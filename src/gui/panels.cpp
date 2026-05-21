@@ -6,6 +6,7 @@
 #include <cstring>
 #include <string>
 
+#include "IconsFontAwesome6.h"
 #include "gui/app.hpp"
 #include "gui/axis_presets.hpp"
 #include "gui/crystal_preview.hpp"
@@ -474,16 +475,12 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   //   duplicate y: delete_y + btn_h + kHoverBtnGap
   char dup_id[32];
   char del_id[32];
-  // Glyphs: "D" for Duplicate (less ambiguous than "+", which reads as "Add"),
-  // "\xC3\x97" (U+00D7 ×) for Delete. Both ASCII / Latin-1 — covered by ImGui's
-  // default Proggy Clean font; replacing them with proper SVG icons is tracked
-  // in backlog as "GUI icon font integration (FontAwesome)".
-  snprintf(dup_id, sizeof(dup_id), "D##dup_%d_%d", layer_idx, entry_idx);
-  snprintf(del_id, sizeof(del_id), "\xC3\x97##del_%d_%d", layer_idx, entry_idx);
+  snprintf(dup_id, sizeof(dup_id), ICON_FA_COPY "##dup_%d_%d", layer_idx, entry_idx);
+  snprintf(del_id, sizeof(del_id), ICON_FA_XMARK "##del_%d_%d", layer_idx, entry_idx);
 
   float frame_pad_x = ImGui::GetStyle().FramePadding.x;
-  float dup_glyph_w = ImGui::CalcTextSize("D").x;
-  float del_glyph_w = ImGui::CalcTextSize("\xC3\x97").x;
+  float dup_glyph_w = ImGui::CalcTextSize(ICON_FA_COPY).x;
+  float del_glyph_w = ImGui::CalcTextSize(ICON_FA_XMARK).x;
   float btn_w = std::max(dup_glyph_w, del_glyph_w) + frame_pad_x * 2.0f;
   float btn_h = ImGui::GetFrameHeight();
   constexpr float kHoverBtnPad = 2.0f;
@@ -554,9 +551,9 @@ void RenderLayer(GuiState& state, int layer_idx) {
   // Right-aligned delete button on the header row. Only enabled when more than
   // one layer exists (the scattering model requires at least one layer).
   char layer_del_id[32];
-  snprintf(layer_del_id, sizeof(layer_del_id), "x##layer_%d", layer_idx);
+  snprintf(layer_del_id, sizeof(layer_del_id), ICON_FA_XMARK "##layer_%d", layer_idx);
   bool can_delete_layer = state.layers.size() > 1;
-  float layer_del_w = ImGui::CalcTextSize("x").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+  float layer_del_w = ImGui::CalcTextSize(ICON_FA_XMARK).x + ImGui::GetStyle().FramePadding.x * 2.0f;
   ImGui::SameLine(ImGui::GetContentRegionMax().x - layer_del_w);
   if (can_delete_layer) {
     PushDestructiveStyle();

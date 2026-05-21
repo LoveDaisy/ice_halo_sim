@@ -142,6 +142,24 @@ if(BUILD_GUI)
     DOWNLOAD_ONLY YES
   )
 
+  # IconFontCppHeaders: ICON_FA_* macros for FontAwesome 6 (header-only).
+  # Pinned to a specific commit SHA (rather than `main`) for reproducible builds.
+  CPMAddPackage(
+    NAME IconFontCppHeaders
+    GITHUB_REPOSITORY juliettef/IconFontCppHeaders
+    GIT_TAG 3ee7f3d295ae773c0046db8d7b89b886eb2526de
+    DOWNLOAD_ONLY YES
+  )
+
+  # Font Awesome 6 Free — TTF asset is consumed at configure time by
+  # src/gui/CMakeLists.txt (file(READ HEX)) and embedded into the GUI binary.
+  CPMAddPackage(
+    NAME font_awesome
+    GITHUB_REPOSITORY FortAwesome/Font-Awesome
+    GIT_TAG 6.7.2
+    DOWNLOAD_ONLY YES
+  )
+
   # GLAD2: OpenGL loader for Windows (macOS/Linux use native GL headers)
   # GLAD2 v2.0.8 has its CMakeLists.txt in cmake/ subdirectory (root is a Python package).
   # SOURCE_SUBDIR tells CPM to run add_subdirectory on cmake/ instead of root.

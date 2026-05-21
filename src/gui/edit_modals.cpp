@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 
+#include "IconsFontAwesome6.h"
 #include "gui/app.hpp"
 #include "gui/axis_presets.hpp"
 #include "gui/crystal_preview.hpp"
@@ -785,7 +786,7 @@ static void RenderSharedFilterControls(bool d_applicable) {
       ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0, 0, 0, 0));
       ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
       ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
-      ImGui::SmallButton("(i)##d_tooltip_icon");
+      ImGui::SmallButton(ICON_FA_CIRCLE_INFO "##d_tooltip_icon");
       ImGui::PopStyleVar();
       ImGui::PopStyleColor(4);
       if (ImGui::IsItemHovered()) {
@@ -1521,7 +1522,14 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
     if (ok_disabled) {
       ImGui::BeginDisabled();
     }
-    if (ImGui::Button("OK##edit_modal", ImVec2(80, 0))) {
+    // Use the wider of the two labels for both buttons so the OK/Cancel pair
+    // stays visually balanced regardless of glyph-width differences.
+    const char* kOkLabel = ICON_FA_CHECK " OK##edit_modal";
+    const char* kCancelLabel = ICON_FA_XMARK " Cancel##edit_modal";
+    float ok_cancel_width =
+        std::max(ImGui::CalcTextSize(kOkLabel, nullptr, true).x, ImGui::CalcTextSize(kCancelLabel, nullptr, true).x) +
+        ImGui::GetStyle().FramePadding.x * 2.0f;
+    if (ImGui::Button(kOkLabel, ImVec2(ok_cancel_width, 0))) {
       CommitAllBuffers(state);
       g_active_modal = ActiveModal::kNone;
       ImGui::CloseCurrentPopup();
@@ -1533,7 +1541,7 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
       ImGui::SetTooltip("%s", ok_tooltip);
     }
     ImGui::SameLine();
-    if (ImGui::Button("Cancel##edit_modal", ImVec2(80, 0))) {
+    if (ImGui::Button(kCancelLabel, ImVec2(ok_cancel_width, 0))) {
       // Cleanup (trackball restore, g_active_modal reset) is delegated to
       // HandlePopupClosed on the next frame via the !window_open path, so
       // Cancel / title-bar × / Esc all share a single code path.

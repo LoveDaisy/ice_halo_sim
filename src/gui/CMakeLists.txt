@@ -13,6 +13,28 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
     ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp)
 
+# Embed Font Awesome 6 Free Solid TTF into the GUI binary at build time.
+# Uses a Python helper (scripts/embed_binary.py) instead of CMake file(READ HEX),
+# which is O(n^2) on large inputs and would noticeably stretch configure time
+# on the ~400KB TTF.
+set(FA_TTF_SRC "${font_awesome_SOURCE_DIR}/webfonts/fa-solid-900.ttf")
+set(FA_TTF_EMBED_CPP "${CMAKE_CURRENT_BINARY_DIR}/fa_solid_900_embed.cpp")
+if(NOT EXISTS "${FA_TTF_SRC}")
+  message(FATAL_ERROR "[gui] FontAwesome TTF not found at ${FA_TTF_SRC}. "
+                      "Check the font_awesome CPM dependency in top-level CMakeLists.txt.")
+endif()
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_custom_command(
+    OUTPUT "${FA_TTF_EMBED_CPP}"
+    COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_SOURCE_DIR}/scripts/embed_binary.py"
+            "${FA_TTF_SRC}"
+            "${FA_TTF_EMBED_CPP}"
+            "kFaSolid900"
+    DEPENDS "${FA_TTF_SRC}" "${CMAKE_SOURCE_DIR}/scripts/embed_binary.py"
+    COMMENT "[gui] Embedding fa-solid-900.ttf -> fa_solid_900_embed.cpp"
+    VERBATIM)
+
 # OBJECT library: shared between LumiceGUI and LumiceGUITests
 add_library(lumice_gui_obj OBJECT
     ${PROJ_SRC_DIR}/gui/app.cpp
@@ -31,13 +53,15 @@ add_library(lumice_gui_obj OBJECT
     ${PROJ_SRC_DIR}/gui/server_poller.cpp
     ${PROJ_SRC_DIR}/gui/stb_impl.cpp
     ${PROJ_SRC_DIR}/gui/window_sizing.cpp
+    ${FA_TTF_EMBED_CPP}
     ${IMGUI_SOURCES})
 
 target_include_directories(lumice_gui_obj PUBLIC
     ${PROJ_SRC_DIR}
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
-    ${stb_SOURCE_DIR})
+    ${stb_SOURCE_DIR}
+    ${IconFontCppHeaders_SOURCE_DIR})
 
 if(WIN32)
   target_link_libraries(lumice_gui_obj PUBLIC

@@ -19,6 +19,7 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "gui/app.hpp"
 #include "gui/edit_modals.hpp"
+#include "gui/font_init.hpp"
 #include "gui/gl_capture.hpp"
 #include "gui/gl_init.h"
 #include "gui/gui_constants.hpp"
@@ -223,6 +224,9 @@ int main(int argc, char** argv) {
   io.IniFilename = nullptr;
 
   ImGui::StyleColorsDark();
+
+  gui::LoadFontAtlas(io);
+
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
 

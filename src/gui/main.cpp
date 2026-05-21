@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -18,6 +19,7 @@
 #include "gui/app.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/file_io.hpp"
+#include "gui/font_init.hpp"
 #include "gui/gl_common.h"
 #include "gui/gl_init.h"
 #include "gui/gui_logger.hpp"
@@ -130,6 +132,8 @@ int main(int argc, char** argv) {
   io.IniFilename = nullptr;  // Disable imgui.ini persistence (also suppresses viewport position persistence)
 
   ImGui::StyleColorsDark();
+
+  gui::LoadFontAtlas(io);
 
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
