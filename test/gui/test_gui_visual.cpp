@@ -16,7 +16,7 @@ static void DriveCrystalPreviewFboForTest() {
   if (gui::g_state.layers.empty() || gui::g_state.layers[0].entries.empty()) {
     return;
   }
-  const auto& cr = gui::g_state.layers[0].entries[0].crystal;
+  const auto& cr = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id];
   int hash = gui::CrystalParamHash(cr);
   if (hash != gui::g_crystal_mesh_hash) {
     int result = gui::BuildAndUploadCrystalMesh(cr);
@@ -230,7 +230,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
 
       // Switch to Pyramid type
       if (!gui::g_state.layers.empty() && !gui::g_state.layers[0].entries.empty()) {
-        gui::g_state.layers[0].entries[0].crystal.type = gui::CrystalType::kPyramid;
+        gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].type = gui::CrystalType::kPyramid;
       }
       // upper_h/lower_h default to 0.2 after Step 1 change
       gui::g_crystal_mesh_hash = -1;  // Force mesh rebuild

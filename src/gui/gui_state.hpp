@@ -549,6 +549,29 @@ inline void GuiState::ConfigSnapshot::ApplyTo(GuiState& state) const {
   state.renderer = renderer;
 }
 
+// Convenience helpers (intended for tests + ad-hoc call sites). Production
+// code prefers explicit `state.crystals[entry.crystal_id]` because the
+// indirection should be visible at the call site.
+inline CrystalConfig& CrystalOf(GuiState& s, EntryCard& e) {
+  return s.crystals[e.crystal_id];
+}
+inline const CrystalConfig& CrystalOf(const GuiState& s, const EntryCard& e) {
+  return s.crystals[e.crystal_id];
+}
+inline std::optional<FilterConfig> FilterOf(const GuiState& s, const EntryCard& e) {
+  return e.filter_id.has_value() ? std::optional<FilterConfig>{ s.filters[*e.filter_id] } : std::nullopt;
+}
+// Write a filter back to the pool — reuses the existing pool slot if the
+// entry already references one, otherwise appends.
+inline void SetFilter(GuiState& s, EntryCard& e, const FilterConfig& f) {
+  if (e.filter_id.has_value()) {
+    s.filters[*e.filter_id] = f;
+  } else {
+    e.filter_id = static_cast<int>(s.filters.size());
+    s.filters.push_back(f);
+  }
+}
+
 inline GuiState InitDefaultState() {
   GuiState s;
 

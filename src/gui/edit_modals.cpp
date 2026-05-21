@@ -349,11 +349,14 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   // Initialize all three buffers (regardless of req.target) so any tab the user
   // switches to shows the entry's current values. Modal-level OK commits all
   // three atomically; Cancel discards all.
-  // Reserve enough crystal/filter pool capacity to absorb a few pick-mode /
-  // unlink / duplicate pushes without invalidating buffer reads that hold
-  // pool references during the modal's lifetime.
-  state.crystals.reserve(state.crystals.size() + 4);
-  state.filters.reserve(state.filters.size() + 4);
+  //
+  // Reallocation note: do NOT call state.crystals.reserve() here. External
+  // callers may hold const references into the pool (e.g. tests that bind
+  // `auto& cr = state.crystals[...]` across a modal-open boundary); growing
+  // the vector would invalidate those. The modal's own reads below copy into
+  // local buffers immediately, so no long-lived pool reference is needed.
+  // Pick-mode push_back paths (Link / Unlink / Duplicate) happen *after* the
+  // modal closes, when no external references are held.
   const CrystalConfig& src_crystal = state.crystals[entry.crystal_id];
   g_crystal_buf = src_crystal;
   g_axis_buf[0] = src_crystal.zenith;
