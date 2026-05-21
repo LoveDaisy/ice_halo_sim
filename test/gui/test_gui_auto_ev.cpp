@@ -17,28 +17,23 @@ struct AutoEvScene {
 };
 
 // clang-format off
-// Per-scene PSNR thresholds are mean − 3σ (floored to 0.5 dB), computed from N=30 mean-ref
+// Per-scene PSNR thresholds are mean − 3σ (floored to 0.5 dB), computed from N=10 mean-ref
 // calibration runs via scripts/regen_gui_test_refs.py. One threshold covers both _off and
 // _on modes (conservative min of the two). Reference images are N=10 pixel-averaged means.
-// rp46 and rp46_nof are stepped down 0.5 dB from the N=30 floor (22.0→21.5, 17.5→17.0):
-// the 0.5 dB floor lands within 0.1 dB of mean−3σ, leaving no headroom for jpg encode noise.
 //
-// All 18 reference images were regenerated together (task-query-filter-uplift-v2) after a
-// forced binary rebuild; the N=10→N=30 calibration change makes std narrower, so some
-// thresholds shift up by ~0.5 dB (mean−3σ floor rises). ON-mode scene PSNR changes
-// (e.g. filters +2.3 dB, rp46 −0.8 dB) are due to re-seed from the binary rebuild and
-// the improved reference quality from N=30, not from semantic changes in consumer-side
-// filter binding (filter-on scenes render the same ray set as before the uplift).
+// Last regenerated in task-gui-icon-font (2026-05-21) after introducing the FontAwesome
+// icon font — the chrome glyphs in the captured frame changed, invalidating all 18
+// references and forcing a fresh calibration pass.
 static const AutoEvScene kScenes[] = {
   {"halo_22",    LUMICE_E2E_CONFIG_DIR "/halo_22.json",                           256, 256, 16.5},
   {"multi_scat", LUMICE_E2E_CONFIG_DIR "/multi_scatter.json",                     256, 256, 16.5},
   {"color",      LUMICE_E2E_CONFIG_DIR "/color.json",                             256, 256, 18.0},
-  {"pyramid",    LUMICE_E2E_CONFIG_DIR "/pyramid.json",                           256, 256, 17.5},
-  {"cza",        LUMICE_E2E_CONFIG_DIR "/cza.json",                               256, 256, 30.0},
+  {"pyramid",    LUMICE_E2E_CONFIG_DIR "/pyramid.json",                           256, 256, 18.0},
+  {"cza",        LUMICE_E2E_CONFIG_DIR "/cza.json",                               256, 256, 31.0},
   {"parhelion",  LUMICE_E2E_CONFIG_DIR "/parhelion.json",                         256, 256, 18.0},
-  {"filters",    LUMICE_E2E_CONFIG_DIR "/filters.json",                           256, 256, 17.5},
-  {"rp46",       LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6.json",              256, 256, 21.5},
-  {"rp46_nof",   LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6_nofilter.json",     256, 256, 17.0},
+  {"filters",    LUMICE_E2E_CONFIG_DIR "/filters.json",                           256, 256, 19.0},
+  {"rp46",       LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6.json",              256, 256, 17.0},
+  {"rp46_nof",   LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6_nofilter.json",     256, 256, 17.5},
 };
 // clang-format on
 static constexpr int kSceneCount = 9;
