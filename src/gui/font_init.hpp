@@ -21,11 +21,11 @@ inline void LoadFontAtlas(ImGuiIO& io) {
     icon_cfg.OversampleH = 2;
     icon_cfg.OversampleV = 2;
     icon_cfg.GlyphMinAdvanceX = 13.0f;
-    static const ImWchar kIconRanges[] = {ICON_MIN_FA, ICON_MAX_FA, 0};
+    static const ImWchar kIconRanges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
     void* icon_buf = IM_ALLOC(kFaSolid900Size);
     std::memcpy(icon_buf, kFaSolid900Data, kFaSolid900Size);
-    ImFont* icon_font = io.Fonts->AddFontFromMemoryTTF(
-        icon_buf, static_cast<int>(kFaSolid900Size), 13.0f, &icon_cfg, kIconRanges);
+    ImFont* icon_font =
+        io.Fonts->AddFontFromMemoryTTF(icon_buf, static_cast<int>(kFaSolid900Size), 13.0f, &icon_cfg, kIconRanges);
     if (!icon_font) {
       fprintf(stderr, "[gui] WARNING: FA icon font failed to load; ICON_FA_* glyphs will be blank.\n");
     }

@@ -18,8 +18,8 @@
 
 #include "gui/app.hpp"
 #include "gui/edit_modals.hpp"
-#include "gui/font_init.hpp"
 #include "gui/file_io.hpp"
+#include "gui/font_init.hpp"
 #include "gui/gl_common.h"
 #include "gui/gl_init.h"
 #include "gui/gui_logger.hpp"
