@@ -7,6 +7,7 @@
 
 #include "IconsFontAwesome6.h"
 #include "gui/app.hpp"
+#include "gui/crystal_preview.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_ev_auto.hpp"
@@ -380,13 +381,23 @@ void RenderLeftPanel(float window_height) {
   }
 
   // Pick-mode completion: if pick was active at frame entry but is now reset
-  // (cleared by RenderEntryCard's InvisibleButton click handler), re-open the
-  // modal on the SOURCE entry so the user resumes editing where they started.
+  // (cleared by RenderEntryCard's pick-click handler), re-open the modal on
+  // the SOURCE entry so the user resumes editing where they started. The
+  // editing entry's crystal_id was just re-bound to the clicked card's
+  // crystal, so also reset the singleton trackball view to that crystal's
+  // default orientation — otherwise the modal preview keeps the old
+  // crystal's rotation while the thumbnail (which always renders from the
+  // entry's axis distribution) shows the new one. Cancel paths
+  // (Esc / blank-area click) clear pick_source_at_entry and skip this
+  // branch, so view reset only fires when a link was actually applied.
   if (pick_source_at_entry.has_value() && !g_state.pick_link_source.has_value()) {
+    const auto& src = *pick_source_at_entry;
+    const auto& editing_entry = g_state.layers[src.layer_idx].entries[src.entry_idx];
+    ResetCrystalViewToCrystal(g_state.crystals[editing_entry.crystal_id]);
     EditRequest reopen;
     reopen.target = EditTarget::kCrystal;
-    reopen.layer_idx = pick_source_at_entry->layer_idx;
-    reopen.entry_idx = pick_source_at_entry->entry_idx;
+    reopen.layer_idx = src.layer_idx;
+    reopen.entry_idx = src.entry_idx;
     OpenEditModal(reopen, g_state);
   }
 
