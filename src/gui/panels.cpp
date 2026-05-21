@@ -660,11 +660,14 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   {
     const int shared = CountEntriesSharing(state, entry.crystal_id, entry.filter_id);
     if (shared >= 2) {
-      // Anchor: top-right of card window, just left of the hover-buttons column
-      // (kHoverBtnPad + btn_w worth of horizontal space reserved on the right).
+      // Anchor: third slot in the right-edge column, directly below the
+      // hover-revealed Delete (top) / Duplicate (middle) buttons. Stays
+      // visible regardless of hover (it's a persistent state indicator, not
+      // an action). Horizontally centered within the column for visual
+      // alignment with the buttons above.
       const float glyph_w = ImGui::CalcTextSize(ICON_FA_LINK).x;
-      const float badge_x = card_win_pos.x + card_win_sz.x - btn_w - glyph_w - kHoverBtnPad * 2.0f;
-      const float badge_y = card_win_pos.y + kHoverBtnPad;
+      const float badge_x = btn_x + (btn_w - glyph_w) * 0.5f;
+      const float badge_y = dup_y + btn_h + kHoverBtnGap;
       ImGui::SetCursorScreenPos(ImVec2(badge_x, badge_y));
       ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.8f, 1.0f, 1.0f));
       ImGui::TextUnformatted(ICON_FA_LINK);
@@ -710,16 +713,23 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
     const ImVec2 card_max(card_win_pos.x + card_win_sz.x, card_win_pos.y + card_win_sz.y);
     if (ImGui::IsMouseHoveringRect(card_win_pos, card_max) && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         !ImGui::IsAnyItemHovered()) {
-      const std::optional<int> old_filter_id = entry.filter_id;
-      ApplyPickLink(state, *state.pick_link_source, GuiState::EntryRef{ layer_idx, entry_idx });
+      // "Link A to B" semantics: A (the entry whose modal opened the picker —
+      // pick_link_source) adopts B's (the clicked card's) crystal/filter ids.
+      // So in ApplyPickLink(source, target) the *clicked card* is the source
+      // (model) and pick_link_source is the target (modified).
+      const auto pick_source_ref = *state.pick_link_source;
+      const auto& editing_entry = state.layers[pick_source_ref.layer_idx].entries[pick_source_ref.entry_idx];
+      const std::optional<int> old_filter_id = editing_entry.filter_id;
+      ApplyPickLink(state, GuiState::EntryRef{ layer_idx, entry_idx }, pick_source_ref);
       state.pick_link_source.reset();
       state.MarkDirty();
-      // If filter existence changed, update intensity_locked (same as ApplyBuffersToEntry path).
-      if (old_filter_id.has_value() != entry.filter_id.has_value()) {
+      // Re-read editing entry after pool re-bind to compare filter existence.
+      const auto& editing_after = state.layers[pick_source_ref.layer_idx].entries[pick_source_ref.entry_idx];
+      if (old_filter_id.has_value() != editing_after.filter_id.has_value()) {
         state.MarkFilterDirty();
       }
-      // No explicit Invalidate: entry now shares source's crystal_id; its cache entry
-      // is already present (rendered from source's perspective).
+      // No explicit Invalidate: editing entry now shares clicked card's
+      // crystal_id; that crystal already has a cache entry from this frame.
     }
   }
 
