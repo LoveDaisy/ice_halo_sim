@@ -1050,14 +1050,40 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
   g_ee_params.entry_text = g_ee_entry_buf;
   g_ee_params.exit_text = g_ee_exit_buf;
 
+  // Local helper: propagate a filter_id change from `entry` to all entries
+  // that were "linked" with it before the change — i.e., entries sharing the
+  // same (crystal_id, old_filter_id) pair. Preserves the "linked group is an
+  // atomic share unit" semantic when a filter is added or removed: editing
+  // one card's filter must also flip the linked siblings' filter_id so the
+  // group stays coherent (otherwise the fa-link badge disappears the moment
+  // a filter is added to a previously filter-less linked group). Mutating
+  // pool slot contents in-place (filter edit on an already-bound slot) is
+  // unaffected — siblings see the new content via the shared filter_id.
+  auto propagate_filter_id_to_linked = [&](int cid, std::optional<int> old_filter_id) {
+    if (entry.filter_id == old_filter_id) {
+      return;  // nothing changed; in-place edit, siblings already see it
+    }
+    for (auto& layer : state.layers) {
+      for (auto& other : layer.entries) {
+        if (other.crystal_id == cid && other.filter_id == old_filter_id) {
+          other.filter_id = entry.filter_id;
+        }
+      }
+    }
+  };
+
   // Local helper: write the materialized FilterConfig into the pool, updating
-  // entry.filter_id (existing slot or new append).
+  // entry.filter_id (existing slot or new append). When append is needed
+  // (entry had no filter), propagate the new filter_id to entries that were
+  // linked with `entry` at (crystal_id, None) so the group stays coherent.
   auto write_filter_to_pool = [&](const FilterConfig& f) {
     if (entry.filter_id.has_value()) {
       state.filters[*entry.filter_id] = f;
     } else {
+      const std::optional<int> old_filter_id = entry.filter_id;
       entry.filter_id = static_cast<int>(state.filters.size());
       state.filters.push_back(f);
+      propagate_filter_id_to_linked(entry.crystal_id, old_filter_id);
     }
   };
 
@@ -1069,7 +1095,9 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
   // consistent with raypath's "empty ≡ no filter" semantic at the UI layer.
   if (g_filter_active_type == FilterEditType::kEntryExit) {
     if (g_ee_remove_intent) {
+      const std::optional<int> old_filter_id = entry.filter_id;
       entry.filter_id = std::nullopt;  // pool slot becomes orphan (kept until save)
+      propagate_filter_id_to_linked(entry.crystal_id, old_filter_id);
       g_ee_remove_intent = false;
     } else {
       const bool buf_changed = IsFilterDirty();
@@ -1094,7 +1122,9 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
     const bool buf_changed = IsFilterDirty();
     if (g_raypath_params.raypath_text.empty()) {
       // Empty raypath ≡ "no filter" at the UI layer.
+      const std::optional<int> old_filter_id = entry.filter_id;
       entry.filter_id = std::nullopt;
+      propagate_filter_id_to_linked(entry.crystal_id, old_filter_id);
     } else if (g_filter_initial_present || buf_changed) {
       auto v = ValidateRaypathTextMultiSegment(g_raypath_params.raypath_text, CurrentValidationKind());
       if (v.state == LUMICE_RAYPATH_VALID) {

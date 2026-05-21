@@ -3926,6 +3926,70 @@ void RegisterLinkedEntriesTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // filter_add_propagates_to_linked: adding a filter to one entry of a
+  // linked group must also bind the linked siblings to the new filter pool
+  // slot so the group stays coherent (fa-link badge remains visible).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "filter_add_propagates_to_linked");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      // Two entries linked at (crystal_id=0, filter_id=None).
+      gui::EntryCard sibling;
+      sibling.crystal_id = 0;
+      gui::g_state.layers[0].entries.push_back(sibling);
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::nullopt), 2);
+
+      // Open Filter modal on entry 0, type a raypath, commit via OK.
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-5");
+      ctx->Yield(2);
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(2);
+
+      // Both entries must now share the new filter_id (linked group stays
+      // coherent — badge predicate still matches).
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[1].filter_id, gui::g_state.layers[0].entries[0].filter_id);
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, gui::g_state.layers[0].entries[0].filter_id), 2);
+    };
+  }
+
+  // filter_remove_propagates_to_linked: clearing an entry's filter via the
+  // Remove Filter button must also clear linked siblings' filter_id so the
+  // group remains coherent.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "filter_remove_propagates_to_linked");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      // Two entries linked at (crystal_id=0, filter_id=<set>).
+      gui::FilterConfig f;
+      f.param = gui::RaypathParams{ "3-5" };
+      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
+      gui::EntryCard sibling;
+      sibling.crystal_id = 0;
+      sibling.filter_id = gui::g_state.layers[0].entries[0].filter_id;
+      gui::g_state.layers[0].entries.push_back(sibling);
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, gui::g_state.layers[0].entries[0].filter_id), 2);
+
+      // Open Filter modal on entry 0, click Remove Filter, commit via OK.
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Remove Filter##filter");
+      ctx->Yield(2);
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
+      IM_CHECK(!gui::g_state.layers[0].entries[1].filter_id.has_value());
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::nullopt), 2);
+    };
+  }
+
   // legacy-partial-sharing: same crystal_id but different filter_id is NOT
   // considered "shared" by the badge predicate (card is atomic share unit).
   {
