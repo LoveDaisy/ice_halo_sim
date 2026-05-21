@@ -723,8 +723,8 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       // Let ProcessUpdateQueue run for several frames to render the default entry thumbnail
       ctx->Yield(10);
 
-      auto tex = gui::g_thumbnail_cache.GetTexture(0, 0);
-      // Thumbnail should be rendered for the default entry (non-zero texture ID)
+      // Default entry has crystal_id=0; cache is keyed by crystal_id.
+      auto tex = gui::g_thumbnail_cache.GetTexture(gui::g_state.layers[0].entries[0].crystal_id);
       IM_CHECK(tex != 0);
     };
   }
@@ -736,14 +736,19 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(5);
 
-      // Add a new entry
-      gui::g_state.layers[0].entries.emplace_back();
+      // Add a second entry with its own crystal pool slot (different crystal_id)
+      gui::CrystalConfig c2;
+      c2.type = gui::CrystalType::kPyramid;
+      gui::EntryCard e2;
+      e2.crystal_id = static_cast<int>(gui::g_state.crystals.size());
+      gui::g_state.crystals.push_back(c2);
+      gui::g_state.layers[0].entries.push_back(e2);
       gui::g_thumbnail_cache.OnLayerStructureChanged();
       ctx->Yield(10);
 
-      // Both entries should have thumbnails
-      auto tex0 = gui::g_thumbnail_cache.GetTexture(0, 0);
-      auto tex1 = gui::g_thumbnail_cache.GetTexture(0, 1);
+      // Both crystal pool slots should have thumbnails (cache is keyed by crystal_id)
+      auto tex0 = gui::g_thumbnail_cache.GetTexture(gui::g_state.layers[0].entries[0].crystal_id);
+      auto tex1 = gui::g_thumbnail_cache.GetTexture(gui::g_state.layers[0].entries[1].crystal_id);
       IM_CHECK(tex0 != 0);
       IM_CHECK(tex1 != 0);
     };

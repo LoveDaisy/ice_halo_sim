@@ -1128,7 +1128,8 @@ void CommitAllBuffers(GuiState& state) {
   if (!r.valid || !r.entry_changed) {
     return;
   }
-  g_thumbnail_cache.Invalidate(g_modal_layer_idx, g_modal_entry_idx);
+  // Invalidate by crystal_id: all entries sharing this crystal get a fresh thumbnail.
+  g_thumbnail_cache.Invalidate(state.layers[g_modal_layer_idx].entries[g_modal_entry_idx].crystal_id);
   state.MarkDirty();
   state.MarkFilterDirty();
   g_crystal_mesh_hash = -1;
@@ -1143,7 +1144,7 @@ void CommitAllBuffersImmediate(GuiState& state) {
   if (!r.valid || !r.entry_changed) {
     return;
   }
-  g_thumbnail_cache.Invalidate(g_modal_layer_idx, g_modal_entry_idx);
+  g_thumbnail_cache.Invalidate(state.layers[g_modal_layer_idx].entries[g_modal_entry_idx].crystal_id);
   state.MarkDirty();
   if (r.filter_changed) {
     state.MarkFilterDirty();

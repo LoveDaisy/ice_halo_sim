@@ -365,6 +365,15 @@ void RenderLeftPanel(float window_height) {
     ResetEditRequest();
   }
 
+  // Pick-mode cancel: blank area / panel-switch click.
+  // If pick is still active after cards are rendered (no card's InvisibleButton consumed
+  // the click), a left mouse click anywhere cancels pick. Covers clicking blank space in
+  // the LeftPanel, the right panel, or any non-card widget. Esc was handled at frame start.
+  if (g_state.pick_link_source.has_value() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    g_state.pick_link_source.reset();
+    pick_source_at_entry.reset();  // suppress spurious modal re-open
+  }
+
   // Pick-mode completion: if pick was active at frame entry but is now reset
   // (cleared by RenderEntryCard's InvisibleButton click handler), re-open the
   // modal on the SOURCE entry so the user resumes editing where they started.

@@ -503,7 +503,7 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   // Left column: crystal thumbnail (or grey placeholder if not yet rendered)
   ImVec2 thumb_pos = ImGui::GetCursorScreenPos();
   ImDrawList* draw_list = ImGui::GetWindowDrawList();
-  auto thumb_tex = g_thumbnail_cache.GetTexture(layer_idx, entry_idx);
+  auto thumb_tex = g_thumbnail_cache.GetTexture(entry.crystal_id);
   ImVec2 thumb_br(thumb_pos.x + thumb_display_size, thumb_pos.y + thumb_display_size);
   if (thumb_tex != 0) {
     // OpenGL texture Y-axis is flipped relative to ImGui: uv0=(0,1) uv1=(1,0)
@@ -703,10 +703,16 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   if (pick_active && !pick_target_disabled) {
     ImGui::SetCursorScreenPos(card_win_pos);
     if (ImGui::InvisibleButton("##pick_target", card_win_sz)) {
+      const std::optional<int> old_filter_id = entry.filter_id;
       ApplyPickLink(state, *state.pick_link_source, GuiState::EntryRef{ layer_idx, entry_idx });
       state.pick_link_source.reset();
       state.MarkDirty();
-      g_thumbnail_cache.Invalidate(layer_idx, entry_idx);
+      // If filter existence changed, update intensity_locked (same as ApplyBuffersToEntry path).
+      if (old_filter_id.has_value() != entry.filter_id.has_value()) {
+        state.MarkFilterDirty();
+      }
+      // No explicit Invalidate: entry now shares source's crystal_id; its cache entry
+      // is already present (rendered from source's perspective).
     }
   }
 
