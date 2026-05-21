@@ -31,12 +31,14 @@
     "filters_on": {
       "psnr_mean": 25.06,
       "psnr_std": 0.1677,
-      "threshold": 24.5
+      "threshold": 24.2,
+      "threshold_note": "N=10 conservative: -0.3 dB vs mean-3sigma=24.5; re-run --n-calib 30 to lift"
     },
     "halo_22_off": {
       "psnr_mean": 19.483,
       "psnr_std": 0.1604,
-      "threshold": 19.0
+      "threshold": 18.7,
+      "threshold_note": "N=10 conservative: -0.3 dB vs mean-3sigma=19.0; re-run --n-calib 30 to lift"
     },
     "halo_22_on": {
       "psnr_mean": 17.224,
@@ -67,12 +69,14 @@
     "pyramid_off": {
       "psnr_mean": 18.498,
       "psnr_std": 0.1557,
-      "threshold": 18.0
+      "threshold": 17.7,
+      "threshold_note": "N=10 conservative: -0.3 dB vs mean-3sigma=18.0; re-run --n-calib 30 to lift"
     },
     "pyramid_on": {
       "psnr_mean": 18.359,
       "psnr_std": 0.0989,
-      "threshold": 18.0
+      "threshold": 17.7,
+      "threshold_note": "N=10 conservative: -0.3 dB vs mean-3sigma=18.0; re-run --n-calib 30 to lift"
     },
     "rp46_nof_off": {
       "psnr_mean": 19.904,
@@ -89,6 +93,7 @@
       "psnr_mean": 20.705,
       "psnr_std": 0.1009,
       "threshold": 20.0
-    }
+    },
+    "rp46_on_note": "Phase B did not sample rp46_on (rp46_off timed out during calibration); kScenes rp46 threshold uses conservative rp46_off basis (19.5). Measured PSNR ~30 dB. Re-run Phase B with initial threshold ~17 dB to capture rp46_on calibration."
   }
 }

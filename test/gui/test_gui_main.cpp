@@ -17,10 +17,8 @@
 #include "gui/gl_common.h"
 
 #define IMGUI_DEFINE_MATH_OPERATORS
-#include "IconsFontAwesome6.h"
 #include "gui/app.hpp"
 #include "gui/edit_modals.hpp"
-#include "gui/fa_solid_900_embed.h"
 #include "gui/font_init.hpp"
 #include "gui/gl_capture.hpp"
 #include "gui/gl_init.h"

@@ -25,23 +25,24 @@ struct AutoEvScene {
 // icon font — the chrome glyphs in the captured frame changed, invalidating all 18
 // references and forcing a fresh calibration pass.
 //
-// N=10 calibration note: two scenes with margin < 0.6 dB (halo_22 and rp46_nof) have their
-// thresholds lowered by 0.3 dB as a conservative compensation for the reduced σ reliability
-// at N=10 vs. the documented N≥30 standard. This provides ~0.8 dB and ~0.6 dB margins
-// respectively, reducing CI flaky risk. Re-run Phase B with --n-calib 30 to lift this penalty.
+// N=10 calibration note: scenes with mean-3σ gap < 0.1 dB or margin < 0.6 dB have their
+// thresholds lowered by 0.3 dB as conservative N=10 compensation (reduced σ reliability vs.
+// the documented N≥30 standard). Re-run Phase B with --n-calib 30 to lift these penalties.
+// Adjusted scenes: halo_22_on (−0.3→16.2), halo_22_off (−0.3→18.7), pyramid_off+on (−0.3→17.7),
+// filters_on (−0.3→24.2), rp46_nof_on (−0.3→17.2). kScenes uses min(off, on) per scene.
 //
-// rp46 threshold (17.0): Phase B did not sample rp46_on during calibration (rp46_off failed
-// first, stopping the engine before on-mode ran). Measured PSNR ~30 dB; 17.0 is a safe
-// hand-set conservative floor. Source: progress.md task-gui-icon-font DONE 2026-05-21.
+// rp46 threshold (19.5): Phase B did not sample rp46_on (rp46_off timed out first); 19.5 is
+// the conservative rp46_off calibrated basis (mean=20.705, calib threshold=20.0 − 0.5 dB).
+// rp46_on measured PSNR ~30 dB — well above 19.5. Source: progress.md task-gui-icon-font.
 static const AutoEvScene kScenes[] = {
-  {"halo_22",    LUMICE_E2E_CONFIG_DIR "/halo_22.json",                           256, 256, 16.2},  // N=10 −0.3 dB
+  {"halo_22",    LUMICE_E2E_CONFIG_DIR "/halo_22.json",                           256, 256, 16.2},  // N=10 −0.3 dB (on-limited)
   {"multi_scat", LUMICE_E2E_CONFIG_DIR "/multi_scatter.json",                     256, 256, 16.5},
   {"color",      LUMICE_E2E_CONFIG_DIR "/color.json",                             256, 256, 18.0},
-  {"pyramid",    LUMICE_E2E_CONFIG_DIR "/pyramid.json",                           256, 256, 18.0},
+  {"pyramid",    LUMICE_E2E_CONFIG_DIR "/pyramid.json",                           256, 256, 17.7},  // N=10 −0.3 dB
   {"cza",        LUMICE_E2E_CONFIG_DIR "/cza.json",                               256, 256, 31.0},
   {"parhelion",  LUMICE_E2E_CONFIG_DIR "/parhelion.json",                         256, 256, 18.0},
   {"filters",    LUMICE_E2E_CONFIG_DIR "/filters.json",                           256, 256, 19.0},
-  {"rp46",       LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6.json",              256, 256, 17.0},  // hand-set, see note above
+  {"rp46",       LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6.json",              256, 256, 19.5},  // rp46_off basis, see note above
   {"rp46_nof",   LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6_nofilter.json",     256, 256, 17.2},  // N=10 −0.3 dB
 };
 // clang-format on

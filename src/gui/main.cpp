@@ -16,10 +16,8 @@
 #include <string_view>
 #include <thread>
 
-#include "IconsFontAwesome6.h"
 #include "gui/app.hpp"
 #include "gui/edit_modals.hpp"
-#include "gui/fa_solid_900_embed.h"
 #include "gui/font_init.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gl_common.h"

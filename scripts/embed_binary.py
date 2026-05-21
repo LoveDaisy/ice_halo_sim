@@ -37,6 +37,8 @@ def main() -> int:
     lines.append("")
     lines.append("namespace lumice::gui {")
     lines.append("")
+    lines.append("// extern declarations give external linkage to the const definitions below")
+    lines.append("// (namespace-scope const has internal linkage by default in C++ — do not remove).")
     lines.append(f"extern const unsigned char {symbol}Data[];")
     lines.append(f"extern const std::size_t {symbol}Size;")
     lines.append("")
