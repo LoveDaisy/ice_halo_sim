@@ -66,6 +66,72 @@ std::string AxisPresetName(const CrystalConfig& c) {
   return AxisPresetLabel(ClassifyAxisPreset(c.zenith, c.azimuth, c.roll));
 }
 
+// ---- ID-pool sharing helpers (task-gui-linked-entries) ----
+
+int CountEntriesSharing(const GuiState& state, int crystal_id, const std::optional<int>& filter_id) {
+  int count = 0;
+  for (const auto& layer : state.layers) {
+    for (const auto& e : layer.entries) {
+      if (e.crystal_id == crystal_id && e.filter_id == filter_id) {
+        ++count;
+      }
+    }
+  }
+  return count;
+}
+
+bool UnlinkEntryFromPool(GuiState& state, int layer_idx, int entry_idx) {
+  if (layer_idx < 0 || layer_idx >= static_cast<int>(state.layers.size())) {
+    return false;
+  }
+  auto& entries = state.layers[layer_idx].entries;
+  if (entry_idx < 0 || entry_idx >= static_cast<int>(entries.size())) {
+    return false;
+  }
+  auto& e = entries[entry_idx];
+  // Only fork pool slots that are currently shared (ref count ≥ 2 on the
+  // <crystal_id, filter_id> pair). Already-unique entries are a no-op.
+  if (CountEntriesSharing(state, e.crystal_id, e.filter_id) < 2) {
+    return false;
+  }
+  CrystalConfig cloned_crystal = state.crystals[e.crystal_id];
+  e.crystal_id = static_cast<int>(state.crystals.size());
+  state.crystals.push_back(std::move(cloned_crystal));
+  if (e.filter_id.has_value()) {
+    FilterConfig cloned_filter = state.filters[*e.filter_id];
+    e.filter_id = static_cast<int>(state.filters.size());
+    state.filters.push_back(std::move(cloned_filter));
+  }
+  return true;
+}
+
+bool ApplyPickLink(GuiState& state, GuiState::EntryRef source, GuiState::EntryRef target) {
+  if (source.layer_idx < 0 || source.layer_idx >= static_cast<int>(state.layers.size())) {
+    return false;
+  }
+  if (target.layer_idx < 0 || target.layer_idx >= static_cast<int>(state.layers.size())) {
+    return false;
+  }
+  const auto& source_entries = state.layers[source.layer_idx].entries;
+  auto& target_entries = state.layers[target.layer_idx].entries;
+  if (source.entry_idx < 0 || source.entry_idx >= static_cast<int>(source_entries.size())) {
+    return false;
+  }
+  if (target.entry_idx < 0 || target.entry_idx >= static_cast<int>(target_entries.size())) {
+    return false;
+  }
+  // Capture source ids before we mutate the target (in case source==target).
+  const int src_cid = source_entries[source.entry_idx].crystal_id;
+  const std::optional<int> src_fid = source_entries[source.entry_idx].filter_id;
+  auto& t = target_entries[target.entry_idx];
+  if (t.crystal_id == src_cid && t.filter_id == src_fid) {
+    return false;  // already shared, no-op
+  }
+  t.crystal_id = src_cid;
+  t.filter_id = src_fid;
+  return true;
+}
+
 namespace {
 
 // Append " <In|Out>[ <sym>]" suffix shared by every filter type's summary.
@@ -351,6 +417,28 @@ void ResetPendingDeleteState() {
 bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   auto& entry = state.layers[layer_idx].entries[entry_idx];
 
+  // ---- Pick-mode: detect whether we're targeting this card ----
+  // When state.pick_link_source is set, every card becomes a click-target for
+  // completing the eyedropper share. Source card and already-shared cards are
+  // disabled (would be a no-op). The actual click handling happens at the
+  // bottom of RenderEntryCard via an InvisibleButton overlay that covers the
+  // card body.
+  const bool pick_active = state.pick_link_source.has_value();
+  bool pick_target_disabled = false;
+  if (pick_active) {
+    const auto& src_ref = *state.pick_link_source;
+    if (src_ref.layer_idx == layer_idx && src_ref.entry_idx == entry_idx) {
+      pick_target_disabled = true;  // can't link to self
+    } else if (src_ref.layer_idx >= 0 && src_ref.layer_idx < static_cast<int>(state.layers.size()) &&
+               src_ref.entry_idx >= 0 &&
+               src_ref.entry_idx < static_cast<int>(state.layers[src_ref.layer_idx].entries.size())) {
+      const auto& src_entry = state.layers[src_ref.layer_idx].entries[src_ref.entry_idx];
+      if (entry.crystal_id == src_entry.crystal_id && entry.filter_id == src_entry.filter_id) {
+        pick_target_disabled = true;  // already shared
+      }
+    }
+  }
+
   ImGui::PushID(entry_idx);
 
   // Active highlight: when the unified edit modal is bound to this entry,
@@ -369,6 +457,27 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
     // pushed color with IM_COL32(80, 160, 255, 255) per plan §7 Risk 1
     // (cool-blue accent, no family clash with red Delete or neutral Duplicate).
     ImGui::PushStyleColor(ImGuiCol_Border, ImGui::GetStyleColorVec4(ImGuiCol_NavHighlight));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, kActiveCardBorder);
+  }
+
+  // ---- Co-shared highlight ----
+  // If an edit modal is open on a *different* card whose (crystal_id, filter_id)
+  // matches this card's, render a co-shared border tint so the user sees which
+  // cards their in-flight edit will affect. Distinct from `active` (modal owns
+  // *this* card) — uses a warmer accent to differentiate.
+  bool co_shared = false;
+  if (!active && IsEditModalOpen()) {
+    auto target = GetEditModalTarget();
+    if (target.layer_idx >= 0 && target.layer_idx < static_cast<int>(state.layers.size()) && target.entry_idx >= 0 &&
+        target.entry_idx < static_cast<int>(state.layers[target.layer_idx].entries.size())) {
+      const auto& tgt_entry = state.layers[target.layer_idx].entries[target.entry_idx];
+      if (entry.crystal_id == tgt_entry.crystal_id && entry.filter_id == tgt_entry.filter_id) {
+        co_shared = true;
+      }
+    }
+  }
+  if (co_shared) {
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.0f, 0.65f, 0.2f, 1.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, kActiveCardBorder);
   }
 
@@ -544,9 +653,70 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   bool hover_now = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
   ImGui::GetStateStorage()->SetBool(hover_persist_id, hover_now);
 
+  // ---- fa-link badge (static sharing indicator) ----
+  // Drawn AFTER all inner widgets but BEFORE the pick-mode overlay so it shows
+  // through the click-through invisible button. Predicate: (crystal_id,
+  // filter_id) is shared by 2+ entries across all layers (this card included).
+  {
+    const int shared = CountEntriesSharing(state, entry.crystal_id, entry.filter_id);
+    if (shared >= 2) {
+      // Anchor: top-right of card window, just left of the hover-buttons column
+      // (kHoverBtnPad + btn_w worth of horizontal space reserved on the right).
+      const float glyph_w = ImGui::CalcTextSize(ICON_FA_LINK).x;
+      const float badge_x = card_win_pos.x + card_win_sz.x - btn_w - glyph_w - kHoverBtnPad * 2.0f;
+      const float badge_y = card_win_pos.y + kHoverBtnPad;
+      ImGui::SetCursorScreenPos(ImVec2(badge_x, badge_y));
+      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.8f, 1.0f, 1.0f));
+      ImGui::TextUnformatted(ICON_FA_LINK);
+      ImGui::PopStyleColor();
+      if (ImGui::IsItemHovered()) {
+        std::string list;
+        for (int li = 0; li < static_cast<int>(state.layers.size()); ++li) {
+          for (int ei = 0; ei < static_cast<int>(state.layers[li].entries.size()); ++ei) {
+            const auto& other = state.layers[li].entries[ei];
+            if (other.crystal_id == entry.crystal_id && other.filter_id == entry.filter_id) {
+              if (li == layer_idx && ei == entry_idx) {
+                continue;  // skip self in the tooltip list
+              }
+              if (!list.empty()) {
+                list += "\n";
+              }
+              list += "Layer " + std::to_string(li) + " / Entry " + std::to_string(ei);
+            }
+          }
+        }
+        if (list.empty()) {
+          list = "(no other entries)";
+        }
+        ImGui::SetTooltip("Shared with:\n%s", list.c_str());
+      }
+    }
+  }
+
+  // ---- Pick-mode overlay ----
+  // Place a full-card-sized InvisibleButton at the card's top-left so any
+  // click inside the card area completes the share. The button is rendered
+  // last so existing inner widgets (Edit / Duplicate / Delete) keep their
+  // hit priority; ImGui processes overlapping items in declaration order.
+  // We position the button by absolute-coord trick: SetCursorScreenPos to the
+  // card's win pos, then size to the win size.
+  if (pick_active && !pick_target_disabled) {
+    ImGui::SetCursorScreenPos(card_win_pos);
+    if (ImGui::InvisibleButton("##pick_target", card_win_sz)) {
+      ApplyPickLink(state, *state.pick_link_source, GuiState::EntryRef{ layer_idx, entry_idx });
+      state.pick_link_source.reset();
+      state.MarkDirty();
+      g_thumbnail_cache.Invalidate(layer_idx, entry_idx);
+    }
+  }
+
   ImGui::EndChild();  // ##card — must be unconditional
 
   if (active) {
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+  }
+  if (co_shared) {
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
   }

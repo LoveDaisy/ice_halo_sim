@@ -306,11 +306,34 @@ void RenderLeftPanel(float window_height) {
     return;
   }
 
+  // Pick-mode: Esc cancels (read here before any ImGui::Begin so the key event
+  // isn't consumed by inner widgets first).
+  bool pick_active_at_entry = g_state.pick_link_source.has_value();
+  if (pick_active_at_entry && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+    g_state.pick_link_source.reset();
+  }
+  // Remember whether pick was active at the start of this frame so we can
+  // detect "pick just completed" at the bottom and re-open the modal.
+  std::optional<GuiState::EntryRef> pick_source_at_entry =
+      pick_active_at_entry ? g_state.pick_link_source : std::nullopt;
+
   SetNextPanelGeometry(0, kTopBarHeight, kLeftPanelWidth, panel_height);
   ImGui::Begin("##LeftPanel", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
                    ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+  // Pick-mode hint bar — render above the scroll area so the user always sees
+  // the active-pick state and the Esc instruction. The actual click target is
+  // each entry card (handled inside RenderEntryCard via InvisibleButton).
+  if (pick_active_at_entry) {
+    const auto& src = *g_state.pick_link_source;
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.2f, 1.0f));
+    ImGui::TextWrapped("Pick mode: click an entry to share crystal/filter from Layer %d / Entry %d (Esc to cancel)",
+                       src.layer_idx, src.entry_idx);
+    ImGui::PopStyleColor();
+    ImGui::Separator();
+  }
 
   // ---- Layout: cards (scroll) + toolbar ----
   float avail_h = ImGui::GetContentRegionAvail().y;
@@ -340,6 +363,17 @@ void RenderLeftPanel(float window_height) {
   if (GetEditRequest().target != EditTarget::kNone) {
     OpenEditModal(GetEditRequest(), g_state);
     ResetEditRequest();
+  }
+
+  // Pick-mode completion: if pick was active at frame entry but is now reset
+  // (cleared by RenderEntryCard's InvisibleButton click handler), re-open the
+  // modal on the SOURCE entry so the user resumes editing where they started.
+  if (pick_source_at_entry.has_value() && !g_state.pick_link_source.has_value()) {
+    EditRequest reopen;
+    reopen.target = EditTarget::kCrystal;
+    reopen.layer_idx = pick_source_at_entry->layer_idx;
+    reopen.entry_idx = pick_source_at_entry->entry_idx;
+    OpenEditModal(reopen, g_state);
   }
 
   ImGui::End();

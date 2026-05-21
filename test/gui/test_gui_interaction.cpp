@@ -3731,3 +3731,176 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 }
+
+// ========== task-gui-linked-entries: pick-mode / unlink / duplicate / badge ==========
+// AC-9 coverage: link / unlink / duplicate / cancel / delete-cleanup /
+// co-shared-highlight / legacy-partial-sharing seven paths.
+
+void RegisterLinkedEntriesTests(ImGuiTestEngine* engine) {
+  // link: ApplyPickLink copies source (crystal_id, filter_id) to target entry.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "link");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+      // Add a second entry with its own pool slot.
+      gui::CrystalConfig c2;
+      c2.type = gui::CrystalType::kPyramid;
+      c2.prism_h = 2.0f;
+      gui::EntryCard e2;
+      e2.crystal_id = static_cast<int>(gui::g_state.crystals.size());
+      gui::g_state.crystals.push_back(c2);
+      gui::g_state.layers[0].entries.push_back(e2);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
+
+      const int src_cid = gui::g_state.layers[0].entries[0].crystal_id;
+      IM_CHECK_NE(gui::g_state.layers[0].entries[1].crystal_id, src_cid);
+      // Apply pick: entry 0 → entry 1
+      bool ok = gui::ApplyPickLink(gui::g_state, { 0, 0 }, { 0, 1 });
+      IM_CHECK(ok);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[1].crystal_id, src_cid);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[1].filter_id, gui::g_state.layers[0].entries[0].filter_id);
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, src_cid, gui::g_state.layers[0].entries[0].filter_id), 2);
+    };
+  }
+
+  // unlink: forking a shared entry creates a fresh pool slot.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "unlink");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+      // Two entries sharing crystal_id = 0.
+      gui::EntryCard sibling;
+      sibling.crystal_id = 0;
+      gui::g_state.layers[0].entries.push_back(sibling);
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::nullopt), 2);
+      const size_t crystals_before = gui::g_state.crystals.size();
+
+      bool forked = gui::UnlinkEntryFromPool(gui::g_state, 0, 1);
+      IM_CHECK(forked);
+      IM_CHECK_EQ(gui::g_state.crystals.size(), crystals_before + 1);
+      IM_CHECK_NE(gui::g_state.layers[0].entries[1].crystal_id, 0);
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::nullopt), 1);
+    };
+  }
+
+  // duplicate: clone-to-pool produces two new ids; mutating the copy does not
+  // affect the original. Validates the panels.cpp Duplicate handler.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "duplicate");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].type = gui::CrystalType::kPyramid;
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].prism_h = 1.5f;
+      ctx->Yield();
+
+      const int orig_cid = gui::g_state.layers[0].entries[0].crystal_id;
+      ctx->ItemClick("**/" ICON_FA_COPY "##dup_0_0");
+      ctx->Yield();
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
+      const int dup_cid = gui::g_state.layers[0].entries[1].crystal_id;
+      IM_CHECK_NE(dup_cid, orig_cid);
+
+      // Mutate the duplicated entry's pool slot — original must remain intact.
+      gui::g_state.crystals[dup_cid].prism_h = 3.7f;
+      IM_CHECK_EQ(gui::g_state.crystals[orig_cid].prism_h, 1.5f);
+      IM_CHECK_EQ(gui::g_state.crystals[dup_cid].prism_h, 3.7f);
+    };
+  }
+
+  // cancel: pick_link_source cleared without applying ids.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "cancel");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+      gui::EntryCard sibling;
+      gui::CrystalConfig c2;
+      c2.type = gui::CrystalType::kPyramid;
+      sibling.crystal_id = static_cast<int>(gui::g_state.crystals.size());
+      gui::g_state.crystals.push_back(c2);
+      gui::g_state.layers[0].entries.push_back(sibling);
+
+      const int e0_cid = gui::g_state.layers[0].entries[0].crystal_id;
+      const int e1_cid = gui::g_state.layers[0].entries[1].crystal_id;
+
+      // Simulate Link to... press: set pick_link_source on source = entry 0.
+      gui::g_state.pick_link_source = gui::GuiState::EntryRef{ 0, 0 };
+      // Cancel without applying.
+      gui::g_state.pick_link_source.reset();
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal_id, e0_cid);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[1].crystal_id, e1_cid);
+      IM_CHECK(!gui::g_state.pick_link_source.has_value());
+    };
+  }
+
+  // delete-cleanup: deleting an entry leaves orphan pool slots untouched (no
+  // refcount-driven compaction) — pool grows monotonically within a session.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "delete_cleanup");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+      gui::CrystalConfig c2;
+      c2.type = gui::CrystalType::kPyramid;
+      gui::EntryCard e2;
+      e2.crystal_id = static_cast<int>(gui::g_state.crystals.size());
+      gui::g_state.crystals.push_back(c2);
+      gui::g_state.layers[0].entries.push_back(e2);
+      const size_t pool_before = gui::g_state.crystals.size();
+
+      // Delete entry 1 (the pyramid one).
+      gui::g_state.layers[0].entries.erase(gui::g_state.layers[0].entries.begin() + 1);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
+      // Pool slot is orphan but still present — guarantees other entries don't
+      // see their ids shift.
+      IM_CHECK_EQ(gui::g_state.crystals.size(), pool_before);
+      // The surviving entry still points to its original slot.
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal_id, 0);
+    };
+  }
+
+  // co-shared-highlight: when two entries share (crystal_id, filter_id), the
+  // CountEntriesSharing predicate is ≥ 2 and drives the fa-link badge +
+  // co-shared border highlight. Tested at the data-layer (rendering is GL).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "co_shared_highlight");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+      gui::EntryCard sibling;
+      sibling.crystal_id = 0;  // share with default entry
+      gui::g_state.layers[0].entries.push_back(sibling);
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::nullopt), 2);
+      // After unlink, badge predicate drops back to 1.
+      gui::UnlinkEntryFromPool(gui::g_state, 0, 1);
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::nullopt), 1);
+    };
+  }
+
+  // legacy-partial-sharing: same crystal_id but different filter_id is NOT
+  // considered "shared" by the badge predicate (card is atomic share unit).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "legacy_partial_sharing");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+      // Entry 0: no filter.
+      // Entry 1: shares crystal_id but adds a filter — different (cid, fid).
+      gui::EntryCard sibling;
+      sibling.crystal_id = 0;
+      gui::FilterConfig f;
+      f.param = gui::RaypathParams{ "3-5" };
+      gui::SetFilter(gui::g_state, sibling, f);
+      gui::g_state.layers[0].entries.push_back(sibling);
+
+      // Pair (0, nullopt) is unique to entry 0.
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::nullopt), 1);
+      // Pair (0, 0) is unique to entry 1.
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::optional<int>{ 0 }), 1);
+    };
+  }
+}

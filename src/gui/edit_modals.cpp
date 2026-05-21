@@ -1410,6 +1410,56 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
                                              ImGuiTabItemFlags_SetSelected :
                                              ImGuiTabItemFlags_None;
 
+  // ---- Sharing status row (Link to... / Unlink) ----
+  // Header above the tab bar showing how many entries share this card's
+  // (crystal_id, filter_id) pair. "Link to..." starts pick-mode; "Unlink"
+  // forks the pool slots so this entry becomes independent.
+  {
+    const int ly = g_modal_layer_idx;
+    const int en = g_modal_entry_idx;
+    if (ly >= 0 && ly < static_cast<int>(state.layers.size()) && en >= 0 &&
+        en < static_cast<int>(state.layers[ly].entries.size())) {
+      const auto& cur_entry = state.layers[ly].entries[en];
+      const int shared_with = CountEntriesSharing(state, cur_entry.crystal_id, cur_entry.filter_id) - 1;
+      if (shared_with > 0) {
+        ImGui::TextDisabled("Shared with %d other entr%s", shared_with, shared_with == 1 ? "y" : "ies");
+      } else {
+        ImGui::TextDisabled("Not shared");
+      }
+      ImGui::SameLine();
+      // "Link to..." — commit current buffer, arm pick-mode, close modal.
+      if (ImGui::SmallButton("Link to...##share")) {
+        CommitAllBuffersImmediate(state);
+        state.pick_link_source = GuiState::EntryRef{ ly, en };
+        g_active_modal = ActiveModal::kNone;
+        if (!state.modal_immediate_mode) {
+          ImGui::CloseCurrentPopup();
+        }
+      }
+      if (shared_with > 0) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Unlink##share")) {
+          // Commit pending edits BEFORE forking pool slots so the active edit
+          // doesn't carry over to the other entries we were sharing with.
+          CommitAllBuffersImmediate(state);
+          if (UnlinkEntryFromPool(state, ly, en)) {
+            // Re-read the just-cloned slot into the modal buffer so g_crystal_buf
+            // (etc.) match the new entry, not the stale shared slot.
+            const auto& fresh_entry = state.layers[ly].entries[en];
+            const CrystalConfig& src_crystal = state.crystals[fresh_entry.crystal_id];
+            g_crystal_buf = src_crystal;
+            g_axis_buf[0] = src_crystal.zenith;
+            g_axis_buf[1] = src_crystal.azimuth;
+            g_axis_buf[2] = src_crystal.roll;
+            SnapshotAllBuffers(state);
+            state.MarkDirty();
+          }
+        }
+      }
+      ImGui::Separator();
+    }
+  }
+
   // Per-tab dirty detection. The label picks up a trailing " *" when the
   // in-flight buffer differs from the snapshot taken at modal-open. All
   // labels share a fixed `###` suffix — with three hashes ImGui derives the

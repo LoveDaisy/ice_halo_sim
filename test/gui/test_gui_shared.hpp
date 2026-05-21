@@ -166,5 +166,6 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine);
 void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine);
 void RegisterCrystalRendererTests(ImGuiTestEngine* engine);
 void RegisterAutoEvRegressionTests(ImGuiTestEngine* engine);
+void RegisterLinkedEntriesTests(ImGuiTestEngine* engine);
 
 #endif  // LUMICE_TEST_GUI_SHARED_HPP
