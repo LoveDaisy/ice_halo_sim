@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779339326100,
+  "lastUpdate": 1779339327651,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -7659,6 +7659,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 64.7,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "135151eed06f1cb0288a1020d0a10c52cc45c485",
+          "message": "Merge pull request #102 from LoveDaisy/feat/gui_font\n\nfeat(gui): integrate FontAwesome 6 icon font for 12 GUI buttons",
+          "timestamp": "2026-05-21T12:50:01+08:00",
+          "tree_id": "949a6505c17485e7d2383f3d8f4f9f6d89603285",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/135151eed06f1cb0288a1020d0a10c52cc45c485"
+        },
+        "date": 1779339327320,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 88.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 73.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 71.9,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 66.2,
             "unit": "%"
           }
         ]
