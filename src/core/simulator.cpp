@@ -423,6 +423,7 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       // sequence (and thus fixed-seed output) differs from the pre-uplift evaluation
       // order (which tested filter first). Fixed-seed determinism is intentionally
       // not preserved across this change.
+      // See doc/filter-architecture.md §2 (filter as simulation-side gate)
       if (rng.GetUniform() < ms_info.prob_ && spec->Check(r)) {
         // 1.1 Branch gate: filter+prob both pass → continue to next ms scatter level.
         r.is_continue_ = true;

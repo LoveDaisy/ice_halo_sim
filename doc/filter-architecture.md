@@ -1,0 +1,275 @@
+[中文版](filter-architecture_zh.md)
+
+# Filter Architecture
+
+This document captures the core design constraints for Lumice's filter subsystem.
+It is a **specification**: all implementation must align with the invariants stated here.
+If an implementation detail conflicts with a statement in this document, fix the doc first
+(when the doc is wrong) or fix the code (when the code drifts), but never silently diverge.
+
+**Target audience**: contributors implementing features that touch filter routing, crystal
+configuration, multi-scatter propagation, or the C API, as well as reviewers performing
+code-review against Design A.
+
+---
+
+## §1 Binding Model: Filter ↔ Crystal (Single-Key)
+
+A filter is bound to a **crystal**, not to a layer, stage, or scattering entry.
+The mapping is one-to-one:
+
+```
+crystal_id  ──────────────  filter_id   (single-key pair)
+```
+
+### JSON / Configuration
+
+In the JSON configuration, `scattering[].entries[].filter` is a *serialization detail*.
+Semantically it is equivalent to "the filter of the crystal referenced by this entry."
+A given `crystal_id` is expected to have the same filter across all scattering entries
+that reference it — the GUI enforces this invariant (see §5); a JSON loader may assert it.
+
+### GUI Linked Entries
+
+Two entries are **linked** if and only if they share both `crystal_id` and `filter_id`.
+The GUI renders a link badge when ≥ 2 entries form such a pair.
+A linked group is the **atomic share unit**: any edit to one member must be observable
+on all members.
+
+Edit propagation rules — automatic vs needs explicit propagation:
+
+1. **Crystal content edit** (in-place overwrite at the shared pool slot): automatic.
+   All entries sharing the `crystal_id` see the update via pool indirection.
+2. **Filter content edit** (in-place overwrite at the shared pool slot): automatic.
+   Same mechanism via shared `filter_id`.
+3. **Filter add** (`entry.filter_id: None → Some N`): needs propagation.
+   The new pool slot is bound only to the editing entry by default; linked siblings
+   (previously at `(cid, None)` with this entry) must also have their `filter_id`
+   flipped to N, otherwise the group decoheres.
+4. **Filter remove** (`entry.filter_id: Some → None`): needs propagation.
+   Linked siblings must also have `filter_id` cleared.
+
+See `src/gui/gui_state.hpp:294-328` for the authoritative comment block and propagation
+owner (`ApplyBuffersToEntry` via the `propagate_filter_id_to_linked` lambda).
+
+### "Same Parameters, Different Filter"
+
+If you want two crystals with identical geometry but different filters, create **two
+independent `crystal_id` instances**. The GUI provides link/unlink operations for this:
+"Link to…" adopts the target's `(crystal_id, filter_id)` atomically; "Unlink" forks a
+private clone.
+
+---
+
+## §2 Filter Role in Simulation (Design A)
+
+Filters **participate in simulation propagation**. They act as gates at every
+ray-exit-crystal decision point inside the simulator.
+
+### Decision Rule (per ray, per crystal exit)
+
+```
+ray exits crystal
+    │
+    ├─ filter check passes  ──►  ray is eligible for outgoing / MS propagation
+    │
+    └─ filter check fails   ──►  ray is DROPPED
+                                 (neither emitted as outgoing
+                                  nor forwarded to the next MS layer)
+```
+
+`FilterSpec::Check(ray)` is called once per outgoing-ray candidate, bound to the filter
+of the crystal that just emitted it.  A failing ray does not appear in any downstream
+buffer.
+
+### Design Rationale
+
+Placing the gate at the simulator level (rather than at the consumer / render level)
+gives two benefits:
+
+1. **Correctness**: filter selectivity applies at every layer in the multi-scatter chain,
+   so the physically correct subset of rays propagates through the full crystal sequence.
+2. **Performance**: high-selectivity filters prune the ray population early; the pruning
+   effect multiplies across layers (see §3).
+
+---
+
+## §3 Multi-Scatter Semantics
+
+In a multi-scatter (MS) configuration, each layer is a `(prob, crystal, filter)` triple.
+
+```
+Layer 0:  prob₀ × crystal₀ × filter₀
+               │
+         filter₀ pass only
+               │
+Layer 1:  prob₁ × crystal₁ × filter₁
+               │
+         filter₁ pass only
+               │
+         ...
+```
+
+Filter is evaluated at **each crystal exit** within the simulator.  Layer N's filter
+controls which rays are eligible to enter layer N+1.  Rays that fail the filter at any
+layer are dropped; they do not propagate further and do not appear in the output buffers.
+
+Higher filter selectivity → faster simulation: the surviving ray fraction compounds
+multiplicatively as `∏ᵢ (pass_rateᵢ × probᵢ)` across layers.
+
+---
+
+## §4 Render Phase: No Filter Logic
+
+The render / consumer phase performs **no filter operations**.
+
+All rays received by `RenderConsumer` have already been filtered inside the simulator.
+The render pass is pure projection and XYZ accumulation:
+
+```
+simulator output  →  RenderConsumer  →  projection  →  XYZ accumulate
+                                         (no filter)
+```
+
+`RenderConfig` does not hold a filter field.  After task-revert (219.4) the previously
+present `ms_filter_` field has been removed.  Any attempt to apply filters at the consumer
+level is a design violation.
+
+---
+
+## §5 Data Flow Invariants
+
+### Config representation
+
+Filter data is stored in `SceneConfig.ms_.setting_[].filter_` (`ScatteringSetting.filter_`,
+per-entry, in `src/config/proj_config.hpp`).
+
+**Underlying assumption**: each `crystal_id` carries the same filter across all scattering
+entries that reference it.  The GUI `linked-crystal` invariant enforces this at the GUI
+layer.  A JSON loader assertion can enforce it at parse time.
+
+### Filter check entry point
+
+Every outgoing-ray candidate in the simulator calls `FilterSpec::Check(ray)` once.
+`FilterSpec::Create(config, crystal, axis_dist)` builds the spec from the filter config
+bound to that crystal.
+
+The call site is in `CollectData()` inside `src/core/simulator.cpp` — see §2 for the
+decision rule.
+
+### RenderConfig invariant
+
+`RenderConfig` must not hold filter fields.  Filters are a simulation-side concern only.
+
+---
+
+## §6 Historical Context
+
+### task-200 (query-filter-uplift-v2, 2026-05-18) — Routing Decision: Reverted
+
+**Goal**: move filter from simulator-side to consumer-side so that live-editing a filter
+would not re-trigger a full simulation.
+
+**Implementation**: `config_manager.cpp:194-225` added a post-parse auto-binding that
+copies `scattering.entries[].filter` into `renderer.ms_filter_`.  This activated the
+previously-dormant `FilterRay` path in `render.cpp`.  In the simulator, the filter was
+demoted to a pure MS-branch gate (filter-fail rays were still emitted as outgoing).
+
+**Discovered problems** (scrum-prob-zero-leak / #219, 2026-05-22):
+
+1. The intended benefit — "filter edit skips simulation" — was never realized in the GUI.
+   Changing a filter still triggered `MarkFilterDirty → full sim re-run`.
+2. Three implementation bugs were found in the task-200 code path:
+   - Post-parse flattening lost per-entry filter binding for multi-level MS configs.
+   - Crystal context was frozen at config-parse time, preventing live crystal updates
+     from reaching the consumer-side filter.
+   - Chain-walk boundary condition in the config binder caused index overflow for
+     certain MS configurations.
+3. Consumer-side filtering is less efficient: filter selectivity no longer prunes the ray
+   population during simulation, so the multi-layer pruning benefit (§3) is lost.
+
+**Decision**: revert to Design A (task-revert-filter-to-simulator-side, 219.4).
+
+### scrum-210 (filter-architecture-refactor, 2026-05-19) — Retained
+
+scrum-210 introduced `FilterSpec` polymorphism and the canonical-form / orbit-based
+approach to raypath matching.  This is a **pure algorithm-layer improvement**, orthogonal
+to the routing decision.  task-revert (219.4) migrates the filter *call sites* (consumer
+→ simulator) but does not touch the `FilterSpec` algorithm interface.
+
+Retained components: `src/core/filter_spec.{hpp,cpp}`, the per-batch `specs_table`
+call in the simulator, and the scrum-210 test suite.
+
+### scrum-prob-zero-leak / #219 (2026-05-22) — Authoritative baseline
+
+This scrum audited the task-200 bugs, evaluated revert options, and adopted Design A
+as the canonical routing model.  The unfiltered-* C API fields are retained with
+degraded semantics (§7); adaptive brightness Off mode is temporarily disabled (§7).
+Future work items (adaptive brightness Off mode redesign, additivity testing in Design A,
+unfiltered baseline) are tracked in the project backlog.
+
+---
+
+## §7 C API Deprecation and GUI Off-mode Temporary Disable
+
+### `LUMICE_RawXyzResult` — Deprecated Fields
+
+The following fields were introduced by task-200 and are **retained for ABI compatibility**
+after task-revert, but their semantics are degraded:
+
+| Field | task-200 semantics | Post-revert semantics |
+|-------|-------------------|----------------------|
+| `unfiltered_xyz_buffer` | all outgoing rays before consumer-side filter | **equals** `xyz_buffer` (filtered = unfiltered because filter is now simulator-side) |
+| `unfiltered_snapshot_intensity` | per-pixel intensity for unfiltered rays | **equals** `snapshot_intensity` |
+
+**Status**: `DEPRECATED`.  Callers should use `xyz_buffer` and `snapshot_intensity`.
+Do not rely on `unfiltered_*` being different from `filtered_*`.
+
+The true redesign of "unfiltered baseline" and "additivity testing" in Design A is tracked
+as a future backlog item: *"Adaptive Brightness Off mode + additivity testing: redesign on
+Design A baseline"*.
+
+See `src/include/lumice.h` for the DEPRECATED annotation on these fields.
+
+### GUI Adaptive Brightness — Off Mode Temporarily Disabled
+
+After task-revert, the GUI **hard-disables** the Adaptive Brightness Off-mode toggle
+(toggle grayed out, tooltip explains the situation).
+
+**Reason**: in Design A, `unfiltered_xyz_buffer` equals `xyz_buffer`, so Off mode and On
+mode produce the same EV anchor — there is no meaningful difference.  More importantly,
+if a scene has a highly-selective filter, the EV anchor under Off mode would be computed
+from the same filtered set as On mode, removing the ~10-stop brightness jump that Off mode
+was designed to prevent.  Until Off mode is redesigned on the Design A baseline, it is
+safer to disable it than to expose a silently-wrong UX.
+
+See `doc/adaptive-brightness.md` §5b and §6 for code path references and the pre-revert
+behavior change notice.
+
+---
+
+## §8 Invariant Automation (Future Work — Placeholder)
+
+The following automated checks are not yet implemented.  They are listed here as
+anchor points for future contributors:
+
+- **Simulator output assertion**: a unit test that verifies no ray in the simulator's
+  outgoing buffer fails the configured filter.  Guards against reintroduction of the
+  task-200 consumer-side filter routing.
+- **Linked-crystal invariant assertion**: a JSON-loader assertion that every `crystal_id`
+  appearing in multiple `scattering.entries` references the same `filter` config.
+
+---
+
+## Cross-References
+
+| Concern | Location |
+|---------|----------|
+| Binding model, GUI linked-group invariants | `src/gui/gui_state.hpp:294-328` |
+| Filter ↔ crystal per-entry config | `src/config/proj_config.hpp` — `ScatteringSetting` |
+| Simulator-side filter check (Design A gate) | `src/core/simulator.cpp` — `CollectData()` |
+| FilterSpec algorithm interface | `src/core/filter_spec.hpp` |
+| C API `unfiltered_*` deprecated fields | `src/include/lumice.h` — `LUMICE_RawXyzResult` |
+| Filter JSON schema | `doc/configuration.md` |
+| Raypath semantics, P/B/D filter toggles | `doc/raypath-symmetry.md` |
+| Adaptive Brightness Off mode, additivity | `doc/adaptive-brightness.md` |

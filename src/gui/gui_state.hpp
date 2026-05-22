@@ -326,6 +326,7 @@ struct FilterConfig {
 // Propagation owner: ApplyBuffersToEntry in edit_modals.cpp via the local
 // `propagate_filter_id_to_linked` lambda. Touch that lambda's call sites if
 // you add a new filter_id-flipping path.
+// See doc/filter-architecture.md §1 for the core/sim-side view of the same invariant.
 
 // GUI-only data structure: one crystal+filter entry card in the layer model.
 //

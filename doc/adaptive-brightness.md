@@ -204,6 +204,31 @@ the manual EV offset.
 
 ---
 
+## 5c. Off Mode Status After task-revert (219.4)
+
+The task-200 routing decision described in §5b has been **reverted** in task-revert
+(219.4, scrum-prob-zero-leak / #219).  Filter evaluation has been moved back to the
+simulator side (Design A): filter-fail rays are dropped inside the simulator and never
+reach the consumer.
+
+As a consequence:
+
+- `unfiltered_xyz_buffer` **equals** `xyz_buffer` after the revert — both reflect the
+  same simulator-filtered ray set.  The distinction between "unfiltered" and "filtered"
+  no longer exists at the consumer level.
+- **Off mode is temporarily hard-disabled** in the GUI (toggle grayed out, tooltip
+  explains the situation).  Since the unfiltered anchor equals the filtered anchor,
+  Off mode and On mode would be identical — and the ~10-stop brightness jump that Off
+  mode was designed to prevent can no longer be triggered.
+- `unfiltered_xyz_buffer` and `unfiltered_snapshot_intensity` in `LUMICE_RawXyzResult`
+  are **DEPRECATED**; use `xyz_buffer` and `snapshot_intensity` instead.
+
+The redesign of Off mode on the Design A baseline (restoring the additivity invariant
+through a different mechanism) is tracked as a future backlog item.
+See `doc/filter-architecture.md §7` for the full specification.
+
+---
+
 ## 6. References
 
 ### Code Paths
