@@ -149,6 +149,11 @@ def additivity_runs():
 
 
 @pytest.mark.slow
+@pytest.mark.xfail(
+    reason="filter-independence assumption invalid under Design A "
+    "(task-revert-filter-to-simulator-side); pending backlog redesign",
+    strict=False,
+)
 def test_unfiltered_intensity_consistent(additivity_runs):
     a = additivity_runs["filter_in"]
     b = additivity_runs["filter_out"]
@@ -172,6 +177,11 @@ def test_unfiltered_intensity_consistent(additivity_runs):
 
 
 @pytest.mark.slow
+@pytest.mark.xfail(
+    reason="filter-independence assumption invalid under Design A "
+    "(task-revert-filter-to-simulator-side); pending backlog redesign",
+    strict=False,
+)
 def test_partition_buffer_additivity(additivity_runs):
     """``A.flt + B.flt ≈ N.unf`` — scalar primary + bright-pixel secondary.
 

@@ -547,9 +547,17 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     }
     SliderWithInput("EV##display", &r.exposure_offset, -6.0f, 6.0f, "%.1f");
 
+    // Design A (task-revert-filter-to-simulator-side): OFF mode would compare
+    // unfiltered baselines, but with simulator-side filter unfiltered ≡ filtered,
+    // so OFF mode is hard-disabled here. Code path retained as scaffolding for
+    // the future Design-A-based redesign (see backlog).
+    ImGui::BeginDisabled(true);
     ImGui::Checkbox("Adaptive Brightness##display", &g_state.auto_ev_enabled);
+    ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
-      ImGui::SetTooltip("Off: filter outputs are physically comparable.\nOn: each filter adapts to its visible rays.");
+      ImGui::SetTooltip(
+          "OFF mode unavailable: simulator-side filter makes unfiltered == filtered.\n"
+          "Pending redesign on Design A baseline (see backlog).");
     }
     if (g_state.auto_ev_enabled) {
       ImGui::SameLine();
