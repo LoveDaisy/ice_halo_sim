@@ -131,9 +131,9 @@ simulator output  →  RenderConsumer  →  projection  →  XYZ accumulate
                                          (no filter)
 ```
 
-`RenderConfig` does not hold a filter field.  After task-revert (219.4) the previously
-present `ms_filter_` field has been removed.  Any attempt to apply filters at the consumer
-level is a design violation.
+`RenderConfig` does not hold a filter field.  The previously present `ms_filter_` field
+is removed in task-revert (Design A target, removed in task-revert 219.4).  Any attempt
+to apply filters at the consumer level is a design violation.
 
 ---
 
@@ -170,8 +170,8 @@ decision rule.
 **Goal**: move filter from simulator-side to consumer-side so that live-editing a filter
 would not re-trigger a full simulation.
 
-**Implementation**: `config_manager.cpp:194-225` added a post-parse auto-binding that
-copies `scattering.entries[].filter` into `renderer.ms_filter_`.  This activated the
+**Implementation**: `config_manager.cpp:194-225` (removed in task-revert-filter-to-simulator-side / 219.4)
+added a post-parse auto-binding that copies `scattering.entries[].filter` into `renderer.ms_filter_`.  This activated the
 previously-dormant `FilterRay` path in `render.cpp`.  In the simulator, the filter was
 demoted to a pure MS-branch gate (filter-fail rays were still emitted as outgoing).
 

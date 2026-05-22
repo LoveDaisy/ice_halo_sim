@@ -76,14 +76,14 @@ typedef struct LUMICE_RawXyzResult_ {
   unsigned long long snapshot_generation;  // Increments on each new snapshot; compare to detect data changes
   int effective_pixels;                    // Non-zero pixel count (for adaptive normalization)
   // DEPRECATED: after task-revert (219.4) this field equals xyz_buffer because filters are
-  // applied simulator-side; unfiltered == filtered by construction. Use xyz_buffer instead.
-  // Future redesign tracked in backlog: "Adaptive Brightness Off mode + additivity testing
-  // on Design A baseline". See doc/filter-architecture.md §7.
-  const float* unfiltered_xyz_buffer;      // All outgoing rays before the query filter is applied.
+  // applied simulator-side; unfiltered == filtered by construction. After task-revert (219.4),
+  // use xyz_buffer instead. Future redesign tracked in backlog: "Adaptive Brightness Off mode
+  // + additivity testing on Design A baseline". See doc/filter-architecture.md §7.
+  const float* unfiltered_xyz_buffer;      // [pre-revert semantics]: all outgoing rays before the query filter is applied.
                                            // Filter-independent: invariant across filter_in / filter_out / no-filter
                                            // runs of an otherwise-identical scene. Check has_valid_data before use.
-  // DEPRECATED: same deprecation as unfiltered_xyz_buffer above; use snapshot_intensity instead.
-  float unfiltered_snapshot_intensity;     // Per-pixel landed intensity for unfiltered rays (same invariant).
+  // DEPRECATED: same deprecation as unfiltered_xyz_buffer above; after task-revert (219.4), use snapshot_intensity instead.
+  float unfiltered_snapshot_intensity;     // [pre-revert semantics]: per-pixel landed intensity for unfiltered rays (same invariant).
 } LUMICE_RawXyzResult;
 
 typedef struct LUMICE_StatsResult_ {
