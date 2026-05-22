@@ -364,10 +364,12 @@ TEST(PartitionCrystalRayNum, ZeroRayNumPreservesCarry) {
 }
 
 // ============================================================================
-// CollectData filter dispatch (post task-query-filter-uplift-v2)
+// CollectData filter dispatch (Design A: simulator-side emit-gate)
 //
-// Confirms that filter-fail rays are routed to kOutgoing (not kStopped), so
-// the consumer-side query filter can see the unfiltered ray set. See AC-2.
+// Confirms that filter-fail rays are dropped at the simulator boundary
+// (IsFilterDropped()=true, IsOutgoing()=false) so they never reach the
+// outgoing buffer or downstream consumers. See doc/filter-architecture.md §2
+// and task-revert-filter-to-simulator-side AC-1.
 // ============================================================================
 
 // kFilterIn (default) + Match() returning false → Check() == false. Emulates a
@@ -401,13 +403,12 @@ RaySeg MakeOutgoingCandidate() {
 
 }  // namespace
 
-TEST(CollectDataFilterDispatch, FilterFailBecomesOutgoing) {
+TEST(CollectDataFilterDispatch, FilterFailDroppedWithZeroProb) {
   RandomNumberGenerator rng(42);
   AlwaysRejectSpec filter;
   MsInfo ms_info;
-  // prob_=0: rng < prob is always false → short-circuit, filter->Check never called.
-  // This covers the prob-fail → kOutgoing path; see FilterFailWithNonZeroProbEmitsOutgoing
-  // for the direct filter-fail → kOutgoing (AC-2) coverage.
+  // Design A: filter is checked before prob. AlwaysRejectSpec → ray is
+  // marked IsFilterDropped(), regardless of prob value.
   ms_info.prob_ = 0.0f;
 
   RayBuffer buffer_data[2];
@@ -422,14 +423,15 @@ TEST(CollectDataFilterDispatch, FilterFailBecomesOutgoing) {
   CollectData(rng, ms_info, &filter, buffer_data, init_data);
 
   ASSERT_EQ(buffer_data[1].size_, 1u);
-  EXPECT_TRUE(buffer_data[1].rays_[0].IsOutgoing()) << "filter-fail ray must emit as IsOutgoing()";
-  // init_data must NOT contain the filter-fail ray.
+  const auto& r = buffer_data[1].rays_[0];
+  EXPECT_TRUE(r.IsFilterDropped()) << "filter-fail ray must be IsFilterDropped()";
+  EXPECT_FALSE(r.IsOutgoing()) << "filter-fail ray must not reach outgoing";
+  EXPECT_FALSE(r.IsContinue());
   EXPECT_EQ(init_data[1].size_, 0u);
 }
 
-TEST(CollectDataFilterDispatch, FilterFailWithNonZeroProbEmitsOutgoing) {
-  // prob_=1.0f: rng < prob is always true → filter->Check IS called and returns false.
-  // This is the direct AC-2 coverage: filter-fail ray must emit as IsOutgoing().
+TEST(CollectDataFilterDispatch, FilterFailDroppedWithNonZeroProb) {
+  // prob_=1.0f: still drops because filter is checked first under Design A.
   RandomNumberGenerator rng(42);
   AlwaysRejectSpec filter;
   MsInfo ms_info;
@@ -447,7 +449,10 @@ TEST(CollectDataFilterDispatch, FilterFailWithNonZeroProbEmitsOutgoing) {
   CollectData(rng, ms_info, &filter, buffer_data, init_data);
 
   ASSERT_EQ(buffer_data[1].size_, 1u);
-  EXPECT_TRUE(buffer_data[1].rays_[0].IsOutgoing()) << "filter-fail ray must emit as IsOutgoing()";
+  const auto& r = buffer_data[1].rays_[0];
+  EXPECT_TRUE(r.IsFilterDropped()) << "filter-fail ray must be IsFilterDropped() under Design A";
+  EXPECT_FALSE(r.IsOutgoing());
+  EXPECT_FALSE(r.IsContinue());
   EXPECT_EQ(init_data[1].size_, 0u);
 }
 

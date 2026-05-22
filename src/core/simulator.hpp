@@ -81,14 +81,16 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& propo
                                                  std::vector<double>& carry);
 
 // Per-batch ray dispatcher: classifies each ray via derived predicates
-// (IsNormal() / IsOutgoing() / IsContinue() / IsTir()) and routes IsContinue()
-// rays into the next ms init buffer. Segment kind is derived from (to_face_,
-// w_, is_continue_); only the IsContinue() bit is written here.
+// (IsNormal() / IsOutgoing() / IsContinue() / IsTir() / IsFilterDropped()) and
+// routes IsContinue() rays into the next ms init buffer. Segment kind is
+// derived from (to_face_, w_, is_continue_, is_filter_dropped_); only the
+// IsContinue() and IsFilterDropped() bits are written here.
 //
-// Filter semantics (post task-query-filter-uplift-v2): the filter acts only as
-// a branch gate controlling IsContinue(). Filter-fail rays are emitted as
-// IsOutgoing() so that the consumer-side query filter sees the full unfiltered
-// ray set.
+// Filter semantics (Design A, see doc/filter-architecture.md §2): the filter
+// is a simulator-side emit-gate. For outgoing candidates, filter-fail rays
+// are marked IsFilterDropped() and excluded from both outgoing and continue;
+// filter-pass rays then branch on prob between continue (next MS level) and
+// outgoing. The consumer no longer applies a query filter.
 //
 // Internal: exposed for unit testing; not part of the public C API.
 void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input

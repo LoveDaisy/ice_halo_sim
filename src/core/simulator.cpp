@@ -406,10 +406,12 @@ void FillRayOtherInfo(size_t curr_ray_num, size_t i,                           /
 void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input
                  RayBuffer* buffer_data, RayBuffer* init_data) {                             // output
   for (auto& r : buffer_data[1]) {
-    // Default: not continuing. The branch-gate below may override for outgoing
-    // candidates that pass filter+prob. TIR / Normal / unselected-Outgoing all
-    // stay false; the buffer slot may carry a stale `true` from a prior round.
+    // Default: not continuing, not filter-dropped. The branch-gate below may
+    // override for outgoing candidates. TIR / Normal / unselected-Outgoing all
+    // stay false; the buffer slot may carry stale `true` values from a prior
+    // round, so explicit reset is required.
     r.is_continue_ = false;
+    r.is_filter_dropped_ = false;
 
     if (r.w_ < 0) {
       // 0. Total reflection — derived via IsTir() (w_ < 0); no state write needed.
@@ -419,17 +421,20 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       r.crystal_rot_.Apply(r.d_);
       r.crystal_rot_.Apply(r.p_);
 
-      // Note: rng.GetUniform() is consumed before spec->Check(), so the RNG
-      // sequence (and thus fixed-seed output) differs from the pre-uplift evaluation
-      // order (which tested filter first). Fixed-seed determinism is intentionally
-      // not preserved across this change.
-      // See doc/filter-architecture.md §2 (filter as simulation-side gate)
-      if (rng.GetUniform() < ms_info.prob_ && spec->Check(r)) {
-        // 1.1 Branch gate: filter+prob both pass → continue to next ms scatter level.
+      // Design A (filter as simulator-side emit-gate): apply filter first; on
+      // fail mark the ray IsFilterDropped() so it is excluded from outgoing
+      // and never reaches the consumer. On pass, branch on prob between
+      // continue (next MS level) and outgoing.
+      // See doc/filter-architecture.md §2.
+      if (spec != nullptr && !spec->Check(r)) {
+        // 1.1 Filter-fail → drop: not outgoing, not continuing.
+        r.is_filter_dropped_ = true;
+      } else if (rng.GetUniform() < ms_info.prob_) {
+        // 1.2 Filter-pass + prob-pass → continue to next ms scatter level.
         r.is_continue_ = true;
       }
-      // 1.2 else: emit outgoing — both filter-fail and prob-fail rays stay
-      //     is_continue_ = false. Query filter is applied downstream by RenderConsumer.
+      // 1.3 else: filter-pass + prob-fail → emit outgoing (is_continue_ =
+      //     false, is_filter_dropped_ = false → IsOutgoing() = true).
     }
     // 2. else: normal rays (to_face_ != kInvalidId && w_ >= 0) — IsNormal() derived; no state write.
 
