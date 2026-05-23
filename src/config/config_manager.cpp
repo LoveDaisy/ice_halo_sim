@@ -86,6 +86,13 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
   // simulator-side via scattering.entries[].filter). Legacy renderer.filter
   // JSON keys are silently ignored for backward compatibility.
 
+  if (j_render.contains("adaptive_brightness")) {
+    const auto& j_ab = j_render.at("adaptive_brightness");
+    if (j_ab.contains("mode")) {
+      j_ab.at("mode").get_to(render.ab_mode_);
+    }
+  }
+
   return render;
 }
 
