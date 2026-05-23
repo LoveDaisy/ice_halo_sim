@@ -1,24 +1,20 @@
 """End-to-end tests: partition additivity and unfiltered-intensity invariants.
 
-Three companion tests share a single ``additivity_runs`` fixture (one
-fresh-server simulation per config — ``filter_in`` / ``filter_out`` /
-``no_filter``):
+Three companion tests share an ``additivity_runs`` fixture (one fresh-server
+simulation per config — ``filter_in`` / ``filter_out`` / ``no_filter``) plus a
+``partition_pair`` parameterized fixture that drives the redesigned
+``test_partition_buffer_additivity`` across multiple ms_prob and filter-type
+configurations.
 
-1. ``test_unfiltered_intensity_consistent`` — scalar ``unfiltered_snapshot_intensity``
-   is filter-independent (regression guard from task-query-filter-uplift-v2).
-2. ``test_partition_buffer_additivity`` — ``A.flt + B.flt ≈ N.unf`` in raw XYZ
-   space, asserted on two layers:
-     - **scalar primary**: ``|A.flt_intensity + B.flt_intensity - N.unf_intensity|
-       / N.unf_intensity < _PARTITION_SCALAR_TOL``
-     - **bright-pixel secondary**: per-pixel ``mean_rel`` over the bright mask
-       (``N.unf > peak * 0.001``) ``< _PARTITION_BRIGHT_TOL``
-   Replaces the buffer-wide ``mean_rel`` metric removed during scrum-193
-   rollback — that metric was an MC noise floor (~36 %) in this sparse render
-   regime and had no discriminatory power (see
-   ``scratchpad/explore-partition-buffer-additivity-root-cause/SUMMARY.md``).
+1. ``test_unfiltered_intensity_consistent`` — scalar anchor intensity is
+   filter-independent under the F1 OFF-mode anchor lane.
+2. ``test_partition_buffer_additivity`` — anchor buffer partition invariant:
+   ``A.anchor == B.anchor`` (bit-stable under fixed seed + single worker) and
+   ``A.snapshot + B.snapshot == A.anchor`` (scalar conservation). Covers
+   ms_prob ∈ {0, 0.3, 0.5} and two filter shapes (raypath, entry_exit).
 3. ``test_xyz_addition_beats_srgb`` — sRGB gamma non-linearity guard;
    XYZ-space addition must produce a lower display error than sRGB-space
-   addition (the encode order matters for halo composition pipelines).
+   addition. Uses anchor as the filter-independent normalization base.
 
 All three carry ``@pytest.mark.slow`` — they run on PR / main, not in the
 default CI pytest invocation.
@@ -26,12 +22,13 @@ default CI pytest invocation.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from test.e2e.capi_runner import run_scene_capi_buffered
+from test.e2e.capi_runner import run_scene_capi, run_scene_capi_buffered
 
 CONFIGS_DIR = Path(__file__).parent / "configs"
 
@@ -53,68 +50,50 @@ _K_NORM_SCALE = 0.08
 
 # ── thresholds ───────────────────────────────────────────────────────────────
 
-# Tolerance for the scalar ``unfiltered_snapshot_intensity`` consistency check
-# (test_unfiltered_intensity_consistent). With 200k rays the MC stddev of the
-# scalar is well below 1 %; 5 % gives ample headroom while still catching the
-# pre-uplift ~95 % deviation. Inherited from task-query-filter-uplift-v2.
-_REL_TOL = 0.05
+# Fixed seed for the partition-additivity fixture. Combined with
+# LUMICE_SIM_SEED's single-worker override (see src/server/server.cpp) this
+# makes two server lifecycles bit-stable: same RNG seed, FIFO scene_queue
+# consumed by one Simulator → identical ray paths and identical fp32 sums.
+_PARTITION_TEST_SEED = "42"
 
-# Primary scalar tolerance for partition additivity
-# ``|A.snapshot + B.snapshot - N.unfiltered| / N.unfiltered``.
-#
-# Calibration: combined N=20 fresh single-run samples:
-#   e1_results.json (N=5):
-#     0.533 %, 0.550 %, 0.437 %, 0.229 %, 0.536 %
-#   calibrate_bright.py (N=5):
-#     0.186 %, 0.394 %, 1.189 %, 0.675 %, 0.243 %
-#   extended AC-1 measurement (N=10):
-#     1.075 %, 0.786 %, 0.675 %, 0.335 %, 0.594 %,
-#     0.227 %, 0.344 %, 1.375 %, 0.115 %, 0.603 %
-#   mean = 0.555 %, σ = 0.341 %, mean + 3σ = 1.577 %
-#   ceil to 0.5 % grid → 2.0 %.
-# Earlier estimates from N=5 / N=10 underestimated σ (single-round samples up
-# to 1.38 % observed); N=20 is large enough that the σ estimate has tightened.
-# 2.0 % remains far below the AC-2 injection prediction of ~4.9 %, so the
-# threshold preserves sensitivity to partition-additivity regressions.
-_PARTITION_SCALAR_TOL = 0.02
+# Anchor buffer cross-filter invariance tolerance. Under LUMICE_SIM_SEED the
+# anchor is bit-identical across filter_in / filter_out runs, so 1e-4 is
+# loose enough to absorb any future single-worker reduction-order changes
+# (e.g., extra OpenMP guards) without going so loose it could mask a real
+# regression.
+_ANCHOR_INVARIANT_TOL = 1e-4
 
-# Secondary bright-pixel tolerance for partition additivity. Empirically
-# calibrated via
-# ``scratchpad/task-partition-additivity-test-redesign/calibrate_bright.py``
-# (N=5) plus extended AC-1 measurement (N=10) for a combined N=15 sample of
-# single-run bright_mean_rel:
-#   5.941 %, 6.955 %, 8.393 %, 7.797 %, 7.042 %,
-#   6.235 %, 9.522 %, 6.769 %, 6.998 %, 7.988 %,
-#   9.161 %, 9.543 %, 7.396 %, 8.974 %, 7.610 %
-#   mean = 7.755 %, σ = 1.155 %, mean + 3σ = 11.221 %
-#   ceil to 0.5 % grid → 11.5 %.
-# The initial N=5 calibration produced σ = 0.93 % (→ 10.5 % threshold) but
-# N=15 reveals σ = 1.16 % with single-round values up to 9.54 %; 11.5 % is
-# the conservative threshold that keeps AC-1's 5-round PASS probability
-# above the design margin.
-_PARTITION_BRIGHT_TOL = 0.115
+# Scalar partition sum tolerance: ``|A.snap + B.snap - A.anchor| / A.anchor``.
+# Same seed + single worker should yield fp32 round-off only (observed
+# ~1.3e-5 in M2 verification); 1e-4 leaves ~8× headroom.
+_PARTITION_SCALAR_TOL_STRICT = 1e-4
+
+# test_unfiltered_intensity_consistent MC tolerance — the three runs in
+# additivity_runs use unseeded multi-worker dispatch, so the ~2 % MC
+# stddev at 200k rays governs the headroom (2.5× margin).
+_UNFILTERED_CONSISTENCY_TOL = 0.05
 
 # Bright-mask threshold: pixels whose any-channel XYZ value exceeds
 # ``peak * _BRIGHT_MASK_FRAC`` are considered bright. Chosen to capture the
 # halo signal while excluding dark-region Poisson noise.
 _BRIGHT_MASK_FRAC = 0.001
 
-# sRGB gamma non-linearity guard floor. From the f409e83 5M-ray experiment
-# (XYZ error ~1 %, sRGB error ~12 %); 5 % gap is the minimum margin we require
-# to call the linear-vs-encoded difference statistically meaningful.
-#
-# Single-run baseline (200k rays, bright mask N.unf > peak * 0.001):
-# xyz_error ≈ 1.6 %, srgb_error ≈ 27.6 %, gap ≈ 26.0 %. The 5 % floor
-# is therefore deeply within margin while still rejecting any accidental
-# regression to sRGB-space composition.
+# sRGB gamma non-linearity guard floor. Single-run baseline at 200k rays
+# (bright mask N.flt_buf > peak * 0.001): xyz_error ≈ 1.6 %, srgb_error
+# ≈ 27.6 %, gap ≈ 26.0 %. The 5 % floor is deeply within margin while still
+# rejecting any accidental regression to sRGB-space composition.
 _SRGB_NONLINEARITY_FLOOR = 0.05
+
+_PARTITION_CONFIGS = [
+    # (filter_in_config, filter_out_config, label)
+    ("rp46_additivity_in.json",      "rp46_additivity_out.json",      "rp46_ms0"),
+    ("rp46_additivity_in_ms03.json", "rp46_additivity_out_ms03.json", "rp46_ms03"),
+    ("rp46_additivity_in_ms05.json", "rp46_additivity_out_ms05.json", "rp46_ms05"),
+    ("ee_additivity_in.json",        "ee_additivity_out.json",        "ee_ms0"),
+]
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
-
-
-def _mean_rel(a: np.ndarray, b: np.ndarray) -> float:
-    return float(np.abs(a - b).mean() / (np.abs(b).mean() + 1e-12))
 
 
 def _srgb_gamma(linear: np.ndarray) -> np.ndarray:
@@ -132,7 +111,7 @@ def _display_xyz(buf: np.ndarray, intensity: float, total_pix: int) -> np.ndarra
     return buf * (_K_NORM_SCALE * total_pix / intensity)
 
 
-# ── fixture ──────────────────────────────────────────────────────────────────
+# ── fixtures ─────────────────────────────────────────────────────────────────
 
 
 @pytest.fixture(scope="module")
@@ -145,87 +124,123 @@ def additivity_runs():
     }
 
 
+@pytest.fixture(
+    scope="module",
+    params=_PARTITION_CONFIGS,
+    ids=[c[2] for c in _PARTITION_CONFIGS],
+)
+def partition_pair(request):
+    """Two same-seed OFF-mode runs (filter_in + filter_out).
+
+    LUMICE_SIM_SEED is read by each fresh ServerImpl ctor
+    (capi_runner.py:186 CreateServer / capi_runner.py:234 DestroyServer) and
+    forces worker_count=1 — see src/server/server.cpp. The two runs therefore
+    share an identical RNG state machine and produce bit-stable anchors.
+    """
+    in_cfg, out_cfg, _label = request.param
+    old_seed = os.environ.get("LUMICE_SIM_SEED")
+    os.environ["LUMICE_SIM_SEED"] = _PARTITION_TEST_SEED
+    try:
+        result_in = run_scene_capi(str(CONFIGS_DIR / in_cfg))
+        result_out = run_scene_capi(str(CONFIGS_DIR / out_cfg))
+    finally:
+        if old_seed is None:
+            os.environ.pop("LUMICE_SIM_SEED", None)
+        else:
+            os.environ["LUMICE_SIM_SEED"] = old_seed
+    return result_in, result_out
+
+
 # ── tests ────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.slow
 @pytest.mark.xfail(
-    reason="filter-independence assumption invalid under Design A "
-    "(task-revert-filter-to-simulator-side); pending backlog redesign",
+    reason="no_filter OFF mode degenerates to Design A (anchor_d_ empty); two "
+    "filter runs vs the no_filter baseline come from independent MC samples "
+    "so the comparison carries MC noise, not the F1 anchor invariant. "
+    "Tracked in backlog: revisit when no_filter OFF mode short-circuit changes.",
     strict=False,
 )
 def test_unfiltered_intensity_consistent(additivity_runs):
+    """``filter_in / filter_out`` anchor totals match the no_filter baseline.
+
+    The no_filter OFF mode path takes a short-circuit (src/core/simulator.cpp:
+    no filter spec → CollectData not CollectDataF1 → anchor_d_ empty →
+    anchor_total_intensity_=0 → anchor_snapshot_intensity falls back to
+    snapshot_intensity in render.cpp:568). The front-line assertion verifies
+    that degenerate path is still intact; the cross-run comparison then uses
+    a single ``anchor_ref = n.snapshot_intensity``.
+    """
     a = additivity_runs["filter_in"]
     b = additivity_runs["filter_out"]
     n = additivity_runs["no_filter"]
 
-    assert n.unfiltered_intensity > 0, (
-        f"baseline (no_filter) unfiltered intensity is zero: {n}"
+    # Front-line: no_filter OFF mode must degenerate (anchor ≈ snapshot).
+    # If this fails, the short-circuit at render.cpp:503 changed and the
+    # rest of the test no longer reflects what it claims to test.
+    assert n.anchor_snapshot_intensity == pytest.approx(n.snapshot_intensity, rel=1e-4), (
+        "no_filter OFF mode should degenerate: anchor ≈ snapshot_intensity"
+        f" (got anchor={n.anchor_snapshot_intensity:.6g}, snap={n.snapshot_intensity:.6g})"
     )
+    anchor_ref = n.snapshot_intensity
+    assert anchor_ref > 0, "no_filter snapshot_intensity is zero"
 
-    rel_a = abs(a.unfiltered_intensity - n.unfiltered_intensity) / n.unfiltered_intensity
-    rel_b = abs(b.unfiltered_intensity - n.unfiltered_intensity) / n.unfiltered_intensity
+    # filter runs anchor = total emission (F1); no_filter snapshot = total
+    # emission (Design A equivalent). Different MC seeds → MC tolerance.
+    rel_a = abs(a.anchor_snapshot_intensity - anchor_ref) / anchor_ref
+    rel_b = abs(b.anchor_snapshot_intensity - anchor_ref) / anchor_ref
 
-    assert rel_a < _REL_TOL, (
-        f"filter_in unfiltered intensity deviates from no_filter by {rel_a:.1%}"
-        f" (filter_in={a.unfiltered_intensity:.6g}, no_filter={n.unfiltered_intensity:.6g})"
+    assert rel_a < _UNFILTERED_CONSISTENCY_TOL, (
+        f"filter_in anchor deviates from no_filter total by {rel_a:.1%}"
+        f" (filter_in anchor={a.anchor_snapshot_intensity:.6g},"
+        f" no_filter snap={anchor_ref:.6g})"
     )
-    assert rel_b < _REL_TOL, (
-        f"filter_out unfiltered intensity deviates from no_filter by {rel_b:.1%}"
-        f" (filter_out={b.unfiltered_intensity:.6g}, no_filter={n.unfiltered_intensity:.6g})"
+    assert rel_b < _UNFILTERED_CONSISTENCY_TOL, (
+        f"filter_out anchor deviates from no_filter total by {rel_b:.1%}"
+        f" (filter_out anchor={b.anchor_snapshot_intensity:.6g},"
+        f" no_filter snap={anchor_ref:.6g})"
     )
 
 
 @pytest.mark.slow
-@pytest.mark.xfail(
-    reason="filter-independence assumption invalid under Design A "
-    "(task-revert-filter-to-simulator-side); pending backlog redesign",
-    strict=False,
-)
-def test_partition_buffer_additivity(additivity_runs):
-    """``A.flt + B.flt ≈ N.unf`` — scalar primary + bright-pixel secondary.
+def test_partition_buffer_additivity(partition_pair):
+    """Anchor buffer partition invariant under OFF mode + fixed seed.
 
-    The old buffer-wide ``np.abs(diff).mean() / np.abs(ref).mean()`` was an MC
-    noise floor (~36 %) in this sparse render regime — two independent N=1 runs
-    on identical configs produced the same number whether or not partition
-    additivity actually held (explore-202 decisive evidence: 35.78 % vs 35.99 %,
-    diff < 1σ). Replaced here with a scalar primary + bright-region secondary;
-    each carries an empirically calibrated threshold.
+    Primary: ``A.anchor == B.anchor`` (bit-stable; LUMICE_SIM_SEED collapses
+    to single worker so same RNG → same rays → same fp32 sum regardless of
+    filter direction).
+
+    Secondary: ``A.snapshot + B.snapshot == A.anchor`` (scalar conservation —
+    every emission lands in exactly one of the two filter partitions).
     """
-    A = additivity_runs["filter_in"]
-    B = additivity_runs["filter_out"]
-    N = additivity_runs["no_filter"]
+    A, B = partition_pair
 
-    assert N.unfiltered_intensity > 0, (
-        f"baseline (no_filter) unfiltered intensity is zero: {N}"
+    # Front-line: anchor lane must be active (OFF mode + filter present).
+    assert A.anchor_snapshot_intensity > 0, (
+        "A.anchor_snapshot_intensity is zero — check OFF mode + filter config (F1 semantics)"
     )
-
-    # Primary: scalar partition additivity. Tight (1 %) because the scalar
-    # noise floor at 200k rays is ~0.2-0.6 % (5 fresh-build rounds, mean+3σ).
-    scalar_diff = abs(A.snapshot_intensity + B.snapshot_intensity - N.unfiltered_intensity)
-    scalar_rel = scalar_diff / N.unfiltered_intensity
-    assert scalar_rel < _PARTITION_SCALAR_TOL, (
-        f"scalar partition additivity deviates by {scalar_rel:.3%}"
-        f" (A.flt={A.snapshot_intensity:.6g}, B.flt={B.snapshot_intensity:.6g},"
-        f" N.unf={N.unfiltered_intensity:.6g}, threshold {_PARTITION_SCALAR_TOL:.1%})"
+    assert B.anchor_snapshot_intensity > 0, (
+        "B.anchor_snapshot_intensity is zero — check OFF mode + filter config (F1 semantics)"
     )
 
-    # Secondary: bright-pixel buffer-wise mean_rel — restricts the metric to
-    # pixels carrying actual halo signal so the dark-region Poisson noise does
-    # not dominate the numerator.
-    peak = float(N.unf_buf.max())
-    bright_mask = (N.unf_buf > peak * _BRIGHT_MASK_FRAC).any(axis=-1)
-    assert bright_mask.any(), (
-        f"no bright pixels detected (peak={peak:.6g}, threshold={peak * _BRIGHT_MASK_FRAC:.6g})"
+    # Primary: anchor cross-filter invariance.
+    anchor_max = max(A.anchor_snapshot_intensity, B.anchor_snapshot_intensity)
+    anchor_rel = abs(A.anchor_snapshot_intensity - B.anchor_snapshot_intensity) / anchor_max
+    assert anchor_rel < _ANCHOR_INVARIANT_TOL, (
+        f"anchor_snapshot_intensity filter-independence violated: "
+        f"A={A.anchor_snapshot_intensity:.6g}, B={B.anchor_snapshot_intensity:.6g}, "
+        f"rel={anchor_rel:.2e} (tol={_ANCHOR_INVARIANT_TOL:.0e})"
     )
-    diff = A.flt_buf + B.flt_buf - N.unf_buf
-    bright_mean_rel = (
-        np.abs(diff[bright_mask]).mean() / (np.abs(N.unf_buf[bright_mask]).mean() + 1e-12)
-    )
-    assert bright_mean_rel < _PARTITION_BRIGHT_TOL, (
-        f"bright-pixel partition additivity deviates by {bright_mean_rel:.3%}"
-        f" (n_bright={int(bright_mask.sum())},"
-        f" threshold {_PARTITION_BRIGHT_TOL:.1%})"
+
+    # Secondary: scalar conservation across the partition.
+    total = A.anchor_snapshot_intensity
+    partition_sum = A.snapshot_intensity + B.snapshot_intensity
+    partition_rel = abs(partition_sum - total) / total
+    assert partition_rel < _PARTITION_SCALAR_TOL_STRICT, (
+        f"partition sum deviates from anchor total: "
+        f"A.snap={A.snapshot_intensity:.6g}, B.snap={B.snapshot_intensity:.6g}, "
+        f"sum={partition_sum:.6g}, anchor={total:.6g}, rel={partition_rel:.2e}"
     )
 
 
@@ -238,26 +253,29 @@ def test_xyz_addition_beats_srgb(additivity_runs):
     XYZ followed by a single encode; this test guards against accidentally
     re-introducing the sRGB-space addition path.
 
-    Both errors are evaluated over the bright mask (same one used in
-    ``test_partition_buffer_additivity``). The historical f409e83 version
-    ran at 5M rays where dark-pixel noise was negligible; at 200k rays the
-    full-frame ``mean_rel`` is dominated by a ~46 % dark-region Poisson floor
-    that shrinks the structural sRGB-vs-XYZ gap to ~4 % (sub-threshold).
-    Restricting to bright pixels recovers the structural difference (gap
-    ~26 % at single run).
+    Normalization uses anchor (filter-independent total emission) for the two
+    filter runs and ``snapshot_intensity`` for the no_filter run (short-circuit
+    degenerate path — see test_unfiltered_intensity_consistent docstring).
     """
     A = additivity_runs["filter_in"]
     B = additivity_runs["filter_out"]
     N = additivity_runs["no_filter"]
     pix = A.img_width * A.img_height
 
-    A_disp = _display_xyz(A.flt_buf, A.unfiltered_intensity, pix)
-    B_disp = _display_xyz(B.flt_buf, B.unfiltered_intensity, pix)
-    N_disp = _display_xyz(N.unf_buf, N.unfiltered_intensity, pix)
+    # OFF mode filter runs: anchor must be non-zero (F1 semantics).
+    assert A.anchor_snapshot_intensity > 0, "filter_in OFF-mode anchor is zero — check F1 semantics"
+    assert B.anchor_snapshot_intensity > 0, "filter_out OFF-mode anchor is zero — check F1 semantics"
+
+    A_disp = _display_xyz(A.flt_buf, A.anchor_snapshot_intensity, pix)
+    B_disp = _display_xyz(B.flt_buf, B.anchor_snapshot_intensity, pix)
+    # no_filter degenerates: anchor ≈ snapshot → use snapshot for normalization.
+    N_disp = _display_xyz(N.flt_buf, N.snapshot_intensity, pix)
     N_srgb = _xyz_to_srgb(N_disp)
 
-    peak = float(N.unf_buf.max())
-    bright_mask = (N.unf_buf > peak * _BRIGHT_MASK_FRAC).any(axis=-1)
+    # Bright mask comes from the no_filter buffer (= full-emission pixels under
+    # OFF mode no_filter, since snapshot buffer == all emissions when no filter).
+    peak = float(N.flt_buf.max())
+    bright_mask = (N.flt_buf > peak * _BRIGHT_MASK_FRAC).any(axis=-1)
     assert bright_mask.any(), (
         f"no bright pixels detected (peak={peak:.6g}, threshold={peak * _BRIGHT_MASK_FRAC:.6g})"
     )
