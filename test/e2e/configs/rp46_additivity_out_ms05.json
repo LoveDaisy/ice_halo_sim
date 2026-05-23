@@ -25,7 +25,15 @@
       }
     }
   ],
-  "filter": [],
+  "filter": [
+    {
+      "id": 1,
+      "type": "raypath",
+      "action": "filter_out",
+      "raypath": [4, 6],
+      "symmetry": "none"
+    }
+  ],
   "scene": {
     "light_source": {
       "type": "sun",
@@ -36,11 +44,12 @@
     "max_hits": 7,
     "scattering": [
       {
-        "prob": 0.0,
+        "prob": 0.5,
         "entries": [
           {
             "crystal": 1,
-            "proportion": 10
+            "proportion": 10,
+            "filter": 1
           }
         ]
       }

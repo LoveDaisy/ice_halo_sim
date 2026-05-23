@@ -25,7 +25,15 @@
       }
     }
   ],
-  "filter": [],
+  "filter": [
+    {
+      "id": 1,
+      "type": "entry_exit",
+      "action": "filter_in",
+      "entry": 3,
+      "exit": 5
+    }
+  ],
   "scene": {
     "light_source": {
       "type": "sun",
@@ -40,7 +48,8 @@
         "entries": [
           {
             "crystal": 1,
-            "proportion": 10
+            "proportion": 10,
+            "filter": 1
           }
         ]
       }

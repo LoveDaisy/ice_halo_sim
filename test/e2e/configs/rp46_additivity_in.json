@@ -65,6 +65,9 @@
       "resolution": [128, 128],
       "view": {
         "elevation": 20
+      },
+      "adaptive_brightness": {
+        "mode": "off"
       }
     }
   ]
