@@ -547,17 +547,22 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     }
     SliderWithInput("EV##display", &r.exposure_offset, -6.0f, 6.0f, "%.1f");
 
-    // Design A (task-revert-filter-to-simulator-side): OFF mode would compare
-    // unfiltered baselines, but with simulator-side filter unfiltered ≡ filtered,
-    // so OFF mode is hard-disabled here. Code path retained as scaffolding for
-    // the future Design-A-based redesign (see backlog).
-    ImGui::BeginDisabled(true);
-    ImGui::Checkbox("Adaptive Brightness##display", &g_state.auto_ev_enabled);
-    ImGui::EndDisabled();
+    // Mode-gated F1 (task-f1-simulator-mode-toggle):
+    //   ON  → Design A semantics; EV anchor = P99 over filtered XYZ (per-frame self-anchor).
+    //         Toggling the filter intentionally changes the anchor.
+    //   OFF → F1 semantics; filter never mid-trajectory kills, anchor buffer aggregates
+    //         filter-pass + filter-fail emission so the EV anchor stays stable across
+    //         filter toggles. Costs extra simulation work — see filter-architecture.md §7.
+    // Changing the mode triggers a simulator restart (same tier as changing the filter list).
+    if (ImGui::Checkbox("Adaptive Brightness##display", &g_state.auto_ev_enabled)) {
+      g_state.renderer.ab_mode_ = g_state.auto_ev_enabled ? AdaptiveBrightnessMode::kOn : AdaptiveBrightnessMode::kOff;
+      g_state.MarkDirty();
+    }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
       ImGui::SetTooltip(
-          "OFF mode unavailable: simulator-side filter makes unfiltered == filtered.\n"
-          "Pending redesign on Design A baseline (see backlog).");
+          "ON: EV anchored to the current filtered image (auto-adjusts per filter).\n"
+          "OFF: EV anchored to the filter-independent emission (stable across filter toggles).\n"
+          "Switching this re-runs the simulation.");
     }
     if (g_state.auto_ev_enabled) {
       ImGui::SameLine();
@@ -812,11 +817,15 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     pp.view_proj = BuildPreviewViewProjFromRenderer(rc);
     float ev_total = rc.exposure_offset + (g_state.auto_ev_enabled ? g_state.ev_auto : 0.0f);
     pp.exposure.intensity_factor = std::pow(2.0f, ev_total);
-    // ON mode normalizes by filtered intensity (per-buffer auto-EV); OFF mode normalizes by
-    // unfiltered intensity so the live preview stays consistent with the OFF-mode EV anchor
-    // computed in app.cpp (filter-independent absolute brightness).
-    const float norm_intensity =
-        g_state.auto_ev_enabled ? g_state.snapshot_intensity : g_state.unfiltered_snapshot_intensity;
+    // ON mode normalizes by filtered intensity (per-buffer auto-EV); OFF mode normalizes by the
+    // server-side anchor intensity so the live preview stays consistent with the OFF-mode EV
+    // anchor computed in app.cpp (filter-independent absolute brightness). When the anchor is
+    // unavailable (no filter) the OFF path silently falls back to filtered intensity, matching
+    // the ON-mode behavior; this keeps the preview stable when the user toggles filters off.
+    float norm_intensity = g_state.snapshot_intensity;
+    if (!g_state.auto_ev_enabled && g_state.anchor_snapshot_intensity > 0.0f) {
+      norm_intensity = g_state.anchor_snapshot_intensity;
+    }
     pp.exposure.intensity_scale = norm_intensity > 0 ? pp.exposure.intensity_factor / norm_intensity : 0.0f;
     // Overlap parameters for dual fisheye texture sampling.
     pp.source.max_abs_dz = kDualFisheyeOverlap;

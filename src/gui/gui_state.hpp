@@ -146,6 +146,11 @@ static_assert(kVisibleFront == kVisibleCount - 1, "Visible enum terminal value m
 inline const int kSimResolutions[] = { 512, 1024, 2048, 4096 };
 constexpr int kSimResolutionCount = 4;
 
+// GUI-local mirror of config::AdaptiveBrightnessMode (defined in src/config/render_config.hpp).
+// Defined here to keep the gui/ ↔ config/ API boundary clean (see AGENTS.md). Integer values
+// must stay synchronized with the C API's LUMICE_RenderParam::ab_mode encoding (0=on, 1=off).
+enum class AdaptiveBrightnessMode : int { kOn = 0, kOff = 1 };
+
 struct RenderConfig {
   int lens_type = 0;  // Index into kLensTypeNames
   float fov = 90.0f;
@@ -158,12 +163,16 @@ struct RenderConfig {
   float ray_color[3] = { 1.0f, 1.0f, 1.0f };
   float opacity = 1.0f;
   float exposure_offset = 0.0f;  // EV: intensity_factor = 2^exposure_offset
+  // Adaptive Brightness mode (authoritative source for the GUI; the auto_ev_enabled checkbox
+  // is a derived view). Switching this triggers a simulator restart via the renderer != renderer
+  // comparison in DoRun (NeedsRebuild on the server side picks up the change as well).
+  AdaptiveBrightnessMode ab_mode_ = AdaptiveBrightnessMode::kOn;
 
   bool operator==(const RenderConfig& o) const {
     return lens_type == o.lens_type && fov == o.fov && elevation == o.elevation && azimuth == o.azimuth &&
            roll == o.roll && sim_resolution_index == o.sim_resolution_index && visible == o.visible &&
            std::equal(background, background + 3, o.background) && std::equal(ray_color, ray_color + 3, o.ray_color) &&
-           opacity == o.opacity && exposure_offset == o.exposure_offset;
+           opacity == o.opacity && exposure_offset == o.exposure_offset && ab_mode_ == o.ab_mode_;
   }
   bool operator!=(const RenderConfig& o) const { return !(*this == o); }
 };
@@ -500,11 +509,13 @@ struct GuiState {
   // Stats from last poll
   unsigned long stats_ray_seg_num = 0;
   unsigned long stats_sim_ray_num = 0;
-  float snapshot_intensity = 0;             // Per-pixel landed intensity for XYZ→RGB normalization
-  float unfiltered_snapshot_intensity = 0;  // Per-pixel unfiltered intensity; updated each texture upload
-  int effective_pixels = 0;                 // Non-zero pixel count for adaptive normalization
-  int norm_mode = 0;                        // 0=absolute, 1=adaptive (not exposed in UI)
-  unsigned long texture_upload_count = 0;   // Cumulative texture uploads (diagnostic counter)
+  float snapshot_intensity = 0;  // Per-pixel landed intensity for XYZ→RGB normalization
+  // OFF-mode (Adaptive Brightness off) anchor intensity: per-pixel filter-pass + filter-fail
+  // combined intensity used for EV anchor normalization. Zero in ON mode.
+  float anchor_snapshot_intensity = 0;
+  int effective_pixels = 0;                // Non-zero pixel count for adaptive normalization
+  int norm_mode = 0;                       // 0=absolute, 1=adaptive (not exposed in UI)
+  unsigned long texture_upload_count = 0;  // Cumulative texture uploads (diagnostic counter)
 
   // Auto-EV runtime state (display layer only, not persisted, not in ConfigSnapshot)
   float p99_raw_y = 0.0f;       // Un-normalized P99 Y value; updated each texture upload

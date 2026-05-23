@@ -323,7 +323,6 @@ RenderConsumer::RenderConsumer(RenderConfig config)
       short_pix_(static_cast<float>(std::min(config_.resolution_[0], config_.resolution_[1]))),
       internal_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
-      unfiltered_snapshot_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_work_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_image_buffer_(std::make_unique<uint8_t[]>(config_.resolution_[0] * config_.resolution_[1] * 3)) {
   float ax_z[3]{ 0, 0, 1 };
@@ -331,6 +330,12 @@ RenderConsumer::RenderConsumer(RenderConfig config)
   rot_.Chain({ ax_z, (-90.0f + config_.view_.ro_) * math::kDegreeToRad })
       .Chain({ ax_y, (90.0f - config_.view_.el_) * math::kDegreeToRad })
       .Chain({ ax_z, config_.view_.az_ * math::kDegreeToRad });
+
+  // Anchor buffers (~25 MB each at 2048×1024) are lazily allocated on the first Consume
+  // call that produces filter-fail emission. ON mode never allocates; OFF mode without
+  // any filter also never allocates because the simulator short-circuits to the Design A
+  // collect path (SimData::anchor_d_ stays empty). This keeps OFF-without-filter at parity
+  // with ON-mode memory use. See plan §Step 7 / doc/filter-architecture.md §7.
 }
 
 
@@ -486,6 +491,51 @@ void RenderConsumer::Consume(const SimData& data) {
     }
   }
 
+  // === OFF-mode anchor lane (F1) ===
+  // Anchor accumulates filter-pass + filter-fail emission for a filter-independent EV anchor.
+  // Filter-pass contribution is identical to internal_xyz_ above, so we re-project nothing —
+  // instead PrepareSnapshot will sum snapshot_xyz_ + anchor_snapshot_xyz_ pixel-by-pixel.
+  // Here we only project the filter-fail outgoing lane (sim_data.anchor_d_/anchor_w_).
+  // Overlap dual-write is intentionally NOT applied to the anchor lane: the anchor lane is
+  // used solely for EV P99 statistics, and the overlap ring is a small geometric artifact
+  // that contributes negligibly to the P99 percentile. Skipping it keeps Consume hot-path
+  // cost minimal in OFF mode.
+  if (config_.ab_mode_ == AdaptiveBrightnessMode::kOff && !data.anchor_d_.empty()) {
+    if (!anchor_internal_xyz_) {
+      // Lazy allocation: first time we see filter-fail emission in OFF mode.
+      auto pix_count = static_cast<size_t>(config_.resolution_[0]) * config_.resolution_[1] * 3;
+      anchor_internal_xyz_ = std::make_unique<float[]>(pix_count);
+      anchor_snapshot_xyz_ = std::make_unique<float[]>(pix_count);
+      std::memset(anchor_internal_xyz_.get(), 0, pix_count * sizeof(float));
+    }
+    size_t anchor_count = data.anchor_w_.size();
+    if (anchor_count > buf_capacity_) {
+      buf_capacity_ = anchor_count;
+      d_buf_ = std::make_unique<float[]>(buf_capacity_ * 3);
+      w_buf_ = std::make_unique<float[]>(buf_capacity_);
+      xy_buf_ = std::make_unique<int[]>(buf_capacity_ * 2);
+      overlap_w_buf_ = std::make_unique<float[]>(buf_capacity_);
+    }
+    std::memcpy(d_buf_.get(), data.anchor_d_.data(), anchor_count * 3 * sizeof(float));
+    std::memcpy(w_buf_.get(), data.anchor_w_.data(), anchor_count * sizeof(float));
+    lens_proj(proj_param, d_buf_.get(), xy_buf_.get(), anchor_count);
+
+    size_t anchor_final = 0;
+    float anchor_landed = 0;
+    for (size_t i = 0; i < anchor_count; i++) {
+      if (xy_buf_[i * 2 + 0] < 0 || xy_buf_[i * 2 + 0] >= config_.resolution_[0] ||  //
+          xy_buf_[i * 2 + 1] < 0 || xy_buf_[i * 2 + 1] >= config_.resolution_[1]) {
+        continue;
+      }
+      xy_buf_[anchor_final] = xy_buf_[i * 2 + 1] * config_.resolution_[0] + xy_buf_[i * 2 + 0];
+      w_buf_[anchor_final] = w_buf_[i];
+      anchor_landed += w_buf_[i];
+      anchor_final++;
+    }
+    SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), anchor_internal_xyz_.get(), anchor_final);
+    anchor_total_intensity_ += anchor_landed;
+  }
+
   auto t3 = std::chrono::steady_clock::now();
 
   consume_count_++;
@@ -508,11 +558,35 @@ void RenderConsumer::PrepareSnapshot() {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   std::memcpy(snapshot_xyz_.get(), internal_xyz_.get(), total_pix * 3 * sizeof(float));
   snapshot_intensity_ = total_intensity_;
-  // Design A: filter runs simulator-side, so internal_xyz_ already represents
-  // the filtered ray set. unfiltered_* fields are retained for ABI but mirror
-  // the filtered snapshot. See doc/filter-architecture.md §7.
-  std::memcpy(unfiltered_snapshot_xyz_.get(), snapshot_xyz_.get(), total_pix * 3 * sizeof(float));
-  unfiltered_snapshot_intensity_ = snapshot_intensity_;
+
+  // OFF-mode anchor P99 / intensity. Combined emission = filter-pass (snapshot_xyz_) +
+  // filter-fail (anchor_internal_xyz_), giving a filter-independent EV anchor. Computed
+  // server-side to avoid shipping a second full-XYZ buffer across the C API.
+  if (anchor_internal_xyz_) {
+    std::memcpy(anchor_snapshot_xyz_.get(), anchor_internal_xyz_.get(), total_pix * 3 * sizeof(float));
+    anchor_snapshot_intensity_ = snapshot_intensity_ + anchor_total_intensity_;
+
+    // P99 of combined Y. Allocate per call (called rarely; snapshot intervals dominate
+    // rendering cost). Skip zero pixels to match GUI ComputeP99Y semantics.
+    std::vector<float> y_vals;
+    y_vals.reserve(static_cast<size_t>(total_pix));
+    for (int i = 0; i < total_pix; i++) {
+      float y = snapshot_xyz_[i * 3 + 1] + anchor_snapshot_xyz_[i * 3 + 1];
+      if (y > 0.0f) {
+        y_vals.push_back(y);
+      }
+    }
+    if (y_vals.empty()) {
+      anchor_p99_y_ = 0.0f;
+    } else {
+      auto idx = static_cast<size_t>(static_cast<float>(y_vals.size()) * 0.99f);
+      if (idx >= y_vals.size()) {
+        idx = y_vals.size() - 1;
+      }
+      std::nth_element(y_vals.begin(), y_vals.begin() + static_cast<ptrdiff_t>(idx), y_vals.end());
+      anchor_p99_y_ = y_vals[idx];
+    }
+  }
 }
 
 void RenderConsumer::CountEffectivePixels() {
@@ -596,7 +670,8 @@ Result RenderConsumer::GetResult() const {
 RawXyzResult RenderConsumer::GetRawXyzResult() const {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   float per_pixel_intensity = total_pix > 0 ? snapshot_intensity_ / (kNormScale * total_pix) : 0.0f;
-  float unfiltered_per_pixel = total_pix > 0 ? unfiltered_snapshot_intensity_ / (kNormScale * total_pix) : 0.0f;
+  // OFF mode: scalar per-pixel anchor intensity; ON mode (anchor_internal_xyz_ == nullptr) returns 0.
+  float anchor_per_pixel = total_pix > 0 ? anchor_snapshot_intensity_ / (kNormScale * total_pix) : 0.0f;
   return { config_.id_,
            config_.resolution_[0],
            config_.resolution_[1],
@@ -606,22 +681,28 @@ RawXyzResult RenderConsumer::GetRawXyzResult() const {
            {},
            {},
            effective_pix_,
-           unfiltered_snapshot_xyz_.get(),
-           unfiltered_per_pixel };
+           anchor_p99_y_,
+           anchor_per_pixel };
 }
 
 void RenderConsumer::Reset() {
   total_intensity_ = 0;
   snapshot_intensity_ = 0;
-  // unfiltered_snapshot_intensity_ retained for ABI; mirrors snapshot_intensity_
-  // under Design A and must be cleared so a stale value cannot leak after Reset.
-  unfiltered_snapshot_intensity_ = 0;
   effective_pix_ = 0;
   auto buf_size = static_cast<size_t>(config_.resolution_[0]) * config_.resolution_[1] * 3;
   std::memset(internal_xyz_.get(), 0, buf_size * sizeof(float));
-  // snapshot_xyz_ / unfiltered_snapshot_xyz_ not zeroed: PrepareSnapshot will memcpy over them.
+  // snapshot_xyz_ not zeroed: PrepareSnapshot will memcpy over it.
   // has_ever_consumed_ = false (set in Stop) ensures GetRawXyzResults returns has_valid_data_=false
   // until new data arrives, preventing stale snapshot reads.
+
+  // anchor_internal_xyz_ may be null in OFF-without-filter (no filter-fail emission ever produced);
+  // we deliberately do not allocate-on-Reset to preserve the OFF-without-filter zero-cost path.
+  if (anchor_internal_xyz_) {
+    std::memset(anchor_internal_xyz_.get(), 0, buf_size * sizeof(float));
+  }
+  anchor_total_intensity_ = 0;
+  anchor_snapshot_intensity_ = 0;
+  anchor_p99_y_ = 0;
 }
 
 void RenderConsumer::ResetWith(const RenderConfig& new_config) {

@@ -303,6 +303,7 @@ static nlohmann::json ConfigToJson(const LUMICE_Config& c) {
     jr["intensity_factor"] = r.intensity_factor;
     jr["norm_mode"] = r.norm_mode;
     jr["overlap"] = r.overlap;
+    jr["adaptive_brightness"]["mode"] = (r.ab_mode == 0) ? "on" : "off";
     root["render"].push_back(jr);
   }
 
@@ -605,6 +606,11 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, LUMICE
     if (rj.contains("overlap")) {
       r.overlap = std::max(0.0f, rj.at("overlap").get<float>());
     }
+    r.ab_mode = 0;  // Default ON
+    if (rj.contains("adaptive_brightness") && rj.at("adaptive_brightness").contains("mode")) {
+      auto mode_str = rj.at("adaptive_brightness").at("mode").get<std::string>();
+      r.ab_mode = (mode_str == "off") ? 1 : 0;
+    }
     // lens, view, visible, background fields are ignored (not representable in LUMICE_Config)
   }
   return LUMICE_OK;
@@ -752,8 +758,8 @@ LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzRes
     out[i].has_valid_data = results[i].has_valid_data_ ? 1 : 0;
     out[i].snapshot_generation = results[i].snapshot_generation_;
     out[i].effective_pixels = results[i].effective_pixels_;
-    out[i].unfiltered_xyz_buffer = results[i].unfiltered_xyz_buffer_;
-    out[i].unfiltered_snapshot_intensity = results[i].unfiltered_snapshot_intensity_;
+    out[i].anchor_p99_y = results[i].anchor_p99_y_;
+    out[i].anchor_snapshot_intensity = results[i].anchor_snapshot_intensity_;
   }
 
   // Sentinel — only when caller provided an extra slot (count < max_count)

@@ -2,10 +2,8 @@
 
 The standard subprocess-based runner in :mod:`test.e2e.runner` only exposes
 return code / stdout / stderr; it has no way to read scalar fields like
-``unfiltered_snapshot_intensity`` from ``LUMICE_RawXyzResult``. Tests that
-need those values (notably the unfiltered intensity additivity tests added
-for task-query-filter-uplift-v2) drive Lumice through the C API directly via
-``ctypes``.
+``anchor_snapshot_intensity`` from ``LUMICE_RawXyzResult``. Tests that
+need those values drive Lumice through the C API directly via ``ctypes``.
 
 Each call to :func:`run_scene_capi` creates a fresh ``LUMICE_Server``,
 commits the requested config, polls until the server returns to IDLE with
@@ -34,25 +32,27 @@ from typing import Optional
 import numpy as np
 
 
-# Mirrors LUMICE_RawXyzResult in src/include/lumice.h (verified 72 bytes
-# on 64-bit macOS/Linux). Keep in sync with scripts/dump_xyz_stats.py:51.
+# Mirrors LUMICE_RawXyzResult in src/include/lumice.h (verified 64 bytes
+# on 64-bit macOS/Linux after the F1 mode-toggle ABI break: the two
+# unfiltered_* fields were replaced by scalar anchor_p99_y + anchor_snapshot_intensity,
+# dropping a pointer slot). Keep in sync with scripts/dump_xyz_stats.py.
 class LUMICE_RawXyzResult(ctypes.Structure):
     _fields_ = [
-        ("renderer_id",                   ctypes.c_int),
-        ("img_width",                     ctypes.c_int),
-        ("img_height",                    ctypes.c_int),
-        ("xyz_buffer",                    ctypes.POINTER(ctypes.c_float)),
-        ("snapshot_intensity",            ctypes.c_float),
-        ("intensity_factor",              ctypes.c_float),
-        ("has_valid_data",                ctypes.c_int),
-        ("snapshot_generation",           ctypes.c_uint64),
-        ("effective_pixels",              ctypes.c_int),
-        ("unfiltered_xyz_buffer",         ctypes.POINTER(ctypes.c_float)),
-        ("unfiltered_snapshot_intensity", ctypes.c_float),
+        ("renderer_id",                ctypes.c_int),
+        ("img_width",                  ctypes.c_int),
+        ("img_height",                 ctypes.c_int),
+        ("xyz_buffer",                 ctypes.POINTER(ctypes.c_float)),
+        ("snapshot_intensity",         ctypes.c_float),
+        ("intensity_factor",           ctypes.c_float),
+        ("has_valid_data",             ctypes.c_int),
+        ("snapshot_generation",        ctypes.c_uint64),
+        ("effective_pixels",           ctypes.c_int),
+        ("anchor_p99_y",               ctypes.c_float),
+        ("anchor_snapshot_intensity",  ctypes.c_float),
     ]
 
 
-assert ctypes.sizeof(LUMICE_RawXyzResult) == 72, (
+assert ctypes.sizeof(LUMICE_RawXyzResult) == 64, (
     "LUMICE_RawXyzResult size mismatch — verify lumice.h field layout"
 )
 
@@ -65,26 +65,39 @@ _LUMICE_SERVER_NOT_READY = 2
 
 @dataclass
 class SimResult:
-    """Subset of LUMICE_RawXyzResult fields exposed to test code."""
+    """Subset of LUMICE_RawXyzResult fields exposed to test code.
 
-    unfiltered_intensity: float
+    ``anchor_p99_y`` and ``anchor_snapshot_intensity`` are non-zero only when the
+    server is running in Adaptive Brightness OFF mode (F1) with a filter spec.
+    The legacy ``unfiltered_*`` C API fields were removed in scrum-adaptive-
+    additivity-redesign / task-f1-simulator-mode-toggle.
+    """
+
     snapshot_intensity: float
+    anchor_p99_y: float
+    anchor_snapshot_intensity: float
     has_valid_data: bool
     effective_pixels: int
 
 
 @dataclass
 class BufferedSimResult:
-    """SimResult plus copied XYZ buffers for partition-additivity tests."""
+    """SimResult plus a copied XYZ buffer.
 
-    unfiltered_intensity: float
+    The historical ``unf_buf`` (unfiltered XYZ image) was removed alongside the
+    ``unfiltered_xyz_buffer`` C API field. Tests that previously relied on it
+    (the partition_buffer_additivity family in test_additivity.py) are scheduled
+    for redesign on the OFF-mode anchor baseline in a follow-up task.
+    """
+
     snapshot_intensity: float
+    anchor_p99_y: float
+    anchor_snapshot_intensity: float
     has_valid_data: bool
     effective_pixels: int
     img_width: int
     img_height: int
     flt_buf: np.ndarray
-    unf_buf: np.ndarray
 
 
 def _project_root() -> Path:
@@ -210,8 +223,9 @@ def run_scene_capi(config_path: str, timeout_sec: int = 180) -> SimResult:
 
         r = results[0]
         return SimResult(
-            unfiltered_intensity=float(r.unfiltered_snapshot_intensity),
             snapshot_intensity=float(r.snapshot_intensity),
+            anchor_p99_y=float(r.anchor_p99_y),
+            anchor_snapshot_intensity=float(r.anchor_snapshot_intensity),
             has_valid_data=bool(r.has_valid_data),
             effective_pixels=int(r.effective_pixels),
         )
@@ -276,19 +290,18 @@ def run_scene_capi_buffered(config_path: str, timeout_sec: int = 180) -> Buffere
             time.sleep(0.2)
 
         r = results[0]
-        # Snapshot scalars + pointer addresses before any further API call
+        # Snapshot scalars + pointer addresses before any further API call.
         r_w = int(r.img_width)
         r_h = int(r.img_height)
         r_xyz_addr = ctypes.cast(r.xyz_buffer, ctypes.c_void_p).value
-        r_unf_addr = ctypes.cast(r.unfiltered_xyz_buffer, ctypes.c_void_p).value
         r_snap = float(r.snapshot_intensity)
-        r_unf_int = float(r.unfiltered_snapshot_intensity)
+        r_anchor_p99 = float(r.anchor_p99_y)
+        r_anchor_int = float(r.anchor_snapshot_intensity)
         r_valid = bool(r.has_valid_data)
         r_eff = int(r.effective_pixels)
-        if r_xyz_addr is None or r_unf_addr is None:
+        if r_xyz_addr is None:
             raise RuntimeError(
-                f"{config_path}: race — pointer became NULL after IDLE check "
-                f"(xyz={r_xyz_addr}, unf={r_unf_addr})"
+                f"{config_path}: race — xyz pointer became NULL after IDLE check"
             )
 
         n = r_w * r_h * 3
@@ -305,17 +318,16 @@ def run_scene_capi_buffered(config_path: str, timeout_sec: int = 180) -> Buffere
             )
 
         flt_buf = _copy_addr(r_xyz_addr)
-        unf_buf = _copy_addr(r_unf_addr)
 
         return BufferedSimResult(
-            unfiltered_intensity=r_unf_int,
             snapshot_intensity=r_snap,
+            anchor_p99_y=r_anchor_p99,
+            anchor_snapshot_intensity=r_anchor_int,
             has_valid_data=r_valid,
             effective_pixels=r_eff,
             img_width=r_w,
             img_height=r_h,
             flt_buf=flt_buf,
-            unf_buf=unf_buf,
         )
 
     finally:
