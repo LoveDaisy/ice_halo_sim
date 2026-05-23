@@ -108,11 +108,11 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       // Verify migration to copy model
       IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), 1);
       IM_CHECK_EQ(static_cast<int>(loaded.layers[0].entries.size()), 2);
-      IM_CHECK_EQ(loaded.layers[0].entries[0].crystal.type, gui::CrystalType::kPrism);
-      IM_CHECK_EQ(loaded.layers[0].entries[0].crystal.height, 2.0f);
+      IM_CHECK_EQ(gui::CrystalOf(loaded, loaded.layers[0].entries[0]).type, gui::CrystalType::kPrism);
+      IM_CHECK_EQ(gui::CrystalOf(loaded, loaded.layers[0].entries[0]).height, 2.0f);
       IM_CHECK_EQ(loaded.layers[0].entries[0].proportion, 60.0f);
-      IM_CHECK_EQ(loaded.layers[0].entries[1].crystal.type, gui::CrystalType::kPyramid);
-      IM_CHECK(!loaded.layers[0].entries[1].filter.has_value());
+      IM_CHECK_EQ(gui::CrystalOf(loaded, loaded.layers[0].entries[1]).type, gui::CrystalType::kPyramid);
+      IM_CHECK(!loaded.layers[0].entries[1].filter_id.has_value());
       IM_CHECK_EQ(loaded.sun.altitude, 25.0f);
     };
   }
@@ -125,28 +125,31 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
 
       // Set up a state with multiple entries, filter, and pyramid crystal
       auto& entry0 = gui::g_state.layers[0].entries[0];
-      entry0.crystal.type = gui::CrystalType::kPyramid;
-      entry0.crystal.prism_h = 2.0f;
-      entry0.crystal.upper_h = 0.3f;
-      entry0.crystal.lower_h = 0.4f;
+      gui::CrystalOf(gui::g_state, entry0).type = gui::CrystalType::kPyramid;
+      gui::CrystalOf(gui::g_state, entry0).prism_h = 2.0f;
+      gui::CrystalOf(gui::g_state, entry0).upper_h = 0.3f;
+      gui::CrystalOf(gui::g_state, entry0).lower_h = 0.4f;
       // Non-default face_distance to exercise the conditional-write branch in SerializeCrystal.
-      entry0.crystal.face_distance[0] = 1.2f;
-      entry0.crystal.face_distance[3] = 0.9f;
+      gui::CrystalOf(gui::g_state, entry0).face_distance[0] = 1.2f;
+      gui::CrystalOf(gui::g_state, entry0).face_distance[3] = 0.9f;
       // Non-default axis distributions to verify axis round-trip on all three axes.
       // All three use the same SerializeAxisDist/FillAxisDist path, but covering each
       // individually guards against future per-axis special-casing (e.g. roll default-omission).
-      entry0.crystal.zenith = gui::AxisDist{ gui::AxisDistType::kGauss, 25.0f, 3.0f };
-      entry0.crystal.azimuth = gui::AxisDist{ gui::AxisDistType::kUniform, 10.0f, 20.0f };
-      entry0.crystal.roll = gui::AxisDist{ gui::AxisDistType::kLaplacian, 5.0f, 2.0f };
+      gui::CrystalOf(gui::g_state, entry0).zenith = gui::AxisDist{ gui::AxisDistType::kGauss, 25.0f, 3.0f };
+      gui::CrystalOf(gui::g_state, entry0).azimuth = gui::AxisDist{ gui::AxisDistType::kUniform, 10.0f, 20.0f };
+      gui::CrystalOf(gui::g_state, entry0).roll = gui::AxisDist{ gui::AxisDistType::kLaplacian, 5.0f, 2.0f };
       entry0.proportion = 75.0f;
       gui::FilterConfig f;
       f.param = gui::RaypathParams{ "3-1-5" };
-      entry0.filter = f;
+      gui::SetFilter(gui::g_state, entry0, f);
 
-      // Add a second entry
+      // Add a second entry with its own crystal pool slot (ID-pool model).
+      gui::CrystalConfig extra_crystal;
+      extra_crystal.type = gui::CrystalType::kPrism;
+      extra_crystal.height = 3.0f;
       gui::EntryCard extra;
-      extra.crystal.type = gui::CrystalType::kPrism;
-      extra.crystal.height = 3.0f;
+      extra.crystal_id = static_cast<int>(gui::g_state.crystals.size());
+      gui::g_state.crystals.push_back(extra_crystal);
       extra.proportion = 25.0f;
       gui::g_state.layers[0].entries.push_back(extra);
 
@@ -166,28 +169,28 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       // Verify all fields survived round-trip
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
       auto& loaded0 = gui::g_state.layers[0].entries[0];
-      IM_CHECK_EQ(loaded0.crystal.type, gui::CrystalType::kPyramid);
-      IM_CHECK_EQ(loaded0.crystal.prism_h, 2.0f);
-      IM_CHECK_EQ(loaded0.crystal.upper_h, 0.3f);
-      IM_CHECK_EQ(loaded0.crystal.lower_h, 0.4f);
-      IM_CHECK_EQ(loaded0.crystal.face_distance[0], 1.2f);
-      IM_CHECK_EQ(loaded0.crystal.face_distance[3], 0.9f);
-      IM_CHECK_EQ(loaded0.crystal.zenith.type, gui::AxisDistType::kGauss);
-      IM_CHECK_EQ(loaded0.crystal.zenith.mean, 25.0f);
-      IM_CHECK_EQ(loaded0.crystal.zenith.std, 3.0f);
-      IM_CHECK_EQ(loaded0.crystal.azimuth.type, gui::AxisDistType::kUniform);
-      IM_CHECK_EQ(loaded0.crystal.azimuth.mean, 10.0f);
-      IM_CHECK_EQ(loaded0.crystal.azimuth.std, 20.0f);
-      IM_CHECK_EQ(loaded0.crystal.roll.type, gui::AxisDistType::kLaplacian);
-      IM_CHECK_EQ(loaded0.crystal.roll.mean, 5.0f);
-      IM_CHECK_EQ(loaded0.crystal.roll.std, 2.0f);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded0).type, gui::CrystalType::kPyramid);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded0).prism_h, 2.0f);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded0).upper_h, 0.3f);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded0).lower_h, 0.4f);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded0).face_distance[0], 1.2f);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded0).face_distance[3], 0.9f);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded0).zenith.type, gui::AxisDistType::kGauss);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded0).zenith.mean, 25.0f);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded0).zenith.std, 3.0f);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded0).azimuth.type, gui::AxisDistType::kUniform);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded0).azimuth.mean, 10.0f);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded0).azimuth.std, 20.0f);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded0).roll.type, gui::AxisDistType::kLaplacian);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded0).roll.mean, 5.0f);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded0).roll.std, 2.0f);
       IM_CHECK_EQ(loaded0.proportion, 75.0f);
-      IM_CHECK(loaded0.filter.has_value());
-      IM_CHECK_EQ(loaded0.filter->RaypathText(), std::string("3-1-5"));
+      IM_CHECK(loaded0.filter_id.has_value());
+      IM_CHECK_EQ(gui::g_state.filters[*loaded0.filter_id].RaypathText(), std::string("3-1-5"));
 
       auto& loaded1 = gui::g_state.layers[0].entries[1];
-      IM_CHECK_EQ(loaded1.crystal.type, gui::CrystalType::kPrism);
-      IM_CHECK_EQ(loaded1.crystal.height, 3.0f);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded1).type, gui::CrystalType::kPrism);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded1).height, 3.0f);
       IM_CHECK_EQ(loaded1.proportion, 25.0f);
 
       std::remove(tmp_path);
@@ -485,18 +488,18 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::Layer layer;
       layer.probability = 0.0f;
       gui::EntryCard entry;
-      entry.crystal.type = gui::CrystalType::kPrism;
-      entry.crystal.height = 1.0f;
-      entry.crystal.face_distance[0] = 1.0f;
-      entry.crystal.face_distance[1] = 1.0f;
-      entry.crystal.face_distance[2] = 1.0f;
-      entry.crystal.face_distance[3] = 1.0f;
-      entry.crystal.face_distance[4] = 1.0f;
-      entry.crystal.face_distance[5] = 1.0f;
+      gui::CrystalOf(gui::g_state, entry).type = gui::CrystalType::kPrism;
+      gui::CrystalOf(gui::g_state, entry).height = 1.0f;
+      gui::CrystalOf(gui::g_state, entry).face_distance[0] = 1.0f;
+      gui::CrystalOf(gui::g_state, entry).face_distance[1] = 1.0f;
+      gui::CrystalOf(gui::g_state, entry).face_distance[2] = 1.0f;
+      gui::CrystalOf(gui::g_state, entry).face_distance[3] = 1.0f;
+      gui::CrystalOf(gui::g_state, entry).face_distance[4] = 1.0f;
+      gui::CrystalOf(gui::g_state, entry).face_distance[5] = 1.0f;
       entry.proportion = 100.0f;
       gui::FilterConfig f;
       f.param = gui::RaypathParams{ "3-5; 1-3" };
-      entry.filter = f;
+      gui::SetFilter(gui::g_state, entry, f);
       layer.entries.push_back(entry);
       gui::g_state.layers.push_back(layer);
 
@@ -557,15 +560,15 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::Layer layer;
       layer.probability = 0.0f;
       gui::EntryCard entry;
-      entry.crystal.type = gui::CrystalType::kPrism;
-      entry.crystal.height = 1.0f;
+      gui::CrystalOf(gui::g_state, entry).type = gui::CrystalType::kPrism;
+      gui::CrystalOf(gui::g_state, entry).height = 1.0f;
       for (int i = 0; i < 6; ++i) {
-        entry.crystal.face_distance[i] = 1.0f;
+        gui::CrystalOf(gui::g_state, entry).face_distance[i] = 1.0f;
       }
       entry.proportion = 100.0f;
       gui::FilterConfig f;
       f.param = gui::RaypathParams{ "3-1-5" };
-      entry.filter = f;
+      gui::SetFilter(gui::g_state, entry, f);
       layer.entries.push_back(entry);
       gui::g_state.layers.push_back(layer);
 
@@ -597,16 +600,20 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       layer.probability = 0.0f;
 
       auto make_entry = [](gui::FilterParamVariant param) {
-        gui::EntryCard e;
-        e.crystal.type = gui::CrystalType::kPrism;
-        e.crystal.height = 1.0f;
+        // ID-pool model: each entry needs its own crystal + filter pool slot.
+        gui::CrystalConfig c;
+        c.type = gui::CrystalType::kPrism;
+        c.height = 1.0f;
         for (int i = 0; i < 6; ++i) {
-          e.crystal.face_distance[i] = 1.0f;
+          c.face_distance[i] = 1.0f;
         }
+        gui::EntryCard e;
+        e.crystal_id = static_cast<int>(gui::g_state.crystals.size());
+        gui::g_state.crystals.push_back(c);
         e.proportion = 25.0f;
         gui::FilterConfig f;
         f.param = std::move(param);
-        e.filter = f;
+        gui::SetFilter(gui::g_state, e, f);
         return e;
       };
 
@@ -628,11 +635,11 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
 
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
 
-      const auto& f0 = *gui::g_state.layers[0].entries[0].filter;
+      const auto& f0 = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
       IM_CHECK(std::holds_alternative<gui::RaypathParams>(f0.param));
       IM_CHECK_EQ(std::get<gui::RaypathParams>(f0.param).raypath_text, std::string("3-1-5"));
 
-      const auto& f1 = *gui::g_state.layers[0].entries[1].filter;
+      const auto& f1 = gui::g_state.filters[*gui::g_state.layers[0].entries[1].filter_id];
       IM_CHECK(std::holds_alternative<gui::EntryExitParams>(f1.param));
       const auto& ee = std::get<gui::EntryExitParams>(f1.param);
       IM_CHECK_EQ(ee.entry_text, std::string("7"));
@@ -668,8 +675,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK(ok);
       IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), 1);
       IM_CHECK_EQ(static_cast<int>(loaded.layers[0].entries.size()), 1);
-      IM_CHECK(loaded.layers[0].entries[0].filter.has_value());
-      const auto& f = *loaded.layers[0].entries[0].filter;
+      IM_CHECK(loaded.layers[0].entries[0].filter_id.has_value());
+      const auto& f = loaded.filters[*loaded.layers[0].entries[0].filter_id];
       IM_CHECK(std::holds_alternative<gui::RaypathParams>(f.param));
       IM_CHECK_EQ(std::get<gui::RaypathParams>(f.param).raypath_text, std::string("3-1-5"));
     };
@@ -692,10 +699,10 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       layer.probability = 1.0f;
 
       gui::EntryCard e;
-      e.crystal.type = gui::CrystalType::kPrism;
-      e.crystal.height = 1.0f;
+      gui::CrystalOf(gui::g_state, e).type = gui::CrystalType::kPrism;
+      gui::CrystalOf(gui::g_state, e).height = 1.0f;
       for (int i = 0; i < 6; ++i) {
-        e.crystal.face_distance[i] = 1.0f;
+        gui::CrystalOf(gui::g_state, e).face_distance[i] = 1.0f;
       }
       e.proportion = 100.0f;
 
@@ -705,7 +712,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       fc.sym_b = false;  // omitted
       fc.sym_d = true;   // → "D"
       fc.param = gui::EntryExitParams{ /*entry_text=*/"2", /*exit_text=*/"5" };
-      e.filter = fc;
+      gui::SetFilter(gui::g_state, e, fc);
 
       layer.entries.push_back(e);
       gui::g_state.layers.push_back(layer);
@@ -768,8 +775,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(restored.layers[0].entries.size()), 1);
 
       // direction type → unknown-type fallback → empty RaypathParams
-      IM_CHECK(restored.layers[0].entries[0].filter.has_value());
-      const auto& f = *restored.layers[0].entries[0].filter;
+      IM_CHECK(restored.layers[0].entries[0].filter_id.has_value());
+      const auto& f = restored.filters[*restored.layers[0].entries[0].filter_id];
       IM_CHECK(std::holds_alternative<gui::RaypathParams>(f.param));
       IM_CHECK(std::get<gui::RaypathParams>(f.param).raypath_text.empty());
     };
@@ -804,8 +811,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::GuiState restored;
       bool ok = gui::DeserializeGuiStateJson(v2_lmc, restored);
       IM_CHECK(ok);
-      IM_CHECK(restored.layers[0].entries[0].filter.has_value());
-      const auto& f = *restored.layers[0].entries[0].filter;
+      IM_CHECK(restored.layers[0].entries[0].filter_id.has_value());
+      const auto& f = restored.filters[*restored.layers[0].entries[0].filter_id];
       IM_CHECK(std::holds_alternative<gui::EntryExitParams>(f.param));
       const auto& ee = std::get<gui::EntryExitParams>(f.param);
       IM_CHECK_EQ(ee.entry_text, std::string("7"));
@@ -822,7 +829,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
   }
 
   // T13 — AC7 serialization equivalence: Remove EE Filter via GUI → OK →
-  // entry.filter == nullopt → SerializeCoreConfig emits no "filter" field.
+  // entry.filter_id = nullopt → SerializeCoreConfig emits no "filter" field.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "entry_exit_remove_ok_no_filter_in_json");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -840,10 +847,10 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         ee.entry_text = "3";
         ee.exit_text = "6";
         fc.param = ee;
-        gui::g_state.layers[0].entries[0].filter = fc;
+        gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], fc);
       }
       ctx->Yield(2);
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
@@ -856,7 +863,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // filter must be nullopt after Remove + OK.
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
 
       // SerializeCoreConfig must not emit any "filter" field (no EE residue).
       const std::string core_json = gui::SerializeCoreConfig(gui::g_state);

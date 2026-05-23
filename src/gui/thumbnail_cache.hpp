@@ -3,7 +3,6 @@
 
 #include <cstdint>
 #include <deque>
-#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -25,12 +24,13 @@ class ThumbnailCache {
   // Release all GL resources. Must be called before GL context is destroyed.
   void Destroy();
 
-  // Look up the thumbnail texture for the given entry.
+  // Look up the thumbnail texture for the given crystal pool slot.
+  // Multiple entries that share the same crystal_id share one cached texture.
   // - Cache miss: creates a dirty entry, enqueues for rendering, returns 0.
   // - Cache hit + dirty: returns 0 (pending update).
   // - Cache hit + clean: returns the GL texture ID.
-  // Idempotent: repeated calls for the same entry in the same frame do not duplicate enqueue.
-  uintptr_t GetTexture(int layer_idx, int entry_idx);
+  // Idempotent: repeated calls for the same crystal_id in the same frame do not duplicate enqueue.
+  uintptr_t GetTexture(int crystal_id);
 
   // Process up to max_updates entries from the update queue.
   // For each entry: builds mesh, determines pose rotation, renders, blits to entry texture.
@@ -38,8 +38,10 @@ class ThumbnailCache {
   // Must be called once per frame, BEFORE card rendering.
   void ProcessUpdateQueue(const GuiState& state, int max_updates);
 
-  // Mark a specific entry as dirty and enqueue for re-rendering.
-  void Invalidate(int layer_idx, int entry_idx);
+  // Mark the cache entry for the given crystal pool slot as dirty and enqueue for re-rendering.
+  // All entries sharing the same crystal_id share one cache slot, so this invalidates
+  // the thumbnail for every card that references this crystal.
+  void Invalidate(int crystal_id);
 
   // Mark all entries as dirty and enqueue for re-rendering.
   void InvalidateAll();
@@ -55,11 +57,9 @@ class ThumbnailCache {
     bool dirty = true;
   };
 
-  static uint64_t MakeKey(int layer_idx, int entry_idx) {
-    return (static_cast<uint64_t>(layer_idx) << 32) | static_cast<uint32_t>(entry_idx);
-  }
+  static uint64_t MakeKey(int crystal_id) { return static_cast<uint64_t>(crystal_id); }
 
-  void RenderThumbnail(int layer_idx, int entry_idx, const GuiState& state);
+  void RenderThumbnail(int crystal_id, const GuiState& state);
 
   CrystalRenderer renderer_;
   bool valid_ = false;

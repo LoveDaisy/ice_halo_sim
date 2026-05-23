@@ -69,10 +69,10 @@ void RegisterP0Tests(ImGuiTestEngine* engine) {
 
       // Modify state via layers model
       auto& entry0 = gui::g_state.layers[0].entries[0];
-      entry0.crystal.type = gui::CrystalType::kPyramid;
-      entry0.crystal.prism_h = 2.0f;
-      entry0.crystal.upper_h = 0.3f;
-      entry0.crystal.lower_h = 0.4f;
+      gui::CrystalOf(gui::g_state, entry0).type = gui::CrystalType::kPyramid;
+      gui::CrystalOf(gui::g_state, entry0).prism_h = 2.0f;
+      gui::CrystalOf(gui::g_state, entry0).upper_h = 0.3f;
+      gui::CrystalOf(gui::g_state, entry0).lower_h = 0.4f;
       gui::g_state.sun.altitude = 30.0f;
       gui::g_state.sim.max_hits = 12;
 
@@ -83,7 +83,7 @@ void RegisterP0Tests(ImGuiTestEngine* engine) {
 
       // Reset
       gui::DoNew();
-      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.type, gui::CrystalType::kPrism);
+      IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].type, gui::CrystalType::kPrism);
 
       // Load
       std::vector<unsigned char> tex_data;
@@ -94,10 +94,10 @@ void RegisterP0Tests(ImGuiTestEngine* engine) {
 
       // Verify roundtrip
       auto& loaded_entry = gui::g_state.layers[0].entries[0];
-      IM_CHECK_EQ(loaded_entry.crystal.type, gui::CrystalType::kPyramid);
-      IM_CHECK_EQ(loaded_entry.crystal.prism_h, 2.0f);
-      IM_CHECK_EQ(loaded_entry.crystal.upper_h, 0.3f);
-      IM_CHECK_EQ(loaded_entry.crystal.lower_h, 0.4f);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded_entry).type, gui::CrystalType::kPyramid);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded_entry).prism_h, 2.0f);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded_entry).upper_h, 0.3f);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded_entry).lower_h, 0.4f);
       IM_CHECK_EQ(gui::g_state.sun.altitude, 30.0f);
       IM_CHECK_EQ(gui::g_state.sim.max_hits, 12);
       IM_CHECK(tex_data.empty());  // save_texture=false
@@ -171,15 +171,15 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Verify initial: entry has no filter
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
 
       // Programmatically set a filter so we can test clearing it
       gui::FilterConfig f;
       f.param = gui::RaypathParams{ "3-1-5" };
-      gui::g_state.layers[0].entries[0].filter = f;
+      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
 
       // Verify filter is set
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
 
       // Open filter modal, click Remove (buffered) then OK to commit removal.
       ctx->ItemClick("**/Edit##fi");
@@ -190,7 +190,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Verify filter is cleared
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
     };
   }
 
@@ -209,7 +209,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       gui::FilterConfig f;
       f.param = gui::RaypathParams{ "3-1-5" };
-      gui::g_state.layers[0].entries[0].filter = f;
+      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
@@ -252,7 +252,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       f.sym_p = true;
       f.sym_b = false;  // <-- non-default; reset would flip it to true.
       f.sym_d = true;
-      gui::g_state.layers[0].entries[0].filter = f;
+      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
       ctx->Yield();
 
       ctx->ItemClick("**/Edit##fi");
@@ -264,11 +264,12 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_p == true);
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_b == false);
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_d == true);
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(),
+                      "3-1-5");
+      IM_CHECK(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].sym_p == true);
+      IM_CHECK(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].sym_b == false);
+      IM_CHECK(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].sym_d == true);
     };
   }
 
@@ -286,7 +287,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       f.sym_p = true;
       f.sym_b = false;
       f.sym_d = true;
-      gui::g_state.layers[0].entries[0].filter = f;
+      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
       ctx->Yield();
 
       ctx->ItemClick("**/Edit##fi");
@@ -296,11 +297,12 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(4);
 
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_p == true);
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_b == false);
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter->sym_d == true);
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(),
+                      "3-1-5");
+      IM_CHECK(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].sym_p == true);
+      IM_CHECK(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].sym_b == false);
+      IM_CHECK(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].sym_d == true);
     };
   }
 
@@ -315,7 +317,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       gui::FilterConfig f;
       f.param = gui::RaypathParams{ "1-3" };
-      gui::g_state.layers[0].entries[0].filter = f;
+      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
       ctx->Yield();
 
       ctx->ItemClick("**/Edit##fi");
@@ -327,8 +329,9 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(),
+                      "3-1-5");
     };
   }
 
@@ -343,7 +346,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Entry has no filter initially → raypath empty → Remove disabled.
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
@@ -365,7 +368,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
   // P1: scrum-gui-polish-v13 161.2 — In Immediate mode, Remove applies on the
   // next frame (ApplyBuffersToEntry sees empty raypath and writes nullopt).
-  // Dual observable: entry.filter == nullopt (direct) + intensity_locked
+  // Dual observable: entry.filter_id = nullopt (direct) + intensity_locked
   // (MarkFilterDirty side effect at gui_state.hpp:264-268). Pre-condition
   // asserts intensity_locked starts false to avoid tautologies.
   {
@@ -376,7 +379,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       gui::FilterConfig f;
       f.param = gui::RaypathParams{ "3-1-5" };
-      gui::g_state.layers[0].entries[0].filter = f;
+      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
       gui::g_state.intensity_locked = false;
       ctx->Yield();
 
@@ -394,7 +397,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/Remove Filter##filter");
       ctx->Yield(2);
 
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
       IM_CHECK(gui::g_state.intensity_locked == true);
 
       // Close modal (Immediate uses Close button, not Cancel).
@@ -419,7 +422,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       ResetTestState();
       ctx->Yield(2);
-      const float orig_h = gui::g_state.layers[0].entries[0].crystal.height;
+      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height;
 
       // AC #1: on modal open, no tab carries a dirty marker.
       ctx->ItemClick("**/Edit##cr");
@@ -588,7 +591,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // Stage a filter on the entry so Remove Filter is a real change.
       gui::FilterConfig f;
       f.param = gui::RaypathParams{ "3-1-5" };
-      gui::g_state.layers[0].entries[0].filter = f;
+      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
       // "finite rays just finished" snapshot state.
       gui::g_state.sim_state = gui::GuiState::SimState::kDone;
       gui::g_state.snapshot_intensity = 0.5f;
@@ -631,7 +634,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       gui::g_state.dirty = false;
       ctx->Yield();
 
-      const float orig_h = gui::g_state.layers[0].entries[0].crystal.height;
+      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height;
 
       // Open Edit modal (Staged), then toggle Immediate — triggers close+reopen.
       ctx->ItemClick("**/Edit##cr");
@@ -704,8 +707,8 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // frames have a "last known good" to preserve.
       ctx->ItemInputValue("**/Raypath##filter_modal", "3-1");
       ctx->Yield(2);
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1");
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(), "3-1");
 
       // kInvalid: pure non-numeric "abc" — syntactically invalid.
       ctx->ItemInputValue("**/Raypath##filter_modal", "abc");
@@ -722,8 +725,8 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
         IM_CHECK((info_rm.ItemFlags & ImGuiItemFlags_Disabled) == 0);
       }
       // L2 + L3: guard intercepted — entry.filter preserved at last valid.
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1");
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(), "3-1");
 
       // kIncomplete: trailing separator "3-" — syntactically incomplete per
       // ValidateRaypathText rules. Guard treats same as kInvalid (Staged OK
@@ -737,20 +740,21 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
         auto info_rm = ctx->ItemInfo("**/Remove Filter##filter");
         IM_CHECK((info_rm.ItemFlags & ImGuiItemFlags_Disabled) == 0);
       }
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1");
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(), "3-1");
 
       // Valid recovery: a fresh valid raypath must commit normally, proving
       // the guard does not wedge the entry permanently after a rejection.
       ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
       ctx->Yield(2);
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(),
+                      "3-1-5");
 
       // Empty → nullopt (161.2 rule unchanged by this task).
       ctx->ItemInputValue("**/Raypath##filter_modal", "");
       ctx->Yield(2);
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
 
       ctx->ItemClick("**/Close##edit_modal");
       ctx->Yield(2);
@@ -768,7 +772,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // mode-switch path — that is covered by Test 5).
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
-      const float orig_h = gui::g_state.layers[0].entries[0].crystal.height;
+      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height;
 
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(4);
@@ -777,7 +781,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // commits every frame via CommitAllBuffersImmediate).
       ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 2.5f);
       ctx->Yield(2);
-      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.height, orig_h + 2.5f);
+      IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height, orig_h + 2.5f);
 
       ctx->ItemClick("**/Close##edit_modal");
       ctx->Yield(2);
@@ -799,7 +803,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ResetTestState();
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
-      const float orig_h = gui::g_state.layers[0].entries[0].crystal.height;
+      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height;
 
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(4);
@@ -824,7 +828,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ResetTestState();
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
-      const float orig_h = gui::g_state.layers[0].entries[0].crystal.height;
+      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height;
 
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(4);
@@ -833,13 +837,13 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       ctx->ItemClick("**/Close##edit_modal");
       ctx->Yield(2);
-      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.height, orig_h + 4.0f);
+      IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height, orig_h + 4.0f);
 
       // Reopen to confirm the value truly persisted through close (guards
       // against any path that might silently revert buffer→entry mapping).
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(4);
-      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.height, orig_h + 4.0f);
+      IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height, orig_h + 4.0f);
       ctx->ItemClick("**/Close##edit_modal");
       ctx->Yield(2);
       gui::g_state.modal_immediate_mode = false;
@@ -856,7 +860,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ResetTestState();
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
-      const float orig_h = gui::g_state.layers[0].entries[0].crystal.height;
+      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height;
 
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(4);
@@ -867,7 +871,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // ImGui's default popup handling closes the top popup on Escape.
       ctx->KeyPress(ImGuiKey_Escape);
       ctx->Yield(2);
-      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.height, orig_h + 5.0f);
+      IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height, orig_h + 5.0f);
 
       gui::g_state.modal_immediate_mode = false;
     };
@@ -893,7 +897,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // has no filter until OK.
       ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
       ctx->Yield(2);
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
 
       // Toggle Immediate: switch commits the buffer via CommitAllBuffersImmediate,
       // then close+reopen preserves tab selection + buffer.
@@ -901,8 +905,9 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(8);
 
       // Filter is now populated on the entry (committed by the switch).
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(),
+                      "3-1-5");
       // Filter tab controls still accessible — tab selection survived.
       IM_CHECK(ctx->ItemExists("**/Raypath##filter_modal"));
 
@@ -1349,9 +1354,10 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Default crystal: azimuth = Uniform 360°, roll mean = 0 — D is applicable.
-      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.azimuth.type, gui::AxisDistType::kUniform);
-      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.azimuth.std, 360.0f);
-      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.roll.mean, 0.0f);
+      IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].azimuth.type,
+                  gui::AxisDistType::kUniform);
+      IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].azimuth.std, 360.0f);
+      IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].roll.mean, 0.0f);
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
@@ -1372,8 +1378,10 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      gui::g_state.layers[0].entries[0].crystal.azimuth = { gui::AxisDistType::kUniform, 0.0f, 360.0f };
-      gui::g_state.layers[0].entries[0].crystal.roll = { gui::AxisDistType::kUniform, 15.0f, 360.0f };
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].azimuth = { gui::AxisDistType::kUniform, 0.0f,
+                                                                                      360.0f };
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].roll = { gui::AxisDistType::kUniform, 15.0f,
+                                                                                   360.0f };
       ctx->Yield();
 
       ctx->ItemClick("**/Edit##fi");
@@ -1395,8 +1403,10 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      gui::g_state.layers[0].entries[0].crystal.azimuth = { gui::AxisDistType::kGauss, 0.0f, 30.0f };
-      gui::g_state.layers[0].entries[0].crystal.roll = { gui::AxisDistType::kUniform, 0.0f, 360.0f };
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].azimuth = { gui::AxisDistType::kGauss, 0.0f,
+                                                                                      30.0f };
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].roll = { gui::AxisDistType::kUniform, 0.0f,
+                                                                                   360.0f };
       ctx->Yield();
 
       ctx->ItemClick("**/Edit##fi");
@@ -1523,8 +1533,8 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Modify the default entry's crystal type
-      gui::g_state.layers[0].entries[0].crystal.type = gui::CrystalType::kPyramid;
-      gui::g_state.layers[0].entries[0].crystal.prism_h = 2.5f;
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].type = gui::CrystalType::kPyramid;
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].prism_h = 2.5f;
       ctx->Yield();
 
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
@@ -1536,8 +1546,8 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
 
       // Verify the copy has same crystal params
       auto& copy = gui::g_state.layers[0].entries[1];
-      IM_CHECK_EQ(copy.crystal.type, gui::CrystalType::kPyramid);
-      IM_CHECK_EQ(copy.crystal.prism_h, 2.5f);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, copy).type, gui::CrystalType::kPyramid);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, copy).prism_h, 2.5f);
     };
   }
 
@@ -1629,7 +1639,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.type, gui::CrystalType::kPrism);
+      IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].type, gui::CrystalType::kPrism);
 
       // Open crystal modal
       ctx->ItemClick("**/Edit##cr");
@@ -1644,7 +1654,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Height should be clamped to >= 0.01 (kLog with min=0.01)
-      IM_CHECK_GE(gui::g_state.layers[0].entries[0].crystal.height, 0.01f - 1e-6f);
+      IM_CHECK_GE(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height, 0.01f - 1e-6f);
     };
   }
 
@@ -1656,7 +1666,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Switch to Pyramid type programmatically
-      gui::g_state.layers[0].entries[0].crystal.type = gui::CrystalType::kPyramid;
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].type = gui::CrystalType::kPyramid;
       ctx->Yield();
 
       // Open crystal modal
@@ -1671,7 +1681,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
-      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.upper_h, 0.0f);
+      IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].upper_h, 0.0f);
     };
   }
 
@@ -1682,7 +1692,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      gui::g_state.layers[0].entries[0].crystal.type = gui::CrystalType::kPyramid;
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].type = gui::CrystalType::kPyramid;
       ctx->Yield();
 
       ctx->ItemClick("**/Edit##cr");
@@ -1695,7 +1705,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
-      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.upper_h, 1.0f);
+      IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].upper_h, 1.0f);
     };
   }
 
@@ -1710,7 +1720,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      gui::g_state.layers[0].entries[0].crystal.type = gui::CrystalType::kPyramid;
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].type = gui::CrystalType::kPyramid;
       ctx->Yield();
 
       ctx->ItemClick("**/Edit##cr");
@@ -1722,7 +1732,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
-      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.upper_h, 0.5f);
+      IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].upper_h, 0.5f);
     };
   }
 
@@ -2568,7 +2578,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
       auto baseline = gui::g_state.texture_upload_count;
 
       // Act: change a crystal parameter, mark dirty, commit on test thread
-      gui::g_state.layers[0].entries[0].crystal.height = 2.5f;
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height = 2.5f;
       gui::g_state.dirty = true;
       gui::DoRun();
 
@@ -2591,7 +2601,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
       // Pre-register a filter on the first entry so StartPerfSimulation's DoRun commits with it
       gui::FilterConfig f;
       f.param = gui::RaypathParams{ "3-1-5" };
-      gui::g_state.layers[0].entries[0].filter = f;
+      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
 
       StartPerfSimulation();
 
@@ -2619,7 +2629,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
       auto baseline = gui::g_state.texture_upload_count;
 
       // Act: change filter raypath, mark filter dirty, commit
-      gui::g_state.layers[0].entries[0].filter->MutableRaypathText() = "3-1-5-7";
+      gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].MutableRaypathText() = "3-1-5-7";
       gui::g_state.MarkFilterDirty();
       gui::DoRun();
 
@@ -2724,8 +2734,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       std::remove(tmp_path);  // clean up any stale file from a previous failed run
       gui::g_state.current_file_path = tmp_path;
       // Modify state in a verifiable way
-      gui::g_state.layers[0].entries[0].crystal.type = gui::CrystalType::kPyramid;
-      gui::g_state.layers[0].entries[0].crystal.prism_h = 3.5f;
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].type = gui::CrystalType::kPyramid;
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].prism_h = 3.5f;
       gui::g_state.dirty = true;
       ctx->Yield();
 
@@ -2746,8 +2756,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       int th = 0;
       bool load_ok = gui::LoadLmcFile(tmp_path, loaded, tex, tw, th);
       IM_CHECK(load_ok);
-      IM_CHECK_EQ(loaded.layers[0].entries[0].crystal.type, gui::CrystalType::kPyramid);
-      IM_CHECK_EQ(loaded.layers[0].entries[0].crystal.prism_h, 3.5f);
+      IM_CHECK_EQ(gui::CrystalOf(loaded, loaded.layers[0].entries[0]).type, gui::CrystalType::kPyramid);
+      IM_CHECK_EQ(gui::CrystalOf(loaded, loaded.layers[0].entries[0]).prism_h, 3.5f);
 
       std::remove(tmp_path);
     };
@@ -2760,7 +2770,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      auto& cr = gui::g_state.layers[0].entries[0].crystal;
+      auto& cr = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id];
       auto type_before = cr.type;
       float height_before = cr.height;
 
@@ -2786,7 +2796,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Verify initial height
-      float initial_height = gui::g_state.layers[0].entries[0].crystal.height;
+      float initial_height = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height;
 
       // Open crystal modal
       ctx->ItemClick("**/Edit##cr");
@@ -2801,7 +2811,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Height should be updated to 5.0
-      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal.height, 5.0f);
+      IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height, 5.0f);
     };
   }
 
@@ -2825,12 +2835,12 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       auto& entry = gui::g_state.layers[0].entries[0];
-      IM_CHECK_EQ(entry.crystal.height, 5.0f);
-      gui::AxisDist axis_zenith_baseline = entry.crystal.zenith;
-      gui::AxisDist axis_azimuth_baseline = entry.crystal.azimuth;
-      gui::AxisDist axis_roll_baseline = entry.crystal.roll;
-      std::string name_baseline = entry.crystal.name;
-      gui::CrystalType type_baseline = entry.crystal.type;
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).height, 5.0f);
+      gui::AxisDist axis_zenith_baseline = gui::CrystalOf(gui::g_state, entry).zenith;
+      gui::AxisDist axis_azimuth_baseline = gui::CrystalOf(gui::g_state, entry).azimuth;
+      gui::AxisDist axis_roll_baseline = gui::CrystalOf(gui::g_state, entry).roll;
+      std::string name_baseline = gui::CrystalOf(gui::g_state, entry).name;
+      gui::CrystalType type_baseline = gui::CrystalOf(gui::g_state, entry).type;
 
       // Step 2: open modal again, modify height to another non-default (2.0),
       // click Reset All, then OK to commit the reset.
@@ -2845,22 +2855,22 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
       // Step 3: assert all 7 shape fields back to defaults.
       gui::CrystalConfig defaults;
-      IM_CHECK_EQ(entry.crystal.height, defaults.height);
-      IM_CHECK_EQ(entry.crystal.prism_h, defaults.prism_h);
-      IM_CHECK_EQ(entry.crystal.upper_h, defaults.upper_h);
-      IM_CHECK_EQ(entry.crystal.lower_h, defaults.lower_h);
-      IM_CHECK_EQ(entry.crystal.upper_alpha, defaults.upper_alpha);
-      IM_CHECK_EQ(entry.crystal.lower_alpha, defaults.lower_alpha);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).height, defaults.height);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).prism_h, defaults.prism_h);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).upper_h, defaults.upper_h);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).lower_h, defaults.lower_h);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).upper_alpha, defaults.upper_alpha);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).lower_alpha, defaults.lower_alpha);
       for (int i = 0; i < 6; ++i) {
-        IM_CHECK_EQ(entry.crystal.face_distance[i], defaults.face_distance[i]);
+        IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).face_distance[i], defaults.face_distance[i]);
       }
 
       // Step 4: assert name/type/axis preserved (Reset All must not touch them).
-      IM_CHECK_EQ(entry.crystal.name, name_baseline);
-      IM_CHECK_EQ(entry.crystal.type, type_baseline);
-      IM_CHECK(entry.crystal.zenith == axis_zenith_baseline);
-      IM_CHECK(entry.crystal.azimuth == axis_azimuth_baseline);
-      IM_CHECK(entry.crystal.roll == axis_roll_baseline);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).name, name_baseline);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).type, type_baseline);
+      IM_CHECK(gui::CrystalOf(gui::g_state, entry).zenith == axis_zenith_baseline);
+      IM_CHECK(gui::CrystalOf(gui::g_state, entry).azimuth == axis_azimuth_baseline);
+      IM_CHECK(gui::CrystalOf(gui::g_state, entry).roll == axis_roll_baseline);
     };
   }
 
@@ -2882,7 +2892,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       auto& entry = gui::g_state.layers[0].entries[0];
-      IM_CHECK_EQ(entry.crystal.height, 5.0f);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).height, 5.0f);
 
       // Open modal, Reset All, Cancel — entry must remain at 5.0.
       ctx->ItemClick("**/Edit##cr");
@@ -2893,7 +2903,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Entry unchanged: Cancel discarded the Reset All effect from the buffer.
-      IM_CHECK_EQ(entry.crystal.height, 5.0f);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).height, 5.0f);
     };
   }
 
@@ -2907,7 +2917,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Entry starts with no filter.
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
 
       // Open filter modal, click OK immediately without modifying anything.
       ctx->ItemClick("**/Edit##fi");
@@ -2916,7 +2926,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Filter must still be nullopt.
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
     };
   }
 
@@ -2930,7 +2940,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Entry starts with no filter.
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
 
       // Open filter modal, type a raypath (touches g_filter_buf via g_raypath_buf
       // sync in CommitAllBuffers), click OK.
@@ -2942,8 +2952,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Filter must now exist with the typed raypath.
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText(), std::string("1-3"));
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      IM_CHECK_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText(), std::string("1-3"));
     };
   }
 
@@ -2965,7 +2975,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
         ResetTestState();
         ctx->Yield(2);
 
-        auto& cr = gui::g_state.layers[0].entries[0].crystal;
+        auto& cr = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id];
         cr.zenith = zenith;
         cr.azimuth = azimuth;
         cr.roll = roll;
@@ -3401,7 +3411,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
@@ -3412,8 +3422,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].filter->action, 1);
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      IM_CHECK_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].action, 1);
     };
   }
 
@@ -3426,7 +3436,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
@@ -3440,8 +3450,9 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-5; 1-3");
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(),
+                      "3-5; 1-3");
     };
   }
 
@@ -3455,7 +3466,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
@@ -3473,8 +3484,9 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.layers[0].entries[0].filter->RaypathText().c_str(), "3-1-5");
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(),
+                      "3-1-5");
     };
   }
 
@@ -3559,7 +3571,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
@@ -3579,8 +3591,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      const auto& f = *gui::g_state.layers[0].entries[0].filter;
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      const auto& f = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
       IM_CHECK(std::holds_alternative<gui::EntryExitParams>(f.param));
       const auto& ee = std::get<gui::EntryExitParams>(f.param);
       IM_CHECK_EQ(ee.entry_text, std::string("2"));
@@ -3595,7 +3607,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       // entry/exit now render the raw text buffer (kept as-is so partial
       // input stays visible). ASCII "->" is used so the bundled font always
       // renders it (U+2192 fell back to "?" glyph on user's machine).
-      IM_CHECK_STR_EQ(gui::FilterSummary(gui::g_state.layers[0].entries[0].filter).c_str(), "EE:2->5 Out PBD");
+      IM_CHECK_STR_EQ(gui::FilterSummary(gui::FilterOf(gui::g_state, gui::g_state.layers[0].entries[0])).c_str(),
+                      "EE:2->5 Out PBD");
     };
   }
 
@@ -3630,8 +3643,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
-      const auto& f = *gui::g_state.layers[0].entries[0].filter;
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      const auto& f = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
       IM_CHECK(std::holds_alternative<gui::EntryExitParams>(f.param));
       const auto& ee = std::get<gui::EntryExitParams>(f.param);
       IM_CHECK_EQ(ee.entry_text, std::string("3"));
@@ -3640,7 +3653,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
   }
 
   // T11 — Remove Filter (EE): button always enabled, clears fields, OK enabled
-  // (intent bypasses incomplete gate), and OK → entry.filter == nullopt even
+  // (intent bypasses incomplete gate), and OK → entry.filter_id = nullopt even
   // if user re-types values after Remove (session-level single direction).
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_remove_clears_and_ok_enabled");
@@ -3679,7 +3692,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Remove intent takes precedence: filter must be nullopt regardless of re-typed value.
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
     };
   }
 
@@ -3698,10 +3711,10 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
         ee.entry_text = "2";
         ee.exit_text = "5";
         fc.param = ee;
-        gui::g_state.layers[0].entries[0].filter = fc;
+        gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], fc);
       }
       ctx->Yield(2);
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
@@ -3714,7 +3727,289 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // After Remove + OK, filter must be nullopt.
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter.has_value());
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
+    };
+  }
+}
+
+// ========== task-gui-linked-entries: pick-mode / unlink / duplicate / badge ==========
+// AC-9 coverage: link / unlink / duplicate / cancel / delete-cleanup /
+// co-shared-highlight / legacy-partial-sharing seven paths.
+
+void RegisterLinkedEntriesTests(ImGuiTestEngine* engine) {
+  // link: ApplyPickLink copies source (crystal_id, filter_id) to target entry.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "link");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+      // Add a second entry with its own pool slot.
+      gui::CrystalConfig c2;
+      c2.type = gui::CrystalType::kPyramid;
+      c2.prism_h = 2.0f;
+      gui::EntryCard e2;
+      e2.crystal_id = static_cast<int>(gui::g_state.crystals.size());
+      gui::g_state.crystals.push_back(c2);
+      gui::g_state.layers[0].entries.push_back(e2);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
+
+      const int src_cid = gui::g_state.layers[0].entries[0].crystal_id;
+      IM_CHECK_NE(gui::g_state.layers[0].entries[1].crystal_id, src_cid);
+      // Apply pick: entry 0 → entry 1
+      bool ok = gui::ApplyPickLink(gui::g_state, { 0, 0 }, { 0, 1 });
+      IM_CHECK(ok);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[1].crystal_id, src_cid);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[1].filter_id, gui::g_state.layers[0].entries[0].filter_id);
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, src_cid, gui::g_state.layers[0].entries[0].filter_id), 2);
+    };
+  }
+
+  // unlink: forking a shared entry creates a fresh pool slot.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "unlink");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+      // Two entries sharing crystal_id = 0.
+      gui::EntryCard sibling;
+      sibling.crystal_id = 0;
+      gui::g_state.layers[0].entries.push_back(sibling);
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::nullopt), 2);
+      const size_t crystals_before = gui::g_state.crystals.size();
+
+      bool forked = gui::UnlinkEntryFromPool(gui::g_state, 0, 1);
+      IM_CHECK(forked);
+      IM_CHECK_EQ(gui::g_state.crystals.size(), crystals_before + 1);
+      IM_CHECK_NE(gui::g_state.layers[0].entries[1].crystal_id, 0);
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::nullopt), 1);
+    };
+  }
+
+  // duplicate: clone-to-pool produces two new ids; mutating the copy does not
+  // affect the original. Validates the panels.cpp Duplicate handler.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "duplicate");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].type = gui::CrystalType::kPyramid;
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].prism_h = 1.5f;
+      ctx->Yield();
+
+      const int orig_cid = gui::g_state.layers[0].entries[0].crystal_id;
+      ctx->ItemClick("**/" ICON_FA_COPY "##dup_0_0");
+      ctx->Yield();
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
+      const int dup_cid = gui::g_state.layers[0].entries[1].crystal_id;
+      IM_CHECK_NE(dup_cid, orig_cid);
+
+      // Mutate the duplicated entry's pool slot — original must remain intact.
+      gui::g_state.crystals[dup_cid].prism_h = 3.7f;
+      IM_CHECK_EQ(gui::g_state.crystals[orig_cid].prism_h, 1.5f);
+      IM_CHECK_EQ(gui::g_state.crystals[dup_cid].prism_h, 3.7f);
+    };
+  }
+
+  // cancel: pick_link_source cleared without applying ids.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "cancel");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+      gui::EntryCard sibling;
+      gui::CrystalConfig c2;
+      c2.type = gui::CrystalType::kPyramid;
+      sibling.crystal_id = static_cast<int>(gui::g_state.crystals.size());
+      gui::g_state.crystals.push_back(c2);
+      gui::g_state.layers[0].entries.push_back(sibling);
+
+      const int e0_cid = gui::g_state.layers[0].entries[0].crystal_id;
+      const int e1_cid = gui::g_state.layers[0].entries[1].crystal_id;
+
+      // Simulate Link to... press: set pick_link_source on source = entry 0.
+      gui::g_state.pick_link_source = gui::GuiState::EntryRef{ 0, 0 };
+      // Cancel without applying.
+      gui::g_state.pick_link_source.reset();
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal_id, e0_cid);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[1].crystal_id, e1_cid);
+      IM_CHECK(!gui::g_state.pick_link_source.has_value());
+    };
+  }
+
+  // delete-cleanup: deleting an entry leaves orphan pool slots untouched (no
+  // refcount-driven compaction) — pool grows monotonically within a session.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "delete_cleanup");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+      gui::CrystalConfig c2;
+      c2.type = gui::CrystalType::kPyramid;
+      gui::EntryCard e2;
+      e2.crystal_id = static_cast<int>(gui::g_state.crystals.size());
+      gui::g_state.crystals.push_back(c2);
+      gui::g_state.layers[0].entries.push_back(e2);
+      const size_t pool_before = gui::g_state.crystals.size();
+
+      // Delete entry 1 (the pyramid one).
+      gui::g_state.layers[0].entries.erase(gui::g_state.layers[0].entries.begin() + 1);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
+      // Pool slot is orphan but still present — guarantees other entries don't
+      // see their ids shift.
+      IM_CHECK_EQ(gui::g_state.crystals.size(), pool_before);
+      // The surviving entry still points to its original slot.
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal_id, 0);
+    };
+  }
+
+  // co-shared-highlight: when two entries share (crystal_id, filter_id), the
+  // CountEntriesSharing predicate is ≥ 2 and drives the fa-link badge +
+  // co-shared border highlight. Tested at the data-layer (rendering is GL).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "co_shared_highlight");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+      gui::EntryCard sibling;
+      sibling.crystal_id = 0;  // share with default entry
+      gui::g_state.layers[0].entries.push_back(sibling);
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::nullopt), 2);
+      // After unlink, badge predicate drops back to 1.
+      gui::UnlinkEntryFromPool(gui::g_state, 0, 1);
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::nullopt), 1);
+    };
+  }
+
+  // add_entry_independent: clicking "+ Crystal" in a layer must seed the new
+  // entry with a fresh crystal pool slot (regression: implicit Link to slot 0).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "add_entry_independent");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      const int orig_cid = gui::g_state.layers[0].entries[0].crystal_id;
+      const std::size_t crystals_before = gui::g_state.crystals.size();
+
+      ctx->ItemClick("**/+ Crystal##layer_0");
+      ctx->Yield();
+
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
+      IM_CHECK_EQ(gui::g_state.crystals.size(), crystals_before + 1);
+      const int new_cid = gui::g_state.layers[0].entries[1].crystal_id;
+      IM_CHECK_NE(new_cid, orig_cid);
+      // Pair must NOT be considered shared — fa-link badge must stay off.
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, new_cid, std::nullopt), 1);
+    };
+  }
+
+  // add_layer_independent: clicking "+ Layer" must seed the new layer's entry
+  // with a fresh crystal pool slot (regression: implicit Link to slot 0).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "add_layer_independent");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      const int orig_cid = gui::g_state.layers[0].entries[0].crystal_id;
+      const std::size_t crystals_before = gui::g_state.crystals.size();
+      const std::size_t layers_before = gui::g_state.layers.size();
+
+      ctx->ItemClick("**/+ Layer");
+      ctx->Yield();
+
+      IM_CHECK_EQ(gui::g_state.layers.size(), layers_before + 1);
+      IM_CHECK_EQ(gui::g_state.crystals.size(), crystals_before + 1);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.back().entries.size()), 1);
+      const int new_cid = gui::g_state.layers.back().entries[0].crystal_id;
+      IM_CHECK_NE(new_cid, orig_cid);
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, new_cid, std::nullopt), 1);
+    };
+  }
+
+  // filter_add_propagates_to_linked: adding a filter to one entry of a
+  // linked group must also bind the linked siblings to the new filter pool
+  // slot so the group stays coherent (fa-link badge remains visible).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "filter_add_propagates_to_linked");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      // Two entries linked at (crystal_id=0, filter_id=None).
+      gui::EntryCard sibling;
+      sibling.crystal_id = 0;
+      gui::g_state.layers[0].entries.push_back(sibling);
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::nullopt), 2);
+
+      // Open Filter modal on entry 0, type a raypath, commit via OK.
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/Raypath##filter_modal", "3-5");
+      ctx->Yield(2);
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(2);
+
+      // Both entries must now share the new filter_id (linked group stays
+      // coherent — badge predicate still matches).
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[1].filter_id, gui::g_state.layers[0].entries[0].filter_id);
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, gui::g_state.layers[0].entries[0].filter_id), 2);
+    };
+  }
+
+  // filter_remove_propagates_to_linked: clearing an entry's filter via the
+  // Remove Filter button must also clear linked siblings' filter_id so the
+  // group remains coherent.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "filter_remove_propagates_to_linked");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      // Two entries linked at (crystal_id=0, filter_id=<set>).
+      gui::FilterConfig f;
+      f.param = gui::RaypathParams{ "3-5" };
+      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
+      gui::EntryCard sibling;
+      sibling.crystal_id = 0;
+      sibling.filter_id = gui::g_state.layers[0].entries[0].filter_id;
+      gui::g_state.layers[0].entries.push_back(sibling);
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, gui::g_state.layers[0].entries[0].filter_id), 2);
+
+      // Open Filter modal on entry 0, click Remove Filter, commit via OK.
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Remove Filter##filter");
+      ctx->Yield(2);
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
+      IM_CHECK(!gui::g_state.layers[0].entries[1].filter_id.has_value());
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::nullopt), 2);
+    };
+  }
+
+  // legacy-partial-sharing: same crystal_id but different filter_id is NOT
+  // considered "shared" by the badge predicate (card is atomic share unit).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "legacy_partial_sharing");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+      // Entry 0: no filter.
+      // Entry 1: shares crystal_id but adds a filter — different (cid, fid).
+      gui::EntryCard sibling;
+      sibling.crystal_id = 0;
+      gui::FilterConfig f;
+      f.param = gui::RaypathParams{ "3-5" };
+      gui::SetFilter(gui::g_state, sibling, f);
+      gui::g_state.layers[0].entries.push_back(sibling);
+
+      // Pair (0, nullopt) is unique to entry 0.
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::nullopt), 1);
+      // Pair (0, 0) is unique to entry 1.
+      IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::optional<int>{ 0 }), 1);
     };
   }
 }

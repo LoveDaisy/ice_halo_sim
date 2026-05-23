@@ -306,6 +306,7 @@ int main(int argc, char** argv) {
   RegisterFaceNumberOverlayTests(engine);
   RegisterCrystalRendererTests(engine);
   RegisterAutoEvRegressionTests(engine);
+  RegisterLinkedEntriesTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
 
   // Main loop — runs until all tests complete

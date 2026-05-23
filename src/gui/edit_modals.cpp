@@ -284,7 +284,7 @@ void SnapshotAllBuffers(const GuiState& state) {
   const int en = g_modal_entry_idx;
   if (ly >= 0 && ly < static_cast<int>(state.layers.size()) && en >= 0 &&
       en < static_cast<int>(state.layers[ly].entries.size())) {
-    g_filter_initial_present = state.layers[ly].entries[en].filter.has_value();
+    g_filter_initial_present = state.layers[ly].entries[en].filter_id.has_value();
   }
 }
 
@@ -349,14 +349,23 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   // Initialize all three buffers (regardless of req.target) so any tab the user
   // switches to shows the entry's current values. Modal-level OK commits all
   // three atomically; Cancel discards all.
-  g_crystal_buf = entry.crystal;
-  g_axis_buf[0] = entry.crystal.zenith;
-  g_axis_buf[1] = entry.crystal.azimuth;
-  g_axis_buf[2] = entry.crystal.roll;
+  //
+  // Reallocation note: do NOT call state.crystals.reserve() here. External
+  // callers may hold const references into the pool (e.g. tests that bind
+  // `auto& cr = state.crystals[...]` across a modal-open boundary); growing
+  // the vector would invalidate those. The modal's own reads below copy into
+  // local buffers immediately, so no long-lived pool reference is needed.
+  // Pick-mode push_back paths (Link / Unlink / Duplicate) happen *after* the
+  // modal closes, when no external references are held.
+  const CrystalConfig& src_crystal = state.crystals[entry.crystal_id];
+  g_crystal_buf = src_crystal;
+  g_axis_buf[0] = src_crystal.zenith;
+  g_axis_buf[1] = src_crystal.azimuth;
+  g_axis_buf[2] = src_crystal.roll;
   // Filter buffers: split top-level shared fields and per-type sub-buffer.
-  // `entry.filter.value_or(FilterConfig{})` defaults to a Raypath alternative
-  // with empty text — preserves the pre-task semantics for nullopt entries.
-  const FilterConfig src = entry.filter.value_or(FilterConfig{});
+  // Default to a Raypath alternative with empty text when the entry has no
+  // filter — preserves the pre-task semantics for nullopt entries.
+  const FilterConfig src = entry.filter_id.has_value() ? state.filters[*entry.filter_id] : FilterConfig{};
   g_filter_top = FilterConfig{};
   g_filter_top.name = src.name;
   g_filter_top.action = src.action;
@@ -862,7 +871,8 @@ static void RenderFilterModal() {
     const int en = g_modal_entry_idx;
     if (ly >= 0 && ly < static_cast<int>(g_state.layers.size()) && en >= 0 &&
         en < static_cast<int>(g_state.layers[ly].entries.size())) {
-      const auto& cr = g_state.layers[ly].entries[en].crystal;
+      const auto& entry_ref = g_state.layers[ly].entries[en];
+      const auto& cr = g_state.crystals[entry_ref.crystal_id];
       d_applicable = IsDApplicableGuiAxis(cr.azimuth, cr.roll);
     }
   }
@@ -944,7 +954,8 @@ bool IsCurrentModalDApplicable() {
   if (en < 0 || en >= static_cast<int>(g_state.layers[ly].entries.size())) {
     return false;
   }
-  const auto& cr = g_state.layers[ly].entries[en].crystal;
+  const auto& entry_ref = g_state.layers[ly].entries[en];
+  const auto& cr = g_state.crystals[entry_ref.crystal_id];
   return IsDApplicableGuiAxis(cr.azimuth, cr.roll);
 }
 
@@ -988,10 +999,15 @@ bool IsFilterDirty() {
 
 // Result of applying edit buffers back to the entry. Used by both commit paths
 // to decide which dirty-notification side effects to fire.
+//
+// ID-pool model: "entry_changed" covers both pool-content mutation (writing the
+// edited buffer back to state.crystals[entry.crystal_id]) AND entry-ref id
+// changes; the commit path computes it by comparing the pool slot before vs
+// after the write, plus the entry's own id fields.
 struct ApplyBuffersResult {
   bool valid;           // false if g_modal_layer_idx / g_modal_entry_idx out of range
-  bool entry_changed;   // entry != old_entry after apply
-  bool filter_changed;  // entry.filter != old_entry.filter after apply
+  bool entry_changed;   // crystal/axis/filter content or entry ids changed
+  bool filter_changed;  // filter pool content or entry.filter_id changed
 };
 
 // Single source of truth for buffer→entry field assignment. Both
@@ -1009,16 +1025,24 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
     return { false, false, false };
   }
   auto& entry = state.layers[ly].entries[en];
-  // Diff-gate: snapshot before applying buffers so callers can skip render-invalidation
-  // when nothing actually changed (e.g. Staged OK without any edits must not
-  // clear the rendered image or arm Revert).
+
+  // Diff-gate (ID-pool model): the entry struct itself only carries ids; the
+  // crystal/filter content lives in the pool. Compare pool-slot content (and
+  // entry's filter_id) before vs after the write to detect "anything changed"
+  // for MarkDirty / render-invalidation decisions.
   const EntryCard old_entry = entry;
-  // g_crystal_buf carries the Crystal-tab edits; overlay axis edits from the
-  // Axis tab so the unified commit reflects both.
-  entry.crystal = g_crystal_buf;
-  entry.crystal.zenith = g_axis_buf[0];
-  entry.crystal.azimuth = g_axis_buf[1];
-  entry.crystal.roll = g_axis_buf[2];
+  const CrystalConfig old_crystal = state.crystals[entry.crystal_id];
+  const std::optional<FilterConfig> old_filter =
+      entry.filter_id.has_value() ? std::optional<FilterConfig>{ state.filters[*entry.filter_id] } : std::nullopt;
+
+  // Write Crystal-tab buffer back into the pool slot referenced by entry.
+  // Every entry sharing entry.crystal_id will observe this on next render.
+  CrystalConfig& pool_crystal = state.crystals[entry.crystal_id];
+  pool_crystal = g_crystal_buf;
+  pool_crystal.zenith = g_axis_buf[0];
+  pool_crystal.azimuth = g_axis_buf[1];
+  pool_crystal.roll = g_axis_buf[2];
+
   // Sync the ImGui InputText backing buffers back into the sub-buffers
   // before any commit decision. The g_*_buf arrays are the canonical
   // source while the modal is open.
@@ -1026,68 +1050,84 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
   g_ee_params.entry_text = g_ee_entry_buf;
   g_ee_params.exit_text = g_ee_exit_buf;
 
-  // EntryExit commit branch. Validates entry/exit text against the
-  // current crystal kind; only commits when both fields are kValid.
-  // OK-button gating in RenderEditModals enforces the same condition,
-  // so the guard here is the model-layer invariant for Immediate-mode
-  // commits. Empty fields (kIncomplete) are treated as not-yet-typed
-  // and skip the commit — consistent with raypath's "empty ≡ no filter"
-  // semantic at the UI layer.
+  // Local helper: propagate a filter_id change from `entry` to all entries
+  // that were "linked" with it before the change — i.e., entries sharing the
+  // same (crystal_id, old_filter_id) pair. Preserves the "linked group is an
+  // atomic share unit" semantic when a filter is added or removed: editing
+  // one card's filter must also flip the linked siblings' filter_id so the
+  // group stays coherent (otherwise the fa-link badge disappears the moment
+  // a filter is added to a previously filter-less linked group). Mutating
+  // pool slot contents in-place (filter edit on an already-bound slot) is
+  // unaffected — siblings see the new content via the shared filter_id.
+  auto propagate_filter_id_to_linked = [&](int cid, std::optional<int> old_filter_id) {
+    if (entry.filter_id == old_filter_id) {
+      return;  // nothing changed; in-place edit, siblings already see it
+    }
+    for (auto& layer : state.layers) {
+      for (auto& other : layer.entries) {
+        if (other.crystal_id == cid && other.filter_id == old_filter_id) {
+          other.filter_id = entry.filter_id;
+        }
+      }
+    }
+  };
+
+  // Local helper: write the materialized FilterConfig into the pool, updating
+  // entry.filter_id (existing slot or new append). When append is needed
+  // (entry had no filter), propagate the new filter_id to entries that were
+  // linked with `entry` at (crystal_id, None) so the group stays coherent.
+  auto write_filter_to_pool = [&](const FilterConfig& f) {
+    if (entry.filter_id.has_value()) {
+      state.filters[*entry.filter_id] = f;
+    } else {
+      const std::optional<int> old_filter_id = entry.filter_id;
+      entry.filter_id = static_cast<int>(state.filters.size());
+      state.filters.push_back(f);
+      propagate_filter_id_to_linked(entry.crystal_id, old_filter_id);
+    }
+  };
+
+  // EntryExit commit branch. Validates entry/exit text against the current
+  // crystal kind; only commits when both fields are kValid. OK-button gating
+  // in RenderEditModals enforces the same condition, so the guard here is the
+  // model-layer invariant for Immediate-mode commits. Empty fields
+  // (kIncomplete) are treated as not-yet-typed and skip the commit —
+  // consistent with raypath's "empty ≡ no filter" semantic at the UI layer.
   if (g_filter_active_type == FilterEditType::kEntryExit) {
-    // Remove intent: bypass kValid gate, reset filter to nullopt.
     if (g_ee_remove_intent) {
-      entry.filter = std::nullopt;
+      const std::optional<int> old_filter_id = entry.filter_id;
+      entry.filter_id = std::nullopt;  // pool slot becomes orphan (kept until save)
+      propagate_filter_id_to_linked(entry.crystal_id, old_filter_id);
       g_ee_remove_intent = false;
-      return { true, entry != old_entry, entry.filter != old_entry.filter };
+    } else {
+      const bool buf_changed = IsFilterDirty();
+      const auto kind = CurrentValidationKind();
+      const auto v_entry = GuiValidateFaceNumberText(g_ee_params.entry_text, kind);
+      const auto v_exit = GuiValidateFaceNumberText(g_ee_params.exit_text, kind);
+      const bool both_valid = v_entry.state == LUMICE_RAYPATH_VALID && v_exit.state == LUMICE_RAYPATH_VALID;
+      if ((g_filter_initial_present || buf_changed) && both_valid) {
+        FilterConfig out;
+        out.name = g_filter_top.name;
+        out.action = g_filter_top.action;
+        out.sym_p = g_filter_top.sym_p;
+        out.sym_b = g_filter_top.sym_b;
+        out.sym_d = g_filter_top.sym_d;
+        out.param = g_ee_params;
+        write_filter_to_pool(out);
+      }
     }
+  } else if (g_filter_active_type == FilterEditType::kRaypath) {
+    // Raypath commit branch. Wrapped in an explicit `== kRaypath` guard so
+    // every FilterEditType has a symmetrical commit branch.
     const bool buf_changed = IsFilterDirty();
-    const auto kind = CurrentValidationKind();
-    const auto v_entry = GuiValidateFaceNumberText(g_ee_params.entry_text, kind);
-    const auto v_exit = GuiValidateFaceNumberText(g_ee_params.exit_text, kind);
-    const bool both_valid = v_entry.state == LUMICE_RAYPATH_VALID && v_exit.state == LUMICE_RAYPATH_VALID;
-    if ((g_filter_initial_present || buf_changed) && both_valid) {
-      FilterConfig out;
-      out.name = g_filter_top.name;
-      out.action = g_filter_top.action;
-      out.sym_p = g_filter_top.sym_p;
-      out.sym_b = g_filter_top.sym_b;
-      out.sym_d = g_filter_top.sym_d;
-      out.param = g_ee_params;
-      entry.filter = out;
-    }
-    return { true, entry != old_entry, entry.filter != old_entry.filter };
-  }
-
-  // Raypath commit branch. Wrapped in an explicit `== kRaypath` guard so
-  // every FilterEditType has a symmetrical commit branch. The trailing
-  // `return` at the end of the function is a defensive no-op for any future
-  // FilterEditType extension that forgets to add its own branch.
-  if (g_filter_active_type == FilterEditType::kRaypath) {
-    // Buffer-changed predicate: defined as IsFilterDirty() in this TU so the
-    // commit decision and the tab-label dirty mark stay in sync — adding a new
-    // FilterEditType only needs one place to be touched.
-    const bool buf_changed = IsFilterDirty();
-
     if (g_raypath_params.raypath_text.empty()) {
-      // Empty raypath ≡ "no filter" at the UI layer (the Remove button is just
-      // a shortcut for "backspace the textbox empty"). This also subsumes the
-      // old "Remove intent" path and the default-PBD leak: a default-constructed
-      // FilterConfig has empty raypath, so untouched no-filter entries stay
-      // nullopt here.
-      entry.filter = std::nullopt;
+      // Empty raypath ≡ "no filter" at the UI layer.
+      const std::optional<int> old_filter_id = entry.filter_id;
+      entry.filter_id = std::nullopt;
+      propagate_filter_id_to_linked(entry.crystal_id, old_filter_id);
     } else if (g_filter_initial_present || buf_changed) {
-      // Model-layer invariant: FilterConfig must never hold an invalid raypath,
-      // regardless of commit mode. Staged mode already enforces this via the OK
-      // button's disabled gate (ok_disabled check on the Staged OK path);
-      // Immediate mode per-frame commits reach this branch with potentially
-      // invalid text, so the guard here is the single model-layer gate that
-      // makes the invariant hold in both modes. kIncomplete is treated same as
-      // kInvalid — matches the Staged OK disjunction `v.state != kValid`,
-      // preventing half-typed input from poisoning the renderer. Multi-segment
-      // OR (";") is supported via ValidateRaypathTextMultiSegment.
       auto v = ValidateRaypathTextMultiSegment(g_raypath_params.raypath_text, CurrentValidationKind());
       if (v.state == LUMICE_RAYPATH_VALID) {
-        // Materialize FilterConfig from top fields + active raypath sub-buffer.
         FilterConfig out;
         out.name = g_filter_top.name;
         out.action = g_filter_top.action;
@@ -1095,11 +1135,20 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
         out.sym_b = g_filter_top.sym_b;
         out.sym_d = g_filter_top.sym_d;
         out.param = g_raypath_params;
-        entry.filter = out;
+        write_filter_to_pool(out);
       }
     }
   }
-  return { true, entry != old_entry, entry.filter != old_entry.filter };
+
+  // Recompute filter content post-write to compare against the pre-write
+  // snapshot. The entry-ref filter_id may have flipped (set/cleared) and/or
+  // its pool slot content may have changed.
+  const std::optional<FilterConfig> new_filter =
+      entry.filter_id.has_value() ? std::optional<FilterConfig>{ state.filters[*entry.filter_id] } : std::nullopt;
+  const bool crystal_changed = pool_crystal != old_crystal;
+  const bool filter_changed = new_filter != old_filter;
+  const bool entry_changed = crystal_changed || filter_changed || entry != old_entry;
+  return { true, entry_changed, filter_changed };
 }
 
 // Staged OK path: any entry change clears the display + restarts simulation
@@ -1109,7 +1158,8 @@ void CommitAllBuffers(GuiState& state) {
   if (!r.valid || !r.entry_changed) {
     return;
   }
-  g_thumbnail_cache.Invalidate(g_modal_layer_idx, g_modal_entry_idx);
+  // Invalidate by crystal_id: all entries sharing this crystal get a fresh thumbnail.
+  g_thumbnail_cache.Invalidate(state.layers[g_modal_layer_idx].entries[g_modal_entry_idx].crystal_id);
   state.MarkDirty();
   state.MarkFilterDirty();
   g_crystal_mesh_hash = -1;
@@ -1124,7 +1174,7 @@ void CommitAllBuffersImmediate(GuiState& state) {
   if (!r.valid || !r.entry_changed) {
     return;
   }
-  g_thumbnail_cache.Invalidate(g_modal_layer_idx, g_modal_entry_idx);
+  g_thumbnail_cache.Invalidate(state.layers[g_modal_layer_idx].entries[g_modal_entry_idx].crystal_id);
   state.MarkDirty();
   if (r.filter_changed) {
     state.MarkFilterDirty();
@@ -1390,6 +1440,56 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   const ImGuiTabItemFlags filter_flags = (g_pending_tab_select && g_active_tab == ActiveTab::kFilter) ?
                                              ImGuiTabItemFlags_SetSelected :
                                              ImGuiTabItemFlags_None;
+
+  // ---- Sharing status row (Link to... / Unlink) ----
+  // Header above the tab bar showing how many entries share this card's
+  // (crystal_id, filter_id) pair. "Link to..." starts pick-mode; "Unlink"
+  // forks the pool slots so this entry becomes independent.
+  {
+    const int ly = g_modal_layer_idx;
+    const int en = g_modal_entry_idx;
+    if (ly >= 0 && ly < static_cast<int>(state.layers.size()) && en >= 0 &&
+        en < static_cast<int>(state.layers[ly].entries.size())) {
+      const auto& cur_entry = state.layers[ly].entries[en];
+      const int shared_with = CountEntriesSharing(state, cur_entry.crystal_id, cur_entry.filter_id) - 1;
+      if (shared_with > 0) {
+        ImGui::TextDisabled("Shared with %d other entr%s", shared_with, shared_with == 1 ? "y" : "ies");
+      } else {
+        ImGui::TextDisabled("Not shared");
+      }
+      ImGui::SameLine();
+      // "Link to..." — commit current buffer, arm pick-mode, close modal.
+      if (ImGui::SmallButton("Link to...##share")) {
+        CommitAllBuffersImmediate(state);
+        state.pick_link_source = GuiState::EntryRef{ ly, en };
+        g_active_modal = ActiveModal::kNone;
+        if (!state.modal_immediate_mode) {
+          ImGui::CloseCurrentPopup();
+        }
+      }
+      if (shared_with > 0) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Unlink##share")) {
+          // Commit pending edits BEFORE forking pool slots so the active edit
+          // doesn't carry over to the other entries we were sharing with.
+          CommitAllBuffersImmediate(state);
+          if (UnlinkEntryFromPool(state, ly, en)) {
+            // Re-read the just-cloned slot into the modal buffer so g_crystal_buf
+            // (etc.) match the new entry, not the stale shared slot.
+            const auto& fresh_entry = state.layers[ly].entries[en];
+            const CrystalConfig& src_crystal = state.crystals[fresh_entry.crystal_id];
+            g_crystal_buf = src_crystal;
+            g_axis_buf[0] = src_crystal.zenith;
+            g_axis_buf[1] = src_crystal.azimuth;
+            g_axis_buf[2] = src_crystal.roll;
+            SnapshotAllBuffers(state);
+            state.MarkDirty();
+          }
+        }
+      }
+      ImGui::Separator();
+    }
+  }
 
   // Per-tab dirty detection. The label picks up a trailing " *" when the
   // in-flight buffer differs from the snapshot taken at modal-open. All

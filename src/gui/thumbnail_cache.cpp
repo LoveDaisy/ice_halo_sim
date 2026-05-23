@@ -54,12 +54,12 @@ void ThumbnailCache::Destroy() {
   valid_ = false;
 }
 
-uintptr_t ThumbnailCache::GetTexture(int layer_idx, int entry_idx) {
+uintptr_t ThumbnailCache::GetTexture(int crystal_id) {
   if (!valid_) {
     return 0;
   }
 
-  uint64_t key = MakeKey(layer_idx, entry_idx);
+  uint64_t key = MakeKey(crystal_id);
   auto it = cache_.find(key);
   if (it == cache_.end()) {
     // Cache miss: create dirty entry and enqueue
@@ -95,28 +95,24 @@ void ThumbnailCache::ProcessUpdateQueue(const GuiState& state, int max_updates) 
     uint64_t key = update_queue_.front();
     update_queue_.pop_front();
 
-    int layer_idx = static_cast<int>(key >> 32);
-    int entry_idx = static_cast<int>(key & 0xFFFFFFFF);
+    int crystal_id = static_cast<int>(key);
 
-    // Bounds check: structure may have changed since enqueue
-    if (layer_idx < 0 || layer_idx >= static_cast<int>(state.layers.size())) {
-      continue;
-    }
-    if (entry_idx < 0 || entry_idx >= static_cast<int>(state.layers[layer_idx].entries.size())) {
+    // Bounds check: pool may have grown since enqueue, but crystal_id must be valid
+    if (crystal_id < 0 || crystal_id >= static_cast<int>(state.crystals.size())) {
       continue;
     }
 
-    RenderThumbnail(layer_idx, entry_idx, state);
+    RenderThumbnail(crystal_id, state);
     processed++;
   }
 }
 
-void ThumbnailCache::Invalidate(int layer_idx, int entry_idx) {
+void ThumbnailCache::Invalidate(int crystal_id) {
   if (!valid_) {
     return;
   }
 
-  uint64_t key = MakeKey(layer_idx, entry_idx);
+  uint64_t key = MakeKey(crystal_id);
   auto it = cache_.find(key);
   if (it != cache_.end()) {
     if (!it->second.dirty) {
@@ -124,9 +120,8 @@ void ThumbnailCache::Invalidate(int layer_idx, int entry_idx) {
       update_queue_.push_back(key);
     }
     // If already dirty, it's already in the queue — skip to avoid duplicates
-  } else {
-    // Entry not in cache yet; it will be created on next GetTexture() call
   }
+  // Entry not in cache yet: will be created (dirty) on next GetTexture() call
 }
 
 void ThumbnailCache::InvalidateAll() {
@@ -151,19 +146,19 @@ void ThumbnailCache::OnLayerStructureChanged() {
   update_queue_.clear();
 }
 
-void ThumbnailCache::RenderThumbnail(int layer_idx, int entry_idx, const GuiState& state) {
-  const auto& crystal = state.layers[layer_idx].entries[entry_idx].crystal;
+void ThumbnailCache::RenderThumbnail(int crystal_id, const GuiState& state) {
+  const auto& crystal = state.crystals[crystal_id];
 
   // Build mesh data
   LUMICE_CrystalMesh mesh{};
   if (!BuildCrystalMeshData(crystal, &mesh)) {
-    GUI_LOG_WARNING("Failed to build mesh for thumbnail ({}, {})", layer_idx, entry_idx);
+    GUI_LOG_WARNING("Failed to build mesh for thumbnail (crystal_id={})", crystal_id);
     return;
   }
 
   // Defend against degenerate geometry
   if (mesh.vertex_count <= 0 || mesh.edge_count <= 0) {
-    GUI_LOG_WARNING("Degenerate mesh for thumbnail ({}, {}): {} vertices, {} edges", layer_idx, entry_idx,
+    GUI_LOG_WARNING("Degenerate mesh for thumbnail (crystal_id={}): {} vertices, {} edges", crystal_id,
                     mesh.vertex_count, mesh.edge_count);
     return;
   }
@@ -184,8 +179,8 @@ void ThumbnailCache::RenderThumbnail(int layer_idx, int entry_idx, const GuiStat
   // Render to the shared renderer's FBO
   renderer_.Render(rotation, kDefaultCrystalZoom, CrystalStyle::kHiddenLine);
 
-  // Ensure per-entry texture exists
-  uint64_t key = MakeKey(layer_idx, entry_idx);
+  // Ensure per-crystal texture exists
+  uint64_t key = MakeKey(crystal_id);
   auto& entry = cache_[key];
   if (entry.texture == 0) {
     glGenTextures(1, &entry.texture);

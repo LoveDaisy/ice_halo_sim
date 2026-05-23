@@ -62,6 +62,21 @@ void RenderSceneControls(GuiState& state);
 // Name kept for GUI test teardown compatibility (was pending-delete only, now broader).
 void ResetPendingDeleteState();
 
+// ---- ID-pool sharing helpers (task-gui-linked-entries) ----
+
+// Count how many entries (across all layers) reference (crystal_id, filter_id).
+// "Sharing" predicate = both ids equal (filter_id compared including nullopt).
+int CountEntriesSharing(const GuiState& state, int crystal_id, const std::optional<int>& filter_id);
+
+// Unlink the given entry from any shared crystal/filter pool slot: clone the
+// current pool content into a fresh slot so the entry becomes independent.
+// Returns true if the entry actually became disjoint from any other entry.
+bool UnlinkEntryFromPool(GuiState& state, int layer_idx, int entry_idx);
+
+// Complete a pick-mode share: copy source entry's (crystal_id, filter_id) onto
+// the target entry. Returns true if any id actually changed.
+bool ApplyPickLink(GuiState& state, GuiState::EntryRef source, GuiState::EntryRef target);
+
 }  // namespace lumice::gui
 
 #endif  // LUMICE_GUI_PANELS_HPP

@@ -602,28 +602,48 @@ std::string SerializeCoreConfig(const GuiState& state) {
   }
   scene["max_hits"] = state.sim.max_hits;
 
+  // ID-pool model: walk reachable crystals/filters and dedupe via pool id.
+  // Each pool id is emitted as one core crystal/filter; entries reference by
+  // (pool_id + 1) — core ConfigManager uses ID-field map lookup, so id
+  // sequences need not be contiguous.
+  std::map<int, int> crystal_pool_to_core;  // pool_id -> core id
+  std::map<int, int> filter_pool_to_core;   // pool_id -> main_id (last id for multi-segment)
   scene["scattering"] = json::array();
   for (auto& layer : state.layers) {
     json jl;
     jl["prob"] = layer.probability;
     jl["entries"] = json::array();
     for (auto& entry : layer.entries) {
-      // Assign temporary crystal ID and serialize
-      int cid = next_crystal_id++;
-      auto jc = SerializeCrystal(entry.crystal, cid);
-      root["crystal"].push_back(jc);
+      int cid;
+      auto it_c = crystal_pool_to_core.find(entry.crystal_id);
+      if (it_c == crystal_pool_to_core.end()) {
+        cid = next_crystal_id++;
+        crystal_pool_to_core.emplace(entry.crystal_id, cid);
+        root["crystal"].push_back(SerializeCrystal(state.crystals[entry.crystal_id], cid));
+      } else {
+        cid = it_c->second;
+      }
 
       json je;
       je["crystal"] = cid;
       je["proportion"] = entry.proportion;
 
-      if (entry.filter) {
-        auto fr = SerializeFilterForCore(*entry.filter, next_filter_id);
-        for (auto& jf : fr.filters) {
-          root["filter"].push_back(jf);
+      if (entry.filter_id.has_value()) {
+        int fpool = *entry.filter_id;
+        int main_id;
+        auto it_f = filter_pool_to_core.find(fpool);
+        if (it_f == filter_pool_to_core.end()) {
+          auto fr = SerializeFilterForCore(state.filters[fpool], next_filter_id);
+          for (auto& jf : fr.filters) {
+            root["filter"].push_back(jf);
+          }
+          next_filter_id += static_cast<int>(fr.filters.size());
+          main_id = fr.main_id;
+          filter_pool_to_core.emplace(fpool, main_id);
+        } else {
+          main_id = it_f->second;
         }
-        next_filter_id += static_cast<int>(fr.filters.size());
-        je["filter"] = fr.main_id;
+        je["filter"] = main_id;
       }
 
       jl["entries"].push_back(je);
@@ -732,9 +752,13 @@ static void FillFilterParam(const FilterConfig& f, int id, LUMICE_FilterParam* d
 void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
   std::memset(out, 0, sizeof(LUMICE_Config));
 
-  // Flatten layers into crystals/filters/scattering with dynamically assigned IDs
-  int next_crystal_id = 1;
-  int next_filter_id = 1;
+  // ID-pool model: walk entries, dedupe by pool id, emit one C crystal/filter
+  // per reachable pool slot. Pool slot at index P becomes C API id P+1
+  // (1-based). Core's ConfigManager looks up by ID-field (not array position),
+  // so non-contiguous id sequences are safe when an orphan pool slot is
+  // skipped.
+  std::map<int, int> crystal_pool_to_core;  // pool_id -> C api id (1-based)
+  std::map<int, int> filter_pool_to_core;
   int crystal_idx = 0;
   int filter_idx = 0;
 
@@ -749,20 +773,37 @@ void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
     for (int k = 0; k < dst_layer.entry_count; k++) {
       const auto& entry = layer.entries[k];
 
-      // Assign crystal (truncate entries if crystal array is full)
-      if (crystal_idx >= LUMICE_MAX_CONFIG_CRYSTALS) {
-        dst_layer.entry_count = k;
-        break;
+      int cid;
+      auto it_c = crystal_pool_to_core.find(entry.crystal_id);
+      if (it_c == crystal_pool_to_core.end()) {
+        if (crystal_idx >= LUMICE_MAX_CONFIG_CRYSTALS) {
+          // C buffer full — truncate entries from this point.
+          dst_layer.entry_count = k;
+          break;
+        }
+        cid = entry.crystal_id + 1;  // 0-based pool → 1-based C API
+        crystal_pool_to_core.emplace(entry.crystal_id, cid);
+        FillCrystalParam(state.crystals[entry.crystal_id], cid, &out->crystals[crystal_idx++]);
+      } else {
+        cid = it_c->second;
       }
-      int cid = next_crystal_id++;
-      FillCrystalParam(entry.crystal, cid, &out->crystals[crystal_idx++]);
       dst_layer.entries[k].crystal_id = cid;
       dst_layer.entries[k].proportion = entry.proportion;
 
-      // Assign filter (if present; omit if filter array is full)
-      if (entry.filter && filter_idx < LUMICE_MAX_CONFIG_FILTERS) {
-        int fid = next_filter_id++;
-        FillFilterParam(*entry.filter, fid, &out->filters[filter_idx++]);
+      if (entry.filter_id.has_value()) {
+        int fpool = *entry.filter_id;
+        int fid;
+        auto it_f = filter_pool_to_core.find(fpool);
+        if (it_f != filter_pool_to_core.end()) {
+          fid = it_f->second;
+        } else if (filter_idx < LUMICE_MAX_CONFIG_FILTERS) {
+          fid = fpool + 1;  // 0-based pool → 1-based C API
+          filter_pool_to_core.emplace(fpool, fid);
+          FillFilterParam(state.filters[fpool], fid, &out->filters[filter_idx++]);
+        } else {
+          // Filter buffer full — drop this entry's filter (entry survives).
+          fid = -1;
+        }
         dst_layer.entries[k].filter_id = fid;
       } else {
         dst_layer.entries[k].filter_id = -1;
@@ -909,6 +950,10 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
     if (js.contains("scattering") && js["scattering"].is_array()) {
       const auto& jscattering = js["scattering"];
 
+      // Import to ID-pool: dedupe by source JSON ids, so two entries with the
+      // same crystal/filter reference share one pool slot (identity).
+      std::map<int, int> crystal_id_to_pool;
+      std::map<int, int> filter_id_to_pool;
       for (const auto& jlayer : jscattering) {
         Layer layer;
         layer.probability = jlayer.value("prob", 1.0f);
@@ -918,12 +963,32 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
             EntryCard entry;
             int crystal_id_flat = je.value("crystal", -1);
             if (crystal_map.count(crystal_id_flat)) {
-              entry.crystal = crystal_map[crystal_id_flat];
+              auto it = crystal_id_to_pool.find(crystal_id_flat);
+              if (it == crystal_id_to_pool.end()) {
+                entry.crystal_id = static_cast<int>(state.crystals.size());
+                state.crystals.push_back(crystal_map[crystal_id_flat]);
+                crystal_id_to_pool.emplace(crystal_id_flat, entry.crystal_id);
+              } else {
+                entry.crystal_id = it->second;
+              }
+            } else {
+              // Unknown crystal reference — fall back to a fresh default pool
+              // slot so entry.crystal_id stays valid (avoid OOB on render).
+              entry.crystal_id = static_cast<int>(state.crystals.size());
+              state.crystals.emplace_back();
             }
             entry.proportion = je.value("proportion", 1.0f);
             int filter_id = je.value("filter", -1);
             if (filter_id >= 0 && filter_map.count(filter_id)) {
-              entry.filter = filter_map[filter_id];
+              auto it = filter_id_to_pool.find(filter_id);
+              if (it == filter_id_to_pool.end()) {
+                int pool_id = static_cast<int>(state.filters.size());
+                state.filters.push_back(filter_map[filter_id]);
+                filter_id_to_pool.emplace(filter_id, pool_id);
+                entry.filter_id = pool_id;
+              } else {
+                entry.filter_id = it->second;
+              }
             }
             layer.entries.push_back(entry);
           }
@@ -988,7 +1053,10 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
 std::string SerializeGuiStateJson(const GuiState& state) {
   json root;
 
-  // Layers (copy model: each entry embeds its crystal/filter)
+  // Layers — on-disk format remains v2 inline: each entry embeds its crystal
+  // and (optionally) filter JSON. The runtime ID-pool is decompressed back to
+  // inline at save time, so .lmc files saved before and after this migration
+  // are byte-equivalent.
   root["layers"] = json::array();
   int ser_crystal_id = 1;
   int ser_filter_id = 1;
@@ -998,10 +1066,10 @@ std::string SerializeGuiStateJson(const GuiState& state) {
     jl["entries"] = json::array();
     for (auto& entry : layer.entries) {
       json je;
-      je["crystal"] = SerializeCrystal(entry.crystal, ser_crystal_id++);
+      je["crystal"] = SerializeCrystal(state.crystals[entry.crystal_id], ser_crystal_id++);
       je["proportion"] = entry.proportion;
-      if (entry.filter) {
-        je["filter"] = SerializeFilterForGui(*entry.filter, ser_filter_id++);
+      if (entry.filter_id.has_value()) {
+        je["filter"] = SerializeFilterForGui(state.filters[*entry.filter_id], ser_filter_id++);
       }
       jl["entries"].push_back(je);
     }
@@ -1085,7 +1153,10 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
 
   state = GuiState{};
 
-  // Layers: new copy-model format ("layers" key) with backward compat for old ID-referenced format
+  // Layers — on-disk format is v2 inline (each entry embeds its crystal/filter
+  // JSON). Load path: append each inline crystal/filter into the runtime
+  // ID-pool and record entry.crystal_id / entry.filter_id. Append-only, no
+  // dedup (simpler — pool sparsity is acceptable in a single session).
   if (root.contains("layers") && root["layers"].is_array()) {
     for (auto& jl : root["layers"]) {
       Layer layer;
@@ -1094,11 +1165,17 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
         for (auto& je : jl["entries"]) {
           EntryCard entry;
           if (je.contains("crystal")) {
-            entry.crystal = ParseCrystal(je["crystal"]);
+            entry.crystal_id = static_cast<int>(state.crystals.size());
+            state.crystals.push_back(ParseCrystal(je["crystal"]));
+          } else {
+            // No inline crystal — provide a default slot so entry stays valid.
+            entry.crystal_id = static_cast<int>(state.crystals.size());
+            state.crystals.emplace_back();
           }
           entry.proportion = je.value("proportion", 100.0f);
           if (je.contains("filter") && !je["filter"].is_null()) {
-            entry.filter = ParseFilterFromGuiJson(je["filter"]);
+            entry.filter_id = static_cast<int>(state.filters.size());
+            state.filters.push_back(ParseFilterFromGuiJson(je["filter"]));
           }
           layer.entries.push_back(entry);
         }
@@ -1106,7 +1183,9 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
       state.layers.push_back(layer);
     }
   } else if (root.contains("crystals") && root.contains("scattering")) {
-    // Backward compat: old .lmc format with ID-referenced crystals/filters/scattering
+    // Legacy v1 .lmc format: pool-shaped already (top-level crystals/filters
+    // arrays, scattering entries reference by id). Dedupe by source id so
+    // entries that share crystal_id collapse to the same pool slot.
     std::map<int, CrystalConfig> crystal_map;
     if (root["crystals"].is_array()) {
       for (auto& jc : root["crystals"]) {
@@ -1122,6 +1201,8 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
       }
     }
     if (root["scattering"].is_array()) {
+      std::map<int, int> crystal_id_to_pool;
+      std::map<int, int> filter_id_to_pool;
       for (auto& jl : root["scattering"]) {
         Layer layer;
         layer.probability = jl.value("prob", 0.0f);
@@ -1130,12 +1211,30 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
             EntryCard entry;
             int crystal_id = je.value("crystal_id", -1);
             if (crystal_map.count(crystal_id)) {
-              entry.crystal = crystal_map[crystal_id];
+              auto it = crystal_id_to_pool.find(crystal_id);
+              if (it == crystal_id_to_pool.end()) {
+                entry.crystal_id = static_cast<int>(state.crystals.size());
+                state.crystals.push_back(crystal_map[crystal_id]);
+                crystal_id_to_pool.emplace(crystal_id, entry.crystal_id);
+              } else {
+                entry.crystal_id = it->second;
+              }
+            } else {
+              entry.crystal_id = static_cast<int>(state.crystals.size());
+              state.crystals.emplace_back();
             }
             entry.proportion = je.value("proportion", 100.0f);
             int filter_id = je.value("filter_id", -1);
             if (filter_id >= 0 && filter_map.count(filter_id)) {
-              entry.filter = filter_map[filter_id];
+              auto it = filter_id_to_pool.find(filter_id);
+              if (it == filter_id_to_pool.end()) {
+                int pool_id = static_cast<int>(state.filters.size());
+                state.filters.push_back(filter_map[filter_id]);
+                filter_id_to_pool.emplace(filter_id, pool_id);
+                entry.filter_id = pool_id;
+              } else {
+                entry.filter_id = it->second;
+              }
             }
             layer.entries.push_back(entry);
           }

@@ -7,6 +7,7 @@
 
 #include "IconsFontAwesome6.h"
 #include "gui/app.hpp"
+#include "gui/crystal_preview.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_ev_auto.hpp"
@@ -306,11 +307,34 @@ void RenderLeftPanel(float window_height) {
     return;
   }
 
+  // Pick-mode: Esc cancels (read here before any ImGui::Begin so the key event
+  // isn't consumed by inner widgets first).
+  bool pick_active_at_entry = g_state.pick_link_source.has_value();
+  if (pick_active_at_entry && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+    g_state.pick_link_source.reset();
+  }
+  // Remember whether pick was active at the start of this frame so we can
+  // detect "pick just completed" at the bottom and re-open the modal.
+  std::optional<GuiState::EntryRef> pick_source_at_entry =
+      pick_active_at_entry ? g_state.pick_link_source : std::nullopt;
+
   SetNextPanelGeometry(0, kTopBarHeight, kLeftPanelWidth, panel_height);
   ImGui::Begin("##LeftPanel", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
                    ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+  // Pick-mode hint bar — render above the scroll area so the user always sees
+  // the active-pick state and the Esc instruction. The actual click target is
+  // each entry card (handled inside RenderEntryCard via InvisibleButton).
+  if (pick_active_at_entry) {
+    const auto& src = *g_state.pick_link_source;
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.2f, 1.0f));
+    ImGui::TextWrapped("Pick mode: click an entry to share crystal/filter from Layer %d / Entry %d (Esc to cancel)",
+                       src.layer_idx, src.entry_idx);
+    ImGui::PopStyleColor();
+    ImGui::Separator();
+  }
 
   // ---- Layout: cards (scroll) + toolbar ----
   float avail_h = ImGui::GetContentRegionAvail().y;
@@ -329,8 +353,13 @@ void RenderLeftPanel(float window_height) {
   // ---- Bottom toolbar: add layer only (per-layer delete lives on the header row) ----
   ImGui::Spacing();
   if (ImGui::SmallButton("+ Layer")) {
+    // Bind the new layer's seed entry to a fresh pool slot — see panels.cpp's
+    // "+ Crystal" handler for the same rationale (avoid implicit link to slot 0).
+    EntryCard new_entry;
+    new_entry.crystal_id = static_cast<int>(g_state.crystals.size());
+    g_state.crystals.emplace_back();
     Layer new_layer;
-    new_layer.entries.emplace_back();
+    new_layer.entries.push_back(new_entry);
     g_state.layers.push_back(std::move(new_layer));
     g_thumbnail_cache.OnLayerStructureChanged();
     g_state.MarkDirty();
@@ -340,6 +369,36 @@ void RenderLeftPanel(float window_height) {
   if (GetEditRequest().target != EditTarget::kNone) {
     OpenEditModal(GetEditRequest(), g_state);
     ResetEditRequest();
+  }
+
+  // Pick-mode cancel: blank area / panel-switch click.
+  // If pick is still active after cards are rendered (no card's InvisibleButton consumed
+  // the click), a left mouse click anywhere cancels pick. Covers clicking blank space in
+  // the LeftPanel, the right panel, or any non-card widget. Esc was handled at frame start.
+  if (g_state.pick_link_source.has_value() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    g_state.pick_link_source.reset();
+    pick_source_at_entry.reset();  // suppress spurious modal re-open
+  }
+
+  // Pick-mode completion: if pick was active at frame entry but is now reset
+  // (cleared by RenderEntryCard's pick-click handler), re-open the modal on
+  // the SOURCE entry so the user resumes editing where they started. The
+  // editing entry's crystal_id was just re-bound to the clicked card's
+  // crystal, so also reset the singleton trackball view to that crystal's
+  // default orientation — otherwise the modal preview keeps the old
+  // crystal's rotation while the thumbnail (which always renders from the
+  // entry's axis distribution) shows the new one. Cancel paths
+  // (Esc / blank-area click) clear pick_source_at_entry and skip this
+  // branch, so view reset only fires when a link was actually applied.
+  if (pick_source_at_entry.has_value() && !g_state.pick_link_source.has_value()) {
+    const auto& src = *pick_source_at_entry;
+    const auto& editing_entry = g_state.layers[src.layer_idx].entries[src.entry_idx];
+    ResetCrystalViewToCrystal(g_state.crystals[editing_entry.crystal_id]);
+    EditRequest reopen;
+    reopen.target = EditTarget::kCrystal;
+    reopen.layer_idx = src.layer_idx;
+    reopen.entry_idx = src.entry_idx;
+    OpenEditModal(reopen, g_state);
   }
 
   ImGui::End();

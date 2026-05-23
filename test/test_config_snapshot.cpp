@@ -9,33 +9,50 @@ namespace lumice::gui {
 namespace {
 
 // Helper: build a GuiState with non-default values across every configuration field.
+// ID-pool model: crystals/filters live in dedicated pools; entries hold ids.
 GuiState MakeModifiedState() {
   GuiState s = InitDefaultState();
 
-  // Mutate layers: replace default single-entry layer and add a pyramid entry with filter.
+  // Reset state: clear default pool slot + default layer, then rebuild.
+  s.crystals.clear();
+  s.filters.clear();
   s.layers.clear();
+
+  // Pool slot 0: custom prism
+  CrystalConfig c0;
+  c0.name = "custom-prism";
+  c0.type = CrystalType::kPrism;
+  c0.height = 2.5f;
+  c0.face_distance[0] = 1.3f;
+  c0.zenith = AxisDist{ AxisDistType::kGauss, 30.0f, 5.0f };
+  s.crystals.push_back(c0);
+
+  // Pool slot 1: pyramid
+  CrystalConfig c1;
+  c1.type = CrystalType::kPyramid;
+  c1.prism_h = 1.8f;
+  c1.upper_h = 0.4f;
+  c1.lower_h = 0.3f;
+  c1.upper_alpha = 32.0f;
+  c1.lower_alpha = 28.0f;
+  s.crystals.push_back(c1);
+
+  // Filter pool slot 0
+  FilterConfig f;
+  f.param = RaypathParams{ "3-1-5" };
+  f.sym_p = false;
+  s.filters.push_back(f);
+
   Layer layer;
   layer.probability = 0.42f;
   EntryCard e0;
-  e0.crystal.name = "custom-prism";
-  e0.crystal.type = CrystalType::kPrism;
-  e0.crystal.height = 2.5f;
-  e0.crystal.face_distance[0] = 1.3f;
-  e0.crystal.zenith = AxisDist{ AxisDistType::kGauss, 30.0f, 5.0f };
+  e0.crystal_id = 0;
   e0.proportion = 70.0f;
   layer.entries.push_back(e0);
 
   EntryCard e1;
-  e1.crystal.type = CrystalType::kPyramid;
-  e1.crystal.prism_h = 1.8f;
-  e1.crystal.upper_h = 0.4f;
-  e1.crystal.lower_h = 0.3f;
-  e1.crystal.upper_alpha = 32.0f;
-  e1.crystal.lower_alpha = 28.0f;
-  FilterConfig f;
-  f.param = RaypathParams{ "3-1-5" };
-  f.sym_p = false;
-  e1.filter = f;
+  e1.crystal_id = 1;
+  e1.filter_id = 0;
   e1.proportion = 30.0f;
   layer.entries.push_back(e1);
   s.layers.push_back(layer);
@@ -59,12 +76,16 @@ TEST(ConfigSnapshot, FromCapturesAllConfigFields) {
 
   ASSERT_EQ(snap.layers.size(), s.layers.size());
   ASSERT_EQ(snap.layers[0].entries.size(), s.layers[0].entries.size());
-  EXPECT_EQ(snap.layers[0].entries[0].crystal.name, s.layers[0].entries[0].crystal.name);
-  EXPECT_FLOAT_EQ(snap.layers[0].entries[0].crystal.height, s.layers[0].entries[0].crystal.height);
-  EXPECT_FLOAT_EQ(snap.layers[0].entries[0].crystal.face_distance[0], 1.3f);
-  EXPECT_EQ(snap.layers[0].entries[0].crystal.zenith.type, AxisDistType::kGauss);
-  EXPECT_FLOAT_EQ(snap.layers[0].entries[0].crystal.zenith.mean, 30.0f);
-  EXPECT_FLOAT_EQ(snap.layers[0].entries[0].crystal.zenith.std, 5.0f);
+  ASSERT_EQ(snap.crystals.size(), s.crystals.size());
+  ASSERT_EQ(snap.filters.size(), s.filters.size());
+  const int snap_cid0 = snap.layers[0].entries[0].crystal_id;
+  const int src_cid0 = s.layers[0].entries[0].crystal_id;
+  EXPECT_EQ(snap.crystals[snap_cid0].name, s.crystals[src_cid0].name);
+  EXPECT_FLOAT_EQ(snap.crystals[snap_cid0].height, s.crystals[src_cid0].height);
+  EXPECT_FLOAT_EQ(snap.crystals[snap_cid0].face_distance[0], 1.3f);
+  EXPECT_EQ(snap.crystals[snap_cid0].zenith.type, AxisDistType::kGauss);
+  EXPECT_FLOAT_EQ(snap.crystals[snap_cid0].zenith.mean, 30.0f);
+  EXPECT_FLOAT_EQ(snap.crystals[snap_cid0].zenith.std, 5.0f);
   EXPECT_FLOAT_EQ(snap.layers[0].probability, s.layers[0].probability);
 
   EXPECT_FLOAT_EQ(snap.sun.altitude, 35.0f);
@@ -157,24 +178,59 @@ TEST(ConfigSnapshot, RoundTripFromThenApplyRestoresConfig) {
   // Key fields should survive the From → ApplyTo cycle.
   ASSERT_EQ(restored.layers.size(), original.layers.size());
   EXPECT_EQ(restored.layers[0].entries.size(), original.layers[0].entries.size());
-  EXPECT_EQ(restored.layers[0].entries[1].crystal.type, CrystalType::kPyramid);
-  EXPECT_TRUE(restored.layers[0].entries[1].filter.has_value());
-  EXPECT_EQ(restored.layers[0].entries[1].filter->RaypathText(), "3-1-5");
-  EXPECT_FALSE(restored.layers[0].entries[1].filter->sym_p);
+  ASSERT_EQ(restored.crystals.size(), original.crystals.size());
+  ASSERT_EQ(restored.filters.size(), original.filters.size());
+  const auto& restored_e1 = restored.layers[0].entries[1];
+  EXPECT_EQ(restored.crystals[restored_e1.crystal_id].type, CrystalType::kPyramid);
+  ASSERT_TRUE(restored_e1.filter_id.has_value());
+  EXPECT_EQ(restored.filters[*restored_e1.filter_id].RaypathText(), "3-1-5");
+  EXPECT_FALSE(restored.filters[*restored_e1.filter_id].sym_p);
   EXPECT_FLOAT_EQ(restored.sun.altitude, original.sun.altitude);
   EXPECT_EQ(restored.sim.infinite, original.sim.infinite);
   EXPECT_EQ(restored.renderer.lens_type, original.renderer.lens_type);
   EXPECT_FLOAT_EQ(restored.renderer.fov, original.renderer.fov);
   // Nested crystal/axis fields also survive the From → ApplyTo cycle.
-  EXPECT_FLOAT_EQ(restored.layers[0].entries[0].crystal.face_distance[0], 1.3f);
-  EXPECT_EQ(restored.layers[0].entries[0].crystal.zenith.type, AxisDistType::kGauss);
-  EXPECT_FLOAT_EQ(restored.layers[0].entries[0].crystal.zenith.mean, 30.0f);
+  const auto& restored_e0 = restored.layers[0].entries[0];
+  EXPECT_FLOAT_EQ(restored.crystals[restored_e0.crystal_id].face_distance[0], 1.3f);
+  EXPECT_EQ(restored.crystals[restored_e0.crystal_id].zenith.type, AxisDistType::kGauss);
+  EXPECT_FLOAT_EQ(restored.crystals[restored_e0.crystal_id].zenith.mean, 30.0f);
+}
+
+// ID-pool round-trip: build state with shared crystal_id across two entries,
+// take snapshot, mutate live pool, ApplyTo, verify pool + entry-ref ids both
+// restore correctly (identity-based sharing survives the round trip).
+TEST(ConfigSnapshot, RoundTripPoolAndEntries) {
+  GuiState s = InitDefaultState();
+  // Two entries sharing crystal pool slot 0.
+  CrystalConfig c = s.crystals[0];
+  c.height = 1.5f;
+  s.crystals[0] = c;
+  EntryCard e_extra;
+  e_extra.crystal_id = 0;
+  e_extra.proportion = 25.0f;
+  s.layers[0].entries.push_back(e_extra);
+  ASSERT_EQ(s.layers[0].entries.size(), 2u);
+
+  auto snap = GuiState::ConfigSnapshot::From(s);
+
+  // Mutate the live pool + push a filter entry, then revert via ApplyTo.
+  s.crystals[0].height = 99.0f;
+  s.filters.push_back(FilterConfig{});
+  s.layers[0].entries[1].filter_id = 0;
+
+  snap.ApplyTo(s);
+
+  EXPECT_FLOAT_EQ(s.crystals[0].height, 1.5f);
+  EXPECT_EQ(s.layers[0].entries[0].crystal_id, 0);
+  EXPECT_EQ(s.layers[0].entries[1].crystal_id, 0);
+  EXPECT_FALSE(s.layers[0].entries[1].filter_id.has_value());
+  EXPECT_EQ(s.filters.size(), 0u);
 }
 
 // Mirror the production sizeof() guard at test scope as an extra reminder on the
 // baseline platform. Platform-gated because std::vector size varies across stdlibs.
 #if defined(__APPLE__) && defined(__aarch64__)
-static_assert(sizeof(GuiState::ConfigSnapshot) == 112,
+static_assert(sizeof(GuiState::ConfigSnapshot) == 160,
               "Test mirror: ConfigSnapshot size changed; update From/ApplyTo in gui_state.hpp");
 #endif
 

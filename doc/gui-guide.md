@@ -80,6 +80,30 @@ Hovering a crystal card reveals two small action buttons in its top-right corner
 
 The buttons fade in / out via alpha so the card layout stays stable; clicks are routed even on the very first hovered frame.
 
+### Linked Entries
+
+Two or more crystal cards that share the same crystal configuration and filter configuration form a **linked group**. Edits made through any member — crystal shape, axis distribution, or filter — are automatically visible on every other member in the group.
+
+**fa-link badge** — A chain link icon appears below the hover action buttons on the card's right edge whenever the card belongs to a linked group (at least one other entry shares the same crystal and filter). Hovering the badge shows a tooltip listing the other entries in the group by layer and index. The badge is always visible (not hover-revealed) because it reflects a persistent state.
+
+**"Link to..." — entering pick mode** — Open the popup editor for any card by clicking its `Edit` button. Above the Crystal / Axis / Filter tabs you will see a sharing status line (`Not shared` or `Shared with N other entries`). Click **Link to...** to enter pick mode: the modal closes and a yellow hint bar appears at the top of the left panel:
+
+> Pick mode: click an entry to share crystal/filter from Layer X / Entry Y (Esc to cancel)
+
+Click any *other* card to link the current entry to it — the current entry adopts that card's crystal and filter. The popup editor reopens on the current entry so editing can continue from where it left off.
+
+**Exiting pick mode without linking:** press `Esc`, or click any blank area in the panel (or switch panels), to cancel. The original crystal and filter are preserved.
+
+**"Unlink"** — When the card belongs to a linked group, an **Unlink** button appears in the sharing status row of the popup editor. Clicking it forks the shared pool slots: the entry receives a private copy of its crystal and filter and leaves the group. Other members are unaffected.
+
+**"D" (Duplicate) vs Link** — The `D` hover button (see [Card Hover Actions](#card-hover-actions)) creates a fully independent copy of the entry with its own crystal and filter. Unlike linking, the duplicate is born unlinked; subsequent edits to the original and the copy never affect each other.
+
+**Edit propagation in a linked group:**
+- Crystal and filter content edits in the popup editor are automatically reflected on all group members via the shared pool — no extra action required.
+- Adding or removing a filter on one member also updates the filter reference for the entire group, so the fa-link badge remains visible and the group stays coherent.
+
+**Co-shared highlight** — While the popup editor is open, other cards in the same linked group display an orange border. This makes it easy to see which entries will be affected by the current editing session.
+
 ## Right Panel — View Parameters
 
 The right panel groups every parameter that influences how the simulated rays are rendered. Four collapsing sections are open by default.
@@ -117,7 +141,7 @@ The central area shows the live, lens-projected halo image. While idle the area 
 
 ## Popup Editor
 
-`Edit` buttons on a crystal card open a single modal editor with three tabs (Crystal / Axis / Filter) and a persistent crystal preview pane on the left side. The preview redraws on every frame so geometry and axis edits are visible immediately. Since v15 the modal can be detached as its own OS window via ImGui multi-viewport — drag the title bar outside the host window to float it.
+`Edit` buttons on a crystal card open a single modal editor with three tabs (Crystal / Axis / Filter) and a persistent crystal preview pane on the left side. The preview redraws on every frame so geometry and axis edits are visible immediately. Since v15 the modal can be detached as its own OS window via ImGui multi-viewport — drag the title bar outside the host window to float it. A sharing status row above the tabs shows whether the card belongs to a linked group and provides **Link to...** and **Unlink** actions; see [Linked Entries](#linked-entries).
 
 ![Popup Editor — Crystal, Axis, Filter tabs](figs/gui_edit_modal_combined.jpg)
 
