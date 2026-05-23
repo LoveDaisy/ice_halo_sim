@@ -82,7 +82,7 @@ inline bool operator==(const LensParam& a, const LensParam& b) {
 
 inline bool operator==(const RenderConfig& a, const RenderConfig& b) {
   // Bump this when adding fields to RenderConfig.
-  static_assert(sizeof(RenderConfig) == 168, "Update operator== when RenderConfig fields change");
+  static_assert(sizeof(RenderConfig) == 144, "Update operator== when RenderConfig fields change");
   return a.id_ == b.id_ && a.lens_ == b.lens_ &&
          std::equal(std::begin(a.lens_shift_), std::end(a.lens_shift_), std::begin(b.lens_shift_)) &&
          std::equal(std::begin(a.resolution_), std::end(a.resolution_), std::begin(b.resolution_)) &&
@@ -91,7 +91,7 @@ inline bool operator==(const RenderConfig& a, const RenderConfig& b) {
          std::equal(std::begin(a.ray_color_), std::end(a.ray_color_), std::begin(b.ray_color_)) &&
          a.opacity_ == b.opacity_ && a.intensity_factor_ == b.intensity_factor_ && a.norm_mode_ == b.norm_mode_ &&
          a.overlap_ == b.overlap_ && a.central_grid_ == b.central_grid_ && a.elevation_grid_ == b.elevation_grid_ &&
-         a.celestial_outline_ == b.celestial_outline_ && a.ms_filter_ == b.ms_filter_;
+         a.celestial_outline_ == b.celestial_outline_;
 }
 
 // ---- Light config ----

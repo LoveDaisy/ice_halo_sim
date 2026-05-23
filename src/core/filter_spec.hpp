@@ -1,3 +1,5 @@
+// See doc/filter-architecture.md §2/§3 for the simulation-side filter gate semantics
+// and multi-scatter pruning behaviour that this class implements.
 #ifndef SRC_CORE_FILTER_SPEC_H_
 #define SRC_CORE_FILTER_SPEC_H_
 

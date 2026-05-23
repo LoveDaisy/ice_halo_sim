@@ -113,13 +113,6 @@ TEST(RenderConfigTest, EachLayoutField_ReturnsTrue) {
     mod.overlap_ = 0.5f;
     EXPECT_TRUE(lumice::NeedsRebuild(base, mod)) << "overlap";
   }
-
-  // ms_filter
-  {
-    auto mod = base;
-    mod.ms_filter_.push_back(lumice::FilterConfig{});
-    EXPECT_TRUE(lumice::NeedsRebuild(base, mod)) << "ms_filter";
-  }
 }
 
 TEST(RenderConfigTest, EachAppearanceField_ReturnsFalse) {
@@ -208,10 +201,6 @@ TEST(RenderConfigTest, Symmetry_LayoutChanges) {
   auto mod_overlap = base;
   mod_overlap.overlap_ = 0.5f;
   EXPECT_EQ(lumice::NeedsRebuild(base, mod_overlap), lumice::NeedsRebuild(mod_overlap, base)) << "overlap symmetry";
-
-  auto mod_filter = base;
-  mod_filter.ms_filter_.push_back(lumice::FilterConfig{});
-  EXPECT_EQ(lumice::NeedsRebuild(base, mod_filter), lumice::NeedsRebuild(mod_filter, base)) << "ms_filter symmetry";
 }
 
 TEST(RenderConfigTest, MixedChanges_LayoutPlusAppearance) {

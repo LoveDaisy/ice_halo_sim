@@ -4,7 +4,6 @@
 #include <nlohmann/json.hpp>
 #include <vector>
 
-#include "config/filter_config.hpp"
 #include "core/def.hpp"
 
 namespace lumice {
@@ -96,8 +95,6 @@ struct RenderConfig {
   std::vector<GridLineParam> central_grid_;
   std::vector<GridLineParam> elevation_grid_;
   bool celestial_outline_ = true;
-
-  std::vector<FilterConfig> ms_filter_;  // for multi-scattering
 };
 
 NLOHMANN_JSON_SERIALIZE_ENUM(    // declear

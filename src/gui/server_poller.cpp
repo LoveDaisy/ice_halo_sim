@@ -204,6 +204,9 @@ void ServerPoller::PollOnce() {
         staged_.xyz_data.resize(float_count);
         std::memcpy(staged_.xyz_data.data(), xyz_results[0].xyz_buffer, float_count * sizeof(float));
         staged_.unfiltered_xyz_data.resize(float_count);
+        // Design A: unfiltered ≡ filtered (simulator-side filter already applied before emission).
+        // Field retained to avoid GUI link breakage; values equal the xyz_buffer counterpart.
+        // See doc/filter-architecture.md §7.
         // unfiltered_xyz_buffer is always non-null (allocated at construction); gated by has_valid_data.
         std::memcpy(staged_.unfiltered_xyz_data.data(), xyz_results[0].unfiltered_xyz_buffer,
                     float_count * sizeof(float));

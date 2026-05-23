@@ -11,6 +11,7 @@ doc/
 ├── README.md / README_zh.md                         # Documentation index (English/Chinese)
 ├── architecture.md / _zh.md                         # System architecture
 ├── configuration.md / _zh.md                        # Configuration guide
+├── filter-architecture.md / _zh.md                  # Filter subsystem design constraints (Design A)
 ├── adaptive-brightness.md / .zh.md                  # Adaptive Brightness: algorithm, modes, additivity
 ├── raypath-symmetry.md / _zh.md                     # Raypath symmetry: P/B/D filter semantics
 ├── c_api.md / _zh.md                                # C API reference
@@ -39,6 +40,13 @@ For users of this project:
   - Detailed configuration options and defaults
   - Validation rules
   - Common configuration errors and solutions
+
+- **[Filter Architecture](filter-architecture.md)**: Core design constraints for the filter subsystem
+  - Filter ↔ crystal single-key binding model
+  - Simulation-side filter gate (Design A): filter-fail rays are dropped in the simulator
+  - Multi-scatter pruning semantics and performance implications
+  - Historical context: task-200 routing decision and revert rationale
+  - C API `unfiltered_*` field deprecation and GUI Off-mode temporary disable
 
 - **[Adaptive Brightness](adaptive-brightness.md)**: Automatic EV normalization in the GUI
   - P99-anchored algorithm and target-white mapping

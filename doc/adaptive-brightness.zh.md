@@ -167,6 +167,29 @@ Path B 现在累积真正的 unfiltered 全集。
 
 ---
 
+## 5c. task-revert（219.4）后的 Off 模式状态
+
+> **注意**：本节描述 task-revert（219.4）完成后的状态，**该实施尚未落地**。
+> 219.4 合入前，当前代码仍遵循 §5b 描述的 task-200 路由。
+
+§5b 描述的 task-200 路由决策正在 task-revert（219.4，scrum-prob-zero-leak / #219）中被回退。
+Filter 评估将回归 simulator 端（Design A）：filter 失败的 ray 将在 simulator 内部被丢弃，不再到达 consumer。
+
+回退后：
+
+- `unfiltered_xyz_buffer` **将等同** `xyz_buffer`——两者均反映经 simulator 过滤的同一 ray 集合。
+  Consumer 层的"unfiltered"与"filtered"区分将不再存在。
+- **Off 模式将在 GUI 中暂时强制禁用**（开关置灰，tooltip 说明原因）。
+  由于 unfiltered anchor 等同 filtered anchor，Off 模式与 On 模式将产生相同结果；
+  Off 模式原本旨在防止的 ~10 stops 亮度跳跃也无法再被触发。
+- `LUMICE_RawXyzResult` 中的 `unfiltered_xyz_buffer` 与 `unfiltered_snapshot_intensity` 已标记为 **DEPRECATED**；
+  task-revert（219.4）完成后，请改用 `xyz_buffer` 与 `snapshot_intensity`。
+
+在 Design A 基线上重新设计 Off 模式（通过不同机制恢复可加性不变量）已作为 backlog 条目跟踪。
+完整规格说明见 `doc/filter-architecture_zh.md §7`。
+
+---
+
 ## 6. 参考
 
 ### 代码路径

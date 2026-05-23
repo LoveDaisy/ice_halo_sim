@@ -11,6 +11,7 @@ doc/
 ├── README.md / README_zh.md                         # 文档索引（英文/中文）
 ├── architecture.md / _zh.md                         # 系统架构文档
 ├── configuration.md / _zh.md                        # 配置文档
+├── filter-architecture.md / _zh.md                  # Filter 子系统设计约束（Design A）
 ├── adaptive-brightness.md / .zh.md                  # 自适应亮度：算法、双模式语义、可加性
 ├── raypath-symmetry.md / _zh.md                     # Raypath 对称性：P/B/D 过滤器语义
 ├── c_api.md / _zh.md                                # C接口使用文档
@@ -39,6 +40,13 @@ doc/
   - 配置项详细说明和默认值
   - 配置验证规则
   - 常见配置错误和解决方案
+
+- **[Filter 子系统架构](filter-architecture_zh.md)**: Filter 子系统核心设计约束
+  - Filter ↔ 晶体单键绑定模型
+  - Simulation 端 filter 门控（Design A）：失败 ray 在 simulator 中丢弃
+  - 多重散射剪枝语义与性能影响
+  - 历史脉络：task-200 路由决策与回退理由
+  - C API `unfiltered_*` 字段废弃及 GUI Off 模式临时禁用
 
 - **[自适应亮度](adaptive-brightness.zh.md)**: GUI 自动 EV 归一化
   - P99 锚点算法与目标白点映射

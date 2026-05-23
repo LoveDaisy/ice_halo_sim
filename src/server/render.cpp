@@ -14,7 +14,6 @@
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/def.hpp"
-#include "core/filter_spec.hpp"
 #include "core/math.hpp"
 #include "core/projection.hpp"
 #include "core/raypath.hpp"
@@ -324,7 +323,6 @@ RenderConsumer::RenderConsumer(RenderConfig config)
       short_pix_(static_cast<float>(std::min(config_.resolution_[0], config_.resolution_[1]))),
       internal_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
-      unfiltered_internal_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       unfiltered_snapshot_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_work_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_image_buffer_(std::make_unique<uint8_t[]>(config_.resolution_[0] * config_.resolution_[1] * 3)) {
@@ -333,46 +331,6 @@ RenderConsumer::RenderConsumer(RenderConfig config)
   rot_.Chain({ ax_z, (-90.0f + config_.view_.ro_) * math::kDegreeToRad })
       .Chain({ ax_y, (90.0f - config_.view_.el_) * math::kDegreeToRad })
       .Chain({ ax_z, config_.view_.az_ * math::kDegreeToRad });
-}
-
-
-// specs_table[fi][crystal_idx] holds canonical-form FilterSpec keyed by (filter
-// stage, crystal index). When n_crystals == 0 the inner vectors stay empty;
-// FilterRay's bound-check then rejects every ray (defensive — not reachable on
-// the normal render path because outgoing rays always carry a valid crystal).
-bool FilterRay(const RayBuffer& rays, size_t i,
-               const std::vector<std::vector<std::unique_ptr<FilterSpec>>>& specs_table) {
-  if (specs_table.empty()) {
-    return true;
-  }
-
-  const auto& r = rays[i];
-  bool filter_checked = true;
-  size_t curr_idx = i;
-  size_t root_idx = r.root_ray_idx_;
-  for (auto fit = specs_table.rbegin(); fit != specs_table.rend(); /* increament see below */) {
-    if (curr_idx != kInvalidId) {
-      root_idx = rays[curr_idx].root_ray_idx_;
-    } else {
-      filter_checked = false;
-      break;
-    }
-
-    const auto crystal_idx = static_cast<size_t>(r.crystal_idx_);
-    if (crystal_idx >= fit->size()) {
-      filter_checked = false;
-      break;
-    }
-    if (!(*fit)[crystal_idx]->Check(rays[curr_idx])) {
-      filter_checked = false;
-      break;
-    }
-
-    // increament
-    curr_idx = rays[root_idx].prev_ray_idx_;
-    fit++;
-  }
-  return filter_checked && curr_idx == kInfSize;
 }
 
 
@@ -391,33 +349,9 @@ void RenderConsumer::Consume(const SimData& data) {
     overlap_w_buf_ = std::make_unique<float[]>(buf_capacity_);
   }
 
-  // Build per-(fi, crystal_idx) FilterSpec table once per Consume call.
-  // Per-Consume rebuild is intentional: crystals come from SimData and may differ
-  // across calls (non-deterministic scenario); deterministic scenario has small
-  // n_crystals (1-3), making per-Consume rebuild negligible.
-  //
-  // SimData invariant (sim_data.hpp:55): crystal_axis_dists_ is parallel to crystals_,
-  // so axis_dists[ci] is always defined for ci < n_crystals.
-  //
-  // n_crystals == 0 path: outer vector stays sized to n_filters with empty inner
-  // vectors; FilterRay's crystal_idx bound-check then rejects every ray. This is
-  // a defensive bottom — not reachable on the normal render path because outgoing
-  // rays always carry a valid crystal_idx.
-  const size_t n_filters = config_.ms_filter_.size();
-  const size_t n_crystals = data.crystals_.size();
-  std::vector<std::vector<std::unique_ptr<FilterSpec>>> specs_table(n_filters);
-  if (n_filters > 0 && n_crystals > 0) {
-    for (size_t fi = 0; fi < n_filters; fi++) {
-      specs_table[fi].reserve(n_crystals);
-      for (size_t ci = 0; ci < n_crystals; ci++) {
-        specs_table[fi].emplace_back(
-            FilterSpec::Create(config_.ms_filter_[fi], data.crystals_[ci], data.crystal_axis_dists_[ci]));
-      }
-    }
-  }
-
-  // Lens setup: moved before filter+copy so the unfiltered pass (path B) can reuse params.
-  // F16: GetProjFunc/LensProjParam depend only on config_.*; moving before filter+copy is safe.
+  // Design A: filter runs simulator-side (see doc/filter-architecture.md §2).
+  // All rays in data.outgoing_* have already been filter-gated; the consumer
+  // simply projects and accumulates. No per-Consume FilterSpec table needed.
   auto lens_proj = GetProjFunc(config_.lens_.type_);
   LensProjParam proj_param{ config_.lens_.fov_,
                             short_pix_,
@@ -476,91 +410,14 @@ void RenderConsumer::Consume(const SimData& data) {
     }
   };
 
-  // === Path B: unfiltered accumulation pass (filter present) ===
-  // All outgoing rays are projected before the filter+copy step to build the unfiltered EV anchor.
-  // F17: data.outgoing_d_/outgoing_w_ are always filled by Simulator alongside outgoing_indices_.
-  // F14: buf_capacity_ >= outgoing_count, so overlap_w_buf_ memcpy below is safe.
-  if (!config_.ms_filter_.empty() && !data.outgoing_d_.empty()) {
-    lens_proj(proj_param, data.outgoing_d_.data(), xy_buf_.get(), outgoing_count);
-
-    // Save original outgoing weights for unfiltered overlap pass 2.
-    // This is overwritten later when filtered pass 2 saves filtered weights into overlap_w_buf_.
-    // Unfiltered pass 2 (below) must complete before that overwrite.
-    if (proj_param.max_abs_dz_ > 0) {
-      std::memcpy(overlap_w_buf_.get(), data.outgoing_w_.data(), outgoing_count * sizeof(float));
-    }
-
-    size_t unfiltered_final = 0;
-    float unfiltered_landed = 0;
-    for (size_t i = 0; i < outgoing_count; i++) {
-      if (xy_buf_[i * 2] < 0 || xy_buf_[i * 2] >= config_.resolution_[0] || xy_buf_[i * 2 + 1] < 0 ||
-          xy_buf_[i * 2 + 1] >= config_.resolution_[1]) {
-        continue;
-      }
-      xy_buf_[unfiltered_final] = xy_buf_[i * 2 + 1] * config_.resolution_[0] + xy_buf_[i * 2];
-      w_buf_[unfiltered_final] = data.outgoing_w_[i];
-      unfiltered_landed += data.outgoing_w_[i];
-      unfiltered_final++;
-    }
-    SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), unfiltered_internal_xyz_.get(), unfiltered_final);
-    unfiltered_total_intensity_ += unfiltered_landed;
-
-    // Unfiltered overlap pass 2: must complete before filtered pass 2 overwrites overlap_w_buf_.
-    if (proj_param.max_abs_dz_ > 0) {
-      size_t overlap_count = 0;
-      int w = config_.resolution_[0];
-      int h = config_.resolution_[1];
-      for (size_t i = 0; i < outgoing_count; i++) {
-        float sky_x = -data.outgoing_d_[i * 3];
-        float sky_y = -data.outgoing_d_[i * 3 + 1];
-        float sky_z = -data.outgoing_d_[i * 3 + 2];
-        if (std::abs(sky_z) >= proj_param.max_abs_dz_) {
-          continue;
-        }
-        bool primary_upper = (sky_z >= 0);
-        float z_hemi_opp = primary_upper ? -sky_z : sky_z;
-        auto proj = overlap_fwd(sky_x, sky_y, z_hemi_opp, proj_param.r_scale_);
-        float fx = 0;
-        float fy = 0;
-        projection::DualFisheyeToPixel(proj.x, proj.y, !primary_upper, w, h, &fx, &fy);
-        int px = static_cast<int>(std::floor(fx + 0.5f));
-        int py = static_cast<int>(std::floor(fy + 0.5f));
-        if (px < 0 || px >= w || py < 0 || py >= h) {
-          continue;
-        }
-        xy_buf_[overlap_count] = py * w + px;
-        w_buf_[overlap_count] = overlap_w_buf_[i];
-        overlap_count++;
-      }
-      if (overlap_count > 0) {
-        SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), unfiltered_internal_xyz_.get(), overlap_count);
-      }
-    }
-  }
-
-  // Filter + copy outgoing rays into contiguous buffers.
+  // Copy pre-filtered outgoing rays into contiguous buffers (Design A:
+  // simulator-side filter has already dropped non-matching rays).
   assert(!data.outgoing_indices_.empty() || data.rays_.Empty());
-  size_t filtered_ray_num = 0;
-
-  if (config_.ms_filter_.empty() && !data.outgoing_d_.empty()) {
-    // Fast path: no filter — bulk memcpy from pre-packed contiguous arrays.
-    // Avoids random access into 112-byte RaySeg structs (cache utilization 14% → 100%).
-    filtered_ray_num = outgoing_count;
+  size_t filtered_ray_num = outgoing_count;
+  if (!data.outgoing_d_.empty()) {
     std::memcpy(d_buf_.get(), data.outgoing_d_.data(), filtered_ray_num * 3 * sizeof(float));
     std::memcpy(w_buf_.get(), data.outgoing_w_.data(), filtered_ray_num * sizeof(float));
-  } else {
-    // Slow path: filter present — must call FilterRay per ray (chain walk through rays buffer).
-    for (size_t i : data.outgoing_indices_) {
-      const auto& r = data.rays_[i];
-      if (!FilterRay(data.rays_, i, specs_table)) {
-        continue;
-      }
-      std::memcpy(d_buf_.get() + filtered_ray_num * 3, r.d_, 3 * sizeof(float));
-      w_buf_[filtered_ray_num] = r.w_;
-      filtered_ray_num++;
-    }
   }
-  auto t1 = std::chrono::steady_clock::now();
 
   lens_proj(proj_param, d_buf_.get(), xy_buf_.get(), filtered_ray_num);
   auto t2 = std::chrono::steady_clock::now();
@@ -587,13 +444,6 @@ void RenderConsumer::Consume(const SimData& data) {
   }
   SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), internal_xyz_.get(), final_ray_num);
   total_intensity_ += landed_weight;
-
-  // === Path A: no-filter special case — unfiltered == filtered ===
-  // F15: SpectrumToXyz is read-only on w_buf_/xy_buf_; calling twice with same compacted input is safe.
-  if (config_.ms_filter_.empty()) {
-    SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), unfiltered_internal_xyz_.get(), final_ray_num);
-    unfiltered_total_intensity_ += landed_weight;
-  }
 
   // === Pass 2: Overlap dual-write (only for dual fisheye with max_abs_dz > 0) ===
   // Project overlap-zone rays to the opposite hemisphere, filling the ring r ∈ (r_scale, 1].
@@ -633,18 +483,13 @@ void RenderConsumer::Consume(const SimData& data) {
     if (overlap_count > 0) {
       // Pass 2 does NOT update total_intensity_ — preserves normalization.
       SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), internal_xyz_.get(), overlap_count);
-      // Path A: unfiltered == filtered for overlap pass 2 as well.
-      if (config_.ms_filter_.empty()) {
-        SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), unfiltered_internal_xyz_.get(), overlap_count);
-      }
     }
   }
 
   auto t3 = std::chrono::steady_clock::now();
 
   consume_count_++;
-  consume_filter_us_ += std::chrono::duration<double, std::micro>(t1 - t0).count();
-  consume_proj_us_ += std::chrono::duration<double, std::micro>(t2 - t1).count();
+  consume_proj_us_ += std::chrono::duration<double, std::micro>(t2 - t0).count();
   consume_accum_us_ += std::chrono::duration<double, std::micro>(t3 - t2).count();
 }
 
@@ -652,23 +497,22 @@ void RenderConsumer::LogConsumeProfile() const {
   if (consume_count_ == 0) {
     return;
   }
-  double avg_filter = consume_filter_us_ / static_cast<double>(consume_count_);
   double avg_proj = consume_proj_us_ / static_cast<double>(consume_count_);
   double avg_accum = consume_accum_us_ / static_cast<double>(consume_count_);
-  double avg_total = avg_filter + avg_proj + avg_accum;
-  ILOG_INFO(logger_,
-            "Consume profile: {} batches, avg {:.1f}us (filter {:.1f}us {:.0f}% + proj {:.1f}us {:.0f}% + "
-            "accum {:.1f}us {:.0f}%)",
-            consume_count_, avg_total, avg_filter, avg_filter / avg_total * 100, avg_proj, avg_proj / avg_total * 100,
-            avg_accum, avg_accum / avg_total * 100);
+  double avg_total = avg_proj + avg_accum;
+  ILOG_INFO(logger_, "Consume profile: {} batches, avg {:.1f}us (proj {:.1f}us {:.0f}% + accum {:.1f}us {:.0f}%)",
+            consume_count_, avg_total, avg_proj, avg_proj / avg_total * 100, avg_accum, avg_accum / avg_total * 100);
 }
 
 void RenderConsumer::PrepareSnapshot() {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   std::memcpy(snapshot_xyz_.get(), internal_xyz_.get(), total_pix * 3 * sizeof(float));
   snapshot_intensity_ = total_intensity_;
-  std::memcpy(unfiltered_snapshot_xyz_.get(), unfiltered_internal_xyz_.get(), total_pix * 3 * sizeof(float));
-  unfiltered_snapshot_intensity_ = unfiltered_total_intensity_;
+  // Design A: filter runs simulator-side, so internal_xyz_ already represents
+  // the filtered ray set. unfiltered_* fields are retained for ABI but mirror
+  // the filtered snapshot. See doc/filter-architecture.md §7.
+  std::memcpy(unfiltered_snapshot_xyz_.get(), snapshot_xyz_.get(), total_pix * 3 * sizeof(float));
+  unfiltered_snapshot_intensity_ = snapshot_intensity_;
 }
 
 void RenderConsumer::CountEffectivePixels() {
@@ -769,12 +613,12 @@ RawXyzResult RenderConsumer::GetRawXyzResult() const {
 void RenderConsumer::Reset() {
   total_intensity_ = 0;
   snapshot_intensity_ = 0;
-  unfiltered_total_intensity_ = 0;
+  // unfiltered_snapshot_intensity_ retained for ABI; mirrors snapshot_intensity_
+  // under Design A and must be cleared so a stale value cannot leak after Reset.
   unfiltered_snapshot_intensity_ = 0;
   effective_pix_ = 0;
   auto buf_size = static_cast<size_t>(config_.resolution_[0]) * config_.resolution_[1] * 3;
   std::memset(internal_xyz_.get(), 0, buf_size * sizeof(float));
-  std::memset(unfiltered_internal_xyz_.get(), 0, buf_size * sizeof(float));
   // snapshot_xyz_ / unfiltered_snapshot_xyz_ not zeroed: PrepareSnapshot will memcpy over them.
   // has_ever_consumed_ = false (set in Stop) ensures GetRawXyzResults returns has_valid_data_=false
   // until new data arrives, preventing stale snapshot reads.
