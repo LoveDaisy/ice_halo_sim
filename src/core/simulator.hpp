@@ -105,13 +105,13 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
 // F1 variant of CollectData (selected when AdaptiveBrightnessMode::kOff is active for the batch).
 // Differences from Design-A CollectData:
 //   - Filter is NOT an emit-gate. Outgoing candidates whose filter check fails are routed into
-//     the anchor lane (collected by the caller via IsAnchorOutgoing()) AND remain eligible for
+//     the anchor lane (collected by the caller via IsFilterDropped()) AND remain eligible for
 //     prob-pass continue to the next MS layer. This is the source of F1's perf cost in
 //     scenes with mid-trajectory filters.
 //   - Filter-pass + prob-pass → continue (same as Design A).
 //   - Filter-pass + prob-fail → emit to outgoing lane (same as Design A).
 // is_continue_ and is_filter_dropped_ flags are still written so the caller's outgoing/anchor
-// collection loop can dispatch by IsOutgoing() / IsAnchorOutgoing().
+// collection loop can dispatch by IsOutgoing() / IsFilterDropped().
 //
 // See doc/filter-architecture.md §7 (and scrum-adaptive-additivity-redesign explore SUMMARY)
 // for design rationale. Internal: exposed for unit testing; not part of the public C API.

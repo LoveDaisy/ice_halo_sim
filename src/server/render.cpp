@@ -507,6 +507,7 @@ void RenderConsumer::Consume(const SimData& data) {
       anchor_internal_xyz_ = std::make_unique<float[]>(pix_count);
       anchor_snapshot_xyz_ = std::make_unique<float[]>(pix_count);
       std::memset(anchor_internal_xyz_.get(), 0, pix_count * sizeof(float));
+      std::memset(anchor_snapshot_xyz_.get(), 0, pix_count * sizeof(float));
     }
     size_t anchor_count = data.anchor_w_.size();
     if (anchor_count > buf_capacity_) {
@@ -697,6 +698,7 @@ void RenderConsumer::Reset() {
 
   // anchor_internal_xyz_ may be null in OFF-without-filter (no filter-fail emission ever produced);
   // we deliberately do not allocate-on-Reset to preserve the OFF-without-filter zero-cost path.
+  // anchor_snapshot_xyz_ is not zeroed: PrepareSnapshot will overwrite it before any read.
   if (anchor_internal_xyz_) {
     std::memset(anchor_internal_xyz_.get(), 0, buf_size * sizeof(float));
   }

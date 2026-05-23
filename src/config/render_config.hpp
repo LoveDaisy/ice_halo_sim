@@ -46,7 +46,7 @@ struct LensParam {
   float fov_;
 };
 
-NLOHMANN_JSON_SERIALIZE_ENUM(  // declear
+NLOHMANN_JSON_SERIALIZE_ENUM(  // declare
     LensParam::LensType,       // type
     {
         { LensParam::kLinear, "linear" },
@@ -116,14 +116,14 @@ struct RenderConfig {
   AdaptiveBrightnessMode ab_mode_ = AdaptiveBrightnessMode::kOn;
 };
 
-NLOHMANN_JSON_SERIALIZE_ENUM(  // declear
+NLOHMANN_JSON_SERIALIZE_ENUM(  // declare
     AdaptiveBrightnessMode,    // type
     {
         { AdaptiveBrightnessMode::kOn, "on" },
         { AdaptiveBrightnessMode::kOff, "off" },
     })
 
-NLOHMANN_JSON_SERIALIZE_ENUM(    // declear
+NLOHMANN_JSON_SERIALIZE_ENUM(    // declare
     RenderConfig::VisibleRange,  // type
     {
         { RenderConfig::kUpper, "upper" },

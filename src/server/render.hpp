@@ -45,8 +45,8 @@ class RenderConsumer : public IConsume {
   // are skipped on every Consume / Snapshot path.
   // anchor_total_intensity_ tracks the OFF-mode anchor lane weight (filter-fail outgoing rays
   // only); the filter-independent total intensity at snapshot time is
-  // anchor_snapshot_intensity_ = snapshot_intensity_ + anchor_intensity_ (both filter-pass and
-  // filter-fail). See doc/filter-architecture.md §7.
+  // anchor_snapshot_intensity_ = snapshot_intensity_ (filter-pass) + anchor_total_intensity_ (filter-fail).
+  // See doc/filter-architecture.md §7.
   float anchor_total_intensity_ = 0;
   float anchor_snapshot_intensity_ = 0;
   float anchor_p99_y_ = 0;
