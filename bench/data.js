@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779529615717,
+  "lastUpdate": 1779529617395,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -7799,6 +7799,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 66.2,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d158a9394600b1ded192e6dc974603f42b76fb47",
+          "message": "Merge pull request #103 from LoveDaisy/feat/gui_card_link\n\nfeat(gui): linked entries via ID-pool model + pick-mode UX",
+          "timestamp": "2026-05-23T17:41:59+08:00",
+          "tree_id": "dcb404af64a0c4302dbf917a45e0f4888b230422",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/d158a9394600b1ded192e6dc974603f42b76fb47"
+        },
+        "date": 1779529616960,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 89.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 73.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 67.3,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 65.5,
             "unit": "%"
           }
         ]
