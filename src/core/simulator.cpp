@@ -455,6 +455,56 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
 }
 
 
+void CollectDataF1(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input
+                   RayBuffer* buffer_data, RayBuffer* init_data) {                             // output
+  // F1 variant: filter is NOT a mid-trajectory kill. Filter-fail outgoing candidates that
+  // would otherwise drop are instead routed into the anchor lane (IsFilterDropped() == true,
+  // collected by the caller into SimData::anchor_d_/anchor_w_). Filter-fail rays also remain
+  // eligible for prob-pass continue to the next MS level — this is the source of OFF mode's
+  // perf cost. See doc/filter-architecture.md §7 (mode-gated F1).
+  //
+  // Branch table for outgoing candidates (to_face_ == kInvalidId, w_ >= 0):
+  //   filter-pass + prob-pass → is_continue_ = true (next MS)
+  //   filter-pass + prob-fail → outgoing (no flag)
+  //   filter-fail + prob-pass → is_continue_ = true (next MS) — F1-only behavior
+  //   filter-fail + prob-fail → is_filter_dropped_ = true (anchor lane)
+  // The is_continue_ vs is_filter_dropped_ mutual exclusion is preserved (only one is set).
+  for (auto& r : buffer_data[1]) {
+    r.is_continue_ = false;
+    r.is_filter_dropped_ = false;
+
+    if (r.w_ < 0) {
+      // TIR — handled by tail rotation below; no state write.
+    } else if (r.to_face_ == kInvalidId) {
+      r.crystal_rot_.Apply(r.d_);
+      r.crystal_rot_.Apply(r.p_);
+
+      bool filter_pass = (spec == nullptr) || spec->Check(r);
+      if (rng.GetUniform() < ms_info.prob_) {
+        // prob-pass: continue regardless of filter result. F1 contract.
+        r.is_continue_ = true;
+      } else if (!filter_pass) {
+        // filter-fail + prob-fail: anchor lane (not visible in main outgoing).
+        r.is_filter_dropped_ = true;
+      }
+      // else filter-pass + prob-fail: emit outgoing (no flag set).
+    }
+
+    if (r.w_ < 0) {
+      r.crystal_rot_.Apply(r.d_);
+      r.crystal_rot_.Apply(r.p_);
+    }
+
+    if (r.IsNormal()) {
+      buffer_data[0].EmplaceBack(r);
+    }
+    if (r.IsContinue()) {
+      init_data[1].EmplaceBack(r);
+    }
+  }
+}
+
+
 Simulator::Simulator(QueuePtrS<SimBatch> config_queue, QueuePtrS<SimData> data_queue, uint32_t seed)
     : config_queue_(std::move(config_queue)), data_queue_(std::move(data_queue)), stop_(false), idle_(true),
       seed_(seed), rng_(seed != 0 ? seed :
@@ -519,13 +569,14 @@ void Simulator::Run() {
       prev_generation = generation;
     }
 
+    auto ab_mode = batch.ab_mode_;
     const auto& spectrum = config.light_source_.spectrum_;
     if (auto* illuminant = std::get_if<IlluminantType>(&spectrum)) {
       // Standard illuminant: uniform wavelength sampling + SPD weight
       float wl = 380.0f + rng_.GetUniform() * 400.0f;  // [380, 780] nm
       float weight = GetIlluminantSpd(*illuminant, wl);
-      SimulateOneWavelength(config, WlParam{ wl, weight }, batch.ray_num_, crystal_cache, workspace, generation,
-                            ray_alloc_carry);
+      SimulateOneWavelength(config, WlParam{ wl, weight }, batch.ray_num_, ab_mode, crystal_cache, workspace,
+                            generation, ray_alloc_carry);
     } else {
       // Discrete wavelength list
       const auto& wl_params = std::get<std::vector<WlParam>>(spectrum);
@@ -533,7 +584,8 @@ void Simulator::Run() {
         if (stop_) {
           break;
         }
-        SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation, ray_alloc_carry);
+        SimulateOneWavelength(config, wl_param, batch.ray_num_, ab_mode, crystal_cache, workspace, generation,
+                              ray_alloc_carry);
       }
     }
 
@@ -543,18 +595,24 @@ void Simulator::Run() {
 
 
 void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num,
-                                      CrystalCache& crystal_cache, SimWorkspace& workspace, uint64_t generation,
+                                      AdaptiveBrightnessMode ab_mode, CrystalCache& crystal_cache,
+                                      SimWorkspace& workspace, uint64_t generation,
                                       std::vector<std::vector<double>>& ray_alloc_carry) {
   ILOG_TRACE(logger_, "Run: get config: ray({}), wl({:.1f},{:.2f})",  //
              ray_num, wl_param.wl_, wl_param.weight_);
 
   float wl = wl_param.wl_;
   size_t original_ray_num = ray_num;  // ray_num is overwritten in the ms loop; keep original for normalization.
+  bool collect_anchor = (ab_mode == AdaptiveBrightnessMode::kOff);
 
   RayBuffer all_data = AllocateAllData(config, ray_num);
   std::vector<size_t> outgoing_indices;
   std::vector<float> outgoing_d;
   std::vector<float> outgoing_w;
+  // OFF mode (F1) only: anchor lane for filter-fail prob-fail outgoing candidates.
+  // Empty in ON mode (Design A still discards filter-fail rays before they reach the consumer).
+  std::vector<float> anchor_d;
+  std::vector<float> anchor_w;
   auto& init_data = workspace.init_data;
   auto& buffer_data = workspace.buffer_data;
   init_data[0].size_ = 0;
@@ -665,21 +723,36 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
           FillRayOtherInfo(curr_ray_num, i, curr_crystal, all_data,  // input
                            buffer_data);                             // output
 
-          // 2.3 Collect data. And set ray properties: state
-          CollectData(rng_, m, spec.get(),      // input
-                      buffer_data, init_data);  // output
+          // 2.3 Collect data. And set ray properties: state.
+          // OFF mode + filter spec present: route via F1 collector. Without a spec the two
+          // collectors are observationally equivalent (no filter ⇒ no fork), so we keep the
+          // Design A path to avoid touching the hot loop in the no-filter common case.
+          if (collect_anchor && spec) {
+            CollectDataF1(rng_, m, spec.get(),      // input
+                          buffer_data, init_data);  // output
+          } else {
+            CollectData(rng_, m, spec.get(),      // input
+                        buffer_data, init_data);  // output
+          }
 
-          // 2.4 Copy to all_data + collect outgoing indices
+          // 2.4 Copy to all_data + collect outgoing indices.
+          // In OFF mode (collect_anchor && spec), CollectDataF1 may also produce
+          // IsFilterDropped() outgoing-candidates that belong to the anchor lane.
           size_t base_index = all_data.size_;
           all_data.EmplaceBack(buffer_data[1]);
           for (size_t j = 0; j < buffer_data[1].size_; j++) {
-            if (buffer_data[1][j].IsOutgoing()) {
+            const auto& r = buffer_data[1][j];
+            if (r.IsOutgoing()) {
               outgoing_indices.push_back(base_index + j);
-              const auto& r = buffer_data[1][j];
               outgoing_d.push_back(r.d_[0]);
               outgoing_d.push_back(r.d_[1]);
               outgoing_d.push_back(r.d_[2]);
               outgoing_w.push_back(r.w_);
+            } else if (collect_anchor && r.IsFilterDropped()) {
+              anchor_d.push_back(r.d_[0]);
+              anchor_d.push_back(r.d_[1]);
+              anchor_d.push_back(r.d_[2]);
+              anchor_w.push_back(r.w_);
             }
           }
         }  // hit loop
@@ -713,6 +786,8 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   sim_data.outgoing_indices_ = std::move(outgoing_indices);
   sim_data.outgoing_d_ = std::move(outgoing_d);
   sim_data.outgoing_w_ = std::move(outgoing_w);
+  sim_data.anchor_d_ = std::move(anchor_d);
+  sim_data.anchor_w_ = std::move(anchor_w);
   sim_data.root_ray_count_ = original_ray_num;
   data_queue_->Emplace(std::move(sim_data));
 }
