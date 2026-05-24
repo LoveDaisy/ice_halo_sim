@@ -68,20 +68,6 @@ void from_json(const nlohmann::json& j, LensParam& l);
 // Returns the maximum valid FOV (in degrees) for the given lens type.
 float MaxFov(LensParam::LensType type);
 
-// Adaptive Brightness mode for the EV anchor path.
-//   kOn  (default): Design A semantics — filter is a simulator-side emit-gate; EV anchor
-//                   reads the per-frame filtered P99 (snapshot_xyz_). Changing the filter
-//                   changes the anchor.
-//   kOff:           F1 semantics — filter never mid-trajectory kills a ray; filter-fail
-//                   outgoing rays are routed to a separate anchor buffer that the EV
-//                   anchor reads (server-side P99). Filter and anchor are decoupled, so
-//                   toggling the filter does not jump EV. Pays extra simulation cost.
-// Underlying type is fixed to int32_t so RenderConfig size is stable across compilers.
-enum class AdaptiveBrightnessMode : int32_t {
-  kOn = 0,
-  kOff = 1,
-};
-
 struct RenderConfig {
   enum VisibleRange {
     kUpper,
@@ -109,19 +95,7 @@ struct RenderConfig {
   std::vector<GridLineParam> central_grid_;
   std::vector<GridLineParam> elevation_grid_;
   bool celestial_outline_ = true;
-
-  // Adaptive Brightness mode (see AdaptiveBrightnessMode above). Authoritative source for
-  // ON/OFF; GUI's auto_ev_enabled is a derived view. Mode change triggers simulator restart
-  // because filter/anchor semantics differ between modes (handled by NeedsRebuild).
-  AdaptiveBrightnessMode ab_mode_ = AdaptiveBrightnessMode::kOn;
 };
-
-NLOHMANN_JSON_SERIALIZE_ENUM(  // declare
-    AdaptiveBrightnessMode,    // type
-    {
-        { AdaptiveBrightnessMode::kOn, "on" },
-        { AdaptiveBrightnessMode::kOff, "off" },
-    })
 
 NLOHMANN_JSON_SERIALIZE_ENUM(    // declare
     RenderConfig::VisibleRange,  // type

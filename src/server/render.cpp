@@ -491,7 +491,7 @@ void RenderConsumer::Consume(const SimData& data) {
     }
   }
 
-  // === OFF-mode anchor lane (F1) ===
+  // === F1 anchor lane ===
   // Anchor accumulates filter-pass + filter-fail emission for a filter-independent EV anchor.
   // Filter-pass contribution is identical to internal_xyz_ above, so we re-project nothing —
   // instead PrepareSnapshot will sum snapshot_xyz_ + anchor_snapshot_xyz_ pixel-by-pixel.
@@ -499,8 +499,11 @@ void RenderConsumer::Consume(const SimData& data) {
   // Overlap dual-write is intentionally NOT applied to the anchor lane: the anchor lane is
   // used solely for EV P99 statistics, and the overlap ring is a small geometric artifact
   // that contributes negligibly to the P99 percentile. Skipping it keeps Consume hot-path
-  // cost minimal in OFF mode.
-  if (config_.ab_mode_ == AdaptiveBrightnessMode::kOff && !data.anchor_d_.empty()) {
+  // cost minimal.
+  // The lane is naturally inert when no filter spec is configured: simulator.cpp keeps
+  // anchor_d_/anchor_w_ empty in that case, the guard below short-circuits without any
+  // allocation, and the GUI's degenerate fallback (anchor_p99_y <= 0) is then taken.
+  if (!data.anchor_d_.empty()) {
     if (!anchor_internal_xyz_) {
       // Lazy allocation: first time we see filter-fail emission in OFF mode.
       auto pix_count = static_cast<size_t>(config_.resolution_[0]) * config_.resolution_[1] * 3;

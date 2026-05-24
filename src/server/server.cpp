@@ -659,27 +659,16 @@ void ServerImpl::GenerateScene() {
 
   std::shared_ptr<const SceneConfig> scene;
   uint64_t generation = 0;
-  // Resolve mode at scene-generation time so it tracks the current committed config.
-  // OFF-superset: if ANY renderer requests OFF, the whole batch runs F1 (the simulator can
-  // only run one collect-path per batch, and Design-A renderers are forward-compatible with
-  // F1 output — anchor lane is just ignored on consumers that don't allocate an anchor buffer).
-  AdaptiveBrightnessMode ab_mode = AdaptiveBrightnessMode::kOn;
   {
     std::lock_guard<std::mutex> lock(scene_mutex_);
     scene = active_scene_;
     generation = scene_generation_.load();
-    for (const auto& [_, r] : config_manager_.renderers_) {
-      if (r.ab_mode_ == AdaptiveBrightnessMode::kOff) {
-        ab_mode = AdaptiveBrightnessMode::kOff;
-        break;
-      }
-    }
   }
   auto ray_num = scene->ray_num_;
   size_t committed_num = 0;
   while (ray_num == kInfSize || committed_num < ray_num) {
     size_t batch_ray_num = std::min(kDefaultRayNum, ray_num - committed_num);
-    scene_queue_->Emplace(SimBatch{ batch_ray_num, scene, generation, ab_mode });
+    scene_queue_->Emplace(SimBatch{ batch_ray_num, scene, generation });
     sim_scene_cnt_++;
     if (!first_batch_logged) {
       ILOG_INFO(logger_, "GenerateScene: first batch enqueued at {:.1f}ms after start",

@@ -7,7 +7,6 @@
 #include <vector>
 
 #include "config/proj_config.hpp"
-#include "config/render_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/crystal.hpp"
 #include "core/geo3d.hpp"
@@ -30,11 +29,6 @@ struct SimBatch {
   size_t ray_num_ = 0;
   std::shared_ptr<const SceneConfig> scene_;
   uint64_t generation_ = 0;
-  // Adaptive Brightness mode chosen at commit time. kOn → Design A CollectData (filter is
-  // emit-gate); kOff → F1 CollectData_F1 (filter-fail outgoing rays routed to anchor buffer
-  // instead of dropped, and may still continue to next MS level). When multiple renderers
-  // exist with mixed modes the server emits kOff if any renderer requests it (OFF-superset).
-  AdaptiveBrightnessMode ab_mode_ = AdaptiveBrightnessMode::kOn;
 };
 
 class Simulator {
@@ -64,8 +58,8 @@ class Simulator {
     RayBuffer init_data[2]{};
   };
   void SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num,
-                             AdaptiveBrightnessMode ab_mode, CrystalCache& crystal_cache, SimWorkspace& workspace,
-                             uint64_t generation, std::vector<std::vector<double>>& ray_alloc_carry);
+                             CrystalCache& crystal_cache, SimWorkspace& workspace, uint64_t generation,
+                             std::vector<std::vector<double>>& ray_alloc_carry);
 
   static constexpr size_t kSmallBatchRayNum = 32;
 
@@ -92,31 +86,18 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& propo
 // derived from (to_face_, w_, is_continue_, is_filter_dropped_); only the
 // IsContinue() and IsFilterDropped() bits are written here.
 //
-// Filter semantics (Design A, see doc/filter-architecture.md §2): the filter
-// is a simulator-side emit-gate. For outgoing candidates, filter-fail rays
-// are marked IsFilterDropped() and excluded from both outgoing and continue;
-// filter-pass rays then branch on prob between continue (next MS level) and
-// outgoing. The consumer no longer applies a query filter.
+// Filter semantics (F1 anchor lane, see doc/filter-architecture.md §7):
+// outgoing candidates whose filter check fails are routed into the anchor lane
+// (IsFilterDropped() == true, collected by the caller into
+// SimData::anchor_d_/anchor_w_) AND remain eligible for prob-pass continue to
+// the next MS level. Filter-pass + prob-pass → continue; filter-pass +
+// prob-fail → emit outgoing. When `spec == nullptr` the anchor lane stays
+// empty (filter always passes) and the path degenerates to the no-filter case
+// at zero extra cost.
 //
 // Internal: exposed for unit testing; not part of the public C API.
 void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input
                  RayBuffer* buffer_data, RayBuffer* init_data);                              // output
-
-// F1 variant of CollectData (selected when AdaptiveBrightnessMode::kOff is active for the batch).
-// Differences from Design-A CollectData:
-//   - Filter is NOT an emit-gate. Outgoing candidates whose filter check fails are routed into
-//     the anchor lane (collected by the caller via IsFilterDropped()) AND remain eligible for
-//     prob-pass continue to the next MS layer. This is the source of F1's perf cost in
-//     scenes with mid-trajectory filters.
-//   - Filter-pass + prob-pass → continue (same as Design A).
-//   - Filter-pass + prob-fail → emit to outgoing lane (same as Design A).
-// is_continue_ and is_filter_dropped_ flags are still written so the caller's outgoing/anchor
-// collection loop can dispatch by IsOutgoing() / IsFilterDropped().
-//
-// See doc/filter-architecture.md §7 (and scrum-adaptive-additivity-redesign explore SUMMARY)
-// for design rationale. Internal: exposed for unit testing; not part of the public C API.
-void CollectDataF1(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input
-                   RayBuffer* buffer_data, RayBuffer* init_data);                              // output
 
 // Build the local-to-world rotation matrix for a crystal sample.
 // Implements the chain  R = Rz(az - pi) * Ry(-zenith) * Rz(roll),

@@ -303,7 +303,6 @@ static nlohmann::json ConfigToJson(const LUMICE_Config& c) {
     jr["intensity_factor"] = r.intensity_factor;
     jr["norm_mode"] = r.norm_mode;
     jr["overlap"] = r.overlap;
-    jr["adaptive_brightness"]["mode"] = (r.ab_mode == 0) ? "on" : "off";
     root["render"].push_back(jr);
   }
 
@@ -605,11 +604,6 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, LUMICE
     }
     if (rj.contains("overlap")) {
       r.overlap = std::max(0.0f, rj.at("overlap").get<float>());
-    }
-    r.ab_mode = 0;  // Default ON
-    if (rj.contains("adaptive_brightness") && rj.at("adaptive_brightness").contains("mode")) {
-      auto mode_str = rj.at("adaptive_brightness").at("mode").get<std::string>();
-      r.ab_mode = (mode_str == "off") ? 1 : 0;
     }
     // lens, view, visible, background fields are ignored (not representable in LUMICE_Config)
   }

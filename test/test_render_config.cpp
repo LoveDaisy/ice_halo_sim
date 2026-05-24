@@ -113,13 +113,6 @@ TEST(RenderConfigTest, EachLayoutField_ReturnsTrue) {
     mod.overlap_ = 0.5f;
     EXPECT_TRUE(lumice::NeedsRebuild(base, mod)) << "overlap";
   }
-
-  // ab_mode (adaptive brightness mode — switches simulator collect path between Design A and F1)
-  {
-    auto mod = base;
-    mod.ab_mode_ = lumice::AdaptiveBrightnessMode::kOff;
-    EXPECT_TRUE(lumice::NeedsRebuild(base, mod)) << "ab_mode";
-  }
 }
 
 TEST(RenderConfigTest, EachAppearanceField_ReturnsFalse) {

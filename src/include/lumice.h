@@ -75,13 +75,15 @@ typedef struct LUMICE_RawXyzResult_ {
   int has_valid_data;        // Non-zero once simulation has produced data (reset on CommitConfig/Stop)
   unsigned long long snapshot_generation;  // Increments on each new snapshot; compare to detect data changes
   int effective_pixels;                    // Non-zero pixel count (for adaptive normalization)
-  // Adaptive Brightness OFF mode (F1) only — see doc/filter-architecture.md §7.
+  // F1 anchor lane — see doc/filter-architecture.md §7.
   //   anchor_p99_y:               P99 of Y over filter-pass + filter-fail emission combined
-  //                               (filter-independent EV anchor). Zero in ON mode and in OFF
-  //                               mode when no anchor lane was allocated.
+  //                               (filter-independent EV anchor). Zero when no filter is
+  //                               configured (anchor lane stays empty).
   //   anchor_snapshot_intensity:  Per-pixel landed intensity for the same combined set
-  //                               (snapshot_intensity + filter-fail intensity). Zero in ON mode.
-  // GUI uses these to drive the EV-auto path when the user toggles Adaptive Brightness off.
+  //                               (snapshot_intensity + filter-fail intensity). Zero when
+  //                               no filter is configured.
+  // GUI uses these to drive the EV-auto path; the GUI falls back to the filtered snapshot
+  // when both values are zero (degenerate no-filter scenario).
   float anchor_p99_y;
   float anchor_snapshot_intensity;
 } LUMICE_RawXyzResult;
@@ -196,8 +198,6 @@ typedef struct LUMICE_RenderParam_ {
   float intensity_factor;
   int norm_mode;  // 0=absolute (W*H), 1=adaptive (non-zero pixels)
   float overlap;  // Dual fisheye overlap zone |sky.z| threshold (sin value). 0 = no overlap.
-  int ab_mode;    // Adaptive Brightness mode: 0=ON (Design A, per-frame self-anchor),
-                  // 1=OFF (F1, filter-independent anchor). Mode change triggers simulator restart.
 } LUMICE_RenderParam;
 
 typedef struct LUMICE_Config_ {

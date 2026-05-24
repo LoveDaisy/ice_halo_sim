@@ -38,13 +38,13 @@ class RenderConsumer : public IConsume {
   std::unique_ptr<float[]> snapshot_work_;            // PostSnapshot work buffer (preserves snapshot_xyz_)
   std::unique_ptr<uint8_t[]> snapshot_image_buffer_;  // produced by PostSnapshot()
 
-  // Anchor lane (allocated only when AdaptiveBrightnessMode::kOff). Accumulates filter-fail
-  // outgoing rays (SimData::anchor_d_/anchor_w_); combined with internal_xyz_ at snapshot
-  // time yields filter-independent total emission, so anchor_p99_y_ stays stable across
-  // filter toggles. ab_mode_ == kOn leaves all anchor_* members at zero / nullptr and they
-  // are skipped on every Consume / Snapshot path.
-  // anchor_total_intensity_ tracks the OFF-mode anchor lane weight (filter-fail outgoing rays
-  // only); the filter-independent total intensity at snapshot time is
+  // Anchor lane: lazily populated when a filter spec is active (SimData::anchor_d_/anchor_w_
+  // is non-empty). Accumulates filter-fail outgoing rays; combined with internal_xyz_ at
+  // snapshot time yields filter-independent total emission, so anchor_p99_y_ stays stable
+  // across filter toggles. When no filter is configured the anchor buffers remain unallocated
+  // / zero and SyncFromPoller's degenerate branch falls back to filter-self snapshot.
+  // anchor_total_intensity_ tracks the anchor lane weight (filter-fail outgoing rays only);
+  // the filter-independent total intensity at snapshot time is
   // anchor_snapshot_intensity_ = snapshot_intensity_ (filter-pass) + anchor_total_intensity_ (filter-fail).
   // See doc/filter-architecture.md §7.
   float anchor_total_intensity_ = 0;
