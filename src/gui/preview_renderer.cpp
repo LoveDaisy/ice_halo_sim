@@ -257,7 +257,8 @@ vec4 dualFisheyeInverse(vec2 pos, int type) {
 
   return vec4(d, 1.0);
 }
-
+)glsl"
+R"glsl(
 // Rectangular (equirectangular): always full-sky, returns world-space direction.
 // Matches Core: scale = min(width/2, height) / PI
 vec4 rectangularInverse(vec2 pos) {
