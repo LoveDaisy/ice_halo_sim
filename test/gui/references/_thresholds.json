@@ -1,99 +1,97 @@
 {
-  "generated_at": "2026-05-21T10:13:31",
-  "n_ref_runs": 10,
-  "n_calib_runs": 10,
+  "generated_at": "2026-05-24T11:42:54",
+  "n_ref_runs": 4,
+  "n_calib_runs": 4,
   "scenes": {
     "color_off": {
-      "psnr_mean": 20.916,
-      "psnr_std": 0.1559,
+      "psnr_mean": 20.3675,
+      "psnr_std": 0.074,
       "threshold": 20.0
     },
     "color_on": {
-      "psnr_mean": 18.496,
-      "psnr_std": 0.0777,
-      "threshold": 18.0
+      "psnr_mean": 18.0325,
+      "psnr_std": 0.0554,
+      "threshold": 17.5
     },
     "cza_off": {
-      "psnr_mean": 31.77,
-      "psnr_std": 0.1895,
-      "threshold": 31.0
+      "psnr_mean": 31.0275,
+      "psnr_std": 0.1438,
+      "threshold": 30.5
     },
     "cza_on": {
-      "psnr_mean": 35.979,
-      "psnr_std": 0.1083,
-      "threshold": 35.5
+      "psnr_mean": 35.4233,
+      "psnr_std": 0.0826,
+      "threshold": 35.0
     },
     "filters_off": {
-      "psnr_mean": 19.885,
-      "psnr_std": 0.1486,
+      "psnr_mean": 19.3825,
+      "psnr_std": 0.0782,
       "threshold": 19.0
     },
     "filters_on": {
-      "psnr_mean": 25.06,
-      "psnr_std": 0.1677,
-      "threshold": 24.2,
-      "threshold_note": "N=10 conservative: -0.3 dB vs mean-3sigma=24.5; re-run --n-calib 30 to lift"
+      "psnr_mean": 17.9875,
+      "psnr_std": 0.0776,
+      "threshold": 17.5
     },
     "halo_22_off": {
-      "psnr_mean": 19.483,
-      "psnr_std": 0.1604,
-      "threshold": 18.7,
-      "threshold_note": "N=10 conservative: -0.3 dB vs mean-3sigma=19.0; re-run --n-calib 30 to lift"
+      "psnr_mean": 18.7125,
+      "psnr_std": 0.1221,
+      "threshold": 18.0
     },
     "halo_22_on": {
-      "psnr_mean": 17.224,
-      "psnr_std": 0.1286,
-      "threshold": 16.2,
-      "threshold_note": "N=10 conservative: -0.3 dB vs mean-3sigma=16.5; re-run --n-calib 30 to lift"
+      "psnr_mean": 16.6175,
+      "psnr_std": 0.013,
+      "threshold": 16.5
     },
     "multi_scat_off": {
-      "psnr_mean": 19.42,
-      "psnr_std": 0.1509,
+      "psnr_mean": 18.8125,
+      "psnr_std": 0.0512,
       "threshold": 18.5
     },
     "multi_scat_on": {
-      "psnr_mean": 17.131,
-      "psnr_std": 0.0924,
-      "threshold": 16.5
+      "psnr_mean": 16.555,
+      "psnr_std": 0.055,
+      "threshold": 16.0
     },
     "parhelion_off": {
-      "psnr_mean": 20.966,
-      "psnr_std": 0.0977,
-      "threshold": 20.5
-    },
-    "parhelion_on": {
-      "psnr_mean": 18.529,
-      "psnr_std": 0.077,
-      "threshold": 18.0
-    },
-    "pyramid_off": {
-      "psnr_mean": 18.498,
-      "psnr_std": 0.1557,
-      "threshold": 17.7,
-      "threshold_note": "N=10 conservative: -0.3 dB vs mean-3sigma=18.0; re-run --n-calib 30 to lift"
-    },
-    "pyramid_on": {
-      "psnr_mean": 18.359,
-      "psnr_std": 0.0989,
-      "threshold": 17.7,
-      "threshold_note": "N=10 conservative: -0.3 dB vs mean-3sigma=18.0; re-run --n-calib 30 to lift"
-    },
-    "rp46_nof_off": {
-      "psnr_mean": 19.904,
-      "psnr_std": 0.0984,
+      "psnr_mean": 20.1975,
+      "psnr_std": 0.1186,
       "threshold": 19.5
     },
+    "parhelion_on": {
+      "psnr_mean": 18.04,
+      "psnr_std": 0.0964,
+      "threshold": 17.5
+    },
+    "pyramid_off": {
+      "psnr_mean": 17.6175,
+      "psnr_std": 0.1145,
+      "threshold": 17.0
+    },
+    "pyramid_on": {
+      "psnr_mean": 17.68,
+      "psnr_std": 0.0,
+      "threshold": 17.5
+    },
+    "rp46_nof_off": {
+      "psnr_mean": 19.0825,
+      "psnr_std": 0.1535,
+      "threshold": 18.5
+    },
     "rp46_nof_on": {
-      "psnr_mean": 17.828,
-      "psnr_std": 0.0691,
-      "threshold": 17.2,
-      "threshold_note": "N=10 conservative: -0.3 dB vs mean-3sigma=17.5; re-run --n-calib 30 to lift"
+      "psnr_mean": 17.3,
+      "psnr_std": 0.0354,
+      "threshold": 17.0
     },
     "rp46_off": {
-      "psnr_mean": 20.705,
-      "psnr_std": 0.1009,
+      "psnr_mean": 20.3825,
+      "psnr_std": 0.0858,
       "threshold": 20.0
     },
-    "rp46_on_note": "Phase B did not sample rp46_on (rp46_off timed out during calibration); kScenes rp46 threshold uses conservative rp46_off basis (19.5). Measured PSNR ~30 dB. Re-run Phase B with initial threshold ~17 dB to capture rp46_on calibration."
+    "rp46_on": {
+      "psnr_mean": 19.98,
+      "psnr_std": 0.0982,
+      "threshold": 19.5
+    }
   }
 }

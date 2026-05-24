@@ -7,7 +7,7 @@ simulation per config — ``filter_in`` / ``filter_out`` / ``no_filter``) plus a
 configurations.
 
 1. ``test_unfiltered_intensity_consistent`` — scalar anchor intensity is
-   filter-independent under the F1 OFF-mode anchor lane.
+   filter-independent under the F1 anchor lane.
 2. ``test_partition_buffer_additivity`` — anchor buffer partition invariant:
    ``A.anchor == B.anchor`` (bit-stable under fixed seed + single worker) and
    ``A.snapshot + B.snapshot == A.anchor`` (scalar conservation). Covers
@@ -130,7 +130,7 @@ def additivity_runs():
     ids=[c[2] for c in _PARTITION_CONFIGS],
 )
 def partition_pair(request):
-    """Two same-seed OFF-mode runs (filter_in + filter_out).
+    """Two same-seed runs (filter_in + filter_out) — F1 anchor lane invariant.
 
     LUMICE_SIM_SEED is read by each fresh ServerImpl ctor
     (capi_runner.py:186 CreateServer / capi_runner.py:234 DestroyServer) and
@@ -156,31 +156,28 @@ def partition_pair(request):
 
 @pytest.mark.slow
 @pytest.mark.xfail(
-    reason="no_filter OFF mode degenerates to Design A (anchor_d_ empty); two "
-    "filter runs vs the no_filter baseline come from independent MC samples "
-    "so the comparison carries MC noise, not the F1 anchor invariant. "
-    "Tracked in backlog: revisit when no_filter OFF mode short-circuit changes.",
+    reason="no_filter degenerates: with no filter spec the simulator never populates "
+    "anchor_d_, so anchor_snapshot_intensity stays at 0 and the two filter runs are "
+    "compared against the no_filter snapshot baseline via independent MC samples. "
+    "Tracked in backlog: revisit when the degenerate no_filter short-circuit changes.",
     strict=False,
 )
 def test_unfiltered_intensity_consistent(additivity_runs):
     """``filter_in / filter_out`` anchor totals match the no_filter baseline.
 
-    The no_filter OFF mode path takes a short-circuit (src/core/simulator.cpp:
-    no filter spec → CollectData not CollectDataF1 → anchor_d_ empty →
-    anchor_total_intensity_=0 → anchor_snapshot_intensity falls back to
-    snapshot_intensity in render.cpp:568). The front-line assertion verifies
-    that degenerate path is still intact; the cross-run comparison then uses
-    a single ``anchor_ref = n.snapshot_intensity``.
+    With no filter spec the simulator skips the anchor lane (spec == nullptr →
+    no IsFilterDropped writes → anchor_d_ stays empty → anchor_snapshot_intensity
+    degenerates to 0 in render.cpp). The front-line assertion verifies that
+    degenerate path is still intact; the cross-run comparison then uses a single
+    ``anchor_ref = n.snapshot_intensity``.
     """
     a = additivity_runs["filter_in"]
     b = additivity_runs["filter_out"]
     n = additivity_runs["no_filter"]
 
-    # Front-line: no_filter OFF mode must degenerate (anchor ≈ snapshot).
-    # If this fails, the short-circuit at render.cpp:503 changed and the
-    # rest of the test no longer reflects what it claims to test.
+    # Front-line: no_filter must degenerate (anchor ≈ snapshot via fallback).
     assert n.anchor_snapshot_intensity == pytest.approx(n.snapshot_intensity, rel=1e-4), (
-        "no_filter OFF mode should degenerate: anchor ≈ snapshot_intensity"
+        "no_filter should degenerate: anchor ≈ snapshot_intensity"
         f" (got anchor={n.anchor_snapshot_intensity:.6g}, snap={n.snapshot_intensity:.6g})"
     )
     anchor_ref = n.snapshot_intensity
@@ -205,7 +202,7 @@ def test_unfiltered_intensity_consistent(additivity_runs):
 
 @pytest.mark.slow
 def test_partition_buffer_additivity(partition_pair):
-    """Anchor buffer partition invariant under OFF mode + fixed seed.
+    """Anchor buffer partition invariant under F1 anchor lane + fixed seed.
 
     Primary: ``A.anchor == B.anchor`` (bit-stable; LUMICE_SIM_SEED collapses
     to single worker so same RNG → same rays → same fp32 sum regardless of
@@ -216,12 +213,12 @@ def test_partition_buffer_additivity(partition_pair):
     """
     A, B = partition_pair
 
-    # Front-line: anchor lane must be active (OFF mode + filter present).
+    # Front-line: anchor lane must be active (filter present → F1 anchor populated).
     assert A.anchor_snapshot_intensity > 0, (
-        "A.anchor_snapshot_intensity is zero — check OFF mode + filter config (F1 semantics)"
+        "A.anchor_snapshot_intensity is zero — check filter config (F1 anchor lane semantics)"
     )
     assert B.anchor_snapshot_intensity > 0, (
-        "B.anchor_snapshot_intensity is zero — check OFF mode + filter config (F1 semantics)"
+        "B.anchor_snapshot_intensity is zero — check filter config (F1 anchor lane semantics)"
     )
 
     # Primary: anchor cross-filter invariance.
@@ -262,9 +259,9 @@ def test_xyz_addition_beats_srgb(additivity_runs):
     N = additivity_runs["no_filter"]
     pix = A.img_width * A.img_height
 
-    # OFF mode filter runs: anchor must be non-zero (F1 semantics).
-    assert A.anchor_snapshot_intensity > 0, "filter_in OFF-mode anchor is zero — check F1 semantics"
-    assert B.anchor_snapshot_intensity > 0, "filter_out OFF-mode anchor is zero — check F1 semantics"
+    # Filter runs: anchor must be non-zero (F1 anchor lane active).
+    assert A.anchor_snapshot_intensity > 0, "filter_in anchor is zero — check F1 anchor-lane semantics"
+    assert B.anchor_snapshot_intensity > 0, "filter_out anchor is zero — check F1 anchor-lane semantics"
 
     A_disp = _display_xyz(A.flt_buf, A.anchor_snapshot_intensity, pix)
     B_disp = _display_xyz(B.flt_buf, B.anchor_snapshot_intensity, pix)
@@ -272,8 +269,8 @@ def test_xyz_addition_beats_srgb(additivity_runs):
     N_disp = _display_xyz(N.flt_buf, N.snapshot_intensity, pix)
     N_srgb = _xyz_to_srgb(N_disp)
 
-    # Bright mask comes from the no_filter buffer (= full-emission pixels under
-    # OFF mode no_filter, since snapshot buffer == all emissions when no filter).
+    # Bright mask comes from the no_filter buffer (= full-emission pixels since the
+    # filtered snapshot equals all emissions when no filter is configured).
     peak = float(N.flt_buf.max())
     bright_mask = (N.flt_buf > peak * _BRIGHT_MASK_FRAC).any(axis=-1)
     assert bright_mask.any(), (

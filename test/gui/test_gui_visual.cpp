@@ -595,11 +595,11 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
     };
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
-      // Disable auto-EV so ev_total stays at exposure_offset throughout: both the
-      // live capture (Phase 2) and the reloaded capture (Phase 5) would otherwise
-      // diverge because ev_auto is runtime-only (not persisted) and resets to 0 on
-      // load while the live simulation produces a non-zero value.
-      gui::g_state.auto_ev_enabled = false;
+      // ev_auto and snapshot_intensity are runtime-only state (not persisted to .lmc) and
+      // they decay to 0 on reload. The Phase 2 capture uses the live sim's snapshot_intensity
+      // (carried in `live_snapshot_intensity` below); Phase 5 must restore the same value so
+      // intensity_scale matches across the two captures. We also clear ev_auto in both phases
+      // so the manual EV slider (exposure_offset = 0) is the only EV contribution.
 
       // --- Phase 1: Start simulation and wait for texture data ---
       gui::g_server = LUMICE_CreateServer();
@@ -633,9 +633,16 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       gui::DoStop();
       ctx->Yield(5);  // Let the final poller sync complete
 
+      // ExportPreviewPng reads gui::g_preview_vp.params, which is refreshed only by the
+      // panel render — clear ev_auto first, Yield(1) to bake the new params, then trigger
+      // the export. Capture snapshot_intensity for the Phase 5 replay.
       const char* path_a = "/tmp/lumice_save_visual_A.png";
       g_export_test.Reset();
       g_export_test.export_path = path_a;
+      gui::g_state.ev_auto = 0.0f;
+      gui::g_state.anchor_snapshot_intensity = 0.0f;
+      ctx->Yield(1);
+      const float live_snapshot_intensity = gui::g_state.snapshot_intensity;
       g_export_test.export_requested = true;
       ctx->Yield(2);
       IM_CHECK(g_export_test.export_done);
@@ -671,6 +678,10 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       const char* path_b = "/tmp/lumice_save_visual_B.png";
       g_export_test.Reset();
       g_export_test.export_path = path_b;
+      gui::g_state.ev_auto = 0.0f;
+      gui::g_state.snapshot_intensity = live_snapshot_intensity;
+      gui::g_state.anchor_snapshot_intensity = 0.0f;
+      ctx->Yield(1);
       g_export_test.export_requested = true;
       ctx->Yield(2);
       IM_CHECK(g_export_test.export_done);
