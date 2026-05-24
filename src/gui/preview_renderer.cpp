@@ -1,5 +1,8 @@
 #include "gui/preview_renderer.hpp"
 
+#include <algorithm>
+#include <array>
+#include <cassert>
 #include <cmath>
 #include <cstdio>
 
@@ -674,6 +677,201 @@ void BuildViewMatrix(float elevation_deg, float azimuth_deg, float roll_deg, flo
   out[6] = ce * ca;
   out[7] = ce * sa;
   out[8] = se;
+}
+
+// Sentinel value indicating the world direction does not project to a renderable
+// screen position under the current lens / camera setup. Kept identical to the
+// magic shader value so the GPU distance test trivially rejects it.
+static constexpr std::array<float, 2> kProjectSentinel = { -9999.f, -9999.f };
+
+static bool IsInViewport(float px, float py, float vp_w, float vp_h) {
+  // Half-pixel margin keeps points landing exactly on the viewport edge
+  // (e.g. fisheye r = img_radius for the equator) inside the visible region
+  // — the shader naturally clips anything truly outside.
+  constexpr float kEdgeMargin = 0.5f;
+  return std::abs(px) <= vp_w * 0.5f + kEdgeMargin && std::abs(py) <= vp_h * 0.5f + kEdgeMargin;
+}
+
+// Apply transpose(view_matrix) * world_dir. Column-major view-to-world.
+static void WorldToView(const ViewProjection& vp, const float world_dir[3], float out_view[3]) {
+  float vm[9];
+  BuildViewMatrix(vp.elevation, vp.azimuth, vp.roll, vm);
+  for (int c = 0; c < 3; ++c) {
+    out_view[c] = vm[c * 3 + 0] * world_dir[0] + vm[c * 3 + 1] * world_dir[1] + vm[c * 3 + 2] * world_dir[2];
+  }
+}
+
+// Small epsilon absorbs single-precision noise from BuildViewMatrix (e.g.
+// cos(π/2) ≈ -4.37e-8 leaks into view_dir.z when the camera is tilted to
+// elevation 90°), so directions right on the horizon still classify as
+// "in front" instead of being rejected by the behind-camera guard.
+constexpr float kBehindCameraEps = 1e-5f;
+
+// Linear pinhole: behind-camera ⇒ sentinel; otherwise standard perspective divide.
+static std::array<float, 2> ProjectLinear(const float view_dir[3], float half_fov, float img_radius) {
+  if (view_dir[2] >= -kBehindCameraEps) {
+    return kProjectSentinel;
+  }
+  float focal = img_radius / std::tan(half_fov);
+  float px = focal * view_dir[0] / (-view_dir[2]);
+  float py = focal * view_dir[1] / (-view_dir[2]);
+  return { px, py };
+}
+
+// Forward equation for the single-hemisphere fisheye family (lens=1..3, 8).
+// fisheye_type matches the shader's `fisheyeInverse(... int type)` switch:
+// 0=equal_area, 1=equidistant, 2=stereographic, 3=orthographic.
+static std::array<float, 2> ProjectFisheye(const float view_dir[3], float half_fov, float img_radius,
+                                           int fisheye_type) {
+  if (view_dir[2] > kBehindCameraEps) {
+    return kProjectSentinel;
+  }
+  float theta = std::acos(std::clamp(-view_dir[2], -1.0f, 1.0f));
+  float r_norm = 0.0f;
+  if (fisheye_type == 0) {
+    float denom = std::sin(half_fov * 0.5f);
+    if (denom <= 0.0f) {
+      return kProjectSentinel;
+    }
+    r_norm = std::sin(theta * 0.5f) / denom;
+  } else if (fisheye_type == 1) {
+    if (half_fov <= 0.0f) {
+      return kProjectSentinel;
+    }
+    r_norm = theta / half_fov;
+  } else if (fisheye_type == 2) {
+    float denom = std::tan(half_fov * 0.5f);
+    if (denom <= 0.0f) {
+      return kProjectSentinel;
+    }
+    r_norm = std::tan(theta * 0.5f) / denom;
+  } else {  // orthographic
+    float denom = std::sin(half_fov);
+    if (denom <= 0.0f) {
+      return kProjectSentinel;
+    }
+    r_norm = std::sin(theta) / denom;
+  }
+  float r = r_norm * img_radius;
+  float phi = std::atan2(view_dir[1], view_dir[0]);
+  return { r * std::cos(phi), r * std::sin(phi) };
+}
+
+// Compute r_norm for a dual-fisheye projection (theta in [0, pi/2]).
+// fisheye_type semantics match ProjectFisheye but the field of view is fixed
+// at half_pi per hemisphere (matches shader dualFisheyeInverse()).
+static float DualFisheyeRNorm(float theta, int fisheye_type) {
+  constexpr float kHalfPi = 1.57079632679489661923f;
+  if (fisheye_type == 0) {
+    return std::sin(theta * 0.5f) / std::sin(kHalfPi * 0.5f);
+  }
+  if (fisheye_type == 1) {
+    return theta / kHalfPi;
+  }
+  if (fisheye_type == 2) {
+    return std::tan(theta * 0.5f) / std::tan(kHalfPi * 0.5f);
+  }
+  // orthographic: r_norm = sin(theta)
+  return std::sin(theta);
+}
+
+// Forward for dual-fisheye family (lens=4..6, 9). world_dir.z<0 ⇒ left (upper)
+// circle, world_dir.z>0 ⇒ right (lower) circle. The phi solve mirrors the
+// hemisphere case split in shader dualFisheyeInverse().
+static std::array<float, 2> ProjectDualFisheye(const float world_dir[3], float short_res_dual, int fisheye_type) {
+  float circle_radius = short_res_dual * 0.5f;
+  bool is_upper = world_dir[2] < 0.0f;
+  float cx = is_upper ? -circle_radius : circle_radius;
+  float z_abs = std::abs(world_dir[2]);
+  float theta = std::acos(std::clamp(z_abs, -1.0f, 1.0f));
+  float r = DualFisheyeRNorm(theta, fisheye_type) * circle_radius;
+  // theta=0 (zenith / nadir) ⇒ sin(theta)=0, phi is irrelevant and the marker
+  // lands exactly at the circle center — the common case for this helper's caller.
+  float phi = 0.0f;
+  float sin_theta = std::sin(theta);
+  if (sin_theta > 1e-6f) {
+    // Shader: upper d = (-st*sin(phi),  st*cos(phi), -ct)
+    //         lower d = (-st*sin(phi), -st*cos(phi), +ct)
+    float sx = -world_dir[0] / sin_theta;                              // = sin(phi)
+    float cy = (is_upper ? world_dir[1] : -world_dir[1]) / sin_theta;  // = cos(phi)
+    phi = std::atan2(sx, cy);
+  }
+  return { cx + r * std::cos(phi), r * std::sin(phi) };
+}
+
+// Equirectangular forward: inverse of shader rectangularInverse().
+// At the poles (|lat|=π/2) world_dir.xy ≈ 0 and atan2 is singular — anchor
+// lon=0 so zenith/nadir project to the column directly in front of the
+// camera (mid-column of the viewport), not to the φ=±π edge.
+static std::array<float, 2> ProjectRectangular(const float world_dir[3], float short_res_dual) {
+  constexpr float kPi = 3.14159265358979323846f;
+  constexpr float kPoleEps = 1e-6f;
+  float scale = short_res_dual / kPi;
+  float lat = std::asin(std::clamp(-world_dir[2], -1.0f, 1.0f));
+  float xy_norm_sq = world_dir[0] * world_dir[0] + world_dir[1] * world_dir[1];
+  float lon = (xy_norm_sq < kPoleEps) ? 0.0f : std::atan2(-world_dir[1], -world_dir[0]);
+  return { lon * scale, -lat * scale };
+}
+
+// See declaration in preview_renderer.hpp for contract.
+std::array<float, 2> ProjectWorldDirToScreen(const ViewProjection& vp, const float world_dir[3], int vp_w, int vp_h) {
+  constexpr float kPi = 3.14159265358979323846f;
+  if (vp_w <= 0 || vp_h <= 0) {
+    return kProjectSentinel;
+  }
+
+  float half_fov = vp.fov * 0.5f * kPi / 180.0f;
+  auto vp_w_f = static_cast<float>(vp_w);
+  auto vp_h_f = static_cast<float>(vp_h);
+  float img_radius = std::min(vp_w_f, vp_h_f) * 0.5f;
+  float short_res_dual = std::min(vp_w_f * 0.5f, vp_h_f);
+
+  int lt = vp.lens_type;
+  bool needs_view_transform = (lt == kLensTypeLinear) ||
+                              (lt >= kLensTypeFisheyeEqualArea && lt <= kLensTypeFisheyeStereographic) ||
+                              (lt == kLensTypeFisheyeOrthographic);
+
+  float local_dir[3];
+  if (needs_view_transform) {
+    WorldToView(vp, world_dir, local_dir);
+  } else {
+    local_dir[0] = world_dir[0];
+    local_dir[1] = world_dir[1];
+    local_dir[2] = world_dir[2];
+  }
+
+  std::array<float, 2> out = kProjectSentinel;
+  if (lt == kLensTypeLinear) {
+    out = ProjectLinear(local_dir, half_fov, img_radius);
+  } else if (lt == kLensTypeFisheyeEqualArea) {
+    out = ProjectFisheye(local_dir, half_fov, img_radius, 0);
+  } else if (lt == kLensTypeFisheyeEquidist) {
+    out = ProjectFisheye(local_dir, half_fov, img_radius, 1);
+  } else if (lt == kLensTypeFisheyeStereographic) {
+    out = ProjectFisheye(local_dir, half_fov, img_radius, 2);
+  } else if (lt == kLensTypeFisheyeOrthographic) {
+    out = ProjectFisheye(local_dir, half_fov, img_radius, 3);
+  } else if (lt == kLensTypeDualFisheyeEqualArea) {
+    out = ProjectDualFisheye(local_dir, short_res_dual, 0);
+  } else if (lt == kLensTypeDualFisheyeEquidist) {
+    out = ProjectDualFisheye(local_dir, short_res_dual, 1);
+  } else if (lt == kLensTypeDualFisheyeStereographic) {
+    out = ProjectDualFisheye(local_dir, short_res_dual, 2);
+  } else if (lt == kLensTypeDualFisheyeOrthographic) {
+    out = ProjectDualFisheye(local_dir, short_res_dual, 3);
+  } else if (lt == kLensTypeRectangular) {
+    out = ProjectRectangular(local_dir, short_res_dual);
+  } else if (lt == kLensTypeGlobe) {
+    return kProjectSentinel;  // out of scope for this task
+  } else {
+    assert(false && "ProjectWorldDirToScreen: unhandled lens type");
+    return kProjectSentinel;
+  }
+
+  if (out == kProjectSentinel || !IsInViewport(out[0], out[1], vp_w_f, vp_h_f)) {
+    return kProjectSentinel;
+  }
+  return out;
 }
 
 void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const PreviewParams& params) {
