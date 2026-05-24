@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779626510224,
+  "lastUpdate": 1779626512451,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -8079,6 +8079,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 69.4,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e925a47e0db8e111ca3bd397a8ed21c44f8ed48d",
+          "message": "Merge pull request #105 from LoveDaisy/fix/adaptive_brightness_screenshot\n\nAdaptive Brightness: single-mode F1 anchor + screenshot fix + P99.5/T135 defaults",
+          "timestamp": "2026-05-24T20:37:24+08:00",
+          "tree_id": "a7d961fcc9ac82180aab92bb7165fd154a4c4616",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/e925a47e0db8e111ca3bd397a8ed21c44f8ed48d"
+        },
+        "date": 1779626511695,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 83,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 80.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 73.1,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 72.2,
             "unit": "%"
           }
         ]
