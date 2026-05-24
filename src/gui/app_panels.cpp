@@ -546,15 +546,6 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
     }
     SliderWithInput("EV##display", &r.exposure_offset, -6.0f, 6.0f, "%.1f");
-    // Auto-EV is always active: EV anchor reads the filter-independent anchor lane
-    // (see doc/filter-architecture.md §7). With no filter the anchor lane degenerates
-    // and SyncFromPoller falls back to the filtered snapshot.
-    ImGui::SameLine();
-    if (g_state.p995_raw_y > 0.0f) {
-      ImGui::TextDisabled("(+%.2f EV auto)", g_state.ev_auto);
-    } else {
-      ImGui::TextDisabled("(auto: no data)");
-    }
 
     ImGui::SeparatorText("Aspect Ratio");
     int preset_idx = static_cast<int>(g_state.aspect_preset);
