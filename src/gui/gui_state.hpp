@@ -146,11 +146,6 @@ static_assert(kVisibleFront == kVisibleCount - 1, "Visible enum terminal value m
 inline const int kSimResolutions[] = { 512, 1024, 2048, 4096 };
 constexpr int kSimResolutionCount = 4;
 
-// GUI-local mirror of config::AdaptiveBrightnessMode (defined in src/config/render_config.hpp).
-// Defined here to keep the gui/ ↔ config/ API boundary clean (see AGENTS.md). Integer values
-// must stay synchronized with the C API's LUMICE_RenderParam::ab_mode encoding (0=on, 1=off).
-enum class AdaptiveBrightnessMode : int { kOn = 0, kOff = 1 };
-
 struct RenderConfig {
   int lens_type = 0;  // Index into kLensTypeNames
   float fov = 90.0f;
@@ -163,16 +158,12 @@ struct RenderConfig {
   float ray_color[3] = { 1.0f, 1.0f, 1.0f };
   float opacity = 1.0f;
   float exposure_offset = 0.0f;  // EV: intensity_factor = 2^exposure_offset
-  // Adaptive Brightness mode (authoritative source for the GUI; the auto_ev_enabled checkbox
-  // is a derived view). Switching this triggers a simulator restart via the renderer != renderer
-  // comparison in DoRun (NeedsRebuild on the server side picks up the change as well).
-  AdaptiveBrightnessMode ab_mode_ = AdaptiveBrightnessMode::kOn;
 
   bool operator==(const RenderConfig& o) const {
     return lens_type == o.lens_type && fov == o.fov && elevation == o.elevation && azimuth == o.azimuth &&
            roll == o.roll && sim_resolution_index == o.sim_resolution_index && visible == o.visible &&
            std::equal(background, background + 3, o.background) && std::equal(ray_color, ray_color + 3, o.ray_color) &&
-           opacity == o.opacity && exposure_offset == o.exposure_offset && ab_mode_ == o.ab_mode_;
+           opacity == o.opacity && exposure_offset == o.exposure_offset;
   }
   bool operator!=(const RenderConfig& o) const { return !(*this == o); }
 };
@@ -510,8 +501,8 @@ struct GuiState {
   unsigned long stats_ray_seg_num = 0;
   unsigned long stats_sim_ray_num = 0;
   float snapshot_intensity = 0;  // Per-pixel landed intensity for XYZ→RGB normalization
-  // OFF-mode (Adaptive Brightness off) anchor intensity: per-pixel filter-pass + filter-fail
-  // combined intensity used for EV anchor normalization. Zero in ON mode.
+  // Anchor lane intensity: per-pixel filter-pass + filter-fail combined intensity used for EV
+  // anchor normalization. Zero when no filter is configured (anchor lane degenerates).
   float anchor_snapshot_intensity = 0;
   int effective_pixels = 0;                // Non-zero pixel count for adaptive normalization
   int norm_mode = 0;                       // 0=absolute, 1=adaptive (not exposed in UI)
@@ -520,7 +511,6 @@ struct GuiState {
   // Auto-EV runtime state (display layer only, not persisted, not in ConfigSnapshot)
   float p99_raw_y = 0.0f;       // Un-normalized P99 Y value; updated each texture upload
   float ev_auto = 0.0f;         // P99-anchored auto-EV in stops; recomputed from p99_raw_y
-  bool auto_ev_enabled = true;  // Display panel toggle
   float target_white = 200.0f;  // Target P99 brightness on 0-255 sRGB scale
 
   // Last committed config snapshot (for Revert — config fields only, no runtime state).
@@ -566,10 +556,9 @@ struct GuiState {
 // be audited for matching changes. Apple Silicon + libc++ only (std::vector size varies
 // across stdlib implementations).
 #if defined(__APPLE__) && defined(__aarch64__)
-// Size updated after ID-pool migration (task-gui-linked-entries, 2026-05): adds
-// two std::vector fields (crystals/filters) above the existing layers field;
-// libc++ vector header is 24 bytes each on arm64, so the snapshot grows by 48
-// bytes vs the prior 112-byte layout (now 160).
+// Size remains 160 after task-remove-adaptive-brightness-on-mode: removing
+// gui::RenderConfig::ab_mode_ reclaimed trailing padding only (libc++ vector
+// header alignment dominates the ConfigSnapshot footprint).
 static_assert(sizeof(GuiState::ConfigSnapshot) == 160,
               "GuiState::ConfigSnapshot size changed; audit From()/ApplyTo() implementations below");
 #endif

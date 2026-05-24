@@ -451,8 +451,6 @@ void DoOpen() {
     GuiState new_state = InitDefaultState();
     if (DeserializeFromJson(json_str, new_state)) {
       g_state = new_state;
-      // ab_mode_ is the authoritative source; the GUI toggle mirrors it after load.
-      g_state.auto_ev_enabled = (g_state.renderer.ab_mode_ == AdaptiveBrightnessMode::kOn);
       g_state.current_file_path.clear();  // Don't set .json path as save target
       g_state.dirty = true;               // Unsaved new project
       g_state.sim_state = SimState::kIdle;
@@ -475,8 +473,6 @@ void DoOpen() {
   if (LoadLmcFile(path, g_state, tex_data, tex_w, tex_h)) {
     g_state.current_file_path = path;
     g_state.dirty = false;
-    // Mirror the loaded renderer mode into the GUI toggle (auto_ev_enabled is a view of ab_mode_).
-    g_state.auto_ev_enabled = (g_state.renderer.ab_mode_ == AdaptiveBrightnessMode::kOn);
     g_thumbnail_cache.OnLayerStructureChanged();
     // Reset modal preview trackball to the loaded file's first entry.
     if (!g_state.layers.empty() && !g_state.layers[0].entries.empty()) {
@@ -738,9 +734,6 @@ void DoRevert() {
     // order remains correct (callback sees fully restored state). Runtime state (dirty,
     // sim_state, poller counters, etc.) is intentionally preserved by ApplyTo.
     snapshot.ApplyTo(g_state);
-    // ab_mode_ is restored via renderer; mirror it into auto_ev_enabled so the toggle
-    // visually matches the reverted state.
-    g_state.auto_ev_enabled = (g_state.renderer.ab_mode_ == AdaptiveBrightnessMode::kOn);
     g_thumbnail_cache.OnLayerStructureChanged();
     g_state.sim_state = SimState::kDone;
   }
@@ -791,25 +784,20 @@ void SyncFromPoller() {
     g_state.anchor_snapshot_intensity = data.anchor_snapshot_intensity;
     g_state.effective_pixels = data.effective_pixels;
     g_state.texture_upload_count++;
-    // Mode-gated EV anchor (see doc/filter-architecture.md §7):
-    //   ON  → P99 over the filtered XYZ texture (per-frame self-anchor; filter changes the anchor).
-    //   OFF → use server-side anchor P99 / intensity (combined filter-pass + filter-fail emission).
-    //         When the OFF-mode anchor is unavailable (no filter spec → no anchor lane allocated,
-    //         server returns 0), gracefully fall back to the ON-mode path so EV still tracks.
-    if (g_state.auto_ev_enabled) {
-      g_state.p99_raw_y = ComputeP99Y(data.xyz_data);
-      g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, g_state.target_white);
-    } else if (data.anchor_p99_y > 0.0f && data.anchor_snapshot_intensity > 0.0f) {
+    // EV anchor selection (see doc/filter-architecture.md §7):
+    //   Filter present → server-side F1 anchor (filter-independent P99 / intensity).
+    //   No filter      → anchor lane stays empty (server returns 0); degenerate to
+    //                    filtered snapshot. Filter-empty makes filtered ≡ unfiltered,
+    //                    so the user observes no behavioral difference.
+    if (data.anchor_p99_y > 0.0f && data.anchor_snapshot_intensity > 0.0f) {
       g_state.p99_raw_y = data.anchor_p99_y;
       g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.anchor_snapshot_intensity, g_state.target_white);
     } else {
-      // Degenerate OFF: no anchor lane (e.g. no filter). Use filtered path; filter-empty makes
-      // filtered ≡ unfiltered, so behavior matches ON mode without the user noticing.
       g_state.p99_raw_y = ComputeP99Y(data.xyz_data);
       g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, g_state.target_white);
     }
-    GUI_LOG_VERBOSE("[GUI] SyncFromPoller: p99_raw_y={:.6f}, ev_auto={:.3f}, mode={}", g_state.p99_raw_y,
-                    g_state.ev_auto, g_state.auto_ev_enabled ? "ON(filtered)" : "OFF(anchor)");
+    GUI_LOG_VERBOSE("[GUI] SyncFromPoller: p99_raw_y={:.6f}, ev_auto={:.3f}, anchor_src={}", g_state.p99_raw_y,
+                    g_state.ev_auto, (data.anchor_p99_y > 0.0f) ? "anchor" : "filtered");
   }
 }
 

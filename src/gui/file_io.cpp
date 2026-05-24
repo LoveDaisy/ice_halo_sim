@@ -503,7 +503,6 @@ static json SerializeRendererForGui(const RenderConfig& r) {
   jr["ray_color"] = { r.ray_color[0], r.ray_color[1], r.ray_color[2] };
   jr["opacity"] = r.opacity;
   jr["exposure_offset"] = r.exposure_offset;
-  jr["adaptive_brightness_mode"] = (r.ab_mode_ == AdaptiveBrightnessMode::kOff) ? "off" : "on";
   return jr;
 }
 
@@ -526,9 +525,8 @@ static RenderConfig ParseRendererFromGuiJson(const json& jr) {
   }
   r.opacity = jr.value("opacity", RenderConfig{}.opacity);
   r.exposure_offset = jr.value("exposure_offset", RenderConfig{}.exposure_offset);
-  // .lmc files predating F1 mode-toggle omit this key; default to ON to preserve old behavior.
-  auto ab_str = jr.value("adaptive_brightness_mode", std::string("on"));
-  r.ab_mode_ = (ab_str == "off") ? AdaptiveBrightnessMode::kOff : AdaptiveBrightnessMode::kOn;
+  // Older .lmc payloads carry an "adaptive_brightness_mode" key; nlohmann's value(...) ignores
+  // unknown keys, so no migration code is needed — the field becomes a silent no-op.
   return r;
 }
 
@@ -680,7 +678,6 @@ std::string SerializeCoreConfig(const GuiState& state) {
     jr["intensity_factor"] = std::pow(2.0f, r.exposure_offset);
     jr["norm_mode"] = state.norm_mode;
     jr["overlap"] = kDualFisheyeOverlap;
-    jr["adaptive_brightness"]["mode"] = (r.ab_mode_ == AdaptiveBrightnessMode::kOff) ? "off" : "on";
 
     root["render"].push_back(jr);
   }
@@ -833,7 +830,6 @@ void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
     dst.intensity_factor = std::pow(2.0f, r.exposure_offset);
     dst.norm_mode = state.norm_mode;
     dst.overlap = kDualFisheyeOverlap;
-    dst.ab_mode = (r.ab_mode_ == AdaptiveBrightnessMode::kOff) ? 1 : 0;
   }
 
   // Scene: light source
