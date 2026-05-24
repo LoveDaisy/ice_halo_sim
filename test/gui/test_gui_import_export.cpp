@@ -473,6 +473,49 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // task-gui-zenith-nadir-marker: zenith/nadir overlay round-trip — 4 new fields
+  // (line toggle, color[3], alpha, radius_px) preserved through Serialize → Deserialize.
+  // Missing-key fallback covered separately by overlay_legacy_key_fallback.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "zenith_nadir_roundtrip");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      gui::g_state.show_zenith_nadir_line = true;
+      gui::g_state.zenith_nadir_color[0] = 0.1f;
+      gui::g_state.zenith_nadir_color[1] = 0.5f;
+      gui::g_state.zenith_nadir_color[2] = 0.9f;
+      gui::g_state.zenith_nadir_alpha = 0.42f;
+      gui::g_state.zenith_nadir_radius_px = 12.5f;
+
+      std::string json = gui::SerializeGuiStateJson(gui::g_state);
+      IM_CHECK(!json.empty());
+
+      gui::GuiState loaded;
+      bool ok = gui::DeserializeGuiStateJson(json, loaded);
+      IM_CHECK(ok);
+      IM_CHECK_EQ(loaded.show_zenith_nadir_line, true);
+      IM_CHECK_EQ(loaded.zenith_nadir_color[0], 0.1f);
+      IM_CHECK_EQ(loaded.zenith_nadir_color[1], 0.5f);
+      IM_CHECK_EQ(loaded.zenith_nadir_color[2], 0.9f);
+      IM_CHECK_EQ(loaded.zenith_nadir_alpha, 0.42f);
+      IM_CHECK_EQ(loaded.zenith_nadir_radius_px, 12.5f);
+
+      // Legacy file (without these keys) must fall back to defaults — verifies
+      // no exception and no spurious enabled state for users on older .lmc files.
+      std::string legacy_json = R"({
+        "layers": [],
+        "renderer": {"lens_type": "linear", "fov": 90.0}
+      })";
+      gui::GuiState legacy_loaded;
+      IM_CHECK(gui::DeserializeGuiStateJson(legacy_json, legacy_loaded));
+      IM_CHECK_EQ(legacy_loaded.show_zenith_nadir_line, false);
+      IM_CHECK_EQ(legacy_loaded.zenith_nadir_alpha, 0.6f);
+      IM_CHECK_EQ(legacy_loaded.zenith_nadir_radius_px, 8.0f);
+    };
+  }
+
   // task-data-model-and-serialization: AC #7 — multi-raypath OR end-to-end.
   // GUI raypath_text "3-5; 1-3" → SerializeCoreConfig → ConfigManager parses
   // out 3 filters: 2 simple raypaths (ids 1, 2) + 1 complex (id 3) referencing

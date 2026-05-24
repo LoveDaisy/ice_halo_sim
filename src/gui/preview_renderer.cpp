@@ -57,6 +57,17 @@ uniform float u_horizon_alpha;
 uniform float u_grid_alpha;
 uniform float u_sun_circles_alpha;
 
+// Zenith / Nadir pixel-space ring marker uniforms (task-gui-zenith-nadir-marker).
+// Screen positions are center-origin, y-up, in pixels — same convention as
+// `pos = v_ndc * u_resolution * 0.5` (see main()). Sentinel (-9999, -9999)
+// trivially fails the distance test so the ring is skipped.
+uniform int u_show_zenith_nadir;
+uniform vec2 u_zenith_screen_pos;
+uniform vec2 u_nadir_screen_pos;
+uniform float u_zenith_nadir_radius_px;
+uniform vec3 u_zenith_nadir_color;
+uniform float u_zenith_nadir_alpha;
+
 const float PI = 3.14159265358979323846;
 
 // Algorithm synced with CPU: src/util/color_space.hpp (GamutClipXyz + XyzToLinearRgb + LinearToSrgb)
@@ -293,7 +304,9 @@ vec4 globeInverse(vec2 pos, float half_fov) {
 
 // Overlay auxiliary lines on top of final_color.
 // world_dir must be a valid world-space direction.
-vec3 overlayAuxLines(vec3 world_dir, vec3 color) {
+// pos_pix: pixel-space position of the current fragment, center-origin (0,0),
+// y-up. Matches the CPU helper ProjectWorldDirToScreen for marker overlays.
+vec3 overlayAuxLines(vec3 world_dir, vec3 color, vec2 pos_pix) {
   float DEG = 180.0 / PI;
   float altitude_deg = asin(clamp(-world_dir.z, -1.0, 1.0)) * DEG;
   float azimuth_deg = atan(-world_dir.y, -world_dir.x) * DEG;  // [-180, 180]
@@ -335,6 +348,21 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color) {
     float d = abs(altitude_deg);
     float t = 1.0 - smoothstep(0.0, fw_alt * 1.5, d);
     color = mix(color, u_horizon_color, t * u_horizon_alpha);
+  }
+
+  // Zenith / Nadir pixel-space ring markers — drawn last so they sit on top
+  // of all other overlays. CPU passes sentinel (-9999, -9999) when the marker
+  // is offscreen / behind the camera; the distance test rejects it naturally.
+  if (u_show_zenith_nadir != 0) {
+    const float kRingHalfWidthPx = 1.5;
+    float dz = length(pos_pix - u_zenith_screen_pos);
+    float tz = 1.0 - smoothstep(0.0, kRingHalfWidthPx,
+                                abs(dz - u_zenith_nadir_radius_px));
+    color = mix(color, u_zenith_nadir_color, tz * u_zenith_nadir_alpha);
+    float dn = length(pos_pix - u_nadir_screen_pos);
+    float tn = 1.0 - smoothstep(0.0, kRingHalfWidthPx,
+                                abs(dn - u_zenith_nadir_radius_px));
+    color = mix(color, u_zenith_nadir_color, tn * u_zenith_nadir_alpha);
   }
 
   return color;
@@ -409,7 +437,7 @@ void main() {
 
   // Auxiliary line overlay (on top of everything, only in visible region)
   if (result.w >= 0.5 && pixel_visible) {
-    final_color = overlayAuxLines(world_dir, final_color);
+    final_color = overlayAuxLines(world_dir, final_color, pos);
   }
 
   frag_color = vec4(final_color, 1.0);
@@ -960,6 +988,16 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   glUniform1f(glGetUniformLocation(shader_program_, "u_horizon_alpha"), ov.horizon_alpha);
   glUniform1f(glGetUniformLocation(shader_program_, "u_grid_alpha"), ov.grid_alpha);
   glUniform1f(glGetUniformLocation(shader_program_, "u_sun_circles_alpha"), ov.sun_circles_alpha);
+
+  glUniform1i(glGetUniformLocation(shader_program_, "u_show_zenith_nadir"), ov.show_zenith_nadir ? 1 : 0);
+  glUniform2f(glGetUniformLocation(shader_program_, "u_zenith_screen_pos"), ov.zenith_screen_pos[0],
+              ov.zenith_screen_pos[1]);
+  glUniform2f(glGetUniformLocation(shader_program_, "u_nadir_screen_pos"), ov.nadir_screen_pos[0],
+              ov.nadir_screen_pos[1]);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_zenith_nadir_radius_px"), ov.zenith_nadir_radius_px);
+  glUniform3f(glGetUniformLocation(shader_program_, "u_zenith_nadir_color"), ov.zenith_nadir_color[0],
+              ov.zenith_nadir_color[1], ov.zenith_nadir_color[2]);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_zenith_nadir_alpha"), ov.zenith_nadir_alpha);
 
   // Draw fullscreen quad
   glBindVertexArray(vao_);
