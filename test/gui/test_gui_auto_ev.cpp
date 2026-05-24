@@ -26,15 +26,15 @@ struct AutoEvScene {
 // (mean-ref + threshold), so the script's mean-3σ floor is taken as-is without any
 // further safety margin.
 static const AutoEvScene kScenes[] = {
-  {"halo_22",    LUMICE_E2E_CONFIG_DIR "/halo_22.json",                           256, 256, 16.5},  // min(18.5, 16.5)
-  {"multi_scat", LUMICE_E2E_CONFIG_DIR "/multi_scatter.json",                     256, 256, 16.5},  // min(18.5, 16.5)
-  {"color",      LUMICE_E2E_CONFIG_DIR "/color.json",                             256, 256, 18.0},  // min(20.0, 18.0)
-  {"pyramid",    LUMICE_E2E_CONFIG_DIR "/pyramid.json",                           256, 256, 17.5},  // min(17.5, 17.5)
-  {"cza",        LUMICE_E2E_CONFIG_DIR "/cza.json",                               256, 256, 30.5},  // min(30.5, 35.0)
-  {"parhelion",  LUMICE_E2E_CONFIG_DIR "/parhelion.json",                         256, 256, 18.0},  // min(19.5, 18.0)
-  {"filters",    LUMICE_E2E_CONFIG_DIR "/filters.json",                           256, 256, 17.0},  // min(18.0, 17.0)
-  {"rp46",       LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6.json",              256, 256, 19.5},  // min(20.0, 19.5)
-  {"rp46_nof",   LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6_nofilter.json",     256, 256, 17.0},  // min(19.0, 17.0)
+  {"halo_22",    LUMICE_E2E_CONFIG_DIR "/halo_22.json",                           256, 256, 18.0},  // min(18.5, 21.0) − 0.5 margin
+  {"multi_scat", LUMICE_E2E_CONFIG_DIR "/multi_scatter.json",                     256, 256, 18.5},  // min(18.5, 21.0)
+  {"color",      LUMICE_E2E_CONFIG_DIR "/color.json",                             256, 256, 20.0},  // min(20.0, 23.0)
+  {"pyramid",    LUMICE_E2E_CONFIG_DIR "/pyramid.json",                           256, 256, 17.0},  // min(17.0, 22.0)
+  {"cza",        LUMICE_E2E_CONFIG_DIR "/cza.json",                               256, 256, 30.0},  // min(30.0, 40.0)
+  {"parhelion",  LUMICE_E2E_CONFIG_DIR "/parhelion.json",                         256, 256, 19.5},  // min(19.5, 23.0)
+  {"filters",    LUMICE_E2E_CONFIG_DIR "/filters.json",                           256, 256, 19.0},  // min(19.0, 20.5)
+  {"rp46",       LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6.json",              256, 256, 20.0},  // min(20.5, 21.0) − 0.5 margin
+  {"rp46_nof",   LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6_nofilter.json",     256, 256, 18.5},  // min(18.5, 22.0)
 };
 // clang-format on
 static constexpr int kSceneCount = 9;

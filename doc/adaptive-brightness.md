@@ -32,18 +32,18 @@ EV because the anchor is derived from the filter-independent F1 anchor lane.
 
 ## 2. Algorithm
 
-### 2.1 P99-Anchored Normalization
+### 2.1 P99.5-Anchored Normalization
 
-The core algorithm (`ComputeP99Y` / `ComputeEvAuto` in `src/gui/gui_ev_auto.hpp`) is:
+The core algorithm (`ComputeP995Y` / `ComputeEvAuto` in `src/gui/gui_ev_auto.hpp`) is:
 
 1. **Extract** all positive Y-channel values from the anchor XYZ buffer.
-2. **Compute the P99 value** (`y_p99`): the 99th percentile of those Y values.
+2. **Compute the P99.5 value** (`y_p995`): the 99.5th percentile of those Y values.
 3. **Normalize** relative to the anchor intensity:
    ```
-   p99_norm = y_p99 / anchor_snapshot_intensity
+   p99_norm = y_p995 / anchor_snapshot_intensity
    ```
 4. **Map** `p99_norm` to `target_white` on the sRGB [0, 255] scale.
-   `target_white` is fixed at 200 (the GUI no longer exposes a slider; users tune the
+   `target_white` is fixed at 135 (the GUI no longer exposes a slider; users tune the
    manual EV offset for further adjustment).
    The mapping applies the sRGB transfer function inverse to obtain a linear target:
    ```
@@ -60,27 +60,27 @@ no data is available yet, the EV contribution is 0 and the GUI shows `(auto: no 
 
 ### 2.2 Data Source — F1 Anchor Lane
 
-`y_p99` and the normalization intensity come from the server-side F1 anchor lane:
+`y_p995` and the normalization intensity come from the server-side F1 anchor lane:
 
 | Field | Meaning |
 |-------|---------|
-| `anchor_p99_y` | P99 of Y over filter-pass + filter-fail emission combined. |
+| `anchor_p995_y` | P99.5 of Y over filter-pass + filter-fail emission combined. |
 | `anchor_snapshot_intensity` | Per-pixel landed intensity for the same combined set. |
 
 Both are exposed by `LUMICE_RawXyzResult` (see `src/include/lumice.h`).
 
 **Degenerate path (no filter)**: when no filter is configured, the simulator skips the
 anchor lane entirely (no `IsFilterDropped` writes), so the server returns
-`anchor_p99_y = 0` and `anchor_snapshot_intensity = 0`. `SyncFromPoller()` falls back
+`anchor_p995_y = 0` and `anchor_snapshot_intensity = 0`. `SyncFromPoller()` falls back
 to the filtered snapshot:
 
 ```cpp
-if (data.anchor_p99_y > 0.0f && data.anchor_snapshot_intensity > 0.0f) {
-    g_state.p99_raw_y = data.anchor_p99_y;
-    g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.anchor_snapshot_intensity, target_white);
+if (data.anchor_p995_y > 0.0f && data.anchor_snapshot_intensity > 0.0f) {
+    g_state.p995_raw_y = data.anchor_p995_y;
+    g_state.ev_auto = ComputeEvAuto(g_state.p995_raw_y, g_state.anchor_snapshot_intensity, target_white);
 } else {
-    g_state.p99_raw_y = ComputeP99Y(data.xyz_data);
-    g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, target_white);
+    g_state.p995_raw_y = ComputeP995Y(data.xyz_data);
+    g_state.ev_auto = ComputeEvAuto(g_state.p995_raw_y, g_state.snapshot_intensity, target_white);
 }
 ```
 
@@ -170,7 +170,7 @@ crystal exit (outgoing candidate)
 ```
 
 The anchor lane accumulates filter-pass + filter-fail emission. The C API exposes the
-P99 and intensity via `LUMICE_RawXyzResult.anchor_p99_y` and `anchor_snapshot_intensity`.
+P99.5 and intensity via `LUMICE_RawXyzResult.anchor_p995_y` and `anchor_snapshot_intensity`.
 The GUI (`SyncFromPoller()` in `src/gui/app.cpp`) uses these to compute the EV offset.
 
 The branch table inside `CollectData` (see `src/core/simulator.cpp`) is:
@@ -218,12 +218,12 @@ mode dispatch is gone.
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| Algorithm | `src/gui/gui_ev_auto.hpp` | `ComputeP99Y`, `ComputeEvAuto` |
-| EV source | `src/gui/app.cpp` — `SyncFromPoller()` | Reads `anchor_p99_y` / `anchor_snapshot_intensity` (degenerate fallback to filtered snapshot when both are 0) |
+| Algorithm | `src/gui/gui_ev_auto.hpp` | `ComputeP995Y`, `ComputeEvAuto` |
+| EV source | `src/gui/app.cpp` — `SyncFromPoller()` | Reads `anchor_p995_y` / `anchor_snapshot_intensity` (degenerate fallback to filtered snapshot when both are 0) |
 | GUI display | `src/gui/app_panels.cpp` | `(+N.NN EV auto)` text and `ev_total = exposure_offset + ev_auto` |
 | Anchor lane | `src/server/render.cpp` — `Consume()` | Accumulates filter-pass + filter-fail emission into the anchor buffer when filter is present |
 | Simulator | `src/core/simulator.cpp` — `CollectData()` | F1 branch table; routes filter-fail outgoing to anchor lane |
-| C API fields | `src/include/lumice.h` — `LUMICE_RawXyzResult` | `anchor_p99_y`, `anchor_snapshot_intensity`, `xyz_buffer`, `snapshot_intensity` |
+| C API fields | `src/include/lumice.h` — `LUMICE_RawXyzResult` | `anchor_p995_y`, `anchor_snapshot_intensity`, `xyz_buffer`, `snapshot_intensity` |
 
 ### Related Documentation
 

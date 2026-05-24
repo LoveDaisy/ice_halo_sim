@@ -49,10 +49,9 @@ For users of this project:
   - C API `unfiltered_*` field deprecation and GUI Off-mode temporary disable
 
 - **[Adaptive Brightness](adaptive-brightness.md)**: Automatic EV normalization in the GUI
-  - P99-anchored algorithm and target-white mapping
-  - Off mode: shared EV scale, XYZ linear additivity for complementary filters
-  - On mode: per-filter adaptive EV for faint or isolated arcs
-  - sRGB gamma caveat and tooltip wording rationale
+  - P99.5-anchored algorithm and target-white mapping (always on, no toggle)
+  - F1 anchor lane: filter-independent EV scale, XYZ linear additivity for complementary filters
+  - sRGB gamma caveat
 
 - **[Raypath Symmetry](raypath-symmetry.md)**: P, B, D filter toggle semantics
   - Two sources of raypath equivalence (crystal geometry vs orientation distribution)

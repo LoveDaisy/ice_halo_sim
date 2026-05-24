@@ -208,7 +208,7 @@ as the canonical routing model.  Off mode redesign was tracked as a backlog item
 ### scrum-221 (adaptive-additivity-redesign, 2026-05-24) — Off mode redesign shipped
 
 Implemented Off mode via F1 anchor lane (see §7).  ABI swap removed `unfiltered_*`
-fields and introduced `anchor_p99_y` / `anchor_snapshot_intensity`.  Additivity testing
+fields and introduced `anchor_p995_y` / `anchor_snapshot_intensity`.  Additivity testing
 (partition invariant) added to the E2E test suite.
 
 ---
@@ -228,7 +228,7 @@ fields and introduced `anchor_p99_y` / `anchor_snapshot_intensity`.  Additivity 
 
 | Field | Semantics |
 |-------|-----------|
-| `anchor_p99_y` | P99 of Y over filter-pass + filter-fail emission combined (filter-independent EV anchor). Zero when no filter is configured (anchor lane is empty). |
+| `anchor_p995_y` | P99.5 of Y over filter-pass + filter-fail emission combined (filter-independent EV anchor). Zero when no filter is configured (anchor lane is empty). |
 | `anchor_snapshot_intensity` | Per-pixel landed intensity for the same combined set. Zero when no filter is configured. |
 
 The pre-scrum-221 `unfiltered_xyz_buffer` / `unfiltered_snapshot_intensity` fields
@@ -241,11 +241,11 @@ The EV offset (loosely ε; formally `ev = log2(target_linear / p99_norm)`) is so
 from the F1 anchor lane, with a graceful degenerate path when no filter is active:
 
 ```
-filter present:  ev = log2(target_linear / (anchor_p99_y / anchor_snapshot_intensity))
+filter present:  ev = log2(target_linear / (anchor_p995_y / anchor_snapshot_intensity))
                  (F1 combined anchor; filter-independent)
 
-no filter:       ev = log2(target_linear / (ComputeP99Y(xyz_buffer) / snapshot_intensity))
-                 (anchor_p99_y == 0 → fallback; equals filtered self-anchor since
+no filter:       ev = log2(target_linear / (ComputeP995Y(xyz_buffer) / snapshot_intensity))
+                 (anchor_p995_y == 0 → fallback; equals filtered self-anchor since
                   xyz_buffer == full emission when no filter is configured)
 ```
 
@@ -279,7 +279,7 @@ crystal exit (outgoing candidate)
 `RenderConsumer::Consume()` in `src/server/render.cpp` accumulates anchor emission into
 the anchor buffer, gated by `data.anchor_d_.empty()` so the path is naturally inert when
 no filter spec is configured (no `IsFilterDropped` writes → empty anchor → no allocation).
-`PrepareSnapshot()` exposes `anchor_p99_y` and `anchor_snapshot_intensity` to the C API.
+`PrepareSnapshot()` exposes `anchor_p995_y` and `anchor_snapshot_intensity` to the C API.
 
 ### Performance
 
@@ -316,7 +316,7 @@ anchor points for future contributors:
 | Filter ↔ crystal per-entry config | `src/config/proj_config.hpp` — `ScatteringSetting` |
 | Simulator-side filter check (Design A gate) | `src/core/simulator.cpp` — `CollectData()` |
 | FilterSpec algorithm interface | `src/core/filter_spec.hpp` |
-| C API anchor fields (Off mode) | `src/include/lumice.h` — `LUMICE_RawXyzResult.anchor_p99_y` / `anchor_snapshot_intensity` |
+| C API anchor fields (Off mode) | `src/include/lumice.h` — `LUMICE_RawXyzResult.anchor_p995_y` / `anchor_snapshot_intensity` |
 | Filter JSON schema | `doc/configuration.md` |
 | Raypath semantics, P/B/D filter toggles | `doc/raypath-symmetry.md` |
 | Adaptive Brightness Off mode, additivity | `doc/adaptive-brightness.md` |

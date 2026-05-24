@@ -49,10 +49,9 @@ doc/
   - C API `unfiltered_*` 字段废弃及 GUI Off 模式临时禁用
 
 - **[自适应亮度](adaptive-brightness.zh.md)**: GUI 自动 EV 归一化
-  - P99 锚点算法与目标白点映射
-  - Off 模式：共享 EV 刻度，互补 filter 的 XYZ 线性可加性
-  - On 模式：针对暗弱或孤立弧的按 filter 自适应 EV
-  - sRGB gamma 非线性 caveat 与 tooltip 文案设计理由
+  - P99.5 锚点算法与目标白点映射（始终启用，无开关）
+  - F1 anchor lane：filter-independent EV 刻度，互补 filter 的 XYZ 线性可加性
+  - sRGB gamma 非线性 caveat
 
 - **[Raypath 对称性](raypath-symmetry.zh.md)**: P、B、D 过滤器开关语义
   - Raypath 等价性的两类来源（晶体几何 vs 取向分布）

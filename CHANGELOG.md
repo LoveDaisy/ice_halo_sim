@@ -12,8 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   F1 anchor lane introduced by scrum-221; the GUI Display panel now shows
   `(+N.NN EV auto)` next to the manual EV slider with no checkbox. Filter switches
   no longer jump the EV.
+- **Adaptive Brightness defaults updated**: EV anchor now uses the P99.5 percentile
+  (previously P99) and maps to `target_white = 135` (previously 200). These values
+  produce better perceptual balance across typical halo scenes.
 
 ### Removed
+- **Breaking ABI #2**: `LUMICE_RawXyzResult::anchor_p99_y` renamed to `anchor_p995_y`.
+  Update all ctypes / FFI / C callers that reference this field by name.
 - **Breaking ABI**: `LUMICE_RenderParam::ab_mode` field removed from the C API.
   Callers should drop the assignment; behavior matches the prior OFF mode (F1).
 - `AdaptiveBrightnessMode` enum (`src/config/render_config.hpp`) removed.

@@ -20,18 +20,18 @@
 
 ## 2. 算法
 
-### 2.1 P99 锚点归一化
+### 2.1 P99.5 锚点归一化
 
-核心算法（`src/gui/gui_ev_auto.hpp` 中的 `ComputeP99Y` / `ComputeEvAuto`）：
+核心算法（`src/gui/gui_ev_auto.hpp` 中的 `ComputeP995Y` / `ComputeEvAuto`）：
 
 1. **提取** anchor XYZ buffer 中所有正值的 Y 通道。
-2. **计算 P99 值**（`y_p99`）：上述 Y 值的第 99 百分位数。
+2. **计算 P99.5 值**（`y_p995`）：上述 Y 值的第 99.5 百分位数。
 3. **相对锚点强度归一化**：
    ```
-   p99_norm = y_p99 / anchor_snapshot_intensity
+   p99_norm = y_p995 / anchor_snapshot_intensity
    ```
 4. **将 `p99_norm` 映射到 sRGB [0, 255] 刻度上的 `target_white`**。
-   `target_white` 固定为 200（GUI 已不再暴露滑条；如需进一步调整，由用户拖动手动 EV 滑条）。
+   `target_white` 固定为 135（GUI 已不再暴露滑条；如需进一步调整，由用户拖动手动 EV 滑条）。
    映射先做 sRGB 传递函数的逆变换，得到线性目标值：
    ```
    t = target_white / 255
@@ -46,24 +46,24 @@
 
 ### 2.2 数据来源——F1 Anchor Lane
 
-`y_p99` 和归一化强度都来自服务端的 F1 anchor lane：
+`y_p995` 和归一化强度都来自服务端的 F1 anchor lane：
 
 | 字段 | 含义 |
 |------|------|
-| `anchor_p99_y` | filter-pass + filter-fail 发射合并集的 Y 通道 P99 |
+| `anchor_p995_y` | filter-pass + filter-fail 发射合并集的 Y 通道 P99.5 |
 | `anchor_snapshot_intensity` | 同一集合的每像素 landed 强度 |
 
 二者都通过 `LUMICE_RawXyzResult` 暴露（参见 `src/include/lumice.h`）。
 
-**退化路径（无 filter）**：当未配置 filter 时，simulator 跳过 anchor lane（不写 `IsFilterDropped`），server 返回 `anchor_p99_y = 0` 与 `anchor_snapshot_intensity = 0`。此时 `SyncFromPoller()` 回退到 filtered snapshot：
+**退化路径（无 filter）**：当未配置 filter 时，simulator 跳过 anchor lane（不写 `IsFilterDropped`），server 返回 `anchor_p995_y = 0` 与 `anchor_snapshot_intensity = 0`。此时 `SyncFromPoller()` 回退到 filtered snapshot：
 
 ```cpp
-if (data.anchor_p99_y > 0.0f && data.anchor_snapshot_intensity > 0.0f) {
-    g_state.p99_raw_y = data.anchor_p99_y;
-    g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.anchor_snapshot_intensity, target_white);
+if (data.anchor_p995_y > 0.0f && data.anchor_snapshot_intensity > 0.0f) {
+    g_state.p995_raw_y = data.anchor_p995_y;
+    g_state.ev_auto = ComputeEvAuto(g_state.p995_raw_y, g_state.anchor_snapshot_intensity, target_white);
 } else {
-    g_state.p99_raw_y = ComputeP99Y(data.xyz_data);
-    g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, target_white);
+    g_state.p995_raw_y = ComputeP995Y(data.xyz_data);
+    g_state.ev_auto = ComputeEvAuto(g_state.p995_raw_y, g_state.snapshot_intensity, target_white);
 }
 ```
 
@@ -138,7 +138,7 @@ crystal 退出（outgoing 候选）
                        （不渲染；仅贡献到 EV 锚点）
 ```
 
-Anchor lane 累积 filter-pass + filter-fail 射线。C API 通过 `LUMICE_RawXyzResult.anchor_p99_y` 与 `anchor_snapshot_intensity` 暴露 P99 与强度。GUI（`src/gui/app.cpp` 中的 `SyncFromPoller()`）使用这些数据计算 EV 偏移。
+Anchor lane 累积 filter-pass + filter-fail 射线。C API 通过 `LUMICE_RawXyzResult.anchor_p995_y` 与 `anchor_snapshot_intensity` 暴露 P99.5 与强度。GUI（`src/gui/app.cpp` 中的 `SyncFromPoller()`）使用这些数据计算 EV 偏移。
 
 `CollectData`（参见 `src/core/simulator.cpp`）的分支表为：
 
@@ -173,12 +173,12 @@ scrum-221 引入了 GUI 的 Adaptive Brightness ON/OFF 开关，在 per-frame se
 
 | 组件 | 文件 | 功能 |
 |------|------|------|
-| 算法 | `src/gui/gui_ev_auto.hpp` | `ComputeP99Y`、`ComputeEvAuto` |
-| EV 来源 | `src/gui/app.cpp` — `SyncFromPoller()` | 读取 `anchor_p99_y` / `anchor_snapshot_intensity`（两者均为 0 时退化为 filtered snapshot） |
+| 算法 | `src/gui/gui_ev_auto.hpp` | `ComputeP995Y`、`ComputeEvAuto` |
+| EV 来源 | `src/gui/app.cpp` — `SyncFromPoller()` | 读取 `anchor_p995_y` / `anchor_snapshot_intensity`（两者均为 0 时退化为 filtered snapshot） |
 | GUI 显示 | `src/gui/app_panels.cpp` | `(+N.NN EV auto)` 文本与 `ev_total = exposure_offset + ev_auto` |
 | Anchor lane | `src/server/render.cpp` — `Consume()` | filter 存在时累积 filter-pass + filter-fail 射线到 anchor buffer |
 | Simulator | `src/core/simulator.cpp` — `CollectData()` | F1 分支表；将 filter-fail outgoing 路由至 anchor lane |
-| C API 字段 | `src/include/lumice.h` — `LUMICE_RawXyzResult` | `anchor_p99_y`、`anchor_snapshot_intensity`、`xyz_buffer`、`snapshot_intensity` |
+| C API 字段 | `src/include/lumice.h` — `LUMICE_RawXyzResult` | `anchor_p995_y`、`anchor_snapshot_intensity`、`xyz_buffer`、`snapshot_intensity` |
 
 ### 相关文档
 
