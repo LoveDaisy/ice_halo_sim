@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Adaptive Brightness no longer has an ON/OFF toggle. The simulator always uses the
+  F1 anchor lane introduced by scrum-221; the GUI Display panel now shows
+  `(+N.NN EV auto)` next to the manual EV slider with no checkbox. Filter switches
+  no longer jump the EV.
+
+### Removed
+- **Breaking ABI**: `LUMICE_RenderParam::ab_mode` field removed from the C API.
+  Callers should drop the assignment; behavior matches the prior OFF mode (F1).
+- `AdaptiveBrightnessMode` enum (`src/config/render_config.hpp`) removed.
+- `RenderConfig::ab_mode_`, `SimBatch::ab_mode_`, `GuiState::auto_ev_enabled`,
+  and the GUI-local `AdaptiveBrightnessMode` mirror enum removed.
+- `adaptive_brightness.mode` JSON config key is no longer parsed (nlohmann ignores
+  unknown keys silently, so old configs load without error but the field is a
+  no-op).
+
 ## [4.1.3] - 2026-03-17
 
 ### Fixed

@@ -2,13 +2,13 @@
 
 # Adaptive Brightness
 
-This document describes Lumice's Adaptive Brightness feature: its algorithm, the two modes
-(Off / On), the physical additivity invariant it preserves in Off mode, and the rationale
-behind the tooltip wording.
+This document describes Lumice's Adaptive Brightness feature: its algorithm, the F1
+anchor-lane mechanism that backs it, and the physical additivity invariant the design
+preserves.
 
-**Target audience**: users who want to understand why enabling or disabling Adaptive
-Brightness changes how filter outputs compare to each other, and contributors who need to
-reason about the EV-normalization pipeline.
+**Target audience**: users who want to understand how Lumice keeps the EV scale stable
+when toggling filters, and contributors who need to reason about the EV-normalization
+pipeline.
 
 ---
 
@@ -20,11 +20,13 @@ accumulates a much brighter buffer than a scene with a rare, faint arc. Without
 normalization, comparing two configurations requires manual EV slider tuning.
 
 **Adaptive Brightness** automates this EV adjustment. The GUI computes an EV offset
-(displayed as `+N.NN EV` next to the checkbox) and applies it to the post-processing
-pipeline so that a perceptually significant fraction of the bright pixels lands at a
-user-configurable target brightness on screen.
+(displayed as `+N.NN EV auto` next to the manual EV slider in the **right panel →
+Display** section) and applies it to the post-processing pipeline so that a perceptually
+significant fraction of the bright pixels lands at a user-configurable target brightness
+on screen.
 
-The checkbox is found in the **right panel → Display** section.
+The feature is always on — there is no GUI toggle. Filter switches do not jump the
+EV because the anchor is derived from the filter-independent F1 anchor lane.
 
 ---
 
@@ -34,15 +36,15 @@ The checkbox is found in the **right panel → Display** section.
 
 The core algorithm (`ComputeP99Y` / `ComputeEvAuto` in `src/gui/gui_ev_auto.hpp`) is:
 
-1. **Extract** all positive Y-channel values from the accumulated XYZ buffer.
+1. **Extract** all positive Y-channel values from the anchor XYZ buffer.
 2. **Compute the P99 value** (`y_p99`): the 99th percentile of those Y values.
-3. **Normalize** relative to `snapshot_intensity` (total accumulated intensity):
+3. **Normalize** relative to the anchor intensity:
    ```
-   p99_norm = y_p99 / snapshot_intensity
+   p99_norm = y_p99 / anchor_snapshot_intensity
    ```
-4. **Map** `p99_norm` to `target_white` on the sRGB [0, 255] scale.  
+4. **Map** `p99_norm` to `target_white` on the sRGB [0, 255] scale.
    `target_white` is fixed at 200 (the GUI no longer exposes a slider; users tune the
-   manual EV offset for further adjustment).  
+   manual EV offset for further adjustment).
    The mapping applies the sRGB transfer function inverse to obtain a linear target:
    ```
    t = target_white / 255
@@ -50,87 +52,88 @@ The core algorithm (`ComputeP99Y` / `ComputeEvAuto` in `src/gui/gui_ev_auto.hpp`
    ```
 5. **Compute the EV offset** in stops, clamped to [−6, +6]:
    ```
-   ev = log2(target_linear / p99_norm)
+   ev_auto = log2(target_linear / p99_norm)
    ```
 
-The resulting `ev` is added to the manual EV slider value before the post-processing pass.
-When `p99_norm` is unavailable (no data yet), the EV contribution is 0 and the GUI shows
-`(no data)`.
+`ev_auto` is added to the manual EV slider value before the post-processing pass. When
+no data is available yet, the EV contribution is 0 and the GUI shows `(auto: no data)`.
 
-### 2.2 Data Source Selection
+### 2.2 Data Source — F1 Anchor Lane
 
-The P99 is computed from different XYZ buffers depending on the mode:
+`y_p99` and the normalization intensity come from the server-side F1 anchor lane:
 
-| Mode | P99 source |
-|------|------------|
-| **Off** | `anchor_p99_y` (server-side) — P99 over combined filter-pass + filter-fail emission; see `LUMICE_RawXyzResult.anchor_p99_y`. Normalized by `anchor_snapshot_intensity`. |
-| **On**  | `ComputeP99Y(xyz_buffer)` (GUI-side) — P99 over the filtered XYZ buffer, normalized by `snapshot_intensity`. |
+| Field | Meaning |
+|-------|---------|
+| `anchor_p99_y` | P99 of Y over filter-pass + filter-fail emission combined. |
+| `anchor_snapshot_intensity` | Per-pixel landed intensity for the same combined set. |
+
+Both are exposed by `LUMICE_RawXyzResult` (see `src/include/lumice.h`).
+
+**Degenerate path (no filter)**: when no filter is configured, the simulator skips the
+anchor lane entirely (no `IsFilterDropped` writes), so the server returns
+`anchor_p99_y = 0` and `anchor_snapshot_intensity = 0`. `SyncFromPoller()` falls back
+to the filtered snapshot:
+
+```cpp
+if (data.anchor_p99_y > 0.0f && data.anchor_snapshot_intensity > 0.0f) {
+    g_state.p99_raw_y = data.anchor_p99_y;
+    g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.anchor_snapshot_intensity, target_white);
+} else {
+    g_state.p99_raw_y = ComputeP99Y(data.xyz_data);
+    g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, target_white);
+}
+```
+
+With no filter the filtered snapshot equals the total emission, so the two branches are
+numerically equivalent — the fallback is purely a missing-data guard, not a semantic
+mode switch.
 
 ---
 
-## 3. Modes
+## 3. Behavior
 
-### Off — Physically Comparable Outputs
+All filter configurations within a single simulation share the same EV scale:
 
-In **Off** mode the P99 anchor is derived from the **anchor lane**: an emission accumulator
-that combines both filter-pass and filter-fail rays inside the simulator (see §5c).
+- Switching the filter on or off, or swapping between two complementary filters, does
+  not shift the overall brightness level — only the subset of rays shown changes.
+- **Physical additivity holds** for complementary ray-path filters (see §4).
 
-This means:
+Recommended workflows:
 
-- All filter configurations share the same EV scale for a given simulation run.
-- Turning a filter on or off, or switching between two complementary filters, does not shift
-  the overall brightness level — only the subset of rays shown changes.
-- **Physical additivity holds** (see §4).
-
-Recommended when you want to:
-
-- Visually compare multiple filters side-by-side.
-- Verify that a set of complementary filters (a partition) sums to the unfiltered result.
+- Visually compare multiple filters side-by-side without re-tuning EV.
+- Verify that a set of complementary filters (a partition) sums to the unfiltered
+  result.
 - Understand the absolute contribution of each ray-path class.
 
-**Performance note**: Off mode runs an additional anchor pass alongside the normal simulation.
-Overhead scales with the filter-fail ray volume:
+**Performance note**: when a filter spec is present, the simulator runs the anchor-lane
+collection pass alongside the normal simulation. Overhead scales with the filter-fail
+ray volume:
 
 - `ms_prob ≈ 0` (single-scatter or near-zero multi-scatter): overhead is negligible (~0%).
 - `ms_prob ≈ 0.5`: approximately +97% overhead (~2× simulation time).
 
-### On — Adaptive Visibility
-
-In **On** mode the P99 anchor is derived from the **filtered** buffer: only rays that
-survive the active filter contribute to the anchor.
-
-This means:
-
-- A filter that captures a faint, isolated arc (few surviving rays, low absolute
-  brightness) gets its own local EV boost — the arc becomes visible even when it would
-  otherwise be lost in the noise floor under a global scale.
-- Switching between two different filters changes the EV offset independently for each.
-- **Additivity is not guaranteed** (see §4).
-
-Recommended when you want to:
-
-- Examine the visual quality of a single filter in isolation.
-- Make a faint or rare arc visible without manually tweaking the EV slider.
+When no filter is configured the anchor lane stays empty (the simulator skips the
+`IsFilterDropped` writes) and the cost is zero.
 
 ---
 
 ## 4. Additivity
 
-### 4.1 Linear XYZ Space — Off Mode
+### 4.1 Linear XYZ Space
 
 Let F₁, F₂, …, Fₙ be a set of **complementary ray-path filters** — filters that partition
 the set of all outgoing rays (every ray matches exactly one Fᵢ, and no ray is counted
 twice). Define `buf(Fᵢ)` as the accumulated XYZ buffer when filter Fᵢ is active.
 
-In **Off** mode, all buffers are normalized by the same unfiltered anchor, so:
+Because every filter run normalizes by the same anchor intensity:
 
 ```
 buf(F₁) + buf(F₂) + … + buf(Fₙ) = buf(unfiltered)
 ```
 
-This equality holds **exactly** in the linear XYZ color space. It is a direct consequence
-of the linearity of the accumulation pass: each ray's XYZ contribution is counted in
-exactly one `buf(Fᵢ)`.
+This equality holds **exactly** in the linear XYZ color space. It is a direct
+consequence of the linearity of the accumulation pass: each ray's XYZ contribution
+lands in exactly one `buf(Fᵢ)`.
 
 ### 4.2 sRGB Pixel Level — Not Additive
 
@@ -142,95 +145,23 @@ sRGB(buf(F₁)) + sRGB(buf(F₂)) ≠ sRGB(buf(F₁) + buf(F₂))
 ```
 
 In practice, the visual discrepancy is small for typical halo scenes (the gamma curve is
-nearly linear for dim pixels and the brightening effect is modest for bright ones), but the
-equality does not hold in general.
+nearly linear for dim pixels and the brightening effect is modest for bright ones), but
+the equality does not hold in general.
 
 **Summary**:
 
-| | XYZ linear space | sRGB pixel space |
+| Composition | XYZ linear space | sRGB pixel space |
 |---|---|---|
-| Off mode, complementary filters | ✅ Exactly additive | ❌ Not additive (gamma nonlinearity) |
-| On mode | ❌ No additivity guarantee | ❌ No additivity guarantee |
-
-### 4.3 On Mode
-
-In **On** mode each filter uses its own private anchor, so the normalization factors differ
-between filters. Adding two normalized pixel buffers has no physical interpretation. Off
-mode should be used when comparing or combining filter outputs.
+| Complementary filters with shared anchor | ✅ Exactly additive | ❌ Not additive (gamma nonlinearity) |
 
 ---
 
-## 5. Tooltip Wording Rationale
+## 5. F1 Anchor Lane Mechanism
 
-The GUI shows a `(?)` info icon next to the Adaptive Brightness checkbox. Hovering
-it displays:
-
-> ON (default): EV anchored to the current filtered image.
->   Filter switches may shift brightness. Simulation is fast.
-> OFF: EV anchored to the filter-independent physical baseline.
->   Brightness is stable when switching filters.
->   Simulation is slower (~2x for high multi-scatter probability scenes).
-> Switching this mode re-runs the simulation.
-
-The wording intentionally avoids technical terms such as "XYZ linear space", "P99
-percentile", or "sRGB gamma". The tooltip targets general users who do not have a color
-science background. The key distinction is expressed in user-outcome terms:
-
-- **ON**: each filter adapts its brightness scale to the visible rays — useful for
-  inspecting a dim arc that would otherwise be invisible. Fast because no extra work.
-- **OFF**: all filter configurations share the same physical brightness scale, so
-  outputs are directly comparable. Costs extra simulation work for the anchor lane.
-
-Contributors who need the technical specification should consult this document and
-`src/gui/gui_ev_auto.hpp`.
-
----
-
-## 5b. Historical: Behavior Change Notice (task-query-filter-uplift-v2)
-
-Prior to this change, the simulator marked any ray that failed a configured
-`scattering.entries[].filter` as stopped (the pre-T2 `kStopped` state, since
-folded into the `IsTir()` predicate), so it never reached the consumer's
-"unfiltered" accumulator. As a result, `unfiltered_xyz_buffer` was actually
-*post-filter*, and Off-mode EV was indirectly sensitive to the filter — violating
-the additivity invariant described in §4.
-
-The fix demotes the simulator-side filter to a pure branch gate (controlling
-the multi-scatter `IsContinue()` bit only), so filter-fail rays are emitted as
-`IsOutgoing()` and the consumer's Path B accumulates the true unfiltered set.
-
-**User-visible consequence**:
-
-- Scenes that previously configured a low-pass-rate filter (e.g. a raypath
-  filter where only a small percentage of rays survive) will see Off-mode EV
-  shift toward "darker" because the anchor is now the full ray set rather than
-  the post-filter subset. A ~0.1%-pass-rate filter can lower the Off-mode anchor
-  by roughly 10 stops.
-- On-mode behaviour is unchanged.
-- The filtered ("On-mode") XYZ buffer and final rendered image at a given EV
-  are unchanged.
-
-If you relied on the previous Off-mode behaviour, switch to On mode or adjust
-the manual EV offset.
-
----
-
-## 5c. Off Mode Redesign — F1 Anchor Lane (scrum-221)
-
-> **Note**: this section replaces the earlier "task-revert (219.4) pending state"
-> description. The Off mode redesign was implemented in scrum-221
-> (`feat: F1 mode-toggle + anchor lane`).
-
-After task-revert (219.4) restored Design A (filter on simulator side), the
-`unfiltered_xyz_buffer` equalled `xyz_buffer`, making Off mode meaningless. scrum-221
-redesigned Off mode via a parallel **anchor lane** inside the simulator.
-
-### F1 Mechanism
-
-When Off mode is active, the simulator runs a secondary collection pass:
+When a filter spec is active, the simulator runs a parallel anchor-lane pass:
 
 ```
-crystal exit
+crystal exit (outgoing candidate)
     │
     ├─ filter passes  →  xyz_buffer  +  anchor lane
     │
@@ -238,36 +169,65 @@ crystal exit
                          (not rendered; contributes to EV anchor only)
 ```
 
-The anchor lane accumulates filter-pass + filter-fail emission. The C API exposes this
-via `LUMICE_RawXyzResult.anchor_p99_y` and `anchor_snapshot_intensity`. The GUI
-(`SyncFromPoller()` in `src/gui/app.cpp`) uses these to compute the EV offset when
-Off mode is active.
+The anchor lane accumulates filter-pass + filter-fail emission. The C API exposes the
+P99 and intensity via `LUMICE_RawXyzResult.anchor_p99_y` and `anchor_snapshot_intensity`.
+The GUI (`SyncFromPoller()` in `src/gui/app.cpp`) uses these to compute the EV offset.
 
-This restores the additivity invariant (§4.1): all filter configurations in a run share
-the same EV scale because the anchor is derived from the full emission.
+The branch table inside `CollectData` (see `src/core/simulator.cpp`) is:
 
-### ABI Change
+```
+filter-pass + prob-pass → IsContinue()      (next MS scatter)
+filter-pass + prob-fail → IsOutgoing()      (emit, contributes to xyz_buffer + anchor)
+filter-fail + prob-pass → IsContinue()      (anchor-lane bypass — propagates)
+filter-fail + prob-fail → IsFilterDropped() (anchor lane only)
+```
 
-The old `unfiltered_xyz_buffer` and `unfiltered_snapshot_intensity` fields from task-200
-were removed in the scrum-221 ABI swap. Use `anchor_p99_y` and `anchor_snapshot_intensity`
-for Off mode EV anchoring. See `doc/filter-architecture.md §7` for details.
+`IsContinue()` and `IsFilterDropped()` are mutually exclusive. See
+`doc/filter-architecture.md §7` for the full design rationale.
 
 ---
 
-## 6. References
+## 6. Historical Notes
+
+### 6.1 Pre-task-query-filter-uplift-v2 — Unfiltered Buffer Behavior
+
+Prior to task-query-filter-uplift-v2 the simulator marked any ray that failed a
+configured `scattering.entries[].filter` as stopped (the pre-T2 `kStopped` state, since
+folded into the `IsTir()` predicate), so it never reached the consumer's "unfiltered"
+accumulator. As a result, `unfiltered_xyz_buffer` was actually *post-filter*, and the
+EV anchor was indirectly sensitive to the filter.
+
+The fix demoted the simulator-side filter to a pure branch gate (controlling the
+multi-scatter `IsContinue()` bit only) so filter-fail rays were emitted as
+`IsOutgoing()` and the consumer's Path B accumulated the true unfiltered set.
+
+### 6.2 scrum-221 — Mode-Gated F1
+
+scrum-221 introduced a GUI Adaptive Brightness ON/OFF toggle that selected between
+per-frame self-anchor (ON, Design A) and the F1 anchor lane (OFF). The toggle and
+Design A path were removed in `task-remove-adaptive-brightness-on-mode` (this revision)
+after internal testing confirmed the F1 anchor produces strictly better UX with
+acceptable performance cost. The anchor-lane implementation is unchanged; only the
+mode dispatch is gone.
+
+---
+
+## 7. References
 
 ### Code Paths
 
 | Component | File | Purpose |
 |-----------|------|---------|
 | Algorithm | `src/gui/gui_ev_auto.hpp` | `ComputeP99Y`, `ComputeEvAuto` |
-| Data-source switch | `src/gui/app.cpp` — `SyncFromPoller()` | ON: `ComputeP99Y(xyz_buffer)` / `snapshot_intensity`; OFF: `anchor_p99_y` / `anchor_snapshot_intensity` |
-| GUI control | `src/gui/app_panels.cpp` | Checkbox + `(?)` tooltip + EV display (`target_white` is fixed at 200, no slider) |
-| Anchor lane | `src/server/render.cpp` — `Consume()` | Accumulates filter-pass + filter-fail emission into the anchor buffer in Off mode |
-| C API fields | `src/include/lumice.h` — `LUMICE_RawXyzResult` | `anchor_p99_y` and `anchor_snapshot_intensity` (Off mode); `xyz_buffer` and `snapshot_intensity` (On mode) |
+| EV source | `src/gui/app.cpp` — `SyncFromPoller()` | Reads `anchor_p99_y` / `anchor_snapshot_intensity` (degenerate fallback to filtered snapshot when both are 0) |
+| GUI display | `src/gui/app_panels.cpp` | `(+N.NN EV auto)` text and `ev_total = exposure_offset + ev_auto` |
+| Anchor lane | `src/server/render.cpp` — `Consume()` | Accumulates filter-pass + filter-fail emission into the anchor buffer when filter is present |
+| Simulator | `src/core/simulator.cpp` — `CollectData()` | F1 branch table; routes filter-fail outgoing to anchor lane |
+| C API fields | `src/include/lumice.h` — `LUMICE_RawXyzResult` | `anchor_p99_y`, `anchor_snapshot_intensity`, `xyz_buffer`, `snapshot_intensity` |
 
 ### Related Documentation
 
+- `doc/filter-architecture.md` §7 — F1 anchor lane design + branch semantics
 - `doc/configuration.md` — full JSON configuration reference
 - `doc/gui-guide.md` — GUI layout and panel overview
 - `doc/raypath-symmetry.md` — ray-path symmetry and filter semantics (P, B, D toggles)
