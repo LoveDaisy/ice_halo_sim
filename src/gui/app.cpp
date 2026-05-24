@@ -237,10 +237,16 @@ static void RefreshCpuTextureForSave() {
   int w = xyz_results[0].img_width;
   int h = xyz_results[0].img_height;
 
-  // Compute intensity_scale using the CURRENT GUI exposure_offset, matching the shader.
-  float intensity_factor = std::pow(2.0f, g_state.renderer.exposure_offset);
-  float per_pixel_intensity = xyz_results[0].snapshot_intensity;
-  float intensity_scale = per_pixel_intensity > 0 ? intensity_factor / per_pixel_intensity : 0.0f;
+  // Compute intensity_scale matching the shader via ev_total = exposure_offset + ev_auto,
+  // with anchor/filtered double-path norm_intensity selection mirroring app_panels.cpp.
+  // anchor_snapshot_intensity is cached g_state (vs xyz_results[0].snapshot_intensity which
+  // is fresh from this LUMICE_GetRawXyzResults call); both come from the same server state
+  // so a ≤1-frame drift is acceptable for .lmc thumbnail.
+  float intensity_factor = std::pow(2.0f, g_state.renderer.exposure_offset + g_state.ev_auto);
+  float norm_intensity = (g_state.anchor_snapshot_intensity > 0.0f && g_state.p99_raw_y > 0.0f) ?
+                             g_state.anchor_snapshot_intensity :
+                             xyz_results[0].snapshot_intensity;
+  float intensity_scale = norm_intensity > 0 ? intensity_factor / norm_intensity : 0.0f;
 
   // Convert XYZ→sRGB on CPU using the same algorithm as the shader
   std::vector<unsigned char> srgb(static_cast<size_t>(w) * h * 3);
@@ -281,13 +287,20 @@ void DoSaveAs() {
 //
 // Formula mirrors app_panels.cpp's live preview path, keeping shader u_intensity_scale
 // byte-identical between preview and export:
-//   intensity_factor = 2^exposure_offset
-//   intensity_scale  = intensity_factor / snapshot_intensity  (0 if snapshot_intensity <= 0)
+//   ev_total         = exposure_offset + ev_auto       (auto-EV from F1 anchor lane)
+//   intensity_factor = 2^ev_total
+//   norm_intensity   = anchor_snapshot_intensity if anchor lane active, else snapshot_intensity
+//   intensity_scale  = intensity_factor / norm_intensity   (0 if norm_intensity <= 0)
+// Dual condition on anchor lane (both anchor_snapshot_intensity > 0 and p99_raw_y > 0)
+// matches app_panels.cpp so the EV numerator and norm denominator come from the same source.
 static PreviewParams BuildExportParams() {
   PreviewParams params = g_preview_vp.params;
-  params.exposure.intensity_factor = std::pow(2.0f, g_state.renderer.exposure_offset);
-  params.exposure.intensity_scale =
-      g_state.snapshot_intensity > 0 ? params.exposure.intensity_factor / g_state.snapshot_intensity : 0.0f;
+  float ev_total = g_state.renderer.exposure_offset + g_state.ev_auto;
+  params.exposure.intensity_factor = std::pow(2.0f, ev_total);
+  float norm_intensity = (g_state.anchor_snapshot_intensity > 0.0f && g_state.p99_raw_y > 0.0f) ?
+                             g_state.anchor_snapshot_intensity :
+                             g_state.snapshot_intensity;
+  params.exposure.intensity_scale = norm_intensity > 0 ? params.exposure.intensity_factor / norm_intensity : 0.0f;
   return params;
 }
 
