@@ -53,7 +53,10 @@
         "type": "fisheye_equal_area",
         "fov": 120
       },
-      "resolution": [128, 128],
+      "resolution": [
+        128,
+        128
+      ],
       "view": {
         "elevation": 20
       }

@@ -405,11 +405,23 @@ void FillRayOtherInfo(size_t curr_ray_num, size_t i,                           /
 
 void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input
                  RayBuffer* buffer_data, RayBuffer* init_data) {                             // output
+  // F1 anchor-lane semantics (see doc/filter-architecture.md §7): the filter is NOT a
+  // mid-trajectory kill. Outgoing candidates that fail the filter are routed into the
+  // anchor lane (IsFilterDropped() == true, collected by the caller into
+  // SimData::anchor_d_/anchor_w_) AND remain eligible for prob-pass continue to the next
+  // MS level. When `spec == nullptr` the anchor lane stays empty (filter always passes)
+  // and the path degenerates to the no-filter case at zero extra cost.
+  //
+  // Branch table for outgoing candidates (to_face_ == kInvalidId, w_ >= 0):
+  //   filter-pass + prob-pass → is_continue_ = true (next MS)
+  //   filter-pass + prob-fail → outgoing (no flag)
+  //   filter-fail + prob-pass → is_continue_ = true (next MS) — anchor lane bypass
+  //   filter-fail + prob-fail → is_filter_dropped_ = true (anchor lane)
+  // is_continue_ and is_filter_dropped_ are mutually exclusive (only one is set).
   for (auto& r : buffer_data[1]) {
-    // Default: not continuing, not filter-dropped. The branch-gate below may
-    // override for outgoing candidates. TIR / Normal / unselected-Outgoing all
-    // stay false; the buffer slot may carry stale `true` values from a prior
-    // round, so explicit reset is required.
+    // Explicit reset: both the original Design A CollectData and CollectDataF1 carried
+    // these resets to guard against stale bool values from pool-reused buffer slots
+    // (a prior round may leave is_continue_=true; TIR/Normal paths below do not write it).
     r.is_continue_ = false;
     r.is_filter_dropped_ = false;
 
@@ -421,20 +433,16 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       r.crystal_rot_.Apply(r.d_);
       r.crystal_rot_.Apply(r.p_);
 
-      // Design A (filter as simulator-side emit-gate): apply filter first; on
-      // fail mark the ray IsFilterDropped() so it is excluded from outgoing
-      // and never reaches the consumer. On pass, branch on prob between
-      // continue (next MS level) and outgoing.
-      // See doc/filter-architecture.md §2.
-      if (spec != nullptr && !spec->Check(r)) {
-        // 1.1 Filter-fail → drop: not outgoing, not continuing.
-        r.is_filter_dropped_ = true;
-      } else if (rng.GetUniform() < ms_info.prob_) {
-        // 1.2 Filter-pass + prob-pass → continue to next ms scatter level.
+      bool filter_pass = (spec == nullptr) || spec->Check(r);
+      if (rng.GetUniform() < ms_info.prob_) {
+        // 1.1 prob-pass → continue regardless of filter result. Filter-fail rays still
+        //     propagate to the next MS level (anchor lane bypass for in-trajectory paths).
         r.is_continue_ = true;
+      } else if (!filter_pass) {
+        // 1.2 filter-fail + prob-fail → anchor lane (not visible in main outgoing).
+        r.is_filter_dropped_ = true;
       }
-      // 1.3 else: filter-pass + prob-fail → emit outgoing (is_continue_ =
-      //     false, is_filter_dropped_ = false → IsOutgoing() = true).
+      // 1.3 else: filter-pass + prob-fail → emit outgoing (no flag set).
     }
     // 2. else: normal rays (to_face_ != kInvalidId && w_ >= 0) — IsNormal() derived; no state write.
 
@@ -555,6 +563,10 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   std::vector<size_t> outgoing_indices;
   std::vector<float> outgoing_d;
   std::vector<float> outgoing_w;
+  // Anchor lane for filter-fail prob-fail outgoing candidates. Stays empty when no filter
+  // is configured (CollectData skips IsFilterDropped writes when spec == nullptr).
+  std::vector<float> anchor_d;
+  std::vector<float> anchor_w;
   auto& init_data = workspace.init_data;
   auto& buffer_data = workspace.buffer_data;
   init_data[0].size_ = 0;
@@ -665,21 +677,28 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
           FillRayOtherInfo(curr_ray_num, i, curr_crystal, all_data,  // input
                            buffer_data);                             // output
 
-          // 2.3 Collect data. And set ray properties: state
+          // 2.3 Collect data. And set ray properties: state.
           CollectData(rng_, m, spec.get(),      // input
                       buffer_data, init_data);  // output
 
-          // 2.4 Copy to all_data + collect outgoing indices
+          // 2.4 Copy to all_data + collect outgoing indices.
+          // CollectData may also produce IsFilterDropped() outgoing-candidates that belong
+          // to the anchor lane (only when a filter spec is present).
           size_t base_index = all_data.size_;
           all_data.EmplaceBack(buffer_data[1]);
           for (size_t j = 0; j < buffer_data[1].size_; j++) {
-            if (buffer_data[1][j].IsOutgoing()) {
+            const auto& r = buffer_data[1][j];
+            if (r.IsOutgoing()) {
               outgoing_indices.push_back(base_index + j);
-              const auto& r = buffer_data[1][j];
               outgoing_d.push_back(r.d_[0]);
               outgoing_d.push_back(r.d_[1]);
               outgoing_d.push_back(r.d_[2]);
               outgoing_w.push_back(r.w_);
+            } else if (r.IsFilterDropped()) {
+              anchor_d.push_back(r.d_[0]);
+              anchor_d.push_back(r.d_[1]);
+              anchor_d.push_back(r.d_[2]);
+              anchor_w.push_back(r.w_);
             }
           }
         }  // hit loop
@@ -713,6 +732,8 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   sim_data.outgoing_indices_ = std::move(outgoing_indices);
   sim_data.outgoing_d_ = std::move(outgoing_d);
   sim_data.outgoing_w_ = std::move(outgoing_w);
+  sim_data.anchor_d_ = std::move(anchor_d);
+  sim_data.anchor_w_ = std::move(anchor_w);
   sim_data.root_ray_count_ = original_ray_num;
   data_queue_->Emplace(std::move(sim_data));
 }

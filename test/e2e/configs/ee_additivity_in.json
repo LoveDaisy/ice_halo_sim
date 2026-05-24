@@ -28,13 +28,10 @@
   "filter": [
     {
       "id": 1,
-      "type": "raypath",
-      "action": "filter_out",
-      "raypath": [
-        4,
-        6
-      ],
-      "symmetry": "none"
+      "type": "entry_exit",
+      "action": "filter_in",
+      "entry": 3,
+      "exit": 5
     }
   ],
   "scene": {

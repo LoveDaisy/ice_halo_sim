@@ -47,7 +47,7 @@
     "max_hits": 7,
     "scattering": [
       {
-        "prob": 0.0,
+        "prob": 0.3,
         "entries": [
           {
             "crystal": 1,

@@ -525,6 +525,8 @@ static RenderConfig ParseRendererFromGuiJson(const json& jr) {
   }
   r.opacity = jr.value("opacity", RenderConfig{}.opacity);
   r.exposure_offset = jr.value("exposure_offset", RenderConfig{}.exposure_offset);
+  // Older .lmc payloads carry an "adaptive_brightness_mode" key; nlohmann's value(...) ignores
+  // unknown keys, so no migration code is needed — the field becomes a silent no-op.
   return r;
 }
 

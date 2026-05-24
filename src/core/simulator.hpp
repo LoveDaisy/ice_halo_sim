@@ -86,11 +86,14 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& propo
 // derived from (to_face_, w_, is_continue_, is_filter_dropped_); only the
 // IsContinue() and IsFilterDropped() bits are written here.
 //
-// Filter semantics (Design A, see doc/filter-architecture.md §2): the filter
-// is a simulator-side emit-gate. For outgoing candidates, filter-fail rays
-// are marked IsFilterDropped() and excluded from both outgoing and continue;
-// filter-pass rays then branch on prob between continue (next MS level) and
-// outgoing. The consumer no longer applies a query filter.
+// Filter semantics (F1 anchor lane, see doc/filter-architecture.md §7):
+// outgoing candidates whose filter check fails are routed into the anchor lane
+// (IsFilterDropped() == true, collected by the caller into
+// SimData::anchor_d_/anchor_w_) AND remain eligible for prob-pass continue to
+// the next MS level. Filter-pass + prob-pass → continue; filter-pass +
+// prob-fail → emit outgoing. When `spec == nullptr` the anchor lane stays
+// empty (filter always passes) and the path degenerates to the no-filter case
+// at zero extra cost.
 //
 // Internal: exposed for unit testing; not part of the public C API.
 void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input

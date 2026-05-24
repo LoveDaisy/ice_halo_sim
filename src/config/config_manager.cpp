@@ -8,7 +8,6 @@
 #include "config/light_config.hpp"
 #include "config/render_config.hpp"
 #include "core/def.hpp"
-#include "util/logger.hpp"
 
 namespace lumice {
 

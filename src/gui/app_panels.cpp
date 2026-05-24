@@ -547,27 +547,6 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     }
     SliderWithInput("EV##display", &r.exposure_offset, -6.0f, 6.0f, "%.1f");
 
-    // Design A (task-revert-filter-to-simulator-side): OFF mode would compare
-    // unfiltered baselines, but with simulator-side filter unfiltered ≡ filtered,
-    // so OFF mode is hard-disabled here. Code path retained as scaffolding for
-    // the future Design-A-based redesign (see backlog).
-    ImGui::BeginDisabled(true);
-    ImGui::Checkbox("Adaptive Brightness##display", &g_state.auto_ev_enabled);
-    ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
-      ImGui::SetTooltip(
-          "OFF mode unavailable: simulator-side filter makes unfiltered == filtered.\n"
-          "Pending redesign on Design A baseline (see backlog).");
-    }
-    if (g_state.auto_ev_enabled) {
-      ImGui::SameLine();
-      if (g_state.p99_raw_y > 0.0f) {
-        ImGui::TextDisabled("(+%.2f EV)", g_state.ev_auto);
-      } else {
-        ImGui::TextDisabled("(no data)");
-      }
-    }
-
     ImGui::SeparatorText("Aspect Ratio");
     int preset_idx = static_cast<int>(g_state.aspect_preset);
     const char* preview_label = kAspectPresetNames[preset_idx];
@@ -810,13 +789,18 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     g_preview_vp.vp_h = static_cast<int>(preview_height * scale_y);
     auto& pp = g_preview_vp.params;
     pp.view_proj = BuildPreviewViewProjFromRenderer(rc);
-    float ev_total = rc.exposure_offset + (g_state.auto_ev_enabled ? g_state.ev_auto : 0.0f);
+    // Auto-EV (ev_auto) is always summed in: see app.cpp SyncFromPoller, which feeds
+    // ev_auto from the F1 anchor lane when present and from the filtered snapshot when
+    // not (degenerate path). The numerator (ev_auto) and denominator (norm_intensity)
+    // must come from the same source — both follow the anchor when available.
+    float ev_total = rc.exposure_offset + g_state.ev_auto;
     pp.exposure.intensity_factor = std::pow(2.0f, ev_total);
-    // ON mode normalizes by filtered intensity (per-buffer auto-EV); OFF mode normalizes by
-    // unfiltered intensity so the live preview stays consistent with the OFF-mode EV anchor
-    // computed in app.cpp (filter-independent absolute brightness).
-    const float norm_intensity =
-        g_state.auto_ev_enabled ? g_state.snapshot_intensity : g_state.unfiltered_snapshot_intensity;
+    // Dual-condition mirrors SyncFromPoller: anchor lane is active only when both
+    // anchor_p995_y and anchor_snapshot_intensity are positive, keeping the ev_auto
+    // numerator and norm_intensity denominator from the same data source.
+    float norm_intensity = (g_state.anchor_snapshot_intensity > 0.0f && g_state.p995_raw_y > 0.0f) ?
+                               g_state.anchor_snapshot_intensity :
+                               g_state.snapshot_intensity;
     pp.exposure.intensity_scale = norm_intensity > 0 ? pp.exposure.intensity_factor / norm_intensity : 0.0f;
     // Overlap parameters for dual fisheye texture sampling.
     pp.source.max_abs_dz = kDualFisheyeOverlap;

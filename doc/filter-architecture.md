@@ -200,51 +200,99 @@ to the routing decision.  task-revert (219.4) migrates the filter *call sites* (
 Retained components: `src/core/filter_spec.{hpp,cpp}`, the per-batch `specs_table`
 call in the simulator, and the scrum-210 test suite.
 
-### scrum-prob-zero-leak / #219 (2026-05-22) — Authoritative baseline
+### scrum-prob-zero-leak / #219 (2026-05-22) — Design A baseline
 
 This scrum audited the task-200 bugs, evaluated revert options, and adopted Design A
-as the canonical routing model.  The unfiltered-* C API fields are retained with
-degraded semantics (§7); adaptive brightness Off mode is temporarily disabled (§7).
-Future work items (adaptive brightness Off mode redesign, additivity testing in Design A,
-unfiltered baseline) are tracked in the project backlog.
+as the canonical routing model.  Off mode redesign was tracked as a backlog item.
+
+### scrum-221 (adaptive-additivity-redesign, 2026-05-24) — Off mode redesign shipped
+
+Implemented Off mode via F1 anchor lane (see §7).  ABI swap removed `unfiltered_*`
+fields and introduced `anchor_p99_y` / `anchor_snapshot_intensity` (renamed to
+`anchor_p995_y` in apply-new-defaults).  Additivity testing
+(partition invariant) added to the E2E test suite.
 
 ---
 
-## §7 C API Deprecation and GUI Off-mode Temporary Disable
+## §7 F1 Anchor Lane (Single-Mode)
 
-### `LUMICE_RawXyzResult` — Deprecated Fields
+> **Historical note**: scrum-221 introduced a GUI Adaptive Brightness ON/OFF toggle that
+> selected between Design A (per-frame self-anchor) and the F1 anchor lane.
+> `task-remove-adaptive-brightness-on-mode` (this revision) removed the toggle and the
+> Design A path after internal testing confirmed F1 produces strictly better UX with
+> acceptable performance cost. Only the mode dispatch is gone — the anchor-lane
+> implementation is unchanged.
 
-The following fields were introduced by task-200 and are **retained for ABI compatibility**
-after task-revert, but their semantics are degraded:
+### `LUMICE_RawXyzResult` Anchor Fields
 
-| Field | task-200 semantics | Post-revert semantics |
-|-------|-------------------|----------------------|
-| `unfiltered_xyz_buffer` | all outgoing rays before consumer-side filter | **equals** `xyz_buffer` (filtered = unfiltered because filter is now simulator-side) |
-| `unfiltered_snapshot_intensity` | per-pixel intensity for unfiltered rays | **equals** `snapshot_intensity` |
+`LUMICE_RawXyzResult` exposes the anchor lane via two fields (see `src/include/lumice.h`):
 
-**Status**: `DEPRECATED`.  Callers should use `xyz_buffer` and `snapshot_intensity`.
-Do not rely on `unfiltered_*` being different from `filtered_*`.
+| Field | Semantics |
+|-------|-----------|
+| `anchor_p995_y` | P99.5 of Y over filter-pass + filter-fail emission combined (filter-independent EV anchor). Zero when no filter is configured (anchor lane is empty). |
+| `anchor_snapshot_intensity` | Per-pixel landed intensity for the same combined set. Zero when no filter is configured. |
 
-The true redesign of "unfiltered baseline" and "additivity testing" in Design A is tracked
-as a future backlog item: *"Adaptive Brightness Off mode + additivity testing: redesign on
-Design A baseline"*.
+The pre-scrum-221 `unfiltered_xyz_buffer` / `unfiltered_snapshot_intensity` fields
+introduced by task-200 stay removed (they degenerated to equality with the post-filter
+buffer after task-revert).
 
-See `src/include/lumice.h` for the DEPRECATED annotation on these fields.
+### EV Offset Source
 
-### GUI Adaptive Brightness — Off Mode Temporarily Disabled
+The EV offset (loosely ε; formally `ev = log2(target_linear / p99_norm)`) is sourced
+from the F1 anchor lane, with a graceful degenerate path when no filter is active:
 
-After task-revert, the GUI **hard-disables** the Adaptive Brightness Off-mode toggle
-(toggle grayed out, tooltip explains the situation).
+```
+filter present:  ev = log2(target_linear / (anchor_p995_y / anchor_snapshot_intensity))
+                 (F1 combined anchor; filter-independent)
 
-**Reason**: in Design A, `unfiltered_xyz_buffer` equals `xyz_buffer`, so Off mode and On
-mode produce the same EV anchor — there is no meaningful difference.  More importantly,
-if a scene has a highly-selective filter, the EV anchor under Off mode would be computed
-from the same filtered set as On mode, removing the ~10-stop brightness jump that Off mode
-was designed to prevent.  Until Off mode is redesigned on the Design A baseline, it is
-safer to disable it than to expose a silently-wrong UX.
+no filter:       ev = log2(target_linear / (ComputeP995Y(xyz_buffer) / snapshot_intensity))
+                 (anchor_p995_y == 0 → fallback; equals filtered self-anchor since
+                  xyz_buffer == full emission when no filter is configured)
+```
 
-See `doc/adaptive-brightness.md` §5b and §6 for code path references and the pre-revert
-behavior change notice.
+The GUI (`SyncFromPoller()` in `src/gui/app.cpp`) performs this selection on each frame.
+
+### Anchor Lane
+
+When a filter spec is active, the simulator runs a secondary collection pass alongside
+the normal filter-pass path:
+
+```
+crystal exit (outgoing candidate)
+    │
+    ├─ filter passes  →  xyz_buffer  +  anchor lane
+    │
+    └─ filter fails   →  anchor lane only
+                         (not rendered; contributes to EV anchor only)
+```
+
+`CollectData()` in `src/core/simulator.cpp` implements the branch table:
+
+| filter | prob | outcome |
+|--------|------|---------|
+| pass | pass | `IsContinue()` — next MS scatter |
+| pass | fail | `IsOutgoing()` — emit (contributes to `xyz_buffer` and anchor) |
+| fail | pass | `IsContinue()` — anchor-lane bypass (propagates to next MS) |
+| fail | fail | `IsFilterDropped()` — anchor lane only |
+
+`IsContinue()` and `IsFilterDropped()` are mutually exclusive.
+
+`RenderConsumer::Consume()` in `src/server/render.cpp` accumulates anchor emission into
+the anchor buffer, gated by `data.anchor_d_.empty()` so the path is naturally inert when
+no filter spec is configured (no `IsFilterDropped` writes → empty anchor → no allocation).
+`PrepareSnapshot()` exposes `anchor_p995_y` and `anchor_snapshot_intensity` to the C API.
+
+### Performance
+
+Anchor overhead scales with the filter-fail ray volume:
+
+- `ms_prob ≈ 0`: filter-fail rays are rare; overhead is negligible (~0%).
+- `ms_prob ≈ 0.5`: roughly half of rays fail the filter; overhead is approximately
+  +97% (~2× simulation time).
+
+With no filter the anchor lane stays empty and the cost is zero.
+
+See `doc/adaptive-brightness.md` for the additivity invariant and full EV semantics.
 
 ---
 
@@ -269,7 +317,7 @@ anchor points for future contributors:
 | Filter ↔ crystal per-entry config | `src/config/proj_config.hpp` — `ScatteringSetting` |
 | Simulator-side filter check (Design A gate) | `src/core/simulator.cpp` — `CollectData()` |
 | FilterSpec algorithm interface | `src/core/filter_spec.hpp` |
-| C API `unfiltered_*` deprecated fields | `src/include/lumice.h` — `LUMICE_RawXyzResult` |
+| C API anchor fields (F1 anchor lane) | `src/include/lumice.h` — `LUMICE_RawXyzResult.anchor_p995_y` / `anchor_snapshot_intensity` |
 | Filter JSON schema | `doc/configuration.md` |
 | Raypath semantics, P/B/D filter toggles | `doc/raypath-symmetry.md` |
 | Adaptive Brightness Off mode, additivity | `doc/adaptive-brightness.md` |

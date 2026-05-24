@@ -30,7 +30,10 @@
       "id": 1,
       "type": "raypath",
       "action": "filter_in",
-      "raypath": [4, 6],
+      "raypath": [
+        4,
+        6
+      ],
       "symmetry": "none"
     }
   ],
@@ -62,7 +65,10 @@
         "type": "fisheye_equal_area",
         "fov": 120
       },
-      "resolution": [128, 128],
+      "resolution": [
+        128,
+        128
+      ],
       "view": {
         "elevation": 20
       }

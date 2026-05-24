@@ -46,7 +46,7 @@ struct LensParam {
   float fov_;
 };
 
-NLOHMANN_JSON_SERIALIZE_ENUM(  // declear
+NLOHMANN_JSON_SERIALIZE_ENUM(  // declare
     LensParam::LensType,       // type
     {
         { LensParam::kLinear, "linear" },
@@ -97,7 +97,7 @@ struct RenderConfig {
   bool celestial_outline_ = true;
 };
 
-NLOHMANN_JSON_SERIALIZE_ENUM(    // declear
+NLOHMANN_JSON_SERIALIZE_ENUM(    // declare
     RenderConfig::VisibleRange,  // type
     {
         { RenderConfig::kUpper, "upper" },

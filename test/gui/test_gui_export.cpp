@@ -176,11 +176,17 @@ static AcState g_ac_state;
 // Compute intensity_scale for export using the AcState.exposure_offset (not the
 // current GUI state). Matches app.cpp::BuildExportParams behavior so tests can
 // probe the EV-follows-export invariant independently of any live slider.
+// Mirrors production: ev_total = exposure_offset + g_state.ev_auto, with
+// anchor/filtered double-path norm_intensity (AC4 still passes since g_state.ev_auto
+// defaults to 0 and anchor_snapshot_intensity defaults to 0 → falls through to filtered).
 static gui::PreviewParams BuildAcExportParams(float exposure_offset) {
   gui::PreviewParams params = gui::g_preview_vp.params;
-  params.exposure.intensity_factor = std::pow(2.0f, exposure_offset);
-  params.exposure.intensity_scale =
-      gui::g_state.snapshot_intensity > 0 ? params.exposure.intensity_factor / gui::g_state.snapshot_intensity : 0.0f;
+  float ev_total = exposure_offset + gui::g_state.ev_auto;
+  params.exposure.intensity_factor = std::pow(2.0f, ev_total);
+  float norm_intensity = (gui::g_state.anchor_snapshot_intensity > 0.0f && gui::g_state.p995_raw_y > 0.0f) ?
+                             gui::g_state.anchor_snapshot_intensity :
+                             gui::g_state.snapshot_intensity;
+  params.exposure.intensity_scale = norm_intensity > 0 ? params.exposure.intensity_factor / norm_intensity : 0.0f;
   return params;
 }
 
@@ -1049,6 +1055,123 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       fprintf(stderr, "[ACI2] preview-vs-export parity PSNR = %.2f dB\n", psnr);
       // 40 dB: well above the "identical up to rounding" bar (expect effectively
       // infinite in practice on stable drivers).
+      IM_CHECK(psnr >= 40.0);
+    };
+  }
+
+  // AC5: ev_auto is summed into export intensity_factor. Pre-fix, BuildExportParams
+  // ignored g_state.ev_auto and only used exposure_offset, producing darker exports
+  // than the on-screen preview when adaptive brightness was active. With the fix,
+  // ev_auto = +2 must brighten the export the same way exposure_offset = +2 would.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "export", "ac5_ev_auto_applied");
+    static bool s_xyz_uploaded = false;
+    t->GuiFunc = [](ImGuiTestContext* /*ctx*/) {
+      AcGuiFunc(nullptr);
+      if (!s_xyz_uploaded) {
+        UploadUniformXyzTexture(0.08f);
+        gui::g_state.snapshot_intensity = 1.0f;
+        // Force anchor lane off so norm_intensity falls through to snapshot_intensity.
+        gui::g_state.anchor_snapshot_intensity = 0.0f;
+        gui::g_state.p995_raw_y = 0.0f;
+        s_xyz_uploaded = true;
+      }
+    };
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_ac_state.Reset();
+      s_xyz_uploaded = false;
+
+      ctx->Yield(3);
+      IM_CHECK(s_xyz_uploaded);
+      ctx->Yield(2);
+
+      // ev_auto = 0, exposure_offset = 0 → baseline
+      gui::g_state.ev_auto = 0.0f;
+      g_ac_state.Reset();
+      g_ac_state.exposure_offset = 0.0f;
+      g_ac_state.requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_ac_state.done);
+      IM_CHECK(g_ac_state.ok);
+      double mean_a = ComputeMeanLuma(g_ac_state.rgba);
+
+      // ev_auto = +2, exposure_offset = 0 → should brighten ~4x (clipped by sRGB)
+      gui::g_state.ev_auto = 2.0f;
+      g_ac_state.Reset();
+      g_ac_state.exposure_offset = 0.0f;
+      g_ac_state.requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_ac_state.done);
+      IM_CHECK(g_ac_state.ok);
+      double mean_b = ComputeMeanLuma(g_ac_state.rgba);
+
+      // Restore ev_auto to avoid leaking state into later tests.
+      gui::g_state.ev_auto = 0.0f;
+
+      fprintf(stderr, "[AC5] mean_a=%.4f mean_b=%.4f (ev_auto+2 / ev_auto0 = %.2fx)\n", mean_a, mean_b,
+              mean_a > 0.0 ? mean_b / mean_a : 0.0);
+
+      constexpr double kMinMeanThreshold = 5.0 / 255.0;
+      IM_CHECK(mean_a > kMinMeanThreshold);
+      // 1.3x mirrors AC4's sRGB-clip-aware bound: actual ratio is closer to 4x.
+      IM_CHECK(mean_b > 1.3 * mean_a);
+    };
+  }
+
+  // AC6: Manual EV (exposure_offset) and auto EV (ev_auto) are interchangeable —
+  // adding +2 EV via either path produces byte-identical export output, because
+  // BuildExportParams sums them into a single ev_total. Pre-fix, only exposure_offset
+  // contributed to export intensity_factor, so the two paths would diverge.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "export", "ac6_export_screen_parity");
+    static bool s_xyz_uploaded = false;
+    t->GuiFunc = [](ImGuiTestContext* /*ctx*/) {
+      AcGuiFunc(nullptr);
+      if (!s_xyz_uploaded) {
+        UploadUniformXyzTexture(0.08f);
+        gui::g_state.snapshot_intensity = 1.0f;
+        gui::g_state.anchor_snapshot_intensity = 0.0f;
+        gui::g_state.p995_raw_y = 0.0f;
+        s_xyz_uploaded = true;
+      }
+    };
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_ac_state.Reset();
+      s_xyz_uploaded = false;
+
+      ctx->Yield(3);
+      IM_CHECK(s_xyz_uploaded);
+      ctx->Yield(2);
+
+      // Path A: +2 EV via exposure_offset (manual slider) — same as AC4 EV=+2.
+      gui::g_state.ev_auto = 0.0f;
+      g_ac_state.Reset();
+      g_ac_state.exposure_offset = 2.0f;
+      g_ac_state.requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_ac_state.done);
+      IM_CHECK(g_ac_state.ok);
+      std::vector<unsigned char> rgba_manual = std::move(g_ac_state.rgba);
+
+      // Path B: +2 EV via ev_auto (adaptive brightness lane).
+      gui::g_state.ev_auto = 2.0f;
+      g_ac_state.Reset();
+      g_ac_state.exposure_offset = 0.0f;
+      g_ac_state.requested = true;
+      ctx->Yield(2);
+      IM_CHECK(g_ac_state.done);
+      IM_CHECK(g_ac_state.ok);
+      std::vector<unsigned char> rgba_auto = std::move(g_ac_state.rgba);
+
+      // Restore ev_auto to avoid leaking state into later tests.
+      gui::g_state.ev_auto = 0.0f;
+
+      IM_CHECK_EQ(rgba_manual.size(), rgba_auto.size());
+      double psnr = ComputePsnrRgba(rgba_manual, rgba_auto);
+      fprintf(stderr, "[AC6] manual-EV vs auto-EV parity PSNR = %.2f dB\n", psnr);
+      // 40 dB: expect effectively infinite (both paths compute identical params).
       IM_CHECK(psnr >= 40.0);
     };
   }

@@ -752,8 +752,8 @@ LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzRes
     out[i].has_valid_data = results[i].has_valid_data_ ? 1 : 0;
     out[i].snapshot_generation = results[i].snapshot_generation_;
     out[i].effective_pixels = results[i].effective_pixels_;
-    out[i].unfiltered_xyz_buffer = results[i].unfiltered_xyz_buffer_;
-    out[i].unfiltered_snapshot_intensity = results[i].unfiltered_snapshot_intensity_;
+    out[i].anchor_p995_y = results[i].anchor_p995_y_;
+    out[i].anchor_snapshot_intensity = results[i].anchor_snapshot_intensity_;
   }
 
   // Sentinel — only when caller provided an extra slot (count < max_count)

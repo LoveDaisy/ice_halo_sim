@@ -5,6 +5,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdlib>
 #include <fstream>
 #include <memory>
 #include <mutex>
@@ -166,8 +167,28 @@ ServerImpl::ServerImpl(int num_workers)
     : config_manager_{}, scene_queue_(std::make_shared<Queue<SimBatch>>()),
       data_queue_(std::make_shared<Queue<SimData>>()), status_(ServerStatus::kIdle) {
   int worker_count = num_workers > 0 ? num_workers : kDefaultSimulatorCnt;
+  // LUMICE_SIM_SEED (internal-only, test-facing): when set, deterministically seed
+  // worker simulators as base_seed + worker_index. Multi-worker batch dispatch via
+  // scene_queue is racy (FIFO queue popped by competing threads), so a seeded run
+  // still produces non-deterministic batch→worker mappings and ~1-2% snapshot drift.
+  // To get bit-stable e2e comparisons (anchor-invariant partition test) we collapse
+  // to a single worker whenever a seed is supplied: one RNG, one consumer of a FIFO
+  // queue. Loses parallelism for the seeded test path only; production paths (no env
+  // var) keep their hardware_concurrency default.
+  uint32_t base_seed = 0;
+  if (const char* seed_env = std::getenv("LUMICE_SIM_SEED")) {
+    try {
+      base_seed = static_cast<uint32_t>(std::stoul(seed_env));
+    } catch (...) {
+      base_seed = 0;
+    }
+  }
+  if (base_seed != 0) {
+    worker_count = 1;
+  }
   for (int i = 0; i < worker_count; i++) {
-    simulators_.emplace_back(scene_queue_, data_queue_);
+    uint32_t worker_seed = base_seed != 0 ? base_seed + static_cast<uint32_t>(i) : 0;
+    simulators_.emplace_back(scene_queue_, data_queue_, worker_seed);
   }
 
   // Spawn persistent threads — they start in cv.wait(), not working.

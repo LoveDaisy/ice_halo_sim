@@ -704,14 +704,11 @@ TEST_F(ServerLifecycleApi, GetRawXyzResults) {
   EXPECT_EQ(out[0].img_height, 400);
   EXPECT_NE(out[0].xyz_buffer, nullptr);
   EXPECT_NE(out[0].has_valid_data, 0);
-  // AC-2: unfiltered buffer is populated after simulation
-  EXPECT_NE(out[0].unfiltered_xyz_buffer, nullptr);
-  EXPECT_GT(out[0].unfiltered_snapshot_intensity, 0.0f);
-  // AC-4a (smoke): MakeSmallSimConfigJson has no filter; unfiltered == filtered
-  // Path A in Consume() re-runs SpectrumToXyz with same w_buf_/xy_buf_,
-  // so intensities and buffers are exactly equal.
-  EXPECT_FLOAT_EQ(out[0].unfiltered_snapshot_intensity, out[0].snapshot_intensity);
-  EXPECT_FLOAT_EQ(out[0].unfiltered_xyz_buffer[0], out[0].xyz_buffer[0]);
+  // Default mode is Adaptive Brightness ON (Design A): the anchor lane is not allocated, so
+  // both anchor fields stay at 0. OFF-mode coverage lives in test_additivity.py / dedicated
+  // OFF-mode unit tests; this test only guards the ON-mode default contract.
+  EXPECT_FLOAT_EQ(out[0].anchor_p995_y, 0.0f);
+  EXPECT_FLOAT_EQ(out[0].anchor_snapshot_intensity, 0.0f);
 
   // Sentinel: xyz_buffer == NULL marks end of array
   EXPECT_EQ(out[1].xyz_buffer, nullptr);

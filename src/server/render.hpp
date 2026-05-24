@@ -32,17 +32,26 @@ class RenderConsumer : public IConsume {
   float short_pix_ = 0;
   float total_intensity_ = 0;
   float snapshot_intensity_ = 0;
-  // Design A: unfiltered_snapshot_intensity_ mirrors snapshot_intensity_;
-  // retained as a separate field only because GetRawXyzResult exposes it
-  // through the stable C ABI (LUMICE_RawXyzResult). See doc/filter-architecture.md §7.
-  float unfiltered_snapshot_intensity_ = 0;
   int effective_pix_ = 0;  // Non-zero pixel count from last PrepareSnapshot
   std::unique_ptr<float[]> internal_xyz_;
   std::unique_ptr<float[]> snapshot_xyz_;
-  // Design A: unfiltered_snapshot_xyz_ mirrors snapshot_xyz_ (ABI retention).
-  std::unique_ptr<float[]> unfiltered_snapshot_xyz_;
   std::unique_ptr<float[]> snapshot_work_;            // PostSnapshot work buffer (preserves snapshot_xyz_)
   std::unique_ptr<uint8_t[]> snapshot_image_buffer_;  // produced by PostSnapshot()
+
+  // Anchor lane: lazily populated when a filter spec is active (SimData::anchor_d_/anchor_w_
+  // is non-empty). Accumulates filter-fail outgoing rays; combined with internal_xyz_ at
+  // snapshot time yields filter-independent total emission, so anchor_p995_y_ stays stable
+  // across filter toggles. When no filter is configured the anchor buffers remain unallocated
+  // / zero and SyncFromPoller's degenerate branch falls back to filter-self snapshot.
+  // anchor_total_intensity_ tracks the anchor lane weight (filter-fail outgoing rays only);
+  // the filter-independent total intensity at snapshot time is
+  // anchor_snapshot_intensity_ = snapshot_intensity_ (filter-pass) + anchor_total_intensity_ (filter-fail).
+  // See doc/filter-architecture.md §7.
+  float anchor_total_intensity_ = 0;
+  float anchor_snapshot_intensity_ = 0;
+  float anchor_p995_y_ = 0;
+  std::unique_ptr<float[]> anchor_internal_xyz_;
+  std::unique_ptr<float[]> anchor_snapshot_xyz_;
 
   // Pre-allocated Consume() buffers (grow-only)
   std::unique_ptr<float[]> d_buf_;

@@ -81,13 +81,13 @@ where `snapshot_intensity` is the `LUMICE_RawXyzResult.snapshot_intensity` field
 
 This is a per-pixel-scaled value: `norm_y = 1.0` corresponds to the average scene
 intensity, not absolute physical luminance. The GUI auto-EV algorithm anchors EV
-so that P99 of `norm_y` maps to `target_white` (default 1.0).
+so that P99.5 of `norm_y` maps to `target_white` (default 1.0).
 
 ## Relation to GUI auto-EV
 
 | This tool field | GUI variable | Role |
 |-----------------|-------------|------|
-| `unfiltered.percentiles.p99` | `g_state.p99_raw_y` | P99 anchor for EV computation |
+| `unfiltered.percentiles.p99` | `g_state.p995_raw_y` | Approximate EV anchor (tool outputs P99/0.99; GUI uses P99.5/0.995 — close but not identical) |
 | `unfiltered.percentiles.*` | Upstream of `ComputeEvAuto()` | Auto-EV input |
 | `filtered.*` | Same path (filter-absent scenes) | Reference for filter-on scenes |
 

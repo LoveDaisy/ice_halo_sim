@@ -500,17 +500,18 @@ struct GuiState {
   // Stats from last poll
   unsigned long stats_ray_seg_num = 0;
   unsigned long stats_sim_ray_num = 0;
-  float snapshot_intensity = 0;             // Per-pixel landed intensity for XYZ→RGB normalization
-  float unfiltered_snapshot_intensity = 0;  // Per-pixel unfiltered intensity; updated each texture upload
-  int effective_pixels = 0;                 // Non-zero pixel count for adaptive normalization
-  int norm_mode = 0;                        // 0=absolute, 1=adaptive (not exposed in UI)
-  unsigned long texture_upload_count = 0;   // Cumulative texture uploads (diagnostic counter)
+  float snapshot_intensity = 0;  // Per-pixel landed intensity for XYZ→RGB normalization
+  // Anchor lane intensity: per-pixel filter-pass + filter-fail combined intensity used for EV
+  // anchor normalization. Zero when no filter is configured (anchor lane degenerates).
+  float anchor_snapshot_intensity = 0;
+  int effective_pixels = 0;                // Non-zero pixel count for adaptive normalization
+  int norm_mode = 0;                       // 0=absolute, 1=adaptive (not exposed in UI)
+  unsigned long texture_upload_count = 0;  // Cumulative texture uploads (diagnostic counter)
 
   // Auto-EV runtime state (display layer only, not persisted, not in ConfigSnapshot)
-  float p99_raw_y = 0.0f;       // Un-normalized P99 Y value; updated each texture upload
-  float ev_auto = 0.0f;         // P99-anchored auto-EV in stops; recomputed from p99_raw_y
-  bool auto_ev_enabled = true;  // Display panel toggle
-  float target_white = 200.0f;  // Target P99 brightness on 0-255 sRGB scale
+  float p995_raw_y = 0.0f;      // Un-normalized P99.5 Y value; updated each texture upload
+  float ev_auto = 0.0f;         // P99.5-anchored auto-EV in stops; recomputed from p995_raw_y
+  float target_white = 135.0f;  // Target P99.5 brightness on 0-255 sRGB scale
 
   // Last committed config snapshot (for Revert — config fields only, no runtime state).
   //
@@ -555,10 +556,9 @@ struct GuiState {
 // be audited for matching changes. Apple Silicon + libc++ only (std::vector size varies
 // across stdlib implementations).
 #if defined(__APPLE__) && defined(__aarch64__)
-// Size updated after ID-pool migration (task-gui-linked-entries, 2026-05): adds
-// two std::vector fields (crystals/filters) above the existing layers field;
-// libc++ vector header is 24 bytes each on arm64, so the snapshot grows by 48
-// bytes vs the prior 112-byte layout (now 160).
+// Size remains 160 after task-remove-adaptive-brightness-on-mode: removing
+// gui::RenderConfig::ab_mode_ reclaimed trailing padding only (libc++ vector
+// header alignment dominates the ConfigSnapshot footprint).
 static_assert(sizeof(GuiState::ConfigSnapshot) == 160,
               "GuiState::ConfigSnapshot size changed; audit From()/ApplyTo() implementations below");
 #endif

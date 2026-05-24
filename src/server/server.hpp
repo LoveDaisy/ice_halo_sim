@@ -140,8 +140,12 @@ struct RawXyzResult {
   bool has_valid_data_ = false;       // True after first ConsumeData; reset on Stop
   uint64_t snapshot_generation_ = 0;  // Increments on each new snapshot
   int effective_pixels_ = 0;          // Non-zero pixel count for adaptive normalization
-  const float* unfiltered_xyz_buffer_ = nullptr;
-  float unfiltered_snapshot_intensity_ = 0.0f;
+  // F1 anchor lane outputs. Both fields are 0 when no filter is configured (anchor lane
+  // degenerates) and the GUI falls back to filter-self snapshot.
+  // anchor_p995_y_ is the P99.5 of Y over the *combined* filter-pass + filter-fail emission;
+  // anchor_snapshot_intensity_ is the per-pixel intensity of the same combined set.
+  float anchor_p995_y_ = 0.0f;
+  float anchor_snapshot_intensity_ = 0.0f;
 };
 
 struct StatsResult {
