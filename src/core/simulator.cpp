@@ -419,10 +419,9 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
   //   filter-fail + prob-fail → is_filter_dropped_ = true (anchor lane)
   // is_continue_ and is_filter_dropped_ are mutually exclusive (only one is set).
   for (auto& r : buffer_data[1]) {
-    // Default: not continuing, not filter-dropped. The branch-gate below may
-    // override for outgoing candidates. TIR / Normal / unselected-Outgoing all
-    // stay false; the buffer slot may carry stale `true` values from a prior
-    // round, so explicit reset is required.
+    // Explicit reset: both the original Design A CollectData and CollectDataF1 carried
+    // these resets to guard against stale bool values from pool-reused buffer slots
+    // (a prior round may leave is_continue_=true; TIR/Normal paths below do not write it).
     r.is_continue_ = false;
     r.is_filter_dropped_ = false;
 

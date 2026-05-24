@@ -804,11 +804,13 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     // must come from the same source — both follow the anchor when available.
     float ev_total = rc.exposure_offset + g_state.ev_auto;
     pp.exposure.intensity_factor = std::pow(2.0f, ev_total);
-    // When anchor is active, anchor_snapshot_intensity > 0 implies anchor_p99_y > 0 (any
-    // anchor ray has non-zero Y), so the single-field check is physically equivalent to the
-    // dual-condition used in SyncFromPoller and selects the same data source as ev_auto.
+    // Dual-condition mirrors SyncFromPoller: anchor lane is active only when both
+    // anchor_p99_y and anchor_snapshot_intensity are positive, keeping the ev_auto
+    // numerator and norm_intensity denominator from the same data source.
     float norm_intensity =
-        (g_state.anchor_snapshot_intensity > 0.0f) ? g_state.anchor_snapshot_intensity : g_state.snapshot_intensity;
+        (g_state.anchor_snapshot_intensity > 0.0f && g_state.p99_raw_y > 0.0f)
+            ? g_state.anchor_snapshot_intensity
+            : g_state.snapshot_intensity;
     pp.exposure.intensity_scale = norm_intensity > 0 ? pp.exposure.intensity_factor / norm_intensity : 0.0f;
     // Overlap parameters for dual fisheye texture sampling.
     pp.source.max_abs_dz = kDualFisheyeOverlap;
