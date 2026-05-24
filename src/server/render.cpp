@@ -332,10 +332,9 @@ RenderConsumer::RenderConsumer(RenderConfig config)
       .Chain({ ax_z, config_.view_.az_ * math::kDegreeToRad });
 
   // Anchor buffers (~25 MB each at 2048×1024) are lazily allocated on the first Consume
-  // call that produces filter-fail emission. ON mode never allocates; OFF mode without
-  // any filter also never allocates because the simulator short-circuits to the Design A
-  // collect path (SimData::anchor_d_ stays empty). This keeps OFF-without-filter at parity
-  // with ON-mode memory use. See plan §Step 7 / doc/filter-architecture.md §7.
+  // call that produces filter-fail emission. Without any filter the simulator produces no
+  // filter-fail rays (SimData::anchor_d_ stays empty), so the buffers stay null at zero cost.
+  // See doc/filter-architecture.md §7.
 }
 
 
@@ -505,7 +504,7 @@ void RenderConsumer::Consume(const SimData& data) {
   // allocation, and the GUI's degenerate fallback (anchor_p99_y <= 0) is then taken.
   if (!data.anchor_d_.empty()) {
     if (!anchor_internal_xyz_) {
-      // Lazy allocation: first time we see filter-fail emission in OFF mode.
+      // Lazy allocation: first time we see filter-fail outgoing emission.
       auto pix_count = static_cast<size_t>(config_.resolution_[0]) * config_.resolution_[1] * 3;
       anchor_internal_xyz_ = std::make_unique<float[]>(pix_count);
       anchor_snapshot_xyz_ = std::make_unique<float[]>(pix_count);
@@ -674,7 +673,7 @@ Result RenderConsumer::GetResult() const {
 RawXyzResult RenderConsumer::GetRawXyzResult() const {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   float per_pixel_intensity = total_pix > 0 ? snapshot_intensity_ / (kNormScale * total_pix) : 0.0f;
-  // OFF mode: scalar per-pixel anchor intensity; ON mode (anchor_internal_xyz_ == nullptr) returns 0.
+  // Anchor lane: scalar per-pixel anchor intensity; returns 0 when no filter present (anchor_internal_xyz_ == nullptr).
   float anchor_per_pixel = total_pix > 0 ? anchor_snapshot_intensity_ / (kNormScale * total_pix) : 0.0f;
   return { config_.id_,
            config_.resolution_[0],
@@ -699,8 +698,8 @@ void RenderConsumer::Reset() {
   // has_ever_consumed_ = false (set in Stop) ensures GetRawXyzResults returns has_valid_data_=false
   // until new data arrives, preventing stale snapshot reads.
 
-  // anchor_internal_xyz_ may be null in OFF-without-filter (no filter-fail emission ever produced);
-  // we deliberately do not allocate-on-Reset to preserve the OFF-without-filter zero-cost path.
+  // anchor_internal_xyz_ may be null when no filter is present (no filter-fail emission ever produced);
+  // deliberately not allocated on Reset to preserve the no-filter zero-cost path.
   // anchor_snapshot_xyz_ is not zeroed: PrepareSnapshot will overwrite it before any read.
   if (anchor_internal_xyz_) {
     std::memset(anchor_internal_xyz_.get(), 0, buf_size * sizeof(float));
