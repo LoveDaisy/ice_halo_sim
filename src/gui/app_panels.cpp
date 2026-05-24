@@ -558,11 +558,16 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       g_state.renderer.ab_mode_ = g_state.auto_ev_enabled ? AdaptiveBrightnessMode::kOn : AdaptiveBrightnessMode::kOff;
       g_state.MarkDirty();
     }
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip(
-          "ON: EV anchored to the current filtered image (auto-adjusts per filter).\n"
-          "OFF: EV anchored to the filter-independent emission (stable across filter toggles).\n"
-          "Switching this re-runs the simulation.");
+          "ON (default): EV anchored to the current filtered image.\n"
+          "  Filter switches may shift brightness. Simulation is fast.\n"
+          "OFF: EV anchored to the filter-independent physical baseline.\n"
+          "  Brightness is stable when switching filters.\n"
+          "  Simulation is slower (~2x for high multi-scatter probability scenes).\n"
+          "Switching this mode re-runs the simulation.");
     }
     if (g_state.auto_ev_enabled) {
       ImGui::SameLine();

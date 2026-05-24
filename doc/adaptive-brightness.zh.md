@@ -48,10 +48,10 @@ checkbox 位于**右侧面板 → Display** 区域。
 
 P99 由不同 XYZ buffer 计算，取决于当前模式：
 
-| 模式 | P99 使用的 XYZ buffer |
-|------|----------------------|
-| **Off** | `unfiltered_xyz_buffer`——晶体出射的全部光线，在 ray-path filter 应用**之前** |
-| **On**  | `filtered_xyz_buffer`——通过当前激活 ray-path filter 后**存活**的光线 |
+| 模式 | P99 数据来源 |
+|------|-------------|
+| **Off** | `anchor_p99_y`（服务端）——filter-pass + filter-fail 合并射线 P99；详见 `LUMICE_RawXyzResult.anchor_p99_y`，由 `anchor_snapshot_intensity` 归一化 |
+| **On**  | `ComputeP99Y(xyz_buffer)`（GUI 端）——已过滤 XYZ buffer 的 P99，由 `snapshot_intensity` 归一化 |
 
 ---
 
@@ -59,7 +59,7 @@ P99 由不同 XYZ buffer 计算，取决于当前模式：
 
 ### Off——输出物理可比
 
-**Off** 模式下，P99 锚点来自**未过滤** buffer：无论光线是否通过当前激活的 filter，均参与锚点计算。
+**Off** 模式下，P99 锚点来自 **anchor lane**——一个在 simulator 内部同时累积 filter-pass 和 filter-fail 射线的发射累积器（见 §5c）。
 
 这意味着：
 
@@ -72,6 +72,11 @@ P99 由不同 XYZ buffer 计算，取决于当前模式：
 - 并排比较多个 filter。
 - 验证一组互补 filter（划分）叠加后等于无 filter 对照实验。
 - 了解各 ray-path 类别的绝对贡献。
+
+**性能说明**：Off 模式在正常模拟之外额外运行 anchor pass。开销随 filter-fail 射线量正比增长：
+
+- `ms_prob ≈ 0`（单散射或近零多重散射）：开销可忽略（~0%）。
+- `ms_prob ≈ 0.5`：约 +97% 开销（~2× 模拟时长）。
 
 ### On——自适应可见性
 
@@ -129,21 +134,25 @@ sRGB(buf(F₁)) + sRGB(buf(F₂)) ≠ sRGB(buf(F₁) + buf(F₂))
 
 ## 5. Tooltip 文案设计理由
 
-GUI tooltip 文案为：
+GUI 在 Adaptive Brightness checkbox 旁显示一个 `(?)` info icon，悬停时展示：
 
-> Off: filter outputs are physically comparable.  
-> On: each filter adapts to its visible rays.
+> ON (default): EV anchored to the current filtered image.
+>   Filter switches may shift brightness. Simulation is fast.
+> OFF: EV anchored to the filter-independent physical baseline.
+>   Brightness is stable when switching filters.
+>   Simulation is slower (~2x for high multi-scatter probability scenes).
+> Switching this mode re-runs the simulation.
 
 文案有意回避了"XYZ 线性空间"、"P99 百分位"、"sRGB gamma"等技术术语。tooltip 面向的是没有色彩科学背景的普通用户，以用户关心的结果来表达关键区别：
 
-- **"physically comparable"**（物理可比）：传达各 filter 输出可以并排比较，相对亮度有物理意义——完整的物理关系被保留。
-- **"adapts to its visible rays"**（自适应各自的可见光线）：传达每个 filter 获得独立的亮度刻度——适合检查原本不可见的暗弱弧。
+- **ON**：每个 filter 根据其可见光线自适应亮度刻度——适合检查原本不可见的暗弱弧。仿真速度快，无额外开销。
+- **OFF**：所有 filter 配置共享相同的物理亮度刻度，输出可直接比较。因 anchor lane 而产生额外模拟开销。
 
 需要技术规范的贡献者请参阅本文档和 `src/gui/gui_ev_auto.hpp`。
 
 ---
 
-## 5b. 行为变更说明（task-query-filter-uplift-v2）
+## 5b. 历史：行为变更说明（task-query-filter-uplift-v2）
 
 在本次改动之前，simulator 端会把任何未通过 `scattering.entries[].filter`
 的光线标记为已停止（即 T2 前的 `kStopped` 状态，现已并入 `IsTir()` 派生谓词），
@@ -167,26 +176,40 @@ Path B 现在累积真正的 unfiltered 全集。
 
 ---
 
-## 5c. task-revert（219.4）后的 Off 模式状态
+## 5c. Off 模式重设计——F1 Anchor Lane（scrum-221）
 
-> **注意**：本节描述 task-revert（219.4）完成后的状态，**该实施尚未落地**。
-> 219.4 合入前，当前代码仍遵循 §5b 描述的 task-200 路由。
+> **注意**：本节替换了早期"task-revert（219.4）待实施状态"的描述。
+> Off 模式重设计已在 scrum-221（`feat: F1 mode-toggle + anchor lane`）中落地。
 
-§5b 描述的 task-200 路由决策正在 task-revert（219.4，scrum-prob-zero-leak / #219）中被回退。
-Filter 评估将回归 simulator 端（Design A）：filter 失败的 ray 将在 simulator 内部被丢弃，不再到达 consumer。
+task-revert（219.4）恢复 Design A（filter 回归 simulator 端）后，`unfiltered_xyz_buffer`
+等同 `xyz_buffer`，Off 模式失去意义。scrum-221 通过 simulator 内部的并行 **anchor lane**
+重新设计了 Off 模式。
 
-回退后：
+### F1 机制
 
-- `unfiltered_xyz_buffer` **将等同** `xyz_buffer`——两者均反映经 simulator 过滤的同一 ray 集合。
-  Consumer 层的"unfiltered"与"filtered"区分将不再存在。
-- **Off 模式将在 GUI 中暂时强制禁用**（开关置灰，tooltip 说明原因）。
-  由于 unfiltered anchor 等同 filtered anchor，Off 模式与 On 模式将产生相同结果；
-  Off 模式原本旨在防止的 ~10 stops 亮度跳跃也无法再被触发。
-- `LUMICE_RawXyzResult` 中的 `unfiltered_xyz_buffer` 与 `unfiltered_snapshot_intensity` 已标记为 **DEPRECATED**；
-  task-revert（219.4）完成后，请改用 `xyz_buffer` 与 `snapshot_intensity`。
+Off 模式激活时，simulator 在正常 filter-pass 路径之外运行辅助收集 pass：
 
-在 Design A 基线上重新设计 Off 模式（通过不同机制恢复可加性不变量）已作为 backlog 条目跟踪。
-完整规格说明见 `doc/filter-architecture_zh.md §7`。
+```
+crystal 退出
+    │
+    ├─ filter 通过  →  xyz_buffer  +  anchor lane
+    │
+    └─ filter 失败  →  anchor lane only
+                       （不渲染；仅贡献到 EV 锚点）
+```
+
+Anchor lane 累积 filter-pass + filter-fail 射线。C API 通过 `LUMICE_RawXyzResult.anchor_p99_y`
+和 `anchor_snapshot_intensity` 暴露此数据。GUI（`src/gui/app.cpp` 中的 `SyncFromPoller()`）
+在 Off 模式激活时使用这些数据计算 EV 偏移。
+
+这恢复了可加性不变量（§4.1）：同一次运行的所有 filter 配置共享相同的 EV 刻度，
+因为锚点来自全量发射光线而非已过滤子集。
+
+### ABI 变更
+
+task-200 引入的旧 `unfiltered_xyz_buffer` 和 `unfiltered_snapshot_intensity` 字段已在
+scrum-221 ABI swap 中移除。Off 模式 EV 锚定请使用 `anchor_p99_y` 和
+`anchor_snapshot_intensity`。详见 `doc/filter-architecture.md §7`。
 
 ---
 
@@ -197,10 +220,10 @@ Filter 评估将回归 simulator 端（Design A）：filter 失败的 ray 将在
 | 组件 | 文件 | 功能 |
 |------|------|------|
 | 算法 | `src/gui/gui_ev_auto.hpp` | `ComputeP99Y`、`ComputeEvAuto` |
-| 数据源切换 | `src/gui/app.cpp` — `SyncFromPoller()` | 根据 `auto_ev_enabled` 选择 `unfiltered_xyz_buffer` 或 `filtered_xyz_buffer` |
-| GUI 控件 | `src/gui/app_panels.cpp` 第 487 行 | checkbox + tooltip + EV 显示（`target_white` 固定 200，无滑条） |
-| 未过滤 buffer | `src/server/render.cpp` — `Consume()` | 在 `FilterRay` 前累积 unfiltered XYZ pass |
-| C API 字段 | `src/include/lumice.h` — `LUMICE_RawXyzResult` | `unfiltered_xyz_buffer` 与 `unfiltered_snapshot_intensity` 字段 |
+| 数据源切换 | `src/gui/app.cpp` — `SyncFromPoller()` | ON：`ComputeP99Y(xyz_buffer)` / `snapshot_intensity`；OFF：`anchor_p99_y` / `anchor_snapshot_intensity` |
+| GUI 控件 | `src/gui/app_panels.cpp` | checkbox + `(?)` tooltip + EV 显示（`target_white` 固定 200，无滑条） |
+| Anchor lane | `src/server/render.cpp` — `Consume()` | Off 模式下累积 filter-pass + filter-fail 射线到 anchor buffer |
+| C API 字段 | `src/include/lumice.h` — `LUMICE_RawXyzResult` | `anchor_p99_y` 与 `anchor_snapshot_intensity`（Off 模式）；`xyz_buffer` 与 `snapshot_intensity`（On 模式） |
 
 ### 相关文档
 
