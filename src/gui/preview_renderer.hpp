@@ -1,6 +1,7 @@
 #ifndef LUMICE_GUI_PREVIEW_RENDERER_HPP
 #define LUMICE_GUI_PREVIEW_RENDERER_HPP
 
+#include <array>
 #include <vector>
 
 #include "gui/gui_constants.hpp"
@@ -64,6 +65,18 @@ struct OverlayDecoration {
   float horizon_alpha = 0.6f;
   float grid_alpha = 0.3f;
   float sun_circles_alpha = 0.5f;
+
+  // Zenith / Nadir pixel-space ring marker.
+  // *_screen_pos: CPU-precomputed; center-origin pixel coords, y-up
+  // (matches shader's `pos = v_ndc * u_resolution * 0.5`). Sentinel
+  // (-9999, -9999) when the direction is offscreen / behind the camera
+  // / unsupported lens — shader compares distance and naturally skips it.
+  bool show_zenith_nadir = false;
+  float zenith_screen_pos[2] = { -9999.f, -9999.f };
+  float nadir_screen_pos[2] = { -9999.f, -9999.f };
+  float zenith_nadir_color[3] = { 0.8f, 0.2f, 0.2f };
+  float zenith_nadir_alpha = 0.6f;
+  float zenith_nadir_radius_px = 8.0f;
 
   static OverlayDecoration Disabled() { return {}; }
 };
@@ -137,6 +150,15 @@ class PreviewRenderer {
 // OpenGL column-major layout: out[col*3 + row].
 // Synced with shader u_view_matrix usage (preview_renderer.cpp).
 void BuildViewMatrix(float elevation_deg, float azimuth_deg, float roll_deg, float out[9]);
+
+// Project a unit world-space direction to screen pixel coordinates matching the
+// fragment shader's coordinate system: origin at viewport center, x right, y up,
+// units = pixels (i.e. `pos = v_ndc * resolution * 0.5`). Returns sentinel
+// {-9999.f, -9999.f} if the direction is behind the camera, outside the viewport,
+// or the lens is unsupported (e.g. kLensTypeGlobe). Synced with the shader's
+// inverse projection helpers (linearInverse / fisheyeInverse / dualFisheyeInverse
+// / rectangularInverse) in preview_renderer.cpp.
+std::array<float, 2> ProjectWorldDirToScreen(const ViewProjection& vp, const float world_dir[3], int vp_w, int vp_h);
 
 // Build a ViewProjection from the renderer sub-state of GuiState.
 // roll is wrapped through EffectiveRollForLens so that lens types that ignore

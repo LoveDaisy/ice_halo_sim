@@ -437,6 +437,14 @@ struct GuiState {
   float grid_alpha = 0.3f;
   float sun_circles_alpha = 0.5f;
 
+  // Zenith / Nadir pixel-space ring marker (see task-gui-zenith-nadir-marker).
+  // Single toggle controls both zenith and nadir; radius is in pixels and stays
+  // visually constant across lens / FOV / zoom changes.
+  bool show_zenith_nadir_line = false;
+  float zenith_nadir_color[3] = { 0.8f, 0.2f, 0.2f };
+  float zenith_nadir_alpha = 0.6f;
+  float zenith_nadir_radius_px = 8.0f;
+
   // File management
   std::filesystem::path current_file_path;
   bool dirty = false;

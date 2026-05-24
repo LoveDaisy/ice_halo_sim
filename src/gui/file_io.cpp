@@ -1126,6 +1126,11 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   root["overlay_horizon_alpha"] = state.horizon_alpha;
   root["overlay_grid_alpha"] = state.grid_alpha;
   root["overlay_sun_circles_alpha"] = state.sun_circles_alpha;
+  root["overlay_zenith_nadir_line"] = state.show_zenith_nadir_line;
+  root["overlay_zenith_nadir_color"] = { state.zenith_nadir_color[0], state.zenith_nadir_color[1],
+                                         state.zenith_nadir_color[2] };
+  root["overlay_zenith_nadir_alpha"] = state.zenith_nadir_alpha;
+  root["overlay_zenith_nadir_radius_px"] = state.zenith_nadir_radius_px;
 
   // Panel state
   root["right_panel_collapsed"] = state.right_panel_collapsed;
@@ -1320,6 +1325,10 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   state.horizon_alpha = root.value("overlay_horizon_alpha", 0.6f);
   state.grid_alpha = root.value("overlay_grid_alpha", 0.3f);
   state.sun_circles_alpha = root.value("overlay_sun_circles_alpha", 0.5f);
+  state.show_zenith_nadir_line = root.value("overlay_zenith_nadir_line", false);
+  read_color3("overlay_zenith_nadir_color", state.zenith_nadir_color);
+  state.zenith_nadir_alpha = root.value("overlay_zenith_nadir_alpha", 0.6f);
+  state.zenith_nadir_radius_px = root.value("overlay_zenith_nadir_radius_px", 8.0f);
 
   // Panel state
   state.right_panel_collapsed = root.value("right_panel_collapsed", false);

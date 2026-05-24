@@ -665,6 +665,16 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
                 &g_state.show_sun_circles_line, "Label##sun_circles", &g_state.show_sun_circles_label);
     SliderWithInput("Alpha##sun_circles", &g_state.sun_circles_alpha, 0.0f, 1.0f, "%.2f");
 
+    // Zenith / Nadir pixel-space marker. Single line toggle (no label column —
+    // markers don't carry text); radius slider mirrors the per-overlay alpha row.
+    ImGui::ColorEdit3("##zenith_nadir_color", g_state.zenith_nadir_color, ImGuiColorEditFlags_NoInputs);
+    ImGui::SameLine();
+    ImGui::TextUnformatted("Zenith/Nadir");
+    ImGui::SameLine(line_col_x);
+    ImGui::Checkbox("##zenith_nadir_line", &g_state.show_zenith_nadir_line);
+    SliderWithInput("Alpha##zenith_nadir", &g_state.zenith_nadir_alpha, 0.0f, 1.0f, "%.2f");
+    SliderWithInput("Radius##zenith_nadir", &g_state.zenith_nadir_radius_px, 2.0f, 20.0f, "%.1f px");
+
     if (g_state.show_sun_circles_line || g_state.show_sun_circles_label) {
       if (ImGui::Button("Edit Angles...##overlay")) {
         ImGui::OpenPopup("SunCirclesEdit");
@@ -831,6 +841,22 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     for (int i = 0; i < pp.overlay.sun_circle_count; i++) {
       pp.overlay.sun_circle_angles[i] = g_state.sun_circle_angles[i];
     }
+
+    // Zenith / Nadir pixel-space marker. zenith world dir = (0,0,-1), nadir = (0,0,+1)
+    // (see preview_renderer.cpp:overlayAuxLines altitude convention).
+    pp.overlay.show_zenith_nadir = g_state.show_zenith_nadir_line;
+    std::copy(std::begin(g_state.zenith_nadir_color), std::end(g_state.zenith_nadir_color),
+              std::begin(pp.overlay.zenith_nadir_color));
+    pp.overlay.zenith_nadir_alpha = g_state.zenith_nadir_alpha;
+    pp.overlay.zenith_nadir_radius_px = g_state.zenith_nadir_radius_px;
+    constexpr float kZenithWorldDir[3] = { 0.f, 0.f, -1.f };
+    constexpr float kNadirWorldDir[3] = { 0.f, 0.f, 1.f };
+    auto zpos = ProjectWorldDirToScreen(pp.view_proj, kZenithWorldDir, g_preview_vp.vp_w, g_preview_vp.vp_h);
+    auto npos = ProjectWorldDirToScreen(pp.view_proj, kNadirWorldDir, g_preview_vp.vp_w, g_preview_vp.vp_h);
+    pp.overlay.zenith_screen_pos[0] = zpos[0];
+    pp.overlay.zenith_screen_pos[1] = zpos[1];
+    pp.overlay.nadir_screen_pos[0] = npos[0];
+    pp.overlay.nadir_screen_pos[1] = npos[1];
 
     // Overlay labels at viewport edges (drawn on the preview window's draw list so
     // modals correctly occlude them). BuildOverlayLabelInput is shared with
