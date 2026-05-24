@@ -208,7 +208,8 @@ as the canonical routing model.  Off mode redesign was tracked as a backlog item
 ### scrum-221 (adaptive-additivity-redesign, 2026-05-24) — Off mode redesign shipped
 
 Implemented Off mode via F1 anchor lane (see §7).  ABI swap removed `unfiltered_*`
-fields and introduced `anchor_p995_y` / `anchor_snapshot_intensity`.  Additivity testing
+fields and introduced `anchor_p99_y` / `anchor_snapshot_intensity` (renamed to
+`anchor_p995_y` in apply-new-defaults).  Additivity testing
 (partition invariant) added to the E2E test suite.
 
 ---
@@ -316,7 +317,7 @@ anchor points for future contributors:
 | Filter ↔ crystal per-entry config | `src/config/proj_config.hpp` — `ScatteringSetting` |
 | Simulator-side filter check (Design A gate) | `src/core/simulator.cpp` — `CollectData()` |
 | FilterSpec algorithm interface | `src/core/filter_spec.hpp` |
-| C API anchor fields (Off mode) | `src/include/lumice.h` — `LUMICE_RawXyzResult.anchor_p995_y` / `anchor_snapshot_intensity` |
+| C API anchor fields (F1 anchor lane) | `src/include/lumice.h` — `LUMICE_RawXyzResult.anchor_p995_y` / `anchor_snapshot_intensity` |
 | Filter JSON schema | `doc/configuration.md` |
 | Raypath semantics, P/B/D filter toggles | `doc/raypath-symmetry.md` |
 | Adaptive Brightness Off mode, additivity | `doc/adaptive-brightness.md` |

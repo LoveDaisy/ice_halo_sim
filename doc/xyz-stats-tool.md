@@ -87,7 +87,7 @@ so that P99.5 of `norm_y` maps to `target_white` (default 1.0).
 
 | This tool field | GUI variable | Role |
 |-----------------|-------------|------|
-| `unfiltered.percentiles.p99` | `g_state.p995_raw_y` | P99.5 anchor for EV computation |
+| `unfiltered.percentiles.p99` | `g_state.p995_raw_y` | Approximate EV anchor (tool outputs P99/0.99; GUI uses P99.5/0.995 — close but not identical) |
 | `unfiltered.percentiles.*` | Upstream of `ComputeEvAuto()` | Auto-EV input |
 | `filtered.*` | Same path (filter-absent scenes) | Reference for filter-on scenes |
 

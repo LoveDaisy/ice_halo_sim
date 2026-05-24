@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - **Breaking ABI #2**: `LUMICE_RawXyzResult::anchor_p99_y` renamed to `anchor_p995_y`.
   Update all ctypes / FFI / C callers that reference this field by name.
+  (ABI break #1 was the removal of `ab_mode` in task-remove-adaptive-brightness-on-mode.)
 - **Breaking ABI**: `LUMICE_RenderParam::ab_mode` field removed from the C API.
   Callers should drop the assignment; behavior matches the prior OFF mode (F1).
 - `AdaptiveBrightnessMode` enum (`src/config/render_config.hpp`) removed.

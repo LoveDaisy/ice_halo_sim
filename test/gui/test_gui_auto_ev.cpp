@@ -24,7 +24,7 @@ struct AutoEvScene {
 // Last regenerated in task-remove-adaptive-brightness-on-mode (2026-05-24) after promoting
 // the F1 anchor lane to be the sole EV anchor. Calibration ran at N=10 for both phases
 // (mean-ref + threshold), so the script's mean-3σ floor is taken as-is without any
-// further safety margin.
+// further safety margin, except where noted in the individual entries below.
 static const AutoEvScene kScenes[] = {
   {"halo_22",    LUMICE_E2E_CONFIG_DIR "/halo_22.json",                           256, 256, 18.0},  // min(18.5, 21.0) − 0.5 margin
   {"multi_scat", LUMICE_E2E_CONFIG_DIR "/multi_scatter.json",                     256, 256, 18.5},  // min(18.5, 21.0)

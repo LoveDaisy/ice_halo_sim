@@ -40,9 +40,9 @@ The core algorithm (`ComputeP995Y` / `ComputeEvAuto` in `src/gui/gui_ev_auto.hpp
 2. **Compute the P99.5 value** (`y_p995`): the 99.5th percentile of those Y values.
 3. **Normalize** relative to the anchor intensity:
    ```
-   p99_norm = y_p995 / anchor_snapshot_intensity
+   p995_norm = y_p995 / anchor_snapshot_intensity
    ```
-4. **Map** `p99_norm` to `target_white` on the sRGB [0, 255] scale.
+4. **Map** `p995_norm` to `target_white` on the sRGB [0, 255] scale.
    `target_white` is fixed at 135 (the GUI no longer exposes a slider; users tune the
    manual EV offset for further adjustment).
    The mapping applies the sRGB transfer function inverse to obtain a linear target:
@@ -52,7 +52,7 @@ The core algorithm (`ComputeP995Y` / `ComputeEvAuto` in `src/gui/gui_ev_auto.hpp
    ```
 5. **Compute the EV offset** in stops, clamped to [−6, +6]:
    ```
-   ev_auto = log2(target_linear / p99_norm)
+   ev_auto = log2(target_linear / p995_norm)
    ```
 
 `ev_auto` is added to the manual EV slider value before the post-processing pass. When

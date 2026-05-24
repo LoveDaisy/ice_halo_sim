@@ -28,9 +28,9 @@
 2. **计算 P99.5 值**（`y_p995`）：上述 Y 值的第 99.5 百分位数。
 3. **相对锚点强度归一化**：
    ```
-   p99_norm = y_p995 / anchor_snapshot_intensity
+   p995_norm = y_p995 / anchor_snapshot_intensity
    ```
-4. **将 `p99_norm` 映射到 sRGB [0, 255] 刻度上的 `target_white`**。
+4. **将 `p995_norm` 映射到 sRGB [0, 255] 刻度上的 `target_white`**。
    `target_white` 固定为 135（GUI 已不再暴露滑条；如需进一步调整，由用户拖动手动 EV 滑条）。
    映射先做 sRGB 传递函数的逆变换，得到线性目标值：
    ```
@@ -39,7 +39,7 @@
    ```
 5. **计算 EV 偏移**（单位：曝光档），结果夹到 [−6, +6]：
    ```
-   ev_auto = log2(target_linear / p99_norm)
+   ev_auto = log2(target_linear / p995_norm)
    ```
 
 `ev_auto` 与手动 EV 滑条值相加后进入后处理通道。若数据尚不可用，EV 贡献为 0，GUI 显示 `(auto: no data)`。
