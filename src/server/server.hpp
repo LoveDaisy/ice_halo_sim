@@ -142,9 +142,9 @@ struct RawXyzResult {
   int effective_pixels_ = 0;          // Non-zero pixel count for adaptive normalization
   // F1 anchor lane outputs. Both fields are 0 when no filter is configured (anchor lane
   // degenerates) and the GUI falls back to filter-self snapshot.
-  // anchor_p99_y_ is the P99 of Y over the *combined* filter-pass + filter-fail emission;
+  // anchor_p995_y_ is the P99.5 of Y over the *combined* filter-pass + filter-fail emission;
   // anchor_snapshot_intensity_ is the per-pixel intensity of the same combined set.
-  float anchor_p99_y_ = 0.0f;
+  float anchor_p995_y_ = 0.0f;
   float anchor_snapshot_intensity_ = 0.0f;
 };
 

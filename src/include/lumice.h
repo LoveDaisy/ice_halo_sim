@@ -76,7 +76,7 @@ typedef struct LUMICE_RawXyzResult_ {
   unsigned long long snapshot_generation;  // Increments on each new snapshot; compare to detect data changes
   int effective_pixels;                    // Non-zero pixel count (for adaptive normalization)
   // F1 anchor lane — see doc/filter-architecture.md §7.
-  //   anchor_p99_y:               P99 of Y over filter-pass + filter-fail emission combined
+  //   anchor_p995_y:              P99.5 of Y over filter-pass + filter-fail emission combined
   //                               (filter-independent EV anchor). Zero when no filter is
   //                               configured (anchor lane stays empty).
   //   anchor_snapshot_intensity:  Per-pixel landed intensity for the same combined set
@@ -84,7 +84,7 @@ typedef struct LUMICE_RawXyzResult_ {
   //                               no filter is configured.
   // GUI uses these to drive the EV-auto path; the GUI falls back to the filtered snapshot
   // when both values are zero (degenerate no-filter scenario).
-  float anchor_p99_y;
+  float anchor_p995_y;
   float anchor_snapshot_intensity;
 } LUMICE_RawXyzResult;
 

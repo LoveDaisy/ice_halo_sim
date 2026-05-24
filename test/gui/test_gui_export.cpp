@@ -183,7 +183,7 @@ static gui::PreviewParams BuildAcExportParams(float exposure_offset) {
   gui::PreviewParams params = gui::g_preview_vp.params;
   float ev_total = exposure_offset + gui::g_state.ev_auto;
   params.exposure.intensity_factor = std::pow(2.0f, ev_total);
-  float norm_intensity = (gui::g_state.anchor_snapshot_intensity > 0.0f && gui::g_state.p99_raw_y > 0.0f) ?
+  float norm_intensity = (gui::g_state.anchor_snapshot_intensity > 0.0f && gui::g_state.p995_raw_y > 0.0f) ?
                              gui::g_state.anchor_snapshot_intensity :
                              gui::g_state.snapshot_intensity;
   params.exposure.intensity_scale = norm_intensity > 0 ? params.exposure.intensity_factor / norm_intensity : 0.0f;
@@ -1073,7 +1073,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
         gui::g_state.snapshot_intensity = 1.0f;
         // Force anchor lane off so norm_intensity falls through to snapshot_intensity.
         gui::g_state.anchor_snapshot_intensity = 0.0f;
-        gui::g_state.p99_raw_y = 0.0f;
+        gui::g_state.p995_raw_y = 0.0f;
         s_xyz_uploaded = true;
       }
     };
@@ -1132,7 +1132,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
         UploadUniformXyzTexture(0.08f);
         gui::g_state.snapshot_intensity = 1.0f;
         gui::g_state.anchor_snapshot_intensity = 0.0f;
-        gui::g_state.p99_raw_y = 0.0f;
+        gui::g_state.p995_raw_y = 0.0f;
         s_xyz_uploaded = true;
       }
     };

@@ -25,7 +25,7 @@ struct PollerData {
   // OFF-mode (Adaptive Brightness off) anchor outputs — computed server-side over filter-pass
   // + filter-fail combined emission so EV anchor stays filter-independent. Both fields are 0
   // in ON mode and degenerate OFF mode (no filter). See doc/filter-architecture.md §7.
-  float anchor_p99_y = 0;
+  float anchor_p995_y = 0;
   float anchor_snapshot_intensity = 0;
   float intensity_factor = 1.0f;
   int effective_pixels = 0;

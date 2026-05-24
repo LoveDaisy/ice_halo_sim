@@ -40,7 +40,7 @@ class RenderConsumer : public IConsume {
 
   // Anchor lane: lazily populated when a filter spec is active (SimData::anchor_d_/anchor_w_
   // is non-empty). Accumulates filter-fail outgoing rays; combined with internal_xyz_ at
-  // snapshot time yields filter-independent total emission, so anchor_p99_y_ stays stable
+  // snapshot time yields filter-independent total emission, so anchor_p995_y_ stays stable
   // across filter toggles. When no filter is configured the anchor buffers remain unallocated
   // / zero and SyncFromPoller's degenerate branch falls back to filter-self snapshot.
   // anchor_total_intensity_ tracks the anchor lane weight (filter-fail outgoing rays only);
@@ -49,7 +49,7 @@ class RenderConsumer : public IConsume {
   // See doc/filter-architecture.md §7.
   float anchor_total_intensity_ = 0;
   float anchor_snapshot_intensity_ = 0;
-  float anchor_p99_y_ = 0;
+  float anchor_p995_y_ = 0;
   std::unique_ptr<float[]> anchor_internal_xyz_;
   std::unique_ptr<float[]> anchor_snapshot_xyz_;
 

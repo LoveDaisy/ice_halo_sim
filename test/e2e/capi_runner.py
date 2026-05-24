@@ -34,7 +34,7 @@ import numpy as np
 
 # Mirrors LUMICE_RawXyzResult in src/include/lumice.h (verified 64 bytes
 # on 64-bit macOS/Linux after the F1 mode-toggle ABI break: the two
-# unfiltered_* fields were replaced by scalar anchor_p99_y + anchor_snapshot_intensity,
+# unfiltered_* fields were replaced by scalar anchor_p995_y + anchor_snapshot_intensity,
 # dropping a pointer slot). Keep in sync with scripts/dump_xyz_stats.py.
 class LUMICE_RawXyzResult(ctypes.Structure):
     _fields_ = [
@@ -47,7 +47,7 @@ class LUMICE_RawXyzResult(ctypes.Structure):
         ("has_valid_data",             ctypes.c_int),
         ("snapshot_generation",        ctypes.c_uint64),
         ("effective_pixels",           ctypes.c_int),
-        ("anchor_p99_y",               ctypes.c_float),
+        ("anchor_p995_y",              ctypes.c_float),
         ("anchor_snapshot_intensity",  ctypes.c_float),
     ]
 
@@ -67,14 +67,14 @@ _LUMICE_SERVER_NOT_READY = 2
 class SimResult:
     """Subset of LUMICE_RawXyzResult fields exposed to test code.
 
-    ``anchor_p99_y`` and ``anchor_snapshot_intensity`` are non-zero only when the
+    ``anchor_p995_y`` and ``anchor_snapshot_intensity`` are non-zero only when the
     server is running in Adaptive Brightness OFF mode (F1) with a filter spec.
     The legacy ``unfiltered_*`` C API fields were removed in scrum-adaptive-
     additivity-redesign / task-f1-simulator-mode-toggle.
     """
 
     snapshot_intensity: float
-    anchor_p99_y: float
+    anchor_p995_y: float
     anchor_snapshot_intensity: float
     has_valid_data: bool
     effective_pixels: int
@@ -91,7 +91,7 @@ class BufferedSimResult:
     """
 
     snapshot_intensity: float
-    anchor_p99_y: float
+    anchor_p995_y: float
     anchor_snapshot_intensity: float
     has_valid_data: bool
     effective_pixels: int
@@ -224,7 +224,7 @@ def run_scene_capi(config_path: str, timeout_sec: int = 180) -> SimResult:
         r = results[0]
         return SimResult(
             snapshot_intensity=float(r.snapshot_intensity),
-            anchor_p99_y=float(r.anchor_p99_y),
+            anchor_p995_y=float(r.anchor_p995_y),
             anchor_snapshot_intensity=float(r.anchor_snapshot_intensity),
             has_valid_data=bool(r.has_valid_data),
             effective_pixels=int(r.effective_pixels),
@@ -295,7 +295,7 @@ def run_scene_capi_buffered(config_path: str, timeout_sec: int = 180) -> Buffere
         r_h = int(r.img_height)
         r_xyz_addr = ctypes.cast(r.xyz_buffer, ctypes.c_void_p).value
         r_snap = float(r.snapshot_intensity)
-        r_anchor_p99 = float(r.anchor_p99_y)
+        r_anchor_p995 = float(r.anchor_p995_y)
         r_anchor_int = float(r.anchor_snapshot_intensity)
         r_valid = bool(r.has_valid_data)
         r_eff = int(r.effective_pixels)
@@ -321,7 +321,7 @@ def run_scene_capi_buffered(config_path: str, timeout_sec: int = 180) -> Buffere
 
         return BufferedSimResult(
             snapshot_intensity=r_snap,
-            anchor_p99_y=r_anchor_p99,
+            anchor_p995_y=r_anchor_p995,
             anchor_snapshot_intensity=r_anchor_int,
             has_valid_data=r_valid,
             effective_pixels=r_eff,

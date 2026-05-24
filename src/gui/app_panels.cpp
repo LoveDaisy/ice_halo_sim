@@ -550,7 +550,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     // (see doc/filter-architecture.md §7). With no filter the anchor lane degenerates
     // and SyncFromPoller falls back to the filtered snapshot.
     ImGui::SameLine();
-    if (g_state.p99_raw_y > 0.0f) {
+    if (g_state.p995_raw_y > 0.0f) {
       ImGui::TextDisabled("(+%.2f EV auto)", g_state.ev_auto);
     } else {
       ImGui::TextDisabled("(auto: no data)");
@@ -805,12 +805,11 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     float ev_total = rc.exposure_offset + g_state.ev_auto;
     pp.exposure.intensity_factor = std::pow(2.0f, ev_total);
     // Dual-condition mirrors SyncFromPoller: anchor lane is active only when both
-    // anchor_p99_y and anchor_snapshot_intensity are positive, keeping the ev_auto
+    // anchor_p995_y and anchor_snapshot_intensity are positive, keeping the ev_auto
     // numerator and norm_intensity denominator from the same data source.
-    float norm_intensity =
-        (g_state.anchor_snapshot_intensity > 0.0f && g_state.p99_raw_y > 0.0f)
-            ? g_state.anchor_snapshot_intensity
-            : g_state.snapshot_intensity;
+    float norm_intensity = (g_state.anchor_snapshot_intensity > 0.0f && g_state.p995_raw_y > 0.0f) ?
+                               g_state.anchor_snapshot_intensity :
+                               g_state.snapshot_intensity;
     pp.exposure.intensity_scale = norm_intensity > 0 ? pp.exposure.intensity_factor / norm_intensity : 0.0f;
     // Overlap parameters for dual fisheye texture sampling.
     pp.source.max_abs_dz = kDualFisheyeOverlap;

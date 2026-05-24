@@ -243,7 +243,7 @@ static void RefreshCpuTextureForSave() {
   // is fresh from this LUMICE_GetRawXyzResults call); both come from the same server state
   // so a ≤1-frame drift is acceptable for .lmc thumbnail.
   float intensity_factor = std::pow(2.0f, g_state.renderer.exposure_offset + g_state.ev_auto);
-  float norm_intensity = (g_state.anchor_snapshot_intensity > 0.0f && g_state.p99_raw_y > 0.0f) ?
+  float norm_intensity = (g_state.anchor_snapshot_intensity > 0.0f && g_state.p995_raw_y > 0.0f) ?
                              g_state.anchor_snapshot_intensity :
                              xyz_results[0].snapshot_intensity;
   float intensity_scale = norm_intensity > 0 ? intensity_factor / norm_intensity : 0.0f;
@@ -291,13 +291,13 @@ void DoSaveAs() {
 //   intensity_factor = 2^ev_total
 //   norm_intensity   = anchor_snapshot_intensity if anchor lane active, else snapshot_intensity
 //   intensity_scale  = intensity_factor / norm_intensity   (0 if norm_intensity <= 0)
-// Dual condition on anchor lane (both anchor_snapshot_intensity > 0 and p99_raw_y > 0)
+// Dual condition on anchor lane (both anchor_snapshot_intensity > 0 and p995_raw_y > 0)
 // matches app_panels.cpp so the EV numerator and norm denominator come from the same source.
 static PreviewParams BuildExportParams() {
   PreviewParams params = g_preview_vp.params;
   float ev_total = g_state.renderer.exposure_offset + g_state.ev_auto;
   params.exposure.intensity_factor = std::pow(2.0f, ev_total);
-  float norm_intensity = (g_state.anchor_snapshot_intensity > 0.0f && g_state.p99_raw_y > 0.0f) ?
+  float norm_intensity = (g_state.anchor_snapshot_intensity > 0.0f && g_state.p995_raw_y > 0.0f) ?
                              g_state.anchor_snapshot_intensity :
                              g_state.snapshot_intensity;
   params.exposure.intensity_scale = norm_intensity > 0 ? params.exposure.intensity_factor / norm_intensity : 0.0f;
@@ -798,19 +798,19 @@ void SyncFromPoller() {
     g_state.effective_pixels = data.effective_pixels;
     g_state.texture_upload_count++;
     // EV anchor selection (see doc/filter-architecture.md §7):
-    //   Filter present → server-side F1 anchor (filter-independent P99 / intensity).
+    //   Filter present → server-side F1 anchor (filter-independent P99.5 / intensity).
     //   No filter      → anchor lane stays empty (server returns 0); degenerate to
     //                    filtered snapshot. Filter-empty makes filtered ≡ unfiltered,
     //                    so the user observes no behavioral difference.
-    if (data.anchor_p99_y > 0.0f && data.anchor_snapshot_intensity > 0.0f) {
-      g_state.p99_raw_y = data.anchor_p99_y;
-      g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.anchor_snapshot_intensity, g_state.target_white);
+    if (data.anchor_p995_y > 0.0f && data.anchor_snapshot_intensity > 0.0f) {
+      g_state.p995_raw_y = data.anchor_p995_y;
+      g_state.ev_auto = ComputeEvAuto(g_state.p995_raw_y, g_state.anchor_snapshot_intensity, g_state.target_white);
     } else {
-      g_state.p99_raw_y = ComputeP99Y(data.xyz_data);
-      g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, g_state.target_white);
+      g_state.p995_raw_y = ComputeP995Y(data.xyz_data);
+      g_state.ev_auto = ComputeEvAuto(g_state.p995_raw_y, g_state.snapshot_intensity, g_state.target_white);
     }
-    GUI_LOG_VERBOSE("[GUI] SyncFromPoller: p99_raw_y={:.6f}, ev_auto={:.3f}, anchor_src={}", g_state.p99_raw_y,
-                    g_state.ev_auto, (data.anchor_p99_y > 0.0f) ? "anchor" : "filtered");
+    GUI_LOG_VERBOSE("[GUI] SyncFromPoller: p995_raw_y={:.6f}, ev_auto={:.3f}, anchor_src={}", g_state.p995_raw_y,
+                    g_state.ev_auto, (data.anchor_p995_y > 0.0f) ? "anchor" : "filtered");
   }
 }
 

@@ -496,12 +496,12 @@ void RenderConsumer::Consume(const SimData& data) {
   // instead PrepareSnapshot will sum snapshot_xyz_ + anchor_snapshot_xyz_ pixel-by-pixel.
   // Here we only project the filter-fail outgoing lane (sim_data.anchor_d_/anchor_w_).
   // Overlap dual-write is intentionally NOT applied to the anchor lane: the anchor lane is
-  // used solely for EV P99 statistics, and the overlap ring is a small geometric artifact
-  // that contributes negligibly to the P99 percentile. Skipping it keeps Consume hot-path
+  // used solely for EV P99.5 statistics, and the overlap ring is a small geometric artifact
+  // that contributes negligibly to the P99.5 percentile. Skipping it keeps Consume hot-path
   // cost minimal.
   // The lane is naturally inert when no filter spec is configured: simulator.cpp keeps
   // anchor_d_/anchor_w_ empty in that case, the guard below short-circuits without any
-  // allocation, and the GUI's degenerate fallback (anchor_p99_y <= 0) is then taken.
+  // allocation, and the GUI's degenerate fallback (anchor_p995_y <= 0) is then taken.
   if (!data.anchor_d_.empty()) {
     if (!anchor_internal_xyz_) {
       // Lazy allocation: first time we see filter-fail outgoing emission.
@@ -562,15 +562,15 @@ void RenderConsumer::PrepareSnapshot() {
   std::memcpy(snapshot_xyz_.get(), internal_xyz_.get(), total_pix * 3 * sizeof(float));
   snapshot_intensity_ = total_intensity_;
 
-  // OFF-mode anchor P99 / intensity. Combined emission = filter-pass (snapshot_xyz_) +
+  // OFF-mode anchor P99.5 / intensity. Combined emission = filter-pass (snapshot_xyz_) +
   // filter-fail (anchor_internal_xyz_), giving a filter-independent EV anchor. Computed
   // server-side to avoid shipping a second full-XYZ buffer across the C API.
   if (anchor_internal_xyz_) {
     std::memcpy(anchor_snapshot_xyz_.get(), anchor_internal_xyz_.get(), total_pix * 3 * sizeof(float));
     anchor_snapshot_intensity_ = snapshot_intensity_ + anchor_total_intensity_;
 
-    // P99 of combined Y. Allocate per call (called rarely; snapshot intervals dominate
-    // rendering cost). Skip zero pixels to match GUI ComputeP99Y semantics.
+    // P99.5 of combined Y. Allocate per call (called rarely; snapshot intervals dominate
+    // rendering cost). Skip zero pixels to match GUI ComputeP995Y semantics.
     std::vector<float> y_vals;
     y_vals.reserve(static_cast<size_t>(total_pix));
     for (int i = 0; i < total_pix; i++) {
@@ -580,14 +580,14 @@ void RenderConsumer::PrepareSnapshot() {
       }
     }
     if (y_vals.empty()) {
-      anchor_p99_y_ = 0.0f;
+      anchor_p995_y_ = 0.0f;
     } else {
-      auto idx = static_cast<size_t>(static_cast<float>(y_vals.size()) * 0.99f);
+      auto idx = static_cast<size_t>(static_cast<float>(y_vals.size()) * 0.995f);
       if (idx >= y_vals.size()) {
         idx = y_vals.size() - 1;
       }
       std::nth_element(y_vals.begin(), y_vals.begin() + static_cast<ptrdiff_t>(idx), y_vals.end());
-      anchor_p99_y_ = y_vals[idx];
+      anchor_p995_y_ = y_vals[idx];
     }
   }
 }
@@ -684,7 +684,7 @@ RawXyzResult RenderConsumer::GetRawXyzResult() const {
            {},
            {},
            effective_pix_,
-           anchor_p99_y_,
+           anchor_p995_y_,
            anchor_per_pixel };
 }
 
@@ -706,7 +706,7 @@ void RenderConsumer::Reset() {
   }
   anchor_total_intensity_ = 0;
   anchor_snapshot_intensity_ = 0;
-  anchor_p99_y_ = 0;
+  anchor_p995_y_ = 0;
 }
 
 void RenderConsumer::ResetWith(const RenderConfig& new_config) {

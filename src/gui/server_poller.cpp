@@ -206,8 +206,8 @@ void ServerPoller::PollOnce() {
         staged_.texture_width = xyz_results[0].img_width;
         staged_.texture_height = xyz_results[0].img_height;
         staged_.snapshot_intensity = xyz_results[0].snapshot_intensity;
-        // OFF-mode anchor: scalar P99 + intensity (server-side computed). Both 0 in ON mode.
-        staged_.anchor_p99_y = xyz_results[0].anchor_p99_y;
+        // OFF-mode anchor: scalar P99.5 + intensity (server-side computed). Both 0 in ON mode.
+        staged_.anchor_p995_y = xyz_results[0].anchor_p995_y;
         staged_.anchor_snapshot_intensity = xyz_results[0].anchor_snapshot_intensity;
         staged_.intensity_factor = xyz_results[0].intensity_factor;
         staged_.effective_pixels = xyz_results[0].effective_pixels;
