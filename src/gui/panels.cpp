@@ -874,7 +874,7 @@ void RenderSceneControls(GuiState& state) {
     SliderWithInput("Rays(M)", &state.sim.ray_num_millions, 0.1f, 100.0f);
     ImGui::EndDisabled();
   }
-  DIRTY_IF(SliderIntWithInput("Max hits", &state.sim.max_hits, 1, 20));
+  DIRTY_IF(SliderIntWithInput("Max hits", &state.sim.max_hits, 1, 64));
 }
 
 #undef DIRTY_IF

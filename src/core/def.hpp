@@ -21,7 +21,7 @@ enum Symmetry : uint8_t {
 
 
 constexpr size_t kMaxMsNum = 4;        // How many multi-satterings at most.
-constexpr size_t kMaxHits = 8;         // How many hits in one crystal.
+constexpr size_t kMaxHits = 64;        // How many hits in one crystal.
 constexpr size_t kMaxWlNum = 32;       // How many different wavelengths in one configuration.
 constexpr size_t kMaxCrystalNum = 16;  // How many crystal types in one configuration.
 

@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <nlohmann/json.hpp>
+#include <stdexcept>
+#include <string>
 
 #include "config/filter_config.hpp"
 #include "config/light_config.hpp"
@@ -125,6 +127,9 @@ SceneConfig ParseSceneConfig(const nlohmann::json& j_scene, const ConfigManager&
   }
 
   j_scene.at("max_hits").get_to(scene.max_hits_);
+  if (scene.max_hits_ == 0 || scene.max_hits_ > kMaxHits) {
+    throw std::invalid_argument("max_hits must be in [1, " + std::to_string(kMaxHits) + "]");
+  }
 
   scene.light_source_ = j_scene.at("light_source").get<LightSourceConfig>();
 
