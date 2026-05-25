@@ -782,13 +782,12 @@ void SyncFromPoller() {
 
   // Upload XYZ float texture (GL call — must be on main thread).
   // Quality gate is in ServerPoller::PollOnce — staged data is always worth displaying.
-  // The intensity > 0 guard prevents black-frame flicker during slider scrubbing (restart
-  // transiently produces 0-intensity snapshots). Filter changes set intensity_locked via
-  // MarkFilterDirty() to block old data from overwriting the cleared display.
-  // NOTE: original guard `g_state.selected_renderer >= 0` was an artifact of the ID/vector
-  // model; with the copy-model renderer embedded directly, GuiState always owns a valid
-  // renderer by default construction, so the guard is replaced by value-semantics.
-  bool upload_ok = data.has_new_texture && data.snapshot_intensity > 0 && !g_state.intensity_locked;
+  // Upload guard: allow when intensity > 0 (normal frame) OR texture_ray_count > 0
+  // (valid empty frame — filter/physics rejected all rays after simulation ran).
+  // Cold-start transient (texture_ray_count == 0) is still blocked to prevent flicker.
+  // Filter changes set intensity_locked via MarkFilterDirty() to block old data.
+  bool upload_ok =
+      data.has_new_texture && (data.snapshot_intensity > 0 || data.texture_ray_count > 0) && !g_state.intensity_locked;
   if (upload_ok) {
     GUI_LOG_VERBOSE("[GUI] SyncFromPoller: upload tex_rays={}, intensity={:.6f}, eff_pixels={}, factor={:.6f}",
                     data.texture_ray_count, data.snapshot_intensity, data.effective_pixels, data.intensity_factor);

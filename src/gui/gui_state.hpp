@@ -478,6 +478,8 @@ struct GuiState {
   void MarkFilterDirty() {
     MarkDirty();
     snapshot_intensity = 0;
+    anchor_snapshot_intensity = 0;
+    p995_raw_y = 0.0f;
     intensity_locked = true;
   }
 
