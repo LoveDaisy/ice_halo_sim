@@ -99,6 +99,18 @@ gdb ./build/cmake_build/Lumice
 (gdb) run -f examples/config_example.json
 ```
 
+### 环境变量
+
+Lumice 仅在构建脚本和测试工具中使用少量环境变量。产品代码（`src/` 下的 C++ 源码）在运行时**不读取**任何环境变量。
+
+| 变量 | 位置 | 用途 |
+|------|------|------|
+| `LUMICE_SKIP_GUI_TESTS` | `scripts/build.sh` | 设为 `1` 可跳过 GUI 测试的编译和执行。CI 通过 `CI` 变量自动检测无头环境。 |
+| `LUMICE_BIN` | `test/e2e/runner.py` | 覆盖 E2E 子进程测试使用的 CLI 可执行文件路径。默认为 `build/cmake_install/Lumice`。 |
+| `LUMICE_LIB` | `test/e2e/capi_runner.py` | 覆盖 E2E C API 测试使用的共享库路径。默认为 `build/cmake_install/liblumice.dylib`（macOS）或 `.so`（Linux）。 |
+
+**设计原则**：确定性模拟种子通过 C API（`LUMICE_ServerConfig.sim_seed`）传递，而非环境变量，以确保程序行为显式且可复现。详见 [C 接口文档](c_api_zh.md)。
+
 ## 代码风格指南
 
 ### 总体原则

@@ -123,6 +123,22 @@ typedef struct LUMICE_StatsResult_ {
 **Notes**:
 - Sentinel marker: all zeros (`sim_ray_num == 0`)
 
+#### LUMICE_ServerConfig
+
+Server configuration structure for `LUMICE_CreateServerEx()`.
+
+```c
+typedef struct LUMICE_ServerConfig_ {
+  int num_workers;        // Number of simulator worker threads. 0 = default (hardware_concurrency - 2)
+  unsigned int sim_seed;  // Deterministic seed for worker RNGs. 0 = random (default).
+                          // Non-zero collapses to 1 worker for bit-stable results.
+} LUMICE_ServerConfig;
+```
+
+**Notes**:
+- Zero-initialized struct (`= {0}`) is equivalent to default behavior (auto worker count, random seed)
+- When `sim_seed != 0`, the server forces `num_workers = 1` to ensure deterministic ray tracing results
+
 ### Server Lifecycle
 
 #### LUMICE_CreateServer
@@ -139,6 +155,25 @@ LUMICE_Server* LUMICE_CreateServer(void);
 
 **Notes**:
 - The returned handle must be freed using `LUMICE_DestroyServer()`
+
+#### LUMICE_CreateServerEx
+
+Creates a server instance with custom configuration.
+
+```c
+LUMICE_Server* LUMICE_CreateServerEx(const LUMICE_ServerConfig* config);
+```
+
+**Parameters**:
+- `config`: pointer to a `LUMICE_ServerConfig` struct; passing `NULL` is equivalent to `LUMICE_CreateServer()`
+
+**Return value**:
+- On success: returns a server handle pointer
+- On failure: returns `NULL`
+
+**Notes**:
+- The returned handle must be freed using `LUMICE_DestroyServer()`
+- Use this instead of `LUMICE_CreateServer()` when you need to set a deterministic seed or control worker count
 
 #### LUMICE_DestroyServer
 
