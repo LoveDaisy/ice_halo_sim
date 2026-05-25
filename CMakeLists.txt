@@ -38,7 +38,7 @@ endif()
 include(CheckIPOSupported)
 check_ipo_supported(RESULT result OUTPUT output)
 
-if(result AND "${CMAKE_BUILD_TYPE}" STREQUAL "Release")
+if(result AND "${CMAKE_BUILD_TYPE}" STREQUAL "Release" AND NOT BUILD_SHARED_LIBS)
   message(STATUS "IPO supported. Enable inter-procedural optimization.")
   set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 endif()

@@ -230,7 +230,6 @@ jobs:
           -DBUILD_GUI=OFF
           -DBUILD_SHARED_LIBS=ON
           -DLUMICE_NATIVE_ARCH=OFF
-          -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF
 
       - name: Build
         run: cmake --build build --parallel
