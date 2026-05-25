@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779690123140,
+  "lastUpdate": 1779693462602,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -2928,6 +2928,54 @@ window.BENCHMARK_DATA = {
             "value": 430783.5,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b555bce0cfb41ac2959a09682690abaee59e4dcc",
+          "message": "Merge pull request #109 from LoveDaisy/dev/env_var\n\nrefactor: replace LUMICE_SIM_SEED env var with C API sim_seed parameter",
+          "timestamp": "2026-05-25T15:12:52+08:00",
+          "tree_id": "7b0e4e2ac9d8d9d06a5c565821e5ba98db920649",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/b555bce0cfb41ac2959a09682690abaee59e4dcc"
+        },
+        "date": 1779693461920,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 429853.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 573703.8,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 498250.8,
+            "unit": "rays/sec",
+            "extra": "CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 365606.7,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
         ]
       }
