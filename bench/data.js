@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779728987269,
+  "lastUpdate": 1779728989575,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -8779,6 +8779,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 69.1,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "57735b3bf85ff7ae78b102ea0d93aca76e34cc73",
+          "message": "Merge pull request #110 from LoveDaisy/feat/render_refresh\n\nFix rendering update issues, simulator audit gaps, and raise max hits",
+          "timestamp": "2026-05-26T01:05:00+08:00",
+          "tree_id": "9b9aab40e5072b0b7c0942bdb8ed63184483a299",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/57735b3bf85ff7ae78b102ea0d93aca76e34cc73"
+        },
+        "date": 1779728988824,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 88.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 80.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 72.3,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 72,
             "unit": "%"
           }
         ]
