@@ -141,6 +141,8 @@ void InitRay_rot(RandomNumberGenerator& rng, const AxisDistribution& crystal_axi
 }
 
 
+// Do NOT reset cross-layer fields (e.g., is_prior_filter_failed_);
+// they are propagated via TraceRayBasicInfo().
 void InitRay_other_info(const Crystal& curr_crystal, size_t curr_crystal_id, size_t all_data_idx,  // input
                         RayBuffer buffer_data[2]) {                                                // output
   for (auto& r : buffer_data[0]) {
@@ -171,6 +173,11 @@ void InitRayFirstMs(RandomNumberGenerator& rng, const SunParam& light_param, con
 
   // 1.3 init crystal_id, root_ray_idx, rp, state
   InitRay_other_info(curr_crystal, curr_crystal_id, all_data.size_, buffer_data);
+
+  // 1.4 reset cross-layer state (pool-reuse guard: Reset() may not zero memory)
+  for (auto& r : buffer_data[0]) {
+    r.is_prior_filter_failed_ = false;
+  }
 
   all_data.EmplaceBack(buffer_data[0]);
 }
@@ -370,6 +377,8 @@ void TraceRayBasicInfo(const Crystal& curr_crystal, float refractive_index, size
     // Each child segment's from_face_ = parent's to_face_ (the face just hit).
     buffer_data[1][i * 2 + 0].from_face_ = buffer_data[0][i].to_face_;
     buffer_data[1][i * 2 + 1].from_face_ = buffer_data[0][i].to_face_;
+    buffer_data[1][i * 2 + 0].is_prior_filter_failed_ = buffer_data[0][i].is_prior_filter_failed_;
+    buffer_data[1][i * 2 + 1].is_prior_filter_failed_ = buffer_data[0][i].is_prior_filter_failed_;
   }
 
   buffer_data[0].size_ = 0;
@@ -413,9 +422,11 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
   // and the path degenerates to the no-filter case at zero extra cost.
   //
   // Branch table for outgoing candidates (to_face_ == kInvalidId, w_ >= 0):
-  //   filter-pass + prob-pass → is_continue_ = true (next MS)
-  //   filter-pass + prob-fail → outgoing (no flag)
-  //   filter-fail + prob-pass → is_continue_ = true (next MS) — anchor lane bypass
+  //   filter-pass + !prior_failed + prob-pass → is_continue_ = true (next MS)
+  //   filter-pass + !prior_failed + prob-fail → outgoing (no flag)
+  //   filter-pass +  prior_failed + prob-pass → is_continue_ = true (anchor bypass continues)
+  //   filter-pass +  prior_failed + prob-fail → is_filter_dropped_ = true (anchor lane)
+  //   filter-fail + prob-pass → is_continue_ = true; is_prior_filter_failed_ = true
   //   filter-fail + prob-fail → is_filter_dropped_ = true (anchor lane)
   // is_continue_ and is_filter_dropped_ are mutually exclusive (only one is set).
   for (auto& r : buffer_data[1]) {
@@ -434,15 +445,18 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       r.crystal_rot_.Apply(r.p_);
 
       bool filter_pass = (spec == nullptr) || spec->Check(r);
+      if (!filter_pass) {
+        r.is_prior_filter_failed_ = true;
+      }
       if (rng.GetUniform() < ms_info.prob_) {
-        // 1.1 prob-pass → continue regardless of filter result. Filter-fail rays still
-        //     propagate to the next MS level (anchor lane bypass for in-trajectory paths).
+        // 1.1 prob-pass → continue to next MS level. is_prior_filter_failed_ persists
+        //     so downstream layers route this ray to anchor lane, not main outgoing.
         r.is_continue_ = true;
-      } else if (!filter_pass) {
-        // 1.2 filter-fail + prob-fail → anchor lane (not visible in main outgoing).
+      } else if (r.is_prior_filter_failed_) {
+        // 1.2 prior or current filter failure + prob-fail → anchor lane only.
         r.is_filter_dropped_ = true;
       }
-      // 1.3 else: filter-pass + prob-fail → emit outgoing (no flag set).
+      // 1.3 else: filter-pass + no prior failure + prob-fail → emit outgoing (no flag set).
     }
     // 2. else: normal rays (to_face_ != kInvalidId && w_ >= 0) — IsNormal() derived; no state write.
 
