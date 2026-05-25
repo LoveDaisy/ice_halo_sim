@@ -41,8 +41,8 @@ void RayBuffer::EmplaceBack(RaySeg r) {
 }
 
 void RayBuffer::EmplaceBack(const RayBuffer& buffer, size_t start, size_t len) {
-  size_t end = std::min({ start + len, capacity_, buffer.size_ });
-  for (size_t i = start; i < end; i++) {
+  size_t src_end = std::min(start + len, buffer.size_);
+  for (size_t i = start; i < src_end && size_ < capacity_; i++) {
     rays_[size_++] = buffer.rays_[i];
   }
 }

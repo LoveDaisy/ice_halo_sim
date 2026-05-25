@@ -273,21 +273,21 @@ bool SliderWithInput(const char* label, float* value, float min_val, float max_v
   float slider_w = PrepareSliderLayout(label, display_buf, sizeof(display_buf), slider_id, sizeof(slider_id), input_id,
                                        sizeof(input_id));
 
-  bool changed = false;
+  const float old_value = *value;
 
   ImGui::PushItemWidth(slider_w);
-  changed |= RenderNonlinearSlider(slider_id, value, min_val, max_val, fmt, scale);
+  RenderNonlinearSlider(slider_id, value, min_val, max_val, fmt, scale);
   ImGui::PopItemWidth();
 
   ImGui::SameLine();
   ImGui::PushItemWidth(kInputWidth);
-  changed |= ImGui::InputFloat(input_id, value, 0, 0, fmt);
+  ImGui::InputFloat(input_id, value, 0, 0, fmt);
   ImGui::PopItemWidth();
 
   *value = std::clamp(*value, min_val, max_val);
 
   FinishSliderLayout(display_buf);
-  return changed;
+  return *value != old_value;
 }
 
 // SliderInt + InputInt + label text, same layout as SliderWithInput.
@@ -299,21 +299,21 @@ static bool SliderIntWithInput(const char* label, int* value, int min_val, int m
   float slider_w = PrepareSliderLayout(label, display_buf, sizeof(display_buf), slider_id, sizeof(slider_id), input_id,
                                        sizeof(input_id));
 
-  bool changed = false;
+  const int old_value = *value;
 
   ImGui::PushItemWidth(slider_w);
-  changed |= ImGui::SliderInt(slider_id, value, min_val, max_val, "%d", ImGuiSliderFlags_NoInput);
+  ImGui::SliderInt(slider_id, value, min_val, max_val, "%d", ImGuiSliderFlags_NoInput);
   ImGui::PopItemWidth();
 
   ImGui::SameLine();
   ImGui::PushItemWidth(kInputWidth);
-  changed |= ImGui::InputInt(input_id, value, 0, 0);
+  ImGui::InputInt(input_id, value, 0, 0);
   ImGui::PopItemWidth();
 
   *value = std::clamp(*value, min_val, max_val);
 
   FinishSliderLayout(display_buf);
-  return changed;
+  return *value != old_value;
 }
 
 // ---- Axis distribution controls (shared with edit modals) ----
@@ -874,7 +874,7 @@ void RenderSceneControls(GuiState& state) {
     SliderWithInput("Rays(M)", &state.sim.ray_num_millions, 0.1f, 100.0f);
     ImGui::EndDisabled();
   }
-  DIRTY_IF(SliderIntWithInput("Max hits", &state.sim.max_hits, 1, 20));
+  DIRTY_IF(SliderIntWithInput("Max hits", &state.sim.max_hits, 1, 64));
 }
 
 #undef DIRTY_IF
