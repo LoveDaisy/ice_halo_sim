@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779693465310,
+  "lastUpdate": 1779693467218,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -8639,6 +8639,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 71.7,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b555bce0cfb41ac2959a09682690abaee59e4dcc",
+          "message": "Merge pull request #109 from LoveDaisy/dev/env_var\n\nrefactor: replace LUMICE_SIM_SEED env var with C API sim_seed parameter",
+          "timestamp": "2026-05-25T15:12:52+08:00",
+          "tree_id": "7b0e4e2ac9d8d9d06a5c565821e5ba98db920649",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/b555bce0cfb41ac2959a09682690abaee59e4dcc"
+        },
+        "date": 1779693466698,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 91.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 80.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 60.9,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 69.1,
             "unit": "%"
           }
         ]
