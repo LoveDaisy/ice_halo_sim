@@ -21,7 +21,6 @@ Two tests:
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import numpy as np
@@ -33,7 +32,7 @@ CONFIGS_DIR = Path(__file__).parent / "configs"
 
 _K_NORM_SCALE = 0.08
 
-_REPRO_TEST_SEED = "42"
+_REPRO_TEST_SEED = 42
 
 _REPRO_PSNR_THRESHOLD = 25.0
 
@@ -77,16 +76,8 @@ def test_repro_scenario_matches_single_layer():
     do not leak through layer 2. The normalized output should closely match the
     single-layer baseline.
     """
-    old_seed = os.environ.get("LUMICE_SIM_SEED")
-    os.environ["LUMICE_SIM_SEED"] = _REPRO_TEST_SEED
-    try:
-        repro = run_scene_capi_buffered(str(CONFIGS_DIR / "ms_filter_leak_repro.json"))
-        baseline = run_scene_capi_buffered(str(CONFIGS_DIR / "ms_filter_leak_baseline.json"))
-    finally:
-        if old_seed is None:
-            os.environ.pop("LUMICE_SIM_SEED", None)
-        else:
-            os.environ["LUMICE_SIM_SEED"] = old_seed
+    repro = run_scene_capi_buffered(str(CONFIGS_DIR / "ms_filter_leak_repro.json"), sim_seed=_REPRO_TEST_SEED)
+    baseline = run_scene_capi_buffered(str(CONFIGS_DIR / "ms_filter_leak_baseline.json"), sim_seed=_REPRO_TEST_SEED)
 
     assert baseline.snapshot_intensity > 0, "baseline snapshot_intensity is zero"
     assert baseline.anchor_snapshot_intensity > 0, "baseline anchor is zero"

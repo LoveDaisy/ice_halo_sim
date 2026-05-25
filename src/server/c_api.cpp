@@ -69,7 +69,8 @@ LUMICE_Server* LUMICE_CreateServer() {
 LUMICE_Server* LUMICE_CreateServerEx(const LUMICE_ServerConfig* config) {
   auto* s = new LUMICE_Server;
   int num_workers = (config != nullptr) ? config->num_workers : 0;
-  s->server_ = std::make_unique<ns::Server>(num_workers);
+  uint32_t sim_seed = (config != nullptr) ? config->sim_seed : 0;
+  s->server_ = std::make_unique<ns::Server>(num_workers, sim_seed);
   return s;
 }
 

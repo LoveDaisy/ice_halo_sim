@@ -123,6 +123,22 @@ typedef struct LUMICE_StatsResult_ {
 **注意**：
 - 哨兵标识：全零（`sim_ray_num == 0`）
 
+#### LUMICE_ServerConfig
+
+服务器配置结构体，用于 `LUMICE_CreateServerEx()`。
+
+```c
+typedef struct LUMICE_ServerConfig_ {
+  int num_workers;        // 模拟器工作线程数。0 = 默认（hardware_concurrency - 2）
+  unsigned int sim_seed;  // 确定性 RNG 种子。0 = 随机（默认）。
+                          // 非零时强制为单线程以确保结果可复现。
+} LUMICE_ServerConfig;
+```
+
+**注意**：
+- 零初始化的结构体（`= {0}`）等同于默认行为（自动线程数、随机种子）
+- 当 `sim_seed != 0` 时，服务器强制 `num_workers = 1` 以确保确定性光线追踪结果
+
 ### 服务器生命周期
 
 #### LUMICE_CreateServer
@@ -139,6 +155,25 @@ LUMICE_Server* LUMICE_CreateServer(void);
 
 **注意**：
 - 返回的句柄必须使用 `LUMICE_DestroyServer()` 释放
+
+#### LUMICE_CreateServerEx
+
+使用自定义配置创建服务器实例。
+
+```c
+LUMICE_Server* LUMICE_CreateServerEx(const LUMICE_ServerConfig* config);
+```
+
+**参数**：
+- `config`: 指向 `LUMICE_ServerConfig` 结构体的指针；传 `NULL` 等同于 `LUMICE_CreateServer()`
+
+**返回值**：
+- 成功：返回服务器句柄指针
+- 失败：返回 `NULL`
+
+**注意**：
+- 返回的句柄必须使用 `LUMICE_DestroyServer()` 释放
+- 当需要设置确定性种子或控制线程数时，使用此函数替代 `LUMICE_CreateServer()`
 
 #### LUMICE_DestroyServer
 

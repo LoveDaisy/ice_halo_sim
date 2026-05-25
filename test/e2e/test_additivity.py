@@ -22,7 +22,6 @@ default CI pytest invocation.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import numpy as np
@@ -50,11 +49,11 @@ _K_NORM_SCALE = 0.08
 
 # ── thresholds ───────────────────────────────────────────────────────────────
 
-# Fixed seed for the partition-additivity fixture. Combined with
-# LUMICE_SIM_SEED's single-worker override (see src/server/server.cpp) this
-# makes two server lifecycles bit-stable: same RNG seed, FIFO scene_queue
-# consumed by one Simulator → identical ray paths and identical fp32 sums.
-_PARTITION_TEST_SEED = "42"
+# Fixed seed for the partition-additivity fixture. Passed via C API
+# LUMICE_ServerConfig.sim_seed which collapses to 1 worker for bit-stable
+# results: same RNG seed, FIFO scene_queue consumed by one Simulator →
+# identical ray paths and identical fp32 sums.
+_PARTITION_TEST_SEED = 42
 
 # Anchor buffer cross-filter invariance tolerance. Under LUMICE_SIM_SEED the
 # anchor is bit-identical across filter_in / filter_out runs, so 1e-4 is
@@ -132,22 +131,13 @@ def additivity_runs():
 def partition_pair(request):
     """Two same-seed runs (filter_in + filter_out) — F1 anchor lane invariant.
 
-    LUMICE_SIM_SEED is read by each fresh ServerImpl ctor
-    (capi_runner.py:186 CreateServer / capi_runner.py:234 DestroyServer) and
-    forces worker_count=1 — see src/server/server.cpp. The two runs therefore
-    share an identical RNG state machine and produce bit-stable anchors.
+    sim_seed is passed via LUMICE_ServerConfig.sim_seed (C API) which forces
+    worker_count=1 — see src/server/server.cpp. The two runs therefore share
+    an identical RNG state machine and produce bit-stable anchors.
     """
     in_cfg, out_cfg, _label = request.param
-    old_seed = os.environ.get("LUMICE_SIM_SEED")
-    os.environ["LUMICE_SIM_SEED"] = _PARTITION_TEST_SEED
-    try:
-        result_in = run_scene_capi(str(CONFIGS_DIR / in_cfg))
-        result_out = run_scene_capi(str(CONFIGS_DIR / out_cfg))
-    finally:
-        if old_seed is None:
-            os.environ.pop("LUMICE_SIM_SEED", None)
-        else:
-            os.environ["LUMICE_SIM_SEED"] = old_seed
+    result_in = run_scene_capi(str(CONFIGS_DIR / in_cfg), sim_seed=_PARTITION_TEST_SEED)
+    result_out = run_scene_capi(str(CONFIGS_DIR / out_cfg), sim_seed=_PARTITION_TEST_SEED)
     return result_in, result_out
 
 

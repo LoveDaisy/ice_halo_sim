@@ -1,6 +1,7 @@
 #ifndef INCLUDE_SERVER_H_
 #define INCLUDE_SERVER_H_
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <nlohmann/json_fwd.hpp>
@@ -187,9 +188,10 @@ class Server {
   /**
    * @brief Construct a new Server with specified worker count
    * @param num_workers Number of simulator worker threads. 0 = default (hardware_concurrency - 2)
+   * @param sim_seed Deterministic RNG seed. 0 = random. Non-zero collapses to 1 worker.
    * @note The server starts running immediately after construction
    */
-  explicit Server(int num_workers);
+  explicit Server(int num_workers, uint32_t sim_seed = 0);
 
   /**
    * @brief Commit configuration from string

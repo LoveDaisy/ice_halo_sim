@@ -99,6 +99,18 @@ gdb ./build/cmake_build/Lumice
 (gdb) run -f examples/config_example.json
 ```
 
+### Environment Variables
+
+Lumice uses a small number of environment variables for build scripts and test tooling. The product code (C++ source under `src/`) does **not** read any environment variables at runtime.
+
+| Variable | Where | Purpose |
+|----------|-------|---------|
+| `LUMICE_SKIP_GUI_TESTS` | `scripts/build.sh` | Set to `1` to skip GUI test compilation and execution. CI auto-detects headless environments via the `CI` variable. |
+| `LUMICE_BIN` | `test/e2e/runner.py` | Override the CLI binary path for E2E subprocess tests. Defaults to `build/cmake_install/Lumice`. |
+| `LUMICE_LIB` | `test/e2e/capi_runner.py` | Override the shared library path for E2E C API tests. Defaults to `build/cmake_install/liblumice.dylib` (macOS) or `.so` (Linux). |
+
+**Design principle**: Deterministic simulation seeds are passed via the C API (`LUMICE_ServerConfig.sim_seed`) rather than environment variables, to keep program behavior explicit and reproducible. See the [C API documentation](c_api.md) for details.
+
 ## Code Style Guide
 
 ### General Principles
