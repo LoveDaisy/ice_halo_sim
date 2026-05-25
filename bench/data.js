@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779672709342,
+  "lastUpdate": 1779672711188,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -8359,6 +8359,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 72.9,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "22dc93834aba6b5b8c0e55d16027165f830004f8",
+          "message": "Merge pull request #107 from LoveDaisy/feat/ci_test\n\nci: add slow e2e test job with shared-lib build",
+          "timestamp": "2026-05-25T09:25:31+08:00",
+          "tree_id": "8bdc09a9c9a6566dab36fe1e61008d26ef894aab",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/22dc93834aba6b5b8c0e55d16027165f830004f8"
+        },
+        "date": 1779672710643,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 90.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 79.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 76,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 71.6,
             "unit": "%"
           }
         ]
