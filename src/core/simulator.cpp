@@ -206,6 +206,12 @@ void InitRayOtherMs(RandomNumberGenerator& rng, const RayBuffer init_data[2], si
   // 1.3 init crystal_id, crystal_config_id, root_ray_idx, rp, state
   InitRay_other_info(curr_crystal, curr_crystal_id, all_data.size_, buffer_data);
 
+  // 1.4 reset is_continue_ (pool-reuse guard: init_data carries is_continue_=true
+  // from CollectData; must reset before entering the new MS layer's hit loop)
+  for (auto& r : buffer_data[0]) {
+    r.is_continue_ = false;
+  }
+
   all_data.EmplaceBack(buffer_data[0]);
 }
 
@@ -379,6 +385,14 @@ void TraceRayBasicInfo(const Crystal& curr_crystal, float refractive_index, size
     buffer_data[1][i * 2 + 1].from_face_ = buffer_data[0][i].to_face_;
     buffer_data[1][i * 2 + 0].is_prior_filter_failed_ = buffer_data[0][i].is_prior_filter_failed_;
     buffer_data[1][i * 2 + 1].is_prior_filter_failed_ = buffer_data[0][i].is_prior_filter_failed_;
+    buffer_data[1][i * 2 + 0].crystal_idx_ = buffer_data[0][i].crystal_idx_;
+    buffer_data[1][i * 2 + 1].crystal_idx_ = buffer_data[0][i].crystal_idx_;
+    buffer_data[1][i * 2 + 0].crystal_config_id_ = buffer_data[0][i].crystal_config_id_;
+    buffer_data[1][i * 2 + 1].crystal_config_id_ = buffer_data[0][i].crystal_config_id_;
+    buffer_data[1][i * 2 + 0].crystal_rot_ = buffer_data[0][i].crystal_rot_;
+    buffer_data[1][i * 2 + 1].crystal_rot_ = buffer_data[0][i].crystal_rot_;
+    buffer_data[1][i * 2 + 0].root_ray_idx_ = buffer_data[0][i].root_ray_idx_;
+    buffer_data[1][i * 2 + 1].root_ray_idx_ = buffer_data[0][i].root_ray_idx_;
   }
 
   buffer_data[0].size_ = 0;
@@ -386,28 +400,12 @@ void TraceRayBasicInfo(const Crystal& curr_crystal, float refractive_index, size
 }
 
 
-void FillRayOtherInfo(size_t curr_ray_num, size_t i,                           // input
-                      const Crystal& curr_crystal, const RayBuffer& all_data,  // input
-                      RayBuffer buffer_data[2]) {                              // output
-  size_t ray_id_offset = all_data.size_;
+void FillRayOtherInfo(const Crystal& curr_crystal, RayBuffer buffer_data[2]) {
   for (size_t j = 0; j < buffer_data[1].size_; j++) {
     auto& r = buffer_data[1][j];
     if (r.to_face_ != kInvalidId) {
       r.rp_ << curr_crystal.GetFn(r.to_face_);
     }
-
-    if (i == 0) {
-      r.prev_ray_idx_ = j / 2 + ray_id_offset - curr_ray_num;
-    } else if (i == 1) {
-      r.prev_ray_idx_ = j / 2 * 2 + 1 + ray_id_offset - curr_ray_num * 2;
-    } else {
-      r.prev_ray_idx_ = j / 2 * 2 + 0 + ray_id_offset - curr_ray_num * 2;
-    }
-
-    r.crystal_idx_ = all_data[r.prev_ray_idx_].crystal_idx_;
-    r.crystal_config_id_ = all_data[r.prev_ray_idx_].crystal_config_id_;
-    r.crystal_rot_ = all_data[r.prev_ray_idx_].crystal_rot_;
-    r.root_ray_idx_ = all_data[r.prev_ray_idx_].root_ray_idx_;
   }
 }
 
@@ -683,13 +681,12 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
         float refractive_index = curr_crystal.GetRefractiveIndex(wl);
         for (size_t i = 0; i < config.max_hits_ && !stop_; i++) {
           // 2.1 Trace rays. Deal with d, p, w, fid
-          TraceRayBasicInfo(curr_crystal, refractive_index, curr_ray_num,  // input
-                            buffer_data);                                  // output
-          // After tracing, ray data will be in buffer_data[1], and there are curr_ray_num * 2 rays.
+          size_t curr_batch_size = buffer_data[0].size_;
+          TraceRayBasicInfo(curr_crystal, refractive_index, curr_batch_size,  // input
+                            buffer_data);                                     // output
 
-          // 2.2 Fill other information: all but (d, p, w, fid)
-          FillRayOtherInfo(curr_ray_num, i, curr_crystal, all_data,  // input
-                           buffer_data);                             // output
+          // 2.2 Fill other information: append face-number to raypath
+          FillRayOtherInfo(curr_crystal, buffer_data);
 
           // 2.3 Collect data. And set ray properties: state.
           CollectData(rng_, m, spec.get(),      // input

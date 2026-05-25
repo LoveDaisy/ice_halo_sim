@@ -504,6 +504,59 @@ TEST(CollectDataFilterDispatch, FilterPassNoProbEmitsOutgoing) {
   EXPECT_EQ(init_data[1].size_, 0u);
 }
 
+TEST(CollectDataFilterDispatch, PriorFailedFilterPassProbPass) {
+  RandomNumberGenerator rng(42);
+  AlwaysAcceptSpec filter;
+  MsInfo ms_info;
+  ms_info.prob_ = 1.0f;
+
+  RayBuffer buffer_data[2];
+  RayBuffer init_data[2];
+  buffer_data[0].Reset(8);
+  buffer_data[1].Reset(8);
+  init_data[0].Reset(8);
+  init_data[1].Reset(8);
+
+  auto r = MakeOutgoingCandidate();
+  r.is_prior_filter_failed_ = true;
+  buffer_data[1].EmplaceBack(r);
+
+  CollectData(rng, ms_info, &filter, buffer_data, init_data);
+
+  ASSERT_EQ(buffer_data[1].size_, 1u);
+  const auto& out = buffer_data[1].rays_[0];
+  EXPECT_TRUE(out.IsContinue()) << "prior_failed + filter-pass + prob-pass must continue";
+  EXPECT_FALSE(out.IsFilterDropped());
+  EXPECT_EQ(init_data[1].size_, 1u);
+}
+
+TEST(CollectDataFilterDispatch, PriorFailedFilterPassProbFail) {
+  RandomNumberGenerator rng(42);
+  AlwaysAcceptSpec filter;
+  MsInfo ms_info;
+  ms_info.prob_ = 0.0f;
+
+  RayBuffer buffer_data[2];
+  RayBuffer init_data[2];
+  buffer_data[0].Reset(8);
+  buffer_data[1].Reset(8);
+  init_data[0].Reset(8);
+  init_data[1].Reset(8);
+
+  auto r = MakeOutgoingCandidate();
+  r.is_prior_filter_failed_ = true;
+  buffer_data[1].EmplaceBack(r);
+
+  CollectData(rng, ms_info, &filter, buffer_data, init_data);
+
+  ASSERT_EQ(buffer_data[1].size_, 1u);
+  const auto& out = buffer_data[1].rays_[0];
+  EXPECT_TRUE(out.IsFilterDropped()) << "prior_failed + filter-pass + prob-fail must land in anchor lane";
+  EXPECT_FALSE(out.IsContinue());
+  EXPECT_FALSE(out.IsOutgoing());
+  EXPECT_EQ(init_data[1].size_, 0u);
+}
+
 // ---- AC-5: derived-helper unit tests for RaySeg segment-kind predicates ----
 
 namespace {
