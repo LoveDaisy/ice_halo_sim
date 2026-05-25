@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+markers = [
+    "slow: requires shared-lib build; excluded from CI fast path",
+]
