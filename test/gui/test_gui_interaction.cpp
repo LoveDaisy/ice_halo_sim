@@ -1755,6 +1755,42 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.sun.altitude, 90.0f);
     };
   }
+
+  // p1_slider/altitude_out_of_range_no_dirty — out-of-range input at upper boundary does not trigger dirty
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "altitude_out_of_range_no_dirty");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.sun.altitude = 90.0f;
+      gui::g_state.dirty = false;
+      ctx->Yield(2);
+
+      ctx->ItemInputValue("**/##Altitude_input", 200.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.sun.altitude, 90.0f);
+      IM_CHECK_EQ(gui::g_state.dirty, false);
+    };
+  }
+
+  // p1_slider/altitude_out_of_range_negative_no_dirty — out-of-range negative input at lower boundary
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "altitude_out_of_range_negative_no_dirty");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.sun.altitude = -90.0f;
+      gui::g_state.dirty = false;
+      ctx->Yield(2);
+
+      ctx->ItemInputValue("**/##Altitude_input", -200.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.sun.altitude, -90.0f);
+      IM_CHECK_EQ(gui::g_state.dirty, false);
+    };
+  }
 }
 
 // ========== task-test-gui-interaction: P2 Render (lens switch / overlay) ==========
