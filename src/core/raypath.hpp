@@ -82,6 +82,12 @@ struct RaySeg {
   // exclusive with is_continue_: both are only meaningful when to_face_ ==
   // kInvalidId && w_ >= 0.
   bool is_filter_dropped_ = false;
+  // Cross-layer persistent flag: set when an outgoing candidate fails the
+  // per-crystal filter in any MS layer, propagated to child segments via
+  // TraceRayBasicInfo(). Rays carrying this flag route to the anchor lane
+  // (is_filter_dropped_) rather than the main outgoing buffer, even if they
+  // pass the current layer's filter.
+  bool is_prior_filter_failed_ = false;
   RaypathRecorder rp_;  // Raypath in **CURRENT** crystal.
 
   // Derived segment-kind helpers. Invariants (mutually exclusive, exhaustive):
