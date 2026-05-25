@@ -57,6 +57,18 @@ assert ctypes.sizeof(LUMICE_RawXyzResult) == 64, (
 )
 
 
+class LUMICE_ServerConfig(ctypes.Structure):
+    _fields_ = [
+        ("num_workers", ctypes.c_int),
+        ("sim_seed",    ctypes.c_uint),
+    ]
+
+
+assert ctypes.sizeof(LUMICE_ServerConfig) == 8, (
+    "LUMICE_ServerConfig size mismatch — verify lumice.h field layout"
+)
+
+
 # LUMICE_ServerState constants (lumice.h)
 _LUMICE_SERVER_IDLE = 0
 _LUMICE_SERVER_RUNNING = 1
@@ -147,6 +159,9 @@ def _load_lib() -> ctypes.CDLL:
     lib.LUMICE_CreateServer.restype = ctypes.c_void_p
     lib.LUMICE_CreateServer.argtypes = []
 
+    lib.LUMICE_CreateServerEx.restype = ctypes.c_void_p
+    lib.LUMICE_CreateServerEx.argtypes = [ctypes.POINTER(LUMICE_ServerConfig)]
+
     lib.LUMICE_DestroyServer.restype = None
     lib.LUMICE_DestroyServer.argtypes = [ctypes.c_void_p]
 
@@ -167,7 +182,7 @@ def _load_lib() -> ctypes.CDLL:
     return lib
 
 
-def run_scene_capi(config_path: str, timeout_sec: int = 180) -> SimResult:
+def run_scene_capi(config_path: str, sim_seed: int = 0, timeout_sec: int = 180) -> SimResult:
     """Run a single Lumice simulation via the C API and return scalar intensity.
 
     Spawns a fresh server, commits ``config_path``, polls until valid data is
@@ -176,6 +191,7 @@ def run_scene_capi(config_path: str, timeout_sec: int = 180) -> SimResult:
 
     Args:
         config_path: absolute or repo-relative path to a JSON config.
+        sim_seed: deterministic RNG seed (0 = random). Non-zero collapses to 1 worker.
         timeout_sec: maximum wall time to wait for the simulation.
 
     Raises:
@@ -184,7 +200,11 @@ def run_scene_capi(config_path: str, timeout_sec: int = 180) -> SimResult:
     """
     lib = _load_lib()
 
-    server = lib.LUMICE_CreateServer()
+    if sim_seed != 0:
+        cfg = LUMICE_ServerConfig(num_workers=0, sim_seed=sim_seed)
+        server = lib.LUMICE_CreateServerEx(ctypes.byref(cfg))
+    else:
+        server = lib.LUMICE_CreateServer()
     if not server:
         raise RuntimeError("LUMICE_CreateServer returned NULL")
 
@@ -234,7 +254,7 @@ def run_scene_capi(config_path: str, timeout_sec: int = 180) -> SimResult:
         lib.LUMICE_DestroyServer(server)
 
 
-def run_scene_capi_buffered(config_path: str, timeout_sec: int = 180) -> BufferedSimResult:
+def run_scene_capi_buffered(config_path: str, sim_seed: int = 0, timeout_sec: int = 180) -> BufferedSimResult:
     """Run a Lumice sim via the C API and copy out both XYZ buffers.
 
     Polling exits only after `has_valid_data AND IDLE` is observed on two
@@ -247,7 +267,11 @@ def run_scene_capi_buffered(config_path: str, timeout_sec: int = 180) -> Buffere
     """
     lib = _load_lib()
 
-    server = lib.LUMICE_CreateServer()
+    if sim_seed != 0:
+        cfg = LUMICE_ServerConfig(num_workers=0, sim_seed=sim_seed)
+        server = lib.LUMICE_CreateServerEx(ctypes.byref(cfg))
+    else:
+        server = lib.LUMICE_CreateServer()
     if not server:
         raise RuntimeError("LUMICE_CreateServer returned NULL")
 

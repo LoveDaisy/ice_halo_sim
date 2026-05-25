@@ -97,7 +97,9 @@ typedef struct LUMICE_StatsResult_ {
 
 // =============== Server Configuration ===============
 typedef struct LUMICE_ServerConfig_ {
-  int num_workers;  // Number of simulator worker threads. 0 = default (hardware_concurrency - 2)
+  int num_workers;        // Number of simulator worker threads. 0 = default (hardware_concurrency - 2)
+  unsigned int sim_seed;  // Deterministic seed for worker RNGs. 0 = random (default).
+                          // Non-zero collapses to 1 worker for bit-stable results.
 } LUMICE_ServerConfig;
 
 // =============== Server Lifecycle ===============
