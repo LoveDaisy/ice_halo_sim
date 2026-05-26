@@ -1568,6 +1568,83 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.dirty, true);
     };
   }
+
+  // p1_card/card_wide_click_opens_modal — clicking card blank area opens the edit modal
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_card", "card_wide_click_opens_modal");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      IM_CHECK_EQ(gui::IsEditModalOpen(), false);
+
+      // Locate the Edit##cr button on the first card to derive the card's thumbnail area.
+      // The thumbnail occupies the left portion of the card; clicking there hits no ImGui item.
+      auto edit_info = ctx->ItemInfo("**/Edit##cr");
+      IM_CHECK(edit_info.ID != 0);
+      float card_left = edit_info.RectFull.Min.x - 200.0f;
+      float card_top = edit_info.RectFull.Min.y;
+      ImVec2 thumb_center(card_left + 30.0f, card_top + 20.0f);
+
+      ctx->MouseMoveToPos(thumb_center);
+      ctx->MouseClick(0);
+      ctx->Yield(4);
+
+      IM_CHECK_EQ(gui::IsEditModalOpen(), true);
+      auto tgt = gui::GetEditModalTarget();
+      IM_CHECK_EQ(tgt.layer_idx, 0);
+      IM_CHECK_EQ(tgt.entry_idx, 0);
+
+      // Cleanup: close modal
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // p1_card/card_wide_click_noop_same_card — card click on already-open card is no-op
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_card", "card_wide_click_noop_same_card");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Open modal on entry 0 via Edit button
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      IM_CHECK_EQ(gui::IsEditModalOpen(), true);
+      auto tgt_before = gui::GetEditModalTarget();
+      IM_CHECK_EQ(tgt_before.layer_idx, 0);
+      IM_CHECK_EQ(tgt_before.entry_idx, 0);
+
+      // Modify a crystal param to detect if OpenEditModal resets buffers
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].prism_h = 7.77f;
+      ctx->Yield();
+
+      // Click the thumbnail area of the same card
+      auto edit_info = ctx->ItemInfo("**/Edit##cr");
+      IM_CHECK(edit_info.ID != 0);
+      float card_left = edit_info.RectFull.Min.x - 200.0f;
+      float card_top = edit_info.RectFull.Min.y;
+      ImVec2 thumb_center(card_left + 30.0f, card_top + 20.0f);
+
+      ctx->MouseMoveToPos(thumb_center);
+      ctx->MouseClick(0);
+      ctx->Yield(4);
+
+      // Modal still open on same card — no-op
+      IM_CHECK_EQ(gui::IsEditModalOpen(), true);
+      auto tgt_after = gui::GetEditModalTarget();
+      IM_CHECK_EQ(tgt_after.layer_idx, 0);
+      IM_CHECK_EQ(tgt_after.entry_idx, 0);
+
+      // Crystal param was NOT reset by a spurious OpenEditModal call
+      IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].prism_h, 7.77f);
+
+      // Cleanup: close modal
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
 }
 
 // ========== task-test-gui-interaction: P1 Slider boundary tests ==========

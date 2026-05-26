@@ -17,7 +17,7 @@ bool SliderWithInput(const char* label, float* value, float min_val, float max_v
                      SliderScale scale = SliderScale::kLinear);
 
 // ---- Edit request (shared between panels.cpp and app_panels.cpp) ----
-enum class EditTarget { kNone, kCrystal, kAxis, kFilter };
+enum class EditTarget { kNone, kCrystal, kAxis, kFilter, kCard };
 
 struct EditRequest {
   EditTarget target = EditTarget::kNone;

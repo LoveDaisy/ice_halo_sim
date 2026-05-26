@@ -7,6 +7,7 @@ namespace lumice::gui {
 
 struct GuiState;
 struct EditRequest;
+enum class EditTarget;
 
 // Process an edit request from the card UI. Must be called from the left panel
 // after detecting a non-None EditRequest (before ResetEditRequest).
@@ -37,6 +38,10 @@ struct EditModalTarget {
   int entry_idx;
 };
 EditModalTarget GetEditModalTarget();
+
+// Returns the EditTarget corresponding to the currently active tab. When
+// no modal is open, returns EditTarget::kCrystal as the default tab.
+EditTarget GetActiveTabAsEditTarget();
 
 // Reset all modal-internal static state (active modal, edit buffers, pending flags).
 // Called by test teardown (ResetTestState) to prevent state leakage between tests.

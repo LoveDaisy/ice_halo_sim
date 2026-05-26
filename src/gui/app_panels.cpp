@@ -365,9 +365,19 @@ void RenderLeftPanel(float window_height) {
     g_state.MarkDirty();
   }
 
-  // Process edit request: open modal if an edit button was clicked
+  // Process edit request: open modal if an edit button or card area was clicked
   if (GetEditRequest().target != EditTarget::kNone) {
-    OpenEditModal(GetEditRequest(), g_state);
+    const auto& req = GetEditRequest();
+    if (req.target == EditTarget::kCard) {
+      const auto modal_tgt = GetEditModalTarget();
+      if (!IsEditModalOpen() || modal_tgt.layer_idx != req.layer_idx || modal_tgt.entry_idx != req.entry_idx) {
+        EditRequest resolved = req;
+        resolved.target = IsEditModalOpen() ? GetActiveTabAsEditTarget() : EditTarget::kCrystal;
+        OpenEditModal(resolved, g_state);
+      }
+    } else {
+      OpenEditModal(req, g_state);
+    }
     ResetEditRequest();
   }
 
