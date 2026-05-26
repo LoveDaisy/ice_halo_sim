@@ -1578,8 +1578,11 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
 
       IM_CHECK_EQ(gui::IsEditModalOpen(), false);
 
-      // Locate the Edit##cr button on the first card to derive the card's thumbnail area.
-      // The thumbnail occupies the left portion of the card; clicking there hits no ImGui item.
+      // Derive a thumbnail click position from the Edit##cr button anchor.
+      // The Edit button sits in the right column at thumb_display_size + text_w + 2*spacing from
+      // card left (~200 px in the default test window). The thumbnail occupies the leftmost
+      // ~88 px (4 * frame_height_with_spacing − spacing_y), so card_left + 30 stays in the
+      // thumbnail and is clear of every ImGui item (IsAnyItemHovered == false).
       auto edit_info = ctx->ItemInfo("**/Edit##cr");
       IM_CHECK(edit_info.ID != 0);
       float card_left = edit_info.RectFull.Min.x - 200.0f;
@@ -1616,11 +1619,13 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(tgt_before.layer_idx, 0);
       IM_CHECK_EQ(tgt_before.entry_idx, 0);
 
-      // Modify a crystal param to detect if OpenEditModal resets buffers
-      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].prism_h = 7.77f;
+      // Set the Height field through the modal UI — the buffer now differs from g_state.
+      // If a spurious OpenEditModal call resets the buffer, the field reverts to g_state.height.
+      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height;
+      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 33.0f);
       ctx->Yield();
 
-      // Click the thumbnail area of the same card
+      // Click the thumbnail area of the same card (same anchor logic as card_wide_click_opens_modal)
       auto edit_info = ctx->ItemInfo("**/Edit##cr");
       IM_CHECK(edit_info.ID != 0);
       float card_left = edit_info.RectFull.Min.x - 200.0f;
@@ -1637,12 +1642,12 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(tgt_after.layer_idx, 0);
       IM_CHECK_EQ(tgt_after.entry_idx, 0);
 
-      // Crystal param was NOT reset by a spurious OpenEditModal call
-      IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].prism_h, 7.77f);
-
-      // Cleanup: close modal
-      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+      // Commit buffer via OK: if no-op held, g_state.height becomes orig_h + 33.0f;
+      // if OpenEditModal was spuriously called, buffer was reset to orig_h.
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height,
+                  orig_h + 33.0f);
     };
   }
 }

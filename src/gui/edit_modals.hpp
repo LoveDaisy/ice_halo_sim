@@ -39,8 +39,10 @@ struct EditModalTarget {
 };
 EditModalTarget GetEditModalTarget();
 
-// Returns the EditTarget corresponding to the currently active tab. When
-// no modal is open, returns EditTarget::kCrystal as the default tab.
+// Returns the EditTarget corresponding to the currently active tab. Returns
+// EditTarget::kCrystal when no modal is open because ResetModalState() resets
+// g_active_tab to kCrystal on close. Intended solely for resolving the tab in
+// kCard edit requests — do not use for other purposes.
 EditTarget GetActiveTabAsEditTarget();
 
 // Reset all modal-internal static state (active modal, edit buffers, pending flags).
