@@ -244,6 +244,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       r.roll = 7.5f;
       r.sim_resolution_index = 2;
       r.visible = 1;
+      r.front = true;
       r.background[0] = 0.1f;
       r.background[1] = 0.2f;
       r.background[2] = 0.3f;
@@ -267,6 +268,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(loaded.renderer.roll, 7.5f);
       IM_CHECK_EQ(loaded.renderer.sim_resolution_index, 2);
       IM_CHECK_EQ(loaded.renderer.visible, 1);
+      IM_CHECK_EQ(loaded.renderer.front, true);
       IM_CHECK_EQ(loaded.renderer.background[0], 0.1f);
       IM_CHECK_EQ(loaded.renderer.background[1], 0.2f);
       IM_CHECK_EQ(loaded.renderer.background[2], 0.3f);
@@ -323,6 +325,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(loaded.renderer.roll, 3.5f);
       IM_CHECK_EQ(loaded.renderer.sim_resolution_index, 2);  // 2048 → index 2 in kSimResolutions={512,1024,2048,4096}
       IM_CHECK_EQ(loaded.renderer.visible, 1);               // "lower" → 1
+      IM_CHECK_EQ(loaded.renderer.front, false);             // no "front" key → default false
       IM_CHECK(std::abs(loaded.renderer.background[0] - 0.11f) < 1e-5f);
       IM_CHECK(std::abs(loaded.renderer.background[1] - 0.22f) < 1e-5f);
       IM_CHECK(std::abs(loaded.renderer.background[2] - 0.33f) < 1e-5f);
@@ -359,7 +362,32 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(loaded.renderer.fov, 90.0f);
       IM_CHECK_EQ(loaded.renderer.sim_resolution_index, 1);
       IM_CHECK_EQ(loaded.renderer.visible, 2);
+      IM_CHECK_EQ(loaded.renderer.front, false);
       IM_CHECK_EQ(loaded.renderer.opacity, 1.0f);
+    };
+  }
+
+  // Test 4e: legacy "visible": "front" maps to base=full + front=true
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "renderer_legacy_front_compat");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      std::string json = R"({
+        "layers": [],
+        "renderer": {
+          "lens_type": "fisheye_equal_area",
+          "fov": 180.0,
+          "visible": "front"
+        }
+      })";
+
+      gui::GuiState loaded;
+      bool ok = gui::DeserializeGuiStateJson(json, loaded);
+      IM_CHECK(ok);
+      IM_CHECK_EQ(loaded.renderer.visible, gui::kVisibleFull);
+      IM_CHECK_EQ(loaded.renderer.front, true);
     };
   }
 

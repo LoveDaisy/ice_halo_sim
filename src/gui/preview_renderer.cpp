@@ -33,6 +33,7 @@ uniform int u_lens_type;     // 0=linear, 1-3=fisheye, 4-6=dual fisheye, 7=recta
 uniform float u_fov;         // full FOV in degrees
 uniform mat3 u_view_matrix;  // view-to-world rotation (inverse view)
 uniform int u_visible;       // 0=upper, 1=lower, 2=full
+uniform int u_front;         // 1=discard back hemisphere
 uniform float u_intensity_scale;  // = intensity_factor / per_pixel_intensity (0 = RGB mode)
 uniform int u_xyz_mode;           // 1 = XYZ float texture, 0 = sRGB uint8 texture
 uniform sampler2D u_bg_texture;
@@ -413,9 +414,9 @@ void main() {
     pixel_visible = true;
     if (u_visible == 0 && lat < 0.0) pixel_visible = false;   // upper: discard lower hemisphere
     if (u_visible == 1 && lat > 0.0) pixel_visible = false;   // lower: discard upper hemisphere
-    // 3=front: discard back hemisphere. u_view_matrix[2] = -forward (see BuildViewMatrix),
-    // so dot(world_dir, u_view_matrix[2]) > 0 means world_dir is behind the camera.
-    if (u_visible == 3 && dot(world_dir, u_view_matrix[2]) > 0.0) pixel_visible = false;
+    // u_front: discard back hemisphere (AND with base). u_view_matrix[2] = -forward
+    // (see BuildViewMatrix), so dot > 0 means world_dir is behind the camera.
+    if (u_front == 1 && dot(world_dir, u_view_matrix[2]) > 0.0) pixel_visible = false;
 
     if (pixel_visible) {
       vec3 tex_color = sampleDualFisheye(world_dir);
@@ -925,6 +926,7 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   glUniform1i(glGetUniformLocation(shader_program_, "u_lens_type"), params.view_proj.lens_type);
   glUniform1f(glGetUniformLocation(shader_program_, "u_fov"), params.view_proj.fov);
   glUniform1i(glGetUniformLocation(shader_program_, "u_visible"), params.view_proj.visible);
+  glUniform1i(glGetUniformLocation(shader_program_, "u_front"), params.view_proj.front ? 1 : 0);
   glUniform1i(glGetUniformLocation(shader_program_, "u_xyz_mode"), xyz_mode_ ? 1 : 0);
   glUniform1f(glGetUniformLocation(shader_program_, "u_intensity_scale"), params.exposure.intensity_scale);
   glUniform1f(glGetUniformLocation(shader_program_, "u_max_abs_dz"), params.source.max_abs_dz);

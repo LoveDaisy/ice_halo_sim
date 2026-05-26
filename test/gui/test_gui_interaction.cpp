@@ -1646,8 +1646,7 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
       // if OpenEditModal was spuriously called, buffer was reset to orig_h.
       ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
-      IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height,
-                  orig_h + 33.0f);
+      IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height, orig_h + 33.0f);
     };
   }
 }
@@ -2618,13 +2617,13 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // ===== task-visibility-radio-layout (scrum-gui-polish-v18 180.1) =====
-  // Verify the 1×4 horizontal layout: click hit and same-row geometry.
+  // ===== task-visible-hemisphere-combo =====
+  // Verify visibility controls: radio buttons (base hemisphere) + checkbox (front).
 
-  // p2_render/visibility_horizontal_layout_click_hit — fisheye lens (all 4 buttons
-  // enabled); ItemClick on Lower and Front commits the correct value.
+  // p2_render/visibility_click_hit — fisheye lens; ItemClick on Lower radio and Front
+  // checkbox commits the correct values.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_horizontal_layout_click_hit");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_click_hit");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
@@ -2633,16 +2632,21 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/Lower##visible");
       ctx->Yield(2);
       IM_CHECK_EQ(gui::g_state.renderer.visible, gui::kVisibleLower);
+      IM_CHECK_EQ(gui::g_state.renderer.front, false);
       ctx->ItemClick("**/Front##visible");
       ctx->Yield(2);
-      IM_CHECK_EQ(gui::g_state.renderer.visible, gui::kVisibleFront);
+      IM_CHECK_EQ(gui::g_state.renderer.visible, gui::kVisibleLower);
+      IM_CHECK_EQ(gui::g_state.renderer.front, true);
+      ctx->ItemClick("**/Front##visible");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.renderer.front, false);
     };
   }
 
-  // p2_render/visibility_horizontal_layout_same_row — fisheye lens; Upper and Front
-  // must share the same screen row (RectFull.Min.y equal, confirming 1×4 layout).
+  // p2_render/visibility_same_row — fisheye lens; Upper radio and Front checkbox
+  // must share the same screen row.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_horizontal_layout_same_row");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_same_row");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
@@ -2652,6 +2656,19 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       auto info_front = ctx->ItemInfo("**/Front##visible");
       IM_CHECK_EQ(info_upper.RectFull.Min.y, info_front.RectFull.Min.y);
       IM_CHECK(info_front.RectFull.Min.x > info_upper.RectFull.Min.x);
+    };
+  }
+
+  // p2_render/visibility_globe_disables_front — Globe lens disables the Front checkbox.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_globe_disables_front");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
+      ctx->Yield(3);
+      auto info_front = ctx->ItemInfo("**/Front##visible");
+      IM_CHECK(info_front.ItemFlags & ImGuiItemFlags_Disabled);
     };
   }
 }

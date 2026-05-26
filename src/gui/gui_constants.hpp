@@ -172,12 +172,12 @@ inline constexpr bool LensIsFov180(int lens_type) {
 // shader string).
 inline constexpr float kGlobeCameraD = 4.0f;
 
-// Visible region selector. Order must match kVisibleNames in gui_state.hpp.
+// Visible region selector (base hemisphere). Order must match kVisibleNames in gui_state.hpp.
+// Front-hemisphere clipping is an independent flag (RenderConfig::front), not an enum value.
 enum Visible : int {
   kVisibleUpper = 0,
   kVisibleLower = 1,
   kVisibleFull = 2,
-  kVisibleFront = 3,
 };
 
 }  // namespace lumice::gui
