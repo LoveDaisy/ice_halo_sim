@@ -33,7 +33,7 @@ struct ViewProjection {
 
 // Canonical ViewProjection values for export code paths. Kept adjacent to
 // ViewProjection so aggregate-initializer field order can be verified at a
-// glance. Field order, top-to-bottom: lens_type, fov, elevation, azimuth, roll, visible.
+// glance. Field order, top-to-bottom: lens_type, fov, elevation, azimuth, roll, visible, front.
 inline constexpr ViewProjection kDualFisheyeExportViewProj = {
   kLensTypeDualFisheyeEqualArea, 180.0f, 0.0f, 0.0f, 0.0f, kVisibleFull, false,
 };

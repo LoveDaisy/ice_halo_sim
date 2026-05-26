@@ -2671,6 +2671,22 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       IM_CHECK(info_front.ItemFlags & ImGuiItemFlags_Disabled);
     };
   }
+
+  // p2_render/visibility_full_sky_disables_all — Full-sky lens disables the radio buttons
+  // and Front checkbox (outer BeginDisabled path, acceptance criterion #5).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_full_sky_disables_all");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kFullSkyLensTypes[0];
+      ctx->Yield(3);
+      auto info_upper = ctx->ItemInfo("**/Upper##visible");
+      auto info_front = ctx->ItemInfo("**/Front##visible");
+      IM_CHECK(info_upper.ItemFlags & ImGuiItemFlags_Disabled);
+      IM_CHECK(info_front.ItemFlags & ImGuiItemFlags_Disabled);
+    };
+  }
 }
 
 // ========== task-test-gui-interaction: P1 Running simulation restart tests ==========

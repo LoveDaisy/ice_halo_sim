@@ -391,6 +391,36 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // Test 4f: legacy "visible": "front" in core-JSON format (DeserializeFromJson path)
+  // Covers the root["render"][0]["visible"]=="front" branch at file_io.cpp:1038-1041,
+  // which is distinct from the GUI-JSON "renderer" object path tested by renderer_legacy_front_compat.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "core_json_legacy_front_compat");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      std::string json = R"({
+        "crystal": [],
+        "filter": [],
+        "scene": {"scattering": [], "ray_num": 1000, "max_hits": 4,
+                   "light_source": {"altitude": 20.0, "diameter": 0.5, "spectrum": "D65"}},
+        "render": [
+          {
+            "lens": {"type": "fisheye_equal_area", "fov": 180.0},
+            "visible": "front"
+          }
+        ]
+      })";
+
+      gui::GuiState loaded;
+      bool ok = gui::DeserializeFromJson(json, loaded);
+      IM_CHECK(ok);
+      IM_CHECK_EQ(loaded.renderer.visible, gui::kVisibleFull);
+      IM_CHECK_EQ(loaded.renderer.front, true);
+    };
+  }
+
   // Test 4d: legacy format with multiple renderers — GUI now single-renderer, take first.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "renderer_legacy_multi_takes_first");
