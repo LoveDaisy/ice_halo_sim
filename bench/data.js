@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779842847508,
+  "lastUpdate": 1779842849159,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9059,6 +9059,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 71.1,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "062fff11d9ca5a48e9424fc2424572c415b9460f",
+          "message": "Merge pull request #112 from LoveDaisy/fix/misc\n\nchore(gui): unify overlay sentinel and add review follow-up fixes",
+          "timestamp": "2026-05-27T08:42:42+08:00",
+          "tree_id": "adcb4da74d7fbf0987da6ef3c60a107b7c34e64a",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/062fff11d9ca5a48e9424fc2424572c415b9460f"
+        },
+        "date": 1779842848804,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 85.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 79.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 74.3,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 60.1,
             "unit": "%"
           }
         ]
