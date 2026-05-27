@@ -558,6 +558,7 @@ void RenderConsumer::LogConsumeProfile() const {
 }
 
 // See doc/ev-pipeline-architecture.md §3.3
+// See doc/accumulator-consumer-architecture.md §4.2 (two-phase snapshot protocol, Phase 1).
 void RenderConsumer::PrepareSnapshot() {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   std::memcpy(snapshot_xyz_.get(), internal_xyz_.get(), total_pix * 3 * sizeof(float));
@@ -593,6 +594,7 @@ void RenderConsumer::PrepareSnapshot() {
   }
 }
 
+// See doc/accumulator-consumer-architecture.md §4.2 (Phase 1.5 — runs outside consumer_mutex_).
 void RenderConsumer::CountEffectivePixels() {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   int count = 0;
@@ -691,6 +693,7 @@ RawXyzResult RenderConsumer::GetRawXyzResult() const {
 }
 
 // See doc/ev-pipeline-architecture.md §3.4
+// See doc/accumulator-consumer-architecture.md §3.1 (reset path), §6.1 (anchor buffer lifecycle).
 void RenderConsumer::Reset() {
   total_intensity_ = 0;
   snapshot_intensity_ = 0;
@@ -712,6 +715,7 @@ void RenderConsumer::Reset() {
   anchor_p995_y_ = 0;
 }
 
+// See doc/accumulator-consumer-architecture.md §5.3 (ResetWith path — layout fields guaranteed identical).
 void RenderConsumer::ResetWith(const RenderConfig& new_config) {
   // NeedsRebuild guarantees layout fields (resolution, lens, view, visible, filter) are identical,
   // so assigning the full config is safe — layout-derived state (rot_, buffers) stays valid.

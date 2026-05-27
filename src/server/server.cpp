@@ -33,6 +33,7 @@ namespace lumice {
 // which doesn't guarantee fairness — a high-frequency locker (ConsumeData) can starve
 // a low-frequency waiter (Poller) indefinitely. TicketMutex guarantees FIFO ordering:
 // each waiter gets a ticket and is served in order.
+// See doc/accumulator-consumer-architecture.md §4.1.
 class TicketMutex {
  public:
   void lock() {  // NOLINT(readability-identifier-naming) — C++ Lockable requires lowercase
@@ -267,6 +268,7 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   auto stop_ms = std::chrono::duration<double, std::milli>(stop_end - stop_start).count();
 
   // Check if consumers can be reused (same renderer key set, no layout changes).
+  // See doc/accumulator-consumer-architecture.md §5.4 (reuse eligibility).
   auto old_renderers = config_manager_.renderers_;
   config_manager_ = std::move(new_config);
 
@@ -333,6 +335,7 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
 }
 
 
+// See doc/accumulator-consumer-architecture.md §4.2 (two-phase snapshot protocol).
 void ServerImpl::DoSnapshot() {
   // Phase 1: memcpy under consumer_mutex_ (short hold).
   // Copy shared_ptrs so consumers stay alive even if Stop() clears consumers_.
