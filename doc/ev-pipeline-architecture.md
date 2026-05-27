@@ -92,10 +92,15 @@ per_pixel_intensity = snapshot_intensity_ / (kNormScale × total_pixels)
 anchor_per_pixel    = anchor_snapshot_intensity_ / (kNormScale × total_pixels)
 ```
 
-The `kNormScale` factor (0.08) cancels out in the GUI's `intensity_scale` computation
-(it appears in both the numerator via `snapshot_intensity` and the denominator via the
-same formula), so it does not affect the final displayed brightness. Its purpose is to
-produce per-pixel intensity values in a human-readable range for the C API consumers.
+The `kNormScale` factor (0.08) sets the display brightness baseline: at EV = 0, the
+average illuminated pixel is ~5% brightness. In the GUI's `intensity_scale` computation,
+`kNormScale` algebraically cancels because `ComputeEvAuto()` receives
+`anchor_snapshot_intensity` (which already incorporates `kNormScale`) as an input — the
+resulting `ev_auto` absorbs the scale so that `2^ev_auto / norm_intensity` is independent
+of the specific `kNormScale` value. **C API consumers** receive `per_pixel_intensity`
+values whose absolute magnitude is determined by `kNormScale`; this constant is not an
+arbitrary scale factor and must not be changed without re-calibrating the brightness
+baseline.
 
 ### §2.4 C API Surface
 
@@ -184,9 +189,12 @@ Two events trigger anchor data reset:
 2. **Consumer destruction** (`consumers_.clear()` in the full rebuild path): the
    `RenderConsumer` destructor releases all buffers via `unique_ptr` RAII.
 
-`Reset()` is called by:
-- `ResetWith()` (`render.cpp:712`) — the consumer-reuse path in `CommitConfig()`.
-- `Stop()` → `CommitConfig()` → rebuild path implicitly destroys and recreates.
+`Reset()` is called by `ResetWith()` (`render.cpp:712`) — the consumer-reuse path
+triggered when `CommitConfig()` calls `Stop()` → `ResetWith()` → `Reset()`.
+
+**Rebuild path** (`CommitConfig()` → `Stop()` → `consumers_.clear()` → `~RenderConsumer()`):
+anchor buffers are released via `unique_ptr` RAII. `Reset()` is **not** called; there is
+no zero-and-retain step, only deallocation.
 
 ---
 

@@ -7,7 +7,7 @@
 
 namespace lumice::gui {
 
-// See doc/ev-pipeline-architecture.md §2.5
+// See doc/ev-pipeline-architecture.md §2.2 (zero-skip semantics), §2.5 (GUI usage)
 // Extract non-zero Y-channel values from a packed XYZ float array and return
 // their P99.5 value.  Returns 0 if the array has no positive Y entries.
 inline float ComputeP995Y(const std::vector<float>& xyz_data) {
