@@ -261,6 +261,7 @@ LUMICE_ErrorCode LUMICE_ParseConfigString(const char* json_str, LUMICE_Config* o
 LUMICE_ErrorCode LUMICE_ParseConfigFile(const char* filename, LUMICE_Config* out);
 
 // =============== Results ===============
+// See doc/capi-lifecycle-architecture.md §5 for sentinel contract.
 // Unified pattern: (server, out, max_count) -> LUMICE_ErrorCode, sentinel-terminated.
 // Sentinel is written at out[count] only when count < max_count.
 // When the array is full (count == max_count), no sentinel slot is written;

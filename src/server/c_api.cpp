@@ -310,6 +310,7 @@ static nlohmann::json ConfigToJson(const LUMICE_Config& c) {
   return root;
 }
 
+// Struct->JSON path: see doc/capi-lifecycle-architecture.md §6.2.
 LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_Config* config, int* out_reused) {
   if (!server || !config) {
     return LUMICE_ERR_NULL_ARG;
@@ -723,7 +724,7 @@ LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderRes
     out[i].img_buffer = render_results[i].img_buffer_;
   }
 
-  // Sentinel — only when caller provided an extra slot (count < max_count)
+  // Sentinel: see doc/capi-lifecycle-architecture.md §5.2 (fix: 5287efe).
   if (count < max_count) {
     std::memset(&out[count], 0, sizeof(LUMICE_RenderResult));
   }
@@ -757,7 +758,7 @@ LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzRes
     out[i].anchor_snapshot_intensity = results[i].anchor_snapshot_intensity_;
   }
 
-  // Sentinel — only when caller provided an extra slot (count < max_count)
+  // Sentinel: see doc/capi-lifecycle-architecture.md §5.2 (fix: 5287efe).
   if (count < max_count) {
     std::memset(&out[count], 0, sizeof(LUMICE_RawXyzResult));
   }
@@ -782,7 +783,7 @@ LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResul
     }
   }
 
-  // Sentinel — only when caller provided an extra slot (count < max_count)
+  // Sentinel: see doc/capi-lifecycle-architecture.md §5.2 (fix: 5287efe).
   if (count < max_count) {
     std::memset(&out[count], 0, sizeof(LUMICE_StatsResult));
   }

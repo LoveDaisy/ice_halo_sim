@@ -222,6 +222,7 @@ ServerImpl::~ServerImpl() {
 }
 
 
+// Lifecycle reset sequence: see doc/capi-lifecycle-architecture.md §7.
 // NOLINTNEXTLINE(readability-function-size)
 Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reused) {
   auto commit_start = std::chrono::steady_clock::now();
@@ -524,7 +525,8 @@ void ServerImpl::Stop() {
     // Don't clear consumers_ here — CommitConfig decides whether to rebuild or reuse.
     // Consumers are destroyed either by CommitConfig (rebuild path) or ~ServerImpl().
     snapshot_dirty_ = false;
-    has_ever_consumed_ = false;  // New consumers have no data yet
+    // Resets data-valid flag: see doc/capi-lifecycle-architecture.md §7.1.
+    has_ever_consumed_ = false;
   }
   {
     std::lock_guard<std::mutex> lock(status_mutex_);
