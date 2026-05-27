@@ -1568,6 +1568,87 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.dirty, true);
     };
   }
+
+  // p1_card/card_wide_click_opens_modal — clicking card blank area opens the edit modal
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_card", "card_wide_click_opens_modal");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      IM_CHECK_EQ(gui::IsEditModalOpen(), false);
+
+      // Derive a thumbnail click position from the Edit##cr button anchor.
+      // The Edit button sits in the right column at thumb_display_size + text_w + 2*spacing from
+      // card left (~200 px in the default test window). The thumbnail occupies the leftmost
+      // ~88 px (4 * frame_height_with_spacing − spacing_y), so card_left + 30 stays in the
+      // thumbnail and is clear of every ImGui item (IsAnyItemHovered == false).
+      auto edit_info = ctx->ItemInfo("**/Edit##cr");
+      IM_CHECK(edit_info.ID != 0);
+      float card_left = edit_info.RectFull.Min.x - 200.0f;
+      float card_top = edit_info.RectFull.Min.y;
+      ImVec2 thumb_center(card_left + 30.0f, card_top + 20.0f);
+
+      ctx->MouseMoveToPos(thumb_center);
+      ctx->MouseClick(0);
+      ctx->Yield(4);
+
+      IM_CHECK_EQ(gui::IsEditModalOpen(), true);
+      auto tgt = gui::GetEditModalTarget();
+      IM_CHECK_EQ(tgt.layer_idx, 0);
+      IM_CHECK_EQ(tgt.entry_idx, 0);
+
+      // Cleanup: close modal
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // p1_card/card_wide_click_noop_same_card — card click on already-open card is no-op
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_card", "card_wide_click_noop_same_card");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Open modal on entry 0 via Edit button
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      IM_CHECK_EQ(gui::IsEditModalOpen(), true);
+      auto tgt_before = gui::GetEditModalTarget();
+      IM_CHECK_EQ(tgt_before.layer_idx, 0);
+      IM_CHECK_EQ(tgt_before.entry_idx, 0);
+
+      // Set the Height field through the modal UI — the buffer now differs from g_state.
+      // If a spurious OpenEditModal call resets the buffer, the field reverts to g_state.height.
+      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height;
+      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 33.0f);
+      ctx->Yield();
+
+      // Click the thumbnail area of the same card (same anchor logic as card_wide_click_opens_modal)
+      auto edit_info = ctx->ItemInfo("**/Edit##cr");
+      IM_CHECK(edit_info.ID != 0);
+      float card_left = edit_info.RectFull.Min.x - 200.0f;
+      float card_top = edit_info.RectFull.Min.y;
+      ImVec2 thumb_center(card_left + 30.0f, card_top + 20.0f);
+
+      ctx->MouseMoveToPos(thumb_center);
+      ctx->MouseClick(0);
+      ctx->Yield(4);
+
+      // Modal still open on same card — no-op
+      IM_CHECK_EQ(gui::IsEditModalOpen(), true);
+      auto tgt_after = gui::GetEditModalTarget();
+      IM_CHECK_EQ(tgt_after.layer_idx, 0);
+      IM_CHECK_EQ(tgt_after.entry_idx, 0);
+
+      // Commit buffer via OK: if no-op held, g_state.height becomes orig_h + 33.0f;
+      // if OpenEditModal was spuriously called, buffer was reset to orig_h.
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height, orig_h + 33.0f);
+    };
+  }
 }
 
 // ========== task-test-gui-interaction: P1 Slider boundary tests ==========
@@ -2536,13 +2617,13 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // ===== task-visibility-radio-layout (scrum-gui-polish-v18 180.1) =====
-  // Verify the 1×4 horizontal layout: click hit and same-row geometry.
+  // ===== task-visible-hemisphere-combo =====
+  // Verify visibility controls: radio buttons (base hemisphere) + checkbox (front).
 
-  // p2_render/visibility_horizontal_layout_click_hit — fisheye lens (all 4 buttons
-  // enabled); ItemClick on Lower and Front commits the correct value.
+  // p2_render/visibility_click_hit — fisheye lens; ItemClick on Lower radio and Front
+  // checkbox commits the correct values.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_horizontal_layout_click_hit");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_click_hit");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
@@ -2551,16 +2632,21 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/Lower##visible");
       ctx->Yield(2);
       IM_CHECK_EQ(gui::g_state.renderer.visible, gui::kVisibleLower);
+      IM_CHECK_EQ(gui::g_state.renderer.front, false);
       ctx->ItemClick("**/Front##visible");
       ctx->Yield(2);
-      IM_CHECK_EQ(gui::g_state.renderer.visible, gui::kVisibleFront);
+      IM_CHECK_EQ(gui::g_state.renderer.visible, gui::kVisibleLower);
+      IM_CHECK_EQ(gui::g_state.renderer.front, true);
+      ctx->ItemClick("**/Front##visible");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.renderer.front, false);
     };
   }
 
-  // p2_render/visibility_horizontal_layout_same_row — fisheye lens; Upper and Front
-  // must share the same screen row (RectFull.Min.y equal, confirming 1×4 layout).
+  // p2_render/visibility_same_row — fisheye lens; Upper radio and Front checkbox
+  // must share the same screen row.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_horizontal_layout_same_row");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_same_row");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
@@ -2570,6 +2656,35 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       auto info_front = ctx->ItemInfo("**/Front##visible");
       IM_CHECK_EQ(info_upper.RectFull.Min.y, info_front.RectFull.Min.y);
       IM_CHECK(info_front.RectFull.Min.x > info_upper.RectFull.Min.x);
+    };
+  }
+
+  // p2_render/visibility_globe_disables_front — Globe lens disables the Front checkbox.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_globe_disables_front");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
+      ctx->Yield(3);
+      auto info_front = ctx->ItemInfo("**/Front##visible");
+      IM_CHECK(info_front.ItemFlags & ImGuiItemFlags_Disabled);
+    };
+  }
+
+  // p2_render/visibility_full_sky_disables_all — Full-sky lens disables the radio buttons
+  // and Front checkbox (outer BeginDisabled path, acceptance criterion #5).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_full_sky_disables_all");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kFullSkyLensTypes[0];
+      ctx->Yield(3);
+      auto info_upper = ctx->ItemInfo("**/Upper##visible");
+      auto info_front = ctx->ItemInfo("**/Front##visible");
+      IM_CHECK(info_upper.ItemFlags & ImGuiItemFlags_Disabled);
+      IM_CHECK(info_front.ItemFlags & ImGuiItemFlags_Disabled);
     };
   }
 }

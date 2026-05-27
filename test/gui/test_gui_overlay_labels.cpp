@@ -15,7 +15,8 @@
 namespace {
 
 // Convenience: build an OverlayLabelInput with grid enabled, sun circles disabled.
-lumice::gui::OverlayLabelInput MakeGridOnly(int visible, int lens_type, float elevation, float azimuth) {
+lumice::gui::OverlayLabelInput MakeGridOnly(int visible, int lens_type, float elevation, float azimuth,
+                                            bool front = false) {
   lumice::gui::OverlayLabelInput in{};
   in.lens_type = lens_type;
   in.fov = 120.0f;
@@ -23,6 +24,7 @@ lumice::gui::OverlayLabelInput MakeGridOnly(int visible, int lens_type, float el
   in.azimuth = azimuth;
   in.roll = 0.0f;
   in.visible = visible;
+  in.front = front;
   in.show_horizon = false;
   in.show_grid = true;
   in.show_sun_circles = false;
@@ -46,8 +48,10 @@ lumice::gui::OverlayLabelInput MakeGridOnly(int visible, int lens_type, float el
 // viewport bounds — the viewport bound check would then mask is_visible_front, making
 // "back labels suppressed" tests vacuously true. With this setup, is_visible_front is the
 // sole gate for sun-circle interior labels in the back hemisphere.
-lumice::gui::OverlayLabelInput MakeSunOnly(int visible, const float sun_dir[3], const float* circle_angles, int count) {
-  lumice::gui::OverlayLabelInput in = MakeGridOnly(visible, /*lens=Fisheye Equidistant*/ 2, /*elev*/ 0.0f, /*az*/ 0.0f);
+lumice::gui::OverlayLabelInput MakeSunOnly(int visible, const float sun_dir[3], const float* circle_angles, int count,
+                                           bool front = false) {
+  lumice::gui::OverlayLabelInput in =
+      MakeGridOnly(visible, /*lens=Fisheye Equidistant*/ 2, /*elev*/ 0.0f, /*az*/ 0.0f, front);
   in.fov = 360.0f;
   in.show_grid = false;
   in.show_sun_circles = true;
@@ -162,7 +166,7 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       IM_UNUSED(ctx);
       auto in_full = MakeGridOnly(/*visible=*/2, /*lens=Rectangular*/ 7, /*elev*/ 0.0f, /*az*/ 0.0f);
-      auto in_front = MakeGridOnly(/*visible=*/3, /*lens=Rectangular*/ 7, /*elev*/ 0.0f, /*az*/ 0.0f);
+      auto in_front = MakeGridOnly(/*visible=*/2, /*lens=Rectangular*/ 7, /*elev*/ 0.0f, /*az*/ 0.0f, /*front=*/true);
 
       std::vector<lumice::gui::OverlayLabel> labels_full;
       std::vector<lumice::gui::OverlayLabel> labels_front;
@@ -185,7 +189,7 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
       // forward (elev=0,az=0,roll=0) = (-1,0,0); sun_dir=(1,0,0) places the sun directly behind.
       const float sun_back[3] = { 1.0f, 0.0f, 0.0f };
       const float angle = 5.0f;  // small circle stays inside the viewport (interior labels path)
-      auto in = MakeSunOnly(/*visible=*/3, sun_back, &angle, 1);
+      auto in = MakeSunOnly(/*visible=*/2, sun_back, &angle, 1, /*front=*/true);
 
       std::vector<lumice::gui::OverlayLabel> labels;
       lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, 800.0f, 600.0f, labels);
@@ -203,7 +207,7 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
       // sun_dir = forward = (-1,0,0); 4 interior labels all in front hemisphere.
       const float sun_front[3] = { -1.0f, 0.0f, 0.0f };
       const float angle = 5.0f;
-      auto in = MakeSunOnly(/*visible=*/3, sun_front, &angle, 1);
+      auto in = MakeSunOnly(/*visible=*/2, sun_front, &angle, 1, /*front=*/true);
 
       std::vector<lumice::gui::OverlayLabel> labels;
       lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, 800.0f, 600.0f, labels);
@@ -227,7 +231,8 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "front_fisheye_boundary_labels");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       IM_UNUSED(ctx);
-      auto in_front = MakeGridOnly(/*visible=*/3, /*lens=Fisheye Equidistant*/ 2, /*elev*/ 0.0f, /*az*/ 0.0f);
+      auto in_front =
+          MakeGridOnly(/*visible=*/2, /*lens=Fisheye Equidistant*/ 2, /*elev*/ 0.0f, /*az*/ 0.0f, /*front=*/true);
       auto in_full = MakeGridOnly(/*visible=*/2, /*lens=Fisheye Equidistant*/ 2, /*elev*/ 0.0f, /*az*/ 0.0f);
       in_front.fov = 280.0f;
       in_full.fov = 280.0f;

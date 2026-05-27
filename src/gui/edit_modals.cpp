@@ -911,6 +911,18 @@ EditModalTarget GetEditModalTarget() {
   return { g_modal_layer_idx, g_modal_entry_idx };
 }
 
+EditTarget GetActiveTabAsEditTarget() {
+  switch (g_active_tab) {
+    case ActiveTab::kCrystal:
+      return EditTarget::kCrystal;
+    case ActiveTab::kAxis:
+      return EditTarget::kAxis;
+    case ActiveTab::kFilter:
+      return EditTarget::kFilter;
+  }
+  return EditTarget::kCrystal;
+}
+
 void ResetModalState() {
   g_active_modal = ActiveModal::kNone;
   g_active_tab = ActiveTab::kCrystal;

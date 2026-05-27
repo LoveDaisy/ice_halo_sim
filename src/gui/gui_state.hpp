@@ -137,11 +137,10 @@ constexpr float kDualFisheyeOverlap = 0.0872f;
 inline const char* const kSpectrumNames[] = { "D50", "D55", "D65", "D75", "A", "E" };
 constexpr int kSpectrumCount = 6;
 
-inline const char* const kVisibleNames[] = { "Upper", "Lower", "Full", "Front" };
-constexpr int kVisibleCount = 4;  // must stay in sync with fragment shader u_visible range
+inline const char* const kVisibleNames[] = { "Upper", "Lower", "Full" };
+constexpr int kVisibleCount = 3;  // must stay in sync with fragment shader u_visible range (0-2)
 static_assert(sizeof(kVisibleNames) / sizeof(*kVisibleNames) == kVisibleCount,
               "kVisibleNames length must match kVisibleCount");
-static_assert(kVisibleFront == kVisibleCount - 1, "Visible enum terminal value must match kVisibleCount - 1");
 
 inline const int kSimResolutions[] = { 512, 1024, 2048, 4096 };
 constexpr int kSimResolutionCount = 4;
@@ -153,7 +152,8 @@ struct RenderConfig {
   float azimuth = 0.0f;
   float roll = 0.0f;
   int sim_resolution_index = 1;  // Index into kSimResolutions (default 1024)
-  int visible = 2;               // Index into kVisibleNames (0=upper, 1=lower, 2=full, 3=front)
+  int visible = 2;               // Index into kVisibleNames (0=upper, 1=lower, 2=full)
+  bool front = false;            // Independent front-hemisphere clip flag (AND with base)
   float background[3] = { 0.0f, 0.0f, 0.0f };
   float ray_color[3] = { 1.0f, 1.0f, 1.0f };
   float opacity = 1.0f;
@@ -162,8 +162,9 @@ struct RenderConfig {
   bool operator==(const RenderConfig& o) const {
     return lens_type == o.lens_type && fov == o.fov && elevation == o.elevation && azimuth == o.azimuth &&
            roll == o.roll && sim_resolution_index == o.sim_resolution_index && visible == o.visible &&
-           std::equal(background, background + 3, o.background) && std::equal(ray_color, ray_color + 3, o.ray_color) &&
-           opacity == o.opacity && exposure_offset == o.exposure_offset;
+           front == o.front && std::equal(background, background + 3, o.background) &&
+           std::equal(ray_color, ray_color + 3, o.ray_color) && opacity == o.opacity &&
+           exposure_offset == o.exposure_offset;
   }
   bool operator!=(const RenderConfig& o) const { return !(*this == o); }
 };

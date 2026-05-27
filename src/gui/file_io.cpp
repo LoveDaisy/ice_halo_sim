@@ -51,7 +51,7 @@ static const char* kLensTypeJsonNames[] = { "linear",
                                             "dual_fisheye_stereographic",
                                             "rectangular" };
 
-static const char* kVisibleJsonNames[] = { "upper", "lower", "full", "front" };
+static const char* kVisibleJsonNames[] = { "upper", "lower", "full" };
 static_assert(sizeof(kVisibleJsonNames) / sizeof(kVisibleJsonNames[0]) == kVisibleCount,
               "kVisibleJsonNames must match kVisibleCount");
 static const char* kAspectPresetJsonNames[] = { "free", "16:9", "3:2", "4:3", "1:1", "2:1", "match_background" };
@@ -499,6 +499,7 @@ static json SerializeRendererForGui(const RenderConfig& r) {
   jr["roll"] = r.roll;
   jr["sim_resolution"] = kSimResolutions[r.sim_resolution_index];
   jr["visible"] = kVisibleJsonNames[r.visible];
+  jr["front"] = r.front;
   jr["background"] = { r.background[0], r.background[1], r.background[2] };
   jr["ray_color"] = { r.ray_color[0], r.ray_color[1], r.ray_color[2] };
   jr["opacity"] = r.opacity;
@@ -514,7 +515,14 @@ static RenderConfig ParseRendererFromGuiJson(const json& jr) {
   r.azimuth = jr.value("azimuth", RenderConfig{}.azimuth);
   r.roll = jr.value("roll", RenderConfig{}.roll);
   r.sim_resolution_index = SimResolutionIndexFromValue(jr.value("sim_resolution", 1024));
-  r.visible = VisibleFromString(jr.value("visible", "full"));
+  std::string vis_str = jr.value("visible", "full");
+  if (vis_str == "front") {
+    r.visible = kVisibleFull;
+    r.front = true;
+  } else {
+    r.visible = VisibleFromString(vis_str);
+    r.front = jr.value("front", false);
+  }
   if (jr.contains("background") && jr["background"].is_array() && jr["background"].size() == 3) {
     for (int i = 0; i < 3; i++)
       r.background[i] = jr["background"][i].get<float>();
@@ -1027,7 +1035,14 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       r.roll = jr["view"].value("roll", 0.0f);
     }
 
-    r.visible = VisibleFromString(jr.value("visible", "upper"));
+    std::string vis_str = jr.value("visible", "upper");
+    if (vis_str == "front") {
+      r.visible = kVisibleFull;
+      r.front = true;
+    } else {
+      r.visible = VisibleFromString(vis_str);
+      r.front = jr.value("front", false);
+    }
 
     if (jr.contains("background") && jr["background"].is_array() && jr["background"].size() == 3) {
       for (int i = 0; i < 3; i++)

@@ -28,16 +28,17 @@ struct ViewProjection {
   float azimuth = 0.0f;             // Degrees
   float roll = 0.0f;                // Degrees
   int visible = kVisibleFull;       // Index into kVisibleNames (int for shader uniform)
+  bool front = false;               // Independent front-hemisphere clip flag
 };
 
 // Canonical ViewProjection values for export code paths. Kept adjacent to
 // ViewProjection so aggregate-initializer field order can be verified at a
-// glance. Field order, top-to-bottom: lens_type, fov, elevation, azimuth, roll, visible.
+// glance. Field order, top-to-bottom: lens_type, fov, elevation, azimuth, roll, visible, front.
 inline constexpr ViewProjection kDualFisheyeExportViewProj = {
-  kLensTypeDualFisheyeEqualArea, 180.0f, 0.0f, 0.0f, 0.0f, kVisibleFull,
+  kLensTypeDualFisheyeEqualArea, 180.0f, 0.0f, 0.0f, 0.0f, kVisibleFull, false,
 };
 inline constexpr ViewProjection kEquirectExportViewProj = {
-  kLensTypeRectangular, 180.0f, 0.0f, 0.0f, 0.0f, kVisibleFull,
+  kLensTypeRectangular, 180.0f, 0.0f, 0.0f, 0.0f, kVisibleFull, false,
 };
 
 struct Exposure {
@@ -171,6 +172,7 @@ inline ViewProjection BuildPreviewViewProjFromRenderer(const RenderConfig& rc) {
   vp.azimuth = rc.azimuth;
   vp.roll = EffectiveRollForLens(rc.lens_type, rc.roll);
   vp.visible = rc.visible;
+  vp.front = rc.front;
   return vp;
 }
 

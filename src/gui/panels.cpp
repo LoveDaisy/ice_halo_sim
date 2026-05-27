@@ -696,7 +696,7 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
     }
   }
 
-  // ---- Pick-mode hit-test ----
+  // ---- Card-area click handling ----
   // Detect a click anywhere inside the card area via a non-layout-affecting
   // rect query. We previously used SetCursorScreenPos(card_win_pos) +
   // InvisibleButton(card_win_sz), but that combination drives an AutoResizeY
@@ -709,27 +709,35 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   // (Edit / Duplicate / Delete): when one of them is hovered, the click is
   // routed to it and pick-mode cancellation runs via the blank-area handler
   // in app_panels.cpp instead.
-  if (pick_active && !pick_target_disabled) {
+  if (pick_active) {
+    if (!pick_target_disabled) {
+      const ImVec2 card_max(card_win_pos.x + card_win_sz.x, card_win_pos.y + card_win_sz.y);
+      if (ImGui::IsMouseHoveringRect(card_win_pos, card_max) && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+          !ImGui::IsAnyItemHovered()) {
+        // "Link A to B" semantics: A (the entry whose modal opened the picker —
+        // pick_link_source) adopts B's (the clicked card's) crystal/filter ids.
+        // So in ApplyPickLink(source, target) the *clicked card* is the source
+        // (model) and pick_link_source is the target (modified).
+        const auto pick_source_ref = *state.pick_link_source;
+        const auto& editing_entry = state.layers[pick_source_ref.layer_idx].entries[pick_source_ref.entry_idx];
+        const std::optional<int> old_filter_id = editing_entry.filter_id;
+        ApplyPickLink(state, GuiState::EntryRef{ layer_idx, entry_idx }, pick_source_ref);
+        state.pick_link_source.reset();
+        state.MarkDirty();
+        // Re-read editing entry after pool re-bind to compare filter existence.
+        const auto& editing_after = state.layers[pick_source_ref.layer_idx].entries[pick_source_ref.entry_idx];
+        if (old_filter_id.has_value() != editing_after.filter_id.has_value()) {
+          state.MarkFilterDirty();
+        }
+        // No explicit Invalidate: editing entry now shares clicked card's
+        // crystal_id; that crystal already has a cache entry from this frame.
+      }
+    }
+  } else {
     const ImVec2 card_max(card_win_pos.x + card_win_sz.x, card_win_pos.y + card_win_sz.y);
     if (ImGui::IsMouseHoveringRect(card_win_pos, card_max) && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         !ImGui::IsAnyItemHovered()) {
-      // "Link A to B" semantics: A (the entry whose modal opened the picker —
-      // pick_link_source) adopts B's (the clicked card's) crystal/filter ids.
-      // So in ApplyPickLink(source, target) the *clicked card* is the source
-      // (model) and pick_link_source is the target (modified).
-      const auto pick_source_ref = *state.pick_link_source;
-      const auto& editing_entry = state.layers[pick_source_ref.layer_idx].entries[pick_source_ref.entry_idx];
-      const std::optional<int> old_filter_id = editing_entry.filter_id;
-      ApplyPickLink(state, GuiState::EntryRef{ layer_idx, entry_idx }, pick_source_ref);
-      state.pick_link_source.reset();
-      state.MarkDirty();
-      // Re-read editing entry after pool re-bind to compare filter existence.
-      const auto& editing_after = state.layers[pick_source_ref.layer_idx].entries[pick_source_ref.entry_idx];
-      if (old_filter_id.has_value() != editing_after.filter_id.has_value()) {
-        state.MarkFilterDirty();
-      }
-      // No explicit Invalidate: editing entry now shares clicked card's
-      // crystal_id; that crystal already has a cache entry from this frame.
+      g_edit_request = { EditTarget::kCard, layer_idx, entry_idx };
     }
   }
 

@@ -420,15 +420,15 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
   };
 
   // Hemisphere visibility check used by edge-crossing label paths.
-  // visible: 0=upper (alt>=0), 1=lower (alt<=0), 2=full, 3=front.
+  // visible: 0=upper (alt>=0), 1=lower (alt<=0), 2=full. front: independent AND clip.
   auto is_visible = [&](float alt, float wx, float wy, float wz) -> bool {
-    if (input.visible == 0)
-      return alt >= -0.5f;  // small tolerance for edge labels
-    if (input.visible == 1)
-      return alt <= 0.5f;
-    if (input.visible == 3)
-      return front_facing(wx, wy, wz);
-    return true;  // full(2)
+    if (input.visible == 0 && alt < -0.5f)
+      return false;
+    if (input.visible == 1 && alt > 0.5f)
+      return false;
+    if (input.front && !front_facing(wx, wy, wz))
+      return false;
+    return true;
   };
 
   // Front-only visibility check used by sun-circle interior label placement.
@@ -436,7 +436,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
   // Upper/Lower branches — the interior block historically did no is_visible
   // filtering, so other modes must continue to return true unconditionally.
   auto is_visible_front = [&](float wx, float wy, float wz) -> bool {
-    if (input.visible != 3)
+    if (!input.front)
       return true;
     return front_facing(wx, wy, wz);
   };
@@ -825,7 +825,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
       sample_hemisphere_equator(-1.0f);
     if (input.visible == kVisibleLower)
       sample_hemisphere_equator(+1.0f);
-    if (input.visible == kVisibleFront)
+    if (input.front)
       sample_front_great_circle();
     if (input.lens_type != kLensTypeLinear)
       sample_interior_latitudes();
