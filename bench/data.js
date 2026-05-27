@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779841360189,
+  "lastUpdate": 1779841361852,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -8919,6 +8919,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 72,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9db583df928264e5fe43a90e364da883ed197704",
+          "message": "Merge pull request #111 from LoveDaisy/feat/gui_minor\n\nfeat(gui): card-wide click and front-hemisphere checkbox",
+          "timestamp": "2026-05-27T08:18:34+08:00",
+          "tree_id": "3010b3aeccd240cd41893b564209d19ca5731165",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/9db583df928264e5fe43a90e364da883ed197704"
+        },
+        "date": 1779841361471,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 92.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 77.3,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 71.5,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 71.1,
             "unit": "%"
           }
         ]
