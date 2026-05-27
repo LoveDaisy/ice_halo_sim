@@ -557,6 +557,7 @@ void RenderConsumer::LogConsumeProfile() const {
             consume_count_, avg_total, avg_proj, avg_proj / avg_total * 100, avg_accum, avg_accum / avg_total * 100);
 }
 
+// See doc/ev-pipeline-architecture.md §3.3
 void RenderConsumer::PrepareSnapshot() {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   std::memcpy(snapshot_xyz_.get(), internal_xyz_.get(), total_pix * 3 * sizeof(float));
@@ -670,6 +671,7 @@ Result RenderConsumer::GetResult() const {
   return RenderResult{ config_.id_, config_.resolution_[0], config_.resolution_[1], snapshot_image_buffer_.get() };
 }
 
+// See doc/ev-pipeline-architecture.md §2.3
 RawXyzResult RenderConsumer::GetRawXyzResult() const {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   float per_pixel_intensity = total_pix > 0 ? snapshot_intensity_ / (kNormScale * total_pix) : 0.0f;
@@ -688,6 +690,7 @@ RawXyzResult RenderConsumer::GetRawXyzResult() const {
            anchor_per_pixel };
 }
 
+// See doc/ev-pipeline-architecture.md §3.4
 void RenderConsumer::Reset() {
   total_intensity_ = 0;
   snapshot_intensity_ = 0;
