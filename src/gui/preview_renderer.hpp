@@ -142,6 +142,13 @@ class PreviewRenderer {
   std::vector<unsigned char> tex_data_;  // CPU-side copy of texture (RGB uint8, for .lmc save)
   bool xyz_mode_ = false;                // true when texture contains XYZ float data
 
+  // PBO double-buffer for async XYZ texture upload (GLsync stored as void* to
+  // avoid including GL headers in this header; cast to GLsync in the .cpp).
+  std::array<unsigned int, 2> pbo_ = { 0, 0 };
+  std::array<void*, 2> pbo_fence_ = { nullptr, nullptr };
+  std::array<size_t, 2> pbo_byte_count_ = { 0, 0 };
+  int pbo_index_ = 0;
+
   // Background image texture (no CPU-side copy — loaded from file path)
   unsigned int bg_texture_ = 0;
   int bg_width_ = 0;

@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 #include "gui/gl_common.h"
 #include "gui/gui_logger.hpp"
@@ -538,6 +539,21 @@ bool PreviewRenderer::Init() {
 }
 
 void PreviewRenderer::Destroy() {
+  for (int i = 0; i < 2; ++i) {
+    if (pbo_fence_[i] != nullptr) {
+      glDeleteSync(static_cast<GLsync>(pbo_fence_[i]));
+      pbo_fence_[i] = nullptr;
+    }
+  }
+  for (int i = 0; i < 2; ++i) {
+    if (pbo_[i] != 0) {
+      glDeleteBuffers(1, &pbo_[i]);
+      pbo_[i] = 0;
+    }
+  }
+  pbo_byte_count_ = { 0, 0 };
+  pbo_index_ = 0;
+
   if (texture_) {
     glDeleteTextures(1, &texture_);
     texture_ = 0;
@@ -612,31 +628,62 @@ void PreviewRenderer::UploadXyzTexture(const float* data, int width, int height)
     return;
   }
 
-  // Do NOT update tex_data_ (CPU copy) — XYZ float data is not suitable for .lmc save.
-  // For .lmc save, call LUMICE_GetRenderResults() to get sRGB uint8.
+  size_t byte_count = static_cast<size_t>(width) * height * 3 * sizeof(float);
+  int w = pbo_index_;
 
+  // Wait for prior fence (ensure GPU finished reading PBO[w])
+  if (pbo_fence_[w] != nullptr) {
+    auto sync = static_cast<GLsync>(pbo_fence_[w]);
+    GLenum wait_result = glClientWaitSync(sync, GL_SYNC_FLUSH_COMMANDS_BIT, 2'000'000'000ULL);
+    glDeleteSync(sync);
+    pbo_fence_[w] = nullptr;
+    if (wait_result == GL_TIMEOUT_EXPIRED || wait_result == GL_WAIT_FAILED) {
+      GUI_LOG_WARNING("[GL] UploadXyzTexture: fence wait failed (result={}), skipping frame", wait_result);
+      return;
+    }
+  }
+
+  // Lazy-init + resize PBO
+  if (pbo_[w] == 0) {
+    glGenBuffers(1, &pbo_[w]);
+  }
+  glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_[w]);
+  if (pbo_byte_count_[w] != byte_count) {
+    glBufferData(GL_PIXEL_UNPACK_BUFFER, static_cast<GLsizeiptr>(byte_count), nullptr, GL_STREAM_DRAW);
+    pbo_byte_count_[w] = byte_count;
+  }
+
+  // Map PBO and write data
+  void* ptr = glMapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0, static_cast<GLsizeiptr>(byte_count),
+                               GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT | GL_MAP_UNSYNCHRONIZED_BIT);
+  if (!ptr) {
+    GUI_LOG_ERROR("[GL] UploadXyzTexture: glMapBufferRange failed");
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+    return;
+  }
+  std::memcpy(ptr, data, byte_count);
+  glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
+
+  // Upload from PBO to texture (async DMA)
   glBindTexture(GL_TEXTURE_2D, texture_);
-  glPixelStorei(GL_UNPACK_ALIGNMENT, 4);  // float data is 4-byte aligned
-
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
   if (width != tex_width_ || height != tex_height_ || !xyz_mode_) {
-    // Re-allocate texture when switching from uint8 to float or size changed
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, width, height, 0, GL_RGB, GL_FLOAT, data);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, width, height, 0, GL_RGB, GL_FLOAT, nullptr);
     tex_width_ = width;
     tex_height_ = height;
   } else {
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGB, GL_FLOAT, data);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGB, GL_FLOAT, nullptr);
   }
 
   GLenum err = glGetError();
   if (err != GL_NO_ERROR) {
     GUI_LOG_WARNING("[GL] UploadXyzTexture: glGetError={} after {}x{} upload", err, width, height);
   }
-
+  pbo_fence_[w] = static_cast<void*>(glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0));
+  glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
   xyz_mode_ = true;
-  // No glFinish() needed: glTexSubImage2D copies data to driver memory synchronously,
-  // and subsequent draw calls implicitly synchronize. glFinish() was overly aggressive
-  // and could cause GPU command queue stalls leading to TDR on Windows.
   glBindTexture(GL_TEXTURE_2D, 0);
+  pbo_index_ = 1 - pbo_index_;
 }
 
 void PreviewRenderer::UploadBgTexture(const unsigned char* data, int width, int height) {
