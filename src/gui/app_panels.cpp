@@ -558,7 +558,9 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
     }
+    ImGui::BeginGroup();
     SliderWithInput("EV##display", &r.exposure_offset, -6.0f, 6.0f, "%.1f");
+    ImGui::EndGroup();
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Exposure value offset for display brightness");
     }
