@@ -9,6 +9,8 @@
 
 namespace lumice::gui {
 
+inline constexpr float kOverlaySentinel = -9999.f;
+
 // Source texture format. Dual-fisheye overlap parameters for sampling a
 // packed front/back hemisphere texture. Owned by the producer (GUI hard-codes
 // kDualFisheyeOverlap today; future: server/RawXyzResult may supply).
@@ -73,8 +75,8 @@ struct OverlayDecoration {
   // (-9999, -9999) when the direction is offscreen / behind the camera
   // / unsupported lens — shader compares distance and naturally skips it.
   bool show_zenith_nadir = false;
-  float zenith_screen_pos[2] = { -9999.f, -9999.f };
-  float nadir_screen_pos[2] = { -9999.f, -9999.f };
+  float zenith_screen_pos[2] = { kOverlaySentinel, kOverlaySentinel };
+  float nadir_screen_pos[2] = { kOverlaySentinel, kOverlaySentinel };
   float zenith_nadir_color[3] = { 0.8f, 0.2f, 0.2f };
   float zenith_nadir_alpha = 0.6f;
   float zenith_nadir_radius_px = 8.0f;
