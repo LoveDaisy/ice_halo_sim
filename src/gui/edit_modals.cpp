@@ -767,9 +767,15 @@ static void RenderSharedFilterControls(bool d_applicable) {
   if (ImGui::RadioButton("Filter In##filter_action", g_filter_top.action == 0)) {
     g_filter_top.action = 0;
   }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Show only rays matching the filter");
+  }
   ImGui::SameLine();
   if (ImGui::RadioButton("Filter Out##filter_action", g_filter_top.action == 1)) {
     g_filter_top.action = 1;
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Hide rays matching the filter");
   }
 
   // P/B/D Checkbox — H4 修正 (issue per-type-direction / 178.5): only raypath
@@ -782,8 +788,14 @@ static void RenderSharedFilterControls(bool d_applicable) {
       (g_filter_active_type == FilterEditType::kRaypath || g_filter_active_type == FilterEditType::kEntryExit);
   if (sym_active) {
     ImGui::Checkbox("P##filter_modal", &g_filter_top.sym_p);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Prism-face reflection symmetry");
+    }
     ImGui::SameLine();
     ImGui::Checkbox("B##filter_modal", &g_filter_top.sym_b);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Basal-face reflection symmetry");
+    }
     ImGui::SameLine();
     ImGui::Checkbox("D##filter_modal", &g_filter_top.sym_d);
     if (!d_applicable) {
@@ -1711,6 +1723,9 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
       // Invariant: do NOT touch g_active_modal here (must stay kOpen for the
       // reopen gate to fire in Frame N+2).
     }
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Apply parameter changes to simulation in real-time");
   }
 
   if (dispatched_immediate) {
