@@ -806,7 +806,7 @@ void SyncFromPoller() {
       g_state.p995_raw_y = data.anchor_p995_y;
       g_state.ev_auto = ComputeEvAuto(g_state.p995_raw_y, g_state.anchor_snapshot_intensity, g_state.target_white);
     } else {
-      g_state.p995_raw_y = ComputeP995Y(data.xyz_data);
+      g_state.p995_raw_y = data.p995_y;
       g_state.ev_auto = ComputeEvAuto(g_state.p995_raw_y, g_state.snapshot_intensity, g_state.target_white);
     }
     GUI_LOG_VERBOSE("[GUI] SyncFromPoller: p995_raw_y={:.6f}, ev_auto={:.3f}, anchor_src={}", g_state.p995_raw_y,

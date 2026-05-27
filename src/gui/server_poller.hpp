@@ -27,6 +27,7 @@ struct PollerData {
   // in ON mode and degenerate OFF mode (no filter). See doc/filter-architecture.md §7.
   float anchor_p995_y = 0;
   float anchor_snapshot_intensity = 0;
+  float p995_y = 0;  // P99.5 Y value computed in poller thread (fallback for no-filter mode)
   float intensity_factor = 1.0f;
   int effective_pixels = 0;
   bool has_new_texture = false;

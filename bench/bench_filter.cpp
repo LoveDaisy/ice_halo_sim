@@ -1,9 +1,5 @@
-// Filter Match benchmark for scrum-filter-architecture-refactor.
-//
-// Long-term perf regression infrastructure for the production canonical-form
-// matcher (FilterSpec). The legacy B path (RaypathFilter hash set) and the C2
-// prototype matcher were removed in task-filter-callers-migration; B's runtime
-// checks are gone, so a parity self-check has no oracle.
+// FilterSpec::Match micro-benchmark: canonical-form matcher throughput
+// for single and complex (OR-of-raypaths) filters under P+D symmetry.
 
 #include <benchmark/benchmark.h>
 
