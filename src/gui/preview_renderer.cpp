@@ -712,7 +712,7 @@ void BuildViewMatrix(float elevation_deg, float azimuth_deg, float roll_deg, flo
 // Sentinel value indicating the world direction does not project to a renderable
 // screen position under the current lens / camera setup. Kept identical to the
 // magic shader value so the GPU distance test trivially rejects it.
-static constexpr std::array<float, 2> kProjectSentinel = { -9999.f, -9999.f };
+static constexpr std::array<float, 2> kProjectSentinel = { kOverlaySentinel, kOverlaySentinel };
 
 static bool IsInViewport(float px, float py, float vp_w, float vp_h) {
   // Half-pixel margin keeps points landing exactly on the viewport edge
@@ -844,6 +844,7 @@ static std::array<float, 2> ProjectRectangular(const float world_dir[3], float s
 }
 
 // See declaration in preview_renderer.hpp for contract.
+// NOTE: must be updated when adding a new kLensType* constant.
 std::array<float, 2> ProjectWorldDirToScreen(const ViewProjection& vp, const float world_dir[3], int vp_w, int vp_h) {
   constexpr float kPi = 3.14159265358979323846f;
   if (vp_w <= 0 || vp_h <= 0) {

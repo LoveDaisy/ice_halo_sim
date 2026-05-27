@@ -569,6 +569,9 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::GuiState legacy_loaded;
       IM_CHECK(gui::DeserializeGuiStateJson(legacy_json, legacy_loaded));
       IM_CHECK_EQ(legacy_loaded.show_zenith_nadir_line, false);
+      IM_CHECK_EQ(legacy_loaded.zenith_nadir_color[0], 0.8f);
+      IM_CHECK_EQ(legacy_loaded.zenith_nadir_color[1], 0.2f);
+      IM_CHECK_EQ(legacy_loaded.zenith_nadir_color[2], 0.2f);
       IM_CHECK_EQ(legacy_loaded.zenith_nadir_alpha, 0.6f);
       IM_CHECK_EQ(legacy_loaded.zenith_nadir_radius_px, 8.0f);
     };
