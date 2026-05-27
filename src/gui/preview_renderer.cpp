@@ -628,6 +628,7 @@ void PreviewRenderer::UploadXyzTexture(const float* data, int width, int height)
     return;
   }
 
+  // Do NOT update tex_data_ (CPU copy) — XYZ float data is not suitable for .lmc save.
   size_t byte_count = static_cast<size_t>(width) * height * 3 * sizeof(float);
   int w = pbo_index_;
 
@@ -662,7 +663,11 @@ void PreviewRenderer::UploadXyzTexture(const float* data, int width, int height)
     return;
   }
   std::memcpy(ptr, data, byte_count);
-  glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
+  if (glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER) == GL_FALSE) {
+    GUI_LOG_WARNING("[GL] UploadXyzTexture: glUnmapBuffer failed, buffer data may be corrupt, skipping frame");
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+    return;
+  }
 
   // Upload from PBO to texture (async DMA)
   glBindTexture(GL_TEXTURE_2D, texture_);
@@ -680,6 +685,9 @@ void PreviewRenderer::UploadXyzTexture(const float* data, int width, int height)
     GUI_LOG_WARNING("[GL] UploadXyzTexture: glGetError={} after {}x{} upload", err, width, height);
   }
   pbo_fence_[w] = static_cast<void*>(glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0));
+  if (!pbo_fence_[w]) {
+    GUI_LOG_WARNING("[GL] UploadXyzTexture: glFenceSync failed, next write to slot {} will be unguarded", w);
+  }
   glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
   xyz_mode_ = true;
   glBindTexture(GL_TEXTURE_2D, 0);
