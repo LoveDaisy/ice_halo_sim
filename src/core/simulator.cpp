@@ -427,7 +427,9 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
         }
         // 1.2 filter-pass + prob-fail → emit outgoing (IsOutgoing() = true).
       } else {
-        // 1.3 filter-fail → ray terminates. Use TIR sentinel to exclude from IsOutgoing().
+        // 1.3 filter-fail → ray terminates. Reuse TIR sentinel (w_<0) so the ray
+        // is excluded from IsOutgoing() and IsContinue(). Direction/position are
+        // already in world space from the Apply() above, matching real-TIR layout.
         r.w_ = -1.0f;
       }
     }

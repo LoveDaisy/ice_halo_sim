@@ -79,8 +79,9 @@ struct RaySeg {
   bool is_continue_ = false;
   RaypathRecorder rp_;  // Raypath in **CURRENT** crystal.
 
-  // Derived segment-kind helpers. Invariants (mutually exclusive, exhaustive):
-  //   IsTir()      <=> w_ < 0
+  // Derived segment-kind helpers. Invariants (mutually exclusive):
+  //   IsTir()      <=> w_ < 0  (also absorbs filter-terminated outgoing candidates,
+  //                             which reuse the w_<0 sentinel — see doc/filter-architecture.md §7)
   //   IsNormal()   <=> to_face_ != kInvalidId && w_ >= 0
   //   IsOutgoing() <=> to_face_ == kInvalidId && w_ >= 0 && !is_continue_
   //   IsContinue() <=> is_continue_ (only set when to_face_ == kInvalidId && w_ >= 0)

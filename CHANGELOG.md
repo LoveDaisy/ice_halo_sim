@@ -18,14 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Anchor lane removed**: Adaptive Brightness now uses per-frame visible-framebuffer
   self-P99.5 normalization. Filter-fail rays terminate immediately in `CollectData`
   (Design A semantics). The EV scale may shift when toggling a filter, since the
-  P99.5 is computed over the current visible set. Eliminates the ~2× multi-scattering
-  performance tax of the prior anchor-lane design (~+97% at `ms_prob=0.5`,
-  +148% at `ms_prob=0.8`).
+  P99.5 is computed over the current visible set. Eliminates the prior anchor-lane
+  performance tax in multi-scattering scenarios (scrum-221 measured +97% at
+  `ms_prob=0.5` and +148% at `ms_prob=0.8` when the anchor lane was introduced;
+  post-removal benchmark not yet measured, theoretical restoration to no-anchor
+  baseline).
 
 ### Removed
-- **Breaking ABI**: `LUMICE_RawXyzResult::anchor_p995_y` and `anchor_snapshot_intensity`
+- **Breaking ABI #3**: `LUMICE_RawXyzResult::anchor_p995_y` and `anchor_snapshot_intensity`
   fields removed. Struct shrinks from 64 bytes to 56 bytes on 64-bit platforms.
   Update all ctypes / FFI / C callers that reference these fields.
+  (#1 was the removal of `ab_mode` in task-remove-adaptive-brightness-on-mode;
+  #2 was the `anchor_p99_y` → `anchor_p995_y` rename in apply-new-defaults.)
 - `RaySeg::is_filter_dropped_` and `is_prior_filter_failed_` fields and the
   `IsFilterDropped()` helper removed. `IsOutgoing()` simplified accordingly.
 - `SimData::anchor_d_` and `anchor_w_` fields removed (sizeof: 216 → 168 bytes on

@@ -73,6 +73,7 @@ def test_repro_scenario_matches_single_layer():
     baseline = run_scene_capi_buffered(str(CONFIGS_DIR / "ms_filter_leak_baseline.json"), sim_seed=_REPRO_TEST_SEED)
 
     assert baseline.snapshot_intensity > 0, "baseline snapshot_intensity is zero"
+    assert repro.snapshot_intensity > 0, "repro snapshot_intensity is zero (all rays filtered out?)"
 
     pix = baseline.img_width * baseline.img_height
     norm_baseline = baseline.snapshot_intensity
