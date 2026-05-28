@@ -18,11 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Anchor lane removed**: Adaptive Brightness now uses per-frame visible-framebuffer
   self-P99.5 normalization. Filter-fail rays terminate immediately in `CollectData`
   (Design A semantics). The EV scale may shift when toggling a filter, since the
-  P99.5 is computed over the current visible set. Eliminates the prior anchor-lane
-  performance tax in multi-scattering scenarios (scrum-221 measured +97% at
-  `ms_prob=0.5` and +148% at `ms_prob=0.8` when the anchor lane was introduced;
-  post-removal benchmark not yet measured, theoretical restoration to no-anchor
-  baseline).
+  P99.5 is computed over the current visible set. Filter early-kill is fully
+  restored: at `ms_prob=0.5` filter-on runs +74% faster than filter-off (multi-worker,
+  macOS); at `ms_prob=0.8` it is +114% faster. Under the prior F1 anchor lane this
+  speedup was lost because filter-failed rays still completed full multi-scattering
+  trajectories. See `scratchpad/task-remove-anchor-lane/bench/bench_results.md`.
 
 ### Removed
 - **Breaking ABI #3**: `LUMICE_RawXyzResult::anchor_p995_y` and `anchor_snapshot_intensity`
