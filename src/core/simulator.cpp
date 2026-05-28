@@ -175,6 +175,7 @@ void InitRayFirstMs(RandomNumberGenerator& rng, const SunParam& light_param, con
   InitRay_other_info(curr_crystal, curr_crystal_id, all_data.size_, buffer_data);
 
   // 1.4 reset cross-layer state (pool-reuse guard: Reset() may not zero memory)
+  // See doc/raypath-rayseg-architecture.md §3 "Reset Points Summary".
   for (auto& r : buffer_data[0]) {
     r.is_prior_filter_failed_ = false;
   }
@@ -208,6 +209,7 @@ void InitRayOtherMs(RandomNumberGenerator& rng, const RayBuffer init_data[2], si
 
   // 1.4 reset is_continue_ (pool-reuse guard: init_data carries is_continue_=true
   // from CollectData; must reset before entering the new MS layer's hit loop)
+  // See doc/raypath-rayseg-architecture.md §3 "Reset Points Summary".
   for (auto& r : buffer_data[0]) {
     r.is_continue_ = false;
   }
@@ -410,6 +412,7 @@ void FillRayOtherInfo(const Crystal& curr_crystal, RayBuffer buffer_data[2]) {
 }
 
 
+// See doc/raypath-rayseg-architecture.md §3 for the segment state-machine transition rules.
 void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input
                  RayBuffer* buffer_data, RayBuffer* init_data) {                             // output
   // F1 anchor-lane semantics (see doc/filter-architecture.md §7): the filter is NOT a

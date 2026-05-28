@@ -865,16 +865,33 @@ void RenderScatteringSection(GuiState& state) {
 
 void RenderSceneControls(GuiState& state) {
   ImGui::SeparatorText("Sun");
+  ImGui::BeginGroup();
   DIRTY_IF(SliderWithInput("Altitude", &state.sun.altitude, -90.0f, 90.0f));
+  ImGui::EndGroup();
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Sun elevation angle above the horizon");
+  }
+  ImGui::BeginGroup();
   DIRTY_IF(SliderWithInput("Diameter", &state.sun.diameter, 0.1f, 5.0f));
+  ImGui::EndGroup();
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Angular diameter of the sun disk");
+  }
   ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
   DIRTY_IF(ImGui::Combo("Spectrum", &state.sun.spectrum_index, kSpectrumNames, kSpectrumCount));
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Light source spectrum for wavelength-dependent refraction");
+  }
   ImGui::PopItemWidth();
 
   ImGui::SeparatorText("Simulation");
   ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
   DIRTY_IF(ImGui::Checkbox("Infinite rays", &state.sim.infinite));
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Run simulation continuously until manually stopped");
+  }
   ImGui::PopItemWidth();
+  ImGui::BeginGroup();
   if (!state.sim.infinite) {
     DIRTY_IF(SliderWithInput("Rays(M)", &state.sim.ray_num_millions, 0.1f, 100.0f));
   } else {
@@ -882,7 +899,16 @@ void RenderSceneControls(GuiState& state) {
     SliderWithInput("Rays(M)", &state.sim.ray_num_millions, 0.1f, 100.0f);
     ImGui::EndDisabled();
   }
+  ImGui::EndGroup();
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip("Number of rays to trace, in millions");
+  }
+  ImGui::BeginGroup();
   DIRTY_IF(SliderIntWithInput("Max hits", &state.sim.max_hits, 1, 64));
+  ImGui::EndGroup();
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Maximum number of crystal face hits per ray path");
+  }
 }
 
 #undef DIRTY_IF

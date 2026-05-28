@@ -33,6 +33,7 @@ namespace lumice {
 // which doesn't guarantee fairness — a high-frequency locker (ConsumeData) can starve
 // a low-frequency waiter (Poller) indefinitely. TicketMutex guarantees FIFO ordering:
 // each waiter gets a ticket and is served in order.
+// See doc/accumulator-consumer-architecture.md §4.1.
 class TicketMutex {
  public:
   void lock() {  // NOLINT(readability-identifier-naming) — C++ Lockable requires lowercase
@@ -221,6 +222,7 @@ ServerImpl::~ServerImpl() {
 }
 
 
+// Lifecycle reset sequence: see doc/capi-lifecycle-architecture.md §7.
 // NOLINTNEXTLINE(readability-function-size)
 Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reused) {
   auto commit_start = std::chrono::steady_clock::now();
@@ -267,6 +269,7 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   auto stop_ms = std::chrono::duration<double, std::milli>(stop_end - stop_start).count();
 
   // Check if consumers can be reused (same renderer key set, no layout changes).
+  // See doc/accumulator-consumer-architecture.md §5.4 (reuse eligibility).
   auto old_renderers = config_manager_.renderers_;
   config_manager_ = std::move(new_config);
 
@@ -333,6 +336,7 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
 }
 
 
+// See doc/accumulator-consumer-architecture.md §4.2 (two-phase snapshot protocol).
 void ServerImpl::DoSnapshot() {
   // Phase 1: memcpy under consumer_mutex_ (short hold).
   // Copy shared_ptrs so consumers stay alive even if Stop() clears consumers_.
@@ -521,7 +525,8 @@ void ServerImpl::Stop() {
     // Don't clear consumers_ here — CommitConfig decides whether to rebuild or reuse.
     // Consumers are destroyed either by CommitConfig (rebuild path) or ~ServerImpl().
     snapshot_dirty_ = false;
-    has_ever_consumed_ = false;  // New consumers have no data yet
+    // Resets data-valid flag: see doc/capi-lifecycle-architecture.md §7.1.
+    has_ever_consumed_ = false;
   }
   {
     std::lock_guard<std::mutex> lock(status_mutex_);

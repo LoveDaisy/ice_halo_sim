@@ -161,6 +161,8 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
 }
 
 
+// See doc/accumulator-consumer-architecture.md §5.1 (layout vs. appearance classification),
+// §5.2 (sizeof sentinel).
 bool NeedsRebuild(const RenderConfig& a, const RenderConfig& b) {
   // Bump this when adding fields to RenderConfig — then classify as layout or appearance.
   static_assert(sizeof(RenderConfig) == 144, "Update NeedsRebuild when RenderConfig fields change");

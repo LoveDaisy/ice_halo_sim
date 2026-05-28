@@ -499,6 +499,9 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       ImGui::BeginDisabled(is_globe);
     }
     ImGui::Checkbox("Front##visible", &r.front);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("Show front hemisphere only\n(combine with Upper/Full/Lower)");
+    }
     if (!full_sky) {
       ImGui::EndDisabled();
     }
@@ -555,7 +558,12 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
     }
+    ImGui::BeginGroup();
     SliderWithInput("EV##display", &r.exposure_offset, -6.0f, 6.0f, "%.1f");
+    ImGui::EndGroup();
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Exposure value offset for display brightness");
+    }
 
     ImGui::SeparatorText("Aspect Ratio");
     int preset_idx = static_cast<int>(g_state.aspect_preset);

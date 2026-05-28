@@ -12,6 +12,7 @@ namespace lumice {
 constexpr int kMinWavelength = 360;
 constexpr int kMaxWavelength = 830;
 
+// See doc/accumulator-consumer-architecture.md §3 (state machine), §4 (thread safety), §6 (invariants).
 class RenderConsumer : public IConsume {
  public:
   explicit RenderConsumer(RenderConfig config);

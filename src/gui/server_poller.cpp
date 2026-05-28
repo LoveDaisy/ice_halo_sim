@@ -146,6 +146,7 @@ void ServerPoller::WorkerLoop() {
   }
 }
 
+// See doc/accumulator-consumer-architecture.md §8.1 (polling contract), §8.3 (data flow).
 void ServerPoller::PollOnce() {
   auto* server = server_;
   if (!server) {

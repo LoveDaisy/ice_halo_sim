@@ -9,6 +9,7 @@
 namespace lumice {
 
 // =============== Interface ===============
+// See doc/accumulator-consumer-architecture.md §2 for the consumer contract and method semantics.
 /**
  * @brief Consumer interface for processing simulation data
  * @details This interface defines the contract for consumers that process simulation data.

@@ -47,6 +47,7 @@ struct RaypathHash {
 };
 
 
+// See doc/raypath-rayseg-architecture.md §1 for field invariants and state-machine semantics.
 struct RaySeg {
   // NOTE: if IsNormal(), d and p are in crystal-local coordinates; otherwise
   // d and p are in world coordinates.
