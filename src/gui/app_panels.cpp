@@ -817,18 +817,9 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     g_preview_vp.vp_h = static_cast<int>(preview_height * scale_y);
     auto& pp = g_preview_vp.params;
     pp.view_proj = BuildPreviewViewProjFromRenderer(rc);
-    // Auto-EV (ev_auto) is always summed in: see app.cpp SyncFromPoller, which feeds
-    // ev_auto from the F1 anchor lane when present and from the filtered snapshot when
-    // not (degenerate path). The numerator (ev_auto) and denominator (norm_intensity)
-    // must come from the same source — both follow the anchor when available.
     float ev_total = rc.exposure_offset + g_state.ev_auto;
     pp.exposure.intensity_factor = std::pow(2.0f, ev_total);
-    // Dual-condition mirrors SyncFromPoller: anchor lane is active only when both
-    // anchor_p995_y and anchor_snapshot_intensity are positive, keeping the ev_auto
-    // numerator and norm_intensity denominator from the same data source.
-    float norm_intensity = (g_state.anchor_snapshot_intensity > 0.0f && g_state.p995_raw_y > 0.0f) ?
-                               g_state.anchor_snapshot_intensity :
-                               g_state.snapshot_intensity;
+    float norm_intensity = g_state.snapshot_intensity;
     pp.exposure.intensity_scale = norm_intensity > 0 ? pp.exposure.intensity_factor / norm_intensity : 0.0f;
     // Overlap parameters for dual fisheye texture sampling.
     pp.source.max_abs_dz = kDualFisheyeOverlap;

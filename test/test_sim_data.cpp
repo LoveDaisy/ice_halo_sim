@@ -33,7 +33,7 @@ using lumice::SimData;
 // authoring platform that this test file's per-field assertions need updating.
 #if defined(__APPLE__) && defined(__aarch64__)
 static_assert(sizeof(void*) == 8, "SimData layout assumes 64-bit pointers");
-static_assert(sizeof(SimData) == 216,
+static_assert(sizeof(SimData) == 168,
               "SimData layout changed — update test_sim_data.cpp DeepCopy/Move assertions "
               "and sim_data.cpp's static_assert.");
 #endif
@@ -65,9 +65,6 @@ SimData MakePopulatedSimData() {
   s.outgoing_indices_ = { 0, 2, 4 };
   s.outgoing_d_ = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f };
   s.outgoing_w_ = { 0.5f, 0.7f };
-  // Anchor lane (F1 OFF mode). Populated here so deep-copy/move tests cover the new fields.
-  s.anchor_d_ = { 7.0f, 8.0f, 9.0f };
-  s.anchor_w_ = { 0.9f };
   s.crystals_.emplace_back();
   return s;
 }
@@ -277,8 +274,6 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
   EXPECT_EQ(copy.outgoing_indices_, original.outgoing_indices_);
   EXPECT_EQ(copy.outgoing_d_, original.outgoing_d_);
   EXPECT_EQ(copy.outgoing_w_, original.outgoing_w_);
-  EXPECT_EQ(copy.anchor_d_, original.anchor_d_);
-  EXPECT_EQ(copy.anchor_w_, original.anchor_w_);
   EXPECT_EQ(copy.crystals_.size(), original.crystals_.size());
 
   // Deep copy independence — each pointer/container field independently.
@@ -293,11 +288,6 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
 
   copy.outgoing_w_.clear();
   EXPECT_EQ(original.outgoing_w_.size(), 2u) << "outgoing_w_ not deep-copied";
-
-  copy.anchor_d_.clear();
-  EXPECT_EQ(original.anchor_d_.size(), 3u) << "anchor_d_ not deep-copied";
-  copy.anchor_w_.clear();
-  EXPECT_EQ(original.anchor_w_.size(), 1u) << "anchor_w_ not deep-copied";
 
   copy.crystals_.clear();
   EXPECT_EQ(original.crystals_.size(), 1u) << "crystals_ not deep-copied";
@@ -322,8 +312,6 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   EXPECT_EQ(target.outgoing_indices_, original.outgoing_indices_);
   EXPECT_EQ(target.outgoing_d_, original.outgoing_d_);
   EXPECT_EQ(target.outgoing_w_, original.outgoing_w_);
-  EXPECT_EQ(target.anchor_d_, original.anchor_d_);
-  EXPECT_EQ(target.anchor_w_, original.anchor_w_);
   EXPECT_EQ(target.crystals_.size(), 1u);
 
   // Deep copy independence.
@@ -380,8 +368,6 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_EQ(moved.outgoing_indices_.size(), 3u);
   EXPECT_EQ(moved.outgoing_d_.size(), 6u);
   EXPECT_EQ(moved.outgoing_w_.size(), 2u);
-  EXPECT_EQ(moved.anchor_d_.size(), 3u);
-  EXPECT_EQ(moved.anchor_w_.size(), 1u);
   EXPECT_EQ(moved.crystals_.size(), 1u);
 
   // Moved-from source contract — three categories:
@@ -398,8 +384,6 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_TRUE(original.outgoing_indices_.empty());
   EXPECT_TRUE(original.outgoing_d_.empty());
   EXPECT_TRUE(original.outgoing_w_.empty());
-  EXPECT_TRUE(original.anchor_d_.empty());
-  EXPECT_TRUE(original.anchor_w_.empty());
 
   // (c) POD scalar fields are NOT reset on move — this is the current
   // contract. We deliberately do NOT assert curr_wl_/generation_/etc. to be

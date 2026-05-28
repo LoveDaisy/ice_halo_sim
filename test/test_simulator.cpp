@@ -364,19 +364,14 @@ TEST(PartitionCrystalRayNum, ZeroRayNumPreservesCarry) {
 }
 
 // ============================================================================
-// CollectData filter dispatch (F1 anchor lane — single mode)
+// CollectData filter dispatch (Design A — filter-fail = ray kill)
 //
-// F1 branch table for outgoing candidates:
+// Design A branch table for outgoing candidates:
 //   filter-pass + prob-pass → IsContinue() (next MS scatter)
 //   filter-pass + prob-fail → IsOutgoing() (emit)
-//   filter-fail + prob-pass → IsContinue() (anchor-lane bypass — propagates)
-//   filter-fail + prob-fail → IsFilterDropped() (anchor lane)
-// See doc/filter-architecture.md §7 and
-// task-remove-adaptive-brightness-on-mode AC-7.
+//   filter-fail             → ray terminates (w_ set negative; neither outgoing nor continue)
 // ============================================================================
 
-// kFilterIn (default) + Match() returning false → Check() == false. Emulates a
-// "filter-fail" ray without depending on FilterSpec orbit setup.
 class AlwaysRejectSpec : public FilterSpec {
  public:
   bool Match(const RaySeg& /*ray*/) const override { return false; }
@@ -406,11 +401,10 @@ RaySeg MakeOutgoingCandidate() {
 
 }  // namespace
 
-TEST(CollectDataFilterDispatch, FilterFailDroppedWithZeroProb) {
+TEST(CollectDataFilterDispatch, FilterFailTerminatesRay) {
   RandomNumberGenerator rng(42);
   AlwaysRejectSpec filter;
   MsInfo ms_info;
-  // F1: filter-fail + prob-fail → anchor lane (IsFilterDropped()=true).
   ms_info.prob_ = 0.0f;
 
   RayBuffer buffer_data[2];
@@ -426,16 +420,13 @@ TEST(CollectDataFilterDispatch, FilterFailDroppedWithZeroProb) {
 
   ASSERT_EQ(buffer_data[1].size_, 1u);
   const auto& r = buffer_data[1].rays_[0];
-  EXPECT_TRUE(r.IsFilterDropped()) << "filter-fail + prob-fail must land in anchor lane";
   EXPECT_FALSE(r.IsOutgoing()) << "filter-fail must not reach outgoing";
-  EXPECT_FALSE(r.IsContinue());
+  EXPECT_FALSE(r.IsContinue()) << "filter-fail must not continue";
+  EXPECT_LT(r.w_, 0.0f) << "filter-fail terminates ray (w_ set negative)";
   EXPECT_EQ(init_data[1].size_, 0u);
 }
 
-TEST(CollectDataFilterDispatch, FilterFailContinuesWithNonZeroProb) {
-  // F1 contract: prob-pass continues regardless of filter result. Filter-fail
-  // rays still propagate to the next MS level so the anchor lane stays a
-  // partition of outgoing emission rather than a mid-trajectory kill switch.
+TEST(CollectDataFilterDispatch, FilterFailTerminatesEvenWithProbPass) {
   RandomNumberGenerator rng(42);
   AlwaysRejectSpec filter;
   MsInfo ms_info;
@@ -454,17 +445,17 @@ TEST(CollectDataFilterDispatch, FilterFailContinuesWithNonZeroProb) {
 
   ASSERT_EQ(buffer_data[1].size_, 1u);
   const auto& r = buffer_data[1].rays_[0];
-  EXPECT_TRUE(r.IsContinue()) << "filter-fail + prob-pass must continue (F1 contract)";
-  EXPECT_FALSE(r.IsFilterDropped());
+  EXPECT_FALSE(r.IsContinue()) << "Design A: filter-fail must not continue even with prob=1";
   EXPECT_FALSE(r.IsOutgoing());
-  EXPECT_EQ(init_data[1].size_, 1u);
+  EXPECT_LT(r.w_, 0.0f);
+  EXPECT_EQ(init_data[1].size_, 0u);
 }
 
 TEST(CollectDataFilterDispatch, FilterPassWithProbContinues) {
   RandomNumberGenerator rng(42);
   AlwaysAcceptSpec filter;
   MsInfo ms_info;
-  ms_info.prob_ = 1.0f;  // always branch when filter passes
+  ms_info.prob_ = 1.0f;
 
   RayBuffer buffer_data[2];
   RayBuffer init_data[2];
@@ -486,7 +477,7 @@ TEST(CollectDataFilterDispatch, FilterPassNoProbEmitsOutgoing) {
   RandomNumberGenerator rng(42);
   AlwaysAcceptSpec filter;
   MsInfo ms_info;
-  ms_info.prob_ = 0.0f;  // no branching → outgoing
+  ms_info.prob_ = 0.0f;
 
   RayBuffer buffer_data[2];
   RayBuffer init_data[2];
@@ -501,59 +492,6 @@ TEST(CollectDataFilterDispatch, FilterPassNoProbEmitsOutgoing) {
 
   ASSERT_EQ(buffer_data[1].size_, 1u);
   EXPECT_TRUE(buffer_data[1].rays_[0].IsOutgoing());
-  EXPECT_EQ(init_data[1].size_, 0u);
-}
-
-TEST(CollectDataFilterDispatch, PriorFailedFilterPassProbPass) {
-  RandomNumberGenerator rng(42);
-  AlwaysAcceptSpec filter;
-  MsInfo ms_info;
-  ms_info.prob_ = 1.0f;
-
-  RayBuffer buffer_data[2];
-  RayBuffer init_data[2];
-  buffer_data[0].Reset(8);
-  buffer_data[1].Reset(8);
-  init_data[0].Reset(8);
-  init_data[1].Reset(8);
-
-  auto r = MakeOutgoingCandidate();
-  r.is_prior_filter_failed_ = true;
-  buffer_data[1].EmplaceBack(r);
-
-  CollectData(rng, ms_info, &filter, buffer_data, init_data);
-
-  ASSERT_EQ(buffer_data[1].size_, 1u);
-  const auto& out = buffer_data[1].rays_[0];
-  EXPECT_TRUE(out.IsContinue()) << "prior_failed + filter-pass + prob-pass must continue";
-  EXPECT_FALSE(out.IsFilterDropped());
-  EXPECT_EQ(init_data[1].size_, 1u);
-}
-
-TEST(CollectDataFilterDispatch, PriorFailedFilterPassProbFail) {
-  RandomNumberGenerator rng(42);
-  AlwaysAcceptSpec filter;
-  MsInfo ms_info;
-  ms_info.prob_ = 0.0f;
-
-  RayBuffer buffer_data[2];
-  RayBuffer init_data[2];
-  buffer_data[0].Reset(8);
-  buffer_data[1].Reset(8);
-  init_data[0].Reset(8);
-  init_data[1].Reset(8);
-
-  auto r = MakeOutgoingCandidate();
-  r.is_prior_filter_failed_ = true;
-  buffer_data[1].EmplaceBack(r);
-
-  CollectData(rng, ms_info, &filter, buffer_data, init_data);
-
-  ASSERT_EQ(buffer_data[1].size_, 1u);
-  const auto& out = buffer_data[1].rays_[0];
-  EXPECT_TRUE(out.IsFilterDropped()) << "prior_failed + filter-pass + prob-fail must land in anchor lane";
-  EXPECT_FALSE(out.IsContinue());
-  EXPECT_FALSE(out.IsOutgoing());
   EXPECT_EQ(init_data[1].size_, 0u);
 }
 

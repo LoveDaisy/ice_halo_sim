@@ -31,9 +31,9 @@ from test.e2e.capi_runner import run_scene_capi
 _CONFIGS_DIR = Path(__file__).parent / "configs"
 
 _LIFECYCLE_CONFIGS = [
-    str(_CONFIGS_DIR / "rp46_additivity_in.json"),
-    str(_CONFIGS_DIR / "rp46_additivity_out.json"),
-    str(_CONFIGS_DIR / "rp46_additivity_nof.json"),
+    str(_CONFIGS_DIR / "raypath_symmetry_4_6.json"),
+    str(_CONFIGS_DIR / "raypath_symmetry_4_6_nofilter.json"),
+    str(_CONFIGS_DIR / "raypath_symmetry_7_3.json"),
 ]
 
 # 12 rounds × 3 configs = 36 lifecycles > 31 crash threshold

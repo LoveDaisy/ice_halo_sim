@@ -479,7 +479,6 @@ struct GuiState {
   void MarkFilterDirty() {
     MarkDirty();
     snapshot_intensity = 0;
-    anchor_snapshot_intensity = 0;
     p995_raw_y = 0.0f;
     intensity_locked = true;
   }
@@ -511,10 +510,7 @@ struct GuiState {
   // Stats from last poll
   unsigned long stats_ray_seg_num = 0;
   unsigned long stats_sim_ray_num = 0;
-  float snapshot_intensity = 0;  // Per-pixel landed intensity for XYZ→RGB normalization
-  // Anchor lane intensity: per-pixel filter-pass + filter-fail combined intensity used for EV
-  // anchor normalization. Zero when no filter is configured (anchor lane degenerates).
-  float anchor_snapshot_intensity = 0;
+  float snapshot_intensity = 0;            // Per-pixel landed intensity for XYZ→RGB normalization
   int effective_pixels = 0;                // Non-zero pixel count for adaptive normalization
   int norm_mode = 0;                       // 0=absolute, 1=adaptive (not exposed in UI)
   unsigned long texture_upload_count = 0;  // Cumulative texture uploads (diagnostic counter)

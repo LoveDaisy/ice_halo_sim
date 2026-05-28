@@ -141,8 +141,6 @@ void InitRay_rot(RandomNumberGenerator& rng, const AxisDistribution& crystal_axi
 }
 
 
-// Do NOT reset cross-layer fields (e.g., is_prior_filter_failed_);
-// they are propagated via TraceRayBasicInfo().
 void InitRay_other_info(const Crystal& curr_crystal, size_t curr_crystal_id, size_t all_data_idx,  // input
                         RayBuffer buffer_data[2]) {                                                // output
   for (auto& r : buffer_data[0]) {
@@ -173,12 +171,6 @@ void InitRayFirstMs(RandomNumberGenerator& rng, const SunParam& light_param, con
 
   // 1.3 init crystal_id, root_ray_idx, rp, state
   InitRay_other_info(curr_crystal, curr_crystal_id, all_data.size_, buffer_data);
-
-  // 1.4 reset cross-layer state (pool-reuse guard: Reset() may not zero memory)
-  // See doc/raypath-rayseg-architecture.md §3 "Reset Points Summary".
-  for (auto& r : buffer_data[0]) {
-    r.is_prior_filter_failed_ = false;
-  }
 
   all_data.EmplaceBack(buffer_data[0]);
 }
@@ -385,8 +377,6 @@ void TraceRayBasicInfo(const Crystal& curr_crystal, float refractive_index, size
     // Each child segment's from_face_ = parent's to_face_ (the face just hit).
     buffer_data[1][i * 2 + 0].from_face_ = buffer_data[0][i].to_face_;
     buffer_data[1][i * 2 + 1].from_face_ = buffer_data[0][i].to_face_;
-    buffer_data[1][i * 2 + 0].is_prior_filter_failed_ = buffer_data[0][i].is_prior_filter_failed_;
-    buffer_data[1][i * 2 + 1].is_prior_filter_failed_ = buffer_data[0][i].is_prior_filter_failed_;
     buffer_data[1][i * 2 + 0].crystal_idx_ = buffer_data[0][i].crystal_idx_;
     buffer_data[1][i * 2 + 1].crystal_idx_ = buffer_data[0][i].crystal_idx_;
     buffer_data[1][i * 2 + 0].crystal_config_id_ = buffer_data[0][i].crystal_config_id_;
@@ -412,61 +402,38 @@ void FillRayOtherInfo(const Crystal& curr_crystal, RayBuffer buffer_data[2]) {
 }
 
 
+// Design A filter semantics: filter-fail = ray terminates (not outgoing, not continue).
 // See doc/raypath-rayseg-architecture.md §3 for the segment state-machine transition rules.
 void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input
                  RayBuffer* buffer_data, RayBuffer* init_data) {                             // output
-  // F1 anchor-lane semantics (see doc/filter-architecture.md §7): the filter is NOT a
-  // mid-trajectory kill. Outgoing candidates that fail the filter are routed into the
-  // anchor lane (IsFilterDropped() == true, collected by the caller into
-  // SimData::anchor_d_/anchor_w_) AND remain eligible for prob-pass continue to the next
-  // MS level. When `spec == nullptr` the anchor lane stays empty (filter always passes)
-  // and the path degenerates to the no-filter case at zero extra cost.
-  //
-  // Branch table for outgoing candidates (to_face_ == kInvalidId, w_ >= 0):
-  //   filter-pass + !prior_failed + prob-pass → is_continue_ = true (next MS)
-  //   filter-pass + !prior_failed + prob-fail → outgoing (no flag)
-  //   filter-pass +  prior_failed + prob-pass → is_continue_ = true (anchor bypass continues)
-  //   filter-pass +  prior_failed + prob-fail → is_filter_dropped_ = true (anchor lane)
-  //   filter-fail + prob-pass → is_continue_ = true; is_prior_filter_failed_ = true
-  //   filter-fail + prob-fail → is_filter_dropped_ = true (anchor lane)
-  // is_continue_ and is_filter_dropped_ are mutually exclusive (only one is set).
   for (auto& r : buffer_data[1]) {
-    // Explicit reset: both the original Design A CollectData and CollectDataF1 carried
-    // these resets to guard against stale bool values from pool-reused buffer slots
-    // (a prior round may leave is_continue_=true; TIR/Normal paths below do not write it).
+    // Explicit reset: guard against stale bool from pool-reused buffer slots.
     r.is_continue_ = false;
-    r.is_filter_dropped_ = false;
 
     if (r.w_ < 0) {
-      // 0. Total reflection — derived via IsTir() (w_ < 0); no state write needed.
+      // 0. Total reflection — rotate to world space.
+      r.crystal_rot_.Apply(r.d_);
+      r.crystal_rot_.Apply(r.p_);
     } else if (r.to_face_ == kInvalidId) {
-      // 1. Outgoing candidates. Apply rotation first so filter operates in world-space.
-      // (w_ < 0 is already handled above, so to_face_==kInvalidId implies w_ >= 0 — no double-rotation risk.)
+      // 1. Outgoing candidates. Rotate to world space first so filter operates in world coordinates.
       r.crystal_rot_.Apply(r.d_);
       r.crystal_rot_.Apply(r.p_);
 
       bool filter_pass = (spec == nullptr) || spec->Check(r);
-      if (!filter_pass) {
-        r.is_prior_filter_failed_ = true;
+      if (filter_pass) {
+        if (rng.GetUniform() < ms_info.prob_) {
+          // 1.1 filter-pass + prob-pass → continue to next MS level.
+          r.is_continue_ = true;
+        }
+        // 1.2 filter-pass + prob-fail → emit outgoing (IsOutgoing() = true).
+      } else {
+        // 1.3 filter-fail → ray terminates. Reuse TIR sentinel (w_<0) so the ray
+        // is excluded from IsOutgoing() and IsContinue(). Direction/position are
+        // already in world space from the Apply() above, matching real-TIR layout.
+        r.w_ = -1.0f;
       }
-      if (rng.GetUniform() < ms_info.prob_) {
-        // 1.1 prob-pass → continue to next MS level. is_prior_filter_failed_ persists
-        //     so downstream layers route this ray to anchor lane, not main outgoing.
-        r.is_continue_ = true;
-      } else if (r.is_prior_filter_failed_) {
-        // 1.2 prior or current filter failure + prob-fail → anchor lane only.
-        r.is_filter_dropped_ = true;
-      }
-      // 1.3 else: filter-pass + no prior failure + prob-fail → emit outgoing (no flag set).
     }
-    // 2. else: normal rays (to_face_ != kInvalidId && w_ >= 0) — IsNormal() derived; no state write.
-
-    // Tail rotation: only for total reflection (w_ < 0). Outgoing candidates (to_face_==kInvalidId) are
-    // already rotated above; normal rays (to_face_!=kInvalidId) stay in crystal-local coordinates.
-    if (r.w_ < 0) {
-      r.crystal_rot_.Apply(r.d_);
-      r.crystal_rot_.Apply(r.p_);
-    }
+    // 2. Normal rays (to_face_ != kInvalidId && w_ >= 0) stay in crystal-local coordinates.
 
     if (r.IsNormal()) {
       buffer_data[0].EmplaceBack(r);
@@ -578,10 +545,6 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   std::vector<size_t> outgoing_indices;
   std::vector<float> outgoing_d;
   std::vector<float> outgoing_w;
-  // Anchor lane for filter-fail prob-fail outgoing candidates. Stays empty when no filter
-  // is configured (CollectData skips IsFilterDropped writes when spec == nullptr).
-  std::vector<float> anchor_d;
-  std::vector<float> anchor_w;
   auto& init_data = workspace.init_data;
   auto& buffer_data = workspace.buffer_data;
   init_data[0].size_ = 0;
@@ -696,8 +659,6 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
                       buffer_data, init_data);  // output
 
           // 2.4 Copy to all_data + collect outgoing indices.
-          // CollectData may also produce IsFilterDropped() outgoing-candidates that belong
-          // to the anchor lane (only when a filter spec is present).
           size_t base_index = all_data.size_;
           all_data.EmplaceBack(buffer_data[1]);
           for (size_t j = 0; j < buffer_data[1].size_; j++) {
@@ -708,11 +669,6 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
               outgoing_d.push_back(r.d_[1]);
               outgoing_d.push_back(r.d_[2]);
               outgoing_w.push_back(r.w_);
-            } else if (r.IsFilterDropped()) {
-              anchor_d.push_back(r.d_[0]);
-              anchor_d.push_back(r.d_[1]);
-              anchor_d.push_back(r.d_[2]);
-              anchor_w.push_back(r.w_);
             }
           }
         }  // hit loop
@@ -746,8 +702,6 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   sim_data.outgoing_indices_ = std::move(outgoing_indices);
   sim_data.outgoing_d_ = std::move(outgoing_d);
   sim_data.outgoing_w_ = std::move(outgoing_w);
-  sim_data.anchor_d_ = std::move(anchor_d);
-  sim_data.anchor_w_ = std::move(anchor_w);
   sim_data.root_ray_count_ = original_ray_num;
   data_queue_->Emplace(std::move(sim_data));
 }

@@ -2,13 +2,13 @@
 
 The standard subprocess-based runner in :mod:`test.e2e.runner` only exposes
 return code / stdout / stderr; it has no way to read scalar fields like
-``anchor_snapshot_intensity`` from ``LUMICE_RawXyzResult``. Tests that
+``snapshot_intensity`` from ``LUMICE_RawXyzResult``. Tests that
 need those values drive Lumice through the C API directly via ``ctypes``.
 
 Each call to :func:`run_scene_capi` creates a fresh ``LUMICE_Server``,
 commits the requested config, polls until the server returns to IDLE with
 valid data (or the timeout fires), reads the scalar result, and destroys
-the server. The 3 additivity simulations therefore share no state.
+the server.
 
 Library lookup order:
     1. ``LUMICE_LIB`` environment variable (full path to the shared library).
@@ -32,10 +32,8 @@ from typing import Optional
 import numpy as np
 
 
-# Mirrors LUMICE_RawXyzResult in src/include/lumice.h (verified 64 bytes
-# on 64-bit macOS/Linux after the F1 mode-toggle ABI break: the two
-# unfiltered_* fields were replaced by scalar anchor_p995_y + anchor_snapshot_intensity,
-# dropping a pointer slot). Keep in sync with scripts/dump_xyz_stats.py.
+# Mirrors LUMICE_RawXyzResult in src/include/lumice.h. Anchor fields removed
+# in task-remove-anchor-lane; struct size shrunk from 64 → 56 bytes.
 class LUMICE_RawXyzResult(ctypes.Structure):
     _fields_ = [
         ("renderer_id",                ctypes.c_int),
@@ -47,12 +45,10 @@ class LUMICE_RawXyzResult(ctypes.Structure):
         ("has_valid_data",             ctypes.c_int),
         ("snapshot_generation",        ctypes.c_uint64),
         ("effective_pixels",           ctypes.c_int),
-        ("anchor_p995_y",              ctypes.c_float),
-        ("anchor_snapshot_intensity",  ctypes.c_float),
     ]
 
 
-assert ctypes.sizeof(LUMICE_RawXyzResult) == 64, (
+assert ctypes.sizeof(LUMICE_RawXyzResult) == 56, (
     "LUMICE_RawXyzResult size mismatch — verify lumice.h field layout"
 )
 
@@ -77,34 +73,18 @@ _LUMICE_SERVER_NOT_READY = 2
 
 @dataclass
 class SimResult:
-    """Subset of LUMICE_RawXyzResult fields exposed to test code.
-
-    ``anchor_p995_y`` and ``anchor_snapshot_intensity`` are non-zero only when the
-    server is running in Adaptive Brightness OFF mode (F1) with a filter spec.
-    The legacy ``unfiltered_*`` C API fields were removed in scrum-adaptive-
-    additivity-redesign / task-f1-simulator-mode-toggle.
-    """
+    """Subset of LUMICE_RawXyzResult fields exposed to test code."""
 
     snapshot_intensity: float
-    anchor_p995_y: float
-    anchor_snapshot_intensity: float
     has_valid_data: bool
     effective_pixels: int
 
 
 @dataclass
 class BufferedSimResult:
-    """SimResult plus a copied XYZ buffer.
-
-    The historical ``unf_buf`` (unfiltered XYZ image) was removed alongside the
-    ``unfiltered_xyz_buffer`` C API field. Tests that previously relied on it
-    (the partition_buffer_additivity family in test_additivity.py) are scheduled
-    for redesign on the OFF-mode anchor baseline in a follow-up task.
-    """
+    """SimResult plus a copied XYZ buffer."""
 
     snapshot_intensity: float
-    anchor_p995_y: float
-    anchor_snapshot_intensity: float
     has_valid_data: bool
     effective_pixels: int
     img_width: int
@@ -244,8 +224,6 @@ def run_scene_capi(config_path: str, sim_seed: int = 0, timeout_sec: int = 180) 
         r = results[0]
         return SimResult(
             snapshot_intensity=float(r.snapshot_intensity),
-            anchor_p995_y=float(r.anchor_p995_y),
-            anchor_snapshot_intensity=float(r.anchor_snapshot_intensity),
             has_valid_data=bool(r.has_valid_data),
             effective_pixels=int(r.effective_pixels),
         )
@@ -319,8 +297,6 @@ def run_scene_capi_buffered(config_path: str, sim_seed: int = 0, timeout_sec: in
         r_h = int(r.img_height)
         r_xyz_addr = ctypes.cast(r.xyz_buffer, ctypes.c_void_p).value
         r_snap = float(r.snapshot_intensity)
-        r_anchor_p995 = float(r.anchor_p995_y)
-        r_anchor_int = float(r.anchor_snapshot_intensity)
         r_valid = bool(r.has_valid_data)
         r_eff = int(r.effective_pixels)
         if r_xyz_addr is None:
@@ -345,8 +321,6 @@ def run_scene_capi_buffered(config_path: str, sim_seed: int = 0, timeout_sec: in
 
         return BufferedSimResult(
             snapshot_intensity=r_snap,
-            anchor_p995_y=r_anchor_p995,
-            anchor_snapshot_intensity=r_anchor_int,
             has_valid_data=r_valid,
             effective_pixels=r_eff,
             img_width=r_w,

@@ -176,16 +176,11 @@ static AcState g_ac_state;
 // Compute intensity_scale for export using the AcState.exposure_offset (not the
 // current GUI state). Matches app.cpp::BuildExportParams behavior so tests can
 // probe the EV-follows-export invariant independently of any live slider.
-// Mirrors production: ev_total = exposure_offset + g_state.ev_auto, with
-// anchor/filtered double-path norm_intensity (AC4 still passes since g_state.ev_auto
-// defaults to 0 and anchor_snapshot_intensity defaults to 0 → falls through to filtered).
 static gui::PreviewParams BuildAcExportParams(float exposure_offset) {
   gui::PreviewParams params = gui::g_preview_vp.params;
   float ev_total = exposure_offset + gui::g_state.ev_auto;
   params.exposure.intensity_factor = std::pow(2.0f, ev_total);
-  float norm_intensity = (gui::g_state.anchor_snapshot_intensity > 0.0f && gui::g_state.p995_raw_y > 0.0f) ?
-                             gui::g_state.anchor_snapshot_intensity :
-                             gui::g_state.snapshot_intensity;
+  float norm_intensity = gui::g_state.snapshot_intensity;
   params.exposure.intensity_scale = norm_intensity > 0 ? params.exposure.intensity_factor / norm_intensity : 0.0f;
   return params;
 }
@@ -1071,8 +1066,6 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       if (!s_xyz_uploaded) {
         UploadUniformXyzTexture(0.08f);
         gui::g_state.snapshot_intensity = 1.0f;
-        // Force anchor lane off so norm_intensity falls through to snapshot_intensity.
-        gui::g_state.anchor_snapshot_intensity = 0.0f;
         gui::g_state.p995_raw_y = 0.0f;
         s_xyz_uploaded = true;
       }
@@ -1131,7 +1124,6 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       if (!s_xyz_uploaded) {
         UploadUniformXyzTexture(0.08f);
         gui::g_state.snapshot_intensity = 1.0f;
-        gui::g_state.anchor_snapshot_intensity = 0.0f;
         gui::g_state.p995_raw_y = 0.0f;
         s_xyz_uploaded = true;
       }
