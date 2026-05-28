@@ -77,32 +77,17 @@ struct RaySeg {
   // crystal (multi-scattering). Other segment kinds (Normal / Outgoing / Tir)
   // are pure derivations of to_face_ and w_; see helpers below.
   bool is_continue_ = false;
-  // Design A (filter as simulator-side emit-gate): set when the outgoing
-  // candidate fails the per-crystal FilterSpec check. Filter-dropped rays
-  // never reach the outgoing buffer (IsOutgoing() returns false). Mutually
-  // exclusive with is_continue_: both are only meaningful when to_face_ ==
-  // kInvalidId && w_ >= 0.
-  bool is_filter_dropped_ = false;
-  // Cross-layer persistent flag: set when an outgoing candidate fails the
-  // per-crystal filter in any MS layer, propagated to child segments via
-  // TraceRayBasicInfo(). Rays carrying this flag route to the anchor lane
-  // (is_filter_dropped_) rather than the main outgoing buffer, even if they
-  // pass the current layer's filter.
-  bool is_prior_filter_failed_ = false;
   RaypathRecorder rp_;  // Raypath in **CURRENT** crystal.
 
   // Derived segment-kind helpers. Invariants (mutually exclusive, exhaustive):
-  //   IsTir()           <=> w_ < 0
-  //   IsNormal()        <=> to_face_ != kInvalidId && w_ >= 0
-  //   IsOutgoing()      <=> to_face_ == kInvalidId && w_ >= 0 && !is_continue_ && !is_filter_dropped_
-  //   IsContinue()      <=> is_continue_ (only set when to_face_ == kInvalidId && w_ >= 0)
-  //   IsFilterDropped() <=> is_filter_dropped_ (only set when to_face_ == kInvalidId && w_ >= 0;
-  //                        mutually exclusive with is_continue_)
+  //   IsTir()      <=> w_ < 0
+  //   IsNormal()   <=> to_face_ != kInvalidId && w_ >= 0
+  //   IsOutgoing() <=> to_face_ == kInvalidId && w_ >= 0 && !is_continue_
+  //   IsContinue() <=> is_continue_ (only set when to_face_ == kInvalidId && w_ >= 0)
   bool IsTir() const { return w_ < 0; }
   bool IsNormal() const { return to_face_ != kInvalidId && w_ >= 0; }
   bool IsContinue() const { return is_continue_; }
-  bool IsFilterDropped() const { return is_filter_dropped_; }
-  bool IsOutgoing() const { return to_face_ == kInvalidId && w_ >= 0 && !is_continue_ && !is_filter_dropped_; }
+  bool IsOutgoing() const { return to_face_ == kInvalidId && w_ >= 0 && !is_continue_; }
 
   // --- Construction-time invariant validation (for assert only) ---
   // N4 invariants checked at RayBuffer::EmplaceBack(RaySeg) entry. Debug only;

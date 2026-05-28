@@ -1,22 +1,15 @@
 """End-to-end regression tests for the MS filter leak bug.
 
-The bug: in multi-scattering configs, outgoing candidates that fail a per-crystal
-filter in layer N but pass the probability check (anchor-lane bypass) carry no
-persistent flag. In layer N+1, these rays can reach IsOutgoing() and leak into the
-main output buffer, producing extra arcs/halos.
+In Design A, filter-fail rays terminate immediately (do not propagate to the next
+MS layer). The tests below verify two aspects of this behavior:
 
-Fix: ``RaySeg::is_prior_filter_failed_`` persists filter failure across MS layers.
-Rays carrying this flag route to the anchor lane even if they pass the current
-layer's filter.
-
-Two tests:
 1. ``test_impossible_filter_produces_zero_intensity`` — layer 1 uses an impossible
    raypath filter [1,1] (cannot occur in a convex hexagonal prism); all rays fail
-   the filter. With the fix, no ray reaches the main output (snapshot_intensity == 0).
+   the filter and terminate. No ray reaches the main output (snapshot_intensity == 0).
 
 2. ``test_repro_scenario_matches_single_layer`` — the issue's exact reproduction
    config (lowitz + transparent-plate layer 2) compared against the single-layer
-   baseline. With the fix, the normalized images are visually identical (high PSNR).
+   baseline. Filter-failed rays do not leak through layer 2.
 """
 
 from __future__ import annotations
@@ -80,11 +73,10 @@ def test_repro_scenario_matches_single_layer():
     baseline = run_scene_capi_buffered(str(CONFIGS_DIR / "ms_filter_leak_baseline.json"), sim_seed=_REPRO_TEST_SEED)
 
     assert baseline.snapshot_intensity > 0, "baseline snapshot_intensity is zero"
-    assert baseline.anchor_snapshot_intensity > 0, "baseline anchor is zero"
 
     pix = baseline.img_width * baseline.img_height
-    norm_baseline = baseline.anchor_snapshot_intensity
-    norm_repro = repro.anchor_snapshot_intensity if repro.anchor_snapshot_intensity > 0 else repro.snapshot_intensity
+    norm_baseline = baseline.snapshot_intensity
+    norm_repro = repro.snapshot_intensity
 
     disp_baseline = _display_xyz(baseline.flt_buf, norm_baseline, pix)
     disp_repro = _display_xyz(repro.flt_buf, norm_repro, pix)

@@ -640,7 +640,6 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       g_export_test.Reset();
       g_export_test.export_path = path_a;
       gui::g_state.ev_auto = 0.0f;
-      gui::g_state.anchor_snapshot_intensity = 0.0f;
       ctx->Yield(1);
       const float live_snapshot_intensity = gui::g_state.snapshot_intensity;
       g_export_test.export_requested = true;
@@ -680,7 +679,6 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       g_export_test.export_path = path_b;
       gui::g_state.ev_auto = 0.0f;
       gui::g_state.snapshot_intensity = live_snapshot_intensity;
-      gui::g_state.anchor_snapshot_intensity = 0.0f;
       ctx->Yield(1);
       g_export_test.export_requested = true;
       ctx->Yield(2);

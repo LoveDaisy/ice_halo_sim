@@ -754,8 +754,6 @@ LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzRes
     out[i].has_valid_data = results[i].has_valid_data_ ? 1 : 0;
     out[i].snapshot_generation = results[i].snapshot_generation_;
     out[i].effective_pixels = results[i].effective_pixels_;
-    out[i].anchor_p995_y = results[i].anchor_p995_y_;
-    out[i].anchor_snapshot_intensity = results[i].anchor_snapshot_intensity_;
   }
 
   // Sentinel: see doc/capi-lifecycle-architecture.md §5.2 (fix: 5287efe).

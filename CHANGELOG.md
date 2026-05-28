@@ -15,8 +15,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Adaptive Brightness defaults updated**: EV anchor now uses the P99.5 percentile
   (previously P99) and maps to `target_white = 135` (previously 200). These values
   produce better perceptual balance across typical halo scenes.
+- **Anchor lane removed**: Adaptive Brightness now uses per-frame visible-framebuffer
+  self-P99.5 normalization. Filter-fail rays terminate immediately in `CollectData`
+  (Design A semantics). The EV scale may shift when toggling a filter, since the
+  P99.5 is computed over the current visible set. Eliminates the ~2× multi-scattering
+  performance tax of the prior anchor-lane design (~+97% at `ms_prob=0.5`,
+  +148% at `ms_prob=0.8`).
 
 ### Removed
+- **Breaking ABI**: `LUMICE_RawXyzResult::anchor_p995_y` and `anchor_snapshot_intensity`
+  fields removed. Struct shrinks from 64 bytes to 56 bytes on 64-bit platforms.
+  Update all ctypes / FFI / C callers that reference these fields.
+- `RaySeg::is_filter_dropped_` and `is_prior_filter_failed_` fields and the
+  `IsFilterDropped()` helper removed. `IsOutgoing()` simplified accordingly.
+- `SimData::anchor_d_` and `anchor_w_` fields removed (sizeof: 216 → 168 bytes on
+  Apple Silicon libc++).
+- `RenderConsumer` anchor accumulators (`anchor_internal_xyz_`, `anchor_snapshot_xyz_`,
+  `anchor_total_intensity_`, `anchor_snapshot_intensity_`, `anchor_p995_y_`) removed.
+- `test_partition_buffer_additivity` (`test/e2e/test_additivity.py`) and its 9 config
+  files removed; the additivity invariant only held under the anchor-lane normalization.
 - **Breaking ABI #2**: `LUMICE_RawXyzResult::anchor_p99_y` renamed to `anchor_p995_y`.
   Update all ctypes / FFI / C callers that reference this field by name.
   (ABI break #1 was the removal of `ab_mode` in task-remove-adaptive-brightness-on-mode.)

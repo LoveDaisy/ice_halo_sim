@@ -61,13 +61,6 @@ struct SimData {
   std::vector<float> outgoing_d_;  // direction (3 floats per outgoing ray)
   std::vector<float> outgoing_w_;  // weight (1 float per outgoing ray)
 
-  // OFF mode (AdaptiveBrightnessMode::kOff) only: filter-fail outgoing rays that F1 routes
-  // into the anchor buffer. Same packing convention as outgoing_d_/outgoing_w_ but without
-  // an indices side-channel — the consumer never needs to cross-reference back into rays_.
-  // ON mode (Design A) leaves these vectors empty.
-  std::vector<float> anchor_d_;  // direction (3 floats per anchor ray)
-  std::vector<float> anchor_w_;  // weight (1 float per anchor ray)
-
   size_t root_ray_count_ = 0;  // Count of root rays (prev_ray_idx_ == kInfSize)
 };
 
