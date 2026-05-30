@@ -781,10 +781,10 @@ void SyncFromPoller() {
     g_state.snapshot_intensity = data.snapshot_intensity;
     g_state.effective_pixels = data.effective_pixels;
     g_state.texture_upload_count++;
-    // Auto-EV: visible framebuffer self-P99.5 normalization (see doc/adaptive-brightness.md).
-    g_state.p995_raw_y = data.p995_y;
-    g_state.ev_auto = ComputeEvAuto(g_state.p995_raw_y, g_state.snapshot_intensity, g_state.target_white);
-    GUI_LOG_VERBOSE("[GUI] SyncFromPoller: p995_raw_y={:.6f}, ev_auto={:.3f}", g_state.p995_raw_y, g_state.ev_auto);
+    // Auto-EV: visible framebuffer self-P99 normalization (see doc/adaptive-brightness.md).
+    g_state.p99_raw_y = data.p99_y;
+    g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, g_state.target_white);
+    GUI_LOG_VERBOSE("[GUI] SyncFromPoller: p99_raw_y={:.6f}, ev_auto={:.3f}", g_state.p99_raw_y, g_state.ev_auto);
   }
 }
 

@@ -22,7 +22,7 @@ struct PollerData {
   int texture_width = 0;
   int texture_height = 0;
   float snapshot_intensity = 0;
-  float p995_y = 0;  // P99.5 Y of visible framebuffer for auto-EV normalization
+  float p99_y = 0;  // P99 Y of visible framebuffer for auto-EV normalization
   float intensity_factor = 1.0f;
   int effective_pixels = 0;
   bool has_new_texture = false;
