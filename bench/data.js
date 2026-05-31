@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780229218897,
+  "lastUpdate": 1780229220734,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9619,6 +9619,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 67.2,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dc2918aa9d575eeb2b3007788b1bb8cd62f29193",
+          "message": "Merge pull request #116 from LoveDaisy/feat/ev-anchor-p99\n\nfeat(auto-ev): rework adaptive brightness anchor (P99 + global f=8 downsample metric)",
+          "timestamp": "2026-05-31T20:02:04+08:00",
+          "tree_id": "cd1482b671d823bc75c304687bebc49aaa388c11",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/dc2918aa9d575eeb2b3007788b1bb8cd62f29193"
+        },
+        "date": 1780229220249,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 87.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 77.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 80.4,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 71.7,
             "unit": "%"
           }
         ]
