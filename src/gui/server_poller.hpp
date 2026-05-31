@@ -22,7 +22,11 @@ struct PollerData {
   int texture_width = 0;
   int texture_height = 0;
   float snapshot_intensity = 0;
-  float p99_y = 0;  // P99 Y of visible framebuffer for auto-EV normalization
+  // Auto-EV anchor.  When the poller is configured with kEvAutoDownsampleFactor > 1
+  // (see gui_ev_auto.hpp), this is the **fine-equivalent P99** = P99_coarse / f^2 and
+  // is NOT a raw per-pixel Y statistic — use it only as the EV anchor that feeds
+  // ComputeEvAuto, never as a true Y measurement.
+  float p99_y = 0;
   float intensity_factor = 1.0f;
   int effective_pixels = 0;
   bool has_new_texture = false;
