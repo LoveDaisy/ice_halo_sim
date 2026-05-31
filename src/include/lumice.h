@@ -74,7 +74,7 @@ typedef struct LUMICE_RawXyzResult_ {
   float intensity_factor;    // Per-renderer intensity factor (2^EV)
   int has_valid_data;        // Non-zero once simulation has produced data (reset on CommitConfig/Stop)
   unsigned long long snapshot_generation;  // Increments on each new snapshot; compare to detect data changes
-  int effective_pixels;                    // Non-zero pixel count (for adaptive normalization)
+  int effective_pixels;                    // Non-zero pixel count (for stats display)
 } LUMICE_RawXyzResult;
 
 typedef struct LUMICE_StatsResult_ {
@@ -181,6 +181,7 @@ typedef struct LUMICE_ScatterLayer_ {
   int entry_count;
 } LUMICE_ScatterLayer;
 
+// BREAKING (v4.3): norm_mode field removed; struct layout changed. Callers must recompile against this header.
 typedef struct LUMICE_RenderParam_ {
   int id;
   int resolution_w;
