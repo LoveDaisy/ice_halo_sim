@@ -503,7 +503,7 @@ void RenderConsumer::LogConsumeProfile() const {
             consume_count_, avg_total, avg_proj, avg_proj / avg_total * 100, avg_accum, avg_accum / avg_total * 100);
 }
 
-// See doc/ev-pipeline-architecture.md §3.3
+// See doc/ev-pipeline-architecture.md §2.2
 // See doc/accumulator-consumer-architecture.md §4.2 (two-phase snapshot protocol, Phase 1).
 void RenderConsumer::PrepareSnapshot() {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
@@ -604,7 +604,7 @@ RawXyzResult RenderConsumer::GetRawXyzResult() const {
            effective_pix_ };
 }
 
-// See doc/ev-pipeline-architecture.md §3.4
+// See doc/ev-pipeline-architecture.md §3.2
 // See doc/accumulator-consumer-architecture.md §3.1 (reset path).
 void RenderConsumer::Reset() {
   total_intensity_ = 0;
