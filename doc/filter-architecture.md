@@ -207,7 +207,7 @@ as the canonical routing model.  Off mode redesign was tracked as a backlog item
 
 ### scrum-221 (adaptive-additivity-redesign, 2026-05-24) — Off mode redesign shipped
 
-Implemented Off mode via F1 anchor lane (see §7).  ABI swap removed `unfiltered_*`
+Implemented Off mode via F1 anchor lane.  ABI swap removed `unfiltered_*`
 fields and introduced `anchor_p99_y` / `anchor_snapshot_intensity` (renamed to
 `anchor_p995_y` in apply-new-defaults).  Additivity testing
 (partition invariant) added to the E2E test suite.
@@ -242,11 +242,13 @@ TIR-like semantics) but never reach the consumer's outgoing accumulator.
 The EV offset is sourced from the current frame's visible framebuffer:
 
 ```
-ev = log2(target_linear / (p995_y / snapshot_intensity))
+ev = log2(target_linear / (p99_y / snapshot_intensity))
 ```
 
-The P99.5 is computed in the poller thread (`server_poller.cpp::PollOnce`) over the
-staged XYZ data. See `doc/adaptive-brightness.md` for full EV semantics.
+The P99 anchor is computed in the poller thread (`ServerPoller::WorkerLoop`,
+`server_poller.cpp:215`) over the staged XYZ data, using an f=8 box-sum downsample
+(`ComputeP99Y`). See `doc/ev-pipeline-architecture.md §2.5` and
+`doc/adaptive-brightness.md` for full EV semantics.
 
 ---
 
@@ -271,7 +273,7 @@ anchor points for future contributors:
 | Filter ↔ crystal per-entry config | `src/config/proj_config.hpp` — `ScatteringSetting` |
 | Simulator-side filter check (Design A gate) | `src/core/simulator.cpp` — `CollectData()` |
 | FilterSpec algorithm interface | `src/core/filter_spec.hpp` |
-| C API anchor fields (F1 anchor lane) | `src/include/lumice.h` — `LUMICE_RawXyzResult.anchor_p995_y` / `anchor_snapshot_intensity` |
+| EV pipeline (single-lane, P99 anchor) | `doc/ev-pipeline-architecture.md` |
 | Filter JSON schema | `doc/configuration.md` |
 | Raypath semantics, P/B/D filter toggles | `doc/raypath-symmetry.md` |
 | Adaptive Brightness Off mode, additivity | `doc/adaptive-brightness.md` |
