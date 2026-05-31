@@ -48,7 +48,7 @@ TEST(EvAuto, ComputeP99YFineRegressionWithDefaultFactor) {
 //   sorted = {14, 22, 46, 54}; idx = floor(4 * 0.99) = 3 -> y_vals[3] = 54.
 // Returned value = 54 / (f^2 = 4) = 13.5.
 TEST(EvAuto, ComputeP99YBoxSumExact4x4Factor2) {
-  std::vector<float> y = { 1.0f,  2.0f,  3.0f,  4.0f,  5.0f,  6.0f,  7.0f,  8.0f,
+  std::vector<float> y = { 1.0f, 2.0f,  3.0f,  4.0f,  5.0f,  6.0f,  7.0f,  8.0f,
                            9.0f, 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f, 16.0f };
   std::vector<float> xyz = MakeXyz(4, 4, y);
 
