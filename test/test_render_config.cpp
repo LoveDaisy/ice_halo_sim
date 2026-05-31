@@ -24,7 +24,6 @@ lumice::RenderConfig MakeBaseline() {
   cfg.ray_color_[2] = 0.0f;
   cfg.opacity_ = 0.8f;
   cfg.intensity_factor_ = 2.0f;
-  cfg.norm_mode_ = 1;
   cfg.overlap_ = 0.1f;
   cfg.celestial_outline_ = false;
   // Leave grids and ms_filter empty for baseline.
@@ -151,13 +150,6 @@ TEST(RenderConfigTest, EachAppearanceField_ReturnsFalse) {
     auto mod = base;
     mod.intensity_factor_ = 10.0f;
     EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "intensity_factor";
-  }
-
-  // norm_mode
-  {
-    auto mod = base;
-    mod.norm_mode_ = 0;
-    EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "norm_mode";
   }
 
   // central_grid

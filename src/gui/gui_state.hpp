@@ -512,7 +512,6 @@ struct GuiState {
   unsigned long stats_sim_ray_num = 0;
   float snapshot_intensity = 0;            // Per-pixel landed intensity for XYZ→RGB normalization
   int effective_pixels = 0;                // Non-zero pixel count for adaptive normalization
-  int norm_mode = 0;                       // 0=absolute, 1=adaptive (not exposed in UI)
   unsigned long texture_upload_count = 0;  // Cumulative texture uploads (diagnostic counter)
 
   // Auto-EV runtime state (display layer only, not persisted, not in ConfigSnapshot)

@@ -302,7 +302,6 @@ static nlohmann::json ConfigToJson(const LUMICE_Config& c) {
     jr["background"] = { 0.0f, 0.0f, 0.0f };
     jr["opacity"] = r.opacity;
     jr["intensity_factor"] = r.intensity_factor;
-    jr["norm_mode"] = r.norm_mode;
     jr["overlap"] = r.overlap;
     root["render"].push_back(jr);
   }
@@ -600,9 +599,6 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, LUMICE
     }
     if (rj.contains("intensity_factor")) {
       r.intensity_factor = rj.at("intensity_factor").get<float>();
-    }
-    if (rj.contains("norm_mode")) {
-      r.norm_mode = rj.at("norm_mode").get<int>();
     }
     if (rj.contains("overlap")) {
       r.overlap = std::max(0.0f, rj.at("overlap").get<float>());

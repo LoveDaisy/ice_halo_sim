@@ -63,7 +63,7 @@ SimData::SimData() : curr_wl_(0.0f) {}
 SimData::SimData(size_t capacity) : curr_wl_(0.0f), rays_(capacity) {}
 
 SimData::SimData(const SimData& other)
-    : curr_wl_(other.curr_wl_), total_intensity_(other.total_intensity_), generation_(other.generation_),
+    : curr_wl_(other.curr_wl_), generation_(other.generation_),
       rays_(other.rays_.capacity_), crystals_(other.crystals_), crystal_axis_dists_(other.crystal_axis_dists_),
       outgoing_indices_(other.outgoing_indices_), outgoing_d_(other.outgoing_d_), outgoing_w_(other.outgoing_w_),
       root_ray_count_(other.root_ray_count_) {
@@ -72,7 +72,7 @@ SimData::SimData(const SimData& other)
 }
 
 SimData::SimData(SimData&& other) noexcept
-    : curr_wl_(other.curr_wl_), total_intensity_(other.total_intensity_), generation_(other.generation_),
+    : curr_wl_(other.curr_wl_), generation_(other.generation_),
       crystals_(std::move(other.crystals_)), crystal_axis_dists_(std::move(other.crystal_axis_dists_)),
       outgoing_indices_(std::move(other.outgoing_indices_)), outgoing_d_(std::move(other.outgoing_d_)),
       outgoing_w_(std::move(other.outgoing_w_)), root_ray_count_(other.root_ray_count_) {
@@ -91,7 +91,6 @@ SimData& SimData::operator=(const SimData& other) {
   }
 
   curr_wl_ = other.curr_wl_;
-  total_intensity_ = other.total_intensity_;
   generation_ = other.generation_;
   rays_.size_ = other.rays_.size_;
   rays_.capacity_ = other.rays_.capacity_;
@@ -112,7 +111,6 @@ SimData& SimData::operator=(SimData&& other) noexcept {
   }
 
   curr_wl_ = other.curr_wl_;
-  total_intensity_ = other.total_intensity_;
   generation_ = other.generation_;
   rays_.size_ = other.rays_.size_;
   rays_.capacity_ = other.rays_.capacity_;

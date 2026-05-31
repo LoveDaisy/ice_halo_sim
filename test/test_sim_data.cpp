@@ -56,7 +56,6 @@ RaySeg MakeRay(int marker) {
 SimData MakePopulatedSimData() {
   SimData s(8);
   s.curr_wl_ = 550.0f;
-  s.total_intensity_ = 1.5f;
   s.generation_ = 42;
   s.root_ray_count_ = 7;
   for (int i = 0; i < 5; i++) {
@@ -259,7 +258,6 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
   // Scalar field assertions, each with a failure message identifying which
   // field was missed (helps catch the "manual copy missed a field" bug class).
   EXPECT_FLOAT_EQ(copy.curr_wl_, 550.0f) << "curr_wl_ not copied";
-  EXPECT_FLOAT_EQ(copy.total_intensity_, 1.5f) << "total_intensity_ not copied";
   EXPECT_EQ(copy.generation_, 42u) << "generation_ not copied";
   EXPECT_EQ(copy.root_ray_count_, 7u) << "root_ray_count_ not copied";
 
@@ -301,7 +299,6 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
 
   // Field completeness (mirror of copy ctor test).
   EXPECT_FLOAT_EQ(target.curr_wl_, 550.0f) << "curr_wl_ not assigned";
-  EXPECT_FLOAT_EQ(target.total_intensity_, 1.5f) << "total_intensity_ not assigned";
   EXPECT_EQ(target.generation_, 42u) << "generation_ not assigned";
   EXPECT_EQ(target.root_ray_count_, 7u) << "root_ray_count_ not assigned";
   EXPECT_EQ(target.rays_.size_, 5u);
@@ -327,7 +324,6 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   // Use an alias reference to bypass -Wself-assign-overloaded.
   auto orig = MakePopulatedSimData();
   const float kSnapCurrWl = orig.curr_wl_;
-  const float kSnapTotalInt = orig.total_intensity_;
   const uint64_t kSnapGen = orig.generation_;
   const size_t kSnapRoot = orig.root_ray_count_;
   const size_t kSnapRaysSize = orig.rays_.size_;
@@ -340,7 +336,6 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   self_alias = orig;
 
   EXPECT_FLOAT_EQ(orig.curr_wl_, kSnapCurrWl);
-  EXPECT_FLOAT_EQ(orig.total_intensity_, kSnapTotalInt);
   EXPECT_EQ(orig.generation_, kSnapGen);
   EXPECT_EQ(orig.root_ray_count_, kSnapRoot);
   EXPECT_EQ(orig.rays_.size_, kSnapRaysSize);
@@ -362,7 +357,6 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_EQ(moved.rays_.size_, 5u);
   EXPECT_EQ(moved.rays_.capacity_, 8u);
   EXPECT_FLOAT_EQ(moved.curr_wl_, 550.0f);
-  EXPECT_FLOAT_EQ(moved.total_intensity_, 1.5f);
   EXPECT_EQ(moved.generation_, 42u);
   EXPECT_EQ(moved.root_ray_count_, 7u);
   EXPECT_EQ(moved.outgoing_indices_.size(), 3u);
