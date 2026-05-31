@@ -212,7 +212,8 @@ void ServerPoller::PollOnce() {
         staged_.effective_pixels = xyz_results[0].effective_pixels;
         staged_.has_new_texture = true;
         staged_.texture_ray_count = cached_stats.sim_ray_num;
-        staged_.p995_y = ComputeP995Y(staged_.xyz_data);
+        staged_.p99_y =
+            ComputeP99Y(staged_.xyz_data, staged_.texture_width, staged_.texture_height, kEvAutoDownsampleFactor);
         GUI_LOG_VERBOSE("[Poller] staged: rays={} intensity={} gen={}", cached_stats.sim_ray_num,
                         xyz_results[0].snapshot_intensity, xyz_results[0].snapshot_generation);
       } else {

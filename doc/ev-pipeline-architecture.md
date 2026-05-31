@@ -125,14 +125,18 @@ baseline.
 The EV-relevant logic (`app.cpp:805-811`):
 
 ```
-filter present:   p995_raw_y ← anchor_p995_y
+# NOTE: the "filter present" branch describes the F1 anchor lane, REMOVED in
+#       PR #115. Current code has a single self-P99 path (the "no filter" branch).
+#       anchor_p995_y / anchor_snapshot_intensity are dead historical fields kept
+#       under their P99.5-era names; only the live "no filter" path was renamed to P99.
+filter present:   p99_raw_y ← anchor_p995_y   (dead: anchor lane, removed PR #115)
                   ev_auto    ← ComputeEvAuto(anchor_p995_y, anchor_snapshot_intensity, target_white)
 
-no filter:        p995_raw_y ← p995_y          (from filtered snapshot; ≡ total emission)
-                  ev_auto    ← ComputeEvAuto(p995_y, snapshot_intensity, target_white)
+no filter:        p99_raw_y ← p99_y          (from filtered snapshot; ≡ total emission)
+                  ev_auto    ← ComputeEvAuto(p99_y, snapshot_intensity, target_white)
 ```
 
-**Source-coherence invariant**: the EV numerator (`p995_raw_y`) and the normalization
+**Source-coherence invariant**: the EV numerator (`p99_raw_y`) and the normalization
 denominator (`norm_intensity`) must always come from the same data source — either
 both from the anchor lane, or both from the filtered snapshot. This is enforced by
 the dual condition `anchor_p995_y > 0 && anchor_snapshot_intensity > 0`.
@@ -364,7 +368,7 @@ A `static_assert(sizeof(RenderConfig) == 144)` guards against silent field addit
 | Anchor lazy allocation guard | `render.cpp:506-513` |
 | Anchor overlap skip rationale | `render.cpp:498-501` |
 | `PrepareSnapshot()` — anchor P99.5 computation | `render.cpp:560-593` |
-| P99.5 nth_element index formula | `render.cpp:585-591` |
+| P99 nth_element index formula | `render.cpp:585-591` |
 | `GetRawXyzResult()` — per-pixel intensity formula | `render.cpp:673-688` |
 | `Reset()` — anchor zeroing semantics | `render.cpp:691-710` |
 | `ResetWith()` — config update + reset | `render.cpp:712-717` |
@@ -373,7 +377,7 @@ A `static_assert(sizeof(RenderConfig) == 144)` guards against silent field addit
 | `has_ever_consumed_` reset in Stop | `server.cpp:524` |
 | `NeedsRebuild()` — layout field comparison | `render_config.cpp:164-173` |
 | `sizeof(RenderConfig)` static_assert | `render_config.cpp:166` |
-| `ComputeP995Y()` / `ComputeEvAuto()` | `gui_ev_auto.hpp:12-46` |
+| `ComputeP99Y()` / `ComputeEvAuto()` | `gui_ev_auto.hpp:12-46` |
 | `SyncFromPoller()` — anchor source selection + ev_auto | `app.cpp:756-813` |
 | `BuildExportParams()` — export EV consistency | `app.cpp:297-306` |
 | `RefreshCpuTextureForSave()` — .lmc thumbnail EV | `app.cpp:241-256` |

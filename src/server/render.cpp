@@ -539,8 +539,7 @@ void RenderConsumer::PostSnapshot() {
 
   // Intensity scaling uses config_.intensity_factor_ (from CLI JSON / CommitConfig snapshot).
   // GUI rendering uses a separate path: exposure_offset → shader uniform (see app_panels.cpp).
-  int pix = config_.norm_mode_ == 1 ? effective_pix_ : total_pix;
-  float scale = config_.intensity_factor_ * kNormScale * pix / snapshot_intensity_;
+  float scale = config_.intensity_factor_ * kNormScale * total_pix / snapshot_intensity_;
   for (size_t i = 0; i < buf_size; i++) {
     float_data[i] *= scale;
   }

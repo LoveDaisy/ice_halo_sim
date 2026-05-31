@@ -63,9 +63,6 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
   if (j_render.contains("intensity_factor")) {
     j_render.at("intensity_factor").get_to(render.intensity_factor_);
   }
-  if (j_render.contains("norm_mode")) {
-    j_render.at("norm_mode").get_to(render.norm_mode_);
-  }
   if (j_render.contains("overlap")) {
     render.overlap_ = std::max(0.0f, j_render.at("overlap").get<float>());
   }

@@ -1066,7 +1066,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       if (!s_xyz_uploaded) {
         UploadUniformXyzTexture(0.08f);
         gui::g_state.snapshot_intensity = 1.0f;
-        gui::g_state.p995_raw_y = 0.0f;
+        gui::g_state.p99_raw_y = 0.0f;
         s_xyz_uploaded = true;
       }
     };
@@ -1124,7 +1124,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       if (!s_xyz_uploaded) {
         UploadUniformXyzTexture(0.08f);
         gui::g_state.snapshot_intensity = 1.0f;
-        gui::g_state.p995_raw_y = 0.0f;
+        gui::g_state.p99_raw_y = 0.0f;
         s_xyz_uploaded = true;
       }
     };

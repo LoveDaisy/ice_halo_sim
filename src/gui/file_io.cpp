@@ -684,7 +684,6 @@ std::string SerializeCoreConfig(const GuiState& state) {
     jr["background"] = { 0.0f, 0.0f, 0.0f };
     jr["opacity"] = r.opacity;
     jr["intensity_factor"] = std::pow(2.0f, r.exposure_offset);
-    jr["norm_mode"] = state.norm_mode;
     jr["overlap"] = kDualFisheyeOverlap;
 
     root["render"].push_back(jr);
@@ -836,7 +835,6 @@ void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
     dst.resolution_h = res;
     dst.opacity = r.opacity;
     dst.intensity_factor = std::pow(2.0f, r.exposure_offset);
-    dst.norm_mode = state.norm_mode;
     dst.overlap = kDualFisheyeOverlap;
   }
 
@@ -1151,9 +1149,6 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   root["right_panel_collapsed"] = state.right_panel_collapsed;
   root["modal_layout_vertical"] = state.modal_layout_vertical;
 
-  // Normalization mode (display preference)
-  root["norm_mode"] = state.norm_mode;
-
   // Schema version (added in v=2 along with the filter `type` discriminator).
   // Loader is tolerant of missing field (defaults to v=1 fallback path); this
   // is a future-proofing signal, not a load gate (see plan §2 设计点 7).
@@ -1348,9 +1343,6 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   // Panel state
   state.right_panel_collapsed = root.value("right_panel_collapsed", false);
   state.modal_layout_vertical = root.value("modal_layout_vertical", true);
-
-  // Normalization mode (display preference, default absolute for backward compat with old .lmc files)
-  state.norm_mode = root.value("norm_mode", 0);
 
   return true;
 }
