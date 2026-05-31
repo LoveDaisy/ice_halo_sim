@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780243625841,
+  "lastUpdate": 1780243628110,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -6674,6 +6674,54 @@ window.BENCHMARK_DATA = {
             "value": 898519.1,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dfad7e8b454dfdd7903349cf553465cdcacf91e9",
+          "message": "Merge pull request #117 from LoveDaisy/chore/ev-pipeline-doc-sync\n\ndocs: align EV/filter architecture docs to single-lane (post anchor-lane removal)",
+          "timestamp": "2026-06-01T00:01:46+08:00",
+          "tree_id": "bcc818e5077e221eaa5599a098d72d4c7e60f479",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/dfad7e8b454dfdd7903349cf553465cdcacf91e9"
+        },
+        "date": 1780243627839,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 1120342.6,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1752454.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 1127290.6,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 946607,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
         ]
       }
