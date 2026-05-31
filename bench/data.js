@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780243628110,
+  "lastUpdate": 1780243629934,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9759,6 +9759,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 71.7,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dfad7e8b454dfdd7903349cf553465cdcacf91e9",
+          "message": "Merge pull request #117 from LoveDaisy/chore/ev-pipeline-doc-sync\n\ndocs: align EV/filter architecture docs to single-lane (post anchor-lane removal)",
+          "timestamp": "2026-06-01T00:01:46+08:00",
+          "tree_id": "bcc818e5077e221eaa5599a098d72d4c7e60f479",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/dfad7e8b454dfdd7903349cf553465cdcacf91e9"
+        },
+        "date": 1780243629587,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 90.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 78.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 76.4,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 69.8,
             "unit": "%"
           }
         ]
