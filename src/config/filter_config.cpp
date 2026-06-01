@@ -133,8 +133,8 @@ void from_json(const nlohmann::json& j, FilterConfig& f) {
                                  ") must be >= min_len (" + std::to_string(p.min_len_) + ")");
       }
       if (*p.max_len_ > kMaxHits) {
-        throw std::runtime_error("entry_exit filter: max_len (" + std::to_string(*p.max_len_) +
-                                 ") exceeds kMaxHits (" + std::to_string(kMaxHits) + ")");
+        throw std::runtime_error("entry_exit filter: max_len (" + std::to_string(*p.max_len_) + ") exceeds kMaxHits (" +
+                                 std::to_string(kMaxHits) + ")");
       }
     }
     f.param_ = p;

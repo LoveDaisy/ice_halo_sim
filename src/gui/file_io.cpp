@@ -1077,8 +1077,8 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
           // never hit this branch (to_json omits max_len iff nullopt and only
           // emits min_len when > 1); third-party hand-authored JSON might.
           GUI_LOG_WARNING(
-              "[FileIO] entry_exit filter with min_len={} but no max_len; mapping to range mode with max={}",
-              min_v, kEELenAbsoluteMax);
+              "[FileIO] entry_exit filter with min_len={} but no max_len; mapping to range mode with max={}", min_v,
+              kEELenAbsoluteMax);
           p.length_mode = 3;  // range
         } else {
           p.length_mode = 3;  // range
