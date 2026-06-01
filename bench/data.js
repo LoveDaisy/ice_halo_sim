@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780243629934,
+  "lastUpdate": 1780290111636,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -3358,6 +3358,54 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 338917.7,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d726d4f8d498793da4007ea5f1b139f12c7d5a9d",
+          "message": "Merge pull request #118 from LoveDaisy/feat/ee-filter-uplift\n\nfeat: EntryExit filter expressiveness — wildcard, multi-value OR, length bounds",
+          "timestamp": "2026-06-01T12:57:04+08:00",
+          "tree_id": "2d104ee146202faca56b9fd9ed006a45cf215c55",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/d726d4f8d498793da4007ea5f1b139f12c7d5a9d"
+        },
+        "date": 1780290111134,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 345855.1,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 573559.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 375810.3,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 337532.5,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
