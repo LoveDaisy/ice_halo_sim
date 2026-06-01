@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780290113993,
+  "lastUpdate": 1780290115588,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9899,6 +9899,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 69.8,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d726d4f8d498793da4007ea5f1b139f12c7d5a9d",
+          "message": "Merge pull request #118 from LoveDaisy/feat/ee-filter-uplift\n\nfeat: EntryExit filter expressiveness — wildcard, multi-value OR, length bounds",
+          "timestamp": "2026-06-01T12:57:04+08:00",
+          "tree_id": "2d104ee146202faca56b9fd9ed006a45cf215c55",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/d726d4f8d498793da4007ea5f1b139f12c7d5a9d"
+        },
+        "date": 1780290115285,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 84,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 79.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 73.5,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 70,
             "unit": "%"
           }
         ]
