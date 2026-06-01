@@ -89,8 +89,7 @@ SimData::SimData(const SimData& other)
       root_ray_count_(other.root_ray_count_) {
   rays_.size_ = other.rays_.size_;
   std::memcpy(rays_.rays_.get(), other.rays_.rays_.get(), sizeof(RaySeg) * other.rays_.capacity_);
-  std::memcpy(rays_.recorders_.get(), other.rays_.recorders_.get(),
-              sizeof(RaypathRecorder) * other.rays_.capacity_);
+  std::memcpy(rays_.recorders_.get(), other.rays_.recorders_.get(), sizeof(RaypathRecorder) * other.rays_.capacity_);
 }
 
 SimData::SimData(SimData&& other) noexcept

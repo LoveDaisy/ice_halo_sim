@@ -21,12 +21,10 @@ class FilterTest : public ::testing::Test {
  protected:
   void SetUp() override { crystal_ = Crystal::CreatePrism(1.0f); }
 
-  static RaySeg MakeRay(const std::vector<IdType>& rp_vec) {
+  static RaySeg MakeRay(const std::vector<IdType>& /*rp_vec*/) {
+    // RaypathRecorder lives on RayBuffer::recorders_ now; build it separately
+    // alongside the RaySeg when a Match() call needs it.
     RaySeg r{};
-    r.rp_.Clear();
-    for (auto fn : rp_vec) {
-      r.rp_ << fn;
-    }
     r.from_face_ = kInvalidId;
     r.to_face_ = kInvalidId;
     r.w_ = 1.0f;

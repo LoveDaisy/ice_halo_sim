@@ -226,9 +226,7 @@ class DirectionSpec : public FilterSpec {
             std::sin(lat_deg * math::kDegreeToRad) },
         radii_c_(std::cos(radii_deg * math::kDegreeToRad)) {}
 
-  bool Match(const RaySeg& ray, const RaypathRecorder& /*rec*/) const override {
-    return Dot3(d_, ray.d_) > radii_c_;
-  }
+  bool Match(const RaySeg& ray, const RaypathRecorder& /*rec*/) const override { return Dot3(d_, ray.d_) > radii_c_; }
 
  private:
   float d_[3];

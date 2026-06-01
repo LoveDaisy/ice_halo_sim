@@ -374,12 +374,12 @@ TEST(PartitionCrystalRayNum, ZeroRayNumPreservesCarry) {
 
 class AlwaysRejectSpec : public FilterSpec {
  public:
-  bool Match(const RaySeg& /*ray*/) const override { return false; }
+  bool Match(const RaySeg& /*ray*/, const RaypathRecorder& /*rec*/) const override { return false; }
 };
 
 class AlwaysAcceptSpec : public FilterSpec {
  public:
-  bool Match(const RaySeg& /*ray*/) const override { return true; }
+  bool Match(const RaySeg& /*ray*/, const RaypathRecorder& /*rec*/) const override { return true; }
 };
 
 namespace {
@@ -414,7 +414,7 @@ TEST(CollectDataFilterDispatch, FilterFailTerminatesRay) {
   init_data[0].Reset(8);
   init_data[1].Reset(8);
 
-  buffer_data[1].EmplaceBack(MakeOutgoingCandidate());
+  buffer_data[1].EmplaceBack(MakeOutgoingCandidate(), RaypathRecorder{});
 
   CollectData(rng, ms_info, &filter, buffer_data, init_data);
 
@@ -439,7 +439,7 @@ TEST(CollectDataFilterDispatch, FilterFailTerminatesEvenWithProbPass) {
   init_data[0].Reset(8);
   init_data[1].Reset(8);
 
-  buffer_data[1].EmplaceBack(MakeOutgoingCandidate());
+  buffer_data[1].EmplaceBack(MakeOutgoingCandidate(), RaypathRecorder{});
 
   CollectData(rng, ms_info, &filter, buffer_data, init_data);
 
@@ -464,7 +464,7 @@ TEST(CollectDataFilterDispatch, FilterPassWithProbContinues) {
   init_data[0].Reset(8);
   init_data[1].Reset(8);
 
-  buffer_data[1].EmplaceBack(MakeOutgoingCandidate());
+  buffer_data[1].EmplaceBack(MakeOutgoingCandidate(), RaypathRecorder{});
 
   CollectData(rng, ms_info, &filter, buffer_data, init_data);
 
@@ -486,7 +486,7 @@ TEST(CollectDataFilterDispatch, FilterPassNoProbEmitsOutgoing) {
   init_data[0].Reset(8);
   init_data[1].Reset(8);
 
-  buffer_data[1].EmplaceBack(MakeOutgoingCandidate());
+  buffer_data[1].EmplaceBack(MakeOutgoingCandidate(), RaypathRecorder{});
 
   CollectData(rng, ms_info, &filter, buffer_data, init_data);
 

@@ -23,6 +23,7 @@ namespace {
 
 using lumice::kInfSize;
 using lumice::RayBuffer;
+using lumice::RaypathRecorder;
 using lumice::RaySeg;
 using lumice::SimData;
 
@@ -33,7 +34,7 @@ using lumice::SimData;
 // authoring platform that this test file's per-field assertions need updating.
 #if defined(__APPLE__) && defined(__aarch64__)
 static_assert(sizeof(void*) == 8, "SimData layout assumes 64-bit pointers");
-static_assert(sizeof(SimData) == 168,
+static_assert(sizeof(SimData) == 176,
               "SimData layout changed — update test_sim_data.cpp DeepCopy/Move assertions "
               "and sim_data.cpp's static_assert.");
 #endif
@@ -59,7 +60,7 @@ SimData MakePopulatedSimData() {
   s.generation_ = 42;
   s.root_ray_count_ = 7;
   for (int i = 0; i < 5; i++) {
-    s.rays_.EmplaceBack(MakeRay(i));
+    s.rays_.EmplaceBack(MakeRay(i), RaypathRecorder{});
   }
   s.outgoing_indices_ = { 0, 2, 4 };
   s.outgoing_d_ = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f };
@@ -98,7 +99,7 @@ TEST(RayBufferTest, EmplaceBackLosesOneSlot) {
   RayBuffer buf(5);
 
   for (int i = 0; i < 4; i++) {
-    buf.EmplaceBack(MakeRay(i));
+    buf.EmplaceBack(MakeRay(i), RaypathRecorder{});
   }
   EXPECT_EQ(buf.size_, 4u);
   EXPECT_FALSE(buf.Empty());
@@ -108,14 +109,14 @@ TEST(RayBufferTest, EmplaceBackLosesOneSlot) {
   EXPECT_FLOAT_EQ(buf[3].w_, 3.0f);
 
   // Guard rejects further writes; size and existing data must remain unchanged.
-  buf.EmplaceBack(MakeRay(99));
+  buf.EmplaceBack(MakeRay(99), RaypathRecorder{});
   EXPECT_EQ(buf.size_, 4u);
   EXPECT_FLOAT_EQ(buf[0].w_, 0.0f);
   EXPECT_FLOAT_EQ(buf[3].w_, 3.0f);
 
   // Repeated guard hits should also leave existing data intact.
   for (int i = 0; i < 5; i++) {
-    buf.EmplaceBack(MakeRay(88));
+    buf.EmplaceBack(MakeRay(88), RaypathRecorder{});
   }
   EXPECT_EQ(buf.size_, 4u);
   EXPECT_FLOAT_EQ(buf[0].w_, 0.0f);
@@ -126,7 +127,7 @@ TEST(RayBufferTest, EmplaceBackLosesOneSlot) {
 TEST(RayBufferTest, EmplaceBackBatchOnEmptyDst) {
   RayBuffer src(10);
   for (int i = 0; i < 5; i++) {
-    src.EmplaceBack(MakeRay(i));
+    src.EmplaceBack(MakeRay(i), RaypathRecorder{});
   }
   EXPECT_EQ(src.size_, 5u);
 
@@ -195,7 +196,7 @@ TEST(RayBufferTest, DISABLED_EmplaceBackBatchOnNonEmptyDstQuirk) {
 TEST(RayBufferTest, ResetGrowsButNeverShrinks) {
   RayBuffer buf(5);
   for (int i = 0; i < 3; i++) {
-    buf.EmplaceBack(MakeRay(i));
+    buf.EmplaceBack(MakeRay(i), RaypathRecorder{});
   }
   EXPECT_EQ(buf.size_, 3u);
 
@@ -230,7 +231,7 @@ TEST(RayBufferTest, ResetGrowsButNeverShrinks) {
 TEST(RayBufferTest, IterationAndIndexing) {
   RayBuffer buf(5);
   for (int i = 0; i < 4; i++) {
-    buf.EmplaceBack(MakeRay(i));
+    buf.EmplaceBack(MakeRay(i), RaypathRecorder{});
   }
 
   // begin/end pointer arithmetic equals size.
