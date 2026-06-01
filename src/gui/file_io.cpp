@@ -209,10 +209,16 @@ static json SerializeFilterForGui(const FilterConfig& f, int id) {
           j["raypath_text"] = p.raypath_text;
         } else if constexpr (std::is_same_v<T, EntryExitParams>) {
           // Persist as text so partial / invalid input round-trips without
-          // surprise int parsing; readers parse on the fly.
+          // surprise int parsing; readers parse on the fly. Length mode and
+          // bounds are GUI-side state (the mode dictates which bound is
+          // user-visible); always serialize so Cancel/Reload preserves the
+          // dropdown selection.
           j["type"] = "entry_exit";
           j["entry_text"] = p.entry_text;
           j["exit_text"] = p.exit_text;
+          j["length_mode"] = p.length_mode;
+          j["min_len"] = p.min_len;
+          j["max_len"] = p.max_len;
         }
       },
       f.param);
@@ -278,6 +284,71 @@ static int ParseFaceNumberOrZero(const std::string& text) {
   return value;
 }
 
+// Sentinel returned by ParseFaceNumberList for the wildcard (empty input).
+static constexpr int kEEWildcardSentinel = -1;
+
+// Parse a comma-separated face-number list (EE multi-value OR input). Empty
+// text returns a single-element list with the wildcard sentinel, so callers
+// can uniformly take the cartesian product. Tokens are individually parsed
+// via ParseFaceNumberOrZero; malformed tokens fall through to 0 there (the
+// OK-button gate stops invalid commits before this is reached in normal
+// use). Trailing comma is ignored — kIncomplete inputs should already have
+// been rejected upstream.
+static std::vector<int> ParseFaceNumberList(const std::string& text) {
+  std::vector<int> out;
+  if (text.empty()) {
+    out.push_back(kEEWildcardSentinel);
+    return out;
+  }
+  size_t pos = 0;
+  while (pos < text.size()) {
+    size_t end = text.find(',', pos);
+    if (end == std::string::npos) {
+      end = text.size();
+    }
+    if (end != pos) {
+      out.push_back(ParseFaceNumberOrZero(text.substr(pos, end - pos)));
+    }
+    pos = end + 1;
+  }
+  if (out.empty()) {
+    out.push_back(kEEWildcardSentinel);
+  }
+  return out;
+}
+
+// Decode the GUI length-mode trio into the core (min_len, max_len) pair.
+// Mirrors the EntryExitParams docstring; see plan §3.3.
+struct EELenBounds {
+  int min_len;
+  int max_len;  // -1 = nullopt (no upper bound)
+};
+static EELenBounds DecodeLengthMode(int mode, int min_len, int max_len) {
+  switch (mode) {
+    case 1:  // strict N
+      return { std::max(min_len, 1), std::max(min_len, 1) };
+    case 2:  // at most N
+      return { 1, std::max(max_len, 1) };
+    case 3:  // range [N,M]
+      return { std::max(min_len, 1), std::max(max_len, std::max(min_len, 1)) };
+    case 0:
+    default:
+      return { 1, -1 };
+  }
+}
+
+// Emit min_len / max_len JSON fields on an EE SimpleFilter following the
+// core schema in src/config/filter_config.cpp: omit min_len when default
+// (==1), omit max_len when unbounded.
+static void WriteEELengthFields(nlohmann::json& j, const EELenBounds& b) {
+  if (b.min_len > 1) {
+    j["min_len"] = b.min_len;
+  }
+  if (b.max_len >= 0) {
+    j["max_len"] = b.max_len;
+  }
+}
+
 // Clamp a GUI int to the C API ID range and warn on overflow.
 static int ClampIdValue(int v, const char* field_name) {
   if (v < 0) {
@@ -337,18 +408,52 @@ static FilterCoreResult SerializeFilterForCore(const FilterConfig& f, int next_f
             result.main_id = complex_id;
           }
         } else if constexpr (std::is_same_v<T, EntryExitParams>) {
-          // Parse text → int at the core boundary. Empty / non-numeric text
-          // falls through to ClampIdValue's negative-clamp path which emits
-          // 0 and a GUI_LOG_WARNING; OK-button gating prevents this from
-          // reaching SerializeFilterForCore in normal operation.
-          int id = next_filter_id_base;
-          int entry_int = ParseFaceNumberOrZero(p.entry_text);
-          int exit_int = ParseFaceNumberOrZero(p.exit_text);
-          result.filters.push_back(BuildCoreSimpleFilterJson(f, id, "entry_exit", [&](json& j) {
-            j["entry"] = ClampIdValue(entry_int, "entry");
-            j["exit"] = ClampIdValue(exit_int, "exit");
-          }));
-          result.main_id = id;
+          // Multi-value OR is expanded to N×M EE SimpleFilters + 1 ComplexFilter,
+          // mirroring the raypath multi-segment path above. Wildcard (empty
+          // text) collapses to a single sentinel so the cartesian product
+          // still yields one pair → one filter. Length bounds (decoded from
+          // the GUI mode dropdown) are written onto each EE SimpleFilter.
+          auto entries = ParseFaceNumberList(p.entry_text);
+          auto exits = ParseFaceNumberList(p.exit_text);
+          const auto bounds = DecodeLengthMode(p.length_mode, p.min_len, p.max_len);
+          const size_t pair_count = entries.size() * exits.size();
+
+          auto emit_ee = [&](int id, int entry_int, int exit_int) {
+            result.filters.push_back(BuildCoreSimpleFilterJson(f, id, "entry_exit", [&](json& j) {
+              if (entry_int != kEEWildcardSentinel) {
+                j["entry"] = ClampIdValue(entry_int, "entry");
+              }
+              if (exit_int != kEEWildcardSentinel) {
+                j["exit"] = ClampIdValue(exit_int, "exit");
+              }
+              WriteEELengthFields(j, bounds);
+            }));
+          };
+
+          if (pair_count <= 1) {
+            int id = next_filter_id_base;
+            emit_ee(id, entries[0], exits[0]);
+            result.main_id = id;
+          } else {
+            std::vector<int> child_ids;
+            child_ids.reserve(pair_count);
+            int idx = 0;
+            for (int e : entries) {
+              for (int x : exits) {
+                int id = next_filter_id_base + idx++;
+                child_ids.push_back(id);
+                emit_ee(id, e, x);
+              }
+            }
+            int complex_id = next_filter_id_base + static_cast<int>(pair_count);
+            json composition = json::array();
+            for (int cid : child_ids) {
+              composition.push_back(json::array({ cid }));
+            }
+            result.filters.push_back(BuildCoreSimpleFilterJson(
+                f, complex_id, "complex", [&composition](json& j) { j["composition"] = composition; }));
+            result.main_id = complex_id;
+          }
         }
       },
       f.param);
@@ -573,6 +678,21 @@ static FilterConfig ParseFilterFromGuiJson(const json& jf) {
     } else if (jf.contains("exit")) {
       int v = jf.value("exit", 0);
       p.exit_text = (v == 0) ? std::string{} : std::to_string(v);
+    }
+    // Length-mode trio: missing in pre-uplift .lmc files; defaults keep the
+    // old "no constraint" behaviour. length_mode is clamped to [0,3] so a
+    // corrupt value does not crash the UI Combo.
+    p.length_mode = jf.value("length_mode", 0);
+    if (p.length_mode < 0 || p.length_mode > 3) {
+      p.length_mode = 0;
+    }
+    p.min_len = jf.value("min_len", 1);
+    p.max_len = jf.value("max_len", 1);
+    if (p.min_len < 1) {
+      p.min_len = 1;
+    }
+    if (p.max_len < 1) {
+      p.max_len = 1;
     }
     f.param = p;
   } else {
@@ -916,13 +1036,34 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
         f.param = RaypathParams{ text };
       } else if (type_str == "entry_exit") {
         // core JSON keeps int "entry" / "exit" — translate to GUI's text
-        // representation (0 → empty so the user-visible "untouched" state
-        // is preserved).
+        // representation. Absent or explicit-null fields are the wildcard
+        // form (post-uplift schema) and map to an empty string. min_len /
+        // max_len are decoded into the four GUI length-mode buckets.
         EntryExitParams p;
-        int entry_int = jf.value("entry", 0);
-        int exit_int = jf.value("exit", 0);
-        p.entry_text = (entry_int == 0) ? std::string{} : std::to_string(entry_int);
-        p.exit_text = (exit_int == 0) ? std::string{} : std::to_string(exit_int);
+        auto read_face = [&](const char* key) -> std::string {
+          if (!jf.contains(key) || jf.at(key).is_null()) {
+            return std::string{};  // wildcard
+          }
+          int v = jf.at(key).get<int>();
+          return (v == 0) ? std::string{} : std::to_string(v);
+        };
+        p.entry_text = read_face("entry");
+        p.exit_text = read_face("exit");
+        const bool has_min = jf.contains("min_len") && !jf.at("min_len").is_null();
+        const bool has_max = jf.contains("max_len") && !jf.at("max_len").is_null();
+        const int min_v = has_min ? std::max(jf.at("min_len").get<int>(), 1) : 1;
+        const int max_v = has_max ? std::max(jf.at("max_len").get<int>(), 1) : 1;
+        if (!has_min && !has_max) {
+          p.length_mode = 0;
+        } else if (has_max && (min_v == max_v) && has_min) {
+          p.length_mode = 1;  // strict
+        } else if (has_max && !has_min) {
+          p.length_mode = 2;  // upper bound only
+        } else {
+          p.length_mode = 3;  // range
+        }
+        p.min_len = min_v;
+        p.max_len = has_max ? max_v : min_v;
         f.param = p;
       } else {
         GUI_LOG_WARNING("[FileIO] Unknown filter type '{}' on core JSON import, defaulting to empty raypath", type_str);

@@ -863,6 +863,49 @@ TEST(EntryExitJson, RangeWildcardRoundTrip) {
   ExpectEEEqual(GetEE(cfg2), ee);
 }
 
+// ========== ValidateFaceNumberListText tests ==========
+
+TEST(ValidateFaceNumberListTextTest, Empty_IsValidWildcard) {
+  auto r = ValidateFaceNumberListText("", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kValid);
+  EXPECT_TRUE(r.message.empty());
+}
+
+TEST(ValidateFaceNumberListTextTest, SingleValue_IsValid) {
+  auto r = ValidateFaceNumberListText("3", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kValid);
+}
+
+TEST(ValidateFaceNumberListTextTest, MultiValue_IsValid) {
+  auto r = ValidateFaceNumberListText("3,4,5", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kValid);
+}
+
+TEST(ValidateFaceNumberListTextTest, TrailingComma_IsIncomplete) {
+  auto r = ValidateFaceNumberListText("3,", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kIncomplete);
+}
+
+TEST(ValidateFaceNumberListTextTest, InteriorEmpty_IsInvalid) {
+  auto r = ValidateFaceNumberListText("3,,5", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kInvalid);
+  EXPECT_NE(r.message.find("Empty"), std::string::npos);
+}
+
+TEST(ValidateFaceNumberListTextTest, IllegalFace_PropagatesMessage) {
+  // 13 is illegal on a prism — list validator delegates to the per-face
+  // validator, so the kind-specific message must surface.
+  auto r = ValidateFaceNumberListText("3,13,5", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kInvalid);
+  EXPECT_NE(r.message.find("Prism"), std::string::npos);
+  EXPECT_NE(r.message.find("13"), std::string::npos);
+}
+
+TEST(ValidateFaceNumberListTextTest, LeadingComma_IsInvalid) {
+  auto r = ValidateFaceNumberListText(",3", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kInvalid);
+}
+
 TEST(EntryExitJson, MinLenNullTreatedAsDefault) {
   // Explicit null on min_len/max_len is tolerated (treated same as absent).
   nlohmann::json j = {

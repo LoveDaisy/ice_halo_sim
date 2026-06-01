@@ -189,11 +189,35 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
           }
           return p.raypath_text;
         } else if constexpr (std::is_same_v<T, EntryExitParams>) {
-          // "?" placeholder so a half-typed (kIncomplete) config still
-          // renders something readable in the entry card summary.
-          const char* e = p.entry_text.empty() ? "?" : p.entry_text.c_str();
-          const char* x = p.exit_text.empty() ? "?" : p.exit_text.c_str();
-          return std::string("EE:") + e + "->" + x;
+          // Format each end as "*" (wildcard / empty), the raw text (single
+          // value), or "{a,b,...}" (multi-value list). Length suffix encodes
+          // the four mode choices so the summary roundtrips with the edit
+          // modal's dropdown.
+          auto format_side = [](const std::string& t) -> std::string {
+            if (t.empty()) {
+              return "*";
+            }
+            if (t.find(',') == std::string::npos) {
+              return t;
+            }
+            return std::string("{") + t + "}";
+          };
+          std::string body = std::string("EE:") + format_side(p.entry_text) + "-" + format_side(p.exit_text);
+          switch (p.length_mode) {
+            case 1:
+              body += " L=" + std::to_string(p.min_len);
+              break;
+            case 2:
+              body += " L<=" + std::to_string(p.max_len);
+              break;
+            case 3:
+              body += " L=[" + std::to_string(p.min_len) + "," + std::to_string(p.max_len) + "]";
+              break;
+            case 0:
+            default:
+              break;
+          }
+          return body;
         } else {
           return "*";
         }

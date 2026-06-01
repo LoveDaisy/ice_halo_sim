@@ -94,6 +94,43 @@ inline GuiValidationResult GuiValidateFaceNumberText(const std::string& text, LU
   return r;
 }
 
+// Validate a comma-separated face-number list (Entry-Exit multi-value OR
+// input). Empty text = wildcard ("any face") → kValid. Trailing comma →
+// kIncomplete. Internal empty token (e.g. "3,,4") → kInvalid. Each
+// non-empty token is delegated to GuiValidateFaceNumberText so the
+// kind-specific legality message stays identical to the single-value path.
+inline GuiValidationResult GuiValidateFaceNumberListText(const std::string& text, LUMICE_CrystalKind kind) {
+  GuiValidationResult r;
+  if (text.empty()) {
+    r.state = LUMICE_RAYPATH_VALID;
+    return r;
+  }
+  if (text.back() == ',') {
+    r.state = LUMICE_RAYPATH_INCOMPLETE;
+    return r;
+  }
+  size_t pos = 0;
+  while (pos < text.size()) {
+    size_t end = text.find(',', pos);
+    if (end == std::string::npos) {
+      end = text.size();
+    }
+    if (end == pos) {
+      r.state = LUMICE_RAYPATH_INVALID;
+      r.message = "Empty face number in list";
+      return r;
+    }
+    auto tok = text.substr(pos, end - pos);
+    auto sr = GuiValidateFaceNumberText(tok, kind);
+    if (sr.state != LUMICE_RAYPATH_VALID) {
+      return sr;
+    }
+    pos = end + 1;
+  }
+  r.state = LUMICE_RAYPATH_VALID;
+  return r;
+}
+
 // Validate raypath text supporting the multi-segment ';' syntax.
 //
 // Job split (per plan):

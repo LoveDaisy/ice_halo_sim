@@ -3680,18 +3680,27 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(ctx->ItemExists("**/Exit##filter_ee_exit"));
       IM_CHECK(!ctx->ItemExists("**/Raypath##filter_modal"));
 
-      // OK is disabled while EE fields are empty (kIncomplete, not kValid).
-      // post-task-filter-modal-polish-v1 contract: empty face number is not
-      // a committable value — user must type a legal face number first.
+      // post-task-ee-filter-uplift contract: empty entry/exit text encodes
+      // the wildcard ("any face") branch and is itself a committable value.
+      // OK stays enabled with both fields empty (double-wildcard).
       auto info_ok = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
-      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
-      // Type valid face numbers → OK enables.
+      // Type valid face numbers → OK still enabled.
       ctx->ItemInputValue("**/Entry##filter_ee_entry", "1");
       ctx->ItemInputValue("**/Exit##filter_ee_exit", "2");
       ctx->Yield(2);
       auto info_typed = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
       IM_CHECK((info_typed.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      // Trailing comma → kIncomplete → OK disabled (user is mid-typing).
+      ctx->ItemInputValue("**/Entry##filter_ee_entry", "3,");
+      ctx->Yield(2);
+      auto info_trailing = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
+      IM_CHECK((info_trailing.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      // Restore typed value so the rest of the test sees a valid buffer.
+      ctx->ItemInputValue("**/Entry##filter_ee_entry", "1");
+      ctx->Yield(2);
 
       // Switch to Raypath: EE inputs un-render.
       ctx->ItemClick("**/Raypath##filter_type");
@@ -3754,12 +3763,12 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(f.sym_b);
       IM_CHECK(f.sym_d);
 
-      // FilterSummary EE format: "EE:<entry>-><exit> <In|Out>[ <sym>]" —
-      // entry/exit now render the raw text buffer (kept as-is so partial
-      // input stays visible). ASCII "->" is used so the bundled font always
-      // renders it (U+2192 fell back to "?" glyph on user's machine).
+      // FilterSummary EE format (task-ee-filter-uplift): "EE:<entry>-<exit>
+      // [length-suffix] <In|Out>[ <sym>]". Single values render bare; lists
+      // render in {...}; wildcards render as "*". Length suffix omitted when
+      // mode=0 (no constraint), which is the default for this fresh commit.
       IM_CHECK_STR_EQ(gui::FilterSummary(gui::FilterOf(gui::g_state, gui::g_state.layers[0].entries[0])).c_str(),
-                      "EE:2->5 Out PBD");
+                      "EE:2-5 Out PBD");
     };
   }
 
@@ -3844,6 +3853,104 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
       // Remove intent takes precedence: filter must be nullopt regardless of re-typed value.
       IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
+    };
+  }
+
+  // T11b — task-ee-filter-uplift: multi-value OR + InputText round-trip
+  // through the modal. Length-mode dropdown interaction is exercised by a
+  // pure-state test below to avoid driving the BeginCombo widget from the
+  // headless harness (Combo button does not register IMGUI_TEST_ENGINE_ITEM_INFO).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_uplift_multivalue_list");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+
+      // Multi-value entry, single-value exit.
+      ctx->ItemInputValue("**/Entry##filter_ee_entry", "3,4");
+      ctx->ItemInputValue("**/Exit##filter_ee_exit", "5");
+      ctx->Yield(2);
+
+      // OK enabled (list valid).
+      auto info_ok = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
+      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      const auto& f = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
+      const auto& ee = std::get<gui::EntryExitParams>(f.param);
+      IM_CHECK_EQ(ee.entry_text, std::string("3,4"));
+      IM_CHECK_EQ(ee.exit_text, std::string("5"));
+      IM_CHECK_EQ(ee.length_mode, 0);  // default
+
+      // FilterSummary: list end uses {}, single end bare, no length suffix.
+      IM_CHECK_STR_EQ(gui::FilterSummary(gui::FilterOf(gui::g_state, gui::g_state.layers[0].entries[0])).c_str(),
+                      "EE:{3,4}-5 In PBD");
+    };
+  }
+
+  // T11b2 — task-ee-filter-uplift: FilterSummary length-mode formatting.
+  // Length-mode dropdown UI interaction is left to manual verification;
+  // this test pins the four format strings the summary should emit.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_uplift_length_summary_formats");
+    t->TestFunc = [](ImGuiTestContext* /*ctx*/) {
+      auto make_summary = [](int mode, int min_v, int max_v) {
+        gui::FilterConfig fc;
+        gui::EntryExitParams ee;
+        ee.entry_text = "3";
+        ee.exit_text = "5";
+        ee.length_mode = mode;
+        ee.min_len = min_v;
+        ee.max_len = max_v;
+        fc.param = ee;
+        return gui::FilterSummary(std::optional<gui::FilterConfig>{ fc });
+      };
+      IM_CHECK_STR_EQ(make_summary(0, 1, 1).c_str(), "EE:3-5 In PBD");
+      IM_CHECK_STR_EQ(make_summary(1, 2, 2).c_str(), "EE:3-5 L=2 In PBD");
+      IM_CHECK_STR_EQ(make_summary(2, 1, 4).c_str(), "EE:3-5 L<=4 In PBD");
+      IM_CHECK_STR_EQ(make_summary(3, 2, 5).c_str(), "EE:3-5 L=[2,5] In PBD");
+    };
+  }
+
+  // T11c — task-ee-filter-uplift: double-wildcard + no length constraint
+  // commits and renders as "EE:*-*".
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_uplift_double_wildcard");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->Yield(2);
+
+      // Leave entry/exit empty (= wildcard); default length mode = 0.
+      // Need to "dirty" the filter so the commit branch fires — clicking
+      // the type radio above already does that.
+
+      auto info_ok = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
+      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      const auto& f = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
+      const auto& ee = std::get<gui::EntryExitParams>(f.param);
+      IM_CHECK(ee.entry_text.empty());
+      IM_CHECK(ee.exit_text.empty());
+      IM_CHECK_EQ(ee.length_mode, 0);
+      IM_CHECK_STR_EQ(gui::FilterSummary(gui::FilterOf(gui::g_state, gui::g_state.layers[0].entries[0])).c_str(),
+                      "EE:*-* In PBD");
     };
   }
 
