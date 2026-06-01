@@ -142,7 +142,7 @@ RaypathOrbit BuildOrbit(const Crystal& crystal, const std::vector<IdType>& rp, u
 
 class NoneSpec : public FilterSpec {
  public:
-  bool Match(const RaySeg& /*ray*/) const override { return true; }
+  bool Match(const RaySeg& /*ray*/, const RaypathRecorder& /*rec*/) const override { return true; }
 };
 
 class RaypathSpec : public FilterSpec {
@@ -150,7 +150,7 @@ class RaypathSpec : public FilterSpec {
   RaypathSpec(const Crystal& crystal, const std::vector<IdType>& rp, uint8_t symmetry, int sigma_a, bool d_applicable)
       : orbit_(BuildOrbit(crystal, rp, symmetry, sigma_a, d_applicable)) {}
 
-  bool Match(const RaySeg& ray) const override { return orbit_.Contains(ray.rp_); }
+  bool Match(const RaySeg& /*ray*/, const RaypathRecorder& rec) const override { return orbit_.Contains(rec); }
 
  private:
   RaypathOrbit orbit_;
@@ -164,8 +164,8 @@ class EntryExitSpec : public FilterSpec {
         has_orbit_(has_entry_ || has_exit_),
         orbit_(BuildOrbitFromEnds(crystal, entry, exit, symmetry, sigma_a, d_applicable)) {}
 
-  bool Match(const RaySeg& ray) const override {
-    size_t size = ray.rp_.size_;
+  bool Match(const RaySeg& /*ray*/, const RaypathRecorder& rec) const override {
+    size_t size = rec.size_;
     if (size == 0) {
       return false;
     }
@@ -181,11 +181,11 @@ class EntryExitSpec : public FilterSpec {
     RaypathRecorder ee;
     ee.Clear();
     if (has_entry_ && has_exit_) {
-      ee << ray.rp_[0] << ray.rp_[size - 1];
+      ee << rec[0] << rec[size - 1];
     } else if (has_entry_) {
-      ee << ray.rp_[0];
+      ee << rec[0];
     } else {
-      ee << ray.rp_[size - 1];
+      ee << rec[size - 1];
     }
     return orbit_.Contains(ee);
   }
@@ -226,7 +226,9 @@ class DirectionSpec : public FilterSpec {
             std::sin(lat_deg * math::kDegreeToRad) },
         radii_c_(std::cos(radii_deg * math::kDegreeToRad)) {}
 
-  bool Match(const RaySeg& ray) const override { return Dot3(d_, ray.d_) > radii_c_; }
+  bool Match(const RaySeg& ray, const RaypathRecorder& /*rec*/) const override {
+    return Dot3(d_, ray.d_) > radii_c_;
+  }
 
  private:
   float d_[3];
@@ -236,7 +238,9 @@ class DirectionSpec : public FilterSpec {
 class CrystalSpec : public FilterSpec {
  public:
   explicit CrystalSpec(IdType crystal_id) : crystal_id_(crystal_id) {}
-  bool Match(const RaySeg& ray) const override { return ray.crystal_config_id_ == crystal_id_; }
+  bool Match(const RaySeg& ray, const RaypathRecorder& /*rec*/) const override {
+    return ray.crystal_config_id_ == crystal_id_;
+  }
 
  private:
   IdType crystal_id_;
@@ -247,11 +251,11 @@ class ComplexSpec : public FilterSpec {
   ComplexSpec(const Crystal& crystal, const std::vector<std::vector<std::pair<IdType, SimpleFilterParam>>>& all_param,
               uint8_t symmetry, int sigma_a, bool d_applicable);
 
-  bool Match(const RaySeg& ray) const override {
+  bool Match(const RaySeg& ray, const RaypathRecorder& rec) const override {
     for (const auto& or_clause : filters_) {
       bool and_check = true;
       for (const auto& and_f : or_clause) {
-        if (!and_f->Match(ray)) {
+        if (!and_f->Match(ray, rec)) {
           and_check = false;
           break;
         }

@@ -17,22 +17,34 @@ struct RayBuffer {
 
   RaySeg& operator[](size_t idx) const;
 
+  // Parallel-array access to the per-ray RaypathRecorder (moved out of RaySeg
+  // to keep the hot float/id BufferWrapper cache density high). Named method
+  // rather than a second operator[] overload to avoid `buf[i]` ambiguity
+  // between RaySeg and RaypathRecorder arrays.
+  RaypathRecorder& RecorderAt(size_t idx);
+  const RaypathRecorder& RecorderAt(size_t idx) const;
+
   void Reset(size_t capacity);
   bool Empty() const;
   // Single-RaySeg entry point. Asserts RaySeg::IsValidComplete() at entry
   // to gate the N4 construction-time invariants (Debug only; noop in Release).
   // Buffer-to-buffer overload below is internal data movement and skips this
   // gate — its inputs were already validated when first emplaced.
-  void EmplaceBack(RaySeg r);
+  void EmplaceBack(RaySeg r, const RaypathRecorder& rec);
   void EmplaceBack(const RayBuffer& buffer, size_t start = 0, size_t len = kInfSize);
 
   RaySeg* rays() const;
   RaySeg* begin() const;
   RaySeg* end() const;
 
+  // TODO(soa-refactor): if RayBuffer gains more owning members in the future,
+  // give RayBuffer its own copy/move ctors + assignment ops so SimData can
+  // delegate instead of manually synchronizing each owning field below. (See
+  // scrum-cpu-soa-refactor review.md Suggestion 1.)
   size_t capacity_;
   size_t size_;
   std::unique_ptr<RaySeg[]> rays_;
+  std::unique_ptr<RaypathRecorder[]> recorders_;
 };
 
 

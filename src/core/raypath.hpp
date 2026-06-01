@@ -77,7 +77,10 @@ struct RaySeg {
   // crystal (multi-scattering). Other segment kinds (Normal / Outgoing / Tir)
   // are pure derivations of to_face_ and w_; see helpers below.
   bool is_continue_ = false;
-  RaypathRecorder rp_;  // Raypath in **CURRENT** crystal.
+  // NOTE: RaypathRecorder lives in RayBuffer::recorders_ as a parallel array;
+  // access via RayBuffer::RecorderAt(idx). Removed from RaySeg to keep the hot
+  // BufferWrapper<float>(step=sizeof(RaySeg)) cache density high (see
+  // scratchpad/scrum-cpu-soa-refactor for the SoA-prize analysis).
 
   // Derived segment-kind helpers. Invariants (mutually exclusive):
   //   IsTir()      <=> w_ < 0  (also absorbs filter-terminated outgoing candidates,
@@ -125,6 +128,11 @@ struct RaySeg {
            IsValidVec3Finite(d_) && IsValidVec3Finite(p_);
   }
 };
+
+// SoA-prize guard: RaypathRecorder was moved out to RayBuffer::recorders_.
+// If RaySeg grows again, the hot BufferWrapper<float>(step=sizeof(RaySeg))
+// cache density regresses — re-evaluate before bumping this value.
+static_assert(sizeof(RaySeg) == 96, "RaySeg size changed — re-check hot-loop cache density");
 
 }  // namespace lumice
 

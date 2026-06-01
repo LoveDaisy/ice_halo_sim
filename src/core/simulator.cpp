@@ -143,12 +143,14 @@ void InitRay_rot(RandomNumberGenerator& rng, const AxisDistribution& crystal_axi
 
 void InitRay_other_info(const Crystal& curr_crystal, size_t curr_crystal_id, size_t all_data_idx,  // input
                         RayBuffer buffer_data[2]) {                                                // output
-  for (auto& r : buffer_data[0]) {
+  for (size_t i = 0; i < buffer_data[0].size_; i++) {
+    auto& r = buffer_data[0][i];
+    auto& rec = buffer_data[0].RecorderAt(i);
     r.crystal_idx_ = curr_crystal_id;
     r.crystal_config_id_ = curr_crystal.config_id_;
     r.root_ray_idx_ = all_data_idx++;
-    r.rp_.Clear();
-    r.rp_ << curr_crystal.GetFn(r.to_face_);
+    rec.Clear();
+    rec << curr_crystal.GetFn(r.to_face_);
   }
 }
 
@@ -372,8 +374,8 @@ void TraceRayBasicInfo(const Crystal& curr_crystal, float refractive_index, size
   }
 
   for (size_t i = 0; i < curr_ray_num; i++) {
-    buffer_data[1][i * 2 + 0].rp_ = buffer_data[0][i].rp_;
-    buffer_data[1][i * 2 + 1].rp_ = buffer_data[0][i].rp_;
+    buffer_data[1].RecorderAt(i * 2 + 0) = buffer_data[0].RecorderAt(i);
+    buffer_data[1].RecorderAt(i * 2 + 1) = buffer_data[0].RecorderAt(i);
     // Each child segment's from_face_ = parent's to_face_ (the face just hit).
     buffer_data[1][i * 2 + 0].from_face_ = buffer_data[0][i].to_face_;
     buffer_data[1][i * 2 + 1].from_face_ = buffer_data[0][i].to_face_;
@@ -396,7 +398,7 @@ void FillRayOtherInfo(const Crystal& curr_crystal, RayBuffer buffer_data[2]) {
   for (size_t j = 0; j < buffer_data[1].size_; j++) {
     auto& r = buffer_data[1][j];
     if (r.to_face_ != kInvalidId) {
-      r.rp_ << curr_crystal.GetFn(r.to_face_);
+      buffer_data[1].RecorderAt(j) << curr_crystal.GetFn(r.to_face_);
     }
   }
 }
@@ -406,7 +408,9 @@ void FillRayOtherInfo(const Crystal& curr_crystal, RayBuffer buffer_data[2]) {
 // See doc/raypath-rayseg-architecture.md §3 for the segment state-machine transition rules.
 void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input
                  RayBuffer* buffer_data, RayBuffer* init_data) {                             // output
-  for (auto& r : buffer_data[1]) {
+  for (size_t idx = 0; idx < buffer_data[1].size_; idx++) {
+    auto& r = buffer_data[1][idx];
+    const auto& rec = buffer_data[1].RecorderAt(idx);
     // Explicit reset: guard against stale bool from pool-reused buffer slots.
     r.is_continue_ = false;
 
@@ -419,7 +423,7 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       r.crystal_rot_.Apply(r.d_);
       r.crystal_rot_.Apply(r.p_);
 
-      bool filter_pass = (spec == nullptr) || spec->Check(r);
+      bool filter_pass = (spec == nullptr) || spec->Check(r, rec);
       if (filter_pass) {
         if (rng.GetUniform() < ms_info.prob_) {
           // 1.1 filter-pass + prob-pass → continue to next MS level.
@@ -436,10 +440,10 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
     // 2. Normal rays (to_face_ != kInvalidId && w_ >= 0) stay in crystal-local coordinates.
 
     if (r.IsNormal()) {
-      buffer_data[0].EmplaceBack(r);
+      buffer_data[0].EmplaceBack(r, rec);
     }
     if (r.IsContinue()) {
-      init_data[1].EmplaceBack(r);
+      init_data[1].EmplaceBack(r, rec);
     }
   }
 }

@@ -34,10 +34,10 @@ class FilterSpec {
   FilterSpec& operator=(FilterSpec&&) = default;
   virtual ~FilterSpec() = default;
 
-  virtual bool Match(const RaySeg& ray) const = 0;
+  virtual bool Match(const RaySeg& ray, const RaypathRecorder& rec) const = 0;
 
-  bool Check(const RaySeg& ray) const {
-    bool m = Match(ray);
+  bool Check(const RaySeg& ray, const RaypathRecorder& rec) const {
+    bool m = Match(ray, rec);
     return action_ == FilterConfig::kFilterIn ? m : !m;
   }
 
