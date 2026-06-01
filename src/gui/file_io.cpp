@@ -287,6 +287,11 @@ static int ParseFaceNumberOrZero(const std::string& text) {
 // Sentinel returned by ParseFaceNumberList for the wildcard (empty input).
 static constexpr int kEEWildcardSentinel = -1;
 
+// Local mirror of lumice::kMaxHits (src/core/def.hpp). Hardcoded here to keep
+// the AGENTS.md "src/gui must not include core/ headers directly" boundary
+// intact. Keep in sync if core/def.hpp::kMaxHits changes.
+static constexpr int kEELenAbsoluteMax = 64;
+
 // Parse a comma-separated face-number list (EE multi-value OR input). Empty
 // text returns a single-element list with the wildcard sentinel, so callers
 // can uniformly take the cartesian product. Tokens are individually parsed
@@ -321,7 +326,13 @@ static std::vector<int> ParseFaceNumberList(const std::string& text) {
 // Mirrors the EntryExitParams docstring; see plan §3.3.
 struct EELenBounds {
   int min_len;
-  int max_len;  // -1 = nullopt (no upper bound)
+  // -1 here means "no upper bound" (corresponds to std::optional<size_t> nullopt
+  // on the core EntryExitFilterParam::max_len_). Distinct from
+  // kEEWildcardSentinel which is the face-wildcard marker — same magic value,
+  // different namespace: this one is never confused with a face id because
+  // EELenBounds::max_len is only ever fed to WriteEELengthFields / parsed back
+  // from min/max length JSON fields, not into the entry/exit face channels.
+  int max_len;
 };
 static EELenBounds DecodeLengthMode(int mode, int min_len, int max_len) {
   switch (mode) {
@@ -1059,11 +1070,32 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
           p.length_mode = 1;  // strict
         } else if (has_max && !has_min) {
           p.length_mode = 2;  // upper bound only
+        } else if (has_min && !has_max) {
+          // Lower bound only (min_len without max_len) is not a first-class
+          // GUI mode — collapse it to range with the saturated upper bound so
+          // the dropdown shows something meaningful. Self-generated configs
+          // never hit this branch (to_json omits max_len iff nullopt and only
+          // emits min_len when > 1); third-party hand-authored JSON might.
+          GUI_LOG_WARNING(
+              "[FileIO] entry_exit filter with min_len={} but no max_len; mapping to range mode with max={}",
+              min_v, kEELenAbsoluteMax);
+          p.length_mode = 3;  // range
         } else {
           p.length_mode = 3;  // range
         }
         p.min_len = min_v;
-        p.max_len = has_max ? max_v : min_v;
+        // For has_min && !has_max we synthesize max = kMaxHits so the GUI
+        // range slider has a defined upper anchor; the actual core-side
+        // semantic ("no upper bound") is preserved on subsequent
+        // GUI→core serialization only if the user untouched the field —
+        // any user edit will write max explicitly.
+        if (has_max) {
+          p.max_len = max_v;
+        } else if (has_min) {
+          p.max_len = kEELenAbsoluteMax;
+        } else {
+          p.max_len = min_v;
+        }
         f.param = p;
       } else {
         GUI_LOG_WARNING("[FileIO] Unknown filter type '{}' on core JSON import, defaulting to empty raypath", type_str);

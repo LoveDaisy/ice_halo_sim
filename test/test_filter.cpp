@@ -4,6 +4,7 @@
 
 #include <nlohmann/json.hpp>
 #include <set>
+#include <stdexcept>
 #include <vector>
 
 #include "config/filter_config.hpp"
@@ -917,4 +918,34 @@ TEST(EntryExitJson, MinLenNullTreatedAsDefault) {
   auto p = GetEE(cfg);
   EXPECT_EQ(p.min_len_, 1u);
   EXPECT_FALSE(p.max_len_.has_value());
+}
+
+// Plan §8 AC: from_json must reject min_len < 1.
+TEST(EntryExitJson, MinLenZeroRejected) {
+  nlohmann::json j = {
+    { "id", 1 },   { "type", "entry_exit" }, { "action", "filter_in" }, { "symmetry", "" }, { "entry", 3 },
+    { "exit", 5 }, { "min_len", 0 }
+  };
+  FilterConfig cfg{};
+  EXPECT_THROW(from_json(j, cfg), std::runtime_error);
+}
+
+// Plan §8 AC: from_json must reject max_len < min_len.
+TEST(EntryExitJson, MaxLenLessThanMinLenRejected) {
+  nlohmann::json j = {
+    { "id", 1 },   { "type", "entry_exit" }, { "action", "filter_in" }, { "symmetry", "" }, { "entry", 3 },
+    { "exit", 5 }, { "min_len", 3 },         { "max_len", 1 }
+  };
+  FilterConfig cfg{};
+  EXPECT_THROW(from_json(j, cfg), std::runtime_error);
+}
+
+// Plan §8 AC: from_json must reject max_len > kMaxHits.
+TEST(EntryExitJson, MaxLenExceedsKMaxHitsRejected) {
+  nlohmann::json j = {
+    { "id", 1 },   { "type", "entry_exit" }, { "action", "filter_in" }, { "symmetry", "" }, { "entry", 3 },
+    { "exit", 5 }, { "min_len", 1 },         { "max_len", kMaxHits + 1 }
+  };
+  FilterConfig cfg{};
+  EXPECT_THROW(from_json(j, cfg), std::runtime_error);
 }

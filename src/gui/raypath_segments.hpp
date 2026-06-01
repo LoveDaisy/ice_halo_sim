@@ -99,6 +99,11 @@ inline GuiValidationResult GuiValidateFaceNumberText(const std::string& text, LU
 // kIncomplete. Internal empty token (e.g. "3,,4") → kInvalid. Each
 // non-empty token is delegated to GuiValidateFaceNumberText so the
 // kind-specific legality message stays identical to the single-value path.
+//
+// Logic mirrors lumice::ValidateFaceNumberListText in
+// src/config/raypath_validation.cpp; keep in sync. The GUI tier cannot
+// include core headers directly (AGENTS.md §"Public API boundary"), hence
+// the local copy.
 inline GuiValidationResult GuiValidateFaceNumberListText(const std::string& text, LUMICE_CrystalKind kind) {
   GuiValidationResult r;
   if (text.empty()) {

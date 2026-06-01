@@ -1,6 +1,8 @@
 #include "config/filter_config.hpp"
 
 #include <nlohmann/json.hpp>
+#include <stdexcept>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -120,6 +122,20 @@ void from_json(const nlohmann::json& j, FilterConfig& f) {
     }
     if (j.contains("max_len") && !j.at("max_len").is_null()) {
       p.max_len_ = j.at("max_len").get<size_t>();
+    }
+    // Validation per plan §8 AC: min_len >= 1; if max_len set, min_len <= max_len <= kMaxHits.
+    if (p.min_len_ < 1) {
+      throw std::runtime_error("entry_exit filter: min_len must be >= 1, got " + std::to_string(p.min_len_));
+    }
+    if (p.max_len_.has_value()) {
+      if (*p.max_len_ < p.min_len_) {
+        throw std::runtime_error("entry_exit filter: max_len (" + std::to_string(*p.max_len_) +
+                                 ") must be >= min_len (" + std::to_string(p.min_len_) + ")");
+      }
+      if (*p.max_len_ > kMaxHits) {
+        throw std::runtime_error("entry_exit filter: max_len (" + std::to_string(*p.max_len_) +
+                                 ") exceeds kMaxHits (" + std::to_string(kMaxHits) + ")");
+      }
     }
     f.param_ = p;
   } else if (type == "direction") {
