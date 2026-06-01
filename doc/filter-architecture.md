@@ -161,6 +161,58 @@ decision rule.
 
 `RenderConfig` must not hold filter fields.  Filters are a simulation-side concern only.
 
+### EntryExit filter expressiveness (task-ee-filter-uplift, 2026-06-01)
+
+The `entry_exit` filter type accepts two orthogonal axes of constraint:
+
+1. **Structural axis** — entry-face set × exit-face set, each side independently
+   either a single face number, a list of faces (OR), or wildcard (any face).
+2. **Length axis** — minimum and / or maximum path-length bounds on `RaySeg.rp_.size_`.
+
+The core schema reflects this directly:
+
+```cpp
+// src/config/filter_config.hpp
+struct EntryExitFilterParam {
+  std::optional<IdType> entry_;     // nullopt = wildcard
+  std::optional<IdType> exit_;      // nullopt = wildcard
+  size_t min_len_ = 1;              // path-length lower bound (>=1 by geometry)
+  std::optional<size_t> max_len_;   // nullopt = no upper bound
+};
+```
+
+Match semantics (`EntryExitSpec::Match`, `src/core/filter_spec.cpp`):
+
+| Branch                  | Structural check                                                    |
+|-------------------------|---------------------------------------------------------------------|
+| both ends set           | orbit on `[entry, exit]` against `[rp_[0], rp_[size−1]]`            |
+| only `entry_` set       | orbit on `[entry]` against `[rp_[0]]`                               |
+| only `exit_` set        | orbit on `[exit]` against `[rp_[size−1]]`                           |
+| both wildcard           | structural check skipped; length bounds alone decide                |
+
+Length bounds are evaluated before the orbit check; `size == 0` always rejects
+to keep `rp_[0]` access well-defined.
+
+**Multi-value OR routing** lives in the GUI → core translation layer
+(`src/gui/file_io.cpp::SerializeFilterForCore`).  `EntryExitParams.entry_text`
+and `.exit_text` accept comma-separated face numbers; empty text encodes the
+wildcard.  The serializer takes the cartesian product, emits one EE
+`SimpleFilter` per `(entry, exit)` pair (each carrying the same length bounds),
+then wraps them in a single `ComplexFilter` whose composition is
+`[[id0],[id1],…]`.  This mirrors the raypath multi-segment OR path and keeps
+all "composition" semantics inside `ComplexFilter` — `EntryExitFilterParam`
+itself stays a pure per-end constraint.
+
+The GUI input form is correspondingly two text inputs + a four-mode length
+dropdown (no constraint / strict N / at most N / range [N,M]); see
+`src/gui/edit_modals.cpp::RenderEntryExitSubpanel`.
+
+JSON schema is backward compatible: pre-uplift `{"entry": 3, "exit": 5}`
+deserializes to `entry_=3, exit_=5, min_len_=1, max_len_=nullopt` with no
+behavioral change.  Absent or explicit-null `entry`/`exit`/`max_len` map to
+`nullopt`; absent `min_len` defaults to 1.  The to-json side omits each field
+when it carries the default value.
+
 ---
 
 ## §6 Historical Context
