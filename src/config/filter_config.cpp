@@ -1,6 +1,8 @@
 #include "config/filter_config.hpp"
 
 #include <nlohmann/json.hpp>
+#include <stdexcept>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -21,8 +23,18 @@ struct SimpleFilterParamToJson {
 
   void operator()(const EntryExitFilterParam& p) {
     j_["type"] = "entry_exit";
-    j_["entry"] = p.entry_;
-    j_["exit"] = p.exit_;
+    if (p.entry_.has_value()) {
+      j_["entry"] = *p.entry_;
+    }
+    if (p.exit_.has_value()) {
+      j_["exit"] = *p.exit_;
+    }
+    if (p.min_len_ > 1) {
+      j_["min_len"] = p.min_len_;
+    }
+    if (p.max_len_.has_value()) {
+      j_["max_len"] = *p.max_len_;
+    }
   }
 
   void operator()(const DirectionFilterParam& p) {
@@ -86,6 +98,7 @@ void to_json(nlohmann::json& j, const FilterConfig& f) {
   std::visit(FilterParamToJson{ j }, f.param_);
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void from_json(const nlohmann::json& j, FilterConfig& f) {
   j.at("id").get_to(f.id_);
 
@@ -98,8 +111,32 @@ void from_json(const nlohmann::json& j, FilterConfig& f) {
     f.param_ = p;
   } else if (type == "entry_exit") {
     EntryExitFilterParam p{};
-    j.at("entry").get_to(p.entry_);
-    j.at("exit").get_to(p.exit_);
+    if (j.contains("entry") && !j.at("entry").is_null()) {
+      p.entry_ = j.at("entry").get<IdType>();
+    }
+    if (j.contains("exit") && !j.at("exit").is_null()) {
+      p.exit_ = j.at("exit").get<IdType>();
+    }
+    if (j.contains("min_len") && !j.at("min_len").is_null()) {
+      p.min_len_ = j.at("min_len").get<size_t>();
+    }
+    if (j.contains("max_len") && !j.at("max_len").is_null()) {
+      p.max_len_ = j.at("max_len").get<size_t>();
+    }
+    // Validation per plan §8 AC: min_len >= 1; if max_len set, min_len <= max_len <= kMaxHits.
+    if (p.min_len_ < 1) {
+      throw std::runtime_error("entry_exit filter: min_len must be >= 1, got " + std::to_string(p.min_len_));
+    }
+    if (p.max_len_.has_value()) {
+      if (*p.max_len_ < p.min_len_) {
+        throw std::runtime_error("entry_exit filter: max_len (" + std::to_string(*p.max_len_) +
+                                 ") must be >= min_len (" + std::to_string(p.min_len_) + ")");
+      }
+      if (*p.max_len_ > kMaxHits) {
+        throw std::runtime_error("entry_exit filter: max_len (" + std::to_string(*p.max_len_) + ") exceeds kMaxHits (" +
+                                 std::to_string(kMaxHits) + ")");
+      }
+    }
     f.param_ = p;
   } else if (type == "direction") {
     DirectionFilterParam p{};

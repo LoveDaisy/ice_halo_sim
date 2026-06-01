@@ -186,6 +186,36 @@ RaypathValidationResult ValidateRaypathText(const std::string& text, CrystalKind
   return RaypathValidationResult{ RaypathValidation::kValid, std::string{} };
 }
 
+RaypathValidationResult ValidateFaceNumberListText(const std::string& text, CrystalKind kind) {
+  // Empty text = wildcard ("any face") — always valid.
+  if (text.empty()) {
+    return RaypathValidationResult{ RaypathValidation::kValid, std::string{} };
+  }
+  // Trailing comma → kIncomplete (still typing); matches raypath separator UX.
+  if (text.back() == ',') {
+    return RaypathValidationResult{ RaypathValidation::kIncomplete, std::string{} };
+  }
+  // Walk comma-separated tokens; first non-valid token wins.
+  size_t pos = 0;
+  while (pos < text.size()) {
+    size_t end = text.find(',', pos);
+    if (end == std::string::npos) {
+      end = text.size();
+    }
+    if (end == pos) {
+      // Empty interior token (e.g. "3,,4") — definite error, not "still typing".
+      return RaypathValidationResult{ RaypathValidation::kInvalid, "Empty face number in list" };
+    }
+    std::string token = text.substr(pos, end - pos);
+    auto r = ValidateFaceNumberText(token, kind);
+    if (r.state != RaypathValidation::kValid) {
+      return r;
+    }
+    pos = end + 1;
+  }
+  return RaypathValidationResult{ RaypathValidation::kValid, std::string{} };
+}
+
 RaypathValidationResult ValidateFaceNumberText(const std::string& text, CrystalKind kind) {
   if (text.empty()) {
     return RaypathValidationResult{ RaypathValidation::kIncomplete, std::string{} };

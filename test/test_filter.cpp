@@ -4,6 +4,7 @@
 
 #include <nlohmann/json.hpp>
 #include <set>
+#include <stdexcept>
 #include <vector>
 
 #include "config/filter_config.hpp"
@@ -692,4 +693,257 @@ TEST(ReduceRaypath_OrbitInvariant, D_Only_Pyramid_AllSigmaA) {
           << "D-only orbit member reduces differently at sigma_a=" << sigma_a;
     }
   }
+}
+
+
+// ========== EntryExitFilterParam JSON round-trip tests ==========
+//
+// Cover the optional<entry/exit> + min_len/max_len schema introduced by
+// task-ee-filter-uplift. Backward compatibility: legacy single-value
+// {"entry":3,"exit":5} input must continue to deserialize without loss.
+
+namespace {
+
+FilterConfig MakeEEFilterConfig(IdType id, EntryExitFilterParam ee) {
+  FilterConfig cfg{};
+  cfg.id_ = id;
+  cfg.symmetry_ = FilterConfig::kSymNone;
+  cfg.action_ = FilterConfig::kFilterIn;
+  cfg.param_ = SimpleFilterParam{ ee };
+  return cfg;
+}
+
+EntryExitFilterParam GetEE(const FilterConfig& cfg) {
+  const auto& sp = std::get<SimpleFilterParam>(cfg.param_);
+  return std::get<EntryExitFilterParam>(sp);
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void ExpectEEEqual(const EntryExitFilterParam& a, const EntryExitFilterParam& b) {
+  EXPECT_EQ(a.entry_.has_value(), b.entry_.has_value());
+  if (a.entry_.has_value() && b.entry_.has_value()) {
+    EXPECT_EQ(*a.entry_, *b.entry_);
+  }
+  EXPECT_EQ(a.exit_.has_value(), b.exit_.has_value());
+  if (a.exit_.has_value() && b.exit_.has_value()) {
+    EXPECT_EQ(*a.exit_, *b.exit_);
+  }
+  EXPECT_EQ(a.min_len_, b.min_len_);
+  EXPECT_EQ(a.max_len_.has_value(), b.max_len_.has_value());
+  if (a.max_len_.has_value() && b.max_len_.has_value()) {
+    EXPECT_EQ(*a.max_len_, *b.max_len_);
+  }
+}
+
+}  // namespace
+
+TEST(EntryExitJson, LegacySingleValue_BackwardCompatible) {
+  // Old JSON form lacks min_len / max_len — must deserialise unchanged.
+  nlohmann::json j = { { "id", 1 },        { "type", "entry_exit" }, { "action", "filter_in" },
+                       { "symmetry", "" }, { "entry", 3 },           { "exit", 5 } };
+  FilterConfig cfg{};
+  from_json(j, cfg);
+  auto p = GetEE(cfg);
+  ASSERT_TRUE(p.entry_.has_value());
+  ASSERT_TRUE(p.exit_.has_value());
+  EXPECT_EQ(*p.entry_, 3);
+  EXPECT_EQ(*p.exit_, 5);
+  EXPECT_EQ(p.min_len_, 1u);
+  EXPECT_FALSE(p.max_len_.has_value());
+}
+
+TEST(EntryExitJson, RoundTrip_LegacySingleValue) {
+  EntryExitFilterParam ee;
+  ee.entry_ = 3;
+  ee.exit_ = 5;
+  auto cfg = MakeEEFilterConfig(1, ee);
+  nlohmann::json j;
+  to_json(j, cfg);
+  // Schema: entry/exit present, min_len/max_len absent (defaults).
+  EXPECT_EQ(j.at("entry").get<int>(), 3);
+  EXPECT_EQ(j.at("exit").get<int>(), 5);
+  EXPECT_FALSE(j.contains("min_len"));
+  EXPECT_FALSE(j.contains("max_len"));
+
+  FilterConfig cfg2{};
+  from_json(j, cfg2);
+  ExpectEEEqual(GetEE(cfg2), ee);
+}
+
+TEST(EntryExitJson, EntryWildcard_AbsentField) {
+  EntryExitFilterParam ee;
+  ee.entry_ = std::nullopt;
+  ee.exit_ = 5;
+  auto cfg = MakeEEFilterConfig(2, ee);
+  nlohmann::json j;
+  to_json(j, cfg);
+  EXPECT_FALSE(j.contains("entry"));
+  EXPECT_EQ(j.at("exit").get<int>(), 5);
+
+  FilterConfig cfg2{};
+  from_json(j, cfg2);
+  ExpectEEEqual(GetEE(cfg2), ee);
+}
+
+TEST(EntryExitJson, EntryWildcard_ExplicitNull) {
+  // Explicit null is accepted and maps to nullopt (same as absent).
+  nlohmann::json j = { { "id", 1 },        { "type", "entry_exit" }, { "action", "filter_in" },
+                       { "symmetry", "" }, { "entry", nullptr },     { "exit", 5 } };
+  FilterConfig cfg{};
+  from_json(j, cfg);
+  auto p = GetEE(cfg);
+  EXPECT_FALSE(p.entry_.has_value());
+  ASSERT_TRUE(p.exit_.has_value());
+  EXPECT_EQ(*p.exit_, 5);
+}
+
+TEST(EntryExitJson, DoubleWildcard_EmptyEntryExit) {
+  EntryExitFilterParam ee;
+  ee.entry_ = std::nullopt;
+  ee.exit_ = std::nullopt;
+  auto cfg = MakeEEFilterConfig(3, ee);
+  nlohmann::json j;
+  to_json(j, cfg);
+  EXPECT_FALSE(j.contains("entry"));
+  EXPECT_FALSE(j.contains("exit"));
+
+  FilterConfig cfg2{};
+  from_json(j, cfg2);
+  ExpectEEEqual(GetEE(cfg2), ee);
+}
+
+TEST(EntryExitJson, MaxLenRoundTrip) {
+  EntryExitFilterParam ee;
+  ee.entry_ = 3;
+  ee.exit_ = 5;
+  ee.max_len_ = 5;
+  auto cfg = MakeEEFilterConfig(4, ee);
+  nlohmann::json j;
+  to_json(j, cfg);
+  EXPECT_EQ(j.at("max_len").get<size_t>(), 5u);
+  EXPECT_FALSE(j.contains("min_len"));  // default min_len=1 omitted
+
+  FilterConfig cfg2{};
+  from_json(j, cfg2);
+  ExpectEEEqual(GetEE(cfg2), ee);
+}
+
+TEST(EntryExitJson, StrictLengthRoundTrip) {
+  EntryExitFilterParam ee;
+  ee.entry_ = 3;
+  ee.exit_ = 5;
+  ee.min_len_ = 3;
+  ee.max_len_ = 3;
+  auto cfg = MakeEEFilterConfig(5, ee);
+  nlohmann::json j;
+  to_json(j, cfg);
+  EXPECT_EQ(j.at("min_len").get<size_t>(), 3u);
+  EXPECT_EQ(j.at("max_len").get<size_t>(), 3u);
+
+  FilterConfig cfg2{};
+  from_json(j, cfg2);
+  ExpectEEEqual(GetEE(cfg2), ee);
+}
+
+TEST(EntryExitJson, RangeWildcardRoundTrip) {
+  EntryExitFilterParam ee;
+  ee.entry_ = std::nullopt;
+  ee.exit_ = std::nullopt;
+  ee.min_len_ = 2;
+  ee.max_len_ = 4;
+  auto cfg = MakeEEFilterConfig(6, ee);
+  nlohmann::json j;
+  to_json(j, cfg);
+  EXPECT_FALSE(j.contains("entry"));
+  EXPECT_FALSE(j.contains("exit"));
+  EXPECT_EQ(j.at("min_len").get<size_t>(), 2u);
+  EXPECT_EQ(j.at("max_len").get<size_t>(), 4u);
+
+  FilterConfig cfg2{};
+  from_json(j, cfg2);
+  ExpectEEEqual(GetEE(cfg2), ee);
+}
+
+// ========== ValidateFaceNumberListText tests ==========
+
+TEST(ValidateFaceNumberListTextTest, Empty_IsValidWildcard) {
+  auto r = ValidateFaceNumberListText("", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kValid);
+  EXPECT_TRUE(r.message.empty());
+}
+
+TEST(ValidateFaceNumberListTextTest, SingleValue_IsValid) {
+  auto r = ValidateFaceNumberListText("3", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kValid);
+}
+
+TEST(ValidateFaceNumberListTextTest, MultiValue_IsValid) {
+  auto r = ValidateFaceNumberListText("3,4,5", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kValid);
+}
+
+TEST(ValidateFaceNumberListTextTest, TrailingComma_IsIncomplete) {
+  auto r = ValidateFaceNumberListText("3,", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kIncomplete);
+}
+
+TEST(ValidateFaceNumberListTextTest, InteriorEmpty_IsInvalid) {
+  auto r = ValidateFaceNumberListText("3,,5", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kInvalid);
+  EXPECT_NE(r.message.find("Empty"), std::string::npos);
+}
+
+TEST(ValidateFaceNumberListTextTest, IllegalFace_PropagatesMessage) {
+  // 13 is illegal on a prism — list validator delegates to the per-face
+  // validator, so the kind-specific message must surface.
+  auto r = ValidateFaceNumberListText("3,13,5", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kInvalid);
+  EXPECT_NE(r.message.find("Prism"), std::string::npos);
+  EXPECT_NE(r.message.find("13"), std::string::npos);
+}
+
+TEST(ValidateFaceNumberListTextTest, LeadingComma_IsInvalid) {
+  auto r = ValidateFaceNumberListText(",3", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kInvalid);
+}
+
+TEST(EntryExitJson, MinLenNullTreatedAsDefault) {
+  // Explicit null on min_len/max_len is tolerated (treated same as absent).
+  nlohmann::json j = {
+    { "id", 1 },   { "type", "entry_exit" }, { "action", "filter_in" }, { "symmetry", "" }, { "entry", 3 },
+    { "exit", 5 }, { "min_len", nullptr },   { "max_len", nullptr }
+  };
+  FilterConfig cfg{};
+  from_json(j, cfg);
+  auto p = GetEE(cfg);
+  EXPECT_EQ(p.min_len_, 1u);
+  EXPECT_FALSE(p.max_len_.has_value());
+}
+
+// Plan §8 AC: from_json must reject min_len < 1.
+TEST(EntryExitJson, MinLenZeroRejected) {
+  nlohmann::json j = { { "id", 1 },        { "type", "entry_exit" }, { "action", "filter_in" },
+                       { "symmetry", "" }, { "entry", 3 },           { "exit", 5 },
+                       { "min_len", 0 } };
+  FilterConfig cfg{};
+  EXPECT_THROW(from_json(j, cfg), std::runtime_error);
+}
+
+// Plan §8 AC: from_json must reject max_len < min_len.
+TEST(EntryExitJson, MaxLenLessThanMinLenRejected) {
+  nlohmann::json j = { { "id", 1 },        { "type", "entry_exit" }, { "action", "filter_in" },
+                       { "symmetry", "" }, { "entry", 3 },           { "exit", 5 },
+                       { "min_len", 3 },   { "max_len", 1 } };
+  FilterConfig cfg{};
+  EXPECT_THROW(from_json(j, cfg), std::runtime_error);
+}
+
+// Plan §8 AC: from_json must reject max_len > kMaxHits.
+TEST(EntryExitJson, MaxLenExceedsKMaxHitsRejected) {
+  nlohmann::json j = {
+    { "id", 1 },   { "type", "entry_exit" }, { "action", "filter_in" },  { "symmetry", "" }, { "entry", 3 },
+    { "exit", 5 }, { "min_len", 1 },         { "max_len", kMaxHits + 1 }
+  };
+  FilterConfig cfg{};
+  EXPECT_THROW(from_json(j, cfg), std::runtime_error);
 }

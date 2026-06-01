@@ -612,5 +612,162 @@ TEST(DirectionSpec, FilterOut) {
   EXPECT_FALSE(spec->Check(r3));
 }
 
+// =============== EntryExitSpec Match matrix ===============
+//
+// Cover the four wildcard combinations (entry/exit ∈ {value, nullopt})
+// crossed with length-mode variations (no bound / strict / upper / range /
+// same-face reflection). Also pin orbit-invariance under PBD when both ends
+// are set (regression guard for the legacy single-value behavior).
+
+std::unique_ptr<FilterSpec> MakeEESpec(const Crystal& crystal, std::optional<IdType> entry, std::optional<IdType> exit,
+                                       size_t min_len = 1, std::optional<size_t> max_len = std::nullopt,
+                                       uint8_t symmetry = FilterConfig::kSymNone,
+                                       float roll_mean_deg = kSigmaARollDeg[0]) {
+  FilterConfig cfg{};
+  cfg.id_ = 1;
+  cfg.symmetry_ = symmetry;
+  cfg.action_ = FilterConfig::kFilterIn;
+  EntryExitFilterParam p{};
+  p.entry_ = entry;
+  p.exit_ = exit;
+  p.min_len_ = min_len;
+  p.max_len_ = max_len;
+  cfg.param_ = SimpleFilterParam{ p };
+  return FilterSpec::Create(cfg, crystal, MakeAxis(roll_mean_deg));
+}
+
+TEST(EntryExitSpec_Match, LegacySingleValue_Match) {
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  auto spec = MakeEESpec(prism, IdType{ 3 }, IdType{ 5 });
+  ASSERT_NE(spec, nullptr);
+  EXPECT_TRUE(spec->Match(MakeRay({ 3, 5 })));
+  EXPECT_TRUE(spec->Match(MakeRay({ 3, 4, 5 })));
+  EXPECT_FALSE(spec->Match(MakeRay({ 3, 4, 6 })));
+  EXPECT_FALSE(spec->Match(MakeRay({ 4, 5 })));
+}
+
+TEST(EntryExitSpec_Match, WildcardEntry_OnlyExitConstrains) {
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  auto spec = MakeEESpec(prism, std::nullopt, IdType{ 5 });
+  ASSERT_NE(spec, nullptr);
+  EXPECT_TRUE(spec->Match(MakeRay({ 3, 5 })));
+  EXPECT_TRUE(spec->Match(MakeRay({ 7, 5 })));
+  EXPECT_TRUE(spec->Match(MakeRay({ 5 })));      // size=1: ee={5} matches
+  EXPECT_FALSE(spec->Match(MakeRay({ 3, 4 })));  // exit != 5
+  EXPECT_FALSE(spec->Match(MakeRay({ 5, 7 })));  // last = 7
+}
+
+TEST(EntryExitSpec_Match, WildcardExit_OnlyEntryConstrains) {
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  auto spec = MakeEESpec(prism, IdType{ 3 }, std::nullopt);
+  ASSERT_NE(spec, nullptr);
+  EXPECT_TRUE(spec->Match(MakeRay({ 3, 5 })));
+  EXPECT_TRUE(spec->Match(MakeRay({ 3, 4, 7 })));
+  EXPECT_TRUE(spec->Match(MakeRay({ 3 })));
+  EXPECT_FALSE(spec->Match(MakeRay({ 4, 5 })));  // entry != 3
+}
+
+TEST(EntryExitSpec_Match, DoubleWildcard_AcceptsAnyNonEmpty) {
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  auto spec = MakeEESpec(prism, std::nullopt, std::nullopt);
+  ASSERT_NE(spec, nullptr);
+  EXPECT_TRUE(spec->Match(MakeRay({ 3 })));
+  EXPECT_TRUE(spec->Match(MakeRay({ 3, 5 })));
+  EXPECT_TRUE(spec->Match(MakeRay({ 1, 2, 4 })));
+  EXPECT_FALSE(spec->Match(MakeRay({})));  // empty path always rejected
+}
+
+TEST(EntryExitSpec_Match, SameFaceReflection_size1_Match) {
+  // Regression guard: entry=exit, single-hit reflection must match.
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  auto spec = MakeEESpec(prism, IdType{ 3 }, IdType{ 3 });
+  ASSERT_NE(spec, nullptr);
+  EXPECT_TRUE(spec->Match(MakeRay({ 3 })));
+  EXPECT_TRUE(spec->Match(MakeRay({ 3, 5, 3 })));  // also matches longer paths starting+ending on 3
+  EXPECT_FALSE(spec->Match(MakeRay({ 3, 5 })));    // entry=3, exit=5
+}
+
+TEST(EntryExitSpec_Match, StrictLength_Match) {
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  auto spec = MakeEESpec(prism, IdType{ 3 }, IdType{ 5 }, /*min_len=*/2, /*max_len=*/2);
+  ASSERT_NE(spec, nullptr);
+  EXPECT_TRUE(spec->Match(MakeRay({ 3, 5 })));      // size=2 strict
+  EXPECT_FALSE(spec->Match(MakeRay({ 3, 4, 5 })));  // size=3 rejected
+  EXPECT_FALSE(spec->Match(MakeRay({ 3 })));        // size=1 < min
+}
+
+TEST(EntryExitSpec_Match, UpperBound_Match) {
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  auto spec = MakeEESpec(prism, IdType{ 3 }, IdType{ 5 }, /*min_len=*/1, /*max_len=*/3);
+  ASSERT_NE(spec, nullptr);
+  EXPECT_TRUE(spec->Match(MakeRay({ 3, 5 })));
+  EXPECT_TRUE(spec->Match(MakeRay({ 3, 4, 5 })));
+  EXPECT_FALSE(spec->Match(MakeRay({ 3, 4, 6, 5 })));  // size=4 > max
+}
+
+TEST(EntryExitSpec_Match, RangeBound_WildcardEnds) {
+  // Double-wildcard + length range [2,4]: accept any path with 2..4 hits.
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  auto spec = MakeEESpec(prism, std::nullopt, std::nullopt, /*min_len=*/2, /*max_len=*/4);
+  ASSERT_NE(spec, nullptr);
+  EXPECT_FALSE(spec->Match(MakeRay({ 3 })));  // size=1 < min
+  EXPECT_TRUE(spec->Match(MakeRay({ 3, 5 })));
+  EXPECT_TRUE(spec->Match(MakeRay({ 3, 4, 5 })));
+  EXPECT_TRUE(spec->Match(MakeRay({ 3, 4, 6, 5 })));
+  EXPECT_FALSE(spec->Match(MakeRay({ 3, 4, 5, 6, 7 })));  // size=5 > max
+}
+
+TEST(EntryExitSpec_Match, NoUpperBoundDefault_AcceptsLongPath) {
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  auto spec = MakeEESpec(prism, IdType{ 3 }, IdType{ 5 });  // min_len=1, max_len=nullopt
+  ASSERT_NE(spec, nullptr);
+  std::vector<IdType> long_path{ 3 };
+  for (int i = 0; i < 60; i++) {  // up to ~kMaxHits=64
+    long_path.push_back(static_cast<IdType>(4 + (i % 4)));
+  }
+  long_path.push_back(5);
+  EXPECT_TRUE(spec->Match(MakeRay(long_path)));
+}
+
+TEST(EntryExitSpec_Match, EmptyRay_RejectedRegardlessOfWildcards) {
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  for (bool e_wild : { false, true }) {
+    for (bool x_wild : { false, true }) {
+      auto spec = MakeEESpec(prism, e_wild ? std::optional<IdType>{} : std::optional<IdType>{ 3 },
+                             x_wild ? std::optional<IdType>{} : std::optional<IdType>{ 5 });
+      ASSERT_NE(spec, nullptr);
+      EXPECT_FALSE(spec->Match(MakeRay({}))) << "e_wild=" << e_wild << " x_wild=" << x_wild;
+    }
+  }
+}
+
+TEST(EntryExitSpec_Match, MinLenAboveSize_Rejects) {
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  auto spec = MakeEESpec(prism, std::nullopt, std::nullopt, /*min_len=*/3, /*max_len=*/std::nullopt);
+  ASSERT_NE(spec, nullptr);
+  EXPECT_FALSE(spec->Match(MakeRay({ 3 })));
+  EXPECT_FALSE(spec->Match(MakeRay({ 3, 5 })));
+  EXPECT_TRUE(spec->Match(MakeRay({ 3, 5, 7 })));
+}
+
+// PBD symmetry: every orbit member of (entry=3, exit=5) under PBD must
+// trigger Match()=true when the spec is configured with the seed pair.
+TEST(EntryExitSpec_Match, PBD_OrbitInvariant) {
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  constexpr uint8_t kSym = FilterConfig::kSymP | FilterConfig::kSymD | FilterConfig::kSymB;
+  for (int sigma_a = 0; sigma_a < 6; sigma_a++) {
+    auto spec = MakeEESpec(prism, IdType{ 3 }, IdType{ 5 }, /*min_len=*/1, /*max_len=*/std::nullopt, kSym,
+                           kSigmaARollDeg[sigma_a]);
+    ASSERT_NE(spec, nullptr);
+    auto orbit = prism.ExpandRaypath({ 3, 5 }, kSym, sigma_a, /*d_applicable=*/true);
+    ASSERT_FALSE(orbit.empty());
+    for (size_t i = 0; i < orbit.size(); i++) {
+      SCOPED_TRACE("sigma_a=" + std::to_string(sigma_a) + " orbit[" + std::to_string(i) +
+                   "]=" + FormatRaypath(orbit[i]));
+      EXPECT_TRUE(spec->Match(MakeRay(orbit[i])));
+    }
+  }
+}
+
 }  // namespace
 }  // namespace lumice

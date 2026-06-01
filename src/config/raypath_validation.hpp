@@ -73,6 +73,15 @@ RaypathValidationResult ValidateRaypathText(const std::string& text, CrystalKind
 ///   - Otherwise → kValid.
 RaypathValidationResult ValidateFaceNumberText(const std::string& text, CrystalKind kind);
 
+/// Validate a comma-separated face-number list (used by the Entry-Exit filter
+/// sub-panel's multi-value OR input). Empty text is a wildcard ("any face")
+/// and validates as `kValid`. Each non-empty token is delegated to
+/// `ValidateFaceNumberText`; the first non-valid token determines the
+/// returned state and message. A trailing comma yields `kIncomplete` so the
+/// border colour distinguishes "still typing" from "definitely wrong"
+/// (matches the raypath separator handling).
+RaypathValidationResult ValidateFaceNumberListText(const std::string& text, CrystalKind kind);
+
 }  // namespace lumice
 
 #endif  // CONFIG_RAYPATH_VALIDATION_HPP_

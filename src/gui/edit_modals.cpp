@@ -117,9 +117,10 @@ static EntryExitParams g_ee_params_snapshot;
 // Entry-Exit InputText backing buffers. ImGui needs persistent char arrays
 // for InputText; we mirror them with g_ee_params.{entry,exit}_text on
 // snapshot / commit (mirrors the g_raypath_buf ↔ g_raypath_params.raypath_text
-// pattern).
-static char g_ee_entry_buf[32];
-static char g_ee_exit_buf[32];
+// pattern). 64 bytes comfortably holds a 6-value list of 2-digit faces
+// (e.g. "13,14,15,16,17,18" = 17 chars).
+static char g_ee_entry_buf[64];
+static char g_ee_exit_buf[64];
 
 // ImGui InputText backing store for the raypath text input. The raypath
 // sub-buffer's raypath_text is synced FROM this char array (canonical source)
@@ -721,10 +722,11 @@ static void RenderRaypathSubpanel() {
 // char arrays in place across frames.
 static void RenderEntryExitSubpanel() {
   const auto kind = CurrentValidationKind();
-  const auto v_entry = GuiValidateFaceNumberText(g_ee_entry_buf, kind);
-  const auto v_exit = GuiValidateFaceNumberText(g_ee_exit_buf, kind);
+  const auto v_entry = GuiValidateFaceNumberListText(g_ee_entry_buf, kind);
+  const auto v_exit = GuiValidateFaceNumberListText(g_ee_exit_buf, kind);
 
-  // FrameBg tint mirrors RenderRaypathSubpanel (same helper).
+  // FrameBg tint mirrors RenderRaypathSubpanel (same helper). Empty text
+  // is a wildcard, hence kValid — the border stays neutral.
   ImGui::PushStyleColor(ImGuiCol_FrameBg, ValidationFrameBgColor(v_entry.state));
   ImGui::InputText("Entry##filter_ee_entry", g_ee_entry_buf, sizeof(g_ee_entry_buf));
   ImGui::PopStyleColor();
@@ -740,8 +742,60 @@ static void RenderEntryExitSubpanel() {
     ImGui::TextColored(ImVec4(0.86f, 0.24f, 0.24f, 1.0f), "Exit: %s", v_exit.message.c_str());
   }
 
-  // Shared hint — single value syntax, consistent with EE single-value semantic.
-  ImGui::TextDisabled("e.g. 3");
+  // Shared hint — single value, multi-value OR, or wildcard (empty).
+  ImGui::TextDisabled("e.g. 3 or 3,4 (empty = any)");
+
+  // Length-mode dropdown: four discrete modes drive whether min / max
+  // numeric inputs render. Stored on g_ee_params directly because there is
+  // no large char-buffer to mirror like the text fields.
+  const char* kLengthModeLabels[4] = { "No constraint", "Strict N", "At most N", "Range [N,M]" };
+  if (ImGui::BeginCombo("Length##filter_ee_len_mode", kLengthModeLabels[g_ee_params.length_mode])) {
+    for (int i = 0; i < 4; ++i) {
+      const bool selected = (g_ee_params.length_mode == i);
+      if (ImGui::Selectable(kLengthModeLabels[i], selected)) {
+        g_ee_params.length_mode = i;
+        // Strict mode collapses to a single value: keep min/max in lockstep
+        // so the serializer's "strict N" path always sees a coherent pair.
+        if (i == 1) {
+          g_ee_params.max_len = g_ee_params.min_len;
+        }
+      }
+      if (selected) {
+        ImGui::SetItemDefaultFocus();
+      }
+    }
+    ImGui::EndCombo();
+  }
+
+  if (g_ee_params.length_mode == 1) {
+    // Strict — one numeric input drives both bounds.
+    if (ImGui::InputInt("Length N##filter_ee_strict", &g_ee_params.min_len)) {
+      if (g_ee_params.min_len < 1) {
+        g_ee_params.min_len = 1;
+      }
+      g_ee_params.max_len = g_ee_params.min_len;
+    }
+  } else if (g_ee_params.length_mode == 2) {
+    if (ImGui::InputInt("Max length##filter_ee_max", &g_ee_params.max_len)) {
+      if (g_ee_params.max_len < 1) {
+        g_ee_params.max_len = 1;
+      }
+    }
+  } else if (g_ee_params.length_mode == 3) {
+    if (ImGui::InputInt("Min length##filter_ee_min", &g_ee_params.min_len)) {
+      if (g_ee_params.min_len < 1) {
+        g_ee_params.min_len = 1;
+      }
+      if (g_ee_params.max_len < g_ee_params.min_len) {
+        g_ee_params.max_len = g_ee_params.min_len;
+      }
+    }
+    if (ImGui::InputInt("Max length##filter_ee_max_range", &g_ee_params.max_len)) {
+      if (g_ee_params.max_len < g_ee_params.min_len) {
+        g_ee_params.max_len = g_ee_params.min_len;
+      }
+    }
+  }
 }
 
 // Returns true when the current entry's axis config satisfies D-symmetry
@@ -1126,8 +1180,8 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
     } else {
       const bool buf_changed = IsFilterDirty();
       const auto kind = CurrentValidationKind();
-      const auto v_entry = GuiValidateFaceNumberText(g_ee_params.entry_text, kind);
-      const auto v_exit = GuiValidateFaceNumberText(g_ee_params.exit_text, kind);
+      const auto v_entry = GuiValidateFaceNumberListText(g_ee_params.entry_text, kind);
+      const auto v_exit = GuiValidateFaceNumberListText(g_ee_params.exit_text, kind);
       const bool both_valid = v_entry.state == LUMICE_RAYPATH_VALID && v_exit.state == LUMICE_RAYPATH_VALID;
       if ((g_filter_initial_present || buf_changed) && both_valid) {
         FilterConfig out;
@@ -1629,8 +1683,8 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
       // enabled when the user has clicked Remove Filter.
       if (!g_ee_remove_intent) {
         const auto kind = CurrentValidationKind();
-        const auto ve = GuiValidateFaceNumberText(g_ee_entry_buf, kind);
-        const auto vx = GuiValidateFaceNumberText(g_ee_exit_buf, kind);
+        const auto ve = GuiValidateFaceNumberListText(g_ee_entry_buf, kind);
+        const auto vx = GuiValidateFaceNumberListText(g_ee_exit_buf, kind);
         const bool incomplete = ve.state == LUMICE_RAYPATH_INCOMPLETE || vx.state == LUMICE_RAYPATH_INCOMPLETE;
         const bool invalid = ve.state == LUMICE_RAYPATH_INVALID || vx.state == LUMICE_RAYPATH_INVALID;
         if (invalid) {
@@ -1638,7 +1692,7 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
           ok_tooltip = "Filter face number invalid — fix it in the Filter tab";
         } else if (incomplete) {
           ok_disabled = true;
-          ok_tooltip = "Enter entry and exit face numbers";
+          ok_tooltip = "Finish typing the face-number list (remove trailing comma)";
         }
       }
     }

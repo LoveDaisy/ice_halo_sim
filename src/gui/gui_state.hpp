@@ -230,16 +230,32 @@ struct RaypathParams {
 };
 
 struct EntryExitParams {
-  // GUI text buffers — validated via raypath_validation::ValidateFaceNumberText
-  // and parsed to int at the GUI→core / GUI→.lmc serialization boundary.
+  // GUI text buffers — validated via raypath_validation::ValidateFaceNumberListText
+  // and parsed to int(s) at the GUI→core / GUI→.lmc serialization boundary.
   // Storing as string lets the user type partial input and lets validation
   // surface "Face N not legal on Prism" messages just like the raypath
-  // sub-panel.
+  // sub-panel.  Empty text encodes the wildcard ("any face") branch.
+  // Multi-value OR is encoded as comma-separated face numbers (e.g. "3,4");
+  // the API translation layer expands the cartesian product into N×M
+  // EntryExit SimpleFilters wrapped by a ComplexFilter (mirrors the raypath
+  // multi-segment path).
   std::string entry_text;
   std::string exit_text;
 
+  // Length constraint UI mode and bounds. The four modes are decoded at the
+  // serializer boundary into (min_len, max_len):
+  //   0 = no constraint    → min=1, max=nullopt
+  //   1 = strict N         → min=max=min_len
+  //   2 = at most N        → min=1, max=max_len
+  //   3 = range [N,M]      → min=min_len, max=max_len
+  // Values are stored 1-based to match the core `size_t min_len_` semantics.
+  int length_mode = 0;
+  int min_len = 1;
+  int max_len = 1;
+
   friend bool operator==(const EntryExitParams& a, const EntryExitParams& b) {
-    return a.entry_text == b.entry_text && a.exit_text == b.exit_text;
+    return a.entry_text == b.entry_text && a.exit_text == b.exit_text && a.length_mode == b.length_mode &&
+           a.min_len == b.min_len && a.max_len == b.max_len;
   }
   friend bool operator!=(const EntryExitParams& a, const EntryExitParams& b) { return !(a == b); }
 };
