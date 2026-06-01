@@ -46,7 +46,7 @@ inline bool operator==(const RaypathFilterParam& a, const RaypathFilterParam& b)
 }
 
 inline bool operator==(const EntryExitFilterParam& a, const EntryExitFilterParam& b) {
-  return a.entry_ == b.entry_ && a.exit_ == b.exit_;
+  return a.entry_ == b.entry_ && a.exit_ == b.exit_ && a.min_len_ == b.min_len_ && a.max_len_ == b.max_len_;
 }
 
 inline bool operator==(const DirectionFilterParam& a, const DirectionFilterParam& b) {

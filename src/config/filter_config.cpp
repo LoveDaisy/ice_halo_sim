@@ -21,8 +21,18 @@ struct SimpleFilterParamToJson {
 
   void operator()(const EntryExitFilterParam& p) {
     j_["type"] = "entry_exit";
-    j_["entry"] = p.entry_;
-    j_["exit"] = p.exit_;
+    if (p.entry_.has_value()) {
+      j_["entry"] = *p.entry_;
+    }
+    if (p.exit_.has_value()) {
+      j_["exit"] = *p.exit_;
+    }
+    if (p.min_len_ > 1) {
+      j_["min_len"] = p.min_len_;
+    }
+    if (p.max_len_.has_value()) {
+      j_["max_len"] = *p.max_len_;
+    }
   }
 
   void operator()(const DirectionFilterParam& p) {
@@ -86,6 +96,7 @@ void to_json(nlohmann::json& j, const FilterConfig& f) {
   std::visit(FilterParamToJson{ j }, f.param_);
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void from_json(const nlohmann::json& j, FilterConfig& f) {
   j.at("id").get_to(f.id_);
 
@@ -98,8 +109,18 @@ void from_json(const nlohmann::json& j, FilterConfig& f) {
     f.param_ = p;
   } else if (type == "entry_exit") {
     EntryExitFilterParam p{};
-    j.at("entry").get_to(p.entry_);
-    j.at("exit").get_to(p.exit_);
+    if (j.contains("entry") && !j.at("entry").is_null()) {
+      p.entry_ = j.at("entry").get<IdType>();
+    }
+    if (j.contains("exit") && !j.at("exit").is_null()) {
+      p.exit_ = j.at("exit").get<IdType>();
+    }
+    if (j.contains("min_len") && !j.at("min_len").is_null()) {
+      p.min_len_ = j.at("min_len").get<size_t>();
+    }
+    if (j.contains("max_len") && !j.at("max_len").is_null()) {
+      p.max_len_ = j.at("max_len").get<size_t>();
+    }
     f.param_ = p;
   } else if (type == "direction") {
     DirectionFilterParam p{};

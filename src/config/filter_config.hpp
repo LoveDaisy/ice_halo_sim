@@ -1,7 +1,9 @@
 #ifndef CONFIG_FILTER_CONFIG_H_
 #define CONFIG_FILTER_CONFIG_H_
 
+#include <cstddef>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <variant>
 #include <vector>
 
@@ -16,8 +18,10 @@ struct RaypathFilterParam {
 };
 
 struct EntryExitFilterParam {
-  IdType entry_;
-  IdType exit_;
+  std::optional<IdType> entry_;    // nullopt = wildcard (any entry face)
+  std::optional<IdType> exit_;     // nullopt = wildcard (any exit face)
+  size_t min_len_ = 1;             // path length lower bound (>=1 by geometry)
+  std::optional<size_t> max_len_;  // nullopt = no upper bound
 };
 
 struct DirectionFilterParam {

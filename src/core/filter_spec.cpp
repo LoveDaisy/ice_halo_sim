@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -157,20 +158,63 @@ class RaypathSpec : public FilterSpec {
 
 class EntryExitSpec : public FilterSpec {
  public:
-  EntryExitSpec(const Crystal& crystal, IdType entry, IdType exit, uint8_t symmetry, int sigma_a, bool d_applicable)
-      : orbit_(BuildOrbit(crystal, std::vector<IdType>{ entry, exit }, symmetry, sigma_a, d_applicable)) {}
+  EntryExitSpec(const Crystal& crystal, std::optional<IdType> entry, std::optional<IdType> exit, size_t min_len,
+                std::optional<size_t> max_len, uint8_t symmetry, int sigma_a, bool d_applicable)
+      : min_len_(min_len), max_len_(max_len), has_entry_(entry.has_value()), has_exit_(exit.has_value()),
+        has_orbit_(has_entry_ || has_exit_),
+        orbit_(BuildOrbitFromEnds(crystal, entry, exit, symmetry, sigma_a, d_applicable)) {}
 
   bool Match(const RaySeg& ray) const override {
-    if (ray.rp_.size_ == 0) {
+    size_t size = ray.rp_.size_;
+    if (size == 0) {
       return false;
+    }
+    if (size < min_len_) {
+      return false;
+    }
+    if (max_len_.has_value() && size > *max_len_) {
+      return false;
+    }
+    if (!has_orbit_) {
+      return true;  // both wildcard: length-only match
     }
     RaypathRecorder ee;
     ee.Clear();
-    ee << ray.rp_[0] << ray.rp_[ray.rp_.size_ - 1];
+    if (has_entry_ && has_exit_) {
+      ee << ray.rp_[0] << ray.rp_[size - 1];
+    } else if (has_entry_) {
+      ee << ray.rp_[0];
+    } else {
+      ee << ray.rp_[size - 1];
+    }
     return orbit_.Contains(ee);
   }
 
  private:
+  static RaypathOrbit BuildOrbitFromEnds(const Crystal& crystal, std::optional<IdType> entry,
+                                         std::optional<IdType> exit, uint8_t symmetry, int sigma_a, bool d_applicable) {
+    std::vector<IdType> rp;
+    if (entry.has_value() && exit.has_value()) {
+      rp.push_back(*entry);
+      rp.push_back(*exit);
+    } else if (entry.has_value()) {
+      rp.push_back(*entry);
+    } else if (exit.has_value()) {
+      rp.push_back(*exit);
+    }
+    // For the double-wildcard case we return a default-constructed orbit that
+    // is never consulted (has_orbit_ guards Match).
+    if (rp.empty()) {
+      return RaypathOrbit{};
+    }
+    return BuildOrbit(crystal, rp, symmetry, sigma_a, d_applicable);
+  }
+
+  size_t min_len_;
+  std::optional<size_t> max_len_;
+  bool has_entry_;
+  bool has_exit_;
+  bool has_orbit_;
   RaypathOrbit orbit_;
 };
 
@@ -234,7 +278,8 @@ struct SimpleSpecCreator {
     return std::make_unique<RaypathSpec>(crystal_, p.raypath_, symmetry_, sigma_a_, d_applicable_);
   }
   std::unique_ptr<FilterSpec> operator()(const EntryExitFilterParam& p) const {
-    return std::make_unique<EntryExitSpec>(crystal_, p.entry_, p.exit_, symmetry_, sigma_a_, d_applicable_);
+    return std::make_unique<EntryExitSpec>(crystal_, p.entry_, p.exit_, p.min_len_, p.max_len_, symmetry_, sigma_a_,
+                                           d_applicable_);
   }
   std::unique_ptr<FilterSpec> operator()(const DirectionFilterParam& p) const {
     return std::make_unique<DirectionSpec>(p.lon_, p.lat_, p.radii_);
