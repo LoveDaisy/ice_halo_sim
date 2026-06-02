@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780382992673,
+  "lastUpdate": 1780382994359,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -10039,6 +10039,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 70,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a83345b608ebc03c14a674ba2d9e86a766c27e61",
+          "message": "Merge pull request #119 from LoveDaisy/dev/soa_refactor\n\nCPU SoA: ray recorder footprint optimization (RaypathRecorder split + SBO)",
+          "timestamp": "2026-06-02T14:44:34+08:00",
+          "tree_id": "54bf6808db99db93563899e56f190d727a9b2868",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/a83345b608ebc03c14a674ba2d9e86a766c27e61"
+        },
+        "date": 1780382993976,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 88.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 74.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 72.1,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 52.7,
             "unit": "%"
           }
         ]
