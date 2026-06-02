@@ -145,12 +145,11 @@ void InitRay_other_info(const Crystal& curr_crystal, size_t curr_crystal_id, siz
                         RayBuffer buffer_data[2]) {                                                // output
   for (size_t i = 0; i < buffer_data[0].size_; i++) {
     auto& r = buffer_data[0][i];
-    auto& rec = buffer_data[0].RecorderAt(i);
     r.crystal_idx_ = curr_crystal_id;
     r.crystal_config_id_ = curr_crystal.config_id_;
     r.root_ray_idx_ = all_data_idx++;
-    rec.Clear();
-    rec << curr_crystal.GetFn(r.to_face_);
+    buffer_data[0].RecorderClear(i);
+    buffer_data[0].RecorderAppend(i, curr_crystal.GetFn(r.to_face_));
   }
 }
 
@@ -374,8 +373,10 @@ void TraceRayBasicInfo(const Crystal& curr_crystal, float refractive_index, size
   }
 
   for (size_t i = 0; i < curr_ray_num; i++) {
-    buffer_data[1].RecorderAt(i * 2 + 0) = buffer_data[0].RecorderAt(i);
-    buffer_data[1].RecorderAt(i * 2 + 1) = buffer_data[0].RecorderAt(i);
+    // Fan-out hot path (#247.4 Round 2): RecorderFanOut routes the trivial-POD
+    // copy in-place (recorders_ memcpy ×2) and only takes the arena dup branch
+    // for overflow rays — cold under bench(max_hits=8).
+    buffer_data[1].RecorderFanOut(buffer_data[0], i, i * 2 + 0, i * 2 + 1);
     // Each child segment's from_face_ = parent's to_face_ (the face just hit).
     buffer_data[1][i * 2 + 0].from_face_ = buffer_data[0][i].to_face_;
     buffer_data[1][i * 2 + 1].from_face_ = buffer_data[0][i].to_face_;
@@ -398,7 +399,7 @@ void FillRayOtherInfo(const Crystal& curr_crystal, RayBuffer buffer_data[2]) {
   for (size_t j = 0; j < buffer_data[1].size_; j++) {
     auto& r = buffer_data[1][j];
     if (r.to_face_ != kInvalidId) {
-      buffer_data[1].RecorderAt(j) << curr_crystal.GetFn(r.to_face_);
+      buffer_data[1].RecorderAppend(j, curr_crystal.GetFn(r.to_face_));
     }
   }
 }
@@ -423,7 +424,7 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       r.crystal_rot_.Apply(r.d_);
       r.crystal_rot_.Apply(r.p_);
 
-      bool filter_pass = (spec == nullptr) || spec->Check(r, rec);
+      bool filter_pass = (spec == nullptr) || spec->Check(r, rec, buffer_data[1].OverflowArena());
       if (filter_pass) {
         if (rng.GetUniform() < ms_info.prob_) {
           // 1.1 filter-pass + prob-pass → continue to next MS level.

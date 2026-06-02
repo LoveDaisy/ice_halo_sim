@@ -53,7 +53,9 @@ std::string FormatRecorder(const RaypathRecorder& rp) {
     if (i > 0) {
       s += ",";
     }
-    s += std::to_string(static_cast<int>(rp.recorder_[i]));
+    // Tests build recorders via ToRecorder which feeds operator<< (inline-only),
+    // so reading data_ directly is safe — sizes here are < kInlineCap.
+    s += std::to_string(static_cast<int>(rp.data_[i]));
   }
   s += "}";
   return s;
@@ -65,7 +67,9 @@ std::string FormatRecorder(const RaypathRecorder& rp) {
   auto oracle_rec = ToRecorder(oracle_vec);
 
   auto actual = ToRecorder(rp_seed);
-  detail::ReduceRecorder(actual, symmetry, sigma_a, d_applicable);
+  // ToRecorder yields inline-only recorders (rp_seed ≤ 5 elements), so it is
+  // safe to canonicalise data_ in-place via the buffer-level ReduceBuffer.
+  detail::ReduceBuffer(actual.data_, actual.size_, symmetry, sigma_a, d_applicable);
 
   if (actual != oracle_rec) {
     return ::testing::AssertionFailure() << "ReduceRecorder mismatch: seed=" << FormatRaypath(rp_seed)

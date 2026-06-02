@@ -1,5 +1,7 @@
 // FilterSpec::Match micro-benchmark: canonical-form matcher throughput
 // for single and complex (OR-of-raypaths) filters under P+D symmetry.
+// TODO(#247.4): r.rp_ was removed in #246; this file needs rewriting to use
+// RayBuffer / RecorderAppend APIs before -b bench builds will compile again.
 
 #include <benchmark/benchmark.h>
 

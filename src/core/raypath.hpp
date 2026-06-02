@@ -3,7 +3,8 @@
 
 #include <algorithm>
 #include <cmath>
-#include <iterator>
+#include <cstring>
+#include <type_traits>
 #include <vector>
 
 #include "core/def.hpp"
@@ -11,38 +12,74 @@
 
 namespace lumice {
 
+// Round 2 layout (#247.4): pure POD, trivially copyable. Overflow data lives in
+// RayBuffer::overflow_arena_; this struct only stores an arena slot index, so
+// fan-out (simulator.cpp hot path) reduces to a trivial 18B memcpy.
+//
+//   offset 0:  uint8_t  size_                   (1B, ≤ kMaxHits)
+//   offset 1:  uint8_t  data_[kInlineCap=15]    (15B inline hits)
+//   offset 16: uint16_t overflow_idx_           (2B, kNoOverflow → inline-only)
+//   sizeof == 18, align == 2.
+//
+// Read path: use RayBuffer::RecorderDataPtr(idx) which inspects overflow_idx_
+// and returns either data_ or overflow_arena_ + overflow_idx_*kMaxHits.
+// Append path: use RayBuffer::RecorderAppend(idx, fn) — operator<< on a bare
+// recorder is inline-only (asserts size_ < kInlineCap) and is reserved for
+// canonical_ / EntryExitSpec scratch recorders.
 struct RaypathRecorder {
+  static constexpr uint8_t kInlineCap = 15;
+  static constexpr uint16_t kNoOverflow = 0xFFFFu;
+
+  // Inline-only append. PRECONDITION: size_ < kInlineCap. Hot recorders living
+  // in RayBuffer::recorders_ MUST go through RayBuffer::RecorderAppend instead
+  // so overflow into the arena is handled correctly.
   RaypathRecorder& operator<<(IdType fn);
   IdType operator[](size_t idx) const;
 
   void Clear() {
     size_ = 0;
-    std::fill(std::begin(recorder_), std::end(recorder_), 0);
+    overflow_idx_ = kNoOverflow;
+    std::fill(data_, data_ + kInlineCap, static_cast<uint8_t>(0));
   }
 
-  const uint8_t* begin() const { return recorder_ + 0; }
-  const uint8_t* end() const { return recorder_ + size_; }
+  bool HasOverflow() const { return overflow_idx_ != kNoOverflow; }
 
+  // Inline-only iteration (size_ <= kInlineCap). For overflow-capable recorders
+  // iterate the arena buffer directly via RayBuffer::RecorderDataPtr.
+  const uint8_t* begin() const { return data_; }
+  const uint8_t* end() const { return data_ + std::min<size_t>(size_, kInlineCap); }
+
+  // Inline-only equality (size_ <= kInlineCap). Used in unit tests and
+  // non-filter comparison paths. Overflow recorders are not supported; assert
+  // guards the contract in debug builds, consistent with RaypathHash::operator().
   bool operator==(const RaypathRecorder& other) const {
+    assert(!HasOverflow() && !other.HasOverflow());
     if (size_ != other.size_) {
       return false;
     }
-    for (size_t i = 0; i < size_; i++) {
-      if (recorder_[i] != other.recorder_[i]) {
-        return false;
-      }
-    }
-    return true;
+    return std::memcmp(data_, other.data_, std::min<size_t>(size_, kInlineCap)) == 0;
   }
   bool operator!=(const RaypathRecorder& other) const { return !(*this == other); }
 
-  size_t size_ = 0;
-  uint8_t recorder_[kMaxHits]{};
+  uint8_t size_ = 0;
+  uint8_t data_[kInlineCap]{};
+  uint16_t overflow_idx_ = kNoOverflow;
 };
+
+// Round 2 hard guards: regression here means the fan-out hot path lost trivial
+// memcpy (#247.4 Round 1 root cause: unique_ptr made the struct non-trivially
+// copyable, +31% instructions). Both asserts must hold.
+static_assert(std::is_trivially_copyable_v<RaypathRecorder>,
+              "RaypathRecorder must stay trivially copyable so fan-out is memcpy "
+              "(see #247.4 Round 1 perf regression)");
+static_assert(sizeof(RaypathRecorder) == 18,
+              "RaypathRecorder layout changed — re-check #247.4 SBO invariants and SimData size");
 
 
 struct RaypathHash {
   size_t operator()(const std::vector<IdType>& rp);
+  // Precondition: !rp.HasOverflow(). Hash consumers (filter_spec canonical_)
+  // never feed overflow recorders; callers must guard externally.
   size_t operator()(const RaypathRecorder& rp);
 };
 

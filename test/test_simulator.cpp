@@ -374,12 +374,16 @@ TEST(PartitionCrystalRayNum, ZeroRayNumPreservesCarry) {
 
 class AlwaysRejectSpec : public FilterSpec {
  public:
-  bool Match(const RaySeg& /*ray*/, const RaypathRecorder& /*rec*/) const override { return false; }
+  bool Match(const RaySeg& /*ray*/, const RaypathRecorder& /*rec*/, const uint8_t* /*arena*/) const override {
+    return false;
+  }
 };
 
 class AlwaysAcceptSpec : public FilterSpec {
  public:
-  bool Match(const RaySeg& /*ray*/, const RaypathRecorder& /*rec*/) const override { return true; }
+  bool Match(const RaySeg& /*ray*/, const RaypathRecorder& /*rec*/, const uint8_t* /*arena*/) const override {
+    return true;
+  }
 };
 
 namespace {

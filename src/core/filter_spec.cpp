@@ -55,19 +55,19 @@ bool LexLessRecorder(const uint8_t* a, const uint8_t* b, size_t size) {
 namespace detail {
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-void ReduceRecorder(RaypathRecorder& rp, uint8_t symmetry, int sigma_a, bool d_applicable) {
+void ReduceBuffer(uint8_t* data, size_t size, uint8_t symmetry, int sigma_a, bool d_applicable) {
   if (symmetry == FilterConfig::kSymNone) {
     return;
   }
 
   if (symmetry & FilterConfig::kSymP) {
-    PCanonicalShiftInPlace(rp.recorder_, rp.size_);
+    PCanonicalShiftInPlace(data, size);
   }
 
   if ((symmetry & FilterConfig::kSymD) && d_applicable) {
     uint8_t scratch[kMaxHits]{};
-    for (size_t i = 0; i < rp.size_; i++) {
-      uint8_t x = rp.recorder_[i];
+    for (size_t i = 0; i < size; i++) {
+      uint8_t x = data[i];
       if (x < 3) {
         scratch[i] = x;
         continue;
@@ -78,18 +78,18 @@ void ReduceRecorder(RaypathRecorder& rp, uint8_t symmetry, int sigma_a, bool d_a
       scratch[i] = static_cast<uint8_t>(pyr * 10 + new_pri0 + 3);
     }
     if (symmetry & FilterConfig::kSymP) {
-      PCanonicalShiftInPlace(scratch, rp.size_);
+      PCanonicalShiftInPlace(scratch, size);
     }
-    if (LexLessRecorder(scratch, rp.recorder_, rp.size_)) {
-      std::memcpy(rp.recorder_, scratch, rp.size_);
+    if (LexLessRecorder(scratch, data, size)) {
+      std::memcpy(data, scratch, size);
     }
   }
 
   if (symmetry & FilterConfig::kSymB) {
     uint8_t scratch[kMaxHits]{};
     bool changed = false;
-    for (size_t i = 0; i < rp.size_; i++) {
-      uint8_t x = rp.recorder_[i];
+    for (size_t i = 0; i < size; i++) {
+      uint8_t x = data[i];
       if (x <= 2) {
         scratch[i] = static_cast<uint8_t>(3 - x);
         changed = true;
@@ -103,24 +103,35 @@ void ReduceRecorder(RaypathRecorder& rp, uint8_t symmetry, int sigma_a, bool d_a
         scratch[i] = x;
       }
     }
-    if (changed && LexLessRecorder(scratch, rp.recorder_, rp.size_)) {
-      std::memcpy(rp.recorder_, scratch, rp.size_);
+    if (changed && LexLessRecorder(scratch, data, size)) {
+      std::memcpy(data, scratch, size);
     }
   }
 }
 
 }  // namespace detail
 
-bool RaypathOrbit::Contains(const RaypathRecorder& rp_input) const {
-  if (fn_period_ < 0 || symmetry_ == FilterConfig::kSymNone) {
-    return rp_input == canonical_;
-  }
+bool RaypathOrbit::Contains(const RaypathRecorder& rp_input, const uint8_t* overflow_arena) const {
+  assert(!rp_input.HasOverflow() || overflow_arena != nullptr);
   if (rp_input.size_ != canonical_.size_) {
     return false;
   }
-  RaypathRecorder rp = rp_input;
-  detail::ReduceRecorder(rp, symmetry_, sigma_a_, d_applicable_);
-  return rp == canonical_;
+  // Resolve the raw hit buffer: arena slot for overflow recorders, otherwise
+  // inline data_. Inline-only callers (EntryExitSpec ee, unit tests) pass
+  // overflow_arena=nullptr; if they ever feed an overflow recorder we crash
+  // loudly here rather than silently misread inline bytes.
+  const uint8_t* src =
+      rp_input.HasOverflow() ? overflow_arena + static_cast<size_t>(rp_input.overflow_idx_) * kMaxHits : rp_input.data_;
+  size_t size = rp_input.size_;
+
+  if (fn_period_ < 0 || symmetry_ == FilterConfig::kSymNone) {
+    return std::memcmp(src, canonical_.data_, size) == 0;
+  }
+
+  uint8_t scratch[kMaxHits]{};
+  std::memcpy(scratch, src, size);
+  detail::ReduceBuffer(scratch, size, symmetry_, sigma_a_, d_applicable_);
+  return std::memcmp(scratch, canonical_.data_, size) == 0;
 }
 
 namespace {
@@ -142,7 +153,9 @@ RaypathOrbit BuildOrbit(const Crystal& crystal, const std::vector<IdType>& rp, u
 
 class NoneSpec : public FilterSpec {
  public:
-  bool Match(const RaySeg& /*ray*/, const RaypathRecorder& /*rec*/) const override { return true; }
+  bool Match(const RaySeg& /*ray*/, const RaypathRecorder& /*rec*/, const uint8_t* /*arena*/) const override {
+    return true;
+  }
 };
 
 class RaypathSpec : public FilterSpec {
@@ -150,7 +163,9 @@ class RaypathSpec : public FilterSpec {
   RaypathSpec(const Crystal& crystal, const std::vector<IdType>& rp, uint8_t symmetry, int sigma_a, bool d_applicable)
       : orbit_(BuildOrbit(crystal, rp, symmetry, sigma_a, d_applicable)) {}
 
-  bool Match(const RaySeg& /*ray*/, const RaypathRecorder& rec) const override { return orbit_.Contains(rec); }
+  bool Match(const RaySeg& /*ray*/, const RaypathRecorder& rec, const uint8_t* arena) const override {
+    return orbit_.Contains(rec, arena);
+  }
 
  private:
   RaypathOrbit orbit_;
@@ -164,7 +179,7 @@ class EntryExitSpec : public FilterSpec {
         has_orbit_(has_entry_ || has_exit_),
         orbit_(BuildOrbitFromEnds(crystal, entry, exit, symmetry, sigma_a, d_applicable)) {}
 
-  bool Match(const RaySeg& /*ray*/, const RaypathRecorder& rec) const override {
+  bool Match(const RaySeg& /*ray*/, const RaypathRecorder& rec, const uint8_t* arena) const override {
     size_t size = rec.size_;
     if (size == 0) {
       return false;
@@ -178,16 +193,21 @@ class EntryExitSpec : public FilterSpec {
     if (!has_orbit_) {
       return true;  // both wildcard: length-only match
     }
+    // Resolve first/last byte; they may live in the arena for overflow recorders.
+    assert(!rec.HasOverflow() || arena != nullptr);
+    const uint8_t* data = rec.HasOverflow() ? arena + static_cast<size_t>(rec.overflow_idx_) * kMaxHits : rec.data_;
     RaypathRecorder ee;
     ee.Clear();
     if (has_entry_ && has_exit_) {
-      ee << rec[0] << rec[size - 1];
+      ee << static_cast<IdType>(data[0]);
+      ee << static_cast<IdType>(data[size - 1]);
     } else if (has_entry_) {
-      ee << rec[0];
+      ee << static_cast<IdType>(data[0]);
     } else {
-      ee << rec[size - 1];
+      ee << static_cast<IdType>(data[size - 1]);
     }
-    return orbit_.Contains(ee);
+    // ee is inline-only by construction → arena=nullptr.
+    return orbit_.Contains(ee, nullptr);
   }
 
  private:
@@ -226,7 +246,9 @@ class DirectionSpec : public FilterSpec {
             std::sin(lat_deg * math::kDegreeToRad) },
         radii_c_(std::cos(radii_deg * math::kDegreeToRad)) {}
 
-  bool Match(const RaySeg& ray, const RaypathRecorder& /*rec*/) const override { return Dot3(d_, ray.d_) > radii_c_; }
+  bool Match(const RaySeg& ray, const RaypathRecorder& /*rec*/, const uint8_t* /*arena*/) const override {
+    return Dot3(d_, ray.d_) > radii_c_;
+  }
 
  private:
   float d_[3];
@@ -236,7 +258,7 @@ class DirectionSpec : public FilterSpec {
 class CrystalSpec : public FilterSpec {
  public:
   explicit CrystalSpec(IdType crystal_id) : crystal_id_(crystal_id) {}
-  bool Match(const RaySeg& ray, const RaypathRecorder& /*rec*/) const override {
+  bool Match(const RaySeg& ray, const RaypathRecorder& /*rec*/, const uint8_t* /*arena*/) const override {
     return ray.crystal_config_id_ == crystal_id_;
   }
 
@@ -249,11 +271,11 @@ class ComplexSpec : public FilterSpec {
   ComplexSpec(const Crystal& crystal, const std::vector<std::vector<std::pair<IdType, SimpleFilterParam>>>& all_param,
               uint8_t symmetry, int sigma_a, bool d_applicable);
 
-  bool Match(const RaySeg& ray, const RaypathRecorder& rec) const override {
+  bool Match(const RaySeg& ray, const RaypathRecorder& rec, const uint8_t* arena) const override {
     for (const auto& or_clause : filters_) {
       bool and_check = true;
       for (const auto& and_f : or_clause) {
-        if (!and_f->Match(ray, rec)) {
+        if (!and_f->Match(ray, rec, arena)) {
           and_check = false;
           break;
         }
