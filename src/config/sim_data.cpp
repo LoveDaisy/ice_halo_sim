@@ -77,36 +77,72 @@ RaySeg* RayBuffer::end() const {
   return rays_.get() + size_;
 }
 
+// Copy/move semantics over the two parallel owning arrays. Copy uses capacity_
+// (not size_) as the copy extent, matching the SimData::operator= legacy and
+// MakePopulatedSimData test contract that size_ < capacity_ trailing slots are
+// preserved. When #247.3 introduces a third parallel owning array (hot/cold
+// split), it should sustain the same copy-by-capacity convention so RayBuffer's
+// internal arrays remain symmetric.
+RayBuffer::RayBuffer(const RayBuffer& other)
+    : capacity_(other.capacity_), size_(other.size_),
+      rays_(other.capacity_ > 0 ? std::make_unique<RaySeg[]>(other.capacity_) : nullptr),
+      recorders_(other.capacity_ > 0 ? std::make_unique<RaypathRecorder[]>(other.capacity_) : nullptr) {
+  if (other.capacity_ > 0) {
+    std::memcpy(rays_.get(), other.rays_.get(), sizeof(RaySeg) * other.capacity_);
+    std::memcpy(recorders_.get(), other.recorders_.get(), sizeof(RaypathRecorder) * other.capacity_);
+  }
+}
+
+RayBuffer::RayBuffer(RayBuffer&& other) noexcept
+    : capacity_(other.capacity_), size_(other.size_), rays_(std::move(other.rays_)),
+      recorders_(std::move(other.recorders_)) {
+  other.capacity_ = 0;
+  other.size_ = 0;
+}
+
+RayBuffer& RayBuffer::operator=(const RayBuffer& other) {
+  if (&other == this) {
+    return *this;
+  }
+  capacity_ = other.capacity_;
+  size_ = other.size_;
+  rays_ = other.capacity_ > 0 ? std::make_unique<RaySeg[]>(other.capacity_) : nullptr;
+  recorders_ = other.capacity_ > 0 ? std::make_unique<RaypathRecorder[]>(other.capacity_) : nullptr;
+  if (other.capacity_ > 0) {
+    std::memcpy(rays_.get(), other.rays_.get(), sizeof(RaySeg) * other.capacity_);
+    std::memcpy(recorders_.get(), other.recorders_.get(), sizeof(RaypathRecorder) * other.capacity_);
+  }
+  return *this;
+}
+
+RayBuffer& RayBuffer::operator=(RayBuffer&& other) noexcept {
+  if (&other == this) {
+    return *this;
+  }
+  capacity_ = other.capacity_;
+  size_ = other.size_;
+  rays_ = std::move(other.rays_);
+  recorders_ = std::move(other.recorders_);
+  other.capacity_ = 0;
+  other.size_ = 0;
+  return *this;
+}
+
 
 SimData::SimData() : curr_wl_(0.0f) {}
 
 SimData::SimData(size_t capacity) : curr_wl_(0.0f), rays_(capacity) {}
 
 SimData::SimData(const SimData& other)
-    : curr_wl_(other.curr_wl_), generation_(other.generation_), rays_(other.rays_.capacity_),
-      crystals_(other.crystals_), crystal_axis_dists_(other.crystal_axis_dists_),
-      outgoing_indices_(other.outgoing_indices_), outgoing_d_(other.outgoing_d_), outgoing_w_(other.outgoing_w_),
-      root_ray_count_(other.root_ray_count_) {
-  rays_.size_ = other.rays_.size_;
-  std::memcpy(rays_.rays_.get(), other.rays_.rays_.get(), sizeof(RaySeg) * other.rays_.capacity_);
-  std::memcpy(rays_.recorders_.get(), other.rays_.recorders_.get(), sizeof(RaypathRecorder) * other.rays_.capacity_);
-}
+    : curr_wl_(other.curr_wl_), generation_(other.generation_), rays_(other.rays_), crystals_(other.crystals_),
+      crystal_axis_dists_(other.crystal_axis_dists_), outgoing_indices_(other.outgoing_indices_),
+      outgoing_d_(other.outgoing_d_), outgoing_w_(other.outgoing_w_), root_ray_count_(other.root_ray_count_) {}
 
 SimData::SimData(SimData&& other) noexcept
-    : curr_wl_(other.curr_wl_), generation_(other.generation_), crystals_(std::move(other.crystals_)),
-      crystal_axis_dists_(std::move(other.crystal_axis_dists_)), outgoing_indices_(std::move(other.outgoing_indices_)),
-      outgoing_d_(std::move(other.outgoing_d_)), outgoing_w_(std::move(other.outgoing_w_)),
-      root_ray_count_(other.root_ray_count_) {
-  rays_.size_ = other.rays_.size_;
-  rays_.capacity_ = other.rays_.capacity_;
-  rays_.rays_ = std::move(other.rays_.rays_);
-  rays_.recorders_ = std::move(other.rays_.recorders_);
-
-  other.rays_.size_ = 0;
-  other.rays_.capacity_ = 0;
-  other.rays_.rays_ = nullptr;
-  other.rays_.recorders_ = nullptr;
-}
+    : curr_wl_(other.curr_wl_), generation_(other.generation_), rays_(std::move(other.rays_)),
+      crystals_(std::move(other.crystals_)), crystal_axis_dists_(std::move(other.crystal_axis_dists_)),
+      outgoing_indices_(std::move(other.outgoing_indices_)), outgoing_d_(std::move(other.outgoing_d_)),
+      outgoing_w_(std::move(other.outgoing_w_)), root_ray_count_(other.root_ray_count_) {}
 
 SimData& SimData::operator=(const SimData& other) {
   if (&other == this) {
@@ -115,12 +151,7 @@ SimData& SimData::operator=(const SimData& other) {
 
   curr_wl_ = other.curr_wl_;
   generation_ = other.generation_;
-  rays_.size_ = other.rays_.size_;
-  rays_.capacity_ = other.rays_.capacity_;
-  rays_.rays_ = std::make_unique<RaySeg[]>(rays_.capacity_);
-  rays_.recorders_ = std::make_unique<RaypathRecorder[]>(rays_.capacity_);
-  std::memcpy(rays_.rays_.get(), other.rays_.rays_.get(), sizeof(RaySeg) * rays_.capacity_);
-  std::memcpy(rays_.recorders_.get(), other.rays_.recorders_.get(), sizeof(RaypathRecorder) * rays_.capacity_);
+  rays_ = other.rays_;
   crystals_ = other.crystals_;
   crystal_axis_dists_ = other.crystal_axis_dists_;
   outgoing_indices_ = other.outgoing_indices_;
@@ -137,21 +168,13 @@ SimData& SimData::operator=(SimData&& other) noexcept {
 
   curr_wl_ = other.curr_wl_;
   generation_ = other.generation_;
-  rays_.size_ = other.rays_.size_;
-  rays_.capacity_ = other.rays_.capacity_;
-  rays_.rays_ = std::move(other.rays_.rays_);
-  rays_.recorders_ = std::move(other.rays_.recorders_);
+  rays_ = std::move(other.rays_);
   crystals_ = std::move(other.crystals_);
   crystal_axis_dists_ = std::move(other.crystal_axis_dists_);
   outgoing_indices_ = std::move(other.outgoing_indices_);
   outgoing_d_ = std::move(other.outgoing_d_);
   outgoing_w_ = std::move(other.outgoing_w_);
   root_ray_count_ = other.root_ray_count_;
-
-  other.rays_.capacity_ = 0;
-  other.rays_.size_ = 0;
-  other.rays_.rays_ = nullptr;
-  other.rays_.recorders_ = nullptr;
   return *this;
 }
 

@@ -15,6 +15,17 @@ struct RayBuffer {
   RayBuffer();
   explicit RayBuffer(size_t capacity);
 
+  // Value semantics over the two parallel owning arrays. Copy is a deep dup of
+  // both arrays sized by capacity_ (matches the SimData::operator= legacy
+  // convention so trailing slots beyond size_ are preserved); move transfers
+  // ownership and zeroes the source. Allows SimData's four special members to
+  // delegate instead of hand-syncing each owning field.
+  RayBuffer(const RayBuffer& other);
+  RayBuffer(RayBuffer&& other) noexcept;
+  RayBuffer& operator=(const RayBuffer& other);
+  RayBuffer& operator=(RayBuffer&& other) noexcept;
+  ~RayBuffer() = default;
+
   RaySeg& operator[](size_t idx) const;
 
   // Parallel-array access to the per-ray RaypathRecorder (moved out of RaySeg
@@ -37,10 +48,6 @@ struct RayBuffer {
   RaySeg* begin() const;
   RaySeg* end() const;
 
-  // TODO(soa-refactor): if RayBuffer gains more owning members in the future,
-  // give RayBuffer its own copy/move ctors + assignment ops so SimData can
-  // delegate instead of manually synchronizing each owning field below. (See
-  // scrum-cpu-soa-refactor review.md Suggestion 1.)
   size_t capacity_;
   size_t size_;
   std::unique_ptr<RaySeg[]> rays_;
