@@ -127,7 +127,12 @@ TEST(RayBufferTest, EmplaceBackLosesOneSlot) {
 TEST(RayBufferTest, EmplaceBackBatchOnEmptyDst) {
   RayBuffer src(10);
   for (int i = 0; i < 5; i++) {
-    src.EmplaceBack(MakeRay(i), RaypathRecorder{});
+    // Identifiable recorder per src element: face id = i+1 so the batch-copy
+    // codepath has functional coverage — if recorders_[size_] = buffer.recorders_[i]
+    // is silently dropped, RecorderAt(j).size_ stays 0 on dst and assertions fire.
+    RaypathRecorder rec;
+    rec << static_cast<lumice::IdType>(i + 1);
+    src.EmplaceBack(MakeRay(i), rec);
   }
   EXPECT_EQ(src.size_, 5u);
 
@@ -138,6 +143,14 @@ TEST(RayBufferTest, EmplaceBackBatchOnEmptyDst) {
   EXPECT_FLOAT_EQ(dst[1].w_, 2.0f);
   EXPECT_FLOAT_EQ(dst[2].w_, 3.0f);
 
+  // Recorder content: dst[0..2] originate from src[1..3] → face ids 2/3/4.
+  EXPECT_EQ(dst.RecorderAt(0).size_, 1u);
+  EXPECT_EQ(dst.RecorderAt(0).recorder_[0], static_cast<lumice::IdType>(2));
+  EXPECT_EQ(dst.RecorderAt(1).size_, 1u);
+  EXPECT_EQ(dst.RecorderAt(1).recorder_[0], static_cast<lumice::IdType>(3));
+  EXPECT_EQ(dst.RecorderAt(2).size_, 1u);
+  EXPECT_EQ(dst.RecorderAt(2).recorder_[0], static_cast<lumice::IdType>(4));
+
   // Calling with kInfSize (size_t::max) must be clamped by buffer.size_,
   // not propagate as an overflow.
   RayBuffer dst2(10);
@@ -145,6 +158,12 @@ TEST(RayBufferTest, EmplaceBackBatchOnEmptyDst) {
   EXPECT_EQ(dst2.size_, 5u);  // clamped to src.size_
   EXPECT_FLOAT_EQ(dst2[0].w_, 0.0f);
   EXPECT_FLOAT_EQ(dst2[4].w_, 4.0f);
+
+  // Recorder content: dst2[0..4] mirror src[0..4] → face ids 1..5.
+  EXPECT_EQ(dst2.RecorderAt(0).size_, 1u);
+  EXPECT_EQ(dst2.RecorderAt(0).recorder_[0], static_cast<lumice::IdType>(1));
+  EXPECT_EQ(dst2.RecorderAt(4).size_, 1u);
+  EXPECT_EQ(dst2.RecorderAt(4).recorder_[0], static_cast<lumice::IdType>(5));
 }
 
 
@@ -247,6 +266,135 @@ TEST(RayBufferTest, IterationAndIndexing) {
   // operator[] direct access matches iterated values.
   EXPECT_FLOAT_EQ(buf[0].w_, 0.0f);
   EXPECT_FLOAT_EQ(buf[3].w_, 3.0f);
+}
+
+
+// =============== RayBuffer copy/move (self-owned value semantics) ===============
+//
+// These tests pin the contract that SimData's four special members now delegate
+// to (see sim_data.cpp). Removing or weakening any of them would re-introduce
+// the hand-syncing surface that the #246.2 / #247.1 split fixed.
+
+namespace {
+
+// Helper: build a populated RayBuffer with size < capacity, identifiable
+// rays + recorders. capacity=6 / size=4 mirrors the size != capacity shape
+// used by MakePopulatedSimData so copy-by-capacity is exercised.
+RayBuffer MakePopulatedRayBuffer() {
+  RayBuffer buf(6);
+  for (int i = 0; i < 4; i++) {
+    RaypathRecorder rec;
+    rec << static_cast<lumice::IdType>(i + 1);
+    buf.EmplaceBack(MakeRay(i), rec);
+  }
+  return buf;
+}
+
+}  // namespace
+
+
+TEST(RayBufferTest, CopyConstructDeepCopy) {
+  auto src = MakePopulatedRayBuffer();
+  RayBuffer dst(src);
+
+  EXPECT_EQ(dst.capacity_, 6u);
+  EXPECT_EQ(dst.size_, 4u);
+  ASSERT_NE(dst.rays(), nullptr);
+  EXPECT_NE(dst.rays(), src.rays()) << "deep copy expected: pointers must differ";
+
+  for (size_t i = 0; i < 4; i++) {
+    EXPECT_FLOAT_EQ(dst[i].w_, src[i].w_);
+    EXPECT_EQ(dst.RecorderAt(i).size_, 1u);
+    EXPECT_EQ(dst.RecorderAt(i).recorder_[0], static_cast<lumice::IdType>(i + 1));
+  }
+
+  // Deep copy independence: mutating dst must not affect src.
+  dst[0].w_ = 999.0f;
+  EXPECT_FLOAT_EQ(src[0].w_, 0.0f);
+
+  // Edge case: copy of a default-constructed (capacity=0) buffer must not
+  // dereference nullptr in the memcpy path.
+  RayBuffer empty;
+  // NOLINTNEXTLINE(performance-unnecessary-copy-initialization) — the copy IS the test subject
+  RayBuffer dst_empty(empty);
+  EXPECT_EQ(dst_empty.capacity_, 0u);
+  EXPECT_EQ(dst_empty.size_, 0u);
+  EXPECT_EQ(dst_empty.rays(), nullptr);
+}
+
+
+TEST(RayBufferTest, CopyAssignDeepCopy) {
+  auto src = MakePopulatedRayBuffer();
+  RayBuffer dst(3);  // Different initial capacity — exercises realloc path.
+  dst = src;
+
+  EXPECT_EQ(dst.capacity_, 6u);
+  EXPECT_EQ(dst.size_, 4u);
+  EXPECT_NE(dst.rays(), src.rays());
+  for (size_t i = 0; i < 4; i++) {
+    EXPECT_FLOAT_EQ(dst[i].w_, src[i].w_);
+    EXPECT_EQ(dst.RecorderAt(i).recorder_[0], static_cast<lumice::IdType>(i + 1));
+  }
+
+  // Self-assignment guard — alias via reference to bypass -Wself-assign-overloaded.
+  const size_t kSrcCap = src.capacity_;
+  const size_t kSrcSize = src.size_;
+  const float kRay0W = src[0].w_;
+  RayBuffer& self_alias = src;
+  self_alias = src;
+  EXPECT_EQ(src.capacity_, kSrcCap);
+  EXPECT_EQ(src.size_, kSrcSize);
+  EXPECT_FLOAT_EQ(src[0].w_, kRay0W);
+}
+
+
+TEST(RayBufferTest, MoveConstructTransfersOwnership) {
+  auto src = MakePopulatedRayBuffer();
+  RaySeg* src_rays_ptr = src.rays();
+  const RaypathRecorder* src_rec_ptr = &src.RecorderAt(0);
+
+  RayBuffer dst(std::move(src));
+
+  EXPECT_EQ(dst.capacity_, 6u);
+  EXPECT_EQ(dst.size_, 4u);
+  EXPECT_EQ(dst.rays(), src_rays_ptr) << "ownership transfer expected (no copy)";
+  EXPECT_EQ(&dst.RecorderAt(0), src_rec_ptr) << "recorders_ ownership transfer expected";
+
+  // Moved-from source zeroed by RayBuffer move ctor.
+  EXPECT_EQ(src.capacity_, 0u);
+  EXPECT_EQ(src.size_, 0u);
+  EXPECT_EQ(src.rays_, nullptr);
+  EXPECT_EQ(src.recorders_, nullptr);
+}
+
+
+TEST(RayBufferTest, MoveAssignTransfersOwnership) {
+  auto src = MakePopulatedRayBuffer();
+  RaySeg* src_rays_ptr = src.rays();
+  RayBuffer dst(3);
+  dst = std::move(src);
+
+  EXPECT_EQ(dst.capacity_, 6u);
+  EXPECT_EQ(dst.size_, 4u);
+  EXPECT_EQ(dst.rays(), src_rays_ptr);
+  EXPECT_EQ(src.capacity_, 0u);
+  EXPECT_EQ(src.size_, 0u);
+  EXPECT_EQ(src.rays_, nullptr);
+
+  // Self-move-assignment must preserve all fields (source code has &other == this guard).
+  auto self = MakePopulatedRayBuffer();
+  const size_t kCap = self.capacity_;
+  const size_t kSize = self.size_;
+  RaySeg* snap_ptr = self.rays();
+  const float kRay0W = self[0].w_;
+
+  RayBuffer& self_ref = self;
+  self_ref = std::move(self);
+
+  EXPECT_EQ(self.capacity_, kCap);
+  EXPECT_EQ(self.size_, kSize);
+  EXPECT_EQ(self.rays(), snap_ptr);
+  EXPECT_FLOAT_EQ(self[0].w_, kRay0W);
 }
 
 

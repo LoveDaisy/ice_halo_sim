@@ -21,7 +21,7 @@ class FilterTest : public ::testing::Test {
  protected:
   void SetUp() override { crystal_ = Crystal::CreatePrism(1.0f); }
 
-  static RaySeg MakeRay(const std::vector<IdType>& /*rp_vec*/) {
+  static RaySeg MakeRay() {
     // RaypathRecorder lives on RayBuffer::recorders_ now; build it separately
     // alongside the RaySeg when a Match() call needs it.
     RaySeg r{};

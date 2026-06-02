@@ -91,7 +91,7 @@ AxisDistribution MakeAxis(float roll_mean_deg) {
   return d;
 }
 
-RaySeg MakeRay(const std::vector<IdType>& /*rp_vec*/) {
+RaySeg MakeRay() {
   // RaypathRecorder lives on RayBuffer::recorders_ now; build it separately
   // via ToRecorder(rp_vec) when a Match()/Check() call needs it.
   RaySeg r{};
@@ -112,32 +112,37 @@ RaySeg MakeRay(const std::vector<IdType>& /*rp_vec*/) {
 // vector and invoke spec->Match / spec->Check. Reduces call-site noise after
 // the SoA-prize split moved RaypathRecorder out of RaySeg.
 inline bool SpecMatch(const FilterSpec* spec, const std::vector<IdType>& rp_vec) {
-  return spec->Match(MakeRay(rp_vec), ToRecorder(rp_vec));
+  return spec->Match(MakeRay(), ToRecorder(rp_vec));
 }
 inline bool SpecCheck(const FilterSpec* spec, const std::vector<IdType>& rp_vec) {
-  return spec->Check(MakeRay(rp_vec), ToRecorder(rp_vec));
+  return spec->Check(MakeRay(), ToRecorder(rp_vec));
 }
 
+// NOTE: MakeRay() returns a fixed direction/origin RaySeg; the raypath structure
+// these helpers used to encode via brace-list args was already discarded by
+// MakeRay's body. Callers that need raypath identity pass it directly into
+// ToRecorder()/SpecMatch()/SpecCheck(). The batch size and shape are what
+// downstream sweeps consume — see e.g. NoPerRayReinit_*.
 std::vector<RaySeg> BuildPrismRayBatch() {
   std::vector<RaySeg> rays;
   // empty raypath
-  rays.push_back(MakeRay({}));
+  rays.push_back(MakeRay());
   // single-segment basal + prism
-  rays.push_back(MakeRay({ 1 }));
-  rays.push_back(MakeRay({ 3 }));
+  rays.push_back(MakeRay());
+  rays.push_back(MakeRay());
   // pairs (a,b) ∈ {3..8}²
   for (IdType a = 3; a <= 8; a++) {
     for (IdType b = 3; b <= 8; b++) {
       if (a == b) {
         continue;
       }
-      rays.push_back(MakeRay({ a, b }));
+      rays.push_back(MakeRay());
     }
   }
   // include basal+prism mixes
-  rays.push_back(MakeRay({ 1, 3 }));
-  rays.push_back(MakeRay({ 2, 5, 1 }));
-  rays.push_back(MakeRay({ 3, 6, 4 }));
+  rays.push_back(MakeRay());
+  rays.push_back(MakeRay());
+  rays.push_back(MakeRay());
   return rays;
 }
 
@@ -146,14 +151,14 @@ std::vector<RaySeg> BuildPyramidRayBatch() {
   // pyramid + prism pairs
   for (IdType u = 13; u <= 18; u++) {
     for (IdType p = 3; p <= 8; p++) {
-      rays.push_back(MakeRay({ u, p }));
+      rays.push_back(MakeRay());
     }
   }
   for (IdType l = 23; l <= 28; l++) {
-    rays.push_back(MakeRay({ l, 4 }));
+    rays.push_back(MakeRay());
   }
-  rays.push_back(MakeRay({ 13, 5, 23 }));
-  rays.push_back(MakeRay({ 14, 25, 6 }));
+  rays.push_back(MakeRay());
+  rays.push_back(MakeRay());
   return rays;
 }
 
@@ -292,14 +297,14 @@ constexpr float kSigmaARollDeg[6] = { 0.0f, 150.0f, 120.0f, 90.0f, 60.0f, 30.0f 
   if (orbit.empty()) {
     return ::testing::AssertionFailure() << "ExpandRaypath returned empty orbit for seed=" << FormatRaypath(seed_rp);
   }
-  RaySeg seed_ray = MakeRay(seed_rp);
+  RaySeg seed_ray = MakeRay();
   if (!spec->Match(seed_ray, ToRecorder(seed_rp))) {
     return ::testing::AssertionFailure() << "Seed raypath " << FormatRaypath(seed_rp)
                                          << " did not match its own filter (sym=" << static_cast<int>(symmetry)
                                          << " sigma_a=" << sigma_a << ") - filter misconfigured, orbit sweep aborted";
   }
   for (size_t i = 0; i < orbit.size(); i++) {
-    RaySeg ri = MakeRay(orbit[i]);
+    RaySeg ri = MakeRay();
     if (!spec->Match(ri, ToRecorder(orbit[i]))) {
       return ::testing::AssertionFailure() << "Orbit member " << i << " " << FormatRaypath(orbit[i])
                                            << " Match()=false != expected=true (seed=" << FormatRaypath(seed_rp)
@@ -463,12 +468,12 @@ TEST(FilterSpec_AntiPattern, NoPerRayReinit_ComplexFilter_PD_SigmaA5) {
   std::vector<RaypathRecorder> batch_rec;
   auto orbit = pyramid.ExpandRaypath({ 14, 6 }, kSym, /*sigma_a=*/5, /*d_applicable=*/true);
   for (const auto& rp : orbit) {
-    batch.push_back(MakeRay(rp));
+    batch.push_back(MakeRay());
     batch_rec.push_back(ToRecorder(rp));
   }
-  batch.push_back(MakeRay({ 1 }));  // non-member: basal-only
+  batch.push_back(MakeRay());  // non-member: basal-only
   batch_rec.push_back(ToRecorder({ 1 }));
-  batch.push_back(MakeRay({ 3, 4 }));  // non-member: prism-prism
+  batch.push_back(MakeRay());  // non-member: prism-prism
   batch_rec.push_back(ToRecorder({ 3, 4 }));
 
   std::vector<bool> pass1;
@@ -568,13 +573,13 @@ std::unique_ptr<FilterSpec> MakeDirectionSpec(float lon_deg, float lat_deg, floa
 TEST(DirectionSpec, BasicMatch) {
   auto spec = MakeDirectionSpec(0.0f, 0.0f, 10.0f);
 
-  auto r1 = MakeRay({});
+  auto r1 = MakeRay();
   r1.d_[0] = 1.0f;
   r1.d_[1] = 0.0f;
   r1.d_[2] = 0.0f;
   EXPECT_TRUE(spec->Check(r1, RaypathRecorder{}));
 
-  auto r2 = MakeRay({});
+  auto r2 = MakeRay();
   r2.d_[0] = 0.0f;
   r2.d_[1] = 1.0f;
   r2.d_[2] = 0.0f;
@@ -585,7 +590,7 @@ TEST(DirectionSpec, StateAgnostic) {
   // DirectionSpec reads only d_; is_continue_ and w_ must not affect the result.
   auto spec = MakeDirectionSpec(0.0f, 0.0f, 10.0f);
 
-  auto r = MakeRay({});
+  auto r = MakeRay();
   r.d_[0] = 1.0f;
   r.d_[1] = 0.0f;
   r.d_[2] = 0.0f;
@@ -604,19 +609,19 @@ TEST(DirectionSpec, StateAgnostic) {
 TEST(DirectionSpec, FilterOut) {
   auto spec = MakeDirectionSpec(0.0f, 0.0f, 10.0f, FilterConfig::kFilterOut);
 
-  auto r1 = MakeRay({});
+  auto r1 = MakeRay();
   r1.d_[0] = 1.0f;
   r1.d_[1] = 0.0f;
   r1.d_[2] = 0.0f;
   EXPECT_FALSE(spec->Check(r1, RaypathRecorder{}));
 
-  auto r2 = MakeRay({});
+  auto r2 = MakeRay();
   r2.d_[0] = 0.0f;
   r2.d_[1] = 1.0f;
   r2.d_[2] = 0.0f;
   EXPECT_TRUE(spec->Check(r2, RaypathRecorder{}));
 
-  auto r3 = MakeRay({});
+  auto r3 = MakeRay();
   r3.d_[0] = 1.0f;
   r3.d_[1] = 0.0f;
   r3.d_[2] = 0.0f;
