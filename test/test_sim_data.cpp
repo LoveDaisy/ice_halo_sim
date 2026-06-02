@@ -13,6 +13,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cstring>
+#include <type_traits>
 #include <utility>
 
 #include "config/sim_data.hpp"
@@ -23,6 +25,7 @@ namespace {
 
 using lumice::kInfSize;
 using lumice::RayBuffer;
+using lumice::RaypathRecorder;
 using lumice::RaySeg;
 using lumice::SimData;
 
@@ -33,7 +36,7 @@ using lumice::SimData;
 // authoring platform that this test file's per-field assertions need updating.
 #if defined(__APPLE__) && defined(__aarch64__)
 static_assert(sizeof(void*) == 8, "SimData layout assumes 64-bit pointers");
-static_assert(sizeof(SimData) == 168,
+static_assert(sizeof(SimData) == 192,
               "SimData layout changed — update test_sim_data.cpp DeepCopy/Move assertions "
               "and sim_data.cpp's static_assert.");
 #endif
@@ -59,7 +62,7 @@ SimData MakePopulatedSimData() {
   s.generation_ = 42;
   s.root_ray_count_ = 7;
   for (int i = 0; i < 5; i++) {
-    s.rays_.EmplaceBack(MakeRay(i));
+    s.rays_.EmplaceBack(MakeRay(i), RaypathRecorder{});
   }
   s.outgoing_indices_ = { 0, 2, 4 };
   s.outgoing_d_ = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f };
@@ -69,6 +72,199 @@ SimData MakePopulatedSimData() {
 }
 
 }  // namespace
+
+
+// =============== RaypathRecorder POD / RayBuffer overflow Tests ===============
+//
+// Round 2 (#247.4) restructured overflow as a per-RayBuffer arena keyed by
+// recorders_[idx].overflow_idx_. RaypathRecorder itself is POD; standalone
+// operator<< only services inline-cap recorders (asserts on overflow). All
+// overflow coverage therefore lives at the RayBuffer level below.
+
+TEST(RaypathRecorderTest, IsTriviallyCopyableAndCompact) {
+  static_assert(std::is_trivially_copyable_v<RaypathRecorder>,
+                "RaypathRecorder must be POD/trivially-copyable so fan-out is memcpy");
+  static_assert(sizeof(RaypathRecorder) == 18,
+                "RaypathRecorder stride must stay at 18B; regressing here means the "
+                "fan-out memcpy footprint grew");
+  // Inline append fills data_ contiguously and never touches the overflow index.
+  RaypathRecorder rec;
+  for (uint8_t i = 0; i < RaypathRecorder::kInlineCap; i++) {
+    rec << static_cast<lumice::IdType>(i + 1);
+  }
+  EXPECT_EQ(rec.size_, RaypathRecorder::kInlineCap);
+  EXPECT_FALSE(rec.HasOverflow());
+  for (uint8_t i = 0; i < RaypathRecorder::kInlineCap; i++) {
+    EXPECT_EQ(rec.data_[i], static_cast<uint8_t>(i + 1));
+  }
+}
+
+
+TEST(RayBufferRecorderTest, AppendOverflowMigratesInlineSlot) {
+  // The buffer-level append path is the only way to push past kInlineCap.
+  // First 15 bytes stay inline; the 16th forces arena allocation and
+  // migrates data_[0..14] into the slot before writing the new byte.
+  RayBuffer buf(4);
+  for (uint8_t i = 0; i < RaypathRecorder::kInlineCap; i++) {
+    buf.RecorderAppend(0, static_cast<lumice::IdType>(i + 1));
+  }
+  ASSERT_EQ(buf.RecorderAt(0).size_, RaypathRecorder::kInlineCap);
+  EXPECT_FALSE(buf.RecorderAt(0).HasOverflow()) << "still inline at exactly kInlineCap hits";
+  EXPECT_EQ(buf.RecorderDataPtr(0), buf.RecorderAt(0).data_);
+
+  // 16th hit triggers the migration.
+  buf.RecorderAppend(0, static_cast<lumice::IdType>(16));
+
+  EXPECT_EQ(buf.RecorderAt(0).size_, static_cast<uint8_t>(RaypathRecorder::kInlineCap + 1));
+  ASSERT_TRUE(buf.RecorderAt(0).HasOverflow());
+  EXPECT_NE(buf.OverflowArena(), nullptr);
+
+  const uint8_t* p = buf.RecorderDataPtr(0);
+  ASSERT_NE(p, buf.RecorderAt(0).data_) << "DataPtr must follow the arena slot once overflow";
+  for (uint8_t i = 0; i < RaypathRecorder::kInlineCap; i++) {
+    EXPECT_EQ(p[i], i + 1) << "migrated inline byte " << static_cast<int>(i) << " corrupted";
+  }
+  EXPECT_EQ(p[RaypathRecorder::kInlineCap], static_cast<uint8_t>(16));
+}
+
+
+TEST(RayBufferRecorderTest, AppendBeyondMaxHitsIsNoop) {
+  // size_ saturates at kMaxHits; further appends are silently dropped.
+  RayBuffer buf(4);
+  for (uint8_t i = 0; i < lumice::kMaxHits; i++) {
+    buf.RecorderAppend(0, static_cast<lumice::IdType>(i + 1));
+  }
+  EXPECT_EQ(buf.RecorderAt(0).size_, static_cast<uint8_t>(lumice::kMaxHits));
+  ASSERT_TRUE(buf.RecorderAt(0).HasOverflow());
+
+  // Snapshot the arena slot, push one more, expect no change.
+  uint8_t snapshot[lumice::kMaxHits];
+  std::memcpy(snapshot, buf.RecorderDataPtr(0), lumice::kMaxHits);
+
+  buf.RecorderAppend(0, static_cast<lumice::IdType>(99));
+  EXPECT_EQ(buf.RecorderAt(0).size_, static_cast<uint8_t>(lumice::kMaxHits));
+  EXPECT_EQ(std::memcmp(buf.RecorderDataPtr(0), snapshot, lumice::kMaxHits), 0)
+      << "saturation must not mutate stored bytes";
+}
+
+
+TEST(RayBufferRecorderTest, ClearResetsToInlinePath) {
+  RayBuffer buf(4);
+  for (uint8_t i = 0; i < RaypathRecorder::kInlineCap + 2; i++) {
+    buf.RecorderAppend(0, static_cast<lumice::IdType>(i + 1));
+  }
+  ASSERT_TRUE(buf.RecorderAt(0).HasOverflow());
+
+  buf.RecorderClear(0);
+
+  EXPECT_EQ(buf.RecorderAt(0).size_, static_cast<uint8_t>(0));
+  EXPECT_FALSE(buf.RecorderAt(0).HasOverflow());
+  EXPECT_EQ(buf.RecorderDataPtr(0), buf.RecorderAt(0).data_);
+
+  // Small follow-up push stays inline; the arena slot is NOT reclaimed (bump
+  // allocator semantics — Reset() rewinds overflow_used_), but that slot is
+  // unobservable from this recorder.
+  buf.RecorderAppend(0, static_cast<lumice::IdType>(42));
+  EXPECT_EQ(buf.RecorderAt(0).size_, static_cast<uint8_t>(1));
+  EXPECT_FALSE(buf.RecorderAt(0).HasOverflow());
+  EXPECT_EQ(buf.RecorderDataPtr(0)[0], static_cast<uint8_t>(42));
+}
+
+
+TEST(RayBufferRecorderTest, FanOutDuplicatesOverflowSlotIntoDstArena) {
+  RayBuffer src(4);
+  RayBuffer dst(8);
+
+  // Populate src[1] with an overflow recorder of 20 bytes (inline 15 +
+  // overflow 5).
+  for (uint8_t i = 0; i < 20; i++) {
+    src.RecorderAppend(1, static_cast<lumice::IdType>(i + 1));
+  }
+  ASSERT_TRUE(src.RecorderAt(1).HasOverflow());
+
+  // Pretend src has size 2 so FanOut bookkeeping is consistent; in production
+  // the caller (simulator.cpp) sets buffer_data[0].size_ before fan-out.
+  src.size_ = 2;
+  dst.size_ = 0;
+
+  dst.RecorderFanOut(src, /*src_idx=*/1, /*dst0=*/2, /*dst1=*/3);
+
+  // Both dst slots must reflect the same 20 bytes as src[1].
+  ASSERT_TRUE(dst.RecorderAt(2).HasOverflow());
+  ASSERT_TRUE(dst.RecorderAt(3).HasOverflow());
+  EXPECT_EQ(dst.RecorderAt(2).size_, static_cast<uint8_t>(20));
+  EXPECT_EQ(dst.RecorderAt(3).size_, static_cast<uint8_t>(20));
+
+  const uint8_t* a = dst.RecorderDataPtr(2);
+  const uint8_t* b = dst.RecorderDataPtr(3);
+  const uint8_t* s = src.RecorderDataPtr(1);
+  ASSERT_NE(a, s) << "dst arena must be independent of src arena";
+  ASSERT_NE(b, s);
+  ASSERT_NE(a, b) << "dst0 and dst1 must occupy distinct arena slots";
+  for (uint8_t i = 0; i < 20; i++) {
+    EXPECT_EQ(a[i], static_cast<uint8_t>(i + 1)) << "dst0 byte " << static_cast<int>(i);
+    EXPECT_EQ(b[i], static_cast<uint8_t>(i + 1)) << "dst1 byte " << static_cast<int>(i);
+  }
+
+  // Mutating dst0 must NOT bleed into src or dst1.
+  uint8_t snapshot_src[lumice::kMaxHits];
+  uint8_t snapshot_b[lumice::kMaxHits];
+  std::memcpy(snapshot_src, s, lumice::kMaxHits);
+  std::memcpy(snapshot_b, b, lumice::kMaxHits);
+  uint8_t* a_mut = dst.RecorderDataPtr(2);
+  a_mut[0] = 0xAA;
+  EXPECT_EQ(std::memcmp(s, snapshot_src, lumice::kMaxHits), 0) << "src arena leaked";
+  EXPECT_EQ(std::memcmp(b, snapshot_b, lumice::kMaxHits), 0) << "dst1 arena aliased dst0";
+}
+
+
+TEST(RayBufferRecorderTest, FanOutInlineRecorderTakesTrivialPath) {
+  // Inline recorders must not allocate an arena slot during fan-out (this is
+  // the hot path under bench(max_hits=8)).
+  RayBuffer src(4);
+  RayBuffer dst(8);
+  for (uint8_t i = 0; i < 5; i++) {
+    src.RecorderAppend(1, static_cast<lumice::IdType>(i + 1));
+  }
+  ASSERT_FALSE(src.RecorderAt(1).HasOverflow());
+  src.size_ = 2;
+
+  dst.RecorderFanOut(src, 1, 2, 3);
+
+  EXPECT_FALSE(dst.RecorderAt(2).HasOverflow()) << "inline fan-out must not touch the arena";
+  EXPECT_FALSE(dst.RecorderAt(3).HasOverflow());
+  EXPECT_EQ(dst.OverflowArena(), nullptr) << "dst arena allocation must stay lazy";
+  for (uint8_t i = 0; i < 5; i++) {
+    EXPECT_EQ(dst.RecorderAt(2).data_[i], static_cast<uint8_t>(i + 1));
+    EXPECT_EQ(dst.RecorderAt(3).data_[i], static_cast<uint8_t>(i + 1));
+  }
+}
+
+
+TEST(RayBufferRecorderTest, ResetRewindsArena) {
+  RayBuffer buf(4);
+  // Fill three overflow recorders.
+  for (size_t slot : { 0u, 1u, 2u }) {
+    for (uint8_t i = 0; i < 20; i++) {
+      buf.RecorderAppend(slot, static_cast<lumice::IdType>(i + 1));
+    }
+  }
+  ASSERT_GT(buf.OverflowUsed(), 0u);
+  uint16_t cap_before = buf.OverflowCap();
+
+  buf.Reset(buf.capacity_);
+
+  EXPECT_EQ(buf.OverflowUsed(), 0u) << "Reset must rewind the bump cursor";
+  EXPECT_EQ(buf.OverflowCap(), cap_before) << "Reset retains arena capacity";
+
+  // Reset() rewinds the arena cursor but does NOT zero recorders_ in place —
+  // that mirrors production where InitRay_other_info calls RecorderClear per
+  // ray index at the start of the next MS layer. Emulate that contract:
+  buf.RecorderClear(0);
+  buf.RecorderAppend(0, static_cast<lumice::IdType>(42));
+  EXPECT_FALSE(buf.RecorderAt(0).HasOverflow()) << "small follow-up stays inline";
+  EXPECT_EQ(buf.RecorderAt(0).size_, static_cast<uint8_t>(1));
+}
 
 
 // =============== RayBuffer Tests ===============
@@ -98,7 +294,7 @@ TEST(RayBufferTest, EmplaceBackLosesOneSlot) {
   RayBuffer buf(5);
 
   for (int i = 0; i < 4; i++) {
-    buf.EmplaceBack(MakeRay(i));
+    buf.EmplaceBack(MakeRay(i), RaypathRecorder{});
   }
   EXPECT_EQ(buf.size_, 4u);
   EXPECT_FALSE(buf.Empty());
@@ -108,14 +304,14 @@ TEST(RayBufferTest, EmplaceBackLosesOneSlot) {
   EXPECT_FLOAT_EQ(buf[3].w_, 3.0f);
 
   // Guard rejects further writes; size and existing data must remain unchanged.
-  buf.EmplaceBack(MakeRay(99));
+  buf.EmplaceBack(MakeRay(99), RaypathRecorder{});
   EXPECT_EQ(buf.size_, 4u);
   EXPECT_FLOAT_EQ(buf[0].w_, 0.0f);
   EXPECT_FLOAT_EQ(buf[3].w_, 3.0f);
 
   // Repeated guard hits should also leave existing data intact.
   for (int i = 0; i < 5; i++) {
-    buf.EmplaceBack(MakeRay(88));
+    buf.EmplaceBack(MakeRay(88), RaypathRecorder{});
   }
   EXPECT_EQ(buf.size_, 4u);
   EXPECT_FLOAT_EQ(buf[0].w_, 0.0f);
@@ -126,7 +322,12 @@ TEST(RayBufferTest, EmplaceBackLosesOneSlot) {
 TEST(RayBufferTest, EmplaceBackBatchOnEmptyDst) {
   RayBuffer src(10);
   for (int i = 0; i < 5; i++) {
-    src.EmplaceBack(MakeRay(i));
+    // Identifiable recorder per src element: face id = i+1 so the batch-copy
+    // codepath has functional coverage — if recorders_[size_] = buffer.recorders_[i]
+    // is silently dropped, RecorderAt(j).size_ stays 0 on dst and assertions fire.
+    RaypathRecorder rec;
+    rec << static_cast<lumice::IdType>(i + 1);
+    src.EmplaceBack(MakeRay(i), rec);
   }
   EXPECT_EQ(src.size_, 5u);
 
@@ -137,6 +338,14 @@ TEST(RayBufferTest, EmplaceBackBatchOnEmptyDst) {
   EXPECT_FLOAT_EQ(dst[1].w_, 2.0f);
   EXPECT_FLOAT_EQ(dst[2].w_, 3.0f);
 
+  // Recorder content: dst[0..2] originate from src[1..3] → face ids 2/3/4.
+  EXPECT_EQ(dst.RecorderAt(0).size_, 1u);
+  EXPECT_EQ(dst.RecorderAt(0).data_[0], static_cast<uint8_t>(2));
+  EXPECT_EQ(dst.RecorderAt(1).size_, 1u);
+  EXPECT_EQ(dst.RecorderAt(1).data_[0], static_cast<uint8_t>(3));
+  EXPECT_EQ(dst.RecorderAt(2).size_, 1u);
+  EXPECT_EQ(dst.RecorderAt(2).data_[0], static_cast<uint8_t>(4));
+
   // Calling with kInfSize (size_t::max) must be clamped by buffer.size_,
   // not propagate as an overflow.
   RayBuffer dst2(10);
@@ -144,6 +353,12 @@ TEST(RayBufferTest, EmplaceBackBatchOnEmptyDst) {
   EXPECT_EQ(dst2.size_, 5u);  // clamped to src.size_
   EXPECT_FLOAT_EQ(dst2[0].w_, 0.0f);
   EXPECT_FLOAT_EQ(dst2[4].w_, 4.0f);
+
+  // Recorder content: dst2[0..4] mirror src[0..4] → face ids 1..5.
+  EXPECT_EQ(dst2.RecorderAt(0).size_, 1u);
+  EXPECT_EQ(dst2.RecorderAt(0).data_[0], static_cast<uint8_t>(1));
+  EXPECT_EQ(dst2.RecorderAt(4).size_, 1u);
+  EXPECT_EQ(dst2.RecorderAt(4).data_[0], static_cast<uint8_t>(5));
 }
 
 
@@ -195,7 +410,7 @@ TEST(RayBufferTest, DISABLED_EmplaceBackBatchOnNonEmptyDstQuirk) {
 TEST(RayBufferTest, ResetGrowsButNeverShrinks) {
   RayBuffer buf(5);
   for (int i = 0; i < 3; i++) {
-    buf.EmplaceBack(MakeRay(i));
+    buf.EmplaceBack(MakeRay(i), RaypathRecorder{});
   }
   EXPECT_EQ(buf.size_, 3u);
 
@@ -230,7 +445,7 @@ TEST(RayBufferTest, ResetGrowsButNeverShrinks) {
 TEST(RayBufferTest, IterationAndIndexing) {
   RayBuffer buf(5);
   for (int i = 0; i < 4; i++) {
-    buf.EmplaceBack(MakeRay(i));
+    buf.EmplaceBack(MakeRay(i), RaypathRecorder{});
   }
 
   // begin/end pointer arithmetic equals size.
@@ -248,6 +463,183 @@ TEST(RayBufferTest, IterationAndIndexing) {
   EXPECT_FLOAT_EQ(buf[3].w_, 3.0f);
 }
 
+
+// =============== RayBuffer copy/move (self-owned value semantics) ===============
+//
+// These tests pin the contract that SimData's four special members now delegate
+// to (see sim_data.cpp). Removing or weakening any of them would re-introduce
+// the hand-syncing surface that the #246.2 / #247.1 split fixed.
+
+namespace {
+
+// Helper: build a populated RayBuffer with size < capacity, identifiable
+// rays + recorders. capacity=6 / size=4 mirrors the size != capacity shape
+// used by MakePopulatedSimData so copy-by-capacity is exercised.
+RayBuffer MakePopulatedRayBuffer() {
+  RayBuffer buf(6);
+  for (int i = 0; i < 4; i++) {
+    RaypathRecorder rec;
+    rec << static_cast<lumice::IdType>(i + 1);
+    buf.EmplaceBack(MakeRay(i), rec);
+  }
+  return buf;
+}
+
+}  // namespace
+
+
+TEST(RayBufferTest, CopyConstructDeepCopy) {
+  auto src = MakePopulatedRayBuffer();
+  RayBuffer dst(src);
+
+  EXPECT_EQ(dst.capacity_, 6u);
+  EXPECT_EQ(dst.size_, 4u);
+  ASSERT_NE(dst.rays(), nullptr);
+  EXPECT_NE(dst.rays(), src.rays()) << "deep copy expected: pointers must differ";
+
+  for (size_t i = 0; i < 4; i++) {
+    EXPECT_FLOAT_EQ(dst[i].w_, src[i].w_);
+    EXPECT_EQ(dst.RecorderAt(i).size_, 1u);
+    EXPECT_EQ(dst.RecorderAt(i).data_[0], static_cast<uint8_t>(i + 1));
+  }
+
+  // Deep copy independence: mutating dst must not affect src.
+  dst[0].w_ = 999.0f;
+  EXPECT_FLOAT_EQ(src[0].w_, 0.0f);
+
+  // Edge case: copy of a default-constructed (capacity=0) buffer must not
+  // dereference nullptr in the memcpy path.
+  RayBuffer empty;
+  // NOLINTNEXTLINE(performance-unnecessary-copy-initialization) — the copy IS the test subject
+  RayBuffer dst_empty(empty);
+  EXPECT_EQ(dst_empty.capacity_, 0u);
+  EXPECT_EQ(dst_empty.size_, 0u);
+  EXPECT_EQ(dst_empty.rays(), nullptr);
+}
+
+
+TEST(RayBufferTest, CopyAssignDeepCopy) {
+  auto src = MakePopulatedRayBuffer();
+  RayBuffer dst(3);  // Different initial capacity — exercises realloc path.
+  dst = src;
+
+  EXPECT_EQ(dst.capacity_, 6u);
+  EXPECT_EQ(dst.size_, 4u);
+  EXPECT_NE(dst.rays(), src.rays());
+  for (size_t i = 0; i < 4; i++) {
+    EXPECT_FLOAT_EQ(dst[i].w_, src[i].w_);
+    EXPECT_EQ(dst.RecorderAt(i).data_[0], static_cast<uint8_t>(i + 1));
+  }
+
+  // Self-assignment guard — alias via reference to bypass -Wself-assign-overloaded.
+  const size_t kSrcCap = src.capacity_;
+  const size_t kSrcSize = src.size_;
+  const float kRay0W = src[0].w_;
+  RayBuffer& self_alias = src;
+  self_alias = src;
+  EXPECT_EQ(src.capacity_, kSrcCap);
+  EXPECT_EQ(src.size_, kSrcSize);
+  EXPECT_FLOAT_EQ(src[0].w_, kRay0W);
+}
+
+
+TEST(RayBufferTest, CopyAssignSelfAssignWithOverflow) {
+  // Regression guard: copy-assign self with overflow arena must leave data intact.
+  RayBuffer buf(4);
+  RaypathRecorder empty_rec;
+  empty_rec.Clear();
+  buf.EmplaceBack(MakeRay(1), empty_rec);
+  for (uint8_t i = 0; i < 20; i++) {
+    buf.RecorderAppend(0, static_cast<lumice::IdType>(i + 1));
+  }
+  ASSERT_TRUE(buf.RecorderAt(0).HasOverflow());
+  const uint16_t kUsedBefore = buf.OverflowUsed();
+  const uint8_t kSizeBefore = buf.RecorderAt(0).size_;
+  const std::vector<uint8_t> kDataBefore(buf.RecorderDataPtr(0), buf.RecorderDataPtr(0) + kSizeBefore);
+
+  RayBuffer& self_alias = buf;
+  self_alias = buf;
+
+  EXPECT_EQ(buf.OverflowUsed(), kUsedBefore) << "self-assign must not alter overflow_used_";
+  EXPECT_EQ(buf.RecorderAt(0).size_, kSizeBefore) << "self-assign must preserve recorder size_";
+  EXPECT_EQ(std::vector<uint8_t>(buf.RecorderDataPtr(0), buf.RecorderDataPtr(0) + kSizeBefore), kDataBefore)
+      << "self-assign must preserve overflow arena data";
+}
+
+TEST(RayBufferTest, MoveConstructTransfersOwnership) {
+  auto src = MakePopulatedRayBuffer();
+  RaySeg* src_rays_ptr = src.rays();
+  const RaypathRecorder* src_rec_ptr = &src.RecorderAt(0);
+
+  RayBuffer dst(std::move(src));
+
+  EXPECT_EQ(dst.capacity_, 6u);
+  EXPECT_EQ(dst.size_, 4u);
+  EXPECT_EQ(dst.rays(), src_rays_ptr) << "ownership transfer expected (no copy)";
+  EXPECT_EQ(&dst.RecorderAt(0), src_rec_ptr) << "recorders_ ownership transfer expected";
+
+  // Moved-from source zeroed by RayBuffer move ctor.
+  EXPECT_EQ(src.capacity_, 0u);
+  EXPECT_EQ(src.size_, 0u);
+  EXPECT_EQ(src.rays_, nullptr);
+  EXPECT_EQ(src.recorders_, nullptr);
+}
+
+
+TEST(RayBufferTest, MoveAssignTransfersOwnership) {
+  auto src = MakePopulatedRayBuffer();
+  RaySeg* src_rays_ptr = src.rays();
+  RayBuffer dst(3);
+  dst = std::move(src);
+
+  EXPECT_EQ(dst.capacity_, 6u);
+  EXPECT_EQ(dst.size_, 4u);
+  EXPECT_EQ(dst.rays(), src_rays_ptr);
+  EXPECT_EQ(src.capacity_, 0u);
+  EXPECT_EQ(src.size_, 0u);
+  EXPECT_EQ(src.rays_, nullptr);
+
+  // Self-move-assignment must preserve all fields (source code has &other == this guard).
+  auto self = MakePopulatedRayBuffer();
+  const size_t kCap = self.capacity_;
+  const size_t kSize = self.size_;
+  RaySeg* snap_ptr = self.rays();
+  const float kRay0W = self[0].w_;
+
+  RayBuffer& self_ref = self;
+  self_ref = std::move(self);
+
+  EXPECT_EQ(self.capacity_, kCap);
+  EXPECT_EQ(self.size_, kSize);
+  EXPECT_EQ(self.rays(), snap_ptr);
+  EXPECT_FLOAT_EQ(self[0].w_, kRay0W);
+}
+
+
+TEST(RayBufferTest, EmplaceBackOverflowDeepCopy) {
+  // Build src: add one ray with an inline recorder, then overflow it via RecorderAppend.
+  RayBuffer src(4);
+  RaypathRecorder empty_rec;
+  empty_rec.Clear();
+  src.EmplaceBack(MakeRay(7), empty_rec);
+  for (uint8_t i = 0; i < 20; i++) {
+    src.RecorderAppend(0, static_cast<lumice::IdType>(i + 1));
+  }
+  ASSERT_EQ(src.size_, 1u);
+  ASSERT_TRUE(src.RecorderAt(0).HasOverflow()) << "precondition: src recorder must overflow";
+
+  // EmplaceBack via the buffer-to-buffer overload copies slot 0 into dst.
+  RayBuffer dst(4);
+  dst.EmplaceBack(src, 0, 1);
+
+  ASSERT_EQ(dst.size_, 1u);
+  const RaypathRecorder& dst_rec = dst.RecorderAt(0);
+  const RaypathRecorder& src_rec = src.RecorderAt(0);
+  EXPECT_EQ(dst_rec.size_, src_rec.size_) << "size must match after EmplaceBack";
+  EXPECT_NE(dst.RecorderDataPtr(0), src.RecorderDataPtr(0)) << "dst arena must be independent of src";
+  EXPECT_EQ(std::memcmp(dst.RecorderDataPtr(0), src.RecorderDataPtr(0), src_rec.size_), 0)
+      << "overflow data must be faithfully copied";
+}
 
 // =============== SimData Tests ===============
 

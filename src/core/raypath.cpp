@@ -1,21 +1,27 @@
 #include "core/raypath.hpp"
 
+#include <cassert>
+
 namespace lumice {
 
 RaypathRecorder& RaypathRecorder::operator<<(IdType fn) {
-  if (size_ >= kMaxHits) {
-    return *this;
+  // Inline-only append. Recorders in RayBuffer must go through
+  // RayBuffer::RecorderAppend so overflow is routed to the arena.
+  assert(size_ < kInlineCap);
+  if (size_ < kInlineCap) {
+    data_[size_++] = static_cast<uint8_t>(fn & 0xff);
   }
-  recorder_[size_++] = static_cast<uint8_t>(fn & 0xff);
   return *this;
 }
 
 IdType RaypathRecorder::operator[](size_t idx) const {
-  if (idx >= size_ || recorder_[idx] == 0xff) {
+  // Inline-only access (used by EntryExitSpec::Match on the inline `ee`
+  // scratch recorder and by overflow-free production recorders). For
+  // overflow-capable reads, use RayBuffer::RecorderDataPtr(idx)[idx].
+  if (idx >= size_ || idx >= kInlineCap || data_[idx] == 0xff) {
     return kInvalidId;
   }
-
-  return static_cast<IdType>(recorder_[idx]);
+  return static_cast<IdType>(data_[idx]);
 }
 
 
@@ -45,6 +51,9 @@ size_t RaypathHash::operator()(const std::vector<IdType>& rp) {
 }
 
 size_t RaypathHash::operator()(const RaypathRecorder& rp) {
+  // Hash only inline data; overflow recorders are not expected here (canonical_
+  // raypaths in filter_spec are always ≤ kInlineCap).
+  assert(!rp.HasOverflow());
   RaypathHashHelper h;
   for (auto x : rp) {
     h << x;

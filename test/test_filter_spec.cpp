@@ -53,7 +53,9 @@ std::string FormatRecorder(const RaypathRecorder& rp) {
     if (i > 0) {
       s += ",";
     }
-    s += std::to_string(static_cast<int>(rp.recorder_[i]));
+    // Tests build recorders via ToRecorder which feeds operator<< (inline-only),
+    // so reading data_ directly is safe — sizes here are < kInlineCap.
+    s += std::to_string(static_cast<int>(rp.data_[i]));
   }
   s += "}";
   return s;
@@ -65,7 +67,9 @@ std::string FormatRecorder(const RaypathRecorder& rp) {
   auto oracle_rec = ToRecorder(oracle_vec);
 
   auto actual = ToRecorder(rp_seed);
-  detail::ReduceRecorder(actual, symmetry, sigma_a, d_applicable);
+  // ToRecorder yields inline-only recorders (rp_seed ≤ 5 elements), so it is
+  // safe to canonicalise data_ in-place via the buffer-level ReduceBuffer.
+  detail::ReduceBuffer(actual.data_, actual.size_, symmetry, sigma_a, d_applicable);
 
   if (actual != oracle_rec) {
     return ::testing::AssertionFailure() << "ReduceRecorder mismatch: seed=" << FormatRaypath(rp_seed)
@@ -91,12 +95,10 @@ AxisDistribution MakeAxis(float roll_mean_deg) {
   return d;
 }
 
-RaySeg MakeRay(const std::vector<IdType>& rp_vec) {
+RaySeg MakeRay() {
+  // RaypathRecorder lives on RayBuffer::recorders_ now; build it separately
+  // via ToRecorder(rp_vec) when a Match()/Check() call needs it.
   RaySeg r{};
-  r.rp_.Clear();
-  for (auto fn : rp_vec) {
-    r.rp_ << fn;
-  }
   r.from_face_ = kInvalidId;
   r.to_face_ = kInvalidId;
   r.w_ = 1.0f;
@@ -110,26 +112,41 @@ RaySeg MakeRay(const std::vector<IdType>& rp_vec) {
   return r;
 }
 
+// Convenience wrappers: build (RaySeg, RaypathRecorder) from a raypath face
+// vector and invoke spec->Match / spec->Check. Reduces call-site noise after
+// the SoA-prize split moved RaypathRecorder out of RaySeg.
+inline bool SpecMatch(const FilterSpec* spec, const std::vector<IdType>& rp_vec) {
+  return spec->Match(MakeRay(), ToRecorder(rp_vec));
+}
+inline bool SpecCheck(const FilterSpec* spec, const std::vector<IdType>& rp_vec) {
+  return spec->Check(MakeRay(), ToRecorder(rp_vec));
+}
+
+// NOTE: MakeRay() returns a fixed direction/origin RaySeg; the raypath structure
+// these helpers used to encode via brace-list args was already discarded by
+// MakeRay's body. Callers that need raypath identity pass it directly into
+// ToRecorder()/SpecMatch()/SpecCheck(). The batch size and shape are what
+// downstream sweeps consume — see e.g. NoPerRayReinit_*.
 std::vector<RaySeg> BuildPrismRayBatch() {
   std::vector<RaySeg> rays;
   // empty raypath
-  rays.push_back(MakeRay({}));
+  rays.push_back(MakeRay());
   // single-segment basal + prism
-  rays.push_back(MakeRay({ 1 }));
-  rays.push_back(MakeRay({ 3 }));
+  rays.push_back(MakeRay());
+  rays.push_back(MakeRay());
   // pairs (a,b) ∈ {3..8}²
   for (IdType a = 3; a <= 8; a++) {
     for (IdType b = 3; b <= 8; b++) {
       if (a == b) {
         continue;
       }
-      rays.push_back(MakeRay({ a, b }));
+      rays.push_back(MakeRay());
     }
   }
   // include basal+prism mixes
-  rays.push_back(MakeRay({ 1, 3 }));
-  rays.push_back(MakeRay({ 2, 5, 1 }));
-  rays.push_back(MakeRay({ 3, 6, 4 }));
+  rays.push_back(MakeRay());
+  rays.push_back(MakeRay());
+  rays.push_back(MakeRay());
   return rays;
 }
 
@@ -138,14 +155,14 @@ std::vector<RaySeg> BuildPyramidRayBatch() {
   // pyramid + prism pairs
   for (IdType u = 13; u <= 18; u++) {
     for (IdType p = 3; p <= 8; p++) {
-      rays.push_back(MakeRay({ u, p }));
+      rays.push_back(MakeRay());
     }
   }
   for (IdType l = 23; l <= 28; l++) {
-    rays.push_back(MakeRay({ l, 4 }));
+    rays.push_back(MakeRay());
   }
-  rays.push_back(MakeRay({ 13, 5, 23 }));
-  rays.push_back(MakeRay({ 14, 25, 6 }));
+  rays.push_back(MakeRay());
+  rays.push_back(MakeRay());
   return rays;
 }
 
@@ -274,7 +291,7 @@ TEST(FilterSpecReduceRecorder, MultiSegment_Hex) {
 constexpr float kSigmaARollDeg[6] = { 0.0f, 150.0f, 120.0f, 90.0f, 60.0f, 30.0f };
 
 // Returns AssertionSuccess iff all orbit members produce Match()=true.
-// Precondition: the filter was built from seed_rp, so spec->Match(MakeRay(seed_rp))
+// Precondition: the filter was built from seed_rp, so SpecMatch(spec.get(), seed_rp)
 // must be true; if not, the FilterSpec was misconfigured and the orbit sweep would
 // be vacuously satisfied with expected=false for all members.
 ::testing::AssertionResult VerifyMatchOrbitInvariant(FilterSpec* spec, const Crystal& crystal,
@@ -284,15 +301,15 @@ constexpr float kSigmaARollDeg[6] = { 0.0f, 150.0f, 120.0f, 90.0f, 60.0f, 30.0f 
   if (orbit.empty()) {
     return ::testing::AssertionFailure() << "ExpandRaypath returned empty orbit for seed=" << FormatRaypath(seed_rp);
   }
-  RaySeg seed_ray = MakeRay(seed_rp);
-  if (!spec->Match(seed_ray)) {
+  RaySeg seed_ray = MakeRay();
+  if (!spec->Match(seed_ray, ToRecorder(seed_rp))) {
     return ::testing::AssertionFailure() << "Seed raypath " << FormatRaypath(seed_rp)
                                          << " did not match its own filter (sym=" << static_cast<int>(symmetry)
                                          << " sigma_a=" << sigma_a << ") - filter misconfigured, orbit sweep aborted";
   }
   for (size_t i = 0; i < orbit.size(); i++) {
-    RaySeg ri = MakeRay(orbit[i]);
-    if (!spec->Match(ri)) {
+    RaySeg ri = MakeRay();
+    if (!spec->Match(ri, ToRecorder(orbit[i]))) {
       return ::testing::AssertionFailure() << "Orbit member " << i << " " << FormatRaypath(orbit[i])
                                            << " Match()=false != expected=true (seed=" << FormatRaypath(seed_rp)
                                            << " sym=" << static_cast<int>(symmetry) << " sigma_a=" << sigma_a << ")";
@@ -452,20 +469,24 @@ TEST(FilterSpec_AntiPattern, NoPerRayReinit_ComplexFilter_PD_SigmaA5) {
   ASSERT_NE(spec, nullptr);
 
   std::vector<RaySeg> batch;
+  std::vector<RaypathRecorder> batch_rec;
   auto orbit = pyramid.ExpandRaypath({ 14, 6 }, kSym, /*sigma_a=*/5, /*d_applicable=*/true);
   for (const auto& rp : orbit) {
-    batch.push_back(MakeRay(rp));
+    batch.push_back(MakeRay());
+    batch_rec.push_back(ToRecorder(rp));
   }
-  batch.push_back(MakeRay({ 1 }));     // non-member: basal-only
-  batch.push_back(MakeRay({ 3, 4 }));  // non-member: prism-prism
+  batch.push_back(MakeRay());  // non-member: basal-only
+  batch_rec.push_back(ToRecorder({ 1 }));
+  batch.push_back(MakeRay());  // non-member: prism-prism
+  batch_rec.push_back(ToRecorder({ 3, 4 }));
 
   std::vector<bool> pass1;
   pass1.reserve(batch.size());
-  for (const auto& r : batch) {
-    pass1.push_back(spec->Match(r));
+  for (size_t i = 0; i < batch.size(); i++) {
+    pass1.push_back(spec->Match(batch[i], batch_rec[i]));
   }
   for (size_t i = 0; i < batch.size(); i++) {
-    EXPECT_EQ(spec->Match(batch[i]), pass1[i])
+    EXPECT_EQ(spec->Match(batch[i], batch_rec[i]), pass1[i])
         << "Pass 2 diverged at ray " << i << " - non-deterministic internal state";
   }
 }
@@ -483,16 +504,16 @@ TEST(FilterSpec_MultiCrystal, IndependentCanonical) {
 
   auto prism_orbit = prism.ExpandRaypath({ 3, 5 }, kSym, /*sigma_a=*/0, /*d_applicable=*/false);
   for (const auto& rp : prism_orbit) {
-    EXPECT_TRUE(prism_spec->Match(MakeRay(rp)))
+    EXPECT_TRUE(SpecMatch(prism_spec.get(), rp))
         << "prism orbit member " << FormatRaypath(rp) << " not matched by prism spec";
-    EXPECT_FALSE(pyr_spec->Match(MakeRay(rp)))
+    EXPECT_FALSE(SpecMatch(pyr_spec.get(), rp))
         << "prism orbit member " << FormatRaypath(rp) << " matched by pyramid spec (canonical leak)";
   }
   auto pyr_orbit = pyramid.ExpandRaypath({ 14, 6 }, kSym, /*sigma_a=*/0, /*d_applicable=*/false);
   for (const auto& rp : pyr_orbit) {
-    EXPECT_TRUE(pyr_spec->Match(MakeRay(rp)))
+    EXPECT_TRUE(SpecMatch(pyr_spec.get(), rp))
         << "pyramid orbit member " << FormatRaypath(rp) << " not matched by pyramid spec";
-    EXPECT_FALSE(prism_spec->Match(MakeRay(rp)))
+    EXPECT_FALSE(SpecMatch(prism_spec.get(), rp))
         << "pyramid orbit member " << FormatRaypath(rp) << " matched by prism spec (canonical leak)";
   }
 }
@@ -556,60 +577,60 @@ std::unique_ptr<FilterSpec> MakeDirectionSpec(float lon_deg, float lat_deg, floa
 TEST(DirectionSpec, BasicMatch) {
   auto spec = MakeDirectionSpec(0.0f, 0.0f, 10.0f);
 
-  auto r1 = MakeRay({});
+  auto r1 = MakeRay();
   r1.d_[0] = 1.0f;
   r1.d_[1] = 0.0f;
   r1.d_[2] = 0.0f;
-  EXPECT_TRUE(spec->Check(r1));
+  EXPECT_TRUE(spec->Check(r1, RaypathRecorder{}));
 
-  auto r2 = MakeRay({});
+  auto r2 = MakeRay();
   r2.d_[0] = 0.0f;
   r2.d_[1] = 1.0f;
   r2.d_[2] = 0.0f;
-  EXPECT_FALSE(spec->Check(r2));
+  EXPECT_FALSE(spec->Check(r2, RaypathRecorder{}));
 }
 
 TEST(DirectionSpec, StateAgnostic) {
   // DirectionSpec reads only d_; is_continue_ and w_ must not affect the result.
   auto spec = MakeDirectionSpec(0.0f, 0.0f, 10.0f);
 
-  auto r = MakeRay({});
+  auto r = MakeRay();
   r.d_[0] = 1.0f;
   r.d_[1] = 0.0f;
   r.d_[2] = 0.0f;
 
   r.is_continue_ = false;
   r.w_ = 1.0f;
-  EXPECT_TRUE(spec->Check(r));
+  EXPECT_TRUE(spec->Check(r, RaypathRecorder{}));
 
   r.is_continue_ = true;
-  EXPECT_TRUE(spec->Check(r));
+  EXPECT_TRUE(spec->Check(r, RaypathRecorder{}));
 
   r.w_ = -1.0f;
-  EXPECT_TRUE(spec->Check(r));
+  EXPECT_TRUE(spec->Check(r, RaypathRecorder{}));
 }
 
 TEST(DirectionSpec, FilterOut) {
   auto spec = MakeDirectionSpec(0.0f, 0.0f, 10.0f, FilterConfig::kFilterOut);
 
-  auto r1 = MakeRay({});
+  auto r1 = MakeRay();
   r1.d_[0] = 1.0f;
   r1.d_[1] = 0.0f;
   r1.d_[2] = 0.0f;
-  EXPECT_FALSE(spec->Check(r1));
+  EXPECT_FALSE(spec->Check(r1, RaypathRecorder{}));
 
-  auto r2 = MakeRay({});
+  auto r2 = MakeRay();
   r2.d_[0] = 0.0f;
   r2.d_[1] = 1.0f;
   r2.d_[2] = 0.0f;
-  EXPECT_TRUE(spec->Check(r2));
+  EXPECT_TRUE(spec->Check(r2, RaypathRecorder{}));
 
-  auto r3 = MakeRay({});
+  auto r3 = MakeRay();
   r3.d_[0] = 1.0f;
   r3.d_[1] = 0.0f;
   r3.d_[2] = 0.0f;
   r3.is_continue_ = true;
-  EXPECT_FALSE(spec->Check(r3));
+  EXPECT_FALSE(spec->Check(r3, RaypathRecorder{}));
 }
 
 // =============== EntryExitSpec Match matrix ===============
@@ -640,41 +661,41 @@ TEST(EntryExitSpec_Match, LegacySingleValue_Match) {
   Crystal prism = Crystal::CreatePrism(1.0f);
   auto spec = MakeEESpec(prism, IdType{ 3 }, IdType{ 5 });
   ASSERT_NE(spec, nullptr);
-  EXPECT_TRUE(spec->Match(MakeRay({ 3, 5 })));
-  EXPECT_TRUE(spec->Match(MakeRay({ 3, 4, 5 })));
-  EXPECT_FALSE(spec->Match(MakeRay({ 3, 4, 6 })));
-  EXPECT_FALSE(spec->Match(MakeRay({ 4, 5 })));
+  EXPECT_TRUE(SpecMatch(spec.get(), { 3, 5 }));
+  EXPECT_TRUE(SpecMatch(spec.get(), { 3, 4, 5 }));
+  EXPECT_FALSE(SpecMatch(spec.get(), { 3, 4, 6 }));
+  EXPECT_FALSE(SpecMatch(spec.get(), { 4, 5 }));
 }
 
 TEST(EntryExitSpec_Match, WildcardEntry_OnlyExitConstrains) {
   Crystal prism = Crystal::CreatePrism(1.0f);
   auto spec = MakeEESpec(prism, std::nullopt, IdType{ 5 });
   ASSERT_NE(spec, nullptr);
-  EXPECT_TRUE(spec->Match(MakeRay({ 3, 5 })));
-  EXPECT_TRUE(spec->Match(MakeRay({ 7, 5 })));
-  EXPECT_TRUE(spec->Match(MakeRay({ 5 })));      // size=1: ee={5} matches
-  EXPECT_FALSE(spec->Match(MakeRay({ 3, 4 })));  // exit != 5
-  EXPECT_FALSE(spec->Match(MakeRay({ 5, 7 })));  // last = 7
+  EXPECT_TRUE(SpecMatch(spec.get(), { 3, 5 }));
+  EXPECT_TRUE(SpecMatch(spec.get(), { 7, 5 }));
+  EXPECT_TRUE(SpecMatch(spec.get(), { 5 }));      // size=1: ee={5} matches
+  EXPECT_FALSE(SpecMatch(spec.get(), { 3, 4 }));  // exit != 5
+  EXPECT_FALSE(SpecMatch(spec.get(), { 5, 7 }));  // last = 7
 }
 
 TEST(EntryExitSpec_Match, WildcardExit_OnlyEntryConstrains) {
   Crystal prism = Crystal::CreatePrism(1.0f);
   auto spec = MakeEESpec(prism, IdType{ 3 }, std::nullopt);
   ASSERT_NE(spec, nullptr);
-  EXPECT_TRUE(spec->Match(MakeRay({ 3, 5 })));
-  EXPECT_TRUE(spec->Match(MakeRay({ 3, 4, 7 })));
-  EXPECT_TRUE(spec->Match(MakeRay({ 3 })));
-  EXPECT_FALSE(spec->Match(MakeRay({ 4, 5 })));  // entry != 3
+  EXPECT_TRUE(SpecMatch(spec.get(), { 3, 5 }));
+  EXPECT_TRUE(SpecMatch(spec.get(), { 3, 4, 7 }));
+  EXPECT_TRUE(SpecMatch(spec.get(), { 3 }));
+  EXPECT_FALSE(SpecMatch(spec.get(), { 4, 5 }));  // entry != 3
 }
 
 TEST(EntryExitSpec_Match, DoubleWildcard_AcceptsAnyNonEmpty) {
   Crystal prism = Crystal::CreatePrism(1.0f);
   auto spec = MakeEESpec(prism, std::nullopt, std::nullopt);
   ASSERT_NE(spec, nullptr);
-  EXPECT_TRUE(spec->Match(MakeRay({ 3 })));
-  EXPECT_TRUE(spec->Match(MakeRay({ 3, 5 })));
-  EXPECT_TRUE(spec->Match(MakeRay({ 1, 2, 4 })));
-  EXPECT_FALSE(spec->Match(MakeRay({})));  // empty path always rejected
+  EXPECT_TRUE(SpecMatch(spec.get(), { 3 }));
+  EXPECT_TRUE(SpecMatch(spec.get(), { 3, 5 }));
+  EXPECT_TRUE(SpecMatch(spec.get(), { 1, 2, 4 }));
+  EXPECT_FALSE(SpecMatch(spec.get(), {}));  // empty path always rejected
 }
 
 TEST(EntryExitSpec_Match, SameFaceReflection_size1_Match) {
@@ -682,27 +703,27 @@ TEST(EntryExitSpec_Match, SameFaceReflection_size1_Match) {
   Crystal prism = Crystal::CreatePrism(1.0f);
   auto spec = MakeEESpec(prism, IdType{ 3 }, IdType{ 3 });
   ASSERT_NE(spec, nullptr);
-  EXPECT_TRUE(spec->Match(MakeRay({ 3 })));
-  EXPECT_TRUE(spec->Match(MakeRay({ 3, 5, 3 })));  // also matches longer paths starting+ending on 3
-  EXPECT_FALSE(spec->Match(MakeRay({ 3, 5 })));    // entry=3, exit=5
+  EXPECT_TRUE(SpecMatch(spec.get(), { 3 }));
+  EXPECT_TRUE(SpecMatch(spec.get(), { 3, 5, 3 }));  // also matches longer paths starting+ending on 3
+  EXPECT_FALSE(SpecMatch(spec.get(), { 3, 5 }));    // entry=3, exit=5
 }
 
 TEST(EntryExitSpec_Match, StrictLength_Match) {
   Crystal prism = Crystal::CreatePrism(1.0f);
   auto spec = MakeEESpec(prism, IdType{ 3 }, IdType{ 5 }, /*min_len=*/2, /*max_len=*/2);
   ASSERT_NE(spec, nullptr);
-  EXPECT_TRUE(spec->Match(MakeRay({ 3, 5 })));      // size=2 strict
-  EXPECT_FALSE(spec->Match(MakeRay({ 3, 4, 5 })));  // size=3 rejected
-  EXPECT_FALSE(spec->Match(MakeRay({ 3 })));        // size=1 < min
+  EXPECT_TRUE(SpecMatch(spec.get(), { 3, 5 }));      // size=2 strict
+  EXPECT_FALSE(SpecMatch(spec.get(), { 3, 4, 5 }));  // size=3 rejected
+  EXPECT_FALSE(SpecMatch(spec.get(), { 3 }));        // size=1 < min
 }
 
 TEST(EntryExitSpec_Match, UpperBound_Match) {
   Crystal prism = Crystal::CreatePrism(1.0f);
   auto spec = MakeEESpec(prism, IdType{ 3 }, IdType{ 5 }, /*min_len=*/1, /*max_len=*/3);
   ASSERT_NE(spec, nullptr);
-  EXPECT_TRUE(spec->Match(MakeRay({ 3, 5 })));
-  EXPECT_TRUE(spec->Match(MakeRay({ 3, 4, 5 })));
-  EXPECT_FALSE(spec->Match(MakeRay({ 3, 4, 6, 5 })));  // size=4 > max
+  EXPECT_TRUE(SpecMatch(spec.get(), { 3, 5 }));
+  EXPECT_TRUE(SpecMatch(spec.get(), { 3, 4, 5 }));
+  EXPECT_FALSE(SpecMatch(spec.get(), { 3, 4, 6, 5 }));  // size=4 > max
 }
 
 TEST(EntryExitSpec_Match, RangeBound_WildcardEnds) {
@@ -710,11 +731,11 @@ TEST(EntryExitSpec_Match, RangeBound_WildcardEnds) {
   Crystal prism = Crystal::CreatePrism(1.0f);
   auto spec = MakeEESpec(prism, std::nullopt, std::nullopt, /*min_len=*/2, /*max_len=*/4);
   ASSERT_NE(spec, nullptr);
-  EXPECT_FALSE(spec->Match(MakeRay({ 3 })));  // size=1 < min
-  EXPECT_TRUE(spec->Match(MakeRay({ 3, 5 })));
-  EXPECT_TRUE(spec->Match(MakeRay({ 3, 4, 5 })));
-  EXPECT_TRUE(spec->Match(MakeRay({ 3, 4, 6, 5 })));
-  EXPECT_FALSE(spec->Match(MakeRay({ 3, 4, 5, 6, 7 })));  // size=5 > max
+  EXPECT_FALSE(SpecMatch(spec.get(), { 3 }));  // size=1 < min
+  EXPECT_TRUE(SpecMatch(spec.get(), { 3, 5 }));
+  EXPECT_TRUE(SpecMatch(spec.get(), { 3, 4, 5 }));
+  EXPECT_TRUE(SpecMatch(spec.get(), { 3, 4, 6, 5 }));
+  EXPECT_FALSE(SpecMatch(spec.get(), { 3, 4, 5, 6, 7 }));  // size=5 > max
 }
 
 TEST(EntryExitSpec_Match, NoUpperBoundDefault_AcceptsLongPath) {
@@ -726,7 +747,7 @@ TEST(EntryExitSpec_Match, NoUpperBoundDefault_AcceptsLongPath) {
     long_path.push_back(static_cast<IdType>(4 + (i % 4)));
   }
   long_path.push_back(5);
-  EXPECT_TRUE(spec->Match(MakeRay(long_path)));
+  EXPECT_TRUE(SpecMatch(spec.get(), long_path));
 }
 
 TEST(EntryExitSpec_Match, EmptyRay_RejectedRegardlessOfWildcards) {
@@ -736,7 +757,7 @@ TEST(EntryExitSpec_Match, EmptyRay_RejectedRegardlessOfWildcards) {
       auto spec = MakeEESpec(prism, e_wild ? std::optional<IdType>{} : std::optional<IdType>{ 3 },
                              x_wild ? std::optional<IdType>{} : std::optional<IdType>{ 5 });
       ASSERT_NE(spec, nullptr);
-      EXPECT_FALSE(spec->Match(MakeRay({}))) << "e_wild=" << e_wild << " x_wild=" << x_wild;
+      EXPECT_FALSE(SpecMatch(spec.get(), {})) << "e_wild=" << e_wild << " x_wild=" << x_wild;
     }
   }
 }
@@ -745,9 +766,9 @@ TEST(EntryExitSpec_Match, MinLenAboveSize_Rejects) {
   Crystal prism = Crystal::CreatePrism(1.0f);
   auto spec = MakeEESpec(prism, std::nullopt, std::nullopt, /*min_len=*/3, /*max_len=*/std::nullopt);
   ASSERT_NE(spec, nullptr);
-  EXPECT_FALSE(spec->Match(MakeRay({ 3 })));
-  EXPECT_FALSE(spec->Match(MakeRay({ 3, 5 })));
-  EXPECT_TRUE(spec->Match(MakeRay({ 3, 5, 7 })));
+  EXPECT_FALSE(SpecMatch(spec.get(), { 3 }));
+  EXPECT_FALSE(SpecMatch(spec.get(), { 3, 5 }));
+  EXPECT_TRUE(SpecMatch(spec.get(), { 3, 5, 7 }));
 }
 
 // PBD symmetry: every orbit member of (entry=3, exit=5) under PBD must
@@ -764,7 +785,7 @@ TEST(EntryExitSpec_Match, PBD_OrbitInvariant) {
     for (size_t i = 0; i < orbit.size(); i++) {
       SCOPED_TRACE("sigma_a=" + std::to_string(sigma_a) + " orbit[" + std::to_string(i) +
                    "]=" + FormatRaypath(orbit[i]));
-      EXPECT_TRUE(spec->Match(MakeRay(orbit[i])));
+      EXPECT_TRUE(SpecMatch(spec.get(), orbit[i]));
     }
   }
 }
