@@ -117,8 +117,7 @@ int PhysicalCoreCountWin() {
   if (len == 0) {
     return 0;
   }
-  std::vector<SYSTEM_LOGICAL_PROCESSOR_INFORMATION> buf(
-      len / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION));
+  std::vector<SYSTEM_LOGICAL_PROCESSOR_INFORMATION> buf(len / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION));
   if (!GetLogicalProcessorInformation(buf.data(), &len)) {
     return 0;
   }
