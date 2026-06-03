@@ -17,6 +17,7 @@
 // clang-format on
 
 #include "lumice.h"
+#include "util/cpu_info.hpp"
 
 #ifdef _WIN32
 #define STBIW_WINDOWS_UTF8
@@ -255,7 +256,7 @@ int main(int argc, char** argv) {
     }
 
     auto cores = static_cast<int>(std::thread::hardware_concurrency());
-    int multi_workers = cores > 0 ? cores : 1;
+    int multi_workers = lumice::PhysicalCoreCount();
 
     // Pass 1: single worker, reduced rays
     auto single_config = config_json;

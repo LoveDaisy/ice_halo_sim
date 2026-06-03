@@ -181,7 +181,7 @@ class Server {
 
   /**
    * @brief Construct a new Server with specified worker count
-   * @param num_workers Number of simulator worker threads. 0 = default (hardware_concurrency - 2)
+   * @param num_workers Number of simulator worker threads. 0 = default (physical core count)
    * @param sim_seed Deterministic RNG seed. 0 = random. Non-zero collapses to 1 worker.
    * @note The server starts running immediately after construction
    */
