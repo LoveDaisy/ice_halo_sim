@@ -23,6 +23,7 @@
 #include "server/render.hpp"
 #include "server/server.hpp"
 #include "server/stats.hpp"
+#include "util/cpu_info.hpp"
 #include "util/logger.hpp"
 #include "util/queue.hpp"
 
@@ -70,7 +71,7 @@ class ServerImpl {
   bool IsIdle();
 
  private:
-  static const int kDefaultSimulatorCnt;  // runtime: max(1, hardware_concurrency - 2)
+  static const int kDefaultSimulatorCnt;  // runtime: PhysicalCoreCount() (SMT siblings left for consumer + OS)
   static constexpr int kMaxSceneCnt = 128;
   static constexpr size_t kDefaultRayNum = 128;
 
@@ -136,7 +137,7 @@ class ServerImpl {
   Logger& GetLogger() { return logger_; }
 };
 
-const int ServerImpl::kDefaultSimulatorCnt = std::max(1, static_cast<int>(std::thread::hardware_concurrency()) - 2);
+const int ServerImpl::kDefaultSimulatorCnt = PhysicalCoreCount();
 
 
 template <typename F>
