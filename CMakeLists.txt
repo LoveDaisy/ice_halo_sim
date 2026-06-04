@@ -214,6 +214,20 @@ set(lumice_core_src
   "${PROJ_SRC_DIR}/core/raypath.cpp"
   "${PROJ_SRC_DIR}/core/simulator.cpp")
 
+# Metal backend (Apple only). The .mm file embeds trace_layer.metal as a C++
+# string literal and is the single compiled source for the GPU kernel; the
+# adjacent trace_layer.metal file is kept for standalone syntax checks with
+# `xcrun -sdk macosx metal -c` and as a readable reference. The two must stay
+# in sync — any edit to trace_layer.metal must be mirrored into the embedded
+# kKernelSrc string in metal_trace_backend.mm.
+if(APPLE)
+  list(APPEND lumice_core_src
+    "${PROJ_SRC_DIR}/core/metal_trace_backend.mm")
+  set_source_files_properties(
+    "${PROJ_SRC_DIR}/core/metal_trace_backend.mm"
+    PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+endif()
+
 set(lumice_server_src
   "${PROJ_SRC_DIR}/server/c_api.cpp"
   "${PROJ_SRC_DIR}/server/render.cpp"
@@ -242,6 +256,9 @@ target_include_directories(lumice_obj
     $<INSTALL_INTERFACE:include>
     ${lumice_include})
 target_link_libraries(lumice_obj PUBLIC nlohmann_json::nlohmann_json spdlog::spdlog_header_only tl::expected Threads::Threads)
+if(APPLE)
+  target_link_libraries(lumice_obj PUBLIC "-framework Metal" "-framework Foundation")
+endif()
 
 if(NOT MSVC)
   target_compile_options(lumice_obj PRIVATE

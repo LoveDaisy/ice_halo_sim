@@ -1,14 +1,15 @@
 #ifndef CORE_METAL_TRACE_BACKEND_H_
 #define CORE_METAL_TRACE_BACKEND_H_
 
-// Pure C++ Metal-backend skeleton. Provided to validate the TraceBackend seam
-// from a SECOND, orthogonal vantage point (see core/trace_backend.hpp design
-// invariant #4). Compiles on Apple platforms only.
+// Metal backend for the TraceBackend seam (Apple platforms only).
 //
-// This header intentionally does NOT depend on Metal/Metal.h. The real
-// kernels live in a future companion `.mm` translation unit; the stub here
-// only proves the contract can be implemented under a discrete-memory
-// device-pointer model.
+// This header is intentionally pure C++ and does NOT depend on Metal/Metal.h:
+// the Objective-C++ implementation (`metal_trace_backend.mm`) hides all Metal
+// types behind an opaque pimpl. The seam validates the contract from a second,
+// orthogonal vantage point (see core/trace_backend.hpp design invariant #4) —
+// recorder runs backend-local, continuation rays stay device-resident across
+// the layer boundary, and only a 4-byte counter readback crosses host/device
+// mid-session.
 
 #if defined(__APPLE__)
 
@@ -19,74 +20,38 @@
 
 namespace lumice {
 
-// MetalLayerHandle — in a real implementation this would own:
-//   id<MTLBuffer> continuation_rays_;          // d/p/w/tf/rec parallel SoA on device
-//   id<MTLBuffer> outgoing_d_;                 // streaming-compact append buf
-//   id<MTLBuffer> outgoing_w_;
-//   uint32_t continuation_count_host_mirror_;  // sole host-visible scalar
-// All of the above stay device-resident across the layer's Trace+Scatter
-// kernels — the host only observes the count via a tiny readback.
+// MetalLayerHandle — the only host-visible scalar produced per TraceLayer is
+// the continuation count (populated from a 4-byte device readback, equivalent
+// to a 4-byte cudaMemcpy for CUDA backends). Continuation ray buffers
+// themselves are owned by the backend's session-level pool (Impl::cont_*).
 class MetalLayerHandle : public LayerHandle {
  public:
-  MetalLayerHandle() = default;
+  explicit MetalLayerHandle(size_t continuation_count) : continuation_count_(continuation_count) {}
   size_t ContinuationCount() const override { return continuation_count_; }
 
  private:
-  // Only this scalar is host-visible mid-session (populated from a 4-byte
-  // device readback, equivalent to a 4-byte cudaMemcpy for CUDA backends).
-  // Continuation ray buffers themselves live in device memory.
   size_t continuation_count_ = 0;
 };
 
-// Metal-skeleton backend.
-//
-// State machine + lifetime contracts are inherited from TraceBackend; see
-// core/trace_backend.hpp. The methods below are intentionally stubs — they
-// exist to prove the seam compiles and links under the Metal vantage point.
 class MetalTraceBackend : public TraceBackend {
  public:
-  MetalTraceBackend() = default;
-  ~MetalTraceBackend() override = default;
+  MetalTraceBackend();
+  ~MetalTraceBackend() override;
 
-  // Real impl: allocate persistent device buffers (xyz accumulator W*H*3,
-  // continuation pool capped at AllocateAllData(...) bound), build pipeline
-  // state objects for trace/scatter kernels, capture spec.scene/spec.render
-  // pointers.
-  void BeginSession(const SessionSpec& spec) override { (void)spec; }
+  MetalTraceBackend(const MetalTraceBackend&) = delete;
+  MetalTraceBackend(MetalTraceBackend&&) = delete;
+  MetalTraceBackend& operator=(const MetalTraceBackend&) = delete;
+  MetalTraceBackend& operator=(MetalTraceBackend&&) = delete;
 
-  // Real impl: encode a single MTLComputeCommandEncoder that runs the fused
-  // trace -> recorder -> projection -> XYZ scatter-add kernel chain.
-  // No mid-pipeline kernel boundaries — that is the GPU performance lever
-  // (design invariant #1, core/trace_backend.hpp). Returns a
-  // MetalLayerHandle whose `continuation_count_host_mirror_` is the only
-  // host-visible scalar (matching the CUDA contract: 4-byte readback).
-  LayerHandlePtr TraceLayer(const RootRaySource& roots) override {
-    (void)roots;
-    return std::make_unique<MetalLayerHandle>();
-  }
+  void BeginSession(const SessionSpec& spec) override;
+  LayerHandlePtr TraceLayer(const RootRaySource& roots) override;
+  RootRaySource Recombine(LayerHandlePtr handle, const RecombineSpec& spec) override;
+  void ReadbackImage(XyzImageData& out) override;
+  void EndSession() override;
 
-  // Real impl: dispatch a stream-compaction kernel over the LayerHandle's
-  // continuation buffer (M2 unified memory makes this conceptually cheap;
-  // the contract still pretends a PCIe transfer separates host/device so the
-  // discrete-CUDA path inherits the same seam unchanged — see
-  // core/trace_backend.hpp design invariant #3). DeviceRayBatch::backend_ptr
-  // would map to a freshly-bound id<MTLBuffer> that the caller MUST NOT
-  // free; lifetime ends at the next Recombine OR EndSession.
-  RootRaySource Recombine(LayerHandlePtr handle, const RecombineSpec& spec) override {
-    (void)handle;
-    (void)spec;
-    DeviceRayBatch d;
-    d.backend_ptr = nullptr;  // would be an id<MTLBuffer> cast
-    d.count = 0;
-    return RootRaySource::FromDevice(d);
-  }
-
-  // Real impl: blitEncoder copyFromBuffer(xyz_accumulator) to a host-shared
-  // buffer, then memcpy into out.data. This is the sole device->host
-  // boundary, mirroring CUDA's PCIe XYZ readback (W*H*3*sizeof(float)).
-  void ReadbackImage(XyzImageData& out) override { (void)out; }
-
-  void EndSession() override {}
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace lumice

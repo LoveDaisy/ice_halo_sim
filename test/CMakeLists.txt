@@ -37,6 +37,7 @@ add_executable(unit_test
   "${PROJ_TEST_DIR}/test_ev_auto.cpp"
   "${PROJ_TEST_DIR}/test_cpu_info.cpp"
   "${PROJ_TEST_DIR}/test_cpu_trace_backend.cpp"
+  "${PROJ_TEST_DIR}/test_metal_trace_backend.cpp"
   "${PROJ_TEST_DIR}/test_main.cpp")
 target_include_directories(unit_test
   PRIVATE ${PROJ_TEST_DIR})
