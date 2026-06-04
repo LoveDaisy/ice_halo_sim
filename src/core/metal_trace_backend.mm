@@ -1,8 +1,8 @@
 // Metal backend for TraceBackend (Apple platforms). Pimpl over Objective-C
 // Metal types so the public header stays pure C++. The kernel source is
-// embedded as the kKernelSrc C++ string below; src/core/trace_layer.metal is
-// the syntax-check / readable reference — both MUST stay byte-equivalent
-// (modulo the leading copyright/comment lines).
+// embedded as the kKernelSrc C++ string below; doc/trace_layer.metal is
+// the syntax-check / readable reference — both MUST stay logically equivalent
+// (kernel body identical; the .metal file may carry additional comments).
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -32,7 +32,7 @@ namespace lumice {
 
 namespace {
 
-// Mirror of src/core/trace_layer.metal. Edit both in lock-step.
+// Mirror of doc/trace_layer.metal. Edit both in lock-step.
 constexpr const char* kKernelSrc = R"METAL(
 #include <metal_stdlib>
 using namespace metal;
@@ -105,7 +105,7 @@ kernel void trace_layer_kernel(
   uint   rec_len = 0u;
 
   for (uint hit = 0u; hit < prm.max_hits; hit++) {
-    if (to_face == kInvalidId) { continue; }
+    if (to_face == kInvalidId) { break; }
     if (rec_len < kRecCap) { path[rec_len] = to_face; rec_len += 1u; }
 
     float nx = poly_n[to_face * 3u + 0u];
@@ -241,6 +241,8 @@ struct KernelParams {
   uint32_t ms_mode;
   uint32_t out_cap;
 };
+static_assert(sizeof(KernelParams) == 48u,
+              "KernelParams size mismatch — update host struct to match Metal-side layout");
 
 float ComputeAz0(const Rotation& rot) {
   float ax_z[3]{ 0.0f, 0.0f, 1.0f };
@@ -319,6 +321,7 @@ struct MetalTraceBackend::Impl {
   id<MTLBuffer> counter_buf  = nil;
   id<MTLBuffer> rec_sink_buf = nil;
   size_t        rec_sink_capacity = 0;
+  size_t        max_produced = 0;
 
   // Layer dispatch helpers.
   void EnsureDevice();
@@ -373,12 +376,17 @@ void MetalTraceBackend::Impl::EnsurePso() {
     opts.fastMathEnabled = NO;
   }
   id<MTLLibrary> lib = [device newLibraryWithSource:src options:opts error:&err];
-  assert(lib != nil && "MetalTraceBackend: kernel compile failed");
-  (void)err;
+  if (lib == nil) {
+    NSLog(@"MetalTraceBackend: kernel compile failed: %@", err.localizedDescription);
+    assert(false && "MetalTraceBackend: kernel compile failed");
+  }
   id<MTLFunction> fn = [lib newFunctionWithName:@"trace_layer_kernel"];
   assert(fn != nil && "MetalTraceBackend: kernel entry point missing");
   pso = [device newComputePipelineStateWithFunction:fn error:&err];
-  assert(pso != nil && "MetalTraceBackend: pipeline state creation failed");
+  if (pso == nil) {
+    NSLog(@"MetalTraceBackend: pipeline state creation failed: %@", err.localizedDescription);
+    assert(false && "MetalTraceBackend: pipeline state creation failed");
+  }
 }
 
 void MetalTraceBackend::Impl::EnsureImage(int w, int h) {
@@ -574,12 +582,24 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   [cb commit];
   [cb waitUntilCompleted];
 
+  if (cb.status != MTLCommandBufferStatusCompleted) {
+    NSLog(@"MetalTraceBackend: GPU dispatch failed: %@", cb.error.localizedDescription);
+    assert(false && "MetalTraceBackend: GPU dispatch failed");
+  }
+
   uint32_t produced = *static_cast<uint32_t*>([counter_buf contents]);
   assert(produced <= out_cap && "MetalTraceBackend: continuation overflow");
+  if (produced > max_produced) {
+    max_produced = produced;
+  }
   cont_counts[out_slot] = produced;
 }
 
 void MetalTraceBackend::Impl::Reset() {
+  if (max_produced > 0) {
+    NSLog(@"MetalTraceBackend: session ended — max continuation produced=%zu (out_cap=%zu)",
+          max_produced, out_cap);
+  }
   in_session = false;
   ms_idx = 0;
   root_ray_count = 0;
@@ -590,6 +610,7 @@ void MetalTraceBackend::Impl::Reset() {
   have_crystal = false;
   current_n_idx = 0.0f;
   out_cap = 0;
+  max_produced = 0;
   cont_counts[0] = cont_counts[1] = 0;
   spec = SessionSpec{};
 }
@@ -607,6 +628,11 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   assert(spec.render != nullptr);
   assert(spec.render->lens_.type_ == LensParam::kRectangular &&
          "MetalTraceBackend v1 requires kRectangular lens");
+  // az0-projection is only equivalent to RectangularProject at zenith view
+  // (el=90°, ro=0°). Enforce here to avoid silent projection errors for
+  // non-zenith cameras.
+  assert(std::abs(spec.render->view_.el_ - 90.0f) < 0.01f &&
+         "MetalTraceBackend v1 requires zenith view (el≈90°)");
 
   impl_->spec = spec;
   impl_->in_session = true;
@@ -644,11 +670,12 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     size_t total_ray_num = first_ms ? roots.host.count : roots.device.count;
     if (first_ms) {
       impl_->root_ray_count = total_ray_num;
-      // Allocate continuation pool sized to first-layer root count. The cap
-      // here is held across the session (subsequent layers reuse the same
-      // pool since fan-out per layer cannot exceed the first-layer N's bound).
-      impl_->out_cap = ComputeOutCap(total_ray_num, impl_->spec.scene->max_hits_);
     }
+    // Recalculate out_cap per layer so each layer's continuation buffer is
+    // sized to the actual fan-out from that layer's input count. This matters
+    // for ≥3 MS layers where the fan-out from layer N can exceed the root-count
+    // bound used by layer 0.
+    impl_->out_cap = ComputeOutCap(total_ray_num, impl_->spec.scene->max_hits_);
     if (total_ray_num == 0) {
       return std::make_unique<MetalLayerHandle>(0u);
     }

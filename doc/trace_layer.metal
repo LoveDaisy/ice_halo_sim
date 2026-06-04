@@ -1,10 +1,11 @@
 // Lumice Metal trace kernel — fused trace + recorder + (equirect XYZ
 // accumulate | device-side compaction append) for one MS layer.
 //
-// IMPORTANT: this file is the readable reference and the standalone-syntax
-// check target (compile with `xcrun -sdk macosx metal -c trace_layer.metal`).
-// The runtime source is the kKernelSrc string literal embedded in
-// metal_trace_backend.mm — any edit here MUST be mirrored there.
+// IMPORTANT: this file (doc/trace_layer.metal) is the readable reference and
+// standalone syntax-check target (`xcrun -sdk macosx metal -c trace_layer.metal`).
+// It is NOT compiled by the build system. The runtime source is the kKernelSrc
+// string literal in src/core/metal_trace_backend.mm — the two MUST stay
+// logically equivalent (kernel body identical; this file may carry extra comments).
 //
 // Kernel form follows trace_full.metal from the explore spike
 // (scratchpad/explore-gpu-metal-trace-spike/spike/trace_full.metal): one
@@ -96,7 +97,7 @@ kernel void trace_layer_kernel(
   uint   rec_len = 0u;
 
   for (uint hit = 0u; hit < prm.max_hits; hit++) {
-    if (to_face == kInvalidId) { continue; }
+    if (to_face == kInvalidId) { break; }
     if (rec_len < kRecCap) { path[rec_len] = to_face; rec_len += 1u; }
 
     float nx = poly_n[to_face * 3u + 0u];
