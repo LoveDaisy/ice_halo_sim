@@ -209,9 +209,11 @@ class LayerHandle {
   // filter-pass + prob-pass and should feed the next MS layer).
   virtual size_t ContinuationCount() const = 0;
 
-  // Aggregate exit-ray stats for this layer. See LayerStats above. Used by
-  // the CPU-vs-Metal parity harness; every backend's LayerHandle subclass
-  // must populate these during the producing TraceLayer call.
+  // Aggregate exit-ray stats for this layer. See LayerStats above.
+  // Consumed exclusively by the CPU-vs-Metal parity harness
+  // (test_metal_trace_parity.cpp); no production code path calls this.
+  // Future backends may provide a stub returning LayerStats{} if exit stats
+  // are unavailable (e.g. async kernels).
   virtual LayerStats GetLayerStats() const = 0;
 
   LayerHandle(const LayerHandle&) = delete;

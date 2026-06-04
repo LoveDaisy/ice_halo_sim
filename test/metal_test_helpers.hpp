@@ -62,6 +62,9 @@ inline SceneConfig MakeMetalScene(size_t max_hits, size_t ms_layers) {
       d = Distribution{ DistributionType::kNoRandom, 1.0f, 0.0f };
     }
     s.crystal_.param_ = prism;
+    // Value-init the filter so its POD members (id_, symmetry_) are zeroed
+    // rather than left as stack residue — uninitialized symmetry_ leaks into
+    // FilterSpec::Create as a bit-pattern that can reject every ray.
     s.filter_ = FilterConfig{};
     s.crystal_proportion_ = 1.0f;
     ms.setting_.push_back(std::move(s));

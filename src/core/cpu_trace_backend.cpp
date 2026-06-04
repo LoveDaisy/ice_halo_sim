@@ -235,11 +235,16 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
   auto handle = std::make_unique<CpuLayerHandle>();
   handle->continuation_ = std::move(cont_collect);
   // Aggregate exit-ray stats for parity harness (CPU-vs-Metal oracle).
-  // outgoing_w holds one weight per ray that left the crystal this layer.
-  handle->stats_.exit_count = outgoing_w.size();
+  // All rays that left the crystal = XYZ-bound (outgoing_w) + continuation
+  // (handle->continuation_). Note: CPU applies ms.prob_ routing so
+  // exit_count < Metal v1 (pass-all) on non-final layers by design.
+  handle->stats_.exit_count = outgoing_w.size() + handle->continuation_.size_;
   float w_sum = 0.0f;
   for (float w : outgoing_w) {
     w_sum += w;
+  }
+  for (size_t i = 0; i < handle->continuation_.size_; i++) {
+    w_sum += handle->continuation_[i].w_;
   }
   handle->stats_.exit_w_sum = w_sum;
   return handle;

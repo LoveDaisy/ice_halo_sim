@@ -345,7 +345,7 @@ struct MetalTraceBackend::Impl {
   void EnsureRootBuffers(size_t n);
   void EnsureContBuffer(int slot);
   void EnsureRecSink(size_t n);
-  void EnsureStatBuffers();
+  void EnsureAndResetStatBuffers();
   void UploadCrystal(const Crystal& crystal);
   void ResolveLayerCrystal(const MsInfo& ms_info, bool first_ms,
                            const HostRayBatch& host_batch);
@@ -469,7 +469,7 @@ void MetalTraceBackend::Impl::EnsureContBuffer(int slot) {
   assert(cont_tf[slot] != nil);
 }
 
-void MetalTraceBackend::Impl::EnsureStatBuffers() {
+void MetalTraceBackend::Impl::EnsureAndResetStatBuffers() {
   if (exit_count_buf == nil) {
     exit_count_buf = [device newBufferWithLength:sizeof(uint32_t)
                                          options:MTLResourceStorageModeShared];
@@ -590,7 +590,7 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
 
   EnsureRecSink(num_rays);
   EnsureContBuffer(out_slot);
-  EnsureStatBuffers();
+  EnsureAndResetStatBuffers();
 
   // Counter buffer: reset to 0 before each dispatch.
   if (counter_buf == nil) {

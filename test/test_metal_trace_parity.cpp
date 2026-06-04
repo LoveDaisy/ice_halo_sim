@@ -101,6 +101,12 @@ struct OracleLayerResult {
 
 // Run one MS layer of the kernel-mirror oracle.
 //
+// THIS FUNCTION MUST STAY IN SYNC WITH kKernelSrc (metal_trace_backend.mm).
+// It mirrors the per-thread logic of the Metal compute kernel: single-path
+// refract-priority follow, argmax-facing re-entry, float Fresnel weights.
+// If the Metal kernel's physical model changes (refraction weights, face
+// selection, etc.), update this oracle accordingly.
+//
 // roots_* are crystal-local input rays (matching MetalTraceBackend's first-
 // layer upload format from GenerateFirstLayerRoots). The function does NOT
 // project — accumulating the exit rays into an XYZ image is the caller's
@@ -191,6 +197,8 @@ OracleLayerResult OracleTraceLayer(const Crystal& crystal, const PolyArrays& pol
         }
         float eps_thr = (to_face != kInvalidId && far_face != static_cast<int>(to_face)) ? -kFloatEps : kFloatEps;
         if (far_face >= 0 && t_far > eps_thr) {
+          // Refract (ch==1) overwrites reflect (ch==0): single-path priority.
+          // Reflect energy is intentionally discarded (mirrors kernel).
           cont_face = static_cast<IdType>(far_face);
           c_dx = cdx;
           c_dy = cdy;
@@ -313,10 +321,12 @@ FirstLayerRoots BuildFirstLayerRoots(RandomNumberGenerator& rng, const SessionSp
 // Seed both the per-call RNG and the global RNG identically to
 // MetalTraceBackend::BeginSession's first lines.
 void SeedRngsLikeMetal(RandomNumberGenerator& rng, uint32_t seed) {
-  if (seed != 0) {
-    rng.SetSeed(seed);
-    RandomNumberGenerator::GetInstance().SetSeed(seed);
-  }
+  // seed=0 is a special "no-reseed" sentinel in MetalTraceBackend; oracle
+  // cannot match Metal's RNG state in that case. Guard to prevent silent
+  // parity divergence if a test ever passes seed=0.
+  ASSERT_NE(seed, 0u) << "seed=0 not supported by oracle (RNG state unknown)";
+  rng.SetSeed(seed);
+  RandomNumberGenerator::GetInstance().SetSeed(seed);
 }
 
 // =============================================================================
