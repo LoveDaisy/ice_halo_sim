@@ -407,10 +407,13 @@ void MetalTraceBackend::Impl::EnsurePolyBuffers(size_t poly_cnt) {
   poly_capacity = poly_cnt;
   poly_n_buf  = [device newBufferWithLength:poly_cnt * 3 * sizeof(float)
                                     options:MTLResourceStorageModeShared];
+  assert(poly_n_buf != nil);
   poly_d_buf  = [device newBufferWithLength:poly_cnt * sizeof(float)
                                     options:MTLResourceStorageModeShared];
+  assert(poly_d_buf != nil);
   centroid_buf = [device newBufferWithLength:poly_cnt * 3 * sizeof(float)
                                      options:MTLResourceStorageModeShared];
+  assert(centroid_buf != nil);
 }
 
 void MetalTraceBackend::Impl::EnsureRootBuffers(size_t n) {
@@ -420,12 +423,16 @@ void MetalTraceBackend::Impl::EnsureRootBuffers(size_t n) {
   root_capacity = n;
   root_d_buf  = [device newBufferWithLength:n * 3 * sizeof(float)
                                     options:MTLResourceStorageModeShared];
+  assert(root_d_buf != nil);
   root_p_buf  = [device newBufferWithLength:n * 3 * sizeof(float)
                                     options:MTLResourceStorageModeShared];
+  assert(root_p_buf != nil);
   root_w_buf  = [device newBufferWithLength:n * sizeof(float)
                                     options:MTLResourceStorageModeShared];
+  assert(root_w_buf != nil);
   root_tf_buf = [device newBufferWithLength:n * sizeof(uint16_t)
                                     options:MTLResourceStorageModeShared];
+  assert(root_tf_buf != nil);
 }
 
 void MetalTraceBackend::Impl::EnsureContBuffer(int slot) {
@@ -435,12 +442,16 @@ void MetalTraceBackend::Impl::EnsureContBuffer(int slot) {
   cont_capacity[slot] = out_cap;
   cont_d[slot]  = [device newBufferWithLength:out_cap * 3 * sizeof(float)
                                       options:MTLResourceStorageModeShared];
+  assert(cont_d[slot] != nil);
   cont_p[slot]  = [device newBufferWithLength:out_cap * 3 * sizeof(float)
                                       options:MTLResourceStorageModeShared];
+  assert(cont_p[slot] != nil);
   cont_w[slot]  = [device newBufferWithLength:out_cap * sizeof(float)
                                       options:MTLResourceStorageModeShared];
+  assert(cont_w[slot] != nil);
   cont_tf[slot] = [device newBufferWithLength:out_cap * sizeof(uint16_t)
                                       options:MTLResourceStorageModeShared];
+  assert(cont_tf[slot] != nil);
 }
 
 void MetalTraceBackend::Impl::EnsureRecSink(size_t n) {
@@ -450,6 +461,7 @@ void MetalTraceBackend::Impl::EnsureRecSink(size_t n) {
   rec_sink_capacity = n;
   rec_sink_buf = [device newBufferWithLength:n * sizeof(float)
                                      options:MTLResourceStorageModeShared];
+  assert(rec_sink_buf != nil);
 }
 
 void MetalTraceBackend::Impl::UploadCrystal(const Crystal& crystal) {
@@ -588,7 +600,13 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   }
 
   uint32_t produced = *static_cast<uint32_t*>([counter_buf contents]);
-  assert(produced <= out_cap && "MetalTraceBackend: continuation overflow");
+  if (produced > out_cap) {
+    NSLog(@"MetalTraceBackend: continuation overflow produced=%u out_cap=%zu", produced, out_cap);
+    assert(false && "MetalTraceBackend: continuation overflow");
+    // Release-build clamp: assert is compiled out, so clamp produced to out_cap
+    // to prevent the next layer reading cont_* buffers out of bounds on the GPU.
+    produced = static_cast<uint32_t>(out_cap);
+  }
   if (produced > max_produced) {
     max_produced = produced;
   }
@@ -633,6 +651,10 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   // non-zenith cameras.
   assert(std::abs(spec.render->view_.el_ - 90.0f) < 0.01f &&
          "MetalTraceBackend v1 requires zenith view (el≈90°)");
+  for ([[maybe_unused]] const auto& ms : spec.scene->ms_) {
+    assert(ms.setting_.size() == 1 &&
+           "MetalTraceBackend: each MS layer must have exactly one crystal setting");
+  }
 
   impl_->spec = spec;
   impl_->in_session = true;

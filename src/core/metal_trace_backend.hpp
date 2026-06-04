@@ -33,6 +33,13 @@ class MetalLayerHandle : public LayerHandle {
   size_t continuation_count_ = 0;
 };
 
+// MetalTraceBackend — Metal GPU backend for TraceBackend.
+//
+// v1 constraints:
+//   - kRectangular lens and zenith view (el≈90°) only.
+//   - Each MS layer must have exactly one crystal setting.
+//   - Device-side shuffle is not implemented; callers must set
+//     RecombineSpec.shuffle = false before calling Recombine().
 class MetalTraceBackend : public TraceBackend {
  public:
   MetalTraceBackend();
