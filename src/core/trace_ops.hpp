@@ -70,10 +70,6 @@ RayBuffer AllocateAllData(const SceneConfig& config, size_t ray_num);
 // params each call samples a fresh shape using the RNG).
 Crystal MakeCrystal(RandomNumberGenerator& rng, const CrystalParam& param);
 
-// Per-crystal ray-count partitioning with carry (largest-remainder).
-// Forward declaration kept in simulator.hpp; redeclared here for self-contained
-// includes of trace_ops.hpp.
-
 }  // namespace lumice
 
 #endif  // CORE_TRACE_OPS_H_

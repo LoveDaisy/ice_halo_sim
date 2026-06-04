@@ -106,15 +106,15 @@ inline void ScatterOutgoingToXyz(const float* d, const float* w, size_t count, c
   auto short_pix = static_cast<float>(std::min(cfg.resolution_[0], cfg.resolution_[1]));
   auto proj_param = scatter_accum_internal::MakeProjParam(cfg, camera_rot, short_pix);
 
-  // Per-call scratch.
-  auto d_buf = std::make_unique<float[]>(count * 3);
+  // Per-call scratch. d is read-only throughout; w_buf and xy_buf need
+  // writable storage for in-place compaction in Pass 1.
   auto w_buf = std::make_unique<float[]>(count);
   auto xy_buf = std::make_unique<int[]>(count * 2);
-  std::memcpy(d_buf.get(), d, count * 3 * sizeof(float));
   std::memcpy(w_buf.get(), w, count * sizeof(float));
 
   auto lens_proj = GetProjFunc(cfg.lens_.type_);
-  lens_proj(proj_param, d_buf.get(), xy_buf.get(), count);
+  // lens_proj reads d to compute pixel coords; it does not modify the array.
+  lens_proj(proj_param, const_cast<float*>(d), xy_buf.get(), count);
 
   // Save weights before pass-1 compaction (pass 2 reads originals by ray idx).
   std::unique_ptr<float[]> overlap_w_buf;
@@ -149,9 +149,9 @@ inline void ScatterOutgoingToXyz(const float* d, const float* w, size_t count, c
     int w_res = cfg.resolution_[0];
     int h_res = cfg.resolution_[1];
     for (size_t i = 0; i < count; i++) {
-      float sky_x = -d_buf[i * 3 + 0];
-      float sky_y = -d_buf[i * 3 + 1];
-      float sky_z = -d_buf[i * 3 + 2];
+      float sky_x = -d[i * 3 + 0];
+      float sky_y = -d[i * 3 + 1];
+      float sky_z = -d[i * 3 + 2];
       if (std::abs(sky_z) >= proj_param.max_abs_dz_) {
         continue;
       }

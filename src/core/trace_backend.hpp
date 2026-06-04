@@ -115,6 +115,13 @@ struct SessionSpec {
 // All pointers are caller-owned and remain valid only during the single
 // TraceLayer call that receives this batch.
 // -----------------------------------------------------------------------------
+// Design note: d / p / w / tf are the reserved "external ray ingest" path.
+// Current CpuTraceBackend and MetalTraceBackend skeleton do NOT consume these
+// fields — they generate initial rays internally from the scene config via
+// InitRayFirstMs. These fields will be wired in a future integration task once
+// Simulator routes its pre-sampled rays through the seam. Until then, callers
+// SHOULD leave d/p/w/tf null/zero. (crystal / refractive_index / crystal_id
+// ARE consumed by CpuTraceBackend when crystal != nullptr.)
 struct HostRayBatch {
   size_t count = 0;
   const float* d = nullptr;          // 3 * count, crystal-local direction.

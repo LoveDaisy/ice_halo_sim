@@ -75,6 +75,10 @@ void TraceCrystalBatch(RandomNumberGenerator& rng, const Crystal& crystal, size_
     }
 
     for (size_t i = 0; i < max_hits; i++) {
+      // CollectData (called below) routes IsContinue() rays to cont_collect
+      // AND refills workspace[0] with IsNormal() rays for the next hit.
+      // The workspace[0] refill is the side-effect that drives this loop
+      // past depth 0: without it, curr_batch_size at i >= 1 is always 0.
       size_t curr_batch_size = workspace[0].size_;
       TraceRayBasicInfo(crystal, refractive_index, curr_batch_size, workspace);
       FillRayOtherInfo(crystal, workspace);
@@ -151,6 +155,7 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
 
   const auto& ms_info = spec_.scene->ms_[ms_idx_];
   assert(!ms_info.setting_.empty() && "MS layer has no scattering settings");
+  assert(ms_info.setting_.size() == 1 && "CpuTraceBackend does not yet support multi-crystal MS layers");
   const auto& setting = ms_info.setting_[0];
   const auto& axis_dist = setting.crystal_;
   const auto& crystal_axis = axis_dist.axis_;

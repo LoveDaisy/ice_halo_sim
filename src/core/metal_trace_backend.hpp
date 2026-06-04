@@ -31,8 +31,10 @@ class MetalLayerHandle : public LayerHandle {
   MetalLayerHandle() = default;
   size_t ContinuationCount() const override { return continuation_count_; }
 
-  // In the real implementation, only this scalar is host-visible mid-session.
-  // Continuation rays themselves live in device memory.
+ private:
+  // Only this scalar is host-visible mid-session (populated from a 4-byte
+  // device readback, equivalent to a 4-byte cudaMemcpy for CUDA backends).
+  // Continuation ray buffers themselves live in device memory.
   size_t continuation_count_ = 0;
 };
 

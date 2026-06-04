@@ -125,6 +125,35 @@ TEST(CpuTraceBackend, SingleLayerProducesNonZeroXyz) {
   EXPECT_GT(backend.TotalLandedWeight(), 0.0f);
 
   backend.EndSession();
+
+  // Multi-hit depth regression: max_hits=8 must scatter more than max_hits=1.
+  // If the hit loop degenerates to single-depth (e.g. CollectData stopped
+  // refilling workspace[0] for IsNormal rays), both sums would be equal.
+  {
+    auto scene1h = MakeSimpleScene(/*max_hits=*/1, /*ms_layers=*/1);
+    CpuTraceBackend backend1h;
+    SessionSpec spec1h;
+    spec1h.scene = &scene1h;
+    spec1h.render = &render;
+    spec1h.wl = WlParam{ 550.0f, 1.0f };
+    spec1h.seed = 42;
+    backend1h.BeginSession(spec1h);
+    HostRayBatch host1h;
+    host1h.count = kRayCount;
+    host1h.crystal = nullptr;
+    host1h.refractive_index = 0.0f;
+    backend1h.TraceLayer(RootRaySource::FromHost(host1h));
+    std::vector<float> xyz1h(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
+    XyzImageData img1h{ xyz1h.data(), render.resolution_[0], render.resolution_[1] };
+    backend1h.ReadbackImage(img1h);
+    double sum1h = 0.0;
+    for (float v : xyz1h) {
+      sum1h += static_cast<double>(v);
+    }
+    backend1h.EndSession();
+    EXPECT_GT(sum, sum1h) << "max_hits=8 must produce more XYZ than max_hits=1; "
+                             "if equal, hit depth > 1 is not activating";
+  }
 }
 
 // =============================================================================

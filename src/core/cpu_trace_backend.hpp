@@ -27,6 +27,8 @@ class CpuLayerHandle : public LayerHandle {
   CpuLayerHandle() = default;
   size_t ContinuationCount() const override;
 
+ private:
+  friend class CpuTraceBackend;
   RayBuffer continuation_;
 };
 
