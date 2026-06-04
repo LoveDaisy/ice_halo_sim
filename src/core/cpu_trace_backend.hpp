@@ -26,10 +26,12 @@ class CpuLayerHandle : public LayerHandle {
  public:
   CpuLayerHandle() = default;
   size_t ContinuationCount() const override;
+  LayerStats GetLayerStats() const override;
 
  private:
   friend class CpuTraceBackend;
   RayBuffer continuation_;
+  LayerStats stats_{};
 };
 
 class CpuTraceBackend : public TraceBackend {

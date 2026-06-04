@@ -79,6 +79,8 @@ kernel void trace_layer_kernel(
     device ushort*         out_tf   [[buffer(12)]],
     device atomic_uint*    counter  [[buffer(13)]],
     device float*          rec_sink [[buffer(14)]],
+    device atomic_uint*    exit_cnt [[buffer(15)]],
+    device atomic_float*   exit_wsum [[buffer(16)]],
     uint tid [[thread_position_in_grid]]) {
   if (tid >= prm.num_rays) { return; }
 
@@ -186,6 +188,8 @@ kernel void trace_layer_kernel(
             out_w[slot] = cw;
             out_tf[slot] = ushort(ef);
           }
+          atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
+          atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
         } else {
           float sx = -cdx;
           float sy = -cdy;
@@ -203,6 +207,8 @@ kernel void trace_layer_kernel(
             atomic_fetch_add_explicit(&image[pix + 1u], prm.cie_y * cw, memory_order_relaxed);
             atomic_fetch_add_explicit(&image[pix + 2u], prm.cie_z * cw, memory_order_relaxed);
           }
+          atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
+          atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
         }
       }
     }
@@ -323,6 +329,14 @@ struct MetalTraceBackend::Impl {
   size_t        rec_sink_capacity = 0;
   size_t        max_produced = 0;
 
+  // Exit-ray statistics buffers (parity harness). Both 4-byte atomic scalars
+  // populated by the kernel in both ms_mode branches and read back after each
+  // DispatchLayer; cached in `last_stats` for the producing TraceLayer to
+  // hand off to MetalLayerHandle.
+  id<MTLBuffer> exit_count_buf = nil;
+  id<MTLBuffer> exit_w_sum_buf = nil;
+  LayerStats    last_stats{};
+
   // Layer dispatch helpers.
   void EnsureDevice();
   void EnsurePso();
@@ -331,6 +345,7 @@ struct MetalTraceBackend::Impl {
   void EnsureRootBuffers(size_t n);
   void EnsureContBuffer(int slot);
   void EnsureRecSink(size_t n);
+  void EnsureStatBuffers();
   void UploadCrystal(const Crystal& crystal);
   void ResolveLayerCrystal(const MsInfo& ms_info, bool first_ms,
                            const HostRayBatch& host_batch);
@@ -454,6 +469,21 @@ void MetalTraceBackend::Impl::EnsureContBuffer(int slot) {
   assert(cont_tf[slot] != nil);
 }
 
+void MetalTraceBackend::Impl::EnsureStatBuffers() {
+  if (exit_count_buf == nil) {
+    exit_count_buf = [device newBufferWithLength:sizeof(uint32_t)
+                                         options:MTLResourceStorageModeShared];
+    assert(exit_count_buf != nil);
+  }
+  if (exit_w_sum_buf == nil) {
+    exit_w_sum_buf = [device newBufferWithLength:sizeof(float)
+                                         options:MTLResourceStorageModeShared];
+    assert(exit_w_sum_buf != nil);
+  }
+  *static_cast<uint32_t*>([exit_count_buf contents]) = 0u;
+  *static_cast<float*>([exit_w_sum_buf contents]) = 0.0f;
+}
+
 void MetalTraceBackend::Impl::EnsureRecSink(size_t n) {
   if (n <= rec_sink_capacity) {
     return;
@@ -560,6 +590,7 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
 
   EnsureRecSink(num_rays);
   EnsureContBuffer(out_slot);
+  EnsureStatBuffers();
 
   // Counter buffer: reset to 0 before each dispatch.
   if (counter_buf == nil) {
@@ -586,6 +617,8 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   [enc setBuffer:cont_tf[out_slot] offset:0 atIndex:12];
   [enc setBuffer:counter_buf    offset:0 atIndex:13];
   [enc setBuffer:rec_sink_buf   offset:0 atIndex:14];
+  [enc setBuffer:exit_count_buf offset:0 atIndex:15];
+  [enc setBuffer:exit_w_sum_buf offset:0 atIndex:16];
 
   NSUInteger tg = std::min<NSUInteger>(256, pso.maxTotalThreadsPerThreadgroup);
   [enc dispatchThreads:MTLSizeMake(num_rays, 1, 1)
@@ -611,6 +644,12 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
     max_produced = produced;
   }
   cont_counts[out_slot] = produced;
+
+  // Readback exit-ray stats for the parity harness. Both atomics live in
+  // Shared storage, so a plain host load after waitUntilCompleted is
+  // sufficient (no blit encoder required on unified memory).
+  last_stats.exit_count = *static_cast<uint32_t*>([exit_count_buf contents]);
+  last_stats.exit_w_sum = *static_cast<float*>([exit_w_sum_buf contents]);
 }
 
 void MetalTraceBackend::Impl::Reset() {
@@ -630,6 +669,7 @@ void MetalTraceBackend::Impl::Reset() {
   out_cap = 0;
   max_produced = 0;
   cont_counts[0] = cont_counts[1] = 0;
+  last_stats = LayerStats{};
   spec = SessionSpec{};
 }
 
@@ -699,7 +739,7 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     // bound used by layer 0.
     impl_->out_cap = ComputeOutCap(total_ray_num, impl_->spec.scene->max_hits_);
     if (total_ray_num == 0) {
-      return std::make_unique<MetalLayerHandle>(0u);
+      return std::make_unique<MetalLayerHandle>(0u, LayerStats{});
     }
 
     // Crystal: first layer may use caller-supplied crystal; non-first layers
@@ -736,7 +776,7 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
                          ms_mode, out_slot);
 
     size_t produced = last_layer ? 0u : impl_->cont_counts[out_slot];
-    return std::make_unique<MetalLayerHandle>(produced);
+    return std::make_unique<MetalLayerHandle>(produced, impl_->last_stats);
   }
 }
 

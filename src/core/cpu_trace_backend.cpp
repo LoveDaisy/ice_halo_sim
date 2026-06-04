@@ -114,6 +114,10 @@ size_t CpuLayerHandle::ContinuationCount() const {
   return continuation_.size_;
 }
 
+LayerStats CpuLayerHandle::GetLayerStats() const {
+  return stats_;
+}
+
 
 // ============================== CpuTraceBackend ==============================
 
@@ -230,6 +234,14 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
 
   auto handle = std::make_unique<CpuLayerHandle>();
   handle->continuation_ = std::move(cont_collect);
+  // Aggregate exit-ray stats for parity harness (CPU-vs-Metal oracle).
+  // outgoing_w holds one weight per ray that left the crystal this layer.
+  handle->stats_.exit_count = outgoing_w.size();
+  float w_sum = 0.0f;
+  for (float w : outgoing_w) {
+    w_sum += w;
+  }
+  handle->stats_.exit_w_sum = w_sum;
   return handle;
 }
 

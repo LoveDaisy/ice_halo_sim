@@ -26,11 +26,14 @@ namespace lumice {
 // themselves are owned by the backend's session-level pool (Impl::cont_*).
 class MetalLayerHandle : public LayerHandle {
  public:
-  explicit MetalLayerHandle(size_t continuation_count) : continuation_count_(continuation_count) {}
+  MetalLayerHandle(size_t continuation_count, LayerStats stats)
+      : continuation_count_(continuation_count), stats_(stats) {}
   size_t ContinuationCount() const override { return continuation_count_; }
+  LayerStats GetLayerStats() const override { return stats_; }
 
  private:
   size_t continuation_count_ = 0;
+  LayerStats stats_{};
 };
 
 // MetalTraceBackend — Metal GPU backend for TraceBackend.

@@ -171,6 +171,30 @@ struct RootRaySource {
 };
 
 // -----------------------------------------------------------------------------
+// LayerStats — aggregate exit-ray statistics for the just-traced MS layer.
+//
+// Used by the parity harness (CPU-vs-Metal numeric oracle) to cross-check
+// device compaction integrity: a counter alone is insufficient (silent
+// out_cap overflow may still report N rays produced while truncating the
+// last fraction), so the weight sum is paired with the count.
+//
+// Semantics across backends:
+//   - exit_count : number of rays that left the crystal in this layer. In
+//     append (non-final) mode, equals the number of rays written to the
+//     continuation buffer; in accumulate (final) mode, equals the number of
+//     rays that contributed to the XYZ image (before projection clipping).
+//   - exit_w_sum : sum of `w_` over those same rays.
+//
+// Backends MUST track these for every TraceLayer call. Float accumulation
+// is acceptable (Metal MSL has no double atomic); the CPU oracle's
+// per-layer relative comparison aims at rel ≤ 5e-4.
+// -----------------------------------------------------------------------------
+struct LayerStats {
+  size_t exit_count = 0;
+  float exit_w_sum = 0.0f;
+};
+
+// -----------------------------------------------------------------------------
 // LayerHandle — opaque device-resident result of TraceLayer.
 //
 // Holds backend-local state for the just-traced MS layer (continuation rays
@@ -184,6 +208,11 @@ class LayerHandle {
   // Number of continuation rays produced by this layer (rays that survived
   // filter-pass + prob-pass and should feed the next MS layer).
   virtual size_t ContinuationCount() const = 0;
+
+  // Aggregate exit-ray stats for this layer. See LayerStats above. Used by
+  // the CPU-vs-Metal parity harness; every backend's LayerHandle subclass
+  // must populate these during the producing TraceLayer call.
+  virtual LayerStats GetLayerStats() const = 0;
 
   LayerHandle(const LayerHandle&) = delete;
   LayerHandle(LayerHandle&&) = delete;
