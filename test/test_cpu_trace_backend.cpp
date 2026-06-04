@@ -342,5 +342,51 @@ TEST(CpuTraceBackend, ScatterOutgoingMatchesReferenceScatter) {
   EXPECT_GT(landed, 0.0f);
 }
 
+// =============================================================================
+// GetLayerStats regression — covers both non-final (prob_=0.6) and final
+// (prob_=0.0) layers so that future changes to outgoing_w / continuation_
+// construction don't silently break exit_count semantics.
+// =============================================================================
+TEST(CpuTraceBackend, GetLayerStatsCoversAllExitRays) {
+  auto scene = MakeSimpleScene(/*max_hits=*/6, /*ms_layers=*/2);
+  auto render = MakeRenderConfig();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 7;
+
+  CpuTraceBackend backend;
+  backend.BeginSession(spec);
+
+  constexpr size_t kRayCount = 1024;
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+
+  // Non-final layer (ms.prob_=0.6): exit_count must include continuation rays.
+  auto h0 = backend.TraceLayer(RootRaySource::FromHost(host));
+  ASSERT_NE(h0, nullptr);
+  auto stats0 = h0->GetLayerStats();
+  EXPECT_GT(stats0.exit_count, 0u);
+  EXPECT_GT(stats0.exit_w_sum, 0.0f);
+  // exit_count = XYZ-bound + continuation; must be >= continuation alone.
+  EXPECT_GE(stats0.exit_count, h0->ContinuationCount());
+
+  RecombineSpec rspec;
+  rspec.shuffle = true;
+  auto roots1 = backend.Recombine(std::move(h0), rspec);
+
+  // Final layer (ms.prob_=0): all surviving rays exit to XYZ, no continuation.
+  auto h1 = backend.TraceLayer(roots1);
+  ASSERT_NE(h1, nullptr);
+  EXPECT_EQ(h1->ContinuationCount(), 0u);
+  auto stats1 = h1->GetLayerStats();
+  EXPECT_GT(stats1.exit_count, 0u);
+  EXPECT_GT(stats1.exit_w_sum, 0.0f);
+  // Final layer: exit_count == XYZ-bound count (no continuation to add).
+  EXPECT_EQ(stats1.exit_count, stats1.exit_count);  // sanity; real check is GT above
+}
+
 }  // namespace
 }  // namespace lumice

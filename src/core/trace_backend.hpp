@@ -210,11 +210,10 @@ class LayerHandle {
   virtual size_t ContinuationCount() const = 0;
 
   // Aggregate exit-ray stats for this layer. See LayerStats above.
-  // Consumed exclusively by the CPU-vs-Metal parity harness
-  // (test_metal_trace_parity.cpp); no production code path calls this.
-  // Future backends may provide a stub returning LayerStats{} if exit stats
-  // are unavailable (e.g. async kernels).
-  virtual LayerStats GetLayerStats() const = 0;
+  // Intended consumer: CPU-vs-Metal parity harness (test_metal_trace_parity.cpp).
+  // No production code path calls this. Default implementation returns a
+  // zero-filled LayerStats{}; backends that support parity testing override it.
+  virtual LayerStats GetLayerStats() const { return LayerStats{}; }
 
   LayerHandle(const LayerHandle&) = delete;
   LayerHandle(LayerHandle&&) = delete;

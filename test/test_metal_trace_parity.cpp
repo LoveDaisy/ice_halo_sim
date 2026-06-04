@@ -239,9 +239,10 @@ OracleLayerResult OracleTraceLayer(const Crystal& crystal, const PolyArrays& pol
 // Apply argmax-facing + centroid re-entry to a batch of exit rays. Mirrors
 // the kernel's ms_mode==1 branch where exits become the next layer's roots.
 // NOLINTNEXTLINE(readability-function-size)
-void OracleReentryRoots(const PolyArrays& poly, size_t poly_cnt, const std::vector<float>& exit_d,
+void OracleReentryRoots(const PolyArrays& poly, const std::vector<float>& exit_d,
                         const std::vector<float>& exit_w, std::vector<float>& out_d, std::vector<float>& out_p,
                         std::vector<float>& out_w, std::vector<IdType>& out_tf) {
+  size_t poly_cnt = poly.n.size() / 3;
   size_t n = exit_w.size();
   out_d.assign(exit_d.begin(), exit_d.end());
   out_w.assign(exit_w.begin(), exit_w.end());
@@ -324,7 +325,10 @@ void SeedRngsLikeMetal(RandomNumberGenerator& rng, uint32_t seed) {
   // seed=0 is a special "no-reseed" sentinel in MetalTraceBackend; oracle
   // cannot match Metal's RNG state in that case. Guard to prevent silent
   // parity divergence if a test ever passes seed=0.
-  ASSERT_NE(seed, 0u) << "seed=0 not supported by oracle (RNG state unknown)";
+  EXPECT_NE(seed, 0u) << "seed=0 not supported by oracle (RNG state unknown)";
+  if (seed == 0u) {
+    return;
+  }
   rng.SetSeed(seed);
   RandomNumberGenerator::GetInstance().SetSeed(seed);
 }
@@ -466,7 +470,7 @@ TEST(MetalTraceParity, TwoLayerExitStatsAndXyz) {
   std::vector<float> next_p;
   std::vector<float> next_w;
   std::vector<IdType> next_tf;
-  OracleReentryRoots(poly0, roots0.crystal.PolygonFaceCount(), oracle_l0.exit_d, oracle_l0.exit_w, next_d, next_p,
+  OracleReentryRoots(poly0, oracle_l0.exit_d, oracle_l0.exit_w, next_d, next_p,
                      next_w, next_tf);
 
   // Layer 1: same RNG consumption as Metal (ResolveLayerCrystal calls
