@@ -65,6 +65,11 @@ void FillRayOtherInfo(const Crystal& curr_crystal, RayBuffer buffer_data[2]);
 // Allocate the all_data buffer with expected total-ray capacity for a session.
 RayBuffer AllocateAllData(const SceneConfig& config, size_t ray_num);
 
+// Build a Crystal from a CrystalParam variant using the given RNG. Matches
+// the file-local CrystalMaker visitor used by Simulator (for non-deterministic
+// params each call samples a fresh shape using the RNG).
+Crystal MakeCrystal(RandomNumberGenerator& rng, const CrystalParam& param);
+
 // Per-crystal ray-count partitioning with carry (largest-remainder).
 // Forward declaration kept in simulator.hpp; redeclared here for self-contained
 // includes of trace_ops.hpp.

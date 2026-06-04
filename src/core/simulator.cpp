@@ -236,6 +236,11 @@ struct CrystalMaker {
 };
 
 
+Crystal MakeCrystal(RandomNumberGenerator& rng, const CrystalParam& param) {
+  return std::visit(CrystalMaker{ rng }, param);
+}
+
+
 bool IsDeterministic(const CrystalParam& param) {
   auto all_no_random = [](const Distribution* d, size_t n) {
     return !std::any_of(d, d + n, [](const auto& x) { return x.type != DistributionType::kNoRandom; });

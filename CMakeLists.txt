@@ -204,6 +204,7 @@ set(lumice_config_src
   "${PROJ_SRC_DIR}/config/sim_data.cpp")
 
 set(lumice_core_src
+  "${PROJ_SRC_DIR}/core/cpu_trace_backend.cpp"
   "${PROJ_SRC_DIR}/core/crystal.cpp"
   "${PROJ_SRC_DIR}/core/filter_spec.cpp"
   "${PROJ_SRC_DIR}/core/geo3d.cpp"
