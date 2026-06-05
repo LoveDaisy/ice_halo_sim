@@ -25,6 +25,7 @@
 #include "core/math.hpp"
 #include "core/metal_trace_backend.hpp"
 #include "core/scatter_accum.hpp"
+#include "core/simulator.hpp"  // PartitionCrystalRayNum
 #include "core/trace_ops.hpp"
 #include "util/color_data.hpp"
 
@@ -345,15 +346,17 @@ struct MetalTraceBackend::Impl {
   void EnsureRootBuffers(size_t n);
   void EnsureContBuffer(int slot);
   void EnsureRecSink(size_t n);
-  void EnsureAndResetStatBuffers();
   void UploadCrystal(const Crystal& crystal);
-  void ResolveLayerCrystal(const MsInfo& ms_info, bool first_ms,
-                           const HostRayBatch& host_batch);
-  size_t GenerateFirstLayerRoots(const MsInfo& ms_info, size_t total_ray_num);
+  void ResolveLayerCrystalForCi(const ScatteringSetting& setting, bool use_host,
+                                const HostRayBatch& host_batch);
+  size_t GenerateFirstLayerRootsForCi(const ScatteringSetting& setting,
+                                      size_t ci, size_t crystal_ray_num);
+  void CopyContSliceToRootBuf(size_t ci_start, size_t ci_n, int in_slot);
   void DispatchLayer(size_t num_rays,
                      id<MTLBuffer> r_d, id<MTLBuffer> r_p,
                      id<MTLBuffer> r_w, id<MTLBuffer> r_tf,
-                     uint32_t ms_mode, int out_slot);
+                     uint32_t ms_mode, int out_slot,
+                     uint32_t counter_init);
   void Reset();
 };
 
@@ -469,21 +472,6 @@ void MetalTraceBackend::Impl::EnsureContBuffer(int slot) {
   assert(cont_tf[slot] != nil);
 }
 
-void MetalTraceBackend::Impl::EnsureAndResetStatBuffers() {
-  if (exit_count_buf == nil) {
-    exit_count_buf = [device newBufferWithLength:sizeof(uint32_t)
-                                         options:MTLResourceStorageModeShared];
-    assert(exit_count_buf != nil);
-  }
-  if (exit_w_sum_buf == nil) {
-    exit_w_sum_buf = [device newBufferWithLength:sizeof(float)
-                                         options:MTLResourceStorageModeShared];
-    assert(exit_w_sum_buf != nil);
-  }
-  *static_cast<uint32_t*>([exit_count_buf contents]) = 0u;
-  *static_cast<float*>([exit_w_sum_buf contents]) = 0.0f;
-}
-
 void MetalTraceBackend::Impl::EnsureRecSink(size_t n) {
   if (n <= rec_sink_capacity) {
     return;
@@ -516,14 +504,10 @@ void MetalTraceBackend::Impl::UploadCrystal(const Crystal& crystal) {
   }
 }
 
-void MetalTraceBackend::Impl::ResolveLayerCrystal(const MsInfo& ms_info, bool first_ms,
-                                                  const HostRayBatch& host_batch) {
-  assert(!ms_info.setting_.empty());
-  assert(ms_info.setting_.size() == 1 &&
-         "MetalTraceBackend: multi-crystal MS layers not yet supported");
-  const auto& setting = ms_info.setting_[0];
-
-  if (first_ms && host_batch.crystal != nullptr) {
+void MetalTraceBackend::Impl::ResolveLayerCrystalForCi(const ScatteringSetting& setting,
+                                                        bool use_host,
+                                                        const HostRayBatch& host_batch) {
+  if (use_host && host_batch.crystal != nullptr) {
     current_crystal = *host_batch.crystal;
     current_n_idx = host_batch.refractive_index;
   } else {
@@ -534,23 +518,22 @@ void MetalTraceBackend::Impl::ResolveLayerCrystal(const MsInfo& ms_info, bool fi
   UploadCrystal(current_crystal);
 }
 
-size_t MetalTraceBackend::Impl::GenerateFirstLayerRoots(const MsInfo& ms_info,
-                                                        size_t total_ray_num) {
-  const auto& setting = ms_info.setting_[0];
+size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSetting& setting,
+                                                              size_t ci, size_t crystal_ray_num) {
   const AxisDistribution& crystal_axis = setting.crystal_.axis_;
 
   RayBuffer workspace[2]{};
-  workspace[0].Reset(total_ray_num);
-  workspace[1].Reset(total_ray_num);
-  RayBuffer all_data = AllocateAllData(*spec.scene, total_ray_num);
+  workspace[0].Reset(crystal_ray_num);
+  workspace[1].Reset(crystal_ray_num);
+  RayBuffer all_data = AllocateAllData(*spec.scene, crystal_ray_num);
 
-  InitRayFirstMs(rng, spec.scene->light_source_.param_, spec.wl, total_ray_num,
-                 current_crystal, /*crystal_id=*/0, crystal_axis,
+  InitRayFirstMs(rng, spec.scene->light_source_.param_, spec.wl, crystal_ray_num,
+                 current_crystal, /*crystal_id=*/ci, crystal_axis,
                  workspace, all_data);
 
+  // EnsureRootBuffers is called by TraceLayer at the top of each layer with
+  // total_ray_num so per-ci root buffers are guaranteed >= crystal_ray_num.
   size_t n = workspace[0].size_;
-  EnsureRootBuffers(total_ray_num);
-
   auto* d_ptr  = static_cast<float*>([root_d_buf contents]);
   auto* p_ptr  = static_cast<float*>([root_p_buf contents]);
   auto* w_ptr  = static_cast<float*>([root_w_buf contents]);
@@ -570,10 +553,29 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRoots(const MsInfo& ms_info,
   return n;
 }
 
+void MetalTraceBackend::Impl::CopyContSliceToRootBuf(size_t ci_start, size_t ci_n, int in_slot) {
+  // Copy a slice [ci_start, ci_start + ci_n) of the previous layer's
+  // continuation buffers into root_*_buf. We memcpy through the host (rather
+  // than dispatching with `setBuffer:offset:` on cont_*) because cont_tf is
+  // uint16_t and Metal requires `setBuffer:offset:atIndex:` offsets to be
+  // 4-byte aligned — an arbitrary ci_start may not satisfy that for tf.
+  // On M2 unified memory memcpy is a plain memory copy (no PCIe transfer).
+  const float* src_d  = static_cast<const float*>([cont_d[in_slot]  contents]) + ci_start * 3;
+  const float* src_p  = static_cast<const float*>([cont_p[in_slot]  contents]) + ci_start * 3;
+  const float* src_w  = static_cast<const float*>([cont_w[in_slot]  contents]) + ci_start;
+  const uint16_t* src_tf =
+      static_cast<const uint16_t*>([cont_tf[in_slot] contents]) + ci_start;
+  std::memcpy([root_d_buf contents],  src_d,  ci_n * 3 * sizeof(float));
+  std::memcpy([root_p_buf contents],  src_p,  ci_n * 3 * sizeof(float));
+  std::memcpy([root_w_buf contents],  src_w,  ci_n * sizeof(float));
+  std::memcpy([root_tf_buf contents], src_tf, ci_n * sizeof(uint16_t));
+}
+
 void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
                                             id<MTLBuffer> r_d, id<MTLBuffer> r_p,
                                             id<MTLBuffer> r_w, id<MTLBuffer> r_tf,
-                                            uint32_t ms_mode, int out_slot) {
+                                            uint32_t ms_mode, int out_slot,
+                                            uint32_t counter_init) {
   KernelParams params{};
   params.n_idx    = current_n_idx;
   params.max_hits = static_cast<uint32_t>(spec.scene->max_hits_);
@@ -590,14 +592,32 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
 
   EnsureRecSink(num_rays);
   EnsureContBuffer(out_slot);
-  EnsureAndResetStatBuffers();
-
-  // Counter buffer: reset to 0 before each dispatch.
+  // Multi-ci append semantics: counter_init carries the running offset of
+  // already-written continuation rays from previous ci dispatches; the
+  // kernel's atomic_fetch_add resumes from there. ci=0 always passes 0
+  // (equivalent to the previous unconditional reset).
+  // last_stats is NOT reset here — TraceLayer zeroes it once before the
+  // ci loop, and each DispatchLayer accumulates via += below.
   if (counter_buf == nil) {
     counter_buf = [device newBufferWithLength:sizeof(uint32_t)
                                       options:MTLResourceStorageModeShared];
   }
-  *static_cast<uint32_t*>([counter_buf contents]) = 0u;
+  *static_cast<uint32_t*>([counter_buf contents]) = counter_init;
+  // exit_count / exit_w_sum are atomic accumulators populated by the kernel.
+  // Reset before each dispatch and add the readback into last_stats so the
+  // per-ci contributions sum correctly.
+  if (exit_count_buf == nil) {
+    exit_count_buf = [device newBufferWithLength:sizeof(uint32_t)
+                                         options:MTLResourceStorageModeShared];
+    assert(exit_count_buf != nil);
+  }
+  if (exit_w_sum_buf == nil) {
+    exit_w_sum_buf = [device newBufferWithLength:sizeof(float)
+                                         options:MTLResourceStorageModeShared];
+    assert(exit_w_sum_buf != nil);
+  }
+  *static_cast<uint32_t*>([exit_count_buf contents]) = 0u;
+  *static_cast<float*>([exit_w_sum_buf contents]) = 0.0f;
 
   id<MTLCommandBuffer> cb = [queue commandBuffer];
   id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
@@ -647,9 +667,11 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
 
   // Readback exit-ray stats for the parity harness. Both atomics live in
   // Shared storage, so a plain host load after waitUntilCompleted is
-  // sufficient (no blit encoder required on unified memory).
-  last_stats.exit_count = *static_cast<uint32_t*>([exit_count_buf contents]);
-  last_stats.exit_w_sum = *static_cast<float*>([exit_w_sum_buf contents]);
+  // sufficient (no blit encoder required on unified memory). Accumulate
+  // into last_stats so the multi-ci loop's contributions sum correctly;
+  // TraceLayer is responsible for zeroing last_stats before the ci loop.
+  last_stats.exit_count += *static_cast<uint32_t*>([exit_count_buf contents]);
+  last_stats.exit_w_sum += *static_cast<float*>([exit_w_sum_buf contents]);
 }
 
 void MetalTraceBackend::Impl::Reset() {
@@ -691,10 +713,6 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   // non-zenith cameras.
   assert(std::abs(spec.render->view_.el_ - 90.0f) < 0.01f &&
          "MetalTraceBackend v1 requires zenith view (el≈90°)");
-  for ([[maybe_unused]] const auto& ms : spec.scene->ms_) {
-    assert(ms.setting_.size() == 1 &&
-           "MetalTraceBackend: each MS layer must have exactly one crystal setting");
-  }
 
   impl_->spec = spec;
   impl_->in_session = true;
@@ -727,6 +745,7 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
          "TraceLayer beyond configured MS layers");
   @autoreleasepool {
     const auto& ms_info = impl_->spec.scene->ms_[impl_->ms_idx];
+    assert(!ms_info.setting_.empty() && "MS layer has no scattering settings");
     bool first_ms = !roots.is_device;
 
     size_t total_ray_num = first_ms ? roots.host.count : roots.device.count;
@@ -742,38 +761,68 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       return std::make_unique<MetalLayerHandle>(0u, LayerStats{});
     }
 
-    // Crystal: first layer may use caller-supplied crystal; non-first layers
-    // always rebuild from spec_.scene->ms_[ms_idx_] (v1 prism with deterministic
-    // params yields the same geometry, but keeping this path explicit avoids
-    // the silent assumption when extending to per-layer-distinct crystals).
-    impl_->ResolveLayerCrystal(ms_info, first_ms,
-                               first_ms ? roots.host : HostRayBatch{});
-
-    // Pick input buffers: first layer = host-uploaded root_*; otherwise the
-    // ping-pong continuation slot written by the preceding Recombine.
-    id<MTLBuffer> input_d, input_p, input_w, input_tf;
-    size_t in_count = 0;
-    if (first_ms) {
-      in_count = impl_->GenerateFirstLayerRoots(ms_info, total_ray_num);
-      input_d  = impl_->root_d_buf;
-      input_p  = impl_->root_p_buf;
-      input_w  = impl_->root_w_buf;
-      input_tf = impl_->root_tf_buf;
-    } else {
-      int in_slot = static_cast<int>((impl_->ms_idx - 1) & 1u);
-      in_count   = total_ray_num;
-      input_d    = impl_->cont_d[in_slot];
-      input_p    = impl_->cont_p[in_slot];
-      input_w    = impl_->cont_w[in_slot];
-      input_tf   = impl_->cont_tf[in_slot];
+    // Partition the layer's rays across crystal populations. Matches
+    // simulator.cpp:572-586 and CpuTraceBackend::TraceLayer.
+    size_t crystal_cnt = ms_info.setting_.size();
+    std::vector<float> proportions;
+    proportions.reserve(crystal_cnt);
+    for (size_t ci = 0; ci < crystal_cnt; ci++) {
+      proportions.push_back(ms_info.setting_[ci].crystal_proportion_);
     }
+    std::vector<double> carry(crystal_cnt, 0.0);
+    auto crystal_ray_num = PartitionCrystalRayNum(proportions, total_ray_num, carry);
+
+    // Pre-allocate root_*_buf to the full per-layer total. Each per-ci
+    // dispatch only uses crystal_ray_num[ci] of it; sizing for the upper
+    // bound once avoids repeated grow-only allocations inside the ci loop
+    // and costs nothing on M2 unified memory.
+    impl_->EnsureRootBuffers(total_ray_num);
 
     bool last_layer = (impl_->ms_idx + 1u == impl_->spec.scene->ms_.size());
     uint32_t ms_mode = last_layer ? 0u : 1u;
     int out_slot = static_cast<int>(impl_->ms_idx & 1u);
+    int in_slot = static_cast<int>((impl_->ms_idx - 1) & 1u);  // only used when !first_ms
 
-    impl_->DispatchLayer(in_count, input_d, input_p, input_w, input_tf,
-                         ms_mode, out_slot);
+    // Reset per-layer counters BEFORE the ci loop: counter_buf is written
+    // by each DispatchLayer (counter_init = previous cont_counts), and
+    // last_stats accumulates via += inside DispatchLayer. Both must start
+    // at zero for the layer.
+    impl_->last_stats = LayerStats{};
+    impl_->cont_counts[out_slot] = 0;
+
+    size_t ci_start = 0;  // running offset into the previous-layer
+                          // continuation buffer (non-first_ms only)
+    for (size_t ci = 0; ci < crystal_cnt; ci++) {
+      size_t ci_n = crystal_ray_num[ci];
+      if (ci_n == 0) {
+        continue;
+      }
+      const auto& setting = ms_info.setting_[ci];
+      bool use_host = first_ms && ci == 0 && roots.host.crystal != nullptr;
+      impl_->ResolveLayerCrystalForCi(setting, use_host,
+                                       first_ms ? roots.host : HostRayBatch{});
+
+      size_t in_count = 0;
+      if (first_ms) {
+        in_count = impl_->GenerateFirstLayerRootsForCi(setting, ci, ci_n);
+      } else {
+        // Stage this ci's slice of the prior continuation buffer into the
+        // root buffers so the kernel reads a contiguous, aligned input.
+        impl_->CopyContSliceToRootBuf(ci_start, ci_n, in_slot);
+        in_count = ci_n;
+      }
+
+      // counter_init = current cumulative write offset; ci=0 starts at 0,
+      // each subsequent ci resumes where the previous one's atomic
+      // counter left off (already read back into cont_counts[out_slot]
+      // by the previous DispatchLayer via waitUntilCompleted).
+      uint32_t counter_init = static_cast<uint32_t>(impl_->cont_counts[out_slot]);
+      impl_->DispatchLayer(in_count,
+                           impl_->root_d_buf, impl_->root_p_buf,
+                           impl_->root_w_buf, impl_->root_tf_buf,
+                           ms_mode, out_slot, counter_init);
+      ci_start += ci_n;
+    }
 
     size_t produced = last_layer ? 0u : impl_->cont_counts[out_slot];
     return std::make_unique<MetalLayerHandle>(produced, impl_->last_stats);
