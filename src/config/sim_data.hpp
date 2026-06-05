@@ -138,13 +138,14 @@ struct SimData {
   size_t root_ray_count_ = 0;  // Count of root rays (prev_ray_idx_ == kInfSize)
 
   // Backend pre-accumulated XYZ path (TraceBackend seam integration, task 252.3).
-  // When non-empty: the simulator ran via a TraceBackend (e.g. MetalTraceBackend)
-  // that performed projection + XYZ accumulation on-device. RenderConsumer::Consume
-  // detects this and routes through an early-return XYZ ingest branch instead of
-  // the raw-ray projection path. Layout: width * height * 3 floats, in the
-  // RenderConfig's pixel order. The legacy CPU path leaves these fields at their
-  // default (empty / 0.0) and behavior is unchanged.
-  std::vector<float> backend_xyz_;        // Empty unless backend path active
+  // When is_backend_path_ is true: the simulator ran via a TraceBackend (e.g.
+  // MetalTraceBackend) that performed projection + XYZ accumulation on-device.
+  // RenderConsumer::Consume detects this and routes through an early-return XYZ
+  // ingest branch instead of the raw-ray projection path. Layout of backend_xyz_:
+  // width * height * 3 floats, RenderConfig pixel order. The legacy CPU path
+  // leaves these fields at their defaults and behavior is unchanged.
+  bool is_backend_path_ = false;          // True iff simulator used a TraceBackend
+  std::vector<float> backend_xyz_;        // Non-empty when is_backend_path_ is true
   float backend_total_intensity_ = 0.0f;  // Total landed weight (sum of w_ over landed rays)
 };
 

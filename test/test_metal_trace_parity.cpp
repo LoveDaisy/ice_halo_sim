@@ -31,6 +31,8 @@
 
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
+#include "core/color_util.hpp"
+#include "core/cpu_trace_backend.hpp"
 #include "core/crystal.hpp"
 #include "core/def.hpp"
 #include "core/geo3d.hpp"
@@ -41,6 +43,7 @@
 #include "core/trace_backend.hpp"
 #include "core/trace_ops.hpp"
 #include "metal_test_helpers.hpp"
+#include "util/color_data.hpp"
 
 namespace lumice {
 namespace {
@@ -903,6 +906,114 @@ TEST(MetalTraceParity, MultiPopContinuationAppendInvariant) {
   EXPECT_EQ(h1->ContinuationCount(), 0u) << "Final layer must drain continuation";
   EXPECT_GT(h1->GetLayerStats().exit_count, 0u);
   metal.EndSession();
+}
+
+// Validates the Y-channel reverse formula used by Simulator::SimulateOneWavelengthWithBackend:
+//
+//   total_landed_weight = (Σ_pixels XYZ[i].y) / kCmfY[wl]
+//
+// The formula is derived from SpectrumToXyz's accumulation: xyz[i*3+1] += kCmfY[wl] * w_i.
+// Therefore Σ_pixels xyz[i*3+1] = kCmfY[wl] * Σ(w_i for in-bounds rays) = kCmfY[wl] * total_landed_weight.
+//
+// CpuTraceBackend uses SpectrumToXyz AND tracks TotalLandedWeight() independently. The identity
+// sum_Y / cie_y == TotalLandedWeight() must hold exactly (up to float accumulation noise).
+// MetalTraceBackend's kernel uses the same semantic formula; if the identity holds for
+// CpuTraceBackend, it validates the formula for any backend using this XYZ accumulation pattern.
+TEST(MetalTraceParity, TotalLandedWeightFormulaIdentity) {
+  // Part 1: CpuTraceBackend formula identity — no Metal required, no skip gate.
+  // Uses a fisheye-equal-area render (180° FOV) so that rays landing in the lower
+  // hemisphere (d.z < 0, the observer-side) project into a non-empty in-bounds region.
+  // (kRectangular + kUpper filters out d.z < 0 rays for this scene geometry.)
+  auto scene = MakeMetalScene(/*max_hits=*/4, /*ms_layers=*/1);
+  RenderConfig fisheye_render;
+  fisheye_render.id_ = 0;
+  fisheye_render.lens_.type_ = LensParam::kFisheyeEqualArea;
+  fisheye_render.lens_.fov_ = 180.0f;
+  fisheye_render.resolution_[0] = 64;
+  fisheye_render.resolution_[1] = 64;
+  fisheye_render.view_.az_ = 0.0f;
+  fisheye_render.view_.el_ = 90.0f;
+  fisheye_render.view_.ro_ = 0.0f;
+  fisheye_render.visible_ = RenderConfig::kUpper;
+  constexpr float kWl = 550.0f;
+
+  SessionSpec cpu_spec;
+  cpu_spec.scene = &scene;
+  cpu_spec.render = &fisheye_render;
+  cpu_spec.wl = WlParam{kWl, 1.0f};
+  cpu_spec.seed = 42;
+
+  constexpr size_t kRayCount = 4096;
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  int fw = fisheye_render.resolution_[0];
+  int fh = fisheye_render.resolution_[1];
+  auto fpix = static_cast<size_t>(fw) * static_cast<size_t>(fh);
+  std::vector<float> xyz_cpu(fpix * 3, 0.0f);
+
+  CpuTraceBackend cpu;
+  cpu.BeginSession(cpu_spec);
+  cpu.TraceLayer(RootRaySource::FromHost(host));
+  XyzImageData cpu_img{xyz_cpu.data(), fw, fh};
+  cpu.ReadbackImage(cpu_img);
+  float direct_total = cpu.TotalLandedWeight();
+  cpu.EndSession();
+
+  int wl_key = static_cast<int>(kWl + 0.5f);
+  ASSERT_GE(wl_key, kCmfMinWavelength);
+  ASSERT_LE(wl_key, kCmfMaxWavelength);
+  float cie_y = kCmfY[wl_key - kCmfMinWavelength];
+  ASSERT_GT(cie_y, 1e-7f);
+
+  double sum_y_cpu = 0.0;
+  for (size_t i = 0; i < fpix; i++) {
+    sum_y_cpu += xyz_cpu[i * 3 + 1];
+  }
+  auto formula_total = static_cast<float>(sum_y_cpu / cie_y);
+
+  ASSERT_GT(direct_total, 0.0f) << "CpuTraceBackend produced no landed rays";
+  float rel = std::abs(formula_total - direct_total) / direct_total;
+  // The formula is a mathematical identity (SpectrumToXyz accumulates cie_y*w per ray,
+  // TotalLandedWeight() accumulates w per ray independently). Float summation order
+  // differences give rel ≤ 1e-4 in practice.
+  EXPECT_LE(rel, 1e-3f)
+      << "sum_Y / cie_y diverges from TotalLandedWeight() — formula semantic error"
+      << " formula=" << formula_total << " direct=" << direct_total << " rel=" << rel;
+
+  // Part 2: Metal sanity check — verify Metal sum_Y/cie_y is a sane positive value.
+  // Uses MakeRectangularRender (Metal v1 requires kRectangular + zenith view).
+  if (!ShouldSkipMetalTests()) {
+    auto metal_render = MakeRectangularRender();
+    SessionSpec metal_spec;
+    metal_spec.scene = &scene;
+    metal_spec.render = &metal_render;
+    metal_spec.wl = WlParam{kWl, 1.0f};
+    metal_spec.seed = 42;
+
+    int mw = metal_render.resolution_[0];
+    int mh = metal_render.resolution_[1];
+    auto mpix = static_cast<size_t>(mw) * static_cast<size_t>(mh);
+    std::vector<float> xyz_metal(mpix * 3, 0.0f);
+    {
+      MetalTraceBackend metal;
+      metal.BeginSession(metal_spec);
+      metal.TraceLayer(RootRaySource::FromHost(host));
+      XyzImageData metal_img{xyz_metal.data(), mw, mh};
+      metal.ReadbackImage(metal_img);
+      metal.EndSession();
+    }
+    double sum_y_metal = 0.0;
+    for (size_t i = 0; i < mpix; i++) {
+      sum_y_metal += xyz_metal[i * 3 + 1];
+    }
+    auto metal_total = static_cast<float>(sum_y_metal / cie_y);
+    EXPECT_GT(metal_total, 0.0f) << "Metal sum_Y / cie_y is zero — no rays landed";
+    EXPECT_FALSE(std::isnan(metal_total)) << "Metal sum_Y / cie_y is NaN";
+    EXPECT_FALSE(std::isinf(metal_total)) << "Metal sum_Y / cie_y is Inf";
+  }
 }
 
 }  // namespace

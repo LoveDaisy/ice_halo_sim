@@ -36,9 +36,9 @@ using lumice::SimData;
 // authoring platform that this test file's per-field assertions need updating.
 #if defined(__APPLE__) && defined(__aarch64__)
 static_assert(sizeof(void*) == 8, "SimData layout assumes 64-bit pointers");
-// Task 252.3 added backend_xyz_ (std::vector<float>) + backend_total_intensity_
-// (float), bumping SimData by 32B (24 vector + 4 float + 4 tail align) → 224.
-static_assert(sizeof(SimData) == 224,
+// Task 252.3 added backend_xyz_ (std::vector<float>, 24B) + backend_total_intensity_
+// (float, 4B) + is_backend_path_ (bool, 1B with 7B align padding before vector) → 232.
+static_assert(sizeof(SimData) == 232,
               "SimData layout changed — update test_sim_data.cpp DeepCopy/Move assertions "
               "and sim_data.cpp's static_assert.");
 #endif

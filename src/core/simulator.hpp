@@ -86,10 +86,6 @@ class Simulator {
 
   uint32_t seed_;
   RandomNumberGenerator rng_;
-  // Optional TraceBackend created in Run() when LUMICE_TRACE_BACKEND env var
-  // selects an alternative implementation. nullptr ⇒ legacy CPU path.
-  // Constructed once per Run() entry; destroyed when Run() exits.
-  std::unique_ptr<TraceBackend> backend_;
   Logger logger_{ "Simulator" };
 };
 

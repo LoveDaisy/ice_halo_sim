@@ -45,8 +45,6 @@ RenderConsumer::RenderConsumer(RenderConfig config)
 
 
 void RenderConsumer::Consume(const SimData& data) {
-  auto t0 = std::chrono::steady_clock::now();
-
   // Backend pre-accumulated XYZ path (TraceBackend seam, task 252.3):
   // when the simulator routed this batch through a TraceBackend that performed
   // on-device projection + XYZ accumulation, the resulting W×H×3 image is
@@ -55,7 +53,7 @@ void RenderConsumer::Consume(const SimData& data) {
   // Runtime size check (NOT assert) — release builds optimize asserts away and
   // a mismatched size would OOB-write into internal_xyz_; on mismatch we log
   // and skip rather than corrupt the accumulator.
-  if (!data.backend_xyz_.empty()) {
+  if (data.is_backend_path_) {
     auto pix = static_cast<size_t>(config_.resolution_[0]) * config_.resolution_[1];
     if (data.backend_xyz_.size() != pix * 3) {
       ILOG_ERROR(logger_, "Consume: backend_xyz_ size mismatch (got {}, expected {} = {}x{}x3); skipping batch",
@@ -71,6 +69,7 @@ void RenderConsumer::Consume(const SimData& data) {
     return;
   }
 
+  auto t0 = std::chrono::steady_clock::now();
   // Resize pre-allocated buffers if needed (grow-only).
   // Use outgoing count for capacity — it's the upper bound for filtered rays.
   size_t outgoing_count = data.outgoing_indices_.size();

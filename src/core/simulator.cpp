@@ -477,7 +477,7 @@ Simulator::Simulator(QueuePtrS<SimBatch> config_queue, QueuePtrS<SimData> data_q
 Simulator::Simulator(Simulator&& other) noexcept
     : config_queue_(std::move(other.config_queue_)), data_queue_(std::move(other.data_queue_)),
       stop_(other.stop_.load()), idle_(other.idle_.load()), seed_(other.seed_), rng_(other.rng_),
-      backend_(std::move(other.backend_)), logger_(std::move(other.logger_)) {}
+      logger_(std::move(other.logger_)) {}
 
 Simulator& Simulator::operator=(Simulator&& other) noexcept {
   if (this == &other) {
@@ -490,7 +490,6 @@ Simulator& Simulator::operator=(Simulator&& other) noexcept {
   idle_ = other.idle_.load();
   seed_ = other.seed_;
   rng_ = other.rng_;
-  backend_ = std::move(other.backend_);
   logger_ = std::move(other.logger_);
   return *this;
 }
@@ -583,12 +582,8 @@ void Simulator::Run() {
 
   // Pick a TraceBackend once per Run() entry. nullptr keeps the legacy CPU
   // path (zero behavior change when LUMICE_TRACE_BACKEND is unset).
-  backend_ = CreateBackendFromEnv(logger_);
-#if defined(__APPLE__)
-  bool is_metal = dynamic_cast<MetalTraceBackend*>(backend_.get()) != nullptr;
-#else
-  bool is_metal = false;
-#endif
+  auto backend = CreateBackendFromEnv(logger_);
+  bool is_metal = backend && backend->IsMetal();
   bool warned_multi_renderer = false;
   bool warned_metal_constraint = false;
 
@@ -619,7 +614,7 @@ void Simulator::Run() {
     }
 
     bool use_backend =
-        CanUseBackend(backend_.get(), batch, is_metal, logger_, warned_multi_renderer, warned_metal_constraint);
+        CanUseBackend(backend.get(), batch, is_metal, logger_, warned_multi_renderer, warned_metal_constraint);
 
     const auto& spectrum = config.light_source_.spectrum_;
     if (auto* illuminant = std::get_if<IlluminantType>(&spectrum)) {
@@ -628,7 +623,7 @@ void Simulator::Run() {
       float weight = GetIlluminantSpd(*illuminant, wl);
       WlParam wl_param{ wl, weight };
       if (use_backend) {
-        SimulateOneWavelengthWithBackend(*backend_, config, (*batch.renders_)[0], wl_param, batch.ray_num_, generation);
+        SimulateOneWavelengthWithBackend(*backend, config, (*batch.renders_)[0], wl_param, batch.ray_num_, generation);
       } else {
         SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation, ray_alloc_carry);
       }
@@ -640,7 +635,7 @@ void Simulator::Run() {
           break;
         }
         if (use_backend) {
-          SimulateOneWavelengthWithBackend(*backend_, config, (*batch.renders_)[0], wl_param, batch.ray_num_,
+          SimulateOneWavelengthWithBackend(*backend, config, (*batch.renders_)[0], wl_param, batch.ray_num_,
                                            generation);
         } else {
           SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation,
@@ -651,10 +646,6 @@ void Simulator::Run() {
 
     idle_ = true;
   }
-
-  // Release the backend before returning so Stop()/restart cycles always start
-  // from a clean slate (no in-session leaks on early exit paths).
-  backend_.reset();
 }
 
 
@@ -858,6 +849,14 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
 
   SessionSpec spec{ &scene, &render, wl_param, seed_ };
   backend.BeginSession(spec);
+  // RAII guard: EndSession() is called on all exit paths, including exceptions
+  // thrown by TraceLayer/Recombine (which would otherwise skip EndSession).
+  struct EndOnExit {
+    TraceBackend& b;
+    ~EndOnExit() noexcept { b.EndSession(); }
+    EndOnExit(const EndOnExit&) = delete;
+    EndOnExit& operator=(const EndOnExit&) = delete;
+  } session_guard{ backend };
 
   // Drive (TraceLayer -> Recombine)* n -> TraceLayer (tail) -> ReadbackImage.
   // The first call must be a host RootRaySource; per trace_backend.hpp lines
@@ -891,14 +890,12 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   }
 
   if (aborted) {
-    backend.EndSession();
     return;
   }
 
   int w = render.resolution_[0];
   int h = render.resolution_[1];
   if (w <= 0 || h <= 0) {
-    backend.EndSession();
     return;
   }
   auto pix = static_cast<size_t>(w) * static_cast<size_t>(h);
@@ -920,12 +917,11 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
     }
   }
 
-  backend.EndSession();
-
   SimData sim_data;
   sim_data.curr_wl_ = wl_param.wl_;
   sim_data.generation_ = generation;
   sim_data.root_ray_count_ = ray_num;
+  sim_data.is_backend_path_ = true;
   sim_data.backend_xyz_ = std::move(xyz_data);
   sim_data.backend_total_intensity_ = total_landed_weight;
   data_queue_->Emplace(std::move(sim_data));

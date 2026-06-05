@@ -58,6 +58,7 @@ class MetalTraceBackend : public TraceBackend {
   RootRaySource Recombine(LayerHandlePtr handle, const RecombineSpec& spec) override;
   void ReadbackImage(XyzImageData& out) override;
   void EndSession() override;
+  bool IsMetal() const override { return true; }
 
  private:
   struct Impl;
