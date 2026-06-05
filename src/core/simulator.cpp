@@ -3,24 +3,36 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <numeric>
+#include <string>
 #include <thread>
 
 #include "config/crystal_config.hpp"
 #include "config/light_config.hpp"
 #include "config/proj_config.hpp"
+#include "config/render_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/buffer.hpp"
+#include "core/color_util.hpp"
+#include "core/cpu_trace_backend.hpp"
 #include "core/crystal.hpp"
 #include "core/filter_spec.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
+#include "core/trace_backend.hpp"
+#include "util/color_data.hpp"
 #include "util/illuminant.hpp"
 #include "util/logger.hpp"
 #include "util/queue.hpp"
+
+#if defined(__APPLE__)
+#include "core/metal_trace_backend.hpp"
+#endif
 
 namespace lumice {
 
@@ -465,7 +477,7 @@ Simulator::Simulator(QueuePtrS<SimBatch> config_queue, QueuePtrS<SimData> data_q
 Simulator::Simulator(Simulator&& other) noexcept
     : config_queue_(std::move(other.config_queue_)), data_queue_(std::move(other.data_queue_)),
       stop_(other.stop_.load()), idle_(other.idle_.load()), seed_(other.seed_), rng_(other.rng_),
-      logger_(std::move(other.logger_)) {}
+      backend_(std::move(other.backend_)), logger_(std::move(other.logger_)) {}
 
 Simulator& Simulator::operator=(Simulator&& other) noexcept {
   if (this == &other) {
@@ -478,9 +490,85 @@ Simulator& Simulator::operator=(Simulator&& other) noexcept {
   idle_ = other.idle_.load();
   seed_ = other.seed_;
   rng_ = other.rng_;
+  backend_ = std::move(other.backend_);
   logger_ = std::move(other.logger_);
   return *this;
 }
+
+namespace {
+
+// Read LUMICE_TRACE_BACKEND once and create the matching TraceBackend instance.
+// Returns nullptr for the legacy CPU (Simulator::SimulateOneWavelength) path:
+//   - unset / empty / "legacy"      -> nullptr (legacy)
+//   - "cpu_backend"                  -> CpuTraceBackend (debug; non-Apple too)
+//   - "metal" on Apple               -> MetalTraceBackend
+//   - "metal" elsewhere or unknown   -> nullptr (logged once at WARN)
+std::unique_ptr<TraceBackend> CreateBackendFromEnv(Logger& logger) {
+  const char* raw = std::getenv("LUMICE_TRACE_BACKEND");
+  if (raw == nullptr) {
+    return nullptr;
+  }
+  std::string name(raw);
+  if (name.empty() || name == "legacy") {
+    return nullptr;
+  }
+  if (name == "cpu_backend") {
+    ILOG_INFO(logger, "LUMICE_TRACE_BACKEND=cpu_backend → routing via CpuTraceBackend");
+    return std::make_unique<CpuTraceBackend>();
+  }
+  if (name == "metal") {
+#if defined(__APPLE__)
+    ILOG_INFO(logger, "LUMICE_TRACE_BACKEND=metal → routing via MetalTraceBackend");
+    return std::make_unique<MetalTraceBackend>();
+#else
+    ILOG_WARN(logger, "LUMICE_TRACE_BACKEND=metal requested on non-Apple platform; falling back to legacy CPU");
+    return nullptr;
+#endif
+  }
+  ILOG_WARN(logger, "Unknown LUMICE_TRACE_BACKEND={}; falling back to legacy CPU", name);
+  return nullptr;
+}
+
+// Compatibility gate: even when a backend is selected, a particular batch may
+// not be backend-eligible (multi-renderer config, lens/view limits, etc.).
+// Falls back to legacy CPU on mismatch — logs WARN at most once per Run() via
+// the per-Simulator latch on `warned`. Per-batch checks are conservative: a
+// single false ⇒ legacy CPU for the whole wavelength.
+bool CanUseBackend(const TraceBackend* backend, const SimBatch& batch, bool is_metal, Logger& logger,
+                   bool& warned_multi_renderer, bool& warned_metal_constraint) {
+  if (backend == nullptr) {
+    return false;
+  }
+  if (!batch.renders_ || batch.renders_->empty()) {
+    // No renderer attached (e.g. legacy callers): cannot route through a
+    // backend that needs a RenderConfig for projection. Fall back silently.
+    return false;
+  }
+  if (batch.renders_->size() != 1) {
+    if (!warned_multi_renderer) {
+      ILOG_WARN(logger, "TraceBackend path supports a single renderer only (got {}); falling back to legacy CPU",
+                batch.renders_->size());
+      warned_multi_renderer = true;
+    }
+    return false;
+  }
+  if (is_metal) {
+    const auto& r = (*batch.renders_)[0];
+    if (r.lens_.type_ != LensParam::kRectangular || std::abs(r.view_.el_ - 90.0f) > 0.01f) {
+      if (!warned_metal_constraint) {
+        ILOG_WARN(logger,
+                  "MetalTraceBackend v1 requires kRectangular + zenith view "
+                  "(got lens_type={}, el={:.2f}); falling back to legacy CPU",
+                  static_cast<int>(r.lens_.type_), r.view_.el_);
+        warned_metal_constraint = true;
+      }
+      return false;
+    }
+  }
+  return true;
+}
+
+}  // namespace
 
 void Simulator::Run() {
   stop_ = false;
@@ -492,6 +580,17 @@ void Simulator::Run() {
   if (seed_ != 0) {
     RandomNumberGenerator::GetInstance().SetSeed(seed_);
   }
+
+  // Pick a TraceBackend once per Run() entry. nullptr keeps the legacy CPU
+  // path (zero behavior change when LUMICE_TRACE_BACKEND is unset).
+  backend_ = CreateBackendFromEnv(logger_);
+#if defined(__APPLE__)
+  bool is_metal = dynamic_cast<MetalTraceBackend*>(backend_.get()) != nullptr;
+#else
+  bool is_metal = false;
+#endif
+  bool warned_multi_renderer = false;
+  bool warned_metal_constraint = false;
 
   CrystalCache crystal_cache;
   SimWorkspace workspace;
@@ -519,13 +618,20 @@ void Simulator::Run() {
       prev_generation = generation;
     }
 
+    bool use_backend =
+        CanUseBackend(backend_.get(), batch, is_metal, logger_, warned_multi_renderer, warned_metal_constraint);
+
     const auto& spectrum = config.light_source_.spectrum_;
     if (auto* illuminant = std::get_if<IlluminantType>(&spectrum)) {
       // Standard illuminant: uniform wavelength sampling + SPD weight
       float wl = 380.0f + rng_.GetUniform() * 400.0f;  // [380, 780] nm
       float weight = GetIlluminantSpd(*illuminant, wl);
-      SimulateOneWavelength(config, WlParam{ wl, weight }, batch.ray_num_, crystal_cache, workspace, generation,
-                            ray_alloc_carry);
+      WlParam wl_param{ wl, weight };
+      if (use_backend) {
+        SimulateOneWavelengthWithBackend(*backend_, config, (*batch.renders_)[0], wl_param, batch.ray_num_, generation);
+      } else {
+        SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation, ray_alloc_carry);
+      }
     } else {
       // Discrete wavelength list
       const auto& wl_params = std::get<std::vector<WlParam>>(spectrum);
@@ -533,12 +639,22 @@ void Simulator::Run() {
         if (stop_) {
           break;
         }
-        SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation, ray_alloc_carry);
+        if (use_backend) {
+          SimulateOneWavelengthWithBackend(*backend_, config, (*batch.renders_)[0], wl_param, batch.ray_num_,
+                                           generation);
+        } else {
+          SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation,
+                                ray_alloc_carry);
+        }
       }
     }
 
     idle_ = true;
   }
+
+  // Release the backend before returning so Stop()/restart cycles always start
+  // from a clean slate (no in-session leaks on early exit paths).
+  backend_.reset();
 }
 
 
@@ -712,6 +828,106 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   sim_data.outgoing_d_ = std::move(outgoing_d);
   sim_data.outgoing_w_ = std::move(outgoing_w);
   sim_data.root_ray_count_ = original_ray_num;
+  data_queue_->Emplace(std::move(sim_data));
+}
+
+// Backend-routed wavelength step (task 252.3, TraceBackend seam integration).
+// Mirrors the wavelength-loop semantics of SimulateOneWavelength but delegates
+// trace -> projection -> XYZ accumulation to the supplied backend (CPU or
+// Metal). Produces a SimData whose backend_xyz_ + backend_total_intensity_
+// fields feed RenderConsumer's early-return path (server/render.cpp).
+//
+// Y-channel reverse-compute of total_landed_weight:
+//   sum_Y = Σ XYZ[i].y = Σ kCmfY[wl] · w_i  ⇒  total_landed_weight = sum_Y / kCmfY[wl]
+// This holds because a single-wavelength session multiplies every landed ray's
+// weight by the same kCmfY[wl] before accumulating into the Y channel.
+// Out-of-band wavelengths (kCmfY[wl] ≈ 0) defeat reverse-compute; in that
+// regime XYZ is also zero so total_intensity_ stays 0 → EV scale code already
+// guards `snapshot_intensity_ <= 0`.
+//
+// `stop_` is checked between TraceLayer/Recombine calls. On stop the session
+// is closed via EndSession (RAII-equivalent) but no SimData is emplaced.
+void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const SceneConfig& scene,
+                                                 const RenderConfig& render, const WlParam& wl_param, size_t ray_num,
+                                                 uint64_t generation) {
+  ILOG_TRACE(logger_, "Run(backend): ray({}), wl({:.1f},{:.2f})", ray_num, wl_param.wl_, wl_param.weight_);
+
+  if (ray_num == 0 || scene.ms_.empty()) {
+    return;
+  }
+
+  SessionSpec spec{ &scene, &render, wl_param, seed_ };
+  backend.BeginSession(spec);
+
+  // Drive (TraceLayer -> Recombine)* n -> TraceLayer (tail) -> ReadbackImage.
+  // The first call must be a host RootRaySource; per trace_backend.hpp lines
+  // 118-124, backends self-generate initial rays from scene config, so the
+  // d/p/w/tf pointers stay null and only `count` is consumed.
+  HostRayBatch host{};
+  host.count = ray_num;
+  RootRaySource roots = RootRaySource::FromHost(host);
+
+  bool aborted = false;
+  for (size_t mi = 0; mi < scene.ms_.size(); mi++) {
+    if (stop_) {
+      aborted = true;
+      break;
+    }
+    LayerHandlePtr handle = backend.TraceLayer(roots);
+    bool last_layer = (mi + 1 == scene.ms_.size());
+    if (last_layer) {
+      // No Recombine on the final layer — handle goes out of scope.
+      break;
+    }
+    if (stop_) {
+      aborted = true;
+      break;
+    }
+    // Metal v1 does not implement device-side shuffle and asserts on shuffle=true.
+    // CpuTraceBackend tolerates either. Always disable to keep both paths uniform.
+    RecombineSpec rspec{};
+    rspec.shuffle = false;
+    roots = backend.Recombine(std::move(handle), rspec);
+  }
+
+  if (aborted) {
+    backend.EndSession();
+    return;
+  }
+
+  int w = render.resolution_[0];
+  int h = render.resolution_[1];
+  if (w <= 0 || h <= 0) {
+    backend.EndSession();
+    return;
+  }
+  auto pix = static_cast<size_t>(w) * static_cast<size_t>(h);
+  std::vector<float> xyz_data(pix * 3, 0.0f);
+  XyzImageData xyz_out{ xyz_data.data(), w, h };
+  backend.ReadbackImage(xyz_out);
+
+  // Reverse-compute total_landed_weight from the Y channel — see comment block above.
+  float total_landed_weight = 0.0f;
+  int wl_key = static_cast<int>(wl_param.wl_ + 0.5f);
+  if (wl_key >= kCmfMinWavelength && wl_key <= kCmfMaxWavelength) {
+    float cie_y = kCmfY[wl_key - kCmfMinWavelength];
+    if (cie_y > 1e-7f) {
+      double sum_y = 0.0;  // double accum: 1k×1k×3 floats can exceed float precision
+      for (size_t i = 0; i < pix; i++) {
+        sum_y += xyz_data[i * 3 + 1];
+      }
+      total_landed_weight = static_cast<float>(sum_y / cie_y);
+    }
+  }
+
+  backend.EndSession();
+
+  SimData sim_data;
+  sim_data.curr_wl_ = wl_param.wl_;
+  sim_data.generation_ = generation;
+  sim_data.root_ray_count_ = ray_num;
+  sim_data.backend_xyz_ = std::move(xyz_data);
+  sim_data.backend_total_intensity_ = total_landed_weight;
   data_queue_->Emplace(std::move(sim_data));
 }
 

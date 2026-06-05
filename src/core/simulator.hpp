@@ -12,12 +12,12 @@
 #include "core/crystal.hpp"
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
+#include "core/trace_backend.hpp"
 #include "util/logger.hpp"
 
 namespace lumice {
 
 class FilterSpec;
-class TraceBackend;
 
 template <class T>
 class Queue;
@@ -70,6 +70,13 @@ class Simulator {
                              CrystalCache& crystal_cache, SimWorkspace& workspace, uint64_t generation,
                              std::vector<std::vector<double>>& ray_alloc_carry);
 
+  // Backend-routed wavelength step (task 252.3, TraceBackend seam integration).
+  // Drives backend.BeginSession -> (TraceLayer -> Recombine)+ -> ReadbackImage
+  // -> EndSession and emplaces a SimData carrying backend_xyz_ +
+  // backend_total_intensity_. Only invoked when CanUseBackend() returns true.
+  void SimulateOneWavelengthWithBackend(TraceBackend& backend, const SceneConfig& scene, const RenderConfig& render,
+                                        const WlParam& wl_param, size_t ray_num, uint64_t generation);
+
   static constexpr size_t kSmallBatchRayNum = 32;
 
   QueuePtrS<SimBatch> config_queue_;
@@ -79,6 +86,10 @@ class Simulator {
 
   uint32_t seed_;
   RandomNumberGenerator rng_;
+  // Optional TraceBackend created in Run() when LUMICE_TRACE_BACKEND env var
+  // selects an alternative implementation. nullptr ⇒ legacy CPU path.
+  // Constructed once per Run() entry; destroyed when Run() exits.
+  std::unique_ptr<TraceBackend> backend_;
   Logger logger_{ "Simulator" };
 };
 

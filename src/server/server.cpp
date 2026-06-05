@@ -605,7 +605,11 @@ void ServerImpl::ConsumeData() {
   while (true) {
     CHECK_STOP
     auto sim_data = data_queue_->Get();
-    if (sim_data.rays_.Empty()) {
+    // Interruption sentinel: a default-constructed SimData (queue shutdown /
+    // simulator early exit) has both rays_ and backend_xyz_ empty. Backend
+    // path delivers a non-empty backend_xyz_ with rays_ empty — treat that as
+    // valid data, not interruption.
+    if (sim_data.rays_.Empty() && sim_data.backend_xyz_.empty()) {
       // Simulation is interrupted.
       break;
     }
