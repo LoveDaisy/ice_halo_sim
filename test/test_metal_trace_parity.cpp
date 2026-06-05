@@ -37,6 +37,7 @@
 #include "core/math.hpp"
 #include "core/metal_trace_backend.hpp"
 #include "core/scatter_accum.hpp"
+#include "core/simulator.hpp"  // PartitionCrystalRayNum
 #include "core/trace_backend.hpp"
 #include "core/trace_ops.hpp"
 #include "metal_test_helpers.hpp"
@@ -46,6 +47,7 @@ namespace {
 
 using metal_test::ChannelSum;
 using metal_test::MakeMetalScene;
+using metal_test::MakeMultiCrystalScene;
 using metal_test::MakeRectangularRender;
 using metal_test::RelErr;
 using metal_test::ShouldSkipMetalTests;
@@ -239,9 +241,9 @@ OracleLayerResult OracleTraceLayer(const Crystal& crystal, const PolyArrays& pol
 // Apply argmax-facing + centroid re-entry to a batch of exit rays. Mirrors
 // the kernel's ms_mode==1 branch where exits become the next layer's roots.
 // NOLINTNEXTLINE(readability-function-size)
-void OracleReentryRoots(const PolyArrays& poly, const std::vector<float>& exit_d,
-                        const std::vector<float>& exit_w, std::vector<float>& out_d, std::vector<float>& out_p,
-                        std::vector<float>& out_w, std::vector<IdType>& out_tf) {
+void OracleReentryRoots(const PolyArrays& poly, const std::vector<float>& exit_d, const std::vector<float>& exit_w,
+                        std::vector<float>& out_d, std::vector<float>& out_p, std::vector<float>& out_w,
+                        std::vector<IdType>& out_tf) {
   size_t poly_cnt = poly.n.size() / 3;
   size_t n = exit_w.size();
   out_d.assign(exit_d.begin(), exit_d.end());
@@ -470,8 +472,7 @@ TEST(MetalTraceParity, TwoLayerExitStatsAndXyz) {
   std::vector<float> next_p;
   std::vector<float> next_w;
   std::vector<IdType> next_tf;
-  OracleReentryRoots(poly0, oracle_l0.exit_d, oracle_l0.exit_w, next_d, next_p,
-                     next_w, next_tf);
+  OracleReentryRoots(poly0, oracle_l0.exit_d, oracle_l0.exit_w, next_d, next_p, next_w, next_tf);
 
   // Layer 1: same RNG consumption as Metal (ResolveLayerCrystal calls
   // MakeCrystal on every non-first layer regardless of host crystal).
@@ -554,6 +555,354 @@ TEST(MetalTraceParity, DeepRecorderSingleLayer) {
     double so = ChannelSum(xyz_oracle, c);
     EXPECT_LT(RelErr(sm, so), 5e-4) << "channel=" << c << " metal=" << sm << " oracle=" << so;
   }
+}
+
+// =============================================================================
+// Multi-population oracle helpers (Test J / K).
+//
+// Mirrors MetalTraceBackend::TraceLayer's multi-ci loop: per-ci
+// PartitionCrystalRayNum-sliced root rays, MakeCrystal then InitRayFirstMs
+// (or staged continuation slice for non-first MS), OracleTraceLayer per ci,
+// concatenated exit_d / exit_w in ci order (matches Metal's append behaviour
+// driven by the atomic counter resuming from counter_init = cumulative).
+// =============================================================================
+struct MultiPopFirstLayerResult {
+  size_t total_exit_count = 0;
+  double total_exit_w_sum = 0.0;
+  std::vector<float> exit_d;
+  std::vector<float> exit_w;
+  // Per-ci crystals retained so callers can drive a second MS layer's
+  // re-entry geometry through the same poly tables Metal uses.
+  std::vector<Crystal> crystals;
+  std::vector<PolyArrays> polys;
+};
+
+MultiPopFirstLayerResult OracleRunFirstLayerMultiPop(RandomNumberGenerator& rng, const SessionSpec& spec,
+                                                     size_t total_ray_num) {
+  const auto& ms = spec.scene->ms_[0];
+  size_t crystal_cnt = ms.setting_.size();
+  std::vector<float> proportions;
+  proportions.reserve(crystal_cnt);
+  for (size_t ci = 0; ci < crystal_cnt; ci++) {
+    proportions.push_back(ms.setting_[ci].crystal_proportion_);
+  }
+  std::vector<double> carry(crystal_cnt, 0.0);
+  auto crystal_ray_num = PartitionCrystalRayNum(proportions, total_ray_num, carry);
+
+  MultiPopFirstLayerResult out;
+  out.crystals.reserve(crystal_cnt);
+  out.polys.reserve(crystal_cnt);
+  for (size_t ci = 0; ci < crystal_cnt; ci++) {
+    size_t ci_n = crystal_ray_num[ci];
+    const auto& setting = ms.setting_[ci];
+
+    // Match MetalTraceBackend: ResolveLayerCrystalForCi calls MakeCrystal
+    // unconditionally (host crystal path is not used in this test).
+    Crystal crystal = MakeCrystal(rng, setting.crystal_.param_);
+    float n_idx = crystal.GetRefractiveIndex(spec.wl.wl_);
+    PolyArrays poly = BuildPolyArrays(crystal);
+
+    if (ci_n == 0) {
+      // Still record the crystal so the Metal-side RNG cadence stays
+      // aligned even if a ci is empty (in practice 70/30 + small ray
+      // count rarely produces ci_n=0 but the structure must mirror).
+      out.crystals.push_back(std::move(crystal));
+      out.polys.push_back(std::move(poly));
+      continue;
+    }
+
+    // InitRayFirstMs draws ci_n × per-ray RNG samples — same as Metal's
+    // GenerateFirstLayerRootsForCi.
+    RayBuffer workspace[2]{};
+    workspace[0].Reset(ci_n);
+    workspace[1].Reset(ci_n);
+    RayBuffer all_data = AllocateAllData(*spec.scene, ci_n);
+    InitRayFirstMs(rng, spec.scene->light_source_.param_, spec.wl, ci_n, crystal,
+                   /*curr_crystal_id=*/ci, setting.crystal_.axis_, workspace, all_data);
+
+    size_t n_actual = workspace[0].size_;
+    std::vector<float> root_d(n_actual * 3, 0.0f);
+    std::vector<float> root_p(n_actual * 3, 0.0f);
+    std::vector<float> root_w(n_actual, 0.0f);
+    std::vector<IdType> root_tf(n_actual, 0);
+    for (size_t i = 0; i < n_actual; i++) {
+      const RaySeg& r = workspace[0][i];
+      root_d[i * 3 + 0] = r.d_[0];
+      root_d[i * 3 + 1] = r.d_[1];
+      root_d[i * 3 + 2] = r.d_[2];
+      root_p[i * 3 + 0] = r.p_[0];
+      root_p[i * 3 + 1] = r.p_[1];
+      root_p[i * 3 + 2] = r.p_[2];
+      root_w[i] = r.w_;
+      root_tf[i] = r.to_face_;
+    }
+
+    auto ci_result = OracleTraceLayer(crystal, poly, n_idx, spec.scene->max_hits_, root_d, root_p, root_w, root_tf);
+    out.total_exit_count += ci_result.exit_count;
+    out.total_exit_w_sum += ci_result.exit_w_sum;
+    out.exit_d.insert(out.exit_d.end(), ci_result.exit_d.begin(), ci_result.exit_d.end());
+    out.exit_w.insert(out.exit_w.end(), ci_result.exit_w.begin(), ci_result.exit_w.end());
+
+    out.crystals.push_back(std::move(crystal));
+    out.polys.push_back(std::move(poly));
+  }
+  return out;
+}
+
+// =============================================================================
+// Test J — multi-population single-layer parity (≥2 crystals, 0.7/0.3 split).
+//
+// Validates: backend per-crystal dispatch produces the same total exit_count /
+// exit_w_sum / XYZ as the oracle's per-ci concatenation. The kernel's atomic
+// counter resuming from counter_init = cont_counts[out_slot] is exercised
+// implicitly — Test K extends to two MS layers where the continuation buffer
+// is read back through Recombine.
+// =============================================================================
+TEST(MetalTraceParity, MultiPopSingleLayerExitStatsAndXyz) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+
+  auto scene = MakeMultiCrystalScene(/*max_hits=*/8, /*ms_layers=*/1, /*crystal_count=*/2);
+  auto render = MakeRectangularRender();
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  constexpr size_t kRayCount = 4096;
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  std::vector<float> xyz_metal(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
+  LayerStats metal_stats;
+  {
+    MetalTraceBackend metal;
+    metal.BeginSession(spec);
+    auto h = metal.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h, nullptr);
+    metal_stats = h->GetLayerStats();
+    XyzImageData img{ xyz_metal.data(), render.resolution_[0], render.resolution_[1] };
+    metal.ReadbackImage(img);
+    metal.EndSession();
+  }
+
+  RandomNumberGenerator oracle_rng(0);
+  SeedRngsLikeMetal(oracle_rng, spec.seed);
+  auto oracle = OracleRunFirstLayerMultiPop(oracle_rng, spec, kRayCount);
+
+  std::vector<float> xyz_oracle(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
+  Rotation camera_rot = MakeCameraRotation(render);
+  ScatterOutgoingToXyz(oracle.exit_d.data(), oracle.exit_w.data(), oracle.exit_w.size(), render, camera_rot,
+                       spec.wl.wl_, xyz_oracle.data());
+
+  EXPECT_EQ(metal_stats.exit_count, oracle.total_exit_count)
+      << "exit_count mismatch — metal=" << metal_stats.exit_count << " oracle=" << oracle.total_exit_count;
+  EXPECT_LT(RelErr(metal_stats.exit_w_sum, oracle.total_exit_w_sum), 5e-4)
+      << "exit_w_sum: metal=" << metal_stats.exit_w_sum << " oracle=" << oracle.total_exit_w_sum;
+  for (int c = 0; c < 3; c++) {
+    double sm = ChannelSum(xyz_metal, c);
+    double so = ChannelSum(xyz_oracle, c);
+    EXPECT_LT(RelErr(sm, so), 5e-4) << "channel=" << c << " metal=" << sm << " oracle=" << so;
+  }
+}
+
+// =============================================================================
+// Test K — multi-population × 2 MS layers parity.
+//
+// Validates that the cross-ci counter_init append works under the MS
+// recombine path: Layer 0 writes cont_*[0] with all ci's exits concatenated;
+// argmax-facing + centroid re-entry feeds Layer 1 which performs its own
+// per-ci dispatch, this time staging cont slices into root_* via memcpy.
+// =============================================================================
+TEST(MetalTraceParity, MultiPopTwoLayerExitStatsAndXyz) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+
+  auto scene = MakeMultiCrystalScene(/*max_hits=*/6, /*ms_layers=*/2, /*crystal_count=*/2);
+  auto render = MakeRectangularRender();
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 7;
+
+  constexpr size_t kRayCount = 2048;
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  std::vector<float> xyz_metal(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
+  LayerStats metal_layer0_stats;
+  LayerStats metal_layer1_stats;
+  size_t metal_cont0 = 0;
+  {
+    MetalTraceBackend metal;
+    metal.BeginSession(spec);
+    auto h0 = metal.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h0, nullptr);
+    metal_layer0_stats = h0->GetLayerStats();
+    metal_cont0 = h0->ContinuationCount();
+    RecombineSpec rspec;
+    rspec.shuffle = false;
+    auto roots1 = metal.Recombine(std::move(h0), rspec);
+    auto h1 = metal.TraceLayer(roots1);
+    ASSERT_NE(h1, nullptr);
+    metal_layer1_stats = h1->GetLayerStats();
+    EXPECT_EQ(h1->ContinuationCount(), 0u);
+    XyzImageData img{ xyz_metal.data(), render.resolution_[0], render.resolution_[1] };
+    metal.ReadbackImage(img);
+    metal.EndSession();
+  }
+
+  RandomNumberGenerator oracle_rng(0);
+  SeedRngsLikeMetal(oracle_rng, spec.seed);
+
+  // Layer 0 — multi-pop oracle.
+  auto oracle_l0 = OracleRunFirstLayerMultiPop(oracle_rng, spec, kRayCount);
+  EXPECT_EQ(metal_cont0, oracle_l0.total_exit_count) << "layer0 continuation_count vs oracle exit_count mismatch";
+  EXPECT_EQ(metal_layer0_stats.exit_count, oracle_l0.total_exit_count) << "layer0 exit_count mismatch";
+  EXPECT_LT(RelErr(metal_layer0_stats.exit_w_sum, oracle_l0.total_exit_w_sum), 5e-4)
+      << "layer0 exit_w_sum: metal=" << metal_layer0_stats.exit_w_sum << " oracle=" << oracle_l0.total_exit_w_sum;
+
+  // Re-entry: argmax-facing + centroid. The Metal kernel's exit branch
+  // computes the entry point using the *producing* crystal's poly table.
+  // In MakeMultiCrystalScene all ci share identical prism geometry, so any
+  // ci's poly table is equivalent for the argmax + centroid computation —
+  // use oracle_l0.polys[0] uniformly.
+  std::vector<float> next_d;
+  std::vector<float> next_p;
+  std::vector<float> next_w;
+  std::vector<IdType> next_tf;
+  OracleReentryRoots(oracle_l0.polys[0], oracle_l0.exit_d, oracle_l0.exit_w, next_d, next_p, next_w, next_tf);
+
+  // Layer 1 — multi-pop oracle (manual replication of OracleRunFirstLayerMultiPop
+  // but with the staged roots as input instead of InitRayFirstMs).
+  const auto& ms1 = scene.ms_[1];
+  size_t crystal_cnt1 = ms1.setting_.size();
+  std::vector<float> proportions1;
+  proportions1.reserve(crystal_cnt1);
+  for (size_t ci = 0; ci < crystal_cnt1; ci++) {
+    proportions1.push_back(ms1.setting_[ci].crystal_proportion_);
+  }
+  std::vector<double> carry1(crystal_cnt1, 0.0);
+  size_t total_l1 = next_w.size();
+  auto crystal_ray_num1 = PartitionCrystalRayNum(proportions1, total_l1, carry1);
+
+  size_t total_exit_count_l1 = 0;
+  double total_exit_w_sum_l1 = 0.0;
+  std::vector<float> exits_d_l1;
+  std::vector<float> exits_w_l1;
+  size_t ci_start = 0;
+  for (size_t ci = 0; ci < crystal_cnt1; ci++) {
+    size_t ci_n = crystal_ray_num1[ci];
+    const auto& setting = ms1.setting_[ci];
+    Crystal crystal = MakeCrystal(oracle_rng, setting.crystal_.param_);
+    float n_idx = crystal.GetRefractiveIndex(spec.wl.wl_);
+    PolyArrays poly = BuildPolyArrays(crystal);
+    if (ci_n == 0) {
+      continue;
+    }
+    std::vector<float> slice_d(next_d.begin() + ci_start * 3, next_d.begin() + (ci_start + ci_n) * 3);
+    std::vector<float> slice_p(next_p.begin() + ci_start * 3, next_p.begin() + (ci_start + ci_n) * 3);
+    std::vector<float> slice_w(next_w.begin() + ci_start, next_w.begin() + ci_start + ci_n);
+    std::vector<IdType> slice_tf(next_tf.begin() + ci_start, next_tf.begin() + ci_start + ci_n);
+    auto r = OracleTraceLayer(crystal, poly, n_idx, scene.max_hits_, slice_d, slice_p, slice_w, slice_tf);
+    total_exit_count_l1 += r.exit_count;
+    total_exit_w_sum_l1 += r.exit_w_sum;
+    exits_d_l1.insert(exits_d_l1.end(), r.exit_d.begin(), r.exit_d.end());
+    exits_w_l1.insert(exits_w_l1.end(), r.exit_w.begin(), r.exit_w.end());
+    ci_start += ci_n;
+  }
+
+  EXPECT_EQ(metal_layer1_stats.exit_count, total_exit_count_l1) << "layer1 exit_count mismatch";
+  EXPECT_LT(RelErr(metal_layer1_stats.exit_w_sum, total_exit_w_sum_l1), 5e-4)
+      << "layer1 exit_w_sum: metal=" << metal_layer1_stats.exit_w_sum << " oracle=" << total_exit_w_sum_l1;
+
+  std::vector<float> xyz_oracle(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
+  Rotation camera_rot = MakeCameraRotation(render);
+  ScatterOutgoingToXyz(exits_d_l1.data(), exits_w_l1.data(), exits_w_l1.size(), render, camera_rot, spec.wl.wl_,
+                       xyz_oracle.data());
+  for (int c = 0; c < 3; c++) {
+    double sm = ChannelSum(xyz_metal, c);
+    double so = ChannelSum(xyz_oracle, c);
+    EXPECT_LT(RelErr(sm, so), 5e-4) << "channel=" << c << " metal=" << sm << " oracle=" << so;
+  }
+}
+
+// =============================================================================
+// Test L — multi-population continuation-append capacity invariant.
+//
+// The Metal kernel's per-ray atomic-counter contribution is bounded by
+// 2 * max_hits, and out_cap = total * (2 * max_hits + 4). So the cumulative
+// produced count across all ci dispatches is structurally bounded below
+// out_cap and the overflow assert/clamp path in DispatchLayer is
+// unreachable from valid inputs. This test therefore validates the
+// **invariant** rather than the failure path: in a tight-margin
+// configuration (small max_hits, ≥2 ci append), cumulative produced stays
+// within out_cap, and the layer-0 continuation count equals the sum of
+// per-ci exits (no rays silently dropped by overflow clamping).
+//
+// Aligns with 251.3 sentinel/overflow methodology: assert the safety
+// envelope around an invariant boundary, not the post-failure state.
+// =============================================================================
+TEST(MetalTraceParity, MultiPopContinuationAppendInvariant) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+
+  // Tight margin: small max_hits keeps out_cap close to actual produced
+  // count; 2 layers so cont_*[0] is non-trivially populated; 70/30 split
+  // forces non-empty ci=0 AND ci=1 appends.
+  auto scene = MakeMultiCrystalScene(/*max_hits=*/2, /*ms_layers=*/2, /*crystal_count=*/2);
+  auto render = MakeRectangularRender();
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 123;
+
+  constexpr size_t kRayCount = 1024;
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  MetalTraceBackend metal;
+  metal.BeginSession(spec);
+  auto h0 = metal.TraceLayer(RootRaySource::FromHost(host));
+  ASSERT_NE(h0, nullptr);
+  size_t cont0 = h0->ContinuationCount();
+  LayerStats stats0 = h0->GetLayerStats();
+
+  // Invariant 1: continuation count equals exit_count (Metal kernel writes
+  // each exit to cont_*, no drop).
+  EXPECT_EQ(cont0, stats0.exit_count)
+      << "Layer 0 continuation count diverged from exit_count — possible overflow truncation";
+
+  // Invariant 2: cumulative produced stays within the structural bound
+  // out_cap = total * (2*max_hits + 4) = 1024 * 8 = 8192.
+  size_t out_cap_bound = kRayCount * (2 * scene.max_hits_ + 4);
+  EXPECT_LE(cont0, out_cap_bound) << "Layer 0 cumulative exceeds out_cap structural bound";
+
+  // Drive into layer 1 to exercise the non-first_ms multi-ci memcpy
+  // path; verify no crash and reasonable counts.
+  RecombineSpec rspec;
+  rspec.shuffle = false;
+  auto roots1 = metal.Recombine(std::move(h0), rspec);
+  auto h1 = metal.TraceLayer(roots1);
+  ASSERT_NE(h1, nullptr);
+  EXPECT_EQ(h1->ContinuationCount(), 0u) << "Final layer must drain continuation";
+  EXPECT_GT(h1->GetLayerStats().exit_count, 0u);
+  metal.EndSession();
 }
 
 }  // namespace
