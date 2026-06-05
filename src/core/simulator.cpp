@@ -531,16 +531,17 @@ std::unique_ptr<TraceBackend> CreateBackendFromEnv(Logger& logger) {
 // Compatibility gate: even when a backend is selected, a particular batch may
 // not be backend-eligible (multi-renderer config, lens/view limits, etc.).
 // Falls back to legacy CPU on mismatch — logs WARN at most once per Run() via
-// the per-Simulator latch on `warned`. Per-batch checks are conservative: a
-// single false ⇒ legacy CPU for the whole wavelength.
-bool CanUseBackend(const TraceBackend* backend, const SimBatch& batch, bool is_metal, Logger& logger,
-                   bool& warned_multi_renderer, bool& warned_metal_constraint) {
+// the per-Run() latches on `warned_*`.
+bool CanUseBackend(const TraceBackend* backend, const SimBatch& batch, Logger& logger,
+                   bool& warned_no_renders, bool& warned_multi_renderer, bool& warned_compat) {
   if (backend == nullptr) {
     return false;
   }
   if (!batch.renders_ || batch.renders_->empty()) {
-    // No renderer attached (e.g. legacy callers): cannot route through a
-    // backend that needs a RenderConfig for projection. Fall back silently.
+    if (!warned_no_renders) {
+      ILOG_WARN(logger, "TraceBackend selected but SimBatch carries no renders_; falling back to legacy CPU");
+      warned_no_renders = true;
+    }
     return false;
   }
   if (batch.renders_->size() != 1) {
@@ -551,18 +552,14 @@ bool CanUseBackend(const TraceBackend* backend, const SimBatch& batch, bool is_m
     }
     return false;
   }
-  if (is_metal) {
-    const auto& r = (*batch.renders_)[0];
-    if (r.lens_.type_ != LensParam::kRectangular || std::abs(r.view_.el_ - 90.0f) > 0.01f) {
-      if (!warned_metal_constraint) {
-        ILOG_WARN(logger,
-                  "MetalTraceBackend v1 requires kRectangular + zenith view "
-                  "(got lens_type={}, el={:.2f}); falling back to legacy CPU",
-                  static_cast<int>(r.lens_.type_), r.view_.el_);
-        warned_metal_constraint = true;
-      }
-      return false;
+  const auto& r = (*batch.renders_)[0];
+  if (!backend->IsCompatible(r)) {
+    if (!warned_compat) {
+      ILOG_WARN(logger, "backend incompatible with render config (lens_type={}, el={:.2f}); falling back to legacy CPU",
+                static_cast<int>(r.lens_.type_), r.view_.el_);
+      warned_compat = true;
     }
+    return false;
   }
   return true;
 }
@@ -583,9 +580,9 @@ void Simulator::Run() {
   // Pick a TraceBackend once per Run() entry. nullptr keeps the legacy CPU
   // path (zero behavior change when LUMICE_TRACE_BACKEND is unset).
   auto backend = CreateBackendFromEnv(logger_);
-  bool is_metal = backend && backend->IsMetal();
+  bool warned_no_renders = false;
   bool warned_multi_renderer = false;
-  bool warned_metal_constraint = false;
+  bool warned_compat = false;
 
   CrystalCache crystal_cache;
   SimWorkspace workspace;
@@ -613,8 +610,7 @@ void Simulator::Run() {
       prev_generation = generation;
     }
 
-    bool use_backend =
-        CanUseBackend(backend.get(), batch, is_metal, logger_, warned_multi_renderer, warned_metal_constraint);
+    bool use_backend = CanUseBackend(backend.get(), batch, logger_, warned_no_renders, warned_multi_renderer, warned_compat);
 
     const auto& spectrum = config.light_source_.spectrum_;
     if (auto* illuminant = std::get_if<IlluminantType>(&spectrum)) {

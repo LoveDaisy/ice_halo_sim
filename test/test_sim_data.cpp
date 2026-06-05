@@ -72,6 +72,7 @@ SimData MakePopulatedSimData() {
   s.crystals_.emplace_back();
   // Backend-path fields (task 252.3): non-default values so deep-copy / move
   // tests below detect the "manual copy missed a field" bug class.
+  s.is_backend_path_ = true;
   s.backend_xyz_ = { 0.1f, 0.2f, 0.3f, 0.4f };
   s.backend_total_intensity_ = 1.5f;
   return s;
@@ -672,6 +673,7 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
   EXPECT_EQ(copy.outgoing_w_, original.outgoing_w_);
   EXPECT_EQ(copy.crystals_.size(), original.crystals_.size());
   // Backend-path fields (task 252.3).
+  EXPECT_TRUE(copy.is_backend_path_) << "is_backend_path_ not copied";
   EXPECT_EQ(copy.backend_xyz_, original.backend_xyz_) << "backend_xyz_ not copied";
   EXPECT_FLOAT_EQ(copy.backend_total_intensity_, 1.5f) << "backend_total_intensity_ not copied";
 
@@ -714,6 +716,7 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   EXPECT_EQ(target.outgoing_d_, original.outgoing_d_);
   EXPECT_EQ(target.outgoing_w_, original.outgoing_w_);
   EXPECT_EQ(target.crystals_.size(), 1u);
+  EXPECT_TRUE(target.is_backend_path_) << "is_backend_path_ not assigned";
   EXPECT_EQ(target.backend_xyz_, original.backend_xyz_) << "backend_xyz_ not assigned";
   EXPECT_FLOAT_EQ(target.backend_total_intensity_, 1.5f) << "backend_total_intensity_ not assigned";
 
@@ -769,6 +772,7 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_EQ(moved.outgoing_d_.size(), 6u);
   EXPECT_EQ(moved.outgoing_w_.size(), 2u);
   EXPECT_EQ(moved.crystals_.size(), 1u);
+  EXPECT_TRUE(moved.is_backend_path_) << "is_backend_path_ not moved";
   EXPECT_EQ(moved.backend_xyz_.size(), 4u) << "backend_xyz_ not moved";
   EXPECT_FLOAT_EQ(moved.backend_total_intensity_, 1.5f) << "backend_total_intensity_ not moved";
 
@@ -808,6 +812,7 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   EXPECT_EQ(dst.generation_, 42u);
   EXPECT_EQ(dst.outgoing_indices_.size(), 3u);
   EXPECT_EQ(dst.crystals_.size(), 1u);
+  EXPECT_TRUE(dst.is_backend_path_) << "is_backend_path_ not move-assigned";
   EXPECT_EQ(dst.backend_xyz_.size(), 4u) << "backend_xyz_ not move-assigned";
   EXPECT_FLOAT_EQ(dst.backend_total_intensity_, 1.5f) << "backend_total_intensity_ not move-assigned";
 

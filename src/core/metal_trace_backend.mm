@@ -863,4 +863,8 @@ void MetalTraceBackend::EndSession() {
   impl_->Reset();
 }
 
+bool MetalTraceBackend::IsCompatible(const RenderConfig& render) const {
+  return render.lens_.type_ == LensParam::kRectangular && std::abs(render.view_.el_ - 90.0f) <= 0.01f;
+}
+
 }  // namespace lumice

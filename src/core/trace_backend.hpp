@@ -286,9 +286,12 @@ class TraceBackend {
   // method other than BeginSession after EndSession is undefined.
   virtual void EndSession() = 0;
 
-  // Returns true for Metal-specific backends. Used by CanUseBackend to apply
-  // Metal v1 lens/view constraints without dynamic_cast (avoids RTTI dependency).
-  virtual bool IsMetal() const { return false; }
+  // Returns false if this backend cannot handle the given render config.
+  // Each backend self-describes its constraints, keeping the base class backend-agnostic.
+  virtual bool IsCompatible(const RenderConfig& render) const {
+    (void)render;
+    return true;
+  }
 
   TraceBackend(const TraceBackend&) = delete;
   TraceBackend(TraceBackend&&) = delete;

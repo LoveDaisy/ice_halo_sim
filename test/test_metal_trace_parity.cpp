@@ -983,21 +983,38 @@ TEST(MetalTraceParity, TotalLandedWeightFormulaIdentity) {
       << "sum_Y / cie_y diverges from TotalLandedWeight() — formula semantic error"
       << " formula=" << formula_total << " direct=" << direct_total << " rel=" << rel;
 
-  // Part 2: Metal sanity check — verify Metal sum_Y/cie_y is a sane positive value.
-  // Uses MakeRectangularRender (Metal v1 requires kRectangular + zenith view).
+  // Part 2: Metal formula quantification.
+  //
+  // Run Metal and CpuTraceBackend on the same kRectangular scene and compare
+  // total_landed_weight (sum_Y / cie_y) for both.
+  //
+  // Architectural note: Metal v1 uses an equirectangular projection covering
+  // 360° of longitude, while CPU kRectangular clips to the configured FOV.
+  // Metal therefore captures a larger fraction of exit rays as "in-bounds" and
+  // consistently produces total_landed_weight > CPU. This is a known geometric
+  // difference between the two backends, not a formula bug. The EV
+  // normalization pipeline compensates per-session so final rendered brightness
+  // converges given sufficient wavelength samples; the per-wavelength ratio is
+  // not required to be 1.0. rel ≤ 5e-4 parity is achievable only if both
+  // backends use the same projection geometry, which is a Metal v2 milestone.
+  //
+  // This test verifies: (a) Metal formula is non-zero/finite, and (b) Metal
+  // captures a plausible fraction of rays relative to CPU (0.5x–5x).
   if (!ShouldSkipMetalTests()) {
     auto metal_render = MakeRectangularRender();
-    SessionSpec metal_spec;
-    metal_spec.scene = &scene;
-    metal_spec.render = &metal_render;
-    metal_spec.wl = WlParam{kWl, 1.0f};
-    metal_spec.seed = 42;
-
     int mw = metal_render.resolution_[0];
     int mh = metal_render.resolution_[1];
     auto mpix = static_cast<size_t>(mw) * static_cast<size_t>(mh);
     std::vector<float> xyz_metal(mpix * 3, 0.0f);
+    std::vector<float> xyz_cpu_rect(mpix * 3, 0.0f);
+
     {
+      SessionSpec metal_spec;
+      metal_spec.scene = &scene;
+      metal_spec.render = &metal_render;
+      metal_spec.wl = WlParam{kWl, 1.0f};
+      metal_spec.seed = 42;
+
       MetalTraceBackend metal;
       metal.BeginSession(metal_spec);
       metal.TraceLayer(RootRaySource::FromHost(host));
@@ -1005,14 +1022,36 @@ TEST(MetalTraceParity, TotalLandedWeightFormulaIdentity) {
       metal.ReadbackImage(metal_img);
       metal.EndSession();
     }
-    double sum_y_metal = 0.0;
-    for (size_t i = 0; i < mpix; i++) {
-      sum_y_metal += xyz_metal[i * 3 + 1];
+    {
+      SessionSpec cpu_rect_spec;
+      cpu_rect_spec.scene = &scene;
+      cpu_rect_spec.render = &metal_render;
+      cpu_rect_spec.wl = WlParam{kWl, 1.0f};
+      cpu_rect_spec.seed = 42;
+
+      CpuTraceBackend cpu_rect;
+      cpu_rect.BeginSession(cpu_rect_spec);
+      cpu_rect.TraceLayer(RootRaySource::FromHost(host));
+      float cpu_rect_total = cpu_rect.TotalLandedWeight();
+      cpu_rect.EndSession();
+
+      double sum_y_metal = 0.0;
+      for (size_t i = 0; i < mpix; i++) {
+        sum_y_metal += xyz_metal[i * 3 + 1];
+      }
+      auto metal_total = static_cast<float>(sum_y_metal / cie_y);
+
+      ASSERT_GT(metal_total, 0.0f) << "Metal sum_Y / cie_y is zero — no rays landed";
+      EXPECT_FALSE(std::isnan(metal_total)) << "Metal sum_Y / cie_y is NaN";
+      EXPECT_FALSE(std::isinf(metal_total)) << "Metal sum_Y / cie_y is Inf";
+      ASSERT_GT(cpu_rect_total, 0.0f) << "CpuTraceBackend (rect) produced no landed rays";
+
+      // Both backends trace the same scene; ratio > 1 is expected due to
+      // Metal's broader equirectangular projection (see note above).
+      float ratio = metal_total / cpu_rect_total;
+      EXPECT_GT(ratio, 0.5f) << "Metal captures far fewer rays than CPU — unexpected";
+      EXPECT_LT(ratio, 5.0f) << "Metal captures far more rays than CPU — unexpected";
     }
-    auto metal_total = static_cast<float>(sum_y_metal / cie_y);
-    EXPECT_GT(metal_total, 0.0f) << "Metal sum_Y / cie_y is zero — no rays landed";
-    EXPECT_FALSE(std::isnan(metal_total)) << "Metal sum_Y / cie_y is NaN";
-    EXPECT_FALSE(std::isinf(metal_total)) << "Metal sum_Y / cie_y is Inf";
   }
 }
 
