@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "core/crystal.hpp"
 #include "core/def.hpp"
@@ -135,6 +136,16 @@ struct SimData {
   std::vector<float> outgoing_w_;  // weight (1 float per outgoing ray)
 
   size_t root_ray_count_ = 0;  // Count of root rays (prev_ray_idx_ == kInfSize)
+
+  // Backend pre-accumulated XYZ path (TraceBackend seam integration, task 252.3).
+  // When non-empty: the simulator ran via a TraceBackend (e.g. MetalTraceBackend)
+  // that performed projection + XYZ accumulation on-device. RenderConsumer::Consume
+  // detects this and routes through an early-return XYZ ingest branch instead of
+  // the raw-ray projection path. Layout: width * height * 3 floats, in the
+  // RenderConfig's pixel order. The legacy CPU path leaves these fields at their
+  // default (empty / 0.0) and behavior is unchanged.
+  std::vector<float> backend_xyz_;        // Empty unless backend path active
+  float backend_total_intensity_ = 0.0f;  // Total landed weight (sum of w_ over landed rays)
 };
 
 using SimDataPtrS = std::shared_ptr<SimData>;
