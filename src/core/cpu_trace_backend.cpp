@@ -5,6 +5,7 @@
 #include <cstring>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "config/proj_config.hpp"
 #include "config/sim_data.hpp"
@@ -12,7 +13,7 @@
 #include "core/filter_spec.hpp"
 #include "core/math.hpp"
 #include "core/scatter_accum.hpp"
-#include "core/simulator.hpp"  // CollectData
+#include "core/simulator.hpp"  // CollectData, PartitionCrystalRayNum
 #include "core/trace_ops.hpp"
 
 namespace lumice {
@@ -159,10 +160,6 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
 
   const auto& ms_info = spec_.scene->ms_[ms_idx_];
   assert(!ms_info.setting_.empty() && "MS layer has no scattering settings");
-  assert(ms_info.setting_.size() == 1 && "CpuTraceBackend does not yet support multi-crystal MS layers");
-  const auto& setting = ms_info.setting_[0];
-  const auto& axis_dist = setting.crystal_;
-  const auto& crystal_axis = axis_dist.axis_;
 
   bool first_ms = !roots.is_device;
 
@@ -174,29 +171,18 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
     return std::make_unique<CpuLayerHandle>();
   }
 
-  // Resolve the crystal for this layer.
-  //
-  //  - If caller passed a Crystal pointer in HostRayBatch, use it (the caller
-  //    owns the crystal; the backend does not free it). This is the path the
-  //    main pipeline integration will follow (so the backend doesn't have to
-  //    duplicate Simulator's crystal-cache logic).
-  //  - Otherwise, build one ourselves via CrystalMaker using spec_.scene
-  //    parameters. This matches Simulator's behaviour when no host crystal
-  //    is supplied.
-  Crystal crystal;
-  size_t crystal_id = 0;
-  float refractive_index = 0.0f;
-  if (first_ms && roots.host.crystal != nullptr) {
-    crystal = *roots.host.crystal;
-    crystal_id = roots.host.crystal_id;
-    refractive_index = roots.host.refractive_index;
-  } else {
-    crystal = MakeCrystal(rng_, setting.crystal_.param_);
-    crystal_id = ms_idx_;
-    refractive_index = crystal.GetRefractiveIndex(spec_.wl.wl_);
+  // Partition rays across crystal populations within this MS layer.
+  // Mirrors Simulator::SimulateOneWavelength (simulator.cpp:572-586): build
+  // proportions from setting_[ci].crystal_proportion_ + zeros carry (one
+  // session = one wavelength here, no cross-wavelength accumulation).
+  size_t crystal_cnt = ms_info.setting_.size();
+  std::vector<float> proportions;
+  proportions.reserve(crystal_cnt);
+  for (size_t ci = 0; ci < crystal_cnt; ci++) {
+    proportions.push_back(ms_info.setting_[ci].crystal_proportion_);
   }
-
-  auto filter_spec = FilterSpec::Create(setting.filter_, crystal, crystal_axis);
+  std::vector<double> carry(crystal_cnt, 0.0);
+  auto crystal_ray_num = PartitionCrystalRayNum(proportions, total_ray_num, carry);
 
   // Prepare bookkeeping buffer + the input init_data for InitRayOtherMs.
   RayBuffer all_data = AllocateAllData(*spec_.scene, total_ray_num);
@@ -213,7 +199,7 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
     prev_init[0] = std::move(continuation_buf_);
   }
 
-  // Per-layer continuation collection buffer.
+  // Per-layer continuation collection buffer (shared across all ci).
   RayBuffer cont_collect;
   cont_collect.Reset(total_ray_num * spec_.scene->max_hits_);
 
@@ -222,10 +208,41 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
   outgoing_d.reserve(total_ray_num * spec_.scene->max_hits_ * 3);
   outgoing_w.reserve(total_ray_num * spec_.scene->max_hits_);
 
+  // ci loop: mirrors simulator.cpp:593-686 — per crystal population, resolve
+  // crystal + filter + n_idx, then drive TraceCrystalBatch over crystal_ray_num[ci]
+  // rays. init_ray_offset advances across ci (passed by reference into
+  // InitRayOtherMs), preserving the simulator's RNG draw order.
   size_t init_ray_offset = 0;
-  TraceCrystalBatch(rng_, crystal, crystal_id, crystal_axis, ms_info, filter_spec.get(), refractive_index,
-                    total_ray_num, spec_.scene->max_hits_, spec_.scene->light_source_.param_, spec_.wl, first_ms,
-                    prev_init, init_ray_offset, all_data, cont_collect, outgoing_d, outgoing_w);
+  for (size_t ci = 0; ci < crystal_cnt; ci++) {
+    size_t ci_n = crystal_ray_num[ci];
+    if (ci_n == 0) {
+      continue;
+    }
+    const auto& setting = ms_info.setting_[ci];
+    const auto& crystal_axis = setting.crystal_.axis_;
+
+    Crystal crystal;
+    size_t crystal_id = 0;
+    float refractive_index = 0.0f;
+    if (first_ms && ci == 0 && roots.host.crystal != nullptr) {
+      // Host-supplied crystal path: only ci==0 of the first MS layer uses
+      // the caller's crystal (the host-ingest path is single-population by
+      // construction in 252.3). ci>0 always builds via MakeCrystal.
+      crystal = *roots.host.crystal;
+      crystal_id = roots.host.crystal_id;
+      refractive_index = roots.host.refractive_index;
+    } else {
+      crystal = MakeCrystal(rng_, setting.crystal_.param_);
+      crystal_id = ci;
+      refractive_index = crystal.GetRefractiveIndex(spec_.wl.wl_);
+    }
+
+    auto filter_spec = FilterSpec::Create(setting.filter_, crystal, crystal_axis);
+
+    TraceCrystalBatch(rng_, crystal, crystal_id, crystal_axis, ms_info, filter_spec.get(), refractive_index, ci_n,
+                      spec_.scene->max_hits_, spec_.scene->light_source_.param_, spec_.wl, first_ms, prev_init,
+                      init_ray_offset, all_data, cont_collect, outgoing_d, outgoing_w);
+  }
 
   // Drain the per-layer outgoing into the accumulator.
   ScatterOutgoingToXyz(outgoing_d.data(), outgoing_w.data(), outgoing_w.size(),  //
