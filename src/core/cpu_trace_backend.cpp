@@ -41,9 +41,11 @@ constexpr size_t kSmallBatchRayNum = 32;
 //                   cont_collect there).
 //   - all_data: simulator-side bookkeeping buffer (Recorder lookups during
 //               FilterSpec::Match traverse it).
+// NOLINTNEXTLINE(readability-function-size)
 void TraceCrystalBatch(RandomNumberGenerator& rng, const Crystal& crystal, size_t crystal_id,
                        const AxisDistribution& axis_dist, const MsInfo& ms_info, const FilterSpec* filter_spec,
-                       float refractive_index, size_t total_ray_num, size_t max_hits, const SunParam& sun_param,
+                       float refractive_index, size_t ci_ray_num, size_t layer_ray_num, size_t max_hits,
+                       const SunParam& sun_param,
                        const WlParam& wl_param, bool first_ms,
                        RayBuffer prev_init[2],  // when !first_ms, [0] is input rays
                        size_t& init_ray_offset,
@@ -59,11 +61,19 @@ void TraceCrystalBatch(RandomNumberGenerator& rng, const Crystal& crystal, size_
   // We swap cont_collect with init_for_collect[1] before and after the loop
   // so that EmplaceBack writes into cont_collect's storage.
 
-  for (size_t cn = 0; cn < total_ray_num; cn += kSmallBatchRayNum) {
-    size_t curr_ray_num = std::min(kSmallBatchRayNum, total_ray_num - cn);
+  for (size_t cn = 0; cn < ci_ray_num; cn += kSmallBatchRayNum) {
+    size_t curr_ray_num = std::min(kSmallBatchRayNum, ci_ray_num - cn);
 
-    workspace[0].Reset(curr_ray_num * 2);
-    workspace[1].Reset(curr_ray_num * 2);
+    // Capacity must hold cross-hit fan-out growth, NOT just one small batch's
+    // first level: across the max_hits hit loop a Normal ray can fan into two
+    // children that both stay inside the crystal, so the in-crystal ray count
+    // can exceed curr_ray_num. Size to the layer total *2, mirroring legacy
+    // Simulator::SimulateOneWavelength (simulator.cpp:692-693, `ray_num*2`
+    // reset once outside the ci loop). Reset() only re-allocates when capacity
+    // grows, so subsequent small batches just reset size_ and reuse storage.
+    // (Sizing to curr_ray_num*2 was the scrum-253.4 segfault root cause.)
+    workspace[0].Reset(layer_ray_num * 2);
+    workspace[1].Reset(layer_ray_num * 2);
 
     if (first_ms) {
       InitRayFirstMs(rng, sun_param, wl_param, curr_ray_num,  //
@@ -239,9 +249,12 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
 
     auto filter_spec = FilterSpec::Create(setting.filter_, crystal, crystal_axis);
 
+    // ci_n = this population's ray count (cn loop bound); total_ray_num = the
+    // whole layer's ray count, used to size the trace workspace (see
+    // TraceCrystalBatch capacity comment).
     TraceCrystalBatch(rng_, crystal, crystal_id, crystal_axis, ms_info, filter_spec.get(), refractive_index, ci_n,
-                      spec_.scene->max_hits_, spec_.scene->light_source_.param_, spec_.wl, first_ms, prev_init,
-                      init_ray_offset, all_data, cont_collect, outgoing_d, outgoing_w);
+                      total_ray_num, spec_.scene->max_hits_, spec_.scene->light_source_.param_, spec_.wl, first_ms,
+                      prev_init, init_ray_offset, all_data, cont_collect, outgoing_d, outgoing_w);
   }
 
   // Drain the per-layer outgoing into the accumulator.

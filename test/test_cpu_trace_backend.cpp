@@ -388,5 +388,72 @@ TEST(CpuTraceBackend, GetLayerStatsCoversAllExitRays) {
   EXPECT_EQ(stats1.exit_count, stats1.exit_count);  // sanity; real check is GT above
 }
 
+// =============================================================================
+// Segfault regression (scrum-253.4) — cross-hit fan-out must not overflow the
+// per-small-batch workspace.
+//
+// Root cause (INVESTIGATION.md, debug-assert located): TraceCrystalBatch sized
+// its trace workspace to curr_ray_num*2 (=kSmallBatchRayNum*2=64) PER small
+// batch, which only covers a single fan-out level. Across the max_hits hit
+// loop, the in-crystal ray count grows (a ray can fan into two children that
+// both stay inside), so workspace[0].size_ can exceed kSmallBatchRayNum; the
+// next hit's TraceRayBasicInfo -> RecorderFanOut then writes past capacity ->
+// SIGSEGV in release, assert(dst0 < capacity_) in debug.
+//
+// The trigger is data-dependent (depends on per-hit fan-out), so this test
+// uses the production smoke geometry (random-axis prism, sun alt 20, max_hits
+// 7) with a large ray count + fixed seed to reliably exercise a small batch
+// whose cross-hit growth exceeds kSmallBatchRayNum*2. Pre-fix this CRASHES;
+// post-fix (workspace sized to the layer total, mirroring legacy
+// simulator.cpp:692) it completes and produces a non-empty image.
+// =============================================================================
+TEST(CpuTraceBackend, CrossHitFanoutDoesNotOverflowWorkspace) {
+  auto scene = MakeSimpleScene(/*max_hits=*/7, /*ms_layers=*/1);
+  // Mirror metal_smoke.json's light source (sun altitude 20).
+  scene.light_source_.param_ = SunParam{ 20.0f, 0.0f, 0.5f };
+  auto render = MakeRenderConfig();
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 555.0f, 1.0f };
+  // seed=27 + kRayCount below is an empirically-located deterministic trigger:
+  // on the unfixed code one of its 32-ray small batches grows (via cross-hit
+  // fan-out) past kSmallBatchRayNum, overflowing the 64-slot workspace. The
+  // trigger is RNG-deterministic, so this reproduces the production segfault
+  // without relying on the (low) per-batch probability.
+  spec.seed = 27;
+
+  CpuTraceBackend backend;
+  backend.BeginSession(spec);
+
+  // ~625 small batches; with seed=27 one of them grows past kSmallBatchRayNum*2.
+  constexpr size_t kRayCount = 20000;
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+
+  // Pre-fix: this call SIGSEGVs / asserts. Post-fix: returns normally.
+  auto handle = backend.TraceLayer(RootRaySource::FromHost(host));
+  ASSERT_NE(handle, nullptr);
+
+  std::vector<float> xyz(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
+  XyzImageData img;
+  img.data = xyz.data();
+  img.width = render.resolution_[0];
+  img.height = render.resolution_[1];
+  backend.ReadbackImage(img);
+
+  double sum = 0.0;
+  for (float v : xyz) {
+    ASSERT_TRUE(std::isfinite(v));
+    sum += v;
+  }
+  EXPECT_GT(sum, 0.0) << "smoke-geometry trace must land non-zero light";
+  EXPECT_EQ(backend.RootRayCount(), kRayCount);
+
+  backend.EndSession();
+}
+
 }  // namespace
 }  // namespace lumice
