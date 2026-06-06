@@ -421,7 +421,10 @@ TEST(CpuTraceBackend, CrossHitFanoutDoesNotOverflowWorkspace) {
   // on the unfixed code one of its 32-ray small batches grows (via cross-hit
   // fan-out) past kSmallBatchRayNum, overflowing the 64-slot workspace. The
   // trigger is RNG-deterministic, so this reproduces the production segfault
-  // without relying on the (low) per-batch probability.
+  // without relying on the (low) per-batch probability. If the RNG, crystal
+  // geometry, or kSmallBatchRayNum changes this (seed, kRayCount) pair may no
+  // longer trigger the pre-fix crash; re-locate one by brute-forcing seeds (see
+  // INVESTIGATION.md). It is a regression trigger, not a magic constant.
   spec.seed = 27;
 
   CpuTraceBackend backend;
@@ -431,6 +434,8 @@ TEST(CpuTraceBackend, CrossHitFanoutDoesNotOverflowWorkspace) {
   constexpr size_t kRayCount = 20000;
   HostRayBatch host;
   host.count = kRayCount;
+  // crystal selected from the scene scatter config; nullptr is valid for the
+  // first-ms TraceLayer (backend builds it via MakeCrystal, see other tests).
   host.crystal = nullptr;
 
   // Pre-fix: this call SIGSEGVs / asserts. Post-fix: returns normally.

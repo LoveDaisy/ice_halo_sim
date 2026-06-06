@@ -32,6 +32,8 @@ def test_cpu_backend_route_runs_end_to_end():
 
     Pre-fix this exited 139 (SIGSEGV) with no output.
     """
+    assert CONFIG.exists(), f"config not found: {CONFIG}"
+
     try:
         binary = find_lumice_binary()
     except FileNotFoundError as e:
