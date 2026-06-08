@@ -47,6 +47,12 @@ struct KernelParams {
   float cie_z;
   uint  ms_mode;
   uint  out_cap;
+  // Projection routing:
+  //   proj_type == 0: rectangular (legacy az0 path, uses az0)
+  //   proj_type == 1: dual_fisheye_equal_area (uses r_scale / max_abs_dz)
+  uint  proj_type;
+  float r_scale;
+  float max_abs_dz;
 };
 
 inline float GetReflectRatio(float delta, float rr) {
@@ -219,21 +225,69 @@ kernel void trace_layer_kernel(
           float sx = -wx;
           float sy = -wy;
           float sz = -wz;
-          float lon = atan2(sy, sx) - prm.az0;
-          // Wrap lon to [-pi, pi]: equivalent to the while-loops in
-          // RectangularProject. At exact lon == +pi the formula yields -pi;
-          // after the (raw_x mod W) wrap this collapses to the same pixel.
-          lon = lon - 2.0f * M_PI_F * floor((lon + M_PI_F) / (2.0f * M_PI_F));
-          float lat = asin(clamp(sz, -1.0f, 1.0f));
+          if (prm.proj_type == 0u) {
+            float lon = atan2(sy, sx) - prm.az0;
+            // Wrap lon to [-pi, pi]: equivalent to the while-loops in
+            // RectangularProject. At exact lon == +pi the formula yields -pi;
+            // after the (raw_x mod W) wrap this collapses to the same pixel.
+            lon = lon - 2.0f * M_PI_F * floor((lon + M_PI_F) / (2.0f * M_PI_F));
+            float lat = asin(clamp(sz, -1.0f, 1.0f));
 
-          int raw_x = int(floor(lon * proj_scl + img_w_f * 0.5f + 0.5f));
-          int ix = ((raw_x % iw_i) + iw_i) % iw_i;
-          int iy = int(floor(-lat * proj_scl + img_h_f * 0.5f + 0.5f));
-          if (iy >= 0 && iy < ih_i) {
-            uint pix = (uint(iy) * prm.img_w + uint(ix)) * 3u;
-            atomic_fetch_add_explicit(&image[pix + 0u], prm.cie_x * cw, memory_order_relaxed);
-            atomic_fetch_add_explicit(&image[pix + 1u], prm.cie_y * cw, memory_order_relaxed);
-            atomic_fetch_add_explicit(&image[pix + 2u], prm.cie_z * cw, memory_order_relaxed);
+            int raw_x = int(floor(lon * proj_scl + img_w_f * 0.5f + 0.5f));
+            int ix = ((raw_x % iw_i) + iw_i) % iw_i;
+            int iy = int(floor(-lat * proj_scl + img_h_f * 0.5f + 0.5f));
+            if (iy >= 0 && iy < ih_i) {
+              uint pix = (uint(iy) * prm.img_w + uint(ix)) * 3u;
+              atomic_fetch_add_explicit(&image[pix + 0u], prm.cie_x * cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&image[pix + 1u], prm.cie_y * cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&image[pix + 2u], prm.cie_z * cw, memory_order_relaxed);
+            }
+          } else {
+            // proj_type == 1: dual_fisheye_equal_area + opposite-hemisphere overlap.
+            // DRIFT(gpu-metal-shared-kernel): intentional copy of CPU render.cpp:192-214 +
+            //   projection::{FisheyeEqualAreaForward, DualFisheyeToPixel}. Re-home into a
+            //   single-source shared kernel at the CUDA step (backlog: 核心模拟 GPU 迁移路线).
+            int   dual_short = min(int(prm.img_w) / 2, int(prm.img_h));
+            float r          = float(dual_short) * 0.5f;
+            float cy_pix     = img_h_f * 0.5f;
+            float cx_left    = img_w_f * 0.5f - r;
+            float cx_right   = img_w_f * 0.5f + r;
+            bool  is_upper   = (sz >= 0.0f);
+            float z_hemi     = is_upper ? sz : -sz;
+            float k = prm.r_scale / sqrt(1.0f + clamp(z_hemi, -1.0f + 1e-6f, 1.0f));
+            float xn = k * sx;
+            float yn = k * sy;
+            float cx_primary = is_upper ? cx_left : cx_right;
+            float sx_primary = is_upper ? -1.0f : 1.0f;
+            float fx = sx_primary * yn * r + cx_primary;
+            float fy = xn * r + cy_pix;
+            int ix = int(floor(fx + 0.5f));
+            int iy = int(floor(fy + 0.5f));
+            if (ix >= 0 && ix < iw_i && iy >= 0 && iy < ih_i) {
+              uint pix = (uint(iy) * prm.img_w + uint(ix)) * 3u;
+              atomic_fetch_add_explicit(&image[pix + 0u], prm.cie_x * cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&image[pix + 1u], prm.cie_y * cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&image[pix + 2u], prm.cie_z * cw, memory_order_relaxed);
+            }
+            if (prm.max_abs_dz > 0.0f && z_hemi < prm.max_abs_dz) {
+              float z_opp = -z_hemi;
+              float k2    = prm.r_scale / sqrt(1.0f + clamp(z_opp, -1.0f + 1e-6f, 1.0f));
+              float xn2   = k2 * sx;
+              float yn2   = k2 * sy;
+              bool  is_upper_opp = !is_upper;
+              float cx_opp       = is_upper_opp ? cx_left : cx_right;
+              float sx_opp       = is_upper_opp ? -1.0f : 1.0f;
+              float fx2 = sx_opp * yn2 * r + cx_opp;
+              float fy2 = xn2 * r + cy_pix;
+              int   ix2 = int(floor(fx2 + 0.5f));
+              int   iy2 = int(floor(fy2 + 0.5f));
+              if (ix2 >= 0 && ix2 < iw_i && iy2 >= 0 && iy2 < ih_i) {
+                uint pix2 = (uint(iy2) * prm.img_w + uint(ix2)) * 3u;
+                atomic_fetch_add_explicit(&image[pix2 + 0u], prm.cie_x * cw, memory_order_relaxed);
+                atomic_fetch_add_explicit(&image[pix2 + 1u], prm.cie_y * cw, memory_order_relaxed);
+                atomic_fetch_add_explicit(&image[pix2 + 2u], prm.cie_z * cw, memory_order_relaxed);
+              }
+            }
           }
         }
       }

@@ -24,6 +24,7 @@
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
 #include "core/metal_trace_backend.hpp"
+#include "core/projection.hpp"
 #include "core/scatter_accum.hpp"
 #include "core/simulator.hpp"  // PartitionCrystalRayNum
 #include "core/trace_ops.hpp"
@@ -55,6 +56,12 @@ struct KernelParams {
   float cie_z;
   uint  ms_mode;
   uint  out_cap;
+  // Projection routing (host fills per BeginSession lens type):
+  //   proj_type == 0: rectangular (legacy az0-projection, uses az0)
+  //   proj_type == 1: dual_fisheye_equal_area (uses r_scale / max_abs_dz)
+  uint  proj_type;
+  float r_scale;     // equal-area r_scale = 1/sqrt(1+overlap); 1.0 if no overlap
+  float max_abs_dz;  // overlap zone |sky_z| threshold; 0 = no overlap
 };
 
 inline float GetReflectRatio(float delta, float rr) {
@@ -220,18 +227,69 @@ kernel void trace_layer_kernel(
           float sx = -wx;
           float sy = -wy;
           float sz = -wz;
-          float lon = atan2(sy, sx) - prm.az0;
-          lon = lon - 2.0f * M_PI_F * floor((lon + M_PI_F) / (2.0f * M_PI_F));
-          float lat = asin(clamp(sz, -1.0f, 1.0f));
+          if (prm.proj_type == 0u) {
+            float lon = atan2(sy, sx) - prm.az0;
+            lon = lon - 2.0f * M_PI_F * floor((lon + M_PI_F) / (2.0f * M_PI_F));
+            float lat = asin(clamp(sz, -1.0f, 1.0f));
 
-          int raw_x = int(floor(lon * proj_scl + img_w_f * 0.5f + 0.5f));
-          int ix = ((raw_x % iw_i) + iw_i) % iw_i;
-          int iy = int(floor(-lat * proj_scl + img_h_f * 0.5f + 0.5f));
-          if (iy >= 0 && iy < ih_i) {
-            uint pix = (uint(iy) * prm.img_w + uint(ix)) * 3u;
-            atomic_fetch_add_explicit(&image[pix + 0u], prm.cie_x * cw, memory_order_relaxed);
-            atomic_fetch_add_explicit(&image[pix + 1u], prm.cie_y * cw, memory_order_relaxed);
-            atomic_fetch_add_explicit(&image[pix + 2u], prm.cie_z * cw, memory_order_relaxed);
+            int raw_x = int(floor(lon * proj_scl + img_w_f * 0.5f + 0.5f));
+            int ix = ((raw_x % iw_i) + iw_i) % iw_i;
+            int iy = int(floor(-lat * proj_scl + img_h_f * 0.5f + 0.5f));
+            if (iy >= 0 && iy < ih_i) {
+              uint pix = (uint(iy) * prm.img_w + uint(ix)) * 3u;
+              atomic_fetch_add_explicit(&image[pix + 0u], prm.cie_x * cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&image[pix + 1u], prm.cie_y * cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&image[pix + 2u], prm.cie_z * cw, memory_order_relaxed);
+            }
+          } else {
+            // proj_type == 1: dual fisheye equal-area, primary + opposite-hemisphere overlap.
+            // DRIFT(gpu-metal-shared-kernel): intentional duplicate of CPU render.cpp:192-214 +
+            //   projection::{FisheyeEqualAreaForward, DualFisheyeToPixel} (re-home into a single-
+            //   source shared kernel at CUDA step; backlog: 核心模拟 GPU 迁移路线).
+            int   dual_short = min(int(prm.img_w) / 2, int(prm.img_h));
+            float r          = float(dual_short) * 0.5f;
+            float cy_pix     = img_h_f * 0.5f;
+            float cx_left    = img_w_f * 0.5f - r;
+            float cx_right   = img_w_f * 0.5f + r;
+
+            bool  is_upper = (sz >= 0.0f);
+            float z_hemi   = is_upper ? sz : -sz;  // own hemisphere: +|sz|
+            float k = prm.r_scale / sqrt(1.0f + clamp(z_hemi, -1.0f + 1e-6f, 1.0f));
+            float xn = k * sx;
+            float yn = k * sy;
+            float cx_primary = is_upper ? cx_left : cx_right;
+            float sx_primary = is_upper ? -1.0f : 1.0f;
+            float fx = sx_primary * yn * r + cx_primary;
+            float fy = xn * r + cy_pix;
+            int ix = int(floor(fx + 0.5f));
+            int iy = int(floor(fy + 0.5f));
+            if (ix >= 0 && ix < iw_i && iy >= 0 && iy < ih_i) {
+              uint pix = (uint(iy) * prm.img_w + uint(ix)) * 3u;
+              atomic_fetch_add_explicit(&image[pix + 0u], prm.cie_x * cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&image[pix + 1u], prm.cie_y * cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&image[pix + 2u], prm.cie_z * cw, memory_order_relaxed);
+            }
+            // Overlap dual-write: mirror CPU render.cpp:192-214 (opposite hemisphere, dz<0).
+            // Does NOT increment exit_wsum — preserves normalization parity with CPU.
+            if (prm.max_abs_dz > 0.0f && z_hemi < prm.max_abs_dz) {
+              float z_opp = -z_hemi;  // = -|sz| < 0 (matches z_hemi_opp)
+              float k2    = prm.r_scale / sqrt(1.0f + clamp(z_opp, -1.0f + 1e-6f, 1.0f));
+              float xn2   = k2 * sx;
+              float yn2   = k2 * sy;
+              bool  is_upper_opp = !is_upper;
+              float cx_opp       = is_upper_opp ? cx_left : cx_right;
+              float sx_opp       = is_upper_opp ? -1.0f : 1.0f;
+              float fx2 = sx_opp * yn2 * r + cx_opp;
+              float fy2 = xn2 * r + cy_pix;
+              int   ix2 = int(floor(fx2 + 0.5f));
+              int   iy2 = int(floor(fy2 + 0.5f));
+              if (ix2 >= 0 && ix2 < iw_i && iy2 >= 0 && iy2 < ih_i) {
+                uint pix2 = (uint(iy2) * prm.img_w + uint(ix2)) * 3u;
+                atomic_fetch_add_explicit(&image[pix2 + 0u], prm.cie_x * cw, memory_order_relaxed);
+                atomic_fetch_add_explicit(&image[pix2 + 1u], prm.cie_y * cw, memory_order_relaxed);
+                atomic_fetch_add_explicit(&image[pix2 + 2u], prm.cie_z * cw, memory_order_relaxed);
+              }
+            }
           }
           atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
           atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
@@ -259,6 +317,9 @@ kernel void trace_layer_kernel(
 
 // Mirror of the Metal-side KernelParams (host layout MUST match the .metal
 // struct field-for-field — all 4-byte scalars, natural alignment).
+// NOTE: field order MUST match MSL KernelParams in kKernelSrc — static_assert
+// guards size only; reviewer-facing field-by-field check is the maintainer's
+// responsibility when adding/reordering members.
 struct KernelParams {
   float    n_idx;
   uint32_t max_hits;
@@ -272,8 +333,11 @@ struct KernelParams {
   float    cie_z;
   uint32_t ms_mode;
   uint32_t out_cap;
+  uint32_t proj_type;
+  float    r_scale;
+  float    max_abs_dz;
 };
-static_assert(sizeof(KernelParams) == 48u,
+static_assert(sizeof(KernelParams) == 60u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 
 float ComputeAz0(const Rotation& rot) {
@@ -316,6 +380,11 @@ struct MetalTraceBackend::Impl {
   int    height = 0;
   float  az0 = 0.0f;
   float  cie_x = 0.0f, cie_y = 0.0f, cie_z = 0.0f;
+  // Projection routing — populated by BeginSession per render.lens_.type_.
+  // Mirrors KernelParams fields with the same name; DispatchLayer copies them.
+  uint32_t proj_type = 0u;
+  float    r_scale = 1.0f;
+  float    max_abs_dz = 0.0f;
 
   RandomNumberGenerator rng{ 0 };
 
@@ -671,6 +740,9 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   params.cie_z    = cie_z;
   params.ms_mode  = ms_mode;
   params.out_cap  = static_cast<uint32_t>(out_cap);
+  params.proj_type  = proj_type;
+  params.r_scale    = r_scale;
+  params.max_abs_dz = max_abs_dz;
 
   EnsureRecSink(num_rays);
   EnsureContBuffer(out_slot);
@@ -769,6 +841,9 @@ void MetalTraceBackend::Impl::Reset() {
   height = 0;
   az0 = 0.0f;
   cie_x = cie_y = cie_z = 0.0f;
+  proj_type = 0u;
+  r_scale = 1.0f;
+  max_abs_dz = 0.0f;
   have_crystal = false;
   current_n_idx = 0.0f;
   out_cap = 0;
@@ -789,13 +864,16 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   assert(!impl_->in_session && "BeginSession called on an already-open session");
   assert(spec.scene != nullptr);
   assert(spec.render != nullptr);
-  assert(spec.render->lens_.type_ == LensParam::kRectangular &&
-         "MetalTraceBackend v1 requires kRectangular lens");
+  assert((spec.render->lens_.type_ == LensParam::kRectangular ||
+          spec.render->lens_.type_ == LensParam::kDualFisheyeEqualArea) &&
+         "MetalTraceBackend supports kRectangular or kDualFisheyeEqualArea lens");
   // az0-projection is only equivalent to RectangularProject at zenith view
-  // (el=90°, ro=0°). Enforce here to avoid silent projection errors for
-  // non-zenith cameras.
-  assert(std::abs(spec.render->view_.el_ - 90.0f) < 0.01f &&
-         "MetalTraceBackend v1 requires zenith view (el≈90°)");
+  // (el=90°, ro=0°). Dual-fisheye-EA covers the full globe, view fields are
+  // unused, so we only assert for the rectangular branch.
+  if (spec.render->lens_.type_ == LensParam::kRectangular) {
+    assert(std::abs(spec.render->view_.el_ - 90.0f) < 0.01f &&
+           "MetalTraceBackend kRectangular requires zenith view (el≈90°)");
+  }
 
   impl_->spec = spec;
   impl_->in_session = true;
@@ -807,6 +885,18 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   Rotation camera_rot = MakeCameraRotation(*spec.render);
   impl_->az0 = ComputeAz0(camera_rot);
   ComputeCmf(spec.wl.wl_, impl_->cie_x, impl_->cie_y, impl_->cie_z);
+
+  // Projection routing — kernel reads proj_type/r_scale/max_abs_dz from
+  // KernelParams (filled by DispatchLayer from these Impl fields).
+  if (spec.render->lens_.type_ == LensParam::kDualFisheyeEqualArea) {
+    impl_->proj_type  = 1u;
+    impl_->max_abs_dz = spec.render->overlap_;
+    impl_->r_scale    = projection::ComputeEARScale(spec.render->overlap_);
+  } else {
+    impl_->proj_type  = 0u;
+    impl_->r_scale    = 1.0f;
+    impl_->max_abs_dz = 0.0f;
+  }
 
   if (spec.seed != 0) {
     impl_->rng.SetSeed(spec.seed);
@@ -947,7 +1037,16 @@ void MetalTraceBackend::EndSession() {
 }
 
 bool MetalTraceBackend::IsCompatible(const RenderConfig& render) const {
-  return render.lens_.type_ == LensParam::kRectangular && std::abs(render.view_.el_ - 90.0f) <= 0.01f;
+  if (render.lens_.type_ == LensParam::kRectangular) {
+    return std::abs(render.view_.el_ - 90.0f) <= 0.01f;
+  }
+  if (render.lens_.type_ == LensParam::kDualFisheyeEqualArea) {
+    // kernel implements fov180 full-globe only; reject custom fov to avoid
+    // silent wrong-projection from non-GUI callers (LUMICE_TRACE_BACKEND=metal
+    // + dual-fisheye config). view.el is unused for full-globe — no constraint.
+    return std::abs(render.lens_.fov_ - 180.0f) <= 0.5f;
+  }
+  return false;
 }
 
 }  // namespace lumice
