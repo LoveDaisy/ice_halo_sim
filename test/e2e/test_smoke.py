@@ -21,6 +21,13 @@ PSNR_THRESHOLDS = {
     "cza_01": 41.5,
     "filters_01": 26.7,
     "halo_22_01": 26.7,
+    # ms_multi_crystal: MS multi-crystal-per-layer + dual_fisheye + D65 + 2M rays
+    # is noisier than the single-wavelength configs. Measured run-to-run PSNR
+    # ≈ 23.4 dB (stable: 23.41/23.42/23.44); threshold = min - 3dB floored to
+    # 20.0 for cross-platform margin (reference generated on macOS, CI on Linux).
+    # A structural regression (e.g. the frame band-vs-ring bug) drops PSNR far
+    # below 20, so the gate still catches gross regressions.
+    "ms_multi_crystal_01": 20.0,
     "multi_lens_01": 34.3,
     "multi_lens_02": 35.4,
     "multi_lens_03": 40.3,
