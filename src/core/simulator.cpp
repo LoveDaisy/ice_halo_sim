@@ -532,8 +532,8 @@ std::unique_ptr<TraceBackend> CreateBackendFromEnv(Logger& logger) {
 // not be backend-eligible (multi-renderer config, lens/view limits, etc.).
 // Falls back to legacy CPU on mismatch — logs WARN at most once per Run() via
 // the per-Run() latches on `warned_*`.
-bool CanUseBackend(const TraceBackend* backend, const SimBatch& batch, Logger& logger,
-                   bool& warned_no_renders, bool& warned_multi_renderer, bool& warned_compat) {
+bool CanUseBackend(const TraceBackend* backend, const SimBatch& batch, Logger& logger, bool& warned_no_renders,
+                   bool& warned_multi_renderer, bool& warned_compat) {
   if (backend == nullptr) {
     return false;
   }
@@ -610,7 +610,8 @@ void Simulator::Run() {
       prev_generation = generation;
     }
 
-    bool use_backend = CanUseBackend(backend.get(), batch, logger_, warned_no_renders, warned_multi_renderer, warned_compat);
+    bool use_backend =
+        CanUseBackend(backend.get(), batch, logger_, warned_no_renders, warned_multi_renderer, warned_compat);
 
     const auto& spectrum = config.light_source_.spectrum_;
     if (auto* illuminant = std::get_if<IlluminantType>(&spectrum)) {

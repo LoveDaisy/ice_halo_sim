@@ -843,7 +843,7 @@ TEST(MetalTraceParity, TotalLandedWeightFormulaIdentity) {
   SessionSpec cpu_spec;
   cpu_spec.scene = &scene;
   cpu_spec.render = &fisheye_render;
-  cpu_spec.wl = WlParam{kWl, 1.0f};
+  cpu_spec.wl = WlParam{ kWl, 1.0f };
   cpu_spec.seed = 42;
 
   constexpr size_t kRayCount = 4096;
@@ -860,7 +860,7 @@ TEST(MetalTraceParity, TotalLandedWeightFormulaIdentity) {
   CpuTraceBackend cpu;
   cpu.BeginSession(cpu_spec);
   cpu.TraceLayer(RootRaySource::FromHost(host));
-  XyzImageData cpu_img{xyz_cpu.data(), fw, fh};
+  XyzImageData cpu_img{ xyz_cpu.data(), fw, fh };
   cpu.ReadbackImage(cpu_img);
   float direct_total = cpu.TotalLandedWeight();
   cpu.EndSession();
@@ -882,9 +882,8 @@ TEST(MetalTraceParity, TotalLandedWeightFormulaIdentity) {
   // The formula is a mathematical identity (SpectrumToXyz accumulates cie_y*w per ray,
   // TotalLandedWeight() accumulates w per ray independently). Float summation order
   // differences give rel ≤ 1e-4 in practice.
-  EXPECT_LE(rel, 1e-3f)
-      << "sum_Y / cie_y diverges from TotalLandedWeight() — formula semantic error"
-      << " formula=" << formula_total << " direct=" << direct_total << " rel=" << rel;
+  EXPECT_LE(rel, 1e-3f) << "sum_Y / cie_y diverges from TotalLandedWeight() — formula semantic error"
+                        << " formula=" << formula_total << " direct=" << direct_total << " rel=" << rel;
 
   // Part 2: Metal formula quantification.
   //
@@ -915,13 +914,13 @@ TEST(MetalTraceParity, TotalLandedWeightFormulaIdentity) {
       SessionSpec metal_spec;
       metal_spec.scene = &scene;
       metal_spec.render = &metal_render;
-      metal_spec.wl = WlParam{kWl, 1.0f};
+      metal_spec.wl = WlParam{ kWl, 1.0f };
       metal_spec.seed = 42;
 
       MetalTraceBackend metal;
       metal.BeginSession(metal_spec);
       metal.TraceLayer(RootRaySource::FromHost(host));
-      XyzImageData metal_img{xyz_metal.data(), mw, mh};
+      XyzImageData metal_img{ xyz_metal.data(), mw, mh };
       metal.ReadbackImage(metal_img);
       metal.EndSession();
     }
@@ -929,7 +928,7 @@ TEST(MetalTraceParity, TotalLandedWeightFormulaIdentity) {
       SessionSpec cpu_rect_spec;
       cpu_rect_spec.scene = &scene;
       cpu_rect_spec.render = &metal_render;
-      cpu_rect_spec.wl = WlParam{kWl, 1.0f};
+      cpu_rect_spec.wl = WlParam{ kWl, 1.0f };
       cpu_rect_spec.seed = 42;
 
       CpuTraceBackend cpu_rect;
@@ -1085,8 +1084,8 @@ TEST(MetalTraceParity, MetalVsCpuSingleLayerSpatialStructure) {
   double corr_fix = YChannelCorrelation(xyz_metal, xyz_cpu);
   double corr_broken = YChannelCorrelation(xyz_local, xyz_cpu);
   std::cout << "[MEASURE] corr_fix(metal_world vs cpu_world)=" << corr_fix
-            << "  corr_broken(local vs cpu_world)=" << corr_broken
-            << "  margin=" << (corr_fix - corr_broken) << std::endl;
+            << "  corr_broken(local vs cpu_world)=" << corr_broken << "  margin=" << (corr_fix - corr_broken)
+            << std::endl;
 
   // Positive: world-space Metal matches the independent CPU oracle's ring.
   // Measured corr_fix ≈ 0.9999, corr_broken ≈ 0.028 (margin ≈ 0.97) on an

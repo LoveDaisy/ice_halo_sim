@@ -45,8 +45,7 @@ constexpr size_t kSmallBatchRayNum = 32;
 void TraceCrystalBatch(RandomNumberGenerator& rng, const Crystal& crystal, size_t crystal_id,
                        const AxisDistribution& axis_dist, const MsInfo& ms_info, const FilterSpec* filter_spec,
                        float refractive_index, size_t ci_ray_num, size_t layer_ray_num, size_t max_hits,
-                       const SunParam& sun_param,
-                       const WlParam& wl_param, bool first_ms,
+                       const SunParam& sun_param, const WlParam& wl_param, bool first_ms,
                        RayBuffer prev_init[2],  // when !first_ms, [0] is input rays
                        size_t& init_ray_offset,
                        RayBuffer& all_data,             // bookkeeping
