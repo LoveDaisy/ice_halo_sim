@@ -1055,6 +1055,147 @@ TEST(MetalTraceParity, TotalLandedWeightFormulaIdentity) {
   }
 }
 
+// Pearson correlation of the Y (luminance) channel between two XYZ images.
+// Scale-invariant, so it is robust to the magnitude differences between
+// backends (CpuTraceBackend fans out per hit and clips to FOV; the Metal v1
+// kernel single-paths and covers 360° longitude — see Test E's note). What it
+// IS sensitive to is the SPATIAL distribution: a world-space halo ring vs a
+// crystal-local horizontal band correlate very differently. This is the
+// spatial-aware metric the ChannelSum-based oracle tests lack (scrum.md §1.17).
+double YChannelCorrelation(const std::vector<float>& a, const std::vector<float>& b) {
+  size_t n = a.size() / 3;
+  double ma = 0.0;
+  double mb = 0.0;
+  for (size_t i = 0; i < n; i++) {
+    ma += a[i * 3 + 1];
+    mb += b[i * 3 + 1];
+  }
+  ma /= static_cast<double>(n);
+  mb /= static_cast<double>(n);
+  double num = 0.0;
+  double da = 0.0;
+  double db = 0.0;
+  for (size_t i = 0; i < n; i++) {
+    double x = a[i * 3 + 1] - ma;
+    double y = b[i * 3 + 1] - mb;
+    num += x * y;
+    da += x * x;
+    db += y * y;
+  }
+  return num / (std::sqrt(da * db) + 1e-30);
+}
+
+// =============================================================================
+// Test J — single-layer SPATIAL parity (frame-correctness harness, scrum 253.1)
+//
+// The independent oracle is the real CpuTraceBackend (world-space projection),
+// NOT the kernel-mirror OracleTraceLayer — the mirror shares the Metal kernel's
+// crystal-local projection blind spot (scrum.md §1.17, a02). The metric is a
+// per-pixel Y-channel correlation, spatially sensitive enough to tell a halo
+// ring from a horizontal band.
+//
+//   - Positive arm: Metal (world-space, after the 253.1 frame fix) must
+//     correlate highly with the CpuTraceBackend oracle — same ring structure.
+//   - Negative arm (AC4): the crystal-LOCAL projection (OracleTraceLayer +
+//     ScatterOutgoingToXyz, which is exactly the pre-253.1 Metal behaviour)
+//     must correlate FAR LOWER with the world-space oracle. This proves the
+//     harness is not spatially blind: had Metal stayed local-frame, it FAILS.
+//
+// Uses a full-random crystal orientation (mirroring metal_smoke.json) so the
+// scene actually forms a halo ring; with a fixed orientation local vs world
+// differ only by a global rotation and the band/ring contrast vanishes.
+// =============================================================================
+TEST(MetalTraceParity, MetalVsCpuSingleLayerSpatialStructure) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+
+  auto scene = MakeMetalScene(/*max_hits=*/8, /*ms_layers=*/1);
+  // Full-random orientation (azimuth / zenith / roll uniform 360°) so a real
+  // halo ring forms — mirrors examples-style metal_smoke.json.
+  auto& axis = scene.ms_[0].setting_[0].crystal_.axis_;
+  axis.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  axis.latitude_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  axis.roll_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+
+  auto render = MakeRectangularRender();
+  render.resolution_[0] = 128;
+  render.resolution_[1] = 64;
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  constexpr size_t kRayCount = 262144;
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  int w = render.resolution_[0];
+  int h = render.resolution_[1];
+  auto pix = static_cast<size_t>(w) * static_cast<size_t>(h);
+
+  // --- Metal (world-space, after the 253.1 frame fix) ---
+  std::vector<float> xyz_metal(pix * 3, 0.0f);
+  {
+    MetalTraceBackend metal;
+    metal.BeginSession(spec);
+    metal.TraceLayer(RootRaySource::FromHost(host));
+    XyzImageData img{ xyz_metal.data(), w, h };
+    metal.ReadbackImage(img);
+    metal.EndSession();
+  }
+
+  // --- CpuTraceBackend (independent world-space oracle) ---
+  std::vector<float> xyz_cpu(pix * 3, 0.0f);
+  {
+    CpuTraceBackend cpu;
+    cpu.BeginSession(spec);
+    cpu.TraceLayer(RootRaySource::FromHost(host));
+    XyzImageData img{ xyz_cpu.data(), w, h };
+    cpu.ReadbackImage(img);
+    cpu.EndSession();
+  }
+
+  // --- Negative control: crystal-LOCAL projection (== pre-253.1 Metal) ---
+  // OracleTraceLayer traces in the crystal-local frame and never applies
+  // crystal_rot_; ScatterOutgoingToXyz then projects those local-frame
+  // directions directly — reproducing exactly the band the frame bug produced.
+  RandomNumberGenerator oracle_rng(0);
+  SeedRngsLikeMetal(oracle_rng, spec.seed);
+  auto roots = BuildFirstLayerRoots(oracle_rng, spec, kRayCount);
+  auto poly = BuildPolyArrays(roots.crystal);
+  auto oracle =
+      OracleTraceLayer(roots.crystal, poly, roots.n_idx, scene.max_hits_, roots.d, roots.p, roots.w, roots.tf);
+  std::vector<float> xyz_local(pix * 3, 0.0f);
+  Rotation camera_rot = MakeCameraRotation(render);
+  ScatterOutgoingToXyz(oracle.exit_d.data(), oracle.exit_w.data(), oracle.exit_w.size(), render, camera_rot,
+                       spec.wl.wl_, xyz_local.data());
+
+  double corr_fix = YChannelCorrelation(xyz_metal, xyz_cpu);
+  double corr_broken = YChannelCorrelation(xyz_local, xyz_cpu);
+  std::cout << "[MEASURE] corr_fix(metal_world vs cpu_world)=" << corr_fix
+            << "  corr_broken(local vs cpu_world)=" << corr_broken
+            << "  margin=" << (corr_fix - corr_broken) << std::endl;
+
+  // Positive: world-space Metal matches the independent CPU oracle's ring.
+  // Measured corr_fix ≈ 0.9999, corr_broken ≈ 0.028 (margin ≈ 0.97) on an
+  // M-series device; thresholds sit far below/above to tolerate RNG-path noise
+  // and are never relaxed to pass (red line). The production CLI path (2M rays,
+  // many crystals) measured ≈ 0.92 — still well clear of 0.80.
+  EXPECT_GT(corr_fix, 0.80) << "Metal does not structurally match the CpuTraceBackend world-space oracle";
+
+  // Negative (AC4): the crystal-local projection must collapse correlation.
+  // If this ever passes the positive threshold, the harness has gone spatially
+  // blind and the frame regression would slip through.
+  EXPECT_LT(corr_broken, 0.60) << "local-frame projection correlates too highly — harness may be spatially blind";
+  EXPECT_GT(corr_fix - corr_broken, 0.20)
+      << "fix/broken separation too small — metric not discriminating frame correctness";
+}
+
 }  // namespace
 }  // namespace lumice
 
