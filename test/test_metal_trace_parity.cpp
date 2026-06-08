@@ -1197,6 +1197,208 @@ TEST(MetalTraceParity, MetalVsCpuMultiLayerSpatialStructure) {
   // device-side shuffle is implemented.
 }
 
+// =============================================================================
+// Dual-fisheye equal-area parity (task-metal-gui-default Step 5)
+//
+// Validates the kernel's new proj_type==1 path against the production CPU
+// projection (projection::FisheyeEqualAreaForward + DualFisheyeToPixel +
+// render.cpp:192-214 overlap dual-write, all reached via the public
+// ScatterOutgoingToXyz helper in core/scatter_accum.hpp). Per scrum-253 review
+// guidance (memory 253.1) the CPU side runs the REAL production code path —
+// no test-local re-implementation of the dual-fisheye math.
+// =============================================================================
+using metal_test::MakeDualFisheyeEARender;
+
+TEST(MetalTraceParity, DualFisheyeEA_Single_NoOverlap) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+
+  auto scene = MakeMetalScene(/*max_hits=*/8, /*ms_layers=*/1);
+  auto render = MakeDualFisheyeEARender(/*overlap=*/0.0f);
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  constexpr size_t kRayCount = 4096;
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  std::vector<float> xyz_metal(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
+  LayerStats metal_stats;
+  {
+    MetalTraceBackend metal;
+    metal.BeginSession(spec);
+    auto h = metal.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h, nullptr);
+    metal_stats = h->GetLayerStats();
+    XyzImageData img{ xyz_metal.data(), render.resolution_[0], render.resolution_[1] };
+    metal.ReadbackImage(img);
+    metal.EndSession();
+  }
+
+  RandomNumberGenerator oracle_rng(0);
+  SeedRngsLikeMetal(oracle_rng, spec.seed);
+  auto roots = BuildFirstLayerRoots(oracle_rng, spec, kRayCount);
+  auto poly = BuildPolyArrays(roots.crystal);
+  auto oracle =
+      OracleTraceLayer(roots.crystal, poly, roots.n_idx, scene.max_hits_, roots.d, roots.p, roots.w, roots.tf);
+
+  // Project oracle exit rays through the REAL CPU projection (production
+  // ScatterOutgoingToXyz reaches FisheyeEqualAreaForward + DualFisheyeToPixel).
+  std::vector<float> xyz_oracle(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
+  Rotation camera_rot = MakeCameraRotation(render);
+  ScatterOutgoingToXyz(oracle.exit_d.data(), oracle.exit_w.data(), oracle.exit_w.size(), render, camera_rot,
+                       spec.wl.wl_, xyz_oracle.data());
+
+  EXPECT_EQ(metal_stats.exit_count, oracle.exit_count)
+      << "exit_count mismatch — metal=" << metal_stats.exit_count << " oracle=" << oracle.exit_count;
+  EXPECT_LT(RelErr(metal_stats.exit_w_sum, oracle.exit_w_sum), 5e-4)
+      << "exit_w_sum: metal=" << metal_stats.exit_w_sum << " oracle=" << oracle.exit_w_sum;
+
+  for (int c = 0; c < 3; c++) {
+    double sm = ChannelSum(xyz_metal, c);
+    double so = ChannelSum(xyz_oracle, c);
+    EXPECT_LT(RelErr(sm, so), 5e-4) << "channel=" << c << " metal=" << sm << " oracle=" << so;
+  }
+}
+
+TEST(MetalTraceParity, DualFisheyeEA_Single_WithOverlap) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+
+  // overlap = sin(5°) ≈ kDualFisheyeOverlap (gui_state.hpp:135) — matches the
+  // exact value the GUI live-preview path commits via c_api.cpp.
+  auto scene = MakeMetalScene(/*max_hits=*/8, /*ms_layers=*/1);
+  auto render = MakeDualFisheyeEARender(/*overlap=*/0.0872f);
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  constexpr size_t kRayCount = 4096;
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  std::vector<float> xyz_metal(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
+  LayerStats metal_stats;
+  {
+    MetalTraceBackend metal;
+    metal.BeginSession(spec);
+    auto h = metal.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h, nullptr);
+    metal_stats = h->GetLayerStats();
+    XyzImageData img{ xyz_metal.data(), render.resolution_[0], render.resolution_[1] };
+    metal.ReadbackImage(img);
+    metal.EndSession();
+  }
+
+  RandomNumberGenerator oracle_rng(0);
+  SeedRngsLikeMetal(oracle_rng, spec.seed);
+  auto roots = BuildFirstLayerRoots(oracle_rng, spec, kRayCount);
+  auto poly = BuildPolyArrays(roots.crystal);
+  auto oracle =
+      OracleTraceLayer(roots.crystal, poly, roots.n_idx, scene.max_hits_, roots.d, roots.p, roots.w, roots.tf);
+
+  std::vector<float> xyz_oracle(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
+  Rotation camera_rot = MakeCameraRotation(render);
+  ScatterOutgoingToXyz(oracle.exit_d.data(), oracle.exit_w.data(), oracle.exit_w.size(), render, camera_rot,
+                       spec.wl.wl_, xyz_oracle.data());
+
+  // exit_count and exit_w_sum are accumulated per-exit-event in the kernel
+  // (a single increment) — the overlap dual-write writes only to image, NOT
+  // to exit_wsum (matches CPU render.cpp:217 "Pass 2 does NOT update
+  // total_intensity_"). The strict equality here pins that invariant: if the
+  // kernel ever double-counts overlap rays into exit_wsum, parity breaks.
+  EXPECT_EQ(metal_stats.exit_count, oracle.exit_count)
+      << "exit_count mismatch — metal=" << metal_stats.exit_count << " oracle=" << oracle.exit_count;
+  EXPECT_LT(RelErr(metal_stats.exit_w_sum, oracle.exit_w_sum), 5e-4)
+      << "exit_w_sum: metal=" << metal_stats.exit_w_sum << " oracle=" << oracle.exit_w_sum;
+
+  for (int c = 0; c < 3; c++) {
+    double sm = ChannelSum(xyz_metal, c);
+    double so = ChannelSum(xyz_oracle, c);
+    EXPECT_LT(RelErr(sm, so), 5e-4) << "channel=" << c << " metal=" << sm << " oracle=" << so;
+  }
+}
+
+TEST(MetalTraceParity, DualFisheyeEA_MultiMS_WithOverlap) {
+  // GUI live-preview commonly drives multi-MS scenes; this case validates the
+  // dual-fisheye-EA kernel + inter-layer frame transit (253.2) together,
+  // against the production CpuTraceBackend on the same config.
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+
+  auto scene = MakeMetalScene(/*max_hits=*/6, /*ms_layers=*/2);
+  for (auto& ms : scene.ms_) {
+    auto& axis = ms.setting_[0].crystal_.axis_;
+    axis.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+    axis.latitude_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+    axis.roll_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  }
+  auto render = MakeDualFisheyeEARender(/*overlap=*/0.0872f);
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 7;
+
+  constexpr size_t kRayCount = 262144;
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  int w = render.resolution_[0];
+  int h = render.resolution_[1];
+  auto pix = static_cast<size_t>(w) * static_cast<size_t>(h);
+
+  auto run_two_layer = [&](TraceBackend& be, std::vector<float>& xyz) {
+    be.BeginSession(spec);
+    auto h0 = be.TraceLayer(RootRaySource::FromHost(host));
+    RecombineSpec rspec;
+    rspec.shuffle = false;
+    auto roots1 = be.Recombine(std::move(h0), rspec);
+    auto h1 = be.TraceLayer(roots1);
+    XyzImageData img{ xyz.data(), w, h };
+    be.ReadbackImage(img);
+    be.EndSession();
+    (void)h1;
+  };
+
+  std::vector<float> xyz_metal(pix * 3, 0.0f);
+  std::vector<float> xyz_cpu(pix * 3, 0.0f);
+  {
+    MetalTraceBackend metal;
+    run_two_layer(metal, xyz_metal);
+  }
+  {
+    CpuTraceBackend cpu;
+    run_two_layer(cpu, xyz_cpu);
+  }
+
+  double corr = YChannelCorrelation(xyz_metal, xyz_cpu);
+  std::cout << "[MEASURE] dual-fisheye-EA multi-MS corr(metal vs cpu)=" << corr << std::endl;
+
+  // Held at 0.95 (same threshold as MetalVsCpuMultiLayerSpatialStructure).
+  // Dual-fisheye-EA has no transcendentals (only sqrt) so parity should be
+  // tighter than rectangular, but the bar stays at 0.95 to detect partial
+  // regressions while tolerating sampling noise at 262144 rays.
+  EXPECT_GT(corr, 0.95) << "Metal dual-fisheye-EA multi-MS does not structurally match CpuTraceBackend";
+}
+
 }  // namespace
 }  // namespace lumice
 

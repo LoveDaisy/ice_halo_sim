@@ -44,6 +44,24 @@ inline RenderConfig MakeRectangularRender() {
   return cfg;
 }
 
+// Dual-fisheye equal-area RenderConfig matching the GUI's mandatory wire
+// format (c_api.cpp:295: fov180 / full-globe / el=0). `overlap` mirrors
+// kDualFisheyeOverlap on the GUI side (set 0 for the no-overlap variant).
+inline RenderConfig MakeDualFisheyeEARender(float overlap = 0.0f) {
+  RenderConfig cfg;
+  cfg.id_ = 0;
+  cfg.lens_.type_ = LensParam::kDualFisheyeEqualArea;
+  cfg.lens_.fov_ = 180.0f;
+  cfg.resolution_[0] = 128;  // wide enough for left+right circle layout
+  cfg.resolution_[1] = 64;
+  cfg.view_.az_ = 0.0f;
+  cfg.view_.el_ = 0.0f;  // GUI sets el=0 for dual-fisheye (full-globe; unused)
+  cfg.view_.ro_ = 0.0f;
+  cfg.visible_ = RenderConfig::kFull;
+  cfg.overlap_ = overlap;
+  return cfg;
+}
+
 inline SceneConfig MakeMetalScene(size_t max_hits, size_t ms_layers) {
   SceneConfig scene;
   scene.ray_num_ = 0;
