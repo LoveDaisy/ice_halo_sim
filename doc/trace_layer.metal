@@ -6,6 +6,11 @@
 // It is NOT compiled by the build system. The runtime source is the kKernelSrc
 // string literal in src/core/metal_trace_backend.mm — the two MUST stay
 // logically equivalent (kernel body identical; this file may carry extra comments).
+// NOTE (since 253.1): equivalence currently holds for the FRAME-TRANSFORM logic
+// (per-ray root_rot, mat·v before projection). This reference omits the
+// exit-stats accumulators (buffers 15/16, exit_cnt/exit_wsum) present in
+// kKernelSrc — pre-existing drift, see DECISION 2026-06-08 in the 253.1 task.
+// Do not treat this file as a full drop-in replacement for kKernelSrc.
 //
 // Kernel form follows trace_full.metal from the explore spike
 // (scratchpad/explore-gpu-metal-trace-spike/spike/trace_full.metal): one

@@ -23,6 +23,7 @@
 #if defined(__APPLE__)
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -1063,6 +1064,7 @@ TEST(MetalTraceParity, TotalLandedWeightFormulaIdentity) {
 // crystal-local horizontal band correlate very differently. This is the
 // spatial-aware metric the ChannelSum-based oracle tests lack (scrum.md §1.17).
 double YChannelCorrelation(const std::vector<float>& a, const std::vector<float>& b) {
+  assert(a.size() == b.size() && "YChannelCorrelation: images must have equal size");
   size_t n = a.size() / 3;
   double ma = 0.0;
   double mb = 0.0;
@@ -1164,6 +1166,9 @@ TEST(MetalTraceParity, MetalVsCpuSingleLayerSpatialStructure) {
   // OracleTraceLayer traces in the crystal-local frame and never applies
   // crystal_rot_; ScatterOutgoingToXyz then projects those local-frame
   // directions directly — reproducing exactly the band the frame bug produced.
+  // Originally planned as option (b) test-only identity-matrix injection;
+  // replaced by reusing OracleTraceLayer per the 2026-06-08 DECISION in
+  // progress.md (a02 independent oracle + a04 zero production change).
   RandomNumberGenerator oracle_rng(0);
   SeedRngsLikeMetal(oracle_rng, spec.seed);
   auto roots = BuildFirstLayerRoots(oracle_rng, spec, kRayCount);

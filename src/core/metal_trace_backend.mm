@@ -607,12 +607,10 @@ void MetalTraceBackend::Impl::CopyContSliceToRootBuf(size_t ci_start, size_t ci_
   // projection behaviour byte-for-byte so existing multi-layer parity tests do
   // not regress. 253.2 must populate the real rotation once continuation rays
   // are routed through world space.
+  static const float kIdentity3x3[9] = { 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f };
   auto* rot_ptr = static_cast<float*>([root_rot_buf contents]);
   for (size_t i = 0; i < ci_n; i++) {
-    float* m = rot_ptr + i * 9;
-    m[0] = 1.0f; m[1] = 0.0f; m[2] = 0.0f;
-    m[3] = 0.0f; m[4] = 1.0f; m[5] = 0.0f;
-    m[6] = 0.0f; m[7] = 0.0f; m[8] = 1.0f;
+    std::memcpy(rot_ptr + i * 9, kIdentity3x3, 9 * sizeof(float));
   }
 }
 
