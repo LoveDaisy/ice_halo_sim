@@ -74,6 +74,8 @@ namespace lumice {
 //      MUST list "exit rays returned to world space before leaving the kernel"
 //      as a mandatory check. (Metal once shipped this bug: exit directions were
 //      projected in crystal-local space, scattering the 22° halo into a band.)
+//      As-built lifecycle (host/kernel transform points, multi-MS transit,
+//      parity harness): see doc/trace-backend-frame-lifecycle.md.
 //
 // State machine
 //   Legal call sequence (per backend instance):
