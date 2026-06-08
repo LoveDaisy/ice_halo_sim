@@ -614,9 +614,11 @@ void MetalTraceBackend::Impl::CopyContSliceToRootBuf(const ScatteringSetting& se
   const float* src_d = static_cast<const float*>([cont_d[in_slot] contents]) + ci_start * 3;
   const float* src_w = static_cast<const float*>([cont_w[in_slot] contents]) + ci_start;
 
+  // workspace[2] only because InitRay_rot takes RayBuffer[2]; the second slot is
+  // unused by InitRay_rot/InitRay_p_fid, so it is left default-constructed
+  // (capacity 0) rather than allocated for ci_n rays.
   RayBuffer workspace[2]{};
   workspace[0].Reset(ci_n);
-  workspace[1].Reset(ci_n);
   workspace[0].size_ = ci_n;
   for (size_t i = 0; i < ci_n; i++) {
     RaySeg& r = workspace[0][i];

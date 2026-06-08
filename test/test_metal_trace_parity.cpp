@@ -1162,6 +1162,10 @@ TEST(MetalTraceParity, MetalVsCpuMultiLayerSpatialStructure) {
     rspec.shuffle = false;
     auto roots1 = be.Recombine(std::move(h0), rspec);
     auto h1 = be.TraceLayer(roots1);
+    // h1 (the final layer) is kept alive until after ReadbackImage so the
+    // accumulated XYZ image is fully populated; ReadbackImage reads the
+    // session accumulator (independent of the handle), and EndSession releases
+    // session state. The handle destructs at lambda scope end — after readback.
     XyzImageData img{ xyz.data(), w, h };
     be.ReadbackImage(img);
     be.EndSession();
@@ -1182,10 +1186,16 @@ TEST(MetalTraceParity, MetalVsCpuMultiLayerSpatialStructure) {
   double corr = YChannelCorrelation(xyz_metal, xyz_cpu);
   std::cout << "[MEASURE] multi-MS corr(metal_world vs cpu_world)=" << corr << std::endl;
 
-  // Threshold calibrated from measurement (see progress.md); held below the
-  // observed value to tolerate RNG-path noise, never relaxed to pass (red line).
-  EXPECT_GT(corr, 0.80) << "Metal multi-MS does not structurally match the CpuTraceBackend world-space oracle"
+  // Threshold calibrated from measurement: corr ≈ 0.997 (stable across runs:
+  // 0.997003 / 0.996988). Held at 0.95 — ample margin below the observed value
+  // yet tight enough to catch a partial inter-layer frame regression (e.g. a
+  // transpose sign flip or a single-ci-branch error that would still clear a
+  // looser 0.80 bar). Never relaxed to pass (red line).
+  EXPECT_GT(corr, 0.95) << "Metal multi-MS does not structurally match the CpuTraceBackend world-space oracle"
                         << " — inter-layer frame transit likely wrong";
+  // shuffle=false: Metal v1 requires it (asserts !shuffle in Recombine). The
+  // shuffle=true Recombine path is NOT covered here — add coverage once Metal's
+  // device-side shuffle is implemented.
 }
 
 }  // namespace
