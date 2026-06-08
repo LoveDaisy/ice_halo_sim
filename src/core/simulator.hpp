@@ -7,10 +7,12 @@
 #include <vector>
 
 #include "config/proj_config.hpp"
+#include "config/render_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/crystal.hpp"
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
+#include "core/trace_backend.hpp"
 #include "util/logger.hpp"
 
 namespace lumice {
@@ -29,6 +31,13 @@ struct SimBatch {
   size_t ray_num_ = 0;
   std::shared_ptr<const SceneConfig> scene_;
   uint64_t generation_ = 0;
+  // Snapshot of renderers active when this batch was emitted (task 252.3).
+  // Captured by server.cpp's GenerateScene under scene_mutex_, alongside
+  // active_scene_, so a concurrent CommitConfig cannot tear the (scene,
+  // renders) pair. Non-null on the backend path; the legacy CPU path ignores
+  // this field and tolerates null. shared_ptr<const ...> guarantees in-flight
+  // SimBatches keep the snapshot alive after a later CommitConfig swap.
+  std::shared_ptr<const std::vector<RenderConfig>> renders_;
 };
 
 class Simulator {
@@ -60,6 +69,13 @@ class Simulator {
   void SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num,
                              CrystalCache& crystal_cache, SimWorkspace& workspace, uint64_t generation,
                              std::vector<std::vector<double>>& ray_alloc_carry);
+
+  // Backend-routed wavelength step (task 252.3, TraceBackend seam integration).
+  // Drives backend.BeginSession -> (TraceLayer -> Recombine)+ -> ReadbackImage
+  // -> EndSession and emplaces a SimData carrying backend_xyz_ +
+  // backend_total_intensity_. Only invoked when CanUseBackend() returns true.
+  void SimulateOneWavelengthWithBackend(TraceBackend& backend, const SceneConfig& scene, const RenderConfig& render,
+                                        const WlParam& wl_param, size_t ray_num, uint64_t generation);
 
   static constexpr size_t kSmallBatchRayNum = 32;
 

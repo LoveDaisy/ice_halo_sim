@@ -106,6 +106,11 @@ class ServerImpl {
 
   // Active scene and generation counter for batch staleness detection
   std::shared_ptr<const SceneConfig> active_scene_;
+  // Snapshot of renderers paired with active_scene_ (task 252.3, TraceBackend seam).
+  // Set in CommitConfig under scene_mutex_ in lockstep with active_scene_, then
+  // attached to every SimBatch emitted by GenerateScene. Stays nullptr if no
+  // CommitConfig has yet succeeded; consumers tolerate null.
+  std::shared_ptr<const std::vector<RenderConfig>> active_renders_;
   std::atomic<uint64_t> scene_generation_{ 0 };
 
   // Persistent thread state machine: threads wait on start_cv_ when kStopped,
@@ -317,9 +322,15 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   }
 
   auto new_scene = std::make_shared<SceneConfig>(config_manager_.scene_);
+  auto new_renders = std::make_shared<std::vector<RenderConfig>>();
+  new_renders->reserve(config_manager_.renderers_.size());
+  for (const auto& [_, r] : config_manager_.renderers_) {
+    new_renders->push_back(r);
+  }
   {
     std::lock_guard<std::mutex> lock(scene_mutex_);
     active_scene_ = std::move(new_scene);
+    active_renders_ = std::move(new_renders);
     scene_generation_.fetch_add(1);
   }
 
@@ -594,7 +605,11 @@ void ServerImpl::ConsumeData() {
   while (true) {
     CHECK_STOP
     auto sim_data = data_queue_->Get();
-    if (sim_data.rays_.Empty()) {
+    // Interruption sentinel: a default-constructed SimData (queue shutdown /
+    // simulator early exit) has rays_ empty and is_backend_path_ false. Backend
+    // path sets is_backend_path_ = true with rays_ empty — treat that as valid
+    // data, not interruption.
+    if (sim_data.rays_.Empty() && !sim_data.is_backend_path_) {
       // Simulation is interrupted.
       break;
     }
@@ -648,17 +663,19 @@ void ServerImpl::GenerateScene() {
   bool first_batch_logged = false;
 
   std::shared_ptr<const SceneConfig> scene;
+  std::shared_ptr<const std::vector<RenderConfig>> renders;
   uint64_t generation = 0;
   {
     std::lock_guard<std::mutex> lock(scene_mutex_);
     scene = active_scene_;
+    renders = active_renders_;
     generation = scene_generation_.load();
   }
   auto ray_num = scene->ray_num_;
   size_t committed_num = 0;
   while (ray_num == kInfSize || committed_num < ray_num) {
     size_t batch_ray_num = std::min(kDefaultRayNum, ray_num - committed_num);
-    scene_queue_->Emplace(SimBatch{ batch_ray_num, scene, generation });
+    scene_queue_->Emplace(SimBatch{ batch_ray_num, scene, generation, renders });
     sim_scene_cnt_++;
     if (!first_batch_logged) {
       ILOG_INFO(logger_, "GenerateScene: first batch enqueued at {:.1f}ms after start",
