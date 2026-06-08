@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780910680071,
+  "lastUpdate": 1780910682407,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -10319,6 +10319,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 98.6,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "390813463050266f30c6406eab1cb4b9a52972bb",
+          "message": "Merge pull request #121 from LoveDaisy/feat/metal_backend_prod\n\nfeat: Metal trace backend (production) — pluggable TraceBackend seam + CPU/Metal parity",
+          "timestamp": "2026-06-08T17:19:20+08:00",
+          "tree_id": "ce38b259f1a458387effaafcbece2fdfa5c2e196",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/390813463050266f30c6406eab1cb4b9a52972bb"
+        },
+        "date": 1780910681665,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 87.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 102.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 98.9,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 97.3,
             "unit": "%"
           }
         ]
