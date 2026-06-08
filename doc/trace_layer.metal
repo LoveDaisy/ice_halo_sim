@@ -186,11 +186,18 @@ kernel void trace_layer_kernel(
                              uz * poly_n[fi * 3u + 2u]);
             if (facing > bestf) { bestf = facing; ef = int(fi); }
           }
+          // Return continuation direction to world space before export
+          // (invariant 6 / DESIGN D3). Host resamples new-layer crystal_rot_
+          // + p/to_face (InitRay_p_fid) on the next-layer crystal; out_p/out_tf
+          // here are placeholders.
+          float wcx = m[0] * cdx + m[1] * cdy + m[2] * cdz;
+          float wcy = m[3] * cdx + m[4] * cdy + m[5] * cdz;
+          float wcz = m[6] * cdx + m[7] * cdy + m[8] * cdz;
           uint slot = atomic_fetch_add_explicit(counter, 1u, memory_order_relaxed);
           if (slot < prm.out_cap) {
-            out_d[slot * 3u + 0u] = cdx;
-            out_d[slot * 3u + 1u] = cdy;
-            out_d[slot * 3u + 2u] = cdz;
+            out_d[slot * 3u + 0u] = wcx;
+            out_d[slot * 3u + 1u] = wcy;
+            out_d[slot * 3u + 2u] = wcz;
             out_p[slot * 3u + 0u] = centroid[ef * 3u + 0u];
             out_p[slot * 3u + 1u] = centroid[ef * 3u + 1u];
             out_p[slot * 3u + 2u] = centroid[ef * 3u + 2u];

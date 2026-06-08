@@ -242,41 +242,13 @@ OracleLayerResult OracleTraceLayer(const Crystal& crystal, const PolyArrays& pol
   return res;
 }
 
-// Apply argmax-facing + centroid re-entry to a batch of exit rays. Mirrors
-// the kernel's ms_mode==1 branch where exits become the next layer's roots.
-// NOLINTNEXTLINE(readability-function-size)
-void OracleReentryRoots(const PolyArrays& poly, const std::vector<float>& exit_d, const std::vector<float>& exit_w,
-                        std::vector<float>& out_d, std::vector<float>& out_p, std::vector<float>& out_w,
-                        std::vector<IdType>& out_tf) {
-  size_t poly_cnt = poly.n.size() / 3;
-  size_t n = exit_w.size();
-  out_d.assign(exit_d.begin(), exit_d.end());
-  out_w.assign(exit_w.begin(), exit_w.end());
-  out_p.assign(n * 3, 0.0f);
-  out_tf.assign(n, 0);
-  for (size_t i = 0; i < n; i++) {
-    float dx = exit_d[i * 3 + 0];
-    float dy = exit_d[i * 3 + 1];
-    float dz = exit_d[i * 3 + 2];
-    float inv_len = 1.0f / std::sqrt(dx * dx + dy * dy + dz * dz);
-    float ux = dx * inv_len;
-    float uy = dy * inv_len;
-    float uz = dz * inv_len;
-    int ef = 0;
-    float best = -1e30f;
-    for (size_t fi = 0; fi < poly_cnt; fi++) {
-      float facing = -(ux * poly.n[fi * 3 + 0] + uy * poly.n[fi * 3 + 1] + uz * poly.n[fi * 3 + 2]);
-      if (facing > best) {
-        best = facing;
-        ef = static_cast<int>(fi);
-      }
-    }
-    out_p[i * 3 + 0] = poly.centroid[ef * 3 + 0];
-    out_p[i * 3 + 1] = poly.centroid[ef * 3 + 1];
-    out_p[i * 3 + 2] = poly.centroid[ef * 3 + 2];
-    out_tf[i] = static_cast<IdType>(ef);
-  }
-}
+// NOTE (253.2): the former OracleReentryRoots helper (local-frame argmax-facing
+// + centroid re-entry, mirroring the PRE-253.2 kernel ms_mode==1 branch) was
+// removed. Its local-frame re-entry — no world-transit, no per-ray crystal_rot_
+// resample on the next crystal — is exactly the inter-layer frame bug 253.2
+// fixes, so it is no longer a valid multi-MS oracle. Multi-layer structural
+// parity now uses the real CpuTraceBackend as an independent world-space oracle
+// (MetalVsCpuMultiLayerSpatialStructure).
 
 // Reproduce MetalTraceBackend::GenerateFirstLayerRoots exactly: same RNG
 // path (SetSeed + global SetSeed + MakeCrystal + InitRayFirstMs) so the
@@ -471,36 +443,19 @@ TEST(MetalTraceParity, TwoLayerExitStatsAndXyz) {
   EXPECT_LT(RelErr(metal_layer0_stats.exit_w_sum, oracle_l0.exit_w_sum), 5e-4)
       << "layer0 exit_w_sum: metal=" << metal_layer0_stats.exit_w_sum << " oracle=" << oracle_l0.exit_w_sum;
 
-  // Re-entry: argmax-facing + centroid (matches kernel ms_mode==1 branch).
-  std::vector<float> next_d;
-  std::vector<float> next_p;
-  std::vector<float> next_w;
-  std::vector<IdType> next_tf;
-  OracleReentryRoots(poly0, oracle_l0.exit_d, oracle_l0.exit_w, next_d, next_p, next_w, next_tf);
-
-  // Layer 1: same RNG consumption as Metal (ResolveLayerCrystal calls
-  // MakeCrystal on every non-first layer regardless of host crystal).
-  const auto& setting1 = scene.ms_[1].setting_[0];
-  Crystal crystal1 = MakeCrystal(oracle_rng, setting1.crystal_.param_);
-  float n_idx1 = crystal1.GetRefractiveIndex(spec.wl.wl_);
-  auto poly1 = BuildPolyArrays(crystal1);
-
-  auto oracle_l1 = OracleTraceLayer(crystal1, poly1, n_idx1, scene.max_hits_, next_d, next_p, next_w, next_tf);
-
-  EXPECT_EQ(metal_layer1_stats.exit_count, oracle_l1.exit_count) << "layer1 exit_count mismatch";
-  EXPECT_LT(RelErr(metal_layer1_stats.exit_w_sum, oracle_l1.exit_w_sum), 5e-4)
-      << "layer1 exit_w_sum: metal=" << metal_layer1_stats.exit_w_sum << " oracle=" << oracle_l1.exit_w_sum;
-
-  // Final XYZ comparison.
-  std::vector<float> xyz_oracle(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
-  Rotation camera_rot = MakeCameraRotation(render);
-  ScatterOutgoingToXyz(oracle_l1.exit_d.data(), oracle_l1.exit_w.data(), oracle_l1.exit_w.size(), render, camera_rot,
-                       spec.wl.wl_, xyz_oracle.data());
-  for (int c = 0; c < 3; c++) {
-    double sm = ChannelSum(xyz_metal, c);
-    double so = ChannelSum(xyz_oracle, c);
-    EXPECT_LT(RelErr(sm, so), 5e-4) << "channel=" << c << " metal=" << sm << " oracle=" << so;
-  }
+  // Layer-1 kernel-mirror comparison RETIRED (253.2). The kernel-mirror re-entry
+  // (OracleReentryRoots: local-frame argmax-facing + centroid, no world-transit,
+  // no crystal_rot_ resample) is exactly the pre-253.2 inter-layer frame BUG —
+  // it is no longer a correct baseline now that Metal returns continuation rays
+  // to world space and resamples a new per-ray rotation + entry face on the next
+  // crystal (mirroring CPU CollectData + InitRayOtherMs). Multi-MS structural
+  // correctness for layer 1+ is validated against the independent CpuTraceBackend
+  // world-space oracle in MetalVsCpuMultiLayerSpatialStructure (per-pixel
+  // correlation). Here we keep the still-valid layer-0 exit-stats checks above
+  // and a metal-side sanity check that the 2-layer drive produced finite light.
+  EXPECT_GT(metal_layer1_stats.exit_count, 0u) << "layer1 produced no exits";
+  EXPECT_TRUE(std::isfinite(metal_layer1_stats.exit_w_sum));
+  EXPECT_GT(ChannelSum(xyz_metal, 1), 0.0) << "2-layer drive produced no Y-channel light";
 }
 
 // =============================================================================
@@ -776,69 +731,16 @@ TEST(MetalTraceParity, MultiPopTwoLayerExitStatsAndXyz) {
   EXPECT_LT(RelErr(metal_layer0_stats.exit_w_sum, oracle_l0.total_exit_w_sum), 5e-4)
       << "layer0 exit_w_sum: metal=" << metal_layer0_stats.exit_w_sum << " oracle=" << oracle_l0.total_exit_w_sum;
 
-  // Re-entry: argmax-facing + centroid. The Metal kernel's exit branch
-  // computes the entry point using the *producing* crystal's poly table.
-  // In MakeMultiCrystalScene all ci share identical prism geometry, so any
-  // ci's poly table is equivalent for the argmax + centroid computation —
-  // use oracle_l0.polys[0] uniformly.
-  std::vector<float> next_d;
-  std::vector<float> next_p;
-  std::vector<float> next_w;
-  std::vector<IdType> next_tf;
-  OracleReentryRoots(oracle_l0.polys[0], oracle_l0.exit_d, oracle_l0.exit_w, next_d, next_p, next_w, next_tf);
-
-  // Layer 1 — multi-pop oracle (manual replication of OracleRunFirstLayerMultiPop
-  // but with the staged roots as input instead of InitRayFirstMs).
-  const auto& ms1 = scene.ms_[1];
-  size_t crystal_cnt1 = ms1.setting_.size();
-  std::vector<float> proportions1;
-  proportions1.reserve(crystal_cnt1);
-  for (size_t ci = 0; ci < crystal_cnt1; ci++) {
-    proportions1.push_back(ms1.setting_[ci].crystal_proportion_);
-  }
-  std::vector<double> carry1(crystal_cnt1, 0.0);
-  size_t total_l1 = next_w.size();
-  auto crystal_ray_num1 = PartitionCrystalRayNum(proportions1, total_l1, carry1);
-
-  size_t total_exit_count_l1 = 0;
-  double total_exit_w_sum_l1 = 0.0;
-  std::vector<float> exits_d_l1;
-  std::vector<float> exits_w_l1;
-  size_t ci_start = 0;
-  for (size_t ci = 0; ci < crystal_cnt1; ci++) {
-    size_t ci_n = crystal_ray_num1[ci];
-    const auto& setting = ms1.setting_[ci];
-    Crystal crystal = MakeCrystal(oracle_rng, setting.crystal_.param_);
-    float n_idx = crystal.GetRefractiveIndex(spec.wl.wl_);
-    PolyArrays poly = BuildPolyArrays(crystal);
-    if (ci_n == 0) {
-      continue;
-    }
-    std::vector<float> slice_d(next_d.begin() + ci_start * 3, next_d.begin() + (ci_start + ci_n) * 3);
-    std::vector<float> slice_p(next_p.begin() + ci_start * 3, next_p.begin() + (ci_start + ci_n) * 3);
-    std::vector<float> slice_w(next_w.begin() + ci_start, next_w.begin() + ci_start + ci_n);
-    std::vector<IdType> slice_tf(next_tf.begin() + ci_start, next_tf.begin() + ci_start + ci_n);
-    auto r = OracleTraceLayer(crystal, poly, n_idx, scene.max_hits_, slice_d, slice_p, slice_w, slice_tf);
-    total_exit_count_l1 += r.exit_count;
-    total_exit_w_sum_l1 += r.exit_w_sum;
-    exits_d_l1.insert(exits_d_l1.end(), r.exit_d.begin(), r.exit_d.end());
-    exits_w_l1.insert(exits_w_l1.end(), r.exit_w.begin(), r.exit_w.end());
-    ci_start += ci_n;
-  }
-
-  EXPECT_EQ(metal_layer1_stats.exit_count, total_exit_count_l1) << "layer1 exit_count mismatch";
-  EXPECT_LT(RelErr(metal_layer1_stats.exit_w_sum, total_exit_w_sum_l1), 5e-4)
-      << "layer1 exit_w_sum: metal=" << metal_layer1_stats.exit_w_sum << " oracle=" << total_exit_w_sum_l1;
-
-  std::vector<float> xyz_oracle(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
-  Rotation camera_rot = MakeCameraRotation(render);
-  ScatterOutgoingToXyz(exits_d_l1.data(), exits_w_l1.data(), exits_w_l1.size(), render, camera_rot, spec.wl.wl_,
-                       xyz_oracle.data());
-  for (int c = 0; c < 3; c++) {
-    double sm = ChannelSum(xyz_metal, c);
-    double so = ChannelSum(xyz_oracle, c);
-    EXPECT_LT(RelErr(sm, so), 5e-4) << "channel=" << c << " metal=" << sm << " oracle=" << so;
-  }
+  // Layer-1 multi-pop kernel-mirror comparison RETIRED (253.2) — same reason as
+  // TwoLayerExitStatsAndXyz: OracleReentryRoots' local-frame re-entry (no world-
+  // transit, no per-ray crystal_rot_ resample) is the pre-253.2 inter-layer frame
+  // BUG and is no longer a correct baseline. Multi-MS structural correctness is
+  // validated against the independent CpuTraceBackend world-space oracle in
+  // MetalVsCpuMultiLayerSpatialStructure. The still-valid layer-0 multi-pop exit-
+  // stats checks above are kept; below is a metal-side sanity check only.
+  EXPECT_GT(metal_layer1_stats.exit_count, 0u) << "layer1 produced no exits";
+  EXPECT_TRUE(std::isfinite(metal_layer1_stats.exit_w_sum));
+  EXPECT_GT(ChannelSum(xyz_metal, 1), 0.0) << "2-layer multi-pop drive produced no Y-channel light";
 }
 
 // =============================================================================
@@ -1199,6 +1101,91 @@ TEST(MetalTraceParity, MetalVsCpuSingleLayerSpatialStructure) {
   EXPECT_LT(corr_broken, 0.60) << "local-frame projection correlates too highly — harness may be spatially blind";
   EXPECT_GT(corr_fix - corr_broken, 0.20)
       << "fix/broken separation too small — metric not discriminating frame correctness";
+}
+
+// =============================================================================
+// Test K — MULTI-LAYER spatial parity (multi-MS frame-transit harness, 253.2)
+//
+// Validates the 253.2 inter-layer frame transit (kernel continuation world-
+// return + host resample-to-new-local) against the real CpuTraceBackend as the
+// independent world-space oracle — NOT the kernel-mirror OracleTraceLayer,
+// whose local-frame re-entry (OracleReentryRoots, no world-transit / no
+// resample) is exactly the pre-253.2 frame bug and is therefore retired as a
+// multi-MS structural baseline (see TwoLayer* tests). Two MS layers (layer 0
+// prob 0.6 → continuation, layer 1 accumulate). Spatial Y-channel correlation;
+// if the inter-layer transit were wrong (continuation stuck in the previous
+// layer's local frame), the second layer's contribution would scatter and the
+// correlation would collapse.
+// =============================================================================
+TEST(MetalTraceParity, MetalVsCpuMultiLayerSpatialStructure) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+
+  auto scene = MakeMetalScene(/*max_hits=*/6, /*ms_layers=*/2);
+  // Full-random orientation on BOTH layers so a real halo ring forms and the
+  // inter-layer frame transit is genuinely exercised.
+  for (auto& ms : scene.ms_) {
+    auto& axis = ms.setting_[0].crystal_.axis_;
+    axis.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+    axis.latitude_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+    axis.roll_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  }
+
+  auto render = MakeRectangularRender();
+  render.resolution_[0] = 128;
+  render.resolution_[1] = 64;
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 7;
+
+  constexpr size_t kRayCount = 262144;
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  int w = render.resolution_[0];
+  int h = render.resolution_[1];
+  auto pix = static_cast<size_t>(w) * static_cast<size_t>(h);
+
+  // Drive a 2-layer session through the TraceBackend seam (host → layer0 →
+  // Recombine → layer1 → readback). shuffle=false: Metal v1 requires it and the
+  // CPU oracle stays comparable.
+  auto run_two_layer = [&](TraceBackend& be, std::vector<float>& xyz) {
+    be.BeginSession(spec);
+    auto h0 = be.TraceLayer(RootRaySource::FromHost(host));
+    RecombineSpec rspec;
+    rspec.shuffle = false;
+    auto roots1 = be.Recombine(std::move(h0), rspec);
+    auto h1 = be.TraceLayer(roots1);
+    XyzImageData img{ xyz.data(), w, h };
+    be.ReadbackImage(img);
+    be.EndSession();
+    (void)h1;
+  };
+
+  std::vector<float> xyz_metal(pix * 3, 0.0f);
+  std::vector<float> xyz_cpu(pix * 3, 0.0f);
+  {
+    MetalTraceBackend metal;
+    run_two_layer(metal, xyz_metal);
+  }
+  {
+    CpuTraceBackend cpu;
+    run_two_layer(cpu, xyz_cpu);
+  }
+
+  double corr = YChannelCorrelation(xyz_metal, xyz_cpu);
+  std::cout << "[MEASURE] multi-MS corr(metal_world vs cpu_world)=" << corr << std::endl;
+
+  // Threshold calibrated from measurement (see progress.md); held below the
+  // observed value to tolerate RNG-path noise, never relaxed to pass (red line).
+  EXPECT_GT(corr, 0.80) << "Metal multi-MS does not structurally match the CpuTraceBackend world-space oracle"
+                        << " — inter-layer frame transit likely wrong";
 }
 
 }  // namespace

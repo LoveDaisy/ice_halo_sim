@@ -186,11 +186,21 @@ kernel void trace_layer_kernel(
                              uz * poly_n[fi * 3u + 2u]);
             if (facing > bestf) { bestf = facing; ef = int(fi); }
           }
+          // Return the continuation direction from crystal-local to world
+          // space before writing it out (invariant 6 / DESIGN D3: any ray
+          // leaving the kernel is world-space). The host re-samples a new
+          // per-ray crystal_rot_ for the next layer and rotates back into the
+          // new local frame (mirroring CPU CollectData + InitRayOtherMs). out_p
+          // / out_tf are placeholders here — the host resamples them on the
+          // next-layer crystal via InitRay_p_fid, so they are not relied upon.
+          float wcx = m[0] * cdx + m[1] * cdy + m[2] * cdz;
+          float wcy = m[3] * cdx + m[4] * cdy + m[5] * cdz;
+          float wcz = m[6] * cdx + m[7] * cdy + m[8] * cdz;
           uint slot = atomic_fetch_add_explicit(counter, 1u, memory_order_relaxed);
           if (slot < prm.out_cap) {
-            out_d[slot * 3u + 0u] = cdx;
-            out_d[slot * 3u + 1u] = cdy;
-            out_d[slot * 3u + 2u] = cdz;
+            out_d[slot * 3u + 0u] = wcx;
+            out_d[slot * 3u + 1u] = wcy;
+            out_d[slot * 3u + 2u] = wcz;
             out_p[slot * 3u + 0u] = centroid[ef * 3u + 0u];
             out_p[slot * 3u + 1u] = centroid[ef * 3u + 1u];
             out_p[slot * 3u + 2u] = centroid[ef * 3u + 2u];
@@ -371,7 +381,7 @@ struct MetalTraceBackend::Impl {
                                 const HostRayBatch& host_batch);
   size_t GenerateFirstLayerRootsForCi(const ScatteringSetting& setting,
                                       size_t ci, size_t crystal_ray_num);
-  void CopyContSliceToRootBuf(size_t ci_start, size_t ci_n, int in_slot);
+  void CopyContSliceToRootBuf(const ScatteringSetting& setting, size_t ci_start, size_t ci_n, int in_slot);
   void DispatchLayer(size_t num_rays,
                      id<MTLBuffer> r_d, id<MTLBuffer> r_p,
                      id<MTLBuffer> r_w, id<MTLBuffer> r_tf,
@@ -582,35 +592,62 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
   return n;
 }
 
-void MetalTraceBackend::Impl::CopyContSliceToRootBuf(size_t ci_start, size_t ci_n, int in_slot) {
-  // Copy a slice [ci_start, ci_start + ci_n) of the previous layer's
-  // continuation buffers into root_*_buf. We memcpy through the host (rather
-  // than dispatching with `setBuffer:offset:` on cont_*) because cont_tf is
-  // uint16_t and Metal requires `setBuffer:offset:atIndex:` offsets to be
-  // 4-byte aligned — an arbitrary ci_start may not satisfy that for tf.
-  // On M2 unified memory memcpy is a plain memory copy (no PCIe transfer).
-  const float* src_d  = static_cast<const float*>([cont_d[in_slot]  contents]) + ci_start * 3;
-  const float* src_p  = static_cast<const float*>([cont_p[in_slot]  contents]) + ci_start * 3;
-  const float* src_w  = static_cast<const float*>([cont_w[in_slot]  contents]) + ci_start;
-  const uint16_t* src_tf =
-      static_cast<const uint16_t*>([cont_tf[in_slot] contents]) + ci_start;
-  std::memcpy([root_d_buf contents],  src_d,  ci_n * 3 * sizeof(float));
-  std::memcpy([root_p_buf contents],  src_p,  ci_n * 3 * sizeof(float));
-  std::memcpy([root_w_buf contents],  src_w,  ci_n * sizeof(float));
-  std::memcpy([root_tf_buf contents], src_tf, ci_n * sizeof(uint16_t));
+void MetalTraceBackend::Impl::CopyContSliceToRootBuf(const ScatteringSetting& setting,
+                                                     size_t ci_start, size_t ci_n, int in_slot) {
+  // Inter-layer frame transit (DESIGN D3 / mirrors CPU InitRayOtherMs).
+  // Step 1 made the kernel export continuation DIRECTIONS in WORLD space. For
+  // the next layer — a possibly different crystal — we must (like the CPU's
+  // InitRayOtherMs, simulator.cpp:199-210):
+  //   1) resample a fresh per-ray crystal orientation (InitRay_rot),
+  //   2) rotate the world-space direction into the NEW crystal-local frame
+  //      (ApplyInverse), and
+  //   3) resample the entry point + hit face on the NEW crystal (InitRay_p_fid),
+  // then upload d/p/tf + the new per-ray rotation matrix. The previous layer's
+  // continuation p/to_face are intentionally discarded (the kernel's centroid/
+  // argmax-facing export is a placeholder) — only the world-space direction and
+  // weight carry across the seam, matching the CPU frame chain exactly.
+  //
+  // `current_crystal` is the THIS-layer crystal, already resolved by
+  // ResolveLayerCrystalForCi before this call. `rng` is the session RNG member
+  // (seeded in BeginSession), reused exactly as GenerateFirstLayerRootsForCi /
+  // ResolveLayerCrystalForCi do, so the resample is deterministic under seed.
+  const float* src_d = static_cast<const float*>([cont_d[in_slot] contents]) + ci_start * 3;
+  const float* src_w = static_cast<const float*>([cont_w[in_slot] contents]) + ci_start;
 
-  // TODO(253.2): replace identity with per-ray crystal_rot_.mat_ for multi-MS
-  // world-space transit. The kernel unconditionally applies root_rot*exit_dir
-  // before projection; continuation rays are still in the PREVIOUS layer's
-  // crystal-local frame here (multi-MS frame transit is out of scope for 253.1).
-  // Filling identity makes mat*v == v, preserving the pre-253.1 local-space
-  // projection behaviour byte-for-byte so existing multi-layer parity tests do
-  // not regress. 253.2 must populate the real rotation once continuation rays
-  // are routed through world space.
-  static const float kIdentity3x3[9] = { 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f };
+  RayBuffer workspace[2]{};
+  workspace[0].Reset(ci_n);
+  workspace[1].Reset(ci_n);
+  workspace[0].size_ = ci_n;
+  for (size_t i = 0; i < ci_n; i++) {
+    RaySeg& r = workspace[0][i];
+    r.d_[0] = src_d[i * 3 + 0];
+    r.d_[1] = src_d[i * 3 + 1];
+    r.d_[2] = src_d[i * 3 + 2];  // world-space continuation direction (Step 1)
+    r.w_ = src_w[i];
+  }
+
+  InitRay_rot(rng, setting.crystal_.axis_, workspace);
+  for (size_t i = 0; i < ci_n; i++) {
+    workspace[0][i].crystal_rot_.ApplyInverse(workspace[0][i].d_);
+  }
+  InitRay_p_fid(current_crystal, &workspace[0]);
+
+  auto* d_ptr   = static_cast<float*>([root_d_buf contents]);
+  auto* p_ptr   = static_cast<float*>([root_p_buf contents]);
+  auto* w_ptr   = static_cast<float*>([root_w_buf contents]);
+  auto* tf_ptr  = static_cast<uint16_t*>([root_tf_buf contents]);
   auto* rot_ptr = static_cast<float*>([root_rot_buf contents]);
   for (size_t i = 0; i < ci_n; i++) {
-    std::memcpy(rot_ptr + i * 9, kIdentity3x3, 9 * sizeof(float));
+    const RaySeg& r = workspace[0][i];
+    d_ptr[i * 3 + 0] = r.d_[0];
+    d_ptr[i * 3 + 1] = r.d_[1];
+    d_ptr[i * 3 + 2] = r.d_[2];
+    p_ptr[i * 3 + 0] = r.p_[0];
+    p_ptr[i * 3 + 1] = r.p_[1];
+    p_ptr[i * 3 + 2] = r.p_[2];
+    w_ptr[i] = r.w_;
+    tf_ptr[i] = static_cast<uint16_t>(r.to_face_);
+    std::memcpy(rot_ptr + i * 9, r.crystal_rot_.GetMat(), 9 * sizeof(float));
   }
 }
 
@@ -852,7 +889,7 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       } else {
         // Stage this ci's slice of the prior continuation buffer into the
         // root buffers so the kernel reads a contiguous, aligned input.
-        impl_->CopyContSliceToRootBuf(ci_start, ci_n, in_slot);
+        impl_->CopyContSliceToRootBuf(setting, ci_start, ci_n, in_slot);
         in_count = ci_n;
       }
 
