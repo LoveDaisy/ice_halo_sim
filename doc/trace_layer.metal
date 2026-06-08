@@ -67,6 +67,11 @@ kernel void trace_layer_kernel(
     device ushort*         out_tf   [[buffer(12)]],
     device atomic_uint*    counter  [[buffer(13)]],
     device float*          rec_sink [[buffer(14)]],
+    // NOTE: buffers 15 (exit_cnt) and 16 (exit_wsum) — the parity-harness
+    // exit-ray stats accumulators — exist in kKernelSrc but are omitted from
+    // this readable reference (pre-existing drift, not 253.1). root_rot keeps
+    // its real index 17 to stay logically equivalent on the frame transform.
+    device const float*    root_rot [[buffer(17)]],
     uint tid [[thread_position_in_grid]]) {
   if (tid >= prm.num_rays) { return; }
 
@@ -78,6 +83,13 @@ kernel void trace_layer_kernel(
   float oz = root_p[tid * 3u + 2u];
   float w  = root_w[tid];
   ushort to_face = root_tf[tid];
+
+  // Per-ray crystal->world rotation (row-major; world = m*v, mirroring
+  // Rotation::Apply on the CPU). Applied to the exit direction before
+  // projection so the seam returns world-space rays (invariant 6). Constant
+  // over the whole ray path — load once.
+  float m[9];
+  for (uint k = 0u; k < 9u; k++) { m[k] = root_rot[tid * 9u + k]; }
 
   const float n_idx    = prm.n_idx;
   const uint  poly_cnt = prm.poly_cnt;
@@ -186,9 +198,15 @@ kernel void trace_layer_kernel(
           // raw (un-renormalized) direction — Metal must skip the rsqrt to
           // stay bit-close (the trace formulas already preserve |d|=1 modulo
           // float drift; atan2 is scale-invariant, asin is clamped).
-          float sx = -cdx;
-          float sy = -cdy;
-          float sz = -cdz;
+          // Return the exit direction from crystal-local to world space
+          // (invariant 6 / DESIGN D2): world = m * cd, row-major, matching
+          // CPU CollectData's crystal_rot_.Apply(r.d_).
+          float wx = m[0] * cdx + m[1] * cdy + m[2] * cdz;
+          float wy = m[3] * cdx + m[4] * cdy + m[5] * cdz;
+          float wz = m[6] * cdx + m[7] * cdy + m[8] * cdz;
+          float sx = -wx;
+          float sy = -wy;
+          float sz = -wz;
           float lon = atan2(sy, sx) - prm.az0;
           // Wrap lon to [-pi, pi]: equivalent to the while-loops in
           // RectangularProject. At exact lon == +pi the formula yields -pi;

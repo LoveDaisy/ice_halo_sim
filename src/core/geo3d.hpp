@@ -21,6 +21,11 @@ class Rotation {
   void Apply(float* pt, size_t num = 1) const;
   void ApplyInverse(float* pt, size_t num = 1) const;
 
+  // Row-major 3x3 rotation matrix (world = mat * v_local, see Apply()).
+  // Exposed so backends can upload per-ray orientations to a device kernel
+  // that re-applies the forward rotation before projection (invariant 6).
+  const float* GetMat() const { return mat_; }
+
  private:
   void FillMat(const float* ax, float theta);
 

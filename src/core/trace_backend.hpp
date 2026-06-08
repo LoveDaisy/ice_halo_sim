@@ -57,6 +57,24 @@ namespace lumice {
 //      refactor. `src/include/lumice.h` is unchanged; `src/gui/` and
 //      `src/server/` are unaware of which backend is in use.
 //
+//   6) Ray-frame lifecycle. Rays crossing the seam are ALWAYS in world space:
+//        - TraceLayer's input rays (HostRayBatch ingest or device continuation)
+//          and any ray that LEAVES a backend are world-space.
+//        - The crystal-local frame is a backend-internal detail. A backend may
+//          transform world->local on ingest and MUST transform local->world
+//          before a ray leaves it (projection, continuation, or readback). The
+//          CPU backend already models this (InitRay* applies the inverse crystal
+//          rotation on ingest; CollectData re-applies it before projection).
+//        - Per-ray crystal orientation NEVER crosses the seam: each backend
+//          samples and owns its own per-ray rotations internally. How they are
+//          supplied (host-sampled upload vs device-side RNG) is a backend
+//          performance choice; this invariant is supply-agnostic.
+//      This is a DOCUMENTATION CONTRACT, not an automated gate — comments can
+//      drift. Its closure is procedural: a future CUDA backend's plan-review
+//      MUST list "exit rays returned to world space before leaving the kernel"
+//      as a mandatory check. (Metal once shipped this bug: exit directions were
+//      projected in crystal-local space, scattering the 22° halo into a band.)
+//
 // State machine
 //   Legal call sequence (per backend instance):
 //
@@ -124,7 +142,7 @@ struct SessionSpec {
 // ARE consumed by CpuTraceBackend when crystal != nullptr.)
 struct HostRayBatch {
   size_t count = 0;
-  const float* d = nullptr;          // 3 * count, crystal-local direction.
+  const float* d = nullptr;          // 3 * count, world-space direction (invariant 6).
   const float* p = nullptr;          // 3 * count, entry point.
   const float* w = nullptr;          // count, ray weight (spectral).
   const IdType* tf = nullptr;        // count, ingoing polygon-face id.

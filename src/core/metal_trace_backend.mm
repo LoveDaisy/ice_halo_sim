@@ -82,6 +82,7 @@ kernel void trace_layer_kernel(
     device float*          rec_sink [[buffer(14)]],
     device atomic_uint*    exit_cnt [[buffer(15)]],
     device atomic_float*   exit_wsum [[buffer(16)]],
+    device const float*    root_rot [[buffer(17)]],
     uint tid [[thread_position_in_grid]]) {
   if (tid >= prm.num_rays) { return; }
 
@@ -93,6 +94,13 @@ kernel void trace_layer_kernel(
   float oz = root_p[tid * 3u + 2u];
   float w  = root_w[tid];
   ushort to_face = root_tf[tid];
+
+  // Per-ray crystal->world rotation (row-major; world = m*v, mirroring
+  // Rotation::Apply on the CPU). Applied to the exit direction before
+  // projection so the seam returns world-space rays (invariant 6). The
+  // orientation is constant for the whole ray path, so load it once.
+  float m[9];
+  for (uint k = 0u; k < 9u; k++) { m[k] = root_rot[tid * 9u + k]; }
 
   const float n_idx    = prm.n_idx;
   const uint  poly_cnt = prm.poly_cnt;
@@ -192,9 +200,16 @@ kernel void trace_layer_kernel(
           atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
           atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
         } else {
-          float sx = -cdx;
-          float sy = -cdy;
-          float sz = -cdz;
+          // Return the exit direction from crystal-local to world space
+          // (invariant 6 / DESIGN D2): world = m * cd, row-major, matching
+          // CPU CollectData's crystal_rot_.Apply(r.d_). Without this the
+          // per-ray-random local frame scatters the halo into a band.
+          float wx = m[0] * cdx + m[1] * cdy + m[2] * cdz;
+          float wy = m[3] * cdx + m[4] * cdy + m[5] * cdz;
+          float wz = m[6] * cdx + m[7] * cdy + m[8] * cdz;
+          float sx = -wx;
+          float sy = -wy;
+          float sz = -wz;
           float lon = atan2(sy, sx) - prm.az0;
           lon = lon - 2.0f * M_PI_F * floor((lon + M_PI_F) / (2.0f * M_PI_F));
           float lat = asin(clamp(sz, -1.0f, 1.0f));
@@ -314,6 +329,11 @@ struct MetalTraceBackend::Impl {
   id<MTLBuffer> root_p_buf  = nil;
   id<MTLBuffer> root_w_buf  = nil;
   id<MTLBuffer> root_tf_buf = nil;
+  // Per-ray crystal->world rotation (9 floats/ray, row-major, == Rotation::mat_).
+  // The kernel applies mat*exit_dir before projection to return exit rays from
+  // crystal-local to world space (invariant 6 / DESIGN D2). Sized in lock-step
+  // with root_d_buf by EnsureRootBuffers.
+  id<MTLBuffer> root_rot_buf = nil;
   size_t        root_capacity = 0;
 
   // Continuation ping-pong (indexed by ms_idx & 1).
@@ -451,6 +471,9 @@ void MetalTraceBackend::Impl::EnsureRootBuffers(size_t n) {
   root_tf_buf = [device newBufferWithLength:n * sizeof(uint16_t)
                                     options:MTLResourceStorageModeShared];
   assert(root_tf_buf != nil);
+  root_rot_buf = [device newBufferWithLength:n * 9 * sizeof(float)
+                                    options:MTLResourceStorageModeShared];
+  assert(root_rot_buf != nil);
 }
 
 void MetalTraceBackend::Impl::EnsureContBuffer(int slot) {
@@ -534,10 +557,11 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
   // EnsureRootBuffers is called by TraceLayer at the top of each layer with
   // total_ray_num so per-ci root buffers are guaranteed >= crystal_ray_num.
   size_t n = workspace[0].size_;
-  auto* d_ptr  = static_cast<float*>([root_d_buf contents]);
-  auto* p_ptr  = static_cast<float*>([root_p_buf contents]);
-  auto* w_ptr  = static_cast<float*>([root_w_buf contents]);
-  auto* tf_ptr = static_cast<uint16_t*>([root_tf_buf contents]);
+  auto* d_ptr   = static_cast<float*>([root_d_buf contents]);
+  auto* p_ptr   = static_cast<float*>([root_p_buf contents]);
+  auto* w_ptr   = static_cast<float*>([root_w_buf contents]);
+  auto* tf_ptr  = static_cast<uint16_t*>([root_tf_buf contents]);
+  auto* rot_ptr = static_cast<float*>([root_rot_buf contents]);
 
   for (size_t i = 0; i < n; i++) {
     const RaySeg& r = workspace[0][i];
@@ -549,6 +573,11 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
     p_ptr[i * 3 + 2] = r.p_[2];
     w_ptr[i] = r.w_;
     tf_ptr[i] = static_cast<uint16_t>(r.to_face_);
+    // Per-ray crystal->world rotation (row-major mat_, same layout the kernel
+    // applies as mat*v). InitRayFirstMs sampled this orientation and applied
+    // its inverse to bring d_ into crystal-local space for tracing; the kernel
+    // re-applies the forward rotation before projection (invariant 6).
+    std::memcpy(rot_ptr + i * 9, r.crystal_rot_.GetMat(), 9 * sizeof(float));
   }
   return n;
 }
@@ -569,6 +598,22 @@ void MetalTraceBackend::Impl::CopyContSliceToRootBuf(size_t ci_start, size_t ci_
   std::memcpy([root_p_buf contents],  src_p,  ci_n * 3 * sizeof(float));
   std::memcpy([root_w_buf contents],  src_w,  ci_n * sizeof(float));
   std::memcpy([root_tf_buf contents], src_tf, ci_n * sizeof(uint16_t));
+
+  // TODO(253.2): replace identity with per-ray crystal_rot_.mat_ for multi-MS
+  // world-space transit. The kernel unconditionally applies root_rot*exit_dir
+  // before projection; continuation rays are still in the PREVIOUS layer's
+  // crystal-local frame here (multi-MS frame transit is out of scope for 253.1).
+  // Filling identity makes mat*v == v, preserving the pre-253.1 local-space
+  // projection behaviour byte-for-byte so existing multi-layer parity tests do
+  // not regress. 253.2 must populate the real rotation once continuation rays
+  // are routed through world space.
+  auto* rot_ptr = static_cast<float*>([root_rot_buf contents]);
+  for (size_t i = 0; i < ci_n; i++) {
+    float* m = rot_ptr + i * 9;
+    m[0] = 1.0f; m[1] = 0.0f; m[2] = 0.0f;
+    m[3] = 0.0f; m[4] = 1.0f; m[5] = 0.0f;
+    m[6] = 0.0f; m[7] = 0.0f; m[8] = 1.0f;
+  }
 }
 
 void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
@@ -639,6 +684,7 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   [enc setBuffer:rec_sink_buf   offset:0 atIndex:14];
   [enc setBuffer:exit_count_buf offset:0 atIndex:15];
   [enc setBuffer:exit_w_sum_buf offset:0 atIndex:16];
+  [enc setBuffer:root_rot_buf   offset:0 atIndex:17];
 
   NSUInteger tg = std::min<NSUInteger>(256, pso.maxTotalThreadsPerThreadgroup);
   [enc dispatchThreads:MTLSizeMake(num_rays, 1, 1)
