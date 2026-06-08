@@ -660,10 +660,10 @@ void DoRun() {
   }
 
 #if defined(__APPLE__)
-  // Push current backend preference into server BEFORE CommitConfig. The
-  // pref lives on persistent Simulators (server.cpp:182), and the
-  // CommitConfig Stop→Start cycle makes Run() re-enter and pick it up via
-  // acquire on the next dispatch.
+  // Push current backend preference into server BEFORE CommitConfig. The pref
+  // lives on the persistent Simulators (created once at server construction and
+  // never rebuilt by CommitConfig), and the CommitConfig Stop→Start cycle makes
+  // Run() re-enter and pick it up via acquire on the next dispatch.
   LUMICE_SetPreferredBackend(g_server, g_state.use_metal_backend ? LUMICE_BACKEND_METAL : LUMICE_BACKEND_CPU);
 #endif
 

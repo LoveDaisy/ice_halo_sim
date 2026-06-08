@@ -710,6 +710,12 @@ void ServerImpl::GenerateScene() {
 
 
 // =============== ServerImpl::SetPreferredBackend ===============
+// preferred_backend_ is currently write-only: it is the authoritative cache for
+// a future simulator-rebuild path (today simulators_ is built once in the ctor
+// and never rebuilt, so the per-Simulator atomics below are the live source of
+// truth). The cache store intentionally precedes prod_mutex_; any future reader
+// outside this lock must treat it as "may lead the simulators_ state" and add
+// its own ordering, or move the store inside the lock.
 void ServerImpl::SetPreferredBackend(int backend) {
   preferred_backend_.store(backend, std::memory_order_release);
   std::lock_guard<std::mutex> lock(prod_mutex_);

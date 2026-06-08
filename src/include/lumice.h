@@ -397,7 +397,12 @@ LUMICE_ErrorCode LUMICE_XyzToSrgbUint8(const float* xyz_in, unsigned char* out, 
 //                                             if incompatible or unavailable
 //                                             on this platform.
 // Takes effect on the next simulation start (after LUMICE_CommitConfig). The
-// env-var LUMICE_TRACE_BACKEND, when set, overrides this preference.
+// env-var LUMICE_TRACE_BACKEND, when set, overrides this preference:
+//   - "cpu_backend"            forces CPU unconditionally (ignores this pref).
+//   - "metal"                  forces Metal (Apple) regardless of this pref.
+//   - unset / "" / "legacy"    defers to this API preference.
+// (i.e. an empty or "legacy" env-var no longer forces CPU once this pref is
+//  set to LUMICE_BACKEND_METAL — use "cpu_backend" to hard-pin CPU in CI.)
 // On non-Apple platforms LUMICE_BACKEND_METAL is silently treated as CPU.
 void LUMICE_SetPreferredBackend(LUMICE_Server* server, int backend);
 
