@@ -923,6 +923,12 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   std::vector<float> exit_d;
   std::vector<float> exit_w;
   size_t exit_count = backend.ReadbackExitRays(exit_d, exit_w);
+  if (exit_count == 0) {
+    // Degenerate batch: all rays absorbed, none exited. Skip emplace — an
+    // empty outgoing_indices_ would trip the non-empty assertion in
+    // render.cpp:148. This batch contributes nothing to the output image.
+    return;
+  }
 
   SimData sim_data;
   sim_data.curr_wl_ = wl_param.wl_;
@@ -932,6 +938,8 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
                                        // server.cpp::ConsumeData).
   sim_data.outgoing_d_ = std::move(exit_d);
   sim_data.outgoing_w_ = std::move(exit_w);
+  // dummy: consumer reads .size() only (render.cpp:75); real per-ray indices
+  // arrive in 258.2.
   sim_data.outgoing_indices_.assign(exit_count, 0);
   data_queue_->Emplace(std::move(sim_data));
 }

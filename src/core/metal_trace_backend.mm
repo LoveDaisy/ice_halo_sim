@@ -1015,10 +1015,11 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       // Exit seam (scrum-258.1): size the session-level exit buffer once and
       // reset its atomic slot. Capacity = ComputeOutCap (same fan-out upper
       // bound the continuation buffers use). Single-MS guarantees this is
-      // also an upper bound on total session exit rays; multi-MS per-layer
-      // sizing is owned by 258.3.
+      // SINGLE-MS ONLY: exit_slot accumulates across all layers; capacity is
+      // sized for the first (and only) MS layer here. Multi-MS per-session
+      // capacity re-sizing is owned by scrum-258.3.
       size_t exit_cap = ComputeOutCap(total_ray_num, impl_->spec.scene->max_hits_);
-      impl_->EnsureExitBuffers(exit_cap);
+      impl_->EnsureExitBuffers(exit_cap);  // SINGLE-MS ONLY (see above)
       *static_cast<uint32_t*>([impl_->exit_slot_buf contents]) = 0u;
     }
     // Recalculate out_cap per layer so each layer's continuation buffer is

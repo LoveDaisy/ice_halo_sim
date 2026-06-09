@@ -333,9 +333,9 @@ void CpuTraceBackend::ReadbackImage(XyzImageData& out) {
 
 
 // Exit seam (scrum-258.1): copy the session-accumulated world-space exit
-// rays out. Single-MS: equals the only layer's outgoing set. Move-out is
-// safe — the contract is "call once before EndSession"; subsequent calls
-// would return 0 entries.
+// rays out. Single-MS: equals the only layer's outgoing set. Idempotent
+// within a session — may be called multiple times; each call copies the
+// accumulated exit rays (copy, not move). Cleared in EndSession.
 size_t CpuTraceBackend::ReadbackExitRays(std::vector<float>& out_d,
                                           std::vector<float>& out_w) {
   assert(in_session_ && "ReadbackExitRays called outside BeginSession/EndSession");

@@ -316,8 +316,8 @@ class TraceBackend {
   // (crystal_id, face sequence). Callers should treat the signature as
   // unstable across 258.2.
   //
-  // Default returns 0 so the contract stays opt-in for future, partial
-  // backends; production backends (Cpu, Metal) MUST override.
+  // Default returns 0 for partial or stub backends; production backends
+  // (Cpu, Metal) should override.
   //
   // Replaces the prior ReadbackImage seam (scrum-258.1 Step 5): the
   // exit-seam payload is the canonical out path; ReadbackImage was demoted
