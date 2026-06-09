@@ -63,6 +63,10 @@ struct KernelParams {
   uint  proj_type;
   float r_scale;     // equal-area r_scale = 1/sqrt(1+overlap); 1.0 if no overlap
   float max_abs_dz;  // overlap zone |sky_z| threshold; 0 = no overlap
+  // Buffer-egress (exit seam, scrum-258.1): kernel's final-exit branch writes
+  // {world_dir(3), weight} to exit_d/exit_w at a session-level atomic slot
+  // (exit_slot). Capacity bound is host-supplied (ComputeOutCap).
+  uint  exit_cap;
 };
 
 inline float GetReflectRatio(float delta, float rr) {
@@ -91,6 +95,9 @@ kernel void trace_layer_kernel(
     device atomic_uint*    exit_cnt [[buffer(15)]],
     device atomic_float*   exit_wsum [[buffer(16)]],
     device const float*    root_rot [[buffer(17)]],
+    device float*          exit_d   [[buffer(18)]],
+    device float*          exit_w   [[buffer(19)]],
+    device atomic_uint*    exit_slot [[buffer(20)]],
     uint tid [[thread_position_in_grid]]) {
   if (tid >= prm.num_rays) { return; }
 
@@ -225,6 +232,21 @@ kernel void trace_layer_kernel(
           float wx = m[0] * cdx + m[1] * cdy + m[2] * cdz;
           float wy = m[3] * cdx + m[4] * cdy + m[5] * cdz;
           float wz = m[6] * cdx + m[7] * cdy + m[8] * cdz;
+          // Buffer-egress (exit seam, scrum-258.1): export this exit ray
+          // {world_dir, weight} BEFORE projection — projection clipping is a
+          // consumer concern, and legacy outgoing_d_ likewise captures
+          // pre-clip. Written once per exit ray (the overlap dual-write below
+          // never re-exports). Backend path always captures (no env gate);
+          // simulator drives consumer projection via ReadbackExitRays.
+          {
+            uint es = atomic_fetch_add_explicit(exit_slot, 1u, memory_order_relaxed);
+            if (es < prm.exit_cap) {
+              exit_d[es * 3u + 0u] = wx;
+              exit_d[es * 3u + 1u] = wy;
+              exit_d[es * 3u + 2u] = wz;
+              exit_w[es] = cw;
+            }
+          }
           float sx = -wx;
           float sy = -wy;
           float sz = -wz;
@@ -337,8 +359,9 @@ struct KernelParams {
   uint32_t proj_type;
   float    r_scale;
   float    max_abs_dz;
+  uint32_t exit_cap;  // exit seam (scrum-258.1) — buffer-egress capacity (rays)
 };
-static_assert(sizeof(KernelParams) == 60u,
+static_assert(sizeof(KernelParams) == 64u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 
 float ComputeAz0(const Rotation& rot) {
@@ -444,6 +467,17 @@ struct MetalTraceBackend::Impl {
   id<MTLBuffer> exit_w_sum_buf = nil;
   LayerStats    last_stats{};
 
+  // Buffer-egress (exit seam, scrum-258.1): kernel exports world-space
+  // {world_dir(3), weight} for every exit ray to exit_ray_d/w at a
+  // session-level atomic slot (exit_slot_buf). ReadbackExitRays copies them
+  // out for the simulator to drive the legacy consumer projection path,
+  // replacing the per-batch O(W*H) ReadbackImage. Reset once per session
+  // (first TraceLayer). Capture is unconditional for the backend path.
+  id<MTLBuffer> exit_ray_d_buf = nil;
+  id<MTLBuffer> exit_ray_w_buf = nil;
+  id<MTLBuffer> exit_slot_buf  = nil;
+  size_t        exit_ray_capacity = 0;
+
   // Layer dispatch helpers.
   void EnsureDevice();
   void EnsurePso();
@@ -452,6 +486,7 @@ struct MetalTraceBackend::Impl {
   void EnsureRootBuffers(size_t n);
   void EnsureContBuffer(int slot);
   void EnsureRecSink(size_t n);
+  void EnsureExitBuffers(size_t cap);  // exit seam (scrum-258.1)
   void UploadCrystal(const Crystal& crystal);
   void ResolveLayerCrystalForCi(const ScatteringSetting& setting, bool use_host,
                                 const HostRayBatch& host_batch);
@@ -593,6 +628,28 @@ void MetalTraceBackend::Impl::EnsureRecSink(size_t n) {
   rec_sink_buf = [device newBufferWithLength:n * sizeof(float)
                                      options:MTLResourceStorageModeShared];
   assert(rec_sink_buf != nil);
+}
+
+// Exit seam (scrum-258.1): grow-only buffer-egress storage + atomic slot.
+// Sized to ComputeOutCap(total_ray_num, max_hits) — same fan-out bound the
+// kernel already uses for continuation buffers, so single-MS exits cannot
+// outnumber it. Multi-MS per-layer sizing is owned by 258.3.
+void MetalTraceBackend::Impl::EnsureExitBuffers(size_t cap) {
+  if (exit_slot_buf == nil) {
+    exit_slot_buf = [device newBufferWithLength:sizeof(uint32_t)
+                                        options:MTLResourceStorageModeShared];
+    assert(exit_slot_buf != nil);
+  }
+  if (cap <= exit_ray_capacity) {
+    return;
+  }
+  exit_ray_capacity = cap;
+  exit_ray_d_buf = [device newBufferWithLength:cap * 3 * sizeof(float)
+                                       options:MTLResourceStorageModeShared];
+  assert(exit_ray_d_buf != nil);
+  exit_ray_w_buf = [device newBufferWithLength:cap * sizeof(float)
+                                       options:MTLResourceStorageModeShared];
+  assert(exit_ray_w_buf != nil);
 }
 
 void MetalTraceBackend::Impl::UploadCrystal(const Crystal& crystal) {
@@ -754,6 +811,7 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   params.proj_type  = proj_type;
   params.r_scale    = r_scale;
   params.max_abs_dz = max_abs_dz;
+  params.exit_cap   = static_cast<uint32_t>(exit_ray_capacity);
 
   EnsureRecSink(num_rays);
   EnsureContBuffer(out_slot);
@@ -805,6 +863,11 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   [enc setBuffer:exit_count_buf offset:0 atIndex:15];
   [enc setBuffer:exit_w_sum_buf offset:0 atIndex:16];
   [enc setBuffer:root_rot_buf   offset:0 atIndex:17];
+  // Exit seam (scrum-258.1) — buffer-egress {dir, weight} + atomic slot.
+  // Bound unconditionally; the kernel always writes (no env gate).
+  [enc setBuffer:exit_ray_d_buf offset:0 atIndex:18];
+  [enc setBuffer:exit_ray_w_buf offset:0 atIndex:19];
+  [enc setBuffer:exit_slot_buf  offset:0 atIndex:20];
 
   NSUInteger tg = std::min<NSUInteger>(256, pso.maxTotalThreadsPerThreadgroup);
   [enc dispatchThreads:MTLSizeMake(num_rays, 1, 1)
@@ -869,6 +932,9 @@ void MetalTraceBackend::Impl::Reset() {
   max_produced = 0;
   cont_counts[0] = cont_counts[1] = 0;
   last_stats = LayerStats{};
+  // Exit seam (scrum-258.1): buffers + capacity persist across sessions
+  // (grow-only); only the atomic slot needs reset for the next session,
+  // which happens in TraceLayer on the first MS layer.
   spec = SessionSpec{};
 }
 
@@ -946,6 +1012,14 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     size_t total_ray_num = first_ms ? roots.host.count : roots.device.count;
     if (first_ms) {
       impl_->root_ray_count = total_ray_num;
+      // Exit seam (scrum-258.1): size the session-level exit buffer once and
+      // reset its atomic slot. Capacity = ComputeOutCap (same fan-out upper
+      // bound the continuation buffers use). Single-MS guarantees this is
+      // also an upper bound on total session exit rays; multi-MS per-layer
+      // sizing is owned by 258.3.
+      size_t exit_cap = ComputeOutCap(total_ray_num, impl_->spec.scene->max_hits_);
+      impl_->EnsureExitBuffers(exit_cap);
+      *static_cast<uint32_t*>([impl_->exit_slot_buf contents]) = 0u;
     }
     // Recalculate out_cap per layer so each layer's continuation buffer is
     // sized to the actual fan-out from that layer's input count. This matters
@@ -1052,6 +1126,32 @@ void MetalTraceBackend::ReadbackImage(XyzImageData& out) {
          "XyzImageData dimensions must match BeginSession resolution");
   size_t pix = static_cast<size_t>(impl_->width) * static_cast<size_t>(impl_->height);
   std::memcpy(out.data, [impl_->xyz_image contents], pix * 3 * sizeof(float));
+}
+
+// Exit seam (scrum-258.1): copy captured world-space exit rays out for the
+// simulator to route through the legacy consumer projection. Overflow (slot >
+// capacity) is logged and clamped; ComputeOutCap is the same fan-out bound the
+// continuation buffers use, so single-MS overflow is structurally impossible.
+size_t MetalTraceBackend::ReadbackExitRays(std::vector<float>& out_d,
+                                            std::vector<float>& out_w) {
+  assert(impl_->in_session);
+  if (impl_->exit_slot_buf == nil) {
+    out_d.clear();
+    out_w.clear();
+    return 0;
+  }
+  uint32_t produced = *static_cast<uint32_t*>([impl_->exit_slot_buf contents]);
+  size_t count = std::min<size_t>(produced, impl_->exit_ray_capacity);
+  if (produced > impl_->exit_ray_capacity) {
+    ILOG_ERROR(EffectiveLogger(impl_->logger_),
+               "MetalTraceBackend: exit-ray overflow produced={} exit_cap={} (clamped)",
+               produced, impl_->exit_ray_capacity);
+  }
+  out_d.resize(count * 3);
+  out_w.resize(count);
+  std::memcpy(out_d.data(), [impl_->exit_ray_d_buf contents], count * 3 * sizeof(float));
+  std::memcpy(out_w.data(), [impl_->exit_ray_w_buf contents], count * sizeof(float));
+  return count;
 }
 
 void MetalTraceBackend::EndSession() {

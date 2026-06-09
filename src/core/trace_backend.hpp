@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "config/proj_config.hpp"
 #include "config/render_config.hpp"
@@ -301,6 +302,28 @@ class TraceBackend {
   // caller-provided buffer. Does NOT reset the accumulator; may be called
   // multiple times during a session.
   virtual void ReadbackImage(XyzImageData& out) = 0;
+
+  // Buffer-egress boundary (exit seam, scrum-258) — the canonical exit-ray
+  // contract. Copies the world-space exit rays captured this session
+  // (one entry per ray that left the crystal in the final MS layer) into
+  // the caller-provided vectors and returns the exit-ray count:
+  //   out_d : 3 * count floats, world-space direction (pre-projection)
+  //   out_w : count floats, ray weight (spectral)
+  // The simulator routes these through the legacy consumer projection
+  // (O(exit rays)), replacing the per-batch O(W*H) image readback.
+  //
+  // Structure note (scrum-258.1 → 258.2): the {dir, weight} pair is the v1
+  // payload. 258.2 will evolve this to a richer per-ray record
+  // (crystal_id, face sequence). Callers should treat the signature as
+  // unstable across 258.2.
+  //
+  // Default returns 0 so the contract stays opt-in for future, partial
+  // backends; production backends (Cpu, Metal) MUST override.
+  virtual size_t ReadbackExitRays(std::vector<float>& out_d, std::vector<float>& out_w) {
+    (void)out_d;
+    (void)out_w;
+    return 0;
+  }
 
   // Close the session. Releases per-session backend state. Calling any
   // method other than BeginSession after EndSession is undefined.

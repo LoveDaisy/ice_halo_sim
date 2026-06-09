@@ -15,6 +15,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <vector>
 
 #include "core/trace_backend.hpp"
 
@@ -59,6 +60,8 @@ class MetalTraceBackend : public TraceBackend {
   LayerHandlePtr TraceLayer(const RootRaySource& roots) override;
   RootRaySource Recombine(LayerHandlePtr handle, const RecombineSpec& spec) override;
   void ReadbackImage(XyzImageData& out) override;
+  // Exit seam (scrum-258.1): buffer-egress contract — see base class.
+  size_t ReadbackExitRays(std::vector<float>& out_d, std::vector<float>& out_w) override;
   void EndSession() override;
   bool IsCompatible(const RenderConfig& render) const override;
 
