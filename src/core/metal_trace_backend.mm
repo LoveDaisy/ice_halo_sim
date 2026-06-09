@@ -1286,14 +1286,11 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     size_t total_ray_num = first_ms ? roots.host.count : roots.device.count;
     if (first_ms) {
       impl_->root_ray_count = total_ray_num;
-      // Exit seam (scrum-258.1): size the session-level exit buffer once and
-      // reset its atomic slot. Capacity = ComputeOutCap (same fan-out upper
-      // bound the continuation buffers use). Single-MS guarantees this is
-      // SINGLE-MS ONLY: exit_slot accumulates across all layers; capacity is
-      // sized for the first (and only) MS layer here. Multi-MS per-session
-      // capacity re-sizing is owned by scrum-258.3.
+      // Exit seam (scrum-258.1): size the session-level exit buffer at the
+      // first MS and reset its atomic slot. Multi-MS path grows exit buffer
+      // again on the final layer below — see comment there.
       size_t exit_cap = ComputeOutCap(total_ray_num, impl_->spec.scene->max_hits_);
-      impl_->EnsureExitBuffers(exit_cap);  // SINGLE-MS ONLY (see above)
+      impl_->EnsureExitBuffers(exit_cap);
       *static_cast<uint32_t*>([impl_->exit_slot_buf contents]) = 0u;
     }
     // Recalculate out_cap per layer so each layer's continuation buffer is
@@ -1303,6 +1300,21 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     impl_->out_cap = ComputeOutCap(total_ray_num, impl_->spec.scene->max_hits_);
     if (total_ray_num == 0) {
       return std::make_unique<MetalLayerHandle>(0u, LayerStats{});
+    }
+
+    // scrum-258.4 Step 1: multi-MS final layer may receive far more rays than
+    // the root count (continuation buffer is sized to ComputeOutCap of the
+    // prior layer). Grow exit buffer to cover this layer's fan-out so the
+    // exit_slot atomic does not overflow and silently drop exit rays.
+    // EnsureExitBuffers is grow-only; the exit_slot counter was reset in the
+    // first_ms branch above and ms_mode==1 dispatches never write exit_slot,
+    // so this resize requires no counter reset.
+    {
+      bool last_layer_for_exit = (impl_->ms_idx + 1u == impl_->spec.scene->ms_.size());
+      if (!first_ms && last_layer_for_exit) {
+        size_t exit_cap = ComputeOutCap(total_ray_num, impl_->spec.scene->max_hits_);
+        impl_->EnsureExitBuffers(exit_cap);
+      }
     }
 
     // Partition the layer's rays across crystal populations. Matches
