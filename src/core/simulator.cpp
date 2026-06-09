@@ -477,7 +477,7 @@ Simulator::Simulator(QueuePtrS<SimBatch> config_queue, QueuePtrS<SimData> data_q
 Simulator::Simulator(Simulator&& other) noexcept
     : config_queue_(std::move(other.config_queue_)), data_queue_(std::move(other.data_queue_)),
       stop_(other.stop_.load()), idle_(other.idle_.load()), seed_(other.seed_), rng_(other.rng_),
-      logger_(std::move(other.logger_)) {}
+      logger_(std::move(other.logger_)), preferred_backend_(other.preferred_backend_.load(std::memory_order_acquire)) {}
 
 Simulator& Simulator::operator=(Simulator&& other) noexcept {
   if (this == &other) {
@@ -491,40 +491,56 @@ Simulator& Simulator::operator=(Simulator&& other) noexcept {
   seed_ = other.seed_;
   rng_ = other.rng_;
   logger_ = std::move(other.logger_);
+  preferred_backend_.store(other.preferred_backend_.load(std::memory_order_acquire), std::memory_order_release);
   return *this;
+}
+
+void Simulator::SetPreferredBackend(int backend) {
+  preferred_backend_.store(backend, std::memory_order_release);
 }
 
 namespace {
 
-// Read LUMICE_TRACE_BACKEND once and create the matching TraceBackend instance.
-// Returns nullptr for the legacy CPU (Simulator::SimulateOneWavelength) path:
-//   - unset / empty / "legacy"      -> nullptr (legacy)
-//   - "cpu_backend"                  -> CpuTraceBackend (debug; non-Apple too)
-//   - "metal" on Apple               -> MetalTraceBackend
-//   - "metal" elsewhere or unknown   -> nullptr (logged once at WARN)
-std::unique_ptr<TraceBackend> CreateBackendFromEnv(Logger& logger) {
+// Create a TraceBackend instance for this Run() entry. Precedence:
+//   1) env-var LUMICE_TRACE_BACKEND (debug/CI override; legacy semantics):
+//      - unset / empty / "legacy"   -> falls through to step 2
+//      - "cpu_backend"               -> CpuTraceBackend
+//      - "metal" on Apple            -> MetalTraceBackend
+//      - "metal" elsewhere / unknown -> nullptr (logged WARN)
+//   2) preferred_backend (set by Server::SetPreferredBackend, default kPreferCpu):
+//      - kPreferMetal on Apple       -> MetalTraceBackend
+//      - any value elsewhere         -> nullptr (silent no-op; GUI checkbox
+//                                       on non-Apple builds equates to CPU)
+// Returns nullptr to keep the legacy CPU path (Simulator::SimulateOneWavelength).
+std::unique_ptr<TraceBackend> CreateBackend(int preferred_backend, Logger& logger) {
   const char* raw = std::getenv("LUMICE_TRACE_BACKEND");
-  if (raw == nullptr) {
-    return nullptr;
-  }
-  std::string name(raw);
-  if (name.empty() || name == "legacy") {
-    return nullptr;
-  }
-  if (name == "cpu_backend") {
-    ILOG_INFO(logger, "LUMICE_TRACE_BACKEND=cpu_backend → routing via CpuTraceBackend");
-    return std::make_unique<CpuTraceBackend>();
-  }
-  if (name == "metal") {
+  if (raw != nullptr) {
+    std::string name(raw);
+    if (name.empty() || name == "legacy") {
+      // fall through to preferred_backend
+    } else if (name == "cpu_backend") {
+      ILOG_INFO(logger, "LUMICE_TRACE_BACKEND=cpu_backend → routing via CpuTraceBackend");
+      return std::make_unique<CpuTraceBackend>();
+    } else if (name == "metal") {
 #if defined(__APPLE__)
-    ILOG_INFO(logger, "LUMICE_TRACE_BACKEND=metal → routing via MetalTraceBackend");
+      ILOG_INFO(logger, "LUMICE_TRACE_BACKEND=metal → routing via MetalTraceBackend");
+      return std::make_unique<MetalTraceBackend>();
+#else
+      ILOG_WARN(logger, "LUMICE_TRACE_BACKEND=metal requested on non-Apple platform; falling back to legacy CPU");
+      return nullptr;
+#endif
+    } else {
+      ILOG_WARN(logger, "Unknown LUMICE_TRACE_BACKEND={}; falling back to preferred backend", name);
+    }
+  }
+  if (preferred_backend == Simulator::kPreferMetal) {
+#if defined(__APPLE__)
+    ILOG_INFO(logger, "preferred_backend=metal → routing via MetalTraceBackend");
     return std::make_unique<MetalTraceBackend>();
 #else
-    ILOG_WARN(logger, "LUMICE_TRACE_BACKEND=metal requested on non-Apple platform; falling back to legacy CPU");
-    return nullptr;
+    return nullptr;  // non-Apple: silent no-op (CPU)
 #endif
   }
-  ILOG_WARN(logger, "Unknown LUMICE_TRACE_BACKEND={}; falling back to legacy CPU", name);
   return nullptr;
 }
 
@@ -579,7 +595,7 @@ void Simulator::Run() {
 
   // Pick a TraceBackend once per Run() entry. nullptr keeps the legacy CPU
   // path (zero behavior change when LUMICE_TRACE_BACKEND is unset).
-  auto backend = CreateBackendFromEnv(logger_);
+  auto backend = CreateBackend(preferred_backend_.load(std::memory_order_acquire), logger_);
   bool warned_no_renders = false;
   bool warned_multi_renderer = false;
   bool warned_compat = false;

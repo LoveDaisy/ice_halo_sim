@@ -270,6 +270,17 @@ class Server {
   void SetLogLevel(LogLevel level);
 
   /**
+   * @brief Set preferred trace backend for this server.
+   * @param backend 0 = CPU (default), 1 = Metal (Apple-only; silent CPU
+   *                fallback elsewhere or when the active config is not
+   *                backend-compatible). Mirrors the public C API constants
+   *                LUMICE_BACKEND_CPU / LUMICE_BACKEND_METAL.
+   * @note Takes effect on the next Simulator::Run() entry (after CommitConfig
+   *       restart). env-var LUMICE_TRACE_BACKEND, when set, overrides this.
+   */
+  void SetPreferredBackend(int backend);
+
+  /**
    * @brief Get server status
    * @return Current server status
    */

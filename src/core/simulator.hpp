@@ -55,10 +55,20 @@ class Simulator {
   Simulator& operator=(const Simulator& other) = delete;
   Simulator& operator=(Simulator&& other) noexcept;
 
+  // Preferred backend identifiers. MUST stay aligned with the public
+  // LUMICE_BACKEND_* constants in src/include/lumice.h — core does NOT
+  // include the public header to keep the core ← server ← c_api layering.
+  static constexpr int kPreferCpu = 0;
+  static constexpr int kPreferMetal = 1;
+
   void Run();
   void Stop();
   bool IsIdle() const;
   void SetLogLevel(LogLevel level);
+  // Set the preferred trace backend for the next Run() entry. Thread-safe:
+  // server thread writes via release, simulator thread reads via acquire at
+  // the top of Run().
+  void SetPreferredBackend(int backend);
 
  private:
   using CrystalCache = std::vector<std::pair<const CrystalParam*, Crystal>>;
@@ -87,6 +97,10 @@ class Simulator {
   uint32_t seed_;
   RandomNumberGenerator rng_;
   Logger logger_{ "Simulator" };
+  // Preferred trace backend (kPreferCpu/kPreferMetal). release-write by
+  // ServerImpl::SetPreferredBackend, acquire-read at Run() entry. env-var
+  // LUMICE_TRACE_BACKEND still wins.
+  std::atomic<int> preferred_backend_{ kPreferCpu };
 };
 
 // Distributes ray_num rays across crystals proportionally using per-crystal carry with

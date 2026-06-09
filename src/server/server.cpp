@@ -69,6 +69,7 @@ class ServerImpl {
   void Start();
   ServerStatus GetStatus() const;
   bool IsIdle();
+  void SetPreferredBackend(int backend);
 
  private:
   static const int kDefaultSimulatorCnt;  // runtime: PhysicalCoreCount() (SMT siblings left for consumer + OS)
@@ -124,6 +125,12 @@ class ServerImpl {
 
   std::atomic_bool work_started_{ false };
   std::atomic_bool scene_gen_active_{ false };  // True while GenerateScene is actively producing batches
+
+  // Preferred trace backend (LUMICE_BACKEND_CPU/METAL). Cached at server
+  // level so the preference survives Stop()/Start() cycles and is the
+  // authoritative source for any future simulator-rebuild path. Mirrored
+  // into every Simulator via SetPreferredBackend(). Default is CPU.
+  std::atomic<int> preferred_backend_{ 0 };
 
   std::atomic_int sim_scene_cnt_;
   std::mutex scene_mutex_;
@@ -702,6 +709,22 @@ void ServerImpl::GenerateScene() {
 }
 
 
+// =============== ServerImpl::SetPreferredBackend ===============
+// preferred_backend_ is currently write-only: it is the authoritative cache for
+// a future simulator-rebuild path (today simulators_ is built once in the ctor
+// and never rebuilt, so the per-Simulator atomics below are the live source of
+// truth). The cache store intentionally precedes prod_mutex_; any future reader
+// outside this lock must treat it as "may lead the simulators_ state" and add
+// its own ordering, or move the store inside the lock.
+void ServerImpl::SetPreferredBackend(int backend) {
+  preferred_backend_.store(backend, std::memory_order_release);
+  std::lock_guard<std::mutex> lock(prod_mutex_);
+  for (auto& s : simulators_) {
+    s.SetPreferredBackend(backend);
+  }
+}
+
+
 // =============== ServerImpl::SetLogLevel ===============
 void ServerImpl::SetLogLevel(LogLevel level) {
   logger_.SetLevel(level);
@@ -810,6 +833,12 @@ void Server::Terminate() {
 void Server::SetLogLevel(LogLevel level) {
   if (impl_) {
     impl_->SetLogLevel(level);
+  }
+}
+
+void Server::SetPreferredBackend(int backend) {
+  if (impl_) {
+    impl_->SetPreferredBackend(backend);
   }
 }
 

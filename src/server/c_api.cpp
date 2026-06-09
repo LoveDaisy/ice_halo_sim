@@ -829,6 +829,14 @@ void LUMICE_StopServer(LUMICE_Server* server) {
 }
 
 
+void LUMICE_SetPreferredBackend(LUMICE_Server* server, int backend) {
+  if (!server) {
+    return;
+  }
+  server->server_->SetPreferredBackend(backend);
+}
+
+
 // =============== Crystal Mesh ===============
 
 // Compute per-face polygon topology from triangle data and face_numbers array.

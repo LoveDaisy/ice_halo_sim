@@ -385,6 +385,27 @@ float LUMICE_MaxFov(LUMICE_LensType type);
 // Returns LUMICE_ERR_NULL_ARG if xyz_in or out is NULL; LUMICE_OK otherwise.
 LUMICE_ErrorCode LUMICE_XyzToSrgbUint8(const float* xyz_in, unsigned char* out, int pixel_count, float intensity_scale);
 
+// =============== Preferred Trace Backend ===============
+// Stable backend identifiers. Future backends (e.g. CUDA) append new positive
+// values; 0 stays CPU so default zero-init = legacy behavior.
+#define LUMICE_BACKEND_CPU 0
+#define LUMICE_BACKEND_METAL 1
+
+// Set preferred trace backend for this server.
+//   backend = LUMICE_BACKEND_CPU   (default): legacy CPU path.
+//   backend = LUMICE_BACKEND_METAL          : request Metal; falls back to CPU
+//                                             if incompatible or unavailable
+//                                             on this platform.
+// Takes effect on the next simulation start (after LUMICE_CommitConfig). The
+// env-var LUMICE_TRACE_BACKEND, when set, overrides this preference:
+//   - "cpu_backend"            forces CPU unconditionally (ignores this pref).
+//   - "metal"                  forces Metal (Apple) regardless of this pref.
+//   - unset / "" / "legacy"    defers to this API preference.
+// (i.e. an empty or "legacy" env-var no longer forces CPU once this pref is
+//  set to LUMICE_BACKEND_METAL — use "cpu_backend" to hard-pin CPU in CI.)
+// On non-Apple platforms LUMICE_BACKEND_METAL is silently treated as CPU.
+void LUMICE_SetPreferredBackend(LUMICE_Server* server, int backend);
+
 #if !defined(_MSC_VER)
 #pragma GCC visibility pop
 #endif

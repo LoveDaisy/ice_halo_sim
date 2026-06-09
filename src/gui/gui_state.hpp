@@ -473,6 +473,13 @@ struct GuiState {
   // readback via pending_screenshot; that mechanism was retired — see SUMMARY.)
   bool screenshot_include_overlay = false;
 
+#if defined(__APPLE__)
+  // Request Metal trace backend on the next DoRun (Apple-only). Falls back to
+  // CPU silently if the active config is not Metal-compatible. Wired through
+  // LUMICE_SetPreferredBackend in DoRun. UI-only, session-only.
+  bool use_metal_backend = false;
+#endif
+
   // Edit modal mode (UI-only, session-only, not in ConfigSnapshot).
   // Staged mode: BeginPopupModal + OK/Cancel + dirty-mark on tabs.
   // Immediate mode (default, gui-polish-v15 round 2): ImGui::Begin + single

@@ -933,6 +933,19 @@ void RenderSceneControls(GuiState& state) {
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Maximum number of crystal face hits per ray path");
   }
+
+#if defined(__APPLE__)
+  // Metal toggle (Apple-only). Switching triggers DoRun via the panel return
+  // path — the checkbox is wired through DIRTY_IF so the next Apply/Run picks
+  // up the new preference. Falls back to CPU silently if the active config
+  // is not Metal-compatible (see MetalTraceBackend::IsCompatible).
+  // ImGui::Checkbox renders its label to the right and ignores the item-width
+  // stack, so no PushItemWidth wrapper is needed here.
+  DIRTY_IF(ImGui::Checkbox("Use Metal GPU", &state.use_metal_backend));
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Use Metal GPU for simulation (falls back to CPU if incompatible)");
+  }
+#endif
 }
 
 #undef DIRTY_IF
