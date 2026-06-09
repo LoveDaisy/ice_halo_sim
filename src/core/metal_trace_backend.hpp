@@ -59,7 +59,10 @@ class MetalTraceBackend : public TraceBackend {
   void BeginSession(const SessionSpec& spec) override;
   LayerHandlePtr TraceLayer(const RootRaySource& roots) override;
   RootRaySource Recombine(LayerHandlePtr handle, const RecombineSpec& spec) override;
-  void ReadbackImage(XyzImageData& out) override;
+  // Test-only XYZ image accessor (scrum-258.1 Step 5: no longer on the
+  // TraceBackend production seam). Used by the CPU-vs-Metal parity harness
+  // — keep callers on the concrete type, not a polymorphic base reference.
+  void ReadbackImage(XyzImageData& out);
   // Exit seam (scrum-258.1): buffer-egress contract — see base class.
   size_t ReadbackExitRays(std::vector<float>& out_d, std::vector<float>& out_w) override;
   void EndSession() override;
