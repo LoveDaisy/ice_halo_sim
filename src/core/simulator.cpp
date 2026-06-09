@@ -524,7 +524,7 @@ std::unique_ptr<TraceBackend> CreateBackend(int preferred_backend, Logger& logge
     } else if (name == "metal") {
 #if defined(__APPLE__)
       ILOG_INFO(logger, "LUMICE_TRACE_BACKEND=metal → routing via MetalTraceBackend");
-      return std::make_unique<MetalTraceBackend>();
+      return std::make_unique<MetalTraceBackend>(&logger);
 #else
       ILOG_WARN(logger, "LUMICE_TRACE_BACKEND=metal requested on non-Apple platform; falling back to legacy CPU");
       return nullptr;
@@ -536,7 +536,7 @@ std::unique_ptr<TraceBackend> CreateBackend(int preferred_backend, Logger& logge
   if (preferred_backend == Simulator::kPreferMetal) {
 #if defined(__APPLE__)
     ILOG_INFO(logger, "preferred_backend=metal → routing via MetalTraceBackend");
-    return std::make_unique<MetalTraceBackend>();
+    return std::make_unique<MetalTraceBackend>(&logger);
 #else
     return nullptr;  // non-Apple: silent no-op (CPU)
 #endif

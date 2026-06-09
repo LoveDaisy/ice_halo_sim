@@ -29,6 +29,7 @@
 #include "core/simulator.hpp"  // PartitionCrystalRayNum
 #include "core/trace_ops.hpp"
 #include "util/color_data.hpp"
+#include "util/logger.hpp"
 
 namespace lumice {
 
@@ -365,9 +366,15 @@ size_t ComputeOutCap(size_t n, size_t max_hits) {
   return std::min<size_t>(cap, 64u * 1024u * 1024u);
 }
 
+Logger& EffectiveLogger(Logger* logger) {
+  return logger ? *logger : GetGlobalLogger();
+}
+
 }  // namespace
 
 struct MetalTraceBackend::Impl {
+  Logger* logger_ = nullptr;
+
   id<MTLDevice>               device = nil;
   id<MTLCommandQueue>         queue  = nil;
   id<MTLComputePipelineState> pso    = nil;
@@ -494,14 +501,18 @@ void MetalTraceBackend::Impl::EnsurePso() {
   }
   id<MTLLibrary> lib = [device newLibraryWithSource:src options:opts error:&err];
   if (lib == nil) {
-    NSLog(@"MetalTraceBackend: kernel compile failed: %@", err.localizedDescription);
+    ILOG_ERROR(EffectiveLogger(logger_),
+               "MetalTraceBackend: kernel compile failed: {}",
+               err.localizedDescription.UTF8String);
     assert(false && "MetalTraceBackend: kernel compile failed");
   }
   id<MTLFunction> fn = [lib newFunctionWithName:@"trace_layer_kernel"];
   assert(fn != nil && "MetalTraceBackend: kernel entry point missing");
   pso = [device newComputePipelineStateWithFunction:fn error:&err];
   if (pso == nil) {
-    NSLog(@"MetalTraceBackend: pipeline state creation failed: %@", err.localizedDescription);
+    ILOG_ERROR(EffectiveLogger(logger_),
+               "MetalTraceBackend: pipeline state creation failed: {}",
+               err.localizedDescription.UTF8String);
     assert(false && "MetalTraceBackend: pipeline state creation failed");
   }
 }
@@ -803,13 +814,17 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   [cb waitUntilCompleted];
 
   if (cb.status != MTLCommandBufferStatusCompleted) {
-    NSLog(@"MetalTraceBackend: GPU dispatch failed: %@", cb.error.localizedDescription);
+    ILOG_ERROR(EffectiveLogger(logger_),
+               "MetalTraceBackend: GPU dispatch failed: {}",
+               cb.error.localizedDescription.UTF8String);
     assert(false && "MetalTraceBackend: GPU dispatch failed");
   }
 
   uint32_t produced = *static_cast<uint32_t*>([counter_buf contents]);
   if (produced > out_cap) {
-    NSLog(@"MetalTraceBackend: continuation overflow produced=%u out_cap=%zu", produced, out_cap);
+    ILOG_ERROR(EffectiveLogger(logger_),
+               "MetalTraceBackend: continuation overflow produced={} out_cap={}",
+               produced, out_cap);
     assert(false && "MetalTraceBackend: continuation overflow");
     // Release-build clamp: assert is compiled out, so clamp produced to out_cap
     // to prevent the next layer reading cont_* buffers out of bounds on the GPU.
@@ -831,8 +846,12 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
 
 void MetalTraceBackend::Impl::Reset() {
   if (max_produced > 0) {
-    NSLog(@"MetalTraceBackend: session ended — max continuation produced=%zu (out_cap=%zu)",
-          max_produced, out_cap);
+    ILOG_DEBUG(EffectiveLogger(logger_),
+               "MetalTraceBackend: session ended — max continuation produced={} (out_cap={})",
+               max_produced, out_cap);
+  } else {
+    ILOG_DEBUG(EffectiveLogger(logger_),
+               "MetalTraceBackend: session ended — single-layer MS, no continuation");
   }
   in_session = false;
   ms_idx = 0;
@@ -856,7 +875,10 @@ void MetalTraceBackend::Impl::Reset() {
 
 // ============================== MetalTraceBackend ============================
 
-MetalTraceBackend::MetalTraceBackend() : impl_(std::make_unique<Impl>()) {}
+MetalTraceBackend::MetalTraceBackend(Logger* logger)
+    : impl_(std::make_unique<Impl>()) {
+  impl_->logger_ = logger;
+}
 
 MetalTraceBackend::~MetalTraceBackend() = default;
 

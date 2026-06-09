@@ -20,6 +20,8 @@
 
 namespace lumice {
 
+class Logger;
+
 // MetalLayerHandle — the only host-visible scalar produced per TraceLayer is
 // the continuation count (populated from a 4-byte device readback, equivalent
 // to a 4-byte cudaMemcpy for CUDA backends). Continuation ray buffers
@@ -45,7 +47,7 @@ class MetalLayerHandle : public LayerHandle {
 //     RecombineSpec.shuffle = false before calling Recombine().
 class MetalTraceBackend : public TraceBackend {
  public:
-  MetalTraceBackend();
+  explicit MetalTraceBackend(Logger* logger = nullptr);
   ~MetalTraceBackend() override;
 
   MetalTraceBackend(const MetalTraceBackend&) = delete;
