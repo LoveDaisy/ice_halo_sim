@@ -63,8 +63,9 @@ class MetalTraceBackend : public TraceBackend {
   // TraceBackend production seam). Used by the CPU-vs-Metal parity harness
   // — keep callers on the concrete type, not a polymorphic base reference.
   void ReadbackImage(XyzImageData& out);
-  // Exit seam (scrum-258.1): buffer-egress contract — see base class.
-  size_t ReadbackExitRays(std::vector<float>& out_d, std::vector<float>& out_w) override;
+  // Exit seam (scrum-258.1/258.2): buffer-egress contract — see base class.
+  // 258.2: returns rich `ExitRayRecord` (36B each) — see core/exit_seam.hpp.
+  size_t ReadbackExitRays(std::vector<ExitRayRecord>& out) override;
   void EndSession() override;
   bool IsCompatible(const RenderConfig& render) const override;
 

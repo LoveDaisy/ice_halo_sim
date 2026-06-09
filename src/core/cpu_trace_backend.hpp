@@ -47,11 +47,12 @@ class CpuTraceBackend : public TraceBackend {
   // TraceBackend production seam). Used by the CPU-vs-Metal parity harness
   // — keep callers on the concrete type, not a polymorphic base reference.
   void ReadbackImage(XyzImageData& out);
-  // Exit seam (scrum-258.1): buffer-egress contract — see TraceBackend.
+  // Exit seam (scrum-258.1+): buffer-egress contract — see TraceBackend.
   // Single-MS: returns the final layer's outgoing rays. Multi-MS semantics
   // (per-layer routing / filter / prob 分流) are owned by 258.3.
-  size_t ReadbackExitRays(std::vector<float>& out_d,
-                           std::vector<float>& out_w) override;
+  // 258.2: returns `ExitRayRecord` carrying {dir, weight, path,
+  // crystal_id, ms_layer_idx}; move-out — `exit_records_` is left empty.
+  size_t ReadbackExitRays(std::vector<ExitRayRecord>& out) override;
   void EndSession() override;
 
   // Diagnostic accessors (unit tests).
@@ -76,13 +77,13 @@ class CpuTraceBackend : public TraceBackend {
   // points at &continuation_buf_.
   RayBuffer continuation_buf_;
 
-  // Exit seam (scrum-258.1): session-level accumulator for world-space exit
-  // rays {dir(3), weight}, appended-to by every TraceLayer in this session.
-  // Single-MS: equals the only layer's outgoing set; multi-MS: union of every
-  // layer's outgoings (per-layer routing / filter / prob owned by 258.3).
-  // BeginSession/EndSession reset; ReadbackExitRays returns the count.
-  std::vector<float> exit_d_;
-  std::vector<float> exit_w_;
+  // Exit seam (scrum-258.1/258.2): session-level accumulator for rich
+  // world-space exit records {dir, weight, path, crystal_id, ms_layer_idx},
+  // appended-to by every TraceLayer in this session. Single-MS: equals the
+  // only layer's outgoing set; multi-MS: union of every layer's outgoings
+  // (per-layer routing / filter / prob owned by 258.3). BeginSession /
+  // EndSession reset; ReadbackExitRays moves out and returns the count.
+  std::vector<ExitRayRecord> exit_records_;
 
   bool in_session_ = false;
 };

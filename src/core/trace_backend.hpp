@@ -10,6 +10,7 @@
 #include "config/render_config.hpp"
 #include "core/crystal.hpp"
 #include "core/def.hpp"
+#include "core/exit_seam.hpp"
 
 namespace lumice {
 
@@ -31,7 +32,8 @@ namespace lumice {
 //   2) Host pointers do not cross the seam, except at two explicit boundaries:
 //        - HostRayBatch: the ingest boundary (only at the first MS layer).
 //        - ReadbackExitRays: the sole device->host boundary (exit-ray
-//          buffer-egress — {dir(3*N), weight(N)} for N exit rays).
+//          buffer-egress — N `ExitRayRecord`s, each 36B carrying
+//          {dir, weight, path, crystal_id, ms_layer_idx}).
 //      Ray data and layer-local buffers otherwise live as backend-owned,
 //      opaque, device-resident handles. (scrum-258.1: ReadbackImage was
 //      retired from this seam; CPU/Metal still expose it as a non-virtual
@@ -49,7 +51,7 @@ namespace lumice {
 //          The only host-visible side-effect is reading ContinuationCount() —
 //          a single 4-byte cudaMemcpy.
 //        - ReadbackExitRays performs a single device->host copy of
-//          {dir(3*N), weight(N)} for N exit rays.
+//          N `ExitRayRecord`s (36B each) for N exit rays.
 //
 //   4) Metal co-design as a second orthogonal view. The contract is validated
 //      by at least one Metal skeleton implementation so the seam does not
@@ -305,16 +307,15 @@ class TraceBackend {
   // Buffer-egress boundary (exit seam, scrum-258) — the canonical exit-ray
   // contract. Copies the world-space exit rays captured this session
   // (one entry per ray that left the crystal in the final MS layer) into
-  // the caller-provided vectors and returns the exit-ray count:
-  //   out_d : 3 * count floats, world-space direction (pre-projection)
-  //   out_w : count floats, ray weight (spectral)
-  // The simulator routes these through the legacy consumer projection
-  // (O(exit rays)), replacing the per-batch O(W*H) image readback.
+  // the caller-provided vector and returns the exit-ray count. Each record
+  // is a 36B `ExitRayRecord` carrying {dir, weight, path, crystal_id,
+  // ms_layer_idx}; see core/exit_seam.hpp. The simulator routes these
+  // through the legacy consumer projection (O(exit rays)), replacing the
+  // per-batch O(W*H) image readback.
   //
-  // Structure note (scrum-258.1 → 258.2): the {dir, weight} pair is the v1
-  // payload. 258.2 will evolve this to a richer per-ray record
-  // (crystal_id, face sequence). Callers should treat the signature as
-  // unstable across 258.2.
+  // Structure note (scrum-258.2): the rich record replaces the prior
+  // {dir, weight} pair (scrum-258.1). 258.2 only PRODUCES metadata; 258.3
+  // will CONSUME path/crystal_id for filter + symmetry fold.
   //
   // Default returns 0 for partial or stub backends; production backends
   // (Cpu, Metal) should override. SILENT-ZERO FAILURE MODE: a backend that
@@ -326,9 +327,8 @@ class TraceBackend {
   // exit-seam payload is the canonical out path; ReadbackImage was demoted
   // to a non-virtual, concrete CPU/Metal helper used only by the parity
   // harness (test 接缝 与 生产契约 结构性隔离).
-  virtual size_t ReadbackExitRays(std::vector<float>& out_d, std::vector<float>& out_w) {
-    (void)out_d;
-    (void)out_w;
+  virtual size_t ReadbackExitRays(std::vector<ExitRayRecord>& out) {
+    out.clear();
     return 0;
   }
 

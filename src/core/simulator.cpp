@@ -916,18 +916,29 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
     return;
   }
 
-  // Exit seam (scrum-258.1): collect the backend's world-space exit rays and
-  // hand them to the legacy consumer projection via outgoing_d_/w_. The
-  // consumer reads `outgoing_indices_.size()` (and a non-empty assertion in
+  // Exit seam (scrum-258.1/258.2): collect the backend's rich exit records
+  // and hand the dir/weight projection inputs to the legacy consumer via
+  // outgoing_d_/w_. The rich metadata (path / crystal_id / ms_layer_idx) is
+  // forwarded into sim_data.exit_records_ for 258.3 filter + symmetry fold
+  // to consume — 258.2 only produces it. The consumer reads
+  // `outgoing_indices_.size()` (and a non-empty assertion in
   // render.cpp:148), never its values — fill a dummy zero index per ray.
-  std::vector<float> exit_d;
-  std::vector<float> exit_w;
-  size_t exit_count = backend.ReadbackExitRays(exit_d, exit_w);
+  std::vector<ExitRayRecord> exit_records;
+  size_t exit_count = backend.ReadbackExitRays(exit_records);
   if (exit_count == 0) {
     // Degenerate batch: all rays absorbed, none exited. Skip emplace — an
     // empty outgoing_indices_ would trip the non-empty assertion in
     // render.cpp:148. This batch contributes nothing to the output image.
     return;
+  }
+
+  std::vector<float> exit_d(exit_count * 3);
+  std::vector<float> exit_w(exit_count);
+  for (size_t i = 0; i < exit_count; i++) {
+    exit_d[i * 3 + 0] = exit_records[i].dir[0];
+    exit_d[i * 3 + 1] = exit_records[i].dir[1];
+    exit_d[i * 3 + 2] = exit_records[i].dir[2];
+    exit_w[i] = exit_records[i].weight;
   }
 
   SimData sim_data;
@@ -938,8 +949,9 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
                                        // server.cpp::ConsumeData).
   sim_data.outgoing_d_ = std::move(exit_d);
   sim_data.outgoing_w_ = std::move(exit_w);
+  sim_data.exit_records_ = std::move(exit_records);
   // dummy: consumer reads .size() only (render.cpp:75); real per-ray indices
-  // arrive in 258.2.
+  // arrive when 258.3 unifies outgoing_d_/w_ with exit_records_.
   sim_data.outgoing_indices_.assign(exit_count, 0);
   data_queue_->Emplace(std::move(sim_data));
 }

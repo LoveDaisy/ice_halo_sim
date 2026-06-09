@@ -8,6 +8,7 @@
 
 #include "core/crystal.hpp"
 #include "core/def.hpp"
+#include "core/exit_seam.hpp"
 #include "core/math.hpp"
 #include "core/raypath.hpp"
 
@@ -134,6 +135,12 @@ struct SimData {
   // correspond to outgoing_indices_[k]. Filled by Simulator alongside outgoing_indices_.
   std::vector<float> outgoing_d_;  // direction (3 floats per outgoing ray)
   std::vector<float> outgoing_w_;  // weight (1 float per outgoing ray)
+
+  // Rich exit records (scrum-258.2+) parallel to outgoing_d_/w_. Produced by
+  // the trace backend via ReadbackExitRays; consumed by 258.3 (filter +
+  // symmetry fold). 258.2 only POPULATES these; outgoing_d_/w_ stay as the
+  // consumer's projection input until 258.3 unifies the two.
+  std::vector<ExitRayRecord> exit_records_;
 
   size_t root_ray_count_ = 0;  // Count of root rays (prev_ray_idx_ == kInfSize)
 };

@@ -1129,16 +1129,15 @@ void MetalTraceBackend::ReadbackImage(XyzImageData& out) {
   std::memcpy(out.data, [impl_->xyz_image contents], pix * 3 * sizeof(float));
 }
 
-// Exit seam (scrum-258.1): copy captured world-space exit rays out for the
-// simulator to route through the legacy consumer projection. Overflow (slot >
-// capacity) is logged and clamped; ComputeOutCap is the same fan-out bound the
-// continuation buffers use, so single-MS overflow is structurally impossible.
-size_t MetalTraceBackend::ReadbackExitRays(std::vector<float>& out_d,
-                                            std::vector<float>& out_w) {
+// Exit seam (scrum-258.1/258.2): assemble rich ExitRayRecords from the
+// device-side parallel buffers (exit_ray_d/w_buf + Step 4 metadata buffers).
+// Overflow (slot > capacity) is logged and clamped; ComputeOutCap is the
+// same fan-out bound the continuation buffers use, so single-MS overflow is
+// structurally impossible.
+size_t MetalTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
   assert(impl_->in_session);
   if (impl_->exit_slot_buf == nil) {
-    out_d.clear();
-    out_w.clear();
+    out.clear();
     return 0;
   }
   uint32_t produced = *static_cast<uint32_t*>([impl_->exit_slot_buf contents]);
@@ -1148,10 +1147,20 @@ size_t MetalTraceBackend::ReadbackExitRays(std::vector<float>& out_d,
                "MetalTraceBackend: exit-ray overflow produced={} exit_cap={} (clamped)",
                produced, impl_->exit_ray_capacity);
   }
-  out_d.resize(count * 3);
-  out_w.resize(count);
-  std::memcpy(out_d.data(), [impl_->exit_ray_d_buf contents], count * 3 * sizeof(float));
-  std::memcpy(out_w.data(), [impl_->exit_ray_w_buf contents], count * sizeof(float));
+  out.resize(count);
+  const auto* d_ptr = static_cast<const float*>([impl_->exit_ray_d_buf contents]);
+  const auto* w_ptr = static_cast<const float*>([impl_->exit_ray_w_buf contents]);
+  // Step 4 will plumb crystal_id / face_seq_len / face_seq_data buffers;
+  // until then, metadata fields stay zero-initialized (acceptable: 258.2
+  // simulator consumer reads dir/weight only — see plan §3.6).
+  for (size_t i = 0; i < count; i++) {
+    ExitRayRecord rec{};
+    rec.dir[0] = d_ptr[i * 3 + 0];
+    rec.dir[1] = d_ptr[i * 3 + 1];
+    rec.dir[2] = d_ptr[i * 3 + 2];
+    rec.weight = w_ptr[i];
+    out[i] = rec;
+  }
   return count;
 }
 
