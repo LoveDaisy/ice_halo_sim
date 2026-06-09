@@ -14,10 +14,11 @@ namespace lumice {
 //
 // Round 2 (#247.4) bumped RayBuffer from 32B to 48B (+16B for overflow_arena_
 // unique_ptr + cap_/used_ + alignment padding), so SimData grew 176 → 192.
-// Task 252.3 added backend_xyz_ (std::vector<float>: 24B on libc++/libstdc++)
-// and backend_total_intensity_ (float: 4B), and is_backend_path_ (bool: 1B with
-// 7B alignment padding before the vector), bumping SimData 192 → 232.
-static_assert(sizeof(SimData) == 232, "SimData size changed — update copy/move ctors and operators");
+// Task 252.3 added backend_xyz_ (24B) + backend_total_intensity_ (4B) +
+// is_backend_path_ (1B + 7B align padding) bumping 192 → 232 for the
+// image-seam path. scrum-258.1 Step 4 removes that path entirely (exit
+// seam is the canonical out path), shrinking back to 192.
+static_assert(sizeof(SimData) == 192, "SimData size changed — update copy/move ctors and operators");
 
 namespace {
 
@@ -289,17 +290,13 @@ SimData::SimData(size_t capacity) : curr_wl_(0.0f), rays_(capacity) {}
 SimData::SimData(const SimData& other)
     : curr_wl_(other.curr_wl_), generation_(other.generation_), rays_(other.rays_), crystals_(other.crystals_),
       crystal_axis_dists_(other.crystal_axis_dists_), outgoing_indices_(other.outgoing_indices_),
-      outgoing_d_(other.outgoing_d_), outgoing_w_(other.outgoing_w_), root_ray_count_(other.root_ray_count_),
-      is_backend_path_(other.is_backend_path_), backend_xyz_(other.backend_xyz_),
-      backend_total_intensity_(other.backend_total_intensity_) {}
+      outgoing_d_(other.outgoing_d_), outgoing_w_(other.outgoing_w_), root_ray_count_(other.root_ray_count_) {}
 
 SimData::SimData(SimData&& other) noexcept
     : curr_wl_(other.curr_wl_), generation_(other.generation_), rays_(std::move(other.rays_)),
       crystals_(std::move(other.crystals_)), crystal_axis_dists_(std::move(other.crystal_axis_dists_)),
       outgoing_indices_(std::move(other.outgoing_indices_)), outgoing_d_(std::move(other.outgoing_d_)),
-      outgoing_w_(std::move(other.outgoing_w_)), root_ray_count_(other.root_ray_count_),
-      is_backend_path_(other.is_backend_path_), backend_xyz_(std::move(other.backend_xyz_)),
-      backend_total_intensity_(other.backend_total_intensity_) {}
+      outgoing_w_(std::move(other.outgoing_w_)), root_ray_count_(other.root_ray_count_) {}
 
 SimData& SimData::operator=(const SimData& other) {
   if (&other == this) {
@@ -315,9 +312,6 @@ SimData& SimData::operator=(const SimData& other) {
   outgoing_d_ = other.outgoing_d_;
   outgoing_w_ = other.outgoing_w_;
   root_ray_count_ = other.root_ray_count_;
-  is_backend_path_ = other.is_backend_path_;
-  backend_xyz_ = other.backend_xyz_;
-  backend_total_intensity_ = other.backend_total_intensity_;
   return *this;
 }
 
@@ -335,9 +329,6 @@ SimData& SimData::operator=(SimData&& other) noexcept {
   outgoing_d_ = std::move(other.outgoing_d_);
   outgoing_w_ = std::move(other.outgoing_w_);
   root_ray_count_ = other.root_ray_count_;
-  is_backend_path_ = other.is_backend_path_;
-  backend_xyz_ = std::move(other.backend_xyz_);
-  backend_total_intensity_ = other.backend_total_intensity_;
   return *this;
 }
 

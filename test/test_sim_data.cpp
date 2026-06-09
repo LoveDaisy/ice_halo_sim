@@ -36,9 +36,11 @@ using lumice::SimData;
 // authoring platform that this test file's per-field assertions need updating.
 #if defined(__APPLE__) && defined(__aarch64__)
 static_assert(sizeof(void*) == 8, "SimData layout assumes 64-bit pointers");
-// Task 252.3 added backend_xyz_ (std::vector<float>, 24B) + backend_total_intensity_
-// (float, 4B) + is_backend_path_ (bool, 1B with 7B align padding before vector) → 232.
-static_assert(sizeof(SimData) == 232,
+// Task 252.3 added backend_xyz_/backend_total_intensity_/is_backend_path_
+// (28B + 7B padding) bumping 192 → 232 for the image-seam path. scrum-258.1
+// Step 4 removes those fields (exit seam is the canonical out path),
+// shrinking back to 192.
+static_assert(sizeof(SimData) == 192,
               "SimData layout changed — update test_sim_data.cpp DeepCopy/Move assertions "
               "and sim_data.cpp's static_assert.");
 #endif
@@ -70,11 +72,6 @@ SimData MakePopulatedSimData() {
   s.outgoing_d_ = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f };
   s.outgoing_w_ = { 0.5f, 0.7f };
   s.crystals_.emplace_back();
-  // Backend-path fields (task 252.3): non-default values so deep-copy / move
-  // tests below detect the "manual copy missed a field" bug class.
-  s.is_backend_path_ = true;
-  s.backend_xyz_ = { 0.1f, 0.2f, 0.3f, 0.4f };
-  s.backend_total_intensity_ = 1.5f;
   return s;
 }
 
@@ -672,10 +669,6 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
   EXPECT_EQ(copy.outgoing_d_, original.outgoing_d_);
   EXPECT_EQ(copy.outgoing_w_, original.outgoing_w_);
   EXPECT_EQ(copy.crystals_.size(), original.crystals_.size());
-  // Backend-path fields (task 252.3).
-  EXPECT_TRUE(copy.is_backend_path_) << "is_backend_path_ not copied";
-  EXPECT_EQ(copy.backend_xyz_, original.backend_xyz_) << "backend_xyz_ not copied";
-  EXPECT_FLOAT_EQ(copy.backend_total_intensity_, 1.5f) << "backend_total_intensity_ not copied";
 
   // Deep copy independence — each pointer/container field independently.
   copy.rays_[0].w_ = 999.0f;
@@ -692,9 +685,6 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
 
   copy.crystals_.clear();
   EXPECT_EQ(original.crystals_.size(), 1u) << "crystals_ not deep-copied";
-
-  copy.backend_xyz_.clear();
-  EXPECT_EQ(original.backend_xyz_.size(), 4u) << "backend_xyz_ not deep-copied";
 }
 
 
@@ -716,9 +706,6 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   EXPECT_EQ(target.outgoing_d_, original.outgoing_d_);
   EXPECT_EQ(target.outgoing_w_, original.outgoing_w_);
   EXPECT_EQ(target.crystals_.size(), 1u);
-  EXPECT_TRUE(target.is_backend_path_) << "is_backend_path_ not assigned";
-  EXPECT_EQ(target.backend_xyz_, original.backend_xyz_) << "backend_xyz_ not assigned";
-  EXPECT_FLOAT_EQ(target.backend_total_intensity_, 1.5f) << "backend_total_intensity_ not assigned";
 
   // Deep copy independence.
   target.rays_[0].w_ = 999.0f;
@@ -772,9 +759,6 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_EQ(moved.outgoing_d_.size(), 6u);
   EXPECT_EQ(moved.outgoing_w_.size(), 2u);
   EXPECT_EQ(moved.crystals_.size(), 1u);
-  EXPECT_TRUE(moved.is_backend_path_) << "is_backend_path_ not moved";
-  EXPECT_EQ(moved.backend_xyz_.size(), 4u) << "backend_xyz_ not moved";
-  EXPECT_FLOAT_EQ(moved.backend_total_intensity_, 1.5f) << "backend_total_intensity_ not moved";
 
   // Moved-from source contract — three categories:
   // (a) rays_ pointer ownership transferred → nullptr + zeroed size/capacity.
@@ -812,9 +796,6 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   EXPECT_EQ(dst.generation_, 42u);
   EXPECT_EQ(dst.outgoing_indices_.size(), 3u);
   EXPECT_EQ(dst.crystals_.size(), 1u);
-  EXPECT_TRUE(dst.is_backend_path_) << "is_backend_path_ not move-assigned";
-  EXPECT_EQ(dst.backend_xyz_.size(), 4u) << "backend_xyz_ not move-assigned";
-  EXPECT_FLOAT_EQ(dst.backend_total_intensity_, 1.5f) << "backend_total_intensity_ not move-assigned";
 
   // Source moved-from state.
   EXPECT_EQ(src.rays_.rays_, nullptr);
