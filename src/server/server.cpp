@@ -612,11 +612,18 @@ void ServerImpl::ConsumeData() {
   while (true) {
     CHECK_STOP
     auto sim_data = data_queue_->Get();
-    // Interruption sentinel: a default-constructed SimData (queue shutdown /
-    // simulator early exit) has rays_ empty and is_backend_path_ false. Backend
-    // path sets is_backend_path_ = true with rays_ empty — treat that as valid
-    // data, not interruption.
-    if (sim_data.rays_.Empty() && !sim_data.is_backend_path_) {
+    // Interruption sentinel (scrum-258.1 Step 3 — 协议固化):
+    // a default-constructed SimData (queue shutdown / simulator early exit)
+    // has rays_ empty AND root_ray_count_ == 0. Discriminating on
+    // root_ray_count_ correctly distinguishes the sentinel from:
+    //   - legacy CPU path: rays_ non-empty;
+    //   - backend exit-seam path: rays_ empty + outgoing_d_/w_ populated
+    //     (or empty for a zero-exit batch) but root_ray_count_ = ray_num > 0.
+    // The earlier is_backend_path_ key falsely flagged exit-seam batches as
+    // sentinels (rays_ empty + is_backend_path_ false), deadlocking the
+    // consumer; root_ray_count_ is the protocol-level invariant for a real
+    // produced batch and works uniformly across both paths.
+    if (sim_data.rays_.Empty() && sim_data.root_ray_count_ == 0) {
       // Simulation is interrupted.
       break;
     }

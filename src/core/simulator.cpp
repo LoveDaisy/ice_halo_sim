@@ -18,14 +18,12 @@
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/buffer.hpp"
-#include "core/color_util.hpp"
 #include "core/cpu_trace_backend.hpp"
 #include "core/crystal.hpp"
 #include "core/filter_spec.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
 #include "core/trace_backend.hpp"
-#include "util/color_data.hpp"
 #include "util/illuminant.hpp"
 #include "util/logger.hpp"
 #include "util/queue.hpp"
@@ -835,19 +833,25 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   data_queue_->Emplace(std::move(sim_data));
 }
 
-// Backend-routed wavelength step (task 252.3, TraceBackend seam integration).
+// Backend-routed wavelength step (TraceBackend seam integration, scrum-258.1).
 // Mirrors the wavelength-loop semantics of SimulateOneWavelength but delegates
-// trace -> projection -> XYZ accumulation to the supplied backend (CPU or
-// Metal). Produces a SimData whose backend_xyz_ + backend_total_intensity_
-// fields feed RenderConsumer's early-return path (server/render.cpp).
+// trace -> recorder -> projection to the supplied backend (CPU or Metal) and
+// then routes the backend's world-space EXIT rays back into the legacy
+// consumer projection path via SimData.outgoing_d_/w_. This is the canonical
+// exit-seam buffer-egress path: the backend reports {dir, weight} per exit
+// ray; the consumer projects + XYZ-accumulates them exactly as it does for
+// Metal-OFF, so backend / legacy paths share the same downstream pipeline.
 //
-// Y-channel reverse-compute of total_landed_weight:
-//   sum_Y = Σ XYZ[i].y = Σ kCmfY[wl] · w_i  ⇒  total_landed_weight = sum_Y / kCmfY[wl]
-// This holds because a single-wavelength session multiplies every landed ray's
-// weight by the same kCmfY[wl] before accumulating into the Y channel.
-// Out-of-band wavelengths (kCmfY[wl] ≈ 0) defeat reverse-compute; in that
-// regime XYZ is also zero so total_intensity_ stays 0 → EV scale code already
-// guards `snapshot_intensity_ <= 0`.
+// Behaviour change vs the original 252.3 image-seam path:
+//   - No ReadbackImage / no Y-channel reverse-compute. The backend's
+//     per-batch O(W*H) image readback is replaced by an O(exit rays)
+//     buffer copy (see TraceBackend::ReadbackExitRays).
+//   - SimData carries outgoing_d_/w_ + a dummy outgoing_indices_
+//     (consumer reads .size() only — confirmed by render.cpp:75 / 148 grep).
+//   - root_ray_count_ = ray_num distinguishes a valid backend batch from
+//     the queue shutdown sentinel (default-constructed SimData has
+//     root_ray_count_ == 0); the sentinel discriminator lives in
+//     server.cpp::ConsumeData (固化 with this change, scrum-258.1 Step 3).
 //
 // `stop_` is checked between TraceLayer/Recombine calls. On stop the session
 // is closed via EndSession (RAII-equivalent) but no SimData is emplaced.
@@ -911,32 +915,24 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   if (w <= 0 || h <= 0) {
     return;
   }
-  auto pix = static_cast<size_t>(w) * static_cast<size_t>(h);
-  std::vector<float> xyz_data(pix * 3, 0.0f);
-  XyzImageData xyz_out{ xyz_data.data(), w, h };
-  backend.ReadbackImage(xyz_out);
 
-  // Reverse-compute total_landed_weight from the Y channel — see comment block above.
-  float total_landed_weight = 0.0f;
-  int wl_key = static_cast<int>(wl_param.wl_ + 0.5f);
-  if (wl_key >= kCmfMinWavelength && wl_key <= kCmfMaxWavelength) {
-    float cie_y = kCmfY[wl_key - kCmfMinWavelength];
-    if (cie_y > 1e-7f) {
-      double sum_y = 0.0;  // double accum: 1k×1k×3 floats can exceed float precision
-      for (size_t i = 0; i < pix; i++) {
-        sum_y += xyz_data[i * 3 + 1];
-      }
-      total_landed_weight = static_cast<float>(sum_y / cie_y);
-    }
-  }
+  // Exit seam (scrum-258.1): collect the backend's world-space exit rays and
+  // hand them to the legacy consumer projection via outgoing_d_/w_. The
+  // consumer reads `outgoing_indices_.size()` (and a non-empty assertion in
+  // render.cpp:148), never its values — fill a dummy zero index per ray.
+  std::vector<float> exit_d;
+  std::vector<float> exit_w;
+  size_t exit_count = backend.ReadbackExitRays(exit_d, exit_w);
 
   SimData sim_data;
   sim_data.curr_wl_ = wl_param.wl_;
   sim_data.generation_ = generation;
-  sim_data.root_ray_count_ = ray_num;
-  sim_data.is_backend_path_ = true;
-  sim_data.backend_xyz_ = std::move(xyz_data);
-  sim_data.backend_total_intensity_ = total_landed_weight;
+  sim_data.root_ray_count_ = ray_num;  // distinguishes a valid backend batch
+                                       // from the shutdown sentinel (see
+                                       // server.cpp::ConsumeData).
+  sim_data.outgoing_d_ = std::move(exit_d);
+  sim_data.outgoing_w_ = std::move(exit_w);
+  sim_data.outgoing_indices_.assign(exit_count, 0);
   data_queue_->Emplace(std::move(sim_data));
 }
 
