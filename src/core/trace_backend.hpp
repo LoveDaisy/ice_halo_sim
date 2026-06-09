@@ -317,7 +317,10 @@ class TraceBackend {
   // unstable across 258.2.
   //
   // Default returns 0 for partial or stub backends; production backends
-  // (Cpu, Metal) should override.
+  // (Cpu, Metal) should override. SILENT-ZERO FAILURE MODE: a backend that
+  // forgets to override will produce 0 exit rays per batch — the simulator
+  // discards the batch (exit_count == 0 early-return), yielding a black image
+  // with no compile-time or run-time error. New backend authors must override.
   //
   // Replaces the prior ReadbackImage seam (scrum-258.1 Step 5): the
   // exit-seam payload is the canonical out path; ReadbackImage was demoted
