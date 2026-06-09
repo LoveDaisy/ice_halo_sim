@@ -159,6 +159,8 @@ void CpuTraceBackend::BeginSession(const SessionSpec& spec) {
   }
 
   continuation_buf_ = RayBuffer{};
+  exit_d_.clear();
+  exit_w_.clear();
 }
 
 
@@ -256,6 +258,16 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
                       prev_init, init_ray_offset, all_data, cont_collect, outgoing_d, outgoing_w);
   }
 
+  // Exit seam (scrum-258.1): append this layer's outgoing rays to the
+  // session-level accumulator BEFORE projection. ReadbackExitRays returns
+  // these for the simulator to drive the legacy consumer projection. The
+  // ScatterOutgoingToXyz call below stays for now so ReadbackImage keeps
+  // returning a populated image (parity-harness/oracle path); both writes
+  // share the same source data, so consistency is automatic. Step 5
+  // removes ScatterOutgoingToXyz + xyz_buf_ once ReadbackImage退役.
+  exit_d_.insert(exit_d_.end(), outgoing_d.begin(), outgoing_d.end());
+  exit_w_.insert(exit_w_.end(), outgoing_w.begin(), outgoing_w.end());
+
   // Drain the per-layer outgoing into the accumulator.
   ScatterOutgoingToXyz(outgoing_d.data(), outgoing_w.data(), outgoing_w.size(),  //
                        *spec_.render, camera_rot_, spec_.wl.wl_,                 //
@@ -320,6 +332,19 @@ void CpuTraceBackend::ReadbackImage(XyzImageData& out) {
 }
 
 
+// Exit seam (scrum-258.1): copy the session-accumulated world-space exit
+// rays out. Single-MS: equals the only layer's outgoing set. Move-out is
+// safe — the contract is "call once before EndSession"; subsequent calls
+// would return 0 entries.
+size_t CpuTraceBackend::ReadbackExitRays(std::vector<float>& out_d,
+                                          std::vector<float>& out_w) {
+  assert(in_session_ && "ReadbackExitRays called outside BeginSession/EndSession");
+  out_d = exit_d_;
+  out_w = exit_w_;
+  return exit_w_.size();
+}
+
+
 void CpuTraceBackend::EndSession() {
   in_session_ = false;
   ms_idx_ = 0;
@@ -327,6 +352,8 @@ void CpuTraceBackend::EndSession() {
   total_landed_weight_ = 0.0f;
   xyz_buf_.reset();
   continuation_buf_ = RayBuffer{};
+  exit_d_.clear();
+  exit_w_.clear();
   spec_ = SessionSpec{};
 }
 

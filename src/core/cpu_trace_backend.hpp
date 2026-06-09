@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <vector>
 
 #include "config/sim_data.hpp"
 #include "core/geo3d.hpp"
@@ -43,6 +44,11 @@ class CpuTraceBackend : public TraceBackend {
   LayerHandlePtr TraceLayer(const RootRaySource& roots) override;
   RootRaySource Recombine(LayerHandlePtr handle, const RecombineSpec& spec) override;
   void ReadbackImage(XyzImageData& out) override;
+  // Exit seam (scrum-258.1): buffer-egress contract — see TraceBackend.
+  // Single-MS: returns the final layer's outgoing rays. Multi-MS semantics
+  // (per-layer routing / filter / prob 分流) are owned by 258.3.
+  size_t ReadbackExitRays(std::vector<float>& out_d,
+                           std::vector<float>& out_w) override;
   void EndSession() override;
 
   // Diagnostic accessors (unit tests).
@@ -66,6 +72,14 @@ class CpuTraceBackend : public TraceBackend {
   // (or EndSession). The DeviceRayBatch::backend_ptr handed out by Recombine
   // points at &continuation_buf_.
   RayBuffer continuation_buf_;
+
+  // Exit seam (scrum-258.1): session-level accumulator for world-space exit
+  // rays {dir(3), weight}, appended-to by every TraceLayer in this session.
+  // Single-MS: equals the only layer's outgoing set; multi-MS: union of every
+  // layer's outgoings (per-layer routing / filter / prob owned by 258.3).
+  // BeginSession/EndSession reset; ReadbackExitRays returns the count.
+  std::vector<float> exit_d_;
+  std::vector<float> exit_w_;
 
   bool in_session_ = false;
 };
