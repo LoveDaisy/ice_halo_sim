@@ -67,6 +67,14 @@ struct KernelParams {
   // {world_dir(3), weight} to exit_d/exit_w at a session-level atomic slot
   // (exit_slot). Capacity bound is host-supplied (ComputeOutCap).
   uint  exit_cap;
+  // Exit metadata (scrum-258.2): rich {dir, weight, path, crystal_id,
+  // ms_layer_idx} record. crystal_id = ci for this dispatch; ms_layer_idx =
+  // host-side ms_idx (only the final layer writes exit slots in ms_mode==0).
+  // face_seq_cap = min(max_hits, ExitFaceSeq::kCap=15) — per-slot stride of
+  // exit_face_seq_data_buf; <15 saves device memory + readback bandwidth.
+  uint  crystal_id;
+  uint  face_seq_cap;
+  uint  ms_layer_idx;
 };
 
 inline float GetReflectRatio(float delta, float rr) {
@@ -98,6 +106,9 @@ kernel void trace_layer_kernel(
     device float*          exit_d   [[buffer(18)]],
     device float*          exit_w   [[buffer(19)]],
     device atomic_uint*    exit_slot [[buffer(20)]],
+    device ushort*         exit_crystal_id    [[buffer(21)]],
+    device uchar*          exit_face_seq_len  [[buffer(22)]],
+    device uchar*          exit_face_seq_data [[buffer(23)]],
     uint tid [[thread_position_in_grid]]) {
   if (tid >= prm.num_rays) { return; }
 
@@ -245,6 +256,16 @@ kernel void trace_layer_kernel(
               exit_d[es * 3u + 1u] = wy;
               exit_d[es * 3u + 2u] = wz;
               exit_w[es] = cw;
+              // Rich metadata (scrum-258.2): crystal_id from KernelParams,
+              // face sequence truncated to face_seq_cap (= min(max_hits,
+              // ExitFaceSeq::kCap=15) on the host). Stride = face_seq_cap so
+              // <15-byte-per-slot saves device memory + readback bandwidth.
+              exit_crystal_id[es] = ushort(prm.crystal_id);
+              uint seq_len = min(rec_len, prm.face_seq_cap);
+              exit_face_seq_len[es] = uchar(seq_len);
+              for (uint k = 0u; k < seq_len; k++) {
+                exit_face_seq_data[es * prm.face_seq_cap + k] = uchar(path[k]);
+              }
             }
           }
           float sx = -wx;
@@ -360,8 +381,16 @@ struct KernelParams {
   float    r_scale;
   float    max_abs_dz;
   uint32_t exit_cap;  // exit seam (scrum-258.1) — buffer-egress capacity (rays)
+  // Exit metadata (scrum-258.2). Field order MUST match the MSL struct above
+  // (crystal_id, face_seq_cap, ms_layer_idx) — silent reorder would only
+  // change semantics, not sizeof, so the static_assert below is necessary
+  // but insufficient. Reviewer-side cross-check between host + MSL is
+  // mandatory until layout_test (plan §7 Risk 2) lands.
+  uint32_t crystal_id;
+  uint32_t face_seq_cap;
+  uint32_t ms_layer_idx;
 };
-static_assert(sizeof(KernelParams) == 64u,
+static_assert(sizeof(KernelParams) == 76u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 
 float ComputeAz0(const Rotation& rot) {
@@ -477,6 +506,13 @@ struct MetalTraceBackend::Impl {
   id<MTLBuffer> exit_ray_w_buf = nil;
   id<MTLBuffer> exit_slot_buf  = nil;
   size_t        exit_ray_capacity = 0;
+  // Exit metadata (scrum-258.2). Sized in lock-step with exit_ray_d/w by
+  // EnsureExitBuffers; face_seq_data stride = face_seq_cap_ (set in
+  // BeginSession from scene.max_hits_).
+  id<MTLBuffer> exit_crystal_id_buf    = nil;
+  id<MTLBuffer> exit_face_seq_len_buf  = nil;
+  id<MTLBuffer> exit_face_seq_data_buf = nil;
+  uint32_t      face_seq_cap_ = 0;
 
   // Layer dispatch helpers.
   void EnsureDevice();
@@ -497,7 +533,8 @@ struct MetalTraceBackend::Impl {
                      id<MTLBuffer> r_d, id<MTLBuffer> r_p,
                      id<MTLBuffer> r_w, id<MTLBuffer> r_tf,
                      uint32_t ms_mode, int out_slot,
-                     uint32_t counter_init);
+                     uint32_t counter_init,
+                     uint32_t crystal_id, uint32_t ms_layer_idx);
   void Reset();
 };
 
@@ -650,6 +687,20 @@ void MetalTraceBackend::Impl::EnsureExitBuffers(size_t cap) {
   exit_ray_w_buf = [device newBufferWithLength:cap * sizeof(float)
                                        options:MTLResourceStorageModeShared];
   assert(exit_ray_w_buf != nil);
+  // Exit metadata (scrum-258.2). face_seq_cap_ MUST be set by BeginSession
+  // before TraceLayer reaches this point; assert defends against future
+  // reorderings that would size buffer(23) to zero.
+  assert(face_seq_cap_ > 0u && "BeginSession must set face_seq_cap_ before EnsureExitBuffers");
+  exit_crystal_id_buf = [device newBufferWithLength:cap * sizeof(uint16_t)
+                                            options:MTLResourceStorageModeShared];
+  assert(exit_crystal_id_buf != nil);
+  exit_face_seq_len_buf = [device newBufferWithLength:cap * sizeof(uint8_t)
+                                              options:MTLResourceStorageModeShared];
+  assert(exit_face_seq_len_buf != nil);
+  exit_face_seq_data_buf =
+      [device newBufferWithLength:cap * static_cast<size_t>(face_seq_cap_) * sizeof(uint8_t)
+                          options:MTLResourceStorageModeShared];
+  assert(exit_face_seq_data_buf != nil);
 }
 
 void MetalTraceBackend::Impl::UploadCrystal(const Crystal& crystal) {
@@ -794,7 +845,8 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
                                             id<MTLBuffer> r_d, id<MTLBuffer> r_p,
                                             id<MTLBuffer> r_w, id<MTLBuffer> r_tf,
                                             uint32_t ms_mode, int out_slot,
-                                            uint32_t counter_init) {
+                                            uint32_t counter_init,
+                                            uint32_t crystal_id, uint32_t ms_layer_idx) {
   KernelParams params{};
   params.n_idx    = current_n_idx;
   params.max_hits = static_cast<uint32_t>(spec.scene->max_hits_);
@@ -812,6 +864,16 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   params.r_scale    = r_scale;
   params.max_abs_dz = max_abs_dz;
   params.exit_cap   = static_cast<uint32_t>(exit_ray_capacity);
+  params.crystal_id   = crystal_id;
+  params.face_seq_cap = face_seq_cap_;
+  params.ms_layer_idx = ms_layer_idx;
+  // Defensive sanity bounds — silent host/MSL field reorder would set
+  // crystal_id to a different field's value (max_hits ~8, face_seq_cap ~8,
+  // ms_layer_idx ~0). The bounds below are narrow enough to fire for any
+  // reorder that puts a non-crystal field into the crystal_id slot.
+  assert(crystal_id < kMaxCrystalNum && "crystal_id out of range — check KernelParams layout");
+  assert(face_seq_cap_ > 0u && face_seq_cap_ <= ExitFaceSeq::kCap &&
+         "face_seq_cap_ out of range — check BeginSession + KernelParams layout");
 
   EnsureRecSink(num_rays);
   EnsureContBuffer(out_slot);
@@ -868,6 +930,11 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   [enc setBuffer:exit_ray_d_buf offset:0 atIndex:18];
   [enc setBuffer:exit_ray_w_buf offset:0 atIndex:19];
   [enc setBuffer:exit_slot_buf  offset:0 atIndex:20];
+  // Exit metadata (scrum-258.2) — bind in lock-step with exit_ray_d/w; the
+  // kernel writes to all three when exit_slot is acquired.
+  [enc setBuffer:exit_crystal_id_buf     offset:0 atIndex:21];
+  [enc setBuffer:exit_face_seq_len_buf   offset:0 atIndex:22];
+  [enc setBuffer:exit_face_seq_data_buf  offset:0 atIndex:23];
 
   NSUInteger tg = std::min<NSUInteger>(256, pso.maxTotalThreadsPerThreadgroup);
   [enc dispatchThreads:MTLSizeMake(num_rays, 1, 1)
@@ -935,6 +1002,9 @@ void MetalTraceBackend::Impl::Reset() {
   // Exit seam (scrum-258.1): buffers + capacity persist across sessions
   // (grow-only); only the atomic slot needs reset for the next session,
   // which happens in TraceLayer on the first MS layer.
+  // scrum-258.2: face_seq_cap_ is re-derived per BeginSession from
+  // scene.max_hits_; clear to make a session-mid leak obvious.
+  face_seq_cap_ = 0;
   spec = SessionSpec{};
 }
 
@@ -998,6 +1068,13 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   impl_->cont_counts[0] = 0;
   impl_->cont_counts[1] = 0;
   impl_->out_cap = 0;
+  // Exit metadata (scrum-258.2): per-slot stride of buffer(23). Real configs
+  // have max_hits ≤ ExitFaceSeq::kCap (7-8 in practice), so the min() clamp
+  // is defensive against a future scene bumping max_hits beyond 15. Set BEFORE
+  // EnsureExitBuffers (called from TraceLayer's first-MS branch) so the device
+  // allocation reflects the actual stride.
+  impl_->face_seq_cap_ = std::min<uint32_t>(
+      static_cast<uint32_t>(spec.scene->max_hits_), static_cast<uint32_t>(ExitFaceSeq::kCap));
 }
 
 LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
@@ -1090,7 +1167,9 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       impl_->DispatchLayer(in_count,
                            impl_->root_d_buf, impl_->root_p_buf,
                            impl_->root_w_buf, impl_->root_tf_buf,
-                           ms_mode, out_slot, counter_init);
+                           ms_mode, out_slot, counter_init,
+                           static_cast<uint32_t>(ci),
+                           static_cast<uint32_t>(impl_->ms_idx));
       ci_start += ci_n;
     }
 
@@ -1148,17 +1227,31 @@ size_t MetalTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
                produced, impl_->exit_ray_capacity);
   }
   out.resize(count);
-  const auto* d_ptr = static_cast<const float*>([impl_->exit_ray_d_buf contents]);
-  const auto* w_ptr = static_cast<const float*>([impl_->exit_ray_w_buf contents]);
-  // Step 4 will plumb crystal_id / face_seq_len / face_seq_data buffers;
-  // until then, metadata fields stay zero-initialized (acceptable: 258.2
-  // simulator consumer reads dir/weight only — see plan §3.6).
+  const auto* d_ptr        = static_cast<const float*>([impl_->exit_ray_d_buf contents]);
+  const auto* w_ptr        = static_cast<const float*>([impl_->exit_ray_w_buf contents]);
+  const auto* cid_ptr      = static_cast<const uint16_t*>([impl_->exit_crystal_id_buf contents]);
+  const auto* seq_len_ptr  = static_cast<const uint8_t*>([impl_->exit_face_seq_len_buf contents]);
+  const auto* seq_data_ptr = static_cast<const uint8_t*>([impl_->exit_face_seq_data_buf contents]);
+  const size_t stride      = impl_->face_seq_cap_;
+  // ms_layer_idx: in single-MS (ms_mode==0) every exit slot is written in
+  // the final layer; multi-MS mid-layer exits are NOT exported from kernel
+  // in 258.2 (only the final layer's exit_slot fires), so the host
+  // reconstruction uses the last-traced layer index. 258.3 will reconstruct
+  // per-slot ms_layer_idx from device-side records when mid-layer exit is
+  // exported.
+  const uint8_t final_ms_layer = static_cast<uint8_t>(
+      impl_->spec.scene->ms_.empty() ? 0 : impl_->spec.scene->ms_.size() - 1);
   for (size_t i = 0; i < count; i++) {
     ExitRayRecord rec{};
-    rec.dir[0] = d_ptr[i * 3 + 0];
-    rec.dir[1] = d_ptr[i * 3 + 1];
-    rec.dir[2] = d_ptr[i * 3 + 2];
-    rec.weight = w_ptr[i];
+    rec.dir[0]      = d_ptr[i * 3 + 0];
+    rec.dir[1]      = d_ptr[i * 3 + 1];
+    rec.dir[2]      = d_ptr[i * 3 + 2];
+    rec.weight      = w_ptr[i];
+    rec.crystal_id  = cid_ptr[i];
+    rec.ms_layer_idx = final_ms_layer;
+    uint8_t seq_len = std::min<uint8_t>(seq_len_ptr[i], ExitFaceSeq::kCap);
+    rec.path.size_  = seq_len;
+    std::memcpy(rec.path.data_, seq_data_ptr + i * stride, seq_len);
     out[i] = rec;
   }
   return count;
