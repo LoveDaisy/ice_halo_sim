@@ -1309,12 +1309,11 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     // EnsureExitBuffers is grow-only; the exit_slot counter was reset in the
     // first_ms branch above and ms_mode==1 dispatches never write exit_slot,
     // so this resize requires no counter reset.
-    {
-      bool last_layer_for_exit = (impl_->ms_idx + 1u == impl_->spec.scene->ms_.size());
-      if (!first_ms && last_layer_for_exit) {
-        size_t exit_cap = ComputeOutCap(total_ray_num, impl_->spec.scene->max_hits_);
-        impl_->EnsureExitBuffers(exit_cap);
-      }
+    // ms_idx is set to 0 in BeginSession and incremented only in EndLayer;
+    // it is not modified within TraceLayer, so the expression below is stable.
+    if (!first_ms && (impl_->ms_idx + 1u == impl_->spec.scene->ms_.size())) {
+      const size_t exit_cap = ComputeOutCap(total_ray_num, impl_->spec.scene->max_hits_);
+      impl_->EnsureExitBuffers(exit_cap);
     }
 
     // Partition the layer's rays across crystal populations. Matches
