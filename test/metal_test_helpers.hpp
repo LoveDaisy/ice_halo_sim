@@ -91,6 +91,19 @@ inline SceneConfig MakeMetalScene(size_t max_hits, size_t ms_layers) {
   return scene;
 }
 
+// scrum-258.3 Step 6: per-layer filter+prob tests need explicit prob control.
+// Uniform prob across all layers — for prob=0/1 boundary tests and prob=0.5
+// split direction tests. Crystal/filter setup mirrors MakeMetalScene so the
+// existing fast e2e + parity harness stays compatible.
+inline SceneConfig MakeMetalSceneWithProb(size_t max_hits, size_t ms_layers,
+                                          float prob) {
+  SceneConfig scene = MakeMetalScene(max_hits, ms_layers);
+  for (auto& ms : scene.ms_) {
+    ms.prob_ = prob;
+  }
+  return scene;
+}
+
 // Multi-crystal MS scene for backend-multi-crystal-per-layer parity tests.
 // Each MS layer carries `crystal_count` populations with proportion 0.7 / 0.3
 // (non-uniform — exercises PartitionCrystalRayNum's largest-remainder path).

@@ -44,6 +44,7 @@ namespace {
 
 #if defined(__APPLE__)
 using metal_test::MakeMetalScene;
+using metal_test::MakeMetalSceneWithProb;
 using metal_test::MakeRectangularRender;
 using metal_test::ShouldSkipMetalTests;
 #endif
@@ -180,6 +181,143 @@ TEST(ExitRecordsTest, MetalBackendSingleMsFillsMetadata) {
       EXPECT_LT(rec.path.data_[k], 8u);
     }
   }
+}
+#endif  // __APPLE__
+
+// ============================== scrum-258.3: filter+prob ====================
+//
+// Per-layer filter+prob tests. Each test isolates one boundary of the legacy
+// simulator.cpp:425 CollectData semantics (filter-fail → drop, filter-pass +
+// rng<prob → continue/drop-at-final, filter-pass + rng>=prob → exit):
+//
+//   SingleMsProb1ZeroOutput        : prob=1.0 final layer → every filter-pass
+//                                    exit is "would continue" → 0 returned.
+//   MultiMsProb1ZeroOutput          : layer 0 prob=1.0 → all continue (no
+//                                    mid-exit); layer 1 prob=1.0 → all
+//                                    "would continue" dropped → 0 returned.
+//   MultiMsProb0AllMidExits         : layer 0 prob=0.0 → all rays mid-exit on
+//                                    layer 0 (ms_layer_idx==0); layer 1 has
+//                                    zero input → 0 final-layer exits.
+//   MultiMsMidLayerSplit            : default 2-layer scene (layer 0 prob=0.6,
+//                                    layer 1 prob=0.0) → BOTH ms_layer_idx==0
+//                                    AND ms_layer_idx==1 records present —
+//                                    proves rng<prob → continue (mid+final
+//                                    split direction is correct).
+
+#if defined(__APPLE__)
+namespace {
+
+inline std::vector<ExitRayRecord> RunMetalExitRays(const SceneConfig& scene,
+                                                    const RenderConfig& render,
+                                                    uint32_t seed = 42) {
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = seed;
+
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  MetalTraceBackend metal;
+  metal.BeginSession(spec);
+  RootRaySource src = RootRaySource::FromHost(host);
+  for (size_t layer = 0; layer < scene.ms_.size(); layer++) {
+    auto h = metal.TraceLayer(src);
+    if (layer + 1 < scene.ms_.size()) {
+      src = metal.Recombine(std::move(h), RecombineSpec{ /*shuffle=*/false });
+    }
+  }
+  std::vector<ExitRayRecord> records;
+  metal.ReadbackExitRays(records);
+  metal.EndSession();
+  return records;
+}
+
+}  // namespace
+
+TEST(ExitRecordsTest, MetalBackendSingleMsProb1ZeroOutput) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  auto scene = MakeMetalSceneWithProb(kMaxHits, /*ms_layers=*/1, /*prob=*/1.0f);
+  auto render = MakeRectangularRender();
+  auto records = RunMetalExitRays(scene, render);
+  // prob=1.0 on the (only) final layer: every filter-pass exit gets
+  // rng<1.0 → would-continue → dropped (no next layer). Mirrors legacy
+  // CollectData behaviour at prob=1.0.
+  EXPECT_EQ(records.size(), 0u)
+      << "single-MS prob=1.0 should drop every final-layer exit";
+}
+
+TEST(ExitRecordsTest, MetalBackendMultiMsProb1ZeroOutput) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  auto scene = MakeMetalSceneWithProb(kMaxHits, /*ms_layers=*/2, /*prob=*/1.0f);
+  auto render = MakeRectangularRender();
+  auto records = RunMetalExitRays(scene, render);
+  // Layer 0 prob=1.0: all filter-pass → rng<1.0 → continue (no mid-exit).
+  // Layer 1 prob=1.0: all filter-pass → rng<1.0 → would-continue dropped.
+  EXPECT_EQ(records.size(), 0u)
+      << "multi-MS prob=1.0 on both layers should produce no exits";
+}
+
+TEST(ExitRecordsTest, MetalBackendMultiMsProb0AllMidExits) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  auto scene = MakeMetalSceneWithProb(kMaxHits, /*ms_layers=*/2, /*prob=*/0.0f);
+  auto render = MakeRectangularRender();
+  auto records = RunMetalExitRays(scene, render);
+  // Layer 0 prob=0.0: rng<0.0 never true → every filter-pass → mid-exit on
+  // layer 0 (ms_layer_idx==0). Layer 1 has zero continuation input → zero
+  // final-layer exits.
+  ASSERT_GT(records.size(), 0u)
+      << "multi-MS prob=0.0 should emit all rays as layer-0 mid-exits";
+  size_t mid_cnt = 0;
+  size_t other_cnt = 0;
+  for (const auto& rec : records) {
+    if (rec.ms_layer_idx == 0u) {
+      mid_cnt++;
+    } else {
+      other_cnt++;
+    }
+  }
+  EXPECT_EQ(other_cnt, 0u)
+      << "no final-layer exits expected when prob=0.0 sinks everything to mid";
+  EXPECT_EQ(mid_cnt, records.size());
+}
+
+TEST(ExitRecordsTest, MetalBackendMultiMsMidLayerSplit) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  // MakeMetalScene: layer 0 prob=0.6 → ~60% continue / ~40% mid-exit
+  //                                    (ms_layer_idx=0)
+  //                 layer 1 prob=0.0 → 100% final-layer exits (ms_layer_idx=1)
+  // This is the canonical "rng<prob → continue direction is correct" check:
+  // if Step 4/5 swapped the prob comparator (rng>=prob → continue), mid_cnt
+  // would still be > 0 by symmetry but final_cnt would collapse to zero
+  // (continued rays drop to ~0 instead of ~60%).
+  auto scene = MakeMetalScene(kMaxHits, /*ms_layers=*/2);
+  auto render = MakeRectangularRender();
+  auto records = RunMetalExitRays(scene, render);
+  ASSERT_GT(records.size(), 0u);
+  size_t mid_cnt = 0;
+  size_t final_cnt = 0;
+  for (const auto& rec : records) {
+    if (rec.ms_layer_idx == 0u) {
+      mid_cnt++;
+    } else if (rec.ms_layer_idx == 1u) {
+      final_cnt++;
+    }
+  }
+  EXPECT_GT(mid_cnt, 0u) << "expected mid-layer exits from layer 0 (prob=0.6)";
+  EXPECT_GT(final_cnt, 0u)
+      << "expected final-layer exits from layer 1 (continued rays)";
 }
 #endif  // __APPLE__
 
