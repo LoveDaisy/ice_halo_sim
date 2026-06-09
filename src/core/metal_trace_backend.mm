@@ -21,10 +21,13 @@
 #include "config/sim_data.hpp"
 #include "core/color_util.hpp"
 #include "core/crystal.hpp"
+#include "core/exit_seam.hpp"
+#include "core/filter_spec.hpp"
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
 #include "core/metal_trace_backend.hpp"
 #include "core/projection.hpp"
+#include "core/raypath.hpp"
 #include "core/scatter_accum.hpp"
 #include "core/simulator.hpp"  // PartitionCrystalRayNum
 #include "core/trace_ops.hpp"
@@ -109,6 +112,14 @@ kernel void trace_layer_kernel(
     device ushort*         exit_crystal_id    [[buffer(21)]],
     device uchar*          exit_face_seq_len  [[buffer(22)]],
     device uchar*          exit_face_seq_data [[buffer(23)]],
+    // Cont metadata (scrum-258.3 Step 2): per-cont-ray crystal_id + face
+    // sequence, written by ms_mode==1 exit branch in parallel with out_d/w/tf.
+    // Read host-side by CopyContSliceToRootBuf to apply per-ray filter + prob.
+    // ms_mode==0 dispatches bind these to non-nil dummy buffers; kernel never
+    // writes through them on that path.
+    device ushort*         cont_crystal_id    [[buffer(24)]],
+    device uchar*          cont_face_seq_len  [[buffer(25)]],
+    device uchar*          cont_face_seq_data [[buffer(26)]],
     uint tid [[thread_position_in_grid]]) {
   if (tid >= prm.num_rays) { return; }
 
@@ -232,6 +243,17 @@ kernel void trace_layer_kernel(
             out_p[slot * 3u + 2u] = centroid[ef * 3u + 2u];
             out_w[slot] = cw;
             out_tf[slot] = ushort(ef);
+            // Cont metadata (scrum-258.3 Step 2): record this cont ray's
+            // {crystal_id, face_seq} in parallel buffers so the host hop
+            // (CopyContSliceToRootBuf) can drive filter + prob without a
+            // device→host round-trip. crystal_id == prm.crystal_id (the ci
+            // for THIS dispatch); seq_len bounded by prm.face_seq_cap.
+            cont_crystal_id[slot] = ushort(prm.crystal_id);
+            uint cseq_len = min(rec_len, prm.face_seq_cap);
+            cont_face_seq_len[slot] = uchar(cseq_len);
+            for (uint k = 0u; k < cseq_len; k++) {
+              cont_face_seq_data[slot * prm.face_seq_cap + k] = uchar(path[k]);
+            }
           }
           atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
           atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
@@ -479,6 +501,15 @@ struct MetalTraceBackend::Impl {
   id<MTLBuffer> cont_p[2]  = { nil, nil };
   id<MTLBuffer> cont_w[2]  = { nil, nil };
   id<MTLBuffer> cont_tf[2] = { nil, nil };
+  // Cont metadata (scrum-258.3 Step 1): per-cont-ray {crystal_id, face_seq}
+  // written by kernel ms_mode==1 branch in parallel with cont_d/p/w/tf, so the
+  // host hop (CopyContSliceToRootBuf) can apply per-ray filter + prob without a
+  // new device→host round-trip. Stride of cont_face_seq_data_buf = face_seq_cap_
+  // (set in BeginSession from scene.max_hits_); EnsureContBuffer sizes all three
+  // in lock-step with cont_d/p/w/tf.
+  id<MTLBuffer> cont_crystal_id_buf[2]    = { nil, nil };
+  id<MTLBuffer> cont_face_seq_len_buf[2]  = { nil, nil };
+  id<MTLBuffer> cont_face_seq_data_buf[2] = { nil, nil };
   size_t        cont_capacity[2] = { 0, 0 };
   size_t        cont_counts[2]   = { 0, 0 };
   size_t        out_cap = 0;
@@ -514,6 +545,28 @@ struct MetalTraceBackend::Impl {
   id<MTLBuffer> exit_face_seq_data_buf = nil;
   uint32_t      face_seq_cap_ = 0;
 
+  // Per-layer-exit-processing (scrum-258.3): host-side mirrors of legacy
+  // simulator.cpp:425 CollectData. Each non-final layer writes the ci →
+  // Crystal/AxisDistribution/FilterConfig mapping into hop_*_[out_slot] (ping-
+  // pong on ms_idx & 1), so CopyContSliceToRootBuf reads them via
+  // cont_crystal_id_buf[in_slot] in the layer-boundary host hop. The final
+  // layer writes its own ci → ... mapping into last_layer_* for
+  // ReadbackExitRays.
+  std::vector<Crystal>            hop_crystals_[2];
+  std::vector<AxisDistribution>   hop_axis_dists_[2];
+  std::vector<FilterConfig>       hop_filter_configs_[2];
+  float                           hop_ms_prob_[2]      = { 0.0f, 0.0f };
+  uint8_t                         hop_ms_layer_idx_[2] = { 0u, 0u };
+  std::vector<Crystal>            last_layer_crystals_;
+  std::vector<AxisDistribution>   last_layer_axis_dists_;
+  std::vector<FilterConfig>       last_layer_filter_configs_;
+  float                           last_ms_prob_      = 0.0f;
+  uint8_t                         last_ms_layer_idx_ = 0u;
+  // Mid-layer exits accumulated across non-final layers (legacy CollectData
+  // mirror: filter-pass + rng >= ms_info.prob_ → emit outgoing in *this* layer).
+  // Drained + merged with the final-layer exits in ReadbackExitRays.
+  std::vector<ExitRayRecord> accumulated_mid_exits_;
+
   // Layer dispatch helpers.
   void EnsureDevice();
   void EnsurePso();
@@ -528,7 +581,7 @@ struct MetalTraceBackend::Impl {
                                 const HostRayBatch& host_batch);
   size_t GenerateFirstLayerRootsForCi(const ScatteringSetting& setting,
                                       size_t ci, size_t crystal_ray_num);
-  void CopyContSliceToRootBuf(const ScatteringSetting& setting, size_t ci_start, size_t ci_n, int in_slot);
+  size_t CopyContSliceToRootBuf(const ScatteringSetting& setting, size_t ci_start, size_t ci_n, int in_slot);
   void DispatchLayer(size_t num_rays,
                      id<MTLBuffer> r_d, id<MTLBuffer> r_p,
                      id<MTLBuffer> r_w, id<MTLBuffer> r_tf,
@@ -655,6 +708,19 @@ void MetalTraceBackend::Impl::EnsureContBuffer(int slot) {
   cont_tf[slot] = [device newBufferWithLength:out_cap * sizeof(uint16_t)
                                       options:MTLResourceStorageModeShared];
   assert(cont_tf[slot] != nil);
+  // Cont metadata (scrum-258.3 Step 1): sized in lock-step with cont_d/p/w/tf.
+  // face_seq_cap_ MUST be set by BeginSession before TraceLayer reaches here.
+  assert(face_seq_cap_ > 0u && "BeginSession must set face_seq_cap_ before EnsureContBuffer");
+  cont_crystal_id_buf[slot] = [device newBufferWithLength:out_cap * sizeof(uint16_t)
+                                                  options:MTLResourceStorageModeShared];
+  assert(cont_crystal_id_buf[slot] != nil);
+  cont_face_seq_len_buf[slot] = [device newBufferWithLength:out_cap * sizeof(uint8_t)
+                                                    options:MTLResourceStorageModeShared];
+  assert(cont_face_seq_len_buf[slot] != nil);
+  cont_face_seq_data_buf[slot] =
+      [device newBufferWithLength:out_cap * static_cast<size_t>(face_seq_cap_) * sizeof(uint8_t)
+                          options:MTLResourceStorageModeShared];
+  assert(cont_face_seq_data_buf[slot] != nil);
 }
 
 void MetalTraceBackend::Impl::EnsureRecSink(size_t n) {
@@ -780,44 +846,144 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
   return n;
 }
 
-void MetalTraceBackend::Impl::CopyContSliceToRootBuf(const ScatteringSetting& setting,
-                                                     size_t ci_start, size_t ci_n, int in_slot) {
-  // Inter-layer frame transit (DESIGN D3 / mirrors CPU InitRayOtherMs).
-  // Step 1 made the kernel export continuation DIRECTIONS in WORLD space. For
-  // the next layer — a possibly different crystal — we must (like the CPU's
-  // InitRayOtherMs, simulator.cpp:199-210):
-  //   1) resample a fresh per-ray crystal orientation (InitRay_rot),
-  //   2) rotate the world-space direction into the NEW crystal-local frame
-  //      (ApplyInverse), and
-  //   3) resample the entry point + hit face on the NEW crystal (InitRay_p_fid),
-  // then upload d/p/tf + the new per-ray rotation matrix. The previous layer's
-  // continuation p/to_face are intentionally discarded (the kernel's centroid/
-  // argmax-facing export is a placeholder) — only the world-space direction and
-  // weight carry across the seam, matching the CPU frame chain exactly.
+size_t MetalTraceBackend::Impl::CopyContSliceToRootBuf(const ScatteringSetting& setting,
+                                                       size_t ci_start, size_t ci_n, int in_slot) {
+  // Inter-layer host hop. Two responsibilities:
+  //
+  //  (A) Frame transit (DESIGN D3 / mirrors CPU InitRayOtherMs).
+  //      Step 1 made the kernel export continuation DIRECTIONS in WORLD space.
+  //      For the next layer — possibly a different crystal — we (per
+  //      InitRayOtherMs, simulator.cpp:199-210):
+  //        1) resample a fresh per-ray crystal orientation (InitRay_rot),
+  //        2) rotate the world-space direction into the NEW crystal-local frame
+  //           (ApplyInverse), and
+  //        3) resample the entry point + hit face on the NEW crystal
+  //           (InitRay_p_fid),
+  //      then upload d/p/tf + the new per-ray rotation matrix.
+  //
+  //  (B) Per-layer filter + prob (scrum-258.3 Step 4). Mirrors legacy
+  //      simulator.cpp:425 CollectData:
+  //        filter-fail              → drop
+  //        filter-pass && rng<prob  → continue (write to root_*_buf)
+  //        filter-pass && rng>=prob → mid-layer exit (push into
+  //                                   accumulated_mid_exits_, drained by
+  //                                   ReadbackExitRays)
+  //      Filter input comes from hop_crystals_[in_slot] / hop_axis_dists_ /
+  //      hop_filter_configs_ (populated by the PREVIOUS layer's ci loop);
+  //      face sequence + crystal_id come from cont_face_seq_*_buf[in_slot] /
+  //      cont_crystal_id_buf[in_slot] (populated by the previous layer's
+  //      kernel ms_mode==1 branch).
+  //
+  // The function returns the actual continuation count after filter+prob; the
+  // caller substitutes this for the previous unconditional `ci_n`. Mid-layer
+  // exits and discards do NOT advance the root-buffer write index.
   //
   // `current_crystal` is the THIS-layer crystal, already resolved by
   // ResolveLayerCrystalForCi before this call. `rng` is the session RNG member
   // (seeded in BeginSession), reused exactly as GenerateFirstLayerRootsForCi /
-  // ResolveLayerCrystalForCi do, so the resample is deterministic under seed.
-  const float* src_d = static_cast<const float*>([cont_d[in_slot] contents]) + ci_start * 3;
-  const float* src_w = static_cast<const float*>([cont_w[in_slot] contents]) + ci_start;
+  // ResolveLayerCrystalForCi do.
+  const float*    src_d  = static_cast<const float*>([cont_d[in_slot] contents]) + ci_start * 3;
+  const float*    src_w  = static_cast<const float*>([cont_w[in_slot] contents]) + ci_start;
+  const uint16_t* src_cid =
+      static_cast<const uint16_t*>([cont_crystal_id_buf[in_slot] contents]) + ci_start;
+  const uint8_t*  src_seq_len =
+      static_cast<const uint8_t*>([cont_face_seq_len_buf[in_slot] contents]) + ci_start;
+  const uint8_t*  src_seq_data =
+      static_cast<const uint8_t*>([cont_face_seq_data_buf[in_slot] contents])
+      + ci_start * static_cast<size_t>(face_seq_cap_);
+  const size_t    seq_stride = static_cast<size_t>(face_seq_cap_);
 
-  // workspace[2] only because InitRay_rot takes RayBuffer[2]; the second slot is
-  // unused by InitRay_rot/InitRay_p_fid, so it is left default-constructed
-  // (capacity 0) rather than allocated for ci_n rays.
+  // Per-ci filter cache. Same crystal_id (src_cid[i]) repeats across the
+  // ci slice, so build FilterSpec once per crystal and reuse — avoids
+  // reconstructing the spec for every ray (review Suggestion 1).
+  const size_t crystal_cnt = hop_crystals_[in_slot].size();
+  std::vector<std::unique_ptr<FilterSpec>> spec_per_ci(crystal_cnt);
+  for (size_t k = 0; k < crystal_cnt; k++) {
+    spec_per_ci[k] = FilterSpec::Create(hop_filter_configs_[in_slot][k],
+                                         hop_crystals_[in_slot][k],
+                                         hop_axis_dists_[in_slot][k]);
+  }
+  const float src_ms_prob = hop_ms_prob_[in_slot];
+  const uint8_t src_ms_layer_idx = hop_ms_layer_idx_[in_slot];
+
+  // First pass: filter + prob → partition into (continue) / (mid-exit) /
+  // (drop). Continuation rays are staged into a transient workspace and then
+  // run through the frame-transit InitRay_rot / InitRay_p_fid chain in bulk.
   RayBuffer workspace[2]{};
   workspace[0].Reset(ci_n);
-  workspace[0].size_ = ci_n;
+  workspace[0].size_ = 0;
+  size_t n_continue = 0;
   for (size_t i = 0; i < ci_n; i++) {
-    RaySeg& r = workspace[0][i];
+    uint16_t crystal_id = src_cid[i];
+    assert(crystal_id < crystal_cnt && "cont crystal_id out of range — hop_crystals_ undersized");
+    if (crystal_id >= crystal_cnt) {
+      continue;  // safety: skip stray records
+    }
+
+    // Build {RaySeg, RaypathRecorder} for filter Check (world-space d/p, like
+    // legacy CollectData post-Apply). to_face_ = kInvalidId because this is an
+    // outgoing candidate from the previous layer (the kernel signaled "no
+    // continuation polygon hit" by writing to the cont buffer in ms_mode==1).
+    RaySeg r{};
     r.d_[0] = src_d[i * 3 + 0];
     r.d_[1] = src_d[i * 3 + 1];
-    r.d_[2] = src_d[i * 3 + 2];  // world-space continuation direction (Step 1)
+    r.d_[2] = src_d[i * 3 + 2];
     r.w_ = src_w[i];
+    r.to_face_ = kInvalidId;
+    r.is_continue_ = false;
+    // Mirror legacy InitRay_other_info: crystal_config_id_ comes from the
+    // producing crystal's config_id_. MakeCrystal leaves config_id_ at
+    // kInvalidId (crystal.hpp:287) unless explicitly assigned; this matches
+    // legacy semantics so CrystalSpec filter behaves the same on both paths.
+    const Crystal& src_crystal = hop_crystals_[in_slot][crystal_id];
+    r.crystal_config_id_ = src_crystal.config_id_;
+
+    RaypathRecorder rec{};
+    uint8_t seq_len = src_seq_len[i];
+    if (seq_len > RaypathRecorder::kInlineCap) {
+      seq_len = RaypathRecorder::kInlineCap;
+    }
+    rec.size_ = seq_len;
+    rec.overflow_idx_ = RaypathRecorder::kNoOverflow;  // 0xFFFFu, inline-only
+    std::memcpy(rec.data_, src_seq_data + i * seq_stride, seq_len);
+
+    const FilterSpec* spec = spec_per_ci[crystal_id].get();
+    bool filter_pass = (spec == nullptr) || spec->Check(r, rec, nullptr);
+    if (!filter_pass) {
+      continue;  // discard
+    }
+    if (rng.GetUniform() < src_ms_prob) {
+      // Continue: stage into workspace[0] for the frame-transit chain below.
+      // workspace[0].size_ is the packed write index — discards/mid-exits do
+      // NOT advance it, so the continuation slice stays contiguous.
+      RaySeg& wr = workspace[0][workspace[0].size_];
+      wr = r;  // copies d/w/to_face/is_continue/crystal_config_id
+      workspace[0].size_++;
+      n_continue++;
+    } else {
+      // Mid-layer exit: emit as an ExitRayRecord tagged with the PRODUCING
+      // layer's ms_idx (hop_ms_layer_idx_[in_slot]). ReadbackExitRays drains
+      // and merges with last-layer exits at session end.
+      ExitRayRecord mid_rec{};
+      mid_rec.dir[0] = r.d_[0];
+      mid_rec.dir[1] = r.d_[1];
+      mid_rec.dir[2] = r.d_[2];
+      mid_rec.weight = r.w_;
+      mid_rec.crystal_id = crystal_id;
+      mid_rec.ms_layer_idx = src_ms_layer_idx;
+      mid_rec.path.size_ = seq_len;
+      std::memcpy(mid_rec.path.data_, rec.data_, seq_len);
+      accumulated_mid_exits_.push_back(mid_rec);
+    }
   }
 
+  if (n_continue == 0) {
+    return 0;
+  }
+
+  // Frame-transit chain on the packed continuation slice (n_continue rays).
   InitRay_rot(rng, setting.crystal_.axis_, workspace);
-  for (size_t i = 0; i < ci_n; i++) {
+  for (size_t i = 0; i < n_continue; i++) {
     workspace[0][i].crystal_rot_.ApplyInverse(workspace[0][i].d_);
   }
   InitRay_p_fid(current_crystal, &workspace[0]);
@@ -827,7 +993,7 @@ void MetalTraceBackend::Impl::CopyContSliceToRootBuf(const ScatteringSetting& se
   auto* w_ptr   = static_cast<float*>([root_w_buf contents]);
   auto* tf_ptr  = static_cast<uint16_t*>([root_tf_buf contents]);
   auto* rot_ptr = static_cast<float*>([root_rot_buf contents]);
-  for (size_t i = 0; i < ci_n; i++) {
+  for (size_t i = 0; i < n_continue; i++) {
     const RaySeg& r = workspace[0][i];
     d_ptr[i * 3 + 0] = r.d_[0];
     d_ptr[i * 3 + 1] = r.d_[1];
@@ -839,6 +1005,7 @@ void MetalTraceBackend::Impl::CopyContSliceToRootBuf(const ScatteringSetting& se
     tf_ptr[i] = static_cast<uint16_t>(r.to_face_);
     std::memcpy(rot_ptr + i * 9, r.crystal_rot_.GetMat(), 9 * sizeof(float));
   }
+  return n_continue;
 }
 
 void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
@@ -935,6 +1102,15 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   [enc setBuffer:exit_crystal_id_buf     offset:0 atIndex:21];
   [enc setBuffer:exit_face_seq_len_buf   offset:0 atIndex:22];
   [enc setBuffer:exit_face_seq_data_buf  offset:0 atIndex:23];
+  // Cont metadata (scrum-258.3 Step 2): bound for both ms_mode==0 and
+  // ms_mode==1 dispatches. ms_mode==0 doesn't take the out_d/p/w/tf write
+  // branch, so cont_crystal_id_buf[out_slot] etc. are never written through —
+  // but Metal still requires non-nil buffer bindings. The grow-only
+  // EnsureContBuffer(out_slot) above guarantees these are sized (>= 1 elem)
+  // before this dispatch.
+  [enc setBuffer:cont_crystal_id_buf[out_slot]    offset:0 atIndex:24];
+  [enc setBuffer:cont_face_seq_len_buf[out_slot]  offset:0 atIndex:25];
+  [enc setBuffer:cont_face_seq_data_buf[out_slot] offset:0 atIndex:26];
 
   NSUInteger tg = std::min<NSUInteger>(256, pso.maxTotalThreadsPerThreadgroup);
   [enc dispatchThreads:MTLSizeMake(num_rays, 1, 1)
@@ -1005,6 +1181,23 @@ void MetalTraceBackend::Impl::Reset() {
   // scrum-258.2: face_seq_cap_ is re-derived per BeginSession from
   // scene.max_hits_; clear to make a session-mid leak obvious.
   face_seq_cap_ = 0;
+  // scrum-258.3: per-layer filter+prob state. hop_*_/last_layer_* are
+  // populated by TraceLayer's ci loop in the next session; clear here so a
+  // stale layer's settings cannot bleed across sessions if BeginSession
+  // skips re-assigning a particular slot.
+  for (int s = 0; s < 2; s++) {
+    hop_crystals_[s].clear();
+    hop_axis_dists_[s].clear();
+    hop_filter_configs_[s].clear();
+    hop_ms_prob_[s] = 0.0f;
+    hop_ms_layer_idx_[s] = 0u;
+  }
+  last_layer_crystals_.clear();
+  last_layer_axis_dists_.clear();
+  last_layer_filter_configs_.clear();
+  last_ms_prob_ = 0.0f;
+  last_ms_layer_idx_ = 0u;
+  accumulated_mid_exits_.clear();
   spec = SessionSpec{};
 }
 
@@ -1068,6 +1261,10 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   impl_->cont_counts[0] = 0;
   impl_->cont_counts[1] = 0;
   impl_->out_cap = 0;
+  // scrum-258.3 Step 4: drain mid-layer exits accumulated by the previous
+  // session (paranoia; Reset already clears it, but BeginSession is the
+  // session entry and the canonical place to guarantee empty state).
+  impl_->accumulated_mid_exits_.clear();
   // Exit metadata (scrum-258.2): per-slot stride of buffer(23). Real configs
   // have max_hits ≤ ExitFaceSeq::kCap (7-8 in practice), so the min() clamp
   // is defensive against a future scene bumping max_hits beyond 15. Set BEFORE
@@ -1137,6 +1334,28 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     impl_->last_stats = LayerStats{};
     impl_->cont_counts[out_slot] = 0;
 
+    // scrum-258.3 Step 3: per-layer filter+prob hop state. Non-final layers
+    // populate hop_*_[out_slot] (read back by the NEXT layer's
+    // CopyContSliceToRootBuf via the ping-pong slot indirection); the final
+    // layer populates last_layer_* (read by ReadbackExitRays).
+    if (last_layer) {
+      impl_->last_layer_crystals_.resize(crystal_cnt);
+      impl_->last_layer_axis_dists_.resize(crystal_cnt);
+      impl_->last_layer_filter_configs_.resize(crystal_cnt);
+      impl_->last_ms_prob_ = ms_info.prob_;
+      impl_->last_ms_layer_idx_ = static_cast<uint8_t>(impl_->ms_idx);
+    } else {
+      impl_->hop_crystals_[out_slot].resize(crystal_cnt);
+      impl_->hop_axis_dists_[out_slot].resize(crystal_cnt);
+      impl_->hop_filter_configs_[out_slot].resize(crystal_cnt);
+      impl_->hop_ms_prob_[out_slot] = ms_info.prob_;
+      // ms_layer_idx records the layer that PRODUCED this cont, i.e. impl_->ms_idx
+      // (the current layer). The next layer reads it via in_slot and tags any
+      // mid-exit emitted there with the producing layer's index. ReadbackExitRays
+      // then merges those mid-exits with last-layer exits without a -1 adjustment.
+      impl_->hop_ms_layer_idx_[out_slot] = static_cast<uint8_t>(impl_->ms_idx);
+    }
+
     size_t ci_start = 0;  // running offset into the previous-layer
                           // continuation buffer (non-first_ms only)
     for (size_t ci = 0; ci < crystal_cnt; ci++) {
@@ -1149,14 +1368,35 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       impl_->ResolveLayerCrystalForCi(setting, use_host,
                                        first_ms ? roots.host : HostRayBatch{});
 
+      // scrum-258.3 Step 3: store per-ci crystal + axis + filter for use by
+      // the host hop (CopyContSliceToRootBuf on the next layer, or
+      // ReadbackExitRays for the final layer). current_crystal was just
+      // resolved by ResolveLayerCrystalForCi.
+      if (last_layer) {
+        impl_->last_layer_crystals_[ci] = impl_->current_crystal;
+        impl_->last_layer_axis_dists_[ci] = setting.crystal_.axis_;
+        impl_->last_layer_filter_configs_[ci] = setting.filter_;
+      } else {
+        impl_->hop_crystals_[out_slot][ci] = impl_->current_crystal;
+        impl_->hop_axis_dists_[out_slot][ci] = setting.crystal_.axis_;
+        impl_->hop_filter_configs_[out_slot][ci] = setting.filter_;
+      }
+
       size_t in_count = 0;
       if (first_ms) {
         in_count = impl_->GenerateFirstLayerRootsForCi(setting, ci, ci_n);
       } else {
         // Stage this ci's slice of the prior continuation buffer into the
         // root buffers so the kernel reads a contiguous, aligned input.
-        impl_->CopyContSliceToRootBuf(setting, ci_start, ci_n, in_slot);
-        in_count = ci_n;
+        // scrum-258.3 Step 4: CopyContSliceToRootBuf now applies per-ray
+        // filter + prob and returns the actual continuation count. Skip the
+        // DispatchLayer if filter+prob filtered everything (mirrors the
+        // existing `if (ci_n == 0) continue` guard above).
+        in_count = impl_->CopyContSliceToRootBuf(setting, ci_start, ci_n, in_slot);
+        ci_start += ci_n;
+        if (in_count == 0) {
+          continue;
+        }
       }
 
       // counter_init = current cumulative write offset; ci=0 starts at 0,
@@ -1170,7 +1410,9 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
                            ms_mode, out_slot, counter_init,
                            static_cast<uint32_t>(ci),
                            static_cast<uint32_t>(impl_->ms_idx));
-      ci_start += ci_n;
+      // ci_start was incremented above inside the !first_ms branch (before
+      // the in_count==0 continue), so the next ci reads the correct slice
+      // even if this ci's filter+prob dropped everything.
     }
 
     size_t produced = last_layer ? 0u : impl_->cont_counts[out_slot];
@@ -1208,15 +1450,25 @@ void MetalTraceBackend::ReadbackImage(XyzImageData& out) {
   std::memcpy(out.data, [impl_->xyz_image contents], pix * 3 * sizeof(float));
 }
 
-// Exit seam (scrum-258.1/258.2): assemble rich ExitRayRecords from the
-// device-side parallel buffers (exit_ray_d/w_buf + Step 4 metadata buffers).
-// Overflow (slot > capacity) is logged and clamped; ComputeOutCap is the
-// same fan-out bound the continuation buffers use, so single-MS overflow is
-// structurally impossible.
+// Exit seam (scrum-258.1/258.2/258.3): assemble rich ExitRayRecords.
+//
+// 258.3 makes per-layer filter+prob the seam's responsibility, mirroring legacy
+// simulator.cpp:425 CollectData per-layer:
+//   final-layer exits   : filter + prob applied here in ReadbackExitRays (the
+//                         GPU kernel exports every geometric exit, this gate
+//                         drops filter-fails and the rng<prob "would continue"
+//                         fraction).
+//   mid-layer exits     : already filtered + prob-gated by
+//                         CopyContSliceToRootBuf; accumulated into
+//                         impl_->accumulated_mid_exits_ across non-final layers
+//                         and drained + appended here.
+// Overflow (produced > capacity) on the final-layer exit ring is logged and
+// clamped; ComputeOutCap is the same fan-out bound the continuation buffers
+// use, so structurally rare.
 size_t MetalTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
   assert(impl_->in_session);
+  out.clear();
   if (impl_->exit_slot_buf == nil) {
-    out.clear();
     return 0;
   }
   uint32_t produced = *static_cast<uint32_t*>([impl_->exit_slot_buf contents]);
@@ -1226,35 +1478,81 @@ size_t MetalTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
                "MetalTraceBackend: exit-ray overflow produced={} exit_cap={} (clamped)",
                produced, impl_->exit_ray_capacity);
   }
-  out.resize(count);
   const auto* d_ptr        = static_cast<const float*>([impl_->exit_ray_d_buf contents]);
   const auto* w_ptr        = static_cast<const float*>([impl_->exit_ray_w_buf contents]);
   const auto* cid_ptr      = static_cast<const uint16_t*>([impl_->exit_crystal_id_buf contents]);
   const auto* seq_len_ptr  = static_cast<const uint8_t*>([impl_->exit_face_seq_len_buf contents]);
   const auto* seq_data_ptr = static_cast<const uint8_t*>([impl_->exit_face_seq_data_buf contents]);
   const size_t stride      = impl_->face_seq_cap_;
-  // ms_layer_idx: in single-MS (ms_mode==0) every exit slot is written in
-  // the final layer; multi-MS mid-layer exits are NOT exported from kernel
-  // in 258.2 (only the final layer's exit_slot fires), so the host
-  // reconstruction uses the last-traced layer index. 258.3 will reconstruct
-  // per-slot ms_layer_idx from device-side records when mid-layer exit is
-  // exported.
-  const uint8_t final_ms_layer = static_cast<uint8_t>(
-      impl_->spec.scene->ms_.empty() ? 0 : impl_->spec.scene->ms_.size() - 1);
-  for (size_t i = 0; i < count; i++) {
-    ExitRayRecord rec{};
-    rec.dir[0]      = d_ptr[i * 3 + 0];
-    rec.dir[1]      = d_ptr[i * 3 + 1];
-    rec.dir[2]      = d_ptr[i * 3 + 2];
-    rec.weight      = w_ptr[i];
-    rec.crystal_id  = cid_ptr[i];
-    rec.ms_layer_idx = final_ms_layer;
-    uint8_t seq_len = std::min<uint8_t>(seq_len_ptr[i], ExitFaceSeq::kCap);
-    rec.path.size_  = seq_len;
-    std::memcpy(rec.path.data_, seq_data_ptr + i * stride, seq_len);
-    out[i] = rec;
+
+  // Per-ci FilterSpec cache for the final layer. Same crystal_id repeats
+  // across exits; build each spec once.
+  const size_t last_cnt = impl_->last_layer_crystals_.size();
+  std::vector<std::unique_ptr<FilterSpec>> spec_per_ci(last_cnt);
+  for (size_t k = 0; k < last_cnt; k++) {
+    spec_per_ci[k] = FilterSpec::Create(impl_->last_layer_filter_configs_[k],
+                                         impl_->last_layer_crystals_[k],
+                                         impl_->last_layer_axis_dists_[k]);
   }
-  return count;
+  const float    final_prob      = impl_->last_ms_prob_;
+  const uint8_t  final_ms_layer  = impl_->last_ms_layer_idx_;
+
+  out.reserve(count + impl_->accumulated_mid_exits_.size());
+  for (size_t i = 0; i < count; i++) {
+    uint16_t crystal_id = cid_ptr[i];
+    if (crystal_id >= last_cnt) {
+      continue;  // safety: skip stray records from a malformed kernel run
+    }
+
+    // Reconstruct {RaySeg, RaypathRecorder} for filter Check, mirroring
+    // CollectData post-Apply (d/p in world space, to_face_ = kInvalidId).
+    RaySeg r{};
+    r.d_[0] = d_ptr[i * 3 + 0];
+    r.d_[1] = d_ptr[i * 3 + 1];
+    r.d_[2] = d_ptr[i * 3 + 2];
+    r.w_ = w_ptr[i];
+    r.to_face_ = kInvalidId;
+    r.is_continue_ = false;
+    const Crystal& src_crystal = impl_->last_layer_crystals_[crystal_id];
+    r.crystal_config_id_ = src_crystal.config_id_;
+
+    RaypathRecorder rec{};
+    uint8_t seq_len = std::min<uint8_t>(seq_len_ptr[i], ExitFaceSeq::kCap);
+    rec.size_ = seq_len;
+    rec.overflow_idx_ = RaypathRecorder::kNoOverflow;
+    std::memcpy(rec.data_, seq_data_ptr + i * stride, seq_len);
+
+    const FilterSpec* spec = spec_per_ci[crystal_id].get();
+    bool filter_pass = (spec == nullptr) || spec->Check(r, rec, nullptr);
+    if (!filter_pass) {
+      continue;
+    }
+    // Legacy mirror: rng<prob → "would continue", but there is no next layer,
+    // so the ray is dropped (no outgoing emission). prob=1.0 therefore produces
+    // zero final-layer exits, which matches simulator.cpp:444 behaviour.
+    if (impl_->rng.GetUniform() < final_prob) {
+      continue;
+    }
+
+    ExitRayRecord erec{};
+    erec.dir[0] = r.d_[0];
+    erec.dir[1] = r.d_[1];
+    erec.dir[2] = r.d_[2];
+    erec.weight = r.w_;
+    erec.crystal_id = crystal_id;
+    erec.ms_layer_idx = final_ms_layer;
+    erec.path.size_ = seq_len;
+    std::memcpy(erec.path.data_, rec.data_, seq_len);
+    out.push_back(erec);
+  }
+
+  // Drain mid-layer exits accumulated by CopyContSliceToRootBuf across all
+  // non-final layers of this session.
+  for (const auto& mid_rec : impl_->accumulated_mid_exits_) {
+    out.push_back(mid_rec);
+  }
+  impl_->accumulated_mid_exits_.clear();
+  return out.size();
 }
 
 void MetalTraceBackend::EndSession() {
