@@ -40,6 +40,10 @@ class CpuTraceBackend : public TraceBackend {
   CpuTraceBackend();
   ~CpuTraceBackend() override = default;
 
+  // Seed contract: the first call with spec.seed != 0 seeds the RNG for
+  // this backend instance's entire lifetime; subsequent calls with
+  // spec.seed != 0 trigger an assertion. To use a different seed, destroy
+  // and recreate the backend.
   void BeginSession(const SessionSpec& spec) override;
   LayerHandlePtr TraceLayer(const RootRaySource& roots) override;
   RootRaySource Recombine(LayerHandlePtr handle, const RecombineSpec& spec) override;
@@ -92,7 +96,9 @@ class CpuTraceBackend : public TraceBackend {
   // batch would reset rng_ back to spec.seed, collapsing axis-sample
   // diversity to a single 128-ray sequence repeated thousands of times.
   // See progress.md DONE 2026-06-10 15:35 (task-filter-parity-rootcause-fix).
+  // To reseed, destroy and recreate the backend instance.
   bool seeded_ = false;
+  uint32_t seeded_seed_ = 0;  // seed value used when seeded_ was set
 };
 
 }  // namespace lumice

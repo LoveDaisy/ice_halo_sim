@@ -472,6 +472,7 @@ struct MetalTraceBackend::Impl {
   // BeginSession would otherwise reset rng every 128-ray batch and collapse
   // axis-sample diversity). progress.md DONE 2026-06-10 15:35.
   bool seeded = false;
+  uint32_t seeded_seed = 0;  // seed value used when seeded was set
 
   // Persistent crystal cache for the *current* TraceLayer (rebuilt per layer).
   Crystal current_crystal{};
@@ -1268,11 +1269,15 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
     impl_->max_abs_dz = 0.0f;
   }
 
-  // Seed RNGs once per backend lifetime — see CpuTraceBackend::BeginSession
-  // and progress.md DONE 2026-06-10 15:35 for the per-SimBatch reseed defect.
+  // Seed contract: first call with spec.seed != 0 seeds the RNG; repeated
+  // calls with the same seed are no-ops (normal per-SimBatch pattern).
+  // A different non-zero seed on the same backend instance is a programming
+  // error and triggers the assert. To reseed, destroy and recreate.
+  assert(!impl_->seeded || spec.seed == 0 || spec.seed == impl_->seeded_seed);
   if (spec.seed != 0 && !impl_->seeded) {
     impl_->rng.SetSeed(spec.seed);
     RandomNumberGenerator::GetInstance().SetSeed(spec.seed);
+    impl_->seeded_seed = spec.seed;
     impl_->seeded = true;
   }
 

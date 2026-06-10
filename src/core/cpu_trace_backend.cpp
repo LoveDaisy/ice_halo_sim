@@ -1,10 +1,7 @@
 #include "core/cpu_trace_backend.hpp"
 
 #include <algorithm>
-#include <atomic>
 #include <cassert>
-#include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <utility>
@@ -66,16 +63,16 @@ void TraceCrystalBatch(RandomNumberGenerator& rng, const Crystal& crystal, size_
   for (size_t cn = 0; cn < ci_ray_num; cn += kSmallBatchRayNum) {
     size_t curr_ray_num = std::min(kSmallBatchRayNum, ci_ray_num - cn);
 
-    // Capacity must hold cross-hit fan-out growth, NOT just one small batch's
-    // first level: across the max_hits hit loop a Normal ray can fan into two
-    // children that both stay inside the crystal, so the in-crystal ray count
-    // can exceed curr_ray_num. Size to the layer total *2, mirroring legacy
-    // Simulator::SimulateOneWavelength (simulator.cpp:692-693, `ray_num*2`
-    // reset once outside the ci loop). Reset() only re-allocates when capacity
-    // grows, so subsequent small batches just reset size_ and reuse storage.
-    // (Sizing to curr_ray_num*2 was the scrum-253.4 segfault root cause.)
+    // workspace[0]: CollectData refills it with Normal rays each hit
+    // iteration; capacity = layer_ray_num*2 allows up to 2× fan-out growth.
+    // workspace[1]: HitSurface fans each workspace[0] ray into 2 outputs.
+    // Worst case: workspace[0].size_ == layer_ray_num*2 - 1, so workspace[1]
+    // needs (layer_ray_num*2 - 1)*2 ≈ layer_ray_num*4. Using *2 here caused
+    // heap-buffer-overflow (scrum-258.x SIGABRT, diagnosed by ASan).
+    // Reset() only re-allocates when capacity grows; subsequent small batches
+    // reuse storage. (Sizing *2 for workspace[0] was the scrum-253.4 fix.)
     workspace[0].Reset(layer_ray_num * 2);
-    workspace[1].Reset(layer_ray_num * 2);
+    workspace[1].Reset(layer_ray_num * 4);
 
     if (first_ms) {
       InitRayFirstMs(rng, sun_param, wl_param, curr_ray_num,  //
@@ -155,6 +152,11 @@ void CpuTraceBackend::BeginSession(const SessionSpec& spec) {
   assert(!in_session_ && "BeginSession called on an already-open session");
   assert(spec.scene != nullptr && "SessionSpec.scene must be non-null");
   assert(spec.render != nullptr && "SessionSpec.render must be non-null");
+  // Cross-seed reuse: once seeded, spec.seed must be 0 (no reseed intent)
+  // or the same seed (repeated SimBatches within the same render). A
+  // different non-zero seed on the same instance would silently no-op;
+  // assert here to make that programming error visible at runtime.
+  assert(!seeded_ || spec.seed == 0 || spec.seed == seeded_seed_);
 
   spec_ = spec;
   in_session_ = true;
@@ -177,6 +179,7 @@ void CpuTraceBackend::BeginSession(const SessionSpec& spec) {
   if (spec.seed != 0 && !seeded_) {
     rng_.SetSeed(spec.seed);
     RandomNumberGenerator::GetInstance().SetSeed(spec.seed);
+    seeded_seed_ = spec.seed;
     seeded_ = true;
   }
 
@@ -265,17 +268,6 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
       crystal = MakeCrystal(rng_, setting.crystal_.param_);
       crystal_id = ci;
       refractive_index = crystal.GetRefractiveIndex(spec_.wl.wl_);
-    }
-
-    // WB-CRYSTAL probe (task-filter-parity-rootcause-fix M1/M2). Gated by env
-    // LUMICE_WB_CRYSTAL_LOG=1; first 64 events per process. Remove after M3
-    // ds_corr verification. See progress.md 2026-06-10 15:10.
-    if (const char* wb = std::getenv("LUMICE_WB_CRYSTAL_LOG"); wb && wb[0] == '1') {
-      static std::atomic<int> wb_count{ 0 };
-      if (wb_count.fetch_add(1, std::memory_order_relaxed) < 64) {
-        std::fprintf(stderr, "[WB][C] ms_idx=%zu ci=%zu ci_n=%zu crystal_id=%zu\n",
-                     static_cast<size_t>(ms_idx_), ci, ci_n, crystal_id);
-      }
     }
 
     auto filter_spec = FilterSpec::Create(setting.filter_, crystal, crystal_axis);
