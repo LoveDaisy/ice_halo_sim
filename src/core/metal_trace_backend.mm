@@ -614,6 +614,14 @@ void MetalTraceBackend::Impl::EnsurePso() {
   NSError* err = nil;
   NSString* src = [NSString stringWithUTF8String:kKernelSrc];
   MTLCompileOptions* opts = [MTLCompileOptions new];
+  // The kernel uses atomic_float (gated by __HAVE_ATOMIC_FLOAT__ which is
+  // defined only at MSL >= 3.0, see metal_atomic header). Without an explicit
+  // languageVersion, the runtime default depends on host process metadata and
+  // can fall back to MSL 2.x in ctypes-loaded dylib contexts (e.g. test
+  // harness driving liblumice.dylib via Python), causing "unknown type name
+  // 'atomic_float'" at newLibraryWithSource. Pin MSL 3.0 so the kernel
+  // compiles uniformly across CLI / unit_test / ctypes / GUI host processes.
+  opts.languageVersion = MTLLanguageVersion3_0;
   // Disable fast-math / contract-FMA so the kernel's mul-add sequences round
   // identically to the CPU backend's separate operations. Without this the
   // Metal compiler fuses (a*b + c) into fma(a, b, c), drifting from CPU by
