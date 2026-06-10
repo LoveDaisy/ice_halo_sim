@@ -28,7 +28,7 @@
     "max_hits": 7,
     "scattering": [
       {
-        "prob": 0.0,
+        "prob": 1.0,
         "entries": [
           { "crystal": 1, "proportion": 10, "filter": 1 }
         ]

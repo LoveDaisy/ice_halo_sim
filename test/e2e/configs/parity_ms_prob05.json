@@ -25,12 +25,6 @@
         "entries": [
           { "crystal": 1, "proportion": 10 }
         ]
-      },
-      {
-        "prob": 0.0,
-        "entries": [
-          { "crystal": 1, "proportion": 10 }
-        ]
       }
     ]
   },

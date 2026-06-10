@@ -18,6 +18,11 @@ Library lookup order:
 
 The library must be built with ``BUILD_SHARED_LIBS=ON`` (the default release
 recipe). If lookup fails, raises :class:`FileNotFoundError`.
+
+**Test-only module**: the first call to :func:`run_scene_capi_buffered` installs
+a process-level log callback into the C library (``LUMICE_SetLogCallback``).
+Do not import this module from non-test contexts (bench scripts, REPLs) as the
+hook intercepts all subsequent server log output without any visible indication.
 """
 
 from __future__ import annotations
@@ -64,6 +69,9 @@ class LUMICE_RenderResult(ctypes.Structure):
         ("img_buffer",   ctypes.POINTER(ctypes.c_ubyte)),
     ]
 
+assert ctypes.sizeof(LUMICE_RenderResult) == 24, (
+    "LUMICE_RenderResult size mismatch — verify lumice.h field layout"
+)
 
 # Backend constants (lumice.h:391-392).
 LUMICE_BACKEND_CPU = 0
@@ -258,7 +266,8 @@ class _LogCapture:
         with _LOG_LOCK:
             # Pytest runs serially by contract for this suite — nested capture
             # is a programming error.
-            assert _ACTIVE_LOG_SINK is None, "nested LogCapture is not supported"
+            if _ACTIVE_LOG_SINK is not None:
+                raise RuntimeError("nested LogCapture is not supported")
             _ACTIVE_LOG_SINK = self.lines
         return self.lines
 
@@ -453,6 +462,9 @@ def run_scene_capi_buffered(
                             f"Timeout {elapsed:.1f}s waiting for {config_path} (backend={backend})"
                         )
 
+                    # LUMICE_GetRenderResults always returns LUMICE_OK (0) when
+                    # args are non-null; see c_api.cpp:728. The err check is a
+                    # safety net for future API additions.
                     err = lib.LUMICE_GetRenderResults(server, renders, 1)
                     if err != 0:
                         raise RuntimeError(f"GetRenderResults failed err={err}")
@@ -511,6 +523,7 @@ def run_scene_capi_buffered(
                     raise RuntimeError(
                         f"{config_path}: GetRenderResults returned empty buffer"
                     )
+                # img_buffer is packed RGB uint8 (3 bytes/pixel, sRGB); per lumice.h:262.
                 n_rgb = rr_w * rr_h * 3
                 rgb_buf = (
                     np.frombuffer(
@@ -540,10 +553,10 @@ def run_scene_capi_buffered(
     finally:
         # Restore env state regardless of success/failure.
         if backend == "cpu_backend":
-            if env_was_set and env_old is not None:
+            if env_was_set:
                 os.environ["LUMICE_TRACE_BACKEND"] = env_old
             else:
                 os.environ.pop("LUMICE_TRACE_BACKEND", None)
         else:
-            if env_was_set and env_old is not None:
+            if env_was_set:
                 os.environ["LUMICE_TRACE_BACKEND"] = env_old

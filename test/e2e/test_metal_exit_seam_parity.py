@@ -83,7 +83,13 @@ def _run(config_name: str, backend: str) -> BufferedSimResult:
 
 
 def _assert_routed(r: BufferedSimResult, expected_backend: str, config_name: str) -> None:
-    """Decision Point 1 (a): assert Metal/Cpu actually executed (no fallback)."""
+    """Decision Point 1 (a): assert Metal/Cpu actually executed (no fallback).
+
+    For legacy: no "routing via" log is emitted; _summarize_backend defaults to
+    routed="legacy", so this assertion's real job is catching env pollution
+    (e.g. a leaked LUMICE_TRACE_BACKEND from a prior test run), not positively
+    confirming legacy executed.
+    """
     assert r.routed_backend == expected_backend, (
         f"{config_name}/{expected_backend}: routed={r.routed_backend!r} "
         f"(expected {expected_backend!r}); core log did not emit the expected "

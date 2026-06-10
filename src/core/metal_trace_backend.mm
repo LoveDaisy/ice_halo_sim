@@ -621,7 +621,8 @@ void MetalTraceBackend::Impl::EnsurePso() {
   // harness driving liblumice.dylib via Python), causing "unknown type name
   // 'atomic_float'" at newLibraryWithSource. Pin MSL 3.0 so the kernel
   // compiles uniformly across CLI / unit_test / ctypes / GUI host processes.
-  opts.languageVersion = MTLLanguageVersion3_0;
+  opts.languageVersion = MTLLanguageVersion3_0;  // requires macOS 13+ (Ventura) — consistent with
+                                                  // CMAKE_OSX_DEPLOYMENT_TARGET "13.0" in CMakeLists.txt:6
   // Disable fast-math / contract-FMA so the kernel's mul-add sequences round
   // identically to the CPU backend's separate operations. Without this the
   // Metal compiler fuses (a*b + c) into fma(a, b, c), drifting from CPU by

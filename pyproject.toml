@@ -1,4 +1,5 @@
 [tool.pytest.ini_options]
+addopts = "-p no:xdist"
 markers = [
     "slow: requires shared-lib build; excluded from CI fast path",
 ]
