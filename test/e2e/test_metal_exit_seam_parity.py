@@ -167,20 +167,16 @@ def test_metal_fallback_detector():
 # mean-3σ calibration; 13 dB acts as a catastrophic-regression detector given
 # the architectural raw vs render divergence documented in baseline.md F2.
 #
-# Filter scenes (`*_filter`) remain xfailed: block-mean 4×4 lifts ds_corr
-# from 0.08–0.20 to 0.25–0.38, but neither Metal nor Cpu reaches the 0.80
-# target — both backends have real structural divergence vs legacy on filter
-# scenes, falsifying the spike's "Cpu has no filter bug" claim. xfail stays
-# until 258.7 (cpu_backend) and 258.8 (metal) land their fixes.
+# Filter scenes fixed in 258.10 (BeginSession RNG幂等化): ds_corr lifted from
+# 0.25–0.47 to 0.9963–0.9983 on both Metal and cpu_backend. xfail removed.
 _RAW_THRESHOLDS = {
     # config:                         (metal, cpu_backend)  ds_corr → floor−0.02
     "dual_fisheye_ref":             (0.95, 0.94),
     "ms_multi_crystal":             (0.90, 0.81),
     "parity_ms_prob05":             (0.93, 0.90),
-    # Filter scenes — placeholder targets (0.80) used only to drive XFAIL
-    # mechanism; actual ds_corr ≪ target. See xfail decorator below.
-    "ms_multi_crystal_filtered":    (0.80, 0.80),
-    "parity_ms_prob05_filter":      (0.80, 0.80),
+    # Filter scenes — thresholds calibrated from 258.10 post-fix measurement.
+    "ms_multi_crystal_filtered":    (0.97, 0.97),
+    "parity_ms_prob05_filter":      (0.97, 0.97),
     # parity_single_ms_filter dropped: legacy returns all-zero buffer after
     # the prob=0.0→1.0 fix (commit 0d03388); metal/cpu_backend raise PY
     # exceptions on it. Test is `@pytest.mark.skip`-marked — no threshold.
@@ -259,14 +255,6 @@ def test_parity_multi_ms_prob08():
 # --- Multi MS prob=0.8 + filter ------------------------------------------- #
 
 @pytest.mark.slow
-@pytest.mark.xfail(
-    reason="filter parity divergence persists even under block-mean 4×4 "
-           "(258.6.2): ds_corr metal=0.31 / cpu=0.38 vs target 0.80. Both "
-           "backends structurally diverge from legacy on filter scenes — "
-           "fixes pending 258.7 (cpu_backend) / 258.8 (metal GetFn remap). "
-           "Remove xfail after their fixes land.",
-    strict=False,
-)
 def test_parity_multi_ms_prob08_filter():
     cm, pm, cc, pc = _parity_axes("ms_multi_crystal_filtered")
     print(f"[parity] ms_multi_crystal_filtered: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
@@ -285,15 +273,6 @@ def test_parity_multi_ms_prob05():
 # --- Multi MS prob=0.5 + filter ------------------------------------------- #
 
 @pytest.mark.slow
-@pytest.mark.xfail(
-    reason="filter parity divergence persists under block-mean 4×4 "
-           "(258.6.2): ds_corr metal=0.27 / cpu=0.25 vs target 0.80. The "
-           "prior SIGABRT on cpu_backend (258.4 baseline.md F4) no longer "
-           "reproduces under 258.6 patches — both backends now run to "
-           "completion but disagree with legacy structurally. Pending "
-           "258.7 / 258.8 fixes; remove xfail after they land.",
-    strict=False,
-)
 def test_parity_multi_ms_prob05_filter():
     cm, pm, cc, pc = _parity_axes("parity_ms_prob05_filter")
     print(f"[parity] parity_ms_prob05_filter: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
