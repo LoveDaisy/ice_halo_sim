@@ -178,7 +178,10 @@ TEST(ExitRecordsTest, MetalBackendSingleMsFillsMetadata) {
     EXPECT_LE(rec.path.size_, kMaxHits);
     EXPECT_LE(rec.path.size_, ExitFaceSeq::kCap);
     for (uint8_t k = 0; k < rec.path.size_; k++) {
-      EXPECT_LT(rec.path.data_[k], 8u);
+      // After GetFn remap (258.8): path stores face-numbers (1-8 for prism),
+      // not poly-indices (0-7). FillHexFnMap assigns basal=1,2; prism=3-8.
+      EXPECT_GE(rec.path.data_[k], 1u);
+      EXPECT_LE(rec.path.data_[k], 8u);
     }
   }
 }
