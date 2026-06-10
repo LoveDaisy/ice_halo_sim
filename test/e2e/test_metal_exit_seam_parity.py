@@ -8,6 +8,9 @@ against it on the same scenes, with two complementary metrics:
   - Axis A: Metal exit-seam        vs legacy CPU
   - Axis B: CpuTraceBackend        vs legacy CPU
   - Metric 1: raw XYZ Pearson corr (accumulated layer, GetRawXyzResults)
+                — 258.6.2 switched to block-mean (4×4) downsampled Pearson
+                  (`_raw_corr_ds`) to suppress Monte-Carlo speckle floor on
+                  sparse filter scenes. See baseline.md threshold section.
   - Metric 2: render-image PSNR    (final sRGB image, GetRenderResults)
 
 Every test asserts Metal/Cpu actually ran (routed_backend matches AND no
@@ -19,12 +22,11 @@ Concurrency contract: capi_runner.py mutates os.environ + uses a process-global
 log callback. This suite MUST run serially (no pytest-xdist). Adding parallelism
 requires subprocess isolation.
 
-Thresholds: raw corr / render PSNR per scene are calibrated from baseline.md
-(Step 5 measurement). Until baseline is finalized, placeholders (corr ≥ 0.90,
-PSNR ≥ 30 dB) gate the obvious regressions; tighter per-scene values land with
-baseline.md.
+Thresholds: raw corr (block-mean ds) / render PSNR per scene calibrated from
+baseline.md (258.6.2 measurement on 2026-06-10). See `_RAW_THRESHOLDS` below.
 """
 import math
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -36,17 +38,36 @@ CONFIGS_DIR = Path(__file__).parent / "configs"
 _SEED = 42
 _TIMEOUT = 180
 
+# Block-mean downsample metric (258.6.2) lives in the parity-harness
+# scratchpad. Insert that dir on sys.path so the test can import the
+# single source of `_block_mean` / `_raw_corr_ds` / `_DS_BH` / `_DS_BW`.
+# Note: this test is @pytest.mark.slow and excluded from CI (CI runs
+# `pytest test/e2e/ -v -m "not slow"`), so the scratchpad dependency
+# stays out of the CI critical path. If scratchpad is ever archived,
+# update this path or hoist the metric into `test/e2e/_parity_metrics.py`.
+_HARNESS_DIR = (
+    Path(__file__).resolve().parents[2]
+    / "scratchpad" / "scrum-metal-exit-seam" / "task-parity-harness"
+)
+sys.path.insert(0, str(_HARNESS_DIR))
+from _measure_baseline import (  # noqa: E402  (sys.path mutated above)
+    _block_mean,
+    _raw_corr_ds as _raw_corr_ds_impl,
+    _DS_BH,
+    _DS_BW,
+)
+
 
 # --------------------------------------------------------------------------- #
 # Metrics
 # --------------------------------------------------------------------------- #
 
 def _raw_corr(a: BufferedSimResult, b: BufferedSimResult) -> float:
-    """Pearson correlation of raw XYZ buffers (linear; scale-invariant).
+    """Full-resolution Pearson correlation of raw XYZ buffers.
 
-    Pearson is invariant to per-image scalar normalization, so any
-    snapshot_intensity divergence between backends does NOT affect this
-    metric — what's compared is the spatial structure of accumulated XYZ.
+    Retained as a diagnostic alongside the primary block-mean metric
+    `_raw_corr_ds`. Suppressed by sparsity speckle floor on filter scenes —
+    not used for assertions; see baseline.md F3.
     """
     x = a.flt_buf.ravel().astype(np.float64)
     y = b.flt_buf.ravel().astype(np.float64)
@@ -57,6 +78,19 @@ def _raw_corr(a: BufferedSimResult, b: BufferedSimResult) -> float:
     if math.isnan(corr):
         return 0.0
     return corr
+
+
+def _raw_corr_ds(a: BufferedSimResult, b: BufferedSimResult) -> float:
+    """Block-mean (4×4) downsampled Pearson correlation of raw XYZ buffers.
+
+    Primary metric for parity assertions (258.6.2). Each output bin
+    aggregates ``_DS_BH * _DS_BW`` rays so per-pixel Monte-Carlo speckle
+    decays by ``sqrt(rays/bin)``; spatial structure of the bright
+    population is preserved. Implementation imported from
+    ``scratchpad/scrum-metal-exit-seam/task-parity-harness/_measure_baseline.py``
+    (single source — never re-define).
+    """
+    return _raw_corr_ds_impl(a, b, _DS_BH, _DS_BW)
 
 
 def _render_psnr(a: BufferedSimResult, b: BufferedSimResult) -> float:
@@ -126,34 +160,41 @@ def test_metal_fallback_detector():
 # blowing up the test runner — see 258.4 code-review C1, [[feedback_check_exit_code]].
 # --------------------------------------------------------------------------- #
 
-# Per-scene thresholds calibrated from baseline.md (Step 5, 2026-06-10).
-# Raw corr threshold = floor(measured_corr * 100) / 100 − 0.02 (plan §4).
+# Per-scene thresholds calibrated from baseline.md (258.6.2 re-measure,
+# 2026-06-10). Primary metric is `_raw_corr_ds` (block-mean 4×4); thresholds
+# below are `floor(ds_corr * 100) / 100 − 0.02` per plan §4.
 # Render PSNR threshold = 13.0 dB uniform — single-seed baseline lacks σ for
 # mean-3σ calibration; 13 dB acts as a catastrophic-regression detector given
 # the architectural raw vs render divergence documented in baseline.md F2.
 #
-# Filter scenes are xfailed (raw corr collapsed to ≤ 0.21 across both Metal
-# and Cpu backends, matching 258.4 finding; root cause moved to 258.7/258.8).
-# Non-filter scenes: floor(measured*100)/100 − 0.02 per plan §4.
-# Filter scenes:     0.80 target (matches non-filter ceiling). Current
-# baseline raw_corr ≤ 0.21 → assertion fails → xfail-strict=False marks the
-# test as XFAIL. When 258.7/258.8 fix filter parity, the tests XPASS,
-# signaling the xfail decorator should be removed.
+# Filter scenes (`*_filter`) remain xfailed: block-mean 4×4 lifts ds_corr
+# from 0.08–0.20 to 0.25–0.38, but neither Metal nor Cpu reaches the 0.80
+# target — both backends have real structural divergence vs legacy on filter
+# scenes, falsifying the spike's "Cpu has no filter bug" claim. xfail stays
+# until 258.7 (cpu_backend) and 258.8 (metal) land their fixes.
 _RAW_THRESHOLDS = {
-    # config:                         (metal, cpu_backend)
-    "dual_fisheye_ref":             (0.96, 0.95),
-    "ms_multi_crystal":             (0.89, 0.81),
-    "parity_ms_prob05":             (0.94, 0.92),
-    "parity_single_ms_filter":      (0.80, 0.80),
+    # config:                         (metal, cpu_backend)  ds_corr → floor−0.02
+    "dual_fisheye_ref":             (0.95, 0.94),
+    "ms_multi_crystal":             (0.90, 0.81),
+    "parity_ms_prob05":             (0.93, 0.90),
+    # Filter scenes — placeholder targets (0.80) used only to drive XFAIL
+    # mechanism; actual ds_corr ≪ target. See xfail decorator below.
     "ms_multi_crystal_filtered":    (0.80, 0.80),
-    "parity_ms_prob05_filter":      (0.80, None),  # cpu_backend crashes (skip-marked)
+    "parity_ms_prob05_filter":      (0.80, 0.80),
+    # parity_single_ms_filter dropped: legacy returns all-zero buffer after
+    # the prob=0.0→1.0 fix (commit 0d03388); metal/cpu_backend raise PY
+    # exceptions on it. Test is `@pytest.mark.skip`-marked — no threshold.
 }
 _T_PSNR_DB = 13.0  # uniform render-PSNR floor; see baseline.md threshold section.
 
 
 def _parity_axes(config_name: str) -> tuple[float, float, float, float]:
     """Return (corr_metal_vs_legacy, psnr_metal_vs_legacy,
-                corr_cpu_vs_legacy,   psnr_cpu_vs_legacy)."""
+                corr_cpu_vs_legacy,   psnr_cpu_vs_legacy).
+
+    Corr metric is the 258.6.2 block-mean ds variant. Full-resolution
+    `_raw_corr` is computed only for diagnostic prints.
+    """
     legacy = _run(config_name, "legacy")
     metal = _run(config_name, "metal")
     cpu = _run(config_name, "cpu_backend")
@@ -163,20 +204,20 @@ def _parity_axes(config_name: str) -> tuple[float, float, float, float]:
     _assert_routed(cpu, "cpu_backend", config_name)
 
     return (
-        _raw_corr(metal, legacy),
+        _raw_corr_ds(metal, legacy),
         _render_psnr(metal, legacy),
-        _raw_corr(cpu, legacy),
+        _raw_corr_ds(cpu, legacy),
         _render_psnr(cpu, legacy),
     )
 
 
 def _assert_parity(config_name: str, cm: float, pm: float, cc: float, pc: float) -> None:
     t_metal, t_cpu = _RAW_THRESHOLDS[config_name]
-    assert cm >= t_metal, f"{config_name} Axis A raw_corr {cm:.4f} < {t_metal}"
+    assert cm >= t_metal, f"{config_name} Axis A ds_corr {cm:.4f} < {t_metal}"
     assert pm >= _T_PSNR_DB, f"{config_name} Axis A render PSNR {pm:.2f} dB < {_T_PSNR_DB}"
     if t_cpu is None:
         return  # cpu_backend skip-marked at suite level
-    assert cc >= t_cpu, f"{config_name} Axis B raw_corr {cc:.4f} < {t_cpu}"
+    assert cc >= t_cpu, f"{config_name} Axis B ds_corr {cc:.4f} < {t_cpu}"
     assert pc >= _T_PSNR_DB, f"{config_name} Axis B render PSNR {pc:.2f} dB < {_T_PSNR_DB}"
 
 
@@ -185,22 +226,24 @@ def _assert_parity(config_name: str, cm: float, pm: float, cc: float, pc: float)
 @pytest.mark.slow
 def test_parity_single_ms_no_filter():
     cm, pm, cc, pc = _parity_axes("dual_fisheye_ref")
-    print(f"[parity] dual_fisheye_ref: metal raw={cm:.4f} psnr={pm:.2f}dB | cpu_backend raw={cc:.4f} psnr={pc:.2f}dB")
+    print(f"[parity] dual_fisheye_ref: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
     _assert_parity("dual_fisheye_ref", cm, pm, cc, pc)
 
 
 # --- Single MS + filter ---------------------------------------------------- #
 
 @pytest.mark.slow
-@pytest.mark.xfail(
-    reason="filter parity divergence under investigation — baseline raw_corr "
-           "≤ 0.21 on both backends (see baseline.md F3); root cause moved to "
-           "258.7 (cpu) / 258.8 (metal). Remove xfail after their fix lands.",
-    strict=False,
+@pytest.mark.skip(
+    reason="parity_single_ms_filter became zero-signal after the 258.6 "
+           "code-review prob=0.0→1.0 fix (commit 0d03388): single-MS + "
+           "raypath filter [3,5] survival rate collapsed to near-zero rays "
+           "(eff_px=1, snap=0.0 in legacy). Metal/cpu_backend raise "
+           "PY_EXCEPTION (exit_code=2). Config-level issue, out of scope "
+           "for 258.6.2. Skip until the scene is repaired or replaced.",
 )
 def test_parity_single_ms_filter():
     cm, pm, cc, pc = _parity_axes("parity_single_ms_filter")
-    print(f"[parity] parity_single_ms_filter: metal raw={cm:.4f} psnr={pm:.2f}dB | cpu_backend raw={cc:.4f} psnr={pc:.2f}dB")
+    print(f"[parity] parity_single_ms_filter: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
     _assert_parity("parity_single_ms_filter", cm, pm, cc, pc)
 
 
@@ -209,7 +252,7 @@ def test_parity_single_ms_filter():
 @pytest.mark.slow
 def test_parity_multi_ms_prob08():
     cm, pm, cc, pc = _parity_axes("ms_multi_crystal")
-    print(f"[parity] ms_multi_crystal: metal raw={cm:.4f} psnr={pm:.2f}dB | cpu_backend raw={cc:.4f} psnr={pc:.2f}dB")
+    print(f"[parity] ms_multi_crystal: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
     _assert_parity("ms_multi_crystal", cm, pm, cc, pc)
 
 
@@ -217,12 +260,16 @@ def test_parity_multi_ms_prob08():
 
 @pytest.mark.slow
 @pytest.mark.xfail(
-    reason="filter parity divergence — see baseline.md F3; moved to 258.7/258.8.",
+    reason="filter parity divergence persists even under block-mean 4×4 "
+           "(258.6.2): ds_corr metal=0.31 / cpu=0.38 vs target 0.80. Both "
+           "backends structurally diverge from legacy on filter scenes — "
+           "fixes pending 258.7 (cpu_backend) / 258.8 (metal GetFn remap). "
+           "Remove xfail after their fixes land.",
     strict=False,
 )
 def test_parity_multi_ms_prob08_filter():
     cm, pm, cc, pc = _parity_axes("ms_multi_crystal_filtered")
-    print(f"[parity] ms_multi_crystal_filtered: metal raw={cm:.4f} psnr={pm:.2f}dB | cpu_backend raw={cc:.4f} psnr={pc:.2f}dB")
+    print(f"[parity] ms_multi_crystal_filtered: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
     _assert_parity("ms_multi_crystal_filtered", cm, pm, cc, pc)
 
 
@@ -231,20 +278,23 @@ def test_parity_multi_ms_prob08_filter():
 @pytest.mark.slow
 def test_parity_multi_ms_prob05():
     cm, pm, cc, pc = _parity_axes("parity_ms_prob05")
-    print(f"[parity] parity_ms_prob05: metal raw={cm:.4f} psnr={pm:.2f}dB | cpu_backend raw={cc:.4f} psnr={pc:.2f}dB")
+    print(f"[parity] parity_ms_prob05: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
     _assert_parity("parity_ms_prob05", cm, pm, cc, pc)
 
 
 # --- Multi MS prob=0.5 + filter ------------------------------------------- #
 
 @pytest.mark.slow
-@pytest.mark.skip(
-    reason="ms_prob05_filtered triggers SIGABRT on cpu_backend (258.4 finding, "
-           "reproduced in baseline.md F4); skip (not xfail) to keep the runner "
-           "alive — 258.4 code-review C1 + feedback_check_exit_code. Re-enable "
-           "after 258.7 fix.",
+@pytest.mark.xfail(
+    reason="filter parity divergence persists under block-mean 4×4 "
+           "(258.6.2): ds_corr metal=0.27 / cpu=0.25 vs target 0.80. The "
+           "prior SIGABRT on cpu_backend (258.4 baseline.md F4) no longer "
+           "reproduces under 258.6 patches — both backends now run to "
+           "completion but disagree with legacy structurally. Pending "
+           "258.7 / 258.8 fixes; remove xfail after they land.",
+    strict=False,
 )
 def test_parity_multi_ms_prob05_filter():
     cm, pm, cc, pc = _parity_axes("parity_ms_prob05_filter")
-    print(f"[parity] parity_ms_prob05_filter: metal raw={cm:.4f} psnr={pm:.2f}dB | cpu_backend raw={cc:.4f} psnr={pc:.2f}dB")
+    print(f"[parity] parity_ms_prob05_filter: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
     _assert_parity("parity_ms_prob05_filter", cm, pm, cc, pc)
