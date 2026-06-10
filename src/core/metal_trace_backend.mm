@@ -468,6 +468,10 @@ struct MetalTraceBackend::Impl {
   float    max_abs_dz = 0.0f;
 
   RandomNumberGenerator rng{ 0 };
+  // Seed-once flag — see CpuTraceBackend::seeded_ rationale (per-SimBatch
+  // BeginSession would otherwise reset rng every 128-ray batch and collapse
+  // axis-sample diversity). progress.md DONE 2026-06-10 15:35.
+  bool seeded = false;
 
   // Persistent crystal cache for the *current* TraceLayer (rebuilt per layer).
   Crystal current_crystal{};
@@ -1264,9 +1268,12 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
     impl_->max_abs_dz = 0.0f;
   }
 
-  if (spec.seed != 0) {
+  // Seed RNGs once per backend lifetime — see CpuTraceBackend::BeginSession
+  // and progress.md DONE 2026-06-10 15:35 for the per-SimBatch reseed defect.
+  if (spec.seed != 0 && !impl_->seeded) {
     impl_->rng.SetSeed(spec.seed);
     RandomNumberGenerator::GetInstance().SetSeed(spec.seed);
+    impl_->seeded = true;
   }
 
   impl_->EnsureDevice();

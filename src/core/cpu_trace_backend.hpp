@@ -86,6 +86,13 @@ class CpuTraceBackend : public TraceBackend {
   std::vector<ExitRayRecord> exit_records_;
 
   bool in_session_ = false;
+  // Track whether rng_ has been seeded by a prior BeginSession in this
+  // backend's lifetime. Simulator calls BeginSession / EndSession per
+  // SimBatch (server.cpp:77 `kDefaultRayNum=128`); without this guard every
+  // batch would reset rng_ back to spec.seed, collapsing axis-sample
+  // diversity to a single 128-ray sequence repeated thousands of times.
+  // See progress.md DONE 2026-06-10 15:35 (task-filter-parity-rootcause-fix).
+  bool seeded_ = false;
 };
 
 }  // namespace lumice

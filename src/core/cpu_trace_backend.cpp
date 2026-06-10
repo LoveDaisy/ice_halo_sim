@@ -1,7 +1,10 @@
 #include "core/cpu_trace_backend.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <utility>
@@ -167,10 +170,14 @@ void CpuTraceBackend::BeginSession(const SessionSpec& spec) {
 
   camera_rot_ = MakeCameraRotation(*spec.render);
 
-  // Seed RNGs to match Simulator::Run when spec.seed != 0.
-  if (spec.seed != 0) {
+  // Seed RNGs once per backend lifetime, not once per session. Simulator
+  // drives BeginSession / EndSession per 128-ray SimBatch, so reseeding here
+  // would collapse axis-sample diversity to the first 128 draws repeated.
+  // Mirrors Simulator::Run's seed-at-entry semantics (simulator.cpp:592-594).
+  if (spec.seed != 0 && !seeded_) {
     rng_.SetSeed(spec.seed);
     RandomNumberGenerator::GetInstance().SetSeed(spec.seed);
+    seeded_ = true;
   }
 
   continuation_buf_ = RayBuffer{};
@@ -258,6 +265,17 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
       crystal = MakeCrystal(rng_, setting.crystal_.param_);
       crystal_id = ci;
       refractive_index = crystal.GetRefractiveIndex(spec_.wl.wl_);
+    }
+
+    // WB-CRYSTAL probe (task-filter-parity-rootcause-fix M1/M2). Gated by env
+    // LUMICE_WB_CRYSTAL_LOG=1; first 64 events per process. Remove after M3
+    // ds_corr verification. See progress.md 2026-06-10 15:10.
+    if (const char* wb = std::getenv("LUMICE_WB_CRYSTAL_LOG"); wb && wb[0] == '1') {
+      static std::atomic<int> wb_count{ 0 };
+      if (wb_count.fetch_add(1, std::memory_order_relaxed) < 64) {
+        std::fprintf(stderr, "[WB][C] ms_idx=%zu ci=%zu ci_n=%zu crystal_id=%zu\n",
+                     static_cast<size_t>(ms_idx_), ci, ci_n, crystal_id);
+      }
     }
 
     auto filter_spec = FilterSpec::Create(setting.filter_, crystal, crystal_axis);

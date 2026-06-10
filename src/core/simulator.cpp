@@ -1,10 +1,12 @@
 #include "core/simulator.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -751,6 +753,16 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
             crystal_cache.emplace_back(param_ptr, all_crystals.back());
             cached_crystal = &crystal_cache.back().second;
             ci_crystal_id = curr_crystal_id;
+          }
+          // WB-CRYSTAL probe (task-filter-parity-rootcause-fix M1/M2). Gated by
+          // env LUMICE_WB_CRYSTAL_LOG=1; first 64 events per process. Remove
+          // after M3 ds_corr verification. See progress.md 2026-06-10 15:10.
+          if (const char* wb = std::getenv("LUMICE_WB_CRYSTAL_LOG"); wb && wb[0] == '1') {
+            static std::atomic<int> wb_count{ 0 };
+            if (wb_count.fetch_add(1, std::memory_order_relaxed) < 64) {
+              std::fprintf(stderr, "[WB][L] mi=%zu ci=%zu cn=%zu crystal_id=%zu\n",
+                           mi, ci, cn, curr_crystal_id);
+            }
           }
         }
         const auto& curr_crystal = all_crystals[curr_crystal_id];
