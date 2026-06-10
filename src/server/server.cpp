@@ -685,10 +685,20 @@ void ServerImpl::GenerateScene() {
     renders = active_renders_;
     generation = scene_generation_.load();
   }
+  // LUMICE_BATCH_RAY_NUM: per-batch ray count for performance tuning (default: kDefaultRayNum=128).
+  // Higher values amortize Metal kernel dispatch overhead; tune against legacy crossover (~512).
+  static const size_t kBatchCap = []() -> size_t {
+    if (const char* env = std::getenv("LUMICE_BATCH_RAY_NUM")) {
+      long b = std::atol(env);
+      if (b > 0) { return static_cast<size_t>(b); }
+    }
+    return kDefaultRayNum;
+  }();
+
   auto ray_num = scene->ray_num_;
   size_t committed_num = 0;
   while (ray_num == kInfSize || committed_num < ray_num) {
-    size_t batch_ray_num = std::min(kDefaultRayNum, ray_num - committed_num);
+    size_t batch_ray_num = std::min(kBatchCap, ray_num - committed_num);
     scene_queue_->Emplace(SimBatch{ batch_ray_num, scene, generation, renders });
     sim_scene_cnt_++;
     if (!first_batch_logged) {
@@ -708,7 +718,7 @@ void ServerImpl::GenerateScene() {
       ILOG_DEBUG(logger_, "GenerateScene: continue to generate scenes.");
     }
     CHECK_STOP
-    committed_num += kDefaultRayNum;
+    committed_num += kBatchCap;
     ILOG_TRACE(logger_, "GenerateScene: finish wl");
   }
   scene_gen_active_ = false;  // All exit paths (normal + CHECK_STOP break) converge here

@@ -169,6 +169,22 @@ The dashboard tracks 12 time-series (4 platforms × 3 metrics):
 - The alert threshold is global (same 200% for all metrics); Efficiency regressions below the
   threshold require manual inspection of the chart
 
+### Runtime Tuning Knobs
+
+| Environment variable | Default | Description |
+|----------------------|---------|-------------|
+| `LUMICE_BATCH_RAY_NUM` | 128 | Per-batch ray count sent to the simulator per `SimBatch`. Higher values amortize Metal kernel dispatch overhead; the empirical crossover where the Metal backend outperforms legacy is around 512. Set to a power of two for alignment (e.g. `LUMICE_BATCH_RAY_NUM=512`). Applies at server startup — changing it mid-run has no effect. |
+
+Example: measure throughput at a higher batch size to characterize the Metal dispatch amortization curve:
+
+```bash
+# Default batch (128 rays/batch)
+./build/cmake_install/Lumice --benchmark -f examples/bench_config.json -o /tmp
+
+# Larger batch (512 rays/batch) — Metal backend crosses over here
+LUMICE_BATCH_RAY_NUM=512 ./build/cmake_install/Lumice --benchmark -f examples/bench_config.json -o /tmp
+```
+
 ## 2. GUI Perf Test (Hidden Window, No VSync)
 
 Automated GUI test driven by ImGui Test Engine. Uses a hidden window with `swapInterval(0)`,
