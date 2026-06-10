@@ -954,7 +954,13 @@ size_t MetalTraceBackend::Impl::CopyContSliceToRootBuf(const ScatteringSetting& 
     }
     rec.size_ = seq_len;
     rec.overflow_idx_ = RaypathRecorder::kNoOverflow;  // 0xFFFFu, inline-only
-    std::memcpy(rec.data_, src_seq_data + i * seq_stride, seq_len);
+    // GetFn remap: kernel writes raw poly-index (used for poly_n[to_face*3]),
+    // but FilterSpec::Check expects face-number space (GetFn output, see
+    // filter_spec.cpp:114-152 and crystal.cpp:376-380). Convert per-byte here.
+    const uint8_t* raw_seq = src_seq_data + i * seq_stride;
+    for (uint8_t k = 0; k < seq_len; ++k) {
+      rec.data_[k] = static_cast<uint8_t>(src_crystal.GetFn(static_cast<IdType>(raw_seq[k])));
+    }
 
     const FilterSpec* spec = spec_per_ci[crystal_id].get();
     bool filter_pass = (spec == nullptr) || spec->Check(r, rec, nullptr);
@@ -1540,7 +1546,11 @@ size_t MetalTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
     uint8_t seq_len = std::min<uint8_t>(seq_len_ptr[i], ExitFaceSeq::kCap);
     rec.size_ = seq_len;
     rec.overflow_idx_ = RaypathRecorder::kNoOverflow;
-    std::memcpy(rec.data_, seq_data_ptr + i * stride, seq_len);
+    // GetFn remap: see CopyContSliceToRootBuf above for rationale.
+    const uint8_t* raw_seq = seq_data_ptr + i * stride;
+    for (uint8_t k = 0; k < seq_len; ++k) {
+      rec.data_[k] = static_cast<uint8_t>(src_crystal.GetFn(static_cast<IdType>(raw_seq[k])));
+    }
 
     const FilterSpec* spec = spec_per_ci[crystal_id].get();
     bool filter_pass = (spec == nullptr) || spec->Check(r, rec, nullptr);
