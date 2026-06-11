@@ -2138,9 +2138,11 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
 
       size_t in_count = 0;
       if (first_ms) {
-        // task-260.2: device root-gen runs when
-        //   (a) single crystal population (multi-crystal stream-shift is left
-        //       to task-260.3 geom-pool);
+        // task-260.2/260.7: device root-gen runs when
+        //   (a) per-ci device-gen; each ci resolves a single crystal via
+        //       ResolveLayerCrystalForCi before this guard, so crystal_cnt > 1
+        //       is safe — per-ci multi-crystal parity verified at ds=0.9998
+        //       (explore-260.3 exp2);
         //   (b) host-supplied root rays are NOT pinned via roots.host.crystal
         //       (matches the use_host=true convention below);
         //   (c) spec.seed != 0 (single-worker determinism contract); and
@@ -2149,14 +2151,10 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
         //   (f) LUMICE_DISABLE_DEVICE_GEN env var is unset (escape hatch for
         //       strict-identity parity tests that mirror the host mt19937
         //       stream — these cannot align with the device PCG stream).
-        // crystal_cnt is local to this layer's ms_info; the device-gen guard
-        // intentionally inspects this layer's crystal_cnt so multi-crystal
-        // layers fall back to the host path regardless of session state.
         // The escape hatch is cached once per backend in Impl's ctor (see
         // task-260.5 Step 4); tests that need to flip it must setenv BEFORE
         // constructing a new MetalTraceBackend.
         bool can_use_device_gen = !use_host &&
-                                  crystal_cnt == 1 &&
                                   impl_->gen_seed_ != 0u &&
                                   impl_->current_crystal.TotalTriangles() <= 64u &&
                                   impl_->root_ray_count <= static_cast<size_t>(UINT32_MAX) - ci_n &&

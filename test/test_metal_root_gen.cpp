@@ -1,7 +1,8 @@
-// Device root-gen tests (task-260.2). Exercises the Metal device-resident PCG
-// path activated when spec.seed != 0 and crystal_cnt == 1 (see
-// MetalTraceBackend::TraceLayer can_use_device_gen guard in
-// src/core/metal_trace_backend.mm).
+// Device root-gen tests (task-260.2/260.7). Exercises the Metal device-resident
+// PCG path activated when spec.seed != 0 (see MetalTraceBackend::TraceLayer
+// can_use_device_gen guard in src/core/metal_trace_backend.mm). task-260.7
+// removed the crystal_cnt == 1 gate; multi-crystal layers now also use
+// per-ci device-gen.
 //
 // These tests verify externally observable properties — kernel-internal
 // buffers are pimpl-hidden, so the assertions are at the public API level:
@@ -10,8 +11,8 @@
 //   * device-gen vs host-gen statistical equivalence: aggregate XYZ stays
 //     close (5% rel-err is the Monte Carlo noise floor at N=8192 rays,
 //     well above the ~0.07% drift previously observed in the parity suite).
-//   * device-gen guards: multi-crystal layers and tri_count overrun fall
-//     back to host-gen without crashing.
+//   * device-gen guards: tri_count overrun falls back to host-gen without
+//     crashing; multi-crystal layers stay on device-gen (per-ci).
 //   * counter monotonicity: a second TraceLayer invocation within the same
 //     session produces stable XYZ totals (no batch-wrap collision).
 //
@@ -167,11 +168,10 @@ TEST(MetalRootGen, DeviceGenVsHostGenStatisticalParity) {
   }
 }
 
-// Multi-crystal layer must fall back to the host-gen path (device-gen is
-// limited to crystal_cnt == 1 in task-260.2; task-260.3 will address
-// multi-crystal via the geometry pool). Verifies the layer runs without
-// crash and produces a finite, non-zero XYZ.
-TEST(MetalRootGen, MultiCrystalFallsBackToHostGen) {
+// Multi-crystal layer now uses per-ci device-gen (task-260.7 removed the
+// crystal_cnt == 1 gate; explore-260.3 exp2 verified ds=0.9998). Verifies
+// the layer runs without crash and produces a finite, non-zero XYZ.
+TEST(MetalRootGen, MultiCrystalUsesPerCiDeviceGen) {
   if (ShouldSkipMetalTests()) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
