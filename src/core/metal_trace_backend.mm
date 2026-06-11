@@ -379,6 +379,378 @@ kernel void trace_layer_kernel(
   }
   rec_sink[tid] = rec_csum;
 }
+
+// ===================== Device root-gen (task-260.2) ==========================
+//
+// Counter-based PCG root-ray generator. Replaces host-side InitRayFirstMs +
+// memcpy upload when single-crystal + spec.seed != 0 + root_ray_count fits in
+// uint32_t. Parity strategy = statistical (ds_corr ≥ 0.99) — host mt19937 and
+// device PCG streams are not bitwise alignable.
+//
+// PCG stream contract:
+//   per-thread global root index = gen_ray_base + tid
+//   draw counter = mix(gen_seed, global_idx, slot); slot bumps per draw
+// gen_ray_base is the running root_ray_count BEFORE this dispatch, so two
+// successive batches of the same session never reuse the same (gen_seed,
+// global_idx) tuple. Determinism = single-worker (server.cpp:184 enforces
+// sim_seed != 0 → worker_count = 1).
+
+constant uint kLatPathFullSphere    = 0u;  // axis_dist.IsFullSphereUniform()
+constant uint kLatPathNoRandom      = 1u;
+constant uint kLatPathRayleigh      = 2u;  // kGaussian near-pole optimization
+constant uint kLatPathGaussLegacy   = 3u;  // kGaussianLegacy
+constant uint kLatPathGenericReject = 4u;  // kGaussian/kUniform/kZigzag/kLaplacian
+
+// DistributionType enum values (must match src/core/math.hpp). Crystal-rot
+// parity REQUIRES the GenericReject path know the actual proposal type, so
+// lat_dist_type is carried separately from lat_path.
+constant uint kDistNoRandom      = 0u;
+constant uint kDistUniform       = 1u;
+constant uint kDistGaussian      = 2u;
+constant uint kDistZigzag        = 3u;
+constant uint kDistLaplacian     = 4u;
+constant uint kDistGaussianLegacy = 5u;
+
+constant uint kMaxTriPerKernel = 64u;
+constant int  kMaxRejectionAttempts = 1000;
+
+struct GenRootKernelParams {
+  uint  gen_seed;            // PCG master seed (== spec.seed)
+  uint  gen_ray_base;        // running root_ray_count before this dispatch
+  uint  num_rays;
+  uint  tri_count;
+  float sun_lon;             // (sun.azimuth + 180°) in radians
+  float sun_lat;             // (-sun.altitude) in radians
+  float sun_half_angle;      // (sun.diameter / 2) in radians
+  float ray_weight;          // wl_param.weight_
+  uint  lat_path;            // see kLatPath* above
+  uint  lat_dist_type;       // axis_dist.latitude_dist.type (cast to uint)
+  float lat_mean_rad;        // axis_dist.latitude_dist.mean × deg→rad
+  float lat_std_rad;         // axis_dist.latitude_dist.std × deg→rad
+  float lat_rejection_m;     // ComputeJacobianEnvelope (1.0 for skip paths)
+  uint  az_type;
+  float az_mean_rad;
+  float az_std_rad;
+  float az_pad;
+  uint  roll_type;
+  float roll_mean_rad;
+  float roll_std_rad;
+  float roll_pad;
+};
+
+// Counter-based PCG hash (spike-equivalent). u01 maps to [0,1) using top 24
+// bits, matching the spike implementation (scratchpad/explore-gpu-metal-trace-spike).
+inline uint pcg_hash(uint x) {
+  x = x * 747796405u + 2891336453u;
+  x = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u;
+  return (x >> 22u) ^ x;
+}
+inline float u01_from_hash(uint h) {
+  return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+struct PcgStream {
+  uint seed;
+  uint global_idx;
+  uint slot;
+};
+
+inline float pcg_uniform(thread PcgStream& s) {
+  uint h = pcg_hash(s.seed ^ pcg_hash(s.global_idx * 1000003u + s.slot));
+  s.slot++;
+  return u01_from_hash(h);
+}
+
+// Box-Muller standard normal. u1 floored to avoid log(0).
+inline float pcg_gaussian(thread PcgStream& s) {
+  float u1 = max(pcg_uniform(s), 1e-7f);
+  float u2 = pcg_uniform(s);
+  return sqrt(-2.0f * log(u1)) * cos(2.0f * M_PI_F * u2);
+}
+
+// Mirrors RandomNumberGenerator::Get (math.cpp:365-389). mean / std are passed
+// in the SAME unit the host caller uses for the result; SampleSphericalPointsSph
+// always pre-converts axis_dist.{*}.mean/std to radians here, so the radian
+// envelope semantics hold.
+inline float pcg_get_dist(thread PcgStream& s, uint dtype, float mean, float std_val) {
+  if (dtype == kDistNoRandom) {
+    return mean;
+  }
+  if (dtype == kDistUniform) {
+    return (pcg_uniform(s) - 0.5f) * std_val + mean;
+  }
+  if (dtype == kDistGaussian || dtype == kDistGaussianLegacy) {
+    return pcg_gaussian(s) * std_val + mean;
+  }
+  if (dtype == kDistZigzag) {
+    return fabs(std_val * sin(pcg_uniform(s) * 2.0f * M_PI_F) + mean);
+  }
+  // kLaplacian: inverse CDF.
+  float u = pcg_uniform(s);
+  float sgn = (u < 0.5f) ? -1.0f : 1.0f;
+  float arg = max(1.0f - 2.0f * fabs(u - 0.5f), 1e-30f);
+  return mean - std_val * sgn * log(arg);
+}
+
+// Mirrors detail::NormalizeLatitude (math.cpp:542-553).
+inline void normalize_latitude(float phi, thread float& phi_out, thread bool& flip) {
+  float theta = M_PI_2_F - phi;
+  theta = fmod(theta, 2.0f * M_PI_F);
+  if (theta < 0.0f) {
+    theta += 2.0f * M_PI_F;
+  }
+  flip = theta > M_PI_F;
+  if (flip) {
+    theta = 2.0f * M_PI_F - theta;
+  }
+  phi_out = M_PI_2_F - theta;
+}
+
+// Replicates InitRay_rot + SampleSphericalPointsSph (simulator.cpp:138-150 +
+// math.cpp:404/444). All distribution params are pre-converted to radians on
+// the host so the kernel does no degree↔radian conversions.
+inline void sample_lat_lon_roll(thread PcgStream& s,
+                                constant GenRootKernelParams& gp,
+                                thread float& out_lon,
+                                thread float& out_lat,
+                                thread float& out_roll) {
+  float phi = 0.0f;
+  bool flip = false;
+  float lon = 0.0f;
+  if (gp.lat_path == kLatPathFullSphere) {
+    // SampleSphericalPointsSph(no-arg): lat = asin(2u-1); lambda uniform on [0,2π).
+    float u = pcg_uniform(s) * 2.0f - 1.0f;
+    u = clamp(u, -1.0f, 1.0f);
+    phi = asin(u);
+    lon = pcg_uniform(s) * 2.0f * M_PI_F;
+  } else if (gp.lat_path == kLatPathNoRandom) {
+    phi = gp.lat_mean_rad;
+  } else if (gp.lat_path == kLatPathRayleigh) {
+    float dx = pcg_gaussian(s) * gp.lat_std_rad;
+    float dy = pcg_gaussian(s) * gp.lat_std_rad;
+    float colatitude = sqrt(dx * dx + dy * dy);
+    phi = copysign(M_PI_2_F - colatitude, gp.lat_mean_rad);
+    phi = clamp(phi, -M_PI_2_F, M_PI_2_F);
+    if (gp.lat_mean_rad < 0.0f) {
+      phi = fabs(phi);
+      flip = true;
+    }
+  } else if (gp.lat_path == kLatPathGaussLegacy) {
+    float raw = pcg_get_dist(s, kDistGaussianLegacy, gp.lat_mean_rad, gp.lat_std_rad);
+    normalize_latitude(raw, phi, flip);
+  } else {
+    // kLatPathGenericReject (math.cpp:503-517).
+    int attempts = 0;
+    bool accept = false;
+    do {
+      float raw = pcg_get_dist(s, gp.lat_dist_type, gp.lat_mean_rad, gp.lat_std_rad);
+      normalize_latitude(raw, phi, flip);
+      attempts++;
+      if (attempts >= kMaxRejectionAttempts) {
+        break;
+      }
+      float accept_u = pcg_uniform(s);
+      accept = accept_u < cos(phi) / gp.lat_rejection_m;
+    } while (!accept);
+  }
+  if (gp.lat_path != kLatPathFullSphere) {
+    lon = pcg_get_dist(s, gp.az_type, gp.az_mean_rad, gp.az_std_rad);
+  }
+  float roll = pcg_get_dist(s, gp.roll_type, gp.roll_mean_rad, gp.roll_std_rad);
+  if (flip) {
+    lon += M_PI_F;
+    roll += M_PI_F;
+  }
+  out_lon = lon;
+  out_lat = phi;
+  out_roll = roll;
+}
+
+// Computes R = Rz(lon - π) · Ry(lat - π/2) · Rz(roll) using individual axis
+// rotations chained via Rotation::Chain (geo3d.cpp:32-46), matching
+// BuildCrystalRotation in simulator.cpp:128-135. Stored row-major:
+// mat9[i*3+j] = R_{ij}, identical to Rotation::mat_.
+inline void chain_left_mul_9(thread float* m, thread const float* r) {
+  // m <- r * m
+  float t[9];
+  for (uint i = 0u; i < 3u; i++) {
+    for (uint j = 0u; j < 3u; j++) {
+      t[i * 3 + j] = r[i * 3 + 0] * m[0 * 3 + j]
+                   + r[i * 3 + 1] * m[1 * 3 + j]
+                   + r[i * 3 + 2] * m[2 * 3 + j];
+    }
+  }
+  for (uint k = 0u; k < 9u; k++) {
+    m[k] = t[k];
+  }
+}
+
+inline void axis_angle_rotation_9(thread const float* ax, float theta, thread float* out) {
+  float c = cos(theta);
+  float s = sin(theta);
+  float cc = 1.0f - c;
+  out[0] = ax[0] * ax[0] * cc + c;
+  out[1] = ax[0] * ax[1] * cc - ax[2] * s;
+  out[2] = ax[0] * ax[2] * cc + ax[1] * s;
+  out[3] = ax[0] * ax[1] * cc + ax[2] * s;
+  out[4] = ax[1] * ax[1] * cc + c;
+  out[5] = ax[1] * ax[2] * cc - ax[0] * s;
+  out[6] = ax[0] * ax[2] * cc - ax[1] * s;
+  out[7] = ax[1] * ax[2] * cc + ax[0] * s;
+  out[8] = ax[2] * ax[2] * cc + c;
+}
+
+inline void build_crystal_rotation_9(float lon, float lat, float roll, thread float* mat9) {
+  // Rotation(z, roll), then Chain(y, lat-π/2), then Chain(z, lon-π).
+  // Chain left-multiplies the existing matrix, mirroring Rotation::Chain.
+  float ey[3] = { 0.0f, 1.0f, 0.0f };
+  float ez[3] = { 0.0f, 0.0f, 1.0f };
+  axis_angle_rotation_9(ez, roll, mat9);
+  float middle[9];
+  axis_angle_rotation_9(ey, lat - M_PI_2_F, middle);
+  chain_left_mul_9(mat9, middle);
+  float outer[9];
+  axis_angle_rotation_9(ez, lon - M_PI_F, outer);
+  chain_left_mul_9(mat9, outer);
+}
+
+// d_crystal = R^T · d_world. Mirrors Rotation::ApplyInverse using the row-major
+// mat_ layout (geo3d.cpp:77-87) — read column k of R = row k transposed.
+inline void apply_inverse_mat9(thread const float* mat9,
+                               thread const float* d_world,
+                               thread float* d_crystal) {
+  d_crystal[0] = mat9[0] * d_world[0] + mat9[3] * d_world[1] + mat9[6] * d_world[2];
+  d_crystal[1] = mat9[1] * d_world[0] + mat9[4] * d_world[1] + mat9[7] * d_world[2];
+  d_crystal[2] = mat9[2] * d_world[0] + mat9[5] * d_world[1] + mat9[8] * d_world[2];
+}
+
+// SampleSphCapPoint (geo3d.cpp:171-205). Inputs already in radians.
+inline void sample_sph_cap(thread PcgStream& s,
+                           float lon, float lat, float half_angle,
+                           thread float* out_d) {
+  float c_cap = cos(half_angle);
+  float u = pcg_uniform(s);
+  float x = u + (1.0f - u) * c_cap;
+  float r = sqrt(max(1.0f - x * x, 0.0f));
+  float phi = pcg_uniform(s) * 2.0f * M_PI_F;
+  float y = cos(phi) * r;
+  float z = sin(phi) * r;
+  float c_lon = cos(lon);
+  float s_lon = sin(lon);
+  float c_lat = cos(lat);
+  float s_lat = sin(lat);
+  out_d[0] = c_lon * c_lat * x - s_lon * y - c_lon * s_lat * z;
+  out_d[1] = s_lon * c_lat * x + c_lon * y - s_lon * s_lat * z;
+  out_d[2] = s_lat * x + c_lat * z;
+}
+
+// SampleTrianglePoint (geo3d.cpp:153-168). vtx9 = 3 vertices × 3 coords.
+inline void sample_triangle(thread PcgStream& s,
+                            device const float* vtx9,
+                            thread float* out_p) {
+  float u = pcg_uniform(s);
+  float v = pcg_uniform(s);
+  if (u + v > 1.0f) {
+    u = 1.0f - u;
+    v = 1.0f - v;
+  }
+  for (uint k = 0u; k < 3u; k++) {
+    float a = vtx9[k];
+    float b = vtx9[3 + k];
+    float c = vtx9[6 + k];
+    out_p[k] = u * (b - a) + v * (c - a) + a;
+  }
+}
+
+// RandomSample (geo3d.cpp:112-150) — categorical CDF with negative-weight clip.
+// Mirrors host behavior: non-positive total falls back to bin 0.
+inline uint categorical_sample(thread const float* weights, uint n, float u_in) {
+  float total = 0.0f;
+  for (uint i = 0u; i < n; i++) {
+    total += max(weights[i], 0.0f);
+  }
+  if (total <= 0.0f) {
+    return 0u;
+  }
+  float target = u_in * total;
+  float cumsum = 0.0f;
+  for (uint i = 0u; i < n; i++) {
+    cumsum += max(weights[i], 0.0f);
+    if (cumsum > target) {
+      return i;
+    }
+  }
+  return n - 1u;
+}
+
+kernel void gen_root_kernel(
+    device float*           root_d        [[buffer(0)]],
+    device float*           root_p        [[buffer(1)]],
+    device float*           root_w        [[buffer(2)]],
+    device ushort*          root_tf       [[buffer(3)]],
+    device float*           root_rot      [[buffer(4)]],
+    device const float*     tri_vtx       [[buffer(5)]],
+    device const float*     tri_norm      [[buffer(6)]],
+    device const float*     tri_area      [[buffer(7)]],
+    device const ushort*    tri_to_poly   [[buffer(8)]],
+    constant GenRootKernelParams& gp      [[buffer(9)]],
+    uint tid [[thread_position_in_grid]])
+{
+  if (tid >= gp.num_rays) {
+    return;
+  }
+  uint global_idx = gp.gen_ray_base + tid;
+  PcgStream stream;
+  stream.seed = gp.gen_seed;
+  stream.global_idx = global_idx;
+  stream.slot = 0u;
+
+  // 1. Sample crystal orientation (lon, lat, roll) → 3×3 rotation.
+  float lon, lat, roll;
+  sample_lat_lon_roll(stream, gp, lon, lat, roll);
+  float mat9[9];
+  build_crystal_rotation_9(lon, lat, roll, mat9);
+
+  // 2. Sample incident direction in WORLD space, then rotate into crystal-local.
+  float d_world[3];
+  sample_sph_cap(stream, gp.sun_lon, gp.sun_lat, gp.sun_half_angle, d_world);
+  float d_crystal[3];
+  apply_inverse_mat9(mat9, d_world, d_crystal);
+
+  // 3. Triangle area×facing weighted pick → uniform point on the chosen tri.
+  float proj_prob[kMaxTriPerKernel];
+  uint n_tri = min(gp.tri_count, kMaxTriPerKernel);
+  for (uint t = 0u; t < n_tri; t++) {
+    float dot = d_crystal[0] * tri_norm[t * 3 + 0]
+              + d_crystal[1] * tri_norm[t * 3 + 1]
+              + d_crystal[2] * tri_norm[t * 3 + 2];
+    proj_prob[t] = max(-dot * tri_area[t], 0.0f);
+  }
+  float u_cat = pcg_uniform(stream);
+  uint tri_id = categorical_sample(proj_prob, n_tri, u_cat);
+  float p[3];
+  sample_triangle(stream, tri_vtx + tri_id * 9u, p);
+  ushort to_face = tri_to_poly[tri_id];
+  float weight = gp.ray_weight;
+  if (to_face == kInvalidId) {
+    // Mirrors InitRay_p_fid fallback (simulator.cpp:92-94): zero weight when
+    // a triangle has no polygon backing so downstream HitSurface can drop it.
+    weight = 0.0f;
+  }
+
+  // 4. Emit.
+  root_d[tid * 3 + 0] = d_crystal[0];
+  root_d[tid * 3 + 1] = d_crystal[1];
+  root_d[tid * 3 + 2] = d_crystal[2];
+  root_p[tid * 3 + 0] = p[0];
+  root_p[tid * 3 + 1] = p[1];
+  root_p[tid * 3 + 2] = p[2];
+  root_w[tid] = weight;
+  root_tf[tid] = to_face;
+  for (uint k = 0u; k < 9u; k++) {
+    root_rot[tid * 9u + k] = mat9[k];
+  }
+}
 )METAL";
 
 // Mirror of the Metal-side KernelParams (host layout MUST match the .metal
@@ -415,6 +787,47 @@ struct KernelParams {
 static_assert(sizeof(KernelParams) == 76u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 
+// Device root-gen latitude path tags. MUST match constant kLatPath* in
+// kKernelSrc — they index into a Metal-side branch table.
+enum LatPath : uint32_t {
+  kLatPathFullSphereHost    = 0u,
+  kLatPathNoRandomHost      = 1u,
+  kLatPathRayleighHost      = 2u,
+  kLatPathGaussLegacyHost   = 3u,
+  kLatPathGenericRejectHost = 4u,
+};
+
+// Mirror of the Metal-side GenRootKernelParams (host layout MUST match the
+// MSL struct field-for-field — all 4-byte scalars, natural alignment).
+// Field order MUST match the MSL struct in kKernelSrc — static_assert guards
+// size only; reviewer-facing field-by-field check is required when adding
+// or reordering members (same convention as KernelParams above).
+struct GenRootKernelParams {
+  uint32_t gen_seed;
+  uint32_t gen_ray_base;
+  uint32_t num_rays;
+  uint32_t tri_count;
+  float    sun_lon;
+  float    sun_lat;
+  float    sun_half_angle;
+  float    ray_weight;
+  uint32_t lat_path;
+  uint32_t lat_dist_type;   // DistributionType cast to uint
+  float    lat_mean_rad;
+  float    lat_std_rad;
+  float    lat_rejection_m;
+  uint32_t az_type;
+  float    az_mean_rad;
+  float    az_std_rad;
+  float    az_pad;
+  uint32_t roll_type;
+  float    roll_mean_rad;
+  float    roll_std_rad;
+  float    roll_pad;
+};
+static_assert(sizeof(GenRootKernelParams) == 84u,
+              "GenRootKernelParams size mismatch — update host struct to match Metal-side layout");
+
 float ComputeAz0(const Rotation& rot) {
   float ax_z[3]{ 0.0f, 0.0f, 1.0f };
   rot.Apply(ax_z);
@@ -444,6 +857,25 @@ Logger& EffectiveLogger(Logger* logger) {
   return logger ? *logger : GetGlobalLogger();
 }
 
+// File-local mirror of the file-static ComputeJacobianEnvelope in math.cpp.
+// Inlined here so device root-gen (task-260.2) does not require exporting that
+// helper through math.hpp; keeps math.cpp's parity envelope semantics in one
+// place per file (host math kept private; device path uses its own copy).
+// Inputs in degrees, output is the rejection envelope M used as cos(phi)/M.
+float ComputeJacobianEnvelopeForDeviceGen(const Distribution& dist) {
+  switch (dist.type) {
+    case DistributionType::kGaussian:
+      return std::cos(std::max(std::abs(dist.mean) - 3.0f * dist.std, 0.0f) * math::kDegreeToRad);
+    case DistributionType::kZigzag:
+      return std::cos(std::max(std::abs(dist.mean) - dist.std, 0.0f) * math::kDegreeToRad);
+    case DistributionType::kLaplacian:
+      return std::cos(std::max(std::abs(dist.mean) - 5.0f * dist.std, 0.0f) * math::kDegreeToRad);
+    case DistributionType::kUniform:
+    default:
+      return 1.0f;
+  }
+}
+
 }  // namespace
 
 struct MetalTraceBackend::Impl {
@@ -452,10 +884,19 @@ struct MetalTraceBackend::Impl {
   id<MTLDevice>               device = nil;
   id<MTLCommandQueue>         queue  = nil;
   id<MTLComputePipelineState> pso    = nil;
+  // Device root-gen PSO (task-260.2). Compiled by EnsurePso alongside the
+  // trace_layer kernel; nil until first BeginSession.
+  id<MTLComputePipelineState> gen_root_pso_ = nil;
+  // Captured from spec.seed by BeginSession. 0 → device gen disabled (host
+  // fallback path). Non-zero implies single-worker determinism contract.
+  uint32_t gen_seed_ = 0u;
 
   SessionSpec spec{};
   bool   in_session = false;
   size_t ms_idx = 0;
+  // First-layer root index running counter. BeginSession resets to 0; each
+  // GenerateFirstLayerRootsForCi dispatch advances by the rays it emitted, so
+  // (gen_seed_, gen_ray_base + tid) is a globally unique stream per session.
   size_t root_ray_count = 0;
   int    width = 0;
   int    height = 0;
@@ -598,7 +1039,11 @@ struct MetalTraceBackend::Impl {
   void ResolveLayerCrystalForCi(const ScatteringSetting& setting, bool use_host,
                                 const HostRayBatch& host_batch);
   size_t GenerateFirstLayerRootsForCi(const ScatteringSetting& setting,
-                                      size_t ci, size_t crystal_ray_num);
+                                      size_t ci, size_t crystal_ray_num,
+                                      bool can_use_device_gen);
+  GenRootKernelParams BuildGenRootParams(const ScatteringSetting& setting,
+                                          size_t crystal_ray_num) const;
+  void DispatchGenRoot(const GenRootKernelParams& gp);
   size_t CopyContSliceToRootBuf(const ScatteringSetting& setting, size_t ci_start, size_t ci_n, int in_slot);
   void DispatchLayer(size_t num_rays,
                      id<MTLBuffer> r_d, id<MTLBuffer> r_p,
@@ -666,6 +1111,18 @@ void MetalTraceBackend::Impl::EnsurePso() {
                "MetalTraceBackend: pipeline state creation failed: {}",
                err.localizedDescription.UTF8String);
     assert(false && "MetalTraceBackend: pipeline state creation failed");
+  }
+
+  // Device root-gen PSO (task-260.2). Same library as trace_layer; compiled
+  // in lock-step so the kernel cache survives across BeginSession invocations.
+  id<MTLFunction> gen_fn = [lib newFunctionWithName:@"gen_root_kernel"];
+  assert(gen_fn != nil && "MetalTraceBackend: gen_root_kernel entry point missing");
+  gen_root_pso_ = [device newComputePipelineStateWithFunction:gen_fn error:&err];
+  if (gen_root_pso_ == nil) {
+    ILOG_ERROR(EffectiveLogger(logger_),
+               "MetalTraceBackend: gen_root pipeline state creation failed: {}",
+               err.localizedDescription.UTF8String);
+    assert(false && "MetalTraceBackend: gen_root pipeline state creation failed");
   }
 }
 
@@ -884,7 +1341,24 @@ void MetalTraceBackend::Impl::ResolveLayerCrystalForCi(const ScatteringSetting& 
 }
 
 size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSetting& setting,
-                                                              size_t ci, size_t crystal_ray_num) {
+                                                              size_t ci, size_t crystal_ray_num,
+                                                              bool can_use_device_gen) {
+  if (can_use_device_gen) {
+    // Device root-gen path (task-260.2). Replicates InitRayFirstMs on the GPU
+    // using a counter-based PCG stream keyed by (gen_seed_, gen_ray_base+tid).
+    // root_ray_count accumulates across dispatches to keep the global index
+    // monotone across batches of the same session.
+    GenRootKernelParams gp = BuildGenRootParams(setting, crystal_ray_num);
+    gp.gen_seed     = gen_seed_;
+    assert(root_ray_count <= static_cast<size_t>(UINT32_MAX) &&
+           "root_ray_count overflow: TraceLayer must guard can_use_device_gen with UINT32_MAX bound");
+    gp.gen_ray_base = static_cast<uint32_t>(root_ray_count);
+    gp.num_rays     = static_cast<uint32_t>(crystal_ray_num);
+    DispatchGenRoot(gp);
+    root_ray_count += crystal_ray_num;
+    return crystal_ray_num;
+  }
+
   const AxisDistribution& crystal_axis = setting.crystal_.axis_;
 
   RayBuffer workspace[2]{};
@@ -921,7 +1395,105 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
     // re-applies the forward rotation before projection (invariant 6).
     std::memcpy(rot_ptr + i * 9, r.crystal_rot_.GetMat(), 9 * sizeof(float));
   }
+  // Accumulate the host-gen count too so a future device-gen-eligible call
+  // within the same session keeps gen_ray_base globally monotone.
+  root_ray_count += n;
   return n;
+}
+
+// Maps host axis_dist + sun + wavelength into the device GenRootKernelParams.
+// All angular fields are pre-converted to radians on the host so the kernel
+// itself does zero degree↔radian conversions.
+GenRootKernelParams MetalTraceBackend::Impl::BuildGenRootParams(
+    const ScatteringSetting& setting, size_t crystal_ray_num) const {
+  GenRootKernelParams gp{};
+  gp.tri_count = static_cast<uint32_t>(current_crystal.TotalTriangles());
+  assert(gp.tri_count <= 64u &&
+         "BuildGenRootParams: tri_count > kMaxTriPerKernel — caller must fall back to host gen");
+  gp.num_rays = static_cast<uint32_t>(crystal_ray_num);
+  // gen_seed / gen_ray_base are filled by the caller (depend on session state).
+
+  const SunParam& sun = spec.scene->light_source_.param_;
+  gp.sun_lon        = (sun.azimuth_ + 180.0f) * math::kDegreeToRad;
+  gp.sun_lat        = -sun.altitude_ * math::kDegreeToRad;
+  gp.sun_half_angle = (sun.diameter_ * 0.5f) * math::kDegreeToRad;
+  gp.ray_weight     = spec.wl.weight_;
+
+  const AxisDistribution& axis_dist = setting.crystal_.axis_;
+  // Latitude path / proposal type, mirroring math.cpp:444 SampleSphericalPointsSph
+  // setup. Stays in sync with that function's three-path decision: Rayleigh
+  // (near-pole Gaussian only) / kGaussianLegacy / generic Jacobian rejection /
+  // kNoRandom, plus a top-level fast path when the distribution is the full
+  // sphere uniform sampler.
+  auto lat_type = axis_dist.latitude_dist.type;
+  float lat_mean_rad = axis_dist.latitude_dist.mean * math::kDegreeToRad;
+  float lat_std_rad  = axis_dist.latitude_dist.std  * math::kDegreeToRad;
+  float rejection_m  = 1.0f;
+  uint32_t lat_path  = kLatPathGenericRejectHost;
+
+  if (axis_dist.IsFullSphereUniform()) {
+    lat_path = kLatPathFullSphereHost;
+  } else if (lat_type == DistributionType::kNoRandom) {
+    lat_path = kLatPathNoRandomHost;
+  } else if (lat_type == DistributionType::kGaussianLegacy) {
+    lat_path = kLatPathGaussLegacyHost;
+  } else if (lat_type == DistributionType::kGaussian) {
+    // Same Rayleigh threshold as math.cpp:469: colatitude_center + 3σ < 0.5°.
+    constexpr float kPolarThresholdRad = 0.5f * math::kDegreeToRad;
+    float colatitude_center = math::kPi_2 - std::abs(lat_mean_rad);
+    bool use_rayleigh = (colatitude_center + 3.0f * lat_std_rad) < kPolarThresholdRad;
+    if (use_rayleigh) {
+      lat_path = kLatPathRayleighHost;
+    } else {
+      lat_path = kLatPathGenericRejectHost;
+      rejection_m = ComputeJacobianEnvelopeForDeviceGen(axis_dist.latitude_dist);
+    }
+  } else {
+    // kUniform / kZigzag / kLaplacian: generic rejection.
+    rejection_m = ComputeJacobianEnvelopeForDeviceGen(axis_dist.latitude_dist);
+  }
+
+  gp.lat_path        = lat_path;
+  gp.lat_dist_type   = static_cast<uint32_t>(lat_type);
+  gp.lat_mean_rad    = lat_mean_rad;
+  gp.lat_std_rad     = lat_std_rad;
+  gp.lat_rejection_m = rejection_m;
+
+  gp.az_type     = static_cast<uint32_t>(axis_dist.azimuth_dist.type);
+  gp.az_mean_rad = axis_dist.azimuth_dist.mean * math::kDegreeToRad;
+  gp.az_std_rad  = axis_dist.azimuth_dist.std  * math::kDegreeToRad;
+  gp.az_pad      = 0.0f;
+
+  gp.roll_type     = static_cast<uint32_t>(axis_dist.roll_dist.type);
+  gp.roll_mean_rad = axis_dist.roll_dist.mean * math::kDegreeToRad;
+  gp.roll_std_rad  = axis_dist.roll_dist.std  * math::kDegreeToRad;
+  gp.roll_pad      = 0.0f;
+  return gp;
+}
+
+void MetalTraceBackend::Impl::DispatchGenRoot(const GenRootKernelParams& gp) {
+  @autoreleasepool {
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
+    [enc setComputePipelineState:gen_root_pso_];
+    [enc setBuffer:root_d_buf     offset:0 atIndex:0];
+    [enc setBuffer:root_p_buf     offset:0 atIndex:1];
+    [enc setBuffer:root_w_buf     offset:0 atIndex:2];
+    [enc setBuffer:root_tf_buf    offset:0 atIndex:3];
+    [enc setBuffer:root_rot_buf   offset:0 atIndex:4];
+    [enc setBuffer:tri_vtx_buf_   offset:0 atIndex:5];
+    [enc setBuffer:tri_norm_buf_  offset:0 atIndex:6];
+    [enc setBuffer:tri_area_buf_  offset:0 atIndex:7];
+    [enc setBuffer:tri_to_poly_buf_ offset:0 atIndex:8];
+    [enc setBytes:&gp length:sizeof(GenRootKernelParams) atIndex:9];
+    NSUInteger threads = 64;
+    NSUInteger groups = (static_cast<NSUInteger>(gp.num_rays) + threads - 1) / threads;
+    [enc dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
+        threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
+    [enc endEncoding];
+    [cb commit];
+    [cb waitUntilCompleted];
+  }
 }
 
 size_t MetalTraceBackend::Impl::CopyContSliceToRootBuf(const ScatteringSetting& setting,
@@ -1246,6 +1818,9 @@ void MetalTraceBackend::Impl::Reset() {
   in_session = false;
   ms_idx = 0;
   root_ray_count = 0;
+  // gen_seed_ is re-derived from spec.seed every BeginSession; clear so a
+  // session that omits spec.seed cannot inherit a previous activation.
+  gen_seed_ = 0u;
   width = 0;
   height = 0;
   az0 = 0.0f;
@@ -1344,6 +1919,12 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
     impl_->seeded_seed = spec.seed;
     impl_->seeded = true;
   }
+  // Device root-gen activation (task-260.2). spec.seed != 0 implies the
+  // single-worker determinism contract (server.cpp:184), which is the case we
+  // accelerate. spec.seed == 0 keeps gen_seed_ at 0, which forces the host
+  // path in GenerateFirstLayerRootsForCi via the can_use_device_gen guard in
+  // TraceLayer.
+  impl_->gen_seed_ = static_cast<uint32_t>(spec.seed);
 
   impl_->EnsureDevice();
   impl_->EnsurePso();
@@ -1376,7 +1957,9 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
 
     size_t total_ray_num = first_ms ? roots.host.count : roots.device.count;
     if (first_ms) {
-      impl_->root_ray_count = total_ray_num;
+      // root_ray_count is now maintained inside GenerateFirstLayerRootsForCi
+      // (both host and device paths advance it) so device root-gen sees a
+      // globally monotone gen_ray_base across ci slices and successive batches.
       // Exit seam (scrum-258.1): size the session-level exit buffer at the
       // first MS and reset its atomic slot. Multi-MS path grows exit buffer
       // again on the final layer below — see comment there.
@@ -1486,7 +2069,23 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
 
       size_t in_count = 0;
       if (first_ms) {
-        in_count = impl_->GenerateFirstLayerRootsForCi(setting, ci, ci_n);
+        // task-260.2: device root-gen runs when
+        //   (a) single crystal population (multi-crystal stream-shift is left
+        //       to task-260.3 geom-pool);
+        //   (b) host-supplied root rays are NOT pinned via roots.host.crystal
+        //       (matches the use_host=true convention below);
+        //   (c) spec.seed != 0 (single-worker determinism contract); and
+        //   (d) tri_count ≤ kMaxTriPerKernel (kernel stack-array bound); and
+        //   (e) root_ray_count fits in uint32_t (gen_ray_base width).
+        // crystal_cnt is local to this layer's ms_info; the device-gen guard
+        // intentionally inspects this layer's crystal_cnt so multi-crystal
+        // layers fall back to the host path regardless of session state.
+        bool can_use_device_gen = !use_host &&
+                                  crystal_cnt == 1 &&
+                                  impl_->gen_seed_ != 0u &&
+                                  impl_->current_crystal.TotalTriangles() <= 64u &&
+                                  impl_->root_ray_count <= static_cast<size_t>(UINT32_MAX) - ci_n;
+        in_count = impl_->GenerateFirstLayerRootsForCi(setting, ci, ci_n, can_use_device_gen);
       } else {
         // Stage this ci's slice of the prior continuation buffer into the
         // root buffers so the kernel reads a contiguous, aligned input.
