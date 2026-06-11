@@ -700,6 +700,14 @@ kernel void gen_root_kernel(
   if (tid >= gp.num_rays) {
     return;
   }
+  // task-260.5 Step 3: categorical_sample(n=0) underflows uint and returns
+  // 0xffffffff, which then indexes tri_vtx / tri_to_poly OOB. tri_count==0
+  // should be impossible (host EnsureTriBuffers asserts tri_cnt > 0) but
+  // a defensive early-out here makes the contract local and avoids a GPU
+  // hang/crash if the host invariant ever breaks.
+  if (gp.tri_count == 0u) {
+    return;
+  }
   uint global_idx = gp.gen_ray_base + tid;
   PcgStream stream;
   stream.seed = gp.gen_seed;
@@ -863,6 +871,16 @@ Logger& EffectiveLogger(Logger* logger) {
 // helper through math.hpp; keeps math.cpp's parity envelope semantics in one
 // place per file (host math kept private; device path uses its own copy).
 // Inputs in degrees, output is the rejection envelope M used as cos(phi)/M.
+//
+// SYNC ANCHOR (task-260.5 Step 5, code-review-01 Minor): these four branches
+// MUST stay numerically identical to the file-static ComputeJacobianEnvelope
+// in src/core/math.cpp (consumed by RandomSampler::SampleSphericalPointsSph,
+// math.cpp:444+ — see in particular the generic-rejection path at math.cpp:504
+// where cos(phi)/M is the acceptance ratio). If math.cpp changes either the
+// 3σ (kGaussian), 1σ (kZigzag), or 5σ (kLaplacian) cutoff, OR adds a new
+// DistributionType, mirror the change here in the SAME PR — silent divergence
+// shows up only under narrow raypath filters and ds_corr will tank, exactly
+// the 260.5 regression class.
 float ComputeJacobianEnvelopeForDeviceGen(const Distribution& dist) {
   switch (dist.type) {
     case DistributionType::kGaussian:
@@ -880,7 +898,22 @@ float ComputeJacobianEnvelopeForDeviceGen(const Distribution& dist) {
 }  // namespace
 
 struct MetalTraceBackend::Impl {
+  Impl() {
+    // task-260.5 Step 4 (code-review-01 Minor): cache the device-gen escape
+    // hatch once per backend instance. LUMICE_DISABLE_DEVICE_GEN is a
+    // process-level config (single-worker server, no in-process re-config),
+    // so reading it per-dispatch (the prior behavior) was needless overhead
+    // and risked observing different values across BeginSession cycles if a
+    // future test toggled it mid-instance. The ctor capture pairs naturally
+    // with the test helpers ForceHostGenForByteIdentity / EnableDeviceGen…,
+    // which already setenv BEFORE constructing a fresh MetalTraceBackend.
+    const char* env = std::getenv("LUMICE_DISABLE_DEVICE_GEN");
+    disable_device_gen_ = env != nullptr && env[0] != '\0' && env[0] != '0';
+  }
+
   Logger* logger_ = nullptr;
+  // Captured at construction from LUMICE_DISABLE_DEVICE_GEN. See ctor above.
+  bool disable_device_gen_ = false;
 
   id<MTLDevice>               device = nil;
   id<MTLCommandQueue>         queue  = nil;
@@ -895,9 +928,22 @@ struct MetalTraceBackend::Impl {
   SessionSpec spec{};
   bool   in_session = false;
   size_t ms_idx = 0;
-  // First-layer root index running counter. BeginSession resets to 0; each
-  // GenerateFirstLayerRootsForCi dispatch advances by the rays it emitted, so
-  // (gen_seed_, gen_ray_base + tid) is a globally unique stream per session.
+  // First-layer root index running counter — globally monotone PCG index
+  // across all SimBatches of a single Simulator::Run().
+  //   * Reset to 0 ONLY at first seeding (BeginSession + !seeded gate), in
+  //     lock-step with rng.SetSeed; Reset()/EndSession do NOT touch it.
+  //   * Each GenerateFirstLayerRootsForCi device-gen dispatch advances it by
+  //     the rays it emitted, so (gen_seed_, gen_ray_base + tid) is a unique
+  //     PCG stream per ray within one Run(). Host-gen also advances it so a
+  //     later device-gen-eligible call in the same session stays monotone.
+  //   * Architectural pre-condition: backend instances are per-Run() (created
+  //     in simulator.cpp:596 / CreateBackend), so `seeded` starts false on
+  //     each new Run() and the counter restarts at 0. If a future refactor
+  //     pools backend instances across Run()s, this contract still holds for
+  //     PCG-stream determinism within a Run() but NOT across pooled Run()s —
+  //     revisit cross-Run() seeding semantics at that point.
+  // Value-initialized to 0 by Impl's = {} member initializer below; the
+  // explicit `= 0` here also serves as the !seeded-gate's pre-seed contract.
   size_t root_ray_count = 0;
   int    width = 0;
   int    height = 0;
@@ -1177,6 +1223,13 @@ void MetalTraceBackend::Impl::EnsureRootBuffers(size_t n) {
 }
 
 void MetalTraceBackend::Impl::EnsureTriBuffers(size_t tri_cnt) {
+  // task-260.5 Step 3: device-gen requires at least one triangle for the
+  // area×facing categorical sampler. A zero-count crystal would underflow
+  // categorical_sample in gen_root_kernel (n=0 → returns 0xffffffff → OOB
+  // index). Production configs always have tri_cnt > 0; this assert catches
+  // a future scene/config bug at the layer-prep stage rather than as a GPU
+  // hang.
+  assert(tri_cnt > 0u && "EnsureTriBuffers: tri_cnt == 0 (gen_root_kernel cannot sample)");
   if (tri_cnt <= tri_buf_capacity_) {
     return;
   }
@@ -1818,7 +1871,14 @@ void MetalTraceBackend::Impl::Reset() {
   }
   in_session = false;
   ms_idx = 0;
-  root_ray_count = 0;
+  // root_ray_count INTENTIONALLY persists across Reset(): each EndSession()
+  // is followed (in the next BeginSession) by another GenerateFirstLayerRootsForCi
+  // dispatch that must observe a globally monotone gen_ray_base. The counter
+  // is reset only on the first seeding (BeginSession + !seeded gate), in
+  // lock-step with rng.SetSeed. Mirror bug of 258.10: if we reset here, the
+  // GPU PCG stream collapses to the same 128-ray range every SimBatch and
+  // narrow raypath-filter parity (test_parity_multi_ms_prob05_filter) drops
+  // to ds_corr=0.33. See task-260.5 SUMMARY / plan §1.
   // gen_seed_ is re-derived from spec.seed every BeginSession; clear so a
   // session that omits spec.seed cannot inherit a previous activation.
   gen_seed_ = 0u;
@@ -1889,7 +1949,10 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   impl_->spec = spec;
   impl_->in_session = true;
   impl_->ms_idx = 0;
-  impl_->root_ray_count = 0;
+  // root_ray_count is reset ONLY at first seeding below (the !seeded gate, in
+  // lock-step with rng.SetSeed). Resetting here unconditionally would collapse
+  // the GPU PCG stream to a single 128-ray range every SimBatch — the mirror
+  // bug of 258.10 (RNG re-seed per batch). See task-260.5 fix.
   impl_->width  = spec.render->resolution_[0];
   impl_->height = spec.render->resolution_[1];
 
@@ -1919,6 +1982,11 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
     RandomNumberGenerator::GetInstance().SetSeed(spec.seed);
     impl_->seeded_seed = spec.seed;
     impl_->seeded = true;
+    // task-260.5: zero the device-gen counter ONLY here, alongside SetSeed.
+    // Subsequent BeginSession cycles within the same Run() (same instance,
+    // same seed) leave root_ray_count untouched so successive SimBatches
+    // consume disjoint PCG ranges (gen_ray_base monotonically increases).
+    impl_->root_ray_count = 0;
   }
   // Device root-gen activation (task-260.2). spec.seed != 0 implies the
   // single-worker determinism contract (server.cpp:184), which is the case we
@@ -2084,16 +2152,15 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
         // crystal_cnt is local to this layer's ms_info; the device-gen guard
         // intentionally inspects this layer's crystal_cnt so multi-crystal
         // layers fall back to the host path regardless of session state.
-        // Read the escape hatch per dispatch (not cached) so tests can toggle
-        // it around BeginSession without process re-launch.
-        const char* disable_env = std::getenv("LUMICE_DISABLE_DEVICE_GEN");
-        bool disable_device_gen = disable_env != nullptr && disable_env[0] != '\0' && disable_env[0] != '0';
+        // The escape hatch is cached once per backend in Impl's ctor (see
+        // task-260.5 Step 4); tests that need to flip it must setenv BEFORE
+        // constructing a new MetalTraceBackend.
         bool can_use_device_gen = !use_host &&
                                   crystal_cnt == 1 &&
                                   impl_->gen_seed_ != 0u &&
                                   impl_->current_crystal.TotalTriangles() <= 64u &&
                                   impl_->root_ray_count <= static_cast<size_t>(UINT32_MAX) - ci_n &&
-                                  !disable_device_gen;
+                                  !impl_->disable_device_gen_;
         in_count = impl_->GenerateFirstLayerRootsForCi(setting, ci, ci_n, can_use_device_gen);
       } else {
         // Stage this ci's slice of the prior continuation buffer into the

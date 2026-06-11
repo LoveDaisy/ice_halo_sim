@@ -593,6 +593,13 @@ void Simulator::Run() {
 
   // Pick a TraceBackend once per Run() entry. nullptr keeps the legacy CPU
   // path (zero behavior change when LUMICE_TRACE_BACKEND is unset).
+  //
+  // ARCHITECTURAL INVARIANT (task-260.5, scrum-258.10): backend instances are
+  // created PER Run() and never pooled or reused across Run()s. MetalTraceBackend
+  // relies on this to implement the !seeded gate that resets both the RNG state
+  // and root_ray_count exactly once per Run() — if a future refactor introduces
+  // a backend pool, that gate's semantics must be revisited (cross-Run() PCG
+  // determinism + counter rollover both depend on the per-Run() lifecycle here).
   auto backend = CreateBackend(preferred_backend_.load(std::memory_order_acquire), logger_);
   bool warned_no_renders = false;
   bool warned_multi_renderer = false;
