@@ -30,6 +30,19 @@ inline bool ShouldSkipMetalTests() {
   return env != nullptr && env[0] != '\0' && env[0] != '0';
 }
 
+// task-260.2: when the test asserts byte-identity against a hand-rolled
+// oracle that mirrors the host mt19937 RNG sequence, the Metal device
+// root-gen path (which uses a counter-based PCG stream) cannot be aligned
+// bit-for-bit. Use these helpers at the top of any test to lock the Metal
+// backend to one path. The env var is read per-dispatch in
+// MetalTraceBackend::TraceLayer so toggling between tests is fine.
+inline void ForceHostGenForByteIdentity() {
+  ::setenv("LUMICE_DISABLE_DEVICE_GEN", "1", /*overwrite=*/1);
+}
+inline void EnableDeviceGenForStatisticalParity() {
+  ::unsetenv("LUMICE_DISABLE_DEVICE_GEN");
+}
+
 inline RenderConfig MakeRectangularRender() {
   RenderConfig cfg;
   cfg.id_ = 0;

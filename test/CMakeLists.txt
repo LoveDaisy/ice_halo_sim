@@ -39,6 +39,7 @@ add_executable(unit_test
   "${PROJ_TEST_DIR}/test_cpu_trace_backend.cpp"
   "${PROJ_TEST_DIR}/test_metal_trace_backend.cpp"
   "${PROJ_TEST_DIR}/test_metal_trace_parity.cpp"
+  "${PROJ_TEST_DIR}/test_metal_root_gen.cpp"
   "${PROJ_TEST_DIR}/test_exit_records.cpp"
   "${PROJ_TEST_DIR}/test_main.cpp")
 target_include_directories(unit_test

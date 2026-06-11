@@ -11,6 +11,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <utility>
@@ -2076,15 +2077,23 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
         //       (matches the use_host=true convention below);
         //   (c) spec.seed != 0 (single-worker determinism contract); and
         //   (d) tri_count ≤ kMaxTriPerKernel (kernel stack-array bound); and
-        //   (e) root_ray_count fits in uint32_t (gen_ray_base width).
+        //   (e) root_ray_count fits in uint32_t (gen_ray_base width); and
+        //   (f) LUMICE_DISABLE_DEVICE_GEN env var is unset (escape hatch for
+        //       strict-identity parity tests that mirror the host mt19937
+        //       stream — these cannot align with the device PCG stream).
         // crystal_cnt is local to this layer's ms_info; the device-gen guard
         // intentionally inspects this layer's crystal_cnt so multi-crystal
         // layers fall back to the host path regardless of session state.
+        // Read the escape hatch per dispatch (not cached) so tests can toggle
+        // it around BeginSession without process re-launch.
+        const char* disable_env = std::getenv("LUMICE_DISABLE_DEVICE_GEN");
+        bool disable_device_gen = disable_env != nullptr && disable_env[0] != '\0' && disable_env[0] != '0';
         bool can_use_device_gen = !use_host &&
                                   crystal_cnt == 1 &&
                                   impl_->gen_seed_ != 0u &&
                                   impl_->current_crystal.TotalTriangles() <= 64u &&
-                                  impl_->root_ray_count <= static_cast<size_t>(UINT32_MAX) - ci_n;
+                                  impl_->root_ray_count <= static_cast<size_t>(UINT32_MAX) - ci_n &&
+                                  !disable_device_gen;
         in_count = impl_->GenerateFirstLayerRootsForCi(setting, ci, ci_n, can_use_device_gen);
       } else {
         // Stage this ci's slice of the prior continuation buffer into the
