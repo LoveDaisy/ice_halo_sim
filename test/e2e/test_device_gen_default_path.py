@@ -127,9 +127,14 @@ def test_default_path_device_gen_vs_host_gen_single_ms():
 
 # Activation-proof RelErr floor. PCG vs mt19937 with the same effective seed
 # yield distinct sample streams; on dual_fisheye_ref the sum-of-XYZ relative
-# difference is ~1% empirically. 1e-5 is conservatively far above the floor of
-# noise but far below the real-signal regime, so a near-zero RelErr unambiguously
-# means device-gen fell back to host-gen and produced bit-identical output.
+# difference measures ~4e-5 empirically (single-worker sim_seed=42, 2026-06-11).
+# Per-pixel variance is larger but the global sum has strong MC cancellation —
+# total-sum RelErr is the conservative end of the differentiation envelope.
+# Floor 1e-5 is below the ~4e-5 active-path measurement (~4× headroom) and far
+# above the byte-equal fallback regime (rel_err == 0 if device-gen silently
+# degrades to host-gen), so the test cleanly distinguishes the two cases.
+# Both runs are single-worker deterministic at sim_seed=42, so the gap has no
+# run-to-run variance and the 4× headroom is not flaky.
 _ACTIVATION_RELERR_FLOOR = 1e-5
 
 
