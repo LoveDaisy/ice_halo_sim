@@ -174,6 +174,10 @@ The dashboard tracks 12 time-series (4 platforms × 3 metrics):
 | Environment variable | Default | Description |
 |----------------------|---------|-------------|
 | `LUMICE_BATCH_RAY_NUM` | 128 | Per-batch ray count sent to the simulator per `SimBatch`. Higher values amortize Metal kernel dispatch overhead; the empirical crossover where the Metal backend outperforms legacy is around 512. Set to a power of two for alignment (e.g. `LUMICE_BATCH_RAY_NUM=512`). Applies at server startup — changing it mid-run has no effect. |
+| `LUMICE_TRACE_BACKEND` | unset (legacy CPU) | Trace backend selection: unset = legacy CPU; `metal` = Metal GPU backend (exit-seam + device root-gen); `cpu_backend` = SoA CPU backend. |
+| `LUMICE_DISABLE_DEVICE_GEN` | unset (device-gen ON) | Escape hatch to force **host** root-ray generation on the Metal backend. Device root-gen (GPU PCG root-ray supply) is the **default** for the Metal backend on eligible layers (single-crystal-per-ci, `tri_count ≤ 64`); it activates on both the deterministic single-worker path and the default multi-worker random path (each worker gets a non-zero derived `effective_seed_`). Set this to `1` only for strict-identity parity tests that mirror the host `std::mt19937` stream (which cannot align with the device PCG stream). Read once per backend instance at construction. |
+
+**GPU device root-gen (scrum-260)**: on the Metal backend, root rays (orientation / direction / entry point) are generated on-device via a counter-based PCG stream keyed by `(gen_seed, gen_ray_base + tid)`, replacing host pre-generation + upload. This is the default path (single- and multi-crystal per-ci); statistical equivalence vs legacy is validated by the slow-e2e parity harness (`ds_corr ≥ 0.99`). Throughput uplift is hardware-dependent — quantify on a frequency-locked bench machine.
 
 Example: measure throughput at a higher batch size to characterize the Metal dispatch amortization curve:
 
