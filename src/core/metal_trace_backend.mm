@@ -501,6 +501,18 @@ struct MetalTraceBackend::Impl {
   id<MTLBuffer> root_rot_buf = nil;
   size_t        root_capacity = 0;
 
+  // Triangle-level geometry for device-resident root-gen (task-260.2). Uploaded
+  // by UploadCrystal alongside polygon-level data; sized lazily by
+  // EnsureTriBuffers. The gen kernel reads these to perform area×facing
+  // weighted triangle sampling + entry-point sampling and to map the chosen
+  // triangle back to its polygon face (mirrors PolygonFaceOfTri in
+  // simulator.cpp). face_seq_cap_-style stride is N/A (these are per-triangle).
+  id<MTLBuffer> tri_vtx_buf_     = nil;  // N_tri × 9 float (3 vtx × 3 coords)
+  id<MTLBuffer> tri_norm_buf_    = nil;  // N_tri × 3 float
+  id<MTLBuffer> tri_area_buf_    = nil;  // N_tri × 1 float
+  id<MTLBuffer> tri_to_poly_buf_ = nil;  // N_tri × 1 uint16 (kInvalidId on miss)
+  size_t        tri_buf_capacity_ = 0;
+
   // Continuation ping-pong (indexed by ms_idx & 1).
   id<MTLBuffer> cont_d[2]  = { nil, nil };
   id<MTLBuffer> cont_p[2]  = { nil, nil };
@@ -578,6 +590,7 @@ struct MetalTraceBackend::Impl {
   void EnsureImage(int w, int h);
   void EnsurePolyBuffers(size_t poly_cnt);
   void EnsureRootBuffers(size_t n);
+  void EnsureTriBuffers(size_t tri_cnt);
   void EnsureContBuffer(int slot);
   void EnsureRecSink(size_t n);
   void EnsureExitBuffers(size_t cap);  // exit seam (scrum-258.1)
@@ -705,6 +718,25 @@ void MetalTraceBackend::Impl::EnsureRootBuffers(size_t n) {
   assert(root_rot_buf != nil);
 }
 
+void MetalTraceBackend::Impl::EnsureTriBuffers(size_t tri_cnt) {
+  if (tri_cnt <= tri_buf_capacity_) {
+    return;
+  }
+  tri_buf_capacity_ = tri_cnt;
+  tri_vtx_buf_ = [device newBufferWithLength:tri_cnt * 9 * sizeof(float)
+                                    options:MTLResourceStorageModeShared];
+  assert(tri_vtx_buf_ != nil);
+  tri_norm_buf_ = [device newBufferWithLength:tri_cnt * 3 * sizeof(float)
+                                     options:MTLResourceStorageModeShared];
+  assert(tri_norm_buf_ != nil);
+  tri_area_buf_ = [device newBufferWithLength:tri_cnt * sizeof(float)
+                                     options:MTLResourceStorageModeShared];
+  assert(tri_area_buf_ != nil);
+  tri_to_poly_buf_ = [device newBufferWithLength:tri_cnt * sizeof(uint16_t)
+                                        options:MTLResourceStorageModeShared];
+  assert(tri_to_poly_buf_ != nil);
+}
+
 void MetalTraceBackend::Impl::EnsureContBuffer(int slot) {
   if (out_cap <= cont_capacity[slot]) {
     return;
@@ -802,6 +834,38 @@ void MetalTraceBackend::Impl::UploadCrystal(const Crystal& crystal) {
     for (int k = 0; k < 3; k++) {
       centroid_ptr[f * 3 + k] = (v[0 * 3 + k] + v[1 * 3 + k] + v[2 * 3 + k]) / 3.0f;
     }
+  }
+
+  // Triangle-level geometry (task-260.2). Uploaded so the device root-gen
+  // kernel can replicate InitRay_p_fid: area×facing-weighted triangle pick +
+  // uniform sample inside the triangle, plus tri→polygon mapping.
+  // tri_to_poly is computed by mirroring simulator.cpp::PolygonFaceOfTri
+  // (which is file-static); same Dot3 > 1-1e-3 criterion against polygon
+  // normals already uploaded above.
+  size_t tri_cnt = crystal.TotalTriangles();
+  EnsureTriBuffers(tri_cnt);
+  std::memcpy([tri_vtx_buf_ contents], crystal.GetTriangleVtx(),
+              tri_cnt * 9 * sizeof(float));
+  std::memcpy([tri_norm_buf_ contents], crystal.GetTriangleNormal(),
+              tri_cnt * 3 * sizeof(float));
+  std::memcpy([tri_area_buf_ contents], crystal.GetTirangleArea(),
+              tri_cnt * sizeof(float));
+  const float* tri_norms_src = crystal.GetTriangleNormal();
+  const float* poly_norms_src = crystal.GetPolygonFaceNormal();
+  auto* tri_to_poly_ptr = static_cast<uint16_t*>([tri_to_poly_buf_ contents]);
+  constexpr uint16_t kInvalidIdU16 = 0xffffu;
+  for (size_t t = 0; t < tri_cnt; t++) {
+    const float* tn = tri_norms_src + t * 3;
+    uint16_t mapped = kInvalidIdU16;
+    for (size_t p = 0; p < poly_cnt; p++) {
+      const float* pn = poly_norms_src + p * 3;
+      float dot = tn[0] * pn[0] + tn[1] * pn[1] + tn[2] * pn[2];
+      if (dot > 1.0f - 1e-3f) {
+        mapped = static_cast<uint16_t>(p);
+        break;
+      }
+    }
+    tri_to_poly_ptr[t] = mapped;
   }
 }
 
