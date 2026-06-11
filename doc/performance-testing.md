@@ -179,7 +179,7 @@ The dashboard tracks 12 time-series (4 platforms × 3 metrics):
 
 **GPU device root-gen (scrum-260)**: on the Metal backend, root rays (orientation / direction / entry point) are generated on-device via a counter-based PCG stream keyed by `(gen_seed, gen_ray_base + tid)`, replacing host pre-generation + upload. This is the default path (single- and multi-crystal per-ci); statistical equivalence vs legacy is validated by the slow-e2e parity harness (`ds_corr ≥ 0.99`). Throughput uplift is hardware-dependent — quantify on a frequency-locked bench machine.
 
-**Phase-1 confirmed throughput (task-metal-rootgen-throughput-confirm, Mac M2 Max, 2026-06-11)**: device-gen ON vs OFF measured with `scratchpad/bench/device_gen_throughput_bench.py` (`LUMICE_TRACE_BACKEND=metal`; ON = `LUMICE_DISABLE_DEVICE_GEN` unset, OFF = `=1`). 5 reps per cell, median; CoV reported. Activation that ON==GPU PCG vs OFF==host mt19937 is independently asserted by the slow-e2e test `test_device_gen_activation_proof_fixed_seed` (`dual_fisheye_ref` sim_seed=42, rel_err=4.4e-5 ≫ 1e-5 floor — host-gen fallback would give rel_err=0).
+**Phase-1 confirmed throughput (task-metal-rootgen-throughput-confirm, Mac M2 Max, 2026-06-11)**: device-gen ON vs OFF measured with `scratchpad/bench/device_gen_throughput_bench.py` (`LUMICE_TRACE_BACKEND=metal`; ON = `LUMICE_DISABLE_DEVICE_GEN` unset, OFF = `=1`). 5 reps per cell, median; CoV reported. Activation that ON==GPU PCG vs OFF==host mt19937 is independently asserted by the slow-e2e test `test_device_gen_activation_proof_fixed_seed` (`dual_fisheye_ref` sim_seed=42, rel_err=4.4e-5 ≫ 1e-5 floor — host-gen fallback would give rel_err=0). (Note: the bench script lives under the git-ignored `scratchpad/` tree by design — consistent with `seam_exit_bench.py` — and is not committed; re-running requires the author's local copy. The numbers below are the durable record.)
 
 | Config | Batch | Single rps ON | Single rps OFF | ON/OFF (single) | Multi rps ON | Multi rps OFF | ON/OFF (multi) |
 |--------|-------|---------------|----------------|-----------------|--------------|---------------|----------------|
@@ -190,7 +190,7 @@ The dashboard tracks 12 time-series (4 platforms × 3 metrics):
 | `ms_multi_crystal`                        | 512  |   311 k |   242 k | 1.28× |  2.63 M |  1.17 M | 2.24× |
 | `ms_multi_crystal`                        | 2048 |   447 k |   318 k | 1.41× |  4.77 M |  1.61 M | **2.95×** |
 
-All cells `routed_ok=True` (no fallback); CoV ≤ 5% for 21 of 24 measurements, max CoV 15.0% (`single_ms` b2048 multi ON — kernel saturation, not thermal). The 15.0% cell sits exactly at the CoV>15% retry threshold and was not re-run because the threshold is strict-greater.
+All cells `routed_ok=True` (no fallback); CoV ≤ 5% for 21 of 24 measurements, max CoV 15.0% (`single_ms` b2048 multi ON — kernel saturation, not thermal). The 15.0% cell sits exactly at the CoV>15% retry threshold and was not re-run because the threshold is strict-greater (per the pre-specified CoV>15% → N=9 retry rule; ≤15% is in-spec, not a license to skip warranted reruns).
 
 **Verdicts**:
 

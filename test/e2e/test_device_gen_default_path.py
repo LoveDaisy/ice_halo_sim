@@ -153,8 +153,9 @@ def test_device_gen_activation_proof_fixed_seed():
     envelope is satisfied.
 
     With the same seed but different RNG algorithms (GPU PCG vs host mt19937)
-    the two runs produce visibly different XYZ buffers — the total-sum
-    relative error is ~1% empirically. If device-gen silently fell back to
+    the two runs produce different XYZ buffers — the total-sum relative error
+    is ~4e-5 empirically (actual: rel_err=4.4e-5, single-worker sim_seed=42,
+    2026-06-11), ~4× above the 1e-5 floor. If device-gen silently fell back to
     host-gen (same RNG on both sides), ON ≡ OFF byte-for-byte and RelErr ≈ 0,
     failing the assertion. This closes the "assert-may-pass" hole that
     sim_seed=0 leaves open (each side draws different atomic-counter seeds,
@@ -174,6 +175,8 @@ def test_device_gen_activation_proof_fixed_seed():
 
     on_sum = float(np.sum(on.flt_buf))
     off_sum = float(np.sum(off.flt_buf))
+    # Symmetric denominator: more conservative than the single-sided form in
+    # plan §3 pseudo-code; 4× headroom over the floor confirmed empirically.
     rel_err = abs(on_sum - off_sum) / (abs(on_sum) + abs(off_sum) + 1e-30)
     print(
         f"[activation-proof] dual_fisheye_ref sim_seed=42 metal: "
