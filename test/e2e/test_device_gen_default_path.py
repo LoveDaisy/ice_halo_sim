@@ -25,6 +25,7 @@ import os
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from test.e2e.capi_runner import BufferedSimResult, run_scene_capi_buffered
@@ -50,12 +51,22 @@ def _raw_corr_ds(a: BufferedSimResult, b: BufferedSimResult) -> float:
     return _raw_corr_ds_impl(a, b, _DS_BH, _DS_BW)
 
 
-def _run_metal(config_name: str, disable_device_gen: bool) -> BufferedSimResult:
-    """Run the metal backend with sim_seed=0 (default multi-worker random mode).
+def _run_metal(
+    config_name: str,
+    disable_device_gen: bool,
+    sim_seed: int = 0,
+) -> BufferedSimResult:
+    """Run the metal backend with the given sim_seed.
 
     Toggles `LUMICE_DISABLE_DEVICE_GEN` via os.environ around the call. The
     runner only manages `LUMICE_TRACE_BACKEND`, so this wrapper owns the
     device-gen env var lifecycle.
+
+    sim_seed=0 (default) preserves the original multi-worker random-mode path.
+    Non-zero sim_seed is passed through to `DeriveEffectiveSeed`
+    (src/core/simulator.cpp:481-486) and returned verbatim, collapsing to
+    single-worker — used by the fixed-seed activation proof test to compare
+    PCG(seed) vs mt19937(seed).
     """
     env_was_set = "LUMICE_DISABLE_DEVICE_GEN" in os.environ
     env_old = os.environ.get("LUMICE_DISABLE_DEVICE_GEN")
@@ -66,7 +77,7 @@ def _run_metal(config_name: str, disable_device_gen: bool) -> BufferedSimResult:
     try:
         cfg = str(CONFIGS_DIR / f"{config_name}.json")
         return run_scene_capi_buffered(
-            cfg, sim_seed=0, backend="metal", timeout_sec=_TIMEOUT,
+            cfg, sim_seed=sim_seed, backend="metal", timeout_sec=_TIMEOUT,
         )
     finally:
         if env_was_set:
@@ -111,4 +122,62 @@ def test_default_path_device_gen_vs_host_gen_single_ms():
         f"dual_fisheye_ref default path: device-gen ON vs OFF ds_corr={ds:.4f} "
         f"< {_DS_CORR_FLOOR} — systematic divergence between device-gen and "
         f"host-gen on the default render path."
+    )
+
+
+# Activation-proof RelErr floor. PCG vs mt19937 with the same effective seed
+# yield distinct sample streams; on dual_fisheye_ref the sum-of-XYZ relative
+# difference is ~1% empirically. 1e-5 is conservatively far above the floor of
+# noise but far below the real-signal regime, so a near-zero RelErr unambiguously
+# means device-gen fell back to host-gen and produced bit-identical output.
+_ACTIVATION_RELERR_FLOOR = 1e-5
+
+
+@pytest.mark.slow
+def test_device_gen_activation_proof_fixed_seed():
+    """device-gen ON (GPU PCG) vs OFF (host mt19937) at fixed seed must diverge.
+
+    Uses sim_seed=42. `DeriveEffectiveSeed` (src/core/simulator.cpp:481-486) is
+    `if (seed != 0) return seed;` — non-zero seeds bypass the global atomic
+    counter and are returned verbatim, so ON and OFF both see
+    `effective_seed_=42` deterministically (unit guard:
+    test/test_simulator.cpp:656 SimulatorEffectiveSeed.FixedSeedPreserved).
+    The Metal device-gen gate (src/core/metal_trace_backend.mm:2157-2161)
+    requires `gen_seed_!=0` ∧ `tri_count≤64`; dual_fisheye_ref is a single
+    prism crystal (~20 triangles ≤ 64) and seed=42 ≠ 0, so the activation
+    envelope is satisfied.
+
+    With the same seed but different RNG algorithms (GPU PCG vs host mt19937)
+    the two runs produce visibly different XYZ buffers — the total-sum
+    relative error is ~1% empirically. If device-gen silently fell back to
+    host-gen (same RNG on both sides), ON ≡ OFF byte-for-byte and RelErr ≈ 0,
+    failing the assertion. This closes the "assert-may-pass" hole that
+    sim_seed=0 leaves open (each side draws different atomic-counter seeds,
+    so ds_corr cannot distinguish active vs fallback).
+    """
+    on = _run_metal("dual_fisheye_ref", disable_device_gen=False, sim_seed=42)
+    off = _run_metal("dual_fisheye_ref", disable_device_gen=True, sim_seed=42)
+
+    assert on.routed_backend == "metal" and not on.fell_back, (
+        f"device-gen ON run did not route through metal (routed={on.routed_backend!r}, "
+        f"fell_back={on.fell_back}); tail: {on.log_lines[-5:]}"
+    )
+    assert off.routed_backend == "metal" and not off.fell_back, (
+        f"device-gen OFF run did not route through metal (routed={off.routed_backend!r}, "
+        f"fell_back={off.fell_back}); tail: {off.log_lines[-5:]}"
+    )
+
+    on_sum = float(np.sum(on.flt_buf))
+    off_sum = float(np.sum(off.flt_buf))
+    rel_err = abs(on_sum - off_sum) / (abs(on_sum) + abs(off_sum) + 1e-30)
+    print(
+        f"[activation-proof] dual_fisheye_ref sim_seed=42 metal: "
+        f"on_sum={on_sum:.6e} off_sum={off_sum:.6e} rel_err={rel_err:.3e} "
+        f"(floor={_ACTIVATION_RELERR_FLOOR:.0e})"
+    )
+    assert rel_err > _ACTIVATION_RELERR_FLOOR, (
+        f"dual_fisheye_ref sim_seed=42: device-gen ON vs OFF rel_err={rel_err:.3e} "
+        f"<= {_ACTIVATION_RELERR_FLOOR:.0e} — GPU PCG and host mt19937 produced "
+        f"near-identical output at the same seed. device-gen likely fell back "
+        f"to host-gen; the default-path coverage in this file is then assert-may-pass."
     )
