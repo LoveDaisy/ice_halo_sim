@@ -220,6 +220,7 @@ def _assert_parity(config_name: str, cm: float, pm: float, cc: float, pc: float)
 # --- Single MS, no filter -------------------------------------------------- #
 
 @pytest.mark.slow
+@pytest.mark.heavy  # single-MS parity covered per-PR by device_gen metal; demote to local/nightly
 def test_parity_single_ms_no_filter():
     cm, pm, cc, pc = _parity_axes("dual_fisheye_ref")
     print(f"[parity] dual_fisheye_ref: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
@@ -264,6 +265,7 @@ def test_parity_multi_ms_prob08_filter():
 # --- Multi MS prob=0.5, no filter ----------------------------------------- #
 
 @pytest.mark.slow
+@pytest.mark.heavy  # prob-value variant of prob08 (same code path); demote to local/nightly
 def test_parity_multi_ms_prob05():
     cm, pm, cc, pc = _parity_axes("parity_ms_prob05")
     print(f"[parity] parity_ms_prob05: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
@@ -273,6 +275,7 @@ def test_parity_multi_ms_prob05():
 # --- Multi MS prob=0.5 + filter ------------------------------------------- #
 
 @pytest.mark.slow
+@pytest.mark.heavy  # prob-value variant of prob08_filter (same code path); demote to local/nightly
 def test_parity_multi_ms_prob05_filter():
     cm, pm, cc, pc = _parity_axes("parity_ms_prob05_filter")
     print(f"[parity] parity_ms_prob05_filter: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
