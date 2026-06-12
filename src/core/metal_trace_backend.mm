@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -914,6 +915,13 @@ struct MetalTraceBackend::Impl {
   Logger* logger_ = nullptr;
   // Captured at construction from LUMICE_DISABLE_DEVICE_GEN. See ctor above.
   bool disable_device_gen_ = false;
+  // gen+trace fusion stash (task-264). When device-gen runs for a ci,
+  // GenerateFirstLayerRootsForCi parks the GenRootKernelParams here instead of
+  // dispatching its own command buffer; DispatchLayer then prepends an
+  // EncodeGenRoot encode pass into its own cb so gen and trace share a single
+  // Metal queue round-trip. Reset by DispatchLayer after consumption and by
+  // Reset() as a defensive session-boundary cleanup.
+  std::optional<GenRootKernelParams> pending_gen_params_{};
 
   id<MTLDevice>               device = nil;
   id<MTLCommandQueue>         queue  = nil;
@@ -1090,7 +1098,7 @@ struct MetalTraceBackend::Impl {
                                       bool can_use_device_gen);
   GenRootKernelParams BuildGenRootParams(const ScatteringSetting& setting,
                                           size_t crystal_ray_num) const;
-  void DispatchGenRoot(const GenRootKernelParams& gp);
+  void EncodeGenRoot(id<MTLCommandBuffer> cb, const GenRootKernelParams& gp);
   size_t CopyContSliceToRootBuf(const ScatteringSetting& setting, size_t ci_start, size_t ci_n, int in_slot);
   void DispatchLayer(size_t num_rays,
                      id<MTLBuffer> r_d, id<MTLBuffer> r_p,
@@ -1408,7 +1416,13 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
            "root_ray_count overflow: TraceLayer must guard can_use_device_gen with UINT32_MAX bound");
     gp.gen_ray_base = static_cast<uint32_t>(root_ray_count);
     gp.num_rays     = static_cast<uint32_t>(crystal_ray_num);
-    DispatchGenRoot(gp);
+    // task-264 gen+trace fusion: stash params for DispatchLayer to encode into
+    // the same command buffer as the trace pass. DispatchLayer is guaranteed
+    // to be called for every ci that takes this branch (the ci_n == 0 early
+    // continue in TraceLayer happens before GenerateFirstLayerRootsForCi, and
+    // the device-gen path always returns crystal_ray_num > 0), so the stash
+    // is always consumed within the same ci iteration.
+    pending_gen_params_ = gp;
     root_ray_count += crystal_ray_num;
     return crystal_ray_num;
   }
@@ -1525,9 +1539,15 @@ GenRootKernelParams MetalTraceBackend::Impl::BuildGenRootParams(
   return gp;
 }
 
-void MetalTraceBackend::Impl::DispatchGenRoot(const GenRootKernelParams& gp) {
+// Encodes a root-gen compute pass into the caller-provided command buffer
+// without committing or waiting. Used by DispatchLayer (task-264 gen+trace
+// fusion) to share a single Metal queue round-trip with the subsequent trace
+// pass. Metal forbids overlapping active encoders on one cb, so callers MUST
+// have no other live encoder when invoking this; this function calls
+// endEncoding before returning.
+void MetalTraceBackend::Impl::EncodeGenRoot(id<MTLCommandBuffer> cb,
+                                            const GenRootKernelParams& gp) {
   @autoreleasepool {
-    id<MTLCommandBuffer> cb = [queue commandBuffer];
     id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
     [enc setComputePipelineState:gen_root_pso_];
     [enc setBuffer:root_d_buf     offset:0 atIndex:0];
@@ -1545,8 +1565,6 @@ void MetalTraceBackend::Impl::DispatchGenRoot(const GenRootKernelParams& gp) {
     [enc dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
         threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
     [enc endEncoding];
-    [cb commit];
-    [cb waitUntilCompleted];
   }
 }
 
@@ -1782,6 +1800,17 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   *static_cast<float*>([exit_w_sum_buf contents]) = 0.0f;
 
   id<MTLCommandBuffer> cb = [queue commandBuffer];
+  // task-264 gen+trace fusion: if a device root-gen was stashed by
+  // GenerateFirstLayerRootsForCi for this ci, encode it into the same cb
+  // ahead of the trace pass. Two sequential compute encoders on one cb share
+  // a single commit/wait round-trip; Apple Silicon + MTLResourceStorageModeShared
+  // root_* buffers guarantee read-after-write visibility across encoders
+  // without an explicit memoryBarrierWithScope (verified by parity at corr
+  // 0.946 in explore-263).
+  if (pending_gen_params_.has_value()) {
+    EncodeGenRoot(cb, *pending_gen_params_);
+    pending_gen_params_.reset();
+  }
   id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
   [enc setComputePipelineState:pso];
   [enc setBuffer:r_d            offset:0 atIndex:0];
@@ -1871,6 +1900,11 @@ void MetalTraceBackend::Impl::Reset() {
   }
   in_session = false;
   ms_idx = 0;
+  // task-264 gen+trace fusion: defensive clear at session boundary. In a
+  // healthy run the stash is consumed by DispatchLayer within the same ci
+  // iteration that set it; clearing here protects against stale state if a
+  // session ends mid-ci on an error path.
+  pending_gen_params_.reset();
   // root_ray_count INTENTIONALLY persists across Reset(): each EndSession()
   // is followed (in the next BeginSession) by another GenerateFirstLayerRootsForCi
   // dispatch that must observe a globally monotone gen_ray_base. The counter
