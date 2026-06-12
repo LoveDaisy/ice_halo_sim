@@ -174,6 +174,31 @@ The dashboard tracks 12 time-series (4 platforms × 3 metrics):
 | Environment variable | Default | Description |
 |----------------------|---------|-------------|
 | `LUMICE_BATCH_RAY_NUM` | 128 | Per-batch ray count sent to the simulator per `SimBatch`. Higher values amortize Metal kernel dispatch overhead; the empirical crossover where the Metal backend outperforms legacy is around 512. Set to a power of two for alignment (e.g. `LUMICE_BATCH_RAY_NUM=512`). Applies at server startup — changing it mid-run has no effect. |
+| `LUMICE_TRACE_BACKEND` | unset (legacy CPU) | Trace backend selection: unset = legacy CPU; `metal` = Metal GPU backend (exit-seam + device root-gen); `cpu_backend` = SoA CPU backend. |
+| `LUMICE_DISABLE_DEVICE_GEN` | unset (device-gen ON) | Escape hatch to force **host** root-ray generation on the Metal backend. Device root-gen (GPU PCG root-ray supply) is the **default** for the Metal backend on eligible layers (single-crystal-per-ci, `tri_count ≤ 64`); it activates on both the deterministic single-worker path and the default multi-worker random path (each worker gets a non-zero derived `effective_seed_`). Set this to `1` only for strict-identity parity tests that mirror the host `std::mt19937` stream (which cannot align with the device PCG stream). Read once per backend instance at construction. |
+
+**GPU device root-gen (scrum-260)**: on the Metal backend, root rays (orientation / direction / entry point) are generated on-device via a counter-based PCG stream keyed by `(gen_seed, gen_ray_base + tid)`, replacing host pre-generation + upload. This is the default path (single- and multi-crystal per-ci); statistical equivalence vs legacy is validated by the slow-e2e parity harness (`ds_corr ≥ 0.99`). Throughput uplift is hardware-dependent — quantify on a frequency-locked bench machine.
+
+**Phase-1 confirmed throughput (task-metal-rootgen-throughput-confirm, Mac M2 Max, 2026-06-11)**: device-gen ON vs OFF measured with `scratchpad/bench/device_gen_throughput_bench.py` (`LUMICE_TRACE_BACKEND=metal`; ON = `LUMICE_DISABLE_DEVICE_GEN` unset, OFF = `=1`). 5 reps per cell, median; CoV reported. Activation that ON==GPU PCG vs OFF==host mt19937 is independently asserted by the slow-e2e test `test_device_gen_activation_proof_fixed_seed` (`dual_fisheye_ref` sim_seed=42, rel_err=4.4e-5 ≫ 1e-5 floor — host-gen fallback would give rel_err=0). (Note: the bench script lives under the git-ignored `scratchpad/` tree by design — consistent with `seam_exit_bench.py` — and is not committed; re-running requires the author's local copy. The numbers below are the durable record.)
+
+| Config | Batch | Single rps ON | Single rps OFF | ON/OFF (single) | Multi rps ON | Multi rps OFF | ON/OFF (multi) |
+|--------|-------|---------------|----------------|-----------------|--------------|---------------|----------------|
+| `dual_fisheye_ref` (single-MS, 1 crystal) | 128  |   343 k |   476 k | **0.72×** |  2.45 M |  4.03 M | **0.61×** |
+| `dual_fisheye_ref`                        | 512  | 1.22 M | 1.18 M | 1.04× |  9.19 M |  9.34 M | 0.98× |
+| `dual_fisheye_ref`                        | 2048 | 3.06 M | 1.23 M | 2.47× | 23.37 M | 13.27 M | 1.76× |
+| `ms_multi_crystal` (multi-MS, 2 crystals) | 128  |   107 k |   111 k | 0.97× |   979 k |   793 k | **1.23×** |
+| `ms_multi_crystal`                        | 512  |   311 k |   242 k | 1.28× |  2.63 M |  1.17 M | 2.24× |
+| `ms_multi_crystal`                        | 2048 |   447 k |   318 k | 1.41× |  4.77 M |  1.61 M | **2.95×** |
+
+All cells `routed_ok=True` (no fallback); CoV ≤ 5% for 21 of 24 measurements, max CoV 15.0% (`single_ms` b2048 multi ON — kernel saturation, not thermal). The 15.0% cell sits exactly at the CoV>15% retry threshold and was not re-run because the threshold is strict-greater (per the pre-specified CoV>15% → N=9 retry rule; ≤15% is in-spec, not a license to skip warranted reruns).
+
+**Verdicts**:
+
+- **`dual_fisheye_ref` (single-MS, 1 crystal) at default batch=128 is a NET LOSS for device-gen** (single 0.72×, multi 0.61×). This **contradicts the scrum-260 probe** which reported ~1.87× at the same config — the probe was a single throwaway invocation and did not reflect steady-state behavior. Net gain only kicks in at `batch ≥ ~512` and reaches 2.47× / 1.76× at `batch=2048`. At default batch GPU device-gen pays per-dispatch overhead that the small per-batch ray count cannot amortize.
+- **`ms_multi_crystal` (multi-MS, 2 crystals) at default batch=128 is roughly neutral for single-worker (0.97×) and a net gain (1.23×) for multi-worker.** This is the opposite of the plan's pre-bench hypothesis (which feared multi-crystal per-ci dispatch overhead would dominate); in fact multi-MS workloads amortize device-gen better than single-MS because the multi-MS layer count multiplies the per-batch work GPU-side. At larger batches the multi-MS multi-worker gain grows to 2.24× (b512) and 2.95× (b2048).
+- **Activation cross-check for multi-crystal**: `ms_multi_crystal` multi-worker ON/OFF goes 1.23× → 2.24× → 2.95× as batch grows. The monotone ON-favored ratio with batch (the b2048 crossover predicted by plan §3 Step 3 Minor 1 for "device-gen active but small-dispatch overhead-dominated") confirms device-gen IS activating on multi-crystal per-ci paths; if it had silently fallen back, ON ≡ OFF and the ratio would sit at 1.0 across all batches. The activation-proof test only covers single-crystal; the batch-scaling pattern here is the indirect activation evidence for multi-crystal.
+
+**Implication for default config**: users running the Metal backend at the default `LUMICE_BATCH_RAY_NUM=128` see device-gen **hurt** single-crystal throughput and **help** multi-crystal multi-worker throughput modestly. The strong wins (>2×) require `LUMICE_BATCH_RAY_NUM=2048`. A future task may revisit (a) raising the default batch when device-gen is active, (b) adaptive per-ci batch coalescing for the small-dispatch regime, or (c) selectively disabling device-gen for single-crystal/single-MS scenes at small batches. Until then the escape hatch `LUMICE_DISABLE_DEVICE_GEN=1` is the workaround for users hitting the small-batch single-crystal loss.
 
 Example: measure throughput at a higher batch size to characterize the Metal dispatch amortization curve:
 

@@ -70,6 +70,14 @@ class Simulator {
   // the top of Run().
   void SetPreferredBackend(int backend);
 
+  // Returns the seed actually handed to the trace backend (task 260.6).
+  // When `seed_ != 0` this equals `seed_`; when `seed_ == 0` this is a
+  // per-instance non-zero value derived from a global atomic counter so the
+  // backend's device-gen path activates in the default multi-worker / random
+  // mode. Stable across the simulator's lifetime — required for the backend's
+  // `seeded_` idempotency contract. Exposed for unit tests only.
+  uint32_t GetEffectiveSeed() const { return effective_seed_; }
+
  private:
   using CrystalCache = std::vector<std::pair<const CrystalParam*, Crystal>>;
   struct SimWorkspace {
@@ -97,6 +105,10 @@ class Simulator {
   std::atomic_bool idle_;
 
   uint32_t seed_;
+  // Non-zero seed handed to TraceBackend in `SimulateOneWavelengthWithBackend`
+  // so the device-gen path activates even when the user-facing `seed_` is 0
+  // (default multi-worker random mode). See task 260.6.
+  uint32_t effective_seed_;
   RandomNumberGenerator rng_;
   Logger logger_{ "Simulator" };
   // Preferred trace backend (kPreferCpu/kPreferMetal). release-write by

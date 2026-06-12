@@ -1,6 +1,7 @@
 #include "core/simulator.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -465,17 +466,38 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
 }
 
 
+namespace {
+// Global atomic counter feeding `Simulator::effective_seed_` when the user-facing
+// `seed_` is 0 (task 260.6). `fetch_add(1) + 1u` maps the sequence 0,1,2,...
+// to 1,2,3,..., guaranteeing the derived seed is non-zero (activates the Metal
+// backend's `gen_seed_ != 0` device-gen gate) and pairwise distinct across
+// Simulator instances regardless of which thread constructs them. After 2^32
+// constructions the counter wraps and the next `+1u` returns 0; in practice
+// that point is unreachable (>4e9 Simulator constructions per process).
+// NOTE: do NOT replace with `| 1u` — combined with an init of 0 it produces
+// pairwise collisions (0→1, 1→1, 2→3, 3→3, ...).
+std::atomic<uint32_t> g_simulator_seed_counter{ 0 };
+
+uint32_t DeriveEffectiveSeed(uint32_t seed) {
+  if (seed != 0) {
+    return seed;
+  }
+  return g_simulator_seed_counter.fetch_add(1, std::memory_order_relaxed) + 1u;
+}
+}  // namespace
+
 Simulator::Simulator(QueuePtrS<SimBatch> config_queue, QueuePtrS<SimData> data_queue, uint32_t seed)
     : config_queue_(std::move(config_queue)), data_queue_(std::move(data_queue)), stop_(false), idle_(true),
-      seed_(seed), rng_(seed != 0 ? seed :
-                                    static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count() ^
-                                                          (std::hash<std::thread::id>{}(std::this_thread::get_id())))) {
-}
+      seed_(seed), effective_seed_(DeriveEffectiveSeed(seed)),
+      rng_(seed != 0 ? seed :
+                       static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count() ^
+                                             (std::hash<std::thread::id>{}(std::this_thread::get_id())))) {}
 
 Simulator::Simulator(Simulator&& other) noexcept
     : config_queue_(std::move(other.config_queue_)), data_queue_(std::move(other.data_queue_)),
-      stop_(other.stop_.load()), idle_(other.idle_.load()), seed_(other.seed_), rng_(other.rng_),
-      logger_(std::move(other.logger_)), preferred_backend_(other.preferred_backend_.load(std::memory_order_acquire)) {}
+      stop_(other.stop_.load()), idle_(other.idle_.load()), seed_(other.seed_), effective_seed_(other.effective_seed_),
+      rng_(other.rng_), logger_(std::move(other.logger_)),
+      preferred_backend_(other.preferred_backend_.load(std::memory_order_acquire)) {}
 
 Simulator& Simulator::operator=(Simulator&& other) noexcept {
   if (this == &other) {
@@ -487,6 +509,7 @@ Simulator& Simulator::operator=(Simulator&& other) noexcept {
   stop_ = other.stop_.load();
   idle_ = other.idle_.load();
   seed_ = other.seed_;
+  effective_seed_ = other.effective_seed_;
   rng_ = other.rng_;
   logger_ = std::move(other.logger_);
   preferred_backend_.store(other.preferred_backend_.load(std::memory_order_acquire), std::memory_order_release);
@@ -593,6 +616,13 @@ void Simulator::Run() {
 
   // Pick a TraceBackend once per Run() entry. nullptr keeps the legacy CPU
   // path (zero behavior change when LUMICE_TRACE_BACKEND is unset).
+  //
+  // ARCHITECTURAL INVARIANT (task-260.5, scrum-258.10): backend instances are
+  // created PER Run() and never pooled or reused across Run()s. MetalTraceBackend
+  // relies on this to implement the !seeded gate that resets both the RNG state
+  // and root_ray_count exactly once per Run() — if a future refactor introduces
+  // a backend pool, that gate's semantics must be revisited (cross-Run() PCG
+  // determinism + counter rollover both depend on the per-Run() lifecycle here).
   auto backend = CreateBackend(preferred_backend_.load(std::memory_order_acquire), logger_);
   bool warned_no_renders = false;
   bool warned_multi_renderer = false;
@@ -864,7 +894,10 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
     return;
   }
 
-  SessionSpec spec{ &scene, &render, wl_param, seed_ };
+  // Task 260.6: hand the backend `effective_seed_` (non-zero) so device-gen
+  // activates even when the user-facing `seed_` is 0 (default random mode).
+  // When `seed_ != 0` this equals `seed_` → determinism contract unchanged.
+  SessionSpec spec{ &scene, &render, wl_param, effective_seed_ };
   backend.BeginSession(spec);
   // RAII guard: EndSession() is called on all exit paths, including exceptions
   // thrown by TraceLayer/Recombine (which would otherwise skip EndSession).

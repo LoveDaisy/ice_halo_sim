@@ -14,6 +14,7 @@
 #include "core/math.hpp"
 #include "core/raypath.hpp"
 #include "core/simulator.hpp"
+#include "util/queue.hpp"
 
 namespace lumice {
 namespace {
@@ -634,6 +635,41 @@ TEST(RaySegValidate, PositionInf) {
   RaySeg r = MakeValidRaySeg();
   r.p_[1] = std::numeric_limits<float>::infinity();
   EXPECT_FALSE(r.IsValidComplete());
+}
+
+// --- Task 260.6: Simulator::effective_seed_ ----------------------------- //
+// When the user-facing seed is 0 (default multi-worker random mode), the
+// Simulator must hand the backend a non-zero, per-instance, pairwise-distinct
+// seed so the Metal device-gen path activates (gated on `gen_seed_ != 0`).
+
+TEST(SimulatorEffectiveSeed, ZeroSeedYieldsNonZero) {
+  auto config_queue = std::make_shared<Queue<SimBatch>>();
+  auto data_queue = std::make_shared<Queue<SimData>>();
+  Simulator sim(config_queue, data_queue, /*seed=*/0);
+  uint32_t derived = sim.GetEffectiveSeed();
+  EXPECT_NE(derived, 0u);
+  // Stable across repeated reads — required so backend's `seeded_` idempotency
+  // gate stays consistent across BeginSession calls.
+  EXPECT_EQ(derived, sim.GetEffectiveSeed());
+}
+
+TEST(SimulatorEffectiveSeed, FixedSeedPreserved) {
+  auto config_queue = std::make_shared<Queue<SimBatch>>();
+  auto data_queue = std::make_shared<Queue<SimData>>();
+  Simulator sim(config_queue, data_queue, /*seed=*/42);
+  EXPECT_EQ(sim.GetEffectiveSeed(), 42u);
+}
+
+TEST(SimulatorEffectiveSeed, TwoZeroSeedInstancesDistinct) {
+  // Global atomic counter monotonically increments per construction; pairwise
+  // distinctness is deterministic, not probabilistic.
+  auto config_queue = std::make_shared<Queue<SimBatch>>();
+  auto data_queue = std::make_shared<Queue<SimData>>();
+  Simulator a(config_queue, data_queue, /*seed=*/0);
+  Simulator b(config_queue, data_queue, /*seed=*/0);
+  EXPECT_NE(a.GetEffectiveSeed(), b.GetEffectiveSeed());
+  EXPECT_NE(a.GetEffectiveSeed(), 0u);
+  EXPECT_NE(b.GetEffectiveSeed(), 0u);
 }
 
 }  // namespace

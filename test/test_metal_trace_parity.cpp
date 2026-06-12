@@ -50,6 +50,7 @@ namespace lumice {
 namespace {
 
 using metal_test::ChannelSum;
+using metal_test::ForceHostGenForByteIdentity;
 using metal_test::MakeMetalScene;
 using metal_test::MakeMultiCrystalScene;
 using metal_test::MakeRectangularRender;
@@ -318,6 +319,8 @@ TEST(MetalTraceParity, SingleLayerExitStatsAndXyz) {
   if (ShouldSkipMetalTests()) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
+  // Oracle mirrors host mt19937 stream; device PCG (task-260.2) cannot align.
+  ForceHostGenForByteIdentity();
 
   auto scene = MakeMetalScene(/*max_hits=*/8, /*ms_layers=*/1);
   auto render = MakeRectangularRender();
@@ -384,6 +387,7 @@ TEST(MetalTraceParity, TwoLayerExitStatsAndXyz) {
   if (ShouldSkipMetalTests()) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
+  ForceHostGenForByteIdentity();
 
   auto scene = MakeMetalScene(/*max_hits=*/6, /*ms_layers=*/2);
   auto render = MakeRectangularRender();
@@ -465,6 +469,7 @@ TEST(MetalTraceParity, DeepRecorderSingleLayer) {
   if (ShouldSkipMetalTests()) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
+  ForceHostGenForByteIdentity();
 
   auto scene = MakeMetalScene(/*max_hits=*/16, /*ms_layers=*/1);
   auto render = MakeRectangularRender();
@@ -1213,6 +1218,7 @@ TEST(MetalTraceParity, DualFisheyeEA_Single_NoOverlap) {
   if (ShouldSkipMetalTests()) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
+  ForceHostGenForByteIdentity();
 
   auto scene = MakeMetalScene(/*max_hits=*/8, /*ms_layers=*/1);
   auto render = MakeDualFisheyeEARender(/*overlap=*/0.0f);
@@ -1272,6 +1278,7 @@ TEST(MetalTraceParity, DualFisheyeEA_Single_WithOverlap) {
   if (ShouldSkipMetalTests()) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
+  ForceHostGenForByteIdentity();
 
   // overlap = sin(5°) ≈ kDualFisheyeOverlap (gui_state.hpp:135) — matches the
   // exact value the GUI live-preview path commits via c_api.cpp.
