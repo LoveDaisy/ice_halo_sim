@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -749,6 +750,42 @@ TEST_F(ServerLifecycleApi, GetCachedStatsConsistency) {
   ASSERT_EQ(LUMICE_GetCachedStats(server_, &cached_again), LUMICE_OK);
   EXPECT_EQ(cached_again.sim_ray_num, cached.sim_ray_num);
   EXPECT_EQ(cached_again.crystal_num, cached.crystal_num);
+}
+
+
+// Regression for ServerImpl::Stop() lost-wakeup deadlock: drives CommitConfig→Stop in
+// a tight loop to hit the narrow race window. Each Stop runs on a worker thread with a
+// per-iteration timeout — a hang surfaces as a FAIL() rather than wedging the whole
+// test process. On timeout the worker is detached and server_ is cleared so TearDown
+// neither re-enters Stop() (would deadlock again) nor destroys the server out from
+// under the detached worker (UAF). Leaks the hung server handle, acceptable since the
+// process is about to exit.
+TEST_F(ServerLifecycleApi, StressStartStop) {
+  constexpr int kIterations = 200;
+  constexpr int kStopTimeoutMs = 3000;
+
+  auto small_cfg = MakeSmallSimConfigJson();
+  for (int i = 0; i < kIterations; ++i) {
+    ASSERT_EQ(LUMICE_CommitConfig(server_, small_cfg.c_str()), LUMICE_OK) << "CommitConfig failed at iter " << i;
+
+    std::atomic<bool> stop_done{ false };
+    std::thread t([&] {
+      LUMICE_StopServer(server_);
+      stop_done.store(true, std::memory_order_release);
+    });
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kStopTimeoutMs);
+    while (!stop_done.load(std::memory_order_acquire)) {
+      if (std::chrono::steady_clock::now() >= deadline) {
+        t.detach();
+        // Clear server_ so TearDown skips StopServer/DestroyServer — avoids re-entering
+        // the same deadlock and the UAF on the still-running detached thread.
+        server_ = nullptr;
+        FAIL() << "LUMICE_StopServer hung > " << kStopTimeoutMs << "ms on iteration " << i;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    t.join();
+  }
 }
 
 

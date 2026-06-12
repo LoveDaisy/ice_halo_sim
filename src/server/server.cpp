@@ -169,7 +169,16 @@ void ServerImpl::RunPersistentLoop(F work_fn) {
       active_workers_.fetch_add(1);
     }
     work_fn();
-    if (active_workers_.fetch_sub(1) == 1) {
+    // Mutate the CV predicate var under start_mutex_ — the same lock Stop() holds
+    // while checking active_workers_==0. Closes the lost-wakeup window where Stop()
+    // saw the old value and was atomically releasing the lock to enter wait while
+    // the worker's notify_all() fell into the release→park gap.
+    bool last = false;
+    {
+      std::lock_guard<std::mutex> lk(start_mutex_);
+      last = (active_workers_.fetch_sub(1) == 1);
+    }
+    if (last) {
       // Last active worker — notify Stop() if it's waiting
       start_cv_.notify_all();
     }
