@@ -490,14 +490,13 @@ Simulator::Simulator(QueuePtrS<SimBatch> config_queue, QueuePtrS<SimData> data_q
     : config_queue_(std::move(config_queue)), data_queue_(std::move(data_queue)), stop_(false), idle_(true),
       seed_(seed), effective_seed_(DeriveEffectiveSeed(seed)),
       rng_(seed != 0 ? seed :
-                                    static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count() ^
-                                                          (std::hash<std::thread::id>{}(std::this_thread::get_id())))) {
-}
+                       static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count() ^
+                                             (std::hash<std::thread::id>{}(std::this_thread::get_id())))) {}
 
 Simulator::Simulator(Simulator&& other) noexcept
     : config_queue_(std::move(other.config_queue_)), data_queue_(std::move(other.data_queue_)),
-      stop_(other.stop_.load()), idle_(other.idle_.load()), seed_(other.seed_),
-      effective_seed_(other.effective_seed_), rng_(other.rng_), logger_(std::move(other.logger_)),
+      stop_(other.stop_.load()), idle_(other.idle_.load()), seed_(other.seed_), effective_seed_(other.effective_seed_),
+      rng_(other.rng_), logger_(std::move(other.logger_)),
       preferred_backend_(other.preferred_backend_.load(std::memory_order_acquire)) {}
 
 Simulator& Simulator::operator=(Simulator&& other) noexcept {

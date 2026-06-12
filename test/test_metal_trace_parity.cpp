@@ -50,10 +50,10 @@ namespace lumice {
 namespace {
 
 using metal_test::ChannelSum;
+using metal_test::ForceHostGenForByteIdentity;
 using metal_test::MakeMetalScene;
 using metal_test::MakeMultiCrystalScene;
 using metal_test::MakeRectangularRender;
-using metal_test::ForceHostGenForByteIdentity;
 using metal_test::RelErr;
 using metal_test::ShouldSkipMetalTests;
 

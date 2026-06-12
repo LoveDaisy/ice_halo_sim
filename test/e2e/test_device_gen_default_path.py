@@ -22,7 +22,7 @@ than bit equality.
 @pytest.mark.slow: requires the shared-lib build (`./scripts/build.sh -sj release`).
 """
 import os
-import sys
+import platform
 from pathlib import Path
 
 import numpy as np
@@ -30,20 +30,22 @@ import pytest
 
 from test.e2e.capi_runner import BufferedSimResult, run_scene_capi_buffered
 
-CONFIGS_DIR = Path(__file__).parent / "configs"
-_TIMEOUT = 180
-
-# Pull the block-mean ds-corr metric from the same scratchpad source the
-# 258.6 parity suite uses — single source of truth.
-_HARNESS_DIR = (
-    Path(__file__).resolve().parents[2]
-    / "scratchpad" / "scrum-metal-exit-seam" / "task-parity-harness"
-)
-sys.path.insert(0, str(_HARNESS_DIR))
-from _measure_baseline import (  # noqa: E402  (sys.path mutated above)
+# Block-mean ds-corr metric — single source of truth shared with the 258.6
+# parity suite, hoisted into a tracked module (see _parity_metrics.py header).
+from test.e2e._parity_metrics import (
     _raw_corr_ds as _raw_corr_ds_impl,
     _DS_BH,
     _DS_BW,
+)
+
+CONFIGS_DIR = Path(__file__).parent / "configs"
+_TIMEOUT = 180
+
+# Metal backend is Apple-only. Skip on non-Darwin CI runners (the Ubuntu
+# e2e-slow matrix leg) where forcing the metal backend falls back to legacy and
+# the routed-backend assertions below would fail.
+pytestmark = pytest.mark.skipif(
+    platform.system() != "Darwin", reason="Metal backend is only available on macOS"
 )
 
 
