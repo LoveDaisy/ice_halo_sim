@@ -6,6 +6,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <thread>
@@ -758,8 +759,8 @@ TEST_F(ServerLifecycleApi, GetCachedStatsConsistency) {
 // per-iteration timeout — a hang surfaces as a FAIL() rather than wedging the whole
 // test process. On timeout the worker is detached and server_ is cleared so TearDown
 // neither re-enters Stop() (would deadlock again) nor destroys the server out from
-// under the detached worker (UAF). Leaks the hung server handle, acceptable since the
-// process is about to exit.
+// under the detached worker (UAF). Leaks the hung server handle, acceptable since this
+// test case has already FAILED and the leak is isolated to this iteration's instance.
 TEST_F(ServerLifecycleApi, StressStartStop) {
   constexpr int kIterations = 200;
   constexpr int kStopTimeoutMs = 3000;
@@ -768,13 +769,16 @@ TEST_F(ServerLifecycleApi, StressStartStop) {
   for (int i = 0; i < kIterations; ++i) {
     ASSERT_EQ(LUMICE_CommitConfig(server_, small_cfg.c_str()), LUMICE_OK) << "CommitConfig failed at iter " << i;
 
-    std::atomic<bool> stop_done{ false };
-    std::thread t([&] {
-      LUMICE_StopServer(server_);
-      stop_done.store(true, std::memory_order_release);
+    // shared_ptr + by-value capture keep the worker self-contained: if it is detached and
+    // later unwinds (shouldn't post-fix), it touches neither the stack flag nor the fixture.
+    auto stop_done = std::make_shared<std::atomic<bool>>(false);
+    LUMICE_Server* srv = server_;
+    std::thread t([stop_done, srv] {
+      LUMICE_StopServer(srv);
+      stop_done->store(true, std::memory_order_release);
     });
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kStopTimeoutMs);
-    while (!stop_done.load(std::memory_order_acquire)) {
+    while (!stop_done->load(std::memory_order_acquire)) {
       if (std::chrono::steady_clock::now() >= deadline) {
         t.detach();
         // Clear server_ so TearDown skips StopServer/DestroyServer — avoids re-entering

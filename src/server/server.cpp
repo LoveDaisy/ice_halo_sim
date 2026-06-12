@@ -120,6 +120,9 @@ class ServerImpl {
   std::atomic<ServerState> state_{ ServerState::kStopped };
   std::mutex start_mutex_;
   std::condition_variable start_cv_;
+  // std::atomic for the lock-free read in Stop()'s wait predicate lambda; mutations
+  // are ALSO guarded by start_mutex_ (see RunPersistentLoop) to close the CV
+  // lost-wakeup window. Keep both layers — do not simplify to plain int.
   std::atomic<int> active_workers_{ 0 };
   std::atomic<uint64_t> start_generation_{ 0 };  // Incremented by Start(); prevents re-entry after natural completion
 
