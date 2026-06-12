@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781236764274,
+  "lastUpdate": 1781236766556,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -10879,6 +10879,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 95.9,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "207de068d30e8080608200a0b1cf9b54c3518f43",
+          "message": "Merge pull request #125 from LoveDaisy/fix/serverimpl-stop-deadlock\n\nfix: ServerImpl::Stop() condition-variable lost-wakeup deadlock + stress regression",
+          "timestamp": "2026-06-12T11:53:36+08:00",
+          "tree_id": "476d50f4d2d83297176fb1ddb991155d55897e02",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/207de068d30e8080608200a0b1cf9b54c3518f43"
+        },
+        "date": 1781236765808,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 88.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 102.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 98.8,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 96.9,
             "unit": "%"
           }
         ]
