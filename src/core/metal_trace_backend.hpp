@@ -15,10 +15,13 @@
 
 #include <cstddef>
 #include <memory>
+#include <vector>
 
 #include "core/trace_backend.hpp"
 
 namespace lumice {
+
+class Logger;
 
 // MetalLayerHandle — the only host-visible scalar produced per TraceLayer is
 // the continuation count (populated from a 4-byte device readback, equivalent
@@ -45,7 +48,7 @@ class MetalLayerHandle : public LayerHandle {
 //     RecombineSpec.shuffle = false before calling Recombine().
 class MetalTraceBackend : public TraceBackend {
  public:
-  MetalTraceBackend();
+  explicit MetalTraceBackend(Logger* logger = nullptr);
   ~MetalTraceBackend() override;
 
   MetalTraceBackend(const MetalTraceBackend&) = delete;
@@ -56,7 +59,13 @@ class MetalTraceBackend : public TraceBackend {
   void BeginSession(const SessionSpec& spec) override;
   LayerHandlePtr TraceLayer(const RootRaySource& roots) override;
   RootRaySource Recombine(LayerHandlePtr handle, const RecombineSpec& spec) override;
-  void ReadbackImage(XyzImageData& out) override;
+  // Test-only XYZ image accessor (scrum-258.1 Step 5: no longer on the
+  // TraceBackend production seam). Used by the CPU-vs-Metal parity harness
+  // — keep callers on the concrete type, not a polymorphic base reference.
+  void ReadbackImage(XyzImageData& out);
+  // Exit seam (scrum-258.1/258.2): buffer-egress contract — see base class.
+  // 258.2: returns rich `ExitRayRecord` (36B each) — see core/exit_seam.hpp.
+  size_t ReadbackExitRays(std::vector<ExitRayRecord>& out) override;
   void EndSession() override;
   bool IsCompatible(const RenderConfig& render) const override;
 

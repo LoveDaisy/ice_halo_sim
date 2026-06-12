@@ -45,30 +45,10 @@ RenderConsumer::RenderConsumer(RenderConfig config)
 
 
 void RenderConsumer::Consume(const SimData& data) {
-  // Backend pre-accumulated XYZ path (TraceBackend seam, task 252.3):
-  // when the simulator routed this batch through a TraceBackend that performed
-  // on-device projection + XYZ accumulation, the resulting W×H×3 image is
-  // delivered in data.backend_xyz_ (alongside backend_total_intensity_ for
-  // EV normalization). Bypass the raw-ray projection pipeline entirely.
-  // Runtime size check (NOT assert) — release builds optimize asserts away and
-  // a mismatched size would OOB-write into internal_xyz_; on mismatch we log
-  // and skip rather than corrupt the accumulator.
-  if (data.is_backend_path_) {
-    auto pix = static_cast<size_t>(config_.resolution_[0]) * config_.resolution_[1];
-    if (data.backend_xyz_.size() != pix * 3) {
-      ILOG_ERROR(logger_, "Consume: backend_xyz_ size mismatch (got {}, expected {} = {}x{}x3); skipping batch",
-                 data.backend_xyz_.size(), pix * 3, config_.resolution_[0], config_.resolution_[1]);
-      return;
-    }
-    const float* src = data.backend_xyz_.data();
-    float* dst = internal_xyz_.get();
-    for (size_t i = 0; i < pix * 3; i++) {
-      dst[i] += src[i];
-    }
-    total_intensity_ += data.backend_total_intensity_;
-    return;
-  }
-
+  // scrum-258.1: SimData carries a single payload form — outgoing_d_/w_ +
+  // outgoing_indices_(.size() only) — regardless of whether the simulator
+  // ran via the legacy CPU path or a TraceBackend (exit seam). Both
+  // converge here and run through the projection pipeline below.
   auto t0 = std::chrono::steady_clock::now();
   // Resize pre-allocated buffers if needed (grow-only).
   // Use outgoing count for capacity — it's the upper bound for filtered rays.

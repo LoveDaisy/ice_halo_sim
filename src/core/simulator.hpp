@@ -80,10 +80,12 @@ class Simulator {
                              CrystalCache& crystal_cache, SimWorkspace& workspace, uint64_t generation,
                              std::vector<std::vector<double>>& ray_alloc_carry);
 
-  // Backend-routed wavelength step (task 252.3, TraceBackend seam integration).
-  // Drives backend.BeginSession -> (TraceLayer -> Recombine)+ -> ReadbackImage
-  // -> EndSession and emplaces a SimData carrying backend_xyz_ +
-  // backend_total_intensity_. Only invoked when CanUseBackend() returns true.
+  // Backend-routed wavelength step (TraceBackend seam, scrum-258.1 exit-seam).
+  // Drives backend.BeginSession -> (TraceLayer -> Recombine)+ -> ReadbackExitRays
+  // -> EndSession and emplaces a SimData whose outgoing_d_/w_ carry the
+  // backend's world-space exit rays, routed through the legacy consumer
+  // projection (same downstream path as Metal-OFF). Only invoked when
+  // CanUseBackend() returns true.
   void SimulateOneWavelengthWithBackend(TraceBackend& backend, const SceneConfig& scene, const RenderConfig& render,
                                         const WlParam& wl_param, size_t ray_num, uint64_t generation);
 

@@ -1154,7 +1154,7 @@ TEST(MetalTraceParity, MetalVsCpuMultiLayerSpatialStructure) {
   // Drive a 2-layer session through the TraceBackend seam (host → layer0 →
   // Recombine → layer1 → readback). shuffle=false: Metal v1 requires it and the
   // CPU oracle stays comparable.
-  auto run_two_layer = [&](TraceBackend& be, std::vector<float>& xyz) {
+  auto run_two_layer = [&](auto& be, std::vector<float>& xyz) {
     be.BeginSession(spec);
     auto h0 = be.TraceLayer(RootRaySource::FromHost(host));
     RecombineSpec rspec;
@@ -1365,7 +1365,7 @@ TEST(MetalTraceParity, DualFisheyeEA_MultiMS_WithOverlap) {
   int h = render.resolution_[1];
   auto pix = static_cast<size_t>(w) * static_cast<size_t>(h);
 
-  auto run_two_layer = [&](TraceBackend& be, std::vector<float>& xyz) {
+  auto run_two_layer = [&](auto& be, std::vector<float>& xyz) {
     be.BeginSession(spec);
     auto h0 = be.TraceLayer(RootRaySource::FromHost(host));
     RecombineSpec rspec;

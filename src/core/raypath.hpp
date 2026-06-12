@@ -76,6 +76,24 @@ static_assert(sizeof(RaypathRecorder) == 18,
               "RaypathRecorder layout changed — re-check #247.4 SBO invariants and SimData size");
 
 
+// Inline-only face-sequence for the exit seam (scrum-258.2). Mirrors the inline
+// half of RaypathRecorder but drops overflow_idx_: all real configs have
+// max_hits <= kInlineCap (7-8 in practice), so overflow never fires here. The
+// device-side kernel populates this directly into shared-memory buffers (no
+// device-side dynamic allocation), and the host-side {dir, weight, path,
+// crystal_id, ms_layer_idx} record stays trivially copyable + defined-layout.
+struct ExitFaceSeq {
+  static constexpr uint8_t kCap = 15;
+  static_assert(kCap == RaypathRecorder::kInlineCap,
+                "ExitFaceSeq::kCap must stay in sync with RaypathRecorder::kInlineCap");
+  uint8_t size_ = 0;
+  uint8_t data_[kCap]{};
+};
+static_assert(sizeof(ExitFaceSeq) == 16u, "ExitFaceSeq layout changed — re-check exit-seam wire format");
+static_assert(std::is_trivially_copyable_v<ExitFaceSeq>,
+              "ExitFaceSeq must stay trivially copyable for memcpy out of device buffers");
+
+
 struct RaypathHash {
   size_t operator()(const std::vector<IdType>& rp);
   // Precondition: !rp.HasOverflow(). Hash consumers (filter_spec canonical_)

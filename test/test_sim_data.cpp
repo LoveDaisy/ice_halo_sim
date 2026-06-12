@@ -36,9 +36,12 @@ using lumice::SimData;
 // authoring platform that this test file's per-field assertions need updating.
 #if defined(__APPLE__) && defined(__aarch64__)
 static_assert(sizeof(void*) == 8, "SimData layout assumes 64-bit pointers");
-// Task 252.3 added backend_xyz_ (std::vector<float>, 24B) + backend_total_intensity_
-// (float, 4B) + is_backend_path_ (bool, 1B with 7B align padding before vector) → 232.
-static_assert(sizeof(SimData) == 232,
+// Task 252.3 added backend_xyz_/backend_total_intensity_/is_backend_path_
+// (28B + 7B padding) bumping 192 → 232 for the image-seam path. scrum-258.1
+// Step 4 removes those fields (exit seam is the canonical out path),
+// shrinking back to 192. scrum-258.2 adds exit_records_
+// (vector<ExitRayRecord>, 24B), bumping 192 → 216.
+static_assert(sizeof(SimData) == 216,
               "SimData layout changed — update test_sim_data.cpp DeepCopy/Move assertions "
               "and sim_data.cpp's static_assert.");
 #endif
@@ -69,12 +72,27 @@ SimData MakePopulatedSimData() {
   s.outgoing_indices_ = { 0, 2, 4 };
   s.outgoing_d_ = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f };
   s.outgoing_w_ = { 0.5f, 0.7f };
+  // scrum-258.2: exit_records_ — 2 distinct rich records to exercise the
+  // deep-copy / move paths added to SimData's special members.
+  s.exit_records_.resize(2);
+  s.exit_records_[0].dir[0] = 1.0f;
+  s.exit_records_[0].dir[1] = 2.0f;
+  s.exit_records_[0].dir[2] = 3.0f;
+  s.exit_records_[0].weight = 0.5f;
+  s.exit_records_[0].crystal_id = 7;
+  s.exit_records_[0].ms_layer_idx = 0;
+  s.exit_records_[0].path.size_ = 2;
+  s.exit_records_[0].path.data_[0] = 3;
+  s.exit_records_[0].path.data_[1] = 5;
+  s.exit_records_[1].dir[0] = 4.0f;
+  s.exit_records_[1].dir[1] = 5.0f;
+  s.exit_records_[1].dir[2] = 6.0f;
+  s.exit_records_[1].weight = 0.7f;
+  s.exit_records_[1].crystal_id = 9;
+  s.exit_records_[1].ms_layer_idx = 1;
+  s.exit_records_[1].path.size_ = 1;
+  s.exit_records_[1].path.data_[0] = 11;
   s.crystals_.emplace_back();
-  // Backend-path fields (task 252.3): non-default values so deep-copy / move
-  // tests below detect the "manual copy missed a field" bug class.
-  s.is_backend_path_ = true;
-  s.backend_xyz_ = { 0.1f, 0.2f, 0.3f, 0.4f };
-  s.backend_total_intensity_ = 1.5f;
   return s;
 }
 
@@ -672,10 +690,11 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
   EXPECT_EQ(copy.outgoing_d_, original.outgoing_d_);
   EXPECT_EQ(copy.outgoing_w_, original.outgoing_w_);
   EXPECT_EQ(copy.crystals_.size(), original.crystals_.size());
-  // Backend-path fields (task 252.3).
-  EXPECT_TRUE(copy.is_backend_path_) << "is_backend_path_ not copied";
-  EXPECT_EQ(copy.backend_xyz_, original.backend_xyz_) << "backend_xyz_ not copied";
-  EXPECT_FLOAT_EQ(copy.backend_total_intensity_, 1.5f) << "backend_total_intensity_ not copied";
+  ASSERT_EQ(copy.exit_records_.size(), original.exit_records_.size());
+  EXPECT_EQ(copy.exit_records_[0].crystal_id, 7u);
+  EXPECT_EQ(copy.exit_records_[0].path.size_, 2u);
+  EXPECT_EQ(copy.exit_records_[0].path.data_[1], 5u);
+  EXPECT_EQ(copy.exit_records_[1].ms_layer_idx, 1u);
 
   // Deep copy independence — each pointer/container field independently.
   copy.rays_[0].w_ = 999.0f;
@@ -690,11 +709,11 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
   copy.outgoing_w_.clear();
   EXPECT_EQ(original.outgoing_w_.size(), 2u) << "outgoing_w_ not deep-copied";
 
+  copy.exit_records_.clear();
+  EXPECT_EQ(original.exit_records_.size(), 2u) << "exit_records_ not deep-copied";
+
   copy.crystals_.clear();
   EXPECT_EQ(original.crystals_.size(), 1u) << "crystals_ not deep-copied";
-
-  copy.backend_xyz_.clear();
-  EXPECT_EQ(original.backend_xyz_.size(), 4u) << "backend_xyz_ not deep-copied";
 }
 
 
@@ -716,15 +735,16 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   EXPECT_EQ(target.outgoing_d_, original.outgoing_d_);
   EXPECT_EQ(target.outgoing_w_, original.outgoing_w_);
   EXPECT_EQ(target.crystals_.size(), 1u);
-  EXPECT_TRUE(target.is_backend_path_) << "is_backend_path_ not assigned";
-  EXPECT_EQ(target.backend_xyz_, original.backend_xyz_) << "backend_xyz_ not assigned";
-  EXPECT_FLOAT_EQ(target.backend_total_intensity_, 1.5f) << "backend_total_intensity_ not assigned";
+  ASSERT_EQ(target.exit_records_.size(), 2u);
+  EXPECT_EQ(target.exit_records_[0].crystal_id, 7u);
 
   // Deep copy independence.
   target.rays_[0].w_ = 999.0f;
   EXPECT_FLOAT_EQ(original.rays_[0].w_, 0.0f) << "rays_ not deep-assigned";
   target.outgoing_indices_.push_back(99);
   EXPECT_EQ(original.outgoing_indices_.size(), 3u) << "outgoing_indices_ not deep-assigned";
+  target.exit_records_.clear();
+  EXPECT_EQ(original.exit_records_.size(), 2u) << "exit_records_ not deep-assigned";
   target.crystals_.clear();
   EXPECT_EQ(original.crystals_.size(), 1u) << "crystals_ not deep-assigned";
 
@@ -771,10 +791,8 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_EQ(moved.outgoing_indices_.size(), 3u);
   EXPECT_EQ(moved.outgoing_d_.size(), 6u);
   EXPECT_EQ(moved.outgoing_w_.size(), 2u);
+  EXPECT_EQ(moved.exit_records_.size(), 2u);
   EXPECT_EQ(moved.crystals_.size(), 1u);
-  EXPECT_TRUE(moved.is_backend_path_) << "is_backend_path_ not moved";
-  EXPECT_EQ(moved.backend_xyz_.size(), 4u) << "backend_xyz_ not moved";
-  EXPECT_FLOAT_EQ(moved.backend_total_intensity_, 1.5f) << "backend_total_intensity_ not moved";
 
   // Moved-from source contract — three categories:
   // (a) rays_ pointer ownership transferred → nullptr + zeroed size/capacity.
@@ -790,6 +808,7 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_TRUE(original.outgoing_indices_.empty());
   EXPECT_TRUE(original.outgoing_d_.empty());
   EXPECT_TRUE(original.outgoing_w_.empty());
+  EXPECT_TRUE(original.exit_records_.empty());
 
   // (c) POD scalar fields are NOT reset on move — this is the current
   // contract. We deliberately do NOT assert curr_wl_/generation_/etc. to be
@@ -812,9 +831,6 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   EXPECT_EQ(dst.generation_, 42u);
   EXPECT_EQ(dst.outgoing_indices_.size(), 3u);
   EXPECT_EQ(dst.crystals_.size(), 1u);
-  EXPECT_TRUE(dst.is_backend_path_) << "is_backend_path_ not move-assigned";
-  EXPECT_EQ(dst.backend_xyz_.size(), 4u) << "backend_xyz_ not move-assigned";
-  EXPECT_FLOAT_EQ(dst.backend_total_intensity_, 1.5f) << "backend_total_intensity_ not move-assigned";
 
   // Source moved-from state.
   EXPECT_EQ(src.rays_.rays_, nullptr);

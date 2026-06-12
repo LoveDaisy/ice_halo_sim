@@ -46,12 +46,12 @@ void TraceCrystalBatch(RandomNumberGenerator& rng, const Crystal& crystal, size_
                        const AxisDistribution& axis_dist, const MsInfo& ms_info, const FilterSpec* filter_spec,
                        float refractive_index, size_t ci_ray_num, size_t layer_ray_num, size_t max_hits,
                        const SunParam& sun_param, const WlParam& wl_param, bool first_ms,
+                       uint8_t ms_layer_idx,    // current MS layer index (carried into ExitRayRecord)
                        RayBuffer prev_init[2],  // when !first_ms, [0] is input rays
                        size_t& init_ray_offset,
-                       RayBuffer& all_data,             // bookkeeping
-                       RayBuffer& cont_collect,         // backend's per-layer continuation buffer
-                       std::vector<float>& outgoing_d,  //
-                       std::vector<float>& outgoing_w) {
+                       RayBuffer& all_data,      // bookkeeping
+                       RayBuffer& cont_collect,  // backend's per-layer continuation buffer
+                       std::vector<ExitRayRecord>& outgoing) {
   // workspace[0] = input rays for the current hit; workspace[1] = traced output.
   RayBuffer workspace[2]{};
 
@@ -63,16 +63,16 @@ void TraceCrystalBatch(RandomNumberGenerator& rng, const Crystal& crystal, size_
   for (size_t cn = 0; cn < ci_ray_num; cn += kSmallBatchRayNum) {
     size_t curr_ray_num = std::min(kSmallBatchRayNum, ci_ray_num - cn);
 
-    // Capacity must hold cross-hit fan-out growth, NOT just one small batch's
-    // first level: across the max_hits hit loop a Normal ray can fan into two
-    // children that both stay inside the crystal, so the in-crystal ray count
-    // can exceed curr_ray_num. Size to the layer total *2, mirroring legacy
-    // Simulator::SimulateOneWavelength (simulator.cpp:692-693, `ray_num*2`
-    // reset once outside the ci loop). Reset() only re-allocates when capacity
-    // grows, so subsequent small batches just reset size_ and reuse storage.
-    // (Sizing to curr_ray_num*2 was the scrum-253.4 segfault root cause.)
+    // workspace[0]: CollectData refills it with Normal rays each hit
+    // iteration; capacity = layer_ray_num*2 allows up to 2× fan-out growth.
+    // workspace[1]: HitSurface fans each workspace[0] ray into 2 outputs.
+    // Worst case: workspace[0].size_ == layer_ray_num*2 - 1, so workspace[1]
+    // needs (layer_ray_num*2 - 1)*2 ≈ layer_ray_num*4. Using *2 here caused
+    // heap-buffer-overflow (scrum-258.x SIGABRT, diagnosed by ASan).
+    // Reset() only re-allocates when capacity grows; subsequent small batches
+    // reuse storage. (Sizing *2 for workspace[0] was the scrum-253.4 fix.)
     workspace[0].Reset(layer_ray_num * 2);
-    workspace[1].Reset(layer_ray_num * 2);
+    workspace[1].Reset(layer_ray_num * 4);
 
     if (first_ms) {
       InitRayFirstMs(rng, sun_param, wl_param, curr_ray_num,  //
@@ -101,14 +101,29 @@ void TraceCrystalBatch(RandomNumberGenerator& rng, const Crystal& crystal, size_
       std::swap(init_for_collect[1], cont_collect);
 
       // Copy traced rays to all_data + collect outgoing.
+      // RecorderDataPtr(j) is read BEFORE all_data.EmplaceBack(workspace[1])
+      // mutates workspace[1] (EmplaceBack only writes into all_data here, so
+      // workspace[1]'s recorders are still valid). The recorder pointer routes
+      // inline vs overflow arena correctly via the buffer-level resolver — we
+      // truncate at ExitFaceSeq::kCap (= RaypathRecorder::kInlineCap = 15) so
+      // any (rare, currently non-occurring) overflow path is silently capped.
       all_data.EmplaceBack(workspace[1]);
       for (size_t j = 0; j < workspace[1].size_; j++) {
         const auto& r = workspace[1][j];
         if (r.IsOutgoing()) {
-          outgoing_d.push_back(r.d_[0]);
-          outgoing_d.push_back(r.d_[1]);
-          outgoing_d.push_back(r.d_[2]);
-          outgoing_w.push_back(r.w_);
+          ExitRayRecord rec{};
+          rec.dir[0] = r.d_[0];
+          rec.dir[1] = r.d_[1];
+          rec.dir[2] = r.d_[2];
+          rec.weight = r.w_;
+          rec.crystal_id = static_cast<uint16_t>(crystal_id);
+          rec.ms_layer_idx = ms_layer_idx;
+          const RaypathRecorder& rp = workspace[1].RecorderAt(j);
+          const uint8_t* seq = workspace[1].RecorderDataPtr(j);
+          uint8_t seq_len = static_cast<uint8_t>(std::min<size_t>(rp.size_, ExitFaceSeq::kCap));
+          rec.path.size_ = seq_len;
+          std::memcpy(rec.path.data_, seq, seq_len);
+          outgoing.push_back(rec);
         }
       }
     }  // hit loop
@@ -137,6 +152,11 @@ void CpuTraceBackend::BeginSession(const SessionSpec& spec) {
   assert(!in_session_ && "BeginSession called on an already-open session");
   assert(spec.scene != nullptr && "SessionSpec.scene must be non-null");
   assert(spec.render != nullptr && "SessionSpec.render must be non-null");
+  // Cross-seed reuse: once seeded, spec.seed must be 0 (no reseed intent)
+  // or the same seed (repeated SimBatches within the same render). A
+  // different non-zero seed on the same instance would silently no-op;
+  // assert here to make that programming error visible at runtime.
+  assert(!seeded_ || spec.seed == 0 || spec.seed == seeded_seed_);
 
   spec_ = spec;
   in_session_ = true;
@@ -152,13 +172,19 @@ void CpuTraceBackend::BeginSession(const SessionSpec& spec) {
 
   camera_rot_ = MakeCameraRotation(*spec.render);
 
-  // Seed RNGs to match Simulator::Run when spec.seed != 0.
-  if (spec.seed != 0) {
+  // Seed RNGs once per backend lifetime, not once per session. Simulator
+  // drives BeginSession / EndSession per 128-ray SimBatch, so reseeding here
+  // would collapse axis-sample diversity to the first 128 draws repeated.
+  // Mirrors Simulator::Run's seed-at-entry semantics (simulator.cpp:592-594).
+  if (spec.seed != 0 && !seeded_) {
     rng_.SetSeed(spec.seed);
     RandomNumberGenerator::GetInstance().SetSeed(spec.seed);
+    seeded_seed_ = spec.seed;
+    seeded_ = true;
   }
 
   continuation_buf_ = RayBuffer{};
+  exit_records_.clear();
 }
 
 
@@ -212,10 +238,8 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
   RayBuffer cont_collect;
   cont_collect.Reset(total_ray_num * spec_.scene->max_hits_);
 
-  std::vector<float> outgoing_d;
-  std::vector<float> outgoing_w;
-  outgoing_d.reserve(total_ray_num * spec_.scene->max_hits_ * 3);
-  outgoing_w.reserve(total_ray_num * spec_.scene->max_hits_);
+  std::vector<ExitRayRecord> outgoing_records;
+  outgoing_records.reserve(total_ray_num * spec_.scene->max_hits_);
 
   // ci loop: mirrors simulator.cpp:593-686 — per crystal population, resolve
   // crystal + filter + n_idx, then drive TraceCrystalBatch over crystal_ray_num[ci]
@@ -253,8 +277,27 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
     // TraceCrystalBatch capacity comment).
     TraceCrystalBatch(rng_, crystal, crystal_id, crystal_axis, ms_info, filter_spec.get(), refractive_index, ci_n,
                       total_ray_num, spec_.scene->max_hits_, spec_.scene->light_source_.param_, spec_.wl, first_ms,
-                      prev_init, init_ray_offset, all_data, cont_collect, outgoing_d, outgoing_w);
+                      static_cast<uint8_t>(ms_idx_), prev_init, init_ray_offset, all_data, cont_collect,
+                      outgoing_records);
   }
+
+  // Exit seam (scrum-258.2): append this layer's rich outgoing records to
+  // the session-level accumulator BEFORE projection. ReadbackExitRays
+  // returns these for the simulator to drive the legacy consumer projection
+  // (which still consumes dir/weight extracted from each record). The
+  // ScatterOutgoingToXyz call below stays for now so ReadbackImage keeps
+  // returning a populated image (parity-harness/oracle path).
+  size_t exit_n = outgoing_records.size();
+  std::vector<float> outgoing_d(exit_n * 3);
+  std::vector<float> outgoing_w(exit_n);
+  for (size_t i = 0; i < exit_n; i++) {
+    outgoing_d[i * 3 + 0] = outgoing_records[i].dir[0];
+    outgoing_d[i * 3 + 1] = outgoing_records[i].dir[1];
+    outgoing_d[i * 3 + 2] = outgoing_records[i].dir[2];
+    outgoing_w[i] = outgoing_records[i].weight;
+  }
+  exit_records_.insert(exit_records_.end(), std::make_move_iterator(outgoing_records.begin()),
+                       std::make_move_iterator(outgoing_records.end()));
 
   // Drain the per-layer outgoing into the accumulator.
   ScatterOutgoingToXyz(outgoing_d.data(), outgoing_w.data(), outgoing_w.size(),  //
@@ -320,6 +363,19 @@ void CpuTraceBackend::ReadbackImage(XyzImageData& out) {
 }
 
 
+// Exit seam (scrum-258.2): move the session-accumulated rich exit records
+// out. Single-MS: equals the only layer's outgoing set. NOT idempotent —
+// caller must consume the result within a single ReadbackExitRays call;
+// subsequent calls in the same session return 0 records (move semantics).
+// Cleared by EndSession even when the caller never reads.
+size_t CpuTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
+  assert(in_session_ && "ReadbackExitRays called outside BeginSession/EndSession");
+  out = std::move(exit_records_);
+  exit_records_.clear();
+  return out.size();
+}
+
+
 void CpuTraceBackend::EndSession() {
   in_session_ = false;
   ms_idx_ = 0;
@@ -327,6 +383,7 @@ void CpuTraceBackend::EndSession() {
   total_landed_weight_ = 0.0f;
   xyz_buf_.reset();
   continuation_buf_ = RayBuffer{};
+  exit_records_.clear();
   spec_ = SessionSpec{};
 }
 

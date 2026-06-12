@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <vector>
 
 #include "config/sim_data.hpp"
 #include "core/geo3d.hpp"
@@ -39,10 +40,23 @@ class CpuTraceBackend : public TraceBackend {
   CpuTraceBackend();
   ~CpuTraceBackend() override = default;
 
+  // Seed contract: the first call with spec.seed != 0 seeds the RNG for
+  // this backend instance's entire lifetime; subsequent calls with
+  // spec.seed != 0 trigger an assertion. To use a different seed, destroy
+  // and recreate the backend.
   void BeginSession(const SessionSpec& spec) override;
   LayerHandlePtr TraceLayer(const RootRaySource& roots) override;
   RootRaySource Recombine(LayerHandlePtr handle, const RecombineSpec& spec) override;
-  void ReadbackImage(XyzImageData& out) override;
+  // Test-only XYZ image accessor (scrum-258.1 Step 5: no longer on the
+  // TraceBackend production seam). Used by the CPU-vs-Metal parity harness
+  // — keep callers on the concrete type, not a polymorphic base reference.
+  void ReadbackImage(XyzImageData& out);
+  // Exit seam (scrum-258.1+): buffer-egress contract — see TraceBackend.
+  // Single-MS: returns the final layer's outgoing rays. Multi-MS semantics
+  // (per-layer routing / filter / prob 分流) are owned by 258.3.
+  // 258.2: returns `ExitRayRecord` carrying {dir, weight, path,
+  // crystal_id, ms_layer_idx}; move-out — `exit_records_` is left empty.
+  size_t ReadbackExitRays(std::vector<ExitRayRecord>& out) override;
   void EndSession() override;
 
   // Diagnostic accessors (unit tests).
@@ -67,7 +81,24 @@ class CpuTraceBackend : public TraceBackend {
   // points at &continuation_buf_.
   RayBuffer continuation_buf_;
 
+  // Exit seam (scrum-258.1/258.2): session-level accumulator for rich
+  // world-space exit records {dir, weight, path, crystal_id, ms_layer_idx},
+  // appended-to by every TraceLayer in this session. Single-MS: equals the
+  // only layer's outgoing set; multi-MS: union of every layer's outgoings
+  // (per-layer routing / filter / prob owned by 258.3). BeginSession /
+  // EndSession reset; ReadbackExitRays moves out and returns the count.
+  std::vector<ExitRayRecord> exit_records_;
+
   bool in_session_ = false;
+  // Track whether rng_ has been seeded by a prior BeginSession in this
+  // backend's lifetime. Simulator calls BeginSession / EndSession per
+  // SimBatch (server.cpp:77 `kDefaultRayNum=128`); without this guard every
+  // batch would reset rng_ back to spec.seed, collapsing axis-sample
+  // diversity to a single 128-ray sequence repeated thousands of times.
+  // See progress.md DONE 2026-06-10 15:35 (task-filter-parity-rootcause-fix).
+  // To reseed, destroy and recreate the backend instance.
+  bool seeded_ = false;
+  uint32_t seeded_seed_ = 0;  // seed value used when seeded_ was set
 };
 
 }  // namespace lumice

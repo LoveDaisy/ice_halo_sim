@@ -4,11 +4,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "config/proj_config.hpp"
 #include "config/render_config.hpp"
 #include "core/crystal.hpp"
 #include "core/def.hpp"
+#include "core/exit_seam.hpp"
 
 namespace lumice {
 
@@ -29,9 +31,13 @@ namespace lumice {
 //
 //   2) Host pointers do not cross the seam, except at two explicit boundaries:
 //        - HostRayBatch: the ingest boundary (only at the first MS layer).
-//        - ReadbackImage: the sole device->host boundary (final XYZ readback).
-//      Ray data, layer-local buffers and the accumulated image otherwise live
-//      as backend-owned, opaque, device-resident handles.
+//        - ReadbackExitRays: the sole device->host boundary (exit-ray
+//          buffer-egress — N `ExitRayRecord`s, each 36B carrying
+//          {dir, weight, path, crystal_id, ms_layer_idx}).
+//      Ray data and layer-local buffers otherwise live as backend-owned,
+//      opaque, device-resident handles. (scrum-258.1: ReadbackImage was
+//      retired from this seam; CPU/Metal still expose it as a non-virtual
+//      concrete helper for the parity harness only.)
 //
 //   3) Discrete-memory semantics. Even when the underlying memory is unified
 //      (CPU heap, Apple M2 unified memory), the contract is written as if a
@@ -44,8 +50,8 @@ namespace lumice {
 //        - Recombine maps to a stream-compaction kernel (thrust or hand-written).
 //          The only host-visible side-effect is reading ContinuationCount() —
 //          a single 4-byte cudaMemcpy.
-//        - ReadbackImage performs a single device->host XYZ copy
-//          (W * H * 3 * sizeof(float)).
+//        - ReadbackExitRays performs a single device->host copy of
+//          N `ExitRayRecord`s (36B each) for N exit rays.
 //
 //   4) Metal co-design as a second orthogonal view. The contract is validated
 //      by at least one Metal skeleton implementation so the seam does not
@@ -80,18 +86,19 @@ namespace lumice {
 // State machine
 //   Legal call sequence (per backend instance):
 //
-//     BeginSession                                       \
-//       (TraceLayer -> Recombine)* n   // n >= 0          | session
-//       (TraceLayer)?                  // optional tail   |
-//       ReadbackImage                                    |
-//     EndSession                                         /
+//     BeginSession                                          \
+//       (TraceLayer -> Recombine)* n   // n >= 0             | session
+//       (TraceLayer)?                  // optional tail      |
+//       ReadbackExitRays                                    |
+//     EndSession                                            /
 //
 //   - `TraceLayer` may be invoked one or more times per session.
 //   - `Recombine` consumes a LayerHandle; it must be paired with a preceding
 //     TraceLayer call. The very last MS layer typically skips Recombine since
 //     no further layer follows.
-//   - `ReadbackImage` does NOT clear the accumulator. It can be called multiple
-//     times; each call returns the current cumulative XYZ image.
+//   - `ReadbackExitRays` returns the session's accumulated exit rays. It
+//     does NOT clear the accumulator; callers should treat the call as
+//     idempotent within a session.
 //   - Calling any method outside the BeginSession/EndSession bracket — or
 //     interleaving sessions on the same backend instance — is undefined
 //     behaviour.
@@ -297,10 +304,33 @@ class TraceBackend {
   // See "Lifetime contracts" above for the device_batch.backend_ptr lifetime.
   virtual RootRaySource Recombine(LayerHandlePtr handle, const RecombineSpec& spec) = 0;
 
-  // Sole device -> host boundary. Copies the accumulated XYZ image into the
-  // caller-provided buffer. Does NOT reset the accumulator; may be called
-  // multiple times during a session.
-  virtual void ReadbackImage(XyzImageData& out) = 0;
+  // Buffer-egress boundary (exit seam, scrum-258) — the canonical exit-ray
+  // contract. Copies the world-space exit rays captured this session
+  // (one entry per ray that left the crystal in the final MS layer) into
+  // the caller-provided vector and returns the exit-ray count. Each record
+  // is a 36B `ExitRayRecord` carrying {dir, weight, path, crystal_id,
+  // ms_layer_idx}; see core/exit_seam.hpp. The simulator routes these
+  // through the legacy consumer projection (O(exit rays)), replacing the
+  // per-batch O(W*H) image readback.
+  //
+  // Structure note (scrum-258.2): the rich record replaces the prior
+  // {dir, weight} pair (scrum-258.1). 258.2 only PRODUCES metadata; 258.3
+  // will CONSUME path/crystal_id for filter + symmetry fold.
+  //
+  // Default returns 0 for partial or stub backends; production backends
+  // (Cpu, Metal) should override. SILENT-ZERO FAILURE MODE: a backend that
+  // forgets to override will produce 0 exit rays per batch — the simulator
+  // discards the batch (exit_count == 0 early-return), yielding a black image
+  // with no compile-time or run-time error. New backend authors must override.
+  //
+  // Replaces the prior ReadbackImage seam (scrum-258.1 Step 5): the
+  // exit-seam payload is the canonical out path; ReadbackImage was demoted
+  // to a non-virtual, concrete CPU/Metal helper used only by the parity
+  // harness (test 接缝 与 生产契约 结构性隔离).
+  virtual size_t ReadbackExitRays(std::vector<ExitRayRecord>& out) {
+    out.clear();
+    return 0;
+  }
 
   // Close the session. Releases per-session backend state. Calling any
   // method other than BeginSession after EndSession is undefined.

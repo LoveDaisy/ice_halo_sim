@@ -10,6 +10,10 @@
 // (per-ray root_rot, mat·v before projection). This reference omits the
 // exit-stats accumulators (buffers 15/16, exit_cnt/exit_wsum) present in
 // kKernelSrc — pre-existing drift, see DECISION 2026-06-08 in the 253.1 task.
+// NOTE (since scrum-258.1): kKernelSrc also writes the buffer-egress exit
+// seam — buffers 18/19/20 (exit_d / exit_w / exit_slot) plus the matching
+// KernelParams.exit_cap — in the final-exit branch before projection. This
+// reference omits those bindings for the same readability reason.
 // Do not treat this file as a full drop-in replacement for kKernelSrc.
 //
 // Kernel form follows trace_full.metal from the explore spike
