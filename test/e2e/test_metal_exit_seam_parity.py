@@ -26,7 +26,7 @@ Thresholds: raw corr (block-mean ds) / render PSNR per scene calibrated from
 baseline.md (258.6.2 measurement on 2026-06-10). See `_RAW_THRESHOLDS` below.
 """
 import math
-import sys
+import platform
 from pathlib import Path
 
 import numpy as np
@@ -34,27 +34,25 @@ import pytest
 
 from test.e2e.capi_runner import BufferedSimResult, run_scene_capi_buffered
 
-CONFIGS_DIR = Path(__file__).parent / "configs"
-_SEED = 42
-_TIMEOUT = 180
-
-# Block-mean downsample metric (258.6.2) lives in the parity-harness
-# scratchpad. Insert that dir on sys.path so the test can import the
-# single source of `_block_mean` / `_raw_corr_ds` / `_DS_BH` / `_DS_BW`.
-# Note: this test is @pytest.mark.slow and excluded from CI (CI runs
-# `pytest test/e2e/ -v -m "not slow"`), so the scratchpad dependency
-# stays out of the CI critical path. If scratchpad is ever archived,
-# update this path or hoist the metric into `test/e2e/_parity_metrics.py`.
-_HARNESS_DIR = (
-    Path(__file__).resolve().parents[2]
-    / "scratchpad" / "scrum-metal-exit-seam" / "task-parity-harness"
-)
-sys.path.insert(0, str(_HARNESS_DIR))
-from _measure_baseline import (  # noqa: E402  (sys.path mutated above)
+# Block-mean downsample metric (258.6.2) — single source of truth hoisted into
+# a tracked module (see _parity_metrics.py header for why it no longer lives in
+# the gitignored parity-harness scratchpad).
+from test.e2e._parity_metrics import (
     _block_mean,
     _raw_corr_ds as _raw_corr_ds_impl,
     _DS_BH,
     _DS_BW,
+)
+
+CONFIGS_DIR = Path(__file__).parent / "configs"
+_SEED = 42
+_TIMEOUT = 180
+
+# Every test exercises the Metal backend (Apple-only) and asserts it routed
+# without fallback, so skip on non-Darwin CI runners (the Ubuntu e2e-slow
+# matrix leg) where metal falls back to legacy.
+pytestmark = pytest.mark.skipif(
+    platform.system() != "Darwin", reason="Metal backend is only available on macOS"
 )
 
 
@@ -87,8 +85,7 @@ def _raw_corr_ds(a: BufferedSimResult, b: BufferedSimResult) -> float:
     aggregates ``_DS_BH * _DS_BW`` rays so per-pixel Monte-Carlo speckle
     decays by ``sqrt(rays/bin)``; spatial structure of the bright
     population is preserved. Implementation imported from
-    ``scratchpad/scrum-metal-exit-seam/task-parity-harness/_measure_baseline.py``
-    (single source — never re-define).
+    ``test/e2e/_parity_metrics.py`` (single source — never re-define).
     """
     return _raw_corr_ds_impl(a, b, _DS_BH, _DS_BW)
 
@@ -172,7 +169,10 @@ def test_metal_fallback_detector():
 _RAW_THRESHOLDS = {
     # config:                         (metal, cpu_backend)  ds_corr → floor−0.02
     "dual_fisheye_ref":             (0.95, 0.94),
-    "ms_multi_crystal":             (0.90, 0.81),
+    # ms_multi_crystal metal lifted from 0.90 → 0.99 in task-260.7 once
+    # crystal_cnt == 1 gate was removed; per-ci device-gen measured at
+    # ds=0.9998 in explore-260.3 exp2.
+    "ms_multi_crystal":             (0.99, 0.81),
     "parity_ms_prob05":             (0.93, 0.90),
     # Filter scenes — thresholds calibrated from 258.10 post-fix measurement.
     "ms_multi_crystal_filtered":    (0.97, 0.97),
