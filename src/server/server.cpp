@@ -120,6 +120,9 @@ class ServerImpl {
   std::atomic<ServerState> state_{ ServerState::kStopped };
   std::mutex start_mutex_;
   std::condition_variable start_cv_;
+  // std::atomic for the lock-free read in Stop()'s wait predicate lambda; mutations
+  // are ALSO guarded by start_mutex_ (see RunPersistentLoop) to close the CV
+  // lost-wakeup window. Keep both layers — do not simplify to plain int.
   std::atomic<int> active_workers_{ 0 };
   std::atomic<uint64_t> start_generation_{ 0 };  // Incremented by Start(); prevents re-entry after natural completion
 
@@ -169,7 +172,16 @@ void ServerImpl::RunPersistentLoop(F work_fn) {
       active_workers_.fetch_add(1);
     }
     work_fn();
-    if (active_workers_.fetch_sub(1) == 1) {
+    // Mutate the CV predicate var under start_mutex_ — the same lock Stop() holds
+    // while checking active_workers_==0. Closes the lost-wakeup window where Stop()
+    // saw the old value and was atomically releasing the lock to enter wait while
+    // the worker's notify_all() fell into the release→park gap.
+    bool last = false;
+    {
+      std::lock_guard<std::mutex> lk(start_mutex_);
+      last = (active_workers_.fetch_sub(1) == 1);
+    }
+    if (last) {
       // Last active worker — notify Stop() if it's waiting
       start_cv_.notify_all();
     }
