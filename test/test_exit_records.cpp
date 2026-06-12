@@ -210,9 +210,8 @@ TEST(ExitRecordsTest, MetalBackendSingleMsFillsMetadata) {
 #if defined(__APPLE__)
 namespace {
 
-inline std::vector<ExitRayRecord> RunMetalExitRays(const SceneConfig& scene,
-                                                    const RenderConfig& render,
-                                                    uint32_t seed = 42) {
+inline std::vector<ExitRayRecord> RunMetalExitRays(const SceneConfig& scene, const RenderConfig& render,
+                                                   uint32_t seed = 42) {
   SessionSpec spec;
   spec.scene = &scene;
   spec.render = &render;
@@ -251,8 +250,7 @@ TEST(ExitRecordsTest, MetalBackendSingleMsProb1ZeroOutput) {
   // prob=1.0 on the (only) final layer: every filter-pass exit gets
   // rng<1.0 → would-continue → dropped (no next layer). Mirrors legacy
   // CollectData behaviour at prob=1.0.
-  EXPECT_EQ(records.size(), 0u)
-      << "single-MS prob=1.0 should drop every final-layer exit";
+  EXPECT_EQ(records.size(), 0u) << "single-MS prob=1.0 should drop every final-layer exit";
 }
 
 TEST(ExitRecordsTest, MetalBackendMultiMsProb1ZeroOutput) {
@@ -264,8 +262,7 @@ TEST(ExitRecordsTest, MetalBackendMultiMsProb1ZeroOutput) {
   auto records = RunMetalExitRays(scene, render);
   // Layer 0 prob=1.0: all filter-pass → rng<1.0 → continue (no mid-exit).
   // Layer 1 prob=1.0: all filter-pass → rng<1.0 → would-continue dropped.
-  EXPECT_EQ(records.size(), 0u)
-      << "multi-MS prob=1.0 on both layers should produce no exits";
+  EXPECT_EQ(records.size(), 0u) << "multi-MS prob=1.0 on both layers should produce no exits";
 }
 
 TEST(ExitRecordsTest, MetalBackendMultiMsProb0AllMidExits) {
@@ -278,8 +275,7 @@ TEST(ExitRecordsTest, MetalBackendMultiMsProb0AllMidExits) {
   // Layer 0 prob=0.0: rng<0.0 never true → every filter-pass → mid-exit on
   // layer 0 (ms_layer_idx==0). Layer 1 has zero continuation input → zero
   // final-layer exits.
-  ASSERT_GT(records.size(), 0u)
-      << "multi-MS prob=0.0 should emit all rays as layer-0 mid-exits";
+  ASSERT_GT(records.size(), 0u) << "multi-MS prob=0.0 should emit all rays as layer-0 mid-exits";
   size_t mid_cnt = 0;
   size_t other_cnt = 0;
   for (const auto& rec : records) {
@@ -289,8 +285,7 @@ TEST(ExitRecordsTest, MetalBackendMultiMsProb0AllMidExits) {
       other_cnt++;
     }
   }
-  EXPECT_EQ(other_cnt, 0u)
-      << "no final-layer exits expected when prob=0.0 sinks everything to mid";
+  EXPECT_EQ(other_cnt, 0u) << "no final-layer exits expected when prob=0.0 sinks everything to mid";
   EXPECT_EQ(mid_cnt, records.size());
 }
 
@@ -319,8 +314,7 @@ TEST(ExitRecordsTest, MetalBackendMultiMsMidLayerSplit) {
     }
   }
   EXPECT_GT(mid_cnt, 0u) << "expected mid-layer exits from layer 0 (prob=0.6)";
-  EXPECT_GT(final_cnt, 0u)
-      << "expected final-layer exits from layer 1 (continued rays)";
+  EXPECT_GT(final_cnt, 0u) << "expected final-layer exits from layer 1 (continued rays)";
 }
 #endif  // __APPLE__
 

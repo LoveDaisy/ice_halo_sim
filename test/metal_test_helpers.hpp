@@ -95,8 +95,7 @@ inline SceneConfig MakeMetalScene(size_t max_hits, size_t ms_layers) {
 // Uniform prob across all layers — for prob=0/1 boundary tests and prob=0.5
 // split direction tests. Crystal/filter setup mirrors MakeMetalScene so the
 // existing fast e2e + parity harness stays compatible.
-inline SceneConfig MakeMetalSceneWithProb(size_t max_hits, size_t ms_layers,
-                                          float prob) {
+inline SceneConfig MakeMetalSceneWithProb(size_t max_hits, size_t ms_layers, float prob) {
   SceneConfig scene = MakeMetalScene(max_hits, ms_layers);
   for (auto& ms : scene.ms_) {
     ms.prob_ = prob;

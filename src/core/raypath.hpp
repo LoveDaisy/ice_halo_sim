@@ -89,8 +89,7 @@ struct ExitFaceSeq {
   uint8_t size_ = 0;
   uint8_t data_[kCap]{};
 };
-static_assert(sizeof(ExitFaceSeq) == 16u,
-              "ExitFaceSeq layout changed — re-check exit-seam wire format");
+static_assert(sizeof(ExitFaceSeq) == 16u, "ExitFaceSeq layout changed — re-check exit-seam wire format");
 static_assert(std::is_trivially_copyable_v<ExitFaceSeq>,
               "ExitFaceSeq must stay trivially copyable for memcpy out of device buffers");
 

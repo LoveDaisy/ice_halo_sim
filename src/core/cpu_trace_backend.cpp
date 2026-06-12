@@ -49,8 +49,8 @@ void TraceCrystalBatch(RandomNumberGenerator& rng, const Crystal& crystal, size_
                        uint8_t ms_layer_idx,    // current MS layer index (carried into ExitRayRecord)
                        RayBuffer prev_init[2],  // when !first_ms, [0] is input rays
                        size_t& init_ray_offset,
-                       RayBuffer& all_data,                    // bookkeeping
-                       RayBuffer& cont_collect,                // backend's per-layer continuation buffer
+                       RayBuffer& all_data,      // bookkeeping
+                       RayBuffer& cont_collect,  // backend's per-layer continuation buffer
                        std::vector<ExitRayRecord>& outgoing) {
   // workspace[0] = input rays for the current hit; workspace[1] = traced output.
   RayBuffer workspace[2]{};
@@ -296,8 +296,7 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
     outgoing_d[i * 3 + 2] = outgoing_records[i].dir[2];
     outgoing_w[i] = outgoing_records[i].weight;
   }
-  exit_records_.insert(exit_records_.end(),
-                       std::make_move_iterator(outgoing_records.begin()),
+  exit_records_.insert(exit_records_.end(), std::make_move_iterator(outgoing_records.begin()),
                        std::make_move_iterator(outgoing_records.end()));
 
   // Drain the per-layer outgoing into the accumulator.

@@ -690,7 +690,9 @@ void ServerImpl::GenerateScene() {
   static const size_t kBatchCap = []() -> size_t {
     if (const char* env = std::getenv("LUMICE_BATCH_RAY_NUM")) {
       long b = std::atol(env);
-      if (b > 0) { return static_cast<size_t>(b); }
+      if (b > 0) {
+        return static_cast<size_t>(b);
+      }
     }
     return kDefaultRayNum;
   }();
