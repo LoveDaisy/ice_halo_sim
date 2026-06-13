@@ -166,6 +166,68 @@ TEST(MetalTraceBackend, TwoLayerEndToEnd) {
   backend.EndSession();
 }
 
+// =============================================================================
+// scrum-267 task-fused-emit-gate Step 9 / code-review-01 M2:
+// trace_layer_kernel production-PSO occupancy regression guard.
+//
+// The device emit gate added ~64B of thread-local scratch (`uchar
+// path_local[kDevRecCap]`) plus the DeviceFilterCheck call graph (6 sub-
+// matcher inlines) into trace_layer_kernel — register pressure increased
+// materially. Plan §9 set `maxThreadsPerThreadgroup ≥ 1024` as the wavefront-
+// stay-fused ACCEPTANCE BAR; plan R1 names option B (split filter gate into
+// independent dispatch) as the response when occupancy drops.
+//
+// Code-review-01 M2 directive: "本轮先实测定性：若仍 ≥1024 则加断言锁定即可；
+// 若掉档，记录实测值 + 在 progress 标记，是否拆分由 owner 据实测值裁决（勿盲
+// 拆）". Measured occupancy on the build that closed M5 parity is 704 (on
+// Apple M-series). It is BELOW the plan baseline of 1024, but the parity bar
+// (raw-XYZ corr ≥ 0.98 + +16% energy gap消除 + 既有 parity 测试不回归) is met,
+// and the throughput acceptance gate for this scrum is correctness, not
+// occupancy. Per the owner directive, this test:
+//   1. Prints the measured value so any future regression is debuggable.
+//   2. Asserts ≥ 640 (≈10% margin below the 704 baseline) as a REGRESSION
+//      guard — catches further compiler/code-driven drops without locking in
+//      the current point estimate exactly.
+//   3. Leaves the plan-baseline-vs-measured gap for owner裁决 in
+//      progress.md (entry tagged "DONE — code-review-01 修订").
+//
+// TODO(owner / next scrum): decide whether to invoke plan R1 option B (split
+//   filter gate into its own dispatch — wavefront model allows it) to recover
+//   the 1024-thread baseline. The decision rests on whether throughput (NOT
+//   measured here) actually suffers — measure with the multi-MS + filter
+//   bench before splitting.
+// =============================================================================
+TEST(MetalTraceBackend, TraceLayerKernelOccupancy) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+
+  auto scene = MakeMetalScene(/*max_hits=*/8, /*ms_layers=*/1);
+  auto render = MakeRectangularRender();
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  MetalTraceBackend backend;
+  backend.BeginSession(spec);  // builds the trace PSO via Impl::RebuildPSO.
+  size_t max_threads = backend.TraceLayerKernelMaxThreadsForTest();
+  backend.EndSession();
+
+  std::fprintf(stderr,
+               "[occupancy] trace_layer_kernel maxTotalThreadsPerThreadgroup=%zu "
+               "(plan baseline 1024, regression guard ≥ 640)\n",
+               max_threads);
+  EXPECT_GE(max_threads, static_cast<size_t>(640))
+      << "trace_layer_kernel occupancy regressed below 640 (was 704 at M5 "
+         "closeout, plan baseline 1024) — evaluate plan R1 option B (split "
+         "filter gate into independent dispatch); see scratchpad/"
+         "scrum-gpu-single-engine-continuation/task-fused-emit-gate/plan.md "
+         "and progress.md for context.";
+}
+
 }  // namespace
 }  // namespace lumice
 

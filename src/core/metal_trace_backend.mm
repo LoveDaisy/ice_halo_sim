@@ -169,12 +169,17 @@ kernel void trace_layer_kernel(
     // scrum-267 task-fused-emit-gate Step 4b: device-side emit gate state.
     // The ms_mode==1 path now calls DeviceFilterCheck and draws a PCG prob to
     // decide continuation vs mid-exit on-device; the former cont_crystal_id /
-    // cont_face_seq_* buffers (24-26) used by the host hop are removed.
-    //   27 : filter desc array, indexed by ms_layer_idx * filter_desc_max_ci + ci
-    //   28 : per-slot prefix-sum offsets into gate_getfn_bytes
-    //   29 : flat GetFn(poly_idx) byte stream
-    //   30 : Complex filter sub-spec flat buffer
-    //   31 : per-exit-ray ms_layer tag (final-layer + mid-exits both write)
+    // cont_face_seq_* buffers (24-26) used by the host hop are removed and the
+    // gate buffers move into the freed slots. NOTE: plan §3 reserved 27-31 for
+    // these five buffers; Metal's per-stage buffer index ceiling is 30 (`buffer
+    // attribute parameter out of bounds: must be between 0 and 30`), so the
+    // actual binding is 24-28 (see progress.md DECISION "buffer 槽位 27-31 调
+    // 整为 24-28"). All inline references below use the actual 24-28 slots.
+    //   24 : filter desc array, indexed by ms_layer_idx * filter_desc_max_ci + ci
+    //   25 : per-slot prefix-sum offsets into gate_getfn_bytes
+    //   26 : flat GetFn(poly_idx) byte stream
+    //   27 : Complex filter sub-spec flat buffer
+    //   28 : per-exit-ray ms_layer tag (final-layer + mid-exits both write)
     device const DeviceFilterDesc* gate_filter_desc    [[buffer(24)]],
     device const uint*             gate_getfn_offsets  [[buffer(25)]],
     device const uchar*            gate_getfn_bytes    [[buffer(26)]],
@@ -294,6 +299,19 @@ kernel void trace_layer_kernel(
           for (uint k = 0u; k < gate_len; k++) { path_local[k] = uchar(path[k]); }
           uint gate_slot = prm.ms_layer_idx * prm.filter_desc_max_ci + prm.crystal_id;
           float ray_dir_w[3] = { wcx, wcy, wcz };
+          // 7th argument INTENTIONALLY passes `gate_slot` (NOT prm.crystal_id
+          // as in plan §4 Step 5 pseudo-code). `DeviceFilterCheck` forwards it
+          // to `DeviceFilterMatchRaypath` where it indexes
+          // `gate_getfn_offsets[slot..slot+1]` to locate the per-orbit GetFn
+          // byte stream. `EnsureFilterBuffers` lays out offsets keyed by
+          // `slot = mi * max_ci + ci` (= `gate_slot`), so passing
+          // `prm.crystal_id` would point at layer-0's orbit table for every
+          // layer and silently mis-match from ms_layer_idx ≥ 1. The plan
+          // pseudo-code conflated "which crystal" with "where in the slot
+          // layout" — gate_slot is the correct slot identity here. (See
+          // progress.md DECISION "DeviceFilterCheck 第 7 参数=gate_slot 非
+          // prm.crystal_id" for the full derivation; multi-MS filter parity
+          // proves this is the working form. Do NOT "fix" back to crystal_id.)
           bool filter_pass = DeviceFilterCheck(
               gate_filter_desc[gate_slot], gate_sub_desc_buf,
               path_local, gate_len,
@@ -335,6 +353,10 @@ kernel void trace_layer_kernel(
                 out_w[slot] = cw;
                 out_tf[slot] = ushort(ef);
               }
+              // scrum-267 task-fused-emit-gate: post-gate semantics — exit_cnt
+              // / exit_wsum now tally "filter_pass polygon-exits" (gate dropped
+              // filter_fail rays above; legacy meaning was "all polygon-exits").
+              // Diagnostic-only counters; not consumed by parity tests.
               atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
               atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
             } else {
@@ -357,6 +379,10 @@ kernel void trace_layer_kernel(
                   exit_face_seq_data[es * prm.face_seq_cap + k] = uchar(path[k]);
                 }
               }
+              // scrum-267 task-fused-emit-gate: same post-gate semantics as the
+              // do_continue branch above — filter_pass subset, not all
+              // polygon-exits. Diagnostic-only counters; not consumed by parity
+              // tests.
               atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
               atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
             }
@@ -1479,9 +1505,11 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
   complex_sub_desc_buf_ = nil;
   // scrum-267 task-fused-emit-gate Step 3a (R5 fix): the trace kernel's emit
   // gate unconditionally binds filter_desc_buf_ / getfn_offsets_buf_ /
-  // getfn_bytes_buf_ / complex_sub_desc_buf_ at buffer slots 27-30. Metal
-  // disallows nil-buffer bindings, so each early-return path must still
-  // allocate a 1-byte dummy. The kernel never reads through them in the
+  // getfn_bytes_buf_ / complex_sub_desc_buf_ at buffer slots 24-27 (plan §3
+  // originally reserved 27-30 but Metal's per-stage buffer-index ceiling is
+  // 30 — see DECISION in progress.md). Metal disallows nil-buffer bindings,
+  // so each early-return path must still allocate a 1-byte dummy. The kernel
+  // never reads through them in the
   // no-filter case (DeviceFilterCheck on a None desc returns true and the gate
   // proceeds, but on the ms_mode==0 path the gate is never entered; the
   // ms_mode==1 path only fires when there are MS layers, which co-occurs with
@@ -2037,8 +2065,11 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   // non-nil even in no-filter sessions via the 1-byte dummy fallback (R5
   // fix); ms_mode==0 dispatches never enter the gate so reads through these
   // slots happen only when filter buffers carry real desc data. The ms_layer
-  // tag at slot 31 is written by BOTH ms_mode==0 (final-layer) and
+  // tag at slot 28 is written by BOTH ms_mode==0 (final-layer) and
   // ms_mode==1 (gate mid-exit) paths so ReadbackExitRays can route records.
+  // (Plan §3 originally reserved slots 27-31 for these five buffers; Metal's
+  // per-stage buffer-index ceiling is 30 → actual binding is 24-28. See
+  // progress.md DECISION "buffer 槽位 27-31 调整为 24-28".)
   [enc setBuffer:filter_desc_buf_      offset:0 atIndex:24];
   [enc setBuffer:getfn_offsets_buf_    offset:0 atIndex:25];
   [enc setBuffer:getfn_bytes_buf_      offset:0 atIndex:26];
@@ -2384,6 +2415,15 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
         impl_->last_layer_filter_configs_[ci] = setting.filter_;
       } else {
         impl_->hop_crystals_[out_slot][ci] = impl_->current_crystal;
+        // TODO(Task3 / scrum-267 continuation): the hop_axis_dists_ /
+        // hop_filter_configs_ writes below are DEAD after task-fused-emit-gate
+        // moved per-hop filter+prob into the device emit gate —
+        // CopyContSliceToRootBuf no longer reads them and only the final
+        // layer's last_layer_* mirrors remain in use (ReadbackExitRays final-
+        // layer host filter+prob path). hop_crystals_ stays live because
+        // CopyContSliceToRootBuf's frame-transit still needs the destination
+        // crystal geometry. Delete these two vectors + their hop_* fields when
+        // Task 3 moves frame-transit onto the device.
         impl_->hop_axis_dists_[out_slot][ci] = setting.crystal_.axis_;
         impl_->hop_filter_configs_[out_slot][ci] = setting.filter_;
       }
@@ -2525,6 +2565,12 @@ size_t MetalTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
   const float    final_prob      = impl_->last_ms_prob_;
   const uint8_t  final_ms_layer  = impl_->last_ms_layer_idx_;
 
+  // TODO(Task3 / scrum-267 continuation): after task-fused-emit-gate the
+  // device gate writes mid-exits directly into exit_*_buf with the producing
+  // ms_layer_idx tag, so `accumulated_mid_exits_` is permanently empty. The
+  // `.size()` term and the drain loop below are no-ops kept only to preserve
+  // the Impl member during this scrum's correctness focus; remove both the
+  // member and the drain when Task 3 closes out.
   out.reserve(count + impl_->accumulated_mid_exits_.size());
   for (size_t i = 0; i < count; i++) {
     uint16_t crystal_id = cid_ptr[i];
@@ -2623,6 +2669,13 @@ bool MetalTraceBackend::IsCompatible(const RenderConfig& render) const {
     return std::abs(render.lens_.fov_ - 180.0f) <= 0.5f;
   }
   return false;
+}
+
+size_t MetalTraceBackend::TraceLayerKernelMaxThreadsForTest() const {
+  if (impl_->pso == nil) {
+    return 0;
+  }
+  return static_cast<size_t>(impl_->pso.maxTotalThreadsPerThreadgroup);
 }
 
 }  // namespace lumice
