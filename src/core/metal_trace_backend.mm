@@ -23,6 +23,7 @@
 #include "config/sim_data.hpp"
 #include "core/color_util.hpp"
 #include "core/crystal.hpp"
+#include "core/device_filter_desc.hpp"
 #include "core/exit_seam.hpp"
 #include "core/filter_spec.hpp"
 #include "core/geo3d.hpp"
@@ -1080,6 +1081,24 @@ struct MetalTraceBackend::Impl {
   // Drained + merged with the final-layer exits in ReadbackExitRays.
   std::vector<ExitRayRecord> accumulated_mid_exits_;
 
+  // scrum-267 task-msl-filter-match-port (Step 4): device filter MATCH state.
+  // Filled once per session by EnsureFilterBuffers. Layout contract — both this
+  // upload path AND the parity test build the buffers with these semantics:
+  //   * filter_desc_buf_: array of DeviceFilterDesc, one entry per
+  //     (ms_layer, ci) flattened as `ms_layer * max_ci + ci` (see
+  //     filter_desc_strides_). Same crystal/filter pair across layers does
+  //     NOT dedup — keeps lookup O(1).
+  //   * getfn_offsets_buf_: uint32[n_slot + 1] prefix sum of poly_face_cnt per
+  //     (ms_layer, ci); last entry = total bytes.
+  //   * getfn_bytes_buf_: flat uchar stream, slot i lives in
+  //     [offsets[i], offsets[i+1]); content = crystal.GetFn(poly_idx) per
+  //     poly_idx (D1 layout).
+  id<MTLBuffer> filter_desc_buf_    = nil;
+  id<MTLBuffer> getfn_offsets_buf_  = nil;
+  id<MTLBuffer> getfn_bytes_buf_    = nil;
+  size_t filter_desc_count_    = 0;  // total descs uploaded (flattened slots)
+  size_t filter_desc_max_ci_   = 0;  // per-layer ci stride; flattened slot
+                                     // (mi, ci) → mi * max_ci + ci
   // Layer dispatch helpers.
   void EnsureDevice();
   void EnsurePso();
@@ -1090,6 +1109,7 @@ struct MetalTraceBackend::Impl {
   void EnsureContBuffer(int slot);
   void EnsureRecSink(size_t n);
   void EnsureExitBuffers(size_t cap);  // exit seam (scrum-258.1)
+  void EnsureFilterBuffers(const SessionSpec& session_spec);  // scrum-267.1
   void UploadCrystal(const Crystal& crystal);
   void ResolveLayerCrystalForCi(const ScatteringSetting& setting, bool use_host,
                                 const HostRayBatch& host_batch);
@@ -1332,6 +1352,97 @@ void MetalTraceBackend::Impl::EnsureExitBuffers(size_t cap) {
       [device newBufferWithLength:cap * static_cast<size_t>(face_seq_cap_) * sizeof(uint8_t)
                           options:MTLResourceStorageModeShared];
   assert(exit_face_seq_data_buf != nil);
+}
+
+// scrum-267 task-msl-filter-match-port (Step 4): upload per-session filter
+// descriptors + GetFn tables for the future fused emit gate (sub-task 2).
+// Layout: one DeviceFilterDesc per (ms_layer, ci) slot, flat-indexed as
+// `ms_layer * max_ci + ci` (max_ci = max setting_.size() across layers); one
+// GetFn byte stripe per slot with a uint prefix-sum offsets array. All
+// hexagonal crystals share `poly_face_cnt_ == 8`, so a prototype crystal made
+// with a fixed seed is enough to derive GetFn — current Metal backend supports
+// hex prism only (BeginSession asserts already enforce that elsewhere). Per
+// plan §3 D1 + Step 4 + Round-2 Minor-3 refinement.
+void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spec) {
+  filter_desc_count_ = 0;
+  filter_desc_max_ci_ = 0;
+  filter_desc_buf_ = nil;
+  getfn_offsets_buf_ = nil;
+  getfn_bytes_buf_ = nil;
+  if (session_spec.scene == nullptr) {
+    return;
+  }
+  size_t n_layers = session_spec.scene->ms_.size();
+  if (n_layers == 0) {
+    return;
+  }
+  size_t max_ci = 0;
+  for (const auto& ms : session_spec.scene->ms_) {
+    if (ms.setting_.size() > max_ci) { max_ci = ms.setting_.size(); }
+  }
+  if (max_ci == 0) {
+    return;
+  }
+  filter_desc_max_ci_ = max_ci;
+  size_t n_slot = n_layers * max_ci;
+
+  // Build per-slot prototype crystals via a private RNG so the session's main
+  // rng stream (used for trace) is not advanced. Hex-prism GetFn(poly_idx) is
+  // shape-invariant for hex faces; any sampled instance suffices for the
+  // canonical_bytes + GetFn table contents (Round-2 Minor-3 acknowledgement:
+  // canonical computation is fn_period=6-invariant for hex crystals).
+  RandomNumberGenerator proto_rng(0xC0FEFEEDu);
+  std::vector<DeviceFilterDesc> descs(n_slot);
+  std::vector<std::vector<uint8_t>> per_slot_bytes(n_slot);
+  for (size_t mi = 0; mi < n_layers; ++mi) {
+    const auto& ms = session_spec.scene->ms_[mi];
+    for (size_t ci = 0; ci < ms.setting_.size(); ++ci) {
+      const auto& setting = ms.setting_[ci];
+      Crystal proto = MakeCrystal(proto_rng, setting.crystal_.param_);
+      size_t slot = mi * max_ci + ci;
+      descs[slot] = detail::BuildDeviceFilterDesc(setting.filter_, proto, setting.crystal_.axis_);
+      per_slot_bytes[slot] = detail::BuildDeviceGetFnBytes(proto);
+    }
+    // Empty trailing slots (ms.setting_.size() < max_ci) keep zero-init
+    // DeviceFilterDesc{type=kDeviceFilterTypeNone} + empty GetFn stripe; the
+    // device path treats type=None as pass-through true, so an invalid index
+    // surfaces as a benign true rather than a memory fault.
+  }
+
+  // Upload descs.
+  filter_desc_count_ = n_slot;
+  size_t descs_bytes = n_slot * sizeof(DeviceFilterDesc);
+  filter_desc_buf_ = [device newBufferWithLength:descs_bytes
+                                          options:MTLResourceStorageModeShared];
+  assert(filter_desc_buf_ != nil);
+  std::memcpy([filter_desc_buf_ contents], descs.data(), descs_bytes);
+
+  // Upload GetFn prefix-sum offsets + flat byte stream.
+  std::vector<uint32_t> offsets(n_slot + 1, 0u);
+  for (size_t i = 0; i < n_slot; ++i) {
+    offsets[i + 1] = offsets[i] + static_cast<uint32_t>(per_slot_bytes[i].size());
+  }
+  size_t offsets_bytes = offsets.size() * sizeof(uint32_t);
+  getfn_offsets_buf_ = [device newBufferWithLength:offsets_bytes
+                                            options:MTLResourceStorageModeShared];
+  assert(getfn_offsets_buf_ != nil);
+  std::memcpy([getfn_offsets_buf_ contents], offsets.data(), offsets_bytes);
+
+  size_t total_bytes = offsets.back();
+  // newBufferWithLength:0 returns nil on some drivers — guard with a 1-byte
+  // minimum so the buffer is always bindable (kernel reads gated by offsets).
+  size_t alloc_bytes = std::max<size_t>(total_bytes, 1);
+  getfn_bytes_buf_ = [device newBufferWithLength:alloc_bytes
+                                          options:MTLResourceStorageModeShared];
+  assert(getfn_bytes_buf_ != nil);
+  if (total_bytes > 0) {
+    uint8_t* dst = static_cast<uint8_t*>([getfn_bytes_buf_ contents]);
+    for (size_t i = 0; i < n_slot; ++i) {
+      if (!per_slot_bytes[i].empty()) {
+        std::memcpy(dst + offsets[i], per_slot_bytes[i].data(), per_slot_bytes[i].size());
+      }
+    }
+  }
 }
 
 void MetalTraceBackend::Impl::UploadCrystal(const Crystal& crystal) {
@@ -1952,6 +2063,14 @@ void MetalTraceBackend::Impl::Reset() {
   last_ms_prob_ = 0.0f;
   last_ms_layer_idx_ = 0u;
   accumulated_mid_exits_.clear();
+  // scrum-267 task-msl-filter-match-port (Step 4): per-session device filter
+  // state. Re-uploaded on the next BeginSession; clear here so a stale config
+  // cannot bleed into a re-used backend instance.
+  filter_desc_count_ = 0;
+  filter_desc_max_ci_ = 0;
+  filter_desc_buf_ = nil;
+  getfn_offsets_buf_ = nil;
+  getfn_bytes_buf_ = nil;
   spec = SessionSpec{};
 }
 
@@ -2047,6 +2166,13 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   // allocation reflects the actual stride.
   impl_->face_seq_cap_ = std::min<uint32_t>(
       static_cast<uint32_t>(spec.scene->max_hits_), static_cast<uint32_t>(ExitFaceSeq::kCap));
+
+  // scrum-267 task-msl-filter-match-port (Step 4): upload per-session device
+  // filter descriptors + GetFn tables. Production trace kernel does not yet
+  // consume these (sub-task 2 will splice the gate); for now BeginSession
+  // ensures the descriptors are available to the parity harness and that
+  // sizing is exercised against real session configs.
+  impl_->EnsureFilterBuffers(spec);
 }
 
 LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {

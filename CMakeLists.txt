@@ -222,9 +222,12 @@ set(lumice_core_src
 # kKernelSrc string in metal_trace_backend.mm.
 if(APPLE)
   list(APPEND lumice_core_src
+    "${PROJ_SRC_DIR}/core/device_filter_desc.cpp"
+    "${PROJ_SRC_DIR}/core/metal_filter_match_src.mm"
     "${PROJ_SRC_DIR}/core/metal_trace_backend.mm")
   set_source_files_properties(
     "${PROJ_SRC_DIR}/core/metal_trace_backend.mm"
+    "${PROJ_SRC_DIR}/core/metal_filter_match_src.mm"
     PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 endif()
 
