@@ -2,6 +2,7 @@
 
 #if defined(__APPLE__)
 
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -93,6 +94,29 @@ struct SimpleVisitor {
   void operator()(const CrystalFilterParam& p) const { FillCrystal(p, out); }
 };
 
+// Fill the Complex filter's top-level fields (type / or_clause_count /
+// and_term_counts[]). Does NOT touch sub_desc_start — that field is owned by
+// the caller (`EnsureFilterBuffers`) which assigns it before appending the
+// sub-descs via `BuildComplexSubDescs` (plan §3 D5).
+void FillComplexDescTop(const ComplexFilterParam& p, DeviceFilterDesc& out) {
+  // The OR-clause count is bounded by the struct-level `and_term_counts[]`
+  // array length (MSL has no dynamic allocation). Raising the limit requires
+  // updating `kDeviceFilterMaxOrClauses` + the C++/MSL array length together.
+  assert(p.filters_.size() <= kDeviceFilterMaxOrClauses &&
+         "Complex filter exceeds kDeviceFilterMaxOrClauses (8); raise constant + arrays together");
+  out.type = kDeviceFilterTypeComplex;
+  out.or_clause_count = static_cast<uint8_t>(p.filters_.size());
+  // and_term_counts[] is zero-initialized by `DeviceFilterDesc desc{}` at the
+  // top of BuildDeviceFilterDesc; only set the slots we use.
+  for (size_t i = 0; i < p.filters_.size(); ++i) {
+    // and_term_counts[i] is uint8_t (0..255); AND-term count is far smaller in
+    // practice (the canonical ms3 config uses 1 per clause). The 255 ceiling
+    // is sufficient; raising would only require widening this field.
+    assert(p.filters_[i].size() <= 255u && "Complex AND-term count exceeds uint8_t (255)");
+    out.and_term_counts[i] = static_cast<uint8_t>(p.filters_[i].size());
+  }
+}
+
 struct TopVisitor {
   const Crystal& crystal;
   uint8_t symmetry;
@@ -103,11 +127,11 @@ struct TopVisitor {
   void operator()(const SimpleFilterParam& p) const {
     std::visit(SimpleVisitor{ crystal, symmetry, sigma_a, d_applicable, out }, p);
   }
-  void operator()(const ComplexFilterParam& /*p*/) const {
-    // plan §2 Out of scope: Complex sub-filter layout requires a follow-up
-    // task. Device kernel pass-throughs `true` for type=5, so the descriptor
-    // simply tags the slot.
-    out.type = kDeviceFilterTypeComplex;
+  void operator()(const ComplexFilterParam& p) const {
+    // Top-level desc only: or_clause_count + and_term_counts. sub_desc_start
+    // is assigned in EnsureFilterBuffers immediately before BuildComplexSubDescs
+    // is invoked, so it stays 0 here.
+    FillComplexDescTop(p, out);
   }
 };
 
@@ -125,6 +149,34 @@ DeviceFilterDesc BuildDeviceFilterDesc(const FilterConfig& config, const Crystal
 
   std::visit(TopVisitor{ crystal, config.symmetry_, desc.sigma_a, d_applicable, desc }, config.param_);
   return desc;
+}
+
+void BuildComplexSubDescs(const ComplexFilterParam& p, const Crystal& crystal, uint8_t symmetry, int sigma_a,
+                          bool d_applicable, std::vector<DeviceFilterDesc>& out_sub_descs) {
+  assert(p.filters_.size() <= kDeviceFilterMaxOrClauses &&
+         "Complex filter exceeds kDeviceFilterMaxOrClauses (8); raise constant + arrays together");
+  for (const auto& or_clause : p.filters_) {
+    // Same uint8_t bound as FillComplexDescTop; kept here so an unsynced caller
+    // (e.g. tests bypassing FillComplexDescTop) still trips the check.
+    assert(or_clause.size() <= 255u && "Complex AND-term count exceeds uint8_t (255)");
+    for (const auto& and_entry : or_clause) {
+      // Mirror ComplexSpec ctor (filter_spec.cpp:316): sub-spec inherits the
+      // parent Complex's symmetry / sigma_a / d_applicable. and_entry.first
+      // is the host-side filter id (unused on device — sub_specs are inlined
+      // by position).
+      DeviceFilterDesc sub{};
+      sub.symmetry = symmetry;
+      sub.d_applicable = d_applicable ? 1u : 0u;
+      sub.sigma_a = sigma_a;
+      sub.fn_period = crystal.FnPeriod();
+      // sub-filter predicate only; the top-level Complex `action` is XORed by
+      // DeviceFilterCheck. Mirrors host ComplexSpec::Match calling
+      // `and_f->Match` (not `Check`) per filter_spec.cpp:274-288.
+      sub.action = 0u;
+      std::visit(SimpleVisitor{ crystal, symmetry, sigma_a, d_applicable, sub }, and_entry.second);
+      out_sub_descs.push_back(sub);
+    }
+  }
 }
 
 std::vector<uint8_t> BuildDeviceGetFnBytes(const Crystal& crystal) {

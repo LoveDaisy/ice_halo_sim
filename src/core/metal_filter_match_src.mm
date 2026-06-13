@@ -18,10 +18,12 @@ const char* const kFilterMatchHelperSrc = R"METAL(
 using namespace metal;
 
 // --- DeviceFilterDesc mirror (must match src/core/device_filter_desc.hpp) ---
-// Field-by-field bit-exact alignment of host layout. sizeof must be 108 bytes
-// (verified by static_assert host-side; MSL has no static_assert across
-// strings, so the parity harness uploads a single host-built desc and the
-// kernel reads it back — any layout drift surfaces as a mismatch).
+// Field-by-field bit-exact alignment of host layout. sizeof must be 120 bytes
+// post-267.1b (Complex filter trailer added: or_clause_count reuses former
+// _pad0 byte; and_term_counts[8] + sub_desc_start appended). Verified by
+// host-side static_assert; MSL has no static_assert across strings, so the
+// parity harness uploads a single host-built desc and the kernel reads it
+// back — any layout drift surfaces as a mismatch.
 struct DeviceFilterDesc {
   uchar  type;
   uchar  action;
@@ -33,12 +35,14 @@ struct DeviceFilterDesc {
   uchar  canonical_len;
   uchar  has_entry;
   uchar  has_exit;
-  uchar  _pad0;
+  uchar  or_clause_count;        // Complex only; 0 for non-Complex (was _pad0)
   uint   min_len;
   uint   max_len;
   float  dir[3];
   float  radii_c;
   uint   crystal_id;
+  uchar  and_term_counts[8];     // Complex only: # AND-terms per OR-clause
+  uint   sub_desc_start;         // Complex only: flat start index in complex_sub_desc_buf
 };
 
 // Device filter type tags. Mirror kDeviceFilterType* in device_filter_desc.hpp.
@@ -207,14 +211,19 @@ static inline bool DeviceFilterMatchCrystal(device const DeviceFilterDesc& f,
   return ray_crystal_config_id == f.crystal_id;
 }
 
-// Top-level dispatch — Complex returns pass-through `true` (plan §2).
-static inline bool DeviceFilterMatch(device const DeviceFilterDesc& f,
-                                     thread const uchar* path, uint path_len,
-                                     device const uchar* getfn_bytes,
-                                     device const uint*  getfn_offsets,
-                                     uint  crystal_slot,
-                                     thread const float* ray_dir,
-                                     uint  ray_crystal_config_id) {
+// Simple-only dispatch: None / Raypath / EntryExit / Direction / Crystal. Does
+// NOT include the Complex branch — DeviceFilterMatchComplex calls this to
+// match a sub-spec, so including Complex here would form a static call cycle
+// (DeviceFilterMatch → Complex → Simple → ... ) which MSL rejects. The host
+// builder guarantees Complex sub-specs are always Simple (mirrors
+// ComplexSpec which uses SimpleSpecCreator on each sub-spec).
+static inline bool DeviceFilterMatchSimple(device const DeviceFilterDesc& f,
+                                           thread const uchar* path, uint path_len,
+                                           device const uchar* getfn_bytes,
+                                           device const uint*  getfn_offsets,
+                                           uint  crystal_slot,
+                                           thread const float* ray_dir,
+                                           uint  ray_crystal_config_id) {
   if (f.type == kDevFilterTypeNone)     { return true; }
   if (f.type == kDevFilterTypeRaypath)  {
     return DeviceFilterMatchRaypath(f, path, path_len, getfn_bytes, getfn_offsets, crystal_slot);
@@ -228,20 +237,78 @@ static inline bool DeviceFilterMatch(device const DeviceFilterDesc& f,
   if (f.type == kDevFilterTypeCrystal)  {
     return DeviceFilterMatchCrystal(f, ray_crystal_config_id);
   }
-  // Complex (5) — out of scope this task; pass-through true (plan §2).
-  return true;
+  // Unknown / Complex (caller error in this dispatch).
+  return false;
 }
 
-// Check = Match XOR (action == filter_out). Same algebra as
-// filter_spec.hpp:42-45.
-static inline bool DeviceFilterCheck(device const DeviceFilterDesc& f,
+// Complex filter: OR over AND-clauses of Simple sub-specs. Empty Complex
+// (or_clause_count == 0) returns `false`, matching host ComplexSpec::Match
+// (empty filters_ → loop body never executes → falls through to return false,
+// filter_spec.cpp:274-288). Do NOT change to pass-through `true` — that would
+// silently disable any deferred-construction Complex filter.
+static inline bool DeviceFilterMatchComplex(device const DeviceFilterDesc& f,
+                                            device const DeviceFilterDesc* complex_sub_desc_buf,
+                                            thread const uchar* path, uint path_len,
+                                            device const uchar* getfn_bytes,
+                                            device const uint*  getfn_offsets,
+                                            uint  crystal_slot,
+                                            thread const float* ray_dir,
+                                            uint  ray_crystal_config_id) {
+  if (f.or_clause_count == 0) { return false; }  // see comment above
+  uint sub_idx = f.sub_desc_start;
+  for (uint or_i = 0; or_i < (uint)f.or_clause_count; or_i++) {
+    uint and_n = (uint)f.and_term_counts[or_i];
+    bool and_ok = true;
+    for (uint and_j = 0; and_j < and_n; and_j++) {
+      if (!DeviceFilterMatchSimple(complex_sub_desc_buf[sub_idx],
+                                   path, path_len, getfn_bytes, getfn_offsets,
+                                   crystal_slot, ray_dir, ray_crystal_config_id)) {
+        and_ok = false;
+        // Short-circuit: skip the rest of this AND-clause so sub_idx lands at
+        // the next OR-clause start. and_j sub-descs already consumed, jump the
+        // remaining (and_n - and_j).
+        sub_idx += (and_n - and_j);
+        break;
+      }
+      sub_idx++;
+    }
+    if (and_ok) { return true; }
+  }
+  return false;
+}
+
+// Top-level dispatch — Simple types delegate to DeviceFilterMatchSimple;
+// Complex delegates to DeviceFilterMatchComplex (which calls Simple, not back
+// here, so the MSL static call graph stays acyclic).
+static inline bool DeviceFilterMatch(device const DeviceFilterDesc& f,
+                                     device const DeviceFilterDesc* complex_sub_desc_buf,
                                      thread const uchar* path, uint path_len,
                                      device const uchar* getfn_bytes,
                                      device const uint*  getfn_offsets,
                                      uint  crystal_slot,
                                      thread const float* ray_dir,
                                      uint  ray_crystal_config_id) {
-  bool m = DeviceFilterMatch(f, path, path_len, getfn_bytes, getfn_offsets,
+  if (f.type == kDevFilterTypeComplex) {
+    return DeviceFilterMatchComplex(f, complex_sub_desc_buf,
+                                    path, path_len, getfn_bytes, getfn_offsets,
+                                    crystal_slot, ray_dir, ray_crystal_config_id);
+  }
+  return DeviceFilterMatchSimple(f, path, path_len, getfn_bytes, getfn_offsets,
+                                 crystal_slot, ray_dir, ray_crystal_config_id);
+}
+
+// Check = Match XOR (action == filter_out). Same algebra as
+// filter_spec.hpp:42-45.
+static inline bool DeviceFilterCheck(device const DeviceFilterDesc& f,
+                                     device const DeviceFilterDesc* complex_sub_desc_buf,
+                                     thread const uchar* path, uint path_len,
+                                     device const uchar* getfn_bytes,
+                                     device const uint*  getfn_offsets,
+                                     uint  crystal_slot,
+                                     thread const float* ray_dir,
+                                     uint  ray_crystal_config_id) {
+  bool m = DeviceFilterMatch(f, complex_sub_desc_buf,
+                             path, path_len, getfn_bytes, getfn_offsets,
                              crystal_slot, ray_dir, ray_crystal_config_id);
   return (f.action == 0u) ? m : !m;
 }
@@ -259,29 +326,31 @@ struct FilterMatchTestParams {
 //
 // Buffer layout (mirrors plan D6 binding contract — both this kernel and the
 // host harness must agree on indices):
-//   0  filter_desc_buf   : DeviceFilterDesc[n_filters]
-//   1  getfn_offsets_buf : uint[n_crystals + 1]
-//   2  getfn_bytes_buf   : uchar[]
-//   3  ray_path_buf      : uchar[n * face_seq_cap]
-//   4  ray_path_len_buf  : uchar[n]
-//   5  ray_crystal_slot  : uint16[n]
-//   6  ray_crystal_cid   : uint16[n]
-//   7  ray_dir_buf       : float[n * 3]
-//   8  ray_filter_idx    : uint[n]
-//   9  out_match_buf     : uchar[n]
-//   10 params            : FilterMatchTestParams
+//   0  filter_desc_buf       : DeviceFilterDesc[n_filters]
+//   1  getfn_offsets_buf     : uint[n_crystals + 1]
+//   2  getfn_bytes_buf       : uchar[]
+//   3  ray_path_buf          : uchar[n * face_seq_cap]
+//   4  ray_path_len_buf      : uchar[n]
+//   5  ray_crystal_slot      : uint16[n]
+//   6  ray_crystal_cid       : uint16[n]
+//   7  ray_dir_buf           : float[n * 3]
+//   8  ray_filter_idx        : uint[n]
+//   9  out_match_buf         : uchar[n]
+//   10 params                : FilterMatchTestParams
+//   11 complex_sub_desc_buf  : DeviceFilterDesc[] (Complex sub-specs, flat)
 kernel void filter_match_test_kernel(
-    device const DeviceFilterDesc* filter_desc   [[buffer(0)]],
-    device const uint*             getfn_offsets [[buffer(1)]],
-    device const uchar*            getfn_bytes   [[buffer(2)]],
-    device const uchar*            ray_path      [[buffer(3)]],
-    device const uchar*            ray_path_len  [[buffer(4)]],
-    device const ushort*           ray_cslot     [[buffer(5)]],
-    device const ushort*           ray_cid       [[buffer(6)]],
-    device const float*            ray_dir       [[buffer(7)]],
-    device const uint*             ray_filter    [[buffer(8)]],
-    device uchar*                  out_match     [[buffer(9)]],
-    constant FilterMatchTestParams& prm          [[buffer(10)]],
+    device const DeviceFilterDesc* filter_desc        [[buffer(0)]],
+    device const uint*             getfn_offsets      [[buffer(1)]],
+    device const uchar*            getfn_bytes        [[buffer(2)]],
+    device const uchar*            ray_path           [[buffer(3)]],
+    device const uchar*            ray_path_len       [[buffer(4)]],
+    device const ushort*           ray_cslot          [[buffer(5)]],
+    device const ushort*           ray_cid            [[buffer(6)]],
+    device const float*            ray_dir            [[buffer(7)]],
+    device const uint*             ray_filter         [[buffer(8)]],
+    device uchar*                  out_match          [[buffer(9)]],
+    constant FilterMatchTestParams& prm               [[buffer(10)]],
+    device const DeviceFilterDesc* complex_sub_desc   [[buffer(11)]],
     uint tid [[thread_position_in_grid]]) {
   if (tid >= prm.n) { return; }
   uint len = (uint)ray_path_len[tid];
@@ -299,10 +368,10 @@ kernel void filter_match_test_kernel(
   device const DeviceFilterDesc& f = filter_desc[fi];
   bool result;
   if (prm.check_mode == 0u) {
-    result = DeviceFilterMatch(f, path_local, len, getfn_bytes, getfn_offsets,
+    result = DeviceFilterMatch(f, complex_sub_desc, path_local, len, getfn_bytes, getfn_offsets,
                                (uint)ray_cslot[tid], dir_local, (uint)ray_cid[tid]);
   } else {
-    result = DeviceFilterCheck(f, path_local, len, getfn_bytes, getfn_offsets,
+    result = DeviceFilterCheck(f, complex_sub_desc, path_local, len, getfn_bytes, getfn_offsets,
                                (uint)ray_cslot[tid], dir_local, (uint)ray_cid[tid]);
   }
   out_match[tid] = result ? 1u : 0u;

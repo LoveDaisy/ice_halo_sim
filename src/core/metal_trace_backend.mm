@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "config/proj_config.hpp"
@@ -1096,6 +1097,14 @@ struct MetalTraceBackend::Impl {
   id<MTLBuffer> filter_desc_buf_    = nil;
   id<MTLBuffer> getfn_offsets_buf_  = nil;
   id<MTLBuffer> getfn_bytes_buf_    = nil;
+  // Complex filter sub-spec flat buffer (267.1b). For each top-level Complex
+  // desc, `sub_desc_start` indexes here and `or_clause_count` +
+  // `and_term_counts[]` describe the OR/AND layout. Sub-descs are always
+  // Simple (None/Raypath/EntryExit/Direction/Crystal); Complex never nests
+  // Complex (host semantics: `ComplexSpec` uses `SimpleSpecCreator`).
+  // Allocated even when there are no Complex filters (1-byte dummy) so the
+  // kernel buffer(11) binding is never nil.
+  id<MTLBuffer> complex_sub_desc_buf_ = nil;
   size_t filter_desc_count_    = 0;  // total descs uploaded (flattened slots)
   size_t filter_desc_max_ci_   = 0;  // per-layer ci stride; flattened slot
                                      // (mi, ci) → mi * max_ci + ci
@@ -1369,6 +1378,7 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
   filter_desc_buf_ = nil;
   getfn_offsets_buf_ = nil;
   getfn_bytes_buf_ = nil;
+  complex_sub_desc_buf_ = nil;
   if (session_spec.scene == nullptr) {
     return;
   }
@@ -1394,6 +1404,10 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
   RandomNumberGenerator proto_rng(0xC0FEFEEDu);
   std::vector<DeviceFilterDesc> descs(n_slot);
   std::vector<std::vector<uint8_t>> per_slot_bytes(n_slot);
+  // Flat sub-desc buffer for Complex filters (267.1b). Inlined collection so a
+  // Complex slot's `sub_desc_start` is recorded BEFORE pushing its sub-descs —
+  // avoids needing a separate (slot, ComplexFilterParam) map for a second pass.
+  std::vector<DeviceFilterDesc> all_sub_descs;
   for (size_t mi = 0; mi < n_layers; ++mi) {
     const auto& ms = session_spec.scene->ms_[mi];
     for (size_t ci = 0; ci < ms.setting_.size(); ++ci) {
@@ -1402,6 +1416,17 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
       size_t slot = mi * max_ci + ci;
       descs[slot] = detail::BuildDeviceFilterDesc(setting.filter_, proto, setting.crystal_.axis_);
       per_slot_bytes[slot] = detail::BuildDeviceGetFnBytes(proto);
+      // Inline Complex sub-desc collection — see plan §3 D5 / Step 3 rationale.
+      if (descs[slot].type == kDeviceFilterTypeComplex) {
+        const auto* complex_p = std::get_if<ComplexFilterParam>(&setting.filter_.param_);
+        // FillComplexDescTop is only invoked for ComplexFilterParam, so this
+        // get_if must succeed (defensive against future variant additions).
+        assert(complex_p != nullptr && "Complex desc type without ComplexFilterParam variant");
+        descs[slot].sub_desc_start = static_cast<uint32_t>(all_sub_descs.size());
+        detail::BuildComplexSubDescs(*complex_p, proto, descs[slot].symmetry,
+                                     descs[slot].sigma_a, descs[slot].d_applicable != 0u,
+                                     all_sub_descs);
+      }
     }
     // Empty trailing slots (ms.setting_.size() < max_ci) keep zero-init
     // DeviceFilterDesc{type=kDeviceFilterTypeNone} + empty GetFn stripe; the
@@ -1442,6 +1467,18 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
         std::memcpy(dst + offsets[i], per_slot_bytes[i].data(), per_slot_bytes[i].size());
       }
     }
+  }
+
+  // Upload Complex sub-desc flat buffer (267.1b). Allocate a 1-byte dummy when
+  // there are no Complex filters so the kernel's buffer(11) binding is always
+  // valid (Metal disallows nil buffer binds).
+  size_t sub_desc_bytes = all_sub_descs.size() * sizeof(DeviceFilterDesc);
+  size_t sub_alloc_bytes = std::max<size_t>(sub_desc_bytes, 1);
+  complex_sub_desc_buf_ = [device newBufferWithLength:sub_alloc_bytes
+                                              options:MTLResourceStorageModeShared];
+  assert(complex_sub_desc_buf_ != nil);
+  if (sub_desc_bytes > 0) {
+    std::memcpy([complex_sub_desc_buf_ contents], all_sub_descs.data(), sub_desc_bytes);
   }
 }
 
@@ -2071,6 +2108,7 @@ void MetalTraceBackend::Impl::Reset() {
   filter_desc_buf_ = nil;
   getfn_offsets_buf_ = nil;
   getfn_bytes_buf_ = nil;
+  complex_sub_desc_buf_ = nil;
   spec = SessionSpec{};
 }
 

@@ -35,10 +35,17 @@ constexpr uint8_t kDeviceFilterTypeRaypath = 1;
 constexpr uint8_t kDeviceFilterTypeEntryExit = 2;
 constexpr uint8_t kDeviceFilterTypeDirection = 3;
 constexpr uint8_t kDeviceFilterTypeCrystal = 4;
-// Complex is out of scope this task (plan §2). Device dispatch returns
-// pass-through `true` for type=5 so generation paths that synthesize Complex
-// descs do not silently corrupt other types.
+// Complex = boolean sum-of-products over Simple sub-filters (267.1b). The top-
+// level desc carries `or_clause_count` + `and_term_counts[]` + `sub_desc_start`;
+// the actual Simple sub-descs live in a separate flat buffer
+// (`complex_sub_desc_buf_`), one entry per AND-term, packed by OR-clause order.
 constexpr uint8_t kDeviceFilterTypeComplex = 5;
+
+// Struct-level upper bound on OR-clauses per Complex filter. The `and_term_counts`
+// array length is the hard limit (MSL has no dynamic allocation); raising it
+// requires updating this constant + the array length in `DeviceFilterDesc` and
+// the MSL mirror together.
+constexpr uint8_t kDeviceFilterMaxOrClauses = 8;
 
 // Plain-data descriptor uploaded to the Metal `filter_desc_buf_` (per filter).
 //
@@ -63,15 +70,19 @@ struct DeviceFilterDesc {
   uint8_t canonical_len;        // # significant bytes in canonical_bytes
   uint8_t has_entry;            // EntryExit only
   uint8_t has_exit;             // EntryExit only
-  uint8_t _pad0;                // align next 4-byte block
+  uint8_t or_clause_count;      // Complex only: # OR-clauses (≤ kDeviceFilterMaxOrClauses);
+                                // non-Complex types leave this 0 (was `_pad0` in pre-267.1b layout)
   uint32_t min_len;             // EntryExit lower bound (≥1); Raypath uses canonical_len
   uint32_t max_len;             // EntryExit upper bound; 0 = no upper bound
   float dir[3];                 // Direction only (unit cartesian vector)
   float radii_c;                // Direction only: cos(radii_deg)
   uint32_t crystal_id;          // Crystal only
+  uint8_t and_term_counts[kDeviceFilterMaxOrClauses];  // Complex only: # AND-terms per OR-clause
+  uint32_t sub_desc_start;                             // Complex only: flat start index in complex_sub_desc_buf_
 };
 
-static_assert(sizeof(DeviceFilterDesc) <= 256, "DeviceFilterDesc must stay under 256 bytes — see plan §3.D2");
+static_assert(sizeof(DeviceFilterDesc) <= 256,
+              "DeviceFilterDesc must stay under 256 bytes — see plan §3.D2 (120B as of 267.1b)");
 
 namespace detail {
 
@@ -84,12 +95,33 @@ namespace detail {
 // crystal fallback the function still produces a valid desc — the device path
 // memcmps verbatim when `fn_period < 0`.
 //
-// Complex filters (`ComplexFilterParam`) produce a desc with
-// `type = kDeviceFilterTypeComplex` and otherwise-zero fields; the device-side
-// dispatch returns pass-through `true` for that branch (plan §2 — Complex is
-// out of scope this task).
+// For Complex filters (`ComplexFilterParam`) the returned desc carries
+// `type = kDeviceFilterTypeComplex` + `or_clause_count` + `and_term_counts[]`
+// but **not** `sub_desc_start` — that field is assigned by the caller (e.g.
+// `EnsureFilterBuffers`) immediately before invoking `BuildComplexSubDescs`,
+// which appends the flat list of Simple sub-descs to the shared buffer (plan
+// §3 D5: two-function split keeps top-level desc construction state-free).
 DeviceFilterDesc BuildDeviceFilterDesc(const FilterConfig& config, const Crystal& crystal,
                                        const AxisDistribution& axis_dist);
+
+// Append the flat Simple sub-descs of a Complex filter to `out_sub_descs` in
+// OR-clause × AND-term order. The caller must record
+// `start = out_sub_descs.size()` BEFORE this call and write it into the parent
+// desc's `sub_desc_start`; this function only appends.
+//
+// Sub-descs inherit the parent Complex's `symmetry`/`sigma_a`/`d_applicable`
+// (mirrors `ComplexSpec::ComplexSpec` ctor in filter_spec.cpp:316). Each sub-
+// desc's `action` is forced to 0 (kFilterIn) — the device matcher invokes the
+// Simple-only dispatch (`DeviceFilterMatchSimple`) without applying action XOR;
+// the top-level Complex `action` is XORed at the outer `DeviceFilterCheck`
+// site. This mirrors host `ComplexSpec::Match`, which calls `and_f->Match`
+// (not `Check`) on sub-specs.
+//
+// Each OR-clause's AND-term count is asserted ≤ 255 (uint8_t domain). The
+// OR-clause count itself is checked at the parent desc level (≤
+// kDeviceFilterMaxOrClauses == 8).
+void BuildComplexSubDescs(const ComplexFilterParam& p, const Crystal& crystal, uint8_t symmetry, int sigma_a,
+                          bool d_applicable, std::vector<DeviceFilterDesc>& out_sub_descs);
 
 // Build the per-crystal poly-index → face-number byte table. Mirrors the GetFn
 // remap that `CopyContSliceToRootBuf` does on host (metal_trace_backend.mm

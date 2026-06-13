@@ -71,7 +71,9 @@ using metal_test::ShouldSkipMetalTests;
 // Layout sanity — guards future struct edits (parity harness reuploads bytes
 // verbatim so any host-side reshape that changes sizeof must be intentional).
 TEST(DeviceFilterDescLayout, SizeFitsBudget) {
-  EXPECT_EQ(sizeof(DeviceFilterDesc), static_cast<size_t>(108));
+  // Post-267.1b: 108B → 120B (or_clause_count reuses former _pad0;
+  // and_term_counts[8] + sub_desc_start appended for Complex filter support).
+  EXPECT_EQ(sizeof(DeviceFilterDesc), static_cast<size_t>(120));
   EXPECT_LE(sizeof(DeviceFilterDesc), static_cast<size_t>(256));
 }
 
@@ -232,7 +234,8 @@ size_t DispatchParity(MetalHarness& h,
                       id<MTLBuffer> ray_path, id<MTLBuffer> ray_path_len,
                       id<MTLBuffer> ray_cslot, id<MTLBuffer> ray_cid,
                       id<MTLBuffer> ray_dir, id<MTLBuffer> ray_filter,
-                      id<MTLBuffer> out_match, const FilterMatchTestParams& prm) {
+                      id<MTLBuffer> out_match, const FilterMatchTestParams& prm,
+                      id<MTLBuffer> complex_sub_desc) {
   @autoreleasepool {
     id<MTLBuffer> prm_buf = [h.device newBufferWithLength:sizeof(FilterMatchTestParams)
                                                   options:MTLResourceStorageModeShared];
@@ -240,17 +243,18 @@ size_t DispatchParity(MetalHarness& h,
     id<MTLCommandBuffer> cb = [h.queue commandBuffer];
     id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
     [enc setComputePipelineState:h.pso];
-    [enc setBuffer:filter_desc   offset:0 atIndex:0];
-    [enc setBuffer:getfn_offsets offset:0 atIndex:1];
-    [enc setBuffer:getfn_bytes   offset:0 atIndex:2];
-    [enc setBuffer:ray_path      offset:0 atIndex:3];
-    [enc setBuffer:ray_path_len  offset:0 atIndex:4];
-    [enc setBuffer:ray_cslot     offset:0 atIndex:5];
-    [enc setBuffer:ray_cid       offset:0 atIndex:6];
-    [enc setBuffer:ray_dir       offset:0 atIndex:7];
-    [enc setBuffer:ray_filter    offset:0 atIndex:8];
-    [enc setBuffer:out_match     offset:0 atIndex:9];
-    [enc setBuffer:prm_buf       offset:0 atIndex:10];
+    [enc setBuffer:filter_desc      offset:0 atIndex:0];
+    [enc setBuffer:getfn_offsets    offset:0 atIndex:1];
+    [enc setBuffer:getfn_bytes      offset:0 atIndex:2];
+    [enc setBuffer:ray_path         offset:0 atIndex:3];
+    [enc setBuffer:ray_path_len     offset:0 atIndex:4];
+    [enc setBuffer:ray_cslot        offset:0 atIndex:5];
+    [enc setBuffer:ray_cid          offset:0 atIndex:6];
+    [enc setBuffer:ray_dir          offset:0 atIndex:7];
+    [enc setBuffer:ray_filter       offset:0 atIndex:8];
+    [enc setBuffer:out_match        offset:0 atIndex:9];
+    [enc setBuffer:prm_buf          offset:0 atIndex:10];
+    [enc setBuffer:complex_sub_desc offset:0 atIndex:11];
     NSUInteger tg = std::min<NSUInteger>(256, h.pso.maxTotalThreadsPerThreadgroup);
     [enc dispatchThreads:MTLSizeMake(prm.n, 1, 1) threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
     [enc endEncoding];
@@ -291,11 +295,37 @@ struct ParityFixture {
   Crystal crystal;
   std::vector<DeviceFilterDesc> descs;
   std::vector<uint8_t> getfn;
+  // Flat Complex sub-spec descs. Each Complex slot in `descs` carries
+  // sub_desc_start indexing here; non-Complex slots leave the field at 0.
+  std::vector<DeviceFilterDesc> complex_sub_descs;
   std::vector<std::unique_ptr<FilterSpec>> host_specs;
   std::vector<FilterConfig> filter_configs;  // kept alive for FilterSpec::Create
   AxisDistribution axis;
   uint32_t face_seq_cap = 15;
 };
+
+// Build a Complex FilterConfig — helper used by BuildFixture below. Each
+// or_clause is a list of SimpleFilterParam (the IdType key is informational
+// only; ComplexSpec / BuildComplexSubDescs consume only the variant value).
+FilterConfig MakeComplexConfig(uint8_t symmetry, FilterConfig::Action action,
+                               std::vector<std::vector<SimpleFilterParam>> or_clauses) {
+  FilterConfig cfg{};
+  cfg.symmetry_ = symmetry;
+  cfg.action_ = action;
+  ComplexFilterParam cp;
+  cp.filters_.reserve(or_clauses.size());
+  IdType synthetic_id = 0;
+  for (auto& clause : or_clauses) {
+    std::vector<std::pair<IdType, SimpleFilterParam>> and_terms;
+    and_terms.reserve(clause.size());
+    for (auto& sp : clause) {
+      and_terms.emplace_back(synthetic_id++, std::move(sp));
+    }
+    cp.filters_.push_back(std::move(and_terms));
+  }
+  cfg.param_ = std::move(cp);
+  return cfg;
+}
 
 // Build a comprehensive filter table (covers all device filter types).
 ParityFixture BuildFixture(bool d_applicable_axis) {
@@ -410,11 +440,72 @@ ParityFixture BuildFixture(bool d_applicable_axis) {
     cfg.param_ = p;
     push(cfg);
   }
+  // ---- Complex configs (267.1b) ----
+  // Complex-A — mirrors ms3-multi-crystal-filter.json id=4: PBD filter_in,
+  // 2 OR-clauses × 1 AND-term, each AND a raypath.
+  {
+    RaypathFilterParam a;
+    a.raypath_ = std::vector<IdType>{ 3, 5 };
+    RaypathFilterParam b;
+    b.raypath_ = std::vector<IdType>{ 4, 6 };
+    push(MakeComplexConfig(
+        static_cast<uint8_t>(FilterConfig::kSymP | FilterConfig::kSymB | FilterConfig::kSymD),
+        FilterConfig::kFilterIn,
+        { { SimpleFilterParam{ a } }, { SimpleFilterParam{ b } } }));
+  }
+  // Complex-B — mirrors id=7 layout: BD filter_in, 2 OR × 1 AND.
+  {
+    RaypathFilterParam a;
+    a.raypath_ = std::vector<IdType>{ 5, 3 };
+    RaypathFilterParam b;
+    b.raypath_ = std::vector<IdType>{ 6, 4 };
+    push(MakeComplexConfig(
+        static_cast<uint8_t>(FilterConfig::kSymB | FilterConfig::kSymD),
+        FilterConfig::kFilterIn,
+        { { SimpleFilterParam{ a } }, { SimpleFilterParam{ b } } }));
+  }
+  // Complex-C — filter_out, 1 OR × 1 AND. Tests top-level action XOR over the
+  // Complex MATCH result (both true→false and false→true paths exercised
+  // because the host result varies per sampled ray).
+  {
+    RaypathFilterParam a;
+    a.raypath_ = std::vector<IdType>{ 3, 5 };
+    push(MakeComplexConfig(
+        static_cast<uint8_t>(FilterConfig::kSymP | FilterConfig::kSymB | FilterConfig::kSymD),
+        FilterConfig::kFilterOut,
+        { { SimpleFilterParam{ a } } }));
+  }
+  // Complex-D — AND dimension: 1 OR × 2 AND-terms (raypath ∧ crystal_id),
+  // exercises the inner AND loop short-circuit and sub-desc walk past >1 entry
+  // per clause.
+  {
+    RaypathFilterParam a;
+    a.raypath_ = std::vector<IdType>{ 3, 5 };
+    CrystalFilterParam c;
+    c.crystal_id_ = 7;
+    push(MakeComplexConfig(
+        static_cast<uint8_t>(FilterConfig::kSymP),
+        FilterConfig::kFilterIn,
+        { { SimpleFilterParam{ a }, SimpleFilterParam{ c } } }));
+  }
 
   fx.descs.reserve(fx.filter_configs.size());
   fx.host_specs.reserve(fx.filter_configs.size());
-  for (const auto& cfg : fx.filter_configs) {
-    fx.descs.push_back(detail::BuildDeviceFilterDesc(cfg, fx.crystal, fx.axis));
+  for (size_t i = 0; i < fx.filter_configs.size(); ++i) {
+    const auto& cfg = fx.filter_configs[i];
+    DeviceFilterDesc desc = detail::BuildDeviceFilterDesc(cfg, fx.crystal, fx.axis);
+    // Inline Complex sub-desc collection — mirrors EnsureFilterBuffers in
+    // metal_trace_backend.mm so the fixture exercises the same layout
+    // production uploads.
+    if (desc.type == kDeviceFilterTypeComplex) {
+      const auto* cp = std::get_if<ComplexFilterParam>(&cfg.param_);
+      assert(cp != nullptr && "Complex desc type without ComplexFilterParam variant");
+      desc.sub_desc_start = static_cast<uint32_t>(fx.complex_sub_descs.size());
+      detail::BuildComplexSubDescs(*cp, fx.crystal, desc.symmetry,
+                                   desc.sigma_a, desc.d_applicable != 0u,
+                                   fx.complex_sub_descs);
+    }
+    fx.descs.push_back(desc);
     fx.host_specs.push_back(FilterSpec::Create(cfg, fx.crystal, fx.axis));
   }
   fx.getfn = detail::BuildDeviceGetFnBytes(fx.crystal);
@@ -540,6 +631,11 @@ void RunSweep(MetalHarness& h, const ParityFixture& fx, std::mt19937& rng,
   uint32_t getfn_offsets[2] = { 0, static_cast<uint32_t>(fx.getfn.size()) };
   id<MTLBuffer> offsets_buf = MakeShared(h.device, getfn_offsets, sizeof(getfn_offsets));
   id<MTLBuffer> getfn_buf = MakeShared(h.device, fx.getfn.data(), fx.getfn.size());
+  // Complex sub-desc buffer — 1-byte dummy when empty so the buffer(11) bind
+  // is always valid (Metal disallows nil); kernel reads gated by Complex
+  // dispatch which only triggers on Complex filter slots.
+  id<MTLBuffer> complex_sub_buf = MakeShared(h.device, fx.complex_sub_descs.data(),
+                                             fx.complex_sub_descs.size() * sizeof(DeviceFilterDesc));
   auto rb = UploadRays(h.device, rays, fx.face_seq_cap);
 
   FilterMatchTestParams prm{};
@@ -548,7 +644,7 @@ void RunSweep(MetalHarness& h, const ParityFixture& fx, std::mt19937& rng,
   prm.check_mode = check_mode;
   DispatchParity(h, filter_desc_buf, offsets_buf, getfn_buf,
                  rb.path, rb.path_len, rb.cslot, rb.cid, rb.dir, rb.filter,
-                 rb.out_match, prm);
+                 rb.out_match, prm, complex_sub_buf);
 
   const uint8_t* dev_out = static_cast<const uint8_t*>([rb.out_match contents]);
   size_t mism = 0;
@@ -599,8 +695,20 @@ TEST(MetalFilterMatchParity, RandomSequencesAcrossAxisAndCheckMode) {
   size_t total = 0, mism = 0;
   for (int axis_d_app : { 0, 1 }) {
     ParityFixture fx = BuildFixture(axis_d_app != 0);
-    constexpr size_t kFilterCnt = 10;  // matches BuildFixture
+    // 10 Simple + 4 Complex (A/B/C/D). When this count changes, update both
+    // BuildFixture and this constant.
+    constexpr size_t kFilterCnt = 14;
     ASSERT_EQ(fx.descs.size(), kFilterCnt);
+    // Guard against the "double pass-through" trap: if all Complex descs had
+    // or_clause_count==0, both host (empty Complex → false) and device (early
+    // return false) would agree and silently bypass the Complex MATCH logic.
+    // Assert every Complex slot carries a populated clause list.
+    for (size_t fi = 0; fi < kFilterCnt; ++fi) {
+      if (fx.descs[fi].type == kDeviceFilterTypeComplex) {
+        ASSERT_GT(fx.descs[fi].or_clause_count, 0u)
+            << "Complex filter " << fi << " has 0 OR-clauses — fixture would not exercise MATCH";
+      }
+    }
     size_t per_filter_total[kFilterCnt]{};
     size_t per_filter_mism[kFilterCnt]{};
     for (uint32_t check_mode : { 0u, 1u }) {
