@@ -79,6 +79,11 @@
 - **几何池 / concern #5**（晶体几何参数随机变动 → batch 内多晶体几何、per-ray 索引）在此评估或延后（§6 待定项，257 exp#5 证 memory divergence +20%@K1024 modest，control divergence 未测）。
 - 再由 explore 结论动态生成实现子任务。
 
+### 6.1 Scrum 1 结转的 Scrum 2 输入（267.2 fused-emit-gate 产出，2026-06-14）
+
+- **⭐ R1 option B 评估（occupancy 704 < 1024 基线）**：267.2 的 emit gate 把 `trace_layer_kernel` 生产 PSO 的 `maxTotalThreadsPerThreadgroup` 从 **1024 压到 704**（gate 加 `path_local[64]` + DeviceFilterCheck 调用图，寄存器压力实增；#250 标的"唯一真风险"首次在融合后兑现）。owner 裁决 Scrum 1 接受 704（C2：Scrum 1 验收=correctness 非吞吐；occupancy 不影响正确性，parity 全绿）。**Scrum 2 必做**：在 multi-MS+filter 上对 legacy 实测吞吐——**若吞吐相对 legacy 恶化 > 阈值（建议先定 ~10%），则触发 R1 option B = 把 filter-gate 从 trace kernel 拆成独立 wavefront dispatch 恢复并行度**；若无恶化，可将 occupancy 回归门从临时的 640 升到实测基准 704。**此触发判据须落成 Scrum 2 planning 的必测项（非 TODO），否则会悬空**（code-review-02 Suggestion 1/4）。
+- **gate cleanup（Scrum 2 顺带）**：①`DeviceFilterCheck` 第 7 形参在 `kFilterMatchHelperSrc` 定义层仍名 `crystal_id`，正确实参是 `gate_slot`（= `ms_layer_idx*max_ci+crystal_id`）——建议改名 `orbit_slot` 使 API 自描述（当前靠调用点注释保护，不可扩展）；②`gate_seed` 在 `(ms_layer_idx=0,crystal_id=0)` 退化为 `gen_seed_`、与 gen_root PCG 种子重叠（corner case，M5 parity 未受影响）——加非零 XOR 偏置消除。
+
 ## 7. 验证策略（贯穿两 scrum）
 
 - **ground truth = legacy CPU 渲染**（raw-XYZ 优先于 sRGB）。oracle 另可用 CpuTraceBackend 独立重实现（#253 范式）抓 kernel 数值/时序错。
