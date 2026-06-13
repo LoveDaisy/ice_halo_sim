@@ -442,7 +442,15 @@ TEST(MetalTraceParity, TwoLayerExitStatsAndXyz) {
   auto oracle_l0 =
       OracleTraceLayer(roots0.crystal, poly0, roots0.n_idx, scene.max_hits_, roots0.d, roots0.p, roots0.w, roots0.tf);
 
-  EXPECT_EQ(metal_cont0, oracle_l0.exit_count) << "layer0 continuation_count vs oracle exit_count mismatch";
+  // scrum-267 task-fused-emit-gate: cont_count is now the post-gate
+  // (filter+prob) continuation count, not the geometric polygon-exit count.
+  // For the no-filter test scene with layer-0 prob_=0.6 we expect roughly
+  // 60% of polygon exits to survive the gate; the strict-equality assertion
+  // of the old design (kernel writes every exit to cont buffer) no longer
+  // holds. The kernel exit_count atomic still increments per filter_pass
+  // ray, so for no-filter scenes it matches the oracle's geometric count.
+  EXPECT_GT(metal_cont0, 0u) << "layer0 produced no continuations after gate";
+  EXPECT_LE(metal_cont0, oracle_l0.exit_count) << "layer0 continuation_count cannot exceed polygon-exit count";
   EXPECT_EQ(metal_layer0_stats.exit_count, oracle_l0.exit_count) << "layer0 exit_count mismatch";
   EXPECT_LT(RelErr(metal_layer0_stats.exit_w_sum, oracle_l0.exit_w_sum), 5e-4)
       << "layer0 exit_w_sum: metal=" << metal_layer0_stats.exit_w_sum << " oracle=" << oracle_l0.exit_w_sum;
@@ -731,7 +739,12 @@ TEST(MetalTraceParity, MultiPopTwoLayerExitStatsAndXyz) {
 
   // Layer 0 — multi-pop oracle.
   auto oracle_l0 = OracleRunFirstLayerMultiPop(oracle_rng, spec, kRayCount);
-  EXPECT_EQ(metal_cont0, oracle_l0.total_exit_count) << "layer0 continuation_count vs oracle exit_count mismatch";
+  // scrum-267 task-fused-emit-gate: same semantic shift as
+  // TwoLayerExitStatsAndXyz — cont_count is now post-gate, not the geometric
+  // polygon-exit count. The kernel exit_count atomic still tracks filter_pass
+  // rays (= oracle's geometric count for no-filter scenes).
+  EXPECT_GT(metal_cont0, 0u) << "layer0 produced no continuations after gate";
+  EXPECT_LE(metal_cont0, oracle_l0.total_exit_count) << "layer0 continuation_count cannot exceed polygon-exit count";
   EXPECT_EQ(metal_layer0_stats.exit_count, oracle_l0.total_exit_count) << "layer0 exit_count mismatch";
   EXPECT_LT(RelErr(metal_layer0_stats.exit_w_sum, oracle_l0.total_exit_w_sum), 5e-4)
       << "layer0 exit_w_sum: metal=" << metal_layer0_stats.exit_w_sum << " oracle=" << oracle_l0.total_exit_w_sum;
@@ -794,10 +807,14 @@ TEST(MetalTraceParity, MultiPopContinuationAppendInvariant) {
   size_t cont0 = h0->ContinuationCount();
   LayerStats stats0 = h0->GetLayerStats();
 
-  // Invariant 1: continuation count equals exit_count (Metal kernel writes
-  // each exit to cont_*, no drop).
-  EXPECT_EQ(cont0, stats0.exit_count)
-      << "Layer 0 continuation count diverged from exit_count — possible overflow truncation";
+  // scrum-267 task-fused-emit-gate: the prior "cont0 == stats0.exit_count"
+  // invariant assumed the kernel wrote every polygon exit to cont buffer.
+  // The emit gate now decides on-device whether each exit continues
+  // (filter_pass && rng<prob) or drops/mid-exits, so cont0 is a strict
+  // subset of stats0.exit_count. Replace the equality with the relaxed
+  // invariant (cont count never exceeds polygon-exit count) — overflow
+  // truncation would surface as cont0 > out_cap_bound below.
+  EXPECT_LE(cont0, stats0.exit_count) << "Layer 0 continuation count exceeded exit_count — gate bookkeeping broken";
 
   // Invariant 2: cumulative produced stays within the structural bound
   // out_cap = total * (2*max_hits + 4) = 1024 * 8 = 8192.

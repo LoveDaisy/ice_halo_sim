@@ -16,6 +16,15 @@
 
 namespace lumice {
 
+// Trace-kernel splice contract (scrum-267 task-fused-emit-gate Step 1):
+// kFilterMatchHelperSrc declares `constant uint kDevRecCap = 64` and the
+// production trace kernel kKernelSrc declares `constant uint kRecCap = 64`.
+// Both names refer to the same hop-count budget — the host-visible mirror
+// below is checked against the trace kernel's `kTraceKernelRecCap` (in
+// metal_trace_backend.mm) via static_assert so a future bump cannot drift
+// the two MSL constants apart silently.
+constexpr int kDevFilterMatchRecCap = 64;
+
 // `static inline` helpers shared by the parity test kernel AND the future
 // production trace kernel splice. No I/O / kernel entry points here.
 extern const char* const kFilterMatchHelperSrc;

@@ -29,6 +29,7 @@
 #include "core/filter_spec.hpp"
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
+#include "core/metal_filter_match_src.hpp"
 #include "core/metal_trace_backend.hpp"
 #include "core/projection.hpp"
 #include "core/raypath.hpp"
@@ -42,6 +43,16 @@ namespace lumice {
 
 namespace {
 
+// scrum-267 task-fused-emit-gate Step 1: kRecCap (trace kernel hop budget) and
+// kDevRecCap (filter-match helper path-byte budget) BOTH live in MSL constant
+// strings — they must agree numerically, or `path_local[kDevRecCap]` in the
+// emit gate cannot accept the trace kernel's full `path[kRecCap]`. Mirror the
+// trace-kernel value here so this static_assert traps a future drift the
+// moment one constant is bumped.
+constexpr int kTraceKernelRecCap = 64;
+static_assert(kDevFilterMatchRecCap == kTraceKernelRecCap,
+              "kDevRecCap (filter-match helper) and kRecCap (trace kernel) must match");
+
 // Mirror of doc/trace_layer.metal. Edit both in lock-step.
 constexpr const char* kKernelSrc = R"METAL(
 #include <metal_stdlib>
@@ -50,6 +61,29 @@ using namespace metal;
 constant float  kFloatEps  = 1e-5f;
 constant ushort kInvalidId = 0xffffu;
 constant uint   kRecCap    = 64u;
+
+// scrum-267 task-fused-emit-gate Step 5: PCG stream definitions hoisted here
+// so the trace_layer_kernel's emit gate can call pcg_uniform for the per-ray
+// prob decision. gen_root_kernel (defined later in this string) re-uses the
+// same names; MSL accepts a single forward definition.
+inline uint pcg_hash(uint x) {
+  x = x * 747796405u + 2891336453u;
+  x = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u;
+  return (x >> 22u) ^ x;
+}
+inline float u01_from_hash(uint h) {
+  return float(h >> 8) * (1.0f / 16777216.0f);
+}
+struct PcgStream {
+  uint seed;
+  uint global_idx;
+  uint slot;
+};
+inline float pcg_uniform(thread PcgStream& s) {
+  uint h = pcg_hash(s.seed ^ pcg_hash(s.global_idx * 1000003u + s.slot));
+  s.slot++;
+  return u01_from_hash(h);
+}
 
 struct KernelParams {
   float n_idx;
@@ -82,6 +116,22 @@ struct KernelParams {
   uint  crystal_id;
   uint  face_seq_cap;
   uint  ms_layer_idx;
+  // Emit-gate (scrum-267 task-fused-emit-gate Step 2). Read only by the
+  // ms_mode==1 emit gate; ms_mode==0 dispatches leave these zero / host fills
+  // a benign default.
+  //   ms_prob            : MS continuation probability for THIS layer (gate
+  //                        keeps the ray when pcg_uniform() < ms_prob)
+  //   gate_seed          : PCG seed for the gate's prob draw — derived from
+  //                        gen_seed_ XOR (ms_layer_idx, crystal_id) nonce so
+  //                        successive dispatches see independent prob streams
+  //   filter_desc_max_ci : stride for gate_slot = ms_layer_idx * stride + ci
+  //                        (mirrors EnsureFilterBuffers' max_ci layout)
+  //   crystal_config_id  : DeviceFilterMatchCrystal compares against this; for
+  //                        non-CrystalSpec filters the kernel never reads it
+  float ms_prob;
+  uint  gate_seed;
+  uint  filter_desc_max_ci;
+  uint  crystal_config_id;
 };
 
 inline float GetReflectRatio(float delta, float rr) {
@@ -116,14 +166,20 @@ kernel void trace_layer_kernel(
     device ushort*         exit_crystal_id    [[buffer(21)]],
     device uchar*          exit_face_seq_len  [[buffer(22)]],
     device uchar*          exit_face_seq_data [[buffer(23)]],
-    // Cont metadata (scrum-258.3 Step 2): per-cont-ray crystal_id + face
-    // sequence, written by ms_mode==1 exit branch in parallel with out_d/w/tf.
-    // Read host-side by CopyContSliceToRootBuf to apply per-ray filter + prob.
-    // ms_mode==0 dispatches bind these to non-nil dummy buffers; kernel never
-    // writes through them on that path.
-    device ushort*         cont_crystal_id    [[buffer(24)]],
-    device uchar*          cont_face_seq_len  [[buffer(25)]],
-    device uchar*          cont_face_seq_data [[buffer(26)]],
+    // scrum-267 task-fused-emit-gate Step 4b: device-side emit gate state.
+    // The ms_mode==1 path now calls DeviceFilterCheck and draws a PCG prob to
+    // decide continuation vs mid-exit on-device; the former cont_crystal_id /
+    // cont_face_seq_* buffers (24-26) used by the host hop are removed.
+    //   27 : filter desc array, indexed by ms_layer_idx * filter_desc_max_ci + ci
+    //   28 : per-slot prefix-sum offsets into gate_getfn_bytes
+    //   29 : flat GetFn(poly_idx) byte stream
+    //   30 : Complex filter sub-spec flat buffer
+    //   31 : per-exit-ray ms_layer tag (final-layer + mid-exits both write)
+    device const DeviceFilterDesc* gate_filter_desc    [[buffer(24)]],
+    device const uint*             gate_getfn_offsets  [[buffer(25)]],
+    device const uchar*            gate_getfn_bytes    [[buffer(26)]],
+    device const DeviceFilterDesc* gate_sub_desc_buf   [[buffer(27)]],
+    device uchar*                  exit_ms_layer       [[buffer(28)]],
     uint tid [[thread_position_in_grid]]) {
   if (tid >= prm.num_rays) { return; }
 
@@ -217,50 +273,96 @@ kernel void trace_layer_kernel(
         c_w  = cw;
       } else {
         if (prm.ms_mode == 1u) {
-          float ilen = rsqrt(cdx * cdx + cdy * cdy + cdz * cdz);
-          float ux = cdx * ilen, uy = cdy * ilen, uz = cdz * ilen;
-          int   ef = 0;
-          float bestf = -1e30f;
-          for (uint fi = 0u; fi < poly_cnt; fi++) {
-            float facing = -(ux * poly_n[fi * 3u + 0u] +
-                             uy * poly_n[fi * 3u + 1u] +
-                             uz * poly_n[fi * 3u + 2u]);
-            if (facing > bestf) { bestf = facing; ef = int(fi); }
-          }
-          // Return the continuation direction from crystal-local to world
-          // space before writing it out (invariant 6 / DESIGN D3: any ray
-          // leaving the kernel is world-space). The host re-samples a new
-          // per-ray crystal_rot_ for the next layer and rotates back into the
-          // new local frame (mirroring CPU CollectData + InitRayOtherMs). out_p
-          // / out_tf are placeholders here — the host resamples them on the
-          // next-layer crystal via InitRay_p_fid, so they are not relied upon.
+          // scrum-267 task-fused-emit-gate Step 5: device emit gate.
+          //   filter_pass + continue → write cont buffers (frame transit on host)
+          //   filter_pass + !continue → write exit buffer (mid-exit, pre-gated)
+          //   filter_fail              → drop (no write)
+          // Direction conversion to world space mirrors legacy CollectData
+          // (simulator.cpp:442): crystal_rot_.Apply(r.d_) before FilterSpec
+          // ::Check. DeviceFilterMatchDirection compares against world-space
+          // ray_dir; non-direction filters do not read it but receiving world
+          // ensures future filter additions stay consistent with the host
+          // semantic.
           float wcx = m[0] * cdx + m[1] * cdy + m[2] * cdz;
           float wcy = m[3] * cdx + m[4] * cdy + m[5] * cdz;
           float wcz = m[6] * cdx + m[7] * cdy + m[8] * cdz;
-          uint slot = atomic_fetch_add_explicit(counter, 1u, memory_order_relaxed);
-          if (slot < prm.out_cap) {
-            out_d[slot * 3u + 0u] = wcx;
-            out_d[slot * 3u + 1u] = wcy;
-            out_d[slot * 3u + 2u] = wcz;
-            out_p[slot * 3u + 0u] = centroid[ef * 3u + 0u];
-            out_p[slot * 3u + 1u] = centroid[ef * 3u + 1u];
-            out_p[slot * 3u + 2u] = centroid[ef * 3u + 2u];
-            out_w[slot] = cw;
-            out_tf[slot] = ushort(ef);
-            // Cont metadata (scrum-258.3 Step 2): record this cont ray's
-            // {crystal_id, face_seq} in parallel buffers so the host hop
-            // (CopyContSliceToRootBuf) can drive filter + prob without a
-            // device→host round-trip. crystal_id == prm.crystal_id (the ci
-            // for THIS dispatch); seq_len bounded by prm.face_seq_cap.
-            cont_crystal_id[slot] = ushort(prm.crystal_id);
-            uint cseq_len = min(rec_len, prm.face_seq_cap);
-            cont_face_seq_len[slot] = uchar(cseq_len);
-            for (uint k = 0u; k < cseq_len; k++) {
-              cont_face_seq_data[slot * prm.face_seq_cap + k] = uchar(path[k]);
+          // Build a path buffer in face-index space (ushort path → uchar
+          // DeviceFilterMatch expects). Hex face indices fit in uint8 with
+          // headroom (poly_cnt ≤ 32 in practice), so the narrowing is safe.
+          uchar path_local[kDevRecCap];
+          uint  gate_len = min(rec_len, kDevRecCap);
+          for (uint k = 0u; k < gate_len; k++) { path_local[k] = uchar(path[k]); }
+          uint gate_slot = prm.ms_layer_idx * prm.filter_desc_max_ci + prm.crystal_id;
+          float ray_dir_w[3] = { wcx, wcy, wcz };
+          bool filter_pass = DeviceFilterCheck(
+              gate_filter_desc[gate_slot], gate_sub_desc_buf,
+              path_local, gate_len,
+              gate_getfn_bytes, gate_getfn_offsets,
+              gate_slot, ray_dir_w, prm.crystal_config_id);
+          if (filter_pass) {
+            // Independent PCG stream for the prob draw — gate_seed is derived
+            // from gen_seed_ XOR (ms_layer_idx, crystal_id) on the host so
+            // two dispatches with the same global_idx draw different prob
+            // values. tid as global_idx gives statistical (not bit-exact)
+            // parity with the legacy host mt19937 stream (scrum-267 §3.6).
+            PcgStream gate_stream;
+            gate_stream.seed       = prm.gate_seed;
+            gate_stream.global_idx = tid;
+            gate_stream.slot       = 0u;
+            bool do_continue = (pcg_uniform(gate_stream) < prm.ms_prob);
+            if (do_continue) {
+              // Best-facing face placeholder for out_p / out_tf — host's
+              // CopyContSliceToRootBuf re-samples both via InitRay_p_fid on
+              // the next-layer crystal, so the value here is metadata-only.
+              float ilen = rsqrt(cdx * cdx + cdy * cdy + cdz * cdz);
+              float ux = cdx * ilen, uy = cdy * ilen, uz = cdz * ilen;
+              int   ef = 0;
+              float bestf = -1e30f;
+              for (uint fi = 0u; fi < poly_cnt; fi++) {
+                float facing = -(ux * poly_n[fi * 3u + 0u] +
+                                 uy * poly_n[fi * 3u + 1u] +
+                                 uz * poly_n[fi * 3u + 2u]);
+                if (facing > bestf) { bestf = facing; ef = int(fi); }
+              }
+              uint slot = atomic_fetch_add_explicit(counter, 1u, memory_order_relaxed);
+              if (slot < prm.out_cap) {
+                out_d[slot * 3u + 0u] = wcx;
+                out_d[slot * 3u + 1u] = wcy;
+                out_d[slot * 3u + 2u] = wcz;
+                out_p[slot * 3u + 0u] = centroid[ef * 3u + 0u];
+                out_p[slot * 3u + 1u] = centroid[ef * 3u + 1u];
+                out_p[slot * 3u + 2u] = centroid[ef * 3u + 2u];
+                out_w[slot] = cw;
+                out_tf[slot] = ushort(ef);
+              }
+              atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
+              atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
+            } else {
+              // Mid-exit: filter_pass && !do_continue → emit as outgoing.
+              // Shares exit_slot atomic with ms_mode==0 final-layer exits;
+              // exit_ms_layer tags this slot with the PRODUCING layer's idx
+              // so ReadbackExitRays can skip the host filter+prob path
+              // (already done here in device).
+              uint es = atomic_fetch_add_explicit(exit_slot, 1u, memory_order_relaxed);
+              if (es < prm.exit_cap) {
+                exit_d[es * 3u + 0u] = wcx;
+                exit_d[es * 3u + 1u] = wcy;
+                exit_d[es * 3u + 2u] = wcz;
+                exit_w[es] = cw;
+                exit_crystal_id[es] = ushort(prm.crystal_id);
+                exit_ms_layer[es]   = uchar(prm.ms_layer_idx);
+                uint seq_len = min(rec_len, prm.face_seq_cap);
+                exit_face_seq_len[es] = uchar(seq_len);
+                for (uint k = 0u; k < seq_len; k++) {
+                  exit_face_seq_data[es * prm.face_seq_cap + k] = uchar(path[k]);
+                }
+              }
+              atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
+              atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
             }
           }
-          atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
-          atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
+          // filter_fail: implicit drop (no buffer write, no atomic counter
+          // bump — energy disappears, matching legacy filter_out semantics).
         } else {
           // Return the exit direction from crystal-local to world space
           // (invariant 6 / DESIGN D2): world = m * cd, row-major, matching
@@ -287,6 +389,12 @@ kernel void trace_layer_kernel(
               // ExitFaceSeq::kCap=15) on the host). Stride = face_seq_cap so
               // <15-byte-per-slot saves device memory + readback bandwidth.
               exit_crystal_id[es] = ushort(prm.crystal_id);
+              // scrum-267 task-fused-emit-gate Step 3: tag final-layer exits
+              // with the active ms_layer_idx so ReadbackExitRays can route
+              // them through the existing host filter+prob path (mid-exits
+              // emitted by the gate carry the producing layer's idx and skip
+              // the filter check).
+              exit_ms_layer[es] = uchar(prm.ms_layer_idx);
               uint seq_len = min(rec_len, prm.face_seq_cap);
               exit_face_seq_len[es] = uchar(seq_len);
               for (uint k = 0u; k < seq_len; k++) {
@@ -442,28 +550,10 @@ struct GenRootKernelParams {
   float roll_pad;
 };
 
-// Counter-based PCG hash (spike-equivalent). u01 maps to [0,1) using top 24
-// bits, matching the spike implementation (scratchpad/explore-gpu-metal-trace-spike).
-inline uint pcg_hash(uint x) {
-  x = x * 747796405u + 2891336453u;
-  x = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u;
-  return (x >> 22u) ^ x;
-}
-inline float u01_from_hash(uint h) {
-  return float(h >> 8) * (1.0f / 16777216.0f);
-}
-
-struct PcgStream {
-  uint seed;
-  uint global_idx;
-  uint slot;
-};
-
-inline float pcg_uniform(thread PcgStream& s) {
-  uint h = pcg_hash(s.seed ^ pcg_hash(s.global_idx * 1000003u + s.slot));
-  s.slot++;
-  return u01_from_hash(h);
-}
+// Counter-based PCG hash + stream: PcgStream / pcg_hash / u01_from_hash /
+// pcg_uniform are defined near the top of this string (scrum-267 task-
+// fused-emit-gate hoist) so the trace kernel's emit gate can call them.
+// pcg_gaussian / pcg_get_dist below build on that shared base.
 
 // Box-Muller standard normal. u1 floored to avoid log(0).
 inline float pcg_gaussian(thread PcgStream& s) {
@@ -795,8 +885,15 @@ struct KernelParams {
   uint32_t crystal_id;
   uint32_t face_seq_cap;
   uint32_t ms_layer_idx;
+  // Emit-gate (scrum-267 task-fused-emit-gate Step 2). Field order MUST match
+  // the MSL struct above (ms_prob → gate_seed → filter_desc_max_ci →
+  // crystal_config_id); reviewer-facing field-by-field check is required.
+  float    ms_prob;
+  uint32_t gate_seed;
+  uint32_t filter_desc_max_ci;
+  uint32_t crystal_config_id;
 };
-static_assert(sizeof(KernelParams) == 76u,
+static_assert(sizeof(KernelParams) == 92u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 
 // Device root-gen latitude path tags. MUST match constant kLatPath* in
@@ -1012,19 +1109,14 @@ struct MetalTraceBackend::Impl {
   size_t        tri_buf_capacity_ = 0;
 
   // Continuation ping-pong (indexed by ms_idx & 1).
+  // scrum-267 task-fused-emit-gate Step 4b: the parallel cont_crystal_id /
+  // cont_face_seq_* buffers (formerly slots 24-26) are removed — the emit gate
+  // now applies filter+prob on-device, so the host hop reads only direction +
+  // weight + crystal-rot.
   id<MTLBuffer> cont_d[2]  = { nil, nil };
   id<MTLBuffer> cont_p[2]  = { nil, nil };
   id<MTLBuffer> cont_w[2]  = { nil, nil };
   id<MTLBuffer> cont_tf[2] = { nil, nil };
-  // Cont metadata (scrum-258.3 Step 1): per-cont-ray {crystal_id, face_seq}
-  // written by kernel ms_mode==1 branch in parallel with cont_d/p/w/tf, so the
-  // host hop (CopyContSliceToRootBuf) can apply per-ray filter + prob without a
-  // new device→host round-trip. Stride of cont_face_seq_data_buf = face_seq_cap_
-  // (set in BeginSession from scene.max_hits_); EnsureContBuffer sizes all three
-  // in lock-step with cont_d/p/w/tf.
-  id<MTLBuffer> cont_crystal_id_buf[2]    = { nil, nil };
-  id<MTLBuffer> cont_face_seq_len_buf[2]  = { nil, nil };
-  id<MTLBuffer> cont_face_seq_data_buf[2] = { nil, nil };
   size_t        cont_capacity[2] = { 0, 0 };
   size_t        cont_counts[2]   = { 0, 0 };
   size_t        out_cap = 0;
@@ -1058,15 +1150,21 @@ struct MetalTraceBackend::Impl {
   id<MTLBuffer> exit_crystal_id_buf    = nil;
   id<MTLBuffer> exit_face_seq_len_buf  = nil;
   id<MTLBuffer> exit_face_seq_data_buf = nil;
+  // Exit ms_layer_idx (scrum-267 task-fused-emit-gate Step 3): per-exit-ray
+  // tag identifying which MS layer produced the record. Final-layer exits set
+  // this to last_ms_layer_idx_; mid-exits from the emit gate set it to the
+  // PRODUCING layer's ms_idx. ReadbackExitRays uses the tag to skip the host
+  // filter+prob path for already-gated mid-exits.
+  id<MTLBuffer> exit_ms_layer_buf      = nil;
   uint32_t      face_seq_cap_ = 0;
 
-  // Per-layer-exit-processing (scrum-258.3): host-side mirrors of legacy
-  // simulator.cpp:425 CollectData. Each non-final layer writes the ci →
-  // Crystal/AxisDistribution/FilterConfig mapping into hop_*_[out_slot] (ping-
-  // pong on ms_idx & 1), so CopyContSliceToRootBuf reads them via
-  // cont_crystal_id_buf[in_slot] in the layer-boundary host hop. The final
-  // layer writes its own ci → ... mapping into last_layer_* for
-  // ReadbackExitRays.
+  // Per-layer hop state (scrum-258.3 + scrum-267 task-fused-emit-gate).
+  // hop_ms_prob_ feeds the device emit gate's KernelParams.ms_prob. The other
+  // hop_*_[] fields stayed as the host-hop's filter inputs in scrum-258.3 and
+  // are now unused by CopyContSliceToRootBuf (filter+prob ran in-kernel) —
+  // they are populated by TraceLayer and left as harmless dead writes pending
+  // the Task 3 cleanup. last_layer_* is still consumed by ReadbackExitRays
+  // for the final-layer host filter+prob path.
   std::vector<Crystal>            hop_crystals_[2];
   std::vector<AxisDistribution>   hop_axis_dists_[2];
   std::vector<FilterConfig>       hop_filter_configs_[2];
@@ -1159,7 +1257,16 @@ void MetalTraceBackend::Impl::EnsurePso() {
     return;
   }
   NSError* err = nil;
-  NSString* src = [NSString stringWithUTF8String:kKernelSrc];
+  // scrum-267 task-fused-emit-gate Step 1: prepend kFilterMatchHelperSrc so the
+  // trace kernel can call DeviceFilterCheck at its emit gate (ms_mode==1 path).
+  // The helper declares all helpers `static inline` and uses the dev-prefixed
+  // constants (kDevFilterType*, kDevSym*, kDevRecCap) so there are no symbol
+  // collisions with kKernelSrc; the duplicate `#include <metal_stdlib>` and
+  // `using namespace metal;` lines are MSL-legal (the include guard collapses
+  // the second occurrence).
+  NSString* src = [NSString stringWithFormat:@"%s\n%s",
+                                              kFilterMatchHelperSrc,
+                                              kKernelSrc];
   MTLCompileOptions* opts = [MTLCompileOptions new];
   // The kernel uses atomic_float (gated by __HAVE_ATOMIC_FLOAT__ which is
   // defined only at MSL >= 3.0, see metal_atomic header). Without an explicit
@@ -1302,19 +1409,6 @@ void MetalTraceBackend::Impl::EnsureContBuffer(int slot) {
   cont_tf[slot] = [device newBufferWithLength:out_cap * sizeof(uint16_t)
                                       options:MTLResourceStorageModeShared];
   assert(cont_tf[slot] != nil);
-  // Cont metadata (scrum-258.3 Step 1): sized in lock-step with cont_d/p/w/tf.
-  // face_seq_cap_ MUST be set by BeginSession before TraceLayer reaches here.
-  assert(face_seq_cap_ > 0u && "BeginSession must set face_seq_cap_ before EnsureContBuffer");
-  cont_crystal_id_buf[slot] = [device newBufferWithLength:out_cap * sizeof(uint16_t)
-                                                  options:MTLResourceStorageModeShared];
-  assert(cont_crystal_id_buf[slot] != nil);
-  cont_face_seq_len_buf[slot] = [device newBufferWithLength:out_cap * sizeof(uint8_t)
-                                                    options:MTLResourceStorageModeShared];
-  assert(cont_face_seq_len_buf[slot] != nil);
-  cont_face_seq_data_buf[slot] =
-      [device newBufferWithLength:out_cap * static_cast<size_t>(face_seq_cap_) * sizeof(uint8_t)
-                          options:MTLResourceStorageModeShared];
-  assert(cont_face_seq_data_buf[slot] != nil);
 }
 
 void MetalTraceBackend::Impl::EnsureRecSink(size_t n) {
@@ -1361,6 +1455,10 @@ void MetalTraceBackend::Impl::EnsureExitBuffers(size_t cap) {
       [device newBufferWithLength:cap * static_cast<size_t>(face_seq_cap_) * sizeof(uint8_t)
                           options:MTLResourceStorageModeShared];
   assert(exit_face_seq_data_buf != nil);
+  // scrum-267 task-fused-emit-gate Step 3: ms_layer tag, sized in lock-step.
+  exit_ms_layer_buf = [device newBufferWithLength:cap * sizeof(uint8_t)
+                                          options:MTLResourceStorageModeShared];
+  assert(exit_ms_layer_buf != nil);
 }
 
 // scrum-267 task-msl-filter-match-port (Step 4): upload per-session filter
@@ -1379,11 +1477,36 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
   getfn_offsets_buf_ = nil;
   getfn_bytes_buf_ = nil;
   complex_sub_desc_buf_ = nil;
+  // scrum-267 task-fused-emit-gate Step 3a (R5 fix): the trace kernel's emit
+  // gate unconditionally binds filter_desc_buf_ / getfn_offsets_buf_ /
+  // getfn_bytes_buf_ / complex_sub_desc_buf_ at buffer slots 27-30. Metal
+  // disallows nil-buffer bindings, so each early-return path must still
+  // allocate a 1-byte dummy. The kernel never reads through them in the
+  // no-filter case (DeviceFilterCheck on a None desc returns true and the gate
+  // proceeds, but on the ms_mode==0 path the gate is never entered; the
+  // ms_mode==1 path only fires when there are MS layers, which co-occurs with
+  // EnsureFilterBuffers having a real desc array).
+  auto alloc_filter_dummies = [&]() {
+    filter_desc_buf_ = [device newBufferWithLength:1
+                                          options:MTLResourceStorageModeShared];
+    assert(filter_desc_buf_ != nil);
+    getfn_offsets_buf_ = [device newBufferWithLength:1
+                                            options:MTLResourceStorageModeShared];
+    assert(getfn_offsets_buf_ != nil);
+    getfn_bytes_buf_ = [device newBufferWithLength:1
+                                          options:MTLResourceStorageModeShared];
+    assert(getfn_bytes_buf_ != nil);
+    complex_sub_desc_buf_ = [device newBufferWithLength:1
+                                               options:MTLResourceStorageModeShared];
+    assert(complex_sub_desc_buf_ != nil);
+  };
   if (session_spec.scene == nullptr) {
+    alloc_filter_dummies();
     return;
   }
   size_t n_layers = session_spec.scene->ms_.size();
   if (n_layers == 0) {
+    alloc_filter_dummies();
     return;
   }
   size_t max_ci = 0;
@@ -1391,6 +1514,7 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
     if (ms.setting_.size() > max_ci) { max_ci = ms.setting_.size(); }
   }
   if (max_ci == 0) {
+    alloc_filter_dummies();
     return;
   }
   filter_desc_max_ci_ = max_ci;
@@ -1718,148 +1842,43 @@ void MetalTraceBackend::Impl::EncodeGenRoot(id<MTLCommandBuffer> cb,
 
 size_t MetalTraceBackend::Impl::CopyContSliceToRootBuf(const ScatteringSetting& setting,
                                                        size_t ci_start, size_t ci_n, int in_slot) {
-  // Inter-layer host hop. Two responsibilities:
-  //
-  //  (A) Frame transit (DESIGN D3 / mirrors CPU InitRayOtherMs).
-  //      Step 1 made the kernel export continuation DIRECTIONS in WORLD space.
-  //      For the next layer — possibly a different crystal — we (per
-  //      InitRayOtherMs, simulator.cpp:199-210):
-  //        1) resample a fresh per-ray crystal orientation (InitRay_rot),
-  //        2) rotate the world-space direction into the NEW crystal-local frame
-  //           (ApplyInverse), and
-  //        3) resample the entry point + hit face on the NEW crystal
-  //           (InitRay_p_fid),
-  //      then upload d/p/tf + the new per-ray rotation matrix.
-  //
-  //  (B) Per-layer filter + prob (scrum-258.3 Step 4). Mirrors legacy
-  //      simulator.cpp:425 CollectData:
-  //        filter-fail              → drop
-  //        filter-pass && rng<prob  → continue (write to root_*_buf)
-  //        filter-pass && rng>=prob → mid-layer exit (push into
-  //                                   accumulated_mid_exits_, drained by
-  //                                   ReadbackExitRays)
-  //      Filter input comes from hop_crystals_[in_slot] / hop_axis_dists_ /
-  //      hop_filter_configs_ (populated by the PREVIOUS layer's ci loop);
-  //      face sequence + crystal_id come from cont_face_seq_*_buf[in_slot] /
-  //      cont_crystal_id_buf[in_slot] (populated by the previous layer's
-  //      kernel ms_mode==1 branch).
-  //
-  // The function returns the actual continuation count after filter+prob; the
-  // caller substitutes this for the previous unconditional `ci_n`. Mid-layer
-  // exits and discards do NOT advance the root-buffer write index.
+  // scrum-267 task-fused-emit-gate Step 7: post-gate inter-layer hop. Filter
+  // and prob now run inside the trace kernel (device emit gate), so every
+  // ray in cont_d/cont_w[in_slot] is filter_pass + continue. This function
+  // is reduced to the frame-transit responsibility (DESIGN D3 / mirrors CPU
+  // InitRayOtherMs simulator.cpp:199-210):
+  //   1) resample a fresh per-ray crystal orientation (InitRay_rot),
+  //   2) rotate the world-space direction into the NEW crystal-local frame
+  //      (ApplyInverse), and
+  //   3) resample the entry point + hit face on the NEW crystal
+  //      (InitRay_p_fid),
+  // then upload d/p/tf + the new per-ray rotation matrix.
   //
   // `current_crystal` is the THIS-layer crystal, already resolved by
-  // ResolveLayerCrystalForCi before this call. `rng` is the session RNG member
-  // (seeded in BeginSession), reused exactly as GenerateFirstLayerRootsForCi /
-  // ResolveLayerCrystalForCi do.
-  const float*    src_d  = static_cast<const float*>([cont_d[in_slot] contents]) + ci_start * 3;
-  const float*    src_w  = static_cast<const float*>([cont_w[in_slot] contents]) + ci_start;
-  const uint16_t* src_cid =
-      static_cast<const uint16_t*>([cont_crystal_id_buf[in_slot] contents]) + ci_start;
-  const uint8_t*  src_seq_len =
-      static_cast<const uint8_t*>([cont_face_seq_len_buf[in_slot] contents]) + ci_start;
-  const uint8_t*  src_seq_data =
-      static_cast<const uint8_t*>([cont_face_seq_data_buf[in_slot] contents])
-      + ci_start * static_cast<size_t>(face_seq_cap_);
-  const size_t    seq_stride = static_cast<size_t>(face_seq_cap_);
-
-  // Per-ci filter cache. Same crystal_id (src_cid[i]) repeats across the
-  // ci slice, so build FilterSpec once per crystal and reuse — avoids
-  // reconstructing the spec for every ray (review Suggestion 1).
-  const size_t crystal_cnt = hop_crystals_[in_slot].size();
-  std::vector<std::unique_ptr<FilterSpec>> spec_per_ci(crystal_cnt);
-  for (size_t k = 0; k < crystal_cnt; k++) {
-    spec_per_ci[k] = FilterSpec::Create(hop_filter_configs_[in_slot][k],
-                                         hop_crystals_[in_slot][k],
-                                         hop_axis_dists_[in_slot][k]);
+  // ResolveLayerCrystalForCi before this call. `rng` is the session RNG
+  // member (seeded in BeginSession); InitRay_rot draws from it the same way
+  // GenerateFirstLayerRootsForCi / ResolveLayerCrystalForCi do.
+  if (ci_n == 0) {
+    return 0;
   }
-  const float src_ms_prob = hop_ms_prob_[in_slot];
-  const uint8_t src_ms_layer_idx = hop_ms_layer_idx_[in_slot];
+  const float* src_d = static_cast<const float*>([cont_d[in_slot] contents]) + ci_start * 3;
+  const float* src_w = static_cast<const float*>([cont_w[in_slot] contents]) + ci_start;
 
-  // First pass: filter + prob → partition into (continue) / (mid-exit) /
-  // (drop). Continuation rays are staged into a transient workspace and then
-  // run through the frame-transit InitRay_rot / InitRay_p_fid chain in bulk.
   RayBuffer workspace[2]{};
   workspace[0].Reset(ci_n);
-  workspace[0].size_ = 0;
-  size_t n_continue = 0;
+  workspace[0].size_ = ci_n;
   for (size_t i = 0; i < ci_n; i++) {
-    uint16_t crystal_id = src_cid[i];
-    assert(crystal_id < crystal_cnt && "cont crystal_id out of range — hop_crystals_ undersized");
-    if (crystal_id >= crystal_cnt) {
-      continue;  // safety: skip stray records
-    }
-
-    // Build {RaySeg, RaypathRecorder} for filter Check (world-space d/p, like
-    // legacy CollectData post-Apply). to_face_ = kInvalidId because this is an
-    // outgoing candidate from the previous layer (the kernel signaled "no
-    // continuation polygon hit" by writing to the cont buffer in ms_mode==1).
-    RaySeg r{};
+    RaySeg& r = workspace[0][i];
     r.d_[0] = src_d[i * 3 + 0];
     r.d_[1] = src_d[i * 3 + 1];
     r.d_[2] = src_d[i * 3 + 2];
     r.w_ = src_w[i];
     r.to_face_ = kInvalidId;
     r.is_continue_ = false;
-    // Mirror legacy InitRay_other_info: crystal_config_id_ comes from the
-    // producing crystal's config_id_. MakeCrystal leaves config_id_ at
-    // kInvalidId (crystal.hpp:287) unless explicitly assigned; this matches
-    // legacy semantics so CrystalSpec filter behaves the same on both paths.
-    const Crystal& src_crystal = hop_crystals_[in_slot][crystal_id];
-    r.crystal_config_id_ = src_crystal.config_id_;
-
-    RaypathRecorder rec{};
-    uint8_t seq_len = src_seq_len[i];
-    if (seq_len > RaypathRecorder::kInlineCap) {
-      seq_len = RaypathRecorder::kInlineCap;
-    }
-    rec.size_ = seq_len;
-    rec.overflow_idx_ = RaypathRecorder::kNoOverflow;  // 0xFFFFu, inline-only
-    // GetFn remap: kernel writes raw poly-index (used for poly_n[to_face*3]),
-    // but FilterSpec::Check expects face-number space (GetFn output, see
-    // filter_spec.cpp:114-152 and crystal.cpp:376-380). Convert per-byte here.
-    const uint8_t* raw_seq = src_seq_data + i * seq_stride;
-    for (uint8_t k = 0; k < seq_len; ++k) {
-      rec.data_[k] = static_cast<uint8_t>(src_crystal.GetFn(static_cast<IdType>(raw_seq[k])));
-    }
-
-    const FilterSpec* spec = spec_per_ci[crystal_id].get();
-    bool filter_pass = (spec == nullptr) || spec->Check(r, rec, nullptr);
-    if (!filter_pass) {
-      continue;  // discard
-    }
-    if (rng.GetUniform() < src_ms_prob) {
-      // Continue: stage into workspace[0] for the frame-transit chain below.
-      // workspace[0].size_ is the packed write index — discards/mid-exits do
-      // NOT advance it, so the continuation slice stays contiguous.
-      RaySeg& wr = workspace[0][workspace[0].size_];
-      wr = r;  // copies d/w/to_face/is_continue/crystal_config_id
-      workspace[0].size_++;
-      n_continue++;
-    } else {
-      // Mid-layer exit: emit as an ExitRayRecord tagged with the PRODUCING
-      // layer's ms_idx (hop_ms_layer_idx_[in_slot]). ReadbackExitRays drains
-      // and merges with last-layer exits at session end.
-      ExitRayRecord mid_rec{};
-      mid_rec.dir[0] = r.d_[0];
-      mid_rec.dir[1] = r.d_[1];
-      mid_rec.dir[2] = r.d_[2];
-      mid_rec.weight = r.w_;
-      mid_rec.crystal_id = crystal_id;
-      mid_rec.ms_layer_idx = src_ms_layer_idx;
-      mid_rec.path.size_ = seq_len;
-      std::memcpy(mid_rec.path.data_, rec.data_, seq_len);
-      accumulated_mid_exits_.push_back(mid_rec);
-    }
   }
 
-  if (n_continue == 0) {
-    return 0;
-  }
-
-  // Frame-transit chain on the packed continuation slice (n_continue rays).
   InitRay_rot(rng, setting.crystal_.axis_, workspace);
-  for (size_t i = 0; i < n_continue; i++) {
+  for (size_t i = 0; i < ci_n; i++) {
     workspace[0][i].crystal_rot_.ApplyInverse(workspace[0][i].d_);
   }
   InitRay_p_fid(current_crystal, &workspace[0]);
@@ -1869,7 +1888,7 @@ size_t MetalTraceBackend::Impl::CopyContSliceToRootBuf(const ScatteringSetting& 
   auto* w_ptr   = static_cast<float*>([root_w_buf contents]);
   auto* tf_ptr  = static_cast<uint16_t*>([root_tf_buf contents]);
   auto* rot_ptr = static_cast<float*>([root_rot_buf contents]);
-  for (size_t i = 0; i < n_continue; i++) {
+  for (size_t i = 0; i < ci_n; i++) {
     const RaySeg& r = workspace[0][i];
     d_ptr[i * 3 + 0] = r.d_[0];
     d_ptr[i * 3 + 1] = r.d_[1];
@@ -1881,7 +1900,7 @@ size_t MetalTraceBackend::Impl::CopyContSliceToRootBuf(const ScatteringSetting& 
     tf_ptr[i] = static_cast<uint16_t>(r.to_face_);
     std::memcpy(rot_ptr + i * 9, r.crystal_rot_.GetMat(), 9 * sizeof(float));
   }
-  return n_continue;
+  return ci_n;
 }
 
 void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
@@ -1910,6 +1929,30 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   params.crystal_id   = crystal_id;
   params.face_seq_cap = face_seq_cap_;
   params.ms_layer_idx = ms_layer_idx;
+  // Emit-gate (scrum-267 task-fused-emit-gate Step 6). For ms_mode==0
+  // dispatches the kernel never enters the gate, so ms_prob is left at 0.0f
+  // (its actual value would be the FINAL layer's prob, which the
+  // ReadbackExitRays host path consumes via last_ms_prob_ — duplicating it
+  // here serves no purpose). For ms_mode==1 dispatches hop_ms_prob_[out_slot]
+  // carries the producing-layer prob, populated by TraceLayer's pre-ci-loop
+  // setup; the gate's `pcg_uniform() < ms_prob` mirrors legacy
+  // simulator.cpp:425 rng < ms_info.prob_.
+  if (ms_mode == 1u) {
+    params.ms_prob = hop_ms_prob_[out_slot];
+  } else {
+    params.ms_prob = 0.0f;
+  }
+  // gate_seed mixes gen_seed_ with a (layer, crystal) nonce so each dispatch
+  // owns an independent PCG stream — without the nonce two dispatches with the
+  // same tid would draw the same prob, biasing multi-crystal energy.
+  params.gate_seed = gen_seed_ ^
+                     (ms_layer_idx * 65537u + crystal_id * 2654435761u);
+  params.filter_desc_max_ci = static_cast<uint32_t>(filter_desc_max_ci_);
+  // crystal_config_id is consumed only by DeviceFilterMatchCrystal; current
+  // canonical configs leave it at kInvalidId (0xffff) so the filter rejects.
+  uint16_t cfg_id = current_crystal.config_id_;
+  params.crystal_config_id =
+      (cfg_id == kInvalidId) ? 0xFFFFu : static_cast<uint32_t>(cfg_id);
   // Defensive sanity bounds — silent host/MSL field reorder would set
   // crystal_id to a different field's value (max_hits ~8, face_seq_cap ~8,
   // ms_layer_idx ~0). The bounds below are narrow enough to fire for any
@@ -1989,15 +2032,18 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   [enc setBuffer:exit_crystal_id_buf     offset:0 atIndex:21];
   [enc setBuffer:exit_face_seq_len_buf   offset:0 atIndex:22];
   [enc setBuffer:exit_face_seq_data_buf  offset:0 atIndex:23];
-  // Cont metadata (scrum-258.3 Step 2): bound for both ms_mode==0 and
-  // ms_mode==1 dispatches. ms_mode==0 doesn't take the out_d/p/w/tf write
-  // branch, so cont_crystal_id_buf[out_slot] etc. are never written through —
-  // but Metal still requires non-nil buffer bindings. The grow-only
-  // EnsureContBuffer(out_slot) above guarantees these are sized (>= 1 elem)
-  // before this dispatch.
-  [enc setBuffer:cont_crystal_id_buf[out_slot]    offset:0 atIndex:24];
-  [enc setBuffer:cont_face_seq_len_buf[out_slot]  offset:0 atIndex:25];
-  [enc setBuffer:cont_face_seq_data_buf[out_slot] offset:0 atIndex:26];
+  // Emit-gate state (scrum-267 task-fused-emit-gate Step 4b). Bound for every
+  // dispatch (Metal disallows nil buffers). EnsureFilterBuffers guarantees
+  // non-nil even in no-filter sessions via the 1-byte dummy fallback (R5
+  // fix); ms_mode==0 dispatches never enter the gate so reads through these
+  // slots happen only when filter buffers carry real desc data. The ms_layer
+  // tag at slot 31 is written by BOTH ms_mode==0 (final-layer) and
+  // ms_mode==1 (gate mid-exit) paths so ReadbackExitRays can route records.
+  [enc setBuffer:filter_desc_buf_      offset:0 atIndex:24];
+  [enc setBuffer:getfn_offsets_buf_    offset:0 atIndex:25];
+  [enc setBuffer:getfn_bytes_buf_      offset:0 atIndex:26];
+  [enc setBuffer:complex_sub_desc_buf_ offset:0 atIndex:27];
+  [enc setBuffer:exit_ms_layer_buf     offset:0 atIndex:28];
 
   NSUInteger tg = std::min<NSUInteger>(256, pso.maxTotalThreadsPerThreadgroup);
   [enc dispatchThreads:MTLSizeMake(num_rays, 1, 1)
@@ -2204,6 +2250,15 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   // allocation reflects the actual stride.
   impl_->face_seq_cap_ = std::min<uint32_t>(
       static_cast<uint32_t>(spec.scene->max_hits_), static_cast<uint32_t>(ExitFaceSeq::kCap));
+  // scrum-267 task-fused-emit-gate Step 8: initialize the final-layer index
+  // from the scene config so ReadbackExitRays can route mid-exits even when
+  // the final TraceLayer call is skipped (e.g. prob=0.0 sinks every ray to
+  // mid-exit on layer 0 → layer 1 sees zero inputs → early-returns before
+  // last_ms_layer_idx_ would otherwise be written in TraceLayer).
+  if (!spec.scene->ms_.empty()) {
+    impl_->last_ms_layer_idx_ =
+        static_cast<uint8_t>(spec.scene->ms_.size() - 1);
+  }
 
   // scrum-267 task-msl-filter-match-port (Step 4): upload per-session device
   // filter descriptors + GetFn tables. Production trace kernel does not yet
@@ -2227,11 +2282,18 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       // root_ray_count is now maintained inside GenerateFirstLayerRootsForCi
       // (both host and device paths advance it) so device root-gen sees a
       // globally monotone gen_ray_base across ci slices and successive batches.
-      // Exit seam (scrum-258.1): size the session-level exit buffer at the
-      // first MS and reset its atomic slot. Multi-MS path grows exit buffer
-      // again on the final layer below — see comment there.
-      size_t exit_cap = ComputeOutCap(total_ray_num, impl_->spec.scene->max_hits_);
-      impl_->EnsureExitBuffers(exit_cap);
+      // scrum-267 task-fused-emit-gate Step 3a: size the session-level exit
+      // buffer ONCE at the first MS to cover the full session upper bound
+      // (every MS layer's emit-gate mid-exits + the final-layer exit). This
+      // replaces the prior "first_ms allocates final-layer cap, then last
+      // layer regrows" pattern. The emit gate writes mid-exit slots from EVERY
+      // ms_mode==1 dispatch (including first_ms when num_ms>1); a mid-session
+      // EnsureExitBuffers realloc would orphan data already written into the
+      // old MTLBuffer pointer. One-time pre-allocation eliminates that risk.
+      size_t per_layer_cap = ComputeOutCap(total_ray_num, impl_->spec.scene->max_hits_);
+      size_t num_ms = impl_->spec.scene->ms_.size();
+      size_t total_exit_cap = per_layer_cap * num_ms;
+      impl_->EnsureExitBuffers(total_exit_cap);
       *static_cast<uint32_t*>([impl_->exit_slot_buf contents]) = 0u;
     }
     // Recalculate out_cap per layer so each layer's continuation buffer is
@@ -2243,19 +2305,11 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       return std::make_unique<MetalLayerHandle>(0u, LayerStats{});
     }
 
-    // scrum-258.4 Step 1: multi-MS final layer may receive far more rays than
-    // the root count (continuation buffer is sized to ComputeOutCap of the
-    // prior layer). Grow exit buffer to cover this layer's fan-out so the
-    // exit_slot atomic does not overflow and silently drop exit rays.
-    // EnsureExitBuffers is grow-only; the exit_slot counter was reset in the
-    // first_ms branch above and ms_mode==1 dispatches never write exit_slot,
-    // so this resize requires no counter reset.
-    // ms_idx is set to 0 in BeginSession and incremented only in EndLayer;
-    // it is not modified within TraceLayer, so the expression below is stable.
-    if (!first_ms && (impl_->ms_idx + 1u == impl_->spec.scene->ms_.size())) {
-      const size_t exit_cap = ComputeOutCap(total_ray_num, impl_->spec.scene->max_hits_);
-      impl_->EnsureExitBuffers(exit_cap);
-    }
+    // scrum-267 task-fused-emit-gate Step 3a: the prior multi-MS final-layer
+    // regrow is now subsumed by the first_ms one-time pre-allocation above
+    // (num_ms × ComputeOutCap covers final-layer fan-out + every mid-layer
+    // emit-gate mid-exit). Keeping a mid-session EnsureExitBuffers here would
+    // risk orphaning ms_mode==1 mid-exits already written by earlier layers.
 
     // Partition the layer's rays across crystal populations. Matches
     // simulator.cpp:572-586 and CpuTraceBackend::TraceLayer.
@@ -2456,6 +2510,7 @@ size_t MetalTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
   const auto* cid_ptr      = static_cast<const uint16_t*>([impl_->exit_crystal_id_buf contents]);
   const auto* seq_len_ptr  = static_cast<const uint8_t*>([impl_->exit_face_seq_len_buf contents]);
   const auto* seq_data_ptr = static_cast<const uint8_t*>([impl_->exit_face_seq_data_buf contents]);
+  const auto* ms_layer_ptr = static_cast<const uint8_t*>([impl_->exit_ms_layer_buf contents]);
   const size_t stride      = impl_->face_seq_cap_;
 
   // Per-ci FilterSpec cache for the final layer. Same crystal_id repeats
@@ -2473,6 +2528,27 @@ size_t MetalTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
   out.reserve(count + impl_->accumulated_mid_exits_.size());
   for (size_t i = 0; i < count; i++) {
     uint16_t crystal_id = cid_ptr[i];
+    uint8_t  rec_ms_layer = ms_layer_ptr[i];
+    // scrum-267 task-fused-emit-gate Step 8: mid-layer exits emitted by the
+    // device gate carry the producing layer's ms_layer_idx (≠ final layer).
+    // They have already passed filter+prob inside the kernel, so emit them
+    // verbatim — raw poly-index in path[] is acceptable for raw-XYZ parity
+    // (which only checks dir+weight); golden-ray tests should add GetFn
+    // remapping when needed.
+    if (rec_ms_layer != final_ms_layer) {
+      ExitRayRecord erec{};
+      erec.dir[0] = d_ptr[i * 3 + 0];
+      erec.dir[1] = d_ptr[i * 3 + 1];
+      erec.dir[2] = d_ptr[i * 3 + 2];
+      erec.weight = w_ptr[i];
+      erec.crystal_id   = crystal_id;
+      erec.ms_layer_idx = rec_ms_layer;
+      uint8_t seq_len = std::min<uint8_t>(seq_len_ptr[i], ExitFaceSeq::kCap);
+      erec.path.size_ = seq_len;
+      std::memcpy(erec.path.data_, seq_data_ptr + i * stride, seq_len);
+      out.push_back(erec);
+      continue;
+    }
     if (crystal_id >= last_cnt) {
       continue;  // safety: skip stray records from a malformed kernel run
     }
