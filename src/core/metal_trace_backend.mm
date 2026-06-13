@@ -347,6 +347,11 @@ kernel void trace_layer_kernel(
                 out_d[slot * 3u + 0u] = wcx;
                 out_d[slot * 3u + 1u] = wcy;
                 out_d[slot * 3u + 2u] = wcz;
+                // TODO(scrum-267 task-device-resident-continuation): out_p/out_tf
+                // writes below are dead data. transit_root_kernel reads cont_d/cont_w
+                // only (not cont_p/cont_tf) and resamples entry point + face from
+                // crystal geometry on the device. Clean up when cont_p/cont_tf write
+                // path is retired (remove writes + buffer bindings + buffer members).
                 out_p[slot * 3u + 0u] = centroid[ef * 3u + 0u];
                 out_p[slot * 3u + 1u] = centroid[ef * 3u + 1u];
                 out_p[slot * 3u + 2u] = centroid[ef * 3u + 2u];
@@ -552,6 +557,9 @@ constant uint kDistGaussianLegacy = 5u;
 constant uint kMaxTriPerKernel = 64u;
 constant int  kMaxRejectionAttempts = 1000;
 
+// NOTE: consumed by gen_root_kernel and transit_root_kernel; see
+// BuildTransitRootParams for the transit-side field subset (orientation +
+// geometry only; sun_* / ray_weight are populated but unused by transit).
 struct GenRootKernelParams {
   uint  gen_seed;            // PCG master seed (== spec.seed)
   uint  gen_ray_base;        // running root_ray_count before this dispatch
@@ -1021,6 +1029,9 @@ enum LatPath : uint32_t {
 // Field order MUST match the MSL struct in kKernelSrc — static_assert guards
 // size only; reviewer-facing field-by-field check is required when adding
 // or reordering members (same convention as KernelParams above).
+// NOTE: consumed by gen_root_kernel and transit_root_kernel; see
+// BuildTransitRootParams for the transit-side field subset (orientation +
+// geometry only; sun_* / ray_weight are populated but unused by transit).
 struct GenRootKernelParams {
   uint32_t gen_seed;
   uint32_t gen_ray_base;
@@ -2562,6 +2573,12 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
           impl_->EncodeTransitRoot(transit_cb, transit_gp, in_slot, ci_start);
           [transit_cb commit];
           [transit_cb waitUntilCompleted];
+          if (transit_cb.error != nil) {
+            ILOG_ERROR(EffectiveLogger(impl_->logger_),
+                       "transit_root_kernel GPU error (ci={} ms_layer={}): {}",
+                       ci, impl_->ms_idx,
+                       [[transit_cb.error localizedDescription] UTF8String]);
+          }
         }
         ci_start += ci_n;
         in_count = ci_n;  // all cont rays already filter+prob-passed by the
