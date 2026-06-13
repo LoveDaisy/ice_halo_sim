@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781321887671,
+  "lastUpdate": 1781321889936,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -11159,6 +11159,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 99,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f007991d19cb9c206a4966a0d19133f8838a6762",
+          "message": "Merge pull request #127 from LoveDaisy/docs/gpu-seam-design-and-knowledge-base\n\ndocs: promote GPU seam-design blueprint + route history, add knowledge-base discipline",
+          "timestamp": "2026-06-13T11:32:14+08:00",
+          "tree_id": "76d13ea6ab4d6dc4c0579717acb972e4c3508ee9",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/f007991d19cb9c206a4966a0d19133f8838a6762"
+        },
+        "date": 1781321889136,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 86.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 97.3,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 97.9,
             "unit": "%"
           }
         ]
