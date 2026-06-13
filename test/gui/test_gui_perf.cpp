@@ -2,9 +2,14 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <iterator>
+#include <string>
 #include <thread>
 #include <vector>
 
+#include "gui/file_io.hpp"
 #include "gui/gui_logger.hpp"
 #include "test_gui_shared.hpp"
 
@@ -31,6 +36,26 @@ void StartPerfSimulation() {
   gui::g_server = LUMICE_CreateServer();
   LUMICE_SetLogLevel(gui::g_server, static_cast<LUMICE_LogLevel>(g_core_log_level));
   gui::SetGuiLogLevel(static_cast<spdlog::level::level_enum>(g_gui_log_level));
+
+  // Retained test capability (introduced by explore-265, concern #2 stress test):
+  // if LUMICE_PERF_CONFIG points to a config JSON, load it via the same
+  // DeserializeFromJson path auto_ev uses, so the steady_state / slider_drag
+  // scenarios run on an arbitrary (e.g. heavy multi-MS/multi-crystal) scene instead
+  // of the hardcoded single prism. Faithful resolution kept (no downscale). This is
+  // intentionally kept for reuse by future GUI perf / regime benchmarks (e.g. the
+  // commit<->batch decoupling work); do NOT treat as throwaway instrumentation.
+  if (const char* cfg_path = std::getenv("LUMICE_PERF_CONFIG")) {
+    std::ifstream in(cfg_path);
+    if (in.is_open()) {
+      std::string json_str((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+      if (gui::DeserializeFromJson(json_str, gui::g_state)) {
+        fprintf(stderr, "[PERF] loaded LUMICE_PERF_CONFIG=%s\n", cfg_path);
+        gui::DoRun();
+        return;
+      }
+    }
+    fprintf(stderr, "[PERF] ERROR: failed to load LUMICE_PERF_CONFIG=%s; falling back to default\n", cfg_path);
+  }
 
   // Set up g_state to match perf config, then use DoRun() so the server's
   // config_manager_ is populated from the same SerializeCoreConfig path.
