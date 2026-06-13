@@ -121,10 +121,48 @@ since both modes share one `psnr_threshold` field.
 - Reference images under `test/e2e/references/*.jpg` and `test/gui/references/*.jpg` are explicitly unignored and may be tracked normally.
 - CI runs build and unit tests on branch pushes; E2E tests run on PRs and `main`.
 
-## Useful Paths
+## Documentation Index (`doc/`)
 
-- Main docs: `README.md`, `README_zh.md`
-- Configuration docs: `doc/configuration.md`
-- Performance testing: `doc/performance-testing.md`
-- Windows remote testing: `doc/windows-remote-testing.md`
+Valuable design/architecture docs live in `doc/` (tracked). Consult the relevant one
+**before** redesigning a subsystem — many decisions are already reasoned out here.
+(Most have a `_zh` Chinese sibling.)
+
+- **Overview / guides**: `README.md`, `architecture.md`, `developer-guide.md`, `gui-guide.md`, `configuration.md`
+- **Core / rendering architecture**: `accumulator-consumer-architecture.md`, `raypath-rayseg-architecture.md`, `raypath-symmetry.md`, `coordinate-convention.md`, `crystal-orientation-sampling.md`, `ev-pipeline-architecture.md`, `adaptive-brightness.md`, `filter-architecture.md`
+- **C API**: `c_api.md`, `capi-lifecycle-architecture.md`
+- **GPU / Metal route** (read these before touching the GPU path):
+  - `seam-design.md` — **the `TraceBackend` host/device seam redesign blueprint**; §5 = single-engine, three-clock-decoupled GPU simulator (the target architecture); §3.6 "原始之罪" = why GPU must not mirror the CPU pipeline.
+  - `gpu-route-history.md` — systematic retrospective of the GPU migration (#250→265): decision evolution, accumulated data assets, leftover-item ledger.
+  - `trace-backend-frame-lifecycle.md` — Metal frame lifecycle (as-built, multi-MS transit, parity harness methodology).
+- **Perf / testing**: `performance-testing.md`, `windows-remote-testing.md`, `xyz-stats-tool.md`
 - Example config: `examples/config_example.json`
+
+## Knowledge Base & Working Discipline
+
+This project carries a deliberate accumulated memory. Its value depends on it being
+**retrieved**, not just stored (信息价值 = 内在价值 × 被检索到的概率). The recurring
+failure mode is starting each session like a newcomer and re-deriving decisions the
+owner already settled. Avoid it:
+
+- **Retrieve before re-deriving.** Before starting work on a continuing/recurring topic
+  (GPU/Metal perf, GUI perf, parity, batch/throughput, architecture decisions), FIRST:
+  1. `grep` `scratchpad/backlog.md` for the topic — it holds owner concerns, start
+     conditions, and dependencies (e.g. concern #2 commit↔batch decoupling).
+  2. Read the relevant prior `scratchpad/explore-*/{SUMMARY,insights}.md` and
+     `scratchpad/scrum-*/SUMMARY.md` — they hold verified conclusions and rejected
+     directions. Check the `doc/` index above.
+  3. **Explicitly continue prior threads** ("this refines concern #X") rather than
+     starting fresh. If new evidence conflicts with a prior conclusion, connect them.
+- **The scratchpad system is the source of truth for in-flight reasoning.**
+  `scratchpad/tasks.md` (the task ledger), `scratchpad/backlog.md` (deferred work +
+  owner concerns), `scratchpad/explore-*/` & `scratchpad/scrum-*/` (per-effort
+  hypotheses/experiments/insights/SUMMARY), `scratchpad/learnings/` (extracted lessons).
+  These are git-ignored working memory — do not treat their absence from git as absence
+  of knowledge.
+- **Promote durable design docs out of `scratchpad/` into `doc/`.** scratchpad is
+  git-ignored, so design docs left there are undiscoverable and get lost (this is how
+  the `seam-design.md` blueprint sat unbuilt). When an explore/scrum produces a durable
+  design or decision record, copy it to `doc/` and add it to the index above.
+- **Think at the architecture level before decomposing into tasks.** The task/scrum
+  machinery rewards fast decomposition and immediate action; resist acting on the first
+  promising small direction before the architecture-level question is reasoned through.
