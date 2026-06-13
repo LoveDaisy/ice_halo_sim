@@ -2578,6 +2578,12 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
                        "transit_root_kernel GPU error (ci={} ms_layer={}): {}",
                        ci, impl_->ms_idx,
                        [[transit_cb.error localizedDescription] UTF8String]);
+            // Skip DispatchLayer: root_*_buf contents are undefined after a
+            // failed transit cb; feeding them to the trace kernel would
+            // produce silent garbage. Mirror the TotalTriangles > 64 skip
+            // pattern above.
+            ci_start += ci_n;
+            continue;
           }
         }
         ci_start += ci_n;
