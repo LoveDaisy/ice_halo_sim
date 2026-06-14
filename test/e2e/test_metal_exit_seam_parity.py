@@ -46,7 +46,34 @@ from test.e2e._parity_metrics import (
 
 CONFIGS_DIR = Path(__file__).parent / "configs"
 _SEED = 42
+# Secondary seed for the metal self-consistency cross-seed assertion (see
+# `_assert_metal_self_consistency`). Different stream from _SEED is required;
+# the exact value doesn't matter as long as it's not _SEED.
+_SEED_B = 7
 _TIMEOUT = 180
+
+# --- Multi-MS test hardening (post Task 3 device-resident transit bugfix) --- #
+# The transit-PCG stream-reuse bug (gp.gen_ray_base=0 across SimBatches) showed
+# that the raw-corr-ds metric alone is corr-blind to orientation under-sampling:
+# the bug produced metal_self ≈ 0.954 vs legacy_self ≈ 0.999 but corr_ds vs
+# legacy still came out 0.9795 / 0.8930 — high enough that bumping thresholds
+# masked it. These two assertions guard the cross-seed and global-energy axes:
+#
+#   - SELF_MARGIN (0.02): metal_self must be within legacy_self - 0.02. Under-
+#     sampling collapses metal_self toward 0.95 while legacy stays at 0.999, so
+#     a 0.02 budget catches it cleanly without flagging the natural
+#     PCG-vs-mt19937 noise floor gap (~0.0001).
+#   - ENERGY_TOL (0.05): |sum(metal_Y)/sum(legacy_Y) - 1| ≤ 0.05. Total energy
+#     averages over all pixels so noise floors out; 5% catches gross global
+#     imbalance bugs (e.g. the +16% multi-MS+filter bug that scrum-267 found
+#     during fused-emit-gate) without flagging Monte-Carlo variance.
+#
+# Applied to multi-MS configs where device-resident continuation is exercised
+# (ms_multi_crystal, ms_multi_crystal_filtered). Per-brightness-zone energy
+# ratios are intentionally NOT added (selection bias on sparse filter scenes,
+# cross-config inconsistent — owner decision 2026-06-14).
+_SELF_MARGIN = 0.02
+_ENERGY_TOL = 0.05
 
 # Every test exercises the Metal backend (Apple-only) and asserts it routed
 # without fallback, so skip on non-Darwin CI runners (the Ubuntu e2e-slow
@@ -108,9 +135,9 @@ def _render_psnr(a: BufferedSimResult, b: BufferedSimResult) -> float:
 # Backend execution helper
 # --------------------------------------------------------------------------- #
 
-def _run(config_name: str, backend: str) -> BufferedSimResult:
+def _run(config_name: str, backend: str, seed: int = _SEED) -> BufferedSimResult:
     cfg = str(CONFIGS_DIR / f"{config_name}.json")
-    return run_scene_capi_buffered(cfg, sim_seed=_SEED, backend=backend, timeout_sec=_TIMEOUT)
+    return run_scene_capi_buffered(cfg, sim_seed=seed, backend=backend, timeout_sec=_TIMEOUT)
 
 
 def _assert_routed(r: BufferedSimResult, expected_backend: str, config_name: str) -> None:
@@ -217,6 +244,21 @@ def _parity_axes(config_name: str) -> tuple[float, float, float, float]:
     Corr metric is the 258.6.2 block-mean ds variant. Full-resolution
     `_raw_corr` is computed only for diagnostic prints.
     """
+    _, metrics = _run_parity(config_name)
+    return metrics
+
+
+def _run_parity(
+    config_name: str,
+) -> tuple[
+    tuple[BufferedSimResult, BufferedSimResult, BufferedSimResult],
+    tuple[float, float, float, float],
+]:
+    """Run legacy/metal/cpu_backend on `config_name`, assert routing, and
+    return both the raw BufferedSimResults and the (cm, pm, cc, pc) metric
+    tuple. Used by tests that need the raw buffers for additional assertions
+    (self-consistency, energy conservation) beyond the four parity axes.
+    """
     legacy = _run(config_name, "legacy")
     metal = _run(config_name, "metal")
     cpu = _run(config_name, "cpu_backend")
@@ -225,11 +267,69 @@ def _parity_axes(config_name: str) -> tuple[float, float, float, float]:
     _assert_routed(metal, "metal", config_name)
     _assert_routed(cpu, "cpu_backend", config_name)
 
-    return (
+    metrics = (
         _raw_corr_ds(metal, legacy),
         _render_psnr(metal, legacy),
         _raw_corr_ds(cpu, legacy),
         _render_psnr(cpu, legacy),
+    )
+    return (legacy, metal, cpu), metrics
+
+
+def _assert_metal_self_consistency(
+    config_name: str,
+    metal_s1: BufferedSimResult,
+    legacy_s1: BufferedSimResult,
+) -> None:
+    """Cross-seed self-consistency: metal_self must be within legacy_self -
+    SELF_MARGIN. Catches orientation under-sampling (e.g. transit-PCG stream
+    reuse) that the legacy-vs-metal corr metric is blind to.
+
+    Re-runs metal + legacy with `_SEED_B` and compares to the seed-A buffers
+    passed in. Costs 2 extra sims per protected test.
+    """
+    metal_s2 = _run(config_name, "metal", seed=_SEED_B)
+    legacy_s2 = _run(config_name, "legacy", seed=_SEED_B)
+    _assert_routed(metal_s2, "metal", config_name)
+    _assert_routed(legacy_s2, "legacy", config_name)
+    metal_self = _raw_corr_ds(metal_s1, metal_s2)
+    legacy_self = _raw_corr_ds(legacy_s1, legacy_s2)
+    print(
+        f"[self] {config_name}: metal_self={metal_self:.4f} "
+        f"legacy_self={legacy_self:.4f} margin={_SELF_MARGIN}"
+    )
+    assert metal_self >= legacy_self - _SELF_MARGIN, (
+        f"{config_name}: metal cross-seed self-consistency {metal_self:.4f} < "
+        f"legacy_self {legacy_self:.4f} − {_SELF_MARGIN}. Suspect transit/gen "
+        f"PCG stream collapse — metal orientations are less self-similar across "
+        f"seeds than legacy, signalling under-sampling."
+    )
+
+
+def _assert_energy_conservation(
+    config_name: str,
+    metal: BufferedSimResult,
+    legacy: BufferedSimResult,
+) -> None:
+    """|sum(metal_Y) / sum(legacy_Y) - 1| ≤ ENERGY_TOL. Global energy
+    averages over all pixels so per-pixel Monte-Carlo speckle floors out;
+    catches gross global imbalance (e.g. the +16% multi-MS+filter bug from
+    fused-emit-gate scrum-267) that per-pixel corr can hide.
+    """
+    metal_Y = float(metal.flt_buf[..., 1].sum())
+    legacy_Y = float(legacy.flt_buf[..., 1].sum())
+    assert legacy_Y > 0.0, (
+        f"{config_name}: legacy total Y == 0; cannot form energy ratio"
+    )
+    ratio = metal_Y / legacy_Y
+    print(
+        f"[energy] {config_name}: metal/legacy Y ratio={ratio:.4f} "
+        f"tol=±{_ENERGY_TOL}"
+    )
+    assert abs(ratio - 1.0) <= _ENERGY_TOL, (
+        f"{config_name}: metal/legacy total-Y ratio {ratio:.4f} outside "
+        f"[1 ± {_ENERGY_TOL}]. Suspect global energy imbalance in continuation/"
+        f"emit-gate path (cf. fused-emit-gate +16% regression class)."
     )
 
 
@@ -274,18 +374,25 @@ def test_parity_single_ms_filter():
 
 @pytest.mark.slow
 def test_parity_multi_ms_prob08():
-    cm, pm, cc, pc = _parity_axes("ms_multi_crystal")
+    (legacy, metal, _cpu), (cm, pm, cc, pc) = _run_parity("ms_multi_crystal")
     print(f"[parity] ms_multi_crystal: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
     _assert_parity("ms_multi_crystal", cm, pm, cc, pc)
+    # Task 3 device-resident continuation hardening: cross-seed self-consistency
+    # + total-Y energy conservation cover corr-blind under-sampling / energy bugs.
+    _assert_energy_conservation("ms_multi_crystal", metal, legacy)
+    _assert_metal_self_consistency("ms_multi_crystal", metal, legacy)
 
 
 # --- Multi MS prob=0.8 + filter ------------------------------------------- #
 
 @pytest.mark.slow
 def test_parity_multi_ms_prob08_filter():
-    cm, pm, cc, pc = _parity_axes("ms_multi_crystal_filtered")
+    (legacy, metal, _cpu), (cm, pm, cc, pc) = _run_parity("ms_multi_crystal_filtered")
     print(f"[parity] ms_multi_crystal_filtered: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
     _assert_parity("ms_multi_crystal_filtered", cm, pm, cc, pc)
+    # Task 3 device-resident continuation hardening (see _assert_* docstrings).
+    _assert_energy_conservation("ms_multi_crystal_filtered", metal, legacy)
+    _assert_metal_self_consistency("ms_multi_crystal_filtered", metal, legacy)
 
 
 # --- Multi MS prob=0.5, no filter ----------------------------------------- #
