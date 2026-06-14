@@ -240,10 +240,13 @@ _RAW_THRESHOLDS = {
     #     → threshold = floor(0.99) − 0.02 = 0.97 for both
     #   ms_multi_crystal_complex_filter: metal ds=0.9986, cpu_backend ds=0.9985
     #     → threshold = 0.97 for both
-    # BD filter rows below are placeholders for the skipped tests — kept so
-    # `_assert_parity` lookups don't KeyError if the skip is ever removed.
-    "parity_single_ms_bd_filter":         (0.0, 0.0),
-    "ms_multi_crystal_filtered_bd":       (0.0, 0.0),
+    # BD filter rows: FAIL-LOUD sentinels (impossible ds_corr ≥ 2.0). The tests
+    # are @skip pending 267.6 (metal-bd-exit-seq-parity). If anyone un-skips
+    # WITHOUT recalibrating here, _assert_parity (cm >= 2.0) fails immediately —
+    # preventing a 0.0-threshold "false green" that would silently void the gate.
+    # 267.6 MUST replace these with measured floors when it un-skips.
+    "parity_single_ms_bd_filter":         (2.0, 999.0),
+    "ms_multi_crystal_filtered_bd":       (2.0, 999.0),
     "parity_single_ms_complex_filter":    (0.97, 0.97),
     "ms_multi_crystal_complex_filter":    (0.97, 0.97),
 }

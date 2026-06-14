@@ -1461,18 +1461,28 @@ PrismFaces FindTopBotFaces(const PolyArrays& poly, size_t poly_cnt) {
   return out;
 }
 
-// Fresnel transmittance using the kernel's own delta parameterisation, mirroring
-// metal_trace_backend.mm's per-hit math (OracleTraceLayer:150-158). The kernel
-// computes dd = (1 - rr²)/cos²θ + rr² (equivalent to 1 - rr²·sin²θ / cos²θ + rr²
-// once you fold terms; numerically identical when sub-critical). Reusing the
-// same form makes the golden weight calculation track any future numerical
-// tweak to the kernel's formula.
+// Independent textbook Fresnel transmittance — derived directly from the Snell
+// law + rs/rp amplitude coefficients, NOT the kernel's dd/GetReflectRatio
+// parameterisation. This independence is the whole point of the golden WEIGHT
+// anchor (code-review-01 Minor 3): a shared bug in the kernel's Fresnel formula
+// must NOT be mirrored in the expected value, otherwise the weight assertion
+// degrades into a tautology and the CPU+kernel shared-formula blind spot the
+// golden anchor exists to catch stays open. `rr = n_incident / n_transmit`;
+// `cos_theta_abs = |cosθ_incidence|`.
 float FresnelTransmitDelta(float cos_theta_abs, float rr) {
-  float dd = (1.0f - rr * rr) / (cos_theta_abs * cos_theta_abs) + rr * rr;
-  if (dd <= 0.0f) {
+  // Snell: sinθ_t = rr · sinθ_i. TIR when sinθ_t ≥ 1.
+  float sin_i2 = std::max(0.0f, 1.0f - cos_theta_abs * cos_theta_abs);
+  float sin_t2 = rr * rr * sin_i2;
+  if (sin_t2 >= 1.0f) {
     return 0.0f;  // TIR — full reflection
   }
-  return 1.0f - GetReflectRatio(dd, rr);
+  float cos_t = std::sqrt(1.0f - sin_t2);
+  // Unpolarised power reflectance R = (Rs + Rp)/2 from the amplitude
+  // coefficients (n_i·cosθ form, divided through by n_t so only rr appears).
+  float rs = (rr * cos_theta_abs - cos_t) / (rr * cos_theta_abs + cos_t);
+  float rp = (rr * cos_t - cos_theta_abs) / (rr * cos_t + cos_theta_abs);
+  float reflectance = 0.5f * (rs * rs + rp * rp);
+  return 1.0f - reflectance;
 }
 
 // Find the exit ray whose direction is closest to (dx, dy, dz). Returns -1 if
