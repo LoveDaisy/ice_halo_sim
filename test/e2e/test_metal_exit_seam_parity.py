@@ -167,53 +167,41 @@ def test_metal_fallback_detector():
 # Filter scenes fixed in 258.10 (BeginSession RNG幂等化): ds_corr lifted from
 # 0.25–0.47 to 0.9963–0.9983 on both Metal and cpu_backend. xfail removed.
 #
-# scrum-267 task-device-resident-continuation (Task 3, 2026-06-14): multi-MS
-# Metal frame-transit moved from host (sharing session mt19937 with legacy) to
-# device (PCG transit_seed). Metal multi-MS orientations are no longer bit-
-# identical with legacy — they are statistically equivalent, matching the
-# single-MS device-gen baseline (dual_fisheye_ref's 0.95). The cpu_backend
-# axis is unaffected (still bit-identical via host mt19937) so its thresholds
-# stay tight.
-#
-# Three-way parity behaviour after Task 3 (structural explanation):
-#   ms_multi_crystal (no filter):    0.9795 → threshold 0.95   (~4 pp drop)
-#   parity_ms_prob05_filter (1-xtal+filter): ≥0.97 → threshold 0.97 (unchanged)
-#   ms_multi_crystal_filtered (2-xtal+filter): 0.8930 → threshold 0.87 (~10 pp)
-#
-# WHY the filtered multi-crystal case drops ~6 pp more than unfiltered:
-# In legacy / prior Task-2 baseline, ALL continuation rays across ALL crystals
-# in a layer are transit-oriented by drawing sequentially from the SAME session
-# mt19937 stream. This creates an implicit cross-crystal correlation: crystal-0
-# and crystal-1 transit orientations share adjacent stream positions, so their
-# spatial energy contributions are statistically entangled.
-# With Task-3 PCG transit, each crystal slice gets an INDEPENDENT PCG stream
-# (keyed by ci*nonce). The cross-crystal correlation is broken. For the
-# UNFILTERED case this matters little — all rays proceed, and the per-crystal
-# independence is indistinguishable from the ~4 pp baseline PCG vs mt19937
-# natural gap. For the FILTERED case, only a biased path-dependent subset of
-# rays passes the filter. In legacy, that filtered subset's orientation draws
-# were correlated across crystals (same stream); in PCG they are independent
-# per crystal. This correlation break shifts the inter-crystal energy balance in
-# a filter-sensitive way that compounds on top of the baseline PCG gap, yielding
-# the additional ~6 pp drop. parity_ms_prob05_filter (single crystal + filter)
-# is immune because there is only one crystal — no cross-crystal correlation
-# exists to break in either legacy or PCG.
-# Full derivation: progress.md DECISION "Multi-MS parity 阈值需随 device-PCG
-# transit 重校准" (scrum-gpu-single-engine-continuation/task-device-resident-
-# continuation). Floor − 0.02 calibration: 0.9795 → 0.95; 0.8930 → 0.87.
+# scrum-267 task-device-resident-continuation bugfix (2026-06-14): when Task 3
+# moved multi-MS Metal frame-transit from host to device, an earlier revision
+# of this comment claimed the resulting parity drop (ms_multi_crystal 0.9795,
+# ms_multi_crystal_filtered 0.8930) was the unavoidable PCG-vs-mt19937
+# statistical gap — and the thresholds were widened to 0.95 / 0.87 accordingly.
+# That diagnosis was WRONG. Owner re-inspected the rendered panels (scratchpad/
+# debug-metal-continuation-correctness/findings.md) and traced it to a
+# transit-PCG STREAM REUSE bug: BuildTransitRootParams set gp.gen_ray_base = 0
+# on every SimBatch, so every batch's transit dispatch on (layer, ci) keyed PCG
+# at (transit_seed, 0..ci_n-1), collapsing all batches' tid=k onto the same
+# crystal orientation → severe orientation under-sampling across batches. The
+# corr-only metric hid it (~15625 batches collapsing to ~ci_n discrete
+# orientations still produced a smooth-ish image); a layer-decomposition
+# diagnostic exposed Metal's 2-MS self-noise floor at 0.954 vs legacy 0.9999.
+# Fix: add Impl::transit_ray_count_ (mirrors root_ray_count's monotone-across-
+# SimBatches contract); TraceLayer fills gp.gen_ray_base from it before
+# EncodeTransitRoot and advances after each successful cb. Post-fix measurement
+# (visual_parity_check.py, seed 42 vs noise floor seed 7):
+#   ms_multi_crystal:           0.9998 (noise floor 0.9999, gap −0.0001)
+#   ms_multi_crystal_filtered:  0.9986 (noise floor 0.9988, gap −0.0002)
+# Both within noise floor → metal is statistically indistinguishable from
+# legacy. Thresholds restored to floor−0.02 of the post-fix measurement
+# (0.97 / 0.97) — the prior 0.95 / 0.87 were bug-compensation, not legitimate
+# statistical headroom.
 _RAW_THRESHOLDS = {
     # config:                         (metal, cpu_backend)  ds_corr → floor−0.02
     "dual_fisheye_ref":             (0.95, 0.94),
-    # ms_multi_crystal: metal threshold tracked the prior host-shared-RNG
-    # regime (0.99 after task-260.7). Task 3 device-PCG transit recalibrates
-    # to 0.95 (measured 0.9795). cpu_backend stays at 0.81.
-    "ms_multi_crystal":             (0.95, 0.81),
+    # ms_multi_crystal: post-bugfix measurement 0.9998 ≈ noise floor 0.9999.
+    # Threshold = floor(0.9998 × 100) / 100 − 0.02 = 0.97. cpu_backend unchanged.
+    "ms_multi_crystal":             (0.97, 0.81),
     "parity_ms_prob05":             (0.93, 0.90),
-    # Filter scenes — thresholds calibrated from 258.10 post-fix measurement;
-    # ms_multi_crystal_filtered metal floor re-calibrated for Task 3 device-
-    # PCG transit: 2-crystal + filter → 0.87 (measured 0.8930; see structural
-    # explanation above). cpu_backend unchanged at 0.97.
-    "ms_multi_crystal_filtered":    (0.87, 0.97),
+    # Filter scenes — single-crystal+filter (parity_ms_prob05_filter) unchanged
+    # at 0.97. Multi-crystal+filter (ms_multi_crystal_filtered) post-bugfix
+    # measurement 0.9986 ≈ noise floor 0.9988; threshold = 0.97.
+    "ms_multi_crystal_filtered":    (0.97, 0.97),
     "parity_ms_prob05_filter":      (0.97, 0.97),
     # parity_single_ms_filter dropped: legacy returns all-zero buffer after
     # the prob=0.0→1.0 fix (commit 0d03388); metal/cpu_backend raise PY

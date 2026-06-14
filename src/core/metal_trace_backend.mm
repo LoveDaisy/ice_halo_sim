@@ -897,9 +897,14 @@ kernel void gen_root_kernel(
 //   2) rotate world dir into the NEW crystal-local frame (ApplyInverse), and
 //   3) sample entry point + hit face on the NEW crystal (InitRay_p_fid).
 // gp.gen_seed must be derived from transit_seed (independent from root-gen and
-// gate PCG streams); gp.gen_ray_base must be 0 (per-dispatch indexing); the
-// sun-* / ray_weight fields in gp are unused (world dir comes from cont_d_in
-// instead of sample_sph_cap; weight is carried through from cont_w_in).
+// gate PCG streams); gp.gen_ray_base MUST advance across SimBatches via the
+// host-side transit_ray_count_ counter (same monotone contract as gen_root's
+// root_ray_count) so per-batch transit dispatches on the same (layer,ci) key
+// consume DISJOINT PCG ranges — otherwise tid=k of every batch collapses onto
+// the same orientation, severely under-sampling crystal orientations across
+// batches (scrum-267 bugfix). The sun-* / ray_weight fields in gp are unused
+// (world dir comes from cont_d_in instead of sample_sph_cap; weight is
+// carried through from cont_w_in).
 kernel void transit_root_kernel(
     device const float*  cont_d_in   [[buffer(0)]],
     device const float*  cont_w_in   [[buffer(1)]],
@@ -919,10 +924,13 @@ kernel void transit_root_kernel(
     return;
   }
   // 1. Orientation sample (shares sample_lat_lon_roll with gen_root_kernel;
-  //    gp.gen_seed already carries transit_seed, gp.gen_ray_base == 0).
+  //    gp.gen_seed carries transit_seed, gp.gen_ray_base carries the host-
+  //    side transit_ray_count_ so global_idx = gen_ray_base + tid is unique
+  //    per (layer, ci, batch, tid) across the whole Run() PCG range).
+  uint global_idx = gp.gen_ray_base + tid;
   PcgStream stream;
   stream.seed = gp.gen_seed;
-  stream.global_idx = tid;
+  stream.global_idx = global_idx;
   stream.slot = 0u;
   float lon, lat, roll;
   sample_lat_lon_roll(stream, gp, lon, lat, roll);
@@ -1176,6 +1184,19 @@ struct MetalTraceBackend::Impl {
   // Value-initialized to 0 by Impl's = {} member initializer below; the
   // explicit `= 0` here also serves as the !seeded-gate's pre-seed contract.
   size_t root_ray_count = 0;
+  // scrum-267 task-device-resident-continuation bugfix: per-Run() running
+  // counter for transit_root_kernel dispatches, mirroring root_ray_count.
+  //   * Key invariant: each cont ray's PCG stream key is
+  //     (transit_seed(ms_layer,ci), transit_ray_count_ + tid). Without a
+  //     monotone counter, every SimBatch's transit dispatch on (layer,ci) keys
+  //     by (transit_seed, 0..ci_n-1) which COLLAPSES the per-batch ray
+  //     orientations onto the same ~ci_n discrete draws, severely under-
+  //     sampling crystal orientations across batches. See
+  //     scratchpad/debug-metal-continuation-correctness/findings.md.
+  //   * Reset semantics match root_ray_count exactly: zeroed only at first
+  //     seeding (BeginSession + !seeded gate); persists across Reset()/
+  //     EndSession so successive SimBatches consume disjoint PCG ranges.
+  size_t transit_ray_count_ = 0;
   int    width = 0;
   int    height = 0;
   float  az0 = 0.0f;
@@ -1995,6 +2016,10 @@ void MetalTraceBackend::Impl::EncodeGenRoot(id<MTLCommandBuffer> cb,
 // (world dir comes from cont_d_in instead of sample_sph_cap; weight is carried
 // through from cont_w_in). Future changes to GenRootKernelParams or
 // BuildGenRootParams must check both consumers.
+//
+// gen_ray_base IS NOT set here — the caller fills it from transit_ray_count_
+// just before encoding so the running counter advances monotonically across
+// SimBatches (mirrors gen_root's per-dispatch advance from root_ray_count).
 GenRootKernelParams MetalTraceBackend::Impl::BuildTransitRootParams(
     const ScatteringSetting& setting, size_t ci_n,
     uint32_t ms_layer_idx, uint32_t ci) const {
@@ -2009,7 +2034,9 @@ GenRootKernelParams MetalTraceBackend::Impl::BuildTransitRootParams(
   constexpr uint32_t kTransitNonce = 0xA5A5A5A5u;
   gp.gen_seed     = gen_seed_ ^ kTransitNonce ^
                     (ms_layer_idx * 65537u + ci * 2654435761u);
-  gp.gen_ray_base = 0u;
+  // gp.gen_ray_base intentionally left as BuildGenRootParams's value (0 by
+  // default); the caller MUST overwrite it with transit_ray_count_ before
+  // EncodeTransitRoot — see TraceLayer non-first_ms branch.
   return gp;
 }
 
@@ -2364,6 +2391,10 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
     // same seed) leave root_ray_count untouched so successive SimBatches
     // consume disjoint PCG ranges (gen_ray_base monotonically increases).
     impl_->root_ray_count = 0;
+    // scrum-267 task-device-resident-continuation bugfix: transit_ray_count_
+    // shares root_ray_count's reset contract — zero ONLY here so per-batch
+    // transit dispatches consume disjoint PCG ranges per (layer, ci) stream.
+    impl_->transit_ray_count_ = 0;
   }
   // Device root-gen activation (task-260.2). spec.seed != 0 implies the
   // single-worker determinism contract (server.cpp:184), which is the case we
@@ -2569,6 +2600,12 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
               setting, ci_n,
               static_cast<uint32_t>(impl_->ms_idx),
               static_cast<uint32_t>(ci));
+          // Monotone advance — mirrors gen_root's root_ray_count contract so
+          // per-SimBatch transit dispatches on (layer,ci) consume disjoint PCG
+          // ranges. UINT32_MAX bound matches gen_ray_base width (line ~1830).
+          assert(impl_->transit_ray_count_ <= static_cast<size_t>(UINT32_MAX) - ci_n &&
+                 "transit_ray_count_ overflow: gen_ray_base width exceeded");
+          transit_gp.gen_ray_base = static_cast<uint32_t>(impl_->transit_ray_count_);
           id<MTLCommandBuffer> transit_cb = [impl_->queue commandBuffer];
           impl_->EncodeTransitRoot(transit_cb, transit_gp, in_slot, ci_start);
           [transit_cb commit];
@@ -2585,6 +2622,10 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
             ci_start += ci_n;
             continue;
           }
+          // Advance ONLY after a successful transit cb so a skipped/failed
+          // dispatch does not burn PCG range (kept disjoint with subsequent
+          // successful dispatches on the same (layer,ci)).
+          impl_->transit_ray_count_ += ci_n;
         }
         ci_start += ci_n;
         in_count = ci_n;  // all cont rays already filter+prob-passed by the
