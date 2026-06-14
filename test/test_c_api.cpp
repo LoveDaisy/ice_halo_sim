@@ -588,6 +588,39 @@ TEST(ParseConfigApi, SpectrumEnumerations) {
 
 // =============== Server Lifecycle / Results API Tests ===============
 
+// Helper: build a config with a highly selective BD raypath filter that
+// produces many 0-exit-ray batches on the backend exit-seam path. Used by
+// ZeroExitBatchNoHang to regression-guard the sim_scene_cnt_ leak (fix:
+// simulator.cpp drops the exit_count==0 early return + server.cpp ConsumeData
+// guards consume on has_renderable while keeping -- unconditional).
+//
+// Mirrors test/e2e/configs/parity_single_ms_bd_filter.json structure: prism
+// crystal + raypath [4,6] BD filter + scattering prob=0.5 with filter=1. Sized
+// to ~200k rays so the test completes in seconds when the fix is present and
+// times out at 60s when the leak is reintroduced.
+static std::string MakeBdFilterConfigJson() {
+  auto base = nlohmann::json::parse(MakeMinimalConfigJson());
+  base["scene"]["ray_num"] = 200000ul;
+  base["scene"]["max_hits"] = 7;
+
+  nlohmann::json flt;
+  flt["id"] = 1;
+  flt["type"] = "raypath";
+  flt["raypath"] = { 4, 6 };
+  flt["symmetry"] = "BD";
+  base["filter"] = nlohmann::json::array({ flt });
+
+  nlohmann::json entry;
+  entry["crystal"] = 1;
+  entry["proportion"] = 10;
+  entry["filter"] = 1;
+  nlohmann::json layer;
+  layer["prob"] = 0.5f;
+  layer["entries"] = nlohmann::json::array({ entry });
+  base["scene"]["scattering"] = nlohmann::json::array({ layer });
+  return base.dump();
+}
+
 // Helper: build a small finite-ray-count config with non-empty scattering.
 // - Based on MakeMinimalConfigJson() (parse-modify-dump pattern, like SpectrumEnumerations)
 // - ray_num set to 1000 for fast completion
@@ -790,6 +823,33 @@ TEST_F(ServerLifecycleApi, StressStartStop) {
     }
     t.join();
   }
+}
+
+
+// Regression: backend exit-seam path used to early-return without emplacing
+// a SimData when all rays in a batch were filtered/absorbed (exit_count==0),
+// while GenerateScene had already incremented sim_scene_cnt_. The counter
+// never returned to 0 and GetStatus() stayed non-IDLE → CLI/capi hung.
+// A highly selective BD raypath filter generates many such 0-exit batches.
+//
+// cpu_backend is used (not metal/legacy) because:
+//   - it exercises the same backend exit-seam code path as metal cross-platform
+//   - legacy CPU doesn't go through backend.ReadbackExitRays at all
+// 60s timeout dominates the ~few-seconds expected runtime; on regression the
+// server will sit forever at <1.0 progress with workers idle in config_queue.
+TEST_F(ServerLifecycleApi, ZeroExitBatchNoHang) {
+#ifdef _WIN32
+  ::_putenv_s("LUMICE_TRACE_BACKEND", "cpu_backend");
+  struct EnvGuard { ~EnvGuard() { ::_putenv_s("LUMICE_TRACE_BACKEND", ""); } } guard;
+#else
+  ::setenv("LUMICE_TRACE_BACKEND", "cpu_backend", 1);
+  struct EnvGuard { ~EnvGuard() { ::unsetenv("LUMICE_TRACE_BACKEND"); } } guard;
+#endif
+
+  auto json = MakeBdFilterConfigJson();
+  ASSERT_EQ(LUMICE_CommitConfig(server_, json.c_str()), LUMICE_OK);
+  ASSERT_TRUE(WaitForIdle(server_, 60000))
+      << "Server did not reach IDLE within 60s — sim_scene_cnt_ leak on 0-exit batch regressed";
 }
 
 
