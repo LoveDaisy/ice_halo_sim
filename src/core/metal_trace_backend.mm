@@ -1370,7 +1370,8 @@ struct MetalTraceBackend::Impl {
   GenRootKernelParams BuildTransitRootParams(const ScatteringSetting& setting,
                                               size_t ci_n,
                                               uint32_t ms_layer_idx,
-                                              uint32_t ci) const;
+                                              uint32_t ci,
+                                              uint32_t ray_base) const;
   // Encodes a transit_root_kernel compute pass that reads the cont_d/cont_w
   // slice [ci_start, ci_start + gp.num_rays) of in_slot and writes the full
   // root_*_buf in lock-step with the trace kernel's input layout.
@@ -2022,7 +2023,7 @@ void MetalTraceBackend::Impl::EncodeGenRoot(id<MTLCommandBuffer> cb,
 // SimBatches (mirrors gen_root's per-dispatch advance from root_ray_count).
 GenRootKernelParams MetalTraceBackend::Impl::BuildTransitRootParams(
     const ScatteringSetting& setting, size_t ci_n,
-    uint32_t ms_layer_idx, uint32_t ci) const {
+    uint32_t ms_layer_idx, uint32_t ci, uint32_t ray_base) const {
   GenRootKernelParams gp = BuildGenRootParams(setting, ci_n);
   // Override seed: transit stream must be statistically independent from
   // root-gen (gen_seed_ + gen_ray_base) and from the emit gate (gate_seed) so
@@ -2034,9 +2035,13 @@ GenRootKernelParams MetalTraceBackend::Impl::BuildTransitRootParams(
   constexpr uint32_t kTransitNonce = 0xA5A5A5A5u;
   gp.gen_seed     = gen_seed_ ^ kTransitNonce ^
                     (ms_layer_idx * 65537u + ci * 2654435761u);
-  // gp.gen_ray_base intentionally left as BuildGenRootParams's value (0 by
-  // default); the caller MUST overwrite it with transit_ray_count_ before
-  // EncodeTransitRoot — see TraceLayer non-first_ms branch.
+  // gen_ray_base is a REQUIRED parameter (compiler-enforced), not a comment-
+  // only contract: it MUST be the running transit_ray_count_ so per-SimBatch
+  // dispatches on (layer,ci) consume disjoint PCG ranges. A prior version left
+  // it 0-by-default + "caller must overwrite" in a comment; that soft contract
+  // silently reused PCG streams across batches → orientation under-sampling
+  // (scrum-267 continuation bug). Making it a parameter closes that class.
+  gp.gen_ray_base = ray_base;
   return gp;
 }
 
@@ -2596,16 +2601,16 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
           continue;
         }
         {
-          auto transit_gp = impl_->BuildTransitRootParams(
-              setting, ci_n,
-              static_cast<uint32_t>(impl_->ms_idx),
-              static_cast<uint32_t>(ci));
           // Monotone advance — mirrors gen_root's root_ray_count contract so
           // per-SimBatch transit dispatches on (layer,ci) consume disjoint PCG
           // ranges. UINT32_MAX bound matches gen_ray_base width (line ~1830).
           assert(impl_->transit_ray_count_ <= static_cast<size_t>(UINT32_MAX) - ci_n &&
                  "transit_ray_count_ overflow: gen_ray_base width exceeded");
-          transit_gp.gen_ray_base = static_cast<uint32_t>(impl_->transit_ray_count_);
+          auto transit_gp = impl_->BuildTransitRootParams(
+              setting, ci_n,
+              static_cast<uint32_t>(impl_->ms_idx),
+              static_cast<uint32_t>(ci),
+              static_cast<uint32_t>(impl_->transit_ray_count_));
           id<MTLCommandBuffer> transit_cb = [impl_->queue commandBuffer];
           impl_->EncodeTransitRoot(transit_cb, transit_gp, in_slot, ci_start);
           [transit_cb commit];
