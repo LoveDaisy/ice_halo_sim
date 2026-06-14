@@ -1360,6 +1360,16 @@ struct MetalTraceBackend::Impl {
   size_t GenerateFirstLayerRootsForCi(const ScatteringSetting& setting,
                                       size_t ci, size_t crystal_ray_num,
                                       bool can_use_device_gen);
+  // task-267.4 (continuation-validation) golden-ray hook: test-only host-ray
+  // injection path. Activated when HostRayBatch::d / p / w / tf are non-null
+  // at first MS, ci=0 (TraceLayer guards the branch). Bypasses RNG-based
+  // root generation; root_*_buf are filled directly from the caller-supplied
+  // arrays so a GPU-side trace pass runs over deterministic, analytically
+  // chosen rays. crystal_rot_ is set to identity (rays are interpreted as
+  // crystal-local + world-aligned). Returns the number of injected rays.
+  // Production callers (Simulator) leave host.d == nullptr — this path stays
+  // dormant.
+  size_t InjectHostRoots(const HostRayBatch& host);
   GenRootKernelParams BuildGenRootParams(const ScatteringSetting& setting,
                                           size_t crystal_ray_num) const;
   void EncodeGenRoot(id<MTLCommandBuffer> cb, const GenRootKernelParams& gp);
@@ -1903,6 +1913,55 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
   // Accumulate the host-gen count too so a future device-gen-eligible call
   // within the same session keeps gen_ray_base globally monotone.
   root_ray_count += n;
+  return n;
+}
+
+// task-267.4 (continuation-validation) golden-ray hook.
+//
+// Test-only injection path that bypasses InitRayFirstMs / device gen_root and
+// copies caller-supplied initial rays straight into the device root buffers.
+// Used by GoldenRay* tests in test_metal_trace_parity.cpp to drive the real
+// Metal trace kernel with analytically constructed rays (normal incidence,
+// Snell 30°, etc.) and assert exit direction/weight against closed-form
+// expectations.
+//
+// Lifetime: host.d / p / w / tf are read once here and copied into MTLBuffers
+// (MTLResourceStorageModeShared — Apple unified memory; the `[buf contents]`
+// pointer is the GPU-visible address). Caller can free / reuse the buffers
+// after this call returns.
+//
+// crystal_rot_ is filled with the 3x3 identity matrix per ray: the test rays
+// are constructed in the same frame the kernel uses for both tracing and
+// projection, so no rotation is needed. (Production gen_root samples a per-ray
+// orientation; injection sidesteps that entirely.)
+//
+// root_ray_count is intentionally NOT advanced: this path consumes no PCG
+// stream, so leaving the counter alone keeps any subsequent dispatches (test
+// path normally has none; production never takes this branch) on the same
+// monotone schedule they'd have otherwise.
+size_t MetalTraceBackend::Impl::InjectHostRoots(const HostRayBatch& host) {
+  assert(host.d != nullptr && host.p != nullptr && host.w != nullptr && host.tf != nullptr &&
+         "InjectHostRoots requires non-null d/p/w/tf");
+  assert(host.count > 0 && "InjectHostRoots requires host.count > 0");
+  assert(host.count <= root_capacity &&
+         "InjectHostRoots: host.count exceeds EnsureRootBuffers allocation");
+  size_t n = host.count;
+  auto* d_ptr   = static_cast<float*>([root_d_buf contents]);
+  auto* p_ptr   = static_cast<float*>([root_p_buf contents]);
+  auto* w_ptr   = static_cast<float*>([root_w_buf contents]);
+  auto* tf_ptr  = static_cast<uint16_t*>([root_tf_buf contents]);
+  auto* rot_ptr = static_cast<float*>([root_rot_buf contents]);
+  std::memcpy(d_ptr,  host.d,  n * 3 * sizeof(float));
+  std::memcpy(p_ptr,  host.p,  n * 3 * sizeof(float));
+  std::memcpy(w_ptr,  host.w,  n * sizeof(float));
+  // IdType is uint16_t (def.hpp); root_tf_buf element width matches.
+  std::memcpy(tf_ptr, host.tf, n * sizeof(uint16_t));
+  for (size_t i = 0; i < n; i++) {
+    float* m = rot_ptr + i * 9;
+    m[0] = 1.0f; m[1] = 0.0f; m[2] = 0.0f;
+    m[3] = 0.0f; m[4] = 1.0f; m[5] = 0.0f;
+    m[6] = 0.0f; m[7] = 0.0f; m[8] = 1.0f;
+  }
   return n;
 }
 
@@ -2554,28 +2613,45 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
 
       size_t in_count = 0;
       if (first_ms) {
-        // task-260.2/260.7: device root-gen runs when
-        //   (a) per-ci device-gen; each ci resolves a single crystal via
-        //       ResolveLayerCrystalForCi before this guard, so crystal_cnt > 1
-        //       is safe — per-ci multi-crystal parity verified at ds=0.9998
-        //       (explore-260.3 exp2);
-        //   (b) host-supplied root rays are NOT pinned via roots.host.crystal
-        //       (matches the use_host=true convention below);
-        //   (c) spec.seed != 0 (single-worker determinism contract); and
-        //   (d) tri_count ≤ kMaxTriPerKernel (kernel stack-array bound); and
-        //   (e) root_ray_count fits in uint32_t (gen_ray_base width); and
-        //   (f) LUMICE_DISABLE_DEVICE_GEN env var is unset (escape hatch for
-        //       strict-identity parity tests that mirror the host mt19937
-        //       stream — these cannot align with the device PCG stream).
-        // The escape hatch is cached once per backend in Impl's ctor (see
-        // task-260.5 Step 4); tests that need to flip it must setenv BEFORE
-        // constructing a new MetalTraceBackend.
-        bool can_use_device_gen = !use_host &&
-                                  impl_->gen_seed_ != 0u &&
-                                  impl_->current_crystal.TotalTriangles() <= 64u &&
-                                  impl_->root_ray_count <= static_cast<size_t>(UINT32_MAX) - ci_n &&
-                                  !impl_->disable_device_gen_;
-        in_count = impl_->GenerateFirstLayerRootsForCi(setting, ci, ci_n, can_use_device_gen);
+        // task-267.4 (continuation-validation) golden-ray hook: if the caller
+        // supplied initial-ray buffers via HostRayBatch::d/p/w/tf, bypass both
+        // host-mt19937 InitRayFirstMs and device PCG gen_root and feed those
+        // analytically constructed rays straight into the trace kernel. Only
+        // active at ci=0 (HostRayBatch carries a single crystal) and only
+        // when the test path explicitly opted in (production simulator leaves
+        // host.d == nullptr; see HostRayBatch design note in trace_backend.hpp).
+        const bool inject_host = (ci == 0 && roots.host.d != nullptr);
+        if (inject_host) {
+          assert(use_host &&
+                 "host-ray injection requires roots.host.crystal != nullptr");
+          assert(roots.host.count == ci_n &&
+                 "host-ray injection: host.count must match the ci=0 partition "
+                 "(single-ci, single-crystal contract for golden tests)");
+          in_count = impl_->InjectHostRoots(roots.host);
+        } else {
+          // task-260.2/260.7: device root-gen runs when
+          //   (a) per-ci device-gen; each ci resolves a single crystal via
+          //       ResolveLayerCrystalForCi before this guard, so crystal_cnt > 1
+          //       is safe — per-ci multi-crystal parity verified at ds=0.9998
+          //       (explore-260.3 exp2);
+          //   (b) host-supplied root rays are NOT pinned via roots.host.crystal
+          //       (matches the use_host=true convention below);
+          //   (c) spec.seed != 0 (single-worker determinism contract); and
+          //   (d) tri_count ≤ kMaxTriPerKernel (kernel stack-array bound); and
+          //   (e) root_ray_count fits in uint32_t (gen_ray_base width); and
+          //   (f) LUMICE_DISABLE_DEVICE_GEN env var is unset (escape hatch for
+          //       strict-identity parity tests that mirror the host mt19937
+          //       stream — these cannot align with the device PCG stream).
+          // The escape hatch is cached once per backend in Impl's ctor (see
+          // task-260.5 Step 4); tests that need to flip it must setenv BEFORE
+          // constructing a new MetalTraceBackend.
+          bool can_use_device_gen = !use_host &&
+                                    impl_->gen_seed_ != 0u &&
+                                    impl_->current_crystal.TotalTriangles() <= 64u &&
+                                    impl_->root_ray_count <= static_cast<size_t>(UINT32_MAX) - ci_n &&
+                                    !impl_->disable_device_gen_;
+          in_count = impl_->GenerateFirstLayerRootsForCi(setting, ci, ci_n, can_use_device_gen);
+        }
       } else {
         // scrum-267 task-device-resident-continuation Step 3: device frame-
         // transit. The prior layer's emit gate already filtered + prob-gated

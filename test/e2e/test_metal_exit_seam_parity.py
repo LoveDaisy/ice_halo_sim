@@ -233,6 +233,19 @@ _RAW_THRESHOLDS = {
     # parity_single_ms_filter dropped: legacy returns all-zero buffer after
     # the prob=0.0→1.0 fix (commit 0d03388); metal/cpu_backend raise PY
     # exceptions on it. Test is `@pytest.mark.skip`-marked — no threshold.
+    #
+    # 267.4 matrix extension: complex filter coverage (Step 5 calibrated
+    # 2026-06-14):
+    #   parity_single_ms_complex_filter: metal ds=0.9968, cpu_backend ds=0.9967
+    #     → threshold = floor(0.99) − 0.02 = 0.97 for both
+    #   ms_multi_crystal_complex_filter: metal ds=0.9986, cpu_backend ds=0.9985
+    #     → threshold = 0.97 for both
+    # BD filter rows below are placeholders for the skipped tests — kept so
+    # `_assert_parity` lookups don't KeyError if the skip is ever removed.
+    "parity_single_ms_bd_filter":         (0.0, 0.0),
+    "ms_multi_crystal_filtered_bd":       (0.0, 0.0),
+    "parity_single_ms_complex_filter":    (0.97, 0.97),
+    "ms_multi_crystal_complex_filter":    (0.97, 0.97),
 }
 _T_PSNR_DB = 13.0  # uniform render-PSNR floor; see baseline.md threshold section.
 
@@ -400,9 +413,12 @@ def test_parity_multi_ms_prob08_filter():
 @pytest.mark.slow
 @pytest.mark.heavy  # prob-value variant of prob08 (same code path); demote to local/nightly
 def test_parity_multi_ms_prob05():
-    cm, pm, cc, pc = _parity_axes("parity_ms_prob05")
+    (legacy, metal, _cpu), (cm, pm, cc, pc) = _run_parity("parity_ms_prob05")
     print(f"[parity] parity_ms_prob05: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
     _assert_parity("parity_ms_prob05", cm, pm, cc, pc)
+    # 267.4 matrix hardening: extend energy+self gates to the prob05 variant.
+    _assert_energy_conservation("parity_ms_prob05", metal, legacy)
+    _assert_metal_self_consistency("parity_ms_prob05", metal, legacy)
 
 
 # --- Multi MS prob=0.5 + filter ------------------------------------------- #
@@ -410,6 +426,85 @@ def test_parity_multi_ms_prob05():
 @pytest.mark.slow
 @pytest.mark.heavy  # prob-value variant of prob08_filter (same code path); demote to local/nightly
 def test_parity_multi_ms_prob05_filter():
-    cm, pm, cc, pc = _parity_axes("parity_ms_prob05_filter")
+    (legacy, metal, _cpu), (cm, pm, cc, pc) = _run_parity("parity_ms_prob05_filter")
     print(f"[parity] parity_ms_prob05_filter: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
     _assert_parity("parity_ms_prob05_filter", cm, pm, cc, pc)
+    # 267.4 matrix hardening: extend energy+self gates to the prob05_filter variant.
+    _assert_energy_conservation("parity_ms_prob05_filter", metal, legacy)
+    _assert_metal_self_consistency("parity_ms_prob05_filter", metal, legacy)
+
+
+# --- Single MS + BD filter (267.4 matrix extension) ----------------------- #
+# DISCOVERY (267.4 Step 5 calibration, 2026-06-14): both single-MS and multi-MS
+# BD raypath [4,6] configs hang on Metal at the e2e harness because the kernel
+# produces ZERO surviving rays per batch (`ConsumeData: first batch consumed (0
+# ray segments)`) while legacy emits ~1920 surviving/batch on the same config.
+# Repro: `DYLD_LIBRARY_PATH=$PWD/build/Release/lib LUMICE_TRACE_BACKEND=metal
+# ./build/cmake_install/Lumice -f test/e2e/configs/parity_single_ms_bd_filter.json`.
+# `MetalFilterMatchParity.RandomSequencesAcrossAxisAndCheckMode` (unit test) DOES
+# cover BD raypath [4,6] and passes 0 mismatches — so the divergence is NOT in
+# the per-call `DeviceFilterMatchRaypath` formula itself but somewhere in the
+# end-to-end wiring (BeginSession filter-desc upload? gate dispatch under specific
+# axis_dist? Wait-loop convergence on sparse output?). Owner-routed to a dedicated
+# scrum-267 task `metal-bd-exit-seq-parity` (267.6) which will white-box the metal
+# exit-record face sequence vs legacy recorder and un-skip these two cells. The
+# matrix here keeps the BD slot as a TRACKED OPEN BUG with a repro instead of
+# swallowing the discovery. (See progress.md DECISION "BD column skipped" +
+# scratchpad/.../task-metal-bd-exit-seq-parity/issue.md for full reasoning.)
+
+@pytest.mark.slow
+@pytest.mark.skip(
+    reason="267.4 discovery (2026-06-14): metal kernel emits 0 surviving rays "
+           "for raypath BD [4,6] under this scene's axis distribution while "
+           "legacy emits ~1920/batch; routed to scrum-267 task "
+           "metal-bd-exit-seq-parity (267.6). Filter-match unit parity (single-call) "
+           "passes — divergence is in the e2e wiring, not the match formula. "
+           "Repro: LUMICE_TRACE_BACKEND=metal Lumice -f "
+           "test/e2e/configs/parity_single_ms_bd_filter.json"
+)
+def test_parity_single_ms_bd_filter():
+    (legacy, metal, _cpu), (cm, pm, cc, pc) = _run_parity("parity_single_ms_bd_filter")
+    print(f"[parity] parity_single_ms_bd_filter: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
+    _assert_parity("parity_single_ms_bd_filter", cm, pm, cc, pc)
+    _assert_energy_conservation("parity_single_ms_bd_filter", metal, legacy)
+    _assert_metal_self_consistency("parity_single_ms_bd_filter", metal, legacy)
+
+
+# --- Multi MS + BD filter (267.4 matrix extension) ------------------------ #
+
+@pytest.mark.slow
+@pytest.mark.skip(
+    reason="267.4 discovery (2026-06-14): same metal-BD parity gap as the "
+           "single-MS variant (0 surviving rays vs legacy ~2261/batch). "
+           "See test_parity_single_ms_bd_filter skip reason for repro + scope."
+)
+def test_parity_multi_ms_bd_filter():
+    (legacy, metal, _cpu), (cm, pm, cc, pc) = _run_parity("ms_multi_crystal_filtered_bd")
+    print(f"[parity] ms_multi_crystal_filtered_bd: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
+    _assert_parity("ms_multi_crystal_filtered_bd", cm, pm, cc, pc)
+    _assert_energy_conservation("ms_multi_crystal_filtered_bd", metal, legacy)
+    _assert_metal_self_consistency("ms_multi_crystal_filtered_bd", metal, legacy)
+
+
+# --- Single MS + complex filter (267.4 matrix extension) ------------------ #
+
+@pytest.mark.slow
+def test_parity_single_ms_complex_filter():
+    (legacy, metal, _cpu), (cm, pm, cc, pc) = _run_parity("parity_single_ms_complex_filter")
+    print(f"[parity] parity_single_ms_complex_filter: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
+    _assert_parity("parity_single_ms_complex_filter", cm, pm, cc, pc)
+    # plan §C-A: single-MS energy/self are conditional hard asserts (see above).
+    _assert_energy_conservation("parity_single_ms_complex_filter", metal, legacy)
+    _assert_metal_self_consistency("parity_single_ms_complex_filter", metal, legacy)
+
+
+# --- Multi MS + complex filter (267.4 matrix extension) ------------------- #
+
+@pytest.mark.slow
+def test_parity_multi_ms_complex_filter():
+    (legacy, metal, _cpu), (cm, pm, cc, pc) = _run_parity("ms_multi_crystal_complex_filter")
+    print(f"[parity] ms_multi_crystal_complex_filter: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
+    _assert_parity("ms_multi_crystal_complex_filter", cm, pm, cc, pc)
+    # plan §C-A: multi-MS is unconditional 4-axis hard gate.
+    _assert_energy_conservation("ms_multi_crystal_complex_filter", metal, legacy)
+    _assert_metal_self_consistency("ms_multi_crystal_complex_filter", metal, legacy)

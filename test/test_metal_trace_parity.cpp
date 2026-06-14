@@ -1423,6 +1423,353 @@ TEST(MetalTraceParity, DualFisheyeEA_MultiMS_WithOverlap) {
   EXPECT_GT(corr, 0.95) << "Metal dual-fisheye-EA multi-MS does not structurally match CpuTraceBackend";
 }
 
+// =============================================================================
+// task-267.4 (continuation-validation) golden-ray absolute physics anchors
+// =============================================================================
+//
+// Drives the real MetalTraceBackend trace kernel with analytically constructed
+// rays via the test-only HostRayBatch::d/p/w/tf injection path (wired in
+// metal_trace_backend.mm). Each test compares the kernel's exit ray against a
+// closed-form physics expectation — Snell's law for parallel-slab refraction,
+// Fresnel weights, total energy bound. Orthogonal to the OracleTraceLayer
+// mirror (which catches "kernel does X, oracle does Y" divergence): these
+// anchors catch the shared-formula bug class where CPU mirror AND kernel
+// implement the same wrong formula.
+//
+// Geometry: MakeMetalScene uses a hex prism h=1.0, hex circumradius 1.0
+// (NoRandom distribution → fully deterministic crystal, RNG-free build). Top
+// and bottom face indices are discovered dynamically via BuildPolyArrays so
+// the tests survive Crystal-internal face id changes.
+
+namespace {
+
+struct PrismFaces {
+  IdType top = kInvalidId;
+  IdType bot = kInvalidId;
+};
+
+PrismFaces FindTopBotFaces(const PolyArrays& poly, size_t poly_cnt) {
+  PrismFaces out;
+  for (size_t fi = 0; fi < poly_cnt; fi++) {
+    float nz = poly.n[fi * 3 + 2];
+    if (nz > 0.9f) {
+      out.top = static_cast<IdType>(fi);
+    } else if (nz < -0.9f) {
+      out.bot = static_cast<IdType>(fi);
+    }
+  }
+  return out;
+}
+
+// Fresnel transmittance using the kernel's own delta parameterisation, mirroring
+// metal_trace_backend.mm's per-hit math (OracleTraceLayer:150-158). The kernel
+// computes dd = (1 - rr²)/cos²θ + rr² (equivalent to 1 - rr²·sin²θ / cos²θ + rr²
+// once you fold terms; numerically identical when sub-critical). Reusing the
+// same form makes the golden weight calculation track any future numerical
+// tweak to the kernel's formula.
+float FresnelTransmitDelta(float cos_theta_abs, float rr) {
+  float dd = (1.0f - rr * rr) / (cos_theta_abs * cos_theta_abs) + rr * rr;
+  if (dd <= 0.0f) {
+    return 0.0f;  // TIR — full reflection
+  }
+  return 1.0f - GetReflectRatio(dd, rr);
+}
+
+// Find the exit ray whose direction is closest to (dx, dy, dz). Returns -1 if
+// no exit is within `tol` total absolute difference. The Metal kernel emits
+// multiple exits per input ray (the reflect-at-entry branch and the
+// transmitted branch are BOTH recorded — see OracleTraceLayer:217-225 for the
+// per-channel exit-emit pattern); golden tests locate the expected exit by
+// direction rather than asserting a single-exit count.
+int FindExitByDirection(const std::vector<ExitRayRecord>& exits, float dx, float dy, float dz, float tol = 5e-3f) {
+  int best = -1;
+  float best_diff = tol;
+  for (size_t i = 0; i < exits.size(); i++) {
+    float diff = std::abs(exits[i].dir[0] - dx) + std::abs(exits[i].dir[1] - dy) + std::abs(exits[i].dir[2] - dz);
+    if (diff < best_diff) {
+      best_diff = diff;
+      best = static_cast<int>(i);
+    }
+  }
+  return best;
+}
+
+}  // namespace
+
+// =============================================================================
+// GoldenRay_NormalIncidence — vertical ray through a parallel slab
+// =============================================================================
+TEST(MetalGoldenRay, NormalIncidenceParallelSlab) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  // Force off device-gen — irrelevant here (injection bypasses gen entirely)
+  // but keeps the test single-threaded deterministic if a future change adds
+  // an off-by-default device-gen fallback for short rays.
+  ForceHostGenForByteIdentity();
+
+  // max_hits=2 bounds the bounce chain so the kernel emits a deterministic
+  // 2-exit pattern: (a) reflect-at-entry going back up through the top face,
+  // (b) refract-out through the bottom face. With max_hits>2 the residual
+  // internally-reflected branch bounces between top/bottom and emits further
+  // exits of geometrically decaying weight — the leading two are unchanged.
+  auto scene = MakeMetalScene(/*max_hits=*/2, /*ms_layers=*/1);
+  auto render = MakeRectangularRender();
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  RandomNumberGenerator local_rng(0);
+  local_rng.SetSeed(spec.seed);
+  Crystal crystal = MakeCrystal(local_rng, scene.ms_[0].setting_[0].crystal_.param_);
+  float n_idx = crystal.GetRefractiveIndex(spec.wl.wl_);
+
+  auto poly = BuildPolyArrays(crystal);
+  size_t poly_cnt = crystal.PolygonFaceCount();
+  PrismFaces faces = FindTopBotFaces(poly, poly_cnt);
+  ASSERT_NE(faces.top, kInvalidId) << "top face (normal ≈ +z) not found";
+  ASSERT_NE(faces.bot, kInvalidId) << "bottom face (normal ≈ -z) not found";
+
+  // Entry point: centroid of top face — well inside the hex (radius 1.0)
+  // so the downward-propagating ray cannot exit through a side wall.
+  std::vector<float> d = { 0.0f, 0.0f, -1.0f };
+  // Entry point fixed at the prism axis on the top face plane (z = +h/2). The
+  // lumice-computed face centroid is a TRIANGLE centroid (not hexagon centre),
+  // offset from the axis — using it shifts the refract path so the ray exits
+  // through a side wall instead of the bottom. Anchor at the axis instead so
+  // the parallel-slab geometry holds.
+  std::vector<float> p = { 0.0f, 0.0f, 0.5f };
+  std::vector<float> w = { 1.0f };
+  std::vector<IdType> tf = { faces.top };
+
+  HostRayBatch host;
+  host.count = 1;
+  host.d = d.data();
+  host.p = p.data();
+  host.w = w.data();
+  host.tf = tf.data();
+  host.crystal = &crystal;
+  host.refractive_index = n_idx;
+  host.crystal_id = 0;
+
+  std::vector<ExitRayRecord> exits;
+  size_t exit_count = 0;
+  {
+    MetalTraceBackend metal;
+    metal.BeginSession(spec);
+    auto h = metal.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h, nullptr);
+    exit_count = metal.ReadbackExitRays(exits);
+    metal.EndSession();
+  }
+
+  ASSERT_GE(exit_count, 2u) << "normal-incidence must emit ≥ 2 exits (reflect-at-entry + transmit-out)";
+
+  // Analytic Fresnel at normal incidence.
+  float r_normal = (n_idx - 1.0f) / (n_idx + 1.0f);
+  r_normal *= r_normal;
+  float t_normal = 1.0f - r_normal;
+
+  // Exit A — reflect-at-entry going back up through top, direction (0,0,+1),
+  // weight = R_normal.
+  int idx_up = FindExitByDirection(exits, 0.0f, 0.0f, 1.0f);
+  ASSERT_GE(idx_up, 0) << "no exit found near direction (0,0,+1)";
+  EXPECT_NEAR(exits[idx_up].dir[0], 0.0f, 1e-4f);
+  EXPECT_NEAR(exits[idx_up].dir[1], 0.0f, 1e-4f);
+  EXPECT_NEAR(exits[idx_up].dir[2], 1.0f, 1e-4f);
+  EXPECT_NEAR(exits[idx_up].weight, r_normal, 5e-4f)
+      << "back-reflect weight: got=" << exits[idx_up].weight << " expected=" << r_normal;
+
+  // Exit B — refract-out through bottom going (0,0,-1), weight = T_normal².
+  int idx_down = FindExitByDirection(exits, 0.0f, 0.0f, -1.0f);
+  ASSERT_GE(idx_down, 0) << "no exit found near direction (0,0,-1)";
+  EXPECT_NEAR(exits[idx_down].dir[0], 0.0f, 1e-4f);
+  EXPECT_NEAR(exits[idx_down].dir[1], 0.0f, 1e-4f);
+  EXPECT_NEAR(exits[idx_down].dir[2], -1.0f, 1e-4f);
+  EXPECT_NEAR(exits[idx_down].weight, t_normal * t_normal, 5e-4f)
+      << "forward-transmit weight: got=" << exits[idx_down].weight << " expected=" << (t_normal * t_normal);
+}
+
+// =============================================================================
+// GoldenRay_Snell30 — oblique ray through a parallel slab preserves direction
+// =============================================================================
+TEST(MetalGoldenRay, Snell30ParallelSlab) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  ForceHostGenForByteIdentity();
+
+  // max_hits=4: leaves room for the reflect-at-entry exit + the
+  // refract-out-the-bottom exit + a couple of internally-bouncing branches
+  // that decay geometrically. We assert on direction; the kernel's per-hit
+  // emit count is not part of the contract.
+  auto scene = MakeMetalScene(/*max_hits=*/4, /*ms_layers=*/1);
+  auto render = MakeRectangularRender();
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  RandomNumberGenerator local_rng(0);
+  local_rng.SetSeed(spec.seed);
+  Crystal crystal = MakeCrystal(local_rng, scene.ms_[0].setting_[0].crystal_.param_);
+  float n_idx = crystal.GetRefractiveIndex(spec.wl.wl_);
+
+  auto poly = BuildPolyArrays(crystal);
+  size_t poly_cnt = crystal.PolygonFaceCount();
+  PrismFaces faces = FindTopBotFaces(poly, poly_cnt);
+  ASSERT_NE(faces.top, kInvalidId);
+  ASSERT_NE(faces.bot, kInvalidId);
+
+  // Incident at 30° from -z, in the x-z plane. d = (sin30, 0, -cos30).
+  constexpr float kTheta = 30.0f * 3.14159265358979323846f / 180.0f;
+  float sin_t = std::sin(kTheta);
+  float cos_t = std::cos(kTheta);
+  std::vector<float> d = { sin_t, 0.0f, -cos_t };
+  // Entry near the top face centroid (well inside the hex). Inside-ice the
+  // refracted angle is arcsin(sinθ/n) ≈ 22.4°; horizontal travel from z=+0.5
+  // to z=-0.5 is tan(22.4°) ≈ 0.41 < hex circumradius 1.0, so the ray exits
+  // through the bottom face.
+  // Entry point fixed at the prism axis on the top face plane (z = +h/2). The
+  // lumice-computed face centroid is a TRIANGLE centroid (not hexagon centre),
+  // offset from the axis — using it shifts the refract path so the ray exits
+  // through a side wall instead of the bottom. Anchor at the axis instead so
+  // the parallel-slab geometry holds.
+  std::vector<float> p = { 0.0f, 0.0f, 0.5f };
+  std::vector<float> w = { 1.0f };
+  std::vector<IdType> tf = { faces.top };
+
+  HostRayBatch host;
+  host.count = 1;
+  host.d = d.data();
+  host.p = p.data();
+  host.w = w.data();
+  host.tf = tf.data();
+  host.crystal = &crystal;
+  host.refractive_index = n_idx;
+  host.crystal_id = 0;
+
+  std::vector<ExitRayRecord> exits;
+  size_t exit_count = 0;
+  {
+    MetalTraceBackend metal;
+    metal.BeginSession(spec);
+    auto h = metal.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h, nullptr);
+    exit_count = metal.ReadbackExitRays(exits);
+    metal.EndSession();
+  }
+
+  ASSERT_GE(exit_count, 2u) << "Snell 30° must emit ≥ 2 exits (reflect-at-entry + transmit-out)";
+
+  // Fresnel weights — single-hit per face.
+  float sin_inside = sin_t / n_idx;
+  float cos_inside = std::sqrt(std::max(0.0f, 1.0f - sin_inside * sin_inside));
+  float t_in = FresnelTransmitDelta(cos_t, 1.0f / n_idx);
+  float t_out = FresnelTransmitDelta(cos_inside, n_idx);
+  float r_in = 1.0f - t_in;
+
+  // Exit A — reflect-at-entry: d_reflect = d - 2(d·n)n with n=(0,0,+1) gives
+  // (sin30, 0, +cos30) (going up and forward). Weight ≈ R(30°).
+  int idx_up = FindExitByDirection(exits, sin_t, 0.0f, cos_t);
+  ASSERT_GE(idx_up, 0) << "no exit found near (sin30, 0, +cos30)";
+  EXPECT_NEAR(exits[idx_up].weight, r_in, 5e-4f)
+      << "reflect-at-entry weight: got=" << exits[idx_up].weight << " expected=" << r_in;
+
+  // Exit B — forward refract through parallel slab: direction unchanged,
+  // weight = T_in × T_out.
+  int idx_down = FindExitByDirection(exits, sin_t, 0.0f, -cos_t);
+  ASSERT_GE(idx_down, 0) << "no exit found near (sin30, 0, -cos30)";
+  EXPECT_NEAR(exits[idx_down].dir[0], sin_t, 1e-4f);
+  EXPECT_NEAR(exits[idx_down].dir[1], 0.0f, 1e-4f);
+  EXPECT_NEAR(exits[idx_down].dir[2], -cos_t, 1e-4f);
+  EXPECT_NEAR(exits[idx_down].weight, t_in * t_out, 5e-4f)
+      << "Snell 30° transmitted weight: got=" << exits[idx_down].weight << " expected=" << (t_in * t_out)
+      << " (cos_in=" << cos_t << " cos_inside=" << cos_inside << ")";
+}
+
+// =============================================================================
+// GoldenRay_EnergyConservation — Σw_exit ≤ w_initial, never grows
+// =============================================================================
+TEST(MetalGoldenRay, EnergyConservationSingleRay) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  ForceHostGenForByteIdentity();
+
+  auto scene = MakeMetalScene(/*max_hits=*/8, /*ms_layers=*/1);
+  auto render = MakeRectangularRender();
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  RandomNumberGenerator local_rng(0);
+  local_rng.SetSeed(spec.seed);
+  Crystal crystal = MakeCrystal(local_rng, scene.ms_[0].setting_[0].crystal_.param_);
+  float n_idx = crystal.GetRefractiveIndex(spec.wl.wl_);
+
+  auto poly = BuildPolyArrays(crystal);
+  size_t poly_cnt = crystal.PolygonFaceCount();
+  PrismFaces faces = FindTopBotFaces(poly, poly_cnt);
+  ASSERT_NE(faces.top, kInvalidId);
+
+  // 45° oblique ray — exercises a non-trivial Fresnel + may bounce off a
+  // side wall internally; the single-path kernel still cannot create energy.
+  constexpr float kTheta = 45.0f * 3.14159265358979323846f / 180.0f;
+  float sin_t = std::sin(kTheta);
+  float cos_t = std::cos(kTheta);
+  std::vector<float> d = { sin_t, 0.0f, -cos_t };
+  // Entry point fixed at the prism axis on the top face plane (z = +h/2). The
+  // lumice-computed face centroid is a TRIANGLE centroid (not hexagon centre),
+  // offset from the axis — using it shifts the refract path so the ray exits
+  // through a side wall instead of the bottom. Anchor at the axis instead so
+  // the parallel-slab geometry holds.
+  std::vector<float> p = { 0.0f, 0.0f, 0.5f };
+  std::vector<float> w = { 1.0f };
+  std::vector<IdType> tf = { faces.top };
+
+  HostRayBatch host;
+  host.count = 1;
+  host.d = d.data();
+  host.p = p.data();
+  host.w = w.data();
+  host.tf = tf.data();
+  host.crystal = &crystal;
+  host.refractive_index = n_idx;
+  host.crystal_id = 0;
+
+  std::vector<ExitRayRecord> exits;
+  size_t exit_count = 0;
+  {
+    MetalTraceBackend metal;
+    metal.BeginSession(spec);
+    auto h = metal.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h, nullptr);
+    exit_count = metal.ReadbackExitRays(exits);
+    metal.EndSession();
+  }
+
+  ASSERT_GE(exit_count, 1u) << "ray must produce at least one exit (kernel never absorbs everything)";
+  double sum_w = 0.0;
+  for (size_t i = 0; i < exit_count; i++) {
+    EXPECT_GE(exits[i].weight, 0.0f) << "exit weight must be non-negative (i=" << i << ")";
+    sum_w += static_cast<double>(exits[i].weight);
+  }
+  // Strict no-energy-gain: single-path refract-priority discards reflected
+  // weight at every internal hit, so Σw_exit ≤ w_initial × (1 - R_first) < 1.
+  // Allow a tight float-noise margin above 1.0.
+  EXPECT_LE(sum_w, 1.0 + 1e-4) << "energy gain: Σw_exit=" << sum_w << " > w_initial=1.0 (exit_count=" << exit_count
+                               << ")";
+}
+
 }  // namespace
 }  // namespace lumice
 
