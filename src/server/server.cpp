@@ -649,22 +649,35 @@ void ServerImpl::ConsumeData() {
         ILOG_DEBUG(logger_, "ConsumeData: discarding batch (generation {} != {})", sim_data.generation_,
                    scene_generation_.load());
       } else {
-        auto t_lock0 = std::chrono::steady_clock::now();
-        std::lock_guard<TicketMutex> lock(consumer_mutex_);
-        auto t_lock1 = std::chrono::steady_clock::now();
-        for (auto& c : consumers_) {
-          c->Consume(sim_data);
-        }
-        auto t_consume = std::chrono::steady_clock::now();
-        snapshot_dirty_ = true;
-        has_ever_consumed_ = true;
-        auto lock_us = std::chrono::duration<double, std::micro>(t_lock1 - t_lock0).count();
-        auto consume_us = std::chrono::duration<double, std::micro>(t_consume - t_lock1).count();
-        ILOG_DEBUG(logger_, "ConsumeData: batch rays={} outgoing={} lock={:.0f}us consume={:.0f}us",
-                   sim_data.rays_.size_, sim_data.outgoing_indices_.size(), lock_us, consume_us);
-        if (!first_consume_logged) {
-          ILOG_INFO(logger_, "ConsumeData: first batch consumed ({} ray segments)", sim_data.rays_.size_);
-          first_consume_logged = true;
+        // 0-exit-batch guard: backend exit-seam path may emplace a SimData with
+        // outgoing_d_/rays_ both empty when all rays were filtered/absorbed
+        // (e.g. selective BD filter). Skip consumer projection so we don't
+        // dirty snapshot_dirty_/has_ever_consumed_ on a black contribution, but
+        // STILL fall through to sim_scene_cnt_-- below — that decrement is the
+        // counter invariant paired with GenerateScene's ++ (see simulator.cpp
+        // exit-seam: empty Emplace must reach the consumer's --). Do not move
+        // the -- inside this branch.
+        bool has_renderable = !sim_data.outgoing_d_.empty() || !sim_data.rays_.Empty();
+        if (has_renderable) {
+          auto t_lock0 = std::chrono::steady_clock::now();
+          std::lock_guard<TicketMutex> lock(consumer_mutex_);
+          auto t_lock1 = std::chrono::steady_clock::now();
+          for (auto& c : consumers_) {
+            c->Consume(sim_data);
+          }
+          auto t_consume = std::chrono::steady_clock::now();
+          snapshot_dirty_ = true;
+          has_ever_consumed_ = true;
+          auto lock_us = std::chrono::duration<double, std::micro>(t_lock1 - t_lock0).count();
+          auto consume_us = std::chrono::duration<double, std::micro>(t_consume - t_lock1).count();
+          ILOG_DEBUG(logger_, "ConsumeData: batch rays={} outgoing={} lock={:.0f}us consume={:.0f}us",
+                     sim_data.rays_.size_, sim_data.outgoing_indices_.size(), lock_us, consume_us);
+          if (!first_consume_logged) {
+            ILOG_INFO(logger_, "ConsumeData: first batch consumed ({} ray segments)", sim_data.rays_.size_);
+            first_consume_logged = true;
+          }
+        } else {
+          ILOG_DEBUG(logger_, "ConsumeData: skip consume (0-exit batch, counter still --)");
         }
       }
     } else {
