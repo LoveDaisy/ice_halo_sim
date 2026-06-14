@@ -240,13 +240,15 @@ _RAW_THRESHOLDS = {
     #     → threshold = floor(0.99) − 0.02 = 0.97 for both
     #   ms_multi_crystal_complex_filter: metal ds=0.9986, cpu_backend ds=0.9985
     #     → threshold = 0.97 for both
-    # BD filter rows: FAIL-LOUD sentinels (impossible ds_corr ≥ 2.0). The tests
-    # are @skip pending 267.6 (metal-bd-exit-seq-parity). If anyone un-skips
-    # WITHOUT recalibrating here, _assert_parity (cm >= 2.0) fails immediately —
-    # preventing a 0.0-threshold "false green" that would silently void the gate.
-    # 267.6 MUST replace these with measured floors when it un-skips.
-    "parity_single_ms_bd_filter":         (2.0, 999.0),
-    "ms_multi_crystal_filtered_bd":       (2.0, 999.0),
+    # BD filter rows: calibrated post-fix (task-metal-bd-exit-seq-parity 2026-06-14).
+    # Pre-fix the server hung on 0-exit batches (sim_scene_cnt_ leak); once the
+    # server reaches IDLE, BD parity matches the other filter rows. 3-run baseline:
+    #   parity_single_ms_bd_filter:    metal ds={0.9800, 0.9791, 0.9799}  cpu_backend={0.9819×3}
+    #   ms_multi_crystal_filtered_bd:  metal ds={0.9903, 0.9903, 0.9904}  cpu_backend ds={0.9902×3}
+    # min ≥ 0.97 across all 3 runs → 0.97 floor adopted (consistent with the rest of
+    # the filter matrix; per plan rule "若 min ≥ 0.97 则直接用 0.97").
+    "parity_single_ms_bd_filter":         (0.97, 0.97),
+    "ms_multi_crystal_filtered_bd":       (0.97, 0.97),
     "parity_single_ms_complex_filter":    (0.97, 0.97),
     "ms_multi_crystal_complex_filter":    (0.97, 0.97),
 }
@@ -456,15 +458,6 @@ def test_parity_multi_ms_prob05_filter():
 # scratchpad/.../task-metal-bd-exit-seq-parity/issue.md for full reasoning.)
 
 @pytest.mark.slow
-@pytest.mark.skip(
-    reason="267.4 discovery (2026-06-14): metal kernel emits 0 surviving rays "
-           "for raypath BD [4,6] under this scene's axis distribution while "
-           "legacy emits ~1920/batch; routed to scrum-267 task "
-           "metal-bd-exit-seq-parity (267.6). Filter-match unit parity (single-call) "
-           "passes — divergence is in the e2e wiring, not the match formula. "
-           "Repro: LUMICE_TRACE_BACKEND=metal Lumice -f "
-           "test/e2e/configs/parity_single_ms_bd_filter.json"
-)
 def test_parity_single_ms_bd_filter():
     (legacy, metal, _cpu), (cm, pm, cc, pc) = _run_parity("parity_single_ms_bd_filter")
     print(f"[parity] parity_single_ms_bd_filter: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
@@ -476,11 +469,6 @@ def test_parity_single_ms_bd_filter():
 # --- Multi MS + BD filter (267.4 matrix extension) ------------------------ #
 
 @pytest.mark.slow
-@pytest.mark.skip(
-    reason="267.4 discovery (2026-06-14): same metal-BD parity gap as the "
-           "single-MS variant (0 surviving rays vs legacy ~2261/batch). "
-           "See test_parity_single_ms_bd_filter skip reason for repro + scope."
-)
 def test_parity_multi_ms_bd_filter():
     (legacy, metal, _cpu), (cm, pm, cc, pc) = _run_parity("ms_multi_crystal_filtered_bd")
     print(f"[parity] ms_multi_crystal_filtered_bd: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
