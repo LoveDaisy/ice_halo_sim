@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781485862093,
+  "lastUpdate": 1781485864429,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -11299,6 +11299,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 97.9,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "064c866e25968157761e3751c93fadd158b56ffd",
+          "message": "Merge pull request #128 from LoveDaisy/feat/gpu-single-engine-impl01\n\nfeat(gpu): device-resident continuation engine (§5 Scrum 1)",
+          "timestamp": "2026-06-15T09:05:25+08:00",
+          "tree_id": "002c927b3387b6839b4d22e45715f46c43bb28f6",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/064c866e25968157761e3751c93fadd158b56ffd"
+        },
+        "date": 1781485863648,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 92.3,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 102.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 100,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 93.5,
             "unit": "%"
           }
         ]
