@@ -37,6 +37,18 @@ void StartPerfSimulation() {
   LUMICE_SetLogLevel(gui::g_server, static_cast<LUMICE_LogLevel>(g_core_log_level));
   gui::SetGuiLogLevel(static_cast<spdlog::level::level_enum>(g_gui_log_level));
 
+  // scrum-268 G1: opt-in Metal backend for GUI-regime perf measurement. The
+  // perf harness otherwise runs the GUI's default CPU path; LUMICE_PERF_METAL=1
+  // routes the sim through Metal so G4 (GUI-first responsiveness acceptance) can
+  // measure first_upload / rays_per_sec / texture_fps on the GPU path. Pair with
+  // a Metal-compatible LUMICE_PERF_CONFIG (dual_fisheye/rectangular lens); the
+  // hardcoded fallback config already uses a rectangular lens. No threshold is
+  // asserted here — G4 owns responsiveness gates.
+  if (const char* m = std::getenv("LUMICE_PERF_METAL"); m && std::string(m) == "1") {
+    LUMICE_SetPreferredBackend(gui::g_server, LUMICE_BACKEND_METAL);
+    fprintf(stderr, "[PERF] LUMICE_PERF_METAL=1 → preferred backend = Metal\n");
+  }
+
   // Retained test capability (introduced by explore-265, concern #2 stress test):
   // if LUMICE_PERF_CONFIG points to a config JSON, load it via the same
   // DeserializeFromJson path auto_ev uses, so the steady_state / slider_drag
