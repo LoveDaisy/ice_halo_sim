@@ -69,6 +69,15 @@ class MetalTraceBackend : public TraceBackend {
   void EndSession() override;
   bool IsCompatible(const RenderConfig& render) const override;
 
+  // Test-only: return the trace_layer_kernel PSO's maxTotalThreadsPerThreadgroup
+  // (or 0 if BeginSession has not yet built the PSO). Used by the scrum-267
+  // task-fused-emit-gate occupancy regression guard — the device-side emit
+  // gate added 64B of thread-local path scratch + the DeviceFilterCheck call
+  // graph, and plan §9 mandates ≥1024 maxThreadsPerThreadgroup as the
+  // wavefront-stay-fused acceptance bar (drop triggers R1 option B = split
+  // gate into its own dispatch).
+  size_t TraceLayerKernelMaxThreadsForTest() const;
+
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

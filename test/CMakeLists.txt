@@ -42,6 +42,16 @@ add_executable(unit_test
   "${PROJ_TEST_DIR}/test_metal_root_gen.cpp"
   "${PROJ_TEST_DIR}/test_exit_records.cpp"
   "${PROJ_TEST_DIR}/test_main.cpp")
+if(APPLE)
+  # scrum-267 task-msl-filter-match-port: parity harness for device filter MATCH.
+  # ObjC++ source (.mm) — needs ARC and the Metal/Foundation frameworks.
+  target_sources(unit_test PRIVATE
+    "${PROJ_TEST_DIR}/test_metal_filter_match_parity.mm")
+  set_source_files_properties(
+    "${PROJ_TEST_DIR}/test_metal_filter_match_parity.mm"
+    PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+  target_link_libraries(unit_test PRIVATE "-framework Metal" "-framework Foundation")
+endif()
 target_include_directories(unit_test
   PRIVATE ${PROJ_TEST_DIR})
 target_link_libraries(unit_test

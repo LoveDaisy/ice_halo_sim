@@ -958,13 +958,10 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   // render.cpp:148), never its values — fill a dummy zero index per ray.
   std::vector<ExitRayRecord> exit_records;
   size_t exit_count = backend.ReadbackExitRays(exit_records);
-  if (exit_count == 0) {
-    // Degenerate batch: all rays absorbed, none exited. Skip emplace — an
-    // empty outgoing_indices_ would trip the non-empty assertion in
-    // render.cpp:148. This batch contributes nothing to the output image.
-    return;
-  }
-
+  // 0-exit batch: still Emplace a SimData so server.cpp::ConsumeData decrements
+  // sim_scene_cnt_. root_ray_count_=ray_num>0 distinguishes from the shutdown
+  // sentinel (rays_ empty && root_ray_count_==0). Consumer-side guard skips the
+  // projection call when outgoing_d_ is empty — do not collapse these two paths.
   std::vector<float> exit_d(exit_count * 3);
   std::vector<float> exit_w(exit_count);
   for (size_t i = 0; i < exit_count; i++) {

@@ -134,6 +134,7 @@ Valuable design/architecture docs live in `doc/` (tracked). Consult the relevant
   - `seam-design.md` — **the `TraceBackend` host/device seam redesign blueprint**; §5 = single-engine, three-clock-decoupled GPU simulator (the target architecture); §3.6 "原始之罪" = why GPU must not mirror the CPU pipeline.
   - `gpu-route-history.md` — systematic retrospective of the GPU migration (#250→265): decision evolution, accumulated data assets, leftover-item ledger.
   - `trace-backend-frame-lifecycle.md` — Metal frame lifecycle (as-built, multi-MS transit, parity harness methodology).
+  - `gpu-single-engine-implementation.md` — **§5 单引擎重写的实现设计 + 上下文锚**（explore-266 de-risk 固化：device 续传 filter 可行/divergence 裁决/device gate 融进 kernel 逐跳 emit；2-scrum 弧；legacy=ground truth + raw-XYZ parity）；后续 GPU 单引擎 scrum 的引用源。
 - **Perf / testing**: `performance-testing.md`, `windows-remote-testing.md`, `xyz-stats-tool.md`
 - Example config: `examples/config_example.json`
 
@@ -153,6 +154,14 @@ owner already settled. Avoid it:
      directions. Check the `doc/` index above.
   3. **Explicitly continue prior threads** ("this refines concern #X") rather than
      starting fresh. If new evidence conflicts with a prior conclusion, connect them.
+- **Don't re-measure what's already de-risked.** Before running ANY benchmark or
+  experiment on a recurring topic, `grep` the relevant prior `experiments.md` for that
+  exact measurement — if it's there, harvest the number, do NOT re-run it. Reading a
+  SUMMARY is not enough: it gives conclusions, but the failure mode is re-running the
+  experiment, so check `experiments.md` at row level. A *design* explore's job is to
+  de-risk the unresolved frontier (the blueprint's open §-items), not to re-confirm the
+  premise the blueprint already rests on. Self-check: if your "finding" restates a
+  sentence already in some prior insights/experiments, you are re-deriving — stop.
 - **The scratchpad system is the source of truth for in-flight reasoning.**
   `scratchpad/tasks.md` (the task ledger), `scratchpad/backlog.md` (deferred work +
   owner concerns), `scratchpad/explore-*/` & `scratchpad/scrum-*/` (per-effort
