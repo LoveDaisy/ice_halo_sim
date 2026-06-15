@@ -840,10 +840,14 @@ TEST_F(ServerLifecycleApi, StressStartStop) {
 TEST_F(ServerLifecycleApi, ZeroExitBatchNoHang) {
 #ifdef _WIN32
   ::_putenv_s("LUMICE_TRACE_BACKEND", "cpu_backend");
-  struct EnvGuard { ~EnvGuard() { ::_putenv_s("LUMICE_TRACE_BACKEND", ""); } } guard;
+  struct EnvGuard {
+    ~EnvGuard() { ::_putenv_s("LUMICE_TRACE_BACKEND", ""); }
+  } guard;
 #else
   ::setenv("LUMICE_TRACE_BACKEND", "cpu_backend", 1);
-  struct EnvGuard { ~EnvGuard() { ::unsetenv("LUMICE_TRACE_BACKEND"); } } guard;
+  struct EnvGuard {
+    ~EnvGuard() { ::unsetenv("LUMICE_TRACE_BACKEND"); }
+  } guard;
 #endif
 
   auto json = MakeBdFilterConfigJson();
