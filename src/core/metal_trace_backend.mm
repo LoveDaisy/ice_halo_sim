@@ -1151,6 +1151,17 @@ struct MetalTraceBackend::Impl {
   // Reset() as a defensive session-boundary cleanup.
   std::optional<GenRootKernelParams> pending_gen_params_{};
 
+  // task-268.7 architectural-layer move: DispatchLayer now commits without
+  // waiting; the last committed command buffer parks here so TraceLayer's
+  // ci-loop can wait + read back at a single explicit sync point. This is a
+  // STRUCTURAL precondition for the transit+trace CB merge below (the merged
+  // CB still needs exactly one commit and one wait, just relocated). The
+  // direct latency win comes from Step 3 (one CB per non-first MS ci instead
+  // of two) and Step 1 (single-engine, no GPU contention); pending_cb_ alone
+  // does not introduce in-flight overlap in the single-ci common case.
+  id<MTLCommandBuffer> pending_cb_ = nil;
+  int pending_out_slot_ = 0;  // out_slot for the dispatch parked in pending_cb_
+
   id<MTLDevice>               device = nil;
   id<MTLCommandQueue>         queue  = nil;
   id<MTLComputePipelineState> pso    = nil;
@@ -1387,12 +1398,24 @@ struct MetalTraceBackend::Impl {
   // root_*_buf in lock-step with the trace kernel's input layout.
   void EncodeTransitRoot(id<MTLCommandBuffer> cb, const GenRootKernelParams& gp,
                          int in_slot, size_t ci_start);
+  // DispatchLayer encodes the trace pass (and any pending gen_root) into either
+  // a freshly-created command buffer or `existing_cb` (used by the non-first
+  // MS path to share the CB with a preceding EncodeTransitRoot), commits the
+  // CB without waiting, and parks it in `pending_cb_` along with `out_slot`.
+  // The caller MUST invoke WaitAndReadbackLayer() before reading any host-
+  // visible output (cont_counts, last_stats, exit_slot_buf).
   void DispatchLayer(size_t num_rays,
                      id<MTLBuffer> r_d, id<MTLBuffer> r_p,
                      id<MTLBuffer> r_w, id<MTLBuffer> r_tf,
                      uint32_t ms_mode, int out_slot,
                      uint32_t counter_init,
-                     uint32_t crystal_id, uint32_t ms_layer_idx);
+                     uint32_t crystal_id, uint32_t ms_layer_idx,
+                     id<MTLCommandBuffer> existing_cb = nil);
+  // Waits on `pending_cb_` (if any), validates status, reads back the
+  // continuation counter into cont_counts[pending_out_slot_], accumulates
+  // last_stats from exit_count_buf/exit_w_sum_buf, and clears pending_cb_.
+  // No-op when pending_cb_ is nil (safe to call at ci-loop tail).
+  void WaitAndReadbackLayer();
   void Reset();
 };
 
@@ -2140,7 +2163,13 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
                                             id<MTLBuffer> r_w, id<MTLBuffer> r_tf,
                                             uint32_t ms_mode, int out_slot,
                                             uint32_t counter_init,
-                                            uint32_t crystal_id, uint32_t ms_layer_idx) {
+                                            uint32_t crystal_id, uint32_t ms_layer_idx,
+                                            id<MTLCommandBuffer> existing_cb) {
+  // task-268.7 invariant: caller drains any prior pending CB before issuing
+  // the next DispatchLayer; otherwise we would overwrite pending_cb_ and lose
+  // its continuation counter / exit stats. TraceLayer's ci-loop calls
+  // WaitAndReadbackLayer() at every iteration tail.
+  assert(pending_cb_ == nil && "DispatchLayer: pending_cb_ must be drained before next dispatch");
   KernelParams params{};
   params.n_idx    = current_n_idx;
   params.max_hits = static_cast<uint32_t>(spec.scene->max_hits_);
@@ -2222,15 +2251,20 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   *static_cast<uint32_t*>([exit_count_buf contents]) = 0u;
   *static_cast<float*>([exit_w_sum_buf contents]) = 0.0f;
 
-  id<MTLCommandBuffer> cb = [queue commandBuffer];
+  // task-268.7: caller may supply `existing_cb` so transit_root + trace share
+  // one CB on non-first MS layers (Step 3). Same Apple-Silicon shared-memory
+  // RAW-visibility argument as gen+trace fusion (explore-263 / task-264).
+  id<MTLCommandBuffer> cb = existing_cb != nil ? existing_cb : [queue commandBuffer];
   // task-264 gen+trace fusion: if a device root-gen was stashed by
   // GenerateFirstLayerRootsForCi for this ci, encode it into the same cb
   // ahead of the trace pass. Two sequential compute encoders on one cb share
   // a single commit/wait round-trip; Apple Silicon + MTLResourceStorageModeShared
   // root_* buffers guarantee read-after-write visibility across encoders
   // without an explicit memoryBarrierWithScope (verified by parity at corr
-  // 0.946 in explore-263).
+  // 0.946 in explore-263). Mutually exclusive with `existing_cb != nil`:
+  // gen_root only stashes on the FIRST MS layer (transit-root is non-first).
   if (pending_gen_params_.has_value()) {
+    assert(existing_cb == nil && "gen_root stash + existing_cb both set");
     EncodeGenRoot(cb, *pending_gen_params_);
     pending_gen_params_.reset();
   }
@@ -2284,9 +2318,25 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   [enc dispatchThreads:MTLSizeMake(num_rays, 1, 1)
    threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
   [enc endEncoding];
+  // task-268.7: commit without waiting; the caller drains via
+  // WaitAndReadbackLayer() at the ci-loop tail. Park CB + out_slot so the
+  // readback routes to the correct cont_counts slot.
   [cb commit];
-  [cb waitUntilCompleted];
+  pending_cb_ = cb;
+  pending_out_slot_ = out_slot;
+}
 
+void MetalTraceBackend::Impl::WaitAndReadbackLayer() {
+  if (pending_cb_ == nil) {
+    return;
+  }
+  id<MTLCommandBuffer> cb = pending_cb_;
+  int out_slot = pending_out_slot_;
+  // Clear up-front so a fail-and-assert path leaves pending_cb_ in a sane
+  // state (subsequent DispatchLayer's drain-invariant assert would otherwise
+  // double-trip on a CB we already gave up on).
+  pending_cb_ = nil;
+  [cb waitUntilCompleted];
   if (cb.status != MTLCommandBufferStatusCompleted) {
     ILOG_ERROR(EffectiveLogger(logger_),
                "MetalTraceBackend: GPU dispatch failed: {}",
@@ -2334,6 +2384,14 @@ void MetalTraceBackend::Impl::Reset() {
   // iteration that set it; clearing here protects against stale state if a
   // session ends mid-ci on an error path.
   pending_gen_params_.reset();
+  // task-268.7: in a healthy run TraceLayer drains pending_cb_ at the ci-loop
+  // tail (and again before overflow check); clearing here is the defensive
+  // session-boundary cleanup mirror of the gen_params reset above.
+  if (pending_cb_ != nil) {
+    [pending_cb_ waitUntilCompleted];
+    pending_cb_ = nil;
+  }
+  pending_out_slot_ = 0;
   // root_ray_count INTENTIONALLY persists across Reset(): each EndSession()
   // is followed (in the next BeginSession) by another GenerateFirstLayerRootsForCi
   // dispatch that must observe a globally monotone gen_ray_base. The counter
@@ -2677,13 +2735,11 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
         // host frame-transit needed. The TotalTriangles() ≤ 64 guard
         // mirrors `can_use_device_gen` (kMaxTriPerKernel kernel stack-array
         // bound); canonical configs (hex column ~16 tri) never hit it.
-        // TODO(perf): per-ci independent transit_cb + waitUntilCompleted
-        // produces N CPU-GPU sync points per MS layer. Acceptable for the
-        // canonical few-crystal configs (and consistent with the existing
-        // per-crystal serial dispatch model). If multi-crystal MS layers
-        // become the bottleneck, merge same-MS-layer ci dispatches into a
-        // single cb (encode-in-loop, commit+wait outside) to drop the
-        // intermediate sync points.
+        // task-268.7 Step 3: transit_root + trace_layer now share a single
+        // command buffer per ci. Apple-Silicon shared-memory RAW visibility
+        // across sequential compute encoders on one CB is verified (explore-
+        // 263 gen+trace fusion corr 0.946 / task-264). The merge halves the
+        // per-ci CPU-GPU sync point count on non-first MS layers (from 2 to 1).
         if (impl_->current_crystal.TotalTriangles() > 64u) {
           ILOG_ERROR(EffectiveLogger(impl_->logger_),
                      "transit_root_kernel: crystal ci={} tri_count={} exceeds kMaxTriPerKernel=64; ci skipped",
@@ -2691,48 +2747,49 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
           ci_start += ci_n;
           continue;
         }
-        {
-          // Monotone advance — mirrors gen_root's root_ray_count contract so
-          // per-SimBatch transit dispatches on (layer,ci) consume disjoint PCG
-          // ranges. UINT32_MAX bound matches gen_ray_base width (line ~1830).
-          assert(impl_->transit_ray_count_ <= static_cast<size_t>(UINT32_MAX) - ci_n &&
-                 "transit_ray_count_ overflow: gen_ray_base width exceeded");
-          auto transit_gp = impl_->BuildTransitRootParams(
-              setting, ci_n,
-              static_cast<uint32_t>(impl_->ms_idx),
-              static_cast<uint32_t>(ci),
-              static_cast<uint32_t>(impl_->transit_ray_count_));
-          id<MTLCommandBuffer> transit_cb = [impl_->queue commandBuffer];
-          impl_->EncodeTransitRoot(transit_cb, transit_gp, in_slot, ci_start);
-          [transit_cb commit];
-          [transit_cb waitUntilCompleted];
-          if (transit_cb.error != nil) {
-            ILOG_ERROR(EffectiveLogger(impl_->logger_),
-                       "transit_root_kernel GPU error (ci={} ms_layer={}): {}",
-                       ci, impl_->ms_idx,
-                       [[transit_cb.error localizedDescription] UTF8String]);
-            // Skip DispatchLayer: root_*_buf contents are undefined after a
-            // failed transit cb; feeding them to the trace kernel would
-            // produce silent garbage. Mirror the TotalTriangles > 64 skip
-            // pattern above.
-            ci_start += ci_n;
-            continue;
-          }
-          // Advance ONLY after a successful transit cb so a skipped/failed
-          // dispatch does not burn PCG range (kept disjoint with subsequent
-          // successful dispatches on the same (layer,ci)).
-          impl_->transit_ray_count_ += ci_n;
-        }
+        // Monotone advance — mirrors gen_root's root_ray_count contract so
+        // per-SimBatch transit dispatches on (layer,ci) consume disjoint PCG
+        // ranges. UINT32_MAX bound matches gen_ray_base width (line ~1830).
+        assert(impl_->transit_ray_count_ <= static_cast<size_t>(UINT32_MAX) - ci_n &&
+               "transit_ray_count_ overflow: gen_ray_base width exceeded");
+        auto transit_gp = impl_->BuildTransitRootParams(
+            setting, ci_n,
+            static_cast<uint32_t>(impl_->ms_idx),
+            static_cast<uint32_t>(ci),
+            static_cast<uint32_t>(impl_->transit_ray_count_));
+        id<MTLCommandBuffer> combined_cb = [impl_->queue commandBuffer];
+        impl_->EncodeTransitRoot(combined_cb, transit_gp, in_slot, ci_start);
+        // Advance unconditionally now: with the merged CB we no longer probe
+        // transit success before issuing trace. A failed combined CB surfaces
+        // via WaitAndReadbackLayer's status check (same recovery semantics as
+        // gen+trace fusion — assert in debug, log+continue in release).
+        impl_->transit_ray_count_ += ci_n;
         ci_start += ci_n;
         in_count = ci_n;  // all cont rays already filter+prob-passed by the
                           // prior layer's device emit gate; transit cannot
                           // drop rays.
+
+        // counter_init = current cumulative write offset; ci=0 starts at 0,
+        // each subsequent ci resumes where the previous one's atomic
+        // counter left off (already read back into cont_counts[out_slot]
+        // by the previous WaitAndReadbackLayer call).
+        uint32_t counter_init_nf = static_cast<uint32_t>(impl_->cont_counts[out_slot]);
+        impl_->DispatchLayer(in_count,
+                             impl_->root_d_buf, impl_->root_p_buf,
+                             impl_->root_w_buf, impl_->root_tf_buf,
+                             ms_mode, out_slot, counter_init_nf,
+                             static_cast<uint32_t>(ci),
+                             static_cast<uint32_t>(impl_->ms_idx),
+                             combined_cb);
+        // task-268.7: drain the combined CB at the ci tail so cont_counts /
+        // last_stats are populated before the next ci reads them as
+        // counter_init. Single-ci configs hit this once per layer (still one
+        // commit+wait pair, same wall-clock).
+        impl_->WaitAndReadbackLayer();
+        continue;
       }
 
-      // counter_init = current cumulative write offset; ci=0 starts at 0,
-      // each subsequent ci resumes where the previous one's atomic
-      // counter left off (already read back into cont_counts[out_slot]
-      // by the previous DispatchLayer via waitUntilCompleted).
+      // first_ms (or single-MS) branch: DispatchLayer creates its own CB.
       uint32_t counter_init = static_cast<uint32_t>(impl_->cont_counts[out_slot]);
       impl_->DispatchLayer(in_count,
                            impl_->root_d_buf, impl_->root_p_buf,
@@ -2740,10 +2797,19 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
                            ms_mode, out_slot, counter_init,
                            static_cast<uint32_t>(ci),
                            static_cast<uint32_t>(impl_->ms_idx));
+      // task-268.7: in-loop drain mirrors the non-first MS branch. Single-ci
+      // configs trigger this once per layer; the post-loop nil-check below is
+      // a defensive safety net.
+      impl_->WaitAndReadbackLayer();
       // ci_start was incremented above inside the !first_ms branch (before
       // the in_count==0 continue), so the next ci reads the correct slice
       // even if this ci's filter+prob dropped everything.
     }  // ci-loop
+
+    // task-268.7 safety net: WaitAndReadbackLayer is invoked at every ci tail,
+    // so pending_cb_ is expected to be nil here. The call is a no-op when nil
+    // (defensive against a future code path that skips the in-loop drain).
+    impl_->WaitAndReadbackLayer();
 
     // task-268.4 grow-on-overflow: exit_slot_buf is atomically incremented by
     // the kernel for every emit (final-layer exit and ms_mode==1 mid-exit).

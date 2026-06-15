@@ -70,7 +70,8 @@ LUMICE_Server* LUMICE_CreateServerEx(const LUMICE_ServerConfig* config) {
   auto* s = new LUMICE_Server;
   int num_workers = (config != nullptr) ? config->num_workers : 0;
   uint32_t sim_seed = (config != nullptr) ? config->sim_seed : 0;
-  s->server_ = std::make_unique<ns::Server>(num_workers, sim_seed);
+  int preferred_backend = (config != nullptr) ? config->preferred_backend : 0;
+  s->server_ = std::make_unique<ns::Server>(num_workers, sim_seed, preferred_backend);
   return s;
 }
 

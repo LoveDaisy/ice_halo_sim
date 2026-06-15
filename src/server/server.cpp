@@ -56,7 +56,7 @@ class TicketMutex {
 // =============== ServerImpl ===============
 class ServerImpl {
  public:
-  explicit ServerImpl(int num_workers = 0, uint32_t sim_seed = 0);
+  explicit ServerImpl(int num_workers = 0, uint32_t sim_seed = 0, int preferred_backend = 0);
   ~ServerImpl();
 
   Error CommitConfig(const nlohmann::json& config_json, bool* out_reused = nullptr);
@@ -72,7 +72,10 @@ class ServerImpl {
   void SetPreferredBackend(int backend);
 
  private:
-  static const int kDefaultSimulatorCnt;  // runtime: PhysicalCoreCount() (SMT siblings left for consumer + OS)
+  // task-268.7: single-engine orchestration — server now runs exactly one
+  // Simulator. The legacy kDefaultSimulatorCnt = PhysicalCoreCount() was removed
+  // along with the 12-worker queue-per-Simulator pattern; num_workers is reserved
+  // and ignored. See doc/gpu-single-engine-implementation.md §6.
   static constexpr int kMaxSceneCnt = 128;
   static constexpr size_t kDefaultRayNum = 128;
 
@@ -152,9 +155,6 @@ class ServerImpl {
   Logger& GetLogger() { return logger_; }
 };
 
-const int ServerImpl::kDefaultSimulatorCnt = PhysicalCoreCount();
-
-
 template <typename F>
 void ServerImpl::RunPersistentLoop(F work_fn) {
   uint64_t my_gen = 0;
@@ -189,20 +189,52 @@ void ServerImpl::RunPersistentLoop(F work_fn) {
 }
 
 
-ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed)
+namespace {
+// task-268.7 (owner 2026-06-15): the CPU and GPU routes do NOT mirror each other
+// — each picks its own optimal orchestration, so the server runs two parallel
+// shapes. The GPU/Metal route is a SINGLE engine (N engines would contend one
+// GPU — explore-263); the legacy CPU route keeps MULTI-worker parallelism (that
+// IS its performance model — collapsing it to 1 worker is a ~6x regression on
+// the perf baseline + GUI default path). The route is fixed at construction; the
+// GUI reconstructs the server when the Metal checkbox toggles. An env
+// LUMICE_TRACE_BACKEND override (CLI / --benchmark) takes precedence over the
+// preferred_backend argument, mirroring CreateBackend (simulator.cpp).
+bool ResolveMetalRoute(int preferred_backend) {
+#if defined(__APPLE__)
+  if (const char* raw = std::getenv("LUMICE_TRACE_BACKEND")) {
+    const std::string name = raw;
+    if (name == "metal") return true;
+    if (name == "cpu_backend" || name == "legacy") return false;
+  }
+  return preferred_backend == 1;  // 1 == LUMICE_BACKEND_METAL
+#else
+  (void)preferred_backend;
+  return false;  // Metal unavailable off-Apple → CPU multi-worker route
+#endif
+}
+}  // namespace
+
+ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed, int preferred_backend)
     : config_manager_{}, scene_queue_(std::make_shared<Queue<SimBatch>>()),
       data_queue_(std::make_shared<Queue<SimData>>()), status_(ServerStatus::kIdle) {
-  int worker_count = num_workers > 0 ? num_workers : kDefaultSimulatorCnt;
-  if (sim_seed != 0) {
-    worker_count = 1;
+  preferred_backend_.store(preferred_backend, std::memory_order_release);
+  int worker_count;
+  if (ResolveMetalRoute(preferred_backend)) {
+    worker_count = 1;  // GPU route: single engine (task-268.7)
+  } else {
+    worker_count = num_workers > 0 ? num_workers : PhysicalCoreCount();
+    if (sim_seed != 0) {
+      worker_count = 1;  // deterministic CPU contract: fixed seed → single worker
+    }
   }
   for (int i = 0; i < worker_count; i++) {
-    uint32_t worker_seed = sim_seed != 0 ? sim_seed + static_cast<uint32_t>(i) : 0;
+    uint32_t worker_seed = sim_seed != 0 ? sim_seed + static_cast<uint32_t>(i) : 0u;
     simulators_.emplace_back(scene_queue_, data_queue_, worker_seed);
   }
 
-  // Spawn persistent threads — they start in cv.wait(), not working.
-  // Each thread tracks start_generation_ to avoid re-entering work after natural completion.
+  // Spawn persistent threads — they start in cv.wait(), not working. All
+  // simulators_ are emplaced above first, so the &s references stay valid (no
+  // further vector reallocation).
   for (auto& s : simulators_) {
     simulator_threads_.emplace_back([this, &s]() { RunPersistentLoop([&s] { s.Run(); }); });
   }
@@ -865,7 +897,8 @@ void ServerImpl::SetLogLevel(LogLevel level) {
 // =============== Server ===============
 Server::Server() : impl_(std::make_shared<ServerImpl>()) {}
 
-Server::Server(int num_workers, uint32_t sim_seed) : impl_(std::make_shared<ServerImpl>(num_workers, sim_seed)) {}
+Server::Server(int num_workers, uint32_t sim_seed, int preferred_backend)
+    : impl_(std::make_shared<ServerImpl>(num_workers, sim_seed, preferred_backend)) {}
 
 Error Server::CommitConfig(const nlohmann::json& config_json, bool* out_reused) {
   if (!impl_) {

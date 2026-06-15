@@ -256,14 +256,18 @@ int main(int argc, char** argv) {
     }
 
     auto cores = static_cast<int>(std::thread::hardware_concurrency());
+    // task-268.7: server is always single-engine; num_workers is ignored. The
+    // "multi" pass remains as a higher ray-count comparison vs. the reduced
+    // "single" pass — both run with one Simulator. The `multi_workers` label
+    // is kept only for benchmark-output continuity.
     int multi_workers = lumice::PhysicalCoreCount();
 
-    // Pass 1: single worker, reduced rays
+    // Pass 1: reduced rays (label="single")
     auto single_config = config_json;
     single_config["scene"]["ray_num"] = kBenchmarkSingleRays;
     RunBenchmarkPass(single_config.dump(), 1, "single", cores, log_level);
 
-    // Pass 2: multi worker, original ray count
+    // Pass 2: original ray count (label="multi"; worker count is still 1)
     RunBenchmarkPass(config_json.dump(), multi_workers, "multi", cores, log_level);
 
     return 0;

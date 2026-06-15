@@ -86,9 +86,13 @@ typedef struct LUMICE_StatsResult_ {
 
 // =============== Server Configuration ===============
 typedef struct LUMICE_ServerConfig_ {
-  int num_workers;        // Number of simulator worker threads. 0 = default (physical core count)
-  unsigned int sim_seed;  // Deterministic seed for worker RNGs. 0 = random (default).
-                          // Non-zero collapses to 1 worker for bit-stable results.
+  int num_workers;          // CPU route only: worker count (0 = PhysicalCoreCount()).
+                            // Ignored on the GPU/Metal route (always one engine, task-268.7).
+  unsigned int sim_seed;    // Deterministic seed for the worker RNG. 0 = random (default).
+  int preferred_backend;    // LUMICE_BACKEND_CPU (0, multi-worker) or LUMICE_BACKEND_METAL
+                            // (1, single engine). Fixes the route at construction; the worker
+                            // count follows it. env LUMICE_TRACE_BACKEND overrides. The GUI
+                            // reconstructs the server when the Metal checkbox toggles.
 } LUMICE_ServerConfig;
 
 // =============== Server Lifecycle ===============
