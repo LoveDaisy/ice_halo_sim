@@ -200,6 +200,12 @@ def test_metal_exit_conservation_heavy():
 
     env = dict(os.environ)
     env["LUMICE_TRACE_BACKEND"] = "metal"
+    # The cmake_install CLI is dynamically linked against liblumice.dylib after a
+    # shared-lib (-s) build but ships without an LC_RPATH on this host (known
+    # quirk), so it SIGABRTs on @rpath load unless DYLD_LIBRARY_PATH points at the
+    # dylib. Slow capi tests sidestep this via LUMICE_LIB; this CLI-driven test
+    # must set DYLD explicitly to stay robust across static/shared builds.
+    env.setdefault("DYLD_LIBRARY_PATH", str(get_project_root() / "build" / "Release" / "lib"))
     try:
         with tempfile.TemporaryDirectory() as outdir:
             proc = subprocess.run(
