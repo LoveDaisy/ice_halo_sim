@@ -1,0 +1,271 @@
+{
+  "crystal": [
+    {
+      "axis": {
+        "azimuth": {
+          "mean": 0,
+          "std": 360,
+          "type": "uniform"
+        },
+        "roll": {
+          "mean": 0,
+          "std": 360,
+          "type": "uniform"
+        },
+        "zenith": {
+          "mean": 0,
+          "std": 360,
+          "type": "uniform"
+        }
+      },
+      "id": 1,
+      "shape": {
+        "height": 1
+      },
+      "type": "prism"
+    },
+    {
+      "axis": {
+        "azimuth": {
+          "mean": 0,
+          "std": 360,
+          "type": "uniform"
+        },
+        "roll": {
+          "mean": 0,
+          "std": 360,
+          "type": "uniform"
+        },
+        "zenith": {
+          "mean": 0,
+          "std": 1,
+          "type": "gauss"
+        }
+      },
+      "id": 2,
+      "shape": {
+        "height": 0.3
+      },
+      "type": "prism"
+    },
+    {
+      "axis": {
+        "azimuth": {
+          "mean": 0,
+          "std": 360,
+          "type": "uniform"
+        },
+        "roll": {
+          "mean": 0,
+          "std": 1,
+          "type": "gauss"
+        },
+        "zenith": {
+          "mean": 0,
+          "std": 40,
+          "type": "gauss"
+        }
+      },
+      "id": 3,
+      "shape": {
+        "height": 1
+      },
+      "type": "prism"
+    },
+    {
+      "axis": {
+        "azimuth": {
+          "mean": 0,
+          "std": 360,
+          "type": "uniform"
+        },
+        "roll": {
+          "mean": 0,
+          "std": 360,
+          "type": "uniform"
+        },
+        "zenith": {
+          "mean": 90,
+          "std": 1,
+          "type": "gauss"
+        }
+      },
+      "id": 4,
+      "shape": {
+        "height": 1
+      },
+      "type": "prism"
+    },
+    {
+      "axis": {
+        "azimuth": {
+          "mean": 0,
+          "std": 360,
+          "type": "uniform"
+        },
+        "roll": {
+          "mean": 0,
+          "std": 1,
+          "type": "gauss"
+        },
+        "zenith": {
+          "mean": 0,
+          "std": 40,
+          "type": "gauss"
+        }
+      },
+      "id": 5,
+      "shape": {
+        "face_distance": [
+          1,
+          2,
+          1,
+          2,
+          1,
+          2
+        ],
+        "height": 1
+      },
+      "type": "prism"
+    },
+    {
+      "axis": {
+        "azimuth": {
+          "mean": 0,
+          "std": 360,
+          "type": "uniform"
+        },
+        "roll": {
+          "mean": 0,
+          "std": 360,
+          "type": "uniform"
+        },
+        "zenith": {
+          "mean": 0,
+          "std": 1,
+          "type": "gauss"
+        }
+      },
+      "id": 6,
+      "shape": {
+        "height": 0.5
+      },
+      "type": "prism"
+    },
+    {
+      "axis": {
+        "azimuth": {
+          "mean": 0,
+          "std": 360,
+          "type": "uniform"
+        },
+        "roll": {
+          "mean": 0,
+          "std": 360,
+          "type": "uniform"
+        },
+        "zenith": {
+          "mean": 90,
+          "std": 1,
+          "type": "gauss"
+        }
+      },
+      "id": 7,
+      "shape": {
+        "height": 1.5
+      },
+      "type": "prism"
+    }
+  ],
+  "filter": [],
+  "render": [
+    {
+      "background": [
+        0,
+        0,
+        0
+      ],
+      "id": 1,
+      "intensity_factor": 1,
+      "lens": {
+        "fov": 180,
+        "type": "dual_fisheye_equal_area"
+      },
+      "opacity": 1,
+      "overlap": 0.0872,
+      "resolution": [
+        2048,
+        1024
+      ],
+      "view": {
+        "azimuth": 0,
+        "elevation": 0,
+        "roll": 0
+      },
+      "visible": "full"
+    }
+  ],
+  "scene": {
+    "light_source": {
+      "altitude": 20,
+      "diameter": 0.5,
+      "spectrum": "D65",
+      "type": "sun"
+    },
+    "max_hits": 12,
+    "ray_num": 5000000,
+    "scattering": [
+      {
+        "entries": [
+          {
+            "crystal": 1,
+            "proportion": 100
+          },
+          {
+            "crystal": 2,
+            "proportion": 50
+          },
+          {
+            "crystal": 3,
+            "proportion": 30
+          },
+          {
+            "crystal": 4,
+            "proportion": 100
+          }
+        ],
+        "prob": 0.7
+      },
+      {
+        "entries": [
+          {
+            "crystal": 1,
+            "proportion": 20
+          },
+          {
+            "crystal": 2,
+            "proportion": 30
+          },
+          {
+            "crystal": 5,
+            "proportion": 100
+          }
+        ],
+        "prob": 0.7
+      },
+      {
+        "entries": [
+          {
+            "crystal": 6,
+            "proportion": 100
+          },
+          {
+            "crystal": 7,
+            "proportion": 100
+          }
+        ],
+        "prob": 0
+      }
+    ]
+  }
+}

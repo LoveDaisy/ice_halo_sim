@@ -84,6 +84,17 @@
 - **⭐ R1 option B 评估（occupancy 704 < 1024 基线）**：267.2 的 emit gate 把 `trace_layer_kernel` 生产 PSO 的 `maxTotalThreadsPerThreadgroup` 从 **1024 压到 704**（gate 加 `path_local[64]` + DeviceFilterCheck 调用图，寄存器压力实增；#250 标的"唯一真风险"首次在融合后兑现）。owner 裁决 Scrum 1 接受 704（C2：Scrum 1 验收=correctness 非吞吐；occupancy 不影响正确性，parity 全绿）。**Scrum 2 必做**：在 multi-MS+filter 上对 legacy 实测吞吐——**若吞吐相对 legacy 恶化 > 阈值（建议先定 ~10%），则触发 R1 option B = 把 filter-gate 从 trace kernel 拆成独立 wavefront dispatch 恢复并行度**；若无恶化，可将 occupancy 回归门从临时的 640 升到实测基准 704。**此触发判据须落成 Scrum 2 planning 的必测项（非 TODO），否则会悬空**（code-review-02 Suggestion 1/4）。
 - **gate cleanup（Scrum 2 顺带）**：①`DeviceFilterCheck` 第 7 形参在 `kFilterMatchHelperSrc` 定义层仍名 `crystal_id`，正确实参是 `gate_slot`（= `ms_layer_idx*max_ci+crystal_id`）——建议改名 `orbit_slot` 使 API 自描述（当前靠调用点注释保护，不可扩展）；②`gate_seed` 在 `(ms_layer_idx=0,crystal_id=0)` 退化为 `gen_seed_`、与 gen_root PCG 种子重叠（corner case，M5 parity 未受影响）——加非零 XOR 偏置消除。
 
+## 6.2 反漂移纪律（D1-D4，贯穿 §5 弧的实施纪律）
+
+> 背景：seam-design 蓝图很早就讨论清楚，但 #250→265 多次翻车不是方向问题，而是**实施时贪图最小努力、被现有代码同化、走小步偏移**（§3.6 原始之罪的复发）。Scrum 1 没漂移，正因为有 **C1 硬规则**（删非改 / 干净引擎 / 唯一验收门）。把同款纪律一般化、前置固化为后续每个 scrum 的实施约束。依据 a04（系统完整性先于局部 / 举证责任在增加方 / 减法优先 / 过程信号是架构警报）+ a05（软约束必失效→固化为门禁）。
+
+- **D1 验收门 pre-register**：每个 scrum 的数值验收门在 implementation 之前钉死进 `scrum.md`，门的测试 harness 作为头几个子任务先建。**禁止事后放宽门来迁就实现**——这正是 scrum-267 续传欠采样 bug 被"放宽 corr 阈值"掩盖的复发模式（[[feedback_gpu_parity_corr_masks_undersampling]]）。
+- **D2 删非包 + 前置 reuse/discard 账本**：design explore 收敛时产出"复用/删除账本"（仿 §5.1），**点名要删除的 legacy 结构**，禁止"在旧结构外面再包一层适配器"（包不是删）。
+- **D3 plan-review / code-review 必答三问（不答即 block）**：每个实现子任务的 plan 和 diff 显式回答——①推进了哪条 §5 不变量？②**删除**了什么（不只是加了什么）？③是否依赖 legacy 结构（12-worker / host-hop）？若是——是带 delete-ticket 的临时脚手架，还是漂移？挂在 scrum-drive 已强制的 review 门上。
+- **D4 过程信号当架构警报（tripwire）**：**若某实现子任务的 diff 在 legacy 结构之上净增、且没删任何东西 → 停。** 净加 = 又在镜像 CPU 结构。这是停下来回看大目标的硬信号，不是继续走小步的理由。
+
+> 各 scrum 的具体验收门数值是 scrum-specific，落在该 scrum 的 `scratchpad/scrum-*/scrum.md`，不进本 doc。
+
 ## 7. 验证策略（贯穿两 scrum）
 
 - **ground truth = legacy CPU 渲染**（raw-XYZ 优先于 sRGB）。oracle 另可用 CpuTraceBackend 独立重实现（#253 范式）抓 kernel 数值/时序错。
