@@ -2513,18 +2513,19 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       // root_ray_count is now maintained inside GenerateFirstLayerRootsForCi
       // (both host and device paths advance it) so device root-gen sees a
       // globally monotone gen_ray_base across ci slices and successive batches.
-      // scrum-267 task-fused-emit-gate Step 3a: size the session-level exit
-      // buffer ONCE at the first MS to cover the full session upper bound
-      // (every MS layer's emit-gate mid-exits + the final-layer exit). This
-      // replaces the prior "first_ms allocates final-layer cap, then last
-      // layer regrows" pattern. The emit gate writes mid-exit slots from EVERY
-      // ms_mode==1 dispatch (including first_ms when num_ms>1); a mid-session
-      // EnsureExitBuffers realloc would orphan data already written into the
-      // old MTLBuffer pointer. One-time pre-allocation eliminates that risk.
+      // task-268.4 (commit-batch-decouple-drain): allocate the exit buffer
+      // for a SINGLE layer's worst-case fan-out only. The simulator's
+      // per-layer drain pattern (TraceLayer -> DrainExits -> Recombine)
+      // recycles the same buffer across MS layers, so the prior
+      // `per_layer_cap × num_ms` overallocation is no longer needed.
+      // Grow-on-overflow inside the ci-loop retry below covers cases where
+      // a single layer's actual fan-out exceeds the static ComputeOutCap
+      // estimate (e.g. ms3_mixed_pyramid_heavy: ~169-211 exits/root vs.
+      // ComputeOutCap's max_hits*2+4 bound). Tests that bypass DrainExits
+      // (test_metal_trace_parity.cpp) rely on the same grow-on-overflow to
+      // accommodate cumulative accumulation across layers.
       size_t per_layer_cap = ComputeOutCap(total_ray_num, impl_->spec.scene->max_hits_);
-      size_t num_ms = impl_->spec.scene->ms_.size();
-      size_t total_exit_cap = per_layer_cap * num_ms;
-      impl_->EnsureExitBuffers(total_exit_cap);
+      impl_->EnsureExitBuffers(per_layer_cap);
       *static_cast<uint32_t*>([impl_->exit_slot_buf contents]) = 0u;
     }
     // Recalculate out_cap per layer so each layer's continuation buffer is
@@ -2564,13 +2565,6 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     int out_slot = static_cast<int>(impl_->ms_idx & 1u);
     int in_slot = static_cast<int>((impl_->ms_idx - 1) & 1u);  // only used when !first_ms
 
-    // Reset per-layer counters BEFORE the ci loop: counter_buf is written
-    // by each DispatchLayer (counter_init = previous cont_counts), and
-    // last_stats accumulates via += inside DispatchLayer. Both must start
-    // at zero for the layer.
-    impl_->last_stats = LayerStats{};
-    impl_->cont_counts[out_slot] = 0;
-
     // scrum-258.3 Step 3 + scrum-267 Task 3 cleanup: per-layer filter+prob
     // state. Non-final layers populate `hop_ms_prob_[out_slot]` (consumed by
     // the device emit gate's `KernelParams.ms_prob` in DispatchLayer); the
@@ -2586,8 +2580,29 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       impl_->hop_ms_prob_[out_slot] = ms_info.prob_;
     }
 
-    size_t ci_start = 0;  // running offset into the previous-layer
-                          // continuation buffer (non-first_ms only)
+    // task-268.4 grow-on-overflow: snapshot per-layer counters before the
+    // ci-loop so an exit-buffer overflow can be recovered by growing the
+    // buffer and re-running the ci-loop. The host mt19937 (`impl_->rng`,
+    // consumed only by MakeCrystal inside ResolveLayerCrystalForCi) is NOT
+    // snapshotted — it advances forward on each retry, which is acceptable
+    // because (a) parity-critical paths never trigger overflow, and (b) the
+    // re-run produces a self-consistent fresh sample that exercises the
+    // grown buffer. Loop terminates because each retry doubles the cap.
+    const size_t pre_root_ray_count    = impl_->root_ray_count;
+    const size_t pre_transit_ray_count = impl_->transit_ray_count_;
+
+    constexpr int kMaxExitOverflowRetries = 4;
+    size_t ci_start = 0;  // declared outside the retry so the for-init below
+                          // can re-zero it on each attempt.
+    for (int attempt = 0; ; ++attempt) {
+    ci_start = 0;
+    // Reset per-layer counters BEFORE the ci loop: counter_buf is written
+    // by each DispatchLayer (counter_init = previous cont_counts), and
+    // last_stats accumulates via += inside DispatchLayer. Both must start
+    // at zero for the layer.
+    impl_->last_stats = LayerStats{};
+    impl_->cont_counts[out_slot] = 0;
+
     for (size_t ci = 0; ci < crystal_cnt; ci++) {
       size_t ci_n = crystal_ray_num[ci];
       if (ci_n == 0) {
@@ -2728,7 +2743,37 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       // ci_start was incremented above inside the !first_ms branch (before
       // the in_count==0 continue), so the next ci reads the correct slice
       // even if this ci's filter+prob dropped everything.
+    }  // ci-loop
+
+    // task-268.4 grow-on-overflow: exit_slot_buf is atomically incremented by
+    // the kernel for every emit (final-layer exit and ms_mode==1 mid-exit).
+    // After waitUntilCompleted on the last ci's DispatchLayer (inside
+    // DispatchLayer), shared-memory contents are host-visible.
+    uint32_t produced_exits =
+        *static_cast<uint32_t*>([impl_->exit_slot_buf contents]);
+    if (produced_exits <= impl_->exit_ray_capacity) {
+      break;  // success
     }
+    if (attempt + 1 >= kMaxExitOverflowRetries) {
+      ILOG_ERROR(EffectiveLogger(impl_->logger_),
+                 "MetalTraceBackend: exit-ray overflow produced={} exit_cap={} after {} grow attempts (giving up; clamp)",
+                 produced_exits, impl_->exit_ray_capacity, kMaxExitOverflowRetries);
+      break;  // give up — fall through to DrainExits-side clamp
+    }
+    size_t new_cap = std::max<size_t>(
+        static_cast<size_t>(produced_exits) * 2u,
+        impl_->exit_ray_capacity * 2u);
+    ILOG_DEBUG(EffectiveLogger(impl_->logger_),
+               "MetalTraceBackend: exit-buffer auto-grow cap={}→{} (produced={}, attempt={})",
+               impl_->exit_ray_capacity, new_cap, produced_exits, attempt + 1);
+    impl_->EnsureExitBuffers(new_cap);
+    // Restore RNG-monotonicity counters so the retried ci-loop re-issues
+    // device-gen / transit with the same gen_ray_base / transit base; the
+    // host mt19937 advances forward (see snapshot comment above).
+    impl_->root_ray_count    = pre_root_ray_count;
+    impl_->transit_ray_count_ = pre_transit_ray_count;
+    *static_cast<uint32_t*>([impl_->exit_slot_buf contents]) = 0u;
+    }  // grow-on-overflow retry
 
     size_t produced = last_layer ? 0u : impl_->cont_counts[out_slot];
     return std::make_unique<MetalLayerHandle>(produced, impl_->last_stats);
@@ -2891,6 +2936,19 @@ size_t MetalTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
   }
 
   return out.size();
+}
+
+// task-268.4 per-layer destructive drain. Identical to ReadbackExitRays
+// except for the post-step that zeroes the device atomic slot counter so the
+// exit_*_buf storage can be recycled by the next TraceLayer. Pairs with the
+// simulator's per-layer drain loop (SimulateOneWavelengthWithBackend) and the
+// grow-on-overflow retry inside TraceLayer.
+size_t MetalTraceBackend::DrainExits(std::vector<ExitRayRecord>& out) {
+  size_t n = ReadbackExitRays(out);
+  if (impl_->exit_slot_buf != nil) {
+    *static_cast<uint32_t*>([impl_->exit_slot_buf contents]) = 0u;
+  }
+  return n;
 }
 
 void MetalTraceBackend::EndSession() {

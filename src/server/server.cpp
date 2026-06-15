@@ -621,6 +621,28 @@ bool ServerImpl::IsIdle() {
 void ServerImpl::ConsumeData() {
   ILOG_DEBUG(logger_, "ConsumeData: entry");
   bool first_consume_logged = false;
+  // task-268.4 commit-granularity knob: backend exit-seam SimData are chunked
+  // into kCommitCap-sized slices before Consume() so GUI snapshot cadence is
+  // independent of the LUMICE_DISPATCH_RAY_NUM dispatch granularity. Falls
+  // back to the historical LUMICE_BATCH_RAY_NUM env name when set so existing
+  // scripts keep their commit cadence unchanged. Legacy CPU-path SimData
+  // (non-empty rays_) bypass the chunker — the consumer projects via per-ray
+  // indices into rays_, which cannot be sliced without recomputing indices.
+  static const size_t kCommitCap = []() -> size_t {
+    if (const char* env = std::getenv("LUMICE_COMMIT_RAY_NUM")) {
+      long b = std::atol(env);
+      if (b > 0) {
+        return static_cast<size_t>(b);
+      }
+    }
+    if (const char* env = std::getenv("LUMICE_BATCH_RAY_NUM")) {
+      long b = std::atol(env);
+      if (b > 0) {
+        return static_cast<size_t>(b);
+      }
+    }
+    return kDefaultRayNum;
+  }();
   while (true) {
     CHECK_STOP
     auto sim_data = data_queue_->Get();
@@ -662,8 +684,55 @@ void ServerImpl::ConsumeData() {
           auto t_lock0 = std::chrono::steady_clock::now();
           std::lock_guard<TicketMutex> lock(consumer_mutex_);
           auto t_lock1 = std::chrono::steady_clock::now();
-          for (auto& c : consumers_) {
-            c->Consume(sim_data);
+          // task-268.4: chunk by kCommitCap on the backend exit-seam path
+          // (outgoing_d_ populated AND rays_ empty). Only the FIRST chunk
+          // carries root_ray_count_ + crystals_ — StatsConsumer accumulates
+          // both, so spreading them across chunks would N×-count and break
+          // the stats invariant. Legacy CPU SimData (rays_ non-empty) are
+          // delivered whole because their consumers project via per-ray
+          // indices into rays_, which has no clean sub-batch slice.
+          // NOLINTNEXTLINE(readability-identifier-naming) — local const flag, snake_case is project style for
+          // variables.
+          const bool is_exit_seam_path = sim_data.rays_.Empty() && !sim_data.outgoing_d_.empty();
+          if (!is_exit_seam_path) {
+            for (auto& c : consumers_) {
+              c->Consume(sim_data);
+            }
+          } else {
+            size_t exit_count = sim_data.outgoing_w_.size();
+            size_t emitted = 0;
+            do {
+              size_t chunk_count = std::min(kCommitCap, exit_count - emitted);
+              SimData chunk;
+              chunk.curr_wl_ = sim_data.curr_wl_;
+              chunk.generation_ = sim_data.generation_;
+              // Stats fields only on the first chunk; rest carry 0 / empty
+              // so StatsConsumer's sim_rays_ / crystals_ accumulate to the
+              // same totals as a single whole-Consume call would yield.
+              if (emitted == 0) {
+                chunk.root_ray_count_ = sim_data.root_ray_count_;
+                chunk.crystals_ = sim_data.crystals_;
+                chunk.crystal_axis_dists_ = sim_data.crystal_axis_dists_;
+              }
+              if (chunk_count > 0) {
+                chunk.outgoing_d_.assign(
+                    sim_data.outgoing_d_.begin() + static_cast<std::ptrdiff_t>(emitted) * 3,
+                    sim_data.outgoing_d_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count) * 3);
+                chunk.outgoing_w_.assign(
+                    sim_data.outgoing_w_.begin() + static_cast<std::ptrdiff_t>(emitted),
+                    sim_data.outgoing_w_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count));
+                if (sim_data.exit_records_.size() >= emitted + chunk_count) {
+                  chunk.exit_records_.assign(
+                      sim_data.exit_records_.begin() + static_cast<std::ptrdiff_t>(emitted),
+                      sim_data.exit_records_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count));
+                }
+                chunk.outgoing_indices_.assign(chunk_count, 0);
+              }
+              for (auto& c : consumers_) {
+                c->Consume(chunk);
+              }
+              emitted += chunk_count;
+            } while (emitted < exit_count);
           }
           auto t_consume = std::chrono::steady_clock::now();
           snapshot_dirty_ = true;
@@ -710,17 +779,31 @@ void ServerImpl::GenerateScene() {
     renders = active_renders_;
     generation = scene_generation_.load();
   }
-  // LUMICE_BATCH_RAY_NUM: per-batch ray count for performance tuning (default: kDefaultRayNum=128).
-  // Higher values amortize Metal kernel dispatch overhead; tune against legacy crossover (~512).
-  static const size_t kBatchCap = []() -> size_t {
-    if (const char* env = std::getenv("LUMICE_BATCH_RAY_NUM")) {
+  // task-268.4 commit↔batch decoupling: two independent knobs.
+  //
+  // LUMICE_DISPATCH_RAY_NUM (kDispatchCap): per-SimBatch ray count fed to the
+  //   backend (GPU dispatch granularity). Higher amortizes Metal kernel
+  //   launch overhead; tune against legacy crossover (~512).
+  // LUMICE_COMMIT_RAY_NUM (kCommitCap): SimData-to-consumer commit granularity
+  //   inside ConsumeData. Smaller commits keep GUI snapshot cadence fine
+  //   regardless of dispatch size, so "feed GPU big, refresh UI small"
+  //   becomes a single tunable.
+  //
+  // Backward compat: LUMICE_BATCH_RAY_NUM (historical "batch = commit
+  // granularity" semantics) is honoured as a fallback for kCommitCap only;
+  // dispatch granularity defaults to kDefaultRayNum unless LUMICE_DISPATCH_RAY_NUM
+  // is explicitly set.
+  auto read_env_size = [](const char* name, size_t default_val) -> size_t {
+    if (const char* env = std::getenv(name)) {
       long b = std::atol(env);
       if (b > 0) {
         return static_cast<size_t>(b);
       }
     }
-    return kDefaultRayNum;
-  }();
+    return default_val;
+  };
+  static const size_t kDispatchCap = read_env_size("LUMICE_DISPATCH_RAY_NUM", kDefaultRayNum);
+  static const size_t kBatchCap = kDispatchCap;  // local alias for the loop below
 
   auto ray_num = scene->ray_num_;
   size_t committed_num = 0;

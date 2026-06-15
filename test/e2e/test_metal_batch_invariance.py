@@ -1,8 +1,12 @@
 """Batch-size invariance + commit conservation gate (scrum-268 / G2).
 
-Scrum 2 splits `LUMICE_BATCH_RAY_NUM`'s dual role (GPU dispatch grain AND
-SimData/scene-generation grain — server.cpp:716). Two correctness contracts
-must survive that split.
+Scrum 2 (task-268.4) split the historical `LUMICE_BATCH_RAY_NUM`'s dual role
+into two knobs: `LUMICE_DISPATCH_RAY_NUM` (GPU dispatch grain — fed to the
+backend per SimBatch) and `LUMICE_COMMIT_RAY_NUM` (consumer commit grain —
+ConsumeData chunk size). This gate now drives the DISPATCH grain so it
+characterises pure batch-vs-statistics behaviour of the trace pipeline,
+independent of commit granularity. Two correctness contracts must survive
+that split.
 
   1. **Batch-size dependence (characterize + anti-catastrophe guard).** Changing
      the GPU dispatch batch should not grossly change the statistical result.
@@ -24,11 +28,11 @@ must survive that split.
      stay conserved (sim_rays == ray_num); the loss is at the exit seam. Scrum 2's
      incremental drain must eliminate the clamp.
 
-CRITICAL (code-review BLOCKER-1): `LUMICE_BATCH_RAY_NUM` is read into a function
--local `static const` in server.cpp:715, frozen ONCE per process. So each batch
-size MUST run in its OWN subprocess — an in-process env flip is a no-op and
-would compare a run against itself. Each batch run here is a fresh subprocess
-(the module is self-spawning via __main__).
+CRITICAL (code-review BLOCKER-1): `LUMICE_DISPATCH_RAY_NUM` is read into a
+function-local `static const` in server.cpp's GenerateScene, frozen ONCE per
+process. So each batch size MUST run in its OWN subprocess — an in-process env
+flip is a no-op and would compare a run against itself. Each batch run here is
+a fresh subprocess (the module is self-spawning via __main__).
 
 @pytest.mark.slow — needs shared-lib build; Darwin-only (Metal).
 """
@@ -76,14 +80,24 @@ _RE_STATS = re.compile(r"Stats:\s*sim_rays=(\d+)")
 def _spawn_run(config_name: str, batch: int):
     """Spawn a fresh process that runs capi at `batch`; return its raw-XYZ array.
 
-    Each call is a new process so LUMICE_BATCH_RAY_NUM's process-static actually
-    takes the requested value (code-review BLOCKER-1).
+    Each call is a new process so LUMICE_DISPATCH_RAY_NUM's process-static
+    actually takes the requested value (code-review BLOCKER-1).
     """
     root = get_project_root()
     out = tempfile.NamedTemporaryFile(suffix=".npy", delete=False)
     out.close()
     env = dict(os.environ)
-    env["LUMICE_BATCH_RAY_NUM"] = str(batch)
+    # task-268.4 split: dispatch grain controls per-SimBatch ray count fed to
+    # the backend; commit grain controls ConsumeData chunk size. Pin BOTH to
+    # `batch` here so:
+    #   (a) the statistical comparison genuinely varies the dispatch grain
+    #       (the only knob that affects per-scene geometry sampling);
+    #   (b) the positive control below (`Consume profile: N batches` ratio)
+    #       stays a clean witness that the configured batch took effect —
+    #       leaving commit at the default 128 would clamp the chunk count to
+    #       a near-constant ≈ exits/128 and erase the ratio signal.
+    env["LUMICE_DISPATCH_RAY_NUM"] = str(batch)
+    env["LUMICE_COMMIT_RAY_NUM"] = str(batch)
     env.setdefault("LUMICE_LIB", str(root / "build" / "Release" / "lib" / "liblumice.dylib"))
     env["PYTHONPATH"] = str(root) + os.pathsep + env.get("PYTHONPATH", "")
     proc = subprocess.run(
@@ -222,8 +236,8 @@ def test_metal_exit_conservation_heavy():
 # --------------------------------------------------------------------------- #
 # Self-spawning helper (BLOCKER-1 fix): `python -m test.e2e.test_metal_batch_invariance
 #   <config> <batch> <seed> <rays> <out.npy>` runs ONE capi sim in this fresh
-# process (so the server.cpp LUMICE_BATCH_RAY_NUM static = <batch>) and dumps
-# raw-XYZ + a STATUS json line.
+# process (so server.cpp's LUMICE_DISPATCH_RAY_NUM / LUMICE_COMMIT_RAY_NUM
+# statics = <batch>) and dumps raw-XYZ + a STATUS json line.
 # --------------------------------------------------------------------------- #
 if __name__ == "__main__":
     _config_name, _batch, _seed, _rays, _out = sys.argv[1:6]

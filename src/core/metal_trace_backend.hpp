@@ -66,6 +66,10 @@ class MetalTraceBackend : public TraceBackend {
   // Exit seam (scrum-258.1/258.2): buffer-egress contract — see base class.
   // 258.2: returns rich `ExitRayRecord` (36B each) — see core/exit_seam.hpp.
   size_t ReadbackExitRays(std::vector<ExitRayRecord>& out) override;
+  // task-268.4: per-layer destructive drain. Reads back the current exit
+  // buffer contents AND resets the device slot counter so the buffer can
+  // be recycled across MS layers. See base class doc for the contract.
+  size_t DrainExits(std::vector<ExitRayRecord>& out) override;
   void EndSession() override;
   bool IsCompatible(const RenderConfig& render) const override;
 

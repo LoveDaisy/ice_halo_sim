@@ -916,6 +916,14 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   host.count = ray_num;
   RootRaySource roots = RootRaySource::FromHost(host);
 
+  // task-268.4 per-layer drain (produce -> drain -> recycle): DrainExits
+  // after each TraceLayer copies that layer's exit records into a host-side
+  // accumulator AND resets the device exit slot so the backend can recycle
+  // a single-layer-sized exit buffer across all MS layers. Grow-on-overflow
+  // inside the backend's TraceLayer covers extreme single-layer fan-out
+  // (e.g. ms3_mixed_pyramid_heavy: ~169-211 exits/root vs. ComputeOutCap's
+  // max_hits*2+4 estimate). Single-MS sessions still drain exactly once.
+  std::vector<ExitRayRecord> exit_records;
   bool aborted = false;
   for (size_t mi = 0; mi < scene.ms_.size(); mi++) {
     if (stop_) {
@@ -923,6 +931,18 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
       break;
     }
     LayerHandlePtr handle = backend.TraceLayer(roots);
+
+    std::vector<ExitRayRecord> layer_exits;
+    backend.DrainExits(layer_exits);
+    if (!layer_exits.empty()) {
+      if (exit_records.empty()) {
+        exit_records = std::move(layer_exits);
+      } else {
+        exit_records.insert(exit_records.end(), std::make_move_iterator(layer_exits.begin()),
+                            std::make_move_iterator(layer_exits.end()));
+      }
+    }
+
     bool last_layer = (mi + 1 == scene.ms_.size());
     if (last_layer) {
       // No Recombine on the final layer — handle goes out of scope.
@@ -949,15 +969,14 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
     return;
   }
 
-  // Exit seam (scrum-258.1/258.2): collect the backend's rich exit records
-  // and hand the dir/weight projection inputs to the legacy consumer via
-  // outgoing_d_/w_. The rich metadata (path / crystal_id / ms_layer_idx) is
-  // forwarded into sim_data.exit_records_ for 258.3 filter + symmetry fold
-  // to consume — 258.2 only produces it. The consumer reads
-  // `outgoing_indices_.size()` (and a non-empty assertion in
-  // render.cpp:148), never its values — fill a dummy zero index per ray.
-  std::vector<ExitRayRecord> exit_records;
-  size_t exit_count = backend.ReadbackExitRays(exit_records);
+  // Exit seam (scrum-258.1/258.2): hand the dir/weight projection inputs to
+  // the legacy consumer via outgoing_d_/w_. The rich metadata
+  // (path / crystal_id / ms_layer_idx) is forwarded into
+  // sim_data.exit_records_ for 258.3 filter + symmetry fold to consume —
+  // 258.2 only produces it. The consumer reads `outgoing_indices_.size()`
+  // (and a non-empty assertion in render.cpp:148), never its values —
+  // fill a dummy zero index per ray.
+  size_t exit_count = exit_records.size();
   // 0-exit batch: still Emplace a SimData so server.cpp::ConsumeData decrements
   // sim_scene_cnt_. root_ray_count_=ray_num>0 distinguishes from the shutdown
   // sentinel (rays_ empty && root_ray_count_==0). Consumer-side guard skips the

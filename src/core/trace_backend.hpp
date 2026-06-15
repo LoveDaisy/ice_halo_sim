@@ -87,18 +87,25 @@ namespace lumice {
 //   Legal call sequence (per backend instance):
 //
 //     BeginSession                                          \
-//       (TraceLayer -> Recombine)* n   // n >= 0             | session
-//       (TraceLayer)?                  // optional tail      |
-//       ReadbackExitRays                                    |
+//       (TraceLayer -> DrainExits -> Recombine)* n           | session
+//       TraceLayer -> DrainExits          // final layer     |
 //     EndSession                                            /
 //
 //   - `TraceLayer` may be invoked one or more times per session.
 //   - `Recombine` consumes a LayerHandle; it must be paired with a preceding
 //     TraceLayer call. The very last MS layer typically skips Recombine since
 //     no further layer follows.
-//   - `ReadbackExitRays` returns the session's accumulated exit rays. It
-//     does NOT clear the accumulator; callers should treat the call as
-//     idempotent within a session.
+//   - `DrainExits` is the canonical per-layer egress (task-268.4). It is
+//     DESTRUCTIVE: copies the device-side exit buffer into the caller's
+//     vector AND resets the device counter so the buffer can be recycled
+//     across MS layers (produce -> drain -> recycle). Single-MS callers
+//     invoke it once after the only TraceLayer; multi-MS callers invoke it
+//     between TraceLayer and Recombine for every layer.
+//   - `ReadbackExitRays` predates DrainExits (scrum-258 exit seam). On
+//     CpuTraceBackend it is destructive (same semantics as DrainExits); on
+//     MetalTraceBackend it is non-destructive (does NOT reset the device
+//     slot). Retained for parity-harness tests that read the cumulative
+//     session-level egress; production simulator code SHOULD use DrainExits.
 //   - Calling any method outside the BeginSession/EndSession bracket — or
 //     interleaving sessions on the same backend instance — is undefined
 //     behaviour.
@@ -328,6 +335,34 @@ class TraceBackend {
   // to a non-virtual, concrete CPU/Metal helper used only by the parity
   // harness (test 接缝 与 生产契约 结构性隔离).
   virtual size_t ReadbackExitRays(std::vector<ExitRayRecord>& out) {
+    out.clear();
+    return 0;
+  }
+
+  // Per-layer DESTRUCTIVE drain (task-268.4 commit-batch decoupling).
+  //
+  // Copies the device-side exit buffer into `out` and resets the device
+  // accumulator so the buffer can be recycled across MS layers
+  // (produce -> drain -> recycle). Intended to be called after every
+  // TraceLayer in multi-MS sessions; single-MS sessions call it once after
+  // the only TraceLayer.
+  //
+  // Contrast with ReadbackExitRays (scrum-258): Readback's contract was
+  // session-level egress (cumulative across layers, idempotent on Metal —
+  // does not reset the slot counter). Drain is per-layer egress: each call
+  // returns only what was emitted since the previous Drain (or BeginSession)
+  // and atomically clears the counter so the next TraceLayer writes into
+  // slot 0 again. This is the seam-level mechanism that lets a multi-MS
+  // session keep a SINGLE-layer-sized exit buffer (vs. num_ms × per_layer
+  // in the pre-268.4 scheme), and is the foundation for grow-on-overflow
+  // when a single layer's fan-out exceeds the static cap.
+  //
+  // Overflow handling: backends MUST detect produced > capacity and grow
+  // internally before returning; the returned vector MUST contain every
+  // emitted record (no silent clamp). The pre-268.4 ReadbackExitRays
+  // "produced > capacity → log + clamp" path is RETIRED on the Drain
+  // contract. Default returns 0 for stub backends.
+  virtual size_t DrainExits(std::vector<ExitRayRecord>& out) {
     out.clear();
     return 0;
   }

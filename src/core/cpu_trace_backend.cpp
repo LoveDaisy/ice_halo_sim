@@ -375,6 +375,16 @@ size_t CpuTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
   return out.size();
 }
 
+// task-268.4 per-layer destructive drain. CPU semantics identical to
+// ReadbackExitRays — the only difference vs Metal is that the CPU backend
+// never accumulated session-level device state.
+size_t CpuTraceBackend::DrainExits(std::vector<ExitRayRecord>& out) {
+  assert(in_session_ && "DrainExits called outside BeginSession/EndSession");
+  out = std::move(exit_records_);
+  exit_records_.clear();
+  return out.size();
+}
+
 
 void CpuTraceBackend::EndSession() {
   in_session_ = false;

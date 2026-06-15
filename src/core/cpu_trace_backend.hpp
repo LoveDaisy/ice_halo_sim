@@ -57,6 +57,11 @@ class CpuTraceBackend : public TraceBackend {
   // 258.2: returns `ExitRayRecord` carrying {dir, weight, path,
   // crystal_id, ms_layer_idx}; move-out — `exit_records_` is left empty.
   size_t ReadbackExitRays(std::vector<ExitRayRecord>& out) override;
+  // task-268.4: per-layer destructive drain. On CPU this has identical
+  // semantics to ReadbackExitRays (both move out `exit_records_`) — the
+  // CPU backend never accumulated session-level state because the host-side
+  // vector is rebuilt every layer anyway.
+  size_t DrainExits(std::vector<ExitRayRecord>& out) override;
   void EndSession() override;
 
   // Diagnostic accessors (unit tests).
