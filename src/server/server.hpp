@@ -180,12 +180,17 @@ class Server {
   Server();
 
   /**
-   * @brief Construct a new Server with specified worker count
-   * @param num_workers Number of simulator worker threads. 0 = default (physical core count)
-   * @param sim_seed Deterministic RNG seed. 0 = random. Non-zero collapses to 1 worker.
+   * @brief Construct a new Server
+   * @param num_workers CPU route only: worker count (0 = PhysicalCoreCount()).
+   *        Ignored on the GPU/Metal route, which is always a single engine
+   *        (task-268.7). The route is fixed at construction (see preferred_backend).
+   * @param sim_seed Deterministic RNG seed. 0 = random; non-zero clamps CPU route to 1 worker.
+   * @param preferred_backend LUMICE_BACKEND_CPU (0, multi-worker) or LUMICE_BACKEND_METAL
+   *        (1, single engine). An env LUMICE_TRACE_BACKEND override takes precedence.
+   *        The GUI reconstructs the server when the Metal checkbox toggles.
    * @note The server starts running immediately after construction
    */
-  explicit Server(int num_workers, uint32_t sim_seed = 0);
+  explicit Server(int num_workers, uint32_t sim_seed = 0, int preferred_backend = 0);
 
   /**
    * @brief Commit configuration from string

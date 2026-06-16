@@ -12,6 +12,7 @@
 #include <numeric>
 #include <string>
 #include <thread>
+#include <variant>
 
 #include "config/crystal_config.hpp"
 #include "config/light_config.hpp"
@@ -659,14 +660,29 @@ void Simulator::Run() {
 
     const auto& spectrum = config.light_source_.spectrum_;
     if (auto* illuminant = std::get_if<IlluminantType>(&spectrum)) {
-      // Standard illuminant: uniform wavelength sampling + SPD weight
-      float wl = 380.0f + rng_.GetUniform() * 400.0f;  // [380, 780] nm
-      float weight = GetIlluminantSpd(*illuminant, wl);
-      WlParam wl_param{ wl, weight };
-      if (use_backend) {
-        SimulateOneWavelengthWithBackend(*backend, config, (*batch.renders_)[0], wl_param, batch.ray_num_, generation);
+      // Standard illuminant.
+      // scrum-268.8 (DR-3 / Step 9): only backends with a per-ray wavelength
+      // pool (Metal, WlPoolSize() > 0) sample wavelength per-ray on device. For
+      // those, the per-batch host sampling is deleted — it would only consume
+      // rng_ and set a misleading curr_wl_. Pass a zero-wl WlParam so curr_wl_
+      // stays 0: IF the per-ray wavelength is ever dropped upstream, the
+      // consumer renders black (loud) instead of silently collapsing onto a
+      // flat spectrum (the bug fixed in a101c53e). Pool-less backends (CPU /
+      // cpu_backend / legacy) keep per-batch uniform wl + SPD weight.
+      bool backend_per_ray_wl = use_backend && backend->WlPoolSize() > 0u;
+      if (backend_per_ray_wl) {
+        SimulateOneWavelengthWithBackend(*backend, config, (*batch.renders_)[0], WlParam{}, batch.ray_num_, generation);
       } else {
-        SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation, ray_alloc_carry);
+        float wl = 380.0f + rng_.GetUniform() * 400.0f;  // [380, 780] nm
+        float weight = GetIlluminantSpd(*illuminant, wl);
+        WlParam wl_param{ wl, weight };
+        if (use_backend) {
+          SimulateOneWavelengthWithBackend(*backend, config, (*batch.renders_)[0], wl_param, batch.ray_num_,
+                                           generation);
+        } else {
+          SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation,
+                                ray_alloc_carry);
+        }
       }
     } else {
       // Discrete wavelength list
@@ -916,6 +932,14 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   host.count = ray_num;
   RootRaySource roots = RootRaySource::FromHost(host);
 
+  // task-268.4 per-layer drain (produce -> drain -> recycle): DrainExits
+  // after each TraceLayer copies that layer's exit records into a host-side
+  // accumulator AND resets the device exit slot so the backend can recycle
+  // a single-layer-sized exit buffer across all MS layers. Grow-on-overflow
+  // inside the backend's TraceLayer covers extreme single-layer fan-out
+  // (e.g. ms3_mixed_pyramid_heavy: ~169-211 exits/root vs. ComputeOutCap's
+  // max_hits*2+4 estimate). Single-MS sessions still drain exactly once.
+  std::vector<ExitRayRecord> exit_records;
   bool aborted = false;
   for (size_t mi = 0; mi < scene.ms_.size(); mi++) {
     if (stop_) {
@@ -923,6 +947,18 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
       break;
     }
     LayerHandlePtr handle = backend.TraceLayer(roots);
+
+    std::vector<ExitRayRecord> layer_exits;
+    backend.DrainExits(layer_exits);
+    if (!layer_exits.empty()) {
+      if (exit_records.empty()) {
+        exit_records = std::move(layer_exits);
+      } else {
+        exit_records.insert(exit_records.end(), std::make_move_iterator(layer_exits.begin()),
+                            std::make_move_iterator(layer_exits.end()));
+      }
+    }
+
     bool last_layer = (mi + 1 == scene.ms_.size());
     if (last_layer) {
       // No Recombine on the final layer — handle goes out of scope.
@@ -949,26 +985,40 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
     return;
   }
 
-  // Exit seam (scrum-258.1/258.2): collect the backend's rich exit records
-  // and hand the dir/weight projection inputs to the legacy consumer via
-  // outgoing_d_/w_. The rich metadata (path / crystal_id / ms_layer_idx) is
-  // forwarded into sim_data.exit_records_ for 258.3 filter + symmetry fold
-  // to consume — 258.2 only produces it. The consumer reads
-  // `outgoing_indices_.size()` (and a non-empty assertion in
-  // render.cpp:148), never its values — fill a dummy zero index per ray.
-  std::vector<ExitRayRecord> exit_records;
-  size_t exit_count = backend.ReadbackExitRays(exit_records);
+  // Exit seam (scrum-258.1/258.2): hand the dir/weight projection inputs to
+  // the legacy consumer via outgoing_d_/w_. The rich metadata
+  // (path / crystal_id / ms_layer_idx) is forwarded into
+  // sim_data.exit_records_ for 258.3 filter + symmetry fold to consume —
+  // 258.2 only produces it. The consumer reads `outgoing_indices_.size()`
+  // (and a non-empty assertion in render.cpp:148), never its values —
+  // fill a dummy zero index per ray.
+  size_t exit_count = exit_records.size();
   // 0-exit batch: still Emplace a SimData so server.cpp::ConsumeData decrements
   // sim_scene_cnt_. root_ray_count_=ray_num>0 distinguishes from the shutdown
   // sentinel (rays_ empty && root_ray_count_==0). Consumer-side guard skips the
   // projection call when outgoing_d_ is empty — do not collapse these two paths.
   std::vector<float> exit_d(exit_count * 3);
   std::vector<float> exit_w(exit_count);
+  // scrum-268.8 (DR-3): per-outgoing-ray wavelength is the Metal + illuminant
+  // seam. For other backends or the discrete-wl path, leave outgoing_wl_ empty
+  // and let the consumer's per-batch curr_wl_ branch take over — that path is
+  // bit-identical to the pre-DR-3 behaviour.
+  uint32_t pool_size = backend.WlPoolSize();
+  bool illuminant_mode = std::holds_alternative<IlluminantType>(scene.light_source_.spectrum_);
+  bool fill_per_ray_wl = (pool_size > 0u) && illuminant_mode;
+  std::vector<float> exit_wl;
+  if (fill_per_ray_wl) {
+    exit_wl.resize(exit_count);
+  }
   for (size_t i = 0; i < exit_count; i++) {
     exit_d[i * 3 + 0] = exit_records[i].dir[0];
     exit_d[i * 3 + 1] = exit_records[i].dir[1];
     exit_d[i * 3 + 2] = exit_records[i].dir[2];
     exit_w[i] = exit_records[i].weight;
+    if (fill_per_ray_wl) {
+      float idx = static_cast<float>(exit_records[i].wl_idx) + 0.5f;
+      exit_wl[i] = 380.0f + idx * 400.0f / static_cast<float>(pool_size);
+    }
   }
 
   SimData sim_data;
@@ -979,6 +1029,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
                                        // server.cpp::ConsumeData).
   sim_data.outgoing_d_ = std::move(exit_d);
   sim_data.outgoing_w_ = std::move(exit_w);
+  sim_data.outgoing_wl_ = std::move(exit_wl);
   sim_data.exit_records_ = std::move(exit_records);
   // dummy: consumer reads .size() only (render.cpp:75); real per-ray indices
   // arrive when 258.3 unifies outgoing_d_/w_ with exit_records_.

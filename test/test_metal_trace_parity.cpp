@@ -1504,6 +1504,21 @@ int FindExitByDirection(const std::vector<ExitRayRecord>& exits, float dx, float
   return best;
 }
 
+// Sums weights of all exit rays whose direction cosine with (dx,dy,dz)
+// exceeds cos_tol. Used by multi-MS golden tests where multiple analytic
+// paths land on the same outgoing direction (e.g. T⁴ + R² both exit (0,0,-1)).
+float SumWeightByDirection(const std::vector<ExitRayRecord>& exits, float dx, float dy, float dz,
+                           float cos_tol = 0.9999f) {
+  float sum = 0.0f;
+  for (const auto& e : exits) {
+    float dot = e.dir[0] * dx + e.dir[1] * dy + e.dir[2] * dz;
+    if (dot >= cos_tol) {
+      sum += e.weight;
+    }
+  }
+  return sum;
+}
+
 }  // namespace
 
 // =============================================================================
@@ -1778,6 +1793,152 @@ TEST(MetalGoldenRay, EnergyConservationSingleRay) {
   // Allow a tight float-noise margin above 1.0.
   EXPECT_LE(sum_w, 1.0 + 1e-4) << "energy gain: Σw_exit=" << sum_w << " > w_initial=1.0 (exit_count=" << exit_count
                                << ")";
+}
+
+// =============================================================================
+// GoldenRay_MultiMsContinuationNormalIncidence — 2-MS straight-through anchor
+//
+// G3 (scrum-gpu-single-engine-orchestration): the first absolute analytic
+// anchor on transit_root_kernel's device-resident continuation path. The three
+// preceding MetalGoldenRay tests all stop at single-MS slab; multi-MS
+// continuation correctness was previously gated only by legacy-relative corr,
+// which Scrum-267 showed has masked real bugs (+16% energy, orientation
+// undersampling). This test asserts the Fresnel weight chain over 4 face
+// crossings against an INDEPENDENT analytic expectation (no legacy in the
+// expected value).
+//
+// Analytic derivation (all normal incidence, same crystal n_idx both layers):
+//   Layer 0 (ms_mode=1, prob=1.0, no filter):
+//     Inject d=(0,0,-1), w=1.0 at top face.
+//     Hit 1 (top): reflect-at-entry  → cont ray A: d=(0,0,+1),  w=R
+//     Hit 2 (bot): forward transmit  → cont ray B: d=(0,0,-1),  w=T²
+//   Layer 1 (ms_mode=0, final, prob=0.0, no filter):
+//     transit_root_kernel: kNoRandom orientation → R_crystal=Rz(-π) (Rz(-π)
+//     is its own transpose; lon=0+lat=π/2+roll=0 collapses to a flip of x,y).
+//     d_crystal = R^T·d_world preserves z; face selection by projected area
+//     is deterministic (only top/bot have nonzero projection for ±z).
+//     See transit_root_kernel projected-area branch in lumice::gen_root_kernel.
+//
+//     Ray A (d=(0,0,+1), enters via bottom, normal incidence):
+//       hit 1 (bot): reflect → exit (0,0,-1), w = R · R  = R²
+//       hit 2 (top): transmit → exit (0,0,+1), w = R · T² = RT²
+//     Ray B (d=(0,0,-1), enters via top, normal incidence):
+//       hit 1 (top): reflect → exit (0,0,+1), w = T² · R  = T²R
+//       hit 2 (bot): transmit → exit (0,0,-1), w = T² · T² = T⁴
+//   Expected sums:
+//     Σw(0,0,-1) = T⁴ + R²        (dominant; T⁴ ≈ 0.923 for n≈1.31)
+//     Σw(0,0,+1) = 2·R·T²         (≈ 0.0377)
+//     total      = (T²+R)² < 1    (energy conservative — no gain across MS)
+//
+// IMPORTANT prob trap: ReadbackExitRays drops final-layer exits when
+// rng < final_prob. prob=1.0 would drop EVERY final exit. layer-0 prob=1.0
+// makes all layer-0 hits become continuation rays (no mid-exits); the final
+// layer MUST stay at prob=0.0 (the MakeMetalScene default for the last MS).
+// =============================================================================
+TEST(MetalGoldenRay, MultiMsContinuationNormalIncidence) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  ForceHostGenForByteIdentity();
+
+  // Scene: 2 MS layers, max_hits=2 (reflect-at-entry + forward transmit per
+  // continuation pass). layer-0 prob=1.0 → all layer-0 exits become
+  // continuation rays. layer-1 prob=0.0 (MakeMetalScene default for the final
+  // layer) → all kernel exits become outputs.
+  auto scene = MakeMetalScene(/*max_hits=*/2, /*ms_layers=*/2);
+  scene.ms_[0].prob_ = 1.0f;
+  auto render = MakeRectangularRender();
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  // Crystal is deterministic (kNoRandom h/d/orientation); MakeCrystal consumes
+  // no RNG draws. Both layers use the same crystal params, so n_idx is shared.
+  RandomNumberGenerator local_rng(0);
+  local_rng.SetSeed(spec.seed);
+  Crystal crystal = MakeCrystal(local_rng, scene.ms_[0].setting_[0].crystal_.param_);
+  float n_idx = crystal.GetRefractiveIndex(spec.wl.wl_);
+
+  auto poly = BuildPolyArrays(crystal);
+  size_t poly_cnt = crystal.PolygonFaceCount();
+  PrismFaces faces = FindTopBotFaces(poly, poly_cnt);
+  ASSERT_NE(faces.top, kInvalidId) << "top face not found";
+  ASSERT_NE(faces.bot, kInvalidId) << "bottom face not found";
+
+  // Normal-incidence ray at prism axis on top face — guarantees exit through
+  // bottom on a single-slab pass; on 2-MS, the four analytic paths above.
+  std::vector<float> d = { 0.0f, 0.0f, -1.0f };
+  std::vector<float> p = { 0.0f, 0.0f, 0.5f };
+  std::vector<float> w = { 1.0f };
+  std::vector<IdType> tf = { faces.top };
+
+  HostRayBatch host;
+  host.count = 1;
+  host.d = d.data();
+  host.p = p.data();
+  host.w = w.data();
+  host.tf = tf.data();
+  host.crystal = &crystal;
+  host.refractive_index = n_idx;
+  host.crystal_id = 0;
+
+  // Analytic Fresnel at normal incidence (same n_idx for both layers).
+  float r_normal = (n_idx - 1.0f) / (n_idx + 1.0f);
+  r_normal *= r_normal;
+  float t_normal = 1.0f - r_normal;
+
+  std::vector<ExitRayRecord> exits;
+  size_t exit_count = 0;
+  {
+    MetalTraceBackend metal;
+    metal.BeginSession(spec);
+
+    // Layer 0: inject deterministic ray; produce continuation rays via transit.
+    auto h0 = metal.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h0, nullptr);
+    ASSERT_GE(h0->ContinuationCount(), 1u) << "layer-0 must produce at least 1 continuation ray (prob=1.0, no filter)";
+
+    RecombineSpec rspec;
+    // shuffle=false: preserves continuation-ray order for deterministic
+    // face-selection in transit_root_kernel (Metal v1 also asserts !shuffle).
+    rspec.shuffle = false;
+    auto roots1 = metal.Recombine(std::move(h0), rspec);
+
+    // Layer 1 (final): transit_root_kernel processes continuation rays.
+    auto h1 = metal.TraceLayer(roots1);
+    ASSERT_NE(h1, nullptr);
+
+    exit_count = metal.ReadbackExitRays(exits);
+    metal.EndSession();
+  }
+
+  ASSERT_GE(exit_count, 2u) << "2-MS continuation must produce ≥ 2 exits "
+                               "(≥1 downward from B-transmit + ≥1 upward from A-transmit)";
+
+  // --- Absolute analytic assertions (independent of legacy) ---
+
+  // Dominant downward path: T⁴ (ray B straight through both crystals) plus
+  // R² (ray A doubly-reflected). Sum is analytically known.
+  float expected_down = t_normal * t_normal * t_normal * t_normal + r_normal * r_normal;
+  float sum_down = SumWeightByDirection(exits, 0.0f, 0.0f, -1.0f);
+  EXPECT_NEAR(sum_down, expected_down, 5e-4f) << "Σw(0,0,-1) = T⁴+R²: got=" << sum_down << " expected=" << expected_down
+                                              << " (n_idx=" << n_idx << " T=" << t_normal << " R=" << r_normal << ")";
+
+  // Upward paths: RT² (ray A through crystal-2 top) + T²R (ray B reflect-at-entry).
+  float expected_up = 2.0f * r_normal * t_normal * t_normal;
+  float sum_up = SumWeightByDirection(exits, 0.0f, 0.0f, +1.0f);
+  EXPECT_NEAR(sum_up, expected_up, 5e-4f) << "Σw(0,0,+1) = 2RT²: got=" << sum_up << " expected=" << expected_up;
+
+  // Energy conservation across MS: total must not exceed initial weight 1.0.
+  double total = 0.0;
+  for (size_t i = 0; i < exit_count; i++) {
+    EXPECT_GE(exits[i].weight, 0.0f) << "negative weight at i=" << i;
+    total += static_cast<double>(exits[i].weight);
+  }
+  EXPECT_LE(total, 1.0 + 1e-4) << "energy gain: Σw_exits=" << total << " > 1.0 (exit_count=" << exit_count << ")";
 }
 
 }  // namespace

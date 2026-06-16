@@ -19,15 +19,18 @@ namespace lumice {
 //   offset 16: ExitFaceSeq path       (16B, inline face sequence)
 //   offset 32: uint16_t crystal_id    (2B,  session-level crystal index)
 //   offset 34: uint8_t  ms_layer_idx  (1B,  0-based MS layer index)
-//   offset 35: uint8_t  pad_          (1B,  alignment padding)
-//   sizeof == 36, align == 4.
+//   offset 35: uint8_t  wl_idx        (1B,  per-ray wavelength pool index;
+//                                          0 on the CPU backend — pool layout
+//                                          is Metal-specific. scrum-268.8.)
+//   sizeof == 36, align == 4. Layout/size unchanged from the prior pad_
+//   slot — binary compatible with previously serialized records.
 struct ExitRayRecord {
   float dir[3];
   float weight;
   ExitFaceSeq path;
   uint16_t crystal_id;
   uint8_t ms_layer_idx;
-  uint8_t pad_ = 0;
+  uint8_t wl_idx = 0;
 };
 static_assert(sizeof(ExitRayRecord) == 36u,
               "ExitRayRecord layout changed — re-check exit-seam wire format and bandwidth budget");

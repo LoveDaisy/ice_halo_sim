@@ -56,7 +56,7 @@ class TicketMutex {
 // =============== ServerImpl ===============
 class ServerImpl {
  public:
-  explicit ServerImpl(int num_workers = 0, uint32_t sim_seed = 0);
+  explicit ServerImpl(int num_workers = 0, uint32_t sim_seed = 0, int preferred_backend = 0);
   ~ServerImpl();
 
   Error CommitConfig(const nlohmann::json& config_json, bool* out_reused = nullptr);
@@ -72,9 +72,19 @@ class ServerImpl {
   void SetPreferredBackend(int backend);
 
  private:
-  static const int kDefaultSimulatorCnt;  // runtime: PhysicalCoreCount() (SMT siblings left for consumer + OS)
+  // task-268.7: single-engine orchestration — server now runs exactly one
+  // Simulator. The legacy kDefaultSimulatorCnt = PhysicalCoreCount() was removed
+  // along with the 12-worker queue-per-Simulator pattern; num_workers is reserved
+  // and ignored. See doc/gpu-single-engine-implementation.md §6.
   static constexpr int kMaxSceneCnt = 128;
   static constexpr size_t kDefaultRayNum = 128;
+  // scrum-268.6: Metal single-engine needs a large GPU dispatch to saturate the
+  // device — a 128-ray dispatch starves it (~0.04x legacy), while ~32768 peaks
+  // at ~5.3x legacy on heavy multi-MS+filter scenes (sweep 2026-06-16; plateau
+  // beyond, GPU-bound). CPU/legacy keeps the small 128 default (multi-worker
+  // geometry-sampling cadence). Commit granularity (kCommitCap) stays fine
+  // regardless, so "feed the GPU big, refresh the UI small" is one tunable.
+  static constexpr size_t kDefaultMetalDispatchRayNum = 32768;
 
   void ConsumeData();
   void GenerateScene();
@@ -152,9 +162,6 @@ class ServerImpl {
   Logger& GetLogger() { return logger_; }
 };
 
-const int ServerImpl::kDefaultSimulatorCnt = PhysicalCoreCount();
-
-
 template <typename F>
 void ServerImpl::RunPersistentLoop(F work_fn) {
   uint64_t my_gen = 0;
@@ -189,20 +196,66 @@ void ServerImpl::RunPersistentLoop(F work_fn) {
 }
 
 
-ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed)
+namespace {
+// task-268.7 (owner 2026-06-15): the CPU and GPU routes do NOT mirror each other
+// — each picks its own optimal orchestration, so the server runs two parallel
+// shapes. The GPU/Metal route is a SINGLE engine (N engines would contend one
+// GPU — explore-263); the legacy CPU route keeps MULTI-worker parallelism (that
+// IS its performance model — collapsing it to 1 worker is a ~6x regression on
+// the perf baseline + GUI default path). The route is fixed at construction; the
+// GUI reconstructs the server when the Metal checkbox toggles. An env
+// LUMICE_TRACE_BACKEND override (CLI / --benchmark) takes precedence over the
+// preferred_backend argument, mirroring CreateBackend (simulator.cpp).
+bool ResolveMetalRoute(int preferred_backend) {
+#if defined(__APPLE__)
+  if (const char* raw = std::getenv("LUMICE_TRACE_BACKEND")) {
+    const std::string name = raw;
+    if (name == "metal")
+      return true;
+    if (name == "cpu_backend" || name == "legacy")
+      return false;
+  }
+  return preferred_backend == 1;  // 1 == LUMICE_BACKEND_METAL
+#else
+  (void)preferred_backend;
+  return false;  // Metal unavailable off-Apple → CPU multi-worker route
+#endif
+}
+}  // namespace
+
+ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed, int preferred_backend)
     : config_manager_{}, scene_queue_(std::make_shared<Queue<SimBatch>>()),
       data_queue_(std::make_shared<Queue<SimData>>()), status_(ServerStatus::kIdle) {
-  int worker_count = num_workers > 0 ? num_workers : kDefaultSimulatorCnt;
-  if (sim_seed != 0) {
-    worker_count = 1;
+  preferred_backend_.store(preferred_backend, std::memory_order_release);
+  int worker_count;
+  if (ResolveMetalRoute(preferred_backend)) {
+    worker_count = 1;  // GPU route: single engine (task-268.7)
+  } else {
+    worker_count = num_workers > 0 ? num_workers : PhysicalCoreCount();
+    if (sim_seed != 0) {
+      worker_count = 1;  // deterministic CPU contract: fixed seed → single worker
+    }
   }
   for (int i = 0; i < worker_count; i++) {
-    uint32_t worker_seed = sim_seed != 0 ? sim_seed + static_cast<uint32_t>(i) : 0;
+    uint32_t worker_seed = sim_seed != 0 ? sim_seed + static_cast<uint32_t>(i) : 0u;
     simulators_.emplace_back(scene_queue_, data_queue_, worker_seed);
   }
 
-  // Spawn persistent threads — they start in cv.wait(), not working.
-  // Each thread tracks start_generation_ to avoid re-entering work after natural completion.
+  // Propagate the construction-time backend into every simulator. The server-level
+  // preferred_backend_ above only drives GenerateScene's dispatch sizing + worker
+  // count; each Simulator owns its OWN preferred_backend_ (default kPreferCpu) and
+  // reads it at Run() to pick the trace backend (CreateBackend). Without this, a
+  // server built via CreateServerEx(preferred_backend=metal) would size dispatches
+  // for Metal yet still trace on the legacy CPU path — the runtime SetPreferredBackend
+  // propagated, but the constructor did not (latent until the GUI backend-toggle
+  // reconstruct made CreateServerEx the live route, scrum-268.6 Part C).
+  for (auto& s : simulators_) {
+    s.SetPreferredBackend(preferred_backend);
+  }
+
+  // Spawn persistent threads — they start in cv.wait(), not working. All
+  // simulators_ are emplaced above first, so the &s references stay valid (no
+  // further vector reallocation).
   for (auto& s : simulators_) {
     simulator_threads_.emplace_back([this, &s]() { RunPersistentLoop([&s] { s.Run(); }); });
   }
@@ -621,6 +674,28 @@ bool ServerImpl::IsIdle() {
 void ServerImpl::ConsumeData() {
   ILOG_DEBUG(logger_, "ConsumeData: entry");
   bool first_consume_logged = false;
+  // task-268.4 commit-granularity knob: backend exit-seam SimData are chunked
+  // into kCommitCap-sized slices before Consume() so GUI snapshot cadence is
+  // independent of the LUMICE_DISPATCH_RAY_NUM dispatch granularity. Falls
+  // back to the historical LUMICE_BATCH_RAY_NUM env name when set so existing
+  // scripts keep their commit cadence unchanged. Legacy CPU-path SimData
+  // (non-empty rays_) bypass the chunker — the consumer projects via per-ray
+  // indices into rays_, which cannot be sliced without recomputing indices.
+  static const size_t kCommitCap = []() -> size_t {
+    if (const char* env = std::getenv("LUMICE_COMMIT_RAY_NUM")) {
+      long b = std::atol(env);
+      if (b > 0) {
+        return static_cast<size_t>(b);
+      }
+    }
+    if (const char* env = std::getenv("LUMICE_BATCH_RAY_NUM")) {
+      long b = std::atol(env);
+      if (b > 0) {
+        return static_cast<size_t>(b);
+      }
+    }
+    return kDefaultRayNum;
+  }();
   while (true) {
     CHECK_STOP
     auto sim_data = data_queue_->Get();
@@ -662,8 +737,66 @@ void ServerImpl::ConsumeData() {
           auto t_lock0 = std::chrono::steady_clock::now();
           std::lock_guard<TicketMutex> lock(consumer_mutex_);
           auto t_lock1 = std::chrono::steady_clock::now();
-          for (auto& c : consumers_) {
-            c->Consume(sim_data);
+          // task-268.4: chunk by kCommitCap on the backend exit-seam path
+          // (outgoing_d_ populated AND rays_ empty). Only the FIRST chunk
+          // carries root_ray_count_ + crystals_ — StatsConsumer accumulates
+          // both, so spreading them across chunks would N×-count and break
+          // the stats invariant. Legacy CPU SimData (rays_ non-empty) are
+          // delivered whole because their consumers project via per-ray
+          // indices into rays_, which has no clean sub-batch slice.
+          // NOLINTNEXTLINE(readability-identifier-naming) — local const flag, snake_case is project style for
+          // variables.
+          const bool is_exit_seam_path = sim_data.rays_.Empty() && !sim_data.outgoing_d_.empty();
+          if (!is_exit_seam_path) {
+            for (auto& c : consumers_) {
+              c->Consume(sim_data);
+            }
+          } else {
+            size_t exit_count = sim_data.outgoing_w_.size();
+            size_t emitted = 0;
+            do {
+              size_t chunk_count = std::min(kCommitCap, exit_count - emitted);
+              SimData chunk;
+              chunk.curr_wl_ = sim_data.curr_wl_;
+              chunk.generation_ = sim_data.generation_;
+              // Stats fields only on the first chunk; rest carry 0 / empty
+              // so StatsConsumer's sim_rays_ / crystals_ accumulate to the
+              // same totals as a single whole-Consume call would yield.
+              if (emitted == 0) {
+                chunk.root_ray_count_ = sim_data.root_ray_count_;
+                chunk.crystals_ = sim_data.crystals_;
+                chunk.crystal_axis_dists_ = sim_data.crystal_axis_dists_;
+              }
+              if (chunk_count > 0) {
+                chunk.outgoing_d_.assign(
+                    sim_data.outgoing_d_.begin() + static_cast<std::ptrdiff_t>(emitted) * 3,
+                    sim_data.outgoing_d_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count) * 3);
+                chunk.outgoing_w_.assign(
+                    sim_data.outgoing_w_.begin() + static_cast<std::ptrdiff_t>(emitted),
+                    sim_data.outgoing_w_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count));
+                // scrum-268.8 (DR-3): per-ray wavelength must be sliced in
+                // lock-step with outgoing_w_ — omitting it here left chunked
+                // SimData with empty outgoing_wl_, so the consumer fell back to
+                // per-batch curr_wl_ and the CMF decoupled from the per-ray SPD
+                // weight (flat / illuminant-independent color). Empty for CPU /
+                // discrete-wl paths, where the fallback is correct.
+                if (!sim_data.outgoing_wl_.empty()) {
+                  chunk.outgoing_wl_.assign(
+                      sim_data.outgoing_wl_.begin() + static_cast<std::ptrdiff_t>(emitted),
+                      sim_data.outgoing_wl_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count));
+                }
+                if (sim_data.exit_records_.size() >= emitted + chunk_count) {
+                  chunk.exit_records_.assign(
+                      sim_data.exit_records_.begin() + static_cast<std::ptrdiff_t>(emitted),
+                      sim_data.exit_records_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count));
+                }
+                chunk.outgoing_indices_.assign(chunk_count, 0);
+              }
+              for (auto& c : consumers_) {
+                c->Consume(chunk);
+              }
+              emitted += chunk_count;
+            } while (emitted < exit_count);
           }
           auto t_consume = std::chrono::steady_clock::now();
           snapshot_dirty_ = true;
@@ -710,17 +843,39 @@ void ServerImpl::GenerateScene() {
     renders = active_renders_;
     generation = scene_generation_.load();
   }
-  // LUMICE_BATCH_RAY_NUM: per-batch ray count for performance tuning (default: kDefaultRayNum=128).
-  // Higher values amortize Metal kernel dispatch overhead; tune against legacy crossover (~512).
-  static const size_t kBatchCap = []() -> size_t {
-    if (const char* env = std::getenv("LUMICE_BATCH_RAY_NUM")) {
+  // task-268.4 commit↔batch decoupling: two independent knobs.
+  //
+  // LUMICE_DISPATCH_RAY_NUM (kDispatchCap): per-SimBatch ray count fed to the
+  //   backend (GPU dispatch granularity). Higher amortizes Metal kernel
+  //   launch overhead; tune against legacy crossover (~512).
+  // LUMICE_COMMIT_RAY_NUM (kCommitCap): SimData-to-consumer commit granularity
+  //   inside ConsumeData. Smaller commits keep GUI snapshot cadence fine
+  //   regardless of dispatch size, so "feed GPU big, refresh UI small"
+  //   becomes a single tunable.
+  //
+  // Backward compat: LUMICE_BATCH_RAY_NUM (historical "batch = commit
+  // granularity" semantics) is honoured as a fallback for kCommitCap only;
+  // dispatch granularity defaults to kDefaultRayNum unless LUMICE_DISPATCH_RAY_NUM
+  // is explicitly set.
+  auto read_env_size = [](const char* name, size_t default_val) -> size_t {
+    if (const char* env = std::getenv(name)) {
       long b = std::atol(env);
       if (b > 0) {
         return static_cast<size_t>(b);
       }
     }
-    return kDefaultRayNum;
-  }();
+    return default_val;
+  };
+  // scrum-268.6: backend-aware dispatch default. Metal single-engine defaults
+  // to a large dispatch (kDefaultMetalDispatchRayNum) to saturate the GPU;
+  // CPU/legacy keeps the small kDefaultRayNum. An explicit LUMICE_DISPATCH_RAY_NUM
+  // always wins. NOT static: a server reconstructed on a GUI backend toggle must
+  // re-resolve the default for the new backend (commit↔batch decoupling, 268.4).
+  const size_t kDefaultDispatch = ResolveMetalRoute(preferred_backend_.load(std::memory_order_acquire)) ?
+                                      kDefaultMetalDispatchRayNum :
+                                      kDefaultRayNum;
+  const size_t kDispatchCap = read_env_size("LUMICE_DISPATCH_RAY_NUM", kDefaultDispatch);
+  const size_t kBatchCap = kDispatchCap;  // local alias for the loop below
 
   auto ray_num = scene->ray_num_;
   size_t committed_num = 0;
@@ -782,7 +937,8 @@ void ServerImpl::SetLogLevel(LogLevel level) {
 // =============== Server ===============
 Server::Server() : impl_(std::make_shared<ServerImpl>()) {}
 
-Server::Server(int num_workers, uint32_t sim_seed) : impl_(std::make_shared<ServerImpl>(num_workers, sim_seed)) {}
+Server::Server(int num_workers, uint32_t sim_seed, int preferred_backend)
+    : impl_(std::make_shared<ServerImpl>(num_workers, sim_seed, preferred_backend)) {}
 
 Error Server::CommitConfig(const nlohmann::json& config_json, bool* out_reused) {
   if (!impl_) {

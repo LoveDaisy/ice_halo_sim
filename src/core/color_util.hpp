@@ -40,6 +40,25 @@ inline void SpectrumToXyz(float wl, const float* v, const int* xy, float* xyz, s
   }
 }
 
+// Per-ray variant — each ray i carries its own wavelength wl_per_ray[i].
+// Used by the Metal/DR-3 path where the photon's lifetime wavelength tag is
+// derived from a host-uploaded wavelength pool (see metal_trace_backend.mm's
+// ComputeWlPool). xy / xyz semantics mirror SpectrumToXyz above. Out-of-range
+// wavelengths are silently skipped per ray.
+inline void SpectrumToXyzPerRay(const float* wl_per_ray, const float* v, const int* xy, float* xyz, size_t num) {
+  for (size_t i = 0; i < num; i++) {
+    int wl_key = static_cast<int>(wl_per_ray[i] + 0.5f);
+    if (wl_key < kCmfMinWavelength || wl_key > kCmfMaxWavelength) {
+      continue;
+    }
+    int idx_cmf = wl_key - kCmfMinWavelength;
+    size_t pidx = xy == nullptr ? i * 3 : static_cast<size_t>(xy[i]) * 3;
+    xyz[pidx + 0] += kCmfX[idx_cmf] * v[i];
+    xyz[pidx + 1] += kCmfY[idx_cmf] * v[i];
+    xyz[pidx + 2] += kCmfZ[idx_cmf] * v[i];
+  }
+}
+
 }  // namespace lumice
 
 #endif  // CORE_COLOR_UTIL_H_

@@ -40,8 +40,9 @@ static_assert(sizeof(void*) == 8, "SimData layout assumes 64-bit pointers");
 // (28B + 7B padding) bumping 192 → 232 for the image-seam path. scrum-258.1
 // Step 4 removes those fields (exit seam is the canonical out path),
 // shrinking back to 192. scrum-258.2 adds exit_records_
-// (vector<ExitRayRecord>, 24B), bumping 192 → 216.
-static_assert(sizeof(SimData) == 216,
+// (vector<ExitRayRecord>, 24B), bumping 192 → 216. scrum-268.8 (DR-3) adds
+// outgoing_wl_ (vector<float>, 24B) for per-ray wavelength, bumping 216 → 240.
+static_assert(sizeof(SimData) == 240,
               "SimData layout changed — update test_sim_data.cpp DeepCopy/Move assertions "
               "and sim_data.cpp's static_assert.");
 #endif
@@ -72,6 +73,8 @@ SimData MakePopulatedSimData() {
   s.outgoing_indices_ = { 0, 2, 4 };
   s.outgoing_d_ = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f };
   s.outgoing_w_ = { 0.5f, 0.7f };
+  // scrum-268.8 (DR-3): outgoing_wl_ deep-copy / move coverage.
+  s.outgoing_wl_ = { 550.0f, 600.0f };
   // scrum-258.2: exit_records_ — 2 distinct rich records to exercise the
   // deep-copy / move paths added to SimData's special members.
   s.exit_records_.resize(2);
@@ -689,6 +692,7 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
   EXPECT_EQ(copy.outgoing_indices_, original.outgoing_indices_);
   EXPECT_EQ(copy.outgoing_d_, original.outgoing_d_);
   EXPECT_EQ(copy.outgoing_w_, original.outgoing_w_);
+  EXPECT_EQ(copy.outgoing_wl_, original.outgoing_wl_);  // scrum-268.8 (DR-3)
   EXPECT_EQ(copy.crystals_.size(), original.crystals_.size());
   ASSERT_EQ(copy.exit_records_.size(), original.exit_records_.size());
   EXPECT_EQ(copy.exit_records_[0].crystal_id, 7u);
@@ -708,6 +712,9 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
 
   copy.outgoing_w_.clear();
   EXPECT_EQ(original.outgoing_w_.size(), 2u) << "outgoing_w_ not deep-copied";
+
+  copy.outgoing_wl_.clear();
+  EXPECT_EQ(original.outgoing_wl_.size(), 2u) << "outgoing_wl_ not deep-copied";
 
   copy.exit_records_.clear();
   EXPECT_EQ(original.exit_records_.size(), 2u) << "exit_records_ not deep-copied";
@@ -734,6 +741,7 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   EXPECT_EQ(target.outgoing_indices_, original.outgoing_indices_);
   EXPECT_EQ(target.outgoing_d_, original.outgoing_d_);
   EXPECT_EQ(target.outgoing_w_, original.outgoing_w_);
+  EXPECT_EQ(target.outgoing_wl_, original.outgoing_wl_);  // scrum-268.8 (DR-3)
   EXPECT_EQ(target.crystals_.size(), 1u);
   ASSERT_EQ(target.exit_records_.size(), 2u);
   EXPECT_EQ(target.exit_records_[0].crystal_id, 7u);

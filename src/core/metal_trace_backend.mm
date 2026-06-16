@@ -37,6 +37,7 @@
 #include "core/simulator.hpp"  // PartitionCrystalRayNum
 #include "core/trace_ops.hpp"
 #include "util/color_data.hpp"
+#include "util/illuminant.hpp"
 #include "util/logger.hpp"
 
 namespace lumice {
@@ -85,17 +86,28 @@ inline float pcg_uniform(thread PcgStream& s) {
   return u01_from_hash(h);
 }
 
-struct KernelParams {
+// scrum-268.8 (DR-3): per-ray wavelength pool entry. The host samples M
+// wavelengths uniformly over [380, 780] nm once per (crystal, illuminant) ci
+// dispatch and uploads this table; kernels look up per-ray optics by wl_idx.
+// Layout MUST mirror the C++ WlEntry struct below kKernelSrc (sizeof == 20).
+struct WlEntry {
   float n_idx;
+  float spd_weight;
+  float cmf_x;
+  float cmf_y;
+  float cmf_z;
+};
+
+struct KernelParams {
+  // scrum-268.8 (DR-3): per-batch n_idx / cie_x/y/z removed. trace kernel now
+  // reads per-ray optics from wl_pool[wl_idx] (see WlEntry above + buffer
+  // bindings in DispatchLayer).
   uint  max_hits;
   uint  poly_cnt;
   uint  num_rays;
   uint  img_w;
   uint  img_h;
   float az0;
-  float cie_x;
-  float cie_y;
-  float cie_z;
   uint  ms_mode;
   uint  out_cap;
   // Projection routing (host fills per BeginSession lens type):
@@ -152,9 +164,18 @@ kernel void trace_layer_kernel(
     constant KernelParams& prm      [[buffer(7)]],
     device atomic_float*   image    [[buffer(8)]],
     device float*          out_d    [[buffer(9)]],
-    device float*          out_p    [[buffer(10)]],
-    device float*          out_w    [[buffer(11)]],
-    device ushort*         out_tf   [[buffer(12)]],
+    // scrum-268.8 (DR-3): slots 10 and 12 reclaimed from the retired out_p /
+    // out_tf writes (dead data — transit_root_kernel resamples entry point +
+    // face on the next-layer crystal; ReadbackExitRays never read cont_p /
+    // cont_tf). slot 10 now binds the wavelength pool, 12 binds the per-ray
+    // root wavelength index that the trace kernel reads at entry.
+    // scrum-268.8 (DR-3): wl_pool routes through the `constant` address space
+    // so per-thread divergent WlEntry reads hit the shader-side cache rather
+    // than the slower device-memory gather path. Pool size ≤ 255 × 20B = 5100B
+    // fits well below Metal's 64KB constant buffer ceiling.
+    constant WlEntry*      wl_pool       [[buffer(10)]],
+    device float*          out_w         [[buffer(11)]],
+    device const uint*     root_wl_idx   [[buffer(12)]],
     device atomic_uint*    counter  [[buffer(13)]],
     device float*          rec_sink [[buffer(14)]],
     device atomic_uint*    exit_cnt [[buffer(15)]],
@@ -185,6 +206,12 @@ kernel void trace_layer_kernel(
     device const uchar*            gate_getfn_bytes    [[buffer(26)]],
     device const DeviceFilterDesc* gate_sub_desc_buf   [[buffer(27)]],
     device uchar*                  exit_ms_layer       [[buffer(28)]],
+    // scrum-268.8 (DR-3): per-ray wavelength side-cars. cont_wl_idx[slot]
+    // gets the current ray's wl_idx propagated alongside the emit-gate
+    // continuation write; exit_wl_idx[es] gets it propagated alongside both
+    // the mid-exit (filter+prob) and final-exit (all polygon-exits) writes.
+    device uint*                   cont_wl_idx         [[buffer(29)]],
+    device uint*                   exit_wl_idx         [[buffer(30)]],
     uint tid [[thread_position_in_grid]]) {
   if (tid >= prm.num_rays) { return; }
 
@@ -204,7 +231,16 @@ kernel void trace_layer_kernel(
   float m[9];
   for (uint k = 0u; k < 9u; k++) { m[k] = root_rot[tid * 9u + k]; }
 
-  const float n_idx    = prm.n_idx;
+  // scrum-268.8 (DR-3): per-ray optics via pool lookup. wl_idx is the
+  // photon's lifetime tag — set at gen_root, carried through transit, never
+  // resampled inside the trace. cie_* accumulates into image via wl_pool
+  // entries instead of the deleted prm.cie_x/y/z fields.
+  const uint    wl_idx = root_wl_idx[tid];
+  const WlEntry wle    = wl_pool[wl_idx];
+  const float   n_idx  = wle.n_idx;
+  const float   cmf_x  = wle.cmf_x;
+  const float   cmf_y  = wle.cmf_y;
+  const float   cmf_z  = wle.cmf_z;
   const uint  poly_cnt = prm.poly_cnt;
 
   const int   iw_i      = int(prm.img_w);
@@ -329,34 +365,19 @@ kernel void trace_layer_kernel(
             gate_stream.slot       = 0u;
             bool do_continue = (pcg_uniform(gate_stream) < prm.ms_prob);
             if (do_continue) {
-              // Best-facing face placeholder for out_p / out_tf — the next
-              // layer's transit_root_kernel re-samples entry point + face on
-              // the next-layer crystal, so these writes are metadata-only.
-              float ilen = rsqrt(cdx * cdx + cdy * cdy + cdz * cdz);
-              float ux = cdx * ilen, uy = cdy * ilen, uz = cdz * ilen;
-              int   ef = 0;
-              float bestf = -1e30f;
-              for (uint fi = 0u; fi < poly_cnt; fi++) {
-                float facing = -(ux * poly_n[fi * 3u + 0u] +
-                                 uy * poly_n[fi * 3u + 1u] +
-                                 uz * poly_n[fi * 3u + 2u]);
-                if (facing > bestf) { bestf = facing; ef = int(fi); }
-              }
+              // scrum-268.8: out_p / out_tf retired (transit_root_kernel
+              // resamples entry point + face on the next-layer crystal so
+              // these writes were dead data). cont_wl_idx now propagates
+              // the photon's lifetime wavelength tag into the continuation
+              // ring; transit_root_kernel reads it back into root_wl_idx_out
+              // for the next layer's trace kernel to consume.
               uint slot = atomic_fetch_add_explicit(counter, 1u, memory_order_relaxed);
               if (slot < prm.out_cap) {
                 out_d[slot * 3u + 0u] = wcx;
                 out_d[slot * 3u + 1u] = wcy;
                 out_d[slot * 3u + 2u] = wcz;
-                // TODO(scrum-267 task-device-resident-continuation): out_p/out_tf
-                // writes below are dead data. transit_root_kernel reads cont_d/cont_w
-                // only (not cont_p/cont_tf) and resamples entry point + face from
-                // crystal geometry on the device. Clean up when cont_p/cont_tf write
-                // path is retired (remove writes + buffer bindings + buffer members).
-                out_p[slot * 3u + 0u] = centroid[ef * 3u + 0u];
-                out_p[slot * 3u + 1u] = centroid[ef * 3u + 1u];
-                out_p[slot * 3u + 2u] = centroid[ef * 3u + 2u];
                 out_w[slot] = cw;
-                out_tf[slot] = ushort(ef);
+                cont_wl_idx[slot] = wl_idx;
               }
               // scrum-267 task-fused-emit-gate: post-gate semantics — exit_cnt
               // / exit_wsum now tally "filter_pass polygon-exits" (gate dropped
@@ -378,6 +399,7 @@ kernel void trace_layer_kernel(
                 exit_w[es] = cw;
                 exit_crystal_id[es] = ushort(prm.crystal_id);
                 exit_ms_layer[es]   = uchar(prm.ms_layer_idx);
+                exit_wl_idx[es]     = wl_idx;  // scrum-268.8 per-ray wavelength tag
                 uint seq_len = min(rec_len, prm.face_seq_cap);
                 exit_face_seq_len[es] = uchar(seq_len);
                 for (uint k = 0u; k < seq_len; k++) {
@@ -426,6 +448,7 @@ kernel void trace_layer_kernel(
               // emitted by the gate carry the producing layer's idx and skip
               // the filter check).
               exit_ms_layer[es] = uchar(prm.ms_layer_idx);
+              exit_wl_idx[es]   = wl_idx;  // scrum-268.8 per-ray wavelength tag
               uint seq_len = min(rec_len, prm.face_seq_cap);
               exit_face_seq_len[es] = uchar(seq_len);
               for (uint k = 0u; k < seq_len; k++) {
@@ -446,9 +469,9 @@ kernel void trace_layer_kernel(
             int iy = int(floor(-lat * proj_scl + img_h_f * 0.5f + 0.5f));
             if (iy >= 0 && iy < ih_i) {
               uint pix = (uint(iy) * prm.img_w + uint(ix)) * 3u;
-              atomic_fetch_add_explicit(&image[pix + 0u], prm.cie_x * cw, memory_order_relaxed);
-              atomic_fetch_add_explicit(&image[pix + 1u], prm.cie_y * cw, memory_order_relaxed);
-              atomic_fetch_add_explicit(&image[pix + 2u], prm.cie_z * cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&image[pix + 0u], cmf_x * cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&image[pix + 1u], cmf_y * cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&image[pix + 2u], cmf_z * cw, memory_order_relaxed);
             }
           } else {
             // proj_type == 1: dual fisheye equal-area, primary + opposite-hemisphere overlap.
@@ -474,9 +497,9 @@ kernel void trace_layer_kernel(
             int iy = int(floor(fy + 0.5f));
             if (ix >= 0 && ix < iw_i && iy >= 0 && iy < ih_i) {
               uint pix = (uint(iy) * prm.img_w + uint(ix)) * 3u;
-              atomic_fetch_add_explicit(&image[pix + 0u], prm.cie_x * cw, memory_order_relaxed);
-              atomic_fetch_add_explicit(&image[pix + 1u], prm.cie_y * cw, memory_order_relaxed);
-              atomic_fetch_add_explicit(&image[pix + 2u], prm.cie_z * cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&image[pix + 0u], cmf_x * cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&image[pix + 1u], cmf_y * cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&image[pix + 2u], cmf_z * cw, memory_order_relaxed);
             }
             // Overlap dual-write: mirror CPU render.cpp:192-214 (opposite hemisphere, dz<0).
             // Does NOT increment exit_wsum — preserves normalization parity with CPU.
@@ -494,9 +517,9 @@ kernel void trace_layer_kernel(
               int   iy2 = int(floor(fy2 + 0.5f));
               if (ix2 >= 0 && ix2 < iw_i && iy2 >= 0 && iy2 < ih_i) {
                 uint pix2 = (uint(iy2) * prm.img_w + uint(ix2)) * 3u;
-                atomic_fetch_add_explicit(&image[pix2 + 0u], prm.cie_x * cw, memory_order_relaxed);
-                atomic_fetch_add_explicit(&image[pix2 + 1u], prm.cie_y * cw, memory_order_relaxed);
-                atomic_fetch_add_explicit(&image[pix2 + 2u], prm.cie_z * cw, memory_order_relaxed);
+                atomic_fetch_add_explicit(&image[pix2 + 0u], cmf_x * cw, memory_order_relaxed);
+                atomic_fetch_add_explicit(&image[pix2 + 1u], cmf_y * cw, memory_order_relaxed);
+                atomic_fetch_add_explicit(&image[pix2 + 2u], cmf_z * cw, memory_order_relaxed);
               }
             }
           }
@@ -568,7 +591,10 @@ struct GenRootKernelParams {
   float sun_lon;             // (sun.azimuth + 180°) in radians
   float sun_lat;             // (-sun.altitude) in radians
   float sun_half_angle;      // (sun.diameter / 2) in radians
-  float ray_weight;          // wl_param.weight_
+  // scrum-268.8 (DR-3): replaces per-batch ray_weight. gen_root_kernel uses
+  // wl_pool[wl_idx].spd_weight as the per-ray weight; this field is the modulo
+  // bound that hashes a global ray index into [0, wl_pool_size).
+  uint  wl_pool_size;
   uint  lat_path;            // see kLatPath* above
   uint  lat_dist_type;       // axis_dist.latitude_dist.type (cast to uint)
   float lat_mean_rad;        // axis_dist.latitude_dist.mean × deg→rad
@@ -822,6 +848,13 @@ kernel void gen_root_kernel(
     device const float*     tri_area      [[buffer(7)]],
     device const ushort*    tri_to_poly   [[buffer(8)]],
     constant GenRootKernelParams& gp      [[buffer(9)]],
+    // scrum-268.8 (DR-3): per-ray wavelength pool + per-ray wl_idx output.
+    // Pool entries provide the spd_weight (replacing the deleted gp.ray_weight)
+    // and feed the trace kernel's per-ray optics on the next stage.
+    // scrum-268.8 (DR-3): match trace_layer_kernel's `constant` binding so the
+    // shader-side cache is consistent across both pool readers.
+    constant WlEntry*       wl_pool       [[buffer(10)]],
+    device uint*            root_wl_idx   [[buffer(11)]],
     uint tid [[thread_position_in_grid]])
 {
   if (tid >= gp.num_rays) {
@@ -840,6 +873,22 @@ kernel void gen_root_kernel(
   stream.seed = gp.gen_seed;
   stream.global_idx = global_idx;
   stream.slot = 0u;
+
+  // scrum-268.8 (DR-3): per-ray wavelength index. Uses an independent PCG slot
+  // (20) so it cannot collide with the orientation / triangle-pick draws made
+  // below — kWlPcgSlot stays clear of every existing draw count (orientation +
+  // sun + categorical + triangle ≤ ~12 slots). The result is the photon's
+  // lifetime tag, written to root_wl_idx so the trace kernel can look up
+  // n_idx / cmf_* from wl_pool[wl_idx].
+  PcgStream wl_stream;
+  wl_stream.seed       = gp.gen_seed;
+  wl_stream.global_idx = global_idx;
+  wl_stream.slot       = 20u;
+  uint wl_idx = (uint)(pcg_uniform(wl_stream) * float(gp.wl_pool_size));
+  if (wl_idx >= gp.wl_pool_size) {
+    wl_idx = gp.wl_pool_size - 1u;  // guard against pcg_uniform → 1.0f rounding
+  }
+  root_wl_idx[tid] = wl_idx;
 
   // 1. Sample crystal orientation (lon, lat, roll) → 3×3 rotation.
   float lon, lat, roll;
@@ -867,7 +916,7 @@ kernel void gen_root_kernel(
   float p[3];
   sample_triangle(stream, tri_vtx + tri_id * 9u, p);
   ushort to_face = tri_to_poly[tri_id];
-  float weight = gp.ray_weight;
+  float weight = wl_pool[wl_idx].spd_weight;  // scrum-268.8 per-ray spd weight
   if (to_face == kInvalidId) {
     // Mirrors InitRay_p_fid fallback (simulator.cpp:92-94): zero weight when
     // a triangle has no polygon backing so downstream HitSurface can drop it.
@@ -918,6 +967,12 @@ kernel void transit_root_kernel(
     device const float*  tri_area    [[buffer(9)]],
     device const ushort* tri_to_poly [[buffer(10)]],
     constant GenRootKernelParams& gp [[buffer(11)]],
+    // scrum-268.8 (DR-3): per-ray wavelength carrier through the layer hop.
+    // The emit gate wrote each continuation ray's wl_idx into cont_wl_idx_in;
+    // transit pass-through copies it to root_wl_idx_out so the next layer's
+    // trace kernel reads the same lifetime tag.
+    device const uint*   cont_wl_idx_in   [[buffer(12)]],
+    device uint*         root_wl_idx_out  [[buffer(13)]],
     uint tid [[thread_position_in_grid]])
 {
   if (tid >= gp.num_rays || gp.tri_count == 0u) {
@@ -978,6 +1033,8 @@ kernel void transit_root_kernel(
   for (uint k = 0u; k < 9u; k++) {
     root_rot[tid * 9u + k] = mat9[k];
   }
+  // scrum-268.8 (DR-3): pass-through wavelength index (photon lifetime tag).
+  root_wl_idx_out[tid] = cont_wl_idx_in[tid];
 }
 )METAL";
 
@@ -987,16 +1044,14 @@ kernel void transit_root_kernel(
 // guards size only; reviewer-facing field-by-field check is the maintainer's
 // responsibility when adding/reordering members.
 struct KernelParams {
-  float    n_idx;
+  // scrum-268.8 (DR-3): per-batch n_idx + cie_x/y/z removed. trace_layer
+  // kernel reads per-ray optics from the wl_pool[wl_idx] buffer instead.
   uint32_t max_hits;
   uint32_t poly_cnt;
   uint32_t num_rays;
   uint32_t img_w;
   uint32_t img_h;
   float    az0;
-  float    cie_x;
-  float    cie_y;
-  float    cie_z;
   uint32_t ms_mode;
   uint32_t out_cap;
   uint32_t proj_type;
@@ -1019,7 +1074,7 @@ struct KernelParams {
   uint32_t filter_desc_max_ci;
   uint32_t crystal_config_id;
 };
-static_assert(sizeof(KernelParams) == 92u,
+static_assert(sizeof(KernelParams) == 76u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 
 // Device root-gen latitude path tags. MUST match constant kLatPath* in
@@ -1048,7 +1103,9 @@ struct GenRootKernelParams {
   float    sun_lon;
   float    sun_lat;
   float    sun_half_angle;
-  float    ray_weight;
+  // scrum-268.8 (DR-3): host mirror of MSL `wl_pool_size`. Replaces the
+  // per-batch `ray_weight` (now per-ray from wl_pool[wl_idx].spd_weight).
+  uint32_t wl_pool_size;
   uint32_t lat_path;
   uint32_t lat_dist_type;   // DistributionType cast to uint
   float    lat_mean_rad;
@@ -1082,6 +1139,75 @@ void ComputeCmf(float wl, float& cie_x, float& cie_y, float& cie_z) {
   cie_x = kCmfX[idx];
   cie_y = kCmfY[idx];
   cie_z = kCmfZ[idx];
+}
+
+// scrum-268.8 (DR-3): per-ray wavelength pool — host-side mirror of the MSL
+// WlEntry struct in kKernelSrc. sizeof MUST stay == 20 (5 × 4B); reorderings
+// must mirror MSL.
+struct WlEntry {
+  float n_idx;
+  float spd_weight;
+  float cmf_x;
+  float cmf_y;
+  float cmf_z;
+};
+static_assert(sizeof(WlEntry) == 20u,
+              "WlEntry size mismatch — update MSL WlEntry to match host layout");
+
+// Default M = 64 (≈6.25 nm resolution across [380, 780] nm). Owner can override
+// via env var; capped at 255 so a uint8_t wl_idx in ExitRayRecord stays
+// representable end-to-end.
+constexpr uint32_t kWlPoolSizeDefault = 64u;
+constexpr uint32_t kWlPoolSizeMax     = 255u;
+
+uint32_t ResolveWlPoolSize() {
+  const char* env = std::getenv("LUMICE_WL_POOL_SIZE");
+  if (env == nullptr || env[0] == '\0') {
+    return kWlPoolSizeDefault;
+  }
+  long v = std::strtol(env, nullptr, 10);
+  if (v <= 0) {
+    return kWlPoolSizeDefault;
+  }
+  if (v > static_cast<long>(kWlPoolSizeMax)) {
+    return kWlPoolSizeMax;
+  }
+  return static_cast<uint32_t>(v);
+}
+
+// Build the per-(crystal, spectrum) WlEntry table. M >= 1 is the caller's
+// responsibility. illuminant_mode == true samples M wavelengths uniformly with
+// SPD weights from the standard illuminant table; otherwise the pool degenerates
+// to a single entry carrying spec_wl / spec_weight (discrete-wavelength path).
+// For the degenerate case, M is still >= 1 and the first entry is replicated
+// across the rest so PCG % M lookup stays well-defined.
+void ComputeWlPool(const Crystal& crystal,
+                   bool illuminant_mode, IlluminantType illuminant,
+                   float spec_wl, float spec_weight,
+                   uint32_t M, std::vector<WlEntry>& out) {
+  assert(M > 0u);
+  out.resize(M);
+  if (illuminant_mode) {
+    for (uint32_t m = 0; m < M; ++m) {
+      // Mid-point sampling across [380, 780] — preserves the simulator.cpp:663
+      // uniform-PDF semantics (each entry covers a 400/M nm slice, total
+      // weight sums to ~SPD integral × 400 / M).
+      float wl = 380.0f + (static_cast<float>(m) + 0.5f) * 400.0f /
+                          static_cast<float>(M);
+      WlEntry& e = out[m];
+      e.n_idx = crystal.GetRefractiveIndex(wl);
+      e.spd_weight = GetIlluminantSpd(illuminant, wl);
+      ComputeCmf(wl, e.cmf_x, e.cmf_y, e.cmf_z);
+    }
+  } else {
+    WlEntry e0{};
+    e0.n_idx = crystal.GetRefractiveIndex(spec_wl);
+    e0.spd_weight = spec_weight;
+    ComputeCmf(spec_wl, e0.cmf_x, e0.cmf_y, e0.cmf_z);
+    for (uint32_t m = 0; m < M; ++m) {
+      out[m] = e0;
+    }
+  }
 }
 
 size_t ComputeOutCap(size_t n, size_t max_hits) {
@@ -1151,6 +1277,17 @@ struct MetalTraceBackend::Impl {
   // Reset() as a defensive session-boundary cleanup.
   std::optional<GenRootKernelParams> pending_gen_params_{};
 
+  // task-268.7 architectural-layer move: DispatchLayer now commits without
+  // waiting; the last committed command buffer parks here so TraceLayer's
+  // ci-loop can wait + read back at a single explicit sync point. This is a
+  // STRUCTURAL precondition for the transit+trace CB merge below (the merged
+  // CB still needs exactly one commit and one wait, just relocated). The
+  // direct latency win comes from Step 3 (one CB per non-first MS ci instead
+  // of two) and Step 1 (single-engine, no GPU contention); pending_cb_ alone
+  // does not introduce in-flight overlap in the single-ci common case.
+  id<MTLCommandBuffer> pending_cb_ = nil;
+  int pending_out_slot_ = 0;  // out_slot for the dispatch parked in pending_cb_
+
   id<MTLDevice>               device = nil;
   id<MTLCommandQueue>         queue  = nil;
   id<MTLComputePipelineState> pso    = nil;
@@ -1200,7 +1337,8 @@ struct MetalTraceBackend::Impl {
   int    width = 0;
   int    height = 0;
   float  az0 = 0.0f;
-  float  cie_x = 0.0f, cie_y = 0.0f, cie_z = 0.0f;
+  // scrum-268.8 (DR-3): per-batch cie_x/y/z removed (KernelParams fields
+  // dropped; trace kernel reads CMF from wl_pool[wl_idx]).
   // Projection routing — populated by BeginSession per render.lens_.type_.
   // Mirrors KernelParams fields with the same name; DispatchLayer copies them.
   uint32_t proj_type = 0u;
@@ -1258,10 +1396,12 @@ struct MetalTraceBackend::Impl {
   // cont_face_seq_* buffers (formerly slots 24-26) are removed — the emit gate
   // now applies filter+prob on-device, so the host hop reads only direction +
   // weight + crystal-rot.
+  // scrum-268.8 (DR-3): cont_p / cont_tf retired. trace kernel slots 10 / 12
+  // now bind the wavelength pool / per-ray root wavelength index; the next
+  // layer's transit_root_kernel resamples entry point + face from device
+  // geometry instead of reading the dead cont_p / cont_tf writes.
   id<MTLBuffer> cont_d[2]  = { nil, nil };
-  id<MTLBuffer> cont_p[2]  = { nil, nil };
   id<MTLBuffer> cont_w[2]  = { nil, nil };
-  id<MTLBuffer> cont_tf[2] = { nil, nil };
   size_t        cont_capacity[2] = { 0, 0 };
   size_t        cont_counts[2]   = { 0, 0 };
   size_t        out_cap = 0;
@@ -1302,6 +1442,31 @@ struct MetalTraceBackend::Impl {
   // filter+prob path for already-gated mid-exits.
   id<MTLBuffer> exit_ms_layer_buf      = nil;
   uint32_t      face_seq_cap_ = 0;
+
+  // scrum-268.8 (DR-3): per-ray wavelength pool + per-ray wl_idx side-cars.
+  //   * wl_pool_buf_: M × WlEntry (20B/entry), allocated once at pool-size resolve
+  //     and re-populated per ci dispatch (crystal n_idx depends on ci).
+  //   * root_wl_idx_buf_: max_rays × uint32, single (root buffers are NOT
+  //     ping-pong; gen_root + transit_root both target the same root_*_buf set).
+  //   * cont_wl_idx_buf_[2]: out_cap × uint32, ping-pong with cont_d/cont_w.
+  //   * exit_wl_idx_buf_: exit_cap × uint32, single (lock-step with exit_ray_d).
+  // The buffers grow with the same capacity tracking as their host siblings.
+  id<MTLBuffer> wl_pool_buf_        = nil;
+  id<MTLBuffer> root_wl_idx_buf_    = nil;
+  id<MTLBuffer> cont_wl_idx_buf_[2] = { nil, nil };
+  id<MTLBuffer> exit_wl_idx_buf_    = nil;
+  uint32_t      wl_pool_size_       = 0u;
+  // BeginSession captures the spectrum mode + per-batch sentinel so
+  // ResolveLayerCrystalForCi can rebuild the WlEntry pool against the active
+  // crystal's refractive index each ci dispatch. illuminant_mode_=true uses
+  // an M-entry uniform sampling over [380, 780]; otherwise the pool degenerates
+  // to a 1-entry replication of (spec_wl, spec_weight) so the discrete-list
+  // path stays per-batch (matches the legacy CPU behaviour).
+  bool             illuminant_mode_  = false;
+  IlluminantType   illuminant_       = IlluminantType::kD65;
+  float            per_batch_wl_     = 0.0f;
+  float            per_batch_weight_ = 1.0f;
+  std::vector<WlEntry> wl_pool_host_;
 
   // Per-layer hop state (scrum-258.3 + scrum-267 task-fused-emit-gate +
   // scrum-267 task-device-resident-continuation Task 3).
@@ -1354,6 +1519,7 @@ struct MetalTraceBackend::Impl {
   void EnsureRecSink(size_t n);
   void EnsureExitBuffers(size_t cap);  // exit seam (scrum-258.1)
   void EnsureFilterBuffers(const SessionSpec& session_spec);  // scrum-267.1
+  void EnsureWlPoolBuffer();  // scrum-268.8 (DR-3) per-ray wavelength pool
   void UploadCrystal(const Crystal& crystal);
   void ResolveLayerCrystalForCi(const ScatteringSetting& setting, bool use_host,
                                 const HostRayBatch& host_batch);
@@ -1387,12 +1553,24 @@ struct MetalTraceBackend::Impl {
   // root_*_buf in lock-step with the trace kernel's input layout.
   void EncodeTransitRoot(id<MTLCommandBuffer> cb, const GenRootKernelParams& gp,
                          int in_slot, size_t ci_start);
+  // DispatchLayer encodes the trace pass (and any pending gen_root) into either
+  // a freshly-created command buffer or `existing_cb` (used by the non-first
+  // MS path to share the CB with a preceding EncodeTransitRoot), commits the
+  // CB without waiting, and parks it in `pending_cb_` along with `out_slot`.
+  // The caller MUST invoke WaitAndReadbackLayer() before reading any host-
+  // visible output (cont_counts, last_stats, exit_slot_buf).
   void DispatchLayer(size_t num_rays,
                      id<MTLBuffer> r_d, id<MTLBuffer> r_p,
                      id<MTLBuffer> r_w, id<MTLBuffer> r_tf,
                      uint32_t ms_mode, int out_slot,
                      uint32_t counter_init,
-                     uint32_t crystal_id, uint32_t ms_layer_idx);
+                     uint32_t crystal_id, uint32_t ms_layer_idx,
+                     id<MTLCommandBuffer> existing_cb = nil);
+  // Waits on `pending_cb_` (if any), validates status, reads back the
+  // continuation counter into cont_counts[pending_out_slot_], accumulates
+  // last_stats from exit_count_buf/exit_w_sum_buf, and clears pending_cb_.
+  // No-op when pending_cb_ is nil (safe to call at ci-loop tail).
+  void WaitAndReadbackLayer();
   void Reset();
 };
 
@@ -1537,6 +1715,12 @@ void MetalTraceBackend::Impl::EnsureRootBuffers(size_t n) {
   root_rot_buf = [device newBufferWithLength:n * 9 * sizeof(float)
                                     options:MTLResourceStorageModeShared];
   assert(root_rot_buf != nil);
+  // scrum-268.8 (DR-3): per-ray wavelength index. Lock-stepped with root_d
+  // so transit_root_kernel (root-buf writer for non-first MS) and the trace
+  // kernel (root-buf reader) see a side-car of the same length.
+  root_wl_idx_buf_ = [device newBufferWithLength:n * sizeof(uint32_t)
+                                        options:MTLResourceStorageModeShared];
+  assert(root_wl_idx_buf_ != nil);
 }
 
 void MetalTraceBackend::Impl::EnsureTriBuffers(size_t tri_cnt) {
@@ -1573,15 +1757,15 @@ void MetalTraceBackend::Impl::EnsureContBuffer(int slot) {
   cont_d[slot]  = [device newBufferWithLength:out_cap * 3 * sizeof(float)
                                       options:MTLResourceStorageModeShared];
   assert(cont_d[slot] != nil);
-  cont_p[slot]  = [device newBufferWithLength:out_cap * 3 * sizeof(float)
-                                      options:MTLResourceStorageModeShared];
-  assert(cont_p[slot] != nil);
   cont_w[slot]  = [device newBufferWithLength:out_cap * sizeof(float)
                                       options:MTLResourceStorageModeShared];
   assert(cont_w[slot] != nil);
-  cont_tf[slot] = [device newBufferWithLength:out_cap * sizeof(uint16_t)
-                                      options:MTLResourceStorageModeShared];
-  assert(cont_tf[slot] != nil);
+  // scrum-268.8 (DR-3): per-ray wavelength index for continuation rays.
+  // Lock-stepped with cont_d/cont_w so the emit gate's cont_wl_idx write and
+  // transit_root_kernel's cont_wl_idx read agree on capacity.
+  cont_wl_idx_buf_[slot] = [device newBufferWithLength:out_cap * sizeof(uint32_t)
+                                              options:MTLResourceStorageModeShared];
+  assert(cont_wl_idx_buf_[slot] != nil);
 }
 
 void MetalTraceBackend::Impl::EnsureRecSink(size_t n) {
@@ -1632,6 +1816,30 @@ void MetalTraceBackend::Impl::EnsureExitBuffers(size_t cap) {
   exit_ms_layer_buf = [device newBufferWithLength:cap * sizeof(uint8_t)
                                           options:MTLResourceStorageModeShared];
   assert(exit_ms_layer_buf != nil);
+  // scrum-268.8 (DR-3): per-ray wavelength index on the exit ring. Sized in
+  // lock-step with exit_ray_d_buf so ReadbackExitRays can attach wl_idx to
+  // each emitted ExitRayRecord.
+  exit_wl_idx_buf_ = [device newBufferWithLength:cap * sizeof(uint32_t)
+                                         options:MTLResourceStorageModeShared];
+  assert(exit_wl_idx_buf_ != nil);
+}
+
+// scrum-268.8 (DR-3): allocate the host-uploaded wavelength pool exactly once
+// per backend (pool size is invariant across sessions and ci dispatches; only
+// the pool contents change per ci). Idempotent — safe to call from every
+// BeginSession.
+void MetalTraceBackend::Impl::EnsureWlPoolBuffer() {
+  if (wl_pool_size_ == 0u) {
+    wl_pool_size_ = ResolveWlPoolSize();
+    assert(wl_pool_size_ > 0u && wl_pool_size_ <= kWlPoolSizeMax &&
+           "ResolveWlPoolSize returned out-of-range");
+  }
+  if (wl_pool_buf_ != nil) {
+    return;
+  }
+  wl_pool_buf_ = [device newBufferWithLength:wl_pool_size_ * sizeof(WlEntry)
+                                    options:MTLResourceStorageModeShared];
+  assert(wl_pool_buf_ != nil);
 }
 
 // scrum-267 task-msl-filter-match-port (Step 4): upload per-session filter
@@ -1843,10 +2051,23 @@ void MetalTraceBackend::Impl::ResolveLayerCrystalForCi(const ScatteringSetting& 
     current_n_idx = host_batch.refractive_index;
   } else {
     current_crystal = MakeCrystal(rng, setting.crystal_.param_);
-    current_n_idx = current_crystal.GetRefractiveIndex(spec.wl.wl_);
+    // scrum-268.8 (DR-3): current_n_idx is dead state now — the trace kernel
+    // reads per-ray n from wl_pool[wl_idx], not from this field (KernelParams
+    // .n_idx was removed). After Step 9 the illuminant path passes wl=0, so
+    // guard the Sellmeier call against the zero sentinel to avoid evaluating
+    // GetRefractiveIndex out of its valid range for a value nothing consumes.
+    current_n_idx =
+        (spec.wl.wl_ > 1.0f) ? current_crystal.GetRefractiveIndex(spec.wl.wl_) : 0.0f;
   }
   have_crystal = true;
   UploadCrystal(current_crystal);
+  // scrum-268.8 (DR-3): pool upload moved to BeginSession — Crystal::
+  // GetRefractiveIndex delegates to a global IceRefractiveIndex::Get so the
+  // refractive index per wavelength is identical across every crystal shape
+  // in a session. Recomputing per ci was a measured ~21× throughput hit on
+  // heavy multi-MS configs (M=64 lookups × N_ci × N_batch CPU work that the
+  // GPU could not hide). The session-level cache is invalidated implicitly
+  // by EndSession's Reset().
 }
 
 size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSetting& setting,
@@ -1910,6 +2131,26 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
     // re-applies the forward rotation before projection (invariant 6).
     std::memcpy(rot_ptr + i * 9, r.crystal_rot_.GetMat(), 9 * sizeof(float));
   }
+  // scrum-268.8 (DR-3): the host-gen fallback is per-ray too, mirroring the
+  // device gen_root path. Step 9 hands this backend a zero-wl WlParam, so
+  // InitRayFirstMs left root_w at 0 (no SPD weight) — the pool supplies both the
+  // per-ray wavelength index AND the SPD weight (root_w = pool[wl_idx].spd_weight,
+  // identical to the device path at gen_root_kernel). wl_idx is drawn from the
+  // session rng: statistically equivalent to the device PCG stream (the
+  // device-gen-vs-host-gen test asserts ds-corr, not bit parity). Without this,
+  // host-gen rays carry weight 0 → a black image once curr_wl_ is the Step 9
+  // sentinel.
+  auto* wl_idx_ptr = static_cast<uint32_t*>([root_wl_idx_buf_ contents]);
+  assert(wl_pool_size_ > 0u && !wl_pool_host_.empty() &&
+         "wl_pool must be uploaded before host root-gen");
+  for (size_t i = 0; i < n; i++) {
+    uint32_t wl_idx = static_cast<uint32_t>(rng.GetUniform() * static_cast<float>(wl_pool_size_));
+    if (wl_idx >= wl_pool_size_) {
+      wl_idx = wl_pool_size_ - 1u;
+    }
+    wl_idx_ptr[i] = wl_idx;
+    w_ptr[i] = wl_pool_host_[wl_idx].spd_weight;
+  }
   // Accumulate the host-gen count too so a future device-gen-eligible call
   // within the same session keeps gen_ray_base globally monotone.
   root_ray_count += n;
@@ -1962,6 +2203,24 @@ size_t MetalTraceBackend::Impl::InjectHostRoots(const HostRayBatch& host) {
     m[3] = 0.0f; m[4] = 1.0f; m[5] = 0.0f;
     m[6] = 0.0f; m[7] = 0.0f; m[8] = 1.0f;
   }
+  // scrum-268.8 (DR-3): golden-ray injection is single-wl by construction
+  // (tests set spec.wl.wl_ to a fixed value). Map per_batch_wl_ to a pool
+  // index so the trace kernel reads matching (n_idx, cmf_*) for the
+  // analytically derived rays.
+  auto* wl_idx_ptr = static_cast<uint32_t*>([root_wl_idx_buf_ contents]);
+  uint32_t wl_idx_batch = 0u;
+  if (wl_pool_size_ > 0u) {
+    float t = (per_batch_wl_ - 380.0f) * static_cast<float>(wl_pool_size_) / 400.0f - 0.5f;
+    if (t < 0.0f) {
+      wl_idx_batch = 0u;
+    } else {
+      uint32_t v = static_cast<uint32_t>(t + 0.5f);
+      wl_idx_batch = (v >= wl_pool_size_) ? (wl_pool_size_ - 1u) : v;
+    }
+  }
+  for (size_t i = 0; i < n; i++) {
+    wl_idx_ptr[i] = wl_idx_batch;
+  }
   return n;
 }
 
@@ -1981,7 +2240,12 @@ GenRootKernelParams MetalTraceBackend::Impl::BuildGenRootParams(
   gp.sun_lon        = (sun.azimuth_ + 180.0f) * math::kDegreeToRad;
   gp.sun_lat        = -sun.altitude_ * math::kDegreeToRad;
   gp.sun_half_angle = (sun.diameter_ * 0.5f) * math::kDegreeToRad;
-  gp.ray_weight     = spec.wl.weight_;
+  // scrum-268.8 (DR-3): per-ray weight = wl_pool[wl_idx].spd_weight. Pass
+  // the pool modulo bound so the kernel hash maps a global ray index into
+  // [0, wl_pool_size). EnsureWlPoolBuffer guarantees wl_pool_size_ > 0
+  // before BuildGenRootParams runs.
+  assert(wl_pool_size_ > 0u && "wl_pool_size_ must be resolved before BuildGenRootParams");
+  gp.wl_pool_size   = wl_pool_size_;
 
   const AxisDistribution& axis_dist = setting.crystal_.axis_;
   // Latitude path / proposal type, mirroring math.cpp:444 SampleSphericalPointsSph
@@ -2056,6 +2320,9 @@ void MetalTraceBackend::Impl::EncodeGenRoot(id<MTLCommandBuffer> cb,
     [enc setBuffer:tri_area_buf_  offset:0 atIndex:7];
     [enc setBuffer:tri_to_poly_buf_ offset:0 atIndex:8];
     [enc setBytes:&gp length:sizeof(GenRootKernelParams) atIndex:9];
+    // scrum-268.8 (DR-3): wavelength pool + per-ray wl_idx output buffer.
+    [enc setBuffer:wl_pool_buf_     offset:0 atIndex:10];
+    [enc setBuffer:root_wl_idx_buf_ offset:0 atIndex:11];
     NSUInteger threads = 64;
     NSUInteger groups = (static_cast<NSUInteger>(gp.num_rays) + threads - 1) / threads;
     [enc dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
@@ -2127,6 +2394,11 @@ void MetalTraceBackend::Impl::EncodeTransitRoot(
     [enc setBuffer:tri_area_buf_      offset:0     atIndex:9];
     [enc setBuffer:tri_to_poly_buf_   offset:0     atIndex:10];
     [enc setBytes:&gp length:sizeof(GenRootKernelParams) atIndex:11];
+    // scrum-268.8 (DR-3): per-ray wavelength carrier through transit. The
+    // in-slot cont_wl_idx slice mirrors the cont_d / cont_w offset stride.
+    NSUInteger wl_off = static_cast<NSUInteger>(ci_start) * sizeof(uint32_t);
+    [enc setBuffer:cont_wl_idx_buf_[in_slot] offset:wl_off atIndex:12];
+    [enc setBuffer:root_wl_idx_buf_          offset:0      atIndex:13];
     NSUInteger threads = 64;
     NSUInteger groups  = (static_cast<NSUInteger>(gp.num_rays) + threads - 1) / threads;
     [enc dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
@@ -2140,18 +2412,23 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
                                             id<MTLBuffer> r_w, id<MTLBuffer> r_tf,
                                             uint32_t ms_mode, int out_slot,
                                             uint32_t counter_init,
-                                            uint32_t crystal_id, uint32_t ms_layer_idx) {
+                                            uint32_t crystal_id, uint32_t ms_layer_idx,
+                                            id<MTLCommandBuffer> existing_cb) {
+  // task-268.7 invariant: caller drains any prior pending CB before issuing
+  // the next DispatchLayer; otherwise we would overwrite pending_cb_ and lose
+  // its continuation counter / exit stats. TraceLayer's ci-loop calls
+  // WaitAndReadbackLayer() at every iteration tail.
+  assert(pending_cb_ == nil && "DispatchLayer: pending_cb_ must be drained before next dispatch");
   KernelParams params{};
-  params.n_idx    = current_n_idx;
+  // scrum-268.8 (DR-3): per-batch n_idx + cie_x/y/z dropped (per-ray wl_pool
+  // lookup superseded). current_n_idx + cie_* impl state survive for the
+  // host-side parity audit only and are no longer wired into KernelParams.
   params.max_hits = static_cast<uint32_t>(spec.scene->max_hits_);
   params.poly_cnt = static_cast<uint32_t>(current_crystal.PolygonFaceCount());
   params.num_rays = static_cast<uint32_t>(num_rays);
   params.img_w    = static_cast<uint32_t>(width);
   params.img_h    = static_cast<uint32_t>(height);
   params.az0      = az0;
-  params.cie_x    = cie_x;
-  params.cie_y    = cie_y;
-  params.cie_z    = cie_z;
   params.ms_mode  = ms_mode;
   params.out_cap  = static_cast<uint32_t>(out_cap);
   params.proj_type  = proj_type;
@@ -2222,15 +2499,20 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   *static_cast<uint32_t*>([exit_count_buf contents]) = 0u;
   *static_cast<float*>([exit_w_sum_buf contents]) = 0.0f;
 
-  id<MTLCommandBuffer> cb = [queue commandBuffer];
+  // task-268.7: caller may supply `existing_cb` so transit_root + trace share
+  // one CB on non-first MS layers (Step 3). Same Apple-Silicon shared-memory
+  // RAW-visibility argument as gen+trace fusion (explore-263 / task-264).
+  id<MTLCommandBuffer> cb = existing_cb != nil ? existing_cb : [queue commandBuffer];
   // task-264 gen+trace fusion: if a device root-gen was stashed by
   // GenerateFirstLayerRootsForCi for this ci, encode it into the same cb
   // ahead of the trace pass. Two sequential compute encoders on one cb share
   // a single commit/wait round-trip; Apple Silicon + MTLResourceStorageModeShared
   // root_* buffers guarantee read-after-write visibility across encoders
   // without an explicit memoryBarrierWithScope (verified by parity at corr
-  // 0.946 in explore-263).
+  // 0.946 in explore-263). Mutually exclusive with `existing_cb != nil`:
+  // gen_root only stashes on the FIRST MS layer (transit-root is non-first).
   if (pending_gen_params_.has_value()) {
+    assert(existing_cb == nil && "gen_root stash + existing_cb both set");
     EncodeGenRoot(cb, *pending_gen_params_);
     pending_gen_params_.reset();
   }
@@ -2246,9 +2528,13 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   [enc setBytes:&params length:sizeof(KernelParams) atIndex:7];
   [enc setBuffer:xyz_image      offset:0 atIndex:8];
   [enc setBuffer:cont_d[out_slot]  offset:0 atIndex:9];
-  [enc setBuffer:cont_p[out_slot]  offset:0 atIndex:10];
+  // scrum-268.8 (DR-3): slots 10/12 retired from out_p / out_tf and reclaimed
+  // for the wavelength pool (read) + per-ray root wl_idx (read). cont_w stays
+  // at 11; cont_wl_idx (write) moves out to slot 29 / exit_wl_idx (write) to
+  // slot 30 — the only two free slots left under Metal's 30-binding ceiling.
+  [enc setBuffer:wl_pool_buf_      offset:0 atIndex:10];
   [enc setBuffer:cont_w[out_slot]  offset:0 atIndex:11];
-  [enc setBuffer:cont_tf[out_slot] offset:0 atIndex:12];
+  [enc setBuffer:root_wl_idx_buf_  offset:0 atIndex:12];
   [enc setBuffer:counter_buf    offset:0 atIndex:13];
   [enc setBuffer:rec_sink_buf   offset:0 atIndex:14];
   [enc setBuffer:exit_count_buf offset:0 atIndex:15];
@@ -2279,14 +2565,36 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   [enc setBuffer:getfn_bytes_buf_      offset:0 atIndex:26];
   [enc setBuffer:complex_sub_desc_buf_ offset:0 atIndex:27];
   [enc setBuffer:exit_ms_layer_buf     offset:0 atIndex:28];
+  // scrum-268.8 (DR-3): per-ray wavelength side-cars in the last two free
+  // slots (Metal per-stage ceiling = 30). cont_wl_idx is written alongside
+  // the emit-gate's cont_d/cont_w; exit_wl_idx is written alongside the
+  // final-exit + mid-exit emits.
+  [enc setBuffer:cont_wl_idx_buf_[out_slot] offset:0 atIndex:29];
+  [enc setBuffer:exit_wl_idx_buf_           offset:0 atIndex:30];
 
   NSUInteger tg = std::min<NSUInteger>(256, pso.maxTotalThreadsPerThreadgroup);
   [enc dispatchThreads:MTLSizeMake(num_rays, 1, 1)
    threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
   [enc endEncoding];
+  // task-268.7: commit without waiting; the caller drains via
+  // WaitAndReadbackLayer() at the ci-loop tail. Park CB + out_slot so the
+  // readback routes to the correct cont_counts slot.
   [cb commit];
-  [cb waitUntilCompleted];
+  pending_cb_ = cb;
+  pending_out_slot_ = out_slot;
+}
 
+void MetalTraceBackend::Impl::WaitAndReadbackLayer() {
+  if (pending_cb_ == nil) {
+    return;
+  }
+  id<MTLCommandBuffer> cb = pending_cb_;
+  int out_slot = pending_out_slot_;
+  // Clear up-front so a fail-and-assert path leaves pending_cb_ in a sane
+  // state (subsequent DispatchLayer's drain-invariant assert would otherwise
+  // double-trip on a CB we already gave up on).
+  pending_cb_ = nil;
+  [cb waitUntilCompleted];
   if (cb.status != MTLCommandBufferStatusCompleted) {
     ILOG_ERROR(EffectiveLogger(logger_),
                "MetalTraceBackend: GPU dispatch failed: {}",
@@ -2334,6 +2642,14 @@ void MetalTraceBackend::Impl::Reset() {
   // iteration that set it; clearing here protects against stale state if a
   // session ends mid-ci on an error path.
   pending_gen_params_.reset();
+  // task-268.7: in a healthy run TraceLayer drains pending_cb_ at the ci-loop
+  // tail (and again before overflow check); clearing here is the defensive
+  // session-boundary cleanup mirror of the gen_params reset above.
+  if (pending_cb_ != nil) {
+    [pending_cb_ waitUntilCompleted];
+    pending_cb_ = nil;
+  }
+  pending_out_slot_ = 0;
   // root_ray_count INTENTIONALLY persists across Reset(): each EndSession()
   // is followed (in the next BeginSession) by another GenerateFirstLayerRootsForCi
   // dispatch that must observe a globally monotone gen_ray_base. The counter
@@ -2348,7 +2664,7 @@ void MetalTraceBackend::Impl::Reset() {
   width = 0;
   height = 0;
   az0 = 0.0f;
-  cie_x = cie_y = cie_z = 0.0f;
+  // scrum-268.8 (DR-3): cie_x/y/z removed from Impl.
   proj_type = 0u;
   r_scale = 1.0f;
   max_abs_dz = 0.0f;
@@ -2426,7 +2742,27 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
 
   Rotation camera_rot = MakeCameraRotation(*spec.render);
   impl_->az0 = ComputeAz0(camera_rot);
-  ComputeCmf(spec.wl.wl_, impl_->cie_x, impl_->cie_y, impl_->cie_z);
+  // scrum-268.8 (DR-3): per-batch ComputeCmf(spec.wl.wl_) deleted — CMF is
+  // sourced per-ray from wl_pool[wl_idx] populated below in TraceLayer's ci
+  // loop. spec.wl.wl_ remains the simulator-sampled per-batch sentinel until
+  // simulator.cpp:663 is retired (M4 / Step 9).
+  //
+  // Capture the spectrum mode for ResolveLayerCrystalForCi: when the scene's
+  // light source is an IlluminantType variant, ComputeWlPool samples M
+  // wavelengths uniformly over [380, 780] and weights them by the standard
+  // illuminant SPD. For the discrete-WlParam-list path (simulator.cpp:672)
+  // the pool degenerates to a single (spec_wl, spec_weight) entry replicated
+  // across all M slots so per-ray lookup still works but every ray sees the
+  // same wl — matches legacy single-wl semantics.
+  const auto& spectrum = spec.scene->light_source_.spectrum_;
+  if (const auto* ill = std::get_if<IlluminantType>(&spectrum)) {
+    impl_->illuminant_mode_ = true;
+    impl_->illuminant_      = *ill;
+  } else {
+    impl_->illuminant_mode_ = false;
+  }
+  impl_->per_batch_wl_     = spec.wl.wl_;
+  impl_->per_batch_weight_ = spec.wl.weight_;
 
   // Projection routing — kernel reads proj_type/r_scale/max_abs_dz from
   // KernelParams (filled by DispatchLayer from these Impl fields).
@@ -2470,6 +2806,23 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   impl_->EnsureDevice();
   impl_->EnsurePso();
   impl_->EnsureImage(impl_->width, impl_->height);
+  // scrum-268.8 (DR-3): allocate the wavelength pool buffer once per backend
+  // (size invariant across sessions) and populate it once per BeginSession.
+  // Pool content depends only on (illuminant mode, per_batch_wl_) — both
+  // captured above — and on Crystal::GetRefractiveIndex which is the global
+  // ice model (identical for every crystal shape in the session), so a single
+  // upload covers every ci dispatch.
+  impl_->EnsureWlPoolBuffer();
+  {
+    // Use an empty Crystal proxy — GetRefractiveIndex ignores its argument
+    // and consults the global IceRefractiveIndex model directly.
+    Crystal proxy{};
+    ComputeWlPool(proxy, impl_->illuminant_mode_, impl_->illuminant_,
+                  impl_->per_batch_wl_, impl_->per_batch_weight_,
+                  impl_->wl_pool_size_, impl_->wl_pool_host_);
+    std::memcpy([impl_->wl_pool_buf_ contents], impl_->wl_pool_host_.data(),
+                static_cast<size_t>(impl_->wl_pool_size_) * sizeof(WlEntry));
+  }
 
   impl_->cont_counts[0] = 0;
   impl_->cont_counts[1] = 0;
@@ -2513,18 +2866,19 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       // root_ray_count is now maintained inside GenerateFirstLayerRootsForCi
       // (both host and device paths advance it) so device root-gen sees a
       // globally monotone gen_ray_base across ci slices and successive batches.
-      // scrum-267 task-fused-emit-gate Step 3a: size the session-level exit
-      // buffer ONCE at the first MS to cover the full session upper bound
-      // (every MS layer's emit-gate mid-exits + the final-layer exit). This
-      // replaces the prior "first_ms allocates final-layer cap, then last
-      // layer regrows" pattern. The emit gate writes mid-exit slots from EVERY
-      // ms_mode==1 dispatch (including first_ms when num_ms>1); a mid-session
-      // EnsureExitBuffers realloc would orphan data already written into the
-      // old MTLBuffer pointer. One-time pre-allocation eliminates that risk.
+      // task-268.4 (commit-batch-decouple-drain): allocate the exit buffer
+      // for a SINGLE layer's worst-case fan-out only. The simulator's
+      // per-layer drain pattern (TraceLayer -> DrainExits -> Recombine)
+      // recycles the same buffer across MS layers, so the prior
+      // `per_layer_cap × num_ms` overallocation is no longer needed.
+      // Grow-on-overflow inside the ci-loop retry below covers cases where
+      // a single layer's actual fan-out exceeds the static ComputeOutCap
+      // estimate (e.g. ms3_mixed_pyramid_heavy: ~169-211 exits/root vs.
+      // ComputeOutCap's max_hits*2+4 bound). Tests that bypass DrainExits
+      // (test_metal_trace_parity.cpp) rely on the same grow-on-overflow to
+      // accommodate cumulative accumulation across layers.
       size_t per_layer_cap = ComputeOutCap(total_ray_num, impl_->spec.scene->max_hits_);
-      size_t num_ms = impl_->spec.scene->ms_.size();
-      size_t total_exit_cap = per_layer_cap * num_ms;
-      impl_->EnsureExitBuffers(total_exit_cap);
+      impl_->EnsureExitBuffers(per_layer_cap);
       *static_cast<uint32_t*>([impl_->exit_slot_buf contents]) = 0u;
     }
     // Recalculate out_cap per layer so each layer's continuation buffer is
@@ -2564,13 +2918,6 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     int out_slot = static_cast<int>(impl_->ms_idx & 1u);
     int in_slot = static_cast<int>((impl_->ms_idx - 1) & 1u);  // only used when !first_ms
 
-    // Reset per-layer counters BEFORE the ci loop: counter_buf is written
-    // by each DispatchLayer (counter_init = previous cont_counts), and
-    // last_stats accumulates via += inside DispatchLayer. Both must start
-    // at zero for the layer.
-    impl_->last_stats = LayerStats{};
-    impl_->cont_counts[out_slot] = 0;
-
     // scrum-258.3 Step 3 + scrum-267 Task 3 cleanup: per-layer filter+prob
     // state. Non-final layers populate `hop_ms_prob_[out_slot]` (consumed by
     // the device emit gate's `KernelParams.ms_prob` in DispatchLayer); the
@@ -2586,8 +2933,29 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       impl_->hop_ms_prob_[out_slot] = ms_info.prob_;
     }
 
-    size_t ci_start = 0;  // running offset into the previous-layer
-                          // continuation buffer (non-first_ms only)
+    // task-268.4 grow-on-overflow: snapshot per-layer counters before the
+    // ci-loop so an exit-buffer overflow can be recovered by growing the
+    // buffer and re-running the ci-loop. The host mt19937 (`impl_->rng`,
+    // consumed only by MakeCrystal inside ResolveLayerCrystalForCi) is NOT
+    // snapshotted — it advances forward on each retry, which is acceptable
+    // because (a) parity-critical paths never trigger overflow, and (b) the
+    // re-run produces a self-consistent fresh sample that exercises the
+    // grown buffer. Loop terminates because each retry doubles the cap.
+    const size_t pre_root_ray_count    = impl_->root_ray_count;
+    const size_t pre_transit_ray_count = impl_->transit_ray_count_;
+
+    constexpr int kMaxExitOverflowRetries = 4;
+    size_t ci_start = 0;  // declared outside the retry so the for-init below
+                          // can re-zero it on each attempt.
+    for (int attempt = 0; ; ++attempt) {
+    ci_start = 0;
+    // Reset per-layer counters BEFORE the ci loop: counter_buf is written
+    // by each DispatchLayer (counter_init = previous cont_counts), and
+    // last_stats accumulates via += inside DispatchLayer. Both must start
+    // at zero for the layer.
+    impl_->last_stats = LayerStats{};
+    impl_->cont_counts[out_slot] = 0;
+
     for (size_t ci = 0; ci < crystal_cnt; ci++) {
       size_t ci_n = crystal_ray_num[ci];
       if (ci_n == 0) {
@@ -2662,13 +3030,11 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
         // host frame-transit needed. The TotalTriangles() ≤ 64 guard
         // mirrors `can_use_device_gen` (kMaxTriPerKernel kernel stack-array
         // bound); canonical configs (hex column ~16 tri) never hit it.
-        // TODO(perf): per-ci independent transit_cb + waitUntilCompleted
-        // produces N CPU-GPU sync points per MS layer. Acceptable for the
-        // canonical few-crystal configs (and consistent with the existing
-        // per-crystal serial dispatch model). If multi-crystal MS layers
-        // become the bottleneck, merge same-MS-layer ci dispatches into a
-        // single cb (encode-in-loop, commit+wait outside) to drop the
-        // intermediate sync points.
+        // task-268.7 Step 3: transit_root + trace_layer now share a single
+        // command buffer per ci. Apple-Silicon shared-memory RAW visibility
+        // across sequential compute encoders on one CB is verified (explore-
+        // 263 gen+trace fusion corr 0.946 / task-264). The merge halves the
+        // per-ci CPU-GPU sync point count on non-first MS layers (from 2 to 1).
         if (impl_->current_crystal.TotalTriangles() > 64u) {
           ILOG_ERROR(EffectiveLogger(impl_->logger_),
                      "transit_root_kernel: crystal ci={} tri_count={} exceeds kMaxTriPerKernel=64; ci skipped",
@@ -2676,48 +3042,49 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
           ci_start += ci_n;
           continue;
         }
-        {
-          // Monotone advance — mirrors gen_root's root_ray_count contract so
-          // per-SimBatch transit dispatches on (layer,ci) consume disjoint PCG
-          // ranges. UINT32_MAX bound matches gen_ray_base width (line ~1830).
-          assert(impl_->transit_ray_count_ <= static_cast<size_t>(UINT32_MAX) - ci_n &&
-                 "transit_ray_count_ overflow: gen_ray_base width exceeded");
-          auto transit_gp = impl_->BuildTransitRootParams(
-              setting, ci_n,
-              static_cast<uint32_t>(impl_->ms_idx),
-              static_cast<uint32_t>(ci),
-              static_cast<uint32_t>(impl_->transit_ray_count_));
-          id<MTLCommandBuffer> transit_cb = [impl_->queue commandBuffer];
-          impl_->EncodeTransitRoot(transit_cb, transit_gp, in_slot, ci_start);
-          [transit_cb commit];
-          [transit_cb waitUntilCompleted];
-          if (transit_cb.error != nil) {
-            ILOG_ERROR(EffectiveLogger(impl_->logger_),
-                       "transit_root_kernel GPU error (ci={} ms_layer={}): {}",
-                       ci, impl_->ms_idx,
-                       [[transit_cb.error localizedDescription] UTF8String]);
-            // Skip DispatchLayer: root_*_buf contents are undefined after a
-            // failed transit cb; feeding them to the trace kernel would
-            // produce silent garbage. Mirror the TotalTriangles > 64 skip
-            // pattern above.
-            ci_start += ci_n;
-            continue;
-          }
-          // Advance ONLY after a successful transit cb so a skipped/failed
-          // dispatch does not burn PCG range (kept disjoint with subsequent
-          // successful dispatches on the same (layer,ci)).
-          impl_->transit_ray_count_ += ci_n;
-        }
+        // Monotone advance — mirrors gen_root's root_ray_count contract so
+        // per-SimBatch transit dispatches on (layer,ci) consume disjoint PCG
+        // ranges. UINT32_MAX bound matches gen_ray_base width (line ~1830).
+        assert(impl_->transit_ray_count_ <= static_cast<size_t>(UINT32_MAX) - ci_n &&
+               "transit_ray_count_ overflow: gen_ray_base width exceeded");
+        auto transit_gp = impl_->BuildTransitRootParams(
+            setting, ci_n,
+            static_cast<uint32_t>(impl_->ms_idx),
+            static_cast<uint32_t>(ci),
+            static_cast<uint32_t>(impl_->transit_ray_count_));
+        id<MTLCommandBuffer> combined_cb = [impl_->queue commandBuffer];
+        impl_->EncodeTransitRoot(combined_cb, transit_gp, in_slot, ci_start);
+        // Advance unconditionally now: with the merged CB we no longer probe
+        // transit success before issuing trace. A failed combined CB surfaces
+        // via WaitAndReadbackLayer's status check (same recovery semantics as
+        // gen+trace fusion — assert in debug, log+continue in release).
+        impl_->transit_ray_count_ += ci_n;
         ci_start += ci_n;
         in_count = ci_n;  // all cont rays already filter+prob-passed by the
                           // prior layer's device emit gate; transit cannot
                           // drop rays.
+
+        // counter_init = current cumulative write offset; ci=0 starts at 0,
+        // each subsequent ci resumes where the previous one's atomic
+        // counter left off (already read back into cont_counts[out_slot]
+        // by the previous WaitAndReadbackLayer call).
+        uint32_t counter_init_nf = static_cast<uint32_t>(impl_->cont_counts[out_slot]);
+        impl_->DispatchLayer(in_count,
+                             impl_->root_d_buf, impl_->root_p_buf,
+                             impl_->root_w_buf, impl_->root_tf_buf,
+                             ms_mode, out_slot, counter_init_nf,
+                             static_cast<uint32_t>(ci),
+                             static_cast<uint32_t>(impl_->ms_idx),
+                             combined_cb);
+        // task-268.7: drain the combined CB at the ci tail so cont_counts /
+        // last_stats are populated before the next ci reads them as
+        // counter_init. Single-ci configs hit this once per layer (still one
+        // commit+wait pair, same wall-clock).
+        impl_->WaitAndReadbackLayer();
+        continue;
       }
 
-      // counter_init = current cumulative write offset; ci=0 starts at 0,
-      // each subsequent ci resumes where the previous one's atomic
-      // counter left off (already read back into cont_counts[out_slot]
-      // by the previous DispatchLayer via waitUntilCompleted).
+      // first_ms (or single-MS) branch: DispatchLayer creates its own CB.
       uint32_t counter_init = static_cast<uint32_t>(impl_->cont_counts[out_slot]);
       impl_->DispatchLayer(in_count,
                            impl_->root_d_buf, impl_->root_p_buf,
@@ -2725,10 +3092,49 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
                            ms_mode, out_slot, counter_init,
                            static_cast<uint32_t>(ci),
                            static_cast<uint32_t>(impl_->ms_idx));
+      // task-268.7: in-loop drain mirrors the non-first MS branch. Single-ci
+      // configs trigger this once per layer; the post-loop nil-check below is
+      // a defensive safety net.
+      impl_->WaitAndReadbackLayer();
       // ci_start was incremented above inside the !first_ms branch (before
       // the in_count==0 continue), so the next ci reads the correct slice
       // even if this ci's filter+prob dropped everything.
+    }  // ci-loop
+
+    // task-268.7 safety net: WaitAndReadbackLayer is invoked at every ci tail,
+    // so pending_cb_ is expected to be nil here. The call is a no-op when nil
+    // (defensive against a future code path that skips the in-loop drain).
+    impl_->WaitAndReadbackLayer();
+
+    // task-268.4 grow-on-overflow: exit_slot_buf is atomically incremented by
+    // the kernel for every emit (final-layer exit and ms_mode==1 mid-exit).
+    // After waitUntilCompleted on the last ci's DispatchLayer (inside
+    // DispatchLayer), shared-memory contents are host-visible.
+    uint32_t produced_exits =
+        *static_cast<uint32_t*>([impl_->exit_slot_buf contents]);
+    if (produced_exits <= impl_->exit_ray_capacity) {
+      break;  // success
     }
+    if (attempt + 1 >= kMaxExitOverflowRetries) {
+      ILOG_ERROR(EffectiveLogger(impl_->logger_),
+                 "MetalTraceBackend: exit-ray overflow produced={} exit_cap={} after {} grow attempts (giving up; clamp)",
+                 produced_exits, impl_->exit_ray_capacity, kMaxExitOverflowRetries);
+      break;  // give up — fall through to DrainExits-side clamp
+    }
+    size_t new_cap = std::max<size_t>(
+        static_cast<size_t>(produced_exits) * 2u,
+        impl_->exit_ray_capacity * 2u);
+    ILOG_DEBUG(EffectiveLogger(impl_->logger_),
+               "MetalTraceBackend: exit-buffer auto-grow cap={}→{} (produced={}, attempt={})",
+               impl_->exit_ray_capacity, new_cap, produced_exits, attempt + 1);
+    impl_->EnsureExitBuffers(new_cap);
+    // Restore RNG-monotonicity counters so the retried ci-loop re-issues
+    // device-gen / transit with the same gen_ray_base / transit base; the
+    // host mt19937 advances forward (see snapshot comment above).
+    impl_->root_ray_count    = pre_root_ray_count;
+    impl_->transit_ray_count_ = pre_transit_ray_count;
+    *static_cast<uint32_t*>([impl_->exit_slot_buf contents]) = 0u;
+    }  // grow-on-overflow retry
 
     size_t produced = last_layer ? 0u : impl_->cont_counts[out_slot];
     return std::make_unique<MetalLayerHandle>(produced, impl_->last_stats);
@@ -2800,6 +3206,10 @@ size_t MetalTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
   const auto* seq_len_ptr  = static_cast<const uint8_t*>([impl_->exit_face_seq_len_buf contents]);
   const auto* seq_data_ptr = static_cast<const uint8_t*>([impl_->exit_face_seq_data_buf contents]);
   const auto* ms_layer_ptr = static_cast<const uint8_t*>([impl_->exit_ms_layer_buf contents]);
+  // scrum-268.8 (DR-3): per-exit wavelength index. uint32 on device; narrowed
+  // to uint8_t into ExitRayRecord since wl_pool_size_ <= 255 (assert in
+  // ResolveWlPoolSize).
+  const auto* wl_idx_ptr   = static_cast<const uint32_t*>([impl_->exit_wl_idx_buf_ contents]);
   const size_t stride      = impl_->face_seq_cap_;
 
   // Per-ci FilterSpec cache for the final layer. Same crystal_id repeats
@@ -2832,6 +3242,7 @@ size_t MetalTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
       erec.weight = w_ptr[i];
       erec.crystal_id   = crystal_id;
       erec.ms_layer_idx = rec_ms_layer;
+      erec.wl_idx       = static_cast<uint8_t>(wl_idx_ptr[i] & 0xFFu);
       uint8_t seq_len = std::min<uint8_t>(seq_len_ptr[i], ExitFaceSeq::kCap);
       erec.path.size_ = seq_len;
       std::memcpy(erec.path.data_, seq_data_ptr + i * stride, seq_len);
@@ -2885,12 +3296,26 @@ size_t MetalTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
     erec.weight = r.w_;
     erec.crystal_id = crystal_id;
     erec.ms_layer_idx = final_ms_layer;
+    erec.wl_idx = static_cast<uint8_t>(wl_idx_ptr[i] & 0xFFu);
     erec.path.size_ = seq_len;
     std::memcpy(erec.path.data_, rec.data_, seq_len);
     out.push_back(erec);
   }
 
   return out.size();
+}
+
+// task-268.4 per-layer destructive drain. Identical to ReadbackExitRays
+// except for the post-step that zeroes the device atomic slot counter so the
+// exit_*_buf storage can be recycled by the next TraceLayer. Pairs with the
+// simulator's per-layer drain loop (SimulateOneWavelengthWithBackend) and the
+// grow-on-overflow retry inside TraceLayer.
+size_t MetalTraceBackend::DrainExits(std::vector<ExitRayRecord>& out) {
+  size_t n = ReadbackExitRays(out);
+  if (impl_->exit_slot_buf != nil) {
+    *static_cast<uint32_t*>([impl_->exit_slot_buf contents]) = 0u;
+  }
+  return n;
 }
 
 void MetalTraceBackend::EndSession() {
@@ -2908,6 +3333,16 @@ bool MetalTraceBackend::IsCompatible(const RenderConfig& render) const {
     return std::abs(render.lens_.fov_ - 180.0f) <= 0.5f;
   }
   return false;
+}
+
+uint32_t MetalTraceBackend::WlPoolSize() const {
+  // scrum-268.8 (DR-3): report the *capability* — the configured pool size is
+  // known from the env/default before BeginSession allocates the buffer. The
+  // simulator queries this before the first trace to decide whether to hand the
+  // backend a per-ray (zero-wl) WlParam, so returning 0 pre-session would make
+  // it fall back to per-batch wl even on Metal. After BeginSession this equals
+  // the allocated size (identical value).
+  return impl_->wl_pool_size_ != 0u ? impl_->wl_pool_size_ : ResolveWlPoolSize();
 }
 
 size_t MetalTraceBackend::TraceLayerKernelMaxThreadsForTest() const {

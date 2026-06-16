@@ -257,7 +257,24 @@ jobs:
       - name: Run slow E2E tests
         # 'not heavy' drops redundant parity variants (prob05*, single-MS no-filter)
         # from the per-PR run; they stay available locally/nightly via `-m slow`.
-        run: pytest ${{ matrix.pytest_args }} -v -m "slow and not heavy"
+        #
+        # CLI-based Darwin slow gates (test_metal_throughput, test_metal_batch_invariance
+        # exit-conservation) drive the `Lumice` CLI via runner.find_lumice_binary(), which
+        # looks for build/cmake_install/Lumice or $LUMICE_BIN. This shared-lib build does
+        # not install, so point LUMICE_BIN at the build-tree binary (its build-tree rpath
+        # resolves liblumice; DYLD/LD_LIBRARY_PATH set as a belt-and-suspenders fallback).
+        # No-op on legs where the binary is absent. (The parity leg uses the shared lib via
+        # capi_runner and is unaffected; the Ubuntu leg has no CLI-based slow tests.)
+        run: |
+          cli="$(find build -type f -name Lumice 2>/dev/null | head -1)"
+          if [ -n "$cli" ]; then export LUMICE_BIN="$cli"; fi
+          lib="$(find build \( -name 'liblumice*.dylib' -o -name 'liblumice*.so' \) 2>/dev/null | head -1)"
+          if [ -n "$lib" ]; then
+            libdir="$(dirname "$lib")"
+            export DYLD_LIBRARY_PATH="$libdir:${DYLD_LIBRARY_PATH:-}"
+            export LD_LIBRARY_PATH="$libdir:${LD_LIBRARY_PATH:-}"
+          fi
+          pytest ${{ matrix.pytest_args }} -v -m "slow and not heavy"
         timeout-minutes: 15
 
   benchmark-summary:

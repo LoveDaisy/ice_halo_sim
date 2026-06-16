@@ -226,14 +226,23 @@ inline std::vector<ExitRayRecord> RunMetalExitRays(const SceneConfig& scene, con
   MetalTraceBackend metal;
   metal.BeginSession(spec);
   RootRaySource src = RootRaySource::FromHost(host);
+  std::vector<ExitRayRecord> records;
+  // task-268.4: the exit buffer is now single-layer-cap and recycled per layer
+  // (produce -> DrainExits -> recycle), so multi-MS callers MUST drain after
+  // every TraceLayer — a single ReadbackExitRays at the end only sees the last
+  // layer (mid-layer ms_layer_idx==0 records would be lost). Mirror the real
+  // simulator.cpp per-layer drain. For single-MS this is one drain = equivalent
+  // to the old single readback.
   for (size_t layer = 0; layer < scene.ms_.size(); layer++) {
     auto h = metal.TraceLayer(src);
+    std::vector<ExitRayRecord> layer_exits;
+    metal.DrainExits(layer_exits);
+    records.insert(records.end(), std::make_move_iterator(layer_exits.begin()),
+                   std::make_move_iterator(layer_exits.end()));
     if (layer + 1 < scene.ms_.size()) {
       src = metal.Recombine(std::move(h), RecombineSpec{ /*shuffle=*/false });
     }
   }
-  std::vector<ExitRayRecord> records;
-  metal.ReadbackExitRays(records);
   metal.EndSession();
   return records;
 }

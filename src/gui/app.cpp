@@ -31,6 +31,12 @@ CrystalRenderer g_crystal_renderer;
 ThumbnailCache g_thumbnail_cache;
 LUMICE_Server* g_server = nullptr;
 ServerPoller g_server_poller;
+#if defined(__APPLE__)
+// Tracks the backend the live g_server was *constructed* for (not the env-resolved
+// actual). Startup uses LUMICE_CreateServer() → preferred_backend=CPU, so this is
+// false until the first Metal toggle. See MaybeReconstructServerForBackend.
+bool g_server_is_metal = false;
+#endif
 PreviewViewport g_preview_vp;
 
 int g_programmatic_resize = 0;
@@ -634,11 +640,58 @@ static bool IsTrivialFilterSet(const GuiState& state) {
   return true;
 }
 
+#if defined(__APPLE__)
+// Reconstruct the server so its orchestration *topology* matches the requested
+// backend. Backend is a construction-time property — CPU is N-worker
+// queue-per-Simulator; Metal is a single engine with large dispatch (task-268.7) —
+// so it cannot be flipped on a live server (SetPreferredBackend on an N-worker
+// server would run Metal kernels inside the 12-worker structure, the 0.58× anti-
+// pattern this scrum removed). Toggling the "Use Metal GPU" checkbox therefore
+// tears the server down and rebuilds it with the new preferred_backend.
+//
+// The accumulated image is intentionally discarded: CPU and Metal are
+// statistically-equivalent-but-not-identical sample streams, so mixing them in one
+// accumulation buffer is physically unsound — a clean reset is the correct
+// semantics, and a fresh re-converge is what a backend A/B comparison wants.
+//
+// Returns true iff the server was reconstructed; the caller must then force a full
+// consumer rebuild + fresh poller Start (the new server has no consumers).
+bool MaybeReconstructServerForBackend() {
+  bool want_metal = g_state.use_metal_backend;
+  if (want_metal == g_server_is_metal) {
+    return false;  // backend unchanged — keep the live server
+  }
+  GUI_LOG_INFO("[GUI] Backend toggle: reconstructing server ({} -> {})", g_server_is_metal ? "Metal" : "CPU",
+               want_metal ? "Metal" : "CPU");
+  g_server_poller.Stop();  // synchronous: worker confirmed no longer touching the old server
+  LUMICE_DestroyServer(g_server);
+
+  LUMICE_ServerConfig cfg{};
+  cfg.num_workers = 0;  // 0 = PhysicalCoreCount (CPU); ignored on Metal (single engine)
+  cfg.sim_seed = 0;     // 0 = random — matches LUMICE_CreateServer() startup default
+  cfg.preferred_backend = want_metal ? LUMICE_BACKEND_METAL : LUMICE_BACKEND_CPU;
+  g_server = LUMICE_CreateServerEx(&cfg);
+  g_server_is_metal = want_metal;
+
+  // Re-apply per-server settings that died with the old instance (cf. main.cpp startup).
+  LUMICE_SetLogLevel(g_server, static_cast<LUMICE_LogLevel>(g_state.core_log_level));
+  return true;
+}
+#endif
+
 void DoRun() {
   if (!g_server) {
     return;
   }
   auto run_start = std::chrono::steady_clock::now();
+
+#if defined(__APPLE__)
+  // Backend toggle reconstructs the server (per-backend orchestration topology).
+  // A reconstructed server has no consumers, so force the full-rebuild path below.
+  bool backend_reconstructed = MaybeReconstructServerForBackend();
+#else
+  bool backend_reconstructed = false;
+#endif
 
   // Pre-check: will CommitConfig rebuild consumers (destroying old buffers)?
   // Only renderer layout changes (resolution/lens/view/visible/filter) trigger rebuild.
@@ -647,8 +700,8 @@ void DoRun() {
   // NeedsRebuild comparison: RenderConfig::id was removed during the renderer copy-model
   // migration; since `id` was always 1 pre-migration, operator== behavior is strictly looser
   // and cannot produce new false-positive reuse paths.
-  bool expect_rebuild =
-      !g_state.last_committed_state.has_value() || g_state.renderer != g_state.last_committed_state->renderer;
+  bool expect_rebuild = backend_reconstructed || !g_state.last_committed_state.has_value() ||
+                        g_state.renderer != g_state.last_committed_state->renderer;
   // JSON path always rebuilds (LUMICE_CommitConfig has no out_reused signal,
   // and any new filter type triggers a server-side topology change).
   bool use_json_path = !IsTrivialFilterSet(g_state);
@@ -659,13 +712,8 @@ void DoRun() {
     g_server_poller.Stop();  // Must pause before consumer destruction
   }
 
-#if defined(__APPLE__)
-  // Push current backend preference into server BEFORE CommitConfig. The pref
-  // lives on the persistent Simulators (created once at server construction and
-  // never rebuilt by CommitConfig), and the CommitConfig Stop→Start cycle makes
-  // Run() re-enter and pick it up via acquire on the next dispatch.
-  LUMICE_SetPreferredBackend(g_server, g_state.use_metal_backend ? LUMICE_BACKEND_METAL : LUMICE_BACKEND_CPU);
-#endif
+  // Backend preference is now a construction-time property of the server
+  // (see MaybeReconstructServerForBackend) — no per-DoRun SetPreferredBackend push.
 
   int reused = 0;
   LUMICE_ErrorCode err = LUMICE_OK;

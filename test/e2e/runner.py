@@ -4,7 +4,11 @@ import os
 import subprocess
 from pathlib import Path
 
-DEFAULT_TIMEOUT = 120  # seconds
+DEFAULT_TIMEOUT = 300  # seconds
+# Bumped from 120s as of task-268.7 (single-engine orchestration): the CLI
+# legacy CPU backend now runs one Simulator instead of PhysicalCoreCount(),
+# so heavy configs (MS3, 5M+ rays + filter) need extra wall-clock budget.
+# Genuine hangs are still caught (timeout is finite, not removed).
 
 
 def get_project_root() -> Path:

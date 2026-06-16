@@ -40,8 +40,22 @@ PSNR_THRESHOLDS = {
 
 
 def _discover_configs():
-    """Return sorted list of config JSON paths."""
-    return sorted(CONFIGS_DIR.glob("*.json"))
+    """Return sorted showcase config JSON paths (those with a reference image).
+
+    The smoke leg runs on the fast (`-m "not slow"`) CI path with a 10-minute step
+    budget. test/e2e/configs/ also holds heavy gate fixtures added for the Metal
+    parity/throughput suites (ms3_*, ms_multi_crystal_complex_filter, parity_*, etc.)
+    at 2-5M rays — and since task-268.7 the CPU/CLI route is single-worker (~12x
+    slower), running those here blows the budget (the smoke leg timed out on
+    ms3_mixed_pyramid_heavy). Those fixtures are validated by their own dedicated
+    tests (test_metal_*, test_raypath_*, test_ms_filter_leak, test_cpu_backend_route),
+    so the smoke test scopes to the showcase configs — identified by having a
+    reference image under references/ (exactly the PSNR_THRESHOLDS set).
+    """
+    return sorted(
+        cfg for cfg in CONFIGS_DIR.glob("*.json")
+        if list(REFERENCES_DIR.glob(f"{cfg.stem}_*.jpg"))
+    )
 
 
 class TestSmoke(LumiceTestCase):

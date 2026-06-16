@@ -66,8 +66,16 @@ class MetalTraceBackend : public TraceBackend {
   // Exit seam (scrum-258.1/258.2): buffer-egress contract — see base class.
   // 258.2: returns rich `ExitRayRecord` (36B each) — see core/exit_seam.hpp.
   size_t ReadbackExitRays(std::vector<ExitRayRecord>& out) override;
+  // task-268.4: per-layer destructive drain. Reads back the current exit
+  // buffer contents AND resets the device slot counter so the buffer can
+  // be recycled across MS layers. See base class doc for the contract.
+  size_t DrainExits(std::vector<ExitRayRecord>& out) override;
   void EndSession() override;
   bool IsCompatible(const RenderConfig& render) const override;
+  // scrum-268.8 (DR-3): per-ray wavelength pool size. Resolved from
+  // LUMICE_WL_POOL_SIZE env var the first time BeginSession runs; constant
+  // thereafter for the backend instance's lifetime.
+  uint32_t WlPoolSize() const override;
 
   // Test-only: return the trace_layer_kernel PSO's maxTotalThreadsPerThreadgroup
   // (or 0 if BeginSession has not yet built the PSO). Used by the scrum-267
