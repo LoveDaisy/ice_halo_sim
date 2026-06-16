@@ -127,6 +127,17 @@ def test_metal_throughput_gate(config_name):
         f"{_SANITY_FLOOR} — Metal far slower than legacy or near-hung."
     )
 
+    # --- D1 pre-registered throughput gate — FLIPPED GREEN at scrum-268.6 -------
+    # Metal single-engine + backend-aware large default dispatch (32768) now beats
+    # legacy N-worker on the heavy multi-MS+filter scenes (sweep 2026-06-16:
+    # ~3.5–5.4x). The §5 throughput thesis is landed; this assertion makes the
+    # pre-registered gate ACTIVE so any future drop below parity is caught in CI.
+    assert ratio >= _GATE, (
+        f"{config_name}: throughput gate regression ratio={ratio:.3f} < {_GATE} — "
+        f"Metal single-engine no longer beats legacy N-worker (scrum-268 §5 thesis). "
+        f"Check the backend-aware dispatch default (server.cpp kDefaultMetalDispatchRayNum)."
+    )
+
     # --- D1 pre-registered throughput gate: Metal multi >= legacy --------------
     # Threshold is fixed at 1.0 NOW (not weakened). Until Scrum 2's single engine
     # lands, the landed engine is ~0.58x -> imperative xfail with the measured

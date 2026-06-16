@@ -78,6 +78,13 @@ class ServerImpl {
   // and ignored. See doc/gpu-single-engine-implementation.md §6.
   static constexpr int kMaxSceneCnt = 128;
   static constexpr size_t kDefaultRayNum = 128;
+  // scrum-268.6: Metal single-engine needs a large GPU dispatch to saturate the
+  // device — a 128-ray dispatch starves it (~0.04x legacy), while ~32768 peaks
+  // at ~5.3x legacy on heavy multi-MS+filter scenes (sweep 2026-06-16; plateau
+  // beyond, GPU-bound). CPU/legacy keeps the small 128 default (multi-worker
+  // geometry-sampling cadence). Commit granularity (kCommitCap) stays fine
+  // regardless, so "feed the GPU big, refresh the UI small" is one tunable.
+  static constexpr size_t kDefaultMetalDispatchRayNum = 32768;
 
   void ConsumeData();
   void GenerateScene();
@@ -845,8 +852,17 @@ void ServerImpl::GenerateScene() {
     }
     return default_val;
   };
-  static const size_t kDispatchCap = read_env_size("LUMICE_DISPATCH_RAY_NUM", kDefaultRayNum);
-  static const size_t kBatchCap = kDispatchCap;  // local alias for the loop below
+  // scrum-268.6: backend-aware dispatch default. Metal single-engine defaults
+  // to a large dispatch (kDefaultMetalDispatchRayNum) to saturate the GPU;
+  // CPU/legacy keeps the small kDefaultRayNum. An explicit LUMICE_DISPATCH_RAY_NUM
+  // always wins. NOT static: a server reconstructed on a GUI backend toggle must
+  // re-resolve the default for the new backend (commit↔batch decoupling, 268.4).
+  const size_t kDefaultDispatch =
+      ResolveMetalRoute(preferred_backend_.load(std::memory_order_acquire))
+          ? kDefaultMetalDispatchRayNum
+          : kDefaultRayNum;
+  const size_t kDispatchCap = read_env_size("LUMICE_DISPATCH_RAY_NUM", kDefaultDispatch);
+  const size_t kBatchCap = kDispatchCap;  // local alias for the loop below
 
   auto ray_num = scene->ray_num_;
   size_t committed_num = 0;
