@@ -753,6 +753,17 @@ void ServerImpl::ConsumeData() {
                 chunk.outgoing_w_.assign(
                     sim_data.outgoing_w_.begin() + static_cast<std::ptrdiff_t>(emitted),
                     sim_data.outgoing_w_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count));
+                // scrum-268.8 (DR-3): per-ray wavelength must be sliced in
+                // lock-step with outgoing_w_ — omitting it here left chunked
+                // SimData with empty outgoing_wl_, so the consumer fell back to
+                // per-batch curr_wl_ and the CMF decoupled from the per-ray SPD
+                // weight (flat / illuminant-independent color). Empty for CPU /
+                // discrete-wl paths, where the fallback is correct.
+                if (!sim_data.outgoing_wl_.empty()) {
+                  chunk.outgoing_wl_.assign(
+                      sim_data.outgoing_wl_.begin() + static_cast<std::ptrdiff_t>(emitted),
+                      sim_data.outgoing_wl_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count));
+                }
                 if (sim_data.exit_records_.size() >= emitted + chunk_count) {
                   chunk.exit_records_.assign(
                       sim_data.exit_records_.begin() + static_cast<std::ptrdiff_t>(emitted),

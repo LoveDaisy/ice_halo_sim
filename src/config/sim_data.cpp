@@ -335,6 +335,13 @@ SimData& SimData::operator=(SimData&& other) noexcept {
   outgoing_indices_ = std::move(other.outgoing_indices_);
   outgoing_d_ = std::move(other.outgoing_d_);
   outgoing_w_ = std::move(other.outgoing_w_);
+  outgoing_wl_ = std::move(other.outgoing_wl_);  // scrum-268.8 (DR-3): was missing
+                                                 // here (present in copy/move ctor
+                                                 // + copy assign) — the omission
+                                                 // silently dropped per-ray wl on
+                                                 // the move-assign path used by the
+                                                 // consumer queue, collapsing the
+                                                 // CMF onto per-batch curr_wl_.
   exit_records_ = std::move(other.exit_records_);
   root_ray_count_ = other.root_ray_count_;
   return *this;
