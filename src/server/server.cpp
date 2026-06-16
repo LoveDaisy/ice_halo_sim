@@ -210,8 +210,10 @@ bool ResolveMetalRoute(int preferred_backend) {
 #if defined(__APPLE__)
   if (const char* raw = std::getenv("LUMICE_TRACE_BACKEND")) {
     const std::string name = raw;
-    if (name == "metal") return true;
-    if (name == "cpu_backend" || name == "legacy") return false;
+    if (name == "metal")
+      return true;
+    if (name == "cpu_backend" || name == "legacy")
+      return false;
   }
   return preferred_backend == 1;  // 1 == LUMICE_BACKEND_METAL
 #else
@@ -237,6 +239,18 @@ ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed, int preferred_backend
   for (int i = 0; i < worker_count; i++) {
     uint32_t worker_seed = sim_seed != 0 ? sim_seed + static_cast<uint32_t>(i) : 0u;
     simulators_.emplace_back(scene_queue_, data_queue_, worker_seed);
+  }
+
+  // Propagate the construction-time backend into every simulator. The server-level
+  // preferred_backend_ above only drives GenerateScene's dispatch sizing + worker
+  // count; each Simulator owns its OWN preferred_backend_ (default kPreferCpu) and
+  // reads it at Run() to pick the trace backend (CreateBackend). Without this, a
+  // server built via CreateServerEx(preferred_backend=metal) would size dispatches
+  // for Metal yet still trace on the legacy CPU path — the runtime SetPreferredBackend
+  // propagated, but the constructor did not (latent until the GUI backend-toggle
+  // reconstruct made CreateServerEx the live route, scrum-268.6 Part C).
+  for (auto& s : simulators_) {
+    s.SetPreferredBackend(preferred_backend);
   }
 
   // Spawn persistent threads — they start in cv.wait(), not working. All
@@ -857,10 +871,9 @@ void ServerImpl::GenerateScene() {
   // CPU/legacy keeps the small kDefaultRayNum. An explicit LUMICE_DISPATCH_RAY_NUM
   // always wins. NOT static: a server reconstructed on a GUI backend toggle must
   // re-resolve the default for the new backend (commit↔batch decoupling, 268.4).
-  const size_t kDefaultDispatch =
-      ResolveMetalRoute(preferred_backend_.load(std::memory_order_acquire))
-          ? kDefaultMetalDispatchRayNum
-          : kDefaultRayNum;
+  const size_t kDefaultDispatch = ResolveMetalRoute(preferred_backend_.load(std::memory_order_acquire)) ?
+                                      kDefaultMetalDispatchRayNum :
+                                      kDefaultRayNum;
   const size_t kDispatchCap = read_env_size("LUMICE_DISPATCH_RAY_NUM", kDefaultDispatch);
   const size_t kBatchCap = kDispatchCap;  // local alias for the loop below
 
