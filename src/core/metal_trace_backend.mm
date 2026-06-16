@@ -2055,17 +2055,13 @@ void MetalTraceBackend::Impl::ResolveLayerCrystalForCi(const ScatteringSetting& 
   }
   have_crystal = true;
   UploadCrystal(current_crystal);
-  // scrum-268.8 (DR-3): rebuild + upload the per-(crystal, spectrum) WlEntry
-  // pool. n_idx is crystal-specific so this must run after the crystal swap;
-  // SPD weights + CMF only depend on the spectrum mode (constant per session)
-  // but recomputing them per ci is negligible (≤ 64 calls × O(1) lookup).
-  assert(wl_pool_buf_ != nil && wl_pool_size_ > 0u &&
-         "EnsureWlPoolBuffer must run before the first ResolveLayerCrystalForCi");
-  ComputeWlPool(current_crystal, illuminant_mode_, illuminant_,
-                per_batch_wl_, per_batch_weight_,
-                wl_pool_size_, wl_pool_host_);
-  std::memcpy([wl_pool_buf_ contents], wl_pool_host_.data(),
-              static_cast<size_t>(wl_pool_size_) * sizeof(WlEntry));
+  // scrum-268.8 (DR-3): pool upload moved to BeginSession — Crystal::
+  // GetRefractiveIndex delegates to a global IceRefractiveIndex::Get so the
+  // refractive index per wavelength is identical across every crystal shape
+  // in a session. Recomputing per ci was a measured ~21× throughput hit on
+  // heavy multi-MS configs (M=64 lookups × N_ci × N_batch CPU work that the
+  // GPU could not hide). The session-level cache is invalidated implicitly
+  // by EndSession's Reset().
 }
 
 size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSetting& setting,
@@ -2804,8 +2800,22 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   impl_->EnsurePso();
   impl_->EnsureImage(impl_->width, impl_->height);
   // scrum-268.8 (DR-3): allocate the wavelength pool buffer once per backend
-  // (size invariant across sessions; contents are re-uploaded per ci dispatch).
+  // (size invariant across sessions) and populate it once per BeginSession.
+  // Pool content depends only on (illuminant mode, per_batch_wl_) — both
+  // captured above — and on Crystal::GetRefractiveIndex which is the global
+  // ice model (identical for every crystal shape in the session), so a single
+  // upload covers every ci dispatch.
   impl_->EnsureWlPoolBuffer();
+  {
+    // Use an empty Crystal proxy — GetRefractiveIndex ignores its argument
+    // and consults the global IceRefractiveIndex model directly.
+    Crystal proxy{};
+    ComputeWlPool(proxy, impl_->illuminant_mode_, impl_->illuminant_,
+                  impl_->per_batch_wl_, impl_->per_batch_weight_,
+                  impl_->wl_pool_size_, impl_->wl_pool_host_);
+    std::memcpy([impl_->wl_pool_buf_ contents], impl_->wl_pool_host_.data(),
+                static_cast<size_t>(impl_->wl_pool_size_) * sizeof(WlEntry));
+  }
 
   impl_->cont_counts[0] = 0;
   impl_->cont_counts[1] = 0;
