@@ -2131,24 +2131,25 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
     // re-applies the forward rotation before projection (invariant 6).
     std::memcpy(rot_ptr + i * 9, r.crystal_rot_.GetMat(), 9 * sizeof(float));
   }
-  // scrum-268.8 (DR-3): host fallback path stays per-batch — all host-gen
-  // rays share the simulator-sampled wl. Map per_batch_wl_ to the closest
-  // pool index so the trace kernel's pool[wl_idx] lookup returns
-  // matching (n_idx, cmf_*) for the host-side weight already in root_w.
-  // Pool wavelengths sit at `380 + (m+0.5)*400/M` — invert that formula.
+  // scrum-268.8 (DR-3): the host-gen fallback is per-ray too, mirroring the
+  // device gen_root path. Step 9 hands this backend a zero-wl WlParam, so
+  // InitRayFirstMs left root_w at 0 (no SPD weight) — the pool supplies both the
+  // per-ray wavelength index AND the SPD weight (root_w = pool[wl_idx].spd_weight,
+  // identical to the device path at gen_root_kernel). wl_idx is drawn from the
+  // session rng: statistically equivalent to the device PCG stream (the
+  // device-gen-vs-host-gen test asserts ds-corr, not bit parity). Without this,
+  // host-gen rays carry weight 0 → a black image once curr_wl_ is the Step 9
+  // sentinel.
   auto* wl_idx_ptr = static_cast<uint32_t*>([root_wl_idx_buf_ contents]);
-  uint32_t wl_idx_batch = 0u;
-  if (wl_pool_size_ > 0u) {
-    float t = (per_batch_wl_ - 380.0f) * static_cast<float>(wl_pool_size_) / 400.0f - 0.5f;
-    if (t < 0.0f) {
-      wl_idx_batch = 0u;
-    } else {
-      uint32_t v = static_cast<uint32_t>(t + 0.5f);
-      wl_idx_batch = (v >= wl_pool_size_) ? (wl_pool_size_ - 1u) : v;
-    }
-  }
+  assert(wl_pool_size_ > 0u && !wl_pool_host_.empty() &&
+         "wl_pool must be uploaded before host root-gen");
   for (size_t i = 0; i < n; i++) {
-    wl_idx_ptr[i] = wl_idx_batch;
+    uint32_t wl_idx = static_cast<uint32_t>(rng.GetUniform() * static_cast<float>(wl_pool_size_));
+    if (wl_idx >= wl_pool_size_) {
+      wl_idx = wl_pool_size_ - 1u;
+    }
+    wl_idx_ptr[i] = wl_idx;
+    w_ptr[i] = wl_pool_host_[wl_idx].spd_weight;
   }
   // Accumulate the host-gen count too so a future device-gen-eligible call
   // within the same session keeps gen_ray_base globally monotone.
