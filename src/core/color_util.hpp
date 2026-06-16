@@ -45,8 +45,7 @@ inline void SpectrumToXyz(float wl, const float* v, const int* xy, float* xyz, s
 // derived from a host-uploaded wavelength pool (see metal_trace_backend.mm's
 // ComputeWlPool). xy / xyz semantics mirror SpectrumToXyz above. Out-of-range
 // wavelengths are silently skipped per ray.
-inline void SpectrumToXyzPerRay(const float* wl_per_ray, const float* v,
-                                 const int* xy, float* xyz, size_t num) {
+inline void SpectrumToXyzPerRay(const float* wl_per_ray, const float* v, const int* xy, float* xyz, size_t num) {
   for (size_t i = 0; i < num; i++) {
     int wl_key = static_cast<int>(wl_per_ray[i] + 0.5f);
     if (wl_key < kCmfMinWavelength || wl_key > kCmfMaxWavelength) {

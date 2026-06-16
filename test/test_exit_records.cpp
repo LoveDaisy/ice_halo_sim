@@ -237,8 +237,7 @@ inline std::vector<ExitRayRecord> RunMetalExitRays(const SceneConfig& scene, con
     auto h = metal.TraceLayer(src);
     std::vector<ExitRayRecord> layer_exits;
     metal.DrainExits(layer_exits);
-    records.insert(records.end(),
-                   std::make_move_iterator(layer_exits.begin()),
+    records.insert(records.end(), std::make_move_iterator(layer_exits.begin()),
                    std::make_move_iterator(layer_exits.end()));
     if (layer + 1 < scene.ms_.size()) {
       src = metal.Recombine(std::move(h), RecombineSpec{ /*shuffle=*/false });

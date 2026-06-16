@@ -152,8 +152,7 @@ void RenderConsumer::Consume(const SimData& data) {
     assert(false && "scrum-268.8: per-ray wavelength dropped before consumer");
   }
   if (per_ray_wl) {
-    assert(data.outgoing_wl_.size() == filtered_ray_num &&
-           "outgoing_wl_ size must match outgoing_w_ when present");
+    assert(data.outgoing_wl_.size() == filtered_ray_num && "outgoing_wl_ size must match outgoing_w_ when present");
     std::memcpy(wl_buf_.get(), data.outgoing_wl_.data(), filtered_ray_num * sizeof(float));
   }
 
@@ -188,11 +187,9 @@ void RenderConsumer::Consume(const SimData& data) {
     final_ray_num++;
   }
   if (per_ray_wl) {
-    SpectrumToXyzPerRay(wl_buf_.get(), w_buf_.get(), xy_buf_.get(),
-                        internal_xyz_.get(), final_ray_num);
+    SpectrumToXyzPerRay(wl_buf_.get(), w_buf_.get(), xy_buf_.get(), internal_xyz_.get(), final_ray_num);
   } else {
-    SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(),
-                  internal_xyz_.get(), final_ray_num);
+    SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), internal_xyz_.get(), final_ray_num);
   }
   total_intensity_ += landed_weight;
 
@@ -237,11 +234,9 @@ void RenderConsumer::Consume(const SimData& data) {
     if (overlap_count > 0) {
       // Pass 2 does NOT update total_intensity_ — preserves normalization.
       if (per_ray_wl) {
-        SpectrumToXyzPerRay(wl_buf_.get(), w_buf_.get(), xy_buf_.get(),
-                            internal_xyz_.get(), overlap_count);
+        SpectrumToXyzPerRay(wl_buf_.get(), w_buf_.get(), xy_buf_.get(), internal_xyz_.get(), overlap_count);
       } else {
-        SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(),
-                      internal_xyz_.get(), overlap_count);
+        SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), internal_xyz_.get(), overlap_count);
       }
     }
   }

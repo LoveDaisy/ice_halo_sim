@@ -671,8 +671,7 @@ void Simulator::Run() {
       // cpu_backend / legacy) keep per-batch uniform wl + SPD weight.
       bool backend_per_ray_wl = use_backend && backend->WlPoolSize() > 0u;
       if (backend_per_ray_wl) {
-        SimulateOneWavelengthWithBackend(*backend, config, (*batch.renders_)[0], WlParam{}, batch.ray_num_,
-                                         generation);
+        SimulateOneWavelengthWithBackend(*backend, config, (*batch.renders_)[0], WlParam{}, batch.ray_num_, generation);
       } else {
         float wl = 380.0f + rng_.GetUniform() * 400.0f;  // [380, 780] nm
         float weight = GetIlluminantSpd(*illuminant, wl);
