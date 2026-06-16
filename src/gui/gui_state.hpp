@@ -474,9 +474,10 @@ struct GuiState {
   bool screenshot_include_overlay = false;
 
 #if defined(__APPLE__)
-  // Request Metal trace backend on the next DoRun (Apple-only). Falls back to
-  // CPU silently if the active config is not Metal-compatible. Wired through
-  // LUMICE_SetPreferredBackend in DoRun. UI-only, session-only.
+  // Request Metal trace backend (Apple-only). Toggling this reconstructs the
+  // server on the next DoRun via MaybeReconstructServerForBackend (backend is a
+  // construction-time topology property: CPU N-worker vs Metal single engine), so
+  // the accumulated image resets on toggle. UI-only, session-only.
   bool use_metal_backend = false;
 #endif
 
