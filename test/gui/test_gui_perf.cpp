@@ -33,21 +33,42 @@ static const char* CreatePerfConfig() {
 }
 
 void StartPerfSimulation() {
+  // G4 diagnostic: LUMICE_PERF_CORELOG=1 routes Core logs to stderr so the actual
+  // backend-route decision (simulator.cpp "routing via MetalTraceBackend" vs the
+  // "falling back to legacy CPU" warnings) is observable — the perf harness
+  // otherwise drops Core logs. Opt-in to avoid noise on normal runs.
+  if (const char* c = std::getenv("LUMICE_PERF_CORELOG"); c && std::string(c) == "1") {
+    LUMICE_SetLogCallback([](LUMICE_LogLevel level, const char* name, const char* message) {
+      fprintf(stderr, "[CORE:%d %s] %s\n", static_cast<int>(level), name ? name : "?", message);
+    });
+  }
+
   gui::g_server = LUMICE_CreateServer();
   LUMICE_SetLogLevel(gui::g_server, static_cast<LUMICE_LogLevel>(g_core_log_level));
   gui::SetGuiLogLevel(static_cast<spdlog::level::level_enum>(g_gui_log_level));
 
-  // scrum-268 G1: opt-in Metal backend for GUI-regime perf measurement. The
-  // perf harness otherwise runs the GUI's default CPU path; LUMICE_PERF_METAL=1
-  // routes the sim through Metal so G4 (GUI-first responsiveness acceptance) can
-  // measure first_upload / rays_per_sec / texture_fps on the GPU path. Pair with
-  // a Metal-compatible LUMICE_PERF_CONFIG (dual_fisheye/rectangular lens); the
-  // hardcoded fallback config already uses a rectangular lens. No threshold is
-  // asserted here — G4 owns responsiveness gates.
+#if defined(__APPLE__)
+  // Fresh CPU server (LUMICE_CreateServer default) — re-establish the toggle-
+  // detection invariant before any DoRun. Perf scenarios run sequentially in one
+  // binary, so a prior Metal reconstruction may have left g_server_is_metal true.
+  gui::g_server_is_metal = false;
+
+  // scrum-268 G4: opt-in Metal through the REAL product path. When set, the
+  // use_metal_backend flag is applied just before each DoRun (NOT here): the
+  // LUMICE_PERF_CONFIG branch below calls DeserializeFromJson, which does
+  // `state = GuiState{}` and would wipe an early assignment. DoRun then runs
+  // MaybeReconstructServerForBackend, rebuilding into the single-engine Metal
+  // topology — exactly what the GUI checkbox does. (The retired
+  // LUMICE_SetPreferredBackend route flipped a flag on this CPU N-worker server,
+  // running Metal kernels in the wrong topology — the 0.58× anti-pattern this
+  // scrum removed.) Pair with a Metal-compatible LUMICE_PERF_CONFIG
+  // (dual_fisheye/rectangular lens); the hardcoded fallback uses a rectangular lens.
+  bool want_metal = false;
   if (const char* m = std::getenv("LUMICE_PERF_METAL"); m && std::string(m) == "1") {
-    LUMICE_SetPreferredBackend(gui::g_server, LUMICE_BACKEND_METAL);
-    fprintf(stderr, "[PERF] LUMICE_PERF_METAL=1 → preferred backend = Metal\n");
+    want_metal = true;
+    fprintf(stderr, "[PERF] LUMICE_PERF_METAL=1 → single-engine Metal (server reconstruct on DoRun)\n");
   }
+#endif
 
   // Retained test capability (introduced by explore-265, concern #2 stress test):
   // if LUMICE_PERF_CONFIG points to a config JSON, load it via the same
@@ -62,6 +83,9 @@ void StartPerfSimulation() {
       std::string json_str((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
       if (gui::DeserializeFromJson(json_str, gui::g_state)) {
         fprintf(stderr, "[PERF] loaded LUMICE_PERF_CONFIG=%s\n", cfg_path);
+#if defined(__APPLE__)
+        gui::g_state.use_metal_backend = want_metal;  // set AFTER deserialize (it resets g_state)
+#endif
         gui::DoRun();
         return;
       }
@@ -85,6 +109,9 @@ void StartPerfSimulation() {
     r.background[0] = r.background[1] = r.background[2] = 0.0f;
     r.exposure_offset = 0.0f;
   }
+#if defined(__APPLE__)
+  gui::g_state.use_metal_backend = want_metal;
+#endif
   gui::DoRun();
 }
 
