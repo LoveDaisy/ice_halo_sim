@@ -2051,7 +2051,13 @@ void MetalTraceBackend::Impl::ResolveLayerCrystalForCi(const ScatteringSetting& 
     current_n_idx = host_batch.refractive_index;
   } else {
     current_crystal = MakeCrystal(rng, setting.crystal_.param_);
-    current_n_idx = current_crystal.GetRefractiveIndex(spec.wl.wl_);
+    // scrum-268.8 (DR-3): current_n_idx is dead state now — the trace kernel
+    // reads per-ray n from wl_pool[wl_idx], not from this field (KernelParams
+    // .n_idx was removed). After Step 9 the illuminant path passes wl=0, so
+    // guard the Sellmeier call against the zero sentinel to avoid evaluating
+    // GetRefractiveIndex out of its valid range for a value nothing consumes.
+    current_n_idx =
+        (spec.wl.wl_ > 1.0f) ? current_crystal.GetRefractiveIndex(spec.wl.wl_) : 0.0f;
   }
   have_crystal = true;
   UploadCrystal(current_crystal);
@@ -3329,7 +3335,13 @@ bool MetalTraceBackend::IsCompatible(const RenderConfig& render) const {
 }
 
 uint32_t MetalTraceBackend::WlPoolSize() const {
-  return impl_->wl_pool_size_;
+  // scrum-268.8 (DR-3): report the *capability* — the configured pool size is
+  // known from the env/default before BeginSession allocates the buffer. The
+  // simulator queries this before the first trace to decide whether to hand the
+  // backend a per-ray (zero-wl) WlParam, so returning 0 pre-session would make
+  // it fall back to per-batch wl even on Metal. After BeginSession this equals
+  // the allocated size (identical value).
+  return impl_->wl_pool_size_ != 0u ? impl_->wl_pool_size_ : ResolveWlPoolSize();
 }
 
 size_t MetalTraceBackend::TraceLayerKernelMaxThreadsForTest() const {

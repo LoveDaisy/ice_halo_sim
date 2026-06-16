@@ -137,6 +137,20 @@ void RenderConsumer::Consume(const SimData& data) {
   // scrum-268.8 (DR-3): per-ray wavelength is supplied by Metal (and the CPU
   // path when it migrates). Empty vector → legacy per-batch curr_wl_ branch.
   bool per_ray_wl = !data.outgoing_wl_.empty();
+  // scrum-268.8 (DR-3) anti-silent-fallback gate: an exit-seam batch carrying
+  // outgoing rays but neither per-ray wavelength nor a valid per-batch curr_wl_
+  // means the per-ray wl was dropped upstream (e.g. a commit-chunk / transport
+  // path that forgot to carry outgoing_wl_, as in a101c53e). The fallback below
+  // would silently render a flat, illuminant-independent spectrum — exactly the
+  // bug that hid for an entire scrum. Fail loud instead. CPU/legacy and
+  // discrete-wl paths set a real curr_wl_ (≥380) and never trip this.
+  if (!per_ray_wl && !data.outgoing_d_.empty() && data.curr_wl_ < 1.0f) {
+    ILOG_ERROR(logger_,
+               "RenderConsumer: {} outgoing rays with no per-ray wavelength and curr_wl_={:.1f} (<1) — "
+               "per-ray wavelength was dropped upstream (scrum-268.8)",
+               data.outgoing_d_.size() / 3, data.curr_wl_);
+    assert(false && "scrum-268.8: per-ray wavelength dropped before consumer");
+  }
   if (per_ray_wl) {
     assert(data.outgoing_wl_.size() == filtered_ray_num &&
            "outgoing_wl_ size must match outgoing_w_ when present");

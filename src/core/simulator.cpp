@@ -660,14 +660,30 @@ void Simulator::Run() {
 
     const auto& spectrum = config.light_source_.spectrum_;
     if (auto* illuminant = std::get_if<IlluminantType>(&spectrum)) {
-      // Standard illuminant: uniform wavelength sampling + SPD weight
-      float wl = 380.0f + rng_.GetUniform() * 400.0f;  // [380, 780] nm
-      float weight = GetIlluminantSpd(*illuminant, wl);
-      WlParam wl_param{ wl, weight };
-      if (use_backend) {
-        SimulateOneWavelengthWithBackend(*backend, config, (*batch.renders_)[0], wl_param, batch.ray_num_, generation);
+      // Standard illuminant.
+      // scrum-268.8 (DR-3 / Step 9): only backends with a per-ray wavelength
+      // pool (Metal, WlPoolSize() > 0) sample wavelength per-ray on device. For
+      // those, the per-batch host sampling is deleted — it would only consume
+      // rng_ and set a misleading curr_wl_. Pass a zero-wl WlParam so curr_wl_
+      // stays 0: IF the per-ray wavelength is ever dropped upstream, the
+      // consumer renders black (loud) instead of silently collapsing onto a
+      // flat spectrum (the bug fixed in a101c53e). Pool-less backends (CPU /
+      // cpu_backend / legacy) keep per-batch uniform wl + SPD weight.
+      bool backend_per_ray_wl = use_backend && backend->WlPoolSize() > 0u;
+      if (backend_per_ray_wl) {
+        SimulateOneWavelengthWithBackend(*backend, config, (*batch.renders_)[0], WlParam{}, batch.ray_num_,
+                                         generation);
       } else {
-        SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation, ray_alloc_carry);
+        float wl = 380.0f + rng_.GetUniform() * 400.0f;  // [380, 780] nm
+        float weight = GetIlluminantSpd(*illuminant, wl);
+        WlParam wl_param{ wl, weight };
+        if (use_backend) {
+          SimulateOneWavelengthWithBackend(*backend, config, (*batch.renders_)[0], wl_param, batch.ray_num_,
+                                           generation);
+        } else {
+          SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation,
+                                ray_alloc_carry);
+        }
       }
     } else {
       // Discrete wavelength list
