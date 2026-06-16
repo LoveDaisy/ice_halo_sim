@@ -37,6 +37,7 @@
 #include "core/simulator.hpp"  // PartitionCrystalRayNum
 #include "core/trace_ops.hpp"
 #include "util/color_data.hpp"
+#include "util/illuminant.hpp"
 #include "util/logger.hpp"
 
 namespace lumice {
@@ -84,6 +85,18 @@ inline float pcg_uniform(thread PcgStream& s) {
   s.slot++;
   return u01_from_hash(h);
 }
+
+// scrum-268.8 (DR-3): per-ray wavelength pool entry. The host samples M
+// wavelengths uniformly over [380, 780] nm once per (crystal, illuminant) ci
+// dispatch and uploads this table; kernels look up per-ray optics by wl_idx.
+// Layout MUST mirror the C++ WlEntry struct below kKernelSrc (sizeof == 20).
+struct WlEntry {
+  float n_idx;
+  float spd_weight;
+  float cmf_x;
+  float cmf_y;
+  float cmf_z;
+};
 
 struct KernelParams {
   float n_idx;
@@ -1084,6 +1097,75 @@ void ComputeCmf(float wl, float& cie_x, float& cie_y, float& cie_z) {
   cie_z = kCmfZ[idx];
 }
 
+// scrum-268.8 (DR-3): per-ray wavelength pool — host-side mirror of the MSL
+// WlEntry struct in kKernelSrc. sizeof MUST stay == 20 (5 × 4B); reorderings
+// must mirror MSL.
+struct WlEntry {
+  float n_idx;
+  float spd_weight;
+  float cmf_x;
+  float cmf_y;
+  float cmf_z;
+};
+static_assert(sizeof(WlEntry) == 20u,
+              "WlEntry size mismatch — update MSL WlEntry to match host layout");
+
+// Default M = 64 (≈6.25 nm resolution across [380, 780] nm). Owner can override
+// via env var; capped at 255 so a uint8_t wl_idx in ExitRayRecord stays
+// representable end-to-end.
+constexpr uint32_t kWlPoolSizeDefault = 64u;
+constexpr uint32_t kWlPoolSizeMax     = 255u;
+
+uint32_t ResolveWlPoolSize() {
+  const char* env = std::getenv("LUMICE_WL_POOL_SIZE");
+  if (env == nullptr || env[0] == '\0') {
+    return kWlPoolSizeDefault;
+  }
+  long v = std::strtol(env, nullptr, 10);
+  if (v <= 0) {
+    return kWlPoolSizeDefault;
+  }
+  if (v > static_cast<long>(kWlPoolSizeMax)) {
+    return kWlPoolSizeMax;
+  }
+  return static_cast<uint32_t>(v);
+}
+
+// Build the per-(crystal, spectrum) WlEntry table. M >= 1 is the caller's
+// responsibility. illuminant_mode == true samples M wavelengths uniformly with
+// SPD weights from the standard illuminant table; otherwise the pool degenerates
+// to a single entry carrying spec_wl / spec_weight (discrete-wavelength path).
+// For the degenerate case, M is still >= 1 and the first entry is replicated
+// across the rest so PCG % M lookup stays well-defined.
+void ComputeWlPool(const Crystal& crystal,
+                   bool illuminant_mode, IlluminantType illuminant,
+                   float spec_wl, float spec_weight,
+                   uint32_t M, std::vector<WlEntry>& out) {
+  assert(M > 0u);
+  out.resize(M);
+  if (illuminant_mode) {
+    for (uint32_t m = 0; m < M; ++m) {
+      // Mid-point sampling across [380, 780] — preserves the simulator.cpp:663
+      // uniform-PDF semantics (each entry covers a 400/M nm slice, total
+      // weight sums to ~SPD integral × 400 / M).
+      float wl = 380.0f + (static_cast<float>(m) + 0.5f) * 400.0f /
+                          static_cast<float>(M);
+      WlEntry& e = out[m];
+      e.n_idx = crystal.GetRefractiveIndex(wl);
+      e.spd_weight = GetIlluminantSpd(illuminant, wl);
+      ComputeCmf(wl, e.cmf_x, e.cmf_y, e.cmf_z);
+    }
+  } else {
+    WlEntry e0{};
+    e0.n_idx = crystal.GetRefractiveIndex(spec_wl);
+    e0.spd_weight = spec_weight;
+    ComputeCmf(spec_wl, e0.cmf_x, e0.cmf_y, e0.cmf_z);
+    for (uint32_t m = 0; m < M; ++m) {
+      out[m] = e0;
+    }
+  }
+}
+
 size_t ComputeOutCap(size_t n, size_t max_hits) {
   // explore mh16 ~9.8x fan-out; (max_hits*2+4) covers the observed upper
   // bound with margin; cap at 64M to bound device-memory usage.
@@ -1314,6 +1396,20 @@ struct MetalTraceBackend::Impl {
   id<MTLBuffer> exit_ms_layer_buf      = nil;
   uint32_t      face_seq_cap_ = 0;
 
+  // scrum-268.8 (DR-3): per-ray wavelength pool + per-ray wl_idx side-cars.
+  //   * wl_pool_buf_: M × WlEntry (20B/entry), allocated once at pool-size resolve
+  //     and re-populated per ci dispatch (crystal n_idx depends on ci).
+  //   * root_wl_idx_buf_: max_rays × uint32, single (root buffers are NOT
+  //     ping-pong; gen_root + transit_root both target the same root_*_buf set).
+  //   * cont_wl_idx_buf_[2]: out_cap × uint32, ping-pong with cont_d/cont_w.
+  //   * exit_wl_idx_buf_: exit_cap × uint32, single (lock-step with exit_ray_d).
+  // The buffers grow with the same capacity tracking as their host siblings.
+  id<MTLBuffer> wl_pool_buf_        = nil;
+  id<MTLBuffer> root_wl_idx_buf_    = nil;
+  id<MTLBuffer> cont_wl_idx_buf_[2] = { nil, nil };
+  id<MTLBuffer> exit_wl_idx_buf_    = nil;
+  uint32_t      wl_pool_size_       = 0u;
+
   // Per-layer hop state (scrum-258.3 + scrum-267 task-fused-emit-gate +
   // scrum-267 task-device-resident-continuation Task 3).
   // hop_ms_prob_ feeds the device emit gate's KernelParams.ms_prob.
@@ -1365,6 +1461,7 @@ struct MetalTraceBackend::Impl {
   void EnsureRecSink(size_t n);
   void EnsureExitBuffers(size_t cap);  // exit seam (scrum-258.1)
   void EnsureFilterBuffers(const SessionSpec& session_spec);  // scrum-267.1
+  void EnsureWlPoolBuffer();  // scrum-268.8 (DR-3) per-ray wavelength pool
   void UploadCrystal(const Crystal& crystal);
   void ResolveLayerCrystalForCi(const ScatteringSetting& setting, bool use_host,
                                 const HostRayBatch& host_batch);
@@ -1560,6 +1657,12 @@ void MetalTraceBackend::Impl::EnsureRootBuffers(size_t n) {
   root_rot_buf = [device newBufferWithLength:n * 9 * sizeof(float)
                                     options:MTLResourceStorageModeShared];
   assert(root_rot_buf != nil);
+  // scrum-268.8 (DR-3): per-ray wavelength index. Lock-stepped with root_d
+  // so transit_root_kernel (root-buf writer for non-first MS) and the trace
+  // kernel (root-buf reader) see a side-car of the same length.
+  root_wl_idx_buf_ = [device newBufferWithLength:n * sizeof(uint32_t)
+                                        options:MTLResourceStorageModeShared];
+  assert(root_wl_idx_buf_ != nil);
 }
 
 void MetalTraceBackend::Impl::EnsureTriBuffers(size_t tri_cnt) {
@@ -1605,6 +1708,12 @@ void MetalTraceBackend::Impl::EnsureContBuffer(int slot) {
   cont_tf[slot] = [device newBufferWithLength:out_cap * sizeof(uint16_t)
                                       options:MTLResourceStorageModeShared];
   assert(cont_tf[slot] != nil);
+  // scrum-268.8 (DR-3): per-ray wavelength index for continuation rays.
+  // Lock-stepped with cont_d/cont_w so the emit gate's cont_wl_idx write and
+  // transit_root_kernel's cont_wl_idx read agree on capacity.
+  cont_wl_idx_buf_[slot] = [device newBufferWithLength:out_cap * sizeof(uint32_t)
+                                              options:MTLResourceStorageModeShared];
+  assert(cont_wl_idx_buf_[slot] != nil);
 }
 
 void MetalTraceBackend::Impl::EnsureRecSink(size_t n) {
@@ -1655,6 +1764,30 @@ void MetalTraceBackend::Impl::EnsureExitBuffers(size_t cap) {
   exit_ms_layer_buf = [device newBufferWithLength:cap * sizeof(uint8_t)
                                           options:MTLResourceStorageModeShared];
   assert(exit_ms_layer_buf != nil);
+  // scrum-268.8 (DR-3): per-ray wavelength index on the exit ring. Sized in
+  // lock-step with exit_ray_d_buf so ReadbackExitRays can attach wl_idx to
+  // each emitted ExitRayRecord.
+  exit_wl_idx_buf_ = [device newBufferWithLength:cap * sizeof(uint32_t)
+                                         options:MTLResourceStorageModeShared];
+  assert(exit_wl_idx_buf_ != nil);
+}
+
+// scrum-268.8 (DR-3): allocate the host-uploaded wavelength pool exactly once
+// per backend (pool size is invariant across sessions and ci dispatches; only
+// the pool contents change per ci). Idempotent — safe to call from every
+// BeginSession.
+void MetalTraceBackend::Impl::EnsureWlPoolBuffer() {
+  if (wl_pool_size_ == 0u) {
+    wl_pool_size_ = ResolveWlPoolSize();
+    assert(wl_pool_size_ > 0u && wl_pool_size_ <= kWlPoolSizeMax &&
+           "ResolveWlPoolSize returned out-of-range");
+  }
+  if (wl_pool_buf_ != nil) {
+    return;
+  }
+  wl_pool_buf_ = [device newBufferWithLength:wl_pool_size_ * sizeof(WlEntry)
+                                    options:MTLResourceStorageModeShared];
+  assert(wl_pool_buf_ != nil);
 }
 
 // scrum-267 task-msl-filter-match-port (Step 4): upload per-session filter
@@ -2528,6 +2661,9 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   impl_->EnsureDevice();
   impl_->EnsurePso();
   impl_->EnsureImage(impl_->width, impl_->height);
+  // scrum-268.8 (DR-3): allocate the wavelength pool buffer once per backend
+  // (size invariant across sessions; contents are re-uploaded per ci dispatch).
+  impl_->EnsureWlPoolBuffer();
 
   impl_->cont_counts[0] = 0;
   impl_->cont_counts[1] = 0;
