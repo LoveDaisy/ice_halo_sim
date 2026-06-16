@@ -12,6 +12,7 @@
 #include <numeric>
 #include <string>
 #include <thread>
+#include <variant>
 
 #include "config/crystal_config.hpp"
 #include "config/light_config.hpp"
@@ -983,11 +984,26 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   // projection call when outgoing_d_ is empty — do not collapse these two paths.
   std::vector<float> exit_d(exit_count * 3);
   std::vector<float> exit_w(exit_count);
+  // scrum-268.8 (DR-3): per-outgoing-ray wavelength is the Metal + illuminant
+  // seam. For other backends or the discrete-wl path, leave outgoing_wl_ empty
+  // and let the consumer's per-batch curr_wl_ branch take over — that path is
+  // bit-identical to the pre-DR-3 behaviour.
+  uint32_t pool_size = backend.WlPoolSize();
+  bool illuminant_mode = std::holds_alternative<IlluminantType>(scene.light_source_.spectrum_);
+  bool fill_per_ray_wl = (pool_size > 0u) && illuminant_mode;
+  std::vector<float> exit_wl;
+  if (fill_per_ray_wl) {
+    exit_wl.resize(exit_count);
+  }
   for (size_t i = 0; i < exit_count; i++) {
     exit_d[i * 3 + 0] = exit_records[i].dir[0];
     exit_d[i * 3 + 1] = exit_records[i].dir[1];
     exit_d[i * 3 + 2] = exit_records[i].dir[2];
     exit_w[i] = exit_records[i].weight;
+    if (fill_per_ray_wl) {
+      float idx = static_cast<float>(exit_records[i].wl_idx) + 0.5f;
+      exit_wl[i] = 380.0f + idx * 400.0f / static_cast<float>(pool_size);
+    }
   }
 
   SimData sim_data;
@@ -998,6 +1014,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
                                        // server.cpp::ConsumeData).
   sim_data.outgoing_d_ = std::move(exit_d);
   sim_data.outgoing_w_ = std::move(exit_w);
+  sim_data.outgoing_wl_ = std::move(exit_wl);
   sim_data.exit_records_ = std::move(exit_records);
   // dummy: consumer reads .size() only (render.cpp:75); real per-ray indices
   // arrive when 258.3 unifies outgoing_d_/w_ with exit_records_.

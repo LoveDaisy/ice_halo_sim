@@ -378,6 +378,13 @@ class TraceBackend {
     return true;
   }
 
+  // scrum-268.8 (DR-3): per-ray wavelength pool size, > 0 only when the
+  // backend tags ExitRayRecord::wl_idx with a meaningful pool index. The
+  // simulator inverts pool_idx → wl via `380 + (idx + 0.5) * 400 / M` for
+  // illuminant-mode scenes. Backends without a pool (CPU + legacy) return 0
+  // and the simulator falls back to per-batch wl in SimData.outgoing_wl_.
+  virtual uint32_t WlPoolSize() const { return 0; }
+
   TraceBackend(const TraceBackend&) = delete;
   TraceBackend(TraceBackend&&) = delete;
   TraceBackend& operator=(const TraceBackend&) = delete;

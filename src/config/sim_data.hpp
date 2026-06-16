@@ -135,6 +135,11 @@ struct SimData {
   // correspond to outgoing_indices_[k]. Filled by Simulator alongside outgoing_indices_.
   std::vector<float> outgoing_d_;  // direction (3 floats per outgoing ray)
   std::vector<float> outgoing_w_;  // weight (1 float per outgoing ray)
+  // scrum-268.8 (DR-3): per-outgoing-ray wavelength (nm). When non-empty the
+  // consumer (server/render.cpp) uses per-ray CMF (SpectrumToXyzPerRay) instead
+  // of the single curr_wl_ — this is the Metal/per-ray-pool seam. Empty for
+  // CPU path so SpectrumToXyz(curr_wl_) stays in force.
+  std::vector<float> outgoing_wl_;
 
   // Rich exit records (scrum-258.2+) parallel to outgoing_d_/w_. Produced by
   // the trace backend via ReadbackExitRays; consumed by 258.3 (filter +

@@ -99,16 +99,15 @@ struct WlEntry {
 };
 
 struct KernelParams {
-  float n_idx;
+  // scrum-268.8 (DR-3): per-batch n_idx / cie_x/y/z removed. trace kernel now
+  // reads per-ray optics from wl_pool[wl_idx] (see WlEntry above + buffer
+  // bindings in DispatchLayer).
   uint  max_hits;
   uint  poly_cnt;
   uint  num_rays;
   uint  img_w;
   uint  img_h;
   float az0;
-  float cie_x;
-  float cie_y;
-  float cie_z;
   uint  ms_mode;
   uint  out_cap;
   // Projection routing (host fills per BeginSession lens type):
@@ -165,9 +164,18 @@ kernel void trace_layer_kernel(
     constant KernelParams& prm      [[buffer(7)]],
     device atomic_float*   image    [[buffer(8)]],
     device float*          out_d    [[buffer(9)]],
-    device float*          out_p    [[buffer(10)]],
-    device float*          out_w    [[buffer(11)]],
-    device ushort*         out_tf   [[buffer(12)]],
+    // scrum-268.8 (DR-3): slots 10 and 12 reclaimed from the retired out_p /
+    // out_tf writes (dead data — transit_root_kernel resamples entry point +
+    // face on the next-layer crystal; ReadbackExitRays never read cont_p /
+    // cont_tf). slot 10 now binds the wavelength pool, 12 binds the per-ray
+    // root wavelength index that the trace kernel reads at entry.
+    // scrum-268.8 (DR-3): wl_pool routes through the `constant` address space
+    // so per-thread divergent WlEntry reads hit the shader-side cache rather
+    // than the slower device-memory gather path. Pool size ≤ 255 × 20B = 5100B
+    // fits well below Metal's 64KB constant buffer ceiling.
+    constant WlEntry*      wl_pool       [[buffer(10)]],
+    device float*          out_w         [[buffer(11)]],
+    device const uint*     root_wl_idx   [[buffer(12)]],
     device atomic_uint*    counter  [[buffer(13)]],
     device float*          rec_sink [[buffer(14)]],
     device atomic_uint*    exit_cnt [[buffer(15)]],
@@ -198,6 +206,12 @@ kernel void trace_layer_kernel(
     device const uchar*            gate_getfn_bytes    [[buffer(26)]],
     device const DeviceFilterDesc* gate_sub_desc_buf   [[buffer(27)]],
     device uchar*                  exit_ms_layer       [[buffer(28)]],
+    // scrum-268.8 (DR-3): per-ray wavelength side-cars. cont_wl_idx[slot]
+    // gets the current ray's wl_idx propagated alongside the emit-gate
+    // continuation write; exit_wl_idx[es] gets it propagated alongside both
+    // the mid-exit (filter+prob) and final-exit (all polygon-exits) writes.
+    device uint*                   cont_wl_idx         [[buffer(29)]],
+    device uint*                   exit_wl_idx         [[buffer(30)]],
     uint tid [[thread_position_in_grid]]) {
   if (tid >= prm.num_rays) { return; }
 
@@ -217,7 +231,16 @@ kernel void trace_layer_kernel(
   float m[9];
   for (uint k = 0u; k < 9u; k++) { m[k] = root_rot[tid * 9u + k]; }
 
-  const float n_idx    = prm.n_idx;
+  // scrum-268.8 (DR-3): per-ray optics via pool lookup. wl_idx is the
+  // photon's lifetime tag — set at gen_root, carried through transit, never
+  // resampled inside the trace. cie_* accumulates into image via wl_pool
+  // entries instead of the deleted prm.cie_x/y/z fields.
+  const uint    wl_idx = root_wl_idx[tid];
+  const WlEntry wle    = wl_pool[wl_idx];
+  const float   n_idx  = wle.n_idx;
+  const float   cmf_x  = wle.cmf_x;
+  const float   cmf_y  = wle.cmf_y;
+  const float   cmf_z  = wle.cmf_z;
   const uint  poly_cnt = prm.poly_cnt;
 
   const int   iw_i      = int(prm.img_w);
@@ -342,34 +365,19 @@ kernel void trace_layer_kernel(
             gate_stream.slot       = 0u;
             bool do_continue = (pcg_uniform(gate_stream) < prm.ms_prob);
             if (do_continue) {
-              // Best-facing face placeholder for out_p / out_tf — the next
-              // layer's transit_root_kernel re-samples entry point + face on
-              // the next-layer crystal, so these writes are metadata-only.
-              float ilen = rsqrt(cdx * cdx + cdy * cdy + cdz * cdz);
-              float ux = cdx * ilen, uy = cdy * ilen, uz = cdz * ilen;
-              int   ef = 0;
-              float bestf = -1e30f;
-              for (uint fi = 0u; fi < poly_cnt; fi++) {
-                float facing = -(ux * poly_n[fi * 3u + 0u] +
-                                 uy * poly_n[fi * 3u + 1u] +
-                                 uz * poly_n[fi * 3u + 2u]);
-                if (facing > bestf) { bestf = facing; ef = int(fi); }
-              }
+              // scrum-268.8: out_p / out_tf retired (transit_root_kernel
+              // resamples entry point + face on the next-layer crystal so
+              // these writes were dead data). cont_wl_idx now propagates
+              // the photon's lifetime wavelength tag into the continuation
+              // ring; transit_root_kernel reads it back into root_wl_idx_out
+              // for the next layer's trace kernel to consume.
               uint slot = atomic_fetch_add_explicit(counter, 1u, memory_order_relaxed);
               if (slot < prm.out_cap) {
                 out_d[slot * 3u + 0u] = wcx;
                 out_d[slot * 3u + 1u] = wcy;
                 out_d[slot * 3u + 2u] = wcz;
-                // TODO(scrum-267 task-device-resident-continuation): out_p/out_tf
-                // writes below are dead data. transit_root_kernel reads cont_d/cont_w
-                // only (not cont_p/cont_tf) and resamples entry point + face from
-                // crystal geometry on the device. Clean up when cont_p/cont_tf write
-                // path is retired (remove writes + buffer bindings + buffer members).
-                out_p[slot * 3u + 0u] = centroid[ef * 3u + 0u];
-                out_p[slot * 3u + 1u] = centroid[ef * 3u + 1u];
-                out_p[slot * 3u + 2u] = centroid[ef * 3u + 2u];
                 out_w[slot] = cw;
-                out_tf[slot] = ushort(ef);
+                cont_wl_idx[slot] = wl_idx;
               }
               // scrum-267 task-fused-emit-gate: post-gate semantics — exit_cnt
               // / exit_wsum now tally "filter_pass polygon-exits" (gate dropped
@@ -391,6 +399,7 @@ kernel void trace_layer_kernel(
                 exit_w[es] = cw;
                 exit_crystal_id[es] = ushort(prm.crystal_id);
                 exit_ms_layer[es]   = uchar(prm.ms_layer_idx);
+                exit_wl_idx[es]     = wl_idx;  // scrum-268.8 per-ray wavelength tag
                 uint seq_len = min(rec_len, prm.face_seq_cap);
                 exit_face_seq_len[es] = uchar(seq_len);
                 for (uint k = 0u; k < seq_len; k++) {
@@ -439,6 +448,7 @@ kernel void trace_layer_kernel(
               // emitted by the gate carry the producing layer's idx and skip
               // the filter check).
               exit_ms_layer[es] = uchar(prm.ms_layer_idx);
+              exit_wl_idx[es]   = wl_idx;  // scrum-268.8 per-ray wavelength tag
               uint seq_len = min(rec_len, prm.face_seq_cap);
               exit_face_seq_len[es] = uchar(seq_len);
               for (uint k = 0u; k < seq_len; k++) {
@@ -459,9 +469,9 @@ kernel void trace_layer_kernel(
             int iy = int(floor(-lat * proj_scl + img_h_f * 0.5f + 0.5f));
             if (iy >= 0 && iy < ih_i) {
               uint pix = (uint(iy) * prm.img_w + uint(ix)) * 3u;
-              atomic_fetch_add_explicit(&image[pix + 0u], prm.cie_x * cw, memory_order_relaxed);
-              atomic_fetch_add_explicit(&image[pix + 1u], prm.cie_y * cw, memory_order_relaxed);
-              atomic_fetch_add_explicit(&image[pix + 2u], prm.cie_z * cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&image[pix + 0u], cmf_x * cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&image[pix + 1u], cmf_y * cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&image[pix + 2u], cmf_z * cw, memory_order_relaxed);
             }
           } else {
             // proj_type == 1: dual fisheye equal-area, primary + opposite-hemisphere overlap.
@@ -487,9 +497,9 @@ kernel void trace_layer_kernel(
             int iy = int(floor(fy + 0.5f));
             if (ix >= 0 && ix < iw_i && iy >= 0 && iy < ih_i) {
               uint pix = (uint(iy) * prm.img_w + uint(ix)) * 3u;
-              atomic_fetch_add_explicit(&image[pix + 0u], prm.cie_x * cw, memory_order_relaxed);
-              atomic_fetch_add_explicit(&image[pix + 1u], prm.cie_y * cw, memory_order_relaxed);
-              atomic_fetch_add_explicit(&image[pix + 2u], prm.cie_z * cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&image[pix + 0u], cmf_x * cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&image[pix + 1u], cmf_y * cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&image[pix + 2u], cmf_z * cw, memory_order_relaxed);
             }
             // Overlap dual-write: mirror CPU render.cpp:192-214 (opposite hemisphere, dz<0).
             // Does NOT increment exit_wsum — preserves normalization parity with CPU.
@@ -507,9 +517,9 @@ kernel void trace_layer_kernel(
               int   iy2 = int(floor(fy2 + 0.5f));
               if (ix2 >= 0 && ix2 < iw_i && iy2 >= 0 && iy2 < ih_i) {
                 uint pix2 = (uint(iy2) * prm.img_w + uint(ix2)) * 3u;
-                atomic_fetch_add_explicit(&image[pix2 + 0u], prm.cie_x * cw, memory_order_relaxed);
-                atomic_fetch_add_explicit(&image[pix2 + 1u], prm.cie_y * cw, memory_order_relaxed);
-                atomic_fetch_add_explicit(&image[pix2 + 2u], prm.cie_z * cw, memory_order_relaxed);
+                atomic_fetch_add_explicit(&image[pix2 + 0u], cmf_x * cw, memory_order_relaxed);
+                atomic_fetch_add_explicit(&image[pix2 + 1u], cmf_y * cw, memory_order_relaxed);
+                atomic_fetch_add_explicit(&image[pix2 + 2u], cmf_z * cw, memory_order_relaxed);
               }
             }
           }
@@ -581,7 +591,10 @@ struct GenRootKernelParams {
   float sun_lon;             // (sun.azimuth + 180°) in radians
   float sun_lat;             // (-sun.altitude) in radians
   float sun_half_angle;      // (sun.diameter / 2) in radians
-  float ray_weight;          // wl_param.weight_
+  // scrum-268.8 (DR-3): replaces per-batch ray_weight. gen_root_kernel uses
+  // wl_pool[wl_idx].spd_weight as the per-ray weight; this field is the modulo
+  // bound that hashes a global ray index into [0, wl_pool_size).
+  uint  wl_pool_size;
   uint  lat_path;            // see kLatPath* above
   uint  lat_dist_type;       // axis_dist.latitude_dist.type (cast to uint)
   float lat_mean_rad;        // axis_dist.latitude_dist.mean × deg→rad
@@ -835,6 +848,13 @@ kernel void gen_root_kernel(
     device const float*     tri_area      [[buffer(7)]],
     device const ushort*    tri_to_poly   [[buffer(8)]],
     constant GenRootKernelParams& gp      [[buffer(9)]],
+    // scrum-268.8 (DR-3): per-ray wavelength pool + per-ray wl_idx output.
+    // Pool entries provide the spd_weight (replacing the deleted gp.ray_weight)
+    // and feed the trace kernel's per-ray optics on the next stage.
+    // scrum-268.8 (DR-3): match trace_layer_kernel's `constant` binding so the
+    // shader-side cache is consistent across both pool readers.
+    constant WlEntry*       wl_pool       [[buffer(10)]],
+    device uint*            root_wl_idx   [[buffer(11)]],
     uint tid [[thread_position_in_grid]])
 {
   if (tid >= gp.num_rays) {
@@ -853,6 +873,22 @@ kernel void gen_root_kernel(
   stream.seed = gp.gen_seed;
   stream.global_idx = global_idx;
   stream.slot = 0u;
+
+  // scrum-268.8 (DR-3): per-ray wavelength index. Uses an independent PCG slot
+  // (20) so it cannot collide with the orientation / triangle-pick draws made
+  // below — kWlPcgSlot stays clear of every existing draw count (orientation +
+  // sun + categorical + triangle ≤ ~12 slots). The result is the photon's
+  // lifetime tag, written to root_wl_idx so the trace kernel can look up
+  // n_idx / cmf_* from wl_pool[wl_idx].
+  PcgStream wl_stream;
+  wl_stream.seed       = gp.gen_seed;
+  wl_stream.global_idx = global_idx;
+  wl_stream.slot       = 20u;
+  uint wl_idx = (uint)(pcg_uniform(wl_stream) * float(gp.wl_pool_size));
+  if (wl_idx >= gp.wl_pool_size) {
+    wl_idx = gp.wl_pool_size - 1u;  // guard against pcg_uniform → 1.0f rounding
+  }
+  root_wl_idx[tid] = wl_idx;
 
   // 1. Sample crystal orientation (lon, lat, roll) → 3×3 rotation.
   float lon, lat, roll;
@@ -880,7 +916,7 @@ kernel void gen_root_kernel(
   float p[3];
   sample_triangle(stream, tri_vtx + tri_id * 9u, p);
   ushort to_face = tri_to_poly[tri_id];
-  float weight = gp.ray_weight;
+  float weight = wl_pool[wl_idx].spd_weight;  // scrum-268.8 per-ray spd weight
   if (to_face == kInvalidId) {
     // Mirrors InitRay_p_fid fallback (simulator.cpp:92-94): zero weight when
     // a triangle has no polygon backing so downstream HitSurface can drop it.
@@ -931,6 +967,12 @@ kernel void transit_root_kernel(
     device const float*  tri_area    [[buffer(9)]],
     device const ushort* tri_to_poly [[buffer(10)]],
     constant GenRootKernelParams& gp [[buffer(11)]],
+    // scrum-268.8 (DR-3): per-ray wavelength carrier through the layer hop.
+    // The emit gate wrote each continuation ray's wl_idx into cont_wl_idx_in;
+    // transit pass-through copies it to root_wl_idx_out so the next layer's
+    // trace kernel reads the same lifetime tag.
+    device const uint*   cont_wl_idx_in   [[buffer(12)]],
+    device uint*         root_wl_idx_out  [[buffer(13)]],
     uint tid [[thread_position_in_grid]])
 {
   if (tid >= gp.num_rays || gp.tri_count == 0u) {
@@ -991,6 +1033,8 @@ kernel void transit_root_kernel(
   for (uint k = 0u; k < 9u; k++) {
     root_rot[tid * 9u + k] = mat9[k];
   }
+  // scrum-268.8 (DR-3): pass-through wavelength index (photon lifetime tag).
+  root_wl_idx_out[tid] = cont_wl_idx_in[tid];
 }
 )METAL";
 
@@ -1000,16 +1044,14 @@ kernel void transit_root_kernel(
 // guards size only; reviewer-facing field-by-field check is the maintainer's
 // responsibility when adding/reordering members.
 struct KernelParams {
-  float    n_idx;
+  // scrum-268.8 (DR-3): per-batch n_idx + cie_x/y/z removed. trace_layer
+  // kernel reads per-ray optics from the wl_pool[wl_idx] buffer instead.
   uint32_t max_hits;
   uint32_t poly_cnt;
   uint32_t num_rays;
   uint32_t img_w;
   uint32_t img_h;
   float    az0;
-  float    cie_x;
-  float    cie_y;
-  float    cie_z;
   uint32_t ms_mode;
   uint32_t out_cap;
   uint32_t proj_type;
@@ -1032,7 +1074,7 @@ struct KernelParams {
   uint32_t filter_desc_max_ci;
   uint32_t crystal_config_id;
 };
-static_assert(sizeof(KernelParams) == 92u,
+static_assert(sizeof(KernelParams) == 76u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 
 // Device root-gen latitude path tags. MUST match constant kLatPath* in
@@ -1061,7 +1103,9 @@ struct GenRootKernelParams {
   float    sun_lon;
   float    sun_lat;
   float    sun_half_angle;
-  float    ray_weight;
+  // scrum-268.8 (DR-3): host mirror of MSL `wl_pool_size`. Replaces the
+  // per-batch `ray_weight` (now per-ray from wl_pool[wl_idx].spd_weight).
+  uint32_t wl_pool_size;
   uint32_t lat_path;
   uint32_t lat_dist_type;   // DistributionType cast to uint
   float    lat_mean_rad;
@@ -1293,7 +1337,8 @@ struct MetalTraceBackend::Impl {
   int    width = 0;
   int    height = 0;
   float  az0 = 0.0f;
-  float  cie_x = 0.0f, cie_y = 0.0f, cie_z = 0.0f;
+  // scrum-268.8 (DR-3): per-batch cie_x/y/z removed (KernelParams fields
+  // dropped; trace kernel reads CMF from wl_pool[wl_idx]).
   // Projection routing — populated by BeginSession per render.lens_.type_.
   // Mirrors KernelParams fields with the same name; DispatchLayer copies them.
   uint32_t proj_type = 0u;
@@ -1351,10 +1396,12 @@ struct MetalTraceBackend::Impl {
   // cont_face_seq_* buffers (formerly slots 24-26) are removed — the emit gate
   // now applies filter+prob on-device, so the host hop reads only direction +
   // weight + crystal-rot.
+  // scrum-268.8 (DR-3): cont_p / cont_tf retired. trace kernel slots 10 / 12
+  // now bind the wavelength pool / per-ray root wavelength index; the next
+  // layer's transit_root_kernel resamples entry point + face from device
+  // geometry instead of reading the dead cont_p / cont_tf writes.
   id<MTLBuffer> cont_d[2]  = { nil, nil };
-  id<MTLBuffer> cont_p[2]  = { nil, nil };
   id<MTLBuffer> cont_w[2]  = { nil, nil };
-  id<MTLBuffer> cont_tf[2] = { nil, nil };
   size_t        cont_capacity[2] = { 0, 0 };
   size_t        cont_counts[2]   = { 0, 0 };
   size_t        out_cap = 0;
@@ -1409,6 +1456,17 @@ struct MetalTraceBackend::Impl {
   id<MTLBuffer> cont_wl_idx_buf_[2] = { nil, nil };
   id<MTLBuffer> exit_wl_idx_buf_    = nil;
   uint32_t      wl_pool_size_       = 0u;
+  // BeginSession captures the spectrum mode + per-batch sentinel so
+  // ResolveLayerCrystalForCi can rebuild the WlEntry pool against the active
+  // crystal's refractive index each ci dispatch. illuminant_mode_=true uses
+  // an M-entry uniform sampling over [380, 780]; otherwise the pool degenerates
+  // to a 1-entry replication of (spec_wl, spec_weight) so the discrete-list
+  // path stays per-batch (matches the legacy CPU behaviour).
+  bool             illuminant_mode_  = false;
+  IlluminantType   illuminant_       = IlluminantType::kD65;
+  float            per_batch_wl_     = 0.0f;
+  float            per_batch_weight_ = 1.0f;
+  std::vector<WlEntry> wl_pool_host_;
 
   // Per-layer hop state (scrum-258.3 + scrum-267 task-fused-emit-gate +
   // scrum-267 task-device-resident-continuation Task 3).
@@ -1699,15 +1757,9 @@ void MetalTraceBackend::Impl::EnsureContBuffer(int slot) {
   cont_d[slot]  = [device newBufferWithLength:out_cap * 3 * sizeof(float)
                                       options:MTLResourceStorageModeShared];
   assert(cont_d[slot] != nil);
-  cont_p[slot]  = [device newBufferWithLength:out_cap * 3 * sizeof(float)
-                                      options:MTLResourceStorageModeShared];
-  assert(cont_p[slot] != nil);
   cont_w[slot]  = [device newBufferWithLength:out_cap * sizeof(float)
                                       options:MTLResourceStorageModeShared];
   assert(cont_w[slot] != nil);
-  cont_tf[slot] = [device newBufferWithLength:out_cap * sizeof(uint16_t)
-                                      options:MTLResourceStorageModeShared];
-  assert(cont_tf[slot] != nil);
   // scrum-268.8 (DR-3): per-ray wavelength index for continuation rays.
   // Lock-stepped with cont_d/cont_w so the emit gate's cont_wl_idx write and
   // transit_root_kernel's cont_wl_idx read agree on capacity.
@@ -2003,6 +2055,17 @@ void MetalTraceBackend::Impl::ResolveLayerCrystalForCi(const ScatteringSetting& 
   }
   have_crystal = true;
   UploadCrystal(current_crystal);
+  // scrum-268.8 (DR-3): rebuild + upload the per-(crystal, spectrum) WlEntry
+  // pool. n_idx is crystal-specific so this must run after the crystal swap;
+  // SPD weights + CMF only depend on the spectrum mode (constant per session)
+  // but recomputing them per ci is negligible (≤ 64 calls × O(1) lookup).
+  assert(wl_pool_buf_ != nil && wl_pool_size_ > 0u &&
+         "EnsureWlPoolBuffer must run before the first ResolveLayerCrystalForCi");
+  ComputeWlPool(current_crystal, illuminant_mode_, illuminant_,
+                per_batch_wl_, per_batch_weight_,
+                wl_pool_size_, wl_pool_host_);
+  std::memcpy([wl_pool_buf_ contents], wl_pool_host_.data(),
+              static_cast<size_t>(wl_pool_size_) * sizeof(WlEntry));
 }
 
 size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSetting& setting,
@@ -2066,6 +2129,25 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
     // re-applies the forward rotation before projection (invariant 6).
     std::memcpy(rot_ptr + i * 9, r.crystal_rot_.GetMat(), 9 * sizeof(float));
   }
+  // scrum-268.8 (DR-3): host fallback path stays per-batch — all host-gen
+  // rays share the simulator-sampled wl. Map per_batch_wl_ to the closest
+  // pool index so the trace kernel's pool[wl_idx] lookup returns
+  // matching (n_idx, cmf_*) for the host-side weight already in root_w.
+  // Pool wavelengths sit at `380 + (m+0.5)*400/M` — invert that formula.
+  auto* wl_idx_ptr = static_cast<uint32_t*>([root_wl_idx_buf_ contents]);
+  uint32_t wl_idx_batch = 0u;
+  if (wl_pool_size_ > 0u) {
+    float t = (per_batch_wl_ - 380.0f) * static_cast<float>(wl_pool_size_) / 400.0f - 0.5f;
+    if (t < 0.0f) {
+      wl_idx_batch = 0u;
+    } else {
+      uint32_t v = static_cast<uint32_t>(t + 0.5f);
+      wl_idx_batch = (v >= wl_pool_size_) ? (wl_pool_size_ - 1u) : v;
+    }
+  }
+  for (size_t i = 0; i < n; i++) {
+    wl_idx_ptr[i] = wl_idx_batch;
+  }
   // Accumulate the host-gen count too so a future device-gen-eligible call
   // within the same session keeps gen_ray_base globally monotone.
   root_ray_count += n;
@@ -2118,6 +2200,24 @@ size_t MetalTraceBackend::Impl::InjectHostRoots(const HostRayBatch& host) {
     m[3] = 0.0f; m[4] = 1.0f; m[5] = 0.0f;
     m[6] = 0.0f; m[7] = 0.0f; m[8] = 1.0f;
   }
+  // scrum-268.8 (DR-3): golden-ray injection is single-wl by construction
+  // (tests set spec.wl.wl_ to a fixed value). Map per_batch_wl_ to a pool
+  // index so the trace kernel reads matching (n_idx, cmf_*) for the
+  // analytically derived rays.
+  auto* wl_idx_ptr = static_cast<uint32_t*>([root_wl_idx_buf_ contents]);
+  uint32_t wl_idx_batch = 0u;
+  if (wl_pool_size_ > 0u) {
+    float t = (per_batch_wl_ - 380.0f) * static_cast<float>(wl_pool_size_) / 400.0f - 0.5f;
+    if (t < 0.0f) {
+      wl_idx_batch = 0u;
+    } else {
+      uint32_t v = static_cast<uint32_t>(t + 0.5f);
+      wl_idx_batch = (v >= wl_pool_size_) ? (wl_pool_size_ - 1u) : v;
+    }
+  }
+  for (size_t i = 0; i < n; i++) {
+    wl_idx_ptr[i] = wl_idx_batch;
+  }
   return n;
 }
 
@@ -2137,7 +2237,12 @@ GenRootKernelParams MetalTraceBackend::Impl::BuildGenRootParams(
   gp.sun_lon        = (sun.azimuth_ + 180.0f) * math::kDegreeToRad;
   gp.sun_lat        = -sun.altitude_ * math::kDegreeToRad;
   gp.sun_half_angle = (sun.diameter_ * 0.5f) * math::kDegreeToRad;
-  gp.ray_weight     = spec.wl.weight_;
+  // scrum-268.8 (DR-3): per-ray weight = wl_pool[wl_idx].spd_weight. Pass
+  // the pool modulo bound so the kernel hash maps a global ray index into
+  // [0, wl_pool_size). EnsureWlPoolBuffer guarantees wl_pool_size_ > 0
+  // before BuildGenRootParams runs.
+  assert(wl_pool_size_ > 0u && "wl_pool_size_ must be resolved before BuildGenRootParams");
+  gp.wl_pool_size   = wl_pool_size_;
 
   const AxisDistribution& axis_dist = setting.crystal_.axis_;
   // Latitude path / proposal type, mirroring math.cpp:444 SampleSphericalPointsSph
@@ -2212,6 +2317,9 @@ void MetalTraceBackend::Impl::EncodeGenRoot(id<MTLCommandBuffer> cb,
     [enc setBuffer:tri_area_buf_  offset:0 atIndex:7];
     [enc setBuffer:tri_to_poly_buf_ offset:0 atIndex:8];
     [enc setBytes:&gp length:sizeof(GenRootKernelParams) atIndex:9];
+    // scrum-268.8 (DR-3): wavelength pool + per-ray wl_idx output buffer.
+    [enc setBuffer:wl_pool_buf_     offset:0 atIndex:10];
+    [enc setBuffer:root_wl_idx_buf_ offset:0 atIndex:11];
     NSUInteger threads = 64;
     NSUInteger groups = (static_cast<NSUInteger>(gp.num_rays) + threads - 1) / threads;
     [enc dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
@@ -2283,6 +2391,11 @@ void MetalTraceBackend::Impl::EncodeTransitRoot(
     [enc setBuffer:tri_area_buf_      offset:0     atIndex:9];
     [enc setBuffer:tri_to_poly_buf_   offset:0     atIndex:10];
     [enc setBytes:&gp length:sizeof(GenRootKernelParams) atIndex:11];
+    // scrum-268.8 (DR-3): per-ray wavelength carrier through transit. The
+    // in-slot cont_wl_idx slice mirrors the cont_d / cont_w offset stride.
+    NSUInteger wl_off = static_cast<NSUInteger>(ci_start) * sizeof(uint32_t);
+    [enc setBuffer:cont_wl_idx_buf_[in_slot] offset:wl_off atIndex:12];
+    [enc setBuffer:root_wl_idx_buf_          offset:0      atIndex:13];
     NSUInteger threads = 64;
     NSUInteger groups  = (static_cast<NSUInteger>(gp.num_rays) + threads - 1) / threads;
     [enc dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
@@ -2304,16 +2417,15 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   // WaitAndReadbackLayer() at every iteration tail.
   assert(pending_cb_ == nil && "DispatchLayer: pending_cb_ must be drained before next dispatch");
   KernelParams params{};
-  params.n_idx    = current_n_idx;
+  // scrum-268.8 (DR-3): per-batch n_idx + cie_x/y/z dropped (per-ray wl_pool
+  // lookup superseded). current_n_idx + cie_* impl state survive for the
+  // host-side parity audit only and are no longer wired into KernelParams.
   params.max_hits = static_cast<uint32_t>(spec.scene->max_hits_);
   params.poly_cnt = static_cast<uint32_t>(current_crystal.PolygonFaceCount());
   params.num_rays = static_cast<uint32_t>(num_rays);
   params.img_w    = static_cast<uint32_t>(width);
   params.img_h    = static_cast<uint32_t>(height);
   params.az0      = az0;
-  params.cie_x    = cie_x;
-  params.cie_y    = cie_y;
-  params.cie_z    = cie_z;
   params.ms_mode  = ms_mode;
   params.out_cap  = static_cast<uint32_t>(out_cap);
   params.proj_type  = proj_type;
@@ -2413,9 +2525,13 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   [enc setBytes:&params length:sizeof(KernelParams) atIndex:7];
   [enc setBuffer:xyz_image      offset:0 atIndex:8];
   [enc setBuffer:cont_d[out_slot]  offset:0 atIndex:9];
-  [enc setBuffer:cont_p[out_slot]  offset:0 atIndex:10];
+  // scrum-268.8 (DR-3): slots 10/12 retired from out_p / out_tf and reclaimed
+  // for the wavelength pool (read) + per-ray root wl_idx (read). cont_w stays
+  // at 11; cont_wl_idx (write) moves out to slot 29 / exit_wl_idx (write) to
+  // slot 30 — the only two free slots left under Metal's 30-binding ceiling.
+  [enc setBuffer:wl_pool_buf_      offset:0 atIndex:10];
   [enc setBuffer:cont_w[out_slot]  offset:0 atIndex:11];
-  [enc setBuffer:cont_tf[out_slot] offset:0 atIndex:12];
+  [enc setBuffer:root_wl_idx_buf_  offset:0 atIndex:12];
   [enc setBuffer:counter_buf    offset:0 atIndex:13];
   [enc setBuffer:rec_sink_buf   offset:0 atIndex:14];
   [enc setBuffer:exit_count_buf offset:0 atIndex:15];
@@ -2446,6 +2562,12 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   [enc setBuffer:getfn_bytes_buf_      offset:0 atIndex:26];
   [enc setBuffer:complex_sub_desc_buf_ offset:0 atIndex:27];
   [enc setBuffer:exit_ms_layer_buf     offset:0 atIndex:28];
+  // scrum-268.8 (DR-3): per-ray wavelength side-cars in the last two free
+  // slots (Metal per-stage ceiling = 30). cont_wl_idx is written alongside
+  // the emit-gate's cont_d/cont_w; exit_wl_idx is written alongside the
+  // final-exit + mid-exit emits.
+  [enc setBuffer:cont_wl_idx_buf_[out_slot] offset:0 atIndex:29];
+  [enc setBuffer:exit_wl_idx_buf_           offset:0 atIndex:30];
 
   NSUInteger tg = std::min<NSUInteger>(256, pso.maxTotalThreadsPerThreadgroup);
   [enc dispatchThreads:MTLSizeMake(num_rays, 1, 1)
@@ -2539,7 +2661,7 @@ void MetalTraceBackend::Impl::Reset() {
   width = 0;
   height = 0;
   az0 = 0.0f;
-  cie_x = cie_y = cie_z = 0.0f;
+  // scrum-268.8 (DR-3): cie_x/y/z removed from Impl.
   proj_type = 0u;
   r_scale = 1.0f;
   max_abs_dz = 0.0f;
@@ -2617,7 +2739,27 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
 
   Rotation camera_rot = MakeCameraRotation(*spec.render);
   impl_->az0 = ComputeAz0(camera_rot);
-  ComputeCmf(spec.wl.wl_, impl_->cie_x, impl_->cie_y, impl_->cie_z);
+  // scrum-268.8 (DR-3): per-batch ComputeCmf(spec.wl.wl_) deleted — CMF is
+  // sourced per-ray from wl_pool[wl_idx] populated below in TraceLayer's ci
+  // loop. spec.wl.wl_ remains the simulator-sampled per-batch sentinel until
+  // simulator.cpp:663 is retired (M4 / Step 9).
+  //
+  // Capture the spectrum mode for ResolveLayerCrystalForCi: when the scene's
+  // light source is an IlluminantType variant, ComputeWlPool samples M
+  // wavelengths uniformly over [380, 780] and weights them by the standard
+  // illuminant SPD. For the discrete-WlParam-list path (simulator.cpp:672)
+  // the pool degenerates to a single (spec_wl, spec_weight) entry replicated
+  // across all M slots so per-ray lookup still works but every ray sees the
+  // same wl — matches legacy single-wl semantics.
+  const auto& spectrum = spec.scene->light_source_.spectrum_;
+  if (const auto* ill = std::get_if<IlluminantType>(&spectrum)) {
+    impl_->illuminant_mode_ = true;
+    impl_->illuminant_      = *ill;
+  } else {
+    impl_->illuminant_mode_ = false;
+  }
+  impl_->per_batch_wl_     = spec.wl.wl_;
+  impl_->per_batch_weight_ = spec.wl.weight_;
 
   // Projection routing — kernel reads proj_type/r_scale/max_abs_dz from
   // KernelParams (filled by DispatchLayer from these Impl fields).
@@ -3047,6 +3189,10 @@ size_t MetalTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
   const auto* seq_len_ptr  = static_cast<const uint8_t*>([impl_->exit_face_seq_len_buf contents]);
   const auto* seq_data_ptr = static_cast<const uint8_t*>([impl_->exit_face_seq_data_buf contents]);
   const auto* ms_layer_ptr = static_cast<const uint8_t*>([impl_->exit_ms_layer_buf contents]);
+  // scrum-268.8 (DR-3): per-exit wavelength index. uint32 on device; narrowed
+  // to uint8_t into ExitRayRecord since wl_pool_size_ <= 255 (assert in
+  // ResolveWlPoolSize).
+  const auto* wl_idx_ptr   = static_cast<const uint32_t*>([impl_->exit_wl_idx_buf_ contents]);
   const size_t stride      = impl_->face_seq_cap_;
 
   // Per-ci FilterSpec cache for the final layer. Same crystal_id repeats
@@ -3079,6 +3225,7 @@ size_t MetalTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
       erec.weight = w_ptr[i];
       erec.crystal_id   = crystal_id;
       erec.ms_layer_idx = rec_ms_layer;
+      erec.wl_idx       = static_cast<uint8_t>(wl_idx_ptr[i] & 0xFFu);
       uint8_t seq_len = std::min<uint8_t>(seq_len_ptr[i], ExitFaceSeq::kCap);
       erec.path.size_ = seq_len;
       std::memcpy(erec.path.data_, seq_data_ptr + i * stride, seq_len);
@@ -3132,6 +3279,7 @@ size_t MetalTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
     erec.weight = r.w_;
     erec.crystal_id = crystal_id;
     erec.ms_layer_idx = final_ms_layer;
+    erec.wl_idx = static_cast<uint8_t>(wl_idx_ptr[i] & 0xFFu);
     erec.path.size_ = seq_len;
     std::memcpy(erec.path.data_, rec.data_, seq_len);
     out.push_back(erec);
@@ -3168,6 +3316,10 @@ bool MetalTraceBackend::IsCompatible(const RenderConfig& render) const {
     return std::abs(render.lens_.fov_ - 180.0f) <= 0.5f;
   }
   return false;
+}
+
+uint32_t MetalTraceBackend::WlPoolSize() const {
+  return impl_->wl_pool_size_;
 }
 
 size_t MetalTraceBackend::TraceLayerKernelMaxThreadsForTest() const {

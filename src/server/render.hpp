@@ -44,6 +44,13 @@ class RenderConsumer : public IConsume {
   std::unique_ptr<float[]> w_buf_;
   std::unique_ptr<int[]> xy_buf_;
   std::unique_ptr<float[]> overlap_w_buf_;  // weight copy for overlap dual-write pass
+  // scrum-268.8 (DR-3): per-ray wavelength (nm) buffer mirrored from
+  // SimData.outgoing_wl_; compacted in lock-step with w_buf_ during pass 1
+  // and read by SpectrumToXyzPerRay. Stays empty when the producer uses the
+  // legacy per-batch path (curr_wl_). overlap_wl_buf_ mirrors overlap_w_buf_'s
+  // role: pre-compaction snapshot consumed by pass 2 overlap projection.
+  std::unique_ptr<float[]> wl_buf_;
+  std::unique_ptr<float[]> overlap_wl_buf_;
   size_t buf_capacity_ = 0;
 
   // Profiling counters (accumulated across Consume calls, for benchmark analysis)

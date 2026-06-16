@@ -60,6 +60,9 @@ void RenderConsumer::Consume(const SimData& data) {
     w_buf_ = std::make_unique<float[]>(buf_capacity_);
     xy_buf_ = std::make_unique<int[]>(buf_capacity_ * 2);
     overlap_w_buf_ = std::make_unique<float[]>(buf_capacity_);
+    // scrum-268.8 (DR-3): per-ray wavelength side-car, lock-step grow.
+    wl_buf_ = std::make_unique<float[]>(buf_capacity_);
+    overlap_wl_buf_ = std::make_unique<float[]>(buf_capacity_);
   }
 
   // Design A: filter runs simulator-side (see doc/filter-architecture.md §2).
@@ -131,6 +134,14 @@ void RenderConsumer::Consume(const SimData& data) {
     std::memcpy(d_buf_.get(), data.outgoing_d_.data(), filtered_ray_num * 3 * sizeof(float));
     std::memcpy(w_buf_.get(), data.outgoing_w_.data(), filtered_ray_num * sizeof(float));
   }
+  // scrum-268.8 (DR-3): per-ray wavelength is supplied by Metal (and the CPU
+  // path when it migrates). Empty vector → legacy per-batch curr_wl_ branch.
+  bool per_ray_wl = !data.outgoing_wl_.empty();
+  if (per_ray_wl) {
+    assert(data.outgoing_wl_.size() == filtered_ray_num &&
+           "outgoing_wl_ size must match outgoing_w_ when present");
+    std::memcpy(wl_buf_.get(), data.outgoing_wl_.data(), filtered_ray_num * sizeof(float));
+  }
 
   lens_proj(proj_param, d_buf_.get(), xy_buf_.get(), filtered_ray_num);
   auto t2 = std::chrono::steady_clock::now();
@@ -141,6 +152,10 @@ void RenderConsumer::Consume(const SimData& data) {
   // because the unfiltered overlap pass 2 has already completed.
   if (proj_param.max_abs_dz_ > 0) {
     std::memcpy(overlap_w_buf_.get(), w_buf_.get(), filtered_ray_num * sizeof(float));
+    if (per_ray_wl) {
+      // Mirror the w_buf_ snapshot for per-ray wl (scrum-268.8).
+      std::memcpy(overlap_wl_buf_.get(), wl_buf_.get(), filtered_ray_num * sizeof(float));
+    }
   }
 
   size_t final_ray_num = 0;
@@ -152,10 +167,19 @@ void RenderConsumer::Consume(const SimData& data) {
     }
     xy_buf_[final_ray_num] = xy_buf_[i * 2 + 1] * config_.resolution_[0] + xy_buf_[i * 2 + 0];
     w_buf_[final_ray_num] = w_buf_[i];
+    if (per_ray_wl) {
+      wl_buf_[final_ray_num] = wl_buf_[i];  // compact in lock-step with w_buf_
+    }
     landed_weight += w_buf_[i];
     final_ray_num++;
   }
-  SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), internal_xyz_.get(), final_ray_num);
+  if (per_ray_wl) {
+    SpectrumToXyzPerRay(wl_buf_.get(), w_buf_.get(), xy_buf_.get(),
+                        internal_xyz_.get(), final_ray_num);
+  } else {
+    SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(),
+                  internal_xyz_.get(), final_ray_num);
+  }
   total_intensity_ += landed_weight;
 
   // === Pass 2: Overlap dual-write (only for dual fisheye with max_abs_dz > 0) ===
@@ -191,11 +215,20 @@ void RenderConsumer::Consume(const SimData& data) {
       }
       xy_buf_[overlap_count] = py * w + px;
       w_buf_[overlap_count] = overlap_w_buf_[i];
+      if (per_ray_wl) {
+        wl_buf_[overlap_count] = overlap_wl_buf_[i];
+      }
       overlap_count++;
     }
     if (overlap_count > 0) {
       // Pass 2 does NOT update total_intensity_ — preserves normalization.
-      SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), internal_xyz_.get(), overlap_count);
+      if (per_ray_wl) {
+        SpectrumToXyzPerRay(wl_buf_.get(), w_buf_.get(), xy_buf_.get(),
+                            internal_xyz_.get(), overlap_count);
+      } else {
+        SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(),
+                      internal_xyz_.get(), overlap_count);
+      }
     }
   }
 

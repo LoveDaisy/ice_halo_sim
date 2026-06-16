@@ -72,6 +72,10 @@ class MetalTraceBackend : public TraceBackend {
   size_t DrainExits(std::vector<ExitRayRecord>& out) override;
   void EndSession() override;
   bool IsCompatible(const RenderConfig& render) const override;
+  // scrum-268.8 (DR-3): per-ray wavelength pool size. Resolved from
+  // LUMICE_WL_POOL_SIZE env var the first time BeginSession runs; constant
+  // thereafter for the backend instance's lifetime.
+  uint32_t WlPoolSize() const override;
 
   // Test-only: return the trace_layer_kernel PSO's maxTotalThreadsPerThreadgroup
   // (or 0 if BeginSession has not yet built the PSO). Used by the scrum-267
