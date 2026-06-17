@@ -20,8 +20,10 @@ import numpy as np
 import pytest
 
 from test.e2e.capi_runner import run_scene_capi, run_scene_capi_buffered
+from test.e2e.runner import get_project_root
 
-CONFIGS_DIR = Path(__file__).parent / "configs"
+# TODO: relocate configs when follow-up task completes
+CONFIGS_DIR = get_project_root() / "test" / "e2e" / "configs"
 
 _K_NORM_SCALE = 0.08
 

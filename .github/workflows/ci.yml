@@ -182,15 +182,16 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python dependencies
-        # numpy is imported at module top in test/e2e/test_additivity.py and
+        # numpy is imported at module top in several test modules and
         # test/e2e/capi_runner.py (BufferedSimResult dataclass), so pytest
         # collection needs it even when the slow tests themselves are skipped.
         run: pip install Pillow pytest numpy
 
       - name: Run E2E tests
-        # `-m "not slow"` excludes shared-lib-based tests (e.g. test_additivity.py)
-        # which require BUILD_SHARED_LIBS=ON and a separate build flavor (see e2e-slow job).
-        run: pytest test/e2e/ -v -m "not slow"
+        # `-m "not slow"` excludes shared-lib-based tests which require
+        # BUILD_SHARED_LIBS=ON and a separate build flavor (see e2e-slow job).
+        # Test paths come from pyproject.toml [tool.pytest.ini_options] testpaths.
+        run: pytest -v -m "not slow"
         timeout-minutes: 10
 
   e2e-slow:
@@ -207,17 +208,17 @@ jobs:
           - name: Ubuntu x86_64
             os: ubuntu-24.04
             cache_key: ubuntu-x64
-            pytest_args: test/e2e/
+            pytest_args: "test/e2e-correctness test/parity-cross-backend test/performance test/gui test/regression-sentinel"
 
           - name: macOS ARM64 parity
             os: macos-15
             cache_key: macos-arm64
-            pytest_args: test/e2e/test_metal_exit_seam_parity.py
+            pytest_args: test/parity-cross-backend/backend/test_metal_exit_seam_parity.py
 
           - name: macOS ARM64 rest
             os: macos-15
             cache_key: macos-arm64
-            pytest_args: test/e2e/ --ignore=test/e2e/test_metal_exit_seam_parity.py
+            pytest_args: "test/e2e-correctness test/parity-cross-backend test/performance test/gui test/regression-sentinel --ignore=test/parity-cross-backend/backend/test_metal_exit_seam_parity.py"
 
     runs-on: ${{ matrix.os }}
     name: E2E Slow (${{ matrix.name }})

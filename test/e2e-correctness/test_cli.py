@@ -5,8 +5,10 @@ import os
 from pathlib import Path
 
 from test.e2e.base import LumiceTestCase
+from test.e2e.runner import get_project_root
 
-CONFIGS_DIR = Path(__file__).resolve().parent / "configs"
+# TODO: relocate configs when follow-up task completes
+CONFIGS_DIR = get_project_root() / "test" / "e2e" / "configs"
 
 
 class TestCli(LumiceTestCase):

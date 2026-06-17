@@ -27,8 +27,10 @@ from pathlib import Path
 import pytest
 
 from test.e2e.capi_runner import run_scene_capi
+from test.e2e.runner import get_project_root
 
-_CONFIGS_DIR = Path(__file__).parent / "configs"
+# TODO: relocate configs when follow-up task completes
+_CONFIGS_DIR = get_project_root() / "test" / "e2e" / "configs"
 
 _LIFECYCLE_CONFIGS = [
     str(_CONFIGS_DIR / "raypath_symmetry_4_6.json"),

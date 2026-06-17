@@ -6,12 +6,14 @@ from pathlib import Path
 
 from test.e2e.base import LumiceTestCase
 from test.e2e.image_utils import HAS_PILLOW
+from test.e2e.runner import get_project_root
 
 if HAS_PILLOW:
     from test.e2e.image_utils import compute_mse, compute_psnr, get_dimensions
 
-CONFIGS_DIR = Path(__file__).resolve().parent / "configs"
-REFERENCES_DIR = Path(__file__).resolve().parent / "references"
+# TODO: relocate configs when follow-up task completes
+CONFIGS_DIR = get_project_root() / "test" / "e2e" / "configs"
+REFERENCES_DIR = get_project_root() / "test" / "e2e-correctness" / "references"
 
 # PSNR thresholds per reference image (dB).
 # Calibrated by running each config 3 times and taking min_psnr - 3dB.

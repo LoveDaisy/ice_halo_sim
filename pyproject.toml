@@ -1,4 +1,11 @@
 [tool.pytest.ini_options]
+testpaths = [
+    "test/e2e-correctness",
+    "test/parity-cross-backend",
+    "test/performance",
+    "test/gui",
+    "test/regression-sentinel",
+]
 addopts = "-p no:xdist"
 markers = [
     "slow: requires shared-lib build; excluded from CI fast path",

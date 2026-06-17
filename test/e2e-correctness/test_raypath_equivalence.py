@@ -18,11 +18,13 @@ from pathlib import Path
 
 from test.e2e.base import LumiceTestCase
 from test.e2e.image_utils import HAS_PILLOW
+from test.e2e.runner import get_project_root
 
 if HAS_PILLOW:
     from test.e2e.image_utils import compute_mse, compute_psnr
 
-CONFIGS_DIR = Path(__file__).resolve().parent / "configs"
+# TODO: relocate configs when follow-up task completes
+CONFIGS_DIR = get_project_root() / "test" / "e2e" / "configs"
 
 # Threshold (dB) calibrated via 3 runs of min(PSNR(4-6, 7-3)) − 3 dB.
 # Calibration on 2026-05-10: runs = [26.73, 26.80, 26.69] dB, min = 26.69 dB.

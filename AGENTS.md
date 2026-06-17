@@ -29,9 +29,9 @@ Core conventions:
 ./scripts/build.sh -tj release
 ./scripts/build.sh -gtj release
 LUMICE_SKIP_GUI_TESTS=1 ./scripts/build.sh -gtj release
-pytest test/e2e/ -v                       # fast e2e only (matches CI)
+pytest -v                                 # fast e2e only (matches CI; testpaths in pyproject.toml)
 ./scripts/build.sh -sj release && \
-  pytest test/e2e/ -v -m slow             # slow e2e (needs shared lib; run before PR)
+  pytest -v -m slow                       # slow e2e (needs shared lib; run before PR)
 
 # Format
 ./scripts/format.sh
@@ -70,11 +70,18 @@ Release artifacts land in `build/cmake_install/`. Debug builds stay in `build/cm
 
 - CLI, core, and unit-test flows should remain cross-platform.
 - GUI tests require a display server unless explicitly skipped with `LUMICE_SKIP_GUI_TESTS=1`.
+- E2E test layout (purpose-primary; see `doc/testing-architecture.md` §6):
+  - `test/e2e-correctness/` — full-stack correctness via CLI/PSNR (smoke, CLI behavior, raypath equivalence) + `references/*.jpg`
+  - `test/parity-cross-backend/backend/` — backend-equivalence oracles (Metal exit-seam parity, device-gen default path, cpu_backend route, Metal batch invariance) + C++ siblings from 270.3
+  - `test/performance/` — throughput gates (Metal throughput)
+  - `test/gui/` — GUI acceptance (Metal GUI north-star) alongside the C++ GUI tests
+  - `test/regression-sentinel/` — bug-resurfacing guards (errors, capi sentinel overflow, MS filter leak)
+  - Shared fixtures stay under `test/e2e/` (`base.py`, `runner.py`, `capi_runner.py`, `image_utils.py`, `_parity_metrics.py`, `configs/`).
 - E2E test split:
-  - Default `pytest test/e2e/ -v` runs the fast subset — matches CI behavior (CI uses `-m "not slow"`).
-  - `@pytest.mark.slow` tests require the shared-lib build (`./scripts/build.sh -sj release`) and are excluded from CI to keep PR feedback fast. Run them locally with `pytest test/e2e/ -v -m slow` before opening a PR that touches the simulator core, query filter, or C API surface.
-    - `test_capi_sentinel_overflow.py` — sentinel-overflow regression: 3-config × 12 rounds = 36 server lifecycles via `LUMICE_GetRawXyzResults(max_count=1)`; guards against reintroduction of the c_api.cpp off-by-one sentinel write (fix: 5287efe)
-    - `test_ms_filter_leak.py` — Design A filter-fail termination regression: confirms filter-fail rays do not propagate across MS layers
+  - Default `pytest -v` runs the fast subset — matches CI behavior (CI uses `-m "not slow"`). Test paths come from `pyproject.toml` `testpaths`.
+  - `@pytest.mark.slow` tests require the shared-lib build (`./scripts/build.sh -sj release`) and are excluded from CI to keep PR feedback fast. Run them locally with `pytest -v -m slow` before opening a PR that touches the simulator core, query filter, or C API surface.
+    - `test/regression-sentinel/test_capi_sentinel_overflow.py` — sentinel-overflow regression: 3-config × 12 rounds = 36 server lifecycles via `LUMICE_GetRawXyzResults(max_count=1)`; guards against reintroduction of the c_api.cpp off-by-one sentinel write (fix: 5287efe)
+    - `test/regression-sentinel/test_ms_filter_leak.py` — Design A filter-fail termination regression: confirms filter-fail rays do not propagate across MS layers
 - GUI screenshot references live under `test/gui/references/`.
 - Windows physical-desktop validation uses `scripts/win_remote_test.sh` together with `scripts/win_test_watcher.ps1`.
 - Performance diagnostics and workflows are documented in `doc/performance-testing.md`.
@@ -118,7 +125,7 @@ since both modes share one `psnr_threshold` field.
 
 - `config.json`, `test.json`, `scratchpad/`, remote test output files, and most generated artifacts are intentionally git-ignored.
 - Do not use `git add -f` to force-track ignored files. If a file is ignored and you are unsure, stop and ask first.
-- Reference images under `test/e2e/references/*.jpg` and `test/gui/references/*.jpg` are explicitly unignored and may be tracked normally.
+- Reference images under `test/e2e-correctness/references/*.jpg` and `test/gui/references/*.jpg` are explicitly unignored and may be tracked normally.
 - CI runs build and unit tests on branch pushes; E2E tests run on PRs and `main`.
 
 ## Documentation Index (`doc/`)

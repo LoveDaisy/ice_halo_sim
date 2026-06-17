@@ -21,9 +21,10 @@ from pathlib import Path
 
 import pytest
 
-from test.e2e.runner import find_lumice_binary
+from test.e2e.runner import find_lumice_binary, get_project_root
 
-CONFIG = Path(__file__).parent / "configs" / "cpu_backend_route.json"
+# TODO: relocate configs when follow-up task completes
+CONFIG = get_project_root() / "test" / "e2e" / "configs" / "cpu_backend_route.json"
 
 
 @pytest.mark.slow
