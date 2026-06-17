@@ -25,7 +25,7 @@ struct AutoEvScene {
 // auto-EV box-sum downsample (f=8, see kEvAutoDownsampleFactor in gui_ev_auto.hpp).
 // Calibration ran at N=10 for the mean-ref (Phase A) via scripts/regen_gui_test_refs.py.
 //
-// NOTE: regen_gui_test_refs.py runs `LumiceGUITests --filter auto_ev`, which produces
+// NOTE: regen_gui_test_refs.py runs `gui_test --filter auto_ev`, which produces
 // PSNRs ~1 dB higher than the full-suite invocation (-gtj release) because the full
 // suite warms up scheduler/cache state via the other ~240 tests first.  Thresholds
 // below are set from full-suite mean-4σ (5 runs) instead of the script's mean-3σ

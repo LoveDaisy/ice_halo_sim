@@ -98,7 +98,7 @@ time ./build/cmake_install/Lumice -f examples/bench_config.json -v -o /tmp 2>&1 
 
 ```bash
 # 下载 CI 产物
-gh run download <RUN_ID> --name LumiceGUITests-windows-msvc --dir /tmp/ci-win
+gh run download <RUN_ID> --name gui-test-windows-msvc --dir /tmp/ci-win
 
 # 传输二进制和配置到 Windows 机器
 scp /tmp/ci-win/bin/Lumice.exe <windows-host>:<path>/
@@ -190,12 +190,12 @@ push 到 `main` 的 benchmark 结果会通过
 ./scripts/build.sh -gtj release
 
 # 仅运行性能测试（PERF 输出在 stderr，服务器日志在 stdout）
-./build/Release/bin/LumiceGUITests --filter perf_test \
+./build/Release/bin/gui_test --filter perf_test \
   > /tmp/perf_stdout.txt 2>/tmp/perf_stderr.txt
 grep "\[PERF\]" /tmp/perf_stderr.txt
 
 # debug 级别（增加 ConsumeData 每批次 + Consume 剖析）
-./build/Release/bin/LumiceGUITests --filter perf_test --log-level debug \
+./build/Release/bin/gui_test --filter perf_test --log-level debug \
   > /tmp/perf_stdout_debug.txt 2>/tmp/perf_stderr_debug.txt
 grep "Consume profile" /tmp/perf_stdout_debug.txt
 ```
@@ -206,10 +206,10 @@ grep "Consume profile" /tmp/perf_stdout_debug.txt
 
 ```bash
 # 从 CI 产物传输 GUI 测试二进制
-scp /tmp/ci-win/bin/LumiceGUITests.exe <windows-host>:<path>/
+scp /tmp/ci-win/bin/gui_test.exe <windows-host>:<path>/
 
 # 运行（PowerShell，必须使用 --filter 避免非性能测试崩溃）
-$proc = Start-Process -FilePath ".\LumiceGUITests.exe" `
+$proc = Start-Process -FilePath ".\gui_test.exe" `
   -ArgumentList "-nopause","--filter","perf_test" `
   -NoNewWindow -Wait `
   -RedirectStandardOutput "perf_stdout.txt" `
@@ -263,7 +263,7 @@ Get-Content perf_stderr.txt
 
 ```bash
 # 在 Windows 上运行带 VSync 的 GUI 性能测试
-./scripts/win_remote_test.sh /tmp/ci-win/bin/LumiceGUITests.exe \
+./scripts/win_remote_test.sh /tmp/ci-win/bin/gui_test.exe \
   --filter perf_test --vsync --log-level verbose
 ```
 

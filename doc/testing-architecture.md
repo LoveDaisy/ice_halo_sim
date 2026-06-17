@@ -13,12 +13,13 @@ silently diverge.
 landed in the right layer with the right oracle; anyone reorganizing the test suite.
 
 > **Status note (read first).** This document defines the **target-state** architecture
-> (purpose-primary, layer × subsystem). As of writing, the on-disk test tree is still in its
-> legacy flat shape (`unit_test` / `integration_test` gtest targets, `test/e2e/` pytest,
-> `LumiceGUITests`). The physical migration to `test/<layer>/<subsystem>/` happens in the
-> milestone-cleanup tasks 270.3–270.7. §6 gives both the **current** and **target** columns so
-> you can locate a test today and know where it is going. Until migration lands, classify new
-> tests by *layer* (this doc) but place them in the current physical location for their harness.
+> (purpose-primary, layer × subsystem). The physical migration is in progress under
+> milestone-cleanup tasks 270.3–270.7: 270.3 split the unit gtest layer into
+> `unit_correctness_test` / `golden_analytic_test` / `parity_test`, 270.4 reorganized the
+> pytest tree under `test/e2e-correctness/`, `test/parity-cross-backend/`, `test/performance/`,
+> `test/gui/`, `test/regression-sentinel/`, and 270.5 (this layer) moved the GUI tests into
+> `test/gui/{functional,visual,responsiveness}/` and renamed the target to `gui_test`. §6 gives
+> both the **historical** and **target** columns so you can trace where a test came from.
 
 ---
 
@@ -26,7 +27,8 @@ landed in the right layer with the right oracle; anyone reorganizing the test su
 
 The suite was historically organized by **mechanism / harness**: a flat `unit_test` gtest
 binary (~30 files), an `integration_test` binary, a `test/e2e/` pytest tree, and an
-imgui-engine `LumiceGUITests` binary. Within each bucket, files were laid out flat.
+imgui-engine `gui_test` (formerly `LumiceGUITests`) binary. Within each bucket, files were
+laid out flat.
 
 The categories people actually reason in — "unit", "performance", "correctness", "GUI",
 "the scrum-268 acceptance gates" — are **verification purposes**, not mechanisms. Purpose and
@@ -300,11 +302,10 @@ Three naming systems must stay aligned across a migration (270.3–270.5):
 - **CMake targets**: target-state introduces purpose-named targets in place of the flat
   `unit_test`. **Naming pattern: `<layer-snake>_test`** (snake_case, matching the existing
   `unit_test` / `integration_test` convention) — e.g. `unit_correctness_test`, `parity_test`,
-  `golden_analytic_test`; the GUI layer's target is `gui_test` (superseding `LumiceGUITests`).
-  Whether targets are split further per subsystem (one `unit_correctness_test` vs
+  `golden_analytic_test`; the GUI layer's target is `gui_test` (renamed from `LumiceGUITests`
+  in 270.5). Whether targets are split further per subsystem (one `unit_correctness_test` vs
   `unit_correctness_core_test` + …) is **270.3's call**, but the *pattern* above is fixed here so
-  the naming does not drift. Until migration, `unit_test` / `integration_test` /
-  `LumiceGUITests` remain.
+  the naming does not drift.
 - **CTest LABELS**: target-state adds a purpose-axis label per layer:
   `unit-correctness`, `golden-analytic`, `parity` (the LABEL is the abbreviated form of the
   `parity-cross-backend` layer — the full name is verbose for CMake; this is the **only**

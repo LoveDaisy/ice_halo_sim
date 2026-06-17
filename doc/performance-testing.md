@@ -105,7 +105,7 @@ Build via CI, then transfer the binary:
 
 ```bash
 # Download CI artifact
-gh run download <RUN_ID> --name LumiceGUITests-windows-msvc --dir /tmp/ci-win
+gh run download <RUN_ID> --name gui-test-windows-msvc --dir /tmp/ci-win
 
 # Transfer binary + config to Windows machine
 scp /tmp/ci-win/bin/Lumice.exe <windows-host>:<path>/
@@ -247,12 +247,12 @@ Two scenarios:
 ./scripts/build.sh -gtj release
 
 # Run perf tests only (PERF output on stderr, server logs on stdout)
-./build/Release/bin/LumiceGUITests --filter perf_test \
+./build/Release/bin/gui_test --filter perf_test \
   > /tmp/perf_stdout.txt 2>/tmp/perf_stderr.txt
 grep "\[PERF\]" /tmp/perf_stderr.txt
 
 # With debug level (adds ConsumeData per-batch + Consume profile)
-./build/Release/bin/LumiceGUITests --filter perf_test --log-level debug \
+./build/Release/bin/gui_test --filter perf_test --log-level debug \
   > /tmp/perf_stdout_debug.txt 2>/tmp/perf_stderr_debug.txt
 grep "Consume profile" /tmp/perf_stdout_debug.txt
 ```
@@ -263,10 +263,10 @@ grep "Consume profile" /tmp/perf_stdout_debug.txt
 
 ```bash
 # Transfer GUI test binary from CI artifact
-scp /tmp/ci-win/bin/LumiceGUITests.exe <windows-host>:<path>/
+scp /tmp/ci-win/bin/gui_test.exe <windows-host>:<path>/
 
 # Run (PowerShell, must use --filter to avoid crash on non-perf tests)
-$proc = Start-Process -FilePath ".\LumiceGUITests.exe" `
+$proc = Start-Process -FilePath ".\gui_test.exe" `
   -ArgumentList "-nopause","--filter","perf_test" `
   -NoNewWindow -Wait `
   -RedirectStandardOutput "perf_stdout.txt" `
@@ -321,7 +321,7 @@ See [Windows Remote Testing Guide](windows-remote-testing.md) for setup instruct
 
 ```bash
 # Run GUI perf test on Windows with VSync
-./scripts/win_remote_test.sh /tmp/ci-win/bin/LumiceGUITests.exe \
+./scripts/win_remote_test.sh /tmp/ci-win/bin/gui_test.exe \
   --filter perf_test --vsync --log-level verbose
 ```
 

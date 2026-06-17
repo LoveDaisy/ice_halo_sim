@@ -35,7 +35,7 @@ add_custom_command(
     COMMENT "[gui] Embedding fa-solid-900.ttf -> fa_solid_900_embed.cpp"
     VERBATIM)
 
-# OBJECT library: shared between LumiceGUI and LumiceGUITests
+# OBJECT library: shared between LumiceGUI and gui_test
 add_library(lumice_gui_obj OBJECT
     ${PROJ_SRC_DIR}/gui/app.cpp
     ${PROJ_SRC_DIR}/gui/app_panels.cpp

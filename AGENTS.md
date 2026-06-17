@@ -74,7 +74,7 @@ Release artifacts land in `build/cmake_install/`. Debug builds stay in `build/cm
   - `test/e2e-correctness/` — full-stack correctness via CLI/PSNR (smoke, CLI behavior, raypath equivalence) + `references/*.jpg`
   - `test/parity-cross-backend/backend/` — backend-equivalence oracles (Metal exit-seam parity, device-gen default path, cpu_backend route, Metal batch invariance) + C++ siblings from 270.3
   - `test/performance/` — throughput gates (Metal throughput)
-  - `test/gui/` — GUI acceptance (Metal GUI north-star) alongside the C++ GUI tests
+  - `test/gui/` — GUI acceptance (Metal GUI north-star) alongside the C++ GUI tests (`functional/`, `visual/`, `responsiveness/` subdirs; target `gui_test`)
   - `test/regression-sentinel/` — bug-resurfacing guards (errors, capi sentinel overflow, MS filter leak)
   - Shared fixtures stay under `test/e2e/` (`base.py`, `runner.py`, `capi_runner.py`, `image_utils.py`, `_parity_metrics.py`, `configs/`).
 - E2E test split:
@@ -91,7 +91,7 @@ Release artifacts land in `build/cmake_install/`. Debug builds stay in `build/cm
 The `auto_ev` reference images are pixel-averaged means of N=10 stochastic renders to suppress
 per-run noise. Per-scene PSNR thresholds are `mean − 3σ` (floored to 0.5 dB precision).
 
-**`--keep-export-png` flag** — When passed to `LumiceGUITests`, `CheckAgainstReference` skips
+**`--keep-export-png` flag** — When passed to `gui_test`, `CheckAgainstReference` skips
 `std::remove` so the per-run export PNGs at `/tmp/lumice_auto_ev_*.png` are preserved for
 collection by the driver script.
 
@@ -111,7 +111,7 @@ python scripts/regen_gui_test_refs.py --n 2 --n-calib 2
 ```
 
 After Phase B, copy the `threshold` values from `test/gui/references/_thresholds.json` into
-`kScenes[]` in `test/gui/test_gui_auto_ev.cpp`. Use `min(off_threshold, on_threshold)` per scene
+`kScenes[]` in `test/gui/visual/test_gui_auto_ev.cpp`. Use `min(off_threshold, on_threshold)` per scene
 since both modes share one `psnr_threshold` field.
 
 ## Logging and Troubleshooting

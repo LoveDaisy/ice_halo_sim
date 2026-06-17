@@ -269,7 +269,7 @@ Server::GetResults()
 **关键设计决策**：
 - GUI 逻辑位于 `lumice::gui` 命名空间，使用全局状态（`g_state`、`g_preview` 等）
 - 通过 `lumice.h` C API 与模拟核心通信（与 CLI 使用相同接口）
-- `lumice_gui_obj` OBJECT library 在 `LumiceGUI` 和 `LumiceGUITests` 间共享编译产物
+- `lumice_gui_obj` OBJECT library 在 `LumiceGUI` 和 `gui_test` 间共享编译产物
 
 **依赖**：
 - Dear ImGui v1.91.8-docking（即时模式 GUI）
@@ -306,7 +306,7 @@ Server::GetResults()
 - `lumice`: 核心静态/共享库（默认静态，`-DBUILD_SHARED_LIBS=ON` 编译为共享库）
 - `Lumice`: CLI 可执行文件，链接 `lumice` 库
 - `LumiceGUI`: GUI 可执行文件（`-DBUILD_GUI=ON` 时构建），链接 `lumice_gui_obj` 和 `lumice`
-- `LumiceGUITests`: GUI 测试可执行文件（同时 `-DBUILD_GUI=ON` 和 `-DBUILD_TESTING=ON` 时构建）
+- `gui_test`: GUI 测试可执行文件（同时 `-DBUILD_GUI=ON` 和 `-DBUILD_TESTING=ON` 时构建）
 
 ## C API
 

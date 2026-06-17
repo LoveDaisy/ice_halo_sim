@@ -1,7 +1,7 @@
 // Stub implementations of ImGui Test Engine hooks.
 // Written for imgui_test_engine v1.91.8.
 // When IMGUI_ENABLE_TEST_ENGINE is defined, ImGui calls these hooks.
-// The real implementations live in imgui_test_engine (linked by LumiceGUITests).
+// The real implementations live in imgui_test_engine (linked by gui_test).
 // LumiceGUI links these no-op stubs instead.
 
 #include "imgui.h"

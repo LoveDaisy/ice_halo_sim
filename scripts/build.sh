@@ -29,7 +29,7 @@ build() {
       fi
       echo "Skipping GUI tests ($skip_reason)"
     else
-      GUI_TEST_BIN="${ROOT_DIR}/build/${BUILD_TYPE}/bin/LumiceGUITests"
+      GUI_TEST_BIN="${ROOT_DIR}/build/${BUILD_TYPE}/bin/gui_test"
       if [[ -x "$GUI_TEST_BIN" ]]; then
         echo "Running GUI tests..."
         "$GUI_TEST_BIN"
@@ -55,8 +55,8 @@ help() {
   echo "OPTIONS:"
   echo "  -t:          Build test cases and run unit/parity/golden tests"
   echo "               (CTest -L \"unit-correctness|parity|golden-analytic\")."
-  echo "               Combined with -g, also runs LumiceGUITests (requires a display)."
-  echo "               Set CI=1 or LUMICE_SKIP_GUI_TESTS=1 to skip LumiceGUITests."
+  echo "               Combined with -g, also runs gui_test (requires a display)."
+  echo "               Set CI=1 or LUMICE_SKIP_GUI_TESTS=1 to skip gui_test."
   echo "  -g:          Build GUI application (Dear ImGui + GLFW + OpenGL)."
   echo "  -b:          Build benchmarks (Google Benchmark)."
   echo "  -j:          Build in parallel, i.e. use make -j"

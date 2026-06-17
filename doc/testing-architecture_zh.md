@@ -9,19 +9,21 @@
 **目标读者**：新增或迁移测试的贡献者；核查新测试是否落在正确层、用对 oracle 的评审者；任何重排
 测试套件的人。
 
-> **状态声明（先读）。** 本文定义的是**目标态**架构（purpose 主轴，层 × subsystem）。撰写时，磁盘
-> 上的测试树仍是旧扁平形态（`unit_test` / `integration_test` gtest target、`test/e2e/` pytest、
-> `LumiceGUITests`）。物理迁移到 `test/<layer>/<subsystem>/` 在 milestone-cleanup 的 270.3–270.7
-> 子任务完成。§6 同时给出**现状**与**目标态**两栏，使你今天能定位一个测试、并知道它将去往何处。
-> 迁移落地前：新测试按*层*（本文）归类，但暂放进其 harness 对应的现有物理位置。
+> **状态声明（先读）。** 本文定义的是**目标态**架构（purpose 主轴，层 × subsystem）。物理迁移
+> 在 milestone-cleanup 的 270.3–270.7 子任务中陆续落地：270.3 将单元 gtest 层拆分为
+> `unit_correctness_test` / `golden_analytic_test` / `parity_test`，270.4 将 pytest 树重组到
+> `test/e2e-correctness/`、`test/parity-cross-backend/`、`test/performance/`、`test/gui/`、
+> `test/regression-sentinel/`，270.5（本层）将 GUI 测试迁入
+> `test/gui/{functional,visual,responsiveness}/` 并把 target 重命名为 `gui_test`。§6 同时给出
+> **历史**与**目标态**两栏，便于追溯测试来源。
 
 ---
 
 ## §0 为何 purpose 是主轴
 
 历史上套件按**机制 / harness**组织：扁平的 `unit_test` gtest 二进制（约 30 文件）、一个
-`integration_test` 二进制、一棵 `test/e2e/` pytest 树、以及 imgui-engine 的 `LumiceGUITests`
-二进制。每个桶内文件平铺。
+`integration_test` 二进制、一棵 `test/e2e/` pytest 树、以及 imgui-engine 的 `gui_test`
+（原名 `LumiceGUITests`）二进制。每个桶内文件平铺。
 
 人们真正用来思考的类别——"单元""性能""正确性""GUI""scrum-268 验收门"——其实是**验证目的
 （purpose）**，不是机制。purpose 与 mechanism 正交，于是同一 purpose 被切碎到多处：Metal 正确性
@@ -251,9 +253,9 @@ tag 如何编码取决于该层的物理形态（§6）：对有自然 subsystem
 - **CMake target**：目标态引入按 purpose 命名的 target 取代扁平 `unit_test`。**命名模式：
   `<layer-snake>_test`**（snake_case，沿用现有 `unit_test` / `integration_test` 约定）——如
   `unit_correctness_test`、`parity_test`、`golden_analytic_test`；GUI 层的 target 为 `gui_test`
-  （取代 `LumiceGUITests`）。是否再按 subsystem 进一步拆 target（单个 `unit_correctness_test` vs
-  `unit_correctness_core_test`+…）由 **270.3 裁定**，但上述*模式*在此固定，防命名漂移。迁移落地前，
-  `unit_test` / `integration_test` / `LumiceGUITests` 保留。
+  （270.5 由 `LumiceGUITests` 重命名而来）。是否再按 subsystem 进一步拆 target（单个
+  `unit_correctness_test` vs `unit_correctness_core_test`+…）由 **270.3 裁定**，但上述*模式*在
+  此固定，防命名漂移。
 - **CTest LABELS**：目标态为每层加 purpose 轴 label：`unit-correctness`、`golden-analytic`、
   `parity`（该 LABEL 是 `parity-cross-backend` 层名的缩写——全名对 CMake 过长；这是**唯一**缩写
   label，其余层名**不可**同样截断——`unit-correctness` 不可缩成 `unit`，会与旧机制轴 label 冲突）、
