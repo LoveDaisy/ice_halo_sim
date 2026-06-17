@@ -59,12 +59,17 @@ class MetalTraceBackend : public TraceBackend {
   void BeginSession(const SessionSpec& spec) override;
   LayerHandlePtr TraceLayer(const RootRaySource& roots) override;
   RootRaySource Recombine(LayerHandlePtr handle, const RecombineSpec& spec) override;
-  // Test-only XYZ image accessor (scrum-258.1 Step 5: no longer on the
+  // [TEST-ONLY] XYZ image accessor (scrum-258.1 Step 5: no longer on the
   // TraceBackend production seam). Used by the CPU-vs-Metal parity harness
   // — keep callers on the concrete type, not a polymorphic base reference.
+  // task-270.8 boundary-hardening: marker promoted to enforce edge — not on
+  // any production code path; production exit egress uses DrainExits().
   void ReadbackImage(XyzImageData& out);
-  // Exit seam (scrum-258.1/258.2): buffer-egress contract — see base class.
-  // 258.2: returns rich `ExitRayRecord` (36B each) — see core/exit_seam.hpp.
+  // [PARITY-ONLY] Exit seam (scrum-258.1/258.2): buffer-egress contract — see
+  // base class. 258.2: returns rich `ExitRayRecord` (36B each) — see
+  // core/exit_seam.hpp. task-270.8 boundary-hardening: not invoked on the
+  // production path; DrainExits is the production exit seam. Retained as a
+  // parity testing contract — virtual override stays for the parity harness.
   size_t ReadbackExitRays(std::vector<ExitRayRecord>& out) override;
   // task-268.4: per-layer destructive drain. Reads back the current exit
   // buffer contents AND resets the device slot counter so the buffer can
@@ -77,13 +82,13 @@ class MetalTraceBackend : public TraceBackend {
   // thereafter for the backend instance's lifetime.
   uint32_t WlPoolSize() const override;
 
-  // Test-only: return the trace_layer_kernel PSO's maxTotalThreadsPerThreadgroup
-  // (or 0 if BeginSession has not yet built the PSO). Used by the scrum-267
-  // task-fused-emit-gate occupancy regression guard — the device-side emit
-  // gate added 64B of thread-local path scratch + the DeviceFilterCheck call
-  // graph, and plan §9 mandates ≥1024 maxThreadsPerThreadgroup as the
-  // wavefront-stay-fused acceptance bar (drop triggers R1 option B = split
-  // gate into its own dispatch).
+  // [TEST-ONLY] Return the trace_layer_kernel PSO's
+  // maxTotalThreadsPerThreadgroup (or 0 if BeginSession has not yet built the
+  // PSO). Used by the scrum-267 task-fused-emit-gate occupancy regression
+  // guard — the device-side emit gate added 64B of thread-local path scratch
+  // + the DeviceFilterCheck call graph, and plan §9 mandates ≥1024
+  // maxThreadsPerThreadgroup as the wavefront-stay-fused acceptance bar
+  // (drop triggers R1 option B = split gate into its own dispatch).
   size_t TraceLayerKernelMaxThreadsForTest() const;
 
  private:

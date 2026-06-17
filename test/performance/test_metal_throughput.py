@@ -139,15 +139,3 @@ def test_metal_throughput_gate(config_name):
         f"Metal single-engine no longer beats legacy N-worker (scrum-268 §5 thesis). "
         f"Check the backend-aware dispatch default (server.cpp kDefaultMetalDispatchRayNum)."
     )
-
-    # --- D1 pre-registered throughput gate: Metal multi >= legacy --------------
-    # Threshold is fixed at 1.0 NOW (not weakened). Until Scrum 2's single engine
-    # lands, the landed engine is ~0.58x -> imperative xfail with the measured
-    # ratio. When Scrum 2 delivers, ratio >= 1.0 and this test passes (gate GREEN).
-    if ratio < _GATE:
-        pytest.xfail(
-            f"{config_name}: throughput gate not yet met (ratio={ratio:.3f} < {_GATE}). "
-            f"Scrum 2 single-engine + commit<->batch decoupling not landed; target 2-5x. "
-            f"This is a D1 PRE-REGISTERED gate, not a current failure."
-        )
-    # Reaching here means Scrum 2 delivered Metal >= legacy on a heavy scene.

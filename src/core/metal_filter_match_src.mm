@@ -122,10 +122,11 @@ static inline void ReduceBuffer_dev(thread uchar* data, uint size, uchar symmetr
 }
 
 // --- ApplyGetFn ---
-// Mirrors the GetFn remap in CopyContSliceToRootBuf (metal_trace_backend.mm
-// :1670-1675). `crystal_slot` indexes into the prefix-sum offset table to
-// locate this crystal's per-poly-index GetFn byte stripe. Writes
-// face-numbers into `out` (caller-owned thread buffer).
+// Remaps poly-index path to face-number space via the per-crystal GetFn byte
+// table (built on host by `BuildDeviceGetFnBytes`, see
+// core/device_filter_desc.{hpp,cpp}). `crystal_slot` indexes into the prefix-
+// sum offset table to locate this crystal's stripe. Writes face-numbers into
+// `out` (caller-owned thread buffer).
 static inline void ApplyGetFn_dev(thread const uchar* path, uint len,
                                   device const uchar* getfn_bytes,
                                   device const uint*  getfn_offsets,
