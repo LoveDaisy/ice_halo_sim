@@ -181,6 +181,11 @@ subsystem axis would re-mix unit and perf, which is exactly what we are leaving 
 | `config` | configuration parsing and simulation-config data |
 | `util` | logger, threading, queue, arguments, color data |
 
+> **Name-overlap caution**: the `gui` *tag* here is only a layer-internal subsystem label —
+> e.g. a GUI-component unit test lives at `test/unit-correctness/gui/`. It is **not** the same
+> thing as the `gui` *layer* (§1.6, physical `test/gui/`), which spans functional/visual/
+> responsiveness and is keyed by purpose, not subsystem. Tag ≠ layer despite the shared word.
+
 How a tag is encoded depends on the layer's physical form (§6): a subdirectory
 (`test/<layer>/<subsystem>/`) for layers with a natural subsystem split, or a CTest
 `LABELS` / pytest marker for layers that stay flat.
@@ -198,6 +203,8 @@ the physical blueprint in §6 — this tree decides *membership*, §6 decides *p
    → NO  → continue.
 
 2. Does X need the whole CLI pipeline to run (produces an image / CLI output)?
+   (A GUI-app harness driving the whole pipeline — e.g. test_metal_gui_acceptance via
+    pytest — is NOT a CLI pipeline; answer NO here and route through step 3.)
    → YES → Is the oracle a reference image / output, or a throughput number?
             • image/output correctness → e2e-correctness (§1.4)
             • throughput vs legacy CPU → performance (§1.5)
@@ -291,11 +298,19 @@ test; "oracle = ratio to legacy CPU" is.**
 Three naming systems must stay aligned across a migration (270.3–270.5):
 
 - **CMake targets**: target-state introduces purpose-named targets in place of the flat
-  `unit_test`. Until then `unit_test` / `integration_test` / `LumiceGUITests` remain.
-- **CTest LABELS**: target-state adds a purpose-axis label per layer (e.g.
-  `unit-correctness`, `golden-analytic`, `parity`, `performance`, `gui`,
-  `regression-sentinel`); the current labels are mechanism-axis (`unit` / `integration` /
-  `gui`).
+  `unit_test`. **Naming pattern: `<layer-snake>_test`** (snake_case, matching the existing
+  `unit_test` / `integration_test` convention) — e.g. `unit_correctness_test`, `parity_test`,
+  `golden_analytic_test`; the GUI layer's target is `gui_test` (superseding `LumiceGUITests`).
+  Whether targets are split further per subsystem (one `unit_correctness_test` vs
+  `unit_correctness_core_test` + …) is **270.3's call**, but the *pattern* above is fixed here so
+  the naming does not drift. Until migration, `unit_test` / `integration_test` /
+  `LumiceGUITests` remain.
+- **CTest LABELS**: target-state adds a purpose-axis label per layer:
+  `unit-correctness`, `golden-analytic`, `parity` (the LABEL is the abbreviated form of the
+  `parity-cross-backend` layer — the full name is verbose for CMake; this is the **only**
+  abbreviated label, do not similarly truncate the others — `unit-correctness` must not become
+  `unit`, which would collide with the legacy mechanism-axis label), `performance`, `gui`,
+  `regression-sentinel`. The current labels are mechanism-axis (`unit` / `integration` / `gui`).
 - **pytest markers**: `slow` (requires shared-lib build; excluded from CI fast path) and
   `heavy` (slow + redundant parity variant; deselected per-PR via `not heavy`) are run-cadence
   markers and stay. Layer/subsystem are expressed via directory + marker in the target state.
@@ -327,15 +342,15 @@ health items that must not be moved/deleted casually.
 > `test/<layer>/`, with subsystem encoded by marker/label. The `gui` layer uses
 > `test/gui/<tag>/` (functional/visual/responsiveness).
 
-| Layer | Current C++ (unit/integration) | Current e2e (pytest) | Current gui | Migration constraint |
-|-------|-------------------------------|----------------------|-------------|----------------------|
-| **unit-correctness** | `test_math`, `test_geo3d`, `test_optics`†, `test_crystal`, `test_rng`, `test_queue`, `test_threading_pool`, `test_color_space`, `test_json`, `test_filter`, `test_filter_spec`, `test_config_snapshot`, `test_render_config`, `test_sim_data`, `test_simulator`, `test_cpu_info`, `test_axis_presets`, `test_slider_mapping`, `test_window_sizing`, `test_raypath_segments`, `test_reduce_raypath_audit`, `test_c_api`, `test_exit_records`, `test_ev_auto`, `test_proj`(integration), `test_integration_main` | — | — | — |
-| **golden-analytic** | `test_projection`†, analytic segments inside `test_optics`†, `MultiMsContinuationNormalIncidence` (in `test_metal_trace_parity.cpp`, 2-MS analytic anchor) | — | — | †split out only after per-file confirmation of the analytic-truth boundary vs unit-correctness |
-| **parity-cross-backend** | `test_metal_trace_parity`, `test_metal_root_gen`, `test_metal_trace_backend`, `test_metal_filter_match_parity`(.mm), `test_cpu_trace_backend` | `test_metal_exit_seam_parity`, `test_metal_batch_invariance`, `test_device_gen_default_path`, `test_cpu_backend_route` | — | `_parity_metrics.py` is the single source of parity metrics — **DO_NOT_MIGRATE_INDEPENDENTLY** (move with its dependents). Energy-conservation + cross-seed double gate is a 267.3 reinforcement — **DO NOT DELETE**. |
-| **e2e-correctness** | — | `test_smoke`, `test_cli`, `test_raypath_equivalence` | — | — |
-| **performance** | (no standalone C++ perf target; CI `Benchmark` step runs `--benchmark`) | `test_metal_throughput` | — | The `test_metal_batch_invariance` exit-conservation `xfail` is **legitimate** (worst-case drain not yet landed) — do not "fix" it by deleting. |
-| **gui** | — | `test_metal_gui_acceptance` (G4; gui layer, runs via pytest harness) | `test_gui_auto_ev`, `test_gui_visual`, `test_gui_render`, `test_gui_bg`, `test_gui_crystal_renderer`, `test_gui_export`, `test_gui_import_export`, `test_gui_interaction`, `test_gui_face_number_overlay`, `test_gui_overlay_labels`, `test_gui_smoke`, `test_project_world_dir`, **`test_gui_perf` (responsiveness tag)**, `test_gui_main`/`test_screenshot`/`test_gui_shared` (harness) | `test_gui_perf` oracle = absolute frame budget (§4.4), not throughput-vs-legacy. |
-| **regression-sentinel** | — | `test_capi_sentinel_overflow`, `test_ms_filter_leak`, `test_errors` | — | `test_capi_sentinel_overflow` / `test_ms_filter_leak` guard real bugs via issue repro — **DO NOT alter the scenario**. `test_ms_filter_leak` is also parity-related; its **primary** purpose is sentinel (multi-purpose → classify by primary purpose). |
+| Layer | Target-state path | Current C++ (unit/integration) | Current e2e (pytest) | Current gui | Migration constraint |
+|-------|-------------------|-------------------------------|----------------------|-------------|----------------------|
+| **unit-correctness** | `test/unit-correctness/<subsystem>/` | `test_math`, `test_geo3d`, `test_optics`†, `test_crystal`, `test_rng`, `test_queue`, `test_threading_pool`, `test_color_space`, `test_json`, `test_filter`, `test_filter_spec`, `test_config_snapshot`, `test_render_config`, `test_sim_data`, `test_simulator`, `test_cpu_info`, `test_axis_presets`, `test_slider_mapping`, `test_window_sizing`, `test_raypath_segments`, `test_reduce_raypath_audit`, `test_c_api`, `test_exit_records`, `test_ev_auto`, `test_proj`(integration), `test_integration_main` | — | — | — |
+| **golden-analytic** | `test/golden-analytic/<subsystem>/` | `test_projection`†, analytic segments inside `test_optics`†, `MultiMsContinuationNormalIncidence` (in `test_metal_trace_parity.cpp`, 2-MS analytic anchor) | — | — | †split out only after per-file confirmation of the analytic-truth boundary vs unit-correctness |
+| **parity-cross-backend** | `test/parity-cross-backend/<subsystem>/` | `test_metal_trace_parity`, `test_metal_root_gen`, `test_metal_trace_backend`, `test_metal_filter_match_parity`(.mm), `test_cpu_trace_backend` | `test_metal_exit_seam_parity`, `test_metal_batch_invariance`, `test_device_gen_default_path`, `test_cpu_backend_route` | — | `_parity_metrics.py` is the single source of parity metrics — **DO_NOT_MIGRATE_INDEPENDENTLY** (move with its dependents). Energy-conservation + cross-seed double gate is a 267.3 reinforcement — **DO NOT DELETE**. The `test_metal_batch_invariance` exit-conservation `xfail` is **legitimate** (worst-case drain not yet landed) — do not "fix" it by deleting. |
+| **e2e-correctness** | `test/e2e-correctness/` (flat) | — | `test_smoke`, `test_cli`, `test_raypath_equivalence` | — | — |
+| **performance** | `test/performance/` (flat) | (no standalone C++ perf target; CI `Benchmark` step runs `--benchmark`) | `test_metal_throughput` | — | — |
+| **gui** | `test/gui/<tag>/` (functional/visual/responsiveness) | — | `test_metal_gui_acceptance` (G4; gui layer, runs via pytest harness) | `test_gui_auto_ev`, `test_gui_visual`, `test_gui_render`, `test_gui_bg`, `test_gui_crystal_renderer`, `test_gui_export`, `test_gui_import_export`, `test_gui_interaction`, `test_gui_face_number_overlay`, `test_gui_overlay_labels`, `test_gui_smoke`, `test_project_world_dir`, **`test_gui_perf` (responsiveness tag)**, `test_gui_main`/`test_screenshot`/`test_gui_shared` (harness) | `test_gui_perf` oracle = absolute frame budget (§4.4), not throughput-vs-legacy. |
+| **regression-sentinel** | `test/regression-sentinel/` (flat) | — | `test_capi_sentinel_overflow`, `test_ms_filter_leak`, `test_errors` | — | `test_capi_sentinel_overflow` / `test_ms_filter_leak` guard real bugs via issue repro — **DO NOT alter the scenario**. `test_ms_filter_leak` is also parity-related; its **primary** purpose is sentinel (multi-purpose → classify by primary purpose). |
 
 **Multi-purpose tie-break rule**: when a test serves more than one purpose, classify it by its
 **primary** purpose (the bug/property whose regression it most directly guards), and note the
