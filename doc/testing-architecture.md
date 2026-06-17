@@ -136,8 +136,11 @@ naming convention / physical location**. Cadence values: `CI-fast` (every push, 
 
 - **Purpose**: the GUI is functionally correct, visually correct, and responsive. Three tags
   within one layer: **functional** (widget behavior, file ops, interaction), **visual**
-  (rendered output vs reference), **responsiveness** (frame interval, commit→first-upload
-  latency).
+  (rendered output vs reference), **responsiveness** (interactive delivery of the live loop —
+  frame interval, commit→first-upload latency, **and ray-delivery counts such as rays/restart
+  and upload_rays in steady-state / slider-drag scenarios**). The ray-delivery metrics
+  *reflect* throughput but their oracle is the GUI interactive loop, not a legacy-CPU ratio —
+  so they live here, not in `performance` (see §4.4).
 - **Oracle**: the imgui test engine drives the app; **visual** asserts against tracked
   reference images (PSNR, per-scene thresholds in `_thresholds.json`); **responsiveness**
   asserts against absolute frame-latency budgets; **functional** asserts widget/state outcomes.
@@ -261,12 +264,25 @@ backends agree and are both wrong".
 
 ### §4.4 `performance` vs `gui`-responsiveness boundary
 
-The `performance` layer's defining oracle is **throughput ratio to legacy CPU baseline**
-(`median` + `CoV`). A test whose oracle is an **absolute frame-latency / responsiveness budget**
-(e.g. `test_gui_perf`: frame interval, commit→first-upload delay, measured through the imgui
-engine) does **not** share that oracle, so by the rule-homogeneity principle (§0) it belongs to
-`gui` (responsiveness tag), not `performance`. "Has perf in the name" is not the test —
-**oracle homogeneity is the test.**
+The discriminator is the **oracle**, not whether a metric "reflects speed". The `performance`
+layer's defining oracle is **throughput ratio to legacy CPU baseline** (`median` + `CoV`) — it
+always has a legacy-CPU denominator. A test whose oracle is the **GUI interactive loop measured
+against an absolute budget through the imgui engine** does **not** share that oracle, so by the
+rule-homogeneity principle (§0) it belongs to `gui` (responsiveness tag), not `performance`.
+
+This explicitly includes the **throughput-flavored** GUI metrics, not just latency ones:
+`test_gui_perf` measures frame interval and commit→first-upload delay (latency) **and**
+rays/restart, upload_rays in its steady-state / slider-drag scenarios (ray-delivery counts).
+The ray-delivery counts *look like* throughput, but their oracle is "how much the live preview
+delivered under real-time constraints (poller cadence, commit interval, texture hold)" — an
+absolute interactive budget with **no legacy-CPU denominator** (historically tracked as
+GUI-regime absolute deltas like "rays 18K→79K", never a ratio to legacy). Putting them in
+`performance` would force them under perf's legacy-CPU-denominated discipline, which they do not
+satisfy — a rule-heterogeneous member. So: **gui (responsiveness).**
+
+The throughput that *does* belong to `performance` is the legacy-CPU-denominated kind: the
+committed bench harness (270.6) and `test_metal_throughput`. **"Reflects performance" is not the
+test; "oracle = ratio to legacy CPU" is.**
 
 ---
 
