@@ -50,6 +50,7 @@ namespace lumice {
 namespace {
 
 using metal_test::ChannelSum;
+using metal_test::EnableDeviceGenForStatisticalParity;
 using metal_test::ForceHostGenForByteIdentity;
 using metal_test::MakeMetalScene;
 using metal_test::MakeMultiCrystalScene;
@@ -1421,6 +1422,219 @@ TEST(MetalTraceParity, DualFisheyeEA_MultiMS_WithOverlap) {
   // tighter than rectangular, but the bar stays at 0.95 to detect partial
   // regressions while tolerating sampling noise at 262144 rays.
   EXPECT_GT(corr, 0.95) << "Metal dual-fisheye-EA multi-MS does not structurally match CpuTraceBackend";
+}
+
+// =============================================================================
+// Per-ray wavelength parity gates (task-270.7 / explore-269 P0).
+//
+// scrum-268.8 introduced per-ray wavelength sampling via WlPool / D65; before
+// this gate the parity/golden suite kept spec.wl = WlParam{550} for every
+// Metal test, so a regression that fed all rays the wrong wavelength (or
+// dropped the per-ray wl_idx lookup on a fallback path) would not surface in
+// CI. The two assertions below cover both arms of the wl_pool contract:
+//
+//  - SingleWlParityAndCmfChannelRatios (oracle parity at 450 + 650 nm, plus
+//    CMF channel-ratio sanity): verifies the discrete-wavelength fallback
+//    populates the pool with the correct per-ray (n_idx, cmf_*) entry. If
+//    the kernel ever reads the wrong wl_idx slot, oracle parity breaks; if
+//    CMF lookup is ever frozen at a single wavelength (e.g. 550), the
+//    Z-channel ratio between 450 nm and 650 nm collapses (CMF_Z(450) ≈
+//    1.77, CMF_Z(650) ≈ 0 — a > 1000× ratio).
+//
+//  - D65IlluminantModeBlendsPerRayWavelengths (D65 statistical-mixing gate):
+//    verifies the illuminant path actually samples M wavelengths across
+//    [380, 780] nm per ray. If the path were ever to degrade to a single
+//    wavelength (e.g. only 650 nm), Z-channel light vanishes. The test
+//    internally re-runs a 650 nm single-wl baseline (no cross-TEST state) and
+//    asserts D65 Z-channel >> 650 nm Z-channel.
+//
+// Self-check (manual): swap the 650 nm baseline to WlParam{450} (which has a
+// large CMF_Z) — the D65 vs 650-baseline ratio assertion goes red, proving
+// the gate actually depends on per-ray wavelength sampling rather than just
+// "any non-zero Z light".
+// =============================================================================
+TEST(MetalTraceParity, SingleWlParityAndCmfChannelRatios) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  // Byte-identity oracle: mirror the host mt19937 stream (Metal device-gen
+  // PCG cannot align bit-for-bit).
+  ForceHostGenForByteIdentity();
+
+  auto scene = MakeMetalScene(/*max_hits=*/8, /*ms_layers=*/1);
+  auto render = MakeRectangularRender();
+
+  constexpr size_t kRayCount = 4096;
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  auto run_one_wl = [&](float wl_nm, uint32_t seed, std::vector<float>& xyz_metal_out,
+                        std::vector<float>& xyz_oracle_out, LayerStats& metal_stats_out,
+                        OracleLayerResult& oracle_out) {
+    SessionSpec spec;
+    spec.scene = &scene;
+    spec.render = &render;
+    spec.wl = WlParam{ wl_nm, 1.0f };
+    spec.seed = seed;
+
+    xyz_metal_out.assign(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
+    {
+      MetalTraceBackend metal;
+      metal.BeginSession(spec);
+      auto h = metal.TraceLayer(RootRaySource::FromHost(host));
+      ASSERT_NE(h, nullptr);
+      metal_stats_out = h->GetLayerStats();
+      XyzImageData img{ xyz_metal_out.data(), render.resolution_[0], render.resolution_[1] };
+      metal.ReadbackImage(img);
+      metal.EndSession();
+    }
+
+    RandomNumberGenerator oracle_rng(0);
+    SeedRngsLikeMetal(oracle_rng, spec.seed);
+    auto roots = BuildFirstLayerRoots(oracle_rng, spec, kRayCount);
+    auto poly = BuildPolyArrays(roots.crystal);
+    oracle_out =
+        OracleTraceLayer(roots.crystal, poly, roots.n_idx, scene.max_hits_, roots.d, roots.p, roots.w, roots.tf);
+
+    xyz_oracle_out.assign(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
+    Rotation camera_rot = MakeCameraRotation(render);
+    ScatterOutgoingToXyz(oracle_out.exit_d.data(), oracle_out.exit_w.data(), oracle_out.exit_w.size(), render,
+                         camera_rot, spec.wl.wl_, xyz_oracle_out.data());
+  };
+
+  // --- 450 nm arm ---
+  std::vector<float> xyz_metal_450;
+  std::vector<float> xyz_oracle_450;
+  LayerStats metal_stats_450;
+  OracleLayerResult oracle_450;
+  ASSERT_NO_FATAL_FAILURE(run_one_wl(450.0f, /*seed=*/42, xyz_metal_450, xyz_oracle_450, metal_stats_450, oracle_450));
+
+  // --- 650 nm arm ---
+  std::vector<float> xyz_metal_650;
+  std::vector<float> xyz_oracle_650;
+  LayerStats metal_stats_650;
+  OracleLayerResult oracle_650;
+  ASSERT_NO_FATAL_FAILURE(run_one_wl(650.0f, /*seed=*/42, xyz_metal_650, xyz_oracle_650, metal_stats_650, oracle_650));
+
+  // Per-wavelength oracle parity — the byte-identity test catches a regression
+  // that feeds the kernel the wrong wl_idx (e.g. all rays read pool slot 0).
+  EXPECT_EQ(metal_stats_450.exit_count, oracle_450.exit_count) << "450 nm exit_count mismatch";
+  EXPECT_LT(RelErr(metal_stats_450.exit_w_sum, oracle_450.exit_w_sum), 5e-4)
+      << "450 nm exit_w_sum: metal=" << metal_stats_450.exit_w_sum << " oracle=" << oracle_450.exit_w_sum;
+  EXPECT_EQ(metal_stats_650.exit_count, oracle_650.exit_count) << "650 nm exit_count mismatch";
+  EXPECT_LT(RelErr(metal_stats_650.exit_w_sum, oracle_650.exit_w_sum), 5e-4)
+      << "650 nm exit_w_sum: metal=" << metal_stats_650.exit_w_sum << " oracle=" << oracle_650.exit_w_sum;
+  for (int c = 0; c < 3; c++) {
+    double sm_450 = ChannelSum(xyz_metal_450, c);
+    double so_450 = ChannelSum(xyz_oracle_450, c);
+    EXPECT_LT(RelErr(sm_450, so_450), 5e-4) << "450 nm channel=" << c << " metal=" << sm_450 << " oracle=" << so_450;
+    double sm_650 = ChannelSum(xyz_metal_650, c);
+    double so_650 = ChannelSum(xyz_oracle_650, c);
+    EXPECT_LT(RelErr(sm_650, so_650), 5e-4) << "650 nm channel=" << c << " metal=" << sm_650 << " oracle=" << so_650;
+  }
+
+  // CMF channel-ratio sanity — the per-wavelength CMF lookup must actually
+  // differ across wl. CMF_Z(450) ≈ 1.77, CMF_Z(650) ≈ 0 (kCmfZ table), so the
+  // Z-channel sum at 450 nm must be vastly larger than at 650 nm. A regression
+  // that froze CMF at a single wavelength (e.g. always wl_pool[0]) would
+  // collapse this ratio. 100× is a deliberately conservative floor: measured
+  // ratio is several orders of magnitude.
+  double z_450 = ChannelSum(xyz_metal_450, 2);
+  double z_650 = ChannelSum(xyz_metal_650, 2);
+  std::cout << "[MEASURE] per-wl CMF Z: Z_450=" << z_450 << " Z_650=" << z_650 << " ratio=" << (z_450 / (z_650 + 1e-12))
+            << std::endl;
+  EXPECT_GT(z_450, 100.0 * (z_650 + 1e-12))
+      << "Z-channel ratio between 450 nm and 650 nm collapsed — per-ray CMF lookup may be frozen at a single wl"
+      << " Z_450=" << z_450 << " Z_650=" << z_650;
+}
+
+TEST(MetalTraceParity, D65IlluminantModeBlendsPerRayWavelengths) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+
+  // larger sample count to suppress D65 per-ray sampling noise (M=64 pool ×
+  // PCG wl_idx). Empirically the D65 vs 650-baseline Z ratio is in the
+  // hundreds; 8192 rays put the standard deviation comfortably below the
+  // floor used by the assertion.
+  constexpr size_t kRayCount = 8192;
+  auto render = MakeRectangularRender();
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  // --- D65 illuminant arm: per-ray wavelength sampled from D65 SPD ---
+  auto scene_d65 = MakeMetalScene(/*max_hits=*/8, /*ms_layers=*/1);
+  scene_d65.light_source_.spectrum_ = IlluminantType::kD65;
+  std::vector<float> xyz_metal_d65(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
+  {
+    // Device-gen PCG path: D65 path validates the production routing where
+    // simulator.cpp:672 passes a zero-wl WlParam and the backend samples wl
+    // per ray on device. ForceHostGenForByteIdentity (left over from the
+    // previous test) would force the host root-gen path; reset it here so
+    // this test exercises the production single-worker route.
+    EnableDeviceGenForStatisticalParity();
+
+    SessionSpec spec;
+    spec.scene = &scene_d65;
+    spec.render = &render;
+    spec.wl = WlParam{};  // matches simulator.cpp:674 (zero-wl sentinel)
+    spec.seed = 42;
+
+    MetalTraceBackend metal;
+    metal.BeginSession(spec);
+    auto h = metal.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h, nullptr);
+    XyzImageData img{ xyz_metal_d65.data(), render.resolution_[0], render.resolution_[1] };
+    metal.ReadbackImage(img);
+    metal.EndSession();
+  }
+
+  // --- Single-wl 650 nm baseline arm: same scene shape, Z-channel ≈ 0 ---
+  auto scene_650 = MakeMetalScene(/*max_hits=*/8, /*ms_layers=*/1);
+  std::vector<float> xyz_metal_650(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
+  {
+    EnableDeviceGenForStatisticalParity();  // stay on production path
+
+    SessionSpec spec;
+    spec.scene = &scene_650;
+    spec.render = &render;
+    spec.wl = WlParam{ 650.0f, 1.0f };
+    spec.seed = 42;
+
+    MetalTraceBackend metal;
+    metal.BeginSession(spec);
+    auto h = metal.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h, nullptr);
+    XyzImageData img{ xyz_metal_650.data(), render.resolution_[0], render.resolution_[1] };
+    metal.ReadbackImage(img);
+    metal.EndSession();
+  }
+
+  double x_d65 = ChannelSum(xyz_metal_d65, 0);
+  double y_d65 = ChannelSum(xyz_metal_d65, 1);
+  double z_d65 = ChannelSum(xyz_metal_d65, 2);
+  double z_650 = ChannelSum(xyz_metal_650, 2);
+  std::cout << "[MEASURE] D65 vs 650 nm baseline: X_D65=" << x_d65 << " Y_D65=" << y_d65 << " Z_D65=" << z_d65
+            << " Z_650=" << z_650 << " ratio=" << (z_d65 / (z_650 + 1e-12)) << std::endl;
+
+  // D65 must light all three channels — a degenerate single-wl regression
+  // (e.g. only 650 nm sampled) collapses Z to ≈ 0.
+  EXPECT_GT(x_d65, 0.0) << "D65 produced no X-channel light — per-ray wavelength sampling may be broken";
+  EXPECT_GT(y_d65, 0.0) << "D65 produced no Y-channel light — per-ray wavelength sampling may be broken";
+  EXPECT_GT(z_d65, 0.0) << "D65 produced no Z-channel light — per-ray wavelength sampling may be broken";
+
+  // D65 Z-channel must vastly exceed pure-650-nm Z-channel because D65
+  // includes substantial blue (450 nm CMF_Z ≈ 1.77) while CMF_Z(650) ≈ 0.
+  // Floor (50×) is conservative — measured value is hundreds of × — but
+  // tight enough that "the kernel collapsed to a single red wavelength"
+  // regression goes red.
+  EXPECT_GT(z_d65, 50.0 * (z_650 + 1e-12))
+      << "D65 Z-channel did not exceed 650-nm-only Z-channel by ≥ 50× — per-ray wavelength sampling may be"
+      << " collapsing onto a single wl. Z_D65=" << z_d65 << " Z_650=" << z_650;
 }
 
 }  // namespace
