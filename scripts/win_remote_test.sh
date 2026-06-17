@@ -11,10 +11,10 @@
 #
 # Examples:
 #   # Run perf test with VSync
-#   ./scripts/win_remote_test.sh ./LumiceGUITests.exe --filter perf_test --vsync --log-level verbose
+#   ./scripts/win_remote_test.sh ./gui_test.exe --filter perf_test --vsync --log-level verbose
 #
 #   # Run full GUI test
-#   ./scripts/win_remote_test.sh ./LumiceGUITests.exe
+#   ./scripts/win_remote_test.sh ./gui_test.exe
 #
 # The script will:
 #   1. Copy the binary to the Windows shared directory

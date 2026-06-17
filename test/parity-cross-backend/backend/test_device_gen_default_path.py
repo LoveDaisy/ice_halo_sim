@@ -37,8 +37,10 @@ from test.e2e._parity_metrics import (
     _DS_BH,
     _DS_BW,
 )
+from test.e2e.runner import get_project_root
 
-CONFIGS_DIR = Path(__file__).parent / "configs"
+# TODO: relocate configs when follow-up task completes
+CONFIGS_DIR = get_project_root() / "test" / "e2e" / "configs"
 _TIMEOUT = 180
 
 # Metal backend is Apple-only. Skip on non-Darwin CI runners (the Ubuntu
@@ -96,6 +98,9 @@ _DS_CORR_FLOOR = 0.85
 
 @pytest.mark.slow
 def test_default_path_device_gen_vs_host_gen_single_ms():
+    # Role: device-gen activation gate (LUMICE_DISABLE_DEVICE_GEN on vs off).
+    # Orthogonal to test_parity_single_ms_no_filter (backend equivalence) —
+    # both use dual_fisheye_ref but test independent dimensions.
     """sim_seed=0, single-MS scene: device-gen ON vs OFF must agree statistically.
 
     Uses dual_fisheye_ref (the 258.6 single-MS no-filter parity baseline) — a

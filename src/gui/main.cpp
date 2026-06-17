@@ -262,7 +262,7 @@ int main(int argc, char** argv) {
 
   // --perf-bench: use EXACTLY the same startup path as test_gui_main.cpp's StartPerfSimulation,
   // measure steady-state throughput for 2 seconds, print result, and exit.
-  // This allows apples-to-apples comparison with LumiceGUITests --filter perf_test.
+  // This allows apples-to-apples comparison with gui_test --filter perf_test.
   if (perf_bench) {
     // Disable runtime viewport creation for perf-bench only. Platform callbacks remain
     // registered from ImGui_ImplGlfw_Init; this flag gate merely skips per-frame viewport

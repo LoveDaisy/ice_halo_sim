@@ -269,7 +269,7 @@ The system uses a multi-threaded architecture:
 **Key Design Decisions**:
 - GUI logic lives in `lumice::gui` namespace with global state (`g_state`, `g_preview`, etc.)
 - Communicates with the simulation core via `lumice.h` C API (same interface as the CLI)
-- `lumice_gui_obj` OBJECT library shares compiled GUI + ImGui code between `LumiceGUI` and `LumiceGUITests`
+- `lumice_gui_obj` OBJECT library shares compiled GUI + ImGui code between `LumiceGUI` and `gui_test`
 
 **Dependencies**:
 - Dear ImGui v1.91.8-docking (immediate-mode GUI)
@@ -306,7 +306,7 @@ Build targets:
 - `lumice`: Core static/shared library (static by default; use `-DBUILD_SHARED_LIBS=ON` to build as a shared library)
 - `Lumice`: CLI executable, linked against the `lumice` library
 - `LumiceGUI`: GUI executable (built when `-DBUILD_GUI=ON`), linked against `lumice_gui_obj` and `lumice`
-- `LumiceGUITests`: GUI test executable (built when both `-DBUILD_GUI=ON` and `-DBUILD_TESTING=ON`)
+- `gui_test`: GUI test executable (built when both `-DBUILD_GUI=ON` and `-DBUILD_TESTING=ON`)
 
 ## C API
 

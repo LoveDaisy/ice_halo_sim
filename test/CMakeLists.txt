@@ -10,72 +10,117 @@ CPMAddPackage(
 )
 
 # ==================================================================================================
-# Unit tests
-add_executable(unit_test
-  "${PROJ_TEST_DIR}/test_c_api.cpp"
-  "${PROJ_TEST_DIR}/test_color_space.cpp"
-  "${PROJ_TEST_DIR}/test_config_snapshot.cpp"
-  "${PROJ_TEST_DIR}/test_crystal.cpp"
-  "${PROJ_TEST_DIR}/test_geo3d.cpp"
-  "${PROJ_TEST_DIR}/test_json.cpp"
-  "${PROJ_TEST_DIR}/test_math.cpp"
-  "${PROJ_TEST_DIR}/test_projection.cpp"
-  "${PROJ_TEST_DIR}/test_queue.cpp"
-  "${PROJ_TEST_DIR}/test_render_config.cpp"
-  "${PROJ_TEST_DIR}/test_rng.cpp"
-  "${PROJ_TEST_DIR}/test_filter.cpp"
-  "${PROJ_TEST_DIR}/test_filter_spec.cpp"
-  "${PROJ_TEST_DIR}/test_reduce_raypath_audit.cpp"
-  "${PROJ_TEST_DIR}/test_raypath_segments.cpp"
-  "${PROJ_TEST_DIR}/test_optics.cpp"
-  "${PROJ_TEST_DIR}/test_sim_data.cpp"
-  "${PROJ_TEST_DIR}/test_simulator.cpp"
-  "${PROJ_TEST_DIR}/test_threading_pool.cpp"
-  "${PROJ_TEST_DIR}/test_window_sizing.cpp"
-  "${PROJ_TEST_DIR}/test_axis_presets.cpp"
-  "${PROJ_TEST_DIR}/test_slider_mapping.cpp"
-  "${PROJ_TEST_DIR}/test_ev_auto.cpp"
-  "${PROJ_TEST_DIR}/test_cpu_info.cpp"
-  "${PROJ_TEST_DIR}/test_cpu_trace_backend.cpp"
-  "${PROJ_TEST_DIR}/test_metal_trace_backend.cpp"
-  "${PROJ_TEST_DIR}/test_metal_trace_parity.cpp"
-  "${PROJ_TEST_DIR}/test_metal_root_gen.cpp"
-  "${PROJ_TEST_DIR}/test_exit_records.cpp"
-  "${PROJ_TEST_DIR}/test_main.cpp")
+# Test layout (270.3 — purpose-primary, layer × subsystem):
+#   - unit_correctness_test (LABEL unit-correctness)
+#   - parity_test           (LABEL parity, abbreviated; full layer name is parity-cross-backend)
+#   - golden_analytic_test  (LABEL golden-analytic)
+# See doc/testing-architecture.md §5 for the naming contract.
+
+# --------------------------------------------------------------------------------------------------
+# unit_correctness_test
+add_executable(unit_correctness_test
+  "${PROJ_TEST_DIR}/test_main.cpp"
+  # core/
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_math.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_geo3d.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_optics.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_crystal.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_rng.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_filter.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_filter_spec.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_reduce_raypath_audit.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_raypath_segments.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_simulator.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_exit_records.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_proj.cpp"
+  # config/
+  "${PROJ_TEST_DIR}/unit-correctness/config/test_json.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/config/test_config_snapshot.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/config/test_render_config.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/config/test_sim_data.cpp"
+  # server/
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_c_api.cpp"
+  # util/
+  "${PROJ_TEST_DIR}/unit-correctness/util/test_color_space.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/util/test_queue.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/util/test_threading_pool.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/util/test_cpu_info.cpp"
+  # gui/
+  "${PROJ_TEST_DIR}/unit-correctness/gui/test_axis_presets.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/gui/test_slider_mapping.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/gui/test_window_sizing.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/gui/test_ev_auto.cpp")
+target_include_directories(unit_correctness_test
+  PRIVATE ${PROJ_TEST_DIR})
+target_link_libraries(unit_correctness_test
+  PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} lumice_obj)
+set_target_properties(unit_correctness_test PROPERTIES
+  BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest>")
+
+add_test(NAME "LumiceUnitCorrectnessTest" COMMAND unit_correctness_test
+  "${PROJ_TEST_DIR}/fixtures/v3_config.json"
+  "${CMAKE_CURRENT_BINARY_DIR}")
+set_tests_properties("LumiceUnitCorrectnessTest" PROPERTIES LABELS "unit-correctness")
+
+# --------------------------------------------------------------------------------------------------
+# parity_test (parity-cross-backend layer; label abbreviated per §5)
+add_executable(parity_test
+  "${PROJ_TEST_DIR}/test_main.cpp"
+  "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_metal_trace_parity.cpp"
+  "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_metal_root_gen.cpp"
+  "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_metal_trace_backend.cpp"
+  "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_cpu_trace_backend.cpp")
 if(APPLE)
   # scrum-267 task-msl-filter-match-port: parity harness for device filter MATCH.
   # ObjC++ source (.mm) — needs ARC and the Metal/Foundation frameworks.
-  target_sources(unit_test PRIVATE
-    "${PROJ_TEST_DIR}/test_metal_filter_match_parity.mm")
+  # task-270.8 boundary-hardening: kFilterMatchTestKernelSrc moved out of
+  # liblumice into metal_filter_match_test_src.mm (parity layer only).
+  target_sources(parity_test PRIVATE
+    "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_metal_filter_match_parity.mm"
+    "${PROJ_TEST_DIR}/parity-cross-backend/backend/metal_filter_match_test_src.mm")
   set_source_files_properties(
-    "${PROJ_TEST_DIR}/test_metal_filter_match_parity.mm"
+    "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_metal_filter_match_parity.mm"
+    "${PROJ_TEST_DIR}/parity-cross-backend/backend/metal_filter_match_test_src.mm"
     PROPERTIES COMPILE_FLAGS "-fobjc-arc")
-  target_link_libraries(unit_test PRIVATE "-framework Metal" "-framework Foundation")
+  target_link_libraries(parity_test PRIVATE "-framework Metal" "-framework Foundation")
 endif()
-target_include_directories(unit_test
+target_include_directories(parity_test
   PRIVATE ${PROJ_TEST_DIR})
-target_link_libraries(unit_test
+target_link_libraries(parity_test
   PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} lumice_obj)
-set_target_properties(unit_test PROPERTIES
+set_target_properties(parity_test PROPERTIES
   BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest>")
 
-add_test(NAME "LumiceUnitTest" COMMAND unit_test
+add_test(NAME "LumiceParityTest" COMMAND parity_test
   "${PROJ_TEST_DIR}/fixtures/v3_config.json"
   "${CMAKE_CURRENT_BINARY_DIR}")
-set_tests_properties("LumiceUnitTest" PROPERTIES LABELS "unit")
+set_tests_properties("LumiceParityTest" PROPERTIES LABELS "parity")
 
-# ==================================================================================================
-# Integration tests
-add_executable(integration_test
-  "${PROJ_TEST_DIR}/test_proj.cpp"
-  "${PROJ_TEST_DIR}/test_integration_main.cpp")
-target_include_directories(integration_test
+# --------------------------------------------------------------------------------------------------
+# golden_analytic_test
+#
+# The MetalGoldenRay anchors in backend/ (extracted from test_metal_trace_parity.cpp
+# by 270.3) drive MetalTraceBackend with analytically constructed rays; the projection
+# analytic tests in core/ (test_projection.cpp) use pure math formulas and run on all
+# platforms. test_multi_ms_golden.cpp is guarded by #if APPLE; on non-Apple platforms
+# the backend golden anchors are absent but the 38 projection analytic tests in core/
+# still compile and run. The target needs Metal/Foundation frameworks on APPLE because
+# test_multi_ms_golden.cpp exercises MetalTraceBackend.
+add_executable(golden_analytic_test
+  "${PROJ_TEST_DIR}/test_main.cpp"
+  "${PROJ_TEST_DIR}/golden-analytic/backend/test_multi_ms_golden.cpp"
+  "${PROJ_TEST_DIR}/golden-analytic/core/test_projection.cpp")
+target_include_directories(golden_analytic_test
   PRIVATE ${PROJ_TEST_DIR})
-target_link_libraries(integration_test
+target_link_libraries(golden_analytic_test
   PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} lumice_obj)
-set_target_properties(integration_test PROPERTIES
+if(APPLE)
+  target_link_libraries(golden_analytic_test PRIVATE "-framework Metal" "-framework Foundation")
+endif()
+set_target_properties(golden_analytic_test PROPERTIES
   BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest>")
 
-add_test(NAME "LumiceIntegrationTest" COMMAND integration_test
-  "${PROJ_TEST_DIR}/fixtures/v3_config.json")
-set_tests_properties("LumiceIntegrationTest" PROPERTIES LABELS "integration")
+add_test(NAME "LumiceGoldenAnalyticTest" COMMAND golden_analytic_test
+  "${PROJ_TEST_DIR}/fixtures/v3_config.json"
+  "${CMAKE_CURRENT_BINARY_DIR}")
+set_tests_properties("LumiceGoldenAnalyticTest" PROPERTIES LABELS "golden-analytic")

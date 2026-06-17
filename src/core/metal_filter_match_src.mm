@@ -1,4 +1,4 @@
-// MSL helper + test-kernel source strings — see header for design notes.
+// MSL helper source string — see header for design notes.
 //
 // The MSL `struct DeviceFilterDesc` layout MUST mirror
 // `core/device_filter_desc.hpp` exactly (the host fills the buffer with the
@@ -122,10 +122,11 @@ static inline void ReduceBuffer_dev(thread uchar* data, uint size, uchar symmetr
 }
 
 // --- ApplyGetFn ---
-// Mirrors the GetFn remap in CopyContSliceToRootBuf (metal_trace_backend.mm
-// :1670-1675). `crystal_slot` indexes into the prefix-sum offset table to
-// locate this crystal's per-poly-index GetFn byte stripe. Writes
-// face-numbers into `out` (caller-owned thread buffer).
+// Remaps poly-index path to face-number space via the per-crystal GetFn byte
+// table (built on host by `BuildDeviceGetFnBytes`, see
+// core/device_filter_desc.{hpp,cpp}). `crystal_slot` indexes into the prefix-
+// sum offset table to locate this crystal's stripe. Writes face-numbers into
+// `out` (caller-owned thread buffer).
 static inline void ApplyGetFn_dev(thread const uchar* path, uint len,
                                   device const uchar* getfn_bytes,
                                   device const uint*  getfn_offsets,
@@ -311,70 +312,6 @@ static inline bool DeviceFilterCheck(device const DeviceFilterDesc& f,
                              path, path_len, getfn_bytes, getfn_offsets,
                              crystal_slot, ray_dir, ray_crystal_config_id);
   return (f.action == 0u) ? m : !m;
-}
-)METAL";
-
-const char* const kFilterMatchTestKernelSrc = R"METAL(
-struct FilterMatchTestParams {
-  uint n;
-  uint face_seq_cap;
-  uint check_mode;  // 0 = Match (ignore action), 1 = Check (apply action)
-};
-
-// One thread per ray. Reads (path, path_len, crystal_slot, crystal_config_id,
-// ray_dir, filter_idx) and writes a single uchar 0/1 to `out_match`.
-//
-// Buffer layout (mirrors plan D6 binding contract — both this kernel and the
-// host harness must agree on indices):
-//   0  filter_desc_buf       : DeviceFilterDesc[n_filters]
-//   1  getfn_offsets_buf     : uint[n_crystals + 1]
-//   2  getfn_bytes_buf       : uchar[]
-//   3  ray_path_buf          : uchar[n * face_seq_cap]
-//   4  ray_path_len_buf      : uchar[n]
-//   5  ray_crystal_slot      : uint16[n]
-//   6  ray_crystal_cid       : uint16[n]
-//   7  ray_dir_buf           : float[n * 3]
-//   8  ray_filter_idx        : uint[n]
-//   9  out_match_buf         : uchar[n]
-//   10 params                : FilterMatchTestParams
-//   11 complex_sub_desc_buf  : DeviceFilterDesc[] (Complex sub-specs, flat)
-kernel void filter_match_test_kernel(
-    device const DeviceFilterDesc* filter_desc        [[buffer(0)]],
-    device const uint*             getfn_offsets      [[buffer(1)]],
-    device const uchar*            getfn_bytes        [[buffer(2)]],
-    device const uchar*            ray_path           [[buffer(3)]],
-    device const uchar*            ray_path_len       [[buffer(4)]],
-    device const ushort*           ray_cslot          [[buffer(5)]],
-    device const ushort*           ray_cid            [[buffer(6)]],
-    device const float*            ray_dir            [[buffer(7)]],
-    device const uint*             ray_filter         [[buffer(8)]],
-    device uchar*                  out_match          [[buffer(9)]],
-    constant FilterMatchTestParams& prm               [[buffer(10)]],
-    device const DeviceFilterDesc* complex_sub_desc   [[buffer(11)]],
-    uint tid [[thread_position_in_grid]]) {
-  if (tid >= prm.n) { return; }
-  uint len = (uint)ray_path_len[tid];
-  if (len > kDevRecCap) { len = kDevRecCap; }
-  uchar path_local[64];  // kDevRecCap
-  uint base = tid * prm.face_seq_cap;
-  for (uint i = 0; i < len; i++) {
-    path_local[i] = ray_path[base + i];
-  }
-  float dir_local[3];
-  dir_local[0] = ray_dir[tid * 3 + 0];
-  dir_local[1] = ray_dir[tid * 3 + 1];
-  dir_local[2] = ray_dir[tid * 3 + 2];
-  uint fi = ray_filter[tid];
-  device const DeviceFilterDesc& f = filter_desc[fi];
-  bool result;
-  if (prm.check_mode == 0u) {
-    result = DeviceFilterMatch(f, complex_sub_desc, path_local, len, getfn_bytes, getfn_offsets,
-                               (uint)ray_cslot[tid], dir_local, (uint)ray_cid[tid]);
-  } else {
-    result = DeviceFilterCheck(f, complex_sub_desc, path_local, len, getfn_bytes, getfn_offsets,
-                               (uint)ray_cslot[tid], dir_local, (uint)ray_cid[tid]);
-  }
-  out_match[tid] = result ? 1u : 0u;
 }
 )METAL";
 // clang-format on

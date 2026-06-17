@@ -29,9 +29,9 @@ Core conventions:
 ./scripts/build.sh -tj release
 ./scripts/build.sh -gtj release
 LUMICE_SKIP_GUI_TESTS=1 ./scripts/build.sh -gtj release
-pytest test/e2e/ -v                       # fast e2e only (matches CI)
+pytest -v                                 # fast e2e only (matches CI; testpaths in pyproject.toml)
 ./scripts/build.sh -sj release && \
-  pytest test/e2e/ -v -m slow             # slow e2e (needs shared lib; run before PR)
+  pytest -v -m slow                       # slow e2e (needs shared lib; run before PR)
 
 # Format
 ./scripts/format.sh
@@ -70,11 +70,18 @@ Release artifacts land in `build/cmake_install/`. Debug builds stay in `build/cm
 
 - CLI, core, and unit-test flows should remain cross-platform.
 - GUI tests require a display server unless explicitly skipped with `LUMICE_SKIP_GUI_TESTS=1`.
+- E2E test layout (purpose-primary; see `doc/testing-architecture.md` §6):
+  - `test/e2e-correctness/` — full-stack correctness via CLI/PSNR (smoke, CLI behavior, raypath equivalence) + `references/*.jpg`
+  - `test/parity-cross-backend/backend/` — backend-equivalence oracles (Metal exit-seam parity, device-gen default path, cpu_backend route, Metal batch invariance) + C++ siblings from 270.3
+  - `test/performance/` — throughput gates (Metal throughput)
+  - `test/gui/` — GUI acceptance (Metal GUI north-star) alongside the C++ GUI tests (`functional/`, `visual/`, `responsiveness/` subdirs; target `gui_test`)
+  - `test/regression-sentinel/` — bug-resurfacing guards (errors, capi sentinel overflow, MS filter leak)
+  - Shared fixtures stay under `test/e2e/` (`base.py`, `runner.py`, `capi_runner.py`, `image_utils.py`, `_parity_metrics.py`, `configs/`).
 - E2E test split:
-  - Default `pytest test/e2e/ -v` runs the fast subset — matches CI behavior (CI uses `-m "not slow"`).
-  - `@pytest.mark.slow` tests require the shared-lib build (`./scripts/build.sh -sj release`) and are excluded from CI to keep PR feedback fast. Run them locally with `pytest test/e2e/ -v -m slow` before opening a PR that touches the simulator core, query filter, or C API surface.
-    - `test_capi_sentinel_overflow.py` — sentinel-overflow regression: 3-config × 12 rounds = 36 server lifecycles via `LUMICE_GetRawXyzResults(max_count=1)`; guards against reintroduction of the c_api.cpp off-by-one sentinel write (fix: 5287efe)
-    - `test_ms_filter_leak.py` — Design A filter-fail termination regression: confirms filter-fail rays do not propagate across MS layers
+  - Default `pytest -v` runs the fast subset — matches CI behavior (CI uses `-m "not slow"`). Test paths come from `pyproject.toml` `testpaths`.
+  - `@pytest.mark.slow` tests require the shared-lib build (`./scripts/build.sh -sj release`) and are excluded from CI to keep PR feedback fast. Run them locally with `pytest -v -m slow` before opening a PR that touches the simulator core, query filter, or C API surface.
+    - `test/regression-sentinel/test_capi_sentinel_overflow.py` — sentinel-overflow regression: 3-config × 12 rounds = 36 server lifecycles via `LUMICE_GetRawXyzResults(max_count=1)`; guards against reintroduction of the c_api.cpp off-by-one sentinel write (fix: 5287efe)
+    - `test/regression-sentinel/test_ms_filter_leak.py` — Design A filter-fail termination regression: confirms filter-fail rays do not propagate across MS layers
 - GUI screenshot references live under `test/gui/references/`.
 - Windows physical-desktop validation uses `scripts/win_remote_test.sh` together with `scripts/win_test_watcher.ps1`.
 - Performance diagnostics and workflows are documented in `doc/performance-testing.md`.
@@ -84,7 +91,7 @@ Release artifacts land in `build/cmake_install/`. Debug builds stay in `build/cm
 The `auto_ev` reference images are pixel-averaged means of N=10 stochastic renders to suppress
 per-run noise. Per-scene PSNR thresholds are `mean − 3σ` (floored to 0.5 dB precision).
 
-**`--keep-export-png` flag** — When passed to `LumiceGUITests`, `CheckAgainstReference` skips
+**`--keep-export-png` flag** — When passed to `gui_test`, `CheckAgainstReference` skips
 `std::remove` so the per-run export PNGs at `/tmp/lumice_auto_ev_*.png` are preserved for
 collection by the driver script.
 
@@ -104,7 +111,7 @@ python scripts/regen_gui_test_refs.py --n 2 --n-calib 2
 ```
 
 After Phase B, copy the `threshold` values from `test/gui/references/_thresholds.json` into
-`kScenes[]` in `test/gui/test_gui_auto_ev.cpp`. Use `min(off_threshold, on_threshold)` per scene
+`kScenes[]` in `test/gui/visual/test_gui_auto_ev.cpp`. Use `min(off_threshold, on_threshold)` per scene
 since both modes share one `psnr_threshold` field.
 
 ## Logging and Troubleshooting
@@ -118,7 +125,7 @@ since both modes share one `psnr_threshold` field.
 
 - `config.json`, `test.json`, `scratchpad/`, remote test output files, and most generated artifacts are intentionally git-ignored.
 - Do not use `git add -f` to force-track ignored files. If a file is ignored and you are unsure, stop and ask first.
-- Reference images under `test/e2e/references/*.jpg` and `test/gui/references/*.jpg` are explicitly unignored and may be tracked normally.
+- Reference images under `test/e2e-correctness/references/*.jpg` and `test/gui/references/*.jpg` are explicitly unignored and may be tracked normally.
 - CI runs build and unit tests on branch pushes; E2E tests run on PRs and `main`.
 
 ## Documentation Index (`doc/`)
@@ -132,10 +139,11 @@ Valuable design/architecture docs live in `doc/` (tracked). Consult the relevant
 - **C API**: `c_api.md`, `capi-lifecycle-architecture.md`
 - **GPU / Metal route** (read these before touching the GPU path):
   - `seam-design.md` — **the `TraceBackend` host/device seam redesign blueprint**; §5 = single-engine, three-clock-decoupled GPU simulator (the target architecture); §3.6 "原始之罪" = why GPU must not mirror the CPU pipeline.
-  - `gpu-route-history.md` — systematic retrospective of the GPU migration (#250→265): decision evolution, accumulated data assets, leftover-item ledger.
-  - `trace-backend-frame-lifecycle.md` — Metal frame lifecycle (as-built, multi-MS transit, parity harness methodology).
-  - `gpu-single-engine-implementation.md` — **§5 单引擎重写的实现设计 + 上下文锚**（explore-266 de-risk 固化：device 续传 filter 可行/divergence 裁决/device gate 融进 kernel 逐跳 emit；2-scrum 弧；legacy=ground truth + raw-XYZ parity）；后续 GPU 单引擎 scrum 的引用源。
+  - `gpu-route-history.md` — systematic retrospective of the GPU migration (#250→268): decision evolution, accumulated data assets, leftover-item ledger; §9 = single-engine arc high-point (CLI 9.5×/GUI 2.07×).
+  - `trace-backend-frame-lifecycle.md` — Metal frame lifecycle (as-built, multi-MS transit via device `transit_root_kernel`, parity harness methodology, §8 DR-3 per-ray wavelength).
+  - `gpu-single-engine-implementation.md` — **§0 as-built 接手须知**（scrum-267+268 完成：CLI 9.5×/GUI 2.07×/dispatch 32768/concern #2 解/DR-3 波长/R1 occupancy 640 benign）+ §5 设计推理 + §8 DR-3 决策链 + §9 关键发现；接手 GPU 路线先读 §0。
 - **Perf / testing**: `performance-testing.md`, `windows-remote-testing.md`, `xyz-stats-tool.md`
+  - `testing-architecture.md` — **authoritative test-organization spec**: verification-purpose primary axis × subsystem tag, seven layers (unit-correctness / golden-analytic / parity-cross-backend / e2e-correctness / performance / gui / regression-sentinel), the "how to add a test" decision tree, cross-cutting rules (perf denominator = legacy CPU; parity metric-masks-bugs battery; reference ownership), and the layer×subsystem physical-layout blueprint. Read before adding or reorganizing any test.
 - Example config: `examples/config_example.json`
 
 ## Knowledge Base & Working Discipline

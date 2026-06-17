@@ -56,6 +56,7 @@
 #include "core/raypath.hpp"
 #include "core/trace_backend.hpp"
 #include "metal_test_helpers.hpp"
+#include "parity-cross-backend/backend/metal_filter_match_test_src.hpp"
 
 namespace lumice {
 namespace {

@@ -2,9 +2,9 @@
 """
 Reference generation and threshold calibration driver for auto_ev GUI tests.
 
-Phase A: Run LumiceGUITests N times with --keep-export-png, pixel-average the
+Phase A: Run gui_test N times with --keep-export-png, pixel-average the
   captures per (scene, mode), and save the mean image as the new reference.
-Phase B: Run LumiceGUITests N_calib times, parse PSNR output from stderr, and
+Phase B: Run gui_test N_calib times, parse PSNR output from stderr, and
   compute per-scene threshold recommendations (mean - 3sigma, floor to 0.5 dB).
 
 See AGENTS.md "GUI Test Reference Regeneration" for usage.
@@ -252,8 +252,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--binary",
-        default="build/Release/bin/LumiceGUITests",
-        help="Path to LumiceGUITests binary (default: build/Release/bin/LumiceGUITests)",
+        default="build/Release/bin/gui_test",
+        help="Path to gui_test binary (default: build/Release/bin/gui_test)",
     )
     parser.add_argument(
         "--n", type=int, default=10, help="Phase A: number of reference runs (default: 10)"

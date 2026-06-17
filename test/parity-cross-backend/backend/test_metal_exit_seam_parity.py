@@ -43,8 +43,10 @@ from test.e2e._parity_metrics import (
     _DS_BH,
     _DS_BW,
 )
+from test.e2e.runner import get_project_root
 
-CONFIGS_DIR = Path(__file__).parent / "configs"
+# TODO: relocate configs when follow-up task completes
+CONFIGS_DIR = get_project_root() / "test" / "e2e" / "configs"
 _SEED = 42
 # Secondary seed for the metal self-consistency cross-seed assertion (see
 # `_assert_metal_self_consistency`). Different stream from _SEED is required;
@@ -366,6 +368,9 @@ def _assert_parity(config_name: str, cm: float, pm: float, cc: float, pc: float)
 @pytest.mark.slow
 @pytest.mark.heavy  # single-MS parity covered per-PR by device_gen metal; demote to local/nightly
 def test_parity_single_ms_no_filter():
+    # Role: backend-equivalence oracle (Metal + cpu_backend vs legacy CPU).
+    # dual_fisheye_ref here is a parity baseline, NOT a device-gen gate —
+    # see test_device_gen_default_path.py for the orthogonal gen-switch axis.
     cm, pm, cc, pc = _parity_axes("dual_fisheye_ref")
     print(f"[parity] dual_fisheye_ref: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
     _assert_parity("dual_fisheye_ref", cm, pm, cc, pc)

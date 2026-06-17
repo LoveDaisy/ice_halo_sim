@@ -105,7 +105,7 @@ Build via CI, then transfer the binary:
 
 ```bash
 # Download CI artifact
-gh run download <RUN_ID> --name LumiceGUITests-windows-msvc --dir /tmp/ci-win
+gh run download <RUN_ID> --name gui-test-windows-msvc --dir /tmp/ci-win
 
 # Transfer binary + config to Windows machine
 scp /tmp/ci-win/bin/Lumice.exe <windows-host>:<path>/
@@ -173,9 +173,9 @@ The dashboard tracks 12 time-series (4 platforms × 3 metrics):
 
 | Environment variable | Default | Description |
 |----------------------|---------|-------------|
-| `LUMICE_DISPATCH_RAY_NUM` | 128 | task-268.4: GPU dispatch granularity — per-`SimBatch` ray count fed to the backend. Higher values amortize Metal kernel launch overhead; empirical crossover where Metal outperforms legacy is around 512. Set to a power of two for alignment (e.g. `LUMICE_DISPATCH_RAY_NUM=512`). Applies at server startup; changing mid-run has no effect. Independent of `LUMICE_COMMIT_RAY_NUM` (see next row) — pick "feed GPU big" without sacrificing GUI cadence. |
+| `LUMICE_DISPATCH_RAY_NUM` | **32768** (Metal) / 128 (CPU) | task-268.4 knob; scrum-268.6 set the Metal backend-aware default to **32768** (empirical sweet spot: 5.3–5.4× heavy-scene, GUI steady 2.07× legacy on M2 Max). Amortizes Metal kernel launch overhead; empirical crossover where Metal outperforms legacy is around 512, but the full win requires ≥32768. Set to a power of two for alignment. Applies at server startup; changing mid-run has no effect. Independent of `LUMICE_COMMIT_RAY_NUM` (see next row) — pick "feed GPU big" without sacrificing GUI cadence. |
 | `LUMICE_COMMIT_RAY_NUM` | 128 | task-268.4: SimData-to-consumer commit granularity inside `ConsumeData`. Smaller commits = finer GUI snapshot cadence regardless of dispatch size. Backend exit-seam path only (legacy CPU SimData bypass the chunker). |
-| `LUMICE_BATCH_RAY_NUM` | (deprecated) | Backward-compat fallback for `LUMICE_COMMIT_RAY_NUM` only. Pre-task-268.4 this knob doubled as both dispatch and commit granularity. Prefer the two split env vars above. |
+| `LUMICE_BATCH_RAY_NUM` | (deprecated) | Backward-compat fallback for `LUMICE_COMMIT_RAY_NUM` only. Pre-task-268.4 this knob doubled as both dispatch and commit granularity. **scrum-268: the DISPATCH split is the primary driver for Metal throughput; setting `LUMICE_BATCH_RAY_NUM` now only controls commit cadence, not GPU dispatch size.** Prefer the two split env vars above. |
 | `LUMICE_TRACE_BACKEND` | unset (legacy CPU) | Trace backend selection: unset = legacy CPU; `metal` = Metal GPU backend (exit-seam + device root-gen); `cpu_backend` = SoA CPU backend. |
 | `LUMICE_DISABLE_DEVICE_GEN` | unset (device-gen ON) | Escape hatch to force **host** root-ray generation on the Metal backend. Device root-gen (GPU PCG root-ray supply) is the **default** for the Metal backend on eligible layers (single-crystal-per-ci, `tri_count ≤ 64`); it activates on both the deterministic single-worker path and the default multi-worker random path (each worker gets a non-zero derived `effective_seed_`). Set this to `1` only for strict-identity parity tests that mirror the host `std::mt19937` stream (which cannot align with the device PCG stream). Read once per backend instance at construction. |
 
@@ -247,12 +247,12 @@ Two scenarios:
 ./scripts/build.sh -gtj release
 
 # Run perf tests only (PERF output on stderr, server logs on stdout)
-./build/Release/bin/LumiceGUITests --filter perf_test \
+./build/Release/bin/gui_test --filter perf_test \
   > /tmp/perf_stdout.txt 2>/tmp/perf_stderr.txt
 grep "\[PERF\]" /tmp/perf_stderr.txt
 
 # With debug level (adds ConsumeData per-batch + Consume profile)
-./build/Release/bin/LumiceGUITests --filter perf_test --log-level debug \
+./build/Release/bin/gui_test --filter perf_test --log-level debug \
   > /tmp/perf_stdout_debug.txt 2>/tmp/perf_stderr_debug.txt
 grep "Consume profile" /tmp/perf_stdout_debug.txt
 ```
@@ -263,10 +263,10 @@ grep "Consume profile" /tmp/perf_stdout_debug.txt
 
 ```bash
 # Transfer GUI test binary from CI artifact
-scp /tmp/ci-win/bin/LumiceGUITests.exe <windows-host>:<path>/
+scp /tmp/ci-win/bin/gui_test.exe <windows-host>:<path>/
 
 # Run (PowerShell, must use --filter to avoid crash on non-perf tests)
-$proc = Start-Process -FilePath ".\LumiceGUITests.exe" `
+$proc = Start-Process -FilePath ".\gui_test.exe" `
   -ArgumentList "-nopause","--filter","perf_test" `
   -NoNewWindow -Wait `
   -RedirectStandardOutput "perf_stdout.txt" `
@@ -321,7 +321,7 @@ See [Windows Remote Testing Guide](windows-remote-testing.md) for setup instruct
 
 ```bash
 # Run GUI perf test on Windows with VSync
-./scripts/win_remote_test.sh /tmp/ci-win/bin/LumiceGUITests.exe \
+./scripts/win_remote_test.sh /tmp/ci-win/bin/gui_test.exe \
   --filter perf_test --vsync --log-level verbose
 ```
 

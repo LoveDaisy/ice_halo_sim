@@ -6,12 +6,14 @@ from pathlib import Path
 
 from test.e2e.base import LumiceTestCase
 from test.e2e.image_utils import HAS_PILLOW
+from test.e2e.runner import get_project_root
 
 if HAS_PILLOW:
     from test.e2e.image_utils import compute_mse, compute_psnr, get_dimensions
 
-CONFIGS_DIR = Path(__file__).resolve().parent / "configs"
-REFERENCES_DIR = Path(__file__).resolve().parent / "references"
+# TODO: relocate configs when follow-up task completes
+CONFIGS_DIR = get_project_root() / "test" / "e2e" / "configs"
+REFERENCES_DIR = get_project_root() / "test" / "e2e-correctness" / "references"
 
 # PSNR thresholds per reference image (dB).
 # Calibrated by running each config 3 times and taking min_psnr - 3dB.
@@ -32,6 +34,15 @@ PSNR_THRESHOLDS = {
     "multi_lens_02": 35.4,
     "multi_lens_03": 40.3,
     "multi_scatter_01": 26.6,
+    # orthographic_180: D65 + uniform full-random orientation + 1M rays. Per-run
+    # PSNR (measured on macOS): run-to-run 22.74/22.76 dB (3 runs). Threshold
+    # = min - 3 dB ≈ 19.7 → set 19.5 dB (rounded down to 0.5 dB precision) to
+    # tolerate cross-platform sampling noise (reference generated on macOS,
+    # CI runs on Linux). Re-introduces orthographic-projection e2e coverage
+    # lost when scrum-268.6 scoped smoke to "configs with reference images"
+    # (task-270.7 / explore-269 P0). A structural regression (frame bug,
+    # wrong projection) drops PSNR far below this floor.
+    "orthographic_180_01": 19.5,
     "parhelion_01": 35.0,
     "pyramid_01": 28.8,
     "render_opts_01": 30.3,

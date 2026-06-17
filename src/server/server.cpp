@@ -696,6 +696,19 @@ void ServerImpl::ConsumeData() {
     }
     return kDefaultRayNum;
   }();
+  // Emit a one-time deprecation WARN whenever the legacy env name is in use.
+  // Warn unconditionally — even when LUMICE_COMMIT_RAY_NUM is also set — so
+  // users migrating off old scripts always get migration guidance.
+  if (std::getenv("LUMICE_BATCH_RAY_NUM") != nullptr) {
+    static std::once_flag batch_ray_num_warn_once;
+    std::call_once(batch_ray_num_warn_once, [this]() {
+      ILOG_WARN(logger_,
+                "LUMICE_BATCH_RAY_NUM is deprecated; migrate to "
+                "LUMICE_COMMIT_RAY_NUM. LUMICE_COMMIT_RAY_NUM takes precedence "
+                "when both are set; otherwise the legacy value is applied as "
+                "commit granularity.");
+    });
+  }
   while (true) {
     CHECK_STOP
     auto sim_data = data_queue_->Get();

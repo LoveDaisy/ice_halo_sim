@@ -47,10 +47,10 @@ From your development machine (macOS/Linux):
 
 ```bash
 # Download CI artifact
-gh run download <RUN_ID> --name LumiceGUITests-windows-msvc --dir /tmp/ci-win
+gh run download <RUN_ID> --name gui-test-windows-msvc --dir /tmp/ci-win
 
 # Run perf test with VSync (real display)
-./scripts/win_remote_test.sh /tmp/ci-win/bin/LumiceGUITests.exe \
+./scripts/win_remote_test.sh /tmp/ci-win/bin/gui_test.exe \
   --filter perf_test --vsync --log-level verbose
 
 # Run --perf-bench for throughput measurement

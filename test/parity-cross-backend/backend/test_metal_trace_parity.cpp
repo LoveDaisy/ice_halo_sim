@@ -50,6 +50,7 @@ namespace lumice {
 namespace {
 
 using metal_test::ChannelSum;
+using metal_test::EnableDeviceGenForStatisticalParity;
 using metal_test::ForceHostGenForByteIdentity;
 using metal_test::MakeMetalScene;
 using metal_test::MakeMultiCrystalScene;
@@ -1424,521 +1425,216 @@ TEST(MetalTraceParity, DualFisheyeEA_MultiMS_WithOverlap) {
 }
 
 // =============================================================================
-// task-267.4 (continuation-validation) golden-ray absolute physics anchors
-// =============================================================================
+// Per-ray wavelength parity gates (task-270.7 / explore-269 P0).
 //
-// Drives the real MetalTraceBackend trace kernel with analytically constructed
-// rays via the test-only HostRayBatch::d/p/w/tf injection path (wired in
-// metal_trace_backend.mm). Each test compares the kernel's exit ray against a
-// closed-form physics expectation — Snell's law for parallel-slab refraction,
-// Fresnel weights, total energy bound. Orthogonal to the OracleTraceLayer
-// mirror (which catches "kernel does X, oracle does Y" divergence): these
-// anchors catch the shared-formula bug class where CPU mirror AND kernel
-// implement the same wrong formula.
+// scrum-268.8 introduced per-ray wavelength sampling via WlPool / D65; before
+// this gate the parity/golden suite kept spec.wl = WlParam{550} for every
+// Metal test, so a regression that fed all rays the wrong wavelength (or
+// dropped the per-ray wl_idx lookup on a fallback path) would not surface in
+// CI. The two assertions below cover both arms of the wl_pool contract:
 //
-// Geometry: MakeMetalScene uses a hex prism h=1.0, hex circumradius 1.0
-// (NoRandom distribution → fully deterministic crystal, RNG-free build). Top
-// and bottom face indices are discovered dynamically via BuildPolyArrays so
-// the tests survive Crystal-internal face id changes.
-
-namespace {
-
-struct PrismFaces {
-  IdType top = kInvalidId;
-  IdType bot = kInvalidId;
-};
-
-PrismFaces FindTopBotFaces(const PolyArrays& poly, size_t poly_cnt) {
-  PrismFaces out;
-  for (size_t fi = 0; fi < poly_cnt; fi++) {
-    float nz = poly.n[fi * 3 + 2];
-    if (nz > 0.9f) {
-      out.top = static_cast<IdType>(fi);
-    } else if (nz < -0.9f) {
-      out.bot = static_cast<IdType>(fi);
-    }
-  }
-  return out;
-}
-
-// Independent textbook Fresnel transmittance — derived directly from the Snell
-// law + rs/rp amplitude coefficients, NOT the kernel's dd/GetReflectRatio
-// parameterisation. This independence is the whole point of the golden WEIGHT
-// anchor (code-review-01 Minor 3): a shared bug in the kernel's Fresnel formula
-// must NOT be mirrored in the expected value, otherwise the weight assertion
-// degrades into a tautology and the CPU+kernel shared-formula blind spot the
-// golden anchor exists to catch stays open. `rr = n_incident / n_transmit`;
-// `cos_theta_abs = |cosθ_incidence|`.
-float FresnelTransmitDelta(float cos_theta_abs, float rr) {
-  // Snell: sinθ_t = rr · sinθ_i. TIR when sinθ_t ≥ 1.
-  float sin_i2 = std::max(0.0f, 1.0f - cos_theta_abs * cos_theta_abs);
-  float sin_t2 = rr * rr * sin_i2;
-  if (sin_t2 >= 1.0f) {
-    return 0.0f;  // TIR — full reflection
-  }
-  float cos_t = std::sqrt(1.0f - sin_t2);
-  // Unpolarised power reflectance R = (Rs + Rp)/2 from the amplitude
-  // coefficients (n_i·cosθ form, divided through by n_t so only rr appears).
-  float rs = (rr * cos_theta_abs - cos_t) / (rr * cos_theta_abs + cos_t);
-  float rp = (rr * cos_t - cos_theta_abs) / (rr * cos_t + cos_theta_abs);
-  float reflectance = 0.5f * (rs * rs + rp * rp);
-  return 1.0f - reflectance;
-}
-
-// Find the exit ray whose direction is closest to (dx, dy, dz). Returns -1 if
-// no exit is within `tol` total absolute difference. The Metal kernel emits
-// multiple exits per input ray (the reflect-at-entry branch and the
-// transmitted branch are BOTH recorded — see OracleTraceLayer:217-225 for the
-// per-channel exit-emit pattern); golden tests locate the expected exit by
-// direction rather than asserting a single-exit count.
-int FindExitByDirection(const std::vector<ExitRayRecord>& exits, float dx, float dy, float dz, float tol = 5e-3f) {
-  int best = -1;
-  float best_diff = tol;
-  for (size_t i = 0; i < exits.size(); i++) {
-    float diff = std::abs(exits[i].dir[0] - dx) + std::abs(exits[i].dir[1] - dy) + std::abs(exits[i].dir[2] - dz);
-    if (diff < best_diff) {
-      best_diff = diff;
-      best = static_cast<int>(i);
-    }
-  }
-  return best;
-}
-
-// Sums weights of all exit rays whose direction cosine with (dx,dy,dz)
-// exceeds cos_tol. Used by multi-MS golden tests where multiple analytic
-// paths land on the same outgoing direction (e.g. T⁴ + R² both exit (0,0,-1)).
-float SumWeightByDirection(const std::vector<ExitRayRecord>& exits, float dx, float dy, float dz,
-                           float cos_tol = 0.9999f) {
-  float sum = 0.0f;
-  for (const auto& e : exits) {
-    float dot = e.dir[0] * dx + e.dir[1] * dy + e.dir[2] * dz;
-    if (dot >= cos_tol) {
-      sum += e.weight;
-    }
-  }
-  return sum;
-}
-
-}  // namespace
-
+//  - SingleWlParityAndCmfChannelRatios (oracle parity at 450 + 650 nm, plus
+//    CMF channel-ratio sanity): verifies the discrete-wavelength fallback
+//    populates the pool with the correct per-ray (n_idx, cmf_*) entry. If
+//    the kernel ever reads the wrong wl_idx slot, oracle parity breaks; if
+//    CMF lookup is ever frozen at a single wavelength (e.g. 550), the
+//    Z-channel ratio between 450 nm and 650 nm collapses (CMF_Z(450) ≈
+//    1.77, CMF_Z(650) ≈ 0 — a > 1000× ratio).
+//
+//  - D65IlluminantModeBlendsPerRayWavelengths (D65 statistical-mixing gate):
+//    verifies the illuminant path actually samples M wavelengths across
+//    [380, 780] nm per ray. If the path were ever to degrade to a single
+//    wavelength (e.g. only 650 nm), Z-channel light vanishes. The test
+//    internally re-runs a 650 nm single-wl baseline (no cross-TEST state) and
+//    asserts D65 Z-channel >> 650 nm Z-channel.
+//
+// Self-check (manual): swap the 650 nm baseline to WlParam{450} (which has a
+// large CMF_Z) — the D65 vs 650-baseline ratio assertion goes red, proving
+// the gate actually depends on per-ray wavelength sampling rather than just
+// "any non-zero Z light".
 // =============================================================================
-// GoldenRay_NormalIncidence — vertical ray through a parallel slab
-// =============================================================================
-TEST(MetalGoldenRay, NormalIncidenceParallelSlab) {
+TEST(MetalTraceParity, SingleWlParityAndCmfChannelRatios) {
   if (ShouldSkipMetalTests()) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
-  // Force off device-gen — irrelevant here (injection bypasses gen entirely)
-  // but keeps the test single-threaded deterministic if a future change adds
-  // an off-by-default device-gen fallback for short rays.
-  ForceHostGenForByteIdentity();
-
-  // max_hits=2 bounds the bounce chain so the kernel emits a deterministic
-  // 2-exit pattern: (a) reflect-at-entry going back up through the top face,
-  // (b) refract-out through the bottom face. With max_hits>2 the residual
-  // internally-reflected branch bounces between top/bottom and emits further
-  // exits of geometrically decaying weight — the leading two are unchanged.
-  auto scene = MakeMetalScene(/*max_hits=*/2, /*ms_layers=*/1);
-  auto render = MakeRectangularRender();
-
-  SessionSpec spec;
-  spec.scene = &scene;
-  spec.render = &render;
-  spec.wl = WlParam{ 550.0f, 1.0f };
-  spec.seed = 42;
-
-  RandomNumberGenerator local_rng(0);
-  local_rng.SetSeed(spec.seed);
-  Crystal crystal = MakeCrystal(local_rng, scene.ms_[0].setting_[0].crystal_.param_);
-  float n_idx = crystal.GetRefractiveIndex(spec.wl.wl_);
-
-  auto poly = BuildPolyArrays(crystal);
-  size_t poly_cnt = crystal.PolygonFaceCount();
-  PrismFaces faces = FindTopBotFaces(poly, poly_cnt);
-  ASSERT_NE(faces.top, kInvalidId) << "top face (normal ≈ +z) not found";
-  ASSERT_NE(faces.bot, kInvalidId) << "bottom face (normal ≈ -z) not found";
-
-  // Entry point: centroid of top face — well inside the hex (radius 1.0)
-  // so the downward-propagating ray cannot exit through a side wall.
-  std::vector<float> d = { 0.0f, 0.0f, -1.0f };
-  // Entry point fixed at the prism axis on the top face plane (z = +h/2). The
-  // lumice-computed face centroid is a TRIANGLE centroid (not hexagon centre),
-  // offset from the axis — using it shifts the refract path so the ray exits
-  // through a side wall instead of the bottom. Anchor at the axis instead so
-  // the parallel-slab geometry holds.
-  std::vector<float> p = { 0.0f, 0.0f, 0.5f };
-  std::vector<float> w = { 1.0f };
-  std::vector<IdType> tf = { faces.top };
-
-  HostRayBatch host;
-  host.count = 1;
-  host.d = d.data();
-  host.p = p.data();
-  host.w = w.data();
-  host.tf = tf.data();
-  host.crystal = &crystal;
-  host.refractive_index = n_idx;
-  host.crystal_id = 0;
-
-  std::vector<ExitRayRecord> exits;
-  size_t exit_count = 0;
-  {
-    MetalTraceBackend metal;
-    metal.BeginSession(spec);
-    auto h = metal.TraceLayer(RootRaySource::FromHost(host));
-    ASSERT_NE(h, nullptr);
-    exit_count = metal.ReadbackExitRays(exits);
-    metal.EndSession();
-  }
-
-  ASSERT_GE(exit_count, 2u) << "normal-incidence must emit ≥ 2 exits (reflect-at-entry + transmit-out)";
-
-  // Analytic Fresnel at normal incidence.
-  float r_normal = (n_idx - 1.0f) / (n_idx + 1.0f);
-  r_normal *= r_normal;
-  float t_normal = 1.0f - r_normal;
-
-  // Exit A — reflect-at-entry going back up through top, direction (0,0,+1),
-  // weight = R_normal.
-  int idx_up = FindExitByDirection(exits, 0.0f, 0.0f, 1.0f);
-  ASSERT_GE(idx_up, 0) << "no exit found near direction (0,0,+1)";
-  EXPECT_NEAR(exits[idx_up].dir[0], 0.0f, 1e-4f);
-  EXPECT_NEAR(exits[idx_up].dir[1], 0.0f, 1e-4f);
-  EXPECT_NEAR(exits[idx_up].dir[2], 1.0f, 1e-4f);
-  EXPECT_NEAR(exits[idx_up].weight, r_normal, 5e-4f)
-      << "back-reflect weight: got=" << exits[idx_up].weight << " expected=" << r_normal;
-
-  // Exit B — refract-out through bottom going (0,0,-1), weight = T_normal².
-  int idx_down = FindExitByDirection(exits, 0.0f, 0.0f, -1.0f);
-  ASSERT_GE(idx_down, 0) << "no exit found near direction (0,0,-1)";
-  EXPECT_NEAR(exits[idx_down].dir[0], 0.0f, 1e-4f);
-  EXPECT_NEAR(exits[idx_down].dir[1], 0.0f, 1e-4f);
-  EXPECT_NEAR(exits[idx_down].dir[2], -1.0f, 1e-4f);
-  EXPECT_NEAR(exits[idx_down].weight, t_normal * t_normal, 5e-4f)
-      << "forward-transmit weight: got=" << exits[idx_down].weight << " expected=" << (t_normal * t_normal);
-}
-
-// =============================================================================
-// GoldenRay_Snell30 — oblique ray through a parallel slab preserves direction
-// =============================================================================
-TEST(MetalGoldenRay, Snell30ParallelSlab) {
-  if (ShouldSkipMetalTests()) {
-    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
-  }
-  ForceHostGenForByteIdentity();
-
-  // max_hits=4: leaves room for the reflect-at-entry exit + the
-  // refract-out-the-bottom exit + a couple of internally-bouncing branches
-  // that decay geometrically. We assert on direction; the kernel's per-hit
-  // emit count is not part of the contract.
-  auto scene = MakeMetalScene(/*max_hits=*/4, /*ms_layers=*/1);
-  auto render = MakeRectangularRender();
-
-  SessionSpec spec;
-  spec.scene = &scene;
-  spec.render = &render;
-  spec.wl = WlParam{ 550.0f, 1.0f };
-  spec.seed = 42;
-
-  RandomNumberGenerator local_rng(0);
-  local_rng.SetSeed(spec.seed);
-  Crystal crystal = MakeCrystal(local_rng, scene.ms_[0].setting_[0].crystal_.param_);
-  float n_idx = crystal.GetRefractiveIndex(spec.wl.wl_);
-
-  auto poly = BuildPolyArrays(crystal);
-  size_t poly_cnt = crystal.PolygonFaceCount();
-  PrismFaces faces = FindTopBotFaces(poly, poly_cnt);
-  ASSERT_NE(faces.top, kInvalidId);
-  ASSERT_NE(faces.bot, kInvalidId);
-
-  // Incident at 30° from -z, in the x-z plane. d = (sin30, 0, -cos30).
-  constexpr float kTheta = 30.0f * 3.14159265358979323846f / 180.0f;
-  float sin_t = std::sin(kTheta);
-  float cos_t = std::cos(kTheta);
-  std::vector<float> d = { sin_t, 0.0f, -cos_t };
-  // Entry near the top face centroid (well inside the hex). Inside-ice the
-  // refracted angle is arcsin(sinθ/n) ≈ 22.4°; horizontal travel from z=+0.5
-  // to z=-0.5 is tan(22.4°) ≈ 0.41 < hex circumradius 1.0, so the ray exits
-  // through the bottom face.
-  // Entry point fixed at the prism axis on the top face plane (z = +h/2). The
-  // lumice-computed face centroid is a TRIANGLE centroid (not hexagon centre),
-  // offset from the axis — using it shifts the refract path so the ray exits
-  // through a side wall instead of the bottom. Anchor at the axis instead so
-  // the parallel-slab geometry holds.
-  std::vector<float> p = { 0.0f, 0.0f, 0.5f };
-  std::vector<float> w = { 1.0f };
-  std::vector<IdType> tf = { faces.top };
-
-  HostRayBatch host;
-  host.count = 1;
-  host.d = d.data();
-  host.p = p.data();
-  host.w = w.data();
-  host.tf = tf.data();
-  host.crystal = &crystal;
-  host.refractive_index = n_idx;
-  host.crystal_id = 0;
-
-  std::vector<ExitRayRecord> exits;
-  size_t exit_count = 0;
-  {
-    MetalTraceBackend metal;
-    metal.BeginSession(spec);
-    auto h = metal.TraceLayer(RootRaySource::FromHost(host));
-    ASSERT_NE(h, nullptr);
-    exit_count = metal.ReadbackExitRays(exits);
-    metal.EndSession();
-  }
-
-  ASSERT_GE(exit_count, 2u) << "Snell 30° must emit ≥ 2 exits (reflect-at-entry + transmit-out)";
-
-  // Fresnel weights — single-hit per face.
-  float sin_inside = sin_t / n_idx;
-  float cos_inside = std::sqrt(std::max(0.0f, 1.0f - sin_inside * sin_inside));
-  float t_in = FresnelTransmitDelta(cos_t, 1.0f / n_idx);
-  float t_out = FresnelTransmitDelta(cos_inside, n_idx);
-  float r_in = 1.0f - t_in;
-
-  // Exit A — reflect-at-entry: d_reflect = d - 2(d·n)n with n=(0,0,+1) gives
-  // (sin30, 0, +cos30) (going up and forward). Weight ≈ R(30°).
-  int idx_up = FindExitByDirection(exits, sin_t, 0.0f, cos_t);
-  ASSERT_GE(idx_up, 0) << "no exit found near (sin30, 0, +cos30)";
-  EXPECT_NEAR(exits[idx_up].weight, r_in, 5e-4f)
-      << "reflect-at-entry weight: got=" << exits[idx_up].weight << " expected=" << r_in;
-
-  // Exit B — forward refract through parallel slab: direction unchanged,
-  // weight = T_in × T_out.
-  int idx_down = FindExitByDirection(exits, sin_t, 0.0f, -cos_t);
-  ASSERT_GE(idx_down, 0) << "no exit found near (sin30, 0, -cos30)";
-  EXPECT_NEAR(exits[idx_down].dir[0], sin_t, 1e-4f);
-  EXPECT_NEAR(exits[idx_down].dir[1], 0.0f, 1e-4f);
-  EXPECT_NEAR(exits[idx_down].dir[2], -cos_t, 1e-4f);
-  EXPECT_NEAR(exits[idx_down].weight, t_in * t_out, 5e-4f)
-      << "Snell 30° transmitted weight: got=" << exits[idx_down].weight << " expected=" << (t_in * t_out)
-      << " (cos_in=" << cos_t << " cos_inside=" << cos_inside << ")";
-}
-
-// =============================================================================
-// GoldenRay_EnergyConservation — Σw_exit ≤ w_initial, never grows
-// =============================================================================
-TEST(MetalGoldenRay, EnergyConservationSingleRay) {
-  if (ShouldSkipMetalTests()) {
-    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
-  }
+  // Byte-identity oracle: mirror the host mt19937 stream (Metal device-gen
+  // PCG cannot align bit-for-bit).
   ForceHostGenForByteIdentity();
 
   auto scene = MakeMetalScene(/*max_hits=*/8, /*ms_layers=*/1);
   auto render = MakeRectangularRender();
 
-  SessionSpec spec;
-  spec.scene = &scene;
-  spec.render = &render;
-  spec.wl = WlParam{ 550.0f, 1.0f };
-  spec.seed = 42;
-
-  RandomNumberGenerator local_rng(0);
-  local_rng.SetSeed(spec.seed);
-  Crystal crystal = MakeCrystal(local_rng, scene.ms_[0].setting_[0].crystal_.param_);
-  float n_idx = crystal.GetRefractiveIndex(spec.wl.wl_);
-
-  auto poly = BuildPolyArrays(crystal);
-  size_t poly_cnt = crystal.PolygonFaceCount();
-  PrismFaces faces = FindTopBotFaces(poly, poly_cnt);
-  ASSERT_NE(faces.top, kInvalidId);
-
-  // 45° oblique ray — exercises a non-trivial Fresnel + may bounce off a
-  // side wall internally; the single-path kernel still cannot create energy.
-  constexpr float kTheta = 45.0f * 3.14159265358979323846f / 180.0f;
-  float sin_t = std::sin(kTheta);
-  float cos_t = std::cos(kTheta);
-  std::vector<float> d = { sin_t, 0.0f, -cos_t };
-  // Entry point fixed at the prism axis on the top face plane (z = +h/2). The
-  // lumice-computed face centroid is a TRIANGLE centroid (not hexagon centre),
-  // offset from the axis — using it shifts the refract path so the ray exits
-  // through a side wall instead of the bottom. Anchor at the axis instead so
-  // the parallel-slab geometry holds.
-  std::vector<float> p = { 0.0f, 0.0f, 0.5f };
-  std::vector<float> w = { 1.0f };
-  std::vector<IdType> tf = { faces.top };
-
+  constexpr size_t kRayCount = 4096;
   HostRayBatch host;
-  host.count = 1;
-  host.d = d.data();
-  host.p = p.data();
-  host.w = w.data();
-  host.tf = tf.data();
-  host.crystal = &crystal;
-  host.refractive_index = n_idx;
-  host.crystal_id = 0;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
 
-  std::vector<ExitRayRecord> exits;
-  size_t exit_count = 0;
+  auto run_one_wl = [&](float wl_nm, uint32_t seed, std::vector<float>& xyz_metal_out,
+                        std::vector<float>& xyz_oracle_out, LayerStats& metal_stats_out,
+                        OracleLayerResult& oracle_out) {
+    SessionSpec spec;
+    spec.scene = &scene;
+    spec.render = &render;
+    spec.wl = WlParam{ wl_nm, 1.0f };
+    spec.seed = seed;
+
+    xyz_metal_out.assign(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
+    {
+      MetalTraceBackend metal;
+      metal.BeginSession(spec);
+      auto h = metal.TraceLayer(RootRaySource::FromHost(host));
+      ASSERT_NE(h, nullptr);
+      metal_stats_out = h->GetLayerStats();
+      XyzImageData img{ xyz_metal_out.data(), render.resolution_[0], render.resolution_[1] };
+      metal.ReadbackImage(img);
+      metal.EndSession();
+    }
+
+    RandomNumberGenerator oracle_rng(0);
+    SeedRngsLikeMetal(oracle_rng, spec.seed);
+    auto roots = BuildFirstLayerRoots(oracle_rng, spec, kRayCount);
+    auto poly = BuildPolyArrays(roots.crystal);
+    oracle_out =
+        OracleTraceLayer(roots.crystal, poly, roots.n_idx, scene.max_hits_, roots.d, roots.p, roots.w, roots.tf);
+
+    xyz_oracle_out.assign(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
+    Rotation camera_rot = MakeCameraRotation(render);
+    ScatterOutgoingToXyz(oracle_out.exit_d.data(), oracle_out.exit_w.data(), oracle_out.exit_w.size(), render,
+                         camera_rot, spec.wl.wl_, xyz_oracle_out.data());
+  };
+
+  // --- 450 nm arm ---
+  std::vector<float> xyz_metal_450;
+  std::vector<float> xyz_oracle_450;
+  LayerStats metal_stats_450;
+  OracleLayerResult oracle_450;
+  ASSERT_NO_FATAL_FAILURE(run_one_wl(450.0f, /*seed=*/42, xyz_metal_450, xyz_oracle_450, metal_stats_450, oracle_450));
+
+  // --- 650 nm arm ---
+  std::vector<float> xyz_metal_650;
+  std::vector<float> xyz_oracle_650;
+  LayerStats metal_stats_650;
+  OracleLayerResult oracle_650;
+  ASSERT_NO_FATAL_FAILURE(run_one_wl(650.0f, /*seed=*/42, xyz_metal_650, xyz_oracle_650, metal_stats_650, oracle_650));
+
+  // Per-wavelength oracle parity — the byte-identity test catches a regression
+  // that feeds the kernel the wrong wl_idx (e.g. all rays read pool slot 0).
+  EXPECT_EQ(metal_stats_450.exit_count, oracle_450.exit_count) << "450 nm exit_count mismatch";
+  EXPECT_LT(RelErr(metal_stats_450.exit_w_sum, oracle_450.exit_w_sum), 5e-4)
+      << "450 nm exit_w_sum: metal=" << metal_stats_450.exit_w_sum << " oracle=" << oracle_450.exit_w_sum;
+  EXPECT_EQ(metal_stats_650.exit_count, oracle_650.exit_count) << "650 nm exit_count mismatch";
+  EXPECT_LT(RelErr(metal_stats_650.exit_w_sum, oracle_650.exit_w_sum), 5e-4)
+      << "650 nm exit_w_sum: metal=" << metal_stats_650.exit_w_sum << " oracle=" << oracle_650.exit_w_sum;
+  for (int c = 0; c < 3; c++) {
+    double sm_450 = ChannelSum(xyz_metal_450, c);
+    double so_450 = ChannelSum(xyz_oracle_450, c);
+    EXPECT_LT(RelErr(sm_450, so_450), 5e-4) << "450 nm channel=" << c << " metal=" << sm_450 << " oracle=" << so_450;
+    double sm_650 = ChannelSum(xyz_metal_650, c);
+    double so_650 = ChannelSum(xyz_oracle_650, c);
+    EXPECT_LT(RelErr(sm_650, so_650), 5e-4) << "650 nm channel=" << c << " metal=" << sm_650 << " oracle=" << so_650;
+  }
+
+  // CMF channel-ratio sanity — the per-wavelength CMF lookup must actually
+  // differ across wl. CMF_Z(450) ≈ 1.77, CMF_Z(650) ≈ 0 (kCmfZ table), so the
+  // Z-channel sum at 450 nm must be vastly larger than at 650 nm. A regression
+  // that froze CMF at a single wavelength (e.g. always wl_pool[0]) would
+  // collapse this ratio. 100× is a deliberately conservative floor: measured
+  // ratio is several orders of magnitude.
+  double z_450 = ChannelSum(xyz_metal_450, 2);
+  double z_650 = ChannelSum(xyz_metal_650, 2);
+  std::cout << "[MEASURE] per-wl CMF Z: Z_450=" << z_450 << " Z_650=" << z_650 << " ratio=" << (z_450 / (z_650 + 1e-12))
+            << std::endl;
+  EXPECT_GT(z_450, 100.0 * (z_650 + 1e-12))
+      << "Z-channel ratio between 450 nm and 650 nm collapsed — per-ray CMF lookup may be frozen at a single wl"
+      << " Z_450=" << z_450 << " Z_650=" << z_650;
+}
+
+TEST(MetalTraceParity, D65IlluminantModeBlendsPerRayWavelengths) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+
+  // larger sample count to suppress D65 per-ray sampling noise (M=64 pool ×
+  // PCG wl_idx). Empirically the D65 vs 650-baseline Z ratio is in the
+  // hundreds; 8192 rays put the standard deviation comfortably below the
+  // floor used by the assertion.
+  constexpr size_t kRayCount = 8192;
+  auto render = MakeRectangularRender();
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  // --- D65 illuminant arm: per-ray wavelength sampled from D65 SPD ---
+  auto scene_d65 = MakeMetalScene(/*max_hits=*/8, /*ms_layers=*/1);
+  scene_d65.light_source_.spectrum_ = IlluminantType::kD65;
+  std::vector<float> xyz_metal_d65(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
   {
+    // Device-gen PCG path: D65 path validates the production routing where
+    // simulator.cpp:672 passes a zero-wl WlParam and the backend samples wl
+    // per ray on device. ForceHostGenForByteIdentity (left over from the
+    // previous test) would force the host root-gen path; reset it here so
+    // this test exercises the production single-worker route.
+    EnableDeviceGenForStatisticalParity();
+
+    SessionSpec spec;
+    spec.scene = &scene_d65;
+    spec.render = &render;
+    spec.wl = WlParam{};  // matches simulator.cpp:674 (zero-wl sentinel)
+    spec.seed = 42;
+
     MetalTraceBackend metal;
     metal.BeginSession(spec);
     auto h = metal.TraceLayer(RootRaySource::FromHost(host));
     ASSERT_NE(h, nullptr);
-    exit_count = metal.ReadbackExitRays(exits);
+    XyzImageData img{ xyz_metal_d65.data(), render.resolution_[0], render.resolution_[1] };
+    metal.ReadbackImage(img);
     metal.EndSession();
   }
 
-  ASSERT_GE(exit_count, 1u) << "ray must produce at least one exit (kernel never absorbs everything)";
-  double sum_w = 0.0;
-  for (size_t i = 0; i < exit_count; i++) {
-    EXPECT_GE(exits[i].weight, 0.0f) << "exit weight must be non-negative (i=" << i << ")";
-    sum_w += static_cast<double>(exits[i].weight);
-  }
-  // Strict no-energy-gain: single-path refract-priority discards reflected
-  // weight at every internal hit, so Σw_exit ≤ w_initial × (1 - R_first) < 1.
-  // Allow a tight float-noise margin above 1.0.
-  EXPECT_LE(sum_w, 1.0 + 1e-4) << "energy gain: Σw_exit=" << sum_w << " > w_initial=1.0 (exit_count=" << exit_count
-                               << ")";
-}
-
-// =============================================================================
-// GoldenRay_MultiMsContinuationNormalIncidence — 2-MS straight-through anchor
-//
-// G3 (scrum-gpu-single-engine-orchestration): the first absolute analytic
-// anchor on transit_root_kernel's device-resident continuation path. The three
-// preceding MetalGoldenRay tests all stop at single-MS slab; multi-MS
-// continuation correctness was previously gated only by legacy-relative corr,
-// which Scrum-267 showed has masked real bugs (+16% energy, orientation
-// undersampling). This test asserts the Fresnel weight chain over 4 face
-// crossings against an INDEPENDENT analytic expectation (no legacy in the
-// expected value).
-//
-// Analytic derivation (all normal incidence, same crystal n_idx both layers):
-//   Layer 0 (ms_mode=1, prob=1.0, no filter):
-//     Inject d=(0,0,-1), w=1.0 at top face.
-//     Hit 1 (top): reflect-at-entry  → cont ray A: d=(0,0,+1),  w=R
-//     Hit 2 (bot): forward transmit  → cont ray B: d=(0,0,-1),  w=T²
-//   Layer 1 (ms_mode=0, final, prob=0.0, no filter):
-//     transit_root_kernel: kNoRandom orientation → R_crystal=Rz(-π) (Rz(-π)
-//     is its own transpose; lon=0+lat=π/2+roll=0 collapses to a flip of x,y).
-//     d_crystal = R^T·d_world preserves z; face selection by projected area
-//     is deterministic (only top/bot have nonzero projection for ±z).
-//     See transit_root_kernel projected-area branch in lumice::gen_root_kernel.
-//
-//     Ray A (d=(0,0,+1), enters via bottom, normal incidence):
-//       hit 1 (bot): reflect → exit (0,0,-1), w = R · R  = R²
-//       hit 2 (top): transmit → exit (0,0,+1), w = R · T² = RT²
-//     Ray B (d=(0,0,-1), enters via top, normal incidence):
-//       hit 1 (top): reflect → exit (0,0,+1), w = T² · R  = T²R
-//       hit 2 (bot): transmit → exit (0,0,-1), w = T² · T² = T⁴
-//   Expected sums:
-//     Σw(0,0,-1) = T⁴ + R²        (dominant; T⁴ ≈ 0.923 for n≈1.31)
-//     Σw(0,0,+1) = 2·R·T²         (≈ 0.0377)
-//     total      = (T²+R)² < 1    (energy conservative — no gain across MS)
-//
-// IMPORTANT prob trap: ReadbackExitRays drops final-layer exits when
-// rng < final_prob. prob=1.0 would drop EVERY final exit. layer-0 prob=1.0
-// makes all layer-0 hits become continuation rays (no mid-exits); the final
-// layer MUST stay at prob=0.0 (the MakeMetalScene default for the last MS).
-// =============================================================================
-TEST(MetalGoldenRay, MultiMsContinuationNormalIncidence) {
-  if (ShouldSkipMetalTests()) {
-    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
-  }
-  ForceHostGenForByteIdentity();
-
-  // Scene: 2 MS layers, max_hits=2 (reflect-at-entry + forward transmit per
-  // continuation pass). layer-0 prob=1.0 → all layer-0 exits become
-  // continuation rays. layer-1 prob=0.0 (MakeMetalScene default for the final
-  // layer) → all kernel exits become outputs.
-  auto scene = MakeMetalScene(/*max_hits=*/2, /*ms_layers=*/2);
-  scene.ms_[0].prob_ = 1.0f;
-  auto render = MakeRectangularRender();
-
-  SessionSpec spec;
-  spec.scene = &scene;
-  spec.render = &render;
-  spec.wl = WlParam{ 550.0f, 1.0f };
-  spec.seed = 42;
-
-  // Crystal is deterministic (kNoRandom h/d/orientation); MakeCrystal consumes
-  // no RNG draws. Both layers use the same crystal params, so n_idx is shared.
-  RandomNumberGenerator local_rng(0);
-  local_rng.SetSeed(spec.seed);
-  Crystal crystal = MakeCrystal(local_rng, scene.ms_[0].setting_[0].crystal_.param_);
-  float n_idx = crystal.GetRefractiveIndex(spec.wl.wl_);
-
-  auto poly = BuildPolyArrays(crystal);
-  size_t poly_cnt = crystal.PolygonFaceCount();
-  PrismFaces faces = FindTopBotFaces(poly, poly_cnt);
-  ASSERT_NE(faces.top, kInvalidId) << "top face not found";
-  ASSERT_NE(faces.bot, kInvalidId) << "bottom face not found";
-
-  // Normal-incidence ray at prism axis on top face — guarantees exit through
-  // bottom on a single-slab pass; on 2-MS, the four analytic paths above.
-  std::vector<float> d = { 0.0f, 0.0f, -1.0f };
-  std::vector<float> p = { 0.0f, 0.0f, 0.5f };
-  std::vector<float> w = { 1.0f };
-  std::vector<IdType> tf = { faces.top };
-
-  HostRayBatch host;
-  host.count = 1;
-  host.d = d.data();
-  host.p = p.data();
-  host.w = w.data();
-  host.tf = tf.data();
-  host.crystal = &crystal;
-  host.refractive_index = n_idx;
-  host.crystal_id = 0;
-
-  // Analytic Fresnel at normal incidence (same n_idx for both layers).
-  float r_normal = (n_idx - 1.0f) / (n_idx + 1.0f);
-  r_normal *= r_normal;
-  float t_normal = 1.0f - r_normal;
-
-  std::vector<ExitRayRecord> exits;
-  size_t exit_count = 0;
+  // --- Single-wl 650 nm baseline arm: same scene shape, Z-channel ≈ 0 ---
+  auto scene_650 = MakeMetalScene(/*max_hits=*/8, /*ms_layers=*/1);
+  std::vector<float> xyz_metal_650(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
   {
+    EnableDeviceGenForStatisticalParity();  // stay on production path
+
+    SessionSpec spec;
+    spec.scene = &scene_650;
+    spec.render = &render;
+    spec.wl = WlParam{ 650.0f, 1.0f };
+    spec.seed = 42;
+
     MetalTraceBackend metal;
     metal.BeginSession(spec);
-
-    // Layer 0: inject deterministic ray; produce continuation rays via transit.
-    auto h0 = metal.TraceLayer(RootRaySource::FromHost(host));
-    ASSERT_NE(h0, nullptr);
-    ASSERT_GE(h0->ContinuationCount(), 1u) << "layer-0 must produce at least 1 continuation ray (prob=1.0, no filter)";
-
-    RecombineSpec rspec;
-    // shuffle=false: preserves continuation-ray order for deterministic
-    // face-selection in transit_root_kernel (Metal v1 also asserts !shuffle).
-    rspec.shuffle = false;
-    auto roots1 = metal.Recombine(std::move(h0), rspec);
-
-    // Layer 1 (final): transit_root_kernel processes continuation rays.
-    auto h1 = metal.TraceLayer(roots1);
-    ASSERT_NE(h1, nullptr);
-
-    exit_count = metal.ReadbackExitRays(exits);
+    auto h = metal.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h, nullptr);
+    XyzImageData img{ xyz_metal_650.data(), render.resolution_[0], render.resolution_[1] };
+    metal.ReadbackImage(img);
     metal.EndSession();
   }
 
-  ASSERT_GE(exit_count, 2u) << "2-MS continuation must produce ≥ 2 exits "
-                               "(≥1 downward from B-transmit + ≥1 upward from A-transmit)";
+  double x_d65 = ChannelSum(xyz_metal_d65, 0);
+  double y_d65 = ChannelSum(xyz_metal_d65, 1);
+  double z_d65 = ChannelSum(xyz_metal_d65, 2);
+  double z_650 = ChannelSum(xyz_metal_650, 2);
+  std::cout << "[MEASURE] D65 vs 650 nm baseline: X_D65=" << x_d65 << " Y_D65=" << y_d65 << " Z_D65=" << z_d65
+            << " Z_650=" << z_650 << " ratio=" << (z_d65 / (z_650 + 1e-12)) << std::endl;
 
-  // --- Absolute analytic assertions (independent of legacy) ---
+  // D65 must light all three channels — a degenerate single-wl regression
+  // (e.g. only 650 nm sampled) collapses Z to ≈ 0.
+  EXPECT_GT(x_d65, 0.0) << "D65 produced no X-channel light — per-ray wavelength sampling may be broken";
+  EXPECT_GT(y_d65, 0.0) << "D65 produced no Y-channel light — per-ray wavelength sampling may be broken";
+  EXPECT_GT(z_d65, 0.0) << "D65 produced no Z-channel light — per-ray wavelength sampling may be broken";
 
-  // Dominant downward path: T⁴ (ray B straight through both crystals) plus
-  // R² (ray A doubly-reflected). Sum is analytically known.
-  float expected_down = t_normal * t_normal * t_normal * t_normal + r_normal * r_normal;
-  float sum_down = SumWeightByDirection(exits, 0.0f, 0.0f, -1.0f);
-  EXPECT_NEAR(sum_down, expected_down, 5e-4f) << "Σw(0,0,-1) = T⁴+R²: got=" << sum_down << " expected=" << expected_down
-                                              << " (n_idx=" << n_idx << " T=" << t_normal << " R=" << r_normal << ")";
-
-  // Upward paths: RT² (ray A through crystal-2 top) + T²R (ray B reflect-at-entry).
-  float expected_up = 2.0f * r_normal * t_normal * t_normal;
-  float sum_up = SumWeightByDirection(exits, 0.0f, 0.0f, +1.0f);
-  EXPECT_NEAR(sum_up, expected_up, 5e-4f) << "Σw(0,0,+1) = 2RT²: got=" << sum_up << " expected=" << expected_up;
-
-  // Energy conservation across MS: total must not exceed initial weight 1.0.
-  double total = 0.0;
-  for (size_t i = 0; i < exit_count; i++) {
-    EXPECT_GE(exits[i].weight, 0.0f) << "negative weight at i=" << i;
-    total += static_cast<double>(exits[i].weight);
-  }
-  EXPECT_LE(total, 1.0 + 1e-4) << "energy gain: Σw_exits=" << total << " > 1.0 (exit_count=" << exit_count << ")";
+  // D65 Z-channel must vastly exceed pure-650-nm Z-channel because D65
+  // includes substantial blue (450 nm CMF_Z ≈ 1.77) while CMF_Z(650) ≈ 0.
+  // Floor (50×) is conservative — measured value is hundreds of × — but
+  // tight enough that "the kernel collapsed to a single red wavelength"
+  // regression goes red.
+  EXPECT_GT(z_d65, 50.0 * (z_650 + 1e-12))
+      << "D65 Z-channel did not exceed 650-nm-only Z-channel by ≥ 50× — per-ray wavelength sampling may be"
+      << " collapsing onto a single wl. Z_D65=" << z_d65 << " Z_650=" << z_650;
 }
 
 }  // namespace

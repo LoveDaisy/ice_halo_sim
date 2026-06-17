@@ -49,7 +49,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 _PROJECT_ROOT = get_project_root()
-_GUI_BIN = _PROJECT_ROOT / "build" / "Release" / "bin" / "LumiceGUITests"
+_GUI_BIN = _PROJECT_ROOT / "build" / "Release" / "bin" / "gui_test"
 _LIB_DIR = _PROJECT_ROOT / "build" / "Release" / "lib"
 _CONFIGS_DIR = _PROJECT_ROOT / "test" / "e2e" / "configs"
 
@@ -99,7 +99,7 @@ def _make_infinite_config(tmp_dir: str) -> str:
 
 
 def _run_gui_perf(config_path: str, metal: bool) -> dict:
-    """Run LumiceGUITests perf scenarios; return parsed steady rps + first_upload.
+    """Run gui_test perf scenarios; return parsed steady rps + first_upload.
 
     Returns {"steady_rps": float, "first_upload_ms": float, "fell_back": bool,
              "no_display": bool, "raw": str}.

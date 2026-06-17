@@ -4,8 +4,11 @@ import os
 from pathlib import Path
 
 from test.e2e.base import LumiceTestCase
+from test.e2e.runner import get_project_root
 
-ERROR_CONFIGS_DIR = Path(__file__).resolve().parent / "configs" / "error"
+# TODO: relocate configs when follow-up task completes
+_CONFIGS_ROOT = get_project_root() / "test" / "e2e" / "configs"
+ERROR_CONFIGS_DIR = _CONFIGS_ROOT / "error"
 
 
 class TestErrors(LumiceTestCase):
@@ -49,7 +52,7 @@ class TestErrors(LumiceTestCase):
     def test_nonexistent_output_dir(self):
         """Lumice -o /nonexistent/dir should fail."""
         cfg = next(
-            (Path(__file__).resolve().parent / "configs").glob("halo_22.json"),
+            _CONFIGS_ROOT.glob("halo_22.json"),
             None,
         )
         if cfg is None:

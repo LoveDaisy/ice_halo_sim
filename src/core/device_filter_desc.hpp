@@ -123,9 +123,9 @@ DeviceFilterDesc BuildDeviceFilterDesc(const FilterConfig& config, const Crystal
 void BuildComplexSubDescs(const ComplexFilterParam& p, const Crystal& crystal, uint8_t symmetry, int sigma_a,
                           bool d_applicable, std::vector<DeviceFilterDesc>& out_sub_descs);
 
-// Build the per-crystal poly-index → face-number byte table. Mirrors the GetFn
-// remap that `CopyContSliceToRootBuf` does on host (metal_trace_backend.mm
-// :1670-1675). Output length == `crystal.PolygonFaceCount()`; each byte is
+// Build the per-crystal poly-index → face-number byte table consumed by the
+// device filter MATCH kernels (see `ApplyGetFn_dev` in `metal_filter_match_src
+// .mm`). Output length == `crystal.PolygonFaceCount()`; each byte is
 // `crystal.GetFn(poly_idx) & 0xFF` (face numbers fit in 7 bits — basal 1/2,
 // prism 3..8, pyramidal 13..18/23..28).
 std::vector<uint8_t> BuildDeviceGetFnBytes(const Crystal& crystal);
