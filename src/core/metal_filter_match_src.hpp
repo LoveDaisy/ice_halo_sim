@@ -1,13 +1,14 @@
-// MSL helper + test-kernel source strings for device filter MATCH.
+// MSL helper source strings for device filter MATCH.
 //
-// scrum-267 task-msl-filter-match-port (plan D3). These strings are the
-// "device counterpart" of FilterSpec::Check / RaypathOrbit::Contains; the
-// parity harness compiles `kFilterMatchHelperSrc + kFilterMatchTestKernelSrc`
-// into a Metal library and validates bit-exactness vs the host. Sub-task 2
-// will additionally splice `kFilterMatchHelperSrc` in front of `kKernelSrc`
-// to wire the gate into the production trace kernel — `kFilterMatchHelperSrc`
-// declares everything `static inline` so the symbols do not collide with the
-// production kernel's namespace.
+// scrum-267 task-msl-filter-match-port (plan D3). `kFilterMatchHelperSrc` is
+// the "device counterpart" of FilterSpec::Check / RaypathOrbit::Contains:
+// `static inline` helpers spliced in front of `kKernelSrc` to wire the gate
+// into the production trace kernel without name collisions. The companion
+// parity harness lives under `test/parity-cross-backend/backend/` and
+// supplies its own test kernel string
+// (`kFilterMatchTestKernelSrc`, declared in
+// `metal_filter_match_test_src.hpp`); the test kernel is no longer linked
+// into liblumice (task-270.8 boundary-hardening).
 
 #ifndef SRC_CORE_METAL_FILTER_MATCH_SRC_H_
 #define SRC_CORE_METAL_FILTER_MATCH_SRC_H_
@@ -25,13 +26,9 @@ namespace lumice {
 // the two MSL constants apart silently.
 constexpr int kDevFilterMatchRecCap = 64;
 
-// `static inline` helpers shared by the parity test kernel AND the future
+// `static inline` helpers shared by the parity test kernel AND the
 // production trace kernel splice. No I/O / kernel entry points here.
 extern const char* const kFilterMatchHelperSrc;
-
-// Self-contained kernel entry that exercises `DeviceFilterMatch` once per
-// thread. Used only by the parity harness — not spliced into production.
-extern const char* const kFilterMatchTestKernelSrc;
 
 }  // namespace lumice
 

@@ -73,10 +73,14 @@ add_executable(parity_test
 if(APPLE)
   # scrum-267 task-msl-filter-match-port: parity harness for device filter MATCH.
   # ObjC++ source (.mm) — needs ARC and the Metal/Foundation frameworks.
+  # task-270.8 boundary-hardening: kFilterMatchTestKernelSrc moved out of
+  # liblumice into metal_filter_match_test_src.mm (parity layer only).
   target_sources(parity_test PRIVATE
-    "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_metal_filter_match_parity.mm")
+    "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_metal_filter_match_parity.mm"
+    "${PROJ_TEST_DIR}/parity-cross-backend/backend/metal_filter_match_test_src.mm")
   set_source_files_properties(
     "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_metal_filter_match_parity.mm"
+    "${PROJ_TEST_DIR}/parity-cross-backend/backend/metal_filter_match_test_src.mm"
     PROPERTIES COMPILE_FLAGS "-fobjc-arc")
   target_link_libraries(parity_test PRIVATE "-framework Metal" "-framework Foundation")
 endif()
