@@ -103,8 +103,13 @@ def _spawn_run(config_name: str, batch: int):
     env["LUMICE_COMMIT_RAY_NUM"] = str(batch)
     env.setdefault("LUMICE_LIB", str(root / "build" / "Release" / "lib" / "liblumice.dylib"))
     env["PYTHONPATH"] = str(root) + os.pathsep + env.get("PYTHONPATH", "")
+    # Invoke this file by absolute path (not `-m module`): after the 270.4 reorg
+    # the test lives under test/parity-cross-backend/backend/, whose hyphenated
+    # parent dirs are not valid Python module identifiers, so `-m` cannot address
+    # it. Running the file directly executes the `__main__` block below; its own
+    # absolute imports resolve via PYTHONPATH=root (set above).
     proc = subprocess.run(
-        [sys.executable, "-m", "test.e2e.test_metal_batch_invariance",
+        [sys.executable, os.path.abspath(__file__),
          config_name, str(batch), str(_SEED), str(_INVARIANCE_RAYS), out.name],
         capture_output=True, text=True, timeout=_TIMEOUT, env=env, cwd=str(root),
     )
@@ -243,7 +248,7 @@ def test_metal_exit_conservation_heavy():
 
 
 # --------------------------------------------------------------------------- #
-# Self-spawning helper (BLOCKER-1 fix): `python -m test.e2e.test_metal_batch_invariance
+# Self-spawning helper (BLOCKER-1 fix): `python <this_file.py>
 #   <config> <batch> <seed> <rays> <out.npy>` runs ONE capi sim in this fresh
 # process (so server.cpp's LUMICE_DISPATCH_RAY_NUM / LUMICE_COMMIT_RAY_NUM
 # statics = <batch>) and dumps raw-XYZ + a STATUS json line.
