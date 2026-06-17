@@ -136,6 +136,7 @@ Valuable design/architecture docs live in `doc/` (tracked). Consult the relevant
   - `trace-backend-frame-lifecycle.md` — Metal frame lifecycle (as-built, multi-MS transit, parity harness methodology).
   - `gpu-single-engine-implementation.md` — **§5 单引擎重写的实现设计 + 上下文锚**（explore-266 de-risk 固化：device 续传 filter 可行/divergence 裁决/device gate 融进 kernel 逐跳 emit；2-scrum 弧；legacy=ground truth + raw-XYZ parity）；后续 GPU 单引擎 scrum 的引用源。
 - **Perf / testing**: `performance-testing.md`, `windows-remote-testing.md`, `xyz-stats-tool.md`
+  - `testing-architecture.md` — **authoritative test-organization spec**: verification-purpose primary axis × subsystem tag, seven layers (unit-correctness / golden-analytic / parity-cross-backend / e2e-correctness / performance / gui / regression-sentinel), the "how to add a test" decision tree, cross-cutting rules (perf denominator = legacy CPU; parity metric-masks-bugs battery; reference ownership), and the layer×subsystem physical-layout blueprint. Read before adding or reorganizing any test.
 - Example config: `examples/config_example.json`
 
 ## Knowledge Base & Working Discipline
