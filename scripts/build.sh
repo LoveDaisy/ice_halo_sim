@@ -18,7 +18,7 @@ build() {
   ret=$?
   if [[ $ret == 0 && $BUILD_TEST == ON ]]; then
     echo "Testing..."
-    ctest -L unit --output-on-failure
+    ctest -L "unit-correctness|parity|golden-analytic" --output-on-failure
     ret=$?
   fi
   if [[ $ret == 0 && $BUILD_TEST == ON && $BUILD_GUI == ON ]]; then
@@ -53,7 +53,8 @@ help() {
   echo "  ./build.sh [-tgbjksxh] <debug|release|minsizerel>"
   echo "    Executables will be installed at build/cmake_install"
   echo "OPTIONS:"
-  echo "  -t:          Build test cases and run unit tests (CTest -L unit)."
+  echo "  -t:          Build test cases and run unit/parity/golden tests"
+  echo "               (CTest -L \"unit-correctness|parity|golden-analytic\")."
   echo "               Combined with -g, also runs LumiceGUITests (requires a display)."
   echo "               Set CI=1 or LUMICE_SKIP_GUI_TESTS=1 to skip LumiceGUITests."
   echo "  -g:          Build GUI application (Dear ImGui + GLFW + OpenGL)."

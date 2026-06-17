@@ -98,7 +98,7 @@ jobs:
         run: cmake --build build --parallel
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure -R LumiceUnitTest
+        run: ctest --test-dir build --output-on-failure -L "unit-correctness|parity|golden-analytic"
 
       - name: Benchmark
         continue-on-error: true
