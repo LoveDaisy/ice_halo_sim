@@ -215,6 +215,53 @@ when it carries the default value.
 
 ---
 
+## §5.1 Device-Side Filter-Match (scrum-267 + explore-266 E4)
+
+> Prior to scrum-267 (and as stated in `seam-design.md §4.5` before its update),
+> filter evaluation was assumed to require host-side crystal configuration and
+> therefore could not be moved to the device. **explore-266 E4 refuted this.**
+
+**What changed**: the `ReduceBuffer` core of raypath filter matching was ported to
+MSL and validated against the full real-host filter check:
+- **1.44M per-ray checks, 0 mismatches** across all filter types (None, Direction,
+  Crystal, Raypath/EntryExit, Complex).
+- **No register pressure impact** (1.3–2.7 GB/s, well within the trace kernel budget).
+
+**Decision breakdown** (per filter type):
+| Filter type | Device match feasibility |
+|-------------|-------------------------|
+| `None` | trivial |
+| `Direction` | trivial (solid-angle comparison) |
+| `Crystal` | trivial (`gate_slot % max_ci == crystal_id`) |
+| `Raypath` / `EntryExit` | `ReduceBuffer` + `GetFn` table + memcmp + length bound |
+| `Complex` | boolean composition of the above |
+
+The key insight: §4.5 of seam-design conflated orbit **construction** (config-dependent,
+host-side, per-session once) with per-ray orbit **matching** (bounded integer kernel,
+fully portable to device). Only the match is hot-path; the orbit table is built once
+and bound as a Metal buffer.
+
+**As-built (scrum-267)**: `DeviceFilterCheck` is inlined into the trace kernel's
+per-ray emit gate (ms_mode==1 branch). Each ray that leaves a crystal is immediately
+gated device-side:
+
+```
+emit gate (in trace kernel, per-ray leaving):
+  1. device prob check (PCG)   — continue vs outgoing vs drop
+  2. DeviceFilterCheck(path[], wl_idx, orbit_table, …)  — filter-fail → drop
+  3. write to cont_d_out / exit seam (surviving rays only)
+```
+
+This gate is **correct-by-construction** for the multi-MS +16% bug: the path
+accumulator `path[]` lives in registers at the moment of gating, identical to
+CPU `CollectData`'s `raypath.rp_` at the same decision point (simulator.cpp:426).
+
+**Parity validation**: `test_metal_filter_match_parity.mm` —
+`kFilterMatchTestKernelSrc` micro-kernel isolates `DeviceFilterCheck` against the
+host `FilterSpec::Check` oracle. All filter types (including Raypath PBD/BD and
+Complex multi-level) verified to 0 mismatch. See also `doc/testing-architecture.md
+§4.2` for the full parity battery methodology.
+
 ## §6 Historical Context
 
 ### task-200 (query-filter-uplift-v2, 2026-05-18) — Routing Decision: Reverted

@@ -44,6 +44,18 @@
 **Phase 8 — GUI 可行性现实核对（#265，本会话）**
 - 裁决(A)：Metal 能胜 legacy 但**无全局单 batch**——轻场景要大/重场景要小（concern #2 跨 regime 坐实）。默认 b128 饿死 GPU。Metal 对重场景拖动痛点有效（4.5× 帧）。
 
+**Phase 9 — §5 单引擎重写弧高潮（#266-268，2026-06-14/17）**
+- **explore-266 de-risk**（2026-06-14）：三关键结论固化——①divergence=伪命题（层内线性链 megakernel，层间 wavefront）；②device 续传 filter 可行（E4：`ReduceBuffer` MSL，1.44M 0 mismatch，seam-design §4.5 悲观误判推翻）；③吞吐须双 lever（大 dispatch + device-resident 续传，正交）。定位 current Metal 多 MS+filter 对 legacy **+16% 能量 bug**（根因=host `CopyContSliceToRootBuf` 解耦 filter）。
+- **scrum-267（Scrum 1，device 续传引擎）**：删 `CopyContSliceToRootBuf`，新建 `transit_root_kernel` device 路径；emit gate 内联 device filter-match（DeviceFilterCheck）；raw-XYZ parity 8/8 GREEN（+16% 自愈 correct-by-construction）；occupancy 704→640（DR-3 后，benign）。PR #127，合 main 2026-06-14。
+- **scrum-268（Scrum 2，单引擎编排）**：核心结果：
+  - **CLI 引擎 9.5× legacy**（单引擎 + dispatch 32768 甜点）。
+  - **GUI steady 2.07× legacy**（G4 北极星验收 GREEN，reconstruct 真路径）。
+  - **DR-3 波长 per-ray**：推翻 DR-1 per-tg（multi-MS 续传原子压缩使 tg_id 跨层失稳）→ host 预采 WlPool，光子终生携带 `wl_idx`（见 `doc/trace-backend-frame-lifecycle.md §8`）。
+  - **concern #2 已解**：`LUMICE_BATCH_RAY_NUM` 拆为 `LUMICE_DISPATCH_RAY_NUM`（GPU dispatch 粒度）+ `LUMICE_COMMIT_RAY_NUM`（GUI commit 粒度）双旋钮（268.4）。
+  - **+16% bug correct-by-construction 修复**：随 `CopyContSliceToRootBuf` 删除自愈，parity matrix 10/10。
+  - **吞吐天花板 = poller**：引擎 9.5× 在 GUI 仅兑现 2.07×，差距=poller 每轮整幅 XYZ 回读（20ms，固定开销）——非 consumer-bound（白盒证伪）。
+  - PR #129，合 main 2026-06-17。
+
 ### 演进的元模式
 1. **战略意图始终是"GPU 求吞吐、两步走"**，但 #256 起逐步滑向"在开发机 Mac GUI 上把 Metal 调好"。
 2. **结论反复自我修正**：scrum-260"device-gen 恒默认"→#261"b128 净亏"→#263"regime 2D"→#264"2.40×(vs Metal)"→#265"Metal 输 GUI→b128 饿死→重场景 concern #2"。每步纠正前一步的过度外推，**基线/regime 不断漂移**。
@@ -69,6 +81,11 @@
 | gen regime 2D | 大 batch device-gen 18.5M=2× 天花板 | #263 | — |
 | 融合 | 2.41×（vs 融合前 Metal） | #263-264 | 分母非 legacy |
 | GUI 可行性 | 轻场景大 batch 2-5× 胜；重场景 concern #2 咬人 | #265 | — |
+| device filter-match | 全类型（含 Raypath/Complex）1.44M 0 mismatch；seam §4.5 悲观判推翻 | #266 E4 | M2 统一内存 |
+| CLI 引擎吞吐 | 单引擎 + dispatch 32768 → **9.5× legacy**（重场景 ms3） | #267-268 | M2 Max |
+| GUI steady 吞吐 | 真实 GUI reconstruct 路径 → **2.07× legacy** | #268 G4 | M2 Max |
+| dispatch 甜点 | **32768**（backend-aware 默认）；b128 饿死 GPU | #268.6 | M2 Max |
+| poller 天花板 | 引擎 9.5× → GUI 仅 2.07×；差距=poller 整幅回读 20ms 固定开销 | #268 | M2 Max |
 
 ### 已探索方向 & 裁决
 - 可移植 kernel 语言 → **拒**（藏寄存器驻留杠杆）。

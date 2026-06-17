@@ -101,35 +101,51 @@ mis-oriented ring.
 
 ### 4.3 Multi-MS inter-layer transit
 
+> **⚠️ Superseded by scrum-267 (device-resident continuation engine, 2026-06-14).**
+> The host-side `CopyContSliceToRootBuf` path described in earlier revisions of
+> this section has been **deleted** (scrum-267 task-device-resident-continuation).
+> Inter-layer transit is now entirely device-side via `transit_root_kernel`.
+> The frame-lifecycle invariant (§2) is unchanged — the mechanism moved to device.
+
 Two halves, mirroring the CPU chain (§3):
 
-1. **In-kernel world-return** (continuation export, `:189-196`): before writing a
-   continuation ray to the output buffer, the kernel applies `world = m · v` to
-   its direction (`wcx/wcy/wcz`). The continuation buffer therefore holds
+1. **In-kernel world-return** (continuation emit gate, `metal_trace_backend.mm`
+   ms_mode==1 branch): when the trace kernel decides a ray must continue to the
+   next MS layer, it applies `world = m · v` to the local-frame exit direction
+   before writing `cont_d_out[tid]`. The continuation buffer therefore holds
    **world-space** directions, satisfying invariant 6 at the layer boundary.
-   (The exported `out_p` / `out_tf` are placeholders — they are re-derived in the
-   next step.)
-2. **Host resample-to-new-local** (`CopyContSliceToRootBuf`): for the next layer
-   it reuses the **CPU primitives** from `trace_ops.hpp` — `InitRay_rot(rng,
-   axis, …)` resamples a fresh per-ray `crystal_rot_` (`:631`), `ApplyInverse`
-   rotates the world direction into the new local frame, and
-   `InitRay_p_fid(current_crystal, …)` resamples the entry point + hit face on
-   the **next** crystal (`:635`). The new rotation is uploaded to `root_rot_buf`
-   (`:652`). `current_crystal` is the destination-layer crystal, already resolved
-   by `ResolveLayerCrystalForCi` before this call; `rng` is the session RNG
-   member, so the resample is deterministic under `SessionSpec::seed`.
+   The ray's lifetime wavelength index `wl_idx` is also written to
+   `cont_wl_idx_out[tid]` (DR-3, scrum-268.8 — see §8).
+   (`out_p` / `out_tf` slots in the old host-transit interface are now retired
+   dead writes, documented in the kernel source.)
+
+2. **Device resample-to-new-local** (`transit_root_kernel`, `:957`): a device
+   kernel (scrum-267) replaces the former host `CopyContSliceToRootBuf`. It:
+   - Samples a **fresh per-ray crystal orientation** on-device (same PCG +
+     `sample_lat_lon_roll` as `gen_root_kernel`) keyed by a derived `transit_seed`
+     + monotone `transit_ray_count_` counter (unique per layer/ci/batch/tid across
+     the full Run() PCG range).
+   - Reads the **world-space** continuation direction from `cont_d_in[tid]` and
+     rotates it into the new crystal-local frame via `apply_inverse_mat9`.
+   - Triangle area-weighted picks the **new entry point + face** on the destination
+     crystal (`:1002-1040`), writing `root_p` / `root_tf`.
+   - Pass-through copies `cont_wl_idx_in → root_wl_idx_out` so the wavelength
+     tag survives the layer hop intact (DR-3).
+
+   After `transit_root_kernel`, `root_d` / `root_p` / `root_tf` / `root_rot` /
+   `root_wl_idx_out` are fully populated with zero host-side per-ray work; the
+   host only dispatches the kernel and reads back the continuation counter.
 
 This is single-MS and multi-MS derived from **one rule** (leave-kernel ⇒ world),
 not two patches.
 
-### 4.4 Performance note — async rotation pool (NOT implemented)
+### 4.4 Performance note — async rotation pool (moot since scrum-267)
 
-DESIGN D6 proposes an async producer/consumer pool to overlap host orientation
-sampling with device tracing for multi-MS. **It is not implemented** — 253.2
-landed correctness-first with a synchronous per-layer host resample (§4.3). The
-pool is a deferred optimization (it would fold the host-sampling cost behind the
-trace; constraints: deterministic `ray-index→rotation` mapping + don't starve the
-device). Treat §4.3 as the current behaviour.
+DESIGN D6 proposed an async producer/consumer pool to overlap host orientation
+sampling with device tracing for multi-MS. **It was never implemented**, and is
+now **moot**: scrum-267 moved orientation sampling entirely to `transit_root_kernel`
+on-device, so there is no host-side sampling to overlap. §4.3 now describes the
+current behaviour (device-resident); D6 is a superseded design note.
 
 ## 5. Parity harness methodology (how this is guarded)
 
@@ -172,3 +188,27 @@ ring scene). The `ΣY/kCmfY` total-landed-weight formula
 None. The frame lifecycle is entirely internal to `core`. `src/include/lumice.h`,
 `src/gui/`, and `src/server/` are unchanged and unaware of which backend or frame
 convention is in use (seam invariant 5).
+
+## 8. Per-ray wavelength (DR-3, scrum-268.8)
+
+**Decision**: wavelength is a **per-ray lifetime property** (not per-batch or per-
+threadgroup). Rationale: per-threadgroup was the original plan (DR-1(b)), but was
+rejected because multi-MS continuation compresses ray populations — a photon's
+`tg_id` becomes unstable across layer hops, so per-tg wavelength assignment would
+let a photon change refraction index mid-path.
+
+**Mechanism** (as-built, scrum-268.8):
+- A `WlPool` of `M` entries (`{n, spd_weight, cmf}`) is pre-sampled on the host
+  once per session (CPU-side Sellmeier evaluation, zero device Sellmeier).
+- `gen_root_kernel` assigns each root ray a `wl_idx` from the pool
+  (`wl_idx = global_idx % M`).
+- The trace kernel reads the pool entry via `wl_idx` for per-ray refraction index.
+- On continuation emit the `wl_idx` is written to `cont_wl_idx_out[tid]`.
+- `transit_root_kernel` copies `cont_wl_idx_in → root_wl_idx_out` (§4.3, step 2)
+  so the wavelength tag is preserved across all MS layers.
+- The consumer accumulates XYZ using the per-ray CMF weight from the pool entry.
+
+`M` is resolved from `LUMICE_WL_POOL_SIZE` (env var, read once at `BeginSession`;
+`WlPoolSize()` exposes it for tests). A static analysis bug that would have
+produced a flat spectrum (weight=0) on the `cpu_backend` was caught by the
+anti-silent-regression hard gate deployed in §2's `IsOutgoing` path.

@@ -3,12 +3,42 @@
 > 本文是 §5 单引擎 GPU simulator **重写**的实现设计与上下文锚，供后续 scrum 引用。
 > 配套（读这些获取完整推理）：
 > - `doc/seam-design.md` —— §5 目标架构蓝图（§3.6 原始之罪 / §4.5 filter 出口 / §5 统一 seam 形态）。
-> - `doc/gpu-route-history.md` —— GPU 迁移 #250→266 全程回顾。
+> - `doc/gpu-route-history.md` —— GPU 迁移 #250→268 全程回顾（§9 = 单引擎弧高潮）。
+> - `doc/trace-backend-frame-lifecycle.md` —— Metal 帧生命周期 as-built（§8 = DR-3 波长）。
+> - `doc/testing-architecture.md §4.2` —— parity metric-masks-bugs battery 方法论（cross-seed + 能量守恒 + golden 锚 + 人眼）。
 > - `scratchpad/explore-gpu-single-engine/{SUMMARY,insights,experiments}.md` —— explore-266 de-risk 细节（gitignored，本文固化其 durable 结论）。
 
-## 1. 状态与目标
+## 0. ⭐ As-Built 状态（scrum-267 + scrum-268 完成，2026-06-17）
 
-- **当前**：Metal 是 GUI **opt-in**（`use_metal_backend` 复选框，默认关）；走 **12-worker + host-side MS 续传**（`metal_trace_backend.mm` kernel 写 continuation，host `CopyContSliceToRootBuf` 逐光线做 filter+prob+frame-transit）。这是 258-265 把已 de-risk 零件**焊进 legacy 结构**的产物，非 §5。
+> 本节为接手须知。两个 scrum 均已合 main；下方 §1-§7 保留设计推理原文。
+
+| 里程碑 | 数值 |
+|--------|------|
+| **CLI 引擎吞吐**（重场景 `ms3_multi_crystal_complex_filter`） | **9.5× legacy**（Metal 单引擎 + dispatch 32768） |
+| **GUI steady 吞吐**（真实 GUI regime，reconstruct 路径） | **2.07× legacy**（G4 验收门 GREEN） |
+| **GUI first_upload**（median） | **73ms**（< 150ms 冻结阈） |
+| **dispatch 甜点** | **32768**（backend-aware 默认；`LUMICE_DISPATCH_RAY_NUM`） |
+| **commit↔batch 解耦** | ✅ `LUMICE_DISPATCH_RAY_NUM` + `LUMICE_COMMIT_RAY_NUM` 双旋钮（concern #2 已解） |
+| **parity matrix** | **10/10**（含 D65 illuminant + DR-3 波长） |
+| **occupancy**（trace_layer_kernel PSO） | **640**（benign：R1 不触发，见 §6.1 最终裁决） |
+| **PR** | #127（scrum-267）+ #129（scrum-268），均已合 main（2026-06-17） |
+
+**已删除的遗留结构**（§5.1 reuse/discard 账本承诺的删法）：
+- `CopyContSliceToRootBuf`（host-side 续传）→ 删，由 `transit_root_kernel` 取代。
+- 12-worker queue-per-Simulator 编排 → 删，`server.cpp` 重构为单引擎。
+- `LUMICE_BATCH_RAY_NUM` 双重身份 → 拆为 `LUMICE_DISPATCH_RAY_NUM` + `LUMICE_COMMIT_RAY_NUM`（BATCH 保留为 COMMIT 的 backward-compat fallback，已废弃）。
+- ms_mode==1 "半续传"分支（写占位 out_p=centroid） → 重写为 device emit-gate。
+
+**额外修复（correct-by-construction）**：
+- +16% 多 MS filter 能量 bug（根因=host `CopyContSliceToRootBuf` 解耦 filter，随删除自愈）。
+- server 构造函数潜伏 bug（legacy CPU 巨型未切块 consume 假象，268.6 白盒证伪后修）。
+
+## 1. 状态与目标（设计期原文）
+
+> **接手注意**：本节描述 scrum-267/268 之前的出发状态（设计期），已是历史。
+> as-built 见 §0。
+
+- **当时**：Metal 是 GUI **opt-in**（`use_metal_backend` 复选框，默认关）；走 **12-worker + host-side MS 续传**（`metal_trace_backend.mm` kernel 写 continuation，host `CopyContSliceToRootBuf` 逐光线做 filter+prob+frame-transit）。这是 258-265 把已 de-risk 零件**焊进 legacy 结构**的产物，非 §5。
 - **legacy CPU 始终是 GUI 默认实走路径 + 永久 ground truth**（perf 基线 + 正确性参照）。
 - **目标**：实现 seam-design §5 —— 单引擎、三时钟解耦（几何采样 / trace 派发 / 图像回读各自频率）的 wavefront GPU simulator，替换 12-worker + host-side MS 编排。CPU 不重设计，留作可信 oracle。
 
@@ -81,7 +111,7 @@
 
 ### 6.1 Scrum 1 结转的 Scrum 2 输入（267.2 fused-emit-gate 产出，2026-06-14）
 
-- **⭐ R1 option B 评估（occupancy 704 < 1024 基线）**：267.2 的 emit gate 把 `trace_layer_kernel` 生产 PSO 的 `maxTotalThreadsPerThreadgroup` 从 **1024 压到 704**（gate 加 `path_local[64]` + DeviceFilterCheck 调用图，寄存器压力实增；#250 标的"唯一真风险"首次在融合后兑现）。owner 裁决 Scrum 1 接受 704（C2：Scrum 1 验收=correctness 非吞吐；occupancy 不影响正确性，parity 全绿）。**Scrum 2 必做**：在 multi-MS+filter 上对 legacy 实测吞吐——**若吞吐相对 legacy 恶化 > 阈值（建议先定 ~10%），则触发 R1 option B = 把 filter-gate 从 trace kernel 拆成独立 wavefront dispatch 恢复并行度**；若无恶化，可将 occupancy 回归门从临时的 640 升到实测基准 704。**此触发判据须落成 Scrum 2 planning 的必测项（非 TODO），否则会悬空**（code-review-02 Suggestion 1/4）。
+- **⭐ R1 option B 最终裁决（scrum-268.6 实测，2026-06-17）**：267.2 的 emit gate 把 `trace_layer_kernel` PSO 的 `maxTotalThreadsPerThreadgroup` 从 1024 压到 704（再到 640，DR-3 波长后）。**Scrum 2 实测结果：R1 不触发（benign）。** 理由：`ms3_multi_crystal_complex_filter`（最重场景）Metal 单引擎实测 CLI 吞吐 **9.5× legacy**，GUI steady **2.07× legacy**——occupancy 640 对吞吐无恶化，无需触发 option B（拆 filter-gate 为独立 wavefront dispatch）。occupancy 回归门固定在 640（当前实测基准），由 `TraceLayerKernelMaxThreadsForTest()` 守卫。**R1 option B 归 backlog（CUDA phase-2 开篇时重估，离散显存场景可能更敏感）。**
 - **gate cleanup（Scrum 2 顺带）**：①`DeviceFilterCheck` 第 7 形参在 `kFilterMatchHelperSrc` 定义层仍名 `crystal_id`，正确实参是 `gate_slot`（= `ms_layer_idx*max_ci+crystal_id`）——建议改名 `orbit_slot` 使 API 自描述（当前靠调用点注释保护，不可扩展）；②`gate_seed` 在 `(ms_layer_idx=0,crystal_id=0)` 退化为 `gen_seed_`、与 gen_root PCG 种子重叠（corner case，M5 parity 未受影响）——加非零 XOR 偏置消除。
 
 ## 6.2 反漂移纪律（D1-D4，贯穿 §5 弧的实施纪律）
@@ -100,3 +130,38 @@
 - **ground truth = legacy CPU 渲染**（raw-XYZ 优先于 sRGB）。oracle 另可用 CpuTraceBackend 独立重实现（#253 范式）抓 kernel 数值/时序错。
 - parity 全程统计级（累加图像 / raw-XYZ block-mean corr），非逐光线 identity（mt19937 流不可对齐，PCG 同分布）。
 - perf 基线 = legacy CPU（GUI 实走路径），勿用 `LUMICE_TRACE_BACKEND=cpu_backend`（慢 2.5× 辅助产物）。
+- **⚠️ parity metric-masks-bugs battery**：corr 单指标两次放过真 bug（267.3 欠采样 + 268.8 平坦谱静默）。所有 parity gate 必须组合：**cross-seed 自洽 + 能量守恒 + golden 绝对锚 + 人眼核查 + revert 反验**。详见 `doc/testing-architecture.md §4.2`（权威规范，不在此处重复）。
+
+## 8. DR-3：per-ray 波长决策链（scrum-268.3/268.8）
+
+> 波长设计经历了三轮决策（DR-1→DR-2→DR-3），最终落点与原计划不同。
+
+**DR-1（原计划）**：per-threadgroup 波长——所有位于同一 threadgroup 的光线共享同一折射波长（MSL uniform + tg 内协作读）。
+
+**DR-1 被推翻（owner 白盒 + runner 自阻塞双向发现）**：
+- 多 MS 续传原子压缩光线数——光子的 `tg_id` 在层间变化（tg 内存活数不固定，续传打包重排），per-tg 波长使光子中途换折射率 → 路径计算错误，非方差问题。
+- runner 自阻塞：尝试把 per-batch `wl` 穿过 exit seam 发现 per-batch wl 无法跟着续传存活到下一层。
+- 两端独立发现合流，owner 拍板 DR-3。
+
+**DR-2(B)（过渡）**：host 预采波长池 + 上传，device 仅读 index（零 device Sellmeier，满足 §3.7 合规）。
+
+**DR-3（最终，as-built）**：波长是**每个光子的终生属性**（`wl_idx`，从 root-gen 到最终 consumer 贯穿全路径）：
+- `gen_root_kernel` 按 `global_idx % M` 分配 `wl_idx`（均匀覆盖 WlPool）。
+- trace kernel 按 `wl_idx` 从 WlPool 读折射率（寄存器驻留，零全局访问额外税）。
+- emit gate 把 `wl_idx` 写进 `cont_wl_idx_out`。
+- `transit_root_kernel` pass-through `cont_wl_idx_in → root_wl_idx_out`（见 `doc/trace-backend-frame-lifecycle.md §4.3/§8`）。
+- consumer 用 per-ray CMF 权重积分 XYZ。
+
+**静默失效抓捕**（硬门案例，see §2.4 正确性）：Step 9 gate 误放在 `use_backend` 分支，使 cpu_backend 路径 `curr_wl_` 保持 0（无池），产全黑图像——触发反静默回退硬门（`!per_ray_wl && !outgoing_d_.empty() && curr_wl_ < 1.0f → assert`）当场抓住。没有硬门，bug 静默产平坦谱（plausible，不崩）继续藏。
+
+## 9. 单引擎 as-built：关键发现与弯路
+
+> 接手：这些是 scrum-268 最值得学的教训，避免重做。
+
+1. **"consumer-bound"误判**（268.6）：初测 GUI steady 81K vs legacy 729K → 误判 consumer 是瓶颈。实为：server bug（legacy 巨型未切块 consume）+ GUI 预算稀释。白盒证：benchmark consumer ~1.3µs/batch，健康 ~1.0µs/batch——GPU **非** consumer-bound，差距来源=poller 每 20ms 整幅图回读 + GPU 上传（非 consumer）。
+
+2. **G2 子进程隔离 BLOCKER**（268.2）：in-process static cache 使 batch 变化无效，batch 不变性测试结论全错——改子进程隔离后才得到正确的"batch 有小幅真实依赖（cross corr 0.987-0.997 vs self-noise 0.9998，几何采样粒度效应）"。
+
+3. **独立验证抓 runner 漏报回归**（268.7）：runner 未验证对 CLI legacy 单引擎的影响，owner 亲手发现 legacy 慢 6×（1-worker 编排=设计预期代价，非 regression）。
+
+4. **吞吐天花板：poller 20ms 整幅回读**：引擎 9.5× 在 GUI 仅兑现 2.07×，差距=poller 每轮整幅 XYZ 回读（固定开销，与 dispatch 大小无关）。已记 backlog（partial-readback / async upload 为下一步优化方向）。
