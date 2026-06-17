@@ -54,13 +54,15 @@ _HEAVY_CONFIGS = [
 ]
 
 # C2 sentinel floor: ratio below this = catastrophic regression / near-hang.
-# Deliberately loose (0.20, not 0.30): `rays_per_sec` is a SINGLE wall-clock
-# sample per run (main.cpp:116-134, no warm-up/median), so the ratio is a noisy
-# product of two single samples. The landed engine is ~0.58x; a 0.20 floor keeps
-# a generous margin against thermal/CI-host noise while still tripping on a true
-# collapse (<1/3 of legacy) or a hang. Tightening this needs a median-of-N
-# benchmark CLI (out of scope). See code-review MINOR-2.
-_SANITY_FLOOR = 0.20
+# `rays_per_sec` is a SINGLE wall-clock sample per run (main.cpp:116-134, no
+# warm-up/median), so the ratio is a noisy product of two single samples.
+# After scrum-268's single-engine large-dispatch landing, Metal(default) is
+# consistently 3.5-5.5x legacy on the heavy multi-MS+filter scenes (scrum-268.6
+# sweep + task-270.6 smoke test at 5.52x). A floor of 2.0x is conservative but
+# meaningful: it trips on a true engine collapse or near-hang while tolerating
+# per-run thermal noise (3.5x floor × thermal variance still >> 2.0x). For a
+# systematic median+CoV evaluation, use `scripts/bench_throughput.py`.
+_SANITY_FLOOR = 2.0
 _GATE = 1.0           # D1 pre-registered gate: Metal multi >= legacy (xfail until Scrum 2)
 _TIMEOUT = 240        # --benchmark is bounded (poll-until-IDLE); guard against hangs
 

@@ -125,9 +125,13 @@ naming convention / physical location**. Cadence values: `CI-fast` (every push, 
   baseline (see §4.1). Report `median` + `CoV` across repeats.
 - **Threshold convention**: ratio-to-legacy-CPU floor; statistics reported with `median` and
   coefficient of variation; floors tightened once a committed bench harness provides `CoV`.
-- **Cadence**: `PR` (cheap sentinels) and `nightly` (full bench sweep). The committed bench
-  harness is task 270.6.
-- **Naming**: `test_<backend>_throughput.py`; `scripts/bench_*` for the committed harness.
+- **Cadence**: `PR` (cheap sentinels — e.g. `test_metal_throughput`) and `nightly` (full bench
+  sweep via `scripts/bench_throughput.py`, landed task-270.6). The committed harness is the
+  standard tool for any `--benchmark`-based throughput claim in this repo; ad-hoc
+  one-off scripts in `scratchpad/bench/` are not authoritative.
+- **Naming**: `test_<backend>_throughput.py`; `scripts/bench_throughput.py` is the committed
+  harness (matrix = {legacy, cpu_backend, metal} × heavy configs × Metal dispatch sweep,
+  median+CoV, ratio denominator locked to legacy CPU).
 - **Physical location**: target-state `test/performance/`; current `test/e2e/` (throughput
   sentinel) + the CI `Benchmark` step (`--benchmark -f examples/bench_config.json`).
 - **Boundary note**: GUI frame-latency / responsiveness tests (`test_gui_perf`) are **not** in
