@@ -6,6 +6,7 @@ testpaths = [
     "test/gui",
     "test/regression-sentinel",
 ]
+pythonpath = ["."]
 addopts = "-p no:xdist"
 markers = [
     "slow: requires shared-lib build; excluded from CI fast path",
