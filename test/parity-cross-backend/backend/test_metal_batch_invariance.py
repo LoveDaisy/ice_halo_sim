@@ -22,11 +22,14 @@ that split.
      "one geometry per batch" severity) and PRINTS the cross-vs-self gap as the
      explore-3 input.
 
-  2. **Exit conservation across the seam (D1 pre-registered — xfail until Scrum 2).**
-     The worst-case `ms3_mixed_pyramid_heavy` overflows the fixed exit buffer
-     (exit_cap=12288) under deep continuation and silently CLAMPS (E0). Root rays
-     stay conserved (sim_rays == ray_num); the loss is at the exit seam. Scrum 2's
-     incremental drain must eliminate the clamp.
+  2. **Exit conservation across the seam (D1 — ACTIVE since Scrum-268.4 drain).**
+     The worst-case `ms3_mixed_pyramid_heavy` used to overflow the fixed exit
+     buffer (exit_cap=12288) under deep continuation and silently CLAMP (E0).
+     Scrum 2 task-268.4 (commit↔batch decoupling + per-layer incremental drain)
+     eliminated the clamp. Gate is now active: any reappearance of the
+     "exit-ray overflow" log line on this scene fails the test. Root-ray
+     conservation (sim_rays == ray_num) was already an active assert and
+     stays so — together they pin both halves of the seam.
 
 CRITICAL (code-review BLOCKER-1): `LUMICE_DISPATCH_RAY_NUM` is read into a
 function-local `static const` in server.cpp's GenerateScene, frozen ONCE per
@@ -185,9 +188,11 @@ def test_metal_batch_invariance(config_name):
 @pytest.mark.slow
 def test_metal_exit_conservation_heavy():
     """Worst-case exit conservation: the deep-continuation heavy scene must not
-    silently drop exit rays. Today it overflows exit_cap=12288 and clamps (E0);
-    Scrum 2's incremental drain must eliminate it. Root rays stay conserved —
-    this pins the loss to the exit seam, not root generation.
+    silently drop exit rays. Pre-Scrum-2 this overflowed exit_cap=12288 and
+    clamped (E0); Scrum-268.4's incremental drain eliminated it. Gate is now
+    ACTIVE — any re-introduction of the overflow fails the test. Root rays
+    stay conserved (sim_rays == ray_num) — this pins the loss to the exit
+    seam, not root generation.
     """
     cfg = _CONFIGS_DIR / "ms3_mixed_pyramid_heavy.json"
     with open(cfg) as f:
@@ -223,20 +228,18 @@ def test_metal_exit_conservation_heavy():
         f"root ray conservation broken: sim_rays={stats.group(1)} != {requested}"
     )
 
-    # --- D1 pre-registered exit-conservation gate (xfail until Scrum 2 drain) ---
-    # Note: depends on the overflow message being emitted at the default log level
-    # to stdout/stderr; we scan both. If absent, `overflowed` reads False and the
-    # gate would spuriously "pass" — acceptable as the drain landing is what makes
-    # it legitimately stop overflowing.
+    # --- D1 ACTIVE exit-conservation gate (Scrum-268.4 drain landed) ---
+    # The overflow message is emitted at the default log level to stdout/stderr;
+    # we scan both. Active since 2026-06-17 (task-270.7): Scrum 2's incremental
+    # drain made `overflowed` reliably False on this worst-case scene, so any
+    # reappearance is a regression in the seam.
     overflowed = bool(_RE_OVERFLOW.search(log))
     print(f"[exit-cons] ms3_mixed_pyramid_heavy: exit_overflow={overflowed} (gate: no overflow)")
-    if overflowed:
-        pytest.xfail(
-            "ms3_mixed_pyramid_heavy overflows the fixed exit buffer (exit_cap=12288) "
-            "and silently clamps exit rays under deep continuation. Scrum 2's "
-            "incremental drain / commit<->batch decoupling must eliminate the clamp. "
-            "D1 PRE-REGISTERED gate, not a failure."
-        )
+    assert not overflowed, (
+        "ms3_mixed_pyramid_heavy overflowed exit_cap=12288 — Scrum-268.4's "
+        "incremental drain regressed. Re-introduce clamp-side observability "
+        "(see commit fb722c20 for the drain design) before relaxing this gate."
+    )
 
 
 # --------------------------------------------------------------------------- #

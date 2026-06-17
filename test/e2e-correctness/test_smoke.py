@@ -34,6 +34,15 @@ PSNR_THRESHOLDS = {
     "multi_lens_02": 35.4,
     "multi_lens_03": 40.3,
     "multi_scatter_01": 26.6,
+    # orthographic_180: D65 + uniform full-random orientation + 1M rays. Per-run
+    # PSNR (measured on macOS): run-to-run 22.74/22.76 dB (3 runs). Threshold
+    # = min - 3 dB ≈ 19.7 → set 19.5 dB (rounded down to 0.5 dB precision) to
+    # tolerate cross-platform sampling noise (reference generated on macOS,
+    # CI runs on Linux). Re-introduces orthographic-projection e2e coverage
+    # lost when scrum-268.6 scoped smoke to "configs with reference images"
+    # (task-270.7 / explore-269 P0). A structural regression (frame bug,
+    # wrong projection) drops PSNR far below this floor.
+    "orthographic_180_01": 19.5,
     "parhelion_01": 35.0,
     "pyramid_01": 28.8,
     "render_opts_01": 30.3,
