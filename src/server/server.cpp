@@ -696,10 +696,9 @@ void ServerImpl::ConsumeData() {
     }
     return kDefaultRayNum;
   }();
-  // task-270.8 boundary-hardening: emit a one-time deprecation WARN whenever
-  // the legacy env name is in use. Warn unconditionally on detection — even
-  // when LUMICE_COMMIT_RAY_NUM is also set — so users migrating off old
-  // scripts always get migration guidance (per plan/review).
+  // Emit a one-time deprecation WARN whenever the legacy env name is in use.
+  // Warn unconditionally — even when LUMICE_COMMIT_RAY_NUM is also set — so
+  // users migrating off old scripts always get migration guidance.
   if (std::getenv("LUMICE_BATCH_RAY_NUM") != nullptr) {
     static std::once_flag batch_ray_num_warn_once;
     std::call_once(batch_ray_num_warn_once, [this]() {

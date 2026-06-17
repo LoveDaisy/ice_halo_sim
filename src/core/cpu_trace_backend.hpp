@@ -47,11 +47,9 @@ class CpuTraceBackend : public TraceBackend {
   void BeginSession(const SessionSpec& spec) override;
   LayerHandlePtr TraceLayer(const RootRaySource& roots) override;
   RootRaySource Recombine(LayerHandlePtr handle, const RecombineSpec& spec) override;
-  // [TEST-ONLY] XYZ image accessor (scrum-258.1 Step 5: no longer on the
-  // TraceBackend production seam). Used by the CPU-vs-Metal parity harness
-  // — keep callers on the concrete type, not a polymorphic base reference.
-  // task-270.8 boundary-hardening: marker promoted to enforce edge — not on
-  // any production code path.
+  // [TEST-ONLY] XYZ image accessor — no longer on the TraceBackend production
+  // seam. Used by the CPU-vs-Metal parity harness; keep callers on the
+  // concrete type, not a polymorphic base reference.
   void ReadbackImage(XyzImageData& out);
   // Exit seam (scrum-258.1+): buffer-egress contract — see TraceBackend.
   // Single-MS: returns the final layer's outgoing rays. Multi-MS semantics
