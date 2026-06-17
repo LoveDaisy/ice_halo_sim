@@ -55,6 +55,8 @@ CONFIGS = {
 }
 
 # (label, LUMICE_TRACE_BACKEND value).  None => env unset (legacy CPU).
+# IMPORTANT: "legacy" must be first — subsequent backends use legacy_multi_median
+# as their ratio denominator, which is only set once the legacy row runs.
 BACKENDS = [
     ("legacy", None),
     ("cpu_backend", "cpu_backend"),
@@ -101,7 +103,12 @@ def run(config_path: Path, backend_env: str | None, dispatch_num: int | None) ->
         cmd, capture_output=True, text=True, env=env, timeout=RUN_TIMEOUT_SEC
     )
     out = proc.stdout + proc.stderr
-    benches = [json.loads(m.group(1)) for m in BENCH_RE.finditer(out)]
+    benches = []
+    for m in BENCH_RE.finditer(out):
+        try:
+            benches.append(json.loads(m.group(1)))
+        except json.JSONDecodeError:
+            pass  # malformed [BENCHMARK] line → INCOMPLETE note below
     by_mode = {b["mode"]: b["rays_per_sec"] for b in benches}
 
     routed_metal = ROUTE_METAL in out
@@ -276,7 +283,7 @@ def main() -> int:
 
                 if backend_label == BASELINE_BACKEND:
                     legacy_multi_median = cell["multi_median"]
-                    ratio_str = "1.00x"
+                    ratio_str = "1.00x" if cell["multi_median"] else "    - "
                     suffix = BASELINE_LABEL
                 elif backend_label == "cpu_backend":
                     ratio_str = _fmt_ratio(cell["multi_median"], legacy_multi_median)
