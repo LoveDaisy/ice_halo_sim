@@ -95,15 +95,17 @@ set_tests_properties("LumiceParityTest" PROPERTIES LABELS "parity")
 # --------------------------------------------------------------------------------------------------
 # golden_analytic_test
 #
-# The 4 MetalGoldenRay anchors (extracted from test_metal_trace_parity.cpp by
-# 270.3) drive MetalTraceBackend with analytically constructed rays; on APPLE
-# the target needs the Metal/Foundation frameworks just like parity_test.
-# On non-APPLE platforms the TU is empty and the executable simply runs no
-# tests — keeps the LABEL discoverable and avoids platform-specific CMake
-# branches on test registration.
+# The MetalGoldenRay anchors in backend/ (extracted from test_metal_trace_parity.cpp
+# by 270.3) drive MetalTraceBackend with analytically constructed rays; the projection
+# analytic tests in core/ (test_projection.cpp) use pure math formulas and run on all
+# platforms. test_multi_ms_golden.cpp is guarded by #if APPLE; on non-Apple platforms
+# the backend golden anchors are absent but the 38 projection analytic tests in core/
+# still compile and run. The target needs Metal/Foundation frameworks on APPLE because
+# test_multi_ms_golden.cpp exercises MetalTraceBackend.
 add_executable(golden_analytic_test
   "${PROJ_TEST_DIR}/test_main.cpp"
-  "${PROJ_TEST_DIR}/golden-analytic/backend/test_multi_ms_golden.cpp")
+  "${PROJ_TEST_DIR}/golden-analytic/backend/test_multi_ms_golden.cpp"
+  "${PROJ_TEST_DIR}/golden-analytic/core/test_projection.cpp")
 target_include_directories(golden_analytic_test
   PRIVATE ${PROJ_TEST_DIR})
 target_link_libraries(golden_analytic_test

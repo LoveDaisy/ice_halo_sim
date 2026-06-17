@@ -11,12 +11,10 @@
 // shared-formula bug class where CPU mirror AND kernel implement the same
 // wrong formula.
 //
-// History: extracted from test_metal_trace_parity.cpp by task-270.3
-// (reorg-cpp-tests) following the testing-architecture.md §1.2
-// purpose-primary split. The first three anchors (NormalIncidence /
-// Snell30 / EnergyConservation) come from scrum-267.4
-// (continuation-validation); MultiMsContinuationNormalIncidence is the
-// scrum-gpu-single-engine-orchestration G3 anchor for the device-resident
+// Extracted from test_metal_trace_parity.cpp following the testing-architecture.md
+// §1.2 purpose-primary split. The first three anchors (NormalIncidence /
+// Snell30 / EnergyConservation) validate the continuation engine;
+// MultiMsContinuationNormalIncidence is the G3 anchor for the device-resident
 // continuation path. See doc/testing-architecture.md §1.2 and §6.
 
 #include <gtest/gtest.h>
