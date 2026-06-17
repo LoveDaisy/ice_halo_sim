@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781690098316,
+  "lastUpdate": 1781690101748,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -7922,6 +7922,54 @@ window.BENCHMARK_DATA = {
             "value": 678031.8,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5d0ae08f714a1ffe04c84be055d268ac1a7cf78b",
+          "message": "Merge pull request #130 from LoveDaisy/chore/milestone-cleanup\n\nmilestone-cleanup: testing architecture + suite reorg + boundary/doc hardening (scrum-270)",
+          "timestamp": "2026-06-17T17:47:17+08:00",
+          "tree_id": "5732ebb8dd203a1d9d03c74eff462eadeab90348",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5d0ae08f714a1ffe04c84be055d268ac1a7cf78b"
+        },
+        "date": 1781690101064,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 1029055.1,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1266352.2,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 749063.8,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 753328.6,
+            "unit": "rays/sec",
+            "extra": "CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz\\nCores: 4"
           }
         ]
       }
