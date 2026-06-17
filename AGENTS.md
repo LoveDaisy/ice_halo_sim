@@ -139,9 +139,9 @@ Valuable design/architecture docs live in `doc/` (tracked). Consult the relevant
 - **C API**: `c_api.md`, `capi-lifecycle-architecture.md`
 - **GPU / Metal route** (read these before touching the GPU path):
   - `seam-design.md` — **the `TraceBackend` host/device seam redesign blueprint**; §5 = single-engine, three-clock-decoupled GPU simulator (the target architecture); §3.6 "原始之罪" = why GPU must not mirror the CPU pipeline.
-  - `gpu-route-history.md` — systematic retrospective of the GPU migration (#250→265): decision evolution, accumulated data assets, leftover-item ledger.
-  - `trace-backend-frame-lifecycle.md` — Metal frame lifecycle (as-built, multi-MS transit, parity harness methodology).
-  - `gpu-single-engine-implementation.md` — **§5 单引擎重写的实现设计 + 上下文锚**（explore-266 de-risk 固化：device 续传 filter 可行/divergence 裁决/device gate 融进 kernel 逐跳 emit；2-scrum 弧；legacy=ground truth + raw-XYZ parity）；后续 GPU 单引擎 scrum 的引用源。
+  - `gpu-route-history.md` — systematic retrospective of the GPU migration (#250→268): decision evolution, accumulated data assets, leftover-item ledger; §9 = single-engine arc high-point (CLI 9.5×/GUI 2.07×).
+  - `trace-backend-frame-lifecycle.md` — Metal frame lifecycle (as-built, multi-MS transit via device `transit_root_kernel`, parity harness methodology, §8 DR-3 per-ray wavelength).
+  - `gpu-single-engine-implementation.md` — **§0 as-built 接手须知**（scrum-267+268 完成：CLI 9.5×/GUI 2.07×/dispatch 32768/concern #2 解/DR-3 波长/R1 occupancy 640 benign）+ §5 设计推理 + §8 DR-3 决策链 + §9 关键发现；接手 GPU 路线先读 §0。
 - **Perf / testing**: `performance-testing.md`, `windows-remote-testing.md`, `xyz-stats-tool.md`
   - `testing-architecture.md` — **authoritative test-organization spec**: verification-purpose primary axis × subsystem tag, seven layers (unit-correctness / golden-analytic / parity-cross-backend / e2e-correctness / performance / gui / regression-sentinel), the "how to add a test" decision tree, cross-cutting rules (perf denominator = legacy CPU; parity metric-masks-bugs battery; reference ownership), and the layer×subsystem physical-layout blueprint. Read before adding or reorganizing any test.
 - Example config: `examples/config_example.json`
