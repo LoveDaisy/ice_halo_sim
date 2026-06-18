@@ -55,6 +55,16 @@ extern int g_programmatic_resize;  // Counter: decremented by WindowSizeCallback
 extern bool g_show_unsaved_popup;
 extern PendingAction g_pending_action;
 
+// Queue a user-visible warning surfaced by RenderImportWarningPopup; consecutive
+// calls within one import concatenate so all offending filters are reported.
+void SetImportComplexFilterWarning(const std::string& msg);
+
+// Test-only: read the pending warning text without opening the modal.
+std::string PeekImportComplexFilterWarning();
+
+// Test-only: clear any queued warning (live path auto-consumes via the popup).
+void ClearImportComplexFilterWarning();
+
 // Log sinks for GUI log panel
 extern std::shared_ptr<ImGuiLogSink> g_imgui_log_sink;
 extern std::shared_ptr<spdlog::sinks::basic_file_sink_mt> g_file_log_sink;
@@ -98,6 +108,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
 void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height);
 void RenderStatusBar(float window_width, float window_height);
 void RenderUnsavedPopup(GLFWwindow* window);
+void RenderImportWarningPopup();
 void RenderLogPanel(float window_width, float window_height);
 
 }  // namespace lumice::gui

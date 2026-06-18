@@ -1020,6 +1020,52 @@ void RenderStatusBar(float window_width, float window_height) {
   ImGui::End();
 }
 
+// Pending message text for the Import Warning modal. Filled by
+// SetImportComplexFilterWarning from the JSON import path; consumed (and
+// cleared) by RenderImportWarningPopup when the user dismisses the modal.
+namespace {
+std::string g_pending_import_warning;
+}  // namespace
+
+void SetImportComplexFilterWarning(const std::string& msg) {
+  if (!g_pending_import_warning.empty()) {
+    g_pending_import_warning += "\n";
+  }
+  g_pending_import_warning += msg;
+}
+
+std::string PeekImportComplexFilterWarning() {
+  return g_pending_import_warning;
+}
+
+void ClearImportComplexFilterWarning() {
+  g_pending_import_warning.clear();
+}
+
+void RenderImportWarningPopup() {
+  static std::string active_msg;
+  if (!g_pending_import_warning.empty()) {
+    active_msg = std::move(g_pending_import_warning);
+    // A moved-from std::string is valid-but-unspecified, not guaranteed empty;
+    // clear() makes the trigger false next frame so the popup opens once.
+    g_pending_import_warning.clear();
+    ImGui::OpenPopup("Import Warning");
+  }
+
+  if (ImGui::BeginPopupModal("Import Warning", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::TextUnformatted("Some filters in the imported config cannot be represented in the GUI:");
+    ImGui::Separator();
+    ImGui::TextUnformatted(active_msg.c_str());
+    ImGui::Separator();
+    ImGui::TextUnformatted("These filters were dropped. The rendered image will differ from the original.");
+    if (ImGui::Button("OK", ImVec2(80, 0))) {
+      active_msg.clear();
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+}
+
 void RenderUnsavedPopup(GLFWwindow* window) {
   if (g_show_unsaved_popup) {
     ImGui::OpenPopup("Unsaved Changes");

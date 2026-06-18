@@ -440,6 +440,7 @@ int main(int argc, char** argv) {
     gui::RenderStatusBar(layout_width, layout_height);
     gui::RenderEditModals(gui::g_state, window);
     gui::RenderUnsavedPopup(window);
+    gui::RenderImportWarningPopup();
 
     // Reset aspect ratio to Free when panel collapse state changes (window size doesn't adjust automatically).
     if (gui::g_state.left_panel_collapsed != prev_left_collapsed ||

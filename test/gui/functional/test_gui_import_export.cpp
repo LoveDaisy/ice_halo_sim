@@ -978,4 +978,201 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK(no_filter);
     };
   }
+
+  // task-gui-complex-filter-import-roundtrip: degenerate multi-segment raypath
+  // complex filter survives core-JSON round-trip. GUI emits N simple raypaths
+  // + 1 complex referencing them on serialize; import must reverse-map back to
+  // a multi-segment RaypathParams instead of dropping the complex (explore-271).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "complex_raypath_roundtrip");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+      gui::ClearImportComplexFilterWarning();
+
+      gui::g_state.layers.clear();
+      gui::Layer layer;
+      layer.probability = 0.0f;
+      gui::EntryCard entry;
+      gui::CrystalOf(gui::g_state, entry).type = gui::CrystalType::kPrism;
+      gui::CrystalOf(gui::g_state, entry).height = 1.0f;
+      for (int i = 0; i < 6; ++i) {
+        gui::CrystalOf(gui::g_state, entry).face_distance[i] = 1.0f;
+      }
+      entry.proportion = 100.0f;
+      gui::FilterConfig f;
+      f.param = gui::RaypathParams{ "3-5;1-3" };
+      gui::SetFilter(gui::g_state, entry, f);
+      layer.entries.push_back(entry);
+      gui::g_state.layers.push_back(layer);
+
+      const std::string core_json = gui::SerializeCoreConfig(gui::g_state);
+      IM_CHECK(!core_json.empty());
+
+      gui::GuiState loaded = gui::InitDefaultState();
+      bool ok = gui::DeserializeFromJson(core_json, loaded);
+      IM_CHECK(ok);
+
+      // The scattering entry must reference a filter slot in the loaded state's
+      // filter pool, and that filter must be a multi-segment RaypathParams.
+      IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), 1);
+      IM_CHECK_EQ(static_cast<int>(loaded.layers[0].entries.size()), 1);
+      const auto& loaded_entry = loaded.layers[0].entries[0];
+      IM_CHECK(loaded_entry.filter_id.has_value());
+      const auto& loaded_filter = loaded.filters[*loaded_entry.filter_id];
+      IM_CHECK(loaded_filter.IsRaypath());
+      IM_CHECK_STR_EQ(loaded_filter.RaypathText().c_str(), "3-5;1-3");
+      // No warning should have fired for a well-formed GUI-emitted complex.
+      IM_CHECK(gui::PeekImportComplexFilterWarning().empty());
+    };
+  }
+
+  // task-gui-complex-filter-import-roundtrip: degenerate EE multi-value
+  // (cartesian product) complex filter survives round-trip. entries × exits
+  // factorize back to entry_text / exit_text.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "complex_ee_roundtrip");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+      gui::ClearImportComplexFilterWarning();
+
+      gui::g_state.layers.clear();
+      gui::Layer layer;
+      layer.probability = 0.0f;
+      gui::EntryCard entry;
+      gui::CrystalOf(gui::g_state, entry).type = gui::CrystalType::kPrism;
+      gui::CrystalOf(gui::g_state, entry).height = 1.0f;
+      for (int i = 0; i < 6; ++i) {
+        gui::CrystalOf(gui::g_state, entry).face_distance[i] = 1.0f;
+      }
+      entry.proportion = 100.0f;
+      gui::FilterConfig f;
+      gui::EntryExitParams ee;
+      ee.entry_text = "3,4";
+      ee.exit_text = "5,6";
+      f.param = ee;
+      gui::SetFilter(gui::g_state, entry, f);
+      layer.entries.push_back(entry);
+      gui::g_state.layers.push_back(layer);
+
+      const std::string core_json = gui::SerializeCoreConfig(gui::g_state);
+      IM_CHECK(!core_json.empty());
+      gui::GuiState loaded = gui::InitDefaultState();
+      bool ok = gui::DeserializeFromJson(core_json, loaded);
+      IM_CHECK(ok);
+
+      IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), 1);
+      const auto& loaded_entry = loaded.layers[0].entries[0];
+      IM_CHECK(loaded_entry.filter_id.has_value());
+      const auto& loaded_filter = loaded.filters[*loaded_entry.filter_id];
+      IM_CHECK(std::holds_alternative<gui::EntryExitParams>(loaded_filter.param));
+      const auto& p = std::get<gui::EntryExitParams>(loaded_filter.param);
+      // Order is sorted by reconstruct; both ASCII "3" < "4" and "5" < "6".
+      IM_CHECK_STR_EQ(p.entry_text.c_str(), "3,4");
+      IM_CHECK_STR_EQ(p.exit_text.c_str(), "5,6");
+      IM_CHECK(gui::PeekImportComplexFilterWarning().empty());
+    };
+  }
+
+  // task-gui-complex-filter-import-roundtrip (code-review Major): a wildcard
+  // entry (empty text) crossed with multiple exits still serializes to a
+  // complex filter (pair_count = 1 x N > 1). The reconstruct path must decode
+  // the absent "entry" field back to an empty (wildcard) string — exercising
+  // DecodeEEFaceFromJson's absent-field branch, which Test B's all-specific
+  // faces did not cover.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "complex_ee_wildcard_roundtrip");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+      gui::ClearImportComplexFilterWarning();
+
+      gui::g_state.layers.clear();
+      gui::Layer layer;
+      layer.probability = 0.0f;
+      gui::EntryCard entry;
+      gui::CrystalOf(gui::g_state, entry).type = gui::CrystalType::kPrism;
+      gui::CrystalOf(gui::g_state, entry).height = 1.0f;
+      for (int i = 0; i < 6; ++i) {
+        gui::CrystalOf(gui::g_state, entry).face_distance[i] = 1.0f;
+      }
+      entry.proportion = 100.0f;
+      gui::FilterConfig f;
+      gui::EntryExitParams ee;
+      ee.entry_text = "";  // wildcard entry
+      ee.exit_text = "5,6";
+      f.param = ee;
+      gui::SetFilter(gui::g_state, entry, f);
+      layer.entries.push_back(entry);
+      gui::g_state.layers.push_back(layer);
+
+      const std::string core_json = gui::SerializeCoreConfig(gui::g_state);
+      IM_CHECK(!core_json.empty());
+      gui::GuiState loaded = gui::InitDefaultState();
+      bool ok = gui::DeserializeFromJson(core_json, loaded);
+      IM_CHECK(ok);
+
+      IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), 1);
+      const auto& loaded_entry = loaded.layers[0].entries[0];
+      IM_CHECK(loaded_entry.filter_id.has_value());
+      const auto& loaded_filter = loaded.filters[*loaded_entry.filter_id];
+      IM_CHECK(std::holds_alternative<gui::EntryExitParams>(loaded_filter.param));
+      const auto& p = std::get<gui::EntryExitParams>(loaded_filter.param);
+      IM_CHECK_STR_EQ(p.entry_text.c_str(), "");  // wildcard preserved
+      IM_CHECK_STR_EQ(p.exit_text.c_str(), "5,6");
+      IM_CHECK(gui::PeekImportComplexFilterWarning().empty());
+    };
+  }
+
+  // task-gui-complex-filter-import-roundtrip: a true AND-of-products complex
+  // filter (composition entry with >1 child id, expressing AND semantics) is
+  // not representable in the GUI's flat FilterConfig — import must drop it,
+  // leave the referencing scattering entry without a filter, AND queue a
+  // user-visible warning via SetImportComplexFilterWarning (no silent miscull).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "non_degenerate_complex_ignored_but_warned");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+      gui::ClearImportComplexFilterWarning();
+
+      // Hand-authored core JSON: 2 raypath simples + 1 complex with an
+      // AND-of-products composition ([[1,2]] — id 1 AND id 2 in the same
+      // product), which the GUI cannot represent.
+      const std::string core_json = R"({
+        "crystal": [
+          {"id": 1, "type": "Prism", "height": 1.0,
+           "face_distance": [1,1,1,1,1,1]}
+        ],
+        "filter": [
+          {"id": 1, "type": "raypath", "action": "filter_in", "raypath": [3, 5]},
+          {"id": 2, "type": "raypath", "action": "filter_in", "raypath": [1, 3]},
+          {"id": 3, "type": "complex", "action": "filter_in",
+           "composition": [[1, 2]]}
+        ],
+        "scene": {
+          "light_source": {"altitude": 20.0, "diameter": 0.5},
+          "ray_num": 1000,
+          "max_hits": 8,
+          "scattering": [
+            {"prob": 1.0, "entries": [{"crystal": 1, "proportion": 100.0, "filter": 3}]}
+          ]
+        }
+      })";
+
+      gui::GuiState loaded = gui::InitDefaultState();
+      bool ok = gui::DeserializeFromJson(core_json, loaded);
+      IM_CHECK(ok);
+      IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), 1);
+      const auto& loaded_entry = loaded.layers[0].entries[0];
+      // Filter id=3 is the complex — it must not be materialized; entry's
+      // filter_id must be unset (no silent miscull on the rendered image).
+      IM_CHECK(!loaded_entry.filter_id.has_value());
+      // The loud warning must have fired so the user sees the modal.
+      const std::string warning = gui::PeekImportComplexFilterWarning();
+      IM_CHECK(!warning.empty());
+      gui::ClearImportComplexFilterWarning();
+    };
+  }
 }
