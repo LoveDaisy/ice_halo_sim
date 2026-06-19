@@ -5,7 +5,6 @@
 #include <cstdio>
 #include <fstream>
 #include <limits>
-#include <set>
 #include <utility>
 #include <vector>
 
@@ -517,6 +516,41 @@ TEST(CrystalGetFnByPolygonFace, MatchesTriangleOverloadAndBoundaries) {
   EXPECT_EQ(crystal.GetFn(static_cast<IdType>(crystal.PolygonFaceCount())), kInvalidId);
   // kInvalidId input returns kInvalidId.
   EXPECT_EQ(crystal.GetFn(kInvalidId), kInvalidId);
+}
+
+// task-geometry-gen-numerical-robustness Step 3: prism_h=0 pyramid (apex-on-apex)
+// must not leak prism/basal Fn entries or zero-area triangles into the mesh.
+// Probe data showed Triangulate already skips collapsed prism faces (<3 vertices)
+// upstream; this test asserts the post-Step-2 invariant.
+TEST_F(V3TestCrystal, PrismHZeroNoLeftoverPrismOrBasal) {
+  const float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  for (float wedge : { 60.0f, 75.0f, 87.0f, 87.5f, 88.0f }) {
+    auto crystal = Crystal::CreatePyramid(wedge, wedge, 1.0f, 0.0f, 1.0f, dist);
+
+    // Polygon-face hygiene: 12 = 6 upper pyramid + 6 lower pyramid; no basal, no prism.
+    EXPECT_EQ(crystal.PolygonFaceCount(), 12u) << "wedge=" << wedge;
+    for (size_t p = 0; p < crystal.PolygonFaceCount(); p++) {
+      int fn = static_cast<int>(crystal.GetFn(static_cast<IdType>(p)));
+      EXPECT_TRUE((fn >= 13 && fn <= 18) || (fn >= 23 && fn <= 28))
+          << "wedge=" << wedge << " poly " << p << " unexpected Fn=" << fn;
+    }
+
+    // Triangle-level hygiene: no leftover Fn outside the pyramid set, no zero-area
+    // triangles (max area > 0, no triangle below 1e-6 × max_area).
+    auto tri_cnt = crystal.TotalTriangles();
+    const float* area = crystal.GetTirangleArea();
+    float max_area = 0.0f;
+    for (size_t t = 0; t < tri_cnt; t++) {
+      max_area = std::max(max_area, area[t]);
+    }
+    EXPECT_GT(max_area, 0.0f) << "wedge=" << wedge;
+    for (size_t t = 0; t < tri_cnt; t++) {
+      EXPECT_GT(area[t], 1e-6f * max_area) << "wedge=" << wedge << " tri " << t << " near-zero area " << area[t];
+      int fn = static_cast<int>(crystal.GetFn(static_cast<int>(t)));
+      EXPECT_TRUE((fn >= 13 && fn <= 18) || (fn >= 23 && fn <= 28))
+          << "wedge=" << wedge << " tri " << t << " unexpected Fn=" << fn;
+    }
+  }
 }
 
 // task-geometry-gen-numerical-robustness Step 1: white-box wedge sweep diagnostic.

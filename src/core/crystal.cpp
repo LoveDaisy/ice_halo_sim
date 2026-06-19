@@ -679,9 +679,26 @@ void Crystal::BuildPolygonFaceData(const float* plane_coef, size_t plane_cnt) {
   poly_face_d_ = poly_face_data_.get() + valid_cnt * 3;
   poly_face_tri_id_ = reinterpret_cast<int*>(poly_face_data_.get() + valid_cnt * 4);
 
+  // Degenerate-face safety net (Step 3): warn if the representative triangle of any
+  // accepted polygon face has near-zero area relative to the largest triangle. This
+  // signals an upstream geometry-gen issue (a polygon plane survived without a real
+  // surface); in current pipeline the upstream Triangulate already skips faces with
+  // <3 vertices, so this gate is belt-and-suspenders for future configs (asymmetric
+  // d[6], near-degenerate apex collapse, etc.).
+  float max_tri_area = 0.0f;
+  for (size_t t = 0; t < tri_cnt; t++) {
+    max_tri_area = std::max(max_tri_area, face_area_[t]);
+  }
+
   size_t idx = 0;
   for (size_t p = 0; p < plane_cnt; p++) {
     if (plane_best_tri[p] < 0) {
+      continue;
+    }
+    int rep_tri = plane_best_tri[p];
+    if (max_tri_area > 0.0f && face_area_[rep_tri] < 1e-6f * max_tri_area) {
+      LOG_WARNING("BuildPolygonFaceData: plane %zu has degenerate rep triangle %d (area=%.4e, max=%.4e)", p, rep_tri,
+                  static_cast<double>(face_area_[rep_tri]), static_cast<double>(max_tri_area));
       continue;
     }
     poly_face_n_[idx * 3 + 0] = plane_n[p * 3 + 0];
@@ -691,6 +708,7 @@ void Crystal::BuildPolygonFaceData(const float* plane_coef, size_t plane_cnt) {
     poly_face_tri_id_[idx] = plane_best_tri[p];
     idx++;
   }
+  poly_face_cnt_ = idx;  // Re-count after degenerate filtering.
 }
 
 float Crystal::GetRefractiveIndex(float wl) const {
