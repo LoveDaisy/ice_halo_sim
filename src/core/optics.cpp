@@ -78,6 +78,7 @@ static void PropagateSlab(const Crystal& crystal, size_t num, size_t step, const
   alignas(64) float t_far[kMaxSlabRays];
   int far_face[kMaxSlabRays];
   int src_poly[kMaxSlabRays];
+  bool outward[kMaxSlabRays];
 
   for (size_t i = 0; i < num; i++) {
     const float* d = d_in.Ptr(i);
@@ -92,6 +93,17 @@ static void PropagateSlab(const Crystal& crystal, size_t num, size_t step, const
     far_face[i] = -1;
     IdType src_id = from_face_in[i / step];
     src_poly[i] = (src_id != kInvalidId) ? static_cast<int>(src_id) : -1;
+    // Convex-body outward short-circuit: a ray that departs the source face
+    // pointing outward (d · n_src > 0) cannot hit any other face's polygon.
+    // Without this guard, degenerate infinite planes (e.g. prism_h=0 walls)
+    // can be selected at positive t even though their polygon is empty,
+    // mis-classifying first-bounce external reflections as internal transit.
+    outward[i] = false;
+    if (src_poly[i] >= 0) {
+      const float* sn = pn + src_poly[i] * 3;
+      float d_src = dx[i] * sn[0] + dy[i] * sn[1] + dz[i] * sn[2];
+      outward[i] = (d_src > 0.0f);
+    }
   }
 
   // Face-outer, ray-inner: find minimum t among exit faces (denom > eps)
@@ -102,6 +114,9 @@ static void PropagateSlab(const Crystal& crystal, size_t num, size_t step, const
     float fd = pd[fi];
 
     for (size_t i = 0; i < num; i++) {
+      if (outward[i]) {
+        continue;
+      }
       float denom = dx[i] * nx + dy[i] * ny + dz[i] * nz;
       float t = -(px[i] * nx + py[i] * ny + pz[i] * nz + fd) / denom;
       if (denom > math::kFloatEps && t < t_far[i]) {
