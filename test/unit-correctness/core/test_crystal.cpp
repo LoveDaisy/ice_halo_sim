@@ -518,6 +518,19 @@ TEST(CrystalGetFnByPolygonFace, MatchesTriangleOverloadAndBoundaries) {
   EXPECT_EQ(crystal.GetFn(kInvalidId), kInvalidId);
 }
 
+// task-geometry-gen-numerical-robustness Step 4: at extreme wedge (>= 88.5 deg)
+// the float32 SolveConvexPolyhedronVtx collapsed apex/anti-apex into the basal
+// ring, dropping TotalVertices from 8 to 6 and corrupting downstream face groups.
+// The double-precision pipeline restores the 8-vertex topology end-to-end.
+TEST_F(V3TestCrystal, ExtremeWedgeVertexNoCollapse) {
+  const float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  for (float wedge : { 88.0f, 88.5f, 89.0f, 89.5f, 89.9f }) {
+    auto c = Crystal::CreatePyramid(wedge, wedge, 1.0f, 0.0f, 1.0f, dist);
+    EXPECT_EQ(c.TotalVertices(), 8u) << "wedge=" << wedge;
+    EXPECT_EQ(c.PolygonFaceCount(), 12u) << "wedge=" << wedge;
+  }
+}
+
 // task-geometry-gen-numerical-robustness Step 3: prism_h=0 pyramid (apex-on-apex)
 // must not leak prism/basal Fn entries or zero-area triangles into the mesh.
 // Probe data showed Triangulate already skips collapsed prism faces (<3 vertices)
