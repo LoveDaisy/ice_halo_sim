@@ -32,6 +32,7 @@ import re
 import statistics
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -53,6 +54,14 @@ CONFIGS = {
     "ms_multi_crystal_filtered_bd": PROJECT_ROOT
     / "test" / "e2e" / "configs" / "ms_multi_crystal_filtered_bd.json",
 }
+
+# Per-run ray_num override (task-fix-throughput-bench-honesty). The committed
+# heavy configs ship ray_num=2M; on Metal that completes in ~0.1s — too short a
+# steady window to resolve cleanly even after the setup-exclusion fix (thermal
+# noise dominates). Bump to 2e7 so the active window is ~1s+ on Metal while
+# legacy (slower) still finishes well within RUN_TIMEOUT_SEC. The committed
+# config files are NOT mutated; each run writes a temp config with this ray_num.
+RAY_NUM_OVERRIDE = 20_000_000
 
 # (label, LUMICE_TRACE_BACKEND value).  None => env unset (legacy CPU).
 # IMPORTANT: "legacy" must be first — subsequent backends use legacy_multi_median
@@ -210,6 +219,21 @@ def _preflight() -> list[str]:
     return errs
 
 
+def _override_ray_num(configs: dict, tmp_dir: str) -> dict:
+    """Write temp copies of each config with scene.ray_num = RAY_NUM_OVERRIDE.
+
+    Committed config files are never mutated; returns {label: temp_path}.
+    """
+    out = {}
+    for label, src in configs.items():
+        cfg = json.loads(Path(src).read_text())
+        cfg["scene"]["ray_num"] = RAY_NUM_OVERRIDE
+        dst = Path(tmp_dir) / f"{label}.json"
+        dst.write_text(json.dumps(cfg))
+        out[label] = dst
+    return out
+
+
 def main() -> int:
     errs = _preflight()
     if errs:
@@ -217,6 +241,9 @@ def main() -> int:
         for e in errs:
             sys.stderr.write(f"  - {e}\n")
         return 2
+
+    tmp_dir = tempfile.mkdtemp(prefix="bench_throughput_")
+    configs = _override_ray_num(CONFIGS, tmp_dir)
 
     is_darwin = platform.system() == "Darwin"
     if not is_darwin:
@@ -226,7 +253,9 @@ def main() -> int:
     print(
         "# bench_throughput — denominator = legacy CPU multi_rps (per config).\n"
         "# Metal: single-engine; single/multi passes both run 1 engine.\n"
-        "# CpuTraceBackend rows are verify-only (NOT a baseline).\n",
+        "# CpuTraceBackend rows are verify-only (NOT a baseline).\n"
+        f"# rays_per_sec = steady trace rate (setup excluded, --benchmark fix);\n"
+        f"# ray_num overridden to {RAY_NUM_OVERRIDE:,} for a stable steady window.\n",
         flush=True,
     )
 
@@ -241,7 +270,7 @@ def main() -> int:
     print(header, flush=True)
     print("-" * len(header), flush=True)
 
-    for cfg_label, cfg_path in CONFIGS.items():
+    for cfg_label, cfg_path in configs.items():
         legacy_multi_median = None
 
         for backend_label, backend_env in BACKENDS:
