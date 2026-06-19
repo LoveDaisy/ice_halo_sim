@@ -50,7 +50,19 @@ BENCH_RE = re.compile(r"\[BENCHMARK\]\s*(\{.*\})")
 ROUTE_METAL = "routing via MetalTraceBackend"
 FALLBACK = "falling back"
 
+# Canonical throughput-regime scene set (light -> heavy). Mirrors the benchmark
+# scene registry in doc/performance-testing.md ("基准场景注册表") — keep the two
+# in sync. All entries are dual_fisheye_equal_area (Metal-comparable, no CLI
+# fallback) AND completable by legacy within RUN_TIMEOUT_SEC, so every row yields
+# a real ratio. The heaviest scene `ms3_mixed_pyramid_heavy` is in the registry
+# table but NOT auto-run here: legacy --benchmark's single pass is hardwired to
+# 2M rays (kBenchmarkSingleRays) and times out on that 3-MS pyramid scene, so it
+# has no legacy baseline — it is Metal-only viable (see the registry note).
 CONFIGS = {
+    "bench_light_single_ms": PROJECT_ROOT
+    / "test" / "e2e" / "configs" / "bench_light_single_ms.json",
+    "ms_multi_crystal": PROJECT_ROOT
+    / "test" / "e2e" / "configs" / "ms_multi_crystal.json",
     "ms_multi_crystal_complex_filter": PROJECT_ROOT
     / "test" / "e2e" / "configs" / "ms_multi_crystal_complex_filter.json",
     "ms_multi_crystal_filtered_bd": PROJECT_ROOT

@@ -56,9 +56,17 @@ efficiency, followed by a multi-worker pass for parallel throughput. Two JSON li
 output:
 
 ```
-[BENCHMARK] {"mode": "single", "workers": 1, "cores": 8, "rays": 2000000, "wall_sec": 8.5, "rays_per_sec": 235294.1}
-[BENCHMARK] {"mode": "multi", "workers": 8, "cores": 8, "rays": 10000000, "wall_sec": 2.4, "rays_per_sec": 4166666.7}
+[BENCHMARK] {"mode": "single", "workers": 1, "cores": 8, "rays": 2000000, "wall_sec": 8.51, "setup_sec": 0.01, "active_sec": 8.5, "rays_per_sec": 235294.1, "rate_basis": "steady"}
+[BENCHMARK] {"mode": "multi", "workers": 8, "cores": 8, "rays": 10000000, "wall_sec": 0.6, "setup_sec": 0.02, "active_sec": 0.58, "rays_per_sec": 17241379.3, "rate_basis": "steady"}
 ```
+
+`rays_per_sec` is the **steady trace rate** over `active_sec` (the window from
+first traced ray to IDLE), NOT `rays / wall_sec`. `setup_sec` (server alloc +
+scene gen + first-dispatch latency) is excluded from the denominator;
+`rate_basis` records which path produced the rate (`steady` / `active_short` /
+`wall_fallback`). This setup-exclusion fix (task-fix-throughput-bench-honesty)
+matters for fast backends whose whole run is ~0.2s — folding setup in deflated
+their rays_per_sec by >30%.
 
 **Terminology**: "workers" refers to simulator threads (the threads performing ray tracing).
 Each server instance also has 2 internal threads (scene generation + data consumption), so
@@ -74,7 +82,39 @@ Behavior differences in benchmark mode:
 - **Reduced rays for single pass**: 2M rays (vs the config's original value) to limit CI
   runtime, since single-worker execution is slower
 - **No image I/O**: `SaveRenderResults` is skipped, so `wall_sec` reflects pure simulation time
-- **100ms poll interval** (vs default 1s): reduces timing quantization error to ~0.1s
+- **5ms poll interval** (vs default 1s): caps the IDLE-detection quantization at a few ms
+  (was 100ms; that alone added up to a full poll interval to a fast run's wall time)
+
+### Benchmark Scene Registry (canonical throughput scenes)
+
+> **Single source of truth for throughput comparisons.** Always cite a real
+> config from this table — never invent a scene name. (This table exists because
+> the docs once cited a nonexistent `ms3_multi_crystal_complex_filter` and
+> compared against numbers that could not be reproduced; see
+> task-fix-throughput-bench-honesty.) `scripts/bench_throughput.py` runs the
+> Metal-comparable subset; keep the two in sync.
+
+Measurement basis: **engine** = `Lumice --benchmark` multi pass, setup-excluded
+steady rate; **GUI** = `gui_test perf_test` steady_state, infinite budget,
+reconstruct path. Baseline denominator is always **legacy CPU** (the GUI's real
+path) — never `cpu_backend`. All ratios below measured on **M2 Max, 2026-06-19**
+(`scratchpad/task-fix-throughput-bench-honesty/data/`); treat as the regression
+anchor, re-measure same-session before/after any throughput change.
+
+| config（真实文件） | regime | rays / MS / filter | lens / Metal 可比 | 角色 | Metal vs legacy（实测基线） |
+|---|---|---|---|---|---|
+| `bench_light_single_ms.json` | 轻·单MS | 10M / 1 / 无 | dual_fisheye_EA ✅ | 轻场景吞吐基准（bench 专用，勿因 e2e 改动） | 引擎 ~1.7× / GUI ~1.8× |
+| `ms_multi_crystal.json` | 中·无filter | 2M / 2 / 无 | dual_fisheye_EA ✅ | 无 culling 中等基准 | 引擎 ~2.0× / GUI ~2.2× |
+| `ms_multi_crystal_complex_filter.json` | 重·标准 | 2M / 2 / complex | dual_fisheye_EA ✅ | **G1 + G4 主基准** | 引擎 ~8.1× / GUI ~9.5× |
+| `ms_multi_crystal_filtered_bd.json` | 重·bd | 2M / 2 / bd | dual_fisheye_EA ✅ | G1 第二基准 | 引擎 ~10.1× |
+| `ms3_mixed_pyramid_heavy.json` | 最重·棱锥 | 5M / 3 / 4×raypath | dual_fisheye_EA ✅ | register-pressure 上界 | Metal-only：引擎 ~296K rays/s；**legacy `--benchmark` 超时（single pass 2M @ 1-worker），故无 ratio**；GUI legacy ~48.7K → Metal ~5.7× |
+| `halo_22.json` | 轻·单MS | 10M / 1 / 无 | **fisheye_EA（单）→ CLI Metal 回退** | **e2e 资产，勿改**；legacy-only 轻基准 | N/A（Metal 不兼容此投影；轻·Metal 用 `bench_light_single_ms`） |
+
+Notes:
+- The dispatch sweet spot is 32768 (`LUMICE_DISPATCH_RAY_NUM`); small dispatches
+  starve the GPU (512/2048 = 0.2–0.8× legacy). See the Runtime Tuning Knobs table.
+- `bench_throughput.py` overrides `ray_num` to a large value per run (temp config,
+  committed files untouched) so the steady window is long enough to be stable.
 
 ### macOS
 
