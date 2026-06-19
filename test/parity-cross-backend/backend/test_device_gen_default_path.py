@@ -133,16 +133,26 @@ def test_default_path_device_gen_vs_host_gen_single_ms():
 
 
 # Activation-proof RelErr floor. PCG vs mt19937 with the same effective seed
-# yield distinct sample streams; on dual_fisheye_ref the sum-of-XYZ relative
-# difference measures ~4e-5 empirically (single-worker sim_seed=42, 2026-06-11).
-# Per-pixel variance is larger but the global sum has strong MC cancellation —
-# total-sum RelErr is the conservative end of the differentiation envelope.
-# Floor 1e-5 is below the ~4e-5 active-path measurement (~4× headroom) and far
-# above the byte-equal fallback regime (rel_err == 0 if device-gen silently
-# degrades to host-gen), so the test cleanly distinguishes the two cases.
-# Both runs are single-worker deterministic at sim_seed=42, so the gap has no
-# run-to-run variance and the 4× headroom is not flaky.
-_ACTIVATION_RELERR_FLOOR = 1e-5
+# yield distinct sample streams, so device-gen ON vs OFF produce DIFFERENT XYZ
+# buffers (rel_err > 0). A *silent fallback* (device-gen quietly degrades to
+# host-gen) makes ON and OFF run identical code with the same seed → bit-equal
+# buffers → rel_err == EXACTLY 0. So the floor's job is only to separate
+# "active (rel_err clearly > 0)" from "fallback (rel_err == 0)".
+#
+# The MAGNITUDE of the active divergence is NOT a stable anchor — it is
+# hardware/run-variable for the same code+seed. On dual_fisheye_ref/sim_seed=42
+# the total-sum rel_err has been observed at 4.4e-5 (2026-06-11), 2.5e-5 (local,
+# main), 4.2e-5 (local, this branch), and 7.7e-6 (CI macOS ARM64 runner, this
+# branch) — a ~6× spread driven by GPU floating-point behavior across hosts, not
+# by any one code change. The old floor 1e-5 sits INSIDE that spread, so the test
+# fails on whichever host lands below it (it flaked on the CI runner here).
+#
+# Fix: anchor the floor near the byte-equal/noise floor (a silent fallback gives
+# rel_err == EXACTLY 0), NOT as a fraction of the host-variable active magnitude.
+# 1e-6 sits well below the lowest observed active value (7.7e-6) and orders of
+# magnitude above the bit-equal fallback (0), cleanly separating the two regimes
+# regardless of host.
+_ACTIVATION_RELERR_FLOOR = 1e-6
 
 
 @pytest.mark.slow
@@ -161,10 +171,10 @@ def test_device_gen_activation_proof_fixed_seed():
 
     With the same seed but different RNG algorithms (GPU PCG vs host mt19937)
     the two runs produce different XYZ buffers — the total-sum relative error
-    is ~4e-5 empirically (actual: rel_err=4.4e-5, single-worker sim_seed=42,
-    2026-06-11), ~4× above the 1e-5 floor. If device-gen silently fell back to
-    host-gen (same RNG on both sides), ON ≡ OFF byte-for-byte and RelErr ≈ 0,
-    failing the assertion. This closes the "assert-may-pass" hole that
+    is host-variable (observed 7.7e-6 on the CI macOS runner to ~4e-5 locally
+    for the same seed). If device-gen silently fell back to host-gen (same RNG
+    on both sides), ON ≡ OFF byte-for-byte and RelErr == 0, failing the
+    assertion. This closes the "assert-may-pass" hole that
     sim_seed=0 leaves open (each side draws different atomic-counter seeds,
     so ds_corr cannot distinguish active vs fallback).
     """
@@ -183,7 +193,8 @@ def test_device_gen_activation_proof_fixed_seed():
     on_sum = float(np.sum(on.flt_buf))
     off_sum = float(np.sum(off.flt_buf))
     # Symmetric denominator: more conservative than the single-sided form in
-    # plan §3 pseudo-code; 4× headroom over the floor confirmed empirically.
+    # plan §3 pseudo-code. Floor distinguishes active (rel_err > 0) from
+    # bit-equal fallback (rel_err == 0); see _ACTIVATION_RELERR_FLOOR.
     rel_err = abs(on_sum - off_sum) / (abs(on_sum) + abs(off_sum) + 1e-30)
     print(
         f"[activation-proof] dual_fisheye_ref sim_seed=42 metal: "
