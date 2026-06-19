@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <fstream>
 #include <limits>
 #include <utility>
@@ -515,5 +516,86 @@ TEST(CrystalGetFnByPolygonFace, MatchesTriangleOverloadAndBoundaries) {
   // kInvalidId input returns kInvalidId.
   EXPECT_EQ(crystal.GetFn(kInvalidId), kInvalidId);
 }
+
+// task-geometry-gen-numerical-robustness Step 6a: wedge sweep topology sentinel.
+// Replaces the Step 1 DISABLED_WedgeSweepDiagnostic (white-box probe), promoting
+// its discovery to a regression guard. For prism_h=0 upper_h=lower_h=1.0
+// bipyramid across the full wedge range:
+//   - PolygonFaceCount stays at 12 (6 upper + 6 lower pyramid; no fake basal)
+//   - No polygon face has |n_z| > 0.99 except real pyramid faces, which would
+//     show up as fn 13-18 / 23-28; an extra basal-like face with fn 1 or 2
+//     is the B-ring bug signature.
+// The wedge list MUST be float (not int braced-init), or 87.5 / 89.9 narrowing
+// fails to compile and silent removal would drop coverage of the 87.4 -> 87.5
+// critical point that Step 1 located.
+TEST_F(V3TestCrystal, PyramidWedgeSweepNoFalseBasal) {
+  const float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  for (float wedge : { 60.0f, 75.0f, 80.0f, 85.0f, 87.0f, 87.5f, 88.0f, 89.0f, 89.9f }) {
+    auto c = Crystal::CreatePyramid(wedge, wedge, 1.0f, 0.0f, 1.0f, dist);
+    EXPECT_EQ(c.PolygonFaceCount(), 12u) << "wedge=" << wedge;
+    const float* pn = c.GetPolygonFaceNormal();
+    for (size_t p = 0; p < c.PolygonFaceCount(); p++) {
+      int fn = static_cast<int>(c.GetFn(static_cast<IdType>(p)));
+      EXPECT_FALSE(fn == 1 || fn == 2) << "wedge=" << wedge << " poly " << p << " is a fake basal (fn=" << fn << ")";
+      // pyramid faces at extreme wedge have |n_z| close to 1 (sin(wedge)),
+      // so we can't filter by n_z alone; the Fn check above is the precise sentinel.
+      (void)pn;  // silence unused; kept for future per-normal diagnostics.
+    }
+  }
+}
+
+// task-geometry-gen-numerical-robustness Step 4: at extreme wedge (>= 88.5 deg)
+// the float32 SolveConvexPolyhedronVtx collapsed apex/anti-apex into the basal
+// ring, dropping TotalVertices from 8 to 6 and corrupting downstream face groups.
+// The double-precision pipeline restores the 8-vertex topology end-to-end.
+TEST_F(V3TestCrystal, ExtremeWedgeVertexNoCollapse) {
+  const float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  for (float wedge : { 88.0f, 88.5f, 89.0f, 89.5f, 89.9f }) {
+    auto c = Crystal::CreatePyramid(wedge, wedge, 1.0f, 0.0f, 1.0f, dist);
+    EXPECT_EQ(c.TotalVertices(), 8u) << "wedge=" << wedge;
+    EXPECT_EQ(c.PolygonFaceCount(), 12u) << "wedge=" << wedge;
+  }
+}
+
+// task-geometry-gen-numerical-robustness Step 3: prism_h=0 pyramid (apex-on-apex)
+// must not leak prism/basal Fn entries or zero-area triangles into the mesh.
+// Probe data showed Triangulate already skips collapsed prism faces (<3 vertices)
+// upstream; this test asserts the post-Step-2 invariant.
+TEST_F(V3TestCrystal, PrismHZeroNoLeftoverPrismOrBasal) {
+  const float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  for (float wedge : { 60.0f, 75.0f, 87.0f, 87.5f, 88.0f }) {
+    auto crystal = Crystal::CreatePyramid(wedge, wedge, 1.0f, 0.0f, 1.0f, dist);
+
+    // Polygon-face hygiene: 12 = 6 upper pyramid + 6 lower pyramid; no basal, no prism.
+    EXPECT_EQ(crystal.PolygonFaceCount(), 12u) << "wedge=" << wedge;
+    for (size_t p = 0; p < crystal.PolygonFaceCount(); p++) {
+      int fn = static_cast<int>(crystal.GetFn(static_cast<IdType>(p)));
+      EXPECT_TRUE((fn >= 13 && fn <= 18) || (fn >= 23 && fn <= 28))
+          << "wedge=" << wedge << " poly " << p << " unexpected Fn=" << fn;
+    }
+
+    // Triangle-level hygiene: no leftover Fn outside the pyramid set, no zero-area
+    // triangles (max area > 0, no triangle below 1e-6 × max_area).
+    auto tri_cnt = crystal.TotalTriangles();
+    const float* area = crystal.GetTirangleArea();
+    float max_area = 0.0f;
+    for (size_t t = 0; t < tri_cnt; t++) {
+      max_area = std::max(max_area, area[t]);
+    }
+    EXPECT_GT(max_area, 0.0f) << "wedge=" << wedge;
+    for (size_t t = 0; t < tri_cnt; t++) {
+      EXPECT_GT(area[t], 1e-6f * max_area) << "wedge=" << wedge << " tri " << t << " near-zero area " << area[t];
+      int fn = static_cast<int>(crystal.GetFn(static_cast<int>(t)));
+      EXPECT_TRUE((fn >= 13 && fn <= 18) || (fn >= 23 && fn <= 28))
+          << "wedge=" << wedge << " tri " << t << " unexpected Fn=" << fn;
+    }
+  }
+}
+
+// Step 1 white-box diagnostic (`GeometryGenDiagnostic.DISABLED_WedgeSweepDiagnostic`)
+// was removed in Step 6: its single-point discovery (BuildPolygonFaceData grouping
+// flips at wedge = 87.44 deg) is now permanently guarded by
+// `PyramidWedgeSweepNoFalseBasal` above. The raw sweep data lives in
+// scratchpad/task-geometry-gen-numerical-robustness/progress.md (2026-06-19 entry).
 
 }  // namespace

@@ -583,30 +583,84 @@ const int* Crystal::GetPolygonFaceTriId() const {
   return poly_face_tri_id_;
 }
 
-// Safety note: this function matches plane equations to triangle normals via dot product (> 1.0 - 1e-3).
-// Planes that are geometrically absent (e.g., faces eliminated by non-uniform face distances) will have no
-// matching triangles and are naturally skipped. The safety of handling "phantom planes" depends on this
-// normal-matching mechanism.
+// Triangle→argmax-plane grouping (task-geometry-gen-numerical-robustness Step 2):
+// each triangle is assigned to the SINGLE plane with the highest |n_tri · n_plane| dot
+// (argmax over planes per triangle). Previously the loop was plane-driven: each plane
+// claimed every triangle with dot > 1-1e-3, which let the always-present basal plane
+// (0,0,±1) steal near-horizontal pyramid triangles whose z-component crept above 0.999
+// at wedge ≥ 87.44° — producing a phantom flat basal face on extreme-wedge bipyramids
+// (B-ring 87.5° bug). A geometric triangle lies on exactly one plane; argmax enforces
+// that. A planar floor (best_dot > 1 - kFaceCoplanarFloor) still rejects triangles that
+// match no plane within float noise (signals geometry-build inconsistency).
+//
+// Phantom-plane safety: planes with no triangle whose argmax lands on them are silently
+// dropped (no entry in poly_face_*). Same external contract as before, just the
+// pigeon-holing direction is reversed.
 void Crystal::BuildPolygonFaceData(const float* plane_coef, size_t plane_cnt) {
   static_assert(sizeof(int) == sizeof(float), "BuildPolygonFaceData requires sizeof(int)==sizeof(float)");
 
   auto tri_cnt = TotalTriangles();
 
-  // First pass: count valid faces (planes that match at least one triangle normal)
-  size_t valid_cnt = 0;
+  // kFaceCoplanarFloor: a triangle whose best-match plane dot is below (1 - this) is
+  // considered to match no plane (≈8.1° angular slack). The basal-plane phantom-grab at
+  // wedge ≥ 87.44° produced dots of ~0.9990; the previous threshold (1 - 1e-3 = 0.999)
+  // sat right on this number and accepted it. The floor here is only a sanity gate
+  // against degenerate mesh build — the assignment itself is by argmax, not by absolute
+  // threshold, so it is robust to which side of 0.999 the wedge happens to land on.
+  constexpr float kFaceCoplanarFloor = 1e-2f;
+
+  // Pre-normalize plane equations once; skip degenerate (zero-norm) planes.
+  std::vector<float> plane_n(plane_cnt * 3, 0.0f);
+  std::vector<float> plane_d(plane_cnt, 0.0f);
+  std::vector<char> plane_active(plane_cnt, 0);
   for (size_t p = 0; p < plane_cnt; p++) {
     const float* coef = plane_coef + p * 4;
     float norm_len = Norm3(coef);
     if (norm_len < math::kFloatEps) {
       continue;
     }
+    plane_n[p * 3 + 0] = coef[0] / norm_len;
+    plane_n[p * 3 + 1] = coef[1] / norm_len;
+    plane_n[p * 3 + 2] = coef[2] / norm_len;
+    plane_d[p] = coef[3] / norm_len;
+    plane_active[p] = 1;
+  }
 
-    float n[3]{ coef[0] / norm_len, coef[1] / norm_len, coef[2] / norm_len };
-    for (size_t t = 0; t < tri_cnt; t++) {
-      if (Dot3(n, face_n_ + t * 3) > 1.0f - 1e-3f) {
-        valid_cnt++;
-        break;
+  // For each triangle, find its argmax plane (the single best match). Track per-plane
+  // the representative triangle = the one with the largest dot among triangles assigned
+  // to that plane.
+  std::vector<int> plane_best_tri(plane_cnt, -1);
+  std::vector<float> plane_best_dot(plane_cnt, -1.0f);
+  for (size_t t = 0; t < tri_cnt; t++) {
+    const float* n_tri = face_n_ + t * 3;
+    int tri_best_plane = -1;
+    float tri_best_dot = -1.0f;
+    for (size_t p = 0; p < plane_cnt; p++) {
+      if (!plane_active[p]) {
+        continue;
       }
+      float dot = Dot3(plane_n.data() + p * 3, n_tri);
+      if (dot > tri_best_dot) {
+        tri_best_dot = dot;
+        tri_best_plane = static_cast<int>(p);
+      }
+    }
+    if (tri_best_plane < 0 || tri_best_dot < 1.0f - kFaceCoplanarFloor) {
+      LOG_WARNING("BuildPolygonFaceData: triangle %zu has no coplanar plane (best_dot=%.4f)", t,
+                  static_cast<double>(tri_best_dot));
+      continue;
+    }
+    if (tri_best_dot > plane_best_dot[tri_best_plane]) {
+      plane_best_dot[tri_best_plane] = tri_best_dot;
+      plane_best_tri[tri_best_plane] = static_cast<int>(t);
+    }
+  }
+
+  // Count planes that won at least one triangle.
+  size_t valid_cnt = 0;
+  for (size_t p = 0; p < plane_cnt; p++) {
+    if (plane_best_tri[p] >= 0) {
+      valid_cnt++;
     }
   }
 
@@ -625,39 +679,36 @@ void Crystal::BuildPolygonFaceData(const float* plane_coef, size_t plane_cnt) {
   poly_face_d_ = poly_face_data_.get() + valid_cnt * 3;
   poly_face_tri_id_ = reinterpret_cast<int*>(poly_face_data_.get() + valid_cnt * 4);
 
-  // Second pass: fill data
+  // Degenerate-face safety net (Step 3): warn if the representative triangle of any
+  // accepted polygon face has near-zero area relative to the largest triangle. This
+  // signals an upstream geometry-gen issue (a polygon plane survived without a real
+  // surface); in current pipeline the upstream Triangulate already skips faces with
+  // <3 vertices, so this gate is belt-and-suspenders for future configs (asymmetric
+  // d[6], near-degenerate apex collapse, etc.).
+  float max_tri_area = 0.0f;
+  for (size_t t = 0; t < tri_cnt; t++) {
+    max_tri_area = std::max(max_tri_area, face_area_[t]);
+  }
+
   size_t idx = 0;
   for (size_t p = 0; p < plane_cnt; p++) {
-    const float* coef = plane_coef + p * 4;
-    float norm_len = Norm3(coef);
-    if (norm_len < math::kFloatEps) {
+    if (plane_best_tri[p] < 0) {
       continue;
     }
-
-    float n[3]{ coef[0] / norm_len, coef[1] / norm_len, coef[2] / norm_len };
-    float d = coef[3] / norm_len;
-
-    int best_tri = -1;
-    float best_dot = -1.0f;
-    for (size_t t = 0; t < tri_cnt; t++) {
-      float dot = Dot3(n, face_n_ + t * 3);
-      if (dot > best_dot) {
-        best_dot = dot;
-        best_tri = static_cast<int>(t);
-      }
-    }
-
-    if (best_tri < 0 || best_dot < 1.0f - 1e-3f) {
+    int rep_tri = plane_best_tri[p];
+    if (max_tri_area > 0.0f && face_area_[rep_tri] < 1e-6f * max_tri_area) {
+      LOG_WARNING("BuildPolygonFaceData: plane %zu has degenerate rep triangle %d (area=%.4e, max=%.4e)", p, rep_tri,
+                  static_cast<double>(face_area_[rep_tri]), static_cast<double>(max_tri_area));
       continue;
     }
-
-    poly_face_n_[idx * 3 + 0] = n[0];
-    poly_face_n_[idx * 3 + 1] = n[1];
-    poly_face_n_[idx * 3 + 2] = n[2];
-    poly_face_d_[idx] = d;
-    poly_face_tri_id_[idx] = best_tri;
+    poly_face_n_[idx * 3 + 0] = plane_n[p * 3 + 0];
+    poly_face_n_[idx * 3 + 1] = plane_n[p * 3 + 1];
+    poly_face_n_[idx * 3 + 2] = plane_n[p * 3 + 2];
+    poly_face_d_[idx] = plane_d[p];
+    poly_face_tri_id_[idx] = plane_best_tri[p];
     idx++;
   }
+  poly_face_cnt_ = idx;  // Re-count after degenerate filtering.
 }
 
 float Crystal::GetRefractiveIndex(float wl) const {

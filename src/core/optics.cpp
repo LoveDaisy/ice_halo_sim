@@ -95,6 +95,25 @@ static void PropagateSlab(const Crystal& crystal, size_t num, size_t step, const
   }
 
   // Face-outer, ray-inner: find minimum t among exit faces (denom > eps)
+  //
+  // CONVEXITY ASSUMPTION (latent — keep in mind before adding crystal types):
+  // This "nearest plane the ray is exiting" next-face search is only correct for a
+  // CONVEX crystal whose every polygon plane bounds a real (non-degenerate) face.
+  // It does NOT special-case outward-going rays (those leaving their source face with
+  // d·n_src > 0): on a convex crystal such a ray provably cannot re-hit another face,
+  // so no spurious plane is selectable — but that guarantee relies on two invariants:
+  //   (1) all configured crystals are convex (CreateConcavePyramidMesh exists in geo3d
+  //       but is NOT wired to the config/Crystal factory; if a concave type is ever
+  //       wired through here, outward rays CAN legitimately re-hit and this search will
+  //       misclassify them);
+  //   (2) no degenerate / zero-area plane leaks into the polygon-face set — ensured by
+  //       task-geometry-gen-numerical-robustness (#133), which kills the fake-basal face
+  //       at extreme wedge that previously made outward first-bounce reflections select a
+  //       phantom plane (the B-ring bug).
+  // A defensive `d·n_src > 0` outward-skip was prototyped (#132, PropagateSlab) but not
+  // merged: #133 removed the root-cause trigger, so the skip guards no live scenario and
+  // adds a hot-loop branch + bakes in the convexity assumption. If either invariant above
+  // is broken in the future, revisit #132's outward-skip (gated to convex crystals).
   for (size_t fi = 0; fi < poly_cnt; fi++) {
     float nx = pn[fi * 3 + 0];
     float ny = pn[fi * 3 + 1];

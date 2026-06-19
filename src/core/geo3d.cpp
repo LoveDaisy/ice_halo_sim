@@ -9,6 +9,7 @@
 #include <memory>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #include "core/math.hpp"
 
@@ -401,25 +402,61 @@ size_t FillHexCrystalCoef(float upper_alpha, float lower_alpha, float h1, float 
     out_coef[3] = -h2_2;
     out_coef[7] = -h2_2;
   } else {
-    // Pyramid: solve for z_max/z_min from non-basal planes
-    float z_max = std::numeric_limits<float>::lowest();
-    float z_min = std::numeric_limits<float>::max();
-    float xyz[3];
+    // Pyramid: solve for z_max/z_min from non-basal planes.
+    // Computed in double internally to absorb float32 cancellation at extreme
+    // wedges (≥ 88.5°), then narrowed back when writing the basal d values.
+    // task-geometry-gen-numerical-robustness Step 4.
+    std::vector<double> coef_d(cnt * 4);
+    for (size_t i = 0; i < cnt * 4; i++) {
+      coef_d[i] = static_cast<double>(out_coef[i]);
+    }
+    auto solve_planes_d = [](const double* c1, const double* c2, const double* c3, double* res) -> bool {
+      double det = c1[0] * c2[1] * c3[2] + c1[1] * c2[2] * c3[0] + c1[2] * c2[0] * c3[1] - c1[2] * c2[1] * c3[0] -
+                   c1[0] * c2[2] * c3[1] - c1[1] * c2[0] * c3[2];
+      if (std::fabs(det) < 1e-10) {
+        return false;
+      }
+      double x = c1[3] * c2[2] * c3[1] + c1[1] * c2[3] * c3[2] + c1[2] * c2[1] * c3[3] -  //
+                 c1[1] * c2[2] * c3[3] - c1[2] * c2[3] * c3[1] - c1[3] * c2[1] * c3[2];
+      double y = c1[0] * c2[2] * c3[3] + c1[2] * c2[3] * c3[0] + c1[3] * c2[0] * c3[2] -  //
+                 c1[3] * c2[2] * c3[0] - c1[0] * c2[3] * c3[2] - c1[2] * c2[0] * c3[3];
+      double z = c1[3] * c2[1] * c3[0] + c1[0] * c2[3] * c3[1] + c1[1] * c2[0] * c3[3] -  //
+                 c1[0] * c2[1] * c3[3] - c1[1] * c2[3] * c3[0] - c1[3] * c2[0] * c3[1];
+      res[0] = x / det;
+      res[1] = y / det;
+      res[2] = z / det;
+      return true;
+    };
+    auto is_in_polyhedron_d = [](int n, const double* coef, const double xyz[3]) -> bool {
+      for (int j = 0; j < n; j++) {
+        if (coef[j * 4 + 0] * xyz[0] + coef[j * 4 + 1] * xyz[1] + coef[j * 4 + 2] * xyz[2] + coef[j * 4 + 3] > 1e-10) {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    double z_max = std::numeric_limits<double>::lowest();
+    double z_min = std::numeric_limits<double>::max();
+    double xyz[3];
     for (size_t i = 2; i < cnt; i++) {
       for (size_t j = i + 1; j < cnt; j++) {
         for (size_t k = j + 1; k < cnt; k++) {
-          if (!SolvePlanes(out_coef + i * 4, out_coef + j * 4, out_coef + k * 4, xyz)) {
+          if (!solve_planes_d(coef_d.data() + i * 4, coef_d.data() + j * 4, coef_d.data() + k * 4, xyz)) {
             continue;
           }
-          if (IsInPolyhedron3(static_cast<int>(cnt - 2), out_coef + 8, xyz)) {
+          if (is_in_polyhedron_d(static_cast<int>(cnt - 2), coef_d.data() + 8, xyz)) {
             z_max = std::max(z_max, xyz[2]);
             z_min = std::min(z_min, xyz[2]);
           }
         }
       }
     }
-    out_coef[3] = (-z_max + h2_2) * h1 - h2_2;
-    out_coef[7] = (z_min + h2_2) * h3 - h2_2;
+    auto h1_d = static_cast<double>(h1);
+    auto h3_d = static_cast<double>(h3);
+    auto h2_2_d = static_cast<double>(h2_2);
+    out_coef[3] = static_cast<float>((-z_max + h2_2_d) * h1_d - h2_2_d);
+    out_coef[7] = static_cast<float>((z_min + h2_2_d) * h3_d - h2_2_d);
   }
 
   return cnt;
@@ -429,8 +466,13 @@ size_t FillHexCrystalCoef(float upper_alpha, float lower_alpha, float h1, float 
 // ====== Unified convex polyhedron mesh creation ======
 
 Mesh CreateConvexPolyhedronMesh(int plane_cnt, const float* coef) {
-  auto [vtx, vtx_cnt] = SolveConvexPolyhedronVtx(plane_cnt, coef);
-  auto faces = CollectSurfaceVtx(vtx_cnt, vtx.get(), plane_cnt, coef);
+  // Double-precision geometry-gen pipeline (task-geometry-gen-numerical-robustness
+  // Step 4): vertex solve + co-planar grouping run in double internally to keep
+  // mesh assembly stable on extreme-wedge geometry (≥ 88.5°), where float32
+  // precision-loss collapses apex/anti-apex vertices into the basal ring.
+  // Public coef input and Mesh output stay float — no API surface change.
+  auto [vtx, vtx_cnt] = SolveConvexPolyhedronVtxD(plane_cnt, coef);
+  auto faces = CollectSurfaceVtxD(vtx_cnt, vtx.get(), plane_cnt, coef);
   auto [tri, tri_cnt] = Triangulate(vtx_cnt, vtx.get(), faces);
   return Mesh(vtx_cnt, std::move(vtx), tri_cnt, std::move(tri));
 }

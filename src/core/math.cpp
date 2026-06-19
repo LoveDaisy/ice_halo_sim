@@ -693,6 +693,128 @@ bool IsInPolyhedron3(int n, const float* coef, const float xyz[3], bool boundary
 }
 
 
+namespace {
+
+// File-local double-precision helpers used by SolveConvexPolyhedronVtxD /
+// CollectSurfaceVtxD. Implementations mirror the float versions above; the
+// scale-invariant singularity / boundary criteria are deferred to Step 5.
+//
+// Threshold note: arithmetic runs in double, but the INPUT coefficients are
+// float (relative precision ~1e-7). Residuals on legitimate incidences
+// (vertex actually on a plane, or two intersection triples meeting at the
+// same vertex) are therefore dominated by float-input precision, not double
+// computation precision. Thresholds stay at kFloatEps = 1e-5 to absorb that
+// residual; using kDoubleEps = 1e-10 would false-reject valid incidences on
+// every prism/pyramid plane and collapse the mesh to its pyramid-only subset.
+constexpr double kIncidenceEpsD = static_cast<double>(math::kFloatEps);
+// Singularity threshold for double Cramer's rule: det of float-derived planes
+// scales with float input squared, so kDoubleEps is the right floor — only
+// truly degenerate (numerically zero) triples should be rejected.
+constexpr double kSingularDetD = 1e-10;
+
+bool FloatEqualZeroD(double a, double threshold = kIncidenceEpsD) {
+  return std::fabs(a) < threshold;
+}
+
+double Dot3D(const double* v1, const double* v2) {
+  return v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2];
+}
+
+double DiffNorm3D(const double* a, const double* b) {
+  double dx = a[0] - b[0];
+  double dy = a[1] - b[1];
+  double dz = a[2] - b[2];
+  return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+bool SolvePlanesD(const double* c1, const double* c2, const double* c3, double* res) {
+  double det = c1[0] * c2[1] * c3[2] + c1[1] * c2[2] * c3[0] + c1[2] * c2[0] * c3[1] - c1[2] * c2[1] * c3[0] -
+               c1[0] * c2[2] * c3[1] - c1[1] * c2[0] * c3[2];
+  if (FloatEqualZeroD(det, kSingularDetD)) {
+    res[0] = std::numeric_limits<double>::quiet_NaN();
+    res[1] = std::numeric_limits<double>::quiet_NaN();
+    res[2] = std::numeric_limits<double>::quiet_NaN();
+    return false;
+  }
+  double x = c1[3] * c2[2] * c3[1] + c1[1] * c2[3] * c3[2] + c1[2] * c2[1] * c3[3] -  //
+             c1[1] * c2[2] * c3[3] - c1[2] * c2[3] * c3[1] - c1[3] * c2[1] * c3[2];
+  double y = c1[0] * c2[2] * c3[3] + c1[2] * c2[3] * c3[0] + c1[3] * c2[0] * c3[2] -  //
+             c1[3] * c2[2] * c3[0] - c1[0] * c2[3] * c3[2] - c1[2] * c2[0] * c3[3];
+  double z = c1[3] * c2[1] * c3[0] + c1[0] * c2[3] * c3[1] + c1[1] * c2[0] * c3[3] -  //
+             c1[0] * c2[1] * c3[3] - c1[1] * c2[3] * c3[0] - c1[3] * c2[0] * c3[1];
+  res[0] = x / det;
+  res[1] = y / det;
+  res[2] = z / det;
+  return true;
+}
+
+bool IsInPolyhedron3D(int n, const double* coef, const double xyz[3], bool boundary = true) {
+  double th = boundary ? kIncidenceEpsD : -kIncidenceEpsD;
+  for (int j = 0; j < n; j++) {
+    if (Dot3D(coef + j * 4, xyz) + coef[j * 4 + 3] > th) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void WidenCoefToDouble(int plane_cnt, const float* coef_f, std::vector<double>& coef_d) {
+  coef_d.resize(plane_cnt * 4);
+  for (int i = 0; i < plane_cnt * 4; i++) {
+    coef_d[i] = static_cast<double>(coef_f[i]);
+  }
+}
+
+}  // namespace
+
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+std::tuple<std::unique_ptr<float[]>, int> SolveConvexPolyhedronVtxD(int plane_cnt, const float* coef_ptr) {
+  std::vector<double> coef_d;
+  WidenCoefToDouble(plane_cnt, coef_ptr, coef_d);
+
+  int vtx_cap = plane_cnt * (plane_cnt - 1) * (plane_cnt - 2) / 6;
+  auto vtx_d = std::make_unique<double[]>(vtx_cap * 3);
+  double* vtx_ptr = vtx_d.get();
+
+  double xyz[3]{};
+  int vtx_cnt = 0;
+  for (int i = 0; i < plane_cnt; i++) {
+    for (int j = i + 1; j < plane_cnt; j++) {
+      for (int k = j + 1; k < plane_cnt; k++) {
+        if (!SolvePlanesD(coef_d.data() + i * 4, coef_d.data() + j * 4, coef_d.data() + k * 4, xyz)) {
+          continue;
+        }
+        if (!IsInPolyhedron3D(plane_cnt, coef_d.data(), xyz)) {
+          continue;
+        }
+        bool listed = false;
+        for (int m = 0; m < vtx_cnt; m++) {
+          if (FloatEqualZeroD(DiffNorm3D(vtx_ptr + m * 3, xyz), 2 * kIncidenceEpsD)) {
+            listed = true;
+            break;
+          }
+        }
+        if (listed) {
+          continue;
+        }
+        vtx_ptr[vtx_cnt * 3 + 0] = xyz[0];
+        vtx_ptr[vtx_cnt * 3 + 1] = xyz[1];
+        vtx_ptr[vtx_cnt * 3 + 2] = xyz[2];
+        vtx_cnt++;
+      }
+    }
+  }
+
+  // Narrow back to float at the API boundary.
+  auto final_vtx = std::make_unique<float[]>(vtx_cnt * 3);
+  for (int i = 0; i < vtx_cnt * 3; i++) {
+    final_vtx[i] = static_cast<float>(vtx_ptr[i]);
+  }
+  return std::make_tuple(std::move(final_vtx), vtx_cnt);
+}
+
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 std::tuple<std::unique_ptr<float[]>, int> SolveConvexPolyhedronVtx(int plane_cnt, const float* coef_ptr) {
   using math::kFloatEps;
@@ -824,6 +946,84 @@ std::vector<int> CollectSurfaceVtx(int vtx_cnt, const float* vtx_ptr,          /
     }
   }
   return curr_face;
+}
+
+
+namespace {
+
+// Double-precision incidence helper for CollectSurfaceVtxD.
+// Mirrors CollectSurfaceVtx's per-plane "is this vertex on the plane?" loop but
+// computes Dot3 + d in double for vertices/coefficients widened from float.
+std::vector<int> CollectSurfaceVtxD(int vtx_cnt, const double* vtx_d, int checking_plane, const double* coef_d,
+                                    const std::vector<std::set<int>>& checked_faces) {
+  std::vector<int> curr_face;
+  bool listed = false;
+  const double* cp = coef_d + checking_plane * 4;
+  for (int k = 0; k < vtx_cnt; k++) {
+    if (!FloatEqualZeroD(Dot3D(cp, vtx_d + k * 3) + cp[3])) {
+      continue;
+    }
+    curr_face.emplace_back(k);
+    if (curr_face.size() == 3) {
+      for (const auto& s : checked_faces) {
+        if (s.count(curr_face[0]) && s.count(curr_face[1]) && s.count(curr_face[2])) {
+          listed = true;
+          curr_face.clear();
+          break;
+        }
+      }
+    }
+    if (listed) {
+      break;
+    }
+  }
+  return curr_face;
+}
+
+}  // namespace
+
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+std::vector<std::set<int>> CollectSurfaceVtxD(int vtx_cnt, const float* vtx_ptr, int plane_cnt, const float* coef_ptr) {
+  std::vector<double> coef_d;
+  WidenCoefToDouble(plane_cnt, coef_ptr, coef_d);
+  std::vector<double> vtx_d(vtx_cnt * 3);
+  for (int i = 0; i < vtx_cnt * 3; i++) {
+    vtx_d[i] = static_cast<double>(vtx_ptr[i]);
+  }
+
+  std::vector<std::set<int>> plannar_faces;
+  for (int i = 0; i < vtx_cnt; i++) {
+    for (int j = i + 1; j < vtx_cnt; j++) {
+      int plane1 = -1;
+      int plane2 = -1;
+      for (int k = 0; k < plane_cnt; k++) {
+        const double* cp = coef_d.data() + k * 4;
+        if (!FloatEqualZeroD(Dot3D(cp, vtx_d.data() + i * 3) + cp[3]) ||
+            !FloatEqualZeroD(Dot3D(cp, vtx_d.data() + j * 3) + cp[3])) {
+          continue;
+        }
+        if (plane1 < 0) {
+          plane1 = k;
+        } else {
+          plane2 = k;
+          break;
+        }
+      }
+      if (plane1 < 0 || plane2 < 0) {
+        continue;
+      }
+      auto face1 = CollectSurfaceVtxD(vtx_cnt, vtx_d.data(), plane1, coef_d.data(), plannar_faces);
+      if (!face1.empty()) {
+        plannar_faces.emplace_back(face1.begin(), face1.end());
+      }
+      auto face2 = CollectSurfaceVtxD(vtx_cnt, vtx_d.data(), plane2, coef_d.data(), plannar_faces);
+      if (!face2.empty()) {
+        plannar_faces.emplace_back(face2.begin(), face2.end());
+      }
+    }
+  }
+  return plannar_faces;
 }
 
 

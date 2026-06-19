@@ -282,6 +282,21 @@ bool IsInPolyhedron3(int n, const float* coef, const float xyz[3], bool boundary
 std::tuple<std::unique_ptr<float[]>, int> SolveConvexPolyhedronVtx(int plane_cnt, const float* coef_ptr);
 
 /**
+ * @brief Double-precision variant of SolveConvexPolyhedronVtx.
+ *
+ * Same external contract as @ref SolveConvexPolyhedronVtx (input plane coefficients
+ * in float, output vertices in float), but the intersection-solving / containment
+ * test / vertex de-duplication are all done in double internally. Used by the mesh
+ * builder to suppress float32 precision artifacts on extreme-wedge geometry
+ * (vertex collapse at wedge ≥ ~88.5°, see task-geometry-gen-numerical-robustness).
+ *
+ * @param plane_cnt Number of half spaces.
+ * @param coef_ptr Coefficients of half spaces. [a, b, c, d]
+ * @return std::tuple<std::unique_ptr<float[]>, int> Vertices coordinates and actual vertices number.
+ */
+std::tuple<std::unique_ptr<float[]>, int> SolveConvexPolyhedronVtxD(int plane_cnt, const float* coef_ptr);
+
+/**
  * @brief Find vertices of the difference of two convex polyhedrons.
  *
  * @param plane_cnt1 Half space number of first polyhedron.
@@ -304,6 +319,17 @@ std::tuple<std::unique_ptr<float[]>, int> ConvexPolyhedronDifferenceVtx(int plan
  * @return std::vector<std::set<int>> Vertices collections. Each set<int> is a set of co-plannar vertices.
  */
 std::vector<std::set<int>> CollectSurfaceVtx(int vtx_cnt, const float* vtx_ptr, int plane_cnt, const float* coef_ptr);
+
+/**
+ * @brief Double-precision variant of CollectSurfaceVtx.
+ *
+ * Internally widens float inputs to double for the incidence test (|coef · vtx + d|).
+ * Output face groups are still indices into the input float vertex array. Used by
+ * the mesh builder to avoid spurious "no plane meets this edge" misses on
+ * extreme-wedge geometry where float incidence error approaches the absolute
+ * threshold.
+ */
+std::vector<std::set<int>> CollectSurfaceVtxD(int vtx_cnt, const float* vtx_ptr, int plane_cnt, const float* coef_ptr);
 
 /**
  * @brief Triangulate mesh.
