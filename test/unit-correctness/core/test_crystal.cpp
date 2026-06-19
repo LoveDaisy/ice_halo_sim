@@ -2,9 +2,12 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <fstream>
 #include <limits>
+#include <set>
 #include <utility>
+#include <vector>
 
 #include "config/config_manager.hpp"
 #include "core/crystal.hpp"
@@ -514,6 +517,130 @@ TEST(CrystalGetFnByPolygonFace, MatchesTriangleOverloadAndBoundaries) {
   EXPECT_EQ(crystal.GetFn(static_cast<IdType>(crystal.PolygonFaceCount())), kInvalidId);
   // kInvalidId input returns kInvalidId.
   EXPECT_EQ(crystal.GetFn(kInvalidId), kInvalidId);
+}
+
+// task-geometry-gen-numerical-robustness Step 1: white-box wedge sweep diagnostic.
+// TEMPORARY — DISABLED_ prefix so it does not run by default; invoke with
+// `--gtest_also_run_disabled_tests --gtest_filter=*WedgeSweepDiagnostic*` to capture data.
+// Will be replaced/folded into PyramidWedgeSweepNoFalseBasal in Step 6.
+TEST(GeometryGenDiagnostic, DISABLED_WedgeSweepDiagnostic) {
+  const float wedges[] = { 60.0f, 75.0f, 85.0f, 87.0f, 87.4f, 87.5f, 88.0f, 89.0f, 89.9f };
+  // B-ring config geometry: prism_h=0, upper_h=lower_h=1.0, symmetric dist[6]=1
+  const float h1 = 1.0f;
+  const float h2 = 0.0f;  // prism_h=0 (degenerate prism section)
+  const float h3 = 1.0f;
+  const float dist[6]{ 1, 1, 1, 1, 1, 1 };
+
+  std::printf("\n========== Step 1 white-box: wedge sweep (prism_h=0, upper/lower_h=1.0) ==========\n");
+  for (float wedge : wedges) {
+    std::printf("\n----- wedge = %.4f deg -----\n", wedge);
+
+    float coef[kMaxHexCrystalPlanes * 4];
+    auto plane_cnt = FillHexCrystalCoef(wedge, wedge, h1, h2, h3, dist, coef);
+    std::printf("  FillHexCrystalCoef: plane_cnt = %zu\n", plane_cnt);
+
+    // (a) Per-plane normal length |n| — is the relativization basis non-trivial?
+    std::printf("  Plane normal lengths |n|:");
+    for (size_t p = 0; p < plane_cnt; p++) {
+      float ln = Norm3(coef + p * 4);
+      std::printf(" [p%zu]=%.4e", p, ln);
+    }
+    std::printf("\n");
+
+    // (b) SolvePlanes det for all triples; check raw det vs scale-invariant |det|/(|n1||n2||n3|).
+    int triples_total = 0;
+    int triples_kept = 0;
+    int triples_dropped_singular = 0;
+    float min_raw_det_kept = std::numeric_limits<float>::infinity();
+    float min_rel_det_kept = std::numeric_limits<float>::infinity();
+    float min_raw_det_dropped = std::numeric_limits<float>::infinity();
+    float min_rel_det_dropped = std::numeric_limits<float>::infinity();
+    for (size_t i = 0; i < plane_cnt; i++) {
+      for (size_t j = i + 1; j < plane_cnt; j++) {
+        for (size_t k = j + 1; k < plane_cnt; k++) {
+          const float* c1 = coef + i * 4;
+          const float* c2 = coef + j * 4;
+          const float* c3 = coef + k * 4;
+          float det = c1[0] * c2[1] * c3[2] + c1[1] * c2[2] * c3[0] + c1[2] * c2[0] * c3[1] - c1[2] * c2[1] * c3[0] -
+                      c1[0] * c2[2] * c3[1] - c1[1] * c2[0] * c3[2];
+          float n1 = Norm3(c1);
+          float n2 = Norm3(c2);
+          float n3 = Norm3(c3);
+          float denom = n1 * n2 * n3;
+          float rel = denom > 0 ? std::fabs(det) / denom : 0.0f;
+          float xyz[3];
+          bool solved = SolvePlanes(c1, c2, c3, xyz);
+          triples_total++;
+          if (solved) {
+            triples_kept++;
+            min_raw_det_kept = std::min(min_raw_det_kept, std::fabs(det));
+            min_rel_det_kept = std::min(min_rel_det_kept, rel);
+          } else {
+            triples_dropped_singular++;
+            min_raw_det_dropped = std::min(min_raw_det_dropped, std::fabs(det));
+            min_rel_det_dropped = std::min(min_rel_det_dropped, rel);
+          }
+        }
+      }
+    }
+    std::printf("  SolvePlanes triples: total=%d kept=%d singular-dropped=%d\n", triples_total, triples_kept,
+                triples_dropped_singular);
+    std::printf("    min |det| kept    = %.4e   min rel-det kept    = %.4e\n", min_raw_det_kept, min_rel_det_kept);
+    if (triples_dropped_singular > 0) {
+      std::printf("    min |det| dropped = %.4e   min rel-det dropped = %.4e\n", min_raw_det_dropped,
+                  min_rel_det_dropped);
+    }
+
+    // (c) SolveConvexPolyhedronVtx: vertex count.
+    auto [vtx, vtx_cnt] = SolveConvexPolyhedronVtx(static_cast<int>(plane_cnt), coef);
+    std::printf("  SolveConvexPolyhedronVtx: vtx_cnt = %d\n", vtx_cnt);
+
+    // (d) CollectSurfaceVtx: per-plane |Dot3+d| of all vertices (smallest non-zero is the
+    //     closest "should this vtx be on this plane?" decision). Dump min/max for diagnostic.
+    auto faces = CollectSurfaceVtx(vtx_cnt, vtx.get(), static_cast<int>(plane_cnt), coef);
+    std::printf("  CollectSurfaceVtx: face_groups = %zu\n", faces.size());
+    // Per-plane vertex incidence: sum of |Dot3(coef, vtx) + d| under and over the FloatEqualZero
+    // (=kFloatEps=1e-5) threshold tells us if any vertex is borderline-incident.
+    for (size_t p = 0; p < plane_cnt; p++) {
+      float min_abs_val = std::numeric_limits<float>::infinity();
+      float min_abs_val_normalized = std::numeric_limits<float>::infinity();
+      int borderline_count = 0;  // 0.1*kFloatEps < |val| < 10*kFloatEps
+      float norm_len = Norm3(coef + p * 4);
+      for (int v = 0; v < vtx_cnt; v++) {
+        float val = Dot3(coef + p * 4, vtx.get() + v * 3) + coef[p * 4 + 3];
+        float abs_val = std::fabs(val);
+        if (abs_val < min_abs_val) {
+          min_abs_val = abs_val;
+        }
+        float abs_val_norm = norm_len > 0 ? abs_val / norm_len : abs_val;
+        if (abs_val_norm < min_abs_val_normalized) {
+          min_abs_val_normalized = abs_val_norm;
+        }
+        if (abs_val > 1e-6f && abs_val < 1e-4f) {
+          borderline_count++;
+        }
+      }
+      if (borderline_count > 0) {
+        std::printf("    plane %zu: |n|=%.4e min|val|=%.4e min|val|/|n|=%.4e borderline(1e-6..1e-4)=%d\n", p, norm_len,
+                    min_abs_val, min_abs_val_normalized, borderline_count);
+      }
+    }
+
+    // (e) Final Crystal: poly_face_cnt and normal z (which one is fake basal n=(0,0,±1)?).
+    auto crystal = Crystal::CreatePyramid(wedge, wedge, h1, h2, h3, dist);
+    std::printf("  Crystal.PolygonFaceCount = %zu\n", crystal.PolygonFaceCount());
+    const float* pn = crystal.GetPolygonFaceNormal();
+    int n_basal_like = 0;
+    for (size_t p = 0; p < crystal.PolygonFaceCount(); p++) {
+      if (std::fabs(pn[p * 3 + 2]) > 0.99f) {
+        n_basal_like++;
+        std::printf("    poly %zu: n = (%.4f, %.4f, %.4f) fn=%d  <-- basal-like\n", p, pn[p * 3 + 0], pn[p * 3 + 1],
+                    pn[p * 3 + 2], static_cast<int>(crystal.GetFn(static_cast<IdType>(p))));
+      }
+    }
+    std::printf("  basal-like polygon faces (|n_z|>0.99): %d\n", n_basal_like);
+  }
+  std::printf("\n========== end Step 1 diagnostic ==========\n\n");
 }
 
 }  // namespace
