@@ -49,7 +49,7 @@ jobs:
     name: ${{ matrix.name }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # GUI builds need icon resources from LFS, but NOT test reference images.
       # Selective fetch saves ~16MB bandwidth per run vs `lfs: true`.
@@ -150,7 +150,7 @@ jobs:
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           lfs: true  # E2E reference images are stored in LFS
 
@@ -224,7 +224,7 @@ jobs:
     name: E2E Slow (${{ matrix.name }})
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           lfs: true
 
@@ -286,7 +286,7 @@ jobs:
       contents: write
       actions: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download benchmark artifacts
         uses: actions/download-artifact@v8
@@ -481,7 +481,7 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Check clang-format
         run: |
