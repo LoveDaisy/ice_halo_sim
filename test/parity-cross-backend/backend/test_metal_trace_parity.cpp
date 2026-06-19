@@ -189,18 +189,30 @@ OracleLayerResult OracleTraceLayer(const Crystal& crystal, const PolyArrays& pol
           continue;
         }
 
+        // Mirror metal_trace_backend.mm: convex-body outward short-circuit
+        // (skip search when the child ray leaves the source face outward).
+        bool outward_ray = false;
+        if (to_face != kInvalidId) {
+          float snx = poly.n[to_face * 3 + 0];
+          float sny = poly.n[to_face * 3 + 1];
+          float snz = poly.n[to_face * 3 + 2];
+          outward_ray = (cdx * snx + cdy * sny + cdz * snz) > 0.0f;
+        }
+
         float t_far = 1e30f;
         int far_face = -1;
-        for (size_t fi = 0; fi < poly_cnt; fi++) {
-          float fnx = poly.n[fi * 3 + 0];
-          float fny = poly.n[fi * 3 + 1];
-          float fnz = poly.n[fi * 3 + 2];
-          float fd = poly.d[fi];
-          float denom = cdx * fnx + cdy * fny + cdz * fnz;
-          float t = -(ox * fnx + oy * fny + oz * fnz + fd) / denom;
-          if (denom > kFloatEps && t < t_far) {
-            t_far = t;
-            far_face = static_cast<int>(fi);
+        if (!outward_ray) {
+          for (size_t fi = 0; fi < poly_cnt; fi++) {
+            float fnx = poly.n[fi * 3 + 0];
+            float fny = poly.n[fi * 3 + 1];
+            float fnz = poly.n[fi * 3 + 2];
+            float fd = poly.d[fi];
+            float denom = cdx * fnx + cdy * fny + cdz * fnz;
+            float t = -(ox * fnx + oy * fny + oz * fnz + fd) / denom;
+            if (denom > kFloatEps && t < t_far) {
+              t_far = t;
+              far_face = static_cast<int>(fi);
+            }
           }
         }
         float eps_thr = (to_face != kInvalidId && far_face != static_cast<int>(to_face)) ? -kFloatEps : kFloatEps;

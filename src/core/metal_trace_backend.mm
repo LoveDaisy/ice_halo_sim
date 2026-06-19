@@ -291,17 +291,34 @@ kernel void trace_layer_kernel(
       float cw  = (ch == 0u) ? w_refl : w_refr;
       if (cw < 0.0f) { continue; }
 
+      // Convex-body outward short-circuit (mirrors CPU PropagateSlab):
+      // a child ray leaving the source face outward (d · n_src > 0) cannot
+      // hit any other polygon face. Skip the search so far_face stays -1
+      // and the ray is written as outgoing (kInvalidId). Prevents
+      // degenerate infinite planes (e.g. prism walls at prism_h=0) from
+      // being selected at positive t and mis-classifying first-bounce
+      // external reflections as internal transit.
+      bool outward_ray = false;
+      if (to_face != kInvalidId) {
+        float snx = poly_n[to_face * 3u + 0u];
+        float sny = poly_n[to_face * 3u + 1u];
+        float snz = poly_n[to_face * 3u + 2u];
+        outward_ray = (cdx * snx + cdy * sny + cdz * snz) > 0.0f;
+      }
+
       float t_far = 1e30f;
       int   far_face = -1;
-      for (uint fi = 0u; fi < poly_cnt; fi++) {
-        float fnx = poly_n[fi * 3u + 0u];
-        float fny = poly_n[fi * 3u + 1u];
-        float fnz = poly_n[fi * 3u + 2u];
-        float fd  = poly_d[fi];
-        float denom = cdx * fnx + cdy * fny + cdz * fnz;
-        float t = -(ox * fnx + oy * fny + oz * fnz + fd) / denom;
-        if (denom > kFloatEps && t < t_far) {
-          t_far = t; far_face = int(fi);
+      if (!outward_ray) {
+        for (uint fi = 0u; fi < poly_cnt; fi++) {
+          float fnx = poly_n[fi * 3u + 0u];
+          float fny = poly_n[fi * 3u + 1u];
+          float fnz = poly_n[fi * 3u + 2u];
+          float fd  = poly_d[fi];
+          float denom = cdx * fnx + cdy * fny + cdz * fnz;
+          float t = -(ox * fnx + oy * fny + oz * fnz + fd) / denom;
+          if (denom > kFloatEps && t < t_far) {
+            t_far = t; far_face = int(fi);
+          }
         }
       }
       float eps_thr = (to_face != kInvalidId && far_face != int(to_face)) ? -kFloatEps : kFloatEps;
