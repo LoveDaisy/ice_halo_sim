@@ -993,6 +993,230 @@ void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
 // crystal/filter ID in the parsed maps.
 // NOTE: This is NOT the .lmc GUI state format — see DeserializeGuiStateJson for that.
 
+// Parse a core-JSON EE simple-filter entry's length fields into the GUI's
+// (length_mode, min_len, max_len) triple. Shared by the simple-filter parse
+// branch in DeserializeFromJson and by TryReconstructComplexFilter so both
+// paths use the identical mapping of (has_min, has_max) → length_mode.
+static void DecodeEELengthFromJson(const json& jf, int& length_mode, int& min_len_out, int& max_len_out) {
+  const bool has_min = jf.contains("min_len") && !jf.at("min_len").is_null();
+  const bool has_max = jf.contains("max_len") && !jf.at("max_len").is_null();
+  const int min_v = has_min ? std::max(jf.at("min_len").get<int>(), 1) : 1;
+  const int max_v = has_max ? std::max(jf.at("max_len").get<int>(), 1) : 1;
+  if (!has_min && !has_max) {
+    length_mode = 0;
+  } else if (has_max && (min_v == max_v) && has_min) {
+    length_mode = 1;  // strict
+  } else if (has_max && !has_min) {
+    length_mode = 2;  // upper bound only
+  } else if (has_min && !has_max) {
+    GUI_LOG_WARNING("[FileIO] entry_exit filter with min_len={} but no max_len; mapping to range mode with max={}",
+                    min_v, kEELenAbsoluteMax);
+    length_mode = 3;
+  } else {
+    length_mode = 3;
+  }
+  min_len_out = min_v;
+  if (has_max) {
+    max_len_out = max_v;
+  } else if (has_min) {
+    max_len_out = kEELenAbsoluteMax;
+  } else {
+    max_len_out = min_v;
+  }
+}
+
+// Decode a core-JSON EE "entry"/"exit" face field into the GUI's text form.
+// Wildcard is encoded by field-absence (SerializeFilterForCore omits the field
+// for kEEWildcardSentinel) — so absent/null → empty text. A defensive negative
+// (legacy/hand-written explicit sentinel) is also treated as wildcard; any
+// non-negative integer (including face 0) is a real face → its decimal text.
+// Shared by the simple-filter parse branch and TryReconstructComplexFilter so
+// both paths decode faces identically.
+static std::string DecodeEEFaceFromJson(const json& jf, const char* key) {
+  if (!jf.contains(key) || jf.at(key).is_null()) {
+    return std::string{};
+  }
+  const int v = jf.at(key).get<int>();
+  return (v < 0) ? std::string{} : std::to_string(v);
+}
+
+// Reverse of SerializeFilterForCore for the degenerate forms it produces:
+// a core "complex" filter whose composition is a pure OR-of-singleton-product
+// over N child simple filters of one type (raypath OR entry_exit) is mapped
+// back to a single GUI FilterConfig with multi-segment RaypathParams or
+// multi-value EntryExitParams. Anything not strictly matching that shape
+// returns false with a fail_reason for the caller's loud warning.
+static bool TryReconstructComplexFilter(const json& jf, const std::map<int, json>& raw, FilterConfig& out,
+                                        std::string& fail_reason) {
+  const int complex_id = jf.value("id", 0);
+
+  if (!jf.contains("composition") || !jf["composition"].is_array() || jf["composition"].empty()) {
+    fail_reason = "complex filter id=" + std::to_string(complex_id) + ": composition missing/empty";
+    return false;
+  }
+
+  std::vector<int> child_ids;
+  child_ids.reserve(jf["composition"].size());
+  for (const auto& product : jf["composition"]) {
+    if (!product.is_array() || product.size() != 1) {
+      fail_reason = "complex filter id=" + std::to_string(complex_id) +
+                    ": AND-of-products is not representable in GUI (only pure OR is)";
+      return false;
+    }
+    if (!product[0].is_number_integer()) {
+      fail_reason = "complex filter id=" + std::to_string(complex_id) + ": composition entry is not an integer id";
+      return false;
+    }
+    child_ids.push_back(product[0].get<int>());
+  }
+
+  std::vector<const json*> child_json;
+  child_json.reserve(child_ids.size());
+  std::string child_type;
+  for (int cid : child_ids) {
+    auto it = raw.find(cid);
+    if (it == raw.end()) {
+      fail_reason =
+          "complex filter id=" + std::to_string(complex_id) + ": child id=" + std::to_string(cid) + " not found";
+      return false;
+    }
+    const std::string t = it->second.value("type", std::string{});
+    if (child_type.empty()) {
+      child_type = t;
+    } else if (t != child_type) {
+      fail_reason = "complex filter id=" + std::to_string(complex_id) + ": child filter types are not uniform (mixed " +
+                    child_type + "/" + t + ")";
+      return false;
+    }
+    child_json.push_back(&it->second);
+  }
+
+  FilterConfig f;
+  f.name = jf.value("name", std::string{});
+  const auto action_str = jf.value("action", "filter_in");
+  f.action = (action_str == "filter_out") ? 1 : 0;
+  const auto sym = jf.value("symmetry", std::string{});
+  f.sym_p = (sym.find('P') != std::string::npos);
+  f.sym_b = (sym.find('B') != std::string::npos);
+  f.sym_d = (sym.find('D') != std::string::npos);
+
+  if (child_type == "raypath") {
+    std::string text;
+    for (size_t i = 0; i < child_json.size(); ++i) {
+      const auto& cj = *child_json[i];
+      if (!cj.contains("raypath") || !cj["raypath"].is_array()) {
+        fail_reason =
+            "complex filter id=" + std::to_string(complex_id) + ": child raypath filter missing 'raypath' array";
+        return false;
+      }
+      if (cj["raypath"].empty()) {
+        // An empty segment would yield a malformed multi-segment text (e.g.
+        // "3-5;;1-3"); SerializeFilterForCore never emits this, so refuse and
+        // let the loud warning fire rather than fabricate an illegal raypath.
+        fail_reason =
+            "complex filter id=" + std::to_string(complex_id) + ": child raypath filter has empty 'raypath' array";
+        return false;
+      }
+      if (i > 0) {
+        text += ';';
+      }
+      for (size_t k = 0; k < cj["raypath"].size(); ++k) {
+        if (k > 0) {
+          text += kRaypathSepStr;
+        }
+        text += std::to_string(cj["raypath"][k].get<int>());
+      }
+    }
+    f.param = RaypathParams{ text };
+    out = f;
+    return true;
+  }
+
+  if (child_type == "entry_exit") {
+    // Decode each child's (entry, exit) pair. Wildcard (missing / null) →
+    // empty text; otherwise stringified integer. Then enforce strict
+    // factorization: the children must be exactly the cartesian product of
+    // the unique entry texts × unique exit texts; if any pair is missing or
+    // duplicated, refuse the rebuild and let the loud warning fire.
+    std::vector<std::pair<std::string, std::string>> pairs;
+    pairs.reserve(child_json.size());
+
+    int first_length_mode = 0;
+    int first_min_len = 1;
+    int first_max_len = 1;
+    DecodeEELengthFromJson(*child_json[0], first_length_mode, first_min_len, first_max_len);
+
+    for (size_t i = 0; i < child_json.size(); ++i) {
+      const auto& cj = *child_json[i];
+      pairs.emplace_back(DecodeEEFaceFromJson(cj, "entry"), DecodeEEFaceFromJson(cj, "exit"));
+      if (i > 0) {
+        int lm = 0;
+        int mn = 1;
+        int mx = 1;
+        DecodeEELengthFromJson(cj, lm, mn, mx);
+        if (lm != first_length_mode || mn != first_min_len || mx != first_max_len) {
+          fail_reason =
+              "complex filter id=" + std::to_string(complex_id) + ": EE children have inconsistent length bounds";
+          return false;
+        }
+      }
+    }
+
+    std::vector<std::string> entries_unique;
+    std::vector<std::string> exits_unique;
+    for (const auto& [e, x] : pairs) {
+      if (std::find(entries_unique.begin(), entries_unique.end(), e) == entries_unique.end()) {
+        entries_unique.push_back(e);
+      }
+      if (std::find(exits_unique.begin(), exits_unique.end(), x) == exits_unique.end()) {
+        exits_unique.push_back(x);
+      }
+    }
+
+    if (entries_unique.size() * exits_unique.size() != pairs.size()) {
+      fail_reason = "complex filter id=" + std::to_string(complex_id) +
+                    ": EE pairs do not factorize (not a full cartesian product)";
+      return false;
+    }
+    std::vector<std::vector<bool>> seen(entries_unique.size(), std::vector<bool>(exits_unique.size(), false));
+    for (const auto& [e, x] : pairs) {
+      auto ei = std::find(entries_unique.begin(), entries_unique.end(), e) - entries_unique.begin();
+      auto xi = std::find(exits_unique.begin(), exits_unique.end(), x) - exits_unique.begin();
+      if (seen[ei][xi]) {
+        fail_reason = "complex filter id=" + std::to_string(complex_id) + ": EE pair (" + e + "," + x + ") duplicated";
+        return false;
+      }
+      seen[ei][xi] = true;
+    }
+
+    std::sort(entries_unique.begin(), entries_unique.end());
+    std::sort(exits_unique.begin(), exits_unique.end());
+    auto join_csv = [](const std::vector<std::string>& xs) {
+      std::string s;
+      for (size_t i = 0; i < xs.size(); ++i) {
+        if (i > 0) {
+          s += ',';
+        }
+        s += xs[i];
+      }
+      return s;
+    };
+    EntryExitParams p;
+    p.entry_text = join_csv(entries_unique);
+    p.exit_text = join_csv(exits_unique);
+    p.length_mode = first_length_mode;
+    p.min_len = first_min_len;
+    p.max_len = first_max_len;
+    f.param = p;
+    out = f;
+    return true;
+  }
+
+  fail_reason =
+      "complex filter id=" + std::to_string(complex_id) + ": unsupported child filter type '" + child_type + "'";
+  return false;
+}
+
 bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
   json root;
   try {
@@ -1013,23 +1237,34 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
   }
 
   std::map<int, FilterConfig> filter_map;
+  // Two-pass filter parse: Pass 1 indexes every filter JSON by id so Pass 2b
+  // can rebuild a `complex` filter even when its referenced children appear
+  // later in the array (GUI-emitted JSON always orders children first, but
+  // hand-authored JSON makes no such promise). Pass 2a then runs the
+  // pre-existing simple-filter decode verbatim, and Pass 2b reverse-maps
+  // degenerate complex filters via TryReconstructComplexFilter.
+  std::map<int, json> raw_filter_json;
   if (root.contains("filter") && root["filter"].is_array()) {
     for (auto& jf : root["filter"]) {
-      auto type_str = jf.value("type", "");
-      // `complex` filters are skipped on import: GUI does not consume composite
-      // OR-of-AND structures from external JSON. Multi-segment raypath OR is a
-      // GUI-side authoring concept that's expanded into core JSON on commit,
-      // not the other way around.
+      raw_filter_json[jf.value("id", 0)] = jf;
+    }
+
+    // Pass 2a: parse non-complex filters into filter_map. Iterating the
+    // id-keyed map walks filters in ascending-id order rather than JSON-array
+    // order; this is intentional and semantically equivalent here (filter_map
+    // is keyed by unique id, no ordering dependency in downstream consumers).
+    for (const auto& entry : raw_filter_json) {
+      const int id = entry.first;
+      const json& jf = entry.second;
+      const auto type_str = jf.value("type", std::string{});
       if (type_str == "complex") {
-        GUI_LOG_WARNING("[FileIO] Core JSON 'complex' filter ignored on import (GUI does not consume complex sources)");
         continue;
       }
       FilterConfig f;
-      int id = jf.value("id", 0);
       f.name = jf.value("name", std::string{});
-      auto action_str = jf.value("action", "filter_in");
+      auto action_str = jf.value("action", std::string{ "filter_in" });
       f.action = (action_str == "filter_out") ? 1 : 0;
-      auto sym = jf.value("symmetry", "");
+      auto sym = jf.value("symmetry", std::string{});
       f.sym_p = (sym.find('P') != std::string::npos);
       f.sym_b = (sym.find('B') != std::string::npos);
       f.sym_d = (sym.find('D') != std::string::npos);
@@ -1049,59 +1284,40 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
         // core JSON keeps int "entry" / "exit" — translate to GUI's text
         // representation. Absent or explicit-null fields are the wildcard
         // form (post-uplift schema) and map to an empty string. min_len /
-        // max_len are decoded into the four GUI length-mode buckets.
+        // max_len are decoded into the four GUI length-mode buckets via the
+        // shared DecodeEELengthFromJson helper (reused by complex EE rebuild).
         EntryExitParams p;
-        auto read_face = [&](const char* key) -> std::string {
-          if (!jf.contains(key) || jf.at(key).is_null()) {
-            return std::string{};  // wildcard
-          }
-          int v = jf.at(key).get<int>();
-          return (v == 0) ? std::string{} : std::to_string(v);
-        };
-        p.entry_text = read_face("entry");
-        p.exit_text = read_face("exit");
-        const bool has_min = jf.contains("min_len") && !jf.at("min_len").is_null();
-        const bool has_max = jf.contains("max_len") && !jf.at("max_len").is_null();
-        const int min_v = has_min ? std::max(jf.at("min_len").get<int>(), 1) : 1;
-        const int max_v = has_max ? std::max(jf.at("max_len").get<int>(), 1) : 1;
-        if (!has_min && !has_max) {
-          p.length_mode = 0;
-        } else if (has_max && (min_v == max_v) && has_min) {
-          p.length_mode = 1;  // strict
-        } else if (has_max && !has_min) {
-          p.length_mode = 2;  // upper bound only
-        } else if (has_min && !has_max) {
-          // Lower bound only (min_len without max_len) is not a first-class
-          // GUI mode — collapse it to range with the saturated upper bound so
-          // the dropdown shows something meaningful. Self-generated configs
-          // never hit this branch (to_json omits max_len iff nullopt and only
-          // emits min_len when > 1); third-party hand-authored JSON might.
-          GUI_LOG_WARNING(
-              "[FileIO] entry_exit filter with min_len={} but no max_len; mapping to range mode with max={}", min_v,
-              kEELenAbsoluteMax);
-          p.length_mode = 3;  // range
-        } else {
-          p.length_mode = 3;  // range
-        }
-        p.min_len = min_v;
-        // For has_min && !has_max we synthesize max = kMaxHits so the GUI
-        // range slider has a defined upper anchor; the actual core-side
-        // semantic ("no upper bound") is preserved on subsequent
-        // GUI→core serialization only if the user untouched the field —
-        // any user edit will write max explicitly.
-        if (has_max) {
-          p.max_len = max_v;
-        } else if (has_min) {
-          p.max_len = kEELenAbsoluteMax;
-        } else {
-          p.max_len = min_v;
-        }
+        p.entry_text = DecodeEEFaceFromJson(jf, "entry");
+        p.exit_text = DecodeEEFaceFromJson(jf, "exit");
+        DecodeEELengthFromJson(jf, p.length_mode, p.min_len, p.max_len);
         f.param = p;
       } else {
         GUI_LOG_WARNING("[FileIO] Unknown filter type '{}' on core JSON import, defaulting to empty raypath", type_str);
         f.param = RaypathParams{};
       }
       filter_map[id] = f;
+    }
+
+    // Pass 2b: reverse-map degenerate complex filters (pure OR-of-singleton
+    // products over uniform-type simple children). Non-degenerate complex
+    // filters (real AND-of-ORs, mixed child types, non-factorizable EE pair
+    // sets) cannot be expressed in the GUI's flat FilterConfig — emit a loud
+    // warning so the user notices the silent culling change instead of
+    // staring at a wrong image (explore-271 root cause).
+    for (const auto& entry : raw_filter_json) {
+      const int id = entry.first;
+      const json& jf = entry.second;
+      if (jf.value("type", std::string{}) != "complex") {
+        continue;
+      }
+      FilterConfig rebuilt;
+      std::string fail_reason;
+      if (TryReconstructComplexFilter(jf, raw_filter_json, rebuilt, fail_reason)) {
+        filter_map[id] = rebuilt;
+      } else {
+        GUI_LOG_WARNING("[FileIO] {}", fail_reason);
+        SetImportComplexFilterWarning(fail_reason);
+      }
     }
   }
 

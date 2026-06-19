@@ -12,16 +12,28 @@
 
 > 本节为接手须知。两个 scrum 均已合 main；下方 §1-§7 保留设计推理原文。
 
+> ⚠️ **吞吐数字 2026-06-19 受控重测后纠偏**（task-fix-throughput-bench-honesty）。
+> 原表的 "CLI 9.5× / GUI 2.07× / 6× poller headroom" 三处均为测量假象，已替换为下方
+> 实测 regime 表。纠偏详情与度量教训见本节末"度量纠偏"小节。
+
 | 里程碑 | 数值 |
 |--------|------|
-| **CLI 引擎吞吐**（重场景 `ms3_multi_crystal_complex_filter`） | **9.5× legacy**（Metal 单引擎 + dispatch 32768） |
-| **GUI steady 吞吐**（真实 GUI regime，reconstruct 路径） | **2.07× legacy**（G4 验收门 GREEN） |
-| **GUI first_upload**（median） | **73ms**（< 150ms 冻结阈） |
-| **dispatch 甜点** | **32768**（backend-aware 默认；`LUMICE_DISPATCH_RAY_NUM`） |
+| **CLI 引擎吞吐**（重场景，`--benchmark` setup-excluded，dispatch 32768，M2 Max，2026-06-19 复测） | `ms_multi_crystal_complex_filter` **8.1× legacy**；`ms_multi_crystal_filtered_bd` **10.1× legacy** |
+| **GUI steady 吞吐**（真实 GUI regime，infinite + reconstruct 路径，dual_fisheye 512×256，M2 Max） | 重场景 **~9.5× legacy**（轻 1.8× / 中 2.2× / 最重棱锥 5.7×） |
+| **GUI first_upload**（median，regime 相关） | 重场景 ~18ms / 中场景 ~71ms（均 < 150ms 冻结阈） |
+| **引擎 vs GUI** | **同口径下 ≈ 1:1（无 headroom gap）**——引擎 8–10× ≈ GUI ~9.5×；旧"6× poller headroom"是假象 |
+| **dispatch 甜点** | **32768**（backend-aware 默认；`LUMICE_DISPATCH_RAY_NUM`）。512/2048 仍饿死 GPU（0.2–0.8×），128 在大 ray_num 直接挂死 |
 | **commit↔batch 解耦** | ✅ `LUMICE_DISPATCH_RAY_NUM` + `LUMICE_COMMIT_RAY_NUM` 双旋钮（concern #2 已解） |
 | **parity matrix** | **10/10**（含 D65 illuminant + DR-3 波长） |
 | **occupancy**（trace_layer_kernel PSO） | **640**（benign：R1 不触发，见 §6.1 最终裁决） |
 | **PR** | #127（scrum-267）+ #129（scrum-268），均已合 main（2026-06-17） |
+
+**度量纠偏（task-fix-throughput-bench-honesty，2026-06-19）**——原 §0 三个数字为何错、现值为何可信：
+- **"CLI 9.5× legacy"**：旧 `--benchmark` 把一次性 setup（server alloc + scene gen + 首 dispatch 延迟）与 100ms 轮询量化计入吞吐分母，对 0.2s 量级的快后端系统性低估（实测被压到 4.95×）。修复（计时起点改首次 `sim_ray_num>0` + 5ms 轮询）后重测 = 8.1×/10.1×。旧"9.5×"作为 ratio 巧合接近真值，但出处口径不可信。
+- **"GUI 2.07× legacy"**：是 **task-272 修 complex-filter 导入前**测的——GUI 静默丢 filter → 跑无 culling 的重 workload → 被压低。修复后真实重场景 = ~9.5×。
+- **"6× poller headroom（引擎 9.5× 在 GUI 仅兑现 2.07×，差 poller 20ms 整幅回读）"**：不存在。同口径下引擎 ≈ GUI（甚至 GUI steady 绝对值更高，因 `--benchmark` 旧口径低估引擎）。poller 整幅回读是**每次 commit 的延迟成本**（体现在 first_upload，全部 < 150ms），不是吞吐天花板（explore-271 E3 已证 poll 间隔不影响吞吐）。
+- **错误 config 名**：原表 `ms3_multi_crystal_complex_filter` 不存在；真名为 `ms_multi_crystal_complex_filter`（无 `3`）。
+- **度量教训**：吞吐对比必须 ① 排除 setup（rate = 稳态 active 窗口）；② 对齐 workload（filter culling 与否）与投影（GUI 强制 dual_fisheye_equal_area，见 `file_io.cpp` `SerializeCoreConfig`）；③ 只比同方法学内的 ratio-over-legacy，跨方法学相除无意义。原始数据：`scratchpad/task-fix-throughput-bench-honesty/data/`。
 
 **已删除的遗留结构**（§5.1 reuse/discard 账本承诺的删法）：
 - `CopyContSliceToRootBuf`（host-side 续传）→ 删，由 `transit_root_kernel` 取代。
@@ -111,7 +123,7 @@
 
 ### 6.1 Scrum 1 结转的 Scrum 2 输入（267.2 fused-emit-gate 产出，2026-06-14）
 
-- **⭐ R1 option B 最终裁决（scrum-268.6 实测，2026-06-17）**：267.2 的 emit gate 把 `trace_layer_kernel` PSO 的 `maxTotalThreadsPerThreadgroup` 从 1024 压到 704（再到 640，DR-3 波长后）。**Scrum 2 实测结果：R1 不触发（benign）。** 理由：`ms3_multi_crystal_complex_filter`（最重场景）Metal 单引擎实测 CLI 吞吐 **9.5× legacy**，GUI steady **2.07× legacy**——occupancy 640 对吞吐无恶化，无需触发 option B（拆 filter-gate 为独立 wavefront dispatch）。occupancy 回归门固定在 640（当前实测基准），由 `TraceLayerKernelMaxThreadsForTest()` 守卫。**R1 option B 归 backlog（CUDA phase-2 开篇时重估，离散显存场景可能更敏感）。**
+- **⭐ R1 option B 最终裁决（scrum-268.6 实测，2026-06-17）**：267.2 的 emit gate 把 `trace_layer_kernel` PSO 的 `maxTotalThreadsPerThreadgroup` 从 1024 压到 704（再到 640，DR-3 波长后）。**Scrum 2 实测结果：R1 不触发（benign）。** 理由：重场景（`ms_multi_crystal_complex_filter` / `ms_multi_crystal_filtered_bd`）Metal 单引擎实测 CLI 吞吐 **8–10× legacy**（2026-06-19 复测，见 §0），GUI steady **~9.5× legacy**——occupancy 640 对吞吐无恶化，无需触发 option B（拆 filter-gate 为独立 wavefront dispatch）。occupancy 回归门固定在 640（当前实测基准），由 `TraceLayerKernelMaxThreadsForTest()` 守卫。**R1 option B 归 backlog（CUDA phase-2 开篇时重估，离散显存场景可能更敏感）。**
 - **gate cleanup（Scrum 2 顺带）**：①`DeviceFilterCheck` 第 7 形参在 `kFilterMatchHelperSrc` 定义层仍名 `crystal_id`，正确实参是 `gate_slot`（= `ms_layer_idx*max_ci+crystal_id`）——建议改名 `orbit_slot` 使 API 自描述（当前靠调用点注释保护，不可扩展）；②`gate_seed` 在 `(ms_layer_idx=0,crystal_id=0)` 退化为 `gen_seed_`、与 gen_root PCG 种子重叠（corner case，M5 parity 未受影响）——加非零 XOR 偏置消除。
 
 ## 6.2 反漂移纪律（D1-D4，贯穿 §5 弧的实施纪律）
@@ -164,4 +176,4 @@
 
 3. **独立验证抓 runner 漏报回归**（268.7）：runner 未验证对 CLI legacy 单引擎的影响，owner 亲手发现 legacy 慢 6×（1-worker 编排=设计预期代价，非 regression）。
 
-4. **吞吐天花板：poller 20ms 整幅回读**：引擎 9.5× 在 GUI 仅兑现 2.07×，差距=poller 每轮整幅 XYZ 回读（固定开销，与 dispatch 大小无关）。已记 backlog（partial-readback / async upload 为下一步优化方向）。
+4. **~~吞吐天花板：poller 20ms 整幅回读~~（2026-06-19 推翻，见 §0 度量纠偏）**：原结论"引擎 9.5× 在 GUI 仅兑现 2.07×、差 poller"是测量假象——同口径下引擎（8–10×）≈ GUI（~9.5×），无 headroom gap。poller 整幅回读是 **per-commit 延迟成本**（first_upload < 150ms），不是吞吐天花板（explore-271 E3 实证 poll 间隔不影响吞吐）。partial-readback / async upload 若做，目标是降**交互延迟**（first_upload），非提吞吐。

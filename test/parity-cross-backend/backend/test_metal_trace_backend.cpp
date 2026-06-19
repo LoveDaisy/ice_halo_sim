@@ -184,8 +184,10 @@ TEST(MetalTraceBackend, TwoLayerEndToEnd) {
 //
 // ⭐ R1 RULING (scrum-268.6, 2026-06-16): the occupancy drop is BENIGN. The
 // single-engine + backend-aware large-dispatch (32768) throughput on the heavy
-// multi-MS + filter scenes is ~3.5–5.4x legacy N-worker (measured via
-// test_metal_throughput, the now-active D1 gate). The GPU is saturated at large
+// multi-MS + filter scenes is ~8-10x legacy N-worker (measured via
+// test_metal_throughput, the now-active D1 gate; setup-excluded re-measure
+// 2026-06-19, task-fix-throughput-bench-honesty — the earlier "3.5–5.4x" was the
+// setup-inflated --benchmark reading). The GPU is saturated at large
 // dispatch, so the lower per-threadgroup occupancy does NOT cost throughput.
 // → plan R1 option B (split the filter gate into its own wavefront dispatch to
 // recover occupancy) is NOT invoked. 640 is the accepted production baseline;

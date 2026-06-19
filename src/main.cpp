@@ -29,7 +29,12 @@ namespace {
 
 constexpr int kDefaultJpegQuality = 95;
 constexpr auto kPollInterval = std::chrono::seconds(1);
-constexpr auto kBenchmarkPollInterval = std::chrono::milliseconds(100);
+// Fine poll granularity (was 100ms). At 100ms the IDLE-detection quantization
+// alone could add up to a full poll interval to wall time; for a fast backend
+// whose run completes in ~0.2s that deflated rays_per_sec by >30%. 5ms caps the
+// trailing quantization at a few ms while staying sleep-based (negligible CPU
+// steal from trace workers). See task-fix-throughput-bench-honesty.
+constexpr auto kBenchmarkPollInterval = std::chrono::milliseconds(5);
 constexpr int kBenchmarkSingleRays = 2'000'000;
 
 void PrintUsage(const char* prog_name) {
@@ -113,26 +118,74 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
     return;
   }
 
-  auto t_start = std::chrono::steady_clock::now();
+  // Throughput honesty (task-fix-throughput-bench-honesty): rays_per_sec must
+  // measure the engine's sustained trace rate, NOT (rays / whole-run-wall). The
+  // whole run includes one-time setup (server alloc + scene gen + first-dispatch
+  // latency) during which sim_ray_num stays 0; folding that into the denominator
+  // systematically deflated fast backends. We therefore start the throughput
+  // clock at the first poll where tracing has actually produced rays
+  // (sim_ray_num > 0) and measure the steady window from there to IDLE,
+  // excluding the first observed chunk (its rays were produced before we could
+  // sample them). `wall_sec`/`setup_sec`/`active_sec` are reported alongside for
+  // transparency; existing keys (mode/workers/cores/rays/rays_per_sec) are kept.
+  auto t_run_start = std::chrono::steady_clock::now();
+  auto t_active_start = t_run_start;
+  unsigned long rays_at_active_start = 0;
+  bool active_started = false;
   while (true) {
     std::this_thread::sleep_for(kBenchmarkPollInterval);
     LUMICE_ServerState state{};
     LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1]{};
-    if (LUMICE_QueryServerState(server, &state) == LUMICE_OK && state == LUMICE_SERVER_IDLE) {
-      if (LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) == LUMICE_OK && stats[0].sim_ray_num > 0) {
-        auto t_end = std::chrono::steady_clock::now();
-        double wall_sec = std::chrono::duration<double>(t_end - t_start).count();
-        double rays_per_sec = static_cast<double>(stats[0].sim_ray_num) / wall_sec;
-        nlohmann::json result;
-        result["mode"] = mode;
-        result["workers"] = num_workers;
-        result["cores"] = cores;
-        result["rays"] = stats[0].sim_ray_num;
-        result["wall_sec"] = std::round(wall_sec * 100.0) / 100.0;
-        result["rays_per_sec"] = std::round(rays_per_sec * 10.0) / 10.0;
-        std::cout << "[BENCHMARK] " << result.dump() << "\n";
-        break;
+    if (LUMICE_QueryServerState(server, &state) != LUMICE_OK) {
+      continue;
+    }
+    bool have_stats = LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) == LUMICE_OK;
+    unsigned long cur_rays = have_stats ? stats[0].sim_ray_num : 0;
+    auto now = std::chrono::steady_clock::now();
+
+    // Mark end-of-setup the first time tracing has produced rays.
+    if (!active_started && cur_rays > 0) {
+      active_started = true;
+      t_active_start = now;
+      rays_at_active_start = cur_rays;
+    }
+
+    if (state == LUMICE_SERVER_IDLE && cur_rays > 0) {
+      auto t_end = now;
+      unsigned long r_end = cur_rays;
+      double wall_sec = std::chrono::duration<double>(t_end - t_run_start).count();
+      double setup_sec = std::chrono::duration<double>(t_active_start - t_run_start).count();
+      double active_sec = std::chrono::duration<double>(t_end - t_active_start).count();
+
+      // Steady-window rate excludes setup and the first sampled chunk. Guard the
+      // short-run degenerate case (run completed within the first one/two polls,
+      // so r_end == rays_at_active_start or active window ~0) by falling back to
+      // the active-window-from-first-rays rate, then whole-wall as last resort.
+      double rays_per_sec = 0.0;
+      const char* rate_basis = "wall_fallback";
+      if (active_sec > 1e-4 && r_end > rays_at_active_start) {
+        rays_per_sec = static_cast<double>(r_end - rays_at_active_start) / active_sec;
+        rate_basis = "steady";
+      } else if (active_started && active_sec > 1e-4) {
+        rays_per_sec = static_cast<double>(r_end) / active_sec;
+        rate_basis = "active_short";
+      } else {
+        rays_per_sec = wall_sec > 0 ? static_cast<double>(r_end) / wall_sec : 0.0;
+        rate_basis = "wall_fallback";
       }
+
+      nlohmann::json result;
+      result["mode"] = mode;
+      result["workers"] = num_workers;
+      result["cores"] = cores;
+      result["rays"] = r_end;
+      result["wall_sec"] = std::round(wall_sec * 1000.0) / 1000.0;
+      result["setup_sec"] = std::round(setup_sec * 1000.0) / 1000.0;
+      result["active_sec"] = std::round(active_sec * 1000.0) / 1000.0;
+      result["rays_per_sec"] = std::round(rays_per_sec * 10.0) / 10.0;
+      result["rate_basis"] = rate_basis;
+      std::cout << "[BENCHMARK] " << result.dump() << "\n";
+      break;
     }
   }
 

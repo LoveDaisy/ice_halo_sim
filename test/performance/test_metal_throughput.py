@@ -54,15 +54,17 @@ _HEAVY_CONFIGS = [
 ]
 
 # C2 sentinel floor: ratio below this = catastrophic regression / near-hang.
-# `rays_per_sec` is a SINGLE wall-clock sample per run (main.cpp:116-134, no
-# warm-up/median), so the ratio is a noisy product of two single samples.
-# After scrum-268's single-engine large-dispatch landing, Metal(default) is
-# consistently 3.5-5.5x legacy on the heavy multi-MS+filter scenes (scrum-268.6
-# sweep + task-270.6 smoke test at 5.52x). A floor of 2.0x is conservative but
-# meaningful: it trips on a true engine collapse or near-hang while tolerating
-# per-run thermal noise (3.5x floor × thermal variance still >> 2.0x). For a
-# systematic median+CoV evaluation, use `scripts/bench_throughput.py`.
-_SANITY_FLOOR = 2.0
+# `rays_per_sec` is a SINGLE sample per run (no warm-up/median). Since
+# task-fix-throughput-bench-honesty the [BENCHMARK] rate is the steady trace
+# rate (setup excluded, 5ms poll), so it no longer deflates the fast Metal
+# backend: Metal(default 32768 dispatch) now reads ~8-10x legacy on the heavy
+# multi-MS+filter scenes (bench_throughput.py 2026-06-19: complex_filter 8.14x,
+# filtered_bd 10.09x; the earlier "3.5-5.5x" was the setup-inflated reading).
+# A floor of 3.0x is conservative but meaningful: heavy-scene thermal CoV can
+# reach ~25% on a single sample, and 8x × thermal still sits well above 3.0x,
+# while a true engine collapse / near-hang trips it. For a systematic
+# median+CoV evaluation, use `scripts/bench_throughput.py`.
+_SANITY_FLOOR = 3.0
 _GATE = 1.0           # D1 pre-registered gate: Metal multi >= legacy (xfail until Scrum 2)
 _TIMEOUT = 240        # --benchmark is bounded (poll-until-IDLE); guard against hangs
 
@@ -131,9 +133,11 @@ def test_metal_throughput_gate(config_name):
 
     # --- D1 pre-registered throughput gate — FLIPPED GREEN at scrum-268.6 -------
     # Metal single-engine + backend-aware large default dispatch (32768) now beats
-    # legacy N-worker on the heavy multi-MS+filter scenes (sweep 2026-06-16:
-    # ~3.5–5.4x). The §5 throughput thesis is landed; this assertion makes the
-    # pre-registered gate ACTIVE so any future drop below parity is caught in CI.
+    # legacy N-worker on the heavy multi-MS+filter scenes (steady-rate re-measure
+    # 2026-06-19: ~8-10x; the earlier "3.5-5.4x" was the setup-inflated --benchmark
+    # reading, corrected in task-fix-throughput-bench-honesty). The §5 throughput
+    # thesis is landed; this assertion keeps the pre-registered gate ACTIVE so any
+    # future drop below parity is caught.
     assert ratio >= _GATE, (
         f"{config_name}: throughput gate regression ratio={ratio:.3f} < {_GATE} — "
         f"Metal single-engine no longer beats legacy N-worker (scrum-268 §5 thesis). "
