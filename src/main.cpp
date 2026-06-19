@@ -128,8 +128,8 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
   // excluding the first observed chunk (its rays were produced before we could
   // sample them). `wall_sec`/`setup_sec`/`active_sec` are reported alongside for
   // transparency; existing keys (mode/workers/cores/rays/rays_per_sec) are kept.
-  auto t_commit = std::chrono::steady_clock::now();
-  auto t_active_start = t_commit;
+  auto t_run_start = std::chrono::steady_clock::now();
+  auto t_active_start = t_run_start;
   unsigned long rays_at_active_start = 0;
   bool active_started = false;
   while (true) {
@@ -153,8 +153,8 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
     if (state == LUMICE_SERVER_IDLE && cur_rays > 0) {
       auto t_end = now;
       unsigned long r_end = cur_rays;
-      double wall_sec = std::chrono::duration<double>(t_end - t_commit).count();
-      double setup_sec = std::chrono::duration<double>(t_active_start - t_commit).count();
+      double wall_sec = std::chrono::duration<double>(t_end - t_run_start).count();
+      double setup_sec = std::chrono::duration<double>(t_active_start - t_run_start).count();
       double active_sec = std::chrono::duration<double>(t_end - t_active_start).count();
 
       // Steady-window rate excludes setup and the first sampled chunk. Guard the

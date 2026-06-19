@@ -25,10 +25,12 @@ Usage:
 """
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import platform
 import re
+import shutil
 import statistics
 import subprocess
 import sys
@@ -227,6 +229,8 @@ def _override_ray_num(configs: dict, tmp_dir: str) -> dict:
     out = {}
     for label, src in configs.items():
         cfg = json.loads(Path(src).read_text())
+        if "scene" not in cfg or "ray_num" not in cfg["scene"]:
+            raise KeyError(f"{label}: config missing scene.ray_num (cannot apply override)")
         cfg["scene"]["ray_num"] = RAY_NUM_OVERRIDE
         dst = Path(tmp_dir) / f"{label}.json"
         dst.write_text(json.dumps(cfg))
@@ -243,6 +247,7 @@ def main() -> int:
         return 2
 
     tmp_dir = tempfile.mkdtemp(prefix="bench_throughput_")
+    atexit.register(shutil.rmtree, tmp_dir, ignore_errors=True)
     configs = _override_ray_num(CONFIGS, tmp_dir)
 
     is_darwin = platform.system() == "Darwin"
