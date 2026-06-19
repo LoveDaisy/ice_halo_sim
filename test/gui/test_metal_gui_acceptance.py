@@ -7,11 +7,16 @@ thing the whole §5 arc actually exists for: that the single-engine Metal backen
 intermediate-result feedback), end-to-end through the same path a user drives —
 server reconstruct-on-toggle → poller readback → consumer projection.
 
-Why this is a *separate* gate from G1 (scrum-268.6 Part C investigation, 2026-06-16):
-  - The engine does ~9.5x in `--benchmark`, but the GUI realizes only ~2x of it.
-    The gap is GUI-loop + poller-readback fixed overhead (NOT the consumer, which
-    is ~1us/batch in both benchmark and GUI). So a green G1 does NOT imply a green
-    GUI win — this gate measures the regime that matters.
+Why this is a *separate* gate from G1 (scrum-268.6 + task-fix-throughput-bench-honesty):
+  - G1 measures the bare engine via `--benchmark` (no GUI consumer / poller in the
+    loop); G4 drives the real end-to-end GUI path (reconstruct → poller readback →
+    consumer projection). They now agree in magnitude — both ~8-10x legacy on the
+    heavy scene (the earlier "engine 9.5x but GUI only 2x → 6x poller headroom"
+    was a measurement artifact: a setup-inflated --benchmark reading + a pre-
+    task-272 GUI run that silently dropped the complex filter). G4 stays a
+    distinct gate because it is the only one exercising the GUI-specific failure
+    modes below (ctor backend propagation, finite-budget dilution), not because
+    the GUI lags the engine.
   - Two real bugs were flushed out reaching this gate and are guarded here:
       1. ServerImpl ctor did not propagate preferred_backend to its simulators, so
          CreateServerEx(METAL) sized dispatches for Metal yet traced legacy CPU
@@ -60,8 +65,9 @@ _HEAVY_CONFIG = "ms_multi_crystal_complex_filter"
 _TIMEOUT = 120  # seconds per GUI perf run (steady 2s + slider 5s + Metal warm-up)
 
 # --- North-star throughput gate (GUI regime) -------------------------------------
-# Measured 2026-06-16 (infinite-budget complex_filter, reconstruct path): Metal GUI
-# steady ~2.0-2.6x legacy. Gate at parity (>=1.0); the win has wide margin.
+# Re-measured 2026-06-19 (infinite-budget complex_filter, reconstruct path, post
+# task-272 filter fix): Metal GUI steady ~9.5x legacy on the heavy scene. Gate at
+# parity (>=1.0); the win has wide margin.
 _GATE = 1.0
 # Sanity floor: a drop far below parity means Metal fell back / the reconstructed
 # server stalled (the ctor-propagation bug regressed to ~0.1x). 0.8 keeps margin

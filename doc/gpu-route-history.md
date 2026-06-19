@@ -47,14 +47,14 @@
 **Phase 9 — §5 单引擎重写弧高潮（#266-268，2026-06-14/17）**
 - **explore-266 de-risk**（2026-06-14）：三关键结论固化——①divergence=伪命题（层内线性链 megakernel，层间 wavefront）；②device 续传 filter 可行（E4：`ReduceBuffer` MSL，1.44M 0 mismatch，seam-design §4.5 悲观误判推翻）；③吞吐须双 lever（大 dispatch + device-resident 续传，正交）。定位 current Metal 多 MS+filter 对 legacy **+16% 能量 bug**（根因=host `CopyContSliceToRootBuf` 解耦 filter）。
 - **scrum-267（Scrum 1，device 续传引擎）**：删 `CopyContSliceToRootBuf`，新建 `transit_root_kernel` device 路径；emit gate 内联 device filter-match（DeviceFilterCheck）；raw-XYZ parity 8/8 GREEN（+16% 自愈 correct-by-construction）；occupancy 704→640（DR-3 后，benign）。PR #127，合 main 2026-06-14。
-- **scrum-268（Scrum 2，单引擎编排）**：核心结果：
-  - **CLI 引擎 9.5× legacy**（单引擎 + dispatch 32768 甜点）。
-  - **GUI steady 2.07× legacy**（G4 北极星验收 GREEN，reconstruct 真路径）。
+- **scrum-268（Scrum 2，单引擎编排）**：核心结果（吞吐数字 2026-06-19 受控重测纠偏，见下）：
+  - **CLI 引擎吞吐**（`--benchmark` setup-excluded，dispatch 32768，M2 Max，2026-06-19 复测）：`ms_multi_crystal_complex_filter` **8.1× legacy** / `ms_multi_crystal_filtered_bd` **10.1× legacy**。
+  - **GUI steady 吞吐**（infinite + reconstruct，dual_fisheye）：重场景 **~9.5× legacy**（轻 1.8× / 中 2.2× / 最重 5.7×）。
   - **DR-3 波长 per-ray**：推翻 DR-1 per-tg（multi-MS 续传原子压缩使 tg_id 跨层失稳）→ host 预采 WlPool，光子终生携带 `wl_idx`（见 `doc/trace-backend-frame-lifecycle.md §8`）。
   - **concern #2 已解**：`LUMICE_BATCH_RAY_NUM` 拆为 `LUMICE_DISPATCH_RAY_NUM`（GPU dispatch 粒度）+ `LUMICE_COMMIT_RAY_NUM`（GUI commit 粒度）双旋钮（268.4）。
   - **+16% bug correct-by-construction 修复**：随 `CopyContSliceToRootBuf` 删除自愈，parity matrix 10/10。
-  - **吞吐天花板 = poller**：引擎 9.5× 在 GUI 仅兑现 2.07×，差距=poller 每轮整幅 XYZ 回读（20ms，固定开销）——非 consumer-bound（白盒证伪）。
   - PR #129，合 main 2026-06-17。
+- **吞吐数字纠偏（task-fix-throughput-bench-honesty，2026-06-19）**：scrum-268 收尾时记的 "CLI 9.5× / GUI 2.07× / 6× poller headroom" 三处均为测量假象——① `--benchmark` 把 setup 计入分母低估快后端（修复后引擎 8–10×）；② GUI 2.07× 是 task-272 修 complex-filter 导入前的无 culling 数（修复后 ~9.5×）；③ 同口径下引擎 ≈ GUI，**无 poller headroom gap**（poller 整幅回读是 per-commit 延迟成本，非吞吐天花板，explore-271 E3 已证）。原始数据见 `scratchpad/task-fix-throughput-bench-honesty/data/`。
 
 ### 演进的元模式
 1. **战略意图始终是"GPU 求吞吐、两步走"**，但 #256 起逐步滑向"在开发机 Mac GUI 上把 Metal 调好"。
@@ -82,10 +82,10 @@
 | 融合 | 2.41×（vs 融合前 Metal） | #263-264 | 分母非 legacy |
 | GUI 可行性 | 轻场景大 batch 2-5× 胜；重场景 concern #2 咬人 | #265 | — |
 | device filter-match | 全类型（含 Raypath/Complex）1.44M 0 mismatch；seam §4.5 悲观判推翻 | #266 E4 | M2 统一内存 |
-| CLI 引擎吞吐 | 单引擎 + dispatch 32768 → **9.5× legacy**（重场景 ms3） | #267-268 | M2 Max |
-| GUI steady 吞吐 | 真实 GUI reconstruct 路径 → **2.07× legacy** | #268 G4 | M2 Max |
-| dispatch 甜点 | **32768**（backend-aware 默认）；b128 饿死 GPU | #268.6 | M2 Max |
-| poller 天花板 | 引擎 9.5× → GUI 仅 2.07×；差距=poller 整幅回读 20ms 固定开销 | #268 | M2 Max |
+| CLI 引擎吞吐 | `--benchmark` setup-excluded + dispatch 32768 → **8.1× / 10.1× legacy**（complex_filter / filtered_bd） | #267-268, #273 复测 | M2 Max |
+| GUI steady 吞吐 | infinite + reconstruct → 重场景 **~9.5× legacy**（轻 1.8× / 中 2.2× / 最重 5.7×） | #273 复测 | M2 Max |
+| dispatch 甜点 | **32768**（backend-aware 默认）；512/2048 饿死 GPU（0.2–0.8×），128 大 ray_num 挂死 | #268.6, #273 | M2 Max |
+| 引擎 vs GUI | 同口径 ≈ 1:1（**无 poller headroom gap**）；旧"6× headroom/2.07×/9.5×"为测量假象 | #273 | M2 Max |
 
 ### 已探索方向 & 裁决
 - 可移植 kernel 语言 → **拒**（藏寄存器驻留杠杆）。
