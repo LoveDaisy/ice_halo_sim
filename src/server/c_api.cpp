@@ -981,6 +981,38 @@ static void FillPerFaceTopology(const int* tri, int tri_cnt, const float* vtx, c
       out->face_vtx_pool[pool_offset + k] = unique_verts[k];
     }
     pool_offset += count;
+
+    // Phase B: area-weighted unit-length normal at position `fi`, lockstep with
+    // face_numbers_by_face[fi] / face_vtx_offsets[fi] / face_vtx_counts[fi].
+    // Accumulating un-normalized cross products gives an implicit 2*area weight
+    // per triangle; normalize once at the end. Avoids the GUI's previous
+    // first-triangle-only normal (biased on multi-triangle faces) and the
+    // absolute 1e-12 cross-magnitude threshold.
+    float acc_n[3] = { 0.0f, 0.0f, 0.0f };
+    for (int t = 0; t < tri_cnt; ++t) {
+      if (face_numbers_per_tri[t] != fn) {
+        continue;
+      }
+      const float* a = vtx + tri[t * 3 + 0] * 3;
+      const float* b = vtx + tri[t * 3 + 1] * 3;
+      const float* c = vtx + tri[t * 3 + 2] * 3;
+      float ea[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] };
+      float eb[3] = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
+      acc_n[0] += ea[1] * eb[2] - ea[2] * eb[1];
+      acc_n[1] += ea[2] * eb[0] - ea[0] * eb[2];
+      acc_n[2] += ea[0] * eb[1] - ea[1] * eb[0];
+    }
+    float acc_len = std::sqrt(acc_n[0] * acc_n[0] + acc_n[1] * acc_n[1] + acc_n[2] * acc_n[2]);
+    if (acc_len > 1e-6f) {
+      out->face_normals[fi * 3 + 0] = acc_n[0] / acc_len;
+      out->face_normals[fi * 3 + 1] = acc_n[1] / acc_len;
+      out->face_normals[fi * 3 + 2] = acc_n[2] / acc_len;
+    } else {
+      out->face_normals[fi * 3 + 0] = 0.0f;
+      out->face_normals[fi * 3 + 1] = 0.0f;
+      out->face_normals[fi * 3 + 2] = 0.0f;
+    }
+
     ++fi;
   }
 

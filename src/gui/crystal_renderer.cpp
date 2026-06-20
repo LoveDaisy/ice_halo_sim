@@ -126,7 +126,12 @@ static const char* const kFaceFS = R"glsl(
 in vec3 v_eye_pos;
 out vec4 frag_color;
 void main() {
-  vec3 n = normalize(cross(dFdx(v_eye_pos), dFdy(v_eye_pos)));
+  // Screen-space derivative normal degenerates on slivers/grazing views where
+  // dFdx,dFdy become near-parallel; clamp the cross magnitude so normalize
+  // doesn't propagate NaN into the lighting calc.
+  vec3 raw_n = cross(dFdx(v_eye_pos), dFdy(v_eye_pos));
+  float raw_len = length(raw_n);
+  vec3 n = (raw_len > 1e-6) ? raw_n / raw_len : vec3(0.0, 0.0, 1.0);
   // Ensure normal faces viewer (eye-space camera looks along -Z)
   if (n.z < 0.0) n = -n;
   // Light from upper-left-front in eye space

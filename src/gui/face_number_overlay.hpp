@@ -39,11 +39,14 @@ int AggregateFaceLabels(const float* vertices, int vertex_count, const int* tria
 
 // Aggregate per-face topology (from LUMICE_GetCrystalMesh new fields) into FaceLabel array.
 // Vertices are already CCW-ordered in face_vtx_pool; skips faces with face_numbers_by_face <= 0.
+// `face_normals` is the area-weighted unit normal array
+// (LUMICE_CrystalMesh::face_normals), lockstep with face_numbers_by_face/face_vtx_offsets;
+// non-nullable.
 // Returns the number of labels written.
 int AggregateFaceLabelsFromTopology(const float* vertices, int vertex_count, int face_count,
                                     const int* face_numbers_by_face, const int* face_vtx_offsets,
-                                    const int* face_vtx_counts, const int* face_vtx_pool, FaceLabel* out_labels,
-                                    int max_labels);
+                                    const int* face_vtx_counts, const int* face_vtx_pool, const float* face_normals,
+                                    FaceLabel* out_labels, int max_labels);
 
 // Per-CrystalStyle face-number rendering policy.
 // `visible_*` colors apply to front-facing labels; `hidden_*` apply to back-

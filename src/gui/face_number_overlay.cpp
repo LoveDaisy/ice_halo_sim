@@ -85,23 +85,15 @@ int AggregateFaceLabels(const float* vertices, int vertex_count, const int* tria
     float cy = (p0[1] + p1[1] + p2[1]) / 3.0f;
     float cz = (p0[2] + p1[2] + p2[2]) / 3.0f;
 
-    // Triangle normal = normalize(cross(p1 - p0, p2 - p0)).
-    // Note: we recompute from vertices rather than reusing
-    // LUMICE_CrystalMesh.edge_face_normals because the latter indexes by edge,
-    // not by triangle; there is no direct triangle-to-edge mapping exposed.
-    // Cost is negligible (<=128 triangles).
+    // Triangle normal contribution = cross(p1 - p0, p2 - p0). Modulus is 2×area
+    // so accumulating the un-normalized vector is implicit area weighting; one
+    // final normalization per label replaces the previous absolute-1e-12 per-
+    // triangle threshold and the bias toward the first triangle's plane.
     float e1[3] = { p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2] };
     float e2[3] = { p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2] };
     float nx = e1[1] * e2[2] - e1[2] * e2[1];
     float ny = e1[2] * e2[0] - e1[0] * e2[2];
     float nz = e1[0] * e2[1] - e1[1] * e2[0];
-    float len = nx * nx + ny * ny + nz * nz;
-    if (len > 1e-12f) {
-      float inv = 1.0f / std::sqrt(len);
-      nx *= inv;
-      ny *= inv;
-      nz *= inv;
-    }
 
     // Find existing label bucket.
     int slot = -1;
@@ -124,9 +116,9 @@ int AggregateFaceLabels(const float* vertices, int vertex_count, const int* tria
       out_labels[slot].display_center[0] = 0.0f;
       out_labels[slot].display_center[1] = 0.0f;
       out_labels[slot].display_center[2] = 0.0f;
-      out_labels[slot].display_normal[0] = nx;
-      out_labels[slot].display_normal[1] = ny;
-      out_labels[slot].display_normal[2] = nz;
+      out_labels[slot].display_normal[0] = 0.0f;
+      out_labels[slot].display_normal[1] = 0.0f;
+      out_labels[slot].display_normal[2] = 0.0f;
       out_labels[slot].display_polygon_vertex_count = 0;
       tri_count[slot] = 0;
     }
@@ -134,6 +126,9 @@ int AggregateFaceLabels(const float* vertices, int vertex_count, const int* tria
     out_labels[slot].display_center[0] += cx;
     out_labels[slot].display_center[1] += cy;
     out_labels[slot].display_center[2] += cz;
+    out_labels[slot].display_normal[0] += nx;
+    out_labels[slot].display_normal[1] += ny;
+    out_labels[slot].display_normal[2] += nz;
 
     // Dedup-append each triangle vertex into the per-face polygon bucket.
     AppendPolygonVertex(out_labels[slot], p0);
@@ -143,7 +138,7 @@ int AggregateFaceLabels(const float* vertices, int vertex_count, const int* tria
     tri_count[slot]++;
   }
 
-  // Finalize means.
+  // Finalize means and normalize accumulated area-weighted normals.
   for (int k = 0; k < label_count; ++k) {
     int n = tri_count[k];
     if (n > 1) {
@@ -152,6 +147,17 @@ int AggregateFaceLabels(const float* vertices, int vertex_count, const int* tria
       out_labels[k].display_center[1] *= inv;
       out_labels[k].display_center[2] *= inv;
     }
+    float* nrm = out_labels[k].display_normal;
+    float nlen = std::sqrt(nrm[0] * nrm[0] + nrm[1] * nrm[1] + nrm[2] * nrm[2]);
+    if (nlen > 1e-6f) {
+      nrm[0] /= nlen;
+      nrm[1] /= nlen;
+      nrm[2] /= nlen;
+    } else {
+      nrm[0] = 0.0f;
+      nrm[1] = 0.0f;
+      nrm[2] = 0.0f;
+    }
   }
 
   return label_count;
@@ -159,8 +165,8 @@ int AggregateFaceLabels(const float* vertices, int vertex_count, const int* tria
 
 int AggregateFaceLabelsFromTopology(const float* vertices, int vertex_count, int face_count,
                                     const int* face_numbers_by_face, const int* face_vtx_offsets,
-                                    const int* face_vtx_counts, const int* face_vtx_pool, FaceLabel* out_labels,
-                                    int max_labels) {
+                                    const int* face_vtx_counts, const int* face_vtx_pool, const float* face_normals,
+                                    FaceLabel* out_labels, int max_labels) {
   int label_count = 0;
   for (int fi = 0; fi < face_count && label_count < max_labels; ++fi) {
     int fn = face_numbers_by_face[fi];
@@ -203,30 +209,13 @@ int AggregateFaceLabelsFromTopology(const float* vertices, int vertex_count, int
       label.display_center[2] *= inv;
     }
 
-    // Face normal from first 3 vertices (CCW-ordered by FillPerFaceTopology)
-    if (label.display_polygon_vertex_count >= 3) {
-      const float* p0 = label.display_polygon_verts;
-      const float* p1 = label.display_polygon_verts + 3;
-      const float* p2 = label.display_polygon_verts + 6;
-      float e1[3] = { p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2] };
-      float e2[3] = { p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2] };
-      float nx = e1[1] * e2[2] - e1[2] * e2[1];
-      float ny = e1[2] * e2[0] - e1[0] * e2[2];
-      float nz = e1[0] * e2[1] - e1[1] * e2[0];
-      float len = std::sqrt(nx * nx + ny * ny + nz * nz);
-      if (len > 1e-12f) {
-        nx /= len;
-        ny /= len;
-        nz /= len;
-      }
-      label.display_normal[0] = nx;
-      label.display_normal[1] = ny;
-      label.display_normal[2] = nz;
-    } else {
-      label.display_normal[0] = 0.0f;
-      label.display_normal[1] = 0.0f;
-      label.display_normal[2] = 0.0f;
-    }
+    // Face normal: read the pre-computed area-weighted unit normal at slot fi
+    // (lockstep with face_numbers_by_face[fi] / face_vtx_offsets[fi]). Replaces
+    // the previous GUI-side first-3-vertices cross product (absolute 1e-12
+    // threshold + biased multi-triangle faces toward the first triangle plane).
+    label.display_normal[0] = face_normals[fi * 3 + 0];
+    label.display_normal[1] = face_normals[fi * 3 + 1];
+    label.display_normal[2] = face_normals[fi * 3 + 2];
 
     ++label_count;
   }
@@ -389,7 +378,10 @@ bool ProjectLabelToScreen(const FaceLabel* label, const float rotation[16], cons
   float cx = mvp[0] * p[0] + mvp[4] * p[1] + mvp[8] * p[2] + mvp[12];
   float cy = mvp[1] * p[0] + mvp[5] * p[1] + mvp[9] * p[2] + mvp[13];
   float cw = mvp[3] * p[0] + mvp[7] * p[1] + mvp[11] * p[2] + mvp[15];
-  if (cw == 0.0f) {
+  // Near-singular guard: exact equality misses the cases that actually cause
+  // overflow/NaN downstream (cw within float epsilon of zero). 1e-6f matches
+  // the shader cross-magnitude clamp in crystal_renderer.cpp.
+  if (std::abs(cw) < 1e-6f) {
     return false;
   }
 
@@ -434,7 +426,7 @@ void DrawFaceNumberOverlay(const LUMICE_CrystalMesh* mesh, const float rotation[
   if (mesh->face_count > 0) {
     n = AggregateFaceLabelsFromTopology(mesh->vertices, mesh->vertex_count, mesh->face_count,
                                         mesh->face_numbers_by_face, mesh->face_vtx_offsets, mesh->face_vtx_counts,
-                                        mesh->face_vtx_pool, labels, kMaxFaceLabels);
+                                        mesh->face_vtx_pool, mesh->face_normals, labels, kMaxFaceLabels);
   } else {
     n = AggregateFaceLabels(mesh->vertices, mesh->vertex_count, mesh->triangles, mesh->triangle_count,
                             mesh->face_numbers, labels, kMaxFaceLabels);
