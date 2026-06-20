@@ -683,4 +683,41 @@ TEST_F(V3TestCrystal, FillHexFnMapMillerAxisPyramidSixFold) {
   }
 }
 
+// task-280.6 zero-volume degenerate-crystal guard: when prism_h=0 collides with
+// wedge > kMaxPyramidAlpha (89.9 deg), both pyramidal caps are dropped, leaving
+// upper/lower basal faces at z=0 — a zero-thickness hexagon. Without the guard
+// in FillHexCrystalCoef, Triangulate's Vec3FromTo(body_center, face_center)
+// collapses to (0,0,0) and Normalize3 returns NaN (explore-280.3 reproduce).
+// Detection power: removing the guard makes c.TotalTriangles() > 0 while
+// face normals contain NaN — both branches of the EXPECT below would flip.
+TEST_F(V3TestCrystal, FillHexCrystalCoefZeroVolumeGuardNoNan) {
+  const float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+
+  // Issue scenario: wedge=89.95° (> 89.9° kMaxPyramidAlpha) + prism_h=0 → guard
+  // trips → empty crystal (TotalTriangles=0), no NaN normals.
+  auto c = Crystal::CreatePyramid(89.95f, 89.95f, 1.0f, 0.0f, 1.0f, dist);
+  EXPECT_EQ(c.TotalTriangles(), 0u) << "zero-volume guard should yield empty crystal, not NaN-poisoned mesh";
+
+  // Regression: normal pyramid (prism_h>0, wedge=60°) must be unaffected.
+  auto c_normal = Crystal::CreatePyramid(60.0f, 60.0f, 1.0f, 1.0f, 1.0f, dist);
+  ASSERT_GT(c_normal.TotalTriangles(), 0u);
+  const float* face_n = c_normal.GetTriangleNormal();
+  for (size_t i = 0; i < c_normal.TotalTriangles() * 3; i++) {
+    EXPECT_FALSE(std::isnan(face_n[i])) << "normal pyramid triangle " << (i / 3) << " has NaN normal";
+  }
+
+  // Edge case: wedge=89.9° (exactly at kMaxPyramidAlpha, pyramidal caps NOT
+  // dropped per "alpha <= 89.9" condition) with prism_h=0. Per explore-280.3
+  // wedge ≤ 89.9° is safe at any prism_h, so geometry should still build.
+  // Accept either outcome (guard fires or not), but if any triangles exist,
+  // their normals must be finite — that is the real invariant we care about.
+  auto c_boundary = Crystal::CreatePyramid(89.9f, 89.9f, 1.0f, 0.0f, 1.0f, dist);
+  if (c_boundary.TotalTriangles() > 0u) {
+    const float* bn = c_boundary.GetTriangleNormal();
+    for (size_t i = 0; i < c_boundary.TotalTriangles() * 3; i++) {
+      EXPECT_FALSE(std::isnan(bn[i])) << "boundary wedge=89.9° triangle " << (i / 3) << " has NaN normal";
+    }
+  }
+}
+
 }  // namespace

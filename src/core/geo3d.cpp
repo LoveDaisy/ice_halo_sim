@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "core/math.hpp"
+#include "util/logger.hpp"
 
 namespace lumice {
 
@@ -359,6 +360,23 @@ size_t FillHexCrystalCoef(float upper_alpha, float lower_alpha, float h1, float 
   constexpr float kMaxPyramidAlpha = 89.9f;  // degrees — above this, face degenerates to basal
   bool has_upper = h1 > math::kFloatEps && upper_alpha >= kMinPyramidAlpha && upper_alpha <= kMaxPyramidAlpha;
   bool has_lower = h3 > math::kFloatEps && lower_alpha >= kMinPyramidAlpha && lower_alpha <= kMaxPyramidAlpha;
+
+  // Zero-volume degenerate guard (task-280.6): when both pyramidal caps are dropped
+  // (wedge > kMaxPyramidAlpha or h1/h3 == 0) AND the prism segment h2 ≈ 0, the upper
+  // and lower basal faces coincide → zero-thickness hexagon. Downstream Triangulate
+  // computes Vec3FromTo(body_center, face_center) → (0,0,0), and Normalize3 produces
+  // NaN normals that silently poison the renderer. Emit a warning and short-circuit
+  // to an empty plane set, mirroring the kMaxPyramidAlpha degradation pattern.
+  // (doc/numerical-robustness.md §5: use <eps, not ==0.)
+  // TODO(tech-debt): the basal+prism plane equations above are written into out_coef
+  // before this early return — wasted writes but no UB since callers honor the
+  // returned plane_cnt as the effective length. A future refactor could hoist
+  // has_upper/has_lower computation to the top of the function for true early exit.
+  if (!has_upper && !has_lower && h2 < math::kFloatEps) {
+    LOG_WARNING("FillHexCrystalCoef: zero-volume crystal (prism_h={:.4e}, no valid pyramidal faces); skipping",
+                static_cast<double>(h2));
+    return 0;
+  }
 
   // Upper pyramidal faces (6, if h1 > 0)
   if (has_upper) {
