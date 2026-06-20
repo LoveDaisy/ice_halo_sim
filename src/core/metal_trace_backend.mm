@@ -2013,9 +2013,12 @@ void MetalTraceBackend::Impl::UploadCrystal(const Crystal& crystal) {
   // Triangle-level geometry (task-260.2). Uploaded so the device root-gen
   // kernel can replicate InitRay_p_fid: area×facing-weighted triangle pick +
   // uniform sample inside the triangle, plus tri→polygon mapping.
-  // tri_to_poly is computed by mirroring simulator.cpp::PolygonFaceOfTri
-  // (which is file-static); same Dot3 > 1-1e-3 criterion against polygon
-  // normals already uploaded above.
+  // tri_to_poly mirrors simulator.cpp::detail::PolygonFaceOfTri: argmax over
+  // polygon-face normals with a sanity floor (kFaceCoplanarFloor=1e-2). A
+  // first-match `dot > 1-1e-3` cannot distinguish adjacent upper-pyramid faces
+  // on extreme-wedge (~≥87.4°) crystals (dot ≈ 0.9994).
+  // NOTE: kFaceCoplanarFloor must match the value in crystal.cpp::BuildPolygonFaceData
+  // and simulator.cpp::detail::PolygonFaceOfTri.
   size_t tri_cnt = crystal.TotalTriangles();
   EnsureTriBuffers(tri_cnt);
   std::memcpy([tri_vtx_buf_ contents], crystal.GetTriangleVtx(),
@@ -2028,18 +2031,22 @@ void MetalTraceBackend::Impl::UploadCrystal(const Crystal& crystal) {
   const float* poly_norms_src = crystal.GetPolygonFaceNormal();
   auto* tri_to_poly_ptr = static_cast<uint16_t*>([tri_to_poly_buf_ contents]);
   constexpr uint16_t kInvalidIdU16 = 0xffffu;
+  constexpr float kFaceCoplanarFloor = 1e-2f;
   for (size_t t = 0; t < tri_cnt; t++) {
     const float* tn = tri_norms_src + t * 3;
-    uint16_t mapped = kInvalidIdU16;
+    int best_p = -1;
+    float best_dot = -1.0f;
     for (size_t p = 0; p < poly_cnt; p++) {
       const float* pn = poly_norms_src + p * 3;
       float dot = tn[0] * pn[0] + tn[1] * pn[1] + tn[2] * pn[2];
-      if (dot > 1.0f - 1e-3f) {
-        mapped = static_cast<uint16_t>(p);
-        break;
+      if (dot > best_dot) {
+        best_dot = dot;
+        best_p = static_cast<int>(p);
       }
     }
-    tri_to_poly_ptr[t] = mapped;
+    tri_to_poly_ptr[t] = (best_p >= 0 && best_dot >= 1.0f - kFaceCoplanarFloor)
+                             ? static_cast<uint16_t>(best_p)
+                             : kInvalidIdU16;
   }
 }
 

@@ -473,8 +473,9 @@ TEST(DetailIsDApplicable, Conditions) {
 }
 
 // D4 invariant: every triangle's normal must align with at least one polygon-face
-// normal (dot > 1-1e-3), ensuring PolygonFaceOfTri always finds a match on valid
-// crystals and HitSurface's polygon-face normal equals the per-triangle normal.
+// normal (dot > 1-1e-3) on standard crystals. This is the geometric premise that
+// lets PolygonFaceOfTri's argmax (kFaceCoplanarFloor=1e-2 slack) always find a
+// match, and that HitSurface's polygon-face normal equals the per-triangle normal.
 TEST_F(V3TestCrystal, EveryTriangleMapsToCoplanarPolygon) {
   auto prism = Crystal::CreatePrism(1.3);
   auto pyramid = Crystal::CreatePyramid(0.3f, 1.0f, 0.3f);
