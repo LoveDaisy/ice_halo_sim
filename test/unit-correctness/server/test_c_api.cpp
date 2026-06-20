@@ -246,6 +246,74 @@ TEST(CrystalMeshApi, PerFaceVertexOrderCCW) {
   EXPECT_GT(winding_sum, 0.0f) << "basal face vertices not in CCW order";
 }
 
+// =============== Per-face area-weighted normal tests ===============
+
+TEST(CrystalMeshApi, FaceNormalsUnitLengthPrism) {
+  LUMICE_CrystalMesh mesh{};
+  const char* json = R"({"type": "prism", "shape": {"height": 1.0}})";
+  ASSERT_EQ(LUMICE_GetCrystalMesh(nullptr, json, &mesh), LUMICE_OK);
+  ASSERT_GT(mesh.face_count, 0);
+
+  for (int fi = 0; fi < mesh.face_count; ++fi) {
+    int fn = mesh.face_numbers_by_face[fi];
+    const float* n = mesh.face_normals + fi * 3;
+    float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    EXPECT_NEAR(len, 1.0f, 1e-5f) << "face fi=" << fi << " (fn=" << fn << ") normal not unit length (len=" << len
+                                  << ")";
+  }
+}
+
+TEST(CrystalMeshApi, FaceNormalsOutwardPrism) {
+  // Each face normal must point outward from the face centroid: dot(n, centroid - origin) > 0
+  // for centered hex prism geometry.
+  LUMICE_CrystalMesh mesh{};
+  const char* json = R"({"type": "prism", "shape": {"height": 1.0}})";
+  ASSERT_EQ(LUMICE_GetCrystalMesh(nullptr, json, &mesh), LUMICE_OK);
+  ASSERT_GT(mesh.face_count, 0);
+
+  for (int fi = 0; fi < mesh.face_count; ++fi) {
+    int fn = mesh.face_numbers_by_face[fi];
+    int offset = mesh.face_vtx_offsets[fi];
+    int count = mesh.face_vtx_counts[fi];
+    ASSERT_GT(count, 0);
+
+    float cx = 0.0f;
+    float cy = 0.0f;
+    float cz = 0.0f;
+    for (int k = 0; k < count; ++k) {
+      const float* p = mesh.vertices + mesh.face_vtx_pool[offset + k] * 3;
+      cx += p[0];
+      cy += p[1];
+      cz += p[2];
+    }
+    cx /= count;
+    cy /= count;
+    cz /= count;
+
+    const float* n = mesh.face_normals + fi * 3;
+    float dot = n[0] * cx + n[1] * cy + n[2] * cz;
+    EXPECT_GT(dot, 0.0f) << "face fi=" << fi << " (fn=" << fn << ") normal not outward (dot=" << dot << ")";
+  }
+}
+
+TEST(CrystalMeshApi, FaceNormalsUnitLengthExtremePyramid) {
+  // Extreme-wedge pyramid (close to the catalog-G regime that motivated this task).
+  // Covers lower-pyramidal face numbers (23-28), which exceed LUMICE_MAX_CRYSTAL_FACES=24
+  // — exercising the position-based (fi) indexing rather than fn-value indexing.
+  LUMICE_CrystalMesh mesh{};
+  const char* json = R"({"type": "pyramid", "shape": {"prism_h": 0.01, "upper_h": 0.5, "lower_h": 0.5,
+                            "upper_wedge_angle": 87.0, "lower_wedge_angle": 87.0}})";
+  ASSERT_EQ(LUMICE_GetCrystalMesh(nullptr, json, &mesh), LUMICE_OK);
+  ASSERT_GT(mesh.face_count, 0);
+
+  for (int fi = 0; fi < mesh.face_count; ++fi) {
+    int fn = mesh.face_numbers_by_face[fi];
+    const float* n = mesh.face_normals + fi * 3;
+    float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    EXPECT_NEAR(len, 1.0f, 1e-5f) << "extreme pyramid fi=" << fi << " (fn=" << fn << ") normal len=" << len;
+  }
+}
+
 TEST(CrystalMeshApi, PerFacePoolBoundary) {
   LUMICE_CrystalMesh mesh{};
   const char* json = R"({"type": "pyramid", "shape": {"prism_h": 1.0, "upper_h": 0.5, "lower_h": 0.5}})";

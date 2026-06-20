@@ -725,7 +725,7 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
                                       mesh.face_numbers, labels_old, lumice::gui::kMaxFaceLabels);
       int n_new = lumice::gui::AggregateFaceLabelsFromTopology(
           mesh.vertices, mesh.vertex_count, mesh.face_count, mesh.face_numbers_by_face, mesh.face_vtx_offsets,
-          mesh.face_vtx_counts, mesh.face_vtx_pool, labels_new, lumice::gui::kMaxFaceLabels);
+          mesh.face_vtx_counts, mesh.face_vtx_pool, mesh.face_normals, labels_new, lumice::gui::kMaxFaceLabels);
 
       IM_CHECK_EQ(n_old, n_new);
       IM_CHECK_EQ(n_old, mesh.face_count);

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "core/math.hpp"
+#include "util/logger.hpp"
 
 namespace lumice {
 
@@ -360,6 +361,23 @@ size_t FillHexCrystalCoef(float upper_alpha, float lower_alpha, float h1, float 
   bool has_upper = h1 > math::kFloatEps && upper_alpha >= kMinPyramidAlpha && upper_alpha <= kMaxPyramidAlpha;
   bool has_lower = h3 > math::kFloatEps && lower_alpha >= kMinPyramidAlpha && lower_alpha <= kMaxPyramidAlpha;
 
+  // Zero-volume degenerate guard (task-280.6): when both pyramidal caps are dropped
+  // (wedge > kMaxPyramidAlpha or h1/h3 == 0) AND the prism segment h2 ≈ 0, the upper
+  // and lower basal faces coincide → zero-thickness hexagon. Downstream Triangulate
+  // computes Vec3FromTo(body_center, face_center) → (0,0,0), and Normalize3 produces
+  // NaN normals that silently poison the renderer. Emit a warning and short-circuit
+  // to an empty plane set, mirroring the kMaxPyramidAlpha degradation pattern.
+  // (doc/numerical-robustness.md §5: use <eps, not ==0.)
+  // TODO(tech-debt): the basal+prism plane equations above are written into out_coef
+  // before this early return — wasted writes but no UB since callers honor the
+  // returned plane_cnt as the effective length. A future refactor could hoist
+  // has_upper/has_lower computation to the top of the function for true early exit.
+  if (!has_upper && !has_lower && h2 < math::kFloatEps) {
+    LOG_WARNING("FillHexCrystalCoef: zero-volume crystal (prism_h={:.4e}, no valid pyramidal faces); skipping",
+                static_cast<double>(h2));
+    return 0;
+  }
+
   // Upper pyramidal faces (6, if h1 > 0)
   if (has_upper) {
     float a1 = math::kSqrt3_4 / std::tan(upper_alpha * math::kDegreeToRad);
@@ -410,23 +428,8 @@ size_t FillHexCrystalCoef(float upper_alpha, float lower_alpha, float h1, float 
     for (size_t i = 0; i < cnt * 4; i++) {
       coef_d[i] = static_cast<double>(out_coef[i]);
     }
-    auto solve_planes_d = [](const double* c1, const double* c2, const double* c3, double* res) -> bool {
-      double det = c1[0] * c2[1] * c3[2] + c1[1] * c2[2] * c3[0] + c1[2] * c2[0] * c3[1] - c1[2] * c2[1] * c3[0] -
-                   c1[0] * c2[2] * c3[1] - c1[1] * c2[0] * c3[2];
-      if (std::fabs(det) < 1e-10) {
-        return false;
-      }
-      double x = c1[3] * c2[2] * c3[1] + c1[1] * c2[3] * c3[2] + c1[2] * c2[1] * c3[3] -  //
-                 c1[1] * c2[2] * c3[3] - c1[2] * c2[3] * c3[1] - c1[3] * c2[1] * c3[2];
-      double y = c1[0] * c2[2] * c3[3] + c1[2] * c2[3] * c3[0] + c1[3] * c2[0] * c3[2] -  //
-                 c1[3] * c2[2] * c3[0] - c1[0] * c2[3] * c3[2] - c1[2] * c2[0] * c3[3];
-      double z = c1[3] * c2[1] * c3[0] + c1[0] * c2[3] * c3[1] + c1[1] * c2[0] * c3[3] -  //
-                 c1[0] * c2[1] * c3[3] - c1[1] * c2[3] * c3[0] - c1[3] * c2[0] * c3[1];
-      res[0] = x / det;
-      res[1] = y / det;
-      res[2] = z / det;
-      return true;
-    };
+    // Plane-triple intersection delegates to the single-source SolvePlanesD
+    // (math.hpp) — scale-invariant singularity check on the normalized det.
     auto is_in_polyhedron_d = [](int n, const double* coef, const double xyz[3]) -> bool {
       for (int j = 0; j < n; j++) {
         if (coef[j * 4 + 0] * xyz[0] + coef[j * 4 + 1] * xyz[1] + coef[j * 4 + 2] * xyz[2] + coef[j * 4 + 3] > 1e-10) {
@@ -442,7 +445,7 @@ size_t FillHexCrystalCoef(float upper_alpha, float lower_alpha, float h1, float 
     for (size_t i = 2; i < cnt; i++) {
       for (size_t j = i + 1; j < cnt; j++) {
         for (size_t k = j + 1; k < cnt; k++) {
-          if (!solve_planes_d(coef_d.data() + i * 4, coef_d.data() + j * 4, coef_d.data() + k * 4, xyz)) {
+          if (!SolvePlanesD(coef_d.data() + i * 4, coef_d.data() + j * 4, coef_d.data() + k * 4, xyz)) {
             continue;
           }
           if (is_in_polyhedron_d(static_cast<int>(cnt - 2), coef_d.data() + 8, xyz)) {

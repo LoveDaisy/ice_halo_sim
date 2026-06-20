@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <fstream>
 #include <limits>
+#include <set>
 #include <utility>
 
 #include "config/config_manager.hpp"
@@ -27,6 +28,21 @@ class V3TestCrystal : public ::testing::Test {
 
   nlohmann::json config_json_;
 };
+
+const std::set<int> kExpectedUpper = { 13, 14, 15, 16, 17, 18 };
+const std::set<int> kExpectedLower = { 23, 24, 25, 26, 27, 28 };
+
+// Returns the set of fn values in [lo..hi] across all polygon faces of c.
+std::set<int> CollectFnSet(const Crystal& c, int lo, int hi) {
+  std::set<int> fns;
+  for (size_t p = 0; p < c.PolygonFaceCount(); p++) {
+    int fn = static_cast<int>(c.GetFn(static_cast<IdType>(p)));
+    if (fn >= lo && fn <= hi) {
+      fns.insert(fn);
+    }
+  }
+  return fns;
+}
 
 TEST_F(V3TestCrystal, CrystalCacheData) {
   auto crystal = Crystal::CreatePrism(1.3);
@@ -598,5 +614,110 @@ TEST_F(V3TestCrystal, PrismHZeroNoLeftoverPrismOrBasal) {
 // flips at wedge = 87.44 deg) is now permanently guarded by
 // `PyramidWedgeSweepNoFalseBasal` above. The raw sweep data lives in
 // scratchpad/task-geometry-gen-numerical-robustness/progress.md (2026-06-19 entry).
+
+// task-280.2 fillhexfnmap-extreme-sentinel — Sentinel A:
+// At extreme wedge (89.0/89.5 deg) full pyramid (h1=0.3, h2=1.0, h3=0.3), the
+// 20 polygon faces must yield Fn sets exactly {13..18} (upper) and {23..28}
+// (lower). Detection power: with first-match instead of argmax in
+// FillHexFnMap's pri loop, a face whose normal aligns with ref_j=4 (60 deg)
+// would still satisfy Dot3(n, ref_3) = cos(89 deg) * cos(60 deg) ~ 0.0087 >
+// kFloatEps and be claimed by j=3, collapsing fn=14 into fn=13 -- the set
+// equality below would fail. The explicit size()==6 assertion makes the
+// 6-fold completeness intent obvious in failure output.
+TEST_F(V3TestCrystal, FillHexFnMapExtremeWedgeFullPyramidSixFold) {
+  for (float wedge : { 89.0f, 89.5f }) {
+    auto c = Crystal::CreatePyramid(wedge, wedge, 0.3f, 1.0f, 0.3f);
+    ASSERT_EQ(c.PolygonFaceCount(), 20u) << "wedge=" << wedge;
+    auto upper = CollectFnSet(c, 13, 18);
+    auto lower = CollectFnSet(c, 23, 28);
+    EXPECT_EQ(upper.size(), 6u) << "upper fn count wedge=" << wedge;
+    EXPECT_EQ(lower.size(), 6u) << "lower fn count wedge=" << wedge;
+    EXPECT_EQ(upper, kExpectedUpper) << "upper fn set wedge=" << wedge;
+    EXPECT_EQ(lower, kExpectedLower) << "lower fn set wedge=" << wedge;
+  }
+}
+
+// task-280.2 Sentinel B: extreme wedge bipyramid (prism_h=0) at 89.0/89.5 deg
+// fills the 1-deg gap left by PrismHZeroNoLeftoverPrismOrBasal (sweeps 60..88
+// deg) and PyramidWedgeSweepNoFalseBasal (sweeps to 89.9 deg but only checks
+// fn != 1/2). This asserts full 6-fold completeness of the Fn allocation.
+TEST_F(V3TestCrystal, FillHexFnMapExtremeWedgeBipyramidSixFold) {
+  const float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  for (float wedge : { 89.0f, 89.5f }) {
+    auto c = Crystal::CreatePyramid(wedge, wedge, 1.0f, 0.0f, 1.0f, dist);
+    ASSERT_EQ(c.PolygonFaceCount(), 12u) << "wedge=" << wedge;
+    auto upper = CollectFnSet(c, 13, 18);
+    auto lower = CollectFnSet(c, 23, 28);
+    EXPECT_EQ(upper.size(), 6u) << "upper fn count bipyramid wedge=" << wedge;
+    EXPECT_EQ(lower.size(), 6u) << "lower fn count bipyramid wedge=" << wedge;
+    EXPECT_EQ(upper, kExpectedUpper) << "upper fn set bipyramid wedge=" << wedge;
+    EXPECT_EQ(lower, kExpectedLower) << "lower fn set bipyramid wedge=" << wedge;
+  }
+}
+
+// task-280.2 Sentinel C: multi-Miller-axis pyramid coverage. Fn allocation
+// must not depend on the specific alpha implied by Miller (i1, i4). Covers
+// four axes at temperate wedge angles where geometry generation is robust.
+TEST_F(V3TestCrystal, FillHexFnMapMillerAxisPyramidSixFold) {
+  const float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  struct MillerCase {
+    int i1;
+    int i4;
+    const char* label;
+  };
+  const MillerCase cases[] = {
+    { 1, 1, "(1,1)" },
+    { 1, 2, "(1,2)" },
+    { 2, 1, "(2,1)" },
+    { 3, 2, "(3,2)" },
+  };
+  for (const auto& mc : cases) {
+    auto c = Crystal::CreatePyramid(mc.i1, mc.i4, mc.i1, mc.i4, 0.3f, 1.0f, 0.3f, dist);
+    ASSERT_EQ(c.PolygonFaceCount(), 20u) << "miller=" << mc.label;
+    auto upper = CollectFnSet(c, 13, 18);
+    auto lower = CollectFnSet(c, 23, 28);
+    EXPECT_EQ(upper.size(), 6u) << "upper fn count miller=" << mc.label;
+    EXPECT_EQ(lower.size(), 6u) << "lower fn count miller=" << mc.label;
+    EXPECT_EQ(upper, kExpectedUpper) << "upper fn set miller=" << mc.label;
+    EXPECT_EQ(lower, kExpectedLower) << "lower fn set miller=" << mc.label;
+  }
+}
+
+// task-280.6 zero-volume degenerate-crystal guard: when prism_h=0 collides with
+// wedge > kMaxPyramidAlpha (89.9 deg), both pyramidal caps are dropped, leaving
+// upper/lower basal faces at z=0 — a zero-thickness hexagon. Without the guard
+// in FillHexCrystalCoef, Triangulate's Vec3FromTo(body_center, face_center)
+// collapses to (0,0,0) and Normalize3 returns NaN (explore-280.3 reproduce).
+// Detection power: removing the guard makes c.TotalTriangles() > 0 while
+// face normals contain NaN — both branches of the EXPECT below would flip.
+TEST_F(V3TestCrystal, FillHexCrystalCoefZeroVolumeGuardNoNan) {
+  const float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+
+  // Issue scenario: wedge=89.95° (> 89.9° kMaxPyramidAlpha) + prism_h=0 → guard
+  // trips → empty crystal (TotalTriangles=0), no NaN normals.
+  auto c = Crystal::CreatePyramid(89.95f, 89.95f, 1.0f, 0.0f, 1.0f, dist);
+  EXPECT_EQ(c.TotalTriangles(), 0u) << "zero-volume guard should yield empty crystal, not NaN-poisoned mesh";
+
+  // Regression: normal pyramid (prism_h>0, wedge=60°) must be unaffected.
+  auto c_normal = Crystal::CreatePyramid(60.0f, 60.0f, 1.0f, 1.0f, 1.0f, dist);
+  ASSERT_GT(c_normal.TotalTriangles(), 0u);
+  const float* face_n = c_normal.GetTriangleNormal();
+  for (size_t i = 0; i < c_normal.TotalTriangles() * 3; i++) {
+    EXPECT_FALSE(std::isnan(face_n[i])) << "normal pyramid triangle " << (i / 3) << " has NaN normal";
+  }
+
+  // Edge case: wedge=89.9° (exactly at kMaxPyramidAlpha, pyramidal caps NOT
+  // dropped per "alpha <= 89.9" condition) with prism_h=0. Per explore-280.3
+  // wedge ≤ 89.9° is safe at any prism_h, so geometry should still build.
+  // Accept either outcome (guard fires or not), but if any triangles exist,
+  // their normals must be finite — that is the real invariant we care about.
+  auto c_boundary = Crystal::CreatePyramid(89.9f, 89.9f, 1.0f, 0.0f, 1.0f, dist);
+  if (c_boundary.TotalTriangles() > 0u) {
+    const float* bn = c_boundary.GetTriangleNormal();
+    for (size_t i = 0; i < c_boundary.TotalTriangles() * 3; i++) {
+      EXPECT_FALSE(std::isnan(bn[i])) << "boundary wedge=89.9° triangle " << (i / 3) << " has NaN normal";
+    }
+  }
+}
 
 }  // namespace

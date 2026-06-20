@@ -320,6 +320,10 @@ typedef struct LUMICE_CrystalMesh_ {
   int face_vtx_offsets[LUMICE_MAX_CRYSTAL_FACES];
   int face_vtx_counts[LUMICE_MAX_CRYSTAL_FACES];
   int face_vtx_pool[LUMICE_MAX_CRYSTAL_FACE_VTXPOOL];
+  // Area-weighted unit-length face normals, lockstep with face_numbers_by_face /
+  // face_vtx_offsets / face_vtx_counts: slot [i*3..i*3+2] is the unit normal of
+  // face i for i in [0, face_count). Slots beyond face_count are unspecified.
+  float face_normals[LUMICE_MAX_CRYSTAL_FACES * 3];
 } LUMICE_CrystalMesh;
 
 LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* server, const char* crystal_json, LUMICE_CrystalMesh* out);
