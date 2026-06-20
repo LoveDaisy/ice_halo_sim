@@ -414,6 +414,18 @@ LUMICE_ErrorCode LUMICE_XyzToSrgbUint8(const float* xyz_in, unsigned char* out, 
 // On non-Apple platforms LUMICE_BACKEND_METAL is silently treated as CPU.
 void LUMICE_SetPreferredBackend(LUMICE_Server* server, int backend);
 
+// Query whether a trace backend is available on this machine at runtime.
+//   backend = LUMICE_BACKEND_CPU   : always returns 1.
+//   backend = LUMICE_BACKEND_METAL : returns 1 iff Apple build AND a Metal
+//                                    device is present at runtime; 0 otherwise
+//                                    (non-Apple, or Mac without Metal device).
+//   other values                   : returns 0.
+// Result is cached after the first call; safe to call from any thread and from
+// per-frame GUI code.
+// To add a new backend (e.g. CUDA): append LUMICE_BACKEND_CUDA above and add a
+// matching branch here; CPU / Metal semantics are unchanged.
+int LUMICE_IsBackendAvailable(int backend);
+
 #if !defined(_MSC_VER)
 #pragma GCC visibility pop
 #endif

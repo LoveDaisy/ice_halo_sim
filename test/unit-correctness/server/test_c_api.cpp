@@ -1172,3 +1172,30 @@ TEST(MaxFovApi, DefaultIs360) {
   EXPECT_NEAR(LUMICE_MaxFov(LUMICE_LENS_DUAL_FISHEYE_STEREOGRAPHIC), 360.0f, 0.01f);
   EXPECT_NEAR(LUMICE_MaxFov(LUMICE_LENS_RECTANGULAR), 360.0f, 0.01f);
 }
+
+TEST(BackendAvailabilityApi, CpuAlwaysAvailable) {
+  EXPECT_EQ(LUMICE_IsBackendAvailable(LUMICE_BACKEND_CPU), 1);
+}
+
+TEST(BackendAvailabilityApi, UnknownBackendReturnsZero) {
+  EXPECT_EQ(LUMICE_IsBackendAvailable(999), 0);
+  EXPECT_EQ(LUMICE_IsBackendAvailable(-1), 0);
+}
+
+TEST(BackendAvailabilityApi, MetalMatchesPlatform) {
+#if defined(__APPLE__)
+  // CI/dev Macs are expected to support Metal (any M-series or post-2012
+  // Intel Mac). If this assertion ever fires in a future environment without
+  // a Metal device, guard the EXPECT with a runtime probe or mark DISABLED.
+  EXPECT_EQ(LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL), 1);
+#else
+  EXPECT_EQ(LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL), 0);
+#endif
+}
+
+TEST(BackendAvailabilityApi, CachedAcrossCalls) {
+  const int kFirst = LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL);
+  for (int i = 0; i < 8; ++i) {
+    EXPECT_EQ(LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL), kFirst);
+  }
+}

@@ -941,11 +941,17 @@ void RenderSceneControls(GuiState& state) {
   // topologies, so the server is rebuilt and the accumulated image resets on toggle.
   // Falls back to CPU silently if the active config is not Metal-compatible
   // (see MetalTraceBackend::IsCompatible).
+  // Runtime gate: hide the checkbox entirely on Macs without a Metal device
+  // (very old hardware / certain remote sessions / broken GPU drivers), since
+  // selecting it would otherwise hit a nil device in EnsureDevice. The probe
+  // is cached, so the per-frame cost is a plain memory read.
   // ImGui::Checkbox renders its label to the right and ignores the item-width
   // stack, so no PushItemWidth wrapper is needed here.
-  DIRTY_IF(ImGui::Checkbox("Use Metal GPU", &state.use_metal_backend));
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Use Metal GPU for simulation (falls back to CPU if incompatible)");
+  if (LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL)) {
+    DIRTY_IF(ImGui::Checkbox("Use Metal GPU", &state.use_metal_backend));
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Use Metal GPU for simulation (falls back to CPU if incompatible)");
+    }
   }
 #endif
 }
