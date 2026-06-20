@@ -23,6 +23,17 @@ namespace lumice {
 
 class Logger;
 
+// Runtime probe for Metal device availability. Returns true iff a Metal device
+// is present: first tries MTLCreateSystemDefaultDevice(), and if that is nil
+// falls back to MTLCopyAllDevices() being non-empty (mirrors EnsureDevice's
+// two-step probe; on some Macs the default-device query can return nil while
+// MTLCopyAllDevices still enumerates a usable device). Result is cached after
+// the first call (std::call_once), so subsequent calls are a plain memory read;
+// safe to call from any thread. Has no side effects on the cached result besides
+// the one-time probe — distinct from MetalTraceBackend::Impl::EnsureDevice,
+// which asserts on failure and retains the device reference.
+bool MetalDeviceAvailable();
+
 // MetalLayerHandle — the only host-visible scalar produced per TraceLayer is
 // the continuation count (populated from a 4-byte device readback, equivalent
 // to a 4-byte cudaMemcpy for CUDA backends). Continuation ray buffers

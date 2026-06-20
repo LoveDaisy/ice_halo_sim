@@ -13,6 +13,9 @@
 #include "config/render_config.hpp"
 #include "core/crystal.hpp"
 #include "core/geo3d.hpp"
+#if defined(__APPLE__)
+#include "core/metal_trace_backend.hpp"
+#endif
 #include "include/lumice.h"
 #include "server/server.hpp"
 #include "util/callback_sink.hpp"
@@ -835,6 +838,23 @@ void LUMICE_SetPreferredBackend(LUMICE_Server* server, int backend) {
     return;
   }
   server->server_->SetPreferredBackend(backend);
+}
+
+
+int LUMICE_IsBackendAvailable(int backend) {
+  try {
+    if (backend == LUMICE_BACKEND_CPU) {
+      return 1;
+    }
+#if defined(__APPLE__)
+    if (backend == LUMICE_BACKEND_METAL) {
+      return lumice::MetalDeviceAvailable() ? 1 : 0;
+    }
+#endif
+    return 0;
+  } catch (...) {
+    return 0;
+  }
 }
 
 

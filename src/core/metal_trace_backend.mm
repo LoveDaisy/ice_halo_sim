@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -1251,6 +1252,30 @@ float ComputeJacobianEnvelopeForDeviceGen(const Distribution& dist) {
 }
 
 }  // namespace
+
+bool MetalDeviceAvailable() {
+  static std::once_flag flag;
+  static bool available = false;
+  std::call_once(flag, []() {
+    @autoreleasepool {
+      // Mirror EnsureDevice's two-step probe: MTLCreateSystemDefaultDevice can
+      // return nil on otherwise Metal-capable Macs in certain environments
+      // (e.g. some headless / login-class contexts on M-series chips), while
+      // MTLCopyAllDevices still enumerates the integrated GPU. Treating only
+      // the system-default probe as authoritative would gate the GUI checkbox
+      // off in those environments even though the Metal backend itself runs
+      // fine via the same fallback in EnsureDevice.
+      id<MTLDevice> probe = MTLCreateSystemDefaultDevice();
+      if (probe == nil) {
+        NSArray<id<MTLDevice>>* all = MTLCopyAllDevices();
+        available = (all.count > 0);
+      } else {
+        available = true;
+      }
+    }
+  });
+  return available;
+}
 
 struct MetalTraceBackend::Impl {
   Impl() {
