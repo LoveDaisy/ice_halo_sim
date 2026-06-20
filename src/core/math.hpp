@@ -246,6 +246,26 @@ bool SolveLines(const float* coef1, const float* coef2, float* res);
 bool SolvePlanes(const float* coef1, const float* coef2, const float* coef3, float* res);
 
 /**
+ * @brief Double-precision variant of @ref SolvePlanes. Same semantics as the
+ *        float version (normalize plane normals internally → scale-invariant
+ *        singularity check on `sin(trihedral angle)`), with all arithmetic in
+ *        double. Used by the geometry-generation pipeline (`geo3d.cpp`
+ *        `FillHexCrystalCoef` apex/anti-apex solve) and by the double mesh
+ *        builder (`SolveConvexPolyhedronVtxD` / `CollectSurfaceVtxD`).
+ *        Single source of truth — no manual copy of this routine should live
+ *        in callers (see doc/numerical-robustness.md §4).
+ *
+ * @param coef1 Coefficients for 1st plane. [a, b, c, d]
+ * @param coef2 Coefficients for 2nd plane. [a, b, c, d]
+ * @param coef3 Coefficients for 3rd plane. [a, b, c, d]
+ * @param res Intersection point. [x, y, z]
+ * @return true Find the intersection.
+ * @return false No intersection (parallel or near-singular triple, or a
+ *         degenerate plane with zero-magnitude normal).
+ */
+bool SolvePlanesD(const double* coef1, const double* coef2, const double* coef3, double* res);
+
+/**
  * @brief Check if a 2D point locates **IN** a polygon. The polygon is defined by intersection of
  *        multiple half planes: a*x + b*y + c <= 0
  *

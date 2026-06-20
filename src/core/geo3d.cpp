@@ -410,23 +410,8 @@ size_t FillHexCrystalCoef(float upper_alpha, float lower_alpha, float h1, float 
     for (size_t i = 0; i < cnt * 4; i++) {
       coef_d[i] = static_cast<double>(out_coef[i]);
     }
-    auto solve_planes_d = [](const double* c1, const double* c2, const double* c3, double* res) -> bool {
-      double det = c1[0] * c2[1] * c3[2] + c1[1] * c2[2] * c3[0] + c1[2] * c2[0] * c3[1] - c1[2] * c2[1] * c3[0] -
-                   c1[0] * c2[2] * c3[1] - c1[1] * c2[0] * c3[2];
-      if (std::fabs(det) < 1e-10) {
-        return false;
-      }
-      double x = c1[3] * c2[2] * c3[1] + c1[1] * c2[3] * c3[2] + c1[2] * c2[1] * c3[3] -  //
-                 c1[1] * c2[2] * c3[3] - c1[2] * c2[3] * c3[1] - c1[3] * c2[1] * c3[2];
-      double y = c1[0] * c2[2] * c3[3] + c1[2] * c2[3] * c3[0] + c1[3] * c2[0] * c3[2] -  //
-                 c1[3] * c2[2] * c3[0] - c1[0] * c2[3] * c3[2] - c1[2] * c2[0] * c3[3];
-      double z = c1[3] * c2[1] * c3[0] + c1[0] * c2[3] * c3[1] + c1[1] * c2[0] * c3[3] -  //
-                 c1[0] * c2[1] * c3[3] - c1[1] * c2[3] * c3[0] - c1[3] * c2[0] * c3[1];
-      res[0] = x / det;
-      res[1] = y / det;
-      res[2] = z / det;
-      return true;
-    };
+    // Plane-triple intersection delegates to the single-source SolvePlanesD
+    // (math.hpp) — scale-invariant singularity check on the normalized det.
     auto is_in_polyhedron_d = [](int n, const double* coef, const double xyz[3]) -> bool {
       for (int j = 0; j < n; j++) {
         if (coef[j * 4 + 0] * xyz[0] + coef[j * 4 + 1] * xyz[1] + coef[j * 4 + 2] * xyz[2] + coef[j * 4 + 3] > 1e-10) {
@@ -442,7 +427,7 @@ size_t FillHexCrystalCoef(float upper_alpha, float lower_alpha, float h1, float 
     for (size_t i = 2; i < cnt; i++) {
       for (size_t j = i + 1; j < cnt; j++) {
         for (size_t k = j + 1; k < cnt; k++) {
-          if (!solve_planes_d(coef_d.data() + i * 4, coef_d.data() + j * 4, coef_d.data() + k * 4, xyz)) {
+          if (!SolvePlanesD(coef_d.data() + i * 4, coef_d.data() + j * 4, coef_d.data() + k * 4, xyz)) {
             continue;
           }
           if (is_in_polyhedron_d(static_cast<int>(cnt - 2), coef_d.data() + 8, xyz)) {

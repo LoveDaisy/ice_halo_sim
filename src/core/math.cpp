@@ -629,15 +629,39 @@ void from_json(const nlohmann::json& obj, AxisDistribution& axis) {
 }
 
 
+// Singularity threshold for Cramer's-rule det computed on UNIT-NORMALIZED line /
+// plane normals. After in-function normalization, det = sin(angle-between-normals)
+// (2D) or det = scalar triple product of three unit normals = sin(trihedral angle)
+// (3D), both bounded in [-1, 1]. The threshold therefore measures angular
+// degeneracy and is scale-invariant w.r.t. the caller's normal magnitudes (see
+// doc/numerical-robustness.md §2; task-solveplanes-det-normalization).
+// Calibrated against the double-precision sweep: legitimate triples in wedge
+// 60-89.9° geometry have min|det_norm| ≈ 2.6e-6, spurious near-degenerate
+// triples tail off below 1.6e-7 — 1e-6 sits inside that gap with margin to
+// both sides. Float follows the same calibration (tail is wider in float but
+// the legitimate floor is the same, since the geometry is the same).
+constexpr float kSingularDetNormF = 1e-6f;
+
 bool SolveLines(const float* coef1, const float* coef2, float* res) {
-  float det = coef1[0] * coef2[1] - coef2[0] * coef1[1];
-  if (FloatEqualZero(det)) {
+  // Normalize each line normal (a, b) so the det becomes scale-invariant.
+  float mag1 = std::sqrt(coef1[0] * coef1[0] + coef1[1] * coef1[1]);
+  float mag2 = std::sqrt(coef2[0] * coef2[0] + coef2[1] * coef2[1]);
+  if (mag1 < math::kFloatEps || mag2 < math::kFloatEps) {
     res[0] = std::numeric_limits<float>::quiet_NaN();
     res[1] = std::numeric_limits<float>::quiet_NaN();
     return false;
   }
-  float x = (coef1[1] * coef2[2] - coef2[1] * coef1[2]) / det;
-  float y = (coef1[2] * coef2[0] - coef2[2] * coef1[0]) / det;
+  float c1[3]{ coef1[0] / mag1, coef1[1] / mag1, coef1[2] / mag1 };
+  float c2[3]{ coef2[0] / mag2, coef2[1] / mag2, coef2[2] / mag2 };
+
+  float det = c1[0] * c2[1] - c2[0] * c1[1];
+  if (FloatEqualZero(det, kSingularDetNormF)) {
+    res[0] = std::numeric_limits<float>::quiet_NaN();
+    res[1] = std::numeric_limits<float>::quiet_NaN();
+    return false;
+  }
+  float x = (c1[1] * c2[2] - c2[1] * c1[2]) / det;
+  float y = (c1[2] * c2[0] - c2[2] * c1[0]) / det;
   res[0] = x;
   res[1] = y;
   return true;
@@ -645,20 +669,38 @@ bool SolveLines(const float* coef1, const float* coef2, float* res) {
 
 
 bool SolvePlanes(const float* coef1, const float* coef2, const float* coef3, float* res) {
-  float det = coef1[0] * coef2[1] * coef3[2] + coef1[1] * coef2[2] * coef3[0] + coef1[2] * coef2[0] * coef3[1] -
-              coef1[2] * coef2[1] * coef3[0] - coef1[0] * coef2[2] * coef3[1] - coef1[1] * coef2[0] * coef3[2];
-  if (FloatEqualZero(det)) {
+  // Normalize each plane normal so the det becomes scale-invariant — bounded in
+  // [-1, 1] and equal to sin(trihedral angle). Avoids the historical issue where
+  // an absolute threshold on the raw det (which scales with |n1||n2||n3|) could
+  // either over-reject legitimate triples whose normals happen to have small
+  // magnitude, or under-reject near-degenerate triples whose normals are large.
+  float mag1 = Norm3(coef1);
+  float mag2 = Norm3(coef2);
+  float mag3 = Norm3(coef3);
+  if (mag1 < math::kFloatEps || mag2 < math::kFloatEps || mag3 < math::kFloatEps) {
     res[0] = std::numeric_limits<float>::quiet_NaN();
     res[1] = std::numeric_limits<float>::quiet_NaN();
     res[2] = std::numeric_limits<float>::quiet_NaN();
     return false;
   }
-  float x = coef1[3] * coef2[2] * coef3[1] + coef1[1] * coef2[3] * coef3[2] + coef1[2] * coef2[1] * coef3[3] -
-            coef1[1] * coef2[2] * coef3[3] - coef1[2] * coef2[3] * coef3[1] - coef1[3] * coef2[1] * coef3[2];
-  float y = coef1[0] * coef2[2] * coef3[3] + coef1[2] * coef2[3] * coef3[0] + coef1[3] * coef2[0] * coef3[2] -
-            coef1[3] * coef2[2] * coef3[0] - coef1[0] * coef2[3] * coef3[2] - coef1[2] * coef2[0] * coef3[3];
-  float z = coef1[3] * coef2[1] * coef3[0] + coef1[0] * coef2[3] * coef3[1] + coef1[1] * coef2[0] * coef3[3] -
-            coef1[0] * coef2[1] * coef3[3] - coef1[1] * coef2[3] * coef3[0] - coef1[3] * coef2[0] * coef3[1];
+  float c1[4]{ coef1[0] / mag1, coef1[1] / mag1, coef1[2] / mag1, coef1[3] / mag1 };
+  float c2[4]{ coef2[0] / mag2, coef2[1] / mag2, coef2[2] / mag2, coef2[3] / mag2 };
+  float c3[4]{ coef3[0] / mag3, coef3[1] / mag3, coef3[2] / mag3, coef3[3] / mag3 };
+
+  float det = c1[0] * c2[1] * c3[2] + c1[1] * c2[2] * c3[0] + c1[2] * c2[0] * c3[1] - c1[2] * c2[1] * c3[0] -
+              c1[0] * c2[2] * c3[1] - c1[1] * c2[0] * c3[2];
+  if (FloatEqualZero(det, kSingularDetNormF)) {
+    res[0] = std::numeric_limits<float>::quiet_NaN();
+    res[1] = std::numeric_limits<float>::quiet_NaN();
+    res[2] = std::numeric_limits<float>::quiet_NaN();
+    return false;
+  }
+  float x = c1[3] * c2[2] * c3[1] + c1[1] * c2[3] * c3[2] + c1[2] * c2[1] * c3[3] - c1[1] * c2[2] * c3[3] -
+            c1[2] * c2[3] * c3[1] - c1[3] * c2[1] * c3[2];
+  float y = c1[0] * c2[2] * c3[3] + c1[2] * c2[3] * c3[0] + c1[3] * c2[0] * c3[2] - c1[3] * c2[2] * c3[0] -
+            c1[0] * c2[3] * c3[2] - c1[2] * c2[0] * c3[3];
+  float z = c1[3] * c2[1] * c3[0] + c1[0] * c2[3] * c3[1] + c1[1] * c2[0] * c3[3] - c1[0] * c2[1] * c3[3] -
+            c1[1] * c2[3] * c3[0] - c1[3] * c2[0] * c3[1];
   res[0] = x / det;
   res[1] = y / det;
   res[2] = z / det;
@@ -707,10 +749,6 @@ namespace {
 // residual; using kDoubleEps = 1e-10 would false-reject valid incidences on
 // every prism/pyramid plane and collapse the mesh to its pyramid-only subset.
 constexpr double kIncidenceEpsD = static_cast<double>(math::kFloatEps);
-// Singularity threshold for double Cramer's rule: det of float-derived planes
-// scales with float input squared, so kDoubleEps is the right floor — only
-// truly degenerate (numerically zero) triples should be rejected.
-constexpr double kSingularDetD = 1e-10;
 
 bool FloatEqualZeroD(double a, double threshold = kIncidenceEpsD) {
   return std::fabs(a) < threshold;
@@ -725,27 +763,6 @@ double DiffNorm3D(const double* a, const double* b) {
   double dy = a[1] - b[1];
   double dz = a[2] - b[2];
   return std::sqrt(dx * dx + dy * dy + dz * dz);
-}
-
-bool SolvePlanesD(const double* c1, const double* c2, const double* c3, double* res) {
-  double det = c1[0] * c2[1] * c3[2] + c1[1] * c2[2] * c3[0] + c1[2] * c2[0] * c3[1] - c1[2] * c2[1] * c3[0] -
-               c1[0] * c2[2] * c3[1] - c1[1] * c2[0] * c3[2];
-  if (FloatEqualZeroD(det, kSingularDetD)) {
-    res[0] = std::numeric_limits<double>::quiet_NaN();
-    res[1] = std::numeric_limits<double>::quiet_NaN();
-    res[2] = std::numeric_limits<double>::quiet_NaN();
-    return false;
-  }
-  double x = c1[3] * c2[2] * c3[1] + c1[1] * c2[3] * c3[2] + c1[2] * c2[1] * c3[3] -  //
-             c1[1] * c2[2] * c3[3] - c1[2] * c2[3] * c3[1] - c1[3] * c2[1] * c3[2];
-  double y = c1[0] * c2[2] * c3[3] + c1[2] * c2[3] * c3[0] + c1[3] * c2[0] * c3[2] -  //
-             c1[3] * c2[2] * c3[0] - c1[0] * c2[3] * c3[2] - c1[2] * c2[0] * c3[3];
-  double z = c1[3] * c2[1] * c3[0] + c1[0] * c2[3] * c3[1] + c1[1] * c2[0] * c3[3] -  //
-             c1[0] * c2[1] * c3[3] - c1[1] * c2[3] * c3[0] - c1[3] * c2[0] * c3[1];
-  res[0] = x / det;
-  res[1] = y / det;
-  res[2] = z / det;
-  return true;
 }
 
 bool IsInPolyhedron3D(int n, const double* coef, const double xyz[3], bool boundary = true) {
@@ -766,6 +783,57 @@ void WidenCoefToDouble(int plane_cnt, const float* coef_f, std::vector<double>& 
 }
 
 }  // namespace
+
+
+// Singularity threshold for the double-precision Cramer's rule, evaluated on
+// UNIT-NORMALIZED plane normals. After in-function normalization, det equals
+// sin(trihedral angle) and is bounded in [-1, 1], so the threshold measures
+// angular degeneracy independent of the caller's normal magnitudes (see
+// doc/numerical-robustness.md §2; task-solveplanes-det-normalization).
+// Calibrated against the wedge sweep in V3TestCrystal (60-89.9°):
+//   - spurious near-degenerate triples tail off below |det_norm| ≈ 1.6e-7
+//   - legitimate extreme-wedge triples have min|det_norm| ≈ 2.6e-6
+// 1e-6 sits inside that gap with ~6× margin to spurious, ~3× to legitimate.
+// Well above double rounding noise (~1e-16).
+constexpr double kSingularDetNormD = 1e-6;
+
+bool SolvePlanesD(const double* coef1, const double* coef2, const double* coef3, double* res) {
+  // Normalize each plane normal so the det is scale-invariant. The geometry
+  // generation pipeline (geo3d.cpp) feeds raw plane coefficients whose normal
+  // magnitudes can drift far from unity at extreme wedges, so a raw det
+  // threshold is ill-defined; after normalization det ∈ [-1, 1] regardless.
+  double mag1 = std::sqrt(coef1[0] * coef1[0] + coef1[1] * coef1[1] + coef1[2] * coef1[2]);
+  double mag2 = std::sqrt(coef2[0] * coef2[0] + coef2[1] * coef2[1] + coef2[2] * coef2[2]);
+  double mag3 = std::sqrt(coef3[0] * coef3[0] + coef3[1] * coef3[1] + coef3[2] * coef3[2]);
+  if (mag1 < kIncidenceEpsD || mag2 < kIncidenceEpsD || mag3 < kIncidenceEpsD) {
+    res[0] = std::numeric_limits<double>::quiet_NaN();
+    res[1] = std::numeric_limits<double>::quiet_NaN();
+    res[2] = std::numeric_limits<double>::quiet_NaN();
+    return false;
+  }
+  double c1[4]{ coef1[0] / mag1, coef1[1] / mag1, coef1[2] / mag1, coef1[3] / mag1 };
+  double c2[4]{ coef2[0] / mag2, coef2[1] / mag2, coef2[2] / mag2, coef2[3] / mag2 };
+  double c3[4]{ coef3[0] / mag3, coef3[1] / mag3, coef3[2] / mag3, coef3[3] / mag3 };
+
+  double det = c1[0] * c2[1] * c3[2] + c1[1] * c2[2] * c3[0] + c1[2] * c2[0] * c3[1] -  //
+               c1[2] * c2[1] * c3[0] - c1[0] * c2[2] * c3[1] - c1[1] * c2[0] * c3[2];
+  if (std::fabs(det) < kSingularDetNormD) {
+    res[0] = std::numeric_limits<double>::quiet_NaN();
+    res[1] = std::numeric_limits<double>::quiet_NaN();
+    res[2] = std::numeric_limits<double>::quiet_NaN();
+    return false;
+  }
+  double x = c1[3] * c2[2] * c3[1] + c1[1] * c2[3] * c3[2] + c1[2] * c2[1] * c3[3] -  //
+             c1[1] * c2[2] * c3[3] - c1[2] * c2[3] * c3[1] - c1[3] * c2[1] * c3[2];
+  double y = c1[0] * c2[2] * c3[3] + c1[2] * c2[3] * c3[0] + c1[3] * c2[0] * c3[2] -  //
+             c1[3] * c2[2] * c3[0] - c1[0] * c2[3] * c3[2] - c1[2] * c2[0] * c3[3];
+  double z = c1[3] * c2[1] * c3[0] + c1[0] * c2[3] * c3[1] + c1[1] * c2[0] * c3[3] -  //
+             c1[0] * c2[1] * c3[3] - c1[1] * c2[3] * c3[0] - c1[3] * c2[0] * c3[1];
+  res[0] = x / det;
+  res[1] = y / det;
+  res[2] = z / det;
+  return true;
+}
 
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
