@@ -4,11 +4,13 @@
 #include <cstddef>
 #include <limits>
 #include <numeric>
+#include <set>
 #include <vector>
 
 #include "config/filter_config.hpp"
 #include "config/proj_config.hpp"
 #include "config/sim_data.hpp"
+#include "core/crystal.hpp"
 #include "core/filter_spec.hpp"
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
@@ -670,6 +672,63 @@ TEST(SimulatorEffectiveSeed, TwoZeroSeedInstancesDistinct) {
   EXPECT_NE(a.GetEffectiveSeed(), b.GetEffectiveSeed());
   EXPECT_NE(a.GetEffectiveSeed(), 0u);
   EXPECT_NE(b.GetEffectiveSeed(), 0u);
+}
+
+// Regression sentinel for the PolygonFaceOfTri argmax fix: PolygonFaceOfTri
+// must map each of the 6 upper-pyramid polygon faces uniquely on
+// extreme-wedge crystals. The buggy
+// first-match (`dot > 1-1e-3`) collapses ≥2 physical faces onto the lowest
+// polygon index because adjacent upper-face normals dot to ~0.9994. argmax
+// + sanity floor distinguishes them.
+//
+// Identification: upper-pyramid faces carry Fn ∈ {13..18} (per
+// crystal.cpp::CreatePyramid Miller-axis numbering); we count distinct polygon
+// indices returned by detail::PolygonFaceOfTri for every triangle whose Fn is
+// in that range.
+constexpr IdType kUpperPyramidFnLo = 13;
+constexpr IdType kUpperPyramidFnHi = 18;
+
+size_t CountDistinctUpperPolyFaces(const Crystal& crystal, bool* any_invalid_out = nullptr) {
+  std::set<IdType> polys;
+  bool any_invalid = false;
+  for (size_t t = 0; t < crystal.TotalTriangles(); t++) {
+    IdType fn = crystal.GetFn(static_cast<int>(t));
+    if (fn < kUpperPyramidFnLo || fn > kUpperPyramidFnHi) {
+      continue;
+    }
+    IdType poly = detail::PolygonFaceOfTri(crystal, static_cast<int>(t));
+    if (poly == kInvalidId) {
+      any_invalid = true;
+      continue;
+    }
+    polys.insert(poly);
+  }
+  if (any_invalid_out) {
+    *any_invalid_out = any_invalid;
+  }
+  return polys.size();
+}
+
+TEST(PolygonFaceOfTriArgmax, ExtremeWedge88SixDistinctUpperFaces) {
+  // Extreme wedge 88° — the buggy first-match collapses upper-pyramid triangles
+  // to ≤4 distinct polygon faces; argmax must recover the full 6.
+  auto crystal = Crystal::CreatePyramid(88.0f, 88.0f, 1.0f, 0.0f, 1.0f);
+  bool any_invalid = false;
+  size_t distinct = CountDistinctUpperPolyFaces(crystal, &any_invalid);
+  EXPECT_EQ(distinct, 6u) << "extreme-wedge 88°: upper-pyramid triangles should map to 6 distinct "
+                             "polygon faces under argmax (buggy first-match collapses to ≤4)";
+  EXPECT_FALSE(any_invalid) << "no upper-pyramid triangle should fall below kFaceCoplanarFloor on a "
+                               "valid crystal";
+}
+
+TEST(PolygonFaceOfTriArgmax, NormalWedge87SixDistinctUpperFaces) {
+  // Sanity baseline at the threshold edge — argmax must match first-match's
+  // behavior here (already 6 distinct under either rule).
+  auto crystal = Crystal::CreatePyramid(87.0f, 87.0f, 1.0f, 0.0f, 1.0f);
+  bool any_invalid = false;
+  size_t distinct = CountDistinctUpperPolyFaces(crystal, &any_invalid);
+  EXPECT_EQ(distinct, 6u);
+  EXPECT_FALSE(any_invalid) << "no upper-pyramid triangle should fall below kFaceCoplanarFloor at wedge 87°";
 }
 
 }  // namespace

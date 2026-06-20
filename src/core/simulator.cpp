@@ -36,21 +36,37 @@
 
 namespace lumice {
 
-// Maps a triangle id to its polygon-face index by matching unit normals
-// (BuildPolygonFaceData uses the same dot>1-1e-3 criterion). Returns kInvalidId
-// if no polygon face matches. Used only by InitRay_p_fid below — keeping it
-// file-local avoids reintroducing a Crystal-level reverse mapping that is
-// otherwise unneeded after the from_face_/to_face_ split.
-static IdType PolygonFaceOfTri(const Crystal& crystal, int tri_id) {
+namespace detail {
+
+// Maps a triangle id to its polygon-face index via argmax of the dot product
+// against polygon-face normals (kFaceCoplanarFloor=1e-2). Mirrors the
+// BuildPolygonFaceData side (crystal.cpp); a first-match `dot > 1-1e-3` cannot
+// distinguish adjacent upper-pyramid faces on extreme-wedge (~≥87.4°) crystals
+// because their normals' dot ≈ 0.9994. Returns kInvalidId only if the best
+// match is below the sanity floor (~8.1° slack), which should not happen for
+// valid crystals. Exposed in detail:: for unit-test access; not part of the
+// public API.
+// NOTE: kFaceCoplanarFloor must match the value in crystal.cpp::BuildPolygonFaceData.
+IdType PolygonFaceOfTri(const Crystal& crystal, int tri_id) {
   const float* tn = crystal.GetTriangleNormal() + tri_id * 3;
   const float* pn = crystal.GetPolygonFaceNormal();
+  constexpr float kFaceCoplanarFloor = 1e-2f;
+  int best_p = -1;
+  float best_dot = -1.0f;
   for (size_t p = 0; p < crystal.PolygonFaceCount(); p++) {
-    if (Dot3(tn, pn + p * 3) > 1.0f - 1e-3f) {
-      return static_cast<IdType>(p);
+    float dot = Dot3(tn, pn + p * 3);
+    if (dot > best_dot) {
+      best_dot = dot;
+      best_p = static_cast<int>(p);
     }
   }
-  return kInvalidId;
+  if (best_p < 0 || best_dot < 1.0f - kFaceCoplanarFloor) {
+    return kInvalidId;
+  }
+  return static_cast<IdType>(best_p);
 }
+
+}  // namespace detail
 
 /**
  * @brief Sample on crystal & init origin (p, from_face_, to_face_) of rays.
@@ -86,7 +102,7 @@ void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr) {
     SampleTrianglePoint(face_vtx + tri_id * 9, r.p_);
     // Initial entry segment: no source face, hit face = the sampled one's polygon.
     r.from_face_ = kInvalidId;
-    r.to_face_ = PolygonFaceOfTri(curr_crystal, tri_id);
+    r.to_face_ = detail::PolygonFaceOfTri(curr_crystal, tri_id);
     if (r.to_face_ == kInvalidId) {
       // Triangle has no matching polygon face — should not happen for a valid crystal.
       // Zero weight to suppress downstream contribution; HitSurface also guards

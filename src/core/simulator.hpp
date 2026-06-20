@@ -143,6 +143,14 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
 // Internal: exposed for unit testing; not part of the public C API.
 Rotation BuildCrystalRotation(float azimuth_rad, float latitude_rad, float roll_rad);
 
+namespace detail {
+// Maps a triangle id to its polygon-face index via argmax of the dot product
+// against polygon-face normals (kFaceCoplanarFloor=1e-2). Used by InitRay_p_fid
+// to label the initial entry segment. Exposed for unit-test access; not part
+// of the public C API.
+IdType PolygonFaceOfTri(const Crystal& crystal, int tri_id);
+}  // namespace detail
+
 }  // namespace lumice
 
 #endif  // CORE_SIMULATOR_H_
