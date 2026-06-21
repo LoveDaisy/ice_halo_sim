@@ -16,6 +16,8 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -1277,6 +1279,66 @@ bool MetalDeviceAvailable() {
   return available;
 }
 
+bool MetalPipelineAvailable() {
+  // task-282: cache is once_flag write-once-then-read-only — safe for any
+  // thread to call after the first probe completes. Trial-compile mirrors
+  // EnsurePso's source assembly and MTLCompileOptions verbatim so the gate
+  // exercises the same code path that BeginSession will: catching the
+  // macOS 26.5 "library compiles but kernel entry point missing" failure
+  // before the GUI checkbox even lights up. We deliberately do NOT build a
+  // full MTLComputePipelineState — entry-point lookup is sufficient for the
+  // observed failure mode, and the Step-2 BeginSession throw + simulator
+  // fallback is the safety net for any future runtime-only PSO failure.
+  static std::once_flag flag;
+  static bool available = false;
+  std::call_once(flag, []() {
+    @autoreleasepool {
+      id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+      if (device == nil) {
+        NSArray<id<MTLDevice>>* all = MTLCopyAllDevices();
+        if (all.count > 0) {
+          device = all[0];
+        }
+      }
+      if (device == nil) {
+        return;  // available stays false
+      }
+      // Source-string assembly MUST match EnsurePso (metal_trace_backend.mm:
+      // helper then kernel). MSL forward-declaration order in the helper
+      // depends on this concatenation order — swapping it changes compiler
+      // behaviour and would defeat the gate's predictive value.
+      NSString* src = [NSString stringWithFormat:@"%s\n%s",
+                                                  kFilterMatchHelperSrc,
+                                                  kKernelSrc];
+      MTLCompileOptions* opts = [MTLCompileOptions new];
+      opts.languageVersion = MTLLanguageVersion3_0;
+      if (@available(macOS 15.0, *)) {
+        opts.mathMode = MTLMathModeSafe;
+      } else {
+        opts.fastMathEnabled = NO;
+      }
+      NSError* err = nil;
+      id<MTLLibrary> lib = [device newLibraryWithSource:src options:opts error:&err];
+      if (lib == nil) {
+        return;
+      }
+      // Check ALL three entry points EnsurePso resolves. macOS 26.5 may drop
+      // gen_root_kernel / transit_root_kernel as well; checking only
+      // trace_layer_kernel would let the gate return true while EnsurePso
+      // still throws on a later lookup. Cost is three lookups on the same
+      // library object — trivial vs. the trial compile itself.
+      for (NSString* name in @[ @"trace_layer_kernel", @"gen_root_kernel", @"transit_root_kernel" ]) {
+        id<MTLFunction> fn = [lib newFunctionWithName:name];
+        if (fn == nil) {
+          return;
+        }
+      }
+      available = true;
+    }
+  });
+  return available;
+}
+
 struct MetalTraceBackend::Impl {
   Impl() {
     // task-260.5 Step 4 (code-review-01 Minor): cache the device-gen escape
@@ -1652,44 +1714,73 @@ void MetalTraceBackend::Impl::EnsurePso() {
   }
   id<MTLLibrary> lib = [device newLibraryWithSource:src options:opts error:&err];
   if (lib == nil) {
+    const char* desc = err.localizedDescription.UTF8String;
     ILOG_ERROR(EffectiveLogger(logger_),
                "MetalTraceBackend: kernel compile failed: {}",
-               err.localizedDescription.UTF8String);
-    assert(false && "MetalTraceBackend: kernel compile failed");
+               desc ? desc : "(no error)");
+    throw BackendUnavailableError("MetalTraceBackend: kernel compile failed");
   }
+  // task-282 diagnostic: a successfully-compiled library can still fail to
+  // expose a kernel entry point (observed on macOS 26.5 / M1 Max — see
+  // issue.md). Capture functionNames + err so the next user repro pins down
+  // exactly which entry point the library dropped; previously this path went
+  // straight to a Release-NDEBUG-disabled assert and aborted opaquely.
+  auto LogMissingFunction = [&](const char* name, NSError* fn_err) {
+    NSArray<NSString*>* names = lib.functionNames;
+    NSString* joined = [names componentsJoinedByString:@", "];
+    const char* names_cstr = joined.UTF8String;
+    const char* err_cstr = fn_err.localizedDescription.UTF8String;
+    ILOG_ERROR(EffectiveLogger(logger_),
+               "MetalTraceBackend: kernel entry point '{}' missing — library functionNames=[{}] err={}",
+               name,
+               names_cstr ? names_cstr : "",
+               err_cstr ? err_cstr : "(none)");
+  };
   id<MTLFunction> fn = [lib newFunctionWithName:@"trace_layer_kernel"];
-  assert(fn != nil && "MetalTraceBackend: kernel entry point missing");
+  if (fn == nil) {
+    LogMissingFunction("trace_layer_kernel", err);
+    throw BackendUnavailableError("MetalTraceBackend: trace_layer_kernel entry point missing");
+  }
   pso = [device newComputePipelineStateWithFunction:fn error:&err];
   if (pso == nil) {
+    const char* desc = err.localizedDescription.UTF8String;
     ILOG_ERROR(EffectiveLogger(logger_),
                "MetalTraceBackend: pipeline state creation failed: {}",
-               err.localizedDescription.UTF8String);
-    assert(false && "MetalTraceBackend: pipeline state creation failed");
+               desc ? desc : "(no error)");
+    throw BackendUnavailableError("MetalTraceBackend: pipeline state creation failed");
   }
 
   // Device root-gen PSO (task-260.2). Same library as trace_layer; compiled
   // in lock-step so the kernel cache survives across BeginSession invocations.
   id<MTLFunction> gen_fn = [lib newFunctionWithName:@"gen_root_kernel"];
-  assert(gen_fn != nil && "MetalTraceBackend: gen_root_kernel entry point missing");
+  if (gen_fn == nil) {
+    LogMissingFunction("gen_root_kernel", err);
+    throw BackendUnavailableError("MetalTraceBackend: gen_root_kernel entry point missing");
+  }
   gen_root_pso_ = [device newComputePipelineStateWithFunction:gen_fn error:&err];
   if (gen_root_pso_ == nil) {
+    const char* desc = err.localizedDescription.UTF8String;
     ILOG_ERROR(EffectiveLogger(logger_),
                "MetalTraceBackend: gen_root pipeline state creation failed: {}",
-               err.localizedDescription.UTF8String);
-    assert(false && "MetalTraceBackend: gen_root pipeline state creation failed");
+               desc ? desc : "(no error)");
+    throw BackendUnavailableError("MetalTraceBackend: gen_root pipeline state creation failed");
   }
 
   // Device frame-transit PSO (scrum-267 task-device-resident-continuation).
   // Shares the same compiled library so the kernel cache survives across
   // BeginSession invocations alongside gen_root_pso_.
   id<MTLFunction> transit_fn = [lib newFunctionWithName:@"transit_root_kernel"];
-  assert(transit_fn != nil && "MetalTraceBackend: transit_root_kernel entry point missing");
+  if (transit_fn == nil) {
+    LogMissingFunction("transit_root_kernel", err);
+    throw BackendUnavailableError("MetalTraceBackend: transit_root_kernel entry point missing");
+  }
   transit_root_pso_ = [device newComputePipelineStateWithFunction:transit_fn error:&err];
   if (transit_root_pso_ == nil) {
+    const char* desc = err.localizedDescription.UTF8String;
     ILOG_ERROR(EffectiveLogger(logger_),
                "MetalTraceBackend: transit_root pipeline state creation failed: {}",
-               err.localizedDescription.UTF8String);
-    assert(false && "MetalTraceBackend: transit_root pipeline state creation failed");
+               desc ? desc : "(no error)");
+    throw BackendUnavailableError("MetalTraceBackend: transit_root pipeline state creation failed");
   }
 }
 
@@ -2835,16 +2926,30 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   // TraceLayer.
   impl_->gen_seed_ = static_cast<uint32_t>(spec.seed);
 
-  impl_->EnsureDevice();
-  impl_->EnsurePso();
-  impl_->EnsureImage(impl_->width, impl_->height);
-  // scrum-268.8 (DR-3): allocate the wavelength pool buffer once per backend
-  // (size invariant across sessions) and populate it once per BeginSession.
-  // Pool content depends only on (illuminant mode, per_batch_wl_) — both
-  // captured above — and on Crystal::GetRefractiveIndex which is the global
-  // ice model (identical for every crystal shape in the session), so a single
-  // upload covers every ci dispatch.
-  impl_->EnsureWlPoolBuffer();
+  // task-282: BeginSession sets in_session=true above (line 2766) BEFORE the
+  // Ensure* phase. If EnsurePso (or any downstream Ensure*) throws — e.g. the
+  // macOS 26.5 entry-point-missing path — the SimulateOneWavelengthWithBackend
+  // EndOnExit RAII guard is not yet constructed (its constructor is reached
+  // only on a normal BeginSession return), so EndSession()/Reset() would not
+  // run and `in_session` would leak as true. Catch + Reset()+rethrow restores
+  // the session-clean invariant so the simulator can drop the backend and
+  // continue with the legacy CPU path without tripping a future BeginSession's
+  // !in_session assert.
+  try {
+    impl_->EnsureDevice();
+    impl_->EnsurePso();
+    impl_->EnsureImage(impl_->width, impl_->height);
+    // scrum-268.8 (DR-3): allocate the wavelength pool buffer once per backend
+    // (size invariant across sessions) and populate it once per BeginSession.
+    // Pool content depends only on (illuminant mode, per_batch_wl_) — both
+    // captured above — and on Crystal::GetRefractiveIndex which is the global
+    // ice model (identical for every crystal shape in the session), so a single
+    // upload covers every ci dispatch.
+    impl_->EnsureWlPoolBuffer();
+  } catch (...) {
+    impl_->Reset();
+    throw;
+  }
   {
     // Use an empty Crystal proxy — GetRefractiveIndex ignores its argument
     // and consults the global IceRefractiveIndex model directly.

@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "config/proj_config.hpp"
@@ -130,6 +132,21 @@ namespace lumice {
 //     multi-generation lifetime tracking).
 //
 // =============================================================================
+
+// -----------------------------------------------------------------------------
+// BackendUnavailableError — thrown by a backend when its runtime prerequisites
+// cannot be satisfied (Metal kernel compile / entry-point lookup / PSO build
+// failure on macOS 26.5; CUDA driver mismatch; etc.). Distinct from generic
+// std::runtime_error so the simulator can route it to a CPU-backend fallback
+// instead of bubbling it to the server as a hard failure. BeginSession is the
+// only contract point that may throw this — callers are required to catch by
+// type and downgrade their backend selection (drop the backend instance for
+// the remainder of the Run()).
+// -----------------------------------------------------------------------------
+class BackendUnavailableError : public std::runtime_error {
+ public:
+  explicit BackendUnavailableError(const std::string& what) : std::runtime_error(what) {}
+};
 
 // -----------------------------------------------------------------------------
 // SessionSpec — parameters for a single trace session.
