@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782144662131,
+  "lastUpdate": 1782144664626,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -12839,6 +12839,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 92.8,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "855e6467599128d7249358a9e7fddd24a1ae9d9d",
+          "message": "Merge pull request #140 from LoveDaisy/fix/max-hits-overflow-crash\n\nfix(task-284): max_hits>15 CPU crash (EmplaceBack arena dup) + no-truncation exit-seam",
+          "timestamp": "2026-06-23T00:04:58+08:00",
+          "tree_id": "e8c0acda0c5c32dd47294ac7226ee4de751f408d",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/855e6467599128d7249358a9e7fddd24a1ae9d9d"
+        },
+        "date": 1782144663852,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 66.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 92.3,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 88.4,
             "unit": "%"
           }
         ]
