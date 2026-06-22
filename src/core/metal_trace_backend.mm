@@ -1336,20 +1336,24 @@ bool MetalPipelineAvailable() {
       for (NSString* name in @[ @"trace_layer_kernel", @"gen_root_kernel", @"transit_root_kernel" ]) {
         id<MTLFunction> fn = [lib newFunctionWithName:name];
         if (fn == nil) {
-          // task-282: this is the observed macOS 26.5 failure mode — the
-          // library compiles but does not expose this entry point. Log
-          // functionNames (what the library DID expose) so a user repro pins
-          // down exactly which kernels the toolchain dropped. This mirrors
-          // EnsurePso's LogMissingFunction, but fires here at the gate (which
-          // now intercepts before EnsurePso ever runs, so the runtime-path
-          // diagnostic would otherwise never be reached).
+          // task-282: the observed macOS 26.5 failure mode — newLibraryWithSource
+          // returns a NON-nil library that exports ZERO functions
+          // (functionNames=[]). That signature means the compile errored but
+          // still handed back a degenerate library object with the diagnostics
+          // stashed in `err`. `err` here comes straight from
+          // newLibraryWithSource and is NOT overwritten (the gate builds no PSO),
+          // so unlike EnsurePso's stale-err path it carries the real compiler
+          // message. Log functionNames + that message so a user repro pins the
+          // root cause without another round trip.
           NSArray<NSString*>* names = lib.functionNames;
           const char* names_cstr = [names componentsJoinedByString:@", "].UTF8String;
+          const char* err_cstr = err.localizedDescription.UTF8String;
           ILOG_WARN(EffectiveLogger(nullptr),
                     "MetalPipelineAvailable: library compiled but kernel entry point '{}' missing — "
-                    "gating Metal backend off; library functionNames=[{}]",
+                    "gating Metal backend off; library functionNames=[{}]; compile diagnostics: {}",
                     name.UTF8String,
-                    names_cstr ? names_cstr : "");
+                    names_cstr ? names_cstr : "",
+                    err_cstr ? err_cstr : "(none)");
           return;
         }
       }
