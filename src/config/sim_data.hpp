@@ -76,7 +76,15 @@ struct RayBuffer {
   // to gate the N4 construction-time invariants (Debug only; noop in Release).
   // Buffer-to-buffer overload below is internal data movement and skips this
   // gate — its inputs were already validated when first emplaced.
+  //
+  // The 2-arg overload accepts ONLY inline recorders (asserts !rec.HasOverflow()).
+  // Overflow-capable recorders MUST use the 3-arg overload below, which carries
+  // the arena source so DupOverflowSlot can clone the slot into *this*. The
+  // unguarded 2-arg call on an overflow recorder used to silently copy
+  // overflow_idx_ pointing into the foreign arena, then null-deref on the next
+  // RecorderFanOut/DupOverflowSlot (root cause of the max_hits>15 crash).
   void EmplaceBack(RaySeg r, const RaypathRecorder& rec);
+  void EmplaceBack(RaySeg r, const RaypathRecorder& rec, const RayBuffer& arena_src);
   void EmplaceBack(const RayBuffer& buffer, size_t start = 0, size_t len = kInfSize);
 
   RaySeg* rays() const;

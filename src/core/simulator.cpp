@@ -474,10 +474,14 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
     // 2. Normal rays (to_face_ != kInvalidId && w_ >= 0) stay in crystal-local coordinates.
 
     if (r.IsNormal()) {
-      buffer_data[0].EmplaceBack(r, rec);
+      // rec comes from buffer_data[1]; pass it as arena_src so overflow slots
+      // get duped into buffer_data[0]'s own arena (fix for max_hits>kInlineCap
+      // null-deref: the 2-arg overload would copy overflow_idx_ pointing at the
+      // wrong arena and crash the next RecorderFanOut).
+      buffer_data[0].EmplaceBack(r, rec, buffer_data[1]);
     }
     if (r.IsContinue()) {
-      init_data[1].EmplaceBack(r, rec);
+      init_data[1].EmplaceBack(r, rec, buffer_data[1]);
     }
   }
 }
