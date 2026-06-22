@@ -848,7 +848,15 @@ int LUMICE_IsBackendAvailable(int backend) {
     }
 #if defined(__APPLE__)
     if (backend == LUMICE_BACKEND_METAL) {
-      return lumice::MetalDeviceAvailable() ? 1 : 0;
+      // task-282: deepen the gate from device-presence to trial-compile +
+      // entry-point lookup. MetalDeviceAvailable returned true on macOS 26.5 /
+      // M1 Max where MSL compilation succeeded but newFunctionWithName
+      // ("trace_layer_kernel") returned nil, letting the GUI "Use Metal GPU"
+      // checkbox light up and BeginSession abort on a Metal-framework nil-
+      // computeFunction assertion. MetalPipelineAvailable runs the same
+      // source + options EnsurePso uses and verifies all three kernel entry
+      // points resolve.
+      return lumice::MetalPipelineAvailable() ? 1 : 0;
     }
 #endif
     return 0;

@@ -674,6 +674,28 @@ void Simulator::Run() {
     bool use_backend =
         CanUseBackend(backend.get(), batch, logger_, warned_no_renders, warned_multi_renderer, warned_compat);
 
+    // task-282: BackendUnavailableError signals the backend cannot run this
+    // session (Metal PSO build failure on macOS 26.5, etc.). On first miss
+    // we drop the backend instance for the remainder of the Run() (resetting
+    // `backend` flips `use_backend` to false on the next CanUseBackend call)
+    // and execute the current wavelength on the legacy CPU path here. Crystal
+    // cache + workspace + ray_alloc_carry are in Run() scope, so the fallback
+    // is a direct re-dispatch — no signature plumbing into the helper.
+    auto run_with_backend = [&](const WlParam& wl_param) {
+      try {
+        SimulateOneWavelengthWithBackend(*backend, config, (*batch.renders_)[0], wl_param, batch.ray_num_, generation);
+        return true;
+      } catch (const BackendUnavailableError& e) {
+        ILOG_WARN(
+            logger_,
+            "TraceBackend unavailable ({}); dropping backend and falling back to legacy CPU for the rest of this Run()",
+            e.what());
+        backend.reset();
+        SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation, ray_alloc_carry);
+        return false;
+      }
+    };
+
     const auto& spectrum = config.light_source_.spectrum_;
     if (auto* illuminant = std::get_if<IlluminantType>(&spectrum)) {
       // Standard illuminant.
@@ -687,14 +709,21 @@ void Simulator::Run() {
       // cpu_backend / legacy) keep per-batch uniform wl + SPD weight.
       bool backend_per_ray_wl = use_backend && backend->WlPoolSize() > 0u;
       if (backend_per_ray_wl) {
-        SimulateOneWavelengthWithBackend(*backend, config, (*batch.renders_)[0], WlParam{}, batch.ray_num_, generation);
+        // task-282 fallback samples a host wl (matches the no-backend branch)
+        // if the backend drops mid-call; otherwise the per-ray pool drives wl.
+        if (!run_with_backend(WlParam{})) {
+          // run_with_backend already executed the CPU fallback for this
+          // wavelength using a zero-wl WlParam (consistent with the original
+          // pool-driven semantics: no per-batch host wl is sampled when the
+          // backend owns the pool); subsequent batches take the use_backend
+          // == false branch since `backend` is now reset.
+        }
       } else {
         float wl = 380.0f + rng_.GetUniform() * 400.0f;  // [380, 780] nm
         float weight = GetIlluminantSpd(*illuminant, wl);
         WlParam wl_param{ wl, weight };
         if (use_backend) {
-          SimulateOneWavelengthWithBackend(*backend, config, (*batch.renders_)[0], wl_param, batch.ray_num_,
-                                           generation);
+          run_with_backend(wl_param);
         } else {
           SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation,
                                 ray_alloc_carry);
@@ -707,9 +736,8 @@ void Simulator::Run() {
         if (stop_) {
           break;
         }
-        if (use_backend) {
-          SimulateOneWavelengthWithBackend(*backend, config, (*batch.renders_)[0], wl_param, batch.ray_num_,
-                                           generation);
+        if (use_backend && backend) {
+          run_with_backend(wl_param);
         } else {
           SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation,
                                 ray_alloc_carry);

@@ -34,6 +34,18 @@ class Logger;
 // which asserts on failure and retains the device reference.
 bool MetalDeviceAvailable();
 
+// Deeper Metal availability probe — trial-compiles the same MSL source as
+// EnsurePso (kFilterMatchHelperSrc + kKernelSrc with MSL 3.0 + MTLMathModeSafe)
+// and verifies all three kernel entry points (trace_layer_kernel,
+// gen_root_kernel, transit_root_kernel) resolve via newFunctionWithName. This
+// catches the macOS 26.5 failure mode where the library compiles but kernel
+// entry points are not exposed — a scenario MetalDeviceAvailable cannot
+// observe. The cached result drives LUMICE_IsBackendAvailable so the GUI's
+// "Use Metal GPU" checkbox is gated by the actual runtime success criterion
+// rather than mere device presence. Result is cached after the first call
+// (std::call_once, write-once then read-only — thread-safe).
+bool MetalPipelineAvailable();
+
 // MetalLayerHandle — the only host-visible scalar produced per TraceLayer is
 // the continuation count (populated from a 4-byte device readback, equivalent
 // to a 4-byte cudaMemcpy for CUDA backends). Continuation ray buffers
