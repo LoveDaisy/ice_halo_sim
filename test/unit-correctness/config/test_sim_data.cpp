@@ -13,12 +13,14 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstring>
 #include <type_traits>
 #include <utility>
 
 #include "config/sim_data.hpp"
 #include "core/def.hpp"
+#include "core/exit_seam.hpp"
 #include "core/raypath.hpp"
 
 namespace {
@@ -282,6 +284,47 @@ TEST(RayBufferRecorderTest, EmplaceBackSingleRayWithOverflowDupsArena) {
   std::memcpy(snapshot_dst, dst_slot, lumice::kMaxHits);
   src.RecorderDataPtr(1)[0] = 0xAA;
   EXPECT_EQ(std::memcmp(dst_slot, snapshot_dst, lumice::kMaxHits), 0) << "dst arena aliased src arena";
+}
+
+
+// task-284 no-truncation contract: the exit-seam record (ExitFaceSeq) must
+// carry the FULL recorded path up to kMaxHits, NOT silently cap it at the old
+// kInlineCap=15. This mirrors the cpu_trace_backend.cpp exit-record build
+// (seq_len = min(recorder.size_, ExitFaceSeq::kCap); memcpy(path.data_, ...))
+// against a >15-hit overflow recorder, asserting bytes past index 15 survive.
+// Owner-added per code-review Suggestion (direct structural assertion is
+// stronger than the PSNR-noise-floor proxy used in AC2).
+TEST(RayBufferRecorderTest, ExitFaceSeqCarriesFullPathNoTruncationPast15) {
+  // ExitFaceSeq must be able to hold the full path; the whole point of the
+  // task-284 fix is decoupling kCap from kInlineCap.
+  static_assert(lumice::ExitFaceSeq::kCap == static_cast<uint8_t>(lumice::kMaxHits),
+                "ExitFaceSeq::kCap must equal kMaxHits so exit paths are never truncated");
+  ASSERT_GT(lumice::ExitFaceSeq::kCap, lumice::RaypathRecorder::kInlineCap);
+
+  RayBuffer buf(4);
+  constexpr uint8_t kPathLen = 20;  // > kInlineCap (15), exercises the arena
+  for (uint8_t i = 0; i < kPathLen; i++) {
+    buf.RecorderAppend(0, static_cast<lumice::IdType>(i + 1));
+  }
+  const RaypathRecorder& rp = buf.RecorderAt(0);
+  ASSERT_TRUE(rp.HasOverflow());
+  ASSERT_EQ(rp.size_, kPathLen);
+
+  // Replicate the exit-record builder's copy (cpu_trace_backend.cpp).
+  lumice::ExitFaceSeq seq{};
+  const uint8_t* src = buf.RecorderDataPtr(0);
+  auto seq_len = static_cast<uint8_t>(std::min<size_t>(rp.size_, lumice::ExitFaceSeq::kCap));
+  seq.size_ = seq_len;
+  std::memcpy(seq.data_, src, seq_len);
+
+  // The 20-byte path must survive intact — no cap at 15.
+  EXPECT_EQ(seq.size_, kPathLen) << "exit-seam path truncated; kCap regression";
+  for (uint8_t i = 0; i < kPathLen; i++) {
+    EXPECT_EQ(seq.data_[i], static_cast<uint8_t>(i + 1)) << "byte " << static_cast<int>(i);
+  }
+  // Specifically assert the bytes that the OLD kCap=15 design would have dropped.
+  EXPECT_EQ(seq.data_[15], static_cast<uint8_t>(16));
+  EXPECT_EQ(seq.data_[19], static_cast<uint8_t>(20));
 }
 
 
