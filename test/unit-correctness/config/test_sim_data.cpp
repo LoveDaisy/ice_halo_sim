@@ -13,12 +13,14 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstring>
 #include <type_traits>
 #include <utility>
 
 #include "config/sim_data.hpp"
 #include "core/def.hpp"
+#include "core/exit_seam.hpp"
 #include "core/raypath.hpp"
 
 namespace {
@@ -243,6 +245,106 @@ TEST(RayBufferRecorderTest, FanOutDuplicatesOverflowSlotIntoDstArena) {
   a_mut[0] = 0xAA;
   EXPECT_EQ(std::memcmp(s, snapshot_src, lumice::kMaxHits), 0) << "src arena leaked";
   EXPECT_EQ(std::memcmp(b, snapshot_b, lumice::kMaxHits), 0) << "dst1 arena aliased dst0";
+}
+
+
+// task-284 regression: single-ray EmplaceBack(r, rec, arena_src) must clone
+// the overflow slot into *this* buffer's arena. Pre-fix CollectData used the
+// 2-arg EmplaceBack on overflow recorders, leaving overflow_idx_ pointing into
+// the source buffer's arena; the next RecorderFanOut/DupOverflowSlot then
+// dereferenced this->overflow_arena_ (null) → SIGSEGV on max_hits>kInlineCap.
+TEST(RayBufferRecorderTest, EmplaceBackSingleRayWithOverflowDupsArena) {
+  RayBuffer src(4);
+  // Populate src[1] with an overflow recorder of 20 bytes.
+  for (uint8_t i = 0; i < 20; i++) {
+    src.RecorderAppend(1, static_cast<lumice::IdType>(i + 1));
+  }
+  ASSERT_TRUE(src.RecorderAt(1).HasOverflow());
+  src.size_ = 2;  // mirror production caller bookkeeping
+
+  RayBuffer dst(8);
+  dst.EmplaceBack(MakeRay(7), src.RecorderAt(1), src);
+
+  EXPECT_EQ(dst.size_, 1u);
+  EXPECT_FLOAT_EQ(dst[0].w_, 7.0f);
+  ASSERT_TRUE(dst.RecorderAt(0).HasOverflow());
+  EXPECT_EQ(dst.RecorderAt(0).size_, static_cast<uint8_t>(20));
+
+  // dst arena must be independent of src arena.
+  ASSERT_NE(dst.OverflowArena(), nullptr) << "dst arena must be lazily allocated by DupOverflowSlot";
+  const uint8_t* dst_slot = dst.RecorderDataPtr(0);
+  const uint8_t* src_slot = src.RecorderDataPtr(1);
+  ASSERT_NE(dst_slot, src_slot);
+  for (uint8_t i = 0; i < 20; i++) {
+    EXPECT_EQ(dst_slot[i], static_cast<uint8_t>(i + 1)) << "dst byte " << static_cast<int>(i);
+  }
+
+  // Mutating src arena must not bleed into dst.
+  uint8_t snapshot_dst[lumice::kMaxHits];
+  std::memcpy(snapshot_dst, dst_slot, lumice::kMaxHits);
+  src.RecorderDataPtr(1)[0] = 0xAA;
+  EXPECT_EQ(std::memcmp(dst_slot, snapshot_dst, lumice::kMaxHits), 0) << "dst arena aliased src arena";
+}
+
+
+// task-284 no-truncation contract: the exit-seam record (ExitFaceSeq) must
+// carry the FULL recorded path up to kMaxHits, NOT silently cap it at the old
+// kInlineCap=15. This mirrors the cpu_trace_backend.cpp exit-record build
+// (seq_len = min(recorder.size_, ExitFaceSeq::kCap); memcpy(path.data_, ...))
+// against a >15-hit overflow recorder, asserting bytes past index 15 survive.
+// Owner-added per code-review Suggestion (direct structural assertion is
+// stronger than the PSNR-noise-floor proxy used in AC2).
+TEST(RayBufferRecorderTest, ExitFaceSeqCarriesFullPathNoTruncationPast15) {
+  // ExitFaceSeq must be able to hold the full path; the whole point of the
+  // task-284 fix is decoupling kCap from kInlineCap.
+  static_assert(lumice::ExitFaceSeq::kCap == static_cast<uint8_t>(lumice::kMaxHits),
+                "ExitFaceSeq::kCap must equal kMaxHits so exit paths are never truncated");
+  ASSERT_GT(lumice::ExitFaceSeq::kCap, lumice::RaypathRecorder::kInlineCap);
+
+  RayBuffer buf(4);
+  constexpr uint8_t kPathLen = 20;  // > kInlineCap (15), exercises the arena
+  for (uint8_t i = 0; i < kPathLen; i++) {
+    buf.RecorderAppend(0, static_cast<lumice::IdType>(i + 1));
+  }
+  const RaypathRecorder& rp = buf.RecorderAt(0);
+  ASSERT_TRUE(rp.HasOverflow());
+  ASSERT_EQ(rp.size_, kPathLen);
+
+  // Replicate the exit-record builder's copy (cpu_trace_backend.cpp).
+  lumice::ExitFaceSeq seq{};
+  const uint8_t* src = buf.RecorderDataPtr(0);
+  auto seq_len = static_cast<uint8_t>(std::min<size_t>(rp.size_, lumice::ExitFaceSeq::kCap));
+  seq.size_ = seq_len;
+  std::memcpy(seq.data_, src, seq_len);
+
+  // The 20-byte path must survive intact — no cap at 15.
+  EXPECT_EQ(seq.size_, kPathLen) << "exit-seam path truncated; kCap regression";
+  for (uint8_t i = 0; i < kPathLen; i++) {
+    EXPECT_EQ(seq.data_[i], static_cast<uint8_t>(i + 1)) << "byte " << static_cast<int>(i);
+  }
+  // Specifically assert the bytes that the OLD kCap=15 design would have dropped.
+  EXPECT_EQ(seq.data_[15], static_cast<uint8_t>(16));
+  EXPECT_EQ(seq.data_[19], static_cast<uint8_t>(20));
+}
+
+
+// task-284 inline-recorder path must remain a trivial copy via the 3-arg
+// overload (no arena allocation, identical observable behaviour to the 2-arg
+// overload).
+TEST(RayBufferRecorderTest, EmplaceBackSingleRayInlineSkipsArena) {
+  RayBuffer src(4);
+  src.RecorderAppend(1, static_cast<lumice::IdType>(42));
+  ASSERT_FALSE(src.RecorderAt(1).HasOverflow());
+  src.size_ = 2;
+
+  RayBuffer dst(8);
+  dst.EmplaceBack(MakeRay(3), src.RecorderAt(1), src);
+
+  EXPECT_EQ(dst.size_, 1u);
+  EXPECT_FALSE(dst.RecorderAt(0).HasOverflow());
+  EXPECT_EQ(dst.RecorderAt(0).size_, static_cast<uint8_t>(1));
+  EXPECT_EQ(dst.RecorderAt(0).data_[0], static_cast<uint8_t>(42));
+  EXPECT_EQ(dst.OverflowArena(), nullptr) << "inline path must keep dst arena unallocated";
 }
 
 

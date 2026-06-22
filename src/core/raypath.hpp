@@ -76,20 +76,23 @@ static_assert(sizeof(RaypathRecorder) == 18,
               "RaypathRecorder layout changed — re-check #247.4 SBO invariants and SimData size");
 
 
-// Inline-only face-sequence for the exit seam (scrum-258.2). Mirrors the inline
-// half of RaypathRecorder but drops overflow_idx_: all real configs have
-// max_hits <= kInlineCap (7-8 in practice), so overflow never fires here. The
-// device-side kernel populates this directly into shared-memory buffers (no
-// device-side dynamic allocation), and the host-side {dir, weight, path,
-// crystal_id, ms_layer_idx} record stays trivially copyable + defined-layout.
+// Face-sequence for the exit seam (scrum-258.2). Mirrors RaypathRecorder's
+// hit buffer but drops overflow_idx_: the exit record is the terminal copy of
+// an outgoing ray's path, so the arena indirection is collapsed into an inline
+// kMaxHits-byte array carrying the full path. task-284 bumped kCap from 15 →
+// kMaxHits=64 so paths longer than kInlineCap are no longer silently capped at
+// the exit seam. The device-side kernel populates this directly into
+// shared-memory buffers (no device-side dynamic allocation), and the host-side
+// {dir, weight, path, crystal_id, ms_layer_idx} record stays trivially copyable
+// + defined-layout.
 struct ExitFaceSeq {
-  static constexpr uint8_t kCap = 15;
-  static_assert(kCap == RaypathRecorder::kInlineCap,
-                "ExitFaceSeq::kCap must stay in sync with RaypathRecorder::kInlineCap");
+  static constexpr uint8_t kCap =
+      static_cast<uint8_t>(kMaxHits);  // 64; decoupled from RaypathRecorder::kInlineCap (task-284)
+  static_assert(kMaxHits <= 0xFFu, "ExitFaceSeq::kCap (uint8_t) requires kMaxHits fits in uint8_t");
   uint8_t size_ = 0;
   uint8_t data_[kCap]{};
 };
-static_assert(sizeof(ExitFaceSeq) == 16u, "ExitFaceSeq layout changed — re-check exit-seam wire format");
+static_assert(sizeof(ExitFaceSeq) == 65u, "ExitFaceSeq layout changed — re-check exit-seam wire format");
 static_assert(std::is_trivially_copyable_v<ExitFaceSeq>,
               "ExitFaceSeq must stay trivially copyable for memcpy out of device buffers");
 

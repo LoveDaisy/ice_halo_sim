@@ -180,6 +180,21 @@ void RayBuffer::EmplaceBack(RaySeg r, const RaypathRecorder& rec) {
   }
 }
 
+void RayBuffer::EmplaceBack(RaySeg r, const RaypathRecorder& rec, const RayBuffer& arena_src) {
+  // N4 invariant gate (Debug only).
+  assert(r.IsValidComplete());
+  // PRECONDITION: when rec.HasOverflow(), rec.overflow_idx_ must index into
+  // arena_src.overflow_arena_. DupOverflowSlot will then clone that slot into
+  // *this*'s arena and re-route the dst recorder's overflow_idx_. For inline
+  // recorders the arena_src parameter is ignored (DupOverflowSlot no-ops).
+  if (size_ + 1 < capacity_) {
+    rays_[size_] = r;
+    recorders_[size_] = rec;
+    DupOverflowSlot(arena_src, size_);
+    size_++;
+  }
+}
+
 void RayBuffer::EmplaceBack(const RayBuffer& buffer, size_t start, size_t len) {
   // Note: batch condition is `size_ < capacity_` (can fill the last slot);
   // single-ray version uses `size_ + 1 < capacity_` (always leaves one empty).
