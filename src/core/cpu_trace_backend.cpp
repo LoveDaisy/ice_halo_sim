@@ -104,9 +104,9 @@ void TraceCrystalBatch(RandomNumberGenerator& rng, const Crystal& crystal, size_
       // RecorderDataPtr(j) is read BEFORE all_data.EmplaceBack(workspace[1])
       // mutates workspace[1] (EmplaceBack only writes into all_data here, so
       // workspace[1]'s recorders are still valid). The recorder pointer routes
-      // inline vs overflow arena correctly via the buffer-level resolver — we
-      // truncate at ExitFaceSeq::kCap (= RaypathRecorder::kInlineCap = 15) so
-      // any (rare, currently non-occurring) overflow path is silently capped.
+      // inline vs overflow arena correctly via the buffer-level resolver, and
+      // since task-284 ExitFaceSeq::kCap == kMaxHits the min() below is a
+      // tautological clamp (kept for explicitness; full path always copied).
       all_data.EmplaceBack(workspace[1]);
       for (size_t j = 0; j < workspace[1].size_; j++) {
         const auto& r = workspace[1][j];

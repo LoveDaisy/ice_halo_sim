@@ -2084,11 +2084,11 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   impl_->cont_counts[0] = 0;
   impl_->cont_counts[1] = 0;
   impl_->out_cap = 0;
-  // Exit metadata (scrum-258.2): per-slot stride of buffer(23). Real configs
-  // have max_hits ≤ ExitFaceSeq::kCap (7-8 in practice), so the min() clamp
-  // is defensive against a future scene bumping max_hits beyond 15. Set BEFORE
-  // EnsureExitBuffers (called from TraceLayer's first-MS branch) so the device
-  // allocation reflects the actual stride.
+  // Exit metadata (scrum-258.2): per-slot stride of buffer(23). task-284 bumped
+  // ExitFaceSeq::kCap from 15 to kMaxHits=64; the min() clamp now caps at the
+  // configurable kMaxHits ceiling. Set BEFORE EnsureExitBuffers (called from
+  // TraceLayer's first-MS branch) so the device allocation reflects the actual
+  // stride.
   impl_->face_seq_cap_ = std::min<uint32_t>(
       static_cast<uint32_t>(spec.scene->max_hits_), static_cast<uint32_t>(ExitFaceSeq::kCap));
   // scrum-267 task-fused-emit-gate Step 8: initialize the final-layer index
@@ -2525,17 +2525,28 @@ size_t MetalTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
     RaypathRecorder rec{};
     uint8_t seq_len = std::min<uint8_t>(seq_len_ptr[i], ExitFaceSeq::kCap);
     rec.size_ = seq_len;
-    rec.overflow_idx_ = RaypathRecorder::kNoOverflow;
+    // task-284: paths longer than kInlineCap need a local arena so
+    // FilterSpec::Check can read past rec.data_ without overrunning the inline
+    // buffer. Layout matches RecorderAppend's in-arena format (slot[0]
+    // corresponds to path byte 0; see RaypathOrbit::Contains in filter_spec.cpp).
+    uint8_t local_arena[kMaxHits]{};
+    const bool has_overflow = (seq_len > RaypathRecorder::kInlineCap);
+    rec.overflow_idx_ = has_overflow ? 0 : RaypathRecorder::kNoOverflow;
     // GetFn remap: raw kernel path[] carries poly-face indices; legacy
     // FilterSpec::Check expects post-GetFn ids. Mirrors the (now removed)
     // host frame-transit's GetFn application.
     const uint8_t* raw_seq = seq_data_ptr + i * stride;
     for (uint8_t k = 0; k < seq_len; ++k) {
-      rec.data_[k] = static_cast<uint8_t>(src_crystal.GetFn(static_cast<IdType>(raw_seq[k])));
+      const uint8_t v = static_cast<uint8_t>(src_crystal.GetFn(static_cast<IdType>(raw_seq[k])));
+      if (k < RaypathRecorder::kInlineCap) {
+        rec.data_[k] = v;
+      }
+      local_arena[k] = v;
     }
+    const uint8_t* arena_for_check = has_overflow ? local_arena : nullptr;
 
     const FilterSpec* spec = spec_per_ci[crystal_id].get();
-    bool filter_pass = (spec == nullptr) || spec->Check(r, rec, nullptr);
+    bool filter_pass = (spec == nullptr) || spec->Check(r, rec, arena_for_check);
     if (!filter_pass) {
       continue;
     }
@@ -2555,7 +2566,11 @@ size_t MetalTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
     erec.ms_layer_idx = final_ms_layer;
     erec.wl_idx = static_cast<uint8_t>(wl_idx_ptr[i] & 0xFFu);
     erec.path.size_ = seq_len;
-    std::memcpy(erec.path.data_, rec.data_, seq_len);
+    // task-284: route through local_arena when seq_len > kInlineCap; the inline
+    // rec.data_ only covers the first kInlineCap bytes. local_arena holds the
+    // full path (matches the byte layout RaypathOrbit::Contains expects).
+    const uint8_t* path_src = has_overflow ? local_arena : rec.data_;
+    std::memcpy(erec.path.data_, path_src, seq_len);
     out.push_back(erec);
   }
 

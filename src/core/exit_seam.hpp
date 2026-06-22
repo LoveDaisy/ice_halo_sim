@@ -16,14 +16,17 @@ namespace lumice {
 //
 //   offset 0:  float    dir[3]        (12B, world-space exit direction)
 //   offset 12: float    weight        (4B,  ray weight)
-//   offset 16: ExitFaceSeq path       (16B, inline face sequence)
-//   offset 32: uint16_t crystal_id    (2B,  session-level crystal index)
-//   offset 34: uint8_t  ms_layer_idx  (1B,  0-based MS layer index)
-//   offset 35: uint8_t  wl_idx        (1B,  per-ray wavelength pool index;
+//   offset 16: ExitFaceSeq path       (65B, inline face sequence; task-284 bumped
+//                                          kCap 15→64 so paths up to kMaxHits=64
+//                                          are no longer silently truncated)
+//   offset 81: uint16_t crystal_id    (2B,  session-level crystal index)
+//   offset 83: uint8_t  ms_layer_idx  (1B,  0-based MS layer index)
+//   offset 84: uint8_t  wl_idx        (1B,  per-ray wavelength pool index;
 //                                          0 on the CPU backend — pool layout
 //                                          is Metal-specific. scrum-268.8.)
-//   sizeof == 36, align == 4. Layout/size unchanged from the prior pad_
-//   slot — binary compatible with previously serialized records.
+//   sizeof == 88, align == 4. ExitRayRecord has no on-disk serialization (used
+//   in-process between trace backend and consumer), so the sizeof bump from
+//   task-284's kCap extension only adjusts the static_assert.
 struct ExitRayRecord {
   float dir[3];
   float weight;
@@ -32,7 +35,7 @@ struct ExitRayRecord {
   uint8_t ms_layer_idx;
   uint8_t wl_idx = 0;
 };
-static_assert(sizeof(ExitRayRecord) == 36u,
+static_assert(sizeof(ExitRayRecord) == 88u,
               "ExitRayRecord layout changed — re-check exit-seam wire format and bandwidth budget");
 static_assert(std::is_trivially_copyable_v<ExitRayRecord>,
               "ExitRayRecord must stay trivially copyable for memcpy out of device buffers");

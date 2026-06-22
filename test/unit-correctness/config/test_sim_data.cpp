@@ -246,6 +246,65 @@ TEST(RayBufferRecorderTest, FanOutDuplicatesOverflowSlotIntoDstArena) {
 }
 
 
+// task-284 regression: single-ray EmplaceBack(r, rec, arena_src) must clone
+// the overflow slot into *this* buffer's arena. Pre-fix CollectData used the
+// 2-arg EmplaceBack on overflow recorders, leaving overflow_idx_ pointing into
+// the source buffer's arena; the next RecorderFanOut/DupOverflowSlot then
+// dereferenced this->overflow_arena_ (null) → SIGSEGV on max_hits>kInlineCap.
+TEST(RayBufferRecorderTest, EmplaceBackSingleRayWithOverflowDupsArena) {
+  RayBuffer src(4);
+  // Populate src[1] with an overflow recorder of 20 bytes.
+  for (uint8_t i = 0; i < 20; i++) {
+    src.RecorderAppend(1, static_cast<lumice::IdType>(i + 1));
+  }
+  ASSERT_TRUE(src.RecorderAt(1).HasOverflow());
+  src.size_ = 2;  // mirror production caller bookkeeping
+
+  RayBuffer dst(8);
+  dst.EmplaceBack(MakeRay(7), src.RecorderAt(1), src);
+
+  EXPECT_EQ(dst.size_, 1u);
+  EXPECT_FLOAT_EQ(dst[0].w_, 7.0f);
+  ASSERT_TRUE(dst.RecorderAt(0).HasOverflow());
+  EXPECT_EQ(dst.RecorderAt(0).size_, static_cast<uint8_t>(20));
+
+  // dst arena must be independent of src arena.
+  ASSERT_NE(dst.OverflowArena(), nullptr) << "dst arena must be lazily allocated by DupOverflowSlot";
+  const uint8_t* dst_slot = dst.RecorderDataPtr(0);
+  const uint8_t* src_slot = src.RecorderDataPtr(1);
+  ASSERT_NE(dst_slot, src_slot);
+  for (uint8_t i = 0; i < 20; i++) {
+    EXPECT_EQ(dst_slot[i], static_cast<uint8_t>(i + 1)) << "dst byte " << static_cast<int>(i);
+  }
+
+  // Mutating src arena must not bleed into dst.
+  uint8_t snapshot_dst[lumice::kMaxHits];
+  std::memcpy(snapshot_dst, dst_slot, lumice::kMaxHits);
+  src.RecorderDataPtr(1)[0] = 0xAA;
+  EXPECT_EQ(std::memcmp(dst_slot, snapshot_dst, lumice::kMaxHits), 0) << "dst arena aliased src arena";
+}
+
+
+// task-284 inline-recorder path must remain a trivial copy via the 3-arg
+// overload (no arena allocation, identical observable behaviour to the 2-arg
+// overload).
+TEST(RayBufferRecorderTest, EmplaceBackSingleRayInlineSkipsArena) {
+  RayBuffer src(4);
+  src.RecorderAppend(1, static_cast<lumice::IdType>(42));
+  ASSERT_FALSE(src.RecorderAt(1).HasOverflow());
+  src.size_ = 2;
+
+  RayBuffer dst(8);
+  dst.EmplaceBack(MakeRay(3), src.RecorderAt(1), src);
+
+  EXPECT_EQ(dst.size_, 1u);
+  EXPECT_FALSE(dst.RecorderAt(0).HasOverflow());
+  EXPECT_EQ(dst.RecorderAt(0).size_, static_cast<uint8_t>(1));
+  EXPECT_EQ(dst.RecorderAt(0).data_[0], static_cast<uint8_t>(42));
+  EXPECT_EQ(dst.OverflowArena(), nullptr) << "inline path must keep dst arena unallocated";
+}
+
+
 TEST(RayBufferRecorderTest, FanOutInlineRecorderTakesTrivialPath) {
   // Inline recorders must not allocate an arena slot during fan-out (this is
   // the hot path under bench(max_hits=8)).
