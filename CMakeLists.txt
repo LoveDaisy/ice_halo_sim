@@ -214,10 +214,14 @@ set(lumice_core_src
   "${PROJ_SRC_DIR}/core/raypath.cpp"
   "${PROJ_SRC_DIR}/core/simulator.cpp")
 
-# Metal backend (Apple only). The .mm file embeds the GPU kernel as a C++
-# string literal (kKernelSrc in metal_trace_backend.mm) and is the single
-# compiled source for the GPU kernel — there is no separate .metal reference
-# file (the previously-adjacent doc/trace_layer.metal drifted and was removed).
+# Metal backend (Apple only). task-metal-build-time-metallib (#283): the GPU
+# kernel single source of truth is `src/core/metal/lumice_trace.metal`. CMake
+# precompiles it to a .metallib at build time and embeds the bytes + a C-string
+# fallback into the binary via scripts/embed_metal_artifacts.py. The runtime
+# loads the embedded metallib via newLibraryWithData, bypassing macOS 26.5's
+# broken MSL source frontend; newLibraryWithSource is retained as fallback
+# (disabled when LUMICE_DISABLE_METAL_SOURCE_COMPILE=1, which simulates 26.5
+# for the AC2 regression test).
 if(APPLE)
   list(APPEND lumice_core_src
     "${PROJ_SRC_DIR}/core/device_filter_desc.cpp"
@@ -227,6 +231,59 @@ if(APPLE)
     "${PROJ_SRC_DIR}/core/metal_trace_backend.mm"
     "${PROJ_SRC_DIR}/core/metal_filter_match_src.mm"
     PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+
+  # --- Build-time MSL → metallib → embedded C headers --------------------------
+  # Tools (probed inside APPLE guard so non-Apple builds don't require Python3).
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  find_program(XCRUN_EXECUTABLE xcrun REQUIRED)
+
+  set(LUMICE_METAL_SRC      "${PROJ_SRC_DIR}/core/metal/lumice_trace.metal")
+  set(LUMICE_METAL_GEN_DIR  "${CMAKE_BINARY_DIR}/generated")
+  set(LUMICE_METAL_AIR      "${LUMICE_METAL_GEN_DIR}/lumice_trace.air")
+  set(LUMICE_METAL_METALLIB "${LUMICE_METAL_GEN_DIR}/lumice_trace.metallib")
+  set(LUMICE_METAL_BYTES_H  "${LUMICE_METAL_GEN_DIR}/lumice_trace_metallib_embed.h")
+  set(LUMICE_METAL_SRC_H    "${LUMICE_METAL_GEN_DIR}/lumice_trace_src_embed.h")
+  set(LUMICE_EMBED_SCRIPT   "${CMAKE_SOURCE_DIR}/scripts/embed_metal_artifacts.py")
+
+  # Compile flags MUST stay byte-identical to EnsurePso's runtime
+  # MTLCompileOptions (MSL 3.0 + fno-fast-math/MTLMathModeSafe) so the offline
+  # metallib produces the same numerical result as the runtime source path.
+  # `-arch air64` prevents fat-AIR output (xcrun metallib rejects fat input).
+  add_custom_command(
+    OUTPUT  "${LUMICE_METAL_AIR}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${LUMICE_METAL_GEN_DIR}"
+    COMMAND ${XCRUN_EXECUTABLE} metal
+            -arch air64
+            -std=metal3.0
+            -fno-fast-math
+            -mmacosx-version-min=13.0
+            -c "${LUMICE_METAL_SRC}"
+            -o "${LUMICE_METAL_AIR}"
+    DEPENDS "${LUMICE_METAL_SRC}"
+    COMMENT "Compiling MSL → AIR (lumice_trace.metal → lumice_trace.air)"
+    VERBATIM)
+
+  add_custom_command(
+    OUTPUT  "${LUMICE_METAL_METALLIB}"
+    COMMAND ${XCRUN_EXECUTABLE} metallib
+            "${LUMICE_METAL_AIR}"
+            -o "${LUMICE_METAL_METALLIB}"
+    DEPENDS "${LUMICE_METAL_AIR}"
+    COMMENT "Linking metallib (lumice_trace.air → lumice_trace.metallib)"
+    VERBATIM)
+
+  add_custom_command(
+    OUTPUT  "${LUMICE_METAL_BYTES_H}" "${LUMICE_METAL_SRC_H}"
+    COMMAND ${Python3_EXECUTABLE} "${LUMICE_EMBED_SCRIPT}"
+            --metallib   "${LUMICE_METAL_METALLIB}"
+            --metal-src  "${LUMICE_METAL_SRC}"
+            --out-dir    "${LUMICE_METAL_GEN_DIR}"
+    DEPENDS "${LUMICE_METAL_METALLIB}" "${LUMICE_METAL_SRC}" "${LUMICE_EMBED_SCRIPT}"
+    COMMENT "Embedding metallib + source into C headers"
+    VERBATIM)
+
+  add_custom_target(lumice_metal_shaders
+    DEPENDS "${LUMICE_METAL_BYTES_H}" "${LUMICE_METAL_SRC_H}")
 endif()
 
 set(lumice_server_src
@@ -259,6 +316,12 @@ target_include_directories(lumice_obj
 target_link_libraries(lumice_obj PUBLIC nlohmann_json::nlohmann_json spdlog::spdlog_header_only tl::expected Threads::Threads)
 if(APPLE)
   target_link_libraries(lumice_obj PUBLIC "-framework Metal" "-framework Foundation")
+  # task-metal-build-time-metallib (#283): metal_trace_backend.mm #includes the
+  # generated metallib + source headers; depend on the custom target so the
+  # headers exist before the .mm compiles, and add the generated dir to the
+  # include path. PRIVATE — these headers are not part of the public API.
+  add_dependencies(lumice_obj lumice_metal_shaders)
+  target_include_directories(lumice_obj PRIVATE "${LUMICE_METAL_GEN_DIR}")
 endif()
 
 if(NOT MSVC)

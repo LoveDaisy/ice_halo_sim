@@ -83,6 +83,14 @@ if(APPLE)
     "${PROJ_TEST_DIR}/parity-cross-backend/backend/metal_filter_match_test_src.mm"
     PROPERTIES COMPILE_FLAGS "-fobjc-arc")
   target_link_libraries(parity_test PRIVATE "-framework Metal" "-framework Foundation")
+  # task-#283 (metal-build-time-metallib): the parity harness compiles a
+  # standalone Metal library that calls into the shared MSL helpers
+  # (DeviceFilterCheck etc.). Since `kFilterMatchHelperSrc` is retired, the
+  # harness prepends `kLumiceCombinedKernelSrc` (the build-time-embedded
+  # canonical source) before its test kernel. Wire the generated header dir +
+  # build dependency here so the parity test can `#include` it.
+  target_include_directories(parity_test PRIVATE "${LUMICE_METAL_GEN_DIR}")
+  add_dependencies(parity_test lumice_metal_shaders)
 endif()
 target_include_directories(parity_test
   PRIVATE ${PROJ_TEST_DIR})

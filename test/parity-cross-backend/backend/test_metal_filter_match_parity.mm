@@ -53,6 +53,13 @@
 #include "core/math.hpp"
 #include "core/metal_filter_match_src.hpp"
 #include "core/metal_trace_backend.hpp"
+// task-#283 (metal-build-time-metallib): the parity harness no longer relies
+// on the retired `kFilterMatchHelperSrc` string. Instead it prepends the
+// build-time-embedded canonical source (which contains the helper functions
+// AND the production trace_layer kernel) before its standalone test kernel.
+// The extra production kernel is compiled but never dispatched — the test
+// only invokes `filter_match_test_kernel`.
+#include "lumice_trace_src_embed.h"  // lumice::kLumiceCombinedKernelSrc
 #include "core/raypath.hpp"
 #include "core/trace_backend.hpp"
 #include "metal_test_helpers.hpp"
@@ -196,11 +203,23 @@ struct MetalHarness {
       if (!device) { return false; }
       queue = [device newCommandQueue];
       if (!queue) { return false; }
+      // task-#283: prefix = canonical embedded source (= helpers + production
+      // trace_layer kernel). The test only invokes filter_match_test_kernel;
+      // the unused production kernels add ~50KB of MSL compile work per test
+      // start which is dwarfed by the test's own work and avoids a duplicate
+      // helper-string source-of-truth.
       NSString* src = [NSString stringWithFormat:@"%s\n%s",
-                                                  kFilterMatchHelperSrc,
+                                                  kLumiceCombinedKernelSrc,
                                                   kFilterMatchTestKernelSrc];
+      MTLCompileOptions* opts = [MTLCompileOptions new];
+      opts.languageVersion = MTLLanguageVersion3_0;
+      if (@available(macOS 15.0, *)) {
+        opts.mathMode = MTLMathModeSafe;
+      } else {
+        opts.fastMathEnabled = NO;
+      }
       NSError* err = nil;
-      id<MTLLibrary> lib = [device newLibraryWithSource:src options:nil error:&err];
+      id<MTLLibrary> lib = [device newLibraryWithSource:src options:opts error:&err];
       if (!lib) {
         compile_log = err ? err.localizedDescription.UTF8String : "(no error)";
         return false;

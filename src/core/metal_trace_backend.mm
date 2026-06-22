@@ -1,8 +1,11 @@
 // Metal backend for TraceBackend (Apple platforms). Pimpl over Objective-C
-// Metal types so the public header stays pure C++. The kernel source is
-// embedded as the kKernelSrc C++ string below; doc/trace_layer.metal is
-// the syntax-check / readable reference — both MUST stay logically equivalent
-// (kernel body identical; the .metal file may carry additional comments).
+// Metal types so the public header stays pure C++. The kernel source of truth
+// is `src/core/metal/lumice_trace.metal`, which CMake precompiles to a
+// .metallib at build time. The embedded bytes are loaded via
+// newLibraryWithData (see LoadMetalLibrary), bypassing the macOS 26.5 broken
+// MSL source frontend. The source string is also embedded as a fallback (and
+// is suppressed by LUMICE_DISABLE_METAL_SOURCE_COMPILE for the AC2 regression
+// test). See task-#283 (metal-build-time-metallib).
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -34,6 +37,12 @@
 #include "core/math.hpp"
 #include "core/metal_filter_match_src.hpp"
 #include "core/metal_trace_backend.hpp"
+// task-#283 (metal-build-time-metallib): build-generated headers — wrap their
+// content in `namespace lumice { ... }`, so they are #included at file scope
+// (NOT inside an open `namespace lumice` or anonymous namespace) to keep the
+// embedded symbols at `lumice::kLumice...` rather than nested deeper.
+#include "lumice_trace_metallib_embed.h"   // lumice::kLumiceMetallibBytes / Size
+#include "lumice_trace_src_embed.h"         // lumice::kLumiceCombinedKernelSrc
 #include "core/projection.hpp"
 #include "core/raypath.hpp"
 #include "core/scatter_accum.hpp"
@@ -57,993 +66,9 @@ constexpr int kTraceKernelRecCap = 64;
 static_assert(kDevFilterMatchRecCap == kTraceKernelRecCap,
               "kDevRecCap (filter-match helper) and kRecCap (trace kernel) must match");
 
-// Mirror of doc/trace_layer.metal. Edit both in lock-step.
-constexpr const char* kKernelSrc = R"METAL(
-#include <metal_stdlib>
-using namespace metal;
-
-constant float  kFloatEps  = 1e-5f;
-constant ushort kInvalidId = 0xffffu;
-constant uint   kRecCap    = 64u;
-
-// scrum-267 task-fused-emit-gate Step 5: PCG stream definitions hoisted here
-// so the trace_layer_kernel's emit gate can call pcg_uniform for the per-ray
-// prob decision. gen_root_kernel (defined later in this string) re-uses the
-// same names; MSL accepts a single forward definition.
-inline uint pcg_hash(uint x) {
-  x = x * 747796405u + 2891336453u;
-  x = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u;
-  return (x >> 22u) ^ x;
-}
-inline float u01_from_hash(uint h) {
-  return float(h >> 8) * (1.0f / 16777216.0f);
-}
-struct PcgStream {
-  uint seed;
-  uint global_idx;
-  uint slot;
-};
-inline float pcg_uniform(thread PcgStream& s) {
-  uint h = pcg_hash(s.seed ^ pcg_hash(s.global_idx * 1000003u + s.slot));
-  s.slot++;
-  return u01_from_hash(h);
-}
-
-// scrum-268.8 (DR-3): per-ray wavelength pool entry. The host samples M
-// wavelengths uniformly over [380, 780] nm once per (crystal, illuminant) ci
-// dispatch and uploads this table; kernels look up per-ray optics by wl_idx.
-// Layout MUST mirror the C++ WlEntry struct below kKernelSrc (sizeof == 20).
-struct WlEntry {
-  float n_idx;
-  float spd_weight;
-  float cmf_x;
-  float cmf_y;
-  float cmf_z;
-};
-
-struct KernelParams {
-  // scrum-268.8 (DR-3): per-batch n_idx / cie_x/y/z removed. trace kernel now
-  // reads per-ray optics from wl_pool[wl_idx] (see WlEntry above + buffer
-  // bindings in DispatchLayer).
-  uint  max_hits;
-  uint  poly_cnt;
-  uint  num_rays;
-  uint  img_w;
-  uint  img_h;
-  float az0;
-  uint  ms_mode;
-  uint  out_cap;
-  // Projection routing (host fills per BeginSession lens type):
-  //   proj_type == 0: rectangular (legacy az0-projection, uses az0)
-  //   proj_type == 1: dual_fisheye_equal_area (uses r_scale / max_abs_dz)
-  uint  proj_type;
-  float r_scale;     // equal-area r_scale = 1/sqrt(1+overlap); 1.0 if no overlap
-  float max_abs_dz;  // overlap zone |sky_z| threshold; 0 = no overlap
-  // Buffer-egress (exit seam, scrum-258.1): kernel's final-exit branch writes
-  // {world_dir(3), weight} to exit_d/exit_w at a session-level atomic slot
-  // (exit_slot). Capacity bound is host-supplied (ComputeOutCap).
-  uint  exit_cap;
-  // Exit metadata (scrum-258.2): rich {dir, weight, path, crystal_id,
-  // ms_layer_idx} record. crystal_id = ci for this dispatch; ms_layer_idx =
-  // host-side ms_idx (only the final layer writes exit slots in ms_mode==0).
-  // face_seq_cap = min(max_hits, ExitFaceSeq::kCap=15) — per-slot stride of
-  // exit_face_seq_data_buf; <15 saves device memory + readback bandwidth.
-  uint  crystal_id;
-  uint  face_seq_cap;
-  uint  ms_layer_idx;
-  // Emit-gate (scrum-267 task-fused-emit-gate Step 2). Read only by the
-  // ms_mode==1 emit gate; ms_mode==0 dispatches leave these zero / host fills
-  // a benign default.
-  //   ms_prob            : MS continuation probability for THIS layer (gate
-  //                        keeps the ray when pcg_uniform() < ms_prob)
-  //   gate_seed          : PCG seed for the gate's prob draw — derived from
-  //                        gen_seed_ XOR (ms_layer_idx, crystal_id) nonce so
-  //                        successive dispatches see independent prob streams
-  //   filter_desc_max_ci : stride for gate_slot = ms_layer_idx * stride + ci
-  //                        (mirrors EnsureFilterBuffers' max_ci layout)
-  //   crystal_config_id  : DeviceFilterMatchCrystal compares against this; for
-  //                        non-CrystalSpec filters the kernel never reads it
-  float ms_prob;
-  uint  gate_seed;
-  uint  filter_desc_max_ci;
-  uint  crystal_config_id;
-};
-
-inline float GetReflectRatio(float delta, float rr) {
-  float d_sqrt = sqrt(delta);
-  float Rs = (rr - d_sqrt) / (rr + d_sqrt); Rs *= Rs;
-  float Rp = (1.0f - rr * d_sqrt) / (1.0f + rr * d_sqrt); Rp *= Rp;
-  return (Rs + Rp) * 0.5f;
-}
-
-kernel void trace_layer_kernel(
-    device const float*    root_d   [[buffer(0)]],
-    device const float*    root_p   [[buffer(1)]],
-    device const float*    root_w   [[buffer(2)]],
-    device const ushort*   root_tf  [[buffer(3)]],
-    device const float*    poly_n   [[buffer(4)]],
-    device const float*    poly_d   [[buffer(5)]],
-    device const float*    centroid [[buffer(6)]],
-    constant KernelParams& prm      [[buffer(7)]],
-    device atomic_float*   image    [[buffer(8)]],
-    device float*          out_d    [[buffer(9)]],
-    // scrum-268.8 (DR-3): slots 10 and 12 reclaimed from the retired out_p /
-    // out_tf writes (dead data — transit_root_kernel resamples entry point +
-    // face on the next-layer crystal; ReadbackExitRays never read cont_p /
-    // cont_tf). slot 10 now binds the wavelength pool, 12 binds the per-ray
-    // root wavelength index that the trace kernel reads at entry.
-    // scrum-268.8 (DR-3): wl_pool routes through the `constant` address space
-    // so per-thread divergent WlEntry reads hit the shader-side cache rather
-    // than the slower device-memory gather path. Pool size ≤ 255 × 20B = 5100B
-    // fits well below Metal's 64KB constant buffer ceiling.
-    constant WlEntry*      wl_pool       [[buffer(10)]],
-    device float*          out_w         [[buffer(11)]],
-    device const uint*     root_wl_idx   [[buffer(12)]],
-    device atomic_uint*    counter  [[buffer(13)]],
-    device float*          rec_sink [[buffer(14)]],
-    device atomic_uint*    exit_cnt [[buffer(15)]],
-    device atomic_float*   exit_wsum [[buffer(16)]],
-    device const float*    root_rot [[buffer(17)]],
-    device float*          exit_d   [[buffer(18)]],
-    device float*          exit_w   [[buffer(19)]],
-    device atomic_uint*    exit_slot [[buffer(20)]],
-    device ushort*         exit_crystal_id    [[buffer(21)]],
-    device uchar*          exit_face_seq_len  [[buffer(22)]],
-    device uchar*          exit_face_seq_data [[buffer(23)]],
-    // scrum-267 task-fused-emit-gate Step 4b: device-side emit gate state.
-    // The ms_mode==1 path now calls DeviceFilterCheck and draws a PCG prob to
-    // decide continuation vs mid-exit on-device; the former cont_crystal_id /
-    // cont_face_seq_* buffers (24-26) used by the host hop are removed and the
-    // gate buffers move into the freed slots. NOTE: plan §3 reserved 27-31 for
-    // these five buffers; Metal's per-stage buffer index ceiling is 30 (`buffer
-    // attribute parameter out of bounds: must be between 0 and 30`), so the
-    // actual binding is 24-28 (see progress.md DECISION "buffer 槽位 27-31 调
-    // 整为 24-28"). All inline references below use the actual 24-28 slots.
-    //   24 : filter desc array, indexed by ms_layer_idx * filter_desc_max_ci + ci
-    //   25 : per-slot prefix-sum offsets into gate_getfn_bytes
-    //   26 : flat GetFn(poly_idx) byte stream
-    //   27 : Complex filter sub-spec flat buffer
-    //   28 : per-exit-ray ms_layer tag (final-layer + mid-exits both write)
-    device const DeviceFilterDesc* gate_filter_desc    [[buffer(24)]],
-    device const uint*             gate_getfn_offsets  [[buffer(25)]],
-    device const uchar*            gate_getfn_bytes    [[buffer(26)]],
-    device const DeviceFilterDesc* gate_sub_desc_buf   [[buffer(27)]],
-    device uchar*                  exit_ms_layer       [[buffer(28)]],
-    // scrum-268.8 (DR-3): per-ray wavelength side-cars. cont_wl_idx[slot]
-    // gets the current ray's wl_idx propagated alongside the emit-gate
-    // continuation write; exit_wl_idx[es] gets it propagated alongside both
-    // the mid-exit (filter+prob) and final-exit (all polygon-exits) writes.
-    device uint*                   cont_wl_idx         [[buffer(29)]],
-    device uint*                   exit_wl_idx         [[buffer(30)]],
-    uint tid [[thread_position_in_grid]]) {
-  if (tid >= prm.num_rays) { return; }
-
-  float dx = root_d[tid * 3u + 0u];
-  float dy = root_d[tid * 3u + 1u];
-  float dz = root_d[tid * 3u + 2u];
-  float ox = root_p[tid * 3u + 0u];
-  float oy = root_p[tid * 3u + 1u];
-  float oz = root_p[tid * 3u + 2u];
-  float w  = root_w[tid];
-  ushort to_face = root_tf[tid];
-
-  // Per-ray crystal->world rotation (row-major; world = m*v, mirroring
-  // Rotation::Apply on the CPU). Applied to the exit direction before
-  // projection so the seam returns world-space rays (invariant 6). The
-  // orientation is constant for the whole ray path, so load it once.
-  float m[9];
-  for (uint k = 0u; k < 9u; k++) { m[k] = root_rot[tid * 9u + k]; }
-
-  // scrum-268.8 (DR-3): per-ray optics via pool lookup. wl_idx is the
-  // photon's lifetime tag — set at gen_root, carried through transit, never
-  // resampled inside the trace. cie_* accumulates into image via wl_pool
-  // entries instead of the deleted prm.cie_x/y/z fields.
-  const uint    wl_idx = root_wl_idx[tid];
-  const WlEntry wle    = wl_pool[wl_idx];
-  const float   n_idx  = wle.n_idx;
-  const float   cmf_x  = wle.cmf_x;
-  const float   cmf_y  = wle.cmf_y;
-  const float   cmf_z  = wle.cmf_z;
-  const uint  poly_cnt = prm.poly_cnt;
-
-  const int   iw_i      = int(prm.img_w);
-  const int   ih_i      = int(prm.img_h);
-  const float img_w_f   = float(prm.img_w);
-  const float img_h_f   = float(prm.img_h);
-  const float short_res = float(min(prm.img_w / 2u, prm.img_h));
-  const float proj_scl  = short_res / M_PI_F;
-
-  ushort path[kRecCap];
-  uint   rec_len = 0u;
-
-  for (uint hit = 0u; hit < prm.max_hits; hit++) {
-    if (to_face == kInvalidId) { break; }
-    if (rec_len < kRecCap) { path[rec_len] = to_face; rec_len += 1u; }
-
-    float nx = poly_n[to_face * 3u + 0u];
-    float ny = poly_n[to_face * 3u + 1u];
-    float nz = poly_n[to_face * 3u + 2u];
-    float cos_theta = dx * nx + dy * ny + dz * nz;
-    float rr = (cos_theta > 0.0f) ? n_idx : (1.0f / n_idx);
-    float dd = (1.0f - rr * rr) / (cos_theta * cos_theta) + rr * rr;
-    bool  is_tir = dd <= 0.0f;
-    float w_refl = GetReflectRatio(max(dd, 0.0f), rr) * w;
-    float w_refr = is_tir ? -1.0f : (w - w_refl);
-    float rdx = dx - 2.0f * cos_theta * nx;
-    float rdy = dy - 2.0f * cos_theta * ny;
-    float rdz = dz - 2.0f * cos_theta * nz;
-    float sd  = sqrt(max(dd, 0.0f));
-    float fdx, fdy, fdz;
-    if (is_tir) {
-      fdx = rdx; fdy = rdy; fdz = rdz;
-    } else {
-      fdx = rr * dx - (rr - sd) * cos_theta * nx;
-      fdy = rr * dy - (rr - sd) * cos_theta * ny;
-      fdz = rr * dz - (rr - sd) * cos_theta * nz;
-    }
-
-    ushort cont_face = kInvalidId;
-    float c_dx = 0.0f, c_dy = 0.0f, c_dz = 0.0f;
-    float c_ox = 0.0f, c_oy = 0.0f, c_oz = 0.0f;
-    float c_w  = 0.0f;
-
-    for (uint ch = 0u; ch < 2u; ch++) {
-      float cdx = (ch == 0u) ? rdx : fdx;
-      float cdy = (ch == 0u) ? rdy : fdy;
-      float cdz = (ch == 0u) ? rdz : fdz;
-      float cw  = (ch == 0u) ? w_refl : w_refr;
-      if (cw < 0.0f) { continue; }
-
-      float t_far = 1e30f;
-      int   far_face = -1;
-      for (uint fi = 0u; fi < poly_cnt; fi++) {
-        float fnx = poly_n[fi * 3u + 0u];
-        float fny = poly_n[fi * 3u + 1u];
-        float fnz = poly_n[fi * 3u + 2u];
-        float fd  = poly_d[fi];
-        float denom = cdx * fnx + cdy * fny + cdz * fnz;
-        float t = -(ox * fnx + oy * fny + oz * fnz + fd) / denom;
-        if (denom > kFloatEps && t < t_far) {
-          t_far = t; far_face = int(fi);
-        }
-      }
-      float eps_thr = (to_face != kInvalidId && far_face != int(to_face)) ? -kFloatEps : kFloatEps;
-      if (far_face >= 0 && t_far > eps_thr) {
-        cont_face = ushort(far_face);
-        c_dx = cdx; c_dy = cdy; c_dz = cdz;
-        c_ox = ox + t_far * cdx;
-        c_oy = oy + t_far * cdy;
-        c_oz = oz + t_far * cdz;
-        c_w  = cw;
-      } else {
-        if (prm.ms_mode == 1u) {
-          // scrum-267 task-fused-emit-gate Step 5: device emit gate.
-          //   filter_pass + continue → write cont buffers (frame transit on host)
-          //   filter_pass + !continue → write exit buffer (mid-exit, pre-gated)
-          //   filter_fail              → drop (no write)
-          // Direction conversion to world space mirrors legacy CollectData
-          // (simulator.cpp:442): crystal_rot_.Apply(r.d_) before FilterSpec
-          // ::Check. DeviceFilterMatchDirection compares against world-space
-          // ray_dir; non-direction filters do not read it but receiving world
-          // ensures future filter additions stay consistent with the host
-          // semantic.
-          float wcx = m[0] * cdx + m[1] * cdy + m[2] * cdz;
-          float wcy = m[3] * cdx + m[4] * cdy + m[5] * cdz;
-          float wcz = m[6] * cdx + m[7] * cdy + m[8] * cdz;
-          // Build a path buffer in face-index space (ushort path → uchar
-          // DeviceFilterMatch expects). Hex face indices fit in uint8 with
-          // headroom (poly_cnt ≤ 32 in practice), so the narrowing is safe.
-          uchar path_local[kDevRecCap];
-          uint  gate_len = min(rec_len, kDevRecCap);
-          for (uint k = 0u; k < gate_len; k++) { path_local[k] = uchar(path[k]); }
-          uint gate_slot = prm.ms_layer_idx * prm.filter_desc_max_ci + prm.crystal_id;
-          float ray_dir_w[3] = { wcx, wcy, wcz };
-          // 7th argument INTENTIONALLY passes `gate_slot` (NOT prm.crystal_id
-          // as in plan §4 Step 5 pseudo-code). `DeviceFilterCheck` forwards it
-          // to `DeviceFilterMatchRaypath` where it indexes
-          // `gate_getfn_offsets[slot..slot+1]` to locate the per-orbit GetFn
-          // byte stream. `EnsureFilterBuffers` lays out offsets keyed by
-          // `slot = mi * max_ci + ci` (= `gate_slot`), so passing
-          // `prm.crystal_id` would point at layer-0's orbit table for every
-          // layer and silently mis-match from ms_layer_idx ≥ 1. The plan
-          // pseudo-code conflated "which crystal" with "where in the slot
-          // layout" — gate_slot is the correct slot identity here. (See
-          // progress.md DECISION "DeviceFilterCheck 第 7 参数=gate_slot 非
-          // prm.crystal_id" for the full derivation; multi-MS filter parity
-          // proves this is the working form. Do NOT "fix" back to crystal_id.)
-          bool filter_pass = DeviceFilterCheck(
-              gate_filter_desc[gate_slot], gate_sub_desc_buf,
-              path_local, gate_len,
-              gate_getfn_bytes, gate_getfn_offsets,
-              gate_slot, ray_dir_w, prm.crystal_config_id);
-          if (filter_pass) {
-            // Independent PCG stream for the prob draw — gate_seed is derived
-            // from gen_seed_ XOR (ms_layer_idx, crystal_id) on the host so
-            // two dispatches with the same global_idx draw different prob
-            // values. tid as global_idx gives statistical (not bit-exact)
-            // parity with the legacy host mt19937 stream (scrum-267 §3.6).
-            PcgStream gate_stream;
-            gate_stream.seed       = prm.gate_seed;
-            gate_stream.global_idx = tid;
-            gate_stream.slot       = 0u;
-            bool do_continue = (pcg_uniform(gate_stream) < prm.ms_prob);
-            if (do_continue) {
-              // scrum-268.8: out_p / out_tf retired (transit_root_kernel
-              // resamples entry point + face on the next-layer crystal so
-              // these writes were dead data). cont_wl_idx now propagates
-              // the photon's lifetime wavelength tag into the continuation
-              // ring; transit_root_kernel reads it back into root_wl_idx_out
-              // for the next layer's trace kernel to consume.
-              uint slot = atomic_fetch_add_explicit(counter, 1u, memory_order_relaxed);
-              if (slot < prm.out_cap) {
-                out_d[slot * 3u + 0u] = wcx;
-                out_d[slot * 3u + 1u] = wcy;
-                out_d[slot * 3u + 2u] = wcz;
-                out_w[slot] = cw;
-                cont_wl_idx[slot] = wl_idx;
-              }
-              // scrum-267 task-fused-emit-gate: post-gate semantics — exit_cnt
-              // / exit_wsum now tally "filter_pass polygon-exits" (gate dropped
-              // filter_fail rays above; legacy meaning was "all polygon-exits").
-              // Diagnostic-only counters; not consumed by parity tests.
-              atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
-              atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
-            } else {
-              // Mid-exit: filter_pass && !do_continue → emit as outgoing.
-              // Shares exit_slot atomic with ms_mode==0 final-layer exits;
-              // exit_ms_layer tags this slot with the PRODUCING layer's idx
-              // so ReadbackExitRays can skip the host filter+prob path
-              // (already done here in device).
-              uint es = atomic_fetch_add_explicit(exit_slot, 1u, memory_order_relaxed);
-              if (es < prm.exit_cap) {
-                exit_d[es * 3u + 0u] = wcx;
-                exit_d[es * 3u + 1u] = wcy;
-                exit_d[es * 3u + 2u] = wcz;
-                exit_w[es] = cw;
-                exit_crystal_id[es] = ushort(prm.crystal_id);
-                exit_ms_layer[es]   = uchar(prm.ms_layer_idx);
-                exit_wl_idx[es]     = wl_idx;  // scrum-268.8 per-ray wavelength tag
-                uint seq_len = min(rec_len, prm.face_seq_cap);
-                exit_face_seq_len[es] = uchar(seq_len);
-                for (uint k = 0u; k < seq_len; k++) {
-                  exit_face_seq_data[es * prm.face_seq_cap + k] = uchar(path[k]);
-                }
-              }
-              // scrum-267 task-fused-emit-gate: same post-gate semantics as the
-              // do_continue branch above — filter_pass subset, not all
-              // polygon-exits. Diagnostic-only counters; not consumed by parity
-              // tests.
-              atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
-              atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
-            }
-          }
-          // filter_fail: implicit drop (no buffer write, no atomic counter
-          // bump — energy disappears, matching legacy filter_out semantics).
-        } else {
-          // Return the exit direction from crystal-local to world space
-          // (invariant 6 / DESIGN D2): world = m * cd, row-major, matching
-          // CPU CollectData's crystal_rot_.Apply(r.d_). Without this the
-          // per-ray-random local frame scatters the halo into a band.
-          float wx = m[0] * cdx + m[1] * cdy + m[2] * cdz;
-          float wy = m[3] * cdx + m[4] * cdy + m[5] * cdz;
-          float wz = m[6] * cdx + m[7] * cdy + m[8] * cdz;
-          // Buffer-egress (exit seam, scrum-258.1): export this exit ray
-          // {world_dir, weight} BEFORE projection — projection clipping is a
-          // consumer concern, and legacy outgoing_d_ likewise captures
-          // pre-clip. Written once per exit ray (the overlap dual-write below
-          // never re-exports). Backend path always captures (no env gate);
-          // simulator drives consumer projection via ReadbackExitRays.
-          {
-            uint es = atomic_fetch_add_explicit(exit_slot, 1u, memory_order_relaxed);
-            if (es < prm.exit_cap) {
-              exit_d[es * 3u + 0u] = wx;
-              exit_d[es * 3u + 1u] = wy;
-              exit_d[es * 3u + 2u] = wz;
-              exit_w[es] = cw;
-              // Rich metadata (scrum-258.2): crystal_id from KernelParams,
-              // face sequence truncated to face_seq_cap (= min(max_hits,
-              // ExitFaceSeq::kCap=15) on the host). Stride = face_seq_cap so
-              // <15-byte-per-slot saves device memory + readback bandwidth.
-              exit_crystal_id[es] = ushort(prm.crystal_id);
-              // scrum-267 task-fused-emit-gate Step 3: tag final-layer exits
-              // with the active ms_layer_idx so ReadbackExitRays can route
-              // them through the existing host filter+prob path (mid-exits
-              // emitted by the gate carry the producing layer's idx and skip
-              // the filter check).
-              exit_ms_layer[es] = uchar(prm.ms_layer_idx);
-              exit_wl_idx[es]   = wl_idx;  // scrum-268.8 per-ray wavelength tag
-              uint seq_len = min(rec_len, prm.face_seq_cap);
-              exit_face_seq_len[es] = uchar(seq_len);
-              for (uint k = 0u; k < seq_len; k++) {
-                exit_face_seq_data[es * prm.face_seq_cap + k] = uchar(path[k]);
-              }
-            }
-          }
-          float sx = -wx;
-          float sy = -wy;
-          float sz = -wz;
-          if (prm.proj_type == 0u) {
-            float lon = atan2(sy, sx) - prm.az0;
-            lon = lon - 2.0f * M_PI_F * floor((lon + M_PI_F) / (2.0f * M_PI_F));
-            float lat = asin(clamp(sz, -1.0f, 1.0f));
-
-            int raw_x = int(floor(lon * proj_scl + img_w_f * 0.5f + 0.5f));
-            int ix = ((raw_x % iw_i) + iw_i) % iw_i;
-            int iy = int(floor(-lat * proj_scl + img_h_f * 0.5f + 0.5f));
-            if (iy >= 0 && iy < ih_i) {
-              uint pix = (uint(iy) * prm.img_w + uint(ix)) * 3u;
-              atomic_fetch_add_explicit(&image[pix + 0u], cmf_x * cw, memory_order_relaxed);
-              atomic_fetch_add_explicit(&image[pix + 1u], cmf_y * cw, memory_order_relaxed);
-              atomic_fetch_add_explicit(&image[pix + 2u], cmf_z * cw, memory_order_relaxed);
-            }
-          } else {
-            // proj_type == 1: dual fisheye equal-area, primary + opposite-hemisphere overlap.
-            // DRIFT(gpu-metal-shared-kernel): intentional duplicate of CPU render.cpp:192-214 +
-            //   projection::{FisheyeEqualAreaForward, DualFisheyeToPixel} (re-home into a single-
-            //   source shared kernel at CUDA step; backlog: 核心模拟 GPU 迁移路线).
-            int   dual_short = min(int(prm.img_w) / 2, int(prm.img_h));
-            float r          = float(dual_short) * 0.5f;
-            float cy_pix     = img_h_f * 0.5f;
-            float cx_left    = img_w_f * 0.5f - r;
-            float cx_right   = img_w_f * 0.5f + r;
-
-            bool  is_upper = (sz >= 0.0f);
-            float z_hemi   = is_upper ? sz : -sz;  // own hemisphere: +|sz|
-            float k = prm.r_scale / sqrt(1.0f + clamp(z_hemi, -1.0f + 1e-6f, 1.0f));
-            float xn = k * sx;
-            float yn = k * sy;
-            float cx_primary = is_upper ? cx_left : cx_right;
-            float sx_primary = is_upper ? -1.0f : 1.0f;
-            float fx = sx_primary * yn * r + cx_primary;
-            float fy = xn * r + cy_pix;
-            int ix = int(floor(fx + 0.5f));
-            int iy = int(floor(fy + 0.5f));
-            if (ix >= 0 && ix < iw_i && iy >= 0 && iy < ih_i) {
-              uint pix = (uint(iy) * prm.img_w + uint(ix)) * 3u;
-              atomic_fetch_add_explicit(&image[pix + 0u], cmf_x * cw, memory_order_relaxed);
-              atomic_fetch_add_explicit(&image[pix + 1u], cmf_y * cw, memory_order_relaxed);
-              atomic_fetch_add_explicit(&image[pix + 2u], cmf_z * cw, memory_order_relaxed);
-            }
-            // Overlap dual-write: mirror CPU render.cpp:192-214 (opposite hemisphere, dz<0).
-            // Does NOT increment exit_wsum — preserves normalization parity with CPU.
-            if (prm.max_abs_dz > 0.0f && z_hemi < prm.max_abs_dz) {
-              float z_opp = -z_hemi;  // = -|sz| < 0 (matches z_hemi_opp)
-              float k2    = prm.r_scale / sqrt(1.0f + clamp(z_opp, -1.0f + 1e-6f, 1.0f));
-              float xn2   = k2 * sx;
-              float yn2   = k2 * sy;
-              bool  is_upper_opp = !is_upper;
-              float cx_opp       = is_upper_opp ? cx_left : cx_right;
-              float sx_opp       = is_upper_opp ? -1.0f : 1.0f;
-              float fx2 = sx_opp * yn2 * r + cx_opp;
-              float fy2 = xn2 * r + cy_pix;
-              int   ix2 = int(floor(fx2 + 0.5f));
-              int   iy2 = int(floor(fy2 + 0.5f));
-              if (ix2 >= 0 && ix2 < iw_i && iy2 >= 0 && iy2 < ih_i) {
-                uint pix2 = (uint(iy2) * prm.img_w + uint(ix2)) * 3u;
-                atomic_fetch_add_explicit(&image[pix2 + 0u], cmf_x * cw, memory_order_relaxed);
-                atomic_fetch_add_explicit(&image[pix2 + 1u], cmf_y * cw, memory_order_relaxed);
-                atomic_fetch_add_explicit(&image[pix2 + 2u], cmf_z * cw, memory_order_relaxed);
-              }
-            }
-          }
-          atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
-          atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
-        }
-      }
-    }
-
-    if (cont_face == kInvalidId) {
-      to_face = kInvalidId;
-    } else {
-      dx = c_dx; dy = c_dy; dz = c_dz;
-      ox = c_ox; oy = c_oy; oz = c_oz;
-      w = c_w;
-      to_face = cont_face;
-    }
-  }
-
-  float rec_csum = 0.0f;
-  for (uint k = 0u; k < rec_len; k++) {
-    rec_csum += float(path[k]);
-  }
-  rec_sink[tid] = rec_csum;
-}
-
-// ===================== Device root-gen (task-260.2) ==========================
-//
-// Counter-based PCG root-ray generator. Replaces host-side InitRayFirstMs +
-// memcpy upload when single-crystal + spec.seed != 0 + root_ray_count fits in
-// uint32_t. Parity strategy = statistical (ds_corr ≥ 0.99) — host mt19937 and
-// device PCG streams are not bitwise alignable.
-//
-// PCG stream contract:
-//   per-thread global root index = gen_ray_base + tid
-//   draw counter = mix(gen_seed, global_idx, slot); slot bumps per draw
-// gen_ray_base is the running root_ray_count BEFORE this dispatch, so two
-// successive batches of the same session never reuse the same (gen_seed,
-// global_idx) tuple. Determinism = single-worker (server.cpp:184 enforces
-// sim_seed != 0 → worker_count = 1).
-
-constant uint kLatPathFullSphere    = 0u;  // axis_dist.IsFullSphereUniform()
-constant uint kLatPathNoRandom      = 1u;
-constant uint kLatPathRayleigh      = 2u;  // kGaussian near-pole optimization
-constant uint kLatPathGaussLegacy   = 3u;  // kGaussianLegacy
-constant uint kLatPathGenericReject = 4u;  // kGaussian/kUniform/kZigzag/kLaplacian
-
-// DistributionType enum values (must match src/core/math.hpp). Crystal-rot
-// parity REQUIRES the GenericReject path know the actual proposal type, so
-// lat_dist_type is carried separately from lat_path.
-constant uint kDistNoRandom      = 0u;
-constant uint kDistUniform       = 1u;
-constant uint kDistGaussian      = 2u;
-constant uint kDistZigzag        = 3u;
-constant uint kDistLaplacian     = 4u;
-constant uint kDistGaussianLegacy = 5u;
-
-constant uint kMaxTriPerKernel = 64u;
-constant int  kMaxRejectionAttempts = 1000;
-
-// NOTE: consumed by gen_root_kernel and transit_root_kernel; see
-// BuildTransitRootParams for the transit-side field subset (orientation +
-// geometry only; sun_* / ray_weight are populated but unused by transit).
-struct GenRootKernelParams {
-  uint  gen_seed;            // PCG master seed (== spec.seed)
-  uint  gen_ray_base;        // running root_ray_count before this dispatch
-  uint  num_rays;
-  uint  tri_count;
-  float sun_lon;             // (sun.azimuth + 180°) in radians
-  float sun_lat;             // (-sun.altitude) in radians
-  float sun_half_angle;      // (sun.diameter / 2) in radians
-  // scrum-268.8 (DR-3): replaces per-batch ray_weight. gen_root_kernel uses
-  // wl_pool[wl_idx].spd_weight as the per-ray weight; this field is the modulo
-  // bound that hashes a global ray index into [0, wl_pool_size).
-  uint  wl_pool_size;
-  uint  lat_path;            // see kLatPath* above
-  uint  lat_dist_type;       // axis_dist.latitude_dist.type (cast to uint)
-  float lat_mean_rad;        // axis_dist.latitude_dist.mean × deg→rad
-  float lat_std_rad;         // axis_dist.latitude_dist.std × deg→rad
-  float lat_rejection_m;     // ComputeJacobianEnvelope (1.0 for skip paths)
-  uint  az_type;
-  float az_mean_rad;
-  float az_std_rad;
-  float az_pad;
-  uint  roll_type;
-  float roll_mean_rad;
-  float roll_std_rad;
-  float roll_pad;
-};
-
-// Counter-based PCG hash + stream: PcgStream / pcg_hash / u01_from_hash /
-// pcg_uniform are defined near the top of this string (scrum-267 task-
-// fused-emit-gate hoist) so the trace kernel's emit gate can call them.
-// pcg_gaussian / pcg_get_dist below build on that shared base.
-
-// Box-Muller standard normal. u1 floored to avoid log(0).
-inline float pcg_gaussian(thread PcgStream& s) {
-  float u1 = max(pcg_uniform(s), 1e-7f);
-  float u2 = pcg_uniform(s);
-  return sqrt(-2.0f * log(u1)) * cos(2.0f * M_PI_F * u2);
-}
-
-// Mirrors RandomNumberGenerator::Get (math.cpp:365-389). mean / std are passed
-// in the SAME unit the host caller uses for the result; SampleSphericalPointsSph
-// always pre-converts axis_dist.{*}.mean/std to radians here, so the radian
-// envelope semantics hold.
-inline float pcg_get_dist(thread PcgStream& s, uint dtype, float mean, float std_val) {
-  if (dtype == kDistNoRandom) {
-    return mean;
-  }
-  if (dtype == kDistUniform) {
-    return (pcg_uniform(s) - 0.5f) * std_val + mean;
-  }
-  if (dtype == kDistGaussian || dtype == kDistGaussianLegacy) {
-    return pcg_gaussian(s) * std_val + mean;
-  }
-  if (dtype == kDistZigzag) {
-    return fabs(std_val * sin(pcg_uniform(s) * 2.0f * M_PI_F) + mean);
-  }
-  // kLaplacian: inverse CDF.
-  float u = pcg_uniform(s);
-  float sgn = (u < 0.5f) ? -1.0f : 1.0f;
-  float arg = max(1.0f - 2.0f * fabs(u - 0.5f), 1e-30f);
-  return mean - std_val * sgn * log(arg);
-}
-
-// Mirrors detail::NormalizeLatitude (math.cpp:542-553).
-inline void normalize_latitude(float phi, thread float& phi_out, thread bool& flip) {
-  float theta = M_PI_2_F - phi;
-  theta = fmod(theta, 2.0f * M_PI_F);
-  if (theta < 0.0f) {
-    theta += 2.0f * M_PI_F;
-  }
-  flip = theta > M_PI_F;
-  if (flip) {
-    theta = 2.0f * M_PI_F - theta;
-  }
-  phi_out = M_PI_2_F - theta;
-}
-
-// Replicates InitRay_rot + SampleSphericalPointsSph (simulator.cpp:138-150 +
-// math.cpp:404/444). All distribution params are pre-converted to radians on
-// the host so the kernel does no degree↔radian conversions.
-inline void sample_lat_lon_roll(thread PcgStream& s,
-                                constant GenRootKernelParams& gp,
-                                thread float& out_lon,
-                                thread float& out_lat,
-                                thread float& out_roll) {
-  float phi = 0.0f;
-  bool flip = false;
-  float lon = 0.0f;
-  if (gp.lat_path == kLatPathFullSphere) {
-    // SampleSphericalPointsSph(no-arg): lat = asin(2u-1); lambda uniform on [0,2π).
-    float u = pcg_uniform(s) * 2.0f - 1.0f;
-    u = clamp(u, -1.0f, 1.0f);
-    phi = asin(u);
-    lon = pcg_uniform(s) * 2.0f * M_PI_F;
-  } else if (gp.lat_path == kLatPathNoRandom) {
-    phi = gp.lat_mean_rad;
-  } else if (gp.lat_path == kLatPathRayleigh) {
-    float dx = pcg_gaussian(s) * gp.lat_std_rad;
-    float dy = pcg_gaussian(s) * gp.lat_std_rad;
-    float colatitude = sqrt(dx * dx + dy * dy);
-    phi = copysign(M_PI_2_F - colatitude, gp.lat_mean_rad);
-    phi = clamp(phi, -M_PI_2_F, M_PI_2_F);
-    if (gp.lat_mean_rad < 0.0f) {
-      phi = fabs(phi);
-      flip = true;
-    }
-  } else if (gp.lat_path == kLatPathGaussLegacy) {
-    float raw = pcg_get_dist(s, kDistGaussianLegacy, gp.lat_mean_rad, gp.lat_std_rad);
-    normalize_latitude(raw, phi, flip);
-  } else {
-    // kLatPathGenericReject (math.cpp:503-517).
-    int attempts = 0;
-    bool accept = false;
-    do {
-      float raw = pcg_get_dist(s, gp.lat_dist_type, gp.lat_mean_rad, gp.lat_std_rad);
-      normalize_latitude(raw, phi, flip);
-      attempts++;
-      if (attempts >= kMaxRejectionAttempts) {
-        break;
-      }
-      float accept_u = pcg_uniform(s);
-      accept = accept_u < cos(phi) / gp.lat_rejection_m;
-    } while (!accept);
-  }
-  if (gp.lat_path != kLatPathFullSphere) {
-    lon = pcg_get_dist(s, gp.az_type, gp.az_mean_rad, gp.az_std_rad);
-  }
-  float roll = pcg_get_dist(s, gp.roll_type, gp.roll_mean_rad, gp.roll_std_rad);
-  if (flip) {
-    lon += M_PI_F;
-    roll += M_PI_F;
-  }
-  out_lon = lon;
-  out_lat = phi;
-  out_roll = roll;
-}
-
-// Computes R = Rz(lon - π) · Ry(lat - π/2) · Rz(roll) using individual axis
-// rotations chained via Rotation::Chain (geo3d.cpp:32-46), matching
-// BuildCrystalRotation in simulator.cpp:128-135. Stored row-major:
-// mat9[i*3+j] = R_{ij}, identical to Rotation::mat_.
-inline void chain_left_mul_9(thread float* m, thread const float* r) {
-  // m <- r * m
-  float t[9];
-  for (uint i = 0u; i < 3u; i++) {
-    for (uint j = 0u; j < 3u; j++) {
-      t[i * 3 + j] = r[i * 3 + 0] * m[0 * 3 + j]
-                   + r[i * 3 + 1] * m[1 * 3 + j]
-                   + r[i * 3 + 2] * m[2 * 3 + j];
-    }
-  }
-  for (uint k = 0u; k < 9u; k++) {
-    m[k] = t[k];
-  }
-}
-
-inline void axis_angle_rotation_9(thread const float* ax, float theta, thread float* out) {
-  float c = cos(theta);
-  float s = sin(theta);
-  float cc = 1.0f - c;
-  out[0] = ax[0] * ax[0] * cc + c;
-  out[1] = ax[0] * ax[1] * cc - ax[2] * s;
-  out[2] = ax[0] * ax[2] * cc + ax[1] * s;
-  out[3] = ax[0] * ax[1] * cc + ax[2] * s;
-  out[4] = ax[1] * ax[1] * cc + c;
-  out[5] = ax[1] * ax[2] * cc - ax[0] * s;
-  out[6] = ax[0] * ax[2] * cc - ax[1] * s;
-  out[7] = ax[1] * ax[2] * cc + ax[0] * s;
-  out[8] = ax[2] * ax[2] * cc + c;
-}
-
-inline void build_crystal_rotation_9(float lon, float lat, float roll, thread float* mat9) {
-  // Rotation(z, roll), then Chain(y, lat-π/2), then Chain(z, lon-π).
-  // Chain left-multiplies the existing matrix, mirroring Rotation::Chain.
-  float ey[3] = { 0.0f, 1.0f, 0.0f };
-  float ez[3] = { 0.0f, 0.0f, 1.0f };
-  axis_angle_rotation_9(ez, roll, mat9);
-  float middle[9];
-  axis_angle_rotation_9(ey, lat - M_PI_2_F, middle);
-  chain_left_mul_9(mat9, middle);
-  float outer[9];
-  axis_angle_rotation_9(ez, lon - M_PI_F, outer);
-  chain_left_mul_9(mat9, outer);
-}
-
-// d_crystal = R^T · d_world. Mirrors Rotation::ApplyInverse using the row-major
-// mat_ layout (geo3d.cpp:77-87) — read column k of R = row k transposed.
-inline void apply_inverse_mat9(thread const float* mat9,
-                               thread const float* d_world,
-                               thread float* d_crystal) {
-  d_crystal[0] = mat9[0] * d_world[0] + mat9[3] * d_world[1] + mat9[6] * d_world[2];
-  d_crystal[1] = mat9[1] * d_world[0] + mat9[4] * d_world[1] + mat9[7] * d_world[2];
-  d_crystal[2] = mat9[2] * d_world[0] + mat9[5] * d_world[1] + mat9[8] * d_world[2];
-}
-
-// SampleSphCapPoint (geo3d.cpp:171-205). Inputs already in radians.
-inline void sample_sph_cap(thread PcgStream& s,
-                           float lon, float lat, float half_angle,
-                           thread float* out_d) {
-  float c_cap = cos(half_angle);
-  float u = pcg_uniform(s);
-  float x = u + (1.0f - u) * c_cap;
-  float r = sqrt(max(1.0f - x * x, 0.0f));
-  float phi = pcg_uniform(s) * 2.0f * M_PI_F;
-  float y = cos(phi) * r;
-  float z = sin(phi) * r;
-  float c_lon = cos(lon);
-  float s_lon = sin(lon);
-  float c_lat = cos(lat);
-  float s_lat = sin(lat);
-  out_d[0] = c_lon * c_lat * x - s_lon * y - c_lon * s_lat * z;
-  out_d[1] = s_lon * c_lat * x + c_lon * y - s_lon * s_lat * z;
-  out_d[2] = s_lat * x + c_lat * z;
-}
-
-// SampleTrianglePoint (geo3d.cpp:153-168). vtx9 = 3 vertices × 3 coords.
-inline void sample_triangle(thread PcgStream& s,
-                            device const float* vtx9,
-                            thread float* out_p) {
-  float u = pcg_uniform(s);
-  float v = pcg_uniform(s);
-  if (u + v > 1.0f) {
-    u = 1.0f - u;
-    v = 1.0f - v;
-  }
-  for (uint k = 0u; k < 3u; k++) {
-    float a = vtx9[k];
-    float b = vtx9[3 + k];
-    float c = vtx9[6 + k];
-    out_p[k] = u * (b - a) + v * (c - a) + a;
-  }
-}
-
-// RandomSample (geo3d.cpp:112-150) — categorical CDF with negative-weight clip.
-// Mirrors host behavior: non-positive total falls back to bin 0.
-inline uint categorical_sample(thread const float* weights, uint n, float u_in) {
-  float total = 0.0f;
-  for (uint i = 0u; i < n; i++) {
-    total += max(weights[i], 0.0f);
-  }
-  if (total <= 0.0f) {
-    return 0u;
-  }
-  float target = u_in * total;
-  float cumsum = 0.0f;
-  for (uint i = 0u; i < n; i++) {
-    cumsum += max(weights[i], 0.0f);
-    if (cumsum > target) {
-      return i;
-    }
-  }
-  return n - 1u;
-}
-
-kernel void gen_root_kernel(
-    device float*           root_d        [[buffer(0)]],
-    device float*           root_p        [[buffer(1)]],
-    device float*           root_w        [[buffer(2)]],
-    device ushort*          root_tf       [[buffer(3)]],
-    device float*           root_rot      [[buffer(4)]],
-    device const float*     tri_vtx       [[buffer(5)]],
-    device const float*     tri_norm      [[buffer(6)]],
-    device const float*     tri_area      [[buffer(7)]],
-    device const ushort*    tri_to_poly   [[buffer(8)]],
-    constant GenRootKernelParams& gp      [[buffer(9)]],
-    // scrum-268.8 (DR-3): per-ray wavelength pool + per-ray wl_idx output.
-    // Pool entries provide the spd_weight (replacing the deleted gp.ray_weight)
-    // and feed the trace kernel's per-ray optics on the next stage.
-    // scrum-268.8 (DR-3): match trace_layer_kernel's `constant` binding so the
-    // shader-side cache is consistent across both pool readers.
-    constant WlEntry*       wl_pool       [[buffer(10)]],
-    device uint*            root_wl_idx   [[buffer(11)]],
-    uint tid [[thread_position_in_grid]])
-{
-  if (tid >= gp.num_rays) {
-    return;
-  }
-  // task-260.5 Step 3: categorical_sample(n=0) underflows uint and returns
-  // 0xffffffff, which then indexes tri_vtx / tri_to_poly OOB. tri_count==0
-  // should be impossible (host EnsureTriBuffers asserts tri_cnt > 0) but
-  // a defensive early-out here makes the contract local and avoids a GPU
-  // hang/crash if the host invariant ever breaks.
-  if (gp.tri_count == 0u) {
-    return;
-  }
-  uint global_idx = gp.gen_ray_base + tid;
-  PcgStream stream;
-  stream.seed = gp.gen_seed;
-  stream.global_idx = global_idx;
-  stream.slot = 0u;
-
-  // scrum-268.8 (DR-3): per-ray wavelength index. Uses an independent PCG slot
-  // (20) so it cannot collide with the orientation / triangle-pick draws made
-  // below — kWlPcgSlot stays clear of every existing draw count (orientation +
-  // sun + categorical + triangle ≤ ~12 slots). The result is the photon's
-  // lifetime tag, written to root_wl_idx so the trace kernel can look up
-  // n_idx / cmf_* from wl_pool[wl_idx].
-  PcgStream wl_stream;
-  wl_stream.seed       = gp.gen_seed;
-  wl_stream.global_idx = global_idx;
-  wl_stream.slot       = 20u;
-  uint wl_idx = (uint)(pcg_uniform(wl_stream) * float(gp.wl_pool_size));
-  if (wl_idx >= gp.wl_pool_size) {
-    wl_idx = gp.wl_pool_size - 1u;  // guard against pcg_uniform → 1.0f rounding
-  }
-  root_wl_idx[tid] = wl_idx;
-
-  // 1. Sample crystal orientation (lon, lat, roll) → 3×3 rotation.
-  float lon, lat, roll;
-  sample_lat_lon_roll(stream, gp, lon, lat, roll);
-  float mat9[9];
-  build_crystal_rotation_9(lon, lat, roll, mat9);
-
-  // 2. Sample incident direction in WORLD space, then rotate into crystal-local.
-  float d_world[3];
-  sample_sph_cap(stream, gp.sun_lon, gp.sun_lat, gp.sun_half_angle, d_world);
-  float d_crystal[3];
-  apply_inverse_mat9(mat9, d_world, d_crystal);
-
-  // 3. Triangle area×facing weighted pick → uniform point on the chosen tri.
-  float proj_prob[kMaxTriPerKernel];
-  uint n_tri = min(gp.tri_count, kMaxTriPerKernel);
-  for (uint t = 0u; t < n_tri; t++) {
-    float dot = d_crystal[0] * tri_norm[t * 3 + 0]
-              + d_crystal[1] * tri_norm[t * 3 + 1]
-              + d_crystal[2] * tri_norm[t * 3 + 2];
-    proj_prob[t] = max(-dot * tri_area[t], 0.0f);
-  }
-  float u_cat = pcg_uniform(stream);
-  uint tri_id = categorical_sample(proj_prob, n_tri, u_cat);
-  float p[3];
-  sample_triangle(stream, tri_vtx + tri_id * 9u, p);
-  ushort to_face = tri_to_poly[tri_id];
-  float weight = wl_pool[wl_idx].spd_weight;  // scrum-268.8 per-ray spd weight
-  if (to_face == kInvalidId) {
-    // Mirrors InitRay_p_fid fallback (simulator.cpp:92-94): zero weight when
-    // a triangle has no polygon backing so downstream HitSurface can drop it.
-    weight = 0.0f;
-  }
-
-  // 4. Emit.
-  root_d[tid * 3 + 0] = d_crystal[0];
-  root_d[tid * 3 + 1] = d_crystal[1];
-  root_d[tid * 3 + 2] = d_crystal[2];
-  root_p[tid * 3 + 0] = p[0];
-  root_p[tid * 3 + 1] = p[1];
-  root_p[tid * 3 + 2] = p[2];
-  root_w[tid] = weight;
-  root_tf[tid] = to_face;
-  for (uint k = 0u; k < 9u; k++) {
-    root_rot[tid * 9u + k] = mat9[k];
-  }
-}
-
-// scrum-267 task-device-resident-continuation Step 1: device frame-transit
-// kernel. Reads world-space continuation rays (cont_d_in / cont_w_in) produced
-// by the prior layer's emit gate and emits root_*_buf for the next layer's
-// trace dispatch. Mirrors the legacy InitRayOtherMs (simulator.cpp:199-210)
-// three responsibilities now lifted onto the GPU:
-//   1) sample a fresh per-ray crystal orientation (InitRay_rot equivalent),
-//   2) rotate world dir into the NEW crystal-local frame (ApplyInverse), and
-//   3) sample entry point + hit face on the NEW crystal (InitRay_p_fid).
-// gp.gen_seed must be derived from transit_seed (independent from root-gen and
-// gate PCG streams); gp.gen_ray_base MUST advance across SimBatches via the
-// host-side transit_ray_count_ counter (same monotone contract as gen_root's
-// root_ray_count) so per-batch transit dispatches on the same (layer,ci) key
-// consume DISJOINT PCG ranges — otherwise tid=k of every batch collapses onto
-// the same orientation, severely under-sampling crystal orientations across
-// batches (scrum-267 bugfix). The sun-* / ray_weight fields in gp are unused
-// (world dir comes from cont_d_in instead of sample_sph_cap; weight is
-// carried through from cont_w_in).
-kernel void transit_root_kernel(
-    device const float*  cont_d_in   [[buffer(0)]],
-    device const float*  cont_w_in   [[buffer(1)]],
-    device float*        root_d      [[buffer(2)]],
-    device float*        root_p      [[buffer(3)]],
-    device float*        root_w      [[buffer(4)]],
-    device ushort*       root_tf     [[buffer(5)]],
-    device float*        root_rot    [[buffer(6)]],
-    device const float*  tri_vtx     [[buffer(7)]],
-    device const float*  tri_norm    [[buffer(8)]],
-    device const float*  tri_area    [[buffer(9)]],
-    device const ushort* tri_to_poly [[buffer(10)]],
-    constant GenRootKernelParams& gp [[buffer(11)]],
-    // scrum-268.8 (DR-3): per-ray wavelength carrier through the layer hop.
-    // The emit gate wrote each continuation ray's wl_idx into cont_wl_idx_in;
-    // transit pass-through copies it to root_wl_idx_out so the next layer's
-    // trace kernel reads the same lifetime tag.
-    device const uint*   cont_wl_idx_in   [[buffer(12)]],
-    device uint*         root_wl_idx_out  [[buffer(13)]],
-    uint tid [[thread_position_in_grid]])
-{
-  if (tid >= gp.num_rays || gp.tri_count == 0u) {
-    return;
-  }
-  // 1. Orientation sample (shares sample_lat_lon_roll with gen_root_kernel;
-  //    gp.gen_seed carries transit_seed, gp.gen_ray_base carries the host-
-  //    side transit_ray_count_ so global_idx = gen_ray_base + tid is unique
-  //    per (layer, ci, batch, tid) across the whole Run() PCG range).
-  uint global_idx = gp.gen_ray_base + tid;
-  PcgStream stream;
-  stream.seed = gp.gen_seed;
-  stream.global_idx = global_idx;
-  stream.slot = 0u;
-  float lon, lat, roll;
-  sample_lat_lon_roll(stream, gp, lon, lat, roll);
-  float mat9[9];
-  build_crystal_rotation_9(lon, lat, roll, mat9);
-
-  // 2. Read world-space continuation direction, rotate into crystal-local.
-  float d_world[3] = { cont_d_in[tid * 3u + 0u],
-                       cont_d_in[tid * 3u + 1u],
-                       cont_d_in[tid * 3u + 2u] };
-  float d_crystal[3];
-  apply_inverse_mat9(mat9, d_world, d_crystal);
-
-  // 3. Triangle area×facing weighted pick → uniform point on the chosen tri.
-  float proj_prob[kMaxTriPerKernel];
-  uint n_tri = min(gp.tri_count, kMaxTriPerKernel);
-  for (uint t = 0u; t < n_tri; t++) {
-    float dot = d_crystal[0] * tri_norm[t * 3u + 0u]
-              + d_crystal[1] * tri_norm[t * 3u + 1u]
-              + d_crystal[2] * tri_norm[t * 3u + 2u];
-    proj_prob[t] = max(-dot * tri_area[t], 0.0f);
-  }
-  float u_cat = pcg_uniform(stream);
-  uint tri_id = categorical_sample(proj_prob, n_tri, u_cat);
-  float p[3];
-  sample_triangle(stream, tri_vtx + tri_id * 9u, p);
-  ushort to_face = tri_to_poly[tri_id];
-
-  // 4. Carry continuation weight; mirror InitRay_p_fid fallback (zero weight
-  //    when a triangle has no polygon backing).
-  float w = cont_w_in[tid];
-  if (to_face == kInvalidId) {
-    w = 0.0f;
-  }
-
-  // 5. Emit.
-  root_d[tid * 3u + 0u] = d_crystal[0];
-  root_d[tid * 3u + 1u] = d_crystal[1];
-  root_d[tid * 3u + 2u] = d_crystal[2];
-  root_p[tid * 3u + 0u] = p[0];
-  root_p[tid * 3u + 1u] = p[1];
-  root_p[tid * 3u + 2u] = p[2];
-  root_w[tid] = w;
-  root_tf[tid] = to_face;
-  for (uint k = 0u; k < 9u; k++) {
-    root_rot[tid * 9u + k] = mat9[k];
-  }
-  // scrum-268.8 (DR-3): pass-through wavelength index (photon lifetime tag).
-  root_wl_idx_out[tid] = cont_wl_idx_in[tid];
-}
-)METAL";
-
 // Mirror of the Metal-side KernelParams (host layout MUST match the .metal
 // struct field-for-field — all 4-byte scalars, natural alignment).
-// NOTE: field order MUST match MSL KernelParams in kKernelSrc — static_assert
+// NOTE: field order MUST match MSL KernelParams in src/core/metal/lumice_trace.metal — static_assert
 // guards size only; reviewer-facing field-by-field check is the maintainer's
 // responsibility when adding/reordering members.
 struct KernelParams {
@@ -1081,7 +106,7 @@ static_assert(sizeof(KernelParams) == 76u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 
 // Device root-gen latitude path tags. MUST match constant kLatPath* in
-// kKernelSrc — they index into a Metal-side branch table.
+// src/core/metal/lumice_trace.metal — they index into a Metal-side branch table.
 enum LatPath : uint32_t {
   kLatPathFullSphereHost    = 0u,
   kLatPathNoRandomHost      = 1u,
@@ -1092,7 +117,7 @@ enum LatPath : uint32_t {
 
 // Mirror of the Metal-side GenRootKernelParams (host layout MUST match the
 // MSL struct field-for-field — all 4-byte scalars, natural alignment).
-// Field order MUST match the MSL struct in kKernelSrc — static_assert guards
+// Field order MUST match the MSL struct in src/core/metal/lumice_trace.metal — static_assert guards
 // size only; reviewer-facing field-by-field check is required when adding
 // or reordering members (same convention as KernelParams above).
 // NOTE: consumed by gen_root_kernel and transit_root_kernel; see
@@ -1145,7 +170,7 @@ void ComputeCmf(float wl, float& cie_x, float& cie_y, float& cie_z) {
 }
 
 // scrum-268.8 (DR-3): per-ray wavelength pool — host-side mirror of the MSL
-// WlEntry struct in kKernelSrc. sizeof MUST stay == 20 (5 × 4B); reorderings
+// WlEntry struct in src/core/metal/lumice_trace.metal. sizeof MUST stay == 20 (5 × 4B); reorderings
 // must mirror MSL.
 struct WlEntry {
   float n_idx;
@@ -1253,6 +278,117 @@ float ComputeJacobianEnvelopeForDeviceGen(const Distribution& dist) {
   }
 }
 
+// task-#283 (metal-build-time-metallib): build-time metallib loader.
+//
+// Loads the build-time precompiled metallib bytes embedded in the binary via
+// newLibraryWithData. This path does NOT invoke the runtime MSL source frontend
+// (which is broken on macOS 26.5 — see issue.md): the metallib contains AIR
+// (Apple Intermediate Representation), and newLibraryWithData hands it
+// directly to the driver-level AIR→ISA codegen, which is unaffected.
+//
+// The dispatch_data_t wraps a static `constexpr` byte array — the destructor
+// MUST be a no-op block (`^{}`), NOT DISPATCH_DATA_DESTRUCTOR_DEFAULT
+// (which calls free() on the buffer — UB on a static-storage array).
+id<MTLLibrary> LoadMetallibFromEmbeddedBytes(id<MTLDevice> device,
+                                             NSError** out_err) {
+  dispatch_data_t data = dispatch_data_create(
+      kLumiceMetallibBytes,
+      kLumiceMetallibSize,
+      nullptr,                       // run callback on the default queue
+      ^{}                            // no-op: static array, never freed
+  );
+  NSError* err = nil;
+  id<MTLLibrary> lib = [device newLibraryWithData:data error:&err];
+  if (out_err) { *out_err = err; }
+  return lib;
+}
+
+// Returns nil if neither the embedded metallib nor (optional) source fallback
+// produces a usable library. Caller is responsible for converting nil into a
+// BackendUnavailableError (EnsurePso) or a gate-off (MetalPipelineAvailable).
+//
+// Loading priority:
+//   1. Primary: newLibraryWithData(embedded .metallib) — bypasses source frontend.
+//   2. Fallback: newLibraryWithSource(embedded .metal text) — suppressed when
+//      LUMICE_DISABLE_METAL_SOURCE_COMPILE is set (this is the AC1/AC2 switch
+//      that simulates macOS 26.5's broken source frontend on dev machines so
+//      the metallib path is verified to be self-sufficient).
+//
+// On success: *out_err is cleared to nil so a stale error from a previous
+// failed attempt cannot mislead the caller (matches LoadMissingFunction's
+// expectation that err reflects the FINAL outcome).
+id<MTLLibrary> LoadMetalLibrary(id<MTLDevice> device,
+                                Logger* logger,
+                                NSError** out_err) {
+  // Primary: embedded pre-compiled metallib (bypasses the macOS 26.5 broken
+  // MSL source frontend).
+  NSError* primary_err = nil;
+  id<MTLLibrary> lib = LoadMetallibFromEmbeddedBytes(device, &primary_err);
+  if (lib != nil) {
+    // POSITIVELY surface "we took the embedded-metallib path" so the AC2
+    // regression test can distinguish this from the source fallback (a
+    // returncode==0 alone could not tell which load route ran).
+    // INFO (not VERBOSE) so the AC2 regression sentinel can detect this
+    // marker without juggling log levels. The event is one-shot per backend
+    // instance (BeginSession → EnsurePso) — not per dispatch — so the noise
+    // cost is bounded.
+    ILOG_INFO(EffectiveLogger(logger),
+              "MetalTraceBackend: loaded embedded metallib ({} functions)",
+              (unsigned)lib.functionNames.count);
+    if (out_err) { *out_err = nil; }
+    return lib;
+  }
+  // Metallib load failed. On any macOS ≥13 with an unmodified binary this
+  // should NEVER happen (AIR is forward-compatible). Log and consider the
+  // source fallback.
+  const char* primary_err_cstr =
+      primary_err.localizedDescription.UTF8String;
+  ILOG_WARN(EffectiveLogger(logger),
+            "MetalTraceBackend: newLibraryWithData failed ({}); evaluating source fallback",
+            primary_err_cstr ? primary_err_cstr : "(none)");
+
+  // AC1/AC2 switch: when set, the runtime source compile path is suppressed
+  // entirely. The dev machine then behaves like macOS 26.5 in the sense that
+  // the source frontend is unreachable — exercising the metallib-only path.
+  const char* disable_env = std::getenv("LUMICE_DISABLE_METAL_SOURCE_COMPILE");
+  bool disable_source = (disable_env != nullptr) && (disable_env[0] != '\0')
+                        && (disable_env[0] != '0');
+  if (disable_source) {
+    ILOG_WARN(EffectiveLogger(logger),
+              "MetalTraceBackend: LUMICE_DISABLE_METAL_SOURCE_COMPILE=1 — "
+              "skipping source fallback; reporting metallib failure");
+    if (out_err) { *out_err = primary_err; }
+    return nil;
+  }
+
+  // Fallback: runtime source compile (the legacy pre-task-#283 path).
+  NSString* src = @(kLumiceCombinedKernelSrc);
+  MTLCompileOptions* opts = [MTLCompileOptions new];
+  // Pin MSL 3.0 + safe math so the source fallback produces a numerically
+  // equivalent kernel to the offline metallib (see Step 2 compile flags).
+  opts.languageVersion = MTLLanguageVersion3_0;
+  if (@available(macOS 15.0, *)) {
+    opts.mathMode = MTLMathModeSafe;
+  } else {
+    opts.fastMathEnabled = NO;
+  }
+  NSError* src_err = nil;
+  id<MTLLibrary> src_lib = [device newLibraryWithSource:src
+                                                options:opts
+                                                  error:&src_err];
+  if (src_lib != nil) {
+    ILOG_INFO(EffectiveLogger(logger),
+              "MetalTraceBackend: loaded source-compiled library ({} functions)",
+              (unsigned)src_lib.functionNames.count);
+    if (out_err) { *out_err = nil; }
+    return src_lib;
+  }
+  // Both routes failed: surface the source-fallback err (the more informative
+  // one, since metallib failure on a healthy install is silent / opaque).
+  if (out_err) { *out_err = src_err; }
+  return nil;
+}
+
 }  // namespace
 
 bool MetalDeviceAvailable() {
@@ -1280,15 +416,21 @@ bool MetalDeviceAvailable() {
 }
 
 bool MetalPipelineAvailable() {
+  // task-#283 (metal-build-time-metallib): the gate now goes through the SAME
+  // LoadMetalLibrary helper EnsurePso uses, so there is no asymmetry between
+  // "gate says Metal is available" and "BeginSession actually succeeds" — the
+  // pre-task-#283 risk that the gate compiled source-from-string while
+  // EnsurePso took a different MTLCompileOptions path is structurally gone.
+  // The LUMICE_DISABLE_METAL_SOURCE_COMPILE env var (AC1/AC2 switch) is
+  // honored by LoadMetalLibrary, so the gate also fails closed on dev machines
+  // simulating the macOS 26.5 broken-source-frontend condition.
+  //
   // task-282: cache is once_flag write-once-then-read-only — safe for any
-  // thread to call after the first probe completes. Trial-compile mirrors
-  // EnsurePso's source assembly and MTLCompileOptions verbatim so the gate
-  // exercises the same code path that BeginSession will: catching the
-  // macOS 26.5 "library compiles but kernel entry point missing" failure
-  // before the GUI checkbox even lights up. We deliberately do NOT build a
-  // full MTLComputePipelineState — entry-point lookup is sufficient for the
-  // observed failure mode, and the Step-2 BeginSession throw + simulator
-  // fallback is the safety net for any future runtime-only PSO failure.
+  // thread to call after the first probe completes. We deliberately do NOT
+  // build a full MTLComputePipelineState — entry-point lookup is sufficient
+  // for the observed failure mode, and BeginSession's BackendUnavailableError
+  // + simulator fallback is the safety net for any future runtime-only PSO
+  // failure.
   static std::once_flag flag;
   static bool available = false;
   std::call_once(flag, []() {
@@ -1305,55 +447,31 @@ bool MetalPipelineAvailable() {
                   "MetalPipelineAvailable: no Metal device — gating Metal backend off");
         return;  // available stays false
       }
-      // Source-string assembly MUST match EnsurePso (metal_trace_backend.mm:
-      // helper then kernel). MSL forward-declaration order in the helper
-      // depends on this concatenation order — swapping it changes compiler
-      // behaviour and would defeat the gate's predictive value.
-      NSString* src = [NSString stringWithFormat:@"%s\n%s",
-                                                  kFilterMatchHelperSrc,
-                                                  kKernelSrc];
-      MTLCompileOptions* opts = [MTLCompileOptions new];
-      opts.languageVersion = MTLLanguageVersion3_0;
-      if (@available(macOS 15.0, *)) {
-        opts.mathMode = MTLMathModeSafe;
-      } else {
-        opts.fastMathEnabled = NO;
-      }
       NSError* err = nil;
-      id<MTLLibrary> lib = [device newLibraryWithSource:src options:opts error:&err];
+      id<MTLLibrary> lib = LoadMetalLibrary(device, nullptr, &err);
       if (lib == nil) {
         const char* err_cstr = err.localizedDescription.UTF8String;
         ILOG_WARN(EffectiveLogger(nullptr),
-                  "MetalPipelineAvailable: kernel compile failed — gating Metal backend off; err={}",
+                  "MetalPipelineAvailable: library load failed — gating Metal backend off; err={}",
                   err_cstr ? err_cstr : "(none)");
         return;
       }
-      // Check ALL three entry points EnsurePso resolves. macOS 26.5 may drop
-      // gen_root_kernel / transit_root_kernel as well; checking only
-      // trace_layer_kernel would let the gate return true while EnsurePso
-      // still throws on a later lookup. Cost is three lookups on the same
-      // library object — trivial vs. the trial compile itself.
+      // Check ALL three entry points EnsurePso resolves. Even when the load
+      // returned a non-nil library, a degenerate library (functionNames=[]) —
+      // the macOS 26.5 source-fallback signature, see task-282 — must still
+      // gate Metal off. Checking only trace_layer_kernel would let the gate
+      // return true while EnsurePso still throws on a later lookup; the cost
+      // of three lookups on the same library object is trivial.
       for (NSString* name in @[ @"trace_layer_kernel", @"gen_root_kernel", @"transit_root_kernel" ]) {
         id<MTLFunction> fn = [lib newFunctionWithName:name];
         if (fn == nil) {
-          // task-282: the observed macOS 26.5 failure mode — newLibraryWithSource
-          // returns a NON-nil library that exports ZERO functions
-          // (functionNames=[]). That signature means the compile errored but
-          // still handed back a degenerate library object with the diagnostics
-          // stashed in `err`. `err` here comes straight from
-          // newLibraryWithSource and is NOT overwritten (the gate builds no PSO),
-          // so unlike EnsurePso's stale-err path it carries the real compiler
-          // message. Log functionNames + that message so a user repro pins the
-          // root cause without another round trip.
           NSArray<NSString*>* names = lib.functionNames;
           const char* names_cstr = [names componentsJoinedByString:@", "].UTF8String;
-          const char* err_cstr = err.localizedDescription.UTF8String;
           ILOG_WARN(EffectiveLogger(nullptr),
-                    "MetalPipelineAvailable: library compiled but kernel entry point '{}' missing — "
-                    "gating Metal backend off; library functionNames=[{}]; compile diagnostics: {}",
+                    "MetalPipelineAvailable: library loaded but kernel entry point '{}' missing — "
+                    "gating Metal backend off; library functionNames=[{}]",
                     name.UTF8String,
-                    names_cstr ? names_cstr : "",
-                    err_cstr ? err_cstr : "(none)");
+                    names_cstr ? names_cstr : "");
           return;
         }
       }
@@ -1706,43 +824,21 @@ void MetalTraceBackend::Impl::EnsurePso() {
     return;
   }
   NSError* err = nil;
-  // scrum-267 task-fused-emit-gate Step 1: prepend kFilterMatchHelperSrc so the
-  // trace kernel can call DeviceFilterCheck at its emit gate (ms_mode==1 path).
-  // The helper declares all helpers `static inline` and uses the dev-prefixed
-  // constants (kDevFilterType*, kDevSym*, kDevRecCap) so there are no symbol
-  // collisions with kKernelSrc; the duplicate `#include <metal_stdlib>` and
-  // `using namespace metal;` lines are MSL-legal (the include guard collapses
-  // the second occurrence).
-  NSString* src = [NSString stringWithFormat:@"%s\n%s",
-                                              kFilterMatchHelperSrc,
-                                              kKernelSrc];
-  MTLCompileOptions* opts = [MTLCompileOptions new];
-  // The kernel uses atomic_float (gated by __HAVE_ATOMIC_FLOAT__ which is
-  // defined only at MSL >= 3.0, see metal_atomic header). Without an explicit
-  // languageVersion, the runtime default depends on host process metadata and
-  // can fall back to MSL 2.x in ctypes-loaded dylib contexts (e.g. test
-  // harness driving liblumice.dylib via Python), causing "unknown type name
-  // 'atomic_float'" at newLibraryWithSource. Pin MSL 3.0 so the kernel
-  // compiles uniformly across CLI / unit_test / ctypes / GUI host processes.
-  opts.languageVersion = MTLLanguageVersion3_0;  // requires macOS 13+ (Ventura) — consistent with
-                                                  // CMAKE_OSX_DEPLOYMENT_TARGET "13.0" in CMakeLists.txt:6
-  // Disable fast-math / contract-FMA so the kernel's mul-add sequences round
-  // identically to the CPU backend's separate operations. Without this the
-  // Metal compiler fuses (a*b + c) into fma(a, b, c), drifting from CPU by
-  // ~ULP per bounce and ~1e-4 over an N=4096 sum (observed during Test E
-  // bring-up before this option was set).
-  if (@available(macOS 15.0, *)) {
-    opts.mathMode = MTLMathModeSafe;
-  } else {
-    opts.fastMathEnabled = NO;
-  }
-  id<MTLLibrary> lib = [device newLibraryWithSource:src options:opts error:&err];
+  // task-#283 (metal-build-time-metallib): library acquisition is delegated to
+  // the shared LoadMetalLibrary helper. Primary route = embedded precompiled
+  // metallib (bypasses macOS 26.5 broken MSL source frontend); fallback =
+  // runtime source compile (suppressed by LUMICE_DISABLE_METAL_SOURCE_COMPILE
+  // = the AC1/AC2 26.5-simulation switch). The compile options for the
+  // fallback live inside LoadMetalLibrary and stay byte-for-byte aligned with
+  // the offline metallib's compile flags (MSL 3.0, no-fast-math /
+  // MTLMathModeSafe) so the two routes are numerically equivalent.
+  id<MTLLibrary> lib = LoadMetalLibrary(device, logger_, &err);
   if (lib == nil) {
     const char* desc = err.localizedDescription.UTF8String;
     ILOG_ERROR(EffectiveLogger(logger_),
-               "MetalTraceBackend: kernel compile failed: {}",
+               "MetalTraceBackend: kernel library load failed: {}",
                desc ? desc : "(no error)");
-    throw BackendUnavailableError("MetalTraceBackend: kernel compile failed");
+    throw BackendUnavailableError("MetalTraceBackend: kernel library load failed");
   }
   // task-282 diagnostic: a successfully-compiled library can still fail to
   // expose a kernel entry point (observed on macOS 26.5 / M1 Max — see
