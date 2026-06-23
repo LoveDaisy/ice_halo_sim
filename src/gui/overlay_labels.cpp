@@ -560,7 +560,28 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
     const char* fmt = (input.grid_step >= 1.0f) ? "%.0f\xC2\xB0" : "%.1f\xC2\xB0";
     char buf[32];
     std::snprintf(buf, sizeof(buf), fmt, label_az);
-    emit_curve_label(samples, buf, grid_col, kGroupGrid);
+    // Anchor the meridian label at its intersection with the reference parallel
+    // (horizon alt=0 if visible, else the visible sample whose altitude is
+    // closest to the equator). Meridians converge at the poles, so the generic
+    // boundary/first-visible anchor (emit_curve_label) stacks every longitude
+    // label at the pole-convergence point — degenerate on globe / dual-fisheye
+    // where the pole sits on the visible-region boundary. The equator is where
+    // meridians are maximally separated in azimuth, so labels stay distinct.
+    // (task-288.6 follow-up; owner-chosen placement.) Search outward from the
+    // alt=0 sample index for the nearest visible sample.
+    const int mid = kCurveAltSteps / 2;  // sample index at alt = 0
+    for (int off = 0; off <= mid; ++off) {
+      const int lo = mid - off;
+      const int hi = mid + off;
+      if (lo >= 0 && samples[lo].vis) {
+        out.push_back({ samples[lo].screen_x, samples[lo].screen_y, std::string(buf), grid_col, false, kGroupGrid });
+        break;
+      }
+      if (hi <= kCurveAltSteps && samples[hi].vis) {
+        out.push_back({ samples[hi].screen_x, samples[hi].screen_y, std::string(buf), grid_col, false, kGroupGrid });
+        break;
+      }
+    }
   };
 
   // Sun-circle ring at angular distance angle_deg from input.sun_dir.
