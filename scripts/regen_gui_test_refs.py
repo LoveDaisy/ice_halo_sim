@@ -39,6 +39,7 @@ SCENE_NAMES = [
     "filters",
     "rp46",
     "rp46_nof",
+    "overlay_ea",
 ]
 
 MODES = ["off", "on"]
@@ -53,16 +54,31 @@ _PSNR_RE = re.compile(r"\[auto_ev\]\s+(\S+):\s+PSNR=([0-9.]+)\s+dB")
 # ---------------------------------------------------------------------------
 
 
-def _run(binary: str, extra_args: list[str], capture_stderr: bool = False) -> tuple[int, str]:
-    cmd = [binary, "--filter", "auto_ev"] + extra_args
+def _scene_list(args: argparse.Namespace) -> list[str]:
+    """SCENE_NAMES or [args.scene] when --scene is given."""
+    return [args.scene] if getattr(args, "scene", None) else SCENE_NAMES
+
+
+def _gtest_filter(args: argparse.Namespace) -> str:
+    """Build the gui_test --filter value. Filter is substring-matched against
+    each test's Name OR Category (see imgui_te_engine.cpp:PassFilter — not a
+    glob, not gtest syntax). With --scene, use ^name$ to anchor an exact match
+    on the scene name so 'rp46' does not also pick 'rp46_nof'."""
+    if getattr(args, "scene", None):
+        return f"^{args.scene}$"
+    return "auto_ev"
+
+
+def _run(binary: str, gtest_filter: str, extra_args: list[str], capture_stderr: bool = False) -> tuple[int, str]:
+    cmd = [binary, "--filter", gtest_filter] + extra_args
     result = subprocess.run(cmd, capture_output=capture_stderr, text=True)
     return result.returncode, result.stderr if capture_stderr else ""
 
 
-def _collect_pngs(run_dir: str) -> None:
+def _collect_pngs(run_dir: str, scenes: list[str]) -> None:
     """Move /tmp/lumice_auto_ev_*.png → run_dir/<key>.png for every (scene, mode)."""
     os.makedirs(run_dir, exist_ok=True)
-    for scene in SCENE_NAMES:
+    for scene in scenes:
         for mode in MODES:
             key = f"{scene}_{mode}"
             src = f"/tmp/lumice_auto_ev_{key}.png"
@@ -105,10 +121,13 @@ def phase_a(args: argparse.Namespace) -> None:
     n = args.n
     refs_dir = args.refs_dir
     quality = args.quality
+    scenes = _scene_list(args)
+    gtest_filter = _gtest_filter(args)
 
     print(f"[Phase A] Mean-ref generation: N={n} runs, JPEG quality={quality}")
     print(f"[Phase A] Binary : {binary}")
     print(f"[Phase A] Refs   : {refs_dir}")
+    print(f"[Phase A] Scenes : {scenes} (gtest filter='{gtest_filter}')")
 
     # Clear staging dir for idempotent reruns
     if os.path.exists(STAGING_DIR):
@@ -119,15 +138,15 @@ def phase_a(args: argparse.Namespace) -> None:
     for i in range(n):
         run_dir = os.path.join(STAGING_DIR, f"run_{i}")
         print(f"[Phase A] Run {i + 1}/{n}...", flush=True)
-        rc, _ = _run(binary, ["--keep-export-png"])
+        rc, _ = _run(binary, gtest_filter, ["--keep-export-png"])
         if rc != 0:
             print(f"  WARNING: run {i} exited {rc}", file=sys.stderr)
-        _collect_pngs(run_dir)
+        _collect_pngs(run_dir, scenes)
 
     # Per (scene, mode): pixel-average → apply format silence rule → save reference
     print()
     updated = 0
-    for scene in SCENE_NAMES:
+    for scene in scenes:
         for mode in MODES:
             key = f"{scene}_{mode}"
 
@@ -198,14 +217,16 @@ def phase_b(args: argparse.Namespace) -> None:
     binary = args.binary
     n_calib = args.n_calib
     refs_dir = args.refs_dir
+    gtest_filter = _gtest_filter(args)
 
     print(f"[Phase B] Threshold calibration: N_calib={n_calib} runs")
     print(f"[Phase B] Binary : {binary}")
+    print(f"[Phase B] Filter : {gtest_filter}")
 
     psnr_data: dict[str, list[float]] = {}
     for i in range(n_calib):
         print(f"[Phase B] Calibration run {i + 1}/{n_calib}...", flush=True)
-        _, stderr = _run(binary, [], capture_stderr=True)
+        _, stderr = _run(binary, gtest_filter, [], capture_stderr=True)
         for m in _PSNR_RE.finditer(stderr):
             tag, val = m.group(1), float(m.group(2))
             psnr_data.setdefault(tag, []).append(val)
@@ -228,16 +249,29 @@ def phase_b(args: argparse.Namespace) -> None:
             "threshold": threshold,
         }
 
+    # Merge into existing thresholds.json: scene-level update preserves audit history for
+    # scenes that weren't part of this run (e.g. --scene overlay_ea must not wipe the 9
+    # previously calibrated scenes). New keys overwrite old ones for the scenes we ran.
+    json_path = os.path.join(refs_dir, "_thresholds.json")
+    merged: dict = {}
+    if os.path.exists(json_path):
+        try:
+            with open(json_path) as fh:
+                merged = json.load(fh)
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"  WARNING: existing {json_path} unreadable ({exc}); starting fresh", file=sys.stderr)
+            merged = {}
+    existing_scenes = merged.get("scenes") if isinstance(merged.get("scenes"), dict) else {}
+    existing_scenes.update(scenes_out)
     out = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "n_ref_runs": getattr(args, "n", 10),
         "n_calib_runs": n_calib,
-        "scenes": scenes_out,
+        "scenes": existing_scenes,
     }
-    json_path = os.path.join(refs_dir, "_thresholds.json")
     with open(json_path, "w") as fh:
         json.dump(out, fh, indent=2)
-    print(f"\n[Phase B] Thresholds written to {json_path}")
+    print(f"\n[Phase B] Thresholds written to {json_path} (scenes={len(existing_scenes)})")
     print("[Phase B] Copy 'threshold' values into kScenes[] in test/gui/test_gui_auto_ev.cpp")
 
 
@@ -269,6 +303,17 @@ def main() -> None:
     parser.add_argument("--quality", type=int, default=85, help="JPEG quality (default: 85)")
     parser.add_argument("--phase-a-only", action="store_true", help="Only run Phase A")
     parser.add_argument("--phase-b-only", action="store_true", help="Only run Phase B")
+    parser.add_argument(
+        "--scene",
+        default=None,
+        choices=SCENE_NAMES,
+        help=(
+            "If set, only regenerate refs / calibrate thresholds for this single scene. "
+            "Phase A overwrites only this scene's reference image; Phase B updates only "
+            "this scene's entry in _thresholds.json (other scenes preserved via merge-write). "
+            "Default: run all scenes."
+        ),
+    )
 
     args = parser.parse_args()
 

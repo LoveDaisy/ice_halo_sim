@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-05-31T14:29:05",
+  "generated_at": "2026-06-23T19:02:46",
   "n_ref_runs": 10,
-  "n_calib_runs": 30,
+  "n_calib_runs": 5,
   "scenes": {
     "color_off": {
       "psnr_mean": 20.895,
@@ -92,6 +92,16 @@
       "psnr_mean": 29.5103,
       "psnr_std": 0.3548,
       "threshold": 28.0
+    },
+    "overlay_ea_off": {
+      "psnr_mean": 20.96,
+      "psnr_std": 0.0837,
+      "threshold": 20.5
+    },
+    "overlay_ea_on": {
+      "psnr_mean": 21.552,
+      "psnr_std": 0.1258,
+      "threshold": 21.0
     }
   }
 }

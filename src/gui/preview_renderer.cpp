@@ -58,6 +58,7 @@ uniform vec3 u_sun_circles_color;
 uniform float u_horizon_alpha;
 uniform float u_grid_alpha;
 uniform float u_sun_circles_alpha;
+uniform float u_grid_step;  // degrees; FOV-adaptive, fed from OverlayDecoration::grid_step
 
 // Zenith / Nadir pixel-space ring marker uniforms (task-gui-zenith-nadir-marker).
 // Screen positions are center-origin, y-up, in pixels — same convention as
@@ -315,19 +316,21 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color, vec2 pos_pix) {
   float azimuth_deg = atan(-world_dir.y, -world_dir.x) * DEG;  // [-180, 180]
 
   // Adaptive line width via screen-space derivatives, clamped to avoid singularities
-  float fw_alt = clamp(fwidth(altitude_deg), 0.1, 2.0);
-  float fw_az = clamp(fwidth(azimuth_deg), 0.1, 5.0);
+  float fw_alt = clamp(fwidth(altitude_deg), 1e-4, 2.0);
+  float fw_az = clamp(fwidth(azimuth_deg), 1e-4, 5.0);
 
-  // Coordinate grid (10 degree intervals) — drawn first so other lines overlay on top
+  // Coordinate grid (interval = u_grid_step, FOV-adaptive) — drawn first so
+  // other lines overlay on top
   if (u_show_grid != 0) {
+    float half_step = u_grid_step * 0.5;
     // Altitude grid lines
-    float d_alt = mod(abs(altitude_deg) + 5.0, 10.0) - 5.0;
+    float d_alt = mod(abs(altitude_deg) + half_step, u_grid_step) - half_step;
     float t_alt = 1.0 - smoothstep(0.0, fw_alt * 1.5, abs(d_alt));
 
     // Azimuth grid lines — suppress near poles to avoid fwidth divergence
     float t_az = 0.0;
     if (abs(altitude_deg) < 85.0) {
-      float d_az = mod(azimuth_deg + 185.0, 10.0) - 5.0;  // +185 = +180 offset + 5 centering
+      float d_az = mod(azimuth_deg + 180.0 + half_step, u_grid_step) - half_step;
       t_az = 1.0 - smoothstep(0.0, fw_az * 1.5, abs(d_az));
     }
 
@@ -338,7 +341,7 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color, vec2 pos_pix) {
   // Sun angular distance circles
   if (u_show_sun_circles != 0) {
     float ang_dist_deg = acos(clamp(dot(world_dir, u_sun_dir), -1.0, 1.0)) * DEG;
-    float fw_ang = clamp(fwidth(ang_dist_deg), 0.1, 2.0);
+    float fw_ang = clamp(fwidth(ang_dist_deg), 1e-4, 2.0);
     for (int i = 0; i < u_sun_circle_count; i++) {
       float d = abs(ang_dist_deg - u_sun_circle_angles[i]);
       float t = 1.0 - smoothstep(0.0, fw_ang * 1.5, d);
@@ -837,6 +840,15 @@ static std::array<float, 2> ProjectFisheye(const float view_dir[3], float half_f
     }
     r_norm = std::sin(theta) / denom;
   }
+  // Circular viewport clip: reject points outside the imaging circle. For
+  // FOV<180° fisheye in non-square viewports the rectangular IsInViewport
+  // check downstream is not sufficient — directions past the imaging disc
+  // would otherwise leak into the black-bar region. 0.5/img_radius converts
+  // IsInViewport's 0.5px edge margin into normalized-radius units so the
+  // boundary is handled consistently.
+  if (r_norm > 1.0f + 0.5f / img_radius) {
+    return kProjectSentinel;
+  }
   float r = r_norm * img_radius;
   float phi = std::atan2(view_dir[1], view_dir[0]);
   return { r * std::cos(phi), r * std::sin(phi) };
@@ -898,6 +910,21 @@ static std::array<float, 2> ProjectRectangular(const float world_dir[3], float s
   return { lon * scale, -lat * scale };
 }
 
+// Forward projection for globe lens. eye_dir is the world-direction transformed
+// to eye space via WorldToView (= the world point on the unit sphere expressed
+// in eye coordinates). The camera sits at O = (0, 0, kGlobeCameraD); the front
+// hemisphere visible to the camera satisfies eye_dir.z > 1/kGlobeCameraD.
+// Math is line-for-line equivalent to overlay_labels.cpp::WorldDirToPixel's
+// globe branch — kGlobeCameraD is the single source of truth (gui_constants.hpp).
+static std::array<float, 2> ProjectGlobe(const float eye_dir[3], float half_fov, float img_radius) {
+  if (eye_dir[2] <= 1.0f / kGlobeCameraD) {
+    return kProjectSentinel;
+  }
+  float focal = img_radius / std::tan(half_fov);
+  float denom = kGlobeCameraD - eye_dir[2];
+  return { eye_dir[0] / denom * focal, eye_dir[1] / denom * focal };
+}
+
 // See declaration in preview_renderer.hpp for contract.
 // NOTE: must be updated when adding a new kLensType* constant.
 std::array<float, 2> ProjectWorldDirToScreen(const ViewProjection& vp, const float world_dir[3], int vp_w, int vp_h) {
@@ -913,9 +940,10 @@ std::array<float, 2> ProjectWorldDirToScreen(const ViewProjection& vp, const flo
   float short_res_dual = std::min(vp_w_f * 0.5f, vp_h_f);
 
   int lt = vp.lens_type;
-  bool needs_view_transform = (lt == kLensTypeLinear) ||
-                              (lt >= kLensTypeFisheyeEqualArea && lt <= kLensTypeFisheyeStereographic) ||
-                              (lt == kLensTypeFisheyeOrthographic);
+  // Single source of truth for the "needs view transform" classification:
+  // !LensIsFullSky covers linear, single fisheye family (incl. orthographic)
+  // and globe, mirroring overlay_labels.cpp::WorldDirToPixel.
+  bool needs_view_transform = !LensIsFullSky(lt);
 
   float local_dir[3];
   if (needs_view_transform) {
@@ -948,7 +976,10 @@ std::array<float, 2> ProjectWorldDirToScreen(const ViewProjection& vp, const flo
   } else if (lt == kLensTypeRectangular) {
     out = ProjectRectangular(local_dir, short_res_dual);
   } else if (lt == kLensTypeGlobe) {
-    return kProjectSentinel;  // out of scope for this task
+    // local_dir is the WorldToView-transformed direction (needs_view_transform
+    // = true for globe via !LensIsFullSky), i.e. the eye_dir expected by
+    // ProjectGlobe.
+    out = ProjectGlobe(local_dir, half_fov, img_radius);
   } else {
     assert(false && "ProjectWorldDirToScreen: unhandled lens type");
     return kProjectSentinel;
@@ -1047,6 +1078,7 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   glUniform1f(glGetUniformLocation(shader_program_, "u_horizon_alpha"), ov.horizon_alpha);
   glUniform1f(glGetUniformLocation(shader_program_, "u_grid_alpha"), ov.grid_alpha);
   glUniform1f(glGetUniformLocation(shader_program_, "u_sun_circles_alpha"), ov.sun_circles_alpha);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_grid_step"), ov.grid_step);
 
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_zenith_nadir"), ov.show_zenith_nadir ? 1 : 0);
   glUniform2f(glGetUniformLocation(shader_program_, "u_zenith_screen_pos"), ov.zenith_screen_pos[0],

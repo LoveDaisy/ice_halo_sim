@@ -69,6 +69,11 @@ struct OverlayDecoration {
   float grid_alpha = 0.3f;
   float sun_circles_alpha = 0.5f;
 
+  // Coordinate grid step in degrees. Default 10° keeps legacy callers (e.g.
+  // OverlayDecoration::Disabled / export_fbo_renderer) behaviour unchanged;
+  // live preview path overrides via ComputeGridStep(fov).
+  float grid_step = 10.0f;
+
   // Zenith / Nadir pixel-space ring marker.
   // *_screen_pos: CPU-precomputed; center-origin pixel coords, y-up
   // (matches shader's `pos = v_ndc * u_resolution * 0.5`). Sentinel

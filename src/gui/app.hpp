@@ -83,6 +83,12 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
 // so both paths consume the same field-packing logic.
 OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConfig& rc);
 
+// Pick the coordinate grid step (in degrees) for a given FOV. Single source of
+// truth shared between shader uniform (OverlayDecoration::grid_step) and label
+// CPU loop (OverlayLabelInput::grid_step) so the two never drift.
+// Caller guarantees fov > 0; the function does not validate.
+float ComputeGridStep(float fov);
+
 // Business operations
 void DoSave();
 void DoSaveAs();
