@@ -683,16 +683,6 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
                 &g_state.show_sun_circles_line, "Label##sun_circles", &g_state.show_sun_circles_label);
     SliderWithInput("Alpha##sun_circles", &g_state.sun_circles_alpha, 0.0f, 1.0f, "%.2f");
 
-    // Zenith / Nadir pixel-space marker. Single line toggle (no label column —
-    // markers don't carry text); radius slider mirrors the per-overlay alpha row.
-    ImGui::ColorEdit3("##zenith_nadir_color", g_state.zenith_nadir_color, ImGuiColorEditFlags_NoInputs);
-    ImGui::SameLine();
-    ImGui::TextUnformatted("Zenith/Nadir");
-    ImGui::SameLine(line_col_x);
-    ImGui::Checkbox("##zenith_nadir_line", &g_state.show_zenith_nadir_line);
-    SliderWithInput("Alpha##zenith_nadir", &g_state.zenith_nadir_alpha, 0.0f, 1.0f, "%.2f");
-    SliderWithInput("Radius##zenith_nadir", &g_state.zenith_nadir_radius_px, 2.0f, 20.0f, "%.1f px");
-
     if (g_state.show_sun_circles_line || g_state.show_sun_circles_label) {
       if (ImGui::Button("Edit Angles...##overlay")) {
         ImGui::OpenPopup("SunCirclesEdit");
@@ -763,6 +753,16 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
         ImGui::EndPopup();
       }
     }
+
+    // Zenith / Nadir pixel-space marker. Single line toggle (no label column —
+    // markers don't carry text); radius slider mirrors the per-overlay alpha row.
+    ImGui::ColorEdit3("##zenith_nadir_color", g_state.zenith_nadir_color, ImGuiColorEditFlags_NoInputs);
+    ImGui::SameLine();
+    ImGui::TextUnformatted("Zenith/Nadir");
+    ImGui::SameLine(line_col_x);
+    ImGui::Checkbox("##zenith_nadir_line", &g_state.show_zenith_nadir_line);
+    SliderWithInput("Alpha##zenith_nadir", &g_state.zenith_nadir_alpha, 0.0f, 1.0f, "%.2f");
+    SliderWithInput("Radius##zenith_nadir", &g_state.zenith_nadir_radius_px, 2.0f, 20.0f, "%.1f px");
 
     ImGui::PopItemWidth();
   }
