@@ -315,8 +315,8 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color, vec2 pos_pix) {
   float azimuth_deg = atan(-world_dir.y, -world_dir.x) * DEG;  // [-180, 180]
 
   // Adaptive line width via screen-space derivatives, clamped to avoid singularities
-  float fw_alt = clamp(fwidth(altitude_deg), 0.1, 2.0);
-  float fw_az = clamp(fwidth(azimuth_deg), 0.1, 5.0);
+  float fw_alt = clamp(fwidth(altitude_deg), 1e-4, 2.0);
+  float fw_az = clamp(fwidth(azimuth_deg), 1e-4, 5.0);
 
   // Coordinate grid (10 degree intervals) — drawn first so other lines overlay on top
   if (u_show_grid != 0) {
@@ -338,7 +338,7 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color, vec2 pos_pix) {
   // Sun angular distance circles
   if (u_show_sun_circles != 0) {
     float ang_dist_deg = acos(clamp(dot(world_dir, u_sun_dir), -1.0, 1.0)) * DEG;
-    float fw_ang = clamp(fwidth(ang_dist_deg), 0.1, 2.0);
+    float fw_ang = clamp(fwidth(ang_dist_deg), 1e-4, 2.0);
     for (int i = 0; i < u_sun_circle_count; i++) {
       float d = abs(ang_dist_deg - u_sun_circle_angles[i]);
       float t = 1.0 - smoothstep(0.0, fw_ang * 1.5, d);
