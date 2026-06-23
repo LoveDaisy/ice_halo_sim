@@ -30,23 +30,29 @@ env 是标准做法，不在治理范围内。
 
 ### A 类 — 运行时行为旋钮（策略主要约束对象）
 
-| 变量 | 位置 | 性质 | 已有替代路径？ |
+> task-287 起，所有 A 类 env 的读取都集中在 **`src/util/env_knobs.cpp`**（仓库内唯一允许
+> `getenv("LUMICE_*")` 的地方，由 `scripts/check_policies.py` 强制）。每个旋钮设为非默认值时
+> 首次读取会打一行日志——perf/调试旋钮 INFO，`LUMICE_TRACE_BACKEND` WARN。下表"读取入口"
+> 统一为 `env_knobs.cpp`，"消费方"列出实际使用点。
+
+| 变量 | 读取入口 / 消费方 | 性质 | 显式替代路径 |
 |---|---|---|---|
-| `LUMICE_TRACE_BACKEND` | `src/core/simulator.cpp:558`、`src/server/server.cpp:211` | 选后端 `legacy`/`cpu_backend`/`metal`——**最危险的 footgun** | GUI/API 有（见下）；**CLI 无 `--backend` flag，靠此 env** |
-| `LUMICE_DISPATCH_RAY_NUM` | `src/server/server.cpp:890` | GPU dispatch 粒度（perf 旋钮） | 无（纯实验旋钮） |
-| `LUMICE_COMMIT_RAY_NUM` | `src/server/server.cpp:685` | commit 粒度（perf 旋钮） | 无（纯实验旋钮） |
-| `LUMICE_BATCH_RAY_NUM` | `src/server/server.cpp:691,702` | 已废弃别名（已有 deprecation WARN） | 由 `COMMIT_RAY_NUM` 取代 |
-| `LUMICE_DISABLE_DEVICE_GEN` | `src/core/metal_trace_backend.mm:494` | 关 device-gen（实验/调试旋钮） | 无 |
-| `LUMICE_DISABLE_METAL_SOURCE_COMPILE` | `src/core/metal_trace_backend.mm:353` | 关 metal 源码编译（也被回归 sentinel 当门禁用） | 无 |
-| `LUMICE_WL_POOL_SIZE` | `src/core/metal_trace_backend.mm:192` | 波长池大小（实验旋钮） | 无 |
+| `LUMICE_TRACE_BACKEND` | `env::TraceBackendOverride` ← `simulator.cpp` `CreateBackend` / `server.cpp` `ResolveMetalRoute` | 选后端 `legacy`/`cpu_backend`/`metal`——**曾经的 footgun，已降级** | **CLI `--backend auto\|cpu\|metal`**（`src/main.cpp`）+ C API `LUMICE_SetPreferredBackend` / GUI checkbox。env 仅作 debug/CI 覆盖，生效即 WARN |
+| `LUMICE_DISPATCH_RAY_NUM` | `env::DispatchRayNum` ← `server.cpp` `GenerateScene` | GPU dispatch 粒度（perf 旋钮） | 无（纯实验旋钮，启动 INFO 可观测） |
+| `LUMICE_COMMIT_RAY_NUM` | `env::CommitRayNum` ← `server.cpp` `ConsumeData` | commit 粒度（perf 旋钮） | 无（纯实验旋钮，启动 INFO 可观测） |
+| `LUMICE_BATCH_RAY_NUM` | `env::CommitRayNum`（fallback） | 已废弃别名（deprecation WARN） | 由 `COMMIT_RAY_NUM` 取代 |
+| `LUMICE_DISABLE_DEVICE_GEN` | `env::DisableDeviceGen` ← `metal_trace_backend.mm` Impl ctor | 关 device-gen（实验/调试旋钮） | 无（启动 INFO 可观测） |
+| `LUMICE_DISABLE_METAL_SOURCE_COMPILE` | `env::DisableMetalSourceCompile` ← `metal_trace_backend.mm` `LoadMetalLibrary` | 关 metal 源码编译（也被回归 sentinel 当门禁用） | 无（启动 INFO 可观测） |
+| `LUMICE_WL_POOL_SIZE` | `env::WlPoolSize` ← `metal_trace_backend.mm` `EnsureWlPoolBuffer` | 波长池大小（实验旋钮） | 无（启动 INFO 可观测） |
 
-关于 `LUMICE_TRACE_BACKEND` 的关键事实（决定其处置方式）：
+关于 `LUMICE_TRACE_BACKEND` 的处置（task-287 已落地）：
 
-- 代码注释（`simulator.cpp:547`）已自述其为 **"debug/CI override; legacy semantics"**——
-  设计意图上它本就是覆盖项，不是主路径。
-- 主路径已存在：`Server::SetPreferredBackend`（默认 `kPreferCpu`），经 GUI checkbox 暴露，
-  并由 C API 后端可用性 gate 把关（task-281 `LUMICE_IsBackendAvailable`）。所以 **GUI/API
-  侧已有正规的后端选择路径**，env 只是其上的覆盖。
+- 它本就是 debug/CI 覆盖（代码注释自述 "debug/CI override"）。task-287 给 CLI 补了一等公民
+  `--backend` flag（之前 CLI 选后端只能靠此 env，是真正的缺口），并在 env 生效时打 WARN，
+  正式把它降级为覆盖项而非主路径。
+- 主路径：`--backend`（CLI）/ `LUMICE_SetPreferredBackend`（C API）/ GUI checkbox（经 task-281
+  `LUMICE_IsBackendAvailable` gate）。env 覆盖于其上，保留是因为 CI/parity 测试依赖它强制 backend，
+  删除会破坏测试。
 - 缺口在 **CLI**：CLI 没有一等公民的 `--backend` flag，目前后端选择依赖此 env
   （见 `server.cpp:207` 注释 "CLI / --benchmark"）。这正是需要补的显式路径。
 
@@ -93,21 +99,28 @@ env 是标准做法，不在治理范围内。
   A 类清单登记。
 - **只在测试/脚本里读，不进产品路径** → B 类，自由使用，无需登记。
 
-软约束会失效，所以这道门最终应固化为代码层的集中入口（见后续 task），而非仅靠本文档自律。
+软约束会失效，所以这道门固化为代码层的集中入口 + 自动门禁（§5），而非仅靠本文档自律。
 
-## 5. 需点名的后续 task（不在 chore-286 内实施）
+## 5. 门禁（这道策略怎么"长出牙齿"）
 
-本文档只立策略。以下为策略要求的代码落地，各自单独立 task + code-review：
+策略不靠自觉，靠检查 artifact 的确定性门禁（a04：固化为自动化门禁；a01：验证 artifact 而非
+自我声明）。task-287 落地：
 
-- **task：env-knob 集中注册表 + 启动 log**——把 A 类 perf 旋钮（dispatch/commit/
-  wl_pool/disable_*）的读取集中到一处入口，启动时对每个非默认值打一行 INFO。落地规则 2，
-  最高杠杆。
-- **task：`LUMICE_TRACE_BACKEND` footgun 处置**——给 CLI 补一等公民的 `--backend` flag
-  （和/或 config 字段），覆盖目前依赖 env 的缺口；随后把 env 降级为带响亮 WARN 的 debug
-  override（保留 CI/调试能力，但启动生效即告警）。改运行时行为，必须 code-review。结合当前
-  内测/发版阶段，优先级较高。
+- **`scripts/check_policies.py`**（确定性，无版本依赖）：
+  - getenv 集中化——`getenv("LUMICE_*")` 只能出现在 `src/util/env_knobs.cpp`，其余一律 fail；
+  - getenv 注册——`env_knobs.cpp` 引用的每个 `LUMICE_*` 名字必须出现在本文档，否则 fail；
+  - GUI/core API 边界——`src/gui/**` 不得直接 `#include "core/.."`/`"config/.."`；
+  - `using namespace` 禁用（src/）。
+- **CI `lint` job**（`.github/workflows/ci.yml`，权威门禁，绕不过）：跑 `check_policies.py`
+  + `scripts/format.sh --check`。
+- **本地 pre-commit hook**（`scripts/hooks/pre-commit`，装：`./scripts/install-hooks.sh`）：
+  非交互镜像 CI lint，提交前快速反馈；`git commit --no-verify` 可单次绕过；不动 git-lfs 其他 hook。
+- **判断类项**（机械化不了的，如"这个 env 是否改变用户输出"）放 `.github/PULL_REQUEST_TEMPLATE.md`，
+  由 reviewer 用正交视角核对，而非作者在 hook 里自答。
 
 ## 6. 维护约定
 
-- 新增 / 删除 / 改名任何 A 类 env 旋钮时，**同步更新本文 §2 清单**（含 `file:line`）。
+- 新增 / 删除 / 改名任何 A 类 env 旋钮时：在 `src/util/env_knobs.cpp` 增删读取函数，并**同步
+  更新本文 §2 清单**——getenv 注册检查会拿本文当白名单，名字对不上 CI 直接红。
 - B 类不必逐一登记，但若某 env 从"仅测试"演变为"进产品路径"，须升级登记为 A 类并走决策门。
+- 新增任何 `getenv("LUMICE_*")` 都必须走 `env_knobs.cpp`，否则 `check_policies.py` 拦截。

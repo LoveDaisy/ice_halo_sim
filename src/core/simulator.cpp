@@ -10,6 +10,7 @@
 #include <cstring>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <string>
 #include <thread>
 #include <variant>
@@ -26,6 +27,7 @@
 #include "core/math.hpp"
 #include "core/optics.hpp"
 #include "core/trace_backend.hpp"
+#include "util/env_knobs.hpp"
 #include "util/illuminant.hpp"
 #include "util/logger.hpp"
 #include "util/queue.hpp"
@@ -555,9 +557,8 @@ namespace {
 //                                       on non-Apple builds equates to CPU)
 // Returns nullptr to keep the legacy CPU path (Simulator::SimulateOneWavelength).
 std::unique_ptr<TraceBackend> CreateBackend(int preferred_backend, Logger& logger) {
-  const char* raw = std::getenv("LUMICE_TRACE_BACKEND");
-  if (raw != nullptr) {
-    std::string name(raw);
+  if (std::optional<std::string> override = env::TraceBackendOverride(logger)) {
+    const std::string& name = *override;
     if (name.empty() || name == "legacy") {
       // fall through to preferred_backend
     } else if (name == "cpu_backend") {

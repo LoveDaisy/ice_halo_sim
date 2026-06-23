@@ -1,0 +1,43 @@
+#!/bin/sh
+#
+# Lumice pre-commit hook — non-interactive local mirror of the CI lint job.
+# Installed by scripts/install-hooks.sh into .git/hooks/pre-commit (the git-lfs
+# hooks live in other hook files and are left untouched).
+#
+# It NEVER prompts. On a violation it prints what failed and exits 1; the commit
+# is blocked. Bypass a single commit with:  git commit --no-verify
+#
+# The CI `lint` job is the authoritative gate — this hook just gives faster local
+# feedback so failures don't wait for CI.
+
+REPO_ROOT=$(git rev-parse --show-toplevel) || exit 0
+cd "$REPO_ROOT" || exit 0
+
+# 1) Deterministic policy checks (whole tree — fast).
+if command -v python3 >/dev/null 2>&1; then
+  if ! python3 scripts/check_policies.py; then
+    exit 1
+  fi
+else
+  echo "pre-commit: python3 not found; skipping policy checks (CI will still enforce)." >&2
+fi
+
+# 2) clang-format on staged C/C++ sources. Skip .mm/.m — the repo .clang-format
+#    has no Objective-C config (matches scripts/format.sh --check).
+if command -v clang-format >/dev/null 2>&1; then
+  staged=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(cpp|cc|h|hpp|inl)$' || true)
+  fail=0
+  for f in $staged; do
+    [ -f "$f" ] || continue
+    if ! clang-format --dry-run --Werror "$f" >/dev/null 2>&1; then
+      echo "Needs formatting: $f"
+      fail=1
+    fi
+  done
+  if [ "$fail" -ne 0 ]; then
+    echo "pre-commit: clang-format check failed. Run ./scripts/format.sh, then re-stage." >&2
+    exit 1
+  fi
+fi
+
+exit 0
