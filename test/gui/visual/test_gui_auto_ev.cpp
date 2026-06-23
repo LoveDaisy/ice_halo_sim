@@ -14,6 +14,14 @@ struct AutoEvScene {
   int render_w;
   int render_h;
   double psnr_threshold;
+  // Overlay regression fields (defaults keep legacy scenes unchanged: enable_overlay=false
+  // bypasses the overlay branch in TestFunc; remaining fields are inert in that case).
+  bool enable_overlay = false;
+  int lens_type = 0;
+  float fov = 0.f;
+  float elevation = 0.f;
+  bool overlay_zenith_nadir = false;
+  bool overlay_grid = false;
 };
 
 // clang-format off
@@ -40,9 +48,13 @@ static const AutoEvScene kScenes[] = {
   {"filters",    LUMICE_E2E_CONFIG_DIR "/filters.json",                           256, 256, 18.5},  // min(off=18.5, on=23.5)
   {"rp46",       LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6.json",              256, 256, 20.0},  // min(off=20.0, on=27.5)
   {"rp46_nof",   LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6_nofilter.json",     256, 256, 18.5},  // min(off=18.5, on=19.5)
+  // Overlay regression scene (task-288.7): fisheye EA at elevation=45° with zenith marker +
+  // coordinate grid. Calibrated 2026-06-23 via regen_gui_test_refs.py --scene overlay_ea.
+  {"overlay_ea", LUMICE_E2E_CONFIG_DIR "/halo_22.json",                           256, 256, 19.0,  // min(off=20.5, on=21.0) − 1.5 (full-suite warm-up bias ~1 dB)
+   true, lumice::gui::kLensTypeFisheyeEqualArea, 180.0f, 45.0f, true, true},
 };
 // clang-format on
-static constexpr int kSceneCount = 9;
+static constexpr int kSceneCount = 10;
 
 static bool RequestAndWaitExport(ImGuiTestContext* ctx, const gui::PreviewViewport& vp, const std::string& path) {
   g_auto_ev_export.export_path = path;
@@ -175,6 +187,30 @@ void RegisterAutoEvRegressionTests(ImGuiTestEngine* engine) {
       vp_off.params.exposure.intensity_scale = 1.0f / si;
       vp_off.vp_w = scene.render_w;
       vp_off.vp_h = scene.render_h;
+
+      // Overlay regression scenes (e.g. overlay_ea): override view_proj for marker visibility,
+      // precompute zenith/nadir screen positions, and enable the requested overlay flags.
+      // Mirrors the runtime path in app_panels.cpp:855-869.
+      if (scene.enable_overlay) {
+        vp_off.params.view_proj.lens_type = scene.lens_type;
+        vp_off.params.view_proj.fov = scene.fov;
+        vp_off.params.view_proj.elevation = scene.elevation;
+        if (scene.overlay_zenith_nadir) {
+          constexpr float kZenithWorldDir[3] = { 0.f, 0.f, -1.f };
+          constexpr float kNadirWorldDir[3] = { 0.f, 0.f, 1.f };
+          auto zpos = gui::ProjectWorldDirToScreen(vp_off.params.view_proj, kZenithWorldDir, vp_off.vp_w, vp_off.vp_h);
+          auto npos = gui::ProjectWorldDirToScreen(vp_off.params.view_proj, kNadirWorldDir, vp_off.vp_w, vp_off.vp_h);
+          vp_off.params.overlay.show_zenith_nadir = true;
+          vp_off.params.overlay.zenith_screen_pos[0] = zpos[0];
+          vp_off.params.overlay.zenith_screen_pos[1] = zpos[1];
+          vp_off.params.overlay.nadir_screen_pos[0] = npos[0];
+          vp_off.params.overlay.nadir_screen_pos[1] = npos[1];
+        }
+        if (scene.overlay_grid) {
+          vp_off.params.overlay.show_grid = true;
+          vp_off.params.overlay.grid_step = 10.f;
+        }
+      }
 
       gui::PreviewViewport vp_on = vp_off;
       const float ev_factor = std::pow(2.0f, ev);
