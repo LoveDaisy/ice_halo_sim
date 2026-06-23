@@ -10,7 +10,7 @@
 
 - [ ] Tests pass (`./scripts/build.sh -tj release`)
 - [ ] Code formatted (`./scripts/format.sh`)
-- [ ] Policy checks pass (`python3 scripts/check_policies.py`) — also enforced by the CI `lint` job
+- [ ] Policy checks pass (`python3 scripts/check_policies.py`) — also enforced by the CI `policy` job
 - [ ] Documentation updated (if applicable)
 
 ### Judgment checks (delete a line only if clearly N/A)

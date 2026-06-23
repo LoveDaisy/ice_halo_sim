@@ -28,10 +28,10 @@ Build output: `build/cmake_install/` (Release), `build/cmake_build/` (Debug)
 ./scripts/install-hooks.sh    # non-interactive pre-commit: policy checks + clang-format on staged files
 ```
 
-This mirrors the CI `lint` job locally so failures surface before you push.
-It only adds a `pre-commit` hook and leaves the git-lfs hooks intact. Bypass a
-single commit with `git commit --no-verify`. The CI `lint` job is authoritative
-regardless of whether the hook is installed.
+This mirrors the CI `policy` + `format-check` jobs locally so failures surface
+before you push. It only adds a `pre-commit` hook and leaves the git-lfs hooks
+intact. Bypass a single commit with `git commit --no-verify`. The CI jobs are
+authoritative regardless of whether the hook is installed.
 
 ### Running Tests
 
@@ -60,7 +60,7 @@ Use lowercase with hyphens. Keep branch names short and descriptive.
 4. **Format code** — run `./scripts/format.sh` before committing
 5. **Pass policy checks** — `python3 scripts/check_policies.py` (env-knob centralization, GUI API boundary, using-namespace); installing the hook in step above runs this automatically
 6. **Open a pull request** — fill in the PR template (summary, test plan, checklist)
-7. **CI checks** — ensure all checks pass (lint/policy, build, tests, format)
+7. **CI checks** — ensure all checks pass (policy, format-check, build, tests)
 8. **Merge** — squash or rebase merge to keep history clean
 
 ### Commit Messages

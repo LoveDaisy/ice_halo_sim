@@ -1,14 +1,15 @@
 #!/bin/sh
 #
-# Lumice pre-commit hook — non-interactive local mirror of the CI lint job.
+# Lumice pre-commit hook — non-interactive local mirror of the CI policy +
+# format-check jobs.
 # Installed by scripts/install-hooks.sh into .git/hooks/pre-commit (the git-lfs
 # hooks live in other hook files and are left untouched).
 #
 # It NEVER prompts. On a violation it prints what failed and exits 1; the commit
 # is blocked. Bypass a single commit with:  git commit --no-verify
 #
-# The CI `lint` job is the authoritative gate — this hook just gives faster local
-# feedback so failures don't wait for CI.
+# The CI `policy` / `format-check` jobs are the authoritative gate — this hook
+# just gives faster local feedback so failures don't wait for CI.
 
 REPO_ROOT=$(git rev-parse --show-toplevel) || exit 0
 cd "$REPO_ROOT" || exit 0

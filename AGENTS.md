@@ -35,7 +35,7 @@ pytest -v                                 # fast e2e only (matches CI; testpaths
 
 # Format
 ./scripts/format.sh
-./scripts/format.sh --check          # read-only: exit 1 if anything needs formatting (CI lint)
+./scripts/format.sh --check          # read-only: exit 1 if anything needs formatting (used by the pre-commit hook; CI runs the format-check job)
 
 # Engineering-policy gate (env-knob centralization/registration, GUI API boundary, using-namespace)
 python3 scripts/check_policies.py
@@ -74,7 +74,7 @@ Release artifacts land in `build/cmake_install/`. Debug builds stay in `build/cm
   `doc/env-var-policy.md`. User-facing behavior switches must go through CLI/config/API,
   not env vars (env causes silent per-machine drift). Env is fine for dev/experiment knobs
   (centralized + logged on startup) and test/build infra. All `LUMICE_*` env reads live in
-  `src/util/env_knobs.cpp` and are enforced by `scripts/check_policies.py` (CI `lint` job +
+  `src/util/env_knobs.cpp` and are enforced by `scripts/check_policies.py` (CI `policy` job +
   local pre-commit hook, installed via `./scripts/install-hooks.sh`).
 
 ## Testing and Platform Notes

@@ -114,10 +114,11 @@ env 是标准做法，不在治理范围内。
   - getenv 注册——`env_knobs.cpp` 引用的每个 `LUMICE_*` 名字必须出现在本文档，否则 fail；
   - GUI/core API 边界——`src/gui/**` 不得直接 `#include "core/.."`/`"config/.."`；
   - `using namespace` 禁用（src/）。
-- **CI `lint` job**（`.github/workflows/ci.yml`，权威门禁，绕不过）：跑 `check_policies.py`
-  + `scripts/format.sh --check`。
+- **CI `policy` job**（`.github/workflows/ci.yml`，权威门禁，绕不过）：跑 `check_policies.py`。
+  clang-format 由既有的独立 `format-check` job 负责（两者分开，互不耦合）。
 - **本地 pre-commit hook**（`scripts/hooks/pre-commit`，装：`./scripts/install-hooks.sh`）：
-  非交互镜像 CI lint，提交前快速反馈；`git commit --no-verify` 可单次绕过；不动 git-lfs 其他 hook。
+  非交互镜像 CI 的 policy + format 检查（后者用 `scripts/format.sh --check` 对暂存文件），提交前
+  快速反馈；`git commit --no-verify` 可单次绕过；不动 git-lfs 其他 hook。
 - **判断类项**（机械化不了的，如"这个 env 是否改变用户输出"）放 `.github/PULL_REQUEST_TEMPLATE.md`，
   由 reviewer 用正交视角核对，而非作者在 hook 里自答。
 

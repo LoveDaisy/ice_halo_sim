@@ -4,7 +4,8 @@
 #   ./scripts/format.sh           # rewrite files in place (clang-format -i)
 #   ./scripts/format.sh --check   # report files that would change; exit 1 if any
 #
-# --check is the read-only mode used by CI (lint job) and the pre-commit hook.
+# --check is the read-only mode used by the pre-commit hook (CI's format-check
+# job runs clang-format directly; this mode keeps the local hook DRY).
 
 CHECK_MODE=0
 if [ "$1" == "--check" ]; then

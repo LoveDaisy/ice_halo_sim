@@ -2,9 +2,9 @@
 """Deterministic engineering-policy checks for Lumice.
 
 This is the *executable* half of the policy documents under doc/: it verifies the
-code itself, not a human's promise that they followed a rule. Run by the CI lint
-job and by the local pre-commit hook (scripts/hooks/pre-commit). Exit code is 0
-when clean, 1 when any violation is found (each printed as file:line).
+code itself, not a human's promise that they followed a rule. Run by the CI
+`policy` job and by the local pre-commit hook (scripts/hooks/pre-commit). Exit
+code is 0 when clean, 1 when any violation is found (each printed as file:line).
 
 Checks:
   1. env-getenv-centralization — std::getenv("LUMICE_...") may appear ONLY in
