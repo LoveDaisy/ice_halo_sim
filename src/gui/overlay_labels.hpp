@@ -99,6 +99,26 @@ namespace detail {
 void PixelToWorldDirForTesting(float px, float py, float res_x, float res_y, int lens_type, float fov,
                                const float view_matrix[9], float* out_x, float* out_y, float* out_z, bool* out_valid);
 
+// Test-only thin wrapper exposing the anonymous-namespace WorldDirToPixel so
+// unit tests can pin per-lens dispatch (especially the full-sky lens forward
+// projectors added in task-label-placement-impl). Mirror of
+// PixelToWorldDirForTesting.
+//
+// Inputs:
+//   wx, wy, wz         world-space unit direction
+//   res_x, res_y       viewport width / height in pixels
+//   lens_type          LensType enum value (0..10)
+//   fov                horizontal field-of-view in degrees
+//   view_matrix        column-major 3x3 (BuildViewMatrix output); ignored by
+//                      full-sky lens branches.
+//
+// Outputs:
+//   out_px, out_py     pixel offset from viewport center (only set when valid)
+//   out_valid          false if direction is behind camera, outside the
+//                      projection domain, or otherwise unmapped.
+void WorldDirToPixelForTesting(float wx, float wy, float wz, float res_x, float res_y, int lens_type, float fov,
+                               const float view_matrix[9], float* out_px, float* out_py, bool* out_valid);
+
 // Clamp a label's anchor position so the rendered text bounding box stays
 // inside the viewport rect with at least 2 px (`kViewportInsetPx`) margin
 // on each side.

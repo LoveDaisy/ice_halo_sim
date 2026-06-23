@@ -219,14 +219,17 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
   }
 
   // Test E: Front mode + Fisheye Equidistant fov=280° must label the hemisphere boundary.
-  // Regression guard for scrum-gui-polish-v8 patch: the front-half great circle
-  // (dot(world_dir, forward)=0) was previously not sampled, leaving the visible hemisphere edge
-  // without any angle labels (while Upper/Lower horizons had them).
-  // Lens choice: Fisheye Equidistant shows back-facing dirs unfiltered; fov=280° puts the
-  // boundary circle at r_norm = 90°/140° ≈ 0.64 (well inside the disc) AND leaves enough of
-  // the back hemisphere on viewport edges to produce a non-zero Full-mode baseline.
-  // Linear / Fisheye<180° cannot show this boundary (it's at infinity in gnomonic projection,
-  // or outside the unit disc in narrow fisheye).
+  // Regression guard for scrum-gui-polish-v8 patch (and task-label-placement-impl's
+  // curve-centric rewrite): the front-half hemisphere edge must still receive labels
+  // when visible=Front is set.
+  //
+  // Semantics note (task 288.6): Under boundary-centric the old assert was
+  // `n_front > n_full` because `sample_front_great_circle` densely sampled the
+  // hemisphere boundary and emitted MANY labels per crossing. Under curve-centric
+  // the design intent is "1 boundary label / visible arc, no clustering"
+  // (plan §D3 / Step 3), so n_front no longer exceeds n_full — but n_front must
+  // still be > 0, which proves curves crossing the front-hemisphere edge do
+  // produce boundary labels at the entry transition.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "front_fisheye_boundary_labels");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -245,8 +248,8 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
       int n_front = CountGridLabels(labels_front);
       int n_full = CountGridLabels(labels_full);
 
-      IM_CHECK_GT(n_full, 0);        // baseline sanity (viewport-edge grid labels in Full mode)
-      IM_CHECK_GT(n_front, n_full);  // boundary sampler adds labels at the hemisphere edge in Front
+      IM_CHECK_GT(n_full, 0);   // baseline sanity (interior labels in Full mode)
+      IM_CHECK_GT(n_front, 0);  // front mode still emits boundary labels at hemisphere edge
     };
   }
 
@@ -1052,10 +1055,15 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // task-overlay-line-label-toggle: horizon_label is independent from grid. When
-  // grid is the only label source, the existing skip-0° rule should still hold —
-  // no "0°" label emitted. Pin the rule so a future refactor that drops the
-  // grid skip would surface as a duplicate-0° regression.
+  // task-overlay-line-label-toggle: horizon_label is independent from grid.
+  // The grid loop skips altitude=0° (horizon owns it), so when only grid is on
+  // the *latitude* 0° must not appear.
+  //
+  // Semantics note (task 288.6): Under curve-centric, longitude=0° (the prime
+  // meridian) emits a "0°" azimuth label from `process_longitude_curve(0)`.
+  // This is legitimate output. The grid skip-0 rule applies only to altitude,
+  // so the post-rewrite expectation is "at most 1 '0°' label (the longitude
+  // one), never 2+ (which would imply the altitude-0 skip is broken)".
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_toggle", "grid_only_skips_zero_degree");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -1074,7 +1082,124 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
           ++zero_deg_count;
         }
       }
-      IM_CHECK_EQ(zero_deg_count, 0);
+      // Allow at most 1 "0°" label (the longitude=0° prime-meridian label);
+      // the altitude=0° label MUST be skipped (horizon owns that text) — a
+      // bug in the grid g==0 skip would push this to 2 or more.
+      IM_CHECK_LE(zero_deg_count, 1);
+    };
+  }
+
+  // === task 288.6 curve-centric coverage tests (CC-1 .. CC-4) ===
+  // Regression guards for the 4 boundary-centric gaps fixed by the
+  // curve-centric rewrite (explore-288.5 audit). Each test fails if its
+  // corresponding gap is reintroduced.
+
+  // CC-1: globe lens emits longitude labels (was 0 pre-rewrite — only
+  // sample_interior_latitudes wrote globe labels, and it only walked
+  // altitude rings). Curve-centric process_longitude_curve walks each az
+  // value as a curve, producing boundary anchors on the globe's disc edge.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "cc1_globe_has_longitude_labels");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      auto in = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeGlobe,
+                             /*elev*/ 20.0f, /*az*/ 0.0f);
+      in.fov = 60.0f;
+      std::vector<lumice::gui::OverlayLabel> labels;
+      lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, 512.0f, 512.0f, labels);
+      // Pre-rewrite count was ~13 (latitude rings only). Post-rewrite must
+      // include longitude labels — threshold ≥ 20 with margin to absorb
+      // visibility variation across viewport sizes / elevations.
+      IM_CHECK_GE(CountGridLabels(labels), 20);
+    };
+  }
+
+  // CC-2: rectangular lens emits longitude labels (was 0 pre-rewrite — the
+  // top/bottom viewport edges were polar-azimuth-singular, so the old
+  // edge-sampling Crosses guard `abs(az1-az0)<20` rejected every potential
+  // azimuth crossing). Curve-centric walks each az curve directly and emits
+  // at the first visible sample (the curve hits the viewport top/bottom).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "cc2_rectangular_has_longitude_labels");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      auto in = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeRectangular,
+                             /*elev*/ 20.0f, /*az*/ 0.0f);
+      // Pre-rewrite rectangular had ~40 latitude labels (left/right edge
+      // crossings) and 0 longitude. Post-rewrite must include both.
+      std::vector<lumice::gui::OverlayLabel> labels;
+      lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, 800.0f, 400.0f, labels);
+      IM_CHECK_GE(CountGridLabels(labels), 30);
+    };
+  }
+
+  // CC-3: dual fisheye emits labels on BOTH discs (was 0 pre-rewrite — full
+  // sky lens skipped all interior/hemisphere samplers, and viewport edge
+  // sampling never crossed the two discs). Curve-centric requires the
+  // forward projector for dual fisheye (added Step 1) plus per-disc
+  // visibility detection.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "cc3_dual_fisheye_has_labels_on_both_discs");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      auto in = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeDualFisheyeEqualArea,
+                             /*elev*/ 20.0f, /*az*/ 0.0f);
+      in.show_horizon = true;
+      // 512×512 vp: short_res_dual = min(256, 512) = 256, circle_radius = 128.
+      // Left disc center at px=-128, right at px=+128 (in pixel-offset space).
+      // After viewport translation, screen_x mid = vp_x + vp_w/2 = 256, so
+      // labels on the left disc have screen_x roughly in [0, 256) and right
+      // in (256, 512]. Use a generous threshold to avoid flakiness at the
+      // edge between discs.
+      std::vector<lumice::gui::OverlayLabel> labels;
+      lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, 512.0f, 512.0f, labels);
+      IM_CHECK_GT(CountGridLabels(labels), 0);
+
+      bool has_left = false, has_right = false;
+      for (const auto& l : labels) {
+        if (l.group != 0)
+          continue;
+        if (l.screen_x < 192.0f)
+          has_left = true;
+        if (l.screen_x > 320.0f)
+          has_right = true;
+      }
+      IM_CHECK(has_left);
+      IM_CHECK(has_right);
+    };
+  }
+
+  // CC-4: a single altitude curve emits at most a small number of labels
+  // (no edge-grazing clustering). Pre-rewrite, when an altitude curve grazed
+  // a viewport edge (e.g. fisheye fov=120, equator at elev=0), every adjacent
+  // pixel-pair on the top edge crossed the same alt value, producing a
+  // cluster of ~15 identical labels. Curve-centric emits at most 1 per
+  // visible arc, capping at a small handful per curve. Closed altitude=10°
+  // curve typically has 0–2 visible arcs in any single fisheye view.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "cc4_no_label_clustering_per_altitude_line");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      auto in = MakeGridOnly(lumice::gui::kVisibleFull, lumice::gui::kLensTypeFisheyeEquidist,
+                             /*elev*/ 0.0f, /*az*/ 0.0f);
+      in.fov = 120.0f;
+      std::vector<lumice::gui::OverlayLabel> labels;
+      lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, 512.0f, 512.0f, labels);
+
+      // Count labels whose text exactly equals "10°" — these all come from
+      // the alt=10° altitude curve (longitude curves at az=10° have a
+      // different text in this view, but we still allow up to 2 in case
+      // future label-text rules unify formats).
+      int alt10_count = 0;
+      for (const auto& l : labels) {
+        if (l.text == "10\xC2\xB0") {
+          ++alt10_count;
+        }
+      }
+      // Pre-rewrite this could reach ~15 from edge-grazing clusters; allow
+      // up to 4 (latitude=10° curve + longitude=10° curve, each potentially
+      // emitting 1–2 anchors).
+      IM_CHECK_LE(alt10_count, 4);
     };
   }
 }

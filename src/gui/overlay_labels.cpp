@@ -303,40 +303,77 @@ FwdResult WorldDirToPixel(float wx, float wy, float wz, float res_x, float res_y
     float denom = kGlobeCameraD - dz;
     return { dx / denom * focal, dy / denom * focal, true };
   }
-  // Full-sky lens types (dual fisheye 4-6, rectangular 7, dual orthographic 9):
-  // their shader paths skip the view matrix and the entire sphere is always
-  // visible, so sun circles always intersect viewport edges and don't need
-  // interior labels. Returning invalid lets the caller fall back to edge labels.
-  return { 0, 0, false };
-}
-
-// Angle values computed for each edge sample point.
-struct SampleAngles {
-  float altitude;                         // degrees
-  float azimuth;                          // degrees, [-180, 180]
-  float sun_dist;                         // degrees, [0, 180]
-  float wx = 0.0f, wy = 0.0f, wz = 0.0f;  // world direction (unit vector when valid; (0,0,0) when invalid)
-  float screen_x, screen_y;               // ImGui screen coords
-  bool valid;
-};
-
-// Check if value crosses a target between two samples. Returns interpolated crossing position.
-// Uses a small epsilon tolerance to handle floating-point precision loss at fisheye disc edges (r≈1).
-// kEps=0.01 is small enough to avoid false-positive clusters at near-tangent points (where the
-// original kEps=0.1 caused spurious label groups), yet large enough to catch genuine crossings
-// that precision loss at projection boundaries can flip to same-side.
-bool Crosses(float v0, float v1, float target, float* t_out) {
-  float d0 = v0 - target;
-  float d1 = v1 - target;
-  constexpr float kEps = 0.01f;
-  if (d0 * d1 < kEps) {
-    float denom = v1 - v0;
-    if (std::abs(denom) < 1e-6f)
-      return false;
-    *t_out = std::clamp(-d0 / denom, 0.0f, 1.0f);
-    return true;
+  if (lens_type == kLensTypeRectangular) {
+    // Inverse of RectangularInv: lat = asin(-wz), lon = atan2(-wy, -wx).
+    // short_res / scale match RectangularInv (l.114-115) byte-for-byte so
+    // round-trip (pixel→world→pixel) is exact within float error.
+    float short_res = std::min(res_x * 0.5f, res_y);
+    float scale = short_res / kPi;
+    float clamped_neg_z = std::clamp(-dz, -1.0f, 1.0f);
+    float lat = std::asin(clamped_neg_z);
+    // |lat| ≈ π/2 (pole singularity): lon is undefined; reject.
+    if (std::abs(lat) >= kPi * 0.5f - 1e-6f) {
+      return { 0, 0, false };
+    }
+    float lon = std::atan2(-dy, -dx);
+    return { lon * scale, -lat * scale, true };
   }
-  return false;
+  if ((lens_type >= kLensTypeDualFisheyeEqualArea && lens_type <= kLensTypeDualFisheyeStereographic) ||
+      lens_type == kLensTypeDualFisheyeOrthographic) {
+    // Inverse of DualFisheyeInv: wz≤0 → left disc (upper hemisphere),
+    // wz>0 → right disc (lower hemisphere). Phi formulas derived from the
+    // inv branch's (x, y, z) tuple — see comment block below each branch.
+    float short_res = std::min(res_x * 0.5f, res_y);
+    float circle_radius = short_res * 0.5f;
+    int type = (lens_type == kLensTypeDualFisheyeOrthographic) ? 3 : (lens_type - kLensTypeDualFisheyeEqualArea);
+
+    float half_pi = kPi * 0.5f;
+    bool in_left = (dz <= 0.0f);
+    float theta;
+    float phi;
+    if (in_left) {
+      // Inv left: world = {-st*sin(phi), st*cos(phi), -ct} ⇒
+      //   sin(phi) = -wx/sin(theta), cos(phi) = wy/sin(theta).
+      theta = std::acos(std::clamp(-dz, -1.0f, 1.0f));
+      phi = std::atan2(-dx, dy);
+    } else {
+      // Inv right: world = {-st*sin(phi), -st*cos(phi), ct} ⇒
+      //   sin(phi) = -wx/sin(theta), cos(phi) = -wy/sin(theta).
+      theta = std::acos(std::clamp(dz, -1.0f, 1.0f));
+      phi = std::atan2(-dx, -dy);
+    }
+
+    float use_r;
+    if (type == 0) {  // equal area: use_r = sin(theta/2) / sin(π/4)
+      use_r = std::sin(theta * 0.5f) / std::sin(half_pi * 0.5f);
+    } else if (type == 1) {  // equidistant: use_r = theta / (π/2)
+      use_r = theta / half_pi;
+    } else if (type == 2) {            // stereographic: use_r = tan(theta/2) / tan(π/4)
+      use_r = std::tan(theta * 0.5f);  // tan(π/4) = 1
+    } else {                           // orthographic (type==3): use_r = sin(theta)
+      use_r = std::sin(theta);
+    }
+
+    // Domain guard: use_r > 1 means point lies past the disc edge in the
+    // normalised disc space; the inverse's `r > 1.0` check rejects such
+    // pixels, so the forward must do the same.
+    if (use_r > 1.0f) {
+      return { 0, 0, false };
+    }
+
+    // Special case: theta ≈ 0 means on the optical axis (disc center). phi
+    // is degenerate but use_r ≈ 0 collapses lx/ly to 0, so the result is
+    // just the disc center pixel.
+    float lx = use_r * circle_radius * std::cos(phi);
+    float ly = use_r * circle_radius * std::sin(phi);
+    if (in_left) {
+      return { lx - circle_radius, ly, true };
+    } else {
+      return { lx + circle_radius, ly, true };
+    }
+  }
+  // Unknown / unsupported lens types: return invalid.
+  return { 0, 0, false };
 }
 
 ImU32 ColorToImU32(const float c[3], int alpha) {
@@ -346,12 +383,17 @@ ImU32 ColorToImU32(const float c[3], int alpha) {
 constexpr int kGroupGrid = 0;
 constexpr int kGroupSunCircles = 1;
 
-void AddLabel(std::vector<OverlayLabel>& out, float sx0, float sy0, float sx1, float sy1, float t, const char* fmt,
-              float value, ImU32 color, int group = kGroupGrid) {
-  char buf[32];
-  std::snprintf(buf, sizeof(buf), fmt, value);
-  out.push_back({ sx0 + t * (sx1 - sx0), sy0 + t * (sy1 - sy0), std::string(buf), color, false, group });
-}
+// curve-centric sample. Each (alt_deg, az_deg, world_dir) is walked along a
+// level-set curve (altitude=const / azimuth=const / sun_dist=const); after
+// forward projection it is either visible (inside viewport ∩ projection
+// domain ∩ hemisphere filter) or not. The "vis" boolean is the only flag the
+// boundary/interior dispatch needs — boundary mode emits at the entry point
+// of each visible arc, interior mode emits at the first visible sample.
+struct CurveSample {
+  float wx, wy, wz;  // world direction (unit vector when valid)
+  float screen_x, screen_y;
+  bool vis;  // valid ∧ in viewport ∧ is_visible(alt, world)
+};
 
 }  // namespace
 
@@ -361,488 +403,281 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
   if (!input.show_horizon && !input.show_grid && !input.show_sun_circles)
     return;
 
-  // Build view matrix for types 0-3
+  // View matrix for view-transformed lens types (linear / fisheye / globe);
+  // ignored by full-sky lenses (LensIsFullSky → true) which use world-space.
   float view_matrix[9];
   BuildViewMatrix(input.elevation, input.azimuth, input.roll, view_matrix);
 
   // Camera forward in world space. BuildViewMatrix stores -forward in column 2
-  // (preview_renderer.cpp:600,623), column-major out[col*3+row], so forward = -col2.
-  // Used by Front-mode (visible==3) hemisphere check, mirroring shader's
-  // `dot(world_dir, u_view_matrix[2]) > 0.0` discard test (preview_renderer.cpp:336).
+  // (column-major out[col*3+row]), so forward = -col2. Mirrors shader's
+  // `dot(world_dir, u_view_matrix[2]) > 0.0` cull (preview_renderer.cpp).
   const float forward[3] = { -view_matrix[6], -view_matrix[7], -view_matrix[8] };
 
-  // Viewport pixel dimensions (used as u_resolution in shader)
-  float res_x = vp_screen_w;
-  float res_y = vp_screen_h;
+  const float res_x = vp_screen_w;
+  const float res_y = vp_screen_h;
+  const float hw = res_x * 0.5f, hh = res_y * 0.5f;
 
-  int horizon_a = static_cast<int>(input.horizon_alpha * 255);
-  int grid_a = static_cast<int>(input.grid_alpha * 255);
-  int sun_a = static_cast<int>(input.sun_circles_alpha * 255);
-  ImU32 horizon_col = ColorToImU32(input.horizon_color, horizon_a);
-  ImU32 grid_col = ColorToImU32(input.grid_color, grid_a);
-  ImU32 sun_col = ColorToImU32(input.sun_circles_color, sun_a);
+  const int horizon_a = static_cast<int>(input.horizon_alpha * 255);
+  const int grid_a = static_cast<int>(input.grid_alpha * 255);
+  const int sun_a = static_cast<int>(input.sun_circles_alpha * 255);
+  const ImU32 horizon_col = ColorToImU32(input.horizon_color, horizon_a);
+  const ImU32 grid_col = ColorToImU32(input.grid_color, grid_a);
+  const ImU32 sun_col = ColorToImU32(input.sun_circles_color, sun_a);
 
-  // Compute sun direction dot product for angular distance
-  auto dot3 = [](float a0, float a1, float a2, float b0, float b1, float b2) { return a0 * b0 + a1 * b1 + a2 * b2; };
-
-  // Sample along viewport edges and detect crossings.
-  // Edge definition: 4 edges, each parameterized by pixel offset from viewport center.
-  struct Edge {
-    float start_px, start_py;  // pixel offset from center at t=0
-    float end_px, end_py;      // pixel offset from center at t=1
-    float start_sx, start_sy;  // screen coords at t=0
-    float end_sx, end_sy;      // screen coords at t=1
-  };
-
-  // NDC y=+1 (pos.y=+hh) is OpenGL top = ImGui screen top (vp_screen_y).
-  // NDC y=-1 (pos.y=-hh) is OpenGL bottom = ImGui screen bottom (vp_screen_y + vp_screen_h).
-  float hw = res_x * 0.5f, hh = res_y * 0.5f;
-  Edge edges[4] = {
-    { -hw, hh, hw, hh, vp_screen_x, vp_screen_y, vp_screen_x + vp_screen_w, vp_screen_y },  // top
-    { -hw, -hh, hw, -hh, vp_screen_x, vp_screen_y + vp_screen_h, vp_screen_x + vp_screen_w,
-      vp_screen_y + vp_screen_h },                                                            // bottom
-    { -hw, hh, -hw, -hh, vp_screen_x, vp_screen_y, vp_screen_x, vp_screen_y + vp_screen_h },  // left
-    { hw, hh, hw, -hh, vp_screen_x + vp_screen_w, vp_screen_y, vp_screen_x + vp_screen_w,
-      vp_screen_y + vp_screen_h },  // right
-  };
-
-  // Front-hemisphere predicate: world_dir lies in front of camera.
-  // Shader (preview_renderer.cpp:336) uses strict >0 cull because pixel centers don't go
-  // through interpolation. Overlay labels sample along curves, interp_dir blends + renormalizes
-  // directions between adjacent samples — this introduces float noise at the boundary where
-  // the true dot is exactly 0. Strict >= 0 then silently drops valid boundary crossings.
-  // kFrontEps = 0.01 ≈ sin(0.57°), semantically matching Upper/Lower's 0.5° altitude tolerance
-  // (is_visible below uses `alt >= -0.5f`). Single source of truth for both is_visible
-  // (edge-crossing path) and is_visible_front (sun-circle interior path).
+  // kFrontEps semantics mirror the boundary-centric implementation's
+  // dot >= -kFrontEps cull: kFrontEps ≈ sin(0.57°), the float-noise band at
+  // the front-hemisphere boundary that strict >0 cull lets fall through.
   constexpr float kFrontEps = 0.01f;
   auto front_facing = [&](float wx, float wy, float wz) -> bool {
     return forward[0] * wx + forward[1] * wy + forward[2] * wz >= -kFrontEps;
   };
 
-  // Hemisphere visibility check used by edge-crossing label paths.
-  // visible: 0=upper (alt>=0), 1=lower (alt<=0), 2=full. front: independent AND clip.
-  auto is_visible = [&](float alt, float wx, float wy, float wz) -> bool {
-    if (input.visible == 0 && alt < -0.5f)
+  // Hemisphere visibility check: visible=0 Upper / 1 Lower / 2 Full; front is
+  // an independent AND clip. Re-used across all curve walks (Plan §D5).
+  auto is_visible = [&](float alt_deg, float wx, float wy, float wz) -> bool {
+    if (input.visible == 0 && alt_deg < -0.5f)
       return false;
-    if (input.visible == 1 && alt > 0.5f)
+    if (input.visible == 1 && alt_deg > 0.5f)
       return false;
     if (input.front && !front_facing(wx, wy, wz))
       return false;
     return true;
   };
 
-  // Front-only visibility check used by sun-circle interior label placement.
-  // Kept separate from is_visible to avoid injecting a fake altitude into the
-  // Upper/Lower branches — the interior block historically did no is_visible
-  // filtering, so other modes must continue to return true unconditionally.
-  auto is_visible_front = [&](float wx, float wy, float wz) -> bool {
-    if (!input.front)
-      return true;
-    return front_facing(wx, wy, wz);
-  };
+  // Closed-curve azimuth / open-curve altitude sampling densities.
+  // 360 steps over 360° = 1°/step (visually accurate at typical FOV); the
+  // explore probe used 720/360 for measurement only — production stays at
+  // 360/180 per plan §3 取舍 (≈58 curves × ~360 samples × <100 ns =
+  // sub-2 ms / frame, 60 fps safe). Adjust if visual walk-through finds
+  // jaggedness at extreme curvature.
+  constexpr int kCurveAzSteps = 360;
+  constexpr int kCurveAltSteps = 180;
 
-  // Interpolate world direction at crossing parameter t and renormalize.
-  // Linear-interp + normalize is accurate enough at kSampleStep=4px adjacent samples.
-  auto interp_dir = [](const SampleAngles& a, const SampleAngles& b, float t, float& ix, float& iy, float& iz) {
-    ix = a.wx + t * (b.wx - a.wx);
-    iy = a.wy + t * (b.wy - a.wy);
-    iz = a.wz + t * (b.wz - a.wz);
-    float len = std::sqrt(ix * ix + iy * iy + iz * iz);
-    if (len > 1e-6f) {
-      ix /= len;
-      iy /= len;
-      iz /= len;
-    }
-  };
-
-  // Crossing detection helper: given two adjacent valid sample points, detect and add labels.
-  auto detect_crossings = [&](const SampleAngles& prev, const SampleAngles& cur) {
-    float t;
-
-    // Horizon: altitude == 0. Grid skips this latitude (see "skip 0° altitude" below)
-    // so the two paths produce a single non-overlapping "0°" label when both are on.
-    if (input.show_horizon) {
-      if (std::abs(prev.altitude - cur.altitude) < 20.0f && Crosses(prev.altitude, cur.altitude, 0.0f, &t)) {
-        float ix, iy, iz;
-        interp_dir(prev, cur, t, ix, iy, iz);
-        if (is_visible(0.0f, ix, iy, iz)) {
-          AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "%.0f\xC2\xB0", 0.0f, horizon_col);
-        }
-      }
-    }
-
-    // Grid: altitude crosses multiples of input.grid_step
-    if (input.show_grid) {
-      // Pick a label format that keeps 0.5° precision when grid_step < 1°.
-      const char* fmt = (input.grid_step >= 1.0f) ? "%.0f°" : "%.1f°";
-      // std::round avoids edge truncation on non-integer-divisor steps; out-of-range
-      // targets are filtered by the downstream is_visible / Crosses guards.
-      const int g_max_alt = static_cast<int>(std::round(90.0f / input.grid_step));
-      if (std::abs(prev.altitude - cur.altitude) < 20.0f) {
-        for (int g = -g_max_alt; g <= g_max_alt; g++) {
-          if (g == 0)
-            continue;  // skip 0° altitude (horizon) — low value, avoids equator edge clutter
-          float target = g * input.grid_step;
-          if (Crosses(prev.altitude, cur.altitude, target, &t)) {
-            float ix, iy, iz;
-            interp_dir(prev, cur, t, ix, iy, iz);
-            if (is_visible(target, ix, iy, iz)) {
-              AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, fmt, target, grid_col);
-            }
-          }
-        }
-      }
-
-      // Grid: azimuth crosses multiples of input.grid_step (with wrap-around handling)
-      float az0 = prev.azimuth;
-      float az1 = cur.azimuth;
-      float delta_az = az1 - az0;
-      if (delta_az > 180.0f)
-        az1 -= 360.0f;
-      if (delta_az < -180.0f)
-        az1 += 360.0f;
-
-      const int g_max_az = static_cast<int>(std::round(180.0f / input.grid_step));
-      if (std::abs(az1 - az0) < 20.0f) {
-        for (int g = -g_max_az; g <= g_max_az; g++) {
-          float target = g * input.grid_step;
-          if (Crosses(az0, az1, target, &t)) {
-            float alt_at_crossing = prev.altitude + t * (cur.altitude - prev.altitude);
-            float ix, iy, iz;
-            interp_dir(prev, cur, t, ix, iy, iz);
-            if (!is_visible(alt_at_crossing, ix, iy, iz))
-              continue;
-            float label_val = target;
-            if (label_val > 180.0f)
-              label_val -= 360.0f;
-            if (label_val <= -180.0f)
-              label_val += 360.0f;
-            AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, fmt, label_val, grid_col);
-          }
-        }
-      }
-    }
-
-    // Sun circles: angular distance crosses specified angles
-    if (input.show_sun_circles) {
-      for (int ci = 0; ci < input.sun_circle_count; ci++) {
-        float target = input.sun_circle_angles[ci];
-        if (Crosses(prev.sun_dist, cur.sun_dist, target, &t)) {
-          float alt_at_crossing = prev.altitude + t * (cur.altitude - prev.altitude);
-          float ix, iy, iz;
-          interp_dir(prev, cur, t, ix, iy, iz);
-          if (!is_visible(alt_at_crossing, ix, iy, iz))
-            continue;
-          AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "%.0f\xC2\xB0", target, sun_col,
-                   kGroupSunCircles);
-        }
-      }
-    }
-  };
-
-  // Helper: compute SampleAngles from a pixel offset and screen position.
-  auto make_sample = [&](float px, float py, float sx, float sy) -> SampleAngles {
-    InvResult r = PixelToWorldDir(px, py, res_x, res_y, input.lens_type, input.fov, view_matrix);
-    SampleAngles s{};
-    s.screen_x = sx;
-    s.screen_y = sy;
-    s.valid = r.valid;
-    if (r.valid) {
-      s.altitude = std::asin(std::clamp(-r.z, -1.0f, 1.0f)) * kRad2Deg;
-      s.azimuth = std::atan2(-r.y, -r.x) * kRad2Deg;
-      s.sun_dist = std::acos(std::clamp(dot3(r.x, r.y, r.z, input.sun_dir[0], input.sun_dir[1], input.sun_dir[2]),
-                                        -1.0f, 1.0f)) *
-                   kRad2Deg;
-      s.wx = r.x;
-      s.wy = r.y;
-      s.wz = r.z;
-    }
+  // Forward-project a world direction and classify as "visible" = projection
+  // domain ∩ viewport rect ∩ hemisphere predicate. Centralises the projection
+  // + clipping decision so every curve walk shares the same vis judgement.
+  auto sample_world_dir = [&](float alt_deg, float wx, float wy, float wz) -> CurveSample {
+    CurveSample s{};
+    s.wx = wx;
+    s.wy = wy;
+    s.wz = wz;
+    s.vis = false;
+    FwdResult fp = WorldDirToPixel(wx, wy, wz, res_x, res_y, input.lens_type, input.fov, view_matrix);
+    if (!fp.valid)
+      return s;
+    if (std::abs(fp.px) > hw || std::abs(fp.py) > hh)
+      return s;
+    if (!is_visible(alt_deg, wx, wy, wz))
+      return s;
+    s.screen_x = vp_screen_x + (fp.px + hw) / res_x * vp_screen_w;
+    s.screen_y = vp_screen_y + (hh - fp.py) / res_y * vp_screen_h;
+    s.vis = true;
     return s;
   };
 
-  // === overlay-label sample-source dispatch ===
-  // ComputeOverlayLabels combines up to 5 sample sources to produce labels.
-  // Activation rules (kept in one place to make per-(lens, visible) coverage
-  // auditable; see also LensIsFullSky in gui_constants.hpp):
-  //   1. sample_viewport_edges()        : always (every lens, every visible).
-  //   2. sample_hemisphere_equator(±1)  : !full_sky AND visible ∈ {Upper, Lower}.
-  //   3. sample_front_great_circle()    : !full_sky AND visible == Front.
-  //   4. sample_interior_latitudes()    : !full_sky AND lens != Linear; covers
-  //                                        the gap when the projection disc is
-  //                                        smaller than the viewport (e.g.
-  //                                        single-orthographic + fov=180 +
-  //                                        visible=Full) so latitude rings
-  //                                        wholly inside the disc still get a
-  //                                        text label. Per-altitude is_visible
-  //                                        filter handles Upper/Lower/Front
-  //                                        modes uniformly.
-  //   5. sample_sun_circle_interior()   : show_sun_circles AND !full_sky.
-  // LensIsFullSky is the SSOT for "is this a world-space / full-sky lens?"
-  // (dual fisheye 4-6, rectangular 7, dual orthographic 9 → true).
-
-  // Push the boundary curve a few degrees inward (toward the visible side)
-  // before sampling, so labels emitted at boundary crossings don't straddle
-  // the visible/invisible split. 3° is a visual-spacing heuristic — at typical
-  // fov+lens it projects to ~4–12 px of screen offset, which clears the
-  // text height while staying close enough to read as a "boundary label".
-  constexpr int kBoundarySamples = 360;
-  constexpr float kBoundaryInsetDeg = 3.0f;
-  const float boundary_offset = std::sin(kBoundaryInsetDeg * kDeg2Rad);
-
-  // Helper: walk a parametric world-space curve and feed adjacent forward-
-  // projected sample pairs into detect_crossings. Shared by hemisphere-equator
-  // and front-great-circle samplers.
-  auto sample_curve = [&](auto curve_fn) {
-    SampleAngles prev{};
-    prev.valid = false;
-    for (int i = 0; i <= kBoundarySamples; i++) {
-      float t = i * (2.0f * kPi / kBoundarySamples);
-      float wx_b = 0, wy_b = 0, wz_b = 0;
-      curve_fn(t, wx_b, wy_b, wz_b);
-
-      FwdResult fp = WorldDirToPixel(wx_b, wy_b, wz_b, res_x, res_y, input.lens_type, input.fov, view_matrix);
-      if (!fp.valid || std::abs(fp.px) > hw || std::abs(fp.py) > hh) {
-        prev.valid = false;
-        continue;
-      }
-
-      float scr_x = vp_screen_x + (fp.px + hw) / res_x * vp_screen_w;
-      float scr_y = vp_screen_y + (hh - fp.py) / res_y * vp_screen_h;
-
-      SampleAngles cur = make_sample(fp.px, fp.py, scr_x, scr_y);
-      if (prev.valid && cur.valid)
-        detect_crossings(prev, cur);
-      prev = cur;
-    }
-  };
-
-  // Source 1: viewport rectangle edges.
-  auto sample_viewport_edges = [&]() {
-    for (const auto& edge : edges) {
-      float edge_len = std::sqrt((edge.end_px - edge.start_px) * (edge.end_px - edge.start_px) +
-                                 (edge.end_py - edge.start_py) * (edge.end_py - edge.start_py));
-      int num_samples = std::max(2, static_cast<int>(edge_len / kSampleStep));
-
-      SampleAngles prev{};
-      prev.valid = false;
-
-      for (int i = 0; i <= num_samples; i++) {
-        float frac = static_cast<float>(i) / num_samples;
-        float px = edge.start_px + frac * (edge.end_px - edge.start_px);
-        float py = edge.start_py + frac * (edge.end_py - edge.start_py);
-        float sx = edge.start_sx + frac * (edge.end_sx - edge.start_sx);
-        float sy = edge.start_sy + frac * (edge.end_sy - edge.start_sy);
-
-        SampleAngles cur = make_sample(px, py, sx, sy);
-        if (prev.valid && cur.valid)
-          detect_crossings(prev, cur);
-        prev = cur;
+  // Emit one label per curve via curve-centric dispatch (Plan §D3 / Step 3):
+  //   - boundary mode: each invis→vis transition along the sample sequence
+  //     emits 1 label at the entry sample's screen pos (1 label / visible
+  //     arc). vis→invis exits do NOT emit; they only end an arc.
+  //   - interior mode: no transition found AND ≥1 visible sample → 1 label
+  //     at the first visible sample (the canonical anchor — see plan §D4).
+  //   - closed curves include sample[N] == sample[0] so the wrap-around
+  //     transition (e.g. az=359°→360°) is detected naturally; no extra
+  //     bookkeeping needed (plan suggestion #3).
+  auto emit_curve_label = [&](const std::vector<CurveSample>& samples, const char* text, ImU32 color, int group) {
+    int boundary_count = 0;
+    for (size_t i = 1; i < samples.size(); ++i) {
+      const auto& s0 = samples[i - 1];
+      const auto& s1 = samples[i];
+      if (!s0.vis && s1.vis) {
+        out.push_back({ s1.screen_x, s1.screen_y, std::string(text), color, false, group });
+        ++boundary_count;
       }
     }
-  };
-
-  // Source 2: equator (altitude=0). Active under visible=Upper/Lower; the wz
-  // sign chooses which side the inset offset is applied to.
-  // visible=upper → push toward negative z (altitude=asin(-z) becomes positive);
-  // visible=lower → push toward positive z. After offset the world vector
-  // is renormalized so WorldDirToPixel's unit-length assumption holds.
-  // The az_rad = -π + t parameterization preserves label positions across
-  // the v15/v16 refactors that introduced this sampler.
-  auto sample_hemisphere_equator = [&](float wz_sign) {
-    sample_curve([wz_sign, boundary_offset](float t, float& wx, float& wy, float& wz) {
-      float az = -kPi + t;
-      wx = -std::cos(az);
-      wy = -std::sin(az);
-      wz = wz_sign * boundary_offset;
-      float len = std::sqrt(wx * wx + wy * wy + wz * wz);
-      wx /= len;
-      wy /= len;
-      wz /= len;
-    });
-  };
-
-  // Source 3: front-half great circle (dot(world_dir, forward)=0). Active
-  // under visible=Front. In view space this is the xy-plane; map to world via
-  // view_matrix (column-major: col0/col1 are view-space x/y basis vectors in
-  // world coords). Points: world = cos(t)*col0 + sin(t)*col1, then nudged
-  // toward forward (opposite of col2 = -forward) by boundary_offset so the
-  // boundary samples lie strictly inside the front hemisphere.
-  auto sample_front_great_circle = [&]() {
-    sample_curve([&](float t, float& wx, float& wy, float& wz) {
-      float c = std::cos(t);
-      float s = std::sin(t);
-      wx = c * view_matrix[0] + s * view_matrix[3] - boundary_offset * view_matrix[6];
-      wy = c * view_matrix[1] + s * view_matrix[4] - boundary_offset * view_matrix[7];
-      wz = c * view_matrix[2] + s * view_matrix[5] - boundary_offset * view_matrix[8];
-      float len = std::sqrt(wx * wx + wy * wy + wz * wz);
-      wx /= len;
-      wy /= len;
-      wz /= len;
-    });
-  };
-
-  // Source 4 (NEW): place one latitude label per ring whose forward projection
-  // lies inside the projection disc but the disc itself does not intersect any
-  // viewport edge / hemisphere boundary curve. Walks a small altitude grid
-  // (±10°…±80°) and, per altitude, samples 64 azimuths to find the first valid
-  // viewport-in + visible pixel. is_visible() handles Upper/Lower/Front modes
-  // uniformly. Output is grid-group, no background, no per-source dedup
-  // beyond the existing-text check below — bbox overlap suppression in
-  // AppendOverlayToDrawList is the second line of defence at draw time.
-  // Linear lens excluded by caller dispatch (its latitude rings are screen-
-  // space lines already covered by sample_viewport_edges).
-  auto sample_interior_latitudes = [&]() {
-    if (!input.show_grid)
-      return;
-    constexpr int kAzimuthSamples = 64;
-    // Walk altitudes at ±grid_step intervals up to ±80°. Range kept identical to
-    // the previous constexpr table; only the step is FOV-adaptive.
-    const char* fmt = (input.grid_step >= 1.0f) ? "%.0f°" : "%.1f°";
-    const int g_max_int = static_cast<int>(std::round(80.0f / input.grid_step));
-    for (int gi = -g_max_int; gi <= g_max_int; gi++) {
-      if (gi == 0)
-        continue;
-      const float alt_deg = gi * input.grid_step;
-      char buf[32];
-      std::snprintf(buf, sizeof(buf), fmt, alt_deg);
-      bool already_present = false;
-      for (const auto& l : out) {
-        if (l.group == kGroupGrid && l.text == buf) {
-          already_present = true;
+    if (boundary_count == 0) {
+      for (const auto& s : samples) {
+        if (s.vis) {
+          out.push_back({ s.screen_x, s.screen_y, std::string(text), color, false, group });
           break;
         }
       }
-      if (already_present)
-        continue;
+    }
+  };
 
+  // Altitude curve (latitude ring): closed curve sweeping azimuth 0..2π at
+  // fixed altitude. Direction convention matches make_sample's inverse:
+  //   altitude = asin(-z) → z = -sin(alt)
+  //   azimuth  = atan2(-y, -x) → x = -cos(alt)cos(az), y = -cos(alt)sin(az)
+  // Used by horizon (alt=0) and grid latitudes.
+  auto process_altitude_curve = [&](float alt_deg, ImU32 color) {
+    const float alt_rad = alt_deg * kDeg2Rad;
+    const float cos_a = std::cos(alt_rad);
+    const float sin_a = std::sin(alt_rad);
+
+    std::vector<CurveSample> samples;
+    samples.reserve(kCurveAzSteps + 1);
+    for (int i = 0; i <= kCurveAzSteps; ++i) {
+      const float az_rad = 2.0f * kPi * static_cast<float>(i) / kCurveAzSteps;
+      const float wx = -cos_a * std::cos(az_rad);
+      const float wy = -cos_a * std::sin(az_rad);
+      const float wz = -sin_a;
+      samples.push_back(sample_world_dir(alt_deg, wx, wy, wz));
+    }
+
+    const char* fmt = (input.grid_step >= 1.0f) ? "%.0f\xC2\xB0" : "%.1f\xC2\xB0";
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), fmt, alt_deg);
+    emit_curve_label(samples, buf, color, kGroupGrid);
+  };
+
+  // Longitude curve (meridian): open curve sweeping altitude -π/2..+π/2 at
+  // fixed azimuth. az_deg ∈ (-180°, 180°] (we wrap to that range for the
+  // label text).
+  auto process_longitude_curve = [&](float az_deg) {
+    float label_az = az_deg;
+    if (label_az > 180.0f)
+      label_az -= 360.0f;
+    if (label_az <= -180.0f)
+      label_az += 360.0f;
+
+    const float az_rad = az_deg * kDeg2Rad;
+    const float cos_az = std::cos(az_rad);
+    const float sin_az = std::sin(az_rad);
+
+    std::vector<CurveSample> samples;
+    samples.reserve(kCurveAltSteps + 1);
+    for (int i = 0; i <= kCurveAltSteps; ++i) {
+      const float alt_deg = -90.0f + 180.0f * static_cast<float>(i) / kCurveAltSteps;
       const float alt_rad = alt_deg * kDeg2Rad;
       const float cos_a = std::cos(alt_rad);
       const float sin_a = std::sin(alt_rad);
+      const float wx = -cos_a * cos_az;
+      const float wy = -cos_a * sin_az;
+      const float wz = -sin_a;
+      samples.push_back(sample_world_dir(alt_deg, wx, wy, wz));
+    }
 
-      for (int k = 0; k < kAzimuthSamples; k++) {
-        float az = 2.0f * kPi * static_cast<float>(k) / kAzimuthSamples;
-        // Direction matched to make_sample's altitude/azimuth conventions:
-        //   altitude = asin(-z) → z = -sin(alt)
-        //   azimuth  = atan2(-y, -x) → x = -cos(alt)cos(az), y = -cos(alt)sin(az)
-        float wx = -cos_a * std::cos(az);
-        float wy = -cos_a * std::sin(az);
-        float wz = -sin_a;
-        if (!is_visible(alt_deg, wx, wy, wz))
-          continue;
-        FwdResult fp = WorldDirToPixel(wx, wy, wz, res_x, res_y, input.lens_type, input.fov, view_matrix);
-        if (!fp.valid)
-          continue;
-        if (std::abs(fp.px) > hw || std::abs(fp.py) > hh)
-          continue;
+    const char* fmt = (input.grid_step >= 1.0f) ? "%.0f\xC2\xB0" : "%.1f\xC2\xB0";
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), fmt, label_az);
+    emit_curve_label(samples, buf, grid_col, kGroupGrid);
+  };
 
-        float scr_x = vp_screen_x + (fp.px + hw) / res_x * vp_screen_w;
-        float scr_y = vp_screen_y + (hh - fp.py) / res_y * vp_screen_h;
-        out.push_back({ scr_x, scr_y, std::string(buf), grid_col, false, kGroupGrid });
+  // Sun-circle ring at angular distance angle_deg from input.sun_dir.
+  // Closed curve sweeping phi 0..2π around an orthonormal frame at sun_dir.
+  // Boundary mode (curve crosses out of visible region) → 1 label per
+  // visible arc; interior mode (entire ring in view) → 4 labels at 90°
+  // intervals (canonical sun-circle anchors per plan §D4).
+  auto process_sun_circle = [&](float angle_deg) {
+    const float sd_rad = angle_deg * kDeg2Rad;
+    const float cos_sd = std::cos(sd_rad);
+    const float sin_sd = std::sin(sd_rad);
+    const float sx = input.sun_dir[0], sy = input.sun_dir[1], sz = input.sun_dir[2];
+
+    // Orthonormal frame at sun_dir: pick a non-parallel basis, cross, renorm.
+    float ux, uy, uz;
+    if (std::abs(sz) < 0.9f) {
+      ux = sy;
+      uy = -sx;
+      uz = 0.0f;
+    } else {
+      ux = 0.0f;
+      uy = sz;
+      uz = -sy;
+    }
+    const float u_len = std::sqrt(ux * ux + uy * uy + uz * uz);
+    if (u_len < 1e-6f)
+      return;
+    ux /= u_len;
+    uy /= u_len;
+    uz /= u_len;
+    const float vx = sy * uz - sz * uy;
+    const float vy = sz * ux - sx * uz;
+    const float vz = sx * uy - sy * ux;
+
+    auto dir_at = [&](float phi, float& wx, float& wy, float& wz) {
+      const float cp = std::cos(phi), sp = std::sin(phi);
+      wx = cos_sd * sx + sin_sd * (cp * ux + sp * vx);
+      wy = cos_sd * sy + sin_sd * (cp * uy + sp * vy);
+      wz = cos_sd * sz + sin_sd * (cp * uz + sp * vz);
+    };
+
+    // Walk samples to check for vis transitions.
+    std::vector<CurveSample> samples;
+    samples.reserve(kCurveAzSteps + 1);
+    for (int i = 0; i <= kCurveAzSteps; ++i) {
+      const float phi = 2.0f * kPi * static_cast<float>(i) / kCurveAzSteps;
+      float wx, wy, wz;
+      dir_at(phi, wx, wy, wz);
+      const float alt_at = std::asin(std::clamp(-wz, -1.0f, 1.0f)) * kRad2Deg;
+      samples.push_back(sample_world_dir(alt_at, wx, wy, wz));
+    }
+
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.0f\xC2\xB0", angle_deg);
+
+    // Boundary pass: 1 label per visible arc (invis→vis entry).
+    int boundary_count = 0;
+    for (size_t i = 1; i < samples.size(); ++i) {
+      const auto& s0 = samples[i - 1];
+      const auto& s1 = samples[i];
+      if (!s0.vis && s1.vis) {
+        out.push_back({ s1.screen_x, s1.screen_y, std::string(buf), sun_col, true, kGroupSunCircles });
+        ++boundary_count;
+      }
+    }
+    if (boundary_count > 0)
+      return;
+
+    // Interior mode: entire ring visible (no transition AND ≥1 vis sample) →
+    // 4 canonical anchors at phi=0/90/180/270° around the sun direction.
+    bool any_vis = false;
+    for (const auto& s : samples) {
+      if (s.vis) {
+        any_vis = true;
         break;
       }
     }
-  };
-
-  // Source 5: sun-circle interior labels. Active when sun circles are enabled
-  // and the lens is view-transformed (full-sky lenses always have viewport
-  // edges intersect the sun circle).
-  auto sample_sun_circle_interior = [&]() {
-    for (int ci = 0; ci < input.sun_circle_count; ci++) {
-      float angle_deg = input.sun_circle_angles[ci];
-      // Check if this circle already has edge labels
-      bool has_edge_label = false;
-      for (const auto& label : out) {
-        char expected[32];
-        std::snprintf(expected, sizeof(expected), "%.0f\xC2\xB0", angle_deg);
-        if (label.text == expected && label.color == sun_col) {
-          has_edge_label = true;
-          break;
-        }
-      }
-      if (has_edge_label)
+    if (!any_vis)
+      return;
+    for (int li = 0; li < 4; ++li) {
+      const float phi = li * kPi * 0.5f;
+      float wx, wy, wz;
+      dir_at(phi, wx, wy, wz);
+      const float alt_at = std::asin(std::clamp(-wz, -1.0f, 1.0f)) * kRad2Deg;
+      CurveSample s = sample_world_dir(alt_at, wx, wy, wz);
+      if (!s.vis)
         continue;
-
-      // Generate 4 directions on the sun circle at 90° intervals around the sun direction
-      float sun_dist_rad = angle_deg * kDeg2Rad;
-      // Build an orthonormal frame around sun_dir
-      float sx = input.sun_dir[0], sy = input.sun_dir[1], sz = input.sun_dir[2];
-      // Find a vector not parallel to sun_dir
-      float ux, uy, uz;
-      if (std::abs(sz) < 0.9f) {
-        // Cross with (0,0,1)
-        ux = sy;
-        uy = -sx;
-        uz = 0;
-      } else {
-        // Cross with (1,0,0)
-        ux = 0;
-        uy = sz;
-        uz = -sy;
-      }
-      float u_len = std::sqrt(ux * ux + uy * uy + uz * uz);
-      ux /= u_len;
-      uy /= u_len;
-      uz /= u_len;
-      // v = sun_dir × u
-      float vx = sy * uz - sz * uy;
-      float vy = sz * ux - sx * uz;
-      float vz = sx * uy - sy * ux;
-
-      float cos_sd = std::cos(sun_dist_rad);
-      float sin_sd = std::sin(sun_dist_rad);
-
-      constexpr int kNumInteriorLabels = 4;
-      for (int li = 0; li < kNumInteriorLabels; li++) {
-        float phi = li * kPi * 0.5f;  // 0, 90, 180, 270 degrees
-        float cp = std::cos(phi), sp = std::sin(phi);
-        // Point on the sun circle: cos(sd)*sun_dir + sin(sd)*(cos(phi)*u + sin(phi)*v)
-        float wx = cos_sd * sx + sin_sd * (cp * ux + sp * vx);
-        float wy = cos_sd * sy + sin_sd * (cp * uy + sp * vy);
-        float wz = cos_sd * sz + sin_sd * (cp * uz + sp * vz);
-
-        // Front-mode hemisphere cull (no-op for other modes; keeps interior labels unchanged).
-        if (!is_visible_front(wx, wy, wz))
-          continue;
-
-        FwdResult fp = WorldDirToPixel(wx, wy, wz, res_x, res_y, input.lens_type, input.fov, view_matrix);
-        if (!fp.valid)
-          continue;
-
-        // Check if pixel is within viewport bounds (with margin)
-        if (std::abs(fp.px) > hw - 10.0f || std::abs(fp.py) > hh - 10.0f)
-          continue;
-
-        // Convert pixel offset to ImGui screen coordinates
-        // px goes [-hw, hw] → screen_x goes [vp_screen_x, vp_screen_x + vp_screen_w]
-        // py goes [+hh, -hh] → screen_y goes [vp_screen_y, vp_screen_y + vp_screen_h] (y inverted)
-        float scr_x = vp_screen_x + (fp.px + hw) / res_x * vp_screen_w;
-        float scr_y = vp_screen_y + (hh - fp.py) / res_y * vp_screen_h;
-
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "%.0f\xC2\xB0", angle_deg);
-        out.push_back({ scr_x, scr_y, std::string(buf), sun_col, true, kGroupSunCircles });
-      }
+      out.push_back({ s.screen_x, s.screen_y, std::string(buf), sun_col, true, kGroupSunCircles });
     }
   };
 
   // === dispatch ===
-  const bool full_sky = LensIsFullSky(input.lens_type);
-
-  sample_viewport_edges();
-
-  if (!full_sky) {
-    if (input.visible == kVisibleUpper)
-      sample_hemisphere_equator(-1.0f);
-    if (input.visible == kVisibleLower)
-      sample_hemisphere_equator(+1.0f);
-    if (input.front)
-      sample_front_great_circle();
-    if (input.lens_type != kLensTypeLinear)
-      sample_interior_latitudes();
+  // Horizon: standalone altitude=0 curve (separate from grid so grid's
+  // g==0 skip rule below stays consistent with the boundary-centric era).
+  if (input.show_horizon) {
+    process_altitude_curve(0.0f, horizon_col);
   }
 
-  if (input.show_sun_circles && !full_sky) {
-    sample_sun_circle_interior();
+  if (input.show_grid) {
+    const int g_max_alt = static_cast<int>(std::round(80.0f / input.grid_step));
+    for (int g = -g_max_alt; g <= g_max_alt; ++g) {
+      if (g == 0)
+        continue;  // skip 0° altitude — horizon owns it (see show_horizon above)
+      process_altitude_curve(g * input.grid_step, grid_col);
+    }
+    // Longitude curves: az ∈ (-180°, 180°]. Use step indices [-g_max_az+1, g_max_az]
+    // so az=180° appears once (not duplicated with az=-180°).
+    const int g_max_az = static_cast<int>(std::round(180.0f / input.grid_step));
+    for (int g = -g_max_az + 1; g <= g_max_az; ++g) {
+      process_longitude_curve(g * input.grid_step);
+    }
+  }
+
+  if (input.show_sun_circles) {
+    for (int ci = 0; ci < input.sun_circle_count; ++ci) {
+      process_sun_circle(input.sun_circle_angles[ci]);
+    }
   }
 }
 
@@ -913,6 +748,16 @@ void PixelToWorldDirForTesting(float px, float py, float res_x, float res_y, int
     *out_x = r.x;
     *out_y = r.y;
     *out_z = r.z;
+  }
+}
+
+void WorldDirToPixelForTesting(float wx, float wy, float wz, float res_x, float res_y, int lens_type, float fov,
+                               const float view_matrix[9], float* out_px, float* out_py, bool* out_valid) {
+  FwdResult r = WorldDirToPixel(wx, wy, wz, res_x, res_y, lens_type, fov, view_matrix);
+  *out_valid = r.valid;
+  if (r.valid) {
+    *out_px = r.px;
+    *out_py = r.py;
   }
 }
 
