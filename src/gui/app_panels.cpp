@@ -840,6 +840,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     pp.overlay.horizon_alpha = g_state.horizon_alpha;
     pp.overlay.grid_alpha = g_state.grid_alpha;
     pp.overlay.sun_circles_alpha = g_state.sun_circles_alpha;
+    pp.overlay.grid_step = ComputeGridStep(rc.fov);
     // Precompute sun direction in world space (azimuth fixed at 0, only altitude matters)
     constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
     float sa = g_state.sun.altitude * kDeg2Rad;

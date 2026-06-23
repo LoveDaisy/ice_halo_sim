@@ -36,6 +36,10 @@ struct OverlayLabelInput {
   const float* sun_circle_angles;
   float horizon_color[3], grid_color[3], sun_circles_color[3];
   float horizon_alpha, grid_alpha, sun_circles_alpha;
+
+  // Coordinate grid step in degrees. Default 10° keeps existing callers
+  // behaviour unchanged; live preview path overrides via ComputeGridStep(fov).
+  float grid_step = 10.0f;
 };
 
 // Compute labels at viewport edges where overlay lines cross.

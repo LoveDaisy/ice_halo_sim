@@ -45,6 +45,24 @@ int g_programmatic_resize = 0;
 bool g_show_unsaved_popup = false;
 PendingAction g_pending_action = PendingAction::kNone;
 
+float ComputeGridStep(float fov) {
+  // FOV here is full-angle in degrees (matches RenderConfig::fov / ViewProjection::fov).
+  // Aim: ~4–6 grid lines across the visible FOV; round to a "nice" step.
+  if (fov >= 120.0f)
+    return 30.0f;
+  if (fov >= 60.0f)
+    return 20.0f;
+  if (fov >= 30.0f)
+    return 10.0f;
+  if (fov >= 15.0f)
+    return 5.0f;
+  if (fov >= 6.0f)
+    return 2.0f;
+  if (fov >= 2.0f)
+    return 1.0f;
+  return 0.5f;
+}
+
 OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConfig& rc) {
   OverlayLabelInput input{};
   input.lens_type = rc.lens_type;
@@ -80,6 +98,7 @@ OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConf
             std::begin(input.sun_circles_color));
   input.grid_alpha = state.grid_alpha;
   input.sun_circles_alpha = state.sun_circles_alpha;
+  input.grid_step = ComputeGridStep(rc.fov);
   return input;
 }
 

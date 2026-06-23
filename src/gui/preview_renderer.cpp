@@ -58,6 +58,7 @@ uniform vec3 u_sun_circles_color;
 uniform float u_horizon_alpha;
 uniform float u_grid_alpha;
 uniform float u_sun_circles_alpha;
+uniform float u_grid_step;  // degrees; FOV-adaptive, fed from OverlayDecoration::grid_step
 
 // Zenith / Nadir pixel-space ring marker uniforms (task-gui-zenith-nadir-marker).
 // Screen positions are center-origin, y-up, in pixels — same convention as
@@ -318,16 +319,18 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color, vec2 pos_pix) {
   float fw_alt = clamp(fwidth(altitude_deg), 1e-4, 2.0);
   float fw_az = clamp(fwidth(azimuth_deg), 1e-4, 5.0);
 
-  // Coordinate grid (10 degree intervals) — drawn first so other lines overlay on top
+  // Coordinate grid (interval = u_grid_step, FOV-adaptive) — drawn first so
+  // other lines overlay on top
   if (u_show_grid != 0) {
+    float half_step = u_grid_step * 0.5;
     // Altitude grid lines
-    float d_alt = mod(abs(altitude_deg) + 5.0, 10.0) - 5.0;
+    float d_alt = mod(abs(altitude_deg) + half_step, u_grid_step) - half_step;
     float t_alt = 1.0 - smoothstep(0.0, fw_alt * 1.5, abs(d_alt));
 
     // Azimuth grid lines — suppress near poles to avoid fwidth divergence
     float t_az = 0.0;
     if (abs(altitude_deg) < 85.0) {
-      float d_az = mod(azimuth_deg + 185.0, 10.0) - 5.0;  // +185 = +180 offset + 5 centering
+      float d_az = mod(azimuth_deg + 180.0 + half_step, u_grid_step) - half_step;
       t_az = 1.0 - smoothstep(0.0, fw_az * 1.5, abs(d_az));
     }
 
@@ -1075,6 +1078,7 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   glUniform1f(glGetUniformLocation(shader_program_, "u_horizon_alpha"), ov.horizon_alpha);
   glUniform1f(glGetUniformLocation(shader_program_, "u_grid_alpha"), ov.grid_alpha);
   glUniform1f(glGetUniformLocation(shader_program_, "u_sun_circles_alpha"), ov.sun_circles_alpha);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_grid_step"), ov.grid_step);
 
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_zenith_nadir"), ov.show_zenith_nadir ? 1 : 0);
   glUniform2f(glGetUniformLocation(shader_program_, "u_zenith_screen_pos"), ov.zenith_screen_pos[0],

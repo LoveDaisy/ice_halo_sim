@@ -471,25 +471,29 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
       }
     }
 
-    // Grid: altitude crosses multiples of 10
+    // Grid: altitude crosses multiples of input.grid_step
     if (input.show_grid) {
+      // Pick a label format that keeps 0.5° precision when grid_step < 1°.
+      const char* fmt = (input.grid_step >= 1.0f) ? "%.0f°" : "%.1f°";
+      // std::round avoids edge truncation on non-integer-divisor steps; out-of-range
+      // targets are filtered by the downstream is_visible / Crosses guards.
+      const int g_max_alt = static_cast<int>(std::round(90.0f / input.grid_step));
       if (std::abs(prev.altitude - cur.altitude) < 20.0f) {
-        for (int g = -9; g <= 9; g++) {
+        for (int g = -g_max_alt; g <= g_max_alt; g++) {
           if (g == 0)
             continue;  // skip 0° altitude (horizon) — low value, avoids equator edge clutter
-          float target = g * 10.0f;
+          float target = g * input.grid_step;
           if (Crosses(prev.altitude, cur.altitude, target, &t)) {
             float ix, iy, iz;
             interp_dir(prev, cur, t, ix, iy, iz);
             if (is_visible(target, ix, iy, iz)) {
-              AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "%.0f\xC2\xB0", target,
-                       grid_col);
+              AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, fmt, target, grid_col);
             }
           }
         }
       }
 
-      // Grid: azimuth crosses multiples of 10 (with wrap-around handling)
+      // Grid: azimuth crosses multiples of input.grid_step (with wrap-around handling)
       float az0 = prev.azimuth;
       float az1 = cur.azimuth;
       float delta_az = az1 - az0;
@@ -498,9 +502,10 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
       if (delta_az < -180.0f)
         az1 += 360.0f;
 
+      const int g_max_az = static_cast<int>(std::round(180.0f / input.grid_step));
       if (std::abs(az1 - az0) < 20.0f) {
-        for (int g = -18; g <= 18; g++) {
-          float target = g * 10.0f;
+        for (int g = -g_max_az; g <= g_max_az; g++) {
+          float target = g * input.grid_step;
           if (Crosses(az0, az1, target, &t)) {
             float alt_at_crossing = prev.altitude + t * (cur.altitude - prev.altitude);
             float ix, iy, iz;
@@ -512,8 +517,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
               label_val -= 360.0f;
             if (label_val <= -180.0f)
               label_val += 360.0f;
-            AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, "%.0f\xC2\xB0", label_val,
-                     grid_col);
+            AddLabel(out, prev.screen_x, prev.screen_y, cur.screen_x, cur.screen_y, t, fmt, label_val, grid_col);
           }
         }
       }
@@ -691,10 +695,16 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
     if (!input.show_grid)
       return;
     constexpr int kAzimuthSamples = 64;
-    constexpr int kAltitudeSteps[] = { -80, -70, -60, -50, -40, -30, -20, -10, 10, 20, 30, 40, 50, 60, 70, 80 };
-    for (int alt_deg : kAltitudeSteps) {
+    // Walk altitudes at ±grid_step intervals up to ±80°. Range kept identical to
+    // the previous constexpr table; only the step is FOV-adaptive.
+    const char* fmt = (input.grid_step >= 1.0f) ? "%.0f°" : "%.1f°";
+    const int g_max_int = static_cast<int>(std::round(80.0f / input.grid_step));
+    for (int gi = -g_max_int; gi <= g_max_int; gi++) {
+      if (gi == 0)
+        continue;
+      const float alt_deg = gi * input.grid_step;
       char buf[32];
-      std::snprintf(buf, sizeof(buf), "%.0f\xC2\xB0", static_cast<float>(alt_deg));
+      std::snprintf(buf, sizeof(buf), fmt, alt_deg);
       bool already_present = false;
       for (const auto& l : out) {
         if (l.group == kGroupGrid && l.text == buf) {
@@ -705,7 +715,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
       if (already_present)
         continue;
 
-      const float alt_rad = static_cast<float>(alt_deg) * kDeg2Rad;
+      const float alt_rad = alt_deg * kDeg2Rad;
       const float cos_a = std::cos(alt_rad);
       const float sin_a = std::sin(alt_rad);
 
@@ -717,7 +727,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
         float wx = -cos_a * std::cos(az);
         float wy = -cos_a * std::sin(az);
         float wz = -sin_a;
-        if (!is_visible(static_cast<float>(alt_deg), wx, wy, wz))
+        if (!is_visible(alt_deg, wx, wy, wz))
           continue;
         FwdResult fp = WorldDirToPixel(wx, wy, wz, res_x, res_y, input.lens_type, input.fov, view_matrix);
         if (!fp.valid)
