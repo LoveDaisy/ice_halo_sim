@@ -147,6 +147,7 @@ Valuable design/architecture docs live in `doc/` (tracked). Consult the relevant
 
 - **Overview / guides**: `README.md`, `architecture.md`, `developer-guide.md`, `gui-guide.md`, `configuration.md`
 - **Core / rendering architecture**: `accumulator-consumer-architecture.md`, `raypath-rayseg-architecture.md`, `raypath-symmetry.md`, `coordinate-convention.md`, `crystal-orientation-sampling.md`, `ev-pipeline-architecture.md`, `adaptive-brightness.md`, `filter-architecture.md`
+  - `overlay-label-placement.md` — GUI overlay 文字 label 的 **curve-centric 放置设计**（blueprint；explore-288.5 收敛）：现 boundary-centric 5-source 的 4 缺口审计（globe/rectangular 缺经度、dual_fisheye 零 label、边缘成簇）+ curve-centric 统一模型（每曲线 walk→裁剪可见区域→边界/内部两模式）。改 overlay label 放置前先读。
   - `numerical-robustness.md` — geometric numerical-stability conventions (7 rules): avoid absolute-ε anti-pattern, prefer argmax / relative tolerances, double precision for geometry generation, single predicate owner; distilled from task-275–278 + explore-279. Read before adding or modifying any geometric predicate.
 - **C API**: `c_api.md`, `capi-lifecycle-architecture.md`
 - **GPU / Metal route** (read these before touching the GPU path):
