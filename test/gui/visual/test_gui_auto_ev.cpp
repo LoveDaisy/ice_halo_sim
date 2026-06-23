@@ -25,32 +25,29 @@ struct AutoEvScene {
 };
 
 // clang-format off
-// Per-scene PSNR thresholds are mean − 3σ (floored to 0.5 dB), computed via
-// scripts/regen_gui_test_refs.py. Each scene threshold uses min(off, on) so a single
-// number covers both modes. Reference images are pixel-averaged means.
+// Per-scene PSNR thresholds are calibrated against the auto-EV-applied ("_on") reference
+// only — the legacy "_off" (intensity_factor=1.0) mode was dropped (chore-auto-ev-
+// regression-drop-off), since the GUI has no auto-EV toggle and off exercised no unique
+// code path. Reference images are pixel-averaged means.
 //
-// Last regenerated in task-land-global-downsample-metric (2026-05-31) after landing the
-// auto-EV box-sum downsample (f=8, see kEvAutoDownsampleFactor in gui_ev_auto.hpp).
-// Calibration ran at N=10 for the mean-ref (Phase A) via scripts/regen_gui_test_refs.py.
-//
-// NOTE: regen_gui_test_refs.py runs `gui_test --filter auto_ev`, which produces
-// PSNRs ~1 dB higher than the full-suite invocation (-gtj release) because the full
-// suite warms up scheduler/cache state via the other ~240 tests first.  Thresholds
-// below are set from full-suite mean-4σ (5 runs) instead of the script's mean-3σ
-// recommendation, to absorb the bias and a sample-size safety margin.
+// Recalibrated 2026-06-24 (chore-auto-ev-regression-drop-off) from the FULL gui_test suite
+// run ×10 (not the script's filtered `--filter auto_ev`, which reads ~1 dB optimistic because
+// it skips the warm-up of the other ~240 tests — that optimism was the prior flake source).
+// Each threshold = floor((mean − 4σ) · 2) / 2 over the 10 full-suite on-mode PSNRs; all sit
+// below the observed 10-run minimum with margin. (mean / σ / min per scene shown inline.)
 static const AutoEvScene kScenes[] = {
-  {"halo_22",    LUMICE_E2E_CONFIG_DIR "/halo_22.json",                           256, 256, 18.0},  // min(off=18.0, on=18.5)
-  {"multi_scat", LUMICE_E2E_CONFIG_DIR "/multi_scatter.json",                     256, 256, 18.0},  // min(off=18.5, on=19.0) − 0.5 safety
-  {"color",      LUMICE_E2E_CONFIG_DIR "/color.json",                             256, 256, 18.5},  // min(off=20.0, on=19.0) − 0.5 safety
-  {"pyramid",    LUMICE_E2E_CONFIG_DIR "/pyramid.json",                           256, 256, 18.0},  // min(off=18.0, on=19.5)
-  {"cza",        LUMICE_E2E_CONFIG_DIR "/cza.json",                               256, 256, 30.0},  // min(off=30.0, on=33.5)
-  {"parhelion",  LUMICE_E2E_CONFIG_DIR "/parhelion.json",                         256, 256, 18.5},  // min(off=20.0, on=18.5)
-  {"filters",    LUMICE_E2E_CONFIG_DIR "/filters.json",                           256, 256, 18.5},  // min(off=18.5, on=23.5)
-  {"rp46",       LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6.json",              256, 256, 20.0},  // min(off=20.0, on=27.5)
-  {"rp46_nof",   LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6_nofilter.json",     256, 256, 18.5},  // min(off=18.5, on=19.5)
+  {"halo_22",    LUMICE_E2E_CONFIG_DIR "/halo_22.json",                           256, 256, 18.0},  // mean 19.19 σ0.23 min 18.78
+  {"multi_scat", LUMICE_E2E_CONFIG_DIR "/multi_scatter.json",                     256, 256, 18.5},  // mean 19.45 σ0.22 min 18.89
+  {"color",      LUMICE_E2E_CONFIG_DIR "/color.json",                             256, 256, 18.5},  // mean 19.19 σ0.13 min 18.93
+  {"pyramid",    LUMICE_E2E_CONFIG_DIR "/pyramid.json",                           256, 256, 19.0},  // mean 20.25 σ0.24 min 19.93
+  {"cza",        LUMICE_E2E_CONFIG_DIR "/cza.json",                               256, 256, 34.0},  // mean 35.17 σ0.29 min 34.61
+  {"parhelion",  LUMICE_E2E_CONFIG_DIR "/parhelion.json",                         256, 256, 18.5},  // mean 19.10 σ0.12 min 18.94
+  {"filters",    LUMICE_E2E_CONFIG_DIR "/filters.json",                           256, 256, 23.5},  // mean 24.59 σ0.17 min 24.38
+  {"rp46",       LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6.json",              256, 256, 27.5},  // mean 29.30 σ0.36 min 28.69
+  {"rp46_nof",   LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6_nofilter.json",     256, 256, 19.0},  // mean 20.27 σ0.24 min 19.91
   // Overlay regression scene (task-288.7): fisheye EA at elevation=45° with zenith marker +
-  // coordinate grid. Calibrated 2026-06-23 via regen_gui_test_refs.py --scene overlay_ea.
-  {"overlay_ea", LUMICE_E2E_CONFIG_DIR "/halo_22.json",                           256, 256, 19.0,  // min(off=20.5, on=21.0) − 1.5 (full-suite warm-up bias ~1 dB)
+  // coordinate grid.
+  {"overlay_ea", LUMICE_E2E_CONFIG_DIR "/halo_22.json",                           256, 256, 20.5,  // mean 21.09 σ0.13 min 20.89
    true, lumice::gui::kLensTypeFisheyeEqualArea, 180.0f, 45.0f, true, true},
 };
 // clang-format on
@@ -176,60 +173,54 @@ void RegisterAutoEvRegressionTests(ImGuiTestEngine* engine) {
       const float ev = gui::g_state.ev_auto;
       IM_CHECK_GT(si, 0.0f);
 
-      // 9. Build viewports: same projection, differing only in exposure
+      // 9. Build viewport with auto-EV applied — the actual GUI display state.
+      // (The legacy "off" capture at intensity_factor=1.0 was dropped: GUI has no
+      // auto-EV toggle anymore, so off is a degenerate non-default state and exercises
+      // no code path the auto-EV-applied capture doesn't already cover. See
+      // chore-auto-ev-regression-drop-off.)
       // view_proj mirrors app_panels.cpp:742-747 via helper; source mirrors 753-754.
       const auto& rc = gui::g_state.renderer;
-      gui::PreviewViewport vp_off{};
-      vp_off.params.view_proj = gui::BuildPreviewViewProjFromRenderer(rc);
-      vp_off.params.source.max_abs_dz = gui::kDualFisheyeOverlap;
-      vp_off.params.source.r_scale = 1.0f / std::sqrt(1.0f + gui::kDualFisheyeOverlap);
-      vp_off.params.exposure.intensity_factor = 1.0f;
-      vp_off.params.exposure.intensity_scale = 1.0f / si;
-      vp_off.vp_w = scene.render_w;
-      vp_off.vp_h = scene.render_h;
+      gui::PreviewViewport vp{};
+      vp.params.view_proj = gui::BuildPreviewViewProjFromRenderer(rc);
+      vp.params.source.max_abs_dz = gui::kDualFisheyeOverlap;
+      vp.params.source.r_scale = 1.0f / std::sqrt(1.0f + gui::kDualFisheyeOverlap);
+      const float ev_factor = std::pow(2.0f, ev);
+      vp.params.exposure.intensity_factor = ev_factor;
+      vp.params.exposure.intensity_scale = ev_factor / si;
+      vp.vp_w = scene.render_w;
+      vp.vp_h = scene.render_h;
 
       // Overlay regression scenes (e.g. overlay_ea): override view_proj for marker visibility,
       // precompute zenith/nadir screen positions, and enable the requested overlay flags.
       // Mirrors the runtime path in app_panels.cpp:855-869.
       if (scene.enable_overlay) {
-        vp_off.params.view_proj.lens_type = scene.lens_type;
-        vp_off.params.view_proj.fov = scene.fov;
-        vp_off.params.view_proj.elevation = scene.elevation;
+        vp.params.view_proj.lens_type = scene.lens_type;
+        vp.params.view_proj.fov = scene.fov;
+        vp.params.view_proj.elevation = scene.elevation;
         if (scene.overlay_zenith_nadir) {
           constexpr float kZenithWorldDir[3] = { 0.f, 0.f, -1.f };
           constexpr float kNadirWorldDir[3] = { 0.f, 0.f, 1.f };
-          auto zpos = gui::ProjectWorldDirToScreen(vp_off.params.view_proj, kZenithWorldDir, vp_off.vp_w, vp_off.vp_h);
-          auto npos = gui::ProjectWorldDirToScreen(vp_off.params.view_proj, kNadirWorldDir, vp_off.vp_w, vp_off.vp_h);
-          vp_off.params.overlay.show_zenith_nadir = true;
-          vp_off.params.overlay.zenith_screen_pos[0] = zpos[0];
-          vp_off.params.overlay.zenith_screen_pos[1] = zpos[1];
-          vp_off.params.overlay.nadir_screen_pos[0] = npos[0];
-          vp_off.params.overlay.nadir_screen_pos[1] = npos[1];
+          auto zpos = gui::ProjectWorldDirToScreen(vp.params.view_proj, kZenithWorldDir, vp.vp_w, vp.vp_h);
+          auto npos = gui::ProjectWorldDirToScreen(vp.params.view_proj, kNadirWorldDir, vp.vp_w, vp.vp_h);
+          vp.params.overlay.show_zenith_nadir = true;
+          vp.params.overlay.zenith_screen_pos[0] = zpos[0];
+          vp.params.overlay.zenith_screen_pos[1] = zpos[1];
+          vp.params.overlay.nadir_screen_pos[0] = npos[0];
+          vp.params.overlay.nadir_screen_pos[1] = npos[1];
         }
         if (scene.overlay_grid) {
-          vp_off.params.overlay.show_grid = true;
-          vp_off.params.overlay.grid_step = 10.f;
+          vp.params.overlay.show_grid = true;
+          vp.params.overlay.grid_step = 10.f;
         }
       }
 
-      gui::PreviewViewport vp_on = vp_off;
-      const float ev_factor = std::pow(2.0f, ev);
-      vp_on.params.exposure.intensity_factor = ev_factor;
-      vp_on.params.exposure.intensity_scale = ev_factor / si;
-
-      // 10. Export both off and on captures before checking references.
-      // Exports happen first so that both /tmp images are generated even when
-      // references are missing (allowing a single-pass reference generation).
-      const std::string path_off = std::string("/tmp/lumice_auto_ev_") + scene.name + "_off.png";
+      // 10. Export capture, then compare against reference. The "_on" tag/filename is
+      // retained so the existing auto_ev_<scene>_on.jpg references stay valid.
       const std::string path_on = std::string("/tmp/lumice_auto_ev_") + scene.name + "_on.png";
-      const std::string ref_off = std::string(LUMICE_TEST_REF_DIR) + "/auto_ev_" + scene.name + "_off.jpg";
       const std::string ref_on = std::string(LUMICE_TEST_REF_DIR) + "/auto_ev_" + scene.name + "_on.jpg";
-      IM_CHECK(RequestAndWaitExport(ctx, vp_off, path_off));
-      IM_CHECK(RequestAndWaitExport(ctx, vp_on, path_on));
+      IM_CHECK(RequestAndWaitExport(ctx, vp, path_on));
 
-      // 11. Compare against references (deferred until both exports are done)
-      IM_CHECK(CheckAgainstReference("auto_ev", (std::string(scene.name) + "_off").c_str(), path_off, ref_off,
-                                     scene.psnr_threshold));
+      // 11. Compare against reference
       IM_CHECK(CheckAgainstReference("auto_ev", (std::string(scene.name) + "_on").c_str(), path_on, ref_on,
                                      scene.psnr_threshold));
     };
