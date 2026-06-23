@@ -111,6 +111,13 @@ std::uint32_t WlPoolSize(Logger& logger, std::uint32_t default_val, std::uint32_
   }
   long v = std::strtol(env, nullptr, 10);
   if (v <= 0) {
+    // Set but unparseable / non-positive: warn once so a typo'd value is visible
+    // rather than silently behaving like "unset" (consistency with the other
+    // knobs' "non-default value is observable" principle).
+    static std::once_flag invalid_warned;
+    std::call_once(invalid_warned, [&logger, env, default_val]() {
+      ILOG_WARN(logger, "LUMICE_WL_POOL_SIZE='{}' is invalid; using default {}", env, default_val);
+    });
     return default_val;
   }
   std::uint32_t resolved = (v > static_cast<long>(max_val)) ? max_val : static_cast<std::uint32_t>(v);

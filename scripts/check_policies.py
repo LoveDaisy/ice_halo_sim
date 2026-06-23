@@ -58,6 +58,11 @@ def strip_comments(text: str) -> str:
     Respects string and char literals so that `//` or `/*` inside a literal (e.g.
     a "LUMICE_..." env name or a URL) is NOT mistaken for a comment. Newlines are
     kept so line numbers stay accurate.
+
+    Known limitation: C++11 raw string literals (R"delim(...)delim") are not
+    parsed specially — a raw string containing `//`, `/*`, or a getenv("LUMICE_…")
+    fragment could be mis-handled. The codebase currently uses none, so this is a
+    documented gap, not an active false-positive source.
     """
     out = []
     i, n = 0, len(text)
@@ -123,7 +128,9 @@ def code_lines(path: Path):
 
 
 GETENV_LUMICE = re.compile(r'getenv\s*\(\s*"(LUMICE_[A-Z0-9_]+)"')
-GUI_FORBIDDEN_INCLUDE = re.compile(r'#\s*include\s*"(core|config)/')
+# Catches "core/..", <core/..>, and relative "../core/.." forms. The \b before
+# (core|config) keeps it from matching substrings like "score/" or "mycore/".
+GUI_FORBIDDEN_INCLUDE = re.compile(r'#\s*include\s*[<"][^">]*\b(core|config)/')
 USING_NAMESPACE = re.compile(r"\busing\s+namespace\b")
 
 

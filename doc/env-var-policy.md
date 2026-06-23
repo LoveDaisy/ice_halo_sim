@@ -53,6 +53,9 @@ env 是标准做法，不在治理范围内。
 - 主路径：`--backend`（CLI）/ `LUMICE_SetPreferredBackend`（C API）/ GUI checkbox（经 task-281
   `LUMICE_IsBackendAvailable` gate）。env 覆盖于其上，保留是因为 CI/parity 测试依赖它强制 backend，
   删除会破坏测试。
+- 注意：CLI `--backend auto` 与 `--backend cpu` 当前行为相同（都选 CPU 路由），且二者都会被
+  `LUMICE_TRACE_BACKEND` 覆盖——`--backend cpu` 不是"硬钉 CPU 屏蔽 env"。这是有意设计（env 覆盖
+  位于 `CreateBackend` 内部，对所有 preference 一视同仁），非缺陷。
 - 缺口在 **CLI**：CLI 没有一等公民的 `--backend` flag，目前后端选择依赖此 env
   （见 `server.cpp:207` 注释 "CLI / --benchmark"）。这正是需要补的显式路径。
 

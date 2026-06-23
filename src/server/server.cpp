@@ -686,7 +686,10 @@ void ServerImpl::ConsumeData() {
   // indices into rays_, which cannot be sliced without recomputing indices.
   // Commit granularity + its legacy LUMICE_BATCH_RAY_NUM fallback and one-time
   // deprecation WARN are all resolved inside util/env_knobs (the single
-  // registered getenv site; see doc/env-var-policy.md).
+  // registered getenv site; see doc/env-var-policy.md). Re-resolved on each
+  // ConsumeData entry (was a process-once static lambda) — intentional, mirrors
+  // kDispatchCap's "NOT static" choice so a server reconstructed in-process picks
+  // up the current env; env_knobs' once_flags keep the log line single.
   const size_t kCommitCap = env::CommitRayNum(logger_, kDefaultRayNum);
   while (true) {
     CHECK_STOP
