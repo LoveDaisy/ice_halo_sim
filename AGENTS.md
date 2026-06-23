@@ -35,6 +35,11 @@ pytest -v                                 # fast e2e only (matches CI; testpaths
 
 # Format
 ./scripts/format.sh
+./scripts/format.sh --check          # read-only: exit 1 if anything needs formatting (used by the pre-commit hook; CI runs the format-check job)
+
+# Engineering-policy gate (env-knob centralization/registration, GUI API boundary, using-namespace)
+python3 scripts/check_policies.py
+./scripts/install-hooks.sh           # install the non-interactive pre-commit hook (one-time)
 ```
 
 Release artifacts land in `build/cmake_install/`. Debug builds stay in `build/cmake_build/`.
@@ -65,6 +70,12 @@ Release artifacts land in `build/cmake_install/`. Debug builds stay in `build/cm
 - Public API boundary: `src/gui/` code must only access core/config functionality
   through the C API (`src/include/lumice.h`). Direct `#include` of `core/` or `config/`
   headers from `src/gui/` is prohibited.
+- Environment variables: before adding any new `std::getenv`, apply the decision gate in
+  `doc/env-var-policy.md`. User-facing behavior switches must go through CLI/config/API,
+  not env vars (env causes silent per-machine drift). Env is fine for dev/experiment knobs
+  (centralized + logged on startup) and test/build infra. All `LUMICE_*` env reads live in
+  `src/util/env_knobs.cpp` and are enforced by `scripts/check_policies.py` (CI `policy` job +
+  local pre-commit hook, installed via `./scripts/install-hooks.sh`).
 
 ## Testing and Platform Notes
 
@@ -145,6 +156,7 @@ Valuable design/architecture docs live in `doc/` (tracked). Consult the relevant
   - `gpu-single-engine-implementation.md` — **§0 as-built 接手须知**（scrum-267+268 完成：CLI 9.5×/GUI 2.07×/dispatch 32768/concern #2 解/DR-3 波长/R1 occupancy 640 benign）+ §5 设计推理 + §8 DR-3 决策链 + §9 关键发现；接手 GPU 路线先读 §0。
 - **Perf / testing**: `performance-testing.md`, `windows-remote-testing.md`, `xyz-stats-tool.md`
   - `testing-architecture.md` — **authoritative test-organization spec**: verification-purpose primary axis × subsystem tag, seven layers (unit-correctness / golden-analytic / parity-cross-backend / e2e-correctness / performance / gui / regression-sentinel), the "how to add a test" decision tree, cross-cutting rules (perf denominator = legacy CPU; parity metric-masks-bugs battery; reference ownership), and the layer×subsystem physical-layout blueprint. Read before adding or reorganizing any test.
+- **Engineering policy**: `env-var-policy.md` — **环境变量使用策略**: user-facing behavior switches must NOT live only in env vars (they cause silent per-machine drift / undebuggable bugs); use CLI/config/API instead. A-class runtime knobs (`LUMICE_TRACE_BACKEND` + 6 perf knobs, with file:line) vs B-class test/build infra (leave alone); three disposition rules; and the **decision gate to answer before adding any new `getenv`**. Read before introducing a new env knob.
 - Example config: `examples/config_example.json`
 
 ## Knowledge Base & Working Discipline

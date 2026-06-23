@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -24,6 +25,7 @@
 #include "server/server.hpp"
 #include "server/stats.hpp"
 #include "util/cpu_info.hpp"
+#include "util/env_knobs.hpp"
 #include "util/logger.hpp"
 #include "util/queue.hpp"
 
@@ -206,10 +208,10 @@ namespace {
 // GUI reconstructs the server when the Metal checkbox toggles. An env
 // LUMICE_TRACE_BACKEND override (CLI / --benchmark) takes precedence over the
 // preferred_backend argument, mirroring CreateBackend (simulator.cpp).
-bool ResolveMetalRoute(int preferred_backend) {
+bool ResolveMetalRoute(int preferred_backend, Logger& logger) {
 #if defined(__APPLE__)
-  if (const char* raw = std::getenv("LUMICE_TRACE_BACKEND")) {
-    const std::string name = raw;
+  if (std::optional<std::string> override = env::TraceBackendOverride(logger)) {
+    const std::string& name = *override;
     if (name == "metal")
       return true;
     if (name == "cpu_backend" || name == "legacy")
@@ -218,6 +220,7 @@ bool ResolveMetalRoute(int preferred_backend) {
   return preferred_backend == 1;  // 1 == LUMICE_BACKEND_METAL
 #else
   (void)preferred_backend;
+  (void)logger;
   return false;  // Metal unavailable off-Apple → CPU multi-worker route
 #endif
 }
@@ -228,7 +231,7 @@ ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed, int preferred_backend
       data_queue_(std::make_shared<Queue<SimData>>()), status_(ServerStatus::kIdle) {
   preferred_backend_.store(preferred_backend, std::memory_order_release);
   int worker_count;
-  if (ResolveMetalRoute(preferred_backend)) {
+  if (ResolveMetalRoute(preferred_backend, logger_)) {
     worker_count = 1;  // GPU route: single engine (task-268.7)
   } else {
     worker_count = num_workers > 0 ? num_workers : PhysicalCoreCount();
@@ -681,34 +684,13 @@ void ServerImpl::ConsumeData() {
   // scripts keep their commit cadence unchanged. Legacy CPU-path SimData
   // (non-empty rays_) bypass the chunker — the consumer projects via per-ray
   // indices into rays_, which cannot be sliced without recomputing indices.
-  static const size_t kCommitCap = []() -> size_t {
-    if (const char* env = std::getenv("LUMICE_COMMIT_RAY_NUM")) {
-      long b = std::atol(env);
-      if (b > 0) {
-        return static_cast<size_t>(b);
-      }
-    }
-    if (const char* env = std::getenv("LUMICE_BATCH_RAY_NUM")) {
-      long b = std::atol(env);
-      if (b > 0) {
-        return static_cast<size_t>(b);
-      }
-    }
-    return kDefaultRayNum;
-  }();
-  // Emit a one-time deprecation WARN whenever the legacy env name is in use.
-  // Warn unconditionally — even when LUMICE_COMMIT_RAY_NUM is also set — so
-  // users migrating off old scripts always get migration guidance.
-  if (std::getenv("LUMICE_BATCH_RAY_NUM") != nullptr) {
-    static std::once_flag batch_ray_num_warn_once;
-    std::call_once(batch_ray_num_warn_once, [this]() {
-      ILOG_WARN(logger_,
-                "LUMICE_BATCH_RAY_NUM is deprecated; migrate to "
-                "LUMICE_COMMIT_RAY_NUM. LUMICE_COMMIT_RAY_NUM takes precedence "
-                "when both are set; otherwise the legacy value is applied as "
-                "commit granularity.");
-    });
-  }
+  // Commit granularity + its legacy LUMICE_BATCH_RAY_NUM fallback and one-time
+  // deprecation WARN are all resolved inside util/env_knobs (the single
+  // registered getenv site; see doc/env-var-policy.md). Re-resolved on each
+  // ConsumeData entry (was a process-once static lambda) — intentional, mirrors
+  // kDispatchCap's "NOT static" choice so a server reconstructed in-process picks
+  // up the current env; env_knobs' once_flags keep the log line single.
+  const size_t kCommitCap = env::CommitRayNum(logger_, kDefaultRayNum);
   while (true) {
     CHECK_STOP
     auto sim_data = data_queue_->Get();
@@ -869,25 +851,17 @@ void ServerImpl::GenerateScene() {
   // Backward compat: LUMICE_BATCH_RAY_NUM (historical "batch = commit
   // granularity" semantics) is honoured as a fallback for kCommitCap only;
   // dispatch granularity defaults to kDefaultRayNum unless LUMICE_DISPATCH_RAY_NUM
-  // is explicitly set.
-  auto read_env_size = [](const char* name, size_t default_val) -> size_t {
-    if (const char* env = std::getenv(name)) {
-      long b = std::atol(env);
-      if (b > 0) {
-        return static_cast<size_t>(b);
-      }
-    }
-    return default_val;
-  };
+  // is explicitly set. Both env knobs are read through util/env_knobs (the single
+  // registered getenv site; see doc/env-var-policy.md).
   // scrum-268.6: backend-aware dispatch default. Metal single-engine defaults
   // to a large dispatch (kDefaultMetalDispatchRayNum) to saturate the GPU;
   // CPU/legacy keeps the small kDefaultRayNum. An explicit LUMICE_DISPATCH_RAY_NUM
   // always wins. NOT static: a server reconstructed on a GUI backend toggle must
   // re-resolve the default for the new backend (commit↔batch decoupling, 268.4).
-  const size_t kDefaultDispatch = ResolveMetalRoute(preferred_backend_.load(std::memory_order_acquire)) ?
+  const size_t kDefaultDispatch = ResolveMetalRoute(preferred_backend_.load(std::memory_order_acquire), logger_) ?
                                       kDefaultMetalDispatchRayNum :
                                       kDefaultRayNum;
-  const size_t kDispatchCap = read_env_size("LUMICE_DISPATCH_RAY_NUM", kDefaultDispatch);
+  const size_t kDispatchCap = env::DispatchRayNum(logger_, kDefaultDispatch);
   const size_t kBatchCap = kDispatchCap;  // local alias for the loop below
 
   auto ray_num = scene->ray_num_;

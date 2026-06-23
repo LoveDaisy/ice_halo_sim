@@ -47,6 +47,10 @@ void PrintUsage(const char* prog_name) {
             << "  -o <dir>           Output directory for rendered images (default: current directory)\n"
             << "  --format <fmt>     Output image format: jpg or png (default: jpg)\n"
             << "  --quality <1-100>  JPEG quality (default: 95, ignored for PNG)\n"
+            << "  --backend <name>   Trace backend: auto, cpu, or metal (default: auto).\n"
+            << "                     'auto' and 'cpu' both select the CPU route today; 'metal'\n"
+            << "                     falls back to CPU if unavailable. The LUMICE_TRACE_BACKEND\n"
+            << "                     env var, if set, still overrides this (debug/CI only).\n"
             << "  --benchmark        Run dual-mode benchmark (single-worker + multi-worker) and output\n"
             << "                     two [BENCHMARK] JSON lines with per-core and parallel efficiency data\n"
             << "  -v                 Verbose output (trace level logging)\n"
@@ -58,8 +62,23 @@ void PrintUsage(const char* prog_name) {
             << "  " << prog_name << " -f config.json -o /tmp/output\n"
             << "  " << prog_name << " -f config.json --format png\n"
             << "  " << prog_name << " -f config.json --quality 80\n"
+            << "  " << prog_name << " -f config.json --backend metal\n"
             << "  " << prog_name << " -f config.json --benchmark\n"
             << "  " << prog_name << " -f config.json -v\n";
+}
+
+// Maps a --backend argument to a LUMICE_BACKEND_* id. Returns -1 for an
+// unrecognized name. "auto" resolves to the library default (CPU); the env-var
+// LUMICE_TRACE_BACKEND still overrides this at runtime (debug/CI escape hatch,
+// see doc/env-var-policy.md).
+int ParseBackend(std::string_view name) {
+  if (name == "auto" || name == "cpu") {
+    return LUMICE_BACKEND_CPU;
+  }
+  if (name == "metal") {
+    return LUMICE_BACKEND_METAL;
+  }
+  return -1;
 }
 
 std::filesystem::path FormatImagePath(const std::filesystem::path& output_dir, int renderer_id,
@@ -106,9 +125,10 @@ void PrintStats(LUMICE_Server* server) {
 }
 
 void RunBenchmarkPass(const std::string& config_str, int num_workers, const char* mode, int cores,
-                      LUMICE_LogLevel log_level) {
+                      LUMICE_LogLevel log_level, int preferred_backend) {
   LUMICE_ServerConfig server_config{};
   server_config.num_workers = num_workers;
+  server_config.preferred_backend = preferred_backend;
   auto* server = LUMICE_CreateServerEx(&server_config);
   LUMICE_SetLogLevel(server, log_level);
 
@@ -201,6 +221,7 @@ int main(int argc, char** argv) {
   std::string image_format = "jpg";
   int jpeg_quality = kDefaultJpegQuality;
   bool benchmark_mode = false;
+  int preferred_backend = LUMICE_BACKEND_CPU;
   auto log_level = LUMICE_LOG_INFO;
 
   for (int i = 1; i < argc; i++) {
@@ -249,6 +270,18 @@ int main(int argc, char** argv) {
         PrintUsage(argv[0]);
         return 1;
       }
+    } else if (arg == "--backend") {
+      if (++i >= argc) {
+        std::cerr << "Error: --backend requires an argument\n\n";
+        PrintUsage(argv[0]);
+        return 1;
+      }
+      preferred_backend = ParseBackend(argv[i]);
+      if (preferred_backend < 0) {
+        std::cerr << "Error: --backend must be 'auto', 'cpu', or 'metal', got '" << argv[i] << "'\n\n";
+        PrintUsage(argv[0]);
+        return 1;
+      }
     } else if (arg == "--benchmark") {
       benchmark_mode = true;
     } else if (arg == "-v") {
@@ -293,6 +326,14 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  // Requested Metal but the machine can't provide it → fall back to CPU with a
+  // visible notice rather than silently. (The core would fall back anyway; this
+  // just makes the substitution explicit on the CLI.)
+  if (preferred_backend == LUMICE_BACKEND_METAL && !LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL)) {
+    std::cerr << "Warning: --backend metal requested but no Metal device is available; using CPU.\n";
+    preferred_backend = LUMICE_BACKEND_CPU;
+  }
+
   // Benchmark mode: dual-pass (single-worker + multi-worker)
   if (benchmark_mode) {
     std::ifstream config_file(config_filename);
@@ -318,10 +359,10 @@ int main(int argc, char** argv) {
     // Pass 1: reduced rays (label="single")
     auto single_config = config_json;
     single_config["scene"]["ray_num"] = kBenchmarkSingleRays;
-    RunBenchmarkPass(single_config.dump(), 1, "single", cores, log_level);
+    RunBenchmarkPass(single_config.dump(), 1, "single", cores, log_level, preferred_backend);
 
     // Pass 2: original ray count (label="multi"; worker count is still 1)
-    RunBenchmarkPass(config_json.dump(), multi_workers, "multi", cores, log_level);
+    RunBenchmarkPass(config_json.dump(), multi_workers, "multi", cores, log_level, preferred_backend);
 
     return 0;
   }
@@ -331,7 +372,9 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  auto* server = LUMICE_CreateServer();
+  LUMICE_ServerConfig server_config{};
+  server_config.preferred_backend = preferred_backend;
+  auto* server = LUMICE_CreateServerEx(&server_config);
   LUMICE_SetLogLevel(server, log_level);
 
   if (LUMICE_CommitConfigFromFile(server, config_filename.u8string().c_str()) != LUMICE_OK) {

@@ -487,3 +487,15 @@ jobs:
         run: |
           find src test bench -name '*.cpp' -o -name '*.hpp' -o -name '*.h' -o -name '*.cc' -o -name '*.inl' | \
             xargs clang-format --dry-run --Werror 2>&1
+
+  # Engineering-policy gate (separate from format-check above): env-knob
+  # centralization + registration, GUI/core API boundary, no `using namespace`.
+  # Version-independent — the executable half of doc/env-var-policy.md + AGENTS.md.
+  policy:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Policy checks (env knobs / API boundary / using-namespace)
+        run: python3 scripts/check_policies.py

@@ -49,6 +49,7 @@
 #include "core/simulator.hpp"  // PartitionCrystalRayNum
 #include "core/trace_ops.hpp"
 #include "util/color_data.hpp"
+#include "util/env_knobs.hpp"
 #include "util/illuminant.hpp"
 #include "util/logger.hpp"
 
@@ -188,19 +189,10 @@ static_assert(sizeof(WlEntry) == 20u,
 constexpr uint32_t kWlPoolSizeDefault = 64u;
 constexpr uint32_t kWlPoolSizeMax     = 255u;
 
-uint32_t ResolveWlPoolSize() {
-  const char* env = std::getenv("LUMICE_WL_POOL_SIZE");
-  if (env == nullptr || env[0] == '\0') {
-    return kWlPoolSizeDefault;
-  }
-  long v = std::strtol(env, nullptr, 10);
-  if (v <= 0) {
-    return kWlPoolSizeDefault;
-  }
-  if (v > static_cast<long>(kWlPoolSizeMax)) {
-    return kWlPoolSizeMax;
-  }
-  return static_cast<uint32_t>(v);
+uint32_t ResolveWlPoolSize(Logger& logger) {
+  // Reads LUMICE_WL_POOL_SIZE via util/env_knobs (the single registered getenv
+  // site; see doc/env-var-policy.md). Clamp/default semantics unchanged.
+  return env::WlPoolSize(logger, kWlPoolSizeDefault, kWlPoolSizeMax);
 }
 
 // Build the per-(crystal, spectrum) WlEntry table. M >= 1 is the caller's
@@ -350,9 +342,7 @@ id<MTLLibrary> LoadMetalLibrary(id<MTLDevice> device,
   // AC1/AC2 switch: when set, the runtime source compile path is suppressed
   // entirely. The dev machine then behaves like macOS 26.5 in the sense that
   // the source frontend is unreachable — exercising the metallib-only path.
-  const char* disable_env = std::getenv("LUMICE_DISABLE_METAL_SOURCE_COMPILE");
-  bool disable_source = (disable_env != nullptr) && (disable_env[0] != '\0')
-                        && (disable_env[0] != '0');
+  bool disable_source = env::DisableMetalSourceCompile(EffectiveLogger(logger));
   if (disable_source) {
     ILOG_WARN(EffectiveLogger(logger),
               "MetalTraceBackend: LUMICE_DISABLE_METAL_SOURCE_COMPILE=1 — "
@@ -491,8 +481,9 @@ struct MetalTraceBackend::Impl {
     // future test toggled it mid-instance. The ctor capture pairs naturally
     // with the test helpers ForceHostGenForByteIdentity / EnableDeviceGen…,
     // which already setenv BEFORE constructing a fresh MetalTraceBackend.
-    const char* env = std::getenv("LUMICE_DISABLE_DEVICE_GEN");
-    disable_device_gen_ = env != nullptr && env[0] != '\0' && env[0] != '0';
+    // logger_ may still be null here (set by MetalTraceBackend's ctor after the
+    // Impl is built); EffectiveLogger falls back to the global logger.
+    disable_device_gen_ = env::DisableDeviceGen(EffectiveLogger(logger_));
   }
 
   Logger* logger_ = nullptr;
@@ -1066,7 +1057,7 @@ void MetalTraceBackend::Impl::EnsureExitBuffers(size_t cap) {
 // BeginSession.
 void MetalTraceBackend::Impl::EnsureWlPoolBuffer() {
   if (wl_pool_size_ == 0u) {
-    wl_pool_size_ = ResolveWlPoolSize();
+    wl_pool_size_ = ResolveWlPoolSize(EffectiveLogger(logger_));
     assert(wl_pool_size_ > 0u && wl_pool_size_ <= kWlPoolSizeMax &&
            "ResolveWlPoolSize returned out-of-range");
   }
@@ -2614,7 +2605,7 @@ uint32_t MetalTraceBackend::WlPoolSize() const {
   // backend a per-ray (zero-wl) WlParam, so returning 0 pre-session would make
   // it fall back to per-batch wl even on Metal. After BeginSession this equals
   // the allocated size (identical value).
-  return impl_->wl_pool_size_ != 0u ? impl_->wl_pool_size_ : ResolveWlPoolSize();
+  return impl_->wl_pool_size_ != 0u ? impl_->wl_pool_size_ : ResolveWlPoolSize(EffectiveLogger(impl_->logger_));
 }
 
 size_t MetalTraceBackend::TraceLayerKernelMaxThreadsForTest() const {
