@@ -36,6 +36,10 @@
 #include "core/backend/metal_trace_backend.hpp"
 #endif
 
+#if defined(LUMICE_CUDA_ENABLED)
+#include "core/backend/cuda_trace_backend.hpp"
+#endif
+
 namespace lumice {
 
 namespace detail {
@@ -573,6 +577,19 @@ std::unique_ptr<TraceBackend> CreateBackend(BackendKind preferred_backend, Logge
       ILOG_WARN(logger, "LUMICE_TRACE_BACKEND=metal requested on non-Apple platform; falling back to legacy CPU");
       return nullptr;
 #endif
+    } else if (name == "cuda") {
+#if defined(LUMICE_CUDA_ENABLED)
+      if (CudaDeviceAvailable()) {
+        ILOG_INFO(logger, "LUMICE_TRACE_BACKEND=cuda → routing via CudaTraceBackend");
+        return std::make_unique<CudaTraceBackend>(&logger);
+      }
+      ILOG_WARN(logger, "LUMICE_TRACE_BACKEND=cuda requested but no CUDA device available; falling back to legacy CPU");
+      return nullptr;
+#else
+      ILOG_WARN(logger,
+                "LUMICE_TRACE_BACKEND=cuda requested but LUMICE_CUDA_ENABLED not set; falling back to legacy CPU");
+      return nullptr;
+#endif
     } else {
       ILOG_WARN(logger, "Unknown LUMICE_TRACE_BACKEND={}; falling back to preferred backend", name);
     }
@@ -591,10 +608,20 @@ std::unique_ptr<TraceBackend> CreateBackend(BackendKind preferred_backend, Logge
       return nullptr;  // non-Apple: silent no-op (CPU)
 #endif
     case BackendKind::kCuda:
-      // CUDA backend lands in scrum-cuda-backend-mvp subtask 3; until then
-      // selecting CUDA silently falls through to legacy CPU.
-      ILOG_WARN(logger, "preferred_backend=cuda not yet implemented; falling back to legacy CPU");
+#if defined(LUMICE_CUDA_ENABLED)
+      if (CudaDeviceAvailable()) {
+        ILOG_INFO(logger, "preferred_backend=cuda → routing via CudaTraceBackend");
+        return std::make_unique<CudaTraceBackend>(&logger);
+      }
+      ILOG_WARN(logger, "preferred_backend=cuda but no CUDA device available; falling back to legacy CPU");
       return nullptr;
+#else
+      // CUDA backend gated behind LUMICE_CUDA_ENABLED=ON (dev49 docker /
+      // CUDAToolkit hosts only). Mac / Windows builds without the gate take
+      // the legacy CPU fallback.
+      ILOG_WARN(logger, "preferred_backend=cuda but LUMICE_CUDA_ENABLED not set; falling back to legacy CPU");
+      return nullptr;
+#endif
   }
   return nullptr;
 }

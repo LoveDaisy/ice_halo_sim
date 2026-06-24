@@ -1,0 +1,100 @@
+#ifndef CORE_CUDA_TRACE_BACKEND_H_
+#define CORE_CUDA_TRACE_BACKEND_H_
+
+// CUDA backend for the TraceBackend seam (NVIDIA GPUs).
+//
+// This header is pure C++ and does not include any CUDA Runtime headers; all
+// device state lives behind an opaque pimpl in cuda_trace_backend.cu. The seam
+// is validated from a third orthogonal vantage point (CPU unified-memory +
+// Apple unified-memory + NVIDIA discrete-memory PCIe) — see
+// core/backend/trace_backend.hpp design invariant #4.
+//
+// MVP scope (scrum-cuda-backend-mvp subtask 3): single MS, no filter, no prob
+// 分流, host root upload, K=1 crystal orientation, WlPoolSize()=0 (discrete-wl
+// path). multi-MS / device root-gen / WlPool / GUI throughput live in
+// follow-up subtasks.
+//
+// Build gate: header body is compiled only when LUMICE_CUDA_ENABLED is defined
+// (set by CMake when LUMICE_CUDA_ENABLED=ON). Other translation units include
+// this header unconditionally; the empty body keeps Mac/Windows host builds
+// zero-regress.
+
+#if defined(LUMICE_CUDA_ENABLED)
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+#include "core/backend/trace_backend.hpp"
+
+namespace lumice {
+
+class Logger;
+
+// Runtime probe for CUDA device availability. Returns true iff at least one
+// CUDA-capable device is enumerated by the driver (cudaGetDeviceCount > 0). Has
+// no side effects on the cached state besides the one-time probe; safe to call
+// from any thread. Result is cached after the first call (std::call_once), so
+// subsequent calls are a plain memory read. Distinct from
+// CudaTraceBackend::BeginSession which sets the active device and allocates
+// session buffers — that is the heavy-weight path.
+bool CudaDeviceAvailable();
+
+// CudaLayerHandle — opaque per-layer handle. Mirrors MetalLayerHandle: the only
+// host-visible scalar produced per TraceLayer is the continuation count
+// (populated from a 4-byte cudaMemcpy D2H). Continuation ray buffers live in
+// the session-level Impl::cont_* pool when multi-MS lands; MVP returns 0
+// continuation count because Recombine is a stub.
+class CudaLayerHandle : public LayerHandle {
+ public:
+  explicit CudaLayerHandle(size_t continuation_count, LayerStats stats)
+      : continuation_count_(continuation_count), stats_(stats) {}
+  size_t ContinuationCount() const override { return continuation_count_; }
+  LayerStats GetLayerStats() const override { return stats_; }
+
+ private:
+  size_t continuation_count_ = 0;
+  LayerStats stats_{};
+};
+
+// CudaTraceBackend — NVIDIA GPU backend for TraceBackend.
+//
+// MVP constraints:
+//   - Single MS only (no Recombine continuation; final-layer DrainExits is the
+//     only egress).
+//   - No DeviceFilter / prob 分流 — every traced ray is emitted.
+//   - WlPoolSize() == 0 — caller drives per-batch wl through SimData.outgoing_wl_
+//     (discrete-wl path, matches CpuTraceBackend oracle).
+//   - K=1 crystal orientation — BeginSession allocates one rotation matrix
+//     pair (rot_m2c, rot_c2w) and every thread shares it. Matches the CPU
+//     backend's per-batch single-orientation semantics.
+//   - HostRayBatch ingest only — RootRaySource::FromDevice never reaches
+//     TraceLayer.
+class CudaTraceBackend : public TraceBackend {
+ public:
+  explicit CudaTraceBackend(Logger* logger = nullptr);
+  ~CudaTraceBackend() override;
+
+  CudaTraceBackend(const CudaTraceBackend&) = delete;
+  CudaTraceBackend(CudaTraceBackend&&) = delete;
+  CudaTraceBackend& operator=(const CudaTraceBackend&) = delete;
+  CudaTraceBackend& operator=(CudaTraceBackend&&) = delete;
+
+  void BeginSession(const SessionSpec& spec) override;
+  LayerHandlePtr TraceLayer(const RootRaySource& roots) override;
+  RootRaySource Recombine(LayerHandlePtr handle, const RecombineSpec& spec) override;
+  size_t ReadbackExitRays(std::vector<ExitRayRecord>& out) override;
+  size_t DrainExits(std::vector<ExitRayRecord>& out) override;
+  void EndSession() override;
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
+}  // namespace lumice
+
+#endif  // defined(LUMICE_CUDA_ENABLED)
+
+#endif  // CORE_CUDA_TRACE_BACKEND_H_

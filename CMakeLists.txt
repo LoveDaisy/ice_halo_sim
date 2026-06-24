@@ -19,6 +19,11 @@ set(CMAKE_C_STANDARD 11)              # C11...
 
 option(LUMICE_NATIVE_ARCH "Enable -march=native for release builds (GCC/Clang)" ON)
 
+# CUDA backend (off by default; turn on for dev49 docker CUDA 11.6+ environments).
+# scrum-cuda-backend-mvp subtask 3: enables CudaTraceBackend + lumice_trace.cu.
+# Mac/Windows host builds without nvcc must stay zero-regress when this is OFF.
+option(LUMICE_CUDA_ENABLED "Enable CUDA backend (requires nvcc / CUDAToolkit)" OFF)
+
 if(MSVC)
   add_definitions(-DNOMINMAX)
   set(CMAKE_DEBUG_POSTFIX "d")
@@ -294,6 +299,27 @@ if(APPLE)
     DEPENDS "${LUMICE_METAL_BYTES_H}" "${LUMICE_METAL_SRC_H}")
 endif()
 
+# CUDA backend (off by default). scrum-cuda-backend-mvp subtask 3:
+# - nvcc 11.6 (dev49 docker image) is the lowest supported toolchain.
+# - compute_86 PTX with sm_89 JIT (Ada Lovelace, RTX 4060 Ti) — see
+#   scratchpad/explore-cuda-step2-derisk/TOOLCHAIN.md.
+# - Mac/Windows host builds without nvcc keep BUILD_GUI/perf paths intact when
+#   LUMICE_CUDA_ENABLED is OFF (no enable_language(CUDA) at all).
+if(LUMICE_CUDA_ENABLED)
+  enable_language(CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  set(CMAKE_CUDA_STANDARD 17)
+  set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+  if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    # `86-virtual` emits compute_86 PTX only (no SASS); driver JITs to native
+    # sm_89 on Ada. Matches the explore #294 / E2 toolchain probe.
+    set(CMAKE_CUDA_ARCHITECTURES "86-virtual" CACHE STRING "CUDA archs")
+  endif()
+  list(APPEND lumice_core_src
+    "${PROJ_SRC_DIR}/core/backend/cuda_trace_backend.cu")
+  message(STATUS "CUDA backend enabled (arch=${CMAKE_CUDA_ARCHITECTURES})")
+endif()
+
 set(lumice_server_src
   "${PROJ_SRC_DIR}/server/c_api.cpp"
   "${PROJ_SRC_DIR}/server/render.cpp"
@@ -331,6 +357,11 @@ if(APPLE)
   # include path. PRIVATE — these headers are not part of the public API.
   add_dependencies(lumice_obj lumice_metal_shaders)
   target_include_directories(lumice_obj PRIVATE "${LUMICE_METAL_GEN_DIR}")
+endif()
+
+if(LUMICE_CUDA_ENABLED)
+  target_link_libraries(lumice_obj PUBLIC CUDA::cudart)
+  target_compile_definitions(lumice_obj PUBLIC LUMICE_CUDA_ENABLED=1)
 endif()
 
 if(NOT MSVC)
