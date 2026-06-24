@@ -291,11 +291,13 @@ id<MTLLibrary> LoadMetallibFromEmbeddedBytes(id<MTLDevice> device,
   );
   NSError* err = nil;
   id<MTLLibrary> lib = [device newLibraryWithData:data error:&err];
-  // Only surface err on failure. newLibraryWithData leaves err nil on success,
-  // so writing it unconditionally is benign through the outer LoadMetalLibrary
-  // (which clears *out_err to nil on its own success paths) — but it is a
-  // foot-gun if this helper is ever called standalone: it would clobber a
-  // caller's pre-set *out_err on the success path. Keep err scoped to failure.
+  // Contract: *out_err is written iff the load fails. Scoping the write to
+  // lib == nil makes this hold for ANY caller, independent of caller behavior —
+  // newLibraryWithData leaves err nil on success, so an unconditional write
+  // would clobber a standalone caller's pre-set *out_err on the success path.
+  // (The current sole caller, LoadMetalLibrary, also clears *out_err on its own
+  // success paths, so the old unconditional write was benign in practice — but
+  // the contract must not depend on that.)
   if (lib == nil && out_err) { *out_err = err; }
   return lib;
 }
