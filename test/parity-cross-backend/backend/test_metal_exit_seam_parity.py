@@ -232,9 +232,15 @@ _RAW_THRESHOLDS = {
     # measurement 0.9986 ≈ noise floor 0.9988; threshold = 0.97.
     "ms_multi_crystal_filtered":    (0.97, 0.97),
     "parity_ms_prob05_filter":      (0.97, 0.97),
-    # parity_single_ms_filter dropped: legacy returns all-zero buffer after
-    # the prob=0.0→1.0 fix (commit 0d03388); metal/cpu_backend raise PY
-    # exceptions on it. Test is `@pytest.mark.skip`-marked — no threshold.
+    # parity_single_ms_filter repaired (chore-292 A4): the 258.6 review change
+    # prob=0.0→1.0 (commit 0d03388) zero-signalled this SINGLE-layer scene —
+    # prob=1.0 makes every ray continue to a nonexistent next layer (0 exits),
+    # while prob=0.0 = pure single-scatter (all rays exit). Reverted to 0.0,
+    # which is the semantically-correct "single MS" value and distinct from
+    # parity_ms_prob05_filter (prob=0.5). Calibrated 2026-06-24:
+    # metal ds=0.9984 psnr=28.84dB / cpu_backend ds=0.9986 psnr=29.34dB
+    # → threshold = floor(0.9984 × 100) / 100 − 0.02 = 0.97 for both.
+    "parity_single_ms_filter":      (0.97, 0.97),
     #
     # 267.4 matrix extension: complex filter coverage (Step 5 calibrated
     # 2026-06-14):
@@ -379,14 +385,6 @@ def test_parity_single_ms_no_filter():
 # --- Single MS + filter ---------------------------------------------------- #
 
 @pytest.mark.slow
-@pytest.mark.skip(
-    reason="parity_single_ms_filter became zero-signal after the 258.6 "
-           "code-review prob=0.0→1.0 fix (commit 0d03388): single-MS + "
-           "raypath filter [3,5] survival rate collapsed to near-zero rays "
-           "(eff_px=1, snap=0.0 in legacy). Metal/cpu_backend raise "
-           "PY_EXCEPTION (exit_code=2). Config-level issue, out of scope "
-           "for 258.6.2. Skip until the scene is repaired or replaced.",
-)
 def test_parity_single_ms_filter():
     cm, pm, cc, pc = _parity_axes("parity_single_ms_filter")
     print(f"[parity] parity_single_ms_filter: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
