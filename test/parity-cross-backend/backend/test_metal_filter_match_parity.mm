@@ -208,6 +208,13 @@ struct MetalHarness {
       // the unused production kernels add ~50KB of MSL compile work per test
       // start which is dwarfed by the test's own work and avoids a duplicate
       // helper-string source-of-truth.
+      //
+      // Coupling caveat: since the prefix carries the production trace_layer
+      // kernel, a syntax error in lumice_trace.metal surfaces *here* as this
+      // filter-match parity test failing to compile — a non-obvious failure
+      // mode (the real breakage is in production MSL, not the test kernel). A
+      // future option is a Python-side structural extraction of a helper-only
+      // header (still single-source) to decouple the test from the full kernel.
       NSString* src = [NSString stringWithFormat:@"%s\n%s",
                                                   kLumiceCombinedKernelSrc,
                                                   kFilterMatchTestKernelSrc];
