@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782266701765,
+  "lastUpdate": 1782266703954,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -13399,6 +13399,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 93.6,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "de095baa6b90e83b8311844f3afca2f828153e09",
+          "message": "Merge pull request #144 from LoveDaisy/chore/cleanup-deferred-misc-batch\n\nchore: batch-clean 5 deferred misc backlog items (#292)",
+          "timestamp": "2026-06-24T09:59:01+08:00",
+          "tree_id": "2432a8f38c538bfa0e3c7455b05eade491dadf3d",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/de095baa6b90e83b8311844f3afca2f828153e09"
+        },
+        "date": 1782266703459,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 71.3,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 102.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 89.8,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 85.7,
             "unit": "%"
           }
         ]
