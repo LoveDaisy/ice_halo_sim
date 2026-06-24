@@ -217,7 +217,7 @@ bool ResolveMetalRoute(int preferred_backend, Logger& logger) {
     if (name == "cpu_backend" || name == "legacy")
       return false;
   }
-  return preferred_backend == 1;  // 1 == LUMICE_BACKEND_METAL
+  return preferred_backend == Simulator::kPreferMetal;
 #else
   (void)preferred_backend;
   (void)logger;

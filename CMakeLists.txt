@@ -349,6 +349,14 @@ if(NOT MSVC)
     $<$<CONFIG:MinSizeRel>:$<$<CXX_COMPILER_ID:GNU>:--gc-sections>>)
 endif()
 
+# Shared builds: install the dylib next to the CLI (build/cmake_install/lib) so
+# the install tree is self-contained. The CLI's INSTALL_RPATH (@loader_path/lib,
+# see src/CMakeLists.txt) resolves @rpath/liblumice.dylib there. Static builds
+# archive lumice into the CLI, so there is nothing to install here.
+if(BUILD_SHARED_LIBS)
+  install(TARGETS lumice LIBRARY DESTINATION lib)
+endif()
+
 
 # ==================================================================================================
 # Add subdirectory

@@ -42,7 +42,10 @@ SCENE_NAMES = [
     "overlay_ea",
 ]
 
-MODES = ["off", "on"]
+# Only the auto-EV-applied ("on") capture is exported/compared. The legacy "off"
+# (intensity_factor=1.0) mode was dropped in chore-auto-ev-regression-drop-off — the GUI
+# has no auto-EV toggle, so off was a degenerate non-default state with no unique coverage.
+MODES = ["on"]
 STAGING_DIR = "/tmp/gui_refs_build"
 
 # PSNR output pattern from CheckAgainstReference in test_gui_auto_ev.cpp

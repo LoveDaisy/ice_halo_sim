@@ -1,107 +1,58 @@
 {
   "generated_at": "2026-06-23T19:02:46",
   "n_ref_runs": 10,
-  "n_calib_runs": 5,
+  "n_calib_runs": 10,
   "scenes": {
-    "color_off": {
-      "psnr_mean": 20.895,
-      "psnr_std": 0.145,
-      "threshold": 20.0
-    },
-    "color_on": {
-      "psnr_mean": 19.4247,
-      "psnr_std": 0.1277,
-      "threshold": 19.0
-    },
-    "cza_off": {
-      "psnr_mean": 31.5783,
-      "psnr_std": 0.2102,
-      "threshold": 30.5
-    },
-    "cza_on": {
-      "psnr_mean": 35.1047,
-      "psnr_std": 0.4221,
-      "threshold": 33.5
-    },
-    "filters_off": {
-      "psnr_mean": 20.0257,
-      "psnr_std": 0.1968,
-      "threshold": 19.0
-    },
-    "filters_on": {
-      "psnr_mean": 24.85,
-      "psnr_std": 0.1714,
-      "threshold": 24.0
-    },
-    "halo_22_off": {
-      "psnr_mean": 19.518,
-      "psnr_std": 0.1266,
-      "threshold": 19.0
-    },
     "halo_22_on": {
-      "psnr_mean": 20.143,
-      "psnr_std": 0.1606,
-      "threshold": 19.5
-    },
-    "multi_scat_off": {
-      "psnr_mean": 19.2897,
-      "psnr_std": 0.1438,
-      "threshold": 18.5
+      "psnr_mean": 19.187,
+      "psnr_std": 0.2294,
+      "threshold": 18.0
     },
     "multi_scat_on": {
-      "psnr_mean": 19.8543,
-      "psnr_std": 0.1242,
-      "threshold": 19.0
-    },
-    "parhelion_off": {
-      "psnr_mean": 20.806,
-      "psnr_std": 0.145,
-      "threshold": 20.0
-    },
-    "parhelion_on": {
-      "psnr_mean": 19.4134,
-      "psnr_std": 0.146,
+      "psnr_mean": 19.451,
+      "psnr_std": 0.2234,
       "threshold": 18.5
     },
-    "pyramid_off": {
-      "psnr_mean": 18.3767,
-      "psnr_std": 0.198,
-      "threshold": 17.5
+    "color_on": {
+      "psnr_mean": 19.189,
+      "psnr_std": 0.1306,
+      "threshold": 18.5
     },
     "pyramid_on": {
-      "psnr_mean": 20.1859,
-      "psnr_std": 0.2013,
-      "threshold": 19.5
-    },
-    "rp46_nof_off": {
-      "psnr_mean": 19.753,
-      "psnr_std": 0.1416,
+      "psnr_mean": 20.252,
+      "psnr_std": 0.2416,
       "threshold": 19.0
     },
-    "rp46_nof_on": {
-      "psnr_mean": 20.6552,
-      "psnr_std": 0.1407,
-      "threshold": 20.0
+    "cza_on": {
+      "psnr_mean": 35.173,
+      "psnr_std": 0.2892,
+      "threshold": 34.0
     },
-    "rp46_off": {
-      "psnr_mean": 20.6157,
-      "psnr_std": 0.1173,
-      "threshold": 20.0
+    "parhelion_on": {
+      "psnr_mean": 19.098,
+      "psnr_std": 0.122,
+      "threshold": 18.5
+    },
+    "filters_on": {
+      "psnr_mean": 24.594,
+      "psnr_std": 0.1681,
+      "threshold": 23.5
     },
     "rp46_on": {
-      "psnr_mean": 29.5103,
-      "psnr_std": 0.3548,
-      "threshold": 28.0
+      "psnr_mean": 29.302,
+      "psnr_std": 0.3629,
+      "threshold": 27.5
     },
-    "overlay_ea_off": {
-      "psnr_mean": 20.96,
-      "psnr_std": 0.0837,
-      "threshold": 20.5
+    "rp46_nof_on": {
+      "psnr_mean": 20.267,
+      "psnr_std": 0.2415,
+      "threshold": 19.0
     },
     "overlay_ea_on": {
-      "psnr_mean": 21.552,
-      "psnr_std": 0.1258,
-      "threshold": 21.0
+      "psnr_mean": 21.094,
+      "psnr_std": 0.1287,
+      "threshold": 20.5
     }
-  }
+  },
+  "note": "Recalibrated 2026-06-24 chore-auto-ev-regression-drop-off; on-only; full-suite x10 mean-4sigma floor 0.5dB"
 }

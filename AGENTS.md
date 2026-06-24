@@ -102,6 +102,10 @@ Release artifacts land in `build/cmake_install/`. Debug builds stay in `build/cm
 The `auto_ev` reference images are pixel-averaged means of N=10 stochastic renders to suppress
 per-run noise. Per-scene PSNR thresholds are `mean − 3σ` (floored to 0.5 dB precision).
 
+Each scene has a single reference: the auto-EV-applied capture (`auto_ev_<scene>_on.jpg`). The
+legacy `_off` (intensity_factor=1.0) mode was dropped in chore-auto-ev-regression-drop-off — the
+GUI has no auto-EV toggle, so off was a degenerate non-default state exercising no unique code path.
+
 **`--keep-export-png` flag** — When passed to `gui_test`, `CheckAgainstReference` skips
 `std::remove` so the per-run export PNGs at `/tmp/lumice_auto_ev_*.png` are preserved for
 collection by the driver script.
@@ -122,8 +126,7 @@ python scripts/regen_gui_test_refs.py --n 2 --n-calib 2
 ```
 
 After Phase B, copy the `threshold` values from `test/gui/references/_thresholds.json` into
-`kScenes[]` in `test/gui/visual/test_gui_auto_ev.cpp`. Use `min(off_threshold, on_threshold)` per scene
-since both modes share one `psnr_threshold` field.
+`kScenes[]` in `test/gui/visual/test_gui_auto_ev.cpp` (one `<scene>_on` threshold per scene).
 
 ## Logging and Troubleshooting
 

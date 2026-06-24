@@ -553,9 +553,16 @@ TEST_F(V3TestCrystal, PyramidWedgeSweepNoFalseBasal) {
     const float* pn = c.GetPolygonFaceNormal();
     for (size_t p = 0; p < c.PolygonFaceCount(); p++) {
       int fn = static_cast<int>(c.GetFn(static_cast<IdType>(p)));
+      // Primary sentinel is PolygonFaceCount()==12u above: the task-276 fake
+      // flat-top basal shows up as a geometry/face-count defect. The actual
+      // fake basal was numbered fn=13/23 by FillHexFnMap (it collides with the
+      // upper/lower-cone +x faces) — and 13/23 are *legal* pyramid cone faces,
+      // so fn alone cannot distinguish it (no EXPECT on fn 13/23 is possible).
+      // The fn==1||fn==2 check below is only a cheap secondary guard against a
+      // *different*, basal-numbered degeneration (a real pyramid cap never has
+      // fn 1/2). |n_z| ≈ sin(wedge) ≈ 1 at extreme wedge, so n_z can't filter
+      // either; the geometric sentinel is the face count, not the normal.
       EXPECT_FALSE(fn == 1 || fn == 2) << "wedge=" << wedge << " poly " << p << " is a fake basal (fn=" << fn << ")";
-      // pyramid faces at extreme wedge have |n_z| close to 1 (sin(wedge)),
-      // so we can't filter by n_z alone; the Fn check above is the precise sentinel.
       (void)pn;  // silence unused; kept for future per-normal diagnostics.
     }
   }

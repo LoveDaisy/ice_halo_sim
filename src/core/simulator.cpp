@@ -687,6 +687,13 @@ void Simulator::Run() {
     // cache + workspace + ray_alloc_carry are in Run() scope, so the fallback
     // is a direct re-dispatch — no signature plumbing into the helper.
     auto run_with_backend = [&](const WlParam& wl_param) {
+      // Self-guard: every current call site gates on a non-null backend, but this
+      // keeps the lambda safe if a future caller forgets — same effect as the
+      // catch-block fallback (run the legacy CPU path, report "backend not used").
+      if (!backend) {
+        SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation, ray_alloc_carry);
+        return false;
+      }
       try {
         SimulateOneWavelengthWithBackend(*backend, config, (*batch.renders_)[0], wl_param, batch.ray_num_, generation);
         return true;
@@ -716,13 +723,11 @@ void Simulator::Run() {
       if (backend_per_ray_wl) {
         // task-282 fallback samples a host wl (matches the no-backend branch)
         // if the backend drops mid-call; otherwise the per-ray pool drives wl.
-        if (!run_with_backend(WlParam{})) {
-          // run_with_backend already executed the CPU fallback for this
-          // wavelength using a zero-wl WlParam (consistent with the original
-          // pool-driven semantics: no per-batch host wl is sampled when the
-          // backend owns the pool); subsequent batches take the use_backend
-          // == false branch since `backend` is now reset.
-        }
+        // The fallback already ran the CPU path here using a zero-wl WlParam
+        // (consistent with pool-driven semantics: no per-batch host wl when the
+        // backend owns the pool); subsequent batches take the use_backend == false
+        // branch since `backend` is now reset. Nothing more to do on either result.
+        (void)run_with_backend(WlParam{});
       } else {
         float wl = 380.0f + rng_.GetUniform() * 400.0f;  // [380, 780] nm
         float weight = GetIlluminantSpd(*illuminant, wl);

@@ -298,8 +298,13 @@ static inline bool DeviceFilterCheck(device const DeviceFilterDesc& f,
   return (f.action == 0u) ? m : !m;
 }
 
-#include <metal_stdlib>
-using namespace metal;
+// --- Former kKernelSrc literal boundary --------------------------------------
+// Everything below was once a separate MSL string (kKernelSrc) concatenated
+// after the filter-match helper above. They now compile as one translation unit
+// (single .metal → metallib, single newLibraryWithSource fallback), so the
+// redundant `#include <metal_stdlib>` / `using namespace metal;` that headed the
+// old literal were removed — the directives at the top of this file cover it.
+// -----------------------------------------------------------------------------
 
 constant float  kFloatEps  = 1e-5f;
 constant ushort kInvalidId = 0xffffu;
