@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782268468895,
+  "lastUpdate": 1782272731463,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4656,6 +4656,54 @@ window.BENCHMARK_DATA = {
             "value": 326091.6,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2f8eb7bbab1521ea2da2b78755c8afe7e394a804",
+          "message": "Merge pull request #146 from LoveDaisy/chore/release-prep\n\nchore: release prep v4.3.1 (perf-doc baseline + TraceCrystalBatch cleanup)",
+          "timestamp": "2026-06-24T11:39:57+08:00",
+          "tree_id": "3dca5e48d31d31d09f763da6c0d5dcc69e2ac0e7",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/2f8eb7bbab1521ea2da2b78755c8afe7e394a804"
+        },
+        "date": 1782272730858,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 311576.8,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 612812.5,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 463891.9,
+            "unit": "rays/sec",
+            "extra": "CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 369139,
+            "unit": "rays/sec",
+            "extra": "CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz\\nCores: 4"
           }
         ]
       }
