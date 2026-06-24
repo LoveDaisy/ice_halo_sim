@@ -45,7 +45,8 @@ RenderConsumer::RenderConsumer(RenderConfig config)
 
 
 void RenderConsumer::Consume(const SimData& data) {
-  // scrum-258.1: SimData carries a single payload form — outgoing_d_/w_ —
+  // scrum-258.1: SimData carries a single payload form — outgoing_d_/w_
+  // (plus the optional per-ray outgoing_wl_ added in scrum-268.8 (DR-3)) —
   // regardless of whether the simulator ran via the legacy CPU path or a
   // TraceBackend (exit seam). Both converge here and run through the
   // projection pipeline below.

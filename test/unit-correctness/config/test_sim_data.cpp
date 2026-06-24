@@ -944,6 +944,7 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   const uint64_t kSnapGen = self.generation_;
   const size_t kSnapRaysSize = self.rays_.size_;
   RaySeg* snap_rays_ptr = self.rays_.rays_.get();
+  const size_t kSnapOutgoingWSize = self.outgoing_w_.size();
   const size_t kSnapCrystalsSize = self.crystals_.size();
 
   // Use an alias reference to bypass -Wself-move warning.
@@ -954,5 +955,6 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   EXPECT_EQ(self.generation_, kSnapGen);
   EXPECT_EQ(self.rays_.size_, kSnapRaysSize);
   EXPECT_EQ(self.rays_.rays_.get(), snap_rays_ptr);
+  EXPECT_EQ(self.outgoing_w_.size(), kSnapOutgoingWSize);
   EXPECT_EQ(self.crystals_.size(), kSnapCrystalsSize);
 }

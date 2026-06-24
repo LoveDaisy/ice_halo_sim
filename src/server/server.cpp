@@ -766,6 +766,9 @@ void ServerImpl::ConsumeData() {
                 chunk.outgoing_d_.assign(
                     sim_data.outgoing_d_.begin() + static_cast<std::ptrdiff_t>(emitted) * 3,
                     sim_data.outgoing_d_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count) * 3);
+                // Invariant: outgoing_w_ is sliced to exactly chunk_count, so
+                // chunk.outgoing_w_.size() == chunk_count is the consumer's
+                // per-chunk outgoing-ray count (it reads .size(), see render.cpp).
                 chunk.outgoing_w_.assign(
                     sim_data.outgoing_w_.begin() + static_cast<std::ptrdiff_t>(emitted),
                     sim_data.outgoing_w_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count));
