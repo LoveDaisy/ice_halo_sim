@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782268467356,
+  "lastUpdate": 1782268468895,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -13539,6 +13539,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 85.7,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7fb0d1f4478fc0f63a7a5e2c5fbde2d6a7e073d2",
+          "message": "Merge pull request #145 from LoveDaisy/chore/cleanup-metal-compile-review-minors\n\nchore: clean up Metal compile-path review minors (task-282/283 衍生, #293)",
+          "timestamp": "2026-06-24T10:28:16+08:00",
+          "tree_id": "c31eea8c0d7df06b3064a38d766c0960feaa9fde",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/7fb0d1f4478fc0f63a7a5e2c5fbde2d6a7e073d2"
+        },
+        "date": 1782268468568,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 77.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 101.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 85.4,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 96.7,
             "unit": "%"
           }
         ]
