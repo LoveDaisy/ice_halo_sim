@@ -4,19 +4,13 @@
 #include <cmath>
 
 #include "core/math.hpp"
+#include "core/shared/optics_shared.h"
 
 
 namespace lumice {
 
 float GetReflectRatio(float delta, float rr) {
-  float d_sqrt = std::sqrt(delta);
-
-  float Rs = (rr - d_sqrt) / (rr + d_sqrt);  // NOLINT(readability-identifier-naming) Fresnel notation
-  Rs *= Rs;
-  float Rp = (1 - rr * d_sqrt) / (1 + rr * d_sqrt);  // NOLINT(readability-identifier-naming) Fresnel notation
-  Rp *= Rp;
-
-  return (Rs + Rp) / 2;
+  return lm_optics::GetReflectRatio(delta, rr);
 }
 
 // NOLINTNEXTLINE(readability-function-size)
