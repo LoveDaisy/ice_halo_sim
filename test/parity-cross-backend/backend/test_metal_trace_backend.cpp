@@ -12,9 +12,9 @@
 #include <vector>
 
 #include "config/render_config.hpp"
-#include "core/cpu_trace_backend.hpp"
-#include "core/metal_trace_backend.hpp"
-#include "core/trace_backend.hpp"
+#include "core/backend/cpu_trace_backend.hpp"
+#include "core/backend/metal_trace_backend.hpp"
+#include "core/backend/trace_backend.hpp"
 #include "metal_test_helpers.hpp"
 
 namespace lumice {

@@ -1,4 +1,4 @@
-#include "core/cpu_trace_backend.hpp"
+#include "core/backend/cpu_trace_backend.hpp"
 
 #include <algorithm>
 #include <cassert>

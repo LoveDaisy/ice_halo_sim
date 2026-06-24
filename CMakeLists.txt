@@ -204,7 +204,7 @@ set(lumice_config_src
   "${PROJ_SRC_DIR}/config/sim_data.cpp")
 
 set(lumice_core_src
-  "${PROJ_SRC_DIR}/core/cpu_trace_backend.cpp"
+  "${PROJ_SRC_DIR}/core/backend/cpu_trace_backend.cpp"
   "${PROJ_SRC_DIR}/core/crystal.cpp"
   "${PROJ_SRC_DIR}/core/filter_spec.cpp"
   "${PROJ_SRC_DIR}/core/geo3d.cpp"
@@ -226,9 +226,9 @@ if(APPLE)
   list(APPEND lumice_core_src
     "${PROJ_SRC_DIR}/core/device_filter_desc.cpp"
     "${PROJ_SRC_DIR}/core/metal_filter_match_src.mm"
-    "${PROJ_SRC_DIR}/core/metal_trace_backend.mm")
+    "${PROJ_SRC_DIR}/core/backend/metal_trace_backend.mm")
   set_source_files_properties(
-    "${PROJ_SRC_DIR}/core/metal_trace_backend.mm"
+    "${PROJ_SRC_DIR}/core/backend/metal_trace_backend.mm"
     "${PROJ_SRC_DIR}/core/metal_filter_match_src.mm"
     PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 
@@ -327,7 +327,7 @@ endif()
 
 if(NOT MSVC)
   target_compile_options(lumice_obj PRIVATE
-    -Wall -Wextra -fexceptions -frtti)
+    -Wall -Wextra -Werror=switch -fexceptions -frtti)
   target_compile_definitions(lumice_obj PRIVATE __STDC_FORMAT_MACROS SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
   # -fvisibility=hidden: Release/MinSizeRel 下隐藏所有符号，仅导出 lumice.h 中
   # 由 #pragma GCC visibility push(default) 标记的 C API 函数。

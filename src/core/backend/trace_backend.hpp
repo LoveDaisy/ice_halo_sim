@@ -59,7 +59,7 @@ namespace lumice {
 //      by at least one Metal skeleton implementation so the seam does not
 //      ossify around unified-memory assumptions that the CPU backend alone
 //      could not detect (CPU + M2 Metal are both unified-memory — not
-//      orthogonal). See `core/metal_trace_backend.hpp`.
+//      orthogonal). See `core/backend/metal_trace_backend.hpp`.
 //
 //   5) Public C API stability. The backend split is an internal-to-core
 //      refactor. `src/include/lumice.h` is unchanged; `src/gui/` and

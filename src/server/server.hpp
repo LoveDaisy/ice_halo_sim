@@ -10,6 +10,7 @@
 #include <variant>
 #include <vector>
 
+#include "core/backend/backend_kind.hpp"
 #include "util/logger.hpp"
 
 
@@ -185,12 +186,12 @@ class Server {
    *        Ignored on the GPU/Metal route, which is always a single engine
    *        (task-268.7). The route is fixed at construction (see preferred_backend).
    * @param sim_seed Deterministic RNG seed. 0 = random; non-zero clamps CPU route to 1 worker.
-   * @param preferred_backend LUMICE_BACKEND_CPU (0, multi-worker) or LUMICE_BACKEND_METAL
-   *        (1, single engine). An env LUMICE_TRACE_BACKEND override takes precedence.
-   *        The GUI reconstructs the server when the Metal checkbox toggles.
+   * @param preferred_backend BackendKind::kCpu (multi-worker), kMetal (single engine)
+   *        or kCuda (future). An env LUMICE_TRACE_BACKEND override takes precedence.
+   *        The GUI reconstructs the server when the backend selection changes.
    * @note The server starts running immediately after construction
    */
-  explicit Server(int num_workers, uint32_t sim_seed = 0, int preferred_backend = 0);
+  explicit Server(int num_workers, uint32_t sim_seed = 0, BackendKind preferred_backend = BackendKind::kCpu);
 
   /**
    * @brief Commit configuration from string
@@ -283,7 +284,7 @@ class Server {
    * @note Takes effect on the next Simulator::Run() entry (after CommitConfig
    *       restart). env-var LUMICE_TRACE_BACKEND, when set, overrides this.
    */
-  void SetPreferredBackend(int backend);
+  void SetPreferredBackend(BackendKind backend);
 
   /**
    * @brief Get server status

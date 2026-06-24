@@ -6,7 +6,7 @@
 // This header is intentionally pure C++ and does NOT depend on Metal/Metal.h:
 // the Objective-C++ implementation (`metal_trace_backend.mm`) hides all Metal
 // types behind an opaque pimpl. The seam validates the contract from a second,
-// orthogonal vantage point (see core/trace_backend.hpp design invariant #4) —
+// orthogonal vantage point (see core/backend/trace_backend.hpp design invariant #4) —
 // recorder runs backend-local, continuation rays stay device-resident across
 // the layer boundary, and only a 4-byte counter readback crosses host/device
 // mid-session.
@@ -17,7 +17,7 @@
 #include <memory>
 #include <vector>
 
-#include "core/trace_backend.hpp"
+#include "core/backend/trace_backend.hpp"
 
 namespace lumice {
 

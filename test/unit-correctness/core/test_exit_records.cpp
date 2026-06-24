@@ -30,12 +30,12 @@
 #include "config/light_config.hpp"
 #include "config/proj_config.hpp"
 #include "config/render_config.hpp"
-#include "core/cpu_trace_backend.hpp"
+#include "core/backend/cpu_trace_backend.hpp"
+#include "core/backend/trace_backend.hpp"
 #include "core/exit_seam.hpp"
-#include "core/trace_backend.hpp"
 
 #if defined(__APPLE__)
-#include "core/metal_trace_backend.hpp"
+#include "core/backend/metal_trace_backend.hpp"
 #include "metal_test_helpers.hpp"
 #endif
 

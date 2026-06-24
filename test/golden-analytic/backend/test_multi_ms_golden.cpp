@@ -25,11 +25,11 @@
 #include <cmath>
 #include <vector>
 
+#include "core/backend/metal_trace_backend.hpp"
+#include "core/backend/trace_backend.hpp"
 #include "core/crystal.hpp"
 #include "core/def.hpp"
 #include "core/math.hpp"
-#include "core/metal_trace_backend.hpp"
-#include "core/trace_backend.hpp"
 #include "core/trace_ops.hpp"
 #include "metal_test_helpers.hpp"
 

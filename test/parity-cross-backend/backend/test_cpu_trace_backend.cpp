@@ -11,11 +11,11 @@
 #include "config/light_config.hpp"
 #include "config/proj_config.hpp"
 #include "config/render_config.hpp"
+#include "core/backend/cpu_trace_backend.hpp"
+#include "core/backend/trace_backend.hpp"
 #include "core/color_util.hpp"
-#include "core/cpu_trace_backend.hpp"
 #include "core/lens_proj.hpp"
 #include "core/scatter_accum.hpp"
-#include "core/trace_backend.hpp"
 
 namespace lumice {
 namespace {

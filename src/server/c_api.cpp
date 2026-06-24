@@ -14,7 +14,7 @@
 #include "core/crystal.hpp"
 #include "core/geo3d.hpp"
 #if defined(__APPLE__)
-#include "core/metal_trace_backend.hpp"
+#include "core/backend/metal_trace_backend.hpp"
 #endif
 #include "include/lumice.h"
 #include "server/server.hpp"
@@ -73,7 +73,11 @@ LUMICE_Server* LUMICE_CreateServerEx(const LUMICE_ServerConfig* config) {
   auto* s = new LUMICE_Server;
   int num_workers = (config != nullptr) ? config->num_workers : 0;
   uint32_t sim_seed = (config != nullptr) ? config->sim_seed : 0;
-  int preferred_backend = (config != nullptr) ? config->preferred_backend : 0;
+  // C-API boundary: the public ABI stays `int`; internally we use the
+  // type-safe BackendKind enum. This static_cast is the single conversion
+  // point — other internal code must never cast int↔BackendKind.
+  int raw_backend = (config != nullptr) ? config->preferred_backend : 0;
+  auto preferred_backend = static_cast<ns::BackendKind>(raw_backend);
   s->server_ = std::make_unique<ns::Server>(num_workers, sim_seed, preferred_backend);
   return s;
 }
@@ -837,28 +841,41 @@ void LUMICE_SetPreferredBackend(LUMICE_Server* server, int backend) {
   if (!server) {
     return;
   }
-  server->server_->SetPreferredBackend(backend);
+  // C-API boundary cast: the public ABI keeps int; everything inside uses
+  // BackendKind. Unknown int values map to a kCuda-or-beyond value that
+  // CreateBackend / ResolveMetalRoute handle as "fall back to CPU".
+  server->server_->SetPreferredBackend(static_cast<ns::BackendKind>(backend));
 }
 
 
 int LUMICE_IsBackendAvailable(int backend) {
   try {
-    if (backend == LUMICE_BACKEND_CPU) {
-      return 1;
-    }
+    // -Wswitch: exhaustive over BackendKind, no `default:`. Adding a new
+    // BackendKind value forces this site to add an explicit case (compile-time
+    // gate against silently returning 0 for a freshly-added backend).
+    auto kind = static_cast<ns::BackendKind>(backend);
+    switch (kind) {
+      case ns::BackendKind::kCpu:
+        return 1;
+      case ns::BackendKind::kMetal:
 #if defined(__APPLE__)
-    if (backend == LUMICE_BACKEND_METAL) {
-      // task-282: deepen the gate from device-presence to trial-compile +
-      // entry-point lookup. MetalDeviceAvailable returned true on macOS 26.5 /
-      // M1 Max where MSL compilation succeeded but newFunctionWithName
-      // ("trace_layer_kernel") returned nil, letting the GUI "Use Metal GPU"
-      // checkbox light up and BeginSession abort on a Metal-framework nil-
-      // computeFunction assertion. MetalPipelineAvailable runs the same
-      // source + options EnsurePso uses and verifies all three kernel entry
-      // points resolve.
-      return lumice::MetalPipelineAvailable() ? 1 : 0;
-    }
+        // task-282: deepen the gate from device-presence to trial-compile +
+        // entry-point lookup. MetalDeviceAvailable returned true on macOS 26.5 /
+        // M1 Max where MSL compilation succeeded but newFunctionWithName
+        // ("trace_layer_kernel") returned nil, letting the GUI "Use Metal GPU"
+        // checkbox light up and BeginSession abort on a Metal-framework nil-
+        // computeFunction assertion. MetalPipelineAvailable runs the same
+        // source + options EnsurePso uses and verifies all three kernel entry
+        // points resolve.
+        return lumice::MetalPipelineAvailable() ? 1 : 0;
+#else
+        return 0;
 #endif
+      case ns::BackendKind::kCuda:
+        // CUDA backend lands in scrum-cuda-backend-mvp subtask 3; not yet
+        // runtime-available on any host.
+        return 0;
+    }
     return 0;
   } catch (...) {
     return 0;

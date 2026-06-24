@@ -9,10 +9,11 @@
 #include "config/proj_config.hpp"
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
+#include "core/backend/backend_kind.hpp"
+#include "core/backend/trace_backend.hpp"
 #include "core/crystal.hpp"
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
-#include "core/trace_backend.hpp"
 #include "util/logger.hpp"
 
 namespace lumice {
@@ -55,12 +56,6 @@ class Simulator {
   Simulator& operator=(const Simulator& other) = delete;
   Simulator& operator=(Simulator&& other) noexcept;
 
-  // Preferred backend identifiers. MUST stay aligned with the public
-  // LUMICE_BACKEND_* constants in src/include/lumice.h — core does NOT
-  // include the public header to keep the core ← server ← c_api layering.
-  static constexpr int kPreferCpu = 0;
-  static constexpr int kPreferMetal = 1;
-
   void Run();
   void Stop();
   bool IsIdle() const;
@@ -68,7 +63,7 @@ class Simulator {
   // Set the preferred trace backend for the next Run() entry. Thread-safe:
   // server thread writes via release, simulator thread reads via acquire at
   // the top of Run().
-  void SetPreferredBackend(int backend);
+  void SetPreferredBackend(BackendKind backend);
 
   // Returns the seed actually handed to the trace backend (task 260.6).
   // When `seed_ != 0` this equals `seed_`; when `seed_ == 0` this is a
@@ -111,10 +106,9 @@ class Simulator {
   uint32_t effective_seed_;
   RandomNumberGenerator rng_;
   Logger logger_{ "Simulator" };
-  // Preferred trace backend (kPreferCpu/kPreferMetal). release-write by
-  // ServerImpl::SetPreferredBackend, acquire-read at Run() entry. env-var
-  // LUMICE_TRACE_BACKEND still wins.
-  std::atomic<int> preferred_backend_{ kPreferCpu };
+  // Preferred trace backend. release-write by ServerImpl::SetPreferredBackend,
+  // acquire-read at Run() entry. env-var LUMICE_TRACE_BACKEND still wins.
+  std::atomic<BackendKind> preferred_backend_{ BackendKind::kCpu };
 };
 
 // Distributes ray_num rays across crystals proportionally using per-crystal carry with
