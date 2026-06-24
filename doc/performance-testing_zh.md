@@ -181,7 +181,6 @@ push 到 `main` 的 benchmark 结果会通过
 | `--log-panel` | 关 | 测试期间显示日志面板 |
 | `--dorun-delay <ms>` | 0 | 为 `DoRun` 添加人为延迟（模拟慢环境） |
 | `--skip-calibration` | 关 | 跳过启动时质量阈值校准 |
-| `--perf-bench` | 关 | 运行 `--perf-bench` 模式：独立吞吐量测量 |
 
 ### macOS
 
@@ -243,19 +242,6 @@ Get-Content perf_stderr.txt
 5. 启用文件日志（GUI Log 面板 → Enable File Log）
 6. 使用分析脚本分析日志文件
 
-### 自动化 --perf-bench 模式
-
-`--perf-bench` 标志提供独立吞吐量测量，运行固定时长后报告平均 rays/sec。
-适用于不同构建或平台之间的 apple-to-apple 比较，无需 GUI 交互。
-
-```bash
-# macOS
-./build/cmake_install/LumiceGUI --perf-bench
-
-# Windows（通过远程 watcher，参见 doc/windows-remote-testing_zh.md）
-./scripts/win_remote_test.sh ./LumiceGUI.exe --perf-bench
-```
-
 ### Windows 远程测试
 
 无需物理接触即可测试 Windows，使用 watcher 远程工作流。
@@ -269,14 +255,14 @@ Get-Content perf_stderr.txt
 
 ### 对比
 
-| 条件 | GUI 性能测试 | 手动测试 | --perf-bench |
-|------|-------------|---------|--------------|
-| 窗口 | 隐藏（默认）/ 可见（`--visible`） | 可见 | 可见 |
-| VSync | 关（默认）/ 开（`--vsync`） | 开（系统默认） | 开（系统默认） |
-| 帧率限制 | 开（默认）/ 关（`--no-frame-limit`） | 开 | 开 |
-| 输入 | 自动化（ImGui Test Engine） | 手动（滑动条拖拽） | 无（仅稳态） |
-| 可重复性 | 高 | 低（人为差异） | 高 |
-| 反映真实体验 | 部分（配合 `--visible --vsync`） | 是 | 部分 |
+| 条件 | GUI 性能测试 | 手动测试 |
+|------|-------------|---------|
+| 窗口 | 隐藏（默认）/ 可见（`--visible`） | 可见 |
+| VSync | 关（默认）/ 开（`--vsync`） | 开（系统默认） |
+| 帧率限制 | 开（默认）/ 关（`--no-frame-limit`） | 开 |
+| 输入 | 自动化（ImGui Test Engine） | 手动（滑动条拖拽） |
+| 可重复性 | 高 | 低（人为差异） |
+| 反映真实体验 | 部分（配合 `--visible --vsync`） | 是 |
 
 ## 4. 日志分析脚本
 

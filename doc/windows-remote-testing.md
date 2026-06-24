@@ -52,9 +52,6 @@ gh run download <RUN_ID> --name gui-test-windows-msvc --dir /tmp/ci-win
 # Run perf test with VSync (real display)
 ./scripts/win_remote_test.sh /tmp/ci-win/bin/gui_test.exe \
   --filter perf_test --vsync --log-level verbose
-
-# Run --perf-bench for throughput measurement
-./scripts/win_remote_test.sh /tmp/ci-win/bin/LumiceGUI.exe --perf-bench
 ```
 
 ### 3. Collect Results

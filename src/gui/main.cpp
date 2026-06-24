@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
     bool keep_console = false;
     for (int i = 1; i < argc; ++i) {
       std::string_view arg(argv[i]);
-      if (arg == "--perf-bench" || arg == "-v" || arg == "-d" || arg == "--log-level" || arg == "--core-log-level") {
+      if (arg == "-v" || arg == "-d" || arg == "--log-level" || arg == "--core-log-level") {
         keep_console = true;
         break;
       }
@@ -57,15 +57,11 @@ int main(int argc, char** argv) {
   timeBeginPeriod(1);
 #endif
 
-  // Parse perf-bench flag early — needed before glfwSwapInterval.
-  bool perf_bench = false;
+  // Parse --skip-calibration flag early.
   bool skip_calibration = false;
   for (int i = 1; i < argc; ++i) {
     std::string_view arg(argv[i]);
-    if (arg == "--perf-bench") {
-      perf_bench = true;
-      skip_calibration = true;
-    } else if (arg == "--skip-calibration") {
+    if (arg == "--skip-calibration") {
       skip_calibration = true;
     }
   }
@@ -113,7 +109,7 @@ int main(int argc, char** argv) {
 
   glfwSetWindowSizeLimits(window, gui::kMinWindowWidth, gui::kMinWindowHeight, GLFW_DONT_CARE, GLFW_DONT_CARE);
   glfwMakeContextCurrent(window);
-  glfwSwapInterval(perf_bench ? 0 : 1);  // VSync off for perf-bench to match test binary
+  glfwSwapInterval(1);  // VSync on
 
   if (!gui::InitGLLoader()) {
     glfwDestroyWindow(window);
@@ -140,7 +136,7 @@ int main(int argc, char** argv) {
 
   gui::g_state = gui::InitDefaultState();
 
-  // perf_bench and skip_calibration already parsed above (before glfwSwapInterval).
+  // skip_calibration already parsed above (before glfwSwapInterval).
 
   // Create Lumice server.
   gui::g_server = LUMICE_CreateServer();
@@ -258,101 +254,6 @@ int main(int argc, char** argv) {
   // Must happen after server creation but before the main loop.
   if (!skip_calibration) {
     gui::CalibrateQualityThreshold();
-  }
-
-  // --perf-bench: use EXACTLY the same startup path as test_gui_main.cpp's StartPerfSimulation,
-  // measure steady-state throughput for 2 seconds, print result, and exit.
-  // This allows apples-to-apples comparison with gui_test --filter perf_test.
-  if (perf_bench) {
-    // Disable runtime viewport creation for perf-bench only. Platform callbacks remain
-    // registered from ImGui_ImplGlfw_Init; this flag gate merely skips per-frame viewport
-    // update/render cost so steady-state measurement is not polluted by window management.
-    io.ConfigFlags &= ~ImGuiConfigFlags_ViewportsEnable;
-    // Same config as StartPerfSimulation in test_gui_main.cpp
-    gui::g_state.sun.altitude = 20.0f;
-    gui::g_state.sun.diameter = 0.5f;
-    gui::g_state.sun.spectrum_index = 2;
-    gui::g_state.sim.infinite = true;
-    gui::g_state.sim.max_hits = 8;
-    {
-      auto& r = gui::g_state.renderer;
-      r.lens_type = 1;
-      r.fov = 360.0f;
-      r.sim_resolution_index = 0;  // 512
-      r.visible = 2;
-      r.background[0] = r.background[1] = r.background[2] = 0.0f;
-      r.exposure_offset = 0.0f;
-    }
-    gui::DoRun();
-
-    // Wait for first data
-    auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (gui::g_state.stats_sim_ray_num == 0 && std::chrono::steady_clock::now() < timeout) {
-      glfwPollEvents();
-      gui::SyncFromPoller();
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-
-    // Measure for 2 seconds
-    auto start_rays = gui::g_state.stats_sim_ray_num;
-    auto start_time = std::chrono::steady_clock::now();
-    auto end_time = start_time + std::chrono::seconds(2);
-    int frames = 0;
-    while (std::chrono::steady_clock::now() < end_time) {
-      glfwPollEvents();
-      gui::SyncFromPoller();
-
-      ImGui_ImplOpenGL3_NewFrame();
-      ImGui_ImplGlfw_NewFrame();
-      ImGui::NewFrame();
-
-      int win_w = 0, win_h = 0;
-      glfwGetWindowSize(window, &win_w, &win_h);
-      auto lw = static_cast<float>(win_w);
-      auto lh = static_cast<float>(win_h);
-      gui::RenderTopBar(lw);
-      gui::RenderLeftPanel(lh);
-      gui::RenderRightPanel(window, lw, lh);
-      gui::RenderPreviewPanel(window, lw, lh);
-      gui::RenderStatusBar(lw, lh);
-      gui::RenderEditModals(gui::g_state, window);
-
-      ImGui::Render();
-      int dw = 0, dh = 0;
-      glfwGetFramebufferSize(window, &dw, &dh);
-      glViewport(0, 0, dw, dh);
-      glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-      glClear(GL_COLOR_BUFFER_BIT);
-      if (gui::g_preview_vp.active) {
-        gui::g_preview.Render(gui::g_preview_vp.vp_x, gui::g_preview_vp.vp_y, gui::g_preview_vp.vp_w,
-                              gui::g_preview_vp.vp_h, gui::g_preview_vp.params);
-      }
-      ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-      glfwSwapBuffers(window);
-      frames++;
-    }
-
-    auto end_rays = gui::g_state.stats_sim_ray_num;
-    double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
-    double rps = elapsed > 0 ? static_cast<double>(end_rays - start_rays) / elapsed : 0;
-    fprintf(stderr, "[PERF-BENCH] steady_state: %.1f rays/sec (%lu rays in %.1fs, %d frames, %.1f FPS)\n", rps,
-            end_rays - start_rays, elapsed, frames, frames / elapsed);
-
-    // Cleanup and exit
-    gui::g_server_poller.Stop();
-    gui::g_thumbnail_cache.Destroy();
-    gui::g_crystal_renderer.Destroy();
-    gui::g_preview.Destroy();
-    LUMICE_DestroyServer(gui::g_server);
-    ImGui_ImplOpenGL3_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
-    ImGui::DestroyContext();
-    glfwDestroyWindow(window);
-    glfwTerminate();
-#ifdef _WIN32
-    timeEndPeriod(1);
-#endif
-    return 0;
   }
 
   // Window size callback: detect user manual resize vs programmatic resize
