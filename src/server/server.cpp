@@ -766,6 +766,9 @@ void ServerImpl::ConsumeData() {
                 chunk.outgoing_d_.assign(
                     sim_data.outgoing_d_.begin() + static_cast<std::ptrdiff_t>(emitted) * 3,
                     sim_data.outgoing_d_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count) * 3);
+                // Invariant: outgoing_w_ is sliced to exactly chunk_count, so
+                // chunk.outgoing_w_.size() == chunk_count is the consumer's
+                // per-chunk outgoing-ray count (it reads .size(), see render.cpp).
                 chunk.outgoing_w_.assign(
                     sim_data.outgoing_w_.begin() + static_cast<std::ptrdiff_t>(emitted),
                     sim_data.outgoing_w_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count));
@@ -785,7 +788,6 @@ void ServerImpl::ConsumeData() {
                       sim_data.exit_records_.begin() + static_cast<std::ptrdiff_t>(emitted),
                       sim_data.exit_records_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count));
                 }
-                chunk.outgoing_indices_.assign(chunk_count, 0);
               }
               for (auto& c : consumers_) {
                 c->Consume(chunk);
@@ -799,7 +801,7 @@ void ServerImpl::ConsumeData() {
           auto lock_us = std::chrono::duration<double, std::micro>(t_lock1 - t_lock0).count();
           auto consume_us = std::chrono::duration<double, std::micro>(t_consume - t_lock1).count();
           ILOG_DEBUG(logger_, "ConsumeData: batch rays={} outgoing={} lock={:.0f}us consume={:.0f}us",
-                     sim_data.rays_.size_, sim_data.outgoing_indices_.size(), lock_us, consume_us);
+                     sim_data.rays_.size_, sim_data.outgoing_w_.size(), lock_us, consume_us);
           if (!first_consume_logged) {
             ILOG_INFO(logger_, "ConsumeData: first batch consumed ({} ray segments)", sim_data.rays_.size_);
             first_consume_logged = true;

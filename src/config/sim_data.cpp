@@ -20,8 +20,10 @@ namespace lumice {
 // seam is the canonical out path), shrinking back to 192. scrum-258.2 adds
 // exit_records_ (vector<ExitRayRecord>, 24B) for rich exit metadata,
 // bumping 192 → 216. scrum-268.8 (DR-3) adds outgoing_wl_ (vector<float>, 24B)
-// for per-ray wavelength CMF, bumping 216 → 240.
-static_assert(sizeof(SimData) == 240, "SimData size changed — update copy/move ctors and operators");
+// for per-ray wavelength CMF, bumping 216 → 240. chore-292 (A2) removes the
+// vestigial outgoing_indices_ (vector<size_t>, 24B) — its content was never
+// read; the consumer's outgoing-ray count is outgoing_w_.size() — shrinking 240 → 216.
+static_assert(sizeof(SimData) == 216, "SimData size changed — update copy/move ctors and operators");
 
 namespace {
 
@@ -307,16 +309,15 @@ SimData::SimData(size_t capacity) : curr_wl_(0.0f), rays_(capacity) {}
 
 SimData::SimData(const SimData& other)
     : curr_wl_(other.curr_wl_), generation_(other.generation_), rays_(other.rays_), crystals_(other.crystals_),
-      crystal_axis_dists_(other.crystal_axis_dists_), outgoing_indices_(other.outgoing_indices_),
-      outgoing_d_(other.outgoing_d_), outgoing_w_(other.outgoing_w_), outgoing_wl_(other.outgoing_wl_),
-      exit_records_(other.exit_records_), root_ray_count_(other.root_ray_count_) {}
+      crystal_axis_dists_(other.crystal_axis_dists_), outgoing_d_(other.outgoing_d_), outgoing_w_(other.outgoing_w_),
+      outgoing_wl_(other.outgoing_wl_), exit_records_(other.exit_records_), root_ray_count_(other.root_ray_count_) {}
 
 SimData::SimData(SimData&& other) noexcept
     : curr_wl_(other.curr_wl_), generation_(other.generation_), rays_(std::move(other.rays_)),
       crystals_(std::move(other.crystals_)), crystal_axis_dists_(std::move(other.crystal_axis_dists_)),
-      outgoing_indices_(std::move(other.outgoing_indices_)), outgoing_d_(std::move(other.outgoing_d_)),
-      outgoing_w_(std::move(other.outgoing_w_)), outgoing_wl_(std::move(other.outgoing_wl_)),
-      exit_records_(std::move(other.exit_records_)), root_ray_count_(other.root_ray_count_) {}
+      outgoing_d_(std::move(other.outgoing_d_)), outgoing_w_(std::move(other.outgoing_w_)),
+      outgoing_wl_(std::move(other.outgoing_wl_)), exit_records_(std::move(other.exit_records_)),
+      root_ray_count_(other.root_ray_count_) {}
 
 SimData& SimData::operator=(const SimData& other) {
   if (&other == this) {
@@ -328,7 +329,6 @@ SimData& SimData::operator=(const SimData& other) {
   rays_ = other.rays_;
   crystals_ = other.crystals_;
   crystal_axis_dists_ = other.crystal_axis_dists_;
-  outgoing_indices_ = other.outgoing_indices_;
   outgoing_d_ = other.outgoing_d_;
   outgoing_w_ = other.outgoing_w_;
   outgoing_wl_ = other.outgoing_wl_;
@@ -347,7 +347,6 @@ SimData& SimData::operator=(SimData&& other) noexcept {
   rays_ = std::move(other.rays_);
   crystals_ = std::move(other.crystals_);
   crystal_axis_dists_ = std::move(other.crystal_axis_dists_);
-  outgoing_indices_ = std::move(other.outgoing_indices_);
   outgoing_d_ = std::move(other.outgoing_d_);
   outgoing_w_ = std::move(other.outgoing_w_);
   outgoing_wl_ = std::move(other.outgoing_wl_);  // scrum-268.8 (DR-3): was missing

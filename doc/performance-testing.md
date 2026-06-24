@@ -278,7 +278,6 @@ Two scenarios:
 | `--log-panel` | off | Show the log panel during test |
 | `--dorun-delay <ms>` | 0 | Add artificial delay to `DoRun` (simulate slow environment) |
 | `--skip-calibration` | off | Skip startup quality threshold calibration |
-| `--perf-bench` | off | Run `--perf-bench` mode: standalone throughput measurement |
 
 ### macOS
 
@@ -340,20 +339,6 @@ Reflects real user experience. Requires a display environment with a visible win
 5. Enable file logging (GUI Log panel → Enable File Log)
 6. Analyze the log file with the analysis script
 
-### Automated --perf-bench Mode
-
-The `--perf-bench` flag provides a standalone throughput measurement that runs for a
-fixed duration and reports average rays/sec. Useful for apples-to-apples comparisons
-between builds or platforms without GUI interaction.
-
-```bash
-# macOS
-./build/cmake_install/LumiceGUI --perf-bench
-
-# Windows (via remote watcher, see doc/windows-remote-testing.md)
-./scripts/win_remote_test.sh ./LumiceGUI.exe --perf-bench
-```
-
 ### Remote Windows Testing
 
 For Windows testing without physical access, use the watcher-based remote workflow.
@@ -367,14 +352,14 @@ See [Windows Remote Testing Guide](windows-remote-testing.md) for setup instruct
 
 ### Comparison
 
-| Condition | GUI Perf Test | Manual Test | --perf-bench |
-|-----------|--------------|-------------|--------------|
-| Window | hidden (default) / visible (`--visible`) | visible | visible |
-| VSync | off (default) / on (`--vsync`) | on (system default) | on (system default) |
-| Frame limit | on (default) / off (`--no-frame-limit`) | on | on |
-| Input | automated (ImGui Test Engine) | manual (slider drag) | none (steady-state only) |
-| Reproducibility | high | low (human variance) | high |
-| Reflects real UX | partially (with `--visible --vsync`) | yes | partially |
+| Condition | GUI Perf Test | Manual Test |
+|-----------|--------------|-------------|
+| Window | hidden (default) / visible (`--visible`) | visible |
+| VSync | off (default) / on (`--vsync`) | on (system default) |
+| Frame limit | on (default) / off (`--no-frame-limit`) | on |
+| Input | automated (ImGui Test Engine) | manual (slider drag) |
+| Reproducibility | high | low (human variance) |
+| Reflects real UX | partially (with `--visible --vsync`) | yes |
 
 ## 4. Log Analysis Script
 

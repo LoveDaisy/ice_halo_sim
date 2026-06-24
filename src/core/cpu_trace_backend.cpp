@@ -284,9 +284,15 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
   // Exit seam (scrum-258.2): append this layer's rich outgoing records to
   // the session-level accumulator BEFORE projection. ReadbackExitRays
   // returns these for the simulator to drive the legacy consumer projection
-  // (which still consumes dir/weight extracted from each record). The
-  // ScatterOutgoingToXyz call below stays for now so ReadbackImage keeps
-  // returning a populated image (parity-harness/oracle path).
+  // (which still consumes dir/weight extracted from each record).
+  //
+  // [PARITY-ORACLE] The ScatterOutgoingToXyz accumulation below is
+  // DELIBERATELY RETAINED (not exit-seam leftover): it keeps xyz_buf_
+  // populated so ReadbackImage() can serve as the CPU-vs-Metal parity
+  // reference image. Production GUI/CLI never reads this image — they use
+  // ReadbackExitRays + legacy projection — only the parity harness does
+  // (see the [TEST-ONLY] note on ReadbackImage in cpu_trace_backend.hpp).
+  // Do NOT remove without retiring the Metal/Cpu parity battery.
   size_t exit_n = outgoing_records.size();
   std::vector<float> outgoing_d(exit_n * 3);
   std::vector<float> outgoing_w(exit_n);
