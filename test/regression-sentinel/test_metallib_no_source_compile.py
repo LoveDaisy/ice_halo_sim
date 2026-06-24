@@ -60,7 +60,9 @@ pytestmark = [
 _MARKER_RE = re.compile(
     r"MetalTraceBackend:\s+loaded\s+embedded\s+metallib\s+\((\d+)\s+functions\)"
 )
-_EXPECTED_FUNCTION_COUNT = 3  # trace_layer_kernel + gen_root_kernel + transit_root_kernel
+# trace_layer_kernel + gen_root_kernel + transit_root_kernel.
+# Recount source of truth:  grep -c 'kernel void' src/core/metal/lumice_trace.metal
+_EXPECTED_FUNCTION_COUNT = 3
 
 
 def test_metal_runs_without_source_compile():

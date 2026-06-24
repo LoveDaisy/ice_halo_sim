@@ -836,20 +836,22 @@ void MetalTraceBackend::Impl::EnsurePso() {
   // issue.md). Capture functionNames + err so the next user repro pins down
   // exactly which entry point the library dropped; previously this path went
   // straight to a Release-NDEBUG-disabled assert and aborted opaquely.
-  auto LogMissingFunction = [&](const char* name, NSError* fn_err) {
+  // No NSError argument: -newFunctionWithName: does not populate an NSError on a
+  // missing entry point (it just returns nil). The only meaningful diagnostic is
+  // the library's actual functionNames — passing the surrounding `err` would log
+  // the residual from the previous pipeline-creation step and mislead.
+  auto LogMissingFunction = [&](const char* name) {
     NSArray<NSString*>* names = lib.functionNames;
     NSString* joined = [names componentsJoinedByString:@", "];
     const char* names_cstr = joined.UTF8String;
-    const char* err_cstr = fn_err.localizedDescription.UTF8String;
     ILOG_ERROR(EffectiveLogger(logger_),
-               "MetalTraceBackend: kernel entry point '{}' missing — library functionNames=[{}] err={}",
+               "MetalTraceBackend: kernel entry point '{}' missing — library functionNames=[{}]",
                name,
-               names_cstr ? names_cstr : "",
-               err_cstr ? err_cstr : "(none)");
+               names_cstr ? names_cstr : "");
   };
   id<MTLFunction> fn = [lib newFunctionWithName:@"trace_layer_kernel"];
   if (fn == nil) {
-    LogMissingFunction("trace_layer_kernel", err);
+    LogMissingFunction("trace_layer_kernel");
     throw BackendUnavailableError("MetalTraceBackend: trace_layer_kernel entry point missing");
   }
   pso = [device newComputePipelineStateWithFunction:fn error:&err];
@@ -865,7 +867,7 @@ void MetalTraceBackend::Impl::EnsurePso() {
   // in lock-step so the kernel cache survives across BeginSession invocations.
   id<MTLFunction> gen_fn = [lib newFunctionWithName:@"gen_root_kernel"];
   if (gen_fn == nil) {
-    LogMissingFunction("gen_root_kernel", err);
+    LogMissingFunction("gen_root_kernel");
     throw BackendUnavailableError("MetalTraceBackend: gen_root_kernel entry point missing");
   }
   gen_root_pso_ = [device newComputePipelineStateWithFunction:gen_fn error:&err];
@@ -882,7 +884,7 @@ void MetalTraceBackend::Impl::EnsurePso() {
   // BeginSession invocations alongside gen_root_pso_.
   id<MTLFunction> transit_fn = [lib newFunctionWithName:@"transit_root_kernel"];
   if (transit_fn == nil) {
-    LogMissingFunction("transit_root_kernel", err);
+    LogMissingFunction("transit_root_kernel");
     throw BackendUnavailableError("MetalTraceBackend: transit_root_kernel entry point missing");
   }
   transit_root_pso_ = [device newComputePipelineStateWithFunction:transit_fn error:&err];

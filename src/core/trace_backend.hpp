@@ -142,6 +142,12 @@ namespace lumice {
 // only contract point that may throw this — callers are required to catch by
 // type and downgrade their backend selection (drop the backend instance for
 // the remainder of the Run()).
+//
+// Implementer contract: a backend that throws this from BeginSession AFTER
+// flipping any session-active flag must guard the throw with
+//   try { ... } catch (...) { Reset(); throw; }
+// so the instance is left un-sessioned — the simulator drops it, but tests and
+// re-probes must not observe a half-open session.
 // -----------------------------------------------------------------------------
 class BackendUnavailableError : public std::runtime_error {
  public:
