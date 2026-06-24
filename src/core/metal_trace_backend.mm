@@ -291,7 +291,12 @@ id<MTLLibrary> LoadMetallibFromEmbeddedBytes(id<MTLDevice> device,
   );
   NSError* err = nil;
   id<MTLLibrary> lib = [device newLibraryWithData:data error:&err];
-  if (out_err) { *out_err = err; }
+  // Only surface err on failure. newLibraryWithData leaves err nil on success,
+  // so writing it unconditionally is benign through the outer LoadMetalLibrary
+  // (which clears *out_err to nil on its own success paths) — but it is a
+  // foot-gun if this helper is ever called standalone: it would clobber a
+  // caller's pre-set *out_err on the success path. Keep err scoped to failure.
+  if (lib == nil && out_err) { *out_err = err; }
   return lib;
 }
 
