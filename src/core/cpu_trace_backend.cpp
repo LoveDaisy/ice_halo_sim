@@ -22,6 +22,42 @@ namespace {
 
 constexpr size_t kSmallBatchRayNum = 32;
 
+// Parameter bundles for TraceCrystalBatch. Grouped by lifetime/mutability so the
+// trace entry point stays under the clang-tidy parameter threshold without the
+// readability-function-size NOLINT suppression (was 19 bare params).
+
+// Immutable per-crystal trace inputs (rebuilt per ci population).
+struct CrystalTraceSpec {
+  const Crystal& crystal;
+  size_t crystal_id;
+  const AxisDistribution& axis_dist;
+  float refractive_index;
+};
+
+// Immutable per-layer batch parameters (constant across the ci loop).
+struct BatchTraceSpec {
+  const MsInfo& ms_info;
+  const FilterSpec* filter_spec;
+  const SunParam& sun_param;
+  const WlParam& wl_param;
+  size_t ci_ray_num;     // this population's ray count (cn loop bound)
+  size_t layer_ray_num;  // whole layer's ray count (workspace sizing)
+  size_t max_hits;
+  bool first_ms;
+  uint8_t ms_layer_idx;  // current MS layer index (carried into ExitRayRecord)
+};
+
+// Mutable I/O buffers threaded across the layer's ci iterations. Reference
+// members bind to the caller's locals; const on the struct does not propagate
+// to the referents, so the trace loop mutates them through this bundle.
+struct BatchTraceBuffers {
+  RayBuffer* prev_init;     // [2]; when !first_ms, [0] is input rays
+  size_t& init_ray_offset;  // advances inside prev_init across batches
+  RayBuffer& all_data;      // bookkeeping
+  RayBuffer& cont_collect;  // backend's per-layer continuation buffer
+  std::vector<ExitRayRecord>& outgoing;
+};
+
 // Drive the per-(crystal-batch) trace main loop. Mirrors the inner
 // `for cn -> InitRay* -> for hit -> Trace/Fill/Collect` block of
 // Simulator::SimulateOneWavelength so RNG order is preserved across batches.
@@ -41,17 +77,8 @@ constexpr size_t kSmallBatchRayNum = 32;
 //                   cont_collect there).
 //   - all_data: simulator-side bookkeeping buffer (Recorder lookups during
 //               FilterSpec::Match traverse it).
-// NOLINTNEXTLINE(readability-function-size)
-void TraceCrystalBatch(RandomNumberGenerator& rng, const Crystal& crystal, size_t crystal_id,
-                       const AxisDistribution& axis_dist, const MsInfo& ms_info, const FilterSpec* filter_spec,
-                       float refractive_index, size_t ci_ray_num, size_t layer_ray_num, size_t max_hits,
-                       const SunParam& sun_param, const WlParam& wl_param, bool first_ms,
-                       uint8_t ms_layer_idx,    // current MS layer index (carried into ExitRayRecord)
-                       RayBuffer prev_init[2],  // when !first_ms, [0] is input rays
-                       size_t& init_ray_offset,
-                       RayBuffer& all_data,      // bookkeeping
-                       RayBuffer& cont_collect,  // backend's per-layer continuation buffer
-                       std::vector<ExitRayRecord>& outgoing) {
+void TraceCrystalBatch(RandomNumberGenerator& rng, const CrystalTraceSpec& crystal_spec, const BatchTraceSpec& batch,
+                       const BatchTraceBuffers& buffers) {
   // workspace[0] = input rays for the current hit; workspace[1] = traced output.
   RayBuffer workspace[2]{};
 
@@ -60,8 +87,8 @@ void TraceCrystalBatch(RandomNumberGenerator& rng, const Crystal& crystal, size_
   // We swap cont_collect with init_for_collect[1] before and after the loop
   // so that EmplaceBack writes into cont_collect's storage.
 
-  for (size_t cn = 0; cn < ci_ray_num; cn += kSmallBatchRayNum) {
-    size_t curr_ray_num = std::min(kSmallBatchRayNum, ci_ray_num - cn);
+  for (size_t cn = 0; cn < batch.ci_ray_num; cn += kSmallBatchRayNum) {
+    size_t curr_ray_num = std::min(kSmallBatchRayNum, batch.ci_ray_num - cn);
 
     // workspace[0]: CollectData refills it with Normal rays each hit
     // iteration; capacity = layer_ray_num*2 allows up to 2× fan-out growth.
@@ -71,34 +98,34 @@ void TraceCrystalBatch(RandomNumberGenerator& rng, const Crystal& crystal, size_
     // heap-buffer-overflow (scrum-258.x SIGABRT, diagnosed by ASan).
     // Reset() only re-allocates when capacity grows; subsequent small batches
     // reuse storage. (Sizing *2 for workspace[0] was the scrum-253.4 fix.)
-    workspace[0].Reset(layer_ray_num * 2);
-    workspace[1].Reset(layer_ray_num * 4);
+    workspace[0].Reset(batch.layer_ray_num * 2);
+    workspace[1].Reset(batch.layer_ray_num * 4);
 
-    if (first_ms) {
-      InitRayFirstMs(rng, sun_param, wl_param, curr_ray_num,  //
-                     crystal, crystal_id, axis_dist,          //
-                     workspace, all_data);
+    if (batch.first_ms) {
+      InitRayFirstMs(rng, batch.sun_param, batch.wl_param, curr_ray_num,                     //
+                     crystal_spec.crystal, crystal_spec.crystal_id, crystal_spec.axis_dist,  //
+                     workspace, buffers.all_data);
     } else {
-      InitRayOtherMs(rng, prev_init, curr_ray_num,    //
-                     crystal, crystal_id, axis_dist,  //
-                     workspace, all_data, init_ray_offset);
+      InitRayOtherMs(rng, buffers.prev_init, curr_ray_num,                                   //
+                     crystal_spec.crystal, crystal_spec.crystal_id, crystal_spec.axis_dist,  //
+                     workspace, buffers.all_data, buffers.init_ray_offset);
     }
 
-    for (size_t i = 0; i < max_hits; i++) {
+    for (size_t i = 0; i < batch.max_hits; i++) {
       // CollectData (called below) routes IsContinue() rays to cont_collect
       // AND refills workspace[0] with IsNormal() rays for the next hit.
       // The workspace[0] refill is the side-effect that drives this loop
       // past depth 0: without it, curr_batch_size at i >= 1 is always 0.
       size_t curr_batch_size = workspace[0].size_;
-      TraceRayBasicInfo(crystal, refractive_index, curr_batch_size, workspace);
-      FillRayOtherInfo(crystal, workspace);
+      TraceRayBasicInfo(crystal_spec.crystal, crystal_spec.refractive_index, curr_batch_size, workspace);
+      FillRayOtherInfo(crystal_spec.crystal, workspace);
 
       // CollectData writes continuation rays via init_for_collect[1].EmplaceBack.
       // We thread cont_collect through that slot via a temporary swap.
       RayBuffer init_for_collect[2]{};
-      std::swap(init_for_collect[1], cont_collect);
-      CollectData(rng, ms_info, filter_spec, workspace, init_for_collect);
-      std::swap(init_for_collect[1], cont_collect);
+      std::swap(init_for_collect[1], buffers.cont_collect);
+      CollectData(rng, batch.ms_info, batch.filter_spec, workspace, init_for_collect);
+      std::swap(init_for_collect[1], buffers.cont_collect);
 
       // Copy traced rays to all_data + collect outgoing.
       // RecorderDataPtr(j) is read BEFORE all_data.EmplaceBack(workspace[1])
@@ -107,7 +134,7 @@ void TraceCrystalBatch(RandomNumberGenerator& rng, const Crystal& crystal, size_
       // inline vs overflow arena correctly via the buffer-level resolver, and
       // since task-284 ExitFaceSeq::kCap == kMaxHits the min() below is a
       // tautological clamp (kept for explicitness; full path always copied).
-      all_data.EmplaceBack(workspace[1]);
+      buffers.all_data.EmplaceBack(workspace[1]);
       for (size_t j = 0; j < workspace[1].size_; j++) {
         const auto& r = workspace[1][j];
         if (r.IsOutgoing()) {
@@ -116,14 +143,14 @@ void TraceCrystalBatch(RandomNumberGenerator& rng, const Crystal& crystal, size_
           rec.dir[1] = r.d_[1];
           rec.dir[2] = r.d_[2];
           rec.weight = r.w_;
-          rec.crystal_id = static_cast<uint16_t>(crystal_id);
-          rec.ms_layer_idx = ms_layer_idx;
+          rec.crystal_id = static_cast<uint16_t>(crystal_spec.crystal_id);
+          rec.ms_layer_idx = batch.ms_layer_idx;
           const RaypathRecorder& rp = workspace[1].RecorderAt(j);
           const uint8_t* seq = workspace[1].RecorderDataPtr(j);
           uint8_t seq_len = static_cast<uint8_t>(std::min<size_t>(rp.size_, ExitFaceSeq::kCap));
           rec.path.size_ = seq_len;
           std::memcpy(rec.path.data_, seq, seq_len);
-          outgoing.push_back(rec);
+          buffers.outgoing.push_back(rec);
         }
       }
     }  // hit loop
@@ -275,10 +302,18 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
     // ci_n = this population's ray count (cn loop bound); total_ray_num = the
     // whole layer's ray count, used to size the trace workspace (see
     // TraceCrystalBatch capacity comment).
-    TraceCrystalBatch(rng_, crystal, crystal_id, crystal_axis, ms_info, filter_spec.get(), refractive_index, ci_n,
-                      total_ray_num, spec_.scene->max_hits_, spec_.scene->light_source_.param_, spec_.wl, first_ms,
-                      static_cast<uint8_t>(ms_idx_), prev_init, init_ray_offset, all_data, cont_collect,
-                      outgoing_records);
+    CrystalTraceSpec crystal_spec{ crystal, crystal_id, crystal_axis, refractive_index };
+    BatchTraceSpec batch{ ms_info,
+                          filter_spec.get(),
+                          spec_.scene->light_source_.param_,
+                          spec_.wl,
+                          ci_n,
+                          total_ray_num,
+                          spec_.scene->max_hits_,
+                          first_ms,
+                          static_cast<uint8_t>(ms_idx_) };
+    BatchTraceBuffers buffers{ prev_init, init_ray_offset, all_data, cont_collect, outgoing_records };
+    TraceCrystalBatch(rng_, crystal_spec, batch, buffers);
   }
 
   // Exit seam (scrum-258.2): append this layer's rich outgoing records to

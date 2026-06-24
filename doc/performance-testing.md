@@ -101,13 +101,25 @@ path) — never `cpu_backend`. All ratios below measured on **M2 Max, 2026-06-19
 (`scratchpad/task-fix-throughput-bench-honesty/data/`); treat as the regression
 anchor, re-measure same-session before/after any throughput change.
 
+> **Why two measurement paths (engine vs GUI) coexist — do not collapse them.**
+> `Lumice --benchmark` (engine ceiling) and `gui_test perf_test` (GUI-fidelity)
+> answer orthogonal questions: the former is the *perf denominator / engine
+> headroom* reference (explore-271 used it to establish the ~10.7M rays/s
+> sustained engine rate as the GUI's headroom anchor); the latter measures the
+> user-experienced reconstruct path. `--benchmark` is **load-bearing** — the G1
+> gate (`test/performance/test_metal_throughput.py`) and the committed harness
+> (`scripts/bench_throughput.py`) both invoke it — and is **not** redundant with
+> the GUI path, so it is not a retire candidate. (Evaluated & settled 2026-06-24;
+> the now-removed `LumiceGUI --perf-bench` flag *was* a genuine orphan, retired in
+> #292.) Revisit only if a GUI-regime gate ever becomes the sole throughput门.
+
 | config（真实文件） | regime | rays / MS / filter | lens / Metal 可比 | 角色 | Metal vs legacy（实测基线） |
 |---|---|---|---|---|---|
 | `bench_light_single_ms.json` | 轻·单MS | 10M / 1 / 无 | dual_fisheye_EA ✅ | 轻场景吞吐基准（bench 专用，勿因 e2e 改动） | 引擎 ~1.7× / GUI ~1.8× |
 | `ms_multi_crystal.json` | 中·无filter | 2M / 2 / 无 | dual_fisheye_EA ✅ | 无 culling 中等基准 | 引擎 ~2.0× / GUI ~2.2× |
 | `ms_multi_crystal_complex_filter.json` | 重·标准 | 2M / 2 / complex | dual_fisheye_EA ✅ | **G1 + G4 主基准** | 引擎 ~8.1× / GUI ~9.5× |
 | `ms_multi_crystal_filtered_bd.json` | 重·bd | 2M / 2 / bd | dual_fisheye_EA ✅ | G1 第二基准 | 引擎 ~10.1× |
-| `ms3_mixed_pyramid_heavy.json` | 最重·棱锥 | 5M / 3 / 4×raypath | dual_fisheye_EA ✅ | register-pressure 上界 | Metal-only：引擎 ~296K rays/s；**legacy `--benchmark` 超时（single pass 2M @ 1-worker），故无 ratio**；GUI legacy ~48.7K → Metal ~5.7× |
+| `ms3_mixed_pyramid_heavy.json` | 最重·棱锥 | 5M / 3 / 4×raypath | dual_fisheye_EA ✅ | register-pressure 上界 | 引擎 **~5.5×**（2026-06-24 同会话 M2 Max：legacy multi 46.1K/s、single 7.3K/s；Metal multi 255K/s、single 245K/s）；GUI legacy ~48.7K → Metal ~5.7×（互证）。**注**：legacy single pass ~274s，超出 `bench_throughput.py` 的 `RUN_TIMEOUT_SEC`，故该场景仍从自动跑中排除——基线靠手动大 timeout 单测取得 |
 | `halo_22.json` | 轻·单MS | 10M / 1 / 无 | **fisheye_EA（单）→ CLI Metal 回退** | **e2e 资产，勿改**；legacy-only 轻基准 | N/A（Metal 不兼容此投影；轻·Metal 用 `bench_light_single_ms`） |
 
 Notes:
