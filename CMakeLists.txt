@@ -249,6 +249,13 @@ if(APPLE)
   # MTLCompileOptions (MSL 3.0 + fno-fast-math/MTLMathModeSafe) so the offline
   # metallib produces the same numerical result as the runtime source path.
   # `-arch air64` prevents fat-AIR output (xcrun metallib rejects fat input).
+  # Shared single-source math headers consumed by both MSL and host C++.
+  # Listed in DEPENDS so any change re-triggers metallib compile + embed.
+  set(LUMICE_METAL_SHARED_HDRS
+      "${PROJ_SRC_DIR}/core/shared/lm_shims.h"
+      "${PROJ_SRC_DIR}/core/shared/projection_shared.h"
+      "${PROJ_SRC_DIR}/core/shared/optics_shared.h")
+
   add_custom_command(
     OUTPUT  "${LUMICE_METAL_AIR}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${LUMICE_METAL_GEN_DIR}"
@@ -259,7 +266,7 @@ if(APPLE)
             -mmacosx-version-min=13.0
             -c "${LUMICE_METAL_SRC}"
             -o "${LUMICE_METAL_AIR}"
-    DEPENDS "${LUMICE_METAL_SRC}"
+    DEPENDS "${LUMICE_METAL_SRC}" ${LUMICE_METAL_SHARED_HDRS}
     COMMENT "Compiling MSL → AIR (lumice_trace.metal → lumice_trace.air)"
     VERBATIM)
 
@@ -279,6 +286,7 @@ if(APPLE)
             --metal-src  "${LUMICE_METAL_SRC}"
             --out-dir    "${LUMICE_METAL_GEN_DIR}"
     DEPENDS "${LUMICE_METAL_METALLIB}" "${LUMICE_METAL_SRC}" "${LUMICE_EMBED_SCRIPT}"
+            ${LUMICE_METAL_SHARED_HDRS}
     COMMENT "Embedding metallib + source into C headers"
     VERBATIM)
 

@@ -1,6 +1,12 @@
 #include <metal_stdlib>
 using namespace metal;
 
+// Shared single-source math cores (projection forward + Fresnel). Identical
+// bodies are compiled into projection.cpp on the host side; the embed-script
+// expands these includes inline for the `newLibraryWithSource` fallback path.
+#include "../shared/projection_shared.h"
+#include "../shared/optics_shared.h"
+
 // --- DeviceFilterDesc mirror (must match src/core/device_filter_desc.hpp) ---
 // Field-by-field bit-exact alignment of host layout. sizeof must be 120 bytes
 // post-267.1b (Complex filter trailer added: or_clause_count reuses former
@@ -393,13 +399,6 @@ struct KernelParams {
   uint  crystal_config_id;
 };
 
-inline float GetReflectRatio(float delta, float rr) {
-  float d_sqrt = sqrt(delta);
-  float Rs = (rr - d_sqrt) / (rr + d_sqrt); Rs *= Rs;
-  float Rp = (1.0f - rr * d_sqrt) / (1.0f + rr * d_sqrt); Rp *= Rp;
-  return (Rs + Rp) * 0.5f;
-}
-
 kernel void trace_layer_kernel(
     device const float*    root_d   [[buffer(0)]],
     device const float*    root_p   [[buffer(1)]],
@@ -511,7 +510,7 @@ kernel void trace_layer_kernel(
     float rr = (cos_theta > 0.0f) ? n_idx : (1.0f / n_idx);
     float dd = (1.0f - rr * rr) / (cos_theta * cos_theta) + rr * rr;
     bool  is_tir = dd <= 0.0f;
-    float w_refl = GetReflectRatio(max(dd, 0.0f), rr) * w;
+    float w_refl = lm_optics::GetReflectRatio(max(dd, 0.0f), rr) * w;
     float w_refr = is_tir ? -1.0f : (w - w_refl);
     float rdx = dx - 2.0f * cos_theta * nx;
     float rdy = dy - 2.0f * cos_theta * ny;
@@ -707,9 +706,10 @@ kernel void trace_layer_kernel(
           float sy = -wy;
           float sz = -wz;
           if (prm.proj_type == 0u) {
-            float lon = atan2(sy, sx) - prm.az0;
+            auto proj_r = lm_proj::RectangularForward(sx, sy, sz);
+            float lon = proj_r.x - prm.az0;
             lon = lon - 2.0f * M_PI_F * floor((lon + M_PI_F) / (2.0f * M_PI_F));
-            float lat = asin(clamp(sz, -1.0f, 1.0f));
+            float lat = proj_r.y;
 
             int raw_x = int(floor(lon * proj_scl + img_w_f * 0.5f + 0.5f));
             int ix = ((raw_x % iw_i) + iw_i) % iw_i;
@@ -722,9 +722,9 @@ kernel void trace_layer_kernel(
             }
           } else {
             // proj_type == 1: dual fisheye equal-area, primary + opposite-hemisphere overlap.
-            // DRIFT(gpu-metal-shared-kernel): intentional duplicate of CPU render.cpp:192-214 +
-            //   projection::{FisheyeEqualAreaForward, DualFisheyeToPixel} (re-home into a single-
-            //   source shared kernel at CUDA step; backlog: 核心模拟 GPU 迁移路线).
+            // Projection math comes from lm_proj::FisheyeEqualAreaForward (shared with CPU
+            // projection.cpp); the pixel-layout step below (DualFisheyeToPixel equivalent)
+            // is intentionally kept inline — it encodes lay-out conventions, not pure math.
             int   dual_short = min(int(prm.img_w) / 2, int(prm.img_h));
             float r          = float(dual_short) * 0.5f;
             float cy_pix     = img_h_f * 0.5f;
@@ -733,9 +733,9 @@ kernel void trace_layer_kernel(
 
             bool  is_upper = (sz >= 0.0f);
             float z_hemi   = is_upper ? sz : -sz;  // own hemisphere: +|sz|
-            float k = prm.r_scale / sqrt(1.0f + clamp(z_hemi, -1.0f + 1e-6f, 1.0f));
-            float xn = k * sx;
-            float yn = k * sy;
+            auto  ea_r = lm_proj::FisheyeEqualAreaForward(sx, sy, z_hemi, prm.r_scale);
+            float xn = ea_r.x;
+            float yn = ea_r.y;
             float cx_primary = is_upper ? cx_left : cx_right;
             float sx_primary = is_upper ? -1.0f : 1.0f;
             float fx = sx_primary * yn * r + cx_primary;
@@ -752,9 +752,9 @@ kernel void trace_layer_kernel(
             // Does NOT increment exit_wsum — preserves normalization parity with CPU.
             if (prm.max_abs_dz > 0.0f && z_hemi < prm.max_abs_dz) {
               float z_opp = -z_hemi;  // = -|sz| < 0 (matches z_hemi_opp)
-              float k2    = prm.r_scale / sqrt(1.0f + clamp(z_opp, -1.0f + 1e-6f, 1.0f));
-              float xn2   = k2 * sx;
-              float yn2   = k2 * sy;
+              auto  ea_r2 = lm_proj::FisheyeEqualAreaForward(sx, sy, z_opp, prm.r_scale);
+              float xn2 = ea_r2.x;
+              float yn2 = ea_r2.y;
               bool  is_upper_opp = !is_upper;
               float cx_opp       = is_upper_opp ? cx_left : cx_right;
               float sx_opp       = is_upper_opp ? -1.0f : 1.0f;
