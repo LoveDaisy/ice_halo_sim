@@ -136,11 +136,11 @@ struct SimData {
   RayBuffer rays_;
   std::vector<Crystal> crystals_;
   std::vector<AxisDistribution> crystal_axis_dists_;  // parallel to crystals_
-  std::vector<size_t> outgoing_indices_;              // Indices of kOutgoing rays in rays_ (filled by Simulator)
 
   // Pre-packed outgoing ray data for cache-friendly access in Consume().
   // Tightly packed by outgoing order: outgoing_d_[k*3..k*3+2] and outgoing_w_[k]
-  // correspond to outgoing_indices_[k]. Filled by Simulator alongside outgoing_indices_.
+  // are parallel — one entry per outgoing ray. Filled by Simulator. The outgoing
+  // ray count is outgoing_w_.size() (the consumer's single source of truth).
   std::vector<float> outgoing_d_;  // direction (3 floats per outgoing ray)
   std::vector<float> outgoing_w_;  // weight (1 float per outgoing ray)
   // scrum-268.8 (DR-3): per-outgoing-ray wavelength (nm). When non-empty the

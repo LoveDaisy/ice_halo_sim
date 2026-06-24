@@ -45,14 +45,14 @@ RenderConsumer::RenderConsumer(RenderConfig config)
 
 
 void RenderConsumer::Consume(const SimData& data) {
-  // scrum-258.1: SimData carries a single payload form — outgoing_d_/w_ +
-  // outgoing_indices_(.size() only) — regardless of whether the simulator
-  // ran via the legacy CPU path or a TraceBackend (exit seam). Both
-  // converge here and run through the projection pipeline below.
+  // scrum-258.1: SimData carries a single payload form — outgoing_d_/w_ —
+  // regardless of whether the simulator ran via the legacy CPU path or a
+  // TraceBackend (exit seam). Both converge here and run through the
+  // projection pipeline below.
   auto t0 = std::chrono::steady_clock::now();
   // Resize pre-allocated buffers if needed (grow-only).
   // Use outgoing count for capacity — it's the upper bound for filtered rays.
-  size_t outgoing_count = data.outgoing_indices_.size();
+  size_t outgoing_count = data.outgoing_w_.size();
   size_t needed = std::max(data.rays_.size_, outgoing_count);
   if (needed > buf_capacity_) {
     buf_capacity_ = needed;
@@ -128,7 +128,7 @@ void RenderConsumer::Consume(const SimData& data) {
 
   // Copy pre-filtered outgoing rays into contiguous buffers (Design A:
   // simulator-side filter has already dropped non-matching rays).
-  assert(!data.outgoing_indices_.empty() || data.rays_.Empty());
+  assert(!data.outgoing_w_.empty() || data.rays_.Empty());
   size_t filtered_ray_num = outgoing_count;
   if (!data.outgoing_d_.empty()) {
     std::memcpy(d_buf_.get(), data.outgoing_d_.data(), filtered_ray_num * 3 * sizeof(float));

@@ -770,7 +770,6 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   size_t original_ray_num = ray_num;  // ray_num is overwritten in the ms loop; keep original for normalization.
 
   RayBuffer all_data = AllocateAllData(config, ray_num);
-  std::vector<size_t> outgoing_indices;
   std::vector<float> outgoing_d;
   std::vector<float> outgoing_w;
   auto& init_data = workspace.init_data;
@@ -886,13 +885,11 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
           CollectData(rng_, m, spec.get(),      // input
                       buffer_data, init_data);  // output
 
-          // 2.4 Copy to all_data + collect outgoing indices.
-          size_t base_index = all_data.size_;
+          // 2.4 Copy to all_data + collect outgoing rays (d/w pre-pack).
           all_data.EmplaceBack(buffer_data[1]);
           for (size_t j = 0; j < buffer_data[1].size_; j++) {
             const auto& r = buffer_data[1][j];
             if (r.IsOutgoing()) {
-              outgoing_indices.push_back(base_index + j);
               outgoing_d.push_back(r.d_[0]);
               outgoing_d.push_back(r.d_[1]);
               outgoing_d.push_back(r.d_[2]);
@@ -926,7 +923,6 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   sim_data.crystals_ = std::move(all_crystals);
   sim_data.crystal_axis_dists_ = std::move(all_axis_dists);
   sim_data.rays_ = std::move(all_data);
-  sim_data.outgoing_indices_ = std::move(outgoing_indices);
   sim_data.outgoing_d_ = std::move(outgoing_d);
   sim_data.outgoing_w_ = std::move(outgoing_w);
   sim_data.root_ray_count_ = original_ray_num;
@@ -946,8 +942,8 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
 //   - No ReadbackImage / no Y-channel reverse-compute. The backend's
 //     per-batch O(W*H) image readback is replaced by an O(exit rays)
 //     buffer copy (see TraceBackend::ReadbackExitRays).
-//   - SimData carries outgoing_d_/w_ + a dummy outgoing_indices_
-//     (consumer reads .size() only — confirmed by render.cpp:75 / 148 grep).
+//   - SimData carries outgoing_d_/w_ as the single payload form; the consumer
+//     derives the outgoing-ray count from outgoing_w_.size().
 //   - root_ray_count_ = ray_num distinguishes a valid backend batch from
 //     the queue shutdown sentinel (default-constructed SimData has
 //     root_ray_count_ == 0); the sentinel discriminator lives in
@@ -1043,9 +1039,8 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   // the legacy consumer via outgoing_d_/w_. The rich metadata
   // (path / crystal_id / ms_layer_idx) is forwarded into
   // sim_data.exit_records_ for 258.3 filter + symmetry fold to consume —
-  // 258.2 only produces it. The consumer reads `outgoing_indices_.size()`
-  // (and a non-empty assertion in render.cpp:148), never its values —
-  // fill a dummy zero index per ray.
+  // 258.2 only produces it. The consumer derives the outgoing-ray count from
+  // outgoing_w_.size() (and a non-empty assertion in render.cpp).
   size_t exit_count = exit_records.size();
   // 0-exit batch: still Emplace a SimData so server.cpp::ConsumeData decrements
   // sim_scene_cnt_. root_ray_count_=ray_num>0 distinguishes from the shutdown
@@ -1085,9 +1080,6 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   sim_data.outgoing_w_ = std::move(exit_w);
   sim_data.outgoing_wl_ = std::move(exit_wl);
   sim_data.exit_records_ = std::move(exit_records);
-  // dummy: consumer reads .size() only (render.cpp:75); real per-ray indices
-  // arrive when 258.3 unifies outgoing_d_/w_ with exit_records_.
-  sim_data.outgoing_indices_.assign(exit_count, 0);
   data_queue_->Emplace(std::move(sim_data));
 }
 

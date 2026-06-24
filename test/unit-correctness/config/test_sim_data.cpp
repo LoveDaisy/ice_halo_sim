@@ -44,7 +44,9 @@ static_assert(sizeof(void*) == 8, "SimData layout assumes 64-bit pointers");
 // shrinking back to 192. scrum-258.2 adds exit_records_
 // (vector<ExitRayRecord>, 24B), bumping 192 → 216. scrum-268.8 (DR-3) adds
 // outgoing_wl_ (vector<float>, 24B) for per-ray wavelength, bumping 216 → 240.
-static_assert(sizeof(SimData) == 240,
+// chore-292 (A2) removes the vestigial outgoing_indices_ (vector<size_t>, 24B)
+// — content never read; count = outgoing_w_.size() — shrinking 240 → 216.
+static_assert(sizeof(SimData) == 216,
               "SimData layout changed — update test_sim_data.cpp DeepCopy/Move assertions "
               "and sim_data.cpp's static_assert.");
 #endif
@@ -72,7 +74,6 @@ SimData MakePopulatedSimData() {
   for (int i = 0; i < 5; i++) {
     s.rays_.EmplaceBack(MakeRay(i), RaypathRecorder{});
   }
-  s.outgoing_indices_ = { 0, 2, 4 };
   s.outgoing_d_ = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f };
   s.outgoing_w_ = { 0.5f, 0.7f };
   // scrum-268.8 (DR-3): outgoing_wl_ deep-copy / move coverage.
@@ -791,7 +792,6 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
   }
 
   // Vector field equality.
-  EXPECT_EQ(copy.outgoing_indices_, original.outgoing_indices_);
   EXPECT_EQ(copy.outgoing_d_, original.outgoing_d_);
   EXPECT_EQ(copy.outgoing_w_, original.outgoing_w_);
   EXPECT_EQ(copy.outgoing_wl_, original.outgoing_wl_);  // scrum-268.8 (DR-3)
@@ -805,9 +805,6 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
   // Deep copy independence — each pointer/container field independently.
   copy.rays_[0].w_ = 999.0f;
   EXPECT_FLOAT_EQ(original.rays_[0].w_, 0.0f) << "rays_ not deep-copied";
-
-  copy.outgoing_indices_.push_back(99);
-  EXPECT_EQ(original.outgoing_indices_.size(), 3u) << "outgoing_indices_ not deep-copied";
 
   copy.outgoing_d_.clear();
   EXPECT_EQ(original.outgoing_d_.size(), 6u) << "outgoing_d_ not deep-copied";
@@ -840,7 +837,6 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   for (int i = 0; i < 5; i++) {
     EXPECT_FLOAT_EQ(target.rays_[i].w_, original.rays_[i].w_);
   }
-  EXPECT_EQ(target.outgoing_indices_, original.outgoing_indices_);
   EXPECT_EQ(target.outgoing_d_, original.outgoing_d_);
   EXPECT_EQ(target.outgoing_w_, original.outgoing_w_);
   EXPECT_EQ(target.outgoing_wl_, original.outgoing_wl_);  // scrum-268.8 (DR-3)
@@ -851,8 +847,6 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   // Deep copy independence.
   target.rays_[0].w_ = 999.0f;
   EXPECT_FLOAT_EQ(original.rays_[0].w_, 0.0f) << "rays_ not deep-assigned";
-  target.outgoing_indices_.push_back(99);
-  EXPECT_EQ(original.outgoing_indices_.size(), 3u) << "outgoing_indices_ not deep-assigned";
   target.exit_records_.clear();
   EXPECT_EQ(original.exit_records_.size(), 2u) << "exit_records_ not deep-assigned";
   target.crystals_.clear();
@@ -868,7 +862,6 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   const size_t kSnapRaysSize = orig.rays_.size_;
   const size_t kSnapRaysCap = orig.rays_.capacity_;
   const float kSnapRay0W = orig.rays_[0].w_;
-  const auto kSnapOutgoingIdx = orig.outgoing_indices_;
   const size_t kSnapCrystalsSize = orig.crystals_.size();
 
   SimData& self_alias = orig;
@@ -880,7 +873,6 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   EXPECT_EQ(orig.rays_.size_, kSnapRaysSize);
   EXPECT_EQ(orig.rays_.capacity_, kSnapRaysCap);
   EXPECT_FLOAT_EQ(orig.rays_[0].w_, kSnapRay0W);
-  EXPECT_EQ(orig.outgoing_indices_, kSnapOutgoingIdx);
   EXPECT_EQ(orig.crystals_.size(), kSnapCrystalsSize);
 }
 
@@ -898,7 +890,6 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_FLOAT_EQ(moved.curr_wl_, 550.0f);
   EXPECT_EQ(moved.generation_, 42u);
   EXPECT_EQ(moved.root_ray_count_, 7u);
-  EXPECT_EQ(moved.outgoing_indices_.size(), 3u);
   EXPECT_EQ(moved.outgoing_d_.size(), 6u);
   EXPECT_EQ(moved.outgoing_w_.size(), 2u);
   EXPECT_EQ(moved.exit_records_.size(), 2u);
@@ -915,7 +906,6 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   // This assertion locks the current observed behavior; if migrating to MSVC
   // STL or a future libc++ change, this may need to be relaxed.
   EXPECT_TRUE(original.crystals_.empty());
-  EXPECT_TRUE(original.outgoing_indices_.empty());
   EXPECT_TRUE(original.outgoing_d_.empty());
   EXPECT_TRUE(original.outgoing_w_.empty());
   EXPECT_TRUE(original.exit_records_.empty());
@@ -939,7 +929,6 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   EXPECT_EQ(dst.rays_.capacity_, 8u);
   EXPECT_FLOAT_EQ(dst.curr_wl_, 550.0f);
   EXPECT_EQ(dst.generation_, 42u);
-  EXPECT_EQ(dst.outgoing_indices_.size(), 3u);
   EXPECT_EQ(dst.crystals_.size(), 1u);
 
   // Source moved-from state.
@@ -947,7 +936,6 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   EXPECT_EQ(src.rays_.size_, 0u);
   EXPECT_EQ(src.rays_.capacity_, 0u);
   EXPECT_TRUE(src.crystals_.empty());
-  EXPECT_TRUE(src.outgoing_indices_.empty());
 
   // Self-move-assignment must preserve all fields (source code has
   // &other == this guard). Snapshot → self-move → assert preservation.
@@ -956,7 +944,6 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   const uint64_t kSnapGen = self.generation_;
   const size_t kSnapRaysSize = self.rays_.size_;
   RaySeg* snap_rays_ptr = self.rays_.rays_.get();
-  const size_t kSnapOutgoingIdxSize = self.outgoing_indices_.size();
   const size_t kSnapCrystalsSize = self.crystals_.size();
 
   // Use an alias reference to bypass -Wself-move warning.
@@ -967,6 +954,5 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   EXPECT_EQ(self.generation_, kSnapGen);
   EXPECT_EQ(self.rays_.size_, kSnapRaysSize);
   EXPECT_EQ(self.rays_.rays_.get(), snap_rays_ptr);
-  EXPECT_EQ(self.outgoing_indices_.size(), kSnapOutgoingIdxSize);
   EXPECT_EQ(self.crystals_.size(), kSnapCrystalsSize);
 }
