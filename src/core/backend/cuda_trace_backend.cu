@@ -62,6 +62,7 @@
 #include "core/math.hpp"
 #include "core/raypath.hpp"
 #include "core/shared/optics_shared.h"
+#include "core/shared/pcg_shared.h"
 #include "core/shared/traversal_shared.h"
 #include "core/trace_ops.hpp"
 #include "util/logger.hpp"
@@ -103,6 +104,146 @@ size_t ComputeExitCap(size_t n_roots, size_t max_hits) {
   return std::min(cap, hard_cap);
 }
 
+// Continuation buffer capacity (296.4). Each root may emit up to
+// (max_hits * 2 + 4) candidate continuations (matches ComputeExitCap upper
+// bound — every outward exit is a continuation candidate). Same 64 MiB hard
+// cap scaled by float[4] per slot (dir3 + weight) so the cont pool never
+// exceeds the exit-record pool's memory footprint by more than 1.
+size_t ComputeContCap(size_t n_roots, size_t max_hits) {
+  size_t cap = n_roots * (max_hits * 2u + 4u);
+  // Each cont slot = 3 float dir + 1 float weight + 1 uint32 wl_idx = 20B,
+  // safely below ExitRayRecord (~36B). Reuse the exit-pool hard cap row.
+  size_t hard_cap = (size_t{64u} * 1024u * 1024u) / sizeof(ExitRayRecord);
+  return std::min(cap, hard_cap);
+}
+
+// File-local mirror of Metal `kFaceCoplanarFloor` (metal_trace_backend.mm:1270)
+// — kept numerically in sync with `simulator.cpp::detail::PolygonFaceOfTri`
+// and `crystal.cpp::BuildPolygonFaceData`. Used by tri-to-poly mapping below.
+constexpr float kCudaFaceCoplanarFloor = 1e-2f;
+
+// PCG-stream isolation nonces. Independent values keep the three CUDA-side PCG
+// streams (transit orientation sampler / emit-gate prob draw / future device
+// root-gen) statistically separated even when spec.seed degenerates to 0.
+// Same role as Metal's `kTransitNonce` (metal_trace_backend.mm:1604) and the
+// host-side gate-seed derivation.
+constexpr uint32_t kCudaTransitNonce = 0xA5A5A5A5u;
+constexpr uint32_t kCudaGateNonce    = 0x5A5A5A5Au;
+
+// File-local mirror of Metal `ComputeJacobianEnvelopeForDeviceGen`
+// (metal_trace_backend.mm:259). The four branches MUST stay numerically
+// identical to `ComputeJacobianEnvelope` in `src/core/math.cpp` (consumed by
+// `RandomSampler::SampleSphericalPointsSph` generic-rejection path); if the
+// host envelope changes, mirror the change here in the same PR.
+float CudaJacobianEnvelopeForDeviceGen(const Distribution& dist) {
+  switch (dist.type) {
+    case DistributionType::kGaussian:
+      return std::cos(std::max(std::abs(dist.mean) - 3.0f * dist.std, 0.0f) * math::kDegreeToRad);
+    case DistributionType::kZigzag:
+      return std::cos(std::max(std::abs(dist.mean) - dist.std, 0.0f) * math::kDegreeToRad);
+    case DistributionType::kLaplacian:
+      return std::cos(std::max(std::abs(dist.mean) - 5.0f * dist.std, 0.0f) * math::kDegreeToRad);
+    case DistributionType::kUniform:
+    case DistributionType::kNoRandom:
+    case DistributionType::kGaussianLegacy:
+      return 1.0f;
+  }
+  return 1.0f;
+}
+
+// Build the transit-form GenRootKernelParams. Mirrors Metal's
+// `BuildTransitRootParams` (metal_trace_backend.mm:1593): orientation +
+// geometry fields are derived from `axis_dist` exactly as Metal's
+// `BuildGenRootParams` would; sun_* / wl_pool_size are populated (defaults)
+// but unused by `transit_multi_ms_kernel`. Caller fills `gen_seed` /
+// `gen_ray_base` from the Impl-level transit_seed_ / transit_ray_count_.
+lm_pcg::GenRootKernelParams BuildTransitGpParams(const AxisDistribution& axis_dist,
+                                                  uint32_t tri_count, uint32_t num_rays) {
+  lm_pcg::GenRootKernelParams gp{};
+  gp.tri_count = tri_count;
+  gp.num_rays  = num_rays;
+  // Sun / wl_pool fields unused by transit; leave zero (BuildGenRootParams
+  // populates them, but the transit kernel reads only orientation + geometry).
+  gp.sun_lon = 0.0f;
+  gp.sun_lat = 0.0f;
+  gp.sun_half_angle = 0.0f;
+  gp.wl_pool_size = 1u;  // wl_idx pass-through; 1 keeps "% pool_size" defined
+
+  float lat_mean_rad = axis_dist.latitude_dist.mean * math::kDegreeToRad;
+  float lat_std_rad  = axis_dist.latitude_dist.std  * math::kDegreeToRad;
+  float rejection_m  = 1.0f;
+  uint32_t lat_path  = lm_pcg::kLatPathGenericReject;
+
+  if (axis_dist.IsFullSphereUniform()) {
+    lat_path = lm_pcg::kLatPathFullSphere;
+  } else if (axis_dist.latitude_dist.type == DistributionType::kNoRandom) {
+    lat_path = lm_pcg::kLatPathNoRandom;
+  } else if (axis_dist.latitude_dist.type == DistributionType::kGaussianLegacy) {
+    lat_path = lm_pcg::kLatPathGaussLegacy;
+  } else if (axis_dist.latitude_dist.type == DistributionType::kGaussian) {
+    // Same Rayleigh threshold as math.cpp:469 / metal_trace_backend.mm:1513:
+    // colatitude_center + 3σ < 0.5°.
+    constexpr float kPolarThresholdRad = 0.5f * math::kDegreeToRad;
+    float colatitude_center = math::kPi_2 - std::abs(lat_mean_rad);
+    bool use_rayleigh = (colatitude_center + 3.0f * lat_std_rad) < kPolarThresholdRad;
+    if (use_rayleigh) {
+      lat_path = lm_pcg::kLatPathRayleigh;
+    } else {
+      lat_path = lm_pcg::kLatPathGenericReject;
+      rejection_m = CudaJacobianEnvelopeForDeviceGen(axis_dist.latitude_dist);
+    }
+  } else {
+    rejection_m = CudaJacobianEnvelopeForDeviceGen(axis_dist.latitude_dist);
+  }
+
+  gp.lat_path        = lat_path;
+  gp.lat_dist_type   = static_cast<uint32_t>(axis_dist.latitude_dist.type);
+  gp.lat_mean_rad    = lat_mean_rad;
+  gp.lat_std_rad     = lat_std_rad;
+  gp.lat_rejection_m = rejection_m;
+
+  gp.az_type     = static_cast<uint32_t>(axis_dist.azimuth_dist.type);
+  gp.az_mean_rad = axis_dist.azimuth_dist.mean * math::kDegreeToRad;
+  gp.az_std_rad  = axis_dist.azimuth_dist.std  * math::kDegreeToRad;
+  gp.az_pad      = 0.0f;
+
+  gp.roll_type     = static_cast<uint32_t>(axis_dist.roll_dist.type);
+  gp.roll_mean_rad = axis_dist.roll_dist.mean * math::kDegreeToRad;
+  gp.roll_std_rad  = axis_dist.roll_dist.std  * math::kDegreeToRad;
+  gp.roll_pad      = 0.0f;
+  return gp;
+}
+
+// Compute tri-to-poly mapping (argmax over polygon-face normals + coplanar
+// floor). Mirrors Metal `UploadCrystal` (metal_trace_backend.mm:1271-1286)
+// byte-for-byte; the absolute-ε first-match anti-pattern guard in
+// doc/numerical-robustness.md约定 2 applies — DO NOT replace with a
+// `dot > 1-ε` early-exit.
+void FillTriToPoly(const Crystal& crystal, std::vector<uint16_t>& out) {
+  size_t tri_cnt  = crystal.TotalTriangles();
+  size_t poly_cnt = crystal.PolygonFaceCount();
+  out.resize(tri_cnt);
+  const float* tri_norms = crystal.GetTriangleNormal();
+  const float* poly_norms = crystal.GetPolygonFaceNormal();
+  constexpr uint16_t kInvalidIdU16 = 0xffffu;
+  for (size_t t = 0; t < tri_cnt; ++t) {
+    const float* tn = tri_norms + t * 3u;
+    int best_p = -1;
+    float best_dot = -1.0f;
+    for (size_t p = 0; p < poly_cnt; ++p) {
+      const float* pn = poly_norms + p * 3u;
+      float dot = tn[0] * pn[0] + tn[1] * pn[1] + tn[2] * pn[2];
+      if (dot > best_dot) {
+        best_dot = dot;
+        best_p = static_cast<int>(p);
+      }
+    }
+    out[t] = (best_p >= 0 && best_dot >= 1.0f - kCudaFaceCoplanarFloor)
+                 ? static_cast<uint16_t>(best_p)
+                 : kInvalidIdU16;
+  }
+}
+
 // --- Device-side geometry --------------------------------------------------
 
 __device__ inline float dot3(const float* a, const float* b) {
@@ -133,6 +274,26 @@ __device__ inline ExitFaceSeq BuildExitPath(const uint8_t* path_rec, uint32_t le
 // frame invariant 6: exit_dir is rotated crystal->world using the per-ray
 // d_rot_c2w[tid*9..tid*9+8] row-major matrix before being written.
 
+// scrum-cuda-backend-complete 296.4 (task-cuda-multi-ms) Step 3: kernel gains
+// ms_mode-aware emit gate.
+//
+// ms_mode == 0 (single MS or final-layer multi-MS): every refracted exit /
+//   entry-face external reflect writes an `ExitRayRecord` (existing path).
+// ms_mode == 1 (non-final multi-MS layer): each emit candidate draws an
+//   independent PCG prob (`pcg_uniform(gate_stream) < ms_prob`):
+//     pass → write continuation buffer (d_cont_*); the next-layer trace
+//            kernel reads these via transit_multi_ms_kernel.
+//     fail → mid-exit: write to the exit buffer tagged with this layer's
+//            `ms_layer_idx`. Mirrors Metal lumice_trace.metal:633-660 and
+//            simulator.cpp:472 (filter_pass + prob_fail → outgoing) so the
+//            cumulative XYZ image preserves energy across MS layers. (296.4
+//            ships without filter; 296.5 adds the filter gate that wraps
+//            this prob gate.)
+//   The per-ray gate_stream is seeded once at kernel entry as
+//     {gate_seed, gate_ray_base + tid, 0}. Successive `pcg_uniform` calls
+//   inside the ray advance `slot` per draw, so multiple emit sites per ray
+//   (entry external-reflect + per-bounce refracted exit) consume disjoint
+//   prob streams — matches CPU's per-emit `rng.GetUniform()` cadence.
 __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        // 3 × n_roots (crystal-local)
                                        const float* __restrict__ d_pos,         // 3 × n_roots (crystal-local)
                                        const float* __restrict__ d_ws,          // n_roots
@@ -148,7 +309,18 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                        uint32_t exit_cap,
                                        uint32_t* __restrict__ d_exit_count,
                                        uint16_t crystal_id,
-                                       uint8_t ms_layer_idx) {
+                                       uint8_t ms_layer_idx,
+                                       // ms_mode==1 emit-gate inputs (296.4). Pass 0 / nullptr / 0
+                                       // for single-MS or final-layer dispatches.
+                                       uint8_t ms_mode,
+                                       float ms_prob,
+                                       float* __restrict__ d_cont_d,
+                                       float* __restrict__ d_cont_w,
+                                       uint32_t* __restrict__ d_cont_wl_idx,
+                                       uint32_t* __restrict__ d_cont_count,
+                                       uint32_t cont_cap,
+                                       uint32_t gate_seed,
+                                       uint32_t gate_ray_base) {
   const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_roots) {
     return;
@@ -157,6 +329,17 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
   float dir[3] = {d_dirs[tid * 3u + 0u], d_dirs[tid * 3u + 1u], d_dirs[tid * 3u + 2u]};
   float org[3] = {d_pos[tid * 3u + 0u], d_pos[tid * 3u + 1u], d_pos[tid * 3u + 2u]};
   float w = d_ws[tid];
+
+  // ms_mode==1 emit-gate PCG stream. Disjoint per (gate_seed, layer-batch,
+  // tid); each pcg_uniform draw inside the ray bumps `slot` so multiple emit
+  // sites consume independent prob draws (mirrors CPU's per-emit
+  // rng.GetUniform()). The stream is constructed even in ms_mode==0 (cost is
+  // 3 register writes, ~zero) so the branches below stay symmetric and the
+  // compiler can hoist the dead variable away on ms_mode==0.
+  lm_pcg::PcgStream gate_stream;
+  gate_stream.seed       = gate_seed;
+  gate_stream.global_idx = gate_ray_base + tid;
+  gate_stream.slot       = 0u;
 
   // Initial from_poly = entry-face polygon id from InitRay_p_fid output.
   // p sits exactly on this polygon (no epsilon push); without suppressing
@@ -227,19 +410,50 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
       for (int i = 0; i < 3; ++i) {
         exit_world[i] = rot[i * 3 + 0] * rd0 + rot[i * 3 + 1] * rd1 + rot[i * 3 + 2] * rd2;
       }
-      uint32_t slot = atomicAdd(d_exit_count, 1u);
-      if (slot < exit_cap) {
-        ExitRayRecord& rec = d_exit[slot];
-        rec.dir[0] = exit_world[0];
-        rec.dir[1] = exit_world[1];
-        rec.dir[2] = exit_world[2];
-        rec.weight = w_refl_e;
-        // Entry external reflect: path = [entry_face]. Matches Metal's
-        // hit=0 mid-exit emission with rec_len=1 (lumice_trace.metal:658-662).
-        rec.path = BuildExitPath(path_rec, rec_len);
-        rec.crystal_id = crystal_id;
-        rec.ms_layer_idx = ms_layer_idx;
-        rec.wl_idx = 0u;
+      if (ms_mode == 1u) {
+        // ms_mode==1 emit gate. prob-pass → continuation; prob-fail →
+        // mid-exit (mirrors Metal lumice_trace.metal:633-660 + CPU
+        // simulator.cpp:472 outgoing semantics). MVP has no filter so every
+        // candidate enters the gate; 296.5 will wrap this in a filter check.
+        bool do_continue = (lm_pcg::pcg_uniform(gate_stream) < ms_prob);
+        if (do_continue) {
+          uint32_t cslot = atomicAdd(d_cont_count, 1u);
+          if (cslot < cont_cap) {
+            d_cont_d[cslot * 3u + 0u] = exit_world[0];
+            d_cont_d[cslot * 3u + 1u] = exit_world[1];
+            d_cont_d[cslot * 3u + 2u] = exit_world[2];
+            d_cont_w[cslot]           = w_refl_e;
+            d_cont_wl_idx[cslot]      = 0u;  // wl pass-through; WlPool is 296.6
+          }
+        } else {
+          uint32_t slot = atomicAdd(d_exit_count, 1u);
+          if (slot < exit_cap) {
+            ExitRayRecord& rec = d_exit[slot];
+            rec.dir[0] = exit_world[0];
+            rec.dir[1] = exit_world[1];
+            rec.dir[2] = exit_world[2];
+            rec.weight = w_refl_e;
+            rec.path = BuildExitPath(path_rec, rec_len);
+            rec.crystal_id = crystal_id;
+            rec.ms_layer_idx = ms_layer_idx;
+            rec.wl_idx = 0u;
+          }
+        }
+      } else {
+        uint32_t slot = atomicAdd(d_exit_count, 1u);
+        if (slot < exit_cap) {
+          ExitRayRecord& rec = d_exit[slot];
+          rec.dir[0] = exit_world[0];
+          rec.dir[1] = exit_world[1];
+          rec.dir[2] = exit_world[2];
+          rec.weight = w_refl_e;
+          // Entry external reflect: path = [entry_face]. Matches Metal's
+          // hit=0 mid-exit emission with rec_len=1 (lumice_trace.metal:658-662).
+          rec.path = BuildExitPath(path_rec, rec_len);
+          rec.crystal_id = crystal_id;
+          rec.ms_layer_idx = ms_layer_idx;
+          rec.wl_idx = 0u;
+        }
       }
     }
 
@@ -345,20 +559,50 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
         for (int i = 0; i < 3; ++i) {
           exit_world[i] = rot[i * 3 + 0] * fdx + rot[i * 3 + 1] * fdy + rot[i * 3 + 2] * fdz;
         }
-        uint32_t slot = atomicAdd(d_exit_count, 1u);
-        if (slot < exit_cap) {
-          ExitRayRecord& rec = d_exit[slot];
-          rec.dir[0] = exit_world[0];
-          rec.dir[1] = exit_world[1];
-          rec.dir[2] = exit_world[2];
-          rec.weight = w_refr;
-          // Rich exit path = [entry_face, f_1, ..., f_K] where f_K = hit_poly
-          // (the face the ray refracted through). Mirrors Metal mid-exit
-          // emission at lumice_trace.metal:658-662.
-          rec.path = BuildExitPath(path_rec, rec_len);
-          rec.crystal_id = crystal_id;
-          rec.ms_layer_idx = ms_layer_idx;
-          rec.wl_idx = 0u;
+        if (ms_mode == 1u) {
+          // Same gate semantics as the entry-face emit above (296.4): prob-pass
+          // routes to the continuation ring, prob-fail emits as mid-exit so
+          // the cumulative XYZ image stays energy-conserving across layers.
+          bool do_continue = (lm_pcg::pcg_uniform(gate_stream) < ms_prob);
+          if (do_continue) {
+            uint32_t cslot = atomicAdd(d_cont_count, 1u);
+            if (cslot < cont_cap) {
+              d_cont_d[cslot * 3u + 0u] = exit_world[0];
+              d_cont_d[cslot * 3u + 1u] = exit_world[1];
+              d_cont_d[cslot * 3u + 2u] = exit_world[2];
+              d_cont_w[cslot]           = w_refr;
+              d_cont_wl_idx[cslot]      = 0u;
+            }
+          } else {
+            uint32_t slot = atomicAdd(d_exit_count, 1u);
+            if (slot < exit_cap) {
+              ExitRayRecord& rec = d_exit[slot];
+              rec.dir[0] = exit_world[0];
+              rec.dir[1] = exit_world[1];
+              rec.dir[2] = exit_world[2];
+              rec.weight = w_refr;
+              rec.path = BuildExitPath(path_rec, rec_len);
+              rec.crystal_id = crystal_id;
+              rec.ms_layer_idx = ms_layer_idx;
+              rec.wl_idx = 0u;
+            }
+          }
+        } else {
+          uint32_t slot = atomicAdd(d_exit_count, 1u);
+          if (slot < exit_cap) {
+            ExitRayRecord& rec = d_exit[slot];
+            rec.dir[0] = exit_world[0];
+            rec.dir[1] = exit_world[1];
+            rec.dir[2] = exit_world[2];
+            rec.weight = w_refr;
+            // Rich exit path = [entry_face, f_1, ..., f_K] where f_K = hit_poly
+            // (the face the ray refracted through). Mirrors Metal mid-exit
+            // emission at lumice_trace.metal:658-662.
+            rec.path = BuildExitPath(path_rec, rec_len);
+            rec.crystal_id = crystal_id;
+            rec.ms_layer_idx = ms_layer_idx;
+            rec.wl_idx = 0u;
+          }
         }
       }
     }
@@ -370,6 +614,123 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
     w = w_refl;
     from_poly = hit_poly;
   }
+}
+
+// --- transit_multi_ms_kernel ----------------------------------------------
+//
+// Device-resident MS-layer transit (296.4). Consumes a continuation batch
+// produced by `trace_single_ms_kernel` in ms_mode==1 and emits root rays for
+// the next MS layer. The whole continuation hop stays on device — only the
+// 4-byte continuation count crosses the seam during Recombine. Mirrors Metal
+// `transit_root_kernel` (lumice_trace.metal:1213-1294) form-for-form so the
+// two backends share the orientation + entry-point sampling math via
+// `lm_pcg::*` and cannot drift on either the PCG hash or the sample logic.
+//
+// PCG stream identity: caller pre-derives `gp.gen_seed = transit_seed_` and
+// `gp.gen_ray_base = transit_ray_count_` so (gen_seed, gen_ray_base + tid,
+// slot) is unique across (layer, batch, tid, draw). transit_ray_count_ is
+// advanced by the host AFTER the dispatch returns (Recombine tail). Re-using
+// the same global_idx silently kills cross-seed independence — the AC2b
+// guard catches it (scrum-267.3 lesson).
+__global__ void transit_multi_ms_kernel(
+    const float* __restrict__ d_cont_d_in,        // 3 × n_rays (world-space)
+    const float* __restrict__ d_cont_w_in,        // n_rays (carried continuation weight)
+    const uint32_t* __restrict__ d_cont_wl_idx_in,  // n_rays (pass-through wl_idx)
+    float* __restrict__ d_root_d_out,             // 3 × n_rays (crystal-local)
+    float* __restrict__ d_root_p_out,             // 3 × n_rays (crystal-local entry point)
+    float* __restrict__ d_root_w_out,             // n_rays (post-transit weight)
+    uint32_t* __restrict__ d_root_from_poly_out,  // n_rays (entry-face polygon id; kInvalidId widened)
+    float* __restrict__ d_root_rot_out,           // 9 × n_rays (row-major crystal→world)
+    uint32_t* __restrict__ d_root_wl_idx_out,     // n_rays (pass-through)
+    const float* __restrict__ d_tri_vtx,          // 9 × tri_cnt (3 verts × 3 coords)
+    const float* __restrict__ d_tri_norm,         // 3 × tri_cnt (outward triangle normal)
+    const float* __restrict__ d_tri_area,         // tri_cnt
+    const uint16_t* __restrict__ d_tri_to_poly,   // tri_cnt (kInvalidId on coplanar miss)
+    lm_pcg::GenRootKernelParams gp,
+    uint32_t n_rays) {
+  const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid >= n_rays || gp.tri_count == 0u) {
+    return;
+  }
+
+  // 1. Orientation sample (shares sample_lat_lon_roll with trace via the
+  //    shared pcg_shared.h). gp.gen_ray_base + tid yields a disjoint
+  //    global_idx per (layer, batch, tid).
+  lm_pcg::PcgStream stream;
+  stream.seed       = gp.gen_seed;
+  stream.global_idx = gp.gen_ray_base + tid;
+  stream.slot       = 0u;
+  float lon = 0.0f;
+  float lat = 0.0f;
+  float roll = 0.0f;
+  lm_pcg::sample_lat_lon_roll(stream, gp, lon, lat, roll);
+
+  float mat9[9];
+  lm_pcg::build_crystal_rotation_9(lon, lat, roll, mat9);
+
+  // 2. World-space continuation direction → crystal-local frame.
+  float d_world[3] = {d_cont_d_in[tid * 3u + 0u],
+                      d_cont_d_in[tid * 3u + 1u],
+                      d_cont_d_in[tid * 3u + 2u]};
+  float d_crystal[3];
+  lm_pcg::apply_inverse_mat9(mat9, d_world, d_crystal);
+
+  // 3. Triangle area × facing weighted pick. kMaxTriPerKernel-sized stack
+  //    array; tri_cnt is BeginSession-validated to fit (otherwise it would
+  //    throw BackendUnavailableError before any kernel dispatch).
+  float proj_prob[lm_pcg::kMaxTriPerKernel];
+  uint32_t n_tri = gp.tri_count;
+  if (n_tri > lm_pcg::kMaxTriPerKernel) {
+    n_tri = lm_pcg::kMaxTriPerKernel;  // defensive; host should have already throw'd
+  }
+  for (uint32_t t = 0u; t < n_tri; ++t) {
+    float dot = d_crystal[0] * d_tri_norm[t * 3u + 0u]
+              + d_crystal[1] * d_tri_norm[t * 3u + 1u]
+              + d_crystal[2] * d_tri_norm[t * 3u + 2u];
+    // -dot * area: negate so triangles whose outward normal opposes the ray
+    // (i.e. the ray enters that face) get positive weight; clamp the rest to
+    // zero (mirrors Metal lumice_trace.metal:1265).
+    proj_prob[t] = fmaxf(-dot * d_tri_area[t], 0.0f);
+  }
+  float u_cat = lm_pcg::pcg_uniform(stream);
+  uint32_t tri_id = lm_pcg::categorical_sample(proj_prob, n_tri, u_cat);
+
+  // 4. Uniform sample inside the chosen triangle → entry point p.
+  float p[3];
+  lm_pcg::sample_triangle(stream, d_tri_vtx + tri_id * 9u, p);
+
+  // 5. tri_to_poly. kInvalidId (uint16_t 0xffff) signals "triangle has no
+  //    polygon backing under the coplanar-floor predicate" — mirror Metal's
+  //    InitRay_p_fid zero-weight fallback so downstream trace dispatches see
+  //    a benign drop (w=0 short-circuits the entry-face emit and main loop).
+  uint16_t to_face_u16 = d_tri_to_poly[tri_id];
+  float w = d_cont_w_in[tid];
+  constexpr uint16_t kInvalidIdU16 = 0xffffu;
+  uint32_t to_face_u32;
+  if (to_face_u16 == kInvalidIdU16) {
+    w = 0.0f;
+    to_face_u32 = 0xFFFFFFFFu;  // widened sentinel; trace kernel's `from_poly < poly_cnt`
+                                // guard filters this naturally.
+  } else {
+    to_face_u32 = static_cast<uint32_t>(to_face_u16);
+  }
+
+  // 6. Emit root buffers. d_root_d_out / d_root_p_out are crystal-local (the
+  //    trace kernel consumes them in that frame), d_root_rot_out is the
+  //    crystal→world matrix for invariant-6 conversion on emit, and
+  //    d_root_wl_idx_out is the lifetime wavelength tag (MVP: 0).
+  d_root_d_out[tid * 3u + 0u] = d_crystal[0];
+  d_root_d_out[tid * 3u + 1u] = d_crystal[1];
+  d_root_d_out[tid * 3u + 2u] = d_crystal[2];
+  d_root_p_out[tid * 3u + 0u] = p[0];
+  d_root_p_out[tid * 3u + 1u] = p[1];
+  d_root_p_out[tid * 3u + 2u] = p[2];
+  d_root_w_out[tid] = w;
+  d_root_from_poly_out[tid] = to_face_u32;
+  for (uint32_t k = 0u; k < 9u; ++k) {
+    d_root_rot_out[tid * 9u + k] = mat9[k];
+  }
+  d_root_wl_idx_out[tid] = d_cont_wl_idx_in[tid];
 }
 
 }  // namespace
@@ -395,18 +756,44 @@ struct CudaTraceBackend::Impl {
   float* d_poly_d_ = nullptr;  // poly_cnt (plane constant: p·n + d = 0)
   uint32_t poly_cnt_ = 0;
 
+  // --- Multi-MS continuation (296.4) ---------------------------------------
+  // Per-session triangle pool (transit_multi_ms_kernel needs vtx/norm/area +
+  // tri-to-poly for area×facing-weighted entry-point sampling). Single-CI MVP
+  // — multi-CI 在 296.6 落地。Layout mirrors Metal `tri_*_buf_`.
+  float*    d_tri_vtx_     = nullptr;  // 9 × tri_cnt (3 verts × 3 coords)
+  float*    d_tri_norm_    = nullptr;  // 3 × tri_cnt (outward triangle normal)
+  float*    d_tri_area_    = nullptr;  // tri_cnt
+  uint16_t* d_tri_to_poly_ = nullptr;  // tri_cnt (kInvalidId on coplanar miss)
+  uint32_t  tri_cnt_       = 0;
+
   // Per-ray crystal->world rotation buffer (9 floats/ray, row-major
   // Rotation::mat_). Allocated in EnsureSessionBuffers; filled per TraceLayer
-  // from InitRayFirstMs all_data[i].crystal_rot_ output. Mirrors
+  // from InitRayFirstMs all_data[i].crystal_rot_ output (ms_mode==0 path) or
+  // by transit_multi_ms_kernel (ms_mode==1 path). Sized to cont_cap_ slots
+  // so the transit-kernel write path stays in-bounds. Mirrors
   // metal_trace_backend.mm's per-ray rot upload (frame invariant 6).
   float* d_rot_c2w_ = nullptr;
 
-  // Per-batch root-ray buffers (allocated lazily on first TraceLayer once
-  // n_roots is known).
+  // Per-batch root-ray buffers. Sized to cont_cap_ slots so the transit
+  // kernel can fill up to cont_cap_ root entries (continuation rays from one
+  // layer may exceed the next layer's n_roots after fan-out).
   float* d_dirs_ = nullptr;
   float* d_pos_ = nullptr;
   float* d_ws_ = nullptr;
-  uint32_t* d_from_poly_ = nullptr;  // n_roots; per-ray entry-face polygon id
+  uint32_t* d_from_poly_ = nullptr;  // per-ray entry-face polygon id
+
+  // --- Continuation ring (296.4) -------------------------------------------
+  // Single ping-pong slot (no multi-generation tracking required by seam
+  // lifetime contract: DeviceRayBatch::backend_ptr valid only until the next
+  // Recombine; see trace_backend.hpp). Written by trace_single_ms_kernel when
+  // ms_mode==1, consumed by transit_multi_ms_kernel.
+  float*    d_cont_d_       = nullptr;   // 3 × cont_cap (world-space dir)
+  float*    d_cont_w_       = nullptr;   // cont_cap (continuation weight)
+  uint32_t* d_cont_wl_idx_  = nullptr;   // cont_cap (wl pass-through; MVP always 0)
+  uint32_t* d_cont_count_   = nullptr;   // 1 uint32 (atomic, device)
+  size_t    cont_cap_       = 0;
+  uint32_t  h_cont_count_   = 0;         // host snapshot after 4B D2H readback
+  uint32_t* pinned_cont_count_ = nullptr;  // 1 uint32 pinned host (D2H staging)
 
   // Session-level exit pool.
   ExitRayRecord* d_exit_ = nullptr;
@@ -436,6 +823,35 @@ struct CudaTraceBackend::Impl {
   cudaEvent_t ev_end_d2h_{};
   bool events_created_ = false;
 
+  // --- Transit-kernel PCG state (296.4) ------------------------------------
+  // Independent PCG stream for the device-resident continuation engine. The
+  // counter is monotone across the whole session (NOT reset across batches /
+  // EndSession idle gaps) so the (transit_seed_, transit_ray_count_ + tid)
+  // tuple stays disjoint per (layer, batch, tid) — re-using the same
+  // global_idx silently collapses cross-seed independence (scrum-267.3 lesson;
+  // see [[project_scrum267_continuation_engine_done]]). transit_seeded_ guards
+  // the first-time reset so Reset() can free buffers without zeroing the
+  // counter mid-session.
+  uint32_t transit_seed_      = 0u;
+  size_t   transit_ray_count_ = 0;
+  bool     transit_seeded_    = false;
+
+  // --- Emit-gate PCG state (296.4) -----------------------------------------
+  // Independent PCG stream for the ms_mode==1 emit-gate prob draw inside
+  // `trace_single_ms_kernel`. Same monotone-counter discipline as transit_*.
+  uint32_t gate_seed_      = 0u;
+  size_t   gate_ray_count_ = 0;
+  bool     gate_seeded_    = false;
+
+  // --- MS layer tracking (296.4) -------------------------------------------
+  // Populated by BeginSession from spec.scene->ms_.size() and advanced by
+  // TraceLayer / Recombine. ms_mode is derived as
+  //   ms_mode = (ms_layer_idx_ + 1 < n_ms_layers_) ? 1 : 0
+  // so the final layer writes exit records (ms_mode==0) and earlier layers
+  // write continuation records (ms_mode==1).
+  uint8_t ms_layer_idx_ = 0u;
+  uint8_t n_ms_layers_  = 0u;
+
   void Reset();
   void EnsureSessionBuffers(size_t n);
 };
@@ -448,6 +864,14 @@ void CudaTraceBackend::Impl::Reset() {
   d_poly_n_ = nullptr;
   cudaFree(d_poly_d_);
   d_poly_d_ = nullptr;
+  cudaFree(d_tri_vtx_);
+  d_tri_vtx_ = nullptr;
+  cudaFree(d_tri_norm_);
+  d_tri_norm_ = nullptr;
+  cudaFree(d_tri_area_);
+  d_tri_area_ = nullptr;
+  cudaFree(d_tri_to_poly_);
+  d_tri_to_poly_ = nullptr;
   cudaFree(d_rot_c2w_);
   d_rot_c2w_ = nullptr;
   cudaFree(d_dirs_);
@@ -458,6 +882,14 @@ void CudaTraceBackend::Impl::Reset() {
   d_ws_ = nullptr;
   cudaFree(d_from_poly_);
   d_from_poly_ = nullptr;
+  cudaFree(d_cont_d_);
+  d_cont_d_ = nullptr;
+  cudaFree(d_cont_w_);
+  d_cont_w_ = nullptr;
+  cudaFree(d_cont_wl_idx_);
+  d_cont_wl_idx_ = nullptr;
+  cudaFree(d_cont_count_);
+  d_cont_count_ = nullptr;
   cudaFree(d_exit_);
   d_exit_ = nullptr;
   cudaFree(d_exit_count_);
@@ -473,6 +905,8 @@ void CudaTraceBackend::Impl::Reset() {
   pinned_from_poly_ = nullptr;
   cudaFreeHost(pinned_rot_c2w_);
   pinned_rot_c2w_ = nullptr;
+  cudaFreeHost(pinned_cont_count_);
+  pinned_cont_count_ = nullptr;
   cudaFreeHost(pinned_exit_);
   pinned_exit_ = nullptr;
 
@@ -485,13 +919,22 @@ void CudaTraceBackend::Impl::Reset() {
   }
 
   poly_cnt_ = 0;
+  tri_cnt_ = 0;
   exit_cap_ = 0;
+  cont_cap_ = 0;
   h_exit_count_ = 0;
+  h_cont_count_ = 0;
   n_roots_ = 0;
+  ms_layer_idx_ = 0u;
+  n_ms_layers_ = 0u;
   buffers_allocated_ = false;
   in_session_ = false;
   scene_ = nullptr;
   render_ = nullptr;
+  // transit_seed_ / transit_ray_count_ / transit_seeded_ and the gate_*
+  // counterparts are deliberately NOT cleared — the first-seeding gate in
+  // BeginSession resets the monotone counter exactly once per spec.seed,
+  // matching the Metal `transit_ray_count_` discipline (scrum-267).
 }
 
 void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
@@ -513,15 +956,30 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
   cudaFree(d_rot_c2w_);  d_rot_c2w_ = nullptr;
   cudaFree(d_exit_);     d_exit_ = nullptr;
   cudaFree(d_exit_count_); d_exit_count_ = nullptr;
+  cudaFree(d_cont_d_);      d_cont_d_ = nullptr;
+  cudaFree(d_cont_w_);      d_cont_w_ = nullptr;
+  cudaFree(d_cont_wl_idx_); d_cont_wl_idx_ = nullptr;
+  cudaFree(d_cont_count_);  d_cont_count_ = nullptr;
   cudaFreeHost(pinned_dirs_);     pinned_dirs_ = nullptr;
   cudaFreeHost(pinned_pos_);      pinned_pos_ = nullptr;
   cudaFreeHost(pinned_ws_);       pinned_ws_ = nullptr;
   cudaFreeHost(pinned_from_poly_); pinned_from_poly_ = nullptr;
   cudaFreeHost(pinned_rot_c2w_);  pinned_rot_c2w_ = nullptr;
   cudaFreeHost(pinned_exit_);     pinned_exit_ = nullptr;
+  cudaFreeHost(pinned_cont_count_); pinned_cont_count_ = nullptr;
 
   size_t max_hits = scene_ != nullptr ? scene_->max_hits_ : kMaxHits;
   exit_cap_ = ComputeExitCap(n, max_hits);
+  cont_cap_ = ComputeContCap(n, max_hits);
+
+  // Root / rotation / continuation buffers MUST be sized to cont_cap_, not n:
+  // the transit_multi_ms_kernel writes up to cont_cap_ roots in a single
+  // dispatch (the next-layer fan-out from this layer's continuation count).
+  // Sizing by n alone would overrun these buffers on layers where the
+  // continuation set exceeds the original root_ray_count. Pinned-staging
+  // counterparts (filled only on the ms_mode==0 first-layer ingest path)
+  // stay sized to n_roots since they back the host root-gen output only.
+  size_t buf_cap = std::max<size_t>(n, cont_cap_);
 
   // Check every CUDA allocation. On failure Reset() tears down all buffers
   // (including session-level geometry) and BackendUnavailableError propagates
@@ -534,13 +992,17 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
     }
   };
 
-  ck(cudaMalloc(&d_dirs_,      3 * n * sizeof(float)),               "cudaMalloc d_dirs");
-  ck(cudaMalloc(&d_pos_,       3 * n * sizeof(float)),               "cudaMalloc d_pos");
-  ck(cudaMalloc(&d_ws_,        n * sizeof(float)),                   "cudaMalloc d_ws");
-  ck(cudaMalloc(&d_from_poly_, n * sizeof(uint32_t)),                "cudaMalloc d_from_poly");
-  ck(cudaMalloc(&d_rot_c2w_,   9 * n * sizeof(float)),               "cudaMalloc d_rot_c2w");
-  ck(cudaMalloc(&d_exit_,      exit_cap_ * sizeof(ExitRayRecord)),   "cudaMalloc d_exit");
-  ck(cudaMalloc(&d_exit_count_, sizeof(uint32_t)),                   "cudaMalloc d_exit_count");
+  ck(cudaMalloc(&d_dirs_,        3 * buf_cap * sizeof(float)),             "cudaMalloc d_dirs");
+  ck(cudaMalloc(&d_pos_,         3 * buf_cap * sizeof(float)),             "cudaMalloc d_pos");
+  ck(cudaMalloc(&d_ws_,          buf_cap * sizeof(float)),                 "cudaMalloc d_ws");
+  ck(cudaMalloc(&d_from_poly_,   buf_cap * sizeof(uint32_t)),              "cudaMalloc d_from_poly");
+  ck(cudaMalloc(&d_rot_c2w_,     9 * buf_cap * sizeof(float)),             "cudaMalloc d_rot_c2w");
+  ck(cudaMalloc(&d_exit_,        exit_cap_ * sizeof(ExitRayRecord)),       "cudaMalloc d_exit");
+  ck(cudaMalloc(&d_exit_count_,  sizeof(uint32_t)),                        "cudaMalloc d_exit_count");
+  ck(cudaMalloc(&d_cont_d_,      3 * cont_cap_ * sizeof(float)),           "cudaMalloc d_cont_d");
+  ck(cudaMalloc(&d_cont_w_,      cont_cap_ * sizeof(float)),               "cudaMalloc d_cont_w");
+  ck(cudaMalloc(&d_cont_wl_idx_, cont_cap_ * sizeof(uint32_t)),            "cudaMalloc d_cont_wl_idx");
+  ck(cudaMalloc(&d_cont_count_,  sizeof(uint32_t)),                        "cudaMalloc d_cont_count");
 
   ck(cudaHostAlloc(&pinned_dirs_,     3 * n * sizeof(float),               cudaHostAllocDefault), "cudaHostAlloc pinned_dirs");
   ck(cudaHostAlloc(&pinned_pos_,      3 * n * sizeof(float),               cudaHostAllocDefault), "cudaHostAlloc pinned_pos");
@@ -548,6 +1010,17 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
   ck(cudaHostAlloc(&pinned_from_poly_, n * sizeof(uint32_t),               cudaHostAllocDefault), "cudaHostAlloc pinned_from_poly");
   ck(cudaHostAlloc(&pinned_rot_c2w_,  9 * n * sizeof(float),               cudaHostAllocDefault), "cudaHostAlloc pinned_rot_c2w");
   ck(cudaHostAlloc(&pinned_exit_,     exit_cap_ * sizeof(ExitRayRecord),   cudaHostAllocDefault), "cudaHostAlloc pinned_exit");
+  ck(cudaHostAlloc(&pinned_cont_count_, sizeof(uint32_t),                  cudaHostAllocDefault), "cudaHostAlloc pinned_cont_count");
+
+  // First-use cont-counter zeroing. cudaMalloc carries no zero-init guarantee
+  // (the CUDA spec is explicit), so a freshly allocated d_cont_count_ may
+  // hold non-zero garbage. Without this memset, the first ms_mode==1 trace
+  // dispatch would atomicAdd into a non-zero starting offset and silently
+  // overrun the cont_d_/cont_w_/cont_wl_idx_ pool — caught only by the
+  // parity-battery cross-seed test. Per-layer recycling (after Recombine
+  // drains the count) is owned by Recombine itself; here we only handle the
+  // initial state.
+  ck(cudaMemset(d_cont_count_, 0, sizeof(uint32_t)), "cudaMemset d_cont_count_ (init)");
 
   n_roots_ = n;
   buffers_allocated_ = true;
@@ -641,9 +1114,82 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
                          poly_cnt * sizeof(float), cudaMemcpyHostToDevice),
               "BeginSession cudaMemcpy d_poly_d");
 
-    // Per-ray rotation matrix device buffer (n_roots × 9) is allocated lazily
-    // in EnsureSessionBuffers, not here — n_roots is unknown until the first
-    // TraceLayer call. rng_ stays pristine (no sampling here, see plan §D5).
+    // Triangle pool H2D for transit_multi_ms_kernel (296.4). vtx/norm/area
+    // come straight from Crystal; tri_to_poly is computed host-side via the
+    // argmax + coplanar-floor predicate (mirrors Metal UploadCrystal). The
+    // upload is session-scoped (single CI in MVP); multi-CI per-layer crystal
+    // pool is 296.6.
+    size_t tri_cnt = crystal_for_geom.TotalTriangles();
+    if (tri_cnt == 0) {
+      throw BackendUnavailableError("CudaTraceBackend::BeginSession: degenerate crystal geometry (0 triangles)");
+    }
+    if (tri_cnt > static_cast<size_t>(lm_pcg::kMaxTriPerKernel)) {
+      throw BackendUnavailableError(
+          std::string{"CudaTraceBackend::BeginSession: tri_count="} + std::to_string(tri_cnt) +
+          " exceeds kMaxTriPerKernel=" + std::to_string(lm_pcg::kMaxTriPerKernel) +
+          " (transit_multi_ms_kernel proj_prob[] stack bound)");
+    }
+    impl_->tri_cnt_ = static_cast<uint32_t>(tri_cnt);
+    CheckCuda(cudaMalloc(&impl_->d_tri_vtx_, 9 * tri_cnt * sizeof(float)),
+              "BeginSession cudaMalloc d_tri_vtx");
+    CheckCuda(cudaMemcpy(impl_->d_tri_vtx_, crystal_for_geom.GetTriangleVtx(),
+                         9 * tri_cnt * sizeof(float), cudaMemcpyHostToDevice),
+              "BeginSession cudaMemcpy d_tri_vtx");
+    CheckCuda(cudaMalloc(&impl_->d_tri_norm_, 3 * tri_cnt * sizeof(float)),
+              "BeginSession cudaMalloc d_tri_norm");
+    CheckCuda(cudaMemcpy(impl_->d_tri_norm_, crystal_for_geom.GetTriangleNormal(),
+                         3 * tri_cnt * sizeof(float), cudaMemcpyHostToDevice),
+              "BeginSession cudaMemcpy d_tri_norm");
+    CheckCuda(cudaMalloc(&impl_->d_tri_area_, tri_cnt * sizeof(float)),
+              "BeginSession cudaMalloc d_tri_area");
+    CheckCuda(cudaMemcpy(impl_->d_tri_area_, crystal_for_geom.GetTirangleArea(),
+                         tri_cnt * sizeof(float), cudaMemcpyHostToDevice),
+              "BeginSession cudaMemcpy d_tri_area");
+    std::vector<uint16_t> tri_to_poly_host;
+    FillTriToPoly(crystal_for_geom, tri_to_poly_host);
+    CheckCuda(cudaMalloc(&impl_->d_tri_to_poly_, tri_cnt * sizeof(uint16_t)),
+              "BeginSession cudaMalloc d_tri_to_poly");
+    CheckCuda(cudaMemcpy(impl_->d_tri_to_poly_, tri_to_poly_host.data(),
+                         tri_cnt * sizeof(uint16_t), cudaMemcpyHostToDevice),
+              "BeginSession cudaMemcpy d_tri_to_poly");
+
+    // MS layer count + initial layer index. Used by TraceLayer to derive
+    // ms_mode (continuation vs final exit) when Step 5 lands. n_ms_layers_
+    // is captured once per session (multi-CI is 296.6 work and does not
+    // change ms_.size()).
+    size_t n_ms = spec.scene->ms_.size();
+    if (n_ms > 255u) {
+      throw BackendUnavailableError("CudaTraceBackend::BeginSession: ms_.size() > 255 (uint8_t ms_layer_idx_)");
+    }
+    impl_->n_ms_layers_ = static_cast<uint8_t>(n_ms);
+    impl_->ms_layer_idx_ = 0u;
+
+    // PCG-stream seeding (296.4). transit / gate / future device-gen each get
+    // an independent stream; nonce-XOR keeps them disjoint when spec.seed=0
+    // (driver-non-deterministic) collapses gen_seed_ to zero. transit_seeded_
+    // / gate_seeded_ guard the first-time reset of the monotone counter so a
+    // BeginSession in the middle of a Run() does not overwrite the running
+    // (transit_seed_, transit_ray_count_) PCG position (mirrors the Metal
+    // first-seeding gate, see metal_trace_backend.mm:2037).
+    impl_->transit_seed_ = spec.seed ^ kCudaTransitNonce;
+    impl_->gate_seed_    = spec.seed ^ kCudaGateNonce;
+    if (!impl_->transit_seeded_) {
+      impl_->transit_ray_count_ = 0;
+      impl_->transit_seeded_ = true;
+    }
+    if (!impl_->gate_seeded_) {
+      impl_->gate_ray_count_ = 0;
+      impl_->gate_seeded_ = true;
+    }
+
+    // Per-ray rotation matrix device buffer (cont_cap_ × 9) is allocated
+    // lazily in EnsureSessionBuffers, not here — n_roots is unknown until the
+    // first TraceLayer call. rng_ stays pristine (no sampling here).
+    // The continuation count (d_cont_count_) is also allocated there; we
+    // cudaMemset it to 0 explicitly inside TraceLayer's prologue (mirrors the
+    // existing d_exit_count_ zeroing) so a reused buffer from a prior session
+    // does not seed the atomicAdd offset at non-zero (cudaMalloc carries no
+    // zero-init guarantee).
 
     if (!impl_->events_created_) {
       CheckCuda(cudaEventCreate(&impl_->ev_start_h2d_),   "BeginSession cudaEventCreate ev_start_h2d");
@@ -656,8 +1202,9 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     impl_->in_session_ = true;
     if (impl_->logger != nullptr) {
       ILOG_INFO(*impl_->logger,
-                "CudaTraceBackend::BeginSession: device=0 poly_cnt={} seed={} n_idx={:.4f}",
-                poly_cnt, spec.seed, crystal_for_geom.GetRefractiveIndex(spec.wl.wl_));
+                "CudaTraceBackend::BeginSession: device=0 poly_cnt={} tri_cnt={} n_ms={} seed={} n_idx={:.4f}",
+                poly_cnt, tri_cnt, n_ms, spec.seed,
+                crystal_for_geom.GetRefractiveIndex(spec.wl.wl_));
     }
   } catch (...) {
     impl_->Reset();
@@ -669,11 +1216,15 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
   if (!impl_->in_session_) {
     throw BackendUnavailableError("CudaTraceBackend::TraceLayer called outside session");
   }
-  if (roots.is_device) {
-    throw BackendUnavailableError("CudaTraceBackend::TraceLayer: device root source unsupported in MVP");
-  }
-  size_t n = roots.host.count;
+  // Determine `n` from the active source: host-mode uses the caller's count,
+  // device-mode uses the count stamped by the previous Recombine on the
+  // continuation ring. The device branch trusts `DeviceRayBatch::backend_ptr`
+  // is the d_dirs_ tag handed back by Recombine (see seam contract +
+  // Recombine implementation below).
+  const size_t n = roots.is_device ? roots.device.count : roots.host.count;
   if (n == 0) {
+    // No-op layer: keep ms_layer_idx_ as-is; the caller may still invoke
+    // Recombine to bump it, but with zero rays nothing transits.
     return std::make_unique<CudaLayerHandle>(0u, LayerStats{0u, 0.0f});
   }
 
@@ -690,79 +1241,119 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     }
   };
 
-  // Host-side root-ray generation, mirroring cpu_trace_backend.cpp:135-140.
-  // Build a fresh Crystal per batch via MakeCrystal(rng_, param_) so the
-  // crystal-orientation RNG draw stays consistent with the CPU oracle's
-  // batch-by-batch ordering. Wrapped in try/catch: std::bad_alloc from
-  // RayBuffer growth or other C++ exceptions reset device state before
-  // propagating (mirrors BeginSession's exception-safety contract).
-  const auto& ms_setting = impl_->scene_->ms_[0].setting_[0];
+  // Resolve current MS layer's setting + refractive index. MVP uses the first
+  // crystal_ of `ms_[ms_layer_idx_].setting_[0]` (single-CI assumption); multi-
+  // CI per-layer crystal pool is 296.6.
+  if (impl_->ms_layer_idx_ >= impl_->n_ms_layers_) {
+    throw BackendUnavailableError(
+        std::string{"CudaTraceBackend::TraceLayer: ms_layer_idx_="} +
+        std::to_string(impl_->ms_layer_idx_) + " >= n_ms_layers_=" +
+        std::to_string(impl_->n_ms_layers_) + " (over-traced past final layer)");
+  }
+  const auto& ms_layer   = impl_->scene_->ms_[impl_->ms_layer_idx_];
+  const auto& ms_setting = ms_layer.setting_[0];
   float n_idx = 0.0f;
-  try {
-    Crystal crystal = MakeCrystal(impl_->rng_, ms_setting.crystal_.param_);
-    const auto& axis_dist = ms_setting.crystal_.axis_;
-    n_idx = crystal.GetRefractiveIndex(impl_->wl_.wl_);
 
-    // Mirror the CPU pattern (cpu_trace_backend.cpp:107-108): workspace[0]/[1]
-    // capacities sized for the InitRay/HitSurface fan-out so EmplaceBack
-    // doesn't grow them mid-trace. We only consume workspace[0] (first-hit
-    // snapshot of d/p/w/crystal_rot_), but InitRayFirstMs writes both slots.
-    RayBuffer workspace[2]{};
-    workspace[0].Reset(n * 2);
-    workspace[1].Reset(n * 4);
-    // all_data is the per-batch RaySeg bookkeeping buffer. Use the same
-    // AllocateAllData sizing as the simulator (simulator.cpp:811) — overshoots
-    // for our single-MS use but keeps the capacity contract obviously safe.
-    RayBuffer all_data = AllocateAllData(*impl_->scene_, n);
-    InitRayFirstMs(impl_->rng_, impl_->scene_->light_source_.param_, impl_->wl_, n, crystal, 0, axis_dist,
-                   workspace, all_data);
+  // ms_mode = continuation iff this is NOT the final MS layer. Final layer
+  // (ms_mode==0) writes every exit candidate to d_exit_; non-final layer
+  // (ms_mode==1) routes each candidate through the per-emit PCG gate (see
+  // trace_single_ms_kernel header comment).
+  const bool is_final_layer = (impl_->ms_layer_idx_ + 1u >= impl_->n_ms_layers_);
+  const uint8_t ms_mode = is_final_layer ? 0u : 1u;
+  const float ms_prob = is_final_layer ? 0.0f : ms_layer.prob_;
 
-    // Copy crystal-local d/p/w + per-ray crystal->world rotation into pinned
-    // staging. to_face_ is the InitRay_p_fid entry-face polygon id; the
-    // kernel needs it as the initial from_poly to suppress self-intersect on
-    // the first polygon-slab sweep (p sits exactly on this polygon).
-    // IdType (uint16_t per raypath.hpp) widens cleanly to uint32_t;
-    // kInvalidId (0xFFFFFFFFu after widening) maps to the kernel's "no
-    // previous face" sentinel. InitRayFirstMs samples an independent crystal
-    // orientation per root ray (halo-ring distribution comes from this); each
-    // RaySeg.crystal_rot_ is row-major 3x3. Aligns d_rot_c2w_ with d_dirs_'s
-    // crystal-local frame — frame invariant 6. Mirrors
-    // metal_trace_backend.mm:1375.
-    for (size_t i = 0; i < n; ++i) {
-      const auto& r = all_data[i];
-      impl_->pinned_dirs_[i * 3 + 0] = r.d_[0];
-      impl_->pinned_dirs_[i * 3 + 1] = r.d_[1];
-      impl_->pinned_dirs_[i * 3 + 2] = r.d_[2];
-      impl_->pinned_pos_[i * 3 + 0] = r.p_[0];
-      impl_->pinned_pos_[i * 3 + 1] = r.p_[1];
-      impl_->pinned_pos_[i * 3 + 2] = r.p_[2];
-      impl_->pinned_ws_[i] = r.w_;
-      impl_->pinned_from_poly_[i] =
-          (r.to_face_ == kInvalidId) ? 0xFFFFFFFFu : static_cast<uint32_t>(r.to_face_);
-      std::memcpy(impl_->pinned_rot_c2w_ + i * 9, r.crystal_rot_.GetMat(), 9 * sizeof(float));
+  cudaEventRecord(impl_->ev_start_h2d_);
+
+  if (!roots.is_device) {
+    // ── Host-roots path (first MS layer or single-MS session) ──────────────
+    // Host-side root-ray generation, mirroring cpu_trace_backend.cpp:135-140.
+    // Build a fresh Crystal per batch via MakeCrystal(rng_, param_) so the
+    // crystal-orientation RNG draw stays consistent with the CPU oracle's
+    // batch-by-batch ordering. Wrapped in try/catch: std::bad_alloc from
+    // RayBuffer growth or other C++ exceptions reset device state before
+    // propagating (mirrors BeginSession's exception-safety contract).
+    try {
+      Crystal crystal = MakeCrystal(impl_->rng_, ms_setting.crystal_.param_);
+      const auto& axis_dist = ms_setting.crystal_.axis_;
+      n_idx = crystal.GetRefractiveIndex(impl_->wl_.wl_);
+
+      // Mirror the CPU pattern (cpu_trace_backend.cpp:107-108): workspace[0]/[1]
+      // capacities sized for the InitRay/HitSurface fan-out so EmplaceBack
+      // doesn't grow them mid-trace. We only consume workspace[0] (first-hit
+      // snapshot of d/p/w/crystal_rot_), but InitRayFirstMs writes both slots.
+      RayBuffer workspace[2]{};
+      workspace[0].Reset(n * 2);
+      workspace[1].Reset(n * 4);
+      // all_data is the per-batch RaySeg bookkeeping buffer. Use the same
+      // AllocateAllData sizing as the simulator (simulator.cpp:811) — overshoots
+      // for our single-MS use but keeps the capacity contract obviously safe.
+      RayBuffer all_data = AllocateAllData(*impl_->scene_, n);
+      InitRayFirstMs(impl_->rng_, impl_->scene_->light_source_.param_, impl_->wl_, n, crystal,
+                     impl_->ms_layer_idx_, axis_dist, workspace, all_data);
+
+      // Copy crystal-local d/p/w + per-ray crystal->world rotation into pinned
+      // staging. to_face_ is the InitRay_p_fid entry-face polygon id; the
+      // kernel needs it as the initial from_poly to suppress self-intersect on
+      // the first polygon-slab sweep (p sits exactly on this polygon).
+      // IdType (uint16_t per raypath.hpp) widens cleanly to uint32_t;
+      // kInvalidId (0xFFFFFFFFu after widening) maps to the kernel's "no
+      // previous face" sentinel. InitRayFirstMs samples an independent crystal
+      // orientation per root ray (halo-ring distribution comes from this); each
+      // RaySeg.crystal_rot_ is row-major 3x3. Aligns d_rot_c2w_ with d_dirs_'s
+      // crystal-local frame — frame invariant 6. Mirrors
+      // metal_trace_backend.mm:1375.
+      for (size_t i = 0; i < n; ++i) {
+        const auto& r = all_data[i];
+        impl_->pinned_dirs_[i * 3 + 0] = r.d_[0];
+        impl_->pinned_dirs_[i * 3 + 1] = r.d_[1];
+        impl_->pinned_dirs_[i * 3 + 2] = r.d_[2];
+        impl_->pinned_pos_[i * 3 + 0] = r.p_[0];
+        impl_->pinned_pos_[i * 3 + 1] = r.p_[1];
+        impl_->pinned_pos_[i * 3 + 2] = r.p_[2];
+        impl_->pinned_ws_[i] = r.w_;
+        impl_->pinned_from_poly_[i] =
+            (r.to_face_ == kInvalidId) ? 0xFFFFFFFFu : static_cast<uint32_t>(r.to_face_);
+        std::memcpy(impl_->pinned_rot_c2w_ + i * 9, r.crystal_rot_.GetMat(), 9 * sizeof(float));
+      }
+    } catch (...) {
+      impl_->Reset();
+      throw;
     }
-  } catch (...) {
-    impl_->Reset();
-    throw;
+
+    // H2D upload — all copies issue on the default stream; the synchronous
+    // cudaMemcpy(&h_exit_count_, ...) below is also default-stream and joins
+    // these copies before the host reads the count, so per-ray rot/dir/p/w/
+    // from_poly are guaranteed visible to the kernel launch.
+    cudaMemcpyAsync(impl_->d_rot_c2w_, impl_->pinned_rot_c2w_, 9 * n * sizeof(float),
+                    cudaMemcpyHostToDevice);
+    cudaMemcpyAsync(impl_->d_dirs_, impl_->pinned_dirs_, 3 * n * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpyAsync(impl_->d_pos_, impl_->pinned_pos_, 3 * n * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpyAsync(impl_->d_ws_, impl_->pinned_ws_, n * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpyAsync(impl_->d_from_poly_, impl_->pinned_from_poly_, n * sizeof(uint32_t),
+                    cudaMemcpyHostToDevice);
+    // Harvest any sticky async error from the H2D block.
+    ck_reset(cudaGetLastError(), "H2D batch");
+  } else {
+    // ── Device-roots path (continuation from previous Recombine) ───────────
+    // Root buffers (d_dirs_/d_pos_/d_ws_/d_from_poly_/d_rot_c2w_) were filled
+    // in-place by `transit_multi_ms_kernel` inside the previous Recombine
+    // dispatch; no H2D / pinned staging needed (host pointers do not cross
+    // the seam in this path — §5 铁律). n_idx is still resolved from the
+    // host-side crystal helper since the kernel currently consumes a single
+    // scalar argument; MVP single-CI keeps this identical across layers.
+    Crystal crystal_for_n_idx = MakeCrystal(impl_->rng_, ms_setting.crystal_.param_);
+    n_idx = crystal_for_n_idx.GetRefractiveIndex(impl_->wl_.wl_);
+    // backend_ptr sanity: not strictly required for correctness (the rays live
+    // in our own Impl buffers), but a NULL here means the caller forgot to
+    // pass back the Recombine result — flag it loudly.
+    if (roots.device.backend_ptr == nullptr) {
+      throw BackendUnavailableError(
+          "CudaTraceBackend::TraceLayer: device-roots path got NULL backend_ptr "
+          "(caller did not propagate the previous Recombine result)");
+    }
   }
 
-  // H2D upload — all copies issue on the default stream; the synchronous
-  // cudaMemcpy(&h_exit_count_, ...) below is also default-stream and joins
-  // these copies before the host reads the count, so per-ray rot/dir/p/w/
-  // from_poly are guaranteed visible to the kernel launch.
-  cudaEventRecord(impl_->ev_start_h2d_);
-  cudaMemcpyAsync(impl_->d_rot_c2w_, impl_->pinned_rot_c2w_, 9 * n * sizeof(float),
-                  cudaMemcpyHostToDevice);
-  cudaMemcpyAsync(impl_->d_dirs_, impl_->pinned_dirs_, 3 * n * sizeof(float), cudaMemcpyHostToDevice);
-  cudaMemcpyAsync(impl_->d_pos_, impl_->pinned_pos_, 3 * n * sizeof(float), cudaMemcpyHostToDevice);
-  cudaMemcpyAsync(impl_->d_ws_, impl_->pinned_ws_, n * sizeof(float), cudaMemcpyHostToDevice);
-  cudaMemcpyAsync(impl_->d_from_poly_, impl_->pinned_from_poly_, n * sizeof(uint32_t),
-                  cudaMemcpyHostToDevice);
   cudaEventRecord(impl_->ev_end_h2d_);
-  // Harvest any sticky async error from the H2D block (cudaMemcpyAsync /
-  // cudaEventRecord failures propagate as sticky errors; one GetLastError
-  // picks all of them up at lower call overhead than per-call checking).
-  ck_reset(cudaGetLastError(), "H2D batch");
 
   ck_reset(cudaMemset(impl_->d_exit_count_, 0, sizeof(uint32_t)), "cudaMemset d_exit_count");
 
@@ -770,12 +1361,25 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
   uint32_t grid = (static_cast<uint32_t>(n) + 255u) / 256u;
 
   // Splitting (deterministic per-bounce fan-out) — no per-thread RNG needed.
-  trace_single_ms_kernel<<<grid, 256>>>(impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
-                                        static_cast<uint32_t>(n), impl_->d_poly_n_, impl_->d_poly_d_,
-                                        impl_->poly_cnt_, impl_->d_rot_c2w_, n_idx,
-                                        max_hits, impl_->d_exit_,
-                                        static_cast<uint32_t>(impl_->exit_cap_), impl_->d_exit_count_,
-                                        /*crystal_id=*/0u, /*ms_layer_idx=*/0u);
+  // The ms_mode/ms_prob/gate_* parameters route the kernel's emit gate (see
+  // trace_single_ms_kernel header for the per-emit gate semantics). Final-
+  // layer dispatches pass ms_mode=0 + nullptr cont buffers; non-final layers
+  // pass ms_mode=1 with the d_cont_* ring + gate PCG seed.
+  trace_single_ms_kernel<<<grid, 256>>>(
+      impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
+      static_cast<uint32_t>(n), impl_->d_poly_n_, impl_->d_poly_d_,
+      impl_->poly_cnt_, impl_->d_rot_c2w_, n_idx,
+      max_hits, impl_->d_exit_,
+      static_cast<uint32_t>(impl_->exit_cap_), impl_->d_exit_count_,
+      /*crystal_id=*/0u, /*ms_layer_idx=*/impl_->ms_layer_idx_,
+      ms_mode, ms_prob,
+      ms_mode == 1u ? impl_->d_cont_d_       : nullptr,
+      ms_mode == 1u ? impl_->d_cont_w_       : nullptr,
+      ms_mode == 1u ? impl_->d_cont_wl_idx_  : nullptr,
+      ms_mode == 1u ? impl_->d_cont_count_   : nullptr,
+      ms_mode == 1u ? static_cast<uint32_t>(impl_->cont_cap_) : 0u,
+      impl_->gate_seed_,
+      static_cast<uint32_t>(impl_->gate_ray_count_));
   // Peek immediately after launch: illegal address / invalid config errors
   // surface here before the synchronizing 4B readback, giving a precise
   // error origin instead of a deferred cudaErrorLaunchFailure on Memcpy.
@@ -798,8 +1402,10 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
 
   if (impl_->logger != nullptr) {
     ILOG_DEBUG(*impl_->logger,
-               "CudaTraceBackend::TraceLayer: n={} exit_count={} H2D={:.2f}ms kernel={:.2f}ms D2H={:.2f}ms",
-               n, impl_->h_exit_count_, h2d_ms, kernel_ms, d2h_ms);
+               "CudaTraceBackend::TraceLayer: n={} ms_layer={} ms_mode={} ms_prob={:.3f} "
+               "exit_count={} H2D={:.2f}ms kernel={:.2f}ms D2H={:.2f}ms",
+               n, impl_->ms_layer_idx_, ms_mode, ms_prob,
+               impl_->h_exit_count_, h2d_ms, kernel_ms, d2h_ms);
   }
 
   if (impl_->h_exit_count_ >= impl_->exit_cap_) {
@@ -811,15 +1417,115 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     impl_->h_exit_count_ = static_cast<uint32_t>(impl_->exit_cap_);
   }
 
-  return std::make_unique<CudaLayerHandle>(0u, LayerStats{impl_->h_exit_count_, 0.0f});
+  // Advance gate PCG counter ONLY in ms_mode==1 (final-layer dispatches do
+  // not draw the gate PCG so they leave the counter undisturbed). Bumping
+  // by `n` (root-ray count) — each ray's emit draws share a single
+  // global_idx + advancing `slot`, so two batches with disjoint
+  // global_idx ranges have fully disjoint streams.
+  if (ms_mode == 1u) {
+    impl_->gate_ray_count_ += n;
+  }
+
+  // Continuation-count readback (only meaningful for ms_mode==1; the kernel
+  // does not touch d_cont_count_ on the ms_mode==0 path so it stays at the
+  // value Recombine / EnsureSessionBuffers last zeroed it to).
+  size_t cont_count_for_handle = 0u;
+  if (ms_mode == 1u) {
+    ck_reset(cudaMemcpy(&impl_->h_cont_count_, impl_->d_cont_count_, sizeof(uint32_t),
+                        cudaMemcpyDeviceToHost), "4B cont_count readback");
+    if (impl_->h_cont_count_ >= impl_->cont_cap_) {
+      if (impl_->logger != nullptr) {
+        ILOG_WARN(*impl_->logger,
+                  "CudaTraceBackend::TraceLayer: cont buffer overflow (count={} cap={}); tail dropped",
+                  impl_->h_cont_count_, impl_->cont_cap_);
+      }
+      impl_->h_cont_count_ = static_cast<uint32_t>(impl_->cont_cap_);
+    }
+    cont_count_for_handle = impl_->h_cont_count_;
+  } else {
+    impl_->h_cont_count_ = 0u;
+  }
+
+  return std::make_unique<CudaLayerHandle>(cont_count_for_handle,
+                                           LayerStats{impl_->h_exit_count_, 0.0f});
 }
 
 RootRaySource CudaTraceBackend::Recombine(LayerHandlePtr handle, const RecombineSpec& spec) {
-  (void)handle;
   (void)spec;
-  // MVP single-MS: Recombine never feeds back into TraceLayer (the simulator
-  // single-MS path drains exits and stops). Return an empty DeviceRayBatch.
-  return RootRaySource::FromDevice(DeviceRayBatch{});
+  if (!impl_->in_session_) {
+    throw BackendUnavailableError("CudaTraceBackend::Recombine called outside session");
+  }
+  // Consume the layer handle (frees per-layer state at scope exit). The
+  // continuation count is the authoritative value from impl_->h_cont_count_
+  // populated by TraceLayer's tail readback.
+  handle.reset();
+
+  // Local error helper.
+  auto ck_reset = [this](cudaError_t e, const char* ctx) {
+    if (e != cudaSuccess) {
+      impl_->Reset();
+      throw BackendUnavailableError(std::string{"CudaTraceBackend::Recombine: "} + ctx + ": " +
+                                    cudaGetErrorString(e));
+    }
+  };
+
+  const uint32_t cont_n = impl_->h_cont_count_;
+
+  // No continuations → nothing to transit. Bump ms_layer_idx_ so the next
+  // TraceLayer (if any) advances; return an empty DeviceRayBatch so the
+  // caller can short-circuit. Also zero d_cont_count_ for the next layer.
+  if (cont_n == 0u) {
+    ck_reset(cudaMemset(impl_->d_cont_count_, 0, sizeof(uint32_t)), "cudaMemset d_cont_count");
+    impl_->ms_layer_idx_++;
+    return RootRaySource::FromDevice(DeviceRayBatch{});
+  }
+
+  // Dispatch transit_multi_ms_kernel: read cont_d/cont_w/cont_wl_idx, write
+  // root_d/root_p/root_w/root_from_poly/root_rot/root_wl_idx into the
+  // Impl-owned root buffers (d_dirs_/d_pos_/d_ws_/d_from_poly_/d_rot_c2w_).
+  // d_cont_wl_idx_ aliases the input AND output for wl_idx pass-through —
+  // each thread reads its own slot before writing back, so there is no
+  // race (transit kernel: read at line ~start, write at line ~end of body).
+  const auto& ms_setting = impl_->scene_->ms_[impl_->ms_layer_idx_].setting_[0];
+  lm_pcg::GenRootKernelParams gp =
+      BuildTransitGpParams(ms_setting.crystal_.axis_, impl_->tri_cnt_, cont_n);
+  gp.gen_seed     = impl_->transit_seed_;
+  gp.gen_ray_base = static_cast<uint32_t>(impl_->transit_ray_count_);
+
+  uint32_t grid = (cont_n + 255u) / 256u;
+  transit_multi_ms_kernel<<<grid, 256>>>(
+      impl_->d_cont_d_, impl_->d_cont_w_, impl_->d_cont_wl_idx_,
+      impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
+      impl_->d_rot_c2w_, impl_->d_cont_wl_idx_,  // wl_idx alias: read/write same buffer
+      impl_->d_tri_vtx_, impl_->d_tri_norm_, impl_->d_tri_area_, impl_->d_tri_to_poly_,
+      gp, cont_n);
+  ck_reset(cudaPeekAtLastError(), "transit kernel launch");
+  // Synchronize so the returned DeviceRayBatch is safe to consume by the
+  // next TraceLayer call without further host-side waits.
+  ck_reset(cudaDeviceSynchronize(), "transit kernel sync");
+
+  // Advance PCG counter + MS layer index. transit_ray_count_ uses the
+  // continuation count (= number of kernel threads = number of unique PCG
+  // global_idx values consumed).
+  impl_->transit_ray_count_ += cont_n;
+  impl_->ms_layer_idx_++;
+
+  // Zero d_cont_count_ for the next layer's emit gate (the buffer is reused).
+  ck_reset(cudaMemset(impl_->d_cont_count_, 0, sizeof(uint32_t)), "cudaMemset d_cont_count");
+
+  if (impl_->logger != nullptr) {
+    ILOG_DEBUG(*impl_->logger,
+               "CudaTraceBackend::Recombine: cont_n={} new_layer={} transit_ray_count={}",
+               cont_n, impl_->ms_layer_idx_, impl_->transit_ray_count_);
+  }
+
+  // backend_ptr cookie identifies "this is the Impl's root ring" — opaque to
+  // the caller, used only as a non-null sanity tag by the next TraceLayer's
+  // device-roots branch (the actual buffer addressing lives in Impl).
+  DeviceRayBatch batch{};
+  batch.backend_ptr = static_cast<void*>(impl_->d_dirs_);
+  batch.count = cont_n;
+  return RootRaySource::FromDevice(batch);
 }
 
 size_t CudaTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
