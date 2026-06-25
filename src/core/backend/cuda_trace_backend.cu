@@ -635,13 +635,13 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
 __global__ void transit_multi_ms_kernel(
     const float* __restrict__ d_cont_d_in,        // 3 × n_rays (world-space)
     const float* __restrict__ d_cont_w_in,        // n_rays (carried continuation weight)
-    const uint32_t* __restrict__ d_cont_wl_idx_in,  // n_rays (pass-through wl_idx)
+    const uint32_t* d_cont_wl_idx_in,               // n_rays (pass-through wl_idx); no __restrict__: Recombine may pass same buffer as d_root_wl_idx_out
     float* __restrict__ d_root_d_out,             // 3 × n_rays (crystal-local)
     float* __restrict__ d_root_p_out,             // 3 × n_rays (crystal-local entry point)
     float* __restrict__ d_root_w_out,             // n_rays (post-transit weight)
     uint32_t* __restrict__ d_root_from_poly_out,  // n_rays (entry-face polygon id; kInvalidId widened)
     float* __restrict__ d_root_rot_out,           // 9 × n_rays (row-major crystal→world)
-    uint32_t* __restrict__ d_root_wl_idx_out,     // n_rays (pass-through)
+    uint32_t* d_root_wl_idx_out,                   // n_rays (pass-through); no __restrict__: may alias d_cont_wl_idx_in
     const float* __restrict__ d_tri_vtx,          // 9 × tri_cnt (3 verts × 3 coords)
     const float* __restrict__ d_tri_norm,         // 3 × tri_cnt (outward triangle normal)
     const float* __restrict__ d_tri_area,         // tri_cnt
@@ -1185,11 +1185,10 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     // Per-ray rotation matrix device buffer (cont_cap_ × 9) is allocated
     // lazily in EnsureSessionBuffers, not here — n_roots is unknown until the
     // first TraceLayer call. rng_ stays pristine (no sampling here).
-    // The continuation count (d_cont_count_) is also allocated there; we
-    // cudaMemset it to 0 explicitly inside TraceLayer's prologue (mirrors the
-    // existing d_exit_count_ zeroing) so a reused buffer from a prior session
-    // does not seed the atomicAdd offset at non-zero (cudaMalloc carries no
-    // zero-init guarantee).
+    // d_cont_count_ is zeroed in the first TraceLayer of each session
+    // (ms_layer_idx_==0 path) after EnsureSessionBuffers returns, even when
+    // the buffer is reused from a prior session (EnsureSessionBuffers fast-path
+    // skips zeroing). Recombine owns per-layer zeroing for subsequent layers.
 
     if (!impl_->events_created_) {
       CheckCuda(cudaEventCreate(&impl_->ev_start_h2d_),   "BeginSession cudaEventCreate ev_start_h2d");
@@ -1225,6 +1224,9 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
   if (n == 0) {
     // No-op layer: keep ms_layer_idx_ as-is; the caller may still invoke
     // Recombine to bump it, but with zero rays nothing transits.
+    // Zero h_cont_count_ so a subsequent Recombine sees zero continuations
+    // even if a prior ms_mode==1 layer left a stale value.
+    impl_->h_cont_count_ = 0u;
     return std::make_unique<CudaLayerHandle>(0u, LayerStats{0u, 0.0f});
   }
 
@@ -1240,6 +1242,15 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
                                     cudaGetErrorString(e));
     }
   };
+
+  // Per-session zero of d_cont_count_ at first layer: EnsureSessionBuffers
+  // zeroes on first alloc but skips zeroing when reusing buffers (fast-path).
+  // A prior session that ended without Recombine may leave a non-zero count;
+  // ms_layer_idx_==0 is the session-start sentinel (BeginSession resets it).
+  if (impl_->ms_layer_idx_ == 0) {
+    ck_reset(cudaMemset(impl_->d_cont_count_, 0, sizeof(uint32_t)),
+             "cudaMemset d_cont_count_ (session start)");
+  }
 
   // Resolve current MS layer's setting + refractive index. MVP uses the first
   // crystal_ of `ms_[ms_layer_idx_].setting_[0]` (single-CI assumption); multi-
@@ -1338,11 +1349,19 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     // Root buffers (d_dirs_/d_pos_/d_ws_/d_from_poly_/d_rot_c2w_) were filled
     // in-place by `transit_multi_ms_kernel` inside the previous Recombine
     // dispatch; no H2D / pinned staging needed (host pointers do not cross
-    // the seam in this path — §5 铁律). n_idx is still resolved from the
-    // host-side crystal helper since the kernel currently consumes a single
-    // scalar argument; MVP single-CI keeps this identical across layers.
-    Crystal crystal_for_n_idx = MakeCrystal(impl_->rng_, ms_setting.crystal_.param_);
-    n_idx = crystal_for_n_idx.GetRefractiveIndex(impl_->wl_.wl_);
+    // the seam in this path — §5 铁律). n_idx is resolved via a dummy RNG
+    // (seed=0, not impl_->rng_): Crystal geometry and refractive index are
+    // fully determined by CrystalParam; the MakeCrystal RNG draw only affects
+    // orientation, which is irrelevant here. Using impl_->rng_ would desync
+    // the RNG sequence from the CPU oracle's host-roots path.
+    try {
+      RandomNumberGenerator dummy_rng{0u};
+      Crystal crystal_for_n_idx = MakeCrystal(dummy_rng, ms_setting.crystal_.param_);
+      n_idx = crystal_for_n_idx.GetRefractiveIndex(impl_->wl_.wl_);
+    } catch (...) {
+      impl_->Reset();
+      throw;
+    }
     // backend_ptr sanity: not strictly required for correctness (the rays live
     // in our own Impl buffers), but a NULL here means the caller forgot to
     // pass back the Recombine result — flag it loudly.
@@ -1483,9 +1502,9 @@ RootRaySource CudaTraceBackend::Recombine(LayerHandlePtr handle, const Recombine
   // Dispatch transit_multi_ms_kernel: read cont_d/cont_w/cont_wl_idx, write
   // root_d/root_p/root_w/root_from_poly/root_rot/root_wl_idx into the
   // Impl-owned root buffers (d_dirs_/d_pos_/d_ws_/d_from_poly_/d_rot_c2w_).
-  // d_cont_wl_idx_ aliases the input AND output for wl_idx pass-through —
-  // each thread reads its own slot before writing back, so there is no
-  // race (transit kernel: read at line ~start, write at line ~end of body).
+  // wl_idx pass-through: d_cont_wl_idx_ is passed as both input and output
+  // (aliases). __restrict__ has been removed from those two kernel params to
+  // avoid C/CUDA UB (no-alias contract violation).
   const auto& ms_setting = impl_->scene_->ms_[impl_->ms_layer_idx_].setting_[0];
   lm_pcg::GenRootKernelParams gp =
       BuildTransitGpParams(ms_setting.crystal_.axis_, impl_->tri_cnt_, cont_n);
@@ -1496,13 +1515,13 @@ RootRaySource CudaTraceBackend::Recombine(LayerHandlePtr handle, const Recombine
   transit_multi_ms_kernel<<<grid, 256>>>(
       impl_->d_cont_d_, impl_->d_cont_w_, impl_->d_cont_wl_idx_,
       impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
-      impl_->d_rot_c2w_, impl_->d_cont_wl_idx_,  // wl_idx alias: read/write same buffer
+      impl_->d_rot_c2w_, impl_->d_cont_wl_idx_,  // wl_idx: aliased read/write (no __restrict__ on these params)
       impl_->d_tri_vtx_, impl_->d_tri_norm_, impl_->d_tri_area_, impl_->d_tri_to_poly_,
       gp, cont_n);
   ck_reset(cudaPeekAtLastError(), "transit kernel launch");
-  // Synchronize so the returned DeviceRayBatch is safe to consume by the
-  // next TraceLayer call without further host-side waits.
-  ck_reset(cudaDeviceSynchronize(), "transit kernel sync");
+  // Synchronize the default stream only — cudaDeviceSynchronize would block
+  // all streams (including potential future overlapping streams) unnecessarily.
+  ck_reset(cudaStreamSynchronize(cudaStreamDefault), "transit kernel sync");
 
   // Advance PCG counter + MS layer index. transit_ray_count_ uses the
   // continuation count (= number of kernel threads = number of unique PCG

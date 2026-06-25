@@ -137,3 +137,22 @@ add_test(NAME "LumiceGoldenAnalyticTest" COMMAND golden_analytic_test
   "${PROJ_TEST_DIR}/fixtures/v3_config.json"
   "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties("LumiceGoldenAnalyticTest" PROPERTIES LABELS "golden-analytic")
+
+# --------------------------------------------------------------------------------------------------
+# CUDA multi-MS parity (Python pytest, dev49-only guard via LUMICE_CUDA_ENABLED env)
+#
+# Mirrors the test_cuda_exit_seam_parity.py pattern: implemented as pytest to
+# reuse the e2e runner fixtures (CApiRunner) rather than duplicating them in a
+# new gtest binary. On Mac (LUMICE_CUDA_ENABLED=OFF) the test self-skips; it is
+# intended to run on dev49 via `pytest test_cuda_multi_ms_parity.py` or via
+# `ctest -R CudaMultiMsParity` on dev49 after LUMICE_CUDA_ENABLED=1 in env.
+find_program(PYTEST_EXECUTABLE NAMES pytest pytest3 HINTS ENV PATH)
+if(PYTEST_EXECUTABLE)
+  add_test(NAME "CudaMultiMsParity"
+    COMMAND ${PYTEST_EXECUTABLE} -v
+      "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_cuda_multi_ms_parity.py"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+  set_tests_properties("CudaMultiMsParity" PROPERTIES
+    LABELS "parity;cuda"
+    ENVIRONMENT "LUMICE_CUDA_ENABLED=1")
+endif()
