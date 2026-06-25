@@ -23,9 +23,20 @@
 // Crystal/host-side ray generation re-uses the same `MakeCrystal` /
 // `InitRayFirstMs` chain as `CpuTraceBackend::TraceLayer` (cpu_trace_backend.cpp
 // 312-325 / 135-140). The kernel is a per-thread single-orientation trace using
-// Möller-Trumbore triangle intersection + tri->poly mapping for O(1) from_face
-// guard (Metal slab traversal is polygon-level; the two routes converge at the
-// exit_dir_world record via frame invariant 6).
+// the polygon-slab half-space method (mirrors legacy `PropagateSlab` in
+// optics.cpp:111-125): per polygon face, compute the ray/plane intersection
+// `t = -(p·n + d) / (dir·n)`, accept rays with `dir·n > kSlabEps` (leaving the
+// half-space), pick the minimum `t` as the exit face. Convex-crystal invariant
+// guarantees one face is always found, eliminating the Möller-Trumbore
+// absolute-ε face-miss bug (task-cuda-traversal-robustness; G2 fix).
+//
+// D3 三问：
+//   ① 推进了"内部遍历无漏面"的缝不变量（凸晶体内必命中出射面）。
+//   ② 删除了 `ray_triangle()` 辅助 + 三角级设备缓冲（d_verts_/d_norms_/
+//      d_tri_poly_id_）+ O(tri_cnt) 入射面法向量扫描。
+//   ③ 对标 legacy `PropagateSlab` 既有架构 + Metal polygon-slab；无 CPU batch
+//      适配器、无镜像 CPU 工作单元。GPU 线程=一光线，几何在 session 启动时
+//      上传一次（poly 级 AoS：n 三连续、d 单值）。
 
 #include "core/backend/cuda_trace_backend.hpp"
 
@@ -103,36 +114,6 @@ __device__ inline void cross3(const float* a, const float* b, float* out) {
   out[2] = a[0] * b[1] - a[1] * b[0];
 }
 
-// Möller-Trumbore: intersect ray (origin O, dir D) with triangle (v0, v1, v2).
-// Returns t > 0 on hit (front + back), -1.0f on miss. No back-face culling —
-// the ray sits inside the crystal and may hit faces from either side.
-__device__ inline float ray_triangle(const float* O, const float* D, const float* v0, const float* v1,
-                                     const float* v2) {
-  float e1[3] = {v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]};
-  float e2[3] = {v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]};
-  float pvec[3];
-  cross3(D, e2, pvec);
-  float det = dot3(e1, pvec);
-  // Reject near-parallel rays. 1e-8f matches the Metal poly-slab `kFloatEps`
-  // sentinel scale; sub-eps determinants produce u/v overflow.
-  if (det > -1e-8f && det < 1e-8f) {
-    return -1.0f;
-  }
-  float inv_det = 1.0f / det;
-  float tvec[3] = {O[0] - v0[0], O[1] - v0[1], O[2] - v0[2]};
-  float u = dot3(tvec, pvec) * inv_det;
-  if (u < 0.0f || u > 1.0f) {
-    return -1.0f;
-  }
-  float qvec[3];
-  cross3(tvec, e1, qvec);
-  float v = dot3(D, qvec) * inv_det;
-  if (v < 0.0f || u + v > 1.0f) {
-    return -1.0f;
-  }
-  return dot3(e2, qvec) * inv_det;
-}
-
 // --- trace_single_ms_kernel -----------------------------------------------
 //
 // One thread per root ray. Per-bounce refraction splitting (mirrors legacy
@@ -149,10 +130,9 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                        const float* __restrict__ d_ws,          // n_roots
                                        const uint32_t* __restrict__ d_from_poly,  // n_roots (entry-face polygon id)
                                        uint32_t n_roots,
-                                       const float* __restrict__ d_verts,       // 9 × tri_cnt
-                                       const float* __restrict__ d_norms,       // 3 × tri_cnt (outward face normals)
-                                       const uint32_t* __restrict__ d_tri_poly_id,  // tri_cnt (tri -> polygon id)
-                                       uint32_t tri_cnt,
+                                       const float* __restrict__ d_poly_n,      // 3 × poly_cnt (outward polygon normals)
+                                       const float* __restrict__ d_poly_d,      // poly_cnt (plane constant, p·n + d = 0)
+                                       uint32_t poly_cnt,
                                        const float* __restrict__ d_rot_c2w,     // 9 × n_roots, row-major per ray
                                        float n_idx,
                                        uint32_t max_hits,
@@ -171,10 +151,10 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
   float w = d_ws[tid];
 
   // Initial from_poly = entry-face polygon id from InitRay_p_fid output.
-  // p sits exactly on this polygon's triangle (no epsilon push); without
-  // suppressing self-hit the first Möller-Trumbore would return t≈0 against
-  // the entry face's triangles. Mirrors the CPU/Metal Propagate which uses
-  // `to_face_` as the from_face guard for the first iteration.
+  // p sits exactly on this polygon (no epsilon push); without suppressing
+  // self-hit the first slab sweep would return t≈0 against the entry face.
+  // Mirrors the CPU/Metal Propagate which uses `to_face_` as the from_face
+  // guard for the first iteration.
   uint32_t from_poly = d_from_poly[tid];
 
   // Per-ray crystal->world rotation (row-major). frame invariant 6.
@@ -190,25 +170,17 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
   //
   // `from_poly` already holds the entry-face polygon id (InitRay_p_fid →
   // d_from_poly). `org` already sits on this polygon (area-sampled) so no
-  // march is needed. We only need its outward normal: scan d_tri_poly_id for
-  // the first triangle owned by from_poly (all triangles of a polygon are
-  // coplanar → same normal).
+  // march is needed. We only need its outward normal: read directly from the
+  // polygon-level normal buffer (O(1), no warp divergence).
   //
-  // Cost note: O(tri_cnt) per ray with warp divergence at the break point.
-  // MVP crystals have tri_cnt ≈ 8 (prism) so this is negligible; for larger
-  // meshes a precomputed poly→first_tri map could eliminate the divergence.
-  float entry_nrm[3] = {0.0f, 0.0f, 0.0f};
-  bool entry_nrm_found = false;
-  for (uint32_t tri = 0u; tri < tri_cnt; ++tri) {
-    if (d_tri_poly_id[tri] == from_poly) {
-      entry_nrm[0] = d_norms[tri * 3u + 0u];
-      entry_nrm[1] = d_norms[tri * 3u + 1u];
-      entry_nrm[2] = d_norms[tri * 3u + 2u];
-      entry_nrm_found = true;
-      break;
-    }
-  }
-  if (entry_nrm_found && w > 0.0f) {
+  // Equivalence to the prior O(tri_cnt) tri-scan path: BuildPolygonFaceData
+  // guarantees every valid polygon owns ≥1 triangle, so the old
+  // `entry_nrm_found` predicate was equivalent to `from_poly < poly_cnt`
+  // for all non-sentinel from_poly. The kInvalidId widened sentinel
+  // (0xFFFFFFFFu) is filtered by the same `from_poly < poly_cnt` guard.
+  if ((from_poly < poly_cnt) && (w > 0.0f)) {
+    float entry_nrm[3] = {d_poly_n[from_poly * 3u + 0u], d_poly_n[from_poly * 3u + 1u],
+                          d_poly_n[from_poly * 3u + 2u]};
     // cos_theta_e < 0: sun ray points into the crystal (guaranteed by
     // InitRay_p_fid's area-weighted projection filter). rr_e = 1/n_idx
     // (air→glass) ⇒ 1 - rr_e^2 > 0 ⇒ dd_e > 0 ⇒ never TIR at entry.
@@ -261,37 +233,53 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
     if (w <= 0.0f) {
       break;
     }
-    // Find nearest triangle hit (t > eps) excluding from_poly's triangles.
-    float t_min = 1e30f;
-    uint32_t hit_tri = 0xFFFFFFFFu;
-    for (uint32_t tri = 0u; tri < tri_cnt; ++tri) {
-      if (d_tri_poly_id[tri] == from_poly) {
+    // Polygon-slab traversal: mirrors legacy `PropagateSlab`
+    // (optics.cpp:111-125). For each polygon face whose outward normal makes
+    // `dir·n > kSlabEps` (the ray is leaving that half-space), compute the
+    // ray/plane intersection `t = -(org·n + d) / denom`. Pick the minimum t
+    // as the exit face. Convex-crystal invariant guarantees one face is
+    // always found — no absolute-ε face-miss bug (the Möller-Trumbore route
+    // dropped TIR-reflected near-parallel rays via `det ∈ [-1e-8, 1e-8]`
+    // and `t > 1e-6f` thresholds; see doc/numerical-robustness.md约定 2).
+    // kSlabEps = 1e-5f: float32 robustness epsilon (loose compared to CPU's
+    // math::kFloatEps ≈ 1.19e-7f; the larger value tolerates float32
+    // near-face rounding without affecting convex-crystal correctness).
+    constexpr float kSlabEps = 1e-5f;
+    float t_best = 1e30f;
+    uint32_t hit_poly = 0xFFFFFFFFu;
+    for (uint32_t fi = 0u; fi < poly_cnt; ++fi) {
+      if (fi == from_poly) {
         continue;
       }
-      const float* v0 = d_verts + tri * 9u + 0u;
-      const float* v1 = d_verts + tri * 9u + 3u;
-      const float* v2 = d_verts + tri * 9u + 6u;
-      float t = ray_triangle(org, dir, v0, v1, v2);
-      if (t > 1e-6f && t < t_min) {
-        t_min = t;
-        hit_tri = tri;
+      float nx = d_poly_n[fi * 3u + 0u];
+      float ny = d_poly_n[fi * 3u + 1u];
+      float nz = d_poly_n[fi * 3u + 2u];
+      float denom = dir[0] * nx + dir[1] * ny + dir[2] * nz;
+      if (denom <= kSlabEps) {
+        continue;
+      }
+      float fd = d_poly_d[fi];
+      float t = -(org[0] * nx + org[1] * ny + org[2] * nz + fd) / denom;
+      if (t < t_best) {
+        t_best = t;
+        hit_poly = fi;
       }
     }
-    if (hit_tri == 0xFFFFFFFFu) {
-      // Safety bound — ray escaped without hitting any face. Drop silently
-      // (matches the legacy "outgoing with kInvalidId to_face_" path which
-      // also zero-emits).
+    // Accept t slightly negative (-kSlabEps) for TIR-edge cases where the
+    // hit-point sits just inside the source face within float32 rounding.
+    // Mirrors CPU's `eps_thr = -math::kFloatEps` relaxed threshold
+    // (optics.cpp:138). On a convex crystal this should never trigger the
+    // hard exit — if it does, geometry data is anomalous.
+    if (hit_poly == 0xFFFFFFFFu || t_best <= -kSlabEps) {
       break;
     }
 
-    uint32_t hit_poly = d_tri_poly_id[hit_tri];
-
     // Advance origin to hit point.
-    org[0] += t_min * dir[0];
-    org[1] += t_min * dir[1];
-    org[2] += t_min * dir[2];
+    org[0] += t_best * dir[0];
+    org[1] += t_best * dir[1];
+    org[2] += t_best * dir[2];
 
-    float nrm[3] = {d_norms[hit_tri * 3u + 0u], d_norms[hit_tri * 3u + 1u], d_norms[hit_tri * 3u + 2u]};
+    float nrm[3] = {d_poly_n[hit_poly * 3u + 0u], d_poly_n[hit_poly * 3u + 1u], d_poly_n[hit_poly * 3u + 2u]};
 
     // Fresnel: same formula as cpu/metal HitSurface. cos_theta is signed; rr
     // flips between n (going outward) and 1/n (going inward). dd ≤ 0 ⇒ TIR.
@@ -364,11 +352,11 @@ struct CudaTraceBackend::Impl {
   bool in_session_ = false;
   bool buffers_allocated_ = false;
 
-  // Crystal geometry — uploaded once per session.
-  float* d_verts_ = nullptr;           // 9 × tri_cnt
-  float* d_norms_ = nullptr;           // 3 × tri_cnt (outward face normals)
-  uint32_t* d_tri_poly_id_ = nullptr;  // tri_cnt
-  uint32_t tri_cnt_ = 0;
+  // Crystal geometry — uploaded once per session at polygon-face granularity.
+  // No triangle-level data: the kernel does polygon-slab traversal, not
+  // Möller-Trumbore.
+  float* d_poly_n_ = nullptr;  // 3 × poly_cnt (outward polygon normals, AoS)
+  float* d_poly_d_ = nullptr;  // poly_cnt (plane constant: p·n + d = 0)
   uint32_t poly_cnt_ = 0;
 
   // Per-ray crystal->world rotation buffer (9 floats/ray, row-major
@@ -420,12 +408,10 @@ void CudaTraceBackend::Impl::Reset() {
   // cudaFree / cudaFreeHost on nullptr are no-ops per CUDA spec, so we don't
   // need explicit allocated-flag guards. Errors are intentionally ignored —
   // teardown must not throw.
-  cudaFree(d_verts_);
-  d_verts_ = nullptr;
-  cudaFree(d_norms_);
-  d_norms_ = nullptr;
-  cudaFree(d_tri_poly_id_);
-  d_tri_poly_id_ = nullptr;
+  cudaFree(d_poly_n_);
+  d_poly_n_ = nullptr;
+  cudaFree(d_poly_d_);
+  d_poly_d_ = nullptr;
   cudaFree(d_rot_c2w_);
   d_rot_c2w_ = nullptr;
   cudaFree(d_dirs_);
@@ -462,7 +448,6 @@ void CudaTraceBackend::Impl::Reset() {
     events_created_ = false;
   }
 
-  tri_cnt_ = 0;
   poly_cnt_ = 0;
   exit_cap_ = 0;
   h_exit_count_ = 0;
@@ -585,22 +570,20 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     RandomNumberGenerator dummy_rng{0u};
     Crystal crystal_for_geom = MakeCrystal(dummy_rng, ms_setting.crystal_.param_);
 
-    size_t tri_cnt = crystal_for_geom.TotalTriangles();
     size_t poly_cnt = crystal_for_geom.PolygonFaceCount();
-    if (tri_cnt == 0 || poly_cnt == 0) {
-      throw BackendUnavailableError("CudaTraceBackend::BeginSession: degenerate crystal geometry (0 triangles)");
+    if (poly_cnt == 0) {
+      throw BackendUnavailableError("CudaTraceBackend::BeginSession: degenerate crystal geometry (0 polygons)");
     }
-    impl_->tri_cnt_ = static_cast<uint32_t>(tri_cnt);
     impl_->poly_cnt_ = static_cast<uint32_t>(poly_cnt);
 
     // Detect stochastic CrystalParam: if a Crystal built with the session
-    // seed differs in triangle count from dummy_rng's crystal, the uploaded
+    // seed differs in polygon count from dummy_rng's crystal, the uploaded
     // geometry will diverge from per-batch TraceLayer crystals and G1 parity
     // may fail. MVP dual_fisheye_ref uses deterministic prism/pyramid shapes.
     if (impl_->logger != nullptr) {
       RandomNumberGenerator probe_rng{spec.seed};
       Crystal probe_crystal = MakeCrystal(probe_rng, ms_setting.crystal_.param_);
-      if (probe_crystal.TotalTriangles() != tri_cnt) {
+      if (probe_crystal.PolygonFaceCount() != poly_cnt) {
         ILOG_WARN(*impl_->logger,
                   "CudaTraceBackend::BeginSession: stochastic CrystalParam detected — "
                   "uploaded geometry may diverge from per-batch TraceLayer crystals; "
@@ -608,30 +591,19 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
       }
     }
 
-    // Triangle verts (9 × tri_cnt) + normals (3 × tri_cnt) H2D.
-    CheckCuda(cudaMalloc(&impl_->d_verts_, 9 * tri_cnt * sizeof(float)), "BeginSession cudaMalloc d_verts");
-    CheckCuda(cudaMemcpy(impl_->d_verts_, crystal_for_geom.GetTriangleVtx(), 9 * tri_cnt * sizeof(float),
-                         cudaMemcpyHostToDevice), "BeginSession cudaMemcpy d_verts");
-    CheckCuda(cudaMalloc(&impl_->d_norms_, 3 * tri_cnt * sizeof(float)), "BeginSession cudaMalloc d_norms");
-    CheckCuda(cudaMemcpy(impl_->d_norms_, crystal_for_geom.GetTriangleNormal(), 3 * tri_cnt * sizeof(float),
-                         cudaMemcpyHostToDevice), "BeginSession cudaMemcpy d_norms");
-
-    // tri -> polygon-id reverse map. GetPolygonFaceTriId() returns a per-
-    // polygon start-of-triangle-range array (length poly_cnt); each polygon
-    // p owns triangles [start_p, start_{p+1}).
-    const int* poly_tri_starts = crystal_for_geom.GetPolygonFaceTriId();
-    std::vector<uint32_t> h_tri_poly_id(tri_cnt);
-    for (uint32_t p = 0; p < impl_->poly_cnt_; ++p) {
-      uint32_t start = static_cast<uint32_t>(poly_tri_starts[p]);
-      uint32_t end = (p + 1u < impl_->poly_cnt_) ? static_cast<uint32_t>(poly_tri_starts[p + 1u])
-                                                 : static_cast<uint32_t>(tri_cnt);
-      for (uint32_t t = start; t < end && t < tri_cnt; ++t) {
-        h_tri_poly_id[t] = p;
-      }
-    }
-    CheckCuda(cudaMalloc(&impl_->d_tri_poly_id_, tri_cnt * sizeof(uint32_t)), "BeginSession cudaMalloc d_tri_poly_id");
-    CheckCuda(cudaMemcpy(impl_->d_tri_poly_id_, h_tri_poly_id.data(), tri_cnt * sizeof(uint32_t),
-                         cudaMemcpyHostToDevice), "BeginSession cudaMemcpy d_tri_poly_id");
+    // Polygon-face geometry H2D: outward normals (3 × poly_cnt, AoS) +
+    // plane constants (poly_cnt). Layout matches Crystal::GetPolygonFace*
+    // contracts (crystal.cpp:191/574/578); the kernel reads them via
+    // `d_poly_n[fi*3 + {0,1,2}]` and `d_poly_d[fi]`, mirroring legacy
+    // `PropagateSlab` (optics.cpp:111-125).
+    CheckCuda(cudaMalloc(&impl_->d_poly_n_, 3 * poly_cnt * sizeof(float)), "BeginSession cudaMalloc d_poly_n");
+    CheckCuda(cudaMemcpy(impl_->d_poly_n_, crystal_for_geom.GetPolygonFaceNormal(),
+                         3 * poly_cnt * sizeof(float), cudaMemcpyHostToDevice),
+              "BeginSession cudaMemcpy d_poly_n");
+    CheckCuda(cudaMalloc(&impl_->d_poly_d_, poly_cnt * sizeof(float)), "BeginSession cudaMalloc d_poly_d");
+    CheckCuda(cudaMemcpy(impl_->d_poly_d_, crystal_for_geom.GetPolygonFaceDist(),
+                         poly_cnt * sizeof(float), cudaMemcpyHostToDevice),
+              "BeginSession cudaMemcpy d_poly_d");
 
     // Per-ray rotation matrix device buffer (n_roots × 9) is allocated lazily
     // in EnsureSessionBuffers, not here — n_roots is unknown until the first
@@ -648,8 +620,8 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     impl_->in_session_ = true;
     if (impl_->logger != nullptr) {
       ILOG_INFO(*impl_->logger,
-                "CudaTraceBackend::BeginSession: device=0 tri_cnt={} poly_cnt={} seed={} n_idx={:.4f}",
-                tri_cnt, poly_cnt, spec.seed, crystal_for_geom.GetRefractiveIndex(spec.wl.wl_));
+                "CudaTraceBackend::BeginSession: device=0 poly_cnt={} seed={} n_idx={:.4f}",
+                poly_cnt, spec.seed, crystal_for_geom.GetRefractiveIndex(spec.wl.wl_));
     }
   } catch (...) {
     impl_->Reset();
@@ -712,8 +684,8 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     // Copy crystal-local d/p/w + per-ray crystal->world rotation into pinned
     // staging. to_face_ is the InitRay_p_fid entry-face polygon id; the
     // kernel needs it as the initial from_poly to suppress self-intersect on
-    // the first Möller-Trumbore sweep (p sits exactly on this polygon's
-    // triangle). IdType (uint16_t per raypath.hpp) widens cleanly to uint32_t;
+    // the first polygon-slab sweep (p sits exactly on this polygon).
+    // IdType (uint16_t per raypath.hpp) widens cleanly to uint32_t;
     // kInvalidId (0xFFFFFFFFu after widening) maps to the kernel's "no
     // previous face" sentinel. InitRayFirstMs samples an independent crystal
     // orientation per root ray (halo-ring distribution comes from this); each
@@ -763,8 +735,8 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
 
   // Splitting (deterministic per-bounce fan-out) — no per-thread RNG needed.
   trace_single_ms_kernel<<<grid, 256>>>(impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
-                                        static_cast<uint32_t>(n), impl_->d_verts_, impl_->d_norms_,
-                                        impl_->d_tri_poly_id_, impl_->tri_cnt_, impl_->d_rot_c2w_, n_idx,
+                                        static_cast<uint32_t>(n), impl_->d_poly_n_, impl_->d_poly_d_,
+                                        impl_->poly_cnt_, impl_->d_rot_c2w_, n_idx,
                                         max_hits, impl_->d_exit_,
                                         static_cast<uint32_t>(impl_->exit_cap_), impl_->d_exit_count_,
                                         /*crystal_id=*/0u, /*ms_layer_idx=*/0u);
