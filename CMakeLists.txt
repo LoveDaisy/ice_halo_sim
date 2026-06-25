@@ -365,8 +365,12 @@ if(LUMICE_CUDA_ENABLED)
 endif()
 
 if(NOT MSVC)
+  # -Werror=switch is a GCC/Clang host flag; nvcc parses -Werror itself (does
+  # NOT forward it) and rejects "switch" as an invalid value. Scope it to CXX so
+  # the BackendKind exhaustiveness gate still applies to host TUs while the CUDA
+  # (.cu) TU compiles cleanly. The CXX TUs already cover every BackendKind switch.
   target_compile_options(lumice_obj PRIVATE
-    -Wall -Wextra -Werror=switch -fexceptions -frtti)
+    -Wall -Wextra $<$<COMPILE_LANGUAGE:CXX>:-Werror=switch> -fexceptions -frtti)
   target_compile_definitions(lumice_obj PRIVATE __STDC_FORMAT_MACROS SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
   # -fvisibility=hidden: Release/MinSizeRel 下隐藏所有符号，仅导出 lumice.h 中
   # 由 #pragma GCC visibility push(default) 标记的 C API 函数。
