@@ -109,6 +109,19 @@ __device__ inline float dot3(const float* a, const float* b) {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
+// Build ExitFaceSeq from a thread-local face-id record. `len` is bounded by
+// the caller (rec_len) via the `if (rec_len < ExitFaceSeq::kCap)` guard on
+// every append, so `len <= kCap` is invariant here. uint32_t loop counter
+// (not uint8_t) keeps the comparison correct should kCap ever grow > 255.
+__device__ inline ExitFaceSeq BuildExitPath(const uint8_t* path_rec, uint32_t len) {
+  ExitFaceSeq seq{};  // zero-init data_[kCap]; trailing bytes stay 0
+  seq.size_ = static_cast<uint8_t>(len);
+  for (uint32_t k = 0u; k < len; ++k) {
+    seq.data_[k] = path_rec[k];
+  }
+  return seq;
+}
+
 // --- trace_single_ms_kernel -----------------------------------------------
 //
 // One thread per root ray. Per-bounce refraction splitting (mirrors legacy
@@ -173,7 +186,24 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
   // `entry_nrm_found` predicate was equivalent to `from_poly < poly_cnt`
   // for all non-sentinel from_poly. The kInvalidId widened sentinel
   // (0xFFFFFFFFu) is filtered by the same `from_poly < poly_cnt` guard.
+  // Thread-local rich-exit path recording (task-cuda-rich-exit / 296.3).
+  // Mirrors Metal shader (lumice_trace.metal:500-505): the entry face is
+  // path[0], each subsequent hit is appended *before* Fresnel at that face.
+  // When an exit record is emitted, `path` contains [entry, f_1, ..., f_K]
+  // where f_K is the face the ray exits through. Bounded by ExitFaceSeq::kCap
+  // (64); every append is guarded so worst-case rec_len = 1 + max_hits stays
+  // within the static array. `face_id` widens to uint8_t (poly_cnt ≤ ~40 on
+  // all ice crystals; the BeginSession log records poly_cnt for diagnosis).
+  uint8_t path_rec[ExitFaceSeq::kCap];
+  uint32_t rec_len = 0u;
+
   if ((from_poly < poly_cnt) && (w > 0.0f)) {
+    // Record entry face as path[0]. Matches Metal's to_face=root_tf[tid] which
+    // is captured at hit=0 before Fresnel (lumice_trace.metal:505). `from_poly
+    // < poly_cnt` is guaranteed by the outer guard and poly_cnt ≤ ~40 << 255
+    // for every supported crystal type, so the uint8_t cast is safe.
+    path_rec[rec_len++] = static_cast<uint8_t>(from_poly);
+
     float entry_nrm[3] = {d_poly_n[from_poly * 3u + 0u], d_poly_n[from_poly * 3u + 1u],
                           d_poly_n[from_poly * 3u + 2u]};
     // cos_theta_e < 0: sun ray points into the crystal (guaranteed by
@@ -204,7 +234,9 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
         rec.dir[1] = exit_world[1];
         rec.dir[2] = exit_world[2];
         rec.weight = w_refl_e;
-        rec.path = ExitFaceSeq{};
+        // Entry external reflect: path = [entry_face]. Matches Metal's
+        // hit=0 mid-exit emission with rec_len=1 (lumice_trace.metal:658-662).
+        rec.path = BuildExitPath(path_rec, rec_len);
         rec.crystal_id = crystal_id;
         rec.ms_layer_idx = ms_layer_idx;
         rec.wl_idx = 0u;
@@ -269,6 +301,17 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
     org[1] += t_best * dir[1];
     org[2] += t_best * dir[2];
 
+    // Append this face to the rich-exit path before Fresnel (matches Metal
+    // shader order at lumice_trace.metal:505). Guard against overflow: worst
+    // case rec_len = 1 (entry) + max_hits; when max_hits == kCap a tail face
+    // would overflow, so silently drop the tail (degrades to the legacy
+    // truncation Metal also performs via `if (rec_len < kRecCap)`). Overflow
+    // is only reachable at max_hits == kCap == 64 — typical configs use
+    // max_hits ≤ 8 so this guard is defensive, not active in practice.
+    if (rec_len < static_cast<uint32_t>(ExitFaceSeq::kCap)) {
+      path_rec[rec_len++] = static_cast<uint8_t>(hit_poly);
+    }
+
     float nrm[3] = {d_poly_n[hit_poly * 3u + 0u], d_poly_n[hit_poly * 3u + 1u], d_poly_n[hit_poly * 3u + 2u]};
 
     // Fresnel: same formula as cpu/metal HitSurface. cos_theta is signed; rr
@@ -309,7 +352,10 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
           rec.dir[1] = exit_world[1];
           rec.dir[2] = exit_world[2];
           rec.weight = w_refr;
-          rec.path = ExitFaceSeq{};  // MVP zero-init; path content does not feed G1-G6
+          // Rich exit path = [entry_face, f_1, ..., f_K] where f_K = hit_poly
+          // (the face the ray refracted through). Mirrors Metal mid-exit
+          // emission at lumice_trace.metal:658-662.
+          rec.path = BuildExitPath(path_rec, rec_len);
           rec.crystal_id = crystal_id;
           rec.ms_layer_idx = ms_layer_idx;
           rec.wl_idx = 0u;
