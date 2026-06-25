@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "core/math.hpp"
+#include "core/shared/projection_shared.h"
 
 namespace lumice {
 namespace projection {
@@ -30,30 +31,20 @@ Dir3 LinearInverse(float x, float y) {
 
 // Equal-area: k = r_scale / sqrt(1 + dz). No trig, 1 sqrt.
 ProjXY FisheyeEqualAreaForward(float dx, float dy, float dz, float r_scale) {
-  float k = r_scale / std::sqrt(1.0f + std::clamp(dz, -1.0f + 1e-6f, 1.0f));
-  return { k * dx, k * dy, true };
+  auto r = lm_proj::FisheyeEqualAreaForward(dx, dy, dz, r_scale);
+  return { r.x, r.y, r.valid };
 }
 
 // Equidistant: scale = r_scale * theta / (pi/2 * rho). theta = acos(dz).
 ProjXY FisheyeEquidistantForward(float dx, float dy, float dz, float r_scale) {
-  float rho = std::sqrt(dx * dx + dy * dy);
-  if (rho < 1e-10f) {
-    return { 0, 0, true };  // pole
-  }
-  float theta = std::acos(std::clamp(dz, -1.0f, 1.0f));
-  float scale = r_scale * theta / (math::kPi_2 * rho);
-  return { scale * dx, scale * dy, true };
+  auto r = lm_proj::FisheyeEquidistantForward(dx, dy, dz, r_scale);
+  return { r.x, r.y, r.valid };
 }
 
 // Stereographic: scale = r_scale * tan(theta/2) / rho. theta = acos(dz).
 ProjXY FisheyeStereographicForward(float dx, float dy, float dz, float r_scale) {
-  float rho = std::sqrt(dx * dx + dy * dy);
-  if (rho < 1e-10f) {
-    return { 0, 0, true };  // pole
-  }
-  float theta = std::acos(std::clamp(dz, -1.0f, 1.0f));
-  float scale = r_scale * std::tan(theta / 2.0f) / rho;
-  return { scale * dx, scale * dy, true };
+  auto r = lm_proj::FisheyeStereographicForward(dx, dy, dz, r_scale);
+  return { r.x, r.y, r.valid };
 }
 
 // Orthographic: r = sin(theta). For |d|=1, sin(theta) = sqrt(dx^2 + dy^2), so
@@ -61,10 +52,8 @@ ProjXY FisheyeStereographicForward(float dx, float dy, float dz, float r_scale) 
 // dz < 0 is rejected: sin(theta) is not injective past theta=pi/2 (sin(120) == sin(60)),
 // two distinct rays would otherwise project to the same pixel.
 ProjXY FisheyeOrthographicForward(float dx, float dy, float dz, float r_scale) {
-  if (dz < 0.0f) {
-    return { 0, 0, false };
-  }
-  return { r_scale * dx, r_scale * dy, true };
+  auto r = lm_proj::FisheyeOrthographicForward(dx, dy, dz, r_scale);
+  return { r.x, r.y, r.valid };
 }
 
 
@@ -137,9 +126,8 @@ Dir3 FisheyeOrthographicInverse(float x, float y, float r_scale) {
 // =============== Rectangular ===============
 
 ProjXY RectangularForward(float dx, float dy, float dz) {
-  float lon = std::atan2(dy, dx);
-  float lat = std::asin(std::clamp(dz, -1.0f, 1.0f));
-  return { lon, lat, true };
+  auto r = lm_proj::RectangularForward(dx, dy, dz);
+  return { r.x, r.y, r.valid };
 }
 
 Dir3 RectangularInverse(float lon, float lat) {

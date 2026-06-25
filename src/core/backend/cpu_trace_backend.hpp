@@ -6,9 +6,9 @@
 #include <vector>
 
 #include "config/sim_data.hpp"
+#include "core/backend/trace_backend.hpp"
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
-#include "core/trace_backend.hpp"
 
 namespace lumice {
 

@@ -20,20 +20,24 @@
 #include "config/proj_config.hpp"
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
+#include "core/backend/cpu_trace_backend.hpp"
+#include "core/backend/trace_backend.hpp"
 #include "core/buffer.hpp"
-#include "core/cpu_trace_backend.hpp"
 #include "core/crystal.hpp"
 #include "core/filter_spec.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
-#include "core/trace_backend.hpp"
 #include "util/env_knobs.hpp"
 #include "util/illuminant.hpp"
 #include "util/logger.hpp"
 #include "util/queue.hpp"
 
 #if defined(__APPLE__)
-#include "core/metal_trace_backend.hpp"
+#include "core/backend/metal_trace_backend.hpp"
+#endif
+
+#if defined(LUMICE_CUDA_ENABLED)
+#include "core/backend/cuda_trace_backend.hpp"
 #endif
 
 namespace lumice {
@@ -539,7 +543,7 @@ Simulator& Simulator::operator=(Simulator&& other) noexcept {
   return *this;
 }
 
-void Simulator::SetPreferredBackend(int backend) {
+void Simulator::SetPreferredBackend(BackendKind backend) {
   preferred_backend_.store(backend, std::memory_order_release);
 }
 
@@ -551,12 +555,13 @@ namespace {
 //      - "cpu_backend"               -> CpuTraceBackend
 //      - "metal" on Apple            -> MetalTraceBackend
 //      - "metal" elsewhere / unknown -> nullptr (logged WARN)
-//   2) preferred_backend (set by Server::SetPreferredBackend, default kPreferCpu):
-//      - kPreferMetal on Apple       -> MetalTraceBackend
-//      - any value elsewhere         -> nullptr (silent no-op; GUI checkbox
+//   2) preferred_backend (set by Server::SetPreferredBackend, default kCpu):
+//      - kMetal on Apple             -> MetalTraceBackend
+//      - kMetal elsewhere            -> nullptr (silent no-op; GUI checkbox
 //                                       on non-Apple builds equates to CPU)
+//      - kCuda                       -> not yet implemented, returns nullptr
 // Returns nullptr to keep the legacy CPU path (Simulator::SimulateOneWavelength).
-std::unique_ptr<TraceBackend> CreateBackend(int preferred_backend, Logger& logger) {
+std::unique_ptr<TraceBackend> CreateBackend(BackendKind preferred_backend, Logger& logger) {
   if (std::optional<std::string> override = env::TraceBackendOverride(logger)) {
     const std::string& name = *override;
     if (name.empty() || name == "legacy") {
@@ -572,16 +577,50 @@ std::unique_ptr<TraceBackend> CreateBackend(int preferred_backend, Logger& logge
       ILOG_WARN(logger, "LUMICE_TRACE_BACKEND=metal requested on non-Apple platform; falling back to legacy CPU");
       return nullptr;
 #endif
+    } else if (name == "cuda") {
+#if defined(LUMICE_CUDA_ENABLED)
+      if (CudaDeviceAvailable()) {
+        ILOG_INFO(logger, "LUMICE_TRACE_BACKEND=cuda → routing via CudaTraceBackend");
+        return std::make_unique<CudaTraceBackend>(&logger);
+      }
+      ILOG_WARN(logger, "LUMICE_TRACE_BACKEND=cuda requested but no CUDA device available; falling back to legacy CPU");
+      return nullptr;
+#else
+      ILOG_WARN(logger,
+                "LUMICE_TRACE_BACKEND=cuda requested but LUMICE_CUDA_ENABLED not set; falling back to legacy CPU");
+      return nullptr;
+#endif
     } else {
       ILOG_WARN(logger, "Unknown LUMICE_TRACE_BACKEND={}; falling back to preferred backend", name);
     }
   }
-  if (preferred_backend == Simulator::kPreferMetal) {
+  // -Wswitch: exhaustive over BackendKind, no `default:` so adding a new enum
+  // value forces the compiler to surface this site (and ResolveMetalRoute /
+  // LUMICE_BackendAvailable below).
+  switch (preferred_backend) {
+    case BackendKind::kCpu:
+      return nullptr;
+    case BackendKind::kMetal:
 #if defined(__APPLE__)
-    ILOG_INFO(logger, "preferred_backend=metal → routing via MetalTraceBackend");
-    return std::make_unique<MetalTraceBackend>(&logger);
+      ILOG_INFO(logger, "preferred_backend=metal → routing via MetalTraceBackend");
+      return std::make_unique<MetalTraceBackend>(&logger);
 #else
-    return nullptr;  // non-Apple: silent no-op (CPU)
+      return nullptr;  // non-Apple: silent no-op (CPU)
+#endif
+    case BackendKind::kCuda:
+#if defined(LUMICE_CUDA_ENABLED)
+      if (CudaDeviceAvailable()) {
+        ILOG_INFO(logger, "preferred_backend=cuda → routing via CudaTraceBackend");
+        return std::make_unique<CudaTraceBackend>(&logger);
+      }
+      ILOG_WARN(logger, "preferred_backend=cuda but no CUDA device available; falling back to legacy CPU");
+      return nullptr;
+#else
+      // CUDA backend gated behind LUMICE_CUDA_ENABLED=ON (dev49 docker /
+      // CUDAToolkit hosts only). Mac / Windows builds without the gate take
+      // the legacy CPU fallback.
+      ILOG_WARN(logger, "preferred_backend=cuda but LUMICE_CUDA_ENABLED not set; falling back to legacy CPU");
+      return nullptr;
 #endif
   }
   return nullptr;

@@ -52,7 +52,7 @@
 #include "core/filter_spec.hpp"
 #include "core/math.hpp"
 #include "core/metal_filter_match_src.hpp"
-#include "core/metal_trace_backend.hpp"
+#include "core/backend/metal_trace_backend.hpp"
 // task-#283 (metal-build-time-metallib): the parity harness no longer relies
 // on the retired `kFilterMatchHelperSrc` string. Instead it prepends the
 // build-time-embedded canonical source (which contains the helper functions
@@ -61,7 +61,7 @@
 // only invokes `filter_match_test_kernel`.
 #include "lumice_trace_src_embed.h"  // lumice::kLumiceCombinedKernelSrc
 #include "core/raypath.hpp"
-#include "core/trace_backend.hpp"
+#include "core/backend/trace_backend.hpp"
 #include "metal_test_helpers.hpp"
 #include "parity-cross-backend/backend/metal_filter_match_test_src.hpp"
 

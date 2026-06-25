@@ -89,10 +89,11 @@ typedef struct LUMICE_ServerConfig_ {
   int num_workers;        // CPU route only: worker count (0 = PhysicalCoreCount()).
                           // Ignored on the GPU/Metal route (always one engine, task-268.7).
   unsigned int sim_seed;  // Deterministic seed for the worker RNG. 0 = random (default).
-  int preferred_backend;  // LUMICE_BACKEND_CPU (0, multi-worker) or LUMICE_BACKEND_METAL
-                          // (1, single engine). Fixes the route at construction; the worker
-                          // count follows it. env LUMICE_TRACE_BACKEND overrides. The GUI
-                          // reconstructs the server when the Metal checkbox toggles.
+  int preferred_backend;  // LUMICE_BACKEND_CPU (0, multi-worker), LUMICE_BACKEND_METAL
+                          // (1, single engine on Apple) or LUMICE_BACKEND_CUDA (2, future).
+                          // Fixes the route at construction; the worker count follows it.
+                          // env LUMICE_TRACE_BACKEND overrides. The GUI reconstructs the
+                          // server when the backend selection changes.
 } LUMICE_ServerConfig;
 
 // =============== Server Lifecycle ===============
@@ -398,6 +399,7 @@ LUMICE_ErrorCode LUMICE_XyzToSrgbUint8(const float* xyz_in, unsigned char* out, 
 // values; 0 stays CPU so default zero-init = legacy behavior.
 #define LUMICE_BACKEND_CPU 0
 #define LUMICE_BACKEND_METAL 1
+#define LUMICE_BACKEND_CUDA 2
 
 // Set preferred trace backend for this server.
 //   backend = LUMICE_BACKEND_CPU   (default): legacy CPU path.

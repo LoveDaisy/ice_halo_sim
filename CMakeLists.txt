@@ -19,6 +19,11 @@ set(CMAKE_C_STANDARD 11)              # C11...
 
 option(LUMICE_NATIVE_ARCH "Enable -march=native for release builds (GCC/Clang)" ON)
 
+# CUDA backend (off by default; turn on for dev49 docker CUDA 11.6+ environments).
+# scrum-cuda-backend-mvp subtask 3: enables CudaTraceBackend + lumice_trace.cu.
+# Mac/Windows host builds without nvcc must stay zero-regress when this is OFF.
+option(LUMICE_CUDA_ENABLED "Enable CUDA backend (requires nvcc / CUDAToolkit)" OFF)
+
 if(MSVC)
   add_definitions(-DNOMINMAX)
   set(CMAKE_DEBUG_POSTFIX "d")
@@ -204,7 +209,7 @@ set(lumice_config_src
   "${PROJ_SRC_DIR}/config/sim_data.cpp")
 
 set(lumice_core_src
-  "${PROJ_SRC_DIR}/core/cpu_trace_backend.cpp"
+  "${PROJ_SRC_DIR}/core/backend/cpu_trace_backend.cpp"
   "${PROJ_SRC_DIR}/core/crystal.cpp"
   "${PROJ_SRC_DIR}/core/filter_spec.cpp"
   "${PROJ_SRC_DIR}/core/geo3d.cpp"
@@ -226,9 +231,9 @@ if(APPLE)
   list(APPEND lumice_core_src
     "${PROJ_SRC_DIR}/core/device_filter_desc.cpp"
     "${PROJ_SRC_DIR}/core/metal_filter_match_src.mm"
-    "${PROJ_SRC_DIR}/core/metal_trace_backend.mm")
+    "${PROJ_SRC_DIR}/core/backend/metal_trace_backend.mm")
   set_source_files_properties(
-    "${PROJ_SRC_DIR}/core/metal_trace_backend.mm"
+    "${PROJ_SRC_DIR}/core/backend/metal_trace_backend.mm"
     "${PROJ_SRC_DIR}/core/metal_filter_match_src.mm"
     PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 
@@ -249,6 +254,13 @@ if(APPLE)
   # MTLCompileOptions (MSL 3.0 + fno-fast-math/MTLMathModeSafe) so the offline
   # metallib produces the same numerical result as the runtime source path.
   # `-arch air64` prevents fat-AIR output (xcrun metallib rejects fat input).
+  # Shared single-source math headers consumed by both MSL and host C++.
+  # Listed in DEPENDS so any change re-triggers metallib compile + embed.
+  set(LUMICE_METAL_SHARED_HDRS
+      "${PROJ_SRC_DIR}/core/shared/lm_shims.h"
+      "${PROJ_SRC_DIR}/core/shared/projection_shared.h"
+      "${PROJ_SRC_DIR}/core/shared/optics_shared.h")
+
   add_custom_command(
     OUTPUT  "${LUMICE_METAL_AIR}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${LUMICE_METAL_GEN_DIR}"
@@ -259,7 +271,7 @@ if(APPLE)
             -mmacosx-version-min=13.0
             -c "${LUMICE_METAL_SRC}"
             -o "${LUMICE_METAL_AIR}"
-    DEPENDS "${LUMICE_METAL_SRC}"
+    DEPENDS "${LUMICE_METAL_SRC}" ${LUMICE_METAL_SHARED_HDRS}
     COMMENT "Compiling MSL → AIR (lumice_trace.metal → lumice_trace.air)"
     VERBATIM)
 
@@ -279,11 +291,33 @@ if(APPLE)
             --metal-src  "${LUMICE_METAL_SRC}"
             --out-dir    "${LUMICE_METAL_GEN_DIR}"
     DEPENDS "${LUMICE_METAL_METALLIB}" "${LUMICE_METAL_SRC}" "${LUMICE_EMBED_SCRIPT}"
+            ${LUMICE_METAL_SHARED_HDRS}
     COMMENT "Embedding metallib + source into C headers"
     VERBATIM)
 
   add_custom_target(lumice_metal_shaders
     DEPENDS "${LUMICE_METAL_BYTES_H}" "${LUMICE_METAL_SRC_H}")
+endif()
+
+# CUDA backend (off by default). scrum-cuda-backend-mvp subtask 3:
+# - nvcc 11.6 (dev49 docker image) is the lowest supported toolchain.
+# - compute_86 PTX with sm_89 JIT (Ada Lovelace, RTX 4060 Ti) — see
+#   scratchpad/explore-cuda-step2-derisk/TOOLCHAIN.md.
+# - Mac/Windows host builds without nvcc keep BUILD_GUI/perf paths intact when
+#   LUMICE_CUDA_ENABLED is OFF (no enable_language(CUDA) at all).
+if(LUMICE_CUDA_ENABLED)
+  enable_language(CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  set(CMAKE_CUDA_STANDARD 17)
+  set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+  if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    # `86-virtual` emits compute_86 PTX only (no SASS); driver JITs to native
+    # sm_89 on Ada. Matches the explore #294 / E2 toolchain probe.
+    set(CMAKE_CUDA_ARCHITECTURES "86-virtual" CACHE STRING "CUDA archs")
+  endif()
+  list(APPEND lumice_core_src
+    "${PROJ_SRC_DIR}/core/backend/cuda_trace_backend.cu")
+  message(STATUS "CUDA backend enabled (arch=${CMAKE_CUDA_ARCHITECTURES})")
 endif()
 
 set(lumice_server_src
@@ -325,9 +359,18 @@ if(APPLE)
   target_include_directories(lumice_obj PRIVATE "${LUMICE_METAL_GEN_DIR}")
 endif()
 
+if(LUMICE_CUDA_ENABLED)
+  target_link_libraries(lumice_obj PUBLIC CUDA::cudart)
+  target_compile_definitions(lumice_obj PUBLIC LUMICE_CUDA_ENABLED=1)
+endif()
+
 if(NOT MSVC)
+  # -Werror=switch is a GCC/Clang host flag; nvcc parses -Werror itself (does
+  # NOT forward it) and rejects "switch" as an invalid value. Scope it to CXX so
+  # the BackendKind exhaustiveness gate still applies to host TUs while the CUDA
+  # (.cu) TU compiles cleanly. The CXX TUs already cover every BackendKind switch.
   target_compile_options(lumice_obj PRIVATE
-    -Wall -Wextra -fexceptions -frtti)
+    -Wall -Wextra $<$<COMPILE_LANGUAGE:CXX>:-Werror=switch> -fexceptions -frtti)
   target_compile_definitions(lumice_obj PRIVATE __STDC_FORMAT_MACROS SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
   # -fvisibility=hidden: Release/MinSizeRel 下隐藏所有符号，仅导出 lumice.h 中
   # 由 #pragma GCC visibility push(default) 标记的 C API 函数。

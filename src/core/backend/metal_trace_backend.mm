@@ -36,7 +36,7 @@
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
 #include "core/metal_filter_match_src.hpp"
-#include "core/metal_trace_backend.hpp"
+#include "core/backend/metal_trace_backend.hpp"
 // task-#283 (metal-build-time-metallib): build-generated headers — wrap their
 // content in `namespace lumice { ... }`, so they are #included at file scope
 // (NOT inside an open `namespace lumice` or anonymous namespace) to keep the

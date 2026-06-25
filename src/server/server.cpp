@@ -58,7 +58,7 @@ class TicketMutex {
 // =============== ServerImpl ===============
 class ServerImpl {
  public:
-  explicit ServerImpl(int num_workers = 0, uint32_t sim_seed = 0, int preferred_backend = 0);
+  explicit ServerImpl(int num_workers = 0, uint32_t sim_seed = 0, BackendKind preferred_backend = BackendKind::kCpu);
   ~ServerImpl();
 
   Error CommitConfig(const nlohmann::json& config_json, bool* out_reused = nullptr);
@@ -71,7 +71,7 @@ class ServerImpl {
   void Start();
   ServerStatus GetStatus() const;
   bool IsIdle();
-  void SetPreferredBackend(int backend);
+  void SetPreferredBackend(BackendKind backend);
 
  private:
   // task-268.7: single-engine orchestration — server now runs exactly one
@@ -141,11 +141,11 @@ class ServerImpl {
   std::atomic_bool work_started_{ false };
   std::atomic_bool scene_gen_active_{ false };  // True while GenerateScene is actively producing batches
 
-  // Preferred trace backend (LUMICE_BACKEND_CPU/METAL). Cached at server
-  // level so the preference survives Stop()/Start() cycles and is the
-  // authoritative source for any future simulator-rebuild path. Mirrored
-  // into every Simulator via SetPreferredBackend(). Default is CPU.
-  std::atomic<int> preferred_backend_{ 0 };
+  // Preferred trace backend. Cached at server level so the preference survives
+  // Stop()/Start() cycles and is the authoritative source for any future
+  // simulator-rebuild path. Mirrored into every Simulator via
+  // SetPreferredBackend(). Default is CPU.
+  std::atomic<BackendKind> preferred_backend_{ BackendKind::kCpu };
 
   std::atomic_int sim_scene_cnt_;
   std::mutex scene_mutex_;
@@ -208,16 +208,27 @@ namespace {
 // GUI reconstructs the server when the Metal checkbox toggles. An env
 // LUMICE_TRACE_BACKEND override (CLI / --benchmark) takes precedence over the
 // preferred_backend argument, mirroring CreateBackend (simulator.cpp).
-bool ResolveMetalRoute(int preferred_backend, Logger& logger) {
+bool ResolveMetalRoute(BackendKind preferred_backend, Logger& logger) {
 #if defined(__APPLE__)
   if (std::optional<std::string> override = env::TraceBackendOverride(logger)) {
     const std::string& name = *override;
-    if (name == "metal")
+    if (name == "metal") {
       return true;
-    if (name == "cpu_backend" || name == "legacy")
+    }
+    if (name == "cpu_backend" || name == "legacy") {
+      return false;
+    }
+  }
+  // -Wswitch: exhaustive over BackendKind, no `default:`. CUDA does not route
+  // through the Metal/GPU sizing path until subtask 3 lands the CUDA backend.
+  switch (preferred_backend) {
+    case BackendKind::kMetal:
+      return true;
+    case BackendKind::kCpu:
+    case BackendKind::kCuda:
       return false;
   }
-  return preferred_backend == Simulator::kPreferMetal;
+  return false;
 #else
   (void)preferred_backend;
   (void)logger;
@@ -226,7 +237,7 @@ bool ResolveMetalRoute(int preferred_backend, Logger& logger) {
 }
 }  // namespace
 
-ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed, int preferred_backend)
+ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed, BackendKind preferred_backend)
     : config_manager_{}, scene_queue_(std::make_shared<Queue<SimBatch>>()),
       data_queue_(std::make_shared<Queue<SimData>>()), status_(ServerStatus::kIdle) {
   preferred_backend_.store(preferred_backend, std::memory_order_release);
@@ -246,7 +257,7 @@ ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed, int preferred_backend
 
   // Propagate the construction-time backend into every simulator. The server-level
   // preferred_backend_ above only drives GenerateScene's dispatch sizing + worker
-  // count; each Simulator owns its OWN preferred_backend_ (default kPreferCpu) and
+  // count; each Simulator owns its OWN preferred_backend_ (default kCpu) and
   // reads it at Run() to pick the trace backend (CreateBackend). Without this, a
   // server built via CreateServerEx(preferred_backend=metal) would size dispatches
   // for Metal yet still trace on the legacy CPU path — the runtime SetPreferredBackend
@@ -904,7 +915,7 @@ void ServerImpl::GenerateScene() {
 // truth). The cache store intentionally precedes prod_mutex_; any future reader
 // outside this lock must treat it as "may lead the simulators_ state" and add
 // its own ordering, or move the store inside the lock.
-void ServerImpl::SetPreferredBackend(int backend) {
+void ServerImpl::SetPreferredBackend(BackendKind backend) {
   preferred_backend_.store(backend, std::memory_order_release);
   std::lock_guard<std::mutex> lock(prod_mutex_);
   for (auto& s : simulators_) {
@@ -926,7 +937,7 @@ void ServerImpl::SetLogLevel(LogLevel level) {
 // =============== Server ===============
 Server::Server() : impl_(std::make_shared<ServerImpl>()) {}
 
-Server::Server(int num_workers, uint32_t sim_seed, int preferred_backend)
+Server::Server(int num_workers, uint32_t sim_seed, BackendKind preferred_backend)
     : impl_(std::make_shared<ServerImpl>(num_workers, sim_seed, preferred_backend)) {}
 
 Error Server::CommitConfig(const nlohmann::json& config_json, bool* out_reused) {
@@ -1025,7 +1036,7 @@ void Server::SetLogLevel(LogLevel level) {
   }
 }
 
-void Server::SetPreferredBackend(int backend) {
+void Server::SetPreferredBackend(BackendKind backend) {
   if (impl_) {
     impl_->SetPreferredBackend(backend);
   }

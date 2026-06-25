@@ -1,4 +1,4 @@
-#include "core/cpu_trace_backend.hpp"
+#include "core/backend/cpu_trace_backend.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -45,6 +45,12 @@ struct BatchTraceSpec {
   size_t max_hits;
   bool first_ms;
   uint8_t ms_layer_idx;  // current MS layer index (carried into ExitRayRecord)
+  // Host-ray injection (first_ms only). When non-null, TraceCrystalBatch
+  // bypasses InitRayFirstMs's light-source sampling and populates workspace[0]
+  // directly from host->d/p/w/tf (already in crystal-local space). Used by
+  // golden-ray tests (test/golden-analytic/backend/test_cpu_golden_rays.cpp)
+  // to inject analytically-known rays; production code passes nullptr.
+  const HostRayBatch* host = nullptr;
 };
 
 // Mutable I/O buffers threaded across the layer's ci iterations. Reference
@@ -101,7 +107,31 @@ void TraceCrystalBatch(RandomNumberGenerator& rng, const CrystalTraceSpec& cryst
     workspace[0].Reset(batch.layer_ray_num * 2);
     workspace[1].Reset(batch.layer_ray_num * 4);
 
-    if (batch.first_ms) {
+    if (batch.first_ms && batch.host != nullptr) {
+      // Host-ray injection bypass: rays are pre-sampled in crystal-local
+      // space; skip light-source sampling and InitRay_p_fid. Slice host arrays
+      // by `cn` (offset within ci, which is the only crystal population for
+      // host-ingest per the 252.3 single-population contract).
+      workspace[0].size_ = curr_ray_num;
+      const auto* host = batch.host;
+      for (size_t i = 0; i < curr_ray_num; i++) {
+        auto& r = workspace[0][i];
+        size_t hi = cn + i;
+        r.crystal_rot_ = Rotation{};  // identity: rays already crystal-local
+        r.d_[0] = host->d[hi * 3 + 0];
+        r.d_[1] = host->d[hi * 3 + 1];
+        r.d_[2] = host->d[hi * 3 + 2];
+        r.p_[0] = host->p[hi * 3 + 0];
+        r.p_[1] = host->p[hi * 3 + 1];
+        r.p_[2] = host->p[hi * 3 + 2];
+        r.w_ = host->w[hi];
+        r.from_face_ = kInvalidId;
+        r.to_face_ = host->tf[hi];
+        r.prev_ray_idx_ = kInfSize;
+      }
+      InitRay_other_info(crystal_spec.crystal, crystal_spec.crystal_id, buffers.all_data.size_, workspace);
+      buffers.all_data.EmplaceBack(workspace[0]);
+    } else if (batch.first_ms) {
       InitRayFirstMs(rng, batch.sun_param, batch.wl_param, curr_ray_num,                     //
                      crystal_spec.crystal, crystal_spec.crystal_id, crystal_spec.axis_dist,  //
                      workspace, buffers.all_data);
@@ -303,6 +333,13 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
     // whole layer's ray count, used to size the trace workspace (see
     // TraceCrystalBatch capacity comment).
     CrystalTraceSpec crystal_spec{ crystal, crystal_id, crystal_axis, refractive_index };
+    // Host-ray injection applies only to ci==0 of the first MS layer (single-
+    // population contract from 252.3) AND only when the caller provided
+    // d/p/w/tf pointers. Production paths leave host_inject == nullptr.
+    const HostRayBatch* host_inject = (first_ms && ci == 0 && roots.host.d != nullptr && roots.host.p != nullptr &&
+                                       roots.host.w != nullptr && roots.host.tf != nullptr) ?
+                                          &roots.host :
+                                          nullptr;
     BatchTraceSpec batch{ ms_info,
                           filter_spec.get(),
                           spec_.scene->light_source_.param_,
@@ -311,7 +348,8 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
                           total_ray_num,
                           spec_.scene->max_hits_,
                           first_ms,
-                          static_cast<uint8_t>(ms_idx_) };
+                          static_cast<uint8_t>(ms_idx_),
+                          host_inject };
     BatchTraceBuffers buffers{ prev_init, init_ray_offset, all_data, cont_collect, outgoing_records };
     TraceCrystalBatch(rng_, crystal_spec, batch, buffers);
   }
