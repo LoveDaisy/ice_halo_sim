@@ -180,6 +180,83 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
   // Per-ray crystal->world rotation (row-major). frame invariant 6.
   const float* rot = d_rot_c2w + static_cast<size_t>(tid) * 9u;
 
+  // ── Entry-face air→glass first interaction ───────────────────────────────
+  // Mirrors legacy `TraceRayBasicInfo` order (simulator.cpp:383):
+  //   HitSurface(to_face_in = entry face) → Propagate(from_face_ = entry face)
+  // The pre-295.6 kernel skipped this and let the main loop march to an
+  // *interior* far face using the un-refracted sun direction (treated as if
+  // the ray were already inside the crystal). Fix: process the entry face
+  // explicitly here, then enter the main loop with the refracted inward dir.
+  //
+  // `from_poly` already holds the entry-face polygon id (InitRay_p_fid →
+  // d_from_poly). `org` already sits on this polygon (area-sampled) so no
+  // march is needed. We only need its outward normal: scan d_tri_poly_id for
+  // the first triangle owned by from_poly (all triangles of a polygon are
+  // coplanar → same normal).
+  //
+  // Cost note: O(tri_cnt) per ray with warp divergence at the break point.
+  // MVP crystals have tri_cnt ≈ 8 (prism) so this is negligible; for larger
+  // meshes a precomputed poly→first_tri map could eliminate the divergence.
+  float entry_nrm[3] = {0.0f, 0.0f, 0.0f};
+  bool entry_nrm_found = false;
+  for (uint32_t tri = 0u; tri < tri_cnt; ++tri) {
+    if (d_tri_poly_id[tri] == from_poly) {
+      entry_nrm[0] = d_norms[tri * 3u + 0u];
+      entry_nrm[1] = d_norms[tri * 3u + 1u];
+      entry_nrm[2] = d_norms[tri * 3u + 2u];
+      entry_nrm_found = true;
+      break;
+    }
+  }
+  if (entry_nrm_found && w > 0.0f) {
+    // cos_theta_e < 0: sun ray points into the crystal (guaranteed by
+    // InitRay_p_fid's area-weighted projection filter). rr_e = 1/n_idx
+    // (air→glass) ⇒ 1 - rr_e^2 > 0 ⇒ dd_e > 0 ⇒ never TIR at entry.
+    float cos_theta_e = dot3(dir, entry_nrm);
+    float rr_e = 1.0f / n_idx;
+    float dd_e = (1.0f - rr_e * rr_e) / (cos_theta_e * cos_theta_e) + rr_e * rr_e;
+    float refl_e = lm_optics::GetReflectRatio(dd_e, rr_e);
+    float w_refl_e = refl_e * w;
+    float w_refr_e = w - w_refl_e;
+
+    // Reflected branch → outward exit contribution. cos(refl_dir, entry_nrm)
+    // = -cos_theta_e > 0, so the reflected ray leaves the crystal; emit as
+    // exit record (mirrors legacy HitSurface external-reflect path).
+    if (w_refl_e > 0.0f) {
+      float rd0 = dir[0] - 2.0f * cos_theta_e * entry_nrm[0];
+      float rd1 = dir[1] - 2.0f * cos_theta_e * entry_nrm[1];
+      float rd2 = dir[2] - 2.0f * cos_theta_e * entry_nrm[2];
+      float exit_world[3];
+      for (int i = 0; i < 3; ++i) {
+        exit_world[i] = rot[i * 3 + 0] * rd0 + rot[i * 3 + 1] * rd1 + rot[i * 3 + 2] * rd2;
+      }
+      uint32_t slot = atomicAdd(d_exit_count, 1u);
+      if (slot < exit_cap) {
+        ExitRayRecord& rec = d_exit[slot];
+        rec.dir[0] = exit_world[0];
+        rec.dir[1] = exit_world[1];
+        rec.dir[2] = exit_world[2];
+        rec.weight = w_refl_e;
+        rec.path = ExitFaceSeq{};
+        rec.crystal_id = crystal_id;
+        rec.ms_layer_idx = ms_layer_idx;
+        rec.wl_idx = 0u;
+      }
+    }
+
+    // Refracted branch → bend into crystal. After this dir points inward
+    // (fd·n = cos_theta_e * sd_e < 0 since cos_theta_e < 0, sd_e > 0).
+    // `from_poly` is left unchanged so the main loop's first march excludes
+    // the entry face's triangles (mirrors legacy Propagate's
+    // `from_face_ = to_face_` first-iter guard).
+    float sd_e = sqrtf(dd_e);
+    dir[0] = rr_e * dir[0] - (rr_e - sd_e) * cos_theta_e * entry_nrm[0];
+    dir[1] = rr_e * dir[1] - (rr_e - sd_e) * cos_theta_e * entry_nrm[1];
+    dir[2] = rr_e * dir[2] - (rr_e - sd_e) * cos_theta_e * entry_nrm[2];
+    w = w_refr_e;
+  }
+  // ── End entry-face interaction ───────────────────────────────────────────
+
   for (uint32_t hit = 0u; hit < max_hits; ++hit) {
     if (w <= 0.0f) {
       break;
