@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782372672639,
+  "lastUpdate": 1782372674566,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -13819,6 +13819,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 85.6,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "19cbaf77d4bb88b85b6d5ed6f6330d0d19d86966",
+          "message": "Merge pull request #147 from LoveDaisy/feat/cuda-backend-mvp\n\nfeat(gpu): CUDA backend MVP — single-MS no-filter raw-XYZ parity (scrum-#295)",
+          "timestamp": "2026-06-25T15:24:53+08:00",
+          "tree_id": "76d63a8f08faefd488e6b75f7425f402972e0d4d",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/19cbaf77d4bb88b85b6d5ed6f6330d0d19d86966"
+        },
+        "date": 1782372674081,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 70.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 101.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 93.3,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 87.9,
             "unit": "%"
           }
         ]
