@@ -6,7 +6,10 @@
 //     trace_single_ms_kernel + 4B exit-count readback.
 //   - DrainExits: bulk D2H copy of ExitRayRecord buffer.
 //   - Recombine: single-MS stub (returns empty DeviceRayBatch).
-//   - K=1 crystal orientation per batch (matches CpuTraceBackend semantics).
+//   - Per-ray crystal orientation: InitRayFirstMs samples an independent
+//     orientation per root ray (the halo-ring distribution comes from this);
+//     d_rot_c2w_ is sized n_roots × 9 and indexed by tid in the kernel.
+//     Mirrors metal_trace_backend.mm's per-ray rot upload path.
 //   - HostRayBatch ingest only; RootRaySource::FromDevice never reaches this
 //     backend (single-MS).
 //   - WlPoolSize()=0; single n_idx per session via SessionSpec::wl.
@@ -88,31 +91,6 @@ size_t ComputeExitCap(size_t n_roots, size_t max_hits) {
   return std::min(cap, hard_cap);
 }
 
-// --- PCG32 inline (per-thread reflectance Bernoulli sampling) -------------
-// Independent of cuRAND so the unit is self-contained and matches the per-ray
-// stream semantics used by the Metal kernel.
-
-__device__ inline uint32_t pcg32_step(uint64_t& state) {
-  uint64_t oldstate = state;
-  state = oldstate * 6364136223846793005ULL + 1442695040888963407ULL;
-  uint32_t xorshifted = static_cast<uint32_t>(((oldstate >> 18u) ^ oldstate) >> 27u);
-  uint32_t rot = static_cast<uint32_t>(oldstate >> 59u);
-  return (xorshifted >> rot) | (xorshifted << ((-static_cast<int32_t>(rot)) & 31));
-}
-
-__device__ inline uint64_t pcg32_seed(uint64_t seed, uint64_t streamid) {
-  uint64_t state = 0u;
-  state = state * 6364136223846793005ULL + (streamid | 1u);
-  state += seed;
-  state = state * 6364136223846793005ULL + (streamid | 1u);
-  return state;
-}
-
-__device__ inline float pcg32_uniform(uint64_t& state) {
-  uint32_t u = pcg32_step(state);
-  return static_cast<float>(u >> 8) * (1.0f / 16777216.0f);  // [0, 1)
-}
-
 // --- Device-side geometry --------------------------------------------------
 
 __device__ inline float dot3(const float* a, const float* b) {
@@ -157,10 +135,14 @@ __device__ inline float ray_triangle(const float* O, const float* D, const float
 
 // --- trace_single_ms_kernel -----------------------------------------------
 //
-// One thread per root ray. Multi-hop trace until exit-via-refraction or
-// max_hits cap. Russian-roulette Fresnel Bernoulli selection: u ∈ [0,1)
-// against w_refl_ratio per hit (TIR forces reflect). frame invariant 6:
-// exit_dir is rotated crystal->world before being written to the exit record.
+// One thread per root ray. Per-bounce refraction splitting (mirrors legacy
+// optics.cpp HitSurface + simulator.cpp:914 fan-out, plus Metal exit-seam):
+// at each hit, emit the refracted exit contribution (weight = w*(1-r)) and
+// continue along the reflected branch with weight w*r. Convex-crystal
+// assumption ⇒ non-TIR refraction direction is always outward (cos_exit > 0);
+// the kernel falls through that emit safely if the assumption breaks.
+// frame invariant 6: exit_dir is rotated crystal->world using the per-ray
+// d_rot_c2w[tid*9..tid*9+8] row-major matrix before being written.
 
 __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        // 3 × n_roots (crystal-local)
                                        const float* __restrict__ d_pos,         // 3 × n_roots (crystal-local)
@@ -171,10 +153,9 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                        const float* __restrict__ d_norms,       // 3 × tri_cnt (outward face normals)
                                        const uint32_t* __restrict__ d_tri_poly_id,  // tri_cnt (tri -> polygon id)
                                        uint32_t tri_cnt,
-                                       const float* __restrict__ d_rot_c2w,     // 9 floats, row-major
+                                       const float* __restrict__ d_rot_c2w,     // 9 × n_roots, row-major per ray
                                        float n_idx,
                                        uint32_t max_hits,
-                                       uint64_t kernel_seed,
                                        ExitRayRecord* __restrict__ d_exit,
                                        uint32_t exit_cap,
                                        uint32_t* __restrict__ d_exit_count,
@@ -196,11 +177,13 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
   // `to_face_` as the from_face guard for the first iteration.
   uint32_t from_poly = d_from_poly[tid];
 
-  uint64_t prng_state = pcg32_seed(kernel_seed, static_cast<uint64_t>(tid));
-
-  bool exited = false;
+  // Per-ray crystal->world rotation (row-major). frame invariant 6.
+  const float* rot = d_rot_c2w + static_cast<size_t>(tid) * 9u;
 
   for (uint32_t hit = 0u; hit < max_hits; ++hit) {
+    if (w <= 0.0f) {
+      break;
+    }
     // Find nearest triangle hit (t > eps) excluding from_poly's triangles.
     float t_min = 1e30f;
     uint32_t hit_tri = 0xFFFFFFFFu;
@@ -244,61 +227,48 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
       refl_ratio = 1.0f;
     }
 
-    float u = pcg32_uniform(prng_state);
-    if (u < refl_ratio) {
-      // Reflect.
-      dir[0] = dir[0] - 2.0f * cos_theta * nrm[0];
-      dir[1] = dir[1] - 2.0f * cos_theta * nrm[1];
-      dir[2] = dir[2] - 2.0f * cos_theta * nrm[2];
-      from_poly = hit_poly;
-      continue;
+    float w_refl = refl_ratio * w;
+    float w_refr = is_tir ? 0.0f : (w - w_refl);
+
+    // Emit the refracted exit contribution. Convex-crystal assumption: for
+    // non-TIR, the refracted direction is outward (cos_exit > 0). The
+    // cos_exit > 0 guard below is defensive — non-convex crystals would
+    // simply emit zero refracted exits at grazing-angle edge cases.
+    // TODO: non-convex crystal continuation (refracted ray re-enters) is
+    // out of MVP scope.
+    if (!is_tir && w_refr > 0.0f) {
+      float sd = sqrtf(fmaxf(dd, 0.0f));
+      float fdx = rr * dir[0] - (rr - sd) * cos_theta * nrm[0];
+      float fdy = rr * dir[1] - (rr - sd) * cos_theta * nrm[1];
+      float fdz = rr * dir[2] - (rr - sd) * cos_theta * nrm[2];
+      float cos_exit = fdx * nrm[0] + fdy * nrm[1] + fdz * nrm[2];
+      if (cos_exit > 0.0f) {
+        float exit_world[3];
+        for (int i = 0; i < 3; ++i) {
+          exit_world[i] = rot[i * 3 + 0] * fdx + rot[i * 3 + 1] * fdy + rot[i * 3 + 2] * fdz;
+        }
+        uint32_t slot = atomicAdd(d_exit_count, 1u);
+        if (slot < exit_cap) {
+          ExitRayRecord& rec = d_exit[slot];
+          rec.dir[0] = exit_world[0];
+          rec.dir[1] = exit_world[1];
+          rec.dir[2] = exit_world[2];
+          rec.weight = w_refr;
+          rec.path = ExitFaceSeq{};  // MVP zero-init; path content does not feed G1-G6
+          rec.crystal_id = crystal_id;
+          rec.ms_layer_idx = ms_layer_idx;
+          rec.wl_idx = 0u;
+        }
+      }
     }
 
-    // Refract (cpu/metal HitSurface formula).
-    float sd = sqrtf(fmaxf(dd, 0.0f));
-    float fdx = rr * dir[0] - (rr - sd) * cos_theta * nrm[0];
-    float fdy = rr * dir[1] - (rr - sd) * cos_theta * nrm[1];
-    float fdz = rr * dir[2] - (rr - sd) * cos_theta * nrm[2];
-    dir[0] = fdx;
-    dir[1] = fdy;
-    dir[2] = fdz;
-
-    // Exit detection: refracted dir · outward face normal > 0 ⇒ ray left
-    // the crystal at this face. Otherwise the refraction kept the ray inside
-    // (rare grazing-angle edge case); update from_poly and continue tracing.
-    float cos_exit = dot3(dir, nrm);
-    if (cos_exit > 0.0f) {
-      exited = true;
-      break;
-    }
+    // Reflect along the same bounce; continue with reduced weight.
+    dir[0] = dir[0] - 2.0f * cos_theta * nrm[0];
+    dir[1] = dir[1] - 2.0f * cos_theta * nrm[1];
+    dir[2] = dir[2] - 2.0f * cos_theta * nrm[2];
+    w = w_refl;
     from_poly = hit_poly;
   }
-
-  if (!exited) {
-    return;
-  }
-
-  // frame invariant 6: rotate crystal-local exit direction into world space.
-  float exit_world[3];
-  for (int i = 0; i < 3; ++i) {
-    exit_world[i] = d_rot_c2w[i * 3 + 0] * dir[0] + d_rot_c2w[i * 3 + 1] * dir[1] + d_rot_c2w[i * 3 + 2] * dir[2];
-  }
-
-  // Append to exit buffer. Atomic counter saturates at exit_cap; we drop the
-  // tail when the buffer overflows (host-side warn covers it).
-  uint32_t slot = atomicAdd(d_exit_count, 1u);
-  if (slot >= exit_cap) {
-    return;
-  }
-  ExitRayRecord& rec = d_exit[slot];
-  rec.dir[0] = exit_world[0];
-  rec.dir[1] = exit_world[1];
-  rec.dir[2] = exit_world[2];
-  rec.weight = w;
-  rec.path = ExitFaceSeq{};  // MVP zero-init; path content does not feed G1-G6
-  rec.crystal_id = crystal_id;
-  rec.ms_layer_idx = ms_layer_idx;
-  rec.wl_idx = 0u;
 }
 
 }  // namespace
@@ -324,10 +294,11 @@ struct CudaTraceBackend::Impl {
   uint32_t tri_cnt_ = 0;
   uint32_t poly_cnt_ = 0;
 
-  // Per-batch crystal orientation (filled from InitRayFirstMs output before
-  // the H2D upload). Row-major 3x3, c2w (Rotation::GetMat()).
+  // Per-ray crystal->world rotation buffer (9 floats/ray, row-major
+  // Rotation::mat_). Allocated in EnsureSessionBuffers; filled per TraceLayer
+  // from InitRayFirstMs all_data[i].crystal_rot_ output. Mirrors
+  // metal_trace_backend.mm's per-ray rot upload (frame invariant 6).
   float* d_rot_c2w_ = nullptr;
-  float h_rot_c2w_[9] = {};
 
   // Per-batch root-ray buffers (allocated lazily on first TraceLayer once
   // n_roots is known).
@@ -347,11 +318,10 @@ struct CudaTraceBackend::Impl {
   float* pinned_pos_ = nullptr;
   float* pinned_ws_ = nullptr;
   uint32_t* pinned_from_poly_ = nullptr;
+  float* pinned_rot_c2w_ = nullptr;  // n_roots × 9 (mirrors d_rot_c2w_)
   ExitRayRecord* pinned_exit_ = nullptr;
 
   RandomNumberGenerator rng_{0u};  // re-seeded in BeginSession from spec.seed
-  uint32_t seed_ = 0;             // stored from spec.seed for deterministic kernel_seed
-  uint64_t batch_ctr_ = 0;        // per-session batch index; mixed into kernel_seed
 
   size_t n_roots_ = 0;
 
@@ -402,6 +372,8 @@ void CudaTraceBackend::Impl::Reset() {
   pinned_ws_ = nullptr;
   cudaFreeHost(pinned_from_poly_);
   pinned_from_poly_ = nullptr;
+  cudaFreeHost(pinned_rot_c2w_);
+  pinned_rot_c2w_ = nullptr;
   cudaFreeHost(pinned_exit_);
   pinned_exit_ = nullptr;
 
@@ -418,8 +390,6 @@ void CudaTraceBackend::Impl::Reset() {
   exit_cap_ = 0;
   h_exit_count_ = 0;
   n_roots_ = 0;
-  seed_ = 0;
-  batch_ctr_ = 0;
   buffers_allocated_ = false;
   in_session_ = false;
   scene_ = nullptr;
@@ -442,12 +412,14 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
   cudaFree(d_pos_);      d_pos_ = nullptr;
   cudaFree(d_ws_);       d_ws_ = nullptr;
   cudaFree(d_from_poly_); d_from_poly_ = nullptr;
+  cudaFree(d_rot_c2w_);  d_rot_c2w_ = nullptr;
   cudaFree(d_exit_);     d_exit_ = nullptr;
   cudaFree(d_exit_count_); d_exit_count_ = nullptr;
   cudaFreeHost(pinned_dirs_);     pinned_dirs_ = nullptr;
   cudaFreeHost(pinned_pos_);      pinned_pos_ = nullptr;
   cudaFreeHost(pinned_ws_);       pinned_ws_ = nullptr;
   cudaFreeHost(pinned_from_poly_); pinned_from_poly_ = nullptr;
+  cudaFreeHost(pinned_rot_c2w_);  pinned_rot_c2w_ = nullptr;
   cudaFreeHost(pinned_exit_);     pinned_exit_ = nullptr;
 
   size_t max_hits = scene_ != nullptr ? scene_->max_hits_ : kMaxHits;
@@ -468,6 +440,7 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
   ck(cudaMalloc(&d_pos_,       3 * n * sizeof(float)),               "cudaMalloc d_pos");
   ck(cudaMalloc(&d_ws_,        n * sizeof(float)),                   "cudaMalloc d_ws");
   ck(cudaMalloc(&d_from_poly_, n * sizeof(uint32_t)),                "cudaMalloc d_from_poly");
+  ck(cudaMalloc(&d_rot_c2w_,   9 * n * sizeof(float)),               "cudaMalloc d_rot_c2w");
   ck(cudaMalloc(&d_exit_,      exit_cap_ * sizeof(ExitRayRecord)),   "cudaMalloc d_exit");
   ck(cudaMalloc(&d_exit_count_, sizeof(uint32_t)),                   "cudaMalloc d_exit_count");
 
@@ -475,6 +448,7 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
   ck(cudaHostAlloc(&pinned_pos_,      3 * n * sizeof(float),               cudaHostAllocDefault), "cudaHostAlloc pinned_pos");
   ck(cudaHostAlloc(&pinned_ws_,       n * sizeof(float),                   cudaHostAllocDefault), "cudaHostAlloc pinned_ws");
   ck(cudaHostAlloc(&pinned_from_poly_, n * sizeof(uint32_t),               cudaHostAllocDefault), "cudaHostAlloc pinned_from_poly");
+  ck(cudaHostAlloc(&pinned_rot_c2w_,  9 * n * sizeof(float),               cudaHostAllocDefault), "cudaHostAlloc pinned_rot_c2w");
   ck(cudaHostAlloc(&pinned_exit_,     exit_cap_ * sizeof(ExitRayRecord),   cudaHostAllocDefault), "cudaHostAlloc pinned_exit");
 
   n_roots_ = n;
@@ -508,7 +482,6 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     impl_->render_ = spec.render;
     impl_->wl_ = spec.wl;
     impl_->rng_.SetSeed(spec.seed);
-    impl_->seed_ = spec.seed;
 
     // MVP: single MS, single crystal config — ms_[0].setting_[0].
     if (spec.scene == nullptr || spec.scene->ms_.empty() || spec.scene->ms_[0].setting_.empty()) {
@@ -583,10 +556,9 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     CheckCuda(cudaMemcpy(impl_->d_tri_poly_id_, h_tri_poly_id.data(), tri_cnt * sizeof(uint32_t),
                          cudaMemcpyHostToDevice), "BeginSession cudaMemcpy d_tri_poly_id");
 
-    // Rotation matrix device buffer — filled per TraceLayer from
-    // InitRayFirstMs output. NOT sampled here (rng_ must stay pristine, see
-    // plan §D5).
-    CheckCuda(cudaMalloc(&impl_->d_rot_c2w_, 9 * sizeof(float)), "BeginSession cudaMalloc d_rot_c2w");
+    // Per-ray rotation matrix device buffer (n_roots × 9) is allocated lazily
+    // in EnsureSessionBuffers, not here — n_roots is unknown until the first
+    // TraceLayer call. rng_ stays pristine (no sampling here, see plan §D5).
 
     if (!impl_->events_created_) {
       CheckCuda(cudaEventCreate(&impl_->ev_start_h2d_),   "BeginSession cudaEventCreate ev_start_h2d");
@@ -660,13 +632,17 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     InitRayFirstMs(impl_->rng_, impl_->scene_->light_source_.param_, impl_->wl_, n, crystal, 0, axis_dist,
                    workspace, all_data);
 
-    // Copy crystal-local d/p/w from RaySeg into pinned staging. to_face_ is
-    // the InitRay_p_fid entry-face polygon id; the kernel needs it as the
-    // initial from_poly to suppress self-intersect on the first
-    // Möller-Trumbore sweep (p sits exactly on this polygon's triangle).
-    // IdType (uint16_t per raypath.hpp) widens cleanly to uint32_t; kInvalidId
-    // (0xFFFFFFFFu after widening) maps to the kernel's "no previous face"
-    // sentinel.
+    // Copy crystal-local d/p/w + per-ray crystal->world rotation into pinned
+    // staging. to_face_ is the InitRay_p_fid entry-face polygon id; the
+    // kernel needs it as the initial from_poly to suppress self-intersect on
+    // the first Möller-Trumbore sweep (p sits exactly on this polygon's
+    // triangle). IdType (uint16_t per raypath.hpp) widens cleanly to uint32_t;
+    // kInvalidId (0xFFFFFFFFu after widening) maps to the kernel's "no
+    // previous face" sentinel. InitRayFirstMs samples an independent crystal
+    // orientation per root ray (halo-ring distribution comes from this); each
+    // RaySeg.crystal_rot_ is row-major 3x3. Aligns d_rot_c2w_ with d_dirs_'s
+    // crystal-local frame — frame invariant 6. Mirrors
+    // metal_trace_backend.mm:1375.
     for (size_t i = 0; i < n; ++i) {
       const auto& r = all_data[i];
       impl_->pinned_dirs_[i * 3 + 0] = r.d_[0];
@@ -678,22 +654,20 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
       impl_->pinned_ws_[i] = r.w_;
       impl_->pinned_from_poly_[i] =
           (r.to_face_ == kInvalidId) ? 0xFFFFFFFFu : static_cast<uint32_t>(r.to_face_);
+      std::memcpy(impl_->pinned_rot_c2w_ + i * 9, r.crystal_rot_.GetMat(), 9 * sizeof(float));
     }
-
-    // Capture the actual crystal->world rotation used by InitRay_rot for this
-    // batch (single orientation per batch / K=1 MVP, every RaySeg in this
-    // batch shares the same crystal_rot_). Aligns d_rot_c2w_ with d_dirs_'s
-    // crystal-local frame — frame invariant 6.
-    std::memcpy(impl_->h_rot_c2w_, all_data[0].crystal_rot_.GetMat(), 9 * sizeof(float));
   } catch (...) {
     impl_->Reset();
     throw;
   }
 
-  // H2D upload (default stream — cudaMemcpyAsync degenerates to sync here,
-  // but the calls keep the same shape for a future stream switch).
+  // H2D upload — all copies issue on the default stream; the synchronous
+  // cudaMemcpy(&h_exit_count_, ...) below is also default-stream and joins
+  // these copies before the host reads the count, so per-ray rot/dir/p/w/
+  // from_poly are guaranteed visible to the kernel launch.
   cudaEventRecord(impl_->ev_start_h2d_);
-  cudaMemcpyAsync(impl_->d_rot_c2w_, impl_->h_rot_c2w_, 9 * sizeof(float), cudaMemcpyHostToDevice);
+  cudaMemcpyAsync(impl_->d_rot_c2w_, impl_->pinned_rot_c2w_, 9 * n * sizeof(float),
+                  cudaMemcpyHostToDevice);
   cudaMemcpyAsync(impl_->d_dirs_, impl_->pinned_dirs_, 3 * n * sizeof(float), cudaMemcpyHostToDevice);
   cudaMemcpyAsync(impl_->d_pos_, impl_->pinned_pos_, 3 * n * sizeof(float), cudaMemcpyHostToDevice);
   cudaMemcpyAsync(impl_->d_ws_, impl_->pinned_ws_, n * sizeof(float), cudaMemcpyHostToDevice);
@@ -709,17 +683,12 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
 
   uint32_t max_hits = static_cast<uint32_t>(impl_->scene_->max_hits_);
   uint32_t grid = (static_cast<uint32_t>(n) + 255u) / 256u;
-  // Derive a 64-bit per-batch kernel seed from the session seed and a
-  // monotone batch counter. Avoids float-precision loss (GetUniform() has
-  // only ~24 effective bits per call; two draws → ~48 bits, not 64).
-  // Knuth multiplicative mix gives good avalanche for small batch_ctr values.
-  uint64_t kernel_seed = (static_cast<uint64_t>(impl_->seed_) * 6364136223846793005ULL) ^
-                         (impl_->batch_ctr_++ * 11400714819323198485ULL + 1442695040888963407ULL);
 
+  // Splitting (deterministic per-bounce fan-out) — no per-thread RNG needed.
   trace_single_ms_kernel<<<grid, 256>>>(impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
                                         static_cast<uint32_t>(n), impl_->d_verts_, impl_->d_norms_,
                                         impl_->d_tri_poly_id_, impl_->tri_cnt_, impl_->d_rot_c2w_, n_idx,
-                                        max_hits, kernel_seed, impl_->d_exit_,
+                                        max_hits, impl_->d_exit_,
                                         static_cast<uint32_t>(impl_->exit_cap_), impl_->d_exit_count_,
                                         /*crystal_id=*/0u, /*ms_layer_idx=*/0u);
   // Peek immediately after launch: illegal address / invalid config errors

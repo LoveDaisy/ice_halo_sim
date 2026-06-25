@@ -10,9 +10,9 @@
 // core/backend/trace_backend.hpp design invariant #4.
 //
 // MVP scope (scrum-cuda-backend-mvp subtask 3): single MS, no filter, no prob
-// 分流, host root upload, K=1 crystal orientation, WlPoolSize()=0 (discrete-wl
-// path). multi-MS / device root-gen / WlPool / GUI throughput live in
-// follow-up subtasks.
+// 分流, host root upload, per-ray crystal orientation, WlPoolSize()=0
+// (discrete-wl path). multi-MS / device root-gen / WlPool / GUI throughput
+// live in follow-up subtasks.
 //
 // Build gate: header body is compiled only when LUMICE_CUDA_ENABLED is defined
 // (set by CMake when LUMICE_CUDA_ENABLED=ON). Other translation units include
@@ -66,9 +66,10 @@ class CudaLayerHandle : public LayerHandle {
 //   - No DeviceFilter / prob 分流 — every traced ray is emitted.
 //   - WlPoolSize() == 0 — caller drives per-batch wl through SimData.outgoing_wl_
 //     (discrete-wl path, matches CpuTraceBackend oracle).
-//   - K=1 crystal orientation — BeginSession allocates one rotation matrix
-//     pair (rot_m2c, rot_c2w) and every thread shares it. Matches the CPU
-//     backend's per-batch single-orientation semantics.
+//   - Per-ray crystal orientation — InitRayFirstMs samples one orientation
+//     per root ray (halo-ring distribution comes from this); the kernel
+//     indexes the per-ray d_rot_c2w buffer by tid before applying frame
+//     invariant 6 (mirrors metal_trace_backend.mm's per-ray rot upload).
 //   - HostRayBatch ingest only — RootRaySource::FromDevice never reaches
 //     TraceLayer.
 class CudaTraceBackend : public TraceBackend {
