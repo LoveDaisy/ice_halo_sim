@@ -69,6 +69,16 @@ bool ProbeCudaDevice() {
   return n > 0;
 }
 
+// Throw BackendUnavailableError if err != cudaSuccess. Clears the sticky CUDA
+// error state so subsequent calls see a clean slate.
+void CheckCuda(cudaError_t err, const char* ctx) {
+  if (err != cudaSuccess) {
+    std::string msg = std::string{"CudaTraceBackend: CUDA error at "} + ctx + ": " + cudaGetErrorString(err);
+    (void)cudaGetLastError();
+    throw BackendUnavailableError(std::move(msg));
+  }
+}
+
 // Exit buffer capacity. Coefficient 2 = reflect+refract conservative upper
 // bound per hit; +4 = safety margin matching the Metal EnsureExitBuffers
 // constant. Capped at 64 MiB / sizeof(ExitRayRecord) ≈ 760k records.
@@ -340,6 +350,8 @@ struct CudaTraceBackend::Impl {
   ExitRayRecord* pinned_exit_ = nullptr;
 
   RandomNumberGenerator rng_{0u};  // re-seeded in BeginSession from spec.seed
+  uint32_t seed_ = 0;             // stored from spec.seed for deterministic kernel_seed
+  uint64_t batch_ctr_ = 0;        // per-session batch index; mixed into kernel_seed
 
   size_t n_roots_ = 0;
 
@@ -406,6 +418,8 @@ void CudaTraceBackend::Impl::Reset() {
   exit_cap_ = 0;
   h_exit_count_ = 0;
   n_roots_ = 0;
+  seed_ = 0;
+  batch_ctr_ = 0;
   buffers_allocated_ = false;
   in_session_ = false;
   scene_ = nullptr;
@@ -416,39 +430,52 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
   if (buffers_allocated_ && n_roots_ == n) {
     return;  // MVP: n_roots is fixed within a session; idempotent fast-path.
   }
-  // Note: when n changes (multi-wl / dynamic n in future extensions), insert
-  // cudaDeviceSynchronize() here before freeing — a still-running prior
-  // kernel writing to d_exit_ would otherwise UAF. MVP fixes n so the
-  // idempotent fast-path above skips this branch entirely.
+  // Guard against UAF: if a prior kernel is still writing to d_exit_, freeing
+  // now would corrupt device memory. cudaDeviceSynchronize is a no-op on the
+  // first call (buffers_allocated_ == false) and safe before any re-alloc.
+  if (buffers_allocated_) {
+    cudaDeviceSynchronize();
+  }
 
-  // Re-allocate per-batch buffers.
-  cudaFree(d_dirs_);
-  cudaFree(d_pos_);
-  cudaFree(d_ws_);
-  cudaFree(d_from_poly_);
-  cudaFree(d_exit_);
-  cudaFree(d_exit_count_);
-  cudaFreeHost(pinned_dirs_);
-  cudaFreeHost(pinned_pos_);
-  cudaFreeHost(pinned_ws_);
-  cudaFreeHost(pinned_from_poly_);
-  cudaFreeHost(pinned_exit_);
+  // Release old per-batch buffers (cudaFree(nullptr) is a no-op per CUDA spec).
+  cudaFree(d_dirs_);     d_dirs_ = nullptr;
+  cudaFree(d_pos_);      d_pos_ = nullptr;
+  cudaFree(d_ws_);       d_ws_ = nullptr;
+  cudaFree(d_from_poly_); d_from_poly_ = nullptr;
+  cudaFree(d_exit_);     d_exit_ = nullptr;
+  cudaFree(d_exit_count_); d_exit_count_ = nullptr;
+  cudaFreeHost(pinned_dirs_);     pinned_dirs_ = nullptr;
+  cudaFreeHost(pinned_pos_);      pinned_pos_ = nullptr;
+  cudaFreeHost(pinned_ws_);       pinned_ws_ = nullptr;
+  cudaFreeHost(pinned_from_poly_); pinned_from_poly_ = nullptr;
+  cudaFreeHost(pinned_exit_);     pinned_exit_ = nullptr;
 
   size_t max_hits = scene_ != nullptr ? scene_->max_hits_ : kMaxHits;
   exit_cap_ = ComputeExitCap(n, max_hits);
 
-  cudaMalloc(&d_dirs_, 3 * n * sizeof(float));
-  cudaMalloc(&d_pos_, 3 * n * sizeof(float));
-  cudaMalloc(&d_ws_, n * sizeof(float));
-  cudaMalloc(&d_from_poly_, n * sizeof(uint32_t));
-  cudaMalloc(&d_exit_, exit_cap_ * sizeof(ExitRayRecord));
-  cudaMalloc(&d_exit_count_, sizeof(uint32_t));
+  // Check every CUDA allocation. On failure Reset() tears down all buffers
+  // (including session-level geometry) and BackendUnavailableError propagates
+  // to TraceLayer's caller, ending the session cleanly.
+  auto ck = [this](cudaError_t e, const char* ctx) {
+    if (e != cudaSuccess) {
+      Reset();
+      throw BackendUnavailableError(std::string{"CudaTraceBackend::EnsureSessionBuffers: "} + ctx + ": " +
+                                    cudaGetErrorString(e));
+    }
+  };
 
-  cudaHostAlloc(&pinned_dirs_, 3 * n * sizeof(float), cudaHostAllocDefault);
-  cudaHostAlloc(&pinned_pos_, 3 * n * sizeof(float), cudaHostAllocDefault);
-  cudaHostAlloc(&pinned_ws_, n * sizeof(float), cudaHostAllocDefault);
-  cudaHostAlloc(&pinned_from_poly_, n * sizeof(uint32_t), cudaHostAllocDefault);
-  cudaHostAlloc(&pinned_exit_, exit_cap_ * sizeof(ExitRayRecord), cudaHostAllocDefault);
+  ck(cudaMalloc(&d_dirs_,      3 * n * sizeof(float)),               "cudaMalloc d_dirs");
+  ck(cudaMalloc(&d_pos_,       3 * n * sizeof(float)),               "cudaMalloc d_pos");
+  ck(cudaMalloc(&d_ws_,        n * sizeof(float)),                   "cudaMalloc d_ws");
+  ck(cudaMalloc(&d_from_poly_, n * sizeof(uint32_t)),                "cudaMalloc d_from_poly");
+  ck(cudaMalloc(&d_exit_,      exit_cap_ * sizeof(ExitRayRecord)),   "cudaMalloc d_exit");
+  ck(cudaMalloc(&d_exit_count_, sizeof(uint32_t)),                   "cudaMalloc d_exit_count");
+
+  ck(cudaHostAlloc(&pinned_dirs_,     3 * n * sizeof(float),               cudaHostAllocDefault), "cudaHostAlloc pinned_dirs");
+  ck(cudaHostAlloc(&pinned_pos_,      3 * n * sizeof(float),               cudaHostAllocDefault), "cudaHostAlloc pinned_pos");
+  ck(cudaHostAlloc(&pinned_ws_,       n * sizeof(float),                   cudaHostAllocDefault), "cudaHostAlloc pinned_ws");
+  ck(cudaHostAlloc(&pinned_from_poly_, n * sizeof(uint32_t),               cudaHostAllocDefault), "cudaHostAlloc pinned_from_poly");
+  ck(cudaHostAlloc(&pinned_exit_,     exit_cap_ * sizeof(ExitRayRecord),   cudaHostAllocDefault), "cudaHostAlloc pinned_exit");
 
   n_roots_ = n;
   buffers_allocated_ = true;
@@ -481,6 +508,7 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     impl_->render_ = spec.render;
     impl_->wl_ = spec.wl;
     impl_->rng_.SetSeed(spec.seed);
+    impl_->seed_ = spec.seed;
 
     // MVP: single MS, single crystal config — ms_[0].setting_[0].
     if (spec.scene == nullptr || spec.scene->ms_.empty() || spec.scene->ms_[0].setting_.empty()) {
@@ -516,12 +544,12 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     impl_->poly_cnt_ = static_cast<uint32_t>(poly_cnt);
 
     // Triangle verts (9 × tri_cnt) + normals (3 × tri_cnt) H2D.
-    cudaMalloc(&impl_->d_verts_, 9 * tri_cnt * sizeof(float));
-    cudaMemcpy(impl_->d_verts_, crystal_for_geom.GetTriangleVtx(), 9 * tri_cnt * sizeof(float),
-               cudaMemcpyHostToDevice);
-    cudaMalloc(&impl_->d_norms_, 3 * tri_cnt * sizeof(float));
-    cudaMemcpy(impl_->d_norms_, crystal_for_geom.GetTriangleNormal(), 3 * tri_cnt * sizeof(float),
-               cudaMemcpyHostToDevice);
+    CheckCuda(cudaMalloc(&impl_->d_verts_, 9 * tri_cnt * sizeof(float)), "BeginSession cudaMalloc d_verts");
+    CheckCuda(cudaMemcpy(impl_->d_verts_, crystal_for_geom.GetTriangleVtx(), 9 * tri_cnt * sizeof(float),
+                         cudaMemcpyHostToDevice), "BeginSession cudaMemcpy d_verts");
+    CheckCuda(cudaMalloc(&impl_->d_norms_, 3 * tri_cnt * sizeof(float)), "BeginSession cudaMalloc d_norms");
+    CheckCuda(cudaMemcpy(impl_->d_norms_, crystal_for_geom.GetTriangleNormal(), 3 * tri_cnt * sizeof(float),
+                         cudaMemcpyHostToDevice), "BeginSession cudaMemcpy d_norms");
 
     // tri -> polygon-id reverse map. GetPolygonFaceTriId() returns a per-
     // polygon start-of-triangle-range array (length poly_cnt); each polygon
@@ -536,20 +564,20 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
         h_tri_poly_id[t] = p;
       }
     }
-    cudaMalloc(&impl_->d_tri_poly_id_, tri_cnt * sizeof(uint32_t));
-    cudaMemcpy(impl_->d_tri_poly_id_, h_tri_poly_id.data(), tri_cnt * sizeof(uint32_t),
-               cudaMemcpyHostToDevice);
+    CheckCuda(cudaMalloc(&impl_->d_tri_poly_id_, tri_cnt * sizeof(uint32_t)), "BeginSession cudaMalloc d_tri_poly_id");
+    CheckCuda(cudaMemcpy(impl_->d_tri_poly_id_, h_tri_poly_id.data(), tri_cnt * sizeof(uint32_t),
+                         cudaMemcpyHostToDevice), "BeginSession cudaMemcpy d_tri_poly_id");
 
     // Rotation matrix device buffer — filled per TraceLayer from
     // InitRayFirstMs output. NOT sampled here (rng_ must stay pristine, see
     // plan §D5).
-    cudaMalloc(&impl_->d_rot_c2w_, 9 * sizeof(float));
+    CheckCuda(cudaMalloc(&impl_->d_rot_c2w_, 9 * sizeof(float)), "BeginSession cudaMalloc d_rot_c2w");
 
     if (!impl_->events_created_) {
-      cudaEventCreate(&impl_->ev_start_h2d_);
-      cudaEventCreate(&impl_->ev_end_h2d_);
-      cudaEventCreate(&impl_->ev_end_kernel_);
-      cudaEventCreate(&impl_->ev_end_d2h_);
+      CheckCuda(cudaEventCreate(&impl_->ev_start_h2d_),   "BeginSession cudaEventCreate ev_start_h2d");
+      CheckCuda(cudaEventCreate(&impl_->ev_end_h2d_),     "BeginSession cudaEventCreate ev_end_h2d");
+      CheckCuda(cudaEventCreate(&impl_->ev_end_kernel_),  "BeginSession cudaEventCreate ev_end_kernel");
+      CheckCuda(cudaEventCreate(&impl_->ev_end_d2h_),     "BeginSession cudaEventCreate ev_end_d2h");
       impl_->events_created_ = true;
     }
 
@@ -566,6 +594,9 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
 }
 
 LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
+  if (!impl_->in_session_) {
+    throw BackendUnavailableError("CudaTraceBackend::TraceLayer called outside session");
+  }
   if (roots.is_device) {
     throw BackendUnavailableError("CudaTraceBackend::TraceLayer: device root source unsupported in MVP");
   }
@@ -640,11 +671,12 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
 
   uint32_t max_hits = static_cast<uint32_t>(impl_->scene_->max_hits_);
   uint32_t grid = (static_cast<uint32_t>(n) + 255u) / 256u;
-  // PCG kernel seed: draw 64 bits from persistent rng_ so successive
-  // TraceLayer calls get fresh streams while remaining reproducible via
-  // spec.seed.
-  uint64_t kernel_seed = static_cast<uint64_t>(impl_->rng_.GetUniform() * 4294967296.0f) |
-                         (static_cast<uint64_t>(impl_->rng_.GetUniform() * 4294967296.0f) << 32);
+  // Derive a 64-bit per-batch kernel seed from the session seed and a
+  // monotone batch counter. Avoids float-precision loss (GetUniform() has
+  // only ~24 effective bits per call; two draws → ~48 bits, not 64).
+  // Knuth multiplicative mix gives good avalanche for small batch_ctr values.
+  uint64_t kernel_seed = (static_cast<uint64_t>(impl_->seed_) * 6364136223846793005ULL) ^
+                         (impl_->batch_ctr_++ * 11400714819323198485ULL + 1442695040888963407ULL);
 
   trace_single_ms_kernel<<<grid, 256>>>(impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
                                         static_cast<uint32_t>(n), impl_->d_verts_, impl_->d_norms_,
@@ -697,6 +729,9 @@ size_t CudaTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
 }
 
 size_t CudaTraceBackend::DrainExits(std::vector<ExitRayRecord>& out) {
+  if (!impl_->in_session_) {
+    throw BackendUnavailableError("CudaTraceBackend::DrainExits called outside session");
+  }
   out.clear();
   if (impl_->h_exit_count_ == 0u) {
     return 0u;
