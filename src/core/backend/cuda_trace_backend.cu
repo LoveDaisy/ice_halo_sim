@@ -543,6 +543,21 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     impl_->tri_cnt_ = static_cast<uint32_t>(tri_cnt);
     impl_->poly_cnt_ = static_cast<uint32_t>(poly_cnt);
 
+    // Detect stochastic CrystalParam: if a Crystal built with the session
+    // seed differs in triangle count from dummy_rng's crystal, the uploaded
+    // geometry will diverge from per-batch TraceLayer crystals and G1 parity
+    // may fail. MVP dual_fisheye_ref uses deterministic prism/pyramid shapes.
+    if (impl_->logger != nullptr) {
+      RandomNumberGenerator probe_rng{spec.seed};
+      Crystal probe_crystal = MakeCrystal(probe_rng, ms_setting.crystal_.param_);
+      if (probe_crystal.TotalTriangles() != tri_cnt) {
+        ILOG_WARN(*impl_->logger,
+                  "CudaTraceBackend::BeginSession: stochastic CrystalParam detected — "
+                  "uploaded geometry may diverge from per-batch TraceLayer crystals; "
+                  "G1 parity may fail for non-deterministic crystal shapes");
+      }
+    }
+
     // Triangle verts (9 × tri_cnt) + normals (3 × tri_cnt) H2D.
     CheckCuda(cudaMalloc(&impl_->d_verts_, 9 * tri_cnt * sizeof(float)), "BeginSession cudaMalloc d_verts");
     CheckCuda(cudaMemcpy(impl_->d_verts_, crystal_for_geom.GetTriangleVtx(), 9 * tri_cnt * sizeof(float),
@@ -607,54 +622,73 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
 
   impl_->EnsureSessionBuffers(n);
 
+  // Local helper: Reset() + BackendUnavailableError for CUDA call failures
+  // inside TraceLayer. EnsureSessionBuffers has its own internal Reset path;
+  // this lambda is only for the CUDA calls after it returns.
+  auto ck_reset = [this](cudaError_t e, const char* ctx) {
+    if (e != cudaSuccess) {
+      impl_->Reset();
+      throw BackendUnavailableError(std::string{"CudaTraceBackend::TraceLayer: "} + ctx + ": " +
+                                    cudaGetErrorString(e));
+    }
+  };
+
   // Host-side root-ray generation, mirroring cpu_trace_backend.cpp:135-140.
   // Build a fresh Crystal per batch via MakeCrystal(rng_, param_) so the
   // crystal-orientation RNG draw stays consistent with the CPU oracle's
-  // batch-by-batch ordering.
+  // batch-by-batch ordering. Wrapped in try/catch: std::bad_alloc from
+  // RayBuffer growth or other C++ exceptions reset device state before
+  // propagating (mirrors BeginSession's exception-safety contract).
   const auto& ms_setting = impl_->scene_->ms_[0].setting_[0];
-  Crystal crystal = MakeCrystal(impl_->rng_, ms_setting.crystal_.param_);
-  const auto& axis_dist = ms_setting.crystal_.axis_;
-  float n_idx = crystal.GetRefractiveIndex(impl_->wl_.wl_);
+  float n_idx = 0.0f;
+  try {
+    Crystal crystal = MakeCrystal(impl_->rng_, ms_setting.crystal_.param_);
+    const auto& axis_dist = ms_setting.crystal_.axis_;
+    n_idx = crystal.GetRefractiveIndex(impl_->wl_.wl_);
 
-  // Mirror the CPU pattern (cpu_trace_backend.cpp:107-108): workspace[0]/[1]
-  // capacities sized for the InitRay/HitSurface fan-out so EmplaceBack
-  // doesn't grow them mid-trace. We only consume workspace[0] (first-hit
-  // snapshot of d/p/w/crystal_rot_), but InitRayFirstMs writes both slots.
-  RayBuffer workspace[2]{};
-  workspace[0].Reset(n * 2);
-  workspace[1].Reset(n * 4);
-  // all_data is the per-batch RaySeg bookkeeping buffer. Use the same
-  // AllocateAllData sizing as the simulator (simulator.cpp:811) — overshoots
-  // for our single-MS use but keeps the capacity contract obviously safe.
-  RayBuffer all_data = AllocateAllData(*impl_->scene_, n);
-  InitRayFirstMs(impl_->rng_, impl_->scene_->light_source_.param_, impl_->wl_, n, crystal, 0, axis_dist,
-                 workspace, all_data);
+    // Mirror the CPU pattern (cpu_trace_backend.cpp:107-108): workspace[0]/[1]
+    // capacities sized for the InitRay/HitSurface fan-out so EmplaceBack
+    // doesn't grow them mid-trace. We only consume workspace[0] (first-hit
+    // snapshot of d/p/w/crystal_rot_), but InitRayFirstMs writes both slots.
+    RayBuffer workspace[2]{};
+    workspace[0].Reset(n * 2);
+    workspace[1].Reset(n * 4);
+    // all_data is the per-batch RaySeg bookkeeping buffer. Use the same
+    // AllocateAllData sizing as the simulator (simulator.cpp:811) — overshoots
+    // for our single-MS use but keeps the capacity contract obviously safe.
+    RayBuffer all_data = AllocateAllData(*impl_->scene_, n);
+    InitRayFirstMs(impl_->rng_, impl_->scene_->light_source_.param_, impl_->wl_, n, crystal, 0, axis_dist,
+                   workspace, all_data);
 
-  // Copy crystal-local d/p/w from RaySeg into pinned staging. to_face_ is
-  // the InitRay_p_fid entry-face polygon id; the kernel needs it as the
-  // initial from_poly to suppress self-intersect on the first
-  // Möller-Trumbore sweep (p sits exactly on this polygon's triangle).
-  // IdType (uint16_t per raypath.hpp) widens cleanly to uint32_t; kInvalidId
-  // (0xFFFFFFFFu after widening) maps to the kernel's "no previous face"
-  // sentinel.
-  for (size_t i = 0; i < n; ++i) {
-    const auto& r = all_data[i];
-    impl_->pinned_dirs_[i * 3 + 0] = r.d_[0];
-    impl_->pinned_dirs_[i * 3 + 1] = r.d_[1];
-    impl_->pinned_dirs_[i * 3 + 2] = r.d_[2];
-    impl_->pinned_pos_[i * 3 + 0] = r.p_[0];
-    impl_->pinned_pos_[i * 3 + 1] = r.p_[1];
-    impl_->pinned_pos_[i * 3 + 2] = r.p_[2];
-    impl_->pinned_ws_[i] = r.w_;
-    impl_->pinned_from_poly_[i] =
-        (r.to_face_ == kInvalidId) ? 0xFFFFFFFFu : static_cast<uint32_t>(r.to_face_);
+    // Copy crystal-local d/p/w from RaySeg into pinned staging. to_face_ is
+    // the InitRay_p_fid entry-face polygon id; the kernel needs it as the
+    // initial from_poly to suppress self-intersect on the first
+    // Möller-Trumbore sweep (p sits exactly on this polygon's triangle).
+    // IdType (uint16_t per raypath.hpp) widens cleanly to uint32_t; kInvalidId
+    // (0xFFFFFFFFu after widening) maps to the kernel's "no previous face"
+    // sentinel.
+    for (size_t i = 0; i < n; ++i) {
+      const auto& r = all_data[i];
+      impl_->pinned_dirs_[i * 3 + 0] = r.d_[0];
+      impl_->pinned_dirs_[i * 3 + 1] = r.d_[1];
+      impl_->pinned_dirs_[i * 3 + 2] = r.d_[2];
+      impl_->pinned_pos_[i * 3 + 0] = r.p_[0];
+      impl_->pinned_pos_[i * 3 + 1] = r.p_[1];
+      impl_->pinned_pos_[i * 3 + 2] = r.p_[2];
+      impl_->pinned_ws_[i] = r.w_;
+      impl_->pinned_from_poly_[i] =
+          (r.to_face_ == kInvalidId) ? 0xFFFFFFFFu : static_cast<uint32_t>(r.to_face_);
+    }
+
+    // Capture the actual crystal->world rotation used by InitRay_rot for this
+    // batch (single orientation per batch / K=1 MVP, every RaySeg in this
+    // batch shares the same crystal_rot_). Aligns d_rot_c2w_ with d_dirs_'s
+    // crystal-local frame — frame invariant 6.
+    std::memcpy(impl_->h_rot_c2w_, all_data[0].crystal_rot_.GetMat(), 9 * sizeof(float));
+  } catch (...) {
+    impl_->Reset();
+    throw;
   }
-
-  // Capture the actual crystal->world rotation used by InitRay_rot for this
-  // batch (single orientation per batch / K=1 MVP, every RaySeg in this
-  // batch shares the same crystal_rot_). Aligns d_rot_c2w_ with d_dirs_'s
-  // crystal-local frame — frame invariant 6.
-  std::memcpy(impl_->h_rot_c2w_, all_data[0].crystal_rot_.GetMat(), 9 * sizeof(float));
 
   // H2D upload (default stream — cudaMemcpyAsync degenerates to sync here,
   // but the calls keep the same shape for a future stream switch).
@@ -666,8 +700,12 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
   cudaMemcpyAsync(impl_->d_from_poly_, impl_->pinned_from_poly_, n * sizeof(uint32_t),
                   cudaMemcpyHostToDevice);
   cudaEventRecord(impl_->ev_end_h2d_);
+  // Harvest any sticky async error from the H2D block (cudaMemcpyAsync /
+  // cudaEventRecord failures propagate as sticky errors; one GetLastError
+  // picks all of them up at lower call overhead than per-call checking).
+  ck_reset(cudaGetLastError(), "H2D batch");
 
-  cudaMemset(impl_->d_exit_count_, 0, sizeof(uint32_t));
+  ck_reset(cudaMemset(impl_->d_exit_count_, 0, sizeof(uint32_t)), "cudaMemset d_exit_count");
 
   uint32_t max_hits = static_cast<uint32_t>(impl_->scene_->max_hits_);
   uint32_t grid = (static_cast<uint32_t>(n) + 255u) / 256u;
@@ -684,10 +722,16 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
                                         max_hits, kernel_seed, impl_->d_exit_,
                                         static_cast<uint32_t>(impl_->exit_cap_), impl_->d_exit_count_,
                                         /*crystal_id=*/0u, /*ms_layer_idx=*/0u);
+  // Peek immediately after launch: illegal address / invalid config errors
+  // surface here before the synchronizing 4B readback, giving a precise
+  // error origin instead of a deferred cudaErrorLaunchFailure on Memcpy.
+  ck_reset(cudaPeekAtLastError(), "kernel launch");
   cudaEventRecord(impl_->ev_end_kernel_);
 
-  // 4B readback (synchronous on the default stream).
-  cudaMemcpy(&impl_->h_exit_count_, impl_->d_exit_count_, sizeof(uint32_t), cudaMemcpyDeviceToHost);
+  // 4B readback (synchronous on the default stream — also the first sync
+  // point that surfaces async kernel errors: check the return value).
+  ck_reset(cudaMemcpy(&impl_->h_exit_count_, impl_->d_exit_count_, sizeof(uint32_t),
+                      cudaMemcpyDeviceToHost), "4B readback");
   cudaEventRecord(impl_->ev_end_d2h_);
   cudaEventSynchronize(impl_->ev_end_d2h_);
 
@@ -738,7 +782,14 @@ size_t CudaTraceBackend::DrainExits(std::vector<ExitRayRecord>& out) {
   }
   auto t0 = std::chrono::steady_clock::now();
   size_t count = impl_->h_exit_count_;
-  cudaMemcpy(impl_->pinned_exit_, impl_->d_exit_, count * sizeof(ExitRayRecord), cudaMemcpyDeviceToHost);
+  cudaError_t err_d2h =
+      cudaMemcpy(impl_->pinned_exit_, impl_->d_exit_, count * sizeof(ExitRayRecord), cudaMemcpyDeviceToHost);
+  if (err_d2h != cudaSuccess) {
+    out.clear();
+    impl_->Reset();
+    throw BackendUnavailableError(std::string{"CudaTraceBackend::DrainExits: D2H cudaMemcpy: "} +
+                                  cudaGetErrorString(err_d2h));
+  }
   out.assign(impl_->pinned_exit_, impl_->pinned_exit_ + count);
   auto t1 = std::chrono::steady_clock::now();
   double drain_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
