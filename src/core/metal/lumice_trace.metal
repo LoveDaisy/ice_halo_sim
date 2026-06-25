@@ -7,6 +7,13 @@ using namespace metal;
 #include "../shared/projection_shared.h"
 #include "../shared/optics_shared.h"
 #include "../shared/traversal_shared.h"
+// PCG hash + orientation/triangle samplers are single-sourced in pcg_shared.h
+// (scrum-cuda-backend-complete 296.4) so CUDA's transit_multi_ms_kernel and
+// MSL's transit_root_kernel cannot drift on the orientation math. The shader
+// keeps its historical unqualified call sites via the `using namespace lm_pcg`
+// directive below.
+#include "../shared/pcg_shared.h"
+using namespace lm_pcg;
 
 // --- DeviceFilterDesc mirror (must match src/core/device_filter_desc.hpp) ---
 // Field-by-field bit-exact alignment of host layout. sizeof must be 120 bytes
@@ -317,28 +324,11 @@ constant float  kFloatEps  = 1e-5f;
 constant ushort kInvalidId = 0xffffu;
 constant uint   kRecCap    = 64u;
 
-// scrum-267 task-fused-emit-gate Step 5: PCG stream definitions hoisted here
-// so the trace_layer_kernel's emit gate can call pcg_uniform for the per-ray
-// prob decision. gen_root_kernel (defined later in this string) re-uses the
-// same names; MSL accepts a single forward definition.
-inline uint pcg_hash(uint x) {
-  x = x * 747796405u + 2891336453u;
-  x = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u;
-  return (x >> 22u) ^ x;
-}
-inline float u01_from_hash(uint h) {
-  return float(h >> 8) * (1.0f / 16777216.0f);
-}
-struct PcgStream {
-  uint seed;
-  uint global_idx;
-  uint slot;
-};
-inline float pcg_uniform(thread PcgStream& s) {
-  uint h = pcg_hash(s.seed ^ pcg_hash(s.global_idx * 1000003u + s.slot));
-  s.slot++;
-  return u01_from_hash(h);
-}
+// scrum-267 task-fused-emit-gate Step 5 (296.4 hoist): PCG hash + PcgStream +
+// pcg_uniform now live in ../shared/pcg_shared.h (single-sourced with CUDA).
+// `using namespace lm_pcg;` near the top of this file imports them unqualified
+// so the trace_layer_kernel emit gate / gen_root_kernel / transit_root_kernel
+// call sites keep their original spellings.
 
 // scrum-268.8 (DR-3): per-ray wavelength pool entry. The host samples M
 // wavelengths uniformly over [380, 780] nm once per (crystal, illuminant) ci
@@ -817,222 +807,14 @@ kernel void trace_layer_kernel(
 // global_idx) tuple. Determinism = single-worker (server.cpp:184 enforces
 // sim_seed != 0 → worker_count = 1).
 
-constant uint kLatPathFullSphere    = 0u;  // axis_dist.IsFullSphereUniform()
-constant uint kLatPathNoRandom      = 1u;
-constant uint kLatPathRayleigh      = 2u;  // kGaussian near-pole optimization
-constant uint kLatPathGaussLegacy   = 3u;  // kGaussianLegacy
-constant uint kLatPathGenericReject = 4u;  // kGaussian/kUniform/kZigzag/kLaplacian
-
-// DistributionType enum values (must match src/core/math.hpp). Crystal-rot
-// parity REQUIRES the GenericReject path know the actual proposal type, so
-// lat_dist_type is carried separately from lat_path.
-constant uint kDistNoRandom      = 0u;
-constant uint kDistUniform       = 1u;
-constant uint kDistGaussian      = 2u;
-constant uint kDistZigzag        = 3u;
-constant uint kDistLaplacian     = 4u;
-constant uint kDistGaussianLegacy = 5u;
-
-constant uint kMaxTriPerKernel = 64u;
-constant int  kMaxRejectionAttempts = 1000;
-
-// NOTE: consumed by gen_root_kernel and transit_root_kernel; see
-// BuildTransitRootParams for the transit-side field subset (orientation +
-// geometry only; sun_* / ray_weight are populated but unused by transit).
-struct GenRootKernelParams {
-  uint  gen_seed;            // PCG master seed (== spec.seed)
-  uint  gen_ray_base;        // running root_ray_count before this dispatch
-  uint  num_rays;
-  uint  tri_count;
-  float sun_lon;             // (sun.azimuth + 180°) in radians
-  float sun_lat;             // (-sun.altitude) in radians
-  float sun_half_angle;      // (sun.diameter / 2) in radians
-  // scrum-268.8 (DR-3): replaces per-batch ray_weight. gen_root_kernel uses
-  // wl_pool[wl_idx].spd_weight as the per-ray weight; this field is the modulo
-  // bound that hashes a global ray index into [0, wl_pool_size).
-  uint  wl_pool_size;
-  uint  lat_path;            // see kLatPath* above
-  uint  lat_dist_type;       // axis_dist.latitude_dist.type (cast to uint)
-  float lat_mean_rad;        // axis_dist.latitude_dist.mean × deg→rad
-  float lat_std_rad;         // axis_dist.latitude_dist.std × deg→rad
-  float lat_rejection_m;     // ComputeJacobianEnvelope (1.0 for skip paths)
-  uint  az_type;
-  float az_mean_rad;
-  float az_std_rad;
-  float az_pad;
-  uint  roll_type;
-  float roll_mean_rad;
-  float roll_std_rad;
-  float roll_pad;
-};
-
-// Counter-based PCG hash + stream: PcgStream / pcg_hash / u01_from_hash /
-// pcg_uniform are defined near the top of this string (scrum-267 task-
-// fused-emit-gate hoist) so the trace kernel's emit gate can call them.
-// pcg_gaussian / pcg_get_dist below build on that shared base.
-
-// Box-Muller standard normal. u1 floored to avoid log(0).
-inline float pcg_gaussian(thread PcgStream& s) {
-  float u1 = max(pcg_uniform(s), 1e-7f);
-  float u2 = pcg_uniform(s);
-  return sqrt(-2.0f * log(u1)) * cos(2.0f * M_PI_F * u2);
-}
-
-// Mirrors RandomNumberGenerator::Get (math.cpp:365-389). mean / std are passed
-// in the SAME unit the host caller uses for the result; SampleSphericalPointsSph
-// always pre-converts axis_dist.{*}.mean/std to radians here, so the radian
-// envelope semantics hold.
-inline float pcg_get_dist(thread PcgStream& s, uint dtype, float mean, float std_val) {
-  if (dtype == kDistNoRandom) {
-    return mean;
-  }
-  if (dtype == kDistUniform) {
-    return (pcg_uniform(s) - 0.5f) * std_val + mean;
-  }
-  if (dtype == kDistGaussian || dtype == kDistGaussianLegacy) {
-    return pcg_gaussian(s) * std_val + mean;
-  }
-  if (dtype == kDistZigzag) {
-    return fabs(std_val * sin(pcg_uniform(s) * 2.0f * M_PI_F) + mean);
-  }
-  // kLaplacian: inverse CDF.
-  float u = pcg_uniform(s);
-  float sgn = (u < 0.5f) ? -1.0f : 1.0f;
-  float arg = max(1.0f - 2.0f * fabs(u - 0.5f), 1e-30f);
-  return mean - std_val * sgn * log(arg);
-}
-
-// Mirrors detail::NormalizeLatitude (math.cpp:542-553).
-inline void normalize_latitude(float phi, thread float& phi_out, thread bool& flip) {
-  float theta = M_PI_2_F - phi;
-  theta = fmod(theta, 2.0f * M_PI_F);
-  if (theta < 0.0f) {
-    theta += 2.0f * M_PI_F;
-  }
-  flip = theta > M_PI_F;
-  if (flip) {
-    theta = 2.0f * M_PI_F - theta;
-  }
-  phi_out = M_PI_2_F - theta;
-}
-
-// Replicates InitRay_rot + SampleSphericalPointsSph (simulator.cpp:138-150 +
-// math.cpp:404/444). All distribution params are pre-converted to radians on
-// the host so the kernel does no degree↔radian conversions.
-inline void sample_lat_lon_roll(thread PcgStream& s,
-                                constant GenRootKernelParams& gp,
-                                thread float& out_lon,
-                                thread float& out_lat,
-                                thread float& out_roll) {
-  float phi = 0.0f;
-  bool flip = false;
-  float lon = 0.0f;
-  if (gp.lat_path == kLatPathFullSphere) {
-    // SampleSphericalPointsSph(no-arg): lat = asin(2u-1); lambda uniform on [0,2π).
-    float u = pcg_uniform(s) * 2.0f - 1.0f;
-    u = clamp(u, -1.0f, 1.0f);
-    phi = asin(u);
-    lon = pcg_uniform(s) * 2.0f * M_PI_F;
-  } else if (gp.lat_path == kLatPathNoRandom) {
-    phi = gp.lat_mean_rad;
-  } else if (gp.lat_path == kLatPathRayleigh) {
-    float dx = pcg_gaussian(s) * gp.lat_std_rad;
-    float dy = pcg_gaussian(s) * gp.lat_std_rad;
-    float colatitude = sqrt(dx * dx + dy * dy);
-    phi = copysign(M_PI_2_F - colatitude, gp.lat_mean_rad);
-    phi = clamp(phi, -M_PI_2_F, M_PI_2_F);
-    if (gp.lat_mean_rad < 0.0f) {
-      phi = fabs(phi);
-      flip = true;
-    }
-  } else if (gp.lat_path == kLatPathGaussLegacy) {
-    float raw = pcg_get_dist(s, kDistGaussianLegacy, gp.lat_mean_rad, gp.lat_std_rad);
-    normalize_latitude(raw, phi, flip);
-  } else {
-    // kLatPathGenericReject (math.cpp:503-517).
-    int attempts = 0;
-    bool accept = false;
-    do {
-      float raw = pcg_get_dist(s, gp.lat_dist_type, gp.lat_mean_rad, gp.lat_std_rad);
-      normalize_latitude(raw, phi, flip);
-      attempts++;
-      if (attempts >= kMaxRejectionAttempts) {
-        break;
-      }
-      float accept_u = pcg_uniform(s);
-      accept = accept_u < cos(phi) / gp.lat_rejection_m;
-    } while (!accept);
-  }
-  if (gp.lat_path != kLatPathFullSphere) {
-    lon = pcg_get_dist(s, gp.az_type, gp.az_mean_rad, gp.az_std_rad);
-  }
-  float roll = pcg_get_dist(s, gp.roll_type, gp.roll_mean_rad, gp.roll_std_rad);
-  if (flip) {
-    lon += M_PI_F;
-    roll += M_PI_F;
-  }
-  out_lon = lon;
-  out_lat = phi;
-  out_roll = roll;
-}
-
-// Computes R = Rz(lon - π) · Ry(lat - π/2) · Rz(roll) using individual axis
-// rotations chained via Rotation::Chain (geo3d.cpp:32-46), matching
-// BuildCrystalRotation in simulator.cpp:128-135. Stored row-major:
-// mat9[i*3+j] = R_{ij}, identical to Rotation::mat_.
-inline void chain_left_mul_9(thread float* m, thread const float* r) {
-  // m <- r * m
-  float t[9];
-  for (uint i = 0u; i < 3u; i++) {
-    for (uint j = 0u; j < 3u; j++) {
-      t[i * 3 + j] = r[i * 3 + 0] * m[0 * 3 + j]
-                   + r[i * 3 + 1] * m[1 * 3 + j]
-                   + r[i * 3 + 2] * m[2 * 3 + j];
-    }
-  }
-  for (uint k = 0u; k < 9u; k++) {
-    m[k] = t[k];
-  }
-}
-
-inline void axis_angle_rotation_9(thread const float* ax, float theta, thread float* out) {
-  float c = cos(theta);
-  float s = sin(theta);
-  float cc = 1.0f - c;
-  out[0] = ax[0] * ax[0] * cc + c;
-  out[1] = ax[0] * ax[1] * cc - ax[2] * s;
-  out[2] = ax[0] * ax[2] * cc + ax[1] * s;
-  out[3] = ax[0] * ax[1] * cc + ax[2] * s;
-  out[4] = ax[1] * ax[1] * cc + c;
-  out[5] = ax[1] * ax[2] * cc - ax[0] * s;
-  out[6] = ax[0] * ax[2] * cc - ax[1] * s;
-  out[7] = ax[1] * ax[2] * cc + ax[0] * s;
-  out[8] = ax[2] * ax[2] * cc + c;
-}
-
-inline void build_crystal_rotation_9(float lon, float lat, float roll, thread float* mat9) {
-  // Rotation(z, roll), then Chain(y, lat-π/2), then Chain(z, lon-π).
-  // Chain left-multiplies the existing matrix, mirroring Rotation::Chain.
-  float ey[3] = { 0.0f, 1.0f, 0.0f };
-  float ez[3] = { 0.0f, 0.0f, 1.0f };
-  axis_angle_rotation_9(ez, roll, mat9);
-  float middle[9];
-  axis_angle_rotation_9(ey, lat - M_PI_2_F, middle);
-  chain_left_mul_9(mat9, middle);
-  float outer[9];
-  axis_angle_rotation_9(ez, lon - M_PI_F, outer);
-  chain_left_mul_9(mat9, outer);
-}
-
-// d_crystal = R^T · d_world. Mirrors Rotation::ApplyInverse using the row-major
-// mat_ layout (geo3d.cpp:77-87) — read column k of R = row k transposed.
-inline void apply_inverse_mat9(thread const float* mat9,
-                               thread const float* d_world,
-                               thread float* d_crystal) {
-  d_crystal[0] = mat9[0] * d_world[0] + mat9[3] * d_world[1] + mat9[6] * d_world[2];
-  d_crystal[1] = mat9[1] * d_world[0] + mat9[4] * d_world[1] + mat9[7] * d_world[2];
-  d_crystal[2] = mat9[2] * d_world[0] + mat9[5] * d_world[1] + mat9[8] * d_world[2];
-}
+// kLatPath* / kDist* discriminators, kMaxTriPerKernel, kMaxRejectionAttempts,
+// GenRootKernelParams, pcg_gaussian / pcg_get_dist / normalize_latitude /
+// sample_lat_lon_roll, axis_angle_rotation_9 / chain_left_mul_9 /
+// build_crystal_rotation_9 / apply_inverse_mat9 — all single-sourced in
+// ../shared/pcg_shared.h (scrum-cuda-backend-complete 296.4). The `using
+// namespace lm_pcg;` directive near the top of this file imports the
+// unqualified names that gen_root_kernel / transit_root_kernel / sample_sph_cap
+// call against.
 
 // SampleSphCapPoint (geo3d.cpp:171-205). Inputs already in radians.
 inline void sample_sph_cap(thread PcgStream& s,
@@ -1054,44 +836,10 @@ inline void sample_sph_cap(thread PcgStream& s,
   out_d[2] = s_lat * x + c_lat * z;
 }
 
-// SampleTrianglePoint (geo3d.cpp:153-168). vtx9 = 3 vertices × 3 coords.
-inline void sample_triangle(thread PcgStream& s,
-                            device const float* vtx9,
-                            thread float* out_p) {
-  float u = pcg_uniform(s);
-  float v = pcg_uniform(s);
-  if (u + v > 1.0f) {
-    u = 1.0f - u;
-    v = 1.0f - v;
-  }
-  for (uint k = 0u; k < 3u; k++) {
-    float a = vtx9[k];
-    float b = vtx9[3 + k];
-    float c = vtx9[6 + k];
-    out_p[k] = u * (b - a) + v * (c - a) + a;
-  }
-}
-
-// RandomSample (geo3d.cpp:112-150) — categorical CDF with negative-weight clip.
-// Mirrors host behavior: non-positive total falls back to bin 0.
-inline uint categorical_sample(thread const float* weights, uint n, float u_in) {
-  float total = 0.0f;
-  for (uint i = 0u; i < n; i++) {
-    total += max(weights[i], 0.0f);
-  }
-  if (total <= 0.0f) {
-    return 0u;
-  }
-  float target = u_in * total;
-  float cumsum = 0.0f;
-  for (uint i = 0u; i < n; i++) {
-    cumsum += max(weights[i], 0.0f);
-    if (cumsum > target) {
-      return i;
-    }
-  }
-  return n - 1u;
-}
+// SampleTrianglePoint / RandomSample (categorical) — single-sourced in
+// ../shared/pcg_shared.h (scrum-cuda-backend-complete 296.4). Available
+// unqualified via the `using namespace lm_pcg;` directive at the top of this
+// file.
 
 kernel void gen_root_kernel(
     device float*           root_d        [[buffer(0)]],
