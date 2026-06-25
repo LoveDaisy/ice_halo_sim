@@ -6,6 +6,7 @@ using namespace metal;
 // expands these includes inline for the `newLibraryWithSource` fallback path.
 #include "../shared/projection_shared.h"
 #include "../shared/optics_shared.h"
+#include "../shared/traversal_shared.h"
 
 // --- DeviceFilterDesc mirror (must match src/core/device_filter_desc.hpp) ---
 // Field-by-field bit-exact alignment of host layout. sizeof must be 120 bytes
@@ -537,6 +538,15 @@ kernel void trace_layer_kernel(
       float cw  = (ch == 0u) ? w_refl : w_refr;
       if (cw < 0.0f) { continue; }
 
+      // Polygon-slab traversal via the cross-backend single-source
+      // intersect (lm_traversal::SlabFaceT, see core/shared/traversal_shared.h).
+      // t_far is initialised to 1e30f — equal to SlabFaceT's sentinel for
+      // non-candidate faces — so `t < t_far` naturally skips them without
+      // an explicit denom-gate at the call site.
+      // From-face exclusion: Metal uses the post-loop eps_thr relaxed
+      // threshold (see below) rather than an explicit fi==to_face skip; this
+      // is equivalent to CUDA's skip on convex crystals (see traversal_shared.h
+      // header for the equivalence condition and non-convex caveat).
       float t_far = 1e30f;
       int   far_face = -1;
       for (uint fi = 0u; fi < poly_cnt; fi++) {
@@ -544,9 +554,8 @@ kernel void trace_layer_kernel(
         float fny = poly_n[fi * 3u + 1u];
         float fnz = poly_n[fi * 3u + 2u];
         float fd  = poly_d[fi];
-        float denom = cdx * fnx + cdy * fny + cdz * fnz;
-        float t = -(ox * fnx + oy * fny + oz * fnz + fd) / denom;
-        if (denom > kFloatEps && t < t_far) {
+        float t = lm_traversal::SlabFaceT(cdx, cdy, cdz, ox, oy, oz, fnx, fny, fnz, fd);
+        if (t < t_far) {
           t_far = t; far_face = int(fi);
         }
       }

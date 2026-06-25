@@ -10,7 +10,11 @@
 
 #if defined(__METAL_VERSION__)
 // MSL — compiled by `xcrun metal -c`.
+// LM_CONSTANT — program-scope numeric constant qualifier. MSL requires the
+// `constant` address space for any variable defined at namespace/file scope;
+// host C++ / CUDA accept plain `constexpr`.
 #define LM_FN inline
+#define LM_CONSTANT constant constexpr
 #define LM_SQRT(x) metal::sqrt(x)
 #define LM_ATAN2(y, x) metal::atan2((y), (x))
 #define LM_ASIN(x) metal::asin(x)
@@ -21,6 +25,7 @@
 #elif defined(__CUDACC__)
 // CUDA — compiled by nvcc.
 #define LM_FN __host__ __device__ inline
+#define LM_CONSTANT constexpr
 #define LM_SQRT(x) sqrtf(x)
 #define LM_ATAN2(y, x) atan2f((y), (x))
 #define LM_ASIN(x) asinf(x)
@@ -33,6 +38,7 @@
 #include <algorithm>
 #include <cmath>
 #define LM_FN inline
+#define LM_CONSTANT constexpr
 #define LM_SQRT(x) std::sqrt(x)
 #define LM_ATAN2(y, x) std::atan2((y), (x))
 #define LM_ASIN(x) std::asin(x)

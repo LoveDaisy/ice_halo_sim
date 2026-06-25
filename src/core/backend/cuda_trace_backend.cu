@@ -62,6 +62,7 @@
 #include "core/math.hpp"
 #include "core/raypath.hpp"
 #include "core/shared/optics_shared.h"
+#include "core/shared/traversal_shared.h"
 #include "core/trace_ops.hpp"
 #include "util/logger.hpp"
 
@@ -106,12 +107,6 @@ size_t ComputeExitCap(size_t n_roots, size_t max_hits) {
 
 __device__ inline float dot3(const float* a, const float* b) {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-}
-
-__device__ inline void cross3(const float* a, const float* b, float* out) {
-  out[0] = a[1] * b[2] - a[2] * b[1];
-  out[1] = a[2] * b[0] - a[0] * b[2];
-  out[2] = a[0] * b[1] - a[1] * b[0];
 }
 
 // --- trace_single_ms_kernel -----------------------------------------------
@@ -241,10 +236,9 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
     // always found — no absolute-ε face-miss bug (the Möller-Trumbore route
     // dropped TIR-reflected near-parallel rays via `det ∈ [-1e-8, 1e-8]`
     // and `t > 1e-6f` thresholds; see doc/numerical-robustness.md约定 2).
-    // kSlabEps = 1e-5f: float32 robustness epsilon (loose compared to CPU's
-    // math::kFloatEps ≈ 1.19e-7f; the larger value tolerates float32
-    // near-face rounding without affecting convex-crystal correctness).
-    constexpr float kSlabEps = 1e-5f;
+    // Single-source per-face intersect lives in lm_traversal::SlabFaceT;
+    // see src/core/shared/traversal_shared.h for the denom-gate /
+    // from-face exclusion contract shared with Metal + CPU.
     float t_best = 1e30f;
     uint32_t hit_poly = 0xFFFFFFFFu;
     for (uint32_t fi = 0u; fi < poly_cnt; ++fi) {
@@ -254,12 +248,8 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
       float nx = d_poly_n[fi * 3u + 0u];
       float ny = d_poly_n[fi * 3u + 1u];
       float nz = d_poly_n[fi * 3u + 2u];
-      float denom = dir[0] * nx + dir[1] * ny + dir[2] * nz;
-      if (denom <= kSlabEps) {
-        continue;
-      }
       float fd = d_poly_d[fi];
-      float t = -(org[0] * nx + org[1] * ny + org[2] * nz + fd) / denom;
+      float t = lm_traversal::SlabFaceT(dir[0], dir[1], dir[2], org[0], org[1], org[2], nx, ny, nz, fd);
       if (t < t_best) {
         t_best = t;
         hit_poly = fi;
@@ -270,7 +260,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
     // Mirrors CPU's `eps_thr = -math::kFloatEps` relaxed threshold
     // (optics.cpp:138). On a convex crystal this should never trigger the
     // hard exit — if it does, geometry data is anomalous.
-    if (hit_poly == 0xFFFFFFFFu || t_best <= -kSlabEps) {
+    if (hit_poly == 0xFFFFFFFFu || t_best <= -lm_traversal::kSlabEps) {
       break;
     }
 
