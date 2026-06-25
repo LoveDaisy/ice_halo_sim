@@ -280,14 +280,15 @@ class _LogCapture:
 # Patterns matching the routing log lines in simulator.cpp:520-537.
 _RE_ROUTED_METAL = re.compile(r"routing via MetalTraceBackend")
 _RE_ROUTED_CPU_BACKEND = re.compile(r"routing via CpuTraceBackend")
+_RE_ROUTED_CUDA = re.compile(r"routing via CudaTraceBackend")
 _RE_FALLBACK = re.compile(r"falling back", re.IGNORECASE)
 
 
 def _summarize_backend(lines: List[str]) -> tuple[str, bool]:
     """Return (routed_backend, fell_back) parsed from captured log lines.
 
-    routed_backend ∈ {"metal", "cpu_backend", "legacy"}; "legacy" means no
-    routing line was seen (legacy path is silent in CreateBackend).
+    routed_backend ∈ {"metal", "cpu_backend", "cuda", "legacy"}; "legacy"
+    means no routing line was seen (legacy path is silent in CreateBackend).
     """
     routed = "legacy"
     fell_back = False
@@ -296,6 +297,8 @@ def _summarize_backend(lines: List[str]) -> tuple[str, bool]:
             routed = "metal"
         elif _RE_ROUTED_CPU_BACKEND.search(ln):
             routed = "cpu_backend"
+        elif _RE_ROUTED_CUDA.search(ln):
+            routed = "cuda"
         if _RE_FALLBACK.search(ln):
             fell_back = True
     return routed, fell_back
@@ -371,7 +374,7 @@ def run_scene_capi(config_path: str, sim_seed: int = 0, timeout_sec: int = 180) 
         lib.LUMICE_DestroyServer(server)
 
 
-_BACKEND_MODES = ("legacy", "metal", "cpu_backend")
+_BACKEND_MODES = ("legacy", "metal", "cpu_backend", "cuda")
 
 
 def run_scene_capi_buffered(
@@ -390,6 +393,9 @@ def run_scene_capi_buffered(
                        simulator.cpp:513 CreateBackend).
       - "cpu_backend": env LUMICE_TRACE_BACKEND=cpu_backend (env overrides
                        SetPreferredBackend).
+      - "cuda"       : env LUMICE_TRACE_BACKEND=cuda (env overrides
+                       SetPreferredBackend). Requires LUMICE_CUDA_ENABLED=ON
+                       build + NVIDIA device on the host.
 
     Concurrency contract: this suite runs serially under pytest (no xdist).
     os.environ writes + LogCapture are not safe for parallel workers — adding
@@ -415,6 +421,8 @@ def run_scene_capi_buffered(
     env_old = os.environ.get("LUMICE_TRACE_BACKEND")
     if backend == "cpu_backend":
         os.environ["LUMICE_TRACE_BACKEND"] = "cpu_backend"
+    elif backend == "cuda":
+        os.environ["LUMICE_TRACE_BACKEND"] = "cuda"
     elif env_was_set:
         # Caller's env would override our SetPreferredBackend — strip it.
         del os.environ["LUMICE_TRACE_BACKEND"]
@@ -552,7 +560,7 @@ def run_scene_capi_buffered(
                 lib.LUMICE_DestroyServer(server)
     finally:
         # Restore env state regardless of success/failure.
-        if backend == "cpu_backend":
+        if backend in ("cpu_backend", "cuda"):
             if env_was_set:
                 os.environ["LUMICE_TRACE_BACKEND"] = env_old
             else:

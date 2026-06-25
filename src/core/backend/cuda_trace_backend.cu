@@ -1,14 +1,28 @@
 // CUDA backend for TraceBackend (NVIDIA GPUs).
 //
-// MVP stub stage (scrum-cuda-backend-mvp subtask 3, M1):
-//   - CMake gate + class skeleton.
-//   - CudaDeviceAvailable() runtime probe.
-//   - BeginSession throws BackendUnavailableError so the simulator falls back
-//     to legacy CPU until M2 lands.
+// MVP scope (scrum-cuda-backend-mvp subtask 4, M2–M5):
+//   - BeginSession / EndSession / Reset: device lifecycle + geometry H2D.
+//   - TraceLayer: host-side InitRayFirstMs root-gen + H2D + megakernel
+//     trace_single_ms_kernel + 4B exit-count readback.
+//   - DrainExits: bulk D2H copy of ExitRayRecord buffer.
+//   - Recombine: single-MS stub (returns empty DeviceRayBatch).
+//   - K=1 crystal orientation per batch (matches CpuTraceBackend semantics).
+//   - HostRayBatch ingest only; RootRaySource::FromDevice never reaches this
+//     backend (single-MS).
+//   - WlPoolSize()=0; single n_idx per session via SessionSpec::wl.
+//   - Multi-MS / filter / device root-gen / WlPool / prob 分流 live in
+//     follow-up subtasks.
 //
 // Build gate: this entire translation unit is added to lumice_obj only when
 // LUMICE_CUDA_ENABLED is ON (see CMakeLists.txt). Other backends are
 // uninvolved.
+//
+// Crystal/host-side ray generation re-uses the same `MakeCrystal` /
+// `InitRayFirstMs` chain as `CpuTraceBackend::TraceLayer` (cpu_trace_backend.cpp
+// 312-325 / 135-140). The kernel is a per-thread single-orientation trace using
+// Möller-Trumbore triangle intersection + tri->poly mapping for O(1) from_face
+// guard (Metal slab traversal is polygon-level; the two routes converge at the
+// exit_dir_world record via frame invariant 6).
 
 #include "core/backend/cuda_trace_backend.hpp"
 
@@ -16,12 +30,25 @@
 
 #include <cuda_runtime.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "config/crystal_config.hpp"
+#include "config/light_config.hpp"
+#include "config/proj_config.hpp"
+#include "config/sim_data.hpp"
+#include "core/crystal.hpp"
+#include "core/exit_seam.hpp"
+#include "core/math.hpp"
+#include "core/raypath.hpp"
+#include "core/shared/optics_shared.h"
+#include "core/trace_ops.hpp"
 #include "util/logger.hpp"
 
 namespace lumice {
@@ -36,11 +63,232 @@ bool ProbeCudaDevice() {
   int n = 0;
   cudaError_t err = cudaGetDeviceCount(&n);
   if (err != cudaSuccess) {
-    // Drain the error so subsequent CUDA calls do not see it as sticky.
     (void)cudaGetLastError();
     return false;
   }
   return n > 0;
+}
+
+// Exit buffer capacity. Coefficient 2 = reflect+refract conservative upper
+// bound per hit; +4 = safety margin matching the Metal EnsureExitBuffers
+// constant. Capped at 64 MiB / sizeof(ExitRayRecord) ≈ 760k records.
+size_t ComputeExitCap(size_t n_roots, size_t max_hits) {
+  size_t cap = n_roots * (max_hits * 2u + 4u);
+  size_t hard_cap = (size_t{64u} * 1024u * 1024u) / sizeof(ExitRayRecord);
+  return std::min(cap, hard_cap);
+}
+
+// --- PCG32 inline (per-thread reflectance Bernoulli sampling) -------------
+// Independent of cuRAND so the unit is self-contained and matches the per-ray
+// stream semantics used by the Metal kernel.
+
+__device__ inline uint32_t pcg32_step(uint64_t& state) {
+  uint64_t oldstate = state;
+  state = oldstate * 6364136223846793005ULL + 1442695040888963407ULL;
+  uint32_t xorshifted = static_cast<uint32_t>(((oldstate >> 18u) ^ oldstate) >> 27u);
+  uint32_t rot = static_cast<uint32_t>(oldstate >> 59u);
+  return (xorshifted >> rot) | (xorshifted << ((-static_cast<int32_t>(rot)) & 31));
+}
+
+__device__ inline uint64_t pcg32_seed(uint64_t seed, uint64_t streamid) {
+  uint64_t state = 0u;
+  state = state * 6364136223846793005ULL + (streamid | 1u);
+  state += seed;
+  state = state * 6364136223846793005ULL + (streamid | 1u);
+  return state;
+}
+
+__device__ inline float pcg32_uniform(uint64_t& state) {
+  uint32_t u = pcg32_step(state);
+  return static_cast<float>(u >> 8) * (1.0f / 16777216.0f);  // [0, 1)
+}
+
+// --- Device-side geometry --------------------------------------------------
+
+__device__ inline float dot3(const float* a, const float* b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+__device__ inline void cross3(const float* a, const float* b, float* out) {
+  out[0] = a[1] * b[2] - a[2] * b[1];
+  out[1] = a[2] * b[0] - a[0] * b[2];
+  out[2] = a[0] * b[1] - a[1] * b[0];
+}
+
+// Möller-Trumbore: intersect ray (origin O, dir D) with triangle (v0, v1, v2).
+// Returns t > 0 on hit (front + back), -1.0f on miss. No back-face culling —
+// the ray sits inside the crystal and may hit faces from either side.
+__device__ inline float ray_triangle(const float* O, const float* D, const float* v0, const float* v1,
+                                     const float* v2) {
+  float e1[3] = {v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]};
+  float e2[3] = {v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]};
+  float pvec[3];
+  cross3(D, e2, pvec);
+  float det = dot3(e1, pvec);
+  // Reject near-parallel rays. 1e-8f matches the Metal poly-slab `kFloatEps`
+  // sentinel scale; sub-eps determinants produce u/v overflow.
+  if (det > -1e-8f && det < 1e-8f) {
+    return -1.0f;
+  }
+  float inv_det = 1.0f / det;
+  float tvec[3] = {O[0] - v0[0], O[1] - v0[1], O[2] - v0[2]};
+  float u = dot3(tvec, pvec) * inv_det;
+  if (u < 0.0f || u > 1.0f) {
+    return -1.0f;
+  }
+  float qvec[3];
+  cross3(tvec, e1, qvec);
+  float v = dot3(D, qvec) * inv_det;
+  if (v < 0.0f || u + v > 1.0f) {
+    return -1.0f;
+  }
+  return dot3(e2, qvec) * inv_det;
+}
+
+// --- trace_single_ms_kernel -----------------------------------------------
+//
+// One thread per root ray. Multi-hop trace until exit-via-refraction or
+// max_hits cap. Russian-roulette Fresnel Bernoulli selection: u ∈ [0,1)
+// against w_refl_ratio per hit (TIR forces reflect). frame invariant 6:
+// exit_dir is rotated crystal->world before being written to the exit record.
+
+__global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        // 3 × n_roots (crystal-local)
+                                       const float* __restrict__ d_pos,         // 3 × n_roots (crystal-local)
+                                       const float* __restrict__ d_ws,          // n_roots
+                                       const uint32_t* __restrict__ d_from_poly,  // n_roots (entry-face polygon id)
+                                       uint32_t n_roots,
+                                       const float* __restrict__ d_verts,       // 9 × tri_cnt
+                                       const float* __restrict__ d_norms,       // 3 × tri_cnt (outward face normals)
+                                       const uint32_t* __restrict__ d_tri_poly_id,  // tri_cnt (tri -> polygon id)
+                                       uint32_t tri_cnt,
+                                       const float* __restrict__ d_rot_c2w,     // 9 floats, row-major
+                                       float n_idx,
+                                       uint32_t max_hits,
+                                       uint64_t kernel_seed,
+                                       ExitRayRecord* __restrict__ d_exit,
+                                       uint32_t exit_cap,
+                                       uint32_t* __restrict__ d_exit_count,
+                                       uint16_t crystal_id,
+                                       uint8_t ms_layer_idx) {
+  const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid >= n_roots) {
+    return;
+  }
+
+  float dir[3] = {d_dirs[tid * 3u + 0u], d_dirs[tid * 3u + 1u], d_dirs[tid * 3u + 2u]};
+  float org[3] = {d_pos[tid * 3u + 0u], d_pos[tid * 3u + 1u], d_pos[tid * 3u + 2u]};
+  float w = d_ws[tid];
+
+  // Initial from_poly = entry-face polygon id from InitRay_p_fid output.
+  // p sits exactly on this polygon's triangle (no epsilon push); without
+  // suppressing self-hit the first Möller-Trumbore would return t≈0 against
+  // the entry face's triangles. Mirrors the CPU/Metal Propagate which uses
+  // `to_face_` as the from_face guard for the first iteration.
+  uint32_t from_poly = d_from_poly[tid];
+
+  uint64_t prng_state = pcg32_seed(kernel_seed, static_cast<uint64_t>(tid));
+
+  bool exited = false;
+
+  for (uint32_t hit = 0u; hit < max_hits; ++hit) {
+    // Find nearest triangle hit (t > eps) excluding from_poly's triangles.
+    float t_min = 1e30f;
+    uint32_t hit_tri = 0xFFFFFFFFu;
+    for (uint32_t tri = 0u; tri < tri_cnt; ++tri) {
+      if (d_tri_poly_id[tri] == from_poly) {
+        continue;
+      }
+      const float* v0 = d_verts + tri * 9u + 0u;
+      const float* v1 = d_verts + tri * 9u + 3u;
+      const float* v2 = d_verts + tri * 9u + 6u;
+      float t = ray_triangle(org, dir, v0, v1, v2);
+      if (t > 1e-6f && t < t_min) {
+        t_min = t;
+        hit_tri = tri;
+      }
+    }
+    if (hit_tri == 0xFFFFFFFFu) {
+      // Safety bound — ray escaped without hitting any face. Drop silently
+      // (matches the legacy "outgoing with kInvalidId to_face_" path which
+      // also zero-emits).
+      break;
+    }
+
+    uint32_t hit_poly = d_tri_poly_id[hit_tri];
+
+    // Advance origin to hit point.
+    org[0] += t_min * dir[0];
+    org[1] += t_min * dir[1];
+    org[2] += t_min * dir[2];
+
+    float nrm[3] = {d_norms[hit_tri * 3u + 0u], d_norms[hit_tri * 3u + 1u], d_norms[hit_tri * 3u + 2u]};
+
+    // Fresnel: same formula as cpu/metal HitSurface. cos_theta is signed; rr
+    // flips between n (going outward) and 1/n (going inward). dd ≤ 0 ⇒ TIR.
+    float cos_theta = dot3(dir, nrm);
+    float rr = (cos_theta > 0.0f) ? n_idx : (1.0f / n_idx);
+    float dd = (1.0f - rr * rr) / (cos_theta * cos_theta) + rr * rr;
+    bool is_tir = (dd <= 0.0f);
+    float refl_ratio = lm_optics::GetReflectRatio(fmaxf(dd, 0.0f), rr);
+    if (is_tir) {
+      refl_ratio = 1.0f;
+    }
+
+    float u = pcg32_uniform(prng_state);
+    if (u < refl_ratio) {
+      // Reflect.
+      dir[0] = dir[0] - 2.0f * cos_theta * nrm[0];
+      dir[1] = dir[1] - 2.0f * cos_theta * nrm[1];
+      dir[2] = dir[2] - 2.0f * cos_theta * nrm[2];
+      from_poly = hit_poly;
+      continue;
+    }
+
+    // Refract (cpu/metal HitSurface formula).
+    float sd = sqrtf(fmaxf(dd, 0.0f));
+    float fdx = rr * dir[0] - (rr - sd) * cos_theta * nrm[0];
+    float fdy = rr * dir[1] - (rr - sd) * cos_theta * nrm[1];
+    float fdz = rr * dir[2] - (rr - sd) * cos_theta * nrm[2];
+    dir[0] = fdx;
+    dir[1] = fdy;
+    dir[2] = fdz;
+
+    // Exit detection: refracted dir · outward face normal > 0 ⇒ ray left
+    // the crystal at this face. Otherwise the refraction kept the ray inside
+    // (rare grazing-angle edge case); update from_poly and continue tracing.
+    float cos_exit = dot3(dir, nrm);
+    if (cos_exit > 0.0f) {
+      exited = true;
+      break;
+    }
+    from_poly = hit_poly;
+  }
+
+  if (!exited) {
+    return;
+  }
+
+  // frame invariant 6: rotate crystal-local exit direction into world space.
+  float exit_world[3];
+  for (int i = 0; i < 3; ++i) {
+    exit_world[i] = d_rot_c2w[i * 3 + 0] * dir[0] + d_rot_c2w[i * 3 + 1] * dir[1] + d_rot_c2w[i * 3 + 2] * dir[2];
+  }
+
+  // Append to exit buffer. Atomic counter saturates at exit_cap; we drop the
+  // tail when the buffer overflows (host-side warn covers it).
+  uint32_t slot = atomicAdd(d_exit_count, 1u);
+  if (slot >= exit_cap) {
+    return;
+  }
+  ExitRayRecord& rec = d_exit[slot];
+  rec.dir[0] = exit_world[0];
+  rec.dir[1] = exit_world[1];
+  rec.dir[2] = exit_world[2];
+  rec.weight = w;
+  rec.path = ExitFaceSeq{};  // MVP zero-init; path content does not feed G1-G6
+  rec.crystal_id = crystal_id;
+  rec.ms_layer_idx = ms_layer_idx;
+  rec.wl_idx = 0u;
 }
 
 }  // namespace
@@ -52,59 +300,432 @@ bool CudaDeviceAvailable() {
   return cached;
 }
 
-// --- Impl -----------------------------------------------------------------
-//
-// Heavy-weight session state lives here. M1 only declares the field that
-// indicates whether a session is open; M2 fills out device buffers / pinned
-// staging / counters; M3 wires the kernel.
+// --- Impl ----------------------------------------------------------------
 
 struct CudaTraceBackend::Impl {
   Logger* logger = nullptr;
-  bool in_session = false;
+  bool in_session_ = false;
+  bool buffers_allocated_ = false;
+
+  // Crystal geometry — uploaded once per session.
+  float* d_verts_ = nullptr;           // 9 × tri_cnt
+  float* d_norms_ = nullptr;           // 3 × tri_cnt (outward face normals)
+  uint32_t* d_tri_poly_id_ = nullptr;  // tri_cnt
+  uint32_t tri_cnt_ = 0;
+  uint32_t poly_cnt_ = 0;
+
+  // Per-batch crystal orientation (filled from InitRayFirstMs output before
+  // the H2D upload). Row-major 3x3, c2w (Rotation::GetMat()).
+  float* d_rot_c2w_ = nullptr;
+  float h_rot_c2w_[9] = {};
+
+  // Per-batch root-ray buffers (allocated lazily on first TraceLayer once
+  // n_roots is known).
+  float* d_dirs_ = nullptr;
+  float* d_pos_ = nullptr;
+  float* d_ws_ = nullptr;
+  uint32_t* d_from_poly_ = nullptr;  // n_roots; per-ray entry-face polygon id
+
+  // Session-level exit pool.
+  ExitRayRecord* d_exit_ = nullptr;
+  uint32_t* d_exit_count_ = nullptr;
+  size_t exit_cap_ = 0;
+  uint32_t h_exit_count_ = 0;
+
+  // Pinned staging.
+  float* pinned_dirs_ = nullptr;
+  float* pinned_pos_ = nullptr;
+  float* pinned_ws_ = nullptr;
+  uint32_t* pinned_from_poly_ = nullptr;
+  ExitRayRecord* pinned_exit_ = nullptr;
+
+  RandomNumberGenerator rng_{0u};  // re-seeded in BeginSession from spec.seed
+
+  size_t n_roots_ = 0;
+
+  const SceneConfig* scene_ = nullptr;
+  const RenderConfig* render_ = nullptr;
+  WlParam wl_{};
+
+  cudaEvent_t ev_start_h2d_{};
+  cudaEvent_t ev_end_h2d_{};
+  cudaEvent_t ev_end_kernel_{};
+  cudaEvent_t ev_end_d2h_{};
+  bool events_created_ = false;
+
+  void Reset();
+  void EnsureSessionBuffers(size_t n);
 };
+
+void CudaTraceBackend::Impl::Reset() {
+  // cudaFree / cudaFreeHost on nullptr are no-ops per CUDA spec, so we don't
+  // need explicit allocated-flag guards. Errors are intentionally ignored —
+  // teardown must not throw.
+  cudaFree(d_verts_);
+  d_verts_ = nullptr;
+  cudaFree(d_norms_);
+  d_norms_ = nullptr;
+  cudaFree(d_tri_poly_id_);
+  d_tri_poly_id_ = nullptr;
+  cudaFree(d_rot_c2w_);
+  d_rot_c2w_ = nullptr;
+  cudaFree(d_dirs_);
+  d_dirs_ = nullptr;
+  cudaFree(d_pos_);
+  d_pos_ = nullptr;
+  cudaFree(d_ws_);
+  d_ws_ = nullptr;
+  cudaFree(d_from_poly_);
+  d_from_poly_ = nullptr;
+  cudaFree(d_exit_);
+  d_exit_ = nullptr;
+  cudaFree(d_exit_count_);
+  d_exit_count_ = nullptr;
+
+  cudaFreeHost(pinned_dirs_);
+  pinned_dirs_ = nullptr;
+  cudaFreeHost(pinned_pos_);
+  pinned_pos_ = nullptr;
+  cudaFreeHost(pinned_ws_);
+  pinned_ws_ = nullptr;
+  cudaFreeHost(pinned_from_poly_);
+  pinned_from_poly_ = nullptr;
+  cudaFreeHost(pinned_exit_);
+  pinned_exit_ = nullptr;
+
+  if (events_created_) {
+    cudaEventDestroy(ev_start_h2d_);
+    cudaEventDestroy(ev_end_h2d_);
+    cudaEventDestroy(ev_end_kernel_);
+    cudaEventDestroy(ev_end_d2h_);
+    events_created_ = false;
+  }
+
+  tri_cnt_ = 0;
+  poly_cnt_ = 0;
+  exit_cap_ = 0;
+  h_exit_count_ = 0;
+  n_roots_ = 0;
+  buffers_allocated_ = false;
+  in_session_ = false;
+  scene_ = nullptr;
+  render_ = nullptr;
+}
+
+void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
+  if (buffers_allocated_ && n_roots_ == n) {
+    return;  // MVP: n_roots is fixed within a session; idempotent fast-path.
+  }
+  // Note: when n changes (multi-wl / dynamic n in future extensions), insert
+  // cudaDeviceSynchronize() here before freeing — a still-running prior
+  // kernel writing to d_exit_ would otherwise UAF. MVP fixes n so the
+  // idempotent fast-path above skips this branch entirely.
+
+  // Re-allocate per-batch buffers.
+  cudaFree(d_dirs_);
+  cudaFree(d_pos_);
+  cudaFree(d_ws_);
+  cudaFree(d_from_poly_);
+  cudaFree(d_exit_);
+  cudaFree(d_exit_count_);
+  cudaFreeHost(pinned_dirs_);
+  cudaFreeHost(pinned_pos_);
+  cudaFreeHost(pinned_ws_);
+  cudaFreeHost(pinned_from_poly_);
+  cudaFreeHost(pinned_exit_);
+
+  size_t max_hits = scene_ != nullptr ? scene_->max_hits_ : kMaxHits;
+  exit_cap_ = ComputeExitCap(n, max_hits);
+
+  cudaMalloc(&d_dirs_, 3 * n * sizeof(float));
+  cudaMalloc(&d_pos_, 3 * n * sizeof(float));
+  cudaMalloc(&d_ws_, n * sizeof(float));
+  cudaMalloc(&d_from_poly_, n * sizeof(uint32_t));
+  cudaMalloc(&d_exit_, exit_cap_ * sizeof(ExitRayRecord));
+  cudaMalloc(&d_exit_count_, sizeof(uint32_t));
+
+  cudaHostAlloc(&pinned_dirs_, 3 * n * sizeof(float), cudaHostAllocDefault);
+  cudaHostAlloc(&pinned_pos_, 3 * n * sizeof(float), cudaHostAllocDefault);
+  cudaHostAlloc(&pinned_ws_, n * sizeof(float), cudaHostAllocDefault);
+  cudaHostAlloc(&pinned_from_poly_, n * sizeof(uint32_t), cudaHostAllocDefault);
+  cudaHostAlloc(&pinned_exit_, exit_cap_ * sizeof(ExitRayRecord), cudaHostAllocDefault);
+
+  n_roots_ = n;
+  buffers_allocated_ = true;
+}
 
 CudaTraceBackend::CudaTraceBackend(Logger* logger) : impl_(std::make_unique<Impl>()) {
   impl_->logger = logger;
 }
 
-CudaTraceBackend::~CudaTraceBackend() = default;
+CudaTraceBackend::~CudaTraceBackend() {
+  if (impl_) {
+    impl_->Reset();
+  }
+}
 
 void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
-  (void)spec;
-  // M1: device lifecycle + buffer pool land in M2. Until then, advertise the
-  // backend as unavailable so the simulator routes the run to legacy CPU.
-  // BackendUnavailableError is the contract for "no half-open session" — the
-  // simulator catches it, drops the backend instance, and continues.
-  throw BackendUnavailableError(
-      "CudaTraceBackend::BeginSession not yet implemented (scrum-cuda-backend-mvp M2)");
+  if (impl_->in_session_) {
+    throw BackendUnavailableError("CudaTraceBackend::BeginSession called on already-open session");
+  }
+
+  cudaError_t err = cudaSetDevice(0);
+  if (err != cudaSuccess) {
+    (void)cudaGetLastError();
+    throw BackendUnavailableError(std::string{"CudaTraceBackend::BeginSession: cudaSetDevice failed: "} +
+                                  cudaGetErrorString(err));
+  }
+
+  try {
+    impl_->scene_ = spec.scene;
+    impl_->render_ = spec.render;
+    impl_->wl_ = spec.wl;
+    impl_->rng_.SetSeed(spec.seed);
+
+    // MVP: single MS, single crystal config — ms_[0].setting_[0].
+    if (spec.scene == nullptr || spec.scene->ms_.empty() || spec.scene->ms_[0].setting_.empty()) {
+      throw BackendUnavailableError("CudaTraceBackend::BeginSession: empty SceneConfig.ms_/setting_");
+    }
+    const auto& ms_setting = spec.scene->ms_[0].setting_[0];
+
+    // Build a deterministic Crystal sample for geometry upload. dummy_rng
+    // does NOT touch impl_->rng_ so the persistent batch RNG stays pristine
+    // for the first TraceLayer's MakeCrystal + InitRayFirstMs.
+    //
+    // Determinism premise: Crystal geometry (vertices, normals, polygon
+    // topology) is fully determined by CrystalParam. MakeCrystal's internal
+    // CrystalMaker visits the CrystalParam variant; the RNG is consulted
+    // only when the variant carries a stochastic shape parameter (random
+    // wedge angle / aspect ratio), and even then the *topology* (vertex
+    // count, face indexing) is identical across draws — only the vertex
+    // coordinates change. CPU backend builds a fresh Crystal per batch for
+    // the same CrystalParam (cpu_trace_backend.cpp:325) and consumes it as
+    // the trace oracle; we mirror that pattern here. If CrystalParam carries
+    // a stochastic *shape*, the per-batch geometry the kernel traces against
+    // will diverge from the BeginSession upload — that's a follow-up
+    // (multi-shape pool) and not in MVP scope.
+    RandomNumberGenerator dummy_rng{0u};
+    Crystal crystal_for_geom = MakeCrystal(dummy_rng, ms_setting.crystal_.param_);
+
+    size_t tri_cnt = crystal_for_geom.TotalTriangles();
+    size_t poly_cnt = crystal_for_geom.PolygonFaceCount();
+    if (tri_cnt == 0 || poly_cnt == 0) {
+      throw BackendUnavailableError("CudaTraceBackend::BeginSession: degenerate crystal geometry (0 triangles)");
+    }
+    impl_->tri_cnt_ = static_cast<uint32_t>(tri_cnt);
+    impl_->poly_cnt_ = static_cast<uint32_t>(poly_cnt);
+
+    // Triangle verts (9 × tri_cnt) + normals (3 × tri_cnt) H2D.
+    cudaMalloc(&impl_->d_verts_, 9 * tri_cnt * sizeof(float));
+    cudaMemcpy(impl_->d_verts_, crystal_for_geom.GetTriangleVtx(), 9 * tri_cnt * sizeof(float),
+               cudaMemcpyHostToDevice);
+    cudaMalloc(&impl_->d_norms_, 3 * tri_cnt * sizeof(float));
+    cudaMemcpy(impl_->d_norms_, crystal_for_geom.GetTriangleNormal(), 3 * tri_cnt * sizeof(float),
+               cudaMemcpyHostToDevice);
+
+    // tri -> polygon-id reverse map. GetPolygonFaceTriId() returns a per-
+    // polygon start-of-triangle-range array (length poly_cnt); each polygon
+    // p owns triangles [start_p, start_{p+1}).
+    const int* poly_tri_starts = crystal_for_geom.GetPolygonFaceTriId();
+    std::vector<uint32_t> h_tri_poly_id(tri_cnt);
+    for (uint32_t p = 0; p < impl_->poly_cnt_; ++p) {
+      uint32_t start = static_cast<uint32_t>(poly_tri_starts[p]);
+      uint32_t end = (p + 1u < impl_->poly_cnt_) ? static_cast<uint32_t>(poly_tri_starts[p + 1u])
+                                                 : static_cast<uint32_t>(tri_cnt);
+      for (uint32_t t = start; t < end && t < tri_cnt; ++t) {
+        h_tri_poly_id[t] = p;
+      }
+    }
+    cudaMalloc(&impl_->d_tri_poly_id_, tri_cnt * sizeof(uint32_t));
+    cudaMemcpy(impl_->d_tri_poly_id_, h_tri_poly_id.data(), tri_cnt * sizeof(uint32_t),
+               cudaMemcpyHostToDevice);
+
+    // Rotation matrix device buffer — filled per TraceLayer from
+    // InitRayFirstMs output. NOT sampled here (rng_ must stay pristine, see
+    // plan §D5).
+    cudaMalloc(&impl_->d_rot_c2w_, 9 * sizeof(float));
+
+    if (!impl_->events_created_) {
+      cudaEventCreate(&impl_->ev_start_h2d_);
+      cudaEventCreate(&impl_->ev_end_h2d_);
+      cudaEventCreate(&impl_->ev_end_kernel_);
+      cudaEventCreate(&impl_->ev_end_d2h_);
+      impl_->events_created_ = true;
+    }
+
+    impl_->in_session_ = true;
+    if (impl_->logger != nullptr) {
+      ILOG_INFO(*impl_->logger,
+                "CudaTraceBackend::BeginSession: device=0 tri_cnt={} poly_cnt={} seed={} n_idx={:.4f}",
+                tri_cnt, poly_cnt, spec.seed, crystal_for_geom.GetRefractiveIndex(spec.wl.wl_));
+    }
+  } catch (...) {
+    impl_->Reset();
+    throw;
+  }
 }
 
 LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
-  (void)roots;
-  return std::make_unique<CudaLayerHandle>(0u, LayerStats{});
+  if (roots.is_device) {
+    throw BackendUnavailableError("CudaTraceBackend::TraceLayer: device root source unsupported in MVP");
+  }
+  size_t n = roots.host.count;
+  if (n == 0) {
+    return std::make_unique<CudaLayerHandle>(0u, LayerStats{0u, 0.0f});
+  }
+
+  impl_->EnsureSessionBuffers(n);
+
+  // Host-side root-ray generation, mirroring cpu_trace_backend.cpp:135-140.
+  // Build a fresh Crystal per batch via MakeCrystal(rng_, param_) so the
+  // crystal-orientation RNG draw stays consistent with the CPU oracle's
+  // batch-by-batch ordering.
+  const auto& ms_setting = impl_->scene_->ms_[0].setting_[0];
+  Crystal crystal = MakeCrystal(impl_->rng_, ms_setting.crystal_.param_);
+  const auto& axis_dist = ms_setting.crystal_.axis_;
+  float n_idx = crystal.GetRefractiveIndex(impl_->wl_.wl_);
+
+  // Mirror the CPU pattern (cpu_trace_backend.cpp:107-108): workspace[0]/[1]
+  // capacities sized for the InitRay/HitSurface fan-out so EmplaceBack
+  // doesn't grow them mid-trace. We only consume workspace[0] (first-hit
+  // snapshot of d/p/w/crystal_rot_), but InitRayFirstMs writes both slots.
+  RayBuffer workspace[2]{};
+  workspace[0].Reset(n * 2);
+  workspace[1].Reset(n * 4);
+  // all_data is the per-batch RaySeg bookkeeping buffer. Use the same
+  // AllocateAllData sizing as the simulator (simulator.cpp:811) — overshoots
+  // for our single-MS use but keeps the capacity contract obviously safe.
+  RayBuffer all_data = AllocateAllData(*impl_->scene_, n);
+  InitRayFirstMs(impl_->rng_, impl_->scene_->light_source_.param_, impl_->wl_, n, crystal, 0, axis_dist,
+                 workspace, all_data);
+
+  // Copy crystal-local d/p/w from RaySeg into pinned staging. to_face_ is
+  // the InitRay_p_fid entry-face polygon id; the kernel needs it as the
+  // initial from_poly to suppress self-intersect on the first
+  // Möller-Trumbore sweep (p sits exactly on this polygon's triangle).
+  // IdType (uint16_t per raypath.hpp) widens cleanly to uint32_t; kInvalidId
+  // (0xFFFFFFFFu after widening) maps to the kernel's "no previous face"
+  // sentinel.
+  for (size_t i = 0; i < n; ++i) {
+    const auto& r = all_data[i];
+    impl_->pinned_dirs_[i * 3 + 0] = r.d_[0];
+    impl_->pinned_dirs_[i * 3 + 1] = r.d_[1];
+    impl_->pinned_dirs_[i * 3 + 2] = r.d_[2];
+    impl_->pinned_pos_[i * 3 + 0] = r.p_[0];
+    impl_->pinned_pos_[i * 3 + 1] = r.p_[1];
+    impl_->pinned_pos_[i * 3 + 2] = r.p_[2];
+    impl_->pinned_ws_[i] = r.w_;
+    impl_->pinned_from_poly_[i] =
+        (r.to_face_ == kInvalidId) ? 0xFFFFFFFFu : static_cast<uint32_t>(r.to_face_);
+  }
+
+  // Capture the actual crystal->world rotation used by InitRay_rot for this
+  // batch (single orientation per batch / K=1 MVP, every RaySeg in this
+  // batch shares the same crystal_rot_). Aligns d_rot_c2w_ with d_dirs_'s
+  // crystal-local frame — frame invariant 6.
+  std::memcpy(impl_->h_rot_c2w_, all_data[0].crystal_rot_.GetMat(), 9 * sizeof(float));
+
+  // H2D upload (default stream — cudaMemcpyAsync degenerates to sync here,
+  // but the calls keep the same shape for a future stream switch).
+  cudaEventRecord(impl_->ev_start_h2d_);
+  cudaMemcpyAsync(impl_->d_rot_c2w_, impl_->h_rot_c2w_, 9 * sizeof(float), cudaMemcpyHostToDevice);
+  cudaMemcpyAsync(impl_->d_dirs_, impl_->pinned_dirs_, 3 * n * sizeof(float), cudaMemcpyHostToDevice);
+  cudaMemcpyAsync(impl_->d_pos_, impl_->pinned_pos_, 3 * n * sizeof(float), cudaMemcpyHostToDevice);
+  cudaMemcpyAsync(impl_->d_ws_, impl_->pinned_ws_, n * sizeof(float), cudaMemcpyHostToDevice);
+  cudaMemcpyAsync(impl_->d_from_poly_, impl_->pinned_from_poly_, n * sizeof(uint32_t),
+                  cudaMemcpyHostToDevice);
+  cudaEventRecord(impl_->ev_end_h2d_);
+
+  cudaMemset(impl_->d_exit_count_, 0, sizeof(uint32_t));
+
+  uint32_t max_hits = static_cast<uint32_t>(impl_->scene_->max_hits_);
+  uint32_t grid = (static_cast<uint32_t>(n) + 255u) / 256u;
+  // PCG kernel seed: draw 64 bits from persistent rng_ so successive
+  // TraceLayer calls get fresh streams while remaining reproducible via
+  // spec.seed.
+  uint64_t kernel_seed = static_cast<uint64_t>(impl_->rng_.GetUniform() * 4294967296.0f) |
+                         (static_cast<uint64_t>(impl_->rng_.GetUniform() * 4294967296.0f) << 32);
+
+  trace_single_ms_kernel<<<grid, 256>>>(impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
+                                        static_cast<uint32_t>(n), impl_->d_verts_, impl_->d_norms_,
+                                        impl_->d_tri_poly_id_, impl_->tri_cnt_, impl_->d_rot_c2w_, n_idx,
+                                        max_hits, kernel_seed, impl_->d_exit_,
+                                        static_cast<uint32_t>(impl_->exit_cap_), impl_->d_exit_count_,
+                                        /*crystal_id=*/0u, /*ms_layer_idx=*/0u);
+  cudaEventRecord(impl_->ev_end_kernel_);
+
+  // 4B readback (synchronous on the default stream).
+  cudaMemcpy(&impl_->h_exit_count_, impl_->d_exit_count_, sizeof(uint32_t), cudaMemcpyDeviceToHost);
+  cudaEventRecord(impl_->ev_end_d2h_);
+  cudaEventSynchronize(impl_->ev_end_d2h_);
+
+  float h2d_ms = 0.0f;
+  float kernel_ms = 0.0f;
+  float d2h_ms = 0.0f;
+  cudaEventElapsedTime(&h2d_ms, impl_->ev_start_h2d_, impl_->ev_end_h2d_);
+  cudaEventElapsedTime(&kernel_ms, impl_->ev_end_h2d_, impl_->ev_end_kernel_);
+  cudaEventElapsedTime(&d2h_ms, impl_->ev_end_kernel_, impl_->ev_end_d2h_);
+
+  if (impl_->logger != nullptr) {
+    ILOG_DEBUG(*impl_->logger,
+               "CudaTraceBackend::TraceLayer: n={} exit_count={} H2D={:.2f}ms kernel={:.2f}ms D2H={:.2f}ms",
+               n, impl_->h_exit_count_, h2d_ms, kernel_ms, d2h_ms);
+  }
+
+  if (impl_->h_exit_count_ >= impl_->exit_cap_) {
+    if (impl_->logger != nullptr) {
+      ILOG_WARN(*impl_->logger,
+                "CudaTraceBackend::TraceLayer: exit buffer overflow (count={} cap={}); tail dropped",
+                impl_->h_exit_count_, impl_->exit_cap_);
+    }
+    impl_->h_exit_count_ = static_cast<uint32_t>(impl_->exit_cap_);
+  }
+
+  return std::make_unique<CudaLayerHandle>(0u, LayerStats{impl_->h_exit_count_, 0.0f});
 }
 
 RootRaySource CudaTraceBackend::Recombine(LayerHandlePtr handle, const RecombineSpec& spec) {
   (void)handle;
   (void)spec;
-  // MVP single-MS: Recombine is a no-op stub. Caller MUST NOT pass the result
-  // back into TraceLayer; the simulator's single-MS path never calls Recombine
-  // anyway.
+  // MVP single-MS: Recombine never feeds back into TraceLayer (the simulator
+  // single-MS path drains exits and stops). Return an empty DeviceRayBatch.
   return RootRaySource::FromDevice(DeviceRayBatch{});
 }
 
 size_t CudaTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
-  out.clear();
-  return 0;
+  return DrainExits(out);
 }
 
 size_t CudaTraceBackend::DrainExits(std::vector<ExitRayRecord>& out) {
   out.clear();
-  return 0;
+  if (impl_->h_exit_count_ == 0u) {
+    return 0u;
+  }
+  auto t0 = std::chrono::steady_clock::now();
+  size_t count = impl_->h_exit_count_;
+  cudaMemcpy(impl_->pinned_exit_, impl_->d_exit_, count * sizeof(ExitRayRecord), cudaMemcpyDeviceToHost);
+  out.assign(impl_->pinned_exit_, impl_->pinned_exit_ + count);
+  auto t1 = std::chrono::steady_clock::now();
+  double drain_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+  if (impl_->logger != nullptr) {
+    ILOG_DEBUG(*impl_->logger,
+               "CudaTraceBackend::DrainExits: count={} bytes={} D2H={:.2f}ms",
+               count, count * sizeof(ExitRayRecord), drain_ms);
+  }
+
+  // Reset counter for the next TraceLayer call.
+  cudaMemset(impl_->d_exit_count_, 0, sizeof(uint32_t));
+  impl_->h_exit_count_ = 0u;
+  return count;
 }
 
 void CudaTraceBackend::EndSession() {
-  impl_->in_session = false;
+  if (!impl_->in_session_) {
+    return;
+  }
+  cudaDeviceSynchronize();
+  impl_->Reset();
 }
 
 }  // namespace lumice
