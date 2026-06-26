@@ -64,8 +64,9 @@ class CudaLayerHandle : public LayerHandle {
 //   - Single MS only (no Recombine continuation; final-layer DrainExits is the
 //     only egress).
 //   - No DeviceFilter / prob 分流 — every traced ray is emitted.
-//   - WlPoolSize() == 0 — caller drives per-batch wl through SimData.outgoing_wl_
-//     (discrete-wl path, matches CpuTraceBackend oracle).
+//   - WlPoolSize() == M (296.6 DR-3) — one session covers the whole spectrum via
+//     a device wl_pool; each ray carries a per-ray wl_idx and the exit records
+//     feed SimData.outgoing_wl_ for host-side per-ray CMF (mirrors Metal).
 //   - Per-ray crystal orientation — InitRayFirstMs samples one orientation
 //     per root ray (halo-ring distribution comes from this); the kernel
 //     indexes the per-ray d_rot_c2w buffer by tid before applying frame
@@ -88,6 +89,11 @@ class CudaTraceBackend : public TraceBackend {
   size_t ReadbackExitRays(std::vector<ExitRayRecord>& out) override;
   size_t DrainExits(std::vector<ExitRayRecord>& out) override;
   void EndSession() override;
+  // Per-ray wavelength pool size M (296.6 DR-3). Non-zero routes the driving
+  // loop (simulator.cpp) through the single-session per-ray-wl path. Resolved
+  // from env on demand so it answers correctly even before BeginSession (the
+  // driving loop queries it first). Mirrors MetalTraceBackend::WlPoolSize().
+  uint32_t WlPoolSize() const override;
 
  private:
   struct Impl;

@@ -12,9 +12,11 @@
 //     Mirrors metal_trace_backend.mm's per-ray rot upload path.
 //   - HostRayBatch ingest only; RootRaySource::FromDevice never reaches this
 //     backend (single-MS).
-//   - WlPoolSize()=0; single n_idx per session via SessionSpec::wl.
-//   - Multi-MS / filter / device root-gen / WlPool / prob 分流 live in
-//     follow-up subtasks.
+//   - WlPoolSize()=M (296.6 DR-3): one session covers the whole spectrum via a
+//     device wl_pool; each ray draws a per-ray wl_idx (host first-layer sample;
+//     transit carries it through) and the kernel reads d_wl_pool_[wl_idx].n_idx.
+//   - Device root-gen (gen_root_kernel) is the remaining 296.6 piece; the host
+//     InitRayFirstMs path above is the per-ray-wl fallback.
 //
 // Build gate: this entire translation unit is added to lumice_obj only when
 // LUMICE_CUDA_ENABLED is ON (see CMakeLists.txt). Other backends are
@@ -39,6 +41,7 @@
 //      上传一次（poly 级 AoS：n 三连续、d 单值）。
 
 #include "core/backend/cuda_trace_backend.hpp"
+#include "core/backend/wl_pool.hpp"  // WlEntry / ComputeWlPool / ResolveWlPoolSize (296.6 per-ray wl, DR-3)
 
 #if defined(LUMICE_CUDA_ENABLED)
 
@@ -315,7 +318,8 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                        const float* __restrict__ d_poly_d,      // poly_cnt (plane constant, p·n + d = 0)
                                        uint32_t poly_cnt,
                                        const float* __restrict__ d_rot_c2w,     // 9 × n_roots, row-major per ray
-                                       float n_idx,
+                                       const WlEntry* __restrict__ d_wl_pool,   // wl_pool_size entries (per-ray optics)
+                                       const uint32_t* __restrict__ d_root_wl_idx,  // n_roots (per-ray wl index, 296.6 DR-3)
                                        uint32_t max_hits,
                                        ExitRayRecord* __restrict__ d_exit,
                                        uint32_t exit_cap,
@@ -349,6 +353,14 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
   float dir[3] = {d_dirs[tid * 3u + 0u], d_dirs[tid * 3u + 1u], d_dirs[tid * 3u + 2u]};
   float org[3] = {d_pos[tid * 3u + 0u], d_pos[tid * 3u + 1u], d_pos[tid * 3u + 2u]};
   float w = d_ws[tid];
+
+  // Per-ray wavelength (296.6 DR-3): the ray's lifetime wl_idx selects its
+  // refractive index from the pool, and tags every exit / continuation record
+  // it emits so the host reconstructs the wavelength (simulator.cpp) and the
+  // next MS layer keeps the same wl. Replaces the former per-dispatch scalar
+  // n_idx (single wl per session).
+  const uint32_t wl_idx = d_root_wl_idx[tid];
+  const float n_idx = d_wl_pool[wl_idx].n_idx;
 
   // ms_mode==1 emit-gate PCG stream. Disjoint per (gate_seed, layer-batch,
   // tid); each pcg_uniform draw inside the ray bumps `slot` so multiple emit
@@ -452,7 +464,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               d_cont_d[cslot * 3u + 1u] = exit_world[1];
               d_cont_d[cslot * 3u + 2u] = exit_world[2];
               d_cont_w[cslot]           = w_refl_e;
-              d_cont_wl_idx[cslot]      = 0u;  // wl pass-through; WlPool is 296.6
+              d_cont_wl_idx[cslot]      = wl_idx;  // 296.6 DR-3: carry ray's wl to its continuation
             }
           } else {
             uint32_t slot = atomicAdd(d_exit_count, 1u);
@@ -465,7 +477,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               rec.path = BuildExitPath(path_rec, rec_len);
               rec.crystal_id = crystal_id;
               rec.ms_layer_idx = ms_layer_idx;
-              rec.wl_idx = 0u;
+              rec.wl_idx = static_cast<uint8_t>(wl_idx);
             }
           }
         }
@@ -483,7 +495,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
           rec.path = BuildExitPath(path_rec, rec_len);
           rec.crystal_id = crystal_id;
           rec.ms_layer_idx = ms_layer_idx;
-          rec.wl_idx = 0u;
+          rec.wl_idx = static_cast<uint8_t>(wl_idx);
         }
       }
     }
@@ -607,7 +619,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                 d_cont_d[cslot * 3u + 1u] = exit_world[1];
                 d_cont_d[cslot * 3u + 2u] = exit_world[2];
                 d_cont_w[cslot]           = w_refr;
-                d_cont_wl_idx[cslot]      = 0u;
+                d_cont_wl_idx[cslot]      = wl_idx;  // 296.6 DR-3: carry ray's wl to its continuation
               }
             } else {
               uint32_t slot = atomicAdd(d_exit_count, 1u);
@@ -620,7 +632,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                 rec.path = BuildExitPath(path_rec, rec_len);
                 rec.crystal_id = crystal_id;
                 rec.ms_layer_idx = ms_layer_idx;
-                rec.wl_idx = 0u;
+                rec.wl_idx = static_cast<uint8_t>(wl_idx);
               }
             }
           }
@@ -639,7 +651,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
             rec.path = BuildExitPath(path_rec, rec_len);
             rec.crystal_id = crystal_id;
             rec.ms_layer_idx = ms_layer_idx;
-            rec.wl_idx = 0u;
+            rec.wl_idx = static_cast<uint8_t>(wl_idx);
           }
         }
       }
@@ -819,6 +831,12 @@ struct CudaTraceBackend::Impl {
   float* d_pos_ = nullptr;
   float* d_ws_ = nullptr;
   uint32_t* d_from_poly_ = nullptr;  // per-ray entry-face polygon id
+  // Per-ray wavelength index (296.6 DR-3). Sized like the other root buffers
+  // (cont_cap_); the trace kernel reads d_wl_pool_[d_root_wl_idx_[tid]].n_idx for
+  // per-ray refraction and tags exit/continuation records with it. Filled by the
+  // host first-layer path (per-ray wl sample) or written by transit_multi_ms_kernel
+  // (continuation pass-through) on subsequent layers.
+  uint32_t* d_root_wl_idx_ = nullptr;
 
   // --- Continuation ring (296.4) -------------------------------------------
   // Single ping-pong slot (no multi-generation tracking required by seam
@@ -845,6 +863,7 @@ struct CudaTraceBackend::Impl {
   float* pinned_pos_ = nullptr;
   float* pinned_ws_ = nullptr;
   uint32_t* pinned_from_poly_ = nullptr;
+  uint32_t* pinned_root_wl_idx_ = nullptr;  // n_roots (296.6 per-ray wl, H2D staging)
   float* pinned_rot_c2w_ = nullptr;  // n_roots × 9 (mirrors d_rot_c2w_)
   ExitRayRecord* pinned_exit_ = nullptr;
 
@@ -855,6 +874,20 @@ struct CudaTraceBackend::Impl {
   const SceneConfig* scene_ = nullptr;
   const RenderConfig* render_ = nullptr;
   WlParam wl_{};
+
+  // --- Per-ray wavelength pool (296.6 DR-3) --------------------------------
+  // Single session covers the whole spectrum: each ray samples a wl_idx in
+  // [0, wl_pool_size_) and is tagged with it for life (device root-gen / host
+  // fallback draw it; transit passes it through). The device trace kernel reads
+  // d_wl_pool_[wl_idx].n_idx (per-ray refraction) and emits the wl_idx on exit
+  // records so the host reconstructs the per-ray wavelength (simulator.cpp).
+  // Mirrors Metal's wl_pool (metal_trace_backend.mm). wl_pool_size_==0 means the
+  // pool is unbuilt (WlPoolSize() returns it → caller stays on per-batch wl).
+  uint32_t wl_pool_size_ = 0u;
+  bool illuminant_mode_ = false;
+  IlluminantType illuminant_{};
+  std::vector<WlEntry> wl_pool_host_;
+  WlEntry* d_wl_pool_ = nullptr;  // wl_pool_size_ × WlEntry, uploaded once per BeginSession
 
   cudaEvent_t ev_start_h2d_{};
   cudaEvent_t ev_end_h2d_{};
@@ -963,6 +996,10 @@ void CudaTraceBackend::Impl::Reset() {
   d_ws_ = nullptr;
   cudaFree(d_from_poly_);
   d_from_poly_ = nullptr;
+  cudaFree(d_root_wl_idx_);
+  d_root_wl_idx_ = nullptr;
+  cudaFree(d_wl_pool_);
+  d_wl_pool_ = nullptr;
   cudaFree(d_cont_d_);
   d_cont_d_ = nullptr;
   cudaFree(d_cont_w_);
@@ -992,6 +1029,8 @@ void CudaTraceBackend::Impl::Reset() {
   pinned_ws_ = nullptr;
   cudaFreeHost(pinned_from_poly_);
   pinned_from_poly_ = nullptr;
+  cudaFreeHost(pinned_root_wl_idx_);
+  pinned_root_wl_idx_ = nullptr;
   cudaFreeHost(pinned_rot_c2w_);
   pinned_rot_c2w_ = nullptr;
   cudaFreeHost(pinned_cont_count_);
@@ -1051,6 +1090,7 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
   cudaFree(d_pos_);      d_pos_ = nullptr;
   cudaFree(d_ws_);       d_ws_ = nullptr;
   cudaFree(d_from_poly_); d_from_poly_ = nullptr;
+  cudaFree(d_root_wl_idx_); d_root_wl_idx_ = nullptr;
   cudaFree(d_rot_c2w_);  d_rot_c2w_ = nullptr;
   cudaFree(d_exit_);     d_exit_ = nullptr;
   cudaFree(d_exit_count_); d_exit_count_ = nullptr;
@@ -1062,6 +1102,7 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
   cudaFreeHost(pinned_pos_);      pinned_pos_ = nullptr;
   cudaFreeHost(pinned_ws_);       pinned_ws_ = nullptr;
   cudaFreeHost(pinned_from_poly_); pinned_from_poly_ = nullptr;
+  cudaFreeHost(pinned_root_wl_idx_); pinned_root_wl_idx_ = nullptr;
   cudaFreeHost(pinned_rot_c2w_);  pinned_rot_c2w_ = nullptr;
   cudaFreeHost(pinned_exit_);     pinned_exit_ = nullptr;
   cudaFreeHost(pinned_cont_count_); pinned_cont_count_ = nullptr;
@@ -1094,6 +1135,7 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
   ck(cudaMalloc(&d_pos_,         3 * buf_cap * sizeof(float)),             "cudaMalloc d_pos");
   ck(cudaMalloc(&d_ws_,          buf_cap * sizeof(float)),                 "cudaMalloc d_ws");
   ck(cudaMalloc(&d_from_poly_,   buf_cap * sizeof(uint32_t)),              "cudaMalloc d_from_poly");
+  ck(cudaMalloc(&d_root_wl_idx_, buf_cap * sizeof(uint32_t)),              "cudaMalloc d_root_wl_idx");
   ck(cudaMalloc(&d_rot_c2w_,     9 * buf_cap * sizeof(float)),             "cudaMalloc d_rot_c2w");
   ck(cudaMalloc(&d_exit_,        exit_cap_ * sizeof(ExitRayRecord)),       "cudaMalloc d_exit");
   ck(cudaMalloc(&d_exit_count_,  sizeof(uint32_t)),                        "cudaMalloc d_exit_count");
@@ -1106,6 +1148,7 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
   ck(cudaHostAlloc(&pinned_pos_,      3 * n * sizeof(float),               cudaHostAllocDefault), "cudaHostAlloc pinned_pos");
   ck(cudaHostAlloc(&pinned_ws_,       n * sizeof(float),                   cudaHostAllocDefault), "cudaHostAlloc pinned_ws");
   ck(cudaHostAlloc(&pinned_from_poly_, n * sizeof(uint32_t),               cudaHostAllocDefault), "cudaHostAlloc pinned_from_poly");
+  ck(cudaHostAlloc(&pinned_root_wl_idx_, n * sizeof(uint32_t),             cudaHostAllocDefault), "cudaHostAlloc pinned_root_wl_idx");
   ck(cudaHostAlloc(&pinned_rot_c2w_,  9 * n * sizeof(float),               cudaHostAllocDefault), "cudaHostAlloc pinned_rot_c2w");
   ck(cudaHostAlloc(&pinned_exit_,     exit_cap_ * sizeof(ExitRayRecord),   cudaHostAllocDefault), "cudaHostAlloc pinned_exit");
   ck(cudaHostAlloc(&pinned_cont_count_, sizeof(uint32_t),                  cudaHostAllocDefault), "cudaHostAlloc pinned_cont_count");
@@ -1437,6 +1480,30 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
                          tri_cnt * sizeof(uint16_t), cudaMemcpyHostToDevice),
               "BeginSession cudaMemcpy d_tri_to_poly");
 
+    // Per-ray wavelength pool (296.6 DR-3). One session covers the whole
+    // spectrum; build the WlEntry table (n_idx + spd_weight per sampled wl) from
+    // the scene's light source + this crystal and upload it once. The host
+    // first-layer path / device gen-root draws a per-ray wl_idx in [0, M); the
+    // trace kernel reads d_wl_pool_[wl_idx].n_idx (per-ray refraction) and tags
+    // exit records with wl_idx for host-side wavelength reconstruction
+    // (simulator.cpp). Mirrors Metal ComputeWlPool + EnsureWlPoolBuffer. The
+    // buffer is allocated once (size = env-resolved M, stable per process) and
+    // re-uploaded each BeginSession since the crystal n_idx is scene-dependent.
+    Logger& wl_logger = impl_->logger != nullptr ? *impl_->logger : GetGlobalLogger();
+    impl_->wl_pool_size_ = ResolveWlPoolSize(wl_logger);
+    const auto& spectrum = spec.scene->light_source_.spectrum_;
+    impl_->illuminant_mode_ = std::holds_alternative<IlluminantType>(spectrum);
+    impl_->illuminant_ = impl_->illuminant_mode_ ? std::get<IlluminantType>(spectrum) : IlluminantType{};
+    ComputeWlPool(crystal_for_geom, impl_->illuminant_mode_, impl_->illuminant_, spec.wl.wl_, spec.wl.weight_,
+                  impl_->wl_pool_size_, impl_->wl_pool_host_);
+    if (impl_->d_wl_pool_ == nullptr) {
+      CheckCuda(cudaMalloc(&impl_->d_wl_pool_, impl_->wl_pool_size_ * sizeof(WlEntry)),
+                "BeginSession cudaMalloc d_wl_pool");
+    }
+    CheckCuda(cudaMemcpy(impl_->d_wl_pool_, impl_->wl_pool_host_.data(), impl_->wl_pool_size_ * sizeof(WlEntry),
+                         cudaMemcpyHostToDevice),
+              "BeginSession cudaMemcpy d_wl_pool");
+
     // MS layer count + initial layer index. Used by TraceLayer to derive
     // ms_mode (continuation vs final exit) when Step 5 lands. n_ms_layers_
     // is captured once per session (multi-CI is 296.6 work and does not
@@ -1576,7 +1643,6 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
   }
   const auto& ms_layer   = impl_->scene_->ms_[impl_->ms_layer_idx_];
   const auto& ms_setting = ms_layer.setting_[0];
-  float n_idx = 0.0f;
 
   // ms_mode = continuation iff this is NOT the final MS layer. Final layer
   // (ms_mode==0) writes every exit candidate to d_exit_; non-final layer
@@ -1599,7 +1665,6 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     try {
       Crystal crystal = MakeCrystal(impl_->rng_, ms_setting.crystal_.param_);
       const auto& axis_dist = ms_setting.crystal_.axis_;
-      n_idx = crystal.GetRefractiveIndex(impl_->wl_.wl_);
 
       // Mirror the CPU pattern (cpu_trace_backend.cpp:107-108): workspace[0]/[1]
       // capacities sized for the InitRay/HitSurface fan-out so EmplaceBack
@@ -1634,7 +1699,18 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
         impl_->pinned_pos_[i * 3 + 0] = r.p_[0];
         impl_->pinned_pos_[i * 3 + 1] = r.p_[1];
         impl_->pinned_pos_[i * 3 + 2] = r.p_[2];
-        impl_->pinned_ws_[i] = r.w_;
+        // Per-ray wavelength (296.6 DR-3): draw a wl_idx and take the weight from
+        // the pool's spd_weight. In per-ray (illuminant) mode InitRayFirstMs ran
+        // with the session's zero-wl WlParam, so r.w_ is NOT the spectral weight;
+        // the pool is the single source. In discrete mode the pool is degenerate
+        // (all entries == spec_wl) so this is identical to r.w_. Mirrors Metal's
+        // host-gen fallback (metal_trace_backend.mm:1377).
+        uint32_t wl_idx = static_cast<uint32_t>(impl_->rng_.GetUniform() * static_cast<float>(impl_->wl_pool_size_));
+        if (wl_idx >= impl_->wl_pool_size_) {
+          wl_idx = impl_->wl_pool_size_ - 1u;  // guard GetUniform()→1.0 rounding
+        }
+        impl_->pinned_root_wl_idx_[i] = wl_idx;
+        impl_->pinned_ws_[i] = impl_->wl_pool_host_[wl_idx].spd_weight;
         impl_->pinned_from_poly_[i] =
             (r.to_face_ == kInvalidId) ? 0xFFFFFFFFu : static_cast<uint32_t>(r.to_face_);
         std::memcpy(impl_->pinned_rot_c2w_ + i * 9, r.crystal_rot_.GetMat(), 9 * sizeof(float));
@@ -1655,6 +1731,8 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     cudaMemcpyAsync(impl_->d_ws_, impl_->pinned_ws_, n * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpyAsync(impl_->d_from_poly_, impl_->pinned_from_poly_, n * sizeof(uint32_t),
                     cudaMemcpyHostToDevice);
+    cudaMemcpyAsync(impl_->d_root_wl_idx_, impl_->pinned_root_wl_idx_, n * sizeof(uint32_t),
+                    cudaMemcpyHostToDevice);
     // Harvest any sticky async error from the H2D block.
     ck_reset(cudaGetLastError(), "H2D batch");
   } else {
@@ -1662,19 +1740,10 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     // Root buffers (d_dirs_/d_pos_/d_ws_/d_from_poly_/d_rot_c2w_) were filled
     // in-place by `transit_multi_ms_kernel` inside the previous Recombine
     // dispatch; no H2D / pinned staging needed (host pointers do not cross
-    // the seam in this path — §5 铁律). n_idx is resolved via a dummy RNG
-    // (seed=0, not impl_->rng_): Crystal geometry and refractive index are
-    // fully determined by CrystalParam; the MakeCrystal RNG draw only affects
-    // orientation, which is irrelevant here. Using impl_->rng_ would desync
-    // the RNG sequence from the CPU oracle's host-roots path.
-    try {
-      RandomNumberGenerator dummy_rng{0u};
-      Crystal crystal_for_n_idx = MakeCrystal(dummy_rng, ms_setting.crystal_.param_);
-      n_idx = crystal_for_n_idx.GetRefractiveIndex(impl_->wl_.wl_);
-    } catch (...) {
-      impl_->Reset();
-      throw;
-    }
+    // the seam in this path — §5 铁律). Per-ray n_idx now comes from the device
+    // wl_pool via each ray's wl_idx (296.6 DR-3); the continuation rays carry
+    // their wl_idx in d_root_wl_idx_ (written by transit_multi_ms_kernel), so the
+    // device-roots path needs no host crystal / refractive-index resolution.
     // backend_ptr sanity: not strictly required for correctness (the rays live
     // in our own Impl buffers), but a NULL here means the caller forgot to
     // pass back the Recombine result — flag it loudly.
@@ -1700,7 +1769,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
   trace_single_ms_kernel<<<grid, 256>>>(
       impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
       static_cast<uint32_t>(n), impl_->d_poly_n_, impl_->d_poly_d_,
-      impl_->poly_cnt_, impl_->d_rot_c2w_, n_idx,
+      impl_->poly_cnt_, impl_->d_rot_c2w_, impl_->d_wl_pool_, impl_->d_root_wl_idx_,
       max_hits, impl_->d_exit_,
       static_cast<uint32_t>(impl_->exit_cap_), impl_->d_exit_count_,
       /*crystal_id=*/0u, /*ms_layer_idx=*/impl_->ms_layer_idx_,
@@ -1847,7 +1916,8 @@ RootRaySource CudaTraceBackend::Recombine(LayerHandlePtr handle, const Recombine
   transit_multi_ms_kernel<<<grid, 256>>>(
       impl_->d_cont_d_, impl_->d_cont_w_, impl_->d_cont_wl_idx_,
       impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
-      impl_->d_rot_c2w_, impl_->d_cont_wl_idx_,  // wl_idx: aliased read/write (no __restrict__ on these params)
+      impl_->d_rot_c2w_, impl_->d_root_wl_idx_,  // 296.6 DR-3: pass per-ray wl_idx from continuation into the
+                                                 // next layer's root buffer (read by trace_single_ms_kernel)
       impl_->d_tri_vtx_, impl_->d_tri_norm_, impl_->d_tri_area_, impl_->d_tri_to_poly_,
       gp, cont_n);
   ck_reset(cudaPeekAtLastError(), "transit kernel launch");
@@ -1993,6 +2063,17 @@ void CudaTraceBackend::EndSession() {
   }
   cudaDeviceSynchronize();
   impl_->Reset();
+}
+
+uint32_t CudaTraceBackend::WlPoolSize() const {
+  // Resolve from env on demand (mirrors MetalTraceBackend::WlPoolSize): the
+  // driving loop queries this BEFORE BeginSession to pick the per-ray-wl path,
+  // so it must answer M even when wl_pool_size_ has not been latched yet.
+  if (impl_->wl_pool_size_ != 0u) {
+    return impl_->wl_pool_size_;
+  }
+  Logger& logger = impl_->logger != nullptr ? *impl_->logger : GetGlobalLogger();
+  return ResolveWlPoolSize(logger);
 }
 
 }  // namespace lumice
