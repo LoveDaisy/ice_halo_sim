@@ -1711,7 +1711,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
       ms_mode == 1u ? impl_->d_cont_count_   : nullptr,
       ms_mode == 1u ? static_cast<uint32_t>(impl_->cont_cap_) : 0u,
       impl_->gate_seed_,
-      static_cast<uint32_t>(impl_->gate_ray_count_),
+      NarrowPcgRayBase(impl_->gate_ray_count_, n, "cuda-gate"),
       // 296.5 filter gate params. ms_mode==0 dispatches can pass these as
       // nullptr/0 because the gate code is unreachable; we always pass real
       // pointers to avoid undefined behaviour from null-pointer-arith warnings
@@ -1841,7 +1841,7 @@ RootRaySource CudaTraceBackend::Recombine(LayerHandlePtr handle, const Recombine
   lm_pcg::GenRootKernelParams gp =
       BuildTransitGpParams(ms_setting.crystal_.axis_, impl_->tri_cnt_, cont_n);
   gp.gen_seed     = impl_->transit_seed_;
-  gp.gen_ray_base = static_cast<uint32_t>(impl_->transit_ray_count_);
+  gp.gen_ray_base = NarrowPcgRayBase(impl_->transit_ray_count_, cont_n, "cuda-transit");
 
   uint32_t grid = (cont_n + 255u) / 256u;
   transit_multi_ms_kernel<<<grid, 256>>>(

@@ -1323,9 +1323,9 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
     // monotone across batches of the same session.
     GenRootKernelParams gp = BuildGenRootParams(setting, crystal_ray_num);
     gp.gen_seed     = gen_seed_;
-    assert(root_ray_count <= static_cast<size_t>(UINT32_MAX) &&
-           "root_ray_count overflow: TraceLayer must guard can_use_device_gen with UINT32_MAX bound");
-    gp.gen_ray_base = static_cast<uint32_t>(root_ray_count);
+    // 296.6: real runtime guard replacing the no-op-in-Release assert (the
+    // narrowing now throws past UINT32_MAX rather than silently wrapping).
+    gp.gen_ray_base = NarrowPcgRayBase(root_ray_count, crystal_ray_num, "metal-gen-root");
     gp.num_rays     = static_cast<uint32_t>(crystal_ray_num);
     // task-264 gen+trace fusion: stash params for DispatchLayer to encode into
     // the same command buffer as the trace pass. DispatchLayer is guaranteed
@@ -2301,14 +2301,13 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
         }
         // Monotone advance — mirrors gen_root's root_ray_count contract so
         // per-SimBatch transit dispatches on (layer,ci) consume disjoint PCG
-        // ranges. UINT32_MAX bound matches gen_ray_base width (line ~1830).
-        assert(impl_->transit_ray_count_ <= static_cast<size_t>(UINT32_MAX) - ci_n &&
-               "transit_ray_count_ overflow: gen_ray_base width exceeded");
+        // ranges. 296.6: real runtime guard replacing the no-op-in-Release assert
+        // (gen_ray_base width matches the gen-root path).
         auto transit_gp = impl_->BuildTransitRootParams(
             setting, ci_n,
             static_cast<uint32_t>(impl_->ms_idx),
             static_cast<uint32_t>(ci),
-            static_cast<uint32_t>(impl_->transit_ray_count_));
+            NarrowPcgRayBase(impl_->transit_ray_count_, ci_n, "metal-transit"));
         id<MTLCommandBuffer> combined_cb = [impl_->queue commandBuffer];
         impl_->EncodeTransitRoot(combined_cb, transit_gp, in_slot, ci_start);
         // Advance unconditionally now: with the merged CB we no longer probe
