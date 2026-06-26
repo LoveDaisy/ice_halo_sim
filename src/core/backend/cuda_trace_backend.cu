@@ -799,6 +799,7 @@ struct CudaTraceBackend::Impl {
   ExitRayRecord* d_exit_ = nullptr;
   uint32_t* d_exit_count_ = nullptr;
   size_t exit_cap_ = 0;
+  size_t alloc_exit_cap_ = 0;  // physically-allocated d_exit_ capacity (grow-only across MS layers)
   uint32_t h_exit_count_ = 0;
 
   // Pinned staging.
@@ -854,6 +855,12 @@ struct CudaTraceBackend::Impl {
 
   void Reset();
   void EnsureSessionBuffers(size_t n);
+  // Grow ONLY the exit buffer for a device-roots continuation layer, leaving the
+  // root buffers (d_dirs_/d_pos_/d_ws_/d_from_poly_/d_rot_c2w_) untouched so the
+  // transit_multi_ms_kernel's device-resident continuation rays survive into the
+  // next TraceLayer. EnsureSessionBuffers must NOT run on the device-roots path:
+  // its n_roots_!=n realloc would free those buffers mid-flight (296.4 root-cause).
+  void EnsureExitCapacity(size_t n);
 };
 
 void CudaTraceBackend::Impl::Reset() {
@@ -921,6 +928,7 @@ void CudaTraceBackend::Impl::Reset() {
   poly_cnt_ = 0;
   tri_cnt_ = 0;
   exit_cap_ = 0;
+  alloc_exit_cap_ = 0;
   cont_cap_ = 0;
   h_exit_count_ = 0;
   h_cont_count_ = 0;
@@ -1023,7 +1031,35 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
   ck(cudaMemset(d_cont_count_, 0, sizeof(uint32_t)), "cudaMemset d_cont_count_ (init)");
 
   n_roots_ = n;
+  alloc_exit_cap_ = exit_cap_;  // track physical d_exit_ size for grow-only EnsureExitCapacity
   buffers_allocated_ = true;
+}
+
+void CudaTraceBackend::Impl::EnsureExitCapacity(size_t n) {
+  // Device-roots continuation layer: root buffers already hold the transit
+  // output and are sized by the layer that wrote them — do NOT touch them. Only
+  // the exit pool may need to grow for this layer's fan-out. exit_cap_ tracks the
+  // logical cap used by the kernel/overflow-clamp; alloc_exit_cap_ tracks the
+  // physical d_exit_ allocation so we realloc only when genuinely insufficient.
+  const size_t need = ComputeExitCap(n, scene_ != nullptr ? scene_->max_hits_ : kMaxHits);
+  exit_cap_ = need;
+  if (!buffers_allocated_ || need <= alloc_exit_cap_) {
+    return;  // existing d_exit_ already holds `need` records.
+  }
+  cudaDeviceSynchronize();  // a prior layer's kernel may still be writing d_exit_.
+  auto ck = [this](cudaError_t e, const char* ctx) {
+    if (e != cudaSuccess) {
+      Reset();
+      throw BackendUnavailableError(std::string{"CudaTraceBackend::EnsureExitCapacity: "} + ctx + ": " +
+                                    cudaGetErrorString(e));
+    }
+  };
+  cudaFree(d_exit_);            d_exit_ = nullptr;
+  cudaFreeHost(pinned_exit_);   pinned_exit_ = nullptr;
+  ck(cudaMalloc(&d_exit_, need * sizeof(ExitRayRecord)), "cudaMalloc d_exit (grow)");
+  ck(cudaHostAlloc(&pinned_exit_, need * sizeof(ExitRayRecord), cudaHostAllocDefault),
+     "cudaHostAlloc pinned_exit (grow)");
+  alloc_exit_cap_ = need;
 }
 
 CudaTraceBackend::CudaTraceBackend(Logger* logger) : impl_(std::make_unique<Impl>()) {
@@ -1230,7 +1266,18 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     return std::make_unique<CudaLayerHandle>(0u, LayerStats{0u, 0.0f});
   }
 
-  impl_->EnsureSessionBuffers(n);
+  if (roots.is_device) {
+    // Device-roots continuation layer: the root buffers were filled in-place by
+    // the previous Recombine's transit_multi_ms_kernel and are already sized by
+    // that layer. Running EnsureSessionBuffers here (n = cont_n != n_roots_)
+    // would free + realloc them mid-flight, destroying the continuation rays
+    // (296.4 root-cause: d_ws_/d_from_poly_ then read uninitialised → w=0 →
+    // every layer-1 ray skips entry → ~80% of multi-MS energy lost). Only the
+    // exit pool may need to grow for this layer's exits.
+    impl_->EnsureExitCapacity(n);
+  } else {
+    impl_->EnsureSessionBuffers(n);
+  }
 
   // Local helper: Reset() + BackendUnavailableError for CUDA call failures
   // inside TraceLayer. EnsureSessionBuffers has its own internal Reset path;
@@ -1493,8 +1540,16 @@ RootRaySource CudaTraceBackend::Recombine(LayerHandlePtr handle, const Recombine
   // No continuations → nothing to transit. Bump ms_layer_idx_ so the next
   // TraceLayer (if any) advances; return an empty DeviceRayBatch so the
   // caller can short-circuit. Also zero d_cont_count_ for the next layer.
+  //
+  // Null guard: an n=0 first-layer TraceLayer early-returns before
+  // EnsureSessionBuffers runs, leaving d_cont_count_ == nullptr while the
+  // documented contract still allows a follow-up Recombine. cudaMemset(nullptr)
+  // returns cudaErrorInvalidValue → ck_reset would Reset + throw. When no
+  // buffers exist there is nothing to zero, so skip the memset. (296.4 review)
   if (cont_n == 0u) {
-    ck_reset(cudaMemset(impl_->d_cont_count_, 0, sizeof(uint32_t)), "cudaMemset d_cont_count");
+    if (impl_->d_cont_count_ != nullptr) {
+      ck_reset(cudaMemset(impl_->d_cont_count_, 0, sizeof(uint32_t)), "cudaMemset d_cont_count");
+    }
     impl_->ms_layer_idx_++;
     return RootRaySource::FromDevice(DeviceRayBatch{});
   }
