@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782485779156,
+  "lastUpdate": 1782485781551,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9620,50 +9620,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "77619b84a60bbf93eab1a8e448b94826e5daccf2",
-          "message": "Merge pull request #49 from LoveDaisy/feat/json_api\n\nfeat(c-api): add JSON→LUMICE_Config parsing API",
-          "timestamp": "2026-04-06T01:18:01+08:00",
-          "tree_id": "56a3de0263a49d8b728c2c05d297ae5384bfdfa0",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/77619b84a60bbf93eab1a8e448b94826e5daccf2"
-        },
-        "date": 1775409678893,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 88.9,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 79.5,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 71.7,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 70.1,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "5548e8acc740ce89034441662cae0cb19c816a29",
           "message": "Merge pull request #50 from LoveDaisy/feat/improve_filter\n\nfix(filter): DirectionFilter correctness fix and filter subsystem improvements",
           "timestamp": "2026-04-06T11:58:35+08:00",
@@ -14003,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 87.8,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "df47f8ce94980421ea457cf2a81983343c84732b",
+          "message": "Merge pull request #150 from LoveDaisy/chore/deferred-quality-cleanup\n\nchore: deferred quality cleanup (scrum-298) — e2e ref regen + geometry predicate single-source + ray_num float precision",
+          "timestamp": "2026-06-26T22:50:03+08:00",
+          "tree_id": "638406a85c800d2be16737ae7522efb8951a83fd",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/df47f8ce94980421ea457cf2a81983343c84732b"
+        },
+        "date": 1782485780750,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 60.3,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 103.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 83.8,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 94.6,
             "unit": "%"
           }
         ]
