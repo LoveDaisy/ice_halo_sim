@@ -143,6 +143,10 @@ class ServerImpl {
 
   std::atomic_bool work_started_{ false };
   std::atomic_bool scene_gen_active_{ false };  // True while GenerateScene is actively producing batches
+  // task-296.7 instrumentation: ensures the first-kIdle WARN fires exactly once per run.
+  // Reset alongside work_started_ in CommitConfig / Stop so each render cycle re-arms.
+  // mutable: GetStatus() is const but flips this exactly-once flag on first kIdle.
+  mutable std::atomic_bool idle_logged_{ false };
 
   // Preferred trace backend. Cached at server level so the preference survives
   // Stop()/Start() cycles and is the authoritative source for any future
@@ -590,6 +594,7 @@ void ServerImpl::Start() {
 
     work_started_ = false;
     sim_scene_cnt_ = 0;
+    idle_logged_ = false;  // task-296.7: re-arm first-kIdle WARN for new run
 
     {
       std::lock_guard<std::mutex> lock(status_mutex_);
@@ -698,6 +703,19 @@ ServerStatus ServerImpl::GetStatus() const {
     return ServerStatus::kRunning;
   }
 
+  // task-296.7 diagnostic (DEBUG): capture the four-predicate state on the
+  // first kIdle transition each run. Originally added at WARN to chase the
+  // pre-fix sim_scene_cnt_ counter imbalance (discrete-spectrum 1-vs-N pairing,
+  // see GenerateScene below); kept at DEBUG so a similar regression — or any
+  // future "kIdle came early" report — has a single grep target instead of
+  // needing fresh instrumentation. Once-per-run via idle_logged_ (re-armed in
+  // Start()).
+  if (!idle_logged_.exchange(true)) {
+    ILOG_DEBUG(logger_,
+               "GetStatus: first kIdle — any_busy={} sim_scene_cnt_={} scene_gen_active_={} "
+               "work_started_={}",
+               any_busy, sim_scene_cnt_.load(), scene_gen_active_.load(), work_started_.load());
+  }
   return ServerStatus::kIdle;
 }
 
@@ -922,12 +940,30 @@ void ServerImpl::GenerateScene() {
   const size_t kDispatchCap = env::DispatchRayNum(logger_, kDefaultDispatch);
   const size_t kBatchCap = kDispatchCap;  // local alias for the loop below
 
+  // task-296.7: sim_scene_cnt_ semantic fix — count SimData (not SimBatch).
+  // The simulator emits one SimData per wavelength inside SimulateOneWavelength*
+  // (1 for illuminant; N for discrete spectrum lists). ConsumeData decrements
+  // per SimData. Incrementing by 1 here (the historical behaviour) created a
+  // 1-vs-N pairing imbalance on discrete-spectrum configs: sim_scene_cnt_ went
+  // negative as the consumer drained N - 1 "extra" SimData per batch, GetStatus
+  // saw the predicate fall to false, and CLI single-snapshot rendering reported
+  // kIdle while 4/5 of the wavelengths' batches still got skip-consumed (line
+  // 772 `if (sim_scene_cnt_ > 0)` → else branch). Resolve by incrementing here
+  // by the same N the simulator will emplace, so the counter matches the
+  // consumer's per-SimData decrement. The scene is captured under scene_mutex_
+  // above and immutable for this GenerateScene invocation, so N is computed
+  // once. Throttle/notify thresholds (kMaxSceneCnt, kMaxSceneCnt/2) now refer
+  // to in-flight SimData, which is also the right quantity for memory control.
+  const size_t kNsimdataPerBatch = std::holds_alternative<std::vector<WlParam>>(scene->light_source_.spectrum_) ?
+                                       std::get<std::vector<WlParam>>(scene->light_source_.spectrum_).size() :
+                                       static_cast<size_t>(1);
+
   auto ray_num = scene->ray_num_;
   size_t committed_num = 0;
   while (ray_num == kInfSize || committed_num < ray_num) {
     size_t batch_ray_num = std::min(kBatchCap, ray_num - committed_num);
     scene_queue_->Emplace(SimBatch{ batch_ray_num, scene, generation, renders });
-    sim_scene_cnt_++;
+    sim_scene_cnt_ += static_cast<int>(kNsimdataPerBatch);
     if (!first_batch_logged) {
       ILOG_INFO(logger_, "GenerateScene: first batch enqueued at {:.1f}ms after start",
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - gen_start).count());
