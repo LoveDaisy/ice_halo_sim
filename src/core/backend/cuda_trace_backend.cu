@@ -49,18 +49,24 @@
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <random>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "config/crystal_config.hpp"
+#include "config/filter_config.hpp"
 #include "config/light_config.hpp"
 #include "config/proj_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/crystal.hpp"
+#include "core/device_filter_desc.hpp"
 #include "core/exit_seam.hpp"
+#include "core/filter_spec.hpp"
 #include "core/math.hpp"
 #include "core/raypath.hpp"
+#include "core/shared/filter_shared.h"
 #include "core/shared/optics_shared.h"
 #include "core/shared/pcg_shared.h"
 #include "core/shared/traversal_shared.h"
@@ -129,6 +135,12 @@ constexpr float kCudaFaceCoplanarFloor = 1e-2f;
 // host-side gate-seed derivation.
 constexpr uint32_t kCudaTransitNonce = 0xA5A5A5A5u;
 constexpr uint32_t kCudaGateNonce    = 0x5A5A5A5Au;
+// DrainExits host-side prob draw nonce (296.5). The final-layer drain runs its
+// own RNG stream independent of the device-side gate/transit streams so a
+// session that re-seeds (BeginSession) cleanly resets the drain sequence
+// (mirrors Metal `impl_->rng` re-seeding semantics — see scrum-258 lesson on
+// BeginSession RNG resets being filter parity's hidden third rail).
+constexpr uint32_t kCudaDrainNonce   = 0xD5A1B3C7u;
 
 // File-local mirror of Metal `ComputeJacobianEnvelopeForDeviceGen`
 // (metal_trace_backend.mm:259). The four branches MUST stay numerically
@@ -853,8 +865,38 @@ struct CudaTraceBackend::Impl {
   uint8_t ms_layer_idx_ = 0u;
   uint8_t n_ms_layers_  = 0u;
 
+  // --- Filter buffers (296.5) ----------------------------------------------
+  // Mirrors Metal's filter_desc_buf_ / getfn_offsets_buf_ / getfn_bytes_buf_ /
+  // complex_sub_desc_buf_ quartet (metal_trace_backend.mm:724-734). The CUDA
+  // kernel emit gate (ms_mode==1) consumes these via DeviceFilterCheck; the
+  // 1-byte dummy fallback covers no-filter sessions so the kernel pointers are
+  // always non-null even on the ms_mode==0 path (which doesn't read them).
+  DeviceFilterDesc* d_filter_desc_       = nullptr;  // n_slot DeviceFilterDescs (or 1B dummy)
+  uint32_t*         d_getfn_offsets_     = nullptr;  // (n_slot + 1) uint32 prefix-sum (or 1B dummy)
+  uint8_t*          d_getfn_bytes_       = nullptr;  // flat GetFn byte stream (or 1B dummy)
+  DeviceFilterDesc* d_complex_sub_desc_  = nullptr;  // flat Complex sub-descs (or 1B dummy)
+  uint32_t          filter_desc_max_ci_  = 0u;       // per-layer ci stride (MVP=1)
+  uint32_t          filter_n_slot_       = 0u;       // total descriptor slots
+  uint32_t          crystal_config_id_   = 0xFFFFu;  // for DeviceFilterMatchCrystal
+
+  // --- Final-layer host filter (296.5) -------------------------------------
+  // DrainExits applies FilterSpec::Check + prob to records tagged with the
+  // final ms_layer_idx (mirrors Metal ReadbackExitRays:2447-2578). Captured in
+  // BeginSession from the last ms_setting; single-CI MVP, multi-CI is 296.6.
+  FilterConfig     final_layer_filter_config_{};
+  Crystal          final_layer_crystal_{};
+  AxisDistribution final_layer_axis_dist_{};
+  uint8_t          final_ms_layer_idx_ = 0u;
+  float            final_ms_prob_      = 0.0f;
+  // `drain_rng_` is the host-side prob-draw RNG used by DrainExits. Seeded
+  // once in BeginSession with `spec.seed XOR kCudaDrainNonce` and advanced
+  // monotonically across drains within a session — mirroring Metal's
+  // `impl_->rng` for the final-layer prob check.
+  std::mt19937 drain_rng_{0u};
+
   void Reset();
   void EnsureSessionBuffers(size_t n);
+  void EnsureFilterBuffers(const SessionSpec& spec);
   // Grow ONLY the exit buffer for a device-roots continuation layer, leaving the
   // root buffers (d_dirs_/d_pos_/d_ws_/d_from_poly_/d_rot_c2w_) untouched so the
   // transit_multi_ms_kernel's device-resident continuation rays survive into the
@@ -901,6 +943,14 @@ void CudaTraceBackend::Impl::Reset() {
   d_exit_ = nullptr;
   cudaFree(d_exit_count_);
   d_exit_count_ = nullptr;
+  cudaFree(d_filter_desc_);
+  d_filter_desc_ = nullptr;
+  cudaFree(d_getfn_offsets_);
+  d_getfn_offsets_ = nullptr;
+  cudaFree(d_getfn_bytes_);
+  d_getfn_bytes_ = nullptr;
+  cudaFree(d_complex_sub_desc_);
+  d_complex_sub_desc_ = nullptr;
 
   cudaFreeHost(pinned_dirs_);
   pinned_dirs_ = nullptr;
@@ -935,6 +985,14 @@ void CudaTraceBackend::Impl::Reset() {
   n_roots_ = 0;
   ms_layer_idx_ = 0u;
   n_ms_layers_ = 0u;
+  filter_desc_max_ci_ = 0u;
+  filter_n_slot_ = 0u;
+  crystal_config_id_ = 0xFFFFu;
+  final_layer_filter_config_ = FilterConfig{};
+  final_layer_crystal_ = Crystal{};
+  final_layer_axis_dist_ = AxisDistribution{};
+  final_ms_layer_idx_ = 0u;
+  final_ms_prob_ = 0.0f;
   buffers_allocated_ = false;
   in_session_ = false;
   scene_ = nullptr;
@@ -1060,6 +1118,164 @@ void CudaTraceBackend::Impl::EnsureExitCapacity(size_t n) {
   ck(cudaHostAlloc(&pinned_exit_, need * sizeof(ExitRayRecord), cudaHostAllocDefault),
      "cudaHostAlloc pinned_exit (grow)");
   alloc_exit_cap_ = need;
+}
+
+// EnsureFilterBuffers — mirror of Metal `EnsureFilterBuffers`
+// (metal_trace_backend.mm:1090-1226). Builds the per-(layer,ci) DeviceFilterDesc
+// array + the flat GetFn byte stream + Complex sub-desc buffer; uploads them
+// to device memory. For sessions with no Scene/ms_/setting_ entries the four
+// device pointers fall back to 1-byte dummies so the kernel's ms_mode==1 emit
+// gate can always bind valid pointers; a `type=kDeviceFilterTypeNone` dummy
+// desc makes DeviceFilterCheck return true (pass-through).
+//
+// Single-CI MVP: max_ci is structurally 1, so `gate_slot = ms_layer_idx`.
+// Multi-CI per-layer crystal pool is 296.6.
+void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
+  // Free any prior session's filter buffers (cudaFree on nullptr is a no-op).
+  cudaFree(d_filter_desc_);       d_filter_desc_       = nullptr;
+  cudaFree(d_getfn_offsets_);     d_getfn_offsets_     = nullptr;
+  cudaFree(d_getfn_bytes_);       d_getfn_bytes_       = nullptr;
+  cudaFree(d_complex_sub_desc_);  d_complex_sub_desc_  = nullptr;
+  filter_desc_max_ci_ = 0u;
+  filter_n_slot_      = 0u;
+
+  auto ck = [this](cudaError_t e, const char* ctx) {
+    if (e != cudaSuccess) {
+      Reset();
+      throw BackendUnavailableError(std::string{"CudaTraceBackend::EnsureFilterBuffers: "} + ctx + ": " +
+                                    cudaGetErrorString(e));
+    }
+  };
+
+  auto alloc_dummies = [&]() {
+    ck(cudaMalloc(&d_filter_desc_, sizeof(DeviceFilterDesc)), "cudaMalloc d_filter_desc (dummy)");
+    DeviceFilterDesc dummy{};
+    dummy.type = kDeviceFilterTypeNone;
+    ck(cudaMemcpy(d_filter_desc_, &dummy, sizeof(DeviceFilterDesc), cudaMemcpyHostToDevice),
+       "cudaMemcpy d_filter_desc (dummy)");
+    uint32_t dummy_offsets[2] = {0u, 0u};
+    ck(cudaMalloc(&d_getfn_offsets_, sizeof(dummy_offsets)), "cudaMalloc d_getfn_offsets (dummy)");
+    ck(cudaMemcpy(d_getfn_offsets_, dummy_offsets, sizeof(dummy_offsets), cudaMemcpyHostToDevice),
+       "cudaMemcpy d_getfn_offsets (dummy)");
+    ck(cudaMalloc(&d_getfn_bytes_, 1u), "cudaMalloc d_getfn_bytes (dummy)");
+    ck(cudaMalloc(&d_complex_sub_desc_, sizeof(DeviceFilterDesc)), "cudaMalloc d_complex_sub_desc (dummy)");
+    filter_desc_max_ci_ = 1u;
+    filter_n_slot_      = 1u;
+  };
+
+  if (spec.scene == nullptr || spec.scene->ms_.empty()) {
+    alloc_dummies();
+    return;
+  }
+
+  size_t n_layers = spec.scene->ms_.size();
+  size_t max_ci   = 0;
+  for (const auto& ms : spec.scene->ms_) {
+    if (ms.setting_.size() > max_ci) {
+      max_ci = ms.setting_.size();
+    }
+  }
+  if (max_ci == 0) {
+    alloc_dummies();
+    return;
+  }
+
+  filter_desc_max_ci_ = static_cast<uint32_t>(max_ci);
+  size_t n_slot = n_layers * max_ci;
+  filter_n_slot_ = static_cast<uint32_t>(n_slot);
+
+  // Build per-slot descriptors + per-slot GetFn byte stripes via a private
+  // proto RNG (private to keep the session's main rng_ pristine for the first
+  // TraceLayer's per-batch MakeCrystal). Hex prism GetFn is shape-invariant
+  // across orientation/aspect, so any sampled instance suffices for the
+  // canonical bytes + GetFn table (mirrors Metal proto_rng pattern).
+  RandomNumberGenerator proto_rng(0xC0FEFEEDu);
+  std::vector<DeviceFilterDesc> descs(n_slot);
+  std::vector<std::vector<uint8_t>> per_slot_bytes(n_slot);
+  std::vector<DeviceFilterDesc> all_sub_descs;
+
+  for (size_t mi = 0; mi < n_layers; ++mi) {
+    const auto& ms = spec.scene->ms_[mi];
+    for (size_t ci = 0; ci < ms.setting_.size(); ++ci) {
+      const auto& setting = ms.setting_[ci];
+      Crystal proto = MakeCrystal(proto_rng, setting.crystal_.param_);
+      size_t slot = mi * max_ci + ci;
+      descs[slot] = detail::BuildDeviceFilterDesc(setting.filter_, proto, setting.crystal_.axis_);
+      per_slot_bytes[slot] = detail::BuildDeviceGetFnBytes(proto);
+      if (descs[slot].type == kDeviceFilterTypeComplex) {
+        const auto* complex_p = std::get_if<ComplexFilterParam>(&setting.filter_.param_);
+        // BuildDeviceFilterDesc produces Complex only when the variant carries
+        // ComplexFilterParam; absence here is a programming error.
+        assert(complex_p != nullptr && "Complex desc type without ComplexFilterParam variant");
+        descs[slot].sub_desc_start = static_cast<uint32_t>(all_sub_descs.size());
+        detail::BuildComplexSubDescs(*complex_p, proto, descs[slot].symmetry, descs[slot].sigma_a,
+                                     descs[slot].d_applicable != 0u, all_sub_descs);
+      }
+    }
+    // Trailing slots (ms.setting_.size() < max_ci) keep zero-init
+    // DeviceFilterDesc{type=kDeviceFilterTypeNone} + empty GetFn stripe, so an
+    // out-of-range gate_slot surfaces as a pass-through true.
+  }
+
+  // Upload descriptors.
+  size_t descs_bytes = n_slot * sizeof(DeviceFilterDesc);
+  ck(cudaMalloc(&d_filter_desc_, descs_bytes), "cudaMalloc d_filter_desc");
+  ck(cudaMemcpy(d_filter_desc_, descs.data(), descs_bytes, cudaMemcpyHostToDevice), "cudaMemcpy d_filter_desc");
+
+  // Upload GetFn prefix-sum offsets + flat byte stream.
+  std::vector<uint32_t> offsets(n_slot + 1u, 0u);
+  for (size_t i = 0; i < n_slot; ++i) {
+    offsets[i + 1] = offsets[i] + static_cast<uint32_t>(per_slot_bytes[i].size());
+  }
+  size_t offsets_bytes = offsets.size() * sizeof(uint32_t);
+  ck(cudaMalloc(&d_getfn_offsets_, offsets_bytes), "cudaMalloc d_getfn_offsets");
+  ck(cudaMemcpy(d_getfn_offsets_, offsets.data(), offsets_bytes, cudaMemcpyHostToDevice),
+     "cudaMemcpy d_getfn_offsets");
+
+  size_t total_bytes = offsets.back();
+  size_t alloc_bytes = std::max<size_t>(total_bytes, 1u);  // 1-byte floor so the buffer is always bindable
+  ck(cudaMalloc(&d_getfn_bytes_, alloc_bytes), "cudaMalloc d_getfn_bytes");
+  if (total_bytes > 0) {
+    std::vector<uint8_t> flat(total_bytes, 0u);
+    for (size_t i = 0; i < n_slot; ++i) {
+      if (!per_slot_bytes[i].empty()) {
+        std::memcpy(flat.data() + offsets[i], per_slot_bytes[i].data(), per_slot_bytes[i].size());
+      }
+    }
+    ck(cudaMemcpy(d_getfn_bytes_, flat.data(), total_bytes, cudaMemcpyHostToDevice), "cudaMemcpy d_getfn_bytes");
+  }
+
+  // Upload Complex sub-descs (1-byte dummy fallback when none present, so the
+  // kernel pointer is always bindable; DeviceFilterCheck only reads through it
+  // on Complex slots).
+  size_t sub_desc_bytes = all_sub_descs.size() * sizeof(DeviceFilterDesc);
+  size_t sub_alloc_bytes = std::max<size_t>(sub_desc_bytes, sizeof(DeviceFilterDesc));
+  ck(cudaMalloc(&d_complex_sub_desc_, sub_alloc_bytes), "cudaMalloc d_complex_sub_desc");
+  if (sub_desc_bytes > 0) {
+    ck(cudaMemcpy(d_complex_sub_desc_, all_sub_descs.data(), sub_desc_bytes, cudaMemcpyHostToDevice),
+       "cudaMemcpy d_complex_sub_desc");
+  }
+
+  // Capture final-layer host filter state — DrainExits applies FilterSpec on
+  // records tagged with the final ms_layer_idx (mirrors Metal last_layer_*).
+  // Single-CI MVP: take setting_[0] of the last MS layer.
+  const auto& last_ms_layer = spec.scene->ms_.back();
+  if (!last_ms_layer.setting_.empty()) {
+    const auto& last_setting = last_ms_layer.setting_[0];
+    final_layer_filter_config_ = last_setting.filter_;
+    RandomNumberGenerator drain_proto_rng(0xC0FEFEEDu);
+    final_layer_crystal_ = MakeCrystal(drain_proto_rng, last_setting.crystal_.param_);
+    final_layer_axis_dist_ = last_setting.crystal_.axis_;
+  }
+  final_ms_layer_idx_ = static_cast<uint8_t>(n_layers - 1u);
+  final_ms_prob_ = last_ms_layer.prob_;
+
+  // crystal_config_id_ for DeviceFilterMatchCrystal. Mirrors Metal line 1705-
+  // 1707: when the source crystal has no config_id (kInvalidId), surface
+  // 0xFFFFu so a Crystal-type filter never matches by accident.
+  crystal_config_id_ = (final_layer_crystal_.config_id_ == kInvalidId)
+                          ? 0xFFFFu
+                          : static_cast<uint32_t>(final_layer_crystal_.config_id_);
 }
 
 CudaTraceBackend::CudaTraceBackend(Logger* logger) : impl_(std::make_unique<Impl>()) {
@@ -1217,6 +1433,18 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
       impl_->gate_ray_count_ = 0;
       impl_->gate_seeded_ = true;
     }
+    // Drain RNG re-seeds every BeginSession (mirrors Metal's drains_per_session
+    // reset). Stateful re-seed is correct here because the drain stream is
+    // host-only and serves DrainExits, which is called per-session not
+    // per-frame; cross-seed independence comes from spec.seed varying, NOT
+    // from the per-session re-seed gate (the device-side transit/gate counters
+    // discharge that role).
+    impl_->drain_rng_.seed(spec.seed ^ kCudaDrainNonce);
+
+    // Upload per-(layer,ci) filter descriptors so the kernel's emit gate
+    // (ms_mode==1) can call DeviceFilterCheck, and the final-layer host filter
+    // info is captured for DrainExits. Idempotent across BeginSession calls.
+    impl_->EnsureFilterBuffers(spec);
 
     // Per-ray rotation matrix device buffer (cont_cap_ × 9) is allocated
     // lazily in EnsureSessionBuffers, not here — n_roots is unknown until the
