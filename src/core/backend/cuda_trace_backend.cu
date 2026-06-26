@@ -915,10 +915,16 @@ struct CudaTraceBackend::Impl {
   uint8_t          final_ms_layer_idx_ = 0u;
   float            final_ms_prob_      = 0.0f;
   // `drain_rng_` is the host-side prob-draw RNG used by DrainExits. Seeded
-  // once in BeginSession with `spec.seed XOR kCudaDrainNonce` and advanced
-  // monotonically across drains within a session — mirroring Metal's
-  // `impl_->rng` for the final-layer prob check.
+  // ONCE per Run() (first BeginSession, guarded by drain_seeded_) with
+  // `spec.seed XOR kCudaDrainNonce` and advanced monotonically across all
+  // per-wavelength-batch drains — mirroring legacy's single Simulator rng_ and
+  // the transit_/gate_ "seed once, advance" discipline. Re-seeding it on every
+  // BeginSession (as it did before 296.5 Bug B) replays the same mt19937 prefix
+  // each batch, biasing the final-layer prob keep-fraction (measured 0.53 vs
+  // 0.50 → +7.4% energy); corr stayed 0.996 because the bias is spatially
+  // uniform (the "corr masks energy bug" trap).
   std::mt19937 drain_rng_{0u};
+  bool         drain_seeded_ = false;
 
   void Reset();
   void EnsureSessionBuffers(size_t n);
@@ -1459,13 +1465,19 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
       impl_->gate_ray_count_ = 0;
       impl_->gate_seeded_ = true;
     }
-    // Drain RNG re-seeds every BeginSession (mirrors Metal's drains_per_session
-    // reset). Stateful re-seed is correct here because the drain stream is
-    // host-only and serves DrainExits, which is called per-session not
-    // per-frame; cross-seed independence comes from spec.seed varying, NOT
-    // from the per-session re-seed gate (the device-side transit/gate counters
-    // discharge that role).
-    impl_->drain_rng_.seed(spec.seed ^ kCudaDrainNonce);
+    // Drain RNG: seed ONCE per Run() and advance across all per-wavelength-batch
+    // BeginSession calls, exactly like the transit_/gate_ counters above. The
+    // earlier "re-seed every BeginSession" assumed DrainExits is called
+    // per-session-not-per-frame — false: BeginSession runs per wavelength batch
+    // (same spec.seed each time), so reseeding replayed one mt19937 prefix every
+    // batch and biased the final-layer prob keep-fraction (296.5 Bug B). The
+    // drain_seeded_ guard mirrors transit_seeded_/gate_seeded_; cross-seed
+    // independence comes from spec.seed varying between runs (fresh Impl → guard
+    // re-armed). See [[project_scrum296_progress_filter_blocked]].
+    if (!impl_->drain_seeded_) {
+      impl_->drain_rng_.seed(spec.seed ^ kCudaDrainNonce);
+      impl_->drain_seeded_ = true;
+    }
 
     // Upload per-(layer,ci) filter descriptors so the kernel's emit gate
     // (ms_mode==1) can call DeviceFilterCheck, and the final-layer host filter
