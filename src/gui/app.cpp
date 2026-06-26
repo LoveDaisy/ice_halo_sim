@@ -623,7 +623,7 @@ void CalibrateQualityThreshold() {
   // Uses kCalibrationWindowMs (fixed) instead of kCommitIntervalMs so that changing
   // the commit interval doesn't accidentally tighten/loosen the quality gate.
   double rays_per_window = static_cast<double>(stats[0].sim_ray_num) * kCalibrationWindowMs / elapsed_ms;
-  auto threshold = std::max(kMinRaysFloor, static_cast<unsigned long>(rays_per_window * kCalibrationFraction));
+  auto threshold = std::max(kMinRaysFloor, static_cast<unsigned long long>(rays_per_window * kCalibrationFraction));
 
   g_server_poller.SetCalibratedThreshold(threshold);
   GUI_LOG_INFO("[Calibration] done in {:.0f}ms: {} rays, {:.0f} rays/window({}ms), threshold={}", elapsed_ms,

@@ -50,7 +50,7 @@ constexpr int kQualityGateTimeoutMs = 500;
 // Floor for the adaptive quality gate threshold (min sim_ray_num for texture upload).
 // After calibration, the actual threshold may be higher (adapted to platform throughput).
 // This floor ensures Windows (lower throughput) never drops below a safe minimum.
-constexpr unsigned long kMinRaysFloor = 5000;
+constexpr unsigned long long kMinRaysFloor = 5000;
 
 // SliderWithInput / control alignment layout constants
 constexpr float kLabelColWidth = 70.0f;

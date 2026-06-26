@@ -541,7 +541,7 @@ static LUMICE_ErrorCode JsonToScene(const nlohmann::json& scene, LUMICE_Config* 
       out->ray_num = 0;
     } else if (rn.is_number()) {
       out->infinite = 0;
-      out->ray_num = rn.get<unsigned long>();
+      out->ray_num = rn.get<LUMICE_RayCount>();
     } else {
       return LUMICE_ERR_INVALID_VALUE;
     }

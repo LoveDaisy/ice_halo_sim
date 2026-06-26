@@ -150,7 +150,7 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
   // transparency; existing keys (mode/workers/cores/rays/rays_per_sec) are kept.
   auto t_run_start = std::chrono::steady_clock::now();
   auto t_active_start = t_run_start;
-  unsigned long rays_at_active_start = 0;
+  LUMICE_RayCount rays_at_active_start = 0;
   bool active_started = false;
   while (true) {
     std::this_thread::sleep_for(kBenchmarkPollInterval);
@@ -160,7 +160,7 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
       continue;
     }
     bool have_stats = LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) == LUMICE_OK;
-    unsigned long cur_rays = have_stats ? stats[0].sim_ray_num : 0;
+    LUMICE_RayCount cur_rays = have_stats ? stats[0].sim_ray_num : 0;
     auto now = std::chrono::steady_clock::now();
 
     // Mark end-of-setup the first time tracing has produced rays.
@@ -172,7 +172,7 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
 
     if (state == LUMICE_SERVER_IDLE && cur_rays > 0) {
       auto t_end = now;
-      unsigned long r_end = cur_rays;
+      LUMICE_RayCount r_end = cur_rays;
       double wall_sec = std::chrono::duration<double>(t_end - t_run_start).count();
       double setup_sec = std::chrono::duration<double>(t_active_start - t_run_start).count();
       double active_sec = std::chrono::duration<double>(t_end - t_active_start).count();
