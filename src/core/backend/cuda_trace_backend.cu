@@ -138,6 +138,11 @@ constexpr float kCudaFaceCoplanarFloor = 1e-2f;
 // host-side gate-seed derivation.
 constexpr uint32_t kCudaTransitNonce = 0xA5A5A5A5u;
 constexpr uint32_t kCudaGateNonce    = 0x5A5A5A5Au;
+// Device root-gen PCG nonce (296.6). gen_root_kernel seeds each ray on
+// (gen_seed = spec.seed ^ kCudaGenNonce, gen_ray_base + tid); the nonce keeps the
+// gen stream disjoint from transit/gate/drain so the same spec.seed produces
+// independent draws across the four streams.
+constexpr uint32_t kCudaGenNonce     = 0x3C9A7F11u;
 // DrainExits host-side prob draw nonce (296.5). The final-layer drain runs its
 // own RNG stream independent of the device-side gate/transit streams so a
 // session that re-seeds (BeginSession) cleanly resets the drain sequence
@@ -226,6 +231,22 @@ lm_pcg::GenRootKernelParams BuildTransitGpParams(const AxisDistribution& axis_di
   gp.roll_mean_rad = axis_dist.roll_dist.mean * math::kDegreeToRad;
   gp.roll_std_rad  = axis_dist.roll_dist.std  * math::kDegreeToRad;
   gp.roll_pad      = 0.0f;
+  return gp;
+}
+
+// Build the gen-form GenRootKernelParams for the device root sampler
+// (gen_root_kernel, 296.6). Reuses BuildTransitGpParams for the orientation +
+// geometry fields (identical), then fills the sun cone + wl_pool_size that the
+// gen kernel additionally needs. Mirrors Metal BuildGenRootParams
+// (metal_trace_backend.mm:1413-1415 sun conversion). Caller fills gen_seed /
+// gen_ray_base from the Impl gen_seed_ / gen_ray_count_ stream.
+lm_pcg::GenRootKernelParams BuildGenGpParams(const AxisDistribution& axis_dist, uint32_t tri_count,
+                                             uint32_t num_rays, const SunParam& sun, uint32_t wl_pool_size) {
+  lm_pcg::GenRootKernelParams gp = BuildTransitGpParams(axis_dist, tri_count, num_rays);
+  gp.sun_lon        = (sun.azimuth_ + 180.0f) * math::kDegreeToRad;
+  gp.sun_lat        = -sun.altitude_ * math::kDegreeToRad;
+  gp.sun_half_angle = (sun.diameter_ * 0.5f) * math::kDegreeToRad;
+  gp.wl_pool_size   = wl_pool_size;
   return gp;
 }
 
@@ -783,6 +804,110 @@ __global__ void transit_multi_ms_kernel(
   d_root_wl_idx_out[tid] = d_cont_wl_idx_in[tid];
 }
 
+// --- gen_root_kernel -------------------------------------------------------
+//
+// Device-side first-layer root generation (296.6). Replaces the host
+// InitRayFirstMs + 5-way H2D upload: each thread samples a fresh crystal
+// orientation, an incident direction inside the sun cone, an entry triangle +
+// point, and a per-ray wl_idx — writing the same root buffers the trace kernel
+// reads, all device-resident (no host pointers cross the seam, §5 铁律).
+// Mirrors Metal `gen_root_kernel` (lumice_trace.metal:844-942) form-for-form and
+// shares the orientation / cap / triangle samplers via `lm_pcg::*`, so the two
+// GPU backends cannot drift on the PCG hash or the sample logic. The transit
+// kernel above is the per-layer sibling (incident dir from the continuation
+// buffer instead of the sun; weight carried instead of pool-sampled).
+__global__ void gen_root_kernel(float* __restrict__ d_root_d,           // 3 × n_rays (crystal-local)
+                                float* __restrict__ d_root_p,           // 3 × n_rays (crystal-local entry point)
+                                float* __restrict__ d_root_w,           // n_rays (spd weight)
+                                uint32_t* __restrict__ d_root_from_poly,  // n_rays (entry-face poly id)
+                                float* __restrict__ d_root_rot,         // 9 × n_rays (crystal→world)
+                                uint32_t* __restrict__ d_root_wl_idx,   // n_rays (per-ray wl index)
+                                const float* __restrict__ d_tri_vtx,    // 9 × tri_cnt
+                                const float* __restrict__ d_tri_norm,   // 3 × tri_cnt
+                                const float* __restrict__ d_tri_area,   // tri_cnt
+                                const uint16_t* __restrict__ d_tri_to_poly,  // tri_cnt
+                                const WlEntry* __restrict__ d_wl_pool,  // wl_pool_size entries
+                                lm_pcg::GenRootKernelParams gp,
+                                uint32_t n_rays) {
+  const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid >= n_rays || gp.tri_count == 0u) {
+    return;
+  }
+  const uint32_t global_idx = gp.gen_ray_base + tid;
+
+  // Per-ray wavelength (slot 20, isolated from the orientation/triangle draws
+  // below — mirrors MSL gen_root_kernel:881-895). The wl_idx is the photon's
+  // lifetime tag: it selects spd_weight here and n_idx in the trace kernel.
+  lm_pcg::PcgStream wl_stream;
+  wl_stream.seed       = gp.gen_seed;
+  wl_stream.global_idx = global_idx;
+  wl_stream.slot       = 20u;
+  uint32_t wl_idx = static_cast<uint32_t>(lm_pcg::pcg_uniform(wl_stream) * static_cast<float>(gp.wl_pool_size));
+  if (wl_idx >= gp.wl_pool_size) {
+    wl_idx = gp.wl_pool_size - 1u;  // guard pcg_uniform → 1.0 rounding
+  }
+  d_root_wl_idx[tid] = wl_idx;
+
+  // 1. Crystal orientation → rotation matrix.
+  lm_pcg::PcgStream stream;
+  stream.seed       = gp.gen_seed;
+  stream.global_idx = global_idx;
+  stream.slot       = 0u;
+  float lon = 0.0f;
+  float lat = 0.0f;
+  float roll = 0.0f;
+  lm_pcg::sample_lat_lon_roll(stream, gp, lon, lat, roll);
+  float mat9[9];
+  lm_pcg::build_crystal_rotation_9(lon, lat, roll, mat9);
+
+  // 2. Incident direction in the sun cone (WORLD space) → crystal-local.
+  float d_world[3];
+  lm_pcg::sample_sph_cap(stream, gp.sun_lon, gp.sun_lat, gp.sun_half_angle, d_world);
+  float d_crystal[3];
+  lm_pcg::apply_inverse_mat9(mat9, d_world, d_crystal);
+
+  // 3. Triangle area × facing weighted pick → uniform point on the chosen tri.
+  float proj_prob[lm_pcg::kMaxTriPerKernel];
+  uint32_t n_tri = gp.tri_count;
+  if (n_tri > lm_pcg::kMaxTriPerKernel) {
+    n_tri = lm_pcg::kMaxTriPerKernel;  // defensive; host already throw'd otherwise
+  }
+  for (uint32_t t = 0u; t < n_tri; ++t) {
+    float dot = d_crystal[0] * d_tri_norm[t * 3u + 0u] + d_crystal[1] * d_tri_norm[t * 3u + 1u] +
+                d_crystal[2] * d_tri_norm[t * 3u + 2u];
+    proj_prob[t] = fmaxf(-dot * d_tri_area[t], 0.0f);
+  }
+  float u_cat = lm_pcg::pcg_uniform(stream);
+  uint32_t tri_id = lm_pcg::categorical_sample(proj_prob, n_tri, u_cat);
+  float p[3];
+  lm_pcg::sample_triangle(stream, d_tri_vtx + tri_id * 9u, p);
+
+  // 4. tri_to_poly. kInvalidId → zero-weight drop (InitRay_p_fid fallback).
+  uint16_t to_face_u16 = d_tri_to_poly[tri_id];
+  float weight = d_wl_pool[wl_idx].spd_weight;
+  constexpr uint16_t kInvalidIdU16 = 0xffffu;
+  uint32_t to_face_u32;
+  if (to_face_u16 == kInvalidIdU16) {
+    weight = 0.0f;
+    to_face_u32 = 0xFFFFFFFFu;
+  } else {
+    to_face_u32 = static_cast<uint32_t>(to_face_u16);
+  }
+
+  // 5. Emit root buffers (crystal-local d/p, crystal→world rot for invariant-6).
+  d_root_d[tid * 3u + 0u] = d_crystal[0];
+  d_root_d[tid * 3u + 1u] = d_crystal[1];
+  d_root_d[tid * 3u + 2u] = d_crystal[2];
+  d_root_p[tid * 3u + 0u] = p[0];
+  d_root_p[tid * 3u + 1u] = p[1];
+  d_root_p[tid * 3u + 2u] = p[2];
+  d_root_w[tid] = weight;
+  d_root_from_poly[tid] = to_face_u32;
+  for (uint32_t k = 0u; k < 9u; ++k) {
+    d_root_rot[tid * 9u + k] = mat9[k];
+  }
+}
+
 }  // namespace
 
 bool CudaDeviceAvailable() {
@@ -914,6 +1039,18 @@ struct CudaTraceBackend::Impl {
   uint32_t gate_seed_      = 0u;
   size_t   gate_ray_count_ = 0;
   bool     gate_seeded_    = false;
+
+  // --- Device root-gen PCG state (296.6) -----------------------------------
+  // gen_root_kernel's stream. Same monotone-counter discipline as transit_/gate_:
+  // gen_ray_count_ advances by n per first-layer dispatch and is NOT reset across
+  // batches (gen_seeded_ guards the one-time reset), so (gen_seed_, gen_ray_count_
+  // + tid) stays disjoint per (batch, tid) — re-using global_idx collapses crystal
+  // orientation sampling across batches (scrum-267.3 lesson). disable_device_gen_
+  // (LUMICE_DISABLE_DEVICE_GEN) forces the host InitRayFirstMs fallback.
+  uint32_t gen_seed_      = 0u;
+  size_t   gen_ray_count_ = 0;
+  bool     gen_seeded_    = false;
+  bool     disable_device_gen_ = false;
 
   // --- MS layer tracking (296.4) -------------------------------------------
   // Populated by BeginSession from spec.scene->ms_.size() and advanced by
@@ -1524,6 +1661,7 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     // first-seeding gate, see metal_trace_backend.mm:2037).
     impl_->transit_seed_ = spec.seed ^ kCudaTransitNonce;
     impl_->gate_seed_    = spec.seed ^ kCudaGateNonce;
+    impl_->gen_seed_     = spec.seed ^ kCudaGenNonce;
     if (!impl_->transit_seeded_) {
       impl_->transit_ray_count_ = 0;
       impl_->transit_seeded_ = true;
@@ -1531,6 +1669,13 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     if (!impl_->gate_seeded_) {
       impl_->gate_ray_count_ = 0;
       impl_->gate_seeded_ = true;
+    }
+    if (!impl_->gen_seeded_) {
+      impl_->gen_ray_count_ = 0;
+      impl_->gen_seeded_ = true;
+      // LUMICE_DISABLE_DEVICE_GEN escape hatch — resolve once per session start
+      // (host InitRayFirstMs fallback). Mirrors Metal's disable_device_gen_.
+      impl_->disable_device_gen_ = env::DisableDeviceGen(wl_logger);
     }
     // Drain RNG: seed ONCE per Run() and advance across all per-wavelength-batch
     // BeginSession calls, exactly like the transit_/gate_ counters above. The
@@ -1654,8 +1799,28 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
 
   cudaEventRecord(impl_->ev_start_h2d_);
 
-  if (!roots.is_device) {
-    // ── Host-roots path (first MS layer or single-MS session) ──────────────
+  if (!roots.is_device && !impl_->disable_device_gen_) {
+    // ── Device root-gen path (296.6) ───────────────────────────────────────
+    // gen_root_kernel samples orientation, the sun-cone incident direction,
+    // entry point + per-ray wl on device and writes the root buffers directly —
+    // no host InitRayFirstMs, no H2D (host pointers do not cross the seam, §5
+    // 铁律). Geometry is the BeginSession-uploaded tri pool (tri_cnt ≤ 64 is
+    // enforced there). Mirrors Metal's device-gen GenerateFirstLayerRootsForCi.
+    // impl_->rng_ stays pristine — the device PCG stream owns the sampling.
+    lm_pcg::GenRootKernelParams gp =
+        BuildGenGpParams(ms_setting.crystal_.axis_, impl_->tri_cnt_, static_cast<uint32_t>(n),
+                         impl_->scene_->light_source_.param_, impl_->wl_pool_size_);
+    gp.gen_seed     = impl_->gen_seed_;
+    gp.gen_ray_base = NarrowPcgRayBase(impl_->gen_ray_count_, n, "cuda-gen");
+    uint32_t grid = (static_cast<uint32_t>(n) + 255u) / 256u;
+    gen_root_kernel<<<grid, 256>>>(impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
+                                   impl_->d_rot_c2w_, impl_->d_root_wl_idx_, impl_->d_tri_vtx_, impl_->d_tri_norm_,
+                                   impl_->d_tri_area_, impl_->d_tri_to_poly_, impl_->d_wl_pool_, gp,
+                                   static_cast<uint32_t>(n));
+    ck_reset(cudaPeekAtLastError(), "gen_root_kernel launch");
+    impl_->gen_ray_count_ += n;  // monotone across batches (disjoint PCG ranges)
+  } else if (!roots.is_device) {
+    // ── Host-roots fallback (InitRayFirstMs + H2D; LUMICE_DISABLE_DEVICE_GEN) ─
     // Host-side root-ray generation, mirroring cpu_trace_backend.cpp:135-140.
     // Build a fresh Crystal per batch via MakeCrystal(rng_, param_) so the
     // crystal-orientation RNG draw stays consistent with the CPU oracle's

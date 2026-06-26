@@ -816,25 +816,9 @@ kernel void trace_layer_kernel(
 // unqualified names that gen_root_kernel / transit_root_kernel / sample_sph_cap
 // call against.
 
-// SampleSphCapPoint (geo3d.cpp:171-205). Inputs already in radians.
-inline void sample_sph_cap(thread PcgStream& s,
-                           float lon, float lat, float half_angle,
-                           thread float* out_d) {
-  float c_cap = cos(half_angle);
-  float u = pcg_uniform(s);
-  float x = u + (1.0f - u) * c_cap;
-  float r = sqrt(max(1.0f - x * x, 0.0f));
-  float phi = pcg_uniform(s) * 2.0f * M_PI_F;
-  float y = cos(phi) * r;
-  float z = sin(phi) * r;
-  float c_lon = cos(lon);
-  float s_lon = sin(lon);
-  float c_lat = cos(lat);
-  float s_lat = sin(lat);
-  out_d[0] = c_lon * c_lat * x - s_lon * y - c_lon * s_lat * z;
-  out_d[1] = s_lon * c_lat * x + c_lon * y - s_lon * s_lat * z;
-  out_d[2] = s_lat * x + c_lat * z;
-}
+// sample_sph_cap (SampleSphCapPoint, geo3d.cpp:171-205) is single-sourced in
+// ../shared/pcg_shared.h (296.6), available unqualified via `using namespace
+// lm_pcg`.
 
 // SampleTrianglePoint / RandomSample (categorical) — single-sourced in
 // ../shared/pcg_shared.h (scrum-cuda-backend-complete 296.4). Available

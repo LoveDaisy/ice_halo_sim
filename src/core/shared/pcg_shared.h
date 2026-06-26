@@ -296,6 +296,26 @@ LM_FN void sample_triangle(LM_THREAD PcgStream& s, LM_DEVICE const float* vtx9, 
   }
 }
 
+// SampleSphCapPoint (geo3d.cpp:171-205). Inputs already in radians. Single source
+// for the MSL + CUDA gen_root_kernel (296.6): samples an incident direction
+// within a cone of half_angle around the sun direction (lon, lat).
+LM_FN void sample_sph_cap(LM_THREAD PcgStream& s, float lon, float lat, float half_angle, LM_THREAD float* out_d) {
+  float c_cap = LM_COS(half_angle);
+  float u = pcg_uniform(s);
+  float x = u + (1.0f - u) * c_cap;
+  float r = LM_SQRT(LM_FMAX(1.0f - x * x, 0.0f));
+  float phi = pcg_uniform(s) * 2.0f * LM_PI_F;
+  float y = LM_COS(phi) * r;
+  float z = LM_SIN(phi) * r;
+  float c_lon = LM_COS(lon);
+  float s_lon = LM_SIN(lon);
+  float c_lat = LM_COS(lat);
+  float s_lat = LM_SIN(lat);
+  out_d[0] = c_lon * c_lat * x - s_lon * y - c_lon * s_lat * z;
+  out_d[1] = s_lon * c_lat * x + c_lon * y - s_lon * s_lat * z;
+  out_d[2] = s_lat * x + c_lat * z;
+}
+
 // RandomSample (geo3d.cpp:112-150) — categorical CDF with negative-weight clip.
 // Mirrors host behavior: non-positive total falls back to bin 0.
 LM_FN uint32_t categorical_sample(LM_THREAD const float* weights, uint32_t n, float u_in) {
