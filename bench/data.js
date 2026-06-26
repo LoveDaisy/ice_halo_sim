@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782478807567,
+  "lastUpdate": 1782478810143,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -13959,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 87.9,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5c9c62a9719c8db0cd540c81261e3b3d55b6f615",
+          "message": "Merge pull request #148 from LoveDaisy/feat/cuda-backend-complete\n\nfeat(cuda): CUDA backend complete (scrum-296) — Metal 功能对齐 + 吞吐就绪",
+          "timestamp": "2026-06-26T20:53:54+08:00",
+          "tree_id": "b5aacabd73d8a1a44c91f040ab1ef998e00536d0",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5c9c62a9719c8db0cd540c81261e3b3d55b6f615"
+        },
+        "date": 1782478809352,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 69.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 86.9,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 95.7,
             "unit": "%"
           }
         ]
