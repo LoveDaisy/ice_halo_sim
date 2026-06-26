@@ -168,6 +168,26 @@ TEST(ConfigSnapshot, ApplyToRestoresConfigFieldsAndPreservesRuntimeState) {
   EXPECT_FALSE(target.save_texture);
 }
 
+TEST(ConfigSnapshot, StatsRayCountsNotClearedByApplyTo) {
+  // Regression (task-fix-stats-ray-count-u32-overflow): GUI stats fields are runtime
+  // state, so ApplyTo (which restores config fields) must leave them untouched — here
+  // shown with > 2^32 values that ApplyTo preserves verbatim.
+  // NOTE: the 64-bit *width* guarantee (the actual Windows truncation fix) is enforced
+  // at compile time by the static_asserts in lumice.h and test_c_api.cpp, NOT by this
+  // test — on a 64-bit-`unsigned long` platform (Mac/Linux) this passes even pre-fix.
+  GuiState source = InitDefaultState();
+  auto snap = GuiState::ConfigSnapshot::From(source);
+
+  GuiState target = InitDefaultState();
+  target.stats_ray_seg_num = 9'000'000'000ULL;  // > UINT32_MAX (4'294'967'295)
+  target.stats_sim_ray_num = 5'000'000'000ULL;
+
+  snap.ApplyTo(target);
+
+  EXPECT_EQ(target.stats_ray_seg_num, 9'000'000'000ULL);
+  EXPECT_EQ(target.stats_sim_ray_num, 5'000'000'000ULL);
+}
+
 TEST(ConfigSnapshot, RoundTripFromThenApplyRestoresConfig) {
   GuiState original = MakeModifiedState();
   auto snap = GuiState::ConfigSnapshot::From(original);

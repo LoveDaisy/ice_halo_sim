@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "gui/gui_constants.hpp"
+#include "include/lumice.h"  // LUMICE_RayCount (64-bit ray-count type)
 
 namespace lumice::gui {
 
@@ -532,11 +533,11 @@ struct GuiState {
   SimState sim_state = SimState::kIdle;
 
   // Stats from last poll
-  unsigned long stats_ray_seg_num = 0;
-  unsigned long stats_sim_ray_num = 0;
-  float snapshot_intensity = 0;            // Per-pixel landed intensity for XYZ→RGB normalization
-  int effective_pixels = 0;                // Non-zero pixel count (for stats display)
-  unsigned long texture_upload_count = 0;  // Cumulative texture uploads (diagnostic counter)
+  LUMICE_RayCount stats_ray_seg_num = 0;
+  LUMICE_RayCount stats_sim_ray_num = 0;
+  float snapshot_intensity = 0;                 // Per-pixel landed intensity for XYZ→RGB normalization
+  int effective_pixels = 0;                     // Non-zero pixel count (for stats display)
+  unsigned long long texture_upload_count = 0;  // Cumulative texture uploads (diagnostic counter)
 
   // Auto-EV runtime state (display layer only, not persisted, not in ConfigSnapshot)
   float p99_raw_y = 0.0f;       // Un-normalized P99 Y value; updated each texture upload

@@ -15,6 +15,16 @@
 #include "core/def.hpp"
 #include "include/lumice.h"
 
+// Regression guard (task-fix-stats-ray-count-u32-overflow): ray-count fields must be
+// 64-bit so totals > 2^32 never truncate on Windows, where `unsigned long` is 32-bit
+// (the status-bar ray-count rollover reported by Windows users). These field-level
+// asserts complement the header-level guard in lumice.h: they verify the struct fields
+// actually use the 64-bit type, not just that the typedef is wide enough.
+static_assert(sizeof(((LUMICE_StatsResult*)nullptr)->sim_ray_num) >= 8, "stats sim_ray_num must be 64-bit");
+static_assert(sizeof(((LUMICE_StatsResult*)nullptr)->ray_seg_num) >= 8, "stats ray_seg_num must be 64-bit");
+static_assert(sizeof(((LUMICE_StatsResult*)nullptr)->crystal_num) >= 8, "stats crystal_num must be 64-bit");
+static_assert(sizeof(((LUMICE_Config*)nullptr)->ray_num) >= 8, "config ray_num must be 64-bit");
+
 TEST(CrystalMeshApi, PrismVerticesAndEdges) {
   LUMICE_CrystalMesh mesh{};
   const char* json = R"({"type": "prism", "shape": {"height": 1.0}})";
@@ -488,6 +498,22 @@ TEST(ParseConfigApi, MinimalPrismConfig) {
   EXPECT_EQ(config.renderers[0].resolution_w, 800);
   EXPECT_EQ(config.renderers[0].resolution_h, 400);
   EXPECT_FLOAT_EQ(config.renderers[0].opacity, 1.0f);
+}
+
+
+TEST(ParseConfigApi, RayNumAbove32BitNotTruncated) {
+  // Regression (task-fix-stats-ray-count-u32-overflow): config ray_num was parsed via
+  // `rn.get<unsigned long>()`, truncating to 32-bit on Windows. A finite ray_num above
+  // 2^32 must round-trip through LUMICE_ParseConfigString intact.
+  auto root = nlohmann::json::parse(MakeMinimalConfigJson());
+  const LUMICE_RayCount kBigRayNum = 5'000'000'000ULL;  // > UINT32_MAX (4'294'967'295)
+  root["scene"]["ray_num"] = kBigRayNum;
+
+  LUMICE_Config config{};
+  EXPECT_EQ(LUMICE_ParseConfigString(root.dump().c_str(), &config), LUMICE_OK);
+  EXPECT_EQ(config.infinite, 0);
+  // Pre-fix on Windows this truncated to 705'032'704; post-fix it holds the full value.
+  EXPECT_EQ(config.ray_num, kBigRayNum);
 }
 
 

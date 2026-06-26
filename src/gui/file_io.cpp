@@ -981,7 +981,7 @@ void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
 
   // Scene: simulation
   out->infinite = state.sim.infinite ? 1 : 0;
-  out->ray_num = static_cast<unsigned long>(state.sim.ray_num_millions * 1e6f);
+  out->ray_num = static_cast<LUMICE_RayCount>(state.sim.ray_num_millions * 1e6f);
   out->max_hits = state.sim.max_hits;
 }
 

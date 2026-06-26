@@ -16,8 +16,8 @@ namespace lumice::gui {
 struct PollerData {
   bool valid = false;  // Set to true by worker after first successful poll
   LUMICE_ServerState server_state = LUMICE_SERVER_IDLE;
-  unsigned long stats_ray_seg_num = 0;
-  unsigned long stats_sim_ray_num = 0;
+  LUMICE_RayCount stats_ray_seg_num = 0;
+  LUMICE_RayCount stats_sim_ray_num = 0;
   std::vector<float> xyz_data;  // XYZ float texture data (for GPU conversion)
   int texture_width = 0;
   int texture_height = 0;
@@ -30,7 +30,7 @@ struct PollerData {
   float intensity_factor = 1.0f;
   int effective_pixels = 0;
   bool has_new_texture = false;
-  unsigned long texture_ray_count = 0;  // Ray count at the time texture data was captured (not global stats)
+  LUMICE_RayCount texture_ray_count = 0;  // Ray count at the time texture data was captured (not global stats)
 };
 
 // Polls the LUMICE server on a background thread (every kPollIntervalMs) and stages
@@ -70,7 +70,7 @@ class ServerPoller {
 
   // Set calibrated quality gate threshold (called once at startup after calibration run).
   // Thread-safe: only called from main thread before any Start().
-  void SetCalibratedThreshold(unsigned long threshold);
+  void SetCalibratedThreshold(unsigned long long threshold);
 
  private:
   enum class State { kPaused, kRunning, kTerminating };
@@ -93,7 +93,7 @@ class ServerPoller {
   // Adaptive quality gate: calibrated threshold set once at startup via SetCalibratedThreshold().
   // If not set (calibrated_ == false), falls back to gui::kMinRaysFloor.
   bool calibrated_{ false };
-  unsigned long calibrated_min_rays_{ 0 };
+  unsigned long long calibrated_min_rays_{ 0 };
 
   // Timeout fallback: force upload if quality gate has been rejecting for too long.
   // Reset in Start(), updated in PollOnce() on each quality_ok pass.

@@ -973,11 +973,11 @@ void RenderStatusBar(float window_width, float window_height) {
   // Stats
   if (g_state.stats_sim_ray_num > 0) {
     ImGui::SameLine();
-    unsigned long n = g_state.stats_sim_ray_num;
+    LUMICE_RayCount n = g_state.stats_sim_ray_num;
     char buf[64];
-    if (n >= 1'000'000'000UL) {
+    if (n >= 1'000'000'000ULL) {
       snprintf(buf, sizeof(buf), "| Rays: %.1f x10^9", n / 1e9);
-    } else if (n >= 1'000'000UL) {
+    } else if (n >= 1'000'000ULL) {
       snprintf(buf, sizeof(buf), "| Rays: %.1f x10^6", n / 1e6);
     } else {
       snprintf(buf, sizeof(buf), "| Rays: %.1f x10^3", n / 1e3);

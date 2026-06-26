@@ -53,6 +53,18 @@ typedef enum LUMICE_ServerState_ {
   LUMICE_SERVER_NOT_READY,
 } LUMICE_ServerState;
 
+// =============== Ray Count Type ===============
+// 64-bit count type for ray / ray-segment / crystal totals. Must stay >= 64-bit:
+// `unsigned long` is only 32-bit on Windows (LLP64), which silently truncated
+// totals above 2^32 (the status-bar ray-count rollover reported by Windows users).
+// Used for every field that carries an actual ray-count value across the C API.
+typedef unsigned long long LUMICE_RayCount;
+#if defined(__cplusplus)
+static_assert(sizeof(LUMICE_RayCount) >= 8, "LUMICE_RayCount must be 64-bit (Windows unsigned long is 32-bit)");
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(LUMICE_RayCount) >= 8, "LUMICE_RayCount must be 64-bit (Windows unsigned long is 32-bit)");
+#endif
+
 // =============== Result Structs ===============
 typedef struct LUMICE_RenderResult_ {
   int renderer_id;
@@ -78,9 +90,9 @@ typedef struct LUMICE_RawXyzResult_ {
 } LUMICE_RawXyzResult;
 
 typedef struct LUMICE_StatsResult_ {
-  unsigned long ray_seg_num;
-  unsigned long sim_ray_num;
-  unsigned long crystal_num;
+  LUMICE_RayCount ray_seg_num;
+  LUMICE_RayCount sim_ray_num;
+  LUMICE_RayCount crystal_num;
   // Sentinel: all zeros (sim_ray_num == 0)
 } LUMICE_StatsResult;
 
@@ -216,8 +228,8 @@ typedef struct LUMICE_Config_ {
   const char* spectrum;  // e.g. "D65", "D50", "A", "E"
 
   // Scene: simulation
-  int infinite;           // 1=infinite rays, 0=finite
-  unsigned long ray_num;  // only used when infinite==0
+  int infinite;             // 1=infinite rays, 0=finite
+  LUMICE_RayCount ray_num;  // only used when infinite==0
   int max_hits;
 
   // Scene: scattering
