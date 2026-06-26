@@ -15,8 +15,9 @@
 //   - path.size_ >= 1 for every emitted record (no MVP zero placeholders left)
 //   - >= 10% of records have path.size_ >= 2 (refraction-after-bounce exists;
 //     guards against the "only entry external reflect captured" failure mode)
-//   - every face id in path is < poly_cnt (no garbage / uint8 truncation past
-//     the supported 8-polygon prism)
+//   - every face id in path is a canonical GetFn face number in [1, poly_cnt]
+//     (DrainExits remaps raw poly indices to legacy/Metal face numbers, 296.5;
+//     the hex prism numbers faces 1-8, so 0 / 255 / >8 = garbage or truncation)
 //   - distinct face ids in path[0] across the test population >= 4 (catches
 //     stuck-at-zero / stuck-at-one regressions)
 
@@ -151,7 +152,9 @@ TEST(CudaRichExit, NonZeroPathContent) {
     }
     distinct_head_faces.insert(rec.path.data_[0]);
     for (uint8_t k = 0u; k < sz; k++) {
-      if (rec.path.data_[k] >= kPolyCnt) {
+      // Canonical GetFn face numbers are 1-indexed (296.5): valid range is
+      // [1, kPolyCnt]; 0 / 255 / > kPolyCnt indicate garbage or uint8 truncation.
+      if (rec.path.data_[k] < 1u || rec.path.data_[k] > kPolyCnt) {
         out_of_range++;
         break;
       }
@@ -204,8 +207,13 @@ TEST(CudaRichExit, ExitFaceIsValid) {
                                   << " has empty path; covered by NonZeroPathContent. "
                                      "ExitFaceIsValid expects empty-path records to be filtered already.";
     const uint8_t tail = rec.path.data_[rec.path.size_ - 1u];
-    EXPECT_LT(tail, kPolyCnt) << "record " << i << ": tail face id " << static_cast<int>(tail)
-                              << " is not a valid prism polygon (< " << static_cast<int>(kPolyCnt) << ").";
+    // DrainExits canonicalises raw poly indices to GetFn face numbers (296.5),
+    // matching legacy/Metal. The hex prism numbers faces 1..8, so a valid tail
+    // is in [1, kPolyCnt]; garbage / truncation lands at 0, 255, or > kPolyCnt.
+    EXPECT_GE(tail, 1u) << "record " << i << ": tail face id " << static_cast<int>(tail)
+                        << " below canonical 1-indexed face range.";
+    EXPECT_LE(tail, kPolyCnt) << "record " << i << ": tail face id " << static_cast<int>(tail)
+                              << " is not a valid prism face (1.." << static_cast<int>(kPolyCnt) << ").";
   }
 }
 
