@@ -818,7 +818,24 @@ void ServerImpl::ConsumeData() {
             first_consume_logged = true;
           }
         } else {
-          ILOG_DEBUG(logger_, "ConsumeData: skip consume (0-exit batch, counter still --)");
+          // 0-exit batch on the exit-seam path (all rays filtered/absorbed →
+          // outgoing_d_ AND rays_ both empty). We deliberately do NOT call
+          // c->Consume() — there is nothing to accumulate and a black batch must
+          // not bias the image. BUT a batch that ran to completion with a
+          // legitimately all-black result is still *valid data*: the simulation
+          // converged, the answer is just zero intensity. We therefore flip
+          // has_ever_consumed_ so GetRawXyzResults reports has_valid_data=true,
+          // and dirty the snapshot so PrepareSnapshot produces a clean zero
+          // frame (without this, an all-black simulation — e.g. an impossible
+          // raypath filter — never sets has_valid_data, so the buffered poller
+          // waits for "valid data" forever and times out at 600s). The legacy
+          // CPU path never hit this because its rays_ is always non-empty, so
+          // has_renderable stayed true; the exit-seam path (Metal + CUDA) is the
+          // first to surface it. See doc/capi-lifecycle-architecture.md
+          // ("zero-output completion").
+          snapshot_dirty_ = true;
+          has_ever_consumed_ = true;
+          ILOG_DEBUG(logger_, "ConsumeData: 0-exit batch (all filtered) — marking valid_data, zero snapshot");
         }
       }
     } else {

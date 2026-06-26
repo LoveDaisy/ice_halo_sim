@@ -35,7 +35,7 @@ import platform
 import numpy as np
 import pytest
 
-from test.e2e.capi_runner import BufferedSimResult, run_scene_capi, run_scene_capi_buffered
+from test.e2e.capi_runner import BufferedSimResult, run_scene_capi_buffered
 from test.e2e._parity_metrics import (
     _raw_corr_ds as _raw_corr_ds_impl,
     _DS_BH,
@@ -115,7 +115,10 @@ def test_cuda_impossible_filter_produces_zero_intensity():
     already locks the legacy side of this contract.
     """
     cfg_path = str(CONFIGS_DIR / "ms_filter_leak_impossible.json")
-    result = run_scene_capi(cfg_path, sim_seed=_SEED, backend="cuda", timeout_sec=_TIMEOUT)
+    # run_scene_capi has no backend routing (it would silently run legacy and set
+    # no LUMICE_TRACE_BACKEND); use the buffered runner, which routes to cuda via
+    # env and still exposes snapshot_intensity. (296.5 test wrote the wrong runner.)
+    result = run_scene_capi_buffered(cfg_path, sim_seed=_SEED, backend="cuda", timeout_sec=_TIMEOUT)
     assert result.routed_backend == "cuda", (
         f"impossible filter test: routed={result.routed_backend!r} (expected 'cuda'); "
         f"environment may have forced fallback"
