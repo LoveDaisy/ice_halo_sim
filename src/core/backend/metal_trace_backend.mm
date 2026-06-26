@@ -37,6 +37,7 @@
 #include "core/math.hpp"
 #include "core/metal_filter_match_src.hpp"
 #include "core/backend/metal_trace_backend.hpp"
+#include "core/backend/wl_pool.hpp"  // WlEntry / ComputeWlPool / ResolveWlPoolSize (296.6 single-sourced)
 // task-#283 (metal-build-time-metallib): build-generated headers — wrap their
 // content in `namespace lumice { ... }`, so they are #included at file scope
 // (NOT inside an open `namespace lumice` or anonymous namespace) to keep the
@@ -158,77 +159,6 @@ float ComputeAz0(const Rotation& rot) {
   return std::atan2(ax_z[1], ax_z[0]);
 }
 
-void ComputeCmf(float wl, float& cie_x, float& cie_y, float& cie_z) {
-  int wl_key = static_cast<int>(wl + 0.5f);
-  if (wl_key < kCmfMinWavelength || wl_key > kCmfMaxWavelength) {
-    cie_x = cie_y = cie_z = 0.0f;
-    return;
-  }
-  int idx = wl_key - kCmfMinWavelength;
-  cie_x = kCmfX[idx];
-  cie_y = kCmfY[idx];
-  cie_z = kCmfZ[idx];
-}
-
-// scrum-268.8 (DR-3): per-ray wavelength pool — host-side mirror of the MSL
-// WlEntry struct in src/core/metal/lumice_trace.metal. sizeof MUST stay == 20 (5 × 4B); reorderings
-// must mirror MSL.
-struct WlEntry {
-  float n_idx;
-  float spd_weight;
-  float cmf_x;
-  float cmf_y;
-  float cmf_z;
-};
-static_assert(sizeof(WlEntry) == 20u,
-              "WlEntry size mismatch — update MSL WlEntry to match host layout");
-
-// Default M = 64 (≈6.25 nm resolution across [380, 780] nm). Owner can override
-// via env var; capped at 255 so a uint8_t wl_idx in ExitRayRecord stays
-// representable end-to-end.
-constexpr uint32_t kWlPoolSizeDefault = 64u;
-constexpr uint32_t kWlPoolSizeMax     = 255u;
-
-uint32_t ResolveWlPoolSize(Logger& logger) {
-  // Reads LUMICE_WL_POOL_SIZE via util/env_knobs (the single registered getenv
-  // site; see doc/env-var-policy.md). Clamp/default semantics unchanged.
-  return env::WlPoolSize(logger, kWlPoolSizeDefault, kWlPoolSizeMax);
-}
-
-// Build the per-(crystal, spectrum) WlEntry table. M >= 1 is the caller's
-// responsibility. illuminant_mode == true samples M wavelengths uniformly with
-// SPD weights from the standard illuminant table; otherwise the pool degenerates
-// to a single entry carrying spec_wl / spec_weight (discrete-wavelength path).
-// For the degenerate case, M is still >= 1 and the first entry is replicated
-// across the rest so PCG % M lookup stays well-defined.
-void ComputeWlPool(const Crystal& crystal,
-                   bool illuminant_mode, IlluminantType illuminant,
-                   float spec_wl, float spec_weight,
-                   uint32_t M, std::vector<WlEntry>& out) {
-  assert(M > 0u);
-  out.resize(M);
-  if (illuminant_mode) {
-    for (uint32_t m = 0; m < M; ++m) {
-      // Mid-point sampling across [380, 780] — preserves the simulator.cpp:663
-      // uniform-PDF semantics (each entry covers a 400/M nm slice, total
-      // weight sums to ~SPD integral × 400 / M).
-      float wl = 380.0f + (static_cast<float>(m) + 0.5f) * 400.0f /
-                          static_cast<float>(M);
-      WlEntry& e = out[m];
-      e.n_idx = crystal.GetRefractiveIndex(wl);
-      e.spd_weight = GetIlluminantSpd(illuminant, wl);
-      ComputeCmf(wl, e.cmf_x, e.cmf_y, e.cmf_z);
-    }
-  } else {
-    WlEntry e0{};
-    e0.n_idx = crystal.GetRefractiveIndex(spec_wl);
-    e0.spd_weight = spec_weight;
-    ComputeCmf(spec_wl, e0.cmf_x, e0.cmf_y, e0.cmf_z);
-    for (uint32_t m = 0; m < M; ++m) {
-      out[m] = e0;
-    }
-  }
-}
 
 size_t ComputeOutCap(size_t n, size_t max_hits) {
   // explore mh16 ~9.8x fan-out; (max_hits*2+4) covers the observed upper
@@ -1323,9 +1253,9 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
     // monotone across batches of the same session.
     GenRootKernelParams gp = BuildGenRootParams(setting, crystal_ray_num);
     gp.gen_seed     = gen_seed_;
-    assert(root_ray_count <= static_cast<size_t>(UINT32_MAX) &&
-           "root_ray_count overflow: TraceLayer must guard can_use_device_gen with UINT32_MAX bound");
-    gp.gen_ray_base = static_cast<uint32_t>(root_ray_count);
+    // 296.6: real runtime guard replacing the no-op-in-Release assert (the
+    // narrowing now throws past UINT32_MAX rather than silently wrapping).
+    gp.gen_ray_base = NarrowPcgRayBase(root_ray_count, crystal_ray_num, "metal-gen-root");
     gp.num_rays     = static_cast<uint32_t>(crystal_ray_num);
     // task-264 gen+trace fusion: stash params for DispatchLayer to encode into
     // the same command buffer as the trace pass. DispatchLayer is guaranteed
@@ -2301,14 +2231,13 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
         }
         // Monotone advance — mirrors gen_root's root_ray_count contract so
         // per-SimBatch transit dispatches on (layer,ci) consume disjoint PCG
-        // ranges. UINT32_MAX bound matches gen_ray_base width (line ~1830).
-        assert(impl_->transit_ray_count_ <= static_cast<size_t>(UINT32_MAX) - ci_n &&
-               "transit_ray_count_ overflow: gen_ray_base width exceeded");
+        // ranges. 296.6: real runtime guard replacing the no-op-in-Release assert
+        // (gen_ray_base width matches the gen-root path).
         auto transit_gp = impl_->BuildTransitRootParams(
             setting, ci_n,
             static_cast<uint32_t>(impl_->ms_idx),
             static_cast<uint32_t>(ci),
-            static_cast<uint32_t>(impl_->transit_ray_count_));
+            NarrowPcgRayBase(impl_->transit_ray_count_, ci_n, "metal-transit"));
         id<MTLCommandBuffer> combined_cb = [impl_->queue commandBuffer];
         impl_->EncodeTransitRoot(combined_cb, transit_gp, in_slot, ci_start);
         // Advance unconditionally now: with the merged CB we no longer probe

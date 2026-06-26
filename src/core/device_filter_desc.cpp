@@ -1,7 +1,5 @@
 #include "core/device_filter_desc.hpp"
 
-#if defined(__APPLE__)
-
 #include <cassert>
 #include <cmath>
 #include <cstdint>
@@ -194,5 +192,3 @@ std::vector<uint8_t> BuildDeviceGetFnBytes(const Crystal& crystal) {
 
 }  // namespace detail
 }  // namespace lumice
-
-#endif  // defined(__APPLE__)

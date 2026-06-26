@@ -146,6 +146,67 @@ jobs:
             build/Release/bin/Lumice.exe
           retention-days: 7
 
+  # CUDA compile-only: nvcc actually compiles the .cu translation units on every
+  # push/PR. No GPU is required (nvcc emits PTX/object from CPU). Runtime and
+  # parity validation still need a GPU runner (dev49) and are intentionally
+  # out of scope here — see issue.md AC6: this job must not be read as
+  # "CUDA all green". The job exists to catch nvcc-only compile/syntax bugs
+  # (e.g. -Werror=switch breaking nvcc, scrum-295 commit 9b9cdacd) without
+  # waiting for the rsync→docker→dev49 loop.
+  #
+  # PTX floor = compute_61 (Pascal/2016+); driver JIT-compiles to native sm on
+  # any GPU >= sm_61. Matches CMakeLists.txt CMAKE_CUDA_ARCHITECTURES default.
+  cuda-compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      # Install only the compiler + cudart dev headers/stubs (~400 MB) rather
+      # than the full ~2 GB toolkit. This is enough for nvcc to compile .cu
+      # files and for CMake's find_package(CUDAToolkit) / CUDA::cudart link
+      # target to resolve. Pinned to CUDA 12.6 (a recent stable release that
+      # still supports compute_61 PTX); if 12-6 packages drift, bump to a
+      # nearby 12.x or switch to Jimver/cuda-toolkit action.
+      - name: Install CUDA toolkit (nvcc + cudart)
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
+            -O cuda-keyring.deb
+          sudo dpkg -i cuda-keyring.deb
+          sudo apt-get update -qq
+          sudo apt-get install -y cuda-nvcc-12-6 cuda-cudart-dev-12-6
+          echo "/usr/local/cuda/bin" >> $GITHUB_PATH
+
+      # Share the CPM cache with the Ubuntu x64 build job: same OS, same
+      # CMakeLists.txt hash → same dependency set. The CUDA-enabled configure
+      # does not pull in new CPM packages (CUDA toolkit is system-installed
+      # above, not via CPM), so cache hit rate is preserved.
+      - name: Cache CPM dependencies
+        uses: actions/cache@v5
+        with:
+          path: cpm_cache
+          key: cpm-ubuntu-x64-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: cpm-ubuntu-x64-
+
+      # BUILD_GUI=OFF avoids OpenGL/X11 deps; BUILD_TEST=OFF skips test
+      # targets (no .cu files live under test/, so coverage is complete).
+      # LUMICE_NATIVE_ARCH=OFF matches the rest of CI.
+      - name: Configure (CUDA compile-only)
+        env:
+          CUDA_PATH: /usr/local/cuda
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TEST=OFF
+          -DBUILD_GUI=OFF
+          -DLUMICE_CUDA_ENABLED=ON
+          -DLUMICE_NATIVE_ARCH=OFF
+
+      # Builds the Lumice CLI; this drives nvcc through cuda_trace_backend.cu
+      # and links CUDA::cudart, exercising both compile and link paths.
+      - name: Build (compiles cuda_trace_backend.cu)
+        run: cmake --build build --parallel
+
   e2e-test:
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04

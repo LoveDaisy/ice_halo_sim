@@ -211,6 +211,7 @@ set(lumice_config_src
 set(lumice_core_src
   "${PROJ_SRC_DIR}/core/backend/cpu_trace_backend.cpp"
   "${PROJ_SRC_DIR}/core/crystal.cpp"
+  "${PROJ_SRC_DIR}/core/device_filter_desc.cpp"
   "${PROJ_SRC_DIR}/core/filter_spec.cpp"
   "${PROJ_SRC_DIR}/core/geo3d.cpp"
   "${PROJ_SRC_DIR}/core/math.cpp"
@@ -229,7 +230,6 @@ set(lumice_core_src
 # for the AC2 regression test).
 if(APPLE)
   list(APPEND lumice_core_src
-    "${PROJ_SRC_DIR}/core/device_filter_desc.cpp"
     "${PROJ_SRC_DIR}/core/metal_filter_match_src.mm"
     "${PROJ_SRC_DIR}/core/backend/metal_trace_backend.mm")
   set_source_files_properties(
@@ -259,7 +259,9 @@ if(APPLE)
   set(LUMICE_METAL_SHARED_HDRS
       "${PROJ_SRC_DIR}/core/shared/lm_shims.h"
       "${PROJ_SRC_DIR}/core/shared/projection_shared.h"
-      "${PROJ_SRC_DIR}/core/shared/optics_shared.h")
+      "${PROJ_SRC_DIR}/core/shared/optics_shared.h"
+      "${PROJ_SRC_DIR}/core/shared/traversal_shared.h"
+      "${PROJ_SRC_DIR}/core/shared/pcg_shared.h")
 
   add_custom_command(
     OUTPUT  "${LUMICE_METAL_AIR}"
@@ -300,9 +302,12 @@ if(APPLE)
 endif()
 
 # CUDA backend (off by default). scrum-cuda-backend-mvp subtask 3:
-# - nvcc 11.6 (dev49 docker image) is the lowest supported toolchain.
-# - compute_86 PTX with sm_89 JIT (Ada Lovelace, RTX 4060 Ti) — see
-#   scratchpad/explore-cuda-step2-derisk/TOOLCHAIN.md.
+# - nvcc 11.6 (dev49 docker image) is the lowest supported toolchain;
+#   CUDA 12.x toolkits also work (still support compute_61).
+# - PTX floor = compute_61 (Pascal, 2016+); driver JITs to native sm on any
+#   GPU >= sm_61, including future cards. Benchmark-fidelity SASS for sm_89
+#   (Ada Lovelace, RTX 4060 Ti on dev49) is out of scope here and handled by
+#   the "CUDA delivery" cluster (scrum-cuda-backend-complete 296.6).
 # - Mac/Windows host builds without nvcc keep BUILD_GUI/perf paths intact when
 #   LUMICE_CUDA_ENABLED is OFF (no enable_language(CUDA) at all).
 if(LUMICE_CUDA_ENABLED)
@@ -311,9 +316,12 @@ if(LUMICE_CUDA_ENABLED)
   set(CMAKE_CUDA_STANDARD 17)
   set(CMAKE_CUDA_STANDARD_REQUIRED ON)
   if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-    # `86-virtual` emits compute_86 PTX only (no SASS); driver JITs to native
-    # sm_89 on Ada. Matches the explore #294 / E2 toolchain probe.
-    set(CMAKE_CUDA_ARCHITECTURES "86-virtual" CACHE STRING "CUDA archs")
+    # `61-virtual` emits compute_61 PTX only (no SASS); driver JITs to native
+    # sm on any GPU >= sm_61. Owner decision 2026-06-25 (296.1): PTX floor
+    # widens forward-compat to Pascal/Turing/Ampere/Ada/Hopper/future cards;
+    # the older `86-virtual` default was an explore #294 dev49 probe artifact
+    # that silently excluded Turing/Pascal.
+    set(CMAKE_CUDA_ARCHITECTURES "61-virtual" CACHE STRING "CUDA archs")
   endif()
   list(APPEND lumice_core_src
     "${PROJ_SRC_DIR}/core/backend/cuda_trace_backend.cu")

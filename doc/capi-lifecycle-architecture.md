@@ -236,6 +236,47 @@ These functions have no shared state and are always thread-safe:
 | `LUMICE_MaxFov(type)` | none | Pure function |
 | `LUMICE_XyzToSrgbUint8(xyz_in, out, count, scale)` | `xyz_in != NULL`, `out != NULL` | Batch conversion |
 
+### §3.6 Zero-output completion contract (all-black simulation)
+
+**Contract**: a simulation that runs to completion but produces *legitimately
+zero* renderable output (every ray filtered or absorbed) MUST still report
+`has_valid_data = 1` once it reaches `LUMICE_SERVER_IDLE`. An all-black image is
+a valid answer, not an "incomplete" state. A buffered poller's completion
+predicate is `has_valid_data && state == IDLE` (see `test/e2e/capi_runner.py`),
+so if `has_valid_data` never flips on an all-black run, the poller waits for
+valid data forever and times out (observed: 600 s hang).
+
+**Mechanism**. `has_valid_data` maps from the server flag `has_ever_consumed_`
+(`server.cpp` `GetRawXyzResults`: `valid_data = has_ever_consumed_`). That flag
+is set when a batch is consumed in `ConsumeData`. Each produced batch carries
+`root_ray_count_ > 0`, which distinguishes it from the queue-shutdown sentinel
+(`rays_` empty AND `root_ray_count_ == 0`); the sentinel breaks the loop and is
+never treated as data.
+
+**The trap (and the fix)**. `ConsumeData` gates consumption on
+`has_renderable = !outgoing_d_.empty() || !rays_.Empty()`. On a *zero-exit
+batch* both are empty, so the batch is correctly **not** accumulated (a black
+batch must not bias the image). The original code left it at that — which on the
+**exit-seam path (Metal + CUDA)** meant `has_ever_consumed_` was never set, and
+an all-black simulation hung the poller. The **legacy CPU path never hit this**
+because its `rays_` is always non-empty (it carries every ray segment, not just
+exits), so `has_renderable` stayed true regardless of filtering. The exit-seam
+path was the first consumer to surface the gap; the impossible-raypath-filter
+parity test (`ms_filter_leak_impossible.json`, all rays filter-fail) is the
+reproducer.
+
+The fix (`server.cpp` `ConsumeData`, the zero-exit `else` branch): on a
+completed zero-exit batch, still **set `has_ever_consumed_ = true`** (the run
+produced valid data — zero intensity) and **set `snapshot_dirty_ = true`** (so
+`PrepareSnapshot` emits a clean zero frame; without it `did_snapshot` stays
+false and no snapshot is ever prepared). It still does **not** call
+`c->Consume()` — there is nothing to accumulate.
+
+> **Lesson**: "valid data" is a *completion* predicate, not a *non-emptiness*
+> predicate. Do not infer completion from the presence of renderable output —
+> they are different questions, and a backend that emits only exits (exit-seam)
+> rather than full ray buffers (legacy) makes the difference observable.
+
 ---
 
 ## §4 Thread Safety Model
@@ -458,5 +499,7 @@ obtained `img_buffer` / `xyz_buffer` pointers. The GUI re-fetches via
 | `src/server/c_api.cpp:313` (`CommitConfigStruct` entry) | §6.2 C Struct path |
 | `src/server/server.cpp:226` (`CommitConfig` entry) | §7 SimData side effects |
 | `src/server/server.cpp:526–527` (`has_ever_consumed_ = false`) | §7.1 Reset sequence |
+| `src/server/server.cpp` `ConsumeData` zero-exit `else` branch (`has_ever_consumed_`/`snapshot_dirty_` on all-black batch) | §3.6 Zero-output completion |
 | `src/server/server.cpp:37–53` (`TicketMutex`) | §4 Thread safety (FIFO mutex) |
 | `test/e2e/test_capi_sentinel_overflow.py` | §5.2 Regression test |
+| `test/parity-cross-backend/backend/test_cuda_filter_parity.py::test_cuda_impossible_filter_produces_zero_intensity` | §3.6 Zero-output reproducer |

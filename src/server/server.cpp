@@ -20,6 +20,9 @@
 #include "config/sim_data.hpp"
 #include "core/def.hpp"
 #include "core/simulator.hpp"
+#if defined(LUMICE_CUDA_ENABLED)
+#include "core/backend/cuda_trace_backend.hpp"  // CudaDeviceAvailable() for ResolveGpuRoute
+#endif
 #include "server/consumer.hpp"
 #include "server/render.hpp"
 #include "server/server.hpp"
@@ -140,6 +143,10 @@ class ServerImpl {
 
   std::atomic_bool work_started_{ false };
   std::atomic_bool scene_gen_active_{ false };  // True while GenerateScene is actively producing batches
+  // task-296.7 instrumentation: ensures the first-kIdle WARN fires exactly once per run.
+  // Reset alongside work_started_ in CommitConfig / Stop so each render cycle re-arms.
+  // mutable: GetStatus() is const but flips this exactly-once flag on first kIdle.
+  mutable std::atomic_bool idle_logged_{ false };
 
   // Preferred trace backend. Cached at server level so the preference survives
   // Stop()/Start() cycles and is the authoritative source for any future
@@ -208,32 +215,52 @@ namespace {
 // GUI reconstructs the server when the Metal checkbox toggles. An env
 // LUMICE_TRACE_BACKEND override (CLI / --benchmark) takes precedence over the
 // preferred_backend argument, mirroring CreateBackend (simulator.cpp).
-bool ResolveMetalRoute(BackendKind preferred_backend, Logger& logger) {
-#if defined(__APPLE__)
+// ResolveGpuRoute — does this backend run the GPU single-engine route
+// (worker_count=1 + large dispatch)? This MUST agree with CreateBackend's actual
+// routing decision (simulator.cpp): if it answers "GPU" but CreateBackend falls
+// back to legacy CPU (e.g. CUDA build with no device), the server would size a
+// single-worker 32768-ray-batch pipeline onto the multi-core CPU path — a severe
+// regression. So the CUDA branch gates on the same CudaDeviceAvailable() probe
+// CreateBackend uses (cached std::once, cheap to call per GenerateScene). Metal
+// stays optimistic on Apple (Metal is effectively always present; a PSO failure
+// degrades to CPU via task-282, the accepted edge case).
+// (296.6: generalized from the former Metal-only ResolveMetalRoute so CUDA also
+// takes the single-engine route — see doc/seam-design.md §5.)
+bool ResolveGpuRoute(BackendKind preferred_backend, Logger& logger) {
+  // Env override wins, mirroring CreateBackend's TraceBackendOverride handling.
   if (std::optional<std::string> override = env::TraceBackendOverride(logger)) {
     const std::string& name = *override;
-    if (name == "metal") {
-      return true;
-    }
     if (name == "cpu_backend" || name == "legacy") {
       return false;
     }
-  }
-  // -Wswitch: exhaustive over BackendKind, no `default:`. CUDA does not route
-  // through the Metal/GPU sizing path until subtask 3 lands the CUDA backend.
-  switch (preferred_backend) {
-    case BackendKind::kMetal:
+#if defined(__APPLE__)
+    if (name == "metal") {
       return true;
-    case BackendKind::kCpu:
-    case BackendKind::kCuda:
-      return false;
-  }
-  return false;
-#else
-  (void)preferred_backend;
-  (void)logger;
-  return false;  // Metal unavailable off-Apple → CPU multi-worker route
+    }
 #endif
+#if defined(LUMICE_CUDA_ENABLED)
+    if (name == "cuda") {
+      return CudaDeviceAvailable();
+    }
+#endif
+    // Unknown / unavailable override name → fall through to preferred_backend.
+  }
+  // preferred_backend. CreateBackend (simulator.cpp) holds the exhaustive
+  // -Wswitch over BackendKind that forces a new enum value to be handled; this
+  // site must AGREE with it (a GPU answer here = single-engine sizing). Written
+  // as guarded early-returns rather than a switch so the all-false config
+  // (non-Apple, non-CUDA build) does not trip bugprone-branch-clone.
+#if defined(__APPLE__)
+  if (preferred_backend == BackendKind::kMetal) {
+    return true;
+  }
+#endif
+#if defined(LUMICE_CUDA_ENABLED)
+  if (preferred_backend == BackendKind::kCuda) {
+    return CudaDeviceAvailable();
+  }
+#endif
+  return false;  // kCpu, or the requested GPU backend is unavailable in this build
 }
 }  // namespace
 
@@ -241,15 +268,20 @@ ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed, BackendKind preferred
     : config_manager_{}, scene_queue_(std::make_shared<Queue<SimBatch>>()),
       data_queue_(std::make_shared<Queue<SimData>>()), status_(ServerStatus::kIdle) {
   preferred_backend_.store(preferred_backend, std::memory_order_release);
-  int worker_count;
-  if (ResolveMetalRoute(preferred_backend, logger_)) {
-    worker_count = 1;  // GPU route: single engine (task-268.7)
+  // NOLINTNEXTLINE(readability-identifier-naming) — local const flag, snake_case is project style for variables.
+  const bool gpu_route = ResolveGpuRoute(preferred_backend, logger_);
+  int worker_count = 1;
+  if (gpu_route) {
+    worker_count = 1;  // GPU route: single engine (task-268.7; CUDA joined 296.6)
   } else {
     worker_count = num_workers > 0 ? num_workers : PhysicalCoreCount();
     if (sim_seed != 0) {
       worker_count = 1;  // deterministic CPU contract: fixed seed → single worker
     }
   }
+  // AC1 observability (296.6): the GPU single-engine route must run worker_count==1.
+  ILOG_INFO(logger_, "ServerImpl: gpu_route={} worker_count={} (preferred_backend={})", gpu_route, worker_count,
+            static_cast<int>(preferred_backend));
   for (int i = 0; i < worker_count; i++) {
     uint32_t worker_seed = sim_seed != 0 ? sim_seed + static_cast<uint32_t>(i) : 0u;
     simulators_.emplace_back(scene_queue_, data_queue_, worker_seed);
@@ -562,6 +594,7 @@ void ServerImpl::Start() {
 
     work_started_ = false;
     sim_scene_cnt_ = 0;
+    idle_logged_ = false;  // task-296.7: re-arm first-kIdle WARN for new run
 
     {
       std::lock_guard<std::mutex> lock(status_mutex_);
@@ -670,6 +703,19 @@ ServerStatus ServerImpl::GetStatus() const {
     return ServerStatus::kRunning;
   }
 
+  // task-296.7 diagnostic (DEBUG): capture the four-predicate state on the
+  // first kIdle transition each run. Originally added at WARN to chase the
+  // pre-fix sim_scene_cnt_ counter imbalance (discrete-spectrum 1-vs-N pairing,
+  // see GenerateScene below); kept at DEBUG so a similar regression — or any
+  // future "kIdle came early" report — has a single grep target instead of
+  // needing fresh instrumentation. Once-per-run via idle_logged_ (re-armed in
+  // Start()).
+  if (!idle_logged_.exchange(true)) {
+    ILOG_DEBUG(logger_,
+               "GetStatus: first kIdle — any_busy={} sim_scene_cnt_={} scene_gen_active_={} "
+               "work_started_={}",
+               any_busy, sim_scene_cnt_.load(), scene_gen_active_.load(), work_started_.load());
+  }
   return ServerStatus::kIdle;
 }
 
@@ -818,7 +864,24 @@ void ServerImpl::ConsumeData() {
             first_consume_logged = true;
           }
         } else {
-          ILOG_DEBUG(logger_, "ConsumeData: skip consume (0-exit batch, counter still --)");
+          // 0-exit batch on the exit-seam path (all rays filtered/absorbed →
+          // outgoing_d_ AND rays_ both empty). We deliberately do NOT call
+          // c->Consume() — there is nothing to accumulate and a black batch must
+          // not bias the image. BUT a batch that ran to completion with a
+          // legitimately all-black result is still *valid data*: the simulation
+          // converged, the answer is just zero intensity. We therefore flip
+          // has_ever_consumed_ so GetRawXyzResults reports has_valid_data=true,
+          // and dirty the snapshot so PrepareSnapshot produces a clean zero
+          // frame (without this, an all-black simulation — e.g. an impossible
+          // raypath filter — never sets has_valid_data, so the buffered poller
+          // waits for "valid data" forever and times out at 600s). The legacy
+          // CPU path never hit this because its rays_ is always non-empty, so
+          // has_renderable stayed true; the exit-seam path (Metal + CUDA) is the
+          // first to surface it. See doc/capi-lifecycle-architecture.md
+          // ("zero-output completion").
+          snapshot_dirty_ = true;
+          has_ever_consumed_ = true;
+          ILOG_DEBUG(logger_, "ConsumeData: 0-exit batch (all filtered) — marking valid_data, zero snapshot");
         }
       }
     } else {
@@ -871,18 +934,36 @@ void ServerImpl::GenerateScene() {
   // CPU/legacy keeps the small kDefaultRayNum. An explicit LUMICE_DISPATCH_RAY_NUM
   // always wins. NOT static: a server reconstructed on a GUI backend toggle must
   // re-resolve the default for the new backend (commit↔batch decoupling, 268.4).
-  const size_t kDefaultDispatch = ResolveMetalRoute(preferred_backend_.load(std::memory_order_acquire), logger_) ?
+  const size_t kDefaultDispatch = ResolveGpuRoute(preferred_backend_.load(std::memory_order_acquire), logger_) ?
                                       kDefaultMetalDispatchRayNum :
                                       kDefaultRayNum;
   const size_t kDispatchCap = env::DispatchRayNum(logger_, kDefaultDispatch);
   const size_t kBatchCap = kDispatchCap;  // local alias for the loop below
+
+  // task-296.7: sim_scene_cnt_ semantic fix — count SimData (not SimBatch).
+  // The simulator emits one SimData per wavelength inside SimulateOneWavelength*
+  // (1 for illuminant; N for discrete spectrum lists). ConsumeData decrements
+  // per SimData. Incrementing by 1 here (the historical behaviour) created a
+  // 1-vs-N pairing imbalance on discrete-spectrum configs: sim_scene_cnt_ went
+  // negative as the consumer drained N - 1 "extra" SimData per batch, GetStatus
+  // saw the predicate fall to false, and CLI single-snapshot rendering reported
+  // kIdle while 4/5 of the wavelengths' batches still got skip-consumed (line
+  // 772 `if (sim_scene_cnt_ > 0)` → else branch). Resolve by incrementing here
+  // by the same N the simulator will emplace, so the counter matches the
+  // consumer's per-SimData decrement. The scene is captured under scene_mutex_
+  // above and immutable for this GenerateScene invocation, so N is computed
+  // once. Throttle/notify thresholds (kMaxSceneCnt, kMaxSceneCnt/2) now refer
+  // to in-flight SimData, which is also the right quantity for memory control.
+  const size_t kNsimdataPerBatch = std::holds_alternative<std::vector<WlParam>>(scene->light_source_.spectrum_) ?
+                                       std::get<std::vector<WlParam>>(scene->light_source_.spectrum_).size() :
+                                       static_cast<size_t>(1);
 
   auto ray_num = scene->ray_num_;
   size_t committed_num = 0;
   while (ray_num == kInfSize || committed_num < ray_num) {
     size_t batch_ray_num = std::min(kBatchCap, ray_num - committed_num);
     scene_queue_->Emplace(SimBatch{ batch_ray_num, scene, generation, renders });
-    sim_scene_cnt_++;
+    sim_scene_cnt_ += static_cast<int>(kNsimdataPerBatch);
     if (!first_batch_logged) {
       ILOG_INFO(logger_, "GenerateScene: first batch enqueued at {:.1f}ms after start",
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - gen_start).count());

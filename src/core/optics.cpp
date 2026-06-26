@@ -5,6 +5,7 @@
 
 #include "core/math.hpp"
 #include "core/shared/optics_shared.h"
+#include "core/shared/traversal_shared.h"
 
 
 namespace lumice {
@@ -114,10 +115,15 @@ static void PropagateSlab(const Crystal& crystal, size_t num, size_t step, const
     float nz = pn[fi * 3 + 2];
     float fd = pd[fi];
 
+    // Per-face intersect via cross-backend single-source helper
+    // (lm_traversal::SlabFaceT, see core/shared/traversal_shared.h). Non-
+    // candidate faces (denom ≤ kSlabEps) return 1e30f and lose the `t < t_far[i]`
+    // comparison because t_far[i] is initialised to 1e30f — equivalent to the
+    // prior explicit `denom > kFloatEps` gate. SoA face-outer/ray-inner shape
+    // preserved for the inner loop to remain vectorisable.
     for (size_t i = 0; i < num; i++) {
-      float denom = dx[i] * nx + dy[i] * ny + dz[i] * nz;
-      float t = -(px[i] * nx + py[i] * ny + pz[i] * nz + fd) / denom;
-      if (denom > math::kFloatEps && t < t_far[i]) {
+      float t = lm_traversal::SlabFaceT(dx[i], dy[i], dz[i], px[i], py[i], pz[i], nx, ny, nz, fd);
+      if (t < t_far[i]) {
         t_far[i] = t;
         far_face[i] = static_cast<int>(fi);
       }

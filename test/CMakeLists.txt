@@ -28,10 +28,12 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/core/test_rng.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_filter.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_filter_spec.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_device_filter_check_host.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_reduce_raypath_audit.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_raypath_segments.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_simulator.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_exit_records.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_narrow_pcg_ray_base.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_proj.cpp"
   # config/
   "${PROJ_TEST_DIR}/unit-correctness/config/test_json.cpp"
@@ -69,7 +71,8 @@ add_executable(parity_test
   "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_metal_trace_parity.cpp"
   "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_metal_root_gen.cpp"
   "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_metal_trace_backend.cpp"
-  "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_cpu_trace_backend.cpp")
+  "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_cpu_trace_backend.cpp"
+  "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_cuda_rich_exit.cpp")
 if(APPLE)
   # scrum-267 task-msl-filter-match-port: parity harness for device filter MATCH.
   # ObjC++ source (.mm) — needs ARC and the Metal/Foundation frameworks.
@@ -136,3 +139,22 @@ add_test(NAME "LumiceGoldenAnalyticTest" COMMAND golden_analytic_test
   "${PROJ_TEST_DIR}/fixtures/v3_config.json"
   "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties("LumiceGoldenAnalyticTest" PROPERTIES LABELS "golden-analytic")
+
+# --------------------------------------------------------------------------------------------------
+# CUDA multi-MS parity (Python pytest, dev49-only guard via LUMICE_CUDA_ENABLED env)
+#
+# Mirrors the test_cuda_exit_seam_parity.py pattern: implemented as pytest to
+# reuse the e2e runner fixtures (CApiRunner) rather than duplicating them in a
+# new gtest binary. On Mac (LUMICE_CUDA_ENABLED=OFF) the test self-skips; it is
+# intended to run on dev49 via `pytest test_cuda_multi_ms_parity.py` or via
+# `ctest -R CudaMultiMsParity` on dev49 after LUMICE_CUDA_ENABLED=1 in env.
+find_program(PYTEST_EXECUTABLE NAMES pytest pytest3 HINTS ENV PATH)
+if(PYTEST_EXECUTABLE)
+  add_test(NAME "CudaMultiMsParity"
+    COMMAND ${PYTEST_EXECUTABLE} -v
+      "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_cuda_multi_ms_parity.py"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+  set_tests_properties("CudaMultiMsParity" PROPERTIES
+    LABELS "parity;cuda"
+    ENVIRONMENT "LUMICE_CUDA_ENABLED=1")
+endif()
