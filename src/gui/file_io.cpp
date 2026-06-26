@@ -738,7 +738,7 @@ std::string SerializeCoreConfig(const GuiState& state) {
   if (state.sim.infinite) {
     scene["ray_num"] = "infinite";
   } else {
-    auto ray_num = static_cast<size_t>(state.sim.ray_num_millions * 1e6f);
+    auto ray_num = static_cast<size_t>(state.sim.ray_num_millions * 1e6);
     scene["ray_num"] = ray_num;
   }
   scene["max_hits"] = state.sim.max_hits;
@@ -981,7 +981,7 @@ void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
 
   // Scene: simulation
   out->infinite = state.sim.infinite ? 1 : 0;
-  out->ray_num = static_cast<LUMICE_RayCount>(state.sim.ray_num_millions * 1e6f);
+  out->ray_num = static_cast<LUMICE_RayCount>(state.sim.ray_num_millions * 1e6);
   out->max_hits = state.sim.max_hits;
 }
 
@@ -1338,7 +1338,7 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       if (js["ray_num"].is_string() && js["ray_num"].get<std::string>() == "infinite") {
         state.sim.infinite = true;
       } else if (js["ray_num"].is_number()) {
-        state.sim.ray_num_millions = static_cast<float>(js["ray_num"].get<size_t>()) / 1e6f;
+        state.sim.ray_num_millions = static_cast<float>(js["ray_num"].get<size_t>()) / 1e6;
       }
     }
     state.sim.max_hits = js.value("max_hits", 8);
