@@ -19,7 +19,13 @@ REFERENCES_DIR = get_project_root() / "test" / "e2e-correctness" / "references"
 # Calibrated by running each config 3 times and taking min_psnr - 3dB.
 # Set to None to skip PSNR check for that output.
 PSNR_THRESHOLDS = {
-    "color_01": 27.1,
+    # color: 5-wavelength discrete-spectrum (440/510/550/590/640nm). Reference
+    # regenerated post-296.7 fix (sim_scene_cnt_ 1-vs-N, commit 5513906d) which
+    # restored full 50M-ray sampling. Run-to-run PSNR (3 runs, 2026-06-26):
+    # 39.08/39.63/39.70 dB. Threshold = min - 3dB = 36.0 dB (was 27.1 dB;
+    # +8.9dB tightening confirms owner hypothesis that prior threshold was
+    # artificially low due to discrete-spectrum undersampling bug).
+    "color_01": 36.0,
     "cza_01": 41.5,
     "filters_01": 26.7,
     "halo_22_01": 26.7,
