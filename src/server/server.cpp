@@ -20,6 +20,9 @@
 #include "config/sim_data.hpp"
 #include "core/def.hpp"
 #include "core/simulator.hpp"
+#if defined(LUMICE_CUDA_ENABLED)
+#include "core/backend/cuda_trace_backend.hpp"  // CudaDeviceAvailable() for ResolveGpuRoute
+#endif
 #include "server/consumer.hpp"
 #include "server/render.hpp"
 #include "server/server.hpp"
@@ -208,32 +211,52 @@ namespace {
 // GUI reconstructs the server when the Metal checkbox toggles. An env
 // LUMICE_TRACE_BACKEND override (CLI / --benchmark) takes precedence over the
 // preferred_backend argument, mirroring CreateBackend (simulator.cpp).
-bool ResolveMetalRoute(BackendKind preferred_backend, Logger& logger) {
-#if defined(__APPLE__)
+// ResolveGpuRoute — does this backend run the GPU single-engine route
+// (worker_count=1 + large dispatch)? This MUST agree with CreateBackend's actual
+// routing decision (simulator.cpp): if it answers "GPU" but CreateBackend falls
+// back to legacy CPU (e.g. CUDA build with no device), the server would size a
+// single-worker 32768-ray-batch pipeline onto the multi-core CPU path — a severe
+// regression. So the CUDA branch gates on the same CudaDeviceAvailable() probe
+// CreateBackend uses (cached std::once, cheap to call per GenerateScene). Metal
+// stays optimistic on Apple (Metal is effectively always present; a PSO failure
+// degrades to CPU via task-282, the accepted edge case).
+// (296.6: generalized from the former Metal-only ResolveMetalRoute so CUDA also
+// takes the single-engine route — see doc/seam-design.md §5.)
+bool ResolveGpuRoute(BackendKind preferred_backend, Logger& logger) {
+  // Env override wins, mirroring CreateBackend's TraceBackendOverride handling.
   if (std::optional<std::string> override = env::TraceBackendOverride(logger)) {
     const std::string& name = *override;
-    if (name == "metal") {
-      return true;
-    }
     if (name == "cpu_backend" || name == "legacy") {
       return false;
     }
-  }
-  // -Wswitch: exhaustive over BackendKind, no `default:`. CUDA does not route
-  // through the Metal/GPU sizing path until subtask 3 lands the CUDA backend.
-  switch (preferred_backend) {
-    case BackendKind::kMetal:
+#if defined(__APPLE__)
+    if (name == "metal") {
       return true;
-    case BackendKind::kCpu:
-    case BackendKind::kCuda:
-      return false;
-  }
-  return false;
-#else
-  (void)preferred_backend;
-  (void)logger;
-  return false;  // Metal unavailable off-Apple → CPU multi-worker route
+    }
 #endif
+#if defined(LUMICE_CUDA_ENABLED)
+    if (name == "cuda") {
+      return CudaDeviceAvailable();
+    }
+#endif
+    // Unknown / unavailable override name → fall through to preferred_backend.
+  }
+  // preferred_backend. CreateBackend (simulator.cpp) holds the exhaustive
+  // -Wswitch over BackendKind that forces a new enum value to be handled; this
+  // site must AGREE with it (a GPU answer here = single-engine sizing). Written
+  // as guarded early-returns rather than a switch so the all-false config
+  // (non-Apple, non-CUDA build) does not trip bugprone-branch-clone.
+#if defined(__APPLE__)
+  if (preferred_backend == BackendKind::kMetal) {
+    return true;
+  }
+#endif
+#if defined(LUMICE_CUDA_ENABLED)
+  if (preferred_backend == BackendKind::kCuda) {
+    return CudaDeviceAvailable();
+  }
+#endif
+  return false;  // kCpu, or the requested GPU backend is unavailable in this build
 }
 }  // namespace
 
@@ -241,15 +264,20 @@ ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed, BackendKind preferred
     : config_manager_{}, scene_queue_(std::make_shared<Queue<SimBatch>>()),
       data_queue_(std::make_shared<Queue<SimData>>()), status_(ServerStatus::kIdle) {
   preferred_backend_.store(preferred_backend, std::memory_order_release);
-  int worker_count;
-  if (ResolveMetalRoute(preferred_backend, logger_)) {
-    worker_count = 1;  // GPU route: single engine (task-268.7)
+  // NOLINTNEXTLINE(readability-identifier-naming) — local const flag, snake_case is project style for variables.
+  const bool gpu_route = ResolveGpuRoute(preferred_backend, logger_);
+  int worker_count = 1;
+  if (gpu_route) {
+    worker_count = 1;  // GPU route: single engine (task-268.7; CUDA joined 296.6)
   } else {
     worker_count = num_workers > 0 ? num_workers : PhysicalCoreCount();
     if (sim_seed != 0) {
       worker_count = 1;  // deterministic CPU contract: fixed seed → single worker
     }
   }
+  // AC1 observability (296.6): the GPU single-engine route must run worker_count==1.
+  ILOG_INFO(logger_, "ServerImpl: gpu_route={} worker_count={} (preferred_backend={})", gpu_route, worker_count,
+            static_cast<int>(preferred_backend));
   for (int i = 0; i < worker_count; i++) {
     uint32_t worker_seed = sim_seed != 0 ? sim_seed + static_cast<uint32_t>(i) : 0u;
     simulators_.emplace_back(scene_queue_, data_queue_, worker_seed);
@@ -888,7 +916,7 @@ void ServerImpl::GenerateScene() {
   // CPU/legacy keeps the small kDefaultRayNum. An explicit LUMICE_DISPATCH_RAY_NUM
   // always wins. NOT static: a server reconstructed on a GUI backend toggle must
   // re-resolve the default for the new backend (commit↔batch decoupling, 268.4).
-  const size_t kDefaultDispatch = ResolveMetalRoute(preferred_backend_.load(std::memory_order_acquire), logger_) ?
+  const size_t kDefaultDispatch = ResolveGpuRoute(preferred_backend_.load(std::memory_order_acquire), logger_) ?
                                       kDefaultMetalDispatchRayNum :
                                       kDefaultRayNum;
   const size_t kDispatchCap = env::DispatchRayNum(logger_, kDefaultDispatch);

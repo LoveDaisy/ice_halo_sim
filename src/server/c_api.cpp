@@ -843,7 +843,7 @@ void LUMICE_SetPreferredBackend(LUMICE_Server* server, int backend) {
   }
   // C-API boundary cast: the public ABI keeps int; everything inside uses
   // BackendKind. Unknown int values map to a kCuda-or-beyond value that
-  // CreateBackend / ResolveMetalRoute handle as "fall back to CPU".
+  // CreateBackend / ResolveGpuRoute handle as "fall back to CPU".
   server->server_->SetPreferredBackend(static_cast<ns::BackendKind>(backend));
 }
 

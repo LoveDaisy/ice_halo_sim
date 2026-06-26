@@ -595,7 +595,7 @@ std::unique_ptr<TraceBackend> CreateBackend(BackendKind preferred_backend, Logge
     }
   }
   // -Wswitch: exhaustive over BackendKind, no `default:` so adding a new enum
-  // value forces the compiler to surface this site (and ResolveMetalRoute /
+  // value forces the compiler to surface this site (and ResolveGpuRoute /
   // LUMICE_BackendAvailable below).
   switch (preferred_backend) {
     case BackendKind::kCpu:
