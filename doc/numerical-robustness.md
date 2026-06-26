@@ -65,6 +65,10 @@ drift. Prefer a shared helper; if a backend boundary forces duplication (e.g. th
 `tri_to_poly` kernel mirroring the CPU function), add a `// must match X` comment and a
 parity test, and fix both together.
 
+Convergence log (geometry-gen double-precision predicates):
+- `SolvePlanesD` — converged in task-280.4 (`geo3d.cpp` inline copy removed; single source `math.hpp::SolvePlanesD`).
+- `IsInPolyhedron3D` — converged in task-geometry-predicate-single-source (`geo3d.cpp::is_in_polyhedron_d` lambda removed; single source `math.hpp::IsInPolyhedron3D` with `kIncidenceEpsD = 1e-5`, replacing the lambda's drifted `1e-10`).
+
 ### 5. **Guard normalizations and divisions** by potentially-zero quantities
 `Normalize3`, `cross / |cross|`, `x / det`, `x / extent`, perspective divide — all
 produce NaN/Inf on degenerate inputs (collinear vertices, parallel normals, edge-on

@@ -428,17 +428,9 @@ size_t FillHexCrystalCoef(float upper_alpha, float lower_alpha, float h1, float 
     for (size_t i = 0; i < cnt * 4; i++) {
       coef_d[i] = static_cast<double>(out_coef[i]);
     }
-    // Plane-triple intersection delegates to the single-source SolvePlanesD
-    // (math.hpp) — scale-invariant singularity check on the normalized det.
-    auto is_in_polyhedron_d = [](int n, const double* coef, const double xyz[3]) -> bool {
-      for (int j = 0; j < n; j++) {
-        if (coef[j * 4 + 0] * xyz[0] + coef[j * 4 + 1] * xyz[1] + coef[j * 4 + 2] * xyz[2] + coef[j * 4 + 3] > 1e-10) {
-          return false;
-        }
-      }
-      return true;
-    };
-
+    // Plane-triple intersection + containment both delegate to single-source
+    // math.hpp helpers (SolvePlanesD scale-invariant det; IsInPolyhedron3D with
+    // kIncidenceEpsD=1e-5 absorbing float-input precision residuals).
     double z_max = std::numeric_limits<double>::lowest();
     double z_min = std::numeric_limits<double>::max();
     double xyz[3];
@@ -448,7 +440,7 @@ size_t FillHexCrystalCoef(float upper_alpha, float lower_alpha, float h1, float 
           if (!SolvePlanesD(coef_d.data() + i * 4, coef_d.data() + j * 4, coef_d.data() + k * 4, xyz)) {
             continue;
           }
-          if (is_in_polyhedron_d(static_cast<int>(cnt - 2), coef_d.data() + 8, xyz)) {
+          if (IsInPolyhedron3D(static_cast<int>(cnt - 2), coef_d.data() + 8, xyz)) {
             z_max = std::max(z_max, xyz[2]);
             z_min = std::min(z_min, xyz[2]);
           }

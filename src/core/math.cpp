@@ -765,16 +765,6 @@ double DiffNorm3D(const double* a, const double* b) {
   return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 
-bool IsInPolyhedron3D(int n, const double* coef, const double xyz[3], bool boundary = true) {
-  double th = boundary ? kIncidenceEpsD : -kIncidenceEpsD;
-  for (int j = 0; j < n; j++) {
-    if (Dot3D(coef + j * 4, xyz) + coef[j * 4 + 3] > th) {
-      return false;
-    }
-  }
-  return true;
-}
-
 void WidenCoefToDouble(int plane_cnt, const float* coef_f, std::vector<double>& coef_d) {
   coef_d.resize(plane_cnt * 4);
   for (int i = 0; i < plane_cnt * 4; i++) {
@@ -783,6 +773,17 @@ void WidenCoefToDouble(int plane_cnt, const float* coef_f, std::vector<double>& 
 }
 
 }  // namespace
+
+
+bool IsInPolyhedron3D(int n, const double* coef, const double xyz[3], bool boundary) {
+  double th = boundary ? kIncidenceEpsD : -kIncidenceEpsD;
+  for (int j = 0; j < n; j++) {
+    if (Dot3D(coef + j * 4, xyz) + coef[j * 4 + 3] > th) {
+      return false;
+    }
+  }
+  return true;
+}
 
 
 // Singularity threshold for the double-precision Cramer's rule, evaluated on

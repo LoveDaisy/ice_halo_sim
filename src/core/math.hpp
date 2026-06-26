@@ -292,6 +292,19 @@ bool IsInPolygon2(int n, const float* coef, const float xy[2], bool boundary = t
 bool IsInPolyhedron3(int n, const float* coef, const float xyz[3], bool boundary = true);
 
 /**
+ * @brief Double-precision variant of @ref IsInPolyhedron3. Containment threshold is
+ *        `kIncidenceEpsD = 1e-5` (matches the float-input precision floor; see
+ *        doc/numerical-robustness.md §4 "single source of truth").
+ *
+ * @param n Number of half spaces.
+ * @param coef Coefficients of half spaces, [a, b, c, d] × n.
+ * @param xyz Point to be checked.
+ * @param boundary Whether to treat points on the boundary as "inside" (default true).
+ * @return true if the point is inside (or on the boundary when @p boundary is true).
+ */
+bool IsInPolyhedron3D(int n, const double* coef, const double xyz[3], bool boundary = true);
+
+/**
  * @brief Find all vertices of a convex polyhedron, which is defined by intersection of multiple half spaces:
  *        a*x + b*y + c*z + d <= 0
  *
