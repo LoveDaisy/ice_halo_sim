@@ -332,7 +332,15 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                        uint32_t* __restrict__ d_cont_count,
                                        uint32_t cont_cap,
                                        uint32_t gate_seed,
-                                       uint32_t gate_ray_base) {
+                                       uint32_t gate_ray_base,
+                                       // 296.5 filter gate inputs. ms_mode==0 dispatches pass
+                                       // nullptr/0 — DeviceFilterCheck branches are never executed.
+                                       const DeviceFilterDesc* __restrict__ d_filter_desc,
+                                       const uint32_t* __restrict__ d_getfn_offsets,
+                                       const uint8_t* __restrict__ d_getfn_bytes,
+                                       const DeviceFilterDesc* __restrict__ d_complex_sub_desc,
+                                       uint32_t filter_desc_max_ci,
+                                       uint32_t crystal_config_id) {
   const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_roots) {
     return;
@@ -423,34 +431,45 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
         exit_world[i] = rot[i * 3 + 0] * rd0 + rot[i * 3 + 1] * rd1 + rot[i * 3 + 2] * rd2;
       }
       if (ms_mode == 1u) {
-        // ms_mode==1 emit gate. prob-pass → continuation; prob-fail →
-        // mid-exit (mirrors Metal lumice_trace.metal:633-660 + CPU
-        // simulator.cpp:472 outgoing semantics). MVP has no filter so every
-        // candidate enters the gate; 296.5 will wrap this in a filter check.
-        bool do_continue = (lm_pcg::pcg_uniform(gate_stream) < ms_prob);
-        if (do_continue) {
-          uint32_t cslot = atomicAdd(d_cont_count, 1u);
-          if (cslot < cont_cap) {
-            d_cont_d[cslot * 3u + 0u] = exit_world[0];
-            d_cont_d[cslot * 3u + 1u] = exit_world[1];
-            d_cont_d[cslot * 3u + 2u] = exit_world[2];
-            d_cont_w[cslot]           = w_refl_e;
-            d_cont_wl_idx[cslot]      = 0u;  // wl pass-through; WlPool is 296.6
-          }
-        } else {
-          uint32_t slot = atomicAdd(d_exit_count, 1u);
-          if (slot < exit_cap) {
-            ExitRayRecord& rec = d_exit[slot];
-            rec.dir[0] = exit_world[0];
-            rec.dir[1] = exit_world[1];
-            rec.dir[2] = exit_world[2];
-            rec.weight = w_refl_e;
-            rec.path = BuildExitPath(path_rec, rec_len);
-            rec.crystal_id = crystal_id;
-            rec.ms_layer_idx = ms_layer_idx;
-            rec.wl_idx = 0u;
+        // ms_mode==1 emit gate: filter THEN prob (mirrors Metal
+        // lumice_trace.metal:633-660 + simulator.cpp:472 outgoing semantics).
+        // filter-fail → implicit drop (no buffer write), enforcing AC1
+        // "filter-fail光线不跨MS层传播". exit_world is the WORLD-space ray
+        // direction Metal/CPU FilterMatchDirection expects.
+        const uint32_t gate_slot = static_cast<uint32_t>(ms_layer_idx) * filter_desc_max_ci;
+        const bool filter_pass = lm_filter::DeviceFilterCheck(
+            d_filter_desc[gate_slot], d_complex_sub_desc, path_rec, rec_len, d_getfn_bytes, d_getfn_offsets, gate_slot,
+            exit_world, crystal_config_id);
+        if (filter_pass) {
+          // Prob gate (prob-pass → continuation; prob-fail → mid-exit). The
+          // gate_stream advances on each pcg_uniform draw so the per-bounce
+          // refracted exit gate below consumes a disjoint draw slot.
+          bool do_continue = (lm_pcg::pcg_uniform(gate_stream) < ms_prob);
+          if (do_continue) {
+            uint32_t cslot = atomicAdd(d_cont_count, 1u);
+            if (cslot < cont_cap) {
+              d_cont_d[cslot * 3u + 0u] = exit_world[0];
+              d_cont_d[cslot * 3u + 1u] = exit_world[1];
+              d_cont_d[cslot * 3u + 2u] = exit_world[2];
+              d_cont_w[cslot]           = w_refl_e;
+              d_cont_wl_idx[cslot]      = 0u;  // wl pass-through; WlPool is 296.6
+            }
+          } else {
+            uint32_t slot = atomicAdd(d_exit_count, 1u);
+            if (slot < exit_cap) {
+              ExitRayRecord& rec = d_exit[slot];
+              rec.dir[0] = exit_world[0];
+              rec.dir[1] = exit_world[1];
+              rec.dir[2] = exit_world[2];
+              rec.weight = w_refl_e;
+              rec.path = BuildExitPath(path_rec, rec_len);
+              rec.crystal_id = crystal_id;
+              rec.ms_layer_idx = ms_layer_idx;
+              rec.wl_idx = 0u;
+            }
           }
         }
+        // filter_pass == false: implicit drop (Design A termination).
       } else {
         uint32_t slot = atomicAdd(d_exit_count, 1u);
         if (slot < exit_cap) {
@@ -572,33 +591,40 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
           exit_world[i] = rot[i * 3 + 0] * fdx + rot[i * 3 + 1] * fdy + rot[i * 3 + 2] * fdz;
         }
         if (ms_mode == 1u) {
-          // Same gate semantics as the entry-face emit above (296.4): prob-pass
-          // routes to the continuation ring, prob-fail emits as mid-exit so
-          // the cumulative XYZ image stays energy-conserving across layers.
-          bool do_continue = (lm_pcg::pcg_uniform(gate_stream) < ms_prob);
-          if (do_continue) {
-            uint32_t cslot = atomicAdd(d_cont_count, 1u);
-            if (cslot < cont_cap) {
-              d_cont_d[cslot * 3u + 0u] = exit_world[0];
-              d_cont_d[cslot * 3u + 1u] = exit_world[1];
-              d_cont_d[cslot * 3u + 2u] = exit_world[2];
-              d_cont_w[cslot]           = w_refr;
-              d_cont_wl_idx[cslot]      = 0u;
-            }
-          } else {
-            uint32_t slot = atomicAdd(d_exit_count, 1u);
-            if (slot < exit_cap) {
-              ExitRayRecord& rec = d_exit[slot];
-              rec.dir[0] = exit_world[0];
-              rec.dir[1] = exit_world[1];
-              rec.dir[2] = exit_world[2];
-              rec.weight = w_refr;
-              rec.path = BuildExitPath(path_rec, rec_len);
-              rec.crystal_id = crystal_id;
-              rec.ms_layer_idx = ms_layer_idx;
-              rec.wl_idx = 0u;
+          // Per-bounce refracted exit emit gate (296.5): same filter-then-prob
+          // semantics as the entry-face emit above. path_rec already includes
+          // hit_poly (appended at the top of this hit, before Fresnel).
+          const uint32_t gate_slot = static_cast<uint32_t>(ms_layer_idx) * filter_desc_max_ci;
+          const bool filter_pass = lm_filter::DeviceFilterCheck(
+              d_filter_desc[gate_slot], d_complex_sub_desc, path_rec, rec_len, d_getfn_bytes, d_getfn_offsets,
+              gate_slot, exit_world, crystal_config_id);
+          if (filter_pass) {
+            bool do_continue = (lm_pcg::pcg_uniform(gate_stream) < ms_prob);
+            if (do_continue) {
+              uint32_t cslot = atomicAdd(d_cont_count, 1u);
+              if (cslot < cont_cap) {
+                d_cont_d[cslot * 3u + 0u] = exit_world[0];
+                d_cont_d[cslot * 3u + 1u] = exit_world[1];
+                d_cont_d[cslot * 3u + 2u] = exit_world[2];
+                d_cont_w[cslot]           = w_refr;
+                d_cont_wl_idx[cslot]      = 0u;
+              }
+            } else {
+              uint32_t slot = atomicAdd(d_exit_count, 1u);
+              if (slot < exit_cap) {
+                ExitRayRecord& rec = d_exit[slot];
+                rec.dir[0] = exit_world[0];
+                rec.dir[1] = exit_world[1];
+                rec.dir[2] = exit_world[2];
+                rec.weight = w_refr;
+                rec.path = BuildExitPath(path_rec, rec_len);
+                rec.crystal_id = crystal_id;
+                rec.ms_layer_idx = ms_layer_idx;
+                rec.wl_idx = 0u;
+              }
             }
           }
+          // filter_pass == false: implicit drop (Design A termination).
         } else {
           uint32_t slot = atomicAdd(d_exit_count, 1u);
           if (slot < exit_cap) {
@@ -1673,7 +1699,18 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
       ms_mode == 1u ? impl_->d_cont_count_   : nullptr,
       ms_mode == 1u ? static_cast<uint32_t>(impl_->cont_cap_) : 0u,
       impl_->gate_seed_,
-      static_cast<uint32_t>(impl_->gate_ray_count_));
+      static_cast<uint32_t>(impl_->gate_ray_count_),
+      // 296.5 filter gate params. ms_mode==0 dispatches can pass these as
+      // nullptr/0 because the gate code is unreachable; we always pass real
+      // pointers to avoid undefined behaviour from null-pointer-arith warnings
+      // on stricter compilers — EnsureFilterBuffers guarantees they are
+      // non-null (1-byte dummies in the no-filter session case).
+      ms_mode == 1u ? impl_->d_filter_desc_       : nullptr,
+      ms_mode == 1u ? impl_->d_getfn_offsets_     : nullptr,
+      ms_mode == 1u ? impl_->d_getfn_bytes_       : nullptr,
+      ms_mode == 1u ? impl_->d_complex_sub_desc_  : nullptr,
+      ms_mode == 1u ? impl_->filter_desc_max_ci_  : 0u,
+      impl_->crystal_config_id_);
   // Peek immediately after launch: illegal address / invalid config errors
   // surface here before the synchronizing 4B readback, giving a precise
   // error origin instead of a deferred cudaErrorLaunchFailure on Memcpy.
@@ -1852,20 +1889,90 @@ size_t CudaTraceBackend::DrainExits(std::vector<ExitRayRecord>& out) {
     throw BackendUnavailableError(std::string{"CudaTraceBackend::DrainExits: D2H cudaMemcpy: "} +
                                   cudaGetErrorString(err_d2h));
   }
-  out.assign(impl_->pinned_exit_, impl_->pinned_exit_ + count);
+
+  // Apply final-layer host filter + prob gate (296.5). Mirrors Metal
+  // ReadbackExitRays:2447-2578: mid-layer exits (ms_layer_idx_idx != final)
+  // already passed kernel-side filter+prob and are emitted verbatim; final-
+  // layer records run FilterSpec::Check + a host RNG prob draw to enforce the
+  // legacy CollectData per-layer semantics (simulator.cpp:425).
+  const uint8_t final_layer = impl_->final_ms_layer_idx_;
+  std::unique_ptr<FilterSpec> spec = FilterSpec::Create(
+      impl_->final_layer_filter_config_, impl_->final_layer_crystal_, impl_->final_layer_axis_dist_);
+  std::uniform_real_distribution<float> prob_dist(0.0f, 1.0f);
+
+  out.reserve(count);
+  for (size_t i = 0; i < count; ++i) {
+    const ExitRayRecord& src = impl_->pinned_exit_[i];
+    if (src.ms_layer_idx != final_layer) {
+      // Mid-layer exits already filtered+prob-gated in the kernel; emit verbatim.
+      out.push_back(src);
+      continue;
+    }
+
+    // Reconstruct {RaySeg, RaypathRecorder} for FilterSpec::Check.
+    RaySeg r{};
+    r.d_[0] = src.dir[0];
+    r.d_[1] = src.dir[1];
+    r.d_[2] = src.dir[2];
+    r.w_ = src.weight;
+    r.to_face_ = kInvalidId;
+    r.is_continue_ = false;
+    r.crystal_config_id_ = impl_->final_layer_crystal_.config_id_;
+
+    // GetFn remap: raw kernel path[] carries poly-face indices; FilterSpec
+    // expects post-GetFn ids (mirrors Metal ReadbackExitRays:2539-2545). For
+    // paths longer than RaypathRecorder::kInlineCap a stack arena holds the
+    // overflow tail so FilterSpec::Check can read past data_ safely
+    // (task-284 fix).
+    RaypathRecorder rec{};
+    rec.Clear();
+    uint8_t seq_len = static_cast<uint8_t>(std::min<size_t>(src.path.size_, kMaxHits));
+    rec.size_ = seq_len;
+    uint8_t local_arena[kMaxHits]{};
+    const bool has_overflow = (seq_len > RaypathRecorder::kInlineCap);
+    rec.overflow_idx_ = has_overflow ? 0u : RaypathRecorder::kNoOverflow;
+    for (uint8_t k = 0; k < seq_len; ++k) {
+      const uint8_t v = static_cast<uint8_t>(impl_->final_layer_crystal_.GetFn(static_cast<IdType>(src.path.data_[k])));
+      if (k < RaypathRecorder::kInlineCap) {
+        rec.data_[k] = v;
+      }
+      local_arena[k] = v;
+    }
+    const uint8_t* arena_for_check = has_overflow ? local_arena : nullptr;
+    if (spec && !spec->Check(r, rec, arena_for_check)) {
+      continue;  // filter-fail → drop (Design A termination on final layer)
+    }
+    // Legacy mirror: rng<prob means "would have continued"; since there is no
+    // next layer, drop. final_ms_prob_=0 → never drops (drain_rng_ value
+    // always >= 0). Mirrors Metal ReadbackExitRays:2556 / simulator.cpp:444.
+    if (prob_dist(impl_->drain_rng_) < impl_->final_ms_prob_) {
+      continue;
+    }
+
+    ExitRayRecord emitted = src;
+    // Replace the raw-poly path with the GetFn-remapped face-number path so
+    // downstream raw-XYZ / raypath consumers see the same canonical face ids
+    // the legacy + Metal paths produce. Mirrors Metal `path_src` selection
+    // (ReadbackExitRays:2570-2573).
+    emitted.path.size_ = seq_len;
+    const uint8_t* path_src = has_overflow ? local_arena : rec.data_;
+    std::memcpy(emitted.path.data_, path_src, seq_len);
+    out.push_back(emitted);
+  }
+
   auto t1 = std::chrono::steady_clock::now();
   double drain_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
   if (impl_->logger != nullptr) {
     ILOG_DEBUG(*impl_->logger,
-               "CudaTraceBackend::DrainExits: count={} bytes={} D2H={:.2f}ms",
-               count, count * sizeof(ExitRayRecord), drain_ms);
+               "CudaTraceBackend::DrainExits: read={} kept={} D2H+filter={:.2f}ms",
+               count, out.size(), drain_ms);
   }
 
   // Reset counter for the next TraceLayer call.
   cudaMemset(impl_->d_exit_count_, 0, sizeof(uint32_t));
   impl_->h_exit_count_ = 0u;
-  return count;
+  return out.size();
 }
 
 void CudaTraceBackend::EndSession() {
