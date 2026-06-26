@@ -211,6 +211,7 @@ set(lumice_config_src
 set(lumice_core_src
   "${PROJ_SRC_DIR}/core/backend/cpu_trace_backend.cpp"
   "${PROJ_SRC_DIR}/core/crystal.cpp"
+  "${PROJ_SRC_DIR}/core/device_filter_desc.cpp"
   "${PROJ_SRC_DIR}/core/filter_spec.cpp"
   "${PROJ_SRC_DIR}/core/geo3d.cpp"
   "${PROJ_SRC_DIR}/core/math.cpp"
@@ -229,7 +230,6 @@ set(lumice_core_src
 # for the AC2 regression test).
 if(APPLE)
   list(APPEND lumice_core_src
-    "${PROJ_SRC_DIR}/core/device_filter_desc.cpp"
     "${PROJ_SRC_DIR}/core/metal_filter_match_src.mm"
     "${PROJ_SRC_DIR}/core/backend/metal_trace_backend.mm")
   set_source_files_properties(

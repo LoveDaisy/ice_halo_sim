@@ -10,13 +10,13 @@
 // of the host/device `DeviceFilterDesc` layout (D2 in plan). The MSL source
 // string in `metal_filter_match_src.mm` must mirror field order/types exactly.
 //
-// Locality: not part of the public C API. Only compiled into lumice_obj on
-// Apple builds (paired with the Metal backend).
+// Locality: not part of the public C API. Compiled into lumice_obj on all
+// platforms (Metal + CUDA backends both consume this descriptor; the CUDA
+// device-side matcher in `src/core/shared/filter_shared.h` reads the same
+// fields the MSL kernel does).
 
 #ifndef SRC_CORE_DEVICE_FILTER_DESC_H_
 #define SRC_CORE_DEVICE_FILTER_DESC_H_
-
-#if defined(__APPLE__)
 
 #include <cstdint>
 #include <vector>
@@ -132,7 +132,5 @@ std::vector<uint8_t> BuildDeviceGetFnBytes(const Crystal& crystal);
 
 }  // namespace detail
 }  // namespace lumice
-
-#endif  // defined(__APPLE__)
 
 #endif  // SRC_CORE_DEVICE_FILTER_DESC_H_
