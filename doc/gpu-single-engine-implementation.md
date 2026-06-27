@@ -45,6 +45,23 @@
 - +16% 多 MS filter 能量 bug（根因=host `CopyContSliceToRootBuf` 解耦 filter，随删除自愈）。
 - server 构造函数潜伏 bug（legacy CPU 巨型未切块 consume 假象，268.6 白盒证伪后修）。
 
+### 0.1 ⭐ CUDA backend as-built（全量多 CI + 诚实吞吐基线，2026-06-27，task-cuda-throughput-bench）
+
+> CUDA 是 seam 的第二个真实消费者。scrum-295/296 落地单 CI MVP；本轮把它推到**与 legacy 完全对齐的全量多 CI**，并取到第一份**诚实**吞吐基线。设计蓝图细节见 `scratchpad/task-cuda-throughput-bench/MULTI_CI_DESIGN.md`（git-ignored），分支 `feat/cuda-multi-ci-correctness`。
+
+- **多 CI（每层多晶体带 proportion）全量落地，对标 Metal 惰性-transit-per-CI 模型**（CUDA 此前是 single-CI MVP：BeginSession 只传 1 晶体、TraceLayer/Recombine/DrainExits 用 setting_[0]）。结构改动：
+  - 几何 per-CI：`UploadCrystalGeometry`/`EnsureGeomCapacity`（grow-only），对标 Metal `UploadCrystal`。
+  - cont 缓冲 ping-pong（`d_cont_*[2]`）；**transit 从 Recombine 移入 TraceLayer 惰性逐 CI**（读 cont[in_slot] 的 per-ci 切片过该 ci 晶体），Recombine 变薄（只 bump 层 + 返回 cont count）。
+  - TraceLayer per-CI 循环：`PartitionCrystalRayNum` 连续切片 → 每 CI MakeCrystal + 几何上传 + gen(首层)/transit(续传) + trace，exit(crystal_id=ci tag)/cont[out_slot] atomic 累加。RNG flat-seed + 每 CI 推进 monotone gen/gate/transit counter（不相交 PCG 区间，单 CI 行为不变）。
+  - final 层 DrainExits 按 `ExitRayRecord.crystal_id` 索引 per-CI FilterSpec/crystal；`EnsureContCapacity` 支持 3+ 层 cont/root grow（in_slot 不动，cont_cap_[2] 每槽）。
+  - kernel emit-gate filter slot 修为 `ms_layer*max_ci + crystal_id`（原缺 crystal_id=单 CI MVP 残留）。
+  - `ComputeExitCap/ComputeContCap` 去掉 64MiB silent-drop 硬顶，按解析上界 `n*(max_hits*2+4)` size（correctness > memory；OOM→优雅回退 legacy）。
+- **验证（dev49/44 RTX 4060 Ti，全对 legacy）**：parity-cross-backend 11/11（单MS / ms_prob05 2层 / ms_multi_crystal 2层多CI ds_corr 0.913→0.9998 / **ms3_multi_crystal 3层多CI [4,3,2] 含 final** / filter / cross-seed 自洽）；e2e-correctness 15/15（CUDA 路由确认）；ctest golden-analytic 100%。**未修前 ms_multi_crystal 静默错（ds_corr 0.913，energy+cross-seed 都掩盖）——parity 漏因只测了 single-CI 的 ms_prob05。**
+- **诚实吞吐基线（干净机 44-GPU，GPU 0%/CPU idle 99%）**：light_single_ms CUDA ≈ **0.10–0.12× legacy，flat（与 dispatch 无关）**；瓶颈 100% = **出射记录主机往返**（DrainExits D2H + 主机 filter + 下游 XYZ 累加，线性于 exit 数 ~54ns/exit），trace kernel 极小。
+  - ⚠️ **推翻 scrum-296 Step D（49-GPU 旧单 CI 代码）"大 dispatch 1.6–2.2×"**——那是 exit 64MiB 硬顶丢弃 87% exit 的假象（drain 被封顶→虚高）。处理全部 exit 后 = ~0.1× flat。**"加大 dispatch 让 CUDA 赢"失效。**
+  - 唯一有意义优化 = **device 侧 XYZ 累加**（不每 dispatch 把裸 records 过 PCIe+主机处理），非 dispatch/batch 调参。详见 `scratchpad/backlog.md` seam 条目（待单起 explore）。
+  - 仪表瑕疵待修：多 CI 重写把 cudaEvent `ev_end_kernel_` 记录点挪到 per-CI 循环外，TraceLayer kernel 计时失真（≈0ms 假象）；profiling 前先修 event placement。
+
 ## 1. 状态与目标（设计期原文）
 
 > **接手注意**：本节描述 scrum-267/268 之前的出发状态（设计期），已是历史。
