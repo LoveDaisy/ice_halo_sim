@@ -18,6 +18,10 @@ class RenderConsumer : public IConsume {
   explicit RenderConsumer(RenderConfig config);
 
   void Consume(const SimData& data) override;
+  // S1 device-fused (scrum-302): fold a backend-accumulated XYZ pixel buffer
+  // into internal_xyz_ via Neumaier compensation. Split out of Consume() to
+  // keep that hot projection path within the cognitive-complexity budget.
+  void ConsumeDeviceFused(const SimData& data);
   void PrepareSnapshot() override;
   void CountEffectivePixels();
   void PostSnapshot() override;
@@ -35,6 +39,7 @@ class RenderConsumer : public IConsume {
   float snapshot_intensity_ = 0;
   int effective_pix_ = 0;  // Non-zero pixel count from last PrepareSnapshot
   std::unique_ptr<float[]> internal_xyz_;
+  std::unique_ptr<float[]> comp_xyz_;  // Neumaier compensation buffer (S1 device-fused)
   std::unique_ptr<float[]> snapshot_xyz_;
   std::unique_ptr<float[]> snapshot_work_;            // PostSnapshot work buffer (preserves snapshot_xyz_)
   std::unique_ptr<uint8_t[]> snapshot_image_buffer_;  // produced by PostSnapshot()

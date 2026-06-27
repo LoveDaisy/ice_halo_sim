@@ -13,6 +13,12 @@ using namespace metal;
 // keeps its historical unqualified call sites via the `using namespace lm_pcg`
 // directive below.
 #include "../shared/pcg_shared.h"
+// task-metal-device-fused-consumer (S1): host/MSL/CUDA XYZ accumulation
+// primitive. AccumXyzToPixel is the only call site for atomic adds into
+// xyz_image and landed_weight; cross-batch host-side Neumaier sits in
+// RenderConsumer (host #ifdef branch). Single-source contract: any future
+// CUDA emit gate (S2) uses the same call.
+#include "../shared/accum_shared.h"
 using namespace lm_pcg;
 
 // --- DeviceFilterDesc mirror (must match src/core/device_filter_desc.hpp) ---
@@ -418,12 +424,12 @@ kernel void trace_layer_kernel(
     device atomic_uint*    exit_cnt [[buffer(15)]],
     device atomic_float*   exit_wsum [[buffer(16)]],
     device const float*    root_rot [[buffer(17)]],
-    device float*          exit_d   [[buffer(18)]],
-    device float*          exit_w   [[buffer(19)]],
-    device atomic_uint*    exit_slot [[buffer(20)]],
-    device ushort*         exit_crystal_id    [[buffer(21)]],
-    device uchar*          exit_face_seq_len  [[buffer(22)]],
-    device uchar*          exit_face_seq_data [[buffer(23)]],
+    // S1 device-fused: slot 18 is now the per-session landed-weight scalar
+    // (total weight of in-bounds filter-pass emitted rays, used for
+    // normalisation). Slots 18-23, 28, 30 previously held exit-record
+    // buffers; those are replaced by on-device projection + XYZ accumulation
+    // into `image` (AccumXyzToPixel from accum_shared.h).
+    device atomic_float*   landed_weight [[buffer(18)]],
     // scrum-267 task-fused-emit-gate Step 4b: device-side emit gate state.
     // The ms_mode==1 path now calls DeviceFilterCheck and draws a PCG prob to
     // decide continuation vs mid-exit on-device; the former cont_crystal_id /
@@ -437,18 +443,14 @@ kernel void trace_layer_kernel(
     //   25 : per-slot prefix-sum offsets into gate_getfn_bytes
     //   26 : flat GetFn(poly_idx) byte stream
     //   27 : Complex filter sub-spec flat buffer
-    //   28 : per-exit-ray ms_layer tag (final-layer + mid-exits both write)
+    //   28 : (freed — was exit_ms_layer; removed in S1 device-fused)
     device const DeviceFilterDesc* gate_filter_desc    [[buffer(24)]],
     device const uint*             gate_getfn_offsets  [[buffer(25)]],
     device const uchar*            gate_getfn_bytes    [[buffer(26)]],
     device const DeviceFilterDesc* gate_sub_desc_buf   [[buffer(27)]],
-    device uchar*                  exit_ms_layer       [[buffer(28)]],
-    // scrum-268.8 (DR-3): per-ray wavelength side-cars. cont_wl_idx[slot]
-    // gets the current ray's wl_idx propagated alongside the emit-gate
-    // continuation write; exit_wl_idx[es] gets it propagated alongside both
-    // the mid-exit (filter+prob) and final-exit (all polygon-exits) writes.
+    // scrum-268.8 (DR-3): cont_wl_idx propagates the photon's lifetime
+    // wavelength tag into the continuation ring for the next layer.
     device uint*                   cont_wl_idx         [[buffer(29)]],
-    device uint*                   exit_wl_idx         [[buffer(30)]],
     uint tid [[thread_position_in_grid]]) {
   if (tid >= prm.num_rays) { return; }
 
@@ -631,30 +633,70 @@ kernel void trace_layer_kernel(
               atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
               atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
             } else {
-              // Mid-exit: filter_pass && !do_continue → emit as outgoing.
-              // Shares exit_slot atomic with ms_mode==0 final-layer exits;
-              // exit_ms_layer tags this slot with the PRODUCING layer's idx
-              // so ReadbackExitRays can skip the host filter+prob path
-              // (already done here in device).
-              uint es = atomic_fetch_add_explicit(exit_slot, 1u, memory_order_relaxed);
-              if (es < prm.exit_cap) {
-                exit_d[es * 3u + 0u] = wcx;
-                exit_d[es * 3u + 1u] = wcy;
-                exit_d[es * 3u + 2u] = wcz;
-                exit_w[es] = cw;
-                exit_crystal_id[es] = ushort(prm.crystal_id);
-                exit_ms_layer[es]   = uchar(prm.ms_layer_idx);
-                exit_wl_idx[es]     = wl_idx;  // scrum-268.8 per-ray wavelength tag
-                uint seq_len = min(rec_len, prm.face_seq_cap);
-                exit_face_seq_len[es] = uchar(seq_len);
-                for (uint k = 0u; k < seq_len; k++) {
-                  exit_face_seq_data[es * prm.face_seq_cap + k] = uchar(path[k]);
+              // Mid-exit: filter_pass && !do_continue → device-fused XYZ accumulation.
+              // Project the exit direction into dual_fisheye pixels and atomically
+              // add into `image`. Mirror the ms_mode==0 final-layer projection block
+              // exactly (same dual_fisheye math, same overlap dual-write, same
+              // landed_weight semantics). Projection direction = sky direction =
+              // -(exit direction), so negate the world-space components.
+              float sx_m = -wcx, sy_m = -wcy, sz_m = -wcz;
+              if (prm.proj_type == 0u) {
+                // Rectangular projection — mirror the ms_mode==0 final-layer
+                // proj_type==0 branch. The implement pass copied only the
+                // dual_fisheye branch into mid-exit; without this the
+                // rectangular render config (parity harness MakeRectangularRender)
+                // mis-projects mid-exit rays as dual_fisheye.
+                auto  proj_rm = lm_proj::RectangularForward(sx_m, sy_m, sz_m);
+                float lon_m   = proj_rm.x - prm.az0;
+                lon_m = lon_m - 2.0f * M_PI_F * floor((lon_m + M_PI_F) / (2.0f * M_PI_F));
+                float lat_m   = proj_rm.y;
+                int raw_x_m = int(floor(lon_m * proj_scl + img_w_f * 0.5f + 0.5f));
+                int ix_rm   = ((raw_x_m % iw_i) + iw_i) % iw_i;
+                int iy_rm   = int(floor(-lat_m * proj_scl + img_h_f * 0.5f + 0.5f));
+                if (iy_rm >= 0 && iy_rm < ih_i) {
+                  AccumXyzToPixel(image, uint(iy_rm) * prm.img_w + uint(ix_rm),
+                                  cmf_x, cmf_y, cmf_z, cw);
+                  atomic_fetch_add_explicit(landed_weight, cw, memory_order_relaxed);
+                }
+              } else {
+                int   dual_short_m = min(int(prm.img_w) / 2, int(prm.img_h));
+                float r_m          = float(dual_short_m) * 0.5f;
+                float cy_pix_m     = img_h_f * 0.5f;
+                float cx_left_m    = img_w_f * 0.5f - r_m;
+                float cx_right_m   = img_w_f * 0.5f + r_m;
+                bool  is_upper_m = (sz_m >= 0.0f);
+                float z_hemi_m   = is_upper_m ? sz_m : -sz_m;
+                auto  ea_m = lm_proj::FisheyeEqualAreaForward(sx_m, sy_m, z_hemi_m, prm.r_scale);
+                float cx_prim_m = is_upper_m ? cx_left_m : cx_right_m;
+                float sx_prim_m = is_upper_m ? -1.0f : 1.0f;
+                float fx_m = sx_prim_m * ea_m.y * r_m + cx_prim_m;
+                float fy_m = ea_m.x * r_m + cy_pix_m;
+                int ix_m = int(floor(fx_m + 0.5f));
+                int iy_m = int(floor(fy_m + 0.5f));
+                if (ix_m >= 0 && ix_m < iw_i && iy_m >= 0 && iy_m < ih_i) {
+                  AccumXyzToPixel(image, uint(iy_m) * prm.img_w + uint(ix_m),
+                                  cmf_x, cmf_y, cmf_z, cw);
+                  // landed_weight counts in-bounds primary writes; overlap dual-write
+                  // does NOT increment it (parity with ScatterOutgoingToXyz Pass 2).
+                  atomic_fetch_add_explicit(landed_weight, cw, memory_order_relaxed);
+                  if (prm.max_abs_dz > 0.0f && z_hemi_m < prm.max_abs_dz) {
+                    float z_opp_m = -z_hemi_m;
+                    auto  ea_m2 = lm_proj::FisheyeEqualAreaForward(sx_m, sy_m, z_opp_m, prm.r_scale);
+                    bool  is_upper_opp_m = !is_upper_m;
+                    float cx_opp_m = is_upper_opp_m ? cx_left_m : cx_right_m;
+                    float sx_opp_m = is_upper_opp_m ? -1.0f : 1.0f;
+                    float fx_m2 = sx_opp_m * ea_m2.y * r_m + cx_opp_m;
+                    float fy_m2 = ea_m2.x * r_m + cy_pix_m;
+                    int   ix_m2 = int(floor(fx_m2 + 0.5f));
+                    int   iy_m2 = int(floor(fy_m2 + 0.5f));
+                    if (ix_m2 >= 0 && ix_m2 < iw_i && iy_m2 >= 0 && iy_m2 < ih_i) {
+                      AccumXyzToPixel(image, uint(iy_m2) * prm.img_w + uint(ix_m2),
+                                      cmf_x, cmf_y, cmf_z, cw);
+                    }
+                  }
                 }
               }
-              // scrum-267 task-fused-emit-gate: same post-gate semantics as the
-              // do_continue branch above — filter_pass subset, not all
-              // polygon-exits. Diagnostic-only counters; not consumed by parity
-              // tests.
+              // Diagnostic counters (not consumed by parity tests).
               atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
               atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
             }
@@ -669,108 +711,109 @@ kernel void trace_layer_kernel(
           float wx = m[0] * cdx + m[1] * cdy + m[2] * cdz;
           float wy = m[3] * cdx + m[4] * cdy + m[5] * cdz;
           float wz = m[6] * cdx + m[7] * cdy + m[8] * cdz;
-          // Buffer-egress (exit seam, scrum-258.1): export this exit ray
-          // {world_dir, weight} BEFORE projection — projection clipping is a
-          // consumer concern, and legacy outgoing_d_ likewise captures
-          // pre-clip. Written once per exit ray (the overlap dual-write below
-          // never re-exports). Backend path always captures (no env gate);
-          // simulator drives consumer projection via ReadbackExitRays.
-          {
-            uint es = atomic_fetch_add_explicit(exit_slot, 1u, memory_order_relaxed);
-            if (es < prm.exit_cap) {
-              exit_d[es * 3u + 0u] = wx;
-              exit_d[es * 3u + 1u] = wy;
-              exit_d[es * 3u + 2u] = wz;
-              exit_w[es] = cw;
-              // Rich metadata (scrum-258.2): crystal_id from KernelParams,
-              // face sequence truncated to face_seq_cap (= min(max_hits,
-              // ExitFaceSeq::kCap=15) on the host). Stride = face_seq_cap so
-              // <15-byte-per-slot saves device memory + readback bandwidth.
-              exit_crystal_id[es] = ushort(prm.crystal_id);
-              // scrum-267 task-fused-emit-gate Step 3: tag final-layer exits
-              // with the active ms_layer_idx so ReadbackExitRays can route
-              // them through the existing host filter+prob path (mid-exits
-              // emitted by the gate carry the producing layer's idx and skip
-              // the filter check).
-              exit_ms_layer[es] = uchar(prm.ms_layer_idx);
-              exit_wl_idx[es]   = wl_idx;  // scrum-268.8 per-ray wavelength tag
-              uint seq_len = min(rec_len, prm.face_seq_cap);
-              exit_face_seq_len[es] = uchar(seq_len);
-              for (uint k = 0u; k < seq_len; k++) {
-                exit_face_seq_data[es * prm.face_seq_cap + k] = uchar(path[k]);
+          // S1 device-fused: final-layer filter + prob gate (mirrors ms_mode==1
+          // emit gate). scrum-302: the final-layer prob draw runs ON DEVICE.
+          // Legacy CollectData (simulator.cpp:468) draws rng for every filter-pass
+          // outgoing candidate at EVERY layer; at the final layer rng<prob means
+          // "would continue" but there is no next layer → the ray is dropped, so
+          // only the (1-prob) remainder is emitted. prm.ms_prob carries the real
+          // final-layer prob (backend DispatchLayer passes last_ms_prob_). Omitting
+          // this draw made the device emit 100% → metal/legacy energy = 1/(1-prob).
+          uchar path_local_f[kDevRecCap];
+          uint  gate_len_f = min(rec_len, kDevRecCap);
+          for (uint k = 0u; k < gate_len_f; k++) { path_local_f[k] = uchar(path[k]); }
+          uint  gate_slot_f = prm.ms_layer_idx * prm.filter_desc_max_ci + prm.crystal_id;
+          float ray_dir_w_f[3] = { wx, wy, wz };
+          bool filter_pass_f = DeviceFilterCheck(
+              gate_filter_desc[gate_slot_f], gate_sub_desc_buf,
+              path_local_f, gate_len_f,
+              gate_getfn_bytes, gate_getfn_offsets,
+              gate_slot_f, ray_dir_w_f, prm.crystal_config_id);
+          // Final-layer prob draw — independent PCG stream per dispatch (same
+          // construction as the ms_mode==1 emit gate). rng<ms_prob → drop.
+          PcgStream gate_stream_f;
+          gate_stream_f.seed       = prm.gate_seed;
+          gate_stream_f.global_idx = tid;
+          gate_stream_f.slot       = 0u;
+          bool prob_drop_f = (pcg_uniform(gate_stream_f) < prm.ms_prob);
+          if (filter_pass_f && !prob_drop_f) {
+            float sx = -wx;
+            float sy = -wy;
+            float sz = -wz;
+            if (prm.proj_type == 0u) {
+              auto proj_r = lm_proj::RectangularForward(sx, sy, sz);
+              float lon = proj_r.x - prm.az0;
+              lon = lon - 2.0f * M_PI_F * floor((lon + M_PI_F) / (2.0f * M_PI_F));
+              float lat = proj_r.y;
+
+              int raw_x = int(floor(lon * proj_scl + img_w_f * 0.5f + 0.5f));
+              int ix = ((raw_x % iw_i) + iw_i) % iw_i;
+              int iy = int(floor(-lat * proj_scl + img_h_f * 0.5f + 0.5f));
+              if (iy >= 0 && iy < ih_i) {
+                uint pix = (uint(iy) * prm.img_w + uint(ix)) * 3u;
+                atomic_fetch_add_explicit(&image[pix + 0u], cmf_x * cw, memory_order_relaxed);
+                atomic_fetch_add_explicit(&image[pix + 1u], cmf_y * cw, memory_order_relaxed);
+                atomic_fetch_add_explicit(&image[pix + 2u], cmf_z * cw, memory_order_relaxed);
+                atomic_fetch_add_explicit(landed_weight, cw, memory_order_relaxed);
+              }
+            } else {
+              // proj_type == 1: dual fisheye equal-area, primary + opposite-hemisphere overlap.
+              // Projection math comes from lm_proj::FisheyeEqualAreaForward (shared with CPU
+              // projection.cpp); the pixel-layout step below (DualFisheyeToPixel equivalent)
+              // is intentionally kept inline — it encodes lay-out conventions, not pure math.
+              int   dual_short = min(int(prm.img_w) / 2, int(prm.img_h));
+              float r          = float(dual_short) * 0.5f;
+              float cy_pix     = img_h_f * 0.5f;
+              float cx_left    = img_w_f * 0.5f - r;
+              float cx_right   = img_w_f * 0.5f + r;
+
+              bool  is_upper = (sz >= 0.0f);
+              float z_hemi   = is_upper ? sz : -sz;  // own hemisphere: +|sz|
+              auto  ea_r = lm_proj::FisheyeEqualAreaForward(sx, sy, z_hemi, prm.r_scale);
+              float xn = ea_r.x;
+              float yn = ea_r.y;
+              float cx_primary = is_upper ? cx_left : cx_right;
+              float sx_primary = is_upper ? -1.0f : 1.0f;
+              float fx = sx_primary * yn * r + cx_primary;
+              float fy = xn * r + cy_pix;
+              int ix = int(floor(fx + 0.5f));
+              int iy = int(floor(fy + 0.5f));
+              if (ix >= 0 && ix < iw_i && iy >= 0 && iy < ih_i) {
+                uint pix = (uint(iy) * prm.img_w + uint(ix)) * 3u;
+                atomic_fetch_add_explicit(&image[pix + 0u], cmf_x * cw, memory_order_relaxed);
+                atomic_fetch_add_explicit(&image[pix + 1u], cmf_y * cw, memory_order_relaxed);
+                atomic_fetch_add_explicit(&image[pix + 2u], cmf_z * cw, memory_order_relaxed);
+                // landed_weight counts in-bounds primary writes; overlap dual-write
+                // does NOT increment it (parity with ScatterOutgoingToXyz Pass 2).
+                atomic_fetch_add_explicit(landed_weight, cw, memory_order_relaxed);
+              }
+              // Overlap dual-write: mirror CPU render.cpp:192-214 (opposite hemisphere, dz<0).
+              // Does NOT increment landed_weight — parity with ScatterOutgoingToXyz Pass 2
+              // which does not update total_intensity for overlap writes.
+              if (prm.max_abs_dz > 0.0f && z_hemi < prm.max_abs_dz) {
+                float z_opp = -z_hemi;  // = -|sz| < 0 (matches z_hemi_opp)
+                auto  ea_r2 = lm_proj::FisheyeEqualAreaForward(sx, sy, z_opp, prm.r_scale);
+                float xn2 = ea_r2.x;
+                float yn2 = ea_r2.y;
+                bool  is_upper_opp = !is_upper;
+                float cx_opp       = is_upper_opp ? cx_left : cx_right;
+                float sx_opp       = is_upper_opp ? -1.0f : 1.0f;
+                float fx2 = sx_opp * yn2 * r + cx_opp;
+                float fy2 = xn2 * r + cy_pix;
+                int   ix2 = int(floor(fx2 + 0.5f));
+                int   iy2 = int(floor(fy2 + 0.5f));
+                if (ix2 >= 0 && ix2 < iw_i && iy2 >= 0 && iy2 < ih_i) {
+                  uint pix2 = (uint(iy2) * prm.img_w + uint(ix2)) * 3u;
+                  atomic_fetch_add_explicit(&image[pix2 + 0u], cmf_x * cw, memory_order_relaxed);
+                  atomic_fetch_add_explicit(&image[pix2 + 1u], cmf_y * cw, memory_order_relaxed);
+                  atomic_fetch_add_explicit(&image[pix2 + 2u], cmf_z * cw, memory_order_relaxed);
+                }
               }
             }
+            atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
+            atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
           }
-          float sx = -wx;
-          float sy = -wy;
-          float sz = -wz;
-          if (prm.proj_type == 0u) {
-            auto proj_r = lm_proj::RectangularForward(sx, sy, sz);
-            float lon = proj_r.x - prm.az0;
-            lon = lon - 2.0f * M_PI_F * floor((lon + M_PI_F) / (2.0f * M_PI_F));
-            float lat = proj_r.y;
-
-            int raw_x = int(floor(lon * proj_scl + img_w_f * 0.5f + 0.5f));
-            int ix = ((raw_x % iw_i) + iw_i) % iw_i;
-            int iy = int(floor(-lat * proj_scl + img_h_f * 0.5f + 0.5f));
-            if (iy >= 0 && iy < ih_i) {
-              uint pix = (uint(iy) * prm.img_w + uint(ix)) * 3u;
-              atomic_fetch_add_explicit(&image[pix + 0u], cmf_x * cw, memory_order_relaxed);
-              atomic_fetch_add_explicit(&image[pix + 1u], cmf_y * cw, memory_order_relaxed);
-              atomic_fetch_add_explicit(&image[pix + 2u], cmf_z * cw, memory_order_relaxed);
-            }
-          } else {
-            // proj_type == 1: dual fisheye equal-area, primary + opposite-hemisphere overlap.
-            // Projection math comes from lm_proj::FisheyeEqualAreaForward (shared with CPU
-            // projection.cpp); the pixel-layout step below (DualFisheyeToPixel equivalent)
-            // is intentionally kept inline — it encodes lay-out conventions, not pure math.
-            int   dual_short = min(int(prm.img_w) / 2, int(prm.img_h));
-            float r          = float(dual_short) * 0.5f;
-            float cy_pix     = img_h_f * 0.5f;
-            float cx_left    = img_w_f * 0.5f - r;
-            float cx_right   = img_w_f * 0.5f + r;
-
-            bool  is_upper = (sz >= 0.0f);
-            float z_hemi   = is_upper ? sz : -sz;  // own hemisphere: +|sz|
-            auto  ea_r = lm_proj::FisheyeEqualAreaForward(sx, sy, z_hemi, prm.r_scale);
-            float xn = ea_r.x;
-            float yn = ea_r.y;
-            float cx_primary = is_upper ? cx_left : cx_right;
-            float sx_primary = is_upper ? -1.0f : 1.0f;
-            float fx = sx_primary * yn * r + cx_primary;
-            float fy = xn * r + cy_pix;
-            int ix = int(floor(fx + 0.5f));
-            int iy = int(floor(fy + 0.5f));
-            if (ix >= 0 && ix < iw_i && iy >= 0 && iy < ih_i) {
-              uint pix = (uint(iy) * prm.img_w + uint(ix)) * 3u;
-              atomic_fetch_add_explicit(&image[pix + 0u], cmf_x * cw, memory_order_relaxed);
-              atomic_fetch_add_explicit(&image[pix + 1u], cmf_y * cw, memory_order_relaxed);
-              atomic_fetch_add_explicit(&image[pix + 2u], cmf_z * cw, memory_order_relaxed);
-            }
-            // Overlap dual-write: mirror CPU render.cpp:192-214 (opposite hemisphere, dz<0).
-            // Does NOT increment exit_wsum — preserves normalization parity with CPU.
-            if (prm.max_abs_dz > 0.0f && z_hemi < prm.max_abs_dz) {
-              float z_opp = -z_hemi;  // = -|sz| < 0 (matches z_hemi_opp)
-              auto  ea_r2 = lm_proj::FisheyeEqualAreaForward(sx, sy, z_opp, prm.r_scale);
-              float xn2 = ea_r2.x;
-              float yn2 = ea_r2.y;
-              bool  is_upper_opp = !is_upper;
-              float cx_opp       = is_upper_opp ? cx_left : cx_right;
-              float sx_opp       = is_upper_opp ? -1.0f : 1.0f;
-              float fx2 = sx_opp * yn2 * r + cx_opp;
-              float fy2 = xn2 * r + cy_pix;
-              int   ix2 = int(floor(fx2 + 0.5f));
-              int   iy2 = int(floor(fy2 + 0.5f));
-              if (ix2 >= 0 && ix2 < iw_i && iy2 >= 0 && iy2 < ih_i) {
-                uint pix2 = (uint(iy2) * prm.img_w + uint(ix2)) * 3u;
-                atomic_fetch_add_explicit(&image[pix2 + 0u], cmf_x * cw, memory_order_relaxed);
-                atomic_fetch_add_explicit(&image[pix2 + 1u], cmf_y * cw, memory_order_relaxed);
-                atomic_fetch_add_explicit(&image[pix2 + 2u], cmf_z * cw, memory_order_relaxed);
-              }
-            }
-          }
-          atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
-          atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
+          // filter_fail: implicit drop — no pixel write, no diagnostic counter bump.
         }
       }
     }

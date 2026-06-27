@@ -46,7 +46,9 @@ static_assert(sizeof(void*) == 8, "SimData layout assumes 64-bit pointers");
 // outgoing_wl_ (vector<float>, 24B) for per-ray wavelength, bumping 216 → 240.
 // chore-292 (A2) removes the vestigial outgoing_indices_ (vector<size_t>, 24B)
 // — content never read; count = outgoing_w_.size() — shrinking 240 → 216.
-static_assert(sizeof(SimData) == 216,
+// S1 device-fused: adds xyz_pixel_data_ (vector<float>, 24B) + xyz_landed_weight_
+// (float, 4B) + 4B padding = 32B, bumping 216 → 248.
+static_assert(sizeof(SimData) == 248,
               "SimData layout changed — update test_sim_data.cpp DeepCopy/Move assertions "
               "and sim_data.cpp's static_assert.");
 #endif
@@ -98,6 +100,9 @@ SimData MakePopulatedSimData() {
   s.exit_records_[1].ms_layer_idx = 1;
   s.exit_records_[1].path.size_ = 1;
   s.exit_records_[1].path.data_[0] = 11;
+  // S1 device-fused: xyz_pixel_data_ + xyz_landed_weight_ coverage.
+  s.xyz_pixel_data_ = { 0.1f, 0.2f, 0.3f };
+  s.xyz_landed_weight_ = 1.5f;
   s.crystals_.emplace_back();
   return s;
 }
@@ -801,6 +806,8 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
   EXPECT_EQ(copy.exit_records_[0].path.size_, 2u);
   EXPECT_EQ(copy.exit_records_[0].path.data_[1], 5u);
   EXPECT_EQ(copy.exit_records_[1].ms_layer_idx, 1u);
+  EXPECT_EQ(copy.xyz_pixel_data_, original.xyz_pixel_data_);  // S1 device-fused
+  EXPECT_FLOAT_EQ(copy.xyz_landed_weight_, 1.5f);
 
   // Deep copy independence — each pointer/container field independently.
   copy.rays_[0].w_ = 999.0f;
@@ -843,6 +850,8 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   EXPECT_EQ(target.crystals_.size(), 1u);
   ASSERT_EQ(target.exit_records_.size(), 2u);
   EXPECT_EQ(target.exit_records_[0].crystal_id, 7u);
+  EXPECT_EQ(target.xyz_pixel_data_, original.xyz_pixel_data_);  // S1 device-fused
+  EXPECT_FLOAT_EQ(target.xyz_landed_weight_, 1.5f);
 
   // Deep copy independence.
   target.rays_[0].w_ = 999.0f;
@@ -894,6 +903,8 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_EQ(moved.outgoing_w_.size(), 2u);
   EXPECT_EQ(moved.exit_records_.size(), 2u);
   EXPECT_EQ(moved.crystals_.size(), 1u);
+  EXPECT_EQ(moved.xyz_pixel_data_.size(), 3u);  // S1 device-fused
+  EXPECT_FLOAT_EQ(moved.xyz_landed_weight_, 1.5f);
 
   // Moved-from source contract — three categories:
   // (a) rays_ pointer ownership transferred → nullptr + zeroed size/capacity.

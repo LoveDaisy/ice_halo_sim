@@ -155,6 +155,13 @@ struct SimData {
   // consumer's projection input until 258.3 unifies the two.
   std::vector<ExitRayRecord> exit_records_;
 
+  // S1 device-fused: XYZ pixel accumulation from Metal kernel (HasDeviceXyzAccum path).
+  // Non-empty only when the backend accumulates on-device; CPU path leaves these empty.
+  // xyz_pixel_data_: W * H * 3 floats (row-major, XYZ channels).
+  // xyz_landed_weight_: total weight of in-bounds primary-pixel writes this batch.
+  std::vector<float> xyz_pixel_data_;
+  float xyz_landed_weight_ = 0.0f;
+
   size_t root_ray_count_ = 0;  // Count of root rays (prev_ray_idx_ == kInfSize)
 };
 

@@ -420,6 +420,29 @@ class TraceBackend {
     return 0;
   }
 
+  // Device-fused XYZ accumulation (task-metal-device-fused-consumer S1).
+  //
+  // Backends that fuse the consumer (projection + XYZ accumulate) into the
+  // trace kernel produce a session-resident W*H*3 atomic_float buffer instead
+  // of per-exit records. The simulator reads that buffer once per batch via
+  // ReadbackXyzAccum and forwards it to RenderConsumer's pixel-accumulation
+  // path; DrainExits / ReadbackExitRays return empty for these backends
+  // (the exit-record buffer is no longer materialised).
+  //
+  // Default: false / no-op. CpuTraceBackend stays on the exit-record path.
+  // MetalTraceBackend overrides to true; CudaTraceBackend will follow in S2.
+  virtual bool HasDeviceXyzAccum() const { return false; }
+
+  // Copies the device-accumulated W*H*3 XYZ image into `xyz.data` and the
+  // running landed-weight scalar into `landed_weight`. Must wait for any
+  // outstanding device work to complete before returning. Called once per
+  // wavelength batch AFTER the layer loop. No-op (xyz untouched,
+  // landed_weight = 0) unless HasDeviceXyzAccum() is true.
+  virtual void ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight) {
+    (void)xyz;
+    landed_weight = 0.0f;
+  }
+
   // Close the session. Releases per-session backend state. Calling any
   // method other than BeginSession after EndSession is undefined.
   virtual void EndSession() = 0;

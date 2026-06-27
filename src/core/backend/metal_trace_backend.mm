@@ -586,27 +586,22 @@ struct MetalTraceBackend::Impl {
   id<MTLBuffer> exit_w_sum_buf = nil;
   LayerStats    last_stats{};
 
-  // Buffer-egress (exit seam, scrum-258.1): kernel exports world-space
-  // {world_dir(3), weight} for every exit ray to exit_ray_d/w at a
-  // session-level atomic slot (exit_slot_buf). ReadbackExitRays copies them
-  // out for the simulator to drive the legacy consumer projection path,
-  // replacing the per-batch O(W*H) ReadbackImage. Reset once per session
-  // (first TraceLayer). Capture is unconditional for the backend path.
+  // S1 device-fused: per-session landed-weight scalar buffer (1 × float).
+  // The trace kernel atomically adds in-bounds filter-pass ray weights here
+  // (slot 18). ReadbackXyzAccum reads it alongside the W*H*3 XYZ image.
+  // Allocated on first use; cleared at each BeginSession.
+  id<MTLBuffer> landed_weight_buf_ = nil;
+
+  // Exit-record buffers — retained as nil members for compile compatibility
+  // after S1 device-fused removed their allocations and kernel bindings.
+  // EnsureExitBuffers is a no-op; the kernel no longer writes these slots.
   id<MTLBuffer> exit_ray_d_buf = nil;
   id<MTLBuffer> exit_ray_w_buf = nil;
   id<MTLBuffer> exit_slot_buf  = nil;
   size_t        exit_ray_capacity = 0;
-  // Exit metadata (scrum-258.2). Sized in lock-step with exit_ray_d/w by
-  // EnsureExitBuffers; face_seq_data stride = face_seq_cap_ (set in
-  // BeginSession from scene.max_hits_).
   id<MTLBuffer> exit_crystal_id_buf    = nil;
   id<MTLBuffer> exit_face_seq_len_buf  = nil;
   id<MTLBuffer> exit_face_seq_data_buf = nil;
-  // Exit ms_layer_idx (scrum-267 task-fused-emit-gate Step 3): per-exit-ray
-  // tag identifying which MS layer produced the record. Final-layer exits set
-  // this to last_ms_layer_idx_; mid-exits from the emit gate set it to the
-  // PRODUCING layer's ms_idx. ReadbackExitRays uses the tag to skip the host
-  // filter+prob path for already-gated mid-exits.
   id<MTLBuffer> exit_ms_layer_buf      = nil;
   uint32_t      face_seq_cap_ = 0;
 
@@ -616,12 +611,11 @@ struct MetalTraceBackend::Impl {
   //   * root_wl_idx_buf_: max_rays × uint32, single (root buffers are NOT
   //     ping-pong; gen_root + transit_root both target the same root_*_buf set).
   //   * cont_wl_idx_buf_[2]: out_cap × uint32, ping-pong with cont_d/cont_w.
-  //   * exit_wl_idx_buf_: exit_cap × uint32, single (lock-step with exit_ray_d).
+  // (exit_wl_idx_buf_ removed in S1 device-fused: exit records no longer materialised)
   // The buffers grow with the same capacity tracking as their host siblings.
   id<MTLBuffer> wl_pool_buf_        = nil;
   id<MTLBuffer> root_wl_idx_buf_    = nil;
   id<MTLBuffer> cont_wl_idx_buf_[2] = { nil, nil };
-  id<MTLBuffer> exit_wl_idx_buf_    = nil;
   uint32_t      wl_pool_size_       = 0u;
   // BeginSession captures the spectrum mode + per-batch sentinel so
   // ResolveLayerCrystalForCi can rebuild the WlEntry pool against the active
@@ -684,7 +678,7 @@ struct MetalTraceBackend::Impl {
   void EnsureTriBuffers(size_t tri_cnt);
   void EnsureContBuffer(int slot);
   void EnsureRecSink(size_t n);
-  void EnsureExitBuffers(size_t cap);  // exit seam (scrum-258.1)
+  // EnsureExitBuffers removed in S1 device-fused (exit records eliminated)
   void EnsureFilterBuffers(const SessionSpec& session_spec);  // scrum-267.1
   void EnsureWlPoolBuffer();  // scrum-268.8 (DR-3) per-ray wavelength pool
   void UploadCrystal(const Crystal& crystal);
@@ -977,51 +971,9 @@ void MetalTraceBackend::Impl::EnsureRecSink(size_t n) {
   assert(rec_sink_buf != nil);
 }
 
-// Exit seam (scrum-258.1): grow-only buffer-egress storage + atomic slot.
-// Sized to ComputeOutCap(total_ray_num, max_hits) — same fan-out bound the
-// kernel already uses for continuation buffers, so single-MS exits cannot
-// outnumber it. Multi-MS per-layer sizing is owned by 258.3.
-void MetalTraceBackend::Impl::EnsureExitBuffers(size_t cap) {
-  if (exit_slot_buf == nil) {
-    exit_slot_buf = [device newBufferWithLength:sizeof(uint32_t)
-                                        options:MTLResourceStorageModeShared];
-    assert(exit_slot_buf != nil);
-  }
-  if (cap <= exit_ray_capacity) {
-    return;
-  }
-  exit_ray_capacity = cap;
-  exit_ray_d_buf = [device newBufferWithLength:cap * 3 * sizeof(float)
-                                       options:MTLResourceStorageModeShared];
-  assert(exit_ray_d_buf != nil);
-  exit_ray_w_buf = [device newBufferWithLength:cap * sizeof(float)
-                                       options:MTLResourceStorageModeShared];
-  assert(exit_ray_w_buf != nil);
-  // Exit metadata (scrum-258.2). face_seq_cap_ MUST be set by BeginSession
-  // before TraceLayer reaches this point; assert defends against future
-  // reorderings that would size buffer(23) to zero.
-  assert(face_seq_cap_ > 0u && "BeginSession must set face_seq_cap_ before EnsureExitBuffers");
-  exit_crystal_id_buf = [device newBufferWithLength:cap * sizeof(uint16_t)
-                                            options:MTLResourceStorageModeShared];
-  assert(exit_crystal_id_buf != nil);
-  exit_face_seq_len_buf = [device newBufferWithLength:cap * sizeof(uint8_t)
-                                              options:MTLResourceStorageModeShared];
-  assert(exit_face_seq_len_buf != nil);
-  exit_face_seq_data_buf =
-      [device newBufferWithLength:cap * static_cast<size_t>(face_seq_cap_) * sizeof(uint8_t)
-                          options:MTLResourceStorageModeShared];
-  assert(exit_face_seq_data_buf != nil);
-  // scrum-267 task-fused-emit-gate Step 3: ms_layer tag, sized in lock-step.
-  exit_ms_layer_buf = [device newBufferWithLength:cap * sizeof(uint8_t)
-                                          options:MTLResourceStorageModeShared];
-  assert(exit_ms_layer_buf != nil);
-  // scrum-268.8 (DR-3): per-ray wavelength index on the exit ring. Sized in
-  // lock-step with exit_ray_d_buf so ReadbackExitRays can attach wl_idx to
-  // each emitted ExitRayRecord.
-  exit_wl_idx_buf_ = [device newBufferWithLength:cap * sizeof(uint32_t)
-                                         options:MTLResourceStorageModeShared];
-  assert(exit_wl_idx_buf_ != nil);
-}
+// EnsureExitBuffers was removed in S1 device-fused: exit records are no longer
+// materialised. The function declaration is preserved in comments for history.
+// (formerly: Exit seam scrum-258.1 grow-only buffer-egress storage + atomic slot)
 
 // scrum-268.8 (DR-3): allocate the host-uploaded wavelength pool exactly once
 // per backend (pool size is invariant across sessions and ci dispatches; only
@@ -1671,22 +1623,27 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   params.proj_type  = proj_type;
   params.r_scale    = r_scale;
   params.max_abs_dz = max_abs_dz;
-  params.exit_cap   = static_cast<uint32_t>(exit_ray_capacity);
+  // S1 device-fused: exit_cap and face_seq_cap are unused (exit buffers gone).
+  params.exit_cap     = 0u;
   params.crystal_id   = crystal_id;
-  params.face_seq_cap = face_seq_cap_;
+  params.face_seq_cap = 0u;
   params.ms_layer_idx = ms_layer_idx;
-  // Emit-gate (scrum-267 task-fused-emit-gate Step 6). For ms_mode==0
-  // dispatches the kernel never enters the gate, so ms_prob is left at 0.0f
-  // (its actual value would be the FINAL layer's prob, which the
-  // ReadbackExitRays host path consumes via last_ms_prob_ — duplicating it
-  // here serves no purpose). For ms_mode==1 dispatches hop_ms_prob_[out_slot]
-  // carries the producing-layer prob, populated by TraceLayer's pre-ci-loop
-  // setup; the gate's `pcg_uniform() < ms_prob` mirrors legacy
-  // simulator.cpp:425 rng < ms_info.prob_.
+  // Emit-gate (scrum-267 task-fused-emit-gate Step 6 + scrum-302 S1).
+  // For ms_mode==1 dispatches hop_ms_prob_[out_slot] carries the producing-
+  // layer prob, populated by TraceLayer's pre-ci-loop setup; the gate's
+  // `pcg_uniform() < ms_prob` mirrors legacy simulator.cpp:468 rng < prob_.
+  // For ms_mode==0 (final layer) the device-fused gate now runs the SAME prob
+  // draw on device (scrum-302): legacy CollectData drops filter-pass rng<prob
+  // "would-continue-at-final" rays (there is no next layer) and emits only the
+  // (1-prob) remainder. Forcing 0 here (the pre-302 value, valid only when the
+  // host ReadbackExitRays path owned the final-layer prob) made the device emit
+  // 100% of filter-pass exits → metal/legacy energy = 1/(1-prob) (2× at p=0.5,
+  // caught by parity energy-conservation on prob05 / bd_filter / complex_filter).
+  // Pass the real final-layer prob so the kernel ms_mode==0 gate can drop them.
   if (ms_mode == 1u) {
     params.ms_prob = hop_ms_prob_[out_slot];
   } else {
-    params.ms_prob = 0.0f;
+    params.ms_prob = last_ms_prob_;
   }
   // gate_seed mixes gen_seed_ with a (layer, crystal) nonce so each dispatch
   // owns an independent PCG stream — without the nonce two dispatches with the
@@ -1704,8 +1661,7 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   // ms_layer_idx ~0). The bounds below are narrow enough to fire for any
   // reorder that puts a non-crystal field into the crystal_id slot.
   assert(crystal_id < kMaxCrystalNum && "crystal_id out of range — check KernelParams layout");
-  assert(face_seq_cap_ > 0u && face_seq_cap_ <= ExitFaceSeq::kCap &&
-         "face_seq_cap_ out of range — check BeginSession + KernelParams layout");
+  // face_seq_cap_ assertion removed in S1 device-fused (field unused, always 0).
 
   EnsureRecSink(num_rays);
   EnsureContBuffer(out_slot);
@@ -1777,37 +1733,22 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   [enc setBuffer:exit_count_buf offset:0 atIndex:15];
   [enc setBuffer:exit_w_sum_buf offset:0 atIndex:16];
   [enc setBuffer:root_rot_buf   offset:0 atIndex:17];
-  // Exit seam (scrum-258.1) — buffer-egress {dir, weight} + atomic slot.
-  // Bound unconditionally; the kernel always writes (no env gate).
-  [enc setBuffer:exit_ray_d_buf offset:0 atIndex:18];
-  [enc setBuffer:exit_ray_w_buf offset:0 atIndex:19];
-  [enc setBuffer:exit_slot_buf  offset:0 atIndex:20];
-  // Exit metadata (scrum-258.2) — bind in lock-step with exit_ray_d/w; the
-  // kernel writes to all three when exit_slot is acquired.
-  [enc setBuffer:exit_crystal_id_buf     offset:0 atIndex:21];
-  [enc setBuffer:exit_face_seq_len_buf   offset:0 atIndex:22];
-  [enc setBuffer:exit_face_seq_data_buf  offset:0 atIndex:23];
-  // Emit-gate state (scrum-267 task-fused-emit-gate Step 4b). Bound for every
-  // dispatch (Metal disallows nil buffers). EnsureFilterBuffers guarantees
-  // non-nil even in no-filter sessions via the 1-byte dummy fallback (R5
-  // fix); ms_mode==0 dispatches never enter the gate so reads through these
-  // slots happen only when filter buffers carry real desc data. The ms_layer
-  // tag at slot 28 is written by BOTH ms_mode==0 (final-layer) and
-  // ms_mode==1 (gate mid-exit) paths so ReadbackExitRays can route records.
-  // (Plan §3 originally reserved slots 27-31 for these five buffers; Metal's
-  // per-stage buffer-index ceiling is 30 → actual binding is 24-28. See
-  // progress.md DECISION "buffer 槽位 27-31 调整为 24-28".)
+  // S1 device-fused: slot 18 = landed_weight scalar (previously exit_ray_d).
+  // Slots 19-23 (exit_ray_w/slot/crystal_id/face_seq_len/data) and 28
+  // (exit_ms_layer) and 30 (exit_wl_idx) are freed; exit records are no
+  // longer materialised — the kernel accumulates directly into image + landed_weight.
+  [enc setBuffer:landed_weight_buf_ offset:0 atIndex:18];
+  // Emit-gate filter state (scrum-267 task-fused-emit-gate Step 4b). Bound for
+  // every dispatch (Metal disallows nil buffers). EnsureFilterBuffers guarantees
+  // non-nil even in no-filter sessions via the 1-byte dummy fallback (R5 fix).
+  // Slots 24-27 carry filter descriptors; slot 28 is freed (was exit_ms_layer).
   [enc setBuffer:filter_desc_buf_      offset:0 atIndex:24];
   [enc setBuffer:getfn_offsets_buf_    offset:0 atIndex:25];
   [enc setBuffer:getfn_bytes_buf_      offset:0 atIndex:26];
   [enc setBuffer:complex_sub_desc_buf_ offset:0 atIndex:27];
-  [enc setBuffer:exit_ms_layer_buf     offset:0 atIndex:28];
-  // scrum-268.8 (DR-3): per-ray wavelength side-cars in the last two free
-  // slots (Metal per-stage ceiling = 30). cont_wl_idx is written alongside
-  // the emit-gate's cont_d/cont_w; exit_wl_idx is written alongside the
-  // final-exit + mid-exit emits.
+  // scrum-268.8 (DR-3): cont_wl_idx propagates the photon's lifetime
+  // wavelength tag into the continuation ring (slot 29). Slot 30 freed.
   [enc setBuffer:cont_wl_idx_buf_[out_slot] offset:0 atIndex:29];
-  [enc setBuffer:exit_wl_idx_buf_           offset:0 atIndex:30];
 
   NSUInteger tg = std::min<NSUInteger>(256, pso.maxTotalThreadsPerThreadgroup);
   [enc dispatchThreads:MTLSizeMake(num_rays, 1, 1)
@@ -2053,6 +1994,16 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
     impl_->EnsureDevice();
     impl_->EnsurePso();
     impl_->EnsureImage(impl_->width, impl_->height);
+    // S1 device-fused: landed_weight scalar (1 × float, MTLResourceStorageModeShared).
+    // Allocated once (nil-check), cleared every BeginSession so cross-batch
+    // accumulation starts from zero.
+    if (impl_->landed_weight_buf_ == nil) {
+      impl_->landed_weight_buf_ =
+          [impl_->device newBufferWithLength:sizeof(float)
+                                     options:MTLResourceStorageModeShared];
+      assert(impl_->landed_weight_buf_ != nil);
+    }
+    *static_cast<float*>([impl_->landed_weight_buf_ contents]) = 0.0f;
     // scrum-268.8 (DR-3): allocate the wavelength pool buffer once per backend
     // (size invariant across sessions) and populate it once per BeginSession.
     // Pool content depends only on (illuminant mode, per_batch_wl_) — both
@@ -2128,9 +2079,8 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       // ComputeOutCap's max_hits*2+4 bound). Tests that bypass DrainExits
       // (test_metal_trace_parity.cpp) rely on the same grow-on-overflow to
       // accommodate cumulative accumulation across layers.
-      size_t per_layer_cap = ComputeOutCap(total_ray_num, impl_->spec.scene->max_hits_);
-      impl_->EnsureExitBuffers(per_layer_cap);
-      *static_cast<uint32_t*>([impl_->exit_slot_buf contents]) = 0u;
+      // S1 device-fused: exit buffers removed; no EnsureExitBuffers call needed.
+      // landed_weight_buf_ is cleared per BeginSession (not per-layer).
     }
     // Recalculate out_cap per layer so each layer's continuation buffer is
     // sized to the actual fan-out from that layer's input count. This matters
@@ -2184,21 +2134,11 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       impl_->hop_ms_prob_[out_slot] = ms_info.prob_;
     }
 
-    // task-268.4 grow-on-overflow: snapshot per-layer counters before the
-    // ci-loop so an exit-buffer overflow can be recovered by growing the
-    // buffer and re-running the ci-loop. The host mt19937 (`impl_->rng`,
-    // consumed only by MakeCrystal inside ResolveLayerCrystalForCi) is NOT
-    // snapshotted — it advances forward on each retry, which is acceptable
-    // because (a) parity-critical paths never trigger overflow, and (b) the
-    // re-run produces a self-consistent fresh sample that exercises the
-    // grown buffer. Loop terminates because each retry doubles the cap.
-    const size_t pre_root_ray_count    = impl_->root_ray_count;
-    const size_t pre_transit_ray_count = impl_->transit_ray_count_;
-
-    constexpr int kMaxExitOverflowRetries = 4;
-    size_t ci_start = 0;  // declared outside the retry so the for-init below
-                          // can re-zero it on each attempt.
-    for (int attempt = 0; ; ++attempt) {
+    // S1 device-fused: the grow-on-overflow retry loop is dead (no exit buffers).
+    // The outer for(;;) { break; } structure is preserved so the ci_start / last_stats
+    // / cont_counts reset that follows runs exactly once, matching the original flow.
+    size_t ci_start = 0;
+    for (;;) {
     ci_start = 0;
     // Reset per-layer counters BEFORE the ci loop: counter_buf is written
     // by each DispatchLayer (counter_init = previous cont_counts), and
@@ -2356,35 +2296,10 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     // (defensive against a future code path that skips the in-loop drain).
     impl_->WaitAndReadbackLayer();
 
-    // task-268.4 grow-on-overflow: exit_slot_buf is atomically incremented by
-    // the kernel for every emit (final-layer exit and ms_mode==1 mid-exit).
-    // After waitUntilCompleted on the last ci's DispatchLayer (inside
-    // DispatchLayer), shared-memory contents are host-visible.
-    uint32_t produced_exits =
-        *static_cast<uint32_t*>([impl_->exit_slot_buf contents]);
-    if (produced_exits <= impl_->exit_ray_capacity) {
-      break;  // success
-    }
-    if (attempt + 1 >= kMaxExitOverflowRetries) {
-      ILOG_ERROR(EffectiveLogger(impl_->logger_),
-                 "MetalTraceBackend: exit-ray overflow produced={} exit_cap={} after {} grow attempts (giving up; clamp)",
-                 produced_exits, impl_->exit_ray_capacity, kMaxExitOverflowRetries);
-      break;  // give up — fall through to DrainExits-side clamp
-    }
-    size_t new_cap = std::max<size_t>(
-        static_cast<size_t>(produced_exits) * 2u,
-        impl_->exit_ray_capacity * 2u);
-    ILOG_DEBUG(EffectiveLogger(impl_->logger_),
-               "MetalTraceBackend: exit-buffer auto-grow cap={}→{} (produced={}, attempt={})",
-               impl_->exit_ray_capacity, new_cap, produced_exits, attempt + 1);
-    impl_->EnsureExitBuffers(new_cap);
-    // Restore RNG-monotonicity counters so the retried ci-loop re-issues
-    // device-gen / transit with the same gen_ray_base / transit base; the
-    // host mt19937 advances forward (see snapshot comment above).
-    impl_->root_ray_count    = pre_root_ray_count;
-    impl_->transit_ray_count_ = pre_transit_ray_count;
-    *static_cast<uint32_t*>([impl_->exit_slot_buf contents]) = 0u;
-    }  // grow-on-overflow retry
+    // S1 device-fused: exit_slot_buf is nil — exit records no longer
+    // materialised; no overflow can occur. Break immediately.
+    break;
+    }  // grow-on-overflow retry (inert after S1 device-fused)
 
     size_t produced = last_layer ? 0u : impl_->cont_counts[out_slot];
     return std::make_unique<MetalLayerHandle>(produced, impl_->last_stats);
@@ -2465,153 +2380,30 @@ void MetalTraceBackend::ReadbackImage(XyzImageData& out) {
   std::memcpy(out.data, [impl_->xyz_image contents], pix * 3 * sizeof(float));
 }
 
-// Exit seam (scrum-258.1/258.2/258.3): assemble rich ExitRayRecords.
-//
-// 258.3 makes per-layer filter+prob the seam's responsibility, mirroring legacy
-// simulator.cpp:425 CollectData per-layer:
-//   final-layer exits   : filter + prob applied here in ReadbackExitRays (the
-//                         GPU kernel exports every geometric exit, this gate
-//                         drops filter-fails and the rng<prob "would continue"
-//                         fraction).
-//   mid-layer exits     : already filtered + prob-gated by the device emit
-//                         gate (scrum-267 task-fused-emit-gate); written into
-//                         exit_*_buf with a producing-layer ms_layer_idx tag
-//                         and routed through the != final_ms_layer branch
-//                         below.
-// Overflow (produced > capacity) on the final-layer exit ring is logged and
-// clamped; ComputeOutCap is the same fan-out bound the continuation buffers
-// use, so structurally rare.
+// S1 device-fused: ReadbackExitRays returns empty — the kernel no longer
+// materialises per-exit records. Filter+prob+projection now run on device
+// inside the emit gate; XYZ accumulation goes directly into xyz_image.
+// DrainExits delegates here and likewise returns 0; the simulator's
+// per-layer drain loop receives an empty vector and skips ScatterOutgoingToXyz.
 size_t MetalTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
   assert(impl_->in_session);
   out.clear();
-  if (impl_->exit_slot_buf == nil) {
-    return 0;
-  }
-  uint32_t produced = *static_cast<uint32_t*>([impl_->exit_slot_buf contents]);
-  size_t count = std::min<size_t>(produced, impl_->exit_ray_capacity);
-  if (produced > impl_->exit_ray_capacity) {
-    ILOG_ERROR(EffectiveLogger(impl_->logger_),
-               "MetalTraceBackend: exit-ray overflow produced={} exit_cap={} (clamped)",
-               produced, impl_->exit_ray_capacity);
-  }
-  const auto* d_ptr        = static_cast<const float*>([impl_->exit_ray_d_buf contents]);
-  const auto* w_ptr        = static_cast<const float*>([impl_->exit_ray_w_buf contents]);
-  const auto* cid_ptr      = static_cast<const uint16_t*>([impl_->exit_crystal_id_buf contents]);
-  const auto* seq_len_ptr  = static_cast<const uint8_t*>([impl_->exit_face_seq_len_buf contents]);
-  const auto* seq_data_ptr = static_cast<const uint8_t*>([impl_->exit_face_seq_data_buf contents]);
-  const auto* ms_layer_ptr = static_cast<const uint8_t*>([impl_->exit_ms_layer_buf contents]);
-  // scrum-268.8 (DR-3): per-exit wavelength index. uint32 on device; narrowed
-  // to uint8_t into ExitRayRecord since wl_pool_size_ <= 255 (assert in
-  // ResolveWlPoolSize).
-  const auto* wl_idx_ptr   = static_cast<const uint32_t*>([impl_->exit_wl_idx_buf_ contents]);
-  const size_t stride      = impl_->face_seq_cap_;
+  return 0;
+}
 
-  // Per-ci FilterSpec cache for the final layer. Same crystal_id repeats
-  // across exits; build each spec once.
-  const size_t last_cnt = impl_->last_layer_crystals_.size();
-  std::vector<std::unique_ptr<FilterSpec>> spec_per_ci(last_cnt);
-  for (size_t k = 0; k < last_cnt; k++) {
-    spec_per_ci[k] = FilterSpec::Create(impl_->last_layer_filter_configs_[k],
-                                         impl_->last_layer_crystals_[k],
-                                         impl_->last_layer_axis_dists_[k]);
-  }
-  const float    final_prob      = impl_->last_ms_prob_;
-  const uint8_t  final_ms_layer  = impl_->last_ms_layer_idx_;
-
-  out.reserve(count);
-  for (size_t i = 0; i < count; i++) {
-    uint16_t crystal_id = cid_ptr[i];
-    uint8_t  rec_ms_layer = ms_layer_ptr[i];
-    // scrum-267 task-fused-emit-gate Step 8: mid-layer exits emitted by the
-    // device gate carry the producing layer's ms_layer_idx (≠ final layer).
-    // They have already passed filter+prob inside the kernel, so emit them
-    // verbatim — raw poly-index in path[] is acceptable for raw-XYZ parity
-    // (which only checks dir+weight); golden-ray tests should add GetFn
-    // remapping when needed.
-    if (rec_ms_layer != final_ms_layer) {
-      ExitRayRecord erec{};
-      erec.dir[0] = d_ptr[i * 3 + 0];
-      erec.dir[1] = d_ptr[i * 3 + 1];
-      erec.dir[2] = d_ptr[i * 3 + 2];
-      erec.weight = w_ptr[i];
-      erec.crystal_id   = crystal_id;
-      erec.ms_layer_idx = rec_ms_layer;
-      erec.wl_idx       = static_cast<uint8_t>(wl_idx_ptr[i] & 0xFFu);
-      uint8_t seq_len = std::min<uint8_t>(seq_len_ptr[i], ExitFaceSeq::kCap);
-      erec.path.size_ = seq_len;
-      std::memcpy(erec.path.data_, seq_data_ptr + i * stride, seq_len);
-      out.push_back(erec);
-      continue;
-    }
-    if (crystal_id >= last_cnt) {
-      continue;  // safety: skip stray records from a malformed kernel run
-    }
-
-    // Reconstruct {RaySeg, RaypathRecorder} for filter Check, mirroring
-    // CollectData post-Apply (d/p in world space, to_face_ = kInvalidId).
-    RaySeg r{};
-    r.d_[0] = d_ptr[i * 3 + 0];
-    r.d_[1] = d_ptr[i * 3 + 1];
-    r.d_[2] = d_ptr[i * 3 + 2];
-    r.w_ = w_ptr[i];
-    r.to_face_ = kInvalidId;
-    r.is_continue_ = false;
-    const Crystal& src_crystal = impl_->last_layer_crystals_[crystal_id];
-    r.crystal_config_id_ = src_crystal.config_id_;
-
-    RaypathRecorder rec{};
-    uint8_t seq_len = std::min<uint8_t>(seq_len_ptr[i], ExitFaceSeq::kCap);
-    rec.size_ = seq_len;
-    // task-284: paths longer than kInlineCap need a local arena so
-    // FilterSpec::Check can read past rec.data_ without overrunning the inline
-    // buffer. Layout matches RecorderAppend's in-arena format (slot[0]
-    // corresponds to path byte 0; see RaypathOrbit::Contains in filter_spec.cpp).
-    uint8_t local_arena[kMaxHits]{};
-    const bool has_overflow = (seq_len > RaypathRecorder::kInlineCap);
-    rec.overflow_idx_ = has_overflow ? 0 : RaypathRecorder::kNoOverflow;
-    // GetFn remap: raw kernel path[] carries poly-face indices; legacy
-    // FilterSpec::Check expects post-GetFn ids. Mirrors the (now removed)
-    // host frame-transit's GetFn application.
-    const uint8_t* raw_seq = seq_data_ptr + i * stride;
-    for (uint8_t k = 0; k < seq_len; ++k) {
-      const uint8_t v = static_cast<uint8_t>(src_crystal.GetFn(static_cast<IdType>(raw_seq[k])));
-      if (k < RaypathRecorder::kInlineCap) {
-        rec.data_[k] = v;
-      }
-      local_arena[k] = v;
-    }
-    const uint8_t* arena_for_check = has_overflow ? local_arena : nullptr;
-
-    const FilterSpec* spec = spec_per_ci[crystal_id].get();
-    bool filter_pass = (spec == nullptr) || spec->Check(r, rec, arena_for_check);
-    if (!filter_pass) {
-      continue;
-    }
-    // Legacy mirror: rng<prob → "would continue", but there is no next layer,
-    // so the ray is dropped (no outgoing emission). prob=1.0 therefore produces
-    // zero final-layer exits, which matches simulator.cpp:444 behaviour.
-    if (impl_->rng.GetUniform() < final_prob) {
-      continue;
-    }
-
-    ExitRayRecord erec{};
-    erec.dir[0] = r.d_[0];
-    erec.dir[1] = r.d_[1];
-    erec.dir[2] = r.d_[2];
-    erec.weight = r.w_;
-    erec.crystal_id = crystal_id;
-    erec.ms_layer_idx = final_ms_layer;
-    erec.wl_idx = static_cast<uint8_t>(wl_idx_ptr[i] & 0xFFu);
-    erec.path.size_ = seq_len;
-    // task-284: route through local_arena when seq_len > kInlineCap; the inline
-    // rec.data_ only covers the first kInlineCap bytes. local_arena holds the
-    // full path (matches the byte layout RaypathOrbit::Contains expects).
-    const uint8_t* path_src = has_overflow ? local_arena : rec.data_;
-    std::memcpy(erec.path.data_, path_src, seq_len);
-    out.push_back(erec);
-  }
-
-  return out.size();
+// S1 device-fused: copy the device-accumulated W*H*3 XYZ image and the total
+// landed weight. Called once per wavelength batch AFTER the layer loop.
+// The xyz_image buffer is in MTLResourceStorageModeShared (unified memory on
+// Apple Silicon); waitUntilCompleted in WaitAndReadbackLayer guarantees all
+// pending command buffers have finished before we reach here.
+void MetalTraceBackend::ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight) {
+  assert(impl_->in_session);
+  assert(impl_->landed_weight_buf_ != nil);
+  size_t pix = static_cast<size_t>(impl_->width) * static_cast<size_t>(impl_->height);
+  assert(xyz.data != nullptr);
+  assert(xyz.width == impl_->width && xyz.height == impl_->height);
+  std::memcpy(xyz.data, [impl_->xyz_image contents], pix * 3 * sizeof(float));
+  landed_weight += *static_cast<const float*>([impl_->landed_weight_buf_ contents]);
 }
 
 // task-268.4 per-layer destructive drain. Identical to ReadbackExitRays
