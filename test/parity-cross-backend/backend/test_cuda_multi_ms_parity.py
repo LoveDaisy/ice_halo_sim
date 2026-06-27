@@ -160,6 +160,111 @@ def test_cuda_multi_ms_image_parity_vs_legacy():
 
 
 # --------------------------------------------------------------------------- #
+# Exit-buffer overflow regression (scrum-296 Step D / task-cuda-throughput-bench)
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.slow
+def test_cuda_high_continuation_no_exit_overflow_corruption():
+    """Guard: a HIGH-continuation config must not corrupt the image via the
+    CUDA exit-buffer cap.
+
+    ``ms_prob05`` (the parity config above) has low continuation and never fills
+    the exit pool, so it could not catch this: ``ComputeExitCap`` formerly capped
+    the per-layer exit buffer at 64 MiB (~762600 records). ``ms_multi_crystal``
+    emits ~954k layer-1 exits at the DEFAULT dispatch — over the old cap — and the
+    kernel silently dropped the tail. Total energy (~1.02) AND cross-seed
+    self-corr (~0.9998) both stayed clean and masked it; only corr-vs-legacy
+    exposed the spatial damage (ds_corr fell to 0.913 < the 0.95 floor). The fix
+    sizes the exit/cont buffers to the analytic upper bound `n*(max_hits*2+4)` so
+    no exit is ever dropped. This test pins ds_corr back at/above the floor on
+    exactly the config that overflowed.
+    """
+    cfg = "ms_multi_crystal"
+    legacy = _run(cfg, "legacy", seed=_SEED)
+    cuda = _run(cfg, "cuda", seed=_SEED)
+
+    _assert_routed(legacy, "legacy", cfg)
+    _assert_routed(cuda, "cuda", cfg)
+
+    corr = _raw_corr_ds(cuda, legacy)
+    cuda_Y = float(cuda.flt_buf[..., 1].sum())
+    legacy_Y = float(legacy.flt_buf[..., 1].sum())
+    assert legacy_Y > 0.0, f"{cfg}: legacy total Y == 0; cannot form energy ratio"
+    energy_ratio = cuda_Y / legacy_Y
+
+    print(
+        f"[parity] {cfg}: cuda ds_corr={corr:.4f} energy_ratio={energy_ratio:.4f} "
+        f"(floors corr≥{_T_RAW_CORR_DS}, |energy−1|≤{_T_ENERGY_TOL})"
+    )
+
+    # ds_corr is the discriminating metric: the dropped-tail damage is spatial,
+    # not energetic, so this is what regressed (0.913) under the old cap.
+    assert corr >= _T_RAW_CORR_DS, (
+        f"{cfg}: ds_corr {corr:.4f} < {_T_RAW_CORR_DS}. Exit/cont buffer cap "
+        "may have reintroduced silent exit-record dropping (ComputeExitCap / "
+        "ComputeContCap must size to the analytic upper bound, not a fixed cap)."
+    )
+    assert abs(energy_ratio - 1.0) <= _T_ENERGY_TOL, (
+        f"{cfg}: cuda/legacy total-Y ratio {energy_ratio:.4f} outside "
+        f"[1 ± {_T_ENERGY_TOL}]."
+    )
+
+
+@pytest.mark.slow
+def test_cuda_three_layer_multi_ci_parity_vs_legacy():
+    """Full multi-CI guard: a 3-MS config with multiple crystals on EVERY layer
+    (incl. the final layer) must match legacy.
+
+    ``ms3_multi_crystal`` has 3 scattering layers with per-layer crystal counts
+    [4, 3, 2]. It exercises the parts that 2-layer single-CI-final configs cannot:
+      - per-ci transit on CONTINUATION layers (layers 1,2 multi-CI),
+      - EnsureContCapacity growth across 3 layers (cont fan-out > layer-0 cap),
+      - multi-CI FINAL-layer DrainExits (crystal_id-indexed FilterSpec / GetFn).
+    A single-CI-only CUDA backend traces every ray through one crystal → ds_corr
+    collapses; this pins the full multi-CI path against legacy.
+    """
+    import json
+    import tempfile
+    cfg = "ms3_multi_crystal"
+    # The committed ms3_multi_crystal ships ray_num=5M (an e2e PSNR config); the
+    # legacy oracle runs single-worker under a fixed seed and times out at 5M ×
+    # 3-MS × max_hits=12. Reduce to 300K via a temp config — block-mean ds_corr is
+    # robust to the lower sample count, and the multi-CI structure (3 layers, CI
+    # [4,3,2]) is unchanged. Both backends run the SAME temp config.
+    src = json.loads((CONFIGS_DIR / f"{cfg}.json").read_text())
+    src["scene"]["ray_num"] = 300_000
+    tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+    json.dump(src, tmp)
+    tmp.flush()
+    tmp.close()
+
+    legacy = run_scene_capi_buffered(tmp.name, sim_seed=_SEED, backend="legacy", timeout_sec=_TIMEOUT)
+    cuda = run_scene_capi_buffered(tmp.name, sim_seed=_SEED, backend="cuda", timeout_sec=_TIMEOUT)
+
+    _assert_routed(legacy, "legacy", cfg)
+    _assert_routed(cuda, "cuda", cfg)
+
+    corr = _raw_corr_ds(cuda, legacy)
+    cuda_Y = float(cuda.flt_buf[..., 1].sum())
+    legacy_Y = float(legacy.flt_buf[..., 1].sum())
+    assert legacy_Y > 0.0, f"{cfg}: legacy total Y == 0; cannot form energy ratio"
+    energy_ratio = cuda_Y / legacy_Y
+
+    print(
+        f"[parity] {cfg}(300K): cuda ds_corr={corr:.4f} energy_ratio={energy_ratio:.4f} "
+        f"(floors corr≥{_T_RAW_CORR_DS}, |energy−1|≤{_T_ENERGY_TOL})"
+    )
+    assert corr >= _T_RAW_CORR_DS, (
+        f"{cfg}: ds_corr {corr:.4f} < {_T_RAW_CORR_DS}. Multi-CI path broken on a "
+        "continuation/final layer (per-ci transit / EnsureContCapacity / final-"
+        "layer crystal_id-indexed DrainExits)."
+    )
+    assert abs(energy_ratio - 1.0) <= _T_ENERGY_TOL, (
+        f"{cfg}: cuda/legacy total-Y ratio {energy_ratio:.4f} outside [1 ± {_T_ENERGY_TOL}]."
+    )
+
+
+# --------------------------------------------------------------------------- #
 # AC2b — cross-seed self-consistency (the under-sampling guard)
 # --------------------------------------------------------------------------- #
 
