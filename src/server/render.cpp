@@ -289,8 +289,16 @@ void RenderConsumer::LogConsumeProfile() const {
 // See doc/ev-pipeline-architecture.md §2.2
 // See doc/accumulator-consumer-architecture.md §4.2 (two-phase snapshot protocol, Phase 1).
 void RenderConsumer::PrepareSnapshot() {
-  int total_pix = config_.resolution_[0] * config_.resolution_[1];
-  std::memcpy(snapshot_xyz_.get(), internal_xyz_.get(), total_pix * 3 * sizeof(float));
+  size_t total = static_cast<size_t>(config_.resolution_[0]) * config_.resolution_[1] * 3u;
+  // True running sum = internal_xyz_ + comp_xyz_ (Neumaier residual). The
+  // device-fused path (ConsumeDeviceFused) accumulates the compensation in
+  // comp_xyz_; folding it here is what realizes the precision gain — without
+  // this add the compensation would be tracked but never applied (plain +=).
+  // comp_xyz_ stays all-zero on the legacy projection path, so this is a no-op
+  // there.
+  for (size_t i = 0u; i < total; ++i) {
+    snapshot_xyz_[i] = internal_xyz_[i] + comp_xyz_[i];
+  }
   snapshot_intensity_ = total_intensity_;
 }
 
