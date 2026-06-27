@@ -1024,3 +1024,39 @@ kernel void transit_root_kernel(
   // scrum-268.8 (DR-3): pass-through wavelength index (photon lifetime tag).
   root_wl_idx_out[tid] = cont_wl_idx_in[tid];
 }
+
+// --- shuffle_cont_kernel ---------------------------------------------------
+//
+// Continuation-pool decorrelation shuffle (task-gpu-backend-recombine-shuffle).
+// Gather-form Feistel permutation: each thread tid in [0, n) computes
+// `src = feistel_bijection(tid, n, seed)` (shared lm_pcg, identical to the CUDA
+// shuffle_cont_kernel) and copies (d, w, wl_idx) from in[src] to out[tid]. The
+// dest must NOT alias the source, so the host passes cont[other_slot] as the
+// dest and swaps the slot handles afterwards (see MetalTraceBackend::Recombine).
+//
+// Why: when a multi-CI layer's per-CI trace dispatches run, cont[written_slot]
+// ends up grouped by parent CI. The next layer's per-CI slicing would then hand
+// "parent-correlated" subsets to each child CI, biasing the ray→crystal pairing.
+// Legacy host Fisher-Yates breaks this (simulator.cpp:946-950); explore-300
+// confirmed both GPU backends were missing the same decorrelation step.
+kernel void shuffle_cont_kernel(
+    device const float*  in_d   [[buffer(0)]],   // 3 × n
+    device const float*  in_w   [[buffer(1)]],   // n
+    device const uint*   in_wl  [[buffer(2)]],   // n
+    device float*        out_d  [[buffer(3)]],   // 3 × n
+    device float*        out_w  [[buffer(4)]],   // n
+    device uint*         out_wl [[buffer(5)]],   // n
+    constant uint&       n_rays [[buffer(6)]],
+    constant uint&       seed   [[buffer(7)]],
+    uint tid [[thread_position_in_grid]])
+{
+  if (tid >= n_rays) {
+    return;
+  }
+  uint src = feistel_bijection(tid, n_rays, seed);
+  out_d[tid * 3u + 0u] = in_d[src * 3u + 0u];
+  out_d[tid * 3u + 1u] = in_d[src * 3u + 1u];
+  out_d[tid * 3u + 2u] = in_d[src * 3u + 2u];
+  out_w[tid]  = in_w[src];
+  out_wl[tid] = in_wl[src];
+}

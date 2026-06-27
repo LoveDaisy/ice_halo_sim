@@ -1057,10 +1057,12 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
       aborted = true;
       break;
     }
-    // Metal v1 does not implement device-side shuffle and asserts on shuffle=true.
-    // CpuTraceBackend tolerates either. Always disable to keep both paths uniform.
+    // Continuation-pool decorrelation shuffle (default shuffle = true). All
+    // backends now honor it: CpuTraceBackend via host Fisher-Yates, Metal/CUDA
+    // via a device-side Feistel gather (task-gpu-backend-recombine-shuffle).
+    // It removes the per-parent-CI grouping that biased multi-CI continuation
+    // layers' ray→crystal pairing (explore-300).
     RecombineSpec rspec{};
-    rspec.shuffle = false;
     roots = backend.Recombine(std::move(handle), rspec);
   }
 

@@ -67,8 +67,11 @@ class MetalLayerHandle : public LayerHandle {
 // v1 constraints:
 //   - kRectangular lens and zenith view (el≈90°) only.
 //   - Each MS layer must have exactly one crystal setting.
-//   - Device-side shuffle is not implemented; callers must set
-//     RecombineSpec.shuffle = false before calling Recombine().
+//
+// Recombine honors RecombineSpec.shuffle: when true, a device-side
+// shuffle_cont_kernel (Feistel gather) decorrelates the continuation pool's
+// per-parent-CI grouping, mirroring legacy host Fisher-Yates
+// (task-gpu-backend-recombine-shuffle). shuffle = false skips the permutation.
 class MetalTraceBackend : public TraceBackend {
  public:
   explicit MetalTraceBackend(Logger* logger = nullptr);

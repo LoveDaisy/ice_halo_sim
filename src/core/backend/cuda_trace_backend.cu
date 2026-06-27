@@ -161,6 +161,13 @@ constexpr uint32_t kCudaGenNonce     = 0x3C9A7F11u;
 // (mirrors Metal `impl_->rng` re-seeding semantics — see scrum-258 lesson on
 // BeginSession RNG resets being filter parity's hidden third rail).
 constexpr uint32_t kCudaDrainNonce   = 0xD5A1B3C7u;
+// Continuation-pool shuffle PCG nonce (task-gpu-backend-recombine-shuffle).
+// shuffle_cont_kernel decorrelates the per-parent-CI grouping the per-CI trace
+// kernels leave in cont[written_slot] before the next layer's per-CI slicing
+// consumes them (mirrors legacy host Fisher-Yates in simulator.cpp:946-950).
+// Layer-level seed = shuffle_seed_ ^ ms_layer_idx_ keeps each layer's Feistel
+// independent (Metal-side kMetalShuffleNonce takes the same value, symmetric).
+constexpr uint32_t kCudaShuffleNonce = 0xB17CA3D9u;
 
 // File-local mirror of Metal `ComputeJacobianEnvelopeForDeviceGen`
 // (metal_trace_backend.mm:259). The four branches MUST stay numerically
@@ -922,6 +929,40 @@ __global__ void gen_root_kernel(float* __restrict__ d_root_d,           // 3 × 
   }
 }
 
+// --- shuffle_cont_kernel ---------------------------------------------------
+//
+// Continuation-pool decorrelation shuffle (task-gpu-backend-recombine-shuffle).
+// Gather-form Feistel permutation: each thread tid in [0, n) computes
+// `src = feistel_bijection(tid, n, seed)` (lm_pcg, shared with MSL) and copies
+// (d, w, wl_idx) from in[src] to out[tid]. The dest must NOT alias the source,
+// so the caller passes cont[other_slot] as the dest and swaps the slot pointers
+// afterwards (see Recombine).
+//
+// Why: when a multi-CI layer's per-CI trace_single_ms_kernel dispatches run on
+// the default stream, cont[written_slot] ends up grouped by parent CI. The next
+// layer's per-CI slicing then hands "parent-correlated" subsets to each child
+// CI, biasing the ray→crystal pairing. Legacy host Fisher-Yates breaks this
+// (simulator.cpp:946-950); explore-300 confirmed the GPU backends were missing
+// the same step.
+__global__ void shuffle_cont_kernel(const float* __restrict__    in_d,
+                                    const float* __restrict__    in_w,
+                                    const uint32_t* __restrict__ in_wl,
+                                    float* __restrict__          out_d,
+                                    float* __restrict__          out_w,
+                                    uint32_t* __restrict__       out_wl,
+                                    uint32_t n_rays, uint32_t seed) {
+  const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid >= n_rays) {
+    return;
+  }
+  const uint32_t src = lm_pcg::feistel_bijection(tid, n_rays, seed);
+  out_d[tid * 3u + 0u] = in_d[src * 3u + 0u];
+  out_d[tid * 3u + 1u] = in_d[src * 3u + 1u];
+  out_d[tid * 3u + 2u] = in_d[src * 3u + 2u];
+  out_w[tid]  = in_w[src];
+  out_wl[tid] = in_wl[src];
+}
+
 }  // namespace
 
 bool CudaDeviceAvailable() {
@@ -1091,6 +1132,12 @@ struct CudaTraceBackend::Impl {
   size_t   gen_ray_count_ = 0;
   bool     gen_seeded_    = false;
   bool     disable_device_gen_ = false;
+
+  // --- Continuation-pool shuffle PCG state (task-gpu-backend-recombine-shuffle)
+  // shuffle_cont_kernel uses (shuffle_seed_ ^ ms_layer_idx_) as the per-layer
+  // Feistel seed; no monotone counter (the Feistel is keyed once per layer, not
+  // per ray, and each layer's seed is naturally disjoint).
+  uint32_t shuffle_seed_ = 0u;
 
   // --- MS layer tracking (296.4) -------------------------------------------
   // Populated by BeginSession from spec.scene->ms_.size() and advanced by
@@ -1810,6 +1857,7 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     impl_->transit_seed_ = spec.seed ^ kCudaTransitNonce;
     impl_->gate_seed_    = spec.seed ^ kCudaGateNonce;
     impl_->gen_seed_     = spec.seed ^ kCudaGenNonce;
+    impl_->shuffle_seed_ = spec.seed ^ kCudaShuffleNonce;
     if (!impl_->transit_seeded_) {
       impl_->transit_ray_count_ = 0;
       impl_->transit_seeded_ = true;
@@ -2164,7 +2212,6 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
 }
 
 RootRaySource CudaTraceBackend::Recombine(LayerHandlePtr handle, const RecombineSpec& spec) {
-  (void)spec;
   if (!impl_->in_session_) {
     throw BackendUnavailableError("CudaTraceBackend::Recombine called outside session");
   }
@@ -2181,6 +2228,71 @@ RootRaySource CudaTraceBackend::Recombine(LayerHandlePtr handle, const Recombine
   // here: the next TraceLayer zeroes its own out_slot before its ci-loop.
   const uint32_t cont_n = impl_->h_cont_count_;
   const int written_slot = static_cast<int>(impl_->ms_layer_idx_ & 1u);
+
+  // Continuation-pool decorrelation shuffle (task-gpu-backend-recombine-shuffle).
+  // Mirrors legacy host Fisher-Yates (simulator.cpp:946-950): per-CI trace
+  // dispatches leave cont[written_slot] grouped by parent CI; without this
+  // shuffle, the next layer's per-CI slicing would hand parent-correlated
+  // subsets to each child CI (explore-300 root cause).
+  //
+  // Slot accounting (cuda_trace_backend.cu:1930-1933 F-verify, plan §8):
+  //   - This layer wrote cont[out_slot = ms_layer_idx_ & 1u]; we are BEFORE
+  //     the ++ so written_slot above is exactly that out_slot.
+  //   - The next layer N+1 reads in_slot = ((N+1)-1) & 1 = N & 1 = written_slot.
+  //   - Gather READ cont[written_slot] (source), WRITE cont[other_slot] (dest),
+  //     then SWAP the slot pointers so cont[written_slot] holds the shuffled
+  //     data the next layer will consume.
+  //   - cont[other_slot] post-swap holds the stale source; the next layer will
+  //     overwrite it (out_slot = (N+1) & 1 = other_slot) — no aliasing.
+  if (spec.shuffle && cont_n > 1u) {
+    const int other_slot = 1 - written_slot;
+    // Ensure cont[other_slot] has capacity for cont_n entries. Mirrors the
+    // grow-on-overflow path in EnsureContCapacity (alloc d/w/wl together).
+    if (impl_->cont_cap_[other_slot] < cont_n) {
+      auto ck = [this](cudaError_t e, const char* ctx) {
+        if (e != cudaSuccess) {
+          impl_->Reset();
+          throw BackendUnavailableError(std::string{"CudaTraceBackend::Recombine: "} + ctx + ": " +
+                                        cudaGetErrorString(e));
+        }
+      };
+      cudaDeviceSynchronize();
+      cudaFree(impl_->d_cont_d_[other_slot]);      impl_->d_cont_d_[other_slot] = nullptr;
+      cudaFree(impl_->d_cont_w_[other_slot]);      impl_->d_cont_w_[other_slot] = nullptr;
+      cudaFree(impl_->d_cont_wl_idx_[other_slot]); impl_->d_cont_wl_idx_[other_slot] = nullptr;
+      ck(cudaMalloc(&impl_->d_cont_d_[other_slot],      3 * cont_n * sizeof(float)),
+         "cudaMalloc d_cont_d (shuffle grow)");
+      ck(cudaMalloc(&impl_->d_cont_w_[other_slot],      cont_n * sizeof(float)),
+         "cudaMalloc d_cont_w (shuffle grow)");
+      ck(cudaMalloc(&impl_->d_cont_wl_idx_[other_slot], cont_n * sizeof(uint32_t)),
+         "cudaMalloc d_cont_wl_idx (shuffle grow)");
+      impl_->cont_cap_[other_slot] = cont_n;
+    }
+    const uint32_t shuf_seed = impl_->shuffle_seed_ ^ static_cast<uint32_t>(impl_->ms_layer_idx_);
+    const uint32_t grid = (cont_n + 255u) / 256u;
+    shuffle_cont_kernel<<<grid, 256>>>(impl_->d_cont_d_[written_slot],
+                                       impl_->d_cont_w_[written_slot],
+                                       impl_->d_cont_wl_idx_[written_slot],
+                                       impl_->d_cont_d_[other_slot],
+                                       impl_->d_cont_w_[other_slot],
+                                       impl_->d_cont_wl_idx_[other_slot],
+                                       cont_n, shuf_seed);
+    cudaError_t launch_err = cudaPeekAtLastError();
+    if (launch_err != cudaSuccess) {
+      impl_->Reset();
+      throw BackendUnavailableError(std::string{"CudaTraceBackend::Recombine: shuffle_cont_kernel launch: "} +
+                                    cudaGetErrorString(launch_err));
+    }
+    // Swap ALL four parallel slot arrays so cont[written_slot] holds the
+    // shuffled data (next layer's in_slot = written_slot). Omitting wl_idx
+    // here would silently desynchronize per-ray wavelength tagging — Feistel /
+    // energy parity could not detect it.
+    std::swap(impl_->d_cont_d_[written_slot],      impl_->d_cont_d_[other_slot]);
+    std::swap(impl_->d_cont_w_[written_slot],      impl_->d_cont_w_[other_slot]);
+    std::swap(impl_->d_cont_wl_idx_[written_slot], impl_->d_cont_wl_idx_[other_slot]);
+    std::swap(impl_->cont_cap_[written_slot],      impl_->cont_cap_[other_slot]);
+  }
+
   impl_->ms_layer_idx_++;
 
   if (impl_->logger != nullptr) {

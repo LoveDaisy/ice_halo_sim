@@ -328,7 +328,13 @@ LM_FN void sample_sph_cap(LM_THREAD PcgStream& s, float lon, float lat, float ha
 //
 // Small-n special cases: n<=1 returns i (trivial); n==2 returns i^1 (the
 // p=h=1 case degenerates to all-zero output under the general Feistel form
-// because half-bit width = 0 — see review.md Minor#2).
+// because the half-bit width = 0). The n==2 permutation is seed-INDEPENDENT —
+// a 2-element set has exactly one non-trivial permutation (the swap), so this
+// is a mathematical limit, not a missing seed dependency.
+//
+// Supported domain: n up to 2^30 (~1.07e9), far above any continuation-pool
+// size (ray counts are in the millions at most). The bit-width loop is capped
+// at 30 to keep `1u << bits` clear of the uint32 shift-UB boundary (bits==32).
 LM_FN uint32_t feistel_bijection(uint32_t i, uint32_t n, uint32_t seed) {
   if (n <= 1u) {
     return i;
@@ -340,8 +346,11 @@ LM_FN uint32_t feistel_bijection(uint32_t i, uint32_t n, uint32_t seed) {
   // bit-width (else the split L|R wouldn't cover the whole p domain — e.g.
   // n=5 → next_pow2=8 has 3 bits, halves of 1+1=2 bits cover only 4 elements).
   // Round bit-width up to even (equivalent to next power-of-4 domain).
+  // Cap at 30 so `1u << bits` never reaches the uint32 shift-UB boundary
+  // (bits==32). n > 2^30 is unsupported (see domain note above); it would
+  // degrade gracefully to the cycle-walk fallback rather than invoke UB.
   uint32_t bits = 0u;
-  while ((1u << bits) < n) {
+  while (bits < 30u && (1u << bits) < n) {
     bits++;
   }
   if ((bits & 1u) != 0u) {
@@ -349,8 +358,6 @@ LM_FN uint32_t feistel_bijection(uint32_t i, uint32_t n, uint32_t seed) {
   }
   uint32_t half_bits = bits >> 1u;
   uint32_t hm = (1u << half_bits) - 1u;
-  uint32_t p = 1u << bits;
-  (void)p;
   uint32_t round_const[4] = { 0x9E3779B9u, 0x85EBCA6Bu, 0xC2B2AE35u, 0x27D4EB2Fu };
   uint32_t cur = i;
   // Cycle-walk: at most O(p/n) iterations expected (p ≤ 4n by pow-of-4 rounding;
@@ -372,7 +379,14 @@ LM_FN uint32_t feistel_bijection(uint32_t i, uint32_t n, uint32_t seed) {
     }
     cur = out;
   }
-  // Defensive: should be unreachable; return cur modulo n to keep within range.
+  // Defensive fallback: mathematically unreachable for supported n (a finite
+  // Feistel cycle always returns to [0,n); the Python harness measured a max
+  // cycle-walk depth of 26, well under the guard of 64). If it IS reached, the
+  // permutation contract is already broken — `cur % n` is NOT a bijection, so
+  // the shuffle would silently double-count / drop rays. We still clamp into
+  // [0,n) here (rather than return `cur`) so a broken state cannot cause an
+  // out-of-bounds gather read on the GPU; the energy imbalance would surface
+  // in parity tests.
   return cur % n;
 }
 
