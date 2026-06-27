@@ -68,6 +68,13 @@ constexpr int kTraceKernelRecCap = 64;
 static_assert(kDevFilterMatchRecCap == kTraceKernelRecCap,
               "kDevRecCap (filter-match helper) and kRecCap (trace kernel) must match");
 
+// Continuation-pool shuffle PCG nonce (task-gpu-backend-recombine-shuffle).
+// MUST equal the CUDA-side kCudaShuffleNonce so the two backends derive the
+// same per-layer Feistel seed (spec.seed ^ nonce ^ ms_idx) — the shuffle only
+// needs statistical uniformity, not bit-match with legacy host Fisher-Yates,
+// but keeping the nonces identical keeps the two GPU backends in lock-step.
+constexpr uint32_t kMetalShuffleNonce = 0xB17CA3D9u;
+
 // Mirror of the Metal-side KernelParams (host layout MUST match the .metal
 // struct field-for-field — all 4-byte scalars, natural alignment).
 // NOTE: field order MUST match MSL KernelParams in src/core/metal/lumice_trace.metal — static_assert
@@ -454,6 +461,9 @@ struct MetalTraceBackend::Impl {
   // Device frame-transit PSO (scrum-267 task-device-resident-continuation).
   // Same compiled library as gen_root_pso_; nil until first BeginSession.
   id<MTLComputePipelineState> transit_root_pso_ = nil;
+  // Continuation-pool shuffle PSO (task-gpu-backend-recombine-shuffle).
+  // Same compiled library as the others; nil until first BeginSession.
+  id<MTLComputePipelineState> shuffle_pso_ = nil;
   // Captured from spec.seed by BeginSession. 0 → device gen disabled (host
   // fallback path). Non-zero implies single-worker determinism contract.
   uint32_t gen_seed_ = 0u;
@@ -710,6 +720,12 @@ struct MetalTraceBackend::Impl {
   // root_*_buf in lock-step with the trace kernel's input layout.
   void EncodeTransitRoot(id<MTLCommandBuffer> cb, const GenRootKernelParams& gp,
                          int in_slot, size_t ci_start);
+  // Encodes a shuffle_cont_kernel pass: gather-reads the full cont[in_slot]
+  // slice (n entries) and writes the Feistel permutation into cont[out_slot].
+  // The caller (Recombine) swaps the slot handles afterwards so cont[in_slot]
+  // ends up holding the shuffled data the next layer consumes.
+  void EncodeShuffleCont(id<MTLCommandBuffer> cb, int in_slot, int out_slot,
+                         uint32_t n, uint32_t seed);
   // DispatchLayer encodes the trace pass (and any pending gen_root) into either
   // a freshly-created command buffer or `existing_cb` (used by the non-first
   // MS path to share the CB with a preceding EncodeTransitRoot), commits the
@@ -831,6 +847,23 @@ void MetalTraceBackend::Impl::EnsurePso() {
                "MetalTraceBackend: transit_root pipeline state creation failed: {}",
                desc ? desc : "(no error)");
     throw BackendUnavailableError("MetalTraceBackend: transit_root pipeline state creation failed");
+  }
+
+  // Continuation-pool shuffle PSO (task-gpu-backend-recombine-shuffle). Shares
+  // the same compiled library so the kernel cache survives across BeginSession
+  // invocations alongside transit_root_pso_.
+  id<MTLFunction> shuffle_fn = [lib newFunctionWithName:@"shuffle_cont_kernel"];
+  if (shuffle_fn == nil) {
+    LogMissingFunction("shuffle_cont_kernel");
+    throw BackendUnavailableError("MetalTraceBackend: shuffle_cont_kernel entry point missing");
+  }
+  shuffle_pso_ = [device newComputePipelineStateWithFunction:shuffle_fn error:&err];
+  if (shuffle_pso_ == nil) {
+    const char* desc = err.localizedDescription.UTF8String;
+    ILOG_ERROR(EffectiveLogger(logger_),
+               "MetalTraceBackend: shuffle pipeline state creation failed: {}",
+               desc ? desc : "(no error)");
+    throw BackendUnavailableError("MetalTraceBackend: shuffle pipeline state creation failed");
   }
 }
 
@@ -1576,6 +1609,37 @@ void MetalTraceBackend::Impl::EncodeTransitRoot(
     NSUInteger groups  = (static_cast<NSUInteger>(gp.num_rays) + threads - 1) / threads;
     [enc dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
         threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
+    [enc endEncoding];
+  }
+}
+
+void MetalTraceBackend::Impl::EncodeShuffleCont(
+    id<MTLCommandBuffer> cb, int in_slot, int out_slot,
+    uint32_t n, uint32_t seed) {
+  assert(shuffle_pso_ != nil && "shuffle_pso_ nil in EncodeShuffleCont");
+  assert(cont_d[in_slot] != nil && cont_w[in_slot] != nil &&
+         cont_wl_idx_buf_[in_slot] != nil &&
+         "EncodeShuffleCont: source cont buffers must be allocated");
+  assert(cont_d[out_slot] != nil && cont_w[out_slot] != nil &&
+         cont_wl_idx_buf_[out_slot] != nil &&
+         "EncodeShuffleCont: dest cont buffers must be allocated (EnsureContBuffer)");
+  @autoreleasepool {
+    id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
+    [enc setComputePipelineState:shuffle_pso_];
+    [enc setBuffer:cont_d[in_slot]          offset:0 atIndex:0];
+    [enc setBuffer:cont_w[in_slot]          offset:0 atIndex:1];
+    [enc setBuffer:cont_wl_idx_buf_[in_slot] offset:0 atIndex:2];
+    [enc setBuffer:cont_d[out_slot]         offset:0 atIndex:3];
+    [enc setBuffer:cont_w[out_slot]         offset:0 atIndex:4];
+    [enc setBuffer:cont_wl_idx_buf_[out_slot] offset:0 atIndex:5];
+    [enc setBytes:&n    length:sizeof(uint32_t) atIndex:6];
+    [enc setBytes:&seed length:sizeof(uint32_t) atIndex:7];
+    // 256 to match the CUDA shuffle blockDim (cross-backend symmetry) and the
+    // trace kernel's dispatch, capped to the device ceiling. Non-uniform
+    // dispatchThreads handles the n % tg remainder; the kernel guards tid >= n.
+    NSUInteger tg = std::min<NSUInteger>(256, shuffle_pso_.maxTotalThreadsPerThreadgroup);
+    [enc dispatchThreads:MTLSizeMake(n, 1, 1)
+        threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
     [enc endEncoding];
   }
 }
@@ -2330,13 +2394,57 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
 RootRaySource MetalTraceBackend::Recombine(LayerHandlePtr handle, const RecombineSpec& spec) {
   assert(impl_->in_session);
   assert(handle != nullptr);
-  // v1 does not implement device-side shuffle; integration callers must opt
-  // out explicitly (RecombineSpec.shuffle = false). The default-true value is
-  // safe for the CPU backend only.
-  assert(!spec.shuffle &&
-         "MetalTraceBackend v1 does not implement device-side shuffle");
   size_t count = handle->ContinuationCount();
-  (void)spec;
+
+  // Continuation-pool decorrelation shuffle (task-gpu-backend-recombine-shuffle).
+  // Mirrors legacy host Fisher-Yates (simulator.cpp:946-950): the per-CI trace
+  // dispatches leave cont[written_slot] grouped by parent CI; without this
+  // shuffle, the next layer's per-CI slicing hands parent-correlated subsets to
+  // each child CI (explore-300 root cause).
+  //
+  // Slot accounting (mirrors TraceLayer's out_slot = ms_idx & 1 /
+  // in_slot = (ms_idx-1) & 1 at metal_trace_backend.mm:2105-2106; F-verified):
+  //   - This layer wrote cont[out_slot = ms_idx & 1]; we are BEFORE the ++ so
+  //     written_slot below is exactly that out_slot.
+  //   - The next layer N+1 reads in_slot = ((N+1)-1) & 1 = N & 1 = written_slot.
+  //   - Gather READ cont[written_slot] (source), WRITE cont[other_slot] (dest),
+  //     then SWAP the slot handles so cont[written_slot] holds the shuffled
+  //     data the next layer consumes; cont[other_slot] post-swap holds the
+  //     stale source the next layer overwrites (out_slot = (N+1) & 1) — no alias.
+  if (spec.shuffle && count > 1u) {
+    const int written_slot = static_cast<int>(impl_->ms_idx & 1u);
+    const int other_slot   = 1 - written_slot;
+    // Sync precondition: TraceLayer drained every trace CB via
+    // WaitAndReadbackLayer ([cb waitUntilCompleted]) at each ci-tail before
+    // returning the handle, so no CB is in flight against cont[other_slot] when
+    // we realloc it below (CUDA's equivalent guard is the default-stream
+    // cudaDeviceSynchronize before its grow path).
+    // Grow cont[other_slot] to the current fan-out bound. EnsureContBuffer sizes
+    // every slot to out_cap, and out_cap >= count by the fan-out invariant
+    // (WaitAndReadbackLayer asserts produced <= out_cap), so this guarantees
+    // capacity >= count. Assert makes the implicit invariant explicit, symmetric
+    // with CUDA's explicit cont_cap_[other_slot] < cont_n check.
+    impl_->EnsureContBuffer(other_slot);
+    assert(impl_->cont_capacity[other_slot] >= count &&
+           "shuffle: other_slot capacity must cover the continuation count");
+    // Per-layer Feistel seed: spec.seed ^ nonce ^ ms_idx. Matches the CUDA side
+    // (shuffle_seed_ ^ ms_layer_idx_, with shuffle_seed_ = spec.seed ^ nonce);
+    // inlined here rather than cached since Recombine is called rarely.
+    const uint32_t shuf_seed = impl_->spec.seed ^ kMetalShuffleNonce ^
+                               static_cast<uint32_t>(impl_->ms_idx);
+    id<MTLCommandBuffer> shuf_cb = [impl_->queue commandBuffer];
+    impl_->EncodeShuffleCont(shuf_cb, written_slot, other_slot,
+                             static_cast<uint32_t>(count), shuf_seed);
+    [shuf_cb commit];
+    [shuf_cb waitUntilCompleted];
+    // Swap ALL parallel slot arrays so cont[written_slot] holds the shuffled
+    // data. Omitting cont_wl_idx_buf_ would silently desynchronize per-ray
+    // wavelength tagging — Feistel / energy parity could not detect it.
+    std::swap(impl_->cont_d[written_slot],          impl_->cont_d[other_slot]);
+    std::swap(impl_->cont_w[written_slot],          impl_->cont_w[other_slot]);
+    std::swap(impl_->cont_wl_idx_buf_[written_slot], impl_->cont_wl_idx_buf_[other_slot]);
+    std::swap(impl_->cont_capacity[written_slot],   impl_->cont_capacity[other_slot]);
+  }
 
   impl_->ms_idx++;
 

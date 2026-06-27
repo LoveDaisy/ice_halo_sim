@@ -312,11 +312,15 @@ using LayerHandlePtr = std::unique_ptr<LayerHandle>;
 // -----------------------------------------------------------------------------
 // RecombineSpec — declarative control for the inter-layer compaction stage.
 //
-// `shuffle`: for CPU backends, applies a Fisher-Yates shuffle to the
-// continuation set so per-crystal-batch ordering does not bias the next
-// layer's small-batch dispatch. GPU stream compaction is naturally unordered;
-// backends may interpret `shuffle` as a no-op when compaction already breaks
-// any locality assumptions.
+// `shuffle`: applies a random permutation to the continuation set so the
+// per-parent-crystal ordering left by the producing layer does not bias the
+// next layer's per-CI slicing / small-batch dispatch. CPU backends use a host
+// Fisher-Yates; GPU backends (Metal/CUDA) use a device-side Feistel gather
+// (`feistel_bijection`, task-gpu-backend-recombine-shuffle). The earlier
+// assumption that "GPU stream compaction is naturally unordered, so shuffle is
+// a no-op" held only for single-CI continuation layers; multi-CI continuation
+// layers group the pool by parent CI and DO need this decorrelation
+// (explore-300). `shuffle = false` skips the permutation on every backend.
 // -----------------------------------------------------------------------------
 struct RecombineSpec {
   bool shuffle = true;

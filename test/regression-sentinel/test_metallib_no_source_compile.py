@@ -52,17 +52,19 @@ pytestmark = [
 
 # Marker emitted by LoadMetalLibrary in src/core/metal_trace_backend.mm.
 # Format: "MetalTraceBackend: loaded embedded metallib (N functions)".
-# Asserting both substrings (kernel marker AND the exact "3 functions" count
-# tied to the trace_layer / gen_root / transit_root entry points) gives early
-# warning on either:
+# Asserting both substrings (kernel marker AND the exact "4 functions" count
+# tied to the trace_layer / gen_root / transit_root / shuffle_cont entry points)
+# gives early warning on either:
 #   (a) silent regression to source-compile-only (marker absent), or
-#   (b) accidental drop of an entry point (count != 3).
+#   (b) accidental drop of an entry point (count != 4).
 _MARKER_RE = re.compile(
     r"MetalTraceBackend:\s+loaded\s+embedded\s+metallib\s+\((\d+)\s+functions\)"
 )
-# trace_layer_kernel + gen_root_kernel + transit_root_kernel.
+# trace_layer_kernel + gen_root_kernel + transit_root_kernel + shuffle_cont_kernel.
+# shuffle_cont_kernel added in task-gpu-backend-recombine-shuffle (continuation-
+# pool device-side Feistel shuffle).
 # Recount source of truth:  grep -c 'kernel void' src/core/metal/lumice_trace.metal
-_EXPECTED_FUNCTION_COUNT = 3
+_EXPECTED_FUNCTION_COUNT = 4
 
 
 def test_metal_runs_without_source_compile():
@@ -113,13 +115,13 @@ def test_metal_runs_without_source_compile():
         f"Captured {len(result.log_lines)} log lines."
     )
 
-    # 3. All three production entry points must resolve from the embedded
+    # 3. All four production entry points must resolve from the embedded
     #    metallib. If a future change adds a kernel, update the expected
     #    count in lock-step with the .metal source.
     counts = {int(m.group(1)) for m in matches}
     assert counts == {_EXPECTED_FUNCTION_COUNT}, (
         f"Expected exactly {_EXPECTED_FUNCTION_COUNT} entry points in the "
         f"embedded metallib (trace_layer_kernel / gen_root_kernel / "
-        f"transit_root_kernel); marker reported {counts}. "
+        f"transit_root_kernel / shuffle_cont_kernel); marker reported {counts}. "
         "If you added a new MSL kernel, update _EXPECTED_FUNCTION_COUNT."
     )

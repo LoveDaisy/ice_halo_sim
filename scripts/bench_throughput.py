@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Committed throughput bench harness (task-270.6 / performance layer §1.5).
 
-Runs `Lumice --benchmark` across a 3-backend × heavy-config × Metal-dispatch
+Runs `Lumice --benchmark` across a 4-backend × heavy-config × GPU-dispatch
 matrix, reports median rays/s + CoV per cell, ratios against the legacy CPU
-baseline. Replaces the gitignored `scratchpad/bench/seam_exit_bench.py` (whose
+baseline. Backends: legacy CPU (baseline), cpu_backend (verify-only), Metal
+(Apple host only), CUDA (CUDA host only, e.g. dev49 — scrum-296 Step D). The
+host-incompatible GPU rows print as N/A. Replaces the gitignored `scratchpad/bench/seam_exit_bench.py` (whose
 LUMICE_BATCH_RAY_NUM knob was removed in scrum-268.4).
 
 Baseline policy: the denominator is always legacy CPU (env unset = the GUI's
@@ -38,17 +40,30 @@ import tempfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-BIN = PROJECT_ROOT / "build" / "cmake_install" / "Lumice"
+# BIN/lib are env-overridable so the same harness runs on dev49 (CUDA bench, Linux
+# docker: binary at /work/build/Release/bin/Lumice) as on a local Mac. Default is
+# the local install path.
+_BIN_ENV = os.environ.get("LUMICE_BENCH_BIN")
+BIN = Path(_BIN_ENV) if _BIN_ENV else PROJECT_ROOT / "build" / "cmake_install" / "Lumice"
 # rpath workaround for -sj shared-lib builds (backlog #345). Harmless for -j.
-DYLIB_DIRS = [
+# LUMICE_BENCH_LIBDIR prepends a dir (dev49: /work/build/Release/lib).
+_LIBDIR_ENV = os.environ.get("LUMICE_BENCH_LIBDIR")
+LIB_DIRS = ([Path(_LIBDIR_ENV)] if _LIBDIR_ENV else []) + [
     PROJECT_ROOT / "build" / "Release" / "lib",
     PROJECT_ROOT / "build" / "cmake_install" / "lib",
     PROJECT_ROOT / "build" / "RelWithDebInfo" / "lib",
 ]
+# Shared-lib search-path env var differs by platform: macOS=DYLD_, Linux=LD_.
+LIB_PATH_VAR = "DYLD_LIBRARY_PATH" if platform.system() == "Darwin" else "LD_LIBRARY_PATH"
 
 BENCH_RE = re.compile(r"\[BENCHMARK\]\s*(\{.*\})")
 ROUTE_METAL = "routing via MetalTraceBackend"
+ROUTE_CUDA = "routing via CudaTraceBackend"
 FALLBACK = "falling back"
+# GPU backends whose routing must be confirmed in the log (else the run silently
+# fell back to legacy CPU and the number is meaningless). legacy/cpu_backend are
+# not route-gated (cpu_backend is verify-only; legacy is the baseline path).
+GPU_ROUTE_STRINGS = {"metal": ROUTE_METAL, "cuda": ROUTE_CUDA}
 
 # Canonical throughput-regime scene set (light -> heavy). Mirrors the benchmark
 # scene registry in doc/performance-testing.md ("基准场景注册表") — keep the two
@@ -84,17 +99,22 @@ BACKENDS = [
     ("legacy", None),
     ("cpu_backend", "cpu_backend"),
     ("metal", "metal"),
+    ("cuda", "cuda"),
 ]
 
-# Dispatch sweep applies to Metal only — CPU paths ignore LUMICE_DISPATCH_RAY_NUM
-# for parity with how the GUI runs. `None` means "do NOT set the env var" — the
-# server picks its own backend-aware default (32768 for Metal, kDefaultRayNum for
-# CPU). Keeping `None` distinct from `32768` lets the table verify "default ==
-# 32768 today" without conflating intents if the default later moves.
+# Dispatch sweep applies to GPU backends (Metal, CUDA) — CPU paths ignore
+# LUMICE_DISPATCH_RAY_NUM for parity with how the GUI runs. `None` means "do NOT
+# set the env var" — the server picks its own backend-aware default (32768 for any
+# GPU route, kDefaultRayNum for CPU; server.cpp ResolveGpuRoute). Keeping `None`
+# distinct from `32768` lets the table verify "default == 32768 today" without
+# conflating intents if the default later moves. The small-batch points (128, 512)
+# characterize the "small dispatch starves the GPU" curve that motivates the
+# single-engine large-dispatch route (doc/seam-design.md §5).
 DISPATCH_PLAN = {
     "legacy": [None],
     "cpu_backend": [None],
     "metal": [None, 128, 512, 2048, 32768],
+    "cuda": [None, 128, 512, 2048, 32768],
 }
 
 N_REPS = 5
@@ -107,10 +127,44 @@ BASELINE_LABEL = "[BASELINE]"
 CPU_BACKEND_LABEL = "[verify-only]"  # not a baseline; see feedback_perf_baseline_is_legacy_cpu
 
 
+# --- Optional env-driven matrix narrowing (for focused / robust remote runs) ---
+# The committed defaults above run the full matrix. For a focused dev49 run (e.g.
+# scrum-296 Step D: legacy vs cuda only, fewer reps, larger dispatch probe) these
+# env knobs trim the matrix WITHOUT editing the committed defaults. Unset = full.
+#   LUMICE_BENCH_BACKENDS=legacy,cuda      # subset of backend labels (order kept)
+#   LUMICE_BENCH_CONFIGS=ms_multi_crystal  # subset of config labels
+#   LUMICE_BENCH_DISPATCH=default,32768,65536,131072  # GPU dispatch list ("default"->None)
+#   LUMICE_BENCH_NREPS=5                    # override N_REPS
+def _csv_env(name: str) -> list[str] | None:
+    raw = os.environ.get(name)
+    if not raw:
+        return None
+    return [tok.strip() for tok in raw.split(",") if tok.strip()]
+
+
+_sel_backends = _csv_env("LUMICE_BENCH_BACKENDS")
+if _sel_backends is not None:
+    BACKENDS = [b for b in BACKENDS if b[0] in _sel_backends]
+
+_sel_configs = _csv_env("LUMICE_BENCH_CONFIGS")
+if _sel_configs is not None:
+    CONFIGS = {k: v for k, v in CONFIGS.items() if k in _sel_configs}
+
+_sel_dispatch = _csv_env("LUMICE_BENCH_DISPATCH")
+if _sel_dispatch is not None:
+    _parsed = [None if tok == "default" else int(tok) for tok in _sel_dispatch]
+    for _gpu in ("metal", "cuda"):
+        DISPATCH_PLAN[_gpu] = _parsed
+
+_nreps_env = os.environ.get("LUMICE_BENCH_NREPS")
+if _nreps_env:
+    N_REPS = int(_nreps_env)
+
+
 def run(config_path: Path, backend_env: str | None, dispatch_num: int | None) -> dict:
     """Execute one --benchmark invocation. Returns parsed result dict."""
     env = dict(os.environ)
-    env["DYLD_LIBRARY_PATH"] = ":".join(str(d) for d in DYLIB_DIRS)
+    env[LIB_PATH_VAR] = ":".join(str(d) for d in LIB_DIRS)
     if backend_env is None:
         env.pop("LUMICE_TRACE_BACKEND", None)
     else:
@@ -134,21 +188,22 @@ def run(config_path: Path, backend_env: str | None, dispatch_num: int | None) ->
             pass  # malformed [BENCHMARK] line → INCOMPLETE note below
     by_mode = {b["mode"]: b["rays_per_sec"] for b in benches}
 
-    routed_metal = ROUTE_METAL in out
+    expected_route = GPU_ROUTE_STRINGS.get(backend_env)  # None for legacy/cpu_backend
+    routed_gpu = (expected_route in out) if expected_route else True
     fell_back = FALLBACK in out
     note = ""
-    if backend_env == "metal":
+    if expected_route is not None:  # metal or cuda — must confirm GPU routing
         if fell_back:
             note = "FELL_BACK"
-        elif not routed_metal:
-            note = f"NO_METAL_ROUTE(rc={proc.returncode})"
+        elif not routed_gpu:
+            note = f"NO_{backend_env.upper()}_ROUTE(rc={proc.returncode})"
         elif len(benches) < 2:
             note = f"INCOMPLETE(n={len(benches)},rc={proc.returncode})"
     else:
         if len(benches) < 2:
             note = f"INCOMPLETE(n={len(benches)},rc={proc.returncode})"
 
-    routed_ok = (backend_env != "metal") or (routed_metal and not fell_back)
+    routed_ok = (expected_route is None) or (routed_gpu and not fell_back)
     return {
         "single_rps": by_mode.get("single"),
         "multi_rps": by_mode.get("multi"),
@@ -219,6 +274,19 @@ def _fmt_dispatch(d):
     return "default" if d is None else str(d)
 
 
+def _backend_na_reason(backend_label: str, is_darwin: bool) -> str | None:
+    """Which backends are not runnable on this host (returns reason, else None).
+
+    Metal needs an Apple host; CUDA needs a CUDA-enabled build + NVIDIA device
+    (the dev49 Linux docker image), which is never the Mac dev host.
+    """
+    if backend_label == "metal" and not is_darwin:
+        return "Darwin only"
+    if backend_label == "cuda" and is_darwin:
+        return "CUDA host only"
+    return None
+
+
 def _preflight() -> list[str]:
     """Validate prerequisites; returns list of error strings (empty == OK)."""
     errs: list[str] = []
@@ -264,7 +332,10 @@ def main() -> int:
 
     is_darwin = platform.system() == "Darwin"
     if not is_darwin:
-        print("[bench_throughput] non-Darwin host: Metal rows will be reported as 'N/A'.",
+        print("[bench_throughput] non-Darwin host: Metal rows -> N/A; CUDA is the GPU backend.",
+              flush=True)
+    else:
+        print("[bench_throughput] Darwin host: CUDA rows -> N/A; Metal is the GPU backend.",
               flush=True)
 
     print(
@@ -291,11 +362,12 @@ def main() -> int:
         legacy_multi_median = None
 
         for backend_label, backend_env in BACKENDS:
-            if backend_label == "metal" and not is_darwin:
+            na_reason = _backend_na_reason(backend_label, is_darwin)
+            if na_reason is not None:
                 print(
                     f"{backend_label:<12s} {cfg_label:<34s} {'-':>9s} "
                     f"{'N/A':>15s} {'N/A':>15s} {'-':>6s} {'-':>6s} {'-':>10s} "
-                    f"<-- N/A (Darwin only)",
+                    f"<-- N/A ({na_reason})",
                     flush=True,
                 )
                 continue

@@ -316,6 +316,80 @@ LM_FN void sample_sph_cap(LM_THREAD PcgStream& s, float lon, float lat, float ha
   out_d[2] = s_lat * x + c_lat * z;
 }
 
+// Device-side bijection on [0, n) — 4-round balanced Feistel with cycle-walk
+// for non-power-of-2 n. Used by Metal/CUDA continuation-pool shuffle to remove
+// the per-parent-CI correlation that legacy host Fisher-Yates breaks
+// (explore-300; task-gpu-backend-recombine-shuffle).
+//
+// Each thread `i in [0, n)` computes `src = feistel_bijection(i, n, seed)`
+// independently — no atomics, no host RNG, no sort. The output is a permutation
+// of [0, n). cycle-walk: when the Feistel domain p = next_pow2(n) > n, iterate
+// until the result falls in [0, n); for n in (p/2, p], expected iterations < 2.
+//
+// Small-n special cases: n<=1 returns i (trivial); n==2 returns i^1 (the
+// p=h=1 case degenerates to all-zero output under the general Feistel form
+// because the half-bit width = 0). The n==2 permutation is seed-INDEPENDENT —
+// a 2-element set has exactly one non-trivial permutation (the swap), so this
+// is a mathematical limit, not a missing seed dependency.
+//
+// Supported domain: n up to 2^30 (~1.07e9), far above any continuation-pool
+// size (ray counts are in the millions at most). The bit-width loop is capped
+// at 30 to keep `1u << bits` clear of the uint32 shift-UB boundary (bits==32).
+LM_FN uint32_t feistel_bijection(uint32_t i, uint32_t n, uint32_t seed) {
+  if (n <= 1u) {
+    return i;
+  }
+  if (n == 2u) {
+    return i ^ 1u;
+  }
+  // Balanced Feistel needs an EVEN bit-width domain so each half has equal
+  // bit-width (else the split L|R wouldn't cover the whole p domain — e.g.
+  // n=5 → next_pow2=8 has 3 bits, halves of 1+1=2 bits cover only 4 elements).
+  // Round bit-width up to even (equivalent to next power-of-4 domain).
+  // Cap at 30 so `1u << bits` never reaches the uint32 shift-UB boundary
+  // (bits==32). n > 2^30 is unsupported (see domain note above); it would
+  // degrade gracefully to the cycle-walk fallback rather than invoke UB.
+  uint32_t bits = 0u;
+  while (bits < 30u && (1u << bits) < n) {
+    bits++;
+  }
+  if ((bits & 1u) != 0u) {
+    bits++;
+  }
+  uint32_t half_bits = bits >> 1u;
+  uint32_t hm = (1u << half_bits) - 1u;
+  uint32_t round_const[4] = { 0x9E3779B9u, 0x85EBCA6Bu, 0xC2B2AE35u, 0x27D4EB2Fu };
+  uint32_t cur = i;
+  // Cycle-walk: at most O(p/n) iterations expected (p ≤ 4n by pow-of-4 rounding;
+  // typical n=10^3-10^4 in our cont-pool use case gives ratio ≈ 1-1.6). Guard
+  // bound 64 chosen for statistical safety — verified by Python harness in
+  // scratchpad/task-gpu-backend-recombine-shuffle (n ∈ {2..100003}, 5 seeds).
+  for (uint32_t guard = 0u; guard < 64u; guard++) {
+    uint32_t L = (cur >> half_bits) & hm;
+    uint32_t R = cur & hm;
+    for (uint32_t k = 0u; k < 4u; k++) {
+      uint32_t f = pcg_hash(seed ^ R ^ round_const[k]) & hm;
+      uint32_t new_R = L ^ f;
+      L = R;
+      R = new_R;
+    }
+    uint32_t out = (L << half_bits) | R;
+    if (out < n) {
+      return out;
+    }
+    cur = out;
+  }
+  // Defensive fallback: mathematically unreachable for supported n (a finite
+  // Feistel cycle always returns to [0,n); the Python harness measured a max
+  // cycle-walk depth of 26, well under the guard of 64). If it IS reached, the
+  // permutation contract is already broken — `cur % n` is NOT a bijection, so
+  // the shuffle would silently double-count / drop rays. We still clamp into
+  // [0,n) here (rather than return `cur`) so a broken state cannot cause an
+  // out-of-bounds gather read on the GPU; the energy imbalance would surface
+  // in parity tests.
+  return cur % n;
+}
+
 // RandomSample (geo3d.cpp:112-150) — categorical CDF with negative-weight clip.
 // Mirrors host behavior: non-positive total falls back to bin 0.
 LM_FN uint32_t categorical_sample(LM_THREAD const float* weights, uint32_t n, float u_in) {
