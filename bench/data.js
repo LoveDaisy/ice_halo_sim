@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782568235675,
+  "lastUpdate": 1782568237676,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9620,50 +9620,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "5548e8acc740ce89034441662cae0cb19c816a29",
-          "message": "Merge pull request #50 from LoveDaisy/feat/improve_filter\n\nfix(filter): DirectionFilter correctness fix and filter subsystem improvements",
-          "timestamp": "2026-04-06T11:58:35+08:00",
-          "tree_id": "8e6aad4814519815f04ee9170aa02e23067e2d32",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5548e8acc740ce89034441662cae0cb19c816a29"
-        },
-        "date": 1775448152122,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 97.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 81.2,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 71.7,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 68.2,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "10f0e13e274b0d2f0da17b5a5be993d033af1711",
           "message": "Merge pull request #51 from LoveDaisy/exp/sim_efficiency\n\nfix(core): Jacobian-corrected spherical sampling with proper folding",
           "timestamp": "2026-04-06T18:51:38+08:00",
@@ -14003,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 94.6,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7bd4807017bdde3f3cb961988b4ab9991eeec42b",
+          "message": "Merge pull request #152 from LoveDaisy/feat/cuda-multi-ci-correctness\n\nfix(gpu): CUDA full multi-CI correctness + device-side recombine shuffle (Metal+CUDA)",
+          "timestamp": "2026-06-27T21:44:16+08:00",
+          "tree_id": "afa0020517cdb071aab346c7fde6ef574372c0f9",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/7bd4807017bdde3f3cb961988b4ab9991eeec42b"
+        },
+        "date": 1782568237040,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 64.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 102.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 85.2,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 101.7,
             "unit": "%"
           }
         ]
