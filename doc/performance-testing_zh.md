@@ -70,6 +70,30 @@ benchmark 模式的行为差异：
 - **不写图片**：跳过 `SaveRenderResults`，`wall_sec` 纯反映模拟耗时
 - **100ms 轮询间隔**（默认 1s）：将计时量化误差降至 ~0.1s
 
+### 最新实测结果（每次更新追加）
+
+> 每次重跑 bench 把最新数字追加这里。记**绝对 rays/sec**(不止倍数)、各 config 都有、附硬件摘要。**跨硬件数字不可比**——只在同一 host 块内读,别拿 Mac 行比 Linux 行。来源:`scripts/bench_throughput.py`(默认 dispatch,`ray_num`=20M,N≥5,CoV>15% 重跑 N=9)。
+
+#### Mac — Apple M2 Max(12 核 8P+4E,32GB,macOS 14.7)· legacy vs Metal · 2026-06-28
+
+| config | legacy single | legacy multi | Metal single | Metal multi | Metal/legacy(multi) |
+|---|---|---|---|---|---|
+| `bench_light_single_ms`（轻·单MS） | 573 K/s | 4.62 M/s | **27.8 M/s** | **30.6 M/s** | 6.62× |
+| `ms_multi_crystal`（中·无filter） | 94 K/s | 759 K/s | 7.08 M/s | 7.66 M/s | 10.08× |
+| `ms_multi_crystal_complex_filter`（重·标准） | 333 K/s | 1.54 M/s | 12.4 M/s | 12.8 M/s | 8.33× |
+| `ms_multi_crystal_filtered_bd`（重·bd） | 368 K/s | 1.62 M/s | 13.7 M/s | 14.0 M/s | 8.59× |
+
+- **Metal 在可比的轻·单MS 场景已 ~28–30 M/s,达到/超过 25 M/s 硬件能力目标。** 证明这个标尺在本 codebase 够得着,给 CUDA 一个同引擎目标(4060 Ti 与 M2 Max GPU 算力同级);CUDA 剩余差距是执行模型,不是 kernel 根本极限。
+
+#### Linux — dev49 RTX 4060 Ti(AMD Zen5 9950X 16C/32T host）· legacy vs CUDA · TODO（dev49 被占）
+
+本轮未测。dev49 空闲后跑(scrum-304 buffer-persist 构建),填同样表格,CUDA 轻场景数对标 25 M/s + 上面 Metal ~28 M/s 参照:
+
+```bash
+LUMICE_BENCH_BIN=/work/build/Release/bin/Lumice LUMICE_BENCH_LIBDIR=/work/build/Release/lib \
+LUMICE_BENCH_BACKENDS=legacy,cuda python3 scripts/bench_throughput.py
+```
+
 ### macOS
 
 ```bash
@@ -110,6 +134,30 @@ scp examples/bench_config.json <windows-host>:<path>/
 # 手动模式（PowerShell 墙钟时间）
 Measure-Command { .\Lumice.exe -f bench_config.json -o . 2>&1 | Out-Null } | Select-Object TotalSeconds
 ```
+
+### Linux / CUDA（dev49）
+
+CUDA 吞吐在 dev49（RTX 4060 Ti，Linux，CUDA docker）测。**禁止每个 task 自己写 bench 脚本**——用 committed harness `scripts/bench_throughput.py`（已支持 CUDA env 覆盖、跑 canonical 场景集含可比的 `bench_light_single_ms`、确认 GPU 路由、median+CoV）。详见英文版 `performance-testing.md` 同名节 + `explore-cuda-step2-derisk/TOOLCHAIN.md`。
+
+```bash
+# dev49 CUDA docker 内（先 build -DLUMICE_CUDA_ENABLED=ON -DBUILD_SHARED_LIBS=ON）
+LUMICE_BENCH_BIN=/work/build/Release/bin/Lumice \
+LUMICE_BENCH_LIBDIR=/work/build/Release/lib \
+LUMICE_BENCH_BACKENDS=legacy,cuda \
+  python3 scripts/bench_throughput.py
+# 只跑可比轻场景（对标 25M/s）：LUMICE_BENCH_CONFIGS=bench_light_single_ms
+# dev49 共享机：严格吞吐须 idle 窗口；用完立刻清自己进程，别占机。
+```
+
+**⭐ 验收标尺 = 硬件能力,不是"× legacy CPU"。** 打过 legacy 只是必要门槛（floor），不是成功——GPU 可以"× legacy 赢"却只用 1–2% 利用率（scrum-304 踩过这坑）。GPU 后端真正的标尺是**这块卡的硬件能力**，锚到**可比工作负载 + 外部参照**：
+
+| 场景 | 可比负载 | 硬件能力目标 | 来源 |
+|---|---|---|---|
+| `bench_light_single_ms`（轻·单MS） | 单晶 + 单 MS + 无续传 | **4060 Ti ≥ 25M rays/s** | 竞品实测 |
+
+- 别拿重场景（多晶/多 MS）的数对标单晶单散射——逐光线工作量差一个数量级。
+- GPU 数远低于硬件能力目标时,**无论对 legacy 比值多少都不算成功**;查利用率（CUDA 可用 nsys active%；Mac/Metal 无同口径 CLI 路径,故 active% 非硬性普适门,跨平台判据仍是绝对能力目标）+ 机制,别收尾。
+- 到不了目标,交付物必须是 **profiler 落地的机制解释**（时间花哪了），不是"GPU 非天然胜"的黑盒话术。
 
 ### CI 自动化基准测试
 
