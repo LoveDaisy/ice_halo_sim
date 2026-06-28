@@ -619,18 +619,19 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               d_cont_wl_idx[cslot]      = wl_idx;  // 296.6 DR-3: carry ray's wl to its continuation
             }
           } else {
-            uint32_t slot = atomicAdd(d_exit_count, 1u);
-            if (slot < exit_cap) {
-              ExitRayRecord& rec = d_exit[slot];
-              rec.dir[0] = exit_world[0];
-              rec.dir[1] = exit_world[1];
-              rec.dir[2] = exit_world[2];
-              rec.weight = w_refl_e;
-              rec.path = BuildExitPath(path_rec, rec_len);
-              rec.crystal_id = crystal_id;
-              rec.ms_layer_idx = ms_layer_idx;
-              rec.wl_idx = static_cast<uint8_t>(wl_idx);
-            }
+            // scrum-302 S2 device-fused MID-EXIT (filter-pass && !do_continue).
+            // Project + accumulate into the device XYZ buffer, mirroring Metal
+            // mid-exit (lumice_trace.metal:635-702). NO further prob draw —
+            // !do_continue already IS the mid-exit outcome. Previously this wrote
+            // an ExitRayRecord into d_exit, which HasDeviceXyzAccum()==true makes
+            // the simulator discard (exit_records dropped) → every mid-layer's
+            // exits were silently lost → energy = 1/(layers) deficit.
+            const float cmf_x = d_wl_pool[wl_idx].cmf_x;
+            const float cmf_y = d_wl_pool[wl_idx].cmf_y;
+            const float cmf_z = d_wl_pool[wl_idx].cmf_z;
+            EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
+                            cmf_x, cmf_y, cmf_z, w_refl_e,
+                            proj_type, az0, r_scale, max_abs_dz, img_w, img_h);
           }
         }
         // filter_pass == false: implicit drop (Design A termination).
@@ -789,18 +790,17 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                 d_cont_wl_idx[cslot]      = wl_idx;  // 296.6 DR-3: carry ray's wl to its continuation
               }
             } else {
-              uint32_t slot = atomicAdd(d_exit_count, 1u);
-              if (slot < exit_cap) {
-                ExitRayRecord& rec = d_exit[slot];
-                rec.dir[0] = exit_world[0];
-                rec.dir[1] = exit_world[1];
-                rec.dir[2] = exit_world[2];
-                rec.weight = w_refr;
-                rec.path = BuildExitPath(path_rec, rec_len);
-                rec.crystal_id = crystal_id;
-                rec.ms_layer_idx = ms_layer_idx;
-                rec.wl_idx = static_cast<uint8_t>(wl_idx);
-              }
+              // scrum-302 S2 device-fused MID-EXIT (per-bounce refracted,
+              // filter-pass && !do_continue). Project + accumulate, mirror Metal
+              // mid-exit (lumice_trace.metal:635-702). No further prob draw.
+              // Was: ExitRayRecord write → discarded under HasDeviceXyzAccum →
+              // mid-layer energy loss (see entry-face branch above).
+              const float cmf_x = d_wl_pool[wl_idx].cmf_x;
+              const float cmf_y = d_wl_pool[wl_idx].cmf_y;
+              const float cmf_z = d_wl_pool[wl_idx].cmf_z;
+              EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
+                              cmf_x, cmf_y, cmf_z, w_refr,
+                              proj_type, az0, r_scale, max_abs_dz, img_w, img_h);
             }
           }
           // filter_pass == false: implicit drop (Design A termination).

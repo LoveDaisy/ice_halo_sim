@@ -30,7 +30,10 @@
       "id": 1,
       "type": "raypath",
       "action": "filter_in",
-      "raypath": [1, 1],
+      "raypath": [
+        1,
+        1
+      ],
       "symmetry": "none"
     }
   ],
@@ -68,8 +71,8 @@
     {
       "id": 1,
       "lens": {
-        "type": "fisheye_equal_area",
-        "fov": 120
+        "type": "dual_fisheye_equal_area",
+        "fov": 180
       },
       "resolution": [
         64,
