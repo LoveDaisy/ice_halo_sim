@@ -145,6 +145,10 @@ TEST(ExitRecordsTest, MetalBackendSingleMsFillsMetadata) {
   if (ShouldSkipMetalTests()) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
+  GTEST_SKIP() << "scrum-302 device-fused: Metal accumulates XYZ on-device and no "
+                  "longer materializes exit-record metadata (ReadbackExitRays is a "
+                  "stub). Rich exit metadata is deferred to the raypath-retrace "
+                  "feature; re-enable this regression then.";
   auto scene = MakeMetalScene(kMaxHits, /*ms_layers=*/1);
   auto render = MakeRectangularRender();
 
@@ -278,6 +282,10 @@ TEST(ExitRecordsTest, MetalBackendMultiMsProb0AllMidExits) {
   if (ShouldSkipMetalTests()) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
+  GTEST_SKIP() << "scrum-302 device-fused: Metal accumulates XYZ on-device and no "
+                  "longer materializes exit-record metadata (ReadbackExitRays is a "
+                  "stub). Rich exit metadata is deferred to the raypath-retrace "
+                  "feature; re-enable this regression then.";
   auto scene = MakeMetalSceneWithProb(kMaxHits, /*ms_layers=*/2, /*prob=*/0.0f);
   auto render = MakeRectangularRender();
   auto records = RunMetalExitRays(scene, render);
@@ -302,6 +310,10 @@ TEST(ExitRecordsTest, MetalBackendMultiMsMidLayerSplit) {
   if (ShouldSkipMetalTests()) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
+  GTEST_SKIP() << "scrum-302 device-fused: Metal accumulates XYZ on-device and no "
+                  "longer materializes exit-record metadata (ReadbackExitRays is a "
+                  "stub). Rich exit metadata is deferred to the raypath-retrace "
+                  "feature; re-enable this regression then.";
   // MakeMetalScene: layer 0 prob=0.6 → ~60% continue / ~40% mid-exit
   //                                    (ms_layer_idx=0)
   //                 layer 1 prob=0.0 → 100% final-layer exits (ms_layer_idx=1)

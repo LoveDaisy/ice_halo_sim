@@ -155,6 +155,29 @@ offset 16: uint16_t overflow_idx_        (2B, 超 15 跳指向 arena)
 1. **真·新功能**：当前 Metal `rec_sink[tid]=rec_csum` 只是每光线一个 float 校验和(parity 用)，未导出路径。要让 kernel 在 trace 中逐跳 append `to_face_` 到 per-thread 定长数组并写出——中等改动，从零加。
 2. **MS 多层作用域**：路径是 per-(光线, MS层, 晶体)，每层换晶体、recorder 重起、不跨层累加。单 MS 干净；多 MS 下"filter 作用哪层 / 出射记录带几层路径"需在 schema 定死。
 
+### 4.8 离散显存 reframe：两个出口塌成一条流水线（scrum-302，2026-06-28 第一性原理收敛）
+
+> 本节修正 §4.2-§4.4 在**离散显存**上的结论。§4 原文成立于**统一内存**（Metal/M2）：host/device 边界近免费，故"投影在哪跑"是灵活性选择，host consumer 最灵活。CUDA 诚实吞吐基线（#299）暴露：统一内存上几乎免费的那一跳（出射记录回主机）在离散显存上是 **per-exit PCIe 主机往返**主导成本（~54ns/exit，线性于 exit 数 → 吞吐 flat 0.1×），**与 regime 无关**（GUI 还是 CLI 都吃）。
+
+**第一性原理**：离散显存上唯一稀缺资源 = PCIe 带宽/同步。几何极简（几十三角形、寄存器驻留、无 BVH）→ 最优设计的唯一目标 = 最小化跨 PCIe 数据 × 频率。数据按"是否必须跨 PCIe"分层：
+
+| 层 | 内容 | 大小 | 跨 PCIe? |
+|----|------|------|----------|
+| 输入 | 几何池 + filter orbit 表 + CIE/illuminant | KB | 一次/session |
+| 在途光线状态 | dir/weight/path-so-far/wl_idx | O(N) | **永不**（device-resident） |
+| 输出 | XYZ 累加图 | ~W·H·3 | 显示节奏/一次 |
+| 富元数据（面序列） | 出射记录 | O(出射) | **默认永不**（仅光路回溯特性物化） |
+
+owner 洞察：渲染图只需"方向+强度"；filter 作用在 trace 过程（MS 每层后），最终图不需要富元数据；filter 在 emit 那跳要的是寄存器里"路径至今"——**连持久化记录都不需要**。
+
+**结论（取代 §4.4 的"两个出口"判断，离散显存下）**：
+- **纯融合 device 消费**：emit gate 当场 prob + device filter + 固定投影（dual_fisheye/rectangular）+ 补偿累加进 device XYZ buffer，**渲染图产物连 device 出射 buffer 都不物化**（生产者消费者融合，比 §5 图的 bulk 列更彻底）。富元数据降级为光路回溯的可选 device 旁路 tap。
+- **GUI 与 CLI 走同一条 device 流水线**，唯一区别是回读 XYZ 的频率（显示节奏 vs 一次）——即第三个时钟。§4.4 的"两个出口按 workload 选"塌成"一条流水线、两个回读节奏"。
+- **后端投影固定**（GUI 只请求 dual_fisheye、其他镜头前端重投影，owner 2026-06-28 确认）→ 无灵活性损失，§4.2-§4.3 的"buffer-egress 换灵活性"顾虑在离散显存上不成立；改视角/filter 靠廉价重 trace（trace 仅占~4%）而非缓存出射记录。
+- **消费端（filter+投影+累加）= device 共享核**（`accum_shared.h` host/MSL/CUDA 单源）；Metal 也收编进同一核（统一性 + 单源），host consumer 只留 legacy CPU。
+
+**落地状态（scrum-302）**：Metal（S1）+ CUDA（S2）device-fused 均落地、parity 全绿。⚠️ **但 CUDA 吞吐仍 0.16-0.40× legacy = 缺陷信号待追**（compute-bound + 疑 per-CI 串行 dispatch；见 `gpu-route-history.md` Phase 10 + backlog）——device-fused 是吞吐的**必要非充分**条件。
+
 ---
 
 ## 5. 统一后的 seam 形态（待验证草案）

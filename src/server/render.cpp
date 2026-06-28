@@ -17,6 +17,7 @@
 #include "core/math.hpp"
 #include "core/projection.hpp"
 #include "core/raypath.hpp"
+#include "core/shared/accum_shared.h"
 #include "util/color_data.hpp"
 #include "util/color_space.hpp"
 
@@ -33,6 +34,7 @@ RenderConsumer::RenderConsumer(RenderConfig config)
     : config_(std::move(config)),
       short_pix_(static_cast<float>(std::min(config_.resolution_[0], config_.resolution_[1]))),
       internal_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
+      comp_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_work_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_image_buffer_(std::make_unique<uint8_t[]>(config_.resolution_[0] * config_.resolution_[1] * 3)) {
@@ -44,7 +46,31 @@ RenderConsumer::RenderConsumer(RenderConfig config)
 }
 
 
+void RenderConsumer::ConsumeDeviceFused(const SimData& data) {
+  // S1 device-fused: backend already accumulated XYZ on-device; skip
+  // projection and fold the pixel buffer into internal_xyz_ via Neumaier.
+  auto t0 = std::chrono::steady_clock::now();
+  size_t total = static_cast<size_t>(config_.resolution_[0]) * static_cast<size_t>(config_.resolution_[1]) * 3u;
+  assert(data.xyz_pixel_data_.size() == total);
+  for (size_t i = 0u; i < total; ++i) {
+    NeumaierAdd(internal_xyz_[i], comp_xyz_[i], data.xyz_pixel_data_[i]);
+  }
+  total_intensity_ += data.xyz_landed_weight_;
+  // Count toward the consume profile (proj=0: device did the projection).
+  // The batch-invariance positive control reads "Consume profile: N batches"
+  // to confirm the commit grain took effect — the device-fused branch must
+  // bump the counter or that witness reads 0 / the line never logs.
+  consume_count_++;
+  consume_accum_us_ += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+}
+
+
 void RenderConsumer::Consume(const SimData& data) {
+  if (!data.xyz_pixel_data_.empty()) {
+    ConsumeDeviceFused(data);
+    return;
+  }
+
   // scrum-258.1: SimData carries a single payload form — outgoing_d_/w_
   // (plus the optional per-ray outgoing_wl_ added in scrum-268.8 (DR-3)) —
   // regardless of whether the simulator ran via the legacy CPU path or a
@@ -263,8 +289,16 @@ void RenderConsumer::LogConsumeProfile() const {
 // See doc/ev-pipeline-architecture.md §2.2
 // See doc/accumulator-consumer-architecture.md §4.2 (two-phase snapshot protocol, Phase 1).
 void RenderConsumer::PrepareSnapshot() {
-  int total_pix = config_.resolution_[0] * config_.resolution_[1];
-  std::memcpy(snapshot_xyz_.get(), internal_xyz_.get(), total_pix * 3 * sizeof(float));
+  size_t total = static_cast<size_t>(config_.resolution_[0]) * config_.resolution_[1] * 3u;
+  // True running sum = internal_xyz_ + comp_xyz_ (Neumaier residual). The
+  // device-fused path (ConsumeDeviceFused) accumulates the compensation in
+  // comp_xyz_; folding it here is what realizes the precision gain — without
+  // this add the compensation would be tracked but never applied (plain +=).
+  // comp_xyz_ stays all-zero on the legacy projection path, so this is a no-op
+  // there.
+  for (size_t i = 0u; i < total; ++i) {
+    snapshot_xyz_[i] = internal_xyz_[i] + comp_xyz_[i];
+  }
   snapshot_intensity_ = total_intensity_;
 }
 
@@ -369,6 +403,7 @@ void RenderConsumer::Reset() {
   effective_pix_ = 0;
   auto buf_size = static_cast<size_t>(config_.resolution_[0]) * config_.resolution_[1] * 3;
   std::memset(internal_xyz_.get(), 0, buf_size * sizeof(float));
+  std::memset(comp_xyz_.get(), 0, buf_size * sizeof(float));
   // snapshot_xyz_ not zeroed: PrepareSnapshot will memcpy over it.
   // has_ever_consumed_ = false (set in Stop) ensures GetRawXyzResults returns has_valid_data_=false
   // until new data arrives, preventing stale snapshot reads.

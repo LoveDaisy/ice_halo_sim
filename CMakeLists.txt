@@ -261,7 +261,8 @@ if(APPLE)
       "${PROJ_SRC_DIR}/core/shared/projection_shared.h"
       "${PROJ_SRC_DIR}/core/shared/optics_shared.h"
       "${PROJ_SRC_DIR}/core/shared/traversal_shared.h"
-      "${PROJ_SRC_DIR}/core/shared/pcg_shared.h")
+      "${PROJ_SRC_DIR}/core/shared/pcg_shared.h"
+      "${PROJ_SRC_DIR}/core/shared/accum_shared.h")
 
   add_custom_command(
     OUTPUT  "${LUMICE_METAL_AIR}"

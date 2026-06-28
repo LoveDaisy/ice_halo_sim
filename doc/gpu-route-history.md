@@ -120,3 +120,21 @@
 3. **CUDA 是房间里的大象。** Metal phase-1 越打磨 GUI 细节，离 seam 真正受检点（离散显存、CUDA）越远。所有 unified-memory caveat 的结论都欠一次 CUDA 兑现。
 
 4. **基线漂移=摇摆的机制根源。** 每个"×几"在不同分母下成立（融合前Metal/legacy CPU/CpuTraceBackend/host-gen），跨节点不一致→似是而非。已固化 `feedback_perf_baseline_is_legacy_cpu`，但历史结论需用统一基线重读。
+
+---
+
+## 五、Phase 10 — CUDA 第二步 + device-fused 消费(#294 → #302，2026-06-24 → 06-29)
+
+> 接 §一 Phase 9 之后。这一段把 GPU 路线推进到「第二个真实消费者（离散显存 CUDA）」并把消费端（投影+filter+累加）从 host 搬上 device。**缝契约经 CUDA 兑现、零上层改动未返工——蓝图赌对了。**
+
+**explore-294 → scrum-295（CUDA MVP）→ scrum-296（全量多 CI）**：CUDA backend 接入同一 `TraceBackend` 缝。单 MS 验缝 → 全量多 CI/多 MS/filter 对齐 legacy（parity 全绿）。波折：CUDA 自创 Möller-Trumbore 遍历复现了 task-275~278 已解决的绝对-ε 漏面（energy 0.735）→ 教训「几何遍历也要纳入共享核单源，别重新发明」。
+
+**task-cuda-throughput-bench（#299，诚实吞吐基线）**：干净机实测 CUDA ≈ **0.10-0.12× legacy，flat with dispatch**；瓶颈 100% = **出射记录 per-exit PCIe 主机往返**（DrainExits D2H + host filter + host 累加，~54ns/exit）。**推翻 scrum-296 Step D「大 dispatch 1.6-2.2×」**（那是 64MiB exit 顶丢 87% exit 的假象）。结论：device 侧累加是唯一有意义的方向。
+
+**第一性原理收敛（2026-06-28 owner 讨论）**：离散显存上唯一稀缺资源 = PCIe。数据按「是否必须跨 PCIe」分层（输入一次/在途永不/输出小图/富元数据默认永不）→ **纯融合 device 流水线**：emit gate 当场 prob+filter+固定投影+补偿累加进 device XYZ，**渲染图产物不物化出射记录**；富元数据降级为光路回溯的可选 tap。把蓝图 §4.4「两个出口」在离散显存上塌成「一条流水线、两个回读节奏」。详见 `seam-design.md` §4.8（离散显存 reframe）。
+
+**scrum-302（device-fused accumulation）**：
+- **S1（Metal）**：消费端上 device（emit gate 融投影+filter+补偿累加），砍出射 buffer，抽 option-b 共享核 `accum_shared.h`。inline 修 3 真 bug（mid-exit 漏 rectangular 分支 / server has_renderable 漏 xyz_pixel_data_ 致零图 / **最终层漏 prob draw → energy=1/(1-prob)**）。验收：parity 17/17 + e2e 15/15。意外：device-fused Metal vs 旧 Metal **2.9-4.1×**（消 host O(N) 投影）。PR 未提（合并在分支）。
+- **S2（CUDA/dev49）**：CUDA 接共享核 + device 累加。inline 亲跑 dev49 修 2 bug（mid-exit 漏 device 累加 → energy=1/层数 / 测试 config 用不支持的 fisheye 投影）→ **parity 10/10 绿**。runner 三犯（被 kill / Mac 编不了 CUDA / 收窄 scope 误报 DONE）→ 巩固纪律「CUDA AC 真闭只能 scrum owner 在 dev49 亲跑」。
+
+**⚠️ 未解的核心张力（scrum-302 S2 暴露，owner 定性）**：device-fused 去掉 roundtrip 后，CUDA 吞吐 **0.16-0.40× legacy**（16 线程 Zen5），随 max_hits 收窄不反超。owner 定性:**对一块 4060 Ti 根本不合理 = 设计/实现缺陷**（非"GPU 非天然胜"的可接受现实）。诊断：compute-bound（max_hits 反比）+ 低 max_hits 仍只 1.82M/s 疑 per-CI 串行 dispatch/launch 开销（单引擎大 dispatch 理想在 CUDA 多 CI 未兑现，§3.6 原始之罪复发）+ recorder local-mem。**#250「250×」spike 与 production 间有未追的退化**——这是下一个 explore 的核心(profiler-first，见 backlog)。

@@ -784,7 +784,13 @@ void ServerImpl::ConsumeData() {
         // counter invariant paired with GenerateScene's ++ (see simulator.cpp
         // exit-seam: empty Emplace must reach the consumer's --). Do not move
         // the -- inside this branch.
-        bool has_renderable = !sim_data.outgoing_d_.empty() || !sim_data.rays_.Empty();
+        // S1 device-fused (scrum-302): the backend accumulates XYZ on-device and
+        // emplaces a SimData carrying xyz_pixel_data_ with outgoing_d_ AND rays_
+        // both empty. That payload IS renderable — without this clause it would
+        // be misclassified as a 0-exit black batch and the consumer skipped,
+        // dropping the entire device-fused image (zero output, parity corr=0).
+        bool has_renderable =
+            !sim_data.outgoing_d_.empty() || !sim_data.rays_.Empty() || !sim_data.xyz_pixel_data_.empty();
         if (has_renderable) {
           auto t_lock0 = std::chrono::steady_clock::now();
           std::lock_guard<TicketMutex> lock(consumer_mutex_);

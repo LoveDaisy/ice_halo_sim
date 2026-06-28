@@ -1076,6 +1076,27 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
     return;
   }
 
+  // S1 device-fused path: backend accumulated XYZ on-device; read it back and
+  // enqueue a SimData carrying xyz_pixel_data_ (W*H*3). DrainExits already
+  // returned empty vectors so exit_records is empty. The consumer's Neumaier
+  // path in RenderConsumer::Consume picks up xyz_pixel_data_ instead of the
+  // ScatterOutgoingToXyz path.
+  if (backend.HasDeviceXyzAccum()) {
+    SimData sim_data;
+    sim_data.curr_wl_ = wl_param.wl_;
+    sim_data.generation_ = generation;
+    sim_data.root_ray_count_ = ray_num;
+    size_t pix = static_cast<size_t>(w) * static_cast<size_t>(h);
+    sim_data.xyz_pixel_data_.resize(pix * 3u);
+    XyzImageData xyz_out;
+    xyz_out.data = sim_data.xyz_pixel_data_.data();
+    xyz_out.width = w;
+    xyz_out.height = h;
+    backend.ReadbackXyzAccum(xyz_out, sim_data.xyz_landed_weight_);
+    data_queue_->Emplace(std::move(sim_data));
+    return;
+  }
+
   // Exit seam (scrum-258.1/258.2): hand the dir/weight projection inputs to
   // the legacy consumer via outgoing_d_/w_. The rich metadata
   // (path / crystal_id / ms_layer_idx) is forwarded into
