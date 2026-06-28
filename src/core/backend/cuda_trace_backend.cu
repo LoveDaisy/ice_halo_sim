@@ -48,7 +48,9 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <cassert>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -69,9 +71,14 @@
 #include "core/filter_spec.hpp"
 #include "core/math.hpp"
 #include "core/raypath.hpp"
+#include "core/geo3d.hpp"  // Rotation (rectangular az0 derivation, mirrors Metal ComputeAz0)
+#include "core/math.hpp"  // math::kDegreeToRad
+#include "core/projection.hpp"  // ComputeEARScale (dual-fisheye r_scale derivation)
+#include "core/shared/accum_shared.h"  // AccumXyzToPixel (S2 device-fused emit gate)
 #include "core/shared/filter_shared.h"
 #include "core/shared/optics_shared.h"
 #include "core/shared/pcg_shared.h"
+#include "core/shared/projection_shared.h"  // RectangularForward / FisheyeEqualAreaForward
 #include "core/shared/traversal_shared.h"
 #include "core/trace_ops.hpp"
 #include "core/simulator.hpp"  // PartitionCrystalRayNum (multi-CI per-layer partition)
@@ -318,6 +325,96 @@ __device__ inline ExitFaceSeq BuildExitPath(const uint8_t* path_rec, uint32_t le
   return seq;
 }
 
+// S2 device-fused projection + XYZ accumulation for the ms_mode==0 emit gate.
+// Mirrors the Metal final-layer `proj_type==0 / proj_type==1` blocks
+// (lumice_trace.metal:743-811). `exit_world` is the world-space exit direction
+// (sky direction is -exit_world); writes to `d_xyz_buf` go through the shared
+// `AccumXyzToPixel` helper so single-source semantics with Metal stay tight.
+// `d_landed_weight` tallies only in-bounds primary writes; overlap dual-write
+// (dual-fisheye opposite-hemisphere) does NOT bump landed_weight (matches
+// ScatterOutgoingToXyz Pass 2 / Metal lumice_trace.metal:788-810).
+__device__ inline void EmitToDeviceXyz(float* __restrict__ d_xyz_buf,
+                                       float* __restrict__ d_landed_weight,
+                                       const float exit_world[3],
+                                       float cmf_x,
+                                       float cmf_y,
+                                       float cmf_z,
+                                       float w_emit,
+                                       uint32_t proj_type,
+                                       float az0,
+                                       float r_scale,
+                                       float max_abs_dz,
+                                       uint32_t img_w,
+                                       uint32_t img_h) {
+  const float sx = -exit_world[0];
+  const float sy = -exit_world[1];
+  const float sz = -exit_world[2];
+  const int iw_i = static_cast<int>(img_w);
+  const int ih_i = static_cast<int>(img_h);
+  const float img_w_f = static_cast<float>(img_w);
+  const float img_h_f = static_cast<float>(img_h);
+  if (proj_type == 0u) {
+    auto proj_r = lm_proj::RectangularForward(sx, sy, sz);
+    float lon = proj_r.x - az0;
+    const float two_pi = 2.0f * LM_PI_F;
+    lon = lon - two_pi * floorf((lon + LM_PI_F) / two_pi);
+    const float lat = proj_r.y;
+    const float short_res = static_cast<float>(min(img_w / 2u, img_h));
+    const float proj_scl = short_res / LM_PI_F;
+    int raw_x = static_cast<int>(floorf(lon * proj_scl + img_w_f * 0.5f + 0.5f));
+    const int ix = ((raw_x % iw_i) + iw_i) % iw_i;
+    const int iy = static_cast<int>(floorf(-lat * proj_scl + img_h_f * 0.5f + 0.5f));
+    if (iy >= 0 && iy < ih_i) {
+      const uint32_t pix_flat = static_cast<uint32_t>(iy) * img_w + static_cast<uint32_t>(ix);
+      AccumXyzToPixel(d_xyz_buf, pix_flat, cmf_x, cmf_y, cmf_z, w_emit);
+      atomicAdd(d_landed_weight, w_emit);
+    }
+  } else {
+    // Dual-fisheye equal-area: primary + opposite-hemisphere overlap.
+    const int   dual_short = min(static_cast<int>(img_w) / 2, static_cast<int>(img_h));
+    const float r          = static_cast<float>(dual_short) * 0.5f;
+    const float cy_pix     = img_h_f * 0.5f;
+    const float cx_left    = img_w_f * 0.5f - r;
+    const float cx_right   = img_w_f * 0.5f + r;
+    const bool  is_upper = (sz >= 0.0f);
+    const float z_hemi   = is_upper ? sz : -sz;
+    auto ea_r = lm_proj::FisheyeEqualAreaForward(sx, sy, z_hemi, r_scale);
+    const float xn = ea_r.x;
+    const float yn = ea_r.y;
+    const float cx_primary = is_upper ? cx_left : cx_right;
+    const float sx_primary = is_upper ? -1.0f : 1.0f;
+    const float fx = sx_primary * yn * r + cx_primary;
+    const float fy = xn * r + cy_pix;
+    const int   ix = static_cast<int>(floorf(fx + 0.5f));
+    const int   iy = static_cast<int>(floorf(fy + 0.5f));
+    if (ix >= 0 && ix < iw_i && iy >= 0 && iy < ih_i) {
+      const uint32_t pix_flat = static_cast<uint32_t>(iy) * img_w + static_cast<uint32_t>(ix);
+      AccumXyzToPixel(d_xyz_buf, pix_flat, cmf_x, cmf_y, cmf_z, w_emit);
+      atomicAdd(d_landed_weight, w_emit);
+    }
+    // Overlap dual-write: opposite hemisphere (dz<0). landed_weight NOT bumped
+    // (parity with ScatterOutgoingToXyz Pass 2 / Metal:788-810).
+    if (max_abs_dz > 0.0f && z_hemi < max_abs_dz) {
+      const float z_opp = -z_hemi;
+      auto ea_r2 = lm_proj::FisheyeEqualAreaForward(sx, sy, z_opp, r_scale);
+      const float xn2 = ea_r2.x;
+      const float yn2 = ea_r2.y;
+      const bool  is_upper_opp = !is_upper;
+      const float cx_opp       = is_upper_opp ? cx_left : cx_right;
+      const float sx_opp       = is_upper_opp ? -1.0f : 1.0f;
+      const float fx2 = sx_opp * yn2 * r + cx_opp;
+      const float fy2 = xn2 * r + cy_pix;
+      const int   ix2 = static_cast<int>(floorf(fx2 + 0.5f));
+      const int   iy2 = static_cast<int>(floorf(fy2 + 0.5f));
+      if (ix2 >= 0 && ix2 < iw_i && iy2 >= 0 && iy2 < ih_i) {
+        const uint32_t pix_flat2 =
+            static_cast<uint32_t>(iy2) * img_w + static_cast<uint32_t>(ix2);
+        AccumXyzToPixel(d_xyz_buf, pix_flat2, cmf_x, cmf_y, cmf_z, w_emit);
+      }
+    }
+  }
+}
+
 // --- trace_single_ms_kernel -----------------------------------------------
 //
 // One thread per root ray. Per-bounce refraction splitting (mirrors legacy
@@ -384,7 +481,21 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                        const uint8_t* __restrict__ d_getfn_bytes,
                                        const DeviceFilterDesc* __restrict__ d_complex_sub_desc,
                                        uint32_t filter_desc_max_ci,
-                                       uint32_t crystal_config_id) {
+                                       uint32_t crystal_config_id,
+                                       // S2 device-fused accumulation (ms_mode==0 final-layer emit).
+                                       // d_xyz_buf may be nullptr only when ms_mode==1 (the ms_mode==0
+                                       // branches below dereference it; ms_mode==1 branches don't).
+                                       float* __restrict__ d_xyz_buf,
+                                       float* __restrict__ d_landed_weight,
+                                       uint32_t proj_type,
+                                       float az0,
+                                       float r_scale,
+                                       float max_abs_dz,
+                                       uint32_t img_w,
+                                       uint32_t img_h,
+                                       float last_ms_prob,
+                                       uint32_t gate_seed_final,
+                                       uint32_t gate_ray_base_final) {
   const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_roots) {
     return;
@@ -524,19 +635,33 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
         }
         // filter_pass == false: implicit drop (Design A termination).
       } else {
-        uint32_t slot = atomicAdd(d_exit_count, 1u);
-        if (slot < exit_cap) {
-          ExitRayRecord& rec = d_exit[slot];
-          rec.dir[0] = exit_world[0];
-          rec.dir[1] = exit_world[1];
-          rec.dir[2] = exit_world[2];
-          rec.weight = w_refl_e;
-          // Entry external reflect: path = [entry_face]. Matches Metal's
-          // hit=0 mid-exit emission with rec_len=1 (lumice_trace.metal:658-662).
-          rec.path = BuildExitPath(path_rec, rec_len);
-          rec.crystal_id = crystal_id;
-          rec.ms_layer_idx = ms_layer_idx;
-          rec.wl_idx = static_cast<uint8_t>(wl_idx);
+        // ms_mode==0 (S2 device-fused): filter → final-layer prob draw →
+        // project → AccumXyzToPixel. Entry-face external reflect path. PCG
+        // slot=1 keeps this draw disjoint from the per-bounce refract emit's
+        // slot=0 below (same ray, same gate stream — multiple draws need
+        // distinct slot ids).
+        const uint32_t gate_slot_e = static_cast<uint32_t>(ms_layer_idx) * filter_desc_max_ci +
+                                     static_cast<uint32_t>(crystal_id);
+        const bool filter_pass_e = lm_filter::DeviceFilterCheck(
+            d_filter_desc[gate_slot_e], d_complex_sub_desc, path_rec, rec_len, d_getfn_bytes, d_getfn_offsets,
+            gate_slot_e, exit_world, crystal_config_id);
+        if (filter_pass_e) {
+          lm_pcg::PcgStream gate_f;
+          gate_f.seed       = gate_seed_final;
+          gate_f.global_idx = gate_ray_base_final + tid;
+          gate_f.slot       = 1u;  // entry external reflect emit
+          // Mirrors S1 Bug 3 fix: rng < last_ms_prob ⇒ "would continue" ⇒
+          // there is no next layer ⇒ drop. Only the (1 - last_ms_prob)
+          // remainder reaches the image.
+          const bool prob_drop_e = (lm_pcg::pcg_uniform(gate_f) < last_ms_prob);
+          if (!prob_drop_e) {
+            const float cmf_x = d_wl_pool[wl_idx].cmf_x;
+            const float cmf_y = d_wl_pool[wl_idx].cmf_y;
+            const float cmf_z = d_wl_pool[wl_idx].cmf_z;
+            EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
+                            cmf_x, cmf_y, cmf_z, w_refl_e,
+                            proj_type, az0, r_scale, max_abs_dz, img_w, img_h);
+          }
         }
       }
     }
@@ -680,20 +805,29 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
           }
           // filter_pass == false: implicit drop (Design A termination).
         } else {
-          uint32_t slot = atomicAdd(d_exit_count, 1u);
-          if (slot < exit_cap) {
-            ExitRayRecord& rec = d_exit[slot];
-            rec.dir[0] = exit_world[0];
-            rec.dir[1] = exit_world[1];
-            rec.dir[2] = exit_world[2];
-            rec.weight = w_refr;
-            // Rich exit path = [entry_face, f_1, ..., f_K] where f_K = hit_poly
-            // (the face the ray refracted through). Mirrors Metal mid-exit
-            // emission at lumice_trace.metal:658-662.
-            rec.path = BuildExitPath(path_rec, rec_len);
-            rec.crystal_id = crystal_id;
-            rec.ms_layer_idx = ms_layer_idx;
-            rec.wl_idx = static_cast<uint8_t>(wl_idx);
+          // ms_mode==0 (S2 device-fused) per-bounce refracted exit emit.
+          // Mirrors Metal lumice_trace.metal:714-815 (the ms_mode==0 emit
+          // gate). PCG slot=0 is reserved for this path; the entry-face
+          // external reflect uses slot=1 above.
+          const uint32_t gate_slot_r = static_cast<uint32_t>(ms_layer_idx) * filter_desc_max_ci +
+                                       static_cast<uint32_t>(crystal_id);
+          const bool filter_pass_r = lm_filter::DeviceFilterCheck(
+              d_filter_desc[gate_slot_r], d_complex_sub_desc, path_rec, rec_len, d_getfn_bytes, d_getfn_offsets,
+              gate_slot_r, exit_world, crystal_config_id);
+          if (filter_pass_r) {
+            lm_pcg::PcgStream gate_f;
+            gate_f.seed       = gate_seed_final;
+            gate_f.global_idx = gate_ray_base_final + tid;
+            gate_f.slot       = 0u;  // per-bounce refract emit
+            const bool prob_drop_r = (lm_pcg::pcg_uniform(gate_f) < last_ms_prob);
+            if (!prob_drop_r) {
+              const float cmf_x = d_wl_pool[wl_idx].cmf_x;
+              const float cmf_y = d_wl_pool[wl_idx].cmf_y;
+              const float cmf_z = d_wl_pool[wl_idx].cmf_z;
+              EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
+                              cmf_x, cmf_y, cmf_z, w_refr,
+                              proj_type, az0, r_scale, max_abs_dz, img_w, img_h);
+            }
           }
         }
       }
@@ -1162,6 +1296,22 @@ struct CudaTraceBackend::Impl {
   uint32_t          filter_n_slot_       = 0u;       // total descriptor slots
   uint32_t          crystal_config_id_   = 0xFFFFu;  // for DeviceFilterMatchCrystal
 
+  // --- S2 device-fused XYZ accumulation -----------------------------------
+  // ms_mode==0 emit gate accumulates per-ray (cmf_x/y/z * weight) directly into
+  // a device-resident W*H*3 float buffer via atomicAdd, replacing the per-exit
+  // PCIe round-trip (`DrainExits` + host projection). Allocated per BeginSession,
+  // sized to render.resolution_; cleared at allocation. `ReadbackXyzAccum` D2H
+  // copies it to the host and zeros it for the next batch (one-shot per batch
+  // contract — second call in the same batch returns zeros).
+  float*   d_xyz_buf_       = nullptr;  // img_w_ * img_h_ * 3 floats, atomicAdd target
+  float*   d_landed_weight_ = nullptr;  // 1 float, atomicAdd target (running total)
+  uint32_t proj_type_       = 0u;       // 0=rectangular, 1=dual_fisheye_equal_area
+  float    az0_             = 0.0f;     // rectangular: view azimuth offset (radians)
+  float    r_scale_         = 1.0f;     // dual_fisheye: equal-area r scale
+  float    max_abs_dz_      = 0.0f;     // dual_fisheye: overlap zone |sky.z| threshold
+  uint32_t img_w_           = 0u;
+  uint32_t img_h_           = 0u;
+
   // --- Final-layer host filter (296.5) -------------------------------------
   // DrainExits applies FilterSpec::Check + prob to records tagged with the
   // final ms_layer_idx (mirrors Metal ReadbackExitRays:2447-2578). Captured in
@@ -1268,6 +1418,11 @@ void CudaTraceBackend::Impl::Reset() {
   d_getfn_bytes_ = nullptr;
   cudaFree(d_complex_sub_desc_);
   d_complex_sub_desc_ = nullptr;
+  // S2 device-fused XYZ accumulation buffers.
+  cudaFree(d_xyz_buf_);
+  d_xyz_buf_ = nullptr;
+  cudaFree(d_landed_weight_);
+  d_landed_weight_ = nullptr;
 
   cudaFreeHost(pinned_dirs_);
   pinned_dirs_ = nullptr;
@@ -1314,6 +1469,12 @@ void CudaTraceBackend::Impl::Reset() {
   final_layer_axis_dists_.clear();
   final_ms_layer_idx_ = 0u;
   final_ms_prob_ = 0.0f;
+  proj_type_ = 0u;
+  az0_ = 0.0f;
+  r_scale_ = 1.0f;
+  max_abs_dz_ = 0.0f;
+  img_w_ = 0u;
+  img_h_ = 0u;
   buffers_allocated_ = false;
   in_session_ = false;
   scene_ = nullptr;
@@ -1892,6 +2053,63 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     // info is captured for DrainExits. Idempotent across BeginSession calls.
     impl_->EnsureFilterBuffers(spec);
 
+    // S2 device-fused XYZ accumulation: allocate the W*H*3 device buffer +
+    // landed-weight scalar and zero them. Sized to render.resolution_; the
+    // ms_mode==0 kernel emit gate atomicAdds (cmf * w) into d_xyz_buf_ and
+    // adds the in-bounds weight into d_landed_weight_. ReadbackXyzAccum D2H
+    // copies them and zeros for the next batch.
+    if (spec.render == nullptr) {
+      throw BackendUnavailableError("CudaTraceBackend::BeginSession: spec.render is null");
+    }
+    impl_->img_w_ = static_cast<uint32_t>(spec.render->resolution_[0]);
+    impl_->img_h_ = static_cast<uint32_t>(spec.render->resolution_[1]);
+    if (impl_->img_w_ == 0u || impl_->img_h_ == 0u) {
+      throw BackendUnavailableError(
+          "CudaTraceBackend::BeginSession: render.resolution_ has a zero dimension");
+    }
+    // Projection routing — mirrors Metal BeginSession lines 1947-1955.
+    if (spec.render->lens_.type_ == LensParam::kDualFisheyeEqualArea) {
+      impl_->proj_type_   = 1u;
+      impl_->max_abs_dz_  = spec.render->overlap_;
+      impl_->r_scale_     = projection::ComputeEARScale(spec.render->overlap_);
+      impl_->az0_         = 0.0f;  // unused on dual-fisheye path
+    } else {
+      impl_->proj_type_   = 0u;
+      impl_->max_abs_dz_  = 0.0f;
+      impl_->r_scale_     = 1.0f;
+      // az0 = atan2(camera-rot applied to +Z). Same derivation as Metal
+      // ComputeAz0 (metal_trace_backend.mm:163, MakeCameraRotation at
+      // scatter_accum.hpp:75). Only meaningful at zenith view (el ≈ 90°);
+      // IsCompatible enforces that constraint so non-zenith rectangular
+      // configs fall back to legacy CPU. Inlined here (instead of including
+      // scatter_accum.hpp) to keep the .cu translation unit's host-include
+      // surface narrow.
+      Rotation camera_rot;
+      float ax_z_chain[3]{ 0.0f, 0.0f, 1.0f };
+      float ax_y_chain[3]{ 0.0f, 1.0f, 0.0f };
+      camera_rot
+          .Chain({ ax_z_chain, (-90.0f + spec.render->view_.ro_) * math::kDegreeToRad })
+          .Chain({ ax_y_chain, (90.0f - spec.render->view_.el_) * math::kDegreeToRad })
+          .Chain({ ax_z_chain, spec.render->view_.az_ * math::kDegreeToRad });
+      float ax_z[3]{ 0.0f, 0.0f, 1.0f };
+      camera_rot.Apply(ax_z);
+      impl_->az0_ = std::atan2(ax_z[1], ax_z[0]);
+    }
+    const size_t xyz_floats = static_cast<size_t>(impl_->img_w_) *
+                              static_cast<size_t>(impl_->img_h_) * 3u;
+    if (impl_->d_xyz_buf_ == nullptr) {
+      CheckCuda(cudaMalloc(&impl_->d_xyz_buf_, xyz_floats * sizeof(float)),
+                "BeginSession cudaMalloc d_xyz_buf");
+    }
+    CheckCuda(cudaMemset(impl_->d_xyz_buf_, 0, xyz_floats * sizeof(float)),
+              "BeginSession cudaMemset d_xyz_buf");
+    if (impl_->d_landed_weight_ == nullptr) {
+      CheckCuda(cudaMalloc(&impl_->d_landed_weight_, sizeof(float)),
+                "BeginSession cudaMalloc d_landed_weight");
+    }
+    CheckCuda(cudaMemset(impl_->d_landed_weight_, 0, sizeof(float)),
+              "BeginSession cudaMemset d_landed_weight");
+
     // Per-ray rotation matrix device buffer (cont_cap_ × 9) is allocated
     // lazily in EnsureSessionBuffers, not here — n_roots is unknown until the
     // first TraceLayer call. rng_ stays pristine (no sampling here).
@@ -2123,6 +2341,15 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     // cont[out_slot] (atomic counters, zeroed once before the loop). The kernel
     // computes its filter-desc slot as ms_layer_idx*max_ci + crystal_id, so
     // passing crystal_id=ci selects this ci's per-(layer,ci) filter descriptor.
+    // S2: record ev_end_h2d_ right BEFORE the kernel launch and ev_end_kernel_
+    // right AFTER, both inside the loop. The LAST iteration's pair wins.
+    // Stream order is strict (default stream) so end_h2d → kernel → end_kernel,
+    // and kernel_ms = elapsed(end_h2d, end_kernel) is positive and meaningful.
+    cudaEventRecord(impl_->ev_end_h2d_);
+    // Filter / gate buffers are passed unconditionally (S2): the ms_mode==0
+    // device-fused emit gate also calls DeviceFilterCheck. Previously these
+    // were short-circuited to nullptr on ms_mode==0 dispatches — keeping that
+    // shortcut would make the new ms_mode==0 emit gate deref nullptr.
     trace_single_ms_kernel<<<grid, 256>>>(
         impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
         cin, impl_->d_poly_n_, impl_->d_poly_d_,
@@ -2138,20 +2365,31 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
         ms_mode == 1u ? static_cast<uint32_t>(impl_->cont_cap_[out_slot]) : 0u,
         impl_->gate_seed_,
         NarrowPcgRayBase(impl_->gate_ray_count_, ci_n, "cuda-gate"),
-        ms_mode == 1u ? impl_->d_filter_desc_       : nullptr,
-        ms_mode == 1u ? impl_->d_getfn_offsets_     : nullptr,
-        ms_mode == 1u ? impl_->d_getfn_bytes_       : nullptr,
-        ms_mode == 1u ? impl_->d_complex_sub_desc_  : nullptr,
-        ms_mode == 1u ? impl_->filter_desc_max_ci_  : 0u,
-        ci_cfg_id);
+        impl_->d_filter_desc_,
+        impl_->d_getfn_offsets_,
+        impl_->d_getfn_bytes_,
+        impl_->d_complex_sub_desc_,
+        impl_->filter_desc_max_ci_,
+        ci_cfg_id,
+        // S2 device-fused accumulation params.
+        impl_->d_xyz_buf_, impl_->d_landed_weight_,
+        impl_->proj_type_, impl_->az0_, impl_->r_scale_, impl_->max_abs_dz_,
+        impl_->img_w_, impl_->img_h_,
+        impl_->final_ms_prob_,
+        impl_->gate_seed_,
+        NarrowPcgRayBase(impl_->gate_ray_count_, ci_n, "cuda-gate-final"));
     ck_reset(cudaPeekAtLastError(), "kernel launch");
-    if (ms_mode == 1u) {
-      impl_->gate_ray_count_ += ci_n;  // monotone per (layer,ci,batch)
-    }
+    // S2: ev_end_kernel_ recorded inside the loop captures real kernel time.
+    // The original outside-loop placement (right next to ev_end_h2d_) collapsed
+    // kernel_ms to ~0ms after the multi-CI rewrite — they recorded back-to-back
+    // before any compute observed by the timer.
+    cudaEventRecord(impl_->ev_end_kernel_);
+    // S2: gate_ray_count_ is advanced for BOTH ms_modes now — the ms_mode==0
+    // path also draws prob via the gate stream so every dispatch (final or
+    // not) must consume a disjoint global_idx range to avoid stream collision
+    // across batches. Mirrors the monotone-counter discipline of transit/gen.
+    impl_->gate_ray_count_ += ci_n;
   }  // ci-loop
-
-  cudaEventRecord(impl_->ev_end_h2d_);
-  cudaEventRecord(impl_->ev_end_kernel_);
 
   // 4B readback (synchronous on the default stream — also the first sync
   // point that surfaces async kernel errors: check the return value).
@@ -2438,6 +2676,68 @@ void CudaTraceBackend::EndSession() {
   }
   cudaDeviceSynchronize();
   impl_->Reset();
+}
+
+// S2 device-fused XYZ accumulation: mirrors MetalTraceBackend::HasDeviceXyzAccum.
+// Reports `true` so the simulator routes egress through ReadbackXyzAccum (W*H*3
+// D2H) instead of the per-exit DrainExits PCIe round-trip that flattened CUDA
+// throughput to 0.10–0.12× legacy CPU.
+bool CudaTraceBackend::HasDeviceXyzAccum() const { return true; }
+
+// One-shot per batch: copies d_xyz_buf_ + d_landed_weight_ to host, accumulates
+// landed_weight into the running scalar, and zeros the device buffers so the
+// NEXT batch's BeginSession-allocated state starts clean. Calling twice in the
+// same batch returns zeros on the second call (by design — the buffers are
+// cleared after the first read).
+void CudaTraceBackend::ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight) {
+  if (!impl_->in_session_) {
+    throw BackendUnavailableError("CudaTraceBackend::ReadbackXyzAccum called outside session");
+  }
+  // Defensive guards (Risk 4 / 务实评审 Minor 3): nullptr device buffer or
+  // mismatched host destination would silently corrupt memory on D2H copy.
+  assert(impl_->d_xyz_buf_ != nullptr && "d_xyz_buf_ unallocated — BeginSession failed?");
+  assert(impl_->d_landed_weight_ != nullptr);
+  assert(xyz.data != nullptr && "ReadbackXyzAccum: caller must pre-allocate xyz.data");
+  assert(static_cast<uint32_t>(xyz.width) == impl_->img_w_ &&
+         static_cast<uint32_t>(xyz.height) == impl_->img_h_ &&
+         "ReadbackXyzAccum: xyz dimensions mismatch session render config");
+
+  // waitUntilCompleted-equivalent — all preceding TraceLayer kernel work must
+  // finalize before the D2H copy. Mirrors Metal's cmd-buffer wait.
+  cudaDeviceSynchronize();
+  const size_t pix = static_cast<size_t>(impl_->img_w_) * static_cast<size_t>(impl_->img_h_);
+  CheckCuda(cudaMemcpy(xyz.data, impl_->d_xyz_buf_, pix * 3u * sizeof(float),
+                       cudaMemcpyDeviceToHost),
+            "ReadbackXyzAccum D2H d_xyz_buf");
+  float lw = 0.0f;
+  CheckCuda(cudaMemcpy(&lw, impl_->d_landed_weight_, sizeof(float), cudaMemcpyDeviceToHost),
+            "ReadbackXyzAccum D2H d_landed_weight");
+  landed_weight += lw;
+  // Clear for the next batch — second call in the same batch returns zeros
+  // (per-batch one-shot contract; see header comment).
+  CheckCuda(cudaMemset(impl_->d_xyz_buf_, 0, pix * 3u * sizeof(float)),
+            "ReadbackXyzAccum cudaMemset d_xyz_buf");
+  CheckCuda(cudaMemset(impl_->d_landed_weight_, 0, sizeof(float)),
+            "ReadbackXyzAccum cudaMemset d_landed_weight");
+}
+
+// Mirror MetalTraceBackend::IsCompatible (metal_trace_backend.mm:2426-2437).
+// The device-fused emit gate only implements two projections: rectangular @
+// zenith view (where ComputeAz0 is meaningful) and dual_fisheye_equal_area @
+// the full-globe fov=180 layout. Any other lens config returns false → the
+// simulator transparently falls back to legacy CPU. The el≈90° constraint
+// reflects that the rectangular projection assumes the camera is looking
+// straight up; non-zenith el would require a full rotation pre-multiply in the
+// kernel that S2 does not implement.
+bool CudaTraceBackend::IsCompatible(const RenderConfig& render) const {
+  if (render.lens_.type_ == LensParam::kRectangular) {
+    return std::abs(render.view_.el_ - 90.0f) <= 0.01f;
+  }
+  if (render.lens_.type_ == LensParam::kDualFisheyeEqualArea) {
+    // kernel implements fov180 full-globe only; reject custom fov.
+    return std::abs(render.lens_.fov_ - 180.0f) <= 0.5f;
+  }
+  return false;
 }
 
 uint32_t CudaTraceBackend::WlPoolSize() const {
