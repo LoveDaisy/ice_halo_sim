@@ -207,6 +207,37 @@ After scrum-304.2 buffer-persist, GPU-idle-gated (`nvidia-smi` 0% verified befor
   reasonable single-crystal single-MS proxy (prism, D65, max_hits 7). Align if a precise
   apples-to-apples is needed.
 
+> #### ⚠️ `LUMICE_DISPATCH_RAY_NUM` is a GPU-only knob — never apply it to legacy in a comparison (scrum-306.1/306.4)
+>
+> `LUMICE_DISPATCH_RAY_NUM` sizes the GPU engine's per-dispatch grid. **CUDA total
+> energy is dispatch-invariant** (verified: ΣY = 261.29 M ±0.001% across dispatch
+> ∈ {128, 8192, 32768, 131072} on `dual_fisheye_ref`) — i.e. the GPU result is
+> correct at any dispatch. **Legacy (CPU) total energy is NOT dispatch-invariant**:
+> the same knob (which overrides legacy's `kDefaultRayNum`=128) swings legacy ΣY
+> **−5 %..+13 %** (259.65 M @128 / 245.5 M @8192 / 275.5 M @32768 / 292.9 M @131072).
+> This is a real legacy correctness bug tracked in **scrum-306.7** (energy must be
+> batch-size invariant; mechanism TBD — normalization / ray-count / RNG-per-batch).
+>
+> **Consequence / historical misdiagnosis to NOT repeat**: setting
+> `LUMICE_DISPATCH_RAY_NUM=131072` globally to probe CUDA made
+> `test_cuda_single_ms_no_filter_parity` report `energy_ratio=0.8922` — this was
+> **mis-attributed to a "CUDA exit-cap/cont-cap silent energy loss"** (the original
+> scrum-304.3 backlog entry). It is NOT a CUDA bug: the knob leaked into the legacy
+> reference run and inflated the **denominator** (legacy_Y), `261.29/292.87 = 0.892`.
+> The parity harness now strips `LUMICE_DISPATCH_RAY_NUM` for the `legacy` backend
+> (`test/e2e/capi_runner.py`, scrum-306.4) so the oracle stays at its canonical
+> default and `energy_ratio` reflects the GPU backend's correctness alone
+> (re-verified: @131072 0.8922 FAIL → 1.0063 PASS). `bench_throughput.py` already
+> excludes legacy from the dispatch sweep (`DISPATCH_PLAN["legacy"]=[None]`).
+>
+> **Process lesson (why this is documented here, tracked)**: the 304.3 correctness
+> claim lived only as a backlog one-liner with no preserved script → a wrong
+> diagnosis (CUDA) propagated and could not be re-aligned. Correctness assertions
+> must land in a tracked doc with a reproducible recipe. Reproduce recipe: container
+> `pip install pytest numpy`, `LUMICE_HAS_CUDA=1`, then
+> `LUMICE_DISPATCH_RAY_NUM=131072 pytest -m slow test/parity-cross-backend/backend/test_cuda_exit_seam_parity.py::test_cuda_single_ms_no_filter_parity`;
+> per-dispatch ΣY split via `bench_work/harness2.cpp` (dev49).
+
 ### macOS
 
 ```bash
