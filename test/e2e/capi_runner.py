@@ -427,6 +427,20 @@ def run_scene_capi_buffered(
         # Caller's env would override our SetPreferredBackend — strip it.
         del os.environ["LUMICE_TRACE_BACKEND"]
 
+    # scrum-306.4: LUMICE_DISPATCH_RAY_NUM is a GPU-engine dispatch-sizing knob.
+    # The legacy (CPU) parity oracle's total energy is NOT invariant to it
+    # (explore-306.1: legacy Y swings −5%..+13% across dispatch sizes; a separate
+    # legacy bug tracked in scrum-306.7). When a dev sets LUMICE_DISPATCH_RAY_NUM
+    # globally to probe a GPU backend at a large dispatch, it leaks into the legacy
+    # reference run and inflates legacy_Y → a FALSE energy_ratio failure that was
+    # historically misattributed to a CUDA "silent energy loss". Pin the oracle to
+    # its canonical default by stripping the knob for the legacy run so the ratio
+    # reflects the GPU backend's correctness alone.
+    disp_was_set = "LUMICE_DISPATCH_RAY_NUM" in os.environ
+    disp_old = os.environ.get("LUMICE_DISPATCH_RAY_NUM")
+    if backend == "legacy" and disp_was_set:
+        del os.environ["LUMICE_DISPATCH_RAY_NUM"]
+
     capture = _LogCapture()
 
     try:
@@ -568,3 +582,9 @@ def run_scene_capi_buffered(
         else:
             if env_was_set:
                 os.environ["LUMICE_TRACE_BACKEND"] = env_old
+        # scrum-306.4: restore LUMICE_DISPATCH_RAY_NUM (only the legacy branch
+        # strips it; restore symmetrically regardless of backend).
+        if disp_was_set:
+            os.environ["LUMICE_DISPATCH_RAY_NUM"] = disp_old
+        else:
+            os.environ.pop("LUMICE_DISPATCH_RAY_NUM", None)

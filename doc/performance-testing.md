@@ -192,20 +192,145 @@ After scrum-304.2 buffer-persist, GPU-idle-gated (`nvidia-smi` 0% verified befor
 | `ms_multi_crystal_complex_filter` (重·标准) | 471 K/s | 6.26 M/s | 38.0 M/s | 60.3 M/s | 9.63× |
 | `ms_multi_crystal_filtered_bd` (重·bd) | 510 K/s | 6.73 M/s | 39.1 M/s | 61.9 M/s | 9.19× |
 
+##### Rebench at the new CUDA default (262144) — scrum-306.3 (2026-06-29, dev49 idle-gated, 20M rays, 3 reps median)
+
+| config | legacy multi | CUDA multi (default=262144) | CUDA/legacy | vs old 32768 default |
+|---|---|---|---|---|
+| `bench_light_single_ms` (轻·单MS) | 6.2 M/s | **~87 M/s** | ~14× | 56→87 (1.6×) |
+| `ms_multi_crystal` (中·无filter) | 0.93 M/s | ~19.7 M/s | ~21× | 13.7→19.7 (1.4×) |
+| `ms_multi_crystal_complex_filter` (重·标准) | 3.2 M/s | ~178 M/s | ~56× | 60→178 (3.0×) |
+| `ms_multi_crystal_filtered_bd` (重·bd) | 2.7 M/s | ~232 M/s | ~85× | 62→232 (3.7×) |
+
+- **Out-of-box CUDA improved 1.4–3.7× by the new default dispatch + exit-cap** (scrum-306.2). The
+  filtered configs run *faster* than the light scene (178/232 vs 87 M/s) because the filter
+  terminates most rays early (rays/s counts root rays) — NOT a higher kernel throughput; the light
+  single-MS scene (~87 M/s here, ~114 M/s in the dedicated quiet-machine interleaved sweep) is the
+  honest comparable-load figure.
+- **⚠️ Absolute-number caveat (shared dev49 CPU contention):** CUDA is host-bound and legacy is
+  CPU-bound, so even with the GPU idle-gated (0%), co-tenant **CPU** load depresses both columns and
+  shifts run-to-run (the same bench_light CUDA cell read 87 M here vs 114 M in a quieter window).
+  Trust the **ratios** and the **new-vs-old-default** deltas (intra-run, robust); treat the absolute
+  M/s as indicative. Only per-run **interleaved** comparison (A,B,C,A,B,C…) is drift-proof — see the
+  scrum-306.2 methodology note below. The legacy column is also lower than the pre-306.2 table above
+  for the same reason (CPU contention at measurement time), which inflates the ratios — do not read
+  the ratio jump as pure CUDA gain.
+
 - **Competitive bar MET**: the comparable light single-MS scene is **35–56 M/s**, at/above
   the 25 M/s competitor target AND above the Mac Metal reference (28–30 M/s). buffer-persist
   alone (scrum-304.2) got CUDA here; the earlier "0.16–0.40× / 1.5M" pessimism was a
   measurement artifact — ad-hoc non-idle-gated runs on the heavier `ms_multi_crystal`, the
   wrong yardstick. Always idle-gate + use the canonical harness + the comparable scene.
-- **GPU not yet saturated**: nsys on the light scene (50M-ray plain run) = GPU active 17.6%
-  (JIT/setup-included); benchmark steady-window active ≈ 43%. trace_single_ms_kernel is 95%
-  of GPU time. The fully-fed kernel ceiling is ~129 M rays/s (50M / 386 ms kernel), so the
-  current 56 M is ~43% of ceiling — **~2.3× headroom remains**, locked behind per-dispatch
-  host serialization (default stream + per-layer sync; explore-303, untouched by 304.2).
-  Pursuing it is the async-engine work — now justified by the active% data, not speculation.
+- **GPU not yet saturated** (at the 32768 default this table used): nsys = benchmark steady-window
+  active ≈ 43%; trace_single_ms_kernel is 95% of GPU time; intrinsic kernel ceiling ≈ 134 M/s, so
+  the 56 M here was ~43% of ceiling. **⚠️ SUPERSEDED by scrum-306.2** (see the resolution subsection
+  below): the headroom was NOT locked behind async (per-dispatch sync was 0.3% of host time) but
+  behind per-batch host overhead + a dead `d_exit_` buffer. With those fixed and the CUDA default
+  dispatch raised to 262144, **out-of-box CUDA now reaches ~114 M/s** (= 85% of the 134 M intrinsic
+  rate) on the comparable light scene — these 35–56 M numbers are the pre-306.2 figures at the old
+  32768 default and are retained only as the baseline the 306.2 work improved on.
+- **The GPU route has no true multi-worker parallelism** (worker_count=1, server.cpp:275). The
+  benchmark's "single" and "multi" passes BOTH run on the single GPU engine; their difference is a
+  JIT-warmup + ray-count artifact, not parallelism (explore-306.1 E1: worker_count=1 is the铁证).
+  The "workers":N field in a GPU [BENCHMARK] line is the configured core count, NOT GPU engines.
+  Only the legacy CPU route is genuinely multi-worker (N = PhysicalCoreCount).
 - Caveat: the competitor's exact config (spectrum / max_hits) is unknown; our scene is a
   reasonable single-crystal single-MS proxy (prism, D65, max_hits 7). Align if a precise
   apples-to-apples is needed.
+
+##### scrum-306.2 resolution: the 2.3× headroom was unlocked by dispatch size + exit-cap, NOT async (2026-06-29)
+
+The "~2.3× headroom locked behind per-dispatch host serialization → pursue async" framing
+above was **half wrong**, corrected by profiling:
+
+- **async (stream deferral) was the wrong lever.** nsys CUDA-API summary after the geometry
+  pool: `cudaEventSynchronize` / `cudaDeviceSynchronize` were **0.3% / 0.4%** of host-API
+  time — deferring them buys <1%. The originally-planned increment-2 (mirror Metal
+  `pending_cb_`/`WaitAndReadbackLayer`) was dropped.
+- **The GPU was host-bound, not sync-bound.** nsys GPU-side: `trace_single_ms_kernel` =
+  44.8 ms / 185 dispatches for 6M rays → **~134 M/s intrinsic kernel rate**; the GPU sat ~70%
+  idle waiting on **per-batch host overhead** (BeginSession + XYZ readback + orchestration),
+  which is **common to every variant** and amortizes with **fewer, bigger batches**.
+- **The lever = `LUMICE_DISPATCH_RAY_NUM`** (the default was raised for the CUDA route:
+  `kDefaultCudaDispatchRayNum = 262144`). Idle-gated **interleaved** sweep (cfg_50m, 50M
+  multi): 37M @32768 → **~114M @262144** (= 85% of the 134M ceiling) → ~115M @1M, then
+  declining (2M→106M, 4M→97M) as the continuation/root buffers grow.
+- **exit-cap was the enabler.** CUDA's `HasDeviceXyzAccum()` is unconditionally true, so the
+  trace kernel writes nothing to `d_exit_` (all exits go to `d_xyz_buf_` via `EmitToDeviceXyz`;
+  `DrainExits` reads 0 records). `d_exit_` sized `ComputeExitCap = n·(2·max_hits+4)` was dead
+  weight that ballooned to GBs at large dispatch — causing both the big-dispatch throughput
+  collapse and a parity OOM. Capping it (`kCudaDeadExitCap`) unlocked the dispatch sweep.
+- **The geometry pool (upload-once) + filter/wl persist were throughput-NEUTRAL** (interleaved
+  round-robin: pre ≈ pool ≈ pool+persist). They are correct, parity-clean structural changes
+  (remove per-batch H2D churn, align with seam-design §5) but the churn they removed overlaps
+  GPU compute / sits in setup — NOT on the steady-state critical path. Do not cite them as the
+  speedup source.
+- **Result**: out-of-box (no env knob) CUDA reaches **~114 M/s**, idle-gated, with the full
+  parity suite 10/10 at the new default AND at 524288/1048576. CUDA energy stays
+  dispatch-invariant; `kCommitCap=128` keeps the GUI snapshot cadence decoupled.
+
+**Methodology lessons (shared dev49 is CPU-contended → host-bound CUDA throughput is noisy):**
+- Same binary + same dispatch swung **33M ↔ 114M** with machine load. `nvidia-smi` GPU 0%
+  gate is necessary but NOT sufficient — it doesn't show CPU contention from co-tenant
+  containers. **Only trust per-run interleaved comparison** (A,B,C,A,B,C…), never cross-session,
+  and never even "back-to-back phases" (minute-scale drift between phases faked a 1.9× win once).
+- Use nsys **GPU-side** (`gpukernsum`: kernel time vs wall) to classify GPU-bound vs host-bound.
+  The CUDA-API summary (cudaMemcpy/cudaFree) is host time that may overlap compute — not the
+  bottleneck by itself.
+- **Profile before coding a fix.** A fully-designed stream-deferral increment was abandoned once
+  nsys showed it was worth <1%.
+
+##### scrum-306.6 (Metal kernel lever) + 306.7 (legacy energy) — both converged, no code change (2026-06-29)
+
+- **306.6 Metal kernel lever probe → NO cheap lever.** The path_rec spike (remove the per-bounce
+  `path[]` store + the `rec_csum`/`rec_sink` checksum, rebuild, idle-gated interleaved Metal multi
+  bench) gave **0 throughput change** (BASE ≈ SPIKE ≈ 30 M/s) — exactly like the CUDA path_rec
+  spike. Metal `trace_layer_kernel` dominates (~143–214µs/dispatch, ~80% of GPU time, from the
+  `xctrace export` of the Metal System Trace) and is ALU-bound (occ ~29% / ALU 63–73%, prior E7) —
+  the *hard* case: no cheap occupancy/memory knob, only algorithmic ALU reduction. Same bucket as
+  CUDA (latency-bound, 3 spikes all 0) → folded into the far-future algorithmic-kernel backlog, not
+  a standalone task. (The precise which-ALU breakdown / occupancy-limiter reason needs a
+  counter-enabled Xcode GPU frame capture — interactive, not headless-driveable; the existing
+  `metal-profile.trace` lacks hardware counters.)
+- **306.7 legacy energy "dispatch dependence" → NOT a bug (MC variance).** Legacy ΣY drifts with
+  `LUMICE_DISPATCH_RAY_NUM` because the legacy/illuminant path samples **one wavelength per
+  SimBatch** (`simulator.cpp`): wl-samples = ray_num/dispatch (128 → 78125 samples, converged;
+  131072 → ~77, high variance). `sim_ray_num`/`ray_seg_num` are invariant (10M/150M) — it is NOT a
+  ray-count or normalization bug. The per-batch-wl estimator has the **same expectation** as
+  per-ray wl (unbiased); only variance differs (cross-seed CV 0.3% @128 vs 8.6% @131072 = √(1024×
+  fewer samples)). Legacy at its default (128) is well-converged and correct; 306.4 already strips
+  the GPU-only knob from legacy. A root-cause change (per-ray or per-fixed-chunk wl) would touch the
+  legacy **reference oracle** (re-baseline risk) for zero real-world benefit → not pursued.
+
+> #### ⚠️ `LUMICE_DISPATCH_RAY_NUM` is a GPU-only knob — never apply it to legacy in a comparison (scrum-306.1/306.4)
+>
+> `LUMICE_DISPATCH_RAY_NUM` sizes the GPU engine's per-dispatch grid. **CUDA total
+> energy is dispatch-invariant** (verified: ΣY = 261.29 M ±0.001% across dispatch
+> ∈ {128, 8192, 32768, 131072} on `dual_fisheye_ref`) — i.e. the GPU result is
+> correct at any dispatch. **Legacy (CPU) total energy is NOT dispatch-invariant**:
+> the same knob (which overrides legacy's `kDefaultRayNum`=128) swings legacy ΣY
+> **−5 %..+13 %** (259.65 M @128 / 245.5 M @8192 / 275.5 M @32768 / 292.9 M @131072).
+> This is a real legacy correctness bug tracked in **scrum-306.7** (energy must be
+> batch-size invariant; mechanism TBD — normalization / ray-count / RNG-per-batch).
+>
+> **Consequence / historical misdiagnosis to NOT repeat**: setting
+> `LUMICE_DISPATCH_RAY_NUM=131072` globally to probe CUDA made
+> `test_cuda_single_ms_no_filter_parity` report `energy_ratio=0.8922` — this was
+> **mis-attributed to a "CUDA exit-cap/cont-cap silent energy loss"** (the original
+> scrum-304.3 backlog entry). It is NOT a CUDA bug: the knob leaked into the legacy
+> reference run and inflated the **denominator** (legacy_Y), `261.29/292.87 = 0.892`.
+> The parity harness now strips `LUMICE_DISPATCH_RAY_NUM` for the `legacy` backend
+> (`test/e2e/capi_runner.py`, scrum-306.4) so the oracle stays at its canonical
+> default and `energy_ratio` reflects the GPU backend's correctness alone
+> (re-verified: @131072 0.8922 FAIL → 1.0063 PASS). `bench_throughput.py` already
+> excludes legacy from the dispatch sweep (`DISPATCH_PLAN["legacy"]=[None]`).
+>
+> **Process lesson (why this is documented here, tracked)**: the 304.3 correctness
+> claim lived only as a backlog one-liner with no preserved script → a wrong
+> diagnosis (CUDA) propagated and could not be re-aligned. Correctness assertions
+> must land in a tracked doc with a reproducible recipe. Reproduce recipe: container
+> `pip install pytest numpy`, `LUMICE_HAS_CUDA=1`, then
+> `LUMICE_DISPATCH_RAY_NUM=131072 pytest -m slow test/parity-cross-backend/backend/test_cuda_exit_seam_parity.py::test_cuda_single_ms_no_filter_parity`;
+> per-dispatch ΣY split via `bench_work/harness2.cpp` (dev49).
 
 ### macOS
 

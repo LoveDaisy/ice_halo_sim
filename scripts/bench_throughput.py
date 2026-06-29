@@ -104,17 +104,18 @@ BACKENDS = [
 
 # Dispatch sweep applies to GPU backends (Metal, CUDA) — CPU paths ignore
 # LUMICE_DISPATCH_RAY_NUM for parity with how the GUI runs. `None` means "do NOT
-# set the env var" — the server picks its own backend-aware default (32768 for any
-# GPU route, kDefaultRayNum for CPU; server.cpp ResolveGpuRoute). Keeping `None`
-# distinct from `32768` lets the table verify "default == 32768 today" without
-# conflating intents if the default later moves. The small-batch points (128, 512)
-# characterize the "small dispatch starves the GPU" curve that motivates the
-# single-engine large-dispatch route (doc/seam-design.md §5).
+# set the env var" — the server picks its own backend-aware default (Metal 32768,
+# CUDA 262144 since scrum-306.2, kDefaultRayNum for CPU; server.cpp ResolveGpuRoute).
+# Keeping `None` distinct from the explicit value lets the table verify "default ==
+# the resolved per-backend value" without conflating intents. The small-batch points
+# (128, 512) characterize the "small dispatch starves the GPU" curve; CUDA adds 262144
+# (the scrum-306.2 plateau ≈ 85% of the 134M intrinsic kernel rate, after capping the
+# dead d_exit_ buffer) so the sweep brackets its real operating point.
 DISPATCH_PLAN = {
     "legacy": [None],
     "cpu_backend": [None],
     "metal": [None, 128, 512, 2048, 32768],
-    "cuda": [None, 128, 512, 2048, 32768],
+    "cuda": [None, 128, 512, 2048, 32768, 262144],
 }
 
 N_REPS = 5
