@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782696881767,
+  "lastUpdate": 1782696883297,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9620,50 +9620,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "9fd5b962e42b671f21ccf7e61bf19d462902708f",
-          "message": "Merge pull request #52 from LoveDaisy/feat/axis_dist\n\nfeat: add zigzag and laplacian axis distribution types",
-          "timestamp": "2026-04-06T23:31:58+08:00",
-          "tree_id": "866611c6d3effac07c263c82c88d0f61c5625a57",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/9fd5b962e42b671f21ccf7e61bf19d462902708f"
-        },
-        "date": 1775489756969,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 77.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 76.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 71.7,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 70.9,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "7afaf1ee9852b2a5b2fca35706f11e8cb5cd621d",
           "message": "Merge pull request #53 from LoveDaisy/feat/crystal_param\n\nfeat: replace Miller index with wedge angle for pyramid crystals",
           "timestamp": "2026-04-07T11:45:57+08:00",
@@ -14003,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 95,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c2c5801cbe82410b1423d904c37480dc4ec03185",
+          "message": "Merge pull request #154 from LoveDaisy/feat/cuda-async-engine-port\n\nperf(scrum-304): persist CUDA buffers across sessions — CUDA throughput competitive + bench standardized",
+          "timestamp": "2026-06-29T09:28:47+08:00",
+          "tree_id": "539bc1c7bc7672f023725ee7be21bafaa4fb88d5",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/c2c5801cbe82410b1423d904c37480dc4ec03185"
+        },
+        "date": 1782696882978,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 71.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 88.5,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 88.7,
             "unit": "%"
           }
         ]
