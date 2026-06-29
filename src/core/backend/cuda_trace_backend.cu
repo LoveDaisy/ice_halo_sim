@@ -1166,6 +1166,13 @@ struct CudaTraceBackend::Impl {
   std::vector<Crystal>  pool_crystals_;     // host slot crystals (config_id; wl-pool repr)
   bool        geom_pool_built_ = false;
   const void* pool_scene_      = nullptr;   // scene the pool was built for (rebuild guard)
+  // scrum-306.2 increment 4: filter descriptors + wl pool are per-session-CONSTANT
+  // (config + crystal n_idx fixed across batches) — persist them across the
+  // per-batch cycle instead of free+malloc+H2D every BeginSession (post-pool the
+  // dominant host-API cost: cudaFree 40% + cudaMemcpy 43%, nsys 4M-run). Rebuilt
+  // only on scene change (pool_scene_ sentinel) or full teardown.
+  bool        filter_built_      = false;
+  bool        wl_pool_uploaded_  = false;
 
   // Per-ray crystal->world rotation buffer (9 floats/ray, row-major
   // Rotation::mat_). Allocated in EnsureSessionBuffers; filled per TraceLayer
@@ -1426,13 +1433,9 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
   // (root cause: explore-303). Full teardown (keep_persistent_buffers=false)
   // runs on error paths + the destructor.
 
-  // Filter descriptor buffers are reallocated UNCONDITIONALLY by
-  // EnsureFilterBuffers every BeginSession (no nullptr guard) — so they must be
-  // freed on EVERY session end, including the persistent path, or they leak.
-  cudaFree(d_filter_desc_);      d_filter_desc_ = nullptr;
-  cudaFree(d_getfn_offsets_);    d_getfn_offsets_ = nullptr;
-  cudaFree(d_getfn_bytes_);      d_getfn_bytes_ = nullptr;
-  cudaFree(d_complex_sub_desc_); d_complex_sub_desc_ = nullptr;
+  // scrum-306.2 increment 4: filter descriptors are now PERSISTED across the
+  // per-batch keep path (EnsureFilterBuffers is idempotent on filter_built_), so
+  // they are freed only on full teardown below — not every session end.
 
   if (!keep_persistent_buffers) {
     cudaFree(d_poly_n_);     d_poly_n_ = nullptr;
@@ -1454,6 +1457,22 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
     layer_slot_base_.clear(); pool_crystals_.clear();
     geom_pool_built_ = false;
     pool_scene_ = nullptr;
+    // increment 4: filter descriptors + wl pool persist across the keep path;
+    // free + invalidate them only here on full teardown (d_wl_pool_ freed below).
+    cudaFree(d_filter_desc_);      d_filter_desc_ = nullptr;
+    cudaFree(d_getfn_offsets_);    d_getfn_offsets_ = nullptr;
+    cudaFree(d_getfn_bytes_);      d_getfn_bytes_ = nullptr;
+    cudaFree(d_complex_sub_desc_); d_complex_sub_desc_ = nullptr;
+    filter_built_ = false;
+    wl_pool_uploaded_ = false;
+    filter_desc_max_ci_ = 0u;
+    filter_n_slot_ = 0u;
+    crystal_config_id_ = 0xFFFFu;
+    final_layer_filter_configs_.clear();
+    final_layer_crystals_.clear();
+    final_layer_axis_dists_.clear();
+    final_ms_layer_idx_ = 0u;
+    final_ms_prob_ = 0.0f;
     // Grow-only geometry capacities track the freed buffers above; zero them so
     // a fresh session re-allocates rather than reusing a dangling capacity.
     alloc_poly_cap_ = 0;
@@ -1522,14 +1541,10 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
   h_cont_count_ = 0;
   ms_layer_idx_ = 0u;
   n_ms_layers_ = 0u;
-  filter_desc_max_ci_ = 0u;
-  filter_n_slot_ = 0u;
-  crystal_config_id_ = 0xFFFFu;
-  final_layer_filter_configs_.clear();
-  final_layer_crystals_.clear();
-  final_layer_axis_dists_.clear();
-  final_ms_layer_idx_ = 0u;
-  final_ms_prob_ = 0.0f;
+  // increment 4: filter-descriptor state (filter_desc_max_ci_/filter_n_slot_/
+  // crystal_config_id_/final_layer_*/final_ms_*) is produced by EnsureFilterBuffers
+  // and now PERSISTS across the per-batch keep path — reset only on full teardown
+  // (keep=false block above), not here, or the idempotent-skip path reads zeros.
   proj_type_ = 0u;
   az0_ = 0.0f;
   r_scale_ = 1.0f;
@@ -1878,6 +1893,13 @@ void CudaTraceBackend::Impl::EnsureContCapacity(size_t n_in, int out_slot) {
 // Single-CI MVP: max_ci is structurally 1, so `gate_slot = ms_layer_idx`.
 // Multi-CI per-layer crystal pool is 296.6.
 void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
+  // scrum-306.2 increment 4: filter descriptors are per-session-constant (config
+  // fixed across batches) — built once per scene and persisted (filter_built_,
+  // reset on scene change / full teardown). Skips the free+malloc+H2D churn that
+  // ran every BeginSession (post-pool the dominant host-API cost).
+  if (filter_built_) {
+    return;
+  }
   // Free any prior session's filter buffers (cudaFree on nullptr is a no-op).
   cudaFree(d_filter_desc_);       d_filter_desc_       = nullptr;
   cudaFree(d_getfn_offsets_);     d_getfn_offsets_     = nullptr;
@@ -1908,6 +1930,7 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
     ck(cudaMalloc(&d_complex_sub_desc_, sizeof(DeviceFilterDesc)), "cudaMalloc d_complex_sub_desc (dummy)");
     filter_desc_max_ci_ = 1u;
     filter_n_slot_      = 1u;
+    filter_built_       = true;
   };
 
   if (spec.scene == nullptr || spec.scene->ms_.empty()) {
@@ -2033,6 +2056,7 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
       (!final_layer_crystals_.empty() && final_layer_crystals_[0].config_id_ != kInvalidId)
           ? static_cast<uint32_t>(final_layer_crystals_[0].config_id_)
           : 0xFFFFu;
+  filter_built_ = true;
 }
 
 CudaTraceBackend::CudaTraceBackend(Logger* logger) : impl_(std::make_unique<Impl>()) {
@@ -2063,6 +2087,16 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     impl_->wl_ = spec.wl;
     impl_->rng_.SetSeed(spec.seed);
     impl_->ray_alloc_carry_.clear();  // per-(layer,ci) partition carry — fresh per session
+
+    // scrum-306.2 increment 4: a scene change invalidates every per-session-constant
+    // cache (geometry pool, filter descriptors, wl pool). Within one scene these are
+    // built/uploaded ONCE and reused across the per-batch BeginSession cycle.
+    if (impl_->pool_scene_ != static_cast<const void*>(spec.scene)) {
+      impl_->geom_pool_built_   = false;
+      impl_->filter_built_      = false;
+      impl_->wl_pool_uploaded_  = false;
+      impl_->pool_scene_        = static_cast<const void*>(spec.scene);
+    }
 
     // MVP: single MS, single crystal config — ms_[0].setting_[0].
     if (spec.scene == nullptr || spec.scene->ms_.empty() || spec.scene->ms_[0].setting_.empty()) {
@@ -2112,10 +2146,8 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     // crystal_for_geom (dummy_rng; shape-independent refractive index) still
     // feeds the wl pool + refractive-index log below in both paths.
     if (!impl_->disable_device_gen_) {
-      if (!impl_->geom_pool_built_ ||
-          impl_->pool_scene_ != static_cast<const void*>(spec.scene)) {
-        impl_->BuildGeomPool(*spec.scene);
-        impl_->pool_scene_ = static_cast<const void*>(spec.scene);
+      if (!impl_->geom_pool_built_) {
+        impl_->BuildGeomPool(*spec.scene);  // sets geom_pool_built_
       }
       impl_->poly_cnt_ = impl_->pool_poly_cnt_[0];
       impl_->tri_cnt_  = impl_->pool_tri_cnt_[0];
@@ -2133,20 +2165,26 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     // (simulator.cpp). Mirrors Metal ComputeWlPool + EnsureWlPoolBuffer. The
     // buffer is allocated once (size = env-resolved M, stable per process) and
     // re-uploaded each BeginSession since the crystal n_idx is scene-dependent.
+    // scrum-306.2 increment 4: the wl pool (n_idx + spd_weight per sampled wl) is
+    // per-session-constant (crystal n_idx + spectrum fixed across batches), so
+    // compute + upload it ONCE per scene rather than every BeginSession.
     Logger& wl_logger = impl_->logger != nullptr ? *impl_->logger : GetGlobalLogger();
-    impl_->wl_pool_size_ = ResolveWlPoolSize(wl_logger);
-    const auto& spectrum = spec.scene->light_source_.spectrum_;
-    impl_->illuminant_mode_ = std::holds_alternative<IlluminantType>(spectrum);
-    impl_->illuminant_ = impl_->illuminant_mode_ ? std::get<IlluminantType>(spectrum) : IlluminantType{};
-    ComputeWlPool(crystal_for_geom, impl_->illuminant_mode_, impl_->illuminant_, spec.wl.wl_, spec.wl.weight_,
-                  impl_->wl_pool_size_, impl_->wl_pool_host_);
-    if (impl_->d_wl_pool_ == nullptr) {
-      CheckCuda(cudaMalloc(&impl_->d_wl_pool_, impl_->wl_pool_size_ * sizeof(WlEntry)),
-                "BeginSession cudaMalloc d_wl_pool");
+    if (!impl_->wl_pool_uploaded_) {
+      impl_->wl_pool_size_ = ResolveWlPoolSize(wl_logger);
+      const auto& spectrum = spec.scene->light_source_.spectrum_;
+      impl_->illuminant_mode_ = std::holds_alternative<IlluminantType>(spectrum);
+      impl_->illuminant_ = impl_->illuminant_mode_ ? std::get<IlluminantType>(spectrum) : IlluminantType{};
+      ComputeWlPool(crystal_for_geom, impl_->illuminant_mode_, impl_->illuminant_, spec.wl.wl_, spec.wl.weight_,
+                    impl_->wl_pool_size_, impl_->wl_pool_host_);
+      if (impl_->d_wl_pool_ == nullptr) {
+        CheckCuda(cudaMalloc(&impl_->d_wl_pool_, impl_->wl_pool_size_ * sizeof(WlEntry)),
+                  "BeginSession cudaMalloc d_wl_pool");
+      }
+      CheckCuda(cudaMemcpy(impl_->d_wl_pool_, impl_->wl_pool_host_.data(), impl_->wl_pool_size_ * sizeof(WlEntry),
+                           cudaMemcpyHostToDevice),
+                "BeginSession cudaMemcpy d_wl_pool");
+      impl_->wl_pool_uploaded_ = true;
     }
-    CheckCuda(cudaMemcpy(impl_->d_wl_pool_, impl_->wl_pool_host_.data(), impl_->wl_pool_size_ * sizeof(WlEntry),
-                         cudaMemcpyHostToDevice),
-              "BeginSession cudaMemcpy d_wl_pool");
 
     // MS layer count + initial layer index. Used by TraceLayer to derive
     // ms_mode (continuation vs final exit) when Step 5 lands. n_ms_layers_
