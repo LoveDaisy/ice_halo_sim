@@ -90,6 +90,17 @@ class ServerImpl {
   // geometry-sampling cadence). Commit granularity (kCommitCap) stays fine
   // regardless, so "feed the GPU big, refresh the UI small" is one tunable.
   static constexpr size_t kDefaultMetalDispatchRayNum = 32768;
+  // scrum-306.2: CUDA's optimum sits much higher than Metal's. After capping the
+  // dead d_exit_ buffer (cuda_trace_backend.cu kCudaDeadExitCap), a large dispatch
+  // amortizes the per-batch host stall (BeginSession/XYZ-readback/sync) that left
+  // the GPU ~70% idle: dev49 idle-gated interleaved sweep on cfg_50m (50M-ray
+  // multi) climbs 37M @32768 -> ~114M @262144 (= 85% of the 134M intrinsic kernel
+  // rate, nsys), plateauing/declining beyond (~115M @1M, then cont/root-buffer
+  // pressure). 262144 is the throughput plateau at modest memory. CUDA energy is
+  // dispatch-invariant (scrum-306.4), and parity holds at this dispatch (full
+  // suite 10/10 @262144/524288). Kept separate from the Metal default (Metal's own
+  // optimum is unchanged; not re-measured here).
+  static constexpr size_t kDefaultCudaDispatchRayNum = 262144;
 
   void ConsumeData();
   void GenerateScene();
@@ -940,9 +951,22 @@ void ServerImpl::GenerateScene() {
   // CPU/legacy keeps the small kDefaultRayNum. An explicit LUMICE_DISPATCH_RAY_NUM
   // always wins. NOT static: a server reconstructed on a GUI backend toggle must
   // re-resolve the default for the new backend (commit↔batch decoupling, 268.4).
-  const size_t kDefaultDispatch = ResolveGpuRoute(preferred_backend_.load(std::memory_order_acquire), logger_) ?
-                                      kDefaultMetalDispatchRayNum :
-                                      kDefaultRayNum;
+  // scrum-306.2: CUDA's dispatch optimum (262144) is much higher than Metal's
+  // (32768) once the dead exit buffer is capped — select per backend so each GPU
+  // route gets its own measured plateau. ResolveGpuRoute is env-override-aware
+  // (LUMICE_TRACE_BACKEND wins over preferred_backend_, so keying on the latter
+  // misses the --benchmark/CLI env path). Metal is Apple-only; CUDA is the only
+  // GPU route on a non-Apple CUDA build — so there a true GPU route IS CUDA.
+  const BackendKind kPref = preferred_backend_.load(std::memory_order_acquire);
+  const bool kGpuRoute = ResolveGpuRoute(kPref, logger_);
+#if defined(LUMICE_CUDA_ENABLED) && !defined(__APPLE__)
+  const bool kIsCudaRoute = kGpuRoute;
+#else
+  const bool kIsCudaRoute = false;  // Apple GPU route is Metal; non-CUDA build has none
+#endif
+  const size_t kDefaultDispatch = kIsCudaRoute ? kDefaultCudaDispatchRayNum :
+                                  kGpuRoute    ? kDefaultMetalDispatchRayNum :
+                                                 kDefaultRayNum;
   const size_t kDispatchCap = env::DispatchRayNum(logger_, kDefaultDispatch);
   const size_t kBatchCap = kDispatchCap;  // local alias for the loop below
 
