@@ -85,14 +85,20 @@ benchmark 模式的行为差异：
 
 - **Metal 在可比的轻·单MS 场景已 ~28–30 M/s,达到/超过 25 M/s 硬件能力目标。** 证明这个标尺在本 codebase 够得着,给 CUDA 一个同引擎目标(4060 Ti 与 M2 Max GPU 算力同级);CUDA 剩余差距是执行模型,不是 kernel 根本极限。
 
-#### Linux — dev49 RTX 4060 Ti(AMD Zen5 9950X 16C/32T host）· legacy vs CUDA · TODO（dev49 被占）
+#### Linux — dev49 RTX 4060 Ti(AMD Zen5 9950X 16C/32T host）· legacy vs CUDA · 2026-06-29
 
-本轮未测。dev49 空闲后跑(scrum-304 buffer-persist 构建),填同样表格,CUDA 轻场景数对标 25 M/s + 上面 Metal ~28 M/s 参照:
+scrum-304.2 buffer-persist 后,GPU idle-gate(跑前 `nvidia-smi` 实测 0%),`scripts/bench_throughput.py` 默认 dispatch(=32768),ray_num=20M,N≥5(CoV>15% 重跑 N=9)。
 
-```bash
-LUMICE_BENCH_BIN=/work/build/Release/bin/Lumice LUMICE_BENCH_LIBDIR=/work/build/Release/lib \
-LUMICE_BENCH_BACKENDS=legacy,cuda python3 scripts/bench_throughput.py
-```
+| config | legacy single | legacy multi | CUDA single | CUDA multi | CUDA/legacy(multi) |
+|---|---|---|---|---|---|
+| `bench_light_single_ms`（轻·单MS） | 744 K/s | 8.98 M/s | **35.2 M/s** | **55.9 M/s** | 6.23× |
+| `ms_multi_crystal`（中·无filter） | 126 K/s | 1.44 M/s | 9.67 M/s | 13.7 M/s | 9.55× |
+| `ms_multi_crystal_complex_filter`（重·标准） | 471 K/s | 6.26 M/s | 38.0 M/s | 60.3 M/s | 9.63× |
+| `ms_multi_crystal_filtered_bd`（重·bd） | 510 K/s | 6.73 M/s | 39.1 M/s | 61.9 M/s | 9.19× |
+
+- **竞品线 25M 已达到/超过**:可比轻·单MS 场景 **35–56 M/s**,≥ 25M 竞品目标,也 > Mac Metal 参照(28–30M)。仅 buffer-persist(304.2)就到这了;之前"0.16–0.40× / 1.5M"的悲观是**测量假象**——ad-hoc 非 idle-gate 在重场景 `ms_multi_crystal` 上测、用错标尺。务必 idle-gate + 用 canonical harness + 可比场景。
+- **GPU 尚未满载**:nsys 轻场景(50M plain run)GPU active 17.6%(含 JIT/setup);benchmark steady 窗口 active ≈ 43%。trace kernel 占 GPU 95%。满载天花板 ≈ 129M rays/s(50M / 386ms kernel),现在 56M ≈ 43% → **还剩 ~2.3× headroom**,锁在每-dispatch host 串行(默认流 + per-layer 同步;explore-303 找到,304.2 未动)。要拿这部分=async-engine 工作,**现由 active% 数据支撑,非猜测**。
+- 注:竞品确切配置(光谱/max_hits)未知,我们场景是合理的单晶单MS 代理(prism,D65,max_hits 7)。需精确 apples-to-apples 时对齐。
 
 ### macOS
 

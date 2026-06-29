@@ -180,16 +180,32 @@ not "× legacy", when judging GPU throughput):
   compute to the M2 Max GPU); the remaining CUDA gap is execution-model, not a
   fundamental kernel limit.
 
-#### Linux — dev49 RTX 4060 Ti (AMD Zen5 9950X 16C/32T host) · legacy vs CUDA · TODO (dev49 occupied)
+#### Linux — dev49 RTX 4060 Ti (AMD Zen5 9950X 16C/32T host) · legacy vs CUDA · 2026-06-29
 
-Not yet measured this round. Run when dev49 is idle (after the scrum-304 buffer-persist
-build), fill the same table shape, and compare CUDA's light-scene number against both
-the 25 M/s target and the Metal ~28 M/s reference above:
+After scrum-304.2 buffer-persist, GPU-idle-gated (`nvidia-smi` 0% verified before run),
+`scripts/bench_throughput.py` default dispatch (=32768), ray_num=20M, N≥5 (N=9 on CoV>15%).
 
-```bash
-LUMICE_BENCH_BIN=/work/build/Release/bin/Lumice LUMICE_BENCH_LIBDIR=/work/build/Release/lib \
-LUMICE_BENCH_BACKENDS=legacy,cuda python3 scripts/bench_throughput.py
-```
+| config | legacy single | legacy multi | CUDA single | CUDA multi | CUDA/legacy (multi) |
+|---|---|---|---|---|---|
+| `bench_light_single_ms` (轻·单MS) | 744 K/s | 8.98 M/s | **35.2 M/s** | **55.9 M/s** | 6.23× |
+| `ms_multi_crystal` (中·无filter) | 126 K/s | 1.44 M/s | 9.67 M/s | 13.7 M/s | 9.55× |
+| `ms_multi_crystal_complex_filter` (重·标准) | 471 K/s | 6.26 M/s | 38.0 M/s | 60.3 M/s | 9.63× |
+| `ms_multi_crystal_filtered_bd` (重·bd) | 510 K/s | 6.73 M/s | 39.1 M/s | 61.9 M/s | 9.19× |
+
+- **Competitive bar MET**: the comparable light single-MS scene is **35–56 M/s**, at/above
+  the 25 M/s competitor target AND above the Mac Metal reference (28–30 M/s). buffer-persist
+  alone (scrum-304.2) got CUDA here; the earlier "0.16–0.40× / 1.5M" pessimism was a
+  measurement artifact — ad-hoc non-idle-gated runs on the heavier `ms_multi_crystal`, the
+  wrong yardstick. Always idle-gate + use the canonical harness + the comparable scene.
+- **GPU not yet saturated**: nsys on the light scene (50M-ray plain run) = GPU active 17.6%
+  (JIT/setup-included); benchmark steady-window active ≈ 43%. trace_single_ms_kernel is 95%
+  of GPU time. The fully-fed kernel ceiling is ~129 M rays/s (50M / 386 ms kernel), so the
+  current 56 M is ~43% of ceiling — **~2.3× headroom remains**, locked behind per-dispatch
+  host serialization (default stream + per-layer sync; explore-303, untouched by 304.2).
+  Pursuing it is the async-engine work — now justified by the active% data, not speculation.
+- Caveat: the competitor's exact config (spectrum / max_hits) is unknown; our scene is a
+  reasonable single-crystal single-MS proxy (prism, D65, max_hits 7). Align if a precise
+  apples-to-apples is needed.
 
 ### macOS
 
