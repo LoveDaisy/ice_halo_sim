@@ -128,6 +128,85 @@ Notes:
 - `bench_throughput.py` overrides `ray_num` to a large value per run (temp config,
   committed files untouched) so the steady window is long enough to be stable.
 
+#### Acceptance yardstick: hardware capability, NOT just "× legacy CPU"
+
+> **The `× legacy CPU` ratio is a FLOOR, not the success bar.** Beating the
+> legacy CPU is a necessary gate, never the goal — a GPU backend can "win × legacy"
+> while running the device at 1–2% utilization (this exact trap cost a day in
+> scrum-304: a CUDA number reported as "~1.7× legacy 16-core" was actually a
+> starved GPU on a heavier-than-comparable scene). For GPU backends the real bar
+> is the **device's hardware capability**, anchored to a comparable workload and
+> a known external reference.
+
+**Registered hardware-capability targets** (absolute, scene-anchored — cite these,
+not "× legacy", when judging GPU throughput):
+
+| scene | comparable workload | hardware-capability target | source |
+|---|---|---|---|
+| `bench_light_single_ms` (轻·单MS) | single crystal, single MS, no continuation | **≥ 25M rays/s on RTX 4060 Ti** | competitor product (measured) — the light single-MS scene is the apples-to-apples comparison |
+
+- Always benchmark the **comparable** scene against an external target — do NOT
+  cite a heavy multi-crystal / multi-MS number (e.g. `ms_multi_crystal`) when
+  the reference is single-crystal single-MS. They differ by an order of magnitude
+  in per-ray work.
+- When a GPU backend lands far below its hardware-capability target, the throughput
+  number is **not** a success regardless of the legacy ratio — investigate
+  utilization (see the CUDA active% diagnostic below) and the mechanism, do not
+  close out.
+- If a target genuinely cannot be reached, the acceptance artifact must be a
+  **profiler-grounded mechanism explanation** (where the time goes), not a black-box
+  "GPU doesn't naturally win" claim.
+
+### Latest measured results (per-run log)
+
+> Append the newest numbers here each time the bench is re-run. Record **absolute
+> rays/sec** (not just × legacy), per config, with a hardware summary. **Cross-hardware
+> numbers are NOT comparable** — always read within one host block; never compare a
+> Mac row against a Linux row. Source: `scripts/bench_throughput.py` (default dispatch,
+> `ray_num`=20M, N≥5 reps, N=9 re-run on CoV>15%).
+
+#### Mac — Apple M2 Max (12-core: 8P+4E, 32 GB, macOS 14.7) · legacy vs Metal · 2026-06-28
+
+| config | legacy single | legacy multi | Metal single | Metal multi | Metal/legacy (multi) |
+|---|---|---|---|---|---|
+| `bench_light_single_ms` (轻·单MS) | 573 K/s | 4.62 M/s | **27.8 M/s** | **30.6 M/s** | 6.62× |
+| `ms_multi_crystal` (中·无filter) | 94 K/s | 759 K/s | 7.08 M/s | 7.66 M/s | 10.08× |
+| `ms_multi_crystal_complex_filter` (重·标准) | 333 K/s | 1.54 M/s | 12.4 M/s | 12.8 M/s | 8.33× |
+| `ms_multi_crystal_filtered_bd` (重·bd) | 368 K/s | 1.62 M/s | 13.7 M/s | 14.0 M/s | 8.59× |
+
+- **Metal on the comparable light single-MS scene already hits ~28–30 M/s — at/above
+  the 25 M/s hardware-capability target.** This proves the bar is reachable on this
+  codebase and gives CUDA a same-engine target (the RTX 4060 Ti is comparable raw
+  compute to the M2 Max GPU); the remaining CUDA gap is execution-model, not a
+  fundamental kernel limit.
+
+#### Linux — dev49 RTX 4060 Ti (AMD Zen5 9950X 16C/32T host) · legacy vs CUDA · 2026-06-29
+
+After scrum-304.2 buffer-persist, GPU-idle-gated (`nvidia-smi` 0% verified before run),
+`scripts/bench_throughput.py` default dispatch (=32768), ray_num=20M, N≥5 (N=9 on CoV>15%).
+
+| config | legacy single | legacy multi | CUDA single | CUDA multi | CUDA/legacy (multi) |
+|---|---|---|---|---|---|
+| `bench_light_single_ms` (轻·单MS) | 744 K/s | 8.98 M/s | **35.2 M/s** | **55.9 M/s** | 6.23× |
+| `ms_multi_crystal` (中·无filter) | 126 K/s | 1.44 M/s | 9.67 M/s | 13.7 M/s | 9.55× |
+| `ms_multi_crystal_complex_filter` (重·标准) | 471 K/s | 6.26 M/s | 38.0 M/s | 60.3 M/s | 9.63× |
+| `ms_multi_crystal_filtered_bd` (重·bd) | 510 K/s | 6.73 M/s | 39.1 M/s | 61.9 M/s | 9.19× |
+
+- **Competitive bar MET**: the comparable light single-MS scene is **35–56 M/s**, at/above
+  the 25 M/s competitor target AND above the Mac Metal reference (28–30 M/s). buffer-persist
+  alone (scrum-304.2) got CUDA here; the earlier "0.16–0.40× / 1.5M" pessimism was a
+  measurement artifact — ad-hoc non-idle-gated runs on the heavier `ms_multi_crystal`, the
+  wrong yardstick. Always idle-gate + use the canonical harness + the comparable scene.
+- **GPU not yet saturated**: nsys on the light scene (50M-ray plain run) = GPU active 17.6%
+  (JIT/setup-included); benchmark steady-window active ≈ 43%. trace_single_ms_kernel is 95%
+  of GPU time. The fully-fed kernel ceiling is ~129 M rays/s (50M / 386 ms kernel), so the
+  current 56 M is ~43% of ceiling — **~2.3× headroom remains**, locked behind per-dispatch
+  host serialization (default stream + per-layer sync; explore-303, untouched by 304.2).
+  Pursuing it is the async-engine work — now justified by the active% data, not speculation.
+- Caveat: the competitor's exact config (spectrum / max_hits) is unknown; our scene is a
+  reasonable single-crystal single-MS proxy (prism, D65, max_hits 7). Align if a precise
+  apples-to-apples is needed.
+
 ### macOS
 
 ```bash
@@ -168,6 +247,50 @@ scp examples/bench_config.json <windows-host>:<path>/
 
 # Manual mode (PowerShell wall time)
 Measure-Command { .\Lumice.exe -f bench_config.json -o . 2>&1 | Out-Null } | Select-Object TotalSeconds
+```
+
+### Linux / CUDA (dev49)
+
+CUDA throughput is measured on the dev49 bench box (NVIDIA RTX 4060 Ti, Linux,
+CUDA docker — see `reference_dev49_linux_bench` / `explore-cuda-step2-derisk/TOOLCHAIN.md`).
+**Do NOT improvise per-task bench scripts.** Use the committed harness
+`scripts/bench_throughput.py` — it already supports CUDA via env overrides, runs
+the canonical scene set (including the comparable `bench_light_single_ms`),
+confirms GPU routing (a silent fallback to legacy is flagged, not reported as a
+GPU number), and reports median + CoV with thermal re-runs.
+
+```bash
+# On dev49, inside the CUDA docker (build first: -DLUMICE_CUDA_ENABLED=ON
+# -DBUILD_SHARED_LIBS=ON -> build/Release/{bin/Lumice, lib/liblumice.so}).
+# Canonical CUDA throughput run (legacy baseline + CUDA, full canonical scene set):
+LUMICE_BENCH_BIN=/work/build/Release/bin/Lumice \
+LUMICE_BENCH_LIBDIR=/work/build/Release/lib \
+LUMICE_BENCH_BACKENDS=legacy,cuda \
+  python3 scripts/bench_throughput.py
+# Narrow to the comparable light scene only (vs the 25M/s hardware-capability target):
+#   LUMICE_BENCH_CONFIGS=bench_light_single_ms
+# Idle-gate: dev49 is shared (load often high); take strict throughput numbers in
+# an idle window only. Clean up your processes when done (do not leave Lumice /
+# detached bench running on the shared box).
+```
+
+#### GPU active% diagnostic (CUDA only — Metal/Mac has no equivalent CLI path)
+
+A throughput number alone cannot tell you whether the GPU is fed or starved.
+On CUDA/dev49, pair the bench with an `nsys` capture to read GPU utilization —
+this is the diagnostic that distinguishes a real win from a "beat the CPU while
+the GPU idles" false win. Profiler is already de-risked on dev49 (nsys 2023.4.4 +
+ncu 2024.1.1; install + usage recipe in `explore-cuda-step2-derisk/TOOLCHAIN.md`
+§"Profiler 可用性"). active% is **not a hard universal gate** — Metal on macOS has
+no comparable CLI active% path, so the cross-platform acceptance criterion stays
+the absolute hardware-capability target above; active% is a CUDA-side corroborating
+diagnostic for *why* a number is high or low.
+
+```bash
+# GPU active% = (sum of cuda_gpu_kern_sum) / wall, from an nsys timeline of one
+# representative run. Low active% (e.g. 1–2%) => GPU starved => the throughput
+# number is host-bound, not a hardware-capability result.
+nsys profile --trace=cuda --stats=true -o /tmp/rep <Lumice ...>   # see TOOLCHAIN.md
 ```
 
 ### CI Automated Benchmark

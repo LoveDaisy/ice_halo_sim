@@ -1337,7 +1337,10 @@ struct CudaTraceBackend::Impl {
   std::mt19937 drain_rng_{0u};
   bool         drain_seeded_ = false;
 
-  void Reset();
+  // keep_persistent_buffers=true (per-batch EndSession) preserves the large
+  // device + pinned buffers across sessions to avoid per-batch alloc churn;
+  // false (error paths + destructor) is full teardown. See definition.
+  void Reset(bool keep_persistent_buffers = false);
   void EnsureSessionBuffers(size_t n);
   void EnsureFilterBuffers(const SessionSpec& spec);
   // Grow ONLY the exit buffer for a device-roots continuation layer, leaving the
@@ -1363,102 +1366,99 @@ struct CudaTraceBackend::Impl {
   void UploadCrystalGeometry(const Crystal& crystal);
 };
 
-void CudaTraceBackend::Impl::Reset() {
+void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
   // cudaFree / cudaFreeHost on nullptr are no-ops per CUDA spec, so we don't
   // need explicit allocated-flag guards. Errors are intentionally ignored —
   // teardown must not throw.
-  cudaFree(d_poly_n_);
-  d_poly_n_ = nullptr;
-  cudaFree(d_poly_d_);
-  d_poly_d_ = nullptr;
-  cudaFree(d_tri_vtx_);
-  d_tri_vtx_ = nullptr;
-  cudaFree(d_tri_norm_);
-  d_tri_norm_ = nullptr;
-  cudaFree(d_tri_area_);
-  d_tri_area_ = nullptr;
-  cudaFree(d_tri_to_poly_);
-  d_tri_to_poly_ = nullptr;
-  // Grow-only geometry capacities track the freed buffers above; zero them so a
-  // fresh session re-allocates rather than reusing a dangling capacity.
-  alloc_poly_cap_ = 0;
-  alloc_tri_cap_ = 0;
-  poly_cnt_ = 0;
-  tri_cnt_ = 0;
+  //
+  // scrum-cuda-async-engine-port (304.2): per-batch EndSession passes
+  // keep_persistent_buffers=true so the large device + pinned buffers
+  // (ray/cont/exit/geometry/xyz/wl-pool) and their capacity trackers PERSIST
+  // across sessions, reused via the idempotent EnsureSessionBuffers fast-path
+  // (buffers_allocated_ && n_roots_ == n) + grow-only EnsureGeomCapacity. This
+  // mirrors Metal's Reset() which never frees MTLBuffers between sessions
+  // (metal_trace_backend.mm:1807) and eliminates the per-batch cudaMalloc +
+  // cudaHostAlloc churn that pinned CUDA throughput to GPU ~1-2% utilization
+  // (root cause: explore-303). Full teardown (keep_persistent_buffers=false)
+  // runs on error paths + the destructor.
+
+  // Filter descriptor buffers are reallocated UNCONDITIONALLY by
+  // EnsureFilterBuffers every BeginSession (no nullptr guard) — so they must be
+  // freed on EVERY session end, including the persistent path, or they leak.
+  cudaFree(d_filter_desc_);      d_filter_desc_ = nullptr;
+  cudaFree(d_getfn_offsets_);    d_getfn_offsets_ = nullptr;
+  cudaFree(d_getfn_bytes_);      d_getfn_bytes_ = nullptr;
+  cudaFree(d_complex_sub_desc_); d_complex_sub_desc_ = nullptr;
+
+  if (!keep_persistent_buffers) {
+    cudaFree(d_poly_n_);     d_poly_n_ = nullptr;
+    cudaFree(d_poly_d_);     d_poly_d_ = nullptr;
+    cudaFree(d_tri_vtx_);    d_tri_vtx_ = nullptr;
+    cudaFree(d_tri_norm_);   d_tri_norm_ = nullptr;
+    cudaFree(d_tri_area_);   d_tri_area_ = nullptr;
+    cudaFree(d_tri_to_poly_); d_tri_to_poly_ = nullptr;
+    // Grow-only geometry capacities track the freed buffers above; zero them so
+    // a fresh session re-allocates rather than reusing a dangling capacity.
+    alloc_poly_cap_ = 0;
+    alloc_tri_cap_ = 0;
+    cudaFree(d_rot_c2w_);      d_rot_c2w_ = nullptr;
+    cudaFree(d_dirs_);         d_dirs_ = nullptr;
+    cudaFree(d_pos_);          d_pos_ = nullptr;
+    cudaFree(d_ws_);           d_ws_ = nullptr;
+    cudaFree(d_from_poly_);    d_from_poly_ = nullptr;
+    cudaFree(d_root_wl_idx_);  d_root_wl_idx_ = nullptr;
+    cudaFree(d_wl_pool_);      d_wl_pool_ = nullptr;
+    for (int s = 0; s < 2; ++s) {
+      cudaFree(d_cont_d_[s]);      d_cont_d_[s] = nullptr;
+      cudaFree(d_cont_w_[s]);      d_cont_w_[s] = nullptr;
+      cudaFree(d_cont_wl_idx_[s]); d_cont_wl_idx_[s] = nullptr;
+      cudaFree(d_cont_count_[s]);  d_cont_count_[s] = nullptr;
+    }
+    cudaFree(d_exit_);         d_exit_ = nullptr;
+    cudaFree(d_exit_count_);   d_exit_count_ = nullptr;
+    // S2 device-fused XYZ accumulation buffers.
+    cudaFree(d_xyz_buf_);      d_xyz_buf_ = nullptr;
+    cudaFree(d_landed_weight_); d_landed_weight_ = nullptr;
+
+    cudaFreeHost(pinned_dirs_);        pinned_dirs_ = nullptr;
+    cudaFreeHost(pinned_pos_);         pinned_pos_ = nullptr;
+    cudaFreeHost(pinned_ws_);          pinned_ws_ = nullptr;
+    cudaFreeHost(pinned_from_poly_);   pinned_from_poly_ = nullptr;
+    cudaFreeHost(pinned_root_wl_idx_); pinned_root_wl_idx_ = nullptr;
+    cudaFreeHost(pinned_rot_c2w_);     pinned_rot_c2w_ = nullptr;
+    cudaFreeHost(pinned_cont_count_);  pinned_cont_count_ = nullptr;
+    cudaFreeHost(pinned_exit_);        pinned_exit_ = nullptr;
+
+    if (events_created_) {
+      cudaEventDestroy(ev_start_h2d_);
+      cudaEventDestroy(ev_end_h2d_);
+      cudaEventDestroy(ev_end_kernel_);
+      cudaEventDestroy(ev_end_d2h_);
+      events_created_ = false;
+    }
+
+    // Capacity trackers tied to the freed persistent buffers + the
+    // EnsureSessionBuffers idempotent-fastpath key (buffers_allocated_/n_roots_)
+    // are zeroed ONLY here — leaving them intact on the persistent path is what
+    // lets the next BeginSession skip re-allocation.
+    exit_cap_ = 0;
+    alloc_exit_cap_ = 0;
+    cont_cap_[0] = 0;
+    cont_cap_[1] = 0;
+    root_cap_ = 0;
+    n_roots_ = 0;
+    buffers_allocated_ = false;
+  }
+
+  // Session state — always reset. The next BeginSession re-initialises these;
+  // clearing here matches the prior Reset() contract and keeps accumulators /
+  // RAII vectors clean. (poly_cnt_/tri_cnt_ describe the current crystal and are
+  // re-set by BeginSession's UploadCrystalGeometry before any read.)
   ray_alloc_carry_.clear();
-  cudaFree(d_rot_c2w_);
-  d_rot_c2w_ = nullptr;
-  cudaFree(d_dirs_);
-  d_dirs_ = nullptr;
-  cudaFree(d_pos_);
-  d_pos_ = nullptr;
-  cudaFree(d_ws_);
-  d_ws_ = nullptr;
-  cudaFree(d_from_poly_);
-  d_from_poly_ = nullptr;
-  cudaFree(d_root_wl_idx_);
-  d_root_wl_idx_ = nullptr;
-  cudaFree(d_wl_pool_);
-  d_wl_pool_ = nullptr;
-  for (int s = 0; s < 2; ++s) {
-    cudaFree(d_cont_d_[s]);      d_cont_d_[s] = nullptr;
-    cudaFree(d_cont_w_[s]);      d_cont_w_[s] = nullptr;
-    cudaFree(d_cont_wl_idx_[s]); d_cont_wl_idx_[s] = nullptr;
-    cudaFree(d_cont_count_[s]);  d_cont_count_[s] = nullptr;
-  }
-  cudaFree(d_exit_);
-  d_exit_ = nullptr;
-  cudaFree(d_exit_count_);
-  d_exit_count_ = nullptr;
-  cudaFree(d_filter_desc_);
-  d_filter_desc_ = nullptr;
-  cudaFree(d_getfn_offsets_);
-  d_getfn_offsets_ = nullptr;
-  cudaFree(d_getfn_bytes_);
-  d_getfn_bytes_ = nullptr;
-  cudaFree(d_complex_sub_desc_);
-  d_complex_sub_desc_ = nullptr;
-  // S2 device-fused XYZ accumulation buffers.
-  cudaFree(d_xyz_buf_);
-  d_xyz_buf_ = nullptr;
-  cudaFree(d_landed_weight_);
-  d_landed_weight_ = nullptr;
-
-  cudaFreeHost(pinned_dirs_);
-  pinned_dirs_ = nullptr;
-  cudaFreeHost(pinned_pos_);
-  pinned_pos_ = nullptr;
-  cudaFreeHost(pinned_ws_);
-  pinned_ws_ = nullptr;
-  cudaFreeHost(pinned_from_poly_);
-  pinned_from_poly_ = nullptr;
-  cudaFreeHost(pinned_root_wl_idx_);
-  pinned_root_wl_idx_ = nullptr;
-  cudaFreeHost(pinned_rot_c2w_);
-  pinned_rot_c2w_ = nullptr;
-  cudaFreeHost(pinned_cont_count_);
-  pinned_cont_count_ = nullptr;
-  cudaFreeHost(pinned_exit_);
-  pinned_exit_ = nullptr;
-
-  if (events_created_) {
-    cudaEventDestroy(ev_start_h2d_);
-    cudaEventDestroy(ev_end_h2d_);
-    cudaEventDestroy(ev_end_kernel_);
-    cudaEventDestroy(ev_end_d2h_);
-    events_created_ = false;
-  }
-
   poly_cnt_ = 0;
   tri_cnt_ = 0;
-  exit_cap_ = 0;
-  alloc_exit_cap_ = 0;
-  cont_cap_[0] = 0;
-  cont_cap_[1] = 0;
-  root_cap_ = 0;
   h_exit_count_ = 0;
   h_cont_count_ = 0;
-  n_roots_ = 0;
   ms_layer_idx_ = 0u;
   n_ms_layers_ = 0u;
   filter_desc_max_ci_ = 0u;
@@ -1475,7 +1475,6 @@ void CudaTraceBackend::Impl::Reset() {
   max_abs_dz_ = 0.0f;
   img_w_ = 0u;
   img_h_ = 0u;
-  buffers_allocated_ = false;
   in_session_ = false;
   scene_ = nullptr;
   render_ = nullptr;
@@ -2675,7 +2674,13 @@ void CudaTraceBackend::EndSession() {
     return;
   }
   cudaDeviceSynchronize();
-  impl_->Reset();
+  // scrum-cuda-async-engine-port (304.2): keep the large device + pinned
+  // buffers allocated across the per-batch session boundary (mirrors Metal's
+  // Reset(), metal_trace_backend.mm:1807). The next BeginSession reuses them via
+  // the idempotent EnsureSessionBuffers fast-path, eliminating per-batch
+  // cudaMalloc + cudaHostAlloc churn. Full teardown happens on the destructor /
+  // error paths (Reset() default arg).
+  impl_->Reset(/*keep_persistent_buffers=*/true);
 }
 
 // S2 device-fused XYZ accumulation: mirrors MetalTraceBackend::HasDeviceXyzAccum.
