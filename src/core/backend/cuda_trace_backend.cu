@@ -1140,6 +1140,33 @@ struct CudaTraceBackend::Impl {
   uint32_t  alloc_poly_cap_ = 0;
   uint32_t  alloc_tri_cap_  = 0;
 
+  // --- scrum-306.2 geometry pool (device-gen path) -------------------------
+  // Per-(layer,ci) crystal geometry uploaded ONCE per scene and PERSISTED
+  // across the per-batch BeginSession/EndSession cycle (geom_pool_built_ guard).
+  // Replaces the per-batch MakeCrystal + 6×blocking-H2D re-upload of IDENTICAL
+  // geometry: rng_ is reset to the constant effective_seed_ every BeginSession
+  // (worker_count=1 GPU route) → MakeCrystal yields the same shapes every batch,
+  // so the prior path re-uploaded the same bytes per batch — the dominant
+  // per-dispatch host-sync memcpy (explore-async E2). K=1 shape per (layer,ci):
+  // PARITY-EXACT with the prior per-batch path (current path already traces one
+  // shape/(layer,ci)/session); the §5 per-ray K-shape pool is a later
+  // statistical refinement, not needed for parity. Buffers concatenate all
+  // slots; pool_*_off_/pool_*_cnt_ index each slot (slot = layer_slot_base_[mi]+ci).
+  float*    d_pool_poly_n_      = nullptr;  // 3 × Σ poly_cnt
+  float*    d_pool_poly_d_      = nullptr;  //     Σ poly_cnt
+  float*    d_pool_tri_vtx_     = nullptr;  // 9 × Σ tri_cnt
+  float*    d_pool_tri_norm_    = nullptr;  // 3 × Σ tri_cnt
+  float*    d_pool_tri_area_    = nullptr;  //     Σ tri_cnt
+  uint16_t* d_pool_tri_to_poly_ = nullptr;  //     Σ tri_cnt
+  std::vector<uint32_t> pool_poly_off_;
+  std::vector<uint32_t> pool_poly_cnt_;
+  std::vector<uint32_t> pool_tri_off_;
+  std::vector<uint32_t> pool_tri_cnt_;
+  std::vector<uint32_t> layer_slot_base_;   // ms layer mi → first slot index
+  std::vector<Crystal>  pool_crystals_;     // host slot crystals (config_id; wl-pool repr)
+  bool        geom_pool_built_ = false;
+  const void* pool_scene_      = nullptr;   // scene the pool was built for (rebuild guard)
+
   // Per-ray crystal->world rotation buffer (9 floats/ray, row-major
   // Rotation::mat_). Allocated in EnsureSessionBuffers; filled per TraceLayer
   // from InitRayFirstMs all_data[i].crystal_rot_ output (ms_mode==0 path) or
@@ -1376,6 +1403,11 @@ struct CudaTraceBackend::Impl {
   // poly_cnt_/tri_cnt_. Call once per (layer,ci) before that ci's trace/transit.
   void EnsureGeomCapacity(size_t poly_cnt, size_t tri_cnt);
   void UploadCrystalGeometry(const Crystal& crystal);
+
+  // scrum-306.2: build the per-(layer,ci) geometry pool once (device-gen path).
+  // Consumes rng_ via MakeCrystal in the EXACT ci-loop order (layers outer, ci
+  // inner) so pooled shapes are byte-identical to the prior per-batch upload.
+  void BuildGeomPool(const SceneConfig& scene);
 };
 
 void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
@@ -1409,6 +1441,19 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
     cudaFree(d_tri_norm_);   d_tri_norm_ = nullptr;
     cudaFree(d_tri_area_);   d_tri_area_ = nullptr;
     cudaFree(d_tri_to_poly_); d_tri_to_poly_ = nullptr;
+    // scrum-306.2 geometry pool — freed only on full teardown (persists across
+    // the per-batch keep_persistent path so it is uploaded once per scene).
+    cudaFree(d_pool_poly_n_);      d_pool_poly_n_ = nullptr;
+    cudaFree(d_pool_poly_d_);      d_pool_poly_d_ = nullptr;
+    cudaFree(d_pool_tri_vtx_);     d_pool_tri_vtx_ = nullptr;
+    cudaFree(d_pool_tri_norm_);    d_pool_tri_norm_ = nullptr;
+    cudaFree(d_pool_tri_area_);    d_pool_tri_area_ = nullptr;
+    cudaFree(d_pool_tri_to_poly_); d_pool_tri_to_poly_ = nullptr;
+    pool_poly_off_.clear(); pool_poly_cnt_.clear();
+    pool_tri_off_.clear();  pool_tri_cnt_.clear();
+    layer_slot_base_.clear(); pool_crystals_.clear();
+    geom_pool_built_ = false;
+    pool_scene_ = nullptr;
     // Grow-only geometry capacities track the freed buffers above; zero them so
     // a fresh session re-allocates rather than reusing a dangling capacity.
     alloc_poly_cap_ = 0;
@@ -1560,6 +1605,92 @@ void CudaTraceBackend::Impl::UploadCrystalGeometry(const Crystal& crystal) {
 
   poly_cnt_ = static_cast<uint32_t>(poly_cnt);
   tri_cnt_  = static_cast<uint32_t>(tri_cnt);
+}
+
+void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene) {
+  // Build the per-(layer,ci) geometry pool ONCE. MakeCrystal is consumed from
+  // rng_ in the EXACT order the per-batch ci-loop used it (layers outer, ci
+  // inner; rng_ freshly re-seeded to spec.seed in BeginSession), so the pooled
+  // shapes are byte-identical to the prior per-batch upload. The pool then
+  // persists across batches (geom_pool_built_) — eliminating the per-batch 6×
+  // H2D re-upload of identical geometry.
+  pool_crystals_.clear();
+  pool_poly_off_.clear(); pool_poly_cnt_.clear();
+  pool_tri_off_.clear();  pool_tri_cnt_.clear();
+  layer_slot_base_.clear();
+
+  std::vector<float>    h_poly_n, h_poly_d, h_tri_vtx, h_tri_norm, h_tri_area;
+  std::vector<uint16_t> h_tri2poly;
+  uint32_t poly_acc = 0u, tri_acc = 0u;
+
+  for (size_t mi = 0; mi < scene.ms_.size(); ++mi) {
+    layer_slot_base_.push_back(static_cast<uint32_t>(pool_crystals_.size()));
+    const auto& settings = scene.ms_[mi].setting_;
+    for (size_t ci = 0; ci < settings.size(); ++ci) {
+      Crystal crystal = MakeCrystal(rng_, settings[ci].crystal_.param_);
+      size_t poly_cnt = crystal.PolygonFaceCount();
+      size_t tri_cnt  = crystal.TotalTriangles();
+      if (poly_cnt == 0 || tri_cnt == 0) {
+        throw BackendUnavailableError("CudaTraceBackend::BuildGeomPool: degenerate crystal geometry");
+      }
+      if (tri_cnt > static_cast<size_t>(lm_pcg::kMaxTriPerKernel)) {
+        throw BackendUnavailableError(
+            std::string{"CudaTraceBackend::BuildGeomPool: tri_count="} + std::to_string(tri_cnt) +
+            " exceeds kMaxTriPerKernel=" + std::to_string(lm_pcg::kMaxTriPerKernel));
+      }
+      const float* pn = crystal.GetPolygonFaceNormal();
+      const float* pd = crystal.GetPolygonFaceDist();
+      h_poly_n.insert(h_poly_n.end(), pn, pn + 3 * poly_cnt);
+      h_poly_d.insert(h_poly_d.end(), pd, pd + poly_cnt);
+      const float* tv = crystal.GetTriangleVtx();
+      const float* tn = crystal.GetTriangleNormal();
+      const float* ta = crystal.GetTirangleArea();
+      h_tri_vtx.insert(h_tri_vtx.end(), tv, tv + 9 * tri_cnt);
+      h_tri_norm.insert(h_tri_norm.end(), tn, tn + 3 * tri_cnt);
+      h_tri_area.insert(h_tri_area.end(), ta, ta + tri_cnt);
+      std::vector<uint16_t> t2p;
+      FillTriToPoly(crystal, t2p);
+      h_tri2poly.insert(h_tri2poly.end(), t2p.begin(), t2p.end());
+
+      pool_poly_off_.push_back(poly_acc);
+      pool_poly_cnt_.push_back(static_cast<uint32_t>(poly_cnt));
+      pool_tri_off_.push_back(tri_acc);
+      pool_tri_cnt_.push_back(static_cast<uint32_t>(tri_cnt));
+      poly_acc += static_cast<uint32_t>(poly_cnt);
+      tri_acc  += static_cast<uint32_t>(tri_cnt);
+      pool_crystals_.push_back(std::move(crystal));
+    }
+  }
+
+  // Free any prior pool (scene change), then allocate + H2D-upload once.
+  cudaFree(d_pool_poly_n_);      d_pool_poly_n_ = nullptr;
+  cudaFree(d_pool_poly_d_);      d_pool_poly_d_ = nullptr;
+  cudaFree(d_pool_tri_vtx_);     d_pool_tri_vtx_ = nullptr;
+  cudaFree(d_pool_tri_norm_);    d_pool_tri_norm_ = nullptr;
+  cudaFree(d_pool_tri_area_);    d_pool_tri_area_ = nullptr;
+  cudaFree(d_pool_tri_to_poly_); d_pool_tri_to_poly_ = nullptr;
+
+  CheckCuda(cudaMalloc(&d_pool_poly_n_,      3 * poly_acc * sizeof(float)),    "BuildGeomPool malloc pool_poly_n");
+  CheckCuda(cudaMalloc(&d_pool_poly_d_,          poly_acc * sizeof(float)),    "BuildGeomPool malloc pool_poly_d");
+  CheckCuda(cudaMalloc(&d_pool_tri_vtx_,     9 * tri_acc * sizeof(float)),     "BuildGeomPool malloc pool_tri_vtx");
+  CheckCuda(cudaMalloc(&d_pool_tri_norm_,    3 * tri_acc * sizeof(float)),     "BuildGeomPool malloc pool_tri_norm");
+  CheckCuda(cudaMalloc(&d_pool_tri_area_,        tri_acc * sizeof(float)),     "BuildGeomPool malloc pool_tri_area");
+  CheckCuda(cudaMalloc(&d_pool_tri_to_poly_,     tri_acc * sizeof(uint16_t)),  "BuildGeomPool malloc pool_tri_to_poly");
+
+  CheckCuda(cudaMemcpy(d_pool_poly_n_, h_poly_n.data(), h_poly_n.size() * sizeof(float),
+                       cudaMemcpyHostToDevice), "BuildGeomPool H2D pool_poly_n");
+  CheckCuda(cudaMemcpy(d_pool_poly_d_, h_poly_d.data(), h_poly_d.size() * sizeof(float),
+                       cudaMemcpyHostToDevice), "BuildGeomPool H2D pool_poly_d");
+  CheckCuda(cudaMemcpy(d_pool_tri_vtx_, h_tri_vtx.data(), h_tri_vtx.size() * sizeof(float),
+                       cudaMemcpyHostToDevice), "BuildGeomPool H2D pool_tri_vtx");
+  CheckCuda(cudaMemcpy(d_pool_tri_norm_, h_tri_norm.data(), h_tri_norm.size() * sizeof(float),
+                       cudaMemcpyHostToDevice), "BuildGeomPool H2D pool_tri_norm");
+  CheckCuda(cudaMemcpy(d_pool_tri_area_, h_tri_area.data(), h_tri_area.size() * sizeof(float),
+                       cudaMemcpyHostToDevice), "BuildGeomPool H2D pool_tri_area");
+  CheckCuda(cudaMemcpy(d_pool_tri_to_poly_, h_tri2poly.data(), h_tri2poly.size() * sizeof(uint16_t),
+                       cudaMemcpyHostToDevice), "BuildGeomPool H2D pool_tri_to_poly");
+
+  geom_pool_built_ = true;
 }
 
 void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
@@ -1964,28 +2095,33 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     }
     impl_->poly_cnt_ = static_cast<uint32_t>(poly_cnt);
 
-    // Detect stochastic CrystalParam: if a Crystal built with the session
-    // seed differs in polygon count from dummy_rng's crystal, the uploaded
-    // geometry will diverge from per-batch TraceLayer crystals and G1 parity
-    // may fail. MVP dual_fisheye_ref uses deterministic prism/pyramid shapes.
-    if (impl_->logger != nullptr) {
-      RandomNumberGenerator probe_rng{spec.seed};
-      Crystal probe_crystal = MakeCrystal(probe_rng, ms_setting.crystal_.param_);
-      if (probe_crystal.PolygonFaceCount() != poly_cnt) {
-        ILOG_WARN(*impl_->logger,
-                  "CudaTraceBackend::BeginSession: stochastic CrystalParam detected — "
-                  "uploaded geometry may diverge from per-batch TraceLayer crystals; "
-                  "G1 parity may fail for non-deterministic crystal shapes");
-      }
+    // scrum-306.2: resolve the device-gen escape hatch (idempotent env read,
+    // once per Run via the gen_seeded_ guard) BEFORE geometry setup so the
+    // pool-vs-legacy upload path can branch on it. Resolved here instead of the
+    // later seed block; the duplicate read there is removed.
+    Logger& geom_logger = impl_->logger != nullptr ? *impl_->logger : GetGlobalLogger();
+    if (!impl_->gen_seeded_) {
+      impl_->disable_device_gen_ = env::DisableDeviceGen(geom_logger);
     }
 
-    // Polygon-face slab geometry + triangle pool H2D via the per-CI helper
-    // (mirrors Metal UploadCrystal). TraceLayer re-invokes UploadCrystalGeometry
-    // per (layer,ci) for multi-CI; here it primes the buffers with the first
-    // layer's first crystal so the BeginSession refractive-index log below and
-    // any single-CI fast path see a populated pool. poly_cnt_/tri_cnt_ are set
-    // by the helper. The kMaxTriPerKernel guard now lives inside the helper.
-    impl_->UploadCrystalGeometry(crystal_for_geom);
+    // Geometry to device. Device-gen path: build the per-(layer,ci) pool ONCE
+    // and persist it across the per-batch cycle (parity-exact — same shapes in
+    // the same rng_ order; eliminates the per-batch 6×blocking-H2D re-upload of
+    // identical geometry). Host-roots fallback keeps the legacy per-batch
+    // single-crystal upload (byte-exact rng_ interleaving with InitRayFirstMs).
+    // crystal_for_geom (dummy_rng; shape-independent refractive index) still
+    // feeds the wl pool + refractive-index log below in both paths.
+    if (!impl_->disable_device_gen_) {
+      if (!impl_->geom_pool_built_ ||
+          impl_->pool_scene_ != static_cast<const void*>(spec.scene)) {
+        impl_->BuildGeomPool(*spec.scene);
+        impl_->pool_scene_ = static_cast<const void*>(spec.scene);
+      }
+      impl_->poly_cnt_ = impl_->pool_poly_cnt_[0];
+      impl_->tri_cnt_  = impl_->pool_tri_cnt_[0];
+    } else {
+      impl_->UploadCrystalGeometry(crystal_for_geom);
+    }
     size_t tri_cnt = impl_->tri_cnt_;
 
     // Per-ray wavelength pool (296.6 DR-3). One session covers the whole
@@ -2045,9 +2181,8 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     if (!impl_->gen_seeded_) {
       impl_->gen_ray_count_ = 0;
       impl_->gen_seeded_ = true;
-      // LUMICE_DISABLE_DEVICE_GEN escape hatch — resolve once per session start
-      // (host InitRayFirstMs fallback). Mirrors Metal's disable_device_gen_.
-      impl_->disable_device_gen_ = env::DisableDeviceGen(wl_logger);
+      // disable_device_gen_ is resolved earlier (geometry-setup block) so the
+      // pool-vs-legacy upload path can branch on it before BuildGeomPool.
     }
     // Drain RNG: seed ONCE per Run() and advance across all per-wavelength-batch
     // BeginSession calls, exactly like the transit_/gate_ counters above. The
@@ -2263,14 +2398,40 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     const uint32_t cin = static_cast<uint32_t>(ci_n);
     const uint32_t grid = (cin + 255u) / 256u;
 
-    // Per-ci crystal + geometry (mirrors Metal ResolveLayerCrystalForCi +
-    // UploadCrystal). MakeCrystal consumes impl_->rng_ once per (layer,ci,batch),
-    // matching legacy/Metal ordering.
-    Crystal ci_crystal = MakeCrystal(impl_->rng_, ms_setting.crystal_.param_);
-    impl_->UploadCrystalGeometry(ci_crystal);
-    const uint32_t ci_cfg_id = (ci_crystal.config_id_ == kInvalidId)
-                                   ? 0xFFFFu
-                                   : static_cast<uint32_t>(ci_crystal.config_id_);
+    // Per-ci geometry. Device-gen path (default): point at this (layer,ci)'s
+    // pre-uploaded pool slot — built ONCE in BeginSession, persisted across
+    // batches, no per-batch MakeCrystal / 6×H2D (scrum-306.2; parity-exact since
+    // rng_ is reset to the constant effective_seed_ every batch → same shapes).
+    // Host-roots fallback (disable_device_gen_): per-batch MakeCrystal + legacy
+    // single-crystal upload (byte-exact rng_ interleaving with InitRayFirstMs).
+    // gen/transit read the slot's triangle pool, trace its polygon-slab — all via
+    // geom_* below, so the kernels themselves are unchanged.
+    std::unique_ptr<Crystal> ci_crystal_fb;  // fallback path only (avoids Crystal default-ctor)
+    uint32_t ci_cfg_id;
+    const float* geom_poly_n; const float* geom_poly_d; uint32_t geom_poly_cnt;
+    const float* geom_tri_vtx; const float* geom_tri_norm; const float* geom_tri_area;
+    const uint16_t* geom_tri_to_poly; uint32_t geom_tri_cnt;
+    if (impl_->disable_device_gen_) {
+      ci_crystal_fb = std::make_unique<Crystal>(MakeCrystal(impl_->rng_, ms_setting.crystal_.param_));
+      impl_->UploadCrystalGeometry(*ci_crystal_fb);
+      ci_cfg_id = (ci_crystal_fb->config_id_ == kInvalidId)
+                      ? 0xFFFFu : static_cast<uint32_t>(ci_crystal_fb->config_id_);
+      geom_poly_n = impl_->d_poly_n_; geom_poly_d = impl_->d_poly_d_; geom_poly_cnt = impl_->poly_cnt_;
+      geom_tri_vtx = impl_->d_tri_vtx_; geom_tri_norm = impl_->d_tri_norm_;
+      geom_tri_area = impl_->d_tri_area_; geom_tri_to_poly = impl_->d_tri_to_poly_;
+      geom_tri_cnt = impl_->tri_cnt_;
+    } else {
+      const uint32_t slot = impl_->layer_slot_base_[impl_->ms_layer_idx_] + static_cast<uint32_t>(ci);
+      const Crystal& pc = impl_->pool_crystals_[slot];
+      ci_cfg_id = (pc.config_id_ == kInvalidId) ? 0xFFFFu : static_cast<uint32_t>(pc.config_id_);
+      const uint32_t po = impl_->pool_poly_off_[slot];
+      const uint32_t to = impl_->pool_tri_off_[slot];
+      geom_poly_n = impl_->d_pool_poly_n_ + 3u * po; geom_poly_d = impl_->d_pool_poly_d_ + po;
+      geom_poly_cnt = impl_->pool_poly_cnt_[slot];
+      geom_tri_vtx = impl_->d_pool_tri_vtx_ + 9u * to; geom_tri_norm = impl_->d_pool_tri_norm_ + 3u * to;
+      geom_tri_area = impl_->d_pool_tri_area_ + to; geom_tri_to_poly = impl_->d_pool_tri_to_poly_ + to;
+      geom_tri_cnt = impl_->pool_tri_cnt_[slot];
+    }
 
     // ── Generate / transit this ci's root rays into root buf [0, ci_n) ──────
     if (first_ms && !impl_->disable_device_gen_) {
@@ -2278,13 +2439,13 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
       // + per-ray wl on device for THIS ci's crystal geometry. gen_ray_count_ is
       // monotone so each (layer,ci,batch) consumes a disjoint PCG range.
       lm_pcg::GenRootKernelParams gp =
-          BuildGenGpParams(ms_setting.crystal_.axis_, impl_->tri_cnt_, cin,
+          BuildGenGpParams(ms_setting.crystal_.axis_, geom_tri_cnt, cin,
                            impl_->scene_->light_source_.param_, impl_->wl_pool_size_);
       gp.gen_seed     = impl_->gen_seed_;
       gp.gen_ray_base = NarrowPcgRayBase(impl_->gen_ray_count_, ci_n, "cuda-gen");
       gen_root_kernel<<<grid, 256, 0, impl_->stream_>>>(impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
-                                     impl_->d_rot_c2w_, impl_->d_root_wl_idx_, impl_->d_tri_vtx_,
-                                     impl_->d_tri_norm_, impl_->d_tri_area_, impl_->d_tri_to_poly_,
+                                     impl_->d_rot_c2w_, impl_->d_root_wl_idx_, geom_tri_vtx,
+                                     geom_tri_norm, geom_tri_area, geom_tri_to_poly,
                                      impl_->d_wl_pool_, gp, cin);
       ck_reset(cudaPeekAtLastError(), "gen_root_kernel launch");
       impl_->gen_ray_count_ += ci_n;
@@ -2297,7 +2458,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
         workspace[0].Reset(ci_n * 2);
         workspace[1].Reset(ci_n * 4);
         RayBuffer all_data = AllocateAllData(*impl_->scene_, ci_n);
-        InitRayFirstMs(impl_->rng_, impl_->scene_->light_source_.param_, impl_->wl_, ci_n, ci_crystal,
+        InitRayFirstMs(impl_->rng_, impl_->scene_->light_source_.param_, impl_->wl_, ci_n, *ci_crystal_fb,
                        impl_->ms_layer_idx_, axis_dist, workspace, all_data);
         for (size_t i = 0; i < ci_n; ++i) {
           const auto& r = all_data[i];
@@ -2340,7 +2501,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
       // ci_start; the kernel indexes tid in [0, ci_n). transit_ray_count_ is
       // monotone → disjoint PCG range per (layer,ci,batch).
       lm_pcg::GenRootKernelParams gp =
-          BuildTransitGpParams(ms_setting.crystal_.axis_, impl_->tri_cnt_, cin);
+          BuildTransitGpParams(ms_setting.crystal_.axis_, geom_tri_cnt, cin);
       gp.gen_seed     = impl_->transit_seed_;
       gp.gen_ray_base = NarrowPcgRayBase(impl_->transit_ray_count_, ci_n, "cuda-transit");
       transit_multi_ms_kernel<<<grid, 256, 0, impl_->stream_>>>(
@@ -2348,7 +2509,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
           impl_->d_cont_wl_idx_[in_slot] + ci_start,
           impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
           impl_->d_rot_c2w_, impl_->d_root_wl_idx_,
-          impl_->d_tri_vtx_, impl_->d_tri_norm_, impl_->d_tri_area_, impl_->d_tri_to_poly_,
+          geom_tri_vtx, geom_tri_norm, geom_tri_area, geom_tri_to_poly,
           gp, cin);
       ck_reset(cudaPeekAtLastError(), "transit kernel launch");
       impl_->transit_ray_count_ += ci_n;
@@ -2371,8 +2532,8 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     // shortcut would make the new ms_mode==0 emit gate deref nullptr.
     trace_single_ms_kernel<<<grid, 256, 0, impl_->stream_>>>(
         impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
-        cin, impl_->d_poly_n_, impl_->d_poly_d_,
-        impl_->poly_cnt_, impl_->d_rot_c2w_, impl_->d_wl_pool_, impl_->d_root_wl_idx_,
+        cin, geom_poly_n, geom_poly_d,
+        geom_poly_cnt, impl_->d_rot_c2w_, impl_->d_wl_pool_, impl_->d_root_wl_idx_,
         max_hits, impl_->d_exit_,
         static_cast<uint32_t>(impl_->exit_cap_), impl_->d_exit_count_,
         /*crystal_id=*/static_cast<uint32_t>(ci), /*ms_layer_idx=*/impl_->ms_layer_idx_,
