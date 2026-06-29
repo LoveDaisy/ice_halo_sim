@@ -207,6 +207,48 @@ After scrum-304.2 buffer-persist, GPU-idle-gated (`nvidia-smi` 0% verified befor
   reasonable single-crystal single-MS proxy (prism, D65, max_hits 7). Align if a precise
   apples-to-apples is needed.
 
+##### scrum-306.2 resolution: the 2.3× headroom was unlocked by dispatch size + exit-cap, NOT async (2026-06-29)
+
+The "~2.3× headroom locked behind per-dispatch host serialization → pursue async" framing
+above was **half wrong**, corrected by profiling:
+
+- **async (stream deferral) was the wrong lever.** nsys CUDA-API summary after the geometry
+  pool: `cudaEventSynchronize` / `cudaDeviceSynchronize` were **0.3% / 0.4%** of host-API
+  time — deferring them buys <1%. The originally-planned increment-2 (mirror Metal
+  `pending_cb_`/`WaitAndReadbackLayer`) was dropped.
+- **The GPU was host-bound, not sync-bound.** nsys GPU-side: `trace_single_ms_kernel` =
+  44.8 ms / 185 dispatches for 6M rays → **~134 M/s intrinsic kernel rate**; the GPU sat ~70%
+  idle waiting on **per-batch host overhead** (BeginSession + XYZ readback + orchestration),
+  which is **common to every variant** and amortizes with **fewer, bigger batches**.
+- **The lever = `LUMICE_DISPATCH_RAY_NUM`** (the default was raised for the CUDA route:
+  `kDefaultCudaDispatchRayNum = 262144`). Idle-gated **interleaved** sweep (cfg_50m, 50M
+  multi): 37M @32768 → **~114M @262144** (= 85% of the 134M ceiling) → ~115M @1M, then
+  declining (2M→106M, 4M→97M) as the continuation/root buffers grow.
+- **exit-cap was the enabler.** CUDA's `HasDeviceXyzAccum()` is unconditionally true, so the
+  trace kernel writes nothing to `d_exit_` (all exits go to `d_xyz_buf_` via `EmitToDeviceXyz`;
+  `DrainExits` reads 0 records). `d_exit_` sized `ComputeExitCap = n·(2·max_hits+4)` was dead
+  weight that ballooned to GBs at large dispatch — causing both the big-dispatch throughput
+  collapse and a parity OOM. Capping it (`kCudaDeadExitCap`) unlocked the dispatch sweep.
+- **The geometry pool (upload-once) + filter/wl persist were throughput-NEUTRAL** (interleaved
+  round-robin: pre ≈ pool ≈ pool+persist). They are correct, parity-clean structural changes
+  (remove per-batch H2D churn, align with seam-design §5) but the churn they removed overlaps
+  GPU compute / sits in setup — NOT on the steady-state critical path. Do not cite them as the
+  speedup source.
+- **Result**: out-of-box (no env knob) CUDA reaches **~114 M/s**, idle-gated, with the full
+  parity suite 10/10 at the new default AND at 524288/1048576. CUDA energy stays
+  dispatch-invariant; `kCommitCap=128` keeps the GUI snapshot cadence decoupled.
+
+**Methodology lessons (shared dev49 is CPU-contended → host-bound CUDA throughput is noisy):**
+- Same binary + same dispatch swung **33M ↔ 114M** with machine load. `nvidia-smi` GPU 0%
+  gate is necessary but NOT sufficient — it doesn't show CPU contention from co-tenant
+  containers. **Only trust per-run interleaved comparison** (A,B,C,A,B,C…), never cross-session,
+  and never even "back-to-back phases" (minute-scale drift between phases faked a 1.9× win once).
+- Use nsys **GPU-side** (`gpukernsum`: kernel time vs wall) to classify GPU-bound vs host-bound.
+  The CUDA-API summary (cudaMemcpy/cudaFree) is host time that may overlap compute — not the
+  bottleneck by itself.
+- **Profile before coding a fix.** A fully-designed stream-deferral increment was abandoned once
+  nsys showed it was worth <1%.
+
 > #### ⚠️ `LUMICE_DISPATCH_RAY_NUM` is a GPU-only knob — never apply it to legacy in a comparison (scrum-306.1/306.4)
 >
 > `LUMICE_DISPATCH_RAY_NUM` sizes the GPU engine's per-dispatch grid. **CUDA total
