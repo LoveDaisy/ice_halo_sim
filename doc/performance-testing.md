@@ -192,17 +192,47 @@ After scrum-304.2 buffer-persist, GPU-idle-gated (`nvidia-smi` 0% verified befor
 | `ms_multi_crystal_complex_filter` (重·标准) | 471 K/s | 6.26 M/s | 38.0 M/s | 60.3 M/s | 9.63× |
 | `ms_multi_crystal_filtered_bd` (重·bd) | 510 K/s | 6.73 M/s | 39.1 M/s | 61.9 M/s | 9.19× |
 
+##### Rebench at the new CUDA default (262144) — scrum-306.3 (2026-06-29, dev49 idle-gated, 20M rays, 3 reps median)
+
+| config | legacy multi | CUDA multi (default=262144) | CUDA/legacy | vs old 32768 default |
+|---|---|---|---|---|
+| `bench_light_single_ms` (轻·单MS) | 6.2 M/s | **~87 M/s** | ~14× | 56→87 (1.6×) |
+| `ms_multi_crystal` (中·无filter) | 0.93 M/s | ~19.7 M/s | ~21× | 13.7→19.7 (1.4×) |
+| `ms_multi_crystal_complex_filter` (重·标准) | 3.2 M/s | ~178 M/s | ~56× | 60→178 (3.0×) |
+| `ms_multi_crystal_filtered_bd` (重·bd) | 2.7 M/s | ~232 M/s | ~85× | 62→232 (3.7×) |
+
+- **Out-of-box CUDA improved 1.4–3.7× by the new default dispatch + exit-cap** (scrum-306.2). The
+  filtered configs run *faster* than the light scene (178/232 vs 87 M/s) because the filter
+  terminates most rays early (rays/s counts root rays) — NOT a higher kernel throughput; the light
+  single-MS scene (~87 M/s here, ~114 M/s in the dedicated quiet-machine interleaved sweep) is the
+  honest comparable-load figure.
+- **⚠️ Absolute-number caveat (shared dev49 CPU contention):** CUDA is host-bound and legacy is
+  CPU-bound, so even with the GPU idle-gated (0%), co-tenant **CPU** load depresses both columns and
+  shifts run-to-run (the same bench_light CUDA cell read 87 M here vs 114 M in a quieter window).
+  Trust the **ratios** and the **new-vs-old-default** deltas (intra-run, robust); treat the absolute
+  M/s as indicative. Only per-run **interleaved** comparison (A,B,C,A,B,C…) is drift-proof — see the
+  scrum-306.2 methodology note below. The legacy column is also lower than the pre-306.2 table above
+  for the same reason (CPU contention at measurement time), which inflates the ratios — do not read
+  the ratio jump as pure CUDA gain.
+
 - **Competitive bar MET**: the comparable light single-MS scene is **35–56 M/s**, at/above
   the 25 M/s competitor target AND above the Mac Metal reference (28–30 M/s). buffer-persist
   alone (scrum-304.2) got CUDA here; the earlier "0.16–0.40× / 1.5M" pessimism was a
   measurement artifact — ad-hoc non-idle-gated runs on the heavier `ms_multi_crystal`, the
   wrong yardstick. Always idle-gate + use the canonical harness + the comparable scene.
-- **GPU not yet saturated**: nsys on the light scene (50M-ray plain run) = GPU active 17.6%
-  (JIT/setup-included); benchmark steady-window active ≈ 43%. trace_single_ms_kernel is 95%
-  of GPU time. The fully-fed kernel ceiling is ~129 M rays/s (50M / 386 ms kernel), so the
-  current 56 M is ~43% of ceiling — **~2.3× headroom remains**, locked behind per-dispatch
-  host serialization (default stream + per-layer sync; explore-303, untouched by 304.2).
-  Pursuing it is the async-engine work — now justified by the active% data, not speculation.
+- **GPU not yet saturated** (at the 32768 default this table used): nsys = benchmark steady-window
+  active ≈ 43%; trace_single_ms_kernel is 95% of GPU time; intrinsic kernel ceiling ≈ 134 M/s, so
+  the 56 M here was ~43% of ceiling. **⚠️ SUPERSEDED by scrum-306.2** (see the resolution subsection
+  below): the headroom was NOT locked behind async (per-dispatch sync was 0.3% of host time) but
+  behind per-batch host overhead + a dead `d_exit_` buffer. With those fixed and the CUDA default
+  dispatch raised to 262144, **out-of-box CUDA now reaches ~114 M/s** (= 85% of the 134 M intrinsic
+  rate) on the comparable light scene — these 35–56 M numbers are the pre-306.2 figures at the old
+  32768 default and are retained only as the baseline the 306.2 work improved on.
+- **The GPU route has no true multi-worker parallelism** (worker_count=1, server.cpp:275). The
+  benchmark's "single" and "multi" passes BOTH run on the single GPU engine; their difference is a
+  JIT-warmup + ray-count artifact, not parallelism (explore-306.1 E1: worker_count=1 is the铁证).
+  The "workers":N field in a GPU [BENCHMARK] line is the configured core count, NOT GPU engines.
+  Only the legacy CPU route is genuinely multi-worker (N = PhysicalCoreCount).
 - Caveat: the competitor's exact config (spectrum / max_hits) is unknown; our scene is a
   reasonable single-crystal single-MS proxy (prism, D65, max_hits 7). Align if a precise
   apples-to-apples is needed.
