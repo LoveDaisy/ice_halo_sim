@@ -134,6 +134,16 @@ size_t ComputeExitCap(size_t n_roots, size_t max_hits) {
   return n_roots * (max_hits * 2u + 4u);
 }
 
+// scrum-306.2: CUDA's HasDeviceXyzAccum() is unconditionally true, so every exit
+// is accumulated into d_xyz_buf_ via EmitToDeviceXyz — the trace kernel writes
+// NOTHING to d_exit_ / d_exit_count_ (DrainExits always reads 0 records). The
+// d_exit_/pinned_exit_ pool is therefore dead weight; sizing it to ComputeExitCap
+// (n × (2·max_hits+4)) ballooned to GBs at large LUMICE_DISPATCH_RAY_NUM, causing
+// the big-dispatch throughput collapse + parity OOM. Allocate a token slot so the
+// kernel's (unused) d_exit pointer stays bindable. If HasDeviceXyzAccum ever goes
+// false, restore ComputeExitCap sizing AND the kernel's d_exit write path together.
+constexpr size_t kCudaDeadExitCap = 256u;
+
 // Continuation buffer capacity (296.4). Each root may emit up to
 // (max_hits * 2 + 4) candidate continuations (matches ComputeExitCap upper
 // bound — every outward exit is a continuation candidate). Sized to the same
@@ -1744,7 +1754,7 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
   cudaFreeHost(pinned_cont_count_); pinned_cont_count_ = nullptr;
 
   size_t max_hits = scene_ != nullptr ? scene_->max_hits_ : kMaxHits;
-  exit_cap_ = ComputeExitCap(n, max_hits);
+  exit_cap_ = kCudaDeadExitCap;  // d_exit_ is dead (device-fused XYZ); see kCudaDeadExitCap
   const size_t cont_cap0 = ComputeContCap(n, max_hits);
   cont_cap_[0] = cont_cap0;
   cont_cap_[1] = cont_cap0;
@@ -1812,25 +1822,11 @@ void CudaTraceBackend::Impl::EnsureExitCapacity(size_t n) {
   // the exit pool may need to grow for this layer's fan-out. exit_cap_ tracks the
   // logical cap used by the kernel/overflow-clamp; alloc_exit_cap_ tracks the
   // physical d_exit_ allocation so we realloc only when genuinely insufficient.
-  const size_t need = ComputeExitCap(n, scene_ != nullptr ? scene_->max_hits_ : kMaxHits);
-  exit_cap_ = need;
-  if (!buffers_allocated_ || need <= alloc_exit_cap_) {
-    return;  // existing d_exit_ already holds `need` records.
-  }
-  cudaDeviceSynchronize();  // a prior layer's kernel may still be writing d_exit_.
-  auto ck = [this](cudaError_t e, const char* ctx) {
-    if (e != cudaSuccess) {
-      Reset();
-      throw BackendUnavailableError(std::string{"CudaTraceBackend::EnsureExitCapacity: "} + ctx + ": " +
-                                    cudaGetErrorString(e));
-    }
-  };
-  cudaFree(d_exit_);            d_exit_ = nullptr;
-  cudaFreeHost(pinned_exit_);   pinned_exit_ = nullptr;
-  ck(cudaMalloc(&d_exit_, need * sizeof(ExitRayRecord)), "cudaMalloc d_exit (grow)");
-  ck(cudaHostAlloc(&pinned_exit_, need * sizeof(ExitRayRecord), cudaHostAllocDefault),
-     "cudaHostAlloc pinned_exit (grow)");
-  alloc_exit_cap_ = need;
+  // scrum-306.2: d_exit_ is dead (device-fused XYZ; HasDeviceXyzAccum() always
+  // true → the kernel never writes d_exit_/d_exit_count_). It never needs to grow;
+  // keep the token capacity. See kCudaDeadExitCap.
+  (void)n;
+  exit_cap_ = kCudaDeadExitCap;
 }
 
 void CudaTraceBackend::Impl::EnsureContCapacity(size_t n_in, int out_slot) {
