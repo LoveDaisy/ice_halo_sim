@@ -24,6 +24,13 @@ option(LUMICE_NATIVE_ARCH "Enable -march=native for release builds (GCC/Clang)" 
 # Mac/Windows host builds without nvcc must stay zero-regress when this is OFF.
 option(LUMICE_CUDA_ENABLED "Enable CUDA backend (requires nvcc / CUDAToolkit)" OFF)
 
+# scrum-306.1 (explore-async-evidence, H7): embed Metal shader sources + line
+# tables into the metallib so Xcode/Instruments GPU shader profiler maps occupancy
+# / per-line ALU cost back to lumice_trace.metal. No runtime perf impact (only a
+# slightly larger embedded metallib blob); keep OFF for release/CI. Turn ON for
+# the Xcode profiling build (build/xcode) used to measure Metal kernel occupancy.
+option(LUMICE_METAL_SHADER_PROFILE "Embed Metal shader source + line tables for GPU shader profiler" OFF)
+
 if(MSVC)
   add_definitions(-DNOMINMAX)
   set(CMAKE_DEBUG_POSTFIX "d")
@@ -264,6 +271,13 @@ if(APPLE)
       "${PROJ_SRC_DIR}/core/shared/pcg_shared.h"
       "${PROJ_SRC_DIR}/core/shared/accum_shared.h")
 
+  # scrum-306.1 H7: optional shader debug info for the GPU profiler (off by default).
+  set(LUMICE_METAL_DEBUG_FLAGS "")
+  if(LUMICE_METAL_SHADER_PROFILE)
+    set(LUMICE_METAL_DEBUG_FLAGS -frecord-sources -gline-tables-only)
+    message(STATUS "[metal] LUMICE_METAL_SHADER_PROFILE=ON → embedding shader sources/line-tables for GPU profiler")
+  endif()
+
   add_custom_command(
     OUTPUT  "${LUMICE_METAL_AIR}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${LUMICE_METAL_GEN_DIR}"
@@ -272,6 +286,7 @@ if(APPLE)
             -std=metal3.0
             -fno-fast-math
             -mmacosx-version-min=13.0
+            ${LUMICE_METAL_DEBUG_FLAGS}
             -c "${LUMICE_METAL_SRC}"
             -o "${LUMICE_METAL_AIR}"
     DEPENDS "${LUMICE_METAL_SRC}" ${LUMICE_METAL_SHARED_HDRS}
