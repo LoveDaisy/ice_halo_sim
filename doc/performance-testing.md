@@ -249,6 +249,28 @@ above was **half wrong**, corrected by profiling:
 - **Profile before coding a fix.** A fully-designed stream-deferral increment was abandoned once
   nsys showed it was worth <1%.
 
+##### scrum-306.6 (Metal kernel lever) + 306.7 (legacy energy) — both converged, no code change (2026-06-29)
+
+- **306.6 Metal kernel lever probe → NO cheap lever.** The path_rec spike (remove the per-bounce
+  `path[]` store + the `rec_csum`/`rec_sink` checksum, rebuild, idle-gated interleaved Metal multi
+  bench) gave **0 throughput change** (BASE ≈ SPIKE ≈ 30 M/s) — exactly like the CUDA path_rec
+  spike. Metal `trace_layer_kernel` dominates (~143–214µs/dispatch, ~80% of GPU time, from the
+  `xctrace export` of the Metal System Trace) and is ALU-bound (occ ~29% / ALU 63–73%, prior E7) —
+  the *hard* case: no cheap occupancy/memory knob, only algorithmic ALU reduction. Same bucket as
+  CUDA (latency-bound, 3 spikes all 0) → folded into the far-future algorithmic-kernel backlog, not
+  a standalone task. (The precise which-ALU breakdown / occupancy-limiter reason needs a
+  counter-enabled Xcode GPU frame capture — interactive, not headless-driveable; the existing
+  `metal-profile.trace` lacks hardware counters.)
+- **306.7 legacy energy "dispatch dependence" → NOT a bug (MC variance).** Legacy ΣY drifts with
+  `LUMICE_DISPATCH_RAY_NUM` because the legacy/illuminant path samples **one wavelength per
+  SimBatch** (`simulator.cpp`): wl-samples = ray_num/dispatch (128 → 78125 samples, converged;
+  131072 → ~77, high variance). `sim_ray_num`/`ray_seg_num` are invariant (10M/150M) — it is NOT a
+  ray-count or normalization bug. The per-batch-wl estimator has the **same expectation** as
+  per-ray wl (unbiased); only variance differs (cross-seed CV 0.3% @128 vs 8.6% @131072 = √(1024×
+  fewer samples)). Legacy at its default (128) is well-converged and correct; 306.4 already strips
+  the GPU-only knob from legacy. A root-cause change (per-ray or per-fixed-chunk wl) would touch the
+  legacy **reference oracle** (re-baseline risk) for zero real-world benefit → not pursued.
+
 > #### ⚠️ `LUMICE_DISPATCH_RAY_NUM` is a GPU-only knob — never apply it to legacy in a comparison (scrum-306.1/306.4)
 >
 > `LUMICE_DISPATCH_RAY_NUM` sizes the GPU engine's per-dispatch grid. **CUDA total
