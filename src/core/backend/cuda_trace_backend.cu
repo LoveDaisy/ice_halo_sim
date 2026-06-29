@@ -1235,6 +1235,18 @@ struct CudaTraceBackend::Impl {
   cudaEvent_t ev_end_d2h_{};
   bool events_created_ = false;
 
+  // scrum-306.2 async-stream port (increment 1): all per-dispatch GPU work
+  // (kernels / memcpy / memset / events) runs on this dedicated non-default
+  // stream instead of the legacy default stream. Increment 1 keeps host-blocking
+  // at the SAME logical points (every former cudaDeviceSynchronize / blocking
+  // cudaMemcpy → cudaStreamSynchronize(stream_)), so semantics are preserved and
+  // parity must stay 10/10; it only establishes the stream infrastructure.
+  // Increment 2 then defers the count-readback waits to overlap D2H with compute.
+  // Created once (gated by stream_created_), destroyed in full Reset() / dtor —
+  // persists across the per-batch keep_persistent_buffers path like the events.
+  cudaStream_t stream_{};
+  bool stream_created_ = false;
+
   // --- Transit-kernel PCG state (296.4) ------------------------------------
   // Independent PCG stream for the device-resident continuation engine. The
   // counter is monotone across the whole session (NOT reset across batches /
@@ -1435,6 +1447,10 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
       cudaEventDestroy(ev_end_kernel_);
       cudaEventDestroy(ev_end_d2h_);
       events_created_ = false;
+    }
+    if (stream_created_) {  // scrum-306.2 async-stream
+      cudaStreamDestroy(stream_);
+      stream_created_ = false;
     }
 
     // Capacity trackers tied to the freed persistent buffers + the
@@ -2124,6 +2140,10 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
       CheckCuda(cudaEventCreate(&impl_->ev_end_d2h_),     "BeginSession cudaEventCreate ev_end_d2h");
       impl_->events_created_ = true;
     }
+    if (!impl_->stream_created_) {  // scrum-306.2 async-stream
+      CheckCuda(cudaStreamCreate(&impl_->stream_), "BeginSession cudaStreamCreate");
+      impl_->stream_created_ = true;
+    }
 
     impl_->in_session_ = true;
     if (impl_->logger != nullptr) {
@@ -2227,7 +2247,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
 
   // Zero the layer's accumulators ONCE before the ci-loop: each ci's trace
   // dispatch APPENDS to d_exit_ / cont[out_slot] via atomic counters.
-  cudaEventRecord(impl_->ev_start_h2d_);
+  cudaEventRecord(impl_->ev_start_h2d_, impl_->stream_);
   ck_reset(cudaMemset(impl_->d_exit_count_, 0, sizeof(uint32_t)), "cudaMemset d_exit_count");
   ck_reset(cudaMemset(impl_->d_cont_count_[out_slot], 0, sizeof(uint32_t)),
            "cudaMemset d_cont_count_[out_slot]");
@@ -2262,7 +2282,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
                            impl_->scene_->light_source_.param_, impl_->wl_pool_size_);
       gp.gen_seed     = impl_->gen_seed_;
       gp.gen_ray_base = NarrowPcgRayBase(impl_->gen_ray_count_, ci_n, "cuda-gen");
-      gen_root_kernel<<<grid, 256>>>(impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
+      gen_root_kernel<<<grid, 256, 0, impl_->stream_>>>(impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
                                      impl_->d_rot_c2w_, impl_->d_root_wl_idx_, impl_->d_tri_vtx_,
                                      impl_->d_tri_norm_, impl_->d_tri_area_, impl_->d_tri_to_poly_,
                                      impl_->d_wl_pool_, gp, cin);
@@ -2323,7 +2343,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
           BuildTransitGpParams(ms_setting.crystal_.axis_, impl_->tri_cnt_, cin);
       gp.gen_seed     = impl_->transit_seed_;
       gp.gen_ray_base = NarrowPcgRayBase(impl_->transit_ray_count_, ci_n, "cuda-transit");
-      transit_multi_ms_kernel<<<grid, 256>>>(
+      transit_multi_ms_kernel<<<grid, 256, 0, impl_->stream_>>>(
           impl_->d_cont_d_[in_slot] + ci_start * 3u, impl_->d_cont_w_[in_slot] + ci_start,
           impl_->d_cont_wl_idx_[in_slot] + ci_start,
           impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
@@ -2344,12 +2364,12 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     // right AFTER, both inside the loop. The LAST iteration's pair wins.
     // Stream order is strict (default stream) so end_h2d → kernel → end_kernel,
     // and kernel_ms = elapsed(end_h2d, end_kernel) is positive and meaningful.
-    cudaEventRecord(impl_->ev_end_h2d_);
+    cudaEventRecord(impl_->ev_end_h2d_, impl_->stream_);
     // Filter / gate buffers are passed unconditionally (S2): the ms_mode==0
     // device-fused emit gate also calls DeviceFilterCheck. Previously these
     // were short-circuited to nullptr on ms_mode==0 dispatches — keeping that
     // shortcut would make the new ms_mode==0 emit gate deref nullptr.
-    trace_single_ms_kernel<<<grid, 256>>>(
+    trace_single_ms_kernel<<<grid, 256, 0, impl_->stream_>>>(
         impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
         cin, impl_->d_poly_n_, impl_->d_poly_d_,
         impl_->poly_cnt_, impl_->d_rot_c2w_, impl_->d_wl_pool_, impl_->d_root_wl_idx_,
@@ -2382,7 +2402,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     // The original outside-loop placement (right next to ev_end_h2d_) collapsed
     // kernel_ms to ~0ms after the multi-CI rewrite — they recorded back-to-back
     // before any compute observed by the timer.
-    cudaEventRecord(impl_->ev_end_kernel_);
+    cudaEventRecord(impl_->ev_end_kernel_, impl_->stream_);
     // S2: gate_ray_count_ is advanced for BOTH ms_modes now — the ms_mode==0
     // path also draws prob via the gate stream so every dispatch (final or
     // not) must consume a disjoint global_idx range to avoid stream collision
@@ -2394,7 +2414,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
   // point that surfaces async kernel errors: check the return value).
   ck_reset(cudaMemcpy(&impl_->h_exit_count_, impl_->d_exit_count_, sizeof(uint32_t),
                       cudaMemcpyDeviceToHost), "4B readback");
-  cudaEventRecord(impl_->ev_end_d2h_);
+  cudaEventRecord(impl_->ev_end_d2h_, impl_->stream_);
   cudaEventSynchronize(impl_->ev_end_d2h_);
 
   float h2d_ms = 0.0f;
@@ -2507,7 +2527,7 @@ RootRaySource CudaTraceBackend::Recombine(LayerHandlePtr handle, const Recombine
     }
     const uint32_t shuf_seed = impl_->shuffle_seed_ ^ static_cast<uint32_t>(impl_->ms_layer_idx_);
     const uint32_t grid = (cont_n + 255u) / 256u;
-    shuffle_cont_kernel<<<grid, 256>>>(impl_->d_cont_d_[written_slot],
+    shuffle_cont_kernel<<<grid, 256, 0, impl_->stream_>>>(impl_->d_cont_d_[written_slot],
                                        impl_->d_cont_w_[written_slot],
                                        impl_->d_cont_wl_idx_[written_slot],
                                        impl_->d_cont_d_[other_slot],
