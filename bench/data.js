@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782725333981,
+  "lastUpdate": 1782725335492,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9620,50 +9620,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "7afaf1ee9852b2a5b2fca35706f11e8cb5cd621d",
-          "message": "Merge pull request #53 from LoveDaisy/feat/crystal_param\n\nfeat: replace Miller index with wedge angle for pyramid crystals",
-          "timestamp": "2026-04-07T11:45:57+08:00",
-          "tree_id": "8676799829f22d664374bd7c645615e57c324396",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/7afaf1ee9852b2a5b2fca35706f11e8cb5cd621d"
-        },
-        "date": 1775533774547,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 86.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 81.1,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 72.3,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 56.2,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "ba2780cbd4f7d833fbb6ea8fbe1d10c882645c90",
           "message": "Merge pull request #54 from LoveDaisy/feat/gui_layout\n\nfeat(gui): restructure layout with collapsible panels and overlay",
           "timestamp": "2026-04-08T08:36:58+08:00",
@@ -14003,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 88.7,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3c13a634c66560579a93d2b87cccd690510b1c83",
+          "message": "Merge pull request #155 from LoveDaisy/feat/cuda-async-engine\n\nperf(scrum-306): CUDA throughput 37M→~114M (dispatch default + dead-buffer cap)",
+          "timestamp": "2026-06-29T17:22:12+08:00",
+          "tree_id": "0bfd23fcfaa5e3614e447a2936ea2d73bc2879af",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/3c13a634c66560579a93d2b87cccd690510b1c83"
+        },
+        "date": 1782725335223,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 69.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 102.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 87.8,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 89.8,
             "unit": "%"
           }
         ]
