@@ -207,20 +207,34 @@ jobs:
       - name: Build (compiles cuda_trace_backend.cu)
         run: cmake --build build --parallel
 
-  # Windows CUDA compile-only: nvcc + MSVC on windows-2025.
+  # Windows CUDA compile-only: nvcc + MSVC on windows-2022.
   #
-  # Pin rationale (scrum-310 / task-win-cuda-ci-gate, 2026-06-30):
-  #   - Runner: `windows-2025` (GitHub-hosted; CUDA Toolkit NOT preinstalled).
-  #   - MSVC: runner default (Visual Studio 2022 latest, `_MSC_VER` confirmed
-  #     in the "Diagnose toolchain versions" step log below — kept as a
-  #     permanent diagnostic so future drift is debuggable from any run).
+  # Pin rationale (scrum-310 / task-win-cuda-ci-gate, 2026-07-01):
+  #   - Runner: `windows-2022` (GitHub-hosted; CUDA Toolkit NOT preinstalled).
+  #     We pin to windows-2022 ON PURPOSE — NOT the newer `windows-2025`. The
+  #     `windows-2025` image has rolled its ONLY Visual Studio install forward
+  #     to VS 2026 (MSVC 14.51, `_MSC_VER` 1951; `vswhere` finds only
+  #     `...\Microsoft Visual Studio\18\Enterprise`, no VS 2022 fallback).
+  #     Every current CUDA release rejects MSVC > VS 2022 (CUDA 12.6's
+  #     `crt/host_config.h`: "Only the versions between 2017 and 2022 are
+  #     supported"), so the CUDA job MUST run on an image that still ships a
+  #     CUDA-compatible MSVC. windows-2022 ships VS 2022 (MSVC 14.4x). The
+  #     non-CUDA `Windows MSVC x86_64` build job above stays on windows-2025
+  #     (it compiles fine under VS 2026); only this CUDA job needs the older
+  #     image. Verified first-hand in CI run 28439410508 (the windows-2025
+  #     attempt that failed at Configure).
+  #   - MSVC: windows-2022 runner default (VS 2022; `_MSC_VER` surfaced by the
+  #     "Diagnose toolchain versions" step below — kept permanently so future
+  #     image drift is debuggable from any run).
   #   - CUDA: 12.6.3 — latest 12.6 patch, matches the Linux `cuda-compile`
-  #     job above (reduces cognitive load: one CUDA major across all CI legs)
-  #     and supports the current windows-2025 MSVC host compiler.
-  #     If a future runner image bumps MSVC past CUDA 12.6's host-compiler
-  #     ceiling, bump CUDA here (e.g. to 12.8) rather than pinning MSVC.
-  #     Do NOT use CUDA 11.x — its `_MSC_VER` ceiling (~1930) is below the
-  #     VS 2022 17.11+ shipped on windows-2025 (scrum-309 hit exactly this).
+  #     job above (one CUDA major across all CI legs) and supports VS 2022.
+  #     Do NOT use CUDA 11.x — its `_MSC_VER` ceiling (~1930) is below recent
+  #     VS 2022 17.x (scrum-309 hit exactly this).
+  #   - MAINTENANCE: when GitHub eventually retires windows-2022, either move
+  #     to whatever hosted image still carries a CUDA-supported VS, or bump
+  #     CUDA to a version that supports the then-current MSVC. Do NOT "fix" a
+  #     future break by pinning a stale MSVC toolset onto windows-2025 — that
+  #     image dropped VS 2022 entirely.
   #
   # Mirrors the ubuntu-24.04 `cuda-compile` job (compile-only, no GPU, no
   # runtime). Runtime/parity validation still requires a real CUDA GPU and
@@ -233,7 +247,7 @@ jobs:
   # No job-level `if:` — relies on the workflow-level `on: push / pull_request`
   # triggers so both PRs and branch pushes run this gate.
   windows-cuda-compile:
-    runs-on: windows-2025
+    runs-on: windows-2022
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
