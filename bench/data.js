@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782802423687,
+  "lastUpdate": 1782802425655,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9620,50 +9620,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "ba2780cbd4f7d833fbb6ea8fbe1d10c882645c90",
-          "message": "Merge pull request #54 from LoveDaisy/feat/gui_layout\n\nfeat(gui): restructure layout with collapsible panels and overlay",
-          "timestamp": "2026-04-08T08:36:58+08:00",
-          "tree_id": "2c5b3cc1492cebe092283ae3adfa7bbd060dad26",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/ba2780cbd4f7d833fbb6ea8fbe1d10c882645c90"
-        },
-        "date": 1775608835311,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 86.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 78.2,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 73.3,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 70,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "d4eae674d89a686b081a2aa818bb653152bfdbf3",
           "message": "Merge pull request #55 from LoveDaisy/feat/gui_overlay\n\nfeat(gui): configurable overlay colors, alpha, and edge labels",
           "timestamp": "2026-04-08T08:57:53+08:00",
@@ -14003,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 89.8,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "85c35073907dd5ea3eb9e9bf64bdcb20be8d0ac9",
+          "message": "Merge pull request #156 from LoveDaisy/fix/randomsample-nomatch-entry-leak\n\nfix(geo3d): RandomSample no-match fallback for MSVC 77H light leak (curr_p==0.0 → entry-face bug)",
+          "timestamp": "2026-06-30T14:48:02+08:00",
+          "tree_id": "31d7f3bcd82d107a3ecd3e02f1be0e8105ec0277",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/85c35073907dd5ea3eb9e9bf64bdcb20be8d0ac9"
+        },
+        "date": 1782802425087,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 75.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 86,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 95.9,
             "unit": "%"
           }
         ]
