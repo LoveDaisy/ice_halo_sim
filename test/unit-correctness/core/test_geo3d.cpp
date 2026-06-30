@@ -55,9 +55,9 @@ TEST_F(Geo3dTest, RandomSample_SelectBin_MatchPathUnchanged) {
   // (p[j], p[j+1]] convention so Mac/gcc parity remains byte-identical after the refactor.
   const float p[] = { 0.0f, 0.25f, 0.75f, 1.0f };
   EXPECT_EQ(lumice::detail::RandomSampleSelectBin(0.10f, p, 3), 0);
-  EXPECT_EQ(lumice::detail::RandomSampleSelectBin(0.25f, p, 3), 0) << "boundary belongs to lower bin";
+  EXPECT_EQ(lumice::detail::RandomSampleSelectBin(0.25f, p, 3), 0) << "upper boundary belongs to the bin it closes";
   EXPECT_EQ(lumice::detail::RandomSampleSelectBin(0.50f, p, 3), 1);
-  EXPECT_EQ(lumice::detail::RandomSampleSelectBin(0.75f, p, 3), 1) << "boundary belongs to lower bin";
+  EXPECT_EQ(lumice::detail::RandomSampleSelectBin(0.75f, p, 3), 1) << "upper boundary belongs to the bin it closes";
   EXPECT_EQ(lumice::detail::RandomSampleSelectBin(0.90f, p, 3), 2);
   EXPECT_EQ(lumice::detail::RandomSampleSelectBin(1.00f, p, 3), 2) << "upper boundary belongs to last bin";
 }

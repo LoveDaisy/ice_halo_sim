@@ -164,6 +164,9 @@ int RandomSampleSelectBin(float curr_p, const float* p, int pop_size) {
       return j;
     }
   }
+  // Unreachable under a valid cumulative array (p[pop_size]==1 guarantees at least one
+  // positive-weight bin). Only an all-zero-weight input (p[pop_size]==0) reaches here;
+  // that violates the caller contract, so we fall back to bin 0 defensively.
   return 0;
 }
 }  // namespace detail
