@@ -207,6 +207,123 @@ jobs:
       - name: Build (compiles cuda_trace_backend.cu)
         run: cmake --build build --parallel
 
+  # Windows CUDA compile-only: nvcc + MSVC on windows-2025.
+  #
+  # Pin rationale (scrum-310 / task-win-cuda-ci-gate, 2026-06-30):
+  #   - Runner: `windows-2025` (GitHub-hosted; CUDA Toolkit NOT preinstalled).
+  #   - MSVC: runner default (Visual Studio 2022 latest, `_MSC_VER` confirmed
+  #     in the "Diagnose toolchain versions" step log below — kept as a
+  #     permanent diagnostic so future drift is debuggable from any run).
+  #   - CUDA: 12.6.3 — latest 12.6 patch, matches the Linux `cuda-compile`
+  #     job above (reduces cognitive load: one CUDA major across all CI legs)
+  #     and supports the current windows-2025 MSVC host compiler.
+  #     If a future runner image bumps MSVC past CUDA 12.6's host-compiler
+  #     ceiling, bump CUDA here (e.g. to 12.8) rather than pinning MSVC.
+  #     Do NOT use CUDA 11.x — its `_MSC_VER` ceiling (~1930) is below the
+  #     VS 2022 17.11+ shipped on windows-2025 (scrum-309 hit exactly this).
+  #
+  # Mirrors the ubuntu-24.04 `cuda-compile` job (compile-only, no GPU, no
+  # runtime). Runtime/parity validation still requires a real CUDA GPU and
+  # is covered by scrum-309 + the manual-release-artifact-verify task.
+  #
+  # This job is the merge gate for `feat/cuda-windows-validation` → main:
+  # without it, the scrum-309 Windows-gated build fixes (spdlog/fmt/nvcc)
+  # would have zero automated regression protection on main.
+  #
+  # No job-level `if:` — relies on the workflow-level `on: push / pull_request`
+  # triggers so both PRs and branch pushes run this gate.
+  windows-cuda-compile:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # Sets up the MSVC environment (cl.exe, link.exe, lib paths) for the
+      # current shell. Must run BEFORE the CUDA toolkit step so nvcc sees a
+      # host compiler.
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        # toolset: '14.39'  # Uncomment + pin if a future MSVC bump breaks the
+        #                   # chosen CUDA version (scrum-309 used 14.39).
+
+      # Diagnostics — kept permanently (not a throwaway spike). The host
+      # compiler version determines which CUDA versions are usable; surfacing
+      # `_MSC_VER` and `cl.exe` in every run means future "broke after image
+      # update" failures are debuggable from the job log alone.
+      - name: Diagnose toolchain versions
+        shell: pwsh
+        run: |
+          Write-Host "=== MSVC environment ==="
+          Write-Host "VCToolsVersion = $env:VCToolsVersion"
+          Write-Host "VisualStudioVersion = $env:VisualStudioVersion"
+          Write-Host "--- cl.exe banner ---"
+          cl.exe 2>&1 | Select-Object -First 2
+          Write-Host "--- _MSC_VER via test compile ---"
+          # Emit _MSC_VER as a preprocessor token so it shows up verbatim in
+          # the log even if cl.exe banner format changes across VS updates.
+          'int main(){return _MSC_VER;}' | Set-Content -Path msc_probe.cpp
+          cl.exe /nologo /EP /Zs msc_probe.cpp 2>&1 | Select-String 'return'
+          Remove-Item msc_probe.cpp -ErrorAction SilentlyContinue
+
+      # Install only nvcc + cudart dev headers/stubs (mirrors the Linux job's
+      # precision install). `method: network` is appropriate for hosted runners
+      # (fresh VM each run). `sub-packages` is Jimver/cuda-toolkit's documented
+      # mechanism for partial installs — if the action ever changes that
+      # contract, the install-size diagnostic step below will catch it.
+      - name: Install CUDA toolkit (nvcc + cudart_dev)
+        uses: Jimver/cuda-toolkit@v0.2.23
+        with:
+          cuda: '12.6.3'
+          method: 'network'
+          sub-packages: '["nvcc", "cudart"]'
+
+      # Verify sub-packages took effect (caught a full 4GB install rather than
+      # the ~500MB nvcc+cudart subset). If this shows full-toolkit footprint,
+      # the sub-packages contract changed and the install step needs revisit.
+      - name: Diagnose CUDA install
+        shell: pwsh
+        run: |
+          Write-Host "=== nvcc version ==="
+          nvcc --version
+          Write-Host "=== CUDA_PATH ==="
+          Write-Host "CUDA_PATH = $env:CUDA_PATH"
+          if ($env:CUDA_PATH) {
+            Write-Host "--- toolkit footprint (top-level dirs) ---"
+            Get-ChildItem $env:CUDA_PATH | Select-Object Name, Mode
+          }
+
+      # Independent cache key (not shared with the `windows-msvc-x64` build job
+      # above) so an eventual divergence in CPM dependency sets between the
+      # CUDA-enabled and CUDA-disabled configures cannot pollute either side.
+      # Current CMakeLists.txt does not add CPM packages under
+      # LUMICE_CUDA_ENABLED=ON, so this only costs one extra cache slot.
+      - name: Cache CPM dependencies
+        uses: actions/cache@v5
+        with:
+          path: cpm_cache
+          key: cpm-windows-msvc-x64-cuda-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: cpm-windows-msvc-x64-cuda-
+
+      # BUILD_GUI=OFF + BUILD_TEST=OFF mirrors the Linux cuda-compile job:
+      # no GLAD2/Python generator is invoked (that step is gated on
+      # matrix.build_gui == 'ON' in the build job above), and no test
+      # translation unit owns a .cu file so coverage is complete.
+      # LUMICE_NATIVE_ARCH=OFF matches the rest of CI.
+      - name: Configure (CUDA compile-only)
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TEST=OFF
+          -DBUILD_GUI=OFF
+          -DLUMICE_CUDA_ENABLED=ON
+          -DLUMICE_NATIVE_ARCH=OFF
+
+      # Build the Lumice CLI; this drives nvcc through cuda_trace_backend.cu
+      # and links CUDA::cudart, exercising both compile and link paths under
+      # MSVC. AC2 = this step's log must show nvcc invocation for the .cu TU.
+      - name: Build (compiles cuda_trace_backend.cu via nvcc)
+        run: cmake --build build --parallel
+
   e2e-test:
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
