@@ -16,6 +16,9 @@
 #if defined(__APPLE__)
 #include "core/backend/metal_trace_backend.hpp"
 #endif
+#if defined(LUMICE_CUDA_ENABLED)
+#include "core/backend/cuda_trace_backend.hpp"  // CudaDeviceAvailable() for LUMICE_IsBackendAvailable
+#endif
 #include "include/lumice.h"
 #include "server/server.hpp"
 #include "util/callback_sink.hpp"
@@ -862,7 +865,7 @@ int LUMICE_IsBackendAvailable(int backend) {
         // task-282: deepen the gate from device-presence to trial-compile +
         // entry-point lookup. MetalDeviceAvailable returned true on macOS 26.5 /
         // M1 Max where MSL compilation succeeded but newFunctionWithName
-        // ("trace_layer_kernel") returned nil, letting the GUI "Use Metal GPU"
+        // ("trace_layer_kernel") returned nil, letting the GUI "Use GPU"
         // checkbox light up and BeginSession abort on a Metal-framework nil-
         // computeFunction assertion. MetalPipelineAvailable runs the same
         // source + options EnsurePso uses and verifies all three kernel entry
@@ -872,9 +875,16 @@ int LUMICE_IsBackendAvailable(int backend) {
         return 0;
 #endif
       case ns::BackendKind::kCuda:
-        // CUDA backend lands in scrum-cuda-backend-mvp subtask 3; not yet
-        // runtime-available on any host.
+#if defined(LUMICE_CUDA_ENABLED)
+        // Mirror the Metal gate: report CUDA available only when the build has the
+        // CUDA backend AND a usable NVIDIA device is present at runtime (probed via
+        // the driver). Non-CUDA builds and GPU-less hosts return 0, so the GUI
+        // "Use GPU" toggle stays hidden and BeginSession never routes to a missing
+        // device (the CUDA analog of task-282's Metal nil-PSO guard).
+        return lumice::CudaDeviceAvailable() ? 1 : 0;
+#else
         return 0;
+#endif
     }
     return 0;
   } catch (...) {

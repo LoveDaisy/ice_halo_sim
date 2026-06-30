@@ -41,7 +41,7 @@ bool MetalDeviceAvailable();
 // catches the macOS 26.5 failure mode where the library compiles but kernel
 // entry points are not exposed — a scenario MetalDeviceAvailable cannot
 // observe. The cached result drives LUMICE_IsBackendAvailable so the GUI's
-// "Use Metal GPU" checkbox is gated by the actual runtime success criterion
+// "Use GPU" checkbox (Metal on this host) is gated by the actual runtime success criterion
 // rather than mere device presence. Result is cached after the first call
 // (std::call_once, write-once then read-only — thread-safe).
 bool MetalPipelineAvailable();

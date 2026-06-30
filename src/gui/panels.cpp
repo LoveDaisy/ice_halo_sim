@@ -934,26 +934,25 @@ void RenderSceneControls(GuiState& state) {
     ImGui::SetTooltip("Maximum number of crystal face hits per ray path");
   }
 
-#if defined(__APPLE__)
-  // Metal toggle (Apple-only). Wired through DIRTY_IF so the next Apply/Run
-  // reconstructs the server for the chosen backend (MaybeReconstructServerForBackend
-  // in app.cpp) — CPU N-worker vs Metal single engine are different orchestration
-  // topologies, so the server is rebuilt and the accumulated image resets on toggle.
-  // Falls back to CPU silently if the active config is not Metal-compatible
-  // (see MetalTraceBackend::IsCompatible).
-  // Runtime gate: hide the checkbox entirely on Macs without a Metal device
-  // (very old hardware / certain remote sessions / broken GPU drivers), since
-  // selecting it would otherwise hit a nil device in EnsureDevice. The probe
-  // is cached, so the per-frame cost is a plain memory read.
+  // GPU backend toggle (Metal on Apple, CUDA on NVIDIA). Wired through DIRTY_IF so
+  // the next Apply/Run reconstructs the server for the chosen backend
+  // (MaybeReconstructServerForBackend in app.cpp) — CPU N-worker vs GPU single
+  // engine are different orchestration topologies, so the server is rebuilt and the
+  // accumulated image resets on toggle. Falls back to CPU silently if the active
+  // config is not GPU-compatible.
+  // Runtime gate: only show the checkbox when a GPU backend is actually available
+  // (Metal device on Apple / NVIDIA device + usable CUDA on Windows-Linux), so it
+  // never appears on CPU-only hosts or machines with very old hardware / broken GPU
+  // drivers, where selecting it would otherwise fail in EnsureDevice. The probe is
+  // cached, so the per-frame cost is a plain memory read.
   // ImGui::Checkbox renders its label to the right and ignores the item-width
   // stack, so no PushItemWidth wrapper is needed here.
-  if (LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL)) {
-    DIRTY_IF(ImGui::Checkbox("Use Metal GPU", &state.use_metal_backend));
+  if (LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL) || LUMICE_IsBackendAvailable(LUMICE_BACKEND_CUDA)) {
+    DIRTY_IF(ImGui::Checkbox("Use GPU", &state.use_gpu_backend));
     if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("Use Metal GPU for simulation (falls back to CPU if incompatible)");
+      ImGui::SetTooltip("Use the GPU for simulation (falls back to CPU if incompatible)");
     }
   }
-#endif
 }
 
 #undef DIRTY_IF

@@ -474,13 +474,11 @@ struct GuiState {
   // readback via pending_screenshot; that mechanism was retired — see SUMMARY.)
   bool screenshot_include_overlay = false;
 
-#if defined(__APPLE__)
-  // Request Metal trace backend (Apple-only). Toggling this reconstructs the
-  // server on the next DoRun via MaybeReconstructServerForBackend (backend is a
-  // construction-time topology property: CPU N-worker vs Metal single engine), so
-  // the accumulated image resets on toggle. UI-only, session-only.
-  bool use_metal_backend = false;
-#endif
+  // Request a GPU trace backend (Metal on Apple, CUDA on NVIDIA). Toggling this
+  // reconstructs the server on the next DoRun via MaybeReconstructServerForBackend
+  // (backend is a construction-time topology property: CPU N-worker vs GPU single
+  // engine), so the accumulated image resets on toggle. UI-only, session-only.
+  bool use_gpu_backend = false;
 
   // Edit modal mode (UI-only, session-only, not in ConfigSnapshot).
   // Staged mode: BeginPopupModal + OK/Cancel + dirty-mark on tabs.
