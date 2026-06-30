@@ -363,9 +363,10 @@ endif()
 # - nvcc 11.6 (dev49 docker image) is the lowest supported toolchain;
 #   CUDA 12.x toolkits also work (still support compute_61).
 # - PTX floor = compute_61 (Pascal, 2016+); driver JITs to native sm on any
-#   GPU >= sm_61, including future cards. Benchmark-fidelity SASS for sm_89
-#   (Ada Lovelace, RTX 4060 Ti on dev49) is out of scope here and handled by
-#   the "CUDA delivery" cluster (scrum-cuda-backend-complete 296.6).
+#   GPU >= sm_61, including future cards.
+# - Multi-arch fatbin (scrum-310.2): on top of the compute_61 PTX floor, emit
+#   native SASS for the common modern cards so they skip first-launch JIT and
+#   the dev49 RTX 4060 (sm_89) bench runs native (not PTX-JIT'd) for fidelity.
 # - Mac/Windows host builds without nvcc keep BUILD_GUI/perf paths intact when
 #   LUMICE_CUDA_ENABLED is OFF (no enable_language(CUDA) at all).
 if(LUMICE_CUDA_ENABLED)
@@ -374,12 +375,29 @@ if(LUMICE_CUDA_ENABLED)
   set(CMAKE_CUDA_STANDARD 17)
   set(CMAKE_CUDA_STANDARD_REQUIRED ON)
   if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-    # `61-virtual` emits compute_61 PTX only (no SASS); driver JITs to native
-    # sm on any GPU >= sm_61. Owner decision 2026-06-25 (296.1): PTX floor
-    # widens forward-compat to Pascal/Turing/Ampere/Ada/Hopper/future cards;
-    # the older `86-virtual` default was an explore #294 dev49 probe artifact
-    # that silently excluded Turing/Pascal.
-    set(CMAKE_CUDA_ARCHITECTURES "61-virtual" CACHE STRING "CUDA archs")
+    # PTX floor `61-virtual` emits compute_61 PTX only (no SASS); the driver
+    # JITs it to native sm on any GPU >= sm_61, including future cards. Owner
+    # decision 2026-06-25 (296.1): PTX floor widens forward-compat to
+    # Pascal/Turing/Ampere/Ada/Hopper/future; the older `86-virtual` default
+    # was an explore #294 dev49 probe artifact that silently excluded
+    # Turing/Pascal.
+    set(_lumice_cuda_archs "61-virtual")
+    # Opportunistic native SASS for common cards: skips first-launch JIT and
+    # gives bench fidelity. Each real arch is gated on the toolkit version that
+    # introduced that sm, so older toolchains (dev49 docker 11.6, win-builder
+    # 11.7) still build — they just emit fewer `-real` archs and fall back to
+    # PTX JIT. Distribution/CI builds use a modern toolkit (CI: 12.6) and get
+    # the full fatbin. The PTX floor guarantees universal compat regardless.
+    if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "10.0")
+      list(APPEND _lumice_cuda_archs "75-real")  # Turing (RTX 20 / GTX 16)
+    endif()
+    if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.1")
+      list(APPEND _lumice_cuda_archs "86-real")  # Ampere (RTX 30)
+    endif()
+    if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
+      list(APPEND _lumice_cuda_archs "89-real")  # Ada Lovelace (RTX 40, dev49)
+    endif()
+    set(CMAKE_CUDA_ARCHITECTURES "${_lumice_cuda_archs}" CACHE STRING "CUDA archs")
   endif()
   list(APPEND lumice_core_src
     "${PROJ_SRC_DIR}/core/backend/cuda_trace_backend.cu")
