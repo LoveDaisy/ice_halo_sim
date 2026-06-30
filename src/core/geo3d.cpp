@@ -142,14 +142,34 @@ void RandomSample(int pop_size, const float* weight, int* out, size_t sample_num
   auto& rng = RandomNumberGenerator::GetInstance();
   for (size_t i = 0; i < sample_num; i++) {
     auto curr_p = rng.GetUniform();
-    for (int j = 0; j < pop_size; j++) {
-      if (p[j] < curr_p && curr_p <= p[j + 1]) {
-        out[i] = j;
-        break;
-      }
-    }
+    out[i] = detail::RandomSampleSelectBin(curr_p, p, pop_size);
   }
 }
+
+namespace detail {
+int RandomSampleSelectBin(float curr_p, const float* p, int pop_size) {
+  for (int j = 0; j < pop_size; j++) {
+    if (p[j] < curr_p && curr_p <= p[j + 1]) {
+      return j;
+    }
+  }
+  // No-match fallback: curr_p == 0.0 is the only path here (intervals cover (0, 1]).
+  // MSVC STL uniform_real_distribution<float> can return exactly 0.0; libc++/libstdc++
+  // do not, so this branch is inert on Mac/gcc (parity zero risk). The first j with
+  // p[j+1] > p[j] is the first positive-weight bin, which equals the inverse-CDF limit
+  // at x=0. Without this, callers would silently keep their default index (e.g.
+  // InitRay_p_fid leaving tri_id=0), which can pick a zero-weight bin (the 77H leak).
+  for (int j = 0; j < pop_size; j++) {
+    if (p[j + 1] > p[j]) {
+      return j;
+    }
+  }
+  // Unreachable under a valid cumulative array (p[pop_size]==1 guarantees at least one
+  // positive-weight bin). Only an all-zero-weight input (p[pop_size]==0) reaches here;
+  // that violates the caller contract, so we fall back to bin 0 defensively.
+  return 0;
+}
+}  // namespace detail
 
 
 void SampleTrianglePoint(const float* vertices, float* out_pt, size_t sample_num) {

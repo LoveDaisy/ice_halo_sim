@@ -17,6 +17,73 @@ class Geo3dTest : public ::testing::Test {
 
 
 // ============================================================================
+// RandomSample (no-match / zero-weight bin coverage; see task-fix-randomsample-nomatch-entry-leak)
+// ============================================================================
+
+TEST_F(Geo3dTest, RandomSample_NoMatchFallbackToFirstPositiveWeightBin) {
+  // Deterministic AC3 coverage: drives the curr_p == 0.0 no-match path directly through
+  // detail::RandomSampleSelectBin. MSVC STL uniform_real_distribution<float> can return
+  // exactly 0.0; libc++/libstdc++ do not — so the production RNG path on Mac/gcc never
+  // exercises the fallback. We construct the normalized cumulative array p[] by hand and
+  // assert the helper returns the first positive-weight bin (i.e. the inverse-CDF limit
+  // at x=0), never the zero-weight bin 0.
+
+  // weight = [0, 1, 0, 0]: bin 0 zero-weight, bin 1 carries all mass.
+  // After normalization: p = [0, 0, 1, 1, 1] (intervals: (0,0],(0,1],(1,1],(1,1]).
+  // curr_p == 0.0 satisfies no interval (j=0: p[0]=0 < 0 is false) → fallback path.
+  {
+    const float p[] = { 0.0f, 0.0f, 1.0f, 1.0f, 1.0f };
+    EXPECT_EQ(lumice::detail::RandomSampleSelectBin(0.0f, p, 4), 1) << "no-match must pick first positive bin (1)";
+  }
+
+  // weight = [0, 0, 2, 1]: first positive bin is j=2.
+  // After normalization: p = [0, 0, 0, 2/3, 1].
+  {
+    const float p[] = { 0.0f, 0.0f, 0.0f, 2.0f / 3.0f, 1.0f };
+    EXPECT_EQ(lumice::detail::RandomSampleSelectBin(0.0f, p, 4), 2) << "no-match skips zero-weight bins 0,1";
+  }
+
+  // Single-bin pop (pop_size=2 with weight=[0,1]): no-match must pick j=1, never 0.
+  {
+    const float p[] = { 0.0f, 0.0f, 1.0f };
+    EXPECT_EQ(lumice::detail::RandomSampleSelectBin(0.0f, p, 2), 1) << "single positive bin selected on no-match";
+  }
+}
+
+TEST_F(Geo3dTest, RandomSample_SelectBin_MatchPathUnchanged) {
+  // Belt-and-suspenders: the match path (curr_p > 0) must keep the half-open interval
+  // (p[j], p[j+1]] convention so Mac/gcc parity remains byte-identical after the refactor.
+  const float p[] = { 0.0f, 0.25f, 0.75f, 1.0f };
+  EXPECT_EQ(lumice::detail::RandomSampleSelectBin(0.10f, p, 3), 0);
+  EXPECT_EQ(lumice::detail::RandomSampleSelectBin(0.25f, p, 3), 0) << "upper boundary belongs to the bin it closes";
+  EXPECT_EQ(lumice::detail::RandomSampleSelectBin(0.50f, p, 3), 1);
+  EXPECT_EQ(lumice::detail::RandomSampleSelectBin(0.75f, p, 3), 1) << "upper boundary belongs to the bin it closes";
+  EXPECT_EQ(lumice::detail::RandomSampleSelectBin(0.90f, p, 3), 2);
+  EXPECT_EQ(lumice::detail::RandomSampleSelectBin(1.00f, p, 3), 2) << "upper boundary belongs to last bin";
+}
+
+TEST_F(Geo3dTest, RandomSample_ZeroWeightBinNeverSelectedViaPublicApi) {
+  // Belt-and-suspenders contract test (NOT primary AC3 coverage — see NoMatchFallback test
+  // above for the direct no-match path proof). On Mac/gcc the production RNG never returns
+  // 0.0, so this exercises only the main loop; the assertion still guards against any
+  // future regression (e.g. silent default-write or interval-coverage change) that would
+  // let a zero-weight bin slip through.
+  constexpr int kPop = 4;
+  constexpr float kWeight[kPop] = { 0.0f, 1.0f, 0.0f, 0.0f };  // only bin 1 has weight
+  constexpr size_t kN = 10000;
+  int out[kN];
+  for (size_t i = 0; i < kN; i++) {
+    out[i] = -1;  // sentinel: must be overwritten
+  }
+  lumice::RandomSample(kPop, kWeight, out, kN);
+  for (size_t i = 0; i < kN; i++) {
+    EXPECT_NE(out[i], -1) << "sample " << i << " left as sentinel (RandomSample failed to write)";
+    EXPECT_EQ(out[i], 1) << "sample " << i << " selected zero-weight bin " << out[i];
+  }
+}
+
+
+// ============================================================================
 // SampleTrianglePoint
 // ============================================================================
 

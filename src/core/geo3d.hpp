@@ -35,6 +35,16 @@ class Rotation {
 
 void RandomSample(int pop_size, const float* weight, int* out, size_t sample_num = 1);
 
+namespace detail {
+// Pure bin-selection step used by RandomSample. Exposed for deterministic unit testing of
+// the curr_p==0.0 no-match boundary (MSVC STL uniform_real_distribution<float> can return
+// 0.0; libc++/libstdc++ do not). p is the normalized **cumulative** array (NOT raw weights)
+// of length pop_size+1 with p[0]=0, p[pop_size]=1; returns bin j satisfying p[j] < curr_p <= p[j+1], or — when
+// no interval matches (curr_p==0.0) — the first j with p[j+1] > p[j] (first positive-weight
+// bin), i.e. the inverse-CDF limit at x=0.
+int RandomSampleSelectBin(float curr_p, const float* p, int pop_size);
+}  // namespace detail
+
 void SampleTrianglePoint(const float* vertices, float* out_pt, size_t sample_num = 1);
 
 void SampleSphCapPoint(float lon, float lat, float cap_radii, float* out_pt,    //
