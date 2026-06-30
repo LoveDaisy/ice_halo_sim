@@ -482,6 +482,15 @@ if(NOT MSVC)
     $<$<CONFIG:MinSizeRel>:$<$<CXX_COMPILER_ID:AppleClang,Clang>:-dead_strip>>
     $<$<CONFIG:MinSizeRel>:$<$<CXX_COMPILER_ID:GNU>:--gc-sections>>)
 endif()
+if(WIN32 AND BUILD_SHARED_LIBS)
+  # scrum-309: the C API uses `#pragma GCC visibility` (gcc/clang only); MSVC
+  # exports nothing, so the shared lumice.dll has no usable symbols for the
+  # Python e2e/parity harness (ctypes) or any DLL consumer. Auto-export all
+  # symbols so the Windows DLL is loadable like the Unix .so/.dylib. (A proper
+  # explicit LUMICE_API __declspec export surface is a delivery concern; see
+  # backlog #133.)
+  set_target_properties(lumice PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+endif()
 
 # Shared builds: install the dylib next to the CLI (build/cmake_install/lib) so
 # the install tree is self-contained. The CLI's INSTALL_RPATH (@loader_path/lib,

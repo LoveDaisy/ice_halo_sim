@@ -59,7 +59,7 @@ _T_SELF_MARGIN = 0.02
 
 # Same gate as test_cuda_exit_seam_parity.py — keep the two harnesses in sync.
 _CUDA_AVAILABLE = (
-    platform.system() == "Linux" and os.environ.get("LUMICE_HAS_CUDA") == "1"
+    platform.system() in ("Linux", "Windows") and os.environ.get("LUMICE_HAS_CUDA") == "1"
 )
 
 pytestmark = pytest.mark.skipif(
