@@ -31,12 +31,10 @@ CrystalRenderer g_crystal_renderer;
 ThumbnailCache g_thumbnail_cache;
 LUMICE_Server* g_server = nullptr;
 ServerPoller g_server_poller;
-#if defined(__APPLE__)
-// Tracks the backend the live g_server was *constructed* for (not the env-resolved
-// actual). Startup uses LUMICE_CreateServer() → preferred_backend=CPU, so this is
-// false until the first Metal toggle. See MaybeReconstructServerForBackend.
-bool g_server_is_metal = false;
-#endif
+// Tracks whether the live g_server was *constructed* for a GPU backend (not the
+// env-resolved actual). Startup uses LUMICE_CreateServer() → preferred_backend=CPU,
+// so this is false until the first GPU toggle. See MaybeReconstructServerForBackend.
+bool g_server_is_gpu = false;
 PreviewViewport g_preview_vp;
 
 int g_programmatic_resize = 0;
@@ -659,16 +657,30 @@ static bool IsTrivialFilterSet(const GuiState& state) {
   return true;
 }
 
-#if defined(__APPLE__)
+// Resolve which GPU backend to request on this host: Metal on Apple, CUDA on
+// NVIDIA. Both are single-engine GPU routes (vs the CPU N-worker topology). Probes
+// the C API at runtime, so a host with neither resolves to CPU (the toggle that
+// drives this is hidden when no GPU is available — see panels.cpp).
+static int ResolveGpuBackend() {
+  if (LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL)) {
+    return LUMICE_BACKEND_METAL;
+  }
+  if (LUMICE_IsBackendAvailable(LUMICE_BACKEND_CUDA)) {
+    return LUMICE_BACKEND_CUDA;
+  }
+  return LUMICE_BACKEND_CPU;
+}
+
 // Reconstruct the server so its orchestration *topology* matches the requested
 // backend. Backend is a construction-time property — CPU is N-worker
-// queue-per-Simulator; Metal is a single engine with large dispatch (task-268.7) —
-// so it cannot be flipped on a live server (SetPreferredBackend on an N-worker
-// server would run Metal kernels inside the 12-worker structure, the 0.58× anti-
-// pattern this scrum removed). Toggling the "Use Metal GPU" checkbox therefore
-// tears the server down and rebuilds it with the new preferred_backend.
+// queue-per-Simulator; the GPU route (Metal/CUDA) is a single engine with large
+// dispatch (task-268.7) — so it cannot be flipped on a live server
+// (SetPreferredBackend on an N-worker server would run GPU kernels inside the
+// 12-worker structure, the 0.58× anti-pattern this scrum removed). Toggling the
+// "Use GPU" checkbox therefore tears the server down and rebuilds it with the new
+// preferred_backend.
 //
-// The accumulated image is intentionally discarded: CPU and Metal are
+// The accumulated image is intentionally discarded: CPU and GPU are
 // statistically-equivalent-but-not-identical sample streams, so mixing them in one
 // accumulation buffer is physically unsound — a clean reset is the correct
 // semantics, and a fresh re-converge is what a backend A/B comparison wants.
@@ -676,27 +688,26 @@ static bool IsTrivialFilterSet(const GuiState& state) {
 // Returns true iff the server was reconstructed; the caller must then force a full
 // consumer rebuild + fresh poller Start (the new server has no consumers).
 bool MaybeReconstructServerForBackend() {
-  bool want_metal = g_state.use_metal_backend;
-  if (want_metal == g_server_is_metal) {
+  bool want_gpu = g_state.use_gpu_backend;
+  if (want_gpu == g_server_is_gpu) {
     return false;  // backend unchanged — keep the live server
   }
-  GUI_LOG_INFO("[GUI] Backend toggle: reconstructing server ({} -> {})", g_server_is_metal ? "Metal" : "CPU",
-               want_metal ? "Metal" : "CPU");
+  GUI_LOG_INFO("[GUI] Backend toggle: reconstructing server ({} -> {})", g_server_is_gpu ? "GPU" : "CPU",
+               want_gpu ? "GPU" : "CPU");
   g_server_poller.Stop();  // synchronous: worker confirmed no longer touching the old server
   LUMICE_DestroyServer(g_server);
 
   LUMICE_ServerConfig cfg{};
-  cfg.num_workers = 0;  // 0 = PhysicalCoreCount (CPU); ignored on Metal (single engine)
+  cfg.num_workers = 0;  // 0 = PhysicalCoreCount (CPU); ignored on the GPU single engine
   cfg.sim_seed = 0;     // 0 = random — matches LUMICE_CreateServer() startup default
-  cfg.preferred_backend = want_metal ? LUMICE_BACKEND_METAL : LUMICE_BACKEND_CPU;
+  cfg.preferred_backend = want_gpu ? ResolveGpuBackend() : LUMICE_BACKEND_CPU;
   g_server = LUMICE_CreateServerEx(&cfg);
-  g_server_is_metal = want_metal;
+  g_server_is_gpu = want_gpu;
 
   // Re-apply per-server settings that died with the old instance (cf. main.cpp startup).
   LUMICE_SetLogLevel(g_server, static_cast<LUMICE_LogLevel>(g_state.core_log_level));
   return true;
 }
-#endif
 
 void DoRun() {
   if (!g_server) {
@@ -704,13 +715,10 @@ void DoRun() {
   }
   auto run_start = std::chrono::steady_clock::now();
 
-#if defined(__APPLE__)
   // Backend toggle reconstructs the server (per-backend orchestration topology).
   // A reconstructed server has no consumers, so force the full-rebuild path below.
+  // No-op (returns false) when the GPU toggle is off / unchanged or unavailable.
   bool backend_reconstructed = MaybeReconstructServerForBackend();
-#else
-  bool backend_reconstructed = false;
-#endif
 
   // Pre-check: will CommitConfig rebuild consumers (destroying old buffers)?
   // Only renderer layout changes (resolution/lens/view/visible/filter) trigger rebuild.

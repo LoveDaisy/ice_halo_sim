@@ -6,7 +6,7 @@ if(APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "Minimum macOS version")
 endif()
 
-project(Lumice VERSION 4.3.1)
+project(Lumice VERSION 4.3.2)
 
 set(CMAKE_VERBOSE_MAKEFILE OFF)
 
@@ -107,6 +107,48 @@ CPMAddPackage(
 )
 if(spdlog_ADDED)
   set_target_properties(spdlog PROPERTIES EXCLUDE_FROM_ALL YES)
+  # scrum-309: back-port the `#if FMT_USE_FLOAT128` guard on fmt's float128
+  # formatter so the bundled fmt compiles under nvcc on Windows. fmt v11 declares
+  # `formatter<detail::float128>` unguarded; when FMT_USE_FLOAT128=0 (no
+  # __float128) float128 aliases void, and nvcc's device (EDG) frontend on
+  # Windows eagerly instantiates formatter<void> → "reference to void is not
+  # allowed". Patch the cached source in place (idempotent; no-op once guarded,
+  # harmless on Linux where the specialization stays enabled). Done inline with
+  # CPM's ${spdlog_SOURCE_DIR} rather than a PATCH_COMMAND so the working
+  # directory is unambiguous.
+  set(_fmt_fh "${spdlog_SOURCE_DIR}/include/spdlog/fmt/bundled/format.h")
+  if(EXISTS "${_fmt_fh}")
+    file(READ "${_fmt_fh}" _fmt_c)
+    string(FIND "${_fmt_c}" "#if FMT_USE_FLOAT128\ntemplate <typename Char>\nstruct formatter<detail::float128" _fmt_guarded)
+    if(_fmt_guarded EQUAL -1)
+      string(REPLACE
+        "template <typename Char>\nstruct formatter<detail::float128, Char>\n    : detail::native_formatter<detail::float128, Char,\n                               detail::type::float_type> {};"
+        "#if FMT_USE_FLOAT128\ntemplate <typename Char>\nstruct formatter<detail::float128, Char>\n    : detail::native_formatter<detail::float128, Char,\n                               detail::type::float_type> {};\n#endif"
+        _fmt_c "${_fmt_c}")
+      file(WRITE "${_fmt_fh}" "${_fmt_c}")
+      message(STATUS "scrum-309: guarded bundled fmt formatter<float128> for nvcc/Windows")
+    endif()
+  endif()
+  if(MSVC AND LUMICE_CUDA_ENABLED)
+    # scrum-309 (Windows CUDA build): spdlog's CMake adds bare MSVC flags
+    # `/utf-8` and `/Zc:__cplusplus` as INTERFACE compile options on
+    # spdlog_header_only WITHOUT the `$<NOT:$<COMPILE_LANGUAGE:CUDA>>` guard it
+    # uses for /wd4251. When a CUDA (.cu) TU links spdlog, these `/`-prefixed
+    # flags reach nvcc, which on Windows misreads them as input file paths and
+    # dies ("nvcc fatal: A single input file is required for a non-link phase
+    # when an output file is specified"). Re-scope the interface options to the
+    # CXX language so they never reach nvcc; CMake still supplies the MSVC
+    # runtime to the CUDA host compiler via its own -Xcompiler handling.
+    get_target_property(_spdlog_io spdlog_header_only INTERFACE_COMPILE_OPTIONS)
+    if(_spdlog_io)
+      set(_spdlog_io_cxx "")
+      foreach(_opt IN LISTS _spdlog_io)
+        list(APPEND _spdlog_io_cxx "$<$<COMPILE_LANGUAGE:CXX>:${_opt}>")
+      endforeach()
+      set_target_properties(spdlog_header_only PROPERTIES
+        INTERFACE_COMPILE_OPTIONS "${_spdlog_io_cxx}")
+    endif()
+  endif()
 endif()
 
 # tl-expected: header-only expected<T,E> for C++17
@@ -321,9 +363,10 @@ endif()
 # - nvcc 11.6 (dev49 docker image) is the lowest supported toolchain;
 #   CUDA 12.x toolkits also work (still support compute_61).
 # - PTX floor = compute_61 (Pascal, 2016+); driver JITs to native sm on any
-#   GPU >= sm_61, including future cards. Benchmark-fidelity SASS for sm_89
-#   (Ada Lovelace, RTX 4060 Ti on dev49) is out of scope here and handled by
-#   the "CUDA delivery" cluster (scrum-cuda-backend-complete 296.6).
+#   GPU >= sm_61, including future cards.
+# - Multi-arch fatbin (scrum-310.2): on top of the compute_61 PTX floor, emit
+#   native SASS for the common modern cards so they skip first-launch JIT and
+#   the dev49 RTX 4060 (sm_89) bench runs native (not PTX-JIT'd) for fidelity.
 # - Mac/Windows host builds without nvcc keep BUILD_GUI/perf paths intact when
 #   LUMICE_CUDA_ENABLED is OFF (no enable_language(CUDA) at all).
 if(LUMICE_CUDA_ENABLED)
@@ -332,12 +375,29 @@ if(LUMICE_CUDA_ENABLED)
   set(CMAKE_CUDA_STANDARD 17)
   set(CMAKE_CUDA_STANDARD_REQUIRED ON)
   if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-    # `61-virtual` emits compute_61 PTX only (no SASS); driver JITs to native
-    # sm on any GPU >= sm_61. Owner decision 2026-06-25 (296.1): PTX floor
-    # widens forward-compat to Pascal/Turing/Ampere/Ada/Hopper/future cards;
-    # the older `86-virtual` default was an explore #294 dev49 probe artifact
-    # that silently excluded Turing/Pascal.
-    set(CMAKE_CUDA_ARCHITECTURES "61-virtual" CACHE STRING "CUDA archs")
+    # PTX floor `61-virtual` emits compute_61 PTX only (no SASS); the driver
+    # JITs it to native sm on any GPU >= sm_61, including future cards. Owner
+    # decision 2026-06-25 (296.1): PTX floor widens forward-compat to
+    # Pascal/Turing/Ampere/Ada/Hopper/future; the older `86-virtual` default
+    # was an explore #294 dev49 probe artifact that silently excluded
+    # Turing/Pascal.
+    set(_lumice_cuda_archs "61-virtual")
+    # Opportunistic native SASS for common cards: skips first-launch JIT and
+    # gives bench fidelity. Each real arch is gated on the toolkit version that
+    # introduced that sm, so older toolchains (dev49 docker 11.6, win-builder
+    # 11.7) still build — they just emit fewer `-real` archs and fall back to
+    # PTX JIT. Distribution/CI builds use a modern toolkit (CI: 12.6) and get
+    # the full fatbin. The PTX floor guarantees universal compat regardless.
+    if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "10.0")
+      list(APPEND _lumice_cuda_archs "75-real")  # Turing (RTX 20 / GTX 16)
+    endif()
+    if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.1")
+      list(APPEND _lumice_cuda_archs "86-real")  # Ampere (RTX 30)
+    endif()
+    if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
+      list(APPEND _lumice_cuda_archs "89-real")  # Ada Lovelace (RTX 40, dev49)
+    endif()
+    set(CMAKE_CUDA_ARCHITECTURES "${_lumice_cuda_archs}" CACHE STRING "CUDA archs")
   endif()
   list(APPEND lumice_core_src
     "${PROJ_SRC_DIR}/core/backend/cuda_trace_backend.cu")
@@ -386,6 +446,31 @@ endif()
 if(LUMICE_CUDA_ENABLED)
   target_link_libraries(lumice_obj PUBLIC CUDA::cudart)
   target_compile_definitions(lumice_obj PUBLIC LUMICE_CUDA_ENABLED=1)
+  if(MSVC)
+    # Windows CUDA build (scrum-309).
+    # spdlog/fmt require `/utf-8` (Unicode static_assert) and `/Zc:__cplusplus`
+    # (correct __cplusplus so fmt picks the right code path; without it the
+    # float128 native_formatter instantiates against `void`). The spdlog block
+    # above strips these from the CUDA TU because nvcc misreads the bare `/`
+    # flags as input file paths; re-supply them to the host compiler via
+    # -Xcompiler (nvcc forwards them to cl) so the CUDA host phase matches the
+    # plain-CXX build.
+    target_compile_options(lumice_obj PRIVATE
+      $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8,/Zc:__cplusplus>)
+    # fmt (bundled in spdlog) trips two MSVC×nvcc-only issues during the CUDA
+    # TU's device (EDG) frontend pass, which `/utf-8` (a cl flag) cannot reach:
+    #   FMT_UNICODE: EDG reads source under the system code page (936) on this
+    #     host, so fmt's "Unicode support requires /utf-8" static_assert fires.
+    #   FMT_USE_FLOAT128: nvcc emulates gcc on the host and defines
+    #     __SIZEOF_FLOAT128__, so fmt enables its float128 formatter, but the
+    #     MSVC backend has no __float128 (float128 aliases void) →
+    #     "reference to void is not allowed".
+    # Both features are unused on Windows (logs are ASCII; no float128); disable
+    # them for the CUDA TU. FMT_USE_FLOAT128 is already 0 under plain cl, so
+    # only FMT_UNICODE differs from the CXX TUs (acceptable: ASCII-only logs).
+    target_compile_definitions(lumice_obj PRIVATE
+      $<$<COMPILE_LANGUAGE:CUDA>:FMT_UNICODE=0 FMT_USE_FLOAT128=0>)
+  endif()
 endif()
 
 if(NOT MSVC)
@@ -414,6 +499,15 @@ if(NOT MSVC)
   target_link_options(lumice PUBLIC
     $<$<CONFIG:MinSizeRel>:$<$<CXX_COMPILER_ID:AppleClang,Clang>:-dead_strip>>
     $<$<CONFIG:MinSizeRel>:$<$<CXX_COMPILER_ID:GNU>:--gc-sections>>)
+endif()
+if(WIN32 AND BUILD_SHARED_LIBS)
+  # scrum-309: the C API uses `#pragma GCC visibility` (gcc/clang only); MSVC
+  # exports nothing, so the shared lumice.dll has no usable symbols for the
+  # Python e2e/parity harness (ctypes) or any DLL consumer. Auto-export all
+  # symbols so the Windows DLL is loadable like the Unix .so/.dylib. (A proper
+  # explicit LUMICE_API __declspec export surface is a delivery concern; see
+  # backlog #133.)
+  set_target_properties(lumice PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
 
 # Shared builds: install the dylib next to the CLI (build/cmake_install/lib) so

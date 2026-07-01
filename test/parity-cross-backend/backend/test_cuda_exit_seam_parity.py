@@ -63,7 +63,7 @@ _T_SELF_MARGIN = 0.02
 #      light up these tests as failures. Set LUMICE_HAS_CUDA=1 in the dev49
 #      docker run command (plan §6).
 _CUDA_AVAILABLE = (
-    platform.system() == "Linux" and os.environ.get("LUMICE_HAS_CUDA") == "1"
+    platform.system() in ("Linux", "Windows") and os.environ.get("LUMICE_HAS_CUDA") == "1"
 )
 
 pytestmark = pytest.mark.skipif(

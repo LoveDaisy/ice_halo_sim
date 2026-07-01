@@ -40,13 +40,11 @@ extern ThumbnailCache g_thumbnail_cache;
 extern LUMICE_Server* g_server;
 extern ServerPoller g_server_poller;
 extern PreviewViewport g_preview_vp;
-#if defined(__APPLE__)
-// Tracks the backend the live g_server was constructed for (see app.cpp). Reset to
-// false by any code that creates g_server directly via LUMICE_CreateServer (CPU
-// default) outside MaybeReconstructServerForBackend — e.g. the perf-test harness —
-// to keep the toggle-detection invariant honest.
-extern bool g_server_is_metal;
-#endif
+// Tracks whether the live g_server was constructed for a GPU backend (Metal/CUDA)
+// vs CPU (see app.cpp). Reset to false by any code that creates g_server directly
+// via LUMICE_CreateServer (CPU default) outside MaybeReconstructServerForBackend —
+// e.g. the perf-test harness — to keep the toggle-detection invariant honest.
+extern bool g_server_is_gpu;
 
 // Aspect ratio state
 extern int g_programmatic_resize;  // Counter: decremented by WindowSizeCallback, set by ApplyAspectRatio

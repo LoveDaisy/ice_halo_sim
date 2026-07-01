@@ -332,6 +332,47 @@ above was **half wrong**, corrected by profiling:
 > `LUMICE_DISPATCH_RAY_NUM=131072 pytest -m slow test/parity-cross-backend/backend/test_cuda_exit_seam_parity.py::test_cuda_single_ms_no_filter_parity`;
 > per-dispatch ΣY split via `bench_work/harness2.cpp` (dev49).
 
+#### Windows — win-builder GTX 1070 Ti (Pascal sm_61, 8 GB, driver 560.94, CUDA 11.7, MSVC 14.39) · legacy vs CUDA · 2026-06-30
+
+Cross-arch **data point** (scrum-309.3), NOT a gate. GTX 1070 Ti is an old (2017) mid-range
+Pascal card; the shipped PTX floor (compute_61) is JIT'd at runtime. GPU idle-gated
+(`nvidia-smi` 4% desktop, 0% Lumice before/after). **Interleaved** A,B,A,B per rep (legacy then
+CUDA each round, drift-proof), `ray_num`=20M, N=5, default dispatch (CUDA default=262144). Host =
+8C/16T x86-64 (legacy `multi` runs 8 workers; CUDA route is single-engine, `worker_count=1`). Route
+confirmed every CUDA run (`routing via CudaTraceBackend`, no fallback); legacy never routed GPU
+(`gpu_route=false`). Driver: custom interleaved harness (`Lumice.exe --benchmark` per backend;
+`bench_throughput.py` semantics, ray_num=20M override) — the committed harness is not Windows-path-
+hardened, so a thin interleaved wrapper was used instead.
+
+| config | legacy single | legacy multi | CUDA single | CUDA multi | CUDA/legacy (multi) |
+|---|---|---|---|---|---|
+| `bench_light_single_ms` (轻·单MS) | 0.47 M/s | 3.25 M/s | 31.8 M/s | **60.3 M/s** | 18.6× |
+| `ms_multi_crystal` (中·无filter) | 0.07 M/s | 0.22 M/s | 7.42 M/s | **11.5 M/s** | 52.6× |
+
+Raw per-run (median of N=5; CoV: light CUDA multi ~3.3%, ms_multi CUDA multi <1%, legacy <1% both):
+- light CUDA multi reps: 56.4 / 60.2 / 61.1 / 58.8 / 61.2 M/s; light legacy multi: 3.25 / 3.22 / 3.26 / 3.27 / 3.24 M/s.
+- ms_multi CUDA multi reps: 11.49 / 11.49 / 11.55 / 11.45 / 11.36 M/s; ms_multi legacy multi: 0.219 / 0.220 / 0.218 / 0.219 / 0.215 M/s.
+- Independently reproduced (separate interleaved run, N=3, CUDA `ray_num`=50M for a larger ~0.8 s / ~4.1 s
+  GPU window vs the 20M run's shorter window): CUDA multi 61.0 M/s (light) / 12.0 M/s (ms_multi),
+  legacy multi 3.16 / 0.22 M/s — within ~1–4% of the above, confirming the figures are not a
+  short-measurement-window artifact.
+
+- **Read the absolute M/s, NOT the ratio.** The 18.6×/52.6× ratios are **inflated by an unusually
+  weak legacy CPU baseline** on this host (light legacy multi = 3.25 M/s here vs 8.98 M/s on dev49 —
+  the win-builder CPU is ~2.8× slower per-core/thread), so the ratio is a property of a slow CPU, not
+  a fast GPU. **Cross-host numbers are not comparable** (read within this block only).
+- **Absolute CUDA throughput on the 1070 Ti is below the dev49 RTX 4060 Ti, as expected for the older
+  arch**: comparable light single-MS scene **60 M/s** (1070 Ti) vs ~87–114 M/s (4060 Ti @262144);
+  ms_multi 11.5 M/s vs ~19.7 M/s. Pascal lands ~0.5–0.7× the 4060 Ti — a sane cross-arch ordering.
+- The `single` column (2M-ray pass, JIT-warmup-dominated) reads lower than `multi` (20M-ray pass);
+  per the dev49 notes above, the GPU route has no true multi-worker parallelism, so the single/multi
+  gap is a warmup + ray-count artifact, and `multi` is the representative steady figure.
+- **Honesty caveats**: CPU model name unavailable (admin-gated `Win32_Processor`), so the CPU is
+  characterized only by core count (8C/16T from the `[BENCHMARK]` `cores`/`workers` fields). MSVC
+  version per the 309.1 build env, not re-verified at bench time (binary is the prebuilt CUDA-enabled
+  static `Lumice.exe` from 309.1). Variance is low (this is a dedicated, quiet machine), but only the
+  interleaved per-run numbers are reported — no cross-session averaging.
+
 ### macOS
 
 ```bash

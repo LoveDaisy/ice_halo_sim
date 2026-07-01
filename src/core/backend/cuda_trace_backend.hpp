@@ -24,6 +24,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "core/backend/trace_backend.hpp"
@@ -33,13 +34,20 @@ namespace lumice {
 class Logger;
 
 // Runtime probe for CUDA device availability. Returns true iff at least one
-// CUDA-capable device is enumerated by the driver (cudaGetDeviceCount > 0). Has
-// no side effects on the cached state besides the one-time probe; safe to call
-// from any thread. Result is cached after the first call (std::call_once), so
+// enumerated CUDA device meets the sm_61 PTX floor (a device below the floor,
+// or none/driver-missing, yields false → legacy CPU fallback, never a crash).
+// Safe to call from any thread; the probe runs once and is cached, so
 // subsequent calls are a plain memory read. Distinct from
 // CudaTraceBackend::BeginSession which sets the active device and allocates
 // session buffers — that is the heavy-weight path.
 bool CudaDeviceAvailable();
+
+// One-shot human-readable summary of the CUDA device probe: device count,
+// per-device name + compute capability, driver/runtime versions, and the
+// selection verdict (incl. the sm capability floor). Logged once at backend
+// routing time so an unavailable/degraded GPU is diagnosable from a single run
+// rather than a second release cycle. Cached alongside CudaDeviceAvailable().
+std::string CudaDeviceDiagnostics();
 
 // CudaLayerHandle — opaque per-layer handle. Mirrors MetalLayerHandle: the only
 // host-visible scalar produced per TraceLayer is the continuation count

@@ -54,7 +54,7 @@ _T_ENERGY_TOL = 0.05
 _T_SELF_MARGIN = 0.02
 
 _CUDA_AVAILABLE = (
-    platform.system() == "Linux" and os.environ.get("LUMICE_HAS_CUDA") == "1"
+    platform.system() in ("Linux", "Windows") and os.environ.get("LUMICE_HAS_CUDA") == "1"
 )
 
 pytestmark = pytest.mark.skipif(

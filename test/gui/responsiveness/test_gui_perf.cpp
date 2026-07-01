@@ -50,11 +50,11 @@ void StartPerfSimulation() {
 #if defined(__APPLE__)
   // Fresh CPU server (LUMICE_CreateServer default) — re-establish the toggle-
   // detection invariant before any DoRun. Perf scenarios run sequentially in one
-  // binary, so a prior Metal reconstruction may have left g_server_is_metal true.
-  gui::g_server_is_metal = false;
+  // binary, so a prior Metal reconstruction may have left g_server_is_gpu true.
+  gui::g_server_is_gpu = false;
 
   // scrum-268 G4: opt-in Metal through the REAL product path. When set, the
-  // use_metal_backend flag is applied just before each DoRun (NOT here): the
+  // use_gpu_backend flag is applied just before each DoRun (NOT here): the
   // LUMICE_PERF_CONFIG branch below calls DeserializeFromJson, which does
   // `state = GuiState{}` and would wipe an early assignment. DoRun then runs
   // MaybeReconstructServerForBackend, rebuilding into the single-engine Metal
@@ -84,7 +84,7 @@ void StartPerfSimulation() {
       if (gui::DeserializeFromJson(json_str, gui::g_state)) {
         fprintf(stderr, "[PERF] loaded LUMICE_PERF_CONFIG=%s\n", cfg_path);
 #if defined(__APPLE__)
-        gui::g_state.use_metal_backend = want_metal;  // set AFTER deserialize (it resets g_state)
+        gui::g_state.use_gpu_backend = want_metal;  // set AFTER deserialize (it resets g_state)
 #endif
         gui::DoRun();
         return;
@@ -110,7 +110,7 @@ void StartPerfSimulation() {
     r.exposure_offset = 0.0f;
   }
 #if defined(__APPLE__)
-  gui::g_state.use_metal_backend = want_metal;
+  gui::g_state.use_gpu_backend = want_metal;
 #endif
   gui::DoRun();
 }
