@@ -2330,18 +2330,25 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     }
     const size_t xyz_floats = static_cast<size_t>(impl_->img_w_) *
                               static_cast<size_t>(impl_->img_h_) * 3u;
+    // scrum-312 (third-clock drain): d_xyz_buf_ / d_landed_weight_ are PERSISTENT
+    // accumulators across batches. Zero ONLY on fresh allocation — the former
+    // per-call memset moved to ReadbackXyzAccum's post-drain reset, so device
+    // accumulation survives across BeginSession/EndSession within a drain window
+    // (the simulator drains on display cadence, not per batch). The buffer is
+    // always zero at a window start: first window via this alloc-zero, later
+    // windows via the previous drain's memset.
     if (impl_->d_xyz_buf_ == nullptr) {
       CheckCuda(cudaMalloc(&impl_->d_xyz_buf_, xyz_floats * sizeof(float)),
                 "BeginSession cudaMalloc d_xyz_buf");
+      CheckCuda(cudaMemset(impl_->d_xyz_buf_, 0, xyz_floats * sizeof(float)),
+                "BeginSession cudaMemset d_xyz_buf");
     }
-    CheckCuda(cudaMemset(impl_->d_xyz_buf_, 0, xyz_floats * sizeof(float)),
-              "BeginSession cudaMemset d_xyz_buf");
     if (impl_->d_landed_weight_ == nullptr) {
       CheckCuda(cudaMalloc(&impl_->d_landed_weight_, sizeof(float)),
                 "BeginSession cudaMalloc d_landed_weight");
+      CheckCuda(cudaMemset(impl_->d_landed_weight_, 0, sizeof(float)),
+                "BeginSession cudaMemset d_landed_weight");
     }
-    CheckCuda(cudaMemset(impl_->d_landed_weight_, 0, sizeof(float)),
-              "BeginSession cudaMemset d_landed_weight");
 
     // Per-ray rotation matrix device buffer (cont_cap_ × 9) is allocated
     // lazily in EnsureSessionBuffers, not here — n_roots is unknown until the
@@ -2959,22 +2966,31 @@ bool CudaTraceBackend::HasDeviceXyzAccum() const { return true; }
 // same batch returns zeros on the second call (by design — the buffers are
 // cleared after the first read).
 void CudaTraceBackend::ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight) {
-  if (!impl_->in_session_) {
-    throw BackendUnavailableError("CudaTraceBackend::ReadbackXyzAccum called outside session");
+  // scrum-312 (third-clock drain): the XYZ accumulator is persistent and drained
+  // on display cadence, which the simulator triggers BETWEEN per-batch sessions
+  // (generation-change / producer-pause / run-exit flush). Gate on the buffer
+  // being allocated, not on in_session_ — the persisted buffer is valid to read
+  // after EndSession(keep_persistent_buffers=true).
+  if (impl_->d_xyz_buf_ == nullptr) {
+    throw BackendUnavailableError("CudaTraceBackend::ReadbackXyzAccum called before any session allocated the buffer");
   }
   // Defensive guards (Risk 4 / 务实评审 Minor 3): nullptr device buffer or
   // mismatched host destination would silently corrupt memory on D2H copy.
   assert(impl_->d_xyz_buf_ != nullptr && "d_xyz_buf_ unallocated — BeginSession failed?");
   assert(impl_->d_landed_weight_ != nullptr);
   assert(xyz.data != nullptr && "ReadbackXyzAccum: caller must pre-allocate xyz.data");
-  assert(static_cast<uint32_t>(xyz.width) == impl_->img_w_ &&
-         static_cast<uint32_t>(xyz.height) == impl_->img_h_ &&
-         "ReadbackXyzAccum: xyz dimensions mismatch session render config");
+  // scrum-312: pixel count comes from the CALLER (xyz.width/height), NOT from
+  // impl_->img_w_/img_h_ — those are cleared to 0 by EndSession/Reset (see the
+  // "always reset" block), and the third-clock drain runs BETWEEN sessions, so
+  // reading impl_ dims here would copy 0 bytes and yield a black image. The
+  // simulator sets xyz.width/height from the accumulation window (= the render
+  // dims the persistent d_xyz_buf_ was allocated for, constant within a run).
+  assert(xyz.width > 0 && xyz.height > 0 && "ReadbackXyzAccum: caller must set xyz.width/height");
 
   // waitUntilCompleted-equivalent — all preceding TraceLayer kernel work must
   // finalize before the D2H copy. Mirrors Metal's cmd-buffer wait.
   cudaDeviceSynchronize();
-  const size_t pix = static_cast<size_t>(impl_->img_w_) * static_cast<size_t>(impl_->img_h_);
+  const size_t pix = static_cast<size_t>(xyz.width) * static_cast<size_t>(xyz.height);
   CheckCuda(cudaMemcpy(xyz.data, impl_->d_xyz_buf_, pix * 3u * sizeof(float),
                        cudaMemcpyDeviceToHost),
             "ReadbackXyzAccum D2H d_xyz_buf");

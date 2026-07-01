@@ -443,6 +443,16 @@ class TraceBackend {
     landed_weight = 0.0f;
   }
 
+  // scrum-312 (third-clock drain): true = the device XYZ accumulator PERSISTS
+  // across per-batch BeginSession/EndSession cycles (BeginSession does not zero
+  // it), so the simulator may decouple readback from the trace clock and drain
+  // on display cadence (generation-change / producer-pause / run-exit) instead
+  // of every batch — eliminating the per-batch synchronous D2H readback tax on
+  // discrete-memory backends (CUDA). False = the legacy per-batch drain path
+  // (BeginSession zeroes, readback+enqueue every batch); correct + cheap on
+  // unified-memory backends (Metal), which stay here until 312.4.
+  virtual bool SupportsThirdClockDrain() const { return false; }
+
   // Close the session. Releases per-session backend state. Calling any
   // method other than BeginSession after EndSession is undefined.
   virtual void EndSession() = 0;
