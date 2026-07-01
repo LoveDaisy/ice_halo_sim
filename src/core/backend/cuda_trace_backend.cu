@@ -3019,8 +3019,9 @@ void CudaTraceBackend::ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight)
   CheckCuda(cudaMemcpy(&lw, impl_->d_landed_weight_, sizeof(float), cudaMemcpyDeviceToHost),
             "ReadbackXyzAccum D2H d_landed_weight");
   landed_weight += lw;
-  // Clear for the next batch — second call in the same batch returns zeros
-  // (per-batch one-shot contract; see header comment).
+  // Reset the accumulator so the NEXT drain window starts from zero (scrum-312:
+  // this is now the per-window reset — BeginSession no longer zeroes; a second
+  // drain with no intervening accumulation returns zeros).
   CheckCuda(cudaMemset(impl_->d_xyz_buf_, 0, pix * 3u * sizeof(float)),
             "ReadbackXyzAccum cudaMemset d_xyz_buf");
   CheckCuda(cudaMemset(impl_->d_landed_weight_, 0, sizeof(float)),

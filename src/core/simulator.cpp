@@ -1017,6 +1017,12 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
 // `stop_` is checked between TraceLayer/Recombine calls. On stop the session
 // is closed via EndSession (RAII-equivalent) but no SimData is emplaced.
 void Simulator::DrainDeviceXyz(TraceBackend* backend) {
+  // Drain-OR-settle the pending third-clock window: with a live backend this
+  // reads the device XYZ accumulator back into a SimData and enqueues it; with a
+  // null backend (task-282 fallback killed it mid-window) it enqueues a degenerate
+  // credit-only SimData instead — so the sim_scene_cnt_ books stay balanced even
+  // though the device image is unrecoverable. Callers should NOT assume a real
+  // image always lands.
   // Takes a pointer (not a reference like SimulateOneWavelengthWithBackend)
   // because the Run() flush sites pass `backend.get()`, and `backend` CAN be null
   // there: the task-282 fallback resets it to null mid-Run() on
