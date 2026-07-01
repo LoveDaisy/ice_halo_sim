@@ -4,6 +4,11 @@
 
 所有命令假设工作目录为项目根目录。
 
+> **范围**：本指南保留稳定的操作手册 + **当前 canonical** 吞吐参考。历史 per-run 实测详录
+> （带日期的表、原始 reps、各 effort 的方法论）放在 git-ignored 的 `scratchpad/perf-results-log.md`
+> ——新 per-run 数字追加那里，只有成为新 canonical 锚时才提升进本文档。远程机器上的 CUDA build +
+> parity/正确性验证是另一件事——见 [`gpu-remote-cuda-build-testing.md`](gpu-remote-cuda-build-testing.md)。
+
 ## 日志级别
 
 CLI 基准测试和 GUI 性能测试均支持日志级别选项。
@@ -53,9 +58,15 @@ CLI 基准测试和 GUI 性能测试均支持日志级别选项。
 并行吞吐量。输出两行 JSON：
 
 ```
-[BENCHMARK] {"mode": "single", "workers": 1, "cores": 8, "rays": 2000000, "wall_sec": 8.5, "rays_per_sec": 235294.1}
-[BENCHMARK] {"mode": "multi", "workers": 8, "cores": 8, "rays": 10000000, "wall_sec": 2.4, "rays_per_sec": 4166666.7}
+[BENCHMARK] {"mode": "single", "workers": 1, "cores": 8, "rays": 2000000, "wall_sec": 8.51, "setup_sec": 0.01, "active_sec": 8.5, "rays_per_sec": 235294.1, "rate_basis": "steady"}
+[BENCHMARK] {"mode": "multi", "workers": 8, "cores": 8, "rays": 10000000, "wall_sec": 0.6, "setup_sec": 0.02, "active_sec": 0.58, "rays_per_sec": 17241379.3, "rate_basis": "steady"}
 ```
+
+`rays_per_sec` 是 `active_sec`（从首条光线追踪到 IDLE 的窗口）上的**稳态追踪率**，
+**不是** `rays / wall_sec`。`setup_sec`（server alloc + 场景生成 + 首 dispatch 延迟）从分母
+剔除；`rate_basis` 记录产出该率的路径（`steady` / `active_short` / `wall_fallback`）。这个
+setup-剔除修复（task-fix-throughput-bench-honesty）对整个 run 只 ~0.2s 的快后端很重要——折进
+setup 会把它们的 rays_per_sec 压低 >30%。
 
 **术语**："workers"指 simulator 线程（执行光线追踪的线程）。每个 server 实例还有 2 个
 内部线程（场景生成 + 数据消费），总线程数 = workers + 2。
@@ -68,37 +79,137 @@ benchmark 模式的行为差异：
   （单 worker pass 为 1，多 worker pass 为 `hardware_concurrency()`）
 - **单 worker pass 光线数减少**：2M（而非配置原始值），以限制 CI 耗时
 - **不写图片**：跳过 `SaveRenderResults`，`wall_sec` 纯反映模拟耗时
-- **100ms 轮询间隔**（默认 1s）：将计时量化误差降至 ~0.1s
+- **5ms 轮询间隔**（默认 1s）：把 IDLE 检测量化误差压到几毫秒（曾是 100ms，那单独就能给快 run 的
+  wall time 加上一整个轮询间隔）
 
-### 最新实测结果（每次更新追加）
+### Benchmark 场景注册表（canonical 吞吐场景）
 
-> 每次重跑 bench 把最新数字追加这里。记**绝对 rays/sec**(不止倍数)、各 config 都有、附硬件摘要。**跨硬件数字不可比**——只在同一 host 块内读,别拿 Mac 行比 Linux 行。来源:`scripts/bench_throughput.py`(默认 dispatch,`ray_num`=20M,N≥5,CoV>15% 重跑 N=9)。
+> **吞吐比较的单一真源。** 永远引用本表里的真实 config——绝不臆造场景名。（本表存在是因为文档
+> 曾引用不存在的 `ms3_multi_crystal_complex_filter` 并对标无法复现的数字；见
+> task-fix-throughput-bench-honesty。）`scripts/bench_throughput.py` 跑 Metal-可比子集；两者保持同步。
 
-#### Mac — Apple M2 Max(12 核 8P+4E,32GB,macOS 14.7)· legacy vs Metal · 2026-06-28
+测量口径：**引擎** = `Lumice --benchmark` multi pass，setup-剔除稳态率；**GUI** =
+`gui_test perf_test` steady_state，无限 budget，reconstruct 路径。基线分母永远是 **legacy CPU**
+（GUI 真实路径）——绝不用 `cpu_backend`。下方 `Metal vs legacy` 比值是 M2 Max、2026-06-19 回归锚
+（`scratchpad/task-fix-throughput-bench-honesty/data/`）；任何吞吐改动前后须同会话重测。
 
-| config | legacy single | legacy multi | Metal single | Metal multi | Metal/legacy(multi) |
+| config（真实文件） | regime | rays / MS / filter | lens / Metal 可比 | 角色 | Metal vs legacy（锚） |
 |---|---|---|---|---|---|
-| `bench_light_single_ms`（轻·单MS） | 573 K/s | 4.62 M/s | **27.8 M/s** | **30.6 M/s** | 6.62× |
-| `ms_multi_crystal`（中·无filter） | 94 K/s | 759 K/s | 7.08 M/s | 7.66 M/s | 10.08× |
-| `ms_multi_crystal_complex_filter`（重·标准） | 333 K/s | 1.54 M/s | 12.4 M/s | 12.8 M/s | 8.33× |
-| `ms_multi_crystal_filtered_bd`（重·bd） | 368 K/s | 1.62 M/s | 13.7 M/s | 14.0 M/s | 8.59× |
+| `bench_light_single_ms.json` | 轻·单MS · 512×256 | 10M / 1 / 无 | dual_fisheye_EA ✅ | 轻场景吞吐基准（bench 专用，勿因 e2e 改动）；**512×256 落 GPU L2，系统性高估 GPU 优势**；真实分辨率用 `--res-sweep`（见"分辨率是一等吞吐维度"） | 引擎 ~1.7× / GUI ~1.8× |
+| `ms_multi_crystal.json` | 中·无filter | 2M / 2 / 无 | dual_fisheye_EA ✅ | 无 culling 中等基准；`--res-sweep` 第二代表场景（看场景依赖） | 引擎 ~2.0× / GUI ~2.2× |
+| `ms_multi_crystal_complex_filter.json` | 重·标准 | 2M / 2 / complex | dual_fisheye_EA ✅ | **G1 + G4 主基准** | 引擎 ~8.1× / GUI ~9.5× |
+| `ms_multi_crystal_filtered_bd.json` | 重·bd | 2M / 2 / bd | dual_fisheye_EA ✅ | G1 第二基准 | 引擎 ~10.1× |
+| `ms3_mixed_pyramid_heavy.json` | 最重·棱锥 | 5M / 3 / 4×raypath | dual_fisheye_EA ✅ | register-pressure 上界 | 引擎 **~5.5×**（M2 Max，2026-06-24；GUI 互证 ~5.7×）。注：legacy single pass ~274s 超出 `bench_throughput.py` 的 `RUN_TIMEOUT_SEC`，故该场景仍从自动跑中排除——基线靠手动大 timeout 单测取得 |
+| `halo_22.json` | 轻·单MS | 10M / 1 / 无 | **fisheye_EA（单）→ CLI Metal 回退** | **e2e 资产，勿改**；legacy-only 轻基准 | N/A（Metal 不兼容此投影；轻·Metal 用 `bench_light_single_ms`） |
 
-- **Metal 在可比的轻·单MS 场景已 ~28–30 M/s,达到/超过 25 M/s 硬件能力目标。** 证明这个标尺在本 codebase 够得着,给 CUDA 一个同引擎目标(4060 Ti 与 M2 Max GPU 算力同级);CUDA 剩余差距是执行模型,不是 kernel 根本极限。
+注意：
+- **上表 4 个 light/mid/heavy 主基准（bench_light / ms_multi / complex_filter / filtered_bd）都是
+  512×256**（`ms3_mixed_pyramid_heavy` 例外，为 2048×1024）。512×256 的 XYZ 累加 buffer（W×H×3
+  float = 1.5MB）落在典型 GPU 的 L2 内，**系统性高估 GPU 吞吐**——真实 GUI 默认渲染 2048×1024
+  （16× 像素，24MB buffer，越 L2）。**跨分辨率数字不可比；报吞吐必须带分辨率**。真实分辨率吞吐用
+  `bench_throughput.py --res-sweep`（分辨率轴，默认 dispatch，隔离单变量）——详见下方"分辨率是一等
+  吞吐维度"。
+- dispatch 甜点是**后端 + 分辨率依赖**：Metal 32768 / CUDA 262144 是 **512×256** 下的甜点；**分辨率
+  升高时 CUDA 最优 dispatch 显著上移**（2048×1024 下 ~786K–2M，因 per-batch readback 摊薄）。小
+  dispatch 饿死 GPU（512/2048 = 0.2–0.8× legacy）。
+- `bench_throughput.py` 每 run 把 `ray_num` override 到大值（temp config，不动 committed 文件），
+  使稳态窗口足够长而稳定。
+- **⚠️ 第三时钟 drain 路径（CUDA，scrum-312）用 `multi_wall` 列，不用 `multi_med`**：`multi_med`
+  （binary 的 steady `rays_per_sec`）靠 `sim_ray_num` 进度采样，而第三时钟 drain 稀疏 → 进度粗跳
+  （首个 drain 前 `sim_ray_num` 恒 0）→ steady window 把大部分 tracing 误算进 setup → **系统性假低**
+  （实测 2048 报 22M，真值 39M）。`bench_throughput.py` 已加 `multi_wall = rays/wall_sec`（robust，
+  免疫 drain 粒度），两列背离时**信 `multi_wall`**。per-batch 路径（legacy/Metal/CUDA N=1）两列一致，
+  不受影响。
 
-#### Linux — dev49 RTX 4060 Ti(AMD Zen5 9950X 16C/32T host）· legacy vs CUDA · 2026-06-29
+#### 分辨率是一等吞吐维度（device-fused XYZ 累加 → cost 随 buffer vs GPU L2）
 
-scrum-304.2 buffer-persist 后,GPU idle-gate(跑前 `nvidia-smi` 实测 0%),`scripts/bench_throughput.py` 默认 dispatch(=32768),ray_num=20M,N≥5(CoV>15% 重跑 N=9)。
+> **报任何 GPU 吞吐数字必须带渲染分辨率；跨分辨率不可比。** 这不是二阶细节——它常主导轻场景的 GPU
+> 吞吐（轻场景 trace 便宜，累加/回读占大头）。
 
-| config | legacy single | legacy multi | CUDA single | CUDA multi | CUDA/legacy(multi) |
+机制：device-fused XYZ 累加（scrum-302）把每条出射光线在 **trace kernel 内** `atomicAdd` 进
+W×H×3 float 图像 buffer（12 B/px）。cost 随 buffer 相对 GPU L2 变化：
+
+- buffer ≤ L2（512×256 = 1.5MB，落多数 GPU 的 ~2MB L2）→ 累加走 cache，快。
+- buffer ≫ L2（2048×1024 = 24MB）→ 每次 atomicAdd 打 DRAM，DRAM 带宽绑定，慢。膝在 L2 边界
+  （~512→768），越 L2 后随分辨率平滑衰减（非二元断崖）。
+
+CUDA 路线还有 **per-batch 同步 readback** 税（`ReadbackXyzAccum` 每 SimBatch 一次
+`cudaDeviceSynchronize` + 阻塞 24MB PCIe D2H + memset），scrum-312 已把它解耦到显示节奏（"第三时钟"，
+`seam-design.md` §4.8）——见下方 canonical 结果。Metal 无此税（`StorageModeShared` 统一内存 + 延迟等）。
+
+**流程要求**：
+
+1. GPU 吞吐用 `bench_throughput.py --res-sweep` 扫多档分辨率（默认 `256×128 … 2048×1024` 六档，2:1，
+   跨 L2 膝两侧），而非只报单点。脚本每档在 temp config 里 override `render[].resolution`（committed
+   文件不动，同 ray_num override 机制）。默认扫 `bench_light_single_ms`（轻，累加/回读主导）+
+   `ms_multi_crystal`（稍重，看场景依赖），`--res-list` / `--res-configs` 可覆盖。至少覆盖 **512×256
+   （引擎天花板 / L2-resident）+ 2048×1024（GUI 真实体验）** 两点。
+2. 与竞品 / 硬件能力对标（下方 25M bar）时**对齐分辨率**——我方历史 512×256 数字是 L2-resident 上界，
+   非用户体验。
+3. 数字入表**必标分辨率**（现有表默认 512×256，除 `ms3_mixed_pyramid_heavy`）。sweep 的**曲线数据不入
+   committed 文件**（按机器/会话变），入表的是按 N≥5 CoV 协议正式产出的 canonical 点。
+
+#### 验收标尺：硬件能力，不是"× legacy CPU"
+
+> **`× legacy CPU` 比值是地板，不是成功标尺。** 打过 legacy 只是必要门槛，绝非目标——GPU 后端可以
+> "× legacy 赢"却只用 1–2% 利用率（scrum-304 就踩过这坑：一个报成"~1.7× legacy 16 核"的 CUDA 数其实
+> 是重于可比口径的场景上饿着的 GPU）。GPU 后端真正的标尺是**这块卡的硬件能力**，锚到可比工作负载 +
+> 外部参照。
+
+**已注册硬件能力目标**（绝对、场景锚——判 GPU 吞吐时引用这个，而非"× legacy"）：
+
+| 场景 | 可比负载 | 硬件能力目标 | 来源 |
+|---|---|---|---|
+| `bench_light_single_ms`（轻·单MS） | 单晶 + 单 MS + 无续传 | **4060 Ti ≥ 25M rays/s** | 竞品实测——轻·单MS 是 apples-to-apples 对比 |
+
+- 永远拿**可比**场景对标外部目标——别拿重场景（多晶/多 MS，如 `ms_multi_crystal`）的数去对标单晶单散射。
+  逐光线工作量差一个数量级。
+- GPU 数远低于硬件能力目标时，**无论对 legacy 比值多少都不算成功**；查利用率（CUDA 可用 nsys active%，
+  见下）+ 机制，别收尾。
+- 到不了目标，交付物必须是 **profiler 落地的机制解释**（时间花哪了），不是"GPU 非天然胜"的黑盒话术。
+- **⚠️ 分辨率对齐**：25M bar 的竞品渲染分辨率未知；我方 `bench_light_single_ms` 是 **512×256
+  （L2-resident，上界）**。真实 GUI 默认 2048×1024 下同卡同场景吞吐掉 3.6–5×（见"分辨率是一等吞吐
+  维度"）。判定是否达标前必须**对齐分辨率**——别拿 512×256 的 L2-resident 数字宣称达 bar。用
+  `bench_throughput.py --res-sweep` 取真实分辨率对标点。
+
+### 当前 canonical 吞吐结果
+
+> 当前权威参考数字。**跨硬件数字不可比**——只在同一 host 块内读。历史 per-run 详录（带日期的表、原始
+> reps、各 effort 方法论）在 `scratchpad/perf-results-log.md`。第三时钟路径读 `multi_wall`。
+
+#### scrum-312 第三时钟 canonical · `--res-sweep` · `multi_wall` · 2026-07-01
+
+**背景**：readback 从 trace 时钟解耦到显示节奏第三时钟（seam-design §4.8）。真实 GUI 分辨率
+2048×1024 下 readback/per-batch-copy 税被摊薄。`bench_light_single_ms`（轻·单MS，L2/readback 主导），
+per-resolution `multi_wall`：
+
+| host / backend | 256×128 | 512×256 | 1024×512 | 1536×768 | **2048×1024** |
 |---|---|---|---|---|---|
-| `bench_light_single_ms`（轻·单MS） | 744 K/s | 8.98 M/s | **35.2 M/s** | **55.9 M/s** | 6.23× |
-| `ms_multi_crystal`（中·无filter） | 126 K/s | 1.44 M/s | 9.67 M/s | 13.7 M/s | 9.55× |
-| `ms_multi_crystal_complex_filter`（重·标准） | 471 K/s | 6.26 M/s | 38.0 M/s | 60.3 M/s | 9.63× |
-| `ms_multi_crystal_filtered_bd`（重·bd） | 510 K/s | 6.73 M/s | 39.1 M/s | 61.9 M/s | 9.19× |
+| dev49 RTX 4060Ti (Ada) CUDA | 116 M/s | 110 M/s | 92 M/s | 65 M/s | **39.2 M/s** |
+| win-builder GTX 1070Ti (Pascal) CUDA | 77 M/s | 69 M/s | 45 M/s | 40 M/s | **33.5 M/s** |
+| Mac M-series Metal | 28.1 M/s | 30.3 M/s | 31.2 M/s | 35.1 M/s | **32.3 M/s** |
+| dev49 legacy CPU (baseline) | 9.0 M/s | 8.8 M/s | 8.4 M/s | 7.7 M/s | 6.9 M/s |
+| Mac legacy CPU (baseline) | 5.1 M/s | 4.8 M/s | 4.7 M/s | 4.8 M/s | 4.7 M/s |
 
-- **竞品线 25M 已达到/超过**:可比轻·单MS 场景 **35–56 M/s**,≥ 25M 竞品目标,也 > Mac Metal 参照(28–30M)。仅 buffer-persist(304.2)就到这了;之前"0.16–0.40× / 1.5M"的悲观是**测量假象**——ad-hoc 非 idle-gate 在重场景 `ms_multi_crystal` 上测、用错标尺。务必 idle-gate + 用 canonical harness + 可比场景。
-- **GPU 尚未满载**:nsys 轻场景(50M plain run)GPU active 17.6%(含 JIT/setup);benchmark steady 窗口 active ≈ 43%。trace kernel 占 GPU 95%。满载天花板 ≈ 129M rays/s(50M / 386ms kernel),现在 56M ≈ 43% → **还剩 ~2.3× headroom**,锁在每-dispatch host 串行(默认流 + per-layer 同步;explore-303 找到,304.2 未动)。要拿这部分=async-engine 工作,**现由 active% 数据支撑,非猜测**。
-- 注:竞品确切配置(光谱/max_hits)未知,我们场景是合理的单晶单MS 代理(prism,D65,max_hits 7)。需精确 apples-to-apples 时对齐。
+**第三时钟在 2048×1024 的增益**（vs per-batch drain 旧值，interleaved 同 binary 隔离 drain cadence）：
+
+| host / backend | 旧（per-batch） | 第三时钟 | 增益 | 机制 |
+|---|---|---|---|---|
+| 4060Ti (Ada, 32MB L2) CUDA | 28 M/s | 39 M/s | **1.4×** | Ada L2 大→旧值已 L2-resident，税主要是 per-batch D2H readback |
+| 1070Ti (Pascal, 2MB L2) CUDA | 12.5 M/s | 33.5 M/s | **2.7×** | 兼有 L2 溢出 + readback 税；第三时钟消 readback（L2 残留） |
+| M-series Metal（统一内存） | 11 M/s | 32.3 M/s | **~3×** | 无 PCIe readback；per-batch 24MB memset+memcpy(×76 batch≈3.6GB) 被摊薄 |
+
+**要点**：
+- **三种硬件（CUDA-Ada / CUDA-Pascal / Metal）一致确证第三时钟在真实 GUI 分辨率显著提速**；增益随
+  "旧值里 per-batch readback/copy 占比"放大。
+- **Metal 曲线近平**（28→35 M/s 跨 6 档），第三时钟使 Metal 分辨率-鲁棒（旧路径每 batch 全幅
+  memset+memcpy 在高分辨率是真成本，非仅 CUDA readback）。**推翻早先"Metal 统一内存零收益"判断**。
+- 正确性：CUDA parity 10/10 @4060Ti + 10/10 @1070Ti/sm_61；Metal parity 14/14（含 batch-invariance
+  = drain-cadence 独立性）。
+- win-builder 1070Ti 未列 vs-legacy（CPU 弱，比值虚高，读绝对值）；`multi_med` 列在第三时钟下失真已弃用
+  （用 `multi_wall`）。
+- 重场景 `ms_multi_crystal`（trace 主导，readback 占比小）增益温和：4060Ti 2048 = 14.9 M/s、1070Ti =
+  7.3 M/s、Metal ≈ 17 M/s@256（Mac 热噪大，N=9 后仍抖，需稳定机复测 canonical）。
 
 ### macOS
 
@@ -143,7 +254,11 @@ Measure-Command { .\Lumice.exe -f bench_config.json -o . 2>&1 | Out-Null } | Sel
 
 ### Linux / CUDA（dev49）
 
-CUDA 吞吐在 dev49（RTX 4060 Ti，Linux，CUDA docker）测。**禁止每个 task 自己写 bench 脚本**——用 committed harness `scripts/bench_throughput.py`（已支持 CUDA env 覆盖、跑 canonical 场景集含可比的 `bench_light_single_ms`、确认 GPU 路由、median+CoV）。详见英文版 `performance-testing.md` 同名节 + `explore-cuda-step2-derisk/TOOLCHAIN.md`。
+CUDA 吞吐在 dev49（RTX 4060 Ti，Linux，CUDA docker）测。两机完整 build + parity/正确性 recipe
+（源码同步、docker/BuildTools 工具链、`LUMICE_HAS_CUDA` un-skip 闸、parity battery）见
+[`gpu-remote-cuda-build-testing.md`](gpu-remote-cuda-build-testing.md)。**禁止每个 task 自己写 bench
+脚本**——用 committed harness `scripts/bench_throughput.py`（已支持 CUDA env 覆盖、跑 canonical 场景集
+含可比的 `bench_light_single_ms`、确认 GPU 路由、median+CoV）。
 
 ```bash
 # dev49 CUDA docker 内（先 build -DLUMICE_CUDA_ENABLED=ON -DBUILD_SHARED_LIBS=ON）
@@ -155,15 +270,19 @@ LUMICE_BENCH_BACKENDS=legacy,cuda \
 # dev49 共享机：严格吞吐须 idle 窗口；用完立刻清自己进程，别占机。
 ```
 
-**⭐ 验收标尺 = 硬件能力,不是"× legacy CPU"。** 打过 legacy 只是必要门槛（floor），不是成功——GPU 可以"× legacy 赢"却只用 1–2% 利用率（scrum-304 踩过这坑）。GPU 后端真正的标尺是**这块卡的硬件能力**，锚到**可比工作负载 + 外部参照**：
+#### GPU active% 诊断（仅 CUDA——Metal/Mac 无同口径 CLI 路径）
 
-| 场景 | 可比负载 | 硬件能力目标 | 来源 |
-|---|---|---|---|
-| `bench_light_single_ms`（轻·单MS） | 单晶 + 单 MS + 无续传 | **4060 Ti ≥ 25M rays/s** | 竞品实测 |
+单看吞吐数字无法判断 GPU 是被喂饱还是饿着。CUDA/dev49 上把 bench 配一个 `nsys` capture 读 GPU 利用率
+——这是区分"真赢"与"GPU 空转还打过 CPU 的假赢"的诊断。profiler 已在 dev49 de-risk（nsys 2023.4.4 +
+ncu 2024.1.1；安装 + 用法见 `explore-cuda-step2-derisk/TOOLCHAIN.md`）。active% **非硬性普适门**——
+macOS 上 Metal 无同口径 CLI active% 路径，故跨平台验收判据仍是上方绝对硬件能力目标；active% 是 CUDA 侧
+佐证"为何这个数字高或低"的诊断。
 
-- 别拿重场景（多晶/多 MS）的数对标单晶单散射——逐光线工作量差一个数量级。
-- GPU 数远低于硬件能力目标时,**无论对 legacy 比值多少都不算成功**;查利用率（CUDA 可用 nsys active%；Mac/Metal 无同口径 CLI 路径,故 active% 非硬性普适门,跨平台判据仍是绝对能力目标）+ 机制,别收尾。
-- 到不了目标,交付物必须是 **profiler 落地的机制解释**（时间花哪了），不是"GPU 非天然胜"的黑盒话术。
+```bash
+# GPU active% = (sum of cuda_gpu_kern_sum) / wall，取自一次代表性 run 的 nsys timeline。
+# 低 active%（如 1–2%）=> GPU 饿着 => 吞吐数字是 host-bound，非硬件能力结果。
+nsys profile --trace=cuda --stats=true -o /tmp/rep <Lumice ...>   # 见 TOOLCHAIN.md
+```
 
 ### CI 自动化基准测试
 
@@ -179,7 +298,7 @@ summary 表包含硬件上下文和双模式结果：
 | Cores | 逻辑核心数（`hardware_concurrency()`） |
 | Workers | 多 worker pass 使用的 simulator 线程数 |
 | Single rps | 单 worker rays/sec（单核效率） |
-| Multi rps | 多 worker rays/sec（并行吞吐���） |
+| Multi rps | 多 worker rays/sec（并行吞吐量） |
 | Efficiency | `multi_rps / (single_rps × workers)`——并行扩展效率 |
 
 **注意**：`Single rps` 是跨平台比较最有意义的指标，因为它自然包含了 IPC、
@@ -210,6 +329,44 @@ push 到 `main` 的 benchmark 结果会通过
 - 仅存储 `main` 分支 push 的历史；功能分支 benchmark 仅在 per-run summary 表中显示
 - CI runner 硬件可能不经通知就更换，导致绝对 rps 指标出现阶跃变化
 - 告警阈值是全局的（所有指标共享 200%）；Efficiency 回归低于阈值时需人工巡检图表
+
+### 运行时调优旋钮
+
+| 环境变量 | 默认 | 说明 |
+|----------|------|------|
+| `LUMICE_DISPATCH_RAY_NUM` | **262144**（CUDA）/ **32768**（Metal）/ 128（CPU） | task-268.4 旋钮；GPU 每-dispatch 网格大小。scrum-268.6 定 Metal 默认 32768；scrum-306.2 定 CUDA 默认 262144（都是实测甜点）。摊薄 GPU kernel 启动 + per-batch host 开销；小 dispatch 饿死 GPU（512/2048 = 0.2–0.8× legacy，128 在大 ray_num 下 hang）。设为 2 的幂对齐。server 启动时读取，运行中改无效。与 `LUMICE_COMMIT_RAY_NUM` 独立——喂大 GPU 而不牺牲 GUI 节奏。**分辨率依赖**：262144/32768 甜点测于 **512×256**；分辨率升高最优上移（2048×1024 下 CUDA ~786K–2M，实测 262144→~1M = 2.25×），因 per-batch readback buffer 16× 大、需更大 dispatch 摊薄。分辨率变时重标（见"分辨率是一等吞吐维度"）。 |
+| `LUMICE_COMMIT_RAY_NUM` | 128 | task-268.4：`ConsumeData` 内 SimData-to-consumer 提交粒度。更小提交 = 更细 GUI 快照节奏（与 dispatch 大小无关）。仅 backend exit-seam 路径（legacy CPU SimData 绕过 chunker）。**⚠️ GPU device-fused 路线（Metal/CUDA，`HasDeviceXyzAccum()`==true）上是 no-op**：该路径产出 `xyz_pixel_data_` 而非 `outgoing_d_`，commit chunker（`server.cpp:809`）被跳过；device readback 频率实由 `LUMICE_DISPATCH_RAY_NUM`（每 SimBatch 一次 `ReadbackXyzAccum`）决定，**非本旋钮**。（曾误用本旋钮做"readback 无关"判据，无效。） |
+| `LUMICE_BATCH_RAY_NUM` | （已废弃） | 仅作 `LUMICE_COMMIT_RAY_NUM` 的向后兼容回退。task-268.4 前它同时兼作 dispatch 和 commit 粒度。scrum-268：DISPATCH 拆分是 GPU 吞吐的主驱动；现在设 `LUMICE_BATCH_RAY_NUM` 只控 commit 节奏、不控 GPU dispatch 大小。优先用上面两个拆分 env。 |
+| `LUMICE_TRACE_BACKEND` | 未设（legacy CPU） | trace 后端选择：未设 = legacy CPU；`metal` = Metal GPU 后端；`cuda` = CUDA GPU 后端；`cpu_backend` = SoA CPU 后端。 |
+| `LUMICE_DISABLE_DEVICE_GEN` | 未设（device-gen 开） | 逃生舱：强制 GPU 后端走 **host** root-ray 生成。device root-gen（GPU PCG root-ray 供给）在合格层（single-crystal-per-ci，`tri_count ≤ 64`）是**默认**。仅在镜像 host `std::mt19937` 流的严格-一致 parity 测试里设 `1`（device PCG 流无法与之对齐）。每个后端实例构造时读一次。 |
+
+> #### ⚠️ `LUMICE_DISPATCH_RAY_NUM` 是 GPU 专属旋钮——比较中绝不施给 legacy（scrum-306.1/306.4）
+>
+> `LUMICE_DISPATCH_RAY_NUM` 定 GPU 引擎的 per-dispatch 网格。**CUDA 总能量 dispatch-不变**
+> （实测：ΣY = 261.29 M ±0.001% 跨 dispatch ∈ {128, 8192, 32768, 131072}，`dual_fisheye_ref`）——
+> 即 GPU 结果在任何 dispatch 下都正确。**legacy（CPU）总能量 dispatch-不不变**：同旋钮（override
+> legacy 的 `kDefaultRayNum`=128）使 legacy ΣY 波动 **−5%..+13%**——这是 per-batch 波长采样的
+> Monte-Carlo 方差，**非 bug**（默认 128 收敛正确；见 per-run log 里 scrum-306.7）。
+>
+> **须避免的历史误诊**：为探 CUDA 而全局设 `LUMICE_DISPATCH_RAY_NUM=131072`，使
+> `test_cuda_single_ms_no_filter_parity` 报 `energy_ratio=0.8922`——曾被**误归为"CUDA
+> exit-cap/cont-cap 静默丢能量"**（原 scrum-304.3 backlog 条）。这不是 CUDA bug：旋钮漏进 legacy
+> 参考 run、膨胀了**分母**（legacy_Y），`261.29/292.87 = 0.892`。parity harness 现对 `legacy` 后端
+> 剥掉 `LUMICE_DISPATCH_RAY_NUM`（`test/e2e/capi_runner.py`，scrum-306.4），使 oracle 停在 canonical
+> 默认，`energy_ratio` 只反映 GPU 后端正确性（复验：@131072 0.8922 FAIL → 1.0063 PASS）。
+> `bench_throughput.py` 已把 legacy 排除出 dispatch sweep（`DISPATCH_PLAN["legacy"]=[None]`）。
+>
+> **过程教训**：304.3 的正确性断言只以 backlog 一行存在、无保留脚本 → 一个错诊断（CUDA）传播且无法
+> 对齐。正确性断言必须落进 tracked 文档 + 可复现 recipe。复现：容器 `pip install pytest numpy`，
+> `LUMICE_HAS_CUDA=1`，然后
+> `LUMICE_DISPATCH_RAY_NUM=131072 pytest -m slow test/parity-cross-backend/backend/test_cuda_exit_seam_parity.py::test_cuda_single_ms_no_filter_parity`；
+> 逐 dispatch ΣY 拆分用 `bench_work/harness2.cpp`（dev49）。
+
+**GPU device root-gen（scrum-260）**：GPU 后端上，root 光线（取向 / 方向 / 入射点）经 counter-based
+PCG 流 `(gen_seed, gen_ray_base + tid)` 在 device 上生成，替代 host 预生成 + 上传。这是默认路径；对
+legacy 的统计等价性由 slow-e2e parity harness 验证（`ds_corr ≥ 0.99`）。device-gen ON/OFF 吞吐刻画
+（Metal，phase-1）——默认 batch 下 device-gen 对单晶单散射是净亏、对多晶多 worker 是净赚，大 batch 才
+有强赢——记录在 `scratchpad/perf-results-log.md`。
 
 ## 2. GUI 性能测试（隐藏窗口，无 VSync）
 

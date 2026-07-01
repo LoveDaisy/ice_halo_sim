@@ -5,6 +5,13 @@ benchmarking to real-world GUI interaction testing.
 
 All commands assume the working directory is the project root.
 
+> **Scope**: this guide holds the stable how-to + the **current canonical** throughput
+> reference. Historical per-run measurement dumps (dated tables, raw reps, per-effort
+> methodology notes) live in the git-ignored `scratchpad/perf-results-log.md` — append new
+> per-run numbers there, and promote a number here only when it becomes the new canonical
+> anchor. CUDA build + parity/correctness on the remote boxes is a separate concern — see
+> [`gpu-remote-cuda-build-testing.md`](gpu-remote-cuda-build-testing.md).
+
 ## Log Level
 
 Both CLI benchmark and GUI perf test support log level options.
@@ -97,9 +104,9 @@ Behavior differences in benchmark mode:
 Measurement basis: **engine** = `Lumice --benchmark` multi pass, setup-excluded
 steady rate; **GUI** = `gui_test perf_test` steady_state, infinite budget,
 reconstruct path. Baseline denominator is always **legacy CPU** (the GUI's real
-path) — never `cpu_backend`. All ratios below measured on **M2 Max, 2026-06-19**
-(`scratchpad/task-fix-throughput-bench-honesty/data/`); treat as the regression
-anchor, re-measure same-session before/after any throughput change.
+path) — never `cpu_backend`. The `Metal vs legacy` ratios below are the M2 Max,
+2026-06-19 regression anchor (`scratchpad/task-fix-throughput-bench-honesty/data/`);
+re-measure same-session before/after any throughput change.
 
 > **Why two measurement paths (engine vs GUI) coexist — do not collapse them.**
 > `Lumice --benchmark` (engine ceiling) and `gui_test perf_test` (GUI-fidelity)
@@ -111,45 +118,77 @@ anchor, re-measure same-session before/after any throughput change.
 > (`scripts/bench_throughput.py`) both invoke it — and is **not** redundant with
 > the GUI path, so it is not a retire candidate. (Evaluated & settled 2026-06-24;
 > the now-removed `LumiceGUI --perf-bench` flag *was* a genuine orphan, retired in
-> #292.) Revisit only if a GUI-regime gate ever becomes the sole throughput门.
+> #292.)
 
-| config（真实文件） | regime | rays / MS / filter | lens / Metal 可比 | 角色 | Metal vs legacy（实测基线） |
+| config (real file) | regime | rays / MS / filter | lens / Metal-comparable | role | Metal vs legacy (anchor) |
 |---|---|---|---|---|---|
-| `bench_light_single_ms.json` | 轻·单MS · 512×256 | 10M / 1 / 无 | dual_fisheye_EA ✅ | 轻场景吞吐基准（bench 专用，勿因 e2e 改动）；**512×256 落 GPU L2，系统性高估 GPU 优势**；真实分辨率用 `--res-sweep`（见"分辨率是一等吞吐维度"） | 引擎 ~1.7× / GUI ~1.8× |
-| `ms_multi_crystal.json` | 中·无filter | 2M / 2 / 无 | dual_fisheye_EA ✅ | 无 culling 中等基准；`--res-sweep` 第二代表场景（看场景依赖） | 引擎 ~2.0× / GUI ~2.2× |
-| `ms_multi_crystal_complex_filter.json` | 重·标准 | 2M / 2 / complex | dual_fisheye_EA ✅ | **G1 + G4 主基准** | 引擎 ~8.1× / GUI ~9.5× |
-| `ms_multi_crystal_filtered_bd.json` | 重·bd | 2M / 2 / bd | dual_fisheye_EA ✅ | G1 第二基准 | 引擎 ~10.1× |
-| `ms3_mixed_pyramid_heavy.json` | 最重·棱锥 | 5M / 3 / 4×raypath | dual_fisheye_EA ✅ | register-pressure 上界 | 引擎 **~5.5×**（2026-06-24 同会话 M2 Max：legacy multi 46.1K/s、single 7.3K/s；Metal multi 255K/s、single 245K/s）；GUI legacy ~48.7K → Metal ~5.7×（互证）。**注**：legacy single pass ~274s，超出 `bench_throughput.py` 的 `RUN_TIMEOUT_SEC`，故该场景仍从自动跑中排除——基线靠手动大 timeout 单测取得 |
-| `halo_22.json` | 轻·单MS | 10M / 1 / 无 | **fisheye_EA（单）→ CLI Metal 回退** | **e2e 资产，勿改**；legacy-only 轻基准 | N/A（Metal 不兼容此投影；轻·Metal 用 `bench_light_single_ms`） |
+| `bench_light_single_ms.json` | light·single-MS · 512×256 | 10M / 1 / none | dual_fisheye_EA ✅ | light-scene throughput baseline (bench-only, do NOT change for e2e); **512×256 fits GPU L2, systematically overstates the GPU advantage**; use `--res-sweep` for real resolution (see "resolution is a first-class throughput dimension") | engine ~1.7× / GUI ~1.8× |
+| `ms_multi_crystal.json` | mid·no-filter | 2M / 2 / none | dual_fisheye_EA ✅ | no-culling mid baseline; second `--res-sweep` scene (scene-dependence check) | engine ~2.0× / GUI ~2.2× |
+| `ms_multi_crystal_complex_filter.json` | heavy·standard | 2M / 2 / complex | dual_fisheye_EA ✅ | **G1 + G4 primary baseline** | engine ~8.1× / GUI ~9.5× |
+| `ms_multi_crystal_filtered_bd.json` | heavy·bd | 2M / 2 / bd | dual_fisheye_EA ✅ | G1 second baseline | engine ~10.1× |
+| `ms3_mixed_pyramid_heavy.json` | heaviest·pyramid | 5M / 3 / 4×raypath | dual_fisheye_EA ✅ | register-pressure upper bound | engine **~5.5×** (M2 Max, 2026-06-24; GUI corroborated ~5.7×). Note: legacy single pass ~274s exceeds `bench_throughput.py`'s `RUN_TIMEOUT_SEC`, so this scene stays excluded from the auto run — its baseline is taken via a manual large-timeout unit test |
+| `halo_22.json` | light·single-MS | 10M / 1 / none | **fisheye_EA (single) → CLI Metal falls back** | **e2e asset, do NOT change**; legacy-only light baseline | N/A (Metal incompatible with this projection; use `bench_light_single_ms` for light·Metal) |
 
 Notes:
-- **上表 4 个 light/mid/heavy 主基准（bench_light / ms_multi / complex_filter / filtered_bd）都是 512×256**（`ms3_mixed_pyramid_heavy` 例外，为 2048×1024）。512×256 的 XYZ 累加 buffer（W×H×3 float = 1.5MB）落在典型 GPU 的 L2 内，**系统性高估 GPU 吞吐**——真实 GUI 默认渲染 2048×1024（16× 像素，24MB buffer，越 L2）。**跨分辨率数字不可比；报吞吐必须带分辨率**。真实分辨率吞吐用 `bench_throughput.py --res-sweep`（分辨率轴，默认 dispatch，隔离单变量）——详见下方"分辨率是一等吞吐维度"。
-- The dispatch sweet spot is **backend- and resolution-dependent**: Metal 32768 / CUDA 262144 是 **512×256** 下的甜点；**分辨率升高时 CUDA 最优 dispatch 显著上移**（2048×1024 下 ~786K–2M，因 per-batch readback 摊薄——见"分辨率"小节 + Runtime Tuning Knobs）。小 dispatch 饿死 GPU（512/2048 = 0.2–0.8× legacy）。
+- **The 4 primary light/mid/heavy baselines (bench_light / ms_multi / complex_filter /
+  filtered_bd) are all 512×256** (`ms3_mixed_pyramid_heavy` is the exception, at 2048×1024).
+  A 512×256 XYZ accumulation buffer (W×H×3 float = 1.5 MB) fits in a typical GPU's L2 and
+  **systematically overstates GPU throughput** — the real GUI default renders 2048×1024 (16×
+  pixels, 24 MB buffer, exceeds L2). **Cross-resolution numbers are not comparable; always
+  report throughput with its resolution.** For real-resolution throughput use
+  `bench_throughput.py --res-sweep` (resolution axis, default dispatch, single variable
+  isolated) — see "resolution is a first-class throughput dimension" below.
+- The dispatch sweet spot is **backend- and resolution-dependent**: Metal 32768 / CUDA 262144
+  are the **512×256** sweet spots; **as resolution rises the CUDA optimum shifts up markedly**
+  (~786K–2M at 2048×1024, because it amortizes the per-batch readback — see the resolution
+  subsection + Runtime Tuning Knobs). Small dispatches starve the GPU (512/2048 = 0.2–0.8×
+  legacy).
 - `bench_throughput.py` overrides `ray_num` to a large value per run (temp config,
   committed files untouched) so the steady window is long enough to be stable.
-- **⚠️ 第三时钟 drain 路径（CUDA，scrum-312）用 `multi_wall` 列，不用 `multi_med`**：`multi_med`（binary 的 steady `rays_per_sec`）靠 `sim_ray_num` 进度采样，而第三时钟 drain 稀疏 → 进度粗跳（首个 drain 前 `sim_ray_num` 恒 0）→ steady window 把大部分 tracing 误算进 setup → **系统性假低**（实测 2048 报 22M，真值 39M）。`bench_throughput.py` 已加 `multi_wall = rays/wall_sec`（robust，免疫 drain 粒度），两列背离时**信 `multi_wall`**。per-batch 路径（legacy/Metal/CUDA N=1）两列一致（细进度），不受影响。
+- **⚠️ The third-clock drain path (CUDA, scrum-312) uses the `multi_wall` column, not
+  `multi_med`**: `multi_med` (the binary's steady `rays_per_sec`) samples `sim_ray_num`
+  progress, but the sparse third-clock drain makes that progress jump coarsely (`sim_ray_num`
+  stays 0 until the first drain) → the steady window mis-counts most tracing as setup →
+  **systematic under-report** (2048 read 22M, true 39M). `bench_throughput.py` adds
+  `multi_wall = rays/wall_sec` (robust, immune to drain granularity); when the two columns
+  diverge, **trust `multi_wall`**. Per-batch paths (legacy / Metal / CUDA N=1) agree on both
+  columns (fine-grained progress) and are unaffected.
 
-#### 分辨率是一等吞吐维度（device-fused XYZ 累加 → cost 随 buffer vs GPU L2）
+#### Resolution is a first-class throughput dimension (device-fused XYZ accumulation → cost scales with buffer vs GPU L2)
 
-> **报任何 GPU 吞吐数字必须带渲染分辨率；跨分辨率不可比。** 这不是二阶细节——它常主导轻场景的 GPU 吞吐（轻场景 trace 便宜，累加/回读占大头）。
+> **Every GPU throughput number MUST carry its render resolution; cross-resolution numbers are
+> not comparable.** This is not a second-order detail — it often dominates GPU throughput on
+> light scenes (light scenes trace cheaply, so accumulation/readback dominate).
 
-机制：device-fused XYZ 累加（scrum-302）把每条出射光线在 **trace kernel 内** `atomicAdd` 进 W×H×3 float 图像 buffer（12 B/px）。cost 随 buffer 相对 GPU L2 变化：
+Mechanism: device-fused XYZ accumulation (scrum-302) has every exit ray `atomicAdd` into a
+W×H×3 float image buffer (12 B/px) **inside the trace kernel**. Cost scales with the buffer
+relative to GPU L2:
 
-- buffer ≤ L2（512×256 = 1.5MB，落多数 GPU 的 ~2MB L2）→ 累加走 cache，快。
-- buffer ≫ L2（2048×1024 = 24MB）→ 每次 atomicAdd 打 DRAM，DRAM 带宽绑定，慢。膝在 L2 边界（~512→768），越 L2 后随分辨率平滑衰减（非二元断崖）。
+- buffer ≤ L2 (512×256 = 1.5 MB, fits most GPUs' ~2 MB L2) → accumulation is cached, fast.
+- buffer ≫ L2 (2048×1024 = 24 MB) → each atomicAdd hits DRAM, DRAM-bandwidth-bound, slow. The
+  knee is at the L2 boundary (~512→768), decaying smoothly with resolution past it (not a
+  binary cliff).
 
-**实测分辨率惩罚**（2026-07-01，同机同 binary，仅改分辨率，`bench_light_single_ms` 场景，`--benchmark` 稳态 multi）：
+The CUDA route also carries a **per-batch synchronous readback** tax (`ReadbackXyzAccum`: one
+`cudaDeviceSynchronize` + blocking 24 MB PCIe D2H + memset per SimBatch), which was decoupled to
+the display cadence (the "third clock", `seam-design.md` §4.8) in scrum-312 — see the canonical
+results below. Metal has no such tax (`StorageModeShared` unified memory + deferred wait).
 
-- **1070Ti CUDA**：512×256 = 61 M/s → 2048×1024 = 12.5 M/s（**5×**；含 CUDA per-batch 同步 readback 税，见下）。
-- **M2Max Metal**：512×256 = 29 M/s → 2048×1024 = 8.2 M/s（**3.6×**；Metal 统一内存无 readback 税，纯 in-kernel 累加）。
+**Process requirements**:
 
-CUDA 的额外惩罚来自 **per-batch 同步 readback**（`ReadbackXyzAccum` 每 SimBatch 一次 `cudaDeviceSynchronize` + 阻塞 24MB PCIe D2H + memset），可用大 dispatch 摊薄（2048 下 262144→~1M dispatch = 12.5→~30 M/s）。这是对 `seam-design.md` §4.8"回读走第三时钟"的偏离——详见 `scratchpad/backlog.md`「per-batch 同步 readback 税 + XYZ 累加 L2 溢出」条。Metal 无此税（`StorageModeShared` + 延迟等）。
-
-**流程要求**：
-
-1. GPU 吞吐用 `bench_throughput.py --res-sweep` 扫多档分辨率（默认 `256×128 … 2048×1024` 六档，2:1，跨 L2 膝两侧），而非只报单点。脚本每档在 temp config 里 override `render[].resolution`（committed 文件不动，同 ray_num override 机制）。默认扫 `bench_light_single_ms`（轻，累加/回读主导）+ `ms_multi_crystal`（稍重，看场景依赖），`--res-list` / `--res-configs` 可覆盖。至少覆盖 **512×256（引擎天花板 / L2-resident）+ 2048×1024（GUI 真实体验）** 两点。
-2. 与竞品 / 硬件能力对标（下方 25M bar）时**对齐分辨率**——我方历史 512×256 数字是 L2-resident 上界，非用户体验。
-3. 数字入表**必标分辨率**（现有表默认 512×256，除 `ms3_mixed_pyramid_heavy`）。sweep 的**曲线数据不入 committed 文件**（按机器/会话变），入表的是按 N≥5 CoV 协议正式产出的 canonical 点。
+1. Measure GPU throughput with `bench_throughput.py --res-sweep` across resolutions (default six
+   steps `256×128 … 2048×1024`, 2:1, straddling the L2 knee), not a single point. The script
+   overrides `render[].resolution` in a temp config (committed files untouched, same mechanism as
+   the `ray_num` override). Default sweeps `bench_light_single_ms` (light, accumulation/readback
+   dominated) + `ms_multi_crystal` (heavier, scene-dependence check); `--res-list` / `--res-configs`
+   override. Cover at least **512×256 (engine ceiling / L2-resident) + 2048×1024 (real GUI
+   experience)**.
+2. When comparing against a competitor / hardware capability (the 25M bar below), **align
+   resolution** — our historical 512×256 numbers are an L2-resident upper bound, not the user
+   experience.
+3. Numbers entering a table **must state their resolution** (existing tables default to 512×256,
+   except `ms3_mixed_pyramid_heavy`). Sweep curve data does NOT enter committed files (varies by
+   machine/session); what enters a table is a canonical point produced under the N≥5 CoV protocol.
 
 #### Acceptance yardstick: hardware capability, NOT just "× legacy CPU"
 
@@ -166,7 +205,7 @@ not "× legacy", when judging GPU throughput):
 
 | scene | comparable workload | hardware-capability target | source |
 |---|---|---|---|
-| `bench_light_single_ms` (轻·单MS) | single crystal, single MS, no continuation | **≥ 25M rays/s on RTX 4060 Ti** | competitor product (measured) — the light single-MS scene is the apples-to-apples comparison |
+| `bench_light_single_ms` (light·single-MS) | single crystal, single MS, no continuation | **≥ 25M rays/s on RTX 4060 Ti** | competitor product (measured) — the light single-MS scene is the apples-to-apples comparison |
 
 - Always benchmark the **comparable** scene against an external target — do NOT
   cite a heavy multi-crystal / multi-MS number (e.g. `ms_multi_crystal`) when
@@ -179,27 +218,24 @@ not "× legacy", when judging GPU throughput):
 - If a target genuinely cannot be reached, the acceptance artifact must be a
   **profiler-grounded mechanism explanation** (where the time goes), not a black-box
   "GPU doesn't naturally win" claim.
-- **⚠️ 分辨率对齐**：25M bar 的竞品渲染分辨率未知；我方 `bench_light_single_ms` 是
-  **512×256（L2-resident，上界）**。真实 GUI 默认 2048×1024 下同卡同场景吞吐掉 3.6–5×
-  （见"分辨率是一等吞吐维度"）。判定是否达标前必须**对齐分辨率**——别拿 512×256 的
-  L2-resident 数字宣称达 bar。用 `bench_throughput.py --res-sweep` 取真实分辨率对标点。
+- **⚠️ Align resolution**: the 25M bar's competitor render resolution is unknown; our
+  `bench_light_single_ms` is **512×256 (L2-resident, upper bound)**. On the same card / scene the
+  real GUI default 2048×1024 drops throughput 3.6–5× (see "resolution is a first-class throughput
+  dimension"). Align resolution before judging the bar — don't claim the bar is met from a 512×256
+  L2-resident number. Use `bench_throughput.py --res-sweep` for the real-resolution comparison point.
 
-### Latest measured results (per-run log)
+### Canonical throughput results (current)
 
-> Append the newest numbers here each time the bench is re-run. Record **absolute
-> rays/sec** (not just × legacy), per config, with a hardware summary. **Cross-hardware
-> numbers are NOT comparable** — always read within one host block; never compare a
-> Mac row against a Linux row. Source: `scripts/bench_throughput.py` (default dispatch,
-> `ray_num`=20M, N≥5 reps, N=9 re-run on CoV>15%).
->
-> ⚠️ **Third-clock路径读 `multi_wall`（rays/wall_sec），不读 `multi_med`**（后者在稀疏
-> drain 下失真，见「分辨率是一等吞吐维度」）。下方数字均为 `multi_wall`。
+> The current authoritative reference numbers. **Cross-hardware numbers are NOT comparable** —
+> read within one host block. Historical per-run dumps (dated tables, raw reps, per-effort
+> methodology) live in `scratchpad/perf-results-log.md`. Third-clock path reads `multi_wall`.
 
-#### scrum-312 第三时钟 canonical · `--res-sweep` · `multi_wall` · 2026-07-01
+#### scrum-312 third-clock canonical · `--res-sweep` · `multi_wall` · 2026-07-01
 
-**背景**：readback 从 trace 时钟解耦到显示节奏第三时钟（seam-design §4.8）。真实 GUI 分辨率
-2048×1024 下 readback/per-batch-copy 税被摊薄。`bench_light_single_ms`（轻·单MS，L2/readback 主导），
-per-resolution `multi_wall`：
+**Context**: readback decoupled from the trace clock to the display-cadence third clock
+(seam-design §4.8). At the real GUI resolution 2048×1024 the readback / per-batch-copy tax is
+amortized. `bench_light_single_ms` (light·single-MS, L2/readback dominated), per-resolution
+`multi_wall`:
 
 | host / backend | 256×128 | 512×256 | 1024×512 | 1536×768 | **2048×1024** |
 |---|---|---|---|---|---|
@@ -209,228 +245,30 @@ per-resolution `multi_wall`：
 | dev49 legacy CPU (baseline) | 9.0 M/s | 8.8 M/s | 8.4 M/s | 7.7 M/s | 6.9 M/s |
 | Mac legacy CPU (baseline) | 5.1 M/s | 4.8 M/s | 4.7 M/s | 4.8 M/s | 4.7 M/s |
 
-**第三时钟在 2048×1024 的增益**（vs per-batch drain 旧值，interleaved 同 binary 隔离 drain cadence）：
+**Third-clock gain at 2048×1024** (vs the old per-batch drain, interleaved same-binary to isolate
+the drain cadence):
 
-| host / backend | 旧（per-batch） | 第三时钟 | 增益 | 机制 |
+| host / backend | old (per-batch) | third clock | gain | mechanism |
 |---|---|---|---|---|
-| 4060Ti (Ada, 32MB L2) CUDA | 28 M/s | 39 M/s | **1.4×** | Ada L2 大→旧值已 L2-resident，税主要是 per-batch D2H readback |
-| 1070Ti (Pascal, 2MB L2) CUDA | 12.5 M/s | 33.5 M/s | **2.7×** | 兼有 L2 溢出 + readback 税；第三时钟消 readback（L2 残留） |
-| M-series Metal（统一内存） | 11 M/s | 32.3 M/s | **~3×** | 无 PCIe readback；per-batch 24MB memset+memcpy(×76 batch≈3.6GB) 被摊薄 |
+| 4060Ti (Ada, 32MB L2) CUDA | 28 M/s | 39 M/s | **1.4×** | large Ada L2 → old value already L2-resident; the tax is mainly per-batch D2H readback |
+| 1070Ti (Pascal, 2MB L2) CUDA | 12.5 M/s | 33.5 M/s | **2.7×** | both L2 overflow + readback tax; third clock removes the readback (L2 residual) |
+| M-series Metal (unified memory) | 11 M/s | 32.3 M/s | **~3×** | no PCIe readback; per-batch 24MB memset+memcpy (×76 batch ≈ 3.6GB) amortized |
 
-**要点**：
-- **三种硬件（CUDA-Ada / CUDA-Pascal / Metal）一致确证第三时钟在真实 GUI 分辨率显著提速**；增益随"旧值里 per-batch readback/copy 占比"放大。
-- **Metal 曲线近平**（28→35 M/s 跨 6 档），第三时钟使 Metal 分辨率-鲁棒（旧路径每 batch 全幅 memset+memcpy 在高分辨率是真成本，非仅 CUDA readback）。**推翻早先"Metal 统一内存零收益"判断**。
-- 正确性：CUDA parity 10/10 @4060Ti + 10/10 @1070Ti/sm_61；Metal parity 14/14（含 batch-invariance = drain-cadence 独立性）。
-- win-builder 1070Ti 未列 vs-legacy（CPU 弱，比值虚高，读绝对值）；`multi_med` 列在第三时钟下失真已弃用（用 `multi_wall`）。
-- 重场景 `ms_multi_crystal`（trace 主导，readback 占比小）增益温和：4060Ti 2048 = 14.9 M/s、1070Ti = 7.3 M/s、Metal ≈ 17 M/s@256（Mac 热噪大，N=9 后仍抖）。
-
-#### Mac — Apple M2 Max (12-core: 8P+4E, 32 GB, macOS 14.7) · legacy vs Metal · 2026-06-28
-
-| config | legacy single | legacy multi | Metal single | Metal multi | Metal/legacy (multi) |
-|---|---|---|---|---|---|
-| `bench_light_single_ms` (轻·单MS) | 573 K/s | 4.62 M/s | **27.8 M/s** | **30.6 M/s** | 6.62× |
-| `ms_multi_crystal` (中·无filter) | 94 K/s | 759 K/s | 7.08 M/s | 7.66 M/s | 10.08× |
-| `ms_multi_crystal_complex_filter` (重·标准) | 333 K/s | 1.54 M/s | 12.4 M/s | 12.8 M/s | 8.33× |
-| `ms_multi_crystal_filtered_bd` (重·bd) | 368 K/s | 1.62 M/s | 13.7 M/s | 14.0 M/s | 8.59× |
-
-- **Metal on the comparable light single-MS scene already hits ~28–30 M/s — at/above
-  the 25 M/s hardware-capability target.** This proves the bar is reachable on this
-  codebase and gives CUDA a same-engine target (the RTX 4060 Ti is comparable raw
-  compute to the M2 Max GPU); the remaining CUDA gap is execution-model, not a
-  fundamental kernel limit.
-
-#### Linux — dev49 RTX 4060 Ti (AMD Zen5 9950X 16C/32T host) · legacy vs CUDA · 2026-06-29
-
-After scrum-304.2 buffer-persist, GPU-idle-gated (`nvidia-smi` 0% verified before run),
-`scripts/bench_throughput.py` default dispatch (=32768), ray_num=20M, N≥5 (N=9 on CoV>15%).
-
-| config | legacy single | legacy multi | CUDA single | CUDA multi | CUDA/legacy (multi) |
-|---|---|---|---|---|---|
-| `bench_light_single_ms` (轻·单MS) | 744 K/s | 8.98 M/s | **35.2 M/s** | **55.9 M/s** | 6.23× |
-| `ms_multi_crystal` (中·无filter) | 126 K/s | 1.44 M/s | 9.67 M/s | 13.7 M/s | 9.55× |
-| `ms_multi_crystal_complex_filter` (重·标准) | 471 K/s | 6.26 M/s | 38.0 M/s | 60.3 M/s | 9.63× |
-| `ms_multi_crystal_filtered_bd` (重·bd) | 510 K/s | 6.73 M/s | 39.1 M/s | 61.9 M/s | 9.19× |
-
-##### Rebench at the new CUDA default (262144) — scrum-306.3 (2026-06-29, dev49 idle-gated, 20M rays, 3 reps median)
-
-| config | legacy multi | CUDA multi (default=262144) | CUDA/legacy | vs old 32768 default |
-|---|---|---|---|---|
-| `bench_light_single_ms` (轻·单MS) | 6.2 M/s | **~87 M/s** | ~14× | 56→87 (1.6×) |
-| `ms_multi_crystal` (中·无filter) | 0.93 M/s | ~19.7 M/s | ~21× | 13.7→19.7 (1.4×) |
-| `ms_multi_crystal_complex_filter` (重·标准) | 3.2 M/s | ~178 M/s | ~56× | 60→178 (3.0×) |
-| `ms_multi_crystal_filtered_bd` (重·bd) | 2.7 M/s | ~232 M/s | ~85× | 62→232 (3.7×) |
-
-- **Out-of-box CUDA improved 1.4–3.7× by the new default dispatch + exit-cap** (scrum-306.2). The
-  filtered configs run *faster* than the light scene (178/232 vs 87 M/s) because the filter
-  terminates most rays early (rays/s counts root rays) — NOT a higher kernel throughput; the light
-  single-MS scene (~87 M/s here, ~114 M/s in the dedicated quiet-machine interleaved sweep) is the
-  honest comparable-load figure.
-- **⚠️ Absolute-number caveat (shared dev49 CPU contention):** CUDA is host-bound and legacy is
-  CPU-bound, so even with the GPU idle-gated (0%), co-tenant **CPU** load depresses both columns and
-  shifts run-to-run (the same bench_light CUDA cell read 87 M here vs 114 M in a quieter window).
-  Trust the **ratios** and the **new-vs-old-default** deltas (intra-run, robust); treat the absolute
-  M/s as indicative. Only per-run **interleaved** comparison (A,B,C,A,B,C…) is drift-proof — see the
-  scrum-306.2 methodology note below. The legacy column is also lower than the pre-306.2 table above
-  for the same reason (CPU contention at measurement time), which inflates the ratios — do not read
-  the ratio jump as pure CUDA gain.
-
-- **Competitive bar MET**: the comparable light single-MS scene is **35–56 M/s**, at/above
-  the 25 M/s competitor target AND above the Mac Metal reference (28–30 M/s). buffer-persist
-  alone (scrum-304.2) got CUDA here; the earlier "0.16–0.40× / 1.5M" pessimism was a
-  measurement artifact — ad-hoc non-idle-gated runs on the heavier `ms_multi_crystal`, the
-  wrong yardstick. Always idle-gate + use the canonical harness + the comparable scene.
-- **GPU not yet saturated** (at the 32768 default this table used): nsys = benchmark steady-window
-  active ≈ 43%; trace_single_ms_kernel is 95% of GPU time; intrinsic kernel ceiling ≈ 134 M/s, so
-  the 56 M here was ~43% of ceiling. **⚠️ SUPERSEDED by scrum-306.2** (see the resolution subsection
-  below): the headroom was NOT locked behind async (per-dispatch sync was 0.3% of host time) but
-  behind per-batch host overhead + a dead `d_exit_` buffer. With those fixed and the CUDA default
-  dispatch raised to 262144, **out-of-box CUDA now reaches ~114 M/s** (= 85% of the 134 M intrinsic
-  rate) on the comparable light scene — these 35–56 M numbers are the pre-306.2 figures at the old
-  32768 default and are retained only as the baseline the 306.2 work improved on.
-- **The GPU route has no true multi-worker parallelism** (worker_count=1, server.cpp:275). The
-  benchmark's "single" and "multi" passes BOTH run on the single GPU engine; their difference is a
-  JIT-warmup + ray-count artifact, not parallelism (explore-306.1 E1: worker_count=1 is the铁证).
-  The "workers":N field in a GPU [BENCHMARK] line is the configured core count, NOT GPU engines.
-  Only the legacy CPU route is genuinely multi-worker (N = PhysicalCoreCount).
-- Caveat: the competitor's exact config (spectrum / max_hits) is unknown; our scene is a
-  reasonable single-crystal single-MS proxy (prism, D65, max_hits 7). Align if a precise
-  apples-to-apples is needed.
-
-##### scrum-306.2 resolution: the 2.3× headroom was unlocked by dispatch size + exit-cap, NOT async (2026-06-29)
-
-The "~2.3× headroom locked behind per-dispatch host serialization → pursue async" framing
-above was **half wrong**, corrected by profiling:
-
-- **async (stream deferral) was the wrong lever.** nsys CUDA-API summary after the geometry
-  pool: `cudaEventSynchronize` / `cudaDeviceSynchronize` were **0.3% / 0.4%** of host-API
-  time — deferring them buys <1%. The originally-planned increment-2 (mirror Metal
-  `pending_cb_`/`WaitAndReadbackLayer`) was dropped.
-- **The GPU was host-bound, not sync-bound.** nsys GPU-side: `trace_single_ms_kernel` =
-  44.8 ms / 185 dispatches for 6M rays → **~134 M/s intrinsic kernel rate**; the GPU sat ~70%
-  idle waiting on **per-batch host overhead** (BeginSession + XYZ readback + orchestration),
-  which is **common to every variant** and amortizes with **fewer, bigger batches**.
-- **The lever = `LUMICE_DISPATCH_RAY_NUM`** (the default was raised for the CUDA route:
-  `kDefaultCudaDispatchRayNum = 262144`). Idle-gated **interleaved** sweep (cfg_50m, 50M
-  multi): 37M @32768 → **~114M @262144** (= 85% of the 134M ceiling) → ~115M @1M, then
-  declining (2M→106M, 4M→97M) as the continuation/root buffers grow.
-- **exit-cap was the enabler.** CUDA's `HasDeviceXyzAccum()` is unconditionally true, so the
-  trace kernel writes nothing to `d_exit_` (all exits go to `d_xyz_buf_` via `EmitToDeviceXyz`;
-  `DrainExits` reads 0 records). `d_exit_` sized `ComputeExitCap = n·(2·max_hits+4)` was dead
-  weight that ballooned to GBs at large dispatch — causing both the big-dispatch throughput
-  collapse and a parity OOM. Capping it (`kCudaDeadExitCap`) unlocked the dispatch sweep.
-- **The geometry pool (upload-once) + filter/wl persist were throughput-NEUTRAL** (interleaved
-  round-robin: pre ≈ pool ≈ pool+persist). They are correct, parity-clean structural changes
-  (remove per-batch H2D churn, align with seam-design §5) but the churn they removed overlaps
-  GPU compute / sits in setup — NOT on the steady-state critical path. Do not cite them as the
-  speedup source.
-- **Result**: out-of-box (no env knob) CUDA reaches **~114 M/s**, idle-gated, with the full
-  parity suite 10/10 at the new default AND at 524288/1048576. CUDA energy stays
-  dispatch-invariant; `kCommitCap=128` keeps the GUI snapshot cadence decoupled.
-
-**Methodology lessons (shared dev49 is CPU-contended → host-bound CUDA throughput is noisy):**
-- Same binary + same dispatch swung **33M ↔ 114M** with machine load. `nvidia-smi` GPU 0%
-  gate is necessary but NOT sufficient — it doesn't show CPU contention from co-tenant
-  containers. **Only trust per-run interleaved comparison** (A,B,C,A,B,C…), never cross-session,
-  and never even "back-to-back phases" (minute-scale drift between phases faked a 1.9× win once).
-- Use nsys **GPU-side** (`gpukernsum`: kernel time vs wall) to classify GPU-bound vs host-bound.
-  The CUDA-API summary (cudaMemcpy/cudaFree) is host time that may overlap compute — not the
-  bottleneck by itself.
-- **Profile before coding a fix.** A fully-designed stream-deferral increment was abandoned once
-  nsys showed it was worth <1%.
-
-##### scrum-306.6 (Metal kernel lever) + 306.7 (legacy energy) — both converged, no code change (2026-06-29)
-
-- **306.6 Metal kernel lever probe → NO cheap lever.** The path_rec spike (remove the per-bounce
-  `path[]` store + the `rec_csum`/`rec_sink` checksum, rebuild, idle-gated interleaved Metal multi
-  bench) gave **0 throughput change** (BASE ≈ SPIKE ≈ 30 M/s) — exactly like the CUDA path_rec
-  spike. Metal `trace_layer_kernel` dominates (~143–214µs/dispatch, ~80% of GPU time, from the
-  `xctrace export` of the Metal System Trace) and is ALU-bound (occ ~29% / ALU 63–73%, prior E7) —
-  the *hard* case: no cheap occupancy/memory knob, only algorithmic ALU reduction. Same bucket as
-  CUDA (latency-bound, 3 spikes all 0) → folded into the far-future algorithmic-kernel backlog, not
-  a standalone task. (The precise which-ALU breakdown / occupancy-limiter reason needs a
-  counter-enabled Xcode GPU frame capture — interactive, not headless-driveable; the existing
-  `metal-profile.trace` lacks hardware counters.)
-- **306.7 legacy energy "dispatch dependence" → NOT a bug (MC variance).** Legacy ΣY drifts with
-  `LUMICE_DISPATCH_RAY_NUM` because the legacy/illuminant path samples **one wavelength per
-  SimBatch** (`simulator.cpp`): wl-samples = ray_num/dispatch (128 → 78125 samples, converged;
-  131072 → ~77, high variance). `sim_ray_num`/`ray_seg_num` are invariant (10M/150M) — it is NOT a
-  ray-count or normalization bug. The per-batch-wl estimator has the **same expectation** as
-  per-ray wl (unbiased); only variance differs (cross-seed CV 0.3% @128 vs 8.6% @131072 = √(1024×
-  fewer samples)). Legacy at its default (128) is well-converged and correct; 306.4 already strips
-  the GPU-only knob from legacy. A root-cause change (per-ray or per-fixed-chunk wl) would touch the
-  legacy **reference oracle** (re-baseline risk) for zero real-world benefit → not pursued.
-
-> #### ⚠️ `LUMICE_DISPATCH_RAY_NUM` is a GPU-only knob — never apply it to legacy in a comparison (scrum-306.1/306.4)
->
-> `LUMICE_DISPATCH_RAY_NUM` sizes the GPU engine's per-dispatch grid. **CUDA total
-> energy is dispatch-invariant** (verified: ΣY = 261.29 M ±0.001% across dispatch
-> ∈ {128, 8192, 32768, 131072} on `dual_fisheye_ref`) — i.e. the GPU result is
-> correct at any dispatch. **Legacy (CPU) total energy is NOT dispatch-invariant**:
-> the same knob (which overrides legacy's `kDefaultRayNum`=128) swings legacy ΣY
-> **−5 %..+13 %** (259.65 M @128 / 245.5 M @8192 / 275.5 M @32768 / 292.9 M @131072).
-> This is a real legacy correctness bug tracked in **scrum-306.7** (energy must be
-> batch-size invariant; mechanism TBD — normalization / ray-count / RNG-per-batch).
->
-> **Consequence / historical misdiagnosis to NOT repeat**: setting
-> `LUMICE_DISPATCH_RAY_NUM=131072` globally to probe CUDA made
-> `test_cuda_single_ms_no_filter_parity` report `energy_ratio=0.8922` — this was
-> **mis-attributed to a "CUDA exit-cap/cont-cap silent energy loss"** (the original
-> scrum-304.3 backlog entry). It is NOT a CUDA bug: the knob leaked into the legacy
-> reference run and inflated the **denominator** (legacy_Y), `261.29/292.87 = 0.892`.
-> The parity harness now strips `LUMICE_DISPATCH_RAY_NUM` for the `legacy` backend
-> (`test/e2e/capi_runner.py`, scrum-306.4) so the oracle stays at its canonical
-> default and `energy_ratio` reflects the GPU backend's correctness alone
-> (re-verified: @131072 0.8922 FAIL → 1.0063 PASS). `bench_throughput.py` already
-> excludes legacy from the dispatch sweep (`DISPATCH_PLAN["legacy"]=[None]`).
->
-> **Process lesson (why this is documented here, tracked)**: the 304.3 correctness
-> claim lived only as a backlog one-liner with no preserved script → a wrong
-> diagnosis (CUDA) propagated and could not be re-aligned. Correctness assertions
-> must land in a tracked doc with a reproducible recipe. Reproduce recipe: container
-> `pip install pytest numpy`, `LUMICE_HAS_CUDA=1`, then
-> `LUMICE_DISPATCH_RAY_NUM=131072 pytest -m slow test/parity-cross-backend/backend/test_cuda_exit_seam_parity.py::test_cuda_single_ms_no_filter_parity`;
-> per-dispatch ΣY split via `bench_work/harness2.cpp` (dev49).
-
-#### Windows — win-builder GTX 1070 Ti (Pascal sm_61, 8 GB, driver 560.94, CUDA 11.7, MSVC 14.39) · legacy vs CUDA · 2026-06-30
-
-Cross-arch **data point** (scrum-309.3), NOT a gate. GTX 1070 Ti is an old (2017) mid-range
-Pascal card; the shipped PTX floor (compute_61) is JIT'd at runtime. GPU idle-gated
-(`nvidia-smi` 4% desktop, 0% Lumice before/after). **Interleaved** A,B,A,B per rep (legacy then
-CUDA each round, drift-proof), `ray_num`=20M, N=5, default dispatch (CUDA default=262144). Host =
-8C/16T x86-64 (legacy `multi` runs 8 workers; CUDA route is single-engine, `worker_count=1`). Route
-confirmed every CUDA run (`routing via CudaTraceBackend`, no fallback); legacy never routed GPU
-(`gpu_route=false`). Driver: custom interleaved harness (`Lumice.exe --benchmark` per backend;
-`bench_throughput.py` semantics, ray_num=20M override) — the committed harness is not Windows-path-
-hardened, so a thin interleaved wrapper was used instead.
-
-| config | legacy single | legacy multi | CUDA single | CUDA multi | CUDA/legacy (multi) |
-|---|---|---|---|---|---|
-| `bench_light_single_ms` (轻·单MS) | 0.47 M/s | 3.25 M/s | 31.8 M/s | **60.3 M/s** | 18.6× |
-| `ms_multi_crystal` (中·无filter) | 0.07 M/s | 0.22 M/s | 7.42 M/s | **11.5 M/s** | 52.6× |
-
-Raw per-run (median of N=5; CoV: light CUDA multi ~3.3%, ms_multi CUDA multi <1%, legacy <1% both):
-- light CUDA multi reps: 56.4 / 60.2 / 61.1 / 58.8 / 61.2 M/s; light legacy multi: 3.25 / 3.22 / 3.26 / 3.27 / 3.24 M/s.
-- ms_multi CUDA multi reps: 11.49 / 11.49 / 11.55 / 11.45 / 11.36 M/s; ms_multi legacy multi: 0.219 / 0.220 / 0.218 / 0.219 / 0.215 M/s.
-- Independently reproduced (separate interleaved run, N=3, CUDA `ray_num`=50M for a larger ~0.8 s / ~4.1 s
-  GPU window vs the 20M run's shorter window): CUDA multi 61.0 M/s (light) / 12.0 M/s (ms_multi),
-  legacy multi 3.16 / 0.22 M/s — within ~1–4% of the above, confirming the figures are not a
-  short-measurement-window artifact.
-
-- **Read the absolute M/s, NOT the ratio.** The 18.6×/52.6× ratios are **inflated by an unusually
-  weak legacy CPU baseline** on this host (light legacy multi = 3.25 M/s here vs 8.98 M/s on dev49 —
-  the win-builder CPU is ~2.8× slower per-core/thread), so the ratio is a property of a slow CPU, not
-  a fast GPU. **Cross-host numbers are not comparable** (read within this block only).
-- **Absolute CUDA throughput on the 1070 Ti is below the dev49 RTX 4060 Ti, as expected for the older
-  arch**: comparable light single-MS scene **60 M/s** (1070 Ti) vs ~87–114 M/s (4060 Ti @262144);
-  ms_multi 11.5 M/s vs ~19.7 M/s. Pascal lands ~0.5–0.7× the 4060 Ti — a sane cross-arch ordering.
-- The `single` column (2M-ray pass, JIT-warmup-dominated) reads lower than `multi` (20M-ray pass);
-  per the dev49 notes above, the GPU route has no true multi-worker parallelism, so the single/multi
-  gap is a warmup + ray-count artifact, and `multi` is the representative steady figure.
-- **Honesty caveats**: CPU model name unavailable (admin-gated `Win32_Processor`), so the CPU is
-  characterized only by core count (8C/16T from the `[BENCHMARK]` `cores`/`workers` fields). MSVC
-  version per the 309.1 build env, not re-verified at bench time (binary is the prebuilt CUDA-enabled
-  static `Lumice.exe` from 309.1). Variance is low (this is a dedicated, quiet machine), but only the
-  interleaved per-run numbers are reported — no cross-session averaging.
+**Key points**:
+- **All three hardware classes (CUDA-Ada / CUDA-Pascal / Metal) confirm the third clock is a
+  significant speedup at the real GUI resolution**; the gain scales with how much per-batch
+  readback/copy the old value contained.
+- **The Metal curve is nearly flat** (28→35 M/s across 6 steps) — the third clock makes Metal
+  resolution-robust (the old path's full-frame per-batch memset+memcpy is a real cost at high
+  resolution, not just CUDA readback). **Refutes the earlier "Metal unified memory = zero benefit"
+  judgment.**
+- Correctness: CUDA parity 10/10 @4060Ti + 10/10 @1070Ti/sm_61; Metal parity 14/14 (incl.
+  batch-invariance = drain-cadence independence).
+- win-builder 1070Ti omits vs-legacy (weak CPU inflates the ratio, read absolute values); the
+  `multi_med` column is distorted under the third clock and is deprecated (use `multi_wall`).
+- Heavy scene `ms_multi_crystal` (trace-dominated, small readback share) has a modest gain: 4060Ti
+  2048 = 14.9 M/s, 1070Ti = 7.3 M/s, Metal ≈ 17 M/s@256 (Mac thermal noise large, still jittery at
+  N=9 — needs a stable box to re-measure the canonical).
 
 ### macOS
 
@@ -477,7 +315,9 @@ Measure-Command { .\Lumice.exe -f bench_config.json -o . 2>&1 | Out-Null } | Sel
 ### Linux / CUDA (dev49)
 
 CUDA throughput is measured on the dev49 bench box (NVIDIA RTX 4060 Ti, Linux,
-CUDA docker — see `reference_dev49_linux_bench` / `explore-cuda-step2-derisk/TOOLCHAIN.md`).
+CUDA docker). For the full two-machine build + parity/correctness recipe (source sync,
+docker/BuildTools toolchain, `LUMICE_HAS_CUDA` un-skip gate, parity battery), see
+[`gpu-remote-cuda-build-testing.md`](gpu-remote-cuda-build-testing.md).
 **Do NOT improvise per-task bench scripts.** Use the committed harness
 `scripts/bench_throughput.py` — it already supports CUDA via env overrides, runs
 the canonical scene set (including the comparable `bench_light_single_ms`),
@@ -505,11 +345,11 @@ A throughput number alone cannot tell you whether the GPU is fed or starved.
 On CUDA/dev49, pair the bench with an `nsys` capture to read GPU utilization —
 this is the diagnostic that distinguishes a real win from a "beat the CPU while
 the GPU idles" false win. Profiler is already de-risked on dev49 (nsys 2023.4.4 +
-ncu 2024.1.1; install + usage recipe in `explore-cuda-step2-derisk/TOOLCHAIN.md`
-§"Profiler 可用性"). active% is **not a hard universal gate** — Metal on macOS has
-no comparable CLI active% path, so the cross-platform acceptance criterion stays
-the absolute hardware-capability target above; active% is a CUDA-side corroborating
-diagnostic for *why* a number is high or low.
+ncu 2024.1.1; install + usage recipe in `explore-cuda-step2-derisk/TOOLCHAIN.md`).
+active% is **not a hard universal gate** — Metal on macOS has no comparable CLI
+active% path, so the cross-platform acceptance criterion stays the absolute
+hardware-capability target above; active% is a CUDA-side corroborating diagnostic
+for *why* a number is high or low.
 
 ```bash
 # GPU active% = (sum of cuda_gpu_kern_sum) / wall, from an nsys timeline of one
@@ -573,44 +413,48 @@ The dashboard tracks 12 time-series (4 platforms × 3 metrics):
 
 | Environment variable | Default | Description |
 |----------------------|---------|-------------|
-| `LUMICE_DISPATCH_RAY_NUM` | **32768** (Metal) / 128 (CPU) | task-268.4 knob; scrum-268.6 set the Metal backend-aware default to **32768** (empirical sweet spot). Re-measured 2026-06-19 (task-fix-throughput-bench-honesty, setup-excluded `--benchmark`): heavy-scene engine **8–10× legacy** at 32768, GUI steady **~9.5× legacy** on M2 Max. Amortizes Metal kernel launch overhead; small dispatches starve the GPU (512/2048 = 0.2–0.8× legacy, 128 hangs at large ray_num) — the full win requires ≥32768. Set to a power of two for alignment. Applies at server startup; changing mid-run has no effect. Independent of `LUMICE_COMMIT_RAY_NUM` (see next row) — pick "feed GPU big" without sacrificing GUI cadence. **分辨率依赖**：默认 262144(CUDA)/32768(Metal) 甜点测于 **512×256**；分辨率升高时最优 dispatch 上移（2048×1024 下 CUDA ~786K–2M，实测 262144→~1M = 2.25×），因该场景 per-batch readback buffer 16× 大、需更大 dispatch 摊薄。分辨率变时重标（见"分辨率是一等吞吐维度"）。 |
-| `LUMICE_COMMIT_RAY_NUM` | 128 | task-268.4: SimData-to-consumer commit granularity inside `ConsumeData`. Smaller commits = finer GUI snapshot cadence regardless of dispatch size. Backend exit-seam path only (legacy CPU SimData bypass the chunker). **⚠️ GPU device-fused 路线（Metal/CUDA，`HasDeviceXyzAccum()`==true）上是 no-op**：该路径产出 `xyz_pixel_data_` 而非 `outgoing_d_`，commit chunker（`server.cpp:809`）被跳过；device readback 频率实由 `LUMICE_DISPATCH_RAY_NUM`（每 SimBatch 一次 `ReadbackXyzAccum`）决定，**非本旋钮**。（曾误用本旋钮做"readback 无关"判据，无效。） |
-| `LUMICE_BATCH_RAY_NUM` | (deprecated) | Backward-compat fallback for `LUMICE_COMMIT_RAY_NUM` only. Pre-task-268.4 this knob doubled as both dispatch and commit granularity. **scrum-268: the DISPATCH split is the primary driver for Metal throughput; setting `LUMICE_BATCH_RAY_NUM` now only controls commit cadence, not GPU dispatch size.** Prefer the two split env vars above. |
-| `LUMICE_TRACE_BACKEND` | unset (legacy CPU) | Trace backend selection: unset = legacy CPU; `metal` = Metal GPU backend (exit-seam + device root-gen); `cpu_backend` = SoA CPU backend. |
-| `LUMICE_DISABLE_DEVICE_GEN` | unset (device-gen ON) | Escape hatch to force **host** root-ray generation on the Metal backend. Device root-gen (GPU PCG root-ray supply) is the **default** for the Metal backend on eligible layers (single-crystal-per-ci, `tri_count ≤ 64`); it activates on both the deterministic single-worker path and the default multi-worker random path (each worker gets a non-zero derived `effective_seed_`). Set this to `1` only for strict-identity parity tests that mirror the host `std::mt19937` stream (which cannot align with the device PCG stream). Read once per backend instance at construction. |
+| `LUMICE_DISPATCH_RAY_NUM` | **262144** (CUDA) / **32768** (Metal) / 128 (CPU) | task-268.4 knob; the GPU per-dispatch grid size. scrum-268.6 set the Metal default to 32768; scrum-306.2 set the CUDA default to 262144 (both empirical sweet spots). Amortizes GPU kernel launch + per-batch host overhead; small dispatches starve the GPU (512/2048 = 0.2–0.8× legacy, 128 hangs at large ray_num). Set to a power of two for alignment. Applies at server startup; changing mid-run has no effect. Independent of `LUMICE_COMMIT_RAY_NUM` — feed the GPU big without sacrificing GUI cadence. **Resolution-dependent**: the 262144/32768 sweet spots were measured at **512×256**; the optimum shifts up as resolution rises (2048×1024: CUDA ~786K–2M, measured 262144→~1M = 2.25×), because the per-batch readback buffer is 16× larger and needs a bigger dispatch to amortize. Re-calibrate when resolution changes (see "resolution is a first-class throughput dimension"). |
+| `LUMICE_COMMIT_RAY_NUM` | 128 | task-268.4: SimData-to-consumer commit granularity inside `ConsumeData`. Smaller commits = finer GUI snapshot cadence regardless of dispatch size. Backend exit-seam path only (legacy CPU SimData bypass the chunker). **⚠️ No-op on the GPU device-fused route (Metal/CUDA, `HasDeviceXyzAccum()`==true)**: that path produces `xyz_pixel_data_`, not `outgoing_d_`, so the commit chunker (`server.cpp:809`) is skipped; device readback frequency is set by `LUMICE_DISPATCH_RAY_NUM` (one `ReadbackXyzAccum` per SimBatch), **not this knob**. (Was once mis-used as a "readback-independent" probe — ineffective.) |
+| `LUMICE_BATCH_RAY_NUM` | (deprecated) | Backward-compat fallback for `LUMICE_COMMIT_RAY_NUM` only. Pre-task-268.4 this knob doubled as both dispatch and commit granularity. scrum-268: the DISPATCH split is the primary driver for GPU throughput; setting `LUMICE_BATCH_RAY_NUM` now only controls commit cadence, not GPU dispatch size. Prefer the two split env vars above. |
+| `LUMICE_TRACE_BACKEND` | unset (legacy CPU) | Trace backend selection: unset = legacy CPU; `metal` = Metal GPU backend; `cuda` = CUDA GPU backend; `cpu_backend` = SoA CPU backend. |
+| `LUMICE_DISABLE_DEVICE_GEN` | unset (device-gen ON) | Escape hatch to force **host** root-ray generation on the GPU backends. Device root-gen (GPU PCG root-ray supply) is the **default** on eligible layers (single-crystal-per-ci, `tri_count ≤ 64`). Set this to `1` only for strict-identity parity tests that mirror the host `std::mt19937` stream (which cannot align with the device PCG stream). Read once per backend instance at construction. |
 
-**GPU device root-gen (scrum-260)**: on the Metal backend, root rays (orientation / direction / entry point) are generated on-device via a counter-based PCG stream keyed by `(gen_seed, gen_ray_base + tid)`, replacing host pre-generation + upload. This is the default path (single- and multi-crystal per-ci); statistical equivalence vs legacy is validated by the slow-e2e parity harness (`ds_corr ≥ 0.99`). Throughput uplift is hardware-dependent — quantify on a frequency-locked bench machine.
+> #### ⚠️ `LUMICE_DISPATCH_RAY_NUM` is a GPU-only knob — never apply it to legacy in a comparison (scrum-306.1/306.4)
+>
+> `LUMICE_DISPATCH_RAY_NUM` sizes the GPU engine's per-dispatch grid. **CUDA total
+> energy is dispatch-invariant** (verified: ΣY = 261.29 M ±0.001% across dispatch
+> ∈ {128, 8192, 32768, 131072} on `dual_fisheye_ref`) — i.e. the GPU result is
+> correct at any dispatch. **Legacy (CPU) total energy is NOT dispatch-invariant**:
+> the same knob (which overrides legacy's `kDefaultRayNum`=128) swings legacy ΣY
+> **−5%..+13%** — this is Monte-Carlo variance from per-batch wavelength sampling,
+> not a bug (converged at the default 128; see scrum-306.7 in the per-run log).
+>
+> **Consequence / historical misdiagnosis to NOT repeat**: setting
+> `LUMICE_DISPATCH_RAY_NUM=131072` globally to probe CUDA made
+> `test_cuda_single_ms_no_filter_parity` report `energy_ratio=0.8922` — this was
+> **mis-attributed to a "CUDA exit-cap/cont-cap silent energy loss"** (the original
+> scrum-304.3 backlog entry). It is NOT a CUDA bug: the knob leaked into the legacy
+> reference run and inflated the **denominator** (legacy_Y), `261.29/292.87 = 0.892`.
+> The parity harness now strips `LUMICE_DISPATCH_RAY_NUM` for the `legacy` backend
+> (`test/e2e/capi_runner.py`, scrum-306.4) so the oracle stays at its canonical
+> default and `energy_ratio` reflects the GPU backend's correctness alone
+> (re-verified: @131072 0.8922 FAIL → 1.0063 PASS). `bench_throughput.py` already
+> excludes legacy from the dispatch sweep (`DISPATCH_PLAN["legacy"]=[None]`).
+>
+> **Process lesson**: the 304.3 correctness claim lived only as a backlog one-liner
+> with no preserved script → a wrong diagnosis (CUDA) propagated and could not be
+> re-aligned. Correctness assertions must land in a tracked doc with a reproducible
+> recipe. Reproduce: container `pip install pytest numpy`, `LUMICE_HAS_CUDA=1`, then
+> `LUMICE_DISPATCH_RAY_NUM=131072 pytest -m slow test/parity-cross-backend/backend/test_cuda_exit_seam_parity.py::test_cuda_single_ms_no_filter_parity`;
+> per-dispatch ΣY split via `bench_work/harness2.cpp` (dev49).
 
-**Phase-1 confirmed throughput (task-metal-rootgen-throughput-confirm, Mac M2 Max, 2026-06-11)**: device-gen ON vs OFF measured with `scratchpad/bench/device_gen_throughput_bench.py` (`LUMICE_TRACE_BACKEND=metal`; ON = `LUMICE_DISABLE_DEVICE_GEN` unset, OFF = `=1`). 5 reps per cell, median; CoV reported. Activation that ON==GPU PCG vs OFF==host mt19937 is independently asserted by the slow-e2e test `test_device_gen_activation_proof_fixed_seed` (`dual_fisheye_ref` sim_seed=42, rel_err=4.4e-5 ≫ 1e-5 floor — host-gen fallback would give rel_err=0). (Note: the bench script lives under the git-ignored `scratchpad/` tree by design — consistent with `seam_exit_bench.py` — and is not committed; re-running requires the author's local copy. The numbers below are the durable record.)
-
-| Config | Batch | Single rps ON | Single rps OFF | ON/OFF (single) | Multi rps ON | Multi rps OFF | ON/OFF (multi) |
-|--------|-------|---------------|----------------|-----------------|--------------|---------------|----------------|
-| `dual_fisheye_ref` (single-MS, 1 crystal) | 128  |   343 k |   476 k | **0.72×** |  2.45 M |  4.03 M | **0.61×** |
-| `dual_fisheye_ref`                        | 512  | 1.22 M | 1.18 M | 1.04× |  9.19 M |  9.34 M | 0.98× |
-| `dual_fisheye_ref`                        | 2048 | 3.06 M | 1.23 M | 2.47× | 23.37 M | 13.27 M | 1.76× |
-| `ms_multi_crystal` (multi-MS, 2 crystals) | 128  |   107 k |   111 k | 0.97× |   979 k |   793 k | **1.23×** |
-| `ms_multi_crystal`                        | 512  |   311 k |   242 k | 1.28× |  2.63 M |  1.17 M | 2.24× |
-| `ms_multi_crystal`                        | 2048 |   447 k |   318 k | 1.41× |  4.77 M |  1.61 M | **2.95×** |
-
-All cells `routed_ok=True` (no fallback); CoV ≤ 5% for 21 of 24 measurements, max CoV 15.0% (`single_ms` b2048 multi ON — kernel saturation, not thermal). The 15.0% cell sits exactly at the CoV>15% retry threshold and was not re-run because the threshold is strict-greater (per the pre-specified CoV>15% → N=9 retry rule; ≤15% is in-spec, not a license to skip warranted reruns).
-
-**Verdicts**:
-
-- **`dual_fisheye_ref` (single-MS, 1 crystal) at default batch=128 is a NET LOSS for device-gen** (single 0.72×, multi 0.61×). This **contradicts the scrum-260 probe** which reported ~1.87× at the same config — the probe was a single throwaway invocation and did not reflect steady-state behavior. Net gain only kicks in at `batch ≥ ~512` and reaches 2.47× / 1.76× at `batch=2048`. At default batch GPU device-gen pays per-dispatch overhead that the small per-batch ray count cannot amortize.
-- **`ms_multi_crystal` (multi-MS, 2 crystals) at default batch=128 is roughly neutral for single-worker (0.97×) and a net gain (1.23×) for multi-worker.** This is the opposite of the plan's pre-bench hypothesis (which feared multi-crystal per-ci dispatch overhead would dominate); in fact multi-MS workloads amortize device-gen better than single-MS because the multi-MS layer count multiplies the per-batch work GPU-side. At larger batches the multi-MS multi-worker gain grows to 2.24× (b512) and 2.95× (b2048).
-- **Activation cross-check for multi-crystal**: `ms_multi_crystal` multi-worker ON/OFF goes 1.23× → 2.24× → 2.95× as batch grows. The monotone ON-favored ratio with batch (the b2048 crossover predicted by plan §3 Step 3 Minor 1 for "device-gen active but small-dispatch overhead-dominated") confirms device-gen IS activating on multi-crystal per-ci paths; if it had silently fallen back, ON ≡ OFF and the ratio would sit at 1.0 across all batches. The activation-proof test only covers single-crystal; the batch-scaling pattern here is the indirect activation evidence for multi-crystal.
-
-**Implication for default config**: users running the Metal backend at the default `LUMICE_BATCH_RAY_NUM=128` see device-gen **hurt** single-crystal throughput and **help** multi-crystal multi-worker throughput modestly. The strong wins (>2×) require `LUMICE_BATCH_RAY_NUM=2048`. A future task may revisit (a) raising the default batch when device-gen is active, (b) adaptive per-ci batch coalescing for the small-dispatch regime, or (c) selectively disabling device-gen for single-crystal/single-MS scenes at small batches. Until then the escape hatch `LUMICE_DISABLE_DEVICE_GEN=1` is the workaround for users hitting the small-batch single-crystal loss.
-
-Example: measure throughput at a higher batch size to characterize the Metal dispatch amortization curve:
-
-```bash
-# Default batch (128 rays/batch)
-./build/cmake_install/Lumice --benchmark -f examples/bench_config.json -o /tmp
-
-# Larger batch (512 rays/batch) — Metal backend crosses over here
-LUMICE_BATCH_RAY_NUM=512 ./build/cmake_install/Lumice --benchmark -f examples/bench_config.json -o /tmp
-```
+**GPU device root-gen (scrum-260)**: on the GPU backends, root rays (orientation / direction /
+entry point) are generated on-device via a counter-based PCG stream keyed by
+`(gen_seed, gen_ray_base + tid)`, replacing host pre-generation + upload. This is the default
+path; statistical equivalence vs legacy is validated by the slow-e2e parity harness
+(`ds_corr ≥ 0.99`). The device-gen ON/OFF throughput characterization (Metal, phase-1) — device-gen
+is a net loss for single-crystal single-MS at the default batch and a net gain for multi-crystal
+multi-worker, with strong wins only at large batch — is recorded in `scratchpad/perf-results-log.md`.
 
 ## 2. GUI Perf Test (Hidden Window, No VSync)
 
