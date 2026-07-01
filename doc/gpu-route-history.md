@@ -1,4 +1,6 @@
-# GPU 路线系统回顾（#250 → #265，截至 2026-06-13）
+# GPU 路线系统回顾（#250 → #312，截至 2026-07-01）
+
+> §一~§四 = Metal 单引擎弧（#250→268，原始回顾，截至 2026-06-13）；§五 Phase 10 = CUDA 第二步 + device-fused（#294→302）；§六 Phase 11 = CUDA 吞吐收口 + Windows 交付 + 第三时钟（#303→312）。
 
 > 目的：把 GPU 迁移一路的决策演进、已积累数据、遗留项盘点清楚，作为重新深想的全局参照系。
 > 触发：owner 反思"行动前想得不够深→地基不稳、结论来回摇摆、积累不成形"。
@@ -138,3 +140,21 @@
 - **S2（CUDA/dev49）**：CUDA 接共享核 + device 累加。inline 亲跑 dev49 修 2 bug（mid-exit 漏 device 累加 → energy=1/层数 / 测试 config 用不支持的 fisheye 投影）→ **parity 10/10 绿**。runner 三犯（被 kill / Mac 编不了 CUDA / 收窄 scope 误报 DONE）→ 巩固纪律「CUDA AC 真闭只能 scrum owner 在 dev49 亲跑」。
 
 **⚠️ 未解的核心张力（scrum-302 S2 暴露，owner 定性）**：device-fused 去掉 roundtrip 后，CUDA 吞吐 **0.16-0.40× legacy**（16 线程 Zen5），随 max_hits 收窄不反超。owner 定性:**对一块 4060 Ti 根本不合理 = 设计/实现缺陷**（非"GPU 非天然胜"的可接受现实）。诊断：compute-bound（max_hits 反比）+ 低 max_hits 仍只 1.82M/s 疑 per-CI 串行 dispatch/launch 开销（单引擎大 dispatch 理想在 CUDA 多 CI 未兑现，§3.6 原始之罪复发）+ recorder local-mem。**#250「250×」spike 与 production 间有未追的退化**——这是下一个 explore 的核心(profiler-first，见 backlog)。
+
+---
+
+## 六、Phase 11 — CUDA 吞吐收口 + Windows 交付 + 第三时钟(#303 → #312，2026-06-29 → 07-01)
+
+> 接 Phase 10。这一段把上面「未解的核心张力」（CUDA 0.16-0.40× "根本不合理"）**彻底收口**——真因大半是**测量假象**，剩下是几个真 lever；随后把 CUDA 从"能算对"推到"Windows 可交付"，最后补上蓝图 §4.8 第三时钟。**Phase 10 的悲观基线全部作废，别再引用。**
+
+**explore-303 → scrum-304（吞吐收口第一刀）**：explore-303 一度归因"零 cudaStream + 每层 sync readback → GPU 1-2% 利用"，但 scrum-304 profiling 修正：真因 = **per-batch buffer 拆建 churn**（CUDA Reset 每 batch cudaFree+cudaFreeHost，占 mh15 wall 83%）。**buffer-persist**（`Reset(keep_persistent_buffers)`，镜像 Metal Reset）一刀 → 可比轻·单MS CUDA **35–56M/s（>25M 竞品线，>Mac Metal 28-30M）**，parity 10/10。**"0.16-0.40×" 定性为测量假象**（ad-hoc 非 idle-gate + 拿重场景 `ms_multi_crystal` 当可比口径）。
+
+**scrum-306（dispatch + exit-cap，逼近 intrinsic）**：**async 前提被 profiling 推翻**（nsys 证 cudaEventSynchronize 仅 0.3% host time，stream deferral 值 <1%，增量 2 放弃）。真杠杆 = **默认 dispatch 32768→262144 + exit-cap**（CUDA `HasDeviceXyzAccum` 恒 true → trace kernel 从不写 `d_exit_`，这块死缓冲按 n×(2·max_hits+4) 膨到 GB→崩，capping 解锁大 dispatch）→ out-of-box **~114M/s（= 134M intrinsic 的 85%）**。几何池/persist = parity-clean 结构改进但**吞吐中性**（不得当加速源）。旁证：306.6 Metal 无便宜 kernel 杠杆（同 CUDA→算法级 backlog）；306.7 legacy 能量随 dispatch 波动证伪为 MC 方差非 bug。血泪：shared dev49 CPU 争用使 host-bound 吞吐 33M↔114M 同 binary 剧烈抖动，只信 per-run interleaved。
+
+**explore-307 → task-308（77h 漏光，MSVC 专属正确性 bug）**：`RandomSample` 在 `curr_p==0.0`（MSVC `std::uniform_real_distribution` 可返精确 0）时 no-match→out 未写→保留调用方默认 tri_id=0→选背光面当入射→全反射异色高权重漏光。两平台插桩铁证（MSVC 2e9 抽样 115 次命中 / Mac 1e8 抽样 0 次）。与 GPU 吞吐正交，但同期落地。
+
+**scrum-309 + scrum-310（CUDA Windows 交付）**：1070Ti/sm_61 parity 10/10 + 吞吐数据点 + GUI 跨平台"Use GPU"勾选（owner 眼验）；CI 门禁（windows-2022 pin，windows-2025=VS2026 拒 CUDA）+ 多 arch fatbin（PTX 61 floor + 75/86/89 real）+ 运行时 capability<sm_61 探测+优雅降级 + release 打包 cudart dll + CLI `--backend cuda`。**CUDA 在 Windows 真正可交付。** scrum-311 清理（CUDA 死代码 + CI Node24 + exit-seam crystal 计数）。
+
+**scrum-312（第三时钟 readback 解耦，蓝图 §4.8 兑现）**：内测反馈"默认场景 GPU 慢"→真因 = 真实 GUI 分辨率 2048×1024 下 readback 焊死在 trace 时钟（每 SimBatch 一次 device XYZ 回读）。route B 把 readback 解耦到显示节奏第三时钟 → 2048×1024 增益：4060Ti(Ada) 28→39M(1.4×) / 1070Ti(Pascal) 12.5→33.5M(2.7×) / Metal 11→32.3M(~3×)，三机一致。**推翻"Metal 统一内存零收益"**（per-batch 全幅 24MB memset+memcpy 是真成本）。精度用 periodic-drain（float32+host Neumaier+稀 drain），**f64 淘汰**（48MB 溢 L2，0.6×）。parity CUDA 10/10×2arch + Metal 14/14。
+
+**Phase 11 元模式**：Phase 10 的"根本不合理"张力，收口后大半是**测量方法学问题**（非 idle-gate / 错口径 / setup 计进分母 / drain 粒度失真），真机制 lever 只有三个（buffer-persist / dispatch / exit-cap / 第三时钟）。**教训固化**：GPU 吞吐 correctness 不可单一复现路径自证；shared 机只信 interleaved；profile 先于改代码（async 增量差点白建）。当前 canonical 吞吐见 `doc/performance-testing.md`；per-run 详录见 `scratchpad/perf-results-log.md`。**残余**：机制 C（in-kernel atomicAdd L2 溢出，高分辨率残税）+ kernel 算法级重构（SOL 逼近）归 backlog 远期。
