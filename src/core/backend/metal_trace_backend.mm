@@ -886,10 +886,14 @@ void MetalTraceBackend::Impl::EnsureImage(int w, int h) {
   // clear these — they persist across batches; the drain's post-read reset is the
   // per-window reset.
   if (w != alloc_xyz_w_ || h != alloc_xyz_h_) {
+    // Reset BOTH twin accumulators together. landed_weight_buf_ MUST already be
+    // allocated (BeginSession allocates it before calling EnsureImage) — assert
+    // the invariant loudly rather than silently best-effort, so a future caller
+    // that forgets the ordering can't silently reintroduce the round-1 Major-2
+    // (xyz reset while landed keeps stale rays).
+    assert(landed_weight_buf_ != nil && "EnsureImage: landed_weight_buf_ must be allocated before reset");
     std::memset([xyz_image contents], 0, pix * 3 * sizeof(float));
-    if (landed_weight_buf_ != nil) {
-      *static_cast<float*>([landed_weight_buf_ contents]) = 0.0f;
-    }
+    *static_cast<float*>([landed_weight_buf_ contents]) = 0.0f;
     alloc_xyz_w_ = w;
     alloc_xyz_h_ = h;
   }
