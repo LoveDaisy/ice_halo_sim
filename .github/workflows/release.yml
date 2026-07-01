@@ -59,11 +59,17 @@ jobs:
             build_gui: ON
             ext: tar.gz
 
+          # windows-2022 (NOT windows-2025) on purpose: windows-2025 ships only
+          # VS 2026 (MSVC 14.51), which every current CUDA release rejects
+          # (CUDA host_config.h: VS 2017-2022 only). windows-2022 ships VS 2022,
+          # so the CUDA-enabled release artifact must build there. See the
+          # windows-cuda-compile job in ci.yml for the full rationale.
           - name: windows-x64
-            os: windows-2025
+            os: windows-2022
             build_gui: ON
             ext: zip
             msvc: true
+            cuda: ON  # ship a CUDA-enabled Windows artifact (multi-arch fatbin)
 
     runs-on: ${{ matrix.os }}
     name: Build ${{ matrix.name }}
@@ -95,6 +101,18 @@ jobs:
           libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
           libgtk-3-dev
 
+      # CUDA toolkit for the CUDA-enabled Windows artifact (nvcc + cudart).
+      # Pinned to 12.6.3 to match ci.yml's windows-cuda-compile gate; supports
+      # the windows-2022 VS 2022 host compiler and emits the full multi-arch
+      # fatbin (compute_61 PTX + sm_75/86/89 SASS, see CMakeLists.txt).
+      - name: Install CUDA toolkit (Windows CUDA artifact)
+        if: matrix.cuda == 'ON'
+        uses: Jimver/cuda-toolkit@v0.2.23
+        with:
+          cuda: '12.6.3'
+          method: 'network'
+          sub-packages: '["nvcc", "cudart"]'
+
       - name: Cache CPM dependencies
         uses: actions/cache@v5
         with:
@@ -110,6 +128,7 @@ jobs:
           -DBUILD_TEST=OFF
           -DBUILD_GUI=${{ matrix.build_gui }}
           -DLUMICE_NATIVE_ARCH=OFF
+          -DLUMICE_CUDA_ENABLED=${{ matrix.cuda || 'OFF' }}
           ${{ env.LUMICE_PYTHON_ARGS }}
 
       - name: Build
@@ -117,6 +136,21 @@ jobs:
 
       - name: Install
         run: cmake --install build
+
+      # Bundle the dynamic CUDA runtime next to the executables so the CUDA
+      # backend loads on a user machine that has an NVIDIA driver but no CUDA
+      # Toolkit installed. cudart is dynamically linked (CUDA::cudart); the
+      # NVIDIA display driver provides libcuda/nvcuda.dll separately.
+      - name: Bundle CUDA runtime DLL (Windows CUDA artifact)
+        if: runner.os == 'Windows' && matrix.cuda == 'ON'
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem "$env:CUDA_PATH\bin\cudart64_*.dll" | Select-Object -First 1
+          if (-not $dll) { throw "cudart64 DLL not found under $env:CUDA_PATH\bin" }
+          Write-Host "Bundling CUDA runtime: $($dll.FullName)"
+          Copy-Item $dll.FullName -Destination install/
+          Write-Host "install/ contents:"
+          Get-ChildItem install/ | Select-Object Name, Length
 
       # macOS code signing + notarization (Developer ID Application certificate).
       # Runs only on macOS and only when signing secrets are configured.

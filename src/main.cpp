@@ -47,7 +47,7 @@ void PrintUsage(const char* prog_name) {
             << "  -o <dir>           Output directory for rendered images (default: current directory)\n"
             << "  --format <fmt>     Output image format: jpg or png (default: jpg)\n"
             << "  --quality <1-100>  JPEG quality (default: 95, ignored for PNG)\n"
-            << "  --backend <name>   Trace backend: auto, cpu, or metal (default: auto).\n"
+            << "  --backend <name>   Trace backend: auto, cpu, metal, or cuda (default: auto).\n"
             << "                     'auto' and 'cpu' both select the CPU route today; 'metal'\n"
             << "                     falls back to CPU if unavailable. The LUMICE_TRACE_BACKEND\n"
             << "                     env var, if set, still overrides this (debug/CI only).\n"
@@ -77,6 +77,9 @@ int ParseBackend(std::string_view name) {
   }
   if (name == "metal") {
     return LUMICE_BACKEND_METAL;
+  }
+  if (name == "cuda") {
+    return LUMICE_BACKEND_CUDA;
   }
   return -1;
 }
@@ -278,7 +281,7 @@ int main(int argc, char** argv) {
       }
       preferred_backend = ParseBackend(argv[i]);
       if (preferred_backend < 0) {
-        std::cerr << "Error: --backend must be 'auto', 'cpu', or 'metal', got '" << argv[i] << "'\n\n";
+        std::cerr << "Error: --backend must be 'auto', 'cpu', 'metal', or 'cuda', got '" << argv[i] << "'\n\n";
         PrintUsage(argv[0]);
         return 1;
       }
@@ -331,6 +334,10 @@ int main(int argc, char** argv) {
   // just makes the substitution explicit on the CLI.)
   if (preferred_backend == LUMICE_BACKEND_METAL && !LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL)) {
     std::cerr << "Warning: --backend metal requested but no Metal device is available; using CPU.\n";
+    preferred_backend = LUMICE_BACKEND_CPU;
+  }
+  if (preferred_backend == LUMICE_BACKEND_CUDA && !LUMICE_IsBackendAvailable(LUMICE_BACKEND_CUDA)) {
+    std::cerr << "Warning: --backend cuda requested but no eligible CUDA device is available; using CPU.\n";
     preferred_backend = LUMICE_BACKEND_CPU;
   }
 
