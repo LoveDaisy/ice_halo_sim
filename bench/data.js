@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782868598431,
+  "lastUpdate": 1782868600215,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9620,50 +9620,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "d4eae674d89a686b081a2aa818bb653152bfdbf3",
-          "message": "Merge pull request #55 from LoveDaisy/feat/gui_overlay\n\nfeat(gui): configurable overlay colors, alpha, and edge labels",
-          "timestamp": "2026-04-08T08:57:53+08:00",
-          "tree_id": "caed3f29268640848e2a7ef86a5e23b0407ecf68",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/d4eae674d89a686b081a2aa818bb653152bfdbf3"
-        },
-        "date": 1775610079146,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 95.2,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 75.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 73.8,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 69.7,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "37e473a268869d7c47912cd6488c48d17d3cc090",
           "message": "Merge pull request #56 from LoveDaisy/feat/gui_misc\n\nGUI misc polish: layout, controls, overlay labels",
           "timestamp": "2026-04-08T14:56:40+08:00",
@@ -14003,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 95.9,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "270ec637801ed3a00639faf6e210e2a2a239c19a",
+          "message": "Merge pull request #157 from LoveDaisy/feat/cuda-windows-validation\n\nCUDA on Windows: validation (#309) + delivery cluster (#310)",
+          "timestamp": "2026-07-01T09:10:33+08:00",
+          "tree_id": "2898159b77ce8341ec472358b0b3160cc9f7d1f2",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/270ec637801ed3a00639faf6e210e2a2a239c19a"
+        },
+        "date": 1782868599709,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 82.3,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 87.1,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 95,
             "unit": "%"
           }
         ]
