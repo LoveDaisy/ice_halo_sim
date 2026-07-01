@@ -198,8 +198,14 @@ def run(config_path: Path, backend_env: str | None, dispatch_num: int | None) ->
     env.pop("LUMICE_COMMIT_RAY_NUM", None)  # keep commit granularity at default
 
     cmd = [str(BIN), "--benchmark", "-f", str(config_path), "-v"]
+    # encoding/errors are explicit (not bare text=True): on a non-UTF-8 locale
+    # (e.g. Windows gbk) text=True decodes the binary's log stream with the locale
+    # codec and a stray non-locale byte (Win-1252 smart quote 0x92, etc.) raises
+    # UnicodeDecodeError in the reader thread → proc.stdout stays None. The
+    # [BENCHMARK] JSON we parse is ASCII, so replace undecodable bytes and move on.
     proc = subprocess.run(
-        cmd, capture_output=True, text=True, env=env, timeout=RUN_TIMEOUT_SEC
+        cmd, capture_output=True, encoding="utf-8", errors="replace",
+        env=env, timeout=RUN_TIMEOUT_SEC,
     )
     out = proc.stdout + proc.stderr
     benches = []
