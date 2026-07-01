@@ -115,18 +115,40 @@ anchor, re-measure same-session before/after any throughput change.
 
 | config（真实文件） | regime | rays / MS / filter | lens / Metal 可比 | 角色 | Metal vs legacy（实测基线） |
 |---|---|---|---|---|---|
-| `bench_light_single_ms.json` | 轻·单MS | 10M / 1 / 无 | dual_fisheye_EA ✅ | 轻场景吞吐基准（bench 专用，勿因 e2e 改动） | 引擎 ~1.7× / GUI ~1.8× |
-| `ms_multi_crystal.json` | 中·无filter | 2M / 2 / 无 | dual_fisheye_EA ✅ | 无 culling 中等基准 | 引擎 ~2.0× / GUI ~2.2× |
+| `bench_light_single_ms.json` | 轻·单MS · 512×256 | 10M / 1 / 无 | dual_fisheye_EA ✅ | 轻场景吞吐基准（bench 专用，勿因 e2e 改动）；**512×256 落 GPU L2，系统性高估 GPU 优势**；真实分辨率用 `--res-sweep`（见"分辨率是一等吞吐维度"） | 引擎 ~1.7× / GUI ~1.8× |
+| `ms_multi_crystal.json` | 中·无filter | 2M / 2 / 无 | dual_fisheye_EA ✅ | 无 culling 中等基准；`--res-sweep` 第二代表场景（看场景依赖） | 引擎 ~2.0× / GUI ~2.2× |
 | `ms_multi_crystal_complex_filter.json` | 重·标准 | 2M / 2 / complex | dual_fisheye_EA ✅ | **G1 + G4 主基准** | 引擎 ~8.1× / GUI ~9.5× |
 | `ms_multi_crystal_filtered_bd.json` | 重·bd | 2M / 2 / bd | dual_fisheye_EA ✅ | G1 第二基准 | 引擎 ~10.1× |
 | `ms3_mixed_pyramid_heavy.json` | 最重·棱锥 | 5M / 3 / 4×raypath | dual_fisheye_EA ✅ | register-pressure 上界 | 引擎 **~5.5×**（2026-06-24 同会话 M2 Max：legacy multi 46.1K/s、single 7.3K/s；Metal multi 255K/s、single 245K/s）；GUI legacy ~48.7K → Metal ~5.7×（互证）。**注**：legacy single pass ~274s，超出 `bench_throughput.py` 的 `RUN_TIMEOUT_SEC`，故该场景仍从自动跑中排除——基线靠手动大 timeout 单测取得 |
 | `halo_22.json` | 轻·单MS | 10M / 1 / 无 | **fisheye_EA（单）→ CLI Metal 回退** | **e2e 资产，勿改**；legacy-only 轻基准 | N/A（Metal 不兼容此投影；轻·Metal 用 `bench_light_single_ms`） |
 
 Notes:
-- The dispatch sweet spot is 32768 (`LUMICE_DISPATCH_RAY_NUM`); small dispatches
-  starve the GPU (512/2048 = 0.2–0.8× legacy). See the Runtime Tuning Knobs table.
+- **上表 4 个 light/mid/heavy 主基准（bench_light / ms_multi / complex_filter / filtered_bd）都是 512×256**（`ms3_mixed_pyramid_heavy` 例外，为 2048×1024）。512×256 的 XYZ 累加 buffer（W×H×3 float = 1.5MB）落在典型 GPU 的 L2 内，**系统性高估 GPU 吞吐**——真实 GUI 默认渲染 2048×1024（16× 像素，24MB buffer，越 L2）。**跨分辨率数字不可比；报吞吐必须带分辨率**。真实分辨率吞吐用 `bench_throughput.py --res-sweep`（分辨率轴，默认 dispatch，隔离单变量）——详见下方"分辨率是一等吞吐维度"。
+- The dispatch sweet spot is **backend- and resolution-dependent**: Metal 32768 / CUDA 262144 是 **512×256** 下的甜点；**分辨率升高时 CUDA 最优 dispatch 显著上移**（2048×1024 下 ~786K–2M，因 per-batch readback 摊薄——见"分辨率"小节 + Runtime Tuning Knobs）。小 dispatch 饿死 GPU（512/2048 = 0.2–0.8× legacy）。
 - `bench_throughput.py` overrides `ray_num` to a large value per run (temp config,
   committed files untouched) so the steady window is long enough to be stable.
+
+#### 分辨率是一等吞吐维度（device-fused XYZ 累加 → cost 随 buffer vs GPU L2）
+
+> **报任何 GPU 吞吐数字必须带渲染分辨率；跨分辨率不可比。** 这不是二阶细节——它常主导轻场景的 GPU 吞吐（轻场景 trace 便宜，累加/回读占大头）。
+
+机制：device-fused XYZ 累加（scrum-302）把每条出射光线在 **trace kernel 内** `atomicAdd` 进 W×H×3 float 图像 buffer（12 B/px）。cost 随 buffer 相对 GPU L2 变化：
+
+- buffer ≤ L2（512×256 = 1.5MB，落多数 GPU 的 ~2MB L2）→ 累加走 cache，快。
+- buffer ≫ L2（2048×1024 = 24MB）→ 每次 atomicAdd 打 DRAM，DRAM 带宽绑定，慢。膝在 L2 边界（~512→768），越 L2 后随分辨率平滑衰减（非二元断崖）。
+
+**实测分辨率惩罚**（2026-07-01，同机同 binary，仅改分辨率，`bench_light_single_ms` 场景，`--benchmark` 稳态 multi）：
+
+- **1070Ti CUDA**：512×256 = 61 M/s → 2048×1024 = 12.5 M/s（**5×**；含 CUDA per-batch 同步 readback 税，见下）。
+- **M2Max Metal**：512×256 = 29 M/s → 2048×1024 = 8.2 M/s（**3.6×**；Metal 统一内存无 readback 税，纯 in-kernel 累加）。
+
+CUDA 的额外惩罚来自 **per-batch 同步 readback**（`ReadbackXyzAccum` 每 SimBatch 一次 `cudaDeviceSynchronize` + 阻塞 24MB PCIe D2H + memset），可用大 dispatch 摊薄（2048 下 262144→~1M dispatch = 12.5→~30 M/s）。这是对 `seam-design.md` §4.8"回读走第三时钟"的偏离——详见 `scratchpad/backlog.md`「per-batch 同步 readback 税 + XYZ 累加 L2 溢出」条。Metal 无此税（`StorageModeShared` + 延迟等）。
+
+**流程要求**：
+
+1. GPU 吞吐用 `bench_throughput.py --res-sweep` 扫多档分辨率（默认 `256×128 … 2048×1024` 六档，2:1，跨 L2 膝两侧），而非只报单点。脚本每档在 temp config 里 override `render[].resolution`（committed 文件不动，同 ray_num override 机制）。默认扫 `bench_light_single_ms`（轻，累加/回读主导）+ `ms_multi_crystal`（稍重，看场景依赖），`--res-list` / `--res-configs` 可覆盖。至少覆盖 **512×256（引擎天花板 / L2-resident）+ 2048×1024（GUI 真实体验）** 两点。
+2. 与竞品 / 硬件能力对标（下方 25M bar）时**对齐分辨率**——我方历史 512×256 数字是 L2-resident 上界，非用户体验。
+3. 数字入表**必标分辨率**（现有表默认 512×256，除 `ms3_mixed_pyramid_heavy`）。sweep 的**曲线数据不入 committed 文件**（按机器/会话变），入表的是按 N≥5 CoV 协议正式产出的 canonical 点。
 
 #### Acceptance yardstick: hardware capability, NOT just "× legacy CPU"
 
@@ -156,6 +178,10 @@ not "× legacy", when judging GPU throughput):
 - If a target genuinely cannot be reached, the acceptance artifact must be a
   **profiler-grounded mechanism explanation** (where the time goes), not a black-box
   "GPU doesn't naturally win" claim.
+- **⚠️ 分辨率对齐**：25M bar 的竞品渲染分辨率未知；我方 `bench_light_single_ms` 是
+  **512×256（L2-resident，上界）**。真实 GUI 默认 2048×1024 下同卡同场景吞吐掉 3.6–5×
+  （见"分辨率是一等吞吐维度"）。判定是否达标前必须**对齐分辨率**——别拿 512×256 的
+  L2-resident 数字宣称达 bar。用 `bench_throughput.py --res-sweep` 取真实分辨率对标点。
 
 ### Latest measured results (per-run log)
 
@@ -514,8 +540,8 @@ The dashboard tracks 12 time-series (4 platforms × 3 metrics):
 
 | Environment variable | Default | Description |
 |----------------------|---------|-------------|
-| `LUMICE_DISPATCH_RAY_NUM` | **32768** (Metal) / 128 (CPU) | task-268.4 knob; scrum-268.6 set the Metal backend-aware default to **32768** (empirical sweet spot). Re-measured 2026-06-19 (task-fix-throughput-bench-honesty, setup-excluded `--benchmark`): heavy-scene engine **8–10× legacy** at 32768, GUI steady **~9.5× legacy** on M2 Max. Amortizes Metal kernel launch overhead; small dispatches starve the GPU (512/2048 = 0.2–0.8× legacy, 128 hangs at large ray_num) — the full win requires ≥32768. Set to a power of two for alignment. Applies at server startup; changing mid-run has no effect. Independent of `LUMICE_COMMIT_RAY_NUM` (see next row) — pick "feed GPU big" without sacrificing GUI cadence. |
-| `LUMICE_COMMIT_RAY_NUM` | 128 | task-268.4: SimData-to-consumer commit granularity inside `ConsumeData`. Smaller commits = finer GUI snapshot cadence regardless of dispatch size. Backend exit-seam path only (legacy CPU SimData bypass the chunker). |
+| `LUMICE_DISPATCH_RAY_NUM` | **32768** (Metal) / 128 (CPU) | task-268.4 knob; scrum-268.6 set the Metal backend-aware default to **32768** (empirical sweet spot). Re-measured 2026-06-19 (task-fix-throughput-bench-honesty, setup-excluded `--benchmark`): heavy-scene engine **8–10× legacy** at 32768, GUI steady **~9.5× legacy** on M2 Max. Amortizes Metal kernel launch overhead; small dispatches starve the GPU (512/2048 = 0.2–0.8× legacy, 128 hangs at large ray_num) — the full win requires ≥32768. Set to a power of two for alignment. Applies at server startup; changing mid-run has no effect. Independent of `LUMICE_COMMIT_RAY_NUM` (see next row) — pick "feed GPU big" without sacrificing GUI cadence. **分辨率依赖**：默认 262144(CUDA)/32768(Metal) 甜点测于 **512×256**；分辨率升高时最优 dispatch 上移（2048×1024 下 CUDA ~786K–2M，实测 262144→~1M = 2.25×），因该场景 per-batch readback buffer 16× 大、需更大 dispatch 摊薄。分辨率变时重标（见"分辨率是一等吞吐维度"）。 |
+| `LUMICE_COMMIT_RAY_NUM` | 128 | task-268.4: SimData-to-consumer commit granularity inside `ConsumeData`. Smaller commits = finer GUI snapshot cadence regardless of dispatch size. Backend exit-seam path only (legacy CPU SimData bypass the chunker). **⚠️ GPU device-fused 路线（Metal/CUDA，`HasDeviceXyzAccum()`==true）上是 no-op**：该路径产出 `xyz_pixel_data_` 而非 `outgoing_d_`，commit chunker（`server.cpp:809`）被跳过；device readback 频率实由 `LUMICE_DISPATCH_RAY_NUM`（每 SimBatch 一次 `ReadbackXyzAccum`）决定，**非本旋钮**。（曾误用本旋钮做"readback 无关"判据，无效。） |
 | `LUMICE_BATCH_RAY_NUM` | (deprecated) | Backward-compat fallback for `LUMICE_COMMIT_RAY_NUM` only. Pre-task-268.4 this knob doubled as both dispatch and commit granularity. **scrum-268: the DISPATCH split is the primary driver for Metal throughput; setting `LUMICE_BATCH_RAY_NUM` now only controls commit cadence, not GPU dispatch size.** Prefer the two split env vars above. |
 | `LUMICE_TRACE_BACKEND` | unset (legacy CPU) | Trace backend selection: unset = legacy CPU; `metal` = Metal GPU backend (exit-seam + device root-gen); `cpu_backend` = SoA CPU backend. |
 | `LUMICE_DISABLE_DEVICE_GEN` | unset (device-gen ON) | Escape hatch to force **host** root-ray generation on the Metal backend. Device root-gen (GPU PCG root-ray supply) is the **default** for the Metal backend on eligible layers (single-crystal-per-ci, `tri_count ≤ 64`); it activates on both the deterministic single-worker path and the default multi-worker random path (each worker gets a non-zero derived `effective_seed_`). Set this to `1` only for strict-identity parity tests that mirror the host `std::mt19937` stream (which cannot align with the device PCG stream). Read once per backend instance at construction. |
