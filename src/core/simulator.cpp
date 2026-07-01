@@ -692,6 +692,9 @@ void Simulator::Run() {
   // a backend pool, that gate's semantics must be revisited (cross-Run() PCG
   // determinism + counter rollover both depend on the per-Run() lifecycle here).
   auto backend = CreateBackend(preferred_backend_.load(std::memory_order_acquire), logger_);
+  // scrum-312 third-clock drain cadence cap + fresh window per Run().
+  xyz_drain_batches_ = env::XyzDrainBatches(logger_, kDefaultXyzDrainBatches);
+  xyz_win_ = XyzDrainWindow{};
   bool warned_no_renders = false;
   bool warned_multi_renderer = false;
   bool warned_compat = false;
@@ -702,6 +705,13 @@ void Simulator::Run() {
   uint64_t prev_generation = 0;
 
   while (true) {
+    // scrum-312 third-clock: producer-pause flush. When no batch is queued we are
+    // about to block; drain any pending device XYZ window first so the consumer/
+    // GUI sees the latest image at the natural display cadence (the producer
+    // feeds a burst, pauses, we drain) instead of waiting for the next burst.
+    if (xyz_win_.pending && config_queue_->Empty()) {
+      DrainDeviceXyz(backend.get());
+    }
     auto batch = config_queue_->Get();  // Will block until get one
     if (batch.ray_num_ == 0 || stop_) {
       ILOG_DEBUG(logger_, "Simulator::Run: exit (ray_num={}, stop={})", batch.ray_num_, stop_.load());
@@ -719,6 +729,11 @@ void Simulator::Run() {
     // Reset carry when config changes (new generation = new proportions).
     if (generation != prev_generation) {
       ray_alloc_carry.clear();
+      // scrum-312 third-clock: flush the old generation's device XYZ window
+      // BEFORE any new-generation batch traces into the (shared, persistent)
+      // device buffer — otherwise the new generation's atomicAdds would mix into
+      // the old generation's un-drained accumulation.
+      DrainDeviceXyz(backend.get());
       prev_generation = generation;
     }
 
@@ -803,6 +818,9 @@ void Simulator::Run() {
 
     idle_ = true;
   }
+  // scrum-312 third-clock: final flush on loop exit (ray_num==0 sentinel / stop /
+  // null scene) so the last accumulation window is not lost on shutdown.
+  DrainDeviceXyz(backend.get());
 }
 
 
@@ -998,6 +1016,63 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
 //
 // `stop_` is checked between TraceLayer/Recombine calls. On stop the session
 // is closed via EndSession (RAII-equivalent) but no SimData is emplaced.
+void Simulator::DrainDeviceXyz(TraceBackend* backend) {
+  // Drain-OR-settle the pending third-clock window: with a live backend this
+  // reads the device XYZ accumulator back into a SimData and enqueues it; with a
+  // null backend (task-282 fallback killed it mid-window) it enqueues a degenerate
+  // credit-only SimData instead — so the sim_scene_cnt_ books stay balanced even
+  // though the device image is unrecoverable. Callers should NOT assume a real
+  // image always lands.
+  // Takes a pointer (not a reference like SimulateOneWavelengthWithBackend)
+  // because the Run() flush sites pass `backend.get()`, and `backend` CAN be null
+  // there: the task-282 fallback resets it to null mid-Run() on
+  // BackendUnavailableError. See the backend==nullptr branch below for how the
+  // pending window's counter debt is still settled in that degraded case.
+  // (SimulateOneWavelengthWithBackend stays a reference: run_with_backend gates on
+  // non-null before calling it.)
+  // scrum-312 third-clock drain: read the persistent device XYZ accumulator into
+  // a SimData carrying the WINDOW-aggregated root/crystal counts, enqueue it, and
+  // reset the window. ReadbackXyzAccum zeroes the device buffer after the copy so
+  // the next window starts clean. No-op when nothing has accumulated.
+  if (!xyz_win_.pending) {
+    return;
+  }
+  SimData sim_data;
+  sim_data.curr_wl_ = xyz_win_.wl;
+  sim_data.generation_ = xyz_win_.generation;
+  sim_data.root_ray_count_ = xyz_win_.root_rays;
+  sim_data.crystal_count_ = xyz_win_.crystals;
+  // This one SimData stands in for xyz_win_.calls per-wavelength calls; ConsumeData
+  // decrements sim_scene_cnt_ by this so the counter invariant stays balanced.
+  sim_data.sim_scene_credit_ = xyz_win_.calls;
+  if (backend != nullptr) {
+    // Normal drain: pull the accumulated image off the device.
+    size_t pix = static_cast<size_t>(xyz_win_.w) * static_cast<size_t>(xyz_win_.h);
+    sim_data.xyz_pixel_data_.resize(pix * 3u);
+    XyzImageData xyz_out;
+    xyz_out.data = sim_data.xyz_pixel_data_.data();
+    xyz_out.width = xyz_win_.w;
+    xyz_out.height = xyz_win_.h;
+    backend->ReadbackXyzAccum(xyz_out, sim_data.xyz_landed_weight_);
+  } else {
+    // Degraded path (code-review round-2 Major): backend went null mid-window via
+    // the task-282 fallback. The device image is unrecoverable, but we MUST still
+    // emplace so ConsumeData decrements sim_scene_cnt_ by this window's credit —
+    // else the increments GenerateScene already counted for these batches are
+    // never balanced and the server never idles (the "producer++ / consumer--
+    // must stay bound" invariant; dropping the window entirely reintroduces the
+    // historical IDLE-hang class). Empty xyz_pixel_data_ → the consumer's 0-exit
+    // path decrements without accumulating. root_ray_count_ stays > 0 so this is
+    // not mistaken for the shutdown sentinel (rays_ empty && root_ray_count_ == 0).
+    ILOG_WARN(logger_,
+              "DrainDeviceXyz: backend null mid-window; settling {} credit with empty image "
+              "(device data lost to fallback)",
+              xyz_win_.calls);
+  }
+  data_queue_->Emplace(std::move(sim_data));
+  xyz_win_ = XyzDrainWindow{};
+}
+
 void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const SceneConfig& scene,
                                                  const RenderConfig& render, const WlParam& wl_param, size_t ray_num,
                                                  uint64_t generation) {
@@ -1090,6 +1165,29 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   // path in RenderConsumer::Consume picks up xyz_pixel_data_ instead of the
   // ScatterOutgoingToXyz path.
   if (backend.HasDeviceXyzAccum()) {
+    if (backend.SupportsThirdClockDrain()) {
+      // scrum-312 third-clock: the device XYZ accumulator persists across
+      // batches (BeginSession no longer zeroes it). Accumulate this batch's
+      // normalization/stats into the drain window and return WITHOUT reading
+      // back — the drain (readback+reset+enqueue) fires on display cadence in
+      // Run() (producer-pause / generation-change / run-exit) or when the window
+      // hits the batch cap here. This sheds the per-batch synchronous D2H tax.
+      xyz_win_.pending = true;
+      xyz_win_.root_rays += ray_num;
+      xyz_win_.crystals += backend.GetLastBatchCrystalCount();
+      xyz_win_.generation = generation;
+      xyz_win_.w = w;
+      xyz_win_.h = h;
+      xyz_win_.wl = wl_param.wl_;
+      xyz_win_.calls += 1;
+      if (xyz_win_.calls >= xyz_drain_batches_) {
+        DrainDeviceXyz(&backend);
+      }
+      return;
+    }
+    // Legacy per-batch drain (unified-memory backends, e.g. Metal): readback +
+    // enqueue every batch. Cheap here because the readback is a shared-memory
+    // memcpy, not a synchronous PCIe D2H. Metal moves to the third clock in 312.4.
     SimData sim_data;
     sim_data.curr_wl_ = wl_param.wl_;
     sim_data.generation_ = generation;

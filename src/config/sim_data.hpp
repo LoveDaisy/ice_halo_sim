@@ -162,6 +162,10 @@ struct SimData {
   std::vector<float> xyz_pixel_data_;
   float xyz_landed_weight_ = 0.0f;
 
+  // --- Consumer-side bookkeeping (NOT physical render payload) ---
+  // The fields below are counters the server/consumer use for stats + queue
+  // accounting; they do not affect the rendered image. Keep them distinct from
+  // the physical-result fields above (rays_/xyz_pixel_data_/exit_records_).
   size_t root_ray_count_ = 0;  // Count of root rays (prev_ray_idx_ == kInfSize)
 
   // Crystal count for stats reporting. Populated by legacy path from
@@ -169,6 +173,16 @@ struct SimData {
   // TraceBackend::GetLastBatchCrystalCount() (== final-layer setting count).
   // See scrum-cleanup-cuda-ci-misc/task-exit-seam-crystal-count.
   size_t crystal_count_ = 0;
+
+  // scrum-312 (third-clock drain): how many sim_scene_cnt_ units this SimData
+  // accounts for on the consumer side. Normally 1 (one SimData per
+  // SimulateOneWavelength* call, paired 1:1 with GenerateScene's per-wavelength
+  // increment). The CUDA third-clock path drains ONE SimData for a WINDOW of N
+  // accumulated (batch × wavelength) calls, so it sets this to N — ConsumeData
+  // decrements sim_scene_cnt_ by this credit to keep the increment/decrement
+  // invariant balanced (else the counter never reaches 0 and the server hangs /
+  // never idles). See simulator.cpp DrainDeviceXyz + server.cpp ConsumeData.
+  size_t sim_scene_credit_ = 1;
 };
 
 using SimDataPtrS = std::shared_ptr<SimData>;

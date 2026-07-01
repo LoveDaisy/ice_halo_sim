@@ -30,6 +30,15 @@ class Queue {
     return e;
   }
 
+  // Non-blocking emptiness check. Used by the device-fused XYZ drain cadence
+  // (scrum-312: third-clock decoupling) to flush the accumulation window when
+  // the producer pauses. TOCTOU is benign here — a batch arriving right after
+  // the check just drains one window later.
+  bool Empty() {
+    std::unique_lock lock(q_mutex_);
+    return q_.empty();
+  }
+
   template <class... Args>
   void Emplace(Args&&... args) {
     std::unique_lock lock(q_mutex_);

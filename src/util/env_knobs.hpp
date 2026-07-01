@@ -43,6 +43,14 @@ std::size_t DispatchRayNum(Logger& logger, std::size_t default_val);
 // deprecation WARN once if the legacy LUMICE_BATCH_RAY_NUM name is set at all.
 std::size_t CommitRayNum(Logger& logger, std::size_t default_val);
 
+// LUMICE_XYZ_DRAIN_BATCHES — scrum-312 third-clock drain cadence cap. Max number
+// of device-fused XYZ batches accumulated on-device before a forced drain
+// (readback+reset), bounding within-window float32 accumulation + latency during
+// continuous bursts (CLI). GUI display cadence is driven mainly by producer-pause
+// flush; this is the burst-internal upper bound. Returns the override when set to
+// a positive integer, else default_val. INFO once if applied.
+std::uint32_t XyzDrainBatches(Logger& logger, std::uint32_t default_val);
+
 // LUMICE_WL_POOL_SIZE — Metal per-ray wavelength pool size. Clamped to
 // [1, max_val]; returns default_val when unset/invalid. INFO once if applied.
 std::uint32_t WlPoolSize(Logger& logger, std::uint32_t default_val, std::uint32_t max_val);

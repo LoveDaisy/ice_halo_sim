@@ -27,6 +27,7 @@ Usage:
 """
 from __future__ import annotations
 
+import argparse
 import atexit
 import json
 import os
@@ -91,6 +92,26 @@ CONFIGS = {
 # legacy (slower) still finishes well within RUN_TIMEOUT_SEC. The committed
 # config files are NOT mutated; each run writes a temp config with this ray_num.
 RAY_NUM_OVERRIDE = 20_000_000
+
+# --- Resolution sweep (scrum-312.1) ------------------------------------------
+# GPU throughput is NOT resolution-invariant: the device-fused XYZ accumulation
+# (scrum-302) atomicAdds each exit ray into a W*H*3 float image buffer (12 B/px).
+# When that buffer fits GPU L2 (512x256 = 1.5MB) accumulation is cache-fast; once
+# it spills L2 (2048x1024 = 24MB) every atomicAdd hits DRAM and throughput falls
+# 3.6-5x. The knee sits at the L2 boundary and MOVES with the GPU's L2 size, so a
+# handful of fixed points can't locate it — a sweep can. `--res-sweep` overrides
+# render[].resolution per run (temp config, committed files untouched — same
+# mechanism as the ray_num override) at DEFAULT dispatch, isolating resolution as
+# the single variable. (Dispatch x resolution interaction is a separate explore;
+# see doc/performance-testing.md "分辨率是一等吞吐维度".)
+# 2:1 aspect (dual_fisheye full-globe layout); spans the L2 knee both sides.
+RES_SWEEP_DEFAULT = [
+    (256, 128), (512, 256), (768, 384), (1024, 512), (1536, 768), (2048, 1024),
+]
+# Two representative scenes: a light one (accumulation/readback dominates, cleanest
+# L2 signal) and a heavier one (throughput also varies with exit count / scatter
+# locality — see the backlog readback-tax entry).
+RES_SWEEP_CONFIGS_DEFAULT = ["bench_light_single_ms", "ms_multi_crystal"]
 
 # (label, LUMICE_TRACE_BACKEND value).  None => env unset (legacy CPU).
 # IMPORTANT: "legacy" must be first — subsequent backends use legacy_multi_median
@@ -177,8 +198,14 @@ def run(config_path: Path, backend_env: str | None, dispatch_num: int | None) ->
     env.pop("LUMICE_COMMIT_RAY_NUM", None)  # keep commit granularity at default
 
     cmd = [str(BIN), "--benchmark", "-f", str(config_path), "-v"]
+    # encoding/errors are explicit (not bare text=True): on a non-UTF-8 locale
+    # (e.g. Windows gbk) text=True decodes the binary's log stream with the locale
+    # codec and a stray non-locale byte (Win-1252 smart quote 0x92, etc.) raises
+    # UnicodeDecodeError in the reader thread → proc.stdout stays None. The
+    # [BENCHMARK] JSON we parse is ASCII, so replace undecodable bytes and move on.
     proc = subprocess.run(
-        cmd, capture_output=True, text=True, env=env, timeout=RUN_TIMEOUT_SEC
+        cmd, capture_output=True, encoding="utf-8", errors="replace",
+        env=env, timeout=RUN_TIMEOUT_SEC,
     )
     out = proc.stdout + proc.stderr
     benches = []
@@ -188,6 +215,17 @@ def run(config_path: Path, backend_env: str | None, dispatch_num: int | None) ->
         except json.JSONDecodeError:
             pass  # malformed [BENCHMARK] line → INCOMPLETE note below
     by_mode = {b["mode"]: b["rays_per_sec"] for b in benches}
+    # Wall-clock rate = rays / wall_sec. Robust cross-check for the steady
+    # rays_per_sec, which is FOOLED by the scrum-312 third-clock drain: with
+    # coarse drains, sim_ray_num stays 0 until the first drain, so the binary's
+    # steady window counts most tracing as "setup" and under-reports. wall_rate
+    # includes the (small) setup but is immune to drain granularity — trust it
+    # when it diverges from rays_per_sec. See doc/performance-testing.md.
+    by_mode_wall = {}
+    for b in benches:
+        w = b.get("wall_sec")
+        r = b.get("rays")
+        by_mode_wall[b["mode"]] = (r / w) if (w and r) else None
 
     expected_route = GPU_ROUTE_STRINGS.get(backend_env)  # None for legacy/cpu_backend
     routed_gpu = (expected_route in out) if expected_route else True
@@ -208,6 +246,8 @@ def run(config_path: Path, backend_env: str | None, dispatch_num: int | None) ->
     return {
         "single_rps": by_mode.get("single"),
         "multi_rps": by_mode.get("multi"),
+        "single_wall_rps": by_mode_wall.get("single"),
+        "multi_wall_rps": by_mode_wall.get("multi"),
         "routed_ok": routed_ok,
         "note": note,
         "rc": proc.returncode,
@@ -228,28 +268,33 @@ def _cov(values):
 def measure_cell(config_path: Path, backend_env: str | None, dispatch_num: int | None,
                  n_reps: int) -> dict:
     single_vals, multi_vals, all_ok, notes = [], [], True, []
+    multi_wall_vals = []
     for i in range(n_reps):
         try:
             r = run(config_path, backend_env, dispatch_num)
         except subprocess.TimeoutExpired:
             single_vals.append(None)
             multi_vals.append(None)
+            multi_wall_vals.append(None)
             all_ok = False
             notes.append(f"rep{i}:TIMEOUT")
             continue
         single_vals.append(r["single_rps"])
         multi_vals.append(r["multi_rps"])
+        multi_wall_vals.append(r["multi_wall_rps"])
         if not r["routed_ok"]:
             all_ok = False
         if r["note"]:
             notes.append(f"rep{i}:{r['note']}")
     s_clean = [v for v in single_vals if v is not None]
     m_clean = [v for v in multi_vals if v is not None]
+    mw_clean = [v for v in multi_wall_vals if v is not None]
     return {
         "single_vals": single_vals,
         "multi_vals": multi_vals,
         "single_median": statistics.median(s_clean) if s_clean else None,
         "multi_median": statistics.median(m_clean) if m_clean else None,
+        "multi_wall_median": statistics.median(mw_clean) if mw_clean else None,
         "single_cov": _cov(single_vals),
         "multi_cov": _cov(multi_vals),
         "routed_ok": all_ok,
@@ -302,8 +347,10 @@ def _preflight() -> list[str]:
     return errs
 
 
-def _override_ray_num(configs: dict, tmp_dir: str) -> dict:
-    """Write temp copies of each config with scene.ray_num = RAY_NUM_OVERRIDE.
+def _override_config(configs: dict, tmp_dir: str,
+                     resolution: tuple[int, int] | None = None) -> dict:
+    """Write temp copies of each config with scene.ray_num = RAY_NUM_OVERRIDE and,
+    when `resolution` is given, every render[].resolution set to [w, h].
 
     Committed config files are never mutated; returns {label: temp_path}.
     """
@@ -313,13 +360,182 @@ def _override_ray_num(configs: dict, tmp_dir: str) -> dict:
         if "scene" not in cfg or "ray_num" not in cfg["scene"]:
             raise KeyError(f"{label}: config missing scene.ray_num (cannot apply override)")
         cfg["scene"]["ray_num"] = RAY_NUM_OVERRIDE
-        dst = Path(tmp_dir) / f"{label}.json"
+        suffix = ""
+        if resolution is not None:
+            renders = cfg.get("render")
+            if not isinstance(renders, list) or not renders:
+                raise KeyError(f"{label}: config missing render[] (cannot set resolution)")
+            for r in renders:
+                r["resolution"] = [resolution[0], resolution[1]]
+            suffix = f"_{resolution[0]}x{resolution[1]}"
+        dst = Path(tmp_dir) / f"{label}{suffix}.json"
         dst.write_text(json.dumps(cfg))
         out[label] = dst
     return out
 
 
+def _measure_with_cov_escalation(cfg_path: Path, backend_env: str | None,
+                                 dispatch_num: int | None, label: str,
+                                 cov_log: list[str]) -> dict:
+    """measure_cell + the >15% CoV -> N=9 re-run -> HIGH_COV_THERMAL decision tree.
+    Shared by the default matrix and the resolution sweep so they can't diverge."""
+    cell = measure_cell(cfg_path, backend_env, dispatch_num, N_REPS)
+    worst_cov = max(
+        (c for c in (cell["single_cov"], cell["multi_cov"]) if c is not None),
+        default=None,
+    )
+    if worst_cov is not None and worst_cov > COV_THRESHOLD:
+        msg = (
+            f"[{label}] CoV={100 * worst_cov:.1f}% > 15% @ N={N_REPS} — "
+            f"re-running at N={N_REPS_HIGH_COV}..."
+        )
+        print(msg, flush=True)
+        cov_log.append(msg)
+        cell = measure_cell(cfg_path, backend_env, dispatch_num, N_REPS_HIGH_COV)
+        worst_cov2 = max(
+            (c for c in (cell["single_cov"], cell["multi_cov"]) if c is not None),
+            default=None,
+        )
+        if worst_cov2 is not None and worst_cov2 > COV_THRESHOLD:
+            cell["notes"].append("HIGH_COV_THERMAL")
+            cov_log.append(
+                f"  ↳ still {100 * worst_cov2:.1f}% after N=9 — HIGH_COV_THERMAL"
+            )
+    return cell
+
+
+def run_res_sweep(resolutions: list[tuple[int, int]],
+                  sweep_config_labels: list[str]) -> int:
+    """Sweep render resolution at DEFAULT dispatch to characterize the GPU L2 knee.
+
+    One curve per (config, backend); legacy CPU is the per-(config, resolution)
+    denominator. Committed configs are never mutated (temp override). See the
+    RES_SWEEP_DEFAULT comment for the mechanism.
+    """
+    # Honor the LUMICE_BENCH_CONFIGS narrowing already applied to CONFIGS.
+    sweep_configs = {k: v for k, v in CONFIGS.items() if k in sweep_config_labels}
+    if not sweep_configs:
+        sys.stderr.write(
+            "[bench_throughput] --res-sweep: no matching configs "
+            f"(requested {sweep_config_labels}, available {list(CONFIGS)})\n"
+        )
+        return 2
+
+    is_darwin = platform.system() == "Darwin"
+    tmp_dir = tempfile.mkdtemp(prefix="bench_res_sweep_")
+    atexit.register(shutil.rmtree, tmp_dir, ignore_errors=True)
+
+    print(
+        "# bench_throughput --res-sweep — resolution axis, DEFAULT dispatch.\n"
+        "# denominator = legacy CPU multi_rps per (config, resolution).\n"
+        f"# ray_num overridden to {RAY_NUM_OVERRIDE:,}; W*H*3*4 B = XYZ buffer size.\n"
+        "# Watch for the throughput knee where buffer_MB crosses the GPU L2 size.\n",
+        flush=True,
+    )
+    header = (
+        f"{'backend':<12s} {'config':<26s} {'res':>11s} {'buf_MB':>7s} "
+        f"{'single_med':>15s} {'multi_med':>15s} {'multi_wall':>15s} "
+        f"{'cov_s':>6s} {'cov_m':>6s} {'vs_legacy':>10s} note"
+    )
+    print(header, flush=True)
+    print("-" * len(header), flush=True)
+    print("# multi_wall = rays/wall_sec (robust); multi_med = steady rays_per_sec "
+          "(UNRELIABLE under third-clock drain — trust multi_wall when they diverge).",
+          flush=True)
+
+    rows: list[dict] = []
+    cov_log: list[str] = []
+    for cfg_label, cfg_src in sweep_configs.items():
+        for (w, h) in resolutions:
+            cfg_path = _override_config({cfg_label: cfg_src}, tmp_dir, (w, h))[cfg_label]
+            buf_mb = w * h * 3 * 4 / (1024 * 1024)
+            legacy_multi_median = None
+            for backend_label, backend_env in BACKENDS:
+                na_reason = _backend_na_reason(backend_label, is_darwin)
+                if na_reason is not None:
+                    continue  # skip N/A rows to keep the curve readable
+                label = f"{backend_label} {cfg_label} {w}x{h}"
+                cell = _measure_with_cov_escalation(cfg_path, backend_env, None,
+                                                    label, cov_log)
+                if backend_label == BASELINE_BACKEND:
+                    legacy_multi_median = cell["multi_median"]
+                    ratio_str = "1.00x" if cell["multi_median"] else "    - "
+                    suffix = BASELINE_LABEL
+                elif backend_label == "cpu_backend":
+                    ratio_str = _fmt_ratio(cell["multi_median"], legacy_multi_median)
+                    suffix = CPU_BACKEND_LABEL
+                else:
+                    ratio_str = _fmt_ratio(cell["multi_median"], legacy_multi_median)
+                    suffix = ""
+                flags = list(cell["notes"])
+                if not cell["routed_ok"]:
+                    flags.insert(0, "ROUTE?")
+                note_str = f"<-- {','.join(flags)} {suffix}".rstrip() if flags else suffix
+                print(
+                    f"{backend_label:<12s} {cfg_label:<26s} {f'{w}x{h}':>11s} "
+                    f"{buf_mb:>7.1f} "
+                    f"{_fmt_rps(cell['single_median']):>15s} "
+                    f"{_fmt_rps(cell['multi_median']):>15s} "
+                    f"{_fmt_rps(cell['multi_wall_median']):>15s} "
+                    f"{_fmt_cov(cell['single_cov']):>6s} "
+                    f"{_fmt_cov(cell['multi_cov']):>6s} "
+                    f"{ratio_str:>10s} {note_str}",
+                    flush=True,
+                )
+                rows.append({
+                    "backend": backend_label, "config": cfg_label,
+                    "resolution": [w, h], "buffer_mb": round(buf_mb, 2),
+                    "single_median_rps": cell["single_median"],
+                    "multi_median_rps": cell["multi_median"],
+                    "multi_wall_median_rps": cell["multi_wall_median"],
+                    "single_cov": cell["single_cov"], "multi_cov": cell["multi_cov"],
+                    "vs_legacy_multi": (
+                        cell["multi_median"] / legacy_multi_median
+                        if cell["multi_median"] and legacy_multi_median else None
+                    ),
+                    "routed_ok": cell["routed_ok"], "notes": cell["notes"],
+                })
+            print("", flush=True)
+
+    if cov_log:
+        print("# CoV escalation log:", flush=True)
+        for line in cov_log:
+            print(f"  {line}", flush=True)
+        print("", flush=True)
+    print("# raw rows (json):", flush=True)
+    print(json.dumps(rows, indent=2, default=str), flush=True)
+    return 0
+
+
+def _parse_res_list(s: str) -> list[tuple[int, int]]:
+    out: list[tuple[int, int]] = []
+    for tok in s.split(","):
+        tok = tok.strip().lower()
+        if not tok:
+            continue
+        w, h = tok.split("x")
+        out.append((int(w), int(h)))
+    return out
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Committed throughput bench harness (matrix + resolution sweep)."
+    )
+    parser.add_argument(
+        "--res-sweep", action="store_true",
+        help="sweep render resolution at default dispatch (characterize the GPU L2 knee)",
+    )
+    parser.add_argument(
+        "--res-list", default=None, metavar="WxH,...",
+        help="comma-separated resolutions for --res-sweep (default: 256x128..2048x1024)",
+    )
+    parser.add_argument(
+        "--res-configs", default=None, metavar="label,...",
+        help="config labels to sweep (default: bench_light_single_ms,ms_multi_crystal)",
+    )
+    args = parser.parse_args()
+
     errs = _preflight()
     if errs:
         sys.stderr.write("[bench_throughput] preflight failed:\n")
@@ -327,9 +543,17 @@ def main() -> int:
             sys.stderr.write(f"  - {e}\n")
         return 2
 
+    if args.res_sweep:
+        resolutions = _parse_res_list(args.res_list) if args.res_list else RES_SWEEP_DEFAULT
+        sweep_labels = (
+            [s.strip() for s in args.res_configs.split(",") if s.strip()]
+            if args.res_configs else RES_SWEEP_CONFIGS_DEFAULT
+        )
+        return run_res_sweep(resolutions, sweep_labels)
+
     tmp_dir = tempfile.mkdtemp(prefix="bench_throughput_")
     atexit.register(shutil.rmtree, tmp_dir, ignore_errors=True)
-    configs = _override_ray_num(CONFIGS, tmp_dir)
+    configs = _override_config(CONFIGS, tmp_dir)
 
     is_darwin = platform.system() == "Darwin"
     if not is_darwin:
@@ -353,11 +577,14 @@ def main() -> int:
 
     header = (
         f"{'backend':<12s} {'config':<34s} {'dispatch':>9s} "
-        f"{'single_med':>15s} {'multi_med':>15s} "
+        f"{'single_med':>15s} {'multi_med':>15s} {'multi_wall':>15s} "
         f"{'cov_s':>6s} {'cov_m':>6s} {'vs_legacy':>10s} note"
     )
     print(header, flush=True)
     print("-" * len(header), flush=True)
+    print("# multi_wall = rays/wall_sec (robust); multi_med = steady rays_per_sec "
+          "(UNRELIABLE under third-clock drain — trust multi_wall when they diverge).",
+          flush=True)
 
     for cfg_label, cfg_path in configs.items():
         legacy_multi_median = None
@@ -374,31 +601,11 @@ def main() -> int:
                 continue
 
             for dispatch_num in DISPATCH_PLAN[backend_label]:
-                cell = measure_cell(cfg_path, backend_env, dispatch_num, N_REPS)
-
                 # CoV decision tree: >15% @ N=5 -> rerun at N=9; still >15% -> flag thermal.
-                worst_cov = max(
-                    (c for c in (cell["single_cov"], cell["multi_cov"]) if c is not None),
-                    default=None,
+                label = f"{backend_label} {cfg_label} disp={_fmt_dispatch(dispatch_num)}"
+                cell = _measure_with_cov_escalation(
+                    cfg_path, backend_env, dispatch_num, label, cov_log
                 )
-                if worst_cov is not None and worst_cov > COV_THRESHOLD:
-                    msg = (
-                        f"[{backend_label} {cfg_label} disp={_fmt_dispatch(dispatch_num)}] "
-                        f"CoV={100 * worst_cov:.1f}% > 15% @ N={N_REPS} — "
-                        f"re-running at N={N_REPS_HIGH_COV}..."
-                    )
-                    print(msg, flush=True)
-                    cov_log.append(msg)
-                    cell = measure_cell(cfg_path, backend_env, dispatch_num, N_REPS_HIGH_COV)
-                    worst_cov2 = max(
-                        (c for c in (cell["single_cov"], cell["multi_cov"]) if c is not None),
-                        default=None,
-                    )
-                    if worst_cov2 is not None and worst_cov2 > COV_THRESHOLD:
-                        cell["notes"].append("HIGH_COV_THERMAL")
-                        cov_log.append(
-                            f"  ↳ still {100 * worst_cov2:.1f}% after N=9 — HIGH_COV_THERMAL"
-                        )
 
                 if backend_label == BASELINE_BACKEND:
                     legacy_multi_median = cell["multi_median"]
@@ -421,6 +628,7 @@ def main() -> int:
                     f"{_fmt_dispatch(dispatch_num):>9s} "
                     f"{_fmt_rps(cell['single_median']):>15s} "
                     f"{_fmt_rps(cell['multi_median']):>15s} "
+                    f"{_fmt_rps(cell['multi_wall_median']):>15s} "
                     f"{_fmt_cov(cell['single_cov']):>6s} "
                     f"{_fmt_cov(cell['multi_cov']):>6s} "
                     f"{ratio_str:>10s} {note_str}",
@@ -433,6 +641,7 @@ def main() -> int:
                     "dispatch": _fmt_dispatch(dispatch_num),
                     "single_median_rps": cell["single_median"],
                     "multi_median_rps": cell["multi_median"],
+                    "multi_wall_median_rps": cell["multi_wall_median"],
                     "single_cov": cell["single_cov"],
                     "multi_cov": cell["multi_cov"],
                     "vs_legacy_multi": (

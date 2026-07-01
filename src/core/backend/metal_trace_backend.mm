@@ -527,6 +527,11 @@ struct MetalTraceBackend::Impl {
   // XYZ accumulator (W*H*3 floats).
   id<MTLBuffer> xyz_image = nil;
   size_t        xyz_pix_capacity = 0;
+  // scrum-312: dims xyz_image was actually allocated for (persist across sessions,
+  // unlike width/height which Reset clears). Used by the between-session
+  // third-clock drain to release-safe-verify the caller's dims.
+  int           alloc_xyz_w_ = 0;
+  int           alloc_xyz_h_ = 0;
 
   // Polygon geometry (uploaded per-layer; capacity-resized lazily).
   id<MTLBuffer> poly_n_buf  = nil;
@@ -863,13 +868,35 @@ void MetalTraceBackend::Impl::EnsurePso() {
 
 void MetalTraceBackend::Impl::EnsureImage(int w, int h) {
   size_t pix = static_cast<size_t>(w) * static_cast<size_t>(h);
+  // Grow/shrink the byte allocation only when the pixel COUNT changes.
   if (pix != xyz_pix_capacity) {
     xyz_image = [device newBufferWithLength:pix * 3 * sizeof(float)
                                     options:MTLResourceStorageModeShared];
     assert(xyz_image != nil);
     xyz_pix_capacity = pix;
   }
-  std::memset([xyz_image contents], 0, pix * 3 * sizeof(float));
+  // scrum-312 third clock: reset on any SHAPE change (w or h), not just pixel
+  // count — a same-area shape swap (e.g. 512x1024 -> 1024x512) reuses the buffer
+  // but is a fresh accumulation region. Gate on (w,h) so alloc_xyz_w_/h_ track the
+  // current shape (else the between-session drain's dim check would false-throw,
+  // review-Major-1) and BOTH twin accumulators reset together (else landed_weight
+  // would mix old/new-shape rays while xyz_image reset, review-Major-2). A shape
+  // change always rides a generation change, whose flush already drained the prior
+  // window, so re-zeroing here is correct. Steady state: BeginSession does NOT
+  // clear these — they persist across batches; the drain's post-read reset is the
+  // per-window reset.
+  if (w != alloc_xyz_w_ || h != alloc_xyz_h_) {
+    // Reset BOTH twin accumulators together. landed_weight_buf_ MUST already be
+    // allocated (BeginSession allocates it before calling EnsureImage) — assert
+    // the invariant loudly rather than silently best-effort, so a future caller
+    // that forgets the ordering can't silently reintroduce the round-1 Major-2
+    // (xyz reset while landed keeps stale rays).
+    assert(landed_weight_buf_ != nil && "EnsureImage: landed_weight_buf_ must be allocated before reset");
+    std::memset([xyz_image contents], 0, pix * 3 * sizeof(float));
+    *static_cast<float*>([landed_weight_buf_ contents]) = 0.0f;
+    alloc_xyz_w_ = w;
+    alloc_xyz_h_ = h;
+  }
 }
 
 void MetalTraceBackend::Impl::EnsurePolyBuffers(size_t poly_cnt) {
@@ -1993,17 +2020,18 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   try {
     impl_->EnsureDevice();
     impl_->EnsurePso();
-    impl_->EnsureImage(impl_->width, impl_->height);
     // S1 device-fused: landed_weight scalar (1 × float, MTLResourceStorageModeShared).
-    // Allocated once (nil-check), cleared every BeginSession so cross-batch
-    // accumulation starts from zero.
+    // scrum-312 third clock: allocate ONCE (nil-check); it persists as a cross-batch
+    // accumulator like xyz_image. Allocate it BEFORE EnsureImage so EnsureImage
+    // resets BOTH twin accumulators atomically on a fresh accumulation region /
+    // shape change (review-Major-2). No per-call zero here.
     if (impl_->landed_weight_buf_ == nil) {
       impl_->landed_weight_buf_ =
           [impl_->device newBufferWithLength:sizeof(float)
                                      options:MTLResourceStorageModeShared];
       assert(impl_->landed_weight_buf_ != nil);
     }
-    *static_cast<float*>([impl_->landed_weight_buf_ contents]) = 0.0f;
+    impl_->EnsureImage(impl_->width, impl_->height);
     // scrum-268.8 (DR-3): allocate the wavelength pool buffer once per backend
     // (size invariant across sessions) and populate it once per BeginSession.
     // Pool content depends only on (illuminant mode, per_batch_wl_) — both
@@ -2391,19 +2419,49 @@ size_t MetalTraceBackend::ReadbackExitRays(std::vector<ExitRayRecord>& out) {
   return 0;
 }
 
-// S1 device-fused: copy the device-accumulated W*H*3 XYZ image and the total
-// landed weight. Called once per wavelength batch AFTER the layer loop.
-// The xyz_image buffer is in MTLResourceStorageModeShared (unified memory on
-// Apple Silicon); waitUntilCompleted in WaitAndReadbackLayer guarantees all
-// pending command buffers have finished before we reach here.
+// scrum-312 third-clock drain: copy the PERSISTENT cross-batch xyz_image + landed
+// weight to host and reset them for the next window. The simulator drains on
+// display cadence (a whole window of batches), possibly BETWEEN sessions — so
+// this must not depend on in_session/width/height (Reset clears those), and must
+// itself guarantee GPU completion rather than rely on the caller having waited.
 void MetalTraceBackend::ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight) {
-  assert(impl_->in_session);
-  assert(impl_->landed_weight_buf_ != nil);
-  size_t pix = static_cast<size_t>(impl_->width) * static_cast<size_t>(impl_->height);
-  assert(xyz.data != nullptr);
-  assert(xyz.width == impl_->width && xyz.height == impl_->height);
+  // Release-safe gates (mirror the CUDA backend; asserts are no-ops under NDEBUG,
+  // review-Minor: all three preconditions throw, not assert).
+  if (impl_->xyz_image == nil || impl_->landed_weight_buf_ == nil || xyz.data == nullptr) {
+    throw BackendUnavailableError("MetalTraceBackend::ReadbackXyzAccum: unallocated buffer or null xyz.data");
+  }
+  // Invariant (review-Minor): alloc_xyz_w_/h_ and xyz_pix_capacity encode the same
+  // underlying allocation and are set together in EnsureImage — assert they agree.
+  assert(static_cast<size_t>(impl_->alloc_xyz_w_) * static_cast<size_t>(impl_->alloc_xyz_h_) ==
+             impl_->xyz_pix_capacity &&
+         "alloc dims out of sync with xyz_pix_capacity");
+  // Pixel count from the dims the buffer was ACTUALLY allocated for (persist
+  // across Reset), cross-checked release-safe against the caller's declared dims.
+  if (xyz.width != impl_->alloc_xyz_w_ || xyz.height != impl_->alloc_xyz_h_) {
+    throw BackendUnavailableError("MetalTraceBackend::ReadbackXyzAccum: caller dims (" + std::to_string(xyz.width) +
+                                  "x" + std::to_string(xyz.height) + ") != allocated buffer dims (" +
+                                  std::to_string(impl_->alloc_xyz_w_) + "x" + std::to_string(impl_->alloc_xyz_h_) + ")");
+  }
+  // Defensive GPU-completion barrier: the per-batch WaitAndReadbackLayer (ci-loop
+  // tail) + EndSession already drain pending_cb_, so this is normally nil, but a
+  // between-session drain must not assume that — mirror CUDA's cudaDeviceSynchronize.
+  // Thread-safety (review-Minor): pending_cb_ is only ever touched on the simulator
+  // Run() thread — the trace (DispatchLayer sets it), the per-batch waits, and this
+  // drain (via DrainDeviceXyz at Run()'s flush points / batch-cap) all run on that
+  // single thread sequentially. No cross-thread access, so the bare-pointer r/w is
+  // race-free (the display-cadence "clock" is the Run loop's own control flow, not a
+  // separate GUI thread).
+  if (impl_->pending_cb_ != nil) {
+    [impl_->pending_cb_ waitUntilCompleted];
+    impl_->pending_cb_ = nil;
+  }
+  size_t pix = static_cast<size_t>(impl_->alloc_xyz_w_) * static_cast<size_t>(impl_->alloc_xyz_h_);
   std::memcpy(xyz.data, [impl_->xyz_image contents], pix * 3 * sizeof(float));
   landed_weight += *static_cast<const float*>([impl_->landed_weight_buf_ contents]);
+  // Reset the accumulators so the next drain window starts from zero (BeginSession
+  // no longer clears them). Unified memory → a plain host memset/store suffices.
+  std::memset([impl_->xyz_image contents], 0, pix * 3 * sizeof(float));
+  *static_cast<float*>([impl_->landed_weight_buf_ contents]) = 0.0f;
 }
 
 // task-268.4 per-layer destructive drain. Identical to ReadbackExitRays

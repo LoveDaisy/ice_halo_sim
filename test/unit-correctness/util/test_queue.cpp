@@ -57,6 +57,22 @@ TEST(QueueTest, EmplaceForwardsArgs) {
   EXPECT_EQ(b.second, "world");
 }
 
+TEST(QueueTest, EmptyReflectsQueueContents) {
+  // scrum-312: Empty() is the non-blocking emptiness check the third-clock drain
+  // uses for producer-pause flush. True on a fresh queue, false after Emplace,
+  // true again once drained.
+  Queue<int> q;
+  EXPECT_TRUE(q.Empty());
+  q.Emplace(1);
+  EXPECT_FALSE(q.Empty());
+  q.Emplace(2);
+  EXPECT_FALSE(q.Empty());
+  (void)q.Get();
+  EXPECT_FALSE(q.Empty()) << "one item still queued";
+  (void)q.Get();
+  EXPECT_TRUE(q.Empty()) << "drained back to empty";
+}
+
 TEST(QueueTest, GetBlocksUntilEmplace) {
   // Consumer thread calls Get() first; main thread Emplaces; consumer wakes.
   // Synchronization point is t.join(): if consumer never unblocks, join hangs the test.

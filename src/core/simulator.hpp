@@ -92,6 +92,31 @@ class Simulator {
   void SimulateOneWavelengthWithBackend(TraceBackend& backend, const SceneConfig& scene, const RenderConfig& render,
                                         const WlParam& wl_param, size_t ray_num, uint64_t generation);
 
+  // scrum-312 (third-clock drain): for SupportsThirdClockDrain() backends the
+  // device XYZ accumulator persists across per-batch sessions; this window holds
+  // the host-side aggregation (Σ root rays / crystals) since the last drain so
+  // the drained SimData carries correct normalization + stats. Drained on
+  // display cadence (producer-pause / generation-change / run-exit / batch cap),
+  // not per batch — see Run() and DrainDeviceXyz.
+  struct XyzDrainWindow {
+    bool pending = false;     // undrained device accumulation present
+    size_t root_rays = 0;     // Σ ray_num over the window (normalization denom)
+    size_t crystals = 0;      // Σ crystal_count over the window (stats)
+    uint64_t generation = 0;  // generation the window belongs to
+    int w = 0;                // render resolution of the window
+    int h = 0;
+    float wl = 0.0f;     // last wl (device-fused: not consumed downstream)
+    uint32_t calls = 0;  // batches accumulated since last drain (cadence cap)
+  };
+  XyzDrainWindow xyz_win_;
+  static constexpr uint32_t kDefaultXyzDrainBatches = 64;
+  uint32_t xyz_drain_batches_ = kDefaultXyzDrainBatches;  // resolved from env at Run() entry
+  // Readback the persistent device XYZ accumulator into a SimData (window-
+  // aggregated root/crystal counts), enqueue it, and reset the window. No-op if
+  // `backend` is null or nothing is pending (self-guarding so call sites stay
+  // flat). Called only for SupportsThirdClockDrain() backends.
+  void DrainDeviceXyz(TraceBackend* backend);
+
   static constexpr size_t kSmallBatchRayNum = 32;
 
   QueuePtrS<SimBatch> config_queue_;

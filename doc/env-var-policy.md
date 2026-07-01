@@ -40,6 +40,7 @@ env 是标准做法，不在治理范围内。
 | `LUMICE_TRACE_BACKEND` | `env::TraceBackendOverride` ← `simulator.cpp` `CreateBackend` / `server.cpp` `ResolveMetalRoute` | 选后端 `legacy`/`cpu_backend`/`metal`——**曾经的 footgun，已降级** | **CLI `--backend auto\|cpu\|metal`**（`src/main.cpp`）+ C API `LUMICE_SetPreferredBackend` / GUI checkbox。env 仅作 debug/CI 覆盖，生效即 WARN |
 | `LUMICE_DISPATCH_RAY_NUM` | `env::DispatchRayNum` ← `server.cpp` `GenerateScene` | GPU dispatch 粒度（perf 旋钮） | 无（纯实验旋钮，启动 INFO 可观测） |
 | `LUMICE_COMMIT_RAY_NUM` | `env::CommitRayNum` ← `server.cpp` `ConsumeData` | commit 粒度（perf 旋钮） | 无（纯实验旋钮，启动 INFO 可观测） |
+| `LUMICE_XYZ_DRAIN_BATCHES` | `env::XyzDrainBatches` ← `simulator.cpp` `Run` | scrum-312 第三时钟 drain cadence 上限（每 N 个 device-fused batch 强制回读 XYZ；perf/精度旋钮，CUDA 路径） | 无（纯实验旋钮，启动 INFO 可观测；GUI 显示节奏主要由 producer-pause flush 驱动，此为 burst 内上界） |
 | `LUMICE_BATCH_RAY_NUM` | `env::CommitRayNum`（fallback） | 已废弃别名（deprecation WARN） | 由 `COMMIT_RAY_NUM` 取代 |
 | `LUMICE_DISABLE_DEVICE_GEN` | `env::DisableDeviceGen` ← `metal_trace_backend.mm` Impl ctor | 关 device-gen（实验/调试旋钮） | 无（启动 INFO 可观测） |
 | `LUMICE_DISABLE_METAL_SOURCE_COMPILE` | `env::DisableMetalSourceCompile` ← `metal_trace_backend.mm` `LoadMetalLibrary` | 关 metal 源码编译（也被回归 sentinel 当门禁用） | 无（启动 INFO 可观测） |

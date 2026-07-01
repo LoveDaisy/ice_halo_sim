@@ -104,6 +104,9 @@ class CudaTraceBackend : public TraceBackend {
   // to legacy CPU via simulator backend dispatch.
   bool HasDeviceXyzAccum() const override;
   void ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight) override;
+  // scrum-312: CUDA opts into third-clock drain (persistent device accumulator +
+  // display-cadence readback) to shed the per-batch synchronous D2H readback tax.
+  bool SupportsThirdClockDrain() const override { return true; }
   bool IsCompatible(const RenderConfig& render) const override;
   void EndSession() override;
   // Per-ray wavelength pool size M (296.6 DR-3). Non-zero routes the driving

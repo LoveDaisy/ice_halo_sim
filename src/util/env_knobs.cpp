@@ -55,6 +55,20 @@ std::size_t DispatchRayNum(Logger& logger, std::size_t default_val) {
   return default_val;
 }
 
+std::uint32_t XyzDrainBatches(Logger& logger, std::uint32_t default_val) {
+  if (const char* env = std::getenv("LUMICE_XYZ_DRAIN_BATCHES")) {
+    long b = std::atol(env);
+    if (b > 0) {
+      static std::once_flag logged;
+      std::call_once(logged, [&logger, b, default_val]() {
+        ILOG_INFO(logger, "env override: LUMICE_XYZ_DRAIN_BATCHES={} (default {})", b, default_val);
+      });
+      return static_cast<std::uint32_t>(b);
+    }
+  }
+  return default_val;
+}
+
 std::size_t CommitRayNum(Logger& logger, std::size_t default_val) {
   std::size_t result = default_val;
   bool overridden = false;

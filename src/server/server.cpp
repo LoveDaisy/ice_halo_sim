@@ -905,7 +905,11 @@ void ServerImpl::ConsumeData() {
     } else {
       ILOG_DEBUG(logger_, "ConsumeData: skip consume (sim_scene_cnt_={})", sim_scene_cnt_.load());
     }
-    sim_scene_cnt_--;
+    // scrum-312 third-clock: a windowed device-fused SimData stands in for N
+    // per-wavelength calls (sim_scene_credit_ == N); all other paths credit 1.
+    // Decrement by the credit to keep the GenerateScene ++ / ConsumeData --
+    // invariant balanced regardless of drain windowing.
+    sim_scene_cnt_ -= static_cast<int>(sim_data.sim_scene_credit_);
     if (sim_scene_cnt_ < kMaxSceneCnt / 2) {
       scene_cv_.notify_one();
     }

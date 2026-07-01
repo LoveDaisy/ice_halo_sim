@@ -49,7 +49,9 @@ static_assert(sizeof(void*) == 8, "SimData layout assumes 64-bit pointers");
 // S1 device-fused: adds xyz_pixel_data_ (vector<float>, 24B) + xyz_landed_weight_
 // (float, 4B) + 4B padding = 32B, bumping 216 → 248. task-exit-seam-crystal-count
 // adds crystal_count_ (size_t, 8B) for exit-seam stats, bumping 248 → 256.
-static_assert(sizeof(SimData) == 256,
+// scrum-312 adds sim_scene_credit_ (size_t, 8B) for third-clock drain counter
+// balance, bumping 256 → 264.
+static_assert(sizeof(SimData) == 264,
               "SimData layout changed — update test_sim_data.cpp DeepCopy/Move assertions "
               "and sim_data.cpp's static_assert.");
 #endif
@@ -107,6 +109,8 @@ SimData MakePopulatedSimData() {
   s.crystals_.emplace_back();
   // task-exit-seam-crystal-count: propagation coverage for the new field.
   s.crystal_count_ = 4;
+  // scrum-312: third-clock drain counter-balance credit propagation coverage.
+  s.sim_scene_credit_ = 11;
   return s;
 }
 
@@ -811,7 +815,8 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
   EXPECT_EQ(copy.exit_records_[1].ms_layer_idx, 1u);
   EXPECT_EQ(copy.xyz_pixel_data_, original.xyz_pixel_data_);  // S1 device-fused
   EXPECT_FLOAT_EQ(copy.xyz_landed_weight_, 1.5f);
-  EXPECT_EQ(copy.crystal_count_, 4u) << "crystal_count_ not copied";  // task-exit-seam-crystal-count
+  EXPECT_EQ(copy.crystal_count_, 4u) << "crystal_count_ not copied";         // task-exit-seam-crystal-count
+  EXPECT_EQ(copy.sim_scene_credit_, 11u) << "sim_scene_credit_ not copied";  // scrum-312
 
   // Deep copy independence — each pointer/container field independently.
   copy.rays_[0].w_ = 999.0f;
@@ -856,7 +861,8 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   EXPECT_EQ(target.exit_records_[0].crystal_id, 7u);
   EXPECT_EQ(target.xyz_pixel_data_, original.xyz_pixel_data_);  // S1 device-fused
   EXPECT_FLOAT_EQ(target.xyz_landed_weight_, 1.5f);
-  EXPECT_EQ(target.crystal_count_, 4u) << "crystal_count_ not assigned";  // task-exit-seam-crystal-count
+  EXPECT_EQ(target.crystal_count_, 4u) << "crystal_count_ not assigned";         // task-exit-seam-crystal-count
+  EXPECT_EQ(target.sim_scene_credit_, 11u) << "sim_scene_credit_ not assigned";  // scrum-312
 
   // Deep copy independence.
   target.rays_[0].w_ = 999.0f;
@@ -910,7 +916,8 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_EQ(moved.crystals_.size(), 1u);
   EXPECT_EQ(moved.xyz_pixel_data_.size(), 3u);  // S1 device-fused
   EXPECT_FLOAT_EQ(moved.xyz_landed_weight_, 1.5f);
-  EXPECT_EQ(moved.crystal_count_, 4u) << "crystal_count_ not moved";  // task-exit-seam-crystal-count
+  EXPECT_EQ(moved.crystal_count_, 4u) << "crystal_count_ not moved";         // task-exit-seam-crystal-count
+  EXPECT_EQ(moved.sim_scene_credit_, 11u) << "sim_scene_credit_ not moved";  // scrum-312
 
   // Moved-from source contract — three categories:
   // (a) rays_ pointer ownership transferred → nullptr + zeroed size/capacity.
@@ -947,7 +954,8 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   EXPECT_FLOAT_EQ(dst.curr_wl_, 550.0f);
   EXPECT_EQ(dst.generation_, 42u);
   EXPECT_EQ(dst.crystals_.size(), 1u);
-  EXPECT_EQ(dst.crystal_count_, 4u) << "crystal_count_ not move-assigned";  // task-exit-seam-crystal-count
+  EXPECT_EQ(dst.crystal_count_, 4u) << "crystal_count_ not move-assigned";         // task-exit-seam-crystal-count
+  EXPECT_EQ(dst.sim_scene_credit_, 11u) << "sim_scene_credit_ not move-assigned";  // scrum-312
 
   // Source moved-from state.
   EXPECT_EQ(src.rays_.rays_, nullptr);

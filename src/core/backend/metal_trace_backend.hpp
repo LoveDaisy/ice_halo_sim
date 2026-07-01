@@ -106,6 +106,10 @@ class MetalTraceBackend : public TraceBackend {
   // of materialising per-exit records.
   bool HasDeviceXyzAccum() const override { return true; }
   void ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight) override;
+  // scrum-312.4: Metal joins the third clock (persistent cross-batch XYZ
+  // accumulator + display-cadence drain). Unlike CUDA the payoff is architectural
+  // uniformity, not throughput — unified-memory readback was already ~free.
+  bool SupportsThirdClockDrain() const override { return true; }
   void EndSession() override;
   bool IsCompatible(const RenderConfig& render) const override;
   // scrum-268.8 (DR-3): per-ray wavelength pool size. Resolved from
