@@ -113,6 +113,12 @@ class MetalTraceBackend : public TraceBackend {
   // thereafter for the backend instance's lifetime.
   uint32_t WlPoolSize() const override;
 
+  // task-exit-seam-crystal-count: setting count of the final MS layer for the
+  // current session. Backed by Impl::last_layer_crystals_ (populated during
+  // the last TraceLayer call). Simulator reads this after the MS loop to
+  // fill SimData.crystal_count_ for stats reporting.
+  size_t GetLastBatchCrystalCount() const override;
+
   // [TEST-ONLY] Return the trace_layer_kernel PSO's
   // maxTotalThreadsPerThreadgroup (or 0 if BeginSession has not yet built the
   // PSO). Used by the scrum-267 task-fused-emit-gate occupancy regression

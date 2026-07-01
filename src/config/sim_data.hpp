@@ -163,6 +163,12 @@ struct SimData {
   float xyz_landed_weight_ = 0.0f;
 
   size_t root_ray_count_ = 0;  // Count of root rays (prev_ray_idx_ == kInfSize)
+
+  // Crystal count for stats reporting. Populated by legacy path from
+  // all_crystals.size() and by exit-seam path from
+  // TraceBackend::GetLastBatchCrystalCount() (== final-layer setting count).
+  // See scrum-cleanup-cuda-ci-misc/task-exit-seam-crystal-count.
+  size_t crystal_count_ = 0;
 };
 
 using SimDataPtrS = std::shared_ptr<SimData>;

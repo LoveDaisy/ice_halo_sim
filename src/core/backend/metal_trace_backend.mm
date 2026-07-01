@@ -2446,6 +2446,13 @@ uint32_t MetalTraceBackend::WlPoolSize() const {
   return impl_->wl_pool_size_ != 0u ? impl_->wl_pool_size_ : ResolveWlPoolSize(EffectiveLogger(impl_->logger_));
 }
 
+size_t MetalTraceBackend::GetLastBatchCrystalCount() const {
+  // task-exit-seam-crystal-count: Impl::last_layer_crystals_ is resized/filled
+  // only during the final layer's TraceLayer call (see the block at
+  // metal_trace_backend.mm:2127-2168); reading before EndSession is safe.
+  return impl_->last_layer_crystals_.size();
+}
+
 size_t MetalTraceBackend::TraceLayerKernelMaxThreadsForTest() const {
   if (impl_->pso == nil) {
     return 0;

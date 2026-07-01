@@ -181,45 +181,40 @@ void CheckCuda(cudaError_t err, const char* ctx) {
   }
 }
 
-// Exit buffer capacity. Coefficient 2 = reflect+refract conservative upper
-// bound per hit; +4 = safety margin matching the Metal EnsureExitBuffers
-// constant.
-//
-// `n_roots * (max_hits*2 + 4)` is the ANALYTIC HARD upper bound on exit records
-// a layer can emit (every root emits at most that many), so sizing to it means
-// the kernel's `slot < exit_cap` append guard can never trip and no exit is ever
-// silently dropped. A former `std::min` with a 64 MiB cap (~762600 records) was
-// a memory optimization, but it CORRUPTED output for high-continuation configs
-// that exceed it even at the DEFAULT dispatch: scrum-296 Step D dig-out found
-// ms_multi_crystal's layer-1 emitted ~954k > 762k → tail dropped → ds_corr vs
-// legacy fell to 0.913, while total energy (1.02) and cross-seed self-corr
-// (0.9998) both stayed clean and MASKED the bug (only corr-vs-legacy caught it).
-// Correctness over memory: size to the true bound. A dispatch so large the
-// buffer cannot be allocated fails via cudaMalloc → BackendUnavailableError →
-// graceful legacy fallback — never silently-wrong output. (See the seam-design
-// follow-up: the exit-record host round-trip is the real CUDA throughput
-// bottleneck and wants device-side accumulation rather than a bigger buffer.)
-size_t ComputeExitCap(size_t n_roots, size_t max_hits) {
-  return n_roots * (max_hits * 2u + 4u);
-}
-
 // scrum-306.2: CUDA's HasDeviceXyzAccum() is unconditionally true, so every exit
 // is accumulated into d_xyz_buf_ via EmitToDeviceXyz — the trace kernel writes
 // NOTHING to d_exit_ / d_exit_count_ (DrainExits always reads 0 records). The
-// d_exit_/pinned_exit_ pool is therefore dead weight; sizing it to ComputeExitCap
-// (n × (2·max_hits+4)) ballooned to GBs at large LUMICE_DISPATCH_RAY_NUM, causing
-// the big-dispatch throughput collapse + parity OOM. Allocate a token slot so the
-// kernel's (unused) d_exit pointer stays bindable. If HasDeviceXyzAccum ever goes
-// false, restore ComputeExitCap sizing AND the kernel's d_exit write path together.
+// d_exit_/pinned_exit_ pool is therefore dead weight; sizing it to the analytic
+// bound (n_roots × (2·max_hits+4), formerly computed by a since-removed
+// ComputeExitCap helper) ballooned to GBs at large LUMICE_DISPATCH_RAY_NUM,
+// causing the big-dispatch throughput collapse + parity OOM. Allocate a token
+// slot so the kernel's (unused) d_exit pointer stays bindable. If
+// HasDeviceXyzAccum ever goes false, restore that analytic-bound sizing (see
+// ComputeContCap below for the still-live formula) AND the kernel's d_exit
+// write path together.
 constexpr size_t kCudaDeadExitCap = 256u;
 
-// Continuation buffer capacity (296.4). Each root may emit up to
-// (max_hits * 2 + 4) candidate continuations (matches ComputeExitCap upper
-// bound — every outward exit is a continuation candidate). Sized to the same
-// analytic hard upper bound (no silent-drop cap) for the same correctness
-// reason as ComputeExitCap: a dropped continuation loses a downstream ray's
-// entire sub-tree. Cont slots (~20B) are smaller than ExitRayRecord, so this
-// pool's footprint stays below the exit pool's.
+// Continuation buffer capacity (296.4). Coefficient 2 = reflect+refract
+// conservative upper bound per hit; +4 = safety margin matching the Metal
+// EnsureExitBuffers constant. Each root may emit up to (max_hits * 2 + 4)
+// candidate continuations — every outward exit is a continuation candidate.
+//
+// `n_roots * (max_hits*2 + 4)` is the ANALYTIC HARD upper bound on records a
+// layer can emit (every root emits at most that many), so sizing to it means
+// the kernel's `slot < cont_cap` append guard can never trip and no
+// continuation is ever silently dropped. A former `std::min` with a 64 MiB cap
+// (~762600 records, then shared with the now-removed exit-cap sizing) was a
+// memory optimization, but it CORRUPTED output for high-continuation configs
+// that exceed it even at the DEFAULT dispatch: scrum-296 Step D dig-out found
+// ms_multi_crystal's layer-1 emitted ~954k > 762k → tail dropped → ds_corr vs
+// legacy fell to 0.913, while total energy (1.02) and cross-seed self-corr
+// (0.9998) both stayed clean and MASKED the bug (only corr-vs-legacy caught
+// it). Correctness over memory: size to the true bound — a dropped
+// continuation loses a downstream ray's entire sub-tree. A dispatch so large
+// the buffer cannot be allocated fails via cudaMalloc → BackendUnavailableError
+// → graceful legacy fallback — never silently-wrong output. Cont slots (~20B)
+// are smaller than ExitRayRecord, so this pool's footprint stays below the
+// (now-dead) exit pool's.
 size_t ComputeContCap(size_t n_roots, size_t max_hits) {
   return n_roots * (max_hits * 2u + 4u);
 }
@@ -389,19 +384,6 @@ void FillTriToPoly(const Crystal& crystal, std::vector<uint16_t>& out) {
 
 __device__ inline float dot3(const float* a, const float* b) {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-}
-
-// Build ExitFaceSeq from a thread-local face-id record. `len` is bounded by
-// the caller (rec_len) via the `if (rec_len < ExitFaceSeq::kCap)` guard on
-// every append, so `len <= kCap` is invariant here. uint32_t loop counter
-// (not uint8_t) keeps the comparison correct should kCap ever grow > 255.
-__device__ inline ExitFaceSeq BuildExitPath(const uint8_t* path_rec, uint32_t len) {
-  ExitFaceSeq seq{};  // zero-init data_[kCap]; trailing bytes stay 0
-  seq.size_ = static_cast<uint8_t>(len);
-  for (uint32_t k = 0u; k < len; ++k) {
-    seq.data_[k] = path_rec[k];
-  }
-  return seq;
 }
 
 // S2 device-fused projection + XYZ accumulation for the ms_mode==0 emit gate.
@@ -3036,6 +3018,13 @@ uint32_t CudaTraceBackend::WlPoolSize() const {
   }
   Logger& logger = impl_->logger != nullptr ? *impl_->logger : GetGlobalLogger();
   return ResolveWlPoolSize(logger);
+}
+
+size_t CudaTraceBackend::GetLastBatchCrystalCount() const {
+  // task-exit-seam-crystal-count: Impl::final_layer_crystals_ is populated
+  // during BeginSession (cuda_trace_backend.cu:2078-2093), so it can be read
+  // safely anytime the session is open.
+  return impl_->final_layer_crystals_.size();
 }
 
 }  // namespace lumice

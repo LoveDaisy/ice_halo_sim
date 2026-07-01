@@ -242,6 +242,7 @@ void CpuTraceBackend::BeginSession(const SessionSpec& spec) {
 
   continuation_buf_ = RayBuffer{};
   exit_records_.clear();
+  last_layer_crystal_count_ = 0;
 }
 
 
@@ -268,6 +269,13 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
   // proportions from setting_[ci].crystal_proportion_ + zeros carry (one
   // session = one wavelength here, no cross-wavelength accumulation).
   size_t crystal_cnt = ms_info.setting_.size();
+  // task-exit-seam-crystal-count: record final MS layer setting count for
+  // Simulator to feed SimData.crystal_count_. Semantics: last layer only,
+  // not cross-layer sum (mirrors Metal `last_layer_crystals_` /
+  // CUDA `final_layer_crystals_`).
+  if (ms_idx_ + 1 == spec_.scene->ms_.size()) {
+    last_layer_crystal_count_ = crystal_cnt;
+  }
   std::vector<float> proportions;
   proportions.reserve(crystal_cnt);
   for (size_t ci = 0; ci < crystal_cnt; ci++) {
@@ -469,6 +477,7 @@ void CpuTraceBackend::EndSession() {
   in_session_ = false;
   ms_idx_ = 0;
   root_ray_count_ = 0;
+  last_layer_crystal_count_ = 0;  // task-exit-seam-crystal-count: lifecycle symmetry with BeginSession
   total_landed_weight_ = 0.0f;
   xyz_buf_.reset();
   continuation_buf_ = RayBuffer{};

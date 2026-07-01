@@ -460,5 +460,82 @@ TEST(CpuTraceBackend, CrossHitFanoutDoesNotOverflowWorkspace) {
   backend.EndSession();
 }
 
+// =============================================================================
+// Test — task-exit-seam-crystal-count: GetLastBatchCrystalCount() returns the
+// setting count of the FINAL MS layer (not cross-layer sum). This locks the
+// deliberate semantic decision from plan §2 default assumption 2.
+// =============================================================================
+TEST(CpuTraceBackend, GetLastBatchCrystalCountReturnsFinalLayerSettings) {
+  // Single-MS single-crystal → count == 1.
+  {
+    auto scene = MakeSimpleScene(/*max_hits=*/4, /*ms_layers=*/1);
+    auto render = MakeRenderConfig();
+    SessionSpec spec;
+    spec.scene = &scene;
+    spec.render = &render;
+    spec.wl = WlParam{ 550.0f, 1.0f };
+    spec.seed = 1;
+
+    CpuTraceBackend backend;
+    backend.BeginSession(spec);
+    HostRayBatch host;
+    host.count = 256;
+    host.crystal = nullptr;
+    backend.TraceLayer(RootRaySource::FromHost(host));
+
+    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 1u);
+    backend.EndSession();
+  }
+
+  // Multi-MS: layer 0 has 1 crystal, layer 1 (final) has 3 crystals.
+  // Return value MUST be 3 (final-layer settings count), NOT 4 (1+3 sum).
+  {
+    auto scene = MakeSimpleScene(/*max_hits=*/4, /*ms_layers=*/2);
+    // Extend final layer to 3 crystals by cloning the existing setting.
+    auto& final_ms = scene.ms_.back();
+    ScatteringSetting extra1 = final_ms.setting_.front();
+    ScatteringSetting extra2 = final_ms.setting_.front();
+    final_ms.setting_.front().crystal_proportion_ = 0.4f;
+    extra1.crystal_.id_ = 100;
+    extra1.crystal_proportion_ = 0.3f;
+    extra2.crystal_.id_ = 101;
+    extra2.crystal_proportion_ = 0.3f;
+    final_ms.setting_.push_back(std::move(extra1));
+    final_ms.setting_.push_back(std::move(extra2));
+    ASSERT_EQ(final_ms.setting_.size(), 3u);
+    ASSERT_EQ(scene.ms_.front().setting_.size(), 1u);
+
+    auto render = MakeRenderConfig();
+    SessionSpec spec;
+    spec.scene = &scene;
+    spec.render = &render;
+    spec.wl = WlParam{ 550.0f, 1.0f };
+    spec.seed = 3;
+
+    CpuTraceBackend backend;
+    backend.BeginSession(spec);
+    HostRayBatch host;
+    host.count = 512;
+    host.crystal = nullptr;
+    auto h0 = backend.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h0, nullptr);
+    // After first (non-final) layer: last_layer count is still 0 (or the
+    // final-layer count once the last layer runs); this test only asserts
+    // the final observed value after all layers, but along the way must not
+    // pick up layer-0's count.
+    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u) << "Non-final layer must not populate last_layer_crystal_count_";
+
+    RecombineSpec rspec;
+    rspec.shuffle = true;
+    auto roots1 = backend.Recombine(std::move(h0), rspec);
+    backend.TraceLayer(roots1);
+
+    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 3u) << "Final-layer settings count, not cross-layer sum (would be 4)";
+
+    backend.EndSession();
+    // After EndSession the counter is reset by BeginSession on next open.
+  }
+}
+
 }  // namespace
 }  // namespace lumice

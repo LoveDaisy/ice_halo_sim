@@ -972,6 +972,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   sim_data.outgoing_d_ = std::move(outgoing_d);
   sim_data.outgoing_w_ = std::move(outgoing_w);
   sim_data.root_ray_count_ = original_ray_num;
+  sim_data.crystal_count_ = sim_data.crystals_.size();
   data_queue_->Emplace(std::move(sim_data));
 }
 
@@ -1093,6 +1094,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
     sim_data.curr_wl_ = wl_param.wl_;
     sim_data.generation_ = generation;
     sim_data.root_ray_count_ = ray_num;
+    sim_data.crystal_count_ = backend.GetLastBatchCrystalCount();
     size_t pix = static_cast<size_t>(w) * static_cast<size_t>(h);
     sim_data.xyz_pixel_data_.resize(pix * 3u);
     XyzImageData xyz_out;
@@ -1145,6 +1147,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   sim_data.root_ray_count_ = ray_num;  // distinguishes a valid backend batch
                                        // from the shutdown sentinel (see
                                        // server.cpp::ConsumeData).
+  sim_data.crystal_count_ = backend.GetLastBatchCrystalCount();
   sim_data.outgoing_d_ = std::move(exit_d);
   sim_data.outgoing_w_ = std::move(exit_w);
   sim_data.outgoing_wl_ = std::move(exit_wl);

@@ -230,6 +230,80 @@ TEST(MetalTraceBackend, TraceLayerKernelOccupancy) {
          "and progress.md for context.";
 }
 
+// =============================================================================
+// task-exit-seam-crystal-count: Metal backend reports final-layer setting count.
+// Semantics locked here: return value is the LAST MS layer's setting count
+// (mirrors Impl::last_layer_crystals_), not a cross-layer sum.
+// =============================================================================
+TEST(MetalTraceBackend, GetLastBatchCrystalCountReturnsFinalLayerSettings) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+
+  // Single-MS single-crystal → count == 1.
+  {
+    auto scene = MakeMetalScene(/*max_hits=*/4, /*ms_layers=*/1);
+    auto render = MakeRectangularRender();
+    SessionSpec spec;
+    spec.scene = &scene;
+    spec.render = &render;
+    spec.wl = WlParam{ 550.0f, 1.0f };
+    spec.seed = 11;
+
+    MetalTraceBackend backend;
+    backend.BeginSession(spec);
+    HostRayBatch host;
+    host.count = 512;
+    host.crystal = nullptr;
+    host.refractive_index = 0.0f;
+    backend.TraceLayer(RootRaySource::FromHost(host));
+
+    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 1u);
+    backend.EndSession();
+  }
+
+  // Multi-MS: final layer has 3 crystal settings. Return value MUST be 3.
+  {
+    auto scene = MakeMetalScene(/*max_hits=*/4, /*ms_layers=*/2);
+    auto& final_ms = scene.ms_.back();
+    ScatteringSetting extra1 = final_ms.setting_.front();
+    ScatteringSetting extra2 = final_ms.setting_.front();
+    final_ms.setting_.front().crystal_proportion_ = 0.4f;
+    extra1.crystal_.id_ = 100;
+    extra1.crystal_proportion_ = 0.3f;
+    extra2.crystal_.id_ = 101;
+    extra2.crystal_proportion_ = 0.3f;
+    final_ms.setting_.push_back(std::move(extra1));
+    final_ms.setting_.push_back(std::move(extra2));
+    ASSERT_EQ(final_ms.setting_.size(), 3u);
+    ASSERT_EQ(scene.ms_.front().setting_.size(), 1u);
+
+    auto render = MakeRectangularRender();
+    SessionSpec spec;
+    spec.scene = &scene;
+    spec.render = &render;
+    spec.wl = WlParam{ 550.0f, 1.0f };
+    spec.seed = 13;
+
+    MetalTraceBackend backend;
+    backend.BeginSession(spec);
+    HostRayBatch host;
+    host.count = 1024;
+    host.crystal = nullptr;
+    host.refractive_index = 0.0f;
+
+    auto h0 = backend.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h0, nullptr);
+    RecombineSpec rspec;
+    rspec.shuffle = false;
+    auto roots1 = backend.Recombine(std::move(h0), rspec);
+    backend.TraceLayer(roots1);
+
+    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 3u) << "Final-layer settings count, not cross-layer sum (would be 4)";
+    backend.EndSession();
+  }
+}
+
 }  // namespace
 }  // namespace lumice
 

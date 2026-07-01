@@ -68,6 +68,10 @@ class CpuTraceBackend : public TraceBackend {
   size_t RootRayCount() const { return root_ray_count_; }
   float TotalLandedWeight() const { return total_landed_weight_; }
 
+  // task-exit-seam-crystal-count: setting count of the final MS layer for the
+  // current session. Set by TraceLayer when processing the last layer.
+  size_t GetLastBatchCrystalCount() const override { return last_layer_crystal_count_; }
+
  private:
   SessionSpec spec_{};
   RandomNumberGenerator rng_;
@@ -77,7 +81,8 @@ class CpuTraceBackend : public TraceBackend {
   int height_ = 0;
 
   size_t root_ray_count_ = 0;
-  size_t ms_idx_ = 0;  // advances on each Recombine.
+  size_t last_layer_crystal_count_ = 0;  // task-exit-seam-crystal-count
+  size_t ms_idx_ = 0;                    // advances on each Recombine.
   float total_landed_weight_ = 0.0f;
 
   // Backend-owned storage for the device-resident handle returned by Recombine.

@@ -107,7 +107,7 @@ jobs:
       # fatbin (compute_61 PTX + sm_75/86/89 SASS, see CMakeLists.txt).
       - name: Install CUDA toolkit (Windows CUDA artifact)
         if: matrix.cuda == 'ON'
-        uses: Jimver/cuda-toolkit@v0.2.23
+        uses: Jimver/cuda-toolkit@v0.2.35
         with:
           cuda: '12.6.3'
           method: 'network'

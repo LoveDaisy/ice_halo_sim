@@ -7,7 +7,7 @@ namespace lumice {
 void StatsConsumer::Consume(const SimData& data) {
   sim_rays_ += data.root_ray_count_;
   total_rays_ += data.rays_.size_;
-  crystals_ += data.crystals_.size();
+  crystals_ += data.crystal_count_;
 }
 
 void StatsConsumer::PrepareSnapshot() {

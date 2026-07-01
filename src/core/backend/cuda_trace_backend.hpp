@@ -112,6 +112,11 @@ class CudaTraceBackend : public TraceBackend {
   // driving loop queries it first). Mirrors MetalTraceBackend::WlPoolSize().
   uint32_t WlPoolSize() const override;
 
+  // task-exit-seam-crystal-count: setting count of the final MS layer for the
+  // current session. Backed by Impl::final_layer_crystals_ populated during
+  // BeginSession — safe to read anytime the session is open.
+  size_t GetLastBatchCrystalCount() const override;
+
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
