@@ -466,10 +466,23 @@ class TraceBackend {
   // after BeginSession (CUDA) or after the final TraceLayer call (Metal / CPU),
   // consumed by Simulator to fill SimData.crystal_count_ for stats reporting.
   //
-  // Semantics warning: this is the final-layer setting count, NOT a per-batch
-  // Crystal instance count analogous to the legacy CPU path (which emplaces
-  // one Crystal per kSmallBatchRayNum for random-orientation scenes). Do not
-  // use this value in a bit-parity assertion against legacy stats.
+  // ⚠️ DELIBERATE CROSS-BACKEND SEMANTIC DIFFERENCE (owner-confirmed, 2026-07-01):
+  // the `crystals` stat means DIFFERENT PHYSICAL QUANTITIES per backend today:
+  //   * legacy CPU (SimulateOneWavelength): per-batch Crystal-instance count —
+  //     one Crystal emplaced per kSmallBatchRayNum for random-orientation
+  //     scenes, so it grows ~ray_num/32 (e.g. ~313 for 10k rays).
+  //   * GPU exit-seam (this accessor): final-layer crystal *setting* count —
+  //     a small constant (typically 1-5), because device-gen samples each
+  //     ray's orientation independently and has no "Crystal instance per batch"
+  //     concept.
+  // This gap is architectural, not a bug, and is acceptable because the ONLY
+  // consumer of this stat is the CLI diagnostic line (main.cpp `Stats: ...
+  // crystals=N`) — the GUI does not display it and no internal logic depends
+  // on it. Do NOT use this value in a bit-parity assertion against legacy stats.
+  // UNIFY LATER: when crystal geometry randomization lands (crystal itself
+  // becomes a sampled quantity, like rays), the count becomes a genuine
+  // ray-count-like metric and both backends should converge on one meaning.
+  // See backlog "统一 crystal 计数语义（几何随机化落地时）".
   virtual size_t GetLastBatchCrystalCount() const { return 0; }
 
   TraceBackend(const TraceBackend&) = delete;

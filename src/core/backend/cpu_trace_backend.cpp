@@ -477,6 +477,7 @@ void CpuTraceBackend::EndSession() {
   in_session_ = false;
   ms_idx_ = 0;
   root_ray_count_ = 0;
+  last_layer_crystal_count_ = 0;  // task-exit-seam-crystal-count: lifecycle symmetry with BeginSession
   total_landed_weight_ = 0.0f;
   xyz_buf_.reset();
   continuation_buf_ = RayBuffer{};
