@@ -2341,27 +2341,40 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     const size_t xyz_floats = static_cast<size_t>(impl_->img_w_) *
                               static_cast<size_t>(impl_->img_h_) * 3u;
     // scrum-312 (third-clock drain): d_xyz_buf_ / d_landed_weight_ are PERSISTENT
-    // accumulators across batches. Zero ONLY on fresh allocation — the former
+    // accumulators across batches. Zero ONLY on (re)allocation — the former
     // per-call memset moved to ReadbackXyzAccum's post-drain reset, so device
     // accumulation survives across BeginSession/EndSession within a drain window
     // (the simulator drains on display cadence, not per batch). The buffer is
     // always zero at a window start: first window via this alloc-zero, later
     // windows via the previous drain's memset.
-    if (impl_->d_xyz_buf_ == nullptr) {
-      CheckCuda(cudaMalloc(&impl_->d_xyz_buf_, xyz_floats * sizeof(float)),
-                "BeginSession cudaMalloc d_xyz_buf");
+    //
+    // Re-allocate when the render RESOLUTION changes (not just when null): a
+    // resolution increase on a persistent smaller buffer would let the kernel
+    // atomicAdd new-dims pixel indices out of bounds (memory corruption). A
+    // resolution change always rides a generation change, whose flush already
+    // drained the prior window, so re-zeroing is correct. Mirrors the Metal
+    // EnsureImage shape-change reset (312.4 review-Major). d_landed_weight_ is the
+    // twin accumulator — reset it in lock-step so the two never mix resolutions.
+    const bool xyz_dims_changed = (impl_->d_xyz_buf_ == nullptr) ||
+                                  (impl_->alloc_xyz_w_ != impl_->img_w_) ||
+                                  (impl_->alloc_xyz_h_ != impl_->img_h_);
+    if (xyz_dims_changed) {
+      const size_t old_pix = static_cast<size_t>(impl_->alloc_xyz_w_) * static_cast<size_t>(impl_->alloc_xyz_h_);
+      if (impl_->d_xyz_buf_ == nullptr || old_pix != static_cast<size_t>(impl_->img_w_) * impl_->img_h_) {
+        cudaFree(impl_->d_xyz_buf_);  // no-op on nullptr
+        CheckCuda(cudaMalloc(&impl_->d_xyz_buf_, xyz_floats * sizeof(float)),
+                  "BeginSession cudaMalloc d_xyz_buf");
+      }
+      if (impl_->d_landed_weight_ == nullptr) {
+        CheckCuda(cudaMalloc(&impl_->d_landed_weight_, sizeof(float)),
+                  "BeginSession cudaMalloc d_landed_weight");
+      }
       CheckCuda(cudaMemset(impl_->d_xyz_buf_, 0, xyz_floats * sizeof(float)),
                 "BeginSession cudaMemset d_xyz_buf");
-      // scrum-312: remember the dims this persistent buffer was sized for so the
-      // between-session drain can verify caller dims against real capacity.
-      impl_->alloc_xyz_w_ = impl_->img_w_;
-      impl_->alloc_xyz_h_ = impl_->img_h_;
-    }
-    if (impl_->d_landed_weight_ == nullptr) {
-      CheckCuda(cudaMalloc(&impl_->d_landed_weight_, sizeof(float)),
-                "BeginSession cudaMalloc d_landed_weight");
       CheckCuda(cudaMemset(impl_->d_landed_weight_, 0, sizeof(float)),
                 "BeginSession cudaMemset d_landed_weight");
+      impl_->alloc_xyz_w_ = impl_->img_w_;
+      impl_->alloc_xyz_h_ = impl_->img_h_;
     }
 
     // Per-ray rotation matrix device buffer (cont_cap_ × 9) is allocated
