@@ -217,6 +217,69 @@ TEST(CudaRichExit, ExitFaceIsValid) {
   }
 }
 
+// =============================================================================
+// task-exit-seam-crystal-count: CUDA backend reports final-layer setting count.
+// Semantics: return value is the LAST MS layer's setting count (mirrors
+// Impl::final_layer_crystals_ populated during BeginSession), not a cross-layer
+// sum. Locks plan §2 default assumption 2.
+// =============================================================================
+TEST(CudaBackendCrystalCount, ReturnsFinalLayerSettings) {
+  if (!CudaDeviceAvailable()) {
+    GTEST_SKIP() << "No CUDA device available on this host.";
+  }
+
+  // Case 1 — single MS, single crystal setting → count == 1.
+  {
+    auto scene = MakePrismScene(/*max_hits=*/4);
+    auto render = MakeRenderConfig();
+    SessionSpec spec;
+    spec.scene = &scene;
+    spec.render = &render;
+    spec.wl = WlParam{ 550.0f, 1.0f };
+    spec.seed = 21;
+
+    CudaTraceBackend backend;
+    backend.BeginSession(spec);
+    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 1u);
+    backend.EndSession();
+  }
+
+  // Case 2 — multi MS scene with 3 settings on the FINAL layer, 1 on the
+  // first. Return value MUST be 3, not 4 (cross-layer sum).
+  {
+    auto scene = MakePrismScene(/*max_hits=*/4);
+    // Convert single-MS scene to 2-MS: original layer becomes the first
+    // (with prob>0 to route continuations), append a final layer with 3
+    // crystal settings.
+    scene.ms_.front().prob_ = 0.6f;
+
+    MsInfo final_ms;
+    final_ms.prob_ = 0.0f;
+    ScatteringSetting base = scene.ms_.front().setting_.front();
+    for (int i = 0; i < 3; i++) {
+      ScatteringSetting s = base;
+      s.crystal_.id_ = static_cast<IdType>(100 + i);
+      s.crystal_proportion_ = 1.0f / 3.0f;
+      final_ms.setting_.push_back(std::move(s));
+    }
+    scene.ms_.push_back(std::move(final_ms));
+    ASSERT_EQ(scene.ms_.back().setting_.size(), 3u);
+    ASSERT_EQ(scene.ms_.front().setting_.size(), 1u);
+
+    auto render = MakeRenderConfig();
+    SessionSpec spec;
+    spec.scene = &scene;
+    spec.render = &render;
+    spec.wl = WlParam{ 550.0f, 1.0f };
+    spec.seed = 23;
+
+    CudaTraceBackend backend;
+    backend.BeginSession(spec);
+    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 3u) << "Final-layer settings count, not cross-layer sum (would be 4)";
+    backend.EndSession();
+  }
+}
+
 }  // namespace
 }  // namespace lumice
 
