@@ -1020,15 +1020,15 @@ void Simulator::DrainDeviceXyz(TraceBackend* backend) {
   // Takes a pointer (not a reference like SimulateOneWavelengthWithBackend)
   // because the Run() flush sites pass `backend.get()`, and `backend` CAN be null
   // there: the task-282 fallback resets it to null mid-Run() on
-  // BackendUnavailableError. In that degraded case any device accumulation is
-  // unrecoverable (backend gone), so a null-backend drain is a no-op — the
-  // self-guard below keeps the call sites flat. (SimulateOneWavelengthWithBackend
-  // stays a reference: run_with_backend gates on non-null before calling it.)
+  // BackendUnavailableError. See the backend==nullptr branch below for how the
+  // pending window's counter debt is still settled in that degraded case.
+  // (SimulateOneWavelengthWithBackend stays a reference: run_with_backend gates on
+  // non-null before calling it.)
   // scrum-312 third-clock drain: read the persistent device XYZ accumulator into
   // a SimData carrying the WINDOW-aggregated root/crystal counts, enqueue it, and
   // reset the window. ReadbackXyzAccum zeroes the device buffer after the copy so
-  // the next window starts clean. No-op when no backend or nothing accumulated.
-  if (backend == nullptr || !xyz_win_.pending) {
+  // the next window starts clean. No-op when nothing has accumulated.
+  if (!xyz_win_.pending) {
     return;
   }
   SimData sim_data;
@@ -1039,13 +1039,30 @@ void Simulator::DrainDeviceXyz(TraceBackend* backend) {
   // This one SimData stands in for xyz_win_.calls per-wavelength calls; ConsumeData
   // decrements sim_scene_cnt_ by this so the counter invariant stays balanced.
   sim_data.sim_scene_credit_ = xyz_win_.calls;
-  size_t pix = static_cast<size_t>(xyz_win_.w) * static_cast<size_t>(xyz_win_.h);
-  sim_data.xyz_pixel_data_.resize(pix * 3u);
-  XyzImageData xyz_out;
-  xyz_out.data = sim_data.xyz_pixel_data_.data();
-  xyz_out.width = xyz_win_.w;
-  xyz_out.height = xyz_win_.h;
-  backend->ReadbackXyzAccum(xyz_out, sim_data.xyz_landed_weight_);
+  if (backend != nullptr) {
+    // Normal drain: pull the accumulated image off the device.
+    size_t pix = static_cast<size_t>(xyz_win_.w) * static_cast<size_t>(xyz_win_.h);
+    sim_data.xyz_pixel_data_.resize(pix * 3u);
+    XyzImageData xyz_out;
+    xyz_out.data = sim_data.xyz_pixel_data_.data();
+    xyz_out.width = xyz_win_.w;
+    xyz_out.height = xyz_win_.h;
+    backend->ReadbackXyzAccum(xyz_out, sim_data.xyz_landed_weight_);
+  } else {
+    // Degraded path (code-review round-2 Major): backend went null mid-window via
+    // the task-282 fallback. The device image is unrecoverable, but we MUST still
+    // emplace so ConsumeData decrements sim_scene_cnt_ by this window's credit —
+    // else the increments GenerateScene already counted for these batches are
+    // never balanced and the server never idles (the "producer++ / consumer--
+    // must stay bound" invariant; dropping the window entirely reintroduces the
+    // historical IDLE-hang class). Empty xyz_pixel_data_ → the consumer's 0-exit
+    // path decrements without accumulating. root_ray_count_ stays > 0 so this is
+    // not mistaken for the shutdown sentinel (rays_ empty && root_ray_count_ == 0).
+    ILOG_WARN(logger_,
+              "DrainDeviceXyz: backend null mid-window; settling {} credit with empty image "
+              "(device data lost to fallback)",
+              xyz_win_.calls);
+  }
   data_queue_->Emplace(std::move(sim_data));
   xyz_win_ = XyzDrainWindow{};
 }
