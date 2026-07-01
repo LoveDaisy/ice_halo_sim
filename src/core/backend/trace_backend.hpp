@@ -467,14 +467,19 @@ class TraceBackend {
   // consumed by Simulator to fill SimData.crystal_count_ for stats reporting.
   //
   // ⚠️ DELIBERATE CROSS-BACKEND SEMANTIC DIFFERENCE (owner-confirmed, 2026-07-01):
-  // the `crystals` stat means DIFFERENT PHYSICAL QUANTITIES per backend today:
-  //   * legacy CPU (SimulateOneWavelength): per-batch Crystal-instance count —
-  //     one Crystal emplaced per kSmallBatchRayNum for random-orientation
-  //     scenes, so it grows ~ray_num/32 (e.g. ~313 for 10k rays).
-  //   * GPU exit-seam (this accessor): final-layer crystal *setting* count —
-  //     a small constant (typically 1-5), because device-gen samples each
-  //     ray's orientation independently and has no "Crystal instance per batch"
-  //     concept.
+  // StatsConsumer ACCUMULATES this per-batch value, but the per-batch increment
+  // means DIFFERENT PHYSICAL QUANTITIES per backend today, so the displayed
+  // `crystals` total diverges by a large factor:
+  //   * legacy CPU (SimulateOneWavelength): per-batch Crystal-INSTANCE count —
+  //     one Crystal emplaced per small batch for random-orientation scenes, so
+  //     the accumulated total grows ~ray_num/128.
+  //   * GPU exit-seam (this accessor): final-layer crystal *SETTING* count —
+  //     a small constant (typically 1-5) per dispatch, because device-gen
+  //     samples each ray's orientation independently and has no "Crystal
+  //     instance per batch" concept; accumulated total grows ~ray_num/dispatch.
+  // Measured (config_example, dev49 2026-07-01): CPU ≈15454 crystals @1.98M
+  // rays vs CUDA ≈2 @524K rays — an ~2000× gap at equal ray count. Both are
+  // non-zero and internally consistent; they are simply not the same metric.
   // This gap is architectural, not a bug, and is acceptable because the ONLY
   // consumer of this stat is the CLI diagnostic line (main.cpp `Stats: ...
   // crystals=N`) — the GUI does not display it and no internal logic depends
