@@ -55,6 +55,7 @@
 #include <cstring>
 #include <mutex>
 #include <random>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <variant>
@@ -88,19 +89,87 @@ namespace lumice {
 
 namespace {
 
-// One-shot probe of cudaGetDeviceCount. Cached after the first call. Errors
-// (driver not installed, no devices, runtime mismatch) all collapse to false;
-// the simulator interprets that as "no CUDA backend available, fall back to
-// legacy CPU".
-bool ProbeCudaDevice() {
+// sm_61 (Pascal, 2016) — the PTX floor emitted in the CUDA fatbin (see
+// CMAKE_CUDA_ARCHITECTURES in CMakeLists.txt). A device below this cannot run
+// our code: compute_61 PTX will not JIT *down* to an older SM. Such a device
+// must be rejected at probe time and routed to the legacy CPU fallback, rather
+// than discovered via a deep kernel-launch failure (cudaErrorNoKernelImage).
+// Encoded as major*10 + minor to match cudaDeviceProp.
+constexpr int kCudaCapabilityFloor = 61;
+
+// Result of the one-shot device probe. Selects the first CUDA device whose
+// compute capability meets the PTX floor, and captures a human-readable
+// diagnostic line (device count, per-device name + capability, driver/runtime
+// versions, verdict) so an unavailable/degraded path is debuggable from a
+// single run — no second release cycle just to gather logs (task-282 lesson).
+struct CudaProbe {
+  bool eligible = false;
+  int device = 0;
+  std::string diagnostics;
+};
+
+// Probe cudaGetDeviceCount + per-device capability. All errors (driver not
+// installed, no devices, runtime mismatch, all-devices-too-old) collapse to
+// eligible=false; the simulator interprets that as "no CUDA backend available,
+// fall back to legacy CPU".
+CudaProbe RunCudaProbe() {
+  CudaProbe probe;
+  std::ostringstream os;
+
+  int driver_ver = 0;
+  int runtime_ver = 0;
+  cudaDriverGetVersion(&driver_ver);
+  cudaRuntimeGetVersion(&runtime_ver);
+  (void)cudaGetLastError();
+
   int n = 0;
-  cudaError_t err = cudaGetDeviceCount(&n);
-  if (err != cudaSuccess) {
+  const cudaError_t count_err = cudaGetDeviceCount(&n);
+  if (count_err != cudaSuccess) {
     (void)cudaGetLastError();
-    return false;
+    os << "no usable CUDA device (cudaGetDeviceCount: " << cudaGetErrorString(count_err)
+       << "), driver=" << driver_ver << " runtime=" << runtime_ver << " -> legacy CPU fallback";
+    probe.diagnostics = os.str();
+    return probe;
   }
-  return n > 0;
+
+  os << n << " CUDA device(s), driver=" << driver_ver << " runtime=" << runtime_ver
+     << ", floor=sm_" << kCudaCapabilityFloor << ": ";
+  int selected = -1;
+  for (int i = 0; i < n; ++i) {
+    cudaDeviceProp prop{};
+    if (cudaGetDeviceProperties(&prop, i) != cudaSuccess) {
+      (void)cudaGetLastError();
+      os << "[dev" << i << " properties-query-failed] ";
+      continue;
+    }
+    const int cap = prop.major * 10 + prop.minor;
+    const bool meets = cap >= kCudaCapabilityFloor;
+    os << "[dev" << i << " '" << prop.name << "' sm_" << cap << (meets ? " ok" : " too-old") << "] ";
+    if (meets && selected < 0) {
+      selected = i;
+    }
+  }
+  if (selected >= 0) {
+    probe.eligible = true;
+    probe.device = selected;
+    os << "-> CUDA on dev" << selected;
+  } else {
+    os << "-> no device >= sm_" << kCudaCapabilityFloor << ", legacy CPU fallback";
+  }
+  probe.diagnostics = os.str();
+  return probe;
 }
+
+// Cached once per process (function-local static init is thread-safe).
+const CudaProbe& CudaProbeOnce() {
+  static const CudaProbe probe = RunCudaProbe();
+  return probe;
+}
+
+// Device index BeginSession must bind (cudaSetDevice) — the first eligible
+// device chosen by the probe, not a hardcoded 0 (a user machine may have an
+// old display GPU at index 0 and the compute card at index 1).
+int CudaSelectedDevice() { return CudaProbeOnce().device; }
 
 // Throw BackendUnavailableError if err != cudaSuccess. Clears the sticky CUDA
 // error state so subsequent calls see a clean slate.
@@ -1109,12 +1178,9 @@ __global__ void shuffle_cont_kernel(const float* __restrict__    in_d,
 
 }  // namespace
 
-bool CudaDeviceAvailable() {
-  static std::once_flag flag;
-  static bool cached = false;
-  std::call_once(flag, []() { cached = ProbeCudaDevice(); });
-  return cached;
-}
+bool CudaDeviceAvailable() { return CudaProbeOnce().eligible; }
+
+std::string CudaDeviceDiagnostics() { return CudaProbeOnce().diagnostics; }
 
 // --- Impl ----------------------------------------------------------------
 
@@ -2070,11 +2136,12 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     throw BackendUnavailableError("CudaTraceBackend::BeginSession called on already-open session");
   }
 
-  cudaError_t err = cudaSetDevice(0);
+  const int cuda_dev = CudaSelectedDevice();
+  cudaError_t err = cudaSetDevice(cuda_dev);
   if (err != cudaSuccess) {
     (void)cudaGetLastError();
-    throw BackendUnavailableError(std::string{"CudaTraceBackend::BeginSession: cudaSetDevice failed: "} +
-                                  cudaGetErrorString(err));
+    throw BackendUnavailableError(std::string{"CudaTraceBackend::BeginSession: cudaSetDevice("} +
+                                  std::to_string(cuda_dev) + ") failed: " + cudaGetErrorString(err));
   }
 
   try {

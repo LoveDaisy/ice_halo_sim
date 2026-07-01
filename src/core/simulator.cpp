@@ -554,12 +554,17 @@ namespace {
 //      - unset / empty / "legacy"   -> falls through to step 2
 //      - "cpu_backend"               -> CpuTraceBackend
 //      - "metal" on Apple            -> MetalTraceBackend
-//      - "metal" elsewhere / unknown -> nullptr (logged WARN)
+//      - "cuda" (LUMICE_CUDA_ENABLED) -> CudaTraceBackend if an eligible device
+//                                       (>= sm_61) is present, else legacy CPU
+//      - unknown / unavailable       -> nullptr (logged WARN)
 //   2) preferred_backend (set by Server::SetPreferredBackend, default kCpu):
 //      - kMetal on Apple             -> MetalTraceBackend
 //      - kMetal elsewhere            -> nullptr (silent no-op; GUI checkbox
 //                                       on non-Apple builds equates to CPU)
-//      - kCuda                       -> not yet implemented, returns nullptr
+//      - kCuda (LUMICE_CUDA_ENABLED) -> CudaTraceBackend if an eligible device
+//                                       (>= sm_61) is present, else legacy CPU;
+//                                       runtime probe logged one-shot on both paths
+//      - kCuda (no LUMICE_CUDA_ENABLED) -> nullptr (legacy CPU)
 // Returns nullptr to keep the legacy CPU path (Simulator::SimulateOneWavelength).
 std::unique_ptr<TraceBackend> CreateBackend(BackendKind preferred_backend, Logger& logger) {
   if (std::optional<std::string> override = env::TraceBackendOverride(logger)) {
@@ -579,11 +584,12 @@ std::unique_ptr<TraceBackend> CreateBackend(BackendKind preferred_backend, Logge
 #endif
     } else if (name == "cuda") {
 #if defined(LUMICE_CUDA_ENABLED)
+      ILOG_INFO(logger, "CUDA availability probe: {}", CudaDeviceDiagnostics());
       if (CudaDeviceAvailable()) {
         ILOG_INFO(logger, "LUMICE_TRACE_BACKEND=cuda → routing via CudaTraceBackend");
         return std::make_unique<CudaTraceBackend>(&logger);
       }
-      ILOG_WARN(logger, "LUMICE_TRACE_BACKEND=cuda requested but no CUDA device available; falling back to legacy CPU");
+      ILOG_WARN(logger, "LUMICE_TRACE_BACKEND=cuda requested but no eligible CUDA device; falling back to legacy CPU");
       return nullptr;
 #else
       ILOG_WARN(logger,
@@ -609,11 +615,12 @@ std::unique_ptr<TraceBackend> CreateBackend(BackendKind preferred_backend, Logge
 #endif
     case BackendKind::kCuda:
 #if defined(LUMICE_CUDA_ENABLED)
+      ILOG_INFO(logger, "CUDA availability probe: {}", CudaDeviceDiagnostics());
       if (CudaDeviceAvailable()) {
         ILOG_INFO(logger, "preferred_backend=cuda → routing via CudaTraceBackend");
         return std::make_unique<CudaTraceBackend>(&logger);
       }
-      ILOG_WARN(logger, "preferred_backend=cuda but no CUDA device available; falling back to legacy CPU");
+      ILOG_WARN(logger, "preferred_backend=cuda but no eligible CUDA device; falling back to legacy CPU");
       return nullptr;
 #else
       // CUDA backend gated behind LUMICE_CUDA_ENABLED=ON (dev49 docker /
