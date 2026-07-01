@@ -1017,6 +1017,13 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
 // `stop_` is checked between TraceLayer/Recombine calls. On stop the session
 // is closed via EndSession (RAII-equivalent) but no SimData is emplaced.
 void Simulator::DrainDeviceXyz(TraceBackend* backend) {
+  // Takes a pointer (not a reference like SimulateOneWavelengthWithBackend)
+  // because the Run() flush sites pass `backend.get()`, and `backend` CAN be null
+  // there: the task-282 fallback resets it to null mid-Run() on
+  // BackendUnavailableError. In that degraded case any device accumulation is
+  // unrecoverable (backend gone), so a null-backend drain is a no-op — the
+  // self-guard below keeps the call sites flat. (SimulateOneWavelengthWithBackend
+  // stays a reference: run_with_backend gates on non-null before calling it.)
   // scrum-312 third-clock drain: read the persistent device XYZ accumulator into
   // a SimData carrying the WINDOW-aggregated root/crystal counts, enqueue it, and
   // reset the window. ReadbackXyzAccum zeroes the device buffer after the copy so

@@ -162,6 +162,10 @@ struct SimData {
   std::vector<float> xyz_pixel_data_;
   float xyz_landed_weight_ = 0.0f;
 
+  // --- Consumer-side bookkeeping (NOT physical render payload) ---
+  // The fields below are counters the server/consumer use for stats + queue
+  // accounting; they do not affect the rendered image. Keep them distinct from
+  // the physical-result fields above (rays_/xyz_pixel_data_/exit_records_).
   size_t root_ray_count_ = 0;  // Count of root rays (prev_ray_idx_ == kInfSize)
 
   // Crystal count for stats reporting. Populated by legacy path from

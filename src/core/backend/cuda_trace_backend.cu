@@ -1403,12 +1403,20 @@ struct CudaTraceBackend::Impl {
   // --- S2 device-fused XYZ accumulation -----------------------------------
   // ms_mode==0 emit gate accumulates per-ray (cmf_x/y/z * weight) directly into
   // a device-resident W*H*3 float buffer via atomicAdd, replacing the per-exit
-  // PCIe round-trip (`DrainExits` + host projection). Allocated per BeginSession,
-  // sized to render.resolution_; cleared at allocation. `ReadbackXyzAccum` D2H
-  // copies it to the host and zeros it for the next batch (one-shot per batch
-  // contract — second call in the same batch returns zeros).
-  float*   d_xyz_buf_       = nullptr;  // img_w_ * img_h_ * 3 floats, atomicAdd target
+  // PCIe round-trip (`DrainExits` + host projection). scrum-312 third clock: the
+  // buffer PERSISTS across per-batch sessions (allocated once, zeroed on alloc);
+  // BeginSession no longer zeroes it. `ReadbackXyzAccum` D2H copies it to the host
+  // and zeros it, but the simulator now drains on display cadence (a whole window
+  // of batches), not per batch.
+  float*   d_xyz_buf_       = nullptr;  // alloc_xyz_w_ * alloc_xyz_h_ * 3 floats, atomicAdd target
   float*   d_landed_weight_ = nullptr;  // 1 float, atomicAdd target (running total)
+  // scrum-312: dims the persistent d_xyz_buf_ was actually allocated for. Unlike
+  // img_w_/img_h_ (per-session, cleared by Reset), these survive across sessions
+  // so ReadbackXyzAccum — which drains BETWEEN sessions — can release-safe-verify
+  // the caller's dims against the real buffer capacity (guards the Bug-1 class:
+  // dims decoupled from the buffer). Zeroed only on full teardown (buffer freed).
+  uint32_t alloc_xyz_w_     = 0u;
+  uint32_t alloc_xyz_h_     = 0u;
   uint32_t proj_type_       = 0u;       // 0=rectangular, 1=dual_fisheye_equal_area
   float    az0_             = 0.0f;     // rectangular: view azimuth offset (radians)
   float    r_scale_         = 1.0f;     // dual_fisheye: equal-area r scale
@@ -1553,6 +1561,8 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
     // S2 device-fused XYZ accumulation buffers.
     cudaFree(d_xyz_buf_);      d_xyz_buf_ = nullptr;
     cudaFree(d_landed_weight_); d_landed_weight_ = nullptr;
+    alloc_xyz_w_ = 0u;  // scrum-312: buffer freed → clear its remembered dims
+    alloc_xyz_h_ = 0u;
 
     cudaFreeHost(pinned_dirs_);        pinned_dirs_ = nullptr;
     cudaFreeHost(pinned_pos_);         pinned_pos_ = nullptr;
@@ -2342,6 +2352,10 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
                 "BeginSession cudaMalloc d_xyz_buf");
       CheckCuda(cudaMemset(impl_->d_xyz_buf_, 0, xyz_floats * sizeof(float)),
                 "BeginSession cudaMemset d_xyz_buf");
+      // scrum-312: remember the dims this persistent buffer was sized for so the
+      // between-session drain can verify caller dims against real capacity.
+      impl_->alloc_xyz_w_ = impl_->img_w_;
+      impl_->alloc_xyz_h_ = impl_->img_h_;
     }
     if (impl_->d_landed_weight_ == nullptr) {
       CheckCuda(cudaMalloc(&impl_->d_landed_weight_, sizeof(float)),
@@ -2960,11 +2974,12 @@ void CudaTraceBackend::EndSession() {
 // throughput to 0.10–0.12× legacy CPU.
 bool CudaTraceBackend::HasDeviceXyzAccum() const { return true; }
 
-// One-shot per batch: copies d_xyz_buf_ + d_landed_weight_ to host, accumulates
-// landed_weight into the running scalar, and zeros the device buffers so the
-// NEXT batch's BeginSession-allocated state starts clean. Calling twice in the
-// same batch returns zeros on the second call (by design — the buffers are
-// cleared after the first read).
+// scrum-312 third-clock drain: copies the PERSISTENT cross-batch d_xyz_buf_ +
+// d_landed_weight_ accumulator to host, accumulates landed_weight into the running
+// scalar, and zeros the device buffers to start the next drain window clean. The
+// simulator calls this on display cadence (a whole window of batches), not per
+// batch, and possibly BETWEEN sessions. Draining twice with no accumulation in
+// between returns zeros on the second call (buffers cleared after the first read).
 void CudaTraceBackend::ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight) {
   // scrum-312 (third-clock drain): the XYZ accumulator is persistent and drained
   // on display cadence, which the simulator triggers BETWEEN per-batch sessions
@@ -2974,23 +2989,29 @@ void CudaTraceBackend::ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight)
   if (impl_->d_xyz_buf_ == nullptr) {
     throw BackendUnavailableError("CudaTraceBackend::ReadbackXyzAccum called before any session allocated the buffer");
   }
-  // Defensive guards (Risk 4 / 务实评审 Minor 3): nullptr device buffer or
-  // mismatched host destination would silently corrupt memory on D2H copy.
-  assert(impl_->d_xyz_buf_ != nullptr && "d_xyz_buf_ unallocated — BeginSession failed?");
   assert(impl_->d_landed_weight_ != nullptr);
   assert(xyz.data != nullptr && "ReadbackXyzAccum: caller must pre-allocate xyz.data");
-  // scrum-312: pixel count comes from the CALLER (xyz.width/height), NOT from
-  // impl_->img_w_/img_h_ — those are cleared to 0 by EndSession/Reset (see the
-  // "always reset" block), and the third-clock drain runs BETWEEN sessions, so
-  // reading impl_ dims here would copy 0 bytes and yield a black image. The
-  // simulator sets xyz.width/height from the accumulation window (= the render
-  // dims the persistent d_xyz_buf_ was allocated for, constant within a run).
-  assert(xyz.width > 0 && xyz.height > 0 && "ReadbackXyzAccum: caller must set xyz.width/height");
+  // scrum-312 (release-safe, code-review Major): pixel count comes from the dims
+  // the persistent buffer was ACTUALLY allocated for (alloc_xyz_w_/h_), NOT from
+  // impl_->img_w_/img_h_ (cleared to 0 by EndSession/Reset — reading them here was
+  // Bug 1: 0-byte copy → black image). Cross-check the caller's declared dims
+  // against the real buffer capacity with a RELEASE-safe throw (not an assert —
+  // asserts are no-ops under NDEBUG, which is exactly how Bug 1 stayed silent):
+  // a mismatch means the buffer size and the caller's expectation have decoupled
+  // (e.g. a resolution change on the persistent buffer), which would corrupt the
+  // D2H copy.
+  if (static_cast<uint32_t>(xyz.width) != impl_->alloc_xyz_w_ ||
+      static_cast<uint32_t>(xyz.height) != impl_->alloc_xyz_h_) {
+    throw BackendUnavailableError(
+        "CudaTraceBackend::ReadbackXyzAccum: caller dims (" + std::to_string(xyz.width) + "x" +
+        std::to_string(xyz.height) + ") != allocated buffer dims (" + std::to_string(impl_->alloc_xyz_w_) +
+        "x" + std::to_string(impl_->alloc_xyz_h_) + ")");
+  }
 
   // waitUntilCompleted-equivalent — all preceding TraceLayer kernel work must
   // finalize before the D2H copy. Mirrors Metal's cmd-buffer wait.
   cudaDeviceSynchronize();
-  const size_t pix = static_cast<size_t>(xyz.width) * static_cast<size_t>(xyz.height);
+  const size_t pix = static_cast<size_t>(impl_->alloc_xyz_w_) * static_cast<size_t>(impl_->alloc_xyz_h_);
   CheckCuda(cudaMemcpy(xyz.data, impl_->d_xyz_buf_, pix * 3u * sizeof(float),
                        cudaMemcpyDeviceToHost),
             "ReadbackXyzAccum D2H d_xyz_buf");
