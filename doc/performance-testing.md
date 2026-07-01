@@ -191,6 +191,38 @@ not "× legacy", when judging GPU throughput):
 > numbers are NOT comparable** — always read within one host block; never compare a
 > Mac row against a Linux row. Source: `scripts/bench_throughput.py` (default dispatch,
 > `ray_num`=20M, N≥5 reps, N=9 re-run on CoV>15%).
+>
+> ⚠️ **Third-clock路径读 `multi_wall`（rays/wall_sec），不读 `multi_med`**（后者在稀疏
+> drain 下失真，见「分辨率是一等吞吐维度」）。下方数字均为 `multi_wall`。
+
+#### scrum-312 第三时钟 canonical · `--res-sweep` · `multi_wall` · 2026-07-01
+
+**背景**：readback 从 trace 时钟解耦到显示节奏第三时钟（seam-design §4.8）。真实 GUI 分辨率
+2048×1024 下 readback/per-batch-copy 税被摊薄。`bench_light_single_ms`（轻·单MS，L2/readback 主导），
+per-resolution `multi_wall`：
+
+| host / backend | 256×128 | 512×256 | 1024×512 | 1536×768 | **2048×1024** |
+|---|---|---|---|---|---|
+| dev49 RTX 4060Ti (Ada) CUDA | 116 M/s | 110 M/s | 92 M/s | 65 M/s | **39.2 M/s** |
+| win-builder GTX 1070Ti (Pascal) CUDA | 77 M/s | 69 M/s | 45 M/s | 40 M/s | **33.5 M/s** |
+| Mac M-series Metal | 28.1 M/s | 30.3 M/s | 31.2 M/s | 35.1 M/s | **32.3 M/s** |
+| dev49 legacy CPU (baseline) | 9.0 M/s | 8.8 M/s | 8.4 M/s | 7.7 M/s | 6.9 M/s |
+| Mac legacy CPU (baseline) | 5.1 M/s | 4.8 M/s | 4.7 M/s | 4.8 M/s | 4.7 M/s |
+
+**第三时钟在 2048×1024 的增益**（vs per-batch drain 旧值，interleaved 同 binary 隔离 drain cadence）：
+
+| host / backend | 旧（per-batch） | 第三时钟 | 增益 | 机制 |
+|---|---|---|---|---|
+| 4060Ti (Ada, 32MB L2) CUDA | 28 M/s | 39 M/s | **1.4×** | Ada L2 大→旧值已 L2-resident，税主要是 per-batch D2H readback |
+| 1070Ti (Pascal, 2MB L2) CUDA | 12.5 M/s | 33.5 M/s | **2.7×** | 兼有 L2 溢出 + readback 税；第三时钟消 readback（L2 残留） |
+| M-series Metal（统一内存） | 11 M/s | 32.3 M/s | **~3×** | 无 PCIe readback；per-batch 24MB memset+memcpy(×76 batch≈3.6GB) 被摊薄 |
+
+**要点**：
+- **三种硬件（CUDA-Ada / CUDA-Pascal / Metal）一致确证第三时钟在真实 GUI 分辨率显著提速**；增益随"旧值里 per-batch readback/copy 占比"放大。
+- **Metal 曲线近平**（28→35 M/s 跨 6 档），第三时钟使 Metal 分辨率-鲁棒（旧路径每 batch 全幅 memset+memcpy 在高分辨率是真成本，非仅 CUDA readback）。**推翻早先"Metal 统一内存零收益"判断**。
+- 正确性：CUDA parity 10/10 @4060Ti + 10/10 @1070Ti/sm_61；Metal parity 14/14（含 batch-invariance = drain-cadence 独立性）。
+- win-builder 1070Ti 未列 vs-legacy（CPU 弱，比值虚高，读绝对值）；`multi_med` 列在第三时钟下失真已弃用（用 `multi_wall`）。
+- 重场景 `ms_multi_crystal`（trace 主导，readback 占比小）增益温和：4060Ti 2048 = 14.9 M/s、1070Ti = 7.3 M/s、Metal ≈ 17 M/s@256（Mac 热噪大，N=9 后仍抖）。
 
 #### Mac — Apple M2 Max (12-core: 8P+4E, 32 GB, macOS 14.7) · legacy vs Metal · 2026-06-28
 
