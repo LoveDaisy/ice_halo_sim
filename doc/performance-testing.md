@@ -83,22 +83,20 @@ total thread count = workers + 2.
 good scaling; lower values suggest lock contention, memory bandwidth saturation, or
 scheduling overhead. **Meaningful for the legacy CPU route only** — see the GPU caveat next.
 
-> **⚠️ GPU backends are single-engine — "single" vs "multi" is NOT parallelism.** The GPU route
-> (Metal / CUDA) runs `worker_count=1` unconditionally (`server.cpp:284`); only the legacy CPU
-> route is genuinely multi-worker (`worker_count = PhysicalCoreCount()`). In `--benchmark`'s
-> dual-pass **both** GPU passes run on the same single engine — the "single" pass is just the
-> 2M-ray, JIT-warmup-dominated short run and the "multi" pass is the full-ray-count, warm, long
-> run. So for GPU:
-> - The two numbers are **not** equal (e.g. dev49 CUDA 35→56 M/s, 1070Ti 32→60 M/s) — but the
->   gap is **warmup + ray-count + window-length**, not parallelism.
-> - **The "multi" number is the representative steady figure** (warm + long window); read it, not
->   because it is "parallel" but because it is the settled rate.
-> - **`efficiency` is meaningless for GPU** (`workers` in a GPU `[BENCHMARK]` line is the
->   configured core count, not GPU engines; `explore-306.1` E1 `worker_count=1` is the proof).
->
-> This is documented, not a bug. **Planned simplification** (backlog, needs hardware validation):
-> the GPU dual-pass may be collapsed to a single steady number so the self-reported data stops
-> implying parallelism — until then, apply this caveat when reading GPU `single`/`multi`.
+> **⚠️ GPU backends are single-engine — there is no "single" vs "multi" parallelism.** The GPU
+> route (Metal / CUDA) runs `worker_count=1` unconditionally (`server.cpp:284`); only the legacy
+> CPU route is genuinely multi-worker (`worker_count = PhysicalCoreCount()`). Because a GPU
+> "single" and "multi" pass would both run on the same one engine (differing only by warmup +
+> ray-count, not parallelism), **`--benchmark` collapses the GPU route to ONE steady pass**
+> (labelled `mode="multi"`) and skips the warmup pass; the legacy CPU route keeps the genuine
+> dual-pass. Route detection is env-aware (`LUMICE_WillUseGpuRoute` honors `LUMICE_TRACE_BACKEND`,
+> so an env-selected GPU run collapses too). Consequences when reading GPU results:
+> - A GPU `[BENCHMARK]`/`bench_throughput.py` row has **`multi` only** (`single`/`single_rps` are
+>   absent — this is expected, not INCOMPLETE). The `multi` number is the representative steady rate.
+> - **`efficiency` does not apply to GPU** (there is no single/parallel pair; `explore-306.1` E1
+>   `worker_count=1` is the proof). The CI summary's efficiency column is legacy-CPU-only.
+> - Cross-checking old data: pre-2026-07 GPU tables that show a `single` column were the old
+>   dual-pass (single = 2M-ray warmup run); those `single` GPU numbers were never a per-core figure.
 
 Behavior differences in benchmark mode:
 - **Dual-pass**: Two independent server instances are created sequentially, each with a

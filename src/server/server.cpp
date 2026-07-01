@@ -216,7 +216,6 @@ void ServerImpl::RunPersistentLoop(F work_fn) {
 }
 
 
-namespace {
 // task-268.7 (owner 2026-06-15): the CPU and GPU routes do NOT mirror each other
 // — each picks its own optimal orchestration, so the server runs two parallel
 // shapes. The GPU/Metal route is a SINGLE engine (N engines would contend one
@@ -273,7 +272,6 @@ bool ResolveGpuRoute(BackendKind preferred_backend, Logger& logger) {
 #endif
   return false;  // kCpu, or the requested GPU backend is unavailable in this build
 }
-}  // namespace
 
 ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed, BackendKind preferred_backend)
     : config_manager_{}, scene_queue_(std::make_shared<Queue<SimBatch>>()),

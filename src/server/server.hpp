@@ -153,6 +153,18 @@ struct StatsResult {
 using Result = std::variant<NoneResult, RenderResult, StatsResult>;
 
 
+// =============== GPU route query ===============
+/**
+ * @brief Would a server built with @p preferred_backend take the GPU single-engine route?
+ * @details Single source of truth for the routing decision (env `LUMICE_TRACE_BACKEND`
+ *          override wins over @p preferred_backend, CUDA gated on device availability),
+ *          mirroring CreateBackend. `ServerImpl`'s constructor uses the same function to
+ *          decide `worker_count` (GPU route => 1). Callers outside the server (e.g. the CLI
+ *          `--benchmark` dual-pass, which must skip the meaningless "single" warmup pass for
+ *          the single-engine GPU route) should query this rather than re-deriving the logic.
+ */
+bool ResolveGpuRoute(BackendKind preferred_backend, Logger& logger);
+
 // =============== Server Status ===============
 /**
  * @brief Server status enumeration

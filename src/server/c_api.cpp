@@ -892,6 +892,18 @@ int LUMICE_IsBackendAvailable(int backend) {
   }
 }
 
+int LUMICE_WillUseGpuRoute(int preferred_backend) {
+  try {
+    // Single source of truth: delegate to the same env-aware ResolveGpuRoute the
+    // server uses to size worker_count (server.cpp). Casting an unknown int to
+    // BackendKind is safe here — ResolveGpuRoute treats non-Metal/non-CUDA (or an
+    // unavailable device) as the legacy CPU route (returns false).
+    return ns::ResolveGpuRoute(static_cast<ns::BackendKind>(preferred_backend), ns::GetGlobalLogger()) ? 1 : 0;
+  } catch (...) {
+    return 0;
+  }
+}
+
 
 // =============== Crystal Mesh ===============
 

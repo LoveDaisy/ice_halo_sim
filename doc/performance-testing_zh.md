@@ -74,18 +74,18 @@ setup 会把它们的 rays_per_sec 压低 >30%。
 **并行扩展效率** = `multi_rps / (single_rps × workers)`。接近 1.0 表示良好扩展；
 偏低说明存在锁竞争、内存带宽饱和或调度开销。**仅对 legacy CPU 路线有意义**——见下方 GPU caveat。
 
-> **⚠️ GPU 后端是单引擎——"single" vs "multi" 不是并行。** GPU 路线（Metal / CUDA）无条件
+> **⚠️ GPU 后端是单引擎——不存在 "single" vs "multi" 并行。** GPU 路线（Metal / CUDA）无条件
 > `worker_count=1`（`server.cpp:284`）；只有 legacy CPU 路线是真多 worker（`worker_count =
-> PhysicalCoreCount()`）。`--benchmark` 双趟里 GPU **两趟都跑在同一个单引擎**上——"single" 趟只是
-> 2M 光线、JIT-warmup 主导的短 run，"multi" 趟是全光线数、暖机后、长窗口的 run。所以对 GPU：
-> - 两个数**并不相等**（如 dev49 CUDA 35→56 M/s，1070Ti 32→60 M/s）——但差异来自 **暖机 + 光线数 +
->   窗口长度**，不是并行。
-> - **"multi" 数是稳态代表值**（暖机 + 长窗口）；读它，不是因为它"并行"，而是因为它是稳定率。
-> - **`efficiency` 对 GPU 无意义**（GPU `[BENCHMARK]` 行里的 `workers` 是配置的核数、非 GPU 引擎数；
->   `explore-306.1` E1 `worker_count=1` 是铁证）。
->
-> 这是已记录的现实，非 bug。**计划中的简化**（backlog，需硬件验证）：GPU 双趟可能塌成单个稳态数，
-> 使自报数据不再暗示并行——在此之前，读 GPU `single`/`multi` 时套用本 caveat。
+> PhysicalCoreCount()`）。既然 GPU 的 "single" 与 "multi" 趟都跑在同一个单引擎（只差暖机+光线数、
+> 非并行），**`--benchmark` 对 GPU 路线塌成 ONE 稳态趟**（label `mode="multi"`）、跳过暖机趟；
+> legacy CPU 路线保留真双趟。路线检测是 env-aware 的（`LUMICE_WillUseGpuRoute` 认 `LUMICE_TRACE_BACKEND`，
+> 故 env 选的 GPU run 也塌）。读 GPU 结果时：
+> - GPU 的 `[BENCHMARK]` / `bench_throughput.py` 行**只有 `multi`**（`single`/`single_rps` 缺失
+>   =预期、非 INCOMPLETE）。`multi` 数是稳态代表值。
+> - **`efficiency` 对 GPU 不适用**（无 single/parallel 对；`explore-306.1` E1 `worker_count=1` 铁证）。
+>   CI summary 的 efficiency 列仅对 legacy CPU 有意义。
+> - 对旧数据：2026-07 前带 `single` 列的 GPU 表是旧双趟（single = 2M 光线暖机 run），那些 GPU `single`
+>   数从来不是"单核"指标。
 
 benchmark 模式的行为差异：
 - **双趟运行**：依次创建两个独立 server 实例，指定不同 worker 数
