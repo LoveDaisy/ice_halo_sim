@@ -72,7 +72,20 @@ setup 会把它们的 rays_per_sec 压低 >30%。
 内部线程（场景生成 + 数据消费），总线程数 = workers + 2。
 
 **并行扩展效率** = `multi_rps / (single_rps × workers)`。接近 1.0 表示良好扩展；
-偏低说明存在锁竞争、内存带宽饱和或调度开销。
+偏低说明存在锁竞争、内存带宽饱和或调度开销。**仅对 legacy CPU 路线有意义**——见下方 GPU caveat。
+
+> **⚠️ GPU 后端是单引擎——"single" vs "multi" 不是并行。** GPU 路线（Metal / CUDA）无条件
+> `worker_count=1`（`server.cpp:284`）；只有 legacy CPU 路线是真多 worker（`worker_count =
+> PhysicalCoreCount()`）。`--benchmark` 双趟里 GPU **两趟都跑在同一个单引擎**上——"single" 趟只是
+> 2M 光线、JIT-warmup 主导的短 run，"multi" 趟是全光线数、暖机后、长窗口的 run。所以对 GPU：
+> - 两个数**并不相等**（如 dev49 CUDA 35→56 M/s，1070Ti 32→60 M/s）——但差异来自 **暖机 + 光线数 +
+>   窗口长度**，不是并行。
+> - **"multi" 数是稳态代表值**（暖机 + 长窗口）；读它，不是因为它"并行"，而是因为它是稳定率。
+> - **`efficiency` 对 GPU 无意义**（GPU `[BENCHMARK]` 行里的 `workers` 是配置的核数、非 GPU 引擎数；
+>   `explore-306.1` E1 `worker_count=1` 是铁证）。
+>
+> 这是已记录的现实，非 bug。**计划中的简化**（backlog，需硬件验证）：GPU 双趟可能塌成单个稳态数，
+> 使自报数据不再暗示并行——在此之前，读 GPU `single`/`multi` 时套用本 caveat。
 
 benchmark 模式的行为差异：
 - **双趟运行**：依次创建两个独立 server 实例，指定不同 worker 数

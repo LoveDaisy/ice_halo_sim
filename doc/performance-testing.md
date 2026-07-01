@@ -81,7 +81,24 @@ total thread count = workers + 2.
 
 **Parallel efficiency** = `multi_rps / (single_rps × workers)`. A value near 1.0 indicates
 good scaling; lower values suggest lock contention, memory bandwidth saturation, or
-scheduling overhead.
+scheduling overhead. **Meaningful for the legacy CPU route only** — see the GPU caveat next.
+
+> **⚠️ GPU backends are single-engine — "single" vs "multi" is NOT parallelism.** The GPU route
+> (Metal / CUDA) runs `worker_count=1` unconditionally (`server.cpp:284`); only the legacy CPU
+> route is genuinely multi-worker (`worker_count = PhysicalCoreCount()`). In `--benchmark`'s
+> dual-pass **both** GPU passes run on the same single engine — the "single" pass is just the
+> 2M-ray, JIT-warmup-dominated short run and the "multi" pass is the full-ray-count, warm, long
+> run. So for GPU:
+> - The two numbers are **not** equal (e.g. dev49 CUDA 35→56 M/s, 1070Ti 32→60 M/s) — but the
+>   gap is **warmup + ray-count + window-length**, not parallelism.
+> - **The "multi" number is the representative steady figure** (warm + long window); read it, not
+>   because it is "parallel" but because it is the settled rate.
+> - **`efficiency` is meaningless for GPU** (`workers` in a GPU `[BENCHMARK]` line is the
+>   configured core count, not GPU engines; `explore-306.1` E1 `worker_count=1` is the proof).
+>
+> This is documented, not a bug. **Planned simplification** (backlog, needs hardware validation):
+> the GPU dual-pass may be collapsed to a single steady number so the self-reported data stops
+> implying parallelism — until then, apply this caveat when reading GPU `single`/`multi`.
 
 Behavior differences in benchmark mode:
 - **Dual-pass**: Two independent server instances are created sequentially, each with a
