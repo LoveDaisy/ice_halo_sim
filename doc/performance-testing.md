@@ -127,6 +127,7 @@ Notes:
 - The dispatch sweet spot is **backend- and resolution-dependent**: Metal 32768 / CUDA 262144 是 **512×256** 下的甜点；**分辨率升高时 CUDA 最优 dispatch 显著上移**（2048×1024 下 ~786K–2M，因 per-batch readback 摊薄——见"分辨率"小节 + Runtime Tuning Knobs）。小 dispatch 饿死 GPU（512/2048 = 0.2–0.8× legacy）。
 - `bench_throughput.py` overrides `ray_num` to a large value per run (temp config,
   committed files untouched) so the steady window is long enough to be stable.
+- **⚠️ 第三时钟 drain 路径（CUDA，scrum-312）用 `multi_wall` 列，不用 `multi_med`**：`multi_med`（binary 的 steady `rays_per_sec`）靠 `sim_ray_num` 进度采样，而第三时钟 drain 稀疏 → 进度粗跳（首个 drain 前 `sim_ray_num` 恒 0）→ steady window 把大部分 tracing 误算进 setup → **系统性假低**（实测 2048 报 22M，真值 39M）。`bench_throughput.py` 已加 `multi_wall = rays/wall_sec`（robust，免疫 drain 粒度），两列背离时**信 `multi_wall`**。per-batch 路径（legacy/Metal/CUDA N=1）两列一致（细进度），不受影响。
 
 #### 分辨率是一等吞吐维度（device-fused XYZ 累加 → cost 随 buffer vs GPU L2）
 

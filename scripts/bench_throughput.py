@@ -209,6 +209,17 @@ def run(config_path: Path, backend_env: str | None, dispatch_num: int | None) ->
         except json.JSONDecodeError:
             pass  # malformed [BENCHMARK] line → INCOMPLETE note below
     by_mode = {b["mode"]: b["rays_per_sec"] for b in benches}
+    # Wall-clock rate = rays / wall_sec. Robust cross-check for the steady
+    # rays_per_sec, which is FOOLED by the scrum-312 third-clock drain: with
+    # coarse drains, sim_ray_num stays 0 until the first drain, so the binary's
+    # steady window counts most tracing as "setup" and under-reports. wall_rate
+    # includes the (small) setup but is immune to drain granularity — trust it
+    # when it diverges from rays_per_sec. See doc/performance-testing.md.
+    by_mode_wall = {}
+    for b in benches:
+        w = b.get("wall_sec")
+        r = b.get("rays")
+        by_mode_wall[b["mode"]] = (r / w) if (w and r) else None
 
     expected_route = GPU_ROUTE_STRINGS.get(backend_env)  # None for legacy/cpu_backend
     routed_gpu = (expected_route in out) if expected_route else True
@@ -229,6 +240,8 @@ def run(config_path: Path, backend_env: str | None, dispatch_num: int | None) ->
     return {
         "single_rps": by_mode.get("single"),
         "multi_rps": by_mode.get("multi"),
+        "single_wall_rps": by_mode_wall.get("single"),
+        "multi_wall_rps": by_mode_wall.get("multi"),
         "routed_ok": routed_ok,
         "note": note,
         "rc": proc.returncode,
@@ -249,28 +262,33 @@ def _cov(values):
 def measure_cell(config_path: Path, backend_env: str | None, dispatch_num: int | None,
                  n_reps: int) -> dict:
     single_vals, multi_vals, all_ok, notes = [], [], True, []
+    multi_wall_vals = []
     for i in range(n_reps):
         try:
             r = run(config_path, backend_env, dispatch_num)
         except subprocess.TimeoutExpired:
             single_vals.append(None)
             multi_vals.append(None)
+            multi_wall_vals.append(None)
             all_ok = False
             notes.append(f"rep{i}:TIMEOUT")
             continue
         single_vals.append(r["single_rps"])
         multi_vals.append(r["multi_rps"])
+        multi_wall_vals.append(r["multi_wall_rps"])
         if not r["routed_ok"]:
             all_ok = False
         if r["note"]:
             notes.append(f"rep{i}:{r['note']}")
     s_clean = [v for v in single_vals if v is not None]
     m_clean = [v for v in multi_vals if v is not None]
+    mw_clean = [v for v in multi_wall_vals if v is not None]
     return {
         "single_vals": single_vals,
         "multi_vals": multi_vals,
         "single_median": statistics.median(s_clean) if s_clean else None,
         "multi_median": statistics.median(m_clean) if m_clean else None,
+        "multi_wall_median": statistics.median(mw_clean) if mw_clean else None,
         "single_cov": _cov(single_vals),
         "multi_cov": _cov(multi_vals),
         "routed_ok": all_ok,
@@ -410,11 +428,14 @@ def run_res_sweep(resolutions: list[tuple[int, int]],
     )
     header = (
         f"{'backend':<12s} {'config':<26s} {'res':>11s} {'buf_MB':>7s} "
-        f"{'single_med':>15s} {'multi_med':>15s} "
+        f"{'single_med':>15s} {'multi_med':>15s} {'multi_wall':>15s} "
         f"{'cov_s':>6s} {'cov_m':>6s} {'vs_legacy':>10s} note"
     )
     print(header, flush=True)
     print("-" * len(header), flush=True)
+    print("# multi_wall = rays/wall_sec (robust); multi_med = steady rays_per_sec "
+          "(UNRELIABLE under third-clock drain — trust multi_wall when they diverge).",
+          flush=True)
 
     rows: list[dict] = []
     cov_log: list[str] = []
@@ -449,6 +470,7 @@ def run_res_sweep(resolutions: list[tuple[int, int]],
                     f"{buf_mb:>7.1f} "
                     f"{_fmt_rps(cell['single_median']):>15s} "
                     f"{_fmt_rps(cell['multi_median']):>15s} "
+                    f"{_fmt_rps(cell['multi_wall_median']):>15s} "
                     f"{_fmt_cov(cell['single_cov']):>6s} "
                     f"{_fmt_cov(cell['multi_cov']):>6s} "
                     f"{ratio_str:>10s} {note_str}",
@@ -459,6 +481,7 @@ def run_res_sweep(resolutions: list[tuple[int, int]],
                     "resolution": [w, h], "buffer_mb": round(buf_mb, 2),
                     "single_median_rps": cell["single_median"],
                     "multi_median_rps": cell["multi_median"],
+                    "multi_wall_median_rps": cell["multi_wall_median"],
                     "single_cov": cell["single_cov"], "multi_cov": cell["multi_cov"],
                     "vs_legacy_multi": (
                         cell["multi_median"] / legacy_multi_median
@@ -548,11 +571,14 @@ def main() -> int:
 
     header = (
         f"{'backend':<12s} {'config':<34s} {'dispatch':>9s} "
-        f"{'single_med':>15s} {'multi_med':>15s} "
+        f"{'single_med':>15s} {'multi_med':>15s} {'multi_wall':>15s} "
         f"{'cov_s':>6s} {'cov_m':>6s} {'vs_legacy':>10s} note"
     )
     print(header, flush=True)
     print("-" * len(header), flush=True)
+    print("# multi_wall = rays/wall_sec (robust); multi_med = steady rays_per_sec "
+          "(UNRELIABLE under third-clock drain — trust multi_wall when they diverge).",
+          flush=True)
 
     for cfg_label, cfg_path in configs.items():
         legacy_multi_median = None
@@ -596,6 +622,7 @@ def main() -> int:
                     f"{_fmt_dispatch(dispatch_num):>9s} "
                     f"{_fmt_rps(cell['single_median']):>15s} "
                     f"{_fmt_rps(cell['multi_median']):>15s} "
+                    f"{_fmt_rps(cell['multi_wall_median']):>15s} "
                     f"{_fmt_cov(cell['single_cov']):>6s} "
                     f"{_fmt_cov(cell['multi_cov']):>6s} "
                     f"{ratio_str:>10s} {note_str}",
@@ -608,6 +635,7 @@ def main() -> int:
                     "dispatch": _fmt_dispatch(dispatch_num),
                     "single_median_rps": cell["single_median"],
                     "multi_median_rps": cell["multi_median"],
+                    "multi_wall_median_rps": cell["multi_wall_median"],
                     "single_cov": cell["single_cov"],
                     "multi_cov": cell["multi_cov"],
                     "vs_legacy_multi": (
