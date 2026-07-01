@@ -461,6 +461,17 @@ class TraceBackend {
   // and the simulator falls back to per-batch wl in SimData.outgoing_wl_.
   virtual uint32_t WlPoolSize() const { return 0; }
 
+  // task-exit-seam-crystal-count: number of crystal settings in the final
+  // (last) MS layer for the most recent session. Populated by the backend
+  // after BeginSession (CUDA) or after the final TraceLayer call (Metal / CPU),
+  // consumed by Simulator to fill SimData.crystal_count_ for stats reporting.
+  //
+  // Semantics warning: this is the final-layer setting count, NOT a per-batch
+  // Crystal instance count analogous to the legacy CPU path (which emplaces
+  // one Crystal per kSmallBatchRayNum for random-orientation scenes). Do not
+  // use this value in a bit-parity assertion against legacy stats.
+  virtual size_t GetLastBatchCrystalCount() const { return 0; }
+
   TraceBackend(const TraceBackend&) = delete;
   TraceBackend(TraceBackend&&) = delete;
   TraceBackend& operator=(const TraceBackend&) = delete;

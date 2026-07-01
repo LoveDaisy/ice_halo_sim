@@ -833,6 +833,7 @@ void ServerImpl::ConsumeData() {
               // same totals as a single whole-Consume call would yield.
               if (emitted == 0) {
                 chunk.root_ray_count_ = sim_data.root_ray_count_;
+                chunk.crystal_count_ = sim_data.crystal_count_;
                 chunk.crystals_ = sim_data.crystals_;
                 chunk.crystal_axis_dists_ = sim_data.crystal_axis_dists_;
               }

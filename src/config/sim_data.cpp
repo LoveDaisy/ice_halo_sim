@@ -24,8 +24,10 @@ namespace lumice {
 // vestigial outgoing_indices_ (vector<size_t>, 24B) — its content was never
 // read; the consumer's outgoing-ray count is outgoing_w_.size() — shrinking 240 → 216.
 // S1 device-fused: adds xyz_pixel_data_ (vector<float>, 24B) + xyz_landed_weight_
-// (float, 4B) + 4B padding = 32B total, bumping 216 → 248.
-static_assert(sizeof(SimData) == 248, "SimData size changed — update copy/move ctors and operators");
+// (float, 4B) + 4B padding = 32B total, bumping 216 → 248. task-exit-seam-
+// crystal-count adds crystal_count_ (size_t, 8B) for exit-seam stats, bumping
+// 248 → 256.
+static_assert(sizeof(SimData) == 256, "SimData size changed — update copy/move ctors and operators");
 
 namespace {
 
@@ -313,7 +315,8 @@ SimData::SimData(const SimData& other)
     : curr_wl_(other.curr_wl_), generation_(other.generation_), rays_(other.rays_), crystals_(other.crystals_),
       crystal_axis_dists_(other.crystal_axis_dists_), outgoing_d_(other.outgoing_d_), outgoing_w_(other.outgoing_w_),
       outgoing_wl_(other.outgoing_wl_), exit_records_(other.exit_records_), xyz_pixel_data_(other.xyz_pixel_data_),
-      xyz_landed_weight_(other.xyz_landed_weight_), root_ray_count_(other.root_ray_count_) {}
+      xyz_landed_weight_(other.xyz_landed_weight_), root_ray_count_(other.root_ray_count_),
+      crystal_count_(other.crystal_count_) {}
 
 SimData::SimData(SimData&& other) noexcept
     : curr_wl_(other.curr_wl_), generation_(other.generation_), rays_(std::move(other.rays_)),
@@ -321,7 +324,7 @@ SimData::SimData(SimData&& other) noexcept
       outgoing_d_(std::move(other.outgoing_d_)), outgoing_w_(std::move(other.outgoing_w_)),
       outgoing_wl_(std::move(other.outgoing_wl_)), exit_records_(std::move(other.exit_records_)),
       xyz_pixel_data_(std::move(other.xyz_pixel_data_)), xyz_landed_weight_(other.xyz_landed_weight_),
-      root_ray_count_(other.root_ray_count_) {}
+      root_ray_count_(other.root_ray_count_), crystal_count_(other.crystal_count_) {}
 
 SimData& SimData::operator=(const SimData& other) {
   if (&other == this) {
@@ -340,6 +343,7 @@ SimData& SimData::operator=(const SimData& other) {
   xyz_pixel_data_ = other.xyz_pixel_data_;
   xyz_landed_weight_ = other.xyz_landed_weight_;
   root_ray_count_ = other.root_ray_count_;
+  crystal_count_ = other.crystal_count_;
   return *this;
 }
 
@@ -366,6 +370,7 @@ SimData& SimData::operator=(SimData&& other) noexcept {
   xyz_pixel_data_ = std::move(other.xyz_pixel_data_);
   xyz_landed_weight_ = other.xyz_landed_weight_;
   root_ray_count_ = other.root_ray_count_;
+  crystal_count_ = other.crystal_count_;
   return *this;
 }
 

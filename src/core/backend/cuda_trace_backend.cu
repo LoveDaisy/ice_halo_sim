@@ -3020,6 +3020,13 @@ uint32_t CudaTraceBackend::WlPoolSize() const {
   return ResolveWlPoolSize(logger);
 }
 
+size_t CudaTraceBackend::GetLastBatchCrystalCount() const {
+  // task-exit-seam-crystal-count: Impl::final_layer_crystals_ is populated
+  // during BeginSession (cuda_trace_backend.cu:2078-2093), so it can be read
+  // safely anytime the session is open.
+  return impl_->final_layer_crystals_.size();
+}
+
 }  // namespace lumice
 
 #endif  // defined(LUMICE_CUDA_ENABLED)
