@@ -285,7 +285,7 @@ jobs:
       # mechanism for partial installs — if the action ever changes that
       # contract, the install-size diagnostic step below will catch it.
       - name: Install CUDA toolkit (nvcc + cudart_dev)
-        uses: Jimver/cuda-toolkit@v0.2.23
+        uses: Jimver/cuda-toolkit@v0.2.35
         with:
           cuda: '12.6.3'
           method: 'network'
