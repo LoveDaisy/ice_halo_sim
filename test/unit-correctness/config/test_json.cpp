@@ -498,10 +498,19 @@ TEST(LensConfigGlobe, FovDirectBoundary) {
   EXPECT_THROW(zero.get<LensParam>(), nlohmann::detail::out_of_range);
 }
 
-TEST(LensConfigGlobe, FFieldRejected) {
-  // Globe lens does not support f-derived fov.
+TEST(LensConfigGlobe, FFieldMapsLikeLinear) {
+  // 315.4: globe is now renderable and its on-image scale uses the linear focal
+  // relation (focal = img_radius/tan(fov/2)), so f→fov mirrors the linear lens.
+  // f = 12 (= kHalfShortEdge d) → fov = 2*atan2(d, f) = 2*atan(1) = 90°.
   nlohmann::json j = { { "type", "globe" }, { "f", 12.0f } };
-  EXPECT_THROW(j.get<LensParam>(), nlohmann::detail::out_of_range);
+  auto l = j.get<LensParam>();
+  EXPECT_EQ(l.type_, LensParam::kGlobe);
+  EXPECT_NEAR(l.fov_, 90.0f, 1e-3f);
+
+  // Cross-check against the linear lens for the same f.
+  nlohmann::json jl = { { "type", "linear" }, { "f", 12.0f } };
+  auto ll = jl.get<LensParam>();
+  EXPECT_NEAR(l.fov_, ll.fov_, 1e-5f);
 }
 
 }  // namespace

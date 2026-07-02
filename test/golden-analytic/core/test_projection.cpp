@@ -675,6 +675,7 @@ TEST(LmProj, ProjectExitPerTypeDefaultView) {
     { LensParam::kDualFisheyeEquidistant, 180.0f },
     { LensParam::kDualFisheyeStereographic, 180.0f },
     { LensParam::kDualFisheyeOrthographic, 180.0f },
+    { LensParam::kGlobe, 60.0f },  // globe fov ≤ 90 (MaxFov)
   };
   // Sample a handful of world dirs (must be unit or near-unit; hemispheres matter
   // for cull / dual-fisheye split).
@@ -712,6 +713,7 @@ TEST(LmProj, ProjectExitPerTypeRotatedView) {
     { LensParam::kDualFisheyeEquidistant, 180.0f },
     { LensParam::kDualFisheyeStereographic, 180.0f },
     { LensParam::kDualFisheyeOrthographic, 180.0f },
+    { LensParam::kGlobe, 60.0f },  // globe fov ≤ 90 (MaxFov)
   };
   const float dirs[][3] = {
     { 0.2f, -0.3f, -0.933f },
@@ -797,6 +799,118 @@ TEST(LmProj, RectangularWrapWhileVsFloorEquivalence) {
   // If this ever fires, Step 2 chose the safer path (CPU while-loop) — the
   // shared function stays parity-neutral. Metal/CUDA side is 315.3's concern.
   EXPECT_EQ(mismatches, 0);
+}
+
+// =============== Globe projection (315.4) ===============
+
+// AC4 consistency anchor: the device-side kGlobeCameraD (projection_shared.h)
+// MUST equal the GUI constant (src/gui/gui_constants.hpp:173, = shader
+// globeInverse kGlobeCameraDist). The constant cannot cross the C-API boundary,
+// so this guards the two copies from silently drifting.
+TEST(LmProj, GlobeCameraDMatchesGuiConstant) {
+  EXPECT_FLOAT_EQ(lm_proj::kGlobeCameraD, 4.0f)
+      << "kGlobeCameraD must match src/gui/gui_constants.hpp kGlobeCameraD (=4.0)";
+}
+
+// The GUI globe forward (preview_renderer.cpp:919 ProjectGlobe) is the numerical
+// inverse of the shader `globeInverse` (preview_renderer.cpp:288). This is the
+// exact eye-space math the shared render-path globe branch transcribes. Verify
+// the transcribed math IS the inverse of the sphere ray-cast over sample pixel
+// offsets, so a CLI globe render matches the GUI globe preview (AC2 math check).
+TEST(LmProj, GlobeForwardInvertsShaderSphereCast) {
+  constexpr float kD = 4.0f;  // kGlobeCameraD
+  const float img_radius = 256.0f;
+  const float half_fov = 30.0f * math::kDegreeToRad;  // fov=60
+  const float focal = img_radius / std::tan(half_fov);
+
+  // Shader globeInverse: pixel offset (y-up) → world/eye dir on the sphere.
+  auto globe_inverse = [&](float px, float py, float out[3]) -> bool {
+    float dx = px, dy = py, dz = -focal;
+    float inv_len = 1.0f / std::sqrt(dx * dx + dy * dy + dz * dz);
+    dx *= inv_len;
+    dy *= inv_len;
+    dz *= inv_len;
+    float b = kD * dz;
+    float c = kD * kD - 1.0f;
+    float disc = b * b - c;
+    if (disc < 0.0f) {
+      return false;
+    }
+    float t = -b - std::sqrt(disc);
+    if (t <= 0.0f) {
+      return false;
+    }
+    out[0] = kD * 0.0f + t * dx;
+    out[1] = t * dy;
+    out[2] = kD + t * dz;  // hit_eye = (0,0,D) + t*d ; unit length on sphere
+    return true;
+  };
+  // GUI forward ProjectGlobe: eye_dir → pixel offset (the math transcribed into
+  // the shared globe branch, expressed in the GUI's eye frame).
+  auto globe_forward = [&](const float e[3], float out[2]) -> bool {
+    if (e[2] <= 1.0f / kD) {
+      return false;
+    }
+    float denom = kD - e[2];
+    out[0] = e[0] / denom * focal;
+    out[1] = e[1] / denom * focal;
+    return true;
+  };
+
+  // Offsets kept inside the sphere silhouette (radius ~focal*tan(asin(1/D))
+  // ≈ 114 px at fov=60): rays outside it miss the sphere by design.
+  const float samples[][2] = { { 0.0f, 0.0f },   { 40.0f, 0.0f },   { 0.0f, -55.0f },
+                               { 70.0f, 30.0f }, { -60.0f, 80.0f }, { 90.0f, -40.0f } };
+  for (const auto& s : samples) {
+    float e[3];
+    ASSERT_TRUE(globe_inverse(s[0], s[1], e)) << "sample (" << s[0] << "," << s[1] << ") should hit sphere";
+    float back[2];
+    ASSERT_TRUE(globe_forward(e, back)) << "eye dir should be front-hemisphere";
+    EXPECT_NEAR(back[0], s[0], 1e-2f) << "round-trip px";
+    EXPECT_NEAR(back[1], s[1], 1e-2f) << "round-trip py";
+  }
+}
+
+// Pin the shared render-path globe branch to its documented formula: reusing the
+// single-lens eye vector c = R^T·(-w), cull when c.z >= -1/D, denom = D + c.z,
+// offset = (c.x,c.y)/denom * scale, scale = short_pix/2/tan(fov/2). This keeps
+// globe's numerator/pixel-mapping identical to linear (so globe inherits linear's
+// verified GUI orientation by transitivity) while swapping only the denom+cull.
+TEST(LmProj, GlobeRenderPathMatchesDocumentedFormula) {
+  const int w = 1024, h = 512;
+  const float fov = 50.0f;
+  auto cfg = MakeRC(LensParam::kGlobe, fov, w, h, 20.0f, 35.0f, 10.0f);
+  Rotation rot = lumice::MakeCameraRotation(cfg);
+  const float short_pix = static_cast<float>(std::min(w, h));
+  auto pp = lumice::BuildProjParams(cfg, rot, short_pix);
+
+  const float* mat = rot.GetMat();  // row-major
+  const float kD = lm_proj::kGlobeCameraD;
+  const float scale = short_pix / 2.0f / std::tan(fov * math::kDegreeToRad / 2.0f);
+
+  const float dirs[][3] = { { 0.0f, 0.0f, -1.0f },  { 0.0f, 0.0f, 1.0f },   { 0.3f, -0.2f, -0.93f },
+                            { -0.4f, 0.5f, 0.77f }, { 0.1f, 0.1f, -0.99f }, { 0.6f, -0.3f, 0.74f } };
+  int visible_seen = 0;
+  for (const auto& d : dirs) {
+    // Reference: c = R^T·(-w) (ApplyRotTranspose semantics).
+    float cx = mat[0] * -d[0] + mat[3] * -d[1] + mat[6] * -d[2];
+    float cy = mat[1] * -d[0] + mat[4] * -d[1] + mat[7] * -d[2];
+    float cz = mat[2] * -d[0] + mat[5] * -d[1] + mat[8] * -d[2];
+    auto res = lm_proj::ProjectExitToPixel(pp, d[0], d[1], d[2]);
+    if (cz >= -1.0f / kD) {
+      EXPECT_EQ(res.count, 0) << "expected cull for cz=" << cz;
+    } else {
+      ++visible_seen;
+      float denom = kD + cz;
+      int expect_px = static_cast<int>(std::floor(cx / denom * scale + w / 2.0f + 0.5f));
+      int expect_py = static_cast<int>(std::floor(cy / denom * scale + h / 2.0f + 0.5f));
+      ASSERT_EQ(res.count, 1);
+      EXPECT_EQ(res.hits[0].px, expect_px);
+      EXPECT_EQ(res.hits[0].py, expect_py);
+      EXPECT_TRUE(res.hits[0].bump_landed);
+    }
+  }
+  EXPECT_GT(visible_seen, 0) << "at least one sample must be globe-visible";
 }
 
 }  // namespace

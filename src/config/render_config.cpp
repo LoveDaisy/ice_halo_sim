@@ -105,10 +105,11 @@ void from_json(const nlohmann::json& j, LensParam& l) {
         l.fov_ = std::asin(d / f) * 2 * math::kRadToDegree;
         break;
       case LensParam::kGlobe:
-        // Globe is not a physical pinhole lens; there is no f→fov mapping.
-        // Reject the f input path explicitly so misuse fails loudly instead of silently leaving fov_ undefined.
-        throw nlohmann::detail::out_of_range::create(
-            kErrCodeInvalidValue, "globe lens does not support f-derived fov; use fov field directly", j);
+        // Globe's on-image scale uses focal = img_radius/tan(fov/2), identical
+        // to the linear model (see ComputeScaleAz0 / GUI globeInverse), so the
+        // f→fov mapping mirrors linear.
+        l.fov_ = std::atan2(d, f) * 2 * math::kRadToDegree;
+        break;
     }
   } else {
     throw nlohmann::detail::out_of_range::create(kErrCodeMissingKey, "missing key [fov] or [f]", j);

@@ -2978,16 +2978,17 @@ void CudaTraceBackend::ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight)
             "ReadbackXyzAccum cudaMemset d_landed_weight");
 }
 
-// Mirror MetalTraceBackend::IsCompatible. 315.3: the device-fused emit gate now
-// projects via lm_proj::ProjectExitToPixel (single source with the CPU parity
-// oracle), so all forward projections except globe are supported at any view.
+// Mirror MetalTraceBackend::IsCompatible. 315.3/315.4: the device-fused emit
+// gate projects via lm_proj::ProjectExitToPixel (single source with the CPU
+// parity oracle), so all forward projections including globe are supported.
 bool CudaTraceBackend::IsCompatible(const RenderConfig& render) const {
-  // 315.3: the kernel exit tail projects via lm_proj::ProjectExitToPixel — the
-  // SAME single source as the CPU parity oracle (scatter_accum.hpp) — so every
+  // The kernel exit tail projects via lm_proj::ProjectExitToPixel — the SAME
+  // single source as the CPU parity oracle (scatter_accum.hpp) — so every
   // forward projection (single-lens linear/fisheye, rectangular, dual-fisheye
-  // variants) is byte-identical to legacy CPU at any view/fov. Globe (type 10)
-  // is still unimplemented on device (315.4) → CPU fallback.
-  return render.lens_.type_ != LensParam::kGlobe;
+  // variants, and globe as of 315.4) is byte-identical to legacy CPU at any
+  // view/fov. All lens types are supported on device.
+  (void)render;
+  return true;
 }
 
 uint32_t CudaTraceBackend::WlPoolSize() const {

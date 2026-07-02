@@ -128,6 +128,10 @@ inline void RectangularProject(const LensProjParam& p, const float* d, int* xy, 
   lens_proj_internal::ProjectMainHits(p, LensParam::kRectangular, d, xy, num);
 }
 
+inline void GlobeProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
+  lens_proj_internal::ProjectMainHits(p, LensParam::kGlobe, d, xy, num);
+}
+
 inline ProjFunc GetProjFunc(LensParam::LensType type) {
   static const std::map<LensParam::LensType, ProjFunc> lens_proj_map{
     { LensParam::kLinear, LinearProject },
@@ -140,6 +144,7 @@ inline ProjFunc GetProjFunc(LensParam::LensType type) {
     { LensParam::kRectangular, RectangularProject },
     { LensParam::kFisheyeOrthographic, FisheyeOrthographicProject },
     { LensParam::kDualFisheyeOrthographic, DualFisheyeOrthographicProject },
+    { LensParam::kGlobe, GlobeProject },
   };
   return lens_proj_map.at(type);
 }

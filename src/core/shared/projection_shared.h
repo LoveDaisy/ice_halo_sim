@@ -130,6 +130,16 @@ LM_CONSTANT int kProjFisheyeOrthographic = 8;
 LM_CONSTANT int kProjDualFisheyeOrthographic = 9;
 LM_CONSTANT int kProjGlobe = 10;
 
+// Globe lens camera distance (eye-space). The camera sits at (0,0,kGlobeCameraD)
+// looking toward the unit sphere at the origin (a genuine finite-distance sphere
+// perspective, NOT an orthographic alias). This is the single device-side source
+// of truth for the globe projection.
+//   MUST match src/gui/gui_constants.hpp:173 (GUI kGlobeCameraD, = the shader
+//   `globeInverse` kGlobeCameraDist) — the CLI↔GUI globe consistency contract
+//   (315.4). The constant cannot cross the C-API boundary, so this comment anchor
+//   plus test/golden-analytic/projection round-trip check guard the two copies.
+LM_CONSTANT float kGlobeCameraD = 4.0f;
+
 // Apply the transpose of a row-major 3x3 matrix (equivalent to Rotation::ApplyInverse
 // in src/core/geo3d.cpp:79). Splits out of the switch so both fisheye and linear
 // single-lens branches share one implementation.
@@ -292,7 +302,48 @@ LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, flo
     return r;
   }
 
-  // kProjGlobe (=10) and anything unknown → 315.4 will implement globe.
+  if (t == kProjGlobe) {
+    // Globe: finite-distance sphere perspective. Camera at (0,0,kGlobeCameraD)
+    // in eye space looks at the unit sphere; the near (visible) hemisphere
+    // surface point is the sky direction. Mirrors the GUI forward ProjectGlobe
+    // (preview_renderer.cpp:919) / overlay_labels.cpp globe branch, which are
+    // the numerical inverse of the shader `globeInverse`.
+    //
+    // The GUI expresses globe in its eye_dir e = WorldToView(w). Here we reuse
+    // the SAME eye vector the single-lens family uses: c = R^T * (-w)
+    // (ApplyRotTranspose). Single-lens cull parity (shared cull c.z<=0 ==
+    // GUI-linear cull e.z>=0) forces the value correspondence c.z = -e.z with
+    // the (x,y) numerator shared verbatim between linear and globe on BOTH
+    // sides. Substituting into the GUI globe form:
+    //   GUI visibility  e.z >  1/D   → cull when  c.z >= -1/D
+    //   GUI denom       D - e.z      →            D + c.z   (∈ [3.0, 3.75] for
+    //                                             D=4, never approaches 0)
+    //   GUI numerator   (e.x, e.y)   →            (c.x, c.y)   [same as linear]
+    // Because linear matches the GUI and globe differs from linear by exactly
+    // the same delta on both sides, globe matches the GUI by transitivity
+    // (including the x/y/row pixel convention — no extra flip is introduced).
+    // `p.scale` = focal = img_radius/tan(fov/2), host-computed in ComputeScaleAz0
+    // (identical to the linear scale formula, matching GUI focal).
+    float cx = 0.0f;
+    float cy = 0.0f;
+    float cz = 0.0f;
+    ApplyRotTranspose(p.rot, -wx, -wy, -wz, &cx, &cy, &cz);
+    if (cz >= -1.0f / kGlobeCameraD) {
+      return r;  // outside the camera-facing hemisphere → cull
+    }
+    float denom = kGlobeCameraD + cz;
+    int px = static_cast<int>(LM_FLOOR(cx / denom * p.scale + static_cast<float>(p.img_w) / 2.0f + 0.5f +
+                                       static_cast<float>(p.lens_shift_x)));
+    int py = static_cast<int>(LM_FLOOR(cy / denom * p.scale + static_cast<float>(p.img_h) / 2.0f + 0.5f +
+                                       static_cast<float>(p.lens_shift_y)));
+    r.hits[0].px = px;
+    r.hits[0].py = py;
+    r.hits[0].bump_landed = true;
+    r.count = 1;
+    return r;
+  }
+
+  // Anything unknown → miss.
   return r;
 }
 

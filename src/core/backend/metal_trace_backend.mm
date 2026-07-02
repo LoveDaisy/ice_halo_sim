@@ -1920,10 +1920,8 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   assert(spec.render != nullptr);
   // 315.3: the exit tail now projects via lm_proj::ProjectExitToPixel — the
   // SAME single source as the CPU parity oracle (scatter_accum.hpp) — so every
-  // non-globe lens type produces byte-identical pixels to legacy CPU at any
-  // view/fov. Globe (type 10) is 315.4 (ProjectExitToPixel returns count=0).
-  assert(spec.render->lens_.type_ != LensParam::kGlobe &&
-         "MetalTraceBackend does not yet support the globe projection (315.4)");
+  // lens type (incl. globe, 315.4) produces byte-identical pixels to legacy CPU
+  // at any view/fov.
 
   impl_->spec = spec;
   impl_->in_session = true;
@@ -2471,10 +2469,11 @@ bool MetalTraceBackend::IsCompatible(const RenderConfig& render) const {
   // 315.3: the kernel exit tail projects via lm_proj::ProjectExitToPixel — the
   // SAME single source as the CPU parity oracle (scatter_accum.hpp) — so every
   // forward projection (single-lens linear/fisheye, rectangular, dual-fisheye
-  // variants) is byte-identical to legacy CPU at any view/fov. The trace
-  // geometry is projection-independent, so no per-type view constraint remains.
-  // Globe (type 10) is still unimplemented on device (315.4) → CPU fallback.
-  return render.lens_.type_ != LensParam::kGlobe;
+  // variants, and globe) is byte-identical to legacy CPU at any view/fov. The
+  // trace geometry is projection-independent, so no per-type view constraint
+  // remains — all lens types are supported on device.
+  (void)render;
+  return true;
 }
 
 uint32_t MetalTraceBackend::WlPoolSize() const {

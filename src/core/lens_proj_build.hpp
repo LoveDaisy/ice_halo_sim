@@ -48,13 +48,18 @@ inline ScaleAz0 ComputeScaleAz0(LensParam::LensType type, float fov_rad, float s
       out.az0 = std::atan2(ax_z[1], ax_z[0]);
       break;
     }
+    case LensParam::kGlobe:
+      // Globe uses the same focal = img_radius/tan(fov/2) as linear (the GUI
+      // shader `globeInverse` computes focal identically). scale == focal so
+      // ProjectExitToPixel's globe branch is pure mul; az0 unused.
+      out.scale = short_pix / 2.0f / std::tan(fov_rad / 2.0f);
+      break;
     case LensParam::kDualFisheyeEqualArea:
     case LensParam::kDualFisheyeEquidistant:
     case LensParam::kDualFisheyeStereographic:
     case LensParam::kDualFisheyeOrthographic:
-    case LensParam::kGlobe:
       // Dual-fisheye types: scale unused (r_scale carries the coverage
-      // control); az0 unused. kGlobe reserved for 315.4.
+      // control); az0 unused.
       break;
   }
   return out;
@@ -121,8 +126,8 @@ inline lm_proj::ProjParams BuildProjParams(const RenderConfig& cfg, const Rotati
       // max_abs_dz stays 0 → ProjectExitToPixel emits primary hit only.
       break;
     case LensParam::kGlobe:
-      // 315.4 will implement globe. ProjectExitToPixel currently returns
-      // count=0 for the globe type.
+      // Globe carries no r_scale / max_abs_dz; its perspective scale is in
+      // p.scale (ComputeScaleAz0). ProjectExitToPixel's globe branch handles it.
       break;
   }
   return p;
