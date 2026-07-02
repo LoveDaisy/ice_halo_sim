@@ -7,7 +7,15 @@ testpaths = [
     "test/regression-sentinel",
 ]
 pythonpath = ["."]
-addopts = "-p no:xdist"
+# pytest-xdist parallelism is safe for this suite: xdist runs each test in a
+# separate worker PROCESS, so capi_runner's process-global os.environ + log
+# callback stay isolated per-process. (It was previously disabled via
+# `-p no:xdist` to guard that shared state, but that risk only applies to
+# intra-process concurrency, which xdist does not do — validated: the full slow
+# suite passes under `-n 3`.) CI's e2e-slow job runs the correctness/parity phase
+# with `-n 3` and the throughput gates serially so their measurement is not
+# deflated by concurrent GPU load. Without `-n`, xdist is inert (serial), so
+# default `pytest` behaviour is unchanged.
 markers = [
     "slow: requires shared-lib build; excluded from CI fast path",
     "heavy: slow + redundant parity variant; run locally/nightly, deselected per-PR via 'not heavy'",
