@@ -167,16 +167,22 @@ def _assert_routed(r: BufferedSimResult, expected_backend: str, config_name: str
 
 @pytest.mark.slow
 def test_metal_fallback_detector():
-    """halo_22 uses fisheye_equal_area (lens_type=1) — Metal-incompatible.
+    """A multi-renderer config MUST trip the "falling back to legacy" log.
 
-    Forcing metal MUST trip the "falling back to legacy" log. This is the
-    insurance that all other Axis-A (metal) assertions can meaningfully fail
+    Insurance that all other Axis-A (metal) assertions can meaningfully fail
     rather than silently pass on a degraded path.
+
+    NOTE (315.3/315.4): this used to force Metal on halo_22 (fisheye_equal_area)
+    and rely on a *lens-type* incompatibility. That trigger is GONE — the shared
+    ProjectExitToPixel migration (315.3) + globe (315.4) relaxed
+    MetalTraceBackend::IsCompatible to accept EVERY lens type, so no projection
+    falls back any more. Repointed to the projection-INDEPENDENT multi-renderer
+    fallback (CanUseBackend: renders_->size() != 1) which still fires.
     """
-    r = _run("halo_22", "metal")
+    r = _run("multi_lens", "metal")
     assert r.fell_back, (
-        "Expected fallback warning for Metal on fisheye_equal_area (lens_type=1) "
-        f"but got fell_back=False. log_lines tail: {r.log_lines[-5:]}"
+        "Expected Metal fallback on a multi-renderer config (multi_lens.json) but "
+        f"got fell_back=False. log_lines tail: {r.log_lines[-5:]}"
     )
 
 
