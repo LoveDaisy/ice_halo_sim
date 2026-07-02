@@ -90,3 +90,6 @@ Parameters:
 ## See Also
 
 - [Performance Testing Guide](performance-testing.md) — comprehensive perf testing overview
+- [Remote CUDA Build / Test Recipe](gpu-remote-cuda-build-testing.md) — **different concern**: CUDA
+  compile + parity/correctness on dev49 (Linux) and win-builder (Windows), headless. This guide (Windows
+  remote testing) is for GUI VSync perf on a *physical desktop session*; that one is for CUDA build+parity.

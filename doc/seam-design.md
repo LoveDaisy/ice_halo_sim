@@ -204,6 +204,12 @@ device 巨型 dispatch (batch = 纯性能旋钮):
 
 三时钟独立：几何=逐线程(池索引)、trace=dispatch 尺寸纯性能、回读=下游策略各自节奏。
 
+> ✅ **第三时钟已落地（scrum-312，2026-07-01）**：readback 从 trace 时钟解耦到显示节奏（device 持久累加 +
+> GUI 按显示节奏回读 / CLI 收尾一次，精度用 periodic-drain=float32+host Neumaier）。真实 GUI 分辨率
+> 2048×1024 增益三机一致：4060Ti 28→39M / 1070Ti 12.5→33.5M / Metal 11→32.3M。**蓝图赌对了**——本节
+> 预言的"回读走各自节奏"正是 312 兑现的形态。数字/机制见 `doc/performance-testing.md`「当前 canonical」+
+> `doc/gpu-route-history.md` Phase 11。
+
 ---
 
 ## 6. 待定项（收敛前需各下判断）

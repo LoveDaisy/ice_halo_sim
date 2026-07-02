@@ -12,9 +12,12 @@ Baseline policy: the denominator is always legacy CPU (env unset = the GUI's
 real path). `CpuTraceBackend` is a GPU-validation reference, NOT a perf
 baseline — see feedback_perf_baseline_is_legacy_cpu / doc/testing-architecture.md §4.1.
 
-Metal pass note: the server is single-engine, so the benchmark's "single" pass
-and "multi" pass both run on 1 Metal engine. The legacy CPU "multi" pass runs
-on N=PhysicalCoreCount workers. The G1 gate compares Metal(1-engine, large
+GPU pass note: the GPU route (Metal/CUDA) is single-engine (worker_count=1), so
+--benchmark emits ONE steady "multi" pass for GPU and skips the "single" warmup
+pass (single/multi would not be parallel — the gap is warmup+ray-count). The
+legacy CPU route still emits the genuine dual pass: "single" = 1 worker, "multi"
+= N=PhysicalCoreCount workers. So a GPU row has multi_rps but single_rps=None;
+that is expected, not INCOMPLETE. The G1 gate compares GPU(1-engine, large
 dispatch) vs legacy(N-workers, small dispatch); that asymmetry is intentional.
 
 Lineage: framework (run / measure_cell / _cov / _fmt_*) was lifted from
@@ -236,10 +239,12 @@ def run(config_path: Path, backend_env: str | None, dispatch_num: int | None) ->
             note = "FELL_BACK"
         elif not routed_gpu:
             note = f"NO_{backend_env.upper()}_ROUTE(rc={proc.returncode})"
-        elif len(benches) < 2:
+        elif "multi" not in by_mode:
+            # GPU route is single-engine → --benchmark emits ONE steady ("multi")
+            # pass and skips the "single" warmup pass (it would not be parallel).
             note = f"INCOMPLETE(n={len(benches)},rc={proc.returncode})"
     else:
-        if len(benches) < 2:
+        if len(benches) < 2:  # legacy CPU: genuine single + multi dual-pass
             note = f"INCOMPLETE(n={len(benches)},rc={proc.returncode})"
 
     routed_ok = (expected_route is None) or (routed_gpu and not fell_back)
@@ -565,7 +570,7 @@ def main() -> int:
 
     print(
         "# bench_throughput — denominator = legacy CPU multi_rps (per config).\n"
-        "# Metal: single-engine; single/multi passes both run 1 engine.\n"
+        "# GPU (Metal/CUDA): single-engine; one steady 'multi' pass, no 'single' (shown as '-').\n"
         "# CpuTraceBackend rows are verify-only (NOT a baseline).\n"
         f"# rays_per_sec = steady trace rate (setup excluded, --benchmark fix);\n"
         f"# ray_num overridden to {RAY_NUM_OVERRIDE:,} for a stable steady window.\n",

@@ -892,6 +892,24 @@ int LUMICE_IsBackendAvailable(int backend) {
   }
 }
 
+int LUMICE_WillUseGpuRoute(int preferred_backend) {
+  try {
+    // Single source of truth: delegate to the same env-aware ResolveGpuRoute the
+    // server uses to size worker_count (server.cpp). Casting an unknown int to
+    // BackendKind is safe here — ResolveGpuRoute treats non-Metal/non-CUDA (or an
+    // unavailable device) as the legacy CPU route (returns false), the runtime analog
+    // of LUMICE_IsBackendAvailable's compile-time -Wswitch guard above.
+    return ns::ResolveGpuRoute(static_cast<ns::BackendKind>(preferred_backend), ns::GetGlobalLogger()) ? 1 : 0;
+  } catch (...) {
+    // Fail safe to the legacy CPU route, but not silently: a swallowed device-probe
+    // error here would run the benchmark's CPU dual-pass while preferred_backend is a
+    // GPU, with no trace (project discipline: silent fallbacks cause undebuggable
+    // per-machine drift).
+    ILOG_WARN(ns::GetGlobalLogger(), "LUMICE_WillUseGpuRoute: route resolution threw; assuming legacy CPU route");
+    return 0;
+  }
+}
+
 
 // =============== Crystal Mesh ===============
 

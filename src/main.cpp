@@ -51,8 +51,10 @@ void PrintUsage(const char* prog_name) {
             << "                     'auto' and 'cpu' both select the CPU route today; 'metal'\n"
             << "                     falls back to CPU if unavailable. The LUMICE_TRACE_BACKEND\n"
             << "                     env var, if set, still overrides this (debug/CI only).\n"
-            << "  --benchmark        Run dual-mode benchmark (single-worker + multi-worker) and output\n"
-            << "                     two [BENCHMARK] JSON lines with per-core and parallel efficiency data\n"
+            << "  --benchmark        Run a throughput benchmark and output [BENCHMARK] JSON. The legacy\n"
+            << "                     CPU route runs a dual pass (single-worker + multi-worker → per-core\n"
+            << "                     and parallel-efficiency data); a GPU route is single-engine, so it\n"
+            << "                     runs one steady pass only (single/multi would not be parallel)\n"
             << "  -v                 Verbose output (trace level logging)\n"
             << "  -d                 Debug output (debug level logging)\n"
             << "  -h                 Show this help message and exit\n"
@@ -357,18 +359,28 @@ int main(int argc, char** argv) {
     }
 
     auto cores = static_cast<int>(std::thread::hardware_concurrency());
-    // task-268.7: server is always single-engine; num_workers is ignored. The
-    // "multi" pass remains as a higher ray-count comparison vs. the reduced
-    // "single" pass — both run with one Simulator. The `multi_workers` label
-    // is kept only for benchmark-output continuity.
-    int multi_workers = lumice::PhysicalCoreCount();
 
-    // Pass 1: reduced rays (label="single")
-    auto single_config = config_json;
-    single_config["scene"]["ray_num"] = kBenchmarkSingleRays;
-    RunBenchmarkPass(single_config.dump(), 1, "single", cores, log_level, preferred_backend);
+    // The GPU route is single-engine (worker_count=1, server.cpp) regardless of
+    // num_workers. Its "single" (2M-ray, JIT-warmup-dominated) and "multi"
+    // (full-ray, warm) passes are therefore NOT single-vs-parallel — the gap is
+    // warmup + ray-count, not workers. So for the GPU route we run ONE steady pass
+    // (kept labelled "multi" for output continuity) and skip the meaningless warmup
+    // pass. Only the legacy CPU route keeps the genuine dual-pass: "single" = 1
+    // worker (per-core efficiency), "multi" = PhysicalCoreCount() workers (real
+    // parallelism). LUMICE_WillUseGpuRoute is env-aware (LUMICE_TRACE_BACKEND wins
+    // over --backend), so this matches how bench_throughput.py selects a GPU run.
+    bool gpu_route = LUMICE_WillUseGpuRoute(preferred_backend) != 0;
 
-    // Pass 2: original ray count (label="multi"; worker count is still 1)
+    if (!gpu_route) {
+      // Pass 1: reduced rays, single worker (label="single") — CPU per-core efficiency.
+      auto single_config = config_json;
+      single_config["scene"]["ray_num"] = kBenchmarkSingleRays;
+      RunBenchmarkPass(single_config.dump(), 1, "single", cores, log_level, preferred_backend);
+    }
+
+    // Steady pass (label="multi"): original ray count. CPU = PhysicalCoreCount()
+    // workers (parallel); GPU = the single engine (the representative steady figure).
+    int multi_workers = gpu_route ? 1 : lumice::PhysicalCoreCount();
     RunBenchmarkPass(config_json.dump(), multi_workers, "multi", cores, log_level, preferred_backend);
 
     return 0;

@@ -62,6 +62,19 @@
   - 唯一有意义优化 = **device 侧 XYZ 累加**（不每 dispatch 把裸 records 过 PCIe+主机处理），非 dispatch/batch 调参。详见 `scratchpad/backlog.md` seam 条目（待单起 explore）。
   - 仪表瑕疵待修：多 CI 重写把 cudaEvent `ev_end_kernel_` 记录点挪到 per-CI 循环外，TraceLayer kernel 计时失真（≈0ms 假象）；profiling 前先修 event placement。
 
+> ⚠️ **SUPERSEDED（2026-07-01，scrum-313 doc 审计）**——上面这份 "CUDA ≈ 0.10–0.12× legacy，flat，
+> 唯一优化 = device 侧 XYZ 累加（待 explore）" 的 2026-06-27 基线**已被后续整条 arc 兑现+推翻**，仅作历史留存：
+> - **device 侧 XYZ 累加已落地**（scrum-302 device-fused accumulation）——正是当时点名的"唯一有意义优化"，
+>   消掉了裸 records 过 PCIe 的瓶颈。
+> - **buffer-persist**（scrum-304.2，镜像 Metal Reset）消掉 per-batch alloc churn → 可比轻·单MS CUDA
+>   **35–56M/s（6× legacy，≥25M 竞品线）**。
+> - **dispatch 默认 262144 + exit-cap**（scrum-306.2）→ out-of-box **~114M/s**（= 134M intrinsic 的 85%）。
+> - **第三时钟 readback 解耦**（scrum-312，seam-design §4.8）→ 真实 GUI 分辨率 2048×1024 下 CUDA 28→39M、
+>   Metal 11→32M、1070Ti 12.5→33.5M。
+>
+> 当前 canonical 吞吐数字见 **`doc/performance-testing.md`「当前 canonical 吞吐结果」**（历史 per-run 详录
+> 在 `scratchpad/perf-results-log.md`）。GPU 路线 #294→312 的完整演进见 `doc/gpu-route-history.md` Phase 10–11。
+
 ## 1. 状态与目标（设计期原文）
 
 > **接手注意**：本节描述 scrum-267/268 之前的出发状态（设计期），已是历史。

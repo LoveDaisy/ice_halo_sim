@@ -440,6 +440,17 @@ void LUMICE_SetPreferredBackend(LUMICE_Server* server, int backend);
 // matching branch here; CPU / Metal semantics are unchanged.
 int LUMICE_IsBackendAvailable(int backend);
 
+// Query whether a server built with `preferred_backend` would take the GPU
+// single-engine route (worker_count=1) on this machine. Unlike
+// LUMICE_IsBackendAvailable (which only reports device presence), this also honors
+// the `LUMICE_TRACE_BACKEND` env override, which wins over `preferred_backend` — so
+// e.g. `LUMICE_TRACE_BACKEND=cuda` with preferred_backend=CPU returns 1 (iff an
+// eligible CUDA device exists). Same resolution the server uses to size worker_count.
+// Intended for the CLI `--benchmark` dual-pass: the GPU route is single-engine, so
+// its "single" (warmup) vs "multi" (steady) passes are NOT parallel — callers use
+// this to collapse the GPU benchmark to one steady pass. Returns 1 (GPU route) or 0.
+int LUMICE_WillUseGpuRoute(int preferred_backend);
+
 #if !defined(_MSC_VER)
 #pragma GCC visibility pop
 #endif
