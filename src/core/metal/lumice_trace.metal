@@ -804,9 +804,22 @@ kernel void gen_root_kernel(
   if (gp.tri_count == 0u) {
     return;
   }
+  // task-gpu-rng-ray-index-uint64: `gp.gen_ray_base` is only the low 32 bits
+  // of the 64-bit host ray-base; `gp.gen_ray_base_hi` is the high 32 bits.
+  // pcg_advance_hi carry-detects whether (base_lo + tid) crossed the 2^32
+  // boundary so this thread's actual "hi epoch" may be gp.gen_ray_base_hi or
+  // gp.gen_ray_base_hi + 1. pcg_seed_with_high(seed, hi) is identity when
+  // hi==0 → in-range sessions (< 2^32 rays) remain bit-exact with the pre-fix
+  // stream; hi!=0 mixes pcg_hash(hi) into the seed so wrapped rays cannot
+  // collapse onto lower-epoch rays' streams. `global_idx` is base_lo + tid
+  // (uint32 wrap-allowed): its post-wrap value is exactly the correct lo half
+  // of the wrapped epoch, so the (mixed_seed, global_idx, slot) tuple remains
+  // unique in the full 64-bit space.
+  uint hi_epoch = pcg_advance_hi(gp.gen_ray_base, gp.gen_ray_base_hi, tid);
+  uint mixed_seed = pcg_seed_with_high(gp.gen_seed, hi_epoch);
   uint global_idx = gp.gen_ray_base + tid;
   PcgStream stream;
-  stream.seed = gp.gen_seed;
+  stream.seed = mixed_seed;
   stream.global_idx = global_idx;
   stream.slot = 0u;
 
@@ -817,7 +830,7 @@ kernel void gen_root_kernel(
   // lifetime tag, written to root_wl_idx so the trace kernel can look up
   // n_idx / cmf_* from wl_pool[wl_idx].
   PcgStream wl_stream;
-  wl_stream.seed       = gp.gen_seed;
+  wl_stream.seed       = mixed_seed;
   wl_stream.global_idx = global_idx;
   wl_stream.slot       = 20u;
   uint wl_idx = (uint)(pcg_uniform(wl_stream) * float(gp.wl_pool_size));
@@ -915,12 +928,17 @@ kernel void transit_root_kernel(
     return;
   }
   // 1. Orientation sample (shares sample_lat_lon_roll with gen_root_kernel;
-  //    gp.gen_seed carries transit_seed, gp.gen_ray_base carries the host-
-  //    side transit_ray_count_ so global_idx = gen_ray_base + tid is unique
-  //    per (layer, ci, batch, tid) across the whole Run() PCG range).
+  //    gp.gen_seed carries transit_seed, gp.gen_ray_base + gp.gen_ray_base_hi
+  //    together carry the 64-bit host-side transit_ray_count_ so the mixed
+  //    (seed, global_idx, slot) tuple is unique per (layer, ci, batch, tid)
+  //    across the whole Run() PCG range even past 2^32 rays. See
+  //    pcg_advance_hi / pcg_seed_with_high in pcg_shared.h — hi==0 is a
+  //    no-op so in-range sessions stay bit-exact with pre-fix streams.
+  uint hi_epoch = pcg_advance_hi(gp.gen_ray_base, gp.gen_ray_base_hi, tid);
+  uint mixed_seed = pcg_seed_with_high(gp.gen_seed, hi_epoch);
   uint global_idx = gp.gen_ray_base + tid;
   PcgStream stream;
-  stream.seed = gp.gen_seed;
+  stream.seed = mixed_seed;
   stream.global_idx = global_idx;
   stream.slot = 0u;
   float lon, lat, roll;
