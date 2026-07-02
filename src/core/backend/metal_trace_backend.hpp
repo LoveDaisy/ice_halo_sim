@@ -147,7 +147,16 @@ class MetalTraceBackend : public TraceBackend {
   // Contract: MUST be called AFTER BeginSession and BEFORE the first
   // TraceLayer, and only in test builds. Injecting during a live layer
   // sequence corrupts PCG stream indexing.
-  void SetInitialRayBaseForTest(size_t base);
+  void SetInitialRayBaseForTest(size_t root_base, size_t transit_base);
+
+  // [TEST-ONLY] task-gpu-rng-ray-index-uint64: RNG-isolated observation of the
+  // TRANSIT stream. After a continuation-layer TraceLayer, copies the per-ray
+  // crystal→world rotation matrices (9 floats/ray) back to host. Those are the
+  // transit kernel's sampled orientations R(tid) — a pure function of
+  // (transit_seed, tid), independent of ray physics + continuation compaction —
+  // so hi==0 runs are bit-identical and a non-zero transit hi moves them.
+  // Returns floats written (9 * count), or 0 if unavailable.
+  size_t ReadbackRootRotForTest(std::vector<float>& out, size_t count);
 
  private:
   struct Impl;

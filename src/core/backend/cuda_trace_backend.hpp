@@ -121,13 +121,13 @@ class CudaTraceBackend : public TraceBackend {
   size_t GetLastBatchCrystalCount() const override;
 
   // [TEST-ONLY] task-gpu-rng-ray-index-uint64 white-box injection: pre-seed the
-  // per-session PCG ray-base counters (gen / transit / gate) BEFORE the first
-  // TraceLayer so a dev49-only test can drive the device kernels into a
-  // non-zero hi epoch without running >2^32 real rays. Mirrors
-  // MetalTraceBackend::SetInitialRayBaseForTest — see that comment for the
-  // full contract. MUST be called AFTER BeginSession and BEFORE the first
+  // three per-session PCG ray-base counters (gen / transit / gate) INDEPENDENTLY
+  // BEFORE the first TraceLayer so a dev49-only test can drive exactly one
+  // device stream into a non-zero hi epoch (the other two held at hi==0) without
+  // running >2^32 real rays. Per-stream bases let gate/transit be asserted in
+  // isolation from gen. MUST be called AFTER BeginSession and BEFORE the first
   // TraceLayer, and only in test builds.
-  void SetInitialRayBaseForTest(size_t base);
+  void SetInitialRayBaseForTest(size_t gen_base, size_t transit_base, size_t gate_base);
 
   // [TEST-ONLY] task-gpu-rng-ray-index-uint64 white-box observation: copy the
   // first `count` device-gen'd ray directions (`d_dirs_`, crystal-local, 3
@@ -142,6 +142,19 @@ class CudaTraceBackend : public TraceBackend {
   // >= `count` rays and BEFORE EndSession (which frees d_dirs_). Returns the
   // number of floats written (3 * count), or 0 if unavailable.
   size_t ReadbackGenDirsForTest(std::vector<float>& out, size_t count);
+
+  // [TEST-ONLY] task-gpu-rng-ray-index-uint64: RNG-only observation of the
+  // TRANSIT stream, isolated from ray physics + atomic-compaction non-
+  // determinism. EnableTransitRngProbeForTest allocates a per-continuation-ray
+  // probe sink (call AFTER the first TraceLayer, BEFORE the continuation
+  // TraceLayer); the continuation transit kernel then writes each thread's raw
+  // pcg_uniform draw from its transit_mixed_seed stream (a pure function of
+  // seed + tid → deterministic, unlike d_dirs_/image which mix in the
+  // non-deterministic continuation ray at that tid). ReadbackTransitRngProbeForTest
+  // copies the draws back. A non-zero transit hi must move them; hi==0 runs are
+  // bit-identical. Returns floats written (== count), or 0 if unavailable.
+  void EnableTransitRngProbeForTest(size_t count);
+  size_t ReadbackTransitRngProbeForTest(std::vector<float>& out, size_t count);
 
  private:
   struct Impl;
