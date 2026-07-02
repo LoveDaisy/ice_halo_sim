@@ -88,14 +88,23 @@ CONFIGS = {
     / "test" / "e2e" / "configs" / "ms_multi_crystal_filtered_bd.json",
 }
 
-# Per-run ray_num override (task-fix-throughput-bench-honesty). The committed
-# heavy configs ship ray_num=2M; on Metal that completes in ~0.1s — too short a
-# steady window to resolve cleanly even after the setup-exclusion fix (thermal
-# noise dominates). Bump to 2e7 so the active window is ~1s+ on Metal while
-# legacy (slower) still finishes well within RUN_TIMEOUT_SEC. The committed
-# config files are NOT mutated; each run writes a temp config with this ray_num.
-# Used ONLY for the legacy CPU pass; GPU passes use RAY_NUM_INFINITE below.
-RAY_NUM_OVERRIDE = 20_000_000
+# Per-run ray_num override — LEGACY CPU PASS ONLY (GPU passes use RAY_NUM_INFINITE
+# below, task-gpu-bench-drain-aligned-rate). The committed heavy configs ship
+# ray_num=2M. History: task-fix-throughput-bench-honesty bumped this to 2e7 so the
+# *Metal* active window was ~1s+; but Metal now runs the infinite drain-count path,
+# so this override no longer serves any GPU backend.
+#
+# Kept modest (5M) on purpose. The legacy CPU route is ~1-2 orders of magnitude
+# slower than GPU, so 2e7 rays took tens of seconds *per rep* — which (a) heated a
+# Mac laptop enough to thermally contaminate the GPU cells run afterwards, and
+# (b) on the slow win-builder CPU overran the remote command timeout, orphaning the
+# Lumice process (it kept burning CPU and contaminated a later GPU rerun). The CPU
+# route is fine-grained (per-batch drain → sim_ray_num advances smoothly), so a
+# shorter window still yields a stable steady rate (low CoV): we do NOT need CPU to
+# trace the same ray count as GPU to get reliable data. 5M keeps the legacy multi
+# window ~1s on a fast CPU / a few seconds on a slow one — long enough for a clean
+# steady window, short enough to avoid heat/timeout. Committed configs untouched.
+RAY_NUM_OVERRIDE = 5_000_000
 
 # GPU pass ray_num (task-gpu-bench-drain-aligned-rate). GPU throughput on short
 # ray_num is systematically under-reported because sim_ray_num is drain-quantized
