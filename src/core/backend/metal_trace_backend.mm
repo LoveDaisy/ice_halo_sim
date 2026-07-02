@@ -140,7 +140,14 @@ enum LatPath : uint32_t {
 // geometry only; sun_* / ray_weight are populated but unused by transit).
 struct GenRootKernelParams {
   uint32_t gen_seed;
+  // task-gpu-rng-ray-index-uint64: `gen_ray_base` is now only the LOW 32 bits
+  // of the 64-bit host ray-index; `gen_ray_base_hi` carries the HIGH 32 bits
+  // (split via lumice::SplitPcgRayBase). Device mixes hi into per-ray PCG
+  // stream seed. Field order MUST match the MSL struct in
+  // src/core/shared/pcg_shared.h (which lumice_trace.metal pulls in via
+  // `using namespace lm_pcg;`); the static_assert below only guards size.
   uint32_t gen_ray_base;
+  uint32_t gen_ray_base_hi;
   uint32_t num_rays;
   uint32_t tri_count;
   float    sun_lon;
@@ -163,7 +170,7 @@ struct GenRootKernelParams {
   float    roll_std_rad;
   float    roll_pad;
 };
-static_assert(sizeof(GenRootKernelParams) == 84u,
+static_assert(sizeof(GenRootKernelParams) == 88u,
               "GenRootKernelParams size mismatch — update host struct to match Metal-side layout");
 
 size_t ComputeOutCap(size_t n, size_t max_hits) {
@@ -706,11 +713,14 @@ struct MetalTraceBackend::Impl {
   // params (re-uses BuildGenRootParams' orientation+geometry fields and only
   // overrides PCG seed / base; transit_seed nonce isolates the stream from
   // gen_root and the emit gate). Used by TraceLayer's non-first_ms branch.
+  // task-gpu-rng-ray-index-uint64: `ray_base` widened to size_t so the full
+  // 64-bit host counter reaches the device via SplitPcgRayBase (populating
+  // gp.gen_ray_base + gp.gen_ray_base_hi in a single site).
   GenRootKernelParams BuildTransitRootParams(const ScatteringSetting& setting,
                                               size_t ci_n,
                                               uint32_t ms_layer_idx,
                                               uint32_t ci,
-                                              uint32_t ray_base) const;
+                                              size_t ray_base) const;
   // Encodes a transit_root_kernel compute pass that reads the cont_d/cont_w
   // slice [ci_start, ci_start + gp.num_rays) of in_slot and writes the full
   // root_*_buf in lock-step with the trace kernel's input layout.
@@ -1262,9 +1272,13 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
     // monotone across batches of the same session.
     GenRootKernelParams gp = BuildGenRootParams(setting, crystal_ray_num);
     gp.gen_seed     = gen_seed_;
-    // 296.6: real runtime guard replacing the no-op-in-Release assert (the
-    // narrowing now throws past UINT32_MAX rather than silently wrapping).
-    gp.gen_ray_base = NarrowPcgRayBase(root_ray_count, crystal_ray_num, "metal-gen-root");
+    // task-gpu-rng-ray-index-uint64: SplitPcgRayBase carries the full 64-bit
+    // running ray count into the device via lo/hi halves; the kernel mixes hi
+    // into each ray's PCG seed so sessions beyond 2^32 rays no longer collapse
+    // on wrap (replaces the pre-fix NarrowPcgRayBase 4.29e9 cap).
+    auto split = SplitPcgRayBase(root_ray_count);
+    gp.gen_ray_base    = split.lo;
+    gp.gen_ray_base_hi = split.hi;
     gp.num_rays     = static_cast<uint32_t>(crystal_ray_num);
     // task-264 gen+trace fusion: stash params for DispatchLayer to encode into
     // the same command buffer as the trace pass. DispatchLayer is guaranteed
@@ -1531,7 +1545,7 @@ void MetalTraceBackend::Impl::EncodeGenRoot(id<MTLCommandBuffer> cb,
 // SimBatches (mirrors gen_root's per-dispatch advance from root_ray_count).
 GenRootKernelParams MetalTraceBackend::Impl::BuildTransitRootParams(
     const ScatteringSetting& setting, size_t ci_n,
-    uint32_t ms_layer_idx, uint32_t ci, uint32_t ray_base) const {
+    uint32_t ms_layer_idx, uint32_t ci, size_t ray_base) const {
   GenRootKernelParams gp = BuildGenRootParams(setting, ci_n);
   // Override seed: transit stream must be statistically independent from
   // root-gen (gen_seed_ + gen_ray_base) and from the emit gate (gate_seed) so
@@ -1549,7 +1563,13 @@ GenRootKernelParams MetalTraceBackend::Impl::BuildTransitRootParams(
   // it 0-by-default + "caller must overwrite" in a comment; that soft contract
   // silently reused PCG streams across batches → orientation under-sampling
   // (scrum-267 continuation bug). Making it a parameter closes that class.
-  gp.gen_ray_base = ray_base;
+  //
+  // task-gpu-rng-ray-index-uint64: SplitPcgRayBase provides the full 64-bit
+  // ray-base as (lo, hi); the kernel mixes hi into the per-ray PCG seed so
+  // >2^32 sessions no longer collapse on wrap.
+  auto split = SplitPcgRayBase(ray_base);
+  gp.gen_ray_base    = split.lo;
+  gp.gen_ray_base_hi = split.hi;
   return gp;
 }
 
@@ -2209,17 +2229,20 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
           //       (matches the use_host=true convention below);
           //   (c) spec.seed != 0 (single-worker determinism contract); and
           //   (d) tri_count ≤ kMaxTriPerKernel (kernel stack-array bound); and
-          //   (e) root_ray_count fits in uint32_t (gen_ray_base width); and
-          //   (f) LUMICE_DISABLE_DEVICE_GEN env var is unset (escape hatch for
+          //   (e) LUMICE_DISABLE_DEVICE_GEN env var is unset (escape hatch for
           //       strict-identity parity tests that mirror the host mt19937
           //       stream — these cannot align with the device PCG stream).
+          // task-gpu-rng-ray-index-uint64: the pre-fix "root_ray_count fits in
+          //   uint32" guard is GONE — the kernel now mixes the high 32 bits
+          //   of the 64-bit ray-base into every ray's PCG seed via
+          //   pcg_seed_with_high, so >2^32 sessions no longer collapse on
+          //   wrap and there is no cap to enforce here.
           // The escape hatch is cached once per backend in Impl's ctor (see
           // task-260.5 Step 4); tests that need to flip it must setenv BEFORE
           // constructing a new MetalTraceBackend.
           bool can_use_device_gen = !use_host &&
                                     impl_->gen_seed_ != 0u &&
                                     impl_->current_crystal.TotalTriangles() <= 64u &&
-                                    impl_->root_ray_count <= static_cast<size_t>(UINT32_MAX) - ci_n &&
                                     !impl_->disable_device_gen_;
           in_count = impl_->GenerateFirstLayerRootsForCi(setting, ci, ci_n, can_use_device_gen);
         }
@@ -2247,13 +2270,15 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
         }
         // Monotone advance — mirrors gen_root's root_ray_count contract so
         // per-SimBatch transit dispatches on (layer,ci) consume disjoint PCG
-        // ranges. 296.6: real runtime guard replacing the no-op-in-Release assert
-        // (gen_ray_base width matches the gen-root path).
+        // ranges. task-gpu-rng-ray-index-uint64: the ray_base is passed through
+        // to BuildTransitRootParams as the raw size_t; the split into
+        // (gen_ray_base_lo, gen_ray_base_hi) happens inside so both host
+        // gen/transit call sites share one splitting site.
         auto transit_gp = impl_->BuildTransitRootParams(
             setting, ci_n,
             static_cast<uint32_t>(impl_->ms_idx),
             static_cast<uint32_t>(ci),
-            NarrowPcgRayBase(impl_->transit_ray_count_, ci_n, "metal-transit"));
+            impl_->transit_ray_count_);
         id<MTLCommandBuffer> combined_cb = [impl_->queue commandBuffer];
         impl_->EncodeTransitRoot(combined_cb, transit_gp, in_slot, ci_start);
         // Advance unconditionally now: with the merged CB we no longer probe
@@ -2498,6 +2523,15 @@ size_t MetalTraceBackend::TraceLayerKernelMaxThreadsForTest() const {
     return 0;
   }
   return static_cast<size_t>(impl_->pso.maxTotalThreadsPerThreadgroup);
+}
+
+void MetalTraceBackend::SetInitialRayBaseForTest(size_t base) {
+  // Metal has only two host counters (gen + transit); the emit gate uses tid
+  // directly (statistical-not-bit-exact, scrum-267 §3.6). Setting both here
+  // makes the injection apply to either the first-layer or continuation-layer
+  // exercise of the fix, whichever the test picks.
+  impl_->root_ray_count = base;
+  impl_->transit_ray_count_ = base;
 }
 
 }  // namespace lumice

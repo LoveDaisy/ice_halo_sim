@@ -120,6 +120,15 @@ class CudaTraceBackend : public TraceBackend {
   // BeginSession — safe to read anytime the session is open.
   size_t GetLastBatchCrystalCount() const override;
 
+  // [TEST-ONLY] task-gpu-rng-ray-index-uint64 white-box injection: pre-seed the
+  // per-session PCG ray-base counters (gen / transit / gate) BEFORE the first
+  // TraceLayer so a dev49-only test can drive the device kernels into a
+  // non-zero hi epoch without running >2^32 real rays. Mirrors
+  // MetalTraceBackend::SetInitialRayBaseForTest — see that comment for the
+  // full contract. MUST be called AFTER BeginSession and BEFORE the first
+  // TraceLayer, and only in test builds.
+  void SetInitialRayBaseForTest(size_t base);
+
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

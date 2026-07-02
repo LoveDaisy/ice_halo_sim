@@ -362,6 +362,117 @@ TEST(MetalRootGen, DeviceGenDeterminismCrossInstanceMultiSession) {
   }
 }
 
+// task-gpu-rng-ray-index-uint64 white-box injection: assert the device kernel
+// actually consumes the new `gen_ray_base_hi` field (Major 1 in the plan-review
+// coverage-gap closure — the in-range parity battery only exercises hi==0 which
+// is bit-identical by construction, so a broken host↔device wiring would slip
+// through corr/energy/cross-seed all-green). This drives the Metal gen_root
+// kernel into three distinct hi epochs (0, 1, 2) via `SetInitialRayBaseForTest`
+// and asserts each hi != 0 image diverges from the hi == 0 image by more than
+// the atomic-add noise floor (self-calibrated from two hi==0 runs).
+//
+// Contract:
+//   * hi == 0 (base_lo = 0)             → pcg_seed_with_high is identity → this
+//     reference image is the "pre-fix bit-exact" one that the in-range parity
+//     battery covers exhaustively.
+//   * hi == 1 (base = 1<<32, base_lo=0) → mixed_seed = seed ^ pcg_hash(1), a
+//     different PCG stream per ray → per-pixel content shifts.
+//   * hi == 2 (base = 2<<32, base_lo=0) → mixed_seed = seed ^ pcg_hash(2),
+//     yet another distinct stream → per-pixel content shifts again, distinctly.
+//
+// Discriminator choice: per-pixel L1 relative diff, self-calibrated.
+// Aggregate channel sums are an MC INVARIANT — two different PCG streams
+// sample the same underlying distribution so their integrals coincide to
+// O(1/sqrt(N)); measured ~1e-4 rel drift across hi=0/1/2 (well below the 1e-3
+// threshold the same-stream determinism test uses). Per-pixel L1 responds to
+// stream difference but is SCENE-DEPENDENT: this default scene has kNoRandom
+// axis dist, so most rays hit similar exit angles → stream diff moves rays
+// only fractionally within the pixel grid → per-pixel L1 is a few percent
+// (not 50%+ as it would be under axis-random scenes).
+//
+// Absolute thresholds are therefore unreliable — we compare against a
+// same-scene baseline: run hi=0 TWICE, take the L1 of that repetition as the
+// atomic-noise floor, then assert every (hi≠0) vs (hi==0) L1 exceeds
+// baseline * kBaselineMultiple (default 5×). This scales with scene physics
+// while still detecting wire-up regressions (a broken wire would collapse the
+// hi≠0 streams onto hi==0, giving L1 ≈ baseline).
+//
+// Three-way divergence (hi=0 vs 1, hi=0 vs 2, hi=1 vs 2) forces the mixing to
+// be genuinely a hash of hi — catches "hi wired in but hashed wrong" bug shape
+// where hi=1/2 would both differ from hi=0 but not from each other.
+TEST(MetalRootGen, GenRayBaseHiWireUp) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  EnableDeviceGenForStatisticalParity();
+
+  auto scene = MakeMetalScene(/*max_hits=*/8, /*ms_layers=*/1);
+  auto render = MakeRectangularRender();
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  constexpr size_t kEpoch = static_cast<size_t>(1) << 32;
+  // Slots 0 and 1 are BOTH hi=0 (baseline atomic-noise measurement);
+  // slots 2 and 3 are hi=1 and hi=2 respectively.
+  const size_t kBases[] = { 0u, 0u, kEpoch, 2u * kEpoch };
+  const size_t kImgFloats =
+      static_cast<size_t>(render.resolution_[0]) * static_cast<size_t>(render.resolution_[1]) * 3u;
+  std::vector<std::vector<float>> images(4);
+  for (int i = 0; i < 4; i++) {
+    images[i].assign(kImgFloats, 0.0f);
+    MetalTraceBackend metal;
+    metal.BeginSession(spec);
+    metal.SetInitialRayBaseForTest(kBases[i]);
+    auto h = metal.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h, nullptr);
+    XyzImageData img{ images[i].data(), render.resolution_[0], render.resolution_[1] };
+    metal.ReadbackImage(img);
+    metal.EndSession();
+    for (int c = 0; c < 3; c++) {
+      EXPECT_GT(ChannelSum(images[i], c), 0.0)
+          << "base_idx=" << i << " channel=" << c << " — empty image; test setup broken";
+    }
+  }
+
+  auto l1_rel_diff = [](const std::vector<float>& a, const std::vector<float>& b) {
+    double num = 0.0;
+    double denom = 0.0;
+    for (size_t i = 0; i < a.size(); i++) {
+      num += std::abs(static_cast<double>(a[i]) - static_cast<double>(b[i]));
+      denom += 0.5 * (std::abs(static_cast<double>(a[i])) + std::abs(static_cast<double>(b[i])));
+    }
+    return denom > 0.0 ? num / denom : 0.0;
+  };
+
+  // Baseline: same-stream (both hi==0) atomic-add noise floor for this scene.
+  const double baseline = l1_rel_diff(images[0], images[1]);
+  // Absolute floor guards against a degenerate baseline (e.g. Metal bitwise
+  // atomic determinism giving baseline≈0 → hi≠0 stream drift would sneak
+  // through with a tiny multiple of ~0). 1e-3 is well above float32 rounding
+  // noise but well below any true stream-difference this scene produces.
+  const double threshold = std::max(baseline * 5.0, 1e-3);
+
+  const std::pair<int, int> kPairs[] = { { 0, 2 }, { 0, 3 }, { 2, 3 } };
+  for (auto pr : kPairs) {
+    double d = l1_rel_diff(images[pr.first], images[pr.second]);
+    EXPECT_GT(d, threshold) << "base_pair=(" << pr.first << "," << pr.second << ") per-pixel L1 rel diff=" << d
+                            << " baseline (hi==0 vs hi==0)=" << baseline << " threshold=" << threshold
+                            << " — device-side hi wire-up appears broken: hi!=0 stream produced pixels "
+                               "no different from same-stream atomic noise. Expected the hi-mix to shift "
+                               "the PCG sequence enough that per-pixel L1 diff comfortably exceeds the "
+                               "same-stream repeat baseline.";
+  }
+}
+
 }  // namespace
 }  // namespace lumice
 

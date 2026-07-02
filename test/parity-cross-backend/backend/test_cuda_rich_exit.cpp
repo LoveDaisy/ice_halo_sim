@@ -25,9 +25,12 @@
 
 #if defined(LUMICE_CUDA_ENABLED)
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <set>
+#include <utility>
 #include <vector>
 
 #include "config/crystal_config.hpp"
@@ -277,6 +280,94 @@ TEST(CudaBackendCrystalCount, ReturnsFinalLayerSettings) {
     backend.BeginSession(spec);
     EXPECT_EQ(backend.GetLastBatchCrystalCount(), 3u) << "Final-layer settings count, not cross-layer sum (would be 4)";
     backend.EndSession();
+  }
+}
+
+// =============================================================================
+// task-gpu-rng-ray-index-uint64 white-box injection: assert the CUDA kernels
+// actually consume the new `gen_ray_base_hi` field. Mirrors the Metal-side test
+// (test_metal_root_gen.cpp::GenRayBaseHiWireUp) — the in-range parity battery
+// (all CUDA parity_*.py) only exercises hi==0, which the plan makes bit-exact
+// with the pre-fix stream by construction; a broken host↔device wiring for
+// `gen_ray_base_hi` / mixed_seed would slip through silently.
+//
+// See the Metal-side test comment for the full metric-choice rationale
+// (aggregate channel sum is an MC INVARIANT — cannot distinguish "same PCG"
+// from "different PCG drawing from the same distribution"; per-pixel L1 responds
+// but is scene-dependent, so we self-calibrate against a hi==0-repeat baseline
+// rather than fix an absolute threshold).
+//
+// dev49-only (skips on Mac / hosts without a CUDA device).
+// =============================================================================
+TEST(CudaRngHiWiring, GenRayBaseHiWireUp) {
+  if (!CudaDeviceAvailable()) {
+    GTEST_SKIP() << "No CUDA device available on this host; task-gpu-rng-ray-index-uint64 "
+                    "device-side wiring test requires dev49.";
+  }
+  auto scene = MakePrismScene(/*max_hits=*/8);
+  auto render = MakeRenderConfig();
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  constexpr size_t kEpoch = static_cast<size_t>(1) << 32;
+  // Slots 0/1 = hi==0 baseline (atomic-noise floor); 2 = hi==1; 3 = hi==2.
+  const size_t kBases[] = { 0u, 0u, kEpoch, 2u * kEpoch };
+
+  const int kW = render.resolution_[0];
+  const int kH = render.resolution_[1];
+  const size_t kImgFloats = static_cast<size_t>(kW) * static_cast<size_t>(kH) * 3u;
+  std::vector<std::vector<float>> images(4);
+
+  for (int i = 0; i < 4; i++) {
+    images[i].assign(kImgFloats, 0.0f);
+    CudaTraceBackend backend;
+    backend.BeginSession(spec);
+    backend.SetInitialRayBaseForTest(kBases[i]);
+
+    HostRayBatch host;
+    host.count = kRayCount;
+    host.crystal = nullptr;
+    host.refractive_index = 0.0f;
+    backend.TraceLayer(RootRaySource::FromHost(host));
+
+    XyzImageData img{ images[i].data(), kW, kH };
+    float landed_weight = 0.0f;
+    backend.ReadbackXyzAccum(img, landed_weight);
+    backend.EndSession();
+
+    double total = 0.0;
+    for (float v : images[i]) {
+      total += static_cast<double>(v);
+    }
+    EXPECT_GT(total, 0.0) << "base_idx=" << i
+                          << " — empty image; CUDA test setup is broken (device-fused accum "
+                             "path may not be routing exits into d_xyz_buf).";
+  }
+
+  auto l1_rel_diff = [](const std::vector<float>& a, const std::vector<float>& b) {
+    double num = 0.0;
+    double denom = 0.0;
+    for (size_t i = 0; i < a.size(); i++) {
+      num += std::abs(static_cast<double>(a[i]) - static_cast<double>(b[i]));
+      denom += 0.5 * (std::abs(static_cast<double>(a[i])) + std::abs(static_cast<double>(b[i])));
+    }
+    return denom > 0.0 ? num / denom : 0.0;
+  };
+
+  const double baseline = l1_rel_diff(images[0], images[1]);
+  const double threshold = std::max(baseline * 5.0, 1e-3);
+
+  const std::pair<int, int> kPairs[] = { { 0, 2 }, { 0, 3 }, { 2, 3 } };
+  for (auto pr : kPairs) {
+    double d = l1_rel_diff(images[pr.first], images[pr.second]);
+    EXPECT_GT(d, threshold) << "base_pair=(" << pr.first << "," << pr.second << ") per-pixel L1 rel diff=" << d
+                            << " baseline (hi==0 vs hi==0)=" << baseline << " threshold=" << threshold
+                            << " — CUDA device-side hi wire-up appears broken: hi!=0 stream produced pixels "
+                               "no different from same-stream atomic noise.";
   }
 }
 
