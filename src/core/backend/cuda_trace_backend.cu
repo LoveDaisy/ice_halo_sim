@@ -3076,6 +3076,19 @@ void CudaTraceBackend::SetInitialRayBaseForTest(size_t base) {
   impl_->gate_ray_count_    = base;
 }
 
+size_t CudaTraceBackend::ReadbackGenDirsForTest(std::vector<float>& out, size_t count) {
+  if (impl_->d_dirs_ == nullptr || count == 0u) {
+    out.clear();
+    return 0u;
+  }
+  const size_t n_floats = 3u * count;
+  out.assign(n_floats, 0.0f);
+  cudaDeviceSynchronize();  // gen_root_kernel must finish before the D2H copy
+  CheckCuda(cudaMemcpy(out.data(), impl_->d_dirs_, n_floats * sizeof(float), cudaMemcpyDeviceToHost),
+            "ReadbackGenDirsForTest D2H d_dirs_");
+  return n_floats;
+}
+
 }  // namespace lumice
 
 #endif  // defined(LUMICE_CUDA_ENABLED)
