@@ -463,11 +463,14 @@ TEST(CudaRngHiWiring, GenStreamWireUp) {
   }
 }
 
-// gate stream — observed via the device-fused XYZ image. Final-layer prob 0.5
-// makes the emit gate's prob draw actually gate emission, so a different gate
+// gate FINAL stream (gate_ray_base_final_hi, ms_mode==0) — observed via the
+// device-fused XYZ image. A single-MS scene is always ms_mode==0, so its emit
+// gate uses gate_f seeded from gate_ray_base_final_hi. Final-layer prob 0.5 makes
+// the emit gate's prob draw actually gate emission, so a different gate_final
 // mixed_seed emits a different subset → different image. Injects ONLY the gate
-// base; gen/transit stay hi==0 (so the SAME rays are generated — only the gate
-// decisions move, isolating the gate wiring from gen).
+// base; gen/transit stay hi==0. NOTE: this covers gate_ray_base_FINAL_hi only —
+// the ms_mode==1 per-bounce gate_stream (gate_ray_base_hi) is a distinct kernel
+// param + stream, covered separately by GateMsMode1StreamWireUp below.
 TEST(CudaRngHiWiring, GateStreamWireUp) {
   if (!CudaDeviceAvailable()) {
     GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
@@ -499,6 +502,65 @@ TEST(CudaRngHiWiring, GateStreamWireUp) {
     ASSERT_GT(landed_weight, 0.0f) << "base_idx=" << i << " — no rays accumulated; gate test cannot observe.";
   }
   hi_wire::AssertImageHiDivergence(images, "gate");
+}
+
+// gate PER-BOUNCE stream (gate_ray_base_hi, ms_mode==1) — RNG-ONLY observation,
+// distinct from GateStreamWireUp's gate_ray_base_final_hi. In a 2-layer scene the
+// FIRST TraceLayer (layer 0) is ms_mode==1, so trace_single_ms_kernel's
+// gate_stream (seeded from gate_mixed_seed = f(gate_ray_base_hi)) is executed on
+// device. Its do-continue draws feed the atomic continuation compaction, so the
+// image / continuation set are confounded (same reason TransitStreamWireUp uses
+// a probe) — we therefore read the gate_stream's raw pcg_uniform draw directly
+// via the RNG probe (written at the top of trace_single_ms_kernel when enabled).
+// Injects ONLY the gate base; a non-zero gate hi must move gate_mixed_seed →
+// move every draw; hi==0 runs are bit-identical. Enabling the probe BEFORE the
+// (single) TraceLayer routes it to trace_single_ms_kernel (vs the transit test
+// which enables it between layers to route it to transit_multi_ms_kernel).
+TEST(CudaRngHiWiring, GateMsMode1StreamWireUp) {
+  if (!CudaDeviceAvailable()) {
+    GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
+  }
+  auto scene = hi_wire::MakeTwoLayerScene(/*max_hits=*/6);  // layer 0 → ms_mode==1
+  auto render = hi_wire::MakeFullViewRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  std::vector<std::vector<float>> draws(4);
+  for (int i = 0; i < 4; i++) {
+    CudaTraceBackend backend;
+    backend.BeginSession(spec);
+    backend.SetInitialRayBaseForTest(/*gen=*/0u, /*transit=*/0u, /*gate=*/hi_wire::kBases[i]);
+    backend.EnableRngProbeForTest(kRayCount);  // before the first TraceLayer → trace_single_ms_kernel fills it
+    HostRayBatch host;
+    host.count = kRayCount;
+    host.crystal = nullptr;
+    host.refractive_index = 0.0f;
+    auto h0 = backend.TraceLayer(RootRaySource::FromHost(host));  // layer 0, ms_mode==1
+    ASSERT_NE(h0, nullptr);
+    size_t n = backend.ReadbackRngProbeForTest(draws[i], kRayCount);
+    backend.EndSession();
+    ASSERT_EQ(n, kRayCount) << "base_idx=" << i << " — gate RNG-probe readback returned " << n;
+  }
+
+  EXPECT_EQ(draws[0], draws[1]) << "hi==0 gate draws non-deterministic — cannot distinguish wiring from noise.";
+  auto frac_moved = [](const std::vector<float>& a, const std::vector<float>& b) {
+    size_t moved = 0u;
+    for (size_t r = 0; r < a.size(); r++) {
+      if (std::abs(a[r] - b[r]) > 1e-7f) {
+        moved++;
+      }
+    }
+    return a.empty() ? 0.0 : static_cast<double>(moved) / static_cast<double>(a.size());
+  };
+  const std::pair<int, int> kPairs[] = { { 0, 2 }, { 0, 3 }, { 2, 3 } };
+  for (auto pr : kPairs) {
+    const double moved = frac_moved(draws[pr.first], draws[pr.second]);
+    EXPECT_GT(moved, 0.9) << "gate ms_mode==1 stream: base_pair=(" << pr.first << "," << pr.second << ") only " << moved
+                          << " of gate PCG draws differ — gate_ray_base_hi wiring not reaching the device stream.";
+  }
 }
 
 // transit stream — RNG-ONLY observation. Every ray-physics channel (the XYZ
@@ -546,13 +608,13 @@ TEST(CudaRngHiWiring, TransitStreamWireUp) {
     }
     ASSERT_EQ(cont, cont_count) << "base_idx=" << i
                                 << " — continuation count varies across runs; gen/gate not isolated.";
-    backend.EnableTransitRngProbeForTest(cont_count);  // sink for the next (continuation) layer's transit draws
+    backend.EnableRngProbeForTest(cont_count);  // sink for the next (continuation) layer's transit draws
     RecombineSpec rspec;
     rspec.shuffle = false;
     auto roots1 = backend.Recombine(std::move(h0), rspec);
     auto h1 = backend.TraceLayer(roots1);
     ASSERT_NE(h1, nullptr);
-    size_t n = backend.ReadbackTransitRngProbeForTest(draws[i], cont_count);
+    size_t n = backend.ReadbackRngProbeForTest(draws[i], cont_count);
     backend.EndSession();
     ASSERT_EQ(n, cont_count) << "base_idx=" << i << " — transit RNG-probe readback returned " << n;
   }
