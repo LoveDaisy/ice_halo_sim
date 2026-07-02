@@ -70,10 +70,18 @@ output:
 `rays_per_sec` is the **steady trace rate** over `active_sec` (the window from
 first traced ray to IDLE), NOT `rays / wall_sec`. `setup_sec` (server alloc +
 scene gen + first-dispatch latency) is excluded from the denominator;
-`rate_basis` records which path produced the rate (`steady` / `active_short` /
-`wall_fallback`). This setup-exclusion fix (task-fix-throughput-bench-honesty)
-matters for fast backends whose whole run is ~0.2s — folding setup in deflated
-their rays_per_sec by >30%.
+`rate_basis` records which path produced the rate. This setup-exclusion fix
+(task-fix-throughput-bench-honesty) matters for fast backends whose whole run is
+~0.2s — folding setup in deflated their rays_per_sec by >30%.
+
+**Two independent `rate_basis` ladders** (a reader/gate parses by which path, NOT
+by string-equality across the whole set):
+- **finite `ray_num`** (legacy CPU pass, and any finite-config `--benchmark`):
+  `steady` / `active_short` / `wall_fallback` (the honesty-fix ladder above).
+- **`ray_num="infinite"`** (GPU passes, task-gpu-bench-drain-aligned-rate):
+  `drain_aligned` (measured exactly N drain windows) or `too_few_drains`
+  (exited before N drains — unexpected/untrustworthy). See the drain-count-driven
+  canonical below. The two ladders never share the same string space.
 
 **Terminology**: "workers" refers to simulator threads (the threads performing ray tracing).
 Each server instance also has 2 internal threads (scene generation + data consumption), so
@@ -160,14 +168,18 @@ Notes:
   legacy).
 - `bench_throughput.py` overrides `ray_num` to a large value per run (temp config,
   committed files untouched) so the steady window is long enough to be stable.
-- **⚠️ The third-clock drain path (CUDA, scrum-312) uses the `multi_wall` column, not
-  `multi_med`**: `multi_med` (the binary's steady `rays_per_sec`) samples `sim_ray_num`
-  progress, but the sparse third-clock drain makes that progress jump coarsely (`sim_ray_num`
-  stays 0 until the first drain) → the steady window mis-counts most tracing as setup →
-  **systematic under-report** (2048 read 22M, true 39M). `bench_throughput.py` adds
-  `multi_wall = rays/wall_sec` (robust, immune to drain granularity); when the two columns
-  diverge, **trust `multi_wall`**. Per-batch paths (legacy / Metal / CUDA N=1) agree on both
-  columns (fine-grained progress) and are unaffected.
+- **⚠️ The third-clock drain path once forced a `multi_wall` workaround (scrum-312) — now
+  SUPERSEDED for GPU by drain-count-driven `drain_aligned`** (task-gpu-bench-drain-aligned-rate,
+  2026-07-02). Root cause: `multi_med` (steady `rays_per_sec`) divides by a window bounded by
+  `sim_ray_num`, which only advances on a third-clock drain (every 64×dispatch rays; CUDA
+  default 262144 → 16.8M rays/drain). At the old bench `ray_num=20M` that is ~1.19 drains →
+  `sim_ray_num` stays ~0 → most tracing mis-counted as setup → **5× under-report** (explore-315:
+  wall read 24.7M, true plateau 130M). The old fix was `multi_wall = rays/wall_sec`; the new fix
+  sets GPU `ray_num="infinite"` and measures an integer number of *drain windows* directly
+  (`drain_aligned`), which is both setup-free and drain-granularity-exact. **GPU rows now report
+  the honest steady rate in `rays_per_sec` (`multi_med`) again**; `multi_wall` is only meaningful
+  for finite (legacy) passes and is ignored on `drain_aligned` GPU rows. Per-batch legacy is
+  unaffected (finite `steady` ladder).
 
 #### Resolution is a first-class throughput dimension (device-fused XYZ accumulation → cost scales with buffer vs GPU L2)
 
@@ -243,7 +255,43 @@ not "× legacy", when judging GPU throughput):
 
 > The current authoritative reference numbers. **Cross-hardware numbers are NOT comparable** —
 > read within one host block. Historical per-run dumps (dated tables, raw reps, per-effort
-> methodology) live in `scratchpad/perf-results-log.md`. Third-clock path reads `multi_wall`.
+> methodology) live in `scratchpad/perf-results-log.md`. GPU steady rate = `drain_aligned`
+> `rays_per_sec` (see below); the older scrum-312 res-sweep block reads `multi_wall`.
+
+#### drain-count-driven canonical · default dispatch · config-default resolution · `drain_aligned` `rays_per_sec` · 2026-07-02
+
+**Context** (task-gpu-bench-drain-aligned-rate): GPU `--benchmark` now sets `ray_num="infinite"`
+and measures exactly N=10 integer drain windows (`rate_basis="drain_aligned"`), fixing the
+drain-quantization under-report (explore-315: at the old finite 20M, CUDA read ~1.19 drains →
+5× deflated). Numbers below are the honest steady `rays_per_sec` at each config's **default
+resolution** (NOT the scrum-312 resolution sweep — the two blocks are different metrics/axes and
+must not be compared row-to-row). N reps per cell with the ≥15% CoV → N=9 escalation.
+
+| config | dev49 4060Ti CUDA (vs legacy) | win-builder 1070Ti CUDA | Mac Metal ⚠️(approx) | dev49 legacy CPU |
+|---|---|---|---|---|
+| `bench_light_single_ms` | **130.4 M/s** (15.6×, CoV 0.1%) | 71.8 M/s (1.1%) | ~69 M/s (CoV 11%) | 8.34 M/s |
+| `ms_multi_crystal` | 21.3 M/s (17.2×, 10.2%) | 12.6 M/s (2.5%) | ~16.7 M/s (8.3%) | 1.24 M/s |
+| `ms_multi_crystal_complex_filter` | 411.3 M/s (67.6×, 1.8%) | 99.0 M/s (1.0%) | ~24.6 M/s (18% thermal) | 6.09 M/s |
+| `ms_multi_crystal_filtered_bd` | 660.3 M/s (110.7×, 1.4%) | 135.3 M/s (0.6%) | ~26.7 M/s (8.4%) | 5.97 M/s |
+
+**Key points**:
+- **The 5× under-report is fixed.** `bench_light_single_ms` on 4060Ti reads **130.4 M/s** at
+  0.1% CoV — matching explore-315's independently-measured plateau (400M-ray wall = 130.2 M/s).
+  This *is* the honest steady CUDA rate; the old finite-20M bench read 24.7 M/s (deflated 5×).
+- **Locked-clock desktops (CUDA) are the authoritative canonical**: CoV 0.1–2.5% on both the
+  4060Ti and 1070Ti. drain-count-driven works identically on Ada and Pascal (sm_61).
+- **⚠️ Mac Metal is phase-1 approximate**, NOT canonical. On a Mac *laptop* Metal throughput is
+  thermal/GPU-boost dominated and swings ~2× run-to-run (CoV 8–28%); NO N stabilizes it (an
+  N-sweep confirmed CoV does not drop monotonically with N — beyond ~N=10 thermal drift over the
+  longer measurement *regrows* variance). The Metal figures above are one run's medians; treat
+  them as order-of-magnitude only.
+- **Re: the old "4060Ti@512×256 = 110 M/s" (scrum-312 res-sweep `multi_wall`)** — not a
+  contradiction: that was `multi_wall` at a *fixed 512×256* resolution, a different metric and
+  resolution than the `drain_aligned` default-resolution rate here. The drain-count-driven
+  130.4 M/s is the honest steady rate and supersedes the finite-bench numbers as the GPU rate
+  basis; the res-sweep block below is retained for its resolution-dependence analysis.
+- Correctness (unchanged by this measurement-only change): CUDA parity 10/10 @4060Ti + 10/10
+  @1070Ti/sm_61; Metal parity intact. Mac G1 gate `test_metal_throughput.py` still green.
 
 #### scrum-312 third-clock canonical · `--res-sweep` · `multi_wall` · 2026-07-01
 

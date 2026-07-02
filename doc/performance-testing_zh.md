@@ -64,9 +64,15 @@ CLI 基准测试和 GUI 性能测试均支持日志级别选项。
 
 `rays_per_sec` 是 `active_sec`（从首条光线追踪到 IDLE 的窗口）上的**稳态追踪率**，
 **不是** `rays / wall_sec`。`setup_sec`（server alloc + 场景生成 + 首 dispatch 延迟）从分母
-剔除；`rate_basis` 记录产出该率的路径（`steady` / `active_short` / `wall_fallback`）。这个
-setup-剔除修复（task-fix-throughput-bench-honesty）对整个 run 只 ~0.2s 的快后端很重要——折进
-setup 会把它们的 rays_per_sec 压低 >30%。
+剔除；`rate_basis` 记录产出该率的路径。这个 setup-剔除修复（task-fix-throughput-bench-honesty）
+对整个 run 只 ~0.2s 的快后端很重要——折进 setup 会把它们的 rays_per_sec 压低 >30%。
+
+**两套独立的 `rate_basis` 阶梯**（消费者/gate 按走的哪条路径判定，不按全集字符串相等判）：
+- **finite `ray_num`**（legacy CPU 趟，及任何 finite-config `--benchmark`）：`steady` /
+  `active_short` / `wall_fallback`（上面的 honesty-fix 阶梯）。
+- **`ray_num="infinite"`**（GPU 趟，task-gpu-bench-drain-aligned-rate）：`drain_aligned`（恰好
+  测了 N 个整 drain 窗口）或 `too_few_drains`（未凑满 N drain 就退出——异常/不可信）。见下方
+  drain-count-driven canonical。两套阶梯不共用同一字符串空间。
 
 **术语**："workers"指 simulator 线程（执行光线追踪的线程）。每个 server 实例还有 2 个
 内部线程（场景生成 + 数据消费），总线程数 = workers + 2。
@@ -127,12 +133,15 @@ benchmark 模式的行为差异：
   dispatch 饿死 GPU（512/2048 = 0.2–0.8× legacy）。
 - `bench_throughput.py` 每 run 把 `ray_num` override 到大值（temp config，不动 committed 文件），
   使稳态窗口足够长而稳定。
-- **⚠️ 第三时钟 drain 路径（CUDA，scrum-312）用 `multi_wall` 列，不用 `multi_med`**：`multi_med`
-  （binary 的 steady `rays_per_sec`）靠 `sim_ray_num` 进度采样，而第三时钟 drain 稀疏 → 进度粗跳
-  （首个 drain 前 `sim_ray_num` 恒 0）→ steady window 把大部分 tracing 误算进 setup → **系统性假低**
-  （实测 2048 报 22M，真值 39M）。`bench_throughput.py` 已加 `multi_wall = rays/wall_sec`（robust，
-  免疫 drain 粒度），两列背离时**信 `multi_wall`**。per-batch 路径（legacy/Metal/CUDA N=1）两列一致，
-  不受影响。
+- **⚠️ 第三时钟 drain 路径曾逼出 `multi_wall` workaround（scrum-312）——现对 GPU 由 drain-count-driven
+  `drain_aligned` 取代**（task-gpu-bench-drain-aligned-rate，2026-07-02）。根因：`multi_med`
+  （steady `rays_per_sec`）的窗口以 `sim_ray_num` 为界，而它只在第三时钟 drain 时前进（每 64×dispatch
+  rays；CUDA 默认 262144 → 16.8M rays/drain）。旧 bench `ray_num=20M` 只 ~1.19 drain → `sim_ray_num`
+  近 0 → 大部分 tracing 误算 setup → **5× 假低**（explore-315：wall 报 24.7M，真 plateau 130M）。旧修
+  = `multi_wall = rays/wall_sec`；新修 = GPU 设 `ray_num="infinite"` 直接测整数个 *drain 窗口*
+  （`drain_aligned`），既免 setup 又 drain-粒度精确。**GPU 行现重新用 `rays_per_sec`（`multi_med`）报诚实
+  稳态率**；`multi_wall` 只对 finite（legacy）趟有意义，`drain_aligned` GPU 行忽略之。per-batch legacy
+  不受影响（finite `steady` 阶梯）。
 
 #### 分辨率是一等吞吐维度（device-fused XYZ 累加 → cost 随 buffer vs GPU L2）
 
@@ -188,7 +197,35 @@ CUDA 路线还有 **per-batch 同步 readback** 税（`ReadbackXyzAccum` 每 Sim
 ### 当前 canonical 吞吐结果
 
 > 当前权威参考数字。**跨硬件数字不可比**——只在同一 host 块内读。历史 per-run 详录（带日期的表、原始
-> reps、各 effort 方法论）在 `scratchpad/perf-results-log.md`。第三时钟路径读 `multi_wall`。
+> reps、各 effort 方法论）在 `scratchpad/perf-results-log.md`。GPU 稳态率 = `drain_aligned`
+> `rays_per_sec`（见下）；较旧的 scrum-312 res-sweep 块读 `multi_wall`。
+
+#### drain-count-driven canonical · default dispatch · config 默认分辨率 · `drain_aligned` `rays_per_sec` · 2026-07-02
+
+**背景**（task-gpu-bench-drain-aligned-rate）：GPU `--benchmark` 现设 `ray_num="infinite"`，恰好测
+N=10 个整 drain 窗口（`rate_basis="drain_aligned"`），修复 drain-量化假低（explore-315：旧 finite 20M 下
+CUDA 只 ~1.19 drain → 5× 假低）。下表是各 config **默认分辨率**下的诚实稳态 `rays_per_sec`（**不是**
+scrum-312 分辨率 sweep——两块是不同 metric/轴，不可逐行比较）。每格 N reps，>15% CoV → N=9 escalation。
+
+| config | dev49 4060Ti CUDA (vs legacy) | win-builder 1070Ti CUDA | Mac Metal ⚠️(近似) | dev49 legacy CPU |
+|---|---|---|---|---|
+| `bench_light_single_ms` | **130.4 M/s** (15.6×, CoV 0.1%) | 71.8 M/s (1.1%) | ~69 M/s (CoV 11%) | 8.34 M/s |
+| `ms_multi_crystal` | 21.3 M/s (17.2×, 10.2%) | 12.6 M/s (2.5%) | ~16.7 M/s (8.3%) | 1.24 M/s |
+| `ms_multi_crystal_complex_filter` | 411.3 M/s (67.6×, 1.8%) | 99.0 M/s (1.0%) | ~24.6 M/s (18% 热) | 6.09 M/s |
+| `ms_multi_crystal_filtered_bd` | 660.3 M/s (110.7×, 1.4%) | 135.3 M/s (0.6%) | ~26.7 M/s (8.4%) | 5.97 M/s |
+
+**要点**：
+- **5× 假低已修**：`bench_light_single_ms` 4060Ti 读 **130.4 M/s** @0.1% CoV，命中 explore-315 独立实测
+  plateau（400M-ray wall = 130.2 M/s）。这才是诚实 CUDA 稳态率；旧 finite-20M bench 读 24.7 M/s（5× 假低）。
+- **锁频桌面（CUDA）是权威 canonical**：4060Ti 与 1070Ti CoV 0.1–2.5%。drain-count-driven 在 Ada/Pascal(sm_61) 一致。
+- **⚠️ Mac Metal 是 phase-1 近似**，非 canonical。Mac *笔记本* Metal 吞吐由热/GPU-boost 主导，跨 run 摆动
+  ~2×（CoV 8–28%）；任何 N 都稳不住（N-sweep 证 CoV 不随 N 单调降——超 ~N=10 热漂移反使方差回增）。上表 Metal
+  是单 run 中位数，只作数量级参考。
+- **关于旧「4060Ti@512×256 = 110 M/s」（scrum-312 res-sweep `multi_wall`）**——非矛盾：那是*固定 512×256*
+  的 `multi_wall`，与此处 `drain_aligned` 默认分辨率率是不同 metric+分辨率。drain-count-driven 130.4 M/s
+  是诚实稳态率、取代 finite-bench 数作为 GPU 率基准；下方 res-sweep 块保留其分辨率依赖分析价值。
+- 正确性（本次纯测量改动不影响）：CUDA parity 10/10 @4060Ti + 10/10 @1070Ti/sm_61；Metal parity 完好。
+  Mac G1 gate `test_metal_throughput.py` 仍绿。
 
 #### scrum-312 第三时钟 canonical · `--res-sweep` · `multi_wall` · 2026-07-01
 
