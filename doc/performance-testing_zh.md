@@ -211,16 +211,17 @@ reps，>15% CoV → N=9 escalation。
 > **task-317 重新 canonical 化**：下表 dev49 CUDA + legacy 列由 **render-per-poll 修复后**（commit
 > `ee98065a`）重生成。修复前 `--benchmark` poll 循环每次迭代触发全图 sRGB 渲染，饿死 drain 窗口关闭，
 > CUDA 上更让无界会话跑过 32-bit device PCG ray-index cap → legacy fallback → pass 永不终止。修复后 CUDA
-> infinite ~1.6s 关闭（8 reps，CoV 0.1–1.8%）。这些干净值取代修复前"首次 run"数（更噪/部分被占）。
-> ⚠️ **win-builder 列仍是修复前 old-binary run**——待 fixed-binary 重跑以求全一致（现值为孤儿清理后的
-> 干净 run，task-316 §5）。
+> infinite ~1.6s 关闭（8 reps，CoV 0.1–1.8%）。这些干净 dev49 值取代修复前"首次 run"数（更噪/部分被占）。
+> **win-builder 列已用 fixed-binary 重跑**，与修复前孤儿清理 run 基本一致（≤1.5% 差，在 CoV 内）——证实
+> 修复对"未灾难性挂起"的机器（1070Ti render tax 非灾难性）不改变测量值，且 dev49 那 ~10% 差是旧 run 噪声非
+> 系统性效应。
 
-| config | dev49 4060Ti CUDA (vs legacy) | win-builder 1070Ti CUDA ⚠️(pre-fix) | Mac Metal ⚠️(近似) | dev49 legacy CPU (5M) |
+| config | dev49 4060Ti CUDA (vs legacy) | win-builder 1070Ti CUDA | Mac Metal ⚠️(近似) | dev49 legacy CPU (5M) |
 |---|---|---|---|---|
-| `bench_light_single_ms` | **130.5 M/s** (12.5×, CoV 0.2%) | 80.7 M/s (0.5%) | ~69 M/s (CoV 11%) | 10.45 M/s |
-| `ms_multi_crystal` | 22.2 M/s (12.7×, 0.1%) | 13.3 M/s (0.8%) | ~16.7 M/s (8.3%) | 1.74 M/s |
-| `ms_multi_crystal_complex_filter` | 371.6 M/s (56.9×, 0.8%) | 112.8 M/s (0.8%) | ~24.6 M/s (18% 热) | 6.53 M/s |
-| `ms_multi_crystal_filtered_bd` | 591.2 M/s (89.6×, 1.8%) | 161.2 M/s (0.8%) | ~26.7 M/s (8.4%) | 6.60 M/s |
+| `bench_light_single_ms` | **130.5 M/s** (12.5×, CoV 0.2%) | 80.7 M/s (0.4%) | ~69 M/s (CoV 11%) | 10.45 M/s |
+| `ms_multi_crystal` | 22.2 M/s (12.7×, 0.1%) | 13.2 M/s (0.4%) | ~16.7 M/s (8.3%) | 1.74 M/s |
+| `ms_multi_crystal_complex_filter` | 371.6 M/s (56.9×, 0.8%) | 112.4 M/s (0.6%) | ~24.6 M/s (18% 热) | 6.53 M/s |
+| `ms_multi_crystal_filtered_bd` | 591.2 M/s (89.6×, 1.8%) | 158.8 M/s (0.8%) | ~26.7 M/s (8.4%) | 6.60 M/s |
 
 **要点**：
 - **5× 假低已修**：`bench_light_single_ms` 4060Ti 读 **130.5 M/s** @0.2% CoV，命中 explore-315 独立实测

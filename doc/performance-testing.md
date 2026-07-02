@@ -272,17 +272,19 @@ the ≥15% CoV → N=9 escalation.
 > the render-per-poll fix** (commit `ee98065a`). Before it, the `--benchmark` poll loop triggered a
 > full sRGB render every iteration, which starved drain-window closure and (on CUDA) let the
 > unbounded session trip the 32-bit device PCG ray-index cap → legacy fallback → the pass never
-> terminated. Post-fix, CUDA infinite closes in ~1.6 s (8 reps, CoV 0.1–1.8 %). These clean values
-> supersede the pre-fix "首次 run" numbers (which were noisier / partly contended). ⚠️ The
-> **win-builder column is still the pre-fix old-binary run** — pending a fixed-binary re-run for
-> full consistency (values shown are the arithmetically-clean orphan-free run, task-316 §5).
+> terminated. Post-fix, CUDA infinite closes in ~1.6 s (8 reps, CoV 0.1–1.8 %). These clean dev49 values
+> supersede the pre-fix "首次 run" numbers (which were noisier / partly contended). The
+> **win-builder column was re-run with the fixed binary** and came back essentially identical to
+> the pre-fix orphan-free run (≤1.5 % delta, within CoV) — confirming the fix does not alter the
+> measurement on a machine that did not catastrophically hang (1070Ti's render tax was
+> non-catastrophic), and that the ~10 % dev49 delta was old-run noise, not a systematic effect.
 
-| config | dev49 4060Ti CUDA (vs legacy) | win-builder 1070Ti CUDA ⚠️(pre-fix) | Mac Metal ⚠️(approx) | dev49 legacy CPU (5M) |
+| config | dev49 4060Ti CUDA (vs legacy) | win-builder 1070Ti CUDA | Mac Metal ⚠️(approx) | dev49 legacy CPU (5M) |
 |---|---|---|---|---|
-| `bench_light_single_ms` | **130.5 M/s** (12.5×, CoV 0.2%) | 80.7 M/s (0.5%) | ~69 M/s (CoV 11%) | 10.45 M/s |
-| `ms_multi_crystal` | 22.2 M/s (12.7×, 0.1%) | 13.3 M/s (0.8%) | ~16.7 M/s (8.3%) | 1.74 M/s |
-| `ms_multi_crystal_complex_filter` | 371.6 M/s (56.9×, 0.8%) | 112.8 M/s (0.8%) | ~24.6 M/s (18% thermal) | 6.53 M/s |
-| `ms_multi_crystal_filtered_bd` | 591.2 M/s (89.6×, 1.8%) | 161.2 M/s (0.8%) | ~26.7 M/s (8.4%) | 6.60 M/s |
+| `bench_light_single_ms` | **130.5 M/s** (12.5×, CoV 0.2%) | 80.7 M/s (0.4%) | ~69 M/s (CoV 11%) | 10.45 M/s |
+| `ms_multi_crystal` | 22.2 M/s (12.7×, 0.1%) | 13.2 M/s (0.4%) | ~16.7 M/s (8.3%) | 1.74 M/s |
+| `ms_multi_crystal_complex_filter` | 371.6 M/s (56.9×, 0.8%) | 112.4 M/s (0.6%) | ~24.6 M/s (18% thermal) | 6.53 M/s |
+| `ms_multi_crystal_filtered_bd` | 591.2 M/s (89.6×, 1.8%) | 158.8 M/s (0.8%) | ~26.7 M/s (8.4%) | 6.60 M/s |
 
 **Key points**:
 - **The 5× under-report is fixed.** `bench_light_single_ms` on 4060Ti reads **130.5 M/s** at
