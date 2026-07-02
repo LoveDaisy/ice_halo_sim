@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783011186581,
+  "lastUpdate": 1783011188956,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9610,50 +9610,6 @@ window.BENCHMARK_DATA = {
       {
         "commit": {
           "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "7e14e2262bc6720b96deb8ac82df7ff23de37c90",
-          "message": "Merge pull request #63 from LoveDaisy/feat/test_coverage\n\ntest: close zero-coverage gaps in optics, c_api, sim_data + fix doc errors",
-          "timestamp": "2026-04-10T16:30:44+08:00",
-          "tree_id": "be592e1fb54dc3f40eb93d1f98d64bcd28e8a26a",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/7e14e2262bc6720b96deb8ac82df7ff23de37c90"
-        },
-        "date": 1775810087022,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 79.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 75,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 72.4,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 67.3,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
             "email": "49699333+dependabot[bot]@users.noreply.github.com",
             "name": "dependabot[bot]",
             "username": "dependabot[bot]"
@@ -14003,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 93,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "941ef7f1f57c56309fd9833e8bc4ecedcdb7914c",
+          "message": "Merge pull request #164 from LoveDaisy/feat/gpu-rng-ray-index-uint64\n\nfix(gpu-rng): lift device-gen PCG ray-index 32-bit cap (uint64 lo/hi)",
+          "timestamp": "2026-07-03T00:46:46+08:00",
+          "tree_id": "b4bda3ea0cc4d5a7add7d4f7445183855fe24710",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/941ef7f1f57c56309fd9833e8bc4ecedcdb7914c"
+        },
+        "date": 1783011188172,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 79.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96.2,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 89.6,
             "unit": "%"
           }
         ]
