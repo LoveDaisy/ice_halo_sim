@@ -143,18 +143,19 @@ class CudaTraceBackend : public TraceBackend {
   // number of floats written (3 * count), or 0 if unavailable.
   size_t ReadbackGenDirsForTest(std::vector<float>& out, size_t count);
 
-  // [TEST-ONLY] task-gpu-rng-ray-index-uint64: RNG-only observation of the
-  // TRANSIT stream, isolated from ray physics + atomic-compaction non-
-  // determinism. EnableTransitRngProbeForTest allocates a per-continuation-ray
-  // probe sink (call AFTER the first TraceLayer, BEFORE the continuation
-  // TraceLayer); the continuation transit kernel then writes each thread's raw
-  // pcg_uniform draw from its transit_mixed_seed stream (a pure function of
-  // seed + tid → deterministic, unlike d_dirs_/image which mix in the
-  // non-deterministic continuation ray at that tid). ReadbackTransitRngProbeForTest
-  // copies the draws back. A non-zero transit hi must move them; hi==0 runs are
-  // bit-identical. Returns floats written (== count), or 0 if unavailable.
-  void EnableTransitRngProbeForTest(size_t count);
-  size_t ReadbackTransitRngProbeForTest(std::vector<float>& out, size_t count);
+  // [TEST-ONLY] task-gpu-rng-ray-index-uint64: RNG-only observation of a device
+  // PCG stream, isolated from ray physics + atomic-compaction non-determinism.
+  // EnableRngProbeForTest allocates a per-ray probe sink; the NEXT TraceLayer's
+  // kernel writes each thread's raw pcg_uniform draw into it —
+  // trace_single_ms_kernel probes the ms_mode==1 gate_stream (gate_ray_base_hi),
+  // transit_multi_ms_kernel probes the transit stream (gp.gen_ray_base_hi). Which
+  // kernel fills it depends on WHEN Enable is called in the layer sequence (before
+  // the ms_mode==1 layer → gate; between layers → transit). The draw is a pure
+  // function of (mixed_seed, tid) — deterministic, unlike d_dirs_/image which mix
+  // in the non-deterministic continuation ray at that tid. A non-zero hi on the
+  // probed stream must move the draws; hi==0 runs are bit-identical.
+  void EnableRngProbeForTest(size_t count);
+  size_t ReadbackRngProbeForTest(std::vector<float>& out, size_t count);
 
  private:
   struct Impl;

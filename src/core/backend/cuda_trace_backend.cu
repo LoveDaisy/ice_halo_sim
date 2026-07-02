@@ -516,7 +516,12 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                        // task-gpu-rng-ray-index-uint64: high 32 bits of the
                                        // final-layer gate ray-base (ms_mode==0 emit gate).
                                        // Same discipline as gate_ray_base_hi above.
-                                       uint32_t gate_ray_base_final_hi) {
+                                       uint32_t gate_ray_base_final_hi,
+                                       // [TEST-ONLY] nullptr in production.
+                                       // task-gpu-rng-ray-index-uint64 white-box
+                                       // RNG probe for the ms_mode==1 gate_stream
+                                       // (gate_ray_base_hi); see body.
+                                       float* __restrict__ d_rng_probe) {
   const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_roots) {
     return;
@@ -547,6 +552,22 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
   // two mixing sites stay self-contained if they ever decouple).
   const uint32_t gate_hi_epoch = lm_pcg::pcg_advance_hi(gate_ray_base, gate_ray_base_hi, tid);
   const uint32_t gate_mixed_seed = lm_pcg::pcg_seed_with_high(gate_seed, gate_hi_epoch);
+  if (d_rng_probe != nullptr && ms_mode == 1u) {
+    // [TEST-ONLY] Expose the ms_mode==1 gate_stream's PCG draw so a white-box
+    // test can assert the gate_ray_base_hi wiring in ISOLATION. gate_mixed_seed
+    // depends on gate_ray_base_hi (the per-bounce / entry-face gate, distinct
+    // from gate_ray_base_final_hi). Pure function of (gate_mixed_seed,
+    // gate_ray_base + tid) → deterministic per tid, free of the ray-physics /
+    // continuation-compaction confound. Uses a private stream so the real
+    // gate_stream draws below are undisturbed. Gated on ms_mode==1 so a final
+    // (ms_mode==0) continuation-layer dispatch does not overwrite a transit
+    // probe written by transit_multi_ms_kernel earlier in the same TraceLayer.
+    lm_pcg::PcgStream probe;
+    probe.seed       = gate_mixed_seed;
+    probe.global_idx = gate_ray_base + tid;
+    probe.slot       = 0u;
+    d_rng_probe[tid] = lm_pcg::pcg_uniform(probe);
+  }
   const uint32_t gate_final_hi_epoch =
       lm_pcg::pcg_advance_hi(gate_ray_base_final, gate_ray_base_final_hi, tid);
   const uint32_t gate_final_mixed_seed =
@@ -1495,6 +1516,13 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
   // need explicit allocated-flag guards. Errors are intentionally ignored —
   // teardown must not throw.
   //
+  // [TEST-ONLY] Release the RNG probe on every Reset (session teardown) — it is
+  // armed per-test before a TraceLayer and read back before EndSession, so it
+  // never needs to persist across the keep-buffers path. nullptr in production.
+  cudaFree(d_rng_probe_);
+  d_rng_probe_ = nullptr;
+  rng_probe_cap_ = 0;
+  //
   // scrum-cuda-async-engine-port (304.2): per-batch EndSession passes
   // keep_persistent_buffers=true so the large device + pinned buffers
   // (ray/cont/exit/geometry/xyz/wl-pool) and their capacity trackers PERSIST
@@ -1793,8 +1821,10 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
   }
 
   // Release old per-batch buffers (cudaFree(nullptr) is a no-op per CUDA spec).
+  // NOTE: d_rng_probe_ (test-only) is deliberately NOT freed here — it is enabled
+  // by a test before a TraceLayer and must survive this per-batch realloc; it is
+  // freed at session teardown (Impl::Reset) and re-armed by EnableRngProbeForTest.
   cudaFree(d_dirs_);     d_dirs_ = nullptr;
-  cudaFree(d_rng_probe_); d_rng_probe_ = nullptr;  // [TEST-ONLY] no-op in production (never allocated)
   cudaFree(d_pos_);      d_pos_ = nullptr;
   cudaFree(d_ws_);       d_ws_ = nullptr;
   cudaFree(d_from_poly_); d_from_poly_ = nullptr;
@@ -2690,7 +2720,8 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
         impl_->final_ms_prob_,
         impl_->gate_seed_,
         gate_split.lo,
-        gate_split.hi);
+        gate_split.hi,
+        impl_->d_rng_probe_);
     ck_reset(cudaPeekAtLastError(), "kernel launch");
     // S2: ev_end_kernel_ recorded inside the loop captures real kernel time.
     // The original outside-loop placement (right next to ev_end_h2d_) collapsed
@@ -3100,10 +3131,11 @@ void CudaTraceBackend::SetInitialRayBaseForTest(size_t gen_base, size_t transit_
   impl_->gate_ray_count_    = gate_base;
 }
 
-void CudaTraceBackend::EnableTransitRngProbeForTest(size_t count) {
-  // Allocate the transit RNG-probe sink so the NEXT continuation-layer TraceLayer
-  // fills it with per-tid transit PCG draws. Must be called AFTER the first
-  // TraceLayer (which sizes buffers) and BEFORE the continuation TraceLayer.
+void CudaTraceBackend::EnableRngProbeForTest(size_t count) {
+  // Allocate the RNG-probe sink so the NEXT TraceLayer's trace / transit kernel
+  // fills it with per-tid PCG draws (trace_single_ms_kernel probes the ms_mode==1
+  // gate_stream; transit_multi_ms_kernel probes the transit stream). Which kernel
+  // fills it depends on WHEN this is enabled relative to the layer sequence.
   cudaFree(impl_->d_rng_probe_);
   impl_->d_rng_probe_ = nullptr;
   impl_->rng_probe_cap_ = 0;
@@ -3115,7 +3147,7 @@ void CudaTraceBackend::EnableTransitRngProbeForTest(size_t count) {
   impl_->rng_probe_cap_ = count;
 }
 
-size_t CudaTraceBackend::ReadbackTransitRngProbeForTest(std::vector<float>& out, size_t count) {
+size_t CudaTraceBackend::ReadbackRngProbeForTest(std::vector<float>& out, size_t count) {
   // Bound the copy to the probe allocation so a count larger than the enabled
   // size cannot read past the device buffer.
   if (count > impl_->rng_probe_cap_) {
