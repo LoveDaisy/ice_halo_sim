@@ -2,74 +2,17 @@
 #define CORE_SCATTER_ACCUM_H_
 
 #include <algorithm>
-#include <cmath>
 #include <cstddef>
-#include <cstring>
 #include <memory>
 
 #include "config/render_config.hpp"
 #include "core/color_util.hpp"
 #include "core/geo3d.hpp"
-#include "core/lens_proj.hpp"
+#include "core/lens_proj_build.hpp"
 #include "core/math.hpp"
-#include "core/projection.hpp"
+#include "core/shared/projection_shared.h"
 
 namespace lumice {
-
-namespace scatter_accum_internal {
-
-// Build LensProjParam + camera rotation from a RenderConfig. Mirrors the
-// equivalent setup performed in RenderConsumer's constructor and Consume()
-// (see server/render.cpp). Extracted to a free function so backends can build
-// projection state without instantiating RenderConsumer.
-inline LensProjParam MakeProjParam(const RenderConfig& cfg, const Rotation& rot, float short_pix) {
-  LensProjParam p{ cfg.lens_.fov_,
-                   short_pix,
-                   rot,
-                   cfg.visible_,
-                   { cfg.resolution_[0], cfg.resolution_[1] },
-                   { cfg.lens_shift_[0], cfg.lens_shift_[1] },
-                   0.0f,
-                   1.0f };
-  if (cfg.overlap_ > 0) {
-    switch (cfg.lens_.type_) {
-      case LensParam::kDualFisheyeEqualArea:
-        p.max_abs_dz_ = cfg.overlap_;
-        p.r_scale_ = projection::ComputeEARScale(cfg.overlap_);
-        break;
-      case LensParam::kDualFisheyeEquidistant:
-        p.max_abs_dz_ = cfg.overlap_;
-        p.r_scale_ = projection::ComputeEDRScale(cfg.overlap_);
-        break;
-      case LensParam::kDualFisheyeStereographic:
-        p.max_abs_dz_ = cfg.overlap_;
-        p.r_scale_ = projection::ComputeSTRScale(cfg.overlap_);
-        break;
-      default:
-        // Non-dual-fisheye: overlap ignored. Dual orthographic also falls here
-        // (overlap support is deferred — see server/render.cpp).
-        break;
-    }
-  }
-  return p;
-}
-
-inline projection::ProjXY OverlapForward(LensParam::LensType type, float sky_x, float sky_y, float z_hemi, float r_s) {
-  switch (type) {
-    case LensParam::kDualFisheyeEqualArea:
-      return projection::FisheyeEqualAreaForward(sky_x, sky_y, z_hemi, r_s);
-    case LensParam::kDualFisheyeEquidistant:
-      return projection::FisheyeEquidistantForward(sky_x, sky_y, z_hemi, r_s);
-    case LensParam::kDualFisheyeStereographic:
-      return projection::FisheyeStereographicForward(sky_x, sky_y, z_hemi, r_s);
-    case LensParam::kDualFisheyeOrthographic:
-      return projection::FisheyeOrthographicForward(sky_x, sky_y, z_hemi, r_s);
-    default:
-      return projection::ProjXY{ 0, 0, false };
-  }
-}
-
-}  // namespace scatter_accum_internal
 
 // Camera rotation for a RenderConfig — matches RenderConsumer ctor.
 inline Rotation MakeCameraRotation(const RenderConfig& cfg) {
@@ -87,7 +30,11 @@ inline Rotation MakeCameraRotation(const RenderConfig& cfg) {
 // caller-provided XYZ buffer (W * H * 3 floats).
 //
 // Behavioural equivalence: matches RenderConsumer::Consume(), including the
-// dual-fisheye overlap dual-write pass. The scratch_* buffers are allocated
+// dual-fisheye overlap dual-write pass. Every ray is projected exactly once
+// via lm_proj::ProjectExitToPixel (single arithmetic source); the returned
+// PixelHit.bump_landed separates "primary" (counts into landed_weight) from
+// "overlap dual-write" (does not) and drains into two batches for the
+// existing SpectrumToXyz batch interface. The scratch buffers are allocated
 // per call here — for hot paths the backend should cache its own.
 //
 // This is the GPU "register-resident accumulator drain" boundary on the
@@ -104,78 +51,53 @@ inline void ScatterOutgoingToXyz(const float* d, const float* w, size_t count, c
     return;
   }
   auto short_pix = static_cast<float>(std::min(cfg.resolution_[0], cfg.resolution_[1]));
-  auto proj_param = scatter_accum_internal::MakeProjParam(cfg, camera_rot, short_pix);
+  const auto proj_params = BuildProjParams(cfg, camera_rot, short_pix);
 
-  // Per-call scratch. d is read-only throughout; w_buf and xy_buf need
-  // writable storage for in-place compaction in Pass 1.
-  auto w_buf = std::make_unique<float[]>(count);
-  auto xy_buf = std::make_unique<int[]>(count * 2);
-  std::memcpy(w_buf.get(), w, count * sizeof(float));
+  // Two batch arrays: main hits (bump_landed=true) and overlap hits (=false).
+  // Overlap only fires for dual-fisheye with max_abs_dz>0, so it stays empty
+  // in the common single-lens / rectangular / dual-fisheye-no-overlap path
+  // and its allocation is O(count) worst case (every ray in the overlap band).
+  auto main_w = std::make_unique<float[]>(count);
+  auto main_xy = std::make_unique<int[]>(count);
+  auto overlap_w = std::make_unique<float[]>(count);
+  auto overlap_xy = std::make_unique<int[]>(count);
 
-  auto lens_proj = GetProjFunc(cfg.lens_.type_);
-  // lens_proj reads d to compute pixel coords; it does not modify the array.
-  lens_proj(proj_param, const_cast<float*>(d), xy_buf.get(), count);
+  const int w_res = cfg.resolution_[0];
+  const int h_res = cfg.resolution_[1];
 
-  // Save weights before pass-1 compaction (pass 2 reads originals by ray idx).
-  std::unique_ptr<float[]> overlap_w_buf;
-  if (proj_param.max_abs_dz_ > 0) {
-    overlap_w_buf = std::make_unique<float[]>(count);
-    std::memcpy(overlap_w_buf.get(), w_buf.get(), count * sizeof(float));
-  }
+  size_t main_n = 0;
+  size_t overlap_n = 0;
+  float landed_weight = 0.0f;
 
-  // Pass 1: in-bounds compaction + spectrum scatter-add.
-  size_t final_ray_num = 0;
-  float landed_weight = 0;
-  for (size_t i = 0; i < count; i++) {
-    int px = xy_buf[i * 2 + 0];
-    int py = xy_buf[i * 2 + 1];
-    if (px < 0 || px >= cfg.resolution_[0] ||  //
-        py < 0 || py >= cfg.resolution_[1]) {
-      continue;
+  for (size_t i = 0; i < count; ++i) {
+    auto hit = lm_proj::ProjectExitToPixel(proj_params, d[i * 3 + 0], d[i * 3 + 1], d[i * 3 + 2]);
+    for (int k = 0; k < hit.count; ++k) {
+      int px = hit.hits[k].px;
+      int py = hit.hits[k].py;
+      if (px < 0 || px >= w_res || py < 0 || py >= h_res) {
+        continue;
+      }
+      if (hit.hits[k].bump_landed) {
+        main_xy[main_n] = py * w_res + px;
+        main_w[main_n] = w[i];
+        landed_weight += w[i];
+        ++main_n;
+      } else {
+        overlap_xy[overlap_n] = py * w_res + px;
+        overlap_w[overlap_n] = w[i];
+        ++overlap_n;
+      }
     }
-    xy_buf[final_ray_num] = py * cfg.resolution_[0] + px;
-    w_buf[final_ray_num] = w_buf[i];
-    landed_weight += w_buf[i];
-    final_ray_num++;
   }
-  SpectrumToXyz(wl, w_buf.get(), xy_buf.get(), xyz_buf, final_ray_num);
+
+  SpectrumToXyz(wl, main_w.get(), main_xy.get(), xyz_buf, main_n);
   if (opt_landed_weight != nullptr) {
     *opt_landed_weight += landed_weight;
   }
-
-  // Pass 2: overlap dual-write (dual fisheye with overlap zone).
-  if (proj_param.max_abs_dz_ > 0) {
-    size_t overlap_count = 0;
-    int w_res = cfg.resolution_[0];
-    int h_res = cfg.resolution_[1];
-    for (size_t i = 0; i < count; i++) {
-      float sky_x = -d[i * 3 + 0];
-      float sky_y = -d[i * 3 + 1];
-      float sky_z = -d[i * 3 + 2];
-      if (std::abs(sky_z) >= proj_param.max_abs_dz_) {
-        continue;
-      }
-      bool primary_upper = (sky_z >= 0);
-      float z_hemi_opp = primary_upper ? -sky_z : sky_z;
-      auto proj =
-          scatter_accum_internal::OverlapForward(cfg.lens_.type_, sky_x, sky_y, z_hemi_opp, proj_param.r_scale_);
-      float fx = 0;
-      float fy = 0;
-      projection::DualFisheyeToPixel(proj.x, proj.y, !primary_upper, w_res, h_res, &fx, &fy);
-      int ox = static_cast<int>(std::floor(fx + 0.5f));
-      int oy = static_cast<int>(std::floor(fy + 0.5f));
-      if (ox < 0 || ox >= w_res || oy < 0 || oy >= h_res) {
-        continue;
-      }
-      xy_buf[overlap_count] = oy * w_res + ox;
-      w_buf[overlap_count] = overlap_w_buf[i];
-      overlap_count++;
-    }
-    if (overlap_count > 0) {
-      // Pass 2 does NOT update landed weight (preserves normalization parity
-      // with RenderConsumer::Consume).
-      SpectrumToXyz(wl, w_buf.get(), xy_buf.get(), xyz_buf, overlap_count);
-    }
+  if (overlap_n > 0) {
+    // Overlap batch does NOT update landed weight — preserves normalization
+    // parity with RenderConsumer::Consume Pass 2 semantics.
+    SpectrumToXyz(wl, overlap_w.get(), overlap_xy.get(), xyz_buf, overlap_n);
   }
 }
 
