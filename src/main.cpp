@@ -237,6 +237,13 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
         new_drains = 1;
       } else {
         double ratio = static_cast<double>(delta) / static_cast<double>(rays_per_drain_estimate);
+        // Invariant (do NOT "fix" the floor(1) away): rays_per_drain_estimate is
+        // seeded from the first jump, which is >= one true drain, so ratio <= the
+        // true drain count of this delta and max(1,...) can only UNDER-count
+        // drains — the window therefore only ever grows WIDER (>= N drains), never
+        // closes early with < N. rays_per_sec stays honest regardless because both
+        // endpoints are raw, drain-aligned sim_ray_num reads. Removing the floor
+        // would let a 0-round introduce a real early-close bug.
         new_drains = std::max(1, static_cast<int>(std::llround(ratio)));
       }
       n_drains_observed += new_drains;
