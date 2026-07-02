@@ -74,13 +74,13 @@ inline lm_proj::ProjParams BuildProjParams(const RenderConfig& cfg, const Rotati
     case LensParam::kDualFisheyeEquidistant:
       if (cfg.overlap_ > 0) {
         p.max_abs_dz = cfg.overlap_;
-        p.r_scale = ComputeEDRScale(cfg.overlap_);
+        p.r_scale = projection::ComputeEDRScale(cfg.overlap_);
       }
       break;
     case LensParam::kDualFisheyeStereographic:
       if (cfg.overlap_ > 0) {
         p.max_abs_dz = cfg.overlap_;
-        p.r_scale = ComputeSTRScale(cfg.overlap_);
+        p.r_scale = projection::ComputeSTRScale(cfg.overlap_);
       }
       break;
     case LensParam::kDualFisheyeOrthographic:

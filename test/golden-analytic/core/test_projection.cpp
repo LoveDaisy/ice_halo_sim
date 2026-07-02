@@ -5,8 +5,13 @@
 #include <vector>
 
 #include "config/render_config.hpp"
+#include "core/geo3d.hpp"
+#include "core/lens_proj.hpp"
+#include "core/lens_proj_build.hpp"
 #include "core/math.hpp"
 #include "core/projection.hpp"
+#include "core/scatter_accum.hpp"  // MakeCameraRotation
+#include "core/shared/projection_shared.h"
 
 namespace lumice {
 namespace projection {
@@ -546,6 +551,252 @@ TEST(ComputeEARScale, WithOverlap) {
   auto proj = FisheyeEqualAreaForward(1.0f, 0.0f, 0.0f, s);
   float r = std::sqrt(proj.x * proj.x + proj.y * proj.y);
   EXPECT_NEAR(r, s, 1e-4f);
+}
+
+// =============== lm_proj:: direct forward equivalence ===============
+// Guards against future divergence between projection::LinearForward wrapper
+// and the shared lm_proj::LinearForward it delegates to (task-unify-shared-projection).
+
+TEST(LmProj, LinearForwardMatchesHost) {
+  const float dxs[] = { 0.0f, 0.3f, -0.5f, 0.7f };
+  const float dys[] = { 0.0f, -0.4f, 0.6f, 0.2f };
+  const float dzs[] = { 1.0f, 0.5f, 0.8f, 2.0f };
+  for (int i = 0; i < 4; ++i) {
+    auto a = lm_proj::LinearForward(dxs[i], dys[i], dzs[i]);
+    auto b = projection::LinearForward(dxs[i], dys[i], dzs[i]);
+    EXPECT_EQ(a.valid, b.valid);
+    EXPECT_FLOAT_EQ(a.x, b.x);
+    EXPECT_FLOAT_EQ(a.y, b.y);
+  }
+  // dz<=0 rejection.
+  auto rej = lm_proj::LinearForward(0.5f, 0.5f, -0.1f);
+  EXPECT_FALSE(rej.valid);
+}
+
+// =============== ProjectExitToPixel per-type parity vs GetProjFunc ===============
+// Regression anchor for task-unify-shared-projection Step 3-5: pins the shared
+// ProjectExitToPixel to the current per-type *Project functions. Run BEFORE
+// lens_proj.hpp is rewritten to thin wrappers; runs identically AFTER (since
+// the wrappers delegate to the same function).
+
+// Build a RenderConfig for a lens type + camera view. Kept minimal — only the
+// fields BuildProjParams reads.
+RenderConfig MakeRC(LensParam::LensType t, float fov_deg, int w, int h, float az_deg, float el_deg, float ro_deg,
+                    float overlap = 0.0f, RenderConfig::VisibleRange vis = RenderConfig::kFull) {
+  RenderConfig cfg;
+  cfg.lens_.type_ = t;
+  cfg.lens_.fov_ = fov_deg;
+  cfg.resolution_[0] = w;
+  cfg.resolution_[1] = h;
+  cfg.lens_shift_[0] = 0;
+  cfg.lens_shift_[1] = 0;
+  cfg.visible_ = vis;
+  cfg.overlap_ = overlap;
+  cfg.view_.az_ = az_deg;
+  cfg.view_.el_ = el_deg;
+  cfg.view_.ro_ = ro_deg;
+  return cfg;
+}
+
+// Return (px, py) via ProjectExitToPixel + legacy GetProjFunc for the same
+// (cfg, dir) pair. Both invoke the same math paths post Step 3, but this
+// harness ran on the ORIGINAL *Project bodies first and pinned them.
+void ExpectMainHitEqualsLegacy(LensParam::LensType t, const RenderConfig& cfg, float dx, float dy, float dz,
+                               const char* label) {
+  Rotation rot = lumice::MakeCameraRotation(cfg);
+  float short_pix = static_cast<float>(std::min(cfg.resolution_[0], cfg.resolution_[1]));
+
+  // Shared.
+  auto pp = lumice::BuildProjParams(cfg, rot, short_pix);
+  auto res = lm_proj::ProjectExitToPixel(pp, dx, dy, dz);
+
+  // Legacy.
+  LensProjParam lp{ cfg.lens_.fov_,
+                    short_pix,
+                    rot,
+                    cfg.visible_,
+                    { cfg.resolution_[0], cfg.resolution_[1] },
+                    { cfg.lens_shift_[0], cfg.lens_shift_[1] },
+                    0.0f,
+                    1.0f };
+  if (cfg.overlap_ > 0) {
+    switch (t) {
+      case LensParam::kDualFisheyeEqualArea:
+        lp.max_abs_dz_ = cfg.overlap_;
+        lp.r_scale_ = projection::ComputeEARScale(cfg.overlap_);
+        break;
+      case LensParam::kDualFisheyeEquidistant:
+        lp.max_abs_dz_ = cfg.overlap_;
+        lp.r_scale_ = projection::ComputeEDRScale(cfg.overlap_);
+        break;
+      case LensParam::kDualFisheyeStereographic:
+        lp.max_abs_dz_ = cfg.overlap_;
+        lp.r_scale_ = projection::ComputeSTRScale(cfg.overlap_);
+        break;
+      default:
+        break;
+    }
+  }
+  auto fn = GetProjFunc(t);
+  float d[3] = { dx, dy, dz };
+  int xy[2] = { -999, -999 };
+  fn(lp, d, xy, 1);
+
+  const int expect_px = xy[0];
+  const int expect_py = xy[1];
+
+  if (expect_px == -1 && expect_py == -1) {
+    // Legacy miss (visible_range / cz<=0 cull) → shared count must be 0.
+    EXPECT_EQ(res.count, 0) << label;
+  } else {
+    EXPECT_GE(res.count, 1) << label;
+    if (res.count >= 1) {
+      EXPECT_EQ(res.hits[0].px, expect_px) << label;
+      EXPECT_EQ(res.hits[0].py, expect_py) << label;
+      EXPECT_TRUE(res.hits[0].bump_landed) << label;
+    }
+  }
+}
+
+TEST(LmProj, ProjectExitPerTypeDefaultView) {
+  // Default view: az=0, el=90, ro=0 → identity-ish (Rotation chain still non-trivial
+  // due to the (-90+ro)/(90-el) offsets, but nothing weird).
+  const struct {
+    LensParam::LensType t;
+    float fov;
+  } kCases[] = {
+    { LensParam::kLinear, 90.0f },
+    { LensParam::kFisheyeEqualArea, 180.0f },
+    { LensParam::kFisheyeEquidistant, 180.0f },
+    { LensParam::kFisheyeStereographic, 180.0f },
+    { LensParam::kFisheyeOrthographic, 180.0f },
+    { LensParam::kRectangular, 90.0f },
+    { LensParam::kDualFisheyeEqualArea, 180.0f },
+    { LensParam::kDualFisheyeEquidistant, 180.0f },
+    { LensParam::kDualFisheyeStereographic, 180.0f },
+    { LensParam::kDualFisheyeOrthographic, 180.0f },
+  };
+  // Sample a handful of world dirs (must be unit or near-unit; hemispheres matter
+  // for cull / dual-fisheye split).
+  const float dirs[][3] = {
+    { 0.0f, 0.0f, -1.0f },  // straight down (typical incoming ray)
+    { 0.1f, 0.1f, -0.99f },  { 0.3f, -0.4f, -0.87f },
+    { 0.5f, 0.5f, -0.707f }, { 0.0f, 0.0f, 1.0f },  // straight up (culled for kUpper, kept for kFull/kLower)
+    { 0.7f, 0.2f, 0.68f },
+  };
+  for (const auto& c : kCases) {
+    auto cfg = MakeRC(c.t, c.fov, 1024, 512, 0.0f, 90.0f, 0.0f);
+    for (const auto& d : dirs) {
+      char lbl[64];
+      std::snprintf(lbl, sizeof(lbl), "type=%d dir=(%g,%g,%g)", static_cast<int>(c.t), d[0], d[1], d[2]);
+      ExpectMainHitEqualsLegacy(c.t, cfg, d[0], d[1], d[2], lbl);
+    }
+  }
+}
+
+TEST(LmProj, ProjectExitPerTypeRotatedView) {
+  // Non-default camera (all 3 Euler angles non-zero) — critical: rot[9] contract
+  // must be applied on single-lens types but NOT on dual-fisheye/rectangular.
+  // (task-unify-shared-projection risk 3.)
+  const struct {
+    LensParam::LensType t;
+    float fov;
+  } kCases[] = {
+    { LensParam::kLinear, 60.0f },
+    { LensParam::kFisheyeEqualArea, 180.0f },
+    { LensParam::kFisheyeEquidistant, 180.0f },
+    { LensParam::kFisheyeStereographic, 180.0f },
+    { LensParam::kFisheyeOrthographic, 180.0f },
+    { LensParam::kRectangular, 90.0f },
+    { LensParam::kDualFisheyeEqualArea, 180.0f },
+    { LensParam::kDualFisheyeEquidistant, 180.0f },
+    { LensParam::kDualFisheyeStereographic, 180.0f },
+    { LensParam::kDualFisheyeOrthographic, 180.0f },
+  };
+  const float dirs[][3] = {
+    { 0.2f, -0.3f, -0.933f },
+    { 0.6f, 0.1f, -0.79f },
+    { 0.0f, 0.0f, -1.0f },
+    { -0.5f, 0.4f, -0.768f },
+  };
+  for (const auto& c : kCases) {
+    // az=42, el=60, ro=15 → arbitrary non-trivial rotation.
+    auto cfg = MakeRC(c.t, c.fov, 1024, 512, 42.0f, 60.0f, 15.0f, /*overlap=*/0.0f, RenderConfig::kFull);
+    for (const auto& d : dirs) {
+      char lbl[80];
+      std::snprintf(lbl, sizeof(lbl), "type=%d rot dir=(%g,%g,%g)", static_cast<int>(c.t), d[0], d[1], d[2]);
+      ExpectMainHitEqualsLegacy(c.t, cfg, d[0], d[1], d[2], lbl);
+    }
+  }
+}
+
+TEST(LmProj, ProjectExitVisibleRangeCull) {
+  // kLower should cull d[2]<0 (down-going) for single-lens types.
+  auto cfg = MakeRC(LensParam::kLinear, 90.0f, 512, 512, 0.0f, 90.0f, 0.0f,
+                    /*overlap=*/0.0f, RenderConfig::kLower);
+  Rotation rot = lumice::MakeCameraRotation(cfg);
+  auto pp = lumice::BuildProjParams(cfg, rot, 512.0f);
+  auto r = lm_proj::ProjectExitToPixel(pp, 0.1f, 0.1f, -0.99f);
+  EXPECT_EQ(r.count, 0) << "kLower should reject dz<0";
+}
+
+TEST(LmProj, ProjectExitDualFisheyeOverlapDualWrite) {
+  // Overlap band → count=2, hit[1].bump_landed=false.
+  const float overlap = 0.0872f;  // sin 5°
+  auto cfg = MakeRC(LensParam::kDualFisheyeEqualArea, 180.0f, 1024, 512, 0.0f, 90.0f, 0.0f, overlap);
+  Rotation rot = lumice::MakeCameraRotation(cfg);
+  auto pp = lumice::BuildProjParams(cfg, rot, 512.0f);
+  // Ray with |sky_z| < overlap → sky_z=-wz. Pick wz such that |sky_z|=|-wz|<overlap.
+  auto r_in = lm_proj::ProjectExitToPixel(pp, 0.9f, 0.1f, 0.04f);
+  EXPECT_EQ(r_in.count, 2);
+  EXPECT_TRUE(r_in.hits[0].bump_landed);
+  EXPECT_FALSE(r_in.hits[1].bump_landed);
+
+  // Ray outside band → count=1.
+  auto r_out = lm_proj::ProjectExitToPixel(pp, 0.5f, 0.5f, -0.707f);
+  EXPECT_EQ(r_out.count, 1);
+  EXPECT_TRUE(r_out.hits[0].bump_landed);
+}
+
+// =============== Rectangular wrap equivalence (risk 1 evidence) ===============
+// Verifies that CPU's while-loop wrap and Metal's floor-based wrap output the
+// same pixel index across a dense lon sweep including ±π boundaries. If any
+// mismatch, plan.md risk 1 escalates to a real bug; if all match, both writings
+// are provably interchangeable and Metal side (315.3) can adopt either.
+
+TEST(LmProj, RectangularWrapWhileVsFloorEquivalence) {
+  const int img_w = 2048;
+  const float scale = static_cast<float>(img_w) / 2.0f / math::kPi;  // ~short_res/pi
+  auto wrap_while = [](float lon) {
+    while (lon < -math::kPi) {
+      lon += 2 * math::kPi;
+    }
+    while (lon > math::kPi) {
+      lon -= 2 * math::kPi;
+    }
+    return lon;
+  };
+  auto wrap_floor = [](float lon) {
+    return lon - 2.0f * math::kPi * std::floor((lon + math::kPi) / (2.0f * math::kPi));
+  };
+  // Dense sweep + boundary values.
+  int mismatches = 0;
+  for (int i = -1000; i <= 1000; ++i) {
+    float lon = static_cast<float>(i) * (math::kPi / 500.0f);  // covers ~[-2π, 2π]
+    float a = wrap_while(lon);
+    float b = wrap_floor(lon);
+    int px_a = static_cast<int>(std::floor(a * scale + img_w / 2.0f + 0.5f));
+    int px_b = static_cast<int>(std::floor(b * scale + img_w / 2.0f + 0.5f));
+    px_a = ((px_a % img_w) + img_w) % img_w;
+    px_b = ((px_b % img_w) + img_w) % img_w;
+    if (px_a != px_b) {
+      ++mismatches;
+    }
+  }
+  // Evidence for plan.md risk 1: expect 0 mismatches at pixel granularity.
+  // If this ever fires, Step 2 chose the safer path (CPU while-loop) — the
+  // shared function stays parity-neutral. Metal/CUDA side is 315.3's concern.
+  EXPECT_EQ(mismatches, 0);
 }
 
 }  // namespace
