@@ -260,24 +260,37 @@ not "× legacy", when judging GPU throughput):
 
 #### drain-count-driven canonical · default dispatch · config-default resolution · `drain_aligned` `rays_per_sec` · 2026-07-02
 
-**Context** (task-gpu-bench-drain-aligned-rate): GPU `--benchmark` now sets `ray_num="infinite"`
-and measures exactly N=10 integer drain windows (`rate_basis="drain_aligned"`), fixing the
-drain-quantization under-report (explore-315: at the old finite 20M, CUDA read ~1.19 drains →
-5× deflated). Numbers below are the honest steady `rays_per_sec` at each config's **default
-resolution** (NOT the scrum-312 resolution sweep — the two blocks are different metrics/axes and
-must not be compared row-to-row). N reps per cell with the ≥15% CoV → N=9 escalation.
+**Context** (task-gpu-bench-drain-aligned-rate + **task-317 render-per-poll fix**): GPU
+`--benchmark` sets `ray_num="infinite"` and measures exactly N=10 integer drain windows
+(`rate_basis="drain_aligned"`), fixing the drain-quantization under-report (explore-315: at the
+old finite 20M, CUDA read ~1.19 drains → 5× deflated). Numbers below are the honest steady
+`rays_per_sec` at each config's **default resolution** (NOT the scrum-312 resolution sweep — the
+two blocks are different metrics/axes and must not be compared row-to-row). N reps per cell with
+the ≥15% CoV → N=9 escalation.
 
-| config | dev49 4060Ti CUDA (vs legacy) | win-builder 1070Ti CUDA | Mac Metal ⚠️(approx) | dev49 legacy CPU |
+> **task-317 re-canonicalization**: the dev49 CUDA + legacy columns below were **regenerated with
+> the render-per-poll fix** (commit `ee98065a`). Before it, the `--benchmark` poll loop triggered a
+> full sRGB render every iteration, which starved drain-window closure and (on CUDA) let the
+> unbounded session trip the 32-bit device PCG ray-index cap → legacy fallback → the pass never
+> terminated. Post-fix, CUDA infinite closes in ~1.6 s (8 reps, CoV 0.1–1.8 %). These clean values
+> supersede the pre-fix "首次 run" numbers (which were noisier / partly contended). ⚠️ The
+> **win-builder column is still the pre-fix old-binary run** — pending a fixed-binary re-run for
+> full consistency (values shown are the arithmetically-clean orphan-free run, task-316 §5).
+
+| config | dev49 4060Ti CUDA (vs legacy) | win-builder 1070Ti CUDA ⚠️(pre-fix) | Mac Metal ⚠️(approx) | dev49 legacy CPU (5M) |
 |---|---|---|---|---|
-| `bench_light_single_ms` | **130.4 M/s** (15.6×, CoV 0.1%) | 71.8 M/s (1.1%) | ~69 M/s (CoV 11%) | 8.34 M/s |
-| `ms_multi_crystal` | 21.3 M/s (17.2×, 10.2%) | 12.6 M/s (2.5%) | ~16.7 M/s (8.3%) | 1.24 M/s |
-| `ms_multi_crystal_complex_filter` | 411.3 M/s (67.6×, 1.8%) | 99.0 M/s (1.0%) | ~24.6 M/s (18% thermal) | 6.09 M/s |
-| `ms_multi_crystal_filtered_bd` | 660.3 M/s (110.7×, 1.4%) | 135.3 M/s (0.6%) | ~26.7 M/s (8.4%) | 5.97 M/s |
+| `bench_light_single_ms` | **130.5 M/s** (12.5×, CoV 0.2%) | 80.7 M/s (0.5%) | ~69 M/s (CoV 11%) | 10.45 M/s |
+| `ms_multi_crystal` | 22.2 M/s (12.7×, 0.1%) | 13.3 M/s (0.8%) | ~16.7 M/s (8.3%) | 1.74 M/s |
+| `ms_multi_crystal_complex_filter` | 371.6 M/s (56.9×, 0.8%) | 112.8 M/s (0.8%) | ~24.6 M/s (18% thermal) | 6.53 M/s |
+| `ms_multi_crystal_filtered_bd` | 591.2 M/s (89.6×, 1.8%) | 161.2 M/s (0.8%) | ~26.7 M/s (8.4%) | 6.60 M/s |
 
 **Key points**:
-- **The 5× under-report is fixed.** `bench_light_single_ms` on 4060Ti reads **130.4 M/s** at
-  0.1% CoV — matching explore-315's independently-measured plateau (400M-ray wall = 130.2 M/s).
+- **The 5× under-report is fixed.** `bench_light_single_ms` on 4060Ti reads **130.5 M/s** at
+  0.2% CoV — matching explore-315's independently-measured plateau (400M-ray wall = 130.2 M/s).
   This *is* the honest steady CUDA rate; the old finite-20M bench read 24.7 M/s (deflated 5×).
+- **The infinite `--benchmark` no longer hangs** (task-317): reading `sim_ray_num` via the cheap
+  O(1) `LUMICE_GetSimRayCount` instead of the render-triggering `LUMICE_GetStatsResults` removed
+  the per-poll sRGB render that starved window closure. dev49 CUDA infinite: 3/3 reps RC=0 ~1.6 s.
 - **Locked-clock desktops (CUDA) are the authoritative canonical**: CoV 0.1–2.5% on both the
   4060Ti and 1070Ti. drain-count-driven works identically on Ada and Pascal (sm_61).
 - **⚠️ Mac Metal is phase-1 approximate**, NOT canonical. On a Mac *laptop* Metal throughput is

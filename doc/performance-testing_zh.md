@@ -202,21 +202,32 @@ CUDA 路线还有 **per-batch 同步 readback** 税（`ReadbackXyzAccum` 每 Sim
 
 #### drain-count-driven canonical · default dispatch · config 默认分辨率 · `drain_aligned` `rays_per_sec` · 2026-07-02
 
-**背景**（task-gpu-bench-drain-aligned-rate）：GPU `--benchmark` 现设 `ray_num="infinite"`，恰好测
-N=10 个整 drain 窗口（`rate_basis="drain_aligned"`），修复 drain-量化假低（explore-315：旧 finite 20M 下
-CUDA 只 ~1.19 drain → 5× 假低）。下表是各 config **默认分辨率**下的诚实稳态 `rays_per_sec`（**不是**
-scrum-312 分辨率 sweep——两块是不同 metric/轴，不可逐行比较）。每格 N reps，>15% CoV → N=9 escalation。
+**背景**（task-gpu-bench-drain-aligned-rate + **task-317 render-per-poll 修复**）：GPU `--benchmark`
+设 `ray_num="infinite"`，恰好测 N=10 个整 drain 窗口（`rate_basis="drain_aligned"`），修复 drain-量化
+假低（explore-315：旧 finite 20M 下 CUDA 只 ~1.19 drain → 5× 假低）。下表是各 config **默认分辨率**下的
+诚实稳态 `rays_per_sec`（**不是** scrum-312 分辨率 sweep——两块是不同 metric/轴，不可逐行比较）。每格 N
+reps，>15% CoV → N=9 escalation。
 
-| config | dev49 4060Ti CUDA (vs legacy) | win-builder 1070Ti CUDA | Mac Metal ⚠️(近似) | dev49 legacy CPU |
+> **task-317 重新 canonical 化**：下表 dev49 CUDA + legacy 列由 **render-per-poll 修复后**（commit
+> `ee98065a`）重生成。修复前 `--benchmark` poll 循环每次迭代触发全图 sRGB 渲染，饿死 drain 窗口关闭，
+> CUDA 上更让无界会话跑过 32-bit device PCG ray-index cap → legacy fallback → pass 永不终止。修复后 CUDA
+> infinite ~1.6s 关闭（8 reps，CoV 0.1–1.8%）。这些干净值取代修复前"首次 run"数（更噪/部分被占）。
+> ⚠️ **win-builder 列仍是修复前 old-binary run**——待 fixed-binary 重跑以求全一致（现值为孤儿清理后的
+> 干净 run，task-316 §5）。
+
+| config | dev49 4060Ti CUDA (vs legacy) | win-builder 1070Ti CUDA ⚠️(pre-fix) | Mac Metal ⚠️(近似) | dev49 legacy CPU (5M) |
 |---|---|---|---|---|
-| `bench_light_single_ms` | **130.4 M/s** (15.6×, CoV 0.1%) | 71.8 M/s (1.1%) | ~69 M/s (CoV 11%) | 8.34 M/s |
-| `ms_multi_crystal` | 21.3 M/s (17.2×, 10.2%) | 12.6 M/s (2.5%) | ~16.7 M/s (8.3%) | 1.24 M/s |
-| `ms_multi_crystal_complex_filter` | 411.3 M/s (67.6×, 1.8%) | 99.0 M/s (1.0%) | ~24.6 M/s (18% 热) | 6.09 M/s |
-| `ms_multi_crystal_filtered_bd` | 660.3 M/s (110.7×, 1.4%) | 135.3 M/s (0.6%) | ~26.7 M/s (8.4%) | 5.97 M/s |
+| `bench_light_single_ms` | **130.5 M/s** (12.5×, CoV 0.2%) | 80.7 M/s (0.5%) | ~69 M/s (CoV 11%) | 10.45 M/s |
+| `ms_multi_crystal` | 22.2 M/s (12.7×, 0.1%) | 13.3 M/s (0.8%) | ~16.7 M/s (8.3%) | 1.74 M/s |
+| `ms_multi_crystal_complex_filter` | 371.6 M/s (56.9×, 0.8%) | 112.8 M/s (0.8%) | ~24.6 M/s (18% 热) | 6.53 M/s |
+| `ms_multi_crystal_filtered_bd` | 591.2 M/s (89.6×, 1.8%) | 161.2 M/s (0.8%) | ~26.7 M/s (8.4%) | 6.60 M/s |
 
 **要点**：
-- **5× 假低已修**：`bench_light_single_ms` 4060Ti 读 **130.4 M/s** @0.1% CoV，命中 explore-315 独立实测
+- **5× 假低已修**：`bench_light_single_ms` 4060Ti 读 **130.5 M/s** @0.2% CoV，命中 explore-315 独立实测
   plateau（400M-ray wall = 130.2 M/s）。这才是诚实 CUDA 稳态率；旧 finite-20M bench 读 24.7 M/s（5× 假低）。
+- **infinite `--benchmark` 不再挂**（task-317）：读 `sim_ray_num` 改用便宜 O(1) `LUMICE_GetSimRayCount`
+  替代触发渲染的 `LUMICE_GetStatsResults`，去掉饿死窗口关闭的 per-poll sRGB 渲染。dev49 CUDA infinite：
+  3/3 reps RC=0 ~1.6s。
 - **锁频桌面（CUDA）是权威 canonical**：4060Ti 与 1070Ti CoV 0.1–2.5%。drain-count-driven 在 Ada/Pascal(sm_61) 一致。
 - **⚠️ Mac Metal 是 phase-1 近似**，非 canonical。Mac *笔记本* Metal 吞吐由热/GPU-boost 主导，跨 run 摆动
   ~2×（CoV 8–28%）；任何 N 都稳不住（N-sweep 证 CoV 不随 N 单调降——超 ~N=10 热漂移反使方差回增）。上表 Metal
