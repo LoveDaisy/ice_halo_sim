@@ -158,14 +158,6 @@ inline void FisheyeOrthographicProject(const LensProjParam& p, const float* d, i
   }
 }
 
-// Overlap r_scale helpers for dual-fisheye lenses.
-inline float ComputeEDRScale(float max_abs_dz) {
-  return (max_abs_dz <= 0) ? 1.0f : math::kPi_2 / (math::kPi_2 + std::asin(max_abs_dz));
-}
-inline float ComputeSTRScale(float max_abs_dz) {
-  return (max_abs_dz <= 0) ? 1.0f : 1.0f / std::tan((math::kPi_2 + std::asin(max_abs_dz)) / 2.0f);
-}
-
 inline void DualFisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
     float sky_x = -d[0], sky_y = -d[1], sky_z = -d[2];

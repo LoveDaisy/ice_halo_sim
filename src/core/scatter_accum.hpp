@@ -39,11 +39,11 @@ inline LensProjParam MakeProjParam(const RenderConfig& cfg, const Rotation& rot,
         break;
       case LensParam::kDualFisheyeEquidistant:
         p.max_abs_dz_ = cfg.overlap_;
-        p.r_scale_ = ComputeEDRScale(cfg.overlap_);
+        p.r_scale_ = projection::ComputeEDRScale(cfg.overlap_);
         break;
       case LensParam::kDualFisheyeStereographic:
         p.max_abs_dz_ = cfg.overlap_;
-        p.r_scale_ = ComputeSTRScale(cfg.overlap_);
+        p.r_scale_ = projection::ComputeSTRScale(cfg.overlap_);
         break;
       default:
         // Non-dual-fisheye: overlap ignored. Dual orthographic also falls here

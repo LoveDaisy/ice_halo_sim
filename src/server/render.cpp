@@ -115,11 +115,11 @@ void RenderConsumer::Consume(const SimData& data) {
         break;
       case LensParam::kDualFisheyeEquidistant:
         proj_param.max_abs_dz_ = config_.overlap_;
-        proj_param.r_scale_ = ComputeEDRScale(config_.overlap_);
+        proj_param.r_scale_ = projection::ComputeEDRScale(config_.overlap_);
         break;
       case LensParam::kDualFisheyeStereographic:
         proj_param.max_abs_dz_ = config_.overlap_;
-        proj_param.r_scale_ = ComputeSTRScale(config_.overlap_);
+        proj_param.r_scale_ = projection::ComputeSTRScale(config_.overlap_);
         break;
       default:
         // Non-dual-fisheye: overlap is ignored.

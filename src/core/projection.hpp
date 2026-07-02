@@ -112,6 +112,12 @@ bool PixelToDualFisheye(float fx, float fy, int width, int height, float* x_norm
 // max_abs_dz = sin(overlap_angle); max_abs_dz = 0 → r_scale = 1 (no overlap).
 float ComputeEARScale(float max_abs_dz);
 
+// Overlap r_scale for equidistant / stereographic dual-fisheye. Same contract
+// as ComputeEARScale: max_abs_dz = 0 → 1.0f (no overlap); otherwise a shrink
+// factor derived from the overlap half-angle.
+float ComputeEDRScale(float max_abs_dz);
+float ComputeSTRScale(float max_abs_dz);
+
 
 }  // namespace projection
 }  // namespace lumice
