@@ -54,13 +54,19 @@ inline void ScatterOutgoingToXyz(const float* d, const float* w, size_t count, c
   const auto proj_params = BuildProjParams(cfg, camera_rot, short_pix);
 
   // Two batch arrays: main hits (bump_landed=true) and overlap hits (=false).
-  // Overlap only fires for dual-fisheye with max_abs_dz>0, so it stays empty
-  // in the common single-lens / rectangular / dual-fisheye-no-overlap path
-  // and its allocation is O(count) worst case (every ray in the overlap band).
+  // Overlap only fires for dual-fisheye with max_abs_dz>0 (ProjectExitToPixel
+  // never emits hits[1] otherwise), so the overlap buffers are only
+  // allocated when the projection is actually configured for overlap;
+  // allocation is O(count) worst case (every ray in the overlap band).
   auto main_w = std::make_unique<float[]>(count);
   auto main_xy = std::make_unique<int[]>(count);
-  auto overlap_w = std::make_unique<float[]>(count);
-  auto overlap_xy = std::make_unique<int[]>(count);
+  const bool has_overlap = proj_params.max_abs_dz > 0.0f;
+  std::unique_ptr<float[]> overlap_w;
+  std::unique_ptr<int[]> overlap_xy;
+  if (has_overlap) {
+    overlap_w = std::make_unique<float[]>(count);
+    overlap_xy = std::make_unique<int[]>(count);
+  }
 
   const int w_res = cfg.resolution_[0];
   const int h_res = cfg.resolution_[1];

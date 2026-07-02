@@ -163,8 +163,10 @@ LM_FN void DualFisheyeToPixelXY(float x_norm, float y_norm, bool is_upper, int w
 //   hits[1]           — dual-fisheye overlap dual-write (bump_landed=false).
 //   count             — 0=miss/cull, 1=main only, 2=main + overlap.
 // Bounds culling (px/py against 0..img_w/h-1) is intentionally NOT done here;
-// callers do the range check on the returned integer pixels (matches legacy
-// pattern of returning {-1,-1} for miss).
+// callers do the range check on the returned integer pixels. This function's
+// own miss contract is `count=0` (hits[0] left unwritten); the legacy CPU
+// convention of translating a miss to pixel {-1,-1} is applied one layer up,
+// by lens_proj.hpp's callers, not by ProjectExitToPixel itself.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, float wy, float wz) {
   ProjResult r;
