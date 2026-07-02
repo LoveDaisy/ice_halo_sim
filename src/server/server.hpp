@@ -273,6 +273,14 @@ class Server {
   std::optional<StatsResult> GetCachedStatsResult();
 
   /**
+   * @brief Cheap O(1) live accumulated sim ray count (no snapshot / no render).
+   * @return Running StatsConsumer ray count; 0 if none. For progress polling
+   *         (e.g. the --benchmark drain loop) that needs sim_ray_num every
+   *         iteration but not a rendered image. See task-317.
+   */
+  size_t GetLiveSimRayCount();
+
+  /**
    * @brief Stop the server
    * @note Stops processing but keeps the server alive. Can be restarted by committing new config.
    * @note No Run() method exists because server starts running immediately after construction.

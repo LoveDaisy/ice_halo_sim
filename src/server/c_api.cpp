@@ -815,6 +815,18 @@ LUMICE_ErrorCode LUMICE_GetCachedStats(LUMICE_Server* server, LUMICE_StatsResult
 }
 
 
+LUMICE_ErrorCode LUMICE_GetSimRayCount(LUMICE_Server* server, LUMICE_RayCount* out) {
+  if (!server || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  // Cheap O(1) live ray-count read — no snapshot / no render (task-317). For
+  // progress polling that needs sim_ray_num every iteration without paying the
+  // per-poll DoSnapshot/sRGB render cost of LUMICE_GetStatsResults.
+  *out = static_cast<LUMICE_RayCount>(server->server_->GetLiveSimRayCount());
+  return LUMICE_OK;
+}
+
+
 // =============== State & Control ===============
 LUMICE_ErrorCode LUMICE_QueryServerState(LUMICE_Server* server, LUMICE_ServerState* out) {
   if (!server || !out) {

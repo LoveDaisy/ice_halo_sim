@@ -36,6 +36,21 @@ constexpr auto kPollInterval = std::chrono::seconds(1);
 // steal from trace workers). See task-fix-throughput-bench-honesty.
 constexpr auto kBenchmarkPollInterval = std::chrono::milliseconds(5);
 constexpr int kBenchmarkSingleRays = 2'000'000;
+// Drain-count-driven measurement (task-gpu-bench-drain-aligned-rate): when the
+// bench config asks for scene.ray_num="infinite", RunBenchmarkPass measures the
+// window from drain #1 (warmup-end anchor) to drain #(N+1), then stops the
+// server. N = 10 yields ~CUDA 168M / Metal 21M rays per bench pass — a
+// predictable, cheap, backend-agnostic steady-state measurement.
+// N was chosen empirically (N-sweep on Mac Metal, N∈{5,10,20,40}): CoV does NOT
+// drop monotonically with N — beyond ~N=10 thermal drift over the longer
+// measurement REGROWS variance (N=40 hit 23.6% CoV), so a bigger window is not
+// "more stable". N=10 is the robust middle: on locked-clock desktops (CUDA
+// dev49 / win-builder — the authoritative throughput machines) it is a larger,
+// steadier window than N=5 at negligible cost and no thermal regrowth. On a Mac
+// laptop, Metal throughput is environment-dominated (thermal / GPU boost swing
+// it ~2x run-to-run, CoV 8-28%) and NO N stabilizes it — Mac Metal is treated
+// as approximate (phase-1), not canonical. See doc/performance-testing.md.
+constexpr int kBenchmarkDrainWindows = 10;
 
 void PrintUsage(const char* prog_name) {
   std::cout << "Usage: " << prog_name << " -f <config_file> [options]\n"
@@ -153,19 +168,63 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
   // excluding the first observed chunk (its rays were produced before we could
   // sample them). `wall_sec`/`setup_sec`/`active_sec` are reported alongside for
   // transparency; existing keys (mode/workers/cores/rays/rays_per_sec) are kept.
+  //
+  // Drain-count-driven path (task-gpu-bench-drain-aligned-rate): the setup-honest
+  // steady window above still under-reports fast backends when the config's
+  // finite ray_num yields fewer than ~10 drains — sim_ray_num is drain-quantized
+  // (each drain = kDefaultXyzDrainBatches * dispatch_size rays; simulator.cpp
+  // xyz_win_ triggers on 64 batches). CUDA default dispatch (262144) = 16.8M
+  // rays/drain, so a 20M-ray config only sees ~1.19 drains and lumps most trace
+  // work into "setup". Fix: when the config's scene.ray_num is "infinite"
+  // (config_manager.cpp:120 -> kInfSize), measure the window from the 1st
+  // observed drain (warmup-end anchor) to the (N+1)-th drain, then StopServer.
+  // Endpoints are already sampled before Stop, so the number is unaffected by
+  // Stop semantics (task-262 lost-wakeup already fixed).
+  bool drain_count_mode = false;
+  try {
+    auto j_cfg = nlohmann::json::parse(config_str);
+    const auto& j_ray_num = j_cfg.at("scene").at("ray_num");
+    // Sentinel value "infinite" mirrors config_manager.cpp:120 (which maps it to
+    // kInfSize on the core side). This is a second independent check because
+    // RunBenchmarkPass only receives the raw config_str, not an already-parsed
+    // SceneConfig — the two sites must stay in sync. If a future refactor gives
+    // this function access to the resolved config object, collapse to one site.
+    drain_count_mode = j_ray_num.is_string() && j_ray_num.get<std::string>() == "infinite";
+  } catch (const nlohmann::json::exception&) {
+    // Malformed / unexpected shape: fall back to finite-path measurement.
+  }
+
   auto t_run_start = std::chrono::steady_clock::now();
   auto t_active_start = t_run_start;
   LUMICE_RayCount rays_at_active_start = 0;
   bool active_started = false;
+
+  // Drain-count-driven state (only meaningful when drain_count_mode == true).
+  LUMICE_RayCount prev_rays = 0;
+  int n_drains_observed = 0;
+  LUMICE_RayCount rays_per_drain_estimate = 0;
+  bool first_drain_captured = false;
+  LUMICE_RayCount rays_at_first_drain = 0;
+  auto t_first_drain = t_run_start;
+  bool window_closed = false;
+  LUMICE_RayCount rays_at_final_drain = 0;
+  auto t_final_drain = t_run_start;
+  int n_drains_in_window = 0;
+
   while (true) {
     std::this_thread::sleep_for(kBenchmarkPollInterval);
     LUMICE_ServerState state{};
-    LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1]{};
     if (LUMICE_QueryServerState(server, &state) != LUMICE_OK) {
       continue;
     }
-    bool have_stats = LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) == LUMICE_OK;
-    LUMICE_RayCount cur_rays = have_stats ? stats[0].sim_ray_num : 0;
+    // task-317: read sim_ray_num via the cheap O(1) live counter, NOT
+    // LUMICE_GetStatsResults — the latter triggers a full DoSnapshot +
+    // RenderConsumer sRGB (powf/pixel) on EVERY poll. For the drain-count path
+    // (many polls) that render tax dominated wall-time, starved drain-window
+    // closure, and (on CUDA) let the unbounded session run long enough to trip
+    // the 32-bit device PCG ray-index cap -> silent legacy fallback + hang.
+    LUMICE_RayCount cur_rays = 0;
+    LUMICE_GetSimRayCount(server, &cur_rays);
     auto now = std::chrono::steady_clock::now();
 
     // Mark end-of-setup the first time tracing has produced rays.
@@ -175,6 +234,48 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
       rays_at_active_start = cur_rays;
     }
 
+    // Drain-count-driven bookkeeping: detect drain events by sim_ray_num jumps.
+    // First observed jump defines rays_per_drain_estimate (= that jump's size,
+    // since sim_ray_num starts at 0 and moves in whole-drain increments); later
+    // jumps may span >1 drain if poll granularity is coarser than one drain, so
+    // reverse-infer the drain count from the ray increment (plan §3 D2 / Step 1
+    // test point). On reaching (N+1) drains we lock the endpoint, StopServer,
+    // and let the loop drain to IDLE for a clean shutdown.
+    if (drain_count_mode && !window_closed && cur_rays > prev_rays) {
+      LUMICE_RayCount delta = cur_rays - prev_rays;
+      int new_drains = 0;
+      if (rays_per_drain_estimate == 0) {
+        rays_per_drain_estimate = delta;
+        new_drains = 1;
+      } else {
+        double ratio = static_cast<double>(delta) / static_cast<double>(rays_per_drain_estimate);
+        // Invariant (do NOT "fix" the floor(1) away): rays_per_drain_estimate is
+        // seeded from the first jump, which is >= one true drain, so ratio <= the
+        // true drain count of this delta and max(1,...) can only UNDER-count
+        // drains — the window therefore only ever grows WIDER (>= N drains), never
+        // closes early with < N. rays_per_sec stays honest regardless because both
+        // endpoints are raw, drain-aligned sim_ray_num reads. Removing the floor
+        // would let a 0-round introduce a real early-close bug.
+        new_drains = std::max(1, static_cast<int>(std::llround(ratio)));
+      }
+      n_drains_observed += new_drains;
+      if (!first_drain_captured) {
+        first_drain_captured = true;
+        rays_at_first_drain = cur_rays;
+        t_first_drain = now;
+      } else if (n_drains_observed >= kBenchmarkDrainWindows + 1) {
+        rays_at_final_drain = cur_rays;
+        t_final_drain = now;
+        // Window = drain #1 -> drain #(N+1) skips warmup drain, holds N drains
+        // (or M >= N if a single poll observed a super-drain jump; still
+        // integer-drain-aligned so the rate stays honest).
+        n_drains_in_window = n_drains_observed - 1;
+        window_closed = true;
+        LUMICE_StopServer(server);
+      }
+      prev_rays = cur_rays;
+    }
+
     if (state == LUMICE_SERVER_IDLE && cur_rays > 0) {
       auto t_end = now;
       LUMICE_RayCount r_end = cur_rays;
@@ -182,13 +283,29 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
       double setup_sec = std::chrono::duration<double>(t_active_start - t_run_start).count();
       double active_sec = std::chrono::duration<double>(t_end - t_active_start).count();
 
-      // Steady-window rate excludes setup and the first sampled chunk. Guard the
-      // short-run degenerate case (run completed within the first one/two polls,
-      // so r_end == rays_at_active_start or active window ~0) by falling back to
-      // the active-window-from-first-rays rate, then whole-wall as last resort.
+      // rate_basis ladder:
+      //   drain_count_mode true  -> `drain_aligned` (window closed) or
+      //                             `too_few_drains` (infinite path exited early
+      //                             w/o observing N+1 drains — unexpected).
+      //   drain_count_mode false -> `steady` / `active_short` / `wall_fallback`
+      //                             (task-fix-throughput-bench-honesty ladder).
+      // The two branches are independent enums; downstream (docs, gate) parses
+      // them by drain_count_mode / config context, not by string equality.
       double rays_per_sec = 0.0;
       const char* rate_basis = "wall_fallback";
-      if (active_sec > 1e-4 && r_end > rays_at_active_start) {
+      double window_sec = 0.0;
+      LUMICE_RayCount window_rays = 0;
+      if (drain_count_mode) {
+        if (window_closed && t_final_drain > t_first_drain && rays_at_final_drain > rays_at_first_drain) {
+          window_sec = std::chrono::duration<double>(t_final_drain - t_first_drain).count();
+          window_rays = rays_at_final_drain - rays_at_first_drain;
+          rays_per_sec = static_cast<double>(window_rays) / window_sec;
+          rate_basis = "drain_aligned";
+        } else {
+          rays_per_sec = wall_sec > 0 ? static_cast<double>(r_end) / wall_sec : 0.0;
+          rate_basis = "too_few_drains";
+        }
+      } else if (active_sec > 1e-4 && r_end > rays_at_active_start) {
         rays_per_sec = static_cast<double>(r_end - rays_at_active_start) / active_sec;
         rate_basis = "steady";
       } else if (active_started && active_sec > 1e-4) {
@@ -209,6 +326,11 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
       result["active_sec"] = std::round(active_sec * 1000.0) / 1000.0;
       result["rays_per_sec"] = std::round(rays_per_sec * 10.0) / 10.0;
       result["rate_basis"] = rate_basis;
+      if (drain_count_mode) {
+        result["n_drains_in_window"] = n_drains_in_window;
+        result["window_sec"] = std::round(window_sec * 1000.0) / 1000.0;
+        result["window_rays"] = window_rays;
+      }
       std::cout << "[BENCHMARK] " << result.dump() << "\n";
       break;
     }
