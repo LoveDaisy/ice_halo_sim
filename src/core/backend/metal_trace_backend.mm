@@ -2525,13 +2525,34 @@ size_t MetalTraceBackend::TraceLayerKernelMaxThreadsForTest() const {
   return static_cast<size_t>(impl_->pso.maxTotalThreadsPerThreadgroup);
 }
 
-void MetalTraceBackend::SetInitialRayBaseForTest(size_t base) {
-  // Metal has only two host counters (gen + transit); the emit gate uses tid
-  // directly (statistical-not-bit-exact, scrum-267 §3.6). Setting both here
-  // makes the injection apply to either the first-layer or continuation-layer
-  // exercise of the fix, whichever the test picks.
-  impl_->root_ray_count = base;
-  impl_->transit_ray_count_ = base;
+void MetalTraceBackend::SetInitialRayBaseForTest(size_t root_base, size_t transit_base) {
+  // Metal has two host counters (root gen + transit); the emit gate uses tid
+  // directly (statistical-not-bit-exact, scrum-267 §3.6) so there is no gate hi
+  // stream to inject. Per-stream bases let the gen and transit wirings be
+  // asserted in ISOLATION (drive exactly one stream into a non-zero hi epoch).
+  impl_->root_ray_count = root_base;
+  impl_->transit_ray_count_ = transit_base;
+}
+
+size_t MetalTraceBackend::ReadbackRootRotForTest(std::vector<float>& out, size_t count) {
+  // [TEST-ONLY] task-gpu-rng-ray-index-uint64: copy the first `count` per-ray
+  // crystal→world rotation matrices (root_rot_buf, 9 floats/ray) back to host.
+  // For a continuation (transit) layer these are the transit kernel's sampled
+  // orientations R(tid) = build_crystal_rotation(sample_lat_lon_roll(
+  // transit_mixed_seed, tid)) — a pure function of (transit_seed, tid), so
+  // independent of ray physics and the atomic continuation compaction (unlike
+  // root_d = R^-1·cont_dir, which mixes in whichever continuation ray landed at
+  // this tid). This isolates the transit hi wiring: a non-zero transit hi moves
+  // R(tid) at every tid; hi==0 runs are bit-identical. Metal's unified memory
+  // makes this a plain contents() read (no metallib kernel change needed).
+  if (impl_->root_rot_buf == nil || count == 0u) {
+    out.clear();
+    return 0u;
+  }
+  const size_t n_floats = 9u * count;
+  out.assign(n_floats, 0.0f);
+  std::memcpy(out.data(), [impl_->root_rot_buf contents], n_floats * sizeof(float));
+  return n_floats;
 }
 
 }  // namespace lumice

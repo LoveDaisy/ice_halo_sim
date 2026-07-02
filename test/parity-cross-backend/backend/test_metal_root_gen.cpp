@@ -439,7 +439,7 @@ TEST(MetalRootGen, GenRayBaseHiWireUp) {
     images[i].assign(kImgFloats, 0.0f);
     MetalTraceBackend metal;
     metal.BeginSession(spec);
-    metal.SetInitialRayBaseForTest(kBases[i]);
+    metal.SetInitialRayBaseForTest(/*root_base=*/kBases[i], /*transit_base=*/0u);  // ms_layers=1 → root stream only
     auto h = metal.TraceLayer(RootRaySource::FromHost(host));
     ASSERT_NE(h, nullptr);
     XyzImageData img{ images[i].data(), render.resolution_[0], render.resolution_[1] };
@@ -478,6 +478,93 @@ TEST(MetalRootGen, GenRayBaseHiWireUp) {
                                "no different from same-stream atomic noise. Expected the hi-mix to shift "
                                "the PCG sequence enough that per-pixel L1 diff comfortably exceeds the "
                                "same-stream repeat baseline.";
+  }
+}
+
+// transit stream — RNG-isolated observation via the layer-1 rotation matrices
+// (root_rot), NOT the XYZ image. The transit orientation R(tid) =
+// build_crystal_rotation(sample_lat_lon_roll(transit_mixed_seed, tid)) is a pure
+// function of (transit_seed, tid), so it is deterministic per tid and free of
+// the atomic-continuation-compaction confound that makes the image / root_d
+// non-deterministic across identical 2-layer runs. Injects ONLY the transit
+// base (root stays hi==0) so layer-0 generation + the continuation set are
+// identical across runs; a non-zero transit hi must move R(tid) at every tid.
+// Layer 1 uses a RANDOM axis so sample_lat_lon_roll actually consumes the
+// transit stream (a kNoRandom axis would ignore the seed → no observable). This
+// closes the transit_root_kernel coverage gap the same way the CUDA sibling
+// (CudaRngHiWiring.TransitStreamWireUp) does; Metal has no gate hi stream (the
+// emit gate uses tid directly, scrum-267 §3.6), so gen + transit cover it.
+TEST(MetalRootGen, TransitStreamWireUp) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  EnableDeviceGenForStatisticalParity();
+
+  auto scene = MakeMetalScene(/*max_hits=*/6, /*ms_layers=*/2);
+  // Layer 1 (the continuation/transit layer) gets a random axis so the transit
+  // PCG stream drives its orientation sample.
+  scene.ms_[1].setting_[0].crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  scene.ms_[1].setting_[0].crystal_.axis_.latitude_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  auto render = MakeRectangularRender();
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  constexpr size_t kEpoch = static_cast<size_t>(1) << 32;
+  const size_t kBases[] = { 0u, 0u, kEpoch, 2u * kEpoch };
+  std::vector<std::vector<float>> rots(4);
+  size_t cont_count = 0;
+  for (int i = 0; i < 4; i++) {
+    MetalTraceBackend metal;
+    metal.BeginSession(spec);
+    metal.SetInitialRayBaseForTest(/*root_base=*/0u, /*transit_base=*/kBases[i]);
+    auto h0 = metal.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h0, nullptr);
+    const size_t cont = h0->ContinuationCount();
+    ASSERT_GT(cont, 16u) << "base_idx=" << i << " — too few continuation rays (" << cont << ") to observe transit.";
+    if (i == 0) {
+      cont_count = cont;
+    }
+    ASSERT_EQ(cont, cont_count) << "base_idx=" << i << " — continuation count varies across runs; root not isolated.";
+    RecombineSpec rspec;
+    rspec.shuffle = false;
+    auto roots1 = metal.Recombine(std::move(h0), rspec);
+    auto h1 = metal.TraceLayer(roots1);
+    ASSERT_NE(h1, nullptr);
+    size_t n = metal.ReadbackRootRotForTest(rots[i], cont_count);
+    metal.EndSession();
+    ASSERT_EQ(n, 9u * cont_count) << "base_idx=" << i << " — transit rot readback returned " << n;
+  }
+
+  EXPECT_EQ(rots[0], rots[1]) << "hi==0 transit rotations non-deterministic — cannot distinguish wiring from noise.";
+  auto frac_moved = [](const std::vector<float>& a, const std::vector<float>& b) {
+    const size_t n = a.size() / 9u;
+    size_t moved = 0u;
+    for (size_t r = 0; r < n; r++) {
+      double d2 = 0.0;
+      for (int k = 0; k < 9; k++) {
+        const double e = static_cast<double>(a[9 * r + k]) - static_cast<double>(b[9 * r + k]);
+        d2 += e * e;
+      }
+      if (d2 > 1e-10) {
+        moved++;
+      }
+    }
+    return n > 0u ? static_cast<double>(moved) / static_cast<double>(n) : 0.0;
+  };
+  const std::pair<int, int> kPairs[] = { { 0, 2 }, { 0, 3 }, { 2, 3 } };
+  for (auto pr : kPairs) {
+    const double moved = frac_moved(rots[pr.first], rots[pr.second]);
+    EXPECT_GT(moved, 0.9) << "transit stream: base_pair=(" << pr.first << "," << pr.second << ") only " << moved
+                          << " of layer-1 transit rotations differ — transit hi wiring not reaching the device.";
   }
 }
 

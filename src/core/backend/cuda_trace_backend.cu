@@ -521,7 +521,6 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
   if (tid >= n_roots) {
     return;
   }
-
   float dir[3] = {d_dirs[tid * 3u + 0u], d_dirs[tid * 3u + 1u], d_dirs[tid * 3u + 2u]};
   float org[3] = {d_pos[tid * 3u + 0u], d_pos[tid * 3u + 1u], d_pos[tid * 3u + 2u]};
   float w = d_ws[tid];
@@ -906,7 +905,10 @@ __global__ void transit_multi_ms_kernel(
     const float* __restrict__ d_tri_area,         // tri_cnt
     const uint16_t* __restrict__ d_tri_to_poly,   // tri_cnt (kInvalidId on coplanar miss)
     lm_pcg::GenRootKernelParams gp,
-    uint32_t n_rays) {
+    uint32_t n_rays,
+    // [TEST-ONLY] nullptr in production. task-gpu-rng-ray-index-uint64 white-box
+    // RNG probe: receives this thread's transit PCG draw (see body).
+    float* __restrict__ d_rng_probe) {
   const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_rays || gp.tri_count == 0u) {
     return;
@@ -921,6 +923,21 @@ __global__ void transit_multi_ms_kernel(
       lm_pcg::pcg_advance_hi(gp.gen_ray_base, gp.gen_ray_base_hi, tid);
   const uint32_t transit_mixed_seed =
       lm_pcg::pcg_seed_with_high(gp.gen_seed, transit_hi_epoch);
+  if (d_rng_probe != nullptr) {
+    // [TEST-ONLY] Expose this thread's transit PCG draw. It is a pure function
+    // of (transit_mixed_seed, gp.gen_ray_base + tid) — deterministic per tid and
+    // free of the ray-physics / atomic-compaction confounds that make d_dirs_
+    // and the XYZ image non-deterministic in a raw 2-layer test harness. This
+    // lets a white-box test assert the transit hi wiring reached the device
+    // stream in ISOLATION (the transit orientation itself, not its interaction
+    // with which continuation ray landed at this tid). Uses a private stream so
+    // the real sample_lat_lon_roll draw below is undisturbed.
+    lm_pcg::PcgStream probe;
+    probe.seed       = transit_mixed_seed;
+    probe.global_idx = gp.gen_ray_base + tid;
+    probe.slot       = 0u;
+    d_rng_probe[tid] = lm_pcg::pcg_uniform(probe);
+  }
   lm_pcg::PcgStream stream;
   stream.seed       = transit_mixed_seed;
   stream.global_idx = gp.gen_ray_base + tid;
@@ -1229,6 +1246,9 @@ struct CudaTraceBackend::Impl {
   // kernel can fill up to cont_cap_ root entries (continuation rays from one
   // layer may exceed the next layer's n_roots after fan-out).
   float* d_dirs_ = nullptr;
+  // [TEST-ONLY] transit RNG probe sink (nullptr in production; allocated by
+  // EnableTransitRngProbeForTest). task-gpu-rng-ray-index-uint64.
+  float* d_rng_probe_ = nullptr;
   float* d_pos_ = nullptr;
   float* d_ws_ = nullptr;
   uint32_t* d_from_poly_ = nullptr;  // per-ray entry-face polygon id
@@ -1773,6 +1793,7 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
 
   // Release old per-batch buffers (cudaFree(nullptr) is a no-op per CUDA spec).
   cudaFree(d_dirs_);     d_dirs_ = nullptr;
+  cudaFree(d_rng_probe_); d_rng_probe_ = nullptr;  // [TEST-ONLY] no-op in production (never allocated)
   cudaFree(d_pos_);      d_pos_ = nullptr;
   cudaFree(d_ws_);       d_ws_ = nullptr;
   cudaFree(d_from_poly_); d_from_poly_ = nullptr;
@@ -2614,7 +2635,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
           impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
           impl_->d_rot_c2w_, impl_->d_root_wl_idx_,
           geom_tri_vtx, geom_tri_norm, geom_tri_area, geom_tri_to_poly,
-          gp, cin);
+          gp, cin, impl_->d_rng_probe_);
       ck_reset(cudaPeekAtLastError(), "transit kernel launch");
       impl_->transit_ray_count_ += ci_n;
       ci_start += ci_n;
@@ -3066,14 +3087,41 @@ size_t CudaTraceBackend::GetLastBatchCrystalCount() const {
   return impl_->final_layer_crystals_.size();
 }
 
-void CudaTraceBackend::SetInitialRayBaseForTest(size_t base) {
-  // task-gpu-rng-ray-index-uint64 white-box injection. Setting all three
-  // counters keeps the fix's device-side hi-mixing observable regardless of
-  // which stream (first-layer gen / continuation transit / emit gate) the
-  // test exercises.
-  impl_->gen_ray_count_     = base;
-  impl_->transit_ray_count_ = base;
-  impl_->gate_ray_count_    = base;
+void CudaTraceBackend::SetInitialRayBaseForTest(size_t gen_base, size_t transit_base, size_t gate_base) {
+  // task-gpu-rng-ray-index-uint64 white-box injection. Each of the three device
+  // PCG streams (first-layer gen / continuation transit / emit gate) gets its
+  // OWN base so a test can drive exactly one stream into a non-zero hi epoch
+  // while holding the other two at hi==0 — this is what lets the gate/transit
+  // wiring be asserted in ISOLATION from gen (a combined injection could pass on
+  // gen alone even if gate/transit are mis-wired).
+  impl_->gen_ray_count_     = gen_base;
+  impl_->transit_ray_count_ = transit_base;
+  impl_->gate_ray_count_    = gate_base;
+}
+
+void CudaTraceBackend::EnableTransitRngProbeForTest(size_t count) {
+  // Allocate the transit RNG-probe sink so the NEXT continuation-layer TraceLayer
+  // fills it with per-tid transit PCG draws. Must be called AFTER the first
+  // TraceLayer (which sizes buffers) and BEFORE the continuation TraceLayer.
+  cudaFree(impl_->d_rng_probe_);
+  impl_->d_rng_probe_ = nullptr;
+  if (count == 0u) {
+    return;
+  }
+  CheckCuda(cudaMalloc(&impl_->d_rng_probe_, count * sizeof(float)), "cudaMalloc d_rng_probe (test)");
+  CheckCuda(cudaMemset(impl_->d_rng_probe_, 0, count * sizeof(float)), "cudaMemset d_rng_probe (test)");
+}
+
+size_t CudaTraceBackend::ReadbackTransitRngProbeForTest(std::vector<float>& out, size_t count) {
+  if (impl_->d_rng_probe_ == nullptr || count == 0u) {
+    out.clear();
+    return 0u;
+  }
+  out.assign(count, 0.0f);
+  cudaDeviceSynchronize();
+  CheckCuda(cudaMemcpy(out.data(), impl_->d_rng_probe_, count * sizeof(float), cudaMemcpyDeviceToHost),
+            "ReadbackTransitRngProbeForTest D2H");
+  return count;
 }
 
 size_t CudaTraceBackend::ReadbackGenDirsForTest(std::vector<float>& out, size_t count) {
