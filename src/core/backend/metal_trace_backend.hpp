@@ -132,6 +132,23 @@ class MetalTraceBackend : public TraceBackend {
   // (drop triggers R1 option B = split gate into its own dispatch).
   size_t TraceLayerKernelMaxThreadsForTest() const;
 
+  // [TEST-ONLY] task-gpu-rng-ray-index-uint64 white-box injection: pre-seed
+  // the per-session PCG ray-base counter (`root_ray_count`) BEFORE the first
+  // TraceLayer so a test can drive the device-gen kernel into a non-zero hi
+  // epoch (hi = base >> 32) without running >2^32 real rays. The device now
+  // XORs pcg_hash(hi) into every ray's PCG seed via pcg_seed_with_high, so
+  // an image rendered at base = 1<<32 must differ from one rendered at
+  // base = 0 (same seed, same scene). This is the direct evidence that the
+  // host↔device wiring (SplitPcgRayBase → gp.gen_ray_base_hi → shader
+  // pcg_advance_hi / pcg_seed_with_high) is intact — the in-range parity
+  // battery only exercises the hi==0 branch (bit-identical by construction)
+  // and would happily miss a broken hi-wiring regression.
+  //
+  // Contract: MUST be called AFTER BeginSession and BEFORE the first
+  // TraceLayer, and only in test builds. Injecting during a live layer
+  // sequence corrupts PCG stream indexing.
+  void SetInitialRayBaseForTest(size_t base);
+
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

@@ -75,9 +75,18 @@ LM_CONSTANT int kMaxRejectionAttempts = 1000;
 // and `transit_root_kernel` / `transit_multi_ms_kernel` (Metal + CUDA, device-
 // resident frame transit between MS layers). The sun_* / wl_pool_size fields
 // are populated by BuildGenRootParams but unused by the transit form.
+//
+// task-gpu-rng-ray-index-uint64: `gen_ray_base` carries only the LOW 32 bits
+// of the host-side size_t counter; `gen_ray_base_hi` carries the HIGH 32 bits
+// (host splits via `lumice::SplitPcgRayBase` — see trace_backend.hpp). Together
+// they let the kernel logically address the full 64-bit ray index space without
+// introducing device-side 64-bit integer arithmetic. See `pcg_advance_hi` +
+// `pcg_seed_with_high` below for the mixing rule; `high==0` (session under
+// 2^32 rays) is bit-exact with the pre-fix stream by construction.
 struct GenRootKernelParams {
-  uint32_t gen_seed;      // PCG master seed (== spec.seed [XOR transit/gate nonce])
-  uint32_t gen_ray_base;  // running ray-count before this dispatch (PCG global_idx base)
+  uint32_t gen_seed;         // PCG master seed (== spec.seed [XOR transit/gate nonce])
+  uint32_t gen_ray_base;     // low 32 bits of running ray-count (may wrap; the mod-2^32 wrap is intentional)
+  uint32_t gen_ray_base_hi;  // high 32 bits of running ray-count (0 unless the session accumulated >2^32 rays)
   uint32_t num_rays;
   uint32_t tri_count;
   float sun_lon;           // (sun.azimuth + 180°) in radians
@@ -116,6 +125,38 @@ struct PcgStream {
   uint32_t global_idx;
   uint32_t slot;
 };
+
+// --- 64-bit ray-index helpers (task-gpu-rng-ray-index-uint64) -------------
+// Host provides `base_lo` (low 32 bits) + `base_hi` (high 32 bits) of the
+// running per-session PCG ray-base (see `lumice::SplitPcgRayBase` in
+// trace_backend.hpp). Each thread's true 64-bit global index is
+// `((uint64_t)base_hi << 32) + base_lo + tid`. `pcg_advance_hi` returns this
+// thread's "hi epoch": if `base_lo + tid` overflows a uint32 (wraps at 2^32),
+// the ray crossed into the next hi epoch, so hi = base_hi + 1; otherwise
+// hi = base_hi.
+//
+// `pcg_seed_with_high` mixes that hi into a seed by XOR-ing `pcg_hash(hi)`.
+// Contract: when hi == 0 (every session under 2^32 rays), it is a pure
+// no-op — the resulting seed is bit-identical to the input, so the hot-path
+// PCG stream is bit-exact with the pre-fix behavior for the entire in-range
+// regime. When hi != 0, the mixed seed diverges across hi epochs, preventing
+// two rays with the same (base_lo + tid) mod 2^32 from collapsing onto the
+// same PCG stream after wrap (the scrum-267.3 silent-under-sampling failure
+// mode). The mixing is applied AFTER `stream.seed = gp.gen_seed` — the
+// device-side `stream.global_idx` remains `base_lo + tid` (allowed to wrap;
+// its post-wrap value coincides with the correct lo half of the epoch).
+LM_FN uint32_t pcg_advance_hi(uint32_t base_lo, uint32_t base_hi, uint32_t tid) {
+  uint32_t lo = base_lo + tid;
+  uint32_t carry = (lo < base_lo) ? 1u : 0u;
+  return base_hi + carry;
+}
+
+LM_FN uint32_t pcg_seed_with_high(uint32_t seed, uint32_t hi) {
+  if (hi == 0u) {
+    return seed;
+  }
+  return seed ^ pcg_hash(hi);
+}
 
 LM_FN float pcg_uniform(LM_THREAD PcgStream& s) {
   uint32_t h = pcg_hash(s.seed ^ pcg_hash(s.global_idx * 1000003u + s.slot));

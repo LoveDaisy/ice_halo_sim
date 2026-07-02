@@ -487,6 +487,13 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                        uint32_t cont_cap,
                                        uint32_t gate_seed,
                                        uint32_t gate_ray_base,
+                                       // task-gpu-rng-ray-index-uint64: high 32 bits of the
+                                       // gate ray-base (per-bounce gate; ms_mode==1). Together
+                                       // with gate_ray_base (lo), spans the full 64-bit host
+                                       // gate_ray_count_ so >2^32 sessions no longer collapse
+                                       // onto a wrapped PCG stream. hi==0 → mixing is identity
+                                       // (in-range sessions bit-exact).
+                                       uint32_t gate_ray_base_hi,
                                        // 296.5 filter gate inputs. ms_mode==0 dispatches pass
                                        // nullptr/0 — DeviceFilterCheck branches are never executed.
                                        const DeviceFilterDesc* __restrict__ d_filter_desc,
@@ -505,7 +512,11 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                        lm_proj::ProjParams proj,
                                        float last_ms_prob,
                                        uint32_t gate_seed_final,
-                                       uint32_t gate_ray_base_final) {
+                                       uint32_t gate_ray_base_final,
+                                       // task-gpu-rng-ray-index-uint64: high 32 bits of the
+                                       // final-layer gate ray-base (ms_mode==0 emit gate).
+                                       // Same discipline as gate_ray_base_hi above.
+                                       uint32_t gate_ray_base_final_hi) {
   const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_roots) {
     return;
@@ -529,8 +540,20 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
   // rng.GetUniform()). The stream is constructed even in ms_mode==0 (cost is
   // 3 register writes, ~zero) so the branches below stay symmetric and the
   // compiler can hoist the dead variable away on ms_mode==0.
+  // task-gpu-rng-ray-index-uint64: mix hi epoch into every gate PCG stream so
+  // (gate_seed, gate_ray_base + tid) is unique in the full 64-bit index space.
+  // hi==0 (in-range sessions) is identity → bit-exact with the pre-fix stream.
+  // gate_ray_base and gate_ray_base_final are distinct kernel parameters (host
+  // passes the same counter value today, but each has its own lo/hi pair so the
+  // two mixing sites stay self-contained if they ever decouple).
+  const uint32_t gate_hi_epoch = lm_pcg::pcg_advance_hi(gate_ray_base, gate_ray_base_hi, tid);
+  const uint32_t gate_mixed_seed = lm_pcg::pcg_seed_with_high(gate_seed, gate_hi_epoch);
+  const uint32_t gate_final_hi_epoch =
+      lm_pcg::pcg_advance_hi(gate_ray_base_final, gate_ray_base_final_hi, tid);
+  const uint32_t gate_final_mixed_seed =
+      lm_pcg::pcg_seed_with_high(gate_seed_final, gate_final_hi_epoch);
   lm_pcg::PcgStream gate_stream;
-  gate_stream.seed       = gate_seed;
+  gate_stream.seed       = gate_mixed_seed;
   gate_stream.global_idx = gate_ray_base + tid;
   gate_stream.slot       = 0u;
 
@@ -658,7 +681,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
             gate_slot_e, exit_world, crystal_config_id);
         if (filter_pass_e) {
           lm_pcg::PcgStream gate_f;
-          gate_f.seed       = gate_seed_final;
+          gate_f.seed       = gate_final_mixed_seed;
           gate_f.global_idx = gate_ray_base_final + tid;
           gate_f.slot       = 1u;  // entry external reflect emit
           // Mirrors S1 Bug 3 fix: rng < last_ms_prob ⇒ "would continue" ⇒
@@ -826,7 +849,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               gate_slot_r, exit_world, crystal_config_id);
           if (filter_pass_r) {
             lm_pcg::PcgStream gate_f;
-            gate_f.seed       = gate_seed_final;
+            gate_f.seed       = gate_final_mixed_seed;
             gate_f.global_idx = gate_ray_base_final + tid;
             gate_f.slot       = 0u;  // per-bounce refract emit
             const bool prob_drop_r = (lm_pcg::pcg_uniform(gate_f) < last_ms_prob);
@@ -891,9 +914,15 @@ __global__ void transit_multi_ms_kernel(
 
   // 1. Orientation sample (shares sample_lat_lon_roll with trace via the
   //    shared pcg_shared.h). gp.gen_ray_base + tid yields a disjoint
-  //    global_idx per (layer, batch, tid).
+  //    global_idx per (layer, batch, tid). task-gpu-rng-ray-index-uint64:
+  //    mix gp.gen_ray_base_hi into the seed so the full 64-bit host ray
+  //    index is respected (hi==0 identity → in-range bit-exact).
+  const uint32_t transit_hi_epoch =
+      lm_pcg::pcg_advance_hi(gp.gen_ray_base, gp.gen_ray_base_hi, tid);
+  const uint32_t transit_mixed_seed =
+      lm_pcg::pcg_seed_with_high(gp.gen_seed, transit_hi_epoch);
   lm_pcg::PcgStream stream;
-  stream.seed       = gp.gen_seed;
+  stream.seed       = transit_mixed_seed;
   stream.global_idx = gp.gen_ray_base + tid;
   stream.slot       = 0u;
   float lon = 0.0f;
@@ -999,12 +1028,19 @@ __global__ void gen_root_kernel(float* __restrict__ d_root_d,           // 3 × 
     return;
   }
   const uint32_t global_idx = gp.gen_ray_base + tid;
+  // task-gpu-rng-ray-index-uint64: mix gp.gen_ray_base_hi into every PCG seed
+  // so sessions beyond 2^32 rays no longer collapse on the uint32 wrap; hi==0
+  // (in-range sessions) is identity → bit-exact with the pre-fix stream.
+  const uint32_t gen_hi_epoch =
+      lm_pcg::pcg_advance_hi(gp.gen_ray_base, gp.gen_ray_base_hi, tid);
+  const uint32_t gen_mixed_seed =
+      lm_pcg::pcg_seed_with_high(gp.gen_seed, gen_hi_epoch);
 
   // Per-ray wavelength (slot 20, isolated from the orientation/triangle draws
   // below — mirrors MSL gen_root_kernel:881-895). The wl_idx is the photon's
   // lifetime tag: it selects spd_weight here and n_idx in the trace kernel.
   lm_pcg::PcgStream wl_stream;
-  wl_stream.seed       = gp.gen_seed;
+  wl_stream.seed       = gen_mixed_seed;
   wl_stream.global_idx = global_idx;
   wl_stream.slot       = 20u;
   uint32_t wl_idx = static_cast<uint32_t>(lm_pcg::pcg_uniform(wl_stream) * static_cast<float>(gp.wl_pool_size));
@@ -1015,7 +1051,7 @@ __global__ void gen_root_kernel(float* __restrict__ d_root_d,           // 3 × 
 
   // 1. Crystal orientation → rotation matrix.
   lm_pcg::PcgStream stream;
-  stream.seed       = gp.gen_seed;
+  stream.seed       = gen_mixed_seed;
   stream.global_idx = global_idx;
   stream.slot       = 0u;
   float lon = 0.0f;
@@ -2496,7 +2532,15 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
           BuildGenGpParams(ms_setting.crystal_.axis_, geom_tri_cnt, cin,
                            impl_->scene_->light_source_.param_, impl_->wl_pool_size_);
       gp.gen_seed     = impl_->gen_seed_;
-      gp.gen_ray_base = NarrowPcgRayBase(impl_->gen_ray_count_, ci_n, "cuda-gen");
+      // task-gpu-rng-ray-index-uint64: SplitPcgRayBase forwards the full 64-bit
+      // gen_ray_count_ to the device as lo/hi halves; the kernel mixes hi into
+      // each ray's PCG seed so >2^32 sessions no longer collapse on wrap
+      // (replaces the pre-fix NarrowPcgRayBase 4.29e9 cap).
+      {
+        auto split = SplitPcgRayBase(impl_->gen_ray_count_);
+        gp.gen_ray_base    = split.lo;
+        gp.gen_ray_base_hi = split.hi;
+      }
       gen_root_kernel<<<grid, 256, 0, impl_->stream_>>>(impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
                                      impl_->d_rot_c2w_, impl_->d_root_wl_idx_, geom_tri_vtx,
                                      geom_tri_norm, geom_tri_area, geom_tri_to_poly,
@@ -2557,7 +2601,13 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
       lm_pcg::GenRootKernelParams gp =
           BuildTransitGpParams(ms_setting.crystal_.axis_, geom_tri_cnt, cin);
       gp.gen_seed     = impl_->transit_seed_;
-      gp.gen_ray_base = NarrowPcgRayBase(impl_->transit_ray_count_, ci_n, "cuda-transit");
+      // task-gpu-rng-ray-index-uint64: full 64-bit transit_ray_count_ →
+      // lo/hi (see gen path above for rationale).
+      {
+        auto split = SplitPcgRayBase(impl_->transit_ray_count_);
+        gp.gen_ray_base    = split.lo;
+        gp.gen_ray_base_hi = split.hi;
+      }
       transit_multi_ms_kernel<<<grid, 256, 0, impl_->stream_>>>(
           impl_->d_cont_d_[in_slot] + ci_start * 3u, impl_->d_cont_w_[in_slot] + ci_start,
           impl_->d_cont_wl_idx_[in_slot] + ci_start,
@@ -2580,6 +2630,11 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     // Stream order is strict (default stream) so end_h2d → kernel → end_kernel,
     // and kernel_ms = elapsed(end_h2d, end_kernel) is positive and meaningful.
     cudaEventRecord(impl_->ev_end_h2d_, impl_->stream_);
+    // task-gpu-rng-ray-index-uint64: split the 64-bit gate_ray_count_ into
+    // lo/hi once — both trace_single_ms_kernel gate params (per-bounce +
+    // final) consume the same host counter value today, so a single split
+    // feeds both param slots.
+    const auto gate_split = SplitPcgRayBase(impl_->gate_ray_count_);
     // Filter / gate buffers are passed unconditionally (S2): the ms_mode==0
     // device-fused emit gate also calls DeviceFilterCheck. Previously these
     // were short-circuited to nullptr on ms_mode==0 dispatches — keeping that
@@ -2598,7 +2653,8 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
         ms_mode == 1u ? impl_->d_cont_count_[out_slot]  : nullptr,
         ms_mode == 1u ? static_cast<uint32_t>(impl_->cont_cap_[out_slot]) : 0u,
         impl_->gate_seed_,
-        NarrowPcgRayBase(impl_->gate_ray_count_, ci_n, "cuda-gate"),
+        gate_split.lo,
+        gate_split.hi,
         impl_->d_filter_desc_,
         impl_->d_getfn_offsets_,
         impl_->d_getfn_bytes_,
@@ -2611,7 +2667,8 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
         impl_->proj_params_,
         impl_->final_ms_prob_,
         impl_->gate_seed_,
-        NarrowPcgRayBase(impl_->gate_ray_count_, ci_n, "cuda-gate-final"));
+        gate_split.lo,
+        gate_split.hi);
     ck_reset(cudaPeekAtLastError(), "kernel launch");
     // S2: ev_end_kernel_ recorded inside the loop captures real kernel time.
     // The original outside-loop placement (right next to ev_end_h2d_) collapsed
@@ -3007,6 +3064,16 @@ size_t CudaTraceBackend::GetLastBatchCrystalCount() const {
   // during BeginSession (cuda_trace_backend.cu:2078-2093), so it can be read
   // safely anytime the session is open.
   return impl_->final_layer_crystals_.size();
+}
+
+void CudaTraceBackend::SetInitialRayBaseForTest(size_t base) {
+  // task-gpu-rng-ray-index-uint64 white-box injection. Setting all three
+  // counters keeps the fix's device-side hi-mixing observable regardless of
+  // which stream (first-layer gen / continuation transit / emit gate) the
+  // test exercises.
+  impl_->gen_ray_count_     = base;
+  impl_->transit_ray_count_ = base;
+  impl_->gate_ray_count_    = base;
 }
 
 }  // namespace lumice
