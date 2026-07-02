@@ -290,12 +290,18 @@ LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResul
 // Get cached stats without triggering DoSnapshot/PostSnapshot.
 // Returns the stats from the most recent snapshot (updated by LUMICE_GetRawXyzResults).
 // Returns all-zero struct if no snapshot has been taken yet.
+// NOTE vs LUMICE_GetSimRayCount: this reads a CACHE that only refreshes when
+// something else takes a snapshot (e.g. a GUI poller's LUMICE_GetRawXyzResults);
+// with no such driver (e.g. a headless benchmark) it can stay stale/zero. Use
+// LUMICE_GetSimRayCount when you need a live sim_ray_num with no external trigger.
 LUMICE_ErrorCode LUMICE_GetCachedStats(LUMICE_Server* server, LUMICE_StatsResult* out);
 
 // Cheap O(1) live accumulated sim ray count — no snapshot, no render, no XYZ copy.
 // For progress polling (e.g. the --benchmark drain loop) that needs sim_ray_num
 // every iteration but not a rendered image. Unlike LUMICE_GetStatsResults, this
-// does NOT trigger DoSnapshot/PostSnapshot. Writes 0 if no StatsConsumer. (task-317)
+// does NOT trigger DoSnapshot/PostSnapshot; and unlike LUMICE_GetCachedStats it
+// reads the running counter directly, so it needs no external snapshot driver to
+// stay fresh. Writes 0 if no StatsConsumer (or none produced yet). (task-317)
 LUMICE_ErrorCode LUMICE_GetSimRayCount(LUMICE_Server* server, LUMICE_RayCount* out);
 
 // =============== State & Control ===============

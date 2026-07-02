@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import subprocess
 import tempfile
 from pathlib import Path
@@ -130,8 +131,10 @@ def test_benchmark_infinite_terminates_cuda() -> None:
     LUMICE_HAS_CUDA so it only runs where a CUDA device is actually present
     (matches the parity-cross-backend CUDA gate) rather than silently falling
     back to legacy CPU and voiding coverage."""
-    if os.environ.get("LUMICE_HAS_CUDA") != "1":
-        pytest.skip("CUDA device not available (set LUMICE_HAS_CUDA=1 on a CUDA host)")
+    # Double gate (matches test/parity-cross-backend/backend/ CUDA convention):
+    # CUDA only exists on Linux/Windows AND requires an explicit device opt-in.
+    if platform.system() not in ("Linux", "Windows") or os.environ.get("LUMICE_HAS_CUDA") != "1":
+        pytest.skip("CUDA device not available (set LUMICE_HAS_CUDA=1 on a Linux/Windows CUDA host)")
     try:
         result = _run_infinite_benchmark(backend_env="cuda")
     except subprocess.TimeoutExpired:
@@ -145,9 +148,13 @@ def test_benchmark_infinite_terminates_cuda() -> None:
     assert "drain_aligned" in result.stdout, (
         f"Expected a drain_aligned [BENCHMARK] result (CUDA).\nstdout:\n{result.stdout}"
     )
-    # Detective guard: a legacy fallback (the pre-fix failure mode) would void
-    # the CUDA coverage this test provides.
-    assert "falling back to legacy CPU" not in result.stderr, (
-        f"CUDA benchmark fell back to legacy CPU — the 32-bit PCG cap / hang "
-        f"regression may have resurfaced.\nstderr:\n{result.stderr}"
+    # Detective guard: match the SPECIFIC pre-fix failure cause (the 32-bit
+    # device PCG ray-index cap tripping -> fallback), not the generic "falling
+    # back to legacy CPU" WARN — simulator.cpp emits that substring for several
+    # unrelated reasons (Metal unavailable, incompatible renderer, etc.), which
+    # would misattribute an unrelated warning to this regression.
+    assert "NarrowPcgRayBase" not in result.stderr, (
+        f"CUDA hit the 32-bit device PCG ray-index cap (NarrowPcgRayBase) -> "
+        f"legacy fallback — the render-per-poll / cap hang regression may have "
+        f"resurfaced (task-317 root#2).\nstderr:\n{result.stderr}"
     )

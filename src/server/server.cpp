@@ -69,7 +69,7 @@ class ServerImpl {
   std::vector<RawXyzResult> GetRawXyzResults();
   std::optional<StatsResult> GetStatsResult();
   std::optional<StatsResult> GetCachedStatsResult();
-  size_t LiveSimRayCount();
+  size_t GetLiveSimRayCount();
 
   void Stop();
   void Start();
@@ -596,8 +596,13 @@ std::optional<StatsResult> ServerImpl::GetCachedStatsResult() {
 // sRGB every poll — the render-per-poll root cause), this only reads the running
 // StatsConsumer counter under consumer_mutex_. No snapshot, no render, no XYZ
 // copy — so the poll thread does not perturb the throughput measurement nor
-// starve drain-window closure. Returns 0 if no StatsConsumer is present.
-size_t ServerImpl::LiveSimRayCount() {
+// starve drain-window closure.
+// Sentinel note (inherited ambiguity, not new): 0 means BOTH "no StatsConsumer
+// registered" AND "StatsConsumer present but no rays yet" — the same conflation
+// the old have_stats?…:0 GetStatsResults path had. Fine for the benchmark's
+// monotonic-progress read; a caller needing to distinguish a lifecycle error
+// from a cold start should switch to std::optional<size_t>.
+size_t ServerImpl::GetLiveSimRayCount() {
   std::lock_guard<TicketMutex> lock(consumer_mutex_);
   for (const auto& c : consumers_) {
     if (const auto* sc = dynamic_cast<const StatsConsumer*>(c.get())) {
@@ -1150,7 +1155,7 @@ size_t Server::GetLiveSimRayCount() {
   if (!impl_) {
     return 0;
   }
-  return impl_->LiveSimRayCount();
+  return impl_->GetLiveSimRayCount();
 }
 
 void Server::Stop() {
