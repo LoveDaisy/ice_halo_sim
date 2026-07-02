@@ -3138,6 +3138,12 @@ void CudaTraceBackend::EnableRngProbeForTest(size_t count) {
   // fills it with per-tid PCG draws (trace_single_ms_kernel probes the ms_mode==1
   // gate_stream; transit_multi_ms_kernel probes the transit stream). Which kernel
   // fills it depends on WHEN this is enabled relative to the layer sequence.
+  // CONSTRAINT: single crystal-instance (ci) scenes ONLY. The kernels index the
+  // probe by raw `tid` (0-based per ci dispatch), so a multi-ci layer relaunches
+  // the kernel per ci and each launch overwrites probe[0..n) — the readback would
+  // silently keep only the last ci's draws. All four hi-wiring tests use single-ci
+  // scenes; add a ci_start offset here + in the kernel writes before reusing this
+  // for multi-ci coverage.
   cudaFree(impl_->d_rng_probe_);
   impl_->d_rng_probe_ = nullptr;
   impl_->rng_probe_cap_ = 0;
