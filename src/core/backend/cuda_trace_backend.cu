@@ -1249,6 +1249,7 @@ struct CudaTraceBackend::Impl {
   // [TEST-ONLY] transit RNG probe sink (nullptr in production; allocated by
   // EnableTransitRngProbeForTest). task-gpu-rng-ray-index-uint64.
   float* d_rng_probe_ = nullptr;
+  size_t rng_probe_cap_ = 0;  // element count d_rng_probe_ was allocated for
   float* d_pos_ = nullptr;
   float* d_ws_ = nullptr;
   uint32_t* d_from_poly_ = nullptr;  // per-ray entry-face polygon id
@@ -3105,14 +3106,21 @@ void CudaTraceBackend::EnableTransitRngProbeForTest(size_t count) {
   // TraceLayer (which sizes buffers) and BEFORE the continuation TraceLayer.
   cudaFree(impl_->d_rng_probe_);
   impl_->d_rng_probe_ = nullptr;
+  impl_->rng_probe_cap_ = 0;
   if (count == 0u) {
     return;
   }
   CheckCuda(cudaMalloc(&impl_->d_rng_probe_, count * sizeof(float)), "cudaMalloc d_rng_probe (test)");
   CheckCuda(cudaMemset(impl_->d_rng_probe_, 0, count * sizeof(float)), "cudaMemset d_rng_probe (test)");
+  impl_->rng_probe_cap_ = count;
 }
 
 size_t CudaTraceBackend::ReadbackTransitRngProbeForTest(std::vector<float>& out, size_t count) {
+  // Bound the copy to the probe allocation so a count larger than the enabled
+  // size cannot read past the device buffer.
+  if (count > impl_->rng_probe_cap_) {
+    count = impl_->rng_probe_cap_;
+  }
   if (impl_->d_rng_probe_ == nullptr || count == 0u) {
     out.clear();
     return 0u;
@@ -3125,6 +3133,12 @@ size_t CudaTraceBackend::ReadbackTransitRngProbeForTest(std::vector<float>& out,
 }
 
 size_t CudaTraceBackend::ReadbackGenDirsForTest(std::vector<float>& out, size_t count) {
+  // Bound the copy to the d_dirs_ allocation (root_cap_) so a caller passing a
+  // count larger than the last dispatch cannot read past the device buffer. The
+  // caller's own `ASSERT_EQ(n, 3*count)` then surfaces the truncation loudly.
+  if (count > impl_->root_cap_) {
+    count = impl_->root_cap_;
+  }
   if (impl_->d_dirs_ == nullptr || count == 0u) {
     out.clear();
     return 0u;

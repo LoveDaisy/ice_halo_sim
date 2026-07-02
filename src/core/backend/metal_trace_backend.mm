@@ -2549,7 +2549,13 @@ size_t MetalTraceBackend::ReadbackRootRotForTest(std::vector<float>& out, size_t
     out.clear();
     return 0u;
   }
-  const size_t n_floats = 9u * count;
+  // Bound the copy to the buffer so a count larger than the allocation cannot
+  // read past root_rot_buf; the caller's ASSERT_EQ then surfaces the truncation.
+  const size_t cap_floats = static_cast<size_t>([impl_->root_rot_buf length]) / sizeof(float);
+  size_t n_floats = 9u * count;
+  if (n_floats > cap_floats) {
+    n_floats = cap_floats;
+  }
   out.assign(n_floats, 0.0f);
   std::memcpy(out.data(), [impl_->root_rot_buf contents], n_floats * sizeof(float));
   return n_floats;
