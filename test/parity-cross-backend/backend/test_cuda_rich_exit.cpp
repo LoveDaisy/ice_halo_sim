@@ -305,6 +305,14 @@ TEST(CudaRngHiWiring, GenRayBaseHiWireUp) {
                     "device-side wiring test requires dev49.";
   }
   auto scene = MakePrismScene(/*max_hits=*/8);
+  // Random crystal orientation makes the hi-mixing observable at the gen kernel:
+  // the gen PCG stream drives the per-ray orientation sample, so a different
+  // mixed_seed (from a non-zero hi) yields different rotations → different
+  // generated ray directions. Under a fixed-axis (kNoRandom) scene every ray
+  // shares one orientation and the stream would not move d_dirs_ at all.
+  scene.ms_[0].setting_[0].crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  scene.ms_[0].setting_[0].crystal_.axis_.latitude_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+
   auto render = MakeRenderConfig();
 
   SessionSpec spec;
@@ -314,16 +322,19 @@ TEST(CudaRngHiWiring, GenRayBaseHiWireUp) {
   spec.seed = 42;
 
   constexpr size_t kEpoch = static_cast<size_t>(1) << 32;
-  // Slots 0/1 = hi==0 baseline (atomic-noise floor); 2 = hi==1; 3 = hi==2.
+  // Slots 0/1 = hi==0 baseline (must be bit-identical); 2 = hi==1; 3 = hi==2.
   const size_t kBases[] = { 0u, 0u, kEpoch, 2u * kEpoch };
 
-  const int kW = render.resolution_[0];
-  const int kH = render.resolution_[1];
-  const size_t kImgFloats = static_cast<size_t>(kW) * static_cast<size_t>(kH) * 3u;
-  std::vector<std::vector<float>> images(4);
-
+  // Observation channel = the device-gen'd ray directions (d_dirs_), read back
+  // straight out of gen_root_kernel. This is the most direct possible probe of
+  // the hi wiring: gen_ray_base_hi mixes into the PCG seed that drives the
+  // orientation sample which writes d_dirs_. It deliberately bypasses trace →
+  // emit → device-fused accumulation, because in this raw-TraceLayer harness the
+  // CUDA emit path is not driven (landed_weight stays 0; DrainExits and
+  // ReadbackXyzAccum are both blind — only the full simulator drives emission,
+  // which is why CUDA parity is unaffected).
+  std::vector<std::vector<float>> dirs(4);
   for (int i = 0; i < 4; i++) {
-    images[i].assign(kImgFloats, 0.0f);
     CudaTraceBackend backend;
     backend.BeginSession(spec);
     backend.SetInitialRayBaseForTest(kBases[i]);
@@ -334,40 +345,43 @@ TEST(CudaRngHiWiring, GenRayBaseHiWireUp) {
     host.refractive_index = 0.0f;
     backend.TraceLayer(RootRaySource::FromHost(host));
 
-    XyzImageData img{ images[i].data(), kW, kH };
-    float landed_weight = 0.0f;
-    backend.ReadbackXyzAccum(img, landed_weight);
+    size_t n = backend.ReadbackGenDirsForTest(dirs[i], kRayCount);
     backend.EndSession();
-
-    double total = 0.0;
-    for (float v : images[i]) {
-      total += static_cast<double>(v);
-    }
-    EXPECT_GT(total, 0.0) << "base_idx=" << i
-                          << " — empty image; CUDA test setup is broken (device-fused accum "
-                             "path may not be routing exits into d_xyz_buf).";
+    ASSERT_EQ(n, 3u * kRayCount) << "base_idx=" << i << " — gen-dir readback returned " << n << " floats (expected "
+                                 << 3u * kRayCount << "); d_dirs_ unavailable.";
   }
 
-  auto l1_rel_diff = [](const std::vector<float>& a, const std::vector<float>& b) {
-    double num = 0.0;
-    double denom = 0.0;
-    for (size_t i = 0; i < a.size(); i++) {
-      num += std::abs(static_cast<double>(a[i]) - static_cast<double>(b[i]));
-      denom += 0.5 * (std::abs(static_cast<double>(a[i])) + std::abs(static_cast<double>(b[i])));
+  // Determinism floor: two same-(seed,base) runs must produce bit-identical
+  // generated directions.
+  EXPECT_EQ(dirs[0], dirs[1]) << "hi==0 gen directions are non-deterministic across runs — "
+                                 "test cannot distinguish wiring from noise.";
+
+  // A working hi wire makes hi≠0 diverge from hi==0; a broken wire (hi never
+  // reaching the seed) collapses them onto an identical direction set. Compare
+  // by counting rays whose direction vector differs by more than a tight eps —
+  // a genuine orientation change moves essentially every ray.
+  auto frac_moved = [](const std::vector<float>& a, const std::vector<float>& b) {
+    const size_t n = a.size() / 3u;
+    size_t moved = 0u;
+    for (size_t r = 0; r < n; r++) {
+      const float dx = a[3 * r + 0] - b[3 * r + 0];
+      const float dy = a[3 * r + 1] - b[3 * r + 1];
+      const float dz = a[3 * r + 2] - b[3 * r + 2];
+      if (dx * dx + dy * dy + dz * dz > 1e-10f) {
+        moved++;
+      }
     }
-    return denom > 0.0 ? num / denom : 0.0;
+    return n > 0u ? static_cast<double>(moved) / static_cast<double>(n) : 0.0;
   };
 
-  const double baseline = l1_rel_diff(images[0], images[1]);
-  const double threshold = std::max(baseline * 5.0, 1e-3);
-
+  // Three-way divergence also catches "hi wired but hashed wrong" (hi=1/2 both
+  // differ from hi=0 yet equal each other).
   const std::pair<int, int> kPairs[] = { { 0, 2 }, { 0, 3 }, { 2, 3 } };
   for (auto pr : kPairs) {
-    double d = l1_rel_diff(images[pr.first], images[pr.second]);
-    EXPECT_GT(d, threshold) << "base_pair=(" << pr.first << "," << pr.second << ") per-pixel L1 rel diff=" << d
-                            << " baseline (hi==0 vs hi==0)=" << baseline << " threshold=" << threshold
-                            << " — CUDA device-side hi wire-up appears broken: hi!=0 stream produced pixels "
-                               "no different from same-stream atomic noise.";
+    const double moved = frac_moved(dirs[pr.first], dirs[pr.second]);
+    EXPECT_GT(moved, 0.9) << "base_pair=(" << pr.first << "," << pr.second << ") only " << moved
+                          << " of gen directions differ — CUDA gen_ray_base_hi is not reaching the "
+                             "device orientation sample (hi wiring broken).";
   }
 }
 

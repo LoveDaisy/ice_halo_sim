@@ -385,10 +385,13 @@ TEST(MetalRootGen, DeviceGenDeterminismCrossInstanceMultiSession) {
 // sample the same underlying distribution so their integrals coincide to
 // O(1/sqrt(N)); measured ~1e-4 rel drift across hi=0/1/2 (well below the 1e-3
 // threshold the same-stream determinism test uses). Per-pixel L1 responds to
-// stream difference but is SCENE-DEPENDENT: this default scene has kNoRandom
-// axis dist, so most rays hit similar exit angles → stream diff moves rays
-// only fractionally within the pixel grid → per-pixel L1 is a few percent
-// (not 50%+ as it would be under axis-random scenes).
+// stream difference but is SCENE-DEPENDENT: under a kNoRandom axis dist most
+// rays hit similar exit angles → stream diff moves rays only fractionally
+// within the pixel grid → per-pixel L1 is only a few percent (and on some
+// scene/lens combos washes out to exactly 0, as the CUDA sibling test hit).
+// This test therefore uses a RANDOM crystal axis so the gen PCG stream drives
+// the orientation sample → different mixed_seed → different exit *directions* →
+// ~50%+ per-pixel divergence, robustly observable and not scene-fragile.
 //
 // Absolute thresholds are therefore unreliable — we compare against a
 // same-scene baseline: run hi=0 TWICE, take the L1 of that repetition as the
@@ -408,6 +411,11 @@ TEST(MetalRootGen, GenRayBaseHiWireUp) {
 
   auto scene = MakeMetalScene(/*max_hits=*/8, /*ms_layers=*/1);
   auto render = MakeRectangularRender();
+  // Random crystal orientation so the gen PCG stream drives orientation →
+  // different mixed_seed → different exit directions → robust ~50% per-pixel
+  // divergence (see rationale comment above; mirrors the CUDA sibling test).
+  scene.ms_[0].setting_[0].crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  scene.ms_[0].setting_[0].crystal_.axis_.latitude_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
 
   SessionSpec spec;
   spec.scene = &scene;

@@ -129,6 +129,20 @@ class CudaTraceBackend : public TraceBackend {
   // TraceLayer, and only in test builds.
   void SetInitialRayBaseForTest(size_t base);
 
+  // [TEST-ONLY] task-gpu-rng-ray-index-uint64 white-box observation: copy the
+  // first `count` device-gen'd ray directions (`d_dirs_`, crystal-local, 3
+  // floats/ray) back to host. This is the DIRECT output of `gen_root_kernel` —
+  // the exact kernel where `gen_ray_base_hi` mixes into the PCG seed that drives
+  // the per-ray orientation sample — so it observes the hi wiring without going
+  // through trace → emit → device-fused accumulation (which the raw-TraceLayer
+  // harness does not drive: exits are neither written to the exit buffer nor
+  // accumulated into d_xyz_buf, so DrainExits and ReadbackXyzAccum are both
+  // blind here; the full simulator drives emission, hence CUDA parity is
+  // unaffected). MUST be called AFTER a TraceLayer whose gen dispatch produced
+  // >= `count` rays and BEFORE EndSession (which frees d_dirs_). Returns the
+  // number of floats written (3 * count), or 0 if unavailable.
+  size_t ReadbackGenDirsForTest(std::vector<float>& out, size_t count);
+
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
