@@ -94,7 +94,21 @@ CONFIGS = {
 # noise dominates). Bump to 2e7 so the active window is ~1s+ on Metal while
 # legacy (slower) still finishes well within RUN_TIMEOUT_SEC. The committed
 # config files are NOT mutated; each run writes a temp config with this ray_num.
+# Used ONLY for the legacy CPU pass; GPU passes use RAY_NUM_INFINITE below.
 RAY_NUM_OVERRIDE = 20_000_000
+
+# GPU pass ray_num (task-gpu-bench-drain-aligned-rate). GPU throughput on short
+# ray_num is systematically under-reported because sim_ray_num is drain-quantized
+# (each drain = 64 * dispatch_size rays; CUDA default dispatch 262144 → 16.8M
+# rays/drain; a 20M config only observes ~1.19 drains → most tracing lumps into
+# "setup"). Fix: set ray_num="infinite" for GPU passes so main.cpp's
+# --benchmark takes the drain-count-driven measurement path (window from drain
+# #1 to drain #(N+1), StopServer, report rate_basis=drain_aligned). Legacy CPU
+# stays on RAY_NUM_OVERRIDE (finite) — the legacy denominator must not change
+# (baseline stability policy; see feedback_perf_baseline_is_legacy_cpu). The
+# infinite variant is built by deep-copying the finite variant and overwriting
+# only the ray_num field, so future field additions cannot drift between them.
+RAY_NUM_INFINITE = "infinite"
 
 # --- Resolution sweep (scrum-312.1) ------------------------------------------
 # GPU throughput is NOT resolution-invariant: the device-fused XYZ accumulation
@@ -219,11 +233,16 @@ def run(config_path: Path, backend_env: str | None, dispatch_num: int | None) ->
             pass  # malformed [BENCHMARK] line → INCOMPLETE note below
     by_mode = {b["mode"]: b["rays_per_sec"] for b in benches}
     # Wall-clock rate = rays / wall_sec. Robust cross-check for the steady
-    # rays_per_sec, which is FOOLED by the scrum-312 third-clock drain: with
-    # coarse drains, sim_ray_num stays 0 until the first drain, so the binary's
-    # steady window counts most tracing as "setup" and under-reports. wall_rate
-    # includes the (small) setup but is immune to drain granularity — trust it
-    # when it diverges from rays_per_sec. See doc/performance-testing.md.
+    # rays_per_sec on finite (legacy CPU) passes: with coarse drains, sim_ray_num
+    # stays 0 until the first drain, so the binary's steady window would count
+    # most tracing as "setup" and under-report. wall_rate is immune to drain
+    # granularity. GPU passes now avoid this failure mode entirely by running
+    # under scene.ray_num="infinite" → main.cpp emits rate_basis="drain_aligned"
+    # measured across N whole drains (task-gpu-bench-drain-aligned-rate). Under
+    # drain_aligned, rays_per_sec is the authoritative number and wall_rate is
+    # NOT comparable (wall_sec includes StopServer teardown + IDLE wait, plus
+    # rays counts sim_ray_num past the window endpoint). See
+    # doc/performance-testing.md.
     by_mode_wall = {}
     for b in benches:
         w = b.get("wall_sec")
@@ -354,29 +373,54 @@ def _preflight() -> list[str]:
 
 def _override_config(configs: dict, tmp_dir: str,
                      resolution: tuple[int, int] | None = None) -> dict:
-    """Write temp copies of each config with scene.ray_num = RAY_NUM_OVERRIDE and,
-    when `resolution` is given, every render[].resolution set to [w, h].
+    """Write temp copies of each config, one FINITE variant (ray_num =
+    RAY_NUM_OVERRIDE, for the legacy CPU pass) and one INFINITE variant
+    (ray_num = "infinite", for GPU passes — triggers main.cpp drain-count-driven
+    measurement). The infinite variant is a deep-copy of the finite one with
+    only the ray_num field overwritten, so future field additions can't drift
+    between the two variants. When `resolution` is given, every
+    render[].resolution is set to [w, h] in BOTH variants.
 
-    Committed config files are never mutated; returns {label: temp_path}.
+    Committed config files are never mutated. Returns
+    {label: {"finite": temp_path, "infinite": temp_path}}.
     """
     out = {}
     for label, src in configs.items():
-        cfg = json.loads(Path(src).read_text())
-        if "scene" not in cfg or "ray_num" not in cfg["scene"]:
+        cfg_finite = json.loads(Path(src).read_text())
+        if "scene" not in cfg_finite or "ray_num" not in cfg_finite["scene"]:
             raise KeyError(f"{label}: config missing scene.ray_num (cannot apply override)")
-        cfg["scene"]["ray_num"] = RAY_NUM_OVERRIDE
+        cfg_finite["scene"]["ray_num"] = RAY_NUM_OVERRIDE
         suffix = ""
         if resolution is not None:
-            renders = cfg.get("render")
+            renders = cfg_finite.get("render")
             if not isinstance(renders, list) or not renders:
                 raise KeyError(f"{label}: config missing render[] (cannot set resolution)")
             for r in renders:
                 r["resolution"] = [resolution[0], resolution[1]]
             suffix = f"_{resolution[0]}x{resolution[1]}"
-        dst = Path(tmp_dir) / f"{label}{suffix}.json"
-        dst.write_text(json.dumps(cfg))
-        out[label] = dst
+        # Deep-copy the (already-resolution-adjusted) finite variant, then
+        # overwrite ONLY ray_num — keeps the two variants structurally identical.
+        cfg_infinite = json.loads(json.dumps(cfg_finite))
+        cfg_infinite["scene"]["ray_num"] = RAY_NUM_INFINITE
+        dst_finite = Path(tmp_dir) / f"{label}{suffix}.finite.json"
+        dst_infinite = Path(tmp_dir) / f"{label}{suffix}.infinite.json"
+        dst_finite.write_text(json.dumps(cfg_finite))
+        dst_infinite.write_text(json.dumps(cfg_infinite))
+        out[label] = {"finite": dst_finite, "infinite": dst_infinite}
     return out
+
+
+def _config_for_backend(cfg_variants: dict, backend_env: str | None) -> Path:
+    """Pick finite (legacy/cpu_backend) or infinite (metal/cuda) variant.
+
+    GPU backends use ray_num="infinite" → main.cpp switches to drain-count-driven
+    measurement (task-gpu-bench-drain-aligned-rate). Legacy CPU stays on finite
+    to preserve baseline stability. cpu_backend is a verify-only route (not a
+    baseline) and uses finite too — it doesn't benefit from drain-alignment.
+    """
+    if backend_env in GPU_ROUTE_STRINGS:
+        return cfg_variants["infinite"]
+    return cfg_variants["finite"]
 
 
 def _measure_with_cov_escalation(cfg_path: Path, backend_env: str | None,
@@ -433,7 +477,9 @@ def run_res_sweep(resolutions: list[tuple[int, int]],
     print(
         "# bench_throughput --res-sweep — resolution axis, DEFAULT dispatch.\n"
         "# denominator = legacy CPU multi_rps per (config, resolution).\n"
-        f"# ray_num overridden to {RAY_NUM_OVERRIDE:,}; W*H*3*4 B = XYZ buffer size.\n"
+        f"# ray_num: legacy = {RAY_NUM_OVERRIDE:,} (finite); GPU = infinite\n"
+        "# (main.cpp drain-count-driven, task-gpu-bench-drain-aligned-rate).\n"
+        "# W*H*3*4 B = XYZ buffer size.\n"
         "# Watch for the throughput knee where buffer_MB crosses the GPU L2 size.\n",
         flush=True,
     )
@@ -452,13 +498,14 @@ def run_res_sweep(resolutions: list[tuple[int, int]],
     cov_log: list[str] = []
     for cfg_label, cfg_src in sweep_configs.items():
         for (w, h) in resolutions:
-            cfg_path = _override_config({cfg_label: cfg_src}, tmp_dir, (w, h))[cfg_label]
+            cfg_variants = _override_config({cfg_label: cfg_src}, tmp_dir, (w, h))[cfg_label]
             buf_mb = w * h * 3 * 4 / (1024 * 1024)
             legacy_multi_median = None
             for backend_label, backend_env in BACKENDS:
                 na_reason = _backend_na_reason(backend_label, is_darwin)
                 if na_reason is not None:
                     continue  # skip N/A rows to keep the curve readable
+                cfg_path = _config_for_backend(cfg_variants, backend_env)
                 label = f"{backend_label} {cfg_label} {w}x{h}"
                 cell = _measure_with_cov_escalation(cfg_path, backend_env, None,
                                                     label, cov_log)
@@ -572,8 +619,11 @@ def main() -> int:
         "# bench_throughput — denominator = legacy CPU multi_rps (per config).\n"
         "# GPU (Metal/CUDA): single-engine; one steady 'multi' pass, no 'single' (shown as '-').\n"
         "# CpuTraceBackend rows are verify-only (NOT a baseline).\n"
-        f"# rays_per_sec = steady trace rate (setup excluded, --benchmark fix);\n"
-        f"# ray_num overridden to {RAY_NUM_OVERRIDE:,} for a stable steady window.\n",
+        f"# rays_per_sec = steady trace rate (setup excluded).\n"
+        f"# ray_num: legacy CPU = {RAY_NUM_OVERRIDE:,} (finite, rate_basis=steady);\n"
+        f"# GPU = infinite (rate_basis=drain_aligned, drain-count-driven,\n"
+        f"# task-gpu-bench-drain-aligned-rate). multi_wall column is only\n"
+        f"# meaningful for finite passes; ignore it on drain_aligned GPU rows.\n",
         flush=True,
     )
 
@@ -591,7 +641,7 @@ def main() -> int:
           "(UNRELIABLE under third-clock drain — trust multi_wall when they diverge).",
           flush=True)
 
-    for cfg_label, cfg_path in configs.items():
+    for cfg_label, cfg_variants in configs.items():
         legacy_multi_median = None
 
         for backend_label, backend_env in BACKENDS:
@@ -605,6 +655,7 @@ def main() -> int:
                 )
                 continue
 
+            cfg_path = _config_for_backend(cfg_variants, backend_env)
             for dispatch_num in DISPATCH_PLAN[backend_label]:
                 # CoV decision tree: >15% @ N=5 -> rerun at N=9; still >15% -> flag thermal.
                 label = f"{backend_label} {cfg_label} disp={_fmt_dispatch(dispatch_num)}"
