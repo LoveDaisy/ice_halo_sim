@@ -34,6 +34,7 @@
 #include "core/exit_seam.hpp"
 #include "core/filter_spec.hpp"
 #include "core/geo3d.hpp"
+#include "core/lens_proj_build.hpp"  // BuildProjParams / ProjParams (315.3 unified render projection)
 #include "core/math.hpp"
 #include "core/metal_filter_match_src.hpp"
 #include "core/backend/metal_trace_backend.hpp"
@@ -88,12 +89,8 @@ struct KernelParams {
   uint32_t num_rays;
   uint32_t img_w;
   uint32_t img_h;
-  float    az0;
   uint32_t ms_mode;
   uint32_t out_cap;
-  uint32_t proj_type;
-  float    r_scale;
-  float    max_abs_dz;
   uint32_t exit_cap;  // exit seam (scrum-258.1) — buffer-egress capacity (rays)
   // Exit metadata (scrum-258.2). Field order MUST match the MSL struct above
   // (crystal_id, face_seq_cap, ms_layer_idx) — silent reorder would only
@@ -110,8 +107,17 @@ struct KernelParams {
   uint32_t gate_seed;
   uint32_t filter_desc_max_ci;
   uint32_t crystal_config_id;
+  // Unified render projection (315.3) — mirrors the MSL KernelParams::proj.
+  // Filled by BeginSession via BuildProjParams; consumed by
+  // lm_proj::ProjectExitToPixel in the kernel exit tail. Replaced the former
+  // loose az0 / proj_type / r_scale / max_abs_dz fields.
+  lm_proj::ProjParams proj;
 };
-static_assert(sizeof(KernelParams) == 76u,
+// sizeof(ProjParams) == 76 (6 ints + 4 floats + float[9]); the 15 leading
+// 4-byte KernelParams scalars add 60 → 136 total. All members 4-byte aligned,
+// no padding.
+static_assert(sizeof(lm_proj::ProjParams) == 76u, "ProjParams layout drift — check projection_shared.h");
+static_assert(sizeof(KernelParams) == 136u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 
 // Device root-gen latitude path tags. MUST match constant kLatPath* in
@@ -159,13 +165,6 @@ struct GenRootKernelParams {
 };
 static_assert(sizeof(GenRootKernelParams) == 84u,
               "GenRootKernelParams size mismatch — update host struct to match Metal-side layout");
-
-float ComputeAz0(const Rotation& rot) {
-  float ax_z[3]{ 0.0f, 0.0f, 1.0f };
-  rot.Apply(ax_z);
-  return std::atan2(ax_z[1], ax_z[0]);
-}
-
 
 size_t ComputeOutCap(size_t n, size_t max_hits) {
   // explore mh16 ~9.8x fan-out; (max_hits*2+4) covers the observed upper
@@ -503,14 +502,12 @@ struct MetalTraceBackend::Impl {
   size_t transit_ray_count_ = 0;
   int    width = 0;
   int    height = 0;
-  float  az0 = 0.0f;
   // scrum-268.8 (DR-3): per-batch cie_x/y/z removed (KernelParams fields
   // dropped; trace kernel reads CMF from wl_pool[wl_idx]).
-  // Projection routing — populated by BeginSession per render.lens_.type_.
-  // Mirrors KernelParams fields with the same name; DispatchLayer copies them.
-  uint32_t proj_type = 0u;
-  float    r_scale = 1.0f;
-  float    max_abs_dz = 0.0f;
+  // Unified render projection (315.3) — populated by BeginSession via
+  // BuildProjParams(render, camera_rot, short_pix). Copied into
+  // KernelParams::proj by DispatchLayer; consumed by ProjectExitToPixel.
+  lm_proj::ProjParams proj_params_{};
 
   RandomNumberGenerator rng{ 0 };
   // Seed-once flag — see CpuTraceBackend::seeded_ rationale (per-SimBatch
@@ -1644,12 +1641,11 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   params.num_rays = static_cast<uint32_t>(num_rays);
   params.img_w    = static_cast<uint32_t>(width);
   params.img_h    = static_cast<uint32_t>(height);
-  params.az0      = az0;
   params.ms_mode  = ms_mode;
   params.out_cap  = static_cast<uint32_t>(out_cap);
-  params.proj_type  = proj_type;
-  params.r_scale    = r_scale;
-  params.max_abs_dz = max_abs_dz;
+  // 315.3: single POD carries all projection routing (proj_type / az0 /
+  // r_scale / max_abs_dz / scale / rot / etc.) into the kernel exit tail.
+  params.proj     = proj_params_;
   // S1 device-fused: exit_cap and face_seq_cap are unused (exit buffers gone).
   params.exit_cap     = 0u;
   params.crystal_id   = crystal_id;
@@ -1868,11 +1864,9 @@ void MetalTraceBackend::Impl::Reset() {
   gen_seed_ = 0u;
   width = 0;
   height = 0;
-  az0 = 0.0f;
   // scrum-268.8 (DR-3): cie_x/y/z removed from Impl.
-  proj_type = 0u;
-  r_scale = 1.0f;
-  max_abs_dz = 0.0f;
+  // 315.3: unified projection params reset to POD default.
+  proj_params_ = lm_proj::ProjParams{};
   have_crystal = false;
   current_n_idx = 0.0f;
   out_cap = 0;
@@ -1924,16 +1918,12 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   assert(!impl_->in_session && "BeginSession called on an already-open session");
   assert(spec.scene != nullptr);
   assert(spec.render != nullptr);
-  assert((spec.render->lens_.type_ == LensParam::kRectangular ||
-          spec.render->lens_.type_ == LensParam::kDualFisheyeEqualArea) &&
-         "MetalTraceBackend supports kRectangular or kDualFisheyeEqualArea lens");
-  // az0-projection is only equivalent to RectangularProject at zenith view
-  // (el=90°, ro=0°). Dual-fisheye-EA covers the full globe, view fields are
-  // unused, so we only assert for the rectangular branch.
-  if (spec.render->lens_.type_ == LensParam::kRectangular) {
-    assert(std::abs(spec.render->view_.el_ - 90.0f) < 0.01f &&
-           "MetalTraceBackend kRectangular requires zenith view (el≈90°)");
-  }
+  // 315.3: the exit tail now projects via lm_proj::ProjectExitToPixel — the
+  // SAME single source as the CPU parity oracle (scatter_accum.hpp) — so every
+  // non-globe lens type produces byte-identical pixels to legacy CPU at any
+  // view/fov. Globe (type 10) is 315.4 (ProjectExitToPixel returns count=0).
+  assert(spec.render->lens_.type_ != LensParam::kGlobe &&
+         "MetalTraceBackend does not yet support the globe projection (315.4)");
 
   impl_->spec = spec;
   impl_->in_session = true;
@@ -1946,7 +1936,6 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   impl_->height = spec.render->resolution_[1];
 
   Rotation camera_rot = MakeCameraRotation(*spec.render);
-  impl_->az0 = ComputeAz0(camera_rot);
   // scrum-268.8 (DR-3): per-batch ComputeCmf(spec.wl.wl_) deleted — CMF is
   // sourced per-ray from wl_pool[wl_idx] populated below in TraceLayer's ci
   // loop. spec.wl.wl_ remains the simulator-sampled per-batch sentinel until
@@ -1969,17 +1958,14 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   impl_->per_batch_wl_     = spec.wl.wl_;
   impl_->per_batch_weight_ = spec.wl.weight_;
 
-  // Projection routing — kernel reads proj_type/r_scale/max_abs_dz from
-  // KernelParams (filled by DispatchLayer from these Impl fields).
-  if (spec.render->lens_.type_ == LensParam::kDualFisheyeEqualArea) {
-    impl_->proj_type  = 1u;
-    impl_->max_abs_dz = spec.render->overlap_;
-    impl_->r_scale    = projection::ComputeEARScale(spec.render->overlap_);
-  } else {
-    impl_->proj_type  = 0u;
-    impl_->r_scale    = 1.0f;
-    impl_->max_abs_dz = 0.0f;
-  }
+  // Projection routing (315.3): single-source ProjParams via BuildProjParams —
+  // predigests per-type scale, dual-fisheye r_scale/overlap, rectangular az0,
+  // and the camera rotation. DispatchLayer copies this into KernelParams::proj;
+  // the kernel exit tail calls lm_proj::ProjectExitToPixel(proj, world_exit...),
+  // identical to the CPU parity oracle ScatterOutgoingToXyz.
+  const float short_pix =
+      static_cast<float>(std::min(spec.render->resolution_[0], spec.render->resolution_[1]));
+  impl_->proj_params_ = BuildProjParams(*spec.render, camera_rot, short_pix);
 
   // Seed contract: first call with spec.seed != 0 seeds the RNG; repeated
   // calls with the same seed are no-ops (normal per-SimBatch pattern).
@@ -2482,16 +2468,13 @@ void MetalTraceBackend::EndSession() {
 }
 
 bool MetalTraceBackend::IsCompatible(const RenderConfig& render) const {
-  if (render.lens_.type_ == LensParam::kRectangular) {
-    return std::abs(render.view_.el_ - 90.0f) <= 0.01f;
-  }
-  if (render.lens_.type_ == LensParam::kDualFisheyeEqualArea) {
-    // kernel implements fov180 full-globe only; reject custom fov to avoid
-    // silent wrong-projection from non-GUI callers (LUMICE_TRACE_BACKEND=metal
-    // + dual-fisheye config). view.el is unused for full-globe — no constraint.
-    return std::abs(render.lens_.fov_ - 180.0f) <= 0.5f;
-  }
-  return false;
+  // 315.3: the kernel exit tail projects via lm_proj::ProjectExitToPixel — the
+  // SAME single source as the CPU parity oracle (scatter_accum.hpp) — so every
+  // forward projection (single-lens linear/fisheye, rectangular, dual-fisheye
+  // variants) is byte-identical to legacy CPU at any view/fov. The trace
+  // geometry is projection-independent, so no per-type view constraint remains.
+  // Globe (type 10) is still unimplemented on device (315.4) → CPU fallback.
+  return render.lens_.type_ != LensParam::kGlobe;
 }
 
 uint32_t MetalTraceBackend::WlPoolSize() const {
