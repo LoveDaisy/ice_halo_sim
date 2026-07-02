@@ -445,7 +445,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python dependencies
-        run: pip install Pillow pytest numpy
+        run: pip install Pillow pytest numpy pytest-xdist
 
       - name: Run slow E2E tests
         # 'not heavy' drops redundant parity variants (prob05*, single-MS no-filter)
@@ -467,7 +467,21 @@ jobs:
             export DYLD_LIBRARY_PATH="$libdir:${DYLD_LIBRARY_PATH:-}"
             export LD_LIBRARY_PATH="$libdir:${LD_LIBRARY_PATH:-}"
           fi
-          pytest ${{ matrix.pytest_args }} -v -m "slow and not heavy"
+          # Phase 1 — parallel (pytest-xdist, -n 3). xdist runs each test in a
+          # separate WORKER PROCESS, so capi_runner's process-global os.environ +
+          # log callback stay per-process isolated (validated: the full slow suite
+          # passes under -n 3, ~4min vs ~14min serial). The projection-parity
+          # tests (the bulk of the macOS "rest" leg) dominate wall-time; this is
+          # what keeps the leg under the step timeout. Throughput gates are
+          # EXCLUDED here — they must not measure under concurrent GPU load.
+          pytest ${{ matrix.pytest_args }} --ignore=test/performance -n 3 -v -m "slow and not heavy"
+          # Phase 2 — serial + GPU-isolated: the throughput gates run alone so the
+          # measured rate is not deflated by concurrent tests. Only legs whose args
+          # include test/performance run this (the metal-exit-seam parity leg has
+          # no perf tests → skipped). Cheap (~2 gates); no -n on purpose.
+          case "${{ matrix.pytest_args }}" in
+            *test/performance*) pytest test/performance -v -m "slow and not heavy" ;;
+          esac
         timeout-minutes: 15
 
   benchmark-summary:
