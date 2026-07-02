@@ -1267,8 +1267,10 @@ struct CudaTraceBackend::Impl {
   // kernel can fill up to cont_cap_ root entries (continuation rays from one
   // layer may exceed the next layer's n_roots after fan-out).
   float* d_dirs_ = nullptr;
-  // [TEST-ONLY] transit RNG probe sink (nullptr in production; allocated by
-  // EnableTransitRngProbeForTest). task-gpu-rng-ray-index-uint64.
+  // [TEST-ONLY] RNG probe sink (nullptr in production; allocated by
+  // EnableRngProbeForTest). Shared by the gate_stream (ms_mode==1) and transit
+  // stream probes — which one fills it depends on enable timing (see the hpp
+  // doc). task-gpu-rng-ray-index-uint64.
   float* d_rng_probe_ = nullptr;
   size_t rng_probe_cap_ = 0;  // element count d_rng_probe_ was allocated for
   float* d_pos_ = nullptr;
@@ -3160,7 +3162,7 @@ size_t CudaTraceBackend::ReadbackRngProbeForTest(std::vector<float>& out, size_t
   out.assign(count, 0.0f);
   cudaDeviceSynchronize();
   CheckCuda(cudaMemcpy(out.data(), impl_->d_rng_probe_, count * sizeof(float), cudaMemcpyDeviceToHost),
-            "ReadbackTransitRngProbeForTest D2H");
+            "ReadbackRngProbeForTest D2H");
   return count;
 }
 
