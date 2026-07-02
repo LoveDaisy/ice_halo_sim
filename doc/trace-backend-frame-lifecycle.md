@@ -93,11 +93,18 @@ does not need to change.
 
 The kernel loads the per-ray matrix once at entry (`m[9]`) and, in the exit-
 projection block (`metal_trace_backend.mm:213-217`), applies `world = m · v` to
-the exit direction **before** the equirect projection — the exact analogue of
+the exit direction **before** the forward projection — the exact analogue of
 CPU `CollectData`'s `crystal_rot_.Apply`. The multiply is **row-major
 `mat·v`** (mirroring `Rotation::Apply`'s `Dot3(mat_ + k*3, v)`), **not** the
 transpose (`ApplyInverse` is the transpose) — a transpose here re-introduces a
 mis-oriented ring.
+
+> **Note (scrum-315, 2026-07-02)**: what this section calls "the equirect
+> projection" was originally the single fixed in-kernel projection. The exit block
+> now dispatches over **all 11 `LensType` projections** via the shared
+> `src/core/shared/projection_shared.h::ProjectExitToPixel` (equirect =
+> `rectangular` is just one branch). The world-space rotation step described here
+> is unchanged and still precedes the forward projection for every type.
 
 ### 4.3 Multi-MS inter-layer transit
 

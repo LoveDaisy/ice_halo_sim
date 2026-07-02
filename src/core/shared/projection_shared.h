@@ -1,6 +1,21 @@
 // Single-source pure-math projection forward functions.
-// Shared by host C++ (src/core/projection.cpp), MSL kernel
-// (src/core/metal/lumice_trace.metal), and (future) CUDA kernel.
+//
+// This header is THE single source of truth for the RENDER-path forward
+// projection (sky/world dir -> pixel) across all three trace backends:
+//   - legacy CPU  (src/core/projection.cpp, lens_proj.hpp, scatter_accum.hpp)
+//   - Metal       (src/core/metal/lumice_trace.metal, mid/final exit blocks)
+//   - CUDA        (src/core/backend/cuda_trace_backend.cu, EmitGateProject)
+// All three compile this same file (host C++ / MSL / CUDA via lm_shims.h), so
+// all 11 LensType projections render identically on every backend and cross-
+// backend parity is a structural guarantee — no backend can drift (315.2-315.6).
+//
+// NOT covered here: the GUI display re-projection (inverse resampling of a
+// fixed dual-fisheye all-sky image in the preview shader / overlay labels).
+// That is a SEPARATE concern living behind the C-API boundary — src/gui/ may
+// not #include core/ headers (check_policies.py gate) and GLSL cannot include
+// C++ — so its lens math is deliberately duplicated. The ONLY value shared
+// across that boundary is globe kGlobeCameraD (see the "must match" anchor
+// below); the wider GUI lens-math duplication is tracked separately in backlog.
 //
 // Surface contract: scalar value semantics only. Caller owns
 // pixel-layout and visibility-rejection concerns.

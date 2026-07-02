@@ -74,6 +74,29 @@
 >
 > 当前 canonical 吞吐数字见 **`doc/performance-testing.md`「当前 canonical 吞吐结果」**（历史 per-run 详录
 > 在 `scratchpad/perf-results-log.md`）。GPU 路线 #294→312 的完整演进见 `doc/gpu-route-history.md` Phase 10–11。
+### 0.2 ⭐ 投影支持矩阵（scrum-315 投影全量对齐，2026-07-02）
+
+> 此前 GPU 后端只在 device 内做 **2 种固定投影**（`rectangular` + `dual_fisheye_equal_area`）；其余镜头经 `IsCompatible` 返回 false → **静默回落 legacy CPU**（输出正确，只是吃不到 GPU 加速）。scrum-315 把 forward 投影统一进单一真源后，**全部 11 种投影都在三端渲染**。
+
+`LensParam::LensType`（`src/config/render_config.hpp`）全集 = 11 种，现在**全部**在 legacy CPU / Metal / CUDA 上渲染，单源自 `src/core/shared/projection_shared.h::ProjectExitToPixel`（三端同源编译，parity 是结构性保证）：
+
+| # | proj_type | 类型 | legacy CPU | Metal | CUDA |
+|---|-----------|------|:---:|:---:|:---:|
+| 0 | linear | 透视 | ✅ | ✅ | ✅ |
+| 1 | fisheye_equal_area | 等积鱼眼 | ✅ | ✅ | ✅ |
+| 2 | fisheye_equidistant | 等距鱼眼 | ✅ | ✅ | ✅ |
+| 3 | fisheye_stereographic | 立体投影鱼眼 | ✅ | ✅ | ✅ |
+| 4 | dual_fisheye_equal_area | 双等积鱼眼 | ✅ | ✅ | ✅ |
+| 5 | dual_fisheye_equidistant | 双等距鱼眼 | ✅ | ✅ | ✅ |
+| 6 | dual_fisheye_stereographic | 双立体鱼眼 | ✅ | ✅ | ✅ |
+| 7 | rectangular | 等距柱状（全景） | ✅ | ✅ | ✅ |
+| 8 | fisheye_orthographic | 正交鱼眼 | ✅ | ✅ | ✅ |
+| 9 | dual_fisheye_orthographic | 双正交鱼眼 | ✅ | ✅ | ✅ |
+| 10 | globe | 有限距离球面透视（Option B） | ✅ | ✅ | ✅ |
+
+- **globe = 选项 B（真投影，非 orthographic 别名）**：有限距离球面透视，相机在 `(0,0,kGlobeCameraD)`，`kGlobeCameraD=4.0`，覆盖视轴 ±75.5° 而非满半球（与 orthographic 数学不同，仅 D→∞ 极限相等）。315.4 新增，legacy 此前也没有（仅 GUI 预览专用）。**core/shared 的 `kGlobeCameraD` 必须与 GUI `src/gui/gui_constants.hpp` 一致**（CLI↔GUI 观感一致契约；常数跨不过 C-API 边界，靠 shared 头 "must match" 注释锚 + golden-analytic round-trip 校验维持）。
+- **GUI 显示重投影不在此矩阵内**：GUI 预览的 inverse 重采样（固定 dual-fisheye 全天图 → 任意视角显示）是 C-API 边界外的独立关注点，其镜头数学不进 `projection_shared.h`（`src/gui/` 不能 `#include` core 头 + GLSL 不能 include C++ 头）。渲染路径 = forward scatter；GUI 显示 = inverse 重采样，两者本质不同。
+- **cross-backend parity 测试**：`test/parity-cross-backend/backend/test_{metal,cuda}_projection_parity.py`（共享 battery `test/e2e/_projection_battery.py`），每种投影一个 oracle=legacy 的对照，确认全部类型真走 GPU、不再 fallback。
 
 ## 1. 状态与目标（设计期原文）
 

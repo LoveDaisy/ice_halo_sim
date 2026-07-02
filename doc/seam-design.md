@@ -171,9 +171,9 @@ offset 16: uint16_t overflow_idx_        (2B, 超 15 跳指向 arena)
 owner 洞察：渲染图只需"方向+强度"；filter 作用在 trace 过程（MS 每层后），最终图不需要富元数据；filter 在 emit 那跳要的是寄存器里"路径至今"——**连持久化记录都不需要**。
 
 **结论（取代 §4.4 的"两个出口"判断，离散显存下）**：
-- **纯融合 device 消费**：emit gate 当场 prob + device filter + 固定投影（dual_fisheye/rectangular）+ 补偿累加进 device XYZ buffer，**渲染图产物连 device 出射 buffer 都不物化**（生产者消费者融合，比 §5 图的 bulk 列更彻底）。富元数据降级为光路回溯的可选 device 旁路 tap。
+- **纯融合 device 消费**：emit gate 当场 prob + device filter + device 内投影（scrum-315 起为**全部 11 种 LensType**，经共享 `src/core/shared/projection_shared.h::ProjectExitToPixel` 在 device 内 dispatch；此前仅 dual_fisheye/rectangular 两种）+ 补偿累加进 device XYZ buffer，**渲染图产物连 device 出射 buffer 都不物化**（生产者消费者融合，比 §5 图的 bulk 列更彻底）。富元数据降级为光路回溯的可选 device 旁路 tap。
 - **GUI 与 CLI 走同一条 device 流水线**，唯一区别是回读 XYZ 的频率（显示节奏 vs 一次）——即第三个时钟。§4.4 的"两个出口按 workload 选"塌成"一条流水线、两个回读节奏"。
-- **后端投影固定**（GUI 只请求 dual_fisheye、其他镜头前端重投影，owner 2026-06-28 确认）→ 无灵活性损失，§4.2-§4.3 的"buffer-egress 换灵活性"顾虑在离散显存上不成立；改视角/filter 靠廉价重 trace（trace 仅占~4%）而非缓存出射记录。
+- **后端投影不再固定，但仍在 device 融合**（更新：scrum-315，2026-07-02）：设计当初（owner 2026-06-28）判断"GUI 只请求 dual_fisheye、其他镜头前端重投影"故后端只需 2 种固定投影；scrum-315 把 forward 投影统一进共享 `projection_shared.h`，device 融合消费端改为对 `proj_type` 做 dispatch，**全部 11 种投影（含新增 globe）都在 GPU 内完成**（CLI 批渲染所有镜头都吃 GPU 加速，不再静默回落 legacy CPU）。这与本节结论**正交**：仍是"一条 device 流水线、不物化出射 buffer"，只是投影从固定单支变成共享 dispatch——§4.2-§4.3 的"buffer-egress 换灵活性"顾虑在离散显存上依旧不成立。GUI 显示重投影那套（inverse 重采样固定 dual-fisheye 全天图）不进 shared、不变。
 - **消费端（filter+投影+累加）= device 共享核**（`accum_shared.h` host/MSL/CUDA 单源）；Metal 也收编进同一核（统一性 + 单源），host consumer 只留 legacy CPU。
 
 **落地状态（scrum-302）**：Metal（S1）+ CUDA（S2）device-fused 均落地、parity 全绿。⚠️ **但 CUDA 吞吐仍 0.16-0.40× legacy = 缺陷信号待追**（compute-bound + 疑 per-CI 串行 dispatch；见 `gpu-route-history.md` Phase 10 + backlog）——device-fused 是吞吐的**必要非充分**条件。
