@@ -72,7 +72,8 @@
 #include "core/filter_spec.hpp"
 #include "core/math.hpp"
 #include "core/raypath.hpp"
-#include "core/geo3d.hpp"  // Rotation (rectangular az0 derivation, mirrors Metal ComputeAz0)
+#include "core/geo3d.hpp"  // Rotation (camera rotation for BuildProjParams)
+#include "core/lens_proj_build.hpp"  // BuildProjParams / ProjParams (315.3 unified render projection)
 #include "core/math.hpp"  // math::kDegreeToRad
 #include "core/projection.hpp"  // ComputeEARScale (dual-fisheye r_scale derivation)
 #include "core/shared/accum_shared.h"  // AccumXyzToPixel (S2 device-fused emit gate)
@@ -401,76 +402,27 @@ __device__ inline void EmitToDeviceXyz(float* __restrict__ d_xyz_buf,
                                        float cmf_y,
                                        float cmf_z,
                                        float w_emit,
-                                       uint32_t proj_type,
-                                       float az0,
-                                       float r_scale,
-                                       float max_abs_dz,
-                                       uint32_t img_w,
-                                       uint32_t img_h) {
-  const float sx = -exit_world[0];
-  const float sy = -exit_world[1];
-  const float sz = -exit_world[2];
-  const int iw_i = static_cast<int>(img_w);
-  const int ih_i = static_cast<int>(img_h);
-  const float img_w_f = static_cast<float>(img_w);
-  const float img_h_f = static_cast<float>(img_h);
-  if (proj_type == 0u) {
-    auto proj_r = lm_proj::RectangularForward(sx, sy, sz);
-    float lon = proj_r.x - az0;
-    const float two_pi = 2.0f * LM_PI_F;
-    lon = lon - two_pi * floorf((lon + LM_PI_F) / two_pi);
-    const float lat = proj_r.y;
-    const float short_res = static_cast<float>(min(img_w / 2u, img_h));
-    const float proj_scl = short_res / LM_PI_F;
-    int raw_x = static_cast<int>(floorf(lon * proj_scl + img_w_f * 0.5f + 0.5f));
-    const int ix = ((raw_x % iw_i) + iw_i) % iw_i;
-    const int iy = static_cast<int>(floorf(-lat * proj_scl + img_h_f * 0.5f + 0.5f));
-    if (iy >= 0 && iy < ih_i) {
-      const uint32_t pix_flat = static_cast<uint32_t>(iy) * img_w + static_cast<uint32_t>(ix);
+                                       const lm_proj::ProjParams& proj) {
+  // 315.3: single-source projection via lm_proj::ProjectExitToPixel (shared
+  // with host CPU scatter_accum.hpp + Metal). Pass the WORLD exit dir — the
+  // function negates internally to the sky direction, matching
+  // ScatterOutgoingToXyz which feeds the outgoing world dir `d`. Each returned
+  // hit (primary + optional dual-fisheye overlap) is atomically added;
+  // d_landed_weight only bumps on bump_landed (primary, not overlap — parity
+  // with ScatterOutgoingToXyz Pass 2 / Metal exit tail).
+  lm_proj::ProjResult r =
+      lm_proj::ProjectExitToPixel(proj, exit_world[0], exit_world[1], exit_world[2]);
+  const int iw_i = proj.img_w;
+  const int ih_i = proj.img_h;
+  for (int hi = 0; hi < r.count; ++hi) {
+    const int px = r.hits[hi].px;
+    const int py = r.hits[hi].py;
+    if (px >= 0 && px < iw_i && py >= 0 && py < ih_i) {
+      const uint32_t pix_flat =
+          static_cast<uint32_t>(py) * static_cast<uint32_t>(proj.img_w) + static_cast<uint32_t>(px);
       AccumXyzToPixel(d_xyz_buf, pix_flat, cmf_x, cmf_y, cmf_z, w_emit);
-      atomicAdd(d_landed_weight, w_emit);
-    }
-  } else {
-    // Dual-fisheye equal-area: primary + opposite-hemisphere overlap.
-    const int   dual_short = min(static_cast<int>(img_w) / 2, static_cast<int>(img_h));
-    const float r          = static_cast<float>(dual_short) * 0.5f;
-    const float cy_pix     = img_h_f * 0.5f;
-    const float cx_left    = img_w_f * 0.5f - r;
-    const float cx_right   = img_w_f * 0.5f + r;
-    const bool  is_upper = (sz >= 0.0f);
-    const float z_hemi   = is_upper ? sz : -sz;
-    auto ea_r = lm_proj::FisheyeEqualAreaForward(sx, sy, z_hemi, r_scale);
-    const float xn = ea_r.x;
-    const float yn = ea_r.y;
-    const float cx_primary = is_upper ? cx_left : cx_right;
-    const float sx_primary = is_upper ? -1.0f : 1.0f;
-    const float fx = sx_primary * yn * r + cx_primary;
-    const float fy = xn * r + cy_pix;
-    const int   ix = static_cast<int>(floorf(fx + 0.5f));
-    const int   iy = static_cast<int>(floorf(fy + 0.5f));
-    if (ix >= 0 && ix < iw_i && iy >= 0 && iy < ih_i) {
-      const uint32_t pix_flat = static_cast<uint32_t>(iy) * img_w + static_cast<uint32_t>(ix);
-      AccumXyzToPixel(d_xyz_buf, pix_flat, cmf_x, cmf_y, cmf_z, w_emit);
-      atomicAdd(d_landed_weight, w_emit);
-    }
-    // Overlap dual-write: opposite hemisphere (dz<0). landed_weight NOT bumped
-    // (parity with ScatterOutgoingToXyz Pass 2 / Metal:788-810).
-    if (max_abs_dz > 0.0f && z_hemi < max_abs_dz) {
-      const float z_opp = -z_hemi;
-      auto ea_r2 = lm_proj::FisheyeEqualAreaForward(sx, sy, z_opp, r_scale);
-      const float xn2 = ea_r2.x;
-      const float yn2 = ea_r2.y;
-      const bool  is_upper_opp = !is_upper;
-      const float cx_opp       = is_upper_opp ? cx_left : cx_right;
-      const float sx_opp       = is_upper_opp ? -1.0f : 1.0f;
-      const float fx2 = sx_opp * yn2 * r + cx_opp;
-      const float fy2 = xn2 * r + cy_pix;
-      const int   ix2 = static_cast<int>(floorf(fx2 + 0.5f));
-      const int   iy2 = static_cast<int>(floorf(fy2 + 0.5f));
-      if (ix2 >= 0 && ix2 < iw_i && iy2 >= 0 && iy2 < ih_i) {
-        const uint32_t pix_flat2 =
-            static_cast<uint32_t>(iy2) * img_w + static_cast<uint32_t>(ix2);
-        AccumXyzToPixel(d_xyz_buf, pix_flat2, cmf_x, cmf_y, cmf_z, w_emit);
+      if (r.hits[hi].bump_landed) {
+        atomicAdd(d_landed_weight, w_emit);
       }
     }
   }
@@ -548,12 +500,9 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                        // branches below dereference it; ms_mode==1 branches don't).
                                        float* __restrict__ d_xyz_buf,
                                        float* __restrict__ d_landed_weight,
-                                       uint32_t proj_type,
-                                       float az0,
-                                       float r_scale,
-                                       float max_abs_dz,
-                                       uint32_t img_w,
-                                       uint32_t img_h,
+                                       // 315.3: single POD carries all projection routing
+                                       // (proj_type / az0 / r_scale / max_abs_dz / scale / rot / ...).
+                                       lm_proj::ProjParams proj,
                                        float last_ms_prob,
                                        uint32_t gate_seed_final,
                                        uint32_t gate_ray_base_final) {
@@ -692,7 +641,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
             const float cmf_z = d_wl_pool[wl_idx].cmf_z;
             EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                             cmf_x, cmf_y, cmf_z, w_refl_e,
-                            proj_type, az0, r_scale, max_abs_dz, img_w, img_h);
+                            proj);
           }
         }
         // filter_pass == false: implicit drop (Design A termination).
@@ -722,7 +671,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
             const float cmf_z = d_wl_pool[wl_idx].cmf_z;
             EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                             cmf_x, cmf_y, cmf_z, w_refl_e,
-                            proj_type, az0, r_scale, max_abs_dz, img_w, img_h);
+                            proj);
           }
         }
       }
@@ -861,7 +810,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               const float cmf_z = d_wl_pool[wl_idx].cmf_z;
               EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                               cmf_x, cmf_y, cmf_z, w_refr,
-                              proj_type, az0, r_scale, max_abs_dz, img_w, img_h);
+                              proj);
             }
           }
           // filter_pass == false: implicit drop (Design A termination).
@@ -887,7 +836,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               const float cmf_z = d_wl_pool[wl_idx].cmf_z;
               EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                               cmf_x, cmf_y, cmf_z, w_refr,
-                              proj_type, az0, r_scale, max_abs_dz, img_w, img_h);
+                              proj);
             }
           }
         }
@@ -1417,10 +1366,11 @@ struct CudaTraceBackend::Impl {
   // dims decoupled from the buffer). Zeroed only on full teardown (buffer freed).
   uint32_t alloc_xyz_w_     = 0u;
   uint32_t alloc_xyz_h_     = 0u;
-  uint32_t proj_type_       = 0u;       // 0=rectangular, 1=dual_fisheye_equal_area
-  float    az0_             = 0.0f;     // rectangular: view azimuth offset (radians)
-  float    r_scale_         = 1.0f;     // dual_fisheye: equal-area r scale
-  float    max_abs_dz_      = 0.0f;     // dual_fisheye: overlap zone |sky.z| threshold
+  // 315.3: unified render projection — populated by BeginSession via
+  // BuildProjParams(render, camera_rot, short_pix). Passed by value to
+  // trace_single_ms_kernel; consumed by lm_proj::ProjectExitToPixel. Replaced
+  // the former loose proj_type_ / az0_ / r_scale_ / max_abs_dz_ scalars.
+  lm_proj::ProjParams proj_params_{};
   uint32_t img_w_           = 0u;
   uint32_t img_h_           = 0u;
 
@@ -1613,10 +1563,8 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
   // crystal_config_id_/final_layer_*/final_ms_*) is produced by EnsureFilterBuffers
   // and now PERSISTS across the per-batch keep path — reset only on full teardown
   // (keep=false block above), not here, or the idempotent-skip path reads zeros.
-  proj_type_ = 0u;
-  az0_ = 0.0f;
-  r_scale_ = 1.0f;
-  max_abs_dz_ = 0.0f;
+  // 315.3: unified projection params reset to POD default.
+  proj_params_ = lm_proj::ProjParams{};
   img_w_ = 0u;
   img_h_ = 0u;
   in_session_ = false;
@@ -2310,34 +2258,23 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
       throw BackendUnavailableError(
           "CudaTraceBackend::BeginSession: render.resolution_ has a zero dimension");
     }
-    // Projection routing — mirrors Metal BeginSession lines 1947-1955.
-    if (spec.render->lens_.type_ == LensParam::kDualFisheyeEqualArea) {
-      impl_->proj_type_   = 1u;
-      impl_->max_abs_dz_  = spec.render->overlap_;
-      impl_->r_scale_     = projection::ComputeEARScale(spec.render->overlap_);
-      impl_->az0_         = 0.0f;  // unused on dual-fisheye path
-    } else {
-      impl_->proj_type_   = 0u;
-      impl_->max_abs_dz_  = 0.0f;
-      impl_->r_scale_     = 1.0f;
-      // az0 = atan2(camera-rot applied to +Z). Same derivation as Metal
-      // ComputeAz0 (metal_trace_backend.mm:163, MakeCameraRotation at
-      // scatter_accum.hpp:75). Only meaningful at zenith view (el ≈ 90°);
-      // IsCompatible enforces that constraint so non-zenith rectangular
-      // configs fall back to legacy CPU. Inlined here (instead of including
-      // scatter_accum.hpp) to keep the .cu translation unit's host-include
-      // surface narrow.
-      Rotation camera_rot;
-      float ax_z_chain[3]{ 0.0f, 0.0f, 1.0f };
-      float ax_y_chain[3]{ 0.0f, 1.0f, 0.0f };
-      camera_rot
-          .Chain({ ax_z_chain, (-90.0f + spec.render->view_.ro_) * math::kDegreeToRad })
-          .Chain({ ax_y_chain, (90.0f - spec.render->view_.el_) * math::kDegreeToRad })
-          .Chain({ ax_z_chain, spec.render->view_.az_ * math::kDegreeToRad });
-      float ax_z[3]{ 0.0f, 0.0f, 1.0f };
-      camera_rot.Apply(ax_z);
-      impl_->az0_ = std::atan2(ax_z[1], ax_z[0]);
-    }
+    // Projection routing (315.3): single-source ProjParams via BuildProjParams
+    // (predigests per-type scale, dual-fisheye r_scale/overlap, rectangular
+    // az0, camera rotation) — mirrors Metal BeginSession. trace_single_ms_kernel
+    // reads this via lm_proj::ProjectExitToPixel, identical to the CPU parity
+    // oracle ScatterOutgoingToXyz. The camera rotation is inlined here (mirrors
+    // MakeCameraRotation in scatter_accum.hpp) to keep the .cu host-include
+    // surface narrow.
+    Rotation camera_rot;
+    float ax_z_chain[3]{ 0.0f, 0.0f, 1.0f };
+    float ax_y_chain[3]{ 0.0f, 1.0f, 0.0f };
+    camera_rot
+        .Chain({ ax_z_chain, (-90.0f + spec.render->view_.ro_) * math::kDegreeToRad })
+        .Chain({ ax_y_chain, (90.0f - spec.render->view_.el_) * math::kDegreeToRad })
+        .Chain({ ax_z_chain, spec.render->view_.az_ * math::kDegreeToRad });
+    const float short_pix =
+        static_cast<float>(std::min(spec.render->resolution_[0], spec.render->resolution_[1]));
+    impl_->proj_params_ = BuildProjParams(*spec.render, camera_rot, short_pix);
     const size_t xyz_floats = static_cast<size_t>(impl_->img_w_) *
                               static_cast<size_t>(impl_->img_h_) * 3u;
     // scrum-312 (third-clock drain): d_xyz_buf_ / d_landed_weight_ are PERSISTENT
@@ -2670,8 +2607,8 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
         ci_cfg_id,
         // S2 device-fused accumulation params.
         impl_->d_xyz_buf_, impl_->d_landed_weight_,
-        impl_->proj_type_, impl_->az0_, impl_->r_scale_, impl_->max_abs_dz_,
-        impl_->img_w_, impl_->img_h_,
+        // 315.3: single POD carries all projection routing into the kernel.
+        impl_->proj_params_,
         impl_->final_ms_prob_,
         impl_->gate_seed_,
         NarrowPcgRayBase(impl_->gate_ray_count_, ci_n, "cuda-gate-final"));
@@ -3041,23 +2978,17 @@ void CudaTraceBackend::ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight)
             "ReadbackXyzAccum cudaMemset d_landed_weight");
 }
 
-// Mirror MetalTraceBackend::IsCompatible (metal_trace_backend.mm:2426-2437).
-// The device-fused emit gate only implements two projections: rectangular @
-// zenith view (where ComputeAz0 is meaningful) and dual_fisheye_equal_area @
-// the full-globe fov=180 layout. Any other lens config returns false → the
-// simulator transparently falls back to legacy CPU. The el≈90° constraint
-// reflects that the rectangular projection assumes the camera is looking
-// straight up; non-zenith el would require a full rotation pre-multiply in the
-// kernel that S2 does not implement.
+// Mirror MetalTraceBackend::IsCompatible. 315.3/315.4: the device-fused emit
+// gate projects via lm_proj::ProjectExitToPixel (single source with the CPU
+// parity oracle), so all forward projections including globe are supported.
 bool CudaTraceBackend::IsCompatible(const RenderConfig& render) const {
-  if (render.lens_.type_ == LensParam::kRectangular) {
-    return std::abs(render.view_.el_ - 90.0f) <= 0.01f;
-  }
-  if (render.lens_.type_ == LensParam::kDualFisheyeEqualArea) {
-    // kernel implements fov180 full-globe only; reject custom fov.
-    return std::abs(render.lens_.fov_ - 180.0f) <= 0.5f;
-  }
-  return false;
+  // The kernel exit tail projects via lm_proj::ProjectExitToPixel — the SAME
+  // single source as the CPU parity oracle (scatter_accum.hpp) — so every
+  // forward projection (single-lens linear/fisheye, rectangular, dual-fisheye
+  // variants, and globe as of 315.4) is byte-identical to legacy CPU at any
+  // view/fov. All lens types are supported on device.
+  (void)render;
+  return true;
 }
 
 uint32_t CudaTraceBackend::WlPoolSize() const {

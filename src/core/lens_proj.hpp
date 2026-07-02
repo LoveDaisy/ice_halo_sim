@@ -9,17 +9,19 @@
 
 #include "config/render_config.hpp"
 #include "core/geo3d.hpp"
+#include "core/lens_proj_build.hpp"
 #include "core/math.hpp"
 #include "core/projection.hpp"
+#include "core/shared/projection_shared.h"
 
 namespace lumice {
 
 // Shared lens-projection primitives used by both server/render.cpp and
-// core/scatter_accum.hpp. Functions and constants in this header are tagged
-// `inline` / `inline constexpr` so multi-TU include is ODR-safe.
-//
-// Behaviour is identical to the legacy file-local definitions that used to
-// live in server/render.cpp — this is a pure header extraction.
+// core/scatter_accum.hpp. All 10 per-type `*Project` functions are thin
+// wrappers over `lm_proj::ProjectExitToPixel` (single arithmetic source,
+// see doc/task-unify-shared-projection). `LensProjParam` remains the
+// external descriptor so existing consumers (GetProjFunc, tests) are not
+// disturbed.
 
 struct LensProjParam {
   float fov_;
@@ -34,211 +36,100 @@ struct LensProjParam {
 
 using ProjFunc = std::function<void(const LensProjParam&, const float*, int*, size_t)>;
 
-inline void LinearProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  float scale = p.short_pix_ / 2.0f / std::tan(p.fov_ / 2.0f * math::kDegreeToRad);
+namespace lens_proj_internal {
+
+// Build the shared POD from a legacy LensProjParam + a runtime type. Starts
+// from the pre-computed max_abs_dz_ / r_scale_ carried by LensProjParam
+// (predigested by lens_proj.hpp's own callers — currently test_projection.cpp
+// and any future direct `*Project` caller; scatter_accum.hpp / render.cpp
+// build lm_proj::ProjParams directly via BuildProjParams(cfg, rot, short_pix)
+// and do not go through this path). The per-type `scale`/`az0` derivation
+// itself is NOT duplicated here — it delegates to
+// lumice::ComputeScaleAz0() (lens_proj_build.hpp), the single source of
+// truth also used by BuildProjParams().
+inline lm_proj::ProjParams ToShared(const LensProjParam& p, LensParam::LensType type) {
+  lm_proj::ProjParams s{};
+  s.proj_type = static_cast<int>(type);
+  s.img_w = p.resolution_[0];
+  s.img_h = p.resolution_[1];
+  s.visible_range = static_cast<int>(p.visible_range_);
+  s.lens_shift_x = p.lens_shift_[0];
+  s.lens_shift_y = p.lens_shift_[1];
+  s.max_abs_dz = p.max_abs_dz_;
+  s.r_scale = p.r_scale_;
+
+  const float* mat = p.rot_.GetMat();
+  std::memcpy(s.rot, mat, 9 * sizeof(float));
+
+  const float fov_rad = p.fov_ * math::kDegreeToRad;
+  const auto sa = ComputeScaleAz0(type, fov_rad, p.short_pix_, p.resolution_[0], p.resolution_[1], p.rot_);
+  s.scale = sa.scale;
+  s.az0 = sa.az0;
+  return s;
+}
+
+// Common thin-wrapper body: for each ray, dispatch to ProjectExitToPixel
+// and write the main hit to xy (miss → {-1,-1}). Overlap dual-write is
+// consumed by ScatterOutgoingToXyz / render.cpp directly, not by
+// GetProjFunc — legacy *Project callers only ever cared about hits[0].
+inline void ProjectMainHits(const LensProjParam& p, LensParam::LensType type, const float* d, int* xy, size_t num) {
+  auto shared = ToShared(p, type);
   for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
-    if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
-        (p.visible_range_ == RenderConfig::kLower && d[2] < 0)) {
+    auto r = lm_proj::ProjectExitToPixel(shared, d[0], d[1], d[2]);
+    if (r.count == 0) {
       xy[0] = -1;
       xy[1] = -1;
-      continue;
+    } else {
+      xy[0] = r.hits[0].px;
+      xy[1] = r.hits[0].py;
     }
-
-    float d_cam[3]{ -d[0], -d[1], -d[2] };
-    p.rot_.ApplyInverse(d_cam);
-    auto proj = projection::LinearForward(d_cam[0], d_cam[1], d_cam[2]);
-    if (!proj.valid) {
-      xy[0] = -1;
-      xy[1] = -1;
-      continue;
-    }
-
-    xy[0] = static_cast<int>(std::floor(proj.x * scale + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
-    xy[1] = static_cast<int>(std::floor(proj.y * scale + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
   }
+}
+
+}  // namespace lens_proj_internal
+
+inline void LinearProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
+  lens_proj_internal::ProjectMainHits(p, LensParam::kLinear, d, xy, num);
 }
 
 inline void FisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  float scale = p.short_pix_ / 2.0f / std::sqrt(2.0f) / std::sin(p.fov_ / 4.0f * math::kDegreeToRad);
-
-  for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
-    if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
-        (p.visible_range_ == RenderConfig::kLower && d[2] < 0)) {
-      xy[0] = -1;
-      xy[1] = -1;
-      continue;
-    }
-
-    float d_cam[3]{ -d[0], -d[1], -d[2] };
-    p.rot_.ApplyInverse(d_cam);
-    if (d_cam[2] <= 0) {
-      xy[0] = -1;
-      xy[1] = -1;
-      continue;
-    }
-    auto proj = projection::FisheyeEqualAreaForward(d_cam[0], d_cam[1], d_cam[2]);
-
-    xy[0] = static_cast<int>(std::floor(proj.x * scale + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
-    xy[1] = static_cast<int>(std::floor(proj.y * scale + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
-  }
+  lens_proj_internal::ProjectMainHits(p, LensParam::kFisheyeEqualArea, d, xy, num);
 }
 
 inline void FisheyeEquidistantProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  float scale = p.short_pix_ * math::kPi_2 / (p.fov_ * math::kDegreeToRad);
-
-  for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
-    if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
-        (p.visible_range_ == RenderConfig::kLower && d[2] < 0)) {
-      xy[0] = -1;
-      xy[1] = -1;
-      continue;
-    }
-
-    float d_cam[3]{ -d[0], -d[1], -d[2] };
-    p.rot_.ApplyInverse(d_cam);
-    if (d_cam[2] <= 0) {
-      xy[0] = -1;
-      xy[1] = -1;
-      continue;
-    }
-    auto proj = projection::FisheyeEquidistantForward(d_cam[0], d_cam[1], d_cam[2]);
-
-    xy[0] = static_cast<int>(std::floor(proj.x * scale + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
-    xy[1] = static_cast<int>(std::floor(proj.y * scale + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
-  }
+  lens_proj_internal::ProjectMainHits(p, LensParam::kFisheyeEquidistant, d, xy, num);
 }
 
 inline void FisheyeStereographicProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  float scale = p.short_pix_ / 2.0f / std::tan(p.fov_ / 4.0f * math::kDegreeToRad);
-
-  for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
-    if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
-        (p.visible_range_ == RenderConfig::kLower && d[2] < 0)) {
-      xy[0] = -1;
-      xy[1] = -1;
-      continue;
-    }
-
-    float d_cam[3]{ -d[0], -d[1], -d[2] };
-    p.rot_.ApplyInverse(d_cam);
-    if (d_cam[2] <= 0) {
-      xy[0] = -1;
-      xy[1] = -1;
-      continue;
-    }
-    auto proj = projection::FisheyeStereographicForward(d_cam[0], d_cam[1], d_cam[2]);
-
-    xy[0] = static_cast<int>(std::floor(proj.x * scale + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
-    xy[1] = static_cast<int>(std::floor(proj.y * scale + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
-  }
+  lens_proj_internal::ProjectMainHits(p, LensParam::kFisheyeStereographic, d, xy, num);
 }
 
 inline void FisheyeOrthographicProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  float scale = p.short_pix_ / 2.0f / std::sin(p.fov_ / 2.0f * math::kDegreeToRad);
-
-  for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
-    if ((p.visible_range_ == RenderConfig::kUpper && d[2] > 0) ||  //
-        (p.visible_range_ == RenderConfig::kLower && d[2] < 0)) {
-      xy[0] = -1;
-      xy[1] = -1;
-      continue;
-    }
-
-    float d_cam[3]{ -d[0], -d[1], -d[2] };
-    p.rot_.ApplyInverse(d_cam);
-    if (d_cam[2] <= 0) {
-      xy[0] = -1;
-      xy[1] = -1;
-      continue;
-    }
-    auto proj = projection::FisheyeOrthographicForward(d_cam[0], d_cam[1], d_cam[2]);
-
-    xy[0] = static_cast<int>(std::floor(proj.x * scale + p.resolution_[0] / 2.0f + 0.5f + p.lens_shift_[0]));
-    xy[1] = static_cast<int>(std::floor(proj.y * scale + p.resolution_[1] / 2.0f + 0.5f + p.lens_shift_[1]));
-  }
-}
-
-// Overlap r_scale helpers for dual-fisheye lenses.
-inline float ComputeEDRScale(float max_abs_dz) {
-  return (max_abs_dz <= 0) ? 1.0f : math::kPi_2 / (math::kPi_2 + std::asin(max_abs_dz));
-}
-inline float ComputeSTRScale(float max_abs_dz) {
-  return (max_abs_dz <= 0) ? 1.0f : 1.0f / std::tan((math::kPi_2 + std::asin(max_abs_dz)) / 2.0f);
+  lens_proj_internal::ProjectMainHits(p, LensParam::kFisheyeOrthographic, d, xy, num);
 }
 
 inline void DualFisheyeEqualAreaProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
-    float sky_x = -d[0], sky_y = -d[1], sky_z = -d[2];
-    bool is_upper = (sky_z >= 0);
-    float z_hemi = is_upper ? sky_z : -sky_z;
-    auto proj = projection::FisheyeEqualAreaForward(sky_x, sky_y, z_hemi, p.r_scale_);
-    float fx, fy;
-    projection::DualFisheyeToPixel(proj.x, proj.y, is_upper, p.resolution_[0], p.resolution_[1], &fx, &fy);
-    xy[0] = static_cast<int>(std::floor(fx + 0.5f));
-    xy[1] = static_cast<int>(std::floor(fy + 0.5f));
-  }
+  lens_proj_internal::ProjectMainHits(p, LensParam::kDualFisheyeEqualArea, d, xy, num);
 }
 
 inline void DualFisheyeEquidistantProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
-    float sky_x = -d[0], sky_y = -d[1], sky_z = -d[2];
-    bool is_upper = (sky_z >= 0);
-    float z_hemi = is_upper ? sky_z : -sky_z;
-    auto proj = projection::FisheyeEquidistantForward(sky_x, sky_y, z_hemi, p.r_scale_);
-    float fx, fy;
-    projection::DualFisheyeToPixel(proj.x, proj.y, is_upper, p.resolution_[0], p.resolution_[1], &fx, &fy);
-    xy[0] = static_cast<int>(std::floor(fx + 0.5f));
-    xy[1] = static_cast<int>(std::floor(fy + 0.5f));
-  }
+  lens_proj_internal::ProjectMainHits(p, LensParam::kDualFisheyeEquidistant, d, xy, num);
 }
 
 inline void DualFisheyeStereographicProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
-    float sky_x = -d[0], sky_y = -d[1], sky_z = -d[2];
-    bool is_upper = (sky_z >= 0);
-    float z_hemi = is_upper ? sky_z : -sky_z;
-    auto proj = projection::FisheyeStereographicForward(sky_x, sky_y, z_hemi, p.r_scale_);
-    float fx, fy;
-    projection::DualFisheyeToPixel(proj.x, proj.y, is_upper, p.resolution_[0], p.resolution_[1], &fx, &fy);
-    xy[0] = static_cast<int>(std::floor(fx + 0.5f));
-    xy[1] = static_cast<int>(std::floor(fy + 0.5f));
-  }
+  lens_proj_internal::ProjectMainHits(p, LensParam::kDualFisheyeStereographic, d, xy, num);
 }
 
 inline void DualFisheyeOrthographicProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
-    float sky_x = -d[0], sky_y = -d[1], sky_z = -d[2];
-    bool is_upper = (sky_z >= 0);
-    float z_hemi = is_upper ? sky_z : -sky_z;
-    auto proj = projection::FisheyeOrthographicForward(sky_x, sky_y, z_hemi, p.r_scale_);
-    float fx, fy;
-    projection::DualFisheyeToPixel(proj.x, proj.y, is_upper, p.resolution_[0], p.resolution_[1], &fx, &fy);
-    xy[0] = static_cast<int>(std::floor(fx + 0.5f));
-    xy[1] = static_cast<int>(std::floor(fy + 0.5f));
-  }
+  lens_proj_internal::ProjectMainHits(p, LensParam::kDualFisheyeOrthographic, d, xy, num);
 }
 
 inline void RectangularProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
-  auto short_res = std::min(p.resolution_[0] / 2, p.resolution_[1]);
-  float scale = short_res / math::kPi;
+  lens_proj_internal::ProjectMainHits(p, LensParam::kRectangular, d, xy, num);
+}
 
-  float ax_z[3]{ 0, 0, 1 };
-  p.rot_.Apply(ax_z);
-  float az0 = std::atan2(ax_z[1], ax_z[0]);
-  for (size_t i = 0; i < num; i++, d += 3, xy += 2) {
-    auto proj = projection::RectangularForward(-d[0], -d[1], -d[2]);
-    float lon = proj.x - az0;  // subtract camera azimuth offset
-    while (lon < -math::kPi) {
-      lon += 2 * math::kPi;
-    }
-    while (lon > math::kPi) {
-      lon -= 2 * math::kPi;
-    }
-
-    int raw_x = static_cast<int>(std::floor(lon * scale + p.resolution_[0] / 2.0f + 0.5f));
-    xy[0] = ((raw_x % p.resolution_[0]) + p.resolution_[0]) % p.resolution_[0];
-    xy[1] = static_cast<int>(std::floor(-proj.y * scale + p.resolution_[1] / 2.0f + 0.5f));
-  }
+inline void GlobeProject(const LensProjParam& p, const float* d, int* xy, size_t num = 1) {
+  lens_proj_internal::ProjectMainHits(p, LensParam::kGlobe, d, xy, num);
 }
 
 inline ProjFunc GetProjFunc(LensParam::LensType type) {
@@ -253,6 +144,7 @@ inline ProjFunc GetProjFunc(LensParam::LensType type) {
     { LensParam::kRectangular, RectangularProject },
     { LensParam::kFisheyeOrthographic, FisheyeOrthographicProject },
     { LensParam::kDualFisheyeOrthographic, DualFisheyeOrthographicProject },
+    { LensParam::kGlobe, GlobeProject },
   };
   return lens_proj_map.at(type);
 }

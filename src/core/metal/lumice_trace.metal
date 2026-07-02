@@ -357,15 +357,8 @@ struct KernelParams {
   uint  num_rays;
   uint  img_w;
   uint  img_h;
-  float az0;
   uint  ms_mode;
   uint  out_cap;
-  // Projection routing (host fills per BeginSession lens type):
-  //   proj_type == 0: rectangular (legacy az0-projection, uses az0)
-  //   proj_type == 1: dual_fisheye_equal_area (uses r_scale / max_abs_dz)
-  uint  proj_type;
-  float r_scale;     // equal-area r_scale = 1/sqrt(1+overlap); 1.0 if no overlap
-  float max_abs_dz;  // overlap zone |sky_z| threshold; 0 = no overlap
   // Buffer-egress (exit seam, scrum-258.1): kernel's final-exit branch writes
   // {world_dir(3), weight} to exit_d/exit_w at a session-level atomic slot
   // (exit_slot). Capacity bound is host-supplied (ComputeOutCap).
@@ -394,6 +387,13 @@ struct KernelParams {
   uint  gate_seed;
   uint  filter_desc_max_ci;
   uint  crystal_config_id;
+  // Unified render projection (315.3): host predigests all trig-heavy setup
+  // (per-type scale, dual-fisheye r_scale/overlap, rectangular az0, camera rot)
+  // into this POD, filled by BeginSession via BuildProjParams. The exit tail
+  // calls lm_proj::ProjectExitToPixel(proj, world_exit...) — single source with
+  // host CPU (scatter_accum.hpp) and CUDA. Replaces the former loose az0 /
+  // proj_type / r_scale / max_abs_dz fields.
+  lm_proj::ProjParams proj;
 };
 
 kernel void trace_layer_kernel(
@@ -484,10 +484,11 @@ kernel void trace_layer_kernel(
 
   const int   iw_i      = int(prm.img_w);
   const int   ih_i      = int(prm.img_h);
-  const float img_w_f   = float(prm.img_w);
-  const float img_h_f   = float(prm.img_h);
-  const float short_res = float(min(prm.img_w / 2u, prm.img_h));
-  const float proj_scl  = short_res / M_PI_F;
+  // 315.3: thread-local copy of the POD projection params. ProjectExitToPixel
+  // takes a `thread const ProjParams&` (LM_THREAD), but prm lives in the
+  // `constant` address space — MSL cannot bind a constant object to a thread
+  // reference, so copy once per thread and pass the local to both exit blocks.
+  lm_proj::ProjParams proj_local = prm.proj;
 
   ushort path[kRecCap];
   uint   rec_len = 0u;
@@ -634,65 +635,21 @@ kernel void trace_layer_kernel(
               atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
             } else {
               // Mid-exit: filter_pass && !do_continue → device-fused XYZ accumulation.
-              // Project the exit direction into dual_fisheye pixels and atomically
-              // add into `image`. Mirror the ms_mode==0 final-layer projection block
-              // exactly (same dual_fisheye math, same overlap dual-write, same
-              // landed_weight semantics). Projection direction = sky direction =
-              // -(exit direction), so negate the world-space components.
-              float sx_m = -wcx, sy_m = -wcy, sz_m = -wcz;
-              if (prm.proj_type == 0u) {
-                // Rectangular projection — mirror the ms_mode==0 final-layer
-                // proj_type==0 branch. The implement pass copied only the
-                // dual_fisheye branch into mid-exit; without this the
-                // rectangular render config (parity harness MakeRectangularRender)
-                // mis-projects mid-exit rays as dual_fisheye.
-                auto  proj_rm = lm_proj::RectangularForward(sx_m, sy_m, sz_m);
-                float lon_m   = proj_rm.x - prm.az0;
-                lon_m = lon_m - 2.0f * M_PI_F * floor((lon_m + M_PI_F) / (2.0f * M_PI_F));
-                float lat_m   = proj_rm.y;
-                int raw_x_m = int(floor(lon_m * proj_scl + img_w_f * 0.5f + 0.5f));
-                int ix_rm   = ((raw_x_m % iw_i) + iw_i) % iw_i;
-                int iy_rm   = int(floor(-lat_m * proj_scl + img_h_f * 0.5f + 0.5f));
-                if (iy_rm >= 0 && iy_rm < ih_i) {
-                  AccumXyzToPixel(image, uint(iy_rm) * prm.img_w + uint(ix_rm),
+              // 315.3: single-source projection via lm_proj::ProjectExitToPixel
+              // (shared with host CPU scatter_accum.hpp + CUDA). Pass the WORLD
+              // exit dir (wcx,wcy,wcz) — the function negates internally to the
+              // sky direction, matching ScatterOutgoingToXyz which feeds the
+              // outgoing world dir `d`. Each returned hit is atomically added;
+              // landed_weight only bumps on bump_landed (primary, not overlap).
+              lm_proj::ProjResult pr_m = lm_proj::ProjectExitToPixel(proj_local, wcx, wcy, wcz);
+              for (int hi = 0; hi < pr_m.count; hi++) {
+                int px_m = pr_m.hits[hi].px;
+                int py_m = pr_m.hits[hi].py;
+                if (px_m >= 0 && px_m < iw_i && py_m >= 0 && py_m < ih_i) {
+                  AccumXyzToPixel(image, uint(py_m) * prm.img_w + uint(px_m),
                                   cmf_x, cmf_y, cmf_z, cw);
-                  atomic_fetch_add_explicit(landed_weight, cw, memory_order_relaxed);
-                }
-              } else {
-                int   dual_short_m = min(int(prm.img_w) / 2, int(prm.img_h));
-                float r_m          = float(dual_short_m) * 0.5f;
-                float cy_pix_m     = img_h_f * 0.5f;
-                float cx_left_m    = img_w_f * 0.5f - r_m;
-                float cx_right_m   = img_w_f * 0.5f + r_m;
-                bool  is_upper_m = (sz_m >= 0.0f);
-                float z_hemi_m   = is_upper_m ? sz_m : -sz_m;
-                auto  ea_m = lm_proj::FisheyeEqualAreaForward(sx_m, sy_m, z_hemi_m, prm.r_scale);
-                float cx_prim_m = is_upper_m ? cx_left_m : cx_right_m;
-                float sx_prim_m = is_upper_m ? -1.0f : 1.0f;
-                float fx_m = sx_prim_m * ea_m.y * r_m + cx_prim_m;
-                float fy_m = ea_m.x * r_m + cy_pix_m;
-                int ix_m = int(floor(fx_m + 0.5f));
-                int iy_m = int(floor(fy_m + 0.5f));
-                if (ix_m >= 0 && ix_m < iw_i && iy_m >= 0 && iy_m < ih_i) {
-                  AccumXyzToPixel(image, uint(iy_m) * prm.img_w + uint(ix_m),
-                                  cmf_x, cmf_y, cmf_z, cw);
-                  // landed_weight counts in-bounds primary writes; overlap dual-write
-                  // does NOT increment it (parity with ScatterOutgoingToXyz Pass 2).
-                  atomic_fetch_add_explicit(landed_weight, cw, memory_order_relaxed);
-                  if (prm.max_abs_dz > 0.0f && z_hemi_m < prm.max_abs_dz) {
-                    float z_opp_m = -z_hemi_m;
-                    auto  ea_m2 = lm_proj::FisheyeEqualAreaForward(sx_m, sy_m, z_opp_m, prm.r_scale);
-                    bool  is_upper_opp_m = !is_upper_m;
-                    float cx_opp_m = is_upper_opp_m ? cx_left_m : cx_right_m;
-                    float sx_opp_m = is_upper_opp_m ? -1.0f : 1.0f;
-                    float fx_m2 = sx_opp_m * ea_m2.y * r_m + cx_opp_m;
-                    float fy_m2 = ea_m2.x * r_m + cy_pix_m;
-                    int   ix_m2 = int(floor(fx_m2 + 0.5f));
-                    int   iy_m2 = int(floor(fy_m2 + 0.5f));
-                    if (ix_m2 >= 0 && ix_m2 < iw_i && iy_m2 >= 0 && iy_m2 < ih_i) {
-                      AccumXyzToPixel(image, uint(iy_m2) * prm.img_w + uint(ix_m2),
-                                      cmf_x, cmf_y, cmf_z, cw);
-                    }
+                  if (pr_m.hits[hi].bump_landed) {
+                    atomic_fetch_add_explicit(landed_weight, cw, memory_order_relaxed);
                   }
                 }
               }
@@ -737,76 +694,24 @@ kernel void trace_layer_kernel(
           gate_stream_f.slot       = 0u;
           bool prob_drop_f = (pcg_uniform(gate_stream_f) < prm.ms_prob);
           if (filter_pass_f && !prob_drop_f) {
-            float sx = -wx;
-            float sy = -wy;
-            float sz = -wz;
-            if (prm.proj_type == 0u) {
-              auto proj_r = lm_proj::RectangularForward(sx, sy, sz);
-              float lon = proj_r.x - prm.az0;
-              lon = lon - 2.0f * M_PI_F * floor((lon + M_PI_F) / (2.0f * M_PI_F));
-              float lat = proj_r.y;
-
-              int raw_x = int(floor(lon * proj_scl + img_w_f * 0.5f + 0.5f));
-              int ix = ((raw_x % iw_i) + iw_i) % iw_i;
-              int iy = int(floor(-lat * proj_scl + img_h_f * 0.5f + 0.5f));
-              if (iy >= 0 && iy < ih_i) {
-                uint pix = (uint(iy) * prm.img_w + uint(ix)) * 3u;
+            // 315.3: single-source projection via lm_proj::ProjectExitToPixel
+            // (shared with host CPU scatter_accum.hpp + CUDA). Pass the WORLD
+            // exit dir (wx,wy,wz) — the function negates internally to the sky
+            // direction, matching ScatterOutgoingToXyz which feeds the outgoing
+            // world dir `d`. Each returned hit (primary + optional dual-fisheye
+            // overlap) is atomically added; landed_weight only bumps on
+            // bump_landed (primary, not overlap — parity with Pass 2).
+            lm_proj::ProjResult pr_f = lm_proj::ProjectExitToPixel(proj_local, wx, wy, wz);
+            for (int hi = 0; hi < pr_f.count; hi++) {
+              int px_f = pr_f.hits[hi].px;
+              int py_f = pr_f.hits[hi].py;
+              if (px_f >= 0 && px_f < iw_i && py_f >= 0 && py_f < ih_i) {
+                uint pix = (uint(py_f) * prm.img_w + uint(px_f)) * 3u;
                 atomic_fetch_add_explicit(&image[pix + 0u], cmf_x * cw, memory_order_relaxed);
                 atomic_fetch_add_explicit(&image[pix + 1u], cmf_y * cw, memory_order_relaxed);
                 atomic_fetch_add_explicit(&image[pix + 2u], cmf_z * cw, memory_order_relaxed);
-                atomic_fetch_add_explicit(landed_weight, cw, memory_order_relaxed);
-              }
-            } else {
-              // proj_type == 1: dual fisheye equal-area, primary + opposite-hemisphere overlap.
-              // Projection math comes from lm_proj::FisheyeEqualAreaForward (shared with CPU
-              // projection.cpp); the pixel-layout step below (DualFisheyeToPixel equivalent)
-              // is intentionally kept inline — it encodes lay-out conventions, not pure math.
-              int   dual_short = min(int(prm.img_w) / 2, int(prm.img_h));
-              float r          = float(dual_short) * 0.5f;
-              float cy_pix     = img_h_f * 0.5f;
-              float cx_left    = img_w_f * 0.5f - r;
-              float cx_right   = img_w_f * 0.5f + r;
-
-              bool  is_upper = (sz >= 0.0f);
-              float z_hemi   = is_upper ? sz : -sz;  // own hemisphere: +|sz|
-              auto  ea_r = lm_proj::FisheyeEqualAreaForward(sx, sy, z_hemi, prm.r_scale);
-              float xn = ea_r.x;
-              float yn = ea_r.y;
-              float cx_primary = is_upper ? cx_left : cx_right;
-              float sx_primary = is_upper ? -1.0f : 1.0f;
-              float fx = sx_primary * yn * r + cx_primary;
-              float fy = xn * r + cy_pix;
-              int ix = int(floor(fx + 0.5f));
-              int iy = int(floor(fy + 0.5f));
-              if (ix >= 0 && ix < iw_i && iy >= 0 && iy < ih_i) {
-                uint pix = (uint(iy) * prm.img_w + uint(ix)) * 3u;
-                atomic_fetch_add_explicit(&image[pix + 0u], cmf_x * cw, memory_order_relaxed);
-                atomic_fetch_add_explicit(&image[pix + 1u], cmf_y * cw, memory_order_relaxed);
-                atomic_fetch_add_explicit(&image[pix + 2u], cmf_z * cw, memory_order_relaxed);
-                // landed_weight counts in-bounds primary writes; overlap dual-write
-                // does NOT increment it (parity with ScatterOutgoingToXyz Pass 2).
-                atomic_fetch_add_explicit(landed_weight, cw, memory_order_relaxed);
-              }
-              // Overlap dual-write: mirror CPU render.cpp:192-214 (opposite hemisphere, dz<0).
-              // Does NOT increment landed_weight — parity with ScatterOutgoingToXyz Pass 2
-              // which does not update total_intensity for overlap writes.
-              if (prm.max_abs_dz > 0.0f && z_hemi < prm.max_abs_dz) {
-                float z_opp = -z_hemi;  // = -|sz| < 0 (matches z_hemi_opp)
-                auto  ea_r2 = lm_proj::FisheyeEqualAreaForward(sx, sy, z_opp, prm.r_scale);
-                float xn2 = ea_r2.x;
-                float yn2 = ea_r2.y;
-                bool  is_upper_opp = !is_upper;
-                float cx_opp       = is_upper_opp ? cx_left : cx_right;
-                float sx_opp       = is_upper_opp ? -1.0f : 1.0f;
-                float fx2 = sx_opp * yn2 * r + cx_opp;
-                float fy2 = xn2 * r + cy_pix;
-                int   ix2 = int(floor(fx2 + 0.5f));
-                int   iy2 = int(floor(fy2 + 0.5f));
-                if (ix2 >= 0 && ix2 < iw_i && iy2 >= 0 && iy2 < ih_i) {
-                  uint pix2 = (uint(iy2) * prm.img_w + uint(ix2)) * 3u;
-                  atomic_fetch_add_explicit(&image[pix2 + 0u], cmf_x * cw, memory_order_relaxed);
-                  atomic_fetch_add_explicit(&image[pix2 + 1u], cmf_y * cw, memory_order_relaxed);
-                  atomic_fetch_add_explicit(&image[pix2 + 2u], cmf_z * cw, memory_order_relaxed);
+                if (pr_f.hits[hi].bump_landed) {
+                  atomic_fetch_add_explicit(landed_weight, cw, memory_order_relaxed);
                 }
               }
             }

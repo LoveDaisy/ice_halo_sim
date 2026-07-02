@@ -158,3 +158,16 @@
 **scrum-312（第三时钟 readback 解耦，蓝图 §4.8 兑现）**：内测反馈"默认场景 GPU 慢"→真因 = 真实 GUI 分辨率 2048×1024 下 readback 焊死在 trace 时钟（每 SimBatch 一次 device XYZ 回读）。route B 把 readback 解耦到显示节奏第三时钟 → 2048×1024 增益：4060Ti(Ada) 28→39M(1.4×) / 1070Ti(Pascal) 12.5→33.5M(2.7×) / Metal 11→32.3M(~3×)，三机一致。**推翻"Metal 统一内存零收益"**（per-batch 全幅 24MB memset+memcpy 是真成本）。精度用 periodic-drain（float32+host Neumaier+稀 drain），**f64 淘汰**（48MB 溢 L2，0.6×）。parity CUDA 10/10×2arch + Metal 14/14。
 
 **Phase 11 元模式**：Phase 10 的"根本不合理"张力，收口后大半是**测量方法学问题**（非 idle-gate / 错口径 / setup 计进分母 / drain 粒度失真），真机制 lever 只有三个（buffer-persist / dispatch / exit-cap / 第三时钟）。**教训固化**：GPU 吞吐 correctness 不可单一复现路径自证；shared 机只信 interleaved；profile 先于改代码（async 增量差点白建）。当前 canonical 吞吐见 `doc/performance-testing.md`；per-run 详录见 `scratchpad/perf-results-log.md`。**残余**：机制 C（in-kernel atomicAdd L2 溢出，高分辨率残税）+ kernel 算法级重构（SOL 逼近）归 backlog 远期。
+## 七、Phase 12 — 投影全量对齐（scrum-315，2026-07-02）
+
+> device-fused 消费端此前只在 GPU 内做**两种固定投影**（`rectangular` + `dual_fisheye_equal_area`）；其余镜头类型经 `IsCompatible` 返回 false → **静默回落 legacy CPU**（输出正确，只是吃不到 GPU 加速）。这是 **GPU 加速覆盖**缺口，不是正确性缺口。
+
+**scrum-gpu-projection-parity（#315，worktree 隔离，5 步 + 1 chore）**：把 forward 投影（dir→pixel，含 pixel-layout / fov scale / lens_shift / dual-fisheye 双眼布局 / overlap / 可见范围裁剪）从三处各写一遍（legacy `lens_proj.hpp` / Metal `lumice_trace.metal` 两 block / CUDA `EmitGateProject`）统一进**单一真源** `src/core/shared/projection_shared.h::ProjectExitToPixel`。三端塌成对同一函数的薄封装 → 加投影≈免费，**cross-backend parity 是结构性保证**（同一份代码，host/Metal/CUDA 不可能漂移）。
+
+- **315.1 explore**：de-risk pixel-layout 能否进 shared 并跨 host C++ / MSL / CUDA 同源编译（无 std 容器）→ 可行。
+- **315.2**：建真·共享 `ProjectExitToPixel`（补 `LinearForward` + pixel-layout + dual + overlap），legacy CPU 改调它，**parity-neutral**（仍 10 种、不改行为，用现有 e2e/parity 把重构本身 de-risk）。
+- **315.3**：全部 forward 类型接进 Metal（两 block）+ CUDA（`EmitGateProject`）走共享 dispatch；放宽 Metal/CUDA `IsCompatible` + 去 BeginSession assert，让 GPU 接受全部类型。
+- **315.4**：新增 **globe** 为第 11 种可渲染投影（legacy 此前也没有，仅 GUI 预览专用）——**选项 B：有限距离球面透视**（`kGlobeCameraD=4.0`，覆盖视轴 ±75.5° 而非满半球，与 orthographic 数学不同，仅 D→∞ 极限相等）；必须与 GUI `gui_constants.hpp` `kGlobeCameraD` 一致（CLI↔GUI 观感一致契约，靠 shared 头 "must match" 注释锚 + golden-analytic round-trip 校验维持）。
+- **315.5**：每种投影一个 cross-backend parity 测试（legacy=oracle）`test/parity-cross-backend/backend/test_{metal,cuda}_projection_parity.py`（共享 `test/e2e/_projection_battery.py`），确认全部类型真走 GPU、不再 fallback。
+
+**结果**：**全部 11 种投影**（`linear` / `fisheye_{equal_area,equidistant,stereographic,orthographic}` / `dual_fisheye_{同四}` / `rectangular` / `globe`）现在都在 **legacy CPU + Metal + CUDA** 上渲染，单源自 `projection_shared.h`。GUI 显示重投影（inverse 重采样固定 dual-fisheye 全天图）是 C-API 边界外的独立关注点，不进 shared、不动（仅守 globe `kGlobeCameraD` 一致性；GUI 侧镜头数学多副本的隐性漂移已单记 backlog，后续单独 explore）。

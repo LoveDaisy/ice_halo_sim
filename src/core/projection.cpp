@@ -195,5 +195,13 @@ float ComputeEARScale(float max_abs_dz) {
   return (max_abs_dz <= 0) ? 1.0f : 1.0f / std::sqrt(1.0f + max_abs_dz);
 }
 
+float ComputeEDRScale(float max_abs_dz) {
+  return (max_abs_dz <= 0) ? 1.0f : math::kPi_2 / (math::kPi_2 + std::asin(max_abs_dz));
+}
+
+float ComputeSTRScale(float max_abs_dz) {
+  return (max_abs_dz <= 0) ? 1.0f : 1.0f / std::tan((math::kPi_2 + std::asin(max_abs_dz)) / 2.0f);
+}
+
 }  // namespace projection
 }  // namespace lumice
