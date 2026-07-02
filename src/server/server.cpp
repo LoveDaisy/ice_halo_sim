@@ -69,6 +69,7 @@ class ServerImpl {
   std::vector<RawXyzResult> GetRawXyzResults();
   std::optional<StatsResult> GetStatsResult();
   std::optional<StatsResult> GetCachedStatsResult();
+  size_t LiveSimRayCount();
 
   void Stop();
   void Start();
@@ -588,6 +589,22 @@ std::optional<StatsResult> ServerImpl::GetStatsResult() {
 std::optional<StatsResult> ServerImpl::GetCachedStatsResult() {
   std::lock_guard<std::mutex> lock(snapshot_mutex_);
   return cached_stats_result_;
+}
+
+// task-317: cheap O(1) live sim-ray-count read for the --benchmark drain-count
+// poll loop. Unlike GetStatsResult() (which calls DoSnapshot -> RenderConsumer
+// sRGB every poll — the render-per-poll root cause), this only reads the running
+// StatsConsumer counter under consumer_mutex_. No snapshot, no render, no XYZ
+// copy — so the poll thread does not perturb the throughput measurement nor
+// starve drain-window closure. Returns 0 if no StatsConsumer is present.
+size_t ServerImpl::LiveSimRayCount() {
+  std::lock_guard<TicketMutex> lock(consumer_mutex_);
+  for (const auto& c : consumers_) {
+    if (const auto* sc = dynamic_cast<const StatsConsumer*>(c.get())) {
+      return sc->LiveSimRays();
+    }
+  }
+  return 0;
 }
 
 
@@ -1127,6 +1144,13 @@ std::optional<StatsResult> Server::GetCachedStatsResult() {
     return std::nullopt;
   }
   return impl_->GetCachedStatsResult();
+}
+
+size_t Server::GetLiveSimRayCount() {
+  if (!impl_) {
+    return 0;
+  }
+  return impl_->LiveSimRayCount();
 }
 
 void Server::Stop() {

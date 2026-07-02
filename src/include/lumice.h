@@ -292,6 +292,12 @@ LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResul
 // Returns all-zero struct if no snapshot has been taken yet.
 LUMICE_ErrorCode LUMICE_GetCachedStats(LUMICE_Server* server, LUMICE_StatsResult* out);
 
+// Cheap O(1) live accumulated sim ray count — no snapshot, no render, no XYZ copy.
+// For progress polling (e.g. the --benchmark drain loop) that needs sim_ray_num
+// every iteration but not a rendered image. Unlike LUMICE_GetStatsResults, this
+// does NOT trigger DoSnapshot/PostSnapshot. Writes 0 if no StatsConsumer. (task-317)
+LUMICE_ErrorCode LUMICE_GetSimRayCount(LUMICE_Server* server, LUMICE_RayCount* out);
+
 // =============== State & Control ===============
 LUMICE_ErrorCode LUMICE_QueryServerState(LUMICE_Server* server, LUMICE_ServerState* out);
 void LUMICE_StopServer(LUMICE_Server* server);

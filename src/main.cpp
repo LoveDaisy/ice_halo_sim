@@ -214,12 +214,17 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
   while (true) {
     std::this_thread::sleep_for(kBenchmarkPollInterval);
     LUMICE_ServerState state{};
-    LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1]{};
     if (LUMICE_QueryServerState(server, &state) != LUMICE_OK) {
       continue;
     }
-    bool have_stats = LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) == LUMICE_OK;
-    LUMICE_RayCount cur_rays = have_stats ? stats[0].sim_ray_num : 0;
+    // task-317: read sim_ray_num via the cheap O(1) live counter, NOT
+    // LUMICE_GetStatsResults — the latter triggers a full DoSnapshot +
+    // RenderConsumer sRGB (powf/pixel) on EVERY poll. For the drain-count path
+    // (many polls) that render tax dominated wall-time, starved drain-window
+    // closure, and (on CUDA) let the unbounded session run long enough to trip
+    // the 32-bit device PCG ray-index cap -> silent legacy fallback + hang.
+    LUMICE_RayCount cur_rays = 0;
+    LUMICE_GetSimRayCount(server, &cur_rays);
     auto now = std::chrono::steady_clock::now();
 
     // Mark end-of-setup the first time tracing has produced rays.
