@@ -39,11 +39,18 @@ constexpr int kBenchmarkSingleRays = 2'000'000;
 // Drain-count-driven measurement (task-gpu-bench-drain-aligned-rate): when the
 // bench config asks for scene.ray_num="infinite", RunBenchmarkPass measures the
 // window from drain #1 (warmup-end anchor) to drain #(N+1), then stops the
-// server. Setting N = 5 yields ~CUDA 84M / Metal 10.5M rays per bench pass — a
-// predictable, cheap, backend-agnostic steady-state measurement. If drain
-// granularity turns out to leave one backend below plateau, bump this constant
-// (one place). See doc/performance-testing.md and issue.md for context.
-constexpr int kBenchmarkDrainWindows = 5;
+// server. N = 10 yields ~CUDA 168M / Metal 21M rays per bench pass — a
+// predictable, cheap, backend-agnostic steady-state measurement.
+// N was chosen empirically (N-sweep on Mac Metal, N∈{5,10,20,40}): CoV does NOT
+// drop monotonically with N — beyond ~N=10 thermal drift over the longer
+// measurement REGROWS variance (N=40 hit 23.6% CoV), so a bigger window is not
+// "more stable". N=10 is the robust middle: on locked-clock desktops (CUDA
+// dev49 / win-builder — the authoritative throughput machines) it is a larger,
+// steadier window than N=5 at negligible cost and no thermal regrowth. On a Mac
+// laptop, Metal throughput is environment-dominated (thermal / GPU boost swing
+// it ~2x run-to-run, CoV 8-28%) and NO N stabilizes it — Mac Metal is treated
+// as approximate (phase-1), not canonical. See doc/performance-testing.md.
+constexpr int kBenchmarkDrainWindows = 10;
 
 void PrintUsage(const char* prog_name) {
   std::cout << "Usage: " << prog_name << " -f <config_file> [options]\n"
