@@ -25,9 +25,12 @@
 
 #if defined(LUMICE_CUDA_ENABLED)
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <set>
+#include <utility>
 #include <vector>
 
 #include "config/crystal_config.hpp"
@@ -56,6 +59,12 @@ SceneConfig MakePrismScene(size_t max_hits) {
   MsInfo ms;
   ms.prob_ = 0.0f;  // single MS final layer
   ScatteringSetting s;
+  // Value-initialize the filter (NoneFilterParam pass-through). Without this the
+  // POD members FilterConfig::symmetry_/action_/id_ stay INDETERMINATE (a bare
+  // `ScatteringSetting s;` default-inits them), and the garbage action_/symmetry_
+  // make the device emit gate's DeviceFilterCheck reject every exit → no XYZ
+  // accumulation (mirrors test/cpu_test_helpers.hpp which sets this explicitly).
+  s.filter_ = FilterConfig{};
   s.crystal_.id_ = 0;
   PrismCrystalParam prism;
   prism.h_ = Distribution{ DistributionType::kNoRandom, 1.0f, 0.0f };
@@ -277,6 +286,354 @@ TEST(CudaBackendCrystalCount, ReturnsFinalLayerSettings) {
     backend.BeginSession(spec);
     EXPECT_EQ(backend.GetLastBatchCrystalCount(), 3u) << "Final-layer settings count, not cross-layer sum (would be 4)";
     backend.EndSession();
+  }
+}
+
+// =============================================================================
+// task-gpu-rng-ray-index-uint64 white-box injection: assert the CUDA kernels
+// actually consume the new hi-epoch fields on real hardware. The in-range parity
+// battery (all CUDA parity_*.py) only exercises hi==0, which the fix makes
+// bit-exact with the pre-fix stream by construction — so a broken host↔device
+// wiring of the hi field (wrong kernel param, unread field, mixing not applied)
+// slips through parity silently. The fix touches THREE independent device PCG
+// streams — gen (gen_root_kernel), gate (trace_single_ms_kernel emit gate) and
+// transit (transit_multi_ms_kernel continuation) — and each is a separate
+// transformation chain that must be asserted directly (learnings:
+// assertion-and-coverage-traps "跨独立代码路径的 AC 间接覆盖论证不成立"). A single
+// combined injection would NOT do: gen alone moving the output could mask a
+// broken gate/transit wire. So `SetInitialRayBaseForTest` takes per-stream bases
+// and each test below drives EXACTLY ONE stream into a non-zero hi epoch.
+//
+// dev49-only (skips on Mac / hosts without a CUDA device).
+// =============================================================================
+namespace hi_wire {
+
+constexpr size_t kEpoch = static_cast<size_t>(1) << 32;
+// Slots 0/1 = hi==0 baseline (must be bit-identical); 2 = hi==1; 3 = hi==2.
+constexpr size_t kBases[4] = { 0u, 0u, kEpoch, 2u * kEpoch };
+
+// Single-crystal random-axis prism scene. Random orientation makes the gen
+// stream observable (different mixed_seed → different rotation). `final_prob`
+// controls the final-layer emit-gate keep fraction: it must be > 0 for the gate
+// stream to be observable (with prob==0 the gate draw never gates emit, so the
+// gate seed cannot move the image). filter_ is value-initialized (pass-through)
+// so the device emit gate does not reject every exit (a bare `ScatteringSetting
+// s;` leaves FilterConfig POD members indeterminate → garbage action_ rejects
+// all → no XYZ accumulation).
+SceneConfig MakeRandomAxisScene(size_t max_hits, float final_prob) {
+  SceneConfig scene;
+  scene.ray_num_ = 0;
+  scene.max_hits_ = max_hits;
+  scene.light_source_.param_ = SunParam{ 30.0f, 0.0f, 0.5f };
+  scene.light_source_.spectrum_ = std::vector<WlParam>{ { 550.0f, 1.0f } };
+
+  MsInfo ms;
+  ms.prob_ = final_prob;
+  ScatteringSetting s;
+  s.filter_ = FilterConfig{};
+  s.crystal_.id_ = 0;
+  PrismCrystalParam prism;
+  prism.h_ = Distribution{ DistributionType::kNoRandom, 1.0f, 0.0f };
+  for (auto& d : prism.d_) {
+    d = Distribution{ DistributionType::kNoRandom, 1.0f, 0.0f };
+  }
+  s.crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  s.crystal_.axis_.latitude_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  s.crystal_.param_ = prism;
+  s.crystal_proportion_ = 1.0f;
+  ms.setting_.push_back(std::move(s));
+  scene.ms_.push_back(std::move(ms));
+  return scene;
+}
+
+// Two-MS-layer scene tuned so the transit stream is cleanly OBSERVABLE at
+// layer-1's d_dirs_ without the atomic-compaction confound:
+//   - Point sun (diameter 0) + FIXED-axis layer 0 → every layer-0 ray is
+//     identical → every continuation ray carries the SAME world direction. So
+//     layer-1's d_dirs_[tid] = R1(tid)^-1 · const depends only on tid (the
+//     transit orientation), independent of which continuation ray landed at
+//     that tid → deterministic for a fixed (seed, transit_base).
+//   - RANDOM-axis layer 1 → the transit kernel samples a per-tid orientation
+//     R1(tid) from the transit PCG stream, so a non-zero transit hi moves it.
+// Layer 0 continues (prob 0.6) into layer 1 (final, prob 0).
+SceneConfig MakeTwoLayerScene(size_t max_hits) {
+  SceneConfig scene = MakeRandomAxisScene(max_hits, /*final_prob=*/0.0f);  // layer-1 template (random axis)
+  scene.light_source_.param_ = SunParam{ 30.0f, 0.0f, 0.0f };              // point sun (diameter 0)
+  MsInfo layer0 = scene.ms_[0];
+  layer0.prob_ = 0.6f;
+  layer0.setting_[0].crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kNoRandom, 0.0f, 0.0f };
+  layer0.setting_[0].crystal_.axis_.latitude_dist = Distribution{ DistributionType::kNoRandom, 20.0f, 0.0f };
+  scene.ms_.insert(scene.ms_.begin(), std::move(layer0));
+  return scene;
+}
+
+// Full-sphere rectangular render — keeps every exit direction in the field so
+// the device-fused XYZ image responds to orientation (a narrow fisheye culls
+// most random-orientation exits, collapsing the image toward constant).
+RenderConfig MakeFullViewRender() {
+  RenderConfig cfg;
+  cfg.id_ = 0;
+  cfg.lens_.type_ = LensParam::kRectangular;
+  cfg.lens_.fov_ = 360.0f;
+  cfg.resolution_[0] = 64;
+  cfg.resolution_[1] = 32;
+  cfg.view_.az_ = 0.0f;
+  cfg.view_.el_ = 90.0f;
+  cfg.view_.ro_ = 0.0f;
+  cfg.visible_ = RenderConfig::kFull;
+  return cfg;
+}
+
+double L1RelDiff(const std::vector<float>& a, const std::vector<float>& b) {
+  double num = 0.0;
+  double denom = 0.0;
+  for (size_t i = 0; i < a.size(); i++) {
+    num += std::abs(static_cast<double>(a[i]) - static_cast<double>(b[i]));
+    denom += 0.5 * (std::abs(static_cast<double>(a[i])) + std::abs(static_cast<double>(b[i])));
+  }
+  return denom > 0.0 ? num / denom : 0.0;
+}
+
+// Baseline (hi==0 vs hi==0) determinism + three-way (0-2, 0-3, 2-3) divergence
+// on a set of 4 images. `stream` names the stream under test for failures.
+void AssertImageHiDivergence(const std::vector<std::vector<float>>& images, const char* stream) {
+  const double baseline = L1RelDiff(images[0], images[1]);
+  const double threshold = std::max(baseline * 5.0, 1e-3);
+  const std::pair<int, int> kPairs[] = { { 0, 2 }, { 0, 3 }, { 2, 3 } };
+  for (auto pr : kPairs) {
+    const double d = L1RelDiff(images[pr.first], images[pr.second]);
+    EXPECT_GT(d, threshold) << stream << " stream: base_pair=(" << pr.first << "," << pr.second
+                            << ") per-pixel L1 rel diff=" << d << " baseline(hi==0 vs hi==0)=" << baseline
+                            << " threshold=" << threshold << " — the " << stream
+                            << " hi wiring is not reaching the device (hi!=0 image indistinguishable from hi==0).";
+  }
+}
+
+}  // namespace hi_wire
+
+// gen stream — observed at the MOST direct point: the device-gen'd ray
+// directions (d_dirs_, the immediate gen_root_kernel output). Injects ONLY the
+// gen base; transit/gate stay hi==0.
+TEST(CudaRngHiWiring, GenStreamWireUp) {
+  if (!CudaDeviceAvailable()) {
+    GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
+  }
+  auto scene = hi_wire::MakeRandomAxisScene(/*max_hits=*/8, /*final_prob=*/0.0f);
+  auto render = MakeRenderConfig();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  std::vector<std::vector<float>> dirs(4);
+  for (int i = 0; i < 4; i++) {
+    CudaTraceBackend backend;
+    backend.BeginSession(spec);
+    backend.SetInitialRayBaseForTest(/*gen=*/hi_wire::kBases[i], /*transit=*/0u, /*gate=*/0u);
+    HostRayBatch host;
+    host.count = kRayCount;
+    host.crystal = nullptr;
+    host.refractive_index = 0.0f;
+    backend.TraceLayer(RootRaySource::FromHost(host));
+    size_t n = backend.ReadbackGenDirsForTest(dirs[i], kRayCount);
+    backend.EndSession();
+    ASSERT_EQ(n, 3u * kRayCount) << "base_idx=" << i << " — gen-dir readback returned " << n;
+  }
+
+  EXPECT_EQ(dirs[0], dirs[1]) << "hi==0 gen directions non-deterministic — cannot distinguish wiring from noise.";
+  auto frac_moved = [](const std::vector<float>& a, const std::vector<float>& b) {
+    const size_t n = a.size() / 3u;
+    size_t moved = 0u;
+    for (size_t r = 0; r < n; r++) {
+      const float dx = a[3 * r + 0] - b[3 * r + 0];
+      const float dy = a[3 * r + 1] - b[3 * r + 1];
+      const float dz = a[3 * r + 2] - b[3 * r + 2];
+      if (dx * dx + dy * dy + dz * dz > 1e-10f) {
+        moved++;
+      }
+    }
+    return n > 0u ? static_cast<double>(moved) / static_cast<double>(n) : 0.0;
+  };
+  const std::pair<int, int> kPairs[] = { { 0, 2 }, { 0, 3 }, { 2, 3 } };
+  for (auto pr : kPairs) {
+    const double moved = frac_moved(dirs[pr.first], dirs[pr.second]);
+    EXPECT_GT(moved, 0.9) << "gen stream: base_pair=(" << pr.first << "," << pr.second << ") only " << moved
+                          << " of gen directions differ — gen_ray_base_hi not reaching the orientation sample.";
+  }
+}
+
+// gate FINAL stream (gate_ray_base_final_hi, ms_mode==0) — observed via the
+// device-fused XYZ image. A single-MS scene is always ms_mode==0, so its emit
+// gate uses gate_f seeded from gate_ray_base_final_hi. Final-layer prob 0.5 makes
+// the emit gate's prob draw actually gate emission, so a different gate_final
+// mixed_seed emits a different subset → different image. Injects ONLY the gate
+// base; gen/transit stay hi==0. NOTE: this covers gate_ray_base_FINAL_hi only —
+// the ms_mode==1 per-bounce gate_stream (gate_ray_base_hi) is a distinct kernel
+// param + stream, covered separately by GateMsMode1StreamWireUp below.
+TEST(CudaRngHiWiring, GateStreamWireUp) {
+  if (!CudaDeviceAvailable()) {
+    GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
+  }
+  auto scene = hi_wire::MakeRandomAxisScene(/*max_hits=*/8, /*final_prob=*/0.5f);
+  auto render = hi_wire::MakeFullViewRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  const size_t kImgFloats = static_cast<size_t>(render.resolution_[0]) * render.resolution_[1] * 3u;
+  std::vector<std::vector<float>> images(4);
+  for (int i = 0; i < 4; i++) {
+    images[i].assign(kImgFloats, 0.0f);
+    CudaTraceBackend backend;
+    backend.BeginSession(spec);
+    backend.SetInitialRayBaseForTest(/*gen=*/0u, /*transit=*/0u, /*gate=*/hi_wire::kBases[i]);
+    HostRayBatch host;
+    host.count = kRayCount;
+    host.crystal = nullptr;
+    host.refractive_index = 0.0f;
+    backend.TraceLayer(RootRaySource::FromHost(host));
+    XyzImageData img{ images[i].data(), render.resolution_[0], render.resolution_[1] };
+    float landed_weight = 0.0f;
+    backend.ReadbackXyzAccum(img, landed_weight);
+    backend.EndSession();
+    ASSERT_GT(landed_weight, 0.0f) << "base_idx=" << i << " — no rays accumulated; gate test cannot observe.";
+  }
+  hi_wire::AssertImageHiDivergence(images, "gate");
+}
+
+// gate PER-BOUNCE stream (gate_ray_base_hi, ms_mode==1) — RNG-ONLY observation,
+// distinct from GateStreamWireUp's gate_ray_base_final_hi. In a 2-layer scene the
+// FIRST TraceLayer (layer 0) is ms_mode==1, so trace_single_ms_kernel's
+// gate_stream (seeded from gate_mixed_seed = f(gate_ray_base_hi)) is executed on
+// device. Its do-continue draws feed the atomic continuation compaction, so the
+// image / continuation set are confounded (same reason TransitStreamWireUp uses
+// a probe) — we therefore read the gate_stream's raw pcg_uniform draw directly
+// via the RNG probe (written at the top of trace_single_ms_kernel when enabled).
+// Injects ONLY the gate base; a non-zero gate hi must move gate_mixed_seed →
+// move every draw; hi==0 runs are bit-identical. Enabling the probe BEFORE the
+// (single) TraceLayer routes it to trace_single_ms_kernel (vs the transit test
+// which enables it between layers to route it to transit_multi_ms_kernel).
+TEST(CudaRngHiWiring, GateMsMode1StreamWireUp) {
+  if (!CudaDeviceAvailable()) {
+    GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
+  }
+  auto scene = hi_wire::MakeTwoLayerScene(/*max_hits=*/6);  // layer 0 → ms_mode==1
+  auto render = hi_wire::MakeFullViewRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  std::vector<std::vector<float>> draws(4);
+  for (int i = 0; i < 4; i++) {
+    CudaTraceBackend backend;
+    backend.BeginSession(spec);
+    backend.SetInitialRayBaseForTest(/*gen=*/0u, /*transit=*/0u, /*gate=*/hi_wire::kBases[i]);
+    backend.EnableRngProbeForTest(kRayCount);  // before the first TraceLayer → trace_single_ms_kernel fills it
+    HostRayBatch host;
+    host.count = kRayCount;
+    host.crystal = nullptr;
+    host.refractive_index = 0.0f;
+    auto h0 = backend.TraceLayer(RootRaySource::FromHost(host));  // layer 0, ms_mode==1
+    ASSERT_NE(h0, nullptr);
+    size_t n = backend.ReadbackRngProbeForTest(draws[i], kRayCount);
+    backend.EndSession();
+    ASSERT_EQ(n, kRayCount) << "base_idx=" << i << " — gate RNG-probe readback returned " << n;
+  }
+
+  EXPECT_EQ(draws[0], draws[1]) << "hi==0 gate draws non-deterministic — cannot distinguish wiring from noise.";
+  auto frac_moved = [](const std::vector<float>& a, const std::vector<float>& b) {
+    size_t moved = 0u;
+    for (size_t r = 0; r < a.size(); r++) {
+      if (std::abs(a[r] - b[r]) > 1e-7f) {
+        moved++;
+      }
+    }
+    return a.empty() ? 0.0 : static_cast<double>(moved) / static_cast<double>(a.size());
+  };
+  const std::pair<int, int> kPairs[] = { { 0, 2 }, { 0, 3 }, { 2, 3 } };
+  for (auto pr : kPairs) {
+    const double moved = frac_moved(draws[pr.first], draws[pr.second]);
+    EXPECT_GT(moved, 0.9) << "gate ms_mode==1 stream: base_pair=(" << pr.first << "," << pr.second << ") only " << moved
+                          << " of gate PCG draws differ — gate_ray_base_hi wiring not reaching the device stream.";
+  }
+}
+
+// transit stream — RNG-ONLY observation. Every ray-physics channel (the XYZ
+// image, or d_dirs_) is confounded here: the atomic continuation compaction
+// assigns tids non-deterministically, so each transit orientation is combined
+// with a different continuation ray across identical runs (measured d_dirs_ /
+// image baseline is NON-zero, masking the transit-hi effect behind compaction
+// shuffle). So instead of observing the transit orientation's effect on rays we
+// observe the transit PCG STREAM DIRECTLY: the continuation transit kernel
+// writes each thread's raw pcg_uniform draw (from its transit_mixed_seed stream)
+// into a probe sink. That draw is a pure function of (transit_mixed_seed,
+// gp.gen_ray_base + tid) — deterministic per tid, independent of ray physics and
+// compaction. Injects ONLY the transit base; a non-zero transit hi must change
+// transit_mixed_seed → change the draw at every tid; hi==0 runs are bit-
+// identical.
+TEST(CudaRngHiWiring, TransitStreamWireUp) {
+  if (!CudaDeviceAvailable()) {
+    GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
+  }
+  auto scene = hi_wire::MakeTwoLayerScene(/*max_hits=*/6);
+  auto render = hi_wire::MakeFullViewRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  std::vector<std::vector<float>> draws(4);
+  size_t cont_count = 0;
+  for (int i = 0; i < 4; i++) {
+    CudaTraceBackend backend;
+    backend.BeginSession(spec);
+    backend.SetInitialRayBaseForTest(/*gen=*/0u, /*transit=*/hi_wire::kBases[i], /*gate=*/0u);
+    HostRayBatch host;
+    host.count = kRayCount;
+    host.crystal = nullptr;
+    host.refractive_index = 0.0f;
+    auto h0 = backend.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h0, nullptr);
+    const size_t cont = h0->ContinuationCount();
+    ASSERT_GT(cont, 16u) << "base_idx=" << i << " — too few continuation rays (" << cont
+                         << ") to observe transit wiring; raise ray count / layer-0 prob.";
+    if (i == 0) {
+      cont_count = cont;
+    }
+    ASSERT_EQ(cont, cont_count) << "base_idx=" << i
+                                << " — continuation count varies across runs; gen/gate not isolated.";
+    backend.EnableRngProbeForTest(cont_count);  // sink for the next (continuation) layer's transit draws
+    RecombineSpec rspec;
+    rspec.shuffle = false;
+    auto roots1 = backend.Recombine(std::move(h0), rspec);
+    auto h1 = backend.TraceLayer(roots1);
+    ASSERT_NE(h1, nullptr);
+    size_t n = backend.ReadbackRngProbeForTest(draws[i], cont_count);
+    backend.EndSession();
+    ASSERT_EQ(n, cont_count) << "base_idx=" << i << " — transit RNG-probe readback returned " << n;
+  }
+
+  EXPECT_EQ(draws[0], draws[1]) << "hi==0 transit draws non-deterministic — cannot distinguish wiring from noise.";
+  auto frac_moved = [](const std::vector<float>& a, const std::vector<float>& b) {
+    size_t moved = 0u;
+    for (size_t r = 0; r < a.size(); r++) {
+      if (std::abs(a[r] - b[r]) > 1e-7f) {
+        moved++;
+      }
+    }
+    return a.empty() ? 0.0 : static_cast<double>(moved) / static_cast<double>(a.size());
+  };
+  const std::pair<int, int> kPairs[] = { { 0, 2 }, { 0, 3 }, { 2, 3 } };
+  for (auto pr : kPairs) {
+    const double moved = frac_moved(draws[pr.first], draws[pr.second]);
+    EXPECT_GT(moved, 0.9) << "transit stream: base_pair=(" << pr.first << "," << pr.second << ") only " << moved
+                          << " of transit PCG draws differ — transit hi wiring not reaching the device stream.";
   }
 }
 

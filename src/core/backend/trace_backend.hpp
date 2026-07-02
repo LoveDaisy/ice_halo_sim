@@ -154,30 +154,36 @@ class BackendUnavailableError : public std::runtime_error {
   explicit BackendUnavailableError(const std::string& what) : std::runtime_error(what) {}
 };
 
-// NarrowPcgRayBase — guard the size_t→uint32_t narrowing of a per-session PCG
-// ray-index base (gen / gate / transit) before a device dispatch. The device
-// seeds each ray's PCG stream on (seed, global_idx = ray_base + tid), tid in
-// [0, dispatch_count). Past 2^32 the uint32 global_idx wraps and two rays collide
-// on the same stream → silent under-sampling (the scrum-267.3 failure mode). The
-// per-backend asserts that previously bounded this are no-ops in Release, so this
-// throws a real runtime error instead of silently corrupting the image. It caps a
-// session at ~4.29e9 rays — only reachable on the single-engine large-dispatch
-// route (296.6). The proper fix (uint64 global_idx + high-bit hash mixing, shared
-// across both GPU backends) is backlogged ("device-gen ray index 32-bit
-// truncation"). Throwing BackendUnavailableError lets Run()'s catch degrade to
-// legacy CPU (task-282 pattern). dispatch_count is subtracted so the guard fires
-// before base + (dispatch_count-1) would wrap, matching the prior assert bound.
-inline uint32_t NarrowPcgRayBase(size_t ray_base, size_t dispatch_count, const char* stream_name) {
-  if (ray_base > static_cast<size_t>(UINT32_MAX) - dispatch_count) {
-    throw BackendUnavailableError(std::string{ "NarrowPcgRayBase: the '" } + stream_name +
-                                  "' device PCG ray-index base (" + std::to_string(ray_base) + ") + dispatch (" +
-                                  std::to_string(dispatch_count) +
-                                  ") would exceed UINT32_MAX; the uint32 global_idx "
-                                  "(base + tid) would wrap and collapse PCG ray streams into silent under-sampling. "
-                                  "A session is capped at ~4.29e9 rays until the uint64 ray-index fix lands "
-                                  "(backlog: device-gen ray index 32-bit truncation).");
-  }
-  return static_cast<uint32_t>(ray_base);
+// PcgRayBaseSplit — the (lo, hi) halves of a per-session 64-bit PCG ray-index
+// base. `lo = ray_base & 0xFFFFFFFF`, `hi = ray_base >> 32`. See
+// `SplitPcgRayBase` below.
+struct PcgRayBaseSplit {
+  uint32_t lo;
+  uint32_t hi;
+};
+
+// SplitPcgRayBase — split a session-scoped 64-bit PCG ray-index base (gen /
+// gate / transit) into its low + high 32-bit halves for the device dispatch.
+// The device seeds each ray's PCG stream on (seed, global_idx = base + tid);
+// pre-fix, base was narrowed to uint32 → past 2^32 the uint32 global_idx wrapped
+// and two rays collided on the same stream → silent under-sampling (the
+// scrum-267.3 failure mode). task-gpu-rng-ray-index-uint64 lifts that cap by
+// carrying the high 32 bits into every kernel launch; the device then mixes
+// `pcg_hash(hi)` into each ray's seed via `lm_pcg::pcg_seed_with_high` so
+// stream identity depends on the full 64-bit index. See
+// `lm_pcg::pcg_advance_hi` in pcg_shared.h for the per-thread carry-detect
+// that promotes tid past the epoch boundary.
+//
+// This function is a pure bit-shuffle; it does NOT throw. size_t is 64-bit on
+// every platform we ship (macOS/Linux/Windows x64), which the static_assert
+// makes explicit — if a 32-bit build ever became a target, ray_base would
+// max out at 2^32-1 and hi would be identically 0 (still correct).
+inline PcgRayBaseSplit SplitPcgRayBase(size_t ray_base) {
+  static_assert(sizeof(size_t) == 8, "SplitPcgRayBase assumes 64-bit size_t");
+  PcgRayBaseSplit split;
+  split.lo = static_cast<uint32_t>(ray_base & 0xFFFFFFFFull);
+  split.hi = static_cast<uint32_t>(static_cast<uint64_t>(ray_base) >> 32u);
+  return split;
 }
 
 // -----------------------------------------------------------------------------

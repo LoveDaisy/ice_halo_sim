@@ -33,7 +33,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/core/test_raypath_segments.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_simulator.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_exit_records.cpp"
-  "${PROJ_TEST_DIR}/unit-correctness/core/test_narrow_pcg_ray_base.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_pcg_ray_base_split.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_proj.cpp"
   # config/
   "${PROJ_TEST_DIR}/unit-correctness/config/test_json.cpp"

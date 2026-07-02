@@ -362,6 +362,212 @@ TEST(MetalRootGen, DeviceGenDeterminismCrossInstanceMultiSession) {
   }
 }
 
+// task-gpu-rng-ray-index-uint64 white-box injection: assert the device kernel
+// actually consumes the new `gen_ray_base_hi` field (Major 1 in the plan-review
+// coverage-gap closure — the in-range parity battery only exercises hi==0 which
+// is bit-identical by construction, so a broken host↔device wiring would slip
+// through corr/energy/cross-seed all-green). This drives the Metal gen_root
+// kernel into three distinct hi epochs (0, 1, 2) via `SetInitialRayBaseForTest`
+// and asserts each hi != 0 image diverges from the hi == 0 image by more than
+// the atomic-add noise floor (self-calibrated from two hi==0 runs).
+//
+// Contract:
+//   * hi == 0 (base_lo = 0)             → pcg_seed_with_high is identity → this
+//     reference image is the "pre-fix bit-exact" one that the in-range parity
+//     battery covers exhaustively.
+//   * hi == 1 (base = 1<<32, base_lo=0) → mixed_seed = seed ^ pcg_hash(1), a
+//     different PCG stream per ray → per-pixel content shifts.
+//   * hi == 2 (base = 2<<32, base_lo=0) → mixed_seed = seed ^ pcg_hash(2),
+//     yet another distinct stream → per-pixel content shifts again, distinctly.
+//
+// Discriminator choice: per-pixel L1 relative diff, self-calibrated.
+// Aggregate channel sums are an MC INVARIANT — two different PCG streams
+// sample the same underlying distribution so their integrals coincide to
+// O(1/sqrt(N)); measured ~1e-4 rel drift across hi=0/1/2 (well below the 1e-3
+// threshold the same-stream determinism test uses). Per-pixel L1 responds to
+// stream difference but is SCENE-DEPENDENT: under a kNoRandom axis dist most
+// rays hit similar exit angles → stream diff moves rays only fractionally
+// within the pixel grid → per-pixel L1 is only a few percent (and on some
+// scene/lens combos washes out to exactly 0, as the CUDA sibling test hit).
+// This test therefore uses a RANDOM crystal axis so the gen PCG stream drives
+// the orientation sample → different mixed_seed → different exit *directions* →
+// ~50%+ per-pixel divergence, robustly observable and not scene-fragile.
+//
+// Absolute thresholds are therefore unreliable — we compare against a
+// same-scene baseline: run hi=0 TWICE, take the L1 of that repetition as the
+// atomic-noise floor, then assert every (hi≠0) vs (hi==0) L1 exceeds
+// baseline * kBaselineMultiple (default 5×). This scales with scene physics
+// while still detecting wire-up regressions (a broken wire would collapse the
+// hi≠0 streams onto hi==0, giving L1 ≈ baseline).
+//
+// Three-way divergence (hi=0 vs 1, hi=0 vs 2, hi=1 vs 2) forces the mixing to
+// be genuinely a hash of hi — catches "hi wired in but hashed wrong" bug shape
+// where hi=1/2 would both differ from hi=0 but not from each other.
+TEST(MetalRootGen, GenRayBaseHiWireUp) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  EnableDeviceGenForStatisticalParity();
+
+  auto scene = MakeMetalScene(/*max_hits=*/8, /*ms_layers=*/1);
+  auto render = MakeRectangularRender();
+  // Random crystal orientation so the gen PCG stream drives orientation →
+  // different mixed_seed → different exit directions → robust ~50% per-pixel
+  // divergence (see rationale comment above; mirrors the CUDA sibling test).
+  scene.ms_[0].setting_[0].crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  scene.ms_[0].setting_[0].crystal_.axis_.latitude_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  constexpr size_t kEpoch = static_cast<size_t>(1) << 32;
+  // Slots 0 and 1 are BOTH hi=0 (baseline atomic-noise measurement);
+  // slots 2 and 3 are hi=1 and hi=2 respectively.
+  const size_t kBases[] = { 0u, 0u, kEpoch, 2u * kEpoch };
+  const size_t kImgFloats =
+      static_cast<size_t>(render.resolution_[0]) * static_cast<size_t>(render.resolution_[1]) * 3u;
+  std::vector<std::vector<float>> images(4);
+  for (int i = 0; i < 4; i++) {
+    images[i].assign(kImgFloats, 0.0f);
+    MetalTraceBackend metal;
+    metal.BeginSession(spec);
+    metal.SetInitialRayBaseForTest(/*root_base=*/kBases[i], /*transit_base=*/0u);  // ms_layers=1 → root stream only
+    auto h = metal.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h, nullptr);
+    XyzImageData img{ images[i].data(), render.resolution_[0], render.resolution_[1] };
+    metal.ReadbackImage(img);
+    metal.EndSession();
+    for (int c = 0; c < 3; c++) {
+      EXPECT_GT(ChannelSum(images[i], c), 0.0)
+          << "base_idx=" << i << " channel=" << c << " — empty image; test setup broken";
+    }
+  }
+
+  auto l1_rel_diff = [](const std::vector<float>& a, const std::vector<float>& b) {
+    double num = 0.0;
+    double denom = 0.0;
+    for (size_t i = 0; i < a.size(); i++) {
+      num += std::abs(static_cast<double>(a[i]) - static_cast<double>(b[i]));
+      denom += 0.5 * (std::abs(static_cast<double>(a[i])) + std::abs(static_cast<double>(b[i])));
+    }
+    return denom > 0.0 ? num / denom : 0.0;
+  };
+
+  // Baseline: same-stream (both hi==0) atomic-add noise floor for this scene.
+  const double baseline = l1_rel_diff(images[0], images[1]);
+  // Absolute floor guards against a degenerate baseline (e.g. Metal bitwise
+  // atomic determinism giving baseline≈0 → hi≠0 stream drift would sneak
+  // through with a tiny multiple of ~0). 1e-3 is well above float32 rounding
+  // noise but well below any true stream-difference this scene produces.
+  const double threshold = std::max(baseline * 5.0, 1e-3);
+
+  const std::pair<int, int> kPairs[] = { { 0, 2 }, { 0, 3 }, { 2, 3 } };
+  for (auto pr : kPairs) {
+    double d = l1_rel_diff(images[pr.first], images[pr.second]);
+    EXPECT_GT(d, threshold) << "base_pair=(" << pr.first << "," << pr.second << ") per-pixel L1 rel diff=" << d
+                            << " baseline (hi==0 vs hi==0)=" << baseline << " threshold=" << threshold
+                            << " — device-side hi wire-up appears broken: hi!=0 stream produced pixels "
+                               "no different from same-stream atomic noise. Expected the hi-mix to shift "
+                               "the PCG sequence enough that per-pixel L1 diff comfortably exceeds the "
+                               "same-stream repeat baseline.";
+  }
+}
+
+// transit stream — RNG-isolated observation via the layer-1 rotation matrices
+// (root_rot), NOT the XYZ image. The transit orientation R(tid) =
+// build_crystal_rotation(sample_lat_lon_roll(transit_mixed_seed, tid)) is a pure
+// function of (transit_seed, tid), so it is deterministic per tid and free of
+// the atomic-continuation-compaction confound that makes the image / root_d
+// non-deterministic across identical 2-layer runs. Injects ONLY the transit
+// base (root stays hi==0) so layer-0 generation + the continuation set are
+// identical across runs; a non-zero transit hi must move R(tid) at every tid.
+// Layer 1 uses a RANDOM axis so sample_lat_lon_roll actually consumes the
+// transit stream (a kNoRandom axis would ignore the seed → no observable). This
+// closes the transit_root_kernel coverage gap the same way the CUDA sibling
+// (CudaRngHiWiring.TransitStreamWireUp) does; Metal has no gate hi stream (the
+// emit gate uses tid directly, scrum-267 §3.6), so gen + transit cover it.
+TEST(MetalRootGen, TransitStreamWireUp) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  EnableDeviceGenForStatisticalParity();
+
+  auto scene = MakeMetalScene(/*max_hits=*/6, /*ms_layers=*/2);
+  // Layer 1 (the continuation/transit layer) gets a random axis so the transit
+  // PCG stream drives its orientation sample.
+  scene.ms_[1].setting_[0].crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  scene.ms_[1].setting_[0].crystal_.axis_.latitude_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  auto render = MakeRectangularRender();
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  constexpr size_t kEpoch = static_cast<size_t>(1) << 32;
+  const size_t kBases[] = { 0u, 0u, kEpoch, 2u * kEpoch };
+  std::vector<std::vector<float>> rots(4);
+  size_t cont_count = 0;
+  for (int i = 0; i < 4; i++) {
+    MetalTraceBackend metal;
+    metal.BeginSession(spec);
+    metal.SetInitialRayBaseForTest(/*root_base=*/0u, /*transit_base=*/kBases[i]);
+    auto h0 = metal.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h0, nullptr);
+    const size_t cont = h0->ContinuationCount();
+    ASSERT_GT(cont, 16u) << "base_idx=" << i << " — too few continuation rays (" << cont << ") to observe transit.";
+    if (i == 0) {
+      cont_count = cont;
+    }
+    ASSERT_EQ(cont, cont_count) << "base_idx=" << i << " — continuation count varies across runs; root not isolated.";
+    RecombineSpec rspec;
+    rspec.shuffle = false;
+    auto roots1 = metal.Recombine(std::move(h0), rspec);
+    auto h1 = metal.TraceLayer(roots1);
+    ASSERT_NE(h1, nullptr);
+    size_t n = metal.ReadbackRootRotForTest(rots[i], cont_count);
+    metal.EndSession();
+    ASSERT_EQ(n, 9u * cont_count) << "base_idx=" << i << " — transit rot readback returned " << n;
+  }
+
+  EXPECT_EQ(rots[0], rots[1]) << "hi==0 transit rotations non-deterministic — cannot distinguish wiring from noise.";
+  auto frac_moved = [](const std::vector<float>& a, const std::vector<float>& b) {
+    const size_t n = a.size() / 9u;
+    size_t moved = 0u;
+    for (size_t r = 0; r < n; r++) {
+      double d2 = 0.0;
+      for (int k = 0; k < 9; k++) {
+        const double e = static_cast<double>(a[9 * r + k]) - static_cast<double>(b[9 * r + k]);
+        d2 += e * e;
+      }
+      if (d2 > 1e-10) {
+        moved++;
+      }
+    }
+    return n > 0u ? static_cast<double>(moved) / static_cast<double>(n) : 0.0;
+  };
+  const std::pair<int, int> kPairs[] = { { 0, 2 }, { 0, 3 }, { 2, 3 } };
+  for (auto pr : kPairs) {
+    const double moved = frac_moved(rots[pr.first], rots[pr.second]);
+    EXPECT_GT(moved, 0.9) << "transit stream: base_pair=(" << pr.first << "," << pr.second << ") only " << moved
+                          << " of layer-1 transit rotations differ — transit hi wiring not reaching the device.";
+  }
+}
+
 }  // namespace
 }  // namespace lumice
 
