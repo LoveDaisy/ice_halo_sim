@@ -18,6 +18,7 @@
 
 #include "lumice.h"
 #include "util/cpu_info.hpp"
+#include "util/logger.hpp"
 
 #ifdef _WIN32
 #define STBIW_WINDOWS_UTF8
@@ -29,6 +30,64 @@ namespace {
 
 constexpr int kDefaultJpegQuality = 95;
 constexpr auto kPollInterval = std::chrono::seconds(1);
+
+// Warn (once, on config load) if the last multi-scattering layer has prob > 0.
+// core semantics: the last layer's prob-fail rays would have "continued to the
+// next layer", but there is no next layer, so they are silently discarded (see
+// simulator.cpp:1134). This is a footgun in hand-written configs; not a bug.
+//
+// Threshold is a strict `prob > 0.0`, intentionally different from the GUI's
+// IsProbZero(epsilon) helper in gui_state.hpp (kProbZeroEps=0.005 half-step).
+// The GUI epsilon absorbs slider-drag/text-input float noise — CLI values come
+// straight from hand-written JSON where a "0" means literal zero. Keeping the
+// CLI check strict avoids false-negatives on tiny hand-written probs (e.g.
+// 1e-4) that would still leak rays. This intentional asymmetry does NOT
+// violate "GUI ≡ CLI" (that rule is about identical rendering per file value,
+// not about UI-noise-absorption epsilon).
+//
+// JSON keys mirror scattering entries as parsed in config_manager.cpp:94
+// (`j_s.at("prob")`) — keep aligned if the schema evolves.
+void WarnIfLastScatteringLayerProbNonzero(const nlohmann::json& j_cfg) {
+  try {
+    const auto& j_scene = j_cfg.at("scene");
+    if (!j_scene.contains("scattering")) {
+      return;
+    }
+    const auto& j_scat = j_scene.at("scattering");
+    if (!j_scat.is_array() || j_scat.empty()) {
+      return;
+    }
+    const auto& j_last = j_scat.back();
+    if (!j_last.contains("prob")) {
+      return;
+    }
+    double prob = j_last.at("prob").get<double>();
+    if (prob > 0.0) {
+      LOG_WARNING(
+          "Last scattering layer has prob={:.4f} > 0: that fraction of filter-pass rays "
+          "will be discarded (no next layer to receive them). Set the last layer's prob to 0 "
+          "unless this is intentional.",
+          prob);
+    }
+  } catch (const nlohmann::json::exception&) {
+    // Malformed / unexpected shape: silently skip. The core parser will
+    // surface any real schema errors when it consumes the config.
+  }
+}
+
+void WarnIfLastScatteringLayerProbNonzero(const std::filesystem::path& config_path) {
+  std::ifstream f(config_path);
+  if (!f.is_open()) {
+    return;  // let CommitConfigFromFile report the real "cannot open" error.
+  }
+  try {
+    nlohmann::json j;
+    f >> j;
+    WarnIfLastScatteringLayerProbNonzero(j);
+  } catch (const nlohmann::json::exception&) {
+    // As above: let the core parser surface real errors.
+  }
+}
 // Fine poll granularity (was 100ms). At 100ms the IDLE-detection quantization
 // alone could add up to a full poll interval to wall time; for a fast backend
 // whose run completes in ~0.2s that deflated rays_per_sec by >30%. 5ms caps the
@@ -480,6 +539,8 @@ int main(int argc, char** argv) {
       return 1;
     }
 
+    WarnIfLastScatteringLayerProbNonzero(config_json);
+
     auto cores = static_cast<int>(std::thread::hardware_concurrency());
 
     // The GPU route is single-engine (worker_count=1, server.cpp) regardless of
@@ -518,6 +579,7 @@ int main(int argc, char** argv) {
   auto* server = LUMICE_CreateServerEx(&server_config);
   LUMICE_SetLogLevel(server, log_level);
 
+  WarnIfLastScatteringLayerProbNonzero(config_filename);
   if (LUMICE_CommitConfigFromFile(server, config_filename.u8string().c_str()) != LUMICE_OK) {
     LUMICE_DestroyServer(server);
     return 1;
