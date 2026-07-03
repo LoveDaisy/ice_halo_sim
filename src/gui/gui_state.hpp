@@ -417,6 +417,19 @@ struct Layer {
   std::vector<EntryCard> entries;
 };
 
+// MS layer prob helpers (single source of truth for both panels.cpp last-layer
+// four-state UI and app_panels.cpp "+ Layer" continuation-prob promotion).
+// Keep these in one place: if the two sites diverge, a slider-dragged near-zero
+// (e.g. 1e-7) can pass the strict != 0.0f check in one site while the epsilon
+// check locks/unlocks in the other, silently defeating footgun #2's guard.
+// kProbZeroEps = half the SliderWithInput "%.2f" step (0.01), so any value that
+// the UI displays as "0.00" is treated as zero.
+constexpr float kProbZeroEps = 0.005f;
+constexpr float kDefaultContinuationProb = 0.8f;
+inline bool IsProbZero(float p) {
+  return p < kProbZeroEps;
+}
+
 struct GuiState {
   // ID-pool model (restored from pre-card-redesign): EntryCard holds indices
   // into these pools. Editing a pool slot is observed by every entry sharing

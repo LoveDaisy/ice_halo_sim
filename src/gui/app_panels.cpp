@@ -372,6 +372,17 @@ void RenderLeftPanel(float window_height) {
     g_state.crystals.emplace_back();
     Layer new_layer;
     new_layer.entries.push_back(new_entry);
+    // Footgun #2 guard: the layer that WAS the last layer is about to become
+    // an intermediate layer. If its prob is (near-)zero, no rays will reach the
+    // new layer — the newly added layer would be silently dead. Promote to a
+    // sensible continuation default so the user sees rays in the new layer by
+    // default. This is a user-initiated state transition (not a load), so it
+    // is not covered by the "don't silently rewrite loaded values" rule.
+    // Zero-detection MUST use IsProbZero (same helper as panels.cpp) — a raw
+    // == 0.0f would let a slider-dragged 1e-7 sneak past this promotion.
+    if (!g_state.layers.empty() && IsProbZero(g_state.layers.back().probability)) {
+      g_state.layers.back().probability = kDefaultContinuationProb;
+    }
     g_state.layers.push_back(std::move(new_layer));
     g_thumbnail_cache.OnLayerStructureChanged();
     g_state.MarkDirty();
