@@ -1691,6 +1691,33 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // intermediate_layer_prob_nonzero_normal (code-review Minor-4): the "normal"
+  // fourth state — an intermediate (non-last) layer with prob>0 must have an
+  // ENABLED slider and NO warning (neither the disabled last-layer-zero state
+  // (a) nor a warning state (b)/(c)). Completes the four-state coverage.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_prob_footguns", "intermediate_layer_prob_nonzero_normal");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      // Two layers; layer 0 (intermediate) with prob>0 → state (d) normal.
+      gui::Layer new_layer;
+      gui::EntryCard e;
+      e.crystal_id = 0;
+      new_layer.entries.push_back(e);
+      gui::g_state.layers.push_back(std::move(new_layer));
+      gui::g_state.layers[0].probability = 0.5f;  // intermediate, non-zero
+      ctx->Yield(2);
+      // Slider enabled (state (d) normal: not the disabled last-layer-zero
+      // state (a)). We assert the disabled dimension only — the warning icon is
+      // a plain ImGui::TextColored with no queryable ID, so its absence cannot
+      // be asserted via ItemInfo (would always report "not found" and give a
+      // false pass). The show_warning_icon predicate is deterministic in
+      // panels.cpp; states (b)/(c) exercise its enable branch elsewhere.
+      auto info = ctx->ItemInfo("**/##Prob.##layer_0_input");
+      IM_CHECK((info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+    };
+  }
+
   // p1_card/entry_copy — copy an entry card
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_card", "entry_copy");

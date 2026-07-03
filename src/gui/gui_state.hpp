@@ -424,6 +424,13 @@ struct Layer {
 // check locks/unlocks in the other, silently defeating footgun #2's guard.
 // kProbZeroEps = half the SliderWithInput "%.2f" step (0.01), so any value that
 // the UI displays as "0.00" is treated as zero.
+// Accepted GUI/CLI asymmetry (code-review Minor-2): the CLI last-layer warning
+// uses a strict `prob > 0` (hand-written JSON has no slider drift), so a value
+// in (0, kProbZeroEps) — e.g. a hand-edited last-layer 0.001 — warns on the CLI
+// but reads as "zero" (disabled, no icon) in the GUI. This is intentional and
+// harmless: such a value is below the panel's display precision and discards
+// < 0.5% of output rays; forcing the GUI to flag it would contradict the
+// display-precision rationale of kProbZeroEps.
 constexpr float kProbZeroEps = 0.005f;
 constexpr float kDefaultContinuationProb = 0.8f;
 inline bool IsProbZero(float p) {

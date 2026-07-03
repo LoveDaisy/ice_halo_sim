@@ -73,6 +73,21 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), 2);
       IM_CHECK_EQ(loaded.layers[0].probability, 0.3f);
       IM_CHECK_EQ(loaded.layers[1].probability, 0.45f);  // NOT silently zeroed
+
+      // Second serialization path (code-review Major-1): the C struct commit
+      // path (FillLumiceConfig -> LUMICE_CommitConfigStruct) is what actually
+      // feeds the simulator. Assert it preserves the last-layer footgun prob>0
+      // too — the display disable/warning logic must not zero the stored value
+      // on the path that reaches core. This path is commit-only (no reverse
+      // deserialize), so it is a forward-fidelity check, not a round-trip.
+      // (The .lmc save path SerializeGuiStateJson uses the identical
+      // `jl["prob"] = layer.probability` float primitive as SerializeCoreConfig
+      // above, so its prob fidelity is covered by equivalence.)
+      LUMICE_Config cfg;
+      gui::FillLumiceConfig(gui::g_state, &cfg);
+      IM_CHECK_EQ(cfg.scatter_count, 2);
+      IM_CHECK_EQ(cfg.scattering[0].probability, 0.3f);
+      IM_CHECK_EQ(cfg.scattering[1].probability, 0.45f);
     };
   }
 
