@@ -990,7 +990,13 @@ EditTarget GetActiveTabAsEditTarget() {
   return EditTarget::kCrystal;
 }
 
+namespace {
+// Defined further down alongside the spectrum-modal statics (same anonymous namespace, this TU).
+void ResetSpectrumModalStateGlobals();
+}  // namespace
+
 void ResetModalState() {
+  ResetSpectrumModalStateGlobals();  // clear the spectrum-editor statics too (Major: test isolation)
   g_active_modal = ActiveModal::kNone;
   g_active_tab = ActiveTab::kCrystal;
   g_pending_tab_select = false;
@@ -1799,10 +1805,12 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
 namespace {
 
 bool g_spectrum_modal_open_pending = false;
-bool g_spectrum_modal_active = false;
 std::vector<WlWeight> g_spectrum_edit_buf;
 int g_spectrum_import_preset = 2;  // default D65 as the "import preset" preview target
-int g_spectrum_prev_index = 2;     // spectrum_index seen when the modal was opened (for Cancel)
+// NOTE: no g_spectrum_prev_index / g_spectrum_modal_active. spectrum_index is committed to
+// kCustomSpectrumIndex ONLY inside the OK button (transactionally with custom_spectrum), so Escape /
+// Cancel / click-outside all leave spectrum_index at its prior valid value — no per-exit-path restore
+// bookkeeping is needed.
 
 // Hard-coded uniform starting point (equal-weight probes across visible band). Not the actual
 // illuminant SPD — the GUI cannot include core light_config headers per the API boundary rule
@@ -1819,9 +1827,18 @@ std::vector<WlWeight> BuildPresetSeed(int /*preset_idx*/) {
   return out;
 }
 
+// Reset spectrum-modal statics on test teardown (called from ResetModalState via forward decl).
+// These globals live in a later anonymous-namespace block than ResetModalState; both blocks are the
+// same anonymous namespace in this TU, so the forward declaration below resolves here.
+void ResetSpectrumModalStateGlobals() {
+  g_spectrum_modal_open_pending = false;
+  g_spectrum_edit_buf.clear();
+  g_spectrum_import_preset = 2;
+}
+
 }  // namespace
 
-void OpenSpectrumModal(GuiState& state, int prior_index) {
+void OpenSpectrumModal(GuiState& state) {
   g_spectrum_modal_open_pending = true;
   // Seed the edit buffer with the current custom spectrum, if any; otherwise the preset seed.
   if (!state.sun.custom_spectrum.empty()) {
@@ -1829,14 +1846,12 @@ void OpenSpectrumModal(GuiState& state, int prior_index) {
   } else {
     g_spectrum_edit_buf = BuildPresetSeed(state.sun.spectrum_index);
   }
-  g_spectrum_prev_index = prior_index;
 }
 
 void RenderSpectrumModal(GuiState& state) {
   if (g_spectrum_modal_open_pending) {
     ImGui::OpenPopup("Custom Spectrum##spectrum_modal");
     g_spectrum_modal_open_pending = false;
-    g_spectrum_modal_active = true;
   }
 
   ImGui::SetNextWindowSize(ImVec2(480, 0), ImGuiCond_Appearing);
@@ -1922,10 +1937,12 @@ void RenderSpectrumModal(GuiState& state) {
       e.wavelength = std::clamp(e.wavelength, 380.0f, 780.0f);
       e.weight = std::max(e.weight, 0.0f);
     }
+    // Single transactional commit of the custom-spectrum state: this is the ONLY site that sets
+    // spectrum_index to kCustomSpectrumIndex, keeping the invariant (index==custom ⟹ buf non-empty)
+    // — OK is gated on a non-empty buffer (ok_disabled) above.
     state.sun.custom_spectrum = g_spectrum_edit_buf;
     state.sun.spectrum_index = kCustomSpectrumIndex;
     state.MarkDirty();
-    g_spectrum_modal_active = false;
     ImGui::CloseCurrentPopup();
   }
   if (ok_disabled) {
@@ -1936,12 +1953,8 @@ void RenderSpectrumModal(GuiState& state) {
   }
   ImGui::SameLine();
   if (ImGui::Button(ICON_FA_XMARK " Cancel##spec_cancel", ImVec2(80, 0))) {
-    // Restore prior spectrum_index (Sun panel combo may have been left on "Custom..." while modal
-    // was open; if the user cancels without confirming, revert to the preset they had before).
-    if (state.sun.custom_spectrum.empty()) {
-      state.sun.spectrum_index = g_spectrum_prev_index;
-    }
-    g_spectrum_modal_active = false;
+    // Nothing to restore: spectrum_index was never mutated on open (only OK commits it), so Cancel /
+    // Escape / click-outside all naturally leave it at the prior valid preset. Just discard the buffer.
     ImGui::CloseCurrentPopup();
   }
 

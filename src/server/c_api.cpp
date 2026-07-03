@@ -538,11 +538,15 @@ static LUMICE_ErrorCode JsonToScene(const nlohmann::json& scene, LUMICE_Config* 
         }
         out->spectrum_count = 0;
       } else if (sp.is_array()) {
-        if (static_cast<int>(sp.size()) > LUMICE_MAX_CONFIG_SPECTRUM_ENTRIES) {
+        const int count = static_cast<int>(sp.size());
+        if (count > LUMICE_MAX_CONFIG_SPECTRUM_ENTRIES) {
           return LUMICE_ERR_INVALID_CONFIG;
         }
-        out->spectrum_count = static_cast<int>(sp.size());
-        for (int i = 0; i < out->spectrum_count; i++) {
+        // Validate + fill every entry BEFORE publishing spectrum_count, so a mid-array failure returns
+        // an error without leaving the struct claiming N entries with only some slots written (callers
+        // that reuse a non-zeroed struct would otherwise read garbage). spectrum_count is the last write.
+        out->spectrum_count = 0;
+        for (int i = 0; i < count; i++) {
           const auto& e = sp[i];
           if (!e.is_object() || !e.contains("wavelength") || !e.contains("weight")) {
             return LUMICE_ERR_MISSING_FIELD;
@@ -550,6 +554,7 @@ static LUMICE_ErrorCode JsonToScene(const nlohmann::json& scene, LUMICE_Config* 
           out->spectrum_entries[i].wavelength = e.at("wavelength").get<float>();
           out->spectrum_entries[i].weight = e.at("weight").get<float>();
         }
+        out->spectrum_count = count;
         out->spectrum = "D65";  // fallback string kept for downstream defaults
       } else {
         return LUMICE_ERR_INVALID_VALUE;

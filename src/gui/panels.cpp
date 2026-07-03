@@ -911,12 +911,19 @@ void RenderSceneControls(GuiState& state) {
     items[kSpectrumCount] = "Custom...";
     return items;
   }();
-  int prev_idx = state.sun.spectrum_index;
-  if (ImGui::Combo("Spectrum", &state.sun.spectrum_index, kSpectrumComboItems, kSpectrumComboItemCount)) {
-    if (state.sun.spectrum_index == kCustomSpectrumIndex) {
-      OpenSpectrumModal(state, prev_idx);  // pass pre-Combo index so Cancel can restore the prior preset
+  // Bind the combo to a local, NOT state.sun.spectrum_index: picking "Custom..." must not commit the
+  // custom index before the modal confirms. spectrum_index is only advanced to kCustomSpectrumIndex
+  // inside the modal's OK (single transactional commit), so dismissing via Escape / click-outside /
+  // Cancel leaves it at the prior valid preset. The combo re-reads spectrum_index each frame, so it
+  // shows the prior preset while the editor is open and flips to "Custom..." once OK commits.
+  int combo_sel = state.sun.spectrum_index;
+  if (ImGui::Combo("Spectrum", &combo_sel, kSpectrumComboItems, kSpectrumComboItemCount)) {
+    if (combo_sel == kCustomSpectrumIndex) {
+      OpenSpectrumModal(state);  // intent-only: open the editor; OK is the sole commit point
     } else {
-      state.sun.custom_spectrum.clear();
+      state.sun.spectrum_index = combo_sel;
+      // Keep custom_spectrum intact — it is only read when spectrum_index==kCustomSpectrumIndex, so
+      // switching to a preset and back restores the user's edits instead of silently discarding them.
       state.MarkDirty();
     }
   }
@@ -928,7 +935,7 @@ void RenderSceneControls(GuiState& state) {
   ImGui::PopItemWidth();
   if (state.sun.spectrum_index == kCustomSpectrumIndex) {
     if (ImGui::SmallButton("Edit spectrum...##spectrum_edit")) {
-      OpenSpectrumModal(state, kCustomSpectrumIndex);  // prior==custom → Cancel keeps custom
+      OpenSpectrumModal(state);  // re-open editor for the existing custom spectrum
     }
   }
 
