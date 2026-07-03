@@ -156,17 +156,20 @@ InvResult PixelToWorldDir(float px, float py, float res_x, float res_y, int lens
   } else if (lens_type >= kLensTypeFisheyeEqualArea && lens_type <= kLensTypeFisheyeStereographic) {
     r = FisheyeInv(px, py, res_x, res_y, half_fov, lens_type - kLensTypeFisheyeEqualArea);
   } else if (lens_type >= kLensTypeDualFisheyeEqualArea && lens_type <= kLensTypeDualFisheyeStereographic) {
-    r = DualFisheyeInv(px, py, res_x, res_y, lens_type - kLensTypeDualFisheyeEqualArea);
+    // Core-pixel-inverse family: flip py (y-up screen → Core's y-down pixel layout),
+    // matching the shader's pos.y flip. Keeps this CPU inverse == the shader inverse
+    // and (with the matching WorldDirToPixel flip) a mutual inverse of the forward.
+    r = DualFisheyeInv(px, -py, res_x, res_y, lens_type - kLensTypeDualFisheyeEqualArea);
     needs_view = false;
   } else if (lens_type == kLensTypeRectangular) {
-    r = RectangularInv(px, py, res_x, res_y);
+    r = RectangularInv(px, -py, res_x, res_y);
     needs_view = false;
   } else if (lens_type == kLensTypeFisheyeOrthographic) {
     // Single orthographic: shader uses fisheyeInverse(type=3) and applies view matrix.
     r = FisheyeInv(px, py, res_x, res_y, half_fov, 3);
   } else if (lens_type == kLensTypeDualFisheyeOrthographic) {
     // Dual orthographic: shader uses dualFisheyeInverse(type=3), no view matrix.
-    r = DualFisheyeInv(px, py, res_x, res_y, 3);
+    r = DualFisheyeInv(px, -py, res_x, res_y, 3);  // CPI family: flip py (see above)
     needs_view = false;
   } else if (lens_type == kLensTypeGlobe) {
     // Mirror shader globeInverse (preview_renderer.cpp:270-288). Camera sits at
@@ -316,7 +319,10 @@ FwdResult WorldDirToPixel(float wx, float wy, float wz, float res_x, float res_y
       return { 0, 0, false };
     }
     float lon = std::atan2(-dy, -dx);
-    return { lon * scale, -lat * scale, true };
+    // CPI family: flip py so this forward stays the mutual inverse of PixelToWorldDir
+    // (which now flips py) and matches the shader's flipped display. Raw forward py is
+    // -lat*scale; flipped → +lat*scale.
+    return { lon * scale, lat * scale, true };
   }
   if ((lens_type >= kLensTypeDualFisheyeEqualArea && lens_type <= kLensTypeDualFisheyeStereographic) ||
       lens_type == kLensTypeDualFisheyeOrthographic) {
@@ -366,10 +372,11 @@ FwdResult WorldDirToPixel(float wx, float wy, float wz, float res_x, float res_y
     // just the disc center pixel.
     float lx = use_r * circle_radius * std::cos(phi);
     float ly = use_r * circle_radius * std::sin(phi);
+    // CPI family: flip py (−ly) to match PixelToWorldDir's py flip + the shader.
     if (in_left) {
-      return { lx - circle_radius, ly, true };
+      return { lx - circle_radius, -ly, true };
     } else {
-      return { lx + circle_radius, ly, true };
+      return { lx + circle_radius, -ly, true };
     }
   }
   // Unknown / unsupported lens types: return invalid.
