@@ -267,7 +267,19 @@ static nlohmann::json ConfigToJson(const LUMICE_Config& c) {
   scene["light_source"]["altitude"] = c.sun_altitude;
   scene["light_source"]["azimuth"] = c.sun_azimuth;
   scene["light_source"]["diameter"] = c.sun_diameter;
-  scene["light_source"]["spectrum"] = c.spectrum ? c.spectrum : "D65";
+  if (c.spectrum_count > 0) {
+    // Discrete custom spectrum. Shape matches core light_config.cpp::SpectrumToJson.
+    json spectrum = json::array();
+    for (int i = 0; i < c.spectrum_count; i++) {
+      json e;
+      e["wavelength"] = c.spectrum_entries[i].wavelength;
+      e["weight"] = c.spectrum_entries[i].weight;
+      spectrum.push_back(e);
+    }
+    scene["light_source"]["spectrum"] = spectrum;
+  } else {
+    scene["light_source"]["spectrum"] = c.spectrum ? c.spectrum : "D65";
+  }
 
   if (c.infinite) {
     scene["ray_num"] = "infinite";
@@ -375,10 +387,7 @@ static LUMICE_ErrorCode JsonToAxisDist(const nlohmann::json& j, LUMICE_AxisDist*
 
 static const char* MapSpectrumString(const std::string& s) {
   static const std::map<std::string, const char*> kSpectrumMap = {
-    { "D65", "D65" },
-    { "D50", "D50" },
-    { "A", "A" },
-    { "E", "E" },
+    { "D65", "D65" }, { "D55", "D55" }, { "D50", "D50" }, { "D75", "D75" }, { "A", "A" }, { "E", "E" },
   };
   auto it = kSpectrumMap.find(s);
   return it != kSpectrumMap.end() ? it->second : nullptr;
@@ -522,15 +531,32 @@ static LUMICE_ErrorCode JsonToScene(const nlohmann::json& scene, LUMICE_Config* 
     }
     if (ls.contains("spectrum")) {
       const auto& sp = ls.at("spectrum");
-      if (!sp.is_string()) {
-        return LUMICE_ERR_INVALID_VALUE;  // Array-form spectrum not supported by LUMICE_Config
-      }
-      out->spectrum = MapSpectrumString(sp.get<std::string>());
-      if (!out->spectrum) {
+      if (sp.is_string()) {
+        out->spectrum = MapSpectrumString(sp.get<std::string>());
+        if (!out->spectrum) {
+          return LUMICE_ERR_INVALID_VALUE;
+        }
+        out->spectrum_count = 0;
+      } else if (sp.is_array()) {
+        if (static_cast<int>(sp.size()) > LUMICE_MAX_CONFIG_SPECTRUM_ENTRIES) {
+          return LUMICE_ERR_INVALID_CONFIG;
+        }
+        out->spectrum_count = static_cast<int>(sp.size());
+        for (int i = 0; i < out->spectrum_count; i++) {
+          const auto& e = sp[i];
+          if (!e.is_object() || !e.contains("wavelength") || !e.contains("weight")) {
+            return LUMICE_ERR_MISSING_FIELD;
+          }
+          out->spectrum_entries[i].wavelength = e.at("wavelength").get<float>();
+          out->spectrum_entries[i].weight = e.at("weight").get<float>();
+        }
+        out->spectrum = "D65";  // fallback string kept for downstream defaults
+      } else {
         return LUMICE_ERR_INVALID_VALUE;
       }
     } else {
       out->spectrum = "D65";
+      out->spectrum_count = 0;
     }
   } else {
     out->spectrum = "D65";

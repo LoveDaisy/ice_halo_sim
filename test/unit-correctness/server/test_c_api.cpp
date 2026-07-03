@@ -646,7 +646,7 @@ TEST(ParseConfigApi, UnsupportedFilterType) {
 }
 
 
-TEST(ParseConfigApi, ArraySpectrumNotSupported) {
+TEST(ParseConfigApi, ArraySpectrumParsed) {
   nlohmann::json root;
   nlohmann::json cr;
   cr["id"] = 1;
@@ -656,17 +656,61 @@ TEST(ParseConfigApi, ArraySpectrumNotSupported) {
   cr["axis"]["azimuth"] = { { "type", "uniform" }, { "mean", 0.0f }, { "std", 180.0f } };
   cr["axis"]["roll"] = { { "type", "uniform" }, { "mean", 0.0f }, { "std", 180.0f } };
   root["crystal"] = nlohmann::json::array({ cr });
-  root["scene"]["light_source"]["spectrum"] = nlohmann::json::array({ { { "wavelength", 550 }, { "weight", 1.0 } } });
+  root["scene"]["light_source"]["spectrum"] = nlohmann::json::array(
+      { { { "wavelength", 450 }, { "weight", 0.8 } }, { { "wavelength", 550 }, { "weight", 1.0 } } });
   root["scene"]["ray_num"] = 1000;
 
   LUMICE_Config config{};
-  EXPECT_EQ(LUMICE_ParseConfigString(root.dump().c_str(), &config), LUMICE_ERR_INVALID_VALUE);
+  ASSERT_EQ(LUMICE_ParseConfigString(root.dump().c_str(), &config), LUMICE_OK);
+  EXPECT_EQ(config.spectrum_count, 2);
+  EXPECT_FLOAT_EQ(config.spectrum_entries[0].wavelength, 450.0f);
+  EXPECT_FLOAT_EQ(config.spectrum_entries[0].weight, 0.8f);
+  EXPECT_FLOAT_EQ(config.spectrum_entries[1].wavelength, 550.0f);
+  EXPECT_FLOAT_EQ(config.spectrum_entries[1].weight, 1.0f);
+}
+
+
+TEST(ParseConfigApi, StructSpectrumRoundTrip) {
+  // Fill LUMICE_Config directly, commit via struct path (bypasses JSON parse), then re-parse
+  // the ConfigToJson output via a JSON round-trip to prove spectrum_entries[] serializes into
+  // the array shape core light_config expects (mirrors GUI struct→commit path).
+  auto json = MakeMinimalConfigJson();
+  LUMICE_Config config{};
+  ASSERT_EQ(LUMICE_ParseConfigString(json.c_str(), &config), LUMICE_OK);
+
+  config.spectrum_count = 3;
+  config.spectrum_entries[0] = { 450.0f, 0.5f };
+  config.spectrum_entries[1] = { 550.0f, 1.0f };
+  config.spectrum_entries[2] = { 650.0f, 0.7f };
+  config.ray_num = 300;  // 3 wavelengths * 100 rays each is enough for a smoke commit
+  config.infinite = 0;
+
+  auto* server = LUMICE_CreateServer();
+  ASSERT_NE(server, nullptr);
+  int reused = -1;
+  EXPECT_EQ(LUMICE_CommitConfigStruct(server, &config, &reused), LUMICE_OK);
+  LUMICE_StopServer(server);
+  LUMICE_DestroyServer(server);
+}
+
+
+TEST(ParseConfigApi, ArraySpectrumOverCap) {
+  auto json_str = MakeMinimalConfigJson();
+  auto root = nlohmann::json::parse(json_str);
+  nlohmann::json arr = nlohmann::json::array();
+  for (int i = 0; i <= LUMICE_MAX_CONFIG_SPECTRUM_ENTRIES; i++) {
+    arr.push_back({ { "wavelength", 400 + i }, { "weight", 1.0 } });
+  }
+  root["scene"]["light_source"]["spectrum"] = arr;
+
+  LUMICE_Config config{};
+  EXPECT_EQ(LUMICE_ParseConfigString(root.dump().c_str(), &config), LUMICE_ERR_INVALID_CONFIG);
 }
 
 
 TEST(ParseConfigApi, SpectrumEnumerations) {
-  // Test all supported spectrum strings
-  for (const char* sp : { "D65", "D50", "A", "E" }) {
+  // Test all supported spectrum strings (D55 / D75 added in task-323).
+  for (const char* sp : { "D65", "D55", "D50", "D75", "A", "E" }) {
     auto json_str = MakeMinimalConfigJson();
     auto root = nlohmann::json::parse(json_str);
     root["scene"]["light_source"]["spectrum"] = sp;
@@ -674,6 +718,7 @@ TEST(ParseConfigApi, SpectrumEnumerations) {
     LUMICE_Config config{};
     ASSERT_EQ(LUMICE_ParseConfigString(root.dump().c_str(), &config), LUMICE_OK) << "Failed for spectrum: " << sp;
     EXPECT_STREQ(config.spectrum, sp);
+    EXPECT_EQ(config.spectrum_count, 0);
   }
 
   // Unknown spectrum string
