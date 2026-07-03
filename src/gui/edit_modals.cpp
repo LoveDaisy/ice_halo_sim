@@ -1806,7 +1806,6 @@ namespace {
 
 bool g_spectrum_modal_open_pending = false;
 std::vector<WlWeight> g_spectrum_edit_buf;
-int g_spectrum_import_preset = 2;  // default D65 as the "import preset" preview target
 // NOTE: no g_spectrum_prev_index / g_spectrum_modal_active. spectrum_index is committed to
 // kCustomSpectrumIndex ONLY inside the OK button (transactionally with custom_spectrum), so Escape /
 // Cancel / click-outside all leave spectrum_index at its prior valid value — no per-exit-path restore
@@ -1815,7 +1814,7 @@ int g_spectrum_import_preset = 2;  // default D65 as the "import preset" preview
 // Hard-coded uniform starting point (equal-weight probes across visible band). Not the actual
 // illuminant SPD — the GUI cannot include core light_config headers per the API boundary rule
 // (AGENTS.md). Real SPD resampling would need a new C API function; see plan.md §2 default #1.
-std::vector<WlWeight> BuildPresetSeed(int /*preset_idx*/) {
+std::vector<WlWeight> BuildPresetSeed() {
   constexpr int kSeedCount = 9;
   constexpr float kLo = 400.0f, kHi = 720.0f;
   std::vector<WlWeight> out;
@@ -1833,7 +1832,6 @@ std::vector<WlWeight> BuildPresetSeed(int /*preset_idx*/) {
 void ResetSpectrumModalStateGlobals() {
   g_spectrum_modal_open_pending = false;
   g_spectrum_edit_buf.clear();
-  g_spectrum_import_preset = 2;
 }
 
 }  // namespace
@@ -1844,7 +1842,7 @@ void OpenSpectrumModal(GuiState& state) {
   if (!state.sun.custom_spectrum.empty()) {
     g_spectrum_edit_buf = state.sun.custom_spectrum;
   } else {
-    g_spectrum_edit_buf = BuildPresetSeed(state.sun.spectrum_index);
+    g_spectrum_edit_buf = BuildPresetSeed();
   }
 }
 
@@ -1862,22 +1860,11 @@ void RenderSpectrumModal(GuiState& state) {
   ImGui::TextUnformatted("Discrete wavelength/weight list");
   ImGui::Separator();
 
-  // Import preset row.
-  ImGui::TextUnformatted("Import preset:");
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(140);
-  ImGui::Combo("##spec_preset", &g_spectrum_import_preset, kSpectrumNames, kSpectrumCount);
-  ImGui::SameLine();
-  if (ImGui::Button("Load##spec_preset")) {
-    g_spectrum_edit_buf = BuildPresetSeed(g_spectrum_import_preset);
-  }
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip(
-        "Load a uniform 9-wavelength probe grid as an editable starting point.\n"
-        "(Not the real illuminant SPD — see task-323 plan §2 #1.)");
-  }
-
-  ImGui::Separator();
+  // No in-modal "import preset": this editor does discrete wavelength editing only. Preset spectra
+  // (D65 etc.) are chosen from the Sun-panel Spectrum combo, not here — that avoids a misleading
+  // in-modal preset picker that couldn't reproduce a real illuminant SPD anyway (GUI can't include
+  // core SPD headers per the API boundary). A fresh custom spectrum still opens seeded with a uniform
+  // grid (BuildPresetSeed in OpenSpectrumModal) as an editable starting point.
 
   // Editable rows.
   int remove_idx = -1;
@@ -1889,7 +1876,14 @@ void RenderSpectrumModal(GuiState& state) {
     ImGui::SetNextItemWidth(80);
     ImGui::InputFloat("weight##wt", &g_spectrum_edit_buf[i].weight, 0.0f, 0.0f, "%.3f");
     ImGui::SameLine();
-    if (ImGui::SmallButton(ICON_FA_XMARK "##rm")) {
+    // Destructive red styling, matching the entry-card / layer-header delete buttons
+    // (panels.cpp kBtnDestructive* palette); replicated here since that palette is file-local.
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.22f, 0.22f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.30f, 0.30f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.15f, 0.15f, 1.0f));
+    const bool remove_clicked = ImGui::SmallButton(ICON_FA_XMARK "##rm");
+    ImGui::PopStyleColor(3);
+    if (remove_clicked) {
       remove_idx = i;
     }
     ImGui::PopID();
