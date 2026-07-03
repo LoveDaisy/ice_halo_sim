@@ -873,9 +873,16 @@ TEST(LmProj, GlobeForwardInvertsShaderSphereCast) {
 
 // Pin the shared render-path globe branch to its documented formula: reusing the
 // single-lens eye vector c = R^T·(-w), cull when c.z >= -1/D, denom = D + c.z,
-// offset = (c.x,c.y)/denom * scale, scale = short_pix/2/tan(fov/2). This keeps
-// globe's numerator/pixel-mapping identical to linear (so globe inherits linear's
-// verified GUI orientation by transitivity) while swapping only the denom+cull.
+// scale = short_pix/2/tan(fov/2). Pixel = (-c.x, c.y)/denom * scale.
+//
+// The HORIZONTAL term is NEGATED (-c.x) vs linear/fisheye: globe is an OUTSIDE-IN
+// view (camera looks at a sphere from outside), horizontally mirrored relative to
+// the INSIDE-OUT single-lens family. The earlier version reused linear's +c.x "by
+// transitivity" — that was the bug (scrum gui-lens-math-cli-alignment): it made the
+// CLI globe render a left-right mirror of the GUI globe preview (which correctly
+// carries the outside-in handedness via ray-sphere globeInverse). Captured-sample
+// renders confirm: -c.x makes the CLI sun/halo land on the same side as the GUI.
+// Vertical (c.y) is unchanged. Owner: globe follows the GUI (outside-in per tooltip).
 TEST(LmProj, GlobeRenderPathMatchesDocumentedFormula) {
   const int w = 1024, h = 512;
   const float fov = 50.0f;
@@ -902,7 +909,8 @@ TEST(LmProj, GlobeRenderPathMatchesDocumentedFormula) {
     } else {
       ++visible_seen;
       float denom = kD + cz;
-      int expect_px = static_cast<int>(std::floor(cx / denom * scale + w / 2.0f + 0.5f));
+      // -cx: globe is outside-in, horizontally mirrored vs the single-lens family.
+      int expect_px = static_cast<int>(std::floor(-cx / denom * scale + w / 2.0f + 0.5f));
       int expect_py = static_cast<int>(std::floor(cy / denom * scale + h / 2.0f + 0.5f));
       ASSERT_EQ(res.count, 1);
       EXPECT_EQ(res.hits[0].px, expect_px);

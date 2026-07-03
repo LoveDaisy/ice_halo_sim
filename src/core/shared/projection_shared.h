@@ -347,7 +347,14 @@ LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, flo
       return r;  // outside the camera-facing hemisphere → cull
     }
     float denom = kGlobeCameraD + cz;
-    int px = static_cast<int>(LM_FLOOR(cx / denom * p.scale + static_cast<float>(p.img_w) / 2.0f + 0.5f +
+    // Globe is an OUTSIDE-IN view (camera looks at a sphere from outside), which is
+    // horizontally mirrored relative to the INSIDE-OUT single-lens family (sky seen
+    // from within). The GUI `globeInverse` (ray-sphere from outside) carries this
+    // handedness; the CLI forward must match it, so negate the horizontal (cx) term
+    // — globe deliberately diverges from linear's x convention here. See scrum
+    // gui-lens-math-cli-alignment (owner: globe=outside-in per GUI tooltip; GUI is
+    // the source of truth for globe orientation).
+    int px = static_cast<int>(LM_FLOOR(-cx / denom * p.scale + static_cast<float>(p.img_w) / 2.0f + 0.5f +
                                        static_cast<float>(p.lens_shift_x)));
     int py = static_cast<int>(LM_FLOOR(cy / denom * p.scale + static_cast<float>(p.img_h) / 2.0f + 0.5f +
                                        static_cast<float>(p.lens_shift_y)));

@@ -377,8 +377,18 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color, vec2 pos_pix) {
 out vec4 frag_color;
 
 void main() {
-  vec2 pos = v_ndc * u_resolution * 0.5;  // Convert NDC [-1,1] to pixel offset from center
+  vec2 pos = v_ndc * u_resolution * 0.5;  // Convert NDC [-1,1] to pixel offset from center (y-up)
   float half_fov = u_fov * 0.5 * PI / 180.0;
+
+  // The core-pixel-inverse family (dual fisheye 4-6/9, rectangular 7) inverts Core's
+  // y-DOWN pixel layout (DualFisheyeToPixel / RectangularForward), but `pos` here is
+  // y-UP (GL NDC). Feeding y-up pos straight in flips the display vertically vs the
+  // CLI render. Flip pos.y for exactly that family so GUI matches CLI. The view-matrix
+  // family (linear/fisheye/ortho/globe) is self-consistent and keeps raw pos. The same
+  // flip is mirrored in overlay_labels.cpp (PixelToWorldDir / WorldDirToPixel) so grid
+  // labels, zenith/nadir markers and mouse interaction follow the flipped content. See
+  // scrum gui-lens-math-cli-alignment (owner: dual-fisheye/rectangular follow CLI).
+  vec2 pos_ovl = pos;  // pixel pos handed to overlayAuxLines (flipped for the CPI family)
 
   vec4 result = vec4(0.0, 0.0, 0.0, 0.0);
   bool needs_view_transform = true;
@@ -387,15 +397,18 @@ void main() {
   } else if (u_lens_type >= 1 && u_lens_type <= 3) {
     result = fisheyeInverse(pos, half_fov, u_lens_type - 1);
   } else if (u_lens_type >= 4 && u_lens_type <= 6) {
-    result = dualFisheyeInverse(pos, u_lens_type - 4);
+    pos_ovl = vec2(pos.x, -pos.y);
+    result = dualFisheyeInverse(pos_ovl, u_lens_type - 4);
     needs_view_transform = false;  // Core dual fisheye works in world space
   } else if (u_lens_type == 7) {
-    result = rectangularInverse(pos);
+    pos_ovl = vec2(pos.x, -pos.y);
+    result = rectangularInverse(pos_ovl);
     needs_view_transform = false;  // Core rectangular works in world space
   } else if (u_lens_type == 8) {   // kLensTypeFisheyeOrthographic
     result = fisheyeInverse(pos, half_fov, 3);
   } else if (u_lens_type == 9) {   // kLensTypeDualFisheyeOrthographic
-    result = dualFisheyeInverse(pos, 3);
+    pos_ovl = vec2(pos.x, -pos.y);
+    result = dualFisheyeInverse(pos_ovl, 3);
     needs_view_transform = false;  // Core dual fisheye works in world space
   } else if (u_lens_type == 10) {  // kLensTypeGlobe
     result = globeInverse(pos, half_fov);
@@ -443,7 +456,7 @@ void main() {
 
   // Auxiliary line overlay (on top of everything, only in visible region)
   if (result.w >= 0.5 && pixel_visible) {
-    final_color = overlayAuxLines(world_dir, final_color, pos);
+    final_color = overlayAuxLines(world_dir, final_color, pos_ovl);
   }
 
   frag_color = vec4(final_color, 1.0);
