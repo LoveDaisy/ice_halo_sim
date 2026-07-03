@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-23T19:02:46",
+  "generated_at": "2026-07-04T00:30:16",
   "n_ref_runs": 10,
   "n_calib_runs": 10,
   "scenes": {
@@ -9,9 +9,9 @@
       "threshold": 18.0
     },
     "multi_scat_on": {
-      "psnr_mean": 19.451,
-      "psnr_std": 0.2234,
-      "threshold": 18.5
+      "psnr_mean": 16.475,
+      "psnr_std": 0.1322,
+      "threshold": 16.0
     },
     "color_on": {
       "psnr_mean": 19.189,
@@ -53,6 +53,5 @@
       "psnr_std": 0.1287,
       "threshold": 20.5
     }
-  },
-  "note": "Recalibrated 2026-06-24 chore-auto-ev-regression-drop-off; on-only; full-suite x10 mean-4sigma floor 0.5dB"
+  }
 }

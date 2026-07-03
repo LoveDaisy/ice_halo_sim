@@ -37,7 +37,7 @@ struct AutoEvScene {
 // below the observed 10-run minimum with margin. (mean / σ / min per scene shown inline.)
 static const AutoEvScene kScenes[] = {
   {"halo_22",    LUMICE_E2E_CONFIG_DIR "/halo_22.json",                           256, 256, 18.0},  // mean 19.19 σ0.23 min 18.78
-  {"multi_scat", LUMICE_E2E_CONFIG_DIR "/multi_scatter.json",                     256, 256, 18.5},  // mean 19.45 σ0.22 min 18.89
+  {"multi_scat", LUMICE_E2E_CONFIG_DIR "/multi_scatter.json",                     256, 256, 16.0},  // mean 16.48 σ0.13 (regen: real 2-layer scattering, task-gui-ms-prob-footguns)
   {"color",      LUMICE_E2E_CONFIG_DIR "/color.json",                             256, 256, 18.5},  // mean 19.19 σ0.13 min 18.93
   {"pyramid",    LUMICE_E2E_CONFIG_DIR "/pyramid.json",                           256, 256, 19.0},  // mean 20.25 σ0.24 min 19.93
   {"cza",        LUMICE_E2E_CONFIG_DIR "/cza.json",                               256, 256, 34.0},  // mean 35.17 σ0.29 min 34.61
