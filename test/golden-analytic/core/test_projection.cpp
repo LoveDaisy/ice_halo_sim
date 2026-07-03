@@ -883,6 +883,92 @@ TEST(LmProj, GlobeForwardInvertsShaderSphereCast) {
 // carries the outside-in handedness via ray-sphere globeInverse). Captured-sample
 // renders confirm: -c.x makes the CLI sun/halo land on the same side as the GUI.
 // Vertical (c.y) is unchanged. Owner: globe follows the GUI (outside-in per tooltip).
+// =============== Handedness pin (right = +az; scrum-321.4) ===============
+//
+// After 321.2 (commit 9a45fc99) render's single-lens family (Linear + 4 single
+// fisheye + single orthographic) was pinned to screen handedness right = +az via
+// `xy.x = -xy.x;` in projection_shared.h:237. Globe is intentionally OPPOSITE
+// (LEFT), because globe is outside-in view (see GlobeRenderPathMatchesDocumented-
+// Formula above and the `-cx` in the globe branch). Prior to 321.4 this owner
+// decision was not pinned by an ABSOLUTE screen-side assertion in golden — the
+// pre-existing forward/inverse round-trip tests are closed by construction for
+// any self-consistent convention and cannot detect a sign flip. These two tests
+// close that blind spot (issue.md 321.4 / plan.md Step 1 — right = +az on single
+// lens family, opposite side on globe).
+TEST(LmProj, ProjectExitSingleLensHandednessRightIsPositiveAz) {
+  constexpr int kW = 640;
+  constexpr int kH = 320;
+  constexpr float kElOff = 3.0f * math::kDegreeToRad;
+  constexpr float kAzOff = 15.0f * math::kDegreeToRad;
+  const float ce = std::cos(kElOff);
+  const float se = std::sin(kElOff);
+  const float wz = se;
+  const struct {
+    LensParam::LensType t;
+    float fov;
+  } kCases[] = {
+    { LensParam::kLinear, 90.0f },
+    { LensParam::kFisheyeEqualArea, 180.0f },
+    { LensParam::kFisheyeEquidistant, 180.0f },
+    { LensParam::kFisheyeStereographic, 180.0f },
+    { LensParam::kFisheyeOrthographic, 180.0f },
+  };
+  auto probe = [&](LensParam::LensType t, float fov, float az_rad, float* px_out) -> bool {
+    auto cfg = MakeRC(t, fov, kW, kH, /*az=*/180.0f, /*el=*/0.0f, /*ro=*/0.0f);
+    Rotation rot = lumice::MakeCameraRotation(cfg);
+    auto pp = lumice::BuildProjParams(cfg, rot, static_cast<float>(std::min(kW, kH)));
+    float wx = ce * std::cos(az_rad);
+    float wy = ce * std::sin(az_rad);
+    auto res = lm_proj::ProjectExitToPixel(pp, wx, wy, wz);
+    if (res.count < 1) {
+      return false;
+    }
+    *px_out = static_cast<float>(res.hits[0].px);
+    return true;
+  };
+  const float mid = static_cast<float>(kW) / 2.0f;
+  for (const auto& c : kCases) {
+    float px_pos = 0.0f;
+    ASSERT_TRUE(probe(c.t, c.fov, kAzOff, &px_pos)) << "type=" << static_cast<int>(c.t) << " +az must project";
+    EXPECT_GT(px_pos, mid) << "type=" << static_cast<int>(c.t) << " +az must land RIGHT (px > W/2)";
+
+    float px_neg = 0.0f;
+    ASSERT_TRUE(probe(c.t, c.fov, -kAzOff, &px_neg)) << "type=" << static_cast<int>(c.t) << " -az must project";
+    EXPECT_LT(px_neg, mid) << "type=" << static_cast<int>(c.t) << " -az must land LEFT (px < W/2)";
+  }
+}
+
+// Globe is intentionally horizontally mirrored vs. single-lens (outside-in view).
+// After 321.2 (which flipped single-lens to RIGHT=+az) globe remains LEFT=+az.
+// This test pins that "opposite side" so a future refactor cannot silently equalize
+// globe with the single-lens family (that would reintroduce the scrum-320 bug of
+// CLI-vs-GUI mirror).
+TEST(LmProj, ProjectExitGlobeHandednessOppositeOfSingleLens) {
+  constexpr int kW = 640;
+  constexpr int kH = 320;
+  constexpr float kElOff = 3.0f * math::kDegreeToRad;
+  constexpr float kAzOff = 15.0f * math::kDegreeToRad;
+  const float ce = std::cos(kElOff);
+  const float wz = std::sin(kElOff);
+  auto cfg = MakeRC(LensParam::kGlobe, 60.0f, kW, kH, /*az=*/0.0f, /*el=*/0.0f, /*ro=*/0.0f);
+  Rotation rot = lumice::MakeCameraRotation(cfg);
+  auto pp = lumice::BuildProjParams(cfg, rot, static_cast<float>(std::min(kW, kH)));
+  const float mid = static_cast<float>(kW) / 2.0f;
+
+  float wx_p = ce * std::cos(kAzOff);
+  float wy_p = ce * std::sin(kAzOff);
+  auto res_p = lm_proj::ProjectExitToPixel(pp, wx_p, wy_p, wz);
+  ASSERT_GE(res_p.count, 1) << "globe +az must be visible";
+  EXPECT_LT(static_cast<float>(res_p.hits[0].px), mid)
+      << "globe: +az must land LEFT (opposite of single-lens RIGHT; see gui-lens-math-cli-alignment)";
+
+  float wx_n = ce * std::cos(-kAzOff);
+  float wy_n = ce * std::sin(-kAzOff);
+  auto res_n = lm_proj::ProjectExitToPixel(pp, wx_n, wy_n, wz);
+  ASSERT_GE(res_n.count, 1) << "globe -az must be visible";
+  EXPECT_GT(static_cast<float>(res_n.hits[0].px), mid) << "globe: -az must land RIGHT (opposite of single-lens LEFT)";
+}
+
 TEST(LmProj, GlobeRenderPathMatchesDocumentedFormula) {
   const int w = 1024, h = 512;
   const float fov = 50.0f;
