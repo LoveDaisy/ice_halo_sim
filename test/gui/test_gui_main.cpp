@@ -308,6 +308,7 @@ int main(int argc, char** argv) {
   RegisterAutoEvRegressionTests(engine);
   RegisterLinkedEntriesTests(engine);
   RegisterProjectWorldDirTests(engine);
+  RegisterHandednessGuardTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
 
   // Main loop — runs until all tests complete
