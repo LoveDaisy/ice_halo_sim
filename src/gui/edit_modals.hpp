@@ -49,6 +49,13 @@ EditTarget GetActiveTabAsEditTarget();
 // Called by test teardown (ResetTestState) to prevent state leakage between tests.
 void ResetModalState();
 
+// Render the custom-spectrum editor modal (independent of the Crystal/Axis/Filter per-entry
+// modal above). The Sun panel's Spectrum combo calls OpenSpectrumModal() when the user picks
+// "Custom..."; this function must be called each frame (from the main loop, next to
+// RenderEditModals) to actually paint the popup while it is open.
+void OpenSpectrumModal(GuiState& state);
+void RenderSpectrumModal(GuiState& state);
+
 // Returns true when the committed axis config of the currently open modal entry
 // meets D-symmetry conditions (az uniform 360°, roll mean a multiple of 30°).
 // Returns false when no modal is open or the entry index is invalid.

@@ -8,6 +8,7 @@
 #include <cstring>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "IconsFontAwesome6.h"
 #include "gui/app.hpp"
@@ -1787,6 +1788,158 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   } else {
     ImGui::EndPopup();
   }
+}
+
+// ========== Custom Spectrum Modal ==========
+//
+// Separate from the per-entry Crystal/Axis/Filter modal above: spectrum is a global light-source
+// property with no entry index, so it does not share g_modal_layer_idx / g_active_modal state.
+// See plan.md §3 #2 for the rationale (avoid coupling the per-entry index invariants).
+
+namespace {
+
+bool g_spectrum_modal_open_pending = false;
+bool g_spectrum_modal_active = false;
+std::vector<WlWeight> g_spectrum_edit_buf;
+int g_spectrum_import_preset = 2;  // default D65 as the "import preset" preview target
+int g_spectrum_prev_index = 2;     // spectrum_index seen when the modal was opened (for Cancel)
+
+// Hard-coded uniform starting point (equal-weight probes across visible band). Not the actual
+// illuminant SPD — the GUI cannot include core light_config headers per the API boundary rule
+// (AGENTS.md). Real SPD resampling would need a new C API function; see plan.md §2 default #1.
+std::vector<WlWeight> BuildPresetSeed(int /*preset_idx*/) {
+  constexpr int kSeedCount = 9;
+  constexpr float kLo = 400.0f, kHi = 720.0f;
+  std::vector<WlWeight> out;
+  out.reserve(kSeedCount);
+  for (int i = 0; i < kSeedCount; i++) {
+    float t = static_cast<float>(i) / static_cast<float>(kSeedCount - 1);
+    out.push_back({ kLo + t * (kHi - kLo), 1.0f });
+  }
+  return out;
+}
+
+}  // namespace
+
+void OpenSpectrumModal(GuiState& state) {
+  g_spectrum_modal_open_pending = true;
+  // Seed the edit buffer with the current custom spectrum, if any; otherwise the preset seed.
+  if (!state.sun.custom_spectrum.empty()) {
+    g_spectrum_edit_buf = state.sun.custom_spectrum;
+  } else {
+    g_spectrum_edit_buf = BuildPresetSeed(state.sun.spectrum_index);
+  }
+  g_spectrum_prev_index = state.sun.spectrum_index;
+}
+
+void RenderSpectrumModal(GuiState& state) {
+  if (g_spectrum_modal_open_pending) {
+    ImGui::OpenPopup("Custom Spectrum##spectrum_modal");
+    g_spectrum_modal_open_pending = false;
+    g_spectrum_modal_active = true;
+  }
+
+  ImGui::SetNextWindowSize(ImVec2(480, 0), ImGuiCond_Appearing);
+  if (!ImGui::BeginPopupModal("Custom Spectrum##spectrum_modal", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    return;
+  }
+
+  ImGui::TextUnformatted("Discrete wavelength/weight list");
+  ImGui::Separator();
+
+  // Import preset row.
+  ImGui::TextUnformatted("Import preset:");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(140);
+  ImGui::Combo("##spec_preset", &g_spectrum_import_preset, kSpectrumNames, kSpectrumCount);
+  ImGui::SameLine();
+  if (ImGui::Button("Load##spec_preset")) {
+    g_spectrum_edit_buf = BuildPresetSeed(g_spectrum_import_preset);
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip(
+        "Load a uniform 9-wavelength probe grid as an editable starting point.\n"
+        "(Not the real illuminant SPD — see task-323 plan §2 #1.)");
+  }
+
+  ImGui::Separator();
+
+  // Editable rows.
+  int remove_idx = -1;
+  for (int i = 0; i < static_cast<int>(g_spectrum_edit_buf.size()); i++) {
+    ImGui::PushID(i);
+    ImGui::SetNextItemWidth(80);
+    ImGui::InputFloat("wl(nm)##wl", &g_spectrum_edit_buf[i].wavelength, 0.0f, 0.0f, "%.1f");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(80);
+    ImGui::InputFloat("weight##wt", &g_spectrum_edit_buf[i].weight, 0.0f, 0.0f, "%.3f");
+    ImGui::SameLine();
+    if (ImGui::SmallButton(ICON_FA_XMARK "##rm")) {
+      remove_idx = i;
+    }
+    ImGui::PopID();
+  }
+  if (remove_idx >= 0) {
+    g_spectrum_edit_buf.erase(g_spectrum_edit_buf.begin() + remove_idx);
+  }
+
+  // Add row.
+  const int cur_count = static_cast<int>(g_spectrum_edit_buf.size());
+  const bool add_disabled = cur_count >= kSpectrumHardMax;
+  if (add_disabled) {
+    ImGui::BeginDisabled();
+  }
+  if (ImGui::Button(ICON_FA_PLUS " Add row")) {
+    float next_wl = 550.0f;
+    if (!g_spectrum_edit_buf.empty()) {
+      next_wl = std::clamp(g_spectrum_edit_buf.back().wavelength + 40.0f, 380.0f, 780.0f);
+    }
+    g_spectrum_edit_buf.push_back({ next_wl, 1.0f });
+  }
+  if (add_disabled) {
+    ImGui::EndDisabled();
+  }
+  ImGui::SameLine();
+  ImGui::Text("%d / %d entries", cur_count, kSpectrumHardMax);
+
+  if (cur_count > kSpectrumSoftWarnCount) {
+    ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f),
+                       "Warning: %d > %d wavelengths — per-wavelength sampling becomes noisier.", cur_count,
+                       kSpectrumSoftWarnCount);
+  }
+
+  ImGui::Separator();
+
+  // OK / Cancel.
+  const bool ok_disabled = g_spectrum_edit_buf.empty();
+  if (ok_disabled) {
+    ImGui::BeginDisabled();
+  }
+  if (ImGui::Button(ICON_FA_CHECK " OK##spec_ok", ImVec2(80, 0))) {
+    state.sun.custom_spectrum = g_spectrum_edit_buf;
+    state.sun.spectrum_index = kCustomSpectrumIndex;
+    state.MarkDirty();
+    g_spectrum_modal_active = false;
+    ImGui::CloseCurrentPopup();
+  }
+  if (ok_disabled) {
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("Need at least one wavelength row before OK.");
+    }
+  }
+  ImGui::SameLine();
+  if (ImGui::Button(ICON_FA_XMARK " Cancel##spec_cancel", ImVec2(80, 0))) {
+    // Restore prior spectrum_index (Sun panel combo may have been left on "Custom..." while modal
+    // was open; if the user cancels without confirming, revert to the preset they had before).
+    if (state.sun.custom_spectrum.empty()) {
+      state.sun.spectrum_index = g_spectrum_prev_index;
+    }
+    g_spectrum_modal_active = false;
+    ImGui::CloseCurrentPopup();
+  }
+
+  ImGui::EndPopup();
 }
 
 }  // namespace lumice::gui

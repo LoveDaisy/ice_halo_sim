@@ -902,9 +902,27 @@ void RenderSceneControls(GuiState& state) {
     ImGui::SetTooltip("Angular diameter of the sun disk");
   }
   ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-  DIRTY_IF(ImGui::Combo("Spectrum", &state.sun.spectrum_index, kSpectrumNames, kSpectrumCount));
+  // Combo carries kSpectrumCount presets + "Custom..." tail (item count = kSpectrumComboItemCount).
+  static const char* kSpectrumComboItems[kSpectrumComboItemCount] = { kSpectrumNames[0], kSpectrumNames[1],
+                                                                      kSpectrumNames[2], kSpectrumNames[3],
+                                                                      kSpectrumNames[4], kSpectrumNames[5],
+                                                                      "Custom..." };
+  int prev_idx = state.sun.spectrum_index;
+  if (ImGui::Combo("Spectrum", &state.sun.spectrum_index, kSpectrumComboItems, kSpectrumComboItemCount)) {
+    if (state.sun.spectrum_index == kCustomSpectrumIndex) {
+      OpenSpectrumModal(state);
+      // spectrum_index will be committed to kCustomSpectrumIndex by the modal's OK; leave it
+      // pending here so the combo shows "Custom..." while the modal is open. Cancel restores it.
+    } else {
+      state.sun.custom_spectrum.clear();
+      state.MarkDirty();
+    }
+    (void)prev_idx;  // reserved for future revert-on-cancel-open logic
+  }
   if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Light source spectrum for wavelength-dependent refraction");
+    ImGui::SetTooltip(
+        "Light source spectrum for wavelength-dependent refraction.\n"
+        "\"Custom...\" opens an editor for a discrete wavelength/weight list.");
   }
   ImGui::PopItemWidth();
 

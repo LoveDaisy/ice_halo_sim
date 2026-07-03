@@ -228,7 +228,7 @@
         {"wavelength": 770, "weight": 1.0}
       ]
     },
-    "ray_num": 50000000,
+    "ray_num": 450000000,
     "max_hits": 7,
     "scattering": [
       {

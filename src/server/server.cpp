@@ -1058,7 +1058,15 @@ void ServerImpl::GenerateScene() {
                                        std::get<std::vector<WlParam>>(scene->light_source_.spectrum_).size() :
                                        static_cast<size_t>(1);
 
+  // task-323: ray_num semantic unification. Outside this ingest point ray_num is the TOTAL rays
+  // across all wavelengths (discrete spectrum has kNsimdataPerBatch>=1; illuminant has 1). Below
+  // the loop `ray_num` is the per-wavelength budget the simulator sees; per_wl = ceil(total / N_wl)
+  // guarantees at least total rays are traced across the spectrum. Illuminant (N_wl=1) is the
+  // identity transform. kInfSize preserved unchanged (infinite mode ignores the total).
   auto ray_num = scene->ray_num_;
+  if (ray_num != kInfSize && kNsimdataPerBatch > 1) {
+    ray_num = (ray_num + kNsimdataPerBatch - 1) / kNsimdataPerBatch;
+  }
   size_t committed_num = 0;
   while (ray_num == kInfSize || committed_num < ray_num) {
     size_t batch_ray_num = std::min(kBatchCap, ray_num - committed_num);
