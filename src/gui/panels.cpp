@@ -821,20 +821,47 @@ void RenderLayer(GuiState& state, int layer_idx) {
   }
 
   if (header_open) {
-    // Multi-scatter probability slider
+    // Multi-scatter probability slider — four states covering both footguns:
+    //   (a) last layer & prob≈0  → slider disabled (locked at correct 0)
+    //   (b) last layer & prob>0  → slider enabled + warning icon (came from a
+    //       hand-written config; we don't silently rewrite the file value, so
+    //       let the user drag it back to 0)
+    //   (c) non-last layer & prob≈0 → slider enabled + warning icon (the next
+    //       layer will receive no rays — footgun #2)
+    //   (d) otherwise → plain slider
+    // Zero-detection uses IsProbZero (epsilon) rather than == 0.0f — slider
+    // drags can produce sub-step floats that would sneak past a strict check.
     char prob_id[32];
     snprintf(prob_id, sizeof(prob_id), "Prob.##layer_%d", layer_idx);
-    bool single_layer = state.layers.size() <= 1;
-    ImGui::BeginDisabled(single_layer);
+    bool is_last_layer = layer_idx == static_cast<int>(state.layers.size()) - 1;
+    bool prob_is_zero = IsProbZero(layer.probability);
+    bool disable_slider = is_last_layer && prob_is_zero;
+    ImGui::BeginDisabled(disable_slider);
     ImGui::BeginGroup();
     DIRTY_IF(SliderWithInput(prob_id, &layer.probability, 0.0f, 1.0f, "%.2f"));
     ImGui::EndGroup();
     ImGui::EndDisabled();
+    const char* prob_tip = nullptr;
+    if (disable_slider) {
+      prob_tip = "Last layer: all filter-pass rays are effective output; prob does not apply.";
+    } else if (is_last_layer && !prob_is_zero) {
+      prob_tip =
+          "Last layer has prob > 0: that fraction of rays will be discarded (no next layer to receive them). Set to 0.";
+    } else if (!is_last_layer && prob_is_zero) {
+      prob_tip = "prob = 0 means no rays reach the next scattering layer (it will be effectively dead).";
+    } else {
+      prob_tip = "Fraction of rays continuing to the next layer.";
+    }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      const char* prob_tip = single_layer ?
-                                 "Fraction of rays continuing to the next layer.\nAlways 0 for a single layer." :
-                                 "Fraction of rays continuing to the next layer";
       ImGui::SetTooltip("%s", prob_tip);
+    }
+    bool show_warning_icon = (is_last_layer && !prob_is_zero) || (!is_last_layer && prob_is_zero);
+    if (show_warning_icon) {
+      ImGui::SameLine();
+      ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), ICON_FA_CIRCLE_EXCLAMATION);
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", prob_tip);
+      }
     }
 
     // Render entry cards with deferred deletion

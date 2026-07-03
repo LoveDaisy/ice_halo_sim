@@ -140,3 +140,41 @@ class TestOutputFormat(LumiceTestCase):
             ["-f", "dummy.json", "--quality"]
         )
         self.assertNotEqual(result.returncode, 0)
+
+
+class TestLastLayerProbWarning(LumiceTestCase):
+    """task-gui-ms-prob-footguns Step 3: CLI warns on last-layer prob>0.
+
+    Uses real hand-written configs (feedback_test_must_use_issue_scenario) — the
+    parity_single_ms_bd_filter fixture has last-layer prob=0.5, the halo_22
+    fixture has last-layer prob=0.0. No fabricated test-only configs.
+    """
+
+    def test_warns_on_last_layer_prob_positive(self):
+        cfg = CONFIGS_DIR / "parity_single_ms_bd_filter.json"
+        if not cfg.exists():
+            self.skipTest(f"{cfg} not found")
+        result = self.run_lumice(["-f", str(cfg), "-o", self.output_dir])
+        self.assertEqual(result.returncode, 0)
+        # Warning is emitted via spdlog (LOG_WARNING → stdout). Match on the
+        # distinctive prefix to avoid coupling to the full message wording.
+        combined = result.stdout + result.stderr
+        self.assertIn(
+            "Last scattering layer has prob=",
+            combined,
+            f"expected last-layer-prob warning, got:\nSTDOUT:\n{result.stdout}\n"
+            f"STDERR:\n{result.stderr}",
+        )
+
+    def test_no_warn_when_last_layer_prob_zero(self):
+        cfg = CONFIGS_DIR / "halo_22.json"
+        if not cfg.exists():
+            self.skipTest(f"{cfg} not found")
+        result = self.run_lumice(["-f", str(cfg), "-o", self.output_dir])
+        self.assertEqual(result.returncode, 0)
+        combined = result.stdout + result.stderr
+        self.assertNotIn(
+            "Last scattering layer has prob=",
+            combined,
+            "warning should NOT fire on last-layer prob=0.0 configs",
+        )

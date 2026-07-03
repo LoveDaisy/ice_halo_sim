@@ -1548,6 +1548,176 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // p1_prob_footguns — task-gui-ms-prob-footguns: cover the four-state prob
+  // slider and the "+ Layer" continuation-prob promotion. Guards two edit-time
+  // footguns without changing core rendering semantics.
+
+  // last_layer_prob_zero_disables_slider: default single-layer (prob=0) → the
+  // Prob slider must be disabled. Same test asserts the degenerate single-layer
+  // case remains covered (was `single_layer` in old code).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_prob_footguns", "last_layer_prob_zero_disables_slider");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
+      IM_CHECK(gui::IsProbZero(gui::g_state.layers[0].probability));
+      auto info = ctx->ItemInfo("**/##Prob.##layer_0_input");
+      IM_CHECK((info.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+    };
+  }
+
+  // last_layer_prob_nonzero_enables_slider: a hand-written config's last layer
+  // with prob>0 → slider must be ENABLED (user can drag it back to 0). Guards
+  // against silently locking the user out of a loaded footgun value.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_prob_footguns", "last_layer_prob_nonzero_enables_slider");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.layers[0].probability = 0.5f;
+      ctx->Yield(2);
+      auto info = ctx->ItemInfo("**/##Prob.##layer_0_input");
+      IM_CHECK((info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+    };
+  }
+
+  // intermediate_layer_prob_zero_enables_slider: after "+ Layer", the old last
+  // layer (now intermediate) with prob=0 must be ENABLED (user needs to fix
+  // the dead-next-layer footgun). This exercises the (c) state.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_prob_footguns", "intermediate_layer_prob_zero_enables_slider");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      // Manually add a layer without going through "+ Layer" (which would auto-
+      // promote layer[0].probability): construct a two-layer state where the
+      // first layer still has prob=0. This is the state a hand-written config
+      // could produce (footgun #2 from the CLI side).
+      gui::Layer new_layer;
+      gui::EntryCard e;
+      e.crystal_id = 0;
+      new_layer.entries.push_back(e);
+      gui::g_state.layers.push_back(std::move(new_layer));
+      gui::g_state.layers[0].probability = 0.0f;
+      ctx->Yield(2);
+      auto info = ctx->ItemInfo("**/##Prob.##layer_0_input");
+      IM_CHECK((info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+    };
+  }
+
+  // add_layer_promotes_prev_last_prob: "+ Layer" must promote the old last
+  // layer's prob from 0 to kDefaultContinuationProb so the new layer receives
+  // rays. Root fix for footgun #2.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_prob_footguns", "add_layer_promotes_prev_last_prob");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
+      IM_CHECK_EQ(gui::g_state.layers[0].probability, 0.0f);
+
+      ctx->ItemClick("**/+ Layer");
+      ctx->Yield();
+
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 2);
+      IM_CHECK_EQ(gui::g_state.layers[0].probability, gui::kDefaultContinuationProb);
+      IM_CHECK(gui::IsProbZero(gui::g_state.layers[1].probability));  // new last stays 0
+    };
+  }
+
+  // add_layer_promotes_near_zero_prev_last (R2 Major regression): slider drags
+  // can leave layer.probability at a sub-step non-zero (e.g. 1e-7). Promotion
+  // must use the shared IsProbZero epsilon — a strict == 0.0f would sneak this
+  // past the promotion and reproduce footgun #2. This test pins that the
+  // gui_state.hpp IsProbZero helper is actually used by "+ Layer".
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_prob_footguns", "add_layer_promotes_near_zero_prev_last");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.layers[0].probability = 1e-7f;  // < kProbZeroEps
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/+ Layer");
+      ctx->Yield();
+
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 2);
+      IM_CHECK_EQ(gui::g_state.layers[0].probability, gui::kDefaultContinuationProb);
+    };
+  }
+
+  // add_layer_preserves_nonzero_prev_last: "+ Layer" must NOT overwrite a
+  // previously non-zero last-layer prob (already fine — user set it on
+  // purpose). Guards against over-eager promotion.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_prob_footguns", "add_layer_preserves_nonzero_prev_last");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.layers[0].probability = 0.6f;
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/+ Layer");
+      ctx->Yield();
+
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 2);
+      IM_CHECK_EQ(gui::g_state.layers[0].probability, 0.6f);  // preserved
+    };
+  }
+
+  // add_delete_layer_last_falls_back_with_warning (Suggestion-1): "+ Layer"
+  // promotes the old last to kDefaultContinuationProb, then deleting the new
+  // last returns the old last to last-layer status — now with prob>0. Slider
+  // must be ENABLED (state (b)); the reactive four-state logic in panels.cpp
+  // must handle this without any delete-path special-casing.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_prob_footguns", "add_delete_layer_last_falls_back_with_warning");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/+ Layer");
+      ctx->Yield();
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 2);
+      IM_CHECK_EQ(gui::g_state.layers[0].probability, gui::kDefaultContinuationProb);
+
+      // Delete layer 1 via the per-layer header "x" button. Layer 0 becomes
+      // the last layer again — this time with prob=kDefaultContinuationProb>0.
+      ctx->ItemClick("**/" ICON_FA_XMARK "##layer_1");
+      ctx->Yield();
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
+      IM_CHECK_EQ(gui::g_state.layers[0].probability, gui::kDefaultContinuationProb);
+      // Layer 0 is now last with prob>0 → slider must be ENABLED so the user
+      // can fix it (state (b), not the disabled state (a)).
+      auto info = ctx->ItemInfo("**/##Prob.##layer_0_input");
+      IM_CHECK((info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+    };
+  }
+
+  // intermediate_layer_prob_nonzero_normal (code-review Minor-4): the "normal"
+  // fourth state — an intermediate (non-last) layer with prob>0 must have an
+  // ENABLED slider and NO warning (neither the disabled last-layer-zero state
+  // (a) nor a warning state (b)/(c)). Completes the four-state coverage.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_prob_footguns", "intermediate_layer_prob_nonzero_normal");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      // Two layers; layer 0 (intermediate) with prob>0 → state (d) normal.
+      gui::Layer new_layer;
+      gui::EntryCard e;
+      e.crystal_id = 0;
+      new_layer.entries.push_back(e);
+      gui::g_state.layers.push_back(std::move(new_layer));
+      gui::g_state.layers[0].probability = 0.5f;  // intermediate, non-zero
+      ctx->Yield(2);
+      // Slider enabled (state (d) normal: not the disabled last-layer-zero
+      // state (a)). We assert the disabled dimension only — the warning icon is
+      // a plain ImGui::TextColored with no queryable ID, so its absence cannot
+      // be asserted via ItemInfo (would always report "not found" and give a
+      // false pass). The show_warning_icon predicate is deterministic in
+      // panels.cpp; states (b)/(c) exercise its enable branch elsewhere.
+      auto info = ctx->ItemInfo("**/##Prob.##layer_0_input");
+      IM_CHECK((info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+    };
+  }
+
   // p1_card/entry_copy — copy an entry card
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_card", "entry_copy");

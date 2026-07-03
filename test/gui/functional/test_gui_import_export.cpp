@@ -44,6 +44,56 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // task-gui-ms-prob-footguns: layer.probability round-trip must byte-preserve
+  // hand-written values including the "footgun" case (last-layer prob>0). The
+  // GUI's disable/warning logic is display-only; it must not silently rewrite
+  // the loaded value. Locks: file value == deserialized state.probability.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "last_layer_prob_roundtrip");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // Two layers, both with prob>0 (last layer would trigger the CLI
+      // warning, but load must still preserve the value byte-for-byte).
+      gui::g_state.layers[0].probability = 0.3f;
+      gui::Layer new_layer;
+      gui::EntryCard e;
+      e.crystal_id = 0;
+      new_layer.entries.push_back(e);
+      new_layer.probability = 0.45f;  // last layer, non-zero — the footgun value
+      gui::g_state.layers.push_back(std::move(new_layer));
+
+      std::string json = gui::SerializeCoreConfig(gui::g_state);
+      IM_CHECK(!json.empty());
+
+      gui::GuiState loaded = gui::InitDefaultState();
+      bool ok = gui::DeserializeFromJson(json, loaded);
+      IM_CHECK(ok);
+
+      IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), 2);
+      IM_CHECK_EQ(loaded.layers[0].probability, 0.3f);
+      IM_CHECK_EQ(loaded.layers[1].probability, 0.45f);  // NOT silently zeroed
+
+      // Second serialization path (code-review Major-1): the C struct commit
+      // path (FillLumiceConfig -> LUMICE_CommitConfigStruct) is what actually
+      // feeds the simulator. Assert it preserves the last-layer footgun prob>0
+      // too — the display disable/warning logic must not zero the stored value
+      // on the path that reaches core. This path is commit-only (no reverse
+      // deserialize), so it is a forward-fidelity check, not a round-trip.
+      // (The .lmc save path SerializeGuiStateJson uses the identical
+      // `jl["prob"] = layer.probability` float primitive as SerializeCoreConfig
+      // above, so its prob fidelity is covered by equivalence.)
+      // Feed the DESERIALIZED state (not the original g_state) so this is the
+      // full end-to-end chain: file JSON -> deserialize -> loaded -> C struct
+      // -> core (code-review r2 Minor-1).
+      LUMICE_Config cfg;
+      gui::FillLumiceConfig(loaded, &cfg);
+      IM_CHECK_EQ(cfg.scatter_count, 2);
+      IM_CHECK_EQ(cfg.scattering[0].probability, 0.3f);
+      IM_CHECK_EQ(cfg.scattering[1].probability, 0.45f);
+    };
+  }
+
   // Test 2: JSON file round-trip — write to file, read back, deserialize, verify
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "json_file_roundtrip");
