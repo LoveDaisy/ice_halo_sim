@@ -165,6 +165,8 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 #define LUMICE_MAX_CONFIG_SCATTER_LAYERS 8
 #define LUMICE_MAX_CONFIG_SCATTER_ENTRIES 256
 #define LUMICE_MAX_CONFIG_RAYPATH_LEN 32
+// Discrete-spectrum entry cap. Mirrors core wl_pool.hpp::kWlPoolSizeMax (255).
+#define LUMICE_MAX_CONFIG_SPECTRUM_ENTRIES 255
 
 // Axis distribution type constants for LUMICE_AxisDist.type
 #define LUMICE_AXIS_DIST_GAUSS 0
@@ -224,6 +226,18 @@ typedef struct LUMICE_ScatterLayer_ {
   int entry_count;
 } LUMICE_ScatterLayer;
 
+typedef struct LUMICE_SpectrumEntry_ {
+  float wavelength;  // nm
+  float weight;      // relative weight (unnormalized; core normalizes)
+} LUMICE_SpectrumEntry;
+#if defined(__cplusplus)
+static_assert(sizeof(LUMICE_SpectrumEntry) == 2 * sizeof(float),
+              "LUMICE_SpectrumEntry must be tightly packed (2 floats, no padding) for ABI stability");
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(LUMICE_SpectrumEntry) == 2 * sizeof(float),
+               "LUMICE_SpectrumEntry must be tightly packed (2 floats, no padding) for ABI stability");
+#endif
+
 // BREAKING (v4.3): norm_mode field removed; struct layout changed. Callers must recompile against this header.
 typedef struct LUMICE_RenderParam_ {
   int id;
@@ -234,6 +248,9 @@ typedef struct LUMICE_RenderParam_ {
   float overlap;  // Dual fisheye overlap zone |sky.z| threshold (sin value). 0 = no overlap.
 } LUMICE_RenderParam;
 
+// BREAKING (v4.4): added spectrum_entries[]/spectrum_count for custom discrete spectrum.
+// Layout changed; callers must recompile against this header. spectrum_count > 0 selects the
+// discrete-list path and overrides the spectrum string field (mirrors filters/filter_count).
 typedef struct LUMICE_Config_ {
   // Crystals
   LUMICE_CrystalParam crystals[LUMICE_MAX_CONFIG_CRYSTALS];
@@ -251,7 +268,11 @@ typedef struct LUMICE_Config_ {
   float sun_altitude;
   float sun_azimuth;
   float sun_diameter;
-  const char* spectrum;  // e.g. "D65", "D50", "A", "E"
+  const char* spectrum;  // e.g. "D65", "D50", "A", "E"; ignored when spectrum_count > 0
+  // Discrete custom spectrum. When spectrum_count > 0, the spectrum string is ignored and this
+  // list is used instead. spectrum_count == 0 means "use the spectrum string".
+  LUMICE_SpectrumEntry spectrum_entries[LUMICE_MAX_CONFIG_SPECTRUM_ENTRIES];
+  int spectrum_count;
 
   // Scene: simulation
   int infinite;             // 1=infinite rays, 0=finite
@@ -276,7 +297,9 @@ LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_C
 //   - filter: only type="raypath" supported; other types return LUMICE_ERR_INVALID_VALUE
 //   - render: lens/view/visible/background fields are ignored; only id/resolution/opacity/
 //     intensity_factor/overlap are parsed
-//   - spectrum: only string enumerations ("D65","D50","A","E"); arrays return LUMICE_ERR_INVALID_VALUE
+//   - spectrum: string enumerations ("D65","D55","D50","D75","A","E") populate the spectrum
+//     field; JSON arrays of {wavelength, weight} populate spectrum_entries[]/spectrum_count
+//     (up to LUMICE_MAX_CONFIG_SPECTRUM_ENTRIES; larger arrays return LUMICE_ERR_INVALID_CONFIG).
 //
 // The spectrum field in the output struct points to static storage; the caller must not free it.
 // If the caller replaces spectrum with a custom string for CommitConfigStruct, the caller

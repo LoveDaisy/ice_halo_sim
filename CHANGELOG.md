@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **GUI custom discrete-spectrum editor** (task-323): the Sun panel Spectrum combo now
+  offers a "Custom..." entry that opens a wavelength/weight list editor. Custom spectra are
+  persisted in `.lmc` files and core JSON configs.
+
 ### Changed
+- **Breaking config change (discrete spectra)**: `ray_num` now means the TOTAL number of
+  rays traced across ALL wavelengths (previously it was per-wavelength). The server derives
+  the per-wavelength budget via `ceil(ray_num / n_wavelengths)`. Externally hand-written
+  discrete-spectrum configs must multiply their old `ray_num` by the wavelength count to
+  preserve the previous total. Single-wavelength / illuminant configs are unaffected.
 - Adaptive Brightness no longer has an ON/OFF toggle. The simulator always uses the
   F1 anchor lane introduced by scrum-221; the GUI Display panel now shows
   `(+N.NN EV auto)` next to the manual EV slider with no checkbox. Filter switches

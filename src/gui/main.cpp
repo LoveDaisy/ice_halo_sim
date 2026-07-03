@@ -344,6 +344,7 @@ int main(int argc, char** argv) {
     gui::RenderLogPanel(layout_width, layout_height);
     gui::RenderStatusBar(layout_width, layout_height);
     gui::RenderEditModals(gui::g_state, window);
+    gui::RenderSpectrumModal(gui::g_state);
     gui::RenderUnsavedPopup(window);
     gui::RenderImportWarningPopup();
 

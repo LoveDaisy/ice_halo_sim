@@ -86,10 +86,24 @@ struct CrystalConfig {
   friend bool operator!=(const CrystalConfig& a, const CrystalConfig& b) { return !(a == b); }
 };
 
+// Wavelength/weight pair for user-defined discrete spectra.
+struct WlWeight {
+  float wavelength = 550.0f;  // nm
+  float weight = 1.0f;
+  friend bool operator==(const WlWeight& a, const WlWeight& b) {
+    return a.wavelength == b.wavelength && a.weight == b.weight;
+  }
+  friend bool operator!=(const WlWeight& a, const WlWeight& b) { return !(a == b); }
+};
+
 struct SunConfig {
   float altitude = 20.0f;
   float diameter = 0.5f;
-  int spectrum_index = 2;  // Index into kSpectrumNames: 0=D50,1=D55,2=D65,3=D75,4=A,5=E
+  // Invariant: spectrum_index in [0, kSpectrumCount) selects a preset (custom_spectrum ignored);
+  //            spectrum_index == kCustomSpectrumIndex means "use custom_spectrum" (custom_spectrum
+  //            must be non-empty). Enforced at every write site (edit modal OK, file_io load).
+  int spectrum_index = 2;  // Index into kSpectrumNames: 0=D50,1=D55,2=D65,3=D75,4=A,5=E, 6=Custom...
+  std::vector<WlWeight> custom_spectrum;
 };
 
 struct SimConfig {
@@ -148,8 +162,18 @@ static_assert(sizeof(kLensTypePresentationOrder) / sizeof(*kLensTypePresentation
 // FillLumiceConfig/SerializeCoreConfig; core reads overlap from RenderConfig (no hardcoded value).
 constexpr float kDualFisheyeOverlap = 0.0872f;
 
+// Preset illuminant labels. The combo appends "Custom..." at kCustomSpectrumIndex; that entry is
+// NOT part of kSpectrumNames because it is not a downstream illuminant enum — it flips SunConfig
+// into the custom_spectrum path.
 inline const char* const kSpectrumNames[] = { "D50", "D55", "D65", "D75", "A", "E" };
-constexpr int kSpectrumCount = 6;
+constexpr int kSpectrumCount = 6;           // number of preset illuminants (NOT the combo item count)
+constexpr int kCustomSpectrumIndex = 6;     // sentinel; == kSpectrumCount by design
+constexpr int kSpectrumComboItemCount = 7;  // presets + "Custom..." tail
+// Hard cap for GUI-side custom spectrum length. Mirrors LUMICE_MAX_CONFIG_SPECTRUM_ENTRIES / core
+// wl_pool.hpp::kWlPoolSizeMax. Above kSpectrumSoftWarnCount the modal shows a "noisier per-wl
+// sampling" advisory but does not block.
+constexpr int kSpectrumHardMax = 255;
+constexpr int kSpectrumSoftWarnCount = 64;  // mirrors core wl_pool.hpp::kWlPoolSizeDefault
 
 inline const char* const kVisibleNames[] = { "Upper", "Lower", "Full" };
 constexpr int kVisibleCount = 3;  // must stay in sync with fragment shader u_visible range (0-2)
@@ -618,10 +642,10 @@ struct GuiState {
 // be audited for matching changes. Apple Silicon + libc++ only (std::vector size varies
 // across stdlib implementations).
 #if defined(__APPLE__) && defined(__aarch64__)
-// Size remains 160 after task-remove-adaptive-brightness-on-mode: removing
-// gui::RenderConfig::ab_mode_ reclaimed trailing padding only (libc++ vector
-// header alignment dominates the ConfigSnapshot footprint).
-static_assert(sizeof(GuiState::ConfigSnapshot) == 160,
+// Size bumped from 160 → 192 by task-gui-custom-spectrum: SunConfig gained a
+// std::vector<WlWeight> field (custom_spectrum). From()/ApplyTo() copy `sun`
+// wholesale, so this addition is covered without further field-level audit.
+static_assert(sizeof(GuiState::ConfigSnapshot) == 192,
               "GuiState::ConfigSnapshot size changed; audit From()/ApplyTo() implementations below");
 #endif
 

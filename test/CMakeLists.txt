@@ -43,6 +43,7 @@ add_executable(unit_correctness_test
   # server/
   "${PROJ_TEST_DIR}/unit-correctness/server/test_c_api.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_stats_consumer.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_ray_num_semantics.cpp"
   # util/
   "${PROJ_TEST_DIR}/unit-correctness/util/test_color_space.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/util/test_queue.cpp"

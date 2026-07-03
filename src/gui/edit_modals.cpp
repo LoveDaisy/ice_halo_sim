@@ -8,6 +8,7 @@
 #include <cstring>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "IconsFontAwesome6.h"
 #include "gui/app.hpp"
@@ -989,7 +990,13 @@ EditTarget GetActiveTabAsEditTarget() {
   return EditTarget::kCrystal;
 }
 
+namespace {
+// Defined further down alongside the spectrum-modal statics (same anonymous namespace, this TU).
+void ResetSpectrumModalStateGlobals();
+}  // namespace
+
 void ResetModalState() {
+  ResetSpectrumModalStateGlobals();  // clear the spectrum-editor statics too (Major: test isolation)
   g_active_modal = ActiveModal::kNone;
   g_active_tab = ActiveTab::kCrystal;
   g_pending_tab_select = false;
@@ -1787,6 +1794,165 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   } else {
     ImGui::EndPopup();
   }
+}
+
+// ========== Custom Spectrum Modal ==========
+//
+// Separate from the per-entry Crystal/Axis/Filter modal above: spectrum is a global light-source
+// property with no entry index, so it does not share g_modal_layer_idx / g_active_modal state.
+// See plan.md §3 #2 for the rationale (avoid coupling the per-entry index invariants).
+
+namespace {
+
+bool g_spectrum_modal_open_pending = false;
+std::vector<WlWeight> g_spectrum_edit_buf;
+// NOTE: no g_spectrum_prev_index / g_spectrum_modal_active. spectrum_index is committed to
+// kCustomSpectrumIndex ONLY inside the OK button (transactionally with custom_spectrum), so Escape /
+// Cancel / click-outside all leave spectrum_index at its prior valid value — no per-exit-path restore
+// bookkeeping is needed.
+
+// Hard-coded uniform starting point (equal-weight probes across visible band). Not the actual
+// illuminant SPD — the GUI cannot include core light_config headers per the API boundary rule
+// (AGENTS.md). Real SPD resampling would need a new C API function; see plan.md §2 default #1.
+std::vector<WlWeight> BuildPresetSeed() {
+  constexpr int kSeedCount = 9;
+  constexpr float kLo = 400.0f, kHi = 720.0f;
+  std::vector<WlWeight> out;
+  out.reserve(kSeedCount);
+  for (int i = 0; i < kSeedCount; i++) {
+    float t = static_cast<float>(i) / static_cast<float>(kSeedCount - 1);
+    out.push_back({ kLo + t * (kHi - kLo), 1.0f });
+  }
+  return out;
+}
+
+// Reset spectrum-modal statics on test teardown (called from ResetModalState via forward decl).
+// These globals live in a later anonymous-namespace block than ResetModalState; both blocks are the
+// same anonymous namespace in this TU, so the forward declaration below resolves here.
+void ResetSpectrumModalStateGlobals() {
+  g_spectrum_modal_open_pending = false;
+  g_spectrum_edit_buf.clear();
+}
+
+}  // namespace
+
+void OpenSpectrumModal(GuiState& state) {
+  g_spectrum_modal_open_pending = true;
+  // Seed the edit buffer with the current custom spectrum, if any; otherwise the preset seed.
+  if (!state.sun.custom_spectrum.empty()) {
+    g_spectrum_edit_buf = state.sun.custom_spectrum;
+  } else {
+    g_spectrum_edit_buf = BuildPresetSeed();
+  }
+}
+
+void RenderSpectrumModal(GuiState& state) {
+  if (g_spectrum_modal_open_pending) {
+    ImGui::OpenPopup("Custom Spectrum##spectrum_modal");
+    g_spectrum_modal_open_pending = false;
+  }
+
+  ImGui::SetNextWindowSize(ImVec2(480, 0), ImGuiCond_Appearing);
+  if (!ImGui::BeginPopupModal("Custom Spectrum##spectrum_modal", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    return;
+  }
+
+  ImGui::TextUnformatted("Discrete wavelength/weight list");
+  ImGui::Separator();
+
+  // No in-modal "import preset": this editor does discrete wavelength editing only. Preset spectra
+  // (D65 etc.) are chosen from the Sun-panel Spectrum combo, not here — that avoids a misleading
+  // in-modal preset picker that couldn't reproduce a real illuminant SPD anyway (GUI can't include
+  // core SPD headers per the API boundary). A fresh custom spectrum still opens seeded with a uniform
+  // grid (BuildPresetSeed in OpenSpectrumModal) as an editable starting point.
+
+  // Editable rows.
+  int remove_idx = -1;
+  for (int i = 0; i < static_cast<int>(g_spectrum_edit_buf.size()); i++) {
+    ImGui::PushID(i);
+    ImGui::SetNextItemWidth(80);
+    ImGui::InputFloat("wl(nm)##wl", &g_spectrum_edit_buf[i].wavelength, 0.0f, 0.0f, "%.1f");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(80);
+    ImGui::InputFloat("weight##wt", &g_spectrum_edit_buf[i].weight, 0.0f, 0.0f, "%.3f");
+    ImGui::SameLine();
+    // Destructive red styling, matching the entry-card / layer-header delete buttons
+    // (panels.cpp kBtnDestructive* palette); replicated here since that palette is file-local.
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.22f, 0.22f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.30f, 0.30f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.15f, 0.15f, 1.0f));
+    const bool remove_clicked = ImGui::SmallButton(ICON_FA_XMARK "##rm");
+    ImGui::PopStyleColor(3);
+    if (remove_clicked) {
+      remove_idx = i;
+    }
+    ImGui::PopID();
+  }
+  if (remove_idx >= 0) {
+    g_spectrum_edit_buf.erase(g_spectrum_edit_buf.begin() + remove_idx);
+  }
+
+  // Add row.
+  const int cur_count = static_cast<int>(g_spectrum_edit_buf.size());
+  const bool add_disabled = cur_count >= kSpectrumHardMax;
+  if (add_disabled) {
+    ImGui::BeginDisabled();
+  }
+  if (ImGui::Button(ICON_FA_PLUS " Add row")) {
+    float next_wl = 550.0f;
+    if (!g_spectrum_edit_buf.empty()) {
+      next_wl = std::clamp(g_spectrum_edit_buf.back().wavelength + 40.0f, 380.0f, 780.0f);
+    }
+    g_spectrum_edit_buf.push_back({ next_wl, 1.0f });
+  }
+  if (add_disabled) {
+    ImGui::EndDisabled();
+  }
+  ImGui::SameLine();
+  ImGui::Text("%d / %d entries", cur_count, kSpectrumHardMax);
+
+  if (cur_count > kSpectrumSoftWarnCount) {
+    ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f),
+                       "Warning: %d > %d wavelengths — per-wavelength sampling becomes noisier.", cur_count,
+                       kSpectrumSoftWarnCount);
+  }
+
+  ImGui::Separator();
+
+  // OK / Cancel.
+  const bool ok_disabled = g_spectrum_edit_buf.empty();
+  if (ok_disabled) {
+    ImGui::BeginDisabled();
+  }
+  if (ImGui::Button(ICON_FA_CHECK " OK##spec_ok", ImVec2(80, 0))) {
+    // Sanitize obviously-invalid manual input before it reaches the sim: clamp wavelength to the
+    // visible band and weight to non-negative.
+    for (auto& e : g_spectrum_edit_buf) {
+      e.wavelength = std::clamp(e.wavelength, 380.0f, 780.0f);
+      e.weight = std::max(e.weight, 0.0f);
+    }
+    // Single transactional commit of the custom-spectrum state: this is the ONLY site that sets
+    // spectrum_index to kCustomSpectrumIndex, keeping the invariant (index==custom ⟹ buf non-empty)
+    // — OK is gated on a non-empty buffer (ok_disabled) above.
+    state.sun.custom_spectrum = g_spectrum_edit_buf;
+    state.sun.spectrum_index = kCustomSpectrumIndex;
+    state.MarkDirty();
+    ImGui::CloseCurrentPopup();
+  }
+  if (ok_disabled) {
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("Need at least one wavelength row before OK.");
+    }
+  }
+  ImGui::SameLine();
+  if (ImGui::Button(ICON_FA_XMARK " Cancel##spec_cancel", ImVec2(80, 0))) {
+    // Nothing to restore: spectrum_index was never mutated on open (only OK commits it), so Cancel /
+    // Escape / click-outside all naturally leave it at the prior valid preset. Just discard the buffer.
+    ImGui::CloseCurrentPopup();
+  }
+
+  ImGui::EndPopup();
 }
 
 }  // namespace lumice::gui

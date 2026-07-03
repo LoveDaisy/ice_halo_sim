@@ -990,9 +990,9 @@ void RenderStatusBar(float window_width, float window_height) {
     ImGui::SameLine();
     LUMICE_RayCount n = g_state.stats_sim_ray_num;
     char buf[64];
-    // "Total" clarifies this is the summed count over all discrete wavelengths
-    // (= ray_num × N_wavelengths), distinct from the per-wavelength `ray_num`
-    // input. See doc/configuration.md and scrum gui-lens-math-cli-alignment 320.4.
+    // "Total" is the summed count over all discrete wavelengths. Since task-323
+    // `ray_num` is itself the requested total; the actual traced count reported
+    // here is ceil(ray_num / N_wavelengths) × N_wavelengths (may overshoot by <N).
     if (n >= 1'000'000'000ULL) {
       snprintf(buf, sizeof(buf), "| Total rays: %.1f x10^9", n / 1e9);
     } else if (n >= 1'000'000ULL) {

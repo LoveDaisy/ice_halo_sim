@@ -250,7 +250,7 @@ TEST(ConfigSnapshot, RoundTripPoolAndEntries) {
 // Mirror the production sizeof() guard at test scope as an extra reminder on the
 // baseline platform. Platform-gated because std::vector size varies across stdlibs.
 #if defined(__APPLE__) && defined(__aarch64__)
-static_assert(sizeof(GuiState::ConfigSnapshot) == 160,
+static_assert(sizeof(GuiState::ConfigSnapshot) == 192,
               "Test mirror: ConfigSnapshot size changed; update From/ApplyTo in gui_state.hpp");
 #endif
 

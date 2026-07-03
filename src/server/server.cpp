@@ -24,6 +24,7 @@
 #include "core/backend/cuda_trace_backend.hpp"  // CudaDeviceAvailable() for ResolveGpuRoute
 #endif
 #include "server/consumer.hpp"
+#include "server/ray_num_semantics.hpp"
 #include "server/render.hpp"
 #include "server/server.hpp"
 #include "server/stats.hpp"
@@ -1058,10 +1059,28 @@ void ServerImpl::GenerateScene() {
                                        std::get<std::vector<WlParam>>(scene->light_source_.spectrum_).size() :
                                        static_cast<size_t>(1);
 
-  auto ray_num = scene->ray_num_;
+  // task-323: ray_num semantic unification. At this ingest point scene->ray_num_ is the TOTAL rays
+  // across all wavelengths; the simulator loop below consumes a PER-WAVELENGTH budget. Keep the two
+  // quantities in distinctly-named variables (avoids the "same name carrying two dimensions" trap):
+  // per_wl = ceil(total / N_wl) guarantees at least `total` rays are traced across the spectrum.
+  // Illuminant (N_wl=1) is the identity transform. kInfSize is passed through unchanged.
+  size_t total_ray_num = scene->ray_num_;
+  // A hand-written discrete config with total < N_wl asks for fewer rays than wavelengths; ceil still
+  // yields >=1 per wavelength, so the actual total is rounded UP to N_wl. Warn so the author of a bad
+  // config notices the bump (the GUI never hits this — total is always >> the wavelength count).
+  if (total_ray_num != kInfSize && kNsimdataPerBatch > 1 && total_ray_num < kNsimdataPerBatch) {
+    ILOG_WARN(logger_,
+              "GenerateScene: ray_num ({}) < spectrum wavelength count ({}); rounding up to 1 ray/wavelength "
+              "(actual total {} > requested {})",
+              total_ray_num, kNsimdataPerBatch, kNsimdataPerBatch, total_ray_num);
+  }
+  size_t per_wl_ray_num = total_ray_num;
+  if (per_wl_ray_num != kInfSize) {
+    per_wl_ray_num = PerWavelengthRayNum(per_wl_ray_num, kNsimdataPerBatch);
+  }
   size_t committed_num = 0;
-  while (ray_num == kInfSize || committed_num < ray_num) {
-    size_t batch_ray_num = std::min(kBatchCap, ray_num - committed_num);
+  while (per_wl_ray_num == kInfSize || committed_num < per_wl_ray_num) {
+    size_t batch_ray_num = std::min(kBatchCap, per_wl_ray_num - committed_num);
     scene_queue_->Emplace(SimBatch{ batch_ray_num, scene, generation, renders });
     sim_scene_cnt_ += static_cast<int>(kNsimdataPerBatch);
     if (!first_batch_logged) {
@@ -1070,7 +1089,7 @@ void ServerImpl::GenerateScene() {
       first_batch_logged = true;
     }
 
-    ILOG_TRACE(logger_, "GenerateScene: put a scene: ray({}/{}, {})", batch_ray_num, ray_num, committed_num);
+    ILOG_TRACE(logger_, "GenerateScene: put a scene: ray({}/{}, {})", batch_ray_num, per_wl_ray_num, committed_num);
     CHECK_STOP
 
     if (sim_scene_cnt_ >= kMaxSceneCnt) {

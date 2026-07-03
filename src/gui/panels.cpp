@@ -902,11 +902,42 @@ void RenderSceneControls(GuiState& state) {
     ImGui::SetTooltip("Angular diameter of the sun disk");
   }
   ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-  DIRTY_IF(ImGui::Combo("Spectrum", &state.sun.spectrum_index, kSpectrumNames, kSpectrumCount));
+  // Combo carries kSpectrumCount presets + "Custom..." tail (item count = kSpectrumComboItemCount).
+  // Built once from kSpectrumNames so adding/renaming a preset only requires editing kSpectrumNames.
+  static const char* const* kSpectrumComboItems = [] {
+    static const char* items[kSpectrumComboItemCount];
+    for (int i = 0; i < kSpectrumCount; i++)
+      items[i] = kSpectrumNames[i];
+    items[kSpectrumCount] = "Custom...";
+    return items;
+  }();
+  // Bind the combo to a local, NOT state.sun.spectrum_index: picking "Custom..." must not commit the
+  // custom index before the modal confirms. spectrum_index is only advanced to kCustomSpectrumIndex
+  // inside the modal's OK (single transactional commit), so dismissing via Escape / click-outside /
+  // Cancel leaves it at the prior valid preset. The combo re-reads spectrum_index each frame, so it
+  // shows the prior preset while the editor is open and flips to "Custom..." once OK commits.
+  int combo_sel = state.sun.spectrum_index;
+  if (ImGui::Combo("Spectrum", &combo_sel, kSpectrumComboItems, kSpectrumComboItemCount)) {
+    if (combo_sel == kCustomSpectrumIndex) {
+      OpenSpectrumModal(state);  // intent-only: open the editor; OK is the sole commit point
+    } else {
+      state.sun.spectrum_index = combo_sel;
+      // Keep custom_spectrum intact — it is only read when spectrum_index==kCustomSpectrumIndex, so
+      // switching to a preset and back restores the user's edits instead of silently discarding them.
+      state.MarkDirty();
+    }
+  }
   if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Light source spectrum for wavelength-dependent refraction");
+    ImGui::SetTooltip(
+        "Light source spectrum for wavelength-dependent refraction.\n"
+        "\"Custom...\" opens an editor for a discrete wavelength/weight list.");
   }
   ImGui::PopItemWidth();
+  if (state.sun.spectrum_index == kCustomSpectrumIndex) {
+    if (ImGui::SmallButton("Edit spectrum...##spectrum_edit")) {
+      OpenSpectrumModal(state);  // re-open editor for the existing custom spectrum
+    }
+  }
 
   ImGui::SeparatorText("Simulation");
   ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
@@ -926,9 +957,9 @@ void RenderSceneControls(GuiState& state) {
   ImGui::EndGroup();
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
     ImGui::SetTooltip(
-        "Rays per wavelength, in millions.\n"
-        "Total traced = this x number of spectrum wavelengths\n"
-        "(shown as \"Total rays\" in the status bar).");
+        "Total rays across all spectrum wavelengths, in millions.\n"
+        "The server distributes the total to each wavelength as\n"
+        "ceil(total / N_wavelengths) per wavelength.");
   }
   ImGui::BeginGroup();
   DIRTY_IF(SliderIntWithInput("Max hits", &state.sim.max_hits, 1, 64));

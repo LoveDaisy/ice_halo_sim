@@ -30,6 +30,30 @@ namespace lumice::gui {
 
 using json = nlohmann::json;
 
+// Serialize a discrete wl/weight spectrum to a JSON array of {wavelength, weight} objects.
+static nlohmann::json WlWeightArrayToJson(const std::vector<WlWeight>& spec) {
+  nlohmann::json arr = nlohmann::json::array();
+  for (const auto& e : spec) {
+    arr.push_back({ { "wavelength", e.wavelength }, { "weight", e.weight } });
+  }
+  return arr;
+}
+
+// Parses a JSON array of {wavelength, weight} objects into WlWeight entries.
+// Skips malformed elements. Returns the parsed vector (caller sets spectrum_index).
+static std::vector<WlWeight> ParseWlWeightArray(const nlohmann::json& arr) {
+  std::vector<WlWeight> out;
+  for (const auto& e : arr) {
+    if (e.is_object() && e.contains("wavelength") && e.contains("weight")) {
+      WlWeight w;
+      w.wavelength = e.at("wavelength").get<float>();
+      w.weight = e.at("weight").get<float>();
+      out.push_back(w);
+    }
+  }
+  return out;
+}
+
 // Convert Miller index (i1, i4) to wedge angle in degrees. Returns default (28.0) if i1 == 0.
 static float MillerToAlpha(int i1, int i4) {
   constexpr float kSqrt3_2 = 0.866025403784f;
@@ -729,7 +753,10 @@ std::string SerializeCoreConfig(const GuiState& state) {
   scene["light_source"]["type"] = "sun";
   scene["light_source"]["altitude"] = state.sun.altitude;
   scene["light_source"]["diameter"] = state.sun.diameter;
-  if (state.sun.spectrum_index >= 0 && state.sun.spectrum_index < kSpectrumCount) {
+  if (state.sun.spectrum_index == kCustomSpectrumIndex && !state.sun.custom_spectrum.empty()) {
+    // Discrete custom spectrum → JSON array (shape matches core light_config.cpp::SpectrumToJson).
+    scene["light_source"]["spectrum"] = WlWeightArrayToJson(state.sun.custom_spectrum);
+  } else if (state.sun.spectrum_index >= 0 && state.sun.spectrum_index < kSpectrumCount) {
     scene["light_source"]["spectrum"] = kSpectrumNames[state.sun.spectrum_index];
   } else {
     scene["light_source"]["spectrum"] = "D65";
@@ -973,10 +1000,26 @@ void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
   out->sun_altitude = state.sun.altitude;
   out->sun_azimuth = 0.0f;
   out->sun_diameter = state.sun.diameter;
-  if (state.sun.spectrum_index >= 0 && state.sun.spectrum_index < kSpectrumCount) {
-    out->spectrum = kSpectrumNames[state.sun.spectrum_index];
+  if (state.sun.spectrum_index == kCustomSpectrumIndex && !state.sun.custom_spectrum.empty()) {
+    // Discrete custom spectrum → C struct array carrier (spectrum_count > 0 overrides string).
+    int n = std::min(static_cast<int>(state.sun.custom_spectrum.size()), kSpectrumHardMax);
+    if (static_cast<int>(state.sun.custom_spectrum.size()) > kSpectrumHardMax) {
+      GUI_LOG_WARNING("[FileIO] custom spectrum truncated from {} to {} entries", state.sun.custom_spectrum.size(),
+                      kSpectrumHardMax);
+    }
+    out->spectrum_count = n;
+    for (int i = 0; i < n; i++) {
+      out->spectrum_entries[i].wavelength = state.sun.custom_spectrum[i].wavelength;
+      out->spectrum_entries[i].weight = state.sun.custom_spectrum[i].weight;
+    }
+    out->spectrum = "D65";  // fallback string kept but ignored by c_api when spectrum_count > 0
   } else {
-    out->spectrum = "D65";
+    out->spectrum_count = 0;
+    if (state.sun.spectrum_index >= 0 && state.sun.spectrum_index < kSpectrumCount) {
+      out->spectrum = kSpectrumNames[state.sun.spectrum_index];
+    } else {
+      out->spectrum = "D65";
+    }
   }
 
   // Scene: simulation
@@ -1329,8 +1372,17 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       auto& jl = js["light_source"];
       state.sun.altitude = jl.value("altitude", 20.0f);
       state.sun.diameter = jl.value("diameter", 0.5f);
-      if (jl.contains("spectrum") && jl["spectrum"].is_string()) {
-        state.sun.spectrum_index = SpectrumFromString(jl["spectrum"].get<std::string>());
+      if (jl.contains("spectrum")) {
+        const auto& sp = jl["spectrum"];
+        if (sp.is_string()) {
+          state.sun.spectrum_index = SpectrumFromString(sp.get<std::string>());
+          state.sun.custom_spectrum.clear();
+        } else if (sp.is_array()) {
+          // Prior bug: silently dropped discrete arrays (no fallback log). Now imported into
+          // state.sun.custom_spectrum with the sentinel index.
+          state.sun.custom_spectrum = ParseWlWeightArray(sp);
+          state.sun.spectrum_index = state.sun.custom_spectrum.empty() ? 2 /* D65 */ : kCustomSpectrumIndex;
+        }
       }
     }
 
@@ -1484,7 +1536,11 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   json sun;
   sun["altitude"] = state.sun.altitude;
   sun["diameter"] = state.sun.diameter;
-  if (state.sun.spectrum_index >= 0 && state.sun.spectrum_index < kSpectrumCount) {
+  if (state.sun.spectrum_index == kCustomSpectrumIndex && !state.sun.custom_spectrum.empty()) {
+    // "custom" sentinel (lowercase, distinct from preset names) + parallel array field.
+    sun["spectrum"] = "custom";
+    sun["custom_spectrum"] = WlWeightArrayToJson(state.sun.custom_spectrum);
+  } else if (state.sun.spectrum_index >= 0 && state.sun.spectrum_index < kSpectrumCount) {
     sun["spectrum"] = kSpectrumNames[state.sun.spectrum_index];
   } else {
     sun["spectrum"] = "D65";
@@ -1655,7 +1711,14 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
     auto& js = root["sun"];
     state.sun.altitude = js.value("altitude", 20.0f);
     state.sun.diameter = js.value("diameter", 0.5f);
-    state.sun.spectrum_index = SpectrumFromString(js.value("spectrum", "D65"));
+    const auto spec_str = js.value("spectrum", std::string("D65"));
+    if (spec_str == "custom" && js.contains("custom_spectrum") && js["custom_spectrum"].is_array()) {
+      state.sun.custom_spectrum = ParseWlWeightArray(js["custom_spectrum"]);
+      state.sun.spectrum_index = state.sun.custom_spectrum.empty() ? 2 : kCustomSpectrumIndex;
+    } else {
+      state.sun.spectrum_index = SpectrumFromString(spec_str);
+      state.sun.custom_spectrum.clear();
+    }
   }
 
   // Sim
