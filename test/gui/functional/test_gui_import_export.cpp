@@ -83,8 +83,11 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       // (The .lmc save path SerializeGuiStateJson uses the identical
       // `jl["prob"] = layer.probability` float primitive as SerializeCoreConfig
       // above, so its prob fidelity is covered by equivalence.)
+      // Feed the DESERIALIZED state (not the original g_state) so this is the
+      // full end-to-end chain: file JSON -> deserialize -> loaded -> C struct
+      // -> core (code-review r2 Minor-1).
       LUMICE_Config cfg;
-      gui::FillLumiceConfig(gui::g_state, &cfg);
+      gui::FillLumiceConfig(loaded, &cfg);
       IM_CHECK_EQ(cfg.scatter_count, 2);
       IM_CHECK_EQ(cfg.scattering[0].probability, 0.3f);
       IM_CHECK_EQ(cfg.scattering[1].probability, 0.45f);
