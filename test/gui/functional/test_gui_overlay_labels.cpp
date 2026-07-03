@@ -635,6 +635,57 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // ── Up-down orientation guards for the core-pixel-inverse family ──
+  // scrum gui-lens-math-cli-alignment: dual-fisheye (4-6/9) and rectangular (7)
+  // invert Core's y-DOWN pixel layout, but the shader/CPU inverse is fed y-UP
+  // pixel coords → the display was vertically flipped vs the CLI render. The fix
+  // flips py for exactly this family (preview_renderer.cpp pos.y + overlay_labels
+  // PixelToWorldDir/WorldDirToPixel). These pin the corrected orientation so a
+  // revert of the py flip breaks the test instead of silently re-flipping. The
+  // view-matrix family already has the analogous single/dual-ortho top-zenith
+  // guards above; these cover the two lenses the fix actually touched.
+
+  // Rectangular: a top pixel (py=+30 on a 200×200 viewport, y-up) must map to an
+  // UP direction (positive altitude ⇒ -wz > 0 ⇒ wz < 0). Pre-fix RectangularInv
+  // gave lat<0 here (down), the precise inverse of this expectation.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "pixel_to_world_dir_rectangular_top_is_up");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      float view[9];
+      lumice::gui::BuildViewMatrix(0.0f, 0.0f, 0.0f, view);  // unused for rectangular
+      float wx = 0, wy = 0, wz = 0;
+      bool valid = false;
+      lumice::gui::detail::PixelToWorldDirForTesting(0.0f, 30.0f, 200.0f, 200.0f, lumice::gui::kLensTypeRectangular,
+                                                     /*fov*/ 360.0f, view, &wx, &wy, &wz, &valid);
+      IM_CHECK(valid);
+      // altitude = asin(-wz) > 0 for an up direction ⇒ wz < 0.
+      IM_CHECK_LT(wz, -0.1f);
+    };
+  }
+
+  // Dual-fisheye (equal area): in the upper (left) circle, a point ABOVE the disc
+  // center (px=-circle_radius=-50, py=+30) must map to a direction tilted toward
+  // +x (wx>0) and still up (wz<0). Pre-fix (no py flip) this gave wx<0 — the
+  // vertical mirror owner reported. Pins the corrected in-disc vertical orientation.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_labels", "pixel_to_world_dir_dual_fisheye_upper_above_center");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      float view[9];
+      lumice::gui::BuildViewMatrix(0.0f, 0.0f, 0.0f, view);  // unused for dual fisheye
+      float wx = 0, wy = 0, wz = 0;
+      bool valid = false;
+      // 200×200 ⇒ short_res=min(100,200)=100 ⇒ circle_radius=50; left disc center px=-50.
+      lumice::gui::detail::PixelToWorldDirForTesting(-50.0f, 30.0f, 200.0f, 200.0f,
+                                                     lumice::gui::kLensTypeDualFisheyeEqualArea,
+                                                     /*fov*/ 180.0f, view, &wx, &wy, &wz, &valid);
+      IM_CHECK(valid);
+      IM_CHECK_GT(wx, 0.1f);  // tilts toward +x (was <0 pre-fix — the reported flip)
+      IM_CHECK_LT(wz, 0.0f);  // upper hemisphere (up)
+    };
+  }
+
   // detail::ClampLabelPosToViewport contract — pure function tests for the
   // viewport-inset behaviour added in task-overlay-label-edge-inset Step 1.
   // Pin all four edges and the "no-op when label fits centred" path.

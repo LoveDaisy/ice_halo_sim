@@ -301,9 +301,20 @@ The scene configuration defines the simulation scene, including the light source
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `light_source` | object | yes | - | Inline light source configuration (see below) |
-| `ray_num` | integer or string | yes | - | Number of rays; use `"infinite"` for continuous simulation |
+| `ray_num` | integer or string | yes | - | Rays **per discrete wavelength** (see note); use `"infinite"` for continuous simulation |
 | `max_hits` | integer | yes | - | Maximum number of hits |
 | `scattering` | array | yes | - | Scattering configuration array |
+
+> **`ray_num` is per-wavelength, not the total.** The simulator loops over the
+> light source's discrete spectrum and traces `ray_num` rays for **each**
+> wavelength, so the total simulated rays = `ray_num × N_wavelengths`. Example:
+> a 9-line spectrum with `ray_num = 5_000_000` simulates 45,000,000 rays total
+> (this total is what the GUI status bar "Rays" reports). Because the count
+> scales with spectrum size, changing the number of wavelengths changes the
+> total ray budget (and thus brightness/convergence) for the same `ray_num`.
+> The GUI currently exposes only built-in spectra (fixed wavelength counts), so
+> this is not user-visible there yet — but it becomes important when a custom
+> discrete-spectrum editor is added (see backlog).
 
 #### light_source (Light Source Configuration)
 
