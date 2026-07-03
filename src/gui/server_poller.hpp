@@ -78,6 +78,19 @@ class ServerPoller {
   // Thread-safe: only called from main thread before any Start().
   void SetCalibratedThreshold(unsigned long long threshold);
 
+  // ---- Test-only synchronous seam (see test/gui/functional/test_gui_lifecycle.cpp) ----
+  // Drive exactly ONE poll against `server` on the CALLING thread, bypassing the worker
+  // thread, so a regression test can deterministically construct the poll/sync interleaving
+  // that used to lose the terminal completion edge (doc/gui-preview-lifecycle-architecture.md
+  // §2/§6, invariants I3/I4). Not used in production — the real path is Start()/WorkerLoop.
+  void PollOnceForTest(LUMICE_Server* server) {
+    server_ = server;
+    PollOnce();
+  }
+  // Test-only: reset snapshot-generation tracking so the next PollOnceForTest() treats the
+  // server's current generation as new (what Start() does, minus the worker thread).
+  void ResetGenerationForTest() { last_generation_ = 0; }
+
  private:
   enum class State { kPaused, kRunning, kTerminating };
 
