@@ -835,10 +835,15 @@ void SyncFromPoller() {
     return;  // Worker hasn't produced data yet
   }
 
-  // Only transition to kDone when the simulation has actually processed rays and then stopped.
-  // A transient IDLE during restart (before any rays are consumed) has stats_sim_ray_num == 0,
-  // so it's safely ignored here.
-  if (data.server_state == LUMICE_SERVER_IDLE && data.stats_sim_ray_num > 0) {
+  // Transition to kDone by mirroring the SAME reliable level signal the poller uses to
+  // self-pause (has_valid_data), NOT the fragile stats_sim_ray_num>0 which is only rewritten
+  // on new snapshot generations and reset to 0 by every TrySyncData swap (see
+  // doc/gui-preview-lifecycle-architecture.md §2/§6, invariants I3/I4/I6). has_valid_data is
+  // staged on every poll and stays true on the terminal IDLE frame, so whatever the sync/poll
+  // interleaving the completion edge is never lost. A transient IDLE during restart has
+  // has_valid_data == false (server's has_ever_consumed_ is reset on commit/stop), so it is
+  // still correctly ignored here.
+  if (data.server_state == LUMICE_SERVER_IDLE && data.has_valid_data) {
     g_state.sim_state = SimState::kDone;
     GUI_LOG_INFO("[GUI] Simulation done");
   }

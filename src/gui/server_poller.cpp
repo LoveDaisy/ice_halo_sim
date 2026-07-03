@@ -171,6 +171,11 @@ void ServerPoller::PollOnce() {
     std::lock_guard<std::mutex> lock(data_mutex_);
     staged_.valid = true;
     staged_.server_state = server_state;
+    // Lifecycle signal (clock ④): write unconditionally on every poll, alongside server_state
+    // and NOT inside the has_new_snapshot gate (invariant I4). This decouples the cheap
+    // lifecycle heartbeat from expensive snapshot materialization so the terminal edge is
+    // never lost when the final IDLE poll carries no new generation.
+    staged_.has_valid_data = xyz_results[0].has_valid_data;
     if (has_new_snapshot) {
       // Always consume this generation (same generation data won't improve by waiting)
       last_generation_ = xyz_results[0].snapshot_generation;

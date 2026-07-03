@@ -16,6 +16,12 @@ namespace lumice::gui {
 struct PollerData {
   bool valid = false;  // Set to true by worker after first successful poll
   LUMICE_ServerState server_state = LUMICE_SERVER_IDLE;
+  // Lifecycle signal (blueprint clock ④, see doc/gui-preview-lifecycle-architecture.md §6).
+  // Mirrors the server's has_ever_consumed_ level — the SAME reliable signal the poller uses
+  // to self-pause. Written on EVERY poll (not gated on snapshot generation, per invariant I4),
+  // so the terminal IDLE frame durably carries the completion edge until the main thread
+  // consumes it. Kept distinct from the display payload (stats / texture) on purpose.
+  bool has_valid_data = false;
   LUMICE_RayCount stats_ray_seg_num = 0;
   LUMICE_RayCount stats_sim_ray_num = 0;
   std::vector<float> xyz_data;  // XYZ float texture data (for GPU conversion)
