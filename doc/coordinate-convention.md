@@ -356,3 +356,42 @@ Preset correspondences:
   at the means; presets differ in roll **distribution**, not in chain output
 - Lowitz at default: zenith = 0° (mean) with large σ → behaves like Plate
   at the mean, with c-axis swinging widely due to σ
+
+## 10. Screen Handedness (Render Projection Convention)
+
+Sections §1–§9 fix the **world** coordinates, the azimuth math convention, and
+the camera forward direction — but they deliberately do **not** mandate which
+side of the screen an increasing azimuth maps to. That screen left/right mapping
+is a **render presentation** choice, made once and applied consistently across
+every render path (CLI direct-output image, the GPU Metal/CUDA backends, and the
+GUI preview). The core simulator (world directions + rotation chain) is
+unaffected and continues to follow §3.
+
+**Convention: `right = +az`.** For an inside-out lens facing the sun, a sky
+feature at increasing azimuth appears **further to the RIGHT** on screen. This is
+the user-habit-natural direction and is identical for the CLI image and the GUI
+preview (they must agree — that is the whole point of standardizing here).
+
+- **Single-lens family** (linear + the four single fisheyes: equal-area,
+  equidistant, stereographic, orthographic): `+az → screen RIGHT`.
+- **Globe** (option-B outside-in spherical view): intentionally **OPPOSITE**,
+  `+az → screen LEFT`. Viewing the celestial sphere from *outside* mirrors it
+  horizontally relative to the inside-out (naked-eye) view, so globe being the
+  opposite side of the inside-out family is correct, not a bug.
+- **Rectangular / equirectangular**: `+az → screen RIGHT` (the conventional
+  equirectangular longitude direction); consistent with the single-lens family.
+
+**Implementation.** The screen-x handedness lives in the single-lens branch of
+`lm_proj::ProjectExitToPixel` (`src/core/shared/projection_shared.h`, the single
+source shared by legacy CPU / Metal / CUDA), so all backends inherit the same
+convention. The GUI's independent forward implementations
+(`ProjectWorldDirToScreen` in `preview_renderer.cpp`, `WorldDirToPixel` in
+`overlay_labels.cpp`) already produce the same `right = +az` result.
+
+**Regression guard.** Because a handedness flip is invisible to forward/inverse
+round-trip tests (they close by construction under any self-consistent
+convention), this convention is pinned with **absolute screen-side** assertions:
+`test/golden-analytic/core/test_projection.cpp` (backend absolute-column pins)
+and `test/gui/functional/test_render_handedness_guard.cpp` (cross-implementation
+check across backend + both GUI forwards + the interaction read-back). See
+scrum-321 (azimuth-handedness-alignment) for the audit and decision record.

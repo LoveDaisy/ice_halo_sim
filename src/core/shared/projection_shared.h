@@ -230,6 +230,11 @@ LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, flo
     if (!xy.valid) {
       return r;
     }
+    // Screen handedness: right = +az (owner decision 2026-07-03; scrum-321.1 audit).
+    // Applied only to single-lens family (Linear + 4 single-fisheye); dual-fisheye
+    // reuses *Forward directly and is intentionally unaffected. Do NOT move this
+    // negation into the *Forward pure functions — they are shared with dual/globe.
+    xy.x = -xy.x;
     int px = static_cast<int>(
         LM_FLOOR(xy.x * p.scale + static_cast<float>(p.img_w) / 2.0f + 0.5f + static_cast<float>(p.lens_shift_x)));
     int py = static_cast<int>(

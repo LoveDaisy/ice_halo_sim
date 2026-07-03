@@ -19,16 +19,19 @@ REFERENCES_DIR = get_project_root() / "test" / "e2e-correctness" / "references"
 # Calibrated by running each config 3 times and taking min_psnr - 3dB.
 # Set to None to skip PSNR check for that output.
 PSNR_THRESHOLDS = {
-    # color: 5-wavelength discrete-spectrum (440/510/550/590/640nm). Reference
-    # regenerated post-296.7 fix (sim_scene_cnt_ 1-vs-N, commit 5513906d) which
-    # restored full 50M-ray sampling. Run-to-run PSNR (3 runs, 2026-06-26):
-    # 39.08/39.63/39.70 dB. Threshold = min - 3dB = 36.0 dB (was 27.1 dB;
-    # +8.9dB tightening confirms owner hypothesis that prior threshold was
-    # artificially low due to discrete-spectrum undersampling bug).
-    "color_01": 36.0,
-    "cza_01": 41.5,
-    "filters_01": 26.7,
-    "halo_22_01": 26.7,
+    # Thresholds for the 11 single-lens-family references (linear + 4 single-
+    # fisheye) below were recalibrated by scrum-azimuth-handedness-alignment /
+    # task-fix-render-projection-handedness (2026-07-03) after `xy.x` was
+    # negated in ProjectExitToPixel's single-lens branch to align screen
+    # handedness (right=+az) with the GUI. Method: 3 fresh CLI runs per config
+    # against run_1 → threshold = min(PSNR_2vs1, PSNR_3vs1) - 3 dB, floored to
+    # 0.5 dB precision. The 3 control-set thresholds (multi_lens_03,
+    # ms_multi_crystal_01, dual_fisheye_ref_01 — dual-fisheye family, unaffected
+    # by the flip) are preserved from their prior calibration.
+    "color_01": 35.0,
+    "cza_01": 41.0,
+    "filters_01": 29.0,
+    "halo_22_01": 26.5,
     # ms_multi_crystal: MS multi-crystal-per-layer + dual_fisheye + D65 + 2M rays
     # is noisier than the single-wavelength configs. Measured run-to-run PSNR
     # ≈ 23.4 dB (stable: 23.41/23.42/23.44); threshold = min - 3dB floored to
@@ -36,10 +39,10 @@ PSNR_THRESHOLDS = {
     # A structural regression (e.g. the frame band-vs-ring bug) drops PSNR far
     # below 20, so the gate still catches gross regressions.
     "ms_multi_crystal_01": 20.0,
-    "multi_lens_01": 34.3,
-    "multi_lens_02": 35.4,
+    "multi_lens_01": 33.5,
+    "multi_lens_02": 34.5,
     "multi_lens_03": 40.3,
-    "multi_scatter_01": 26.6,
+    "multi_scatter_01": 26.5,
     # orthographic_180: D65 + uniform full-random orientation + 1M rays. Per-run
     # PSNR (measured on macOS): run-to-run 22.74/22.76 dB (3 runs). Threshold
     # = min - 3 dB ≈ 19.7 → set 19.5 dB (rounded down to 0.5 dB precision) to
@@ -49,9 +52,9 @@ PSNR_THRESHOLDS = {
     # (task-270.7 / explore-269 P0). A structural regression (frame bug,
     # wrong projection) drops PSNR far below this floor.
     "orthographic_180_01": 19.5,
-    "parhelion_01": 35.0,
-    "pyramid_01": 28.8,
-    "render_opts_01": 30.3,
+    "parhelion_01": 34.5,
+    "pyramid_01": 28.5,
+    "render_opts_01": 30.0,
     "dual_fisheye_ref_01": 25.8,
 }
 

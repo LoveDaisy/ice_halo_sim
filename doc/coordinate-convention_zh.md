@@ -238,3 +238,17 @@ Preset 与 Case 的对应关系：
 - Parry 默认（zenith = 90°, roll ≈ 0°）：与 Case B 等价（不计随机 az）
 - Column 默认（zenith = 90°, roll Uniform）：均值层与 Parry 相同；preset 差异在 `roll` **分布**上，不在 chain 输出上
 - Lowitz 默认（zenith = 0° mean，大 σ）：均值层与 Plate 相同；c-axis 因大 σ 在天顶附近大幅摆动
+
+## 13. 屏幕手性（渲染投影约定）
+
+前面各节固定了**世界**坐标、azimuth 数学约定与相机 forward 方向，但**刻意没有**规定"azimuth 增大对应屏幕的哪一侧"。屏幕左右映射是一个**渲染呈现**层面的选择，只定义一次，并在所有渲染路径（CLI 直出图、GPU Metal/CUDA 后端、GUI 预览）上一致应用。core 模拟器（世界方向 + 旋转链）不受影响，仍遵 §3。
+
+**约定：`右 = +az`。** 对面对太阳的 inside-out 镜头，azimuth 增大的天空特征在屏幕上**更偏右**。这是最符合用户习惯的方向，且 CLI 直出图与 GUI 预览**必须一致**（这正是在此统一约定的意义）。
+
+- **单镜头族**（linear + 四种单 fisheye：equal-area / equidistant / stereographic / orthographic）：`+az → 屏幕右`。
+- **globe**（option-B 外视角球面）：刻意**相反**，`+az → 屏幕左`。从球**外**看天球会相对 inside-out（裸眼）视角水平镜像，故 globe 与 inside-out 族相反侧是正确的，非 bug。
+- **rectangular / 等距柱状**：`+az → 屏幕右`（等距柱状经度惯例），与单镜头族一致。
+
+**实现**：屏幕 x 手性落在 `lm_proj::ProjectExitToPixel`（`src/core/shared/projection_shared.h`，legacy CPU / Metal / CUDA 三端共享的单一真源）的单镜头分支，故所有后端继承同一约定。GUI 的独立 forward 实现（`preview_renderer.cpp::ProjectWorldDirToScreen`、`overlay_labels.cpp::WorldDirToPixel`）本就产出相同的 `右 = +az`。
+
+**回归守卫**：手性翻转对 forward/inverse 往返测试不可见（任何自洽约定下往返都恒闭合），故用**绝对屏幕左右符号**断言钉死：`test/golden-analytic/core/test_projection.cpp`（backend 绝对列 pin）+ `test/gui/functional/test_render_handedness_guard.cpp`（backend + 两条 GUI forward + 交互读回的跨实现对拍）。审计与决策记录见 scrum-321（azimuth-handedness-alignment）。
