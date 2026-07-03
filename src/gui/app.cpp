@@ -826,51 +826,59 @@ void SyncFromPoller() {
     return;
   }
 
-  PollerData data;
-  if (!g_server_poller.TrySyncData(data)) {
-    GUI_LOG_VERBOSE("[GUI] SyncFromPoller: skipped (poller busy)");
-    return;
-  }
-  if (!data.valid) {
-    return;  // Worker hasn't produced data yet
+  // Atomically load the whole immutable snapshot (invariant I5). One lock-free atomic_load; the
+  // consumer never observes a half-updated field combination. Replaces the old TrySyncData swap
+  // (which zeroed staged stats and was the torn-read root cause).
+  auto snap = g_server_poller.LoadSnapshot();
+  if (!snap || !snap->valid) {
+    return;  // Worker hasn't produced data yet (or a valid=false restart reset).
   }
 
   // Transition to kDone by mirroring the SAME reliable level signal the poller uses to
-  // self-pause (has_valid_data), NOT the fragile stats_sim_ray_num>0 which is only rewritten
-  // on new snapshot generations and reset to 0 by every TrySyncData swap (see
+  // self-pause (has_valid_data), NOT the fragile stats_sim_ray_num>0 (see
   // doc/gui-preview-lifecycle-architecture.md §2/§6, invariants I3/I4/I6). has_valid_data is
-  // staged on every poll and stays true on the terminal IDLE frame, so whatever the sync/poll
+  // carried on every poll and stays true on the terminal IDLE frame, so whatever the sync/poll
   // interleaving the completion edge is never lost. A transient IDLE during restart has
   // has_valid_data == false (server's has_ever_consumed_ is reset on commit/stop), so it is
-  // still correctly ignored here.
-  if (data.server_state == LUMICE_SERVER_IDLE && data.has_valid_data) {
+  // still correctly ignored here. (1.5 replaces this with lifecycle==COMPLETED && epoch match.)
+  if (snap->server_state == LUMICE_SERVER_IDLE && snap->has_valid_data) {
     g_state.sim_state = SimState::kDone;
     GUI_LOG_INFO("[GUI] Simulation done");
   }
 
   // Update stats
-  if (data.stats_sim_ray_num > 0) {
-    g_state.stats_ray_seg_num = data.stats_ray_seg_num;
-    g_state.stats_sim_ray_num = data.stats_sim_ray_num;
+  if (snap->stats_sim_ray_num > 0) {
+    g_state.stats_ray_seg_num = snap->stats_ray_seg_num;
+    g_state.stats_sim_ray_num = snap->stats_sim_ray_num;
   }
 
   // Upload XYZ float texture (GL call — must be on main thread).
-  // Quality gate is in ServerPoller::PollOnce — staged data is always worth displaying.
-  // Upload guard: allow when intensity > 0 (normal frame) OR texture_ray_count > 0
-  // (valid empty frame — filter/physics rejected all rays after simulation ran).
-  // Cold-start transient (texture_ray_count == 0) is still blocked to prevent flicker.
-  // Filter changes set intensity_locked via MarkFilterDirty() to block old data.
-  bool upload_ok =
-      data.has_new_texture && (data.snapshot_intensity > 0 || data.texture_ray_count > 0) && !g_state.intensity_locked;
+  // Quality gate is in ServerPoller::PollOnce — a materialized payload is always worth displaying.
+  // Immutable reads are non-destructive, so exact-once upload is enforced by serial dedup (a fresh
+  // texture bumps texture_serial; carry-forward keeps it unchanged) instead of the old swap-reset.
+  // Upload guard: allow when intensity > 0 (normal frame) OR texture_ray_count > 0 (valid empty
+  // frame — filter/physics rejected all rays after simulation ran). Cold-start transient
+  // (texture_ray_count == 0) is still blocked to prevent flicker. Filter changes set
+  // intensity_locked via MarkFilterDirty() to block old data. A null payload (InvalidateStagedTexture
+  // / no texture yet) skips upload — GL keeps the last uploaded frame (no black flicker).
+  //
+  // last_uploaded_texture_serial_ lives here as a file-scope static for 1.4 (the consumer-side
+  // dedup cursor); 1.5 migrates it into GuiState alongside the rest of the display state.
+  static unsigned long long last_uploaded_texture_serial_ = 0;
+  const auto& payload = snap->payload;
+  bool upload_ok = payload != nullptr && snap->texture_serial != last_uploaded_texture_serial_ &&
+                   (payload->snapshot_intensity > 0 || payload->texture_ray_count > 0) && !g_state.intensity_locked;
   if (upload_ok) {
     GUI_LOG_VERBOSE("[GUI] SyncFromPoller: upload tex_rays={}, intensity={:.6f}, eff_pixels={}, factor={:.6f}",
-                    data.texture_ray_count, data.snapshot_intensity, data.effective_pixels, data.intensity_factor);
-    g_preview.UploadXyzTexture(data.xyz_data.data(), data.texture_width, data.texture_height);
-    g_state.snapshot_intensity = data.snapshot_intensity;
-    g_state.effective_pixels = data.effective_pixels;
+                    payload->texture_ray_count, payload->snapshot_intensity, payload->effective_pixels,
+                    payload->intensity_factor);
+    g_preview.UploadXyzTexture(payload->xyz_data.data(), payload->width, payload->height);
+    g_state.snapshot_intensity = payload->snapshot_intensity;
+    g_state.effective_pixels = payload->effective_pixels;
     g_state.texture_upload_count++;
+    last_uploaded_texture_serial_ = snap->texture_serial;  // record exact-once cursor
     // Auto-EV: visible framebuffer self-P99 normalization (see doc/adaptive-brightness.md).
-    g_state.p99_raw_y = data.p99_y;
+    g_state.p99_raw_y = payload->p99_y;
     g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, g_state.target_white);
     GUI_LOG_VERBOSE("[GUI] SyncFromPoller: p99_raw_y={:.6f}, ev_auto={:.3f}", g_state.p99_raw_y, g_state.ev_auto);
   }

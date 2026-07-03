@@ -6,10 +6,12 @@
 //
 // Two tests:
 //  1. gui_lifecycle/terminal_idle_reaches_done — DETERMINISTIC white-box. Reproduces the
-//     exact poll/sync interleaving from the issue (a mid-run TrySyncData zeroes the staged
-//     stats, then the terminal IDLE poll carries NO new snapshot generation) and asserts
-//     the completion edge still reaches kDone. Also pins the restart/stop-transient IDLE
-//     boundary (has_valid_data==false must NOT be classified done).
+//     exact poll/sync interleaving from the issue (a mid-run texture drop, then the terminal
+//     IDLE poll carries NO new snapshot generation) and asserts the completion edge still
+//     reaches kDone. Also pins the restart/stop-transient IDLE boundary (has_valid_data==false
+//     must NOT be classified done). Post versioned-snapshot-handoff (1.4) the cross-thread
+//     handoff is a single immutable PreviewSnapshot published/loaded atomically (invariant I5),
+//     so the old torn-read channel (data_mutex_/staged_/std::swap) no longer exists.
 //  2. gui_lifecycle/gpu_run_reaches_done — INTEGRATION e2e. Drives the real DoRun→completion
 //     flow (GPU/Metal on Apple, CPU elsewhere) and asserts sim_state reaches kDone. This is
 //     the end-to-end verification that the dead-state is gone through the real Run path.
@@ -95,42 +97,54 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
       IM_CHECK(lc.epoch >= 1);
     }
 
-    // (A) POLLER HALF (server_poller.cpp / I4): a terminal IDLE poll that carries NO new
-    // snapshot generation must still stage has_valid_data==true, even though its staged
-    // stats are 0. This is the level signal that the fix decoupled from snapshot
-    // materialization. Reverting the unconditional-stage line makes b.has_valid_data false.
+    // (A) POLLER HALF (server_poller.cpp / I4 + I5): a terminal IDLE poll that carries NO new
+    // snapshot generation must still carry has_valid_data==true. This is the level signal the
+    // fix decoupled from snapshot materialization. Reverting the unconditional-carry line makes
+    // b->has_valid_data false. Reads are now non-destructive atomic snapshot loads (I5) — the
+    // whole coherent bundle is published as one immutable value, never a torn field-bag.
     {
       gui::ServerPoller local;
       local.ResetGenerationForTest();
-      local.PollOnceForTest(server);  // Poll A: generation G is new -> stages stats + has_valid_data
-      gui::PollerData a;
-      IM_CHECK(local.TrySyncData(a));  // consume Poll A; resets staged (this zeroes staged stats)
-      IM_CHECK(a.valid);
-      IM_CHECK(a.has_valid_data);
-      IM_CHECK(a.stats_sim_ray_num > 0);  // Poll A genuinely carried the generation-bearing frame
+      local.PollOnceForTest(server);  // Poll A: generation G is new -> materializes stats + texture + has_valid_data
+      auto a = local.LoadSnapshot();  // non-destructive load of the published Poll A snapshot
+      IM_CHECK(a != nullptr);
+      IM_CHECK(a->valid);
+      IM_CHECK(a->has_valid_data);
+      IM_CHECK(a->stats_sim_ray_num > 0);  // Poll A genuinely carried the generation-bearing frame
 
       local.PollOnceForTest(server);  // Poll B: same generation G -> has_new_snapshot == false
-      gui::PollerData b;
-      IM_CHECK(local.TrySyncData(b));
-      IM_CHECK(b.valid);
-      IM_CHECK_EQ(static_cast<int>(b.server_state), static_cast<int>(LUMICE_SERVER_IDLE));
-      // The fragile OLD guard (stats_sim_ray_num>0) would see 0 here and never fire:
-      IM_CHECK_EQ(b.stats_sim_ray_num, static_cast<LUMICE_RayCount>(0));
-      // The reliable level signal survives the no-new-generation poll (the fix):
-      IM_CHECK(b.has_valid_data);
+      auto b = local.LoadSnapshot();
+      IM_CHECK(b != nullptr);
+      IM_CHECK(b->valid);
+      IM_CHECK_EQ(static_cast<int>(b->server_state), static_cast<int>(LUMICE_SERVER_IDLE));
+      // I5 bundle coherence: stats CARRY FORWARD across a no-new-generation poll instead of being
+      // torn to 0. The old assertion here was `b.stats_sim_ray_num == 0` — that recorded the
+      // now-ELIMINATED torn read (the old TrySyncData swap zeroed staged stats). Under the new
+      // immutable-snapshot contract the whole bundle stays coherent, so the inverted `> 0` is a
+      // STRONGER assertion (bundle consistency, I5), not a weakening.
+      IM_CHECK(b->stats_sim_ray_num > 0);
+      // The reliable level signal survives the no-new-generation poll (the fix, I4):
+      IM_CHECK(b->has_valid_data);
     }
 
     // (B) APP HALF (app.cpp SyncFromPoller / I3): the real completion decision, exercised
     // through the actual global poller + SyncFromPoller with the same issue interleaving.
-    // A mid TrySyncData zeroes staged stats; the terminal IDLE poll carries no new
-    // generation; SyncFromPoller must still reach kDone. Reverting the guard to
-    // `stats_sim_ray_num>0` leaves sim_state stuck at kSimulating here (the original bug).
+    // The terminal IDLE poll carries no new generation; SyncFromPoller must still reach kDone.
+    // Reverting the completion guard to a snapshot-materialization-only signal (e.g.
+    // `snap->has_new_texture` — the new analog of the old fragile stats/generation gate, since
+    // carry-forward keeps stats>0) leaves sim_state stuck at kSimulating here (the original bug).
+    //
+    // Mid-op: InvalidateStagedTexture() (a real production call — DoRun issues it after a filter
+    // change) nulls the published payload while preserving the has_valid_data level signal. It
+    // replaces the old destructive TrySyncData mid-drain: both ensure the terminal SyncFromPoller
+    // takes NO GL upload path. This matters because the imgui test coroutine runs on a separate
+    // thread with no current GL context (see section C) — with the new non-destructive immutable
+    // reads, the carried texture would otherwise reach UploadXyzTexture from that thread.
     {
       gui::g_server_poller.ResetGenerationForTest();
-      gui::g_server_poller.PollOnceForTest(server);  // Poll A (generation-bearing)
-      gui::PollerData tmp;
-      IM_CHECK(gui::g_server_poller.TrySyncData(tmp));  // mid sync: swap resets staged stats to 0
-      gui::g_server_poller.PollOnceForTest(server);     // Poll B: terminal IDLE, no new generation
+      gui::g_server_poller.PollOnceForTest(server);    // Poll A (generation-bearing)
+      gui::g_server_poller.InvalidateStagedTexture();  // mid-op: drop staged texture, keep level signal
+      gui::g_server_poller.PollOnceForTest(server);    // Poll B: terminal IDLE, no new generation
 
       gui::g_state.sim_state = SimState::kSimulating;
       gui::SyncFromPoller();  // consumes the terminal frame
@@ -144,20 +158,20 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
 
       gui::ServerPoller local;
       local.PollOnceForTest(server);
-      gui::PollerData f;
-      IM_CHECK(local.TrySyncData(f));
-      IM_CHECK(f.valid);
-      IM_CHECK_EQ(static_cast<int>(f.server_state), static_cast<int>(LUMICE_SERVER_IDLE));
-      IM_CHECK(!f.has_valid_data);  // no data produced since Stop
+      auto f = local.LoadSnapshot();
+      IM_CHECK(f != nullptr);
+      IM_CHECK(f->valid);
+      IM_CHECK_EQ(static_cast<int>(f->server_state), static_cast<int>(LUMICE_SERVER_IDLE));
+      IM_CHECK(!f->has_valid_data);  // no data produced since Stop
 
-      // Same no-new-generation interleaving as section (B): drain the first poll, then feed
-      // SyncFromPoller a terminal frame with no new texture (so it takes no GL upload path —
-      // SyncFromPoller runs on the real main thread with a GL context; this coroutine has none).
+      // Same no-new-generation interleaving as section (B): poll, drop the staged texture, then
+      // feed SyncFromPoller a terminal frame with no texture (so it takes no GL upload path —
+      // SyncFromPoller runs on the real main thread with a GL context; this coroutine, on a
+      // separate worker thread, has none).
       gui::g_server_poller.ResetGenerationForTest();
       gui::g_server_poller.PollOnceForTest(server);
-      gui::PollerData drain;
-      IM_CHECK(gui::g_server_poller.TrySyncData(drain));
-      gui::g_server_poller.PollOnceForTest(server);  // terminal IDLE, no new generation
+      gui::g_server_poller.InvalidateStagedTexture();  // mid-op: null the payload (was TrySyncData drain)
+      gui::g_server_poller.PollOnceForTest(server);    // terminal IDLE, no new generation
       gui::g_state.sim_state = SimState::kSimulating;
       gui::SyncFromPoller();
       // Must stay kSimulating — a transient IDLE without valid data is not completion.
