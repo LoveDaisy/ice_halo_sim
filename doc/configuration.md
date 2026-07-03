@@ -301,20 +301,27 @@ The scene configuration defines the simulation scene, including the light source
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `light_source` | object | yes | - | Inline light source configuration (see below) |
-| `ray_num` | integer or string | yes | - | Rays **per discrete wavelength** (see note); use `"infinite"` for continuous simulation |
+| `ray_num` | integer or string | yes | - | **Total** rays across all spectrum wavelengths; use `"infinite"` for continuous simulation |
 | `max_hits` | integer | yes | - | Maximum number of hits |
 | `scattering` | array | yes | - | Scattering configuration array |
 
-> **`ray_num` is per-wavelength, not the total.** The simulator loops over the
-> light source's discrete spectrum and traces `ray_num` rays for **each**
-> wavelength, so the total simulated rays = `ray_num × N_wavelengths`. Example:
-> a 9-line spectrum with `ray_num = 5_000_000` simulates 45,000,000 rays total
-> (this total is what the GUI status bar "Rays" reports). Because the count
-> scales with spectrum size, changing the number of wavelengths changes the
-> total ray budget (and thus brightness/convergence) for the same `ray_num`.
-> The GUI currently exposes only built-in spectra (fixed wavelength counts), so
-> this is not user-visible there yet — but it becomes important when a custom
-> discrete-spectrum editor is added (see backlog).
+> **`ray_num` is the total across all wavelengths.**
+> Before task-323 (2026-07) `ray_num` was interpreted as *rays per discrete
+> wavelength*, so a 9-line spectrum with `ray_num = 5_000_000` silently
+> simulated 45,000,000 rays. That was a footgun: changing the wavelength count
+> changed the total ray budget (and thus brightness/convergence).
+>
+> The server now interprets `ray_num` as the **grand total**. Internally it
+> derives `per_wl = ⌈ray_num / N_wavelengths⌉` before dispatching to the trace
+> loop, so the actual simulated total is `per_wl × N_wavelengths ≥ ray_num`
+> (any small overshoot is due to the ceiling division). Illuminant / continuous
+> spectra have `N_wavelengths = 1` so the transform is the identity.
+>
+> **Migration.** External hand-written configs that used the old per-wavelength
+> semantics must be updated: multiply `ray_num` by the number of discrete
+> wavelengths in the spectrum. The two bundled configs with discrete spectra
+> (`examples/config_example.json`, `test/e2e/configs/color.json`) were migrated
+> as part of task-323 and produce bit-equivalent trace output (PSNR unchanged).
 
 #### light_source (Light Source Configuration)
 

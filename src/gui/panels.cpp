@@ -944,9 +944,9 @@ void RenderSceneControls(GuiState& state) {
   ImGui::EndGroup();
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
     ImGui::SetTooltip(
-        "Rays per wavelength, in millions.\n"
-        "Total traced = this x number of spectrum wavelengths\n"
-        "(shown as \"Total rays\" in the status bar).");
+        "Total rays across all spectrum wavelengths, in millions.\n"
+        "The server distributes the total to each wavelength as\n"
+        "ceil(total / N_wavelengths) per wavelength.");
   }
   ImGui::BeginGroup();
   DIRTY_IF(SliderIntWithInput("Max hits", &state.sim.max_hits, 1, 64));

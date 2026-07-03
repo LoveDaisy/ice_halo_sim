@@ -197,6 +197,103 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // Test: custom-spectrum end-to-end round-trip (task-323).
+  // Covers all 4 file_io write paths + 1 load path introduced by the discrete-spectrum work:
+  //   1. GUI project save (root["sun"]["spectrum"]="custom" + "custom_spectrum" array)
+  //   2. GUI project load (reads back the array, restores kCustomSpectrumIndex)
+  //   3. SerializeCoreConfig (light_source.spectrum emitted as a JSON array)
+  //   4. FillLumiceConfig (LUMICE_Config.spectrum_entries[]/spectrum_count populated)
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "custom_spectrum_roundtrip");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // Configure a 3-entry custom spectrum.
+      gui::g_state.sun.spectrum_index = gui::kCustomSpectrumIndex;
+      gui::g_state.sun.custom_spectrum = { { 450.0f, 0.5f }, { 550.0f, 1.0f }, { 650.0f, 0.7f } };
+
+      // (1)+(2) .lmc save/load round-trip.
+      const char* tmp_path = "/tmp/lumice_custom_spectrum_roundtrip.lmc";
+      bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
+      IM_CHECK(save_ok);
+      gui::DoNew();
+      IM_CHECK(gui::g_state.sun.spectrum_index != gui::kCustomSpectrumIndex);  // reset baseline
+      std::vector<unsigned char> tex_data;
+      int tex_w = 0;
+      int tex_h = 0;
+      bool load_ok = gui::LoadLmcFile(tmp_path, gui::g_state, tex_data, tex_w, tex_h);
+      IM_CHECK(load_ok);
+      IM_CHECK_EQ(gui::g_state.sun.spectrum_index, gui::kCustomSpectrumIndex);
+      IM_CHECK_EQ(gui::g_state.sun.custom_spectrum.size(), (size_t)3);
+      IM_CHECK_EQ(gui::g_state.sun.custom_spectrum[0].wavelength, 450.0f);
+      IM_CHECK_EQ(gui::g_state.sun.custom_spectrum[0].weight, 0.5f);
+      IM_CHECK_EQ(gui::g_state.sun.custom_spectrum[1].wavelength, 550.0f);
+      IM_CHECK_EQ(gui::g_state.sun.custom_spectrum[2].weight, 0.7f);
+      std::remove(tmp_path);
+
+      // (3) SerializeCoreConfig emits an array-form spectrum. Matches core light_config.cpp
+      // SpectrumToJson shape ([{wavelength, weight}, ...]).
+      std::string core_json = gui::SerializeCoreConfig(gui::g_state);
+      auto parsed = nlohmann::json::parse(core_json);
+      const auto& spec = parsed["scene"]["light_source"]["spectrum"];
+      IM_CHECK(spec.is_array());
+      IM_CHECK_EQ(spec.size(), (size_t)3);
+      IM_CHECK_EQ(spec[0]["wavelength"].get<float>(), 450.0f);
+      IM_CHECK_EQ(spec[1]["weight"].get<float>(), 1.0f);
+      IM_CHECK_EQ(spec[2]["wavelength"].get<float>(), 650.0f);
+
+      // (4) FillLumiceConfig populates spectrum_entries[]/spectrum_count.
+      LUMICE_Config cfg{};
+      gui::FillLumiceConfig(gui::g_state, &cfg);
+      IM_CHECK_EQ(cfg.spectrum_count, 3);
+      IM_CHECK_EQ(cfg.spectrum_entries[0].wavelength, 450.0f);
+      IM_CHECK_EQ(cfg.spectrum_entries[0].weight, 0.5f);
+      IM_CHECK_EQ(cfg.spectrum_entries[2].wavelength, 650.0f);
+    };
+  }
+
+  // Test: legacy core-JSON import with array-form spectrum.
+  // Regression guard for the historical silent-drop bug in file_io.cpp (task-323 Step 5 #5):
+  // arrays were previously discarded without warning; must now populate custom_spectrum.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "core_json_array_spectrum_import");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      // Baseline: reset state has a preset spectrum, not custom.
+      IM_CHECK(gui::g_state.sun.spectrum_index != gui::kCustomSpectrumIndex);
+
+      // Build a minimal core-JSON with an array-form spectrum and import it.
+      nlohmann::json root;
+      nlohmann::json cr;
+      cr["id"] = 1;
+      cr["type"] = "prism";
+      cr["shape"]["height"] = 1.0f;
+      cr["axis"]["zenith"] = { { "type", "gauss" }, { "mean", 90.0f }, { "std", 10.0f } };
+      cr["axis"]["azimuth"] = { { "type", "uniform" }, { "mean", 0.0f }, { "std", 180.0f } };
+      cr["axis"]["roll"] = { { "type", "uniform" }, { "mean", 0.0f }, { "std", 180.0f } };
+      root["crystal"] = nlohmann::json::array({ cr });
+      root["scene"]["light_source"]["type"] = "sun";
+      root["scene"]["light_source"]["altitude"] = 20.0f;
+      root["scene"]["light_source"]["diameter"] = 0.5f;
+      root["scene"]["light_source"]["spectrum"] = nlohmann::json::array(
+          { { { "wavelength", 480.0f }, { "weight", 0.9f } }, { { "wavelength", 620.0f }, { "weight", 1.0f } } });
+      root["scene"]["ray_num"] = 1000;
+      root["scene"]["max_hits"] = 7;
+      root["scene"]["scattering"] = nlohmann::json::array(
+          { { { "prob", 1.0f },
+              { "entries", nlohmann::json::array({ { { "crystal", 1 }, { "proportion", 1.0f } } }) } } });
+
+      // Import via the real Core-JSON entry point (mirrors the GUI "Open .json"
+      // flow: app.cpp:498 DeserializeFromJson), NOT the binary .lmc loader.
+      bool load_ok = gui::DeserializeFromJson(root.dump(), gui::g_state);
+      IM_CHECK(load_ok);
+      IM_CHECK_EQ(gui::g_state.sun.spectrum_index, gui::kCustomSpectrumIndex);
+      IM_CHECK_EQ(gui::g_state.sun.custom_spectrum.size(), (size_t)2);
+      IM_CHECK_EQ(gui::g_state.sun.custom_spectrum[0].wavelength, 480.0f);
+      IM_CHECK_EQ(gui::g_state.sun.custom_spectrum[1].wavelength, 620.0f);
+    };
+  }
+
   // Test: modal_layout_vertical roundtrip.
   // Ensures the new .lmc field survives save/load and defaults correctly on legacy files.
   {
