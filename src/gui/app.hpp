@@ -3,6 +3,7 @@
 
 #include <spdlog/sinks/basic_file_sink.h>
 
+#include <atomic>
 #include <memory>
 
 #include "gui/crystal_preview.hpp"
@@ -45,6 +46,15 @@ extern PreviewViewport g_preview_vp;
 // via LUMICE_CreateServer (CPU default) outside MaybeReconstructServerForBackend —
 // e.g. the perf-test harness — to keep the toggle-detection invariant honest.
 extern bool g_server_is_gpu;
+
+// Async Stop completion latch (blueprint §5/§8, 1.6). Set true synchronously by DoStop when it
+// offloads the blocking `poller.Stop() + LUMICE_StopServer` sequence onto a background std::async
+// thread; cleared by that thread when the backend has drained. Read (never written) by
+// SyncFromPoller to advance run_intent kStopping→kStopped. JoinPendingStop() blocks until the
+// background thread has returned and MUST run before any path that destroys/reconstructs the
+// server or poller (use-after-free guard, R1).
+extern std::atomic<bool> g_stop_inflight;
+void JoinPendingStop();
 
 // Aspect ratio state
 extern int g_programmatic_resize;  // Counter: decremented by WindowSizeCallback, set by ApplyAspectRatio

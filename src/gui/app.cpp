@@ -5,10 +5,12 @@
 #include <stb_image.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <future>
 #include <string>
 #include <thread>
 #include <vector>
@@ -36,6 +38,28 @@ ServerPoller g_server_poller;
 // so this is false until the first GPU toggle. See MaybeReconstructServerForBackend.
 bool g_server_is_gpu = false;
 PreviewViewport g_preview_vp;
+
+// Async Stop plumbing (blueprint §5/§8, 1.6). DoStop offloads the blocking teardown sequence
+// (`poller.Stop() + LUMICE_StopServer`) onto this future so the UI thread returns immediately and
+// paints the optimistic "Stopping…" state. g_stop_inflight is the coarse completion latch read by
+// SyncFromPoller to advance the intent to kStopped. Both live at file scope (single GUI thread
+// owns the future; the atomic crosses the one background thread).
+std::atomic<bool> g_stop_inflight{ false };
+namespace {
+std::future<void> g_stop_future;
+}  // namespace
+
+// Block until any in-flight async Stop has finished (poller + server drained), then release the
+// future. Idempotent / cheap when no stop is pending. MUST be called before every path that
+// destroys or reconstructs g_server / g_server_poller, so the background thread can never touch a
+// freed server (R1 use-after-free guard): shutdown (main.cpp), DoRun top, and
+// MaybeReconstructServerForBackend.
+void JoinPendingStop() {
+  if (g_stop_future.valid()) {
+    g_stop_future.wait();
+    g_stop_future = {};
+  }
+}
 
 int g_programmatic_resize = 0;
 
@@ -697,6 +721,7 @@ bool MaybeReconstructServerForBackend() {
   }
   GUI_LOG_INFO("[GUI] Backend toggle: reconstructing server ({} -> {})", g_server_is_gpu ? "GPU" : "CPU",
                want_gpu ? "GPU" : "CPU");
+  JoinPendingStop();       // R1: a background stop may still hold this server — drain it before destroy
   g_server_poller.Stop();  // synchronous: worker confirmed no longer touching the old server
   LUMICE_DestroyServer(g_server);
 
@@ -716,6 +741,10 @@ void DoRun() {
   if (!g_server) {
     return;
   }
+  // R1: a previous Stop may still be draining on the background thread. It calls poller.Stop() +
+  // LUMICE_StopServer on this same server; joining first makes the DoRun commit/rebuild below
+  // race-free (and the reused-consumer / poller-pointer reasoning valid).
+  JoinPendingStop();
   auto run_start = std::chrono::steady_clock::now();
 
   // Backend toggle reconstructs the server (per-backend orchestration topology).
@@ -805,13 +834,25 @@ void DoRun() {
 void DoStop() {
   if (!g_server)
     return;
-  g_server_poller.Stop();  // Must stop poller before server to avoid dangling access
-  LUMICE_StopServer(g_server);
-  // Intent-latch: Stop leaves the backend IDLE, so kStopped is the one display state derived
-  // from intent rather than a fresh observation (blueprint §5). ReconcileSimState maps it to
-  // kDone in 1.5 (current behavior); 1.6 revisits the Stop→Idle terminal per blueprint §8.
-  g_state.run_intent = RunIntent::kStopped;
-  GUI_LOG_INFO("[GUI] DoStop");
+  // Idempotent: a stop is already draining on the background thread (kStopping intent-latched).
+  // Re-entry (double-click, or a UI path that slipped past the disabled button) is a no-op — the
+  // future is single-owner and must not be overwritten while pending.
+  if (g_state.run_intent == RunIntent::kStopping) {
+    return;
+  }
+  // Optimistic async Stop (blueprint §5/§8): set the intent synchronously so the UI paints
+  // "Stopping…" THIS frame, then offload the EXISTING blocking teardown sequence onto a background
+  // thread. The backend cannot interrupt the in-flight batch, so LUMICE_StopServer blocks until it
+  // drains (server.cpp active_workers_==0); doing it off the UI thread keeps the toolbar live.
+  // This writes the INTENT only — sim_state stays single-owner (ReconcileSimState in SyncFromPoller).
+  g_state.run_intent = RunIntent::kStopping;
+  g_stop_inflight.store(true);
+  g_stop_future = std::async(std::launch::async, [srv = g_server] {
+    g_server_poller.Stop();  // fast: wait out one readback poll (reuses the validated stop order)
+    LUMICE_StopServer(srv);  // slow: blocks on the in-flight batch drain — now off the UI thread
+    g_stop_inflight.store(false);
+  });
+  GUI_LOG_INFO("[GUI] DoStop: stopping (async)");
 }
 
 void DoRevert() {
@@ -835,6 +876,14 @@ void DoRevert() {
   }
 }
 
+// Terminal display state a drained Stop resolves to (single flip point). Blueprint §8 originally
+// abstracted this as "Idle", but that was reconsidered to kDone (2026-07-03, doc §8): the GUI's Save guards are
+// keyed on kIdle (RefreshCpuTextureForSave early-return + Save-menu `has_server`), so Stop→Idle
+// would regress save-after-stop, and kIdle would be overloaded with "never-run" vs
+// "stopped-with-result". kDone == current terminal behavior, so the Save guards need no migration.
+// A future flip back to kIdle is this one line + the Save-guard migration.
+constexpr GuiState::SimState kStopEndState = GuiState::SimState::kDone;
+
 // Single-owner sim_state reconcile (I2). Pure — see app.hpp for the contract. The §1.3 truth
 // table: intent picks a base state; a fresh COMPLETED observation is the only thing that pulls a
 // kRunning intent to kDone; a dirty edit on a kDone result surfaces as kModified.
@@ -854,8 +903,12 @@ GuiState::SimState ReconcileSimState(RunIntent intent, uint64_t committed_epoch,
     case RunIntent::kLoaded:
       base = S::kDone;  // static loaded result (no server run backing it)
       break;
+    case RunIntent::kStopping:
+      base = S::kStopping;  // optimistic: async Stop is draining the in-flight batch (pure intent —
+                            // does NOT depend on a fresh observation, and is not demoted by dirty)
+      break;
     case RunIntent::kStopped:
-      base = S::kDone;  // intent-latched (backend is IDLE post-Stop); 1.6 revisits per §8
+      base = kStopEndState;  // drained terminal state; single flip point (see kStopEndState above)
       break;
     case RunIntent::kRunning:
       base = (fresh && snap->lifecycle == LUMICE_LIFECYCLE_COMPLETED) ? S::kDone : S::kSimulating;
@@ -892,6 +945,15 @@ void SyncFromPoller() {
   g_state.sim_state = ReconcileSimState(g_state.run_intent, g_state.committed_epoch, snap.get(), g_state.dirty);
   if (prev_state != SimState::kDone && g_state.sim_state == SimState::kDone) {
     GUI_LOG_INFO("[GUI] Simulation done");
+  }
+
+  // Mealy next-intent advance for the async Stop (blueprint §5/§8): once the background stop thread
+  // has drained (g_stop_inflight cleared, i.e. LUMICE_StopServer returned), promote the optimistic
+  // kStopping intent to the terminal kStopped. This writes the INTENT (a reconcile INPUT) only —
+  // sim_state is still written in exactly one place above (I2 preserved). Placed AFTER the reconcile
+  // so the terminal kStopEndState paints on the NEXT frame's reconcile.
+  if (g_state.run_intent == RunIntent::kStopping && !g_stop_inflight.load()) {
+    g_state.run_intent = RunIntent::kStopped;
   }
 
   if (!snap || !snap->valid) {

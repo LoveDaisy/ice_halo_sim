@@ -21,13 +21,15 @@ enum class CrystalType { kPrism, kPyramid };
 
 // Last user run-intent (blueprint §5 CQS "last command" channel). This is one of the two
 // inputs to ReconcileSimState (the other being the last backend observation). The GUI sets
-// this on DoRun/DoStop/DoOpen; SyncFromPoller derives sim_state from it each frame. 1.5 uses
-// four values; 1.6 will insert an optimistic kStopping before kStopped.
-//   kNone    — fresh session / CLI-JSON import / .lmc with no baked texture (→ kIdle)
-//   kLoaded  — .lmc loaded with a baked result texture (static result, no server run → kDone)
-//   kRunning — Run committed; sim_state follows the fresh backend lifecycle
-//   kStopped — Stop issued (intent-latched → kDone; 1.6 revisits per blueprint §8)
-enum class RunIntent { kNone, kLoaded, kRunning, kStopped };
+// this on DoRun/DoStop/DoOpen; SyncFromPoller derives sim_state from it each frame.
+//   kNone     — fresh session / CLI-JSON import / .lmc with no baked texture (→ kIdle)
+//   kLoaded   — .lmc loaded with a baked result texture (static result, no server run → kDone)
+//   kRunning  — Run committed; sim_state follows the fresh backend lifecycle
+//   kStopping — Stop issued but the backend is still draining the in-flight batch (async, 1.6).
+//               Optimistic intent-latched display state (→ kStopping); advanced to kStopped by
+//               SyncFromPoller once the background stop completes (g_stop_inflight clears).
+//   kStopped  — Stop drained; intent-latched terminal state (→ kStopEndState = kDone, see app.cpp)
+enum class RunIntent { kNone, kLoaded, kRunning, kStopping, kStopped };
 
 // Axis distribution type for crystal orientation.
 // Values must stay contiguous 0..N-1 — ImGui RadioButton relies on static_cast<int>.
@@ -543,7 +545,10 @@ struct GuiState {
   // owner (I2): it maps (run_intent, committed_epoch, last backend observation, dirty) → sim_state
   // once per frame in SyncFromPoller. The three inputs below are what business ops (DoRun/DoStop/
   // DoOpen) write instead of poking sim_state.
-  enum class SimState { kIdle, kSimulating, kDone, kModified };
+  // kStopping is the optimistic "Stopping…" display state shown while the async Stop drains the
+  // in-flight backend batch (1.6). It sits between kSimulating and the terminal state and is NOT
+  // demoted by dirty (a draining run is not an editable completed result).
+  enum class SimState { kIdle, kSimulating, kStopping, kDone, kModified };
   SimState sim_state = SimState::kIdle;
 
   // Reconcile inputs (I1/I2). Written by DoRun/DoStop/DoOpen; read by ReconcileSimState.

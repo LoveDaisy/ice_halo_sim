@@ -19,6 +19,11 @@
 //  3. gui_lifecycle/reconcile_truth_table — PURE unit test of ReconcileSimState (I2), no server/GL.
 //  4. gui_lifecycle/anti_flicker_epoch_floor — PURE structural test of the epoch-floor upload gate
 //     (I1/§3.3): MarkFilterDirty fences the old generation; MarkDirty carries it forward.
+//  5. gui_lifecycle/optimistic_async_stop — INTEGRATION of the 1.6 async Stop (blueprint §5/§8):
+//     DoStop returns immediately with run_intent==kStopping (optimistic, non-blocking); the reconcile
+//     maps that to the kStopping display state; JoinPendingStop drains the background thread and the
+//     next SyncFromPoller frames advance run_intent→kStopped and sim_state→kStopEndState (kDone) with
+//     g_stop_inflight cleared. Uses JoinPendingStop (not sleep/poll) for determinism.
 
 #include <chrono>
 #include <memory>
@@ -288,11 +293,27 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
     IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(RunIntent::kLoaded, 0, nullptr, true)),
                 static_cast<int>(SimState::kModified));
 
-    // kStopped → kDone; +dirty → kModified.
+    // kStopped → kStopEndState (kDone, owner-decided 1.6); +dirty → kModified (kDone is demotable).
     IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(RunIntent::kStopped, 7, nullptr, false)),
                 static_cast<int>(SimState::kDone));
     IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(RunIntent::kStopped, 7, nullptr, true)),
                 static_cast<int>(SimState::kModified));
+
+    // kStopping (async Stop draining, 1.6) → kStopping, for ANY observation/dirty. Pure optimistic
+    // intent: not pulled by a fresh COMPLETED, and NOT demoted by dirty (a draining run is not an
+    // editable completed result). RED手法: mis-mapping the kStopping case to S::kSimulating turns
+    // every row below RED.
+    IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(RunIntent::kStopping, 7, nullptr, false)),
+                static_cast<int>(SimState::kStopping));
+    IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(RunIntent::kStopping, 7, nullptr, true)),
+                static_cast<int>(SimState::kStopping));  // dirty does NOT demote kStopping
+    {
+      auto s = mk(true, 7, kDone_lc);  // even a fresh COMPLETED does not pull kStopping to kDone
+      IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(RunIntent::kStopping, 7, &s, false)),
+                  static_cast<int>(SimState::kStopping));
+      IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(RunIntent::kStopping, 7, &s, true)),
+                  static_cast<int>(SimState::kStopping));
+    }
 
     // kRunning, no observation yet → kSimulating.
     IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(RunIntent::kRunning, 5, nullptr, false)),
@@ -400,5 +421,79 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
       // exact-once: an already-seen serial is rejected even when the epoch clears the floor.
       IM_CHECK(!gui::ShouldUploadPayload(new_snap, /*last_serial=*/2, /*floor=*/kGen));
     }
+  };
+
+  // ---- Test 5: optimistic async Stop (1.6, blueprint §5/§8) ----
+  // INTEGRATION through the real DoRun→DoStop→JoinPendingStop→SyncFromPoller flow on a live server.
+  // Determinism: no sleep/poll guesses — run_intent is set synchronously by DoStop, the optimistic
+  // display is checked via the pure reconcile (independent of the background drain timing), and the
+  // terminal state is reached only after JoinPendingStop() has drained the background thread.
+  ImGuiTest* t5 = IM_REGISTER_TEST(engine, "gui_lifecycle", "optimistic_async_stop");
+  t5->TestFunc = [](ImGuiTestContext* ctx) {
+    // Fresh CPU server + baseline. Infinite rays so the backend keeps running and the Stop happens
+    // mid-run (the real Run→Stop transition the feature targets).
+    gui::g_server_poller.Stop();
+    gui::JoinPendingStop();  // clean any prior test's in-flight stop
+    gui::g_server = LUMICE_CreateServer();
+    IM_CHECK(gui::g_server != nullptr);
+    gui::g_server_is_gpu = false;
+    gui::g_state = gui::InitDefaultState();
+    gui::g_state.sim.infinite = true;
+
+    gui::DoRun();  // real Run path: run_intent=kRunning, commit, start poller.
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunning));
+
+    // Drive frames until the display reflects the running backend (kSimulating).
+    {
+      auto start = std::chrono::steady_clock::now();
+      while (gui::g_state.sim_state != SimState::kSimulating) {
+        ctx->Yield();
+        if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start).count() > 10) {
+          break;
+        }
+      }
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kSimulating));
+    }
+
+    // --- OPTIMISTIC / NON-BLOCKING: DoStop sets the intent synchronously and offloads the drain.
+    gui::DoStop();
+    // run_intent flips to kStopping synchronously (before any drain / SyncFromPoller). This is the
+    // "immediate UI" guarantee — deterministic regardless of how fast the background thread runs
+    // (the background thread never writes run_intent).
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kStopping));
+    // The reconcile maps that intent to the kStopping display state (pure optimistic — needs no
+    // fresh observation and is not demoted by dirty). This is what paints "Stopping…" that frame.
+    {
+      auto snap = gui::g_server_poller.LoadSnapshot();
+      IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(gui::g_state.run_intent, gui::g_state.committed_epoch,
+                                                          snap.get(), gui::g_state.dirty)),
+                  static_cast<int>(SimState::kStopping));
+    }
+    // Idempotent re-entry: a second DoStop while kStopping is a no-op (does not relaunch the future).
+    gui::DoStop();
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kStopping));
+
+    // --- TERMINAL: join the background drain (deterministic, no sleep), then advance the intent.
+    gui::JoinPendingStop();
+    IM_CHECK(!gui::g_stop_inflight.load());  // background thread returned ⇒ backend drained
+    // The intent-advance lives after the reconcile line in SyncFromPoller, so it takes two frames to
+    // reach the terminal display: frame 1 advances kStopping→kStopped, frame 2 reconciles to kDone.
+    for (int i = 0; i < 4 && gui::g_state.sim_state != SimState::kDone; ++i) {
+      gui::SyncFromPoller();
+    }
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kStopped));
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kDone));  // == kStopEndState
+    IM_CHECK(!gui::g_stop_inflight.load());
+
+    // Cleanup
+    gui::g_server_poller.Stop();
+    gui::JoinPendingStop();
+    if (gui::g_server) {
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+    }
+    gui::g_server_is_gpu = false;
+    gui::g_state.run_intent = RunIntent::kNone;
+    gui::g_state.committed_epoch = 0;
   };
 }

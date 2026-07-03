@@ -397,6 +397,7 @@ int main(int argc, char** argv) {
   }
 
   // Cleanup
+  gui::JoinPendingStop();       // R1: drain any in-flight async Stop before tearing down the server
   gui::g_server_poller.Stop();  // Stop poller before destroying server
   gui::g_crystal_renderer.Destroy();
   gui::g_preview.Destroy();
