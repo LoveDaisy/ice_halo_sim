@@ -496,4 +496,63 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
     gui::g_state.run_intent = RunIntent::kNone;
     gui::g_state.committed_epoch = 0;
   };
+
+  // ---- Test 6: I5 — versioned immutable snapshot bundle coherence + whole-object handoff ----
+  // Pins invariant I5 (blueprint §5/§9): the cross-thread handoff is ONE versioned immutable value;
+  // a consumer's single LoadSnapshot() yields a whole object whose fields are mutually coherent for
+  // the SAME committed generation — never a half-updated field combination (the §2 torn-read
+  // pathology). The atomic no-torn-read core is construction-guaranteed (shared_ptr<const
+  // PreviewSnapshot> + one atomic_load/store), which no test can drive RED without deliberately
+  // breaking atomicity; what this test DOES pin is the *producer bundle coherence* the construction
+  // argument cannot: on a generation-bearing poll every field (epoch, lifecycle, stats, payload,
+  // payload->payload_epoch, texture_serial) belongs to the same generation. Test 1 section A pins
+  // lifecycle+epoch+stats carry-forward; this adds the payload / payload_epoch coherence relation
+  // (asserted NOWHERE else) plus that consecutive loads return the identical whole object.
+  ImGuiTest* t6 = IM_REGISTER_TEST(engine, "gui_lifecycle", "snapshot_bundle_coherence");
+  t6->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    gui::g_server_poller.Stop();
+    gui::g_server = nullptr;
+
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    const bool completed = RunFiniteToCompletion(server);
+    IM_CHECK(completed);
+    if (!completed) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+    const unsigned long long done_epoch = CurrentEpoch(server);
+
+    gui::ServerPoller local;
+    local.ResetGenerationForTest();
+    local.PollOnceForTest(server);  // generation-bearing poll: materializes the full bundle
+
+    // Whole-object handoff: LoadSnapshot returns one non-null immutable object (single atomic_load).
+    auto s = local.LoadSnapshot();
+    IM_CHECK(s != nullptr);
+    IM_CHECK(s->valid);
+
+    // Bundle coherence: EVERY field of this one published value belongs to the SAME committed
+    // generation (done_epoch); the terminal lifecycle is consistent with produced stats AND a
+    // materialized payload. No field is torn across generations.
+    IM_CHECK_EQ(s->epoch, done_epoch);
+    IM_CHECK_EQ(s->lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+    IM_CHECK(s->stats_sim_ray_num > 0);
+    IM_CHECK(s->has_new_texture);     // this poll genuinely materialized a texture
+    IM_CHECK(s->payload != nullptr);  // ... so the payload is present in the SAME bundle
+    // The payload's OWN epoch stamp matches the bundle epoch on a fresh materialization — the
+    // coherence relation section A omits. (On carry-forward payload_epoch may deliberately LAG the
+    // bundle epoch; here the texture is freshly materialized so they MUST agree.)
+    IM_CHECK_EQ(s->payload->payload_epoch, done_epoch);
+    IM_CHECK(s->texture_serial != 0);  // a fresh monotonic serial was minted for this materialization
+
+    // Two consecutive loads observe the SAME whole object (atomic pointer handoff, no partial
+    // reconstruction between reads) — the consumer can never see a half-swapped value.
+    auto s2 = local.LoadSnapshot();
+    IM_CHECK(s2.get() == s.get());
+
+    local.Stop();
+    LUMICE_DestroyServer(server);
+  };
 }
