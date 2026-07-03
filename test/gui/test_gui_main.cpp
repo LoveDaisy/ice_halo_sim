@@ -324,7 +324,8 @@ int main(int argc, char** argv) {
       static auto last_commit = std::chrono::steady_clock::now();
       if (gui::g_state.dirty) {
         auto ss = gui::g_state.sim_state;
-        if (ss == gui::GuiState::SimState::kSimulating || ss == gui::GuiState::SimState::kDone) {
+        // Mirrors main.cpp: only auto-commit while simulating (kDone&&dirty reconciles to kModified).
+        if (ss == gui::GuiState::SimState::kSimulating) {
           auto now = std::chrono::steady_clock::now();
           auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
           if (elapsed >= gui::kCommitIntervalMs) {

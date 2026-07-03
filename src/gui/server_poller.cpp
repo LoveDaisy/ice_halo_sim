@@ -34,9 +34,9 @@ void ServerPoller::Start(LUMICE_Server* server) {
   Stop();
 
   // Minimal reset: only clear the valid flag to prevent SyncFromPoller() from acting on
-  // stale data. Do NOT drop the payload or server_state — preserving the last good texture
-  // (carried forward via the shared payload pointer) keeps the preview on screen during the gap
-  // between restart and first new snapshot, preventing visible flicker during slider scrubbing.
+  // stale data. Do NOT drop the payload — preserving the last good texture (carried forward via
+  // the shared payload pointer) keeps the preview on screen during the gap between restart and
+  // first new snapshot, preventing visible flicker during slider scrubbing.
   PublishValidReset();
   // Reset generation tracking so the worker detects the first snapshot as new data.
   last_generation_ = 0;
@@ -106,10 +106,11 @@ void ServerPoller::PublishValidReset() {
 }
 
 void ServerPoller::InvalidateStagedTexture() {
-  // Suppress the last materialized-but-unuploaded texture (paired with intensity_locked after a
-  // filter change) by publishing a payload=null copy. The consumer's `payload &&` guard then
-  // skips upload; GL keeps showing the already-uploaded frame (no black flicker). serial is left
-  // unchanged so a genuinely new future texture still gets a fresh serial and uploads.
+  // Suppress the last materialized-but-unuploaded texture by publishing a payload=null copy. The
+  // consumer's `payload != nullptr` guard then skips upload; GL keeps showing the already-uploaded
+  // frame (no black flicker). serial is left unchanged so a genuinely new future texture still gets
+  // a fresh serial and uploads. Test seam only (see header) — production fences stale data via the
+  // display epoch floor.
   std::lock_guard<std::mutex> lk(publish_mutex_);
   auto prev = LoadPublished();
   if (!prev) {
@@ -155,23 +156,21 @@ void ServerPoller::WorkerLoop() {
 
 // See doc/accumulator-consumer-architecture.md §8.1 (polling contract), §8.3 (data flow).
 //
-// Reads the three server clocks (state, lifecycle heartbeat, raw XYZ) then builds ONE coherent
-// immutable PreviewSnapshot and atomically publishes it (invariant I5). The expensive candidate
-// texture memcpy is prepared OUTSIDE publish_mutex_; only the pointer-level RMW
-// (load prev → decide carry-forward → store) runs inside the lock (no TOCTOU, no 24MB copy under
-// lock). Replaces the old data_mutex_/staged_/std::swap incremental-write + torn-read channel.
+// Reads the two server clocks (lifecycle heartbeat, raw XYZ) then builds ONE coherent immutable
+// PreviewSnapshot and atomically publishes it (invariant I5). The expensive candidate texture
+// memcpy is prepared OUTSIDE publish_mutex_; only the pointer-level RMW (load prev → decide
+// carry-forward → store) runs inside the lock (no TOCTOU, no 24MB copy under lock). Replaces the
+// old data_mutex_/staged_/std::swap incremental-write + torn-read channel.
 void ServerPoller::PollOnce() {
   auto* server = server_;
   if (!server) {
     return;
   }
 
-  // Query server state (projection of lifecycle; kept for behavior equivalence — 1.5 prunes).
-  LUMICE_ServerState server_state{};
-  LUMICE_QueryServerState(server, &server_state);
-
   // Cheap O(1) lifecycle + epoch heartbeat (clock ④, invariant I4). Read on EVERY poll, decoupled
-  // from expensive snapshot materialization, so the terminal completion edge is never lost.
+  // from expensive snapshot materialization, so the terminal completion edge is never lost. This is
+  // both the completion signal published to the consumer and the self-pause signal below (1.5
+  // dropped the QueryServerState + has_valid_data side-channels this replaced).
   LUMICE_SimLifecycleResult lc{};
   LUMICE_GetSimLifecycle(server, &lc);
 
@@ -251,10 +250,8 @@ void ServerPoller::PollOnce() {
     auto next = std::make_shared<PreviewSnapshot>();
     next->valid = true;
     next->epoch = lc.epoch;
-    next->lifecycle = lc.lifecycle;
-    next->server_state = server_state;
     // Lifecycle level signal (clock ④ / I4): carried on every poll.
-    next->has_valid_data = xyz_results[0].has_valid_data;
+    next->lifecycle = lc.lifecycle;
     // Stats: fresh value if this generation produced one; else carry forward prev's (coherent
     // bundle — no torn zero). The consumer applies stats only when >0, so this is behavior-
     // equivalent to the old swap-to-0-then-skip, and is a positive I5 side effect.
@@ -280,9 +277,11 @@ void ServerPoller::PollOnce() {
     StorePublished(std::move(next));
   }
 
-  // Only stop on IDLE if the server has actually produced valid data.
-  // During restart, the server may transiently report IDLE before simulation threads spin up.
-  if (server_state == LUMICE_SERVER_IDLE && xyz_results[0].has_valid_data) {
+  // Self-pause once the run has genuinely completed (finite run drained clean, incl. zero-output).
+  // COMPLETED is the durable terminal edge (infinite runs stay RUNNING; a transient restart IDLE is
+  // NOT COMPLETED), so this never pauses mid-run. The last published snapshot before pausing carries
+  // lifecycle==COMPLETED, so the main thread's per-frame reconcile still reaches kDone (I3).
+  if (lc.lifecycle == LUMICE_LIFECYCLE_COMPLETED) {
     std::lock_guard<std::mutex> lk(mutex_);
     state_.store(State::kPaused);
   }

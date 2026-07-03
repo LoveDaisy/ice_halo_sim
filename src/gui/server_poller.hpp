@@ -45,13 +45,12 @@ struct PreviewSnapshot {
   // covers the whole coherent snapshot (stats + lifecycle + texture); see §6 (StatsResult.epoch
   // deliberately NOT added — the bundle epoch suffices).
   unsigned long long epoch = 0;
-  int lifecycle = LUMICE_LIFECYCLE_IDLE;                 // GetSimLifecycle.lifecycle (1.5 replaces IDLE + side-signal)
-  LUMICE_ServerState server_state = LUMICE_SERVER_IDLE;  // behavior-equivalent (1.5 prunes)
-  // Lifecycle level signal (blueprint clock ④, see §6). Mirrors the server's has_ever_consumed_
-  // level — the SAME reliable signal the poller uses to self-pause. Carried on EVERY poll (not
-  // gated on snapshot generation, per invariant I4), so the terminal IDLE frame durably carries
-  // the completion edge until the main thread consumes it.
-  bool has_valid_data = false;
+  // GetSimLifecycle.lifecycle (blueprint clock ④, see §6). This is the sole completion signal the
+  // main thread reconciles on (ReconcileSimState: COMPLETED@matching-epoch → kDone) and the sole
+  // signal the poller self-pauses on. Carried on EVERY poll (not gated on snapshot generation, per
+  // invariant I4), so the terminal COMPLETED frame durably carries the completion edge until the
+  // main thread consumes it. 1.5 removed the has_valid_data + server_state side-signals it replaced.
+  int lifecycle = LUMICE_LIFECYCLE_IDLE;
   LUMICE_RayCount stats_ray_seg_num = 0;
   LUMICE_RayCount stats_sim_ray_num = 0;
   // Display payload: shared, immutable. Null / carried-forward on sparse / gate-rejected /
@@ -99,8 +98,11 @@ class ServerPoller {
   // return null before the worker's first publish.
   std::shared_ptr<const PreviewSnapshot> LoadSnapshot() const { return LoadPublished(); }
 
-  // Discard any staged texture data. Called before unlocking intensity_locked to prevent
-  // old simulation data from being uploaded after a filter change.
+  // Display-invalidate seam: publish a payload=null copy of the current snapshot so the consumer's
+  // upload gate skips this frame (GL keeps the already-uploaded texture — no black flicker). Not
+  // called in production anymore (the epoch floor fences stale data — see MarkFilterDirty); retained
+  // as a test seam (test_gui_lifecycle drives no-GL-context interleavings through it) and for a
+  // future optimistic-clear path.
   void InvalidateStagedTexture();
 
   // Set calibrated quality gate threshold (called once at startup after calibration run).

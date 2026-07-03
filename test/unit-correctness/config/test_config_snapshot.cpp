@@ -121,7 +121,7 @@ TEST(ConfigSnapshot, ApplyToRestoresConfigFieldsAndPreservesRuntimeState) {
   target.snapshot_intensity = 0.5f;
   target.effective_pixels = 42;
   target.texture_upload_count = 1001;
-  target.intensity_locked = true;
+  target.display_epoch_floor = 7;
   target.aspect_preset = AspectPreset::k16x9;
   target.aspect_portrait = true;
   target.bg_show = true;
@@ -153,7 +153,7 @@ TEST(ConfigSnapshot, ApplyToRestoresConfigFieldsAndPreservesRuntimeState) {
   EXPECT_FLOAT_EQ(target.snapshot_intensity, 0.5f);
   EXPECT_EQ(target.effective_pixels, 42);
   EXPECT_EQ(target.texture_upload_count, 1001u);
-  EXPECT_TRUE(target.intensity_locked);
+  EXPECT_EQ(target.display_epoch_floor, 7u);
   EXPECT_EQ(target.aspect_preset, AspectPreset::k16x9);
   EXPECT_TRUE(target.aspect_portrait);
   EXPECT_TRUE(target.bg_show);

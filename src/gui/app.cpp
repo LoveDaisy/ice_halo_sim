@@ -475,7 +475,8 @@ void DoOpen() {
       g_state = new_state;
       g_state.current_file_path.clear();  // Don't set .json path as save target
       g_state.dirty = true;               // Unsaved new project
-      g_state.sim_state = SimState::kIdle;
+      // Intent: no server run behind this import (→ kIdle via ReconcileSimState).
+      g_state.run_intent = RunIntent::kNone;
       g_thumbnail_cache.OnLayerStructureChanged();
       g_preview.ClearTexture();
       g_preview.ClearBackground();
@@ -503,9 +504,11 @@ void DoOpen() {
     GUI_LOG_INFO("[GUI] DoOpen: {}", PathToU8(path));
     if (!tex_data.empty()) {
       g_preview.UploadTexture(tex_data.data(), tex_w, tex_h);
-      g_state.sim_state = SimState::kDone;
+      // Intent: a baked static result (→ kDone via ReconcileSimState, no server run).
+      g_state.run_intent = RunIntent::kLoaded;
     } else {
-      g_state.sim_state = SimState::kIdle;
+      // Intent: no result to show (→ kIdle).
+      g_state.run_intent = RunIntent::kNone;
     }
 
     // Restore background image from saved path (uses deserialized alpha, not reset to 0.5)
@@ -757,7 +760,14 @@ void DoRun() {
   }
   if (err == LUMICE_OK) {
     g_state.last_committed_state = GuiState::ConfigSnapshot::From(g_state);
-    g_state.sim_state = SimState::kSimulating;
+    // Intent + epoch readback (I1): the synchronous commit above has already minted (or reused)
+    // the lifecycle epoch; read it back so ReconcileSimState keys the display on THIS generation.
+    // A filter change always rebuilds (epoch++), so the new epoch strictly exceeds any
+    // display_epoch_floor MarkFilterDirty raised — the floor lifts itself with no explicit unlock.
+    LUMICE_SimLifecycleResult lc{};
+    LUMICE_GetSimLifecycle(g_server, &lc);
+    g_state.committed_epoch = lc.epoch;
+    g_state.run_intent = RunIntent::kRunning;
     g_state.stats_ray_seg_num = 0;
     g_state.stats_sim_ray_num = 0;
     // Safety check: if GUI predicted reuse but server rebuilt consumers, the poller
@@ -776,13 +786,10 @@ void DoRun() {
     // DoStop→DoRun (poller was paused), PollOnce self-pause (finite rays done), etc.
     // If already kRunning, this is a no-op (zero overhead).
     g_server_poller.EnsureRunning(g_server);
-    // Discard old staged texture before unlocking to prevent stale data from being
-    // uploaded in the next SyncFromPoller (filter change may not trigger rebuild,
-    // so Start() may not have been called to reset staged data).
-    if (g_state.intensity_locked) {
-      g_server_poller.InvalidateStagedTexture();
-    }
-    g_state.intensity_locked = false;
+    // No staged-texture invalidate here: the epoch floor (raised by MarkFilterDirty) already
+    // fences the old generation's payloads, and the freshly committed epoch (read back above)
+    // lifts that fence. Crystal-scrub reuse (no filter change) MUST keep carry-forward, so we
+    // deliberately do not drop the staged texture.
     auto run_end = std::chrono::steady_clock::now();
     GUI_LOG_INFO("[GUI] DoRun: config committed ({:.1f}ms)",
                  std::chrono::duration<double, std::milli>(run_end - run_start).count());
@@ -800,7 +807,10 @@ void DoStop() {
     return;
   g_server_poller.Stop();  // Must stop poller before server to avoid dangling access
   LUMICE_StopServer(g_server);
-  g_state.sim_state = SimState::kDone;
+  // Intent-latch: Stop leaves the backend IDLE, so kStopped is the one display state derived
+  // from intent rather than a fresh observation (blueprint §5). ReconcileSimState maps it to
+  // kDone in 1.5 (current behavior); 1.6 revisits the Stop→Idle terminal per blueprint §8.
+  g_state.run_intent = RunIntent::kStopped;
   GUI_LOG_INFO("[GUI] DoStop");
 }
 
@@ -813,62 +823,93 @@ void DoRevert() {
     // not read other g_state fields, so invoking it after full assignment is
     // equivalent to the previous order (layers assigned -> callback -> other fields).
     // If OnLayerStructureChanged ever starts reading g_state.sun/sim/renderers, this
-    // order remains correct (callback sees fully restored state). Runtime state (dirty,
-    // sim_state, poller counters, etc.) is intentionally preserved by ApplyTo.
+    // order remains correct (callback sees fully restored state). Runtime state (run_intent,
+    // committed_epoch, poller counters, etc.) is intentionally preserved by ApplyTo.
     snapshot.ApplyTo(g_state);
     g_thumbnail_cache.OnLayerStructureChanged();
-    g_state.sim_state = SimState::kDone;
+    // Revert restores config == committed, so it is no longer dirty. This is load-bearing under
+    // the single-owner reconcile: with the old direct sim_state=kDone write gone, a leftover
+    // dirty=true would make ReconcileSimState re-derive kDone+dirty → kModified every frame
+    // (R5 — the revert would appear not to take). Clearing dirty settles it back to kDone.
+    g_state.dirty = false;
   }
 }
 
+// Single-owner sim_state reconcile (I2). Pure — see app.hpp for the contract. The §1.3 truth
+// table: intent picks a base state; a fresh COMPLETED observation is the only thing that pulls a
+// kRunning intent to kDone; a dirty edit on a kDone result surfaces as kModified.
+GuiState::SimState ReconcileSimState(RunIntent intent, uint64_t committed_epoch, const PreviewSnapshot* snap,
+                                     bool dirty) {
+  using S = GuiState::SimState;
+  // "Fresh" = the observation belongs to THIS committed generation (I1). A stale epoch (< committed,
+  // e.g. an old snapshot or a transient poll after a re-commit bumped the epoch) is discarded so a
+  // prior generation's COMPLETED never masquerades as this generation's completion. epoch > committed
+  // cannot happen (the GUI reads the epoch back synchronously on commit).
+  const bool fresh = snap != nullptr && snap->valid && snap->epoch == committed_epoch;
+  S base;
+  switch (intent) {
+    case RunIntent::kNone:
+      base = S::kIdle;  // fresh session / JSON import / .lmc without a baked texture
+      break;
+    case RunIntent::kLoaded:
+      base = S::kDone;  // static loaded result (no server run backing it)
+      break;
+    case RunIntent::kStopped:
+      base = S::kDone;  // intent-latched (backend is IDLE post-Stop); 1.6 revisits per §8
+      break;
+    case RunIntent::kRunning:
+      base = (fresh && snap->lifecycle == LUMICE_LIFECYCLE_COMPLETED) ? S::kDone : S::kSimulating;
+      break;
+  }
+  // A dirty edit layered on a completed result is kModified (old MarkDirty kDone→kModified rule).
+  // kIdle/kSimulating are never demoted by dirty.
+  return (base == S::kDone && dirty) ? S::kModified : base;
+}
+
+// Display upload gate (I1/I6) — pure predicate, see app.hpp. Uploads a payload only when it is a
+// fresh (unseen serial), non-empty frame (intensity>0 or a valid zero-ray terminal frame) whose
+// epoch clears display_epoch_floor. The floor (raised by MarkFilterDirty) fences the old
+// generation; a null / cold-start payload is skipped so GL keeps the last frame (no black flicker).
+bool ShouldUploadPayload(const PreviewSnapshot& snap, unsigned long long last_uploaded_texture_serial,
+                         uint64_t display_epoch_floor) {
+  const auto& payload = snap.payload;
+  return payload != nullptr && snap.texture_serial != last_uploaded_texture_serial &&
+         (payload->snapshot_intensity > 0 || payload->texture_ray_count > 0) &&
+         payload->payload_epoch > display_epoch_floor;
+}
+
 void SyncFromPoller() {
-  if (g_state.sim_state != SimState::kSimulating) {
-    return;
-  }
-
   // Atomically load the whole immutable snapshot (invariant I5). One lock-free atomic_load; the
-  // consumer never observes a half-updated field combination. Replaces the old TrySyncData swap
-  // (which zeroed staged stats and was the torn-read root cause).
+  // consumer never observes a half-updated field combination.
   auto snap = g_server_poller.LoadSnapshot();
-  if (!snap || !snap->valid) {
-    return;  // Worker hasn't produced data yet (or a valid=false restart reset).
-  }
 
-  // Transition to kDone by mirroring the SAME reliable level signal the poller uses to
-  // self-pause (has_valid_data), NOT the fragile stats_sim_ray_num>0 (see
-  // doc/gui-preview-lifecycle-architecture.md §2/§6, invariants I3/I4/I6). has_valid_data is
-  // carried on every poll and stays true on the terminal IDLE frame, so whatever the sync/poll
-  // interleaving the completion edge is never lost. A transient IDLE during restart has
-  // has_valid_data == false (server's has_ever_consumed_ is reset on commit/stop), so it is
-  // still correctly ignored here. (1.5 replaces this with lifecycle==COMPLETED && epoch match.)
-  if (snap->server_state == LUMICE_SERVER_IDLE && snap->has_valid_data) {
-    g_state.sim_state = SimState::kDone;
+  // Level-triggered single-owner reconcile (I2/I3): unconditionally derive sim_state every frame
+  // from (intent, committed_epoch, observation, dirty). No early-return on !=kSimulating — the
+  // durable COMPLETED snapshot self-heals to kDone on any future frame even after the poller
+  // self-pauses, and loaded/idle states also need per-frame derivation. This is the ONLY sim_state
+  // writer in production.
+  const auto prev_state = g_state.sim_state;
+  g_state.sim_state = ReconcileSimState(g_state.run_intent, g_state.committed_epoch, snap.get(), g_state.dirty);
+  if (prev_state != SimState::kDone && g_state.sim_state == SimState::kDone) {
     GUI_LOG_INFO("[GUI] Simulation done");
   }
 
-  // Update stats
-  if (snap->stats_sim_ray_num > 0) {
+  if (!snap || !snap->valid) {
+    return;  // No observation yet (or a valid=false restart reset). State already reconciled.
+  }
+
+  // Stats: apply only when the observation matches the committed generation (I1), so a stale
+  // bundle can't backfill the status bar with a prior run's counts.
+  if (snap->epoch == g_state.committed_epoch && snap->stats_sim_ray_num > 0) {
     g_state.stats_ray_seg_num = snap->stats_ray_seg_num;
     g_state.stats_sim_ray_num = snap->stats_sim_ray_num;
   }
 
-  // Upload XYZ float texture (GL call — must be on main thread).
-  // Quality gate is in ServerPoller::PollOnce — a materialized payload is always worth displaying.
-  // Immutable reads are non-destructive, so exact-once upload is enforced by serial dedup (a fresh
-  // texture bumps texture_serial; carry-forward keeps it unchanged) instead of the old swap-reset.
-  // Upload guard: allow when intensity > 0 (normal frame) OR texture_ray_count > 0 (valid empty
-  // frame — filter/physics rejected all rays after simulation ran). Cold-start transient
-  // (texture_ray_count == 0) is still blocked to prevent flicker. Filter changes set
-  // intensity_locked via MarkFilterDirty() to block old data. A null payload (InvalidateStagedTexture
-  // / no texture yet) skips upload — GL keeps the last uploaded frame (no black flicker).
-  //
-  // last_uploaded_texture_serial_ lives here as a file-scope static for 1.4 (the consumer-side
-  // dedup cursor); 1.5 migrates it into GuiState alongside the rest of the display state.
-  static unsigned long long last_uploaded_texture_serial_ = 0;
-  const auto& payload = snap->payload;
-  bool upload_ok = payload != nullptr && snap->texture_serial != last_uploaded_texture_serial_ &&
-                   (payload->snapshot_intensity > 0 || payload->texture_ray_count > 0) && !g_state.intensity_locked;
-  if (upload_ok) {
+  // Upload XYZ float texture (GL call — must be on main thread). Gate is the pure ShouldUploadPayload
+  // predicate (epoch-keyed, see §3). Exact-once is enforced by serial dedup; the cursor now lives in
+  // GuiState (migrated from a file-scope static in 1.4).
+  if (ShouldUploadPayload(*snap, g_state.last_uploaded_texture_serial, g_state.display_epoch_floor)) {
+    const auto& payload = snap->payload;
     GUI_LOG_VERBOSE("[GUI] SyncFromPoller: upload tex_rays={}, intensity={:.6f}, eff_pixels={}, factor={:.6f}",
                     payload->texture_ray_count, payload->snapshot_intensity, payload->effective_pixels,
                     payload->intensity_factor);
@@ -876,7 +917,7 @@ void SyncFromPoller() {
     g_state.snapshot_intensity = payload->snapshot_intensity;
     g_state.effective_pixels = payload->effective_pixels;
     g_state.texture_upload_count++;
-    last_uploaded_texture_serial_ = snap->texture_serial;  // record exact-once cursor
+    g_state.last_uploaded_texture_serial = snap->texture_serial;  // record exact-once cursor
     // Auto-EV: visible framebuffer self-P99 normalization (see doc/adaptive-brightness.md).
     g_state.p99_raw_y = payload->p99_y;
     g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, g_state.target_white);

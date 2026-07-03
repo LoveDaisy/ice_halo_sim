@@ -1244,9 +1244,9 @@ void CommitAllBuffers(GuiState& state) {
 }
 
 // Immediate path: crystal/axis edits only MarkDirty; MarkFilterDirty (which
-// clears snapshot_intensity and locks upload via intensity_locked=true) is
-// gated on filter actually changing. This is what allows infinite-rays
-// accumulation to persist while the user drags a crystal slider.
+// clears snapshot_intensity and raises the display epoch floor to fence stale
+// old-generation textures) is gated on filter actually changing. This is what
+// allows infinite-rays accumulation to persist while the user drags a crystal slider.
 void CommitAllBuffersImmediate(GuiState& state) {
   const auto r = ApplyBuffersToEntry(state);
   if (!r.valid || !r.entry_changed) {

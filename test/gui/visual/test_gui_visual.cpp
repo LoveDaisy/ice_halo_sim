@@ -657,7 +657,9 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       LUMICE_StopServer(gui::g_server);
       LUMICE_DestroyServer(gui::g_server);
       gui::g_server = nullptr;
-      gui::g_state.sim_state = gui::GuiState::SimState::kIdle;
+      // A loaded .lmc result follows (tex non-empty) → intent kLoaded so the reconcile keeps the
+      // preview in a kDone state instead of the stale kRunning intent flipping it to kSimulating.
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
 
       std::vector<unsigned char> tex_data;
       int tex_w = 0, tex_h = 0;
