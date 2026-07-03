@@ -70,6 +70,48 @@ LM_CONSTANT uint32_t kDistGaussianLegacy = 5u;
 LM_CONSTANT uint32_t kMaxTriPerKernel = 64u;
 LM_CONSTANT int kMaxRejectionAttempts = 1000;
 
+// --- Stream-family nonces -------------------------------------------------
+// PCG-stream separation nonce for the per-ray wavelength draw in
+// `gen_root_kernel` (both Metal `lumice_trace.metal` and CUDA
+// `cuda_trace_backend.cu`, form-for-form mirrored). The wl draw MUST live in
+// its own PCG seed domain, independent of the orientation / triangle-pick
+// draws that share `(mixed_seed, global_idx)` — otherwise the wl_idx becomes
+// correlated with the crystal orientation whenever the orientation stream
+// consumes enough slots to reach the wl slot.
+//
+// Background (task-gpu-wl-stream-decouple-green-tint / issue.md):
+// The previous design put wl on `slot = 20` and reused `mixed_seed`, betting
+// that the orientation stream never consumed 20 slots. Under a near-pole
+// axis distribution (e.g. `zenith` = laplacian mean=0), the acceptance rate
+// `cos(phi)/M` → 0 and GenericReject can consume up to
+// `kMaxRejectionAttempts = 1000` iterations (× 2 slots for Laplacian) per
+// ray — ~10% of rays reach slot 20. The colliding draw then reads the same
+// PCG hash as the wl draw, so wl_idx becomes a function of the orientation,
+// systematically suppressing the red end in the halo column (empirically
+// `metal_lap.green_excess = +3.2` vs `cpu_lap = +0.7`). Seed-domain isolation
+// (XOR-mix into the seed) is immune to slot-count consumption, regardless of
+// how many slots the orientation loop burns — this is the only fix that does
+// not depend on the "orientation never consumes N slots" assumption.
+//
+// **Nonce uniqueness clearinghouse** — all other stream nonces currently in
+// use, so that new nonces (added here or elsewhere) can be picked to not
+// collide:
+//   kTransitNonce        = 0xA5A5A5A5u  (metal_trace_backend.mm)
+//   kCudaGateNonce       = 0x5A5A5A5Au  (cuda_trace_backend.cu)
+//   kCudaGenNonce        = 0x3C9A7F11u  (cuda_trace_backend.cu)
+//   kMetalShuffleNonce   = 0xB17CA3D9u  (metal_trace_backend.mm; symmetric to
+//                                        the CUDA shuffle nonce)
+//   kCudaDrainNonce      = 0xD5A1B3C7u  (cuda_trace_backend.cu)
+//   kWlStreamNonce       = 0x9E3779B9u  (this header; the 32-bit golden-ratio
+//                                        constant — same value used in the
+//                                        issue.md causal-verification patch
+//                                        that shrank metal_lap.green_excess
+//                                        from +3.2 → +1.0)
+// All six values are pairwise distinct. `pcg_hash` has good avalanche on any
+// non-zero XOR delta, so no additional statistical validation is required.
+LM_CONSTANT uint32_t kWlStreamNonce = 0x9E3779B9u;
+// (BuildWlStream is defined after PcgStream below.)
+
 // --- GenRootKernelParams --------------------------------------------------
 // Single source for both `gen_root_kernel` (Metal-only, device root sampler)
 // and `transit_root_kernel` / `transit_multi_ms_kernel` (Metal + CUDA, device-
@@ -125,6 +167,18 @@ struct PcgStream {
   uint32_t global_idx;
   uint32_t slot;
 };
+
+// Single-source constructor for the wl PCG stream — see kWlStreamNonce above
+// for the design rationale (seed-domain isolation, not slot isolation).
+// Metal + CUDA gen_root_kernel both call this instead of hand-writing the
+// three-field init, guaranteeing bit-identical wl streams across backends.
+LM_FN PcgStream BuildWlStream(uint32_t mixed_seed, uint32_t global_idx) {
+  PcgStream s;
+  s.seed = mixed_seed ^ kWlStreamNonce;
+  s.global_idx = global_idx;
+  s.slot = 0u;
+  return s;
+}
 
 // --- 64-bit ray-index helpers (task-gpu-rng-ray-index-uint64) -------------
 // Host provides `base_lo` (low 32 bits) + `base_hi` (high 32 bits) of the

@@ -1074,13 +1074,14 @@ __global__ void gen_root_kernel(float* __restrict__ d_root_d,           // 3 × 
   const uint32_t gen_mixed_seed =
       lm_pcg::pcg_seed_with_high(gp.gen_seed, gen_hi_epoch);
 
-  // Per-ray wavelength (slot 20, isolated from the orientation/triangle draws
-  // below — mirrors MSL gen_root_kernel:881-895). The wl_idx is the photon's
-  // lifetime tag: it selects spd_weight here and n_idx in the trace kernel.
-  lm_pcg::PcgStream wl_stream;
-  wl_stream.seed       = gen_mixed_seed;
-  wl_stream.global_idx = global_idx;
-  wl_stream.slot       = 20u;
+  // Per-ray wavelength (photon lifetime tag → d_root_wl_idx; selects
+  // spd_weight here and n_idx in the trace kernel). Uses a SEED-DOMAIN-
+  // isolated PCG stream via lm_pcg::BuildWlStream (pcg_shared.h) — mirrors
+  // Metal `gen_root_kernel` form-for-form. See kWlStreamNonce for the design
+  // rationale (the historical "slot 20" isolation was root-cause of the
+  // laplacian near-pole green-tint bug — task-gpu-wl-stream-decouple-green-tint;
+  // seed-domain XOR is immune to slot consumption).
+  lm_pcg::PcgStream wl_stream = lm_pcg::BuildWlStream(gen_mixed_seed, global_idx);
   uint32_t wl_idx = static_cast<uint32_t>(lm_pcg::pcg_uniform(wl_stream) * static_cast<float>(gp.wl_pool_size));
   if (wl_idx >= gp.wl_pool_size) {
     wl_idx = gp.wl_pool_size - 1u;  // guard pcg_uniform → 1.0 rounding
