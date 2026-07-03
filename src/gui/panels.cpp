@@ -951,9 +951,18 @@ void RenderSceneControls(GuiState& state) {
   // ImGui::Checkbox renders its label to the right and ignores the item-width
   // stack, so no PushItemWidth wrapper is needed here.
   if (LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL) || LUMICE_IsBackendAvailable(LUMICE_BACKEND_CUDA)) {
+    // Disable the toggle while busy (simulating OR async Stop draining): the backend switch
+    // reconstructs the server on the next DoRun, and an in-flight stop still holds it (R1).
+    bool busy = state.sim_state == GuiState::SimState::kSimulating || state.sim_state == GuiState::SimState::kStopping;
+    if (busy) {
+      ImGui::BeginDisabled();
+    }
     DIRTY_IF(ImGui::Checkbox("Use GPU", &state.use_gpu_backend));
-    if (ImGui::IsItemHovered()) {
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
       ImGui::SetTooltip("Use the GPU for simulation (falls back to CPU if incompatible)");
+    }
+    if (busy) {
+      ImGui::EndDisabled();
     }
   }
 }

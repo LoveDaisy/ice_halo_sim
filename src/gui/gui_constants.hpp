@@ -31,7 +31,7 @@ constexpr int kCommitIntervalMs =
     70;  // Min interval between auto-commits (T_commit, ms).
          // 70ms gives Windows enough headroom: first_upload avg ~48ms + poll ~20ms needs >60ms window.
 constexpr int kPollIntervalMs = 20;  // Server poll interval (T_poll, ms). Shorter than VSync frame (16.67ms at 60fps)
-                                     // to ensure each frame has fresh data available via TrySyncData().
+                                     // to ensure each frame has fresh data available via LoadSnapshot().
 constexpr int kTargetFrameTimeMs = 16;  // Fallback frame time limit (ms). Prevents busy-wait when VSync fails
                                         // (known issue on Windows+NVIDIA, GLFW #1559/#2049).
 // Calibration window for quality gate threshold calculation (ms).
@@ -42,8 +42,8 @@ constexpr int kCalibrationWindowMs = 50;
 // Timeout for quality gate fallback (ms). If the quality gate continuously rejects uploads
 // for this duration, force-upload the current buffer (may be empty → black screen).
 // This handles edge cases where sim_ray_num grows very slowly (e.g. very few simulation threads).
-// The main stale-texture fix is MarkFilterDirty (anchor reset) + SyncFromPoller (zero-intensity upload);
-// this timeout is defense-in-depth.
+// The main stale-texture fix is MarkFilterDirty (anchor reset + display epoch floor) + the
+// SyncFromPoller epoch-keyed upload gate; this timeout is defense-in-depth.
 // Rationale: normal first upload takes 100-200ms; 500ms is 2.5-5x margin.
 constexpr int kQualityGateTimeoutMs = 500;
 

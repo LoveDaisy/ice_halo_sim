@@ -3,6 +3,7 @@
 
 #include <spdlog/sinks/basic_file_sink.h>
 
+#include <atomic>
 #include <memory>
 
 #include "gui/crystal_preview.hpp"
@@ -45,6 +46,15 @@ extern PreviewViewport g_preview_vp;
 // via LUMICE_CreateServer (CPU default) outside MaybeReconstructServerForBackend —
 // e.g. the perf-test harness — to keep the toggle-detection invariant honest.
 extern bool g_server_is_gpu;
+
+// Async Stop completion latch (blueprint §5/§8, 1.6). Set true synchronously by DoStop when it
+// offloads the blocking `poller.Stop() + LUMICE_StopServer` sequence onto a background std::async
+// thread; cleared by that thread when the backend has drained. Read (never written) by
+// SyncFromPoller to advance run_intent kStopping→kStopped. JoinPendingStop() blocks until the
+// background thread has returned and MUST run before any path that destroys/reconstructs the
+// server or poller (use-after-free guard, R1).
+extern std::atomic<bool> g_stop_inflight;
+void JoinPendingStop();
 
 // Aspect ratio state
 extern int g_programmatic_resize;  // Counter: decremented by WindowSizeCallback, set by ApplyAspectRatio
@@ -104,6 +114,21 @@ void DoLoadBackground(GLFWwindow* window);
 void DoClearBackground();
 void SyncFromPoller();
 void CheckUnsavedAndDo(PendingAction action);
+
+// Single-owner sim_state reconcile (I2, blueprint §4/§5). Pure function of the last user intent,
+// the epoch the GUI committed, the last backend observation (may be null before the first poll),
+// and whether the config is dirty. No globals / GL / server access — declared here (not in a .cpp
+// anonymous namespace) so the §1.3 truth table can be unit-tested directly. Called once per frame
+// by SyncFromPoller as the ONLY sim_state writer.
+GuiState::SimState ReconcileSimState(RunIntent intent, uint64_t committed_epoch, const PreviewSnapshot* snap,
+                                     bool dirty);
+
+// Display upload gate (blueprint §7 / I1/I6). Pure predicate deciding whether a poller snapshot's
+// payload should be uploaded to GL this frame: it must be a fresh (unseen serial) non-empty payload
+// whose epoch clears the display_epoch_floor. Declared here so the anti-flicker mechanism (§3.3) is
+// headless-testable without a GL context.
+bool ShouldUploadPayload(const PreviewSnapshot& snap, unsigned long long last_uploaded_texture_serial,
+                         uint64_t display_epoch_floor);
 
 // Panel rendering
 void RenderTopBar(float window_width);

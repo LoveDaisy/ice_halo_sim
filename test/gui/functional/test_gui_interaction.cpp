@@ -113,25 +113,36 @@ void RegisterP0Tests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
 
+      // sim_state is DERIVED each frame by ReconcileSimState (the harness main loop calls
+      // SyncFromPoller every Yield), so these scenes drive the INTENT inputs, not sim_state
+      // directly. With no live server observation the reconcile maps intent → sim_state
+      // deterministically (kNone→kIdle, kRunning→kSimulating, kStopped→kDone, kStopped+dirty→kModified).
+
       // Scene 1: kIdle — "Run" button should exist
-      gui::g_state.sim_state = gui::GuiState::SimState::kIdle;
+      gui::g_state.run_intent = gui::RunIntent::kNone;
+      gui::g_state.dirty = false;
       ctx->Yield();
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kIdle));
       IM_CHECK(ctx->ItemExists("##TopBar/" ICON_FA_PLAY " Run"));
 
       // Scene 2: kSimulating — "Stop" button should exist
-      gui::g_state.sim_state = gui::GuiState::SimState::kSimulating;
+      gui::g_state.run_intent = gui::RunIntent::kRunning;
       ctx->Yield();
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kSimulating));
       IM_CHECK(ctx->ItemExists("##TopBar/" ICON_FA_STOP " Stop"));
 
       // Scene 3: kDone
-      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+      gui::g_state.run_intent = gui::RunIntent::kStopped;
       ctx->Yield();
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kDone));
       IM_CHECK(ctx->ItemExists("##TopBar/" ICON_FA_PLAY " Run"));  // Back to Run
 
-      // Scene 4: kModified — Revert button should appear
-      gui::g_state.sim_state = gui::GuiState::SimState::kModified;
+      // Scene 4: kModified — Revert button should appear (dirty edit on a completed result)
+      gui::g_state.dirty = true;
       ctx->Yield();
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
       IM_CHECK(ctx->ItemExists("##TopBar/Revert"));
+      gui::g_state.dirty = false;
     };
   }
 }
@@ -368,9 +379,10 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
   // P1: scrum-gui-polish-v13 161.2 — In Immediate mode, Remove applies on the
   // next frame (ApplyBuffersToEntry sees empty raypath and writes nullopt).
-  // Dual observable: entry.filter_id = nullopt (direct) + intensity_locked
-  // (MarkFilterDirty side effect at gui_state.hpp:264-268). Pre-condition
-  // asserts intensity_locked starts false to avoid tautologies.
+  // Dual observable: entry.filter_id = nullopt (direct) + display_epoch_floor
+  // (MarkFilterDirty side effect — raises the floor to committed_epoch). Seed a
+  // non-zero committed_epoch with the floor at 0 so the bump is observable, and the
+  // pre-condition asserts the floor starts below committed_epoch to avoid tautologies.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "immediate_remove_applies_next_frame");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -380,11 +392,12 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       gui::FilterConfig f;
       f.param = gui::RaypathParams{ "3-1-5" };
       gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
-      gui::g_state.intensity_locked = false;
+      gui::g_state.committed_epoch = 5;
+      gui::g_state.display_epoch_floor = 0;
       ctx->Yield();
 
-      // Pre-condition guard: MarkFilterDirty has not fired yet.
-      IM_CHECK(gui::g_state.intensity_locked == false);
+      // Pre-condition guard: MarkFilterDirty has not fired yet (floor still below committed).
+      IM_CHECK_EQ(gui::g_state.display_epoch_floor, 0u);
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
@@ -398,7 +411,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
-      IM_CHECK(gui::g_state.intensity_locked == true);
+      IM_CHECK_EQ(gui::g_state.display_epoch_floor, gui::g_state.committed_epoch);
 
       // Close modal (Immediate uses Close button, not Cancel).
       ctx->ItemClick("**/Close##edit_modal");
@@ -552,10 +565,14 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Simulate "finite rays just finished": sim_state == kDone with a
-      // non-zero snapshot intensity that the diff-gate must preserve.
+      // non-zero snapshot intensity that the diff-gate must preserve. run_intent=kLoaded pins the
+      // reconcile base to kDone (the harness main loop reconciles sim_state every frame, so a bare
+      // sim_state write would be overwritten — the intent is what makes it stick).
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
       gui::g_state.sim_state = gui::GuiState::SimState::kDone;
       gui::g_state.snapshot_intensity = 0.5f;
-      gui::g_state.intensity_locked = false;
+      gui::g_state.committed_epoch = 5;
+      gui::g_state.display_epoch_floor = 0;
       gui::g_state.dirty = false;
       ctx->Yield();
 
@@ -569,11 +586,11 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       //   - sim_state still kDone (no kModified ⇒ Revert button stays hidden)
       //   - snapshot_intensity preserved (>0 rather than ==0.5 so future
       //     normalization changes don't break the semantic assertion)
-      //   - intensity_locked still false (no upload lock armed)
+      //   - display_epoch_floor NOT raised (no filter fence armed)
       //   - dirty still false (no spurious unsaved-changes flag)
       IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kDone));
       IM_CHECK_GT(gui::g_state.snapshot_intensity, 0.0f);
-      IM_CHECK(!gui::g_state.intensity_locked);
+      IM_CHECK_EQ(gui::g_state.display_epoch_floor, 0u);
       IM_CHECK(!gui::g_state.dirty);
     };
   }
@@ -592,10 +609,13 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       gui::FilterConfig f;
       f.param = gui::RaypathParams{ "3-1-5" };
       gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
-      // "finite rays just finished" snapshot state.
+      // "finite rays just finished" snapshot state. run_intent=kLoaded pins the reconcile base to
+      // kDone so the subsequent dirty edit surfaces as kModified (see companion test above).
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
       gui::g_state.sim_state = gui::GuiState::SimState::kDone;
       gui::g_state.snapshot_intensity = 0.5f;
-      gui::g_state.intensity_locked = false;
+      gui::g_state.committed_epoch = 5;
+      gui::g_state.display_epoch_floor = 0;
       gui::g_state.dirty = false;
       ctx->Yield();
 
@@ -609,7 +629,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // Render-invalidation MUST have fired (all four effects):
       IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
       IM_CHECK_EQ(gui::g_state.snapshot_intensity, 0.0f);
-      IM_CHECK(gui::g_state.intensity_locked);
+      IM_CHECK_EQ(gui::g_state.display_epoch_floor, gui::g_state.committed_epoch);
       IM_CHECK(gui::g_state.dirty);
     };
   }
@@ -628,9 +648,11 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       // Seed "finite rays just finished" state — an accumulated preview the
       // Immediate mode is supposed to preserve while the user tweaks Crystal.
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
       gui::g_state.sim_state = gui::GuiState::SimState::kDone;
       gui::g_state.snapshot_intensity = 0.5f;
-      gui::g_state.intensity_locked = false;
+      gui::g_state.committed_epoch = 5;
+      gui::g_state.display_epoch_floor = 0;
       gui::g_state.dirty = false;
       ctx->Yield();
 
@@ -650,12 +672,12 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       // Crystal-only edit: change Height via the Crystal tab input. Must
       // MarkDirty (state.dirty == true) but must NOT MarkFilterDirty
-      // (snapshot_intensity preserved, intensity_locked still false).
+      // (snapshot_intensity preserved, display_epoch_floor NOT raised).
       ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 1.0f);
       ctx->Yield(2);
       IM_CHECK(gui::g_state.dirty);
       IM_CHECK_GT(gui::g_state.snapshot_intensity, 0.0f);
-      IM_CHECK(!gui::g_state.intensity_locked);
+      IM_CHECK_EQ(gui::g_state.display_epoch_floor, 0u);
 
       // Filter edit: switch to the Filter tab and type a raypath. Because the
       // entry had no filter at modal open (initial_present=false), the first
@@ -666,7 +688,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
       ctx->Yield(2);
       IM_CHECK_EQ(gui::g_state.snapshot_intensity, 0.0f);
-      IM_CHECK(gui::g_state.intensity_locked);
+      IM_CHECK_EQ(gui::g_state.display_epoch_floor, gui::g_state.committed_epoch);
 
       // Close the Immediate popup and restore Staged default for later tests.
       ctx->ItemClick("**/Close##edit_modal");
@@ -1308,7 +1330,8 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // --- Case 1: not simulating — Save/Save Copy enabled ---
-      gui::g_state.sim_state = gui::GuiState::SimState::kIdle;
+      // sim_state is reconcile-derived; drive intent (kNone→kIdle) instead of writing sim_state.
+      gui::g_state.run_intent = gui::RunIntent::kNone;
       ctx->Yield();
       ctx->ItemClick("##TopBar/Save");
       ctx->Yield(2);
@@ -1328,7 +1351,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // --- Case 2: simulating — Save/Save Copy disabled, Config JSON still enabled ---
-      gui::g_state.sim_state = gui::GuiState::SimState::kSimulating;
+      gui::g_state.run_intent = gui::RunIntent::kRunning;
       ctx->Yield();
       ctx->ItemClick("##TopBar/Save");
       ctx->Yield(2);
@@ -1340,7 +1363,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       ctx->KeyPress(ImGuiKey_Escape);
       ctx->Yield(2);
-      gui::g_state.sim_state = gui::GuiState::SimState::kIdle;
+      gui::g_state.run_intent = gui::RunIntent::kNone;
       ctx->Yield();
     };
   }
@@ -2742,8 +2765,9 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
   }
 
   // p1_running/filter_change_triggers_restart (extension)
-  // Filter changes call MarkFilterDirty() which sets intensity_locked=true to block uploads
-  // until the CommitConfig restart completes. DoRun triggers the restart which unlocks.
+  // Filter changes call MarkFilterDirty() which raises display_epoch_floor to committed_epoch,
+  // fencing the old generation's textures until DoRun re-commits and mints a newer epoch that
+  // clears the floor. End-to-end exercise of the epoch-keyed anti-flicker gate.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_running", "filter_change_triggers_restart");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -2784,7 +2808,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
       gui::g_state.MarkFilterDirty();
       gui::DoRun();
 
-      // Filter changes may take slightly longer (intensity_locked delay); use 2000ms
+      // Filter changes may take slightly longer (epoch-floor fence until re-commit); use 2000ms
       bool ok = WaitForSimRestartAtLeast(ctx, baseline, 2000);
 
       StopPerfSimulation();

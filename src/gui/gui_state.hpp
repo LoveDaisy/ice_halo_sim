@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -17,6 +18,18 @@ namespace lumice::gui {
 
 // Crystal type
 enum class CrystalType { kPrism, kPyramid };
+
+// Last user run-intent (blueprint §5 CQS "last command" channel). This is one of the two
+// inputs to ReconcileSimState (the other being the last backend observation). The GUI sets
+// this on DoRun/DoStop/DoOpen; SyncFromPoller derives sim_state from it each frame.
+//   kNone     — fresh session / CLI-JSON import / .lmc with no baked texture (→ kIdle)
+//   kLoaded   — .lmc loaded with a baked result texture (static result, no server run → kDone)
+//   kRunning  — Run committed; sim_state follows the fresh backend lifecycle
+//   kStopping — Stop issued but the backend is still draining the in-flight batch (async, 1.6).
+//               Optimistic intent-latched display state (→ kStopping); advanced to kStopped by
+//               SyncFromPoller once the background stop completes (g_stop_inflight clears).
+//   kStopped  — Stop drained; intent-latched terminal state (→ kStopEndState = kDone, see app.cpp)
+enum class RunIntent { kNone, kLoaded, kRunning, kStopping, kStopped };
 
 // Axis distribution type for crystal orientation.
 // Values must stay contiguous 0..N-1 — ImGui RadioButton relies on static_cast<int>.
@@ -489,26 +502,28 @@ struct GuiState {
   // while the user drags a crystal slider).
   bool modal_immediate_mode = true;
 
-  void MarkDirty() {
-    dirty = true;
-    if (sim_state == SimState::kDone) {
-      sim_state = SimState::kModified;
-    }
-  }
+  // Mark the config dirty. sim_state is NOT touched here — it is derived once per frame by
+  // the single owner ReconcileSimState (I2). A dirty edit on top of a kDone result surfaces as
+  // kModified via that reconcile (base kDone + dirty), not via a direct write.
+  void MarkDirty() { dirty = true; }
 
-  // Mark a filter-related change. Immediately clears the display (shader renders black
-  // via intensity_scale=0) and locks uploads until the next CommitConfig restart, preventing
-  // stale data from the old simulation from overwriting the cleared state.
+  // Mark a filter-related change. Filter edits ALWAYS trigger a server rebuild on the next
+  // commit (IsTrivialFilterSet ⇒ JSON path ⇒ epoch++), so this does two orthogonal things:
+  //   (a) immediate display clear — snapshot_intensity/p99 reset so the shader renders black
+  //       right away (a legitimate display action, not a lock);
+  //   (b) raise display_epoch_floor to the current committed_epoch so any payload still being
+  //       produced by the OLD generation (epoch <= committed_epoch) is blocked by the upload
+  //       gate (payload_epoch > floor). The next commit mints epoch+1, whose payloads clear
+  //       the floor and reach the screen. This replaces the old intensity_locked boolean with
+  //       a monotone epoch key (blueprint §7 / I1).
+  // MarkDirty (crystal/sun scrub) deliberately does NOT raise the floor, so carry-forward of
+  // the previous generation's texture keeps the preview alive with no black flicker (§3.3).
   void MarkFilterDirty() {
     MarkDirty();
     snapshot_intensity = 0;
     p99_raw_y = 0.0f;
-    intensity_locked = true;
+    display_epoch_floor = committed_epoch;
   }
-
-  // When true, SyncFromPoller skips texture upload to prevent old simulation data from
-  // overwriting a filter-change-triggered display clear. Unlocked by CommitConfig restart.
-  bool intensity_locked = false;
 
   // Panel state (view preference — does not call MarkDirty)
   // not persisted to .lmc (unlike right_panel_collapsed)
@@ -526,9 +541,26 @@ struct GuiState {
   bool log_to_file = false;
   bool log_panel_open = false;
 
-  // Simulation state
-  enum class SimState { kIdle, kSimulating, kDone, kModified };
+  // Simulation state — DERIVED, not directly written. ReconcileSimState (app.cpp) is the single
+  // owner (I2): it maps (run_intent, committed_epoch, last backend observation, dirty) → sim_state
+  // once per frame in SyncFromPoller. The three inputs below are what business ops (DoRun/DoStop/
+  // DoOpen) write instead of poking sim_state.
+  // kStopping is the optimistic "Stopping…" display state shown while the async Stop drains the
+  // in-flight backend batch (1.6). It sits between kSimulating and the terminal state and is NOT
+  // demoted by dirty (a draining run is not an editable completed result).
+  enum class SimState { kIdle, kSimulating, kStopping, kDone, kModified };
   SimState sim_state = SimState::kIdle;
+
+  // Reconcile inputs (I1/I2). Written by DoRun/DoStop/DoOpen; read by ReconcileSimState.
+  RunIntent run_intent = RunIntent::kNone;  // last user command channel (blueprint §5)
+  uint64_t committed_epoch = 0;             // epoch the GUI last committed (DoRun reads it back)
+  // Epoch floor for the display upload gate (blueprint §7). A payload uploads only when
+  // payload_epoch > display_epoch_floor. Raised by MarkFilterDirty to committed_epoch to fence
+  // off the old generation's textures; monotone. Replaces the old intensity_locked boolean.
+  uint64_t display_epoch_floor = 0;
+  // Consumer-side exact-once upload cursor (migrated from a SyncFromPoller file-scope static in
+  // 1.4). SyncFromPoller uploads a payload only when its snapshot texture_serial differs.
+  unsigned long long last_uploaded_texture_serial = 0;
 
   // Stats from last poll
   LUMICE_RayCount stats_ray_seg_num = 0;
@@ -548,8 +580,9 @@ struct GuiState {
   //   Fields mirrored here must be the subset of GuiState classified as "configuration"
   //   (i.e. those reached by MarkDirty, contributing to the dirty/Revert lifecycle).
   //   View preferences (aspect_preset, bg_*, horizon/grid/sun circles, log levels,
-  //   left_panel_collapsed, right_panel_collapsed), runtime state (sim_state, stats_*, snapshot_intensity,
-  //   intensity_locked, texture_upload_count), and file management (current_file_path,
+  //   left_panel_collapsed, right_panel_collapsed), runtime state (sim_state, run_intent,
+  //   committed_epoch, display_epoch_floor, last_uploaded_texture_serial, stats_*,
+  //   snapshot_intensity, texture_upload_count), and file management (current_file_path,
   //   dirty, save_texture) are intentionally excluded.
   //
   // Protection model (plan.md S1):

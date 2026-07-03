@@ -283,7 +283,11 @@ int main(int argc, char** argv) {
       static auto last_commit = std::chrono::steady_clock::now();
       if (gui::g_state.dirty) {
         auto ss = gui::g_state.sim_state;
-        if (ss == gui::GuiState::SimState::kSimulating || ss == gui::GuiState::SimState::kDone) {
+        // Only auto-commit while actively simulating. The old `|| kDone` clause was vestigial:
+        // any dirty edit on a kDone result reconciles to kModified the same frame, so kDone&&dirty
+        // is never observed here. Under the single-owner reconcile, keeping it would risk auto-
+        // rerunning a completed-then-edited result instead of the intended kModified + Revert UX.
+        if (ss == gui::GuiState::SimState::kSimulating) {
           auto now = std::chrono::steady_clock::now();
           auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
           if (elapsed >= gui::kCommitIntervalMs) {
@@ -393,6 +397,7 @@ int main(int argc, char** argv) {
   }
 
   // Cleanup
+  gui::JoinPendingStop();       // R1: drain any in-flight async Stop before tearing down the server
   gui::g_server_poller.Stop();  // Stop poller before destroying server
   gui::g_crystal_renderer.Destroy();
   gui::g_preview.Destroy();

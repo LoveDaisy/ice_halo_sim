@@ -169,5 +169,6 @@ void RegisterAutoEvRegressionTests(ImGuiTestEngine* engine);
 void RegisterLinkedEntriesTests(ImGuiTestEngine* engine);
 void RegisterProjectWorldDirTests(ImGuiTestEngine* engine);
 void RegisterHandednessGuardTests(ImGuiTestEngine* engine);
+void RegisterLifecycleTests(ImGuiTestEngine* engine);
 
 #endif  // LUMICE_TEST_GUI_SHARED_HPP

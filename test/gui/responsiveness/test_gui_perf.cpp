@@ -122,7 +122,9 @@ void StopPerfSimulation() {
     LUMICE_DestroyServer(gui::g_server);
     gui::g_server = nullptr;
   }
-  gui::g_state.sim_state = gui::GuiState::SimState::kIdle;
+  // Reset the reconcile intent too — otherwise the leftover kRunning intent would flip sim_state
+  // back to kSimulating on the next frame (sim_state is reconcile-derived, no longer a raw write).
+  gui::g_state.run_intent = gui::RunIntent::kNone;
 }
 
 static void ReportPerf(const char* label, unsigned long start_rays, unsigned long end_rays, double elapsed_sec) {

@@ -761,6 +761,7 @@ LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzRes
     out[i].has_valid_data = results[i].has_valid_data_ ? 1 : 0;
     out[i].snapshot_generation = results[i].snapshot_generation_;
     out[i].effective_pixels = results[i].effective_pixels_;
+    out[i].epoch = results[i].epoch_;
   }
 
   // Sentinel: see doc/capi-lifecycle-architecture.md §5.2 (fix: 5287efe).
@@ -828,16 +829,44 @@ LUMICE_ErrorCode LUMICE_GetSimRayCount(LUMICE_Server* server, LUMICE_RayCount* o
 
 
 // =============== State & Control ===============
+// QueryServerState is a PROJECTION of the single-source lifecycle truth
+// (GetSimLifecycle): RUNNING -> RUNNING; IDLE | COMPLETED -> IDLE. This keeps the
+// historical running/idle binary intact for the existing call sites while
+// GetSimLifecycle owns the authoritative completed-vs-idle distinction (I1).
 LUMICE_ErrorCode LUMICE_QueryServerState(LUMICE_Server* server, LUMICE_ServerState* out) {
   if (!server || !out) {
     return LUMICE_ERR_NULL_ARG;
   }
 
-  if (server->server_->IsIdle()) {
-    *out = LUMICE_SERVER_IDLE;
-  } else {
+  if (server->server_->GetSimLifecycle() == ns::SimLifecycle::kRunning) {
     *out = LUMICE_SERVER_RUNNING;
+  } else {
+    *out = LUMICE_SERVER_IDLE;
   }
+
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_GetSimLifecycle(LUMICE_Server* server, LUMICE_SimLifecycleResult* out) {
+  if (!server || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+
+  // -Wswitch: exhaustive over SimLifecycle, no `default:` — a new enum value
+  // forces this mapping to add an explicit case.
+  switch (server->server_->GetSimLifecycle()) {
+    case ns::SimLifecycle::kIdle:
+      out->lifecycle = LUMICE_LIFECYCLE_IDLE;
+      break;
+    case ns::SimLifecycle::kRunning:
+      out->lifecycle = LUMICE_LIFECYCLE_RUNNING;
+      break;
+    case ns::SimLifecycle::kCompleted:
+      out->lifecycle = LUMICE_LIFECYCLE_COMPLETED;
+      break;
+  }
+  out->epoch = static_cast<unsigned long long>(server->server_->CommittedEpoch());
 
   return LUMICE_OK;
 }

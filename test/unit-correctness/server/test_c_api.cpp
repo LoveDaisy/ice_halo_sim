@@ -25,6 +25,12 @@ static_assert(sizeof(((LUMICE_StatsResult*)nullptr)->ray_seg_num) >= 8, "stats r
 static_assert(sizeof(((LUMICE_StatsResult*)nullptr)->crystal_num) >= 8, "stats crystal_num must be 64-bit");
 static_assert(sizeof(((LUMICE_Config*)nullptr)->ray_num) >= 8, "config ray_num must be 64-bit");
 
+// ABI guard (backend-lifecycle-epoch): appending the trailing uint64 `epoch`
+// grew LUMICE_RawXyzResult from 56 → 64 bytes (effective_pixels@48 + 4 pad +
+// epoch@56, 8-aligned). test/e2e/capi_runner.py mirrors this exact size; keep the
+// two in lockstep (measured, not assumed — ctypes.sizeof == 64).
+static_assert(sizeof(LUMICE_RawXyzResult) == 64, "LUMICE_RawXyzResult ABI must be 64 bytes (capi_runner.py mirror)");
+
 TEST(CrystalMeshApi, PrismVerticesAndEdges) {
   LUMICE_CrystalMesh mesh{};
   const char* json = R"({"type": "prism", "shape": {"height": 1.0}})";
@@ -801,6 +807,61 @@ TEST_F(ServerLifecycleApi, FullLifecycle) {
   // Final state: IDLE.
   ASSERT_EQ(LUMICE_QueryServerState(server_, &state), LUMICE_OK);
   EXPECT_EQ(state, LUMICE_SERVER_IDLE);
+}
+
+
+// Explicit single-source lifecycle (backend-lifecycle-epoch): Idle → Running →
+// Completed, monotonic epoch (++ per reset-causing commit), Stop → Idle. Also
+// pins QueryServerState as a projection (COMPLETED → IDLE).
+TEST_F(ServerLifecycleApi, GetSimLifecycle) {
+  // Fresh server, no commit yet: IDLE, epoch 0.
+  LUMICE_SimLifecycleResult lc{};
+  ASSERT_EQ(LUMICE_GetSimLifecycle(server_, &lc), LUMICE_OK);
+  EXPECT_EQ(lc.lifecycle, LUMICE_LIFECYCLE_IDLE);
+  EXPECT_EQ(lc.epoch, 0u);
+
+  // First reset-causing commit: epoch must advance to 1. Right after commit the
+  // run is RUNNING (or, on a very fast finish, already COMPLETED) — never IDLE,
+  // since status_ is kRunning until the pipeline drains.
+  auto json = MakeSmallSimConfigJson();
+  ASSERT_EQ(LUMICE_CommitConfig(server_, json.c_str()), LUMICE_OK);
+  ASSERT_EQ(LUMICE_GetSimLifecycle(server_, &lc), LUMICE_OK);
+  EXPECT_EQ(lc.epoch, 1u) << "epoch must ++ on the first reset-causing commit";
+  EXPECT_NE(lc.lifecycle, LUMICE_LIFECYCLE_IDLE) << "post-commit lifecycle is RUNNING or COMPLETED, never IDLE";
+
+  // Drain to completion: COMPLETED, epoch stable at 1.
+  ASSERT_TRUE(WaitForIdle(server_, 10000)) << "Server did not reach IDLE within 10 seconds";
+  ASSERT_EQ(LUMICE_GetSimLifecycle(server_, &lc), LUMICE_OK);
+  EXPECT_EQ(lc.lifecycle, LUMICE_LIFECYCLE_COMPLETED);
+  EXPECT_EQ(lc.epoch, 1u);
+
+  // Projection: COMPLETED must project to LUMICE_SERVER_IDLE via QueryServerState.
+  LUMICE_ServerState state{};
+  ASSERT_EQ(LUMICE_QueryServerState(server_, &state), LUMICE_OK);
+  EXPECT_EQ(state, LUMICE_SERVER_IDLE);
+
+  // Second reset-causing commit: epoch ++ again (monotonic).
+  ASSERT_EQ(LUMICE_CommitConfig(server_, json.c_str()), LUMICE_OK);
+  ASSERT_EQ(LUMICE_GetSimLifecycle(server_, &lc), LUMICE_OK);
+  EXPECT_EQ(lc.epoch, 2u) << "epoch must ++ on each reset-causing commit";
+  ASSERT_TRUE(WaitForIdle(server_, 10000)) << "Server did not reach IDLE within 10 seconds";
+  ASSERT_EQ(LUMICE_GetSimLifecycle(server_, &lc), LUMICE_OK);
+  EXPECT_EQ(lc.lifecycle, LUMICE_LIFECYCLE_COMPLETED);
+  EXPECT_EQ(lc.epoch, 2u);
+
+  // Stop resets consumption → IDLE (not COMPLETED); epoch is unchanged (Stop is
+  // not a commit).
+  LUMICE_StopServer(server_);
+  ASSERT_EQ(LUMICE_GetSimLifecycle(server_, &lc), LUMICE_OK);
+  EXPECT_EQ(lc.lifecycle, LUMICE_LIFECYCLE_IDLE);
+  EXPECT_EQ(lc.epoch, 2u) << "Stop does not advance epoch";
+}
+
+
+TEST_F(ServerLifecycleApi, GetSimLifecycleNullArgs) {
+  LUMICE_SimLifecycleResult lc{};
+  EXPECT_EQ(LUMICE_GetSimLifecycle(nullptr, &lc), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_GetSimLifecycle(server_, nullptr), LUMICE_ERR_NULL_ARG);
 }
 
 

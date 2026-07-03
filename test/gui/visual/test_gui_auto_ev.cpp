@@ -145,9 +145,11 @@ void RegisterAutoEvRegressionTests(ImGuiTestEngine* engine) {
       // 3. Force sim_resolution_index=0 (512) to speed up CI without changing GUI option count
       gui::g_state.renderer.sim_resolution_index = 0;
 
-      // 4. DoRun → triggers SerializeCoreConfig (dual-fisheye override) → starts poller
+      // 4. DoRun → triggers SerializeCoreConfig (dual-fisheye override) → starts poller.
+      // DoRun sets the intent (run_intent=kRunning); sim_state is reconcile-derived on the next
+      // frame, so assert the intent here (the wait loop below drives frames to kSimulating/data).
       gui::DoRun();
-      IM_CHECK_EQ((int)gui::g_state.sim_state, (int)gui::GuiState::SimState::kSimulating);
+      IM_CHECK_EQ((int)gui::g_state.run_intent, (int)gui::RunIntent::kRunning);
 
       // 5. Reset counter so the wait loop below starts from 0
       // (DeserializeFromJson already did a full reset, but DoRun may trigger callbacks)
@@ -166,7 +168,7 @@ void RegisterAutoEvRegressionTests(ImGuiTestEngine* engine) {
       LUMICE_StopServer(gui::g_server);
       LUMICE_DestroyServer(gui::g_server);
       gui::g_server = nullptr;
-      gui::g_state.sim_state = gui::GuiState::SimState::kIdle;
+      gui::g_state.run_intent = gui::RunIntent::kNone;  // reconcile → kIdle (server gone)
 
       // 8. Capture exposure parameters
       const float si = gui::g_state.snapshot_intensity;

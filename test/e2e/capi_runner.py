@@ -40,7 +40,10 @@ import numpy as np
 
 
 # Mirrors LUMICE_RawXyzResult in src/include/lumice.h. Anchor fields removed
-# in task-remove-anchor-lane; struct size shrunk from 64 → 56 bytes.
+# in task-remove-anchor-lane (64 → 56 bytes); the trailing uint64 `epoch` field
+# (backend-lifecycle-epoch, 1.3) grew it back to 64 (48-byte effective_pixels +
+# 4 pad + 8-byte epoch, 8-aligned). Matches the C++ static_assert in
+# test/unit-correctness/server/test_c_api.cpp.
 class LUMICE_RawXyzResult(ctypes.Structure):
     _fields_ = [
         ("renderer_id",                ctypes.c_int),
@@ -52,10 +55,11 @@ class LUMICE_RawXyzResult(ctypes.Structure):
         ("has_valid_data",             ctypes.c_int),
         ("snapshot_generation",        ctypes.c_uint64),
         ("effective_pixels",           ctypes.c_int),
+        ("epoch",                      ctypes.c_uint64),
     ]
 
 
-assert ctypes.sizeof(LUMICE_RawXyzResult) == 56, (
+assert ctypes.sizeof(LUMICE_RawXyzResult) == 64, (
     "LUMICE_RawXyzResult size mismatch — verify lumice.h field layout"
 )
 

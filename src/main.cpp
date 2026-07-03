@@ -530,12 +530,13 @@ int main(int argc, char** argv) {
     SaveRenderResults(server, output_dir, image_format, jpeg_quality);
     PrintStats(server);
 
-    LUMICE_ServerState state{};
-    LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1]{};
-    if (LUMICE_QueryServerState(server, &state) == LUMICE_OK && state == LUMICE_SERVER_IDLE) {
-      if (LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) == LUMICE_OK && stats[0].sim_ray_num > 0) {
-        break;
-      }
+    // Completion via the explicit single-source lifecycle: COMPLETED = a finite
+    // run drained clean (incl. zero-output convergence). Replaces the fragile
+    // `IDLE && stats.sim_ray_num>0` side-signal (scrum-296.7 early-IDLE truncation
+    // history). Infinite runs never reach COMPLETED, matching prior behavior.
+    LUMICE_SimLifecycleResult lifecycle{};
+    if (LUMICE_GetSimLifecycle(server, &lifecycle) == LUMICE_OK && lifecycle.lifecycle == LUMICE_LIFECYCLE_COMPLETED) {
+      break;
     }
   }
 

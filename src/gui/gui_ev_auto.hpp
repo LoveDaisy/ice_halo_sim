@@ -61,7 +61,7 @@ inline std::vector<float> DownsampleBoxSumY(const std::vector<float>& xyz_data, 
 // is a **fine-equivalent P99** — feeding it straight into ComputeEvAuto with
 // the fine `snapshot_intensity` reproduces the math equivalence:
 //   ev = log2(target_linear * snapshot_fine / (P99_coarse / f^2))
-// Therefore `PollerData.p99_y` no longer represents the true per-pixel Y
+// Therefore `TexturePayload.p99_y` no longer represents the true per-pixel Y
 // statistic when downsample is active; downstream consumers must treat it
 // only as the EV anchor and not as a raw Y measurement.
 //

@@ -34,13 +34,10 @@ void ServerPoller::Start(LUMICE_Server* server) {
   Stop();
 
   // Minimal reset: only clear the valid flag to prevent SyncFromPoller() from acting on
-  // stale data. Do NOT clear has_new_texture or server_state — preserving the last good
-  // texture data keeps the preview on screen during the gap between restart and first new
-  // snapshot, preventing visible flicker during slider scrubbing.
-  {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    staged_.valid = false;
-  }
+  // stale data. Do NOT drop the payload — preserving the last good texture (carried forward via
+  // the shared payload pointer) keeps the preview on screen during the gap between restart and
+  // first new snapshot, preventing visible flicker during slider scrubbing.
+  PublishValidReset();
   // Reset generation tracking so the worker detects the first snapshot as new data.
   last_generation_ = 0;
   // Reset quality gate timeout so fallback doesn't fire prematurely after restart.
@@ -89,35 +86,46 @@ void ServerPoller::EnsureRunning(LUMICE_Server* server) {
     server_ = server;
     last_generation_ = 0;
     last_quality_pass_time_ = std::chrono::steady_clock::now();
-    {
-      std::lock_guard<std::mutex> lock(data_mutex_);
-      staged_.valid = false;
-    }
+    PublishValidReset();
     state_.store(State::kRunning);
   }
   cv_.notify_all();
   GUI_LOG_DEBUG("[Poller] EnsureRunning: resumed from paused");
 }
 
+// Publish a valid=false copy of the current snapshot, preserving the payload (carry-forward)
+// so the preview does not flicker between restart and the first new snapshot. The consumer's
+// !valid early-return then ignores stale stats/lifecycle until the worker republishes.
+void ServerPoller::PublishValidReset() {
+  std::lock_guard<std::mutex> lk(publish_mutex_);
+  auto prev = LoadPublished();
+  auto next = prev ? std::make_shared<PreviewSnapshot>(*prev) : std::make_shared<PreviewSnapshot>();
+  next->valid = false;
+  next->has_new_texture = false;
+  StorePublished(std::move(next));
+}
+
 void ServerPoller::InvalidateStagedTexture() {
-  std::lock_guard<std::mutex> lk(data_mutex_);
-  staged_.has_new_texture = false;
+  // Suppress the last materialized-but-unuploaded texture by publishing a payload=null copy. The
+  // consumer's `payload != nullptr` guard then skips upload; GL keeps showing the already-uploaded
+  // frame (no black flicker). serial is left unchanged so a genuinely new future texture still gets
+  // a fresh serial and uploads. Test seam only (see header) — production fences stale data via the
+  // display epoch floor.
+  std::lock_guard<std::mutex> lk(publish_mutex_);
+  auto prev = LoadPublished();
+  if (!prev) {
+    return;
+  }
+  auto next = std::make_shared<PreviewSnapshot>(*prev);
+  next->payload.reset();
+  next->has_new_texture = false;
+  StorePublished(std::move(next));
 }
 
 void ServerPoller::SetCalibratedThreshold(unsigned long long threshold) {
   calibrated_min_rays_ = threshold;
   calibrated_ = true;
   GUI_LOG_INFO("[Poller] calibration set: threshold={}", threshold);
-}
-
-bool ServerPoller::TrySyncData(PollerData& out) {
-  std::unique_lock<std::mutex> lock(data_mutex_, std::try_to_lock);
-  if (!lock.owns_lock()) {
-    return false;
-  }
-  std::swap(out, staged_);
-  staged_.has_new_texture = false;
-  return true;
 }
 
 void ServerPoller::WorkerLoop() {
@@ -147,15 +155,24 @@ void ServerPoller::WorkerLoop() {
 }
 
 // See doc/accumulator-consumer-architecture.md §8.1 (polling contract), §8.3 (data flow).
+//
+// Reads the two server clocks (lifecycle heartbeat, raw XYZ) then builds ONE coherent immutable
+// PreviewSnapshot and atomically publishes it (invariant I5). The expensive candidate texture
+// memcpy is prepared OUTSIDE publish_mutex_; only the pointer-level RMW (load prev → decide
+// carry-forward → store) runs inside the lock (no TOCTOU, no 24MB copy under lock). Replaces the
+// old data_mutex_/staged_/std::swap incremental-write + torn-read channel.
 void ServerPoller::PollOnce() {
   auto* server = server_;
   if (!server) {
     return;
   }
 
-  // Query server state
-  LUMICE_ServerState server_state{};
-  LUMICE_QueryServerState(server, &server_state);
+  // Cheap O(1) lifecycle + epoch heartbeat (clock ④, invariant I4). Read on EVERY poll, decoupled
+  // from expensive snapshot materialization, so the terminal completion edge is never lost. This is
+  // both the completion signal published to the consumer and the self-pause signal below (1.5
+  // dropped the QueryServerState + has_valid_data side-channels this replaced).
+  LUMICE_SimLifecycleResult lc{};
+  LUMICE_GetSimLifecycle(server, &lc);
 
   // Get raw XYZ results (skips CPU XYZ→RGB, for GPU conversion)
   LUMICE_RawXyzResult xyz_results[2]{};
@@ -165,67 +182,106 @@ void ServerPoller::PollOnce() {
   bool has_new_snapshot =
       xyz_results[0].xyz_buffer != nullptr && xyz_results[0].snapshot_generation != last_generation_;
 
-  // Stage results under lock. Quality gate: only overwrite texture data when the snapshot
-  // has enough rays to avoid visible flicker. Stats and server_state are always updated.
-  {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    staged_.valid = true;
-    staged_.server_state = server_state;
-    if (has_new_snapshot) {
-      // Always consume this generation (same generation data won't improve by waiting)
-      last_generation_ = xyz_results[0].snapshot_generation;
+  // ---- Prepare candidate stats + texture payload OUTSIDE publish_mutex_ (no prev dependency).
+  // The 24MB pixel memcpy happens here, never inside the publish critical section.
+  bool have_new_stats = false;
+  LUMICE_RayCount new_ray_seg = 0;
+  LUMICE_RayCount new_sim_ray = 0;
+  std::shared_ptr<const TexturePayload> new_payload;  // non-null only when a fresh texture materialized
 
-      // Get stats (always update — stats are used independently for status bar display)
-      LUMICE_StatsResult cached_stats{};
-      LUMICE_GetCachedStats(server, &cached_stats);
-      if (cached_stats.sim_ray_num > 0) {
-        staged_.stats_ray_seg_num = cached_stats.ray_seg_num;
-        staged_.stats_sim_ray_num = cached_stats.sim_ray_num;
+  if (has_new_snapshot) {
+    // Always consume this generation (same generation data won't improve by waiting)
+    last_generation_ = xyz_results[0].snapshot_generation;
+
+    // Get stats (used independently for status bar display)
+    LUMICE_StatsResult cached_stats{};
+    LUMICE_GetCachedStats(server, &cached_stats);
+    if (cached_stats.sim_ray_num > 0) {
+      have_new_stats = true;
+      new_ray_seg = cached_stats.ray_seg_num;
+      new_sim_ray = cached_stats.sim_ray_num;
+    }
+
+    // Quality gate: skip texture overwrite for sparse snapshots (too few rays = visible flicker).
+    // Cold start (sim_ray_num == 0) is allowed through — no "old good texture" to preserve.
+    unsigned long long min_rays = calibrated_ ? calibrated_min_rays_ : gui::kMinRaysFloor;
+    bool quality_ok = cached_stats.sim_ray_num == 0 || cached_stats.sim_ray_num >= min_rays;
+
+    // Timeout fallback: if quality gate has been rejecting for too long (e.g. empty filter),
+    // force upload so stale textures don't persist indefinitely.
+    auto now = std::chrono::steady_clock::now();
+    if (!quality_ok) {
+      auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_quality_pass_time_).count();
+      if (elapsed_ms > gui::kQualityGateTimeoutMs) {
+        quality_ok = true;
+        GUI_LOG_VERBOSE("[Poller] quality gate timeout: forcing upload after {}ms (rays={}, min={})", elapsed_ms,
+                        cached_stats.sim_ray_num, min_rays);
       }
+    }
 
-      // Quality gate: skip texture overwrite for sparse snapshots (too few rays = visible flicker).
-      // Cold start (sim_ray_num == 0) is allowed through — no "old good texture" to preserve.
-      unsigned long long min_rays = calibrated_ ? calibrated_min_rays_ : gui::kMinRaysFloor;
-      bool quality_ok = cached_stats.sim_ray_num == 0 || cached_stats.sim_ray_num >= min_rays;
-
-      // Timeout fallback: if quality gate has been rejecting for too long (e.g. empty filter),
-      // force upload so stale textures don't persist indefinitely.
-      auto now = std::chrono::steady_clock::now();
-      if (!quality_ok) {
-        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_quality_pass_time_).count();
-        if (elapsed_ms > gui::kQualityGateTimeoutMs) {
-          quality_ok = true;
-          GUI_LOG_VERBOSE("[Poller] quality gate timeout: forcing upload after {}ms (rays={}, min={})", elapsed_ms,
-                          cached_stats.sim_ray_num, min_rays);
-        }
-      }
-
-      if (quality_ok) {
-        last_quality_pass_time_ = now;
-        size_t float_count = static_cast<size_t>(xyz_results[0].img_width) * xyz_results[0].img_height * 3;
-        staged_.xyz_data.resize(float_count);
-        std::memcpy(staged_.xyz_data.data(), xyz_results[0].xyz_buffer, float_count * sizeof(float));
-        staged_.texture_width = xyz_results[0].img_width;
-        staged_.texture_height = xyz_results[0].img_height;
-        staged_.snapshot_intensity = xyz_results[0].snapshot_intensity;
-        staged_.intensity_factor = xyz_results[0].intensity_factor;
-        staged_.effective_pixels = xyz_results[0].effective_pixels;
-        staged_.has_new_texture = true;
-        staged_.texture_ray_count = cached_stats.sim_ray_num;
-        staged_.p99_y =
-            ComputeP99Y(staged_.xyz_data, staged_.texture_width, staged_.texture_height, kEvAutoDownsampleFactor);
-        GUI_LOG_VERBOSE("[Poller] staged: rays={} intensity={} gen={}", cached_stats.sim_ray_num,
-                        xyz_results[0].snapshot_intensity, xyz_results[0].snapshot_generation);
-      } else {
-        GUI_LOG_VERBOSE("[Poller] quality gate: skipped rays={} (min={}) gen={}", cached_stats.sim_ray_num, min_rays,
-                        xyz_results[0].snapshot_generation);
-      }
+    if (quality_ok) {
+      last_quality_pass_time_ = now;
+      auto payload = std::make_shared<TexturePayload>();
+      size_t float_count = static_cast<size_t>(xyz_results[0].img_width) * xyz_results[0].img_height * 3;
+      payload->xyz_data.resize(float_count);
+      std::memcpy(payload->xyz_data.data(), xyz_results[0].xyz_buffer, float_count * sizeof(float));
+      payload->width = xyz_results[0].img_width;
+      payload->height = xyz_results[0].img_height;
+      payload->snapshot_intensity = xyz_results[0].snapshot_intensity;
+      payload->intensity_factor = xyz_results[0].intensity_factor;
+      payload->effective_pixels = xyz_results[0].effective_pixels;
+      payload->texture_ray_count = cached_stats.sim_ray_num;
+      payload->p99_y = ComputeP99Y(payload->xyz_data, payload->width, payload->height, kEvAutoDownsampleFactor);
+      payload->payload_epoch = xyz_results[0].epoch;
+      new_payload = std::move(payload);
+      GUI_LOG_VERBOSE("[Poller] staged: rays={} intensity={} gen={}", cached_stats.sim_ray_num,
+                      xyz_results[0].snapshot_intensity, xyz_results[0].snapshot_generation);
+    } else {
+      GUI_LOG_VERBOSE("[Poller] quality gate: skipped rays={} (min={}) gen={}", cached_stats.sim_ray_num, min_rays,
+                      xyz_results[0].snapshot_generation);
     }
   }
 
-  // Only stop on IDLE if the server has actually produced valid data.
-  // During restart, the server may transiently report IDLE before simulation threads spin up.
-  if (server_state == LUMICE_SERVER_IDLE && xyz_results[0].has_valid_data) {
+  // ---- Publish: whole RMW (load prev → decide carry-forward → store) inside publish_mutex_.
+  // Critical section is pointer/refcount-level only (the pixel memcpy already happened above).
+  {
+    std::lock_guard<std::mutex> lk(publish_mutex_);
+    auto prev = LoadPublished();
+    auto next = std::make_shared<PreviewSnapshot>();
+    next->valid = true;
+    next->epoch = lc.epoch;
+    // Lifecycle level signal (clock ④ / I4): carried on every poll.
+    next->lifecycle = lc.lifecycle;
+    // Stats: fresh value if this generation produced one; else carry forward prev's (coherent
+    // bundle — no torn zero). The consumer applies stats only when >0, so this is behavior-
+    // equivalent to the old swap-to-0-then-skip, and is a positive I5 side effect.
+    if (have_new_stats) {
+      next->stats_ray_seg_num = new_ray_seg;
+      next->stats_sim_ray_num = new_sim_ray;
+    } else if (prev) {
+      next->stats_ray_seg_num = prev->stats_ray_seg_num;
+      next->stats_sim_ray_num = prev->stats_sim_ray_num;
+    }
+    // Texture: a freshly materialized payload gets a new monotonic serial; otherwise carry the
+    // previous payload pointer + serial forward (sparse / gate-rejected / no-new-generation) so
+    // the consumer's serial dedup keeps the last frame on screen (anti-flicker, §5.4).
+    if (new_payload) {
+      next->payload = std::move(new_payload);
+      next->texture_serial = texture_serial_.fetch_add(1) + 1;
+      next->has_new_texture = true;
+    } else if (prev) {
+      next->payload = prev->payload;
+      next->texture_serial = prev->texture_serial;
+      next->has_new_texture = false;
+    }
+    StorePublished(std::move(next));
+  }
+
+  // Self-pause once the run has genuinely completed (finite run drained clean, incl. zero-output).
+  // COMPLETED is the durable terminal edge (infinite runs stay RUNNING; a transient restart IDLE is
+  // NOT COMPLETED), so this never pauses mid-run. The last published snapshot before pausing carries
+  // lifecycle==COMPLETED, so the main thread's per-frame reconcile still reaches kDone (I3).
+  if (lc.lifecycle == LUMICE_LIFECYCLE_COMPLETED) {
     std::lock_guard<std::mutex> lk(mutex_);
     state_.store(State::kPaused);
   }

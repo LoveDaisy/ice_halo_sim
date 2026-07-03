@@ -130,13 +130,19 @@ void RenderTopBar(float window_width) {
     ImGui::SameLine();
   }
 
-  // Run/Stop — fixed width (max of both labels) to prevent layout shift on toggle.
+  // Run/Stop — fixed width (max of ALL three labels, incl. "Stopping…") to prevent layout shift on
+  // toggle. `busy` widens the file-op gates below: New/Open/Save/backend-toggle stay disabled while
+  // the backend is still draining an async Stop (kStopping), not just while simulating.
   bool simulating = (g_state.sim_state == SimState::kSimulating);
+  bool stopping = (g_state.sim_state == SimState::kStopping);
+  bool busy = simulating || stopping;
   const auto& style = ImGui::GetStyle();
   const char* kRunLabel = ICON_FA_PLAY " Run";
   const char* kStopLabel = ICON_FA_STOP " Stop";
-  float run_stop_width =
-      std::max(ImGui::CalcTextSize(kRunLabel).x, ImGui::CalcTextSize(kStopLabel).x) + style.FramePadding.x * 2;
+  const char* kStoppingLabel = ICON_FA_STOP " Stopping...";
+  float run_stop_width = std::max({ ImGui::CalcTextSize(kRunLabel).x, ImGui::CalcTextSize(kStopLabel).x,
+                                    ImGui::CalcTextSize(kStoppingLabel).x }) +
+                         style.FramePadding.x * 2;
   if (simulating) {
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.2f, 0.2f, 1.0f));
@@ -145,6 +151,12 @@ void RenderTopBar(float window_width) {
       DoStop();
     }
     ImGui::PopStyleColor(3);
+  } else if (stopping) {
+    // Async Stop in flight: greyed, disabled "Stopping…" (DoStop is idempotent, but the disabled
+    // button makes the in-flight state unambiguous and blocks re-entry at the UI layer).
+    ImGui::BeginDisabled();
+    ImGui::Button(kStoppingLabel, ImVec2(run_stop_width, 0));
+    ImGui::EndDisabled();
   } else {
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.45f, 0.15f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.55f, 0.2f, 1.0f));
@@ -178,10 +190,10 @@ void RenderTopBar(float window_width) {
   ImGui::TextDisabled("|");
   ImGui::SameLine();
 
-  // File operations — New/Open disabled while simulating; Save menu itself stays
-  // enabled so read-only exports (Screenshot / Dual Fisheye Equal Area / Equirectangular /
-  // Config JSON) remain reachable.
-  if (simulating) {
+  // File operations — New/Open disabled while busy (simulating OR async Stop draining); Save menu
+  // itself stays enabled so read-only exports (Screenshot / Dual Fisheye Equal Area /
+  // Equirectangular / Config JSON) remain reachable.
+  if (busy) {
     ImGui::BeginDisabled();
   }
   if (ImGui::Button("New")) {
@@ -191,7 +203,7 @@ void RenderTopBar(float window_width) {
   if (ImGui::Button("Open")) {
     CheckUnsavedAndDo(PendingAction::kOpen);
   }
-  if (simulating) {
+  if (busy) {
     ImGui::EndDisabled();
   }
   ImGui::SameLine();
@@ -202,7 +214,7 @@ void RenderTopBar(float window_width) {
     if (ImGui::BeginPopup("SaveMenu")) {
       bool no_texture = !g_preview.HasTexture();
       bool has_server = g_server != nullptr && g_state.sim_state != GuiState::SimState::kIdle;
-      if (simulating) {
+      if (busy) {
         ImGui::BeginDisabled();
       }
       if (ImGui::MenuItem("Save")) {
@@ -211,7 +223,7 @@ void RenderTopBar(float window_width) {
       if (ImGui::MenuItem("Save Copy")) {
         DoSaveAs();
       }
-      if (simulating) {
+      if (busy) {
         ImGui::EndDisabled();
       }
       ImGui::Separator();
@@ -961,6 +973,9 @@ void RenderStatusBar(float window_width, float window_height) {
       break;
     case SimState::kSimulating:
       ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Simulating...");
+      break;
+    case SimState::kStopping:
+      ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.0f, 1.0f), "Stopping...");
       break;
     case SimState::kDone:
       ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "Done");

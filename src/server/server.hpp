@@ -142,6 +142,10 @@ struct RawXyzResult {
   bool has_valid_data_ = false;       // True after first ConsumeData; reset on Stop
   uint64_t snapshot_generation_ = 0;  // Increments on each new snapshot
   int effective_pixels_ = 0;          // Non-zero pixel count for adaptive normalization
+  // Lifecycle epoch (committed_epoch_ at snapshot time). Stamped by
+  // GetRawXyzResults; consumed by the GUI display-keying in 1.5. See
+  // doc/gui-preview-lifecycle-architecture.md §4/§5.
+  uint64_t epoch_ = 0;
 };
 
 struct StatsResult {
@@ -173,6 +177,25 @@ enum class ServerStatus {
   kIdle,     ///< Idle (completed or not started)
   kRunning,  ///< Running (processing)
   kError     ///< Error state
+};
+
+// =============== Simulation Lifecycle ===============
+/**
+ * @brief Explicit single-source simulation lifecycle truth.
+ * @details Replaces the historical side-signal disambiguation (bare kIdle +
+ *          has_ever_consumed_ + stats>0). Derived in one place
+ *          (ServerImpl::GetSimLifecycle); ServerStatus / QueryServerState become
+ *          projections of it. See doc/gui-preview-lifecycle-architecture.md §4/§5.
+ *          - kCompleted = a finite run drained clean (includes the zero-output /
+ *            all-filter-rejected convergence, capi-lifecycle §3.6).
+ *          - kIdle      = never run, or reset (post-Stop) with no data consumed.
+ *          - kRunning   = pending work / workers active. Infinite runs stay here
+ *            forever (never kCompleted); Stop returns them to kIdle.
+ */
+enum class SimLifecycle {
+  kIdle,       ///< Not run, or reset and not yet consumed (incl. after Stop)
+  kRunning,    ///< Pending work / workers active
+  kCompleted,  ///< Finite run drained clean (incl. zero-output convergence)
 };
 
 // =============== Server ===============
@@ -311,6 +334,21 @@ class Server {
    * @return Current server status
    */
   ServerStatus GetStatus() const;
+
+  /**
+   * @brief Get the explicit simulation lifecycle (single-source truth).
+   * @return kRunning / kCompleted / kIdle (see SimLifecycle).
+   * @note Authoritative derivation; GetStatus()/QueryServerState are projections.
+   */
+  SimLifecycle GetSimLifecycle() const;
+
+  /**
+   * @brief Current lifecycle epoch (monotonic generation counter).
+   * @return committed_epoch_; ++ on each reset-causing CommitConfig. 0 before any
+   *         successful commit. Read back after a synchronous commit to learn the
+   *         just-minted epoch (no commit-signature change; see plan §2 decision 3).
+   */
+  uint64_t CommittedEpoch() const;
 
   /**
    * @brief Check if server is idle
