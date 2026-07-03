@@ -53,6 +53,31 @@ typedef enum LUMICE_ServerState_ {
   LUMICE_SERVER_NOT_READY,
 } LUMICE_ServerState;
 
+// =============== Simulation Lifecycle ===============
+// Explicit single-source lifecycle truth (replaces disambiguation via bare
+// LUMICE_SERVER_IDLE + has_valid_data + stats>0). LUMICE_QueryServerState is a
+// projection of this enum: RUNNING -> RUNNING, IDLE|COMPLETED -> IDLE.
+//   - COMPLETED = a finite run drained clean (includes zero-output / all-filter-
+//     rejected convergence).
+//   - IDLE      = never run, or reset (post-Stop) with no data consumed.
+//   - RUNNING   = pending work / workers active. Infinite runs stay RUNNING
+//     forever (never COMPLETED); Stop returns them to IDLE.
+typedef enum LUMICE_SimLifecycle_ {
+  LUMICE_LIFECYCLE_IDLE = 0,
+  LUMICE_LIFECYCLE_RUNNING,
+  LUMICE_LIFECYCLE_COMPLETED,
+} LUMICE_SimLifecycle;
+
+// {lifecycle, epoch} snapshot of the backend lifecycle truth.
+//   lifecycle: one of LUMICE_SimLifecycle.
+//   epoch:     monotonic generation counter, ++ on each reset-causing commit.
+//              0 before any successful commit. Read back after a synchronous
+//              commit to learn the just-minted epoch.
+typedef struct LUMICE_SimLifecycleResult_ {
+  int lifecycle;
+  unsigned long long epoch;
+} LUMICE_SimLifecycleResult;
+
 // =============== Ray Count Type ===============
 // 64-bit count type for ray / ray-segment / crystal totals. Must stay >= 64-bit:
 // `unsigned long` is only 32-bit on Windows (LLP64), which silently truncated
@@ -87,6 +112,7 @@ typedef struct LUMICE_RawXyzResult_ {
   int has_valid_data;        // Non-zero once simulation has produced data (reset on CommitConfig/Stop)
   unsigned long long snapshot_generation;  // Increments on each new snapshot; compare to detect data changes
   int effective_pixels;                    // Non-zero pixel count (for stats display)
+  unsigned long long epoch;                // Lifecycle epoch at snapshot time (committed_epoch_); 1.5 display keying
 } LUMICE_RawXyzResult;
 
 typedef struct LUMICE_StatsResult_ {
@@ -306,6 +332,12 @@ LUMICE_ErrorCode LUMICE_GetSimRayCount(LUMICE_Server* server, LUMICE_RayCount* o
 
 // =============== State & Control ===============
 LUMICE_ErrorCode LUMICE_QueryServerState(LUMICE_Server* server, LUMICE_ServerState* out);
+
+// Read the explicit simulation lifecycle + current epoch (single-source truth).
+// LUMICE_QueryServerState is a projection of this. After a synchronous commit,
+// call this to read back the just-minted epoch (no commit-signature change).
+LUMICE_ErrorCode LUMICE_GetSimLifecycle(LUMICE_Server* server, LUMICE_SimLifecycleResult* out);
+
 void LUMICE_StopServer(LUMICE_Server* server);
 
 // =============== Crystal Mesh ===============

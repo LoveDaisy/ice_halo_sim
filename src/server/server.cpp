@@ -74,6 +74,8 @@ class ServerImpl {
   void Stop();
   void Start();
   ServerStatus GetStatus() const;
+  SimLifecycle GetSimLifecycle() const;
+  uint64_t CommittedEpoch() const;
   bool IsIdle();
   void SetPreferredBackend(BackendKind backend);
 
@@ -140,6 +142,14 @@ class ServerImpl {
   // CommitConfig has yet succeeded; consumers tolerate null.
   std::shared_ptr<const std::vector<RenderConfig>> active_renders_;
   std::atomic<uint64_t> scene_generation_{ 0 };
+  // Published lifecycle epoch (the backend-owned truth authority). Distinct from
+  // scene_generation_ (an internal batch-staleness key): keeping them separate
+  // keeps the externally-published epoch from being polluted by batch-scheduling
+  // details. ++ inside CommitConfig's scene_mutex_ critical section (next to
+  // scene_generation_) on the accumulator-reset action — every successful commit
+  // is reset-causing today, so every success ++s. A future "continue-same-config"
+  // path (append rays without reset) must skip this ++. See plan §2 decision 3.
+  std::atomic<uint64_t> committed_epoch_{ 0 };
 
   // Persistent thread state machine: threads wait on start_cv_ when kStopped,
   // work when kRunning, and exit when kTerminating.
@@ -460,6 +470,11 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
     active_scene_ = std::move(new_scene);
     active_renders_ = std::move(new_renders);
     scene_generation_.fetch_add(1);
+    // Publish the new lifecycle epoch alongside the accumulator reset. Stop()
+    // above has drained all workers, so no in-flight batch reads a half-updated
+    // epoch. Pinned to the reset action (not to CommitConfig entry) so a future
+    // continue-same-config path would correctly leave the epoch unchanged.
+    committed_epoch_.fetch_add(1, std::memory_order_release);
   }
 
   auto start_start = std::chrono::steady_clock::now();
@@ -563,6 +578,10 @@ std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
       auto r = render_consumer->GetRawXyzResult();
       r.has_valid_data_ = valid_data;
       r.snapshot_generation_ = generation;
+      // Best-effort epoch stamp (plan §5-R5): consumer data + this read are
+      // serialized under consumer_mutex_/snapshot_mutex_, so a "new epoch with
+      // stale data" tear cannot occur; the atomic-single-value publish is 1.4's job.
+      r.epoch_ = committed_epoch_.load(std::memory_order_acquire);
       results.push_back(r);
     }
   }
@@ -752,6 +771,32 @@ ServerStatus ServerImpl::GetStatus() const {
 
 bool ServerImpl::IsIdle() {
   return GetStatus() == ServerStatus::kIdle;
+}
+
+// Single authoritative lifecycle derivation (plan §2 decision 4). GetStatus()
+// (status_ + four-predicate completion) stays the running/idle authority;
+// has_ever_consumed_ upgrades a settled kIdle into kCompleted vs kIdle. The two
+// locks are held in sequence, never nested (status_mutex_/prod_mutex_ inside
+// GetStatus() release before consumer_mutex_ is taken), avoiding lock-order
+// inversion (plan §5-R4).
+SimLifecycle ServerImpl::GetSimLifecycle() const {
+  ServerStatus st = GetStatus();
+  if (st == ServerStatus::kRunning) {
+    return SimLifecycle::kRunning;
+  }
+  // kIdle or kError: distinguish "drained clean" from "never produced / reset".
+  // has_ever_consumed_ is read under consumer_mutex_ (same lock as its writes at
+  // ConsumeData 895/921 and its reset at Stop 691).
+  bool consumed = false;
+  {
+    std::lock_guard<TicketMutex> lock(consumer_mutex_);
+    consumed = has_ever_consumed_;
+  }
+  return consumed ? SimLifecycle::kCompleted : SimLifecycle::kIdle;
+}
+
+uint64_t ServerImpl::CommittedEpoch() const {
+  return committed_epoch_.load(std::memory_order_acquire);
 }
 
 
@@ -1190,6 +1235,20 @@ ServerStatus Server::GetStatus() const {
     return ServerStatus::kError;
   }
   return impl_->GetStatus();
+}
+
+SimLifecycle Server::GetSimLifecycle() const {
+  if (!impl_) {
+    return SimLifecycle::kIdle;
+  }
+  return impl_->GetSimLifecycle();
+}
+
+uint64_t Server::CommittedEpoch() const {
+  if (!impl_) {
+    return 0;
+  }
+  return impl_->CommittedEpoch();
 }
 
 bool Server::IsIdle() const {

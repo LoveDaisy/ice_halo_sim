@@ -83,6 +83,18 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
       return;
     }
 
+    // Orthogonal add-only pin (backend-lifecycle-epoch 1.3): the same terminal
+    // completion the has_valid_data / kDone assertions below guard is now also
+    // readable as the explicit COMPLETED lifecycle with a minted epoch. This does
+    // NOT replace the level-signal regression baseline (those guard 1.5's later
+    // side-signal removal).
+    {
+      LUMICE_SimLifecycleResult lc{};
+      IM_CHECK_EQ(LUMICE_GetSimLifecycle(server, &lc), LUMICE_OK);
+      IM_CHECK_EQ(lc.lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+      IM_CHECK(lc.epoch >= 1);
+    }
+
     // (A) POLLER HALF (server_poller.cpp / I4): a terminal IDLE poll that carries NO new
     // snapshot generation must still stage has_valid_data==true, even though its staged
     // stats are 0. This is the level signal that the fix decoupled from snapshot
