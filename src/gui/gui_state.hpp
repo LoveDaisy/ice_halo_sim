@@ -642,7 +642,7 @@ struct GuiState {
 // be audited for matching changes. Apple Silicon + libc++ only (std::vector size varies
 // across stdlib implementations).
 #if defined(__APPLE__) && defined(__aarch64__)
-// Size bumped from 160 → 184 by task-gui-custom-spectrum: SunConfig gained a
+// Size bumped from 160 → 192 by task-gui-custom-spectrum: SunConfig gained a
 // std::vector<WlWeight> field (custom_spectrum). From()/ApplyTo() copy `sun`
 // wholesale, so this addition is covered without further field-level audit.
 static_assert(sizeof(GuiState::ConfigSnapshot) == 192,
