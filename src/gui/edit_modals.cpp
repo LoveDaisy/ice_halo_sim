@@ -1821,7 +1821,7 @@ std::vector<WlWeight> BuildPresetSeed(int /*preset_idx*/) {
 
 }  // namespace
 
-void OpenSpectrumModal(GuiState& state) {
+void OpenSpectrumModal(GuiState& state, int prior_index) {
   g_spectrum_modal_open_pending = true;
   // Seed the edit buffer with the current custom spectrum, if any; otherwise the preset seed.
   if (!state.sun.custom_spectrum.empty()) {
@@ -1829,7 +1829,7 @@ void OpenSpectrumModal(GuiState& state) {
   } else {
     g_spectrum_edit_buf = BuildPresetSeed(state.sun.spectrum_index);
   }
-  g_spectrum_prev_index = state.sun.spectrum_index;
+  g_spectrum_prev_index = prior_index;
 }
 
 void RenderSpectrumModal(GuiState& state) {
@@ -1916,6 +1916,12 @@ void RenderSpectrumModal(GuiState& state) {
     ImGui::BeginDisabled();
   }
   if (ImGui::Button(ICON_FA_CHECK " OK##spec_ok", ImVec2(80, 0))) {
+    // Sanitize obviously-invalid manual input before it reaches the sim: clamp wavelength to the
+    // visible band and weight to non-negative.
+    for (auto& e : g_spectrum_edit_buf) {
+      e.wavelength = std::clamp(e.wavelength, 380.0f, 780.0f);
+      e.weight = std::max(e.weight, 0.0f);
+    }
     state.sun.custom_spectrum = g_spectrum_edit_buf;
     state.sun.spectrum_index = kCustomSpectrumIndex;
     state.MarkDirty();

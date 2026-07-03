@@ -24,6 +24,7 @@
 #include "core/backend/cuda_trace_backend.hpp"  // CudaDeviceAvailable() for ResolveGpuRoute
 #endif
 #include "server/consumer.hpp"
+#include "server/ray_num_semantics.hpp"
 #include "server/render.hpp"
 #include "server/server.hpp"
 #include "server/stats.hpp"
@@ -1064,8 +1065,8 @@ void ServerImpl::GenerateScene() {
   // guarantees at least total rays are traced across the spectrum. Illuminant (N_wl=1) is the
   // identity transform. kInfSize preserved unchanged (infinite mode ignores the total).
   auto ray_num = scene->ray_num_;
-  if (ray_num != kInfSize && kNsimdataPerBatch > 1) {
-    ray_num = (ray_num + kNsimdataPerBatch - 1) / kNsimdataPerBatch;
+  if (ray_num != kInfSize) {
+    ray_num = PerWavelengthRayNum(ray_num, kNsimdataPerBatch);
   }
   size_t committed_num = 0;
   while (ray_num == kInfSize || committed_num < ray_num) {

@@ -903,21 +903,22 @@ void RenderSceneControls(GuiState& state) {
   }
   ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
   // Combo carries kSpectrumCount presets + "Custom..." tail (item count = kSpectrumComboItemCount).
-  static const char* kSpectrumComboItems[kSpectrumComboItemCount] = { kSpectrumNames[0], kSpectrumNames[1],
-                                                                      kSpectrumNames[2], kSpectrumNames[3],
-                                                                      kSpectrumNames[4], kSpectrumNames[5],
-                                                                      "Custom..." };
+  // Built once from kSpectrumNames so adding/renaming a preset only requires editing kSpectrumNames.
+  static const char* const* kSpectrumComboItems = [] {
+    static const char* items[kSpectrumComboItemCount];
+    for (int i = 0; i < kSpectrumCount; i++)
+      items[i] = kSpectrumNames[i];
+    items[kSpectrumCount] = "Custom...";
+    return items;
+  }();
   int prev_idx = state.sun.spectrum_index;
   if (ImGui::Combo("Spectrum", &state.sun.spectrum_index, kSpectrumComboItems, kSpectrumComboItemCount)) {
     if (state.sun.spectrum_index == kCustomSpectrumIndex) {
-      OpenSpectrumModal(state);
-      // spectrum_index will be committed to kCustomSpectrumIndex by the modal's OK; leave it
-      // pending here so the combo shows "Custom..." while the modal is open. Cancel restores it.
+      OpenSpectrumModal(state, prev_idx);  // pass pre-Combo index so Cancel can restore the prior preset
     } else {
       state.sun.custom_spectrum.clear();
       state.MarkDirty();
     }
-    (void)prev_idx;  // reserved for future revert-on-cancel-open logic
   }
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip(
@@ -925,6 +926,11 @@ void RenderSceneControls(GuiState& state) {
         "\"Custom...\" opens an editor for a discrete wavelength/weight list.");
   }
   ImGui::PopItemWidth();
+  if (state.sun.spectrum_index == kCustomSpectrumIndex) {
+    if (ImGui::SmallButton("Edit spectrum...##spectrum_edit")) {
+      OpenSpectrumModal(state, kCustomSpectrumIndex);  // prior==custom → Cancel keeps custom
+    }
+  }
 
   ImGui::SeparatorText("Simulation");
   ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));

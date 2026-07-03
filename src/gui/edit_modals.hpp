@@ -53,7 +53,7 @@ void ResetModalState();
 // modal above). The Sun panel's Spectrum combo calls OpenSpectrumModal() when the user picks
 // "Custom..."; this function must be called each frame (from the main loop, next to
 // RenderEditModals) to actually paint the popup while it is open.
-void OpenSpectrumModal(GuiState& state);
+void OpenSpectrumModal(GuiState& state, int prior_index);
 void RenderSpectrumModal(GuiState& state);
 
 // Returns true when the committed axis config of the currently open modal entry
