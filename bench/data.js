@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783097779261,
+  "lastUpdate": 1783099702422,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "f97dd7cb850710474f5c4580a3e2c57b75814c36",
-          "message": "Merge pull request #68 from LoveDaisy/feat/gui_refactor\n\nrefactor(gui): card-based layer/entry layout with copy model",
-          "timestamp": "2026-04-14T10:39:15+08:00",
-          "tree_id": "ca973ccab53593acaf7fd1bf3fd594e6fd860385",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/f97dd7cb850710474f5c4580a3e2c57b75814c36"
-        },
-        "date": 1776134637162,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 409165.5,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 648088.6,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 423617.7,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 380121.4,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4798,6 +4750,54 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 330683.3,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "026928a679c7e511723436c1dd4d8f3ae18c16ab",
+          "message": "Merge pull request #169 from LoveDaisy/feat/gui-ms-prob-footguns\n\ngui: MS layer prob footgun guards (four-state slider, +Layer promotion, CLI warning)",
+          "timestamp": "2026-07-04T01:22:18+08:00",
+          "tree_id": "8ebb7d1b8443f8baf800439ff34a54dfd2e8a09e",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/026928a679c7e511723436c1dd4d8f3ae18c16ab"
+        },
+        "date": 1783099701122,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 402910.4,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 611864.6,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 394653.3,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 354181.5,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
