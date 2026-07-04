@@ -28,6 +28,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <numeric>
 #include <vector>
 
 #include "config/render_config.hpp"
@@ -568,6 +569,119 @@ TEST(MetalRootGen, TransitStreamWireUp) {
     const double moved = frac_moved(rots[pr.first], rots[pr.second]);
     EXPECT_GT(moved, 0.9) << "transit stream: base_pair=(" << pr.first << "," << pr.second << ") only " << moved
                           << " of layer-1 transit rotations differ — transit hi wiring not reaching the device.";
+  }
+}
+
+// scrum-328.2 Step 7 (AC5a) — Facility consumer smoke. Drives the current
+// (pre-new-sampler) generic-reject path on Laplacian b=5 / Gaussian σ=5
+// near-pole configurations, uses the observability facility (EnableGenAttemptCount
+// + ReadbackGenAttemptCount) to collect per-ray rejection-loop iteration
+// counts, and asserts mean(attempts) matches the doc anchors
+// (doc/near-pole-area-measure-sampling.md Laplacian 4.90 / Gaussian 3.76,
+// ±5% per plan). Proves the facility itself works before consumer 2 (328.3/
+// 328.4) swaps in the new tight-envelope sampler.
+//
+// Near-pole config: latitude_dist.mean = 90° (= zenith 0, per math.cpp:638),
+// so cos(φ)/M rejection loop actually kicks in. Sample size 65536 → MC
+// standard error on mean(attempts) < 1% for a distribution whose stdev is
+// ~4, well below the ±5% tolerance.
+struct AttemptStats {
+  double mean;
+  int max;
+  size_t safety_valve_hits;  // rays that hit kMaxRejectionAttempts (1000)
+};
+
+inline AttemptStats ComputeAttemptStats(const std::vector<int>& attempts) {
+  AttemptStats out{ 0.0, 0, 0 };
+  if (attempts.empty()) {
+    return out;
+  }
+  const long long sum = std::accumulate(attempts.begin(), attempts.end(), 0LL);
+  out.mean = static_cast<double>(sum) / static_cast<double>(attempts.size());
+  for (int a : attempts) {
+    if (a > out.max) {
+      out.max = a;
+    }
+    if (a >= 1000) {  // pcg_shared.h kMaxRejectionAttempts
+      out.safety_valve_hits++;
+    }
+  }
+  return out;
+}
+
+TEST(RngObservabilityFacilitySmoke, NearPoleAcceptanceRateMatchesDocAnchors) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  EnableDeviceGenForStatisticalParity();
+
+  // 65536 rays × 1 layer × 1 crystal = 1 ci; sample size covers MC SE < 1%.
+  constexpr size_t kSmokeRayCount = 65536;
+
+  struct Case {
+    const char* label;
+    DistributionType lat_type;
+    float anchor_mean_attempts;  // doc/near-pole-area-measure-sampling.md §附录
+  };
+  const Case kCases[] = {
+    // std5 → std_rad ≈ 0.087, well above Rayleigh threshold (colatitude+3σ<0.5°
+    // → σ < 0.167°) so gen_root_kernel hits kLatPathGenericReject and the
+    // attempts counter reflects real rejection-loop iterations.
+    { "Laplacian b=5", DistributionType::kLaplacian, 4.90 },
+    { "Gaussian σ=5", DistributionType::kGaussian, 3.76 },
+  };
+
+  for (const Case& c : kCases) {
+    auto scene = MakeMetalScene(/*max_hits=*/1, /*ms_layers=*/1);
+    // Near-pole: latitude_dist mean=90° (config zenith=0 equivalent), std=5°.
+    // Azimuth/roll uniform full-range so lon/roll draws don't perturb attempts.
+    scene.ms_[0].setting_[0].crystal_.axis_.latitude_dist = Distribution{ c.lat_type, 90.0f, 5.0f };
+    scene.ms_[0].setting_[0].crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+    scene.ms_[0].setting_[0].crystal_.axis_.roll_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+
+    auto render = MakeRectangularRender();
+    SessionSpec spec;
+    spec.scene = &scene;
+    spec.render = &render;
+    spec.wl = WlParam{ 550.0f, 1.0f };
+    spec.seed = 42;
+
+    HostRayBatch host;
+    host.count = kSmokeRayCount;
+    host.crystal = nullptr;
+    host.refractive_index = 0.0f;
+
+    MetalTraceBackend metal;
+    metal.BeginSession(spec);
+    MetalTraceBackendTestHooks hooks(metal);
+    hooks.EnableGenAttemptCount(kSmokeRayCount);
+    auto h = metal.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h, nullptr) << c.label << " — gen dispatch returned null.";
+
+    std::vector<int> attempts;
+    size_t n = hooks.ReadbackGenAttemptCount(attempts, kSmokeRayCount);
+    metal.EndSession();
+    ASSERT_EQ(n, kSmokeRayCount) << c.label << " — attempt-count readback returned " << n;
+
+    const AttemptStats stats = ComputeAttemptStats(attempts);
+
+    // Sanity: no ray should saturate the safety valve at these parameters.
+    // Any hit would contaminate mean(attempts) with a 1000-clamped outlier and
+    // invalidate the anchor comparison.
+    EXPECT_EQ(stats.safety_valve_hits, 0u)
+        << c.label << " — " << stats.safety_valve_hits
+        << " rays hit kMaxRejectionAttempts=1000; mean would be biased. max=" << stats.max;
+
+    // ±5% band (plan §Step 1 test point). Anchors from
+    // scratchpad/explore-near-pole-latitude-sampling-divergence/insights.md
+    // and doc/near-pole-area-measure-sampling.md §附录, verified by CPU
+    // instrumentation of math.cpp:503 rejection loop.
+    const double lo = c.anchor_mean_attempts * 0.95;
+    const double hi = c.anchor_mean_attempts * 1.05;
+    EXPECT_GE(stats.mean, lo) << c.label << " — mean(attempts)=" << stats.mean << " below anchor±5% [" << lo << ", "
+                              << hi << "] (anchor=" << c.anchor_mean_attempts << ").";
+    EXPECT_LE(stats.mean, hi) << c.label << " — mean(attempts)=" << stats.mean << " above anchor±5% [" << lo << ", "
+                              << hi << "] (anchor=" << c.anchor_mean_attempts << ").";
   }
 }
 
