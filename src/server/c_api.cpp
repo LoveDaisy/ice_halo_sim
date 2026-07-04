@@ -6,6 +6,8 @@
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <set>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -20,6 +22,7 @@
 #include "core/backend/cuda_trace_backend.hpp"  // CudaDeviceAvailable() for LUMICE_IsBackendAvailable
 #endif
 #include "include/lumice.h"
+#include "server/c_api_internal.hpp"
 #include "server/server.hpp"
 #include "util/callback_sink.hpp"
 #include "util/color_space.hpp"
@@ -196,7 +199,9 @@ static nlohmann::json AxisDistToJson(const LUMICE_AxisDist& d) {
   return j;
 }
 
-static nlohmann::json ConfigToJson(const LUMICE_Config& c) {
+// Non-static (declared in server/c_api_internal.hpp) so unit tests can assert the
+// emitted filter JSON shape field by field. See that header for rationale.
+nlohmann::json ConfigToJson(const LUMICE_Config& c) {
   using json = nlohmann::json;
   json root;
 
@@ -241,13 +246,85 @@ static nlohmann::json ConfigToJson(const LUMICE_Config& c) {
     const auto& f = c.filters[i];
     json j;
     j["id"] = f.id;
-    j["type"] = "raypath";
     j["action"] = f.action == 0 ? "filter_in" : "filter_out";
-    json rp = json::array();
-    for (int k = 0; k < f.raypath_count; k++) {
-      rp.push_back(f.raypath[k]);
+
+    // Type-specific fields. Mirrors core config/filter_config.cpp::to_json so that
+    // server->CommitConfig(json) -> from_json consumes the output losslessly.
+    // SYNC: the per-type field list here mirrors the parse side in JsonToFilter (below);
+    // adding/removing a filter type or field requires updating both.
+    switch (f.type) {
+      case LUMICE_FILTER_TYPE_NONE:
+        j["type"] = "none";
+        break;
+      case LUMICE_FILTER_TYPE_RAYPATH: {
+        j["type"] = "raypath";
+        json rp = json::array();
+        for (int k = 0; k < f.raypath_count; k++) {
+          rp.push_back(f.raypath[k]);
+        }
+        j["raypath"] = rp;
+        break;
+      }
+      case LUMICE_FILTER_TYPE_ENTRY_EXIT:
+        j["type"] = "entry_exit";
+        if (f.ee_entry >= 0) {
+          j["entry"] = f.ee_entry;
+        }
+        if (f.ee_exit >= 0) {
+          j["exit"] = f.ee_exit;
+        }
+        if (f.ee_min_len > 1) {
+          j["min_len"] = f.ee_min_len;
+        }
+        if (f.ee_max_len >= 0) {
+          j["max_len"] = f.ee_max_len;
+        }
+        break;
+      case LUMICE_FILTER_TYPE_DIRECTION:
+        j["type"] = "direction";
+        j["az"] = f.dir_az;
+        j["el"] = f.dir_el;
+        j["radii"] = f.dir_radii;
+        break;
+      case LUMICE_FILTER_TYPE_CRYSTAL:
+        j["type"] = "crystal";
+        j["crystal_id"] = f.crystal_id;
+        break;
+      case LUMICE_FILTER_TYPE_COMPLEX: {
+        j["type"] = "complex";
+        if (f.composition_index < 0 || f.composition_index >= c.composition_count) {
+          throw std::invalid_argument("LUMICE_FilterParam.composition_index out of range: " +
+                                      std::to_string(f.composition_index));
+        }
+        const auto& comp = c.compositions[f.composition_index];
+        json composition = json::array();
+        for (int cl = 0; cl < comp.clause_count; cl++) {
+          // Mirror core to_json: a 1-term clause emits a bare id; a multi-term clause an array.
+          if (comp.term_counts[cl] == 1) {
+            composition.push_back(comp.clauses[cl][0]);
+          } else {
+            json terms = json::array();
+            for (int t = 0; t < comp.term_counts[cl]; t++) {
+              terms.push_back(comp.clauses[cl][t]);
+            }
+            composition.push_back(terms);
+          }
+        }
+        j["composition"] = composition;
+        break;
+      }
+      default:
+        // UNSET (zero-init guard) or an out-of-range discriminant: fail fast rather
+        // than silently emitting a wrong/empty filter. Caller LUMICE_CommitConfigStruct
+        // wraps this in try/catch and maps it to LUMICE_ERR_INVALID_CONFIG.
+        throw std::invalid_argument("LUMICE_FilterParam.type is unset or invalid: " + std::to_string(f.type));
     }
-    j["raypath"] = rp;
+
+    // symmetry is a common FilterConfig field (see core filter_config.cpp::to_json, which
+    // emits it for every type before the per-type fields), so it stays outside the switch
+    // and applies to all arms — do not fold it into the raypath case. Emitted
+    // UNCONDITIONALLY (empty string when no bits set) to stay byte-isomorphic with core,
+    // whose to_json always writes j["symmetry"] = sym.
     std::string sym;
     if (f.symmetry & 1)
       sym += "P";
@@ -255,9 +332,7 @@ static nlohmann::json ConfigToJson(const LUMICE_Config& c) {
       sym += "B";
     if (f.symmetry & 4)
       sym += "D";
-    if (!sym.empty()) {
-      j["symmetry"] = sym;
-    }
+    j["symmetry"] = sym;
     root["filter"].push_back(j);
   }
 
@@ -345,15 +420,53 @@ LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_C
     return LUMICE_ERR_INVALID_CONFIG;
   }
 
-  auto config_json = ConfigToJson(*config);
+  // ConfigToJson is a new throw source (std::invalid_argument on an unset/invalid filter
+  // type — the zero-init guard); the raypath-only version never threw. server_->CommitConfig
+  // already converts core from_json exceptions to an Error return internally (server.cpp),
+  // so those don't reach here — this try/catch primarily guards ConfigToJson's throw from
+  // escaping the C ABI boundary. Map any escaped exception to LUMICE_ERR_INVALID_CONFIG.
   bool reused = false;
-  auto err = server->server_->CommitConfig(config_json, &reused);
-  if (err) {
-    LOG_ERROR("Failed to commit configuration (struct): {}", err.message);
-    return MapErrorCode(err.code);
+  try {
+    auto config_json = ConfigToJson(*config);
+    auto err = server->server_->CommitConfig(config_json, &reused);
+    if (err) {
+      LOG_ERROR("Failed to commit configuration (struct): {}", err.message);
+      return MapErrorCode(err.code);
+    }
+  } catch (const std::exception& e) {
+    LOG_ERROR("Failed to commit configuration (struct): invalid config: {}", e.what());
+    return LUMICE_ERR_INVALID_CONFIG;
   }
   if (out_reused) {
     *out_reused = reused ? 1 : 0;
+  }
+  return LUMICE_OK;
+}
+
+
+// =============== Configuration Serialization (LUMICE_Config -> JSON) ===============
+// Public serialization API: struct -> JSON string, the symmetric pair of the parsing
+// section below. snprintf-style caller buffer (see the contract in lumice.h). Wraps the
+// internal ConfigToJson, mapping its throw (unset/invalid filter type) to
+// LUMICE_ERR_INVALID_CONFIG so nothing escapes the C ABI boundary.
+LUMICE_ErrorCode LUMICE_ConfigToJson(const LUMICE_Config* config, char* out_buf, size_t buf_size, size_t* out_len) {
+  if (!config) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  std::string json_str;
+  try {
+    json_str = ConfigToJson(*config).dump();
+  } catch (const std::exception& e) {
+    LOG_ERROR("LUMICE_ConfigToJson: failed to serialize config: {}", e.what());
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  if (out_len) {
+    *out_len = json_str.size();
+  }
+  if (out_buf && buf_size > 0) {
+    size_t n = std::min(json_str.size(), buf_size - 1);
+    std::memcpy(out_buf, json_str.data(), n);
+    out_buf[n] = '\0';
   }
   return LUMICE_OK;
 }
@@ -476,10 +589,6 @@ static LUMICE_ErrorCode JsonToFilter(const nlohmann::json& fj, LUMICE_FilterPara
   }
   f->id = fj.at("id").get<int>();
 
-  if (fj.at("type").get<std::string>() != "raypath") {
-    return LUMICE_ERR_INVALID_VALUE;
-  }
-
   auto action_str = fj.at("action").get<std::string>();
   if (action_str == "filter_in") {
     f->action = 0;
@@ -489,18 +598,53 @@ static LUMICE_ErrorCode JsonToFilter(const nlohmann::json& fj, LUMICE_FilterPara
     return LUMICE_ERR_INVALID_VALUE;
   }
 
-  if (fj.contains("raypath") && fj.at("raypath").is_array()) {
-    const auto& rp = fj.at("raypath");
-    f->raypath_count = static_cast<int>(rp.size());
-    if (f->raypath_count > LUMICE_MAX_CONFIG_RAYPATH_LEN) {
-      return LUMICE_ERR_INVALID_CONFIG;
+  // Type-specific fields (JSON -> struct arm). Field names/defaults mirror core
+  // config/filter_config.cpp::from_json. Parse does lossless mapping ONLY: value
+  // validation (e.g. entry_exit min_len >= 1, max_len <= kMaxHits) stays single-source
+  // in core and fires at commit time (caught by LUMICE_CommitConfigStruct). -1 encodes
+  // an absent optional (wildcard / no bound).
+  // SYNC: the per-type field list here mirrors the emit side in ConfigToJson (above);
+  // adding/removing a filter type or field requires updating both.
+  auto type_str = fj.at("type").get<std::string>();
+  if (type_str == "none") {
+    f->type = LUMICE_FILTER_TYPE_NONE;
+  } else if (type_str == "raypath") {
+    f->type = LUMICE_FILTER_TYPE_RAYPATH;
+    if (fj.contains("raypath") && fj.at("raypath").is_array()) {
+      const auto& rp = fj.at("raypath");
+      f->raypath_count = static_cast<int>(rp.size());
+      if (f->raypath_count > LUMICE_MAX_CONFIG_RAYPATH_LEN) {
+        return LUMICE_ERR_INVALID_CONFIG;
+      }
+      for (int k = 0; k < f->raypath_count; k++) {
+        f->raypath[k] = rp[k].get<int>();
+      }
     }
-    for (int k = 0; k < f->raypath_count; k++) {
-      f->raypath[k] = rp[k].get<int>();
-    }
+  } else if (type_str == "entry_exit") {
+    f->type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+    f->ee_entry = (fj.contains("entry") && !fj.at("entry").is_null()) ? fj.at("entry").get<int>() : -1;
+    f->ee_exit = (fj.contains("exit") && !fj.at("exit").is_null()) ? fj.at("exit").get<int>() : -1;
+    f->ee_min_len = (fj.contains("min_len") && !fj.at("min_len").is_null()) ? fj.at("min_len").get<int>() : 1;
+    f->ee_max_len = (fj.contains("max_len") && !fj.at("max_len").is_null()) ? fj.at("max_len").get<int>() : -1;
+  } else if (type_str == "direction") {
+    f->type = LUMICE_FILTER_TYPE_DIRECTION;
+    f->dir_az = fj.at("az").get<float>();
+    f->dir_el = fj.at("el").get<float>();
+    f->dir_radii = fj.at("radii").get<float>();
+  } else if (type_str == "crystal") {
+    f->type = LUMICE_FILTER_TYPE_CRYSTAL;
+    f->crystal_id = fj.at("crystal_id").get<int>();
+  } else if (type_str == "complex") {
+    // Placeholder: type is set here, but composition + composition_index are resolved by
+    // the second pass in JsonToConfig (needs all simple filters parsed first so composition
+    // cell ids can be validated). -1 marks "not yet resolved".
+    f->type = LUMICE_FILTER_TYPE_COMPLEX;
+    f->composition_index = -1;
+  } else {
+    return LUMICE_ERR_INVALID_VALUE;  // unknown type string
   }
 
-  // Symmetry: string "PBD" -> bitmask
+  // Symmetry: common field for all types. "PBD" -> bitmask.
   f->symmetry = 0;
   if (fj.contains("symmetry")) {
     for (char ch : fj.at("symmetry").get<std::string>()) {
@@ -650,6 +794,60 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, LUMICE
   return LUMICE_OK;
 }
 
+// Resolve a complex filter's "composition" JSON into a LUMICE_Config compositions[] slot and
+// set f->composition_index. Validates reference integrity: each term id must reference an
+// existing SIMPLE (non-complex) filter, and clause/term/composition counts respect the ABI
+// bounds. Must run after all simple filters are parsed (two-pass, mirrors config_manager.cpp).
+static LUMICE_ErrorCode JsonToComplexComposition(const nlohmann::json& fj, LUMICE_Config* out, LUMICE_FilterParam* f) {
+  if (!fj.contains("composition") || !fj.at("composition").is_array()) {
+    return LUMICE_ERR_MISSING_FIELD;
+  }
+  const auto& cmp = fj.at("composition");
+  // Bounds are checked before writing into the pool slot so a rejected input never leaves a
+  // clause_count inconsistent with the ABI ceiling. An empty composition ([]) is accepted as
+  // a degenerate "OR of nothing" (clause_count == 0), mirroring core (no non-empty requirement).
+  if (out->composition_count >= LUMICE_MAX_CONFIG_COMPLEX || static_cast<int>(cmp.size()) > LUMICE_MAX_CONFIG_CLAUSES) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  int comp_idx = out->composition_count++;
+  LUMICE_ComplexComposition* comp = &out->compositions[comp_idx];
+  comp->clause_count = static_cast<int>(cmp.size());
+  for (int cl = 0; cl < comp->clause_count; cl++) {
+    const auto& clause = cmp[cl];
+    // A clause is either a bare id (1-term) or an array of ids (matches core to_json).
+    if (clause.is_array()) {
+      comp->term_counts[cl] = static_cast<int>(clause.size());
+      if (comp->term_counts[cl] > LUMICE_MAX_CONFIG_TERMS) {
+        return LUMICE_ERR_INVALID_CONFIG;
+      }
+      for (int t = 0; t < comp->term_counts[cl]; t++) {
+        comp->clauses[cl][t] = clause[t].get<int>();
+      }
+    } else {
+      comp->term_counts[cl] = 1;
+      comp->clauses[cl][0] = clause.get<int>();
+    }
+    // Reference integrity: each term must name an existing SIMPLE filter (dangling ids and
+    // references to a complex filter are rejected — the latter matches core semantics, which
+    // only allow SimpleFilterParam in a composition, so cycles are impossible by construction).
+    for (int t = 0; t < comp->term_counts[cl]; t++) {
+      int ref_id = comp->clauses[cl][t];
+      bool found_simple = false;
+      for (int k = 0; k < out->filter_count; k++) {
+        if (out->filters[k].id == ref_id && out->filters[k].type != LUMICE_FILTER_TYPE_COMPLEX) {
+          found_simple = true;
+          break;
+        }
+      }
+      if (!found_simple) {
+        return LUMICE_ERR_INVALID_CONFIG;
+      }
+    }
+  }
+  f->composition_index = comp_idx;
+  return LUMICE_OK;
+}
+
 static LUMICE_ErrorCode JsonToConfig(const nlohmann::json& root, LUMICE_Config* out) {
   std::memset(out, 0, sizeof(LUMICE_Config));
   out->spectrum = "D65";  // Safe default (memset leaves nullptr)
@@ -677,8 +875,20 @@ static LUMICE_ErrorCode JsonToConfig(const nlohmann::json& root, LUMICE_Config* 
       return LUMICE_ERR_INVALID_CONFIG;
     }
     out->filter_count = static_cast<int>(filters.size());
+    // Two-pass (mirrors core config_manager.cpp): pass 1 parses simple filters and marks
+    // complex ones as placeholders; pass 2 resolves complex compositions once every simple
+    // filter's id/type is known (needed to validate composition references).
     for (int i = 0; i < out->filter_count; i++) {
       auto err = JsonToFilter(filters[i], &out->filters[i]);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+    }
+    for (int i = 0; i < out->filter_count; i++) {
+      if (out->filters[i].type != LUMICE_FILTER_TYPE_COMPLEX) {
+        continue;
+      }
+      auto err = JsonToComplexComposition(filters[i], out, &out->filters[i]);
       if (err != LUMICE_OK) {
         return err;
       }

@@ -254,8 +254,7 @@ static json SerializeFilterForGui(const FilterConfig& f, int id) {
 // filter entries. `main_id` is the id the scattering entry should reference
 // (== last id emitted for multi-raypath OR; == base id for trivial cases).
 //
-// TU-local (file_io.cpp internal) — see plan §3 default assumption #IsTrivialFilterSet
-// pattern: helpers consumed only by SerializeCoreConfig stay private.
+// TU-local (file_io.cpp internal): helpers consumed only by SerializeCoreConfig stay private.
 struct FilterCoreResult {
   int main_id;
   std::vector<json> filters;
@@ -406,6 +405,11 @@ static int ClampIdValue(int v, const char* field_name) {
 // entry_exit/direction: 1 simple filter of the matching type.
 // next_filter_id_base: caller's id counter; result.main_id = next_filter_id_base + filters.size() - 1
 //                      (matters only for multi-raypath where main_id is the complex filter's id).
+//
+// SYNC: this is the JSON-emit twin of ExpandFilterToStruct (the C-struct emit, below). Any
+// change to the raypath/EE expansion (segment/pair -> N simple + 1 complex-of-singletons)
+// must update both; the struct-vs-JSON cross-check test (filter_expand_struct_vs_json) will
+// catch a drift, but keep the two in step here too.
 static FilterCoreResult SerializeFilterForCore(const FilterConfig& f, int next_filter_id_base) {
   FilterCoreResult result;
   result.main_id = next_filter_id_base;
@@ -898,36 +902,137 @@ static void FillCrystalParam(const CrystalConfig& c, int id, LUMICE_CrystalParam
   FillAxisDist(c.roll, &dst->roll);
 }
 
-// Helper: fill a LUMICE_FilterParam from GUI FilterConfig with a given ID.
-// PRECONDITION: caller must ensure the filter is a single-segment raypath
-// (IsTrivialFilterSet() is true for the whole GuiState). For non-raypath types
-// or multi-segment raypath, the caller must take the JSON commit path
-// (LUMICE_CommitConfig + SerializeCoreConfig) instead. The C struct path lacks
-// the ABI to express those types; routing them here would silently lose data.
-static void FillFilterParam(const FilterConfig& f, int id, LUMICE_FilterParam* dst) {
-  assert(f.IsRaypath() && "FillFilterParam called on non-raypath filter (route via SerializeCoreConfig instead)");
-  dst->id = id;
-  dst->action = f.action;
-  dst->symmetry = (f.sym_p ? 1 : 0) | (f.sym_b ? 2 : 0) | (f.sym_d ? 4 : 0);
-  auto rp = ParseRaypathText(f.RaypathText());
-  dst->raypath_count = static_cast<int>(std::min(rp.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_RAYPATH_LEN)));
-  for (int k = 0; k < dst->raypath_count; k++) {
-    dst->raypath[k] = rp[k];
-  }
+// Struct analog of SerializeFilterForCore: expand a GUI FilterConfig into one or more
+// LUMICE_FilterParam entries — a single simple filter, or (for multi-segment raypath /
+// multi-value EE) N simple filters + 1 complex referencing them via an out->compositions[]
+// slot. Appends to out->filters[] starting at *filter_idx, assigning ids from next_filter_id
+// (a running counter, matching SerializeCoreConfig). Sets *out_main_id to the id a scattering
+// entry should reference (the complex id when expanded, else the sole simple id). All ABI-
+// bounds checks are performed up front, so on overflow the function returns false WITHOUT any
+// partial writes to the counts (*filter_idx / composition_count untouched).
+//
+// SYNC: this mirrors SerializeFilterForCore (the JSON-emit twin) — any change to the
+// raypath/EE expansion (segment/pair -> N simple + 1 complex-of-singletons) must update both;
+// guarded by the struct-vs-JSON cross-check test.
+static bool ExpandFilterToStruct(const FilterConfig& f, int next_filter_id, LUMICE_Config* out, int* filter_idx,
+                                 int* out_main_id) {
+  const int action = f.action;
+  const int symmetry = (f.sym_p ? 1 : 0) | (f.sym_b ? 2 : 0) | (f.sym_d ? 4 : 0);
+  auto set_common = [&](LUMICE_FilterParam* dst, int id, int type) {
+    dst->id = id;
+    dst->type = type;
+    dst->action = action;
+    dst->symmetry = symmetry;
+  };
+
+  return std::visit(
+      [&](const auto& p) -> bool {
+        using T = std::decay_t<decltype(p)>;
+        if constexpr (std::is_same_v<T, RaypathParams>) {
+          auto segs = ParseRaypathTextMultiSegment(p.raypath_text);
+          auto fill_rp = [&](LUMICE_FilterParam* dst, int id, const std::vector<int>& seg) {
+            set_common(dst, id, LUMICE_FILTER_TYPE_RAYPATH);
+            dst->raypath_count =
+                static_cast<int>(std::min(seg.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_RAYPATH_LEN)));
+            for (int k = 0; k < dst->raypath_count; k++) {
+              dst->raypath[k] = seg[k];
+            }
+          };
+          if (segs.size() <= 1) {
+            if (*filter_idx >= LUMICE_MAX_CONFIG_FILTERS) {
+              return false;
+            }
+            fill_rp(&out->filters[(*filter_idx)++], next_filter_id, segs.empty() ? std::vector<int>{} : segs[0]);
+            *out_main_id = next_filter_id;
+            return true;
+          }
+          // Multi-segment OR: N simple raypaths + 1 complex (OR of singleton clauses).
+          const int n = static_cast<int>(segs.size());
+          if (n > LUMICE_MAX_CONFIG_CLAUSES || out->composition_count >= LUMICE_MAX_CONFIG_COMPLEX ||
+              *filter_idx + n + 1 > LUMICE_MAX_CONFIG_FILTERS) {
+            return false;
+          }
+          int comp_idx = out->composition_count++;
+          LUMICE_ComplexComposition* comp = &out->compositions[comp_idx];
+          comp->clause_count = n;
+          for (int i = 0; i < n; i++) {
+            int cid = next_filter_id + i;
+            fill_rp(&out->filters[(*filter_idx)++], cid, segs[i]);
+            comp->term_counts[i] = 1;
+            comp->clauses[i][0] = cid;
+          }
+          int complex_id = next_filter_id + n;
+          LUMICE_FilterParam* cdst = &out->filters[(*filter_idx)++];
+          set_common(cdst, complex_id, LUMICE_FILTER_TYPE_COMPLEX);
+          cdst->composition_index = comp_idx;
+          *out_main_id = complex_id;
+          return true;
+        } else if constexpr (std::is_same_v<T, EntryExitParams>) {
+          auto entries = ParseFaceNumberList(p.entry_text);
+          auto exits = ParseFaceNumberList(p.exit_text);
+          const auto bounds = DecodeLengthMode(p.length_mode, p.min_len, p.max_len);
+          const int pair_count = static_cast<int>(entries.size() * exits.size());
+          auto fill_ee = [&](LUMICE_FilterParam* dst, int id, int e, int x) {
+            set_common(dst, id, LUMICE_FILTER_TYPE_ENTRY_EXIT);
+            dst->ee_entry = (e == kEEWildcardSentinel) ? -1 : ClampIdValue(e, "entry");
+            dst->ee_exit = (x == kEEWildcardSentinel) ? -1 : ClampIdValue(x, "exit");
+            dst->ee_min_len = bounds.min_len;
+            dst->ee_max_len = bounds.max_len;
+          };
+          if (pair_count <= 1) {
+            if (*filter_idx >= LUMICE_MAX_CONFIG_FILTERS) {
+              return false;
+            }
+            fill_ee(&out->filters[(*filter_idx)++], next_filter_id, entries[0], exits[0]);
+            *out_main_id = next_filter_id;
+            return true;
+          }
+          if (pair_count > LUMICE_MAX_CONFIG_CLAUSES || out->composition_count >= LUMICE_MAX_CONFIG_COMPLEX ||
+              *filter_idx + pair_count + 1 > LUMICE_MAX_CONFIG_FILTERS) {
+            return false;
+          }
+          int comp_idx = out->composition_count++;
+          LUMICE_ComplexComposition* comp = &out->compositions[comp_idx];
+          comp->clause_count = pair_count;
+          int i = 0;
+          for (int e : entries) {
+            for (int x : exits) {
+              int cid = next_filter_id + i;
+              fill_ee(&out->filters[(*filter_idx)++], cid, e, x);
+              comp->term_counts[i] = 1;
+              comp->clauses[i][0] = cid;
+              i++;
+            }
+          }
+          int complex_id = next_filter_id + pair_count;
+          LUMICE_FilterParam* cdst = &out->filters[(*filter_idx)++];
+          set_common(cdst, complex_id, LUMICE_FILTER_TYPE_COMPLEX);
+          cdst->composition_index = comp_idx;
+          *out_main_id = complex_id;
+          return true;
+        } else {
+          return false;  // unreachable: FilterParamVariant only has Raypath/EntryExit
+        }
+      },
+      f.param);
 }
 
-void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
+// Returns false if a filter expansion exceeded the ABI bounds (composition pool / clause /
+// filter capacity); the caller must then keep the previously committed state (graceful
+// degradation), not commit `out`. Crystals still use the P+1 pool-id scheme; filters use a
+// running id counter (matching SerializeCoreConfig) because one GUI filter may expand into
+// N simple + 1 complex.
+bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
   std::memset(out, 0, sizeof(LUMICE_Config));
 
-  // ID-pool model: walk entries, dedupe by pool id, emit one C crystal/filter
-  // per reachable pool slot. Pool slot at index P becomes C API id P+1
-  // (1-based). Core's ConfigManager looks up by ID-field (not array position),
-  // so non-contiguous id sequences are safe when an orphan pool slot is
-  // skipped.
+  // ID-pool model: walk entries, dedupe by pool id, emit one C crystal per reachable pool
+  // slot (P -> C API id P+1). Filters map pool_id -> main_id (the id a scattering entry
+  // references; the complex id for an expanded multi-segment/multi-value filter).
   std::map<int, int> crystal_pool_to_core;  // pool_id -> C api id (1-based)
-  std::map<int, int> filter_pool_to_core;
+  std::map<int, int> filter_pool_to_core;   // pool_id -> main_id
   int crystal_idx = 0;
   int filter_idx = 0;
+  int next_filter_id = 1;  // running C-API filter id counter (mirrors SerializeCoreConfig)
 
   out->scatter_count =
       static_cast<int>(std::min(state.layers.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_SCATTER_LAYERS)));
@@ -959,17 +1064,23 @@ void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
 
       if (entry.filter_id.has_value()) {
         int fpool = *entry.filter_id;
-        int fid;
+        int fid = -1;
         auto it_f = filter_pool_to_core.find(fpool);
         if (it_f != filter_pool_to_core.end()) {
           fid = it_f->second;
-        } else if (filter_idx < LUMICE_MAX_CONFIG_FILTERS) {
-          fid = fpool + 1;  // 0-based pool → 1-based C API
-          filter_pool_to_core.emplace(fpool, fid);
-          FillFilterParam(state.filters[fpool], fid, &out->filters[filter_idx++]);
         } else {
-          // Filter buffer full — drop this entry's filter (entry survives).
-          fid = -1;
+          int before_idx = filter_idx;
+          int main_id = -1;
+          if (ExpandFilterToStruct(state.filters[fpool], next_filter_id, out, &filter_idx, &main_id)) {
+            next_filter_id += (filter_idx - before_idx);  // ids consumed == filters appended
+            filter_pool_to_core.emplace(fpool, main_id);
+            fid = main_id;
+          } else {
+            // Exceeded ABI bounds (composition pool / clause / filter capacity). Bail out
+            // immediately with false so the caller keeps the old committed state rather than
+            // commit a truncated config (no point finishing the rest of `out`, it is discarded).
+            return false;
+          }
         }
         dst_layer.entries[k].filter_id = fid;
       } else {
@@ -1026,6 +1137,8 @@ void FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
   out->infinite = state.sim.infinite ? 1 : 0;
   out->ray_num = static_cast<LUMICE_RayCount>(state.sim.ray_num_millions * 1e6);
   out->max_hits = state.sim.max_hits;
+
+  return true;
 }
 
 

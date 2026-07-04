@@ -14,7 +14,10 @@ struct PreviewViewport;
 class PreviewRenderer;
 
 // Fill LUMICE_Config C struct from GuiState (for LUMICE_CommitConfigStruct, bypasses JSON serialization)
-void FillLumiceConfig(const GuiState& state, LUMICE_Config* out);
+// Fill a LUMICE_Config from GuiState for the typed-struct commit path. Returns false if a
+// filter expansion exceeded the ABI bounds (composition pool / clause / filter capacity),
+// in which case the caller must NOT commit `out` and should keep the prior committed state.
+bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out);
 
 // Serialize GuiState to Core JSON string (for .lmc save and CLI compatibility)
 std::string SerializeCoreConfig(const GuiState& state);

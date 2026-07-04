@@ -1322,4 +1322,147 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::ClearImportComplexFilterWarning();
     };
   }
+
+  // 327.4 cross-check: the GUI filter expansion has two twins — SerializeFilterForCore
+  // (GUI -> JSON) and ExpandFilterToStruct (GUI -> C struct, via FillLumiceConfig). For the
+  // same GuiState the struct built directly must field-match the struct obtained by JSON
+  // round-trip. Guards the twins against drift (plan §3-2 / review Major 1).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "filter_expand_struct_vs_json");
+    t->TestFunc = [](ImGuiTestContext*) {
+      auto cross_check = [](gui::FilterParamVariant param) {
+        ResetTestState();
+        gui::g_state.crystals.clear();
+        gui::g_state.filters.clear();
+        gui::g_state.layers.clear();
+        gui::CrystalConfig c;
+        c.type = gui::CrystalType::kPrism;
+        c.height = 1.0f;
+        for (int i = 0; i < 6; ++i) {
+          c.face_distance[i] = 1.0f;
+        }
+        gui::g_state.crystals.push_back(c);
+        gui::FilterConfig f;
+        f.param = std::move(param);
+        gui::g_state.filters.push_back(f);
+        gui::Layer layer;
+        layer.probability = 1.0f;
+        gui::EntryCard e;
+        e.crystal_id = 0;
+        e.filter_id = 0;
+        e.proportion = 100.0f;
+        layer.entries.push_back(e);
+        gui::g_state.layers.push_back(layer);
+
+        LUMICE_Config from_struct{};
+        IM_CHECK(gui::FillLumiceConfig(gui::g_state, &from_struct));  // struct path (ExpandFilterToStruct)
+        std::string json = gui::SerializeCoreConfig(gui::g_state);    // JSON path (SerializeFilterForCore)
+        LUMICE_Config from_json{};
+        IM_CHECK_EQ(LUMICE_ParseConfigString(json.c_str(), &from_json), LUMICE_OK);
+
+        IM_CHECK_EQ(from_struct.filter_count, from_json.filter_count);
+        IM_CHECK_EQ(from_struct.composition_count, from_json.composition_count);
+        for (int i = 0; i < from_struct.filter_count; i++) {
+          const LUMICE_FilterParam& a = from_struct.filters[i];
+          const LUMICE_FilterParam& b = from_json.filters[i];
+          IM_CHECK_EQ(a.id, b.id);
+          IM_CHECK_EQ(a.type, b.type);
+          IM_CHECK_EQ(a.action, b.action);
+          IM_CHECK_EQ(a.symmetry, b.symmetry);
+          if (a.type == LUMICE_FILTER_TYPE_RAYPATH) {
+            IM_CHECK_EQ(a.raypath_count, b.raypath_count);
+            for (int k = 0; k < a.raypath_count; k++) {
+              IM_CHECK_EQ(a.raypath[k], b.raypath[k]);
+            }
+          } else if (a.type == LUMICE_FILTER_TYPE_ENTRY_EXIT) {
+            IM_CHECK_EQ(a.ee_entry, b.ee_entry);
+            IM_CHECK_EQ(a.ee_exit, b.ee_exit);
+            IM_CHECK_EQ(a.ee_min_len, b.ee_min_len);
+            IM_CHECK_EQ(a.ee_max_len, b.ee_max_len);
+          } else if (a.type == LUMICE_FILTER_TYPE_COMPLEX) {
+            const LUMICE_ComplexComposition& ca = from_struct.compositions[a.composition_index];
+            const LUMICE_ComplexComposition& cb = from_json.compositions[b.composition_index];
+            IM_CHECK_EQ(ca.clause_count, cb.clause_count);
+            for (int cl = 0; cl < ca.clause_count; cl++) {
+              IM_CHECK_EQ(ca.term_counts[cl], cb.term_counts[cl]);
+              for (int tt = 0; tt < ca.term_counts[cl]; tt++) {
+                IM_CHECK_EQ(ca.clauses[cl][tt], cb.clauses[cl][tt]);
+              }
+            }
+          }
+        }
+      };
+      cross_check(gui::RaypathParams{ "3-1-5" });          // single-segment -> 1 simple raypath
+      cross_check(gui::RaypathParams{ "3-5; 1-4; 2-6" });  // multi-segment -> 3 simple + 1 complex
+      cross_check(gui::EntryExitParams{ "3", "5" });       // single pair -> 1 simple EE
+      gui::EntryExitParams ee_multi{ "3,5", "1" };         // 2x1 -> 2 simple + 1 complex
+      ee_multi.length_mode = 3;
+      ee_multi.min_len = 2;
+      ee_multi.max_len = 6;
+      cross_check(ee_multi);
+
+      // Overflow: a raypath with more than LUMICE_MAX_CONFIG_CLAUSES OR segments exceeds the
+      // composition ABI bounds -> FillLumiceConfig must return false (graceful degradation),
+      // so app.cpp keeps the prior committed state instead of committing a truncated config.
+      {
+        ResetTestState();
+        gui::g_state.crystals.clear();
+        gui::g_state.filters.clear();
+        gui::g_state.layers.clear();
+        gui::CrystalConfig c;
+        c.type = gui::CrystalType::kPrism;
+        c.height = 1.0f;
+        for (int i = 0; i < 6; ++i) {
+          c.face_distance[i] = 1.0f;
+        }
+        gui::g_state.crystals.push_back(c);
+        std::string too_many_segments;  // LUMICE_MAX_CONFIG_CLAUSES + 1 OR segments
+        for (int i = 0; i < LUMICE_MAX_CONFIG_CLAUSES + 1; ++i) {
+          if (i) {
+            too_many_segments += ";";
+          }
+          too_many_segments += "3-5";
+        }
+        gui::FilterConfig f;
+        f.param = gui::RaypathParams{ too_many_segments };
+        gui::g_state.filters.push_back(f);
+        gui::Layer layer;
+        layer.probability = 1.0f;
+        gui::EntryCard e;
+        e.crystal_id = 0;
+        e.filter_id = 0;
+        e.proportion = 100.0f;
+        layer.entries.push_back(e);
+        gui::g_state.layers.push_back(layer);
+        LUMICE_Config over{};
+        IM_CHECK(!gui::FillLumiceConfig(gui::g_state, &over));  // over ABI bounds -> false
+        // "no partial writes on overflow" contract (ExpandFilterToStruct doc): the overflowing
+        // filter bails before any filter/composition is written for it.
+        IM_CHECK_EQ(over.filter_count, 0);
+        IM_CHECK_EQ(over.composition_count, 0);
+      }
+    };
+  }
+
+  // 327.4 anti-spam: SetGuiWarning is idempotent while the same message is in-flight, so an
+  // over-bounds filter re-detected on every debounced commit does NOT re-open the modal and
+  // freeze interaction. ClearGuiWarning (a successful commit) re-arms it.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "gui_warning_dedup");
+    t->TestFunc = [](ImGuiTestContext*) {
+      gui::ClearGuiWarning();
+      IM_CHECK(gui::PeekGuiWarning().empty());
+      gui::SetGuiWarning("over-bounds A");
+      IM_CHECK_STR_EQ(gui::PeekGuiWarning().c_str(), "over-bounds A");
+      gui::SetGuiWarning("over-bounds A");  // same message -> idempotent, no re-open
+      IM_CHECK_STR_EQ(gui::PeekGuiWarning().c_str(), "over-bounds A");
+      gui::SetGuiWarning("over-bounds B");  // different -> updates (would re-open)
+      IM_CHECK_STR_EQ(gui::PeekGuiWarning().c_str(), "over-bounds B");
+      gui::ClearGuiWarning();  // successful commit re-arms
+      IM_CHECK(gui::PeekGuiWarning().empty());
+      gui::SetGuiWarning("over-bounds A");  // same message after a clear -> warns again
+      IM_CHECK_STR_EQ(gui::PeekGuiWarning().c_str(), "over-bounds A");
+      gui::ClearGuiWarning();
+    };
+  }
 }

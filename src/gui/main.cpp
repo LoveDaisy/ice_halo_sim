@@ -347,6 +347,7 @@ int main(int argc, char** argv) {
     gui::RenderSpectrumModal(gui::g_state);
     gui::RenderUnsavedPopup(window);
     gui::RenderImportWarningPopup();
+    gui::RenderGuiWarningPopup();
 
     // Reset aspect ratio to Free when panel collapse state changes (window size doesn't adjust automatically).
     if (gui::g_state.left_panel_collapsed != prev_left_collapsed ||

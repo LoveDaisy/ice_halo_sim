@@ -1096,6 +1096,59 @@ void RenderImportWarningPopup() {
   }
 }
 
+// Generic GUI warning modal (not import-specific). Fires ONCE per distinct warning episode:
+// SetGuiWarning is idempotent while the same message is in-flight, so a persistent condition
+// re-detected on every debounced commit (e.g. an over-bounds filter re-checked on each 70ms
+// DoRun while the user drags an unrelated slider) does NOT re-open the modal and freeze
+// interaction. ClearGuiWarning (called on a successful commit) re-arms it so a later
+// re-occurrence of the same condition warns again.
+//
+// Identity contract (the message text IS the episode key): callers MUST guarantee that one
+// logical warning event always produces byte-identical text, and that distinct events use
+// distinct text. Today the only caller (DoRun over-bounds) uses a constant string, so this
+// holds. Before a second caller reuses this modal, promote the key from message content to an
+// explicit warning-id/source enum (text becomes display-only) to avoid text collisions
+// (two events, same wording -> new warning swallowed) or wording drift (one event, changed
+// wording -> spurious re-open).
+std::string g_gui_warning_current;   // "" = none; else the message currently in-flight
+bool g_gui_warning_trigger = false;  // request OpenPopup on the next render
+
+void SetGuiWarning(const std::string& msg) {
+  if (msg == g_gui_warning_current) {
+    return;  // this exact warning is already showing / dismissed — do not re-open (anti-spam)
+  }
+  g_gui_warning_current = msg;
+  g_gui_warning_trigger = true;
+}
+
+void ClearGuiWarning() {
+  g_gui_warning_current.clear();
+  g_gui_warning_trigger = false;
+}
+
+// Test accessor: the message currently in-flight ("" if none).
+std::string PeekGuiWarning() {
+  return g_gui_warning_current;
+}
+
+void RenderGuiWarningPopup() {
+  if (g_gui_warning_trigger) {
+    g_gui_warning_trigger = false;
+    ImGui::OpenPopup("Warning");
+  }
+  if (ImGui::BeginPopupModal("Warning", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::TextUnformatted(g_gui_warning_current.c_str());
+    ImGui::Separator();
+    if (ImGui::Button("OK", ImVec2(80, 0))) {
+      // Keep g_gui_warning_current set so the same persistent condition, re-detected on the
+      // next debounced commit, is deduped (does not re-open). ClearGuiWarning (on a successful
+      // commit) re-arms it.
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+}
+
 void RenderUnsavedPopup(GLFWwindow* window) {
   if (g_show_unsaved_popup) {
     ImGui::OpenPopup("Unsaved Changes");

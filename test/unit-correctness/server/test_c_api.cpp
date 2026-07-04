@@ -8,12 +8,16 @@
 #include <fstream>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <set>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
+#include "config/filter_config.hpp"  // core FilterConfig + to_json, for emit isomorphism cross-check
 #include "core/crystal.hpp"
 #include "core/def.hpp"
 #include "include/lumice.h"
+#include "server/c_api_internal.hpp"  // ConfigToJson (test-only exposure) for emit-shape assertions
 
 // Regression guard (task-fix-stats-ray-count-u32-overflow): ray-count fields must be
 // 64-bit so totals > 2^32 never truncate on Windows, where `unsigned long` is 32-bit
@@ -544,7 +548,8 @@ TEST(ParseConfigApi, FullConfigWithPyramidAndFilter) {
 
   // Filter
   EXPECT_EQ(config.filter_count, 1);
-  EXPECT_EQ(config.filters[0].action, 0);  // filter_in
+  EXPECT_EQ(config.filters[0].type, LUMICE_FILTER_TYPE_RAYPATH);  // JsonToFilter sets discriminant
+  EXPECT_EQ(config.filters[0].action, 0);                         // filter_in
   EXPECT_EQ(config.filters[0].raypath_count, 2);
   EXPECT_EQ(config.filters[0].raypath[0], 3);
   EXPECT_EQ(config.filters[0].raypath[1], 5);
@@ -1330,4 +1335,886 @@ TEST(BackendAvailabilityApi, CachedAcrossCalls) {
   for (int i = 0; i < 8; ++i) {
     EXPECT_EQ(LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL), kFirst);
   }
+}
+
+// =====================================================================================
+// task-struct-simple-arms (327.2): LUMICE_FilterParam 5-arm tagged union.
+//
+// Emit-shape tests call ConfigToJson directly (via server/c_api_internal.hpp) and assert
+// the JSON field-by-field, so an emit-side field-name/condition error is caught HERE
+// rather than masked by core's lenient from_json (which would default missing fields and
+// still let LUMICE_CommitConfigStruct return OK). Commit tests then verify the end-to-end
+// ABI-safe path: valid simple types commit; UNSET(0)/out-of-range type -> INVALID_CONFIG
+// (via ConfigToJson throw + CommitConfigStruct catch), never a crash across the C ABI.
+// =====================================================================================
+
+namespace {
+// Minimal LUMICE_Config carrying exactly one filter, for ConfigToJson emit assertions.
+// Other sections stay empty (counts 0) so ConfigToJson's crystal/render/scatter loops are
+// no-ops; spectrum == nullptr resolves to "D65". ConfigToJson does not validate, so this
+// is enough to inspect the emitted filter shape without a server.
+LUMICE_Config MakeOneFilterConfig(const LUMICE_FilterParam& f) {
+  LUMICE_Config config{};
+  config.filter_count = 1;
+  config.filters[0] = f;
+  return config;
+}
+
+// Assert the emitted filter object has EXACTLY this key set — catches both a missing
+// field and an unexpected/cross-arm field (e.g. a Direction filter that wrongly carries
+// "raypath" or "entry"). Per-field EXPECT_EQ alone only checks presence, never absence.
+void ExpectFilterKeys(const nlohmann::json& jf, const std::set<std::string>& expected) {
+  std::set<std::string> actual;
+  for (auto it = jf.begin(); it != jf.end(); ++it) {
+    actual.insert(it.key());
+  }
+  EXPECT_EQ(actual, expected);
+}
+}  // namespace
+
+TEST(StructFilterEmit, None) {
+  LUMICE_FilterParam f{};
+  f.id = 7;
+  f.action = 0;  // filter_in
+  f.type = LUMICE_FILTER_TYPE_NONE;
+  auto root = ConfigToJson(MakeOneFilterConfig(f));
+  const auto& jf = root.at("filter").at(0);
+  EXPECT_EQ(jf.at("id").get<int>(), 7);
+  EXPECT_EQ(jf.at("type").get<std::string>(), "none");
+  EXPECT_EQ(jf.at("action").get<std::string>(), "filter_in");
+  // No symmetry bits set -> no "symmetry" key; no arm-specific fields for "none".
+  ExpectFilterKeys(jf, { "id", "action", "type", "symmetry" });
+}
+
+TEST(StructFilterEmit, Raypath) {
+  LUMICE_FilterParam f{};
+  f.id = 1;
+  f.action = 1;  // filter_out
+  f.type = LUMICE_FILTER_TYPE_RAYPATH;
+  f.raypath_count = 3;
+  f.raypath[0] = 3;
+  f.raypath[1] = 1;
+  f.raypath[2] = 5;
+  f.symmetry = 1 | 2;  // P | B
+  auto root = ConfigToJson(MakeOneFilterConfig(f));
+  const auto& jf = root.at("filter").at(0);
+  EXPECT_EQ(jf.at("type").get<std::string>(), "raypath");
+  EXPECT_EQ(jf.at("action").get<std::string>(), "filter_out");
+  ASSERT_TRUE(jf.at("raypath").is_array());
+  EXPECT_EQ(jf.at("raypath").size(), 3u);
+  EXPECT_EQ(jf.at("raypath")[0].get<int>(), 3);
+  EXPECT_EQ(jf.at("raypath")[2].get<int>(), 5);
+  EXPECT_EQ(jf.at("symmetry").get<std::string>(), "PB");
+  ExpectFilterKeys(jf, { "id", "action", "type", "raypath", "symmetry" });
+}
+
+TEST(StructFilterEmit, EntryExitAllFields) {
+  LUMICE_FilterParam f{};
+  f.id = 2;
+  f.type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+  f.ee_entry = 3;
+  f.ee_exit = 5;
+  f.ee_min_len = 2;
+  f.ee_max_len = 8;
+  auto root = ConfigToJson(MakeOneFilterConfig(f));
+  const auto& jf = root.at("filter").at(0);
+  EXPECT_EQ(jf.at("type").get<std::string>(), "entry_exit");
+  EXPECT_EQ(jf.at("entry").get<int>(), 3);
+  EXPECT_EQ(jf.at("exit").get<int>(), 5);
+  EXPECT_EQ(jf.at("min_len").get<int>(), 2);
+  EXPECT_EQ(jf.at("max_len").get<int>(), 8);
+  ExpectFilterKeys(jf, { "id", "action", "type", "symmetry", "entry", "exit", "min_len", "max_len" });
+}
+
+TEST(StructFilterEmit, EntryExitWildcardsOmitted) {
+  // -1 sentinels (wildcard entry/exit, no max_len) and min_len == 1 must be omitted,
+  // mirroring core to_json which only emits set / non-default optional fields.
+  LUMICE_FilterParam f{};
+  f.id = 2;
+  f.type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+  f.ee_entry = -1;
+  f.ee_exit = -1;
+  f.ee_min_len = 1;
+  f.ee_max_len = -1;
+  auto root = ConfigToJson(MakeOneFilterConfig(f));
+  const auto& jf = root.at("filter").at(0);
+  EXPECT_EQ(jf.at("type").get<std::string>(), "entry_exit");
+  EXPECT_FALSE(jf.contains("entry"));
+  EXPECT_FALSE(jf.contains("exit"));
+  EXPECT_FALSE(jf.contains("min_len"));
+  EXPECT_FALSE(jf.contains("max_len"));
+  ExpectFilterKeys(jf, { "id", "action", "type", "symmetry" });
+}
+
+TEST(StructFilterEmit, Direction) {
+  LUMICE_FilterParam f{};
+  f.id = 4;
+  f.type = LUMICE_FILTER_TYPE_DIRECTION;
+  f.dir_az = 120.0f;
+  f.dir_el = -15.0f;
+  f.dir_radii = 2.5f;
+  auto root = ConfigToJson(MakeOneFilterConfig(f));
+  const auto& jf = root.at("filter").at(0);
+  EXPECT_EQ(jf.at("type").get<std::string>(), "direction");
+  EXPECT_FLOAT_EQ(jf.at("az").get<float>(), 120.0f);
+  EXPECT_FLOAT_EQ(jf.at("el").get<float>(), -15.0f);
+  EXPECT_FLOAT_EQ(jf.at("radii").get<float>(), 2.5f);
+  ExpectFilterKeys(jf, { "id", "action", "type", "symmetry", "az", "el", "radii" });
+}
+
+TEST(StructFilterEmit, Crystal) {
+  LUMICE_FilterParam f{};
+  f.id = 5;
+  f.type = LUMICE_FILTER_TYPE_CRYSTAL;
+  f.crystal_id = 2;
+  auto root = ConfigToJson(MakeOneFilterConfig(f));
+  const auto& jf = root.at("filter").at(0);
+  EXPECT_EQ(jf.at("type").get<std::string>(), "crystal");
+  EXPECT_EQ(jf.at("crystal_id").get<int>(), 2);
+  ExpectFilterKeys(jf, { "id", "action", "type", "symmetry", "crystal_id" });
+}
+
+TEST(StructFilterEmit, UnsetTypeThrows) {
+  // Zero-init guard: type == UNSET(0) must throw, not silently emit "none".
+  LUMICE_FilterParam f{};  // type defaults to 0 == UNSET
+  f.id = 1;
+  EXPECT_THROW(ConfigToJson(MakeOneFilterConfig(f)), std::invalid_argument);
+}
+
+TEST(StructFilterEmit, OutOfRangeTypeThrows) {
+  LUMICE_FilterParam f{};
+  f.id = 1;
+  f.type = 99;  // out of range
+  EXPECT_THROW(ConfigToJson(MakeOneFilterConfig(f)), std::invalid_argument);
+}
+
+// --- Isomorphism cross-check against core's own to_json -------------------------------
+// The AC is "emit JSON isomorphic to filter_config.cpp::to_json". Rather than hand-copy
+// the expected field list (which twice missed the symmetry key-presence detail), build
+// the equivalent core lumice::FilterConfig, run core's to_json (the source of truth), and
+// assert byte-equality with ConfigToJson's filter object. This catches any future drift.
+
+namespace {
+void ExpectEmitMatchesCore(const LUMICE_FilterParam& lf, const lumice::FilterConfig& fc) {
+  nlohmann::json core_j = fc;  // ADL -> lumice::to_json(json&, const FilterConfig&)
+  auto my_j = ConfigToJson(MakeOneFilterConfig(lf)).at("filter").at(0);
+  EXPECT_EQ(my_j, core_j) << "C-API emit:\n" << my_j.dump(2) << "\ncore to_json:\n" << core_j.dump(2);
+}
+}  // namespace
+
+TEST(StructFilterEmitIsomorphism, None) {
+  lumice::FilterConfig fc;
+  fc.id_ = 7;
+  fc.symmetry_ = lumice::FilterConfig::kSymNone;
+  fc.action_ = lumice::FilterConfig::kFilterIn;
+  fc.param_ = lumice::SimpleFilterParam{ lumice::NoneFilterParam{} };
+  LUMICE_FilterParam lf{};
+  lf.id = 7;
+  lf.action = 0;
+  lf.symmetry = 0;
+  lf.type = LUMICE_FILTER_TYPE_NONE;
+  ExpectEmitMatchesCore(lf, fc);
+}
+
+TEST(StructFilterEmitIsomorphism, RaypathWithSymmetry) {
+  lumice::FilterConfig fc;
+  fc.id_ = 1;
+  fc.symmetry_ = lumice::FilterConfig::kSymP | lumice::FilterConfig::kSymB;
+  fc.action_ = lumice::FilterConfig::kFilterOut;
+  fc.param_ = lumice::SimpleFilterParam{ lumice::RaypathFilterParam{ std::vector<lumice::IdType>{ 3, 1, 5 } } };
+  LUMICE_FilterParam lf{};
+  lf.id = 1;
+  lf.action = 1;
+  lf.symmetry = 1 | 2;
+  lf.type = LUMICE_FILTER_TYPE_RAYPATH;
+  lf.raypath_count = 3;
+  lf.raypath[0] = 3;
+  lf.raypath[1] = 1;
+  lf.raypath[2] = 5;
+  ExpectEmitMatchesCore(lf, fc);
+}
+
+TEST(StructFilterEmitIsomorphism, EntryExitFull) {
+  lumice::EntryExitFilterParam ee;
+  ee.entry_ = lumice::IdType{ 3 };
+  ee.exit_ = lumice::IdType{ 5 };
+  ee.min_len_ = 2;
+  ee.max_len_ = std::size_t{ 8 };
+  lumice::FilterConfig fc;
+  fc.id_ = 2;
+  fc.symmetry_ = lumice::FilterConfig::kSymNone;
+  fc.action_ = lumice::FilterConfig::kFilterIn;
+  fc.param_ = lumice::SimpleFilterParam{ ee };
+  LUMICE_FilterParam lf{};
+  lf.id = 2;
+  lf.action = 0;
+  lf.symmetry = 0;
+  lf.type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+  lf.ee_entry = 3;
+  lf.ee_exit = 5;
+  lf.ee_min_len = 2;
+  lf.ee_max_len = 8;
+  ExpectEmitMatchesCore(lf, fc);
+}
+
+TEST(StructFilterEmitIsomorphism, EntryExitWildcardsWithSymmetry) {
+  // Covers "symmetry set + non-raypath type" (the combination prior tests skipped) AND
+  // the wildcard/omitted-field path, cross-checked against core.
+  lumice::EntryExitFilterParam ee;  // entry_/exit_/max_len_ = nullopt, min_len_ = 1
+  lumice::FilterConfig fc;
+  fc.id_ = 2;
+  fc.symmetry_ = lumice::FilterConfig::kSymP | lumice::FilterConfig::kSymB;
+  fc.action_ = lumice::FilterConfig::kFilterIn;
+  fc.param_ = lumice::SimpleFilterParam{ ee };
+  LUMICE_FilterParam lf{};
+  lf.id = 2;
+  lf.action = 0;
+  lf.symmetry = 1 | 2;
+  lf.type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+  lf.ee_entry = -1;
+  lf.ee_exit = -1;
+  lf.ee_min_len = 1;
+  lf.ee_max_len = -1;
+  ExpectEmitMatchesCore(lf, fc);
+}
+
+TEST(StructFilterEmitIsomorphism, Direction) {
+  lumice::DirectionFilterParam dir;
+  dir.lon_ = 120.0f;
+  dir.lat_ = -15.0f;
+  dir.radii_ = 2.5f;
+  lumice::FilterConfig fc;
+  fc.id_ = 4;
+  fc.symmetry_ = lumice::FilterConfig::kSymNone;
+  fc.action_ = lumice::FilterConfig::kFilterIn;
+  fc.param_ = lumice::SimpleFilterParam{ dir };
+  LUMICE_FilterParam lf{};
+  lf.id = 4;
+  lf.action = 0;
+  lf.symmetry = 0;
+  lf.type = LUMICE_FILTER_TYPE_DIRECTION;
+  lf.dir_az = 120.0f;
+  lf.dir_el = -15.0f;
+  lf.dir_radii = 2.5f;
+  ExpectEmitMatchesCore(lf, fc);
+}
+
+TEST(StructFilterEmitIsomorphism, Crystal) {
+  lumice::CrystalFilterParam cr;
+  cr.crystal_id_ = lumice::IdType{ 2 };
+  lumice::FilterConfig fc;
+  fc.id_ = 5;
+  fc.symmetry_ = lumice::FilterConfig::kSymNone;
+  fc.action_ = lumice::FilterConfig::kFilterIn;
+  fc.param_ = lumice::SimpleFilterParam{ cr };
+  LUMICE_FilterParam lf{};
+  lf.id = 5;
+  lf.action = 0;
+  lf.symmetry = 0;
+  lf.type = LUMICE_FILTER_TYPE_CRYSTAL;
+  lf.crystal_id = 2;
+  ExpectEmitMatchesCore(lf, fc);
+}
+
+// --- End-to-end commit through LUMICE_CommitConfigStruct ------------------------------
+
+namespace {
+// Parse the full config (crystals + scene + one referenced filter), then replace that
+// filter (keeping its id, so the scattering reference stays valid) with `f` and shrink to
+// a fast finite sim. Returns the config ready for LUMICE_CommitConfigStruct.
+LUMICE_Config MakeCommitConfigWithFilter(const LUMICE_FilterParam& f) {
+  LUMICE_Config config{};
+  EXPECT_EQ(LUMICE_ParseConfigString(MakeFullConfigJson().c_str(), &config), LUMICE_OK);
+  EXPECT_GE(config.filter_count, 1);
+  const int fid = config.filters[0].id;
+  config.filters[0] = f;
+  config.filters[0].id = fid;
+  config.infinite = 0;
+  config.ray_num = 100;
+  return config;
+}
+
+int CommitFilter(const LUMICE_FilterParam& f) {
+  LUMICE_Config config = MakeCommitConfigWithFilter(f);
+  auto* server = LUMICE_CreateServer();
+  EXPECT_NE(server, nullptr);
+  int reused = -1;
+  auto err = LUMICE_CommitConfigStruct(server, &config, &reused);
+  LUMICE_StopServer(server);
+  LUMICE_DestroyServer(server);
+  return err;
+}
+}  // namespace
+
+TEST(StructFilterCommit, EntryExitCommitsOk) {
+  LUMICE_FilterParam f{};
+  f.action = 0;
+  f.type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+  f.ee_entry = 3;
+  f.ee_exit = 5;
+  f.ee_min_len = 1;
+  f.ee_max_len = -1;
+  EXPECT_EQ(CommitFilter(f), LUMICE_OK);
+}
+
+TEST(StructFilterCommit, DirectionCommitsOk) {
+  LUMICE_FilterParam f{};
+  f.action = 0;
+  f.type = LUMICE_FILTER_TYPE_DIRECTION;
+  f.dir_az = 22.0f;
+  f.dir_el = 0.0f;
+  f.dir_radii = 5.0f;
+  EXPECT_EQ(CommitFilter(f), LUMICE_OK);
+}
+
+TEST(StructFilterCommit, CrystalCommitsOk) {
+  LUMICE_FilterParam f{};
+  f.action = 0;
+  f.type = LUMICE_FILTER_TYPE_CRYSTAL;
+  f.crystal_id = 1;  // MakeFullConfigJson defines crystals with ids 1 and 2
+  EXPECT_EQ(CommitFilter(f), LUMICE_OK);
+}
+
+TEST(StructFilterCommit, UnsetTypeReturnsInvalidConfigNotCrash) {
+  // A construction site that forgot to set `type` zero-inits to UNSET(0). ConfigToJson
+  // throws; LUMICE_CommitConfigStruct must catch and return INVALID_CONFIG, never crash.
+  LUMICE_FilterParam f{};  // type == UNSET
+  f.action = 0;
+  f.type = LUMICE_FILTER_TYPE_UNSET;
+  f.raypath_count = 1;
+  f.raypath[0] = 3;
+  EXPECT_EQ(CommitFilter(f), LUMICE_ERR_INVALID_CONFIG);
+}
+
+TEST(StructFilterCommit, OutOfRangeTypeReturnsInvalidConfigNotCrash) {
+  LUMICE_FilterParam f{};
+  f.action = 0;
+  f.type = 99;  // out of range
+  EXPECT_EQ(CommitFilter(f), LUMICE_ERR_INVALID_CONFIG);
+}
+
+// =====================================================================================
+// task-serialize-completion (327.1): parse direction (JSON -> struct) for all 5 simple
+// types + public LUMICE_ConfigToJson. Round-trip goes through the public serialize + parse
+// APIs; cross-check against core from_json (source of truth) rather than hand-transcribed
+// expectations (see learnings: contract-and-property-tests / emit-schema cross-check).
+// =====================================================================================
+
+namespace {
+// struct -> JSON (public LUMICE_ConfigToJson) -> struct (LUMICE_ParseConfigString). Returns
+// the round-tripped filters[0]. Exercises both new 327.1 pieces end to end.
+LUMICE_FilterParam RoundTripFilter(const LUMICE_FilterParam& in) {
+  LUMICE_Config cfg = MakeOneFilterConfig(in);
+  // Zero-init so that if LUMICE_ConfigToJson unexpectedly fails, the subsequent
+  // LUMICE_ParseConfigString sees a valid empty C-string (loud parse error) rather than
+  // reading uninitialized stack memory (ASSERT_EQ can't be used in this value-returning
+  // helper). Truncation is covered separately by ConfigToJsonBufferTruncationContract.
+  char buf[8192] = {};
+  size_t len = 0;
+  EXPECT_EQ(LUMICE_ConfigToJson(&cfg, buf, sizeof(buf), &len), LUMICE_OK);
+  EXPECT_LT(len, sizeof(buf));  // these small configs never truncate
+  LUMICE_Config out{};
+  EXPECT_EQ(LUMICE_ParseConfigString(buf, &out), LUMICE_OK);
+  EXPECT_EQ(out.filter_count, 1);
+  return out.filters[0];
+}
+
+// Replace MakeFullConfigJson's filter[0] with `jf` (id kept 1 so scattering ref stays valid)
+// and return the full config JSON string, for parse-side tests.
+std::string FullConfigWithFilterJson(const nlohmann::json& jf) {
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  root["filter"][0] = jf;
+  return root.dump();
+}
+}  // namespace
+
+TEST(StructFilterParse, NoneRoundTrip) {
+  LUMICE_FilterParam in{};
+  in.id = 7;
+  in.action = 0;
+  in.type = LUMICE_FILTER_TYPE_NONE;
+  auto out = RoundTripFilter(in);
+  EXPECT_EQ(out.type, LUMICE_FILTER_TYPE_NONE);
+  EXPECT_EQ(out.action, 0);
+}
+
+TEST(StructFilterParse, RaypathRoundTrip) {
+  LUMICE_FilterParam in{};
+  in.id = 1;
+  in.action = 1;
+  in.symmetry = 1 | 2;
+  in.type = LUMICE_FILTER_TYPE_RAYPATH;
+  in.raypath_count = 3;
+  in.raypath[0] = 3;
+  in.raypath[1] = 1;
+  in.raypath[2] = 5;
+  auto out = RoundTripFilter(in);
+  EXPECT_EQ(out.type, LUMICE_FILTER_TYPE_RAYPATH);
+  EXPECT_EQ(out.action, 1);
+  EXPECT_EQ(out.symmetry, 1 | 2);
+  EXPECT_EQ(out.raypath_count, 3);
+  EXPECT_EQ(out.raypath[0], 3);
+  EXPECT_EQ(out.raypath[2], 5);
+}
+
+TEST(StructFilterParse, EntryExitRoundTrip) {
+  LUMICE_FilterParam in{};
+  in.id = 2;
+  in.type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+  in.ee_entry = 3;
+  in.ee_exit = 5;
+  in.ee_min_len = 2;
+  in.ee_max_len = 8;
+  auto out = RoundTripFilter(in);
+  EXPECT_EQ(out.type, LUMICE_FILTER_TYPE_ENTRY_EXIT);
+  EXPECT_EQ(out.ee_entry, 3);
+  EXPECT_EQ(out.ee_exit, 5);
+  EXPECT_EQ(out.ee_min_len, 2);
+  EXPECT_EQ(out.ee_max_len, 8);
+}
+
+TEST(StructFilterParse, EntryExitWildcardRoundTrip) {
+  LUMICE_FilterParam in{};
+  in.id = 2;
+  in.type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+  in.ee_entry = -1;
+  in.ee_exit = -1;
+  in.ee_min_len = 1;
+  in.ee_max_len = -1;
+  auto out = RoundTripFilter(in);
+  EXPECT_EQ(out.type, LUMICE_FILTER_TYPE_ENTRY_EXIT);
+  EXPECT_EQ(out.ee_entry, -1);  // absent -> wildcard sentinel
+  EXPECT_EQ(out.ee_exit, -1);
+  EXPECT_EQ(out.ee_min_len, 1);  // absent -> default 1
+  EXPECT_EQ(out.ee_max_len, -1);
+}
+
+TEST(StructFilterParse, DirectionRoundTrip) {
+  LUMICE_FilterParam in{};
+  in.id = 4;
+  in.type = LUMICE_FILTER_TYPE_DIRECTION;
+  in.dir_az = 120.0f;
+  in.dir_el = -15.0f;
+  in.dir_radii = 2.5f;
+  auto out = RoundTripFilter(in);
+  EXPECT_EQ(out.type, LUMICE_FILTER_TYPE_DIRECTION);
+  EXPECT_FLOAT_EQ(out.dir_az, 120.0f);
+  EXPECT_FLOAT_EQ(out.dir_el, -15.0f);
+  EXPECT_FLOAT_EQ(out.dir_radii, 2.5f);
+}
+
+TEST(StructFilterParse, CrystalRoundTrip) {
+  LUMICE_FilterParam in{};
+  in.id = 5;
+  in.type = LUMICE_FILTER_TYPE_CRYSTAL;
+  in.crystal_id = 2;
+  auto out = RoundTripFilter(in);
+  EXPECT_EQ(out.type, LUMICE_FILTER_TYPE_CRYSTAL);
+  EXPECT_EQ(out.crystal_id, 2);
+}
+
+TEST(StructFilterParse, NonRaypathTypesNoLongerRejected) {
+  // Regression: pre-327.1, ParseConfigString rejected non-raypath filters with INVALID_VALUE.
+  auto json = FullConfigWithFilterJson(
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "entry_exit" }, { "entry", 3 }, { "exit", 5 } });
+  LUMICE_Config out{};
+  EXPECT_EQ(LUMICE_ParseConfigString(json.c_str(), &out), LUMICE_OK);
+  ASSERT_GE(out.filter_count, 1);
+  EXPECT_EQ(out.filters[0].type, LUMICE_FILTER_TYPE_ENTRY_EXIT);
+  EXPECT_EQ(out.filters[0].ee_entry, 3);
+  EXPECT_EQ(out.filters[0].ee_exit, 5);
+  EXPECT_EQ(out.filters[0].ee_min_len, 1);   // absent -> default
+  EXPECT_EQ(out.filters[0].ee_max_len, -1);  // absent
+}
+
+TEST(StructFilterParse, ComplexWithoutCompositionRejected) {
+  // As of 327.3, complex filters DO parse (see StructFilterComplex tests). But a complex
+  // filter missing its required "composition" array is rejected with MISSING_FIELD.
+  auto json = FullConfigWithFilterJson({ { "id", 1 }, { "action", "filter_in" }, { "type", "complex" } });
+  LUMICE_Config out{};
+  EXPECT_EQ(LUMICE_ParseConfigString(json.c_str(), &out), LUMICE_ERR_MISSING_FIELD);
+}
+
+TEST(StructFilterParse, UnknownTypeRejected) {
+  // The default branch also covers arbitrary unknown type strings (not just "complex").
+  auto json = FullConfigWithFilterJson({ { "id", 1 }, { "action", "filter_in" }, { "type", "bogus" } });
+  LUMICE_Config out{};
+  EXPECT_EQ(LUMICE_ParseConfigString(json.c_str(), &out), LUMICE_ERR_INVALID_VALUE);
+}
+
+TEST(StructFilterParse, IllegalEntryExitValuePassesThroughLikeCore) {
+  // Decision (plan 327.1 §7 risk 2): parse does lossless mapping only; value validation
+  // (min_len >= 1) stays single-source in core and fires at commit. So parse of min_len=0
+  // must succeed and store it verbatim (core would likewise not reject at from_json time;
+  // it throws only later). This pins the "validation not duplicated in parse" contract.
+  auto json = FullConfigWithFilterJson(
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "entry_exit" }, { "entry", 3 }, { "min_len", 0 } });
+  LUMICE_Config out{};
+  EXPECT_EQ(LUMICE_ParseConfigString(json.c_str(), &out), LUMICE_OK);
+  ASSERT_GE(out.filter_count, 1);
+  EXPECT_EQ(out.filters[0].ee_min_len, 0);  // stored verbatim, not normalized/rejected here
+}
+
+// Parse cross-check against core from_json (source of truth): parsing a filter JSON via
+// LUMICE_ParseConfigString then re-emitting (LUMICE_ConfigToJson) must byte-match core's own
+// from_json -> to_json round-trip of the same JSON. Since 327.2 proved emit == core to_json,
+// equality here proves the parse direction also agrees with core from_json.
+namespace {
+void ExpectParseMatchesCore(const nlohmann::json& jf) {
+  // core path: from_json -> FilterConfig -> to_json
+  lumice::FilterConfig fc = jf.get<lumice::FilterConfig>();
+  nlohmann::json core_out = fc;
+  // my path: ParseConfigString -> struct -> LUMICE_ConfigToJson -> filter[0]
+  LUMICE_Config cfg{};
+  ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithFilterJson(jf).c_str(), &cfg), LUMICE_OK);
+  char buf[8192];
+  size_t len = 0;
+  ASSERT_EQ(LUMICE_ConfigToJson(&cfg, buf, sizeof(buf), &len), LUMICE_OK);
+  auto my_root = nlohmann::json::parse(std::string(buf, len));
+  EXPECT_EQ(my_root.at("filter").at(0), core_out) << "mine:\n"
+                                                  << my_root.at("filter").at(0).dump(2) << "\ncore:\n"
+                                                  << core_out.dump(2);
+}
+}  // namespace
+
+TEST(StructFilterParseIsomorphism, Raypath) {
+  ExpectParseMatchesCore({ { "id", 1 },
+                           { "action", "filter_out" },
+                           { "type", "raypath" },
+                           { "raypath", { 3, 1, 5 } },
+                           { "symmetry", "PB" } });
+}
+TEST(StructFilterParseIsomorphism, None) {
+  ExpectParseMatchesCore({ { "id", 7 }, { "action", "filter_in" }, { "type", "none" }, { "symmetry", "" } });
+}
+TEST(StructFilterParseIsomorphism, EntryExit) {
+  ExpectParseMatchesCore({ { "id", 2 },
+                           { "action", "filter_in" },
+                           { "type", "entry_exit" },
+                           { "entry", 3 },
+                           { "exit", 5 },
+                           { "min_len", 2 },
+                           { "max_len", 8 },
+                           { "symmetry", "" } });
+}
+TEST(StructFilterParseIsomorphism, Direction) {
+  ExpectParseMatchesCore({ { "id", 4 },
+                           { "action", "filter_in" },
+                           { "type", "direction" },
+                           { "az", 120.0 },
+                           { "el", -15.0 },
+                           { "radii", 2.5 },
+                           { "symmetry", "" } });
+}
+TEST(StructFilterParseIsomorphism, Crystal) {
+  ExpectParseMatchesCore(
+      { { "id", 5 }, { "action", "filter_in" }, { "type", "crystal" }, { "crystal_id", 2 }, { "symmetry", "" } });
+}
+
+TEST(StructFilterParse, ConfigToJsonBufferTruncationContract) {
+  // Exercises the snprintf-style caller-buffer contract (buffer overrun handling is the
+  // highest-risk path for a new C ABI function; plan 327.1 Step 2 required this test).
+  LUMICE_FilterParam f{};
+  f.id = 1;
+  f.action = 0;
+  f.type = LUMICE_FILTER_TYPE_RAYPATH;
+  f.raypath_count = 2;
+  f.raypath[0] = 3;
+  f.raypath[1] = 5;
+  LUMICE_Config cfg = MakeOneFilterConfig(f);
+
+  // NULL config -> NULL_ARG.
+  size_t tmp = 0;
+  EXPECT_EQ(LUMICE_ConfigToJson(nullptr, nullptr, 0, &tmp), LUMICE_ERR_NULL_ARG);
+
+  // Query length only (out_buf == NULL, buf_size == 0).
+  size_t full_len = 0;
+  EXPECT_EQ(LUMICE_ConfigToJson(&cfg, nullptr, 0, &full_len), LUMICE_OK);
+  EXPECT_GT(full_len, size_t{ 8 });  // full JSON is well over 8 bytes
+
+  // Full (untruncated) reference output.
+  char full[8192];
+  ASSERT_EQ(LUMICE_ConfigToJson(&cfg, full, sizeof(full), nullptr), LUMICE_OK);
+
+  // Truncate into a small buffer.
+  char small[8];
+  std::memset(small, 'X', sizeof(small));
+  size_t len = 0;
+  EXPECT_EQ(LUMICE_ConfigToJson(&cfg, small, sizeof(small), &len), LUMICE_OK);
+  EXPECT_EQ(len, full_len);                          // out_len = FULL length, not written count
+  EXPECT_GE(len, sizeof(small));                     // out_len >= buf_size signals truncation
+  EXPECT_EQ(small[sizeof(small) - 1], '\0');         // always NUL-terminated
+  EXPECT_EQ(std::strlen(small), sizeof(small) - 1);  // wrote exactly buf_size-1 chars
+  EXPECT_EQ(std::string(small, sizeof(small) - 1),   // truncated prefix matches full prefix
+            std::string(full, sizeof(small) - 1));
+}
+
+// =====================================================================================
+// task-complex-ref-encoding (327.3): complex (sum-of-products) filter, flat reference
+// encoding (separate compositions[] pool + composition_index; cells reference simple-filter
+// ids). Cross-checked against core ConfigManager's own two-pass resolution (source of truth).
+// =====================================================================================
+
+namespace {
+std::string FullConfigWithFiltersJson(const nlohmann::json& filter_array) {
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  root["filter"] = filter_array;
+  return root.dump();
+}
+
+// Cross-check the C-API complex emit against core's own to_json (source of truth). Builds a
+// core FilterConfig with an equivalent ComplexFilterParam from the composition JSON and runs
+// core to_json; core emits only the referenced simple-filter ids (pair.first), so the
+// SimpleFilterParam content is irrelevant. Then parses the same config via the C API and
+// re-emits, and asserts the complex filter's JSON matches byte for byte. This proves parse +
+// emit of complex agree with core, without needing core's strict full-config ConfigManager
+// parse (which requires render/scene fields the lenient LUMICE parse does not).
+void ExpectComplexMatchesCore(const nlohmann::json& filter_array, int complex_id) {
+  nlohmann::json complex_jf;
+  for (const auto& jf : filter_array) {
+    if (jf.at("id").get<int>() == complex_id) {
+      complex_jf = jf;
+      break;
+    }
+  }
+  ASSERT_FALSE(complex_jf.is_null());
+
+  lumice::FilterConfig fc;
+  fc.id_ = static_cast<lumice::IdType>(complex_id);
+  fc.action_ = lumice::FilterConfig::kFilterIn;
+  fc.symmetry_ = lumice::FilterConfig::kSymNone;
+  lumice::ComplexFilterParam cp;
+  for (const auto& clause : complex_jf.at("composition")) {
+    std::vector<std::pair<lumice::IdType, lumice::SimpleFilterParam>> terms;
+    if (clause.is_array()) {
+      for (const auto& term : clause) {
+        terms.emplace_back(term.get<lumice::IdType>(), lumice::SimpleFilterParam{});
+      }
+    } else {
+      terms.emplace_back(clause.get<lumice::IdType>(), lumice::SimpleFilterParam{});
+    }
+    cp.filters_.emplace_back(terms);
+  }
+  fc.param_ = cp;
+  nlohmann::json core_j = fc;  // core to_json
+
+  LUMICE_Config cfg{};
+  ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filter_array).c_str(), &cfg), LUMICE_OK);
+  char buf[16384];
+  size_t len = 0;
+  ASSERT_EQ(LUMICE_ConfigToJson(&cfg, buf, sizeof(buf), &len), LUMICE_OK);
+  auto my_root = nlohmann::json::parse(std::string(buf, len));
+  nlohmann::json my_j;
+  for (const auto& jf : my_root.at("filter")) {
+    if (jf.at("id").get<int>() == complex_id) {
+      my_j = jf;
+      break;
+    }
+  }
+  ASSERT_FALSE(my_j.is_null());
+  EXPECT_EQ(my_j, core_j) << "mine:\n" << my_j.dump(2) << "\ncore:\n" << core_j.dump(2);
+}
+}  // namespace
+
+TEST(StructFilterComplex, OrOfRaypathsMatchesCore) {  // issue.md 场景: 多段 raypath = OR-of-raypaths
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } },
+      { { "id", 2 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 1, 4 } } },
+      { { "id", 3 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 1, 2 } } },
+  });
+  ExpectComplexMatchesCore(filters, 3);
+}
+
+TEST(StructFilterComplex, OrOfEntryExitMatchesCore) {  // issue.md 场景: 多值 EE = OR-of-EE
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "entry_exit" }, { "entry", 3 }, { "exit", 5 } },
+      { { "id", 2 }, { "action", "filter_in" }, { "type", "entry_exit" }, { "entry", 1 } },
+      { { "id", 3 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 1, 2 } } },
+  });
+  ExpectComplexMatchesCore(filters, 3);
+}
+
+TEST(StructFilterComplex, CrossTypeWithAndClauseMatchesCore) {  // issue.md 场景: 跨 type 组合 + AND 子句
+  // composition = OR( AND(1,2), 1 ) — mixes a 2-term array clause and a bare-id clause.
+  nlohmann::json comp = nlohmann::json::array({ nlohmann::json::array({ 1, 2 }), 1 });
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } },
+      { { "id", 2 }, { "action", "filter_in" }, { "type", "entry_exit" }, { "entry", 3 } },
+      { { "id", 3 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", comp } },
+  });
+  ExpectComplexMatchesCore(filters, 3);
+}
+
+TEST(StructFilterComplex, StructRoundTrip) {
+  // Build a complex config struct directly, round-trip through the public serialize+parse
+  // APIs, and assert the composition survives (clause/term/id fidelity).
+  LUMICE_Config in{};
+  in.filter_count = 3;
+  in.filters[0].id = 1;
+  in.filters[0].type = LUMICE_FILTER_TYPE_RAYPATH;
+  in.filters[0].raypath_count = 2;
+  in.filters[0].raypath[0] = 3;
+  in.filters[0].raypath[1] = 5;
+  in.filters[1].id = 2;
+  in.filters[1].type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+  in.filters[1].ee_entry = 3;
+  in.filters[1].ee_exit = -1;
+  in.filters[1].ee_min_len = 1;
+  in.filters[1].ee_max_len = -1;
+  in.filters[2].id = 3;
+  in.filters[2].type = LUMICE_FILTER_TYPE_COMPLEX;
+  in.filters[2].composition_index = 0;
+  in.composition_count = 1;
+  in.compositions[0].clause_count = 2;
+  in.compositions[0].term_counts[0] = 2;  // AND(1,2)
+  in.compositions[0].clauses[0][0] = 1;
+  in.compositions[0].clauses[0][1] = 2;
+  in.compositions[0].term_counts[1] = 1;  // bare 1
+  in.compositions[0].clauses[1][0] = 1;
+
+  char buf[16384];
+  size_t len = 0;
+  ASSERT_EQ(LUMICE_ConfigToJson(&in, buf, sizeof(buf), &len), LUMICE_OK);
+  LUMICE_Config out{};
+  ASSERT_EQ(LUMICE_ParseConfigString(buf, &out), LUMICE_OK);
+
+  ASSERT_EQ(out.filter_count, 3);
+  ASSERT_EQ(out.filters[2].type, LUMICE_FILTER_TYPE_COMPLEX);
+  const auto& oc = out.compositions[out.filters[2].composition_index];
+  EXPECT_EQ(oc.clause_count, 2);
+  EXPECT_EQ(oc.term_counts[0], 2);
+  EXPECT_EQ(oc.clauses[0][0], 1);
+  EXPECT_EQ(oc.clauses[0][1], 2);
+  EXPECT_EQ(oc.term_counts[1], 1);
+  EXPECT_EQ(oc.clauses[1][0], 1);
+}
+
+TEST(StructFilterComplex, CommitStructEndToEnd) {
+  // Build the complex config via parse, commit through the struct path -> core consumes it.
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } },
+      { { "id", 2 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 1, 4 } } },
+      { { "id", 3 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 1, 2 } } },
+  });
+  LUMICE_Config cfg{};
+  ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_OK);
+  cfg.infinite = 0;
+  cfg.ray_num = 100;
+  auto* server = LUMICE_CreateServer();
+  ASSERT_NE(server, nullptr);
+  int reused = -1;
+  EXPECT_EQ(LUMICE_CommitConfigStruct(server, &cfg, &reused), LUMICE_OK);
+  LUMICE_StopServer(server);
+  LUMICE_DestroyServer(server);
+}
+
+TEST(StructFilterComplex, ComplexFilterCommitReusesOnNonRendererChange) {
+  // The mechanism behind the 327.4 jank fix: a config carrying a COMPLEX filter can reuse
+  // consumers (out_reused == 1) on a subsequent non-renderer change, so the live-preview
+  // buffer is NOT torn. Before, GUI multi-segment/multi-value (complex) filters were forced
+  // onto the JSON commit path, which has no out_reused signal and always rebuilt — tearing
+  // the buffer on every crystal/sun slider drag. Routing complex through the typed struct
+  // (327.3/327.4) restores the reuse signal. The GUI-integration timing (poller not stopped
+  // on drag) is verified on-screen; this locks the underlying core contract headlessly.
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } },
+      { { "id", 2 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 1, 4 } } },
+      { { "id", 3 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 1, 2 } } },
+  });
+  LUMICE_Config cfg{};
+  ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_OK);
+  cfg.infinite = 0;
+  cfg.ray_num = 100;
+
+  auto* server = LUMICE_CreateServer();
+  ASSERT_NE(server, nullptr);
+  int reused = -1;
+  ASSERT_EQ(LUMICE_CommitConfigStruct(server, &cfg, &reused), LUMICE_OK);
+  EXPECT_EQ(reused, 0);  // first commit builds consumers
+
+  // Change only a non-renderer field (sun altitude); the complex filter is unchanged.
+  cfg.sun_altitude += 5.0f;
+  reused = -1;
+  ASSERT_EQ(LUMICE_CommitConfigStruct(server, &cfg, &reused), LUMICE_OK);
+  EXPECT_EQ(reused, 1);  // consumers reused despite the complex filter -> buffer not torn
+
+  LUMICE_StopServer(server);
+  LUMICE_DestroyServer(server);
+}
+
+TEST(StructFilterComplex, DanglingReferenceRejected) {
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } },
+      { { "id", 3 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 99 } } },  // 99 not defined
+  });
+  LUMICE_Config cfg{};
+  EXPECT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_ERR_INVALID_CONFIG);
+}
+
+TEST(StructFilterComplex, ReferenceToComplexRejected) {
+  // A composition term may only reference a SIMPLE filter, never another complex (no cycles).
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } },
+      { { "id", 2 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 1 } } },
+      { { "id", 3 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 2 } } },  // refs complex 2
+  });
+  LUMICE_Config cfg{};
+  EXPECT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_ERR_INVALID_CONFIG);
+}
+
+TEST(StructFilterComplex, TooManyTermsRejected) {
+  // A clause with more than LUMICE_MAX_CONFIG_TERMS terms -> INVALID_CONFIG.
+  nlohmann::json simples = nlohmann::json::array();
+  nlohmann::json big_clause = nlohmann::json::array();
+  for (int i = 1; i <= LUMICE_MAX_CONFIG_TERMS + 1; i++) {
+    simples.push_back({ { "id", i }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } });
+    big_clause.push_back(i);
+  }
+  nlohmann::json filters = simples;
+  filters.push_back({ { "id", 100 },
+                      { "action", "filter_in" },
+                      { "type", "complex" },
+                      { "composition", nlohmann::json::array({ big_clause }) } });
+  LUMICE_Config cfg{};
+  EXPECT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_ERR_INVALID_CONFIG);
+}
+
+TEST(StructFilterComplex, TooManyClausesRejected) {
+  // A composition with more than LUMICE_MAX_CONFIG_CLAUSES clauses -> INVALID_CONFIG.
+  nlohmann::json comp = nlohmann::json::array();
+  for (int i = 0; i < LUMICE_MAX_CONFIG_CLAUSES + 1; i++) {
+    comp.push_back(1);  // each clause references simple filter id 1
+  }
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } },
+      { { "id", 2 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", comp } },
+  });
+  LUMICE_Config cfg{};
+  EXPECT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_ERR_INVALID_CONFIG);
+}
+
+TEST(StructFilterComplex, TooManyCompositionsRejected) {
+  // More than LUMICE_MAX_CONFIG_COMPLEX complex filters -> INVALID_CONFIG on the overflow one.
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } },
+  });
+  for (int i = 0; i < LUMICE_MAX_CONFIG_COMPLEX + 1; i++) {
+    filters.push_back(
+        { { "id", 100 + i }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 1 } } });
+  }
+  LUMICE_Config cfg{};
+  EXPECT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_ERR_INVALID_CONFIG);
+}
+
+TEST(StructFilterComplex, EmptyCompositionAccepted) {
+  // An empty composition ([]) is a degenerate but accepted "OR of nothing" (clause_count 0).
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } },
+      { { "id", 2 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", nlohmann::json::array() } },
+  });
+  LUMICE_Config cfg{};
+  ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_OK);
+  ASSERT_GE(cfg.filter_count, 2);
+  EXPECT_EQ(cfg.filters[1].type, LUMICE_FILTER_TYPE_COMPLEX);
+  EXPECT_EQ(cfg.compositions[cfg.filters[1].composition_index].clause_count, 0);
 }

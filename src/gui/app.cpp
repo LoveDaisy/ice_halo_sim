@@ -603,7 +603,13 @@ void CalibrateQualityThreshold() {
 
   // Use current default state to build a calibration config
   LUMICE_Config config{};
-  FillLumiceConfig(g_state, &config);
+  if (!FillLumiceConfig(g_state, &config)) {
+    // Unlike DoRun (which pops SetGuiWarning), calibration degrades silently to the default
+    // threshold: it does not touch the user's edited/committed config, so a log line is
+    // sufficient and a modal would be noise. Intentional asymmetry, not an oversight.
+    GUI_LOG_WARNING("[Calibration] filter exceeds ABI limits, using default threshold");
+    return;
+  }
   config.infinite = 0;
   config.ray_num = kCalibrationRays;
 
@@ -659,31 +665,6 @@ void CalibrateQualityThreshold() {
 }
 
 
-// Whether all filters in the GuiState can be expressed via the C-struct
-// `LUMICE_FilterParam` ABI (single-segment raypath only). When any filter is
-// a non-raypath type or carries multi-segment ';' OR text, DoRun must take
-// the JSON-commit path so SerializeCoreConfig can expand it into core JSON
-// (incl. multi-raypath → ComplexFilterParam composition). See plan §2 默认假设
-// for the locked physical placement of this helper.
-static bool IsTrivialFilterSet(const GuiState& state) {
-  for (const auto& layer : state.layers) {
-    for (const auto& entry : layer.entries) {
-      if (!entry.filter_id.has_value()) {
-        continue;
-      }
-      const auto& f = state.filters[*entry.filter_id];
-      if (!f.IsRaypath()) {
-        return false;
-      }
-      // Multi-segment OR (';'-separated) — must take JSON path.
-      if (f.RaypathText().find(';') != std::string::npos) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
 // Resolve which GPU backend to request on this host: Metal on Apple, CUDA on
 // NVIDIA. Both are single-engine GPU routes (vs the CPU N-worker topology). Probes
 // the C API at runtime, so a host with neither resolves to CPU (the toggle that
@@ -734,6 +715,13 @@ bool MaybeReconstructServerForBackend() {
 
   // Re-apply per-server settings that died with the old instance (cf. main.cpp startup).
   LUMICE_SetLogLevel(g_server, static_cast<LUMICE_LogLevel>(g_state.core_log_level));
+
+  // The fresh server restarts its epoch authority at 0. Reset the GUI's display generation so the
+  // new backend's low-epoch frames are not fenced out by the old server's carried-over
+  // display_epoch_floor (else the preview freezes on the previous backend's texture). See
+  // GuiState::ResetDisplayGenerationForBackendSwap. The epoch is re-read from the new server by
+  // DoRun's post-commit LUMICE_GetSimLifecycle.
+  g_state.ResetDisplayGenerationForBackendSwap();
   return true;
 }
 
@@ -761,12 +749,29 @@ void DoRun() {
   // and cannot produce new false-positive reuse paths.
   bool expect_rebuild = backend_reconstructed || !g_state.last_committed_state.has_value() ||
                         g_state.renderer != g_state.last_committed_state->renderer;
-  // JSON path always rebuilds (LUMICE_CommitConfig has no out_reused signal,
-  // and any new filter type triggers a server-side topology change).
-  bool use_json_path = !IsTrivialFilterSet(g_state);
-  if (use_json_path) {
-    expect_rebuild = true;
+
+  // Single typed-struct commit path (327.4): all filter types — including multi-segment
+  // raypath / multi-value EE (expanded to N simple + 1 complex) — go through the C struct, so
+  // the out_reused signal is always available (no more JSON path that forced full rebuild and
+  // tore live-preview buffers on every EE/multi-segment slider drag).
+  //
+  // Build the struct BEFORE stopping the poller: if a filter exceeds the ABI bounds
+  // (composition pool / clause / filter capacity), keep the previously committed state
+  // (graceful degradation) — poller untouched, buffer not torn — rather than commit a
+  // truncated config.
+  LUMICE_Config config{};
+  if (!FillLumiceConfig(g_state, &config)) {
+    GUI_LOG_WARNING(
+        "[GUI] DoRun: filter exceeds ABI limits (too many OR segments/values); keeping the "
+        "previous configuration. Simplify the filter to apply the change.");
+    // User-visible prompt (the Log panel is collapsed by default): the edit did NOT apply and
+    // the previous configuration was kept, so the user knows why nothing changed.
+    SetGuiWarning("This filter has too many OR segments / values to apply (limit " +
+                  std::to_string(LUMICE_MAX_CONFIG_CLAUSES) +
+                  ").\nThe previous configuration was kept. Simplify the filter and try again.");
+    return;
   }
+
   if (expect_rebuild) {
     g_server_poller.Stop();  // Must pause before consumer destruction
   }
@@ -775,19 +780,10 @@ void DoRun() {
   // (see MaybeReconstructServerForBackend) — no per-DoRun SetPreferredBackend push.
 
   int reused = 0;
-  LUMICE_ErrorCode err = LUMICE_OK;
-  if (use_json_path) {
-    auto json_str = SerializeCoreConfig(g_state);
-    err = LUMICE_CommitConfig(g_server, json_str.c_str());
-    // JSON path: assume rebuild (no out_reused signal). Set reused=0 so the
-    // downstream branch picks the rebuild path.
-    reused = 0;
-  } else {
-    LUMICE_Config config{};
-    FillLumiceConfig(g_state, &config);
-    err = LUMICE_CommitConfigStruct(g_server, &config, &reused);
-  }
+  LUMICE_ErrorCode err = LUMICE_CommitConfigStruct(g_server, &config, &reused);
   if (err == LUMICE_OK) {
+    // A good commit clears any prior over-bounds warning so a later re-occurrence warns again.
+    ClearGuiWarning();
     g_state.last_committed_state = GuiState::ConfigSnapshot::From(g_state);
     // Intent + epoch readback (I1): the synchronous commit above has already minted (or reused)
     // the lifecycle epoch; read it back so ReconcileSimState keys the display on THIS generation.

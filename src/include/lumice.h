@@ -167,6 +167,11 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 #define LUMICE_MAX_CONFIG_RAYPATH_LEN 32
 // Discrete-spectrum entry cap. Mirrors core wl_pool.hpp::kWlPoolSizeMax (255).
 #define LUMICE_MAX_CONFIG_SPECTRUM_ENTRIES 255
+// Complex (sum-of-products) filter composition bounds. See LUMICE_ComplexComposition.
+// These are ABI ceilings baked into the struct layout; widen (breaking bump) if needed.
+#define LUMICE_MAX_CONFIG_COMPLEX 32  // max complex-filter composition records per config
+#define LUMICE_MAX_CONFIG_CLAUSES 16  // max OR clauses per complex filter
+#define LUMICE_MAX_CONFIG_TERMS 8     // max AND terms per clause
 
 // Axis distribution type constants for LUMICE_AxisDist.type
 #define LUMICE_AXIS_DIST_GAUSS 0
@@ -206,13 +211,78 @@ typedef struct LUMICE_CrystalParam_ {
   LUMICE_AxisDist roll;
 } LUMICE_CrystalParam;
 
+// Filter type discriminant for LUMICE_FilterParam.type.
+// 0 = UNSET is a deliberate zero-init guard: a struct built via memset/aggregate
+// initialization without an explicit type lands on UNSET and is rejected at commit
+// (LUMICE_ERR_INVALID_CONFIG) rather than being silently treated as "none". Callers
+// that want the no-op "none" filter must set LUMICE_FILTER_TYPE_NONE explicitly.
+#define LUMICE_FILTER_TYPE_UNSET 0
+#define LUMICE_FILTER_TYPE_NONE 1
+#define LUMICE_FILTER_TYPE_RAYPATH 2
+#define LUMICE_FILTER_TYPE_ENTRY_EXIT 3
+#define LUMICE_FILTER_TYPE_DIRECTION 4
+#define LUMICE_FILTER_TYPE_CRYSTAL 5
+// Reserved: complex (sum-of-products) filter reference encoding lands in a follow-up.
+// Until then a filter with this type has no ConfigToJson case and is rejected at commit.
+#define LUMICE_FILTER_TYPE_COMPLEX 6
+
+// BREAKING (v4.5): LUMICE_FilterParam extended from raypath-only to a 5-arm tagged
+// union (None/Raypath/EntryExit/Direction/Crystal). Layout changed; callers must
+// recompile against this header. `type` selects the active arm; arm-specific fields are
+// prefixed by arm (raypath_*, ee_*, dir_*, crystal_*). Field naming/units mirror core
+// config/filter_config.hpp. -1 sentinels encode optional fields.
 typedef struct LUMICE_FilterParam_ {
   int id;
-  int action;    // 0=filter_in, 1=filter_out
+  int action;  // 0=filter_in, 1=filter_out
+  // Symmetry is a common field for ALL filter types (mirrors core FilterConfig.symmetry_,
+  // emitted by filter_config.cpp::to_json before the per-type fields), not raypath-only.
   int symmetry;  // bitmask: 1=P, 2=B, 4=D
+  int type;      // LUMICE_FILTER_TYPE_* (UNSET=0 is rejected at commit)
+
+  // Raypath arm (type == LUMICE_FILTER_TYPE_RAYPATH)
   int raypath[LUMICE_MAX_CONFIG_RAYPATH_LEN];
   int raypath_count;
+
+  // EntryExit arm (type == LUMICE_FILTER_TYPE_ENTRY_EXIT). -1 sentinels below.
+  // NOTE: ee_min_len/ee_max_len mirror core's to_json emit conditions (min_len emitted
+  // only when > 1; max_len only when >= 0). An out-of-contract value like ee_min_len == 0
+  // is therefore emitted as "absent" and normalized to the core default (1) at commit
+  // rather than rejected here. Callers must supply ee_min_len >= 1.
+  // -1 is the ONLY sentinel: any other negative value is undefined (treated as wildcard/
+  // absent, not rejected). These fields are int (matching the raypath[] convention); core
+  // stores IdType(uint16_t) for entry/exit and size_t for the lengths, so keep entry/exit
+  // in [0, 65535] and lengths reasonably small.
+  int ee_entry;    // entry face id; -1 = wildcard (any entry face)
+  int ee_exit;     // exit face id;  -1 = wildcard (any exit face)
+  int ee_min_len;  // path length lower bound (>= 1)
+  int ee_max_len;  // path length upper bound; -1 = no upper bound
+
+  // Direction arm (type == LUMICE_FILTER_TYPE_DIRECTION). Degrees.
+  float dir_az;     // azimuth (lon)
+  float dir_el;     // elevation (lat)
+  float dir_radii;  // angular radius (scalar, not an array)
+
+  // Crystal arm (type == LUMICE_FILTER_TYPE_CRYSTAL)
+  int crystal_id;
+
+  // Complex arm (type == LUMICE_FILTER_TYPE_COMPLEX): index into
+  // LUMICE_Config.compositions[] holding this filter's sum-of-products.
+  int composition_index;
 } LUMICE_FilterParam;
+
+// Sum-of-products composition for a complex filter, referenced by
+// LUMICE_FilterParam.composition_index. The outer level is an OR over clauses; each clause
+// is an AND over its terms; each term (clauses[c][t]) is the ID of a SIMPLE filter in the
+// same config's filters[] pool (referenced by id — reorder-robust — not by array index;
+// a term may never reference another complex filter, matching core config semantics).
+// INVARIANT: compositions[] is rebuilt wholesale together with its host LUMICE_Config;
+// records are not individually reordered (composition_index is a pool index valid only
+// within one config snapshot). Consumers (e.g. GUI) must respect this whole-rebuild model.
+typedef struct LUMICE_ComplexComposition_ {
+  int clauses[LUMICE_MAX_CONFIG_CLAUSES][LUMICE_MAX_CONFIG_TERMS];  // simple-filter IDs
+  int term_counts[LUMICE_MAX_CONFIG_CLAUSES];                       // number of terms in each clause
+  int clause_count;
+} LUMICE_ComplexComposition;
 
 typedef struct LUMICE_ScatterEntry_ {
   int crystal_id;
@@ -251,6 +321,9 @@ typedef struct LUMICE_RenderParam_ {
 // BREAKING (v4.4): added spectrum_entries[]/spectrum_count for custom discrete spectrum.
 // Layout changed; callers must recompile against this header. spectrum_count > 0 selects the
 // discrete-list path and overrides the spectrum string field (mirrors filters/filter_count).
+// BREAKING (v4.6): added compositions[]/composition_count for complex (sum-of-products)
+// filters. Layout changed; callers must recompile. A filters[] entry with type ==
+// LUMICE_FILTER_TYPE_COMPLEX indexes into compositions[] via its composition_index.
 typedef struct LUMICE_Config_ {
   // Crystals
   LUMICE_CrystalParam crystals[LUMICE_MAX_CONFIG_CRYSTALS];
@@ -259,6 +332,10 @@ typedef struct LUMICE_Config_ {
   // Filters
   LUMICE_FilterParam filters[LUMICE_MAX_CONFIG_FILTERS];
   int filter_count;
+
+  // Complex-filter compositions (referenced by filters[].composition_index for COMPLEX type).
+  LUMICE_ComplexComposition compositions[LUMICE_MAX_CONFIG_COMPLEX];
+  int composition_count;
 
   // Renderers
   LUMICE_RenderParam renderers[LUMICE_MAX_CONFIG_RENDERERS];
@@ -294,7 +371,13 @@ LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_C
 // (i.e., the subset of the full config format that LUMICE_Config can represent).
 // Specifically:
 //   - crystal: height/face_distance as scalars/arrays, axis as {type, mean, std} objects
-//   - filter: only type="raypath" supported; other types return LUMICE_ERR_INVALID_VALUE
+//   - filter: parse (JSON -> struct) supports all 6 types (none / raypath / entry_exit /
+//     direction / crystal / complex), mirroring the LUMICE_ConfigToJson emit; unknown type
+//     strings return LUMICE_ERR_INVALID_VALUE. Complex filters populate compositions[] and
+//     set composition_index (resolved in a second pass; each composition term must reference
+//     an existing simple filter, else LUMICE_ERR_INVALID_CONFIG). Parse does lossless field
+//     mapping only; per-value semantic validation (e.g. entry_exit min_len >= 1) fires at
+//     commit time in core.
 //   - render: lens/view/visible/background fields are ignored; only id/resolution/opacity/
 //     intensity_factor/overlap are parsed
 //   - spectrum: string enumerations ("D65","D55","D50","D75","A","E") populate the spectrum
@@ -314,6 +397,18 @@ LUMICE_ErrorCode LUMICE_ParseConfigString(const char* json_str, LUMICE_Config* o
 // Parse a JSON file into LUMICE_Config. filename must be UTF-8 encoded.
 // Returns LUMICE_ERR_FILE_NOT_FOUND if the file cannot be opened.
 LUMICE_ErrorCode LUMICE_ParseConfigFile(const char* filename, LUMICE_Config* out);
+
+// Serialize a LUMICE_Config into its JSON string form — the inverse of
+// LUMICE_ParseConfigString and the explicit serialization half of the typed-struct API
+// (for save / round-trip / debugging; distinct from the commit path).
+//
+// Buffer contract (snprintf-style, no cross-ABI allocation): writes at most buf_size bytes
+// into out_buf, always NUL-terminated when buf_size > 0. out_buf may be NULL (or buf_size 0)
+// to query the length without writing. If out_len is non-NULL it receives the full JSON
+// length EXCLUDING the NUL terminator; the output was truncated iff out_len >= buf_size.
+// Returns LUMICE_ERR_NULL_ARG if config is NULL, LUMICE_ERR_INVALID_CONFIG if the config
+// cannot be serialized (e.g. a filter with an unset/invalid type).
+LUMICE_ErrorCode LUMICE_ConfigToJson(const LUMICE_Config* config, char* out_buf, size_t buf_size, size_t* out_len);
 
 // =============== Results ===============
 // See doc/capi-lifecycle-architecture.md §5 for sentinel contract.

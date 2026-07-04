@@ -423,6 +423,51 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
     }
   };
 
+  // ---- Test 4b: backend swap (CPU<->GPU) resets the display epoch fence ----
+  // Pins the fix for "run on CPU, switch to GPU, click Run, preview does not update". A reconstructed
+  // server restarts its epoch authority at 0, so its first frame carries a LOW epoch (1). If the old
+  // server's display_epoch_floor (raised to >=1 by any prior filter edit) is carried across the swap,
+  // ShouldUploadPayload fences the new backend's frame forever and the stale texture sticks on screen.
+  // ResetDisplayGenerationForBackendSwap must clear the fence + carried texture so the new backend's
+  // frame uploads. Bites the real production predicate + the real reset method (fully headless — no
+  // GPU needed, since the bug is a pure epoch-bookkeeping defect independent of the backend kind).
+  ImGuiTest* t4b = IM_REGISTER_TEST(engine, "gui_lifecycle", "backend_swap_resets_epoch_fence");
+  t4b->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    // The new backend's first commit mints epoch 1 (server committed_epoch_ resets to 0, +1 on rebuild).
+    auto fresh_payload = std::make_shared<gui::TexturePayload>();
+    fresh_payload->payload_epoch = 1;
+    fresh_payload->texture_ray_count = 100;  // valid, non-empty frame
+    fresh_payload->snapshot_intensity = 1.0f;
+    gui::PreviewSnapshot fresh_snap;
+    fresh_snap.valid = true;
+    fresh_snap.epoch = 1;
+    fresh_snap.payload = fresh_payload;
+    fresh_snap.texture_serial = 42;  // poller serial is global-monotonic across the swap
+
+    // Accumulated CPU session: the floor was raised to a prior generation by an earlier filter edit,
+    // and a texture from that session was already uploaded.
+    gui::GuiState st;
+    st.committed_epoch = 3;
+    st.display_epoch_floor = 3;
+    st.last_uploaded_texture_serial = 41;
+    st.snapshot_intensity = 1.0f;
+
+    // BUG condition (pre-reset): the new backend's epoch-1 frame is fenced out (1 > 3 is false), so
+    // the preview would freeze on the previous backend's texture.
+    IM_CHECK(!gui::ShouldUploadPayload(fresh_snap, st.last_uploaded_texture_serial, st.display_epoch_floor));
+
+    // FIX: the backend swap resets the display generation to epoch 0 and clears the carried texture.
+    st.ResetDisplayGenerationForBackendSwap();
+    IM_CHECK_EQ(st.committed_epoch, 0u);
+    IM_CHECK_EQ(st.display_epoch_floor, 0u);
+    IM_CHECK_EQ(st.last_uploaded_texture_serial, 0ull);
+    IM_CHECK_EQ(st.snapshot_intensity, 0.0f);  // immediate clear of the stale texture
+
+    // After the reset the new backend's epoch-1 frame clears the fence and uploads.
+    IM_CHECK(gui::ShouldUploadPayload(fresh_snap, st.last_uploaded_texture_serial, st.display_epoch_floor));
+  };
+
   // ---- Test 5: optimistic async Stop (1.6, blueprint §5/§8) ----
   // INTEGRATION through the real DoRun→DoStop→JoinPendingStop→SyncFromPoller flow on a live server.
   // Determinism: no sleep/poll guesses — run_intent is set synchronously by DoStop, the optimistic
