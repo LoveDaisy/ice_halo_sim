@@ -1827,11 +1827,12 @@ TEST(StructFilterParse, NonRaypathTypesNoLongerRejected) {
   EXPECT_EQ(out.filters[0].ee_max_len, -1);  // absent
 }
 
-TEST(StructFilterParse, ComplexTypeStillRejected) {
-  // Complex struct encoding is task 327.3; parse must reject it explicitly (not silently).
+TEST(StructFilterParse, ComplexWithoutCompositionRejected) {
+  // As of 327.3, complex filters DO parse (see StructFilterComplex tests). But a complex
+  // filter missing its required "composition" array is rejected with MISSING_FIELD.
   auto json = FullConfigWithFilterJson({ { "id", 1 }, { "action", "filter_in" }, { "type", "complex" } });
   LUMICE_Config out{};
-  EXPECT_EQ(LUMICE_ParseConfigString(json.c_str(), &out), LUMICE_ERR_INVALID_VALUE);
+  EXPECT_EQ(LUMICE_ParseConfigString(json.c_str(), &out), LUMICE_ERR_MISSING_FIELD);
 }
 
 TEST(StructFilterParse, UnknownTypeRejected) {
@@ -1946,4 +1947,240 @@ TEST(StructFilterParse, ConfigToJsonBufferTruncationContract) {
   EXPECT_EQ(std::strlen(small), sizeof(small) - 1);  // wrote exactly buf_size-1 chars
   EXPECT_EQ(std::string(small, sizeof(small) - 1),   // truncated prefix matches full prefix
             std::string(full, sizeof(small) - 1));
+}
+
+// =====================================================================================
+// task-complex-ref-encoding (327.3): complex (sum-of-products) filter, flat reference
+// encoding (separate compositions[] pool + composition_index; cells reference simple-filter
+// ids). Cross-checked against core ConfigManager's own two-pass resolution (source of truth).
+// =====================================================================================
+
+namespace {
+std::string FullConfigWithFiltersJson(const nlohmann::json& filter_array) {
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  root["filter"] = filter_array;
+  return root.dump();
+}
+
+// Cross-check the C-API complex emit against core's own to_json (source of truth). Builds a
+// core FilterConfig with an equivalent ComplexFilterParam from the composition JSON and runs
+// core to_json; core emits only the referenced simple-filter ids (pair.first), so the
+// SimpleFilterParam content is irrelevant. Then parses the same config via the C API and
+// re-emits, and asserts the complex filter's JSON matches byte for byte. This proves parse +
+// emit of complex agree with core, without needing core's strict full-config ConfigManager
+// parse (which requires render/scene fields the lenient LUMICE parse does not).
+void ExpectComplexMatchesCore(const nlohmann::json& filter_array, int complex_id) {
+  nlohmann::json complex_jf;
+  for (const auto& jf : filter_array) {
+    if (jf.at("id").get<int>() == complex_id) {
+      complex_jf = jf;
+      break;
+    }
+  }
+  ASSERT_FALSE(complex_jf.is_null());
+
+  lumice::FilterConfig fc;
+  fc.id_ = static_cast<lumice::IdType>(complex_id);
+  fc.action_ = lumice::FilterConfig::kFilterIn;
+  fc.symmetry_ = lumice::FilterConfig::kSymNone;
+  lumice::ComplexFilterParam cp;
+  for (const auto& clause : complex_jf.at("composition")) {
+    std::vector<std::pair<lumice::IdType, lumice::SimpleFilterParam>> terms;
+    if (clause.is_array()) {
+      for (const auto& term : clause) {
+        terms.emplace_back(term.get<lumice::IdType>(), lumice::SimpleFilterParam{});
+      }
+    } else {
+      terms.emplace_back(clause.get<lumice::IdType>(), lumice::SimpleFilterParam{});
+    }
+    cp.filters_.emplace_back(terms);
+  }
+  fc.param_ = cp;
+  nlohmann::json core_j = fc;  // core to_json
+
+  LUMICE_Config cfg{};
+  ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filter_array).c_str(), &cfg), LUMICE_OK);
+  char buf[16384];
+  size_t len = 0;
+  ASSERT_EQ(LUMICE_ConfigToJson(&cfg, buf, sizeof(buf), &len), LUMICE_OK);
+  auto my_root = nlohmann::json::parse(std::string(buf, len));
+  nlohmann::json my_j;
+  for (const auto& jf : my_root.at("filter")) {
+    if (jf.at("id").get<int>() == complex_id) {
+      my_j = jf;
+      break;
+    }
+  }
+  ASSERT_FALSE(my_j.is_null());
+  EXPECT_EQ(my_j, core_j) << "mine:\n" << my_j.dump(2) << "\ncore:\n" << core_j.dump(2);
+}
+}  // namespace
+
+TEST(StructFilterComplex, OrOfRaypathsMatchesCore) {  // issue.md 场景: 多段 raypath = OR-of-raypaths
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } },
+      { { "id", 2 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 1, 4 } } },
+      { { "id", 3 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 1, 2 } } },
+  });
+  ExpectComplexMatchesCore(filters, 3);
+}
+
+TEST(StructFilterComplex, OrOfEntryExitMatchesCore) {  // issue.md 场景: 多值 EE = OR-of-EE
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "entry_exit" }, { "entry", 3 }, { "exit", 5 } },
+      { { "id", 2 }, { "action", "filter_in" }, { "type", "entry_exit" }, { "entry", 1 } },
+      { { "id", 3 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 1, 2 } } },
+  });
+  ExpectComplexMatchesCore(filters, 3);
+}
+
+TEST(StructFilterComplex, CrossTypeWithAndClauseMatchesCore) {  // issue.md 场景: 跨 type 组合 + AND 子句
+  // composition = OR( AND(1,2), 1 ) — mixes a 2-term array clause and a bare-id clause.
+  nlohmann::json comp = nlohmann::json::array({ nlohmann::json::array({ 1, 2 }), 1 });
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } },
+      { { "id", 2 }, { "action", "filter_in" }, { "type", "entry_exit" }, { "entry", 3 } },
+      { { "id", 3 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", comp } },
+  });
+  ExpectComplexMatchesCore(filters, 3);
+}
+
+TEST(StructFilterComplex, StructRoundTrip) {
+  // Build a complex config struct directly, round-trip through the public serialize+parse
+  // APIs, and assert the composition survives (clause/term/id fidelity).
+  LUMICE_Config in{};
+  in.filter_count = 3;
+  in.filters[0].id = 1;
+  in.filters[0].type = LUMICE_FILTER_TYPE_RAYPATH;
+  in.filters[0].raypath_count = 2;
+  in.filters[0].raypath[0] = 3;
+  in.filters[0].raypath[1] = 5;
+  in.filters[1].id = 2;
+  in.filters[1].type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+  in.filters[1].ee_entry = 3;
+  in.filters[1].ee_exit = -1;
+  in.filters[1].ee_min_len = 1;
+  in.filters[1].ee_max_len = -1;
+  in.filters[2].id = 3;
+  in.filters[2].type = LUMICE_FILTER_TYPE_COMPLEX;
+  in.filters[2].composition_index = 0;
+  in.composition_count = 1;
+  in.compositions[0].clause_count = 2;
+  in.compositions[0].term_counts[0] = 2;  // AND(1,2)
+  in.compositions[0].clauses[0][0] = 1;
+  in.compositions[0].clauses[0][1] = 2;
+  in.compositions[0].term_counts[1] = 1;  // bare 1
+  in.compositions[0].clauses[1][0] = 1;
+
+  char buf[16384];
+  size_t len = 0;
+  ASSERT_EQ(LUMICE_ConfigToJson(&in, buf, sizeof(buf), &len), LUMICE_OK);
+  LUMICE_Config out{};
+  ASSERT_EQ(LUMICE_ParseConfigString(buf, &out), LUMICE_OK);
+
+  ASSERT_EQ(out.filter_count, 3);
+  ASSERT_EQ(out.filters[2].type, LUMICE_FILTER_TYPE_COMPLEX);
+  const auto& oc = out.compositions[out.filters[2].composition_index];
+  EXPECT_EQ(oc.clause_count, 2);
+  EXPECT_EQ(oc.term_counts[0], 2);
+  EXPECT_EQ(oc.clauses[0][0], 1);
+  EXPECT_EQ(oc.clauses[0][1], 2);
+  EXPECT_EQ(oc.term_counts[1], 1);
+  EXPECT_EQ(oc.clauses[1][0], 1);
+}
+
+TEST(StructFilterComplex, CommitStructEndToEnd) {
+  // Build the complex config via parse, commit through the struct path -> core consumes it.
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } },
+      { { "id", 2 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 1, 4 } } },
+      { { "id", 3 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 1, 2 } } },
+  });
+  LUMICE_Config cfg{};
+  ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_OK);
+  cfg.infinite = 0;
+  cfg.ray_num = 100;
+  auto* server = LUMICE_CreateServer();
+  ASSERT_NE(server, nullptr);
+  int reused = -1;
+  EXPECT_EQ(LUMICE_CommitConfigStruct(server, &cfg, &reused), LUMICE_OK);
+  LUMICE_StopServer(server);
+  LUMICE_DestroyServer(server);
+}
+
+TEST(StructFilterComplex, DanglingReferenceRejected) {
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } },
+      { { "id", 3 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 99 } } },  // 99 not defined
+  });
+  LUMICE_Config cfg{};
+  EXPECT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_ERR_INVALID_CONFIG);
+}
+
+TEST(StructFilterComplex, ReferenceToComplexRejected) {
+  // A composition term may only reference a SIMPLE filter, never another complex (no cycles).
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } },
+      { { "id", 2 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 1 } } },
+      { { "id", 3 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 2 } } },  // refs complex 2
+  });
+  LUMICE_Config cfg{};
+  EXPECT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_ERR_INVALID_CONFIG);
+}
+
+TEST(StructFilterComplex, TooManyTermsRejected) {
+  // A clause with more than LUMICE_MAX_CONFIG_TERMS terms -> INVALID_CONFIG.
+  nlohmann::json simples = nlohmann::json::array();
+  nlohmann::json big_clause = nlohmann::json::array();
+  for (int i = 1; i <= LUMICE_MAX_CONFIG_TERMS + 1; i++) {
+    simples.push_back({ { "id", i }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } });
+    big_clause.push_back(i);
+  }
+  nlohmann::json filters = simples;
+  filters.push_back({ { "id", 100 },
+                      { "action", "filter_in" },
+                      { "type", "complex" },
+                      { "composition", nlohmann::json::array({ big_clause }) } });
+  LUMICE_Config cfg{};
+  EXPECT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_ERR_INVALID_CONFIG);
+}
+
+TEST(StructFilterComplex, TooManyClausesRejected) {
+  // A composition with more than LUMICE_MAX_CONFIG_CLAUSES clauses -> INVALID_CONFIG.
+  nlohmann::json comp = nlohmann::json::array();
+  for (int i = 0; i < LUMICE_MAX_CONFIG_CLAUSES + 1; i++) {
+    comp.push_back(1);  // each clause references simple filter id 1
+  }
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } },
+      { { "id", 2 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", comp } },
+  });
+  LUMICE_Config cfg{};
+  EXPECT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_ERR_INVALID_CONFIG);
+}
+
+TEST(StructFilterComplex, TooManyCompositionsRejected) {
+  // More than LUMICE_MAX_CONFIG_COMPLEX complex filters -> INVALID_CONFIG on the overflow one.
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } },
+  });
+  for (int i = 0; i < LUMICE_MAX_CONFIG_COMPLEX + 1; i++) {
+    filters.push_back(
+        { { "id", 100 + i }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 1 } } });
+  }
+  LUMICE_Config cfg{};
+  EXPECT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_ERR_INVALID_CONFIG);
+}
+
+TEST(StructFilterComplex, EmptyCompositionAccepted) {
+  // An empty composition ([]) is a degenerate but accepted "OR of nothing" (clause_count 0).
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } },
+      { { "id", 2 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", nlohmann::json::array() } },
+  });
+  LUMICE_Config cfg{};
+  ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_OK);
+  ASSERT_GE(cfg.filter_count, 2);
+  EXPECT_EQ(cfg.filters[1].type, LUMICE_FILTER_TYPE_COMPLEX);
+  EXPECT_EQ(cfg.compositions[cfg.filters[1].composition_index].clause_count, 0);
 }

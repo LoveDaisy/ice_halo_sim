@@ -167,6 +167,11 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 #define LUMICE_MAX_CONFIG_RAYPATH_LEN 32
 // Discrete-spectrum entry cap. Mirrors core wl_pool.hpp::kWlPoolSizeMax (255).
 #define LUMICE_MAX_CONFIG_SPECTRUM_ENTRIES 255
+// Complex (sum-of-products) filter composition bounds. See LUMICE_ComplexComposition.
+// These are ABI ceilings baked into the struct layout; widen (breaking bump) if needed.
+#define LUMICE_MAX_CONFIG_COMPLEX 32  // max complex-filter composition records per config
+#define LUMICE_MAX_CONFIG_CLAUSES 16  // max OR clauses per complex filter
+#define LUMICE_MAX_CONFIG_TERMS 8     // max AND terms per clause
 
 // Axis distribution type constants for LUMICE_AxisDist.type
 #define LUMICE_AXIS_DIST_GAUSS 0
@@ -259,7 +264,25 @@ typedef struct LUMICE_FilterParam_ {
 
   // Crystal arm (type == LUMICE_FILTER_TYPE_CRYSTAL)
   int crystal_id;
+
+  // Complex arm (type == LUMICE_FILTER_TYPE_COMPLEX): index into
+  // LUMICE_Config.compositions[] holding this filter's sum-of-products.
+  int composition_index;
 } LUMICE_FilterParam;
+
+// Sum-of-products composition for a complex filter, referenced by
+// LUMICE_FilterParam.composition_index. The outer level is an OR over clauses; each clause
+// is an AND over its terms; each term (clauses[c][t]) is the ID of a SIMPLE filter in the
+// same config's filters[] pool (referenced by id — reorder-robust — not by array index;
+// a term may never reference another complex filter, matching core config semantics).
+// INVARIANT: compositions[] is rebuilt wholesale together with its host LUMICE_Config;
+// records are not individually reordered (composition_index is a pool index valid only
+// within one config snapshot). Consumers (e.g. GUI) must respect this whole-rebuild model.
+typedef struct LUMICE_ComplexComposition_ {
+  int clauses[LUMICE_MAX_CONFIG_CLAUSES][LUMICE_MAX_CONFIG_TERMS];  // simple-filter IDs
+  int term_counts[LUMICE_MAX_CONFIG_CLAUSES];                       // number of terms in each clause
+  int clause_count;
+} LUMICE_ComplexComposition;
 
 typedef struct LUMICE_ScatterEntry_ {
   int crystal_id;
@@ -298,6 +321,9 @@ typedef struct LUMICE_RenderParam_ {
 // BREAKING (v4.4): added spectrum_entries[]/spectrum_count for custom discrete spectrum.
 // Layout changed; callers must recompile against this header. spectrum_count > 0 selects the
 // discrete-list path and overrides the spectrum string field (mirrors filters/filter_count).
+// BREAKING (v4.6): added compositions[]/composition_count for complex (sum-of-products)
+// filters. Layout changed; callers must recompile. A filters[] entry with type ==
+// LUMICE_FILTER_TYPE_COMPLEX indexes into compositions[] via its composition_index.
 typedef struct LUMICE_Config_ {
   // Crystals
   LUMICE_CrystalParam crystals[LUMICE_MAX_CONFIG_CRYSTALS];
@@ -306,6 +332,10 @@ typedef struct LUMICE_Config_ {
   // Filters
   LUMICE_FilterParam filters[LUMICE_MAX_CONFIG_FILTERS];
   int filter_count;
+
+  // Complex-filter compositions (referenced by filters[].composition_index for COMPLEX type).
+  LUMICE_ComplexComposition compositions[LUMICE_MAX_CONFIG_COMPLEX];
+  int composition_count;
 
   // Renderers
   LUMICE_RenderParam renderers[LUMICE_MAX_CONFIG_RENDERERS];
@@ -341,11 +371,13 @@ LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_C
 // (i.e., the subset of the full config format that LUMICE_Config can represent).
 // Specifically:
 //   - crystal: height/face_distance as scalars/arrays, axis as {type, mean, std} objects
-//   - filter: parse (JSON -> struct) supports the 5 simple types (none / raypath /
-//     entry_exit / direction / crystal), mirroring the LUMICE_ConfigToJson emit. type=
-//     "complex" and any unknown type return LUMICE_ERR_INVALID_VALUE (complex struct
-//     encoding lands in a follow-up). Parse does lossless field mapping only; value
-//     validation (e.g. entry_exit min_len >= 1) fires at commit time in core.
+//   - filter: parse (JSON -> struct) supports all 6 types (none / raypath / entry_exit /
+//     direction / crystal / complex), mirroring the LUMICE_ConfigToJson emit; unknown type
+//     strings return LUMICE_ERR_INVALID_VALUE. Complex filters populate compositions[] and
+//     set composition_index (resolved in a second pass; each composition term must reference
+//     an existing simple filter, else LUMICE_ERR_INVALID_CONFIG). Parse does lossless field
+//     mapping only; per-value semantic validation (e.g. entry_exit min_len >= 1) fires at
+//     commit time in core.
 //   - render: lens/view/visible/background fields are ignored; only id/resolution/opacity/
 //     intensity_factor/overlap are parsed
 //   - spectrum: string enumerations ("D65","D55","D50","D75","A","E") populate the spectrum

@@ -290,6 +290,29 @@ nlohmann::json ConfigToJson(const LUMICE_Config& c) {
         j["type"] = "crystal";
         j["crystal_id"] = f.crystal_id;
         break;
+      case LUMICE_FILTER_TYPE_COMPLEX: {
+        j["type"] = "complex";
+        if (f.composition_index < 0 || f.composition_index >= c.composition_count) {
+          throw std::invalid_argument("LUMICE_FilterParam.composition_index out of range: " +
+                                      std::to_string(f.composition_index));
+        }
+        const auto& comp = c.compositions[f.composition_index];
+        json composition = json::array();
+        for (int cl = 0; cl < comp.clause_count; cl++) {
+          // Mirror core to_json: a 1-term clause emits a bare id; a multi-term clause an array.
+          if (comp.term_counts[cl] == 1) {
+            composition.push_back(comp.clauses[cl][0]);
+          } else {
+            json terms = json::array();
+            for (int t = 0; t < comp.term_counts[cl]; t++) {
+              terms.push_back(comp.clauses[cl][t]);
+            }
+            composition.push_back(terms);
+          }
+        }
+        j["composition"] = composition;
+        break;
+      }
       default:
         // UNSET (zero-init guard) or an out-of-range discriminant: fail fast rather
         // than silently emitting a wrong/empty filter. Caller LUMICE_CommitConfigStruct
@@ -611,9 +634,14 @@ static LUMICE_ErrorCode JsonToFilter(const nlohmann::json& fj, LUMICE_FilterPara
   } else if (type_str == "crystal") {
     f->type = LUMICE_FILTER_TYPE_CRYSTAL;
     f->crystal_id = fj.at("crystal_id").get<int>();
+  } else if (type_str == "complex") {
+    // Placeholder: type is set here, but composition + composition_index are resolved by
+    // the second pass in JsonToConfig (needs all simple filters parsed first so composition
+    // cell ids can be validated). -1 marks "not yet resolved".
+    f->type = LUMICE_FILTER_TYPE_COMPLEX;
+    f->composition_index = -1;
   } else {
-    // "complex" (task 327.3) and any unknown type are not yet representable in the struct.
-    return LUMICE_ERR_INVALID_VALUE;
+    return LUMICE_ERR_INVALID_VALUE;  // unknown type string
   }
 
   // Symmetry: common field for all types. "PBD" -> bitmask.
@@ -766,6 +794,60 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, LUMICE
   return LUMICE_OK;
 }
 
+// Resolve a complex filter's "composition" JSON into a LUMICE_Config compositions[] slot and
+// set f->composition_index. Validates reference integrity: each term id must reference an
+// existing SIMPLE (non-complex) filter, and clause/term/composition counts respect the ABI
+// bounds. Must run after all simple filters are parsed (two-pass, mirrors config_manager.cpp).
+static LUMICE_ErrorCode JsonToComplexComposition(const nlohmann::json& fj, LUMICE_Config* out, LUMICE_FilterParam* f) {
+  if (!fj.contains("composition") || !fj.at("composition").is_array()) {
+    return LUMICE_ERR_MISSING_FIELD;
+  }
+  const auto& cmp = fj.at("composition");
+  // Bounds are checked before writing into the pool slot so a rejected input never leaves a
+  // clause_count inconsistent with the ABI ceiling. An empty composition ([]) is accepted as
+  // a degenerate "OR of nothing" (clause_count == 0), mirroring core (no non-empty requirement).
+  if (out->composition_count >= LUMICE_MAX_CONFIG_COMPLEX || static_cast<int>(cmp.size()) > LUMICE_MAX_CONFIG_CLAUSES) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  int comp_idx = out->composition_count++;
+  LUMICE_ComplexComposition* comp = &out->compositions[comp_idx];
+  comp->clause_count = static_cast<int>(cmp.size());
+  for (int cl = 0; cl < comp->clause_count; cl++) {
+    const auto& clause = cmp[cl];
+    // A clause is either a bare id (1-term) or an array of ids (matches core to_json).
+    if (clause.is_array()) {
+      comp->term_counts[cl] = static_cast<int>(clause.size());
+      if (comp->term_counts[cl] > LUMICE_MAX_CONFIG_TERMS) {
+        return LUMICE_ERR_INVALID_CONFIG;
+      }
+      for (int t = 0; t < comp->term_counts[cl]; t++) {
+        comp->clauses[cl][t] = clause[t].get<int>();
+      }
+    } else {
+      comp->term_counts[cl] = 1;
+      comp->clauses[cl][0] = clause.get<int>();
+    }
+    // Reference integrity: each term must name an existing SIMPLE filter (dangling ids and
+    // references to a complex filter are rejected — the latter matches core semantics, which
+    // only allow SimpleFilterParam in a composition, so cycles are impossible by construction).
+    for (int t = 0; t < comp->term_counts[cl]; t++) {
+      int ref_id = comp->clauses[cl][t];
+      bool found_simple = false;
+      for (int k = 0; k < out->filter_count; k++) {
+        if (out->filters[k].id == ref_id && out->filters[k].type != LUMICE_FILTER_TYPE_COMPLEX) {
+          found_simple = true;
+          break;
+        }
+      }
+      if (!found_simple) {
+        return LUMICE_ERR_INVALID_CONFIG;
+      }
+    }
+  }
+  f->composition_index = comp_idx;
+  return LUMICE_OK;
+}
+
 static LUMICE_ErrorCode JsonToConfig(const nlohmann::json& root, LUMICE_Config* out) {
   std::memset(out, 0, sizeof(LUMICE_Config));
   out->spectrum = "D65";  // Safe default (memset leaves nullptr)
@@ -793,8 +875,20 @@ static LUMICE_ErrorCode JsonToConfig(const nlohmann::json& root, LUMICE_Config* 
       return LUMICE_ERR_INVALID_CONFIG;
     }
     out->filter_count = static_cast<int>(filters.size());
+    // Two-pass (mirrors core config_manager.cpp): pass 1 parses simple filters and marks
+    // complex ones as placeholders; pass 2 resolves complex compositions once every simple
+    // filter's id/type is known (needed to validate composition references).
     for (int i = 0; i < out->filter_count; i++) {
       auto err = JsonToFilter(filters[i], &out->filters[i]);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+    }
+    for (int i = 0; i < out->filter_count; i++) {
+      if (out->filters[i].type != LUMICE_FILTER_TYPE_COMPLEX) {
+        continue;
+      }
+      auto err = JsonToComplexComposition(filters[i], out, &out->filters[i]);
       if (err != LUMICE_OK) {
         return err;
       }
