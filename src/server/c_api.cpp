@@ -6,6 +6,8 @@
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <set>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -20,6 +22,7 @@
 #include "core/backend/cuda_trace_backend.hpp"  // CudaDeviceAvailable() for LUMICE_IsBackendAvailable
 #endif
 #include "include/lumice.h"
+#include "server/c_api_internal.hpp"
 #include "server/server.hpp"
 #include "util/callback_sink.hpp"
 #include "util/color_space.hpp"
@@ -196,7 +199,9 @@ static nlohmann::json AxisDistToJson(const LUMICE_AxisDist& d) {
   return j;
 }
 
-static nlohmann::json ConfigToJson(const LUMICE_Config& c) {
+// Non-static (declared in server/c_api_internal.hpp) so unit tests can assert the
+// emitted filter JSON shape field by field. See that header for rationale.
+nlohmann::json ConfigToJson(const LUMICE_Config& c) {
   using json = nlohmann::json;
   json root;
 
@@ -241,13 +246,60 @@ static nlohmann::json ConfigToJson(const LUMICE_Config& c) {
     const auto& f = c.filters[i];
     json j;
     j["id"] = f.id;
-    j["type"] = "raypath";
     j["action"] = f.action == 0 ? "filter_in" : "filter_out";
-    json rp = json::array();
-    for (int k = 0; k < f.raypath_count; k++) {
-      rp.push_back(f.raypath[k]);
+
+    // Type-specific fields. Mirrors core config/filter_config.cpp::to_json so that
+    // server->CommitConfig(json) -> from_json consumes the output losslessly.
+    switch (f.type) {
+      case LUMICE_FILTER_TYPE_NONE:
+        j["type"] = "none";
+        break;
+      case LUMICE_FILTER_TYPE_RAYPATH: {
+        j["type"] = "raypath";
+        json rp = json::array();
+        for (int k = 0; k < f.raypath_count; k++) {
+          rp.push_back(f.raypath[k]);
+        }
+        j["raypath"] = rp;
+        break;
+      }
+      case LUMICE_FILTER_TYPE_ENTRY_EXIT:
+        j["type"] = "entry_exit";
+        if (f.ee_entry >= 0) {
+          j["entry"] = f.ee_entry;
+        }
+        if (f.ee_exit >= 0) {
+          j["exit"] = f.ee_exit;
+        }
+        if (f.ee_min_len > 1) {
+          j["min_len"] = f.ee_min_len;
+        }
+        if (f.ee_max_len >= 0) {
+          j["max_len"] = f.ee_max_len;
+        }
+        break;
+      case LUMICE_FILTER_TYPE_DIRECTION:
+        j["type"] = "direction";
+        j["az"] = f.dir_az;
+        j["el"] = f.dir_el;
+        j["radii"] = f.dir_radii;
+        break;
+      case LUMICE_FILTER_TYPE_CRYSTAL:
+        j["type"] = "crystal";
+        j["crystal_id"] = f.crystal_id;
+        break;
+      default:
+        // UNSET (zero-init guard) or an out-of-range discriminant: fail fast rather
+        // than silently emitting a wrong/empty filter. Caller LUMICE_CommitConfigStruct
+        // wraps this in try/catch and maps it to LUMICE_ERR_INVALID_CONFIG.
+        throw std::invalid_argument("LUMICE_FilterParam.type is unset or invalid: " + std::to_string(f.type));
     }
-    j["raypath"] = rp;
+
+    // symmetry is a common FilterConfig field (see core filter_config.cpp::to_json, which
+    // emits it for every type before the per-type fields), so it stays outside the switch
+    // and applies to all arms — do not fold it into the raypath case. Emitted
+    // UNCONDITIONALLY (empty string when no bits set) to stay byte-isomorphic with core,
+    // whose to_json always writes j["symmetry"] = sym.
     std::string sym;
     if (f.symmetry & 1)
       sym += "P";
@@ -255,9 +307,7 @@ static nlohmann::json ConfigToJson(const LUMICE_Config& c) {
       sym += "B";
     if (f.symmetry & 4)
       sym += "D";
-    if (!sym.empty()) {
-      j["symmetry"] = sym;
-    }
+    j["symmetry"] = sym;
     root["filter"].push_back(j);
   }
 
@@ -345,12 +395,22 @@ LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_C
     return LUMICE_ERR_INVALID_CONFIG;
   }
 
-  auto config_json = ConfigToJson(*config);
+  // ConfigToJson is a new throw source (std::invalid_argument on an unset/invalid filter
+  // type — the zero-init guard); the raypath-only version never threw. server_->CommitConfig
+  // already converts core from_json exceptions to an Error return internally (server.cpp),
+  // so those don't reach here — this try/catch primarily guards ConfigToJson's throw from
+  // escaping the C ABI boundary. Map any escaped exception to LUMICE_ERR_INVALID_CONFIG.
   bool reused = false;
-  auto err = server->server_->CommitConfig(config_json, &reused);
-  if (err) {
-    LOG_ERROR("Failed to commit configuration (struct): {}", err.message);
-    return MapErrorCode(err.code);
+  try {
+    auto config_json = ConfigToJson(*config);
+    auto err = server->server_->CommitConfig(config_json, &reused);
+    if (err) {
+      LOG_ERROR("Failed to commit configuration (struct): {}", err.message);
+      return MapErrorCode(err.code);
+    }
+  } catch (const std::exception& e) {
+    LOG_ERROR("Failed to commit configuration (struct): invalid config: {}", e.what());
+    return LUMICE_ERR_INVALID_CONFIG;
   }
   if (out_reused) {
     *out_reused = reused ? 1 : 0;
@@ -479,6 +539,9 @@ static LUMICE_ErrorCode JsonToFilter(const nlohmann::json& fj, LUMICE_FilterPara
   if (fj.at("type").get<std::string>() != "raypath") {
     return LUMICE_ERR_INVALID_VALUE;
   }
+  // Parse currently supports raypath only (full 5-type parse is task 327.1).
+  // Set the discriminant so the struct is self-consistent after ParseConfigString.
+  f->type = LUMICE_FILTER_TYPE_RAYPATH;
 
   auto action_str = fj.at("action").get<std::string>();
   if (action_str == "filter_in") {

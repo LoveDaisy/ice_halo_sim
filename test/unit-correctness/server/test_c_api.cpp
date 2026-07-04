@@ -8,12 +8,16 @@
 #include <fstream>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <set>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
+#include "config/filter_config.hpp"  // core FilterConfig + to_json, for emit isomorphism cross-check
 #include "core/crystal.hpp"
 #include "core/def.hpp"
 #include "include/lumice.h"
+#include "server/c_api_internal.hpp"  // ConfigToJson (test-only exposure) for emit-shape assertions
 
 // Regression guard (task-fix-stats-ray-count-u32-overflow): ray-count fields must be
 // 64-bit so totals > 2^32 never truncate on Windows, where `unsigned long` is 32-bit
@@ -544,7 +548,8 @@ TEST(ParseConfigApi, FullConfigWithPyramidAndFilter) {
 
   // Filter
   EXPECT_EQ(config.filter_count, 1);
-  EXPECT_EQ(config.filters[0].action, 0);  // filter_in
+  EXPECT_EQ(config.filters[0].type, LUMICE_FILTER_TYPE_RAYPATH);  // JsonToFilter sets discriminant
+  EXPECT_EQ(config.filters[0].action, 0);                         // filter_in
   EXPECT_EQ(config.filters[0].raypath_count, 2);
   EXPECT_EQ(config.filters[0].raypath[0], 3);
   EXPECT_EQ(config.filters[0].raypath[1], 5);
@@ -1330,4 +1335,360 @@ TEST(BackendAvailabilityApi, CachedAcrossCalls) {
   for (int i = 0; i < 8; ++i) {
     EXPECT_EQ(LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL), kFirst);
   }
+}
+
+// =====================================================================================
+// task-struct-simple-arms (327.2): LUMICE_FilterParam 5-arm tagged union.
+//
+// Emit-shape tests call ConfigToJson directly (via server/c_api_internal.hpp) and assert
+// the JSON field-by-field, so an emit-side field-name/condition error is caught HERE
+// rather than masked by core's lenient from_json (which would default missing fields and
+// still let LUMICE_CommitConfigStruct return OK). Commit tests then verify the end-to-end
+// ABI-safe path: valid simple types commit; UNSET(0)/out-of-range type -> INVALID_CONFIG
+// (via ConfigToJson throw + CommitConfigStruct catch), never a crash across the C ABI.
+// =====================================================================================
+
+namespace {
+// Minimal LUMICE_Config carrying exactly one filter, for ConfigToJson emit assertions.
+// Other sections stay empty (counts 0) so ConfigToJson's crystal/render/scatter loops are
+// no-ops; spectrum == nullptr resolves to "D65". ConfigToJson does not validate, so this
+// is enough to inspect the emitted filter shape without a server.
+LUMICE_Config MakeOneFilterConfig(const LUMICE_FilterParam& f) {
+  LUMICE_Config config{};
+  config.filter_count = 1;
+  config.filters[0] = f;
+  return config;
+}
+
+// Assert the emitted filter object has EXACTLY this key set — catches both a missing
+// field and an unexpected/cross-arm field (e.g. a Direction filter that wrongly carries
+// "raypath" or "entry"). Per-field EXPECT_EQ alone only checks presence, never absence.
+void ExpectFilterKeys(const nlohmann::json& jf, const std::set<std::string>& expected) {
+  std::set<std::string> actual;
+  for (auto it = jf.begin(); it != jf.end(); ++it) {
+    actual.insert(it.key());
+  }
+  EXPECT_EQ(actual, expected);
+}
+}  // namespace
+
+TEST(StructFilterEmit, None) {
+  LUMICE_FilterParam f{};
+  f.id = 7;
+  f.action = 0;  // filter_in
+  f.type = LUMICE_FILTER_TYPE_NONE;
+  auto root = ConfigToJson(MakeOneFilterConfig(f));
+  const auto& jf = root.at("filter").at(0);
+  EXPECT_EQ(jf.at("id").get<int>(), 7);
+  EXPECT_EQ(jf.at("type").get<std::string>(), "none");
+  EXPECT_EQ(jf.at("action").get<std::string>(), "filter_in");
+  // No symmetry bits set -> no "symmetry" key; no arm-specific fields for "none".
+  ExpectFilterKeys(jf, { "id", "action", "type", "symmetry" });
+}
+
+TEST(StructFilterEmit, Raypath) {
+  LUMICE_FilterParam f{};
+  f.id = 1;
+  f.action = 1;  // filter_out
+  f.type = LUMICE_FILTER_TYPE_RAYPATH;
+  f.raypath_count = 3;
+  f.raypath[0] = 3;
+  f.raypath[1] = 1;
+  f.raypath[2] = 5;
+  f.symmetry = 1 | 2;  // P | B
+  auto root = ConfigToJson(MakeOneFilterConfig(f));
+  const auto& jf = root.at("filter").at(0);
+  EXPECT_EQ(jf.at("type").get<std::string>(), "raypath");
+  EXPECT_EQ(jf.at("action").get<std::string>(), "filter_out");
+  ASSERT_TRUE(jf.at("raypath").is_array());
+  EXPECT_EQ(jf.at("raypath").size(), 3u);
+  EXPECT_EQ(jf.at("raypath")[0].get<int>(), 3);
+  EXPECT_EQ(jf.at("raypath")[2].get<int>(), 5);
+  EXPECT_EQ(jf.at("symmetry").get<std::string>(), "PB");
+  ExpectFilterKeys(jf, { "id", "action", "type", "raypath", "symmetry" });
+}
+
+TEST(StructFilterEmit, EntryExitAllFields) {
+  LUMICE_FilterParam f{};
+  f.id = 2;
+  f.type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+  f.ee_entry = 3;
+  f.ee_exit = 5;
+  f.ee_min_len = 2;
+  f.ee_max_len = 8;
+  auto root = ConfigToJson(MakeOneFilterConfig(f));
+  const auto& jf = root.at("filter").at(0);
+  EXPECT_EQ(jf.at("type").get<std::string>(), "entry_exit");
+  EXPECT_EQ(jf.at("entry").get<int>(), 3);
+  EXPECT_EQ(jf.at("exit").get<int>(), 5);
+  EXPECT_EQ(jf.at("min_len").get<int>(), 2);
+  EXPECT_EQ(jf.at("max_len").get<int>(), 8);
+  ExpectFilterKeys(jf, { "id", "action", "type", "symmetry", "entry", "exit", "min_len", "max_len" });
+}
+
+TEST(StructFilterEmit, EntryExitWildcardsOmitted) {
+  // -1 sentinels (wildcard entry/exit, no max_len) and min_len == 1 must be omitted,
+  // mirroring core to_json which only emits set / non-default optional fields.
+  LUMICE_FilterParam f{};
+  f.id = 2;
+  f.type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+  f.ee_entry = -1;
+  f.ee_exit = -1;
+  f.ee_min_len = 1;
+  f.ee_max_len = -1;
+  auto root = ConfigToJson(MakeOneFilterConfig(f));
+  const auto& jf = root.at("filter").at(0);
+  EXPECT_EQ(jf.at("type").get<std::string>(), "entry_exit");
+  EXPECT_FALSE(jf.contains("entry"));
+  EXPECT_FALSE(jf.contains("exit"));
+  EXPECT_FALSE(jf.contains("min_len"));
+  EXPECT_FALSE(jf.contains("max_len"));
+  ExpectFilterKeys(jf, { "id", "action", "type", "symmetry" });
+}
+
+TEST(StructFilterEmit, Direction) {
+  LUMICE_FilterParam f{};
+  f.id = 4;
+  f.type = LUMICE_FILTER_TYPE_DIRECTION;
+  f.dir_az = 120.0f;
+  f.dir_el = -15.0f;
+  f.dir_radii = 2.5f;
+  auto root = ConfigToJson(MakeOneFilterConfig(f));
+  const auto& jf = root.at("filter").at(0);
+  EXPECT_EQ(jf.at("type").get<std::string>(), "direction");
+  EXPECT_FLOAT_EQ(jf.at("az").get<float>(), 120.0f);
+  EXPECT_FLOAT_EQ(jf.at("el").get<float>(), -15.0f);
+  EXPECT_FLOAT_EQ(jf.at("radii").get<float>(), 2.5f);
+  ExpectFilterKeys(jf, { "id", "action", "type", "symmetry", "az", "el", "radii" });
+}
+
+TEST(StructFilterEmit, Crystal) {
+  LUMICE_FilterParam f{};
+  f.id = 5;
+  f.type = LUMICE_FILTER_TYPE_CRYSTAL;
+  f.crystal_id = 2;
+  auto root = ConfigToJson(MakeOneFilterConfig(f));
+  const auto& jf = root.at("filter").at(0);
+  EXPECT_EQ(jf.at("type").get<std::string>(), "crystal");
+  EXPECT_EQ(jf.at("crystal_id").get<int>(), 2);
+  ExpectFilterKeys(jf, { "id", "action", "type", "symmetry", "crystal_id" });
+}
+
+TEST(StructFilterEmit, UnsetTypeThrows) {
+  // Zero-init guard: type == UNSET(0) must throw, not silently emit "none".
+  LUMICE_FilterParam f{};  // type defaults to 0 == UNSET
+  f.id = 1;
+  EXPECT_THROW(ConfigToJson(MakeOneFilterConfig(f)), std::invalid_argument);
+}
+
+TEST(StructFilterEmit, OutOfRangeTypeThrows) {
+  LUMICE_FilterParam f{};
+  f.id = 1;
+  f.type = 99;  // out of range
+  EXPECT_THROW(ConfigToJson(MakeOneFilterConfig(f)), std::invalid_argument);
+}
+
+// --- Isomorphism cross-check against core's own to_json -------------------------------
+// The AC is "emit JSON isomorphic to filter_config.cpp::to_json". Rather than hand-copy
+// the expected field list (which twice missed the symmetry key-presence detail), build
+// the equivalent core lumice::FilterConfig, run core's to_json (the source of truth), and
+// assert byte-equality with ConfigToJson's filter object. This catches any future drift.
+
+namespace {
+void ExpectEmitMatchesCore(const LUMICE_FilterParam& lf, const lumice::FilterConfig& fc) {
+  nlohmann::json core_j = fc;  // ADL -> lumice::to_json(json&, const FilterConfig&)
+  auto my_j = ConfigToJson(MakeOneFilterConfig(lf)).at("filter").at(0);
+  EXPECT_EQ(my_j, core_j) << "C-API emit:\n" << my_j.dump(2) << "\ncore to_json:\n" << core_j.dump(2);
+}
+}  // namespace
+
+TEST(StructFilterEmitIsomorphism, None) {
+  lumice::FilterConfig fc;
+  fc.id_ = 7;
+  fc.symmetry_ = lumice::FilterConfig::kSymNone;
+  fc.action_ = lumice::FilterConfig::kFilterIn;
+  fc.param_ = lumice::SimpleFilterParam{ lumice::NoneFilterParam{} };
+  LUMICE_FilterParam lf{};
+  lf.id = 7;
+  lf.action = 0;
+  lf.symmetry = 0;
+  lf.type = LUMICE_FILTER_TYPE_NONE;
+  ExpectEmitMatchesCore(lf, fc);
+}
+
+TEST(StructFilterEmitIsomorphism, RaypathWithSymmetry) {
+  lumice::FilterConfig fc;
+  fc.id_ = 1;
+  fc.symmetry_ = lumice::FilterConfig::kSymP | lumice::FilterConfig::kSymB;
+  fc.action_ = lumice::FilterConfig::kFilterOut;
+  fc.param_ = lumice::SimpleFilterParam{ lumice::RaypathFilterParam{ std::vector<lumice::IdType>{ 3, 1, 5 } } };
+  LUMICE_FilterParam lf{};
+  lf.id = 1;
+  lf.action = 1;
+  lf.symmetry = 1 | 2;
+  lf.type = LUMICE_FILTER_TYPE_RAYPATH;
+  lf.raypath_count = 3;
+  lf.raypath[0] = 3;
+  lf.raypath[1] = 1;
+  lf.raypath[2] = 5;
+  ExpectEmitMatchesCore(lf, fc);
+}
+
+TEST(StructFilterEmitIsomorphism, EntryExitFull) {
+  lumice::EntryExitFilterParam ee;
+  ee.entry_ = lumice::IdType{ 3 };
+  ee.exit_ = lumice::IdType{ 5 };
+  ee.min_len_ = 2;
+  ee.max_len_ = std::size_t{ 8 };
+  lumice::FilterConfig fc;
+  fc.id_ = 2;
+  fc.symmetry_ = lumice::FilterConfig::kSymNone;
+  fc.action_ = lumice::FilterConfig::kFilterIn;
+  fc.param_ = lumice::SimpleFilterParam{ ee };
+  LUMICE_FilterParam lf{};
+  lf.id = 2;
+  lf.action = 0;
+  lf.symmetry = 0;
+  lf.type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+  lf.ee_entry = 3;
+  lf.ee_exit = 5;
+  lf.ee_min_len = 2;
+  lf.ee_max_len = 8;
+  ExpectEmitMatchesCore(lf, fc);
+}
+
+TEST(StructFilterEmitIsomorphism, EntryExitWildcardsWithSymmetry) {
+  // Covers "symmetry set + non-raypath type" (the combination prior tests skipped) AND
+  // the wildcard/omitted-field path, cross-checked against core.
+  lumice::EntryExitFilterParam ee;  // entry_/exit_/max_len_ = nullopt, min_len_ = 1
+  lumice::FilterConfig fc;
+  fc.id_ = 2;
+  fc.symmetry_ = lumice::FilterConfig::kSymP | lumice::FilterConfig::kSymB;
+  fc.action_ = lumice::FilterConfig::kFilterIn;
+  fc.param_ = lumice::SimpleFilterParam{ ee };
+  LUMICE_FilterParam lf{};
+  lf.id = 2;
+  lf.action = 0;
+  lf.symmetry = 1 | 2;
+  lf.type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+  lf.ee_entry = -1;
+  lf.ee_exit = -1;
+  lf.ee_min_len = 1;
+  lf.ee_max_len = -1;
+  ExpectEmitMatchesCore(lf, fc);
+}
+
+TEST(StructFilterEmitIsomorphism, Direction) {
+  lumice::DirectionFilterParam dir;
+  dir.lon_ = 120.0f;
+  dir.lat_ = -15.0f;
+  dir.radii_ = 2.5f;
+  lumice::FilterConfig fc;
+  fc.id_ = 4;
+  fc.symmetry_ = lumice::FilterConfig::kSymNone;
+  fc.action_ = lumice::FilterConfig::kFilterIn;
+  fc.param_ = lumice::SimpleFilterParam{ dir };
+  LUMICE_FilterParam lf{};
+  lf.id = 4;
+  lf.action = 0;
+  lf.symmetry = 0;
+  lf.type = LUMICE_FILTER_TYPE_DIRECTION;
+  lf.dir_az = 120.0f;
+  lf.dir_el = -15.0f;
+  lf.dir_radii = 2.5f;
+  ExpectEmitMatchesCore(lf, fc);
+}
+
+TEST(StructFilterEmitIsomorphism, Crystal) {
+  lumice::CrystalFilterParam cr;
+  cr.crystal_id_ = lumice::IdType{ 2 };
+  lumice::FilterConfig fc;
+  fc.id_ = 5;
+  fc.symmetry_ = lumice::FilterConfig::kSymNone;
+  fc.action_ = lumice::FilterConfig::kFilterIn;
+  fc.param_ = lumice::SimpleFilterParam{ cr };
+  LUMICE_FilterParam lf{};
+  lf.id = 5;
+  lf.action = 0;
+  lf.symmetry = 0;
+  lf.type = LUMICE_FILTER_TYPE_CRYSTAL;
+  lf.crystal_id = 2;
+  ExpectEmitMatchesCore(lf, fc);
+}
+
+// --- End-to-end commit through LUMICE_CommitConfigStruct ------------------------------
+
+namespace {
+// Parse the full config (crystals + scene + one referenced filter), then replace that
+// filter (keeping its id, so the scattering reference stays valid) with `f` and shrink to
+// a fast finite sim. Returns the config ready for LUMICE_CommitConfigStruct.
+LUMICE_Config MakeCommitConfigWithFilter(const LUMICE_FilterParam& f) {
+  LUMICE_Config config{};
+  EXPECT_EQ(LUMICE_ParseConfigString(MakeFullConfigJson().c_str(), &config), LUMICE_OK);
+  EXPECT_GE(config.filter_count, 1);
+  const int fid = config.filters[0].id;
+  config.filters[0] = f;
+  config.filters[0].id = fid;
+  config.infinite = 0;
+  config.ray_num = 100;
+  return config;
+}
+
+int CommitFilter(const LUMICE_FilterParam& f) {
+  LUMICE_Config config = MakeCommitConfigWithFilter(f);
+  auto* server = LUMICE_CreateServer();
+  EXPECT_NE(server, nullptr);
+  int reused = -1;
+  auto err = LUMICE_CommitConfigStruct(server, &config, &reused);
+  LUMICE_StopServer(server);
+  LUMICE_DestroyServer(server);
+  return err;
+}
+}  // namespace
+
+TEST(StructFilterCommit, EntryExitCommitsOk) {
+  LUMICE_FilterParam f{};
+  f.action = 0;
+  f.type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+  f.ee_entry = 3;
+  f.ee_exit = 5;
+  f.ee_min_len = 1;
+  f.ee_max_len = -1;
+  EXPECT_EQ(CommitFilter(f), LUMICE_OK);
+}
+
+TEST(StructFilterCommit, DirectionCommitsOk) {
+  LUMICE_FilterParam f{};
+  f.action = 0;
+  f.type = LUMICE_FILTER_TYPE_DIRECTION;
+  f.dir_az = 22.0f;
+  f.dir_el = 0.0f;
+  f.dir_radii = 5.0f;
+  EXPECT_EQ(CommitFilter(f), LUMICE_OK);
+}
+
+TEST(StructFilterCommit, CrystalCommitsOk) {
+  LUMICE_FilterParam f{};
+  f.action = 0;
+  f.type = LUMICE_FILTER_TYPE_CRYSTAL;
+  f.crystal_id = 1;  // MakeFullConfigJson defines crystals with ids 1 and 2
+  EXPECT_EQ(CommitFilter(f), LUMICE_OK);
+}
+
+TEST(StructFilterCommit, UnsetTypeReturnsInvalidConfigNotCrash) {
+  // A construction site that forgot to set `type` zero-inits to UNSET(0). ConfigToJson
+  // throws; LUMICE_CommitConfigStruct must catch and return INVALID_CONFIG, never crash.
+  LUMICE_FilterParam f{};  // type == UNSET
+  f.action = 0;
+  f.type = LUMICE_FILTER_TYPE_UNSET;
+  f.raypath_count = 1;
+  f.raypath[0] = 3;
+  EXPECT_EQ(CommitFilter(f), LUMICE_ERR_INVALID_CONFIG);
+}
+
+TEST(StructFilterCommit, OutOfRangeTypeReturnsInvalidConfigNotCrash) {
+  LUMICE_FilterParam f{};
+  f.action = 0;
+  f.type = 99;  // out of range
+  EXPECT_EQ(CommitFilter(f), LUMICE_ERR_INVALID_CONFIG);
 }

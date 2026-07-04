@@ -206,12 +206,59 @@ typedef struct LUMICE_CrystalParam_ {
   LUMICE_AxisDist roll;
 } LUMICE_CrystalParam;
 
+// Filter type discriminant for LUMICE_FilterParam.type.
+// 0 = UNSET is a deliberate zero-init guard: a struct built via memset/aggregate
+// initialization without an explicit type lands on UNSET and is rejected at commit
+// (LUMICE_ERR_INVALID_CONFIG) rather than being silently treated as "none". Callers
+// that want the no-op "none" filter must set LUMICE_FILTER_TYPE_NONE explicitly.
+#define LUMICE_FILTER_TYPE_UNSET 0
+#define LUMICE_FILTER_TYPE_NONE 1
+#define LUMICE_FILTER_TYPE_RAYPATH 2
+#define LUMICE_FILTER_TYPE_ENTRY_EXIT 3
+#define LUMICE_FILTER_TYPE_DIRECTION 4
+#define LUMICE_FILTER_TYPE_CRYSTAL 5
+// Reserved: complex (sum-of-products) filter reference encoding lands in a follow-up.
+// Until then a filter with this type has no ConfigToJson case and is rejected at commit.
+#define LUMICE_FILTER_TYPE_COMPLEX 6
+
+// BREAKING (v4.5): LUMICE_FilterParam extended from raypath-only to a 5-arm tagged
+// union (None/Raypath/EntryExit/Direction/Crystal). Layout changed; callers must
+// recompile against this header. `type` selects the active arm; arm-specific fields are
+// prefixed by arm (raypath_*, ee_*, dir_*, crystal_*). Field naming/units mirror core
+// config/filter_config.hpp. -1 sentinels encode optional fields.
 typedef struct LUMICE_FilterParam_ {
   int id;
-  int action;    // 0=filter_in, 1=filter_out
+  int action;  // 0=filter_in, 1=filter_out
+  // Symmetry is a common field for ALL filter types (mirrors core FilterConfig.symmetry_,
+  // emitted by filter_config.cpp::to_json before the per-type fields), not raypath-only.
   int symmetry;  // bitmask: 1=P, 2=B, 4=D
+  int type;      // LUMICE_FILTER_TYPE_* (UNSET=0 is rejected at commit)
+
+  // Raypath arm (type == LUMICE_FILTER_TYPE_RAYPATH)
   int raypath[LUMICE_MAX_CONFIG_RAYPATH_LEN];
   int raypath_count;
+
+  // EntryExit arm (type == LUMICE_FILTER_TYPE_ENTRY_EXIT). -1 sentinels below.
+  // NOTE: ee_min_len/ee_max_len mirror core's to_json emit conditions (min_len emitted
+  // only when > 1; max_len only when >= 0). An out-of-contract value like ee_min_len == 0
+  // is therefore emitted as "absent" and normalized to the core default (1) at commit
+  // rather than rejected here. Callers must supply ee_min_len >= 1.
+  // -1 is the ONLY sentinel: any other negative value is undefined (treated as wildcard/
+  // absent, not rejected). These fields are int (matching the raypath[] convention); core
+  // stores IdType(uint16_t) for entry/exit and size_t for the lengths, so keep entry/exit
+  // in [0, 65535] and lengths reasonably small.
+  int ee_entry;    // entry face id; -1 = wildcard (any entry face)
+  int ee_exit;     // exit face id;  -1 = wildcard (any exit face)
+  int ee_min_len;  // path length lower bound (>= 1)
+  int ee_max_len;  // path length upper bound; -1 = no upper bound
+
+  // Direction arm (type == LUMICE_FILTER_TYPE_DIRECTION). Degrees.
+  float dir_az;     // azimuth (lon)
+  float dir_el;     // elevation (lat)
+  float dir_radii;  // angular radius (scalar, not an array)
+
+  // Crystal arm (type == LUMICE_FILTER_TYPE_CRYSTAL)
+  int crystal_id;
 } LUMICE_FilterParam;
 
 typedef struct LUMICE_ScatterEntry_ {
@@ -294,7 +341,10 @@ LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_C
 // (i.e., the subset of the full config format that LUMICE_Config can represent).
 // Specifically:
 //   - crystal: height/face_distance as scalars/arrays, axis as {type, mean, std} objects
-//   - filter: only type="raypath" supported; other types return LUMICE_ERR_INVALID_VALUE
+//   - filter: parse (JSON -> struct) supports only type="raypath"; other types return
+//     LUMICE_ERR_INVALID_VALUE. NOTE: the emit direction (struct -> JSON via ConfigToJson,
+//     used by LUMICE_CommitConfigStruct) already covers all 5 simple types as of v4.5;
+//     full parse-side support lands in a follow-up. So emit/parse are not yet symmetric.
 //   - render: lens/view/visible/background fields are ignored; only id/resolution/opacity/
 //     intensity_factor/overlap are parsed
 //   - spectrum: string enumerations ("D65","D55","D50","D75","A","E") populate the spectrum

@@ -907,6 +907,7 @@ static void FillCrystalParam(const CrystalConfig& c, int id, LUMICE_CrystalParam
 static void FillFilterParam(const FilterConfig& f, int id, LUMICE_FilterParam* dst) {
   assert(f.IsRaypath() && "FillFilterParam called on non-raypath filter (route via SerializeCoreConfig instead)");
   dst->id = id;
+  dst->type = LUMICE_FILTER_TYPE_RAYPATH;
   dst->action = f.action;
   dst->symmetry = (f.sym_p ? 1 : 0) | (f.sym_b ? 2 : 0) | (f.sym_d ? 4 : 0);
   auto rp = ParseRaypathText(f.RaypathText());
