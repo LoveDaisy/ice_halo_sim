@@ -545,6 +545,14 @@ struct MetalTraceBackend::Impl {
   size_t        lat_attempts_cap_ = 0;
   size_t        lat_attempts_ci_start_ = 0;
   bool          attempts_enabled_ = false;
+  // code-review round 1 Major#2: the EFFECTIVE per-ci write offset for the
+  // NEXT EncodeGenRoot call (= lat_attempts_ci_start_ + running per-ci offset
+  // accumulated by TraceLayer's ci-loop). Without this, every ci in a multi-
+  // crystal-instance layer would write to the same [lat_attempts_ci_start_,
+  // lat_attempts_ci_start_ + ci_n) window and silently overwrite the
+  // previous ci's data. Set by GenerateFirstLayerRootsForCi, consumed by
+  // EncodeGenRoot (mirrors the pending_gen_params_ stash/consume pattern).
+  size_t        pending_attempts_ci_start_ = 0;
 
   // Triangle-level geometry for device-resident root-gen (task-260.2). Uploaded
   // by UploadCrystal alongside polygon-level data; sized lazily by
@@ -686,7 +694,8 @@ struct MetalTraceBackend::Impl {
                                 const HostRayBatch& host_batch);
   size_t GenerateFirstLayerRootsForCi(const ScatteringSetting& setting,
                                       size_t ci, size_t crystal_ray_num,
-                                      bool can_use_device_gen);
+                                      bool can_use_device_gen,
+                                      size_t attempts_ci_off);
   // task-267.4 (continuation-validation) golden-ray hook: test-only host-ray
   // injection path. Activated when HostRayBatch::d / p / w / tf are non-null
   // at first MS, ci=0 (TraceLayer guards the branch). Bypasses RNG-based
@@ -1255,8 +1264,14 @@ void MetalTraceBackend::Impl::ResolveLayerCrystalForCi(const ScatteringSetting& 
 
 size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSetting& setting,
                                                               size_t ci, size_t crystal_ray_num,
-                                                              bool can_use_device_gen) {
+                                                              bool can_use_device_gen,
+                                                              size_t attempts_ci_off) {
   if (can_use_device_gen) {
+    // code-review round 1 Major#2: stash the EFFECTIVE per-ci attempts offset
+    // (base + running per-ci accumulation) for EncodeGenRoot to consume,
+    // mirroring pending_gen_params_'s stash/consume within the same ci
+    // iteration.
+    pending_attempts_ci_start_ = lat_attempts_ci_start_ + attempts_ci_off;
     // Device root-gen path (task-260.2). Replicates InitRayFirstMs on the GPU
     // using a counter-based PCG stream keyed by (gen_seed_, gen_ray_base+tid).
     // root_ray_count accumulates across dispatches to keep the global index
@@ -1493,8 +1508,12 @@ void MetalTraceBackend::Impl::EncodeGenRoot(id<MTLCommandBuffer> cb,
       assert(lat_attempts_buf_ != nil);
     }
     [enc setBuffer:lat_attempts_buf_ offset:0 atIndex:12];
+    // code-review round 1 Major#2: use the per-ci EFFECTIVE offset stashed by
+    // GenerateFirstLayerRootsForCi (base lat_attempts_ci_start_ + running
+    // per-ci accumulation), not the raw base — see pending_attempts_ci_start_
+    // doc.
     uint attempts_ctrl[2] = { attempts_enabled_ ? 1u : 0u,
-                              static_cast<uint>(lat_attempts_ci_start_) };
+                              static_cast<uint>(pending_attempts_ci_start_) };
     [enc setBytes:attempts_ctrl length:sizeof(attempts_ctrl) atIndex:13];
     NSUInteger threads = 64;
     NSUInteger groups = (static_cast<NSUInteger>(gp.num_rays) + threads - 1) / threads;
@@ -2156,6 +2175,11 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     impl_->last_stats = LayerStats{};
     impl_->cont_counts[out_slot] = 0;
 
+    // code-review round 1 Major#2: running per-ci offset for the gen-attempt-
+    // count sibling buffer (see GenerateFirstLayerRootsForCi / EncodeGenRoot).
+    // Only meaningful on the first_ms/gen branch, but harmless to accumulate
+    // unconditionally.
+    size_t attempts_win_off = 0;
     for (size_t ci = 0; ci < crystal_cnt; ci++) {
       size_t ci_n = crystal_ray_num[ci];
       if (ci_n == 0) {
@@ -2221,7 +2245,8 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
                                     impl_->gen_seed_ != 0u &&
                                     impl_->current_crystal.TotalTriangles() <= 64u &&
                                     !impl_->disable_device_gen_;
-          in_count = impl_->GenerateFirstLayerRootsForCi(setting, ci, ci_n, can_use_device_gen);
+          in_count = impl_->GenerateFirstLayerRootsForCi(setting, ci, ci_n, can_use_device_gen,
+                                                          attempts_win_off);
         }
       } else {
         // scrum-267 task-device-resident-continuation Step 3: device frame-
@@ -2303,6 +2328,7 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       // ci_start was incremented above inside the !first_ms branch (before
       // the in_count==0 continue), so the next ci reads the correct slice
       // even if this ci's filter+prob dropped everything.
+      attempts_win_off += ci_n;
     }  // ci-loop
 
     // task-268.7 safety net: WaitAndReadbackLayer is invoked at every ci tail,
@@ -2566,8 +2592,13 @@ void MetalTraceBackendTestHooks::EnableGenAttemptCount(size_t count, size_t ci_s
   // buffer to hold `count` ints, arm the write flag. Independent of the RNG
   // probe (Metal currently has no `EnableRngProbeForTest`; see hpp §"2. 范围
   // 与边界" declaration for why).
+  //
+  // code-review round 1 Major#2: `count` is the layer's total ray count — the
+  // ci-loop's gen dispatch writes at tid + ci_start + <running per-ci
+  // offset>, up to ci_start + count total across all ci's in the layer — so
+  // the allocation must cover ci_start + count, not just count.
   auto& impl = *backend_.impl_;
-  const size_t required_bytes = std::max<size_t>(count, 1u) * sizeof(int);
+  const size_t required_bytes = std::max<size_t>(ci_start + count, 1u) * sizeof(int);
   const size_t current_bytes = (impl.lat_attempts_buf_ == nil)
                                    ? 0u
                                    : static_cast<size_t>([impl.lat_attempts_buf_ length]);
@@ -2578,7 +2609,7 @@ void MetalTraceBackendTestHooks::EnableGenAttemptCount(size_t count, size_t ci_s
   }
   // Zero the used region so a stale count from a prior Enable does not leak.
   std::memset([impl.lat_attempts_buf_ contents], 0, required_bytes);
-  impl.lat_attempts_cap_ = count;
+  impl.lat_attempts_cap_ = ci_start + count;
   impl.lat_attempts_ci_start_ = ci_start;
   impl.attempts_enabled_ = (count > 0u);
 }

@@ -123,10 +123,10 @@ class CudaTraceBackend : public TraceBackend {
   // scrum-328.2 Step 3: all test-only observation + injection points have
   // migrated to `CudaTraceBackendTestHooks` (see
   // `core/backend/cuda_trace_backend_test_hooks.hpp`). This class's public
-  // interface is now production-only. The single retained ForTest-suffixed
-  // symbol above (`GetLastBatchCrystalCount` is production; the enumerated
-  // known-exception on the backend surface is nothing — both prior exceptions
-  // migrated or stayed production). Tests construct
+  // interface is now production-only, with zero `*ForTest`-suffixed symbols
+  // remaining on it — `GetLastBatchCrystalCount` above never carried that
+  // suffix and is an ordinary production method, unaffected by this
+  // refactor. Tests construct
   // `CudaTraceBackendTestHooks(backend).SetInitialRayBase(...)` etc.
   friend class CudaTraceBackendTestHooks;
 

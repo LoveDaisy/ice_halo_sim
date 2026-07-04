@@ -2574,6 +2574,16 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
 
   const uint32_t max_hits = static_cast<uint32_t>(impl_->scene_->max_hits_);
   size_t ci_start = 0;  // running offset into cont[in_slot] for continuation slices
+  // Running per-ci window offset for the RNG probe / attempts sibling buffer
+  // (code-review round 1 Major#2 fix): probe_ci_start_/lat_attempts_ci_start_
+  // are a single caller-supplied BASE set once via Enable*; without this
+  // per-ci accumulation every ci in a multi-crystal-instance layer would
+  // dispatch its kernel with the SAME base and silently overwrite the
+  // previous ci's [0, ci_n) window instead of landing in a disjoint slice.
+  // EnableRngProbe/EnableGenAttemptCount size the buffer to
+  // ci_start + count, where `count` is the layer's total ray count `n` — so
+  // base + sum(ci_n) never exceeds the allocation.
+  size_t probe_win_off = 0;
   for (size_t ci = 0; ci < crystal_cnt; ci++) {
     const size_t ci_n = crystal_ray_num[ci];
     if (ci_n == 0u) {
@@ -2649,9 +2659,9 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
                                      geom_tri_norm, geom_tri_area, geom_tri_to_poly,
                                      impl_->d_wl_pool_, gp, cin,
                                      gen_probe_arg,
-                                     static_cast<uint32_t>(impl_->probe_ci_start_),
+                                     static_cast<uint32_t>(impl_->probe_ci_start_ + probe_win_off),
                                      impl_->d_lat_attempts_,
-                                     static_cast<uint32_t>(impl_->lat_attempts_ci_start_));
+                                     static_cast<uint32_t>(impl_->lat_attempts_ci_start_ + probe_win_off));
       ck_reset(cudaPeekAtLastError(), "gen_root_kernel launch");
       impl_->gen_ray_count_ += ci_n;
     } else if (first_ms) {
@@ -2728,7 +2738,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
           impl_->d_rot_c2w_, impl_->d_root_wl_idx_,
           geom_tri_vtx, geom_tri_norm, geom_tri_area, geom_tri_to_poly,
           gp, cin, transit_probe_arg,
-          static_cast<uint32_t>(impl_->probe_ci_start_));
+          static_cast<uint32_t>(impl_->probe_ci_start_ + probe_win_off));
       ck_reset(cudaPeekAtLastError(), "transit kernel launch");
       impl_->transit_ray_count_ += ci_n;
       ci_start += ci_n;
@@ -2794,7 +2804,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
         gate_split.lo,
         gate_split.hi,
         trace_probe_arg,
-        static_cast<uint32_t>(impl_->probe_ci_start_));
+        static_cast<uint32_t>(impl_->probe_ci_start_ + probe_win_off));
     ck_reset(cudaPeekAtLastError(), "kernel launch");
     // S2: ev_end_kernel_ recorded inside the loop captures real kernel time.
     // The original outside-loop placement (right next to ev_end_h2d_) collapsed
@@ -2806,6 +2816,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     // not) must consume a disjoint global_idx range to avoid stream collision
     // across batches. Mirrors the monotone-counter discipline of transit/gen.
     impl_->gate_ray_count_ += ci_n;
+    probe_win_off += ci_n;
   }  // ci-loop
 
   // 4B readback (synchronous on the default stream — also the first sync
@@ -3215,9 +3226,15 @@ void CudaTraceBackendTestHooks::EnableRngProbe(RngProbeStream stream, size_t cou
   if (count == 0u) {
     return;
   }
-  CheckCuda(cudaMalloc(&impl.d_rng_probe_, count * sizeof(float)), "cudaMalloc d_rng_probe (test)");
-  CheckCuda(cudaMemset(impl.d_rng_probe_, 0, count * sizeof(float)), "cudaMemset d_rng_probe (test)");
-  impl.rng_probe_cap_ = count;
+  // code-review round 1 Major#2: `count` is the layer's total ray count (the
+  // sum of every ci's per-dispatch window within TraceLayer's ci-loop, which
+  // writes at tid + ci_start + <running per-ci offset>); the allocation must
+  // cover ci_start + count, not just count, or a non-zero ci_start overruns
+  // the buffer.
+  const size_t total = ci_start + count;
+  CheckCuda(cudaMalloc(&impl.d_rng_probe_, total * sizeof(float)), "cudaMalloc d_rng_probe (test)");
+  CheckCuda(cudaMemset(impl.d_rng_probe_, 0, total * sizeof(float)), "cudaMemset d_rng_probe (test)");
+  impl.rng_probe_cap_ = total;
 }
 
 size_t CudaTraceBackendTestHooks::ReadbackRngProbe(std::vector<float>& out, size_t count) {
@@ -3245,11 +3262,15 @@ void CudaTraceBackendTestHooks::EnableGenAttemptCount(size_t count, size_t ci_st
   if (count == 0u) {
     return;
   }
-  CheckCuda(cudaMalloc(&impl.d_lat_attempts_, count * sizeof(int)),
+  // code-review round 1 Major#2: see EnableRngProbe — allocation must cover
+  // ci_start + count (the per-ci loop writes at tid + ci_start + running
+  // offset, up to ci_start + count total across all ci's in the layer).
+  const size_t total = ci_start + count;
+  CheckCuda(cudaMalloc(&impl.d_lat_attempts_, total * sizeof(int)),
             "cudaMalloc d_lat_attempts (test)");
-  CheckCuda(cudaMemset(impl.d_lat_attempts_, 0, count * sizeof(int)),
+  CheckCuda(cudaMemset(impl.d_lat_attempts_, 0, total * sizeof(int)),
             "cudaMemset d_lat_attempts (test)");
-  impl.lat_attempts_cap_ = count;
+  impl.lat_attempts_cap_ = total;
 }
 
 size_t CudaTraceBackendTestHooks::ReadbackGenAttemptCount(std::vector<int>& out, size_t count) {

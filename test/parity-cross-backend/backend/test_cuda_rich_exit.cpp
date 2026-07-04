@@ -540,6 +540,78 @@ TEST(CudaRngHiWiring, TransitStreamWireUp) {
   }
 }
 
+// code-review round 1 Major#2 regression (mirrors the Metal-side
+// RngObservabilityFacilitySmoke.MultiCiAttemptWindowsDoNotOverwrite test in
+// test_metal_root_gen.cpp): two real crystal instances (ci=0/1) within ONE MS
+// layer must write their gen-attempt-count windows into DISJOINT regions of
+// the sibling buffer. Before this fix, TraceLayer's ci-loop passed the SAME
+// static `lat_attempts_ci_start_` base to every ci's gen_root_kernel dispatch
+// — with a non-zero base ci_start armed, the second ci's dispatch could
+// silently clobber the first ci's already-written window (or, pre-capacity-
+// fix, write past the [0, count) allocation). dev49-only (skips on Mac /
+// hosts without a CUDA device) — mirrors the hi_wire tests above.
+TEST(RngObservabilityFacilitySmoke, MultiCiAttemptWindowsDoNotOverwrite) {
+  if (!CudaDeviceAvailable()) {
+    GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
+  }
+
+  constexpr size_t kTotal = 16000;
+  constexpr size_t kCiStartBase = 37u;
+
+  auto scene = MakeRandomAxisScene(/*max_hits=*/1, /*final_prob=*/0.0f);
+  // Near-pole Laplacian b=5 (see doc/near-pole-area-measure-sampling.md
+  // §附录) so the rejection loop actually runs and attempts vary — a trivial
+  // always-1 attempts value would not distinguish "written" from
+  // "never-touched-but-happens-to-read-as-1".
+  scene.ms_[0].setting_[0].crystal_.axis_.latitude_dist = Distribution{ DistributionType::kLaplacian, 90.0f, 5.0f };
+  scene.ms_[0].setting_[0].crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  scene.ms_[0].setting_[0].crystal_proportion_ = 0.7f;
+
+  ScatteringSetting ci1 = scene.ms_[0].setting_[0];
+  ci1.crystal_.id_ = 1;
+  ci1.crystal_proportion_ = 0.3f;
+  scene.ms_[0].setting_.push_back(std::move(ci1));
+
+  auto render = MakeFullViewRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  HostRayBatch host;
+  host.count = kTotal;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  CudaTraceBackend backend;
+  backend.BeginSession(spec);
+  CudaTraceBackendTestHooks hooks(backend);
+  hooks.EnableGenAttemptCount(kTotal, kCiStartBase);
+  auto h = backend.TraceLayer(RootRaySource::FromHost(host));
+  ASSERT_NE(h, nullptr);
+
+  std::vector<int> attempts;
+  size_t n = hooks.ReadbackGenAttemptCount(attempts, kCiStartBase + kTotal);
+  backend.EndSession();
+  ASSERT_EQ(n, kCiStartBase + kTotal) << "readback returned fewer elements than allocated — capacity fix regressed.";
+
+  for (size_t i = 0; i < kCiStartBase; i++) {
+    ASSERT_EQ(attempts[i], 0) << "slot " << i << " before ci_start base was written — base offset not honored.";
+  }
+
+  size_t zero_count = 0;
+  for (size_t i = kCiStartBase; i < kCiStartBase + kTotal; i++) {
+    if (attempts[i] == 0) {
+      zero_count++;
+    }
+  }
+  EXPECT_EQ(zero_count, 0u)
+      << zero_count << " of " << kTotal
+      << " attempt-count slots in [ci_start, ci_start+total) were never written — multi-crystal-instance "
+      << "windows are colliding instead of landing in disjoint per-ci slices.";
+}
+
 }  // namespace
 }  // namespace lumice
 
