@@ -1692,3 +1692,258 @@ TEST(StructFilterCommit, OutOfRangeTypeReturnsInvalidConfigNotCrash) {
   f.type = 99;  // out of range
   EXPECT_EQ(CommitFilter(f), LUMICE_ERR_INVALID_CONFIG);
 }
+
+// =====================================================================================
+// task-serialize-completion (327.1): parse direction (JSON -> struct) for all 5 simple
+// types + public LUMICE_ConfigToJson. Round-trip goes through the public serialize + parse
+// APIs; cross-check against core from_json (source of truth) rather than hand-transcribed
+// expectations (see learnings: contract-and-property-tests / emit-schema cross-check).
+// =====================================================================================
+
+namespace {
+// struct -> JSON (public LUMICE_ConfigToJson) -> struct (LUMICE_ParseConfigString). Returns
+// the round-tripped filters[0]. Exercises both new 327.1 pieces end to end.
+LUMICE_FilterParam RoundTripFilter(const LUMICE_FilterParam& in) {
+  LUMICE_Config cfg = MakeOneFilterConfig(in);
+  // Zero-init so that if LUMICE_ConfigToJson unexpectedly fails, the subsequent
+  // LUMICE_ParseConfigString sees a valid empty C-string (loud parse error) rather than
+  // reading uninitialized stack memory (ASSERT_EQ can't be used in this value-returning
+  // helper). Truncation is covered separately by ConfigToJsonBufferTruncationContract.
+  char buf[8192] = {};
+  size_t len = 0;
+  EXPECT_EQ(LUMICE_ConfigToJson(&cfg, buf, sizeof(buf), &len), LUMICE_OK);
+  EXPECT_LT(len, sizeof(buf));  // these small configs never truncate
+  LUMICE_Config out{};
+  EXPECT_EQ(LUMICE_ParseConfigString(buf, &out), LUMICE_OK);
+  EXPECT_EQ(out.filter_count, 1);
+  return out.filters[0];
+}
+
+// Replace MakeFullConfigJson's filter[0] with `jf` (id kept 1 so scattering ref stays valid)
+// and return the full config JSON string, for parse-side tests.
+std::string FullConfigWithFilterJson(const nlohmann::json& jf) {
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  root["filter"][0] = jf;
+  return root.dump();
+}
+}  // namespace
+
+TEST(StructFilterParse, NoneRoundTrip) {
+  LUMICE_FilterParam in{};
+  in.id = 7;
+  in.action = 0;
+  in.type = LUMICE_FILTER_TYPE_NONE;
+  auto out = RoundTripFilter(in);
+  EXPECT_EQ(out.type, LUMICE_FILTER_TYPE_NONE);
+  EXPECT_EQ(out.action, 0);
+}
+
+TEST(StructFilterParse, RaypathRoundTrip) {
+  LUMICE_FilterParam in{};
+  in.id = 1;
+  in.action = 1;
+  in.symmetry = 1 | 2;
+  in.type = LUMICE_FILTER_TYPE_RAYPATH;
+  in.raypath_count = 3;
+  in.raypath[0] = 3;
+  in.raypath[1] = 1;
+  in.raypath[2] = 5;
+  auto out = RoundTripFilter(in);
+  EXPECT_EQ(out.type, LUMICE_FILTER_TYPE_RAYPATH);
+  EXPECT_EQ(out.action, 1);
+  EXPECT_EQ(out.symmetry, 1 | 2);
+  EXPECT_EQ(out.raypath_count, 3);
+  EXPECT_EQ(out.raypath[0], 3);
+  EXPECT_EQ(out.raypath[2], 5);
+}
+
+TEST(StructFilterParse, EntryExitRoundTrip) {
+  LUMICE_FilterParam in{};
+  in.id = 2;
+  in.type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+  in.ee_entry = 3;
+  in.ee_exit = 5;
+  in.ee_min_len = 2;
+  in.ee_max_len = 8;
+  auto out = RoundTripFilter(in);
+  EXPECT_EQ(out.type, LUMICE_FILTER_TYPE_ENTRY_EXIT);
+  EXPECT_EQ(out.ee_entry, 3);
+  EXPECT_EQ(out.ee_exit, 5);
+  EXPECT_EQ(out.ee_min_len, 2);
+  EXPECT_EQ(out.ee_max_len, 8);
+}
+
+TEST(StructFilterParse, EntryExitWildcardRoundTrip) {
+  LUMICE_FilterParam in{};
+  in.id = 2;
+  in.type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+  in.ee_entry = -1;
+  in.ee_exit = -1;
+  in.ee_min_len = 1;
+  in.ee_max_len = -1;
+  auto out = RoundTripFilter(in);
+  EXPECT_EQ(out.type, LUMICE_FILTER_TYPE_ENTRY_EXIT);
+  EXPECT_EQ(out.ee_entry, -1);  // absent -> wildcard sentinel
+  EXPECT_EQ(out.ee_exit, -1);
+  EXPECT_EQ(out.ee_min_len, 1);  // absent -> default 1
+  EXPECT_EQ(out.ee_max_len, -1);
+}
+
+TEST(StructFilterParse, DirectionRoundTrip) {
+  LUMICE_FilterParam in{};
+  in.id = 4;
+  in.type = LUMICE_FILTER_TYPE_DIRECTION;
+  in.dir_az = 120.0f;
+  in.dir_el = -15.0f;
+  in.dir_radii = 2.5f;
+  auto out = RoundTripFilter(in);
+  EXPECT_EQ(out.type, LUMICE_FILTER_TYPE_DIRECTION);
+  EXPECT_FLOAT_EQ(out.dir_az, 120.0f);
+  EXPECT_FLOAT_EQ(out.dir_el, -15.0f);
+  EXPECT_FLOAT_EQ(out.dir_radii, 2.5f);
+}
+
+TEST(StructFilterParse, CrystalRoundTrip) {
+  LUMICE_FilterParam in{};
+  in.id = 5;
+  in.type = LUMICE_FILTER_TYPE_CRYSTAL;
+  in.crystal_id = 2;
+  auto out = RoundTripFilter(in);
+  EXPECT_EQ(out.type, LUMICE_FILTER_TYPE_CRYSTAL);
+  EXPECT_EQ(out.crystal_id, 2);
+}
+
+TEST(StructFilterParse, NonRaypathTypesNoLongerRejected) {
+  // Regression: pre-327.1, ParseConfigString rejected non-raypath filters with INVALID_VALUE.
+  auto json = FullConfigWithFilterJson(
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "entry_exit" }, { "entry", 3 }, { "exit", 5 } });
+  LUMICE_Config out{};
+  EXPECT_EQ(LUMICE_ParseConfigString(json.c_str(), &out), LUMICE_OK);
+  ASSERT_GE(out.filter_count, 1);
+  EXPECT_EQ(out.filters[0].type, LUMICE_FILTER_TYPE_ENTRY_EXIT);
+  EXPECT_EQ(out.filters[0].ee_entry, 3);
+  EXPECT_EQ(out.filters[0].ee_exit, 5);
+  EXPECT_EQ(out.filters[0].ee_min_len, 1);   // absent -> default
+  EXPECT_EQ(out.filters[0].ee_max_len, -1);  // absent
+}
+
+TEST(StructFilterParse, ComplexTypeStillRejected) {
+  // Complex struct encoding is task 327.3; parse must reject it explicitly (not silently).
+  auto json = FullConfigWithFilterJson({ { "id", 1 }, { "action", "filter_in" }, { "type", "complex" } });
+  LUMICE_Config out{};
+  EXPECT_EQ(LUMICE_ParseConfigString(json.c_str(), &out), LUMICE_ERR_INVALID_VALUE);
+}
+
+TEST(StructFilterParse, UnknownTypeRejected) {
+  // The default branch also covers arbitrary unknown type strings (not just "complex").
+  auto json = FullConfigWithFilterJson({ { "id", 1 }, { "action", "filter_in" }, { "type", "bogus" } });
+  LUMICE_Config out{};
+  EXPECT_EQ(LUMICE_ParseConfigString(json.c_str(), &out), LUMICE_ERR_INVALID_VALUE);
+}
+
+TEST(StructFilterParse, IllegalEntryExitValuePassesThroughLikeCore) {
+  // Decision (plan 327.1 §7 risk 2): parse does lossless mapping only; value validation
+  // (min_len >= 1) stays single-source in core and fires at commit. So parse of min_len=0
+  // must succeed and store it verbatim (core would likewise not reject at from_json time;
+  // it throws only later). This pins the "validation not duplicated in parse" contract.
+  auto json = FullConfigWithFilterJson(
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "entry_exit" }, { "entry", 3 }, { "min_len", 0 } });
+  LUMICE_Config out{};
+  EXPECT_EQ(LUMICE_ParseConfigString(json.c_str(), &out), LUMICE_OK);
+  ASSERT_GE(out.filter_count, 1);
+  EXPECT_EQ(out.filters[0].ee_min_len, 0);  // stored verbatim, not normalized/rejected here
+}
+
+// Parse cross-check against core from_json (source of truth): parsing a filter JSON via
+// LUMICE_ParseConfigString then re-emitting (LUMICE_ConfigToJson) must byte-match core's own
+// from_json -> to_json round-trip of the same JSON. Since 327.2 proved emit == core to_json,
+// equality here proves the parse direction also agrees with core from_json.
+namespace {
+void ExpectParseMatchesCore(const nlohmann::json& jf) {
+  // core path: from_json -> FilterConfig -> to_json
+  lumice::FilterConfig fc = jf.get<lumice::FilterConfig>();
+  nlohmann::json core_out = fc;
+  // my path: ParseConfigString -> struct -> LUMICE_ConfigToJson -> filter[0]
+  LUMICE_Config cfg{};
+  ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithFilterJson(jf).c_str(), &cfg), LUMICE_OK);
+  char buf[8192];
+  size_t len = 0;
+  ASSERT_EQ(LUMICE_ConfigToJson(&cfg, buf, sizeof(buf), &len), LUMICE_OK);
+  auto my_root = nlohmann::json::parse(std::string(buf, len));
+  EXPECT_EQ(my_root.at("filter").at(0), core_out) << "mine:\n"
+                                                  << my_root.at("filter").at(0).dump(2) << "\ncore:\n"
+                                                  << core_out.dump(2);
+}
+}  // namespace
+
+TEST(StructFilterParseIsomorphism, Raypath) {
+  ExpectParseMatchesCore({ { "id", 1 },
+                           { "action", "filter_out" },
+                           { "type", "raypath" },
+                           { "raypath", { 3, 1, 5 } },
+                           { "symmetry", "PB" } });
+}
+TEST(StructFilterParseIsomorphism, None) {
+  ExpectParseMatchesCore({ { "id", 7 }, { "action", "filter_in" }, { "type", "none" }, { "symmetry", "" } });
+}
+TEST(StructFilterParseIsomorphism, EntryExit) {
+  ExpectParseMatchesCore({ { "id", 2 },
+                           { "action", "filter_in" },
+                           { "type", "entry_exit" },
+                           { "entry", 3 },
+                           { "exit", 5 },
+                           { "min_len", 2 },
+                           { "max_len", 8 },
+                           { "symmetry", "" } });
+}
+TEST(StructFilterParseIsomorphism, Direction) {
+  ExpectParseMatchesCore({ { "id", 4 },
+                           { "action", "filter_in" },
+                           { "type", "direction" },
+                           { "az", 120.0 },
+                           { "el", -15.0 },
+                           { "radii", 2.5 },
+                           { "symmetry", "" } });
+}
+TEST(StructFilterParseIsomorphism, Crystal) {
+  ExpectParseMatchesCore(
+      { { "id", 5 }, { "action", "filter_in" }, { "type", "crystal" }, { "crystal_id", 2 }, { "symmetry", "" } });
+}
+
+TEST(StructFilterParse, ConfigToJsonBufferTruncationContract) {
+  // Exercises the snprintf-style caller-buffer contract (buffer overrun handling is the
+  // highest-risk path for a new C ABI function; plan 327.1 Step 2 required this test).
+  LUMICE_FilterParam f{};
+  f.id = 1;
+  f.action = 0;
+  f.type = LUMICE_FILTER_TYPE_RAYPATH;
+  f.raypath_count = 2;
+  f.raypath[0] = 3;
+  f.raypath[1] = 5;
+  LUMICE_Config cfg = MakeOneFilterConfig(f);
+
+  // NULL config -> NULL_ARG.
+  size_t tmp = 0;
+  EXPECT_EQ(LUMICE_ConfigToJson(nullptr, nullptr, 0, &tmp), LUMICE_ERR_NULL_ARG);
+
+  // Query length only (out_buf == NULL, buf_size == 0).
+  size_t full_len = 0;
+  EXPECT_EQ(LUMICE_ConfigToJson(&cfg, nullptr, 0, &full_len), LUMICE_OK);
+  EXPECT_GT(full_len, size_t{ 8 });  // full JSON is well over 8 bytes
+
+  // Full (untruncated) reference output.
+  char full[8192];
+  ASSERT_EQ(LUMICE_ConfigToJson(&cfg, full, sizeof(full), nullptr), LUMICE_OK);
+
+  // Truncate into a small buffer.
+  char small[8];
+  std::memset(small, 'X', sizeof(small));
+  size_t len = 0;
+  EXPECT_EQ(LUMICE_ConfigToJson(&cfg, small, sizeof(small), &len), LUMICE_OK);
+  EXPECT_EQ(len, full_len);                          // out_len = FULL length, not written count
+  EXPECT_GE(len, sizeof(small));                     // out_len >= buf_size signals truncation
+  EXPECT_EQ(small[sizeof(small) - 1], '\0');         // always NUL-terminated
+  EXPECT_EQ(std::strlen(small), sizeof(small) - 1);  // wrote exactly buf_size-1 chars
+  EXPECT_EQ(std::string(small, sizeof(small) - 1),   // truncated prefix matches full prefix
+            std::string(full, sizeof(small) - 1));
+}

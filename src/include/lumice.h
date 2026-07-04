@@ -341,10 +341,11 @@ LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_C
 // (i.e., the subset of the full config format that LUMICE_Config can represent).
 // Specifically:
 //   - crystal: height/face_distance as scalars/arrays, axis as {type, mean, std} objects
-//   - filter: parse (JSON -> struct) supports only type="raypath"; other types return
-//     LUMICE_ERR_INVALID_VALUE. NOTE: the emit direction (struct -> JSON via ConfigToJson,
-//     used by LUMICE_CommitConfigStruct) already covers all 5 simple types as of v4.5;
-//     full parse-side support lands in a follow-up. So emit/parse are not yet symmetric.
+//   - filter: parse (JSON -> struct) supports the 5 simple types (none / raypath /
+//     entry_exit / direction / crystal), mirroring the LUMICE_ConfigToJson emit. type=
+//     "complex" and any unknown type return LUMICE_ERR_INVALID_VALUE (complex struct
+//     encoding lands in a follow-up). Parse does lossless field mapping only; value
+//     validation (e.g. entry_exit min_len >= 1) fires at commit time in core.
 //   - render: lens/view/visible/background fields are ignored; only id/resolution/opacity/
 //     intensity_factor/overlap are parsed
 //   - spectrum: string enumerations ("D65","D55","D50","D75","A","E") populate the spectrum
@@ -364,6 +365,18 @@ LUMICE_ErrorCode LUMICE_ParseConfigString(const char* json_str, LUMICE_Config* o
 // Parse a JSON file into LUMICE_Config. filename must be UTF-8 encoded.
 // Returns LUMICE_ERR_FILE_NOT_FOUND if the file cannot be opened.
 LUMICE_ErrorCode LUMICE_ParseConfigFile(const char* filename, LUMICE_Config* out);
+
+// Serialize a LUMICE_Config into its JSON string form — the inverse of
+// LUMICE_ParseConfigString and the explicit serialization half of the typed-struct API
+// (for save / round-trip / debugging; distinct from the commit path).
+//
+// Buffer contract (snprintf-style, no cross-ABI allocation): writes at most buf_size bytes
+// into out_buf, always NUL-terminated when buf_size > 0. out_buf may be NULL (or buf_size 0)
+// to query the length without writing. If out_len is non-NULL it receives the full JSON
+// length EXCLUDING the NUL terminator; the output was truncated iff out_len >= buf_size.
+// Returns LUMICE_ERR_NULL_ARG if config is NULL, LUMICE_ERR_INVALID_CONFIG if the config
+// cannot be serialized (e.g. a filter with an unset/invalid type).
+LUMICE_ErrorCode LUMICE_ConfigToJson(const LUMICE_Config* config, char* out_buf, size_t buf_size, size_t* out_len);
 
 // =============== Results ===============
 // See doc/capi-lifecycle-architecture.md §5 for sentinel contract.

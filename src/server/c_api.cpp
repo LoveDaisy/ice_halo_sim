@@ -250,6 +250,8 @@ nlohmann::json ConfigToJson(const LUMICE_Config& c) {
 
     // Type-specific fields. Mirrors core config/filter_config.cpp::to_json so that
     // server->CommitConfig(json) -> from_json consumes the output losslessly.
+    // SYNC: the per-type field list here mirrors the parse side in JsonToFilter (below);
+    // adding/removing a filter type or field requires updating both.
     switch (f.type) {
       case LUMICE_FILTER_TYPE_NONE:
         j["type"] = "none";
@@ -419,6 +421,34 @@ LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_C
 }
 
 
+// =============== Configuration Serialization (LUMICE_Config -> JSON) ===============
+// Public serialization API: struct -> JSON string, the symmetric pair of the parsing
+// section below. snprintf-style caller buffer (see the contract in lumice.h). Wraps the
+// internal ConfigToJson, mapping its throw (unset/invalid filter type) to
+// LUMICE_ERR_INVALID_CONFIG so nothing escapes the C ABI boundary.
+LUMICE_ErrorCode LUMICE_ConfigToJson(const LUMICE_Config* config, char* out_buf, size_t buf_size, size_t* out_len) {
+  if (!config) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  std::string json_str;
+  try {
+    json_str = ConfigToJson(*config).dump();
+  } catch (const std::exception& e) {
+    LOG_ERROR("LUMICE_ConfigToJson: failed to serialize config: {}", e.what());
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  if (out_len) {
+    *out_len = json_str.size();
+  }
+  if (out_buf && buf_size > 0) {
+    size_t n = std::min(json_str.size(), buf_size - 1);
+    std::memcpy(out_buf, json_str.data(), n);
+    out_buf[n] = '\0';
+  }
+  return LUMICE_OK;
+}
+
+
 // =============== Configuration Parsing (JSON -> LUMICE_Config) ===============
 // Symmetric inverse of ConfigToJson. Decomposed into per-section helpers.
 
@@ -536,13 +566,6 @@ static LUMICE_ErrorCode JsonToFilter(const nlohmann::json& fj, LUMICE_FilterPara
   }
   f->id = fj.at("id").get<int>();
 
-  if (fj.at("type").get<std::string>() != "raypath") {
-    return LUMICE_ERR_INVALID_VALUE;
-  }
-  // Parse currently supports raypath only (full 5-type parse is task 327.1).
-  // Set the discriminant so the struct is self-consistent after ParseConfigString.
-  f->type = LUMICE_FILTER_TYPE_RAYPATH;
-
   auto action_str = fj.at("action").get<std::string>();
   if (action_str == "filter_in") {
     f->action = 0;
@@ -552,18 +575,48 @@ static LUMICE_ErrorCode JsonToFilter(const nlohmann::json& fj, LUMICE_FilterPara
     return LUMICE_ERR_INVALID_VALUE;
   }
 
-  if (fj.contains("raypath") && fj.at("raypath").is_array()) {
-    const auto& rp = fj.at("raypath");
-    f->raypath_count = static_cast<int>(rp.size());
-    if (f->raypath_count > LUMICE_MAX_CONFIG_RAYPATH_LEN) {
-      return LUMICE_ERR_INVALID_CONFIG;
+  // Type-specific fields (JSON -> struct arm). Field names/defaults mirror core
+  // config/filter_config.cpp::from_json. Parse does lossless mapping ONLY: value
+  // validation (e.g. entry_exit min_len >= 1, max_len <= kMaxHits) stays single-source
+  // in core and fires at commit time (caught by LUMICE_CommitConfigStruct). -1 encodes
+  // an absent optional (wildcard / no bound).
+  // SYNC: the per-type field list here mirrors the emit side in ConfigToJson (above);
+  // adding/removing a filter type or field requires updating both.
+  auto type_str = fj.at("type").get<std::string>();
+  if (type_str == "none") {
+    f->type = LUMICE_FILTER_TYPE_NONE;
+  } else if (type_str == "raypath") {
+    f->type = LUMICE_FILTER_TYPE_RAYPATH;
+    if (fj.contains("raypath") && fj.at("raypath").is_array()) {
+      const auto& rp = fj.at("raypath");
+      f->raypath_count = static_cast<int>(rp.size());
+      if (f->raypath_count > LUMICE_MAX_CONFIG_RAYPATH_LEN) {
+        return LUMICE_ERR_INVALID_CONFIG;
+      }
+      for (int k = 0; k < f->raypath_count; k++) {
+        f->raypath[k] = rp[k].get<int>();
+      }
     }
-    for (int k = 0; k < f->raypath_count; k++) {
-      f->raypath[k] = rp[k].get<int>();
-    }
+  } else if (type_str == "entry_exit") {
+    f->type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+    f->ee_entry = (fj.contains("entry") && !fj.at("entry").is_null()) ? fj.at("entry").get<int>() : -1;
+    f->ee_exit = (fj.contains("exit") && !fj.at("exit").is_null()) ? fj.at("exit").get<int>() : -1;
+    f->ee_min_len = (fj.contains("min_len") && !fj.at("min_len").is_null()) ? fj.at("min_len").get<int>() : 1;
+    f->ee_max_len = (fj.contains("max_len") && !fj.at("max_len").is_null()) ? fj.at("max_len").get<int>() : -1;
+  } else if (type_str == "direction") {
+    f->type = LUMICE_FILTER_TYPE_DIRECTION;
+    f->dir_az = fj.at("az").get<float>();
+    f->dir_el = fj.at("el").get<float>();
+    f->dir_radii = fj.at("radii").get<float>();
+  } else if (type_str == "crystal") {
+    f->type = LUMICE_FILTER_TYPE_CRYSTAL;
+    f->crystal_id = fj.at("crystal_id").get<int>();
+  } else {
+    // "complex" (task 327.3) and any unknown type are not yet representable in the struct.
+    return LUMICE_ERR_INVALID_VALUE;
   }
 
-  // Symmetry: string "PBD" -> bitmask
+  // Symmetry: common field for all types. "PBD" -> bitmask.
   f->symmetry = 0;
   if (fj.contains("symmetry")) {
     for (char ch : fj.at("symmetry").get<std::string>()) {
