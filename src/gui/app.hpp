@@ -138,6 +138,14 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
 void RenderStatusBar(float window_width, float window_height);
 void RenderUnsavedPopup(GLFWwindow* window);
 void RenderImportWarningPopup();
+// Generic GUI warning modal (see app_panels.cpp). SetGuiWarning queues a message (idempotent
+// while the same message is in-flight, so a persistent condition re-detected every debounced
+// commit does not re-spam the modal). ClearGuiWarning re-arms it (called on a successful
+// commit). RenderGuiWarningPopup shows it. Used e.g. when a filter edit exceeds the ABI bounds.
+void SetGuiWarning(const std::string& msg);
+void ClearGuiWarning();
+std::string PeekGuiWarning();  // test accessor: current in-flight message ("" if none)
+void RenderGuiWarningPopup();
 void RenderLogPanel(float window_width, float window_height);
 
 }  // namespace lumice::gui

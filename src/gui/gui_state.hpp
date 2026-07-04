@@ -551,8 +551,9 @@ struct GuiState {
   // kModified via that reconcile (base kDone + dirty), not via a direct write.
   void MarkDirty() { dirty = true; }
 
-  // Mark a filter-related change. Filter edits ALWAYS trigger a server rebuild on the next
-  // commit (IsTrivialFilterSet ⇒ JSON path ⇒ epoch++), so this does two orthogonal things:
+  // Mark a filter-related change. A filter edit changes the server's filter topology, so the
+  // next struct commit rebuilds (epoch++) rather than reusing consumers; this does two
+  // orthogonal things:
   //   (a) immediate display clear — snapshot_intensity/p99 reset so the shader renders black
   //       right away (a legitimate display action, not a lock);
   //   (b) raise display_epoch_floor to the current committed_epoch so any payload still being

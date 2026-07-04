@@ -2108,6 +2108,40 @@ TEST(StructFilterComplex, CommitStructEndToEnd) {
   LUMICE_DestroyServer(server);
 }
 
+TEST(StructFilterComplex, ComplexFilterCommitReusesOnNonRendererChange) {
+  // The mechanism behind the 327.4 jank fix: a config carrying a COMPLEX filter can reuse
+  // consumers (out_reused == 1) on a subsequent non-renderer change, so the live-preview
+  // buffer is NOT torn. Before, GUI multi-segment/multi-value (complex) filters were forced
+  // onto the JSON commit path, which has no out_reused signal and always rebuilt — tearing
+  // the buffer on every crystal/sun slider drag. Routing complex through the typed struct
+  // (327.3/327.4) restores the reuse signal. The GUI-integration timing (poller not stopped
+  // on drag) is verified on-screen; this locks the underlying core contract headlessly.
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } },
+      { { "id", 2 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 1, 4 } } },
+      { { "id", 3 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 1, 2 } } },
+  });
+  LUMICE_Config cfg{};
+  ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_OK);
+  cfg.infinite = 0;
+  cfg.ray_num = 100;
+
+  auto* server = LUMICE_CreateServer();
+  ASSERT_NE(server, nullptr);
+  int reused = -1;
+  ASSERT_EQ(LUMICE_CommitConfigStruct(server, &cfg, &reused), LUMICE_OK);
+  EXPECT_EQ(reused, 0);  // first commit builds consumers
+
+  // Change only a non-renderer field (sun altitude); the complex filter is unchanged.
+  cfg.sun_altitude += 5.0f;
+  reused = -1;
+  ASSERT_EQ(LUMICE_CommitConfigStruct(server, &cfg, &reused), LUMICE_OK);
+  EXPECT_EQ(reused, 1);  // consumers reused despite the complex filter -> buffer not torn
+
+  LUMICE_StopServer(server);
+  LUMICE_DestroyServer(server);
+}
+
 TEST(StructFilterComplex, DanglingReferenceRejected) {
   nlohmann::json filters = nlohmann::json::array({
       { { "id", 1 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } },
