@@ -612,6 +612,81 @@ TEST(RngObservabilityFacilitySmoke, MultiCiAttemptWindowsDoNotOverwrite) {
       << "windows are colliding instead of landing in disjoint per-ci slices.";
 }
 
+// scrum-328.3 Step 5 — CUDA-side mirror of the Metal Gaussian tight-envelope
+// acceptance-rate smoke (RngObservabilityFacilitySmoke.NearPoleGaussianTightEnvelope
+// in test_metal_root_gen.cpp:NearPoleAcceptanceRateMatchesDocAnchors's Gaussian
+// σ=5 case). CUDA's gen_root_kernel calls into lm_pcg::sample_lat_lon_roll from
+// the same pcg_shared.h that scrum-328.3 updated, so the CUDA path picks up the
+// new Rayleigh accept step with zero .cu edits (source-mirror-only, per plan
+// Step 5). This test is the runtime evidence that the source mirror actually
+// takes effect on device — required on dev49, skipped on Mac (no CUDA device).
+// Anchor mean(attempts) ≈ 1.002 mirrors the Metal-side Gaussian anchor and the
+// doc/near-pole-area-measure-sampling.md §附录 Python MC prediction.
+TEST(RngObservabilityFacilitySmoke, NearPoleGaussianTightEnvelopeAcceptanceRate) {
+  if (!CudaDeviceAvailable()) {
+    GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
+  }
+
+  constexpr size_t kSmokeRayCount = 65536;
+
+  auto scene = MakeRandomAxisScene(/*max_hits=*/1, /*final_prob=*/0.0f);
+  scene.ms_[0].setting_[0].crystal_.axis_.latitude_dist = Distribution{ DistributionType::kGaussian, 90.0f, 5.0f };
+  scene.ms_[0].setting_[0].crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  scene.ms_[0].setting_[0].crystal_.axis_.roll_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+
+  auto render = MakeFullViewRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  HostRayBatch host;
+  host.count = kSmokeRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  CudaTraceBackend backend;
+  backend.BeginSession(spec);
+  CudaTraceBackendTestHooks hooks(backend);
+  hooks.EnableGenAttemptCount(kSmokeRayCount, /*ci_start=*/0u);
+  auto h = backend.TraceLayer(RootRaySource::FromHost(host));
+  ASSERT_NE(h, nullptr);
+
+  std::vector<int> attempts;
+  size_t n = hooks.ReadbackGenAttemptCount(attempts, kSmokeRayCount);
+  backend.EndSession();
+  ASSERT_EQ(n, kSmokeRayCount);
+
+  long long sum = 0;
+  int max_attempts = 0;
+  size_t safety_valve_hits = 0;
+  for (int a : attempts) {
+    sum += a;
+    if (a > max_attempts) {
+      max_attempts = a;
+    }
+    if (a >= 1000) {  // pcg_shared.h kMaxRejectionAttempts
+      safety_valve_hits++;
+    }
+  }
+  const double mean_attempts = static_cast<double>(sum) / static_cast<double>(attempts.size());
+
+  EXPECT_EQ(safety_valve_hits, 0u) << safety_valve_hits << " rays saturated kMaxRejectionAttempts (max=" << max_attempts
+                                   << ") — mean(attempts) would be biased.";
+
+  // Anchor: ~1.002 (doc §附录 Python MC ≈ 99.8% acceptance). ±5% band matches
+  // the Metal-side smoke's tolerance.
+  constexpr double kAnchor = 1.002;
+  const double lo = kAnchor * 0.95;
+  const double hi = kAnchor * 1.05;
+  EXPECT_GE(mean_attempts, lo) << "CUDA Gaussian σ=5 near-pole mean(attempts)=" << mean_attempts << " below anchor±5% ["
+                               << lo << ", " << hi << "] — tight-envelope Rayleigh path not active on device.";
+  EXPECT_LE(mean_attempts, hi) << "CUDA Gaussian σ=5 near-pole mean(attempts)=" << mean_attempts << " above anchor±5% ["
+                               << lo << ", " << hi
+                               << "] — CUDA/Metal cross-backend anchor drift; investigate source-mirror parity.";
+}
+
 }  // namespace
 }  // namespace lumice
 

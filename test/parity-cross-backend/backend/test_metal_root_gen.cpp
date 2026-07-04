@@ -35,6 +35,7 @@
 #include "core/backend/metal_trace_backend.hpp"
 #include "core/backend/metal_trace_backend_test_hooks.hpp"  // scrum-328.2 Step 3
 #include "core/backend/trace_backend.hpp"
+#include "core/math.hpp"
 #include "metal_test_helpers.hpp"
 
 namespace lumice {
@@ -572,14 +573,15 @@ TEST(MetalRootGen, TransitStreamWireUp) {
   }
 }
 
-// scrum-328.2 Step 7 (AC5a) — Facility consumer smoke. Drives the current
-// (pre-new-sampler) generic-reject path on Laplacian b=5 / Gaussian σ=5
-// near-pole configurations, uses the observability facility (EnableGenAttemptCount
-// + ReadbackGenAttemptCount) to collect per-ray rejection-loop iteration
-// counts, and asserts mean(attempts) matches the doc anchors
-// (doc/near-pole-area-measure-sampling.md Laplacian 4.90 / Gaussian 3.76,
-// ±5% per plan). Proves the facility itself works before consumer 2 (328.3/
-// 328.4) swaps in the new tight-envelope sampler.
+// scrum-328.2 Step 7 (AC5a) — Facility consumer smoke, updated by scrum-328.3
+// after the Gaussian near-pole path switched from kLatPathGenericReject to the
+// tight-envelope kLatPathRayleigh (propose Rayleigh + accept sin(θ)/θ). Drives
+// both a Laplacian b=5 near-pole (still GenericReject — Laplacian is scrum-328.4
+// scope) and a Gaussian σ=5 near-pole (post-328.3 Rayleigh tight-envelope) with
+// the observability facility (EnableGenAttemptCount + ReadbackGenAttemptCount)
+// and asserts mean(attempts) matches the current anchors within ±5%:
+// - Laplacian b=5 → 4.90 (unchanged; kLatPathGenericReject, ~20% acceptance)
+// - Gaussian σ=5  → 1.002 (new; kLatPathRayleigh tight-envelope, ~99.8% acceptance)
 //
 // Near-pole config: latitude_dist.mean = 90° (= zenith 0, per math.cpp:638),
 // so cos(φ)/M rejection loop actually kicks in. Sample size 65536 → MC
@@ -624,11 +626,19 @@ TEST(RngObservabilityFacilitySmoke, NearPoleAcceptanceRateMatchesDocAnchors) {
     float anchor_mean_attempts;  // doc/near-pole-area-measure-sampling.md §附录
   };
   const Case kCases[] = {
-    // std5 → std_rad ≈ 0.087, well above Rayleigh threshold (colatitude+3σ<0.5°
-    // → σ < 0.167°) so gen_root_kernel hits kLatPathGenericReject and the
-    // attempts counter reflects real rejection-loop iterations.
+    // Laplacian b=5 (mean=90°, i.e. zenith=0): still walks kLatPathGenericReject
+    // (Laplacian is out of scope for scrum-328.3's tight-envelope path — that is
+    // scrum-328.4's territory), so its anchor is unchanged.
     { "Laplacian b=5", DistributionType::kLaplacian, 4.90 },
-    { "Gaussian σ=5", DistributionType::kGaussian, 3.76 },
+    // Gaussian σ=5 (mean=90°): after scrum-328.3 relaxed the Rayleigh threshold
+    // to colatitude_center<0.5° (σ-independent, capped at σ<60° per plan risk 1),
+    // this config now routes to kLatPathRayleigh with the tight-envelope
+    // sin(θ)/θ accept step. Anchor is the measured device mean(attempts) with
+    // seed 42 / 65536 rays (captured during scrum-328.3 Step 4); Python MC in
+    // doc/near-pole-area-measure-sampling.md §附录 predicts ≈ 1.002 (99.8%
+    // acceptance). ±5% band absorbs both MC noise and the Python-vs-device
+    // arithmetic tolerance.
+    { "Gaussian σ=5", DistributionType::kGaussian, 1.002 },
   };
 
   for (const Case& c : kCases) {
@@ -756,6 +766,181 @@ TEST(RngObservabilityFacilitySmoke, MultiCiAttemptWindowsDoNotOverwrite) {
       << zero_count << " of " << kTotal
       << " attempt-count slots in [ci_start, ci_start+total) were never written — multi-crystal-instance "
       << "windows are colliding instead of landing in disjoint per-ci slices.";
+}
+
+// scrum-328.3 Step 4(b) — uniform near-pole acceptance-rate smoke. The
+// ComputeJacobianEnvelope kUniform branch was tightened from a loose M=1.0 to
+// the exact bounded-uniform envelope M = cos(max(|mean|-std/2, 0)°). At
+// mean=90° / std=15°, the proposal support is [82.5°, 97.5°] (folded to
+// [82.5°, 90°] via NormalizeLatitude); E[cos(phi)] ≈ 0.06545 and
+// M_new = cos(82.5°) ≈ 0.13053, giving a theoretical accept probability
+// ≈ 0.501 and mean(attempts) ≈ 1.996. Old M=1.0 would give ≈ 15.3.
+// Test asserts the new mean(attempts) lands in a band tight enough to reject
+// the old-M baseline (≤ 6) and confirms no safety-valve hits.
+TEST(RngObservabilityFacilitySmoke, NearPoleUniformAcceptanceRateBeatsBaseline) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  EnableDeviceGenForStatisticalParity();
+
+  constexpr size_t kSmokeRayCount = 65536;
+  auto scene = MakeMetalScene(/*max_hits=*/1, /*ms_layers=*/1);
+  scene.ms_[0].setting_[0].crystal_.axis_.latitude_dist = Distribution{ DistributionType::kUniform, 90.0f, 15.0f };
+  scene.ms_[0].setting_[0].crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  scene.ms_[0].setting_[0].crystal_.axis_.roll_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+
+  auto render = MakeRectangularRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  HostRayBatch host;
+  host.count = kSmokeRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  MetalTraceBackend metal;
+  metal.BeginSession(spec);
+  MetalTraceBackendTestHooks hooks(metal);
+  hooks.EnableGenAttemptCount(kSmokeRayCount);
+  auto h = metal.TraceLayer(RootRaySource::FromHost(host));
+  ASSERT_NE(h, nullptr);
+
+  std::vector<int> attempts;
+  size_t n = hooks.ReadbackGenAttemptCount(attempts, kSmokeRayCount);
+  metal.EndSession();
+  ASSERT_EQ(n, kSmokeRayCount);
+
+  const AttemptStats stats = ComputeAttemptStats(attempts);
+  EXPECT_EQ(stats.safety_valve_hits, 0u);
+
+  // Theoretical mean(attempts) ≈ 1.996 with new tight M; ±15% band absorbs MC
+  // noise + the exact fold-integral approximation. Tight enough to reject the
+  // old M=1.0 baseline (which would give ~15).
+  constexpr double kAnchor = 1.996;
+  const double lo = kAnchor * 0.85;
+  const double hi = kAnchor * 1.15;
+  EXPECT_GE(stats.mean, lo) << "uniform-near-pole mean(attempts)=" << stats.mean << " below anchor±15% [" << lo << ", "
+                            << hi << "] (anchor=" << kAnchor << ").";
+  EXPECT_LE(stats.mean, hi) << "uniform-near-pole mean(attempts)=" << stats.mean << " above anchor±15% [" << lo << ", "
+                            << hi << "] (anchor=" << kAnchor << ").";
+  // Independent rejection of old-M=1.0 baseline (would give ~15 attempts).
+  EXPECT_LT(stats.mean, 6.0) << "uniform-near-pole mean(attempts)=" << stats.mean
+                             << " — tight envelope not active? old M=1.0 baseline would give ~15.";
+}
+
+// scrum-328.3 Step 4(c) — device (Metal) vs CPU (math.cpp::SampleSphericalPointsSph)
+// distribution-shape parity for the new Rayleigh tight-envelope path. AC2 hard
+// constraint: cannot be bit-parity with the OLD sampler (new one is intentionally
+// more precise); must match the analytic target ∝ exp(-θ²/2σ²)·sin(θ) at the
+// distribution level. This test hits the same target with both backends
+// (Gaussian σ=5, mean=90°, seed 42, N=65536) and compares distribution moments
+// (mean + variance of the crystal-axis colatitude) to be equal within Monte
+// Carlo tolerance. Not a bit-parity assertion — RNG streams differ across
+// backends — the check is that both samplers describe the same distribution
+// shape for the axis latitude drawn from the tight-envelope Rayleigh path.
+//
+// Extraction of the crystal-axis direction from the per-ray rotation matrix
+// stored in root_rot_buf (via ReadbackRootRot): build_crystal_rotation_9
+// (pcg_shared.h:402) builds R = Rz(lon-π)·Ry(lat-π/2)·Rz(roll) with row-major
+// storage mat9[i*3+j] = R_ij. Applying R to the crystal-local +Z axis (0,0,1)
+// gives axis_world = (mat9[2], mat9[5], mat9[8]); the Z component is
+// mat9[8] = sin(lat). |mat9[8]| = cos(colatitude_from_pole), so
+// colatitude = acos(|mat9[8]|) for both the +90° and −90° mean folds.
+TEST(RngObservabilityFacilitySmoke, NearPoleGaussianDirsMatchCpuMoments) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  EnableDeviceGenForStatisticalParity();
+
+  constexpr size_t kRayN = 65536;
+  const AxisDistribution axis_dist = [] {
+    AxisDistribution a;
+    a.latitude_dist = Distribution{ DistributionType::kGaussian, 90.0f, 5.0f };
+    a.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+    a.roll_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+    return a;
+  }();
+
+  // --- Metal side: read gen'd crystal→world rotation matrices (9 floats/ray).
+  std::vector<float> metal_rot;
+  {
+    auto scene = MakeMetalScene(/*max_hits=*/1, /*ms_layers=*/1);
+    scene.ms_[0].setting_[0].crystal_.axis_ = axis_dist;
+
+    auto render = MakeRectangularRender();
+    SessionSpec spec;
+    spec.scene = &scene;
+    spec.render = &render;
+    spec.wl = WlParam{ 550.0f, 1.0f };
+    spec.seed = 42;
+
+    HostRayBatch host;
+    host.count = kRayN;
+    host.crystal = nullptr;
+    host.refractive_index = 0.0f;
+
+    MetalTraceBackend metal;
+    metal.BeginSession(spec);
+    MetalTraceBackendTestHooks hooks(metal);
+    auto h = metal.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h, nullptr);
+    size_t n = hooks.ReadbackRootRot(metal_rot, kRayN);
+    metal.EndSession();
+    ASSERT_EQ(n, 9u * kRayN);
+  }
+
+  auto compute_moments = [](const std::vector<double>& xs) {
+    double sum = 0.0;
+    double sum_sq = 0.0;
+    for (double x : xs) {
+      sum += x;
+      sum_sq += x * x;
+    }
+    const double n = static_cast<double>(xs.size());
+    const double mean = sum / n;
+    const double var = std::max(0.0, sum_sq / n - mean * mean);
+    return std::pair<double, double>{ mean, var };
+  };
+
+  std::vector<double> metal_colat;
+  metal_colat.reserve(kRayN);
+  for (size_t r = 0; r < kRayN; r++) {
+    float z = metal_rot[r * 9u + 8u];  // mat9[8] = sin(lat) = cos(colatitude_from_pole)
+    z = std::max(-1.0f, std::min(1.0f, std::abs(z)));
+    metal_colat.push_back(std::acos(static_cast<double>(z)));
+  }
+  const auto [metal_mean, metal_var] = compute_moments(metal_colat);
+
+  // --- CPU side: same axis_dist, same-N, RandomSampler::SampleSphericalPointsSph.
+  RandomNumberGenerator::GetInstance().SetSeed(42);
+  std::vector<float> cpu_lon_lat(3u * kRayN);
+  RandomSampler::SampleSphericalPointsSph(axis_dist, cpu_lon_lat.data(), kRayN);
+  std::vector<double> cpu_colat;
+  cpu_colat.reserve(kRayN);
+  for (size_t r = 0; r < kRayN; r++) {
+    // lon_lat layout: [lambda, phi, roll]. phi is latitude in [-π/2, π/2]; take
+    // colatitude = π/2 - |phi| so south-pole folds match the Metal |mat9[8]|
+    // fold above.
+    const double phi = std::abs(static_cast<double>(cpu_lon_lat[3u * r + 1u]));
+    cpu_colat.push_back(0.5 * lumice::math::kPi - phi);
+  }
+  const auto [cpu_mean, cpu_var] = compute_moments(cpu_colat);
+
+  // For σ=5° = 0.0873 rad targeting ∝ exp(-θ²/2σ²)·sin(θ):
+  //   analytic mean ≈ σ·√(π/2) ≈ 0.1094 rad (~6.27°).
+  // Metal and CPU use independent PCG streams (different bases/global_idx) so
+  // this is a distribution-shape check, not a per-ray comparison. Standard error
+  // on the mean ≈ σ/√N ≈ 3.4e-4 rad; ±0.002 rad tolerance (~6σ_MC) leaves
+  // margin for cross-backend tail-sampling differences without loosening enough
+  // to admit the old sampler's shape.
+  EXPECT_NEAR(metal_mean, cpu_mean, 0.002)
+      << "Metal vs CPU axis-colatitude mean mismatch: metal=" << metal_mean << " cpu=" << cpu_mean
+      << " (rad); tight-envelope samplers should target the same analytic distribution.";
+  EXPECT_NEAR(metal_var, cpu_var, 0.0005) << "Metal vs CPU axis-colatitude variance mismatch: metal=" << metal_var
+                                          << " cpu=" << cpu_var << " (rad²); distribution-shape parity failed.";
 }
 
 }  // namespace
