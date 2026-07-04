@@ -53,9 +53,10 @@ namespace lm_pcg {
 // axis_dist; the kernel only dispatches.
 LM_CONSTANT uint32_t kLatPathFullSphere = 0u;  // axis_dist.IsFullSphereUniform()
 LM_CONSTANT uint32_t kLatPathNoRandom = 1u;
-LM_CONSTANT uint32_t kLatPathRayleigh = 2u;       // kGaussian near-pole optimization
-LM_CONSTANT uint32_t kLatPathGaussLegacy = 3u;    // kGaussianLegacy
-LM_CONSTANT uint32_t kLatPathGenericReject = 4u;  // kGaussian/kUniform/kZigzag/kLaplacian
+LM_CONSTANT uint32_t kLatPathRayleigh = 2u;                // kGaussian near-pole optimization
+LM_CONSTANT uint32_t kLatPathGaussLegacy = 3u;             // kGaussianLegacy
+LM_CONSTANT uint32_t kLatPathGenericReject = 4u;           // kGaussian/kUniform/kZigzag/kLaplacian
+LM_CONSTANT uint32_t kLatPathLaplacianTightEnvelope = 5u;  // kLaplacian near-pole optimization
 
 // DistributionType enum values (must match src/core/math.hpp). Crystal-rot
 // parity REQUIRES the GenericReject path know the actual proposal type, so
@@ -69,6 +70,48 @@ LM_CONSTANT uint32_t kDistGaussianLegacy = 5u;
 
 LM_CONSTANT uint32_t kMaxTriPerKernel = 64u;
 LM_CONSTANT int kMaxRejectionAttempts = 1000;
+
+// --- Stream-family nonces -------------------------------------------------
+// PCG-stream separation nonce for the per-ray wavelength draw in
+// `gen_root_kernel` (both Metal `lumice_trace.metal` and CUDA
+// `cuda_trace_backend.cu`, form-for-form mirrored). The wl draw MUST live in
+// its own PCG seed domain, independent of the orientation / triangle-pick
+// draws that share `(mixed_seed, global_idx)` — otherwise the wl_idx becomes
+// correlated with the crystal orientation whenever the orientation stream
+// consumes enough slots to reach the wl slot.
+//
+// Background (task-gpu-wl-stream-decouple-green-tint / issue.md):
+// The previous design put wl on `slot = 20` and reused `mixed_seed`, betting
+// that the orientation stream never consumed 20 slots. Under a near-pole
+// axis distribution (e.g. `zenith` = laplacian mean=0), the acceptance rate
+// `cos(phi)/M` → 0 and GenericReject can consume up to
+// `kMaxRejectionAttempts = 1000` iterations (× 2 slots for Laplacian) per
+// ray — ~10% of rays reach slot 20. The colliding draw then reads the same
+// PCG hash as the wl draw, so wl_idx becomes a function of the orientation,
+// systematically suppressing the red end in the halo column (empirically
+// `metal_lap.green_excess = +3.2` vs `cpu_lap = +0.7`). Seed-domain isolation
+// (XOR-mix into the seed) is immune to slot-count consumption, regardless of
+// how many slots the orientation loop burns — this is the only fix that does
+// not depend on the "orientation never consumes N slots" assumption.
+//
+// **Nonce uniqueness clearinghouse** — all other stream nonces currently in
+// use, so that new nonces (added here or elsewhere) can be picked to not
+// collide:
+//   kTransitNonce        = 0xA5A5A5A5u  (metal_trace_backend.mm)
+//   kCudaGateNonce       = 0x5A5A5A5Au  (cuda_trace_backend.cu)
+//   kCudaGenNonce        = 0x3C9A7F11u  (cuda_trace_backend.cu)
+//   kMetalShuffleNonce   = 0xB17CA3D9u  (metal_trace_backend.mm; symmetric to
+//                                        the CUDA shuffle nonce)
+//   kCudaDrainNonce      = 0xD5A1B3C7u  (cuda_trace_backend.cu)
+//   kWlStreamNonce       = 0x9E3779B9u  (this header; the 32-bit golden-ratio
+//                                        constant — same value used in the
+//                                        issue.md causal-verification patch
+//                                        that shrank metal_lap.green_excess
+//                                        from +3.2 → +1.0)
+// All six values are pairwise distinct. `pcg_hash` has good avalanche on any
+// non-zero XOR delta, so no additional statistical validation is required.
+LM_CONSTANT uint32_t kWlStreamNonce = 0x9E3779B9u;
+// (BuildWlStream is defined after PcgStream below.)
 
 // --- GenRootKernelParams --------------------------------------------------
 // Single source for both `gen_root_kernel` (Metal-only, device root sampler)
@@ -120,11 +163,33 @@ LM_FN float u01_from_hash(uint32_t h) {
   return static_cast<float>(h >> 8) * (1.0f / 16777216.0f);
 }
 
+// Precise acceptance ratio for tight-envelope area-measure sampling near the
+// pole (doc/near-pole-area-measure-sampling.md §2). Returns sin(theta)/theta;
+// the theta->0 limit is 1.0. The 1e-6f guard only fires when a uniform draw
+// floor drives the proposed colatitude toward 0 (see kLatPathRayleigh branch
+// in sample_lat_lon_roll). Domain is theta in [0, pi]: within it sin(theta) is
+// non-negative, so the returned ratio is in [0, 1] and is a valid probability.
+LM_FN float pcg_sinc(float theta) {
+  return theta > 1e-6f ? LM_SIN(theta) / theta : 1.0f;
+}
+
 struct PcgStream {
   uint32_t seed;
   uint32_t global_idx;
   uint32_t slot;
 };
+
+// Single-source constructor for the wl PCG stream — see kWlStreamNonce above
+// for the design rationale (seed-domain isolation, not slot isolation).
+// Metal + CUDA gen_root_kernel both call this instead of hand-writing the
+// three-field init, guaranteeing bit-identical wl streams across backends.
+LM_FN PcgStream BuildWlStream(uint32_t mixed_seed, uint32_t global_idx) {
+  PcgStream s;
+  s.seed = mixed_seed ^ kWlStreamNonce;
+  s.global_idx = global_idx;
+  s.slot = 0u;
+  return s;
+}
 
 // --- 64-bit ray-index helpers (task-gpu-rng-ray-index-uint64) -------------
 // Host provides `base_lo` (low 32 bits) + `base_hi` (high 32 bits) of the
@@ -171,6 +236,19 @@ LM_FN float pcg_gaussian(LM_THREAD PcgStream& s) {
   return LM_SQRT(-2.0f * LM_LOG(u1)) * LM_COS(2.0f * LM_PI_F * u2);
 }
 
+// Gamma(shape=2, scale=b) via the sum-of-two-Exp(1/b) closed form:
+//   theta = -b * (ln u1 + ln u2), u1,u2 ~ U(0,1)
+// Used by the Laplacian tight-envelope area-measure sampler
+// (doc/near-pole-area-measure-sampling.md §2.1): theta = colatitude ~ Gamma(2,b)
+// paired with sin(theta)/theta acceptance is EXACT (M=1) for the target
+// p(theta) ∝ exp(-theta/b) * sin(theta). u_i floored at 1e-7 (same as
+// pcg_gaussian) to keep log() finite. Consumes 2 uniform slots per call.
+LM_FN float pcg_gamma2(LM_THREAD PcgStream& s, float b) {
+  float u1 = LM_FMAX(pcg_uniform(s), 1e-7f);
+  float u2 = LM_FMAX(pcg_uniform(s), 1e-7f);
+  return -b * (LM_LOG(u1) + LM_LOG(u2));
+}
+
 // Mirrors RandomNumberGenerator::Get (math.cpp:365-389). mean / std are in
 // the SAME unit the host caller uses for the result; SampleSphericalPointsSph
 // always pre-converts axis_dist.{*}.mean/std to radians here, so the radian
@@ -212,11 +290,24 @@ LM_FN void normalize_latitude(float phi, LM_THREAD float& phi_out, LM_THREAD boo
 // Replicates InitRay_rot + SampleSphericalPointsSph (simulator.cpp:138-150 +
 // math.cpp:404/444). All distribution params are pre-converted to radians on
 // the host so the kernel does no degree↔radian conversions.
+//
+// `out_attempts` (scrum-328.2 Step 1 attempt-count observability, plan §5):
+// non-null → the caller receives this ray's rejection-loop iteration count
+// (1 for direct/analytic paths kFullSphere/kNoRandom/kRayleigh/kGaussLegacy;
+// N for kLatPathGenericReject, capped at kMaxRejectionAttempts). The caller
+// uses `mean(attempts)` as the empirical `1/accept_ratio` — the ONLY route
+// to a per-ray acceptance-rate observation on device (the host-side
+// SelectLatPath / ComputeJacobianEnvelope decision is deterministic and
+// cannot substitute). null → no write, hot-path cost is one branch predicted
+// off; production keeps passing null so the observation is compiled out at
+// the call site.
 LM_FN void sample_lat_lon_roll(LM_THREAD PcgStream& s, LM_CONSTANT_REF GenRootKernelParams& gp,
-                               LM_THREAD float& out_lon, LM_THREAD float& out_lat, LM_THREAD float& out_roll) {
+                               LM_THREAD float& out_lon, LM_THREAD float& out_lat, LM_THREAD float& out_roll,
+                               LM_THREAD int* out_attempts) {
   float phi = 0.0f;
   bool flip = false;
   float lon = 0.0f;
+  int attempts_total = 1;  // direct-path default; kLatPathGenericReject overwrites below
   if (gp.lat_path == kLatPathFullSphere) {
     float u = pcg_uniform(s) * 2.0f - 1.0f;
     u = LM_CLAMP(u, -1.0f, 1.0f);
@@ -225,9 +316,56 @@ LM_FN void sample_lat_lon_roll(LM_THREAD PcgStream& s, LM_CONSTANT_REF GenRootKe
   } else if (gp.lat_path == kLatPathNoRandom) {
     phi = gp.lat_mean_rad;
   } else if (gp.lat_path == kLatPathRayleigh) {
-    float dx = pcg_gaussian(s) * gp.lat_std_rad;
-    float dy = pcg_gaussian(s) * gp.lat_std_rad;
-    float colatitude = LM_SQRT(dx * dx + dy * dy);
+    // Tight-envelope area-measure sampling (doc/near-pole-area-measure-sampling.md
+    // §2). Propose colatitude ~ Rayleigh(sigma) via the 2D-Gaussian norm form
+    // (numerically identical to theta = sigma*sqrt(-2 ln u)); accept with
+    // sin(theta)/theta (M=1, exact, never clamp). Consumes 2 gaussian slots +
+    // 1 uniform slot per attempt; expected ~1.002 attempts for sigma <= 60°
+    // (doc §附录). attempts_total is populated so the scrum-328.2 attempt-count
+    // observability facility (EnableGenAttemptCountForTest / ReadbackGenAttemptCountForTest)
+    // measures the tight-envelope acceptance rate directly.
+    int attempts = 0;
+    float colatitude = 0.0f;
+    bool accept = false;
+    do {
+      float dx = pcg_gaussian(s) * gp.lat_std_rad;
+      float dy = pcg_gaussian(s) * gp.lat_std_rad;
+      colatitude = LM_SQRT(dx * dx + dy * dy);
+      attempts++;
+      if (attempts >= kMaxRejectionAttempts) {
+        break;
+      }
+      accept = pcg_uniform(s) < pcg_sinc(colatitude);
+    } while (!accept);
+    attempts_total = attempts;
+    phi = LM_COPYSIGN(LM_PI_2F - colatitude, gp.lat_mean_rad);
+    phi = LM_CLAMP(phi, -LM_PI_2F, LM_PI_2F);
+    if (gp.lat_mean_rad < 0.0f) {
+      phi = LM_FABS(phi);
+      flip = true;
+    }
+  } else if (gp.lat_path == kLatPathLaplacianTightEnvelope) {
+    // Tight-envelope area-measure sampling for Laplacian near-pole
+    // (doc/near-pole-area-measure-sampling.md §2.1). Propose colatitude ~
+    // Gamma(2, b) via pcg_gamma2 (closed form theta = -b(ln u1 + ln u2)); accept
+    // with sin(theta)/theta (M=1, exact, never clamp). Structurally mirrors the
+    // kLatPathRayleigh branch above — same copysign/clamp/flip semantics for
+    // colatitude → phi (they depend only on the geometric fold, not on which
+    // proposal distribution generated theta). Consumes 2 uniform slots per
+    // attempt (pcg_gamma2) + 1 uniform slot (accept draw); expected ~1.007
+    // attempts for b <= 60° (scrum-328.4 Step 1 calibration, exp4).
+    int attempts = 0;
+    float colatitude = 0.0f;
+    bool accept = false;
+    do {
+      colatitude = pcg_gamma2(s, gp.lat_std_rad);
+      attempts++;
+      if (attempts >= kMaxRejectionAttempts) {
+        break;
+      }
+      accept = pcg_uniform(s) < pcg_sinc(colatitude);
+    } while (!accept);
+    attempts_total = attempts;
     phi = LM_COPYSIGN(LM_PI_2F - colatitude, gp.lat_mean_rad);
     phi = LM_CLAMP(phi, -LM_PI_2F, LM_PI_2F);
     if (gp.lat_mean_rad < 0.0f) {
@@ -251,6 +389,7 @@ LM_FN void sample_lat_lon_roll(LM_THREAD PcgStream& s, LM_CONSTANT_REF GenRootKe
       float accept_u = pcg_uniform(s);
       accept = accept_u < LM_COS(phi) / gp.lat_rejection_m;
     } while (!accept);
+    attempts_total = attempts;
   }
   if (gp.lat_path != kLatPathFullSphere) {
     lon = pcg_get_dist(s, gp.az_type, gp.az_mean_rad, gp.az_std_rad);
@@ -263,6 +402,9 @@ LM_FN void sample_lat_lon_roll(LM_THREAD PcgStream& s, LM_CONSTANT_REF GenRootKe
   out_lon = lon;
   out_lat = phi;
   out_roll = roll;
+  if (out_attempts != nullptr) {
+    *out_attempts = attempts_total;
+  }
 }
 
 // --- Crystal rotation builder ---------------------------------------------

@@ -39,58 +39,20 @@
 #include "config/proj_config.hpp"
 #include "config/render_config.hpp"
 #include "core/backend/cuda_trace_backend.hpp"
+#include "core/backend/cuda_trace_backend_test_hooks.hpp"  // scrum-328.2 Step 3
 #include "core/backend/trace_backend.hpp"
 #include "core/exit_seam.hpp"
 #include "core/raypath.hpp"
+#include "cuda_test_helpers.hpp"  // scrum-328.2 Step 5: shared scene / render fixtures
 
 namespace lumice {
 namespace {
 
-// Deterministic prism scene (matches test_cpu_trace_backend.cpp::MakeSimpleScene
-// shape so the geometry — unit prism, 8 polygon faces: 2 basal + 6 sides — is
-// stable across the parity layer).
-SceneConfig MakePrismScene(size_t max_hits) {
-  SceneConfig scene;
-  scene.ray_num_ = 0;
-  scene.max_hits_ = max_hits;
-  scene.light_source_.param_ = SunParam{ 30.0f, 0.0f, 0.5f };
-  scene.light_source_.spectrum_ = std::vector<WlParam>{ { 550.0f, 1.0f } };
-
-  MsInfo ms;
-  ms.prob_ = 0.0f;  // single MS final layer
-  ScatteringSetting s;
-  // Value-initialize the filter (NoneFilterParam pass-through). Without this the
-  // POD members FilterConfig::symmetry_/action_/id_ stay INDETERMINATE (a bare
-  // `ScatteringSetting s;` default-inits them), and the garbage action_/symmetry_
-  // make the device emit gate's DeviceFilterCheck reject every exit → no XYZ
-  // accumulation (mirrors test/cpu_test_helpers.hpp which sets this explicitly).
-  s.filter_ = FilterConfig{};
-  s.crystal_.id_ = 0;
-  PrismCrystalParam prism;
-  prism.h_ = Distribution{ DistributionType::kNoRandom, 1.0f, 0.0f };
-  for (auto& d : prism.d_) {
-    d = Distribution{ DistributionType::kNoRandom, 1.0f, 0.0f };
-  }
-  s.crystal_.param_ = prism;
-  s.crystal_proportion_ = 1.0f;
-  ms.setting_.push_back(std::move(s));
-  scene.ms_.push_back(std::move(ms));
-  return scene;
-}
-
-RenderConfig MakeRenderConfig() {
-  RenderConfig cfg;
-  cfg.id_ = 0;
-  cfg.lens_.type_ = LensParam::kFisheyeEqualArea;
-  cfg.lens_.fov_ = 180.0f;
-  cfg.resolution_[0] = 64;
-  cfg.resolution_[1] = 64;
-  cfg.view_.az_ = 0.0f;
-  cfg.view_.el_ = 90.0f;
-  cfg.view_.ro_ = 0.0f;
-  cfg.visible_ = RenderConfig::kUpper;
-  return cfg;
-}
+using cuda_test::MakeFullViewRender;
+using cuda_test::MakePrismScene;
+using cuda_test::MakeRandomAxisScene;
+using cuda_test::MakeRenderConfig;
+using cuda_test::MakeTwoLayerScene;
 
 // Drive CUDA backend on the prism config and return the drained exit records.
 // Skips the body (returns empty) if no CUDA device is enumerated at runtime,
@@ -312,77 +274,10 @@ constexpr size_t kEpoch = static_cast<size_t>(1) << 32;
 // Slots 0/1 = hi==0 baseline (must be bit-identical); 2 = hi==1; 3 = hi==2.
 constexpr size_t kBases[4] = { 0u, 0u, kEpoch, 2u * kEpoch };
 
-// Single-crystal random-axis prism scene. Random orientation makes the gen
-// stream observable (different mixed_seed → different rotation). `final_prob`
-// controls the final-layer emit-gate keep fraction: it must be > 0 for the gate
-// stream to be observable (with prob==0 the gate draw never gates emit, so the
-// gate seed cannot move the image). filter_ is value-initialized (pass-through)
-// so the device emit gate does not reject every exit (a bare `ScatteringSetting
-// s;` leaves FilterConfig POD members indeterminate → garbage action_ rejects
-// all → no XYZ accumulation).
-SceneConfig MakeRandomAxisScene(size_t max_hits, float final_prob) {
-  SceneConfig scene;
-  scene.ray_num_ = 0;
-  scene.max_hits_ = max_hits;
-  scene.light_source_.param_ = SunParam{ 30.0f, 0.0f, 0.5f };
-  scene.light_source_.spectrum_ = std::vector<WlParam>{ { 550.0f, 1.0f } };
-
-  MsInfo ms;
-  ms.prob_ = final_prob;
-  ScatteringSetting s;
-  s.filter_ = FilterConfig{};
-  s.crystal_.id_ = 0;
-  PrismCrystalParam prism;
-  prism.h_ = Distribution{ DistributionType::kNoRandom, 1.0f, 0.0f };
-  for (auto& d : prism.d_) {
-    d = Distribution{ DistributionType::kNoRandom, 1.0f, 0.0f };
-  }
-  s.crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
-  s.crystal_.axis_.latitude_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
-  s.crystal_.param_ = prism;
-  s.crystal_proportion_ = 1.0f;
-  ms.setting_.push_back(std::move(s));
-  scene.ms_.push_back(std::move(ms));
-  return scene;
-}
-
-// Two-MS-layer scene tuned so the transit stream is cleanly OBSERVABLE at
-// layer-1's d_dirs_ without the atomic-compaction confound:
-//   - Point sun (diameter 0) + FIXED-axis layer 0 → every layer-0 ray is
-//     identical → every continuation ray carries the SAME world direction. So
-//     layer-1's d_dirs_[tid] = R1(tid)^-1 · const depends only on tid (the
-//     transit orientation), independent of which continuation ray landed at
-//     that tid → deterministic for a fixed (seed, transit_base).
-//   - RANDOM-axis layer 1 → the transit kernel samples a per-tid orientation
-//     R1(tid) from the transit PCG stream, so a non-zero transit hi moves it.
-// Layer 0 continues (prob 0.6) into layer 1 (final, prob 0).
-SceneConfig MakeTwoLayerScene(size_t max_hits) {
-  SceneConfig scene = MakeRandomAxisScene(max_hits, /*final_prob=*/0.0f);  // layer-1 template (random axis)
-  scene.light_source_.param_ = SunParam{ 30.0f, 0.0f, 0.0f };              // point sun (diameter 0)
-  MsInfo layer0 = scene.ms_[0];
-  layer0.prob_ = 0.6f;
-  layer0.setting_[0].crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kNoRandom, 0.0f, 0.0f };
-  layer0.setting_[0].crystal_.axis_.latitude_dist = Distribution{ DistributionType::kNoRandom, 20.0f, 0.0f };
-  scene.ms_.insert(scene.ms_.begin(), std::move(layer0));
-  return scene;
-}
-
-// Full-sphere rectangular render — keeps every exit direction in the field so
-// the device-fused XYZ image responds to orientation (a narrow fisheye culls
-// most random-orientation exits, collapsing the image toward constant).
-RenderConfig MakeFullViewRender() {
-  RenderConfig cfg;
-  cfg.id_ = 0;
-  cfg.lens_.type_ = LensParam::kRectangular;
-  cfg.lens_.fov_ = 360.0f;
-  cfg.resolution_[0] = 64;
-  cfg.resolution_[1] = 32;
-  cfg.view_.az_ = 0.0f;
-  cfg.view_.el_ = 90.0f;
-  cfg.view_.ro_ = 0.0f;
-  cfg.visible_ = RenderConfig::kFull;
-  return cfg;
-}
+// Scene / render fixtures (MakeRandomAxisScene / MakeTwoLayerScene /
+// MakeFullViewRender) moved to test/cuda_test_helpers.hpp (scrum-328.2 Step 5)
+// so 328.3/328.4 parity tests can consume the same fixtures without copy/paste.
+// Callers below use the unqualified names via the file-scope using-decls.
 
 double L1RelDiff(const std::vector<float>& a, const std::vector<float>& b) {
   double num = 0.0;
@@ -418,7 +313,7 @@ TEST(CudaRngHiWiring, GenStreamWireUp) {
   if (!CudaDeviceAvailable()) {
     GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
   }
-  auto scene = hi_wire::MakeRandomAxisScene(/*max_hits=*/8, /*final_prob=*/0.0f);
+  auto scene = MakeRandomAxisScene(/*max_hits=*/8, /*final_prob=*/0.0f);
   auto render = MakeRenderConfig();
   SessionSpec spec;
   spec.scene = &scene;
@@ -430,13 +325,14 @@ TEST(CudaRngHiWiring, GenStreamWireUp) {
   for (int i = 0; i < 4; i++) {
     CudaTraceBackend backend;
     backend.BeginSession(spec);
-    backend.SetInitialRayBaseForTest(/*gen=*/hi_wire::kBases[i], /*transit=*/0u, /*gate=*/0u);
+    CudaTraceBackendTestHooks hooks(backend);
+    hooks.SetInitialRayBase(/*gen=*/hi_wire::kBases[i], /*transit=*/0u, /*gate=*/0u);
     HostRayBatch host;
     host.count = kRayCount;
     host.crystal = nullptr;
     host.refractive_index = 0.0f;
     backend.TraceLayer(RootRaySource::FromHost(host));
-    size_t n = backend.ReadbackGenDirsForTest(dirs[i], kRayCount);
+    size_t n = hooks.ReadbackGenDirs(dirs[i], kRayCount);
     backend.EndSession();
     ASSERT_EQ(n, 3u * kRayCount) << "base_idx=" << i << " — gen-dir readback returned " << n;
   }
@@ -475,8 +371,8 @@ TEST(CudaRngHiWiring, GateStreamWireUp) {
   if (!CudaDeviceAvailable()) {
     GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
   }
-  auto scene = hi_wire::MakeRandomAxisScene(/*max_hits=*/8, /*final_prob=*/0.5f);
-  auto render = hi_wire::MakeFullViewRender();
+  auto scene = MakeRandomAxisScene(/*max_hits=*/8, /*final_prob=*/0.5f);
+  auto render = MakeFullViewRender();
   SessionSpec spec;
   spec.scene = &scene;
   spec.render = &render;
@@ -489,7 +385,7 @@ TEST(CudaRngHiWiring, GateStreamWireUp) {
     images[i].assign(kImgFloats, 0.0f);
     CudaTraceBackend backend;
     backend.BeginSession(spec);
-    backend.SetInitialRayBaseForTest(/*gen=*/0u, /*transit=*/0u, /*gate=*/hi_wire::kBases[i]);
+    CudaTraceBackendTestHooks(backend).SetInitialRayBase(/*gen=*/0u, /*transit=*/0u, /*gate=*/hi_wire::kBases[i]);
     HostRayBatch host;
     host.count = kRayCount;
     host.crystal = nullptr;
@@ -520,8 +416,8 @@ TEST(CudaRngHiWiring, GateMsMode1StreamWireUp) {
   if (!CudaDeviceAvailable()) {
     GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
   }
-  auto scene = hi_wire::MakeTwoLayerScene(/*max_hits=*/6);  // layer 0 → ms_mode==1
-  auto render = hi_wire::MakeFullViewRender();
+  auto scene = MakeTwoLayerScene(/*max_hits=*/6);  // layer 0 → ms_mode==1
+  auto render = MakeFullViewRender();
   SessionSpec spec;
   spec.scene = &scene;
   spec.render = &render;
@@ -532,15 +428,20 @@ TEST(CudaRngHiWiring, GateMsMode1StreamWireUp) {
   for (int i = 0; i < 4; i++) {
     CudaTraceBackend backend;
     backend.BeginSession(spec);
-    backend.SetInitialRayBaseForTest(/*gen=*/0u, /*transit=*/0u, /*gate=*/hi_wire::kBases[i]);
-    backend.EnableRngProbeForTest(kRayCount);  // before the first TraceLayer → trace_single_ms_kernel fills it
+    CudaTraceBackendTestHooks hooks(backend);
+    hooks.SetInitialRayBase(/*gen=*/0u, /*transit=*/0u, /*gate=*/hi_wire::kBases[i]);
+    // scrum-328.2 Step 1: explicit stream selection replaces the pre-fix
+    // implicit "whichever kernel runs next" routing. kGateMs1 = trace kernel's
+    // ms_mode==1 emit-gate probe (this test enables before the first TraceLayer
+    // whose scene has an ms_mode==1 layer 0).
+    hooks.EnableRngProbe(RngProbeStream::kGateMs1, kRayCount);
     HostRayBatch host;
     host.count = kRayCount;
     host.crystal = nullptr;
     host.refractive_index = 0.0f;
     auto h0 = backend.TraceLayer(RootRaySource::FromHost(host));  // layer 0, ms_mode==1
     ASSERT_NE(h0, nullptr);
-    size_t n = backend.ReadbackRngProbeForTest(draws[i], kRayCount);
+    size_t n = hooks.ReadbackRngProbe(draws[i], kRayCount);
     backend.EndSession();
     ASSERT_EQ(n, kRayCount) << "base_idx=" << i << " — gate RNG-probe readback returned " << n;
   }
@@ -580,8 +481,8 @@ TEST(CudaRngHiWiring, TransitStreamWireUp) {
   if (!CudaDeviceAvailable()) {
     GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
   }
-  auto scene = hi_wire::MakeTwoLayerScene(/*max_hits=*/6);
-  auto render = hi_wire::MakeFullViewRender();
+  auto scene = MakeTwoLayerScene(/*max_hits=*/6);
+  auto render = MakeFullViewRender();
   SessionSpec spec;
   spec.scene = &scene;
   spec.render = &render;
@@ -593,7 +494,8 @@ TEST(CudaRngHiWiring, TransitStreamWireUp) {
   for (int i = 0; i < 4; i++) {
     CudaTraceBackend backend;
     backend.BeginSession(spec);
-    backend.SetInitialRayBaseForTest(/*gen=*/0u, /*transit=*/hi_wire::kBases[i], /*gate=*/0u);
+    CudaTraceBackendTestHooks hooks(backend);
+    hooks.SetInitialRayBase(/*gen=*/0u, /*transit=*/hi_wire::kBases[i], /*gate=*/0u);
     HostRayBatch host;
     host.count = kRayCount;
     host.crystal = nullptr;
@@ -608,13 +510,14 @@ TEST(CudaRngHiWiring, TransitStreamWireUp) {
     }
     ASSERT_EQ(cont, cont_count) << "base_idx=" << i
                                 << " — continuation count varies across runs; gen/gate not isolated.";
-    backend.EnableRngProbeForTest(cont_count);  // sink for the next (continuation) layer's transit draws
+    // scrum-328.2 Step 1: kTransit → transit_multi_ms_kernel writes the probe.
+    hooks.EnableRngProbe(RngProbeStream::kTransit, cont_count);
     RecombineSpec rspec;
     rspec.shuffle = false;
     auto roots1 = backend.Recombine(std::move(h0), rspec);
     auto h1 = backend.TraceLayer(roots1);
     ASSERT_NE(h1, nullptr);
-    size_t n = backend.ReadbackRngProbeForTest(draws[i], cont_count);
+    size_t n = hooks.ReadbackRngProbe(draws[i], cont_count);
     backend.EndSession();
     ASSERT_EQ(n, cont_count) << "base_idx=" << i << " — transit RNG-probe readback returned " << n;
   }
@@ -635,6 +538,232 @@ TEST(CudaRngHiWiring, TransitStreamWireUp) {
     EXPECT_GT(moved, 0.9) << "transit stream: base_pair=(" << pr.first << "," << pr.second << ") only " << moved
                           << " of transit PCG draws differ — transit hi wiring not reaching the device stream.";
   }
+}
+
+// code-review round 1 Major#2 regression (mirrors the Metal-side
+// RngObservabilityFacilitySmoke.MultiCiAttemptWindowsDoNotOverwrite test in
+// test_metal_root_gen.cpp): two real crystal instances (ci=0/1) within ONE MS
+// layer must write their gen-attempt-count windows into DISJOINT regions of
+// the sibling buffer. Before this fix, TraceLayer's ci-loop passed the SAME
+// static `lat_attempts_ci_start_` base to every ci's gen_root_kernel dispatch
+// — with a non-zero base ci_start armed, the second ci's dispatch could
+// silently clobber the first ci's already-written window (or, pre-capacity-
+// fix, write past the [0, count) allocation). dev49-only (skips on Mac /
+// hosts without a CUDA device) — mirrors the hi_wire tests above.
+TEST(RngObservabilityFacilitySmoke, MultiCiAttemptWindowsDoNotOverwrite) {
+  if (!CudaDeviceAvailable()) {
+    GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
+  }
+
+  constexpr size_t kTotal = 16000;
+  constexpr size_t kCiStartBase = 37u;
+
+  auto scene = MakeRandomAxisScene(/*max_hits=*/1, /*final_prob=*/0.0f);
+  // Off-pole Laplacian mean=80° (colatitude_center=10° > kPolarThresholdRad=0.5°) so
+  // SelectLatPath routes to kLatPathGenericReject regardless of scrum-328.4's tight-
+  // envelope path — the GenericReject rejection loop keeps `attempts` varying so a
+  // trivial always-1 value would not distinguish "written" from "never-touched-but-
+  // happens-to-read-as-1". Prior scrum-328.2 revision used mean=90° / b=5°, which
+  // scrum-328.4 rerouted to LaplacianTightEnvelope with attempts≈1 (would silently
+  // erode this test's discriminating power).
+  scene.ms_[0].setting_[0].crystal_.axis_.latitude_dist = Distribution{ DistributionType::kLaplacian, 80.0f, 5.0f };
+  scene.ms_[0].setting_[0].crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  scene.ms_[0].setting_[0].crystal_proportion_ = 0.7f;
+
+  ScatteringSetting ci1 = scene.ms_[0].setting_[0];
+  ci1.crystal_.id_ = 1;
+  ci1.crystal_proportion_ = 0.3f;
+  scene.ms_[0].setting_.push_back(std::move(ci1));
+
+  auto render = MakeFullViewRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  HostRayBatch host;
+  host.count = kTotal;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  CudaTraceBackend backend;
+  backend.BeginSession(spec);
+  CudaTraceBackendTestHooks hooks(backend);
+  hooks.EnableGenAttemptCount(kTotal, kCiStartBase);
+  auto h = backend.TraceLayer(RootRaySource::FromHost(host));
+  ASSERT_NE(h, nullptr);
+
+  std::vector<int> attempts;
+  size_t n = hooks.ReadbackGenAttemptCount(attempts, kCiStartBase + kTotal);
+  backend.EndSession();
+  ASSERT_EQ(n, kCiStartBase + kTotal) << "readback returned fewer elements than allocated — capacity fix regressed.";
+
+  for (size_t i = 0; i < kCiStartBase; i++) {
+    ASSERT_EQ(attempts[i], 0) << "slot " << i << " before ci_start base was written — base offset not honored.";
+  }
+
+  size_t zero_count = 0;
+  for (size_t i = kCiStartBase; i < kCiStartBase + kTotal; i++) {
+    if (attempts[i] == 0) {
+      zero_count++;
+    }
+  }
+  EXPECT_EQ(zero_count, 0u)
+      << zero_count << " of " << kTotal
+      << " attempt-count slots in [ci_start, ci_start+total) were never written — multi-crystal-instance "
+      << "windows are colliding instead of landing in disjoint per-ci slices.";
+}
+
+// scrum-328.3 Step 5 — CUDA-side mirror of the Metal Gaussian tight-envelope
+// acceptance-rate smoke (RngObservabilityFacilitySmoke.NearPoleGaussianTightEnvelope
+// in test_metal_root_gen.cpp:NearPoleAcceptanceRateMatchesDocAnchors's Gaussian
+// σ=5 case). CUDA's gen_root_kernel calls into lm_pcg::sample_lat_lon_roll from
+// the same pcg_shared.h that scrum-328.3 updated, so the CUDA path picks up the
+// new Rayleigh accept step with zero .cu edits (source-mirror-only, per plan
+// Step 5). This test is the runtime evidence that the source mirror actually
+// takes effect on device — required on dev49, skipped on Mac (no CUDA device).
+// Anchor mean(attempts) ≈ 1.002 mirrors the Metal-side Gaussian anchor and the
+// doc/near-pole-area-measure-sampling.md §附录 Python MC prediction.
+TEST(RngObservabilityFacilitySmoke, NearPoleGaussianTightEnvelopeAcceptanceRate) {
+  if (!CudaDeviceAvailable()) {
+    GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
+  }
+
+  constexpr size_t kSmokeRayCount = 65536;
+
+  auto scene = MakeRandomAxisScene(/*max_hits=*/1, /*final_prob=*/0.0f);
+  scene.ms_[0].setting_[0].crystal_.axis_.latitude_dist = Distribution{ DistributionType::kGaussian, 90.0f, 5.0f };
+  scene.ms_[0].setting_[0].crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  scene.ms_[0].setting_[0].crystal_.axis_.roll_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+
+  auto render = MakeFullViewRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  HostRayBatch host;
+  host.count = kSmokeRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  CudaTraceBackend backend;
+  backend.BeginSession(spec);
+  CudaTraceBackendTestHooks hooks(backend);
+  hooks.EnableGenAttemptCount(kSmokeRayCount, /*ci_start=*/0u);
+  auto h = backend.TraceLayer(RootRaySource::FromHost(host));
+  ASSERT_NE(h, nullptr);
+
+  std::vector<int> attempts;
+  size_t n = hooks.ReadbackGenAttemptCount(attempts, kSmokeRayCount);
+  backend.EndSession();
+  ASSERT_EQ(n, kSmokeRayCount);
+
+  long long sum = 0;
+  int max_attempts = 0;
+  size_t safety_valve_hits = 0;
+  for (int a : attempts) {
+    sum += a;
+    if (a > max_attempts) {
+      max_attempts = a;
+    }
+    if (a >= 1000) {  // pcg_shared.h kMaxRejectionAttempts
+      safety_valve_hits++;
+    }
+  }
+  const double mean_attempts = static_cast<double>(sum) / static_cast<double>(attempts.size());
+
+  EXPECT_EQ(safety_valve_hits, 0u) << safety_valve_hits << " rays saturated kMaxRejectionAttempts (max=" << max_attempts
+                                   << ") — mean(attempts) would be biased.";
+
+  // Anchor: ~1.002 (doc §附录 Python MC ≈ 99.8% acceptance). ±5% band matches
+  // the Metal-side smoke's tolerance.
+  constexpr double kAnchor = 1.002;
+  const double lo = kAnchor * 0.95;
+  const double hi = kAnchor * 1.05;
+  EXPECT_GE(mean_attempts, lo) << "CUDA Gaussian σ=5 near-pole mean(attempts)=" << mean_attempts << " below anchor±5% ["
+                               << lo << ", " << hi << "] — tight-envelope Rayleigh path not active on device.";
+  EXPECT_LE(mean_attempts, hi) << "CUDA Gaussian σ=5 near-pole mean(attempts)=" << mean_attempts << " above anchor±5% ["
+                               << lo << ", " << hi
+                               << "] — CUDA/Metal cross-backend anchor drift; investigate source-mirror parity.";
+}
+
+// scrum-328.4 Step 7 — CUDA-side mirror of the Metal Laplacian tight-envelope
+// acceptance-rate smoke (Laplacian b=5 case in RngObservabilityFacilitySmoke
+// .NearPoleAcceptanceRateMatchesDocAnchors, test_metal_root_gen.cpp). CUDA's
+// gen_root_kernel calls into lm_pcg::sample_lat_lon_roll from the same
+// pcg_shared.h that scrum-328.4 extended with the kLatPathLaplacianTightEnvelope
+// branch, so the CUDA path picks up the Gamma(2,b)+sin(θ)/θ accept step with
+// zero .cu edits (source-mirror-only). This test is the runtime evidence that
+// the source mirror actually takes effect on device — required on dev49,
+// skipped on Mac (no CUDA device). Anchor mean(attempts) ≈ 1.007 mirrors the
+// Metal-side Laplacian anchor and the scrum-328.4 exp4 Python MC estimate 1.0075.
+TEST(RngObservabilityFacilitySmoke, NearPoleLaplacianTightEnvelopeAcceptanceRate) {
+  if (!CudaDeviceAvailable()) {
+    GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
+  }
+
+  constexpr size_t kSmokeRayCount = 65536;
+
+  auto scene = MakeRandomAxisScene(/*max_hits=*/1, /*final_prob=*/0.0f);
+  scene.ms_[0].setting_[0].crystal_.axis_.latitude_dist = Distribution{ DistributionType::kLaplacian, 90.0f, 5.0f };
+  scene.ms_[0].setting_[0].crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  scene.ms_[0].setting_[0].crystal_.axis_.roll_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+
+  auto render = MakeFullViewRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  HostRayBatch host;
+  host.count = kSmokeRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  CudaTraceBackend backend;
+  backend.BeginSession(spec);
+  CudaTraceBackendTestHooks hooks(backend);
+  hooks.EnableGenAttemptCount(kSmokeRayCount, /*ci_start=*/0u);
+  auto h = backend.TraceLayer(RootRaySource::FromHost(host));
+  ASSERT_NE(h, nullptr);
+
+  std::vector<int> attempts;
+  size_t n = hooks.ReadbackGenAttemptCount(attempts, kSmokeRayCount);
+  backend.EndSession();
+  ASSERT_EQ(n, kSmokeRayCount);
+
+  long long sum = 0;
+  int max_attempts = 0;
+  size_t safety_valve_hits = 0;
+  for (int a : attempts) {
+    sum += a;
+    if (a > max_attempts) {
+      max_attempts = a;
+    }
+    if (a >= 1000) {  // pcg_shared.h kMaxRejectionAttempts
+      safety_valve_hits++;
+    }
+  }
+  const double mean_attempts = static_cast<double>(sum) / static_cast<double>(attempts.size());
+
+  EXPECT_EQ(safety_valve_hits, 0u) << safety_valve_hits << " rays saturated kMaxRejectionAttempts (max=" << max_attempts
+                                   << ") — mean(attempts) would be biased.";
+
+  // Anchor: ~1.007 (scrum-328.4 exp4 Python MC ≈ 99.3% acceptance; Metal device-
+  // measured 1.00745). ±5% band matches the Metal-side smoke's tolerance.
+  constexpr double kAnchor = 1.007;
+  const double lo = kAnchor * 0.95;
+  const double hi = kAnchor * 1.05;
+  EXPECT_GE(mean_attempts, lo) << "CUDA Laplacian b=5 near-pole mean(attempts)=" << mean_attempts
+                               << " below anchor±5% [" << lo << ", " << hi
+                               << "] — tight-envelope Laplacian path not active on device.";
+  EXPECT_LE(mean_attempts, hi) << "CUDA Laplacian b=5 near-pole mean(attempts)=" << mean_attempts
+                               << " above anchor±5% [" << lo << ", " << hi
+                               << "] — CUDA/Metal cross-backend anchor drift; investigate source-mirror parity.";
 }
 
 }  // namespace

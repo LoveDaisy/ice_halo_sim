@@ -791,6 +791,12 @@ kernel void gen_root_kernel(
     // shader-side cache is consistent across both pool readers.
     constant WlEntry*       wl_pool       [[buffer(10)]],
     device uint*            root_wl_idx   [[buffer(11)]],
+    // scrum-328.2 Step 1 attempt-count observability (test-only). The buffer
+    // is ALWAYS bound (Metal validation forbids nil bindings); the .x flag in
+    // attempts_ctrl selects whether the kernel actually writes. Production:
+    // ctrl.x==0 → the branch below skips both the pointer arg and the write.
+    device int*             lat_attempts  [[buffer(12)]],
+    constant uint2&         attempts_ctrl [[buffer(13)]],
     uint tid [[thread_position_in_grid]])
 {
   if (tid >= gp.num_rays) {
@@ -823,16 +829,16 @@ kernel void gen_root_kernel(
   stream.global_idx = global_idx;
   stream.slot = 0u;
 
-  // scrum-268.8 (DR-3): per-ray wavelength index. Uses an independent PCG slot
-  // (20) so it cannot collide with the orientation / triangle-pick draws made
-  // below — kWlPcgSlot stays clear of every existing draw count (orientation +
-  // sun + categorical + triangle ≤ ~12 slots). The result is the photon's
-  // lifetime tag, written to root_wl_idx so the trace kernel can look up
-  // n_idx / cmf_* from wl_pool[wl_idx].
-  PcgStream wl_stream;
-  wl_stream.seed       = mixed_seed;
-  wl_stream.global_idx = global_idx;
-  wl_stream.slot       = 20u;
+  // Per-ray wavelength index (photon lifetime tag → root_wl_idx, later
+  // consumed by the trace kernel to look up n_idx / cmf_* from
+  // wl_pool[wl_idx]). Uses a SEED-DOMAIN-isolated PCG stream constructed by
+  // BuildWlStream (pcg_shared.h — see the kWlStreamNonce block for design
+  // rationale). The historical "slot 20" isolation was root-cause of the
+  // laplacian near-pole green-tint bug (task-gpu-wl-stream-decouple-green-tint)
+  // because near-pole GenericReject can consume >20 slots per ray, colliding
+  // the wl draw with an orientation draw. Seed-domain XOR is immune to slot
+  // consumption regardless of how many slots the orientation loop burns.
+  PcgStream wl_stream = BuildWlStream(mixed_seed, global_idx);
   uint wl_idx = (uint)(pcg_uniform(wl_stream) * float(gp.wl_pool_size));
   if (wl_idx >= gp.wl_pool_size) {
     wl_idx = gp.wl_pool_size - 1u;  // guard against pcg_uniform → 1.0f rounding
@@ -841,7 +847,16 @@ kernel void gen_root_kernel(
 
   // 1. Sample crystal orientation (lon, lat, roll) → 3×3 rotation.
   float lon, lat, roll;
-  sample_lat_lon_roll(stream, gp, lon, lat, roll);
+  // scrum-328.2 Step 1: attempt-count observability — writes the per-ray
+  // kLatPathGenericReject iteration count when the sibling buffer is armed
+  // (attempts_ctrl.x!=0). ctrl.y is the multi-ci write-offset. Production:
+  // ctrl.x==0 → &attempts_local skipped, branch predicted off.
+  thread int attempts_local = 1;
+  sample_lat_lon_roll(stream, gp, lon, lat, roll,
+                      attempts_ctrl.x != 0u ? &attempts_local : nullptr);
+  if (attempts_ctrl.x != 0u) {
+    lat_attempts[tid + attempts_ctrl.y] = attempts_local;
+  }
   float mat9[9];
   build_crystal_rotation_9(lon, lat, roll, mat9);
 
@@ -942,7 +957,9 @@ kernel void transit_root_kernel(
   stream.global_idx = global_idx;
   stream.slot = 0u;
   float lon, lat, roll;
-  sample_lat_lon_roll(stream, gp, lon, lat, roll);
+  // scrum-328.2 Step 1: transit surface does not carry attempt-count today
+  // (near-pole acceptance-rate observation is anchored to the gen kernel).
+  sample_lat_lon_roll(stream, gp, lon, lat, roll, nullptr);
   float mat9[9];
   build_crystal_rotation_9(lon, lat, roll, mat9);
 

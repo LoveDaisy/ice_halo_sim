@@ -132,31 +132,12 @@ class MetalTraceBackend : public TraceBackend {
   // (drop triggers R1 option B = split gate into its own dispatch).
   size_t TraceLayerKernelMaxThreadsForTest() const;
 
-  // [TEST-ONLY] task-gpu-rng-ray-index-uint64 white-box injection: pre-seed
-  // the per-session PCG ray-base counter (`root_ray_count`) BEFORE the first
-  // TraceLayer so a test can drive the device-gen kernel into a non-zero hi
-  // epoch (hi = base >> 32) without running >2^32 real rays. The device now
-  // XORs pcg_hash(hi) into every ray's PCG seed via pcg_seed_with_high, so
-  // an image rendered at base = 1<<32 must differ from one rendered at
-  // base = 0 (same seed, same scene). This is the direct evidence that the
-  // host↔device wiring (SplitPcgRayBase → gp.gen_ray_base_hi → shader
-  // pcg_advance_hi / pcg_seed_with_high) is intact — the in-range parity
-  // battery only exercises the hi==0 branch (bit-identical by construction)
-  // and would happily miss a broken hi-wiring regression.
-  //
-  // Contract: MUST be called AFTER BeginSession and BEFORE the first
-  // TraceLayer, and only in test builds. Injecting during a live layer
-  // sequence corrupts PCG stream indexing.
-  void SetInitialRayBaseForTest(size_t root_base, size_t transit_base);
-
-  // [TEST-ONLY] task-gpu-rng-ray-index-uint64: RNG-isolated observation of the
-  // TRANSIT stream. After a continuation-layer TraceLayer, copies the per-ray
-  // crystal→world rotation matrices (9 floats/ray) back to host. Those are the
-  // transit kernel's sampled orientations R(tid) — a pure function of
-  // (transit_seed, tid), independent of ray physics + continuation compaction —
-  // so hi==0 runs are bit-identical and a non-zero transit hi moves them.
-  // Returns floats written (9 * count), or 0 if unavailable.
-  size_t ReadbackRootRotForTest(std::vector<float>& out, size_t count);
+  // scrum-328.2 Step 3: test-only observation + injection points migrated to
+  // `MetalTraceBackendTestHooks` (see `metal_trace_backend_test_hooks.hpp`).
+  // Known exception retained on this class: `TraceLayerKernelMaxThreadsForTest`
+  // above — operational occupancy guard, not a per-ray white-box injection
+  // point (plan §"Step 3 已知例外").
+  friend class MetalTraceBackendTestHooks;
 
  private:
   struct Impl;

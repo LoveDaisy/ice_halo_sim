@@ -38,7 +38,10 @@
 #include "core/math.hpp"
 #include "core/metal_filter_match_src.hpp"
 #include "core/backend/metal_trace_backend.hpp"
+#include "core/backend/metal_trace_backend_test_hooks.hpp"  // scrum-328.2 Step 3
 #include "core/backend/wl_pool.hpp"  // WlEntry / ComputeWlPool / ResolveWlPoolSize (296.6 single-sourced)
+#include "core/shared/lat_path_selection.hpp"  // SelectLatPath / ComputeJacobianEnvelope (single source)
+#include "core/shared/pcg_shared.h"             // lm_pcg::kLatPath* (device sink values)
 // task-#283 (metal-build-time-metallib): build-generated headers — wrap their
 // content in `namespace lumice { ... }`, so they are #included at file scope
 // (NOT inside an open `namespace lumice` or anonymous namespace) to keep the
@@ -120,15 +123,23 @@ static_assert(sizeof(lm_proj::ProjParams) == 76u, "ProjParams layout drift — c
 static_assert(sizeof(KernelParams) == 136u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 
-// Device root-gen latitude path tags. MUST match constant kLatPath* in
-// src/core/metal/lumice_trace.metal — they index into a Metal-side branch table.
-enum LatPath : uint32_t {
-  kLatPathFullSphereHost    = 0u,
-  kLatPathNoRandomHost      = 1u,
-  kLatPathRayleighHost      = 2u,
-  kLatPathGaussLegacyHost   = 3u,
-  kLatPathGenericRejectHost = 4u,
-};
+// Device root-gen latitude path tags. Numeric wire encoding is single-sourced
+// in lm_pcg::kLatPath* (src/core/shared/pcg_shared.h); the pairwise
+// static_assert below guards against LatPathKind (host taxonomy) vs
+// lm_pcg::kLatPath* (device sink) drift.
+static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kFullSphere) == lm_pcg::kLatPathFullSphere,
+              "LatPathKind::kFullSphere must match lm_pcg::kLatPathFullSphere");
+static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kNoRandom) == lm_pcg::kLatPathNoRandom,
+              "LatPathKind::kNoRandom must match lm_pcg::kLatPathNoRandom");
+static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kRayleigh) == lm_pcg::kLatPathRayleigh,
+              "LatPathKind::kRayleigh must match lm_pcg::kLatPathRayleigh");
+static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kGaussLegacy) == lm_pcg::kLatPathGaussLegacy,
+              "LatPathKind::kGaussLegacy must match lm_pcg::kLatPathGaussLegacy");
+static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kGenericReject) == lm_pcg::kLatPathGenericReject,
+              "LatPathKind::kGenericReject must match lm_pcg::kLatPathGenericReject");
+static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kLaplacianTightEnvelope) ==
+                  lm_pcg::kLatPathLaplacianTightEnvelope,
+              "LatPathKind::kLaplacianTightEnvelope must match lm_pcg::kLatPathLaplacianTightEnvelope");
 
 // Mirror of the Metal-side GenRootKernelParams (host layout MUST match the
 // MSL struct field-for-field — all 4-byte scalars, natural alignment).
@@ -182,35 +193,6 @@ size_t ComputeOutCap(size_t n, size_t max_hits) {
 
 Logger& EffectiveLogger(Logger* logger) {
   return logger ? *logger : GetGlobalLogger();
-}
-
-// File-local mirror of the file-static ComputeJacobianEnvelope in math.cpp.
-// Inlined here so device root-gen (task-260.2) does not require exporting that
-// helper through math.hpp; keeps math.cpp's parity envelope semantics in one
-// place per file (host math kept private; device path uses its own copy).
-// Inputs in degrees, output is the rejection envelope M used as cos(phi)/M.
-//
-// SYNC ANCHOR (task-260.5 Step 5, code-review-01 Minor): these four branches
-// MUST stay numerically identical to the file-static ComputeJacobianEnvelope
-// in src/core/math.cpp (consumed by RandomSampler::SampleSphericalPointsSph,
-// math.cpp:444+ — see in particular the generic-rejection path at math.cpp:504
-// where cos(phi)/M is the acceptance ratio). If math.cpp changes either the
-// 3σ (kGaussian), 1σ (kZigzag), or 5σ (kLaplacian) cutoff, OR adds a new
-// DistributionType, mirror the change here in the SAME PR — silent divergence
-// shows up only under narrow raypath filters and ds_corr will tank, exactly
-// the 260.5 regression class.
-float ComputeJacobianEnvelopeForDeviceGen(const Distribution& dist) {
-  switch (dist.type) {
-    case DistributionType::kGaussian:
-      return std::cos(std::max(std::abs(dist.mean) - 3.0f * dist.std, 0.0f) * math::kDegreeToRad);
-    case DistributionType::kZigzag:
-      return std::cos(std::max(std::abs(dist.mean) - dist.std, 0.0f) * math::kDegreeToRad);
-    case DistributionType::kLaplacian:
-      return std::cos(std::max(std::abs(dist.mean) - 5.0f * dist.std, 0.0f) * math::kDegreeToRad);
-    case DistributionType::kUniform:
-    default:
-      return 1.0f;
-  }
 }
 
 // task-#283 (metal-build-time-metallib): build-time metallib loader.
@@ -555,6 +537,26 @@ struct MetalTraceBackend::Impl {
   id<MTLBuffer> root_rot_buf = nil;
   size_t        root_capacity = 0;
 
+  // [TEST-ONLY] scrum-328.2 Step 1 attempt-count sibling buffer. ALWAYS bound
+  // to gen_root_kernel at buffer(12) (Metal validation forbids nil bindings);
+  // the paired `attempts_ctrl.x` scalar tells the kernel whether to actually
+  // write. Grown lazily by EnableGenAttemptCountForTest; a dummy 4-byte
+  // allocation is created on first bind so production dispatches see a valid
+  // buffer without the test path being armed. `attempts_ci_start_` is the
+  // per-ci write offset (mirrors the RNG probe's ci_start).
+  id<MTLBuffer> lat_attempts_buf_ = nil;
+  size_t        lat_attempts_cap_ = 0;
+  size_t        lat_attempts_ci_start_ = 0;
+  bool          attempts_enabled_ = false;
+  // code-review round 1 Major#2: the EFFECTIVE per-ci write offset for the
+  // NEXT EncodeGenRoot call (= lat_attempts_ci_start_ + running per-ci offset
+  // accumulated by TraceLayer's ci-loop). Without this, every ci in a multi-
+  // crystal-instance layer would write to the same [lat_attempts_ci_start_,
+  // lat_attempts_ci_start_ + ci_n) window and silently overwrite the
+  // previous ci's data. Set by GenerateFirstLayerRootsForCi, consumed by
+  // EncodeGenRoot (mirrors the pending_gen_params_ stash/consume pattern).
+  size_t        pending_attempts_ci_start_ = 0;
+
   // Triangle-level geometry for device-resident root-gen (task-260.2). Uploaded
   // by UploadCrystal alongside polygon-level data; sized lazily by
   // EnsureTriBuffers. The gen kernel reads these to perform area×facing
@@ -695,7 +697,8 @@ struct MetalTraceBackend::Impl {
                                 const HostRayBatch& host_batch);
   size_t GenerateFirstLayerRootsForCi(const ScatteringSetting& setting,
                                       size_t ci, size_t crystal_ray_num,
-                                      bool can_use_device_gen);
+                                      bool can_use_device_gen,
+                                      size_t attempts_ci_off);
   // task-267.4 (continuation-validation) golden-ray hook: test-only host-ray
   // injection path. Activated when HostRayBatch::d / p / w / tf are non-null
   // at first MS, ci=0 (TraceLayer guards the branch). Bypasses RNG-based
@@ -1264,8 +1267,14 @@ void MetalTraceBackend::Impl::ResolveLayerCrystalForCi(const ScatteringSetting& 
 
 size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSetting& setting,
                                                               size_t ci, size_t crystal_ray_num,
-                                                              bool can_use_device_gen) {
+                                                              bool can_use_device_gen,
+                                                              size_t attempts_ci_off) {
   if (can_use_device_gen) {
+    // code-review round 1 Major#2: stash the EFFECTIVE per-ci attempts offset
+    // (base + running per-ci accumulation) for EncodeGenRoot to consume,
+    // mirroring pending_gen_params_'s stash/consume within the same ci
+    // iteration.
+    pending_attempts_ci_start_ = lat_attempts_ci_start_ + attempts_ci_off;
     // Device root-gen path (task-260.2). Replicates InitRayFirstMs on the GPU
     // using a counter-based PCG stream keyed by (gen_seed_, gen_ray_base+tid).
     // root_ray_count accumulates across dispatches to keep the global index
@@ -1444,44 +1453,18 @@ GenRootKernelParams MetalTraceBackend::Impl::BuildGenRootParams(
   gp.wl_pool_size   = wl_pool_size_;
 
   const AxisDistribution& axis_dist = setting.crystal_.axis_;
-  // Latitude path / proposal type, mirroring math.cpp:444 SampleSphericalPointsSph
-  // setup. Stays in sync with that function's three-path decision: Rayleigh
-  // (near-pole Gaussian only) / kGaussianLegacy / generic Jacobian rejection /
-  // kNoRandom, plus a top-level fast path when the distribution is the full
-  // sphere uniform sampler.
+  // Latitude path / proposal type single-sourced with math.cpp + CUDA via
+  // lat_path::SelectLatPath (scrum-328.2 Step 4).
+  auto decision = lat_path::SelectLatPath(axis_dist);
   auto lat_type = axis_dist.latitude_dist.type;
   float lat_mean_rad = axis_dist.latitude_dist.mean * math::kDegreeToRad;
   float lat_std_rad  = axis_dist.latitude_dist.std  * math::kDegreeToRad;
-  float rejection_m  = 1.0f;
-  uint32_t lat_path  = kLatPathGenericRejectHost;
 
-  if (axis_dist.IsFullSphereUniform()) {
-    lat_path = kLatPathFullSphereHost;
-  } else if (lat_type == DistributionType::kNoRandom) {
-    lat_path = kLatPathNoRandomHost;
-  } else if (lat_type == DistributionType::kGaussianLegacy) {
-    lat_path = kLatPathGaussLegacyHost;
-  } else if (lat_type == DistributionType::kGaussian) {
-    // Same Rayleigh threshold as math.cpp:469: colatitude_center + 3σ < 0.5°.
-    constexpr float kPolarThresholdRad = 0.5f * math::kDegreeToRad;
-    float colatitude_center = math::kPi_2 - std::abs(lat_mean_rad);
-    bool use_rayleigh = (colatitude_center + 3.0f * lat_std_rad) < kPolarThresholdRad;
-    if (use_rayleigh) {
-      lat_path = kLatPathRayleighHost;
-    } else {
-      lat_path = kLatPathGenericRejectHost;
-      rejection_m = ComputeJacobianEnvelopeForDeviceGen(axis_dist.latitude_dist);
-    }
-  } else {
-    // kUniform / kZigzag / kLaplacian: generic rejection.
-    rejection_m = ComputeJacobianEnvelopeForDeviceGen(axis_dist.latitude_dist);
-  }
-
-  gp.lat_path        = lat_path;
+  gp.lat_path        = lat_path::ToWireValue(decision.kind);
   gp.lat_dist_type   = static_cast<uint32_t>(lat_type);
   gp.lat_mean_rad    = lat_mean_rad;
   gp.lat_std_rad     = lat_std_rad;
-  gp.lat_rejection_m = rejection_m;
+  gp.lat_rejection_m = decision.rejection_m;
 
   gp.az_type     = static_cast<uint32_t>(axis_dist.azimuth_dist.type);
   gp.az_mean_rad = axis_dist.azimuth_dist.mean * math::kDegreeToRad;
@@ -1519,6 +1502,22 @@ void MetalTraceBackend::Impl::EncodeGenRoot(id<MTLCommandBuffer> cb,
     // scrum-268.8 (DR-3): wavelength pool + per-ray wl_idx output buffer.
     [enc setBuffer:wl_pool_buf_     offset:0 atIndex:10];
     [enc setBuffer:root_wl_idx_buf_ offset:0 atIndex:11];
+    // scrum-328.2 Step 1: attempt-count observability sibling. Lazily create
+    // a dummy 4-byte buffer if this is the first EncodeGenRoot after Init,
+    // so Metal validation is satisfied even when the test path is idle.
+    if (lat_attempts_buf_ == nil) {
+      lat_attempts_buf_ = [device newBufferWithLength:sizeof(int)
+                                              options:MTLResourceStorageModeShared];
+      assert(lat_attempts_buf_ != nil);
+    }
+    [enc setBuffer:lat_attempts_buf_ offset:0 atIndex:12];
+    // code-review round 1 Major#2: use the per-ci EFFECTIVE offset stashed by
+    // GenerateFirstLayerRootsForCi (base lat_attempts_ci_start_ + running
+    // per-ci accumulation), not the raw base — see pending_attempts_ci_start_
+    // doc.
+    uint attempts_ctrl[2] = { attempts_enabled_ ? 1u : 0u,
+                              static_cast<uint>(pending_attempts_ci_start_) };
+    [enc setBytes:attempts_ctrl length:sizeof(attempts_ctrl) atIndex:13];
     NSUInteger threads = 64;
     NSUInteger groups = (static_cast<NSUInteger>(gp.num_rays) + threads - 1) / threads;
     [enc dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
@@ -2179,6 +2178,11 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     impl_->last_stats = LayerStats{};
     impl_->cont_counts[out_slot] = 0;
 
+    // code-review round 1 Major#2: running per-ci offset for the gen-attempt-
+    // count sibling buffer (see GenerateFirstLayerRootsForCi / EncodeGenRoot).
+    // Only meaningful on the first_ms/gen branch, but harmless to accumulate
+    // unconditionally.
+    size_t attempts_win_off = 0;
     for (size_t ci = 0; ci < crystal_cnt; ci++) {
       size_t ci_n = crystal_ray_num[ci];
       if (ci_n == 0) {
@@ -2244,7 +2248,8 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
                                     impl_->gen_seed_ != 0u &&
                                     impl_->current_crystal.TotalTriangles() <= 64u &&
                                     !impl_->disable_device_gen_;
-          in_count = impl_->GenerateFirstLayerRootsForCi(setting, ci, ci_n, can_use_device_gen);
+          in_count = impl_->GenerateFirstLayerRootsForCi(setting, ci, ci_n, can_use_device_gen,
+                                                          attempts_win_off);
         }
       } else {
         // scrum-267 task-device-resident-continuation Step 3: device frame-
@@ -2326,6 +2331,7 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       // ci_start was incremented above inside the !first_ms branch (before
       // the in_count==0 continue), so the next ci reads the correct slice
       // even if this ci's filter+prob dropped everything.
+      attempts_win_off += ci_n;
     }  // ci-loop
 
     // task-268.7 safety net: WaitAndReadbackLayer is invoked at every ci tail,
@@ -2525,16 +2531,19 @@ size_t MetalTraceBackend::TraceLayerKernelMaxThreadsForTest() const {
   return static_cast<size_t>(impl_->pso.maxTotalThreadsPerThreadgroup);
 }
 
-void MetalTraceBackend::SetInitialRayBaseForTest(size_t root_base, size_t transit_base) {
-  // Metal has two host counters (root gen + transit); the emit gate uses tid
-  // directly (statistical-not-bit-exact, scrum-267 §3.6) so there is no gate hi
-  // stream to inject. Per-stream bases let the gen and transit wirings be
-  // asserted in ISOLATION (drive exactly one stream into a non-zero hi epoch).
-  impl_->root_ray_count = root_base;
-  impl_->transit_ray_count_ = transit_base;
+// --- scrum-328.2 Step 3: MetalTraceBackendTestHooks method definitions ---
+// Semantics identical to the pre-scrum-328.2 `MetalTraceBackend::XxxForTest`
+// bodies; only the access seam moved (via `backend_.impl_->...`). Live in this
+// .mm TU so Impl's complete definition (an Obj-C++ struct with id<MTL...>
+// members) is visible.
+
+void MetalTraceBackendTestHooks::SetInitialRayBase(size_t root_base, size_t transit_base) {
+  auto& impl = *backend_.impl_;
+  impl.root_ray_count = root_base;
+  impl.transit_ray_count_ = transit_base;
 }
 
-size_t MetalTraceBackend::ReadbackRootRotForTest(std::vector<float>& out, size_t count) {
+size_t MetalTraceBackendTestHooks::ReadbackRootRot(std::vector<float>& out, size_t count) {
   // [TEST-ONLY] task-gpu-rng-ray-index-uint64: copy the first `count` per-ray
   // crystal→world rotation matrices (root_rot_buf, 9 floats/ray) back to host.
   // For a continuation (transit) layer these are the transit kernel's sampled
@@ -2545,20 +2554,81 @@ size_t MetalTraceBackend::ReadbackRootRotForTest(std::vector<float>& out, size_t
   // this tid). This isolates the transit hi wiring: a non-zero transit hi moves
   // R(tid) at every tid; hi==0 runs are bit-identical. Metal's unified memory
   // makes this a plain contents() read (no metallib kernel change needed).
-  if (impl_->root_rot_buf == nil || count == 0u) {
+  auto& impl = *backend_.impl_;
+  if (impl.root_rot_buf == nil || count == 0u) {
     out.clear();
     return 0u;
   }
   // Bound the copy to the buffer so a count larger than the allocation cannot
   // read past root_rot_buf; the caller's ASSERT_EQ then surfaces the truncation.
-  const size_t cap_floats = static_cast<size_t>([impl_->root_rot_buf length]) / sizeof(float);
+  const size_t cap_floats = static_cast<size_t>([impl.root_rot_buf length]) / sizeof(float);
   size_t n_floats = 9u * count;
   if (n_floats > cap_floats) {
     n_floats = cap_floats;
   }
   out.assign(n_floats, 0.0f);
-  std::memcpy(out.data(), [impl_->root_rot_buf contents], n_floats * sizeof(float));
+  std::memcpy(out.data(), [impl.root_rot_buf contents], n_floats * sizeof(float));
   return n_floats;
+}
+
+size_t MetalTraceBackendTestHooks::ReadbackGenDirs(std::vector<float>& out, size_t count) {
+  // [TEST-ONLY] scrum-328.2 Step 2: mirror of CUDA. root_d_buf is
+  // MTLResourceStorageModeShared (unified memory) so this is a plain memcpy —
+  // no kernel change needed.
+  auto& impl = *backend_.impl_;
+  if (impl.root_d_buf == nil || count == 0u) {
+    out.clear();
+    return 0u;
+  }
+  const size_t cap_floats = static_cast<size_t>([impl.root_d_buf length]) / sizeof(float);
+  size_t n_floats = 3u * count;
+  if (n_floats > cap_floats) {
+    n_floats = cap_floats;
+  }
+  out.assign(n_floats, 0.0f);
+  std::memcpy(out.data(), [impl.root_d_buf contents], n_floats * sizeof(float));
+  return n_floats;
+}
+
+void MetalTraceBackendTestHooks::EnableGenAttemptCount(size_t count, size_t ci_start) {
+  // scrum-328.2 Step 1 Metal-symmetric enable: grow the always-bound sibling
+  // buffer to hold `count` ints, arm the write flag. Independent of the RNG
+  // probe (Metal currently has no `EnableRngProbeForTest`; see hpp §"2. 范围
+  // 与边界" declaration for why).
+  //
+  // code-review round 1 Major#2: `count` is the layer's total ray count — the
+  // ci-loop's gen dispatch writes at tid + ci_start + <running per-ci
+  // offset>, up to ci_start + count total across all ci's in the layer — so
+  // the allocation must cover ci_start + count, not just count.
+  auto& impl = *backend_.impl_;
+  const size_t required_bytes = std::max<size_t>(ci_start + count, 1u) * sizeof(int);
+  const size_t current_bytes = (impl.lat_attempts_buf_ == nil)
+                                   ? 0u
+                                   : static_cast<size_t>([impl.lat_attempts_buf_ length]);
+  if (current_bytes < required_bytes) {
+    impl.lat_attempts_buf_ =
+        [impl.device newBufferWithLength:required_bytes options:MTLResourceStorageModeShared];
+    assert(impl.lat_attempts_buf_ != nil);
+  }
+  // Zero the used region so a stale count from a prior Enable does not leak.
+  std::memset([impl.lat_attempts_buf_ contents], 0, required_bytes);
+  impl.lat_attempts_cap_ = ci_start + count;
+  impl.lat_attempts_ci_start_ = ci_start;
+  impl.attempts_enabled_ = (count > 0u);
+}
+
+size_t MetalTraceBackendTestHooks::ReadbackGenAttemptCount(std::vector<int>& out, size_t count) {
+  auto& impl = *backend_.impl_;
+  if (count > impl.lat_attempts_cap_) {
+    count = impl.lat_attempts_cap_;
+  }
+  if (impl.lat_attempts_buf_ == nil || count == 0u) {
+    out.clear();
+    return 0u;
+  }
+  out.assign(count, 0);
+  std::memcpy(out.data(), [impl.lat_attempts_buf_ contents], count * sizeof(int));
+  return count;
 }
 
 }  // namespace lumice
