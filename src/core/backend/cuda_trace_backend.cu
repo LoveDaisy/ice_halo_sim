@@ -78,6 +78,7 @@
 #include "core/projection.hpp"  // ComputeEARScale (dual-fisheye r_scale derivation)
 #include "core/shared/accum_shared.h"  // AccumXyzToPixel (S2 device-fused emit gate)
 #include "core/shared/filter_shared.h"
+#include "core/shared/lat_path_selection.hpp"  // SelectLatPath / ComputeJacobianEnvelope (single source)
 #include "core/shared/optics_shared.h"
 #include "core/shared/pcg_shared.h"
 #include "core/shared/projection_shared.h"  // RectangularForward / FisheyeEqualAreaForward
@@ -251,26 +252,18 @@ constexpr uint32_t kCudaDrainNonce   = 0xD5A1B3C7u;
 // independent (Metal-side kMetalShuffleNonce takes the same value, symmetric).
 constexpr uint32_t kCudaShuffleNonce = 0xB17CA3D9u;
 
-// File-local mirror of Metal `ComputeJacobianEnvelopeForDeviceGen`
-// (metal_trace_backend.mm:259). The four branches MUST stay numerically
-// identical to `ComputeJacobianEnvelope` in `src/core/math.cpp` (consumed by
-// `RandomSampler::SampleSphericalPointsSph` generic-rejection path); if the
-// host envelope changes, mirror the change here in the same PR.
-float CudaJacobianEnvelopeForDeviceGen(const Distribution& dist) {
-  switch (dist.type) {
-    case DistributionType::kGaussian:
-      return std::cos(std::max(std::abs(dist.mean) - 3.0f * dist.std, 0.0f) * math::kDegreeToRad);
-    case DistributionType::kZigzag:
-      return std::cos(std::max(std::abs(dist.mean) - dist.std, 0.0f) * math::kDegreeToRad);
-    case DistributionType::kLaplacian:
-      return std::cos(std::max(std::abs(dist.mean) - 5.0f * dist.std, 0.0f) * math::kDegreeToRad);
-    case DistributionType::kUniform:
-    case DistributionType::kNoRandom:
-    case DistributionType::kGaussianLegacy:
-      return 1.0f;
-  }
-  return 1.0f;
-}
+// Pairwise static_assert: LatPathKind wire values must match lm_pcg::kLatPath*
+// (device sink). Guards against silent enum-value drift.
+static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kFullSphere) == lm_pcg::kLatPathFullSphere,
+              "LatPathKind::kFullSphere must match lm_pcg::kLatPathFullSphere");
+static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kNoRandom) == lm_pcg::kLatPathNoRandom,
+              "LatPathKind::kNoRandom must match lm_pcg::kLatPathNoRandom");
+static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kRayleigh) == lm_pcg::kLatPathRayleigh,
+              "LatPathKind::kRayleigh must match lm_pcg::kLatPathRayleigh");
+static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kGaussLegacy) == lm_pcg::kLatPathGaussLegacy,
+              "LatPathKind::kGaussLegacy must match lm_pcg::kLatPathGaussLegacy");
+static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kGenericReject) == lm_pcg::kLatPathGenericReject,
+              "LatPathKind::kGenericReject must match lm_pcg::kLatPathGenericReject");
 
 // Build the transit-form GenRootKernelParams. Mirrors Metal's
 // `BuildTransitRootParams` (metal_trace_backend.mm:1593): orientation +
@@ -290,38 +283,17 @@ lm_pcg::GenRootKernelParams BuildTransitGpParams(const AxisDistribution& axis_di
   gp.sun_half_angle = 0.0f;
   gp.wl_pool_size = 1u;  // wl_idx pass-through; 1 keeps "% pool_size" defined
 
+  // Path selection + envelope constant single-sourced with math.cpp + Metal
+  // via lat_path::SelectLatPath (scrum-328.2 Step 4).
+  auto decision = lat_path::SelectLatPath(axis_dist);
   float lat_mean_rad = axis_dist.latitude_dist.mean * math::kDegreeToRad;
   float lat_std_rad  = axis_dist.latitude_dist.std  * math::kDegreeToRad;
-  float rejection_m  = 1.0f;
-  uint32_t lat_path  = lm_pcg::kLatPathGenericReject;
 
-  if (axis_dist.IsFullSphereUniform()) {
-    lat_path = lm_pcg::kLatPathFullSphere;
-  } else if (axis_dist.latitude_dist.type == DistributionType::kNoRandom) {
-    lat_path = lm_pcg::kLatPathNoRandom;
-  } else if (axis_dist.latitude_dist.type == DistributionType::kGaussianLegacy) {
-    lat_path = lm_pcg::kLatPathGaussLegacy;
-  } else if (axis_dist.latitude_dist.type == DistributionType::kGaussian) {
-    // Same Rayleigh threshold as math.cpp:469 / metal_trace_backend.mm:1513:
-    // colatitude_center + 3σ < 0.5°.
-    constexpr float kPolarThresholdRad = 0.5f * math::kDegreeToRad;
-    float colatitude_center = math::kPi_2 - std::abs(lat_mean_rad);
-    bool use_rayleigh = (colatitude_center + 3.0f * lat_std_rad) < kPolarThresholdRad;
-    if (use_rayleigh) {
-      lat_path = lm_pcg::kLatPathRayleigh;
-    } else {
-      lat_path = lm_pcg::kLatPathGenericReject;
-      rejection_m = CudaJacobianEnvelopeForDeviceGen(axis_dist.latitude_dist);
-    }
-  } else {
-    rejection_m = CudaJacobianEnvelopeForDeviceGen(axis_dist.latitude_dist);
-  }
-
-  gp.lat_path        = lat_path;
+  gp.lat_path        = lat_path::ToWireValue(decision.kind);
   gp.lat_dist_type   = static_cast<uint32_t>(axis_dist.latitude_dist.type);
   gp.lat_mean_rad    = lat_mean_rad;
   gp.lat_std_rad     = lat_std_rad;
-  gp.lat_rejection_m = rejection_m;
+  gp.lat_rejection_m = decision.rejection_m;
 
   gp.az_type     = static_cast<uint32_t>(axis_dist.azimuth_dist.type);
   gp.az_mean_rad = axis_dist.azimuth_dist.mean * math::kDegreeToRad;

@@ -8,6 +8,7 @@
 #include <limits>
 #include <memory>
 
+#include "core/shared/lat_path_selection.hpp"
 #include "util/logger.hpp"
 
 
@@ -413,34 +414,6 @@ void RandomSampler::SampleSphericalPointsSph(float* data, size_t num, size_t ste
 }
 
 
-namespace {
-// Compute the Jacobian rejection envelope constant M for a given latitude distribution.
-// M = max(cos(phi)) over the proposal's support, used in acceptance probability cos(phi)/M.
-// Tighter M → higher acceptance rate. All inputs in degrees.
-// NOTE: For extreme configs where |mean| + std > 90, NormalizeLatitude folding may produce
-// latitudes near ±90° where cos(phi) → 0, causing low acceptance rates but not incorrectness.
-float ComputeJacobianEnvelope(const Distribution& dist) {
-  switch (dist.type) {
-    case DistributionType::kGaussian:
-      // Proposal range ~ [mean - 3σ, mean + 3σ]; cos is maximized at latitude closest to equator.
-      return std::cos(std::max(std::abs(dist.mean) - 3.0f * dist.std, 0.0f) * math::kDegreeToRad);
-    case DistributionType::kZigzag:
-      // Proposal range: |std·sin(2πU) + mean|.
-      // When |mean| >= std: [|mean|-std, |mean|+std], M = cos((|mean|-std)°).
-      // When |mean| < std: [0, |mean|+std], M = cos(0) = 1.
-      return std::cos(std::max(std::abs(dist.mean) - dist.std, 0.0f) * math::kDegreeToRad);
-    case DistributionType::kLaplacian:
-      // Laplace tails heavier than Gaussian; use 5b instead of 3σ (covers 99.3% of mass).
-      // Samples beyond 5b are rare and handled correctly by NormalizeLatitude + rejection.
-      return std::cos(std::max(std::abs(dist.mean) - 5.0f * dist.std, 0.0f) * math::kDegreeToRad);
-    case DistributionType::kUniform:
-    default:
-      return 1.0f;
-  }
-}
-}  // namespace
-
-
 void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num) {
   auto& rng = RandomNumberGenerator::GetInstance();
 
@@ -453,26 +426,20 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
   //   2. Generic rejection: propose from distribution, accept with prob cos(phi)/M.
   //      Covers kGaussian (non-Rayleigh), kUniform, kZigzag, and future types.
   //   3. kNoRandom: single deterministic orientation, no Jacobian needed.
-  constexpr float kPolarThresholdRad = 0.5f * math::kDegreeToRad;  // Rayleigh only for colatitude < 0.5°
   constexpr int kMaxRejectionAttempts = 1000;
 
   auto lat_type = axis_dist.latitude_dist.type;
 
-  // Rayleigh path: Gaussian-only optimization for near-pole distributions.
-  bool use_rayleigh = false;
-  float latitude_mean_rad = 0;
-  float sigma_rad = 0;
-  if (lat_type == DistributionType::kGaussian) {
-    latitude_mean_rad = axis_dist.latitude_dist.mean * math::kDegreeToRad;
-    sigma_rad = axis_dist.latitude_dist.std * math::kDegreeToRad;
-    float colatitude_center = math::kPi_2 - std::abs(latitude_mean_rad);
-    use_rayleigh = (colatitude_center + 3.0f * sigma_rad) < kPolarThresholdRad;
-  }
-
-  // Precompute rejection envelope for types that use Jacobian rejection.
-  // kGaussianLegacy and kNoRandom skip rejection entirely.
-  bool skip_jacobian = (lat_type == DistributionType::kNoRandom || lat_type == DistributionType::kGaussianLegacy);
-  float rejection_m = (!skip_jacobian && !use_rayleigh) ? ComputeJacobianEnvelope(axis_dist.latitude_dist) : 1.0f;
+  // Path selection + envelope constant M share a single source with the two
+  // GPU backends via lat_path::SelectLatPath (scrum-328.2 Step 4). Derive the
+  // host-side booleans (use_rayleigh / skip_jacobian equivalents) + the
+  // Rayleigh branch's cached mean_rad/sigma_rad from the decision result.
+  auto decision = lat_path::SelectLatPath(axis_dist);
+  bool use_rayleigh = (decision.kind == lat_path::LatPathKind::kRayleigh);
+  float rejection_m = decision.rejection_m;
+  float latitude_mean_rad =
+      (lat_type == DistributionType::kGaussian) ? axis_dist.latitude_dist.mean * math::kDegreeToRad : 0.0f;
+  float sigma_rad = (lat_type == DistributionType::kGaussian) ? axis_dist.latitude_dist.std * math::kDegreeToRad : 0.0f;
 
   for (size_t i = 0; i < num; i++) {
     float phi = 0;

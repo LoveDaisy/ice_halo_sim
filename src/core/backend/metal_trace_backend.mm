@@ -39,6 +39,8 @@
 #include "core/metal_filter_match_src.hpp"
 #include "core/backend/metal_trace_backend.hpp"
 #include "core/backend/wl_pool.hpp"  // WlEntry / ComputeWlPool / ResolveWlPoolSize (296.6 single-sourced)
+#include "core/shared/lat_path_selection.hpp"  // SelectLatPath / ComputeJacobianEnvelope (single source)
+#include "core/shared/pcg_shared.h"             // lm_pcg::kLatPath* (device sink values)
 // task-#283 (metal-build-time-metallib): build-generated headers — wrap their
 // content in `namespace lumice { ... }`, so they are #included at file scope
 // (NOT inside an open `namespace lumice` or anonymous namespace) to keep the
@@ -120,15 +122,20 @@ static_assert(sizeof(lm_proj::ProjParams) == 76u, "ProjParams layout drift — c
 static_assert(sizeof(KernelParams) == 136u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 
-// Device root-gen latitude path tags. MUST match constant kLatPath* in
-// src/core/metal/lumice_trace.metal — they index into a Metal-side branch table.
-enum LatPath : uint32_t {
-  kLatPathFullSphereHost    = 0u,
-  kLatPathNoRandomHost      = 1u,
-  kLatPathRayleighHost      = 2u,
-  kLatPathGaussLegacyHost   = 3u,
-  kLatPathGenericRejectHost = 4u,
-};
+// Device root-gen latitude path tags. Numeric wire encoding is single-sourced
+// in lm_pcg::kLatPath* (src/core/shared/pcg_shared.h); the pairwise
+// static_assert below guards against LatPathKind (host taxonomy) vs
+// lm_pcg::kLatPath* (device sink) drift.
+static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kFullSphere) == lm_pcg::kLatPathFullSphere,
+              "LatPathKind::kFullSphere must match lm_pcg::kLatPathFullSphere");
+static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kNoRandom) == lm_pcg::kLatPathNoRandom,
+              "LatPathKind::kNoRandom must match lm_pcg::kLatPathNoRandom");
+static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kRayleigh) == lm_pcg::kLatPathRayleigh,
+              "LatPathKind::kRayleigh must match lm_pcg::kLatPathRayleigh");
+static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kGaussLegacy) == lm_pcg::kLatPathGaussLegacy,
+              "LatPathKind::kGaussLegacy must match lm_pcg::kLatPathGaussLegacy");
+static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kGenericReject) == lm_pcg::kLatPathGenericReject,
+              "LatPathKind::kGenericReject must match lm_pcg::kLatPathGenericReject");
 
 // Mirror of the Metal-side GenRootKernelParams (host layout MUST match the
 // MSL struct field-for-field — all 4-byte scalars, natural alignment).
@@ -182,35 +189,6 @@ size_t ComputeOutCap(size_t n, size_t max_hits) {
 
 Logger& EffectiveLogger(Logger* logger) {
   return logger ? *logger : GetGlobalLogger();
-}
-
-// File-local mirror of the file-static ComputeJacobianEnvelope in math.cpp.
-// Inlined here so device root-gen (task-260.2) does not require exporting that
-// helper through math.hpp; keeps math.cpp's parity envelope semantics in one
-// place per file (host math kept private; device path uses its own copy).
-// Inputs in degrees, output is the rejection envelope M used as cos(phi)/M.
-//
-// SYNC ANCHOR (task-260.5 Step 5, code-review-01 Minor): these four branches
-// MUST stay numerically identical to the file-static ComputeJacobianEnvelope
-// in src/core/math.cpp (consumed by RandomSampler::SampleSphericalPointsSph,
-// math.cpp:444+ — see in particular the generic-rejection path at math.cpp:504
-// where cos(phi)/M is the acceptance ratio). If math.cpp changes either the
-// 3σ (kGaussian), 1σ (kZigzag), or 5σ (kLaplacian) cutoff, OR adds a new
-// DistributionType, mirror the change here in the SAME PR — silent divergence
-// shows up only under narrow raypath filters and ds_corr will tank, exactly
-// the 260.5 regression class.
-float ComputeJacobianEnvelopeForDeviceGen(const Distribution& dist) {
-  switch (dist.type) {
-    case DistributionType::kGaussian:
-      return std::cos(std::max(std::abs(dist.mean) - 3.0f * dist.std, 0.0f) * math::kDegreeToRad);
-    case DistributionType::kZigzag:
-      return std::cos(std::max(std::abs(dist.mean) - dist.std, 0.0f) * math::kDegreeToRad);
-    case DistributionType::kLaplacian:
-      return std::cos(std::max(std::abs(dist.mean) - 5.0f * dist.std, 0.0f) * math::kDegreeToRad);
-    case DistributionType::kUniform:
-    default:
-      return 1.0f;
-  }
 }
 
 // task-#283 (metal-build-time-metallib): build-time metallib loader.
@@ -1444,44 +1422,18 @@ GenRootKernelParams MetalTraceBackend::Impl::BuildGenRootParams(
   gp.wl_pool_size   = wl_pool_size_;
 
   const AxisDistribution& axis_dist = setting.crystal_.axis_;
-  // Latitude path / proposal type, mirroring math.cpp:444 SampleSphericalPointsSph
-  // setup. Stays in sync with that function's three-path decision: Rayleigh
-  // (near-pole Gaussian only) / kGaussianLegacy / generic Jacobian rejection /
-  // kNoRandom, plus a top-level fast path when the distribution is the full
-  // sphere uniform sampler.
+  // Latitude path / proposal type single-sourced with math.cpp + CUDA via
+  // lat_path::SelectLatPath (scrum-328.2 Step 4).
+  auto decision = lat_path::SelectLatPath(axis_dist);
   auto lat_type = axis_dist.latitude_dist.type;
   float lat_mean_rad = axis_dist.latitude_dist.mean * math::kDegreeToRad;
   float lat_std_rad  = axis_dist.latitude_dist.std  * math::kDegreeToRad;
-  float rejection_m  = 1.0f;
-  uint32_t lat_path  = kLatPathGenericRejectHost;
 
-  if (axis_dist.IsFullSphereUniform()) {
-    lat_path = kLatPathFullSphereHost;
-  } else if (lat_type == DistributionType::kNoRandom) {
-    lat_path = kLatPathNoRandomHost;
-  } else if (lat_type == DistributionType::kGaussianLegacy) {
-    lat_path = kLatPathGaussLegacyHost;
-  } else if (lat_type == DistributionType::kGaussian) {
-    // Same Rayleigh threshold as math.cpp:469: colatitude_center + 3σ < 0.5°.
-    constexpr float kPolarThresholdRad = 0.5f * math::kDegreeToRad;
-    float colatitude_center = math::kPi_2 - std::abs(lat_mean_rad);
-    bool use_rayleigh = (colatitude_center + 3.0f * lat_std_rad) < kPolarThresholdRad;
-    if (use_rayleigh) {
-      lat_path = kLatPathRayleighHost;
-    } else {
-      lat_path = kLatPathGenericRejectHost;
-      rejection_m = ComputeJacobianEnvelopeForDeviceGen(axis_dist.latitude_dist);
-    }
-  } else {
-    // kUniform / kZigzag / kLaplacian: generic rejection.
-    rejection_m = ComputeJacobianEnvelopeForDeviceGen(axis_dist.latitude_dist);
-  }
-
-  gp.lat_path        = lat_path;
+  gp.lat_path        = lat_path::ToWireValue(decision.kind);
   gp.lat_dist_type   = static_cast<uint32_t>(lat_type);
   gp.lat_mean_rad    = lat_mean_rad;
   gp.lat_std_rad     = lat_std_rad;
-  gp.lat_rejection_m = rejection_m;
+  gp.lat_rejection_m = decision.rejection_m;
 
   gp.az_type     = static_cast<uint32_t>(axis_dist.azimuth_dist.type);
   gp.az_mean_rad = axis_dist.azimuth_dist.mean * math::kDegreeToRad;
