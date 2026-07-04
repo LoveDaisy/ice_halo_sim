@@ -52,7 +52,15 @@ constexpr uint32_t ToWireValue(LatPathKind kind) {
 //   - kGaussian:  proposal range ~ [mean-3σ, mean+3σ] → M = cos(max(|mean|-3σ, 0)°)
 //   - kZigzag:    proposal range |std·sin(2πU)+mean| → M = cos(max(|mean|-std, 0)°)
 //   - kLaplacian: 5b cutoff (covers 99.3% of Laplace mass) → cos(max(|mean|-5b, 0)°)
-//   - kUniform / default: M = 1
+//   - kUniform:   proposal support is exactly [mean-std/2, mean+std/2] (uniform
+//     GetUniform() maps to (u-0.5)*std+mean; see math.cpp RandomNumberGenerator::Get
+//     and pcg_get_dist mirror). Tight-envelope M = cos(max(|mean|-std/2, 0)°) is
+//     exact (not an approximation): when the support brackets the equator the
+//     max()-clamp yields M=1 (bit-identical to the prior behavior); when the
+//     support is bounded away from equator M<1 lifts the acceptance rate.
+//     Full-sphere uniform (IsFullSphereUniform()==true) is routed to
+//     kFullSphere in SelectLatPath and does not reach this branch.
+//   - default: unknown/future type → conservative M = 1.
 inline float ComputeJacobianEnvelope(const Distribution& dist) {
   switch (dist.type) {
     case DistributionType::kGaussian:
@@ -62,6 +70,7 @@ inline float ComputeJacobianEnvelope(const Distribution& dist) {
     case DistributionType::kLaplacian:
       return std::cos(std::max(std::abs(dist.mean) - 5.0f * dist.std, 0.0f) * math::kDegreeToRad);
     case DistributionType::kUniform:
+      return std::cos(std::max(std::abs(dist.mean) - 0.5f * dist.std, 0.0f) * math::kDegreeToRad);
     default:
       return 1.0f;
   }
@@ -74,10 +83,17 @@ struct LatPathDecision {
 
 // Select latitude-sampling path + rejection envelope for a given axis
 // distribution. Mirrors the branch structure at
-// RandomSampler::SampleSphericalPointsSph setup (math.cpp:459-475).
+// RandomSampler::SampleSphericalPointsSph setup (math.cpp:437,
+// metal_trace_backend.mm:1455, cuda_trace_backend.cu:290).
 //
-// Rayleigh threshold: colatitude_center + 3σ < 0.5° — same value used by
-// math.cpp:469, metal_trace_backend.mm:1466, cuda_trace_backend.cu:307.
+// Rayleigh threshold: colatitude_center < 0.5° (sigma-independent). The
+// tight-envelope Rayleigh sampler in pcg_shared.h::sample_lat_lon_roll is
+// exact (accept = sin(theta)/theta, M=1) for any sigma up to ~60°
+// (doc/near-pole-area-measure-sampling.md §附录, validated by MC), so the
+// previous "colatitude_center + 3sigma < 0.5°" guard (which the tight sampler
+// no longer needs) was relaxed. The prior guard misrouted typical near-pole
+// Parhelia/Parry configurations (mean=90°, sigma=5°, colatitude_center=0 but
+// 3sigma=15°) to kLatPathGenericReject with a ~27% acceptance rate.
 inline LatPathDecision SelectLatPath(const AxisDistribution& axis_dist) {
   if (axis_dist.IsFullSphereUniform()) {
     return { LatPathKind::kFullSphere, 1.0f };
@@ -91,10 +107,18 @@ inline LatPathDecision SelectLatPath(const AxisDistribution& axis_dist) {
   }
   if (lat_type == DistributionType::kGaussian) {
     constexpr float kPolarThresholdRad = 0.5f * math::kDegreeToRad;
+    // Upper bound on sigma for the tight-envelope Rayleigh path: doc/near-pole-
+    // area-measure-sampling.md §附录 validated exactness for sigma <= 60°. Beyond
+    // that the proposed colatitude routinely exceeds [0, pi], sin(theta)/theta
+    // turns negative, and the accept step degenerates to the kMaxRejectionAttempts
+    // safety valve (silent distribution collapse — caught during implement by the
+    // pre-existing full-sphere N(±90°, 180°) tests). Above the cap we fall back to
+    // GenericReject, which handles arbitrary sigma correctly.
+    constexpr float kMaxTightEnvelopeSigmaRad = 60.0f * math::kDegreeToRad;
     float lat_mean_rad = axis_dist.latitude_dist.mean * math::kDegreeToRad;
     float lat_std_rad = axis_dist.latitude_dist.std * math::kDegreeToRad;
     float colatitude_center = math::kPi_2 - std::abs(lat_mean_rad);
-    bool use_rayleigh = (colatitude_center + 3.0f * lat_std_rad) < kPolarThresholdRad;
+    bool use_rayleigh = colatitude_center < kPolarThresholdRad && lat_std_rad < kMaxTightEnvelopeSigmaRad;
     if (use_rayleigh) {
       return { LatPathKind::kRayleigh, 1.0f };
     }

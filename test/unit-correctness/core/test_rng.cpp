@@ -407,9 +407,16 @@ TEST_F(SphericalSamplingTest, MeanVarianceAccuracy) {
   Config configs[] = { { 0, 5 }, { 45, 5 }, { 90, 5 }, { 0, 30 }, { 0, 180 }, { 90, 180 } };
 
   auto& rng = lumice::RandomNumberGenerator::GetInstance();
-  rng.SetSeed(123);
 
   for (const auto& cfg : configs) {
+    // Reset seed per-config so each config's Monte Carlo estimate is independent
+    // of prior configs' RNG consumption. Previously all configs shared one seed
+    // (123); when scrum-328.3 introduced the sinθ/θ accept step in the Rayleigh
+    // path, the shifted RNG stream pushed {zen=0,σ=30} 0.008° over the 0.1°
+    // tolerance despite the sampler's target distribution being unchanged. Per-
+    // config seeding removes the cross-config coupling without loosening the
+    // tolerance (see plan §3 "RNG 消耗节拍变化" clause).
+    rng.SetSeed(123);
     lumice::AxisDistribution axis;
     axis.latitude_dist.type = lumice::DistributionType::kGaussian;
     axis.latitude_dist.mean = static_cast<float>(90.0 - cfg.zen);

@@ -9,6 +9,7 @@
 #include <memory>
 
 #include "core/shared/lat_path_selection.hpp"
+#include "core/shared/pcg_shared.h"
 #include "util/logger.hpp"
 
 
@@ -446,11 +447,26 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
     bool flip = false;
 
     if (lat_type == DistributionType::kGaussian && use_rayleigh) {
-      // Rayleigh path: 2D Gaussian in tangent plane at pole → Rayleigh angular distance.
-      // Guard ensures colatitude_center + 3σ < 0.5°, so colatitude rarely exceeds valid range.
-      float dx = rng.GetGaussian() * sigma_rad;
-      float dy = rng.GetGaussian() * sigma_rad;
-      float colatitude = std::sqrt(dx * dx + dy * dy);
+      // Tight-envelope area-measure Rayleigh path (doc/near-pole-area-measure-sampling.md §2).
+      // Propose colatitude ~ Rayleigh(sigma) via the 2D-Gaussian norm form (numerically
+      // identical to theta = sigma*sqrt(-2 ln u)); accept with sin(theta)/theta (M=1,
+      // exact, never clamp). Mirrors pcg_shared.h::sample_lat_lon_roll kLatPathRayleigh
+      // branch; kMaxRejectionAttempts safety valve shared with the generic branch below.
+      int attempts = 0;
+      float colatitude = 0.0f;
+      bool accept = false;
+      do {
+        float dx = rng.GetGaussian() * sigma_rad;
+        float dy = rng.GetGaussian() * sigma_rad;
+        colatitude = std::sqrt(dx * dx + dy * dy);
+        ++attempts;
+        if (attempts >= kMaxRejectionAttempts) {
+          LOG_WARNING("SampleSphericalPointsSph: Rayleigh safety valve triggered (mean={}, std={})",
+                      axis_dist.latitude_dist.mean, axis_dist.latitude_dist.std);
+          break;
+        }
+        accept = rng.GetUniform() < lm_pcg::pcg_sinc(colatitude);
+      } while (!accept);
       phi = std::copysign(math::kPi_2 - colatitude, latitude_mean_rad);
       phi = std::max(-math::kPi_2, std::min(math::kPi_2, phi));
       if (latitude_mean_rad < 0) {

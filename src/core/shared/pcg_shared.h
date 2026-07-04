@@ -162,6 +162,16 @@ LM_FN float u01_from_hash(uint32_t h) {
   return static_cast<float>(h >> 8) * (1.0f / 16777216.0f);
 }
 
+// Precise acceptance ratio for tight-envelope area-measure sampling near the
+// pole (doc/near-pole-area-measure-sampling.md §2). Returns sin(theta)/theta;
+// the theta->0 limit is 1.0. The 1e-6f guard only fires when a uniform draw
+// floor drives the proposed colatitude toward 0 (see kLatPathRayleigh branch
+// in sample_lat_lon_roll). Domain is theta in [0, pi]: within it sin(theta) is
+// non-negative, so the returned ratio is in [0, 1] and is a valid probability.
+LM_FN float pcg_sinc(float theta) {
+  return theta > 1e-6f ? LM_SIN(theta) / theta : 1.0f;
+}
+
 struct PcgStream {
   uint32_t seed;
   uint32_t global_idx;
@@ -292,9 +302,28 @@ LM_FN void sample_lat_lon_roll(LM_THREAD PcgStream& s, LM_CONSTANT_REF GenRootKe
   } else if (gp.lat_path == kLatPathNoRandom) {
     phi = gp.lat_mean_rad;
   } else if (gp.lat_path == kLatPathRayleigh) {
-    float dx = pcg_gaussian(s) * gp.lat_std_rad;
-    float dy = pcg_gaussian(s) * gp.lat_std_rad;
-    float colatitude = LM_SQRT(dx * dx + dy * dy);
+    // Tight-envelope area-measure sampling (doc/near-pole-area-measure-sampling.md
+    // §2). Propose colatitude ~ Rayleigh(sigma) via the 2D-Gaussian norm form
+    // (numerically identical to theta = sigma*sqrt(-2 ln u)); accept with
+    // sin(theta)/theta (M=1, exact, never clamp). Consumes 2 gaussian slots +
+    // 1 uniform slot per attempt; expected ~1.002 attempts for sigma <= 60°
+    // (doc §附录). attempts_total is populated so the scrum-328.2 attempt-count
+    // observability facility (EnableGenAttemptCountForTest / ReadbackGenAttemptCountForTest)
+    // measures the tight-envelope acceptance rate directly.
+    int attempts = 0;
+    float colatitude = 0.0f;
+    bool accept = false;
+    do {
+      float dx = pcg_gaussian(s) * gp.lat_std_rad;
+      float dy = pcg_gaussian(s) * gp.lat_std_rad;
+      colatitude = LM_SQRT(dx * dx + dy * dy);
+      attempts++;
+      if (attempts >= kMaxRejectionAttempts) {
+        break;
+      }
+      accept = pcg_uniform(s) < pcg_sinc(colatitude);
+    } while (!accept);
+    attempts_total = attempts;
     phi = LM_COPYSIGN(LM_PI_2F - colatitude, gp.lat_mean_rad);
     phi = LM_CLAMP(phi, -LM_PI_2F, LM_PI_2F);
     if (gp.lat_mean_rad < 0.0f) {
