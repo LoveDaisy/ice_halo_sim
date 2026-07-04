@@ -27,6 +27,7 @@
 #include <string>
 #include <vector>
 
+#include "core/backend/rng_probe_stream.hpp"
 #include "core/backend/trace_backend.hpp"
 
 namespace lumice {
@@ -151,19 +152,49 @@ class CudaTraceBackend : public TraceBackend {
   // number of floats written (3 * count), or 0 if unavailable.
   size_t ReadbackGenDirsForTest(std::vector<float>& out, size_t count);
 
-  // [TEST-ONLY] task-gpu-rng-ray-index-uint64: RNG-only observation of a device
-  // PCG stream, isolated from ray physics + atomic-compaction non-determinism.
-  // EnableRngProbeForTest allocates a per-ray probe sink; the NEXT TraceLayer's
-  // kernel writes each thread's raw pcg_uniform draw into it —
-  // trace_single_ms_kernel probes the ms_mode==1 gate_stream (gate_ray_base_hi),
-  // transit_multi_ms_kernel probes the transit stream (gp.gen_ray_base_hi). Which
-  // kernel fills it depends on WHEN Enable is called in the layer sequence (before
-  // the ms_mode==1 layer → gate; between layers → transit). The draw is a pure
-  // function of (mixed_seed, tid) — deterministic, unlike d_dirs_/image which mix
-  // in the non-deterministic continuation ray at that tid. A non-zero hi on the
-  // probed stream must move the draws; hi==0 runs are bit-identical.
-  void EnableRngProbeForTest(size_t count);
+  // [TEST-ONLY] task-gpu-rng-ray-index-uint64 + scrum-328.2 Step 1: RNG-only
+  // observation of a device PCG stream, isolated from ray physics + atomic-
+  // compaction non-determinism. EnableRngProbeForTest allocates a per-ray probe
+  // sink; the NEXT TraceLayer's kernel writes each thread's raw pcg_uniform
+  // draw at probe[tid + ci_start] into it — but **only the kernel matching
+  // the explicit `stream` argument** actually writes (host passes nullptr to
+  // the other kernels), replacing the pre-scrum-328.2 implicit "whichever
+  // kernel is executed next" routing:
+  //   - RngProbeStream::kGen        → gen_root_kernel writes the first
+  //                                    pcg_uniform draw of its per-ray PCG
+  //                                    stream. (scrum-328.2 Step 1 new.)
+  //   - RngProbeStream::kGateMs1    → trace_single_ms_kernel writes the emit
+  //                                    gate's first draw when ms_mode==1
+  //                                    (per-bounce, gate_ray_base_hi).
+  //   - RngProbeStream::kGateFinal  → trace_single_ms_kernel writes the emit
+  //                                    gate's first draw when ms_mode==0
+  //                                    (final layer, gate_ray_base_final_hi).
+  //                                    Reserved wiring; add the ms_mode==0
+  //                                    probe write when a consumer needs it.
+  //   - RngProbeStream::kTransit    → transit_multi_ms_kernel writes the
+  //                                    transit stream's first draw.
+  // `ci_start` addresses probe[tid + ci_start] so a multi-crystal-instance
+  // dispatch series does not silently overwrite prior CIs' draws (the pre-
+  // scrum-328.2 wiring indexed by raw `tid`, i.e. only single-ci scenes were
+  // safe). The draw is a pure function of (mixed_seed, tid) — deterministic,
+  // unlike d_dirs_/image which mix in the non-deterministic continuation ray
+  // at that tid. A non-zero hi on the probed stream must move the draws;
+  // hi==0 runs are bit-identical.
+  void EnableRngProbeForTest(RngProbeStream stream, size_t count, size_t ci_start = 0);
   size_t ReadbackRngProbeForTest(std::vector<float>& out, size_t count);
+
+  // [TEST-ONLY] scrum-328.2 Step 1 attempt-count observability. Allocates a
+  // per-ray sink sibling to the RNG probe; gen_root_kernel unconditionally
+  // writes each ray's kLatPathGenericReject inner-loop iteration count when
+  // the sink is bound (mean(attempts) = 1/accept_ratio, the ONLY direct route
+  // to a per-ray acceptance-rate observation on device). Independent of
+  // EnableRngProbeForTest (no shared enable state), Metal-symmetric. Consumer:
+  // scrum-328 near-pole area-measure sampler smoke tests / parity harness
+  // (mean(attempts) → doc/near-pole-area-measure-sampling.md anchor 4.90 for
+  // Laplacian b=5, 3.76 for Gaussian σ=5). `ci_start` mirrors the RNG probe
+  // ci addressing so multi-ci scenes can be observed without overwrite.
+  void EnableGenAttemptCountForTest(size_t count, size_t ci_start = 0);
+  size_t ReadbackGenAttemptCountForTest(std::vector<int>& out, size_t count);
 
  private:
   struct Impl;

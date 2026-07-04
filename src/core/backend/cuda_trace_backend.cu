@@ -493,7 +493,14 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                        // task-gpu-rng-ray-index-uint64 white-box
                                        // RNG probe for the ms_mode==1 gate_stream
                                        // (gate_ray_base_hi); see body.
-                                       float* __restrict__ d_rng_probe) {
+                                       float* __restrict__ d_rng_probe,
+                                       // [TEST-ONLY] scrum-328.2 Step 1: probe
+                                       // buffer index offset so a multi-crystal-
+                                       // instance dispatch series can address
+                                       // per-ci probe windows via
+                                       // d_rng_probe[tid + probe_ci_start]. 0 in
+                                       // production and in single-ci tests.
+                                       uint32_t probe_ci_start) {
   const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_roots) {
     return;
@@ -538,7 +545,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
     probe.seed       = gate_mixed_seed;
     probe.global_idx = gate_ray_base + tid;
     probe.slot       = 0u;
-    d_rng_probe[tid] = lm_pcg::pcg_uniform(probe);
+    d_rng_probe[tid + probe_ci_start] = lm_pcg::pcg_uniform(probe);
   }
   const uint32_t gate_final_hi_epoch =
       lm_pcg::pcg_advance_hi(gate_ray_base_final, gate_ray_base_final_hi, tid);
@@ -901,7 +908,9 @@ __global__ void transit_multi_ms_kernel(
     uint32_t n_rays,
     // [TEST-ONLY] nullptr in production. task-gpu-rng-ray-index-uint64 white-box
     // RNG probe: receives this thread's transit PCG draw (see body).
-    float* __restrict__ d_rng_probe) {
+    float* __restrict__ d_rng_probe,
+    // [TEST-ONLY] scrum-328.2 Step 1 multi-ci probe addressing (see gen kernel).
+    uint32_t probe_ci_start) {
   const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_rays || gp.tri_count == 0u) {
     return;
@@ -929,7 +938,7 @@ __global__ void transit_multi_ms_kernel(
     probe.seed       = transit_mixed_seed;
     probe.global_idx = gp.gen_ray_base + tid;
     probe.slot       = 0u;
-    d_rng_probe[tid] = lm_pcg::pcg_uniform(probe);
+    d_rng_probe[tid + probe_ci_start] = lm_pcg::pcg_uniform(probe);
   }
   lm_pcg::PcgStream stream;
   stream.seed       = transit_mixed_seed;
@@ -1034,7 +1043,23 @@ __global__ void gen_root_kernel(float* __restrict__ d_root_d,           // 3 × 
                                 const uint16_t* __restrict__ d_tri_to_poly,  // tri_cnt
                                 const WlEntry* __restrict__ d_wl_pool,  // wl_pool_size entries
                                 lm_pcg::GenRootKernelParams gp,
-                                uint32_t n_rays) {
+                                uint32_t n_rays,
+                                // [TEST-ONLY] scrum-328.2 Step 1 RNG-probe / attempt-count observability
+                                // (nullptr in production; buffers are allocated by the corresponding
+                                // Enable*ForTest methods on the backend).
+                                //   d_rng_probe       — non-null → each thread writes its first
+                                //                       pcg_uniform draw of the gen PCG stream to
+                                //                       d_rng_probe[tid + probe_ci_start]. Used for
+                                //                       RngProbeStream::kGen isolation.
+                                //   d_lat_attempts    — non-null → each thread writes its
+                                //                       kLatPathGenericReject inner-loop iteration
+                                //                       count (1 for direct-path) to
+                                //                       d_lat_attempts[tid + attempts_ci_start].
+                                //                       Consumer: near-pole acceptance-rate smoke.
+                                float* __restrict__ d_rng_probe,
+                                uint32_t probe_ci_start,
+                                int* __restrict__ d_lat_attempts,
+                                uint32_t attempts_ci_start) {
   const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_rays || gp.tri_count == 0u) {
     return;
@@ -1063,6 +1088,19 @@ __global__ void gen_root_kernel(float* __restrict__ d_root_d,           // 3 × 
   d_root_wl_idx[tid] = wl_idx;
 
   // 1. Crystal orientation → rotation matrix.
+  // scrum-328.2 Step 1: RNG probe for RngProbeStream::kGen — write the FIRST
+  // pcg_uniform draw of the gen stream (before sample_lat_lon_roll consumes
+  // any slot) so a test can observe (mixed_seed, global_idx) in isolation
+  // from downstream ray physics + wl_stream. Pure function of the seed pair;
+  // hi==0 runs bit-identical, hi!=0 must move the draw at every tid.
+  if (d_rng_probe != nullptr) {
+    lm_pcg::PcgStream probe;
+    probe.seed       = gen_mixed_seed;
+    probe.global_idx = global_idx;
+    probe.slot       = 0u;
+    d_rng_probe[tid + probe_ci_start] = lm_pcg::pcg_uniform(probe);
+  }
+
   lm_pcg::PcgStream stream;
   stream.seed       = gen_mixed_seed;
   stream.global_idx = global_idx;
@@ -1070,11 +1108,15 @@ __global__ void gen_root_kernel(float* __restrict__ d_root_d,           // 3 × 
   float lon = 0.0f;
   float lat = 0.0f;
   float roll = 0.0f;
-  // scrum-328.2 Step 1: out_attempts=nullptr in the gen kernel until the
-  // attempt-count observation buffer (`d_lat_attempts_`) is wired in a
-  // follow-up milestone. Kept explicit so the plumbing point is a single
-  // line change.
-  lm_pcg::sample_lat_lon_roll(stream, gp, lon, lat, roll, nullptr);
+  int attempts_local = 1;
+  // Pass `&attempts_local` only when the sibling buffer is bound — the branch
+  // predicts trivially in production (d_lat_attempts always nullptr), and the
+  // per-ray write below is likewise short-circuited.
+  lm_pcg::sample_lat_lon_roll(stream, gp, lon, lat, roll,
+                              d_lat_attempts != nullptr ? &attempts_local : nullptr);
+  if (d_lat_attempts != nullptr) {
+    d_lat_attempts[tid + attempts_ci_start] = attempts_local;
+  }
   float mat9[9];
   lm_pcg::build_crystal_rotation_9(lon, lat, roll, mat9);
 
@@ -1247,11 +1289,21 @@ struct CudaTraceBackend::Impl {
   // layer may exceed the next layer's n_roots after fan-out).
   float* d_dirs_ = nullptr;
   // [TEST-ONLY] RNG probe sink (nullptr in production; allocated by
-  // EnableRngProbeForTest). Shared by the gate_stream (ms_mode==1) and transit
-  // stream probes — which one fills it depends on enable timing (see the hpp
-  // doc). task-gpu-rng-ray-index-uint64.
+  // EnableRngProbeForTest). scrum-328.2 Step 1: explicit stream selection
+  // routes the buffer at dispatch time — host passes nullptr into the
+  // non-matched kernels so only the requested stream's kernel writes it.
+  // task-gpu-rng-ray-index-uint64.
   float* d_rng_probe_ = nullptr;
   size_t rng_probe_cap_ = 0;  // element count d_rng_probe_ was allocated for
+  RngProbeStream probe_stream_ = RngProbeStream::kGen;  // meaningful only when d_rng_probe_ != nullptr
+  size_t probe_ci_start_ = 0;  // ci-window offset applied at probe write (see EnableRngProbeForTest hpp doc)
+  // [TEST-ONLY] scrum-328.2 Step 1: per-ray attempt-count sibling buffer
+  // (nullptr in production; allocated by EnableGenAttemptCountForTest). Bound
+  // → gen_root_kernel writes each ray's kLatPathGenericReject iteration count
+  // via sample_lat_lon_roll's out_attempts arg. Independent of the RNG probe.
+  int* d_lat_attempts_ = nullptr;
+  size_t lat_attempts_cap_ = 0;
+  size_t lat_attempts_ci_start_ = 0;
   float* d_pos_ = nullptr;
   float* d_ws_ = nullptr;
   uint32_t* d_from_poly_ = nullptr;  // per-ray entry-face polygon id
@@ -1503,6 +1555,13 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
   cudaFree(d_rng_probe_);
   d_rng_probe_ = nullptr;
   rng_probe_cap_ = 0;
+  probe_stream_ = RngProbeStream::kGen;
+  probe_ci_start_ = 0;
+  // [TEST-ONLY] Same disposition for the attempt-count sibling buffer.
+  cudaFree(d_lat_attempts_);
+  d_lat_attempts_ = nullptr;
+  lat_attempts_cap_ = 0;
+  lat_attempts_ci_start_ = 0;
   //
   // scrum-cuda-async-engine-port (304.2): per-batch EndSession passes
   // keep_persistent_buffers=true so the large device + pinned buffers
@@ -1802,9 +1861,10 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
   }
 
   // Release old per-batch buffers (cudaFree(nullptr) is a no-op per CUDA spec).
-  // NOTE: d_rng_probe_ (test-only) is deliberately NOT freed here — it is enabled
-  // by a test before a TraceLayer and must survive this per-batch realloc; it is
-  // freed at session teardown (Impl::Reset) and re-armed by EnableRngProbeForTest.
+  // NOTE: d_rng_probe_ / d_lat_attempts_ (test-only) are deliberately NOT freed
+  // here — they are enabled by a test before a TraceLayer and must survive this
+  // per-batch realloc; both are freed at session teardown (Impl::Reset) and re-
+  // armed by EnableRngProbeForTest / EnableGenAttemptCountForTest.
   cudaFree(d_dirs_);     d_dirs_ = nullptr;
   cudaFree(d_pos_);      d_pos_ = nullptr;
   cudaFree(d_ws_);       d_ws_ = nullptr;
@@ -2574,10 +2634,22 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
         gp.gen_ray_base    = split.lo;
         gp.gen_ray_base_hi = split.hi;
       }
+      // scrum-328.2 Step 1: route the test-only RNG probe to gen_root_kernel
+      // only when the requested stream is kGen (otherwise pass nullptr so the
+      // kernel skips its probe write). d_lat_attempts_ is independent — bind
+      // whenever the sibling buffer is allocated (production: nullptr).
+      float* gen_probe_arg = (impl_->d_rng_probe_ != nullptr &&
+                              impl_->probe_stream_ == RngProbeStream::kGen)
+                                 ? impl_->d_rng_probe_
+                                 : nullptr;
       gen_root_kernel<<<grid, 256, 0, impl_->stream_>>>(impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
                                      impl_->d_rot_c2w_, impl_->d_root_wl_idx_, geom_tri_vtx,
                                      geom_tri_norm, geom_tri_area, geom_tri_to_poly,
-                                     impl_->d_wl_pool_, gp, cin);
+                                     impl_->d_wl_pool_, gp, cin,
+                                     gen_probe_arg,
+                                     static_cast<uint32_t>(impl_->probe_ci_start_),
+                                     impl_->d_lat_attempts_,
+                                     static_cast<uint32_t>(impl_->lat_attempts_ci_start_));
       ck_reset(cudaPeekAtLastError(), "gen_root_kernel launch");
       impl_->gen_ray_count_ += ci_n;
     } else if (first_ms) {
@@ -2641,13 +2713,20 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
         gp.gen_ray_base    = split.lo;
         gp.gen_ray_base_hi = split.hi;
       }
+      // scrum-328.2 Step 1: route the RNG probe to transit only when the
+      // requested stream is kTransit (see gen dispatch for the pattern).
+      float* transit_probe_arg = (impl_->d_rng_probe_ != nullptr &&
+                                  impl_->probe_stream_ == RngProbeStream::kTransit)
+                                     ? impl_->d_rng_probe_
+                                     : nullptr;
       transit_multi_ms_kernel<<<grid, 256, 0, impl_->stream_>>>(
           impl_->d_cont_d_[in_slot] + ci_start * 3u, impl_->d_cont_w_[in_slot] + ci_start,
           impl_->d_cont_wl_idx_[in_slot] + ci_start,
           impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
           impl_->d_rot_c2w_, impl_->d_root_wl_idx_,
           geom_tri_vtx, geom_tri_norm, geom_tri_area, geom_tri_to_poly,
-          gp, cin, impl_->d_rng_probe_);
+          gp, cin, transit_probe_arg,
+          static_cast<uint32_t>(impl_->probe_ci_start_));
       ck_reset(cudaPeekAtLastError(), "transit kernel launch");
       impl_->transit_ray_count_ += ci_n;
       ci_start += ci_n;
@@ -2672,6 +2751,16 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     // device-fused emit gate also calls DeviceFilterCheck. Previously these
     // were short-circuited to nullptr on ms_mode==0 dispatches — keeping that
     // shortcut would make the new ms_mode==0 emit gate deref nullptr.
+    // scrum-328.2 Step 1: route the RNG probe to trace_single_ms_kernel only
+    // when the requested stream targets an emit-gate stream. Today only
+    // kGateMs1 has a kernel-side probe write (the existing ms_mode==1 gate
+    // path); kGateFinal is enum-reserved for a future ms_mode==0 probe hook
+    // (no consumer today — GateStreamWireUp uses ReadbackXyzAccum instead).
+    float* trace_probe_arg = (impl_->d_rng_probe_ != nullptr &&
+                              (impl_->probe_stream_ == RngProbeStream::kGateMs1 ||
+                               impl_->probe_stream_ == RngProbeStream::kGateFinal))
+                                 ? impl_->d_rng_probe_
+                                 : nullptr;
     trace_single_ms_kernel<<<grid, 256, 0, impl_->stream_>>>(
         impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
         cin, geom_poly_n, geom_poly_d,
@@ -2702,7 +2791,8 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
         impl_->gate_seed_,
         gate_split.lo,
         gate_split.hi,
-        impl_->d_rng_probe_);
+        trace_probe_arg,
+        static_cast<uint32_t>(impl_->probe_ci_start_));
     ck_reset(cudaPeekAtLastError(), "kernel launch");
     // S2: ev_end_kernel_ recorded inside the loop captures real kernel time.
     // The original outside-loop placement (right next to ev_end_h2d_) collapsed
@@ -3112,20 +3202,16 @@ void CudaTraceBackend::SetInitialRayBaseForTest(size_t gen_base, size_t transit_
   impl_->gate_ray_count_    = gate_base;
 }
 
-void CudaTraceBackend::EnableRngProbeForTest(size_t count) {
-  // Allocate the RNG-probe sink so the NEXT TraceLayer's trace / transit kernel
-  // fills it with per-tid PCG draws (trace_single_ms_kernel probes the ms_mode==1
-  // gate_stream; transit_multi_ms_kernel probes the transit stream). Which kernel
-  // fills it depends on WHEN this is enabled relative to the layer sequence.
-  // CONSTRAINT: single crystal-instance (ci) scenes ONLY. The kernels index the
-  // probe by raw `tid` (0-based per ci dispatch), so a multi-ci layer relaunches
-  // the kernel per ci and each launch overwrites probe[0..n) — the readback would
-  // silently keep only the last ci's draws. All four hi-wiring tests use single-ci
-  // scenes; add a ci_start offset here + in the kernel writes before reusing this
-  // for multi-ci coverage.
+void CudaTraceBackend::EnableRngProbeForTest(RngProbeStream stream, size_t count, size_t ci_start) {
+  // scrum-328.2 Step 1: allocate the RNG-probe sink AND record which stream
+  // the caller wants it routed to. Dispatch sites pass nullptr into the
+  // non-matched kernels so only the requested stream's kernel writes. Repeat
+  // Enable calls replace the prior stream/ci_start (armed per-test).
   cudaFree(impl_->d_rng_probe_);
   impl_->d_rng_probe_ = nullptr;
   impl_->rng_probe_cap_ = 0;
+  impl_->probe_stream_ = stream;
+  impl_->probe_ci_start_ = ci_start;
   if (count == 0u) {
     return;
   }
@@ -3148,6 +3234,41 @@ size_t CudaTraceBackend::ReadbackRngProbeForTest(std::vector<float>& out, size_t
   cudaDeviceSynchronize();
   CheckCuda(cudaMemcpy(out.data(), impl_->d_rng_probe_, count * sizeof(float), cudaMemcpyDeviceToHost),
             "ReadbackRngProbeForTest D2H");
+  return count;
+}
+
+void CudaTraceBackend::EnableGenAttemptCountForTest(size_t count, size_t ci_start) {
+  // scrum-328.2 Step 1: allocate the per-ray attempt-count sibling buffer.
+  // gen_root_kernel writes each ray's kLatPathGenericReject iteration count
+  // via sample_lat_lon_roll's out_attempts arg iff this buffer is non-null.
+  // Independent of EnableRngProbeForTest (each has its own Enable/state) so
+  // a test can arm both, either, or neither.
+  cudaFree(impl_->d_lat_attempts_);
+  impl_->d_lat_attempts_ = nullptr;
+  impl_->lat_attempts_cap_ = 0;
+  impl_->lat_attempts_ci_start_ = ci_start;
+  if (count == 0u) {
+    return;
+  }
+  CheckCuda(cudaMalloc(&impl_->d_lat_attempts_, count * sizeof(int)),
+            "cudaMalloc d_lat_attempts (test)");
+  CheckCuda(cudaMemset(impl_->d_lat_attempts_, 0, count * sizeof(int)),
+            "cudaMemset d_lat_attempts (test)");
+  impl_->lat_attempts_cap_ = count;
+}
+
+size_t CudaTraceBackend::ReadbackGenAttemptCountForTest(std::vector<int>& out, size_t count) {
+  if (count > impl_->lat_attempts_cap_) {
+    count = impl_->lat_attempts_cap_;
+  }
+  if (impl_->d_lat_attempts_ == nullptr || count == 0u) {
+    out.clear();
+    return 0u;
+  }
+  out.assign(count, 0);
+  cudaDeviceSynchronize();
+  CheckCuda(cudaMemcpy(out.data(), impl_->d_lat_attempts_, count * sizeof(int), cudaMemcpyDeviceToHost),
+            "ReadbackGenAttemptCountForTest D2H");
   return count;
 }
 

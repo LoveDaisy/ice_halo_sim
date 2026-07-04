@@ -427,7 +427,11 @@ TEST(CudaRngHiWiring, GateMsMode1StreamWireUp) {
     CudaTraceBackend backend;
     backend.BeginSession(spec);
     backend.SetInitialRayBaseForTest(/*gen=*/0u, /*transit=*/0u, /*gate=*/hi_wire::kBases[i]);
-    backend.EnableRngProbeForTest(kRayCount);  // before the first TraceLayer → trace_single_ms_kernel fills it
+    // scrum-328.2 Step 1: explicit stream selection replaces the pre-fix
+    // implicit "whichever kernel runs next" routing. kGateMs1 = trace kernel's
+    // ms_mode==1 emit-gate probe (this test enables before the first TraceLayer
+    // whose scene has an ms_mode==1 layer 0).
+    backend.EnableRngProbeForTest(RngProbeStream::kGateMs1, kRayCount);
     HostRayBatch host;
     host.count = kRayCount;
     host.crystal = nullptr;
@@ -502,7 +506,8 @@ TEST(CudaRngHiWiring, TransitStreamWireUp) {
     }
     ASSERT_EQ(cont, cont_count) << "base_idx=" << i
                                 << " — continuation count varies across runs; gen/gate not isolated.";
-    backend.EnableRngProbeForTest(cont_count);  // sink for the next (continuation) layer's transit draws
+    // scrum-328.2 Step 1: kTransit → transit_multi_ms_kernel writes the probe.
+    backend.EnableRngProbeForTest(RngProbeStream::kTransit, cont_count);
     RecombineSpec rspec;
     rspec.shuffle = false;
     auto roots1 = backend.Recombine(std::move(h0), rspec);
