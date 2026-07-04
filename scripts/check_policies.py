@@ -15,6 +15,11 @@ Checks:
   3. gui-api-boundary — src/gui/** must not #include "core/..." or "config/...";
      the GUI talks to core only through the C API (src/include/lumice.h).
   4. no-using-namespace — `using namespace` is banned in src/ (AGENTS.md).
+  5. struct-layout-parity — canonical/mirror struct pairs (currently just
+     `GenRootKernelParams` between pcg_shared.h and metal_trace_backend.mm) must
+     have identical ordered (type, name) field lists. Catches same-size field
+     reorders that sizeof-based `static_assert`s do not detect (scrum-328.2
+     Step 6).
 
 Add a new check as a function returning a list of Violation and append it to
 CHECKS. Keep each check deterministic and artifact-inspecting.
@@ -212,11 +217,128 @@ def check_no_using_namespace() -> list[Violation]:
     return out
 
 
+# Struct-layout parity: ordered (type, name) field lists must match between the
+# canonical `GenRootKernelParams` in src/core/shared/pcg_shared.h and its host
+# mirror in src/core/backend/metal_trace_backend.mm. Field order/type/name drift
+# in either file silently breaks the MSL-shader ↔ host binding — sizeof static
+# asserts only catch size deltas, not same-size reorders.
+#
+# Regex approach (matches the existing check style — no AST): scan for the
+# canonical struct block, then extract one `<type> <name>;` per line inside it.
+# `GenRootKernelParams` is intentionally simple (POD, single-declaration lines,
+# no nested structs / macros / bitfields) so this survives; if the struct
+# complexifies later, harden the extractor rather than swap to a full parser.
+STRUCT_FIELD_RE = re.compile(
+    r"^\s*(?P<type>[A-Za-z_][A-Za-z0-9_:<>\s]*?)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:=[^;]+)?;\s*$"
+)
+
+STRUCT_LAYOUT_PAIRS: list[tuple[str, Path, Path]] = [
+    (
+        "GenRootKernelParams",
+        SRC / "core" / "shared" / "pcg_shared.h",
+        SRC / "core" / "backend" / "metal_trace_backend.mm",
+    ),
+]
+
+
+def _extract_struct_fields(path: Path, struct_name: str) -> tuple[list[tuple[str, str]], int]:
+    """Return (ordered [(type, name)], line where the struct opens) — or ([], -1)
+    if the struct isn't found. Uses the comment-stripped text so field lines
+    inside comments do not pollute the list; strings inside the struct body are
+    unlikely for a POD, so the comment stripper alone is sufficient.
+    """
+    text = path.read_text(encoding="utf-8")
+    stripped = strip_comments(text)
+    open_re = re.compile(r"\bstruct\s+" + re.escape(struct_name) + r"\s*\{")
+    m = open_re.search(stripped)
+    if not m:
+        return [], -1
+    open_line = stripped.count("\n", 0, m.start()) + 1
+    # Walk braces from the opening `{` to find the matching close.
+    body_start = m.end()
+    depth = 1
+    i = body_start
+    while i < len(stripped) and depth > 0:
+        c = stripped[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        i += 1
+    if depth != 0:
+        return [], open_line
+    body = stripped[body_start:i]
+    fields: list[tuple[str, str]] = []
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("//") or line.startswith("#"):
+            continue
+        fm = STRUCT_FIELD_RE.match(line)
+        if fm:
+            type_str = " ".join(fm.group("type").split())  # collapse whitespace
+            fields.append((type_str, fm.group("name")))
+    return fields, open_line
+
+
+def check_struct_layout_parity() -> list[Violation]:
+    out: list[Violation] = []
+    for struct_name, canon_path, mirror_path in STRUCT_LAYOUT_PAIRS:
+        canon_fields, canon_line = _extract_struct_fields(canon_path, struct_name)
+        mirror_fields, mirror_line = _extract_struct_fields(mirror_path, struct_name)
+        if not canon_fields:
+            out.append(
+                Violation(
+                    canon_path,
+                    canon_line if canon_line > 0 else 1,
+                    "struct-layout-parity",
+                    f"canonical struct `{struct_name}` not found in {canon_path.name}",
+                )
+            )
+            continue
+        if not mirror_fields:
+            out.append(
+                Violation(
+                    mirror_path,
+                    mirror_line if mirror_line > 0 else 1,
+                    "struct-layout-parity",
+                    f"mirror struct `{struct_name}` not found in {mirror_path.name}",
+                )
+            )
+            continue
+        if len(canon_fields) != len(mirror_fields):
+            out.append(
+                Violation(
+                    mirror_path,
+                    mirror_line,
+                    "struct-layout-parity",
+                    f"`{struct_name}` field count differs: canonical={len(canon_fields)} "
+                    f"vs mirror={len(mirror_fields)} (canonical @ {canon_path.name}:{canon_line})",
+                )
+            )
+        for idx, (canon, mirror) in enumerate(zip(canon_fields, mirror_fields)):
+            if canon != mirror:
+                out.append(
+                    Violation(
+                        mirror_path,
+                        mirror_line,
+                        "struct-layout-parity",
+                        (
+                            f"`{struct_name}` field #{idx} differs: canonical=`{canon[0]} {canon[1]}` "
+                            f"(@ {canon_path.name}:{canon_line}) vs mirror=`{mirror[0]} {mirror[1]}`"
+                        ),
+                    )
+                )
+    return out
+
+
 CHECKS = [
     check_getenv_centralization,
     check_env_knob_registration,
     check_gui_api_boundary,
     check_no_using_namespace,
+    check_struct_layout_parity,
 ]
 
 
@@ -236,7 +358,7 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    print("Policy check passed (env centralization, knob registration, GUI API boundary, using-namespace).")
+    print("Policy check passed (env centralization, knob registration, GUI API boundary, using-namespace, struct-layout parity).")
     return 0
 
 
