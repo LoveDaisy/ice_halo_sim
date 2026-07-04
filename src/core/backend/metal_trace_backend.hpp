@@ -158,6 +158,25 @@ class MetalTraceBackend : public TraceBackend {
   // Returns floats written (9 * count), or 0 if unavailable.
   size_t ReadbackRootRotForTest(std::vector<float>& out, size_t count);
 
+  // [TEST-ONLY] scrum-328.2 Step 2: mirror of CUDA
+  // `CudaTraceBackend::ReadbackGenDirsForTest`. Copies the first `count`
+  // device-gen'd ray directions (`root_d_buf`, crystal-local, 3 floats/ray)
+  // back to host. Unified-memory backend → this is a `memcpy` from the
+  // buffer's `contents` (no metallib change needed). MUST be called AFTER a
+  // TraceLayer whose gen dispatch produced >= `count` rays and BEFORE
+  // EndSession (which nils the buffer). Returns floats written (3 * count),
+  // or 0 if unavailable.
+  size_t ReadbackGenDirsForTest(std::vector<float>& out, size_t count);
+
+  // [TEST-ONLY] scrum-328.2 Step 1 (Metal-symmetric attempt-count observation).
+  // See CudaTraceBackend::EnableGenAttemptCountForTest for the semantic — this
+  // is the Metal side of the "device end acceptance-rate observation" facility
+  // that near-pole sampler smoke tests (scrum-328.1 / 328.3 / 328.4) consume.
+  // gen_root_kernel writes each ray's kLatPathGenericReject inner-loop count
+  // to `lat_attempts_buf_[tid + ci_start]` when the sink is armed.
+  void EnableGenAttemptCountForTest(size_t count, size_t ci_start = 0);
+  size_t ReadbackGenAttemptCountForTest(std::vector<int>& out, size_t count);
+
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

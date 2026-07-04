@@ -791,6 +791,12 @@ kernel void gen_root_kernel(
     // shader-side cache is consistent across both pool readers.
     constant WlEntry*       wl_pool       [[buffer(10)]],
     device uint*            root_wl_idx   [[buffer(11)]],
+    // scrum-328.2 Step 1 attempt-count observability (test-only). The buffer
+    // is ALWAYS bound (Metal validation forbids nil bindings); the .x flag in
+    // attempts_ctrl selects whether the kernel actually writes. Production:
+    // ctrl.x==0 → the branch below skips both the pointer arg and the write.
+    device int*             lat_attempts  [[buffer(12)]],
+    constant uint2&         attempts_ctrl [[buffer(13)]],
     uint tid [[thread_position_in_grid]])
 {
   if (tid >= gp.num_rays) {
@@ -841,9 +847,16 @@ kernel void gen_root_kernel(
 
   // 1. Sample crystal orientation (lon, lat, roll) → 3×3 rotation.
   float lon, lat, roll;
-  // scrum-328.2 Step 1: attempt-count buffer wiring lands in a follow-up
-  // milestone; pass nullptr here so the observation is compiled out today.
-  sample_lat_lon_roll(stream, gp, lon, lat, roll, nullptr);
+  // scrum-328.2 Step 1: attempt-count observability — writes the per-ray
+  // kLatPathGenericReject iteration count when the sibling buffer is armed
+  // (attempts_ctrl.x!=0). ctrl.y is the multi-ci write-offset. Production:
+  // ctrl.x==0 → &attempts_local skipped, branch predicted off.
+  thread int attempts_local = 1;
+  sample_lat_lon_roll(stream, gp, lon, lat, roll,
+                      attempts_ctrl.x != 0u ? &attempts_local : nullptr);
+  if (attempts_ctrl.x != 0u) {
+    lat_attempts[tid + attempts_ctrl.y] = attempts_local;
+  }
   float mat9[9];
   build_crystal_rotation_9(lon, lat, roll, mat9);
 

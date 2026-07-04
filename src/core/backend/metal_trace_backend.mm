@@ -533,6 +533,18 @@ struct MetalTraceBackend::Impl {
   id<MTLBuffer> root_rot_buf = nil;
   size_t        root_capacity = 0;
 
+  // [TEST-ONLY] scrum-328.2 Step 1 attempt-count sibling buffer. ALWAYS bound
+  // to gen_root_kernel at buffer(12) (Metal validation forbids nil bindings);
+  // the paired `attempts_ctrl.x` scalar tells the kernel whether to actually
+  // write. Grown lazily by EnableGenAttemptCountForTest; a dummy 4-byte
+  // allocation is created on first bind so production dispatches see a valid
+  // buffer without the test path being armed. `attempts_ci_start_` is the
+  // per-ci write offset (mirrors the RNG probe's ci_start).
+  id<MTLBuffer> lat_attempts_buf_ = nil;
+  size_t        lat_attempts_cap_ = 0;
+  size_t        lat_attempts_ci_start_ = 0;
+  bool          attempts_enabled_ = false;
+
   // Triangle-level geometry for device-resident root-gen (task-260.2). Uploaded
   // by UploadCrystal alongside polygon-level data; sized lazily by
   // EnsureTriBuffers. The gen kernel reads these to perform area×facing
@@ -1471,6 +1483,18 @@ void MetalTraceBackend::Impl::EncodeGenRoot(id<MTLCommandBuffer> cb,
     // scrum-268.8 (DR-3): wavelength pool + per-ray wl_idx output buffer.
     [enc setBuffer:wl_pool_buf_     offset:0 atIndex:10];
     [enc setBuffer:root_wl_idx_buf_ offset:0 atIndex:11];
+    // scrum-328.2 Step 1: attempt-count observability sibling. Lazily create
+    // a dummy 4-byte buffer if this is the first EncodeGenRoot after Init,
+    // so Metal validation is satisfied even when the test path is idle.
+    if (lat_attempts_buf_ == nil) {
+      lat_attempts_buf_ = [device newBufferWithLength:sizeof(int)
+                                              options:MTLResourceStorageModeShared];
+      assert(lat_attempts_buf_ != nil);
+    }
+    [enc setBuffer:lat_attempts_buf_ offset:0 atIndex:12];
+    uint attempts_ctrl[2] = { attempts_enabled_ ? 1u : 0u,
+                              static_cast<uint>(lat_attempts_ci_start_) };
+    [enc setBytes:attempts_ctrl length:sizeof(attempts_ctrl) atIndex:13];
     NSUInteger threads = 64;
     NSUInteger groups = (static_cast<NSUInteger>(gp.num_rays) + threads - 1) / threads;
     [enc dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
@@ -2511,6 +2535,58 @@ size_t MetalTraceBackend::ReadbackRootRotForTest(std::vector<float>& out, size_t
   out.assign(n_floats, 0.0f);
   std::memcpy(out.data(), [impl_->root_rot_buf contents], n_floats * sizeof(float));
   return n_floats;
+}
+
+size_t MetalTraceBackend::ReadbackGenDirsForTest(std::vector<float>& out, size_t count) {
+  // [TEST-ONLY] scrum-328.2 Step 2: mirror of CUDA. root_d_buf is
+  // MTLResourceStorageModeShared (unified memory) so this is a plain memcpy —
+  // no kernel change needed.
+  if (impl_->root_d_buf == nil || count == 0u) {
+    out.clear();
+    return 0u;
+  }
+  const size_t cap_floats = static_cast<size_t>([impl_->root_d_buf length]) / sizeof(float);
+  size_t n_floats = 3u * count;
+  if (n_floats > cap_floats) {
+    n_floats = cap_floats;
+  }
+  out.assign(n_floats, 0.0f);
+  std::memcpy(out.data(), [impl_->root_d_buf contents], n_floats * sizeof(float));
+  return n_floats;
+}
+
+void MetalTraceBackend::EnableGenAttemptCountForTest(size_t count, size_t ci_start) {
+  // scrum-328.2 Step 1 Metal-symmetric enable: grow the always-bound sibling
+  // buffer to hold `count` ints, arm the write flag. Independent of the RNG
+  // probe (Metal currently has no `EnableRngProbeForTest`; see hpp §"2. 范围
+  // 与边界" declaration for why).
+  const size_t required_bytes = std::max<size_t>(count, 1u) * sizeof(int);
+  const size_t current_bytes = (impl_->lat_attempts_buf_ == nil)
+                                   ? 0u
+                                   : static_cast<size_t>([impl_->lat_attempts_buf_ length]);
+  if (current_bytes < required_bytes) {
+    impl_->lat_attempts_buf_ =
+        [impl_->device newBufferWithLength:required_bytes options:MTLResourceStorageModeShared];
+    assert(impl_->lat_attempts_buf_ != nil);
+  }
+  // Zero the used region so a stale count from a prior Enable does not leak.
+  std::memset([impl_->lat_attempts_buf_ contents], 0, required_bytes);
+  impl_->lat_attempts_cap_ = count;
+  impl_->lat_attempts_ci_start_ = ci_start;
+  impl_->attempts_enabled_ = (count > 0u);
+}
+
+size_t MetalTraceBackend::ReadbackGenAttemptCountForTest(std::vector<int>& out, size_t count) {
+  if (count > impl_->lat_attempts_cap_) {
+    count = impl_->lat_attempts_cap_;
+  }
+  if (impl_->lat_attempts_buf_ == nil || count == 0u) {
+    out.clear();
+    return 0u;
+  }
+  out.assign(count, 0);
+  std::memcpy(out.data(), [impl_->lat_attempts_buf_ contents], count * sizeof(int));
+  return count;
 }
 
 }  // namespace lumice
