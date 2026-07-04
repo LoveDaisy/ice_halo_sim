@@ -27,7 +27,6 @@
 #include <string>
 #include <vector>
 
-#include "core/backend/rng_probe_stream.hpp"
 #include "core/backend/trace_backend.hpp"
 
 namespace lumice {
@@ -121,80 +120,15 @@ class CudaTraceBackend : public TraceBackend {
   // BeginSession — safe to read anytime the session is open.
   size_t GetLastBatchCrystalCount() const override;
 
-  // [TEST-ONLY] task-gpu-rng-ray-index-uint64 white-box injection: pre-seed the
-  // three per-session PCG ray-base counters (gen / transit / gate) INDEPENDENTLY
-  // BEFORE the first TraceLayer so a dev49-only test can drive exactly one
-  // device stream into a non-zero hi epoch (the other two held at hi==0) without
-  // running >2^32 real rays. Per-stream bases let gate/transit be asserted in
-  // isolation from gen. MUST be called AFTER BeginSession and BEFORE the first
-  // TraceLayer, and only in test builds.
-  void SetInitialRayBaseForTest(size_t gen_base, size_t transit_base, size_t gate_base);
-
-  // [TEST-ONLY] task-gpu-rng-ray-index-uint64 white-box observation: copy the
-  // first `count` device-gen'd ray directions (`d_dirs_`, crystal-local, 3
-  // floats/ray) back to host. This is the DIRECT output of `gen_root_kernel` —
-  // the exact kernel where `gen_ray_base_hi` mixes into the PCG seed that drives
-  // the per-ray orientation sample — so it observes the hi wiring in isolation
-  // from trace → emit → device-fused accumulation.
-  //
-  // Raw-TraceLayer harness coverage caveat (scrum-328.2 Step 0 recon):
-  //   - `ReadbackXyzAccum` IS populated in raw-TraceLayer harness runs when
-  //     the scene's `final_prob > 0` and the render is compatible
-  //     (`GateStreamWireUp` in test_cuda_rich_exit.cpp exercises this).
-  //   - `GenStreamWireUp` scenes deliberately set `final_prob=0.0f` (gen
-  //     stream isolation): the emit path drops every ray so `ReadbackXyzAccum`
-  //     stays zero and `DrainExits` returns empty — the design here is to
-  //     observe `d_dirs_` directly, not to complain that the accum path is
-  //     blind. The kernel wiring itself does write when `final_prob>0`.
-  //
-  // Contract: MUST be called AFTER a TraceLayer whose gen dispatch produced
-  // >= `count` rays and BEFORE EndSession (which frees d_dirs_). Returns the
-  // number of floats written (3 * count), or 0 if unavailable.
-  size_t ReadbackGenDirsForTest(std::vector<float>& out, size_t count);
-
-  // [TEST-ONLY] task-gpu-rng-ray-index-uint64 + scrum-328.2 Step 1: RNG-only
-  // observation of a device PCG stream, isolated from ray physics + atomic-
-  // compaction non-determinism. EnableRngProbeForTest allocates a per-ray probe
-  // sink; the NEXT TraceLayer's kernel writes each thread's raw pcg_uniform
-  // draw at probe[tid + ci_start] into it — but **only the kernel matching
-  // the explicit `stream` argument** actually writes (host passes nullptr to
-  // the other kernels), replacing the pre-scrum-328.2 implicit "whichever
-  // kernel is executed next" routing:
-  //   - RngProbeStream::kGen        → gen_root_kernel writes the first
-  //                                    pcg_uniform draw of its per-ray PCG
-  //                                    stream. (scrum-328.2 Step 1 new.)
-  //   - RngProbeStream::kGateMs1    → trace_single_ms_kernel writes the emit
-  //                                    gate's first draw when ms_mode==1
-  //                                    (per-bounce, gate_ray_base_hi).
-  //   - RngProbeStream::kGateFinal  → trace_single_ms_kernel writes the emit
-  //                                    gate's first draw when ms_mode==0
-  //                                    (final layer, gate_ray_base_final_hi).
-  //                                    Reserved wiring; add the ms_mode==0
-  //                                    probe write when a consumer needs it.
-  //   - RngProbeStream::kTransit    → transit_multi_ms_kernel writes the
-  //                                    transit stream's first draw.
-  // `ci_start` addresses probe[tid + ci_start] so a multi-crystal-instance
-  // dispatch series does not silently overwrite prior CIs' draws (the pre-
-  // scrum-328.2 wiring indexed by raw `tid`, i.e. only single-ci scenes were
-  // safe). The draw is a pure function of (mixed_seed, tid) — deterministic,
-  // unlike d_dirs_/image which mix in the non-deterministic continuation ray
-  // at that tid. A non-zero hi on the probed stream must move the draws;
-  // hi==0 runs are bit-identical.
-  void EnableRngProbeForTest(RngProbeStream stream, size_t count, size_t ci_start = 0);
-  size_t ReadbackRngProbeForTest(std::vector<float>& out, size_t count);
-
-  // [TEST-ONLY] scrum-328.2 Step 1 attempt-count observability. Allocates a
-  // per-ray sink sibling to the RNG probe; gen_root_kernel unconditionally
-  // writes each ray's kLatPathGenericReject inner-loop iteration count when
-  // the sink is bound (mean(attempts) = 1/accept_ratio, the ONLY direct route
-  // to a per-ray acceptance-rate observation on device). Independent of
-  // EnableRngProbeForTest (no shared enable state), Metal-symmetric. Consumer:
-  // scrum-328 near-pole area-measure sampler smoke tests / parity harness
-  // (mean(attempts) → doc/near-pole-area-measure-sampling.md anchor 4.90 for
-  // Laplacian b=5, 3.76 for Gaussian σ=5). `ci_start` mirrors the RNG probe
-  // ci addressing so multi-ci scenes can be observed without overwrite.
-  void EnableGenAttemptCountForTest(size_t count, size_t ci_start = 0);
-  size_t ReadbackGenAttemptCountForTest(std::vector<int>& out, size_t count);
+  // scrum-328.2 Step 3: all test-only observation + injection points have
+  // migrated to `CudaTraceBackendTestHooks` (see
+  // `core/backend/cuda_trace_backend_test_hooks.hpp`). This class's public
+  // interface is now production-only. The single retained ForTest-suffixed
+  // symbol above (`GetLastBatchCrystalCount` is production; the enumerated
+  // known-exception on the backend surface is nothing — both prior exceptions
+  // migrated or stayed production). Tests construct
+  // `CudaTraceBackendTestHooks(backend).SetInitialRayBase(...)` etc.
+  friend class CudaTraceBackendTestHooks;
 
  private:
   struct Impl;

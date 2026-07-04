@@ -132,50 +132,12 @@ class MetalTraceBackend : public TraceBackend {
   // (drop triggers R1 option B = split gate into its own dispatch).
   size_t TraceLayerKernelMaxThreadsForTest() const;
 
-  // [TEST-ONLY] task-gpu-rng-ray-index-uint64 white-box injection: pre-seed
-  // the per-session PCG ray-base counter (`root_ray_count`) BEFORE the first
-  // TraceLayer so a test can drive the device-gen kernel into a non-zero hi
-  // epoch (hi = base >> 32) without running >2^32 real rays. The device now
-  // XORs pcg_hash(hi) into every ray's PCG seed via pcg_seed_with_high, so
-  // an image rendered at base = 1<<32 must differ from one rendered at
-  // base = 0 (same seed, same scene). This is the direct evidence that the
-  // host↔device wiring (SplitPcgRayBase → gp.gen_ray_base_hi → shader
-  // pcg_advance_hi / pcg_seed_with_high) is intact — the in-range parity
-  // battery only exercises the hi==0 branch (bit-identical by construction)
-  // and would happily miss a broken hi-wiring regression.
-  //
-  // Contract: MUST be called AFTER BeginSession and BEFORE the first
-  // TraceLayer, and only in test builds. Injecting during a live layer
-  // sequence corrupts PCG stream indexing.
-  void SetInitialRayBaseForTest(size_t root_base, size_t transit_base);
-
-  // [TEST-ONLY] task-gpu-rng-ray-index-uint64: RNG-isolated observation of the
-  // TRANSIT stream. After a continuation-layer TraceLayer, copies the per-ray
-  // crystal→world rotation matrices (9 floats/ray) back to host. Those are the
-  // transit kernel's sampled orientations R(tid) — a pure function of
-  // (transit_seed, tid), independent of ray physics + continuation compaction —
-  // so hi==0 runs are bit-identical and a non-zero transit hi moves them.
-  // Returns floats written (9 * count), or 0 if unavailable.
-  size_t ReadbackRootRotForTest(std::vector<float>& out, size_t count);
-
-  // [TEST-ONLY] scrum-328.2 Step 2: mirror of CUDA
-  // `CudaTraceBackend::ReadbackGenDirsForTest`. Copies the first `count`
-  // device-gen'd ray directions (`root_d_buf`, crystal-local, 3 floats/ray)
-  // back to host. Unified-memory backend → this is a `memcpy` from the
-  // buffer's `contents` (no metallib change needed). MUST be called AFTER a
-  // TraceLayer whose gen dispatch produced >= `count` rays and BEFORE
-  // EndSession (which nils the buffer). Returns floats written (3 * count),
-  // or 0 if unavailable.
-  size_t ReadbackGenDirsForTest(std::vector<float>& out, size_t count);
-
-  // [TEST-ONLY] scrum-328.2 Step 1 (Metal-symmetric attempt-count observation).
-  // See CudaTraceBackend::EnableGenAttemptCountForTest for the semantic — this
-  // is the Metal side of the "device end acceptance-rate observation" facility
-  // that near-pole sampler smoke tests (scrum-328.1 / 328.3 / 328.4) consume.
-  // gen_root_kernel writes each ray's kLatPathGenericReject inner-loop count
-  // to `lat_attempts_buf_[tid + ci_start]` when the sink is armed.
-  void EnableGenAttemptCountForTest(size_t count, size_t ci_start = 0);
-  size_t ReadbackGenAttemptCountForTest(std::vector<int>& out, size_t count);
+  // scrum-328.2 Step 3: test-only observation + injection points migrated to
+  // `MetalTraceBackendTestHooks` (see `metal_trace_backend_test_hooks.hpp`).
+  // Known exception retained on this class: `TraceLayerKernelMaxThreadsForTest`
+  // above — operational occupancy guard, not a per-ray white-box injection
+  // point (plan §"Step 3 已知例外").
+  friend class MetalTraceBackendTestHooks;
 
  private:
   struct Impl;

@@ -38,6 +38,7 @@
 #include "core/math.hpp"
 #include "core/metal_filter_match_src.hpp"
 #include "core/backend/metal_trace_backend.hpp"
+#include "core/backend/metal_trace_backend_test_hooks.hpp"  // scrum-328.2 Step 3
 #include "core/backend/wl_pool.hpp"  // WlEntry / ComputeWlPool / ResolveWlPoolSize (296.6 single-sourced)
 #include "core/shared/lat_path_selection.hpp"  // SelectLatPath / ComputeJacobianEnvelope (single source)
 #include "core/shared/pcg_shared.h"             // lm_pcg::kLatPath* (device sink values)
@@ -2501,16 +2502,19 @@ size_t MetalTraceBackend::TraceLayerKernelMaxThreadsForTest() const {
   return static_cast<size_t>(impl_->pso.maxTotalThreadsPerThreadgroup);
 }
 
-void MetalTraceBackend::SetInitialRayBaseForTest(size_t root_base, size_t transit_base) {
-  // Metal has two host counters (root gen + transit); the emit gate uses tid
-  // directly (statistical-not-bit-exact, scrum-267 §3.6) so there is no gate hi
-  // stream to inject. Per-stream bases let the gen and transit wirings be
-  // asserted in ISOLATION (drive exactly one stream into a non-zero hi epoch).
-  impl_->root_ray_count = root_base;
-  impl_->transit_ray_count_ = transit_base;
+// --- scrum-328.2 Step 3: MetalTraceBackendTestHooks method definitions ---
+// Semantics identical to the pre-scrum-328.2 `MetalTraceBackend::XxxForTest`
+// bodies; only the access seam moved (via `backend_.impl_->...`). Live in this
+// .mm TU so Impl's complete definition (an Obj-C++ struct with id<MTL...>
+// members) is visible.
+
+void MetalTraceBackendTestHooks::SetInitialRayBase(size_t root_base, size_t transit_base) {
+  auto& impl = *backend_.impl_;
+  impl.root_ray_count = root_base;
+  impl.transit_ray_count_ = transit_base;
 }
 
-size_t MetalTraceBackend::ReadbackRootRotForTest(std::vector<float>& out, size_t count) {
+size_t MetalTraceBackendTestHooks::ReadbackRootRot(std::vector<float>& out, size_t count) {
   // [TEST-ONLY] task-gpu-rng-ray-index-uint64: copy the first `count` per-ray
   // crystal→world rotation matrices (root_rot_buf, 9 floats/ray) back to host.
   // For a continuation (transit) layer these are the transit kernel's sampled
@@ -2521,71 +2525,75 @@ size_t MetalTraceBackend::ReadbackRootRotForTest(std::vector<float>& out, size_t
   // this tid). This isolates the transit hi wiring: a non-zero transit hi moves
   // R(tid) at every tid; hi==0 runs are bit-identical. Metal's unified memory
   // makes this a plain contents() read (no metallib kernel change needed).
-  if (impl_->root_rot_buf == nil || count == 0u) {
+  auto& impl = *backend_.impl_;
+  if (impl.root_rot_buf == nil || count == 0u) {
     out.clear();
     return 0u;
   }
   // Bound the copy to the buffer so a count larger than the allocation cannot
   // read past root_rot_buf; the caller's ASSERT_EQ then surfaces the truncation.
-  const size_t cap_floats = static_cast<size_t>([impl_->root_rot_buf length]) / sizeof(float);
+  const size_t cap_floats = static_cast<size_t>([impl.root_rot_buf length]) / sizeof(float);
   size_t n_floats = 9u * count;
   if (n_floats > cap_floats) {
     n_floats = cap_floats;
   }
   out.assign(n_floats, 0.0f);
-  std::memcpy(out.data(), [impl_->root_rot_buf contents], n_floats * sizeof(float));
+  std::memcpy(out.data(), [impl.root_rot_buf contents], n_floats * sizeof(float));
   return n_floats;
 }
 
-size_t MetalTraceBackend::ReadbackGenDirsForTest(std::vector<float>& out, size_t count) {
+size_t MetalTraceBackendTestHooks::ReadbackGenDirs(std::vector<float>& out, size_t count) {
   // [TEST-ONLY] scrum-328.2 Step 2: mirror of CUDA. root_d_buf is
   // MTLResourceStorageModeShared (unified memory) so this is a plain memcpy —
   // no kernel change needed.
-  if (impl_->root_d_buf == nil || count == 0u) {
+  auto& impl = *backend_.impl_;
+  if (impl.root_d_buf == nil || count == 0u) {
     out.clear();
     return 0u;
   }
-  const size_t cap_floats = static_cast<size_t>([impl_->root_d_buf length]) / sizeof(float);
+  const size_t cap_floats = static_cast<size_t>([impl.root_d_buf length]) / sizeof(float);
   size_t n_floats = 3u * count;
   if (n_floats > cap_floats) {
     n_floats = cap_floats;
   }
   out.assign(n_floats, 0.0f);
-  std::memcpy(out.data(), [impl_->root_d_buf contents], n_floats * sizeof(float));
+  std::memcpy(out.data(), [impl.root_d_buf contents], n_floats * sizeof(float));
   return n_floats;
 }
 
-void MetalTraceBackend::EnableGenAttemptCountForTest(size_t count, size_t ci_start) {
+void MetalTraceBackendTestHooks::EnableGenAttemptCount(size_t count, size_t ci_start) {
   // scrum-328.2 Step 1 Metal-symmetric enable: grow the always-bound sibling
   // buffer to hold `count` ints, arm the write flag. Independent of the RNG
   // probe (Metal currently has no `EnableRngProbeForTest`; see hpp §"2. 范围
   // 与边界" declaration for why).
+  auto& impl = *backend_.impl_;
   const size_t required_bytes = std::max<size_t>(count, 1u) * sizeof(int);
-  const size_t current_bytes = (impl_->lat_attempts_buf_ == nil)
+  const size_t current_bytes = (impl.lat_attempts_buf_ == nil)
                                    ? 0u
-                                   : static_cast<size_t>([impl_->lat_attempts_buf_ length]);
+                                   : static_cast<size_t>([impl.lat_attempts_buf_ length]);
   if (current_bytes < required_bytes) {
-    impl_->lat_attempts_buf_ =
-        [impl_->device newBufferWithLength:required_bytes options:MTLResourceStorageModeShared];
-    assert(impl_->lat_attempts_buf_ != nil);
+    impl.lat_attempts_buf_ =
+        [impl.device newBufferWithLength:required_bytes options:MTLResourceStorageModeShared];
+    assert(impl.lat_attempts_buf_ != nil);
   }
   // Zero the used region so a stale count from a prior Enable does not leak.
-  std::memset([impl_->lat_attempts_buf_ contents], 0, required_bytes);
-  impl_->lat_attempts_cap_ = count;
-  impl_->lat_attempts_ci_start_ = ci_start;
-  impl_->attempts_enabled_ = (count > 0u);
+  std::memset([impl.lat_attempts_buf_ contents], 0, required_bytes);
+  impl.lat_attempts_cap_ = count;
+  impl.lat_attempts_ci_start_ = ci_start;
+  impl.attempts_enabled_ = (count > 0u);
 }
 
-size_t MetalTraceBackend::ReadbackGenAttemptCountForTest(std::vector<int>& out, size_t count) {
-  if (count > impl_->lat_attempts_cap_) {
-    count = impl_->lat_attempts_cap_;
+size_t MetalTraceBackendTestHooks::ReadbackGenAttemptCount(std::vector<int>& out, size_t count) {
+  auto& impl = *backend_.impl_;
+  if (count > impl.lat_attempts_cap_) {
+    count = impl.lat_attempts_cap_;
   }
-  if (impl_->lat_attempts_buf_ == nil || count == 0u) {
+  if (impl.lat_attempts_buf_ == nil || count == 0u) {
     out.clear();
     return 0u;
   }
   out.assign(count, 0);
-  std::memcpy(out.data(), [impl_->lat_attempts_buf_ contents], count * sizeof(int));
+  std::memcpy(out.data(), [impl.lat_attempts_buf_ contents], count * sizeof(int));
   return count;
 }
 

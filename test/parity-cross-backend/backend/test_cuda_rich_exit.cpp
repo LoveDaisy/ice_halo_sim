@@ -39,6 +39,7 @@
 #include "config/proj_config.hpp"
 #include "config/render_config.hpp"
 #include "core/backend/cuda_trace_backend.hpp"
+#include "core/backend/cuda_trace_backend_test_hooks.hpp"  // scrum-328.2 Step 3
 #include "core/backend/trace_backend.hpp"
 #include "core/exit_seam.hpp"
 #include "core/raypath.hpp"
@@ -324,13 +325,14 @@ TEST(CudaRngHiWiring, GenStreamWireUp) {
   for (int i = 0; i < 4; i++) {
     CudaTraceBackend backend;
     backend.BeginSession(spec);
-    backend.SetInitialRayBaseForTest(/*gen=*/hi_wire::kBases[i], /*transit=*/0u, /*gate=*/0u);
+    CudaTraceBackendTestHooks hooks(backend);
+    hooks.SetInitialRayBase(/*gen=*/hi_wire::kBases[i], /*transit=*/0u, /*gate=*/0u);
     HostRayBatch host;
     host.count = kRayCount;
     host.crystal = nullptr;
     host.refractive_index = 0.0f;
     backend.TraceLayer(RootRaySource::FromHost(host));
-    size_t n = backend.ReadbackGenDirsForTest(dirs[i], kRayCount);
+    size_t n = hooks.ReadbackGenDirs(dirs[i], kRayCount);
     backend.EndSession();
     ASSERT_EQ(n, 3u * kRayCount) << "base_idx=" << i << " — gen-dir readback returned " << n;
   }
@@ -383,7 +385,7 @@ TEST(CudaRngHiWiring, GateStreamWireUp) {
     images[i].assign(kImgFloats, 0.0f);
     CudaTraceBackend backend;
     backend.BeginSession(spec);
-    backend.SetInitialRayBaseForTest(/*gen=*/0u, /*transit=*/0u, /*gate=*/hi_wire::kBases[i]);
+    CudaTraceBackendTestHooks(backend).SetInitialRayBase(/*gen=*/0u, /*transit=*/0u, /*gate=*/hi_wire::kBases[i]);
     HostRayBatch host;
     host.count = kRayCount;
     host.crystal = nullptr;
@@ -426,19 +428,20 @@ TEST(CudaRngHiWiring, GateMsMode1StreamWireUp) {
   for (int i = 0; i < 4; i++) {
     CudaTraceBackend backend;
     backend.BeginSession(spec);
-    backend.SetInitialRayBaseForTest(/*gen=*/0u, /*transit=*/0u, /*gate=*/hi_wire::kBases[i]);
+    CudaTraceBackendTestHooks hooks(backend);
+    hooks.SetInitialRayBase(/*gen=*/0u, /*transit=*/0u, /*gate=*/hi_wire::kBases[i]);
     // scrum-328.2 Step 1: explicit stream selection replaces the pre-fix
     // implicit "whichever kernel runs next" routing. kGateMs1 = trace kernel's
     // ms_mode==1 emit-gate probe (this test enables before the first TraceLayer
     // whose scene has an ms_mode==1 layer 0).
-    backend.EnableRngProbeForTest(RngProbeStream::kGateMs1, kRayCount);
+    hooks.EnableRngProbe(RngProbeStream::kGateMs1, kRayCount);
     HostRayBatch host;
     host.count = kRayCount;
     host.crystal = nullptr;
     host.refractive_index = 0.0f;
     auto h0 = backend.TraceLayer(RootRaySource::FromHost(host));  // layer 0, ms_mode==1
     ASSERT_NE(h0, nullptr);
-    size_t n = backend.ReadbackRngProbeForTest(draws[i], kRayCount);
+    size_t n = hooks.ReadbackRngProbe(draws[i], kRayCount);
     backend.EndSession();
     ASSERT_EQ(n, kRayCount) << "base_idx=" << i << " — gate RNG-probe readback returned " << n;
   }
@@ -491,7 +494,8 @@ TEST(CudaRngHiWiring, TransitStreamWireUp) {
   for (int i = 0; i < 4; i++) {
     CudaTraceBackend backend;
     backend.BeginSession(spec);
-    backend.SetInitialRayBaseForTest(/*gen=*/0u, /*transit=*/hi_wire::kBases[i], /*gate=*/0u);
+    CudaTraceBackendTestHooks hooks(backend);
+    hooks.SetInitialRayBase(/*gen=*/0u, /*transit=*/hi_wire::kBases[i], /*gate=*/0u);
     HostRayBatch host;
     host.count = kRayCount;
     host.crystal = nullptr;
@@ -507,13 +511,13 @@ TEST(CudaRngHiWiring, TransitStreamWireUp) {
     ASSERT_EQ(cont, cont_count) << "base_idx=" << i
                                 << " — continuation count varies across runs; gen/gate not isolated.";
     // scrum-328.2 Step 1: kTransit → transit_multi_ms_kernel writes the probe.
-    backend.EnableRngProbeForTest(RngProbeStream::kTransit, cont_count);
+    hooks.EnableRngProbe(RngProbeStream::kTransit, cont_count);
     RecombineSpec rspec;
     rspec.shuffle = false;
     auto roots1 = backend.Recombine(std::move(h0), rspec);
     auto h1 = backend.TraceLayer(roots1);
     ASSERT_NE(h1, nullptr);
-    size_t n = backend.ReadbackRngProbeForTest(draws[i], cont_count);
+    size_t n = hooks.ReadbackRngProbe(draws[i], cont_count);
     backend.EndSession();
     ASSERT_EQ(n, cont_count) << "base_idx=" << i << " — transit RNG-probe readback returned " << n;
   }

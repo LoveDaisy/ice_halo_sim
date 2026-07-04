@@ -41,6 +41,8 @@
 //      上传一次（poly 级 AoS：n 三连续、d 单值）。
 
 #include "core/backend/cuda_trace_backend.hpp"
+#include "core/backend/cuda_trace_backend_test_hooks.hpp"  // scrum-328.2 Step 3
+#include "core/backend/rng_probe_stream.hpp"  // scrum-328.2 Step 1 (used by Impl state)
 #include "core/backend/wl_pool.hpp"  // WlEntry / ComputeWlPool / ResolveWlPoolSize (296.6 per-ray wl, DR-3)
 
 #if defined(LUMICE_CUDA_ENABLED)
@@ -3190,104 +3192,96 @@ size_t CudaTraceBackend::GetLastBatchCrystalCount() const {
   return impl_->final_layer_crystals_.size();
 }
 
-void CudaTraceBackend::SetInitialRayBaseForTest(size_t gen_base, size_t transit_base, size_t gate_base) {
-  // task-gpu-rng-ray-index-uint64 white-box injection. Each of the three device
-  // PCG streams (first-layer gen / continuation transit / emit gate) gets its
-  // OWN base so a test can drive exactly one stream into a non-zero hi epoch
-  // while holding the other two at hi==0 — this is what lets the gate/transit
-  // wiring be asserted in ISOLATION from gen (a combined injection could pass on
-  // gen alone even if gate/transit are mis-wired).
-  impl_->gen_ray_count_     = gen_base;
-  impl_->transit_ray_count_ = transit_base;
-  impl_->gate_ray_count_    = gate_base;
+// --- scrum-328.2 Step 3: TestHooks method definitions --------------------
+// Live in this TU so `backend_.impl_->...` has visibility of Impl's complete
+// definition (which is anon-namespace + file-scope in this TU). Semantically
+// each method is the pre-scrum-328.2 CudaTraceBackend::XxxForTest body with
+// `impl_->` rewritten to `backend_.impl_->`. Behavior + validation contracts
+// unchanged — only the access seam moved.
+
+void CudaTraceBackendTestHooks::SetInitialRayBase(size_t gen_base, size_t transit_base, size_t gate_base) {
+  backend_.impl_->gen_ray_count_     = gen_base;
+  backend_.impl_->transit_ray_count_ = transit_base;
+  backend_.impl_->gate_ray_count_    = gate_base;
 }
 
-void CudaTraceBackend::EnableRngProbeForTest(RngProbeStream stream, size_t count, size_t ci_start) {
-  // scrum-328.2 Step 1: allocate the RNG-probe sink AND record which stream
-  // the caller wants it routed to. Dispatch sites pass nullptr into the
-  // non-matched kernels so only the requested stream's kernel writes. Repeat
-  // Enable calls replace the prior stream/ci_start (armed per-test).
-  cudaFree(impl_->d_rng_probe_);
-  impl_->d_rng_probe_ = nullptr;
-  impl_->rng_probe_cap_ = 0;
-  impl_->probe_stream_ = stream;
-  impl_->probe_ci_start_ = ci_start;
+void CudaTraceBackendTestHooks::EnableRngProbe(RngProbeStream stream, size_t count, size_t ci_start) {
+  auto& impl = *backend_.impl_;
+  cudaFree(impl.d_rng_probe_);
+  impl.d_rng_probe_ = nullptr;
+  impl.rng_probe_cap_ = 0;
+  impl.probe_stream_ = stream;
+  impl.probe_ci_start_ = ci_start;
   if (count == 0u) {
     return;
   }
-  CheckCuda(cudaMalloc(&impl_->d_rng_probe_, count * sizeof(float)), "cudaMalloc d_rng_probe (test)");
-  CheckCuda(cudaMemset(impl_->d_rng_probe_, 0, count * sizeof(float)), "cudaMemset d_rng_probe (test)");
-  impl_->rng_probe_cap_ = count;
+  CheckCuda(cudaMalloc(&impl.d_rng_probe_, count * sizeof(float)), "cudaMalloc d_rng_probe (test)");
+  CheckCuda(cudaMemset(impl.d_rng_probe_, 0, count * sizeof(float)), "cudaMemset d_rng_probe (test)");
+  impl.rng_probe_cap_ = count;
 }
 
-size_t CudaTraceBackend::ReadbackRngProbeForTest(std::vector<float>& out, size_t count) {
-  // Bound the copy to the probe allocation so a count larger than the enabled
-  // size cannot read past the device buffer.
-  if (count > impl_->rng_probe_cap_) {
-    count = impl_->rng_probe_cap_;
+size_t CudaTraceBackendTestHooks::ReadbackRngProbe(std::vector<float>& out, size_t count) {
+  auto& impl = *backend_.impl_;
+  if (count > impl.rng_probe_cap_) {
+    count = impl.rng_probe_cap_;
   }
-  if (impl_->d_rng_probe_ == nullptr || count == 0u) {
+  if (impl.d_rng_probe_ == nullptr || count == 0u) {
     out.clear();
     return 0u;
   }
   out.assign(count, 0.0f);
   cudaDeviceSynchronize();
-  CheckCuda(cudaMemcpy(out.data(), impl_->d_rng_probe_, count * sizeof(float), cudaMemcpyDeviceToHost),
-            "ReadbackRngProbeForTest D2H");
+  CheckCuda(cudaMemcpy(out.data(), impl.d_rng_probe_, count * sizeof(float), cudaMemcpyDeviceToHost),
+            "ReadbackRngProbe D2H");
   return count;
 }
 
-void CudaTraceBackend::EnableGenAttemptCountForTest(size_t count, size_t ci_start) {
-  // scrum-328.2 Step 1: allocate the per-ray attempt-count sibling buffer.
-  // gen_root_kernel writes each ray's kLatPathGenericReject iteration count
-  // via sample_lat_lon_roll's out_attempts arg iff this buffer is non-null.
-  // Independent of EnableRngProbeForTest (each has its own Enable/state) so
-  // a test can arm both, either, or neither.
-  cudaFree(impl_->d_lat_attempts_);
-  impl_->d_lat_attempts_ = nullptr;
-  impl_->lat_attempts_cap_ = 0;
-  impl_->lat_attempts_ci_start_ = ci_start;
+void CudaTraceBackendTestHooks::EnableGenAttemptCount(size_t count, size_t ci_start) {
+  auto& impl = *backend_.impl_;
+  cudaFree(impl.d_lat_attempts_);
+  impl.d_lat_attempts_ = nullptr;
+  impl.lat_attempts_cap_ = 0;
+  impl.lat_attempts_ci_start_ = ci_start;
   if (count == 0u) {
     return;
   }
-  CheckCuda(cudaMalloc(&impl_->d_lat_attempts_, count * sizeof(int)),
+  CheckCuda(cudaMalloc(&impl.d_lat_attempts_, count * sizeof(int)),
             "cudaMalloc d_lat_attempts (test)");
-  CheckCuda(cudaMemset(impl_->d_lat_attempts_, 0, count * sizeof(int)),
+  CheckCuda(cudaMemset(impl.d_lat_attempts_, 0, count * sizeof(int)),
             "cudaMemset d_lat_attempts (test)");
-  impl_->lat_attempts_cap_ = count;
+  impl.lat_attempts_cap_ = count;
 }
 
-size_t CudaTraceBackend::ReadbackGenAttemptCountForTest(std::vector<int>& out, size_t count) {
-  if (count > impl_->lat_attempts_cap_) {
-    count = impl_->lat_attempts_cap_;
+size_t CudaTraceBackendTestHooks::ReadbackGenAttemptCount(std::vector<int>& out, size_t count) {
+  auto& impl = *backend_.impl_;
+  if (count > impl.lat_attempts_cap_) {
+    count = impl.lat_attempts_cap_;
   }
-  if (impl_->d_lat_attempts_ == nullptr || count == 0u) {
+  if (impl.d_lat_attempts_ == nullptr || count == 0u) {
     out.clear();
     return 0u;
   }
   out.assign(count, 0);
   cudaDeviceSynchronize();
-  CheckCuda(cudaMemcpy(out.data(), impl_->d_lat_attempts_, count * sizeof(int), cudaMemcpyDeviceToHost),
-            "ReadbackGenAttemptCountForTest D2H");
+  CheckCuda(cudaMemcpy(out.data(), impl.d_lat_attempts_, count * sizeof(int), cudaMemcpyDeviceToHost),
+            "ReadbackGenAttemptCount D2H");
   return count;
 }
 
-size_t CudaTraceBackend::ReadbackGenDirsForTest(std::vector<float>& out, size_t count) {
-  // Bound the copy to the d_dirs_ allocation (root_cap_) so a caller passing a
-  // count larger than the last dispatch cannot read past the device buffer. The
-  // caller's own `ASSERT_EQ(n, 3*count)` then surfaces the truncation loudly.
-  if (count > impl_->root_cap_) {
-    count = impl_->root_cap_;
+size_t CudaTraceBackendTestHooks::ReadbackGenDirs(std::vector<float>& out, size_t count) {
+  auto& impl = *backend_.impl_;
+  if (count > impl.root_cap_) {
+    count = impl.root_cap_;
   }
-  if (impl_->d_dirs_ == nullptr || count == 0u) {
+  if (impl.d_dirs_ == nullptr || count == 0u) {
     out.clear();
     return 0u;
   }
   const size_t n_floats = 3u * count;
   out.assign(n_floats, 0.0f);
   cudaDeviceSynchronize();  // gen_root_kernel must finish before the D2H copy
-  CheckCuda(cudaMemcpy(out.data(), impl_->d_dirs_, n_floats * sizeof(float), cudaMemcpyDeviceToHost),
-            "ReadbackGenDirsForTest D2H d_dirs_");
+  CheckCuda(cudaMemcpy(out.data(), impl.d_dirs_, n_floats * sizeof(float), cudaMemcpyDeviceToHost),
+            "ReadbackGenDirs D2H d_dirs_");
   return n_floats;
 }
 

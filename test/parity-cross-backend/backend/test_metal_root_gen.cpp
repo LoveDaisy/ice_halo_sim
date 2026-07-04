@@ -32,6 +32,7 @@
 
 #include "config/render_config.hpp"
 #include "core/backend/metal_trace_backend.hpp"
+#include "core/backend/metal_trace_backend_test_hooks.hpp"  // scrum-328.2 Step 3
 #include "core/backend/trace_backend.hpp"
 #include "metal_test_helpers.hpp"
 
@@ -439,7 +440,8 @@ TEST(MetalRootGen, GenRayBaseHiWireUp) {
     images[i].assign(kImgFloats, 0.0f);
     MetalTraceBackend metal;
     metal.BeginSession(spec);
-    metal.SetInitialRayBaseForTest(/*root_base=*/kBases[i], /*transit_base=*/0u);  // ms_layers=1 → root stream only
+    MetalTraceBackendTestHooks(metal).SetInitialRayBase(/*root_base=*/kBases[i],
+                                                        /*transit_base=*/0u);  // ms_layers=1 → root stream only
     auto h = metal.TraceLayer(RootRaySource::FromHost(host));
     ASSERT_NE(h, nullptr);
     XyzImageData img{ images[i].data(), render.resolution_[0], render.resolution_[1] };
@@ -525,7 +527,8 @@ TEST(MetalRootGen, TransitStreamWireUp) {
   for (int i = 0; i < 4; i++) {
     MetalTraceBackend metal;
     metal.BeginSession(spec);
-    metal.SetInitialRayBaseForTest(/*root_base=*/0u, /*transit_base=*/kBases[i]);
+    MetalTraceBackendTestHooks hooks(metal);
+    hooks.SetInitialRayBase(/*root_base=*/0u, /*transit_base=*/kBases[i]);
     auto h0 = metal.TraceLayer(RootRaySource::FromHost(host));
     ASSERT_NE(h0, nullptr);
     const size_t cont = h0->ContinuationCount();
@@ -539,7 +542,7 @@ TEST(MetalRootGen, TransitStreamWireUp) {
     auto roots1 = metal.Recombine(std::move(h0), rspec);
     auto h1 = metal.TraceLayer(roots1);
     ASSERT_NE(h1, nullptr);
-    size_t n = metal.ReadbackRootRotForTest(rots[i], cont_count);
+    size_t n = hooks.ReadbackRootRot(rots[i], cont_count);
     metal.EndSession();
     ASSERT_EQ(n, 9u * cont_count) << "base_idx=" << i << " — transit rot readback returned " << n;
   }
