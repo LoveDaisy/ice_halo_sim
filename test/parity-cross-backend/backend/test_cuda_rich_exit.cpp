@@ -42,55 +42,16 @@
 #include "core/backend/trace_backend.hpp"
 #include "core/exit_seam.hpp"
 #include "core/raypath.hpp"
+#include "cuda_test_helpers.hpp"  // scrum-328.2 Step 5: shared scene / render fixtures
 
 namespace lumice {
 namespace {
 
-// Deterministic prism scene (matches test_cpu_trace_backend.cpp::MakeSimpleScene
-// shape so the geometry — unit prism, 8 polygon faces: 2 basal + 6 sides — is
-// stable across the parity layer).
-SceneConfig MakePrismScene(size_t max_hits) {
-  SceneConfig scene;
-  scene.ray_num_ = 0;
-  scene.max_hits_ = max_hits;
-  scene.light_source_.param_ = SunParam{ 30.0f, 0.0f, 0.5f };
-  scene.light_source_.spectrum_ = std::vector<WlParam>{ { 550.0f, 1.0f } };
-
-  MsInfo ms;
-  ms.prob_ = 0.0f;  // single MS final layer
-  ScatteringSetting s;
-  // Value-initialize the filter (NoneFilterParam pass-through). Without this the
-  // POD members FilterConfig::symmetry_/action_/id_ stay INDETERMINATE (a bare
-  // `ScatteringSetting s;` default-inits them), and the garbage action_/symmetry_
-  // make the device emit gate's DeviceFilterCheck reject every exit → no XYZ
-  // accumulation (mirrors test/cpu_test_helpers.hpp which sets this explicitly).
-  s.filter_ = FilterConfig{};
-  s.crystal_.id_ = 0;
-  PrismCrystalParam prism;
-  prism.h_ = Distribution{ DistributionType::kNoRandom, 1.0f, 0.0f };
-  for (auto& d : prism.d_) {
-    d = Distribution{ DistributionType::kNoRandom, 1.0f, 0.0f };
-  }
-  s.crystal_.param_ = prism;
-  s.crystal_proportion_ = 1.0f;
-  ms.setting_.push_back(std::move(s));
-  scene.ms_.push_back(std::move(ms));
-  return scene;
-}
-
-RenderConfig MakeRenderConfig() {
-  RenderConfig cfg;
-  cfg.id_ = 0;
-  cfg.lens_.type_ = LensParam::kFisheyeEqualArea;
-  cfg.lens_.fov_ = 180.0f;
-  cfg.resolution_[0] = 64;
-  cfg.resolution_[1] = 64;
-  cfg.view_.az_ = 0.0f;
-  cfg.view_.el_ = 90.0f;
-  cfg.view_.ro_ = 0.0f;
-  cfg.visible_ = RenderConfig::kUpper;
-  return cfg;
-}
+using cuda_test::MakeFullViewRender;
+using cuda_test::MakePrismScene;
+using cuda_test::MakeRandomAxisScene;
+using cuda_test::MakeRenderConfig;
+using cuda_test::MakeTwoLayerScene;
 
 // Drive CUDA backend on the prism config and return the drained exit records.
 // Skips the body (returns empty) if no CUDA device is enumerated at runtime,
@@ -312,77 +273,10 @@ constexpr size_t kEpoch = static_cast<size_t>(1) << 32;
 // Slots 0/1 = hi==0 baseline (must be bit-identical); 2 = hi==1; 3 = hi==2.
 constexpr size_t kBases[4] = { 0u, 0u, kEpoch, 2u * kEpoch };
 
-// Single-crystal random-axis prism scene. Random orientation makes the gen
-// stream observable (different mixed_seed → different rotation). `final_prob`
-// controls the final-layer emit-gate keep fraction: it must be > 0 for the gate
-// stream to be observable (with prob==0 the gate draw never gates emit, so the
-// gate seed cannot move the image). filter_ is value-initialized (pass-through)
-// so the device emit gate does not reject every exit (a bare `ScatteringSetting
-// s;` leaves FilterConfig POD members indeterminate → garbage action_ rejects
-// all → no XYZ accumulation).
-SceneConfig MakeRandomAxisScene(size_t max_hits, float final_prob) {
-  SceneConfig scene;
-  scene.ray_num_ = 0;
-  scene.max_hits_ = max_hits;
-  scene.light_source_.param_ = SunParam{ 30.0f, 0.0f, 0.5f };
-  scene.light_source_.spectrum_ = std::vector<WlParam>{ { 550.0f, 1.0f } };
-
-  MsInfo ms;
-  ms.prob_ = final_prob;
-  ScatteringSetting s;
-  s.filter_ = FilterConfig{};
-  s.crystal_.id_ = 0;
-  PrismCrystalParam prism;
-  prism.h_ = Distribution{ DistributionType::kNoRandom, 1.0f, 0.0f };
-  for (auto& d : prism.d_) {
-    d = Distribution{ DistributionType::kNoRandom, 1.0f, 0.0f };
-  }
-  s.crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
-  s.crystal_.axis_.latitude_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
-  s.crystal_.param_ = prism;
-  s.crystal_proportion_ = 1.0f;
-  ms.setting_.push_back(std::move(s));
-  scene.ms_.push_back(std::move(ms));
-  return scene;
-}
-
-// Two-MS-layer scene tuned so the transit stream is cleanly OBSERVABLE at
-// layer-1's d_dirs_ without the atomic-compaction confound:
-//   - Point sun (diameter 0) + FIXED-axis layer 0 → every layer-0 ray is
-//     identical → every continuation ray carries the SAME world direction. So
-//     layer-1's d_dirs_[tid] = R1(tid)^-1 · const depends only on tid (the
-//     transit orientation), independent of which continuation ray landed at
-//     that tid → deterministic for a fixed (seed, transit_base).
-//   - RANDOM-axis layer 1 → the transit kernel samples a per-tid orientation
-//     R1(tid) from the transit PCG stream, so a non-zero transit hi moves it.
-// Layer 0 continues (prob 0.6) into layer 1 (final, prob 0).
-SceneConfig MakeTwoLayerScene(size_t max_hits) {
-  SceneConfig scene = MakeRandomAxisScene(max_hits, /*final_prob=*/0.0f);  // layer-1 template (random axis)
-  scene.light_source_.param_ = SunParam{ 30.0f, 0.0f, 0.0f };              // point sun (diameter 0)
-  MsInfo layer0 = scene.ms_[0];
-  layer0.prob_ = 0.6f;
-  layer0.setting_[0].crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kNoRandom, 0.0f, 0.0f };
-  layer0.setting_[0].crystal_.axis_.latitude_dist = Distribution{ DistributionType::kNoRandom, 20.0f, 0.0f };
-  scene.ms_.insert(scene.ms_.begin(), std::move(layer0));
-  return scene;
-}
-
-// Full-sphere rectangular render — keeps every exit direction in the field so
-// the device-fused XYZ image responds to orientation (a narrow fisheye culls
-// most random-orientation exits, collapsing the image toward constant).
-RenderConfig MakeFullViewRender() {
-  RenderConfig cfg;
-  cfg.id_ = 0;
-  cfg.lens_.type_ = LensParam::kRectangular;
-  cfg.lens_.fov_ = 360.0f;
-  cfg.resolution_[0] = 64;
-  cfg.resolution_[1] = 32;
-  cfg.view_.az_ = 0.0f;
-  cfg.view_.el_ = 90.0f;
-  cfg.view_.ro_ = 0.0f;
-  cfg.visible_ = RenderConfig::kFull;
-  return cfg;
-}
+// Scene / render fixtures (MakeRandomAxisScene / MakeTwoLayerScene /
+// MakeFullViewRender) moved to test/cuda_test_helpers.hpp (scrum-328.2 Step 5)
+// so 328.3/328.4 parity tests can consume the same fixtures without copy/paste.
+// Callers below use the unqualified names via the file-scope using-decls.
 
 double L1RelDiff(const std::vector<float>& a, const std::vector<float>& b) {
   double num = 0.0;
@@ -418,7 +312,7 @@ TEST(CudaRngHiWiring, GenStreamWireUp) {
   if (!CudaDeviceAvailable()) {
     GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
   }
-  auto scene = hi_wire::MakeRandomAxisScene(/*max_hits=*/8, /*final_prob=*/0.0f);
+  auto scene = MakeRandomAxisScene(/*max_hits=*/8, /*final_prob=*/0.0f);
   auto render = MakeRenderConfig();
   SessionSpec spec;
   spec.scene = &scene;
@@ -475,8 +369,8 @@ TEST(CudaRngHiWiring, GateStreamWireUp) {
   if (!CudaDeviceAvailable()) {
     GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
   }
-  auto scene = hi_wire::MakeRandomAxisScene(/*max_hits=*/8, /*final_prob=*/0.5f);
-  auto render = hi_wire::MakeFullViewRender();
+  auto scene = MakeRandomAxisScene(/*max_hits=*/8, /*final_prob=*/0.5f);
+  auto render = MakeFullViewRender();
   SessionSpec spec;
   spec.scene = &scene;
   spec.render = &render;
@@ -520,8 +414,8 @@ TEST(CudaRngHiWiring, GateMsMode1StreamWireUp) {
   if (!CudaDeviceAvailable()) {
     GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
   }
-  auto scene = hi_wire::MakeTwoLayerScene(/*max_hits=*/6);  // layer 0 → ms_mode==1
-  auto render = hi_wire::MakeFullViewRender();
+  auto scene = MakeTwoLayerScene(/*max_hits=*/6);  // layer 0 → ms_mode==1
+  auto render = MakeFullViewRender();
   SessionSpec spec;
   spec.scene = &scene;
   spec.render = &render;
@@ -580,8 +474,8 @@ TEST(CudaRngHiWiring, TransitStreamWireUp) {
   if (!CudaDeviceAvailable()) {
     GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
   }
-  auto scene = hi_wire::MakeTwoLayerScene(/*max_hits=*/6);
-  auto render = hi_wire::MakeFullViewRender();
+  auto scene = MakeTwoLayerScene(/*max_hits=*/6);
+  auto render = MakeFullViewRender();
   SessionSpec spec;
   spec.scene = &scene;
   spec.render = &render;
