@@ -570,6 +570,25 @@ struct GuiState {
     display_epoch_floor = committed_epoch;
   }
 
+  // Backend swap (CPU<->GPU) destroys the live server and constructs a fresh one whose epoch
+  // authority (server-side committed_epoch_) resets to 0 — the next commit mints epoch 1. The
+  // display epoch fence (display_epoch_floor) and the epoch bookkeeping below belong to the OLD
+  // server's epoch space; carried across the swap they would fence out the new backend's low-epoch
+  // payloads (the upload gate payload_epoch > display_epoch_floor fails whenever the old floor was
+  // raised to >=1 by any prior filter edit), freezing the previous backend's texture on screen. A
+  // reconstructed server also has no old-generation payloads in flight (the old server is destroyed),
+  // so the fence has nothing legitimate left to guard. Reset the display generation to epoch 0 and
+  // clear the carried-forward texture so the new backend's first frame reaches the screen. Called by
+  // MaybeReconstructServerForBackend (the sole owner of server reconstruction). The epoch fields are
+  // re-established from the fresh server via DoRun's post-commit LUMICE_GetSimLifecycle readback.
+  void ResetDisplayGenerationForBackendSwap() {
+    committed_epoch = 0;
+    display_epoch_floor = 0;
+    last_uploaded_texture_serial = 0;
+    snapshot_intensity = 0;  // immediate clear; the new backend's first payload fills it back in
+    p99_raw_y = 0.0f;
+  }
+
   // Panel state (view preference — does not call MarkDirty)
   // not persisted to .lmc (unlike right_panel_collapsed)
   bool left_panel_collapsed = false;

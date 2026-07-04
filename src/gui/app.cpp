@@ -715,6 +715,13 @@ bool MaybeReconstructServerForBackend() {
 
   // Re-apply per-server settings that died with the old instance (cf. main.cpp startup).
   LUMICE_SetLogLevel(g_server, static_cast<LUMICE_LogLevel>(g_state.core_log_level));
+
+  // The fresh server restarts its epoch authority at 0. Reset the GUI's display generation so the
+  // new backend's low-epoch frames are not fenced out by the old server's carried-over
+  // display_epoch_floor (else the preview freezes on the previous backend's texture). See
+  // GuiState::ResetDisplayGenerationForBackendSwap. The epoch is re-read from the new server by
+  // DoRun's post-commit LUMICE_GetSimLifecycle.
+  g_state.ResetDisplayGenerationForBackendSwap();
   return true;
 }
 
