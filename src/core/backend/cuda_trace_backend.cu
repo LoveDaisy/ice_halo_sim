@@ -938,7 +938,9 @@ __global__ void transit_multi_ms_kernel(
   float lon = 0.0f;
   float lat = 0.0f;
   float roll = 0.0f;
-  lm_pcg::sample_lat_lon_roll(stream, gp, lon, lat, roll);
+  // scrum-328.2 Step 1: transit does not (yet) surface attempt-count — the
+  // near-pole acceptance-rate observation is anchored to the gen sampler.
+  lm_pcg::sample_lat_lon_roll(stream, gp, lon, lat, roll, nullptr);
 
   float mat9[9];
   lm_pcg::build_crystal_rotation_9(lon, lat, roll, mat9);
@@ -1068,7 +1070,11 @@ __global__ void gen_root_kernel(float* __restrict__ d_root_d,           // 3 × 
   float lon = 0.0f;
   float lat = 0.0f;
   float roll = 0.0f;
-  lm_pcg::sample_lat_lon_roll(stream, gp, lon, lat, roll);
+  // scrum-328.2 Step 1: out_attempts=nullptr in the gen kernel until the
+  // attempt-count observation buffer (`d_lat_attempts_`) is wired in a
+  // follow-up milestone. Kept explicit so the plumbing point is a single
+  // line change.
+  lm_pcg::sample_lat_lon_roll(stream, gp, lon, lat, roll, nullptr);
   float mat9[9];
   lm_pcg::build_crystal_rotation_9(lon, lat, roll, mat9);
 

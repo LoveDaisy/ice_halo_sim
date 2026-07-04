@@ -841,7 +841,9 @@ kernel void gen_root_kernel(
 
   // 1. Sample crystal orientation (lon, lat, roll) → 3×3 rotation.
   float lon, lat, roll;
-  sample_lat_lon_roll(stream, gp, lon, lat, roll);
+  // scrum-328.2 Step 1: attempt-count buffer wiring lands in a follow-up
+  // milestone; pass nullptr here so the observation is compiled out today.
+  sample_lat_lon_roll(stream, gp, lon, lat, roll, nullptr);
   float mat9[9];
   build_crystal_rotation_9(lon, lat, roll, mat9);
 
@@ -942,7 +944,9 @@ kernel void transit_root_kernel(
   stream.global_idx = global_idx;
   stream.slot = 0u;
   float lon, lat, roll;
-  sample_lat_lon_roll(stream, gp, lon, lat, roll);
+  // scrum-328.2 Step 1: transit surface does not carry attempt-count today
+  // (near-pole acceptance-rate observation is anchored to the gen kernel).
+  sample_lat_lon_roll(stream, gp, lon, lat, roll, nullptr);
   float mat9[9];
   build_crystal_rotation_9(lon, lat, roll, mat9);
 

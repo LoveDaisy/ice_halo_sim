@@ -266,11 +266,24 @@ LM_FN void normalize_latitude(float phi, LM_THREAD float& phi_out, LM_THREAD boo
 // Replicates InitRay_rot + SampleSphericalPointsSph (simulator.cpp:138-150 +
 // math.cpp:404/444). All distribution params are pre-converted to radians on
 // the host so the kernel does no degree↔radian conversions.
+//
+// `out_attempts` (scrum-328.2 Step 1 attempt-count observability, plan §5):
+// non-null → the caller receives this ray's rejection-loop iteration count
+// (1 for direct/analytic paths kFullSphere/kNoRandom/kRayleigh/kGaussLegacy;
+// N for kLatPathGenericReject, capped at kMaxRejectionAttempts). The caller
+// uses `mean(attempts)` as the empirical `1/accept_ratio` — the ONLY route
+// to a per-ray acceptance-rate observation on device (the host-side
+// SelectLatPath / ComputeJacobianEnvelope decision is deterministic and
+// cannot substitute). null → no write, hot-path cost is one branch predicted
+// off; production keeps passing null so the observation is compiled out at
+// the call site.
 LM_FN void sample_lat_lon_roll(LM_THREAD PcgStream& s, LM_CONSTANT_REF GenRootKernelParams& gp,
-                               LM_THREAD float& out_lon, LM_THREAD float& out_lat, LM_THREAD float& out_roll) {
+                               LM_THREAD float& out_lon, LM_THREAD float& out_lat, LM_THREAD float& out_roll,
+                               LM_THREAD int* out_attempts) {
   float phi = 0.0f;
   bool flip = false;
   float lon = 0.0f;
+  int attempts_total = 1;  // direct-path default; kLatPathGenericReject overwrites below
   if (gp.lat_path == kLatPathFullSphere) {
     float u = pcg_uniform(s) * 2.0f - 1.0f;
     u = LM_CLAMP(u, -1.0f, 1.0f);
@@ -305,6 +318,7 @@ LM_FN void sample_lat_lon_roll(LM_THREAD PcgStream& s, LM_CONSTANT_REF GenRootKe
       float accept_u = pcg_uniform(s);
       accept = accept_u < LM_COS(phi) / gp.lat_rejection_m;
     } while (!accept);
+    attempts_total = attempts;
   }
   if (gp.lat_path != kLatPathFullSphere) {
     lon = pcg_get_dist(s, gp.az_type, gp.az_mean_rad, gp.az_std_rad);
@@ -317,6 +331,9 @@ LM_FN void sample_lat_lon_roll(LM_THREAD PcgStream& s, LM_CONSTANT_REF GenRootKe
   out_lon = lon;
   out_lat = phi;
   out_roll = roll;
+  if (out_attempts != nullptr) {
+    *out_attempts = attempts_total;
+  }
 }
 
 // --- Crystal rotation builder ---------------------------------------------
