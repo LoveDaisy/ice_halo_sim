@@ -266,6 +266,9 @@ static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kGaussLegacy) == lm_p
               "LatPathKind::kGaussLegacy must match lm_pcg::kLatPathGaussLegacy");
 static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kGenericReject) == lm_pcg::kLatPathGenericReject,
               "LatPathKind::kGenericReject must match lm_pcg::kLatPathGenericReject");
+static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kLaplacianTightEnvelope) ==
+                  lm_pcg::kLatPathLaplacianTightEnvelope,
+              "LatPathKind::kLaplacianTightEnvelope must match lm_pcg::kLatPathLaplacianTightEnvelope");
 
 // Build the transit-form GenRootKernelParams. Mirrors Metal's
 // `BuildTransitRootParams` (metal_trace_backend.mm:1593): orientation +

@@ -559,11 +559,14 @@ TEST(RngObservabilityFacilitySmoke, MultiCiAttemptWindowsDoNotOverwrite) {
   constexpr size_t kCiStartBase = 37u;
 
   auto scene = MakeRandomAxisScene(/*max_hits=*/1, /*final_prob=*/0.0f);
-  // Near-pole Laplacian b=5 (see doc/near-pole-area-measure-sampling.md
-  // §附录) so the rejection loop actually runs and attempts vary — a trivial
-  // always-1 attempts value would not distinguish "written" from
-  // "never-touched-but-happens-to-read-as-1".
-  scene.ms_[0].setting_[0].crystal_.axis_.latitude_dist = Distribution{ DistributionType::kLaplacian, 90.0f, 5.0f };
+  // Off-pole Laplacian mean=80° (colatitude_center=10° > kPolarThresholdRad=0.5°) so
+  // SelectLatPath routes to kLatPathGenericReject regardless of scrum-328.4's tight-
+  // envelope path — the GenericReject rejection loop keeps `attempts` varying so a
+  // trivial always-1 value would not distinguish "written" from "never-touched-but-
+  // happens-to-read-as-1". Prior scrum-328.2 revision used mean=90° / b=5°, which
+  // scrum-328.4 rerouted to LaplacianTightEnvelope with attempts≈1 (would silently
+  // erode this test's discriminating power).
+  scene.ms_[0].setting_[0].crystal_.axis_.latitude_dist = Distribution{ DistributionType::kLaplacian, 80.0f, 5.0f };
   scene.ms_[0].setting_[0].crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
   scene.ms_[0].setting_[0].crystal_proportion_ = 0.7f;
 
@@ -684,6 +687,82 @@ TEST(RngObservabilityFacilitySmoke, NearPoleGaussianTightEnvelopeAcceptanceRate)
                                << lo << ", " << hi << "] — tight-envelope Rayleigh path not active on device.";
   EXPECT_LE(mean_attempts, hi) << "CUDA Gaussian σ=5 near-pole mean(attempts)=" << mean_attempts << " above anchor±5% ["
                                << lo << ", " << hi
+                               << "] — CUDA/Metal cross-backend anchor drift; investigate source-mirror parity.";
+}
+
+// scrum-328.4 Step 7 — CUDA-side mirror of the Metal Laplacian tight-envelope
+// acceptance-rate smoke (Laplacian b=5 case in RngObservabilityFacilitySmoke
+// .NearPoleAcceptanceRateMatchesDocAnchors, test_metal_root_gen.cpp). CUDA's
+// gen_root_kernel calls into lm_pcg::sample_lat_lon_roll from the same
+// pcg_shared.h that scrum-328.4 extended with the kLatPathLaplacianTightEnvelope
+// branch, so the CUDA path picks up the Gamma(2,b)+sin(θ)/θ accept step with
+// zero .cu edits (source-mirror-only). This test is the runtime evidence that
+// the source mirror actually takes effect on device — required on dev49,
+// skipped on Mac (no CUDA device). Anchor mean(attempts) ≈ 1.007 mirrors the
+// Metal-side Laplacian anchor and the scrum-328.4 exp4 Python MC estimate 1.0075.
+TEST(RngObservabilityFacilitySmoke, NearPoleLaplacianTightEnvelopeAcceptanceRate) {
+  if (!CudaDeviceAvailable()) {
+    GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
+  }
+
+  constexpr size_t kSmokeRayCount = 65536;
+
+  auto scene = MakeRandomAxisScene(/*max_hits=*/1, /*final_prob=*/0.0f);
+  scene.ms_[0].setting_[0].crystal_.axis_.latitude_dist = Distribution{ DistributionType::kLaplacian, 90.0f, 5.0f };
+  scene.ms_[0].setting_[0].crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  scene.ms_[0].setting_[0].crystal_.axis_.roll_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+
+  auto render = MakeFullViewRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  HostRayBatch host;
+  host.count = kSmokeRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  CudaTraceBackend backend;
+  backend.BeginSession(spec);
+  CudaTraceBackendTestHooks hooks(backend);
+  hooks.EnableGenAttemptCount(kSmokeRayCount, /*ci_start=*/0u);
+  auto h = backend.TraceLayer(RootRaySource::FromHost(host));
+  ASSERT_NE(h, nullptr);
+
+  std::vector<int> attempts;
+  size_t n = hooks.ReadbackGenAttemptCount(attempts, kSmokeRayCount);
+  backend.EndSession();
+  ASSERT_EQ(n, kSmokeRayCount);
+
+  long long sum = 0;
+  int max_attempts = 0;
+  size_t safety_valve_hits = 0;
+  for (int a : attempts) {
+    sum += a;
+    if (a > max_attempts) {
+      max_attempts = a;
+    }
+    if (a >= 1000) {  // pcg_shared.h kMaxRejectionAttempts
+      safety_valve_hits++;
+    }
+  }
+  const double mean_attempts = static_cast<double>(sum) / static_cast<double>(attempts.size());
+
+  EXPECT_EQ(safety_valve_hits, 0u) << safety_valve_hits << " rays saturated kMaxRejectionAttempts (max=" << max_attempts
+                                   << ") — mean(attempts) would be biased.";
+
+  // Anchor: ~1.007 (scrum-328.4 exp4 Python MC ≈ 99.3% acceptance; Metal device-
+  // measured 1.00745). ±5% band matches the Metal-side smoke's tolerance.
+  constexpr double kAnchor = 1.007;
+  const double lo = kAnchor * 0.95;
+  const double hi = kAnchor * 1.05;
+  EXPECT_GE(mean_attempts, lo) << "CUDA Laplacian b=5 near-pole mean(attempts)=" << mean_attempts
+                               << " below anchor±5% [" << lo << ", " << hi
+                               << "] — tight-envelope Laplacian path not active on device.";
+  EXPECT_LE(mean_attempts, hi) << "CUDA Laplacian b=5 near-pole mean(attempts)=" << mean_attempts
+                               << " above anchor±5% [" << lo << ", " << hi
                                << "] — CUDA/Metal cross-backend anchor drift; investigate source-mirror parity.";
 }
 

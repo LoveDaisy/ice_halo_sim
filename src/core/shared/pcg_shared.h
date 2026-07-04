@@ -53,9 +53,10 @@ namespace lm_pcg {
 // axis_dist; the kernel only dispatches.
 LM_CONSTANT uint32_t kLatPathFullSphere = 0u;  // axis_dist.IsFullSphereUniform()
 LM_CONSTANT uint32_t kLatPathNoRandom = 1u;
-LM_CONSTANT uint32_t kLatPathRayleigh = 2u;       // kGaussian near-pole optimization
-LM_CONSTANT uint32_t kLatPathGaussLegacy = 3u;    // kGaussianLegacy
-LM_CONSTANT uint32_t kLatPathGenericReject = 4u;  // kGaussian/kUniform/kZigzag/kLaplacian
+LM_CONSTANT uint32_t kLatPathRayleigh = 2u;                // kGaussian near-pole optimization
+LM_CONSTANT uint32_t kLatPathGaussLegacy = 3u;             // kGaussianLegacy
+LM_CONSTANT uint32_t kLatPathGenericReject = 4u;           // kGaussian/kUniform/kZigzag/kLaplacian
+LM_CONSTANT uint32_t kLatPathLaplacianTightEnvelope = 5u;  // kLaplacian near-pole optimization
 
 // DistributionType enum values (must match src/core/math.hpp). Crystal-rot
 // parity REQUIRES the GenericReject path know the actual proposal type, so
@@ -235,6 +236,19 @@ LM_FN float pcg_gaussian(LM_THREAD PcgStream& s) {
   return LM_SQRT(-2.0f * LM_LOG(u1)) * LM_COS(2.0f * LM_PI_F * u2);
 }
 
+// Gamma(shape=2, scale=b) via the sum-of-two-Exp(1/b) closed form:
+//   theta = -b * (ln u1 + ln u2), u1,u2 ~ U(0,1)
+// Used by the Laplacian tight-envelope area-measure sampler
+// (doc/near-pole-area-measure-sampling.md §2.1): theta = colatitude ~ Gamma(2,b)
+// paired with sin(theta)/theta acceptance is EXACT (M=1) for the target
+// p(theta) ∝ exp(-theta/b) * sin(theta). u_i floored at 1e-7 (same as
+// pcg_gaussian) to keep log() finite. Consumes 2 uniform slots per call.
+LM_FN float pcg_gamma2(LM_THREAD PcgStream& s, float b) {
+  float u1 = LM_FMAX(pcg_uniform(s), 1e-7f);
+  float u2 = LM_FMAX(pcg_uniform(s), 1e-7f);
+  return -b * (LM_LOG(u1) + LM_LOG(u2));
+}
+
 // Mirrors RandomNumberGenerator::Get (math.cpp:365-389). mean / std are in
 // the SAME unit the host caller uses for the result; SampleSphericalPointsSph
 // always pre-converts axis_dist.{*}.mean/std to radians here, so the radian
@@ -317,6 +331,34 @@ LM_FN void sample_lat_lon_roll(LM_THREAD PcgStream& s, LM_CONSTANT_REF GenRootKe
       float dx = pcg_gaussian(s) * gp.lat_std_rad;
       float dy = pcg_gaussian(s) * gp.lat_std_rad;
       colatitude = LM_SQRT(dx * dx + dy * dy);
+      attempts++;
+      if (attempts >= kMaxRejectionAttempts) {
+        break;
+      }
+      accept = pcg_uniform(s) < pcg_sinc(colatitude);
+    } while (!accept);
+    attempts_total = attempts;
+    phi = LM_COPYSIGN(LM_PI_2F - colatitude, gp.lat_mean_rad);
+    phi = LM_CLAMP(phi, -LM_PI_2F, LM_PI_2F);
+    if (gp.lat_mean_rad < 0.0f) {
+      phi = LM_FABS(phi);
+      flip = true;
+    }
+  } else if (gp.lat_path == kLatPathLaplacianTightEnvelope) {
+    // Tight-envelope area-measure sampling for Laplacian near-pole
+    // (doc/near-pole-area-measure-sampling.md §2.1). Propose colatitude ~
+    // Gamma(2, b) via pcg_gamma2 (closed form theta = -b(ln u1 + ln u2)); accept
+    // with sin(theta)/theta (M=1, exact, never clamp). Structurally mirrors the
+    // kLatPathRayleigh branch above — same copysign/clamp/flip semantics for
+    // colatitude → phi (they depend only on the geometric fold, not on which
+    // proposal distribution generated theta). Consumes 2 uniform slots per
+    // attempt (pcg_gamma2) + 1 uniform slot (accept draw); expected ~1.007
+    // attempts for b <= 60° (scrum-328.4 Step 1 calibration, exp4).
+    int attempts = 0;
+    float colatitude = 0.0f;
+    bool accept = false;
+    do {
+      colatitude = pcg_gamma2(s, gp.lat_std_rad);
       attempts++;
       if (attempts >= kMaxRejectionAttempts) {
         break;

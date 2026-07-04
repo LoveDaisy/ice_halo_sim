@@ -36,8 +36,25 @@ enum class LatPathKind : uint32_t {
   kNoRandom = 1u,
   kRayleigh = 2u,  // kGaussian near-pole optimization
   kGaussLegacy = 3u,
-  kGenericReject = 4u,  // kGaussian / kUniform / kZigzag / kLaplacian
+  kGenericReject = 4u,           // kGaussian / kUniform / kZigzag / kLaplacian
+  kLaplacianTightEnvelope = 5u,  // kLaplacian near-pole optimization (Gamma(2,b) proposal)
 };
+
+// Near-pole colatitude trigger threshold for tight-envelope area-measure
+// sampling — shared between the kGaussian (Rayleigh) and kLaplacian (Gamma(2,b))
+// branches of SelectLatPath. The threshold is a property of the sin(theta) <= theta
+// upper bound (doc/near-pole-area-measure-sampling.md §2.2), independent of the
+// proposal distribution family.
+constexpr float kPolarThresholdRad = 0.5f * math::kDegreeToRad;
+
+// Scale upper bounds for the two tight-envelope branches.
+// - Gaussian sigma cap 60° (doc §附录 MC-validated).
+// - Laplacian b cap 60° (scrum-328.4 Step 1 calibration exp4: safety_hit_pct=0
+//   at b=90° with N=100k; mean_attempts stays <= 2 within cap. 60° chosen to
+//   mirror the Gaussian cap for reader-side symmetry, not because Laplacian
+//   fails at b>60°).
+constexpr float kMaxTightEnvelopeSigmaRad = 60.0f * math::kDegreeToRad;
+constexpr float kMaxTightEnvelopeLaplacianBRad = 60.0f * math::kDegreeToRad;
 
 constexpr uint32_t ToWireValue(LatPathKind kind) {
   return static_cast<uint32_t>(kind);
@@ -106,15 +123,6 @@ inline LatPathDecision SelectLatPath(const AxisDistribution& axis_dist) {
     return { LatPathKind::kGaussLegacy, 1.0f };
   }
   if (lat_type == DistributionType::kGaussian) {
-    constexpr float kPolarThresholdRad = 0.5f * math::kDegreeToRad;
-    // Upper bound on sigma for the tight-envelope Rayleigh path: doc/near-pole-
-    // area-measure-sampling.md §附录 validated exactness for sigma <= 60°. Beyond
-    // that the proposed colatitude routinely exceeds [0, pi], sin(theta)/theta
-    // turns negative, and the accept step degenerates to the kMaxRejectionAttempts
-    // safety valve (silent distribution collapse — caught during implement by the
-    // pre-existing full-sphere N(±90°, 180°) tests). Above the cap we fall back to
-    // GenericReject, which handles arbitrary sigma correctly.
-    constexpr float kMaxTightEnvelopeSigmaRad = 60.0f * math::kDegreeToRad;
     float lat_mean_rad = axis_dist.latitude_dist.mean * math::kDegreeToRad;
     float lat_std_rad = axis_dist.latitude_dist.std * math::kDegreeToRad;
     float colatitude_center = math::kPi_2 - std::abs(lat_mean_rad);
@@ -124,7 +132,22 @@ inline LatPathDecision SelectLatPath(const AxisDistribution& axis_dist) {
     }
     return { LatPathKind::kGenericReject, ComputeJacobianEnvelope(axis_dist.latitude_dist) };
   }
-  // kUniform / kZigzag / kLaplacian
+  if (lat_type == DistributionType::kLaplacian) {
+    // Laplacian tight-envelope branch (scrum-328.4). Trigger uses the same
+    // colatitude_center threshold as the Gaussian branch — the sin(theta) <= theta
+    // upper bound is a geometric property, not proposal-family-dependent. The scale
+    // (b) cap is a separate constant validated by MC in exp4 (see comment beside
+    // kMaxTightEnvelopeLaplacianBRad).
+    float lat_mean_rad = axis_dist.latitude_dist.mean * math::kDegreeToRad;
+    float lat_scale_rad = axis_dist.latitude_dist.std * math::kDegreeToRad;  // Distribution.std carries Laplace b
+    float colatitude_center = math::kPi_2 - std::abs(lat_mean_rad);
+    bool use_laplacian_tight = colatitude_center < kPolarThresholdRad && lat_scale_rad < kMaxTightEnvelopeLaplacianBRad;
+    if (use_laplacian_tight) {
+      return { LatPathKind::kLaplacianTightEnvelope, 1.0f };
+    }
+    return { LatPathKind::kGenericReject, ComputeJacobianEnvelope(axis_dist.latitude_dist) };
+  }
+  // kUniform / kZigzag
   return { LatPathKind::kGenericReject, ComputeJacobianEnvelope(axis_dist.latitude_dist) };
 }
 

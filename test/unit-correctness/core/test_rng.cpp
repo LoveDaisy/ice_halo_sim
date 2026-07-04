@@ -5,6 +5,7 @@
 
 #include "core/crystal.hpp"
 #include "core/math.hpp"
+#include "core/shared/lat_path_selection.hpp"
 #include "util/threading_pool.hpp"
 
 namespace {
@@ -826,6 +827,153 @@ TEST_F(SphericalSamplingTest, LaplacianHeavierTailThanGaussian) {
 }
 
 
+// scrum-328.4 (Laplacian tight-envelope area-measure sampling). Verifies the CPU sampler
+// reproduces the ANALYTICAL target p(theta) ∝ exp(-theta/b) · sin(theta) on the near-pole
+// tight-envelope branch (mean=90°, colatitude_center=0 → routes to kLaplacianTightEnvelope).
+// Deliberately NOT a KS-match against the pre-existing GenericReject Laplacian sampler,
+// which has a known M=cos(5b) tail-clamp bias (scrum-328.1 exp1); the tight-envelope path
+// is exact by construction (M=1), so matching the old sampler would flag a valid improvement
+// as regression (issue.md AC hardline).
+//
+// Uses moment + CDF-quantile matching against the analytical target rather than bin-by-bin
+// density matching — the latter suffers from bin-boundary MC artifacts at the θ→0 corner
+// where p(θ)→0 linearly and small integer-count effects amplify apparent relative dev.
+TEST_F(SphericalSamplingTest, LaplacianTightEnvelopeExactness) {
+  // Configuration: near-pole (mean latitude=90° in internal convention, i.e., zenith=0°) with
+  // b=5° — the task-325 issue scenario and the b tested in scrum-328.1 exp1.
+  lumice::AxisDistribution axis;
+  axis.latitude_dist = { lumice::DistributionType::kLaplacian, 90.0f, 5.0f };
+  axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+
+  // Sanity: confirm this config actually routes to the new path (else the test measures GenericReject).
+  auto decision = lumice::lat_path::SelectLatPath(axis);
+  ASSERT_EQ(decision.kind, lumice::lat_path::LatPathKind::kLaplacianTightEnvelope)
+      << "Test configuration must trigger the tight-envelope branch; otherwise this test measures a different code "
+         "path.";
+
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
+  rng.SetSeed(1234);
+
+  // Collect colatitudes.
+  constexpr size_t kN = kSampleCount;
+  std::vector<double> colatitudes;
+  colatitudes.reserve(kN);
+  float lon_lat[3];
+  for (size_t i = 0; i < kN; i++) {
+    lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
+    colatitudes.push_back(static_cast<double>(lumice::math::kPi_2 - lon_lat[1]));  // rad
+  }
+  std::sort(colatitudes.begin(), colatitudes.end());
+
+  // Theoretical target: p(θ) ∝ exp(-θ/b)·sin(θ) on [0, π].
+  const double target_b = 5.0 * kDeg2Rad;
+  auto target_density = [target_b](double theta) { return std::exp(-theta / target_b) * std::sin(theta); };
+  // Numerical CDF sampling for quantile inversion + moment computation.
+  constexpr int kCdfPts = 20000;
+  const double cdf_dt = lumice::math::kPi / kCdfPts;
+  std::vector<double> cdf_pts(kCdfPts + 1);
+  cdf_pts[0] = 0.0;
+  double theo_mean = 0.0;
+  double theo_msq = 0.0;
+  for (int k = 0; k < kCdfPts; k++) {
+    double theta = (k + 0.5) * cdf_dt;
+    double w = target_density(theta) * cdf_dt;
+    cdf_pts[k + 1] = cdf_pts[k] + w;
+    theo_mean += theta * w;
+    theo_msq += theta * theta * w;
+  }
+  double normalizer = cdf_pts.back();
+  theo_mean /= normalizer;
+  theo_msq /= normalizer;
+  double theo_std = std::sqrt(theo_msq - theo_mean * theo_mean);
+
+  auto theo_quantile = [&](double q) -> double {
+    double target_val = q * normalizer;
+    auto it = std::lower_bound(cdf_pts.begin(), cdf_pts.end(), target_val);
+    int idx = static_cast<int>(std::distance(cdf_pts.begin(), it));
+    if (idx <= 0) {
+      return 0.0;
+    }
+    if (idx >= static_cast<int>(cdf_pts.size())) {
+      return static_cast<double>(lumice::math::kPi);
+    }
+    double frac = (target_val - cdf_pts[idx - 1]) / (cdf_pts[idx] - cdf_pts[idx - 1]);
+    return (static_cast<double>(idx - 1) + frac) * cdf_dt;
+  };
+
+  // Moment matching (rad units).
+  double sample_mean = 0.0;
+  for (double c : colatitudes)
+    sample_mean += c;
+  sample_mean /= kN;
+  double sample_msq = 0.0;
+  for (double c : colatitudes)
+    sample_msq += (c - sample_mean) * (c - sample_mean);
+  double sample_std = std::sqrt(sample_msq / kN);
+
+  EXPECT_NEAR(sample_mean, theo_mean, theo_mean * 0.02)
+      << "Sample colatitude mean deviates from analytical target (rad).";
+  EXPECT_NEAR(sample_std, theo_std, theo_std * 0.02) << "Sample colatitude std deviates from analytical target (rad).";
+
+  // Quantile matching at 5%, 10%, 25%, 50%, 75%, 90%, 95%, 99%.
+  const double kQuantiles[] = { 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99 };
+  for (double q : kQuantiles) {
+    double sample_q = colatitudes[static_cast<size_t>(q * kN)];
+    double theo_q = theo_quantile(q);
+    // Absolute tolerance: 1° = 0.0175 rad — well above MC noise on quantiles at N=500k,
+    // strict enough to catch any distribution-shape drift.
+    EXPECT_NEAR(sample_q, theo_q, 1.0 * kDeg2Rad)
+        << "Quantile " << q << " sample=" << sample_q << " theo=" << theo_q << " (rad)";
+  }
+}
+
+
+// scrum-328.4 (crossover cap fallback). Verifies that when Laplacian scale exceeds
+// kMaxTightEnvelopeLaplacianBRad, SelectLatPath routes to kGenericReject rather than
+// silently accepting a possibly-unsafe wide-b tight-envelope. Also confirms the runtime
+// sampler still produces valid latitudes (no safety-valve corruption).
+TEST_F(SphericalSamplingTest, LaplacianTightEnvelopeCrossoverFallback) {
+  // b=70° > 60° cap.
+  lumice::AxisDistribution axis;
+  axis.latitude_dist = { lumice::DistributionType::kLaplacian, 90.0f, 70.0f };
+  axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+
+  auto decision = lumice::lat_path::SelectLatPath(axis);
+  EXPECT_EQ(decision.kind, lumice::lat_path::LatPathKind::kGenericReject)
+      << "Beyond the b cap, SelectLatPath must fall back to GenericReject.";
+
+  // Also confirm the config just below the cap (b=59°) still triggers tight-envelope.
+  lumice::AxisDistribution axis_within;
+  axis_within.latitude_dist = { lumice::DistributionType::kLaplacian, 90.0f, 59.0f };
+  axis_within.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+  auto decision_within = lumice::lat_path::SelectLatPath(axis_within);
+  EXPECT_EQ(decision_within.kind, lumice::lat_path::LatPathKind::kLaplacianTightEnvelope)
+      << "Just below the b cap the tight-envelope branch must remain active.";
+
+  // Boundary-miss config: mean=80° → colatitude_center=10° > kPolarThresholdRad=0.5° → GenericReject
+  // even at b=5°. Guards against the polar threshold being accidentally widened.
+  lumice::AxisDistribution axis_offpole;
+  axis_offpole.latitude_dist = { lumice::DistributionType::kLaplacian, 80.0f, 5.0f };
+  axis_offpole.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
+  auto decision_offpole = lumice::lat_path::SelectLatPath(axis_offpole);
+  EXPECT_EQ(decision_offpole.kind, lumice::lat_path::LatPathKind::kGenericReject)
+      << "Off-pole Laplacian (colatitude_center=10°) must not trigger tight-envelope.";
+
+  // Runtime sanity for the wide-b GenericReject config: no NaN, latitudes in [-π/2, π/2].
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
+  rng.SetSeed(2024);
+  float lon_lat[3];
+  for (int i = 0; i < 5000; i++) {
+    lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
+    ASSERT_GE(lon_lat[1], -lumice::math::kPi_2 - 1e-4f);
+    ASSERT_LE(lon_lat[1], lumice::math::kPi_2 + 1e-4f);
+    ASSERT_TRUE(std::isfinite(lon_lat[0]));
+    ASSERT_TRUE(std::isfinite(lon_lat[1]));
+    ASSERT_TRUE(std::isfinite(lon_lat[2]));
+  }
+}
+
+
 // Verifies that fold-roll coupling is correct: sampling with a latitude that triggers pole crossing
 // (fold) and roll=0° produces the same output as sampling the equivalent post-fold orientation
 // directly (with no fold, and roll=π already baked in).
@@ -1099,6 +1247,78 @@ TEST(FoldRollFlipBalanceTest, RayleighPositiveMean) {
   // All samples near north pole → flip=false for all → roll≈0
   EXPECT_EQ(flip_count, 0) << "Rayleigh north-pole path must not set flip=true";
   EXPECT_EQ(negative_lat_count, 0) << "Rayleigh north-pole path must produce positive phi";
+}
+
+
+// scrum-328.4: mirror of RayleighNegativeMean for the Laplacian tight-envelope branch. The
+// copysign/clamp/flip code path is separate from the Rayleigh branch (independent local vars),
+// so Rayleigh coverage does not exercise it.
+TEST(FoldRollFlipBalanceTest, LaplacianTightEnvelopeNegativeMean) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+  using lumice::RandomSampler;
+  using lumice::math::kPi;
+
+  AxisDistribution axis;
+  // mean=-89.9°, b=0.01° → colatitude_center=0.1° < 0.5° and b < 60° → tight-envelope
+  axis.latitude_dist = { DistributionType::kLaplacian, -89.9f, 0.01f };
+  axis.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  axis.roll_dist = { DistributionType::kGaussian, 0.0f, 0.0f };
+
+  constexpr int kN = 5'000;
+  std::vector<float> data(kN * 3);
+  lumice::RandomNumberGenerator::GetInstance().SetSeed(444);
+  RandomSampler::SampleSphericalPointsSph(axis, data.data(), kN);
+
+  int flip_count = 0;
+  int negative_lat_count = 0;
+  for (int i = 0; i < kN; i++) {
+    float lat = data[i * 3 + 1];
+    float roll = data[i * 3 + 2];
+    if (std::abs(roll - kPi) < 0.01f) {
+      flip_count++;
+    }
+    if (lat < 0.0f) {
+      negative_lat_count++;
+    }
+  }
+  float flip_frac = static_cast<float>(flip_count) / kN;
+  EXPECT_GT(flip_frac, 0.99f) << "Laplacian tight-envelope south-pole path must set flip=true";
+  EXPECT_EQ(negative_lat_count, 0) << "Laplacian tight-envelope south-pole path must fold phi to positive";
+}
+
+
+TEST(FoldRollFlipBalanceTest, LaplacianTightEnvelopePositiveMean) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+  using lumice::RandomSampler;
+  using lumice::math::kPi;
+
+  AxisDistribution axis;
+  axis.latitude_dist = { DistributionType::kLaplacian, 89.9f, 0.01f };
+  axis.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  axis.roll_dist = { DistributionType::kGaussian, 0.0f, 0.0f };
+
+  constexpr int kN = 5'000;
+  std::vector<float> data(kN * 3);
+  lumice::RandomNumberGenerator::GetInstance().SetSeed(445);
+  RandomSampler::SampleSphericalPointsSph(axis, data.data(), kN);
+
+  int flip_count = 0;
+  int negative_lat_count = 0;
+  for (int i = 0; i < kN; i++) {
+    float lat = data[i * 3 + 1];
+    float roll = data[i * 3 + 2];
+    if (std::abs(roll - kPi) < 0.01f) {
+      flip_count++;
+    }
+    if (lat < 0.0f) {
+      negative_lat_count++;
+    }
+  }
+
+  EXPECT_EQ(flip_count, 0) << "Laplacian tight-envelope north-pole path must not set flip=true";
+  EXPECT_EQ(negative_lat_count, 0) << "Laplacian tight-envelope north-pole path must produce positive phi";
 }
 
 

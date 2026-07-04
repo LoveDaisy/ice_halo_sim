@@ -437,10 +437,16 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
   // Rayleigh branch's cached mean_rad/sigma_rad from the decision result.
   auto decision = lat_path::SelectLatPath(axis_dist);
   bool use_rayleigh = (decision.kind == lat_path::LatPathKind::kRayleigh);
+  bool use_laplacian_tight = (decision.kind == lat_path::LatPathKind::kLaplacianTightEnvelope);
   float rejection_m = decision.rejection_m;
-  float latitude_mean_rad =
-      (lat_type == DistributionType::kGaussian) ? axis_dist.latitude_dist.mean * math::kDegreeToRad : 0.0f;
-  float sigma_rad = (lat_type == DistributionType::kGaussian) ? axis_dist.latitude_dist.std * math::kDegreeToRad : 0.0f;
+  // Cached radian versions of mean/scale, shared by the two tight-envelope branches.
+  // For kGaussian this holds (mean, sigma); for kLaplacian this holds (mean, b) —
+  // the two Distribution types are mutually exclusive per call, so the same pair
+  // of locals safely serves both. `lat_scale_rad` was renamed from `sigma_rad`
+  // (which read as Gaussian-specific) after the Laplacian branch was added.
+  bool cache_needed = (lat_type == DistributionType::kGaussian) || (lat_type == DistributionType::kLaplacian);
+  float latitude_mean_rad = cache_needed ? axis_dist.latitude_dist.mean * math::kDegreeToRad : 0.0f;
+  float lat_scale_rad = cache_needed ? axis_dist.latitude_dist.std * math::kDegreeToRad : 0.0f;
 
   for (size_t i = 0; i < num; i++) {
     float phi = 0;
@@ -456,8 +462,8 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
       float colatitude = 0.0f;
       bool accept = false;
       do {
-        float dx = rng.GetGaussian() * sigma_rad;
-        float dy = rng.GetGaussian() * sigma_rad;
+        float dx = rng.GetGaussian() * lat_scale_rad;
+        float dy = rng.GetGaussian() * lat_scale_rad;
         colatitude = std::sqrt(dx * dx + dy * dy);
         ++attempts;
         if (attempts >= kMaxRejectionAttempts) {
@@ -474,6 +480,36 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
         // lambda/roll += π downstream. Semantically identical to NormalizeLatitude, but not
         // delegated there because Rayleigh phi is computed from copysign+clamp (never outside
         // [-π/2, π/2]), so the NormalizeLatitude loop/reflection logic is unnecessary here.
+        phi = std::abs(phi);
+        flip = true;
+      }
+    } else if (lat_type == DistributionType::kLaplacian && use_laplacian_tight) {
+      // Tight-envelope area-measure Laplacian path (doc/near-pole-area-measure-sampling.md §2.1).
+      // Propose colatitude ~ Gamma(2, b) via closed form theta = -b(ln u1 + ln u2); accept with
+      // sin(theta)/theta (M=1, exact, never clamp). Mirrors pcg_shared.h::sample_lat_lon_roll
+      // kLatPathLaplacianTightEnvelope branch. copysign/clamp/flip semantics identical to
+      // Rayleigh branch above — they depend on the geometric fold, not on the proposal family.
+      int attempts = 0;
+      float colatitude = 0.0f;
+      bool accept = false;
+      do {
+        // 1e-7f floor matches the device-side pcg_gamma2 (pcg_shared.h) so CPU and GPU
+        // samplers see identical tail behavior; floating to the tiniest normal float would
+        // let -log(u) reach ~87, producing colatitude proposals ~87*b beyond legal domain.
+        float u1 = std::max(rng.GetUniform(), 1e-7f);
+        float u2 = std::max(rng.GetUniform(), 1e-7f);
+        colatitude = -lat_scale_rad * (std::log(u1) + std::log(u2));
+        ++attempts;
+        if (attempts >= kMaxRejectionAttempts) {
+          LOG_WARNING("SampleSphericalPointsSph: Laplacian tight-envelope safety valve triggered (mean={}, std={})",
+                      axis_dist.latitude_dist.mean, axis_dist.latitude_dist.std);
+          break;
+        }
+        accept = rng.GetUniform() < lm_pcg::pcg_sinc(colatitude);
+      } while (!accept);
+      phi = std::copysign(math::kPi_2 - colatitude, latitude_mean_rad);
+      phi = std::max(-math::kPi_2, std::min(math::kPi_2, phi));
+      if (latitude_mean_rad < 0) {
         phi = std::abs(phi);
         flip = true;
       }

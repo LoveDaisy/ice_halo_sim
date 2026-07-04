@@ -137,6 +137,9 @@ static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kGaussLegacy) == lm_p
               "LatPathKind::kGaussLegacy must match lm_pcg::kLatPathGaussLegacy");
 static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kGenericReject) == lm_pcg::kLatPathGenericReject,
               "LatPathKind::kGenericReject must match lm_pcg::kLatPathGenericReject");
+static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kLaplacianTightEnvelope) ==
+                  lm_pcg::kLatPathLaplacianTightEnvelope,
+              "LatPathKind::kLaplacianTightEnvelope must match lm_pcg::kLatPathLaplacianTightEnvelope");
 
 // Mirror of the Metal-side GenRootKernelParams (host layout MUST match the
 // MSL struct field-for-field — all 4-byte scalars, natural alignment).
