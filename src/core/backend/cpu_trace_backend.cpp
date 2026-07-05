@@ -449,9 +449,12 @@ RootRaySource CpuTraceBackend::Recombine(LayerHandlePtr handle, const RecombineS
   if (spec.shuffle && continuation_buf_.size_ > 1) {
     // Fisher-Yates shuffle — mirror Simulator's swap-based shuffle order
     // (same loop shape so RNG draws stay aligned with the legacy path).
+    // SwapRay carries each ray's component mask with it (task-331.3): a plain
+    // std::swap(buf[i],buf[j]) swaps only rays_ and would decorrelate the
+    // cross-layer OR-accumulated mask from its ray. RNG draws are unchanged.
     for (size_t i = 0; i < continuation_buf_.size_; i++) {
       size_t j = static_cast<size_t>(rng_.GetUniform() * (continuation_buf_.size_ - i)) + i;
-      std::swap(continuation_buf_[i], continuation_buf_[j]);
+      continuation_buf_.SwapRay(i, j);
     }
   }
 

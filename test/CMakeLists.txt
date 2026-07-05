@@ -29,6 +29,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/core/test_filter.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_filter_spec.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_component_gate.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_crosslayer_component.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_device_filter_check_host.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_reduce_raypath_audit.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_raypath_segments.cpp"

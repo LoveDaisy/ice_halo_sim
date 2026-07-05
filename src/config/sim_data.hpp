@@ -74,6 +74,20 @@ struct RayBuffer {
   // Mirror of RecorderFanOut for the hit-loop child pair in TraceRayBasicInfo.
   void ComponentFanOut(const RayBuffer& src, size_t src_idx, size_t dst0, size_t dst1);
 
+  // Swap the full per-ray hot state of slots i and j: the RaySeg AND its
+  // parallel component mask, so a ray and its OR-accumulated raypath-color mask
+  // stay paired under the continuation-pool decorrelation shuffle
+  // (simulator.cpp + cpu_trace_backend.cpp). Before task-331.3 the shuffle used
+  // `std::swap(buf[i], buf[j])`, which swaps ONLY rays_ (operator[] returns
+  // RaySeg&) and left components_ behind — decorrelating the accumulated mask
+  // from its ray across MS layers (the mask is the only cross-layer-surviving
+  // per-ray state; recorders are RecorderClear'd at the next layer's entry).
+  // recorders_ is DELIBERATELY not swapped here: it is reset at layer entry
+  // before being read, so swapping it would only churn the overflow arena for
+  // no observable effect — keeping the shuffle's recorder behaviour bit-identical
+  // to pre-331.3 (rendering unchanged).
+  void SwapRay(size_t i, size_t j);
+
   // Read-only pointer to the overflow arena base for downstream consumers
   // (e.g. FilterSpec::Match needs it to resolve recorder data). Returns
   // nullptr when no overflow slot has been allocated yet.

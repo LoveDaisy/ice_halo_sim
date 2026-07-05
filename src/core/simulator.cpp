@@ -1070,10 +1070,14 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
     init_data[0].Reset(ray_num * (config.max_hits_ + 1));
     std::swap(init_data[0], init_data[1]);
 
-    // Shuffle init_data
+    // Shuffle init_data. SwapRay (not std::swap(buf[i],buf[j])) so each ray's
+    // OR-accumulated component mask stays paired with it across the layer
+    // boundary — operator[] only exposes RaySeg, so a plain swap would leave the
+    // parallel components_ array behind and decorrelate the cross-layer mask
+    // (task-331.3). RNG draw order is unchanged (SwapRay draws nothing).
     for (size_t i = 0; i < init_data[0].size_; i++) {
       size_t j = static_cast<size_t>(rng_.GetUniform() * (init_data[0].size_ - i)) + i;
-      std::swap(init_data[0][i], init_data[0][j]);
+      init_data[0].SwapRay(i, j);
     }
 
     first_ms = false;

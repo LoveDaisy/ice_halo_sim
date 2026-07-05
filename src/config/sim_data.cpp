@@ -189,6 +189,18 @@ void RayBuffer::ComponentFanOut(const RayBuffer& src, size_t src_idx, size_t dst
   components_[dst1] = v;
 }
 
+void RayBuffer::SwapRay(size_t i, size_t j) {
+  assert(i < capacity_);
+  assert(j < capacity_);
+  if (i == j) {
+    return;
+  }
+  // Keep the RaySeg and its parallel component mask together — see the header
+  // note. recorders_ intentionally excluded (cleared at layer entry).
+  std::swap(rays_[i], rays_[j]);
+  std::swap(components_[i], components_[j]);
+}
+
 void RayBuffer::Reset(size_t capacity) {
   if (capacity > capacity_) {
     rays_ = std::make_unique<RaySeg[]>(capacity);
