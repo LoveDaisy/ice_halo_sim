@@ -8,6 +8,7 @@
 #include <limits>
 #include <memory>
 
+#include "core/lat_lut.hpp"
 #include "core/shared/lat_path_selection.hpp"
 #include "core/shared/pcg_shared.h"
 #include "util/logger.hpp"
@@ -415,7 +416,30 @@ void RandomSampler::SampleSphericalPointsSph(float* data, size_t num, size_t ste
 }
 
 
-void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num) {
+namespace {
+// Thread-local most-recent LUT cache (330.2, plan-review C1): BuildLatLut is amortized once per
+// axis distribution, never per ray. Callers may pass a prebuilt LUT to bypass this; otherwise the
+// sampler caches the most recently used latitude distribution per worker thread. InitRay_rot
+// processes one crystal_axis per batch, so this is one build per batch on the cache-miss path.
+const LatLut& CachedLatLut(const Distribution& d) {
+  thread_local LatLut cached;
+  thread_local bool valid = false;
+  thread_local DistributionType key_type = DistributionType::kNoRandom;
+  thread_local float key_mean = 0.0f;
+  thread_local float key_std = 0.0f;
+  if (!valid || key_type != d.type || key_mean != d.mean || key_std != d.std) {
+    cached = BuildLatLut(d);
+    valid = true;
+    key_type = d.type;
+    key_mean = d.mean;
+    key_std = d.std;
+  }
+  return cached;
+}
+}  // namespace
+
+void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num,
+                                             const LatLut* lat_lut) {
   auto& rng = RandomNumberGenerator::GetInstance();
 
   // Jacobian correction for latitude sampling.
@@ -452,7 +476,18 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
     float phi = 0;
     bool flip = false;
 
-    if (lat_type == DistributionType::kGaussian && use_rayleigh) {
+    if (decision.kind == lat_path::LatPathKind::kLutInverseCdf) {
+      // Unified area-measure inverse-CDF LUT (330.2). One uniform draw + fixed binary search
+      // (no rejection loop); flip reproduces the pole-crossing azimuth flip via the per-bin
+      // flip probability. The LUT is amortized once per axis distribution (passed-in or cached),
+      // never per ray. Shares lm_pcg::invert_lat_lut / lat_lut_bin with the device kernels.
+      const LatLut& lut = (lat_lut != nullptr) ? *lat_lut : CachedLatLut(axis_dist.latitude_dist);
+      const float xi = rng.GetUniform();
+      const float theta_z = lm_pcg::invert_lat_lut(xi, lut.theta.data(), lut.cdf.data(), LatLut::kNodes);
+      phi = math::kPi_2 - theta_z;
+      const uint32_t bin = lm_pcg::lat_lut_bin(theta_z, lut.theta.data(), LatLut::kNodes);
+      flip = rng.GetUniform() < lut.flip_prob[bin];
+    } else if (lat_type == DistributionType::kGaussian && use_rayleigh) {
       // Tight-envelope area-measure Rayleigh path (doc/near-pole-area-measure-sampling.md §2).
       // Propose colatitude ~ Rayleigh(sigma) via the 2D-Gaussian norm form (numerically
       // identical to theta = sigma*sqrt(-2 ln u)); accept with sin(theta)/theta (M=1,
