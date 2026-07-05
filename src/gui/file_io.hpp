@@ -13,11 +13,25 @@ struct GuiState;
 struct PreviewViewport;
 class PreviewRenderer;
 
+// Identifies which filter reference triggered an ABI-bounds overflow inside FillLumiceConfig.
+// Populated only when FillLumiceConfig returns false AND the caller passed a non-null pointer.
+// Captures the FIRST reference walked in scattering-layer order — same filter pool id reused
+// across multiple (layer, entry) sites only reports the first, which is sufficient to locate
+// the offending filter (all sites share identical content).
+struct FilterOverflowInfo {
+  int layer_index = -1;     // 0-based scattering layer index (present to caller as +1)
+  int entry_index = -1;     // 0-based entry index within the layer (present to caller as +1)
+  std::string filter_name;  // FilterConfig::name (may be empty if user did not name the filter)
+};
+
 // Fill LUMICE_Config C struct from GuiState (for LUMICE_CommitConfigStruct, bypasses JSON serialization)
 // Fill a LUMICE_Config from GuiState for the typed-struct commit path. Returns false if a
 // filter expansion exceeded the ABI bounds (composition pool / clause / filter capacity),
 // in which case the caller must NOT commit `out` and should keep the prior committed state.
-bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out);
+// When `overflow` is non-null and the return is false, it receives the identity of the first
+// (layer, entry, filter name) that triggered the overflow so the caller can build a locating
+// message; the value is untouched on success.
+bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out, FilterOverflowInfo* overflow = nullptr);
 
 // Serialize GuiState to Core JSON string (for .lmc save and CLI compatibility)
 std::string SerializeCoreConfig(const GuiState& state);

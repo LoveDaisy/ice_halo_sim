@@ -1022,7 +1022,7 @@ static bool ExpandFilterToStruct(const FilterConfig& f, int next_filter_id, LUMI
 // degradation), not commit `out`. Crystals still use the P+1 pool-id scheme; filters use a
 // running id counter (matching SerializeCoreConfig) because one GUI filter may expand into
 // N simple + 1 complex.
-bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
+bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out, FilterOverflowInfo* overflow) {
   std::memset(out, 0, sizeof(LUMICE_Config));
 
   // ID-pool model: walk entries, dedupe by pool id, emit one C crystal per reachable pool
@@ -1079,6 +1079,14 @@ bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out) {
             // Exceeded ABI bounds (composition pool / clause / filter capacity). Bail out
             // immediately with false so the caller keeps the old committed state rather than
             // commit a truncated config (no point finishing the rest of `out`, it is discarded).
+            // Capture the current (layer, entry, filter name) so the caller can locate the
+            // offending filter. Only the FIRST reference is reported — if the same filter pool
+            // id is used at multiple sites, later ones are not surfaced (they share content).
+            if (overflow != nullptr) {
+              overflow->layer_index = i;
+              overflow->entry_index = k;
+              overflow->filter_name = state.filters[fpool].name;
+            }
             return false;
           }
         }
