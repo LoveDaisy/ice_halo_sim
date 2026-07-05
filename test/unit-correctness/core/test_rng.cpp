@@ -849,11 +849,12 @@ TEST_F(SphericalSamplingTest, LaplacianTightEnvelopeExactness) {
   axis.latitude_dist = { lumice::DistributionType::kLaplacian, 90.0f, 5.0f };
   axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
 
-  // Sanity: confirm this config actually routes to the new path (else the test measures GenericReject).
+  // 330.2 S5: all Laplacian latitudes now route to the unified inverse-CDF LUT. The rest of this
+  // test is the valuable part — it validates the sampled colatitude against the ANALYTIC target
+  // p(θ) ∝ exp(-θ/b)·sin(θ) (the scrum-328 AC), which the LUT reproduces exactly.
   auto decision = lumice::lat_path::SelectLatPath(axis);
-  ASSERT_EQ(decision.kind, lumice::lat_path::LatPathKind::kLaplacianTightEnvelope)
-      << "Test configuration must trigger the tight-envelope branch; otherwise this test measures a different code "
-         "path.";
+  ASSERT_EQ(decision.kind, lumice::lat_path::LatPathKind::kLutInverseCdf)
+      << "Test configuration must route to the unified LUT path.";
 
   auto& rng = lumice::RandomNumberGenerator::GetInstance();
   rng.SetSeed(1234);
@@ -937,31 +938,33 @@ TEST_F(SphericalSamplingTest, LaplacianTightEnvelopeExactness) {
 // silently accepting a possibly-unsafe wide-b tight-envelope. Also confirms the runtime
 // sampler still produces valid latitudes (no safety-valve corruption).
 TEST_F(SphericalSamplingTest, LaplacianTightEnvelopeCrossoverFallback) {
-  // b=70° > 60° cap.
+  // 330.2 S5: the tight-envelope↔generic-reject CROSSOVER (b-cap, polar threshold) is unified
+  // away — every Laplacian latitude, near-pole / off-pole / wide-b alike, now routes to the single
+  // kLutInverseCdf path (the b cap + threshold distinctions only mattered for the retired branches;
+  // 330.3 may drop this test entirely). What remains worth guarding: all these configs route to the
+  // LUT and produce valid finite orientations. b=70° > old 60° cap.
   lumice::AxisDistribution axis;
   axis.latitude_dist = { lumice::DistributionType::kLaplacian, 90.0f, 70.0f };
   axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
 
   auto decision = lumice::lat_path::SelectLatPath(axis);
-  EXPECT_EQ(decision.kind, lumice::lat_path::LatPathKind::kGenericReject)
-      << "Beyond the b cap, SelectLatPath must fall back to GenericReject.";
+  EXPECT_EQ(decision.kind, lumice::lat_path::LatPathKind::kLutInverseCdf)
+      << "Wide-b Laplacian must route to the unified LUT.";
 
-  // Also confirm the config just below the cap (b=59°) still triggers tight-envelope.
   lumice::AxisDistribution axis_within;
   axis_within.latitude_dist = { lumice::DistributionType::kLaplacian, 90.0f, 59.0f };
   axis_within.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
   auto decision_within = lumice::lat_path::SelectLatPath(axis_within);
-  EXPECT_EQ(decision_within.kind, lumice::lat_path::LatPathKind::kLaplacianTightEnvelope)
-      << "Just below the b cap the tight-envelope branch must remain active.";
+  EXPECT_EQ(decision_within.kind, lumice::lat_path::LatPathKind::kLutInverseCdf)
+      << "Near-pole Laplacian must route to the unified LUT.";
 
-  // Boundary-miss config: mean=80° → colatitude_center=10° > kPolarThresholdRad=0.5° → GenericReject
-  // even at b=5°. Guards against the polar threshold being accidentally widened.
+  // Off-pole (mean=80° → colatitude_center=10°) also routes to the LUT now (previously GenericReject).
   lumice::AxisDistribution axis_offpole;
   axis_offpole.latitude_dist = { lumice::DistributionType::kLaplacian, 80.0f, 5.0f };
   axis_offpole.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
   auto decision_offpole = lumice::lat_path::SelectLatPath(axis_offpole);
-  EXPECT_EQ(decision_offpole.kind, lumice::lat_path::LatPathKind::kGenericReject)
-      << "Off-pole Laplacian (colatitude_center=10°) must not trigger tight-envelope.";
+  EXPECT_EQ(decision_offpole.kind, lumice::lat_path::LatPathKind::kLutInverseCdf)
+      << "Off-pole Laplacian must route to the unified LUT.";
 
   // Runtime sanity for the wide-b GenericReject config: no NaN, latitudes in [-π/2, π/2].
   auto& rng = lumice::RandomNumberGenerator::GetInstance();
@@ -1211,9 +1214,12 @@ TEST(FoldRollFlipBalanceTest, RayleighNegativeMean) {
   }
 
   float flip_frac = static_cast<float>(flip_count) / kN;
-  // All samples near south pole → flip=true for all → roll≈π
-  EXPECT_GT(flip_frac, 0.99f) << "Rayleigh south-pole path must set flip=true for all samples";
-  EXPECT_EQ(negative_lat_count, 0) << "Rayleigh south-pole path must fold phi to positive";
+  // 330.2: the unified LUT PRESERVES the southern hemisphere. The retired Rayleigh abs() fold
+  // mapped a down-pointing c-axis to up (+ roll π) — an up/down-symmetry assumption that is wrong
+  // for up/down-asymmetric crystals (owner-confirmed 2026-07-05). So a mean=-89.9° c-axis stays at
+  // negative latitude, and with σ=0.01° no sample crosses the south pole → no fold, roll stays 0.
+  EXPECT_GT(negative_lat_count, kN * 99 / 100) << "unified LUT must keep down c-axis DOWN (negative latitude)";
+  EXPECT_LT(flip_frac, 0.01f) << "no south-pole crossing at σ=0.01° → flip≈0 (roll stays 0, not π)";
 }
 
 // Step 5 regression: positive-mean Rayleigh (north pole) must NOT trigger flip.
@@ -1287,8 +1293,11 @@ TEST(FoldRollFlipBalanceTest, LaplacianTightEnvelopeNegativeMean) {
     }
   }
   float flip_frac = static_cast<float>(flip_count) / kN;
-  EXPECT_GT(flip_frac, 0.99f) << "Laplacian tight-envelope south-pole path must set flip=true";
-  EXPECT_EQ(negative_lat_count, 0) << "Laplacian tight-envelope south-pole path must fold phi to positive";
+  // 330.2: unified LUT preserves the southern hemisphere (see RayleighNegativeMean). A down-pointing
+  // Laplacian c-axis (mean=-89.9°) stays at negative latitude; with b=0.01° no sample crosses the
+  // south pole → no fold. (Retired behavior folded it to positive latitude + flip.)
+  EXPECT_GT(negative_lat_count, kN * 99 / 100) << "unified LUT must keep down c-axis DOWN (negative latitude)";
+  EXPECT_LT(flip_frac, 0.05f) << "negligible south-pole crossing at b=0.01° → flip≈0";
 }
 
 
