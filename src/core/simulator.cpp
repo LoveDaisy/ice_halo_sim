@@ -464,7 +464,8 @@ void FillRayOtherInfo(const Crystal& curr_crystal, RayBuffer buffer_data[2]) {
 // Design A filter semantics: filter-fail = ray terminates (not outgoing, not continue).
 // See doc/raypath-rayseg-architecture.md §3 for the segment state-machine transition rules.
 void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input
-                 RayBuffer* buffer_data, RayBuffer* init_data) {                             // output
+                 RayBuffer* buffer_data, RayBuffer* init_data,                               // output
+                 const std::vector<uint8_t>* summand_bits) {                                 // input
   for (size_t idx = 0; idx < buffer_data[1].size_; idx++) {
     auto& r = buffer_data[1][idx];
     const auto& rec = buffer_data[1].RecorderAt(idx);
@@ -480,8 +481,43 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       r.crystal_rot_.Apply(r.d_);
       r.crystal_rot_.Apply(r.p_);
 
-      bool filter_pass = (spec == nullptr) || spec->Check(r, rec, buffer_data[1].OverflowArena());
+      // task-331.2: gate decision. When a raypath-color summand->bit map is
+      // provided, evaluate the filter in a SINGLE pass (CheckSummandMask also
+      // returns the per-summand match mask) so the component bits reuse the
+      // same evaluation that produces the gate boolean — no extra predicate
+      // pass. Without the map, keep the original short-circuit Check() so the
+      // gate decision, RNG order, and perf are bit-identical to pre-331.2.
+      const uint8_t* arena = buffer_data[1].OverflowArena();
+      uint64_t summand_mask = 0;
+      bool filter_pass = false;
+      if (spec == nullptr) {
+        filter_pass = true;
+      } else if (summand_bits != nullptr) {
+        filter_pass = spec->CheckSummandMask(r, rec, arena, &summand_mask);
+      } else {
+        filter_pass = spec->Check(r, rec, arena);
+      }
       if (filter_pass) {
+        // Produce this layer's component bits for the surviving ray and OR them
+        // into its carried mask (which the T1 transport then propagates to the
+        // emitted or continued copy below). Only outgoing candidates reach this
+        // branch, i.e. rays whose raypath (rec) is complete for this crystal —
+        // so per-summand matching is on the full current-layer path.
+        if (summand_bits != nullptr && summand_mask != 0) {
+          uint64_t produced = 0;
+          const std::vector<uint8_t>& sb = *summand_bits;
+          for (size_t k = 0; k < sb.size() && k < 64; k++) {
+            if ((summand_mask & (1ull << k)) != 0) {
+              uint8_t bit = sb[k];
+              if (bit < ComponentTable::kMaxBits) {
+                produced |= (1ull << bit);
+              }
+            }
+          }
+          if (produced != 0) {
+            buffer_data[1].SetComponent(idx, buffer_data[1].ComponentAt(idx) | produced);
+          }
+        }
         if (rng.GetUniform() < ms_info.prob_) {
           // 1.1 filter-pass + prob-pass → continue to next MS level.
           r.is_continue_ = true;
@@ -868,20 +904,19 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   float wl = wl_param.wl_;
   size_t original_ray_num = ray_num;  // ray_num is overwritten in the ms loop; keep original for normalization.
 
-  // task-331.1: prove the component table can be built from the scene config
-  // at the simulator entry. Phase-1 does not consume it downstream — T2 will
-  // wire runtime lookups in CollectData when it starts producing bits.
+  // task-331.1/2: static (layer, crystal-slot, summand) -> component-bit table.
+  // T2 consumes it at the emit gate: ComponentBitsFor(component_table, mi, ci)
+  // yields the per-summand bit map the gate ORs into each surviving ray's mask.
   //
   // NOTE (plan-review): calling BuildComponentTable per-wavelength is a
-  // TEMPORARY validation shape. T2 should hoist this to a per-simulation-run
-  // scope (config-load-time or Run() top) before adding real consumers, so
-  // multi-wavelength scenes don't rebuild the same static table dozens of
-  // times. Not hoisting here yet because T1 lacks a natural per-run seam that
-  // both the legacy and backend paths already share, and we don't want to
-  // pre-invent one before T2 tells us what shape it actually needs.
+  // TEMPORARY validation shape. A later task should hoist this to a
+  // per-simulation-run scope (config-load-time or Run() top), so multi-
+  // wavelength scenes don't rebuild the same static table dozens of times. The
+  // build is a pure O(total summands) walk (no I/O, no RNG), so the cost is
+  // negligible; not hoisting here to keep this task's diff focused on the gate
+  // producer rather than reshaping Run()'s per-run seam.
   ComponentTable component_table = BuildComponentTable(config);
   ILOG_DEBUG(logger_, "ComponentTable built: {} entries (legacy path)", component_table.entries_.size());
-  (void)component_table;  // silence unused-variable in Release NDEBUG builds.
 
   RayBuffer all_data = AllocateAllData(config, ray_num);
   std::vector<float> outgoing_d;
@@ -928,6 +963,15 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
     for (size_t ci = 0; ci < ms_crystal_cnt && !stop_; ci++) {
       const auto& s = m.setting_[ci];
       std::unique_ptr<FilterSpec> spec;
+
+      // task-331.2: per-summand -> component-bit map for THIS (layer, crystal).
+      // The emit gate is always invoked from inside this (mi, ci) loop, so
+      // (mi, ci) is exactly the static key BuildComponentTable used — no need
+      // to resolve the runtime crystal_config_id_/crystal_idx_ (unstable across
+      // batches). Depends only on config, so compute once per ci (crystal
+      // instance re-sampling inside the cn loop does not affect it).
+      std::vector<uint8_t> summand_bits =
+          ComponentBitsFor(component_table, static_cast<IdType>(mi), static_cast<IdType>(ci));
 
       bool deterministic = IsDeterministic(s.crystal_.param_);
 
@@ -1000,8 +1044,9 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
           FillRayOtherInfo(curr_crystal, buffer_data);
 
           // 2.3 Collect data. And set ray properties: state.
-          CollectData(rng_, m, spec.get(),      // input
-                      buffer_data, init_data);  // output
+          CollectData(rng_, m, spec.get(),     // input
+                      buffer_data, init_data,  // output
+                      &summand_bits);          // input (task-331.2 component producer)
 
           // 2.4 Copy to all_data + collect outgoing rays (d/w pre-pack).
           all_data.EmplaceBack(buffer_data[1]);
@@ -1012,7 +1057,8 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
               outgoing_d.push_back(r.d_[1]);
               outgoing_d.push_back(r.d_[2]);
               outgoing_w.push_back(r.w_);
-              // task-331.1: mask reads 0 until T2 wires the producer.
+              // task-331.2: CollectData has now OR'd this layer's component
+              // bits into the mask (0 only when no summand matched / no map).
               outgoing_component.push_back(buffer_data[1].ComponentAt(j));
             }
           }
@@ -1139,11 +1185,11 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
     return;
   }
 
-  // task-331.1: same buildability validation as the legacy path — see the note
-  // above SimulateOneWavelength.
-  ComponentTable component_table = BuildComponentTable(scene);
-  ILOG_DEBUG(logger_, "ComponentTable built: {} entries (backend path)", component_table.entries_.size());
-  (void)component_table;
+  // task-331.2: the component table is now built and consumed INSIDE the
+  // backend that produces per-ray masks (CpuTraceBackend::BeginSession builds
+  // it; its emit gate slices it per (layer, crystal)). Metal/CUDA leave
+  // component_mask at 0 until T5/T6 wire device-side production, so this
+  // host-side entry no longer builds a throwaway table.
 
   // Task 260.6: hand the backend `effective_seed_` (non-zero) so device-gen
   // activates even when the user-facing `seed_` is 0 (default random mode).

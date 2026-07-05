@@ -64,6 +64,20 @@ struct ComponentTable {
 // masks in `CollectData`.
 ComponentTable BuildComponentTable(const SceneConfig& scene);
 
+// Runtime lookup helper (task-331.2): collect the summand -> component-bit
+// mapping for one (layer, crystal-slot) as a dense vector indexed by
+// summand_idx. Entry values are the assigned bit index in [0, kMaxBits) or
+// `ComponentTable::kNoBit` for over-budget summands. A summand index absent
+// from the table (should not happen for a well-formed table) also reads
+// kNoBit. Missing (layer, crystal_id) -> empty vector (e.g. a None-filter
+// crystal, which contributes no summands).
+//
+// The CPU emit gate calls this once per (layer, crystal-slot) and uses it to
+// map a FilterSpec's per-summand match mask (FilterSpec::CheckSummandMask)
+// onto global component bits. Keyed by the STATIC setting-slot index — see the
+// crystal_id_ note on ComponentTableEntry above.
+std::vector<uint8_t> ComponentBitsFor(const ComponentTable& table, IdType layer, IdType crystal_id);
+
 }  // namespace lumice
 
 #endif  // CONFIG_COMPONENT_TABLE_H_

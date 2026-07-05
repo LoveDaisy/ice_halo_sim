@@ -83,4 +83,18 @@ ComponentTable BuildComponentTable(const SceneConfig& scene) {
   return table;
 }
 
+std::vector<uint8_t> ComponentBitsFor(const ComponentTable& table, IdType layer, IdType crystal_id) {
+  std::vector<uint8_t> bits;
+  for (const auto& e : table.entries_) {
+    if (e.layer_ != layer || e.crystal_id_ != crystal_id) {
+      continue;
+    }
+    if (e.summand_idx_ >= bits.size()) {
+      bits.resize(static_cast<size_t>(e.summand_idx_) + 1, ComponentTable::kNoBit);
+    }
+    bits[e.summand_idx_] = e.bit_;
+  }
+  return bits;
+}
+
 }  // namespace lumice

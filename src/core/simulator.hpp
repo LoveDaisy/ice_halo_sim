@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -150,8 +151,19 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& propo
 // continue; filter-pass + prob-fail = emit outgoing.
 //
 // Internal: exposed for unit testing; not part of the public C API.
+//
+// task-331.2: when `summand_bits` is non-null, the emit gate produces the
+// current layer's raypath-color component bits for each surviving outgoing
+// candidate by reusing the FilterSpec's per-summand match (single pass, no
+// extra evaluation) and OR-ing the mapped bits into the ray's component mask
+// (carried forward by the T1 transport). `summand_bits[k]` = the global
+// component bit for OR-summand k of this (layer, crystal) filter (or
+// ComponentTable::kNoBit). Pass nullptr (default) to leave the mask untouched
+// — the gate decision and RNG order are then bit-identical to the pre-331.2
+// behaviour.
 void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input
-                 RayBuffer* buffer_data, RayBuffer* init_data);                              // output
+                 RayBuffer* buffer_data, RayBuffer* init_data,                               // output
+                 const std::vector<uint8_t>* summand_bits = nullptr);                        // input
 
 // Build the local-to-world rotation matrix for a crystal sample.
 // Implements the chain  R = Rz(az - pi) * Ry(-zenith) * Rz(roll),

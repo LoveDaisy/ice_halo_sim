@@ -156,6 +156,16 @@ class NoneSpec : public FilterSpec {
   bool Match(const RaySeg& /*ray*/, const RaypathRecorder& /*rec*/, const uint8_t* /*arena*/) const override {
     return true;
   }
+  // None passes every ray but contributes no OR-summand (0 component bits), so
+  // the mask is always 0 even though the gate boolean is true. This mirrors
+  // BuildComponentTable's "NoneFilterParam -> 0 summands" counting rule.
+  uint64_t MatchSummandMask(const RaySeg& /*ray*/, const RaypathRecorder& /*rec*/, const uint8_t* /*arena*/,
+                            bool* out_matched) const override {
+    if (out_matched != nullptr) {
+      *out_matched = true;
+    }
+    return 0ull;
+  }
 };
 
 class RaypathSpec : public FilterSpec {
@@ -285,6 +295,34 @@ class ComplexSpec : public FilterSpec {
       }
     }
     return false;
+  }
+
+  // Evaluate EVERY OR-summand (no cross-clause short-circuit) so bit k reflects
+  // whether summand k matched. The returned boolean (mask != 0) is bit-identical
+  // to the short-circuit Match() above; the only difference is that all clauses
+  // are evaluated so the per-summand information survives the collapse. Summand
+  // index k here matches BuildComponentTable's summand_idx_ (both walk filters_
+  // in order). Bits at k >= 64 cannot be represented and are dropped (a single
+  // filter with > 64 OR-summands already exceeds the uint64 component budget).
+  uint64_t MatchSummandMask(const RaySeg& ray, const RaypathRecorder& rec, const uint8_t* arena,
+                            bool* out_matched) const override {
+    uint64_t mask = 0;
+    for (size_t k = 0; k < filters_.size() && k < 64; k++) {
+      bool and_check = true;
+      for (const auto& and_f : filters_[k]) {
+        if (!and_f->Match(ray, rec, arena)) {
+          and_check = false;
+          break;
+        }
+      }
+      if (and_check) {
+        mask |= (1ull << k);
+      }
+    }
+    if (out_matched != nullptr) {
+      *out_matched = (mask != 0);
+    }
+    return mask;
   }
 
  private:
