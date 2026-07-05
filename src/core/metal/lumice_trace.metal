@@ -852,7 +852,9 @@ kernel void gen_root_kernel(
   // (attempts_ctrl.x!=0). ctrl.y is the multi-ci write-offset. Production:
   // ctrl.x==0 → &attempts_local skipped, branch predicted off.
   thread int attempts_local = 1;
-  sample_lat_lon_roll(stream, gp, lon, lat, roll,
+  // 330.2 S3: LUT arrays are nullptr until the buffers are bound (S3b) — safe because the
+  // kLatPathLutInverseCdf branch is dormant until SelectLatPath is flipped (S5).
+  sample_lat_lon_roll(stream, gp, nullptr, nullptr, nullptr, lon, lat, roll,
                       attempts_ctrl.x != 0u ? &attempts_local : nullptr);
   if (attempts_ctrl.x != 0u) {
     lat_attempts[tid + attempts_ctrl.y] = attempts_local;
@@ -959,7 +961,7 @@ kernel void transit_root_kernel(
   float lon, lat, roll;
   // scrum-328.2 Step 1: transit surface does not carry attempt-count today
   // (near-pole acceptance-rate observation is anchored to the gen kernel).
-  sample_lat_lon_roll(stream, gp, lon, lat, roll, nullptr);
+  sample_lat_lon_roll(stream, gp, nullptr, nullptr, nullptr, lon, lat, roll, nullptr);  // 330.2 S3: LUT buffers pending S3b
   float mat9[9];
   build_crystal_rotation_9(lon, lat, roll, mat9);
 

@@ -140,6 +140,8 @@ static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kGenericReject) == lm
 static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kLaplacianTightEnvelope) ==
                   lm_pcg::kLatPathLaplacianTightEnvelope,
               "LatPathKind::kLaplacianTightEnvelope must match lm_pcg::kLatPathLaplacianTightEnvelope");
+static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kLutInverseCdf) == lm_pcg::kLatPathLutInverseCdf,
+              "LatPathKind::kLutInverseCdf must match lm_pcg::kLatPathLutInverseCdf");
 
 // Mirror of the Metal-side GenRootKernelParams (host layout MUST match the
 // MSL struct field-for-field — all 4-byte scalars, natural alignment).
@@ -172,6 +174,7 @@ struct GenRootKernelParams {
   float    lat_mean_rad;
   float    lat_std_rad;
   float    lat_rejection_m;
+  uint32_t lat_lut_n;       // node count for kLatPathLutInverseCdf (330.2); LUT arrays bound separately
   uint32_t az_type;
   float    az_mean_rad;
   float    az_std_rad;
@@ -181,7 +184,7 @@ struct GenRootKernelParams {
   float    roll_std_rad;
   float    roll_pad;
 };
-static_assert(sizeof(GenRootKernelParams) == 88u,
+static_assert(sizeof(GenRootKernelParams) == 92u,
               "GenRootKernelParams size mismatch — update host struct to match Metal-side layout");
 
 size_t ComputeOutCap(size_t n, size_t max_hits) {

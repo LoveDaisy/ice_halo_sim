@@ -142,6 +142,7 @@ struct GenRootKernelParams {
   float lat_mean_rad;
   float lat_std_rad;
   float lat_rejection_m;
+  uint32_t lat_lut_n;  // node count for kLatPathLutInverseCdf (330.2); LUT arrays bound separately
   uint32_t az_type;
   float az_mean_rad;
   float az_std_rad;
@@ -359,8 +360,9 @@ LM_FN uint32_t lat_lut_bin(float theta, LM_DEVICE const float* theta_nodes, uint
 // off; production keeps passing null so the observation is compiled out at
 // the call site.
 LM_FN void sample_lat_lon_roll(LM_THREAD PcgStream& s, LM_CONSTANT_REF GenRootKernelParams& gp,
-                               LM_THREAD float& out_lon, LM_THREAD float& out_lat, LM_THREAD float& out_roll,
-                               LM_THREAD int* out_attempts) {
+                               LM_DEVICE const float* lat_lut_theta, LM_DEVICE const float* lat_lut_cdf,
+                               LM_DEVICE const float* lat_lut_flip, LM_THREAD float& out_lon, LM_THREAD float& out_lat,
+                               LM_THREAD float& out_roll, LM_THREAD int* out_attempts) {
   float phi = 0.0f;
   bool flip = false;
   float lon = 0.0f;
@@ -432,6 +434,17 @@ LM_FN void sample_lat_lon_roll(LM_THREAD PcgStream& s, LM_CONSTANT_REF GenRootKe
   } else if (gp.lat_path == kLatPathGaussLegacy) {
     float raw = pcg_get_dist(s, kDistGaussianLegacy, gp.lat_mean_rad, gp.lat_std_rad);
     normalize_latitude(raw, phi, flip);
+  } else if (gp.lat_path == kLatPathLutInverseCdf) {
+    // Unified area-measure inverse-CDF LUT (330.2). One uniform draw + fixed binary search (no
+    // rejection loop, attempts_total stays 1); flip via the per-bin probability reproduces the
+    // pole-crossing azimuth flip. Same single-source invert_lat_lut / lat_lut_bin as the CPU
+    // sampler (math.cpp). The three LUT arrays are bound as separate device buffers (they cannot
+    // live inside the setBytes-uploaded GenRootKernelParams struct).
+    float xi = pcg_uniform(s);
+    float colatitude = invert_lat_lut(xi, lat_lut_theta, lat_lut_cdf, gp.lat_lut_n);
+    phi = LM_PI_2F - colatitude;  // colatitude-from-zenith (theta_z in [0,pi]) -> latitude in [-pi/2,pi/2]
+    uint32_t bin = lat_lut_bin(colatitude, lat_lut_theta, gp.lat_lut_n);
+    flip = pcg_uniform(s) < lat_lut_flip[bin];
   } else {
     // kLatPathGenericReject (math.cpp:503-517).
     int attempts = 0;

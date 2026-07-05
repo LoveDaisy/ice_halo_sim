@@ -954,7 +954,7 @@ __global__ void transit_multi_ms_kernel(
   float roll = 0.0f;
   // scrum-328.2 Step 1: transit does not (yet) surface attempt-count — the
   // near-pole acceptance-rate observation is anchored to the gen sampler.
-  lm_pcg::sample_lat_lon_roll(stream, gp, lon, lat, roll, nullptr);
+  lm_pcg::sample_lat_lon_roll(stream, gp, nullptr, nullptr, nullptr, lon, lat, roll, nullptr);  // 330.2 S3: LUT buffers pending S3b
 
   float mat9[9];
   lm_pcg::build_crystal_rotation_9(lon, lat, roll, mat9);
@@ -1117,7 +1117,8 @@ __global__ void gen_root_kernel(float* __restrict__ d_root_d,           // 3 × 
   // Pass `&attempts_local` only when the sibling buffer is bound — the branch
   // predicts trivially in production (d_lat_attempts always nullptr), and the
   // per-ray write below is likewise short-circuited.
-  lm_pcg::sample_lat_lon_roll(stream, gp, lon, lat, roll,
+  // 330.2 S3: LUT arrays nullptr until buffers bound (S3b); branch dormant until S5.
+  lm_pcg::sample_lat_lon_roll(stream, gp, nullptr, nullptr, nullptr, lon, lat, roll,
                               d_lat_attempts != nullptr ? &attempts_local : nullptr);
   if (d_lat_attempts != nullptr) {
     d_lat_attempts[tid + attempts_ci_start] = attempts_local;
