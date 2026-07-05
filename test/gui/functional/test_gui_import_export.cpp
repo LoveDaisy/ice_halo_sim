@@ -1401,6 +1401,14 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       ee_multi.max_len = 6;
       cross_check(ee_multi);
 
+      // Wildcard EE matrix: empty entry/exit strings map to LUMICE_EE_WILDCARD_SENTINEL and
+      // must survive struct↔JSON cross-check on both single and multi-value sides.
+      cross_check(gui::EntryExitParams{ "", "" });     // both wildcard -> 1 simple EE
+      cross_check(gui::EntryExitParams{ "", "5" });    // entry wildcard + single exit -> 1 simple EE
+      cross_check(gui::EntryExitParams{ "3", "" });    // single entry + exit wildcard -> 1 simple EE
+      cross_check(gui::EntryExitParams{ "3,5", "" });  // 2 entry values × wildcard exit -> 2 simple + 1 complex
+      cross_check(gui::EntryExitParams{ "", "3,5" });  // wildcard entry × 2 exit values -> 2 simple + 1 complex
+
       // Overflow: a raypath with more than LUMICE_MAX_CONFIG_CLAUSES OR segments exceeds the
       // composition ABI bounds -> FillLumiceConfig must return false (graceful degradation),
       // so app.cpp keeps the prior committed state instead of committing a truncated config.
@@ -1424,6 +1432,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
           too_many_segments += "3-5";
         }
         gui::FilterConfig f;
+        f.name = "OverflowFilter";  // named so overflow.filter_name assertion below is meaningful
         f.param = gui::RaypathParams{ too_many_segments };
         gui::g_state.filters.push_back(f);
         gui::Layer layer;
@@ -1435,11 +1444,17 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         layer.entries.push_back(e);
         gui::g_state.layers.push_back(layer);
         LUMICE_Config over{};
-        IM_CHECK(!gui::FillLumiceConfig(gui::g_state, &over));  // over ABI bounds -> false
+        gui::FilterOverflowInfo overflow;
+        IM_CHECK(!gui::FillLumiceConfig(gui::g_state, &over, &overflow));  // over ABI bounds -> false
         // "no partial writes on overflow" contract (ExpandFilterToStruct doc): the overflowing
         // filter bails before any filter/composition is written for it.
         IM_CHECK_EQ(over.filter_count, 0);
         IM_CHECK_EQ(over.composition_count, 0);
+        // Overflow identity: the first (layer 0, entry 0) reference is captured with the
+        // FilterConfig::name so the caller can locate the offending filter for the user.
+        IM_CHECK_EQ(overflow.layer_index, 0);
+        IM_CHECK_EQ(overflow.entry_index, 0);
+        IM_CHECK_EQ(overflow.filter_name, std::string("OverflowFilter"));
       }
     };
   }
