@@ -797,6 +797,11 @@ kernel void gen_root_kernel(
     // ctrl.x==0 → the branch below skips both the pointer arg and the write.
     device int*             lat_attempts  [[buffer(12)]],
     constant uint2&         attempts_ctrl [[buffer(13)]],
+    // 330.2 S3b: unified area-measure inverse-CDF latitude LUT (read only when
+    // gp.lat_path == kLatPathLutInverseCdf). Always bound (Metal forbids nil).
+    device const float*     lat_lut_theta [[buffer(14)]],
+    device const float*     lat_lut_cdf   [[buffer(15)]],
+    device const float*     lat_lut_flip  [[buffer(16)]],
     uint tid [[thread_position_in_grid]])
 {
   if (tid >= gp.num_rays) {
@@ -854,7 +859,7 @@ kernel void gen_root_kernel(
   thread int attempts_local = 1;
   // 330.2 S3: LUT arrays are nullptr until the buffers are bound (S3b) — safe because the
   // kLatPathLutInverseCdf branch is dormant until SelectLatPath is flipped (S5).
-  sample_lat_lon_roll(stream, gp, nullptr, nullptr, nullptr, lon, lat, roll,
+  sample_lat_lon_roll(stream, gp, lat_lut_theta, lat_lut_cdf, lat_lut_flip, lon, lat, roll,
                       attempts_ctrl.x != 0u ? &attempts_local : nullptr);
   if (attempts_ctrl.x != 0u) {
     lat_attempts[tid + attempts_ctrl.y] = attempts_local;
@@ -939,6 +944,10 @@ kernel void transit_root_kernel(
     // trace kernel reads the same lifetime tag.
     device const uint*   cont_wl_idx_in   [[buffer(12)]],
     device uint*         root_wl_idx_out  [[buffer(13)]],
+    // 330.2 S3b: unified latitude LUT (read only when lat_path==LutInverseCdf).
+    device const float*  lat_lut_theta    [[buffer(14)]],
+    device const float*  lat_lut_cdf      [[buffer(15)]],
+    device const float*  lat_lut_flip     [[buffer(16)]],
     uint tid [[thread_position_in_grid]])
 {
   if (tid >= gp.num_rays || gp.tri_count == 0u) {
@@ -961,7 +970,7 @@ kernel void transit_root_kernel(
   float lon, lat, roll;
   // scrum-328.2 Step 1: transit surface does not carry attempt-count today
   // (near-pole acceptance-rate observation is anchored to the gen kernel).
-  sample_lat_lon_roll(stream, gp, nullptr, nullptr, nullptr, lon, lat, roll, nullptr);  // 330.2 S3: LUT buffers pending S3b
+  sample_lat_lon_roll(stream, gp, lat_lut_theta, lat_lut_cdf, lat_lut_flip, lon, lat, roll, nullptr);  // 330.2 S3b
   float mat9[9];
   build_crystal_rotation_9(lon, lat, roll, mat9);
 
