@@ -25,6 +25,7 @@
 #include <variant>
 #include <vector>
 
+#include "config/component_table.hpp"  // task-331.5 raypath-color foundation
 #include "config/proj_config.hpp"
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
@@ -116,12 +117,16 @@ struct KernelParams {
   // lm_proj::ProjectExitToPixel in the kernel exit tail. Replaced the former
   // loose az0 / proj_type / r_scale / max_abs_dz fields.
   lm_proj::ProjParams proj;
+  // task-331.5 (raypath-color foundation): 0 in production (emit gate skips all
+  // component work), 1 in the CPU-parity test (produce per-summand bits + append
+  // (mask, weight) to the capture ring). Mirrors MSL KernelParams::capture_component.
+  uint32_t capture_component;
 };
 // sizeof(ProjParams) == 76 (6 ints + 4 floats + float[9]); the 15 leading
-// 4-byte KernelParams scalars add 60 → 136 total. All members 4-byte aligned,
-// no padding.
+// 4-byte KernelParams scalars add 60, + proj 76 + capture_component 4 → 140
+// total. All members 4-byte aligned, no padding.
 static_assert(sizeof(lm_proj::ProjParams) == 76u, "ProjParams layout drift — check projection_shared.h");
-static_assert(sizeof(KernelParams) == 136u,
+static_assert(sizeof(KernelParams) == 140u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 
 // Device root-gen latitude path tags. Numeric wire encoding is single-sourced
@@ -635,6 +640,31 @@ struct MetalTraceBackend::Impl {
   id<MTLBuffer> root_wl_idx_buf_    = nil;
   id<MTLBuffer> cont_wl_idx_buf_[2] = { nil, nil };
   uint32_t      wl_pool_size_       = 0u;
+
+  // task-331.5 (raypath-color foundation): per-ray uint64 component mask —
+  // structural sibling of the wl_idx side-cars above.
+  //   * root_component_buf_: max_rays × uint64, single (root buffers not
+  //     ping-pong). Layer 0 memset to 0; layer≥1 written by transit_root_kernel.
+  //   * cont_component_buf_[2]: out_cap × uint64, ping-pong with cont_d/cont_w/
+  //     cont_wl_idx — MUST move in lockstep through the shuffle gather + the
+  //     Recombine handle swap (LANDMINE, mirror CPU RayBuffer::SwapRay).
+  //   * gate_component_bits_buf_: (n_slot × kDeviceFilterMaxOrClauses) uint8,
+  //     summand→component-bit table keyed by gate_slot (mi*max_ci+ci), built in
+  //     EnsureFilterBuffers from BuildComponentTable/ComponentBitsFor.
+  //   * exit_comp_* : per-batch capture ring for emitted rays (mid-exit +
+  //     final). Drained per layer into captured_masks_/captured_ws_ when
+  //     capture_component_ is on (test-only; production leaves capture off).
+  id<MTLBuffer> root_component_buf_    = nil;
+  id<MTLBuffer> cont_component_buf_[2] = { nil, nil };
+  id<MTLBuffer> gate_component_bits_buf_ = nil;
+  id<MTLBuffer> exit_comp_mask_buf_ = nil;
+  id<MTLBuffer> exit_comp_w_buf_    = nil;
+  id<MTLBuffer> exit_comp_cnt_buf_  = nil;
+  size_t        exit_comp_capacity_ = 0;
+  bool          capture_component_  = false;
+  ComponentTable component_table_{};
+  std::vector<uint64_t> captured_masks_;
+  std::vector<float>    captured_ws_;
   // BeginSession captures the spectrum mode + per-batch sentinel so
   // ResolveLayerCrystalForCi can rebuild the WlEntry pool against the active
   // crystal's refractive index each ci dispatch. illuminant_mode_=true uses
@@ -695,6 +725,7 @@ struct MetalTraceBackend::Impl {
   void EnsureRootBuffers(size_t n);
   void EnsureTriBuffers(size_t tri_cnt);
   void EnsureContBuffer(int slot);
+  void EnsureComponentCaptureBuffers(size_t cap);  // task-331.5 (test-only ring)
   void EnsureRecSink(size_t n);
   // EnsureExitBuffers removed in S1 device-fused (exit records eliminated)
   void EnsureFilterBuffers(const SessionSpec& session_spec);  // scrum-267.1
@@ -964,6 +995,12 @@ void MetalTraceBackend::Impl::EnsureRootBuffers(size_t n) {
   root_wl_idx_buf_ = [device newBufferWithLength:n * sizeof(uint32_t)
                                         options:MTLResourceStorageModeShared];
   assert(root_wl_idx_buf_ != nil);
+  // task-331.5: per-ray component mask carried into the trace kernel. Single
+  // (not ping-pong), lock-stepped with root_d. Layer 0 is memset to 0 by
+  // TraceLayer; layer≥1 is overwritten by transit_root_kernel.
+  root_component_buf_ = [device newBufferWithLength:n * sizeof(uint64_t)
+                                           options:MTLResourceStorageModeShared];
+  assert(root_component_buf_ != nil);
 }
 
 void MetalTraceBackend::Impl::EnsureTriBuffers(size_t tri_cnt) {
@@ -1009,6 +1046,34 @@ void MetalTraceBackend::Impl::EnsureContBuffer(int slot) {
   cont_wl_idx_buf_[slot] = [device newBufferWithLength:out_cap * sizeof(uint32_t)
                                               options:MTLResourceStorageModeShared];
   assert(cont_wl_idx_buf_[slot] != nil);
+  // task-331.5: per-ray component mask for continuation rays. Lock-stepped with
+  // cont_d/cont_w/cont_wl_idx so the emit gate write, shuffle gather, and
+  // Recombine handle swap all agree on capacity.
+  cont_component_buf_[slot] = [device newBufferWithLength:out_cap * sizeof(uint64_t)
+                                                 options:MTLResourceStorageModeShared];
+  assert(cont_component_buf_[slot] != nil);
+}
+
+void MetalTraceBackend::Impl::EnsureComponentCaptureBuffers(size_t cap) {
+  // task-331.5: grow-only per-batch capture ring for emitted (mid-exit + final)
+  // rays. Only allocated when capture_component_ is on; production never calls
+  // this (the kernel's capture branch is gated by KernelParams.capture_component).
+  // The atomic counter buffer is allocated once (1 × uint32).
+  if (exit_comp_cnt_buf_ == nil) {
+    exit_comp_cnt_buf_ = [device newBufferWithLength:sizeof(uint32_t)
+                                            options:MTLResourceStorageModeShared];
+    assert(exit_comp_cnt_buf_ != nil);
+  }
+  if (cap <= exit_comp_capacity_ && exit_comp_mask_buf_ != nil) {
+    return;
+  }
+  exit_comp_capacity_ = cap;
+  exit_comp_mask_buf_ = [device newBufferWithLength:cap * sizeof(uint64_t)
+                                           options:MTLResourceStorageModeShared];
+  assert(exit_comp_mask_buf_ != nil);
+  exit_comp_w_buf_ = [device newBufferWithLength:cap * sizeof(float)
+                                        options:MTLResourceStorageModeShared];
+  assert(exit_comp_w_buf_ != nil);
 }
 
 void MetalTraceBackend::Impl::EnsureRecSink(size_t n) {
@@ -1083,7 +1148,13 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
     complex_sub_desc_buf_ = [device newBufferWithLength:1
                                                options:MTLResourceStorageModeShared];
     assert(complex_sub_desc_buf_ != nil);
+    // task-331.5: kernel binds gate_component_bits unconditionally (slot 21);
+    // 1-byte dummy for the no-filter path (never read when capture is off).
+    gate_component_bits_buf_ = [device newBufferWithLength:1
+                                                  options:MTLResourceStorageModeShared];
+    assert(gate_component_bits_buf_ != nil);
   };
+  gate_component_bits_buf_ = nil;
   if (session_spec.scene == nullptr) {
     alloc_filter_dummies();
     return;
@@ -1188,6 +1259,30 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
   if (sub_desc_bytes > 0) {
     std::memcpy([complex_sub_desc_buf_ contents], all_sub_descs.data(), sub_desc_bytes);
   }
+
+  // task-331.5: build the summand→component-bit table, keyed by the SAME
+  // gate_slot = mi * max_ci + ci layout the device filter descs use. Dense
+  // stride = kDeviceFilterMaxOrClauses (a Complex filter has ≤ that many
+  // OR-summands; simple filters use only index 0). Entry = component bit index
+  // in [0,64) or ComponentTable::kNoBit (0xFF) for over-budget/absent summands.
+  component_table_ = BuildComponentTable(*session_spec.scene);
+  const size_t stride = kDeviceFilterMaxOrClauses;
+  std::vector<uint8_t> comp_bits(n_slot * stride, ComponentTable::kNoBit);
+  for (size_t mi = 0; mi < n_layers; ++mi) {
+    const auto& ms = session_spec.scene->ms_[mi];
+    for (size_t ci = 0; ci < ms.setting_.size(); ++ci) {
+      std::vector<uint8_t> bits =
+          ComponentBitsFor(component_table_, static_cast<IdType>(mi), static_cast<IdType>(ci));
+      size_t slot = mi * max_ci + ci;
+      for (size_t k = 0; k < bits.size() && k < stride; ++k) {
+        comp_bits[slot * stride + k] = bits[k];
+      }
+    }
+  }
+  gate_component_bits_buf_ = [device newBufferWithLength:comp_bits.size() * sizeof(uint8_t)
+                                                options:MTLResourceStorageModeShared];
+  assert(gate_component_bits_buf_ != nil);
+  std::memcpy([gate_component_bits_buf_ contents], comp_bits.data(), comp_bits.size());
 }
 
 void MetalTraceBackend::Impl::UploadCrystal(const Crystal& crystal) {
@@ -1671,6 +1766,12 @@ void MetalTraceBackend::Impl::EncodeTransitRoot(
     [enc setBuffer:lat_lut_theta_buf_        offset:0      atIndex:14];
     [enc setBuffer:lat_lut_cdf_buf_          offset:0      atIndex:15];
     [enc setBuffer:lat_lut_flip_buf_         offset:0      atIndex:16];
+    // task-331.5: per-ray component mask carrier through transit (sibling of
+    // wl_idx). Same ci_start slice stride, 8B/ray. Rebased onto scrum-332:
+    // LUT took 14/15/16, so component moved 14/15→17/18 (matches transit_root_kernel).
+    NSUInteger comp_off = static_cast<NSUInteger>(ci_start) * sizeof(uint64_t);
+    [enc setBuffer:cont_component_buf_[in_slot] offset:comp_off atIndex:17];
+    [enc setBuffer:root_component_buf_          offset:0        atIndex:18];
     NSUInteger threads = 64;
     NSUInteger groups  = (static_cast<NSUInteger>(gp.num_rays) + threads - 1) / threads;
     [enc dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
@@ -1700,6 +1801,11 @@ void MetalTraceBackend::Impl::EncodeShuffleCont(
     [enc setBuffer:cont_wl_idx_buf_[out_slot] offset:0 atIndex:5];
     [enc setBytes:&n    length:sizeof(uint32_t) atIndex:6];
     [enc setBytes:&seed length:sizeof(uint32_t) atIndex:7];
+    // task-331.5: gather the per-ray component mask in lockstep (LANDMINE —
+    // omitting it decorrelates the mask from its ray across the layer boundary,
+    // exactly the CPU SwapRay bug reproduced on device).
+    [enc setBuffer:cont_component_buf_[in_slot]  offset:0 atIndex:8];
+    [enc setBuffer:cont_component_buf_[out_slot] offset:0 atIndex:9];
     // 256 to match the CUDA shuffle blockDim (cross-backend symmetry) and the
     // trace kernel's dispatch, capped to the device ceiling. Non-uniform
     // dispatchThreads handles the n % tg remainder; the kernel guards tid >= n.
@@ -1736,6 +1842,8 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   // 315.3: single POD carries all projection routing (proj_type / az0 /
   // r_scale / max_abs_dz / scale / rot / etc.) into the kernel exit tail.
   params.proj     = proj_params_;
+  // task-331.5: gate component-mask production + capture (test-only; 0 in prod).
+  params.capture_component = capture_component_ ? 1u : 0u;
   // S1 device-fused: exit_cap and face_seq_cap are unused (exit buffers gone).
   params.exit_cap     = 0u;
   params.crystal_id   = crystal_id;
@@ -1778,6 +1886,10 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
 
   EnsureRecSink(num_rays);
   EnsureContBuffer(out_slot);
+  // task-331.5: capture ring must be bindable (Metal disallows nil buffers).
+  // Sized to out_cap when capturing; a 1-element dummy otherwise (kernel's
+  // capture branch is gated by KernelParams.capture_component == 0).
+  EnsureComponentCaptureBuffers(capture_component_ ? out_cap : 1u);
   // Multi-ci append semantics: counter_init carries the running offset of
   // already-written continuation rays from previous ci dispatches; the
   // kernel's atomic_fetch_add resumes from there. ci=0 always passes 0
@@ -1862,6 +1974,16 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   // scrum-268.8 (DR-3): cont_wl_idx propagates the photon's lifetime
   // wavelength tag into the continuation ring (slot 29). Slot 30 freed.
   [enc setBuffer:cont_wl_idx_buf_[out_slot] offset:0 atIndex:29];
+  // task-331.5 (raypath-color foundation): per-ray component-mask carry (19/20),
+  // summand→bit table (21), and the emit capture ring (22/23/28). All bound
+  // unconditionally (Metal disallows nil); the kernel's capture branch is gated
+  // by KernelParams.capture_component so production dispatches skip them.
+  [enc setBuffer:root_component_buf_       offset:0 atIndex:19];
+  [enc setBuffer:cont_component_buf_[out_slot] offset:0 atIndex:20];
+  [enc setBuffer:gate_component_bits_buf_  offset:0 atIndex:21];
+  [enc setBuffer:exit_comp_mask_buf_       offset:0 atIndex:22];
+  [enc setBuffer:exit_comp_w_buf_          offset:0 atIndex:23];
+  [enc setBuffer:exit_comp_cnt_buf_        offset:0 atIndex:28];
 
   NSUInteger tg = std::min<NSUInteger>(256, pso.maxTotalThreadsPerThreadgroup);
   [enc dispatchThreads:MTLSizeMake(num_rays, 1, 1)
@@ -2154,6 +2276,11 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   // ensures the descriptors are available to the parity harness and that
   // sizing is exercised against real session configs.
   impl_->EnsureFilterBuffers(spec);
+
+  // task-331.5: reset the per-session component-mask capture accumulators
+  // (component_table_ is rebuilt inside EnsureFilterBuffers above).
+  impl_->captured_masks_.clear();
+  impl_->captured_ws_.clear();
 }
 
 LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
@@ -2248,6 +2375,19 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     // at zero for the layer.
     impl_->last_stats = LayerStats{};
     impl_->cont_counts[out_slot] = 0;
+
+    // task-331.5: per-layer component-mask setup (test-only capture path).
+    //   - Layer 0's root rays start with an all-zero carried mask; memset here
+    //     (transit_root_kernel overwrites root_component for layer≥1).
+    //   - Reset the capture-ring counter so each layer's emits append from 0;
+    //     the per-layer drain after the ci loop reads exactly this layer's count.
+    if (impl_->capture_component_) {
+      impl_->EnsureComponentCaptureBuffers(impl_->out_cap);
+      if (first_ms && impl_->root_component_buf_ != nil) {
+        std::memset([impl_->root_component_buf_ contents], 0, total_ray_num * sizeof(uint64_t));
+      }
+      *static_cast<uint32_t*>([impl_->exit_comp_cnt_buf_ contents]) = 0u;
+    }
 
     // code-review round 1 Major#2: running per-ci offset for the gen-attempt-
     // count sibling buffer (see GenerateFirstLayerRootsForCi / EncodeGenRoot).
@@ -2410,6 +2550,19 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     // (defensive against a future code path that skips the in-loop drain).
     impl_->WaitAndReadbackLayer();
 
+    // task-331.5: drain this layer's component-mask capture ring into the
+    // session accumulators (test-only). All trace CBs are already waited above,
+    // so the counter + buffers are coherent. Clamp to capacity (the kernel's
+    // `cslot < out_cap` guard drops overflow; assert-free like the cont ring).
+    if (impl_->capture_component_) {
+      uint32_t n_cap = *static_cast<uint32_t*>([impl_->exit_comp_cnt_buf_ contents]);
+      size_t n = std::min<size_t>(n_cap, impl_->exit_comp_capacity_);
+      const uint64_t* mptr = static_cast<const uint64_t*>([impl_->exit_comp_mask_buf_ contents]);
+      const float*    wptr = static_cast<const float*>([impl_->exit_comp_w_buf_ contents]);
+      impl_->captured_masks_.insert(impl_->captured_masks_.end(), mptr, mptr + n);
+      impl_->captured_ws_.insert(impl_->captured_ws_.end(), wptr, wptr + n);
+    }
+
     // S1 device-fused: exit_slot_buf is nil — exit records no longer
     // materialised; no overflow can occur. Break immediately.
     break;
@@ -2472,6 +2625,13 @@ RootRaySource MetalTraceBackend::Recombine(LayerHandlePtr handle, const Recombin
     std::swap(impl_->cont_d[written_slot],          impl_->cont_d[other_slot]);
     std::swap(impl_->cont_w[written_slot],          impl_->cont_w[other_slot]);
     std::swap(impl_->cont_wl_idx_buf_[written_slot], impl_->cont_wl_idx_buf_[other_slot]);
+    // task-331.5 (LANDMINE): the component mask is a parallel per-ray array — it
+    // MUST swap with cont_d/cont_w/cont_wl_idx here, mirroring CPU
+    // RayBuffer::SwapRay. Omitting it silently decorrelates the OR-accumulated
+    // mask from its ray across the layer boundary (breaks the joint distribution
+    // while preserving per-component marginals — invisible to a corr/marginal
+    // check, caught only by the per-mask-value parity assertion).
+    std::swap(impl_->cont_component_buf_[written_slot], impl_->cont_component_buf_[other_slot]);
     std::swap(impl_->cont_capacity[written_slot],   impl_->cont_capacity[other_slot]);
   }
 
@@ -2492,6 +2652,18 @@ void MetalTraceBackend::ReadbackImage(XyzImageData& out) {
          "XyzImageData dimensions must match BeginSession resolution");
   size_t pix = static_cast<size_t>(impl_->width) * static_cast<size_t>(impl_->height);
   std::memcpy(out.data, [impl_->xyz_image contents], pix * 3 * sizeof(float));
+}
+
+void MetalTraceBackend::SetCaptureComponent(bool enable) {
+  // Must be set before BeginSession — the capture-ring sizing + per-layer
+  // memset/reset in TraceLayer read this flag.
+  impl_->capture_component_ = enable;
+}
+
+void MetalTraceBackend::ReadbackComponentCapture(std::vector<uint64_t>& masks,
+                                                 std::vector<float>& weights) const {
+  masks = impl_->captured_masks_;
+  weights = impl_->captured_ws_;
 }
 
 // S1 device-fused: ReadbackExitRays returns empty — the kernel no longer
