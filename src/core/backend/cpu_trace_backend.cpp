@@ -175,6 +175,11 @@ void TraceCrystalBatch(RandomNumberGenerator& rng, const CrystalTraceSpec& cryst
           rec.weight = r.w_;
           rec.crystal_id = static_cast<uint16_t>(crystal_spec.crystal_id);
           rec.ms_layer_idx = batch.ms_layer_idx;
+          // task-331.1: pipe the per-ray component mask out of workspace[1]
+          // into the exit record. Phase-1 always reads 0 because T2/T3 haven't
+          // wired the producer yet; this line is intentionally still added so
+          // T2/T3 don't have to touch cpu_trace_backend.cpp.
+          rec.component_mask = workspace[1].ComponentAt(j);
           const RaypathRecorder& rp = workspace[1].RecorderAt(j);
           const uint8_t* seq = workspace[1].RecorderDataPtr(j);
           uint8_t seq_len = static_cast<uint8_t>(std::min<size_t>(rp.size_, ExitFaceSeq::kCap));

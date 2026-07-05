@@ -16,6 +16,7 @@
 #include "core/math.hpp"
 #include "core/raypath.hpp"
 #include "core/simulator.hpp"
+#include "core/trace_ops.hpp"
 #include "util/queue.hpp"
 
 namespace lumice {
@@ -501,6 +502,153 @@ TEST(CollectDataFilterDispatch, FilterPassNoProbEmitsOutgoing) {
   EXPECT_TRUE(buffer_data[1].rays_[0].IsOutgoing());
   EXPECT_EQ(init_data[1].size_, 0u);
 }
+
+// ============================================================================
+// ComponentMaskPropagation (task-331.1): T1 transport-only coverage for the
+// per-ray component mask added to RayBuffer. All assertions here are about
+// *transport* (reset / fan-out / pass-through), not production — the mask
+// value is always either 0 or a hand-injected test marker; T2 will start
+// setting real bits and the CollectData assertions below will need updating
+// (see the inline notes at each one).
+// ============================================================================
+
+TEST(ComponentMaskPropagation, InitRayFirstMsZeroesComponentSlots) {
+  Crystal crystal = Crystal::CreatePrism(1.0f);
+  RandomNumberGenerator rng(42);
+  SunParam sun{ 90.0f, 0.0f, 0.5f };
+  WlParam wl{ 550.0f, 1.0f };
+  AxisDistribution axis;
+
+  RayBuffer buffer_data[2];
+  buffer_data[0].Reset(8);
+  buffer_data[1].Reset(8);
+  RayBuffer all_data;
+  all_data.Reset(16);
+
+  // Pre-poison every slot so the "zeroed by InitRayFirstMs" assertion below is
+  // load-bearing (not vacuously true because of a fresh-allocation zero-init).
+  for (size_t i = 0; i < 8; i++) {
+    buffer_data[0].SetComponent(i, 0xFFFFFFFFFFFFFFFFull);
+  }
+
+  constexpr size_t kRayNum = 4;
+  InitRayFirstMs(rng, sun, wl, kRayNum, crystal, /*curr_crystal_id=*/0, axis, buffer_data, all_data);
+
+  ASSERT_EQ(buffer_data[0].size_, kRayNum);
+  for (size_t i = 0; i < kRayNum; i++) {
+    EXPECT_EQ(buffer_data[0].ComponentAt(i), 0u) << "slot " << i << " not zeroed by InitRayFirstMs";
+  }
+}
+
+TEST(ComponentMaskPropagation, TraceRayBasicInfoFanOutInheritsMask) {
+  Crystal crystal = Crystal::CreatePrism(1.0f);
+  float refractive_index = crystal.GetRefractiveIndex(550.0f);
+  RandomNumberGenerator rng(7);
+  SunParam sun{ 90.0f, 0.0f, 0.5f };
+  WlParam wl{ 550.0f, 1.0f };
+  AxisDistribution axis;
+
+  RayBuffer buffer_data[2];
+  buffer_data[0].Reset(4);
+  buffer_data[1].Reset(4);
+  RayBuffer all_data;
+  all_data.Reset(16);
+
+  constexpr size_t kRayNum = 1;
+  InitRayFirstMs(rng, sun, wl, kRayNum, crystal, /*curr_crystal_id=*/0, axis, buffer_data, all_data);
+  ASSERT_EQ(buffer_data[0].size_, kRayNum);
+
+  // Inject a nonzero test value AFTER InitRayFirstMs (which resets to 0) —
+  // this is the marker the fan-out below must propagate.
+  constexpr uint64_t kMarker = 0x123456789abcdef0ull;
+  buffer_data[0].SetComponent(0, kMarker);
+
+  TraceRayBasicInfo(crystal, refractive_index, kRayNum, buffer_data);
+
+  ASSERT_EQ(buffer_data[1].size_, kRayNum * 2);
+  EXPECT_EQ(buffer_data[1].ComponentAt(0), kMarker) << "reflect child did not inherit parent mask";
+  EXPECT_EQ(buffer_data[1].ComponentAt(1), kMarker) << "refract child did not inherit parent mask";
+}
+
+namespace {
+
+// Build a RaySeg shaped like MakeOutgoingCandidate() but with to_face_ set to
+// a real (non-sentinel) face id, so IsNormal() is true (to_face_ !=
+// kInvalidId && w_ >= 0) instead of IsOutgoing()/IsContinue().
+RaySeg MakeNormalCandidate() {
+  RaySeg r{};
+  r.d_[0] = 1.0f;
+  r.d_[1] = 0.0f;
+  r.d_[2] = 0.0f;
+  r.p_[0] = 0.0f;
+  r.p_[1] = 0.0f;
+  r.p_[2] = 0.0f;
+  r.w_ = 0.5f;  // positive (not TIR)
+  r.from_face_ = kInvalidId;
+  r.to_face_ = 3;  // non-sentinel face id -> IsNormal() candidate
+  r.crystal_rot_ = Rotation{};
+  return r;
+}
+
+}  // namespace
+
+// T1 pass-through contract: CollectData copies buffer_data[1]'s mask verbatim
+// into buffer_data[0] for IsNormal() rays (no OR-combine yet). T2 will change
+// this to "new = old OR produced-bit" — when that lands, this assertion is
+// EXPECTED to need updating (from plain equality to the OR relationship); a
+// mismatch here after T2 lands is not, by itself, a regression.
+TEST(ComponentMaskPropagation, CollectDataNormalBranchPassesThroughUnchanged) {
+  RandomNumberGenerator rng(42);
+  AlwaysAcceptSpec filter;
+  MsInfo ms_info;
+  ms_info.prob_ = 0.0f;
+
+  RayBuffer buffer_data[2];
+  RayBuffer init_data[2];
+  buffer_data[0].Reset(8);
+  buffer_data[1].Reset(8);
+  init_data[0].Reset(8);
+  init_data[1].Reset(8);
+
+  buffer_data[1].EmplaceBack(MakeNormalCandidate(), RaypathRecorder{});
+  constexpr uint64_t kMarker = 0x00ff00ff00ff00ffull;
+  buffer_data[1].SetComponent(0, kMarker);
+
+  CollectData(rng, ms_info, &filter, buffer_data, init_data);
+
+  ASSERT_EQ(buffer_data[0].size_, 1u);
+  ASSERT_TRUE(buffer_data[0].rays_[0].IsNormal());
+  EXPECT_EQ(buffer_data[0].ComponentAt(0), kMarker)
+      << "T1 pass-through: destination mask must equal source verbatim (no OR yet)";
+}
+
+// Mirror of the IsNormal() case above for the IsContinue() branch — same T1
+// pass-through contract, same "will become OR-combine under T2" caveat.
+TEST(ComponentMaskPropagation, CollectDataContinueBranchPassesThroughUnchanged) {
+  RandomNumberGenerator rng(42);
+  AlwaysAcceptSpec filter;
+  MsInfo ms_info;
+  ms_info.prob_ = 1.0f;  // force filter-pass + prob-pass -> IsContinue()
+
+  RayBuffer buffer_data[2];
+  RayBuffer init_data[2];
+  buffer_data[0].Reset(8);
+  buffer_data[1].Reset(8);
+  init_data[0].Reset(8);
+  init_data[1].Reset(8);
+
+  buffer_data[1].EmplaceBack(MakeOutgoingCandidate(), RaypathRecorder{});
+  constexpr uint64_t kMarker = 0xaaaabbbbccccddddull;
+  buffer_data[1].SetComponent(0, kMarker);
+
+  CollectData(rng, ms_info, &filter, buffer_data, init_data);
+
+  ASSERT_EQ(init_data[1].size_, 1u);
+  ASSERT_TRUE(buffer_data[1].rays_[0].IsContinue());
+  EXPECT_EQ(init_data[1].ComponentAt(0), kMarker)
+      << "T1 pass-through: destination mask must equal source verbatim (no OR yet)";
+}
+
 
 // ---- AC-5: derived-helper unit tests for RaySeg segment-kind predicates ----
 

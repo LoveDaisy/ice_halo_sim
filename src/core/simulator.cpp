@@ -15,6 +15,7 @@
 #include <thread>
 #include <variant>
 
+#include "config/component_table.hpp"
 #include "config/crystal_config.hpp"
 #include "config/light_config.hpp"
 #include "config/proj_config.hpp"
@@ -206,6 +207,16 @@ void InitRayFirstMs(RandomNumberGenerator& rng, const SunParam& light_param, con
 
   // 1.3 init crystal_id, root_ray_idx, rp, state
   InitRay_other_info(curr_crystal, curr_crystal_id, all_data.size_, buffer_data);
+
+  // 1.4 First-MS reset of the per-ray component mask (task-331.1). The mask is
+  // the only cross-MS-layer per-ray state added since scrum-237 removed
+  // is_prior_filter_failed_/anchor lane. Reset MUST happen here and NOT inside
+  // InitRay_other_info: the latter is shared with InitRayOtherMs, and zeroing
+  // the mask on subsequent layers would break the "first-layer reset, then OR
+  // forward" semantics that T2/T3 rely on.
+  for (size_t i = 0; i < buffer_data[0].size_; i++) {
+    buffer_data[0].SetComponent(i, 0);
+  }
 
   all_data.EmplaceBack(buffer_data[0]);
 }
@@ -416,6 +427,12 @@ void TraceRayBasicInfo(const Crystal& curr_crystal, float refractive_index, size
     // copy in-place (recorders_ memcpy ×2) and only takes the arena dup branch
     // for overflow rays — cold under bench(max_hits=8).
     buffer_data[1].RecorderFanOut(buffer_data[0], i, i * 2 + 0, i * 2 + 1);
+    // task-331.1: mirror the recorder fan-out for the per-ray component mask.
+    // Both child segments inherit the parent's mask verbatim (T2/T3 OR-produce
+    // bits later; this fan-out keeps the mask propagating through the hit
+    // loop). Currently a no-op semantically (all masks are 0 in T1), but wiring
+    // it now means T2 doesn't have to touch simulator.cpp fan-out code.
+    buffer_data[1].ComponentFanOut(buffer_data[0], i, i * 2 + 0, i * 2 + 1);
     // Each child segment's from_face_ = parent's to_face_ (the face just hit).
     buffer_data[1][i * 2 + 0].from_face_ = buffer_data[0][i].to_face_;
     buffer_data[1][i * 2 + 1].from_face_ = buffer_data[0][i].to_face_;
@@ -479,15 +496,33 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
     }
     // 2. Normal rays (to_face_ != kInvalidId && w_ >= 0) stay in crystal-local coordinates.
 
+    // task-331.1: capture the source mask once. Single-ray EmplaceBack
+    // deliberately does not touch components_ (its signature stays untouched
+    // to avoid ripple-changing every caller); the mask hand-off is explicit
+    // here so T2 has an obvious insertion point for the "OR in this layer's
+    // hit bits" step and so pool-reused destination slots don't leak stale
+    // values from earlier iterations.
+    uint64_t src_component = buffer_data[1].ComponentAt(idx);
     if (r.IsNormal()) {
       // rec comes from buffer_data[1]; pass it as arena_src so overflow slots
       // get duped into buffer_data[0]'s own arena (fix for max_hits>kInlineCap
       // null-deref: the 2-arg overload would copy overflow_idx_ pointing at the
       // wrong arena and crash the next RecorderFanOut).
+      size_t dst_idx = buffer_data[0].size_;  // read before EmplaceBack mutates size_.
       buffer_data[0].EmplaceBack(r, rec, buffer_data[1]);
+      // EmplaceBack loses one slot when size_+1==capacity_ — replay that guard
+      // so we don't SetComponent past size_. size_ moved iff the ray was
+      // actually appended.
+      if (buffer_data[0].size_ > dst_idx) {
+        buffer_data[0].SetComponent(dst_idx, src_component);
+      }
     }
     if (r.IsContinue()) {
+      size_t dst_idx = init_data[1].size_;
       init_data[1].EmplaceBack(r, rec, buffer_data[1]);
+      if (init_data[1].size_ > dst_idx) {
+        init_data[1].SetComponent(dst_idx, src_component);
+      }
     }
   }
 }
@@ -833,9 +868,28 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   float wl = wl_param.wl_;
   size_t original_ray_num = ray_num;  // ray_num is overwritten in the ms loop; keep original for normalization.
 
+  // task-331.1: prove the component table can be built from the scene config
+  // at the simulator entry. Phase-1 does not consume it downstream — T2 will
+  // wire runtime lookups in CollectData when it starts producing bits.
+  //
+  // NOTE (plan-review): calling BuildComponentTable per-wavelength is a
+  // TEMPORARY validation shape. T2 should hoist this to a per-simulation-run
+  // scope (config-load-time or Run() top) before adding real consumers, so
+  // multi-wavelength scenes don't rebuild the same static table dozens of
+  // times. Not hoisting here yet because T1 lacks a natural per-run seam that
+  // both the legacy and backend paths already share, and we don't want to
+  // pre-invent one before T2 tells us what shape it actually needs.
+  ComponentTable component_table = BuildComponentTable(config);
+  ILOG_DEBUG(logger_, "ComponentTable built: {} entries (legacy path)", component_table.entries_.size());
+  (void)component_table;  // silence unused-variable in Release NDEBUG builds.
+
   RayBuffer all_data = AllocateAllData(config, ray_num);
   std::vector<float> outgoing_d;
   std::vector<float> outgoing_w;
+  // task-331.1: per-outgoing-ray component mask parallel to outgoing_d_/w_.
+  // Phase-1 emits 0s (no producer wired), but the plumbing must exist so T2/T3
+  // don't need to touch this legacy path.
+  std::vector<uint64_t> outgoing_component;
   auto& init_data = workspace.init_data;
   auto& buffer_data = workspace.buffer_data;
   init_data[0].size_ = 0;
@@ -958,6 +1012,8 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
               outgoing_d.push_back(r.d_[1]);
               outgoing_d.push_back(r.d_[2]);
               outgoing_w.push_back(r.w_);
+              // task-331.1: mask reads 0 until T2 wires the producer.
+              outgoing_component.push_back(buffer_data[1].ComponentAt(j));
             }
           }
         }  // hit loop
@@ -989,6 +1045,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   sim_data.rays_ = std::move(all_data);
   sim_data.outgoing_d_ = std::move(outgoing_d);
   sim_data.outgoing_w_ = std::move(outgoing_w);
+  sim_data.outgoing_component_ = std::move(outgoing_component);  // task-331.1
   sim_data.root_ray_count_ = original_ray_num;
   sim_data.crystal_count_ = sim_data.crystals_.size();
   data_queue_->Emplace(std::move(sim_data));
@@ -1081,6 +1138,12 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   if (ray_num == 0 || scene.ms_.empty()) {
     return;
   }
+
+  // task-331.1: same buildability validation as the legacy path — see the note
+  // above SimulateOneWavelength.
+  ComponentTable component_table = BuildComponentTable(scene);
+  ILOG_DEBUG(logger_, "ComponentTable built: {} entries (backend path)", component_table.entries_.size());
+  (void)component_table;
 
   // Task 260.6: hand the backend `effective_seed_` (non-zero) so device-gen
   // activates even when the user-facing `seed_` is 0 (default random mode).
@@ -1228,6 +1291,13 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   if (fill_per_ray_wl) {
     exit_wl.resize(exit_count);
   }
+  // task-331.1: per-outgoing-ray component mask parallel to exit_d_/exit_w_.
+  // Filled unconditionally (the field on ExitRayRecord always exists, unlike
+  // the pool-gated wl seam above). Metal/CUDA leave the field at 0 today
+  // because their kernels don't produce per-ray masks yet (see plan §0.2 —
+  // T5/T6 deliver via device-side per-component atomicAdd rather than mirroring
+  // the ExitRayRecord carrier). CpuTraceBackend populates the field for real.
+  std::vector<uint64_t> exit_component(exit_count);
   for (size_t i = 0; i < exit_count; i++) {
     exit_d[i * 3 + 0] = exit_records[i].dir[0];
     exit_d[i * 3 + 1] = exit_records[i].dir[1];
@@ -1237,6 +1307,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
       float idx = static_cast<float>(exit_records[i].wl_idx) + 0.5f;
       exit_wl[i] = 380.0f + idx * 400.0f / static_cast<float>(pool_size);
     }
+    exit_component[i] = exit_records[i].component_mask;
   }
 
   SimData sim_data;
@@ -1249,6 +1320,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   sim_data.outgoing_d_ = std::move(exit_d);
   sim_data.outgoing_w_ = std::move(exit_w);
   sim_data.outgoing_wl_ = std::move(exit_wl);
+  sim_data.outgoing_component_ = std::move(exit_component);  // task-331.1
   sim_data.exit_records_ = std::move(exit_records);
   data_queue_->Emplace(std::move(sim_data));
 }

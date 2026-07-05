@@ -50,8 +50,10 @@ static_assert(sizeof(void*) == 8, "SimData layout assumes 64-bit pointers");
 // (float, 4B) + 4B padding = 32B, bumping 216 → 248. task-exit-seam-crystal-count
 // adds crystal_count_ (size_t, 8B) for exit-seam stats, bumping 248 → 256.
 // scrum-312 adds sim_scene_credit_ (size_t, 8B) for third-clock drain counter
-// balance, bumping 256 → 264.
-static_assert(sizeof(SimData) == 264,
+// balance, bumping 256 → 264. task-331.1 adds outgoing_component_
+// (vector<uint64_t>, 24B) + RayBuffer::components_ (unique_ptr, 8B),
+// bumping 264 → 296.
+static_assert(sizeof(SimData) == 296,
               "SimData layout changed — update test_sim_data.cpp DeepCopy/Move assertions "
               "and sim_data.cpp's static_assert.");
 #endif
@@ -83,6 +85,9 @@ SimData MakePopulatedSimData() {
   s.outgoing_w_ = { 0.5f, 0.7f };
   // scrum-268.8 (DR-3): outgoing_wl_ deep-copy / move coverage.
   s.outgoing_wl_ = { 550.0f, 600.0f };
+  // task-331.1: outgoing_component_ deep-copy / move coverage (mirror of
+  // outgoing_wl_ — the two share the same move-assign miss failure mode).
+  s.outgoing_component_ = { 0x0102030405060708ull, 0x1122334455667788ull };
   // scrum-258.2: exit_records_ — 2 distinct rich records to exercise the
   // deep-copy / move paths added to SimData's special members.
   s.exit_records_.resize(2);
@@ -784,6 +789,146 @@ TEST(RayBufferTest, EmplaceBackOverflowDeepCopy) {
       << "overflow data must be faithfully copied";
 }
 
+// =============== RayBuffer Component Mask Tests (task-331.1) ===============
+//
+// Coverage mirrors RayBufferTest/RayBufferRecorderTest above: components_ is a
+// new parallel array (raypath-color foundation, T1) carrying a uint64 bitmask
+// per ray across MS layers. Phase-1 leaves every runtime-produced value at 0;
+// these tests only lock down the *transport* contract (storage / copy / move /
+// fan-out / Reset), not any bit-production semantics — that is T2's job.
+
+TEST(RayBufferComponentTest, DefaultConstructionAllZero) {
+  RayBuffer buf(5);
+  for (size_t i = 0; i < 5; i++) {
+    EXPECT_EQ(buf.ComponentAt(i), 0u) << "slot " << i << " not zero on construction";
+  }
+}
+
+TEST(RayBufferComponentTest, SetComponentRoundTrip) {
+  RayBuffer buf(4);
+  constexpr uint64_t kMarker = 0x0102030405060708ull;
+  buf.SetComponent(2, kMarker);
+  EXPECT_EQ(buf.ComponentAt(2), kMarker);
+  // Untouched slots remain 0 — SetComponent must not have side effects on
+  // neighboring slots.
+  EXPECT_EQ(buf.ComponentAt(0), 0u);
+  EXPECT_EQ(buf.ComponentAt(1), 0u);
+  EXPECT_EQ(buf.ComponentAt(3), 0u);
+}
+
+TEST(RayBufferComponentTest, ComponentFanOutCopiesToBothChildSlots) {
+  RayBuffer src(4);
+  RayBuffer dst(8);
+  constexpr uint64_t kMarker = 0xAABBCCDD11223344ull;
+  src.SetComponent(1, kMarker);
+
+  dst.ComponentFanOut(src, /*src_idx=*/1, /*dst0=*/2, /*dst1=*/3);
+
+  EXPECT_EQ(dst.ComponentAt(2), kMarker) << "dst0 must inherit src's mask";
+  EXPECT_EQ(dst.ComponentAt(3), kMarker) << "dst1 must inherit src's mask";
+  // Fan-out must not disturb unrelated slots.
+  EXPECT_EQ(dst.ComponentAt(0), 0u);
+  EXPECT_EQ(dst.ComponentAt(1), 0u);
+}
+
+namespace {
+
+// Helper: build a RayBuffer with 4 populated rays (rays_ + recorders_, mirrors
+// MakePopulatedRayBuffer above) AND distinct nonzero component values per
+// slot, for copy/move independence testing.
+RayBuffer MakePopulatedComponentBuffer() {
+  RayBuffer buf(6);  // capacity 6, size 4 — mirrors MakePopulatedRayBuffer's shape
+  for (int i = 0; i < 4; i++) {
+    RaypathRecorder rec;
+    rec << static_cast<lumice::IdType>(i + 1);
+    buf.EmplaceBack(MakeRay(i), rec);
+  }
+  for (size_t i = 0; i < 4; i++) {
+    buf.SetComponent(i, 0x1000000000000000ull + i);
+  }
+  return buf;
+}
+
+}  // namespace
+
+TEST(RayBufferComponentTest, CopyConstructDeepCopy) {
+  auto src = MakePopulatedComponentBuffer();
+  RayBuffer dst(src);
+
+  for (size_t i = 0; i < 4; i++) {
+    EXPECT_EQ(dst.ComponentAt(i), src.ComponentAt(i)) << "slot " << i;
+  }
+
+  // Deep-copy independence: mutating dst must not affect src.
+  dst.SetComponent(0, 0xFFFFFFFFFFFFFFFFull);
+  EXPECT_EQ(src.ComponentAt(0), 0x1000000000000000ull) << "component mask not deep-copied";
+}
+
+TEST(RayBufferComponentTest, CopyAssignDeepCopy) {
+  auto src = MakePopulatedComponentBuffer();
+  RayBuffer dst(3);  // Different initial capacity — exercises the realloc path.
+  dst = src;
+
+  for (size_t i = 0; i < 4; i++) {
+    EXPECT_EQ(dst.ComponentAt(i), src.ComponentAt(i)) << "slot " << i;
+  }
+
+  dst.SetComponent(1, 0xFFFFFFFFFFFFFFFFull);
+  EXPECT_EQ(src.ComponentAt(1), 0x1000000000000001ull) << "component mask not deep-assigned";
+}
+
+TEST(RayBufferComponentTest, MoveConstructTransfersOwnership) {
+  auto src = MakePopulatedComponentBuffer();
+  const uint64_t* src_components_ptr = src.components_.get();
+
+  RayBuffer dst(std::move(src));
+
+  EXPECT_EQ(dst.components_.get(), src_components_ptr) << "ownership transfer expected (no copy)";
+  EXPECT_EQ(dst.ComponentAt(2), 0x1000000000000002ull);
+
+  // Moved-from source: components_ ownership transferred out (nullptr).
+  EXPECT_EQ(src.components_, nullptr);
+}
+
+TEST(RayBufferComponentTest, MoveAssignTransfersOwnership) {
+  auto src = MakePopulatedComponentBuffer();
+  const uint64_t* src_components_ptr = src.components_.get();
+  RayBuffer dst(3);  // Different initial capacity.
+  dst = std::move(src);
+
+  EXPECT_EQ(dst.components_.get(), src_components_ptr);
+  EXPECT_EQ(dst.ComponentAt(3), 0x1000000000000003ull);
+  EXPECT_EQ(src.components_, nullptr);
+}
+
+TEST(RayBufferComponentTest, ResetGrowNewCapacityUsableNotGuaranteedZero) {
+  RayBuffer buf(3);
+  buf.SetComponent(0, 0x1111111111111111ull);
+  buf.SetComponent(1, 0x2222222222222222ull);
+
+  // Same-capacity Reset(): components_ is NOT reallocated, so old values
+  // survive untouched. This mirrors the recorders_/arena contract already
+  // pinned by RayBufferRecorderTest.ResetRewindsArena above — Reset() only
+  // rewinds size_ (and the arena bump cursor); it makes no promise about
+  // zeroing per-ray payload arrays. The mask reset for MS-layer entry is
+  // InitRayFirstMs's explicit job (simulator.cpp step 1.4), not Reset()'s.
+  buf.Reset(3);
+  EXPECT_EQ(buf.ComponentAt(0), 0x1111111111111111ull)
+      << "Reset(same capacity) does not guarantee zeroing — this is expected, not a bug";
+  EXPECT_EQ(buf.ComponentAt(1), 0x2222222222222222ull);
+
+  // Growing capacity reallocates components_ from scratch (make_unique
+  // value-initialises to all-zero), but that is an incidental consequence of
+  // reallocation, not a documented zeroing guarantee of Reset() itself. What
+  // this assertion actually locks down: the newly-grown capacity is usable
+  // (writable/readable without crashing).
+  buf.Reset(10);
+  ASSERT_EQ(buf.capacity_, 10u);
+  buf.SetComponent(9, 0x3333333333333333ull);
+  EXPECT_EQ(buf.ComponentAt(9), 0x3333333333333333ull) << "grown capacity slot must be usable";
+}
+
+
 // =============== SimData Tests ===============
 
 TEST(SimDataTest, CopyConstructDeepCopy) {
@@ -806,7 +951,8 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
   // Vector field equality.
   EXPECT_EQ(copy.outgoing_d_, original.outgoing_d_);
   EXPECT_EQ(copy.outgoing_w_, original.outgoing_w_);
-  EXPECT_EQ(copy.outgoing_wl_, original.outgoing_wl_);  // scrum-268.8 (DR-3)
+  EXPECT_EQ(copy.outgoing_wl_, original.outgoing_wl_);                // scrum-268.8 (DR-3)
+  EXPECT_EQ(copy.outgoing_component_, original.outgoing_component_);  // task-331.1
   EXPECT_EQ(copy.crystals_.size(), original.crystals_.size());
   ASSERT_EQ(copy.exit_records_.size(), original.exit_records_.size());
   EXPECT_EQ(copy.exit_records_[0].crystal_id, 7u);
@@ -830,6 +976,9 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
 
   copy.outgoing_wl_.clear();
   EXPECT_EQ(original.outgoing_wl_.size(), 2u) << "outgoing_wl_ not deep-copied";
+
+  copy.outgoing_component_.clear();
+  EXPECT_EQ(original.outgoing_component_.size(), 2u) << "outgoing_component_ not deep-copied";
 
   copy.exit_records_.clear();
   EXPECT_EQ(original.exit_records_.size(), 2u) << "exit_records_ not deep-copied";
@@ -855,7 +1004,8 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   }
   EXPECT_EQ(target.outgoing_d_, original.outgoing_d_);
   EXPECT_EQ(target.outgoing_w_, original.outgoing_w_);
-  EXPECT_EQ(target.outgoing_wl_, original.outgoing_wl_);  // scrum-268.8 (DR-3)
+  EXPECT_EQ(target.outgoing_wl_, original.outgoing_wl_);                // scrum-268.8 (DR-3)
+  EXPECT_EQ(target.outgoing_component_, original.outgoing_component_);  // task-331.1
   EXPECT_EQ(target.crystals_.size(), 1u);
   ASSERT_EQ(target.exit_records_.size(), 2u);
   EXPECT_EQ(target.exit_records_[0].crystal_id, 7u);
@@ -912,6 +1062,7 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_EQ(moved.root_ray_count_, 7u);
   EXPECT_EQ(moved.outgoing_d_.size(), 6u);
   EXPECT_EQ(moved.outgoing_w_.size(), 2u);
+  EXPECT_EQ(moved.outgoing_component_.size(), 2u);  // task-331.1
   EXPECT_EQ(moved.exit_records_.size(), 2u);
   EXPECT_EQ(moved.crystals_.size(), 1u);
   EXPECT_EQ(moved.xyz_pixel_data_.size(), 3u);  // S1 device-fused
@@ -932,6 +1083,7 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_TRUE(original.crystals_.empty());
   EXPECT_TRUE(original.outgoing_d_.empty());
   EXPECT_TRUE(original.outgoing_w_.empty());
+  EXPECT_TRUE(original.outgoing_component_.empty());  // task-331.1
   EXPECT_TRUE(original.exit_records_.empty());
 
   // (c) POD scalar fields are NOT reset on move — this is the current
@@ -956,6 +1108,12 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   EXPECT_EQ(dst.crystals_.size(), 1u);
   EXPECT_EQ(dst.crystal_count_, 4u) << "crystal_count_ not move-assigned";         // task-exit-seam-crystal-count
   EXPECT_EQ(dst.sim_scene_credit_, 11u) << "sim_scene_credit_ not move-assigned";  // scrum-312
+  // task-331.1: the outgoing_wl_ move-assign trap (scrum-268.8) is the closest
+  // precedent — assert outgoing_component_ survives move-assign so we don't
+  // repeat that failure mode.
+  ASSERT_EQ(dst.outgoing_component_.size(), 2u) << "outgoing_component_ not move-assigned";
+  EXPECT_EQ(dst.outgoing_component_[0], 0x0102030405060708ull);
+  EXPECT_EQ(dst.outgoing_component_[1], 0x1122334455667788ull);
 
   // Source moved-from state.
   EXPECT_EQ(src.rays_.rays_, nullptr);

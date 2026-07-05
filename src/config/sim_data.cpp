@@ -27,8 +27,13 @@ namespace lumice {
 // (float, 4B) + 4B padding = 32B total, bumping 216 → 248. task-exit-seam-
 // crystal-count adds crystal_count_ (size_t, 8B) for exit-seam stats, bumping
 // 248 → 256. scrum-312 adds sim_scene_credit_ (size_t, 8B) for third-clock drain
-// counter balance, bumping 256 → 264.
-static_assert(sizeof(SimData) == 264, "SimData size changed — update copy/move ctors and operators");
+// counter balance, bumping 256 → 264. task-331.1 (raypath-color foundation)
+// adds outgoing_component_ (vector<uint64_t>, 24B) for per-outgoing-ray
+// component mask, bumping 264 → 288. task-331.1 also grows RayBuffer by 8B
+// (components_ unique_ptr) so the rays_ member's contribution to sizeof(SimData)
+// bumps by 8B → total 264 + 24 (outgoing_component_) + 8 (RayBuffer.components_)
+// = 296.
+static_assert(sizeof(SimData) == 296, "SimData size changed — update copy/move ctors and operators");
 
 namespace {
 
@@ -48,7 +53,10 @@ RayBuffer::RayBuffer() : capacity_(0), size_(0), overflow_cap_(0), overflow_used
 
 RayBuffer::RayBuffer(size_t capacity)
     : capacity_(capacity), size_(0), rays_(std::make_unique<RaySeg[]>(capacity)),
-      recorders_(std::make_unique<RaypathRecorder[]>(capacity)), overflow_cap_(0), overflow_used_(0) {}
+      recorders_(std::make_unique<RaypathRecorder[]>(capacity)),
+      // task-331.1: value-initialised uint64 array (all zeros); mirrors rays_/recorders_
+      // allocation gating so capacity==0 leaves components_ as nullptr.
+      components_(std::make_unique<uint64_t[]>(capacity)), overflow_cap_(0), overflow_used_(0) {}
 
 RaySeg& RayBuffer::operator[](size_t idx) const {
   return rays_[idx];
@@ -157,10 +165,41 @@ void RayBuffer::RecorderFanOut(const RayBuffer& src, size_t src_idx, size_t dst0
   }
 }
 
+// task-331.1: per-ray component mask parallel-array accessors + fan-out.
+// Kept adjacent to the RaypathRecorder helpers so future contributors treat
+// components_ as the same style of hot-loop parallel column.
+uint64_t RayBuffer::ComponentAt(size_t idx) const {
+  assert(idx < capacity_);
+  return components_[idx];
+}
+
+void RayBuffer::SetComponent(size_t idx, uint64_t v) {
+  assert(idx < capacity_);
+  components_[idx] = v;
+}
+
+void RayBuffer::ComponentFanOut(const RayBuffer& src, size_t src_idx, size_t dst0, size_t dst1) {
+  assert(&src != this);
+  assert(dst0 != dst1);
+  assert(src_idx < src.capacity_);
+  assert(dst0 < capacity_);
+  assert(dst1 < capacity_);
+  uint64_t v = src.components_[src_idx];
+  components_[dst0] = v;
+  components_[dst1] = v;
+}
+
 void RayBuffer::Reset(size_t capacity) {
   if (capacity > capacity_) {
     rays_ = std::make_unique<RaySeg[]>(capacity);
     recorders_ = std::make_unique<RaypathRecorder[]>(capacity);
+    // task-331.1: grow the components_ parallel array in lockstep with rays_.
+    // Grow-never-shrink mirrors rays_/recorders_ so pool reuse across MS
+    // layers pays no re-allocation cost. Reset does NOT zero existing slots
+    // (only newly-allocated capacity is value-initialised); the mask reset for
+    // MS-layer entry is done explicitly in InitRayFirstMs — see
+    // doc/raypath-rayseg-architecture.md §3 "Reset Points Summary".
+    components_ = std::make_unique<uint64_t[]>(capacity);
     capacity_ = capacity;
   }
   size_ = 0;
@@ -210,6 +249,13 @@ void RayBuffer::EmplaceBack(const RayBuffer& buffer, size_t start, size_t len) {
   for (size_t i = start; i < src_end && size_ < capacity_; i++) {
     rays_[size_] = buffer.rays_[i];
     recorders_[size_] = buffer.recorders_[i];
+    // task-331.1: carry the per-ray component mask alongside the ray+recorder
+    // pair so MS-layer batch moves (InitRayOtherMs → EmplaceBack(init_data[0])
+    // and the hit-loop all_data.EmplaceBack(buffer_data[1])) don't drop the
+    // mask. Single-ray EmplaceBack overloads deliberately do NOT touch
+    // components_ — their callers (CollectData) SetComponent explicitly to
+    // avoid changing the two-arg / three-arg signatures.
+    components_[size_] = buffer.components_[i];
     DupOverflowSlot(buffer, size_);
     size_++;
   }
@@ -237,12 +283,17 @@ RayBuffer::RayBuffer(const RayBuffer& other)
     : capacity_(other.capacity_), size_(other.size_),
       rays_(other.capacity_ > 0 ? std::make_unique<RaySeg[]>(other.capacity_) : nullptr),
       recorders_(other.capacity_ > 0 ? std::make_unique<RaypathRecorder[]>(other.capacity_) : nullptr),
+      components_(other.capacity_ > 0 ? std::make_unique<uint64_t[]>(other.capacity_) : nullptr),
       overflow_cap_(other.overflow_cap_), overflow_used_(other.overflow_used_) {
   if (other.capacity_ > 0) {
     std::memcpy(rays_.get(), other.rays_.get(), sizeof(RaySeg) * other.capacity_);
     // Round 2: RaypathRecorder is POD again — trivial memcpy across the
     // full capacity_ array (no per-element deep copy needed).
     std::memcpy(recorders_.get(), other.recorders_.get(), sizeof(RaypathRecorder) * other.capacity_);
+    // task-331.1: components_ is a POD uint64 parallel array — memcpy the full
+    // capacity_ slice to mirror the rays_/recorders_ deep-copy semantics
+    // (SimData::operator= convention: trailing slots preserved).
+    std::memcpy(components_.get(), other.components_.get(), sizeof(uint64_t) * other.capacity_);
   }
   if (other.overflow_cap_ > 0) {
     overflow_arena_ = std::make_unique<uint8_t[]>(static_cast<size_t>(other.overflow_cap_) * kMaxHits);
@@ -255,8 +306,9 @@ RayBuffer::RayBuffer(const RayBuffer& other)
 
 RayBuffer::RayBuffer(RayBuffer&& other) noexcept
     : capacity_(other.capacity_), size_(other.size_), rays_(std::move(other.rays_)),
-      recorders_(std::move(other.recorders_)), overflow_arena_(std::move(other.overflow_arena_)),
-      overflow_cap_(other.overflow_cap_), overflow_used_(other.overflow_used_) {
+      recorders_(std::move(other.recorders_)), components_(std::move(other.components_)),
+      overflow_arena_(std::move(other.overflow_arena_)), overflow_cap_(other.overflow_cap_),
+      overflow_used_(other.overflow_used_) {
   other.capacity_ = 0;
   other.size_ = 0;
   other.overflow_cap_ = 0;
@@ -271,9 +323,12 @@ RayBuffer& RayBuffer::operator=(const RayBuffer& other) {
   size_ = other.size_;
   rays_ = other.capacity_ > 0 ? std::make_unique<RaySeg[]>(other.capacity_) : nullptr;
   recorders_ = other.capacity_ > 0 ? std::make_unique<RaypathRecorder[]>(other.capacity_) : nullptr;
+  components_ = other.capacity_ > 0 ? std::make_unique<uint64_t[]>(other.capacity_) : nullptr;
   if (other.capacity_ > 0) {
     std::memcpy(rays_.get(), other.rays_.get(), sizeof(RaySeg) * other.capacity_);
     std::memcpy(recorders_.get(), other.recorders_.get(), sizeof(RaypathRecorder) * other.capacity_);
+    // task-331.1: mirror rays_/recorders_ deep-copy semantics for components_.
+    std::memcpy(components_.get(), other.components_.get(), sizeof(uint64_t) * other.capacity_);
   }
   overflow_cap_ = other.overflow_cap_;
   overflow_used_ = other.overflow_used_;
@@ -297,6 +352,10 @@ RayBuffer& RayBuffer::operator=(RayBuffer&& other) noexcept {
   size_ = other.size_;
   rays_ = std::move(other.rays_);
   recorders_ = std::move(other.recorders_);
+  // task-331.1: transfer components_ ownership alongside rays_/recorders_.
+  // Omitting this on move-assign would leak the mask exactly like the
+  // scrum-268.8 outgoing_wl_ move-assign miss — see the note below on SimData.
+  components_ = std::move(other.components_);
   overflow_arena_ = std::move(other.overflow_arena_);
   overflow_cap_ = other.overflow_cap_;
   overflow_used_ = other.overflow_used_;
@@ -315,7 +374,8 @@ SimData::SimData(size_t capacity) : curr_wl_(0.0f), rays_(capacity) {}
 SimData::SimData(const SimData& other)
     : curr_wl_(other.curr_wl_), generation_(other.generation_), rays_(other.rays_), crystals_(other.crystals_),
       crystal_axis_dists_(other.crystal_axis_dists_), outgoing_d_(other.outgoing_d_), outgoing_w_(other.outgoing_w_),
-      outgoing_wl_(other.outgoing_wl_), exit_records_(other.exit_records_), xyz_pixel_data_(other.xyz_pixel_data_),
+      outgoing_wl_(other.outgoing_wl_), outgoing_component_(other.outgoing_component_),
+      exit_records_(other.exit_records_), xyz_pixel_data_(other.xyz_pixel_data_),
       xyz_landed_weight_(other.xyz_landed_weight_), root_ray_count_(other.root_ray_count_),
       crystal_count_(other.crystal_count_), sim_scene_credit_(other.sim_scene_credit_) {}
 
@@ -323,10 +383,10 @@ SimData::SimData(SimData&& other) noexcept
     : curr_wl_(other.curr_wl_), generation_(other.generation_), rays_(std::move(other.rays_)),
       crystals_(std::move(other.crystals_)), crystal_axis_dists_(std::move(other.crystal_axis_dists_)),
       outgoing_d_(std::move(other.outgoing_d_)), outgoing_w_(std::move(other.outgoing_w_)),
-      outgoing_wl_(std::move(other.outgoing_wl_)), exit_records_(std::move(other.exit_records_)),
-      xyz_pixel_data_(std::move(other.xyz_pixel_data_)), xyz_landed_weight_(other.xyz_landed_weight_),
-      root_ray_count_(other.root_ray_count_), crystal_count_(other.crystal_count_),
-      sim_scene_credit_(other.sim_scene_credit_) {}
+      outgoing_wl_(std::move(other.outgoing_wl_)), outgoing_component_(std::move(other.outgoing_component_)),
+      exit_records_(std::move(other.exit_records_)), xyz_pixel_data_(std::move(other.xyz_pixel_data_)),
+      xyz_landed_weight_(other.xyz_landed_weight_), root_ray_count_(other.root_ray_count_),
+      crystal_count_(other.crystal_count_), sim_scene_credit_(other.sim_scene_credit_) {}
 
 SimData& SimData::operator=(const SimData& other) {
   if (&other == this) {
@@ -341,6 +401,7 @@ SimData& SimData::operator=(const SimData& other) {
   outgoing_d_ = other.outgoing_d_;
   outgoing_w_ = other.outgoing_w_;
   outgoing_wl_ = other.outgoing_wl_;
+  outgoing_component_ = other.outgoing_component_;  // task-331.1
   exit_records_ = other.exit_records_;
   xyz_pixel_data_ = other.xyz_pixel_data_;
   xyz_landed_weight_ = other.xyz_landed_weight_;
@@ -362,13 +423,16 @@ SimData& SimData::operator=(SimData&& other) noexcept {
   crystal_axis_dists_ = std::move(other.crystal_axis_dists_);
   outgoing_d_ = std::move(other.outgoing_d_);
   outgoing_w_ = std::move(other.outgoing_w_);
-  outgoing_wl_ = std::move(other.outgoing_wl_);  // scrum-268.8 (DR-3): was missing
-                                                 // here (present in copy/move ctor
-                                                 // + copy assign) — the omission
-                                                 // silently dropped per-ray wl on
-                                                 // the move-assign path used by the
-                                                 // consumer queue, collapsing the
-                                                 // CMF onto per-batch curr_wl_.
+  outgoing_wl_ = std::move(other.outgoing_wl_);                // scrum-268.8 (DR-3): was missing
+                                                               // here (present in copy/move ctor
+                                                               // + copy assign) — the omission
+                                                               // silently dropped per-ray wl on
+                                                               // the move-assign path used by the
+                                                               // consumer queue, collapsing the
+                                                               // CMF onto per-batch curr_wl_.
+  outgoing_component_ = std::move(other.outgoing_component_);  // task-331.1: same
+                                                               // move-assign trap as
+                                                               // outgoing_wl_ above.
   exit_records_ = std::move(other.exit_records_);
   xyz_pixel_data_ = std::move(other.xyz_pixel_data_);
   xyz_landed_weight_ = other.xyz_landed_weight_;
