@@ -1917,6 +1917,15 @@ void RenderSpectrumModal(GuiState& state) {
                        kSpectrumSoftWarnCount);
   }
 
+  ImGui::Spacing();
+  if (ImGui::Button("Reset##spec_reset", ImVec2(80, 0))) {
+    // Reset-to-default (not revert-to-open-time): re-seed with the same uniform preset a freshly
+    // opened custom spectrum starts from. Only mutates the edit buffer — OK remains the sole commit
+    // point (see g_spectrum_edit_buf contract above); Cancel/Escape after Reset leaves committed
+    // state untouched.
+    g_spectrum_edit_buf = BuildPresetSeed();
+  }
+
   ImGui::Separator();
 
   // OK / Cancel.

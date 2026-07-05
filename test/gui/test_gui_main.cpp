@@ -378,6 +378,7 @@ int main(int argc, char** argv) {
     // In fully headless CI `glfwGetMonitors` returns 0 → helper returns false
     // → caller falls back to FLT_MAX, matching the plan-intended behavior.
     gui::RenderEditModals(gui::g_state, window);
+    gui::RenderSpectrumModal(gui::g_state);
     gui::RenderUnsavedPopup(window);
 
     ImGui::Render();
