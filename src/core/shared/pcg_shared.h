@@ -57,6 +57,7 @@ LM_CONSTANT uint32_t kLatPathRayleigh = 2u;                // kGaussian near-pol
 LM_CONSTANT uint32_t kLatPathGaussLegacy = 3u;             // kGaussianLegacy
 LM_CONSTANT uint32_t kLatPathGenericReject = 4u;           // kGaussian/kUniform/kZigzag/kLaplacian
 LM_CONSTANT uint32_t kLatPathLaplacianTightEnvelope = 5u;  // kLaplacian near-pole optimization
+LM_CONSTANT uint32_t kLatPathLutInverseCdf = 6u;           // unified area-measure inverse-CDF LUT (330.2)
 
 // DistributionType enum values (must match src/core/math.hpp). Crystal-rot
 // parity REQUIRES the GenericReject path know the actual proposal type, so
@@ -285,6 +286,47 @@ LM_FN void normalize_latitude(float phi, LM_THREAD float& phi_out, LM_THREAD boo
     theta = 2.0f * LM_PI_F - theta;
   }
   phi_out = LM_PI_2F - theta;
+}
+
+// Unified area-measure latitude sampler (330.2 core-lut-sampler; design:
+// doc/near-pole-area-measure-sampling.md + explore unify-orientation-sampling-cosine-measure).
+// Numerical inverse-CDF over a uniform-theta node table: theta_nodes[i] / cdf_nodes[i]
+// for i in [0, n_nodes-1], with cdf_nodes STRICTLY increasing (BuildLatLut enforces the
+// monotonicity lift; both the search predicate and the interpolation denominator rely on
+// it). Given a uniform draw xi, returns colatitude theta = F^-1(xi) by binary search +
+// linear interpolation.
+//
+// RNG-agnostic single source: the host CPU sampler (RandomNumberGenerator) and the device
+// gen/transit kernels (PcgStream) each draw their own xi and call THIS one function — the
+// mirrored rejection loops disappear. Pointers are LM_DEVICE so the table lives in a Metal
+// `device` buffer bound separately (NOT embedded in the setBytes GenRootKernelParams
+// struct, which cannot carry device pointers) / a plain CUDA/host pointer.
+//
+// Node placement is uniform-theta (NOT equal-xi) with a fixed binary search: explore
+// exp3/exp5 showed equal-xi O(1) indexing smears the extreme tail and a guide table has a
+// warp-stalling worst case, while uniform-theta + binary search is tail-exact at N=256.
+// With (n_nodes-1) a power of two (256 intervals) the `hi-lo>1` loop runs a constant 8
+// iterations for every xi → warp-uniform, no control divergence. xi is clamped into the
+// representable CDF span so the (possibly lifted) endpoints and xi==1.0 resolve cleanly;
+// the denom>0 guard makes a degenerate (bit-equal) bin return its lower node instead of NaN.
+LM_FN float invert_lat_lut(float xi, LM_DEVICE const float* theta_nodes, LM_DEVICE const float* cdf_nodes,
+                           uint32_t n_nodes) {
+  xi = LM_CLAMP(xi, cdf_nodes[0], cdf_nodes[n_nodes - 1u]);
+  uint32_t lo = 0u;
+  uint32_t hi = n_nodes - 1u;
+  while (hi - lo > 1u) {
+    uint32_t mid = (lo + hi) >> 1u;
+    if (cdf_nodes[mid] <= xi) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  float c0 = cdf_nodes[lo];
+  float c1 = cdf_nodes[lo + 1u];
+  float denom = c1 - c0;
+  float w = denom > 0.0f ? (xi - c0) / denom : 0.0f;
+  return theta_nodes[lo] + w * (theta_nodes[lo + 1u] - theta_nodes[lo]);
 }
 
 // Replicates InitRay_rot + SampleSphericalPointsSph (simulator.cpp:138-150 +

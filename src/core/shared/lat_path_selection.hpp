@@ -38,6 +38,8 @@ enum class LatPathKind : uint32_t {
   kGaussLegacy = 3u,
   kGenericReject = 4u,           // kGaussian / kUniform / kZigzag / kLaplacian
   kLaplacianTightEnvelope = 5u,  // kLaplacian near-pole optimization (Gamma(2,b) proposal)
+  kLutInverseCdf = 6u,           // unified area-measure inverse-CDF LUT (330.2); numeric value
+                                 // MUST match lm_pcg::kLatPathLutInverseCdf (pcg_shared.h)
 };
 
 // Near-pole colatitude trigger threshold for tight-envelope area-measure

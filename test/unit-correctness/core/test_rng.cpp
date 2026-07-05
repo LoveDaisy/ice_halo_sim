@@ -1,11 +1,14 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
+#include <vector>
 
 #include "core/crystal.hpp"
 #include "core/math.hpp"
 #include "core/shared/lat_path_selection.hpp"
+#include "core/shared/pcg_shared.h"
 #include "util/threading_pool.hpp"
 
 namespace {
@@ -1339,6 +1342,72 @@ TEST_F(RngTest, LaplacianJsonRoundTrip) {
   EXPECT_EQ(parsed.type, DistributionType::kLaplacian);
   EXPECT_FLOAT_EQ(parsed.mean, 45.0f);
   EXPECT_FLOAT_EQ(parsed.std, 3.0f);
+}
+
+// --- 330.2 invert_lat_lut (unified area-measure inverse-CDF LUT) --------------
+// Pins the numeric contract of the pure single-source inversion used by BOTH the
+// CPU sampler and the device gen/transit kernels, independent of the
+// distribution-specific BuildLatLut (330.2 S2). Covers analytic tables with known
+// inverses + the fp32 monotonicity guards (degenerate bin, xi clamp at lifted
+// endpoints). Uniform-theta + fixed binary search (explore exp3/exp5).
+namespace {
+constexpr float kHalfPiF = 1.5707963267948966f;
+}
+
+TEST(InvertLatLutTest, LinearCdfIsLinearInverse) {
+  constexpr uint32_t kN = 257;  // 256 intervals (power of two -> constant 8-iter search)
+  std::vector<float> theta(kN), cdf(kN);
+  for (uint32_t i = 0; i < kN; ++i) {
+    const float t = static_cast<float>(i) / static_cast<float>(kN - 1);
+    theta[i] = kHalfPiF * t;
+    cdf[i] = t;  // linear CDF -> exact linear inverse
+  }
+  for (float xi : { 0.0f, 0.1f, 0.25f, 0.5f, 0.75f, 0.9f, 1.0f }) {
+    const float got = lm_pcg::invert_lat_lut(xi, theta.data(), cdf.data(), kN);
+    EXPECT_NEAR(got, xi * kHalfPiF, 1e-5f) << "xi=" << xi;
+  }
+}
+
+TEST(InvertLatLutTest, ClampsOutOfRangeAndLiftedEndpoints) {
+  // Endpoints deliberately != 0/1 (as after a monotonicity lift): xi outside
+  // [cdf[0], cdf[N-1]] must clamp to the boundary nodes, not read out of range.
+  constexpr uint32_t kN = 5;
+  const std::vector<float> theta = { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f };
+  const std::vector<float> cdf = { 0.1f, 0.3f, 0.6f, 0.8f, 0.95f };
+  EXPECT_FLOAT_EQ(lm_pcg::invert_lat_lut(-1.0f, theta.data(), cdf.data(), kN), 0.0f);
+  EXPECT_FLOAT_EQ(lm_pcg::invert_lat_lut(2.0f, theta.data(), cdf.data(), kN), 1.0f);
+  EXPECT_FLOAT_EQ(lm_pcg::invert_lat_lut(0.1f, theta.data(), cdf.data(), kN), 0.0f);
+  EXPECT_FLOAT_EQ(lm_pcg::invert_lat_lut(0.95f, theta.data(), cdf.data(), kN), 1.0f);
+}
+
+TEST(InvertLatLutTest, DegenerateBinNoNaN) {
+  // A flat CDF region (c1 == c0) must not divide by zero; returns a finite node value.
+  constexpr uint32_t kN = 5;
+  const std::vector<float> theta = { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f };
+  const std::vector<float> cdf = { 0.0f, 0.5f, 0.5f, 0.5f, 1.0f };  // flat middle
+  const float got = lm_pcg::invert_lat_lut(0.5f, theta.data(), cdf.data(), kN);
+  EXPECT_TRUE(std::isfinite(got));
+  EXPECT_GE(got, 0.0f);
+  EXPECT_LE(got, 1.0f);
+}
+
+TEST(InvertLatLutTest, MonotoneAndConvexCdfInverse) {
+  // Convex CDF F=t^2 (theta=kHalfPi*t) => inverse theta = kHalfPi*sqrt(xi).
+  constexpr uint32_t kN = 257;
+  std::vector<float> theta(kN), cdf(kN);
+  for (uint32_t i = 0; i < kN; ++i) {
+    const float t = static_cast<float>(i) / static_cast<float>(kN - 1);
+    theta[i] = kHalfPiF * t;
+    cdf[i] = t * t;
+  }
+  float prev = -1.0f;
+  for (int k = 0; k <= 100; ++k) {
+    const float xi = static_cast<float>(k) / 100.0f;
+    const float got = lm_pcg::invert_lat_lut(xi, theta.data(), cdf.data(), kN);
+    EXPECT_GE(got, prev - 1e-6f) << "non-monotone at xi=" << xi;
+    prev = got;
+  }
+  EXPECT_NEAR(lm_pcg::invert_lat_lut(0.25f, theta.data(), cdf.data(), kN), kHalfPiF * 0.5f, 2e-3f);
 }
 
 
