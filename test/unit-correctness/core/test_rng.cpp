@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/crystal.hpp"
+#include "core/lat_lut.hpp"
 #include "core/math.hpp"
 #include "core/shared/lat_path_selection.hpp"
 #include "core/shared/pcg_shared.h"
@@ -1408,6 +1409,126 @@ TEST(InvertLatLutTest, MonotoneAndConvexCdfInverse) {
     prev = got;
   }
   EXPECT_NEAR(lm_pcg::invert_lat_lut(0.25f, theta.data(), cdf.data(), kN), kHalfPiF * 0.5f, 2e-3f);
+}
+
+
+// --- 330.2 BuildLatLut: colatitude-marginal parity vs the real sampler ---------
+// The LUT's core job is to reproduce the folded area-measure colatitude distribution.
+// This marginal is flip-independent (flip rotates azimuth/roll, not latitude), so it
+// isolates the BuildLatLut quadrature/fold construction from the flip question.
+namespace {
+double KsStat(std::vector<double> a, std::vector<double> b) {
+  std::sort(a.begin(), a.end());
+  std::sort(b.begin(), b.end());
+  std::vector<double> all;
+  all.reserve(a.size() + b.size());
+  all.insert(all.end(), a.begin(), a.end());
+  all.insert(all.end(), b.begin(), b.end());
+  std::sort(all.begin(), all.end());
+  double d = 0.0;
+  for (double v : all) {
+    double ca = static_cast<double>(std::upper_bound(a.begin(), a.end(), v) - a.begin()) / a.size();
+    double cb = static_cast<double>(std::upper_bound(b.begin(), b.end(), v) - b.begin()) / b.size();
+    d = std::max(d, std::abs(ca - cb));
+  }
+  return d;
+}
+}  // namespace
+
+TEST(LatLutColatitudeTest, MatchesRealSamplerColatitudeMarginal) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+  struct Cfg {
+    float mean;
+    float std;
+    DistributionType type;
+    const char* label;
+  };
+  const Cfg cfgs[] = {
+    { 90.0f, 5.0f, DistributionType::kGaussian, "gauss near-pole (real=Rayleigh)" },
+    { 60.0f, 5.0f, DistributionType::kGaussian, "gauss off-pole (real=generic)" },
+    { 30.0f, 8.0f, DistributionType::kGaussian, "gauss mid-latitude" },
+    { 90.0f, 5.0f, DistributionType::kLaplacian, "laplacian near-pole (real=tight)" },
+    { 0.0f, 20.0f, DistributionType::kUniform, "uniform band" },
+  };
+  constexpr int kN = 500000;
+  const double crit = 1.63 * std::sqrt(2.0 / kN);
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
+  rng.SetSeed(20260705);
+
+  for (const auto& c : cfgs) {
+    SCOPED_TRACE(c.label);
+    AxisDistribution axis;
+    axis.latitude_dist = lumice::Distribution{ c.type, c.mean, c.std };
+    axis.azimuth_dist.type = DistributionType::kUniform;  // uniform az: flip is a no-op here
+
+    std::vector<double> real(kN);
+    float lon_lat[3];
+    for (int i = 0; i < kN; ++i) {
+      lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
+      real[i] = lumice::math::kPi_2 - lon_lat[1];  // colatitude-from-zenith
+    }
+
+    const lumice::LatLut table = lumice::BuildLatLut(axis.latitude_dist);
+    std::vector<double> lut(kN);
+    for (int i = 0; i < kN; ++i) {
+      const float xi = rng.GetUniform();
+      lut[i] = lm_pcg::invert_lat_lut(xi, table.theta.data(), table.cdf.data(), lumice::LatLut::kNodes);
+    }
+
+    // Allow a small slack over the two-sample KS crit for LUT node-resolution + fp32.
+    EXPECT_LT(KsStat(real, lut), crit * 2.0) << c.label;
+  }
+}
+
+// Full-direction parity for the COMMON regime (mean>0, uniform azimuth): the LUT must be
+// distributionally identical to the current sampler there — same colatitude AND same azimuth.
+// (For the edge regimes — southern near-pole, or near-pole + non-uniform azimuth — the LUT
+// intentionally diverges toward correctness: it preserves the up/down hemisphere the Rayleigh
+// abs() fold collapses, and keeps the over-vertical azimuth population Rayleigh drops. Those
+// are validated against the analytic target, not the old sampler, per the scrum-328 AC.)
+TEST(LatLutColatitudeTest, CommonRegimeAzimuthUnchanged) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+  auto wrap = [](double a) {
+    const double two_pi = 2.0 * lumice::math::kPi;
+    a = std::fmod(a, two_pi);
+    return a < 0 ? a + two_pi : a;
+  };
+  const float means[] = { 90.0f, 60.0f, 30.0f };
+  constexpr int kN = 400000;
+  const double crit = 1.63 * std::sqrt(2.0 / kN);
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
+  rng.SetSeed(999);
+  for (float mean : means) {
+    SCOPED_TRACE(mean);
+    AxisDistribution axis;
+    axis.latitude_dist = lumice::Distribution{ DistributionType::kGaussian, mean, 5.0f };
+    // Full-circle uniform azimuth (std=360°) — the common near-pole case; flip is a no-op here.
+    // (A degenerate std=0 would fix azimuth at 0°, which IS the non-uniform edge case where the
+    // LUT intentionally diverges, so it must not be used to assert common-regime equivalence.)
+    axis.azimuth_dist = lumice::Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+    const lumice::LatLut table = lumice::BuildLatLut(axis.latitude_dist);
+
+    std::vector<double> az_real(kN), az_lut(kN);
+    float lon_lat[3];
+    for (int i = 0; i < kN; ++i) {
+      lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
+      az_real[i] = wrap(lon_lat[0]);
+    }
+    for (int i = 0; i < kN; ++i) {
+      const float xi = rng.GetUniform();
+      const float th = lm_pcg::invert_lat_lut(xi, table.theta.data(), table.cdf.data(), lumice::LatLut::kNodes);
+      const uint32_t bin = lm_pcg::lat_lut_bin(th, table.theta.data(), lumice::LatLut::kNodes);
+      const bool flip = rng.GetUniform() < table.flip_prob[bin];
+      float az = rng.Get(axis.azimuth_dist) * lumice::math::kDegreeToRad;
+      if (flip) {
+        az += lumice::math::kPi;
+      }
+      az_lut[i] = wrap(az);
+    }
+    EXPECT_LT(KsStat(az_real, az_lut), crit * 2.0) << "azimuth must stay uniform (flip is a no-op here)";
+  }
 }
 
 

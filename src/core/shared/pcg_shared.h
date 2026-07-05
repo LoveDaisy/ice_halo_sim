@@ -329,6 +329,21 @@ LM_FN float invert_lat_lut(float xi, LM_DEVICE const float* theta_nodes, LM_DEVI
   return theta_nodes[lo] + w * (theta_nodes[lo + 1u] - theta_nodes[lo]);
 }
 
+// Flip-table bin index for a colatitude sampled from the uniform-theta LUT (330.2).
+// theta_nodes are UNIFORMLY spaced over [theta_nodes[0], theta_nodes[n-1]], so the
+// containing interval is a direct O(1) computation (no search). Returns an index in
+// [0, n_nodes-2]; the caller reads flip_prob[idx] and draws a Bernoulli flip bit. Host and
+// device compute the same index this way, keeping the flip semantics single-sourced.
+LM_FN uint32_t lat_lut_bin(float theta, LM_DEVICE const float* theta_nodes, uint32_t n_nodes) {
+  float span = theta_nodes[n_nodes - 1u] - theta_nodes[0];
+  float t = span > 0.0f ? (theta - theta_nodes[0]) / span : 0.0f;
+  int idx = static_cast<int>(t * static_cast<float>(n_nodes - 1u));
+  idx = idx < 0 ? 0 : idx;
+  int last = static_cast<int>(n_nodes) - 2;
+  idx = idx > last ? last : idx;
+  return static_cast<uint32_t>(idx);
+}
+
 // Replicates InitRay_rot + SampleSphericalPointsSph (simulator.cpp:138-150 +
 // math.cpp:404/444). All distribution params are pre-converted to radians on
 // the host so the kernel does no degree↔radian conversions.
