@@ -762,24 +762,18 @@ void DoRun() {
   LUMICE_Config config{};
   FilterOverflowInfo overflow;
   if (!FillLumiceConfig(g_state, &config, &overflow)) {
-    // Build a "where" locator from the overflow identity captured inside FillLumiceConfig.
-    // 1-based Layer/Entry to match the panel header convention (panels.cpp "Layer %d" uses
-    // layer_idx + 1); FilterConfig::name is optional so it is prepended only when non-empty.
-    std::string where;
-    if (!overflow.filter_name.empty()) {
-      where = " (filter \"" + overflow.filter_name + "\", Layer " + std::to_string(overflow.layer_index + 1) +
-              " / Entry " + std::to_string(overflow.entry_index + 1) + ")";
-    } else {
-      where = " (Layer " + std::to_string(overflow.layer_index + 1) + " / Entry " +
-              std::to_string(overflow.entry_index + 1) + ")";
-    }
+    // Locator ("filter \"NAME\", Layer L / Entry E", or "Layer L / Entry E" when unnamed)
+    // identifying which filter reference tripped the ABI bounds, captured inside
+    // FillLumiceConfig. Built by FormatOverflowLocator so the format is unit-testable
+    // (test_gui_import_export.cpp) rather than only exercised through on-screen GUI.
+    const std::string locator = FormatOverflowLocator(overflow);
     // User-visible prompt (the Log panel is collapsed by default): the edit did NOT apply and
     // the previous configuration was kept, so the user knows why nothing changed. The same
     // locator-bearing text drives both the modal and the Log line so the two channels stay in
     // sync (see Log-dedup comment below).
     std::string warning_msg = "This filter has too many OR segments / values to apply (limit " +
-                              std::to_string(LUMICE_MAX_CONFIG_CLAUSES) + ")" + where +
-                              ".\nThe previous configuration was kept. Simplify the filter and try again.";
+                              std::to_string(LUMICE_MAX_CONFIG_CLAUSES) + "; " + locator +
+                              ").\nThe previous configuration was kept. Simplify the filter and try again.";
     // Log-panel dedup: gate the Log write on the SAME state SetGuiWarning uses for modal dedup
     // (in-flight message equals the new one). Sharing the key intentionally couples the two
     // channels — a wording change (e.g. new Layer/Entry after the user switches which filter
@@ -787,9 +781,9 @@ void DoRun() {
     // why we did NOT introduce a separate `g_last_overlimit_log_msg` static variable.
     if (PeekGuiWarning() != warning_msg) {
       GUI_LOG_WARNING(
-          "[GUI] DoRun: filter exceeds ABI limits (too many OR segments/values){}; keeping the "
+          "[GUI] DoRun: filter exceeds ABI limits (too many OR segments/values; {}); keeping the "
           "previous configuration. Simplify the filter to apply the change.",
-          where);
+          locator);
     }
     SetGuiWarning(warning_msg);
     return;

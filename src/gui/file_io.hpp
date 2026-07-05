@@ -33,6 +33,14 @@ struct FilterOverflowInfo {
 // message; the value is untouched on success.
 bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out, FilterOverflowInfo* overflow = nullptr);
 
+// Format a human-readable locator ("filter \"NAME\", Layer L / Entry E", or just
+// "Layer L / Entry E" when the filter is unnamed) from a FilterOverflowInfo, using 1-based
+// Layer/Entry to match the panel header convention (panels.cpp "Layer %d"). Extracted as a pure
+// function so the message format is unit-testable (test_gui_import_export.cpp) instead of only
+// exercised through on-screen GUI. Returns the inner text WITHOUT surrounding parentheses so the
+// caller can embed it inside its own "(limit N; ...)" grouping.
+std::string FormatOverflowLocator(const FilterOverflowInfo& overflow);
+
 // Serialize GuiState to Core JSON string (for .lmc save and CLI compatibility)
 std::string SerializeCoreConfig(const GuiState& state);
 

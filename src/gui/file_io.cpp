@@ -1022,6 +1022,16 @@ static bool ExpandFilterToStruct(const FilterConfig& f, int next_filter_id, LUMI
 // degradation), not commit `out`. Crystals still use the P+1 pool-id scheme; filters use a
 // running id counter (matching SerializeCoreConfig) because one GUI filter may expand into
 // N simple + 1 complex.
+std::string FormatOverflowLocator(const FilterOverflowInfo& overflow) {
+  // 1-based Layer/Entry to match the panel header convention (panels.cpp "Layer %d").
+  const std::string pos =
+      "Layer " + std::to_string(overflow.layer_index + 1) + " / Entry " + std::to_string(overflow.entry_index + 1);
+  if (!overflow.filter_name.empty()) {
+    return "filter \"" + overflow.filter_name + "\", " + pos;
+  }
+  return pos;
+}
+
 bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out, FilterOverflowInfo* overflow) {
   std::memset(out, 0, sizeof(LUMICE_Config));
 
