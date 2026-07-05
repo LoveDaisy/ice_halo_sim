@@ -1853,7 +1853,10 @@ void RenderSpectrumModal(GuiState& state) {
   }
 
   ImGui::SetNextWindowSize(ImVec2(480, 0), ImGuiCond_Appearing);
-  if (!ImGui::BeginPopupModal("Custom Spectrum##spectrum_modal", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+  // p_open (re-armed to true each frame) renders the title-bar × for style parity with the Edit Entry
+  // modal; clicking it sets title_x_open false and is handled as a Cancel-equivalent below.
+  bool title_x_open = true;
+  if (!ImGui::BeginPopupModal("Custom Spectrum##spectrum_modal", &title_x_open, ImGuiWindowFlags_AlwaysAutoResize)) {
     return;
   }
 
@@ -1917,18 +1920,11 @@ void RenderSpectrumModal(GuiState& state) {
                        kSpectrumSoftWarnCount);
   }
 
-  ImGui::Spacing();
-  if (ImGui::Button("Reset##spec_reset", ImVec2(80, 0))) {
-    // Reset-to-default (not revert-to-open-time): re-seed with the same uniform preset a freshly
-    // opened custom spectrum starts from. Only mutates the edit buffer — OK remains the sole commit
-    // point (see g_spectrum_edit_buf contract above); Cancel/Escape after Reset leaves committed
-    // state untouched.
-    g_spectrum_edit_buf = BuildPresetSeed();
-  }
-
   ImGui::Separator();
 
-  // OK / Cancel.
+  // Action row: OK / Cancel (dialog-terminating) on the left; Reset (a non-terminating edit action)
+  // right-aligned on the same row so it reads as a distinct class and resists being mis-clicked as a
+  // third confirm button.
   const bool ok_disabled = g_spectrum_edit_buf.empty();
   if (ok_disabled) {
     ImGui::BeginDisabled();
@@ -1958,6 +1954,27 @@ void RenderSpectrumModal(GuiState& state) {
   if (ImGui::Button(ICON_FA_XMARK " Cancel##spec_cancel", ImVec2(80, 0))) {
     // Nothing to restore: spectrum_index was never mutated on open (only OK commits it), so Cancel /
     // Escape / click-outside all naturally leave it at the prior valid preset. Just discard the buffer.
+    ImGui::CloseCurrentPopup();
+  }
+
+  // Reset##spec_reset, right-aligned on the same row. Reset-to-default (not revert-to-open-time):
+  // re-seed with the same uniform preset a freshly opened custom spectrum starts from. Only mutates
+  // the edit buffer — OK stays the sole commit point (see g_spectrum_edit_buf contract above).
+  // When the window is too narrow to right-align without overlapping Cancel, fall back to normal
+  // same-line placement (this converges in one frame under AlwaysAutoResize).
+  ImGui::SameLine();
+  constexpr float kResetBtnW = 80.0f;
+  const float reset_x = ImGui::GetWindowContentRegionMax().x - kResetBtnW;
+  if (reset_x > ImGui::GetCursorPosX()) {
+    ImGui::SetCursorPosX(reset_x);
+  }
+  if (ImGui::Button("Reset##spec_reset", ImVec2(kResetBtnW, 0))) {
+    g_spectrum_edit_buf = BuildPresetSeed();
+  }
+
+  // Title-bar × = Cancel-equivalent: discard the edit buffer without committing. spectrum_index was
+  // never mutated on open, so there is nothing to restore — same exit path as Cancel/Escape.
+  if (!title_x_open) {
     ImGui::CloseCurrentPopup();
   }
 
