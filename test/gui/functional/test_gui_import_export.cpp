@@ -1401,6 +1401,14 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       ee_multi.max_len = 6;
       cross_check(ee_multi);
 
+      // Wildcard EE matrix: empty entry/exit strings map to LUMICE_EE_WILDCARD_SENTINEL and
+      // must survive struct↔JSON cross-check on both single and multi-value sides.
+      cross_check(gui::EntryExitParams{ "", "" });     // both wildcard -> 1 simple EE
+      cross_check(gui::EntryExitParams{ "", "5" });    // entry wildcard + single exit -> 1 simple EE
+      cross_check(gui::EntryExitParams{ "3", "" });    // single entry + exit wildcard -> 1 simple EE
+      cross_check(gui::EntryExitParams{ "3,5", "" });  // 2 entry values × wildcard exit -> 2 simple + 1 complex
+      cross_check(gui::EntryExitParams{ "", "3,5" });  // wildcard entry × 2 exit values -> 2 simple + 1 complex
+
       // Overflow: a raypath with more than LUMICE_MAX_CONFIG_CLAUSES OR segments exceeds the
       // composition ABI bounds -> FillLumiceConfig must return false (graceful degradation),
       // so app.cpp keeps the prior committed state instead of committing a truncated config.
@@ -1424,6 +1432,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
           too_many_segments += "3-5";
         }
         gui::FilterConfig f;
+        f.name = "OverflowFilter";  // named so overflow.filter_name assertion below is meaningful
         f.param = gui::RaypathParams{ too_many_segments };
         gui::g_state.filters.push_back(f);
         gui::Layer layer;
@@ -1435,12 +1444,68 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         layer.entries.push_back(e);
         gui::g_state.layers.push_back(layer);
         LUMICE_Config over{};
-        IM_CHECK(!gui::FillLumiceConfig(gui::g_state, &over));  // over ABI bounds -> false
+        gui::FilterOverflowInfo overflow;
+        IM_CHECK(!gui::FillLumiceConfig(gui::g_state, &over, &overflow));  // over ABI bounds -> false
         // "no partial writes on overflow" contract (ExpandFilterToStruct doc): the overflowing
         // filter bails before any filter/composition is written for it.
         IM_CHECK_EQ(over.filter_count, 0);
         IM_CHECK_EQ(over.composition_count, 0);
+        // Overflow identity: the first (layer 0, entry 0) reference is captured with the
+        // FilterConfig::name so the caller can locate the offending filter for the user.
+        IM_CHECK_EQ(overflow.layer_index, 0);
+        IM_CHECK_EQ(overflow.entry_index, 0);
+        IM_CHECK_EQ(overflow.filter_name, std::string("OverflowFilter"));
+        // The locator string DoRun embeds in the modal + Log message (named filter form).
+        IM_CHECK_STR_EQ(gui::FormatOverflowLocator(overflow).c_str(), "filter \"OverflowFilter\", Layer 1 / Entry 1");
       }
+    };
+  }
+
+  // FormatOverflowLocator format contract (pure function, no GUI): the unnamed form drops the
+  // filter clause and keeps 1-based Layer/Entry, and the indices are presented as +1.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "overflow_locator_format");
+    t->TestFunc = [](ImGuiTestContext*) {
+      gui::FilterOverflowInfo named;
+      named.layer_index = 2;
+      named.entry_index = 0;
+      named.filter_name = "MyFilter";
+      IM_CHECK_STR_EQ(gui::FormatOverflowLocator(named).c_str(), "filter \"MyFilter\", Layer 3 / Entry 1");
+      gui::FilterOverflowInfo unnamed;
+      unnamed.layer_index = 0;
+      unnamed.entry_index = 4;
+      // Empty filter_name -> no "filter \"...\"," clause, just the position.
+      IM_CHECK_STR_EQ(gui::FormatOverflowLocator(unnamed).c_str(), "Layer 1 / Entry 5");
+    };
+  }
+
+  // DoRun's Log-panel dedup gate (`PeekGuiWarning() != warning_msg`): a persistent overflow
+  // re-detected on every ~70ms debounce commit writes the Log line ONLY on the first detection
+  // (message unchanged -> gate closed), and re-opens (gate open) when the located filter/layer
+  // changes or after a successful commit clears the warning. This exercises the exact predicate
+  // DoRun uses so AC② (Log dedup) has automated coverage rather than only on-screen verification.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "overflow_log_dedup_gate");
+    t->TestFunc = [](ImGuiTestContext*) {
+      gui::ClearGuiWarning();
+      const std::string msg_a = "This filter has too many OR segments / values to apply (limit " +
+                                std::to_string(LUMICE_MAX_CONFIG_CLAUSES) +
+                                "; filter \"A\", Layer 1 / Entry 1).\nkept.";
+      // First detection: gate open -> would write the Log line.
+      IM_CHECK(gui::PeekGuiWarning() != msg_a);
+      gui::SetGuiWarning(msg_a);
+      // Same overflow re-detected on the next debounce commit: gate closed -> Log NOT re-written.
+      IM_CHECK(gui::PeekGuiWarning() == msg_a);
+      // User switches which filter overflows (new locator): gate open again -> re-logs.
+      const std::string msg_b = "This filter has too many OR segments / values to apply (limit " +
+                                std::to_string(LUMICE_MAX_CONFIG_CLAUSES) +
+                                "; filter \"B\", Layer 2 / Entry 1).\nkept.";
+      IM_CHECK(gui::PeekGuiWarning() != msg_b);
+      gui::SetGuiWarning(msg_b);
+      // A successful commit clears the warning: the same message would log again afterwards.
+      gui::ClearGuiWarning();
+      IM_CHECK(gui::PeekGuiWarning() != msg_a);
+      gui::ClearGuiWarning();
     };
   }
 

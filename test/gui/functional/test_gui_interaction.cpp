@@ -3252,6 +3252,85 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // p2_modal/spectrum_modal_reset_resets_to_preset_seed — inject a non-default custom
+  // spectrum baseline, open the modal, click Reset, OK to commit; verify the committed
+  // custom_spectrum matches the uniform 9-point 400–720nm/weight=1.0 preset seed
+  // (asserted against the construction formula, not BuildPresetSeed() itself, to keep
+  // the test independent of that private helper).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "spectrum_modal_reset_resets_to_preset_seed");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Step 1: establish a non-default custom-spectrum baseline via direct state
+      // injection (same technique as test_gui_import_export.cpp:262-263). Direct
+      // injection matches the "user already has a custom spectrum and clicks Edit
+      // to reopen it" scenario without depending on the Combo/button chain.
+      gui::g_state.sun.spectrum_index = gui::kCustomSpectrumIndex;
+      gui::g_state.sun.custom_spectrum = { { 450.0f, 0.5f }, { 550.0f, 1.0f }, { 650.0f, 0.7f } };
+
+      // Step 2: open the modal directly. See progress.md DECISION 2026-07-05: this
+      // is functionally equivalent to clicking "Edit spectrum...##spectrum_edit"
+      // (panels.cpp:965) but doesn't rely on the outer Combo showing that button.
+      gui::OpenSpectrumModal(gui::g_state);
+      ctx->Yield(3);
+
+      // Step 3: Reset + OK.
+      ctx->ItemClick("**/Reset##spec_reset");
+      ctx->Yield();
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##spec_ok");
+      ctx->Yield(2);
+
+      // Step 4: assert the committed spectrum matches the preset seed formula
+      // (9 points, 400–720 nm equidistant, weight=1.0). Independent of
+      // BuildPresetSeed() so a refactor of that helper can't silently drift this.
+      const auto& out = gui::g_state.sun.custom_spectrum;
+      IM_CHECK_EQ(gui::g_state.sun.spectrum_index, gui::kCustomSpectrumIndex);
+      IM_CHECK_EQ(out.size(), (size_t)9);
+      IM_CHECK_EQ(out.front().wavelength, 400.0f);
+      IM_CHECK_EQ(out.back().wavelength, 720.0f);
+      for (size_t i = 0; i < out.size(); ++i) {
+        const float expected_wl = 400.0f + static_cast<float>(i) * 40.0f;
+        IM_CHECK_EQ(out[i].wavelength, expected_wl);
+        IM_CHECK_EQ(out[i].weight, 1.0f);
+      }
+    };
+  }
+
+  // p2_modal/spectrum_modal_reset_then_cancel_keeps_state — Reset in the edit buffer,
+  // then Cancel; committed custom_spectrum and spectrum_index must stay at their
+  // pre-Reset values (transactional contract from task-323: OK is the sole commit).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "spectrum_modal_reset_then_cancel_keeps_state");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Baseline: a non-default committed custom spectrum.
+      const std::vector<gui::WlWeight> baseline = { { 450.0f, 0.5f }, { 550.0f, 1.0f }, { 650.0f, 0.7f } };
+      gui::g_state.sun.spectrum_index = gui::kCustomSpectrumIndex;
+      gui::g_state.sun.custom_spectrum = baseline;
+      const int baseline_index = gui::g_state.sun.spectrum_index;
+
+      // Open modal, Reset (mutates only the edit buffer), Cancel.
+      gui::OpenSpectrumModal(gui::g_state);
+      ctx->Yield(3);
+      ctx->ItemClick("**/Reset##spec_reset");
+      ctx->Yield();
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##spec_cancel");
+      ctx->Yield(2);
+
+      // Committed state must be untouched.
+      IM_CHECK_EQ(gui::g_state.sun.spectrum_index, baseline_index);
+      IM_CHECK_EQ(gui::g_state.sun.custom_spectrum.size(), baseline.size());
+      for (size_t i = 0; i < baseline.size(); ++i) {
+        IM_CHECK_EQ(gui::g_state.sun.custom_spectrum[i].wavelength, baseline[i].wavelength);
+        IM_CHECK_EQ(gui::g_state.sun.custom_spectrum[i].weight, baseline[i].weight);
+      }
+    };
+  }
+
   // p2_modal/filter_modal_ok_no_change_keeps_nullopt — open filter modal on empty
   // entry, click OK without touching anything: entry must stay nullopt (otherwise
   // a default-constructed filter "* In PBD" silently blocks all rays).
