@@ -130,9 +130,11 @@ inline LatPathDecision SelectLatPath(const AxisDistribution& axis_dist) {
     float colatitude_center = math::kPi_2 - std::abs(lat_mean_rad);
     bool use_rayleigh = colatitude_center < kPolarThresholdRad && lat_std_rad < kMaxTightEnvelopeSigmaRad;
     if (use_rayleigh) {
-      return { LatPathKind::kRayleigh, 1.0f };
+      // 330.2 S5: unified LUT path replaces the near-pole Rayleigh optimization.
+      return { LatPathKind::kLutInverseCdf, 1.0f };
     }
-    return { LatPathKind::kGenericReject, ComputeJacobianEnvelope(axis_dist.latitude_dist) };
+    // 330.2 S5: unified LUT path replaces the off-pole generic-rejection sampler.
+    return { LatPathKind::kLutInverseCdf, 1.0f };
   }
   if (lat_type == DistributionType::kLaplacian) {
     // Laplacian tight-envelope branch (scrum-328.4). Trigger uses the same
@@ -145,12 +147,14 @@ inline LatPathDecision SelectLatPath(const AxisDistribution& axis_dist) {
     float colatitude_center = math::kPi_2 - std::abs(lat_mean_rad);
     bool use_laplacian_tight = colatitude_center < kPolarThresholdRad && lat_scale_rad < kMaxTightEnvelopeLaplacianBRad;
     if (use_laplacian_tight) {
-      return { LatPathKind::kLaplacianTightEnvelope, 1.0f };
+      // 330.2 S5: unified LUT path replaces the near-pole Gamma(2,b) optimization.
+      return { LatPathKind::kLutInverseCdf, 1.0f };
     }
-    return { LatPathKind::kGenericReject, ComputeJacobianEnvelope(axis_dist.latitude_dist) };
+    // 330.2 S5: unified LUT path replaces the off-pole generic-rejection sampler.
+    return { LatPathKind::kLutInverseCdf, 1.0f };
   }
-  // kUniform / kZigzag
-  return { LatPathKind::kGenericReject, ComputeJacobianEnvelope(axis_dist.latitude_dist) };
+  // kUniform / kZigzag — 330.2 S5: unified LUT path replaces generic rejection.
+  return { LatPathKind::kLutInverseCdf, 1.0f };
 }
 
 }  // namespace lat_path
