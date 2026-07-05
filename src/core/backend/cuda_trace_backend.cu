@@ -75,6 +75,7 @@
 #include "core/math.hpp"
 #include "core/raypath.hpp"
 #include "core/geo3d.hpp"  // Rotation (camera rotation for BuildProjParams)
+#include "core/lat_lut.hpp"          // BuildLatLut / LatLut (330.2 unified LUT sampler)
 #include "core/lens_proj_build.hpp"  // BuildProjParams / ProjParams (315.3 unified render projection)
 #include "core/math.hpp"  // math::kDegreeToRad
 #include "core/projection.hpp"  // ComputeEARScale (dual-fisheye r_scale derivation)
@@ -299,6 +300,10 @@ lm_pcg::GenRootKernelParams BuildTransitGpParams(const AxisDistribution& axis_di
   gp.lat_mean_rad    = lat_mean_rad;
   gp.lat_std_rad     = lat_std_rad;
   gp.lat_rejection_m = decision.rejection_m;
+  // 330.2 S6: node count is the device signal that the LUT buffers hold valid
+  // data (0 on every non-LUT path). The arrays themselves are passed as separate
+  // kernel pointer args. Mirrors Metal BuildGenRootParams.
+  gp.lat_lut_n = (decision.kind == lat_path::LatPathKind::kLutInverseCdf) ? LatLut::kNodes : 0u;
 
   gp.az_type     = static_cast<uint32_t>(axis_dist.azimuth_dist.type);
   gp.az_mean_rad = axis_dist.azimuth_dist.mean * math::kDegreeToRad;
@@ -909,6 +914,10 @@ __global__ void transit_multi_ms_kernel(
     const float* __restrict__ d_tri_norm,         // 3 × tri_cnt (outward triangle normal)
     const float* __restrict__ d_tri_area,         // tri_cnt
     const uint16_t* __restrict__ d_tri_to_poly,   // tri_cnt (kInvalidId on coplanar miss)
+    // 330.2 S6: unified latitude LUT (read only when gp.lat_lut_n > 0).
+    const float* __restrict__ d_lat_lut_theta,
+    const float* __restrict__ d_lat_lut_cdf,
+    const float* __restrict__ d_lat_lut_flip,
     lm_pcg::GenRootKernelParams gp,
     uint32_t n_rays,
     // [TEST-ONLY] nullptr in production. task-gpu-rng-ray-index-uint64 white-box
@@ -954,7 +963,7 @@ __global__ void transit_multi_ms_kernel(
   float roll = 0.0f;
   // scrum-328.2 Step 1: transit does not (yet) surface attempt-count — the
   // near-pole acceptance-rate observation is anchored to the gen sampler.
-  lm_pcg::sample_lat_lon_roll(stream, gp, nullptr, nullptr, nullptr, lon, lat, roll, nullptr);  // 330.2 S3: LUT buffers pending S3b
+  lm_pcg::sample_lat_lon_roll(stream, gp, d_lat_lut_theta, d_lat_lut_cdf, d_lat_lut_flip, lon, lat, roll, nullptr);  // 330.2 S6
 
   float mat9[9];
   lm_pcg::build_crystal_rotation_9(lon, lat, roll, mat9);
@@ -1047,6 +1056,10 @@ __global__ void gen_root_kernel(float* __restrict__ d_root_d,           // 3 × 
                                 const float* __restrict__ d_tri_area,   // tri_cnt
                                 const uint16_t* __restrict__ d_tri_to_poly,  // tri_cnt
                                 const WlEntry* __restrict__ d_wl_pool,  // wl_pool_size entries
+                                // 330.2 S6: unified latitude LUT (read only when gp.lat_lut_n > 0).
+                                const float* __restrict__ d_lat_lut_theta,
+                                const float* __restrict__ d_lat_lut_cdf,
+                                const float* __restrict__ d_lat_lut_flip,
                                 lm_pcg::GenRootKernelParams gp,
                                 uint32_t n_rays,
                                 // [TEST-ONLY] scrum-328.2 Step 1 RNG-probe / attempt-count observability
@@ -1117,8 +1130,8 @@ __global__ void gen_root_kernel(float* __restrict__ d_root_d,           // 3 × 
   // Pass `&attempts_local` only when the sibling buffer is bound — the branch
   // predicts trivially in production (d_lat_attempts always nullptr), and the
   // per-ray write below is likewise short-circuited.
-  // 330.2 S3: LUT arrays nullptr until buffers bound (S3b); branch dormant until S5.
-  lm_pcg::sample_lat_lon_roll(stream, gp, nullptr, nullptr, nullptr, lon, lat, roll,
+  // 330.2 S6: unified LUT arrays (consumed only on the kLutInverseCdf branch).
+  lm_pcg::sample_lat_lon_roll(stream, gp, d_lat_lut_theta, d_lat_lut_cdf, d_lat_lut_flip, lon, lat, roll,
                               d_lat_attempts != nullptr ? &attempts_local : nullptr);
   if (d_lat_attempts != nullptr) {
     d_lat_attempts[tid + attempts_ci_start] = attempts_local;
@@ -1310,6 +1323,15 @@ struct CudaTraceBackend::Impl {
   int* d_lat_attempts_ = nullptr;
   size_t lat_attempts_cap_ = 0;
   size_t lat_attempts_ci_start_ = 0;
+
+  // 330.2 S6: unified area-measure inverse-CDF latitude LUT (theta/cdf/flip),
+  // three fixed-size (LatLut::kNodes float) device buffers rebuilt per-ci by
+  // UploadLatLut when the axis distribution routes to kLatPathLutInverseCdf.
+  // gen_root_kernel / transit_multi_ms_kernel read them only when
+  // gp.lat_lut_n > 0 (mirrors Metal lat_lut_*_buf_ at buffer 14/15/16).
+  float* d_lat_lut_theta_ = nullptr;
+  float* d_lat_lut_cdf_   = nullptr;
+  float* d_lat_lut_flip_  = nullptr;
   float* d_pos_ = nullptr;
   float* d_ws_ = nullptr;
   uint32_t* d_from_poly_ = nullptr;  // per-ray entry-face polygon id
@@ -1544,6 +1566,12 @@ struct CudaTraceBackend::Impl {
   void EnsureGeomCapacity(size_t poly_cnt, size_t tri_cnt);
   void UploadCrystalGeometry(const Crystal& crystal);
 
+  // 330.2 S6: lazily cudaMalloc the three fixed-size LUT buffers (called from
+  // UploadLatLut). Rebuild + H2D-copy the LUT for the given axis distribution
+  // when it routes to kLutInverseCdf; per-ci cadence covers gen + transit.
+  void EnsureLatLutBuffers();
+  void UploadLatLut(const AxisDistribution& axis);
+
   // scrum-306.2: build the per-(layer,ci) geometry pool once (device-gen path).
   // Consumes rng_ via MakeCrystal in the EXACT ci-loop order (layers outer, ci
   // inner) so pooled shapes are byte-identical to the prior per-batch upload.
@@ -1568,6 +1596,11 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
   d_lat_attempts_ = nullptr;
   lat_attempts_cap_ = 0;
   lat_attempts_ci_start_ = 0;
+  // 330.2 S6: release the unified LUT buffers on teardown; EnsureLatLutBuffers
+  // re-allocates lazily on the next session's first UploadLatLut.
+  cudaFree(d_lat_lut_theta_); d_lat_lut_theta_ = nullptr;
+  cudaFree(d_lat_lut_cdf_);   d_lat_lut_cdf_ = nullptr;
+  cudaFree(d_lat_lut_flip_);  d_lat_lut_flip_ = nullptr;
   //
   // scrum-cuda-async-engine-port (304.2): per-batch EndSession passes
   // keep_persistent_buffers=true so the large device + pinned buffers
@@ -1767,6 +1800,41 @@ void CudaTraceBackend::Impl::UploadCrystalGeometry(const Crystal& crystal) {
 
   poly_cnt_ = static_cast<uint32_t>(poly_cnt);
   tri_cnt_  = static_cast<uint32_t>(tri_cnt);
+}
+
+// 330.2 S6: allocate the three fixed-size LUT device buffers if not present.
+// gen/transit kernels always receive these pointers; their contents are read
+// only when gp.lat_lut_n > 0. Mirrors Metal EnsureLatLutBuffers.
+void CudaTraceBackend::Impl::EnsureLatLutBuffers() {
+  constexpr size_t kBytes = static_cast<size_t>(LatLut::kNodes) * sizeof(float);
+  if (d_lat_lut_theta_ == nullptr) {
+    CheckCuda(cudaMalloc(&d_lat_lut_theta_, kBytes), "EnsureLatLutBuffers cudaMalloc d_lat_lut_theta");
+  }
+  if (d_lat_lut_cdf_ == nullptr) {
+    CheckCuda(cudaMalloc(&d_lat_lut_cdf_, kBytes), "EnsureLatLutBuffers cudaMalloc d_lat_lut_cdf");
+  }
+  if (d_lat_lut_flip_ == nullptr) {
+    CheckCuda(cudaMalloc(&d_lat_lut_flip_, kBytes), "EnsureLatLutBuffers cudaMalloc d_lat_lut_flip");
+  }
+}
+
+// 330.2 S6: rebuild the latitude LUT for this ci's axis distribution and H2D-copy
+// the three arrays. Only the LUT-routed families consume the contents; other
+// paths leave stale data (never read). Per-ci cadence covers gen + transit.
+// Mirrors Metal UploadLatLut.
+void CudaTraceBackend::Impl::UploadLatLut(const AxisDistribution& axis) {
+  EnsureLatLutBuffers();
+  if (lat_path::SelectLatPath(axis).kind != lat_path::LatPathKind::kLutInverseCdf) {
+    return;
+  }
+  LatLut lut = BuildLatLut(axis.latitude_dist);
+  constexpr size_t kBytes = static_cast<size_t>(LatLut::kNodes) * sizeof(float);
+  CheckCuda(cudaMemcpy(d_lat_lut_theta_, lut.theta.data(), kBytes, cudaMemcpyHostToDevice),
+            "UploadLatLut cudaMemcpy d_lat_lut_theta");
+  CheckCuda(cudaMemcpy(d_lat_lut_cdf_, lut.cdf.data(), kBytes, cudaMemcpyHostToDevice),
+            "UploadLatLut cudaMemcpy d_lat_lut_cdf");
+  CheckCuda(cudaMemcpy(d_lat_lut_flip_, lut.flip_prob.data(), kBytes, cudaMemcpyHostToDevice),
+            "UploadLatLut cudaMemcpy d_lat_lut_flip");
 }
 
 void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene) {
@@ -2632,6 +2700,12 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
       geom_tri_cnt = impl_->pool_tri_cnt_[slot];
     }
 
+    // 330.2 S6: rebuild the latitude LUT for this ci's axis distribution before
+    // the gen/transit dispatch (mirrors Metal ResolveLayerCrystalForCi's
+    // per-ci UploadLatLut). Depends only on the axis dist; the device-gen gen
+    // kernel and every layer's transit kernel of this ci read the same table.
+    impl_->UploadLatLut(ms_setting.crystal_.axis_);
+
     // ── Generate / transit this ci's root rays into root buf [0, ci_n) ──────
     if (first_ms && !impl_->disable_device_gen_) {
       // Device root-gen (296.6): samples orientation + sun-cone dir + entry point
@@ -2661,7 +2735,9 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
       gen_root_kernel<<<grid, 256, 0, impl_->stream_>>>(impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
                                      impl_->d_rot_c2w_, impl_->d_root_wl_idx_, geom_tri_vtx,
                                      geom_tri_norm, geom_tri_area, geom_tri_to_poly,
-                                     impl_->d_wl_pool_, gp, cin,
+                                     impl_->d_wl_pool_,
+                                     impl_->d_lat_lut_theta_, impl_->d_lat_lut_cdf_, impl_->d_lat_lut_flip_,
+                                     gp, cin,
                                      gen_probe_arg,
                                      static_cast<uint32_t>(impl_->probe_ci_start_ + probe_win_off),
                                      impl_->d_lat_attempts_,
@@ -2741,6 +2817,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
           impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
           impl_->d_rot_c2w_, impl_->d_root_wl_idx_,
           geom_tri_vtx, geom_tri_norm, geom_tri_area, geom_tri_to_poly,
+          impl_->d_lat_lut_theta_, impl_->d_lat_lut_cdf_, impl_->d_lat_lut_flip_,
           gp, cin, transit_probe_arg,
           static_cast<uint32_t>(impl_->probe_ci_start_ + probe_win_off));
       ck_reset(cudaPeekAtLastError(), "transit kernel launch");
