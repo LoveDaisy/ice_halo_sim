@@ -442,41 +442,30 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
                                              const LatLut* lat_lut) {
   auto& rng = RandomNumberGenerator::GetInstance();
 
-  // Jacobian correction for latitude sampling.
-  // Target distribution: p(phi) ∝ proposal(phi) × cos(phi)
-  // where cos(phi) = sin(colatitude) is the spherical area element Jacobian.
-  //
-  // Three paths:
-  //   1. Rayleigh (Gaussian near-pole only): 2D Gaussian → Rayleigh, exact for sin(θ)≈θ.
-  //   2. Generic rejection: propose from distribution, accept with prob cos(phi)/M.
-  //      Covers kGaussian (non-Rayleigh), kUniform, kZigzag, and future types.
-  //   3. kNoRandom: single deterministic orientation, no Jacobian needed.
-  constexpr int kMaxRejectionAttempts = 1000;
-
+  // Latitude sampling with the spherical-area Jacobian p(phi) ∝ proposal(phi) × cos(phi),
+  // where cos(phi) = sin(colatitude) is the area element. Since 330.3 every non-degenerate
+  // distribution routes to the unified inverse-CDF area-measure LUT (kLutInverseCdf); the
+  // remaining explicit paths are kGaussianLegacy (legacy no-Jacobian Gaussian) and kNoRandom
+  // (single deterministic orientation, no Jacobian needed). Path selection is single-sourced
+  // with the two GPU backends via lat_path::SelectLatPath (scrum-328.2 Step 4).
   auto lat_type = axis_dist.latitude_dist.type;
-
-  // Path selection + envelope constant M share a single source with the two
-  // GPU backends via lat_path::SelectLatPath (scrum-328.2 Step 4). Derive the
-  // host-side booleans (use_rayleigh / skip_jacobian equivalents) + the
-  // Rayleigh branch's cached mean_rad/sigma_rad from the decision result.
   auto decision = lat_path::SelectLatPath(axis_dist);
-  bool use_rayleigh = (decision.kind == lat_path::LatPathKind::kRayleigh);
-  bool use_laplacian_tight = (decision.kind == lat_path::LatPathKind::kLaplacianTightEnvelope);
-  float rejection_m = decision.rejection_m;
-  // Cached radian versions of mean/scale, shared by the two tight-envelope branches.
-  // For kGaussian this holds (mean, sigma); for kLaplacian this holds (mean, b) —
-  // the two Distribution types are mutually exclusive per call, so the same pair
-  // of locals safely serves both. `lat_scale_rad` was renamed from `sigma_rad`
-  // (which read as Gaussian-specific) after the Laplacian branch was added.
-  bool cache_needed = (lat_type == DistributionType::kGaussian) || (lat_type == DistributionType::kLaplacian);
-  float latitude_mean_rad = cache_needed ? axis_dist.latitude_dist.mean * math::kDegreeToRad : 0.0f;
-  float lat_scale_rad = cache_needed ? axis_dist.latitude_dist.std * math::kDegreeToRad : 0.0f;
 
   for (size_t i = 0; i < num; i++) {
     float phi = 0;
     bool flip = false;
 
-    if (decision.kind == lat_path::LatPathKind::kLutInverseCdf) {
+    if (decision.kind == lat_path::LatPathKind::kFullSphere) {
+      // Full-sphere uniform (IsFullSphereUniform()==true) reaching the parameterized overload —
+      // e.g. the Jacobian-correction unit test; production routes such axes through the dedicated
+      // SampleSphericalPointsSph(full-sphere) overload from simulator.cpp. Sample latitude directly
+      // with the area measure: phi = asin(u), u ~ U(-1,1), giving the uniform-on-sphere
+      // distribution. Matches the device sample_lat_lon_roll kLatPathFullSphere branch
+      // (pcg_shared.h). Before 330.3 this case fell through to the generic Jacobian-rejection branch
+      // (now retired), which reached the same distribution via cos(phi) rejection.
+      float u = std::max(-1.0f, std::min(1.0f, rng.GetUniform() * 2.0f - 1.0f));
+      phi = std::asin(u);
+    } else if (decision.kind == lat_path::LatPathKind::kLutInverseCdf) {
       // Unified area-measure inverse-CDF LUT (330.2). One uniform draw + fixed binary search
       // (no rejection loop); flip reproduces the pole-crossing azimuth flip via the per-bin
       // flip probability. The LUT is amortized once per axis distribution (passed-in or cached),
@@ -487,88 +476,12 @@ void RandomSampler::SampleSphericalPointsSph(const AxisDistribution& axis_dist, 
       phi = math::kPi_2 - theta_z;
       const uint32_t bin = lm_pcg::lat_lut_bin(theta_z, lut.theta.data(), LatLut::kNodes);
       flip = rng.GetUniform() < lut.flip_prob[bin];
-    } else if (lat_type == DistributionType::kGaussian && use_rayleigh) {
-      // Tight-envelope area-measure Rayleigh path (doc/near-pole-area-measure-sampling.md §2).
-      // Propose colatitude ~ Rayleigh(sigma) via the 2D-Gaussian norm form (numerically
-      // identical to theta = sigma*sqrt(-2 ln u)); accept with sin(theta)/theta (M=1,
-      // exact, never clamp). Mirrors pcg_shared.h::sample_lat_lon_roll kLatPathRayleigh
-      // branch; kMaxRejectionAttempts safety valve shared with the generic branch below.
-      int attempts = 0;
-      float colatitude = 0.0f;
-      bool accept = false;
-      do {
-        float dx = rng.GetGaussian() * lat_scale_rad;
-        float dy = rng.GetGaussian() * lat_scale_rad;
-        colatitude = std::sqrt(dx * dx + dy * dy);
-        ++attempts;
-        if (attempts >= kMaxRejectionAttempts) {
-          LOG_WARNING("SampleSphericalPointsSph: Rayleigh safety valve triggered (mean={}, std={})",
-                      axis_dist.latitude_dist.mean, axis_dist.latitude_dist.std);
-          break;
-        }
-        accept = rng.GetUniform() < lm_pcg::pcg_sinc(colatitude);
-      } while (!accept);
-      phi = std::copysign(math::kPi_2 - colatitude, latitude_mean_rad);
-      phi = std::max(-math::kPi_2, std::min(math::kPi_2, phi));
-      if (latitude_mean_rad < 0) {
-        // South-pole Rayleigh: fold phi to positive latitude and set flip=true to trigger
-        // lambda/roll += π downstream. Semantically identical to NormalizeLatitude, but not
-        // delegated there because Rayleigh phi is computed from copysign+clamp (never outside
-        // [-π/2, π/2]), so the NormalizeLatitude loop/reflection logic is unnecessary here.
-        phi = std::abs(phi);
-        flip = true;
-      }
-    } else if (lat_type == DistributionType::kLaplacian && use_laplacian_tight) {
-      // Tight-envelope area-measure Laplacian path (doc/near-pole-area-measure-sampling.md §2.1).
-      // Propose colatitude ~ Gamma(2, b) via closed form theta = -b(ln u1 + ln u2); accept with
-      // sin(theta)/theta (M=1, exact, never clamp). Mirrors pcg_shared.h::sample_lat_lon_roll
-      // kLatPathLaplacianTightEnvelope branch. copysign/clamp/flip semantics identical to
-      // Rayleigh branch above — they depend on the geometric fold, not on the proposal family.
-      int attempts = 0;
-      float colatitude = 0.0f;
-      bool accept = false;
-      do {
-        // 1e-7f floor matches the device-side pcg_gamma2 (pcg_shared.h) so CPU and GPU
-        // samplers see identical tail behavior; floating to the tiniest normal float would
-        // let -log(u) reach ~87, producing colatitude proposals ~87*b beyond legal domain.
-        float u1 = std::max(rng.GetUniform(), 1e-7f);
-        float u2 = std::max(rng.GetUniform(), 1e-7f);
-        colatitude = -lat_scale_rad * (std::log(u1) + std::log(u2));
-        ++attempts;
-        if (attempts >= kMaxRejectionAttempts) {
-          LOG_WARNING("SampleSphericalPointsSph: Laplacian tight-envelope safety valve triggered (mean={}, std={})",
-                      axis_dist.latitude_dist.mean, axis_dist.latitude_dist.std);
-          break;
-        }
-        accept = rng.GetUniform() < lm_pcg::pcg_sinc(colatitude);
-      } while (!accept);
-      phi = std::copysign(math::kPi_2 - colatitude, latitude_mean_rad);
-      phi = std::max(-math::kPi_2, std::min(math::kPi_2, phi));
-      if (latitude_mean_rad < 0) {
-        phi = std::abs(phi);
-        flip = true;
-      }
     } else if (lat_type == DistributionType::kGaussianLegacy) {
       // Legacy Gaussian: sample without Jacobian rejection (reproduces old behavior).
       phi = rng.Get(axis_dist.latitude_dist) * math::kDegreeToRad;
       auto [norm_phi, norm_flip] = detail::NormalizeLatitude(phi);
       phi = norm_phi;
       flip = norm_flip;
-    } else if (lat_type != DistributionType::kNoRandom) {
-      // Generic Jacobian rejection path (kGaussian non-Rayleigh, kUniform, kZigzag, etc.).
-      int attempts = 0;
-      do {
-        phi = rng.Get(axis_dist.latitude_dist) * math::kDegreeToRad;
-        auto [norm_phi, norm_flip] = detail::NormalizeLatitude(phi);
-        phi = norm_phi;
-        flip = norm_flip;
-        ++attempts;
-        if (attempts >= kMaxRejectionAttempts) {
-          LOG_WARNING("SampleSphericalPointsSph: rejection safety valve triggered (mean={}, std={})",
-                      axis_dist.latitude_dist.mean, axis_dist.latitude_dist.std);
-          break;
-        }
-      } while (rng.GetUniform() >= std::cos(phi) / rejection_m);
     } else {
       // kNoRandom: no Jacobian needed (single deterministic orientation).
       phi = rng.Get(axis_dist.latitude_dist) * math::kDegreeToRad;

@@ -51,17 +51,16 @@ namespace lm_pcg {
 // `lat_path` discriminator (mirrors host SampleSphericalPointsSph code paths,
 // math.cpp:404/444). Selecting a path is a host-side decision based on
 // axis_dist; the kernel only dispatches.
+// Values 2/4/5 (retired Rayleigh / GenericReject / LaplacianTightEnvelope, 330.3)
+// are intentionally omitted so the surviving wire values do not shift.
 LM_CONSTANT uint32_t kLatPathFullSphere = 0u;  // axis_dist.IsFullSphereUniform()
 LM_CONSTANT uint32_t kLatPathNoRandom = 1u;
-LM_CONSTANT uint32_t kLatPathRayleigh = 2u;                // kGaussian near-pole optimization
-LM_CONSTANT uint32_t kLatPathGaussLegacy = 3u;             // kGaussianLegacy
-LM_CONSTANT uint32_t kLatPathGenericReject = 4u;           // kGaussian/kUniform/kZigzag/kLaplacian
-LM_CONSTANT uint32_t kLatPathLaplacianTightEnvelope = 5u;  // kLaplacian near-pole optimization
-LM_CONSTANT uint32_t kLatPathLutInverseCdf = 6u;           // unified area-measure inverse-CDF LUT (330.2)
+LM_CONSTANT uint32_t kLatPathGaussLegacy = 3u;    // kGaussianLegacy
+LM_CONSTANT uint32_t kLatPathLutInverseCdf = 6u;  // unified area-measure inverse-CDF LUT (330.2)
 
-// DistributionType enum values (must match src/core/math.hpp). Crystal-rot
-// parity REQUIRES the GenericReject path know the actual proposal type, so
-// lat_dist_type is carried separately from lat_path.
+// DistributionType enum values (must match src/core/math.hpp). Still used for
+// the az_type / roll_type draws in pcg_get_dist; the lat_dist_type wire field is
+// dead post-330.3 (only the retired GenericReject path read it).
 LM_CONSTANT uint32_t kDistNoRandom = 0u;
 LM_CONSTANT uint32_t kDistUniform = 1u;
 LM_CONSTANT uint32_t kDistGaussian = 2u;
@@ -138,11 +137,11 @@ struct GenRootKernelParams {
   float sun_half_angle;    // (sun.diameter / 2) in radians
   uint32_t wl_pool_size;   // hashes a global ray index into [0, wl_pool_size)
   uint32_t lat_path;       // see kLatPath* above
-  uint32_t lat_dist_type;  // axis_dist.latitude_dist.type (cast to uint32_t)
+  uint32_t lat_dist_type;  // dead post-330.3 (only the retired GenericReject path read it); wire layout frozen
   float lat_mean_rad;
   float lat_std_rad;
-  float lat_rejection_m;
-  uint32_t lat_lut_n;  // node count for kLatPathLutInverseCdf (330.2); LUT arrays bound separately
+  float lat_rejection_m;  // dead post-330.3 (surviving paths are rejection-free, always 1.0); wire layout frozen
+  uint32_t lat_lut_n;     // node count for kLatPathLutInverseCdf (330.2); LUT arrays bound separately
   uint32_t az_type;
   float az_mean_rad;
   float az_std_rad;
@@ -163,16 +162,6 @@ LM_FN uint32_t pcg_hash(uint32_t x) {
 
 LM_FN float u01_from_hash(uint32_t h) {
   return static_cast<float>(h >> 8) * (1.0f / 16777216.0f);
-}
-
-// Precise acceptance ratio for tight-envelope area-measure sampling near the
-// pole (doc/near-pole-area-measure-sampling.md §2). Returns sin(theta)/theta;
-// the theta->0 limit is 1.0. The 1e-6f guard only fires when a uniform draw
-// floor drives the proposed colatitude toward 0 (see kLatPathRayleigh branch
-// in sample_lat_lon_roll). Domain is theta in [0, pi]: within it sin(theta) is
-// non-negative, so the returned ratio is in [0, 1] and is a valid probability.
-LM_FN float pcg_sinc(float theta) {
-  return theta > 1e-6f ? LM_SIN(theta) / theta : 1.0f;
 }
 
 struct PcgStream {
@@ -236,19 +225,6 @@ LM_FN float pcg_gaussian(LM_THREAD PcgStream& s) {
   float u1 = LM_FMAX(pcg_uniform(s), 1e-7f);
   float u2 = pcg_uniform(s);
   return LM_SQRT(-2.0f * LM_LOG(u1)) * LM_COS(2.0f * LM_PI_F * u2);
-}
-
-// Gamma(shape=2, scale=b) via the sum-of-two-Exp(1/b) closed form:
-//   theta = -b * (ln u1 + ln u2), u1,u2 ~ U(0,1)
-// Used by the Laplacian tight-envelope area-measure sampler
-// (doc/near-pole-area-measure-sampling.md §2.1): theta = colatitude ~ Gamma(2,b)
-// paired with sin(theta)/theta acceptance is EXACT (M=1) for the target
-// p(theta) ∝ exp(-theta/b) * sin(theta). u_i floored at 1e-7 (same as
-// pcg_gaussian) to keep log() finite. Consumes 2 uniform slots per call.
-LM_FN float pcg_gamma2(LM_THREAD PcgStream& s, float b) {
-  float u1 = LM_FMAX(pcg_uniform(s), 1e-7f);
-  float u2 = LM_FMAX(pcg_uniform(s), 1e-7f);
-  return -b * (LM_LOG(u1) + LM_LOG(u2));
 }
 
 // Mirrors RandomNumberGenerator::Get (math.cpp:365-389). mean / std are in
@@ -350,15 +326,13 @@ LM_FN uint32_t lat_lut_bin(float theta, LM_DEVICE const float* theta_nodes, uint
 // the host so the kernel does no degree↔radian conversions.
 //
 // `out_attempts` (scrum-328.2 Step 1 attempt-count observability, plan §5):
-// non-null → the caller receives this ray's rejection-loop iteration count
-// (1 for direct/analytic paths kFullSphere/kNoRandom/kRayleigh/kGaussLegacy;
-// N for kLatPathGenericReject, capped at kMaxRejectionAttempts). The caller
-// uses `mean(attempts)` as the empirical `1/accept_ratio` — the ONLY route
-// to a per-ray acceptance-rate observation on device (the host-side
-// SelectLatPath / ComputeJacobianEnvelope decision is deterministic and
-// cannot substitute). null → no write, hot-path cost is one branch predicted
-// off; production keeps passing null so the observation is compiled out at
-// the call site.
+// non-null → the caller receives this ray's rejection-loop iteration count.
+// Since 330.3 every surviving path is rejection-free, so this is always 1; the
+// facility is retained because a future rejection-based path would surface its
+// acceptance rate here (the host-side SelectLatPath decision is deterministic
+// and cannot substitute). null → no write, hot-path cost is one branch
+// predicted off; production keeps passing null so the observation is compiled
+// out at the call site.
 LM_FN void sample_lat_lon_roll(LM_THREAD PcgStream& s, LM_CONSTANT_REF GenRootKernelParams& gp,
                                LM_DEVICE const float* lat_lut_theta, LM_DEVICE const float* lat_lut_cdf,
                                LM_DEVICE const float* lat_lut_flip, LM_THREAD float& out_lon, LM_THREAD float& out_lat,
@@ -366,7 +340,7 @@ LM_FN void sample_lat_lon_roll(LM_THREAD PcgStream& s, LM_CONSTANT_REF GenRootKe
   float phi = 0.0f;
   bool flip = false;
   float lon = 0.0f;
-  int attempts_total = 1;  // direct-path default; kLatPathGenericReject overwrites below
+  int attempts_total = 1;  // every surviving path is rejection-free (330.3): always 1 attempt
   if (gp.lat_path == kLatPathFullSphere) {
     float u = pcg_uniform(s) * 2.0f - 1.0f;
     u = LM_CLAMP(u, -1.0f, 1.0f);
@@ -374,92 +348,21 @@ LM_FN void sample_lat_lon_roll(LM_THREAD PcgStream& s, LM_CONSTANT_REF GenRootKe
     lon = pcg_uniform(s) * 2.0f * LM_PI_F;
   } else if (gp.lat_path == kLatPathNoRandom) {
     phi = gp.lat_mean_rad;
-  } else if (gp.lat_path == kLatPathRayleigh) {
-    // Tight-envelope area-measure sampling (doc/near-pole-area-measure-sampling.md
-    // §2). Propose colatitude ~ Rayleigh(sigma) via the 2D-Gaussian norm form
-    // (numerically identical to theta = sigma*sqrt(-2 ln u)); accept with
-    // sin(theta)/theta (M=1, exact, never clamp). Consumes 2 gaussian slots +
-    // 1 uniform slot per attempt; expected ~1.002 attempts for sigma <= 60°
-    // (doc §附录). attempts_total is populated so the scrum-328.2 attempt-count
-    // observability facility (EnableGenAttemptCountForTest / ReadbackGenAttemptCountForTest)
-    // measures the tight-envelope acceptance rate directly.
-    int attempts = 0;
-    float colatitude = 0.0f;
-    bool accept = false;
-    do {
-      float dx = pcg_gaussian(s) * gp.lat_std_rad;
-      float dy = pcg_gaussian(s) * gp.lat_std_rad;
-      colatitude = LM_SQRT(dx * dx + dy * dy);
-      attempts++;
-      if (attempts >= kMaxRejectionAttempts) {
-        break;
-      }
-      accept = pcg_uniform(s) < pcg_sinc(colatitude);
-    } while (!accept);
-    attempts_total = attempts;
-    phi = LM_COPYSIGN(LM_PI_2F - colatitude, gp.lat_mean_rad);
-    phi = LM_CLAMP(phi, -LM_PI_2F, LM_PI_2F);
-    if (gp.lat_mean_rad < 0.0f) {
-      phi = LM_FABS(phi);
-      flip = true;
-    }
-  } else if (gp.lat_path == kLatPathLaplacianTightEnvelope) {
-    // Tight-envelope area-measure sampling for Laplacian near-pole
-    // (doc/near-pole-area-measure-sampling.md §2.1). Propose colatitude ~
-    // Gamma(2, b) via pcg_gamma2 (closed form theta = -b(ln u1 + ln u2)); accept
-    // with sin(theta)/theta (M=1, exact, never clamp). Structurally mirrors the
-    // kLatPathRayleigh branch above — same copysign/clamp/flip semantics for
-    // colatitude → phi (they depend only on the geometric fold, not on which
-    // proposal distribution generated theta). Consumes 2 uniform slots per
-    // attempt (pcg_gamma2) + 1 uniform slot (accept draw); expected ~1.007
-    // attempts for b <= 60° (scrum-328.4 Step 1 calibration, exp4).
-    int attempts = 0;
-    float colatitude = 0.0f;
-    bool accept = false;
-    do {
-      colatitude = pcg_gamma2(s, gp.lat_std_rad);
-      attempts++;
-      if (attempts >= kMaxRejectionAttempts) {
-        break;
-      }
-      accept = pcg_uniform(s) < pcg_sinc(colatitude);
-    } while (!accept);
-    attempts_total = attempts;
-    phi = LM_COPYSIGN(LM_PI_2F - colatitude, gp.lat_mean_rad);
-    phi = LM_CLAMP(phi, -LM_PI_2F, LM_PI_2F);
-    if (gp.lat_mean_rad < 0.0f) {
-      phi = LM_FABS(phi);
-      flip = true;
-    }
   } else if (gp.lat_path == kLatPathGaussLegacy) {
     float raw = pcg_get_dist(s, kDistGaussianLegacy, gp.lat_mean_rad, gp.lat_std_rad);
     normalize_latitude(raw, phi, flip);
   } else if (gp.lat_path == kLatPathLutInverseCdf) {
-    // Unified area-measure inverse-CDF LUT (330.2). One uniform draw + fixed binary search (no
-    // rejection loop, attempts_total stays 1); flip via the per-bin probability reproduces the
-    // pole-crossing azimuth flip. Same single-source invert_lat_lut / lat_lut_bin as the CPU
-    // sampler (math.cpp). The three LUT arrays are bound as separate device buffers (they cannot
-    // live inside the setBytes-uploaded GenRootKernelParams struct).
+    // Unified area-measure inverse-CDF LUT (330.2; sole non-degenerate path since 330.3). One
+    // uniform draw + fixed binary search (no rejection loop, attempts_total stays 1); flip via the
+    // per-bin probability reproduces the pole-crossing azimuth flip. Same single-source
+    // invert_lat_lut / lat_lut_bin as the CPU sampler (math.cpp). The three LUT arrays are bound as
+    // separate device buffers (they cannot live inside the setBytes-uploaded GenRootKernelParams
+    // struct).
     float xi = pcg_uniform(s);
     float colatitude = invert_lat_lut(xi, lat_lut_theta, lat_lut_cdf, gp.lat_lut_n);
     phi = LM_PI_2F - colatitude;  // colatitude-from-zenith (theta_z in [0,pi]) -> latitude in [-pi/2,pi/2]
     uint32_t bin = lat_lut_bin(colatitude, lat_lut_theta, gp.lat_lut_n);
     flip = pcg_uniform(s) < lat_lut_flip[bin];
-  } else {
-    // kLatPathGenericReject (math.cpp:503-517).
-    int attempts = 0;
-    bool accept = false;
-    do {
-      float raw = pcg_get_dist(s, gp.lat_dist_type, gp.lat_mean_rad, gp.lat_std_rad);
-      normalize_latitude(raw, phi, flip);
-      attempts++;
-      if (attempts >= kMaxRejectionAttempts) {
-        break;
-      }
-      float accept_u = pcg_uniform(s);
-      accept = accept_u < LM_COS(phi) / gp.lat_rejection_m;
-    } while (!accept);
-    attempts_total = attempts;
   }
   if (gp.lat_path != kLatPathFullSphere) {
     lon = pcg_get_dist(s, gp.az_type, gp.az_mean_rad, gp.az_std_rad);

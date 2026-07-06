@@ -81,7 +81,7 @@
 #include "core/projection.hpp"  // ComputeEARScale (dual-fisheye r_scale derivation)
 #include "core/shared/accum_shared.h"  // AccumXyzToPixel (S2 device-fused emit gate)
 #include "core/shared/filter_shared.h"
-#include "core/shared/lat_path_selection.hpp"  // SelectLatPath / ComputeJacobianEnvelope (single source)
+#include "core/shared/lat_path_selection.hpp"  // SelectLatPath (single source)
 #include "core/shared/optics_shared.h"
 #include "core/shared/pcg_shared.h"
 #include "core/shared/projection_shared.h"  // RectangularForward / FisheyeEqualAreaForward
@@ -261,15 +261,8 @@ static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kFullSphere) == lm_pc
               "LatPathKind::kFullSphere must match lm_pcg::kLatPathFullSphere");
 static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kNoRandom) == lm_pcg::kLatPathNoRandom,
               "LatPathKind::kNoRandom must match lm_pcg::kLatPathNoRandom");
-static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kRayleigh) == lm_pcg::kLatPathRayleigh,
-              "LatPathKind::kRayleigh must match lm_pcg::kLatPathRayleigh");
 static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kGaussLegacy) == lm_pcg::kLatPathGaussLegacy,
               "LatPathKind::kGaussLegacy must match lm_pcg::kLatPathGaussLegacy");
-static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kGenericReject) == lm_pcg::kLatPathGenericReject,
-              "LatPathKind::kGenericReject must match lm_pcg::kLatPathGenericReject");
-static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kLaplacianTightEnvelope) ==
-                  lm_pcg::kLatPathLaplacianTightEnvelope,
-              "LatPathKind::kLaplacianTightEnvelope must match lm_pcg::kLatPathLaplacianTightEnvelope");
 
 // Build the transit-form GenRootKernelParams. Mirrors Metal's
 // `BuildTransitRootParams` (metal_trace_backend.mm:1593): orientation +
@@ -1070,8 +1063,8 @@ __global__ void gen_root_kernel(float* __restrict__ d_root_d,           // 3 × 
                                 //                       d_rng_probe[tid + probe_ci_start]. Used for
                                 //                       RngProbeStream::kGen isolation.
                                 //   d_lat_attempts    — non-null → each thread writes its
-                                //                       kLatPathGenericReject inner-loop iteration
-                                //                       count (1 for direct-path) to
+                                //                       rejection-loop iteration count (always 1
+                                //                       since 330.3; every path rejection-free) to
                                 //                       d_lat_attempts[tid + attempts_ci_start].
                                 //                       Consumer: near-pole acceptance-rate smoke.
                                 float* __restrict__ d_rng_probe,
@@ -1318,8 +1311,9 @@ struct CudaTraceBackend::Impl {
   size_t probe_ci_start_ = 0;  // ci-window offset applied at probe write (see EnableRngProbeForTest hpp doc)
   // [TEST-ONLY] scrum-328.2 Step 1: per-ray attempt-count sibling buffer
   // (nullptr in production; allocated by EnableGenAttemptCountForTest). Bound
-  // → gen_root_kernel writes each ray's kLatPathGenericReject iteration count
-  // via sample_lat_lon_roll's out_attempts arg. Independent of the RNG probe.
+  // → gen_root_kernel writes each ray's rejection-loop iteration count (always
+  // 1 since 330.3) via sample_lat_lon_roll's out_attempts arg. Independent of
+  // the RNG probe.
   int* d_lat_attempts_ = nullptr;
   size_t lat_attempts_cap_ = 0;
   size_t lat_attempts_ci_start_ = 0;

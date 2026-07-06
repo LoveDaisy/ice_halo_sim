@@ -831,13 +831,12 @@ TEST_F(SphericalSamplingTest, LaplacianHeavierTailThanGaussian) {
 }
 
 
-// scrum-328.4 (Laplacian tight-envelope area-measure sampling). Verifies the CPU sampler
-// reproduces the ANALYTICAL target p(theta) ∝ exp(-theta/b) · sin(theta) on the near-pole
-// tight-envelope branch (mean=90°, colatitude_center=0 → routes to kLaplacianTightEnvelope).
-// Deliberately NOT a KS-match against the pre-existing GenericReject Laplacian sampler,
-// which has a known M=cos(5b) tail-clamp bias (scrum-328.1 exp1); the tight-envelope path
-// is exact by construction (M=1), so matching the old sampler would flag a valid improvement
-// as regression (issue.md AC hardline).
+// scrum-328.4 / 330.2 (unified area-measure LUT). Verifies the CPU sampler reproduces the
+// ANALYTICAL target p(theta) ∝ exp(-theta/b) · sin(theta) for a near-pole Laplacian
+// (mean=90°, colatitude_center=0 → routes to the unified inverse-CDF LUT, kLutInverseCdf).
+// Deliberately NOT a KS-match against the retired GenericReject Laplacian sampler, which had a
+// known M=cos(5b) tail-clamp bias (scrum-328.1 exp1); the LUT is exact by construction, so
+// matching the old sampler would flag a valid improvement as regression (issue.md AC hardline).
 //
 // Uses moment + CDF-quantile matching against the analytical target rather than bin-by-bin
 // density matching — the latter suffers from bin-boundary MC artifacts at the θ→0 corner
@@ -933,16 +932,12 @@ TEST_F(SphericalSamplingTest, LaplacianTightEnvelopeExactness) {
 }
 
 
-// scrum-328.4 (crossover cap fallback). Verifies that when Laplacian scale exceeds
-// kMaxTightEnvelopeLaplacianBRad, SelectLatPath routes to kGenericReject rather than
-// silently accepting a possibly-unsafe wide-b tight-envelope. Also confirms the runtime
-// sampler still produces valid latitudes (no safety-valve corruption).
-TEST_F(SphericalSamplingTest, LaplacianTightEnvelopeCrossoverFallback) {
-  // 330.2 S5: the tight-envelope↔generic-reject CROSSOVER (b-cap, polar threshold) is unified
-  // away — every Laplacian latitude, near-pole / off-pole / wide-b alike, now routes to the single
-  // kLutInverseCdf path (the b cap + threshold distinctions only mattered for the retired branches;
-  // 330.3 may drop this test entirely). What remains worth guarding: all these configs route to the
-  // LUT and produce valid finite orientations. b=70° > old 60° cap.
+// 330.3 (post branch-retirement smoke). The tight-envelope↔generic-reject crossover (b-cap,
+// polar threshold) it originally guarded no longer exists — every Laplacian latitude, near-pole
+// / off-pole / wide-b alike, routes to the single unified LUT path (kLutInverseCdf). What remains
+// worth guarding: all these configs route to the LUT and produce valid finite orientations.
+TEST_F(SphericalSamplingTest, LaplacianAllConfigsRouteToLut) {
+  // Wide b=70° (> old 60° cap): still routes to the LUT.
   lumice::AxisDistribution axis;
   axis.latitude_dist = { lumice::DistributionType::kLaplacian, 90.0f, 70.0f };
   axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
@@ -966,7 +961,7 @@ TEST_F(SphericalSamplingTest, LaplacianTightEnvelopeCrossoverFallback) {
   EXPECT_EQ(decision_offpole.kind, lumice::lat_path::LatPathKind::kLutInverseCdf)
       << "Off-pole Laplacian must route to the unified LUT.";
 
-  // Runtime sanity for the wide-b GenericReject config: no NaN, latitudes in [-π/2, π/2].
+  // Runtime sanity for the wide-b config: no NaN, latitudes in [-π/2, π/2].
   auto& rng = lumice::RandomNumberGenerator::GetInstance();
   rng.SetSeed(2024);
   float lon_lat[3];

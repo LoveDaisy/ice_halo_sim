@@ -41,7 +41,7 @@
 #include "core/backend/metal_trace_backend.hpp"
 #include "core/backend/metal_trace_backend_test_hooks.hpp"  // scrum-328.2 Step 3
 #include "core/backend/wl_pool.hpp"  // WlEntry / ComputeWlPool / ResolveWlPoolSize (296.6 single-sourced)
-#include "core/shared/lat_path_selection.hpp"  // SelectLatPath / ComputeJacobianEnvelope (single source)
+#include "core/shared/lat_path_selection.hpp"  // SelectLatPath (single source)
 #include "core/shared/pcg_shared.h"             // lm_pcg::kLatPath* (device sink values)
 // task-#283 (metal-build-time-metallib): build-generated headers — wrap their
 // content in `namespace lumice { ... }`, so they are #included at file scope
@@ -132,15 +132,8 @@ static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kFullSphere) == lm_pc
               "LatPathKind::kFullSphere must match lm_pcg::kLatPathFullSphere");
 static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kNoRandom) == lm_pcg::kLatPathNoRandom,
               "LatPathKind::kNoRandom must match lm_pcg::kLatPathNoRandom");
-static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kRayleigh) == lm_pcg::kLatPathRayleigh,
-              "LatPathKind::kRayleigh must match lm_pcg::kLatPathRayleigh");
 static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kGaussLegacy) == lm_pcg::kLatPathGaussLegacy,
               "LatPathKind::kGaussLegacy must match lm_pcg::kLatPathGaussLegacy");
-static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kGenericReject) == lm_pcg::kLatPathGenericReject,
-              "LatPathKind::kGenericReject must match lm_pcg::kLatPathGenericReject");
-static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kLaplacianTightEnvelope) ==
-                  lm_pcg::kLatPathLaplacianTightEnvelope,
-              "LatPathKind::kLaplacianTightEnvelope must match lm_pcg::kLatPathLaplacianTightEnvelope");
 static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kLutInverseCdf) == lm_pcg::kLatPathLutInverseCdf,
               "LatPathKind::kLutInverseCdf must match lm_pcg::kLatPathLutInverseCdf");
 
@@ -171,10 +164,10 @@ struct GenRootKernelParams {
   // per-batch `ray_weight` (now per-ray from wl_pool[wl_idx].spd_weight).
   uint32_t wl_pool_size;
   uint32_t lat_path;
-  uint32_t lat_dist_type;   // DistributionType cast to uint
+  uint32_t lat_dist_type;   // dead post-330.3 (retired GenericReject path); wire layout frozen
   float    lat_mean_rad;
   float    lat_std_rad;
-  float    lat_rejection_m;
+  float    lat_rejection_m; // dead post-330.3 (surviving paths rejection-free); wire layout frozen
   uint32_t lat_lut_n;       // node count for kLatPathLutInverseCdf (330.2); LUT arrays bound separately
   uint32_t az_type;
   float    az_mean_rad;

@@ -853,7 +853,8 @@ kernel void gen_root_kernel(
   // 1. Sample crystal orientation (lon, lat, roll) → 3×3 rotation.
   float lon, lat, roll;
   // scrum-328.2 Step 1: attempt-count observability — writes the per-ray
-  // kLatPathGenericReject iteration count when the sibling buffer is armed
+  // rejection-loop iteration count when the sibling buffer is armed (always 1
+  // since 330.3; every path is rejection-free).
   // (attempts_ctrl.x!=0). ctrl.y is the multi-ci write-offset. Production:
   // ctrl.x==0 → &attempts_local skipped, branch predicted off.
   thread int attempts_local = 1;
