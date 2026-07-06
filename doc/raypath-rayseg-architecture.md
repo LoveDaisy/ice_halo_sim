@@ -40,9 +40,14 @@ semantic role, valid range, and sentinel values.
 
 | Field | Type | Semantics | Source |
 |-------|------|-----------|--------|
-| `is_continue_` | `bool` | Set when this outgoing candidate continues to the next MS layer. Only meaningful when `to_face_ == kInvalidId && w_ >= 0`. Default `false`. | `src/core/raypath.hpp:78` |
-| `is_filter_dropped_` | `bool` | Set when the outgoing candidate fails the per-crystal filter check. Mutually exclusive with `is_continue_`. | `src/core/raypath.hpp:84` |
-| `is_prior_filter_failed_` | `bool` | Cross-layer persistent flag: set when any upstream MS layer's filter rejects this ray. Propagated via `TraceRayBasicInfo`. Reset only in `InitRayFirstMs`. | `src/core/raypath.hpp:90` |
+| `is_continue_` | `bool` | Set when this outgoing candidate continues to the next MS layer. Only meaningful when `to_face_ == kInvalidId && w_ >= 0`. Default `false`. | `src/core/raypath.hpp` (`is_continue_`) |
+
+**Note (scrum-237, 2026-05-28)**: `is_filter_dropped_` and `is_prior_filter_failed_`
+plus the anchor-lane machinery were removed. Filter-fail rays now terminate
+immediately in `CollectData` by reusing the TIR sentinel (`w_ = -1.0f`), so no
+cross-MS-layer "prior filter failed" flag needs to persist. See
+`doc/filter-architecture.md §6` (scrum-237) and `§7` (current branch table) for
+the authoritative post-removal semantics.
 
 ### N4 Construction-Time Invariants
 
@@ -126,14 +131,15 @@ directly.
 
 ### State Derivation
 
-Segment kind is derived from two primary fields (`to_face_`, `w_`) and two 1-bit flags
-(`is_continue_`, `is_filter_dropped_`). The five states are **mutually exclusive and
-exhaustive** (source: `src/core/raypath.hpp:93-104`):
+Segment kind is derived from two primary fields (`to_face_`, `w_`) and one 1-bit
+flag (`is_continue_`). The four states are **mutually exclusive and exhaustive**
+(source: `RaySeg::IsTir/IsNormal/IsContinue/IsOutgoing` in `src/core/raypath.hpp`):
 
 ```
                         ┌─────────────────────────────────────┐
                         │          w_ < 0?                    │
-                        │   YES ──► TIR (total reflection)    │
+                        │   YES ──► TIR (also filter-fail;    │
+                        │            see filter-arch. §7)     │
                         │   NO  ──┐                           │
                         │         │                           │
                         │    to_face_ != kInvalidId?          │
@@ -142,44 +148,28 @@ exhaustive** (source: `src/core/raypath.hpp:93-104`):
                         │         │  (outgoing candidate)     │
                         │    is_continue_?                    │
                         │   YES ──► CONTINUE (next MS)        │
-                        │   NO  ──┐                           │
-                        │    is_filter_dropped_?              │
-                        │   YES ──► FILTER-DROPPED (anchor)   │
                         │   NO  ──► OUTGOING (emit)           │
                         └─────────────────────────────────────┘
 ```
 
 | State | Predicate | Meaning |
 |-------|-----------|---------|
-| TIR | `w_ < 0` | Total internal reflection; ray is absorbed. |
+| TIR | `w_ < 0` | Total internal reflection **or** filter-fail (the latter reuses the TIR sentinel; see `filter-architecture.md §7`). Absorbed by the simulator; never emitted. |
 | Normal | `to_face_ != kInvalidId && w_ >= 0` | Ray hit another face; continues tracing inside the crystal. |
-| Outgoing | `to_face_ == kInvalidId && w_ >= 0 && !is_continue_ && !is_filter_dropped_` | Ray exits crystal, passes filter (or no filter), does not continue to next MS. Emitted to output. |
+| Outgoing | `to_face_ == kInvalidId && w_ >= 0 && !is_continue_` | Ray exits crystal, passes filter (or no filter), does not continue to next MS. Emitted to output. |
 | Continue | `is_continue_` (implies `to_face_ == kInvalidId && w_ >= 0`) | Ray exits crystal and continues to next MS layer. |
-| Filter-Dropped | `is_filter_dropped_` (implies `to_face_ == kInvalidId && w_ >= 0`) | Ray exits crystal but fails filter; routed to anchor lane. |
 
 ### Transition Rules in CollectData
 
-`CollectData` (source: `src/core/simulator.cpp:413-474`) is the sole state-assignment
-function. It processes `buffer_data[1]` (the output of `TraceRayBasicInfo` + `FillRayOtherInfo`)
-and writes the state flags.
+`CollectData` (`src/core/simulator.cpp`) is the sole state-assignment function.
+For the authoritative post-scrum-237 branch table (filter-fail = `w_ = -1.0f`
+sentinel, ray terminates immediately, no anchor lane, no cross-layer
+"prior filter failed" flag), see `doc/filter-architecture.md §7`. That section is
+the single source of truth for the Design A branch table; this document does not
+duplicate it to avoid a second drift point.
 
-**Pre-loop reset** (pool-reuse guard): both `is_continue_` and `is_filter_dropped_` are
-explicitly reset to `false` for every segment at the top of the loop
-(source: `src/core/simulator.cpp:434-435`).
-
-**Branch table** for outgoing candidates (`to_face_ == kInvalidId && w_ >= 0`):
-
-| Filter | Prior Failed | Prob | is_continue_ | is_filter_dropped_ | is_prior_filter_failed_ | Destination |
-|--------|-------------|------|--------------|-------------------|------------------------|-------------|
-| pass | no | pass | true | false | unchanged | next MS |
-| pass | no | fail | false | false | unchanged | outgoing buffer |
-| pass | yes | pass | true | false | unchanged | next MS (anchor bypass) |
-| pass | yes | fail | false | true | unchanged | anchor lane |
-| fail | — | pass | true | false | **set true** | next MS |
-| fail | — | fail | false | true | **set true** | anchor lane |
-
-Source: `src/core/simulator.cpp:430-458`. See also `doc/filter-architecture.md §7` for the
-anchor-lane design rationale.
+**Pre-loop reset** (pool-reuse guard): `is_continue_` is explicitly reset to
+`false` for every segment at the top of the `CollectData` loop.
 
 **Coordinate rotation**: outgoing candidates have `d_` and `p_` rotated from crystal-local
 to world-space (`crystal_rot_.Apply`) **before** the filter check
@@ -188,29 +178,25 @@ branch (source: `src/core/simulator.cpp:463-466`). Normal segments remain in cry
 coordinates.
 
 **Routing after state assignment**:
-- `IsNormal()` → re-enters `buffer_data[0]` for the next hit iteration
-  (source: `src/core/simulator.cpp:468-469`).
-- `IsContinue()` → appended to `init_data[1]` for the next MS layer
-  (source: `src/core/simulator.cpp:471-472`).
-- `IsOutgoing()` / `IsFilterDropped()` → collected in the main loop into `outgoing_*` /
-  `anchor_*` vectors respectively (source: `src/core/simulator.cpp:700-714`).
+- `IsNormal()` → re-enters `buffer_data[0]` for the next hit iteration.
+- `IsContinue()` → appended to `init_data[1]` for the next MS layer.
+- `IsOutgoing()` → collected in the wavelength loop into `outgoing_*` vectors.
+- `IsTir()` (including filter-fail) → stays in `all_data` but is not emitted.
 
 ### Reset Points Summary
 
-| Field | Reset Location | Trigger | Source |
-|-------|---------------|---------|--------|
-| `is_continue_` | `CollectData` loop top | Every segment, every hit iteration | `src/core/simulator.cpp:434` |
-| `is_continue_` | `InitRayOtherMs` step 1.4 | Pool-reuse guard for MS layer entry | `src/core/simulator.cpp:211` |
-| `is_filter_dropped_` | `CollectData` loop top | Every segment, every hit iteration | `src/core/simulator.cpp:435` |
-| `is_prior_filter_failed_` | `InitRayFirstMs` step 1.4 | Once per root ray (first MS only) | `src/core/simulator.cpp:179` |
-| `rp_` | `InitRay_other_info` | Each crystal initialization | `src/core/simulator.cpp:152` |
+| Field | Reset Location | Trigger |
+|-------|---------------|---------|
+| `is_continue_` | `CollectData` loop top | Every segment, every hit iteration |
+| `is_continue_` | `InitRayOtherMs` step 1.4 | Pool-reuse guard for MS layer entry |
+| Raypath recorder | `InitRay_other_info` | Each crystal initialization |
 
-**Key invariant**: `is_prior_filter_failed_` is the **only** cross-MS-layer persistent bool.
-It is set in `CollectData` when a filter fails (source: `src/core/simulator.cpp:447`) and
-propagated to child segments in `TraceRayBasicInfo` (source: `src/core/simulator.cpp:386-387`).
-It is reset only in `InitRayFirstMs` (source: `src/core/simulator.cpp:179`), never in
-`InitRayOtherMs` — this is by design, so that a filter failure in layer N causes all
-downstream layers to route the ray to the anchor lane.
+**Note (scrum-237, 2026-05-28)**: post-anchor-lane removal there is no cross-MS-layer
+persistent per-ray state carried by `RaySeg` itself — a filter-fail simply sets
+`w_ = -1.0f` and the ray terminates. Any future cross-layer per-ray state (e.g.
+the phase-2 raypath-color foundation's per-ray component mask) is added as a
+**parallel array on `RayBuffer`**, not as a `RaySeg` field, to preserve the
+`sizeof(RaySeg) == 96` SoA-prize invariant.
 
 ---
 

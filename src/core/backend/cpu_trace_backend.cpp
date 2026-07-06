@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <utility>
@@ -45,6 +46,11 @@ struct BatchTraceSpec {
   size_t max_hits;
   bool first_ms;
   uint8_t ms_layer_idx;  // current MS layer index (carried into ExitRayRecord)
+  // task-331.2: per-summand -> component-bit map for THIS (layer, crystal),
+  // sliced from CpuTraceBackend::component_table_. Handed to CollectData so the
+  // emit gate produces this layer's component bits. Null (no map) leaves masks
+  // untouched, matching the legacy path's nullptr-default behaviour.
+  const std::vector<uint8_t>* summand_bits = nullptr;
   // Host-ray injection (first_ms only). When non-null, TraceCrystalBatch
   // bypasses InitRayFirstMs's light-source sampling and populates workspace[0]
   // directly from host->d/p/w/tf (already in crystal-local space). Used by
@@ -154,7 +160,7 @@ void TraceCrystalBatch(RandomNumberGenerator& rng, const CrystalTraceSpec& cryst
       // We thread cont_collect through that slot via a temporary swap.
       RayBuffer init_for_collect[2]{};
       std::swap(init_for_collect[1], buffers.cont_collect);
-      CollectData(rng, batch.ms_info, batch.filter_spec, workspace, init_for_collect);
+      CollectData(rng, batch.ms_info, batch.filter_spec, workspace, init_for_collect, batch.summand_bits);
       std::swap(init_for_collect[1], buffers.cont_collect);
 
       // Copy traced rays to all_data + collect outgoing.
@@ -175,6 +181,11 @@ void TraceCrystalBatch(RandomNumberGenerator& rng, const CrystalTraceSpec& cryst
           rec.weight = r.w_;
           rec.crystal_id = static_cast<uint16_t>(crystal_spec.crystal_id);
           rec.ms_layer_idx = batch.ms_layer_idx;
+          // task-331.2: pipe the per-ray component mask out of workspace[1]
+          // into the exit record. CollectData (above) has OR'd this layer's
+          // component bits into the mask via the summand_bits map; reads 0 only
+          // when no summand matched.
+          rec.component_mask = workspace[1].ComponentAt(j);
           const RaypathRecorder& rp = workspace[1].RecorderAt(j);
           const uint8_t* seq = workspace[1].RecorderDataPtr(j);
           uint8_t seq_len = static_cast<uint8_t>(std::min<size_t>(rp.size_, ExitFaceSeq::kCap));
@@ -243,6 +254,11 @@ void CpuTraceBackend::BeginSession(const SessionSpec& spec) {
   continuation_buf_ = RayBuffer{};
   exit_records_.clear();
   last_layer_crystal_count_ = 0;
+
+  // task-331.2: build the raypath-color component table for this scene once per
+  // session. Pure O(total summands) walk — TraceLayer slices it per (layer,
+  // crystal) so the emit gate can produce component bits.
+  component_table_ = BuildComponentTable(*spec.scene);
 }
 
 
@@ -337,6 +353,13 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
 
     auto filter_spec = FilterSpec::Create(setting.filter_, crystal, crystal_axis);
 
+    // task-331.2: slice the component table by the STATIC (layer, crystal-slot)
+    // key. `ci` is the setting-slot index BuildComponentTable used — NOT
+    // crystal_spec.crystal_id (which is the host-supplied crystal id on the
+    // ci==0 host-inject path). ms_idx_ is the current MS layer.
+    std::vector<uint8_t> summand_bits =
+        ComponentBitsFor(component_table_, static_cast<IdType>(ms_idx_), static_cast<IdType>(ci));
+
     // ci_n = this population's ray count (cn loop bound); total_ray_num = the
     // whole layer's ray count, used to size the trace workspace (see
     // TraceCrystalBatch capacity comment).
@@ -357,6 +380,7 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
                           spec_.scene->max_hits_,
                           first_ms,
                           static_cast<uint8_t>(ms_idx_),
+                          &summand_bits,
                           host_inject };
     BatchTraceBuffers buffers{ prev_init, init_ray_offset, all_data, cont_collect, outgoing_records };
     TraceCrystalBatch(rng_, crystal_spec, batch, buffers);
@@ -425,9 +449,12 @@ RootRaySource CpuTraceBackend::Recombine(LayerHandlePtr handle, const RecombineS
   if (spec.shuffle && continuation_buf_.size_ > 1) {
     // Fisher-Yates shuffle — mirror Simulator's swap-based shuffle order
     // (same loop shape so RNG draws stay aligned with the legacy path).
+    // SwapRay carries each ray's component mask with it (task-331.3): a plain
+    // std::swap(buf[i],buf[j]) swaps only rays_ and would decorrelate the
+    // cross-layer OR-accumulated mask from its ray. RNG draws are unchanged.
     for (size_t i = 0; i < continuation_buf_.size_; i++) {
       size_t j = static_cast<size_t>(rng_.GetUniform() * (continuation_buf_.size_ - i)) + i;
-      std::swap(continuation_buf_[i], continuation_buf_[j]);
+      continuation_buf_.SwapRay(i, j);
     }
   }
 
@@ -482,6 +509,7 @@ void CpuTraceBackend::EndSession() {
   xyz_buf_.reset();
   continuation_buf_ = RayBuffer{};
   exit_records_.clear();
+  component_table_ = ComponentTable{};  // task-331.2: lifecycle symmetry
   spec_ = SessionSpec{};
 }
 

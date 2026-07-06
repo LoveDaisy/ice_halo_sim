@@ -314,6 +314,56 @@ LM_FN bool DeviceFilterCheck(const DeviceFilterDesc& f, const DeviceFilterDesc* 
   return (f.action == 0u) ? m : !m;
 }
 
+// task-331.6 (raypath-color foundation): per-summand match mask, the device
+// mirror of host `ComplexSpec::MatchSummandMask` / `FilterSpec::MatchSummandMask`
+// (filter_spec.cpp:307 / filter_spec.hpp:58) and MSL `DeviceFilterSummandMask`
+// (lumice_trace.metal). Returns a mask whose bit k is set iff OR-summand k
+// matched — EVERY clause is evaluated (no cross-clause short-circuit) so the
+// collapse-to-boolean gate does not discard the per-summand info the component
+// mask needs. `out_matched` receives the pre-action collapse boolean
+// (== DeviceFilterMatch). Semantics:
+//   - Complex       : bit or_i set iff its AND-clause fully matched.
+//   - None          : 0 summands → mask 0, matched=true (mirrors NoneSpec).
+//   - other simple  : 1 summand → bit 0 iff matched (mirrors non-None simple).
+// The result is capped at kDeviceFilterMaxOrClauses summands (== the Complex
+// or_clause_count upper bound); the component-bit table uses the same stride.
+LM_FN uint32_t DeviceFilterSummandMask(const DeviceFilterDesc& f, const DeviceFilterDesc* complex_sub_desc_buf,
+                                       const uint8_t* path, uint32_t path_len, const uint8_t* getfn_bytes,
+                                       const uint32_t* getfn_offsets, uint32_t crystal_slot, const float* ray_dir,
+                                       uint32_t ray_crystal_config_id, bool* out_matched) {
+  if (f.type == kDeviceFilterTypeComplex) {
+    uint32_t mask = 0u;
+    uint32_t sub_idx = f.sub_desc_start;
+    for (uint32_t or_i = 0u; or_i < static_cast<uint32_t>(f.or_clause_count) && or_i < kDeviceFilterMaxOrClauses;
+         ++or_i) {
+      uint32_t and_n = static_cast<uint32_t>(f.and_term_counts[or_i]);
+      bool and_ok = true;
+      for (uint32_t and_j = 0u; and_j < and_n; ++and_j) {
+        if (!DeviceFilterMatchSimple(complex_sub_desc_buf[sub_idx], path, path_len, getfn_bytes, getfn_offsets,
+                                     crystal_slot, ray_dir, ray_crystal_config_id)) {
+          and_ok = false;
+          sub_idx += (and_n - and_j);  // skip rest of this AND-clause
+          break;
+        }
+        ++sub_idx;
+      }
+      if (and_ok) {
+        mask |= (1u << or_i);
+      }
+    }
+    *out_matched = (mask != 0u);
+    return mask;
+  }
+  if (f.type == kDeviceFilterTypeNone) {
+    *out_matched = true;  // None passes but contributes 0 summands
+    return 0u;
+  }
+  bool m = DeviceFilterMatchSimple(f, path, path_len, getfn_bytes, getfn_offsets, crystal_slot, ray_dir,
+                                   ray_crystal_config_id);
+  *out_matched = m;
+  return m ? 1u : 0u;
+}
+
 }  // namespace lm_filter
 }  // namespace lumice
 // NOLINTEND(readability-identifier-naming,readability-function-cognitive-complexity,readability-function-size)

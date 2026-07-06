@@ -318,6 +318,61 @@ static inline bool DeviceFilterCheck(device const DeviceFilterDesc& f,
   return (f.action == 0u) ? m : !m;
 }
 
+// task-331.5 (raypath-color foundation): stride of the per-gate-slot component
+// bit table (gate_component_bits[gate_slot * kDevComponentStride + k]). MUST
+// equal host `kDeviceFilterMaxOrClauses` (device_filter_desc.hpp): a Complex
+// filter has at most that many OR-summands; simple filters use only index 0.
+constant uint kDevComponentStride = 8u;
+
+// Per-summand match mask (mirror of host ComplexSpec::MatchSummandMask /
+// FilterSpec::MatchSummandMask, filter_spec.cpp:307 / filter_spec.hpp:58).
+// Returns a mask whose bit k is set iff OR-summand k matched — EVERY clause is
+// evaluated (no cross-clause short-circuit) so the collapse-to-boolean gate
+// does not discard the per-summand info the component mask needs. `out_matched`
+// receives the pre-action collapse boolean (== DeviceFilterMatch). Semantics:
+//   - Complex : bit or_i set iff its AND-clause fully matched.
+//   - None    : 0 summands → mask 0, matched=true (mirrors NoneSpec).
+//   - other simple : 1 summand → bit 0 iff matched (mirrors non-None simple).
+static inline uint DeviceFilterSummandMask(device const DeviceFilterDesc& f,
+                                           device const DeviceFilterDesc* complex_sub_desc_buf,
+                                           thread const uchar* path, uint path_len,
+                                           device const uchar* getfn_bytes,
+                                           device const uint*  getfn_offsets,
+                                           uint  crystal_slot,
+                                           thread const float* ray_dir,
+                                           uint  ray_crystal_config_id,
+                                           thread bool* out_matched) {
+  if (f.type == kDevFilterTypeComplex) {
+    uint mask = 0u;
+    uint sub_idx = f.sub_desc_start;
+    for (uint or_i = 0u; or_i < (uint)f.or_clause_count && or_i < kDevComponentStride; or_i++) {
+      uint and_n = (uint)f.and_term_counts[or_i];
+      bool and_ok = true;
+      for (uint and_j = 0u; and_j < and_n; and_j++) {
+        if (!DeviceFilterMatchSimple(complex_sub_desc_buf[sub_idx],
+                                     path, path_len, getfn_bytes, getfn_offsets,
+                                     crystal_slot, ray_dir, ray_crystal_config_id)) {
+          and_ok = false;
+          sub_idx += (and_n - and_j);  // skip rest of this AND-clause
+          break;
+        }
+        sub_idx++;
+      }
+      if (and_ok) { mask |= (1u << or_i); }
+    }
+    *out_matched = (mask != 0u);
+    return mask;
+  }
+  if (f.type == kDevFilterTypeNone) {
+    *out_matched = true;   // None passes but contributes 0 summands
+    return 0u;
+  }
+  bool m = DeviceFilterMatchSimple(f, path, path_len, getfn_bytes, getfn_offsets,
+                                   crystal_slot, ray_dir, ray_crystal_config_id);
+  *out_matched = m;
+  return m ? 1u : 0u;
+}
+
 // --- Former kKernelSrc literal boundary --------------------------------------
 // Everything below was once a separate MSL string (kKernelSrc) concatenated
 // after the filter-match helper above. They now compile as one translation unit
@@ -394,6 +449,12 @@ struct KernelParams {
   // host CPU (scatter_accum.hpp) and CUDA. Replaces the former loose az0 /
   // proj_type / r_scale / max_abs_dz fields.
   lm_proj::ProjParams proj;
+  // task-331.5 (raypath-color foundation): when non-zero, the emit gate
+  // produces per-summand component bits, OR's them into the ray's carried
+  // uint64 mask, and appends (mask, weight) to the capture buffers. 0 in
+  // production (no consumer yet) → the gate skips all component work and only
+  // propagates the (all-zero) carried mask through cont_component. Test-only.
+  uint capture_component;
 };
 
 kernel void trace_layer_kernel(
@@ -451,8 +512,27 @@ kernel void trace_layer_kernel(
     // scrum-268.8 (DR-3): cont_wl_idx propagates the photon's lifetime
     // wavelength tag into the continuation ring for the next layer.
     device uint*                   cont_wl_idx         [[buffer(29)]],
+    // task-331.5 (raypath-color foundation): per-ray uint64 component mask.
+    //   root_component  (19, read)  : mask carried INTO this layer (0 on layer
+    //                                 0; transit copies cont→root for layer≥1).
+    //   cont_component  (20, write) : mask carried OUT to the continuation ring
+    //                                 (lock-stepped with cont_d/cont_w/cont_wl_idx).
+    //   gate_component_bits (21,read): summand→component-bit table, keyed by
+    //                                 gate_slot * kDevComponentStride + summand.
+    //   exit_comp_mask/w (22/23,write) + exit_comp_cnt (28,atomic): capture ring
+    //                                 for emitted (mid-exit + final) rays; drained
+    //                                 host-side for CPU parity (test-only).
+    device const ulong*            root_component      [[buffer(19)]],
+    device ulong*                  cont_component      [[buffer(20)]],
+    device const uchar*            gate_component_bits [[buffer(21)]],
+    device ulong*                  exit_comp_mask      [[buffer(22)]],
+    device float*                  exit_comp_w         [[buffer(23)]],
+    device atomic_uint*            exit_comp_cnt       [[buffer(28)]],
     uint tid [[thread_position_in_grid]]) {
   if (tid >= prm.num_rays) { return; }
+  // task-331.5: load the carried component mask once (constant for the whole
+  // in-crystal path, exactly like the wl_idx lifetime tag below).
+  ulong carried_component = root_component[tid];
 
   float dx = root_d[tid * 3u + 0u];
   float dy = root_d[tid * 3u + 1u];
@@ -602,6 +682,24 @@ kernel void trace_layer_kernel(
               gate_getfn_bytes, gate_getfn_offsets,
               gate_slot, ray_dir_w, prm.crystal_config_id);
           if (filter_pass) {
+            // task-331.5: produce this layer's component bits for the surviving
+            // ray and OR them into the carried mask (mirror CollectData
+            // simulator.cpp:500-519). Gated by capture_component so production
+            // (no consumer) pays only the carried-mask copy below.
+            ulong this_mask = carried_component;
+            if (prm.capture_component != 0u) {
+              bool matched_c = false;
+              uint smask = DeviceFilterSummandMask(
+                  gate_filter_desc[gate_slot], gate_sub_desc_buf,
+                  path_local, gate_len, gate_getfn_bytes, gate_getfn_offsets,
+                  gate_slot, ray_dir_w, prm.crystal_config_id, &matched_c);
+              for (uint k = 0u; k < kDevComponentStride; k++) {
+                if ((smask & (1u << k)) != 0u) {
+                  uchar bit = gate_component_bits[gate_slot * kDevComponentStride + k];
+                  if (bit < 64u) { this_mask |= (1ul << (ulong)bit); }
+                }
+              }
+            }
             // Independent PCG stream for the prob draw — gate_seed is derived
             // from gen_seed_ XOR (ms_layer_idx, crystal_id) on the host so
             // two dispatches with the same global_idx draw different prob
@@ -626,6 +724,10 @@ kernel void trace_layer_kernel(
                 out_d[slot * 3u + 2u] = wcz;
                 out_w[slot] = cw;
                 cont_wl_idx[slot] = wl_idx;
+                // task-331.5: carry the OR-accumulated mask with its ray. Kept
+                // lock-stepped with cont_d/cont_w/cont_wl_idx — the host handle
+                // swap + shuffle gather must move this in lockstep (LANDMINE).
+                cont_component[slot] = this_mask;
               }
               // scrum-267 task-fused-emit-gate: post-gate semantics — exit_cnt
               // / exit_wsum now tally "filter_pass polygon-exits" (gate dropped
@@ -651,6 +753,15 @@ kernel void trace_layer_kernel(
                   if (pr_m.hits[hi].bump_landed) {
                     atomic_fetch_add_explicit(landed_weight, cw, memory_order_relaxed);
                   }
+                }
+              }
+              // task-331.5: capture this emitted (mid-exit) ray's mask+weight
+              // for host-side CPU parity (per-mask-value histogram).
+              if (prm.capture_component != 0u) {
+                uint cslot = atomic_fetch_add_explicit(exit_comp_cnt, 1u, memory_order_relaxed);
+                if (cslot < prm.out_cap) {
+                  exit_comp_mask[cslot] = this_mask;
+                  exit_comp_w[cslot]    = cw;
                 }
               }
               // Diagnostic counters (not consumed by parity tests).
@@ -694,6 +805,26 @@ kernel void trace_layer_kernel(
           gate_stream_f.slot       = 0u;
           bool prob_drop_f = (pcg_uniform(gate_stream_f) < prm.ms_prob);
           if (filter_pass_f && !prob_drop_f) {
+            // task-331.5: final-layer component bits (mirror ms_mode==1 gate).
+            ulong this_mask_f = carried_component;
+            if (prm.capture_component != 0u) {
+              bool matched_cf = false;
+              uint smask_f = DeviceFilterSummandMask(
+                  gate_filter_desc[gate_slot_f], gate_sub_desc_buf,
+                  path_local_f, gate_len_f, gate_getfn_bytes, gate_getfn_offsets,
+                  gate_slot_f, ray_dir_w_f, prm.crystal_config_id, &matched_cf);
+              for (uint k = 0u; k < kDevComponentStride; k++) {
+                if ((smask_f & (1u << k)) != 0u) {
+                  uchar bit = gate_component_bits[gate_slot_f * kDevComponentStride + k];
+                  if (bit < 64u) { this_mask_f |= (1ul << (ulong)bit); }
+                }
+              }
+              uint cslot = atomic_fetch_add_explicit(exit_comp_cnt, 1u, memory_order_relaxed);
+              if (cslot < prm.out_cap) {
+                exit_comp_mask[cslot] = this_mask_f;
+                exit_comp_w[cslot]    = cw;
+              }
+            }
             // 315.3: single-source projection via lm_proj::ProjectExitToPixel
             // (shared with host CPU scatter_accum.hpp + CUDA). Pass the WORLD
             // exit dir (wx,wy,wz) — the function negates internally to the sky
@@ -949,6 +1080,10 @@ kernel void transit_root_kernel(
     device const float*  lat_lut_theta    [[buffer(14)]],
     device const float*  lat_lut_cdf      [[buffer(15)]],
     device const float*  lat_lut_flip     [[buffer(16)]],
+    // task-331.5: per-ray component mask pass-through (sibling of wl_idx).
+    // Rebased onto scrum-332: LUT took 14/15/16, so component moved 14/15→17/18.
+    device const ulong*  cont_component_in  [[buffer(17)]],
+    device ulong*        root_component_out [[buffer(18)]],
     uint tid [[thread_position_in_grid]])
 {
   if (tid >= gp.num_rays || gp.tri_count == 0u) {
@@ -1018,6 +1153,8 @@ kernel void transit_root_kernel(
   }
   // scrum-268.8 (DR-3): pass-through wavelength index (photon lifetime tag).
   root_wl_idx_out[tid] = cont_wl_idx_in[tid];
+  // task-331.5: pass-through the OR-accumulated component mask.
+  root_component_out[tid] = cont_component_in[tid];
 }
 
 // --- shuffle_cont_kernel ---------------------------------------------------
@@ -1043,6 +1180,11 @@ kernel void shuffle_cont_kernel(
     device uint*         out_wl [[buffer(5)]],   // n
     constant uint&       n_rays [[buffer(6)]],
     constant uint&       seed   [[buffer(7)]],
+    // task-331.5: per-ray component mask must gather in lockstep with (d,w,wl).
+    // Omitting it is the exact CPU LANDMINE (SwapRay) reproduced on device —
+    // the mask would decorrelate from its ray across the layer boundary.
+    device const ulong*  in_component  [[buffer(8)]],   // n
+    device ulong*        out_component [[buffer(9)]],   // n
     uint tid [[thread_position_in_grid]])
 {
   if (tid >= n_rays) {
@@ -1054,4 +1196,5 @@ kernel void shuffle_cont_kernel(
   out_d[tid * 3u + 2u] = in_d[src * 3u + 2u];
   out_w[tid]  = in_w[src];
   out_wl[tid] = in_wl[src];
+  out_component[tid] = in_component[src];
 }

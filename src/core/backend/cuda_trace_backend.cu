@@ -63,6 +63,7 @@
 #include <variant>
 #include <vector>
 
+#include "config/component_table.hpp"  // task-331.6 raypath-color foundation
 #include "config/crystal_config.hpp"
 #include "config/filter_config.hpp"
 #include "config/light_config.hpp"
@@ -403,6 +404,51 @@ __device__ inline void EmitToDeviceXyz(float* __restrict__ d_xyz_buf,
   }
 }
 
+// task-331.6 (raypath-color foundation): produce THIS layer's component bits
+// for a surviving exit ray and OR them into the carried uint64 mask (device
+// mirror of CPU CollectData simulator.cpp:500-519 + Metal lumice_trace.metal).
+// `carried` is the OR-accumulated mask entering this layer; the returned mask
+// adds this layer's summand→component bits. gate_component_bits is keyed by
+// gate_slot * kDeviceFilterMaxOrClauses + summand. Only called when
+// capture_component != 0 (production skips it → the carried mask passes through
+// unchanged, no filter re-evaluation cost).
+__device__ inline unsigned long long ApplyLayerComponentBits(unsigned long long carried,
+                                                             const DeviceFilterDesc& f,
+                                                             const DeviceFilterDesc* complex_sub_desc,
+                                                             const uint8_t* path, uint32_t path_len,
+                                                             const uint8_t* getfn_bytes, const uint32_t* getfn_offsets,
+                                                             uint32_t gate_slot, const float* ray_dir,
+                                                             uint32_t crystal_config_id,
+                                                             const uint8_t* gate_component_bits) {
+  bool matched = false;
+  uint32_t smask = lm_filter::DeviceFilterSummandMask(f, complex_sub_desc, path, path_len, getfn_bytes, getfn_offsets,
+                                                      gate_slot, ray_dir, crystal_config_id, &matched);
+  unsigned long long m = carried;
+  for (uint32_t k = 0u; k < kDeviceFilterMaxOrClauses; ++k) {
+    if ((smask & (1u << k)) != 0u) {
+      uint8_t bit = gate_component_bits[gate_slot * kDeviceFilterMaxOrClauses + k];
+      if (bit < 64u) {
+        m |= (1ull << static_cast<unsigned long long>(bit));
+      }
+    }
+  }
+  return m;
+}
+
+// task-331.6: append an emitted (mid-exit + final) exit ray's (mask, weight) to
+// the test-only capture ring (drained host-side for CPU parity). Mirrors the
+// Metal capture branch (lumice_trace.metal:749-763). The `cslot < comp_cap`
+// guard drops overflow, mirroring the continuation ring's clamp.
+__device__ inline void CaptureComponentExit(unsigned long long* d_exit_comp_mask, float* d_exit_comp_w,
+                                            uint32_t* d_exit_comp_cnt, uint32_t comp_cap, unsigned long long mask,
+                                            float w) {
+  uint32_t cslot = atomicAdd(d_exit_comp_cnt, 1u);
+  if (cslot < comp_cap) {
+    d_exit_comp_mask[cslot] = mask;
+    d_exit_comp_w[cslot] = w;
+  }
+}
+
 // --- trace_single_ms_kernel -----------------------------------------------
 //
 // One thread per root ray. Per-bounce refraction splitting (mirrors legacy
@@ -503,11 +549,33 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                        // per-ci probe windows via
                                        // d_rng_probe[tid + probe_ci_start]. 0 in
                                        // production and in single-ci tests.
-                                       uint32_t probe_ci_start) {
+                                       uint32_t probe_ci_start,
+                                       // task-331.6 (raypath-color foundation): per-ray uint64
+                                       // component mask carrier (sibling of d_root_wl_idx /
+                                       // d_cont_wl_idx). d_root_component read INTO this layer
+                                       // (0 on layer 0; transit copies cont→root for layer≥1);
+                                       // d_cont_component written OUT to the continuation ring
+                                       // (ms_mode==1). gate_component_bits = summand→bit table.
+                                       // The exit_comp_* ring + capture_component are TEST-ONLY:
+                                       // capture_component==0 in production → the gate skips all
+                                       // produce/capture work and only propagates the carried
+                                       // (all-zero) mask; the exit_comp_* / gate_component_bits
+                                       // pointers may be nullptr in that case.
+                                       const unsigned long long* __restrict__ d_root_component,
+                                       unsigned long long* __restrict__ d_cont_component,
+                                       const uint8_t* __restrict__ d_gate_component_bits,
+                                       unsigned long long* __restrict__ d_exit_comp_mask,
+                                       float* __restrict__ d_exit_comp_w,
+                                       uint32_t* d_exit_comp_cnt,
+                                       uint32_t comp_cap,
+                                       uint32_t capture_component) {
   const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_roots) {
     return;
   }
+  // task-331.6: load the carried component mask once (constant for the whole
+  // in-crystal path, exactly like the wl_idx lifetime tag below).
+  const unsigned long long carried_component = d_root_component[tid];
   float dir[3] = {d_dirs[tid * 3u + 0u], d_dirs[tid * 3u + 1u], d_dirs[tid * 3u + 2u]};
   float org[3] = {d_pos[tid * 3u + 0u], d_pos[tid * 3u + 1u], d_pos[tid * 3u + 2u]};
   float w = d_ws[tid];
@@ -640,6 +708,15 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
             d_filter_desc[gate_slot], d_complex_sub_desc, path_rec, rec_len, d_getfn_bytes, d_getfn_offsets, gate_slot,
             exit_world, crystal_config_id);
         if (filter_pass) {
+          // task-331.6: produce this layer's component bits for the surviving
+          // ray and OR them into the carried mask (gated by capture_component;
+          // production pays only the carried-mask copy below).
+          unsigned long long this_mask = carried_component;
+          if (capture_component != 0u) {
+            this_mask = ApplyLayerComponentBits(carried_component, d_filter_desc[gate_slot], d_complex_sub_desc,
+                                                path_rec, rec_len, d_getfn_bytes, d_getfn_offsets, gate_slot,
+                                                exit_world, crystal_config_id, d_gate_component_bits);
+          }
           // Prob gate (prob-pass → continuation; prob-fail → mid-exit). The
           // gate_stream advances on each pcg_uniform draw so the per-bounce
           // refracted exit gate below consumes a disjoint draw slot.
@@ -652,6 +729,10 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               d_cont_d[cslot * 3u + 2u] = exit_world[2];
               d_cont_w[cslot]           = w_refl_e;
               d_cont_wl_idx[cslot]      = wl_idx;  // 296.6 DR-3: carry ray's wl to its continuation
+              // task-331.6: carry the OR-accumulated mask with its ray. Kept
+              // lock-stepped with cont_d/cont_w/cont_wl_idx — the host handle
+              // swap + shuffle gather must move this in lockstep (LANDMINE).
+              d_cont_component[cslot]   = this_mask;
             }
           } else {
             // scrum-302 S2 device-fused MID-EXIT (filter-pass && !do_continue).
@@ -667,6 +748,10 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
             EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                             cmf_x, cmf_y, cmf_z, w_refl_e,
                             proj);
+            // task-331.6: capture this mid-exit ray's mask+weight for CPU parity.
+            if (capture_component != 0u) {
+              CaptureComponentExit(d_exit_comp_mask, d_exit_comp_w, d_exit_comp_cnt, comp_cap, this_mask, w_refl_e);
+            }
           }
         }
         // filter_pass == false: implicit drop (Design A termination).
@@ -697,6 +782,14 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
             EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                             cmf_x, cmf_y, cmf_z, w_refl_e,
                             proj);
+            // task-331.6: final-layer component bits (mirror ms_mode==0 gate).
+            // Produce + capture only under the test flag.
+            if (capture_component != 0u) {
+              unsigned long long this_mask = ApplyLayerComponentBits(
+                  carried_component, d_filter_desc[gate_slot_e], d_complex_sub_desc, path_rec, rec_len, d_getfn_bytes,
+                  d_getfn_offsets, gate_slot_e, exit_world, crystal_config_id, d_gate_component_bits);
+              CaptureComponentExit(d_exit_comp_mask, d_exit_comp_w, d_exit_comp_cnt, comp_cap, this_mask, w_refl_e);
+            }
           }
         }
       }
@@ -814,6 +907,13 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               d_filter_desc[gate_slot], d_complex_sub_desc, path_rec, rec_len, d_getfn_bytes, d_getfn_offsets,
               gate_slot, exit_world, crystal_config_id);
           if (filter_pass) {
+            // task-331.6: produce this layer's component bits (gated).
+            unsigned long long this_mask = carried_component;
+            if (capture_component != 0u) {
+              this_mask = ApplyLayerComponentBits(carried_component, d_filter_desc[gate_slot], d_complex_sub_desc,
+                                                  path_rec, rec_len, d_getfn_bytes, d_getfn_offsets, gate_slot,
+                                                  exit_world, crystal_config_id, d_gate_component_bits);
+            }
             bool do_continue = (lm_pcg::pcg_uniform(gate_stream) < ms_prob);
             if (do_continue) {
               uint32_t cslot = atomicAdd(d_cont_count, 1u);
@@ -823,6 +923,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                 d_cont_d[cslot * 3u + 2u] = exit_world[2];
                 d_cont_w[cslot]           = w_refr;
                 d_cont_wl_idx[cslot]      = wl_idx;  // 296.6 DR-3: carry ray's wl to its continuation
+                d_cont_component[cslot]   = this_mask;  // task-331.6 LANDMINE-carried mask
               }
             } else {
               // scrum-302 S2 device-fused MID-EXIT (per-bounce refracted,
@@ -836,6 +937,10 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                               cmf_x, cmf_y, cmf_z, w_refr,
                               proj);
+              // task-331.6: capture this mid-exit ray's mask+weight for parity.
+              if (capture_component != 0u) {
+                CaptureComponentExit(d_exit_comp_mask, d_exit_comp_w, d_exit_comp_cnt, comp_cap, this_mask, w_refr);
+              }
             }
           }
           // filter_pass == false: implicit drop (Design A termination).
@@ -862,6 +967,13 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                               cmf_x, cmf_y, cmf_z, w_refr,
                               proj);
+              // task-331.6: final-layer component bits (produce + capture, gated).
+              if (capture_component != 0u) {
+                unsigned long long this_mask = ApplyLayerComponentBits(
+                    carried_component, d_filter_desc[gate_slot_r], d_complex_sub_desc, path_rec, rec_len,
+                    d_getfn_bytes, d_getfn_offsets, gate_slot_r, exit_world, crystal_config_id, d_gate_component_bits);
+                CaptureComponentExit(d_exit_comp_mask, d_exit_comp_w, d_exit_comp_cnt, comp_cap, this_mask, w_refr);
+              }
             }
           }
         }
@@ -917,7 +1029,14 @@ __global__ void transit_multi_ms_kernel(
     // RNG probe: receives this thread's transit PCG draw (see body).
     float* __restrict__ d_rng_probe,
     // [TEST-ONLY] scrum-328.2 Step 1 multi-ci probe addressing (see gen kernel).
-    uint32_t probe_ci_start) {
+    uint32_t probe_ci_start,
+    // task-331.6 (raypath-color foundation): per-ray component mask pass-through
+    // (sibling of wl_idx). Carried from the continuation ring into the next
+    // layer's root buffer, unchanged (the accumulation happens in the trace
+    // kernel's emit gate, not here). no __restrict__: Recombine's transit may
+    // alias in/out on the wl-sibling pattern.
+    const unsigned long long* d_cont_component_in,
+    unsigned long long* d_root_component_out) {
   const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_rays || gp.tri_count == 0u) {
     return;
@@ -1024,6 +1143,8 @@ __global__ void transit_multi_ms_kernel(
     d_root_rot_out[tid * 9u + k] = mat9[k];
   }
   d_root_wl_idx_out[tid] = d_cont_wl_idx_in[tid];
+  // task-331.6: pass-through the OR-accumulated component mask (sibling of wl_idx).
+  d_root_component_out[tid] = d_cont_component_in[tid];
 }
 
 // --- gen_root_kernel -------------------------------------------------------
@@ -1201,6 +1322,12 @@ __global__ void shuffle_cont_kernel(const float* __restrict__    in_d,
                                     float* __restrict__          out_d,
                                     float* __restrict__          out_w,
                                     uint32_t* __restrict__       out_wl,
+                                    // task-331.6: per-ray component mask must gather in lockstep
+                                    // with (d,w,wl). Omitting it is the exact CPU LANDMINE
+                                    // (SwapRay) reproduced on device — the mask would decorrelate
+                                    // from its ray across the layer boundary.
+                                    const unsigned long long* __restrict__ in_component,
+                                    unsigned long long* __restrict__       out_component,
                                     uint32_t n_rays, uint32_t seed) {
   const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_rays) {
@@ -1212,6 +1339,7 @@ __global__ void shuffle_cont_kernel(const float* __restrict__    in_d,
   out_d[tid * 3u + 2u] = in_d[src * 3u + 2u];
   out_w[tid]  = in_w[src];
   out_wl[tid] = in_wl[src];
+  out_component[tid] = in_component[src];
 }
 
 }  // namespace
@@ -1336,6 +1464,14 @@ struct CudaTraceBackend::Impl {
   // (continuation pass-through) on subsequent layers.
   uint32_t* d_root_wl_idx_ = nullptr;
 
+  // task-331.6 (raypath-color foundation): per-ray uint64 component mask carried
+  // INTO the trace kernel — structural sibling of d_root_wl_idx_. Single (not
+  // ping-pong), sized like the root buffers (buf_cap). Layer 0 is memset to 0;
+  // layer≥1 is overwritten by transit_multi_ms_kernel (pass-through from the
+  // continuation ring). `unsigned long long` on device (8B); OR'd + stored only,
+  // never atomically accumulated → no lo/hi split (mirror Metal MSL ulong).
+  unsigned long long* d_root_component_ = nullptr;
+
   // --- Continuation ring (296.4 + multi-CI 全量) ---------------------------
   // PING-PONG (2 slots), mirroring Metal cont_d/cont_w[slot]. Multi-CI moved
   // transit INTO TraceLayer (lazy, per-CI), so a continuation layer READS the
@@ -1347,6 +1483,10 @@ struct CudaTraceBackend::Impl {
   float*    d_cont_d_[2]      = {nullptr, nullptr};  // 3 × cont_cap (world-space dir)
   float*    d_cont_w_[2]      = {nullptr, nullptr};  // cont_cap (continuation weight)
   uint32_t* d_cont_wl_idx_[2] = {nullptr, nullptr};  // cont_cap (per-ray wl pass-through)
+  // task-331.6: per-ray component mask for continuation rays. Ping-pong, sized
+  // like d_cont_wl_idx_ — MUST move in lockstep with cont_d/cont_w/cont_wl_idx
+  // through the shuffle gather + the Recombine handle swap (LANDMINE).
+  unsigned long long* d_cont_component_[2] = {nullptr, nullptr};  // cont_cap (per-ray mask carry)
   uint32_t* d_cont_count_[2]  = {nullptr, nullptr};  // 1 uint32 each (atomic, device)
   // Per-slot continuation capacity (multi-CI 3+ layer): a continuation layer
   // grows ONLY its out_slot (the in_slot holds rays being read this layer and
@@ -1482,6 +1622,26 @@ struct CudaTraceBackend::Impl {
   uint32_t          filter_n_slot_       = 0u;       // total descriptor slots
   uint32_t          crystal_config_id_   = 0xFFFFu;  // for DeviceFilterMatchCrystal
 
+  // --- task-331.6 (raypath-color foundation) component-mask production ------
+  // Summand→component-bit table, keyed by gate_slot * kDeviceFilterMaxOrClauses
+  // + summand (built in EnsureFilterBuffers from BuildComponentTable /
+  // ComponentBitsFor, mirroring Metal gate_component_bits_buf_). Bound to the
+  // trace kernel; only read when capture_component_ is on. nullptr for no-scene
+  // sessions (the kernel's produce branch is gated off in that case).
+  uint8_t*          d_gate_component_bits_ = nullptr;
+  ComponentTable    component_table_{};
+  // [TEST-ONLY] per-session capture ring for emitted (mid-exit + final) rays,
+  // drained per layer into captured_masks_/captured_ws_ when capture_component_
+  // is on. Only allocated under capture (production never touches it — the
+  // kernel's capture branch is gated by the capture_component kernel arg).
+  unsigned long long* d_exit_comp_mask_ = nullptr;
+  float*              d_exit_comp_w_    = nullptr;
+  uint32_t*           d_exit_comp_cnt_  = nullptr;
+  size_t              exit_comp_cap_    = 0;
+  bool                capture_component_ = false;
+  std::vector<uint64_t> captured_masks_;
+  std::vector<float>    captured_ws_;
+
   // --- S2 device-fused XYZ accumulation -----------------------------------
   // ms_mode==0 emit gate accumulates per-ray (cmf_x/y/z * weight) directly into
   // a device-resident W*H*3 float buffer via atomicAdd, replacing the per-exit
@@ -1551,6 +1711,11 @@ struct CudaTraceBackend::Impl {
   // left intact — it holds the previous layer's continuations being read this
   // layer. Mirrors Metal EnsureRootBuffers(total)+EnsureContBuffer(out_slot).
   void EnsureContCapacity(size_t n_in, int out_slot);
+
+  // task-331.6 (test-only): grow-only allocation of the component-mask capture
+  // ring (mask/weight buffers + a 1-uint32 atomic counter). Only invoked when
+  // capture_component_ is on; production never calls it.
+  void EnsureComponentCaptureBuffers(size_t cap);
 
   // Per-CI geometry (multi-CI, mirrors Metal UploadCrystal/Ensure*Buffers).
   // EnsureGeomCapacity grows d_poly_*/d_tri_* (grow-only) to hold a crystal of
@@ -1637,6 +1802,7 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
     cudaFree(d_getfn_offsets_);    d_getfn_offsets_ = nullptr;
     cudaFree(d_getfn_bytes_);      d_getfn_bytes_ = nullptr;
     cudaFree(d_complex_sub_desc_); d_complex_sub_desc_ = nullptr;
+    cudaFree(d_gate_component_bits_); d_gate_component_bits_ = nullptr;  // task-331.6
     filter_built_ = false;
     wl_pool_uploaded_ = false;
     filter_desc_max_ci_ = 0u;
@@ -1657,15 +1823,22 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
     cudaFree(d_ws_);           d_ws_ = nullptr;
     cudaFree(d_from_poly_);    d_from_poly_ = nullptr;
     cudaFree(d_root_wl_idx_);  d_root_wl_idx_ = nullptr;
+    cudaFree(d_root_component_); d_root_component_ = nullptr;  // task-331.6
     cudaFree(d_wl_pool_);      d_wl_pool_ = nullptr;
     for (int s = 0; s < 2; ++s) {
       cudaFree(d_cont_d_[s]);      d_cont_d_[s] = nullptr;
       cudaFree(d_cont_w_[s]);      d_cont_w_[s] = nullptr;
       cudaFree(d_cont_wl_idx_[s]); d_cont_wl_idx_[s] = nullptr;
+      cudaFree(d_cont_component_[s]); d_cont_component_[s] = nullptr;  // task-331.6
       cudaFree(d_cont_count_[s]);  d_cont_count_[s] = nullptr;
     }
     cudaFree(d_exit_);         d_exit_ = nullptr;
     cudaFree(d_exit_count_);   d_exit_count_ = nullptr;
+    // task-331.6 (test-only) component-mask capture ring.
+    cudaFree(d_exit_comp_mask_); d_exit_comp_mask_ = nullptr;
+    cudaFree(d_exit_comp_w_);    d_exit_comp_w_    = nullptr;
+    cudaFree(d_exit_comp_cnt_);  d_exit_comp_cnt_  = nullptr;
+    exit_comp_cap_ = 0;
     // S2 device-fused XYZ accumulation buffers.
     cudaFree(d_xyz_buf_);      d_xyz_buf_ = nullptr;
     cudaFree(d_landed_weight_); d_landed_weight_ = nullptr;
@@ -1938,6 +2111,7 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
   cudaFree(d_ws_);       d_ws_ = nullptr;
   cudaFree(d_from_poly_); d_from_poly_ = nullptr;
   cudaFree(d_root_wl_idx_); d_root_wl_idx_ = nullptr;
+  cudaFree(d_root_component_); d_root_component_ = nullptr;  // task-331.6
   cudaFree(d_rot_c2w_);  d_rot_c2w_ = nullptr;
   cudaFree(d_exit_);     d_exit_ = nullptr;
   cudaFree(d_exit_count_); d_exit_count_ = nullptr;
@@ -1945,6 +2119,7 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
     cudaFree(d_cont_d_[s]);      d_cont_d_[s] = nullptr;
     cudaFree(d_cont_w_[s]);      d_cont_w_[s] = nullptr;
     cudaFree(d_cont_wl_idx_[s]); d_cont_wl_idx_[s] = nullptr;
+    cudaFree(d_cont_component_[s]); d_cont_component_[s] = nullptr;  // task-331.6
     cudaFree(d_cont_count_[s]);  d_cont_count_[s] = nullptr;
   }
   cudaFreeHost(pinned_dirs_);     pinned_dirs_ = nullptr;
@@ -1984,6 +2159,8 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
   ck(cudaMalloc(&d_ws_,          buf_cap * sizeof(float)),                 "cudaMalloc d_ws");
   ck(cudaMalloc(&d_from_poly_,   buf_cap * sizeof(uint32_t)),              "cudaMalloc d_from_poly");
   ck(cudaMalloc(&d_root_wl_idx_, buf_cap * sizeof(uint32_t)),              "cudaMalloc d_root_wl_idx");
+  // task-331.6: per-ray component mask carrier (sibling of d_root_wl_idx_).
+  ck(cudaMalloc(&d_root_component_, buf_cap * sizeof(unsigned long long)), "cudaMalloc d_root_component");
   ck(cudaMalloc(&d_rot_c2w_,     9 * buf_cap * sizeof(float)),             "cudaMalloc d_rot_c2w");
   ck(cudaMalloc(&d_exit_,        exit_cap_ * sizeof(ExitRayRecord)),       "cudaMalloc d_exit");
   ck(cudaMalloc(&d_exit_count_,  sizeof(uint32_t)),                        "cudaMalloc d_exit_count");
@@ -1991,6 +2168,8 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
     ck(cudaMalloc(&d_cont_d_[s],      3 * cont_cap0 * sizeof(float)),       "cudaMalloc d_cont_d");
     ck(cudaMalloc(&d_cont_w_[s],      cont_cap0 * sizeof(float)),           "cudaMalloc d_cont_w");
     ck(cudaMalloc(&d_cont_wl_idx_[s], cont_cap0 * sizeof(uint32_t)),        "cudaMalloc d_cont_wl_idx");
+    // task-331.6: per-ray component mask for continuation rays (sibling of wl_idx).
+    ck(cudaMalloc(&d_cont_component_[s], cont_cap0 * sizeof(unsigned long long)), "cudaMalloc d_cont_component");
     ck(cudaMalloc(&d_cont_count_[s],  sizeof(uint32_t)),                    "cudaMalloc d_cont_count");
   }
 
@@ -2055,12 +2234,15 @@ void CudaTraceBackend::Impl::EnsureContCapacity(size_t n_in, int out_slot) {
     cudaFree(d_ws_);          d_ws_ = nullptr;
     cudaFree(d_from_poly_);   d_from_poly_ = nullptr;
     cudaFree(d_root_wl_idx_); d_root_wl_idx_ = nullptr;
+    cudaFree(d_root_component_); d_root_component_ = nullptr;  // task-331.6
     cudaFree(d_rot_c2w_);     d_rot_c2w_ = nullptr;
     ck(cudaMalloc(&d_dirs_,        3 * n_in * sizeof(float)),   "cudaMalloc d_dirs (grow)");
     ck(cudaMalloc(&d_pos_,         3 * n_in * sizeof(float)),   "cudaMalloc d_pos (grow)");
     ck(cudaMalloc(&d_ws_,          n_in * sizeof(float)),       "cudaMalloc d_ws (grow)");
     ck(cudaMalloc(&d_from_poly_,   n_in * sizeof(uint32_t)),    "cudaMalloc d_from_poly (grow)");
     ck(cudaMalloc(&d_root_wl_idx_, n_in * sizeof(uint32_t)),    "cudaMalloc d_root_wl_idx (grow)");
+    // task-331.6: grow the component mask carrier in lockstep with the roots.
+    ck(cudaMalloc(&d_root_component_, n_in * sizeof(unsigned long long)), "cudaMalloc d_root_component (grow)");
     ck(cudaMalloc(&d_rot_c2w_,     9 * n_in * sizeof(float)),   "cudaMalloc d_rot_c2w (grow)");
     root_cap_ = n_in;
   }
@@ -2074,11 +2256,39 @@ void CudaTraceBackend::Impl::EnsureContCapacity(size_t n_in, int out_slot) {
     cudaFree(d_cont_d_[out_slot]);      d_cont_d_[out_slot] = nullptr;
     cudaFree(d_cont_w_[out_slot]);      d_cont_w_[out_slot] = nullptr;
     cudaFree(d_cont_wl_idx_[out_slot]); d_cont_wl_idx_[out_slot] = nullptr;
+    cudaFree(d_cont_component_[out_slot]); d_cont_component_[out_slot] = nullptr;  // task-331.6
     ck(cudaMalloc(&d_cont_d_[out_slot],      3 * need * sizeof(float)),    "cudaMalloc d_cont_d (grow)");
     ck(cudaMalloc(&d_cont_w_[out_slot],      need * sizeof(float)),        "cudaMalloc d_cont_w (grow)");
     ck(cudaMalloc(&d_cont_wl_idx_[out_slot], need * sizeof(uint32_t)),     "cudaMalloc d_cont_wl_idx (grow)");
+    // task-331.6: grow the continuation component mask in lockstep.
+    ck(cudaMalloc(&d_cont_component_[out_slot], need * sizeof(unsigned long long)), "cudaMalloc d_cont_component (grow)");
     cont_cap_[out_slot] = need;
   }
+}
+
+// task-331.6 (test-only): grow-only allocation of the component-mask capture
+// ring. The atomic counter is allocated once (1 × uint32); the mask/weight
+// buffers grow to `cap`. Only reached under capture_component_ (production never
+// allocates these — the kernel's capture branch is gated by capture_component).
+void CudaTraceBackend::Impl::EnsureComponentCaptureBuffers(size_t cap) {
+  auto ck = [this](cudaError_t e, const char* ctx) {
+    if (e != cudaSuccess) {
+      Reset();
+      throw BackendUnavailableError(std::string{"CudaTraceBackend::EnsureComponentCaptureBuffers: "} + ctx + ": " +
+                                    cudaGetErrorString(e));
+    }
+  };
+  if (d_exit_comp_cnt_ == nullptr) {
+    ck(cudaMalloc(&d_exit_comp_cnt_, sizeof(uint32_t)), "cudaMalloc d_exit_comp_cnt");
+  }
+  if (cap <= exit_comp_cap_ && d_exit_comp_mask_ != nullptr) {
+    return;
+  }
+  cudaFree(d_exit_comp_mask_); d_exit_comp_mask_ = nullptr;
+  cudaFree(d_exit_comp_w_);    d_exit_comp_w_    = nullptr;
+  ck(cudaMalloc(&d_exit_comp_mask_, cap * sizeof(unsigned long long)), "cudaMalloc d_exit_comp_mask");
+  ck(cudaMalloc(&d_exit_comp_w_,    cap * sizeof(float)),              "cudaMalloc d_exit_comp_w");
+  exit_comp_cap_ = cap;
 }
 
 // EnsureFilterBuffers — mirror of Metal `EnsureFilterBuffers`
@@ -2104,6 +2314,8 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
   cudaFree(d_getfn_offsets_);     d_getfn_offsets_     = nullptr;
   cudaFree(d_getfn_bytes_);       d_getfn_bytes_       = nullptr;
   cudaFree(d_complex_sub_desc_);  d_complex_sub_desc_  = nullptr;
+  cudaFree(d_gate_component_bits_); d_gate_component_bits_ = nullptr;  // task-331.6
+  component_table_ = ComponentTable{};
   filter_desc_max_ci_ = 0u;
   filter_n_slot_      = 0u;
 
@@ -2127,6 +2339,10 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
        "cudaMemcpy d_getfn_offsets (dummy)");
     ck(cudaMalloc(&d_getfn_bytes_, 1u), "cudaMalloc d_getfn_bytes (dummy)");
     ck(cudaMalloc(&d_complex_sub_desc_, sizeof(DeviceFilterDesc)), "cudaMalloc d_complex_sub_desc (dummy)");
+    // task-331.6: 1-byte dummy so the kernel's gate_component_bits pointer is
+    // always bindable; never read when capture_component is off (no-scene path).
+    ck(cudaMalloc(&d_gate_component_bits_, 1u), "cudaMalloc d_gate_component_bits (dummy)");
+    component_table_ = ComponentTable{};
     filter_desc_max_ci_ = 1u;
     filter_n_slot_      = 1u;
     filter_built_       = true;
@@ -2223,6 +2439,33 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
   if (sub_desc_bytes > 0) {
     ck(cudaMemcpy(d_complex_sub_desc_, all_sub_descs.data(), sub_desc_bytes, cudaMemcpyHostToDevice),
        "cudaMemcpy d_complex_sub_desc");
+  }
+
+  // task-331.6 (raypath-color foundation): build the summand→component-bit table,
+  // keyed by the SAME gate_slot = mi * max_ci + ci layout the device filter descs
+  // use. Dense stride = kDeviceFilterMaxOrClauses (a Complex filter has ≤ that
+  // many OR-summands; simple filters use only index 0). Entry = component bit
+  // index in [0,64) or ComponentTable::kNoBit (0xFF) for over-budget/absent
+  // summands. Mirrors Metal EnsureFilterBuffers gate_component_bits build.
+  component_table_ = BuildComponentTable(*spec.scene);
+  {
+    const size_t stride = kDeviceFilterMaxOrClauses;
+    std::vector<uint8_t> comp_bits(n_slot * stride, ComponentTable::kNoBit);
+    for (size_t mi = 0; mi < n_layers; ++mi) {
+      const auto& ms = spec.scene->ms_[mi];
+      for (size_t ci = 0; ci < ms.setting_.size(); ++ci) {
+        std::vector<uint8_t> bits =
+            ComponentBitsFor(component_table_, static_cast<IdType>(mi), static_cast<IdType>(ci));
+        size_t slot = mi * max_ci + ci;
+        for (size_t k = 0; k < bits.size() && k < stride; ++k) {
+          comp_bits[slot * stride + k] = bits[k];
+        }
+      }
+    }
+    ck(cudaMalloc(&d_gate_component_bits_, comp_bits.size() * sizeof(uint8_t)), "cudaMalloc d_gate_component_bits");
+    ck(cudaMemcpy(d_gate_component_bits_, comp_bits.data(), comp_bits.size() * sizeof(uint8_t),
+                  cudaMemcpyHostToDevice),
+       "cudaMemcpy d_gate_component_bits");
   }
 
   // Capture final-layer host filter state PER-CI — DrainExits applies FilterSpec
@@ -2441,6 +2684,11 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     // info is captured for DrainExits. Idempotent across BeginSession calls.
     impl_->EnsureFilterBuffers(spec);
 
+    // task-331.6: reset the per-session component-mask capture accumulators
+    // (component_table_ is rebuilt inside EnsureFilterBuffers above).
+    impl_->captured_masks_.clear();
+    impl_->captured_ws_.clear();
+
     // S2 device-fused XYZ accumulation: allocate the W*H*3 device buffer +
     // landed-weight scalar and zero them. Sized to render.resolution_; the
     // ms_mode==0 kernel emit gate atomicAdds (cmf * w) into d_xyz_buf_ and
@@ -2638,6 +2886,22 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
   ck_reset(cudaMemset(impl_->d_cont_count_[out_slot], 0, sizeof(uint32_t)),
            "cudaMemset d_cont_count_[out_slot]");
 
+  // task-331.6 (test-only) component-mask capture setup:
+  //   - Layer 0's root rays start with an all-zero carried mask; memset here
+  //     (transit_multi_ms_kernel overwrites d_root_component_ for layer≥1).
+  //     Gen/host-gen paths do NOT write d_root_component_, so this memset is the
+  //     sole initializer for the first layer.
+  //   - Reset the capture-ring counter so each layer's emits append from 0; the
+  //     per-layer drain after the ci-loop reads exactly this layer's count.
+  if (impl_->capture_component_) {
+    impl_->EnsureComponentCaptureBuffers(ComputeContCap(n, impl_->scene_->max_hits_));
+    if (first_ms && impl_->d_root_component_ != nullptr) {
+      ck_reset(cudaMemset(impl_->d_root_component_, 0, n * sizeof(unsigned long long)),
+               "cudaMemset d_root_component (layer 0)");
+    }
+    ck_reset(cudaMemset(impl_->d_exit_comp_cnt_, 0, sizeof(uint32_t)), "cudaMemset d_exit_comp_cnt");
+  }
+
   const uint32_t max_hits = static_cast<uint32_t>(impl_->scene_->max_hits_);
   size_t ci_start = 0;  // running offset into cont[in_slot] for continuation slices
   // Running per-ci window offset for the RNG probe / attempts sibling buffer
@@ -2813,7 +3077,9 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
           geom_tri_vtx, geom_tri_norm, geom_tri_area, geom_tri_to_poly,
           impl_->d_lat_lut_theta_, impl_->d_lat_lut_cdf_, impl_->d_lat_lut_flip_,
           gp, cin, transit_probe_arg,
-          static_cast<uint32_t>(impl_->probe_ci_start_ + probe_win_off));
+          static_cast<uint32_t>(impl_->probe_ci_start_ + probe_win_off),
+          // task-331.6: carry the component mask cont[in_slot] slice → root.
+          impl_->d_cont_component_[in_slot] + ci_start, impl_->d_root_component_);
       ck_reset(cudaPeekAtLastError(), "transit kernel launch");
       impl_->transit_ray_count_ += ci_n;
       ci_start += ci_n;
@@ -2879,7 +3145,20 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
         gate_split.lo,
         gate_split.hi,
         trace_probe_arg,
-        static_cast<uint32_t>(impl_->probe_ci_start_ + probe_win_off));
+        static_cast<uint32_t>(impl_->probe_ci_start_ + probe_win_off),
+        // task-331.6 (raypath-color foundation) component-mask carry + capture.
+        // d_root_component read always (carried load); d_cont_component written
+        // only on ms_mode==1 (nullptr on final, mirroring d_cont_wl_idx). The
+        // capture ring + gate bits are bound unconditionally; the kernel's
+        // produce/capture branch is gated by capture_component (0 in production).
+        impl_->d_root_component_,
+        ms_mode == 1u ? impl_->d_cont_component_[out_slot] : nullptr,
+        impl_->d_gate_component_bits_,
+        impl_->d_exit_comp_mask_,
+        impl_->d_exit_comp_w_,
+        impl_->d_exit_comp_cnt_,
+        static_cast<uint32_t>(impl_->exit_comp_cap_),
+        impl_->capture_component_ ? 1u : 0u);
     ck_reset(cudaPeekAtLastError(), "kernel launch");
     // S2: ev_end_kernel_ recorded inside the loop captures real kernel time.
     // The original outside-loop placement (right next to ev_end_h2d_) collapsed
@@ -2900,6 +3179,28 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
                       cudaMemcpyDeviceToHost), "4B readback");
   cudaEventRecord(impl_->ev_end_d2h_, impl_->stream_);
   cudaEventSynchronize(impl_->ev_end_d2h_);
+
+  // task-331.6 (test-only): drain this layer's component-mask capture ring into
+  // the session accumulators. All trace kernels are waited above (the 4B
+  // readback + event sync), so the counter + buffers are coherent. Clamp to
+  // capacity (the kernel's `cslot < comp_cap` guard drops overflow — assert-free
+  // like the cont ring). Accumulates across MS layers into captured_masks_/ws_.
+  if (impl_->capture_component_ && impl_->d_exit_comp_cnt_ != nullptr) {
+    uint32_t n_cap = 0u;
+    ck_reset(cudaMemcpy(&n_cap, impl_->d_exit_comp_cnt_, sizeof(uint32_t), cudaMemcpyDeviceToHost),
+             "component capture count readback");
+    size_t n_drain = std::min<size_t>(n_cap, impl_->exit_comp_cap_);
+    if (n_drain > 0) {
+      std::vector<uint64_t> masks(n_drain);
+      std::vector<float> ws(n_drain);
+      ck_reset(cudaMemcpy(masks.data(), impl_->d_exit_comp_mask_, n_drain * sizeof(unsigned long long),
+                          cudaMemcpyDeviceToHost), "component capture mask readback");
+      ck_reset(cudaMemcpy(ws.data(), impl_->d_exit_comp_w_, n_drain * sizeof(float), cudaMemcpyDeviceToHost),
+               "component capture weight readback");
+      impl_->captured_masks_.insert(impl_->captured_masks_.end(), masks.begin(), masks.end());
+      impl_->captured_ws_.insert(impl_->captured_ws_.end(), ws.begin(), ws.end());
+    }
+  }
 
   float h2d_ms = 0.0f;
   float kernel_ms = 0.0f;
@@ -3001,12 +3302,17 @@ RootRaySource CudaTraceBackend::Recombine(LayerHandlePtr handle, const Recombine
       cudaFree(impl_->d_cont_d_[other_slot]);      impl_->d_cont_d_[other_slot] = nullptr;
       cudaFree(impl_->d_cont_w_[other_slot]);      impl_->d_cont_w_[other_slot] = nullptr;
       cudaFree(impl_->d_cont_wl_idx_[other_slot]); impl_->d_cont_wl_idx_[other_slot] = nullptr;
+      cudaFree(impl_->d_cont_component_[other_slot]); impl_->d_cont_component_[other_slot] = nullptr;  // task-331.6
       ck(cudaMalloc(&impl_->d_cont_d_[other_slot],      3 * cont_n * sizeof(float)),
          "cudaMalloc d_cont_d (shuffle grow)");
       ck(cudaMalloc(&impl_->d_cont_w_[other_slot],      cont_n * sizeof(float)),
          "cudaMalloc d_cont_w (shuffle grow)");
       ck(cudaMalloc(&impl_->d_cont_wl_idx_[other_slot], cont_n * sizeof(uint32_t)),
          "cudaMalloc d_cont_wl_idx (shuffle grow)");
+      // task-331.6: grow the destination component buffer in lockstep so the
+      // gather can write out_component[tid].
+      ck(cudaMalloc(&impl_->d_cont_component_[other_slot], cont_n * sizeof(unsigned long long)),
+         "cudaMalloc d_cont_component (shuffle grow)");
       impl_->cont_cap_[other_slot] = cont_n;
     }
     const uint32_t shuf_seed = impl_->shuffle_seed_ ^ static_cast<uint32_t>(impl_->ms_layer_idx_);
@@ -3017,6 +3323,9 @@ RootRaySource CudaTraceBackend::Recombine(LayerHandlePtr handle, const Recombine
                                        impl_->d_cont_d_[other_slot],
                                        impl_->d_cont_w_[other_slot],
                                        impl_->d_cont_wl_idx_[other_slot],
+                                       // task-331.6 LANDMINE: gather the mask in lockstep.
+                                       impl_->d_cont_component_[written_slot],
+                                       impl_->d_cont_component_[other_slot],
                                        cont_n, shuf_seed);
     cudaError_t launch_err = cudaPeekAtLastError();
     if (launch_err != cudaSuccess) {
@@ -3031,6 +3340,14 @@ RootRaySource CudaTraceBackend::Recombine(LayerHandlePtr handle, const Recombine
     std::swap(impl_->d_cont_d_[written_slot],      impl_->d_cont_d_[other_slot]);
     std::swap(impl_->d_cont_w_[written_slot],      impl_->d_cont_w_[other_slot]);
     std::swap(impl_->d_cont_wl_idx_[written_slot], impl_->d_cont_wl_idx_[other_slot]);
+    // task-331.6 (LANDMINE): the component mask is a parallel per-ray array — it
+    // MUST swap with cont_d/cont_w/cont_wl_idx here, mirroring CPU
+    // RayBuffer::SwapRay + Metal Recombine handle swap. Omitting it silently
+    // decorrelates the OR-accumulated mask from its ray across the layer boundary
+    // (breaks the joint distribution while preserving per-component marginals —
+    // invisible to a corr/marginal check, caught only by the per-mask-value
+    // shuffle-invariance parity assertion).
+    std::swap(impl_->d_cont_component_[written_slot], impl_->d_cont_component_[other_slot]);
     std::swap(impl_->cont_cap_[written_slot],      impl_->cont_cap_[other_slot]);
   }
 
@@ -3192,6 +3509,19 @@ void CudaTraceBackend::EndSession() {
 // D2H) instead of the per-exit DrainExits PCIe round-trip that flattened CUDA
 // throughput to 0.10–0.12× legacy CPU.
 bool CudaTraceBackend::HasDeviceXyzAccum() const { return true; }
+
+// task-331.6 (test-only) component-mask parity. Mirrors
+// MetalTraceBackend::SetCaptureComponent / ReadbackComponentCapture.
+void CudaTraceBackend::SetCaptureComponent(bool enable) {
+  // Must be set before BeginSession — the capture-ring sizing + per-layer
+  // memset/reset in TraceLayer read this flag.
+  impl_->capture_component_ = enable;
+}
+
+void CudaTraceBackend::ReadbackComponentCapture(std::vector<uint64_t>& masks, std::vector<float>& weights) const {
+  masks = impl_->captured_masks_;
+  weights = impl_->captured_ws_;
+}
 
 // scrum-312 third-clock drain: copies the PERSISTENT cross-batch d_xyz_buf_ +
 // d_landed_weight_ accumulator to host, accumulates landed_weight into the running

@@ -28,6 +28,8 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/core/test_rng.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_filter.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_filter_spec.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_component_gate.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_crosslayer_component.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_device_filter_check_host.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_reduce_raypath_audit.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_raypath_segments.cpp"
@@ -41,6 +43,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/config/test_config_snapshot.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/config/test_render_config.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/config/test_sim_data.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/config/test_component_table.cpp"
   # server/
   "${PROJ_TEST_DIR}/unit-correctness/server/test_c_api.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_stats_consumer.cpp"
@@ -75,7 +78,11 @@ add_executable(parity_test
   "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_metal_root_gen.cpp"
   "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_metal_trace_backend.cpp"
   "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_cpu_trace_backend.cpp"
-  "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_cuda_rich_exit.cpp")
+  "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_cuda_rich_exit.cpp"
+  # task-331.5 raypath-color foundation: CPU-vs-Metal component-mask parity.
+  "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_metal_component_mask_parity.cpp"
+  # task-331.6 raypath-color foundation: CPU-vs-CUDA component-mask parity.
+  "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_cuda_component_mask_parity.cpp")
 if(APPLE)
   # scrum-267 task-msl-filter-match-port: parity harness for device filter MATCH.
   # ObjC++ source (.mm) — needs ARC and the Metal/Foundation frameworks.

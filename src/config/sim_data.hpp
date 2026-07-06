@@ -62,6 +62,32 @@ struct RayBuffer {
   // hits the overflow branch.
   void RecorderFanOut(const RayBuffer& src, size_t src_idx, size_t dst0, size_t dst1);
 
+  // ---- Per-ray component mask (raypath-color foundation, task-331.1) ----
+  // Parallel array carrying a uint64 per-ray mask across MS layers. Kept out of
+  // RaySeg (which has no free padding for an 8B field — see task-331.1 plan
+  // §3.1) so `sizeof(RaySeg) == 96` and the hot BufferWrapper cache density
+  // survive. Values are OR-accumulated across layers by the phase-2 producer
+  // (T2/T3); T1 only wires the transport path and leaves the mask at 0.
+  uint64_t ComponentAt(size_t idx) const;
+  void SetComponent(size_t idx, uint64_t v);
+  // Copy src.components_[src_idx] into components_[dst0] and components_[dst1].
+  // Mirror of RecorderFanOut for the hit-loop child pair in TraceRayBasicInfo.
+  void ComponentFanOut(const RayBuffer& src, size_t src_idx, size_t dst0, size_t dst1);
+
+  // Swap the full per-ray hot state of slots i and j: the RaySeg AND its
+  // parallel component mask, so a ray and its OR-accumulated raypath-color mask
+  // stay paired under the continuation-pool decorrelation shuffle
+  // (simulator.cpp + cpu_trace_backend.cpp). Before task-331.3 the shuffle used
+  // `std::swap(buf[i], buf[j])`, which swaps ONLY rays_ (operator[] returns
+  // RaySeg&) and left components_ behind — decorrelating the accumulated mask
+  // from its ray across MS layers (the mask is the only cross-layer-surviving
+  // per-ray state; recorders are RecorderClear'd at the next layer's entry).
+  // recorders_ is DELIBERATELY not swapped here: it is reset at layer entry
+  // before being read, so swapping it would only churn the overflow arena for
+  // no observable effect — keeping the shuffle's recorder behaviour bit-identical
+  // to pre-331.3 (rendering unchanged).
+  void SwapRay(size_t i, size_t j);
+
   // Read-only pointer to the overflow arena base for downstream consumers
   // (e.g. FilterSpec::Match needs it to resolve recorder data). Returns
   // nullptr when no overflow slot has been allocated yet.
@@ -95,6 +121,9 @@ struct RayBuffer {
   size_t size_;
   std::unique_ptr<RaySeg[]> rays_;
   std::unique_ptr<RaypathRecorder[]> recorders_;
+  // Per-ray component mask (raypath-color foundation, task-331.1). Zero-initialised
+  // on allocation; propagated by ComponentFanOut and buffer-batch EmplaceBack.
+  std::unique_ptr<uint64_t[]> components_;
 
  private:
   // Bump-allocated arena holding overflow hit buffers (each slot is kMaxHits
@@ -148,6 +177,12 @@ struct SimData {
   // of the single curr_wl_ — this is the Metal/per-ray-pool seam. Empty for
   // CPU path so SpectrumToXyz(curr_wl_) stays in force.
   std::vector<float> outgoing_wl_;
+  // task-331.1 (raypath-color foundation): per-outgoing-ray component mask
+  // (uint64). CPU paths (legacy + CpuTraceBackend) populate this parallel to
+  // outgoing_w_; phase-1 leaves the values at 0 because no producer wires bits
+  // yet. Metal/CUDA leave it empty for now — see scrum-331 T5/T6 for the
+  // device-side delivery path.
+  std::vector<uint64_t> outgoing_component_;
 
   // Rich exit records (scrum-258.2+) parallel to outgoing_d_/w_. Produced by
   // the trace backend via ReadbackExitRays; consumed by 258.3 (filter +

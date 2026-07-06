@@ -5,6 +5,7 @@
 #include <memory>
 #include <vector>
 
+#include "config/component_table.hpp"
 #include "config/sim_data.hpp"
 #include "core/backend/trace_backend.hpp"
 #include "core/geo3d.hpp"
@@ -98,6 +99,13 @@ class CpuTraceBackend : public TraceBackend {
   // (per-layer routing / filter / prob owned by 258.3). BeginSession /
   // EndSession reset; ReadbackExitRays moves out and returns the count.
   std::vector<ExitRayRecord> exit_records_;
+
+  // task-331.2: static (layer, crystal-slot, summand) -> component-bit table
+  // for the current session's scene. Built once in BeginSession; TraceLayer
+  // slices it per (ms_idx_, ci) via ComponentBitsFor and hands the map to
+  // CollectData, which OR-s the matched summands' bits into each surviving
+  // ray's mask (piped out through ExitRayRecord::component_mask).
+  ComponentTable component_table_;
 
   bool in_session_ = false;
   // Track whether rng_ has been seeded by a prior BeginSession in this

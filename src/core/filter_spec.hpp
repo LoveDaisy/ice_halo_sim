@@ -44,6 +44,40 @@ class FilterSpec {
     return action_ == FilterConfig::kFilterIn ? m : !m;
   }
 
+  // Single-pass per-summand evaluation for the raypath-color foundation
+  // (task-331.2). Returns a mask whose bit k is set iff OR-summand k matched,
+  // and (via out_matched) the pre-action collapse boolean == Match(). Simple
+  // non-None filters expose exactly one summand (bit 0); None exposes zero
+  // (mask stays 0). ComplexSpec overrides this to evaluate EVERY OR-summand
+  // (no short-circuit) so the gate's collapse-to-boolean does not discard the
+  // per-summand information the component mask needs.
+  //
+  // Callers that produce component bits at the emit gate MUST use this (via
+  // CheckSummandMask) instead of Match()+Check() so the predicates are
+  // evaluated once, not twice.
+  virtual uint64_t MatchSummandMask(const RaySeg& ray, const RaypathRecorder& rec, const uint8_t* overflow_arena,
+                                    bool* out_matched) const {
+    bool m = Match(ray, rec, overflow_arena);
+    if (out_matched != nullptr) {
+      *out_matched = m;
+    }
+    return m ? 1ull : 0ull;
+  }
+
+  // Action-applied gate decision plus the per-summand mask, in a single pass.
+  // Equivalent to Check() for the returned boolean, but also surfaces the
+  // pre-action per-summand mask so the caller can map matched summands onto
+  // component bits without a second predicate evaluation.
+  bool CheckSummandMask(const RaySeg& ray, const RaypathRecorder& rec, const uint8_t* overflow_arena,
+                        uint64_t* out_summand_mask) const {
+    bool matched = false;
+    uint64_t mask = MatchSummandMask(ray, rec, overflow_arena, &matched);
+    if (out_summand_mask != nullptr) {
+      *out_summand_mask = mask;
+    }
+    return action_ == FilterConfig::kFilterIn ? matched : !matched;
+  }
+
   static std::unique_ptr<FilterSpec> Create(const FilterConfig& config, const Crystal& crystal,
                                             const AxisDistribution& axis_dist);
 

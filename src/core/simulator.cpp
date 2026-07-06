@@ -15,6 +15,7 @@
 #include <thread>
 #include <variant>
 
+#include "config/component_table.hpp"
 #include "config/crystal_config.hpp"
 #include "config/light_config.hpp"
 #include "config/proj_config.hpp"
@@ -206,6 +207,16 @@ void InitRayFirstMs(RandomNumberGenerator& rng, const SunParam& light_param, con
 
   // 1.3 init crystal_id, root_ray_idx, rp, state
   InitRay_other_info(curr_crystal, curr_crystal_id, all_data.size_, buffer_data);
+
+  // 1.4 First-MS reset of the per-ray component mask (task-331.1). The mask is
+  // the only cross-MS-layer per-ray state added since scrum-237 removed
+  // is_prior_filter_failed_/anchor lane. Reset MUST happen here and NOT inside
+  // InitRay_other_info: the latter is shared with InitRayOtherMs, and zeroing
+  // the mask on subsequent layers would break the "first-layer reset, then OR
+  // forward" semantics that T2/T3 rely on.
+  for (size_t i = 0; i < buffer_data[0].size_; i++) {
+    buffer_data[0].SetComponent(i, 0);
+  }
 
   all_data.EmplaceBack(buffer_data[0]);
 }
@@ -416,6 +427,12 @@ void TraceRayBasicInfo(const Crystal& curr_crystal, float refractive_index, size
     // copy in-place (recorders_ memcpy ×2) and only takes the arena dup branch
     // for overflow rays — cold under bench(max_hits=8).
     buffer_data[1].RecorderFanOut(buffer_data[0], i, i * 2 + 0, i * 2 + 1);
+    // task-331.1: mirror the recorder fan-out for the per-ray component mask.
+    // Both child segments inherit the parent's mask verbatim (T2/T3 OR-produce
+    // bits later; this fan-out keeps the mask propagating through the hit
+    // loop). Currently a no-op semantically (all masks are 0 in T1), but wiring
+    // it now means T2 doesn't have to touch simulator.cpp fan-out code.
+    buffer_data[1].ComponentFanOut(buffer_data[0], i, i * 2 + 0, i * 2 + 1);
     // Each child segment's from_face_ = parent's to_face_ (the face just hit).
     buffer_data[1][i * 2 + 0].from_face_ = buffer_data[0][i].to_face_;
     buffer_data[1][i * 2 + 1].from_face_ = buffer_data[0][i].to_face_;
@@ -447,7 +464,8 @@ void FillRayOtherInfo(const Crystal& curr_crystal, RayBuffer buffer_data[2]) {
 // Design A filter semantics: filter-fail = ray terminates (not outgoing, not continue).
 // See doc/raypath-rayseg-architecture.md §3 for the segment state-machine transition rules.
 void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input
-                 RayBuffer* buffer_data, RayBuffer* init_data) {                             // output
+                 RayBuffer* buffer_data, RayBuffer* init_data,                               // output
+                 const std::vector<uint8_t>* summand_bits) {                                 // input
   for (size_t idx = 0; idx < buffer_data[1].size_; idx++) {
     auto& r = buffer_data[1][idx];
     const auto& rec = buffer_data[1].RecorderAt(idx);
@@ -463,8 +481,43 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       r.crystal_rot_.Apply(r.d_);
       r.crystal_rot_.Apply(r.p_);
 
-      bool filter_pass = (spec == nullptr) || spec->Check(r, rec, buffer_data[1].OverflowArena());
+      // task-331.2: gate decision. When a raypath-color summand->bit map is
+      // provided, evaluate the filter in a SINGLE pass (CheckSummandMask also
+      // returns the per-summand match mask) so the component bits reuse the
+      // same evaluation that produces the gate boolean — no extra predicate
+      // pass. Without the map, keep the original short-circuit Check() so the
+      // gate decision, RNG order, and perf are bit-identical to pre-331.2.
+      const uint8_t* arena = buffer_data[1].OverflowArena();
+      uint64_t summand_mask = 0;
+      bool filter_pass = false;
+      if (spec == nullptr) {
+        filter_pass = true;
+      } else if (summand_bits != nullptr) {
+        filter_pass = spec->CheckSummandMask(r, rec, arena, &summand_mask);
+      } else {
+        filter_pass = spec->Check(r, rec, arena);
+      }
       if (filter_pass) {
+        // Produce this layer's component bits for the surviving ray and OR them
+        // into its carried mask (which the T1 transport then propagates to the
+        // emitted or continued copy below). Only outgoing candidates reach this
+        // branch, i.e. rays whose raypath (rec) is complete for this crystal —
+        // so per-summand matching is on the full current-layer path.
+        if (summand_bits != nullptr && summand_mask != 0) {
+          uint64_t produced = 0;
+          const std::vector<uint8_t>& sb = *summand_bits;
+          for (size_t k = 0; k < sb.size() && k < 64; k++) {
+            if ((summand_mask & (1ull << k)) != 0) {
+              uint8_t bit = sb[k];
+              if (bit < ComponentTable::kMaxBits) {
+                produced |= (1ull << bit);
+              }
+            }
+          }
+          if (produced != 0) {
+            buffer_data[1].SetComponent(idx, buffer_data[1].ComponentAt(idx) | produced);
+          }
+        }
         if (rng.GetUniform() < ms_info.prob_) {
           // 1.1 filter-pass + prob-pass → continue to next MS level.
           r.is_continue_ = true;
@@ -479,15 +532,33 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
     }
     // 2. Normal rays (to_face_ != kInvalidId && w_ >= 0) stay in crystal-local coordinates.
 
+    // task-331.1: capture the source mask once. Single-ray EmplaceBack
+    // deliberately does not touch components_ (its signature stays untouched
+    // to avoid ripple-changing every caller); the mask hand-off is explicit
+    // here so T2 has an obvious insertion point for the "OR in this layer's
+    // hit bits" step and so pool-reused destination slots don't leak stale
+    // values from earlier iterations.
+    uint64_t src_component = buffer_data[1].ComponentAt(idx);
     if (r.IsNormal()) {
       // rec comes from buffer_data[1]; pass it as arena_src so overflow slots
       // get duped into buffer_data[0]'s own arena (fix for max_hits>kInlineCap
       // null-deref: the 2-arg overload would copy overflow_idx_ pointing at the
       // wrong arena and crash the next RecorderFanOut).
+      size_t dst_idx = buffer_data[0].size_;  // read before EmplaceBack mutates size_.
       buffer_data[0].EmplaceBack(r, rec, buffer_data[1]);
+      // EmplaceBack loses one slot when size_+1==capacity_ — replay that guard
+      // so we don't SetComponent past size_. size_ moved iff the ray was
+      // actually appended.
+      if (buffer_data[0].size_ > dst_idx) {
+        buffer_data[0].SetComponent(dst_idx, src_component);
+      }
     }
     if (r.IsContinue()) {
+      size_t dst_idx = init_data[1].size_;
       init_data[1].EmplaceBack(r, rec, buffer_data[1]);
+      if (init_data[1].size_ > dst_idx) {
+        init_data[1].SetComponent(dst_idx, src_component);
+      }
     }
   }
 }
@@ -833,9 +904,27 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   float wl = wl_param.wl_;
   size_t original_ray_num = ray_num;  // ray_num is overwritten in the ms loop; keep original for normalization.
 
+  // task-331.1/2: static (layer, crystal-slot, summand) -> component-bit table.
+  // T2 consumes it at the emit gate: ComponentBitsFor(component_table, mi, ci)
+  // yields the per-summand bit map the gate ORs into each surviving ray's mask.
+  //
+  // NOTE (plan-review): calling BuildComponentTable per-wavelength is a
+  // TEMPORARY validation shape. A later task should hoist this to a
+  // per-simulation-run scope (config-load-time or Run() top), so multi-
+  // wavelength scenes don't rebuild the same static table dozens of times. The
+  // build is a pure O(total summands) walk (no I/O, no RNG), so the cost is
+  // negligible; not hoisting here to keep this task's diff focused on the gate
+  // producer rather than reshaping Run()'s per-run seam.
+  ComponentTable component_table = BuildComponentTable(config);
+  ILOG_DEBUG(logger_, "ComponentTable built: {} entries (legacy path)", component_table.entries_.size());
+
   RayBuffer all_data = AllocateAllData(config, ray_num);
   std::vector<float> outgoing_d;
   std::vector<float> outgoing_w;
+  // task-331.1: per-outgoing-ray component mask parallel to outgoing_d_/w_.
+  // Phase-1 emits 0s (no producer wired), but the plumbing must exist so T2/T3
+  // don't need to touch this legacy path.
+  std::vector<uint64_t> outgoing_component;
   auto& init_data = workspace.init_data;
   auto& buffer_data = workspace.buffer_data;
   init_data[0].size_ = 0;
@@ -874,6 +963,15 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
     for (size_t ci = 0; ci < ms_crystal_cnt && !stop_; ci++) {
       const auto& s = m.setting_[ci];
       std::unique_ptr<FilterSpec> spec;
+
+      // task-331.2: per-summand -> component-bit map for THIS (layer, crystal).
+      // The emit gate is always invoked from inside this (mi, ci) loop, so
+      // (mi, ci) is exactly the static key BuildComponentTable used — no need
+      // to resolve the runtime crystal_config_id_/crystal_idx_ (unstable across
+      // batches). Depends only on config, so compute once per ci (crystal
+      // instance re-sampling inside the cn loop does not affect it).
+      std::vector<uint8_t> summand_bits =
+          ComponentBitsFor(component_table, static_cast<IdType>(mi), static_cast<IdType>(ci));
 
       bool deterministic = IsDeterministic(s.crystal_.param_);
 
@@ -946,8 +1044,9 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
           FillRayOtherInfo(curr_crystal, buffer_data);
 
           // 2.3 Collect data. And set ray properties: state.
-          CollectData(rng_, m, spec.get(),      // input
-                      buffer_data, init_data);  // output
+          CollectData(rng_, m, spec.get(),     // input
+                      buffer_data, init_data,  // output
+                      &summand_bits);          // input (task-331.2 component producer)
 
           // 2.4 Copy to all_data + collect outgoing rays (d/w pre-pack).
           all_data.EmplaceBack(buffer_data[1]);
@@ -958,6 +1057,9 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
               outgoing_d.push_back(r.d_[1]);
               outgoing_d.push_back(r.d_[2]);
               outgoing_w.push_back(r.w_);
+              // task-331.2: CollectData has now OR'd this layer's component
+              // bits into the mask (0 only when no summand matched / no map).
+              outgoing_component.push_back(buffer_data[1].ComponentAt(j));
             }
           }
         }  // hit loop
@@ -968,10 +1070,14 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
     init_data[0].Reset(ray_num * (config.max_hits_ + 1));
     std::swap(init_data[0], init_data[1]);
 
-    // Shuffle init_data
+    // Shuffle init_data. SwapRay (not std::swap(buf[i],buf[j])) so each ray's
+    // OR-accumulated component mask stays paired with it across the layer
+    // boundary — operator[] only exposes RaySeg, so a plain swap would leave the
+    // parallel components_ array behind and decorrelate the cross-layer mask
+    // (task-331.3). RNG draw order is unchanged (SwapRay draws nothing).
     for (size_t i = 0; i < init_data[0].size_; i++) {
       size_t j = static_cast<size_t>(rng_.GetUniform() * (init_data[0].size_ - i)) + i;
-      std::swap(init_data[0][i], init_data[0][j]);
+      init_data[0].SwapRay(i, j);
     }
 
     first_ms = false;
@@ -989,6 +1095,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   sim_data.rays_ = std::move(all_data);
   sim_data.outgoing_d_ = std::move(outgoing_d);
   sim_data.outgoing_w_ = std::move(outgoing_w);
+  sim_data.outgoing_component_ = std::move(outgoing_component);  // task-331.1
   sim_data.root_ray_count_ = original_ray_num;
   sim_data.crystal_count_ = sim_data.crystals_.size();
   data_queue_->Emplace(std::move(sim_data));
@@ -1081,6 +1188,12 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   if (ray_num == 0 || scene.ms_.empty()) {
     return;
   }
+
+  // task-331.2: the component table is now built and consumed INSIDE the
+  // backend that produces per-ray masks (CpuTraceBackend::BeginSession builds
+  // it; its emit gate slices it per (layer, crystal)). Metal/CUDA leave
+  // component_mask at 0 until T5/T6 wire device-side production, so this
+  // host-side entry no longer builds a throwaway table.
 
   // Task 260.6: hand the backend `effective_seed_` (non-zero) so device-gen
   // activates even when the user-facing `seed_` is 0 (default random mode).
@@ -1228,6 +1341,13 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   if (fill_per_ray_wl) {
     exit_wl.resize(exit_count);
   }
+  // task-331.1: per-outgoing-ray component mask parallel to exit_d_/exit_w_.
+  // Filled unconditionally (the field on ExitRayRecord always exists, unlike
+  // the pool-gated wl seam above). Metal/CUDA leave the field at 0 today
+  // because their kernels don't produce per-ray masks yet (see plan §0.2 —
+  // T5/T6 deliver via device-side per-component atomicAdd rather than mirroring
+  // the ExitRayRecord carrier). CpuTraceBackend populates the field for real.
+  std::vector<uint64_t> exit_component(exit_count);
   for (size_t i = 0; i < exit_count; i++) {
     exit_d[i * 3 + 0] = exit_records[i].dir[0];
     exit_d[i * 3 + 1] = exit_records[i].dir[1];
@@ -1237,6 +1357,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
       float idx = static_cast<float>(exit_records[i].wl_idx) + 0.5f;
       exit_wl[i] = 380.0f + idx * 400.0f / static_cast<float>(pool_size);
     }
+    exit_component[i] = exit_records[i].component_mask;
   }
 
   SimData sim_data;
@@ -1249,6 +1370,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   sim_data.outgoing_d_ = std::move(exit_d);
   sim_data.outgoing_w_ = std::move(exit_w);
   sim_data.outgoing_wl_ = std::move(exit_wl);
+  sim_data.outgoing_component_ = std::move(exit_component);  // task-331.1
   sim_data.exit_records_ = std::move(exit_records);
   data_queue_->Emplace(std::move(sim_data));
 }
