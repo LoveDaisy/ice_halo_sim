@@ -80,7 +80,9 @@ add_executable(parity_test
   "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_cpu_trace_backend.cpp"
   "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_cuda_rich_exit.cpp"
   # task-331.5 raypath-color foundation: CPU-vs-Metal component-mask parity.
-  "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_metal_component_mask_parity.cpp")
+  "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_metal_component_mask_parity.cpp"
+  # task-331.6 raypath-color foundation: CPU-vs-CUDA component-mask parity.
+  "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_cuda_component_mask_parity.cpp")
 if(APPLE)
   # scrum-267 task-msl-filter-match-port: parity harness for device filter MATCH.
   # ObjC++ source (.mm) — needs ARC and the Metal/Foundation frameworks.

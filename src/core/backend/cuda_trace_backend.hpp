@@ -104,6 +104,18 @@ class CudaTraceBackend : public TraceBackend {
   // to legacy CPU via simulator backend dispatch.
   bool HasDeviceXyzAccum() const override;
   void ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight) override;
+  // [TEST-ONLY] task-331.6 (raypath-color foundation) component-mask parity.
+  // CUDA sibling of MetalTraceBackend::SetCaptureComponent /
+  // ReadbackComponentCapture. SetCaptureComponent(true) makes the emit gate
+  // produce per-summand component bits, OR them into each ray's carried uint64
+  // mask (carried across MS layers on device via d_root_component_ /
+  // d_cont_component_), and append (mask, weight) of every emitted (mid + final)
+  // exit ray to a per-session capture ring. Must be called before BeginSession.
+  // Default false → zero production overhead (the gate skips all produce/capture
+  // work; only the all-zero carried mask propagates). ReadbackComponentCapture
+  // returns the accumulated (mask, weight) pairs for CPU parity comparison.
+  void SetCaptureComponent(bool enable);
+  void ReadbackComponentCapture(std::vector<uint64_t>& masks, std::vector<float>& weights) const;
   // scrum-312: CUDA opts into third-clock drain (persistent device accumulator +
   // display-cadence readback) to shed the per-batch synchronous D2H readback tax.
   bool SupportsThirdClockDrain() const override { return true; }
