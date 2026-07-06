@@ -3734,9 +3734,11 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
-      // Row 0 accepts a single-token raypath. ";" is legacy multi-segment
-      // sugar rejected by ValidateSummandText (";' not allowed inside AND
-      // row"); use "+ Add OR row" instead to express OR across two rows.
+      // Row 0 accepts a single-token raypath. This test uses two separate
+      // rows to exercise the "+ Add OR row" path. (Post-334.3 H-A, a single
+      // row `1-3;3-5` produces an equivalent serialized composition — see
+      // semicolon_multi_raypath_single_row_commits + the import-export
+      // equivalence tests.)
       ctx->ItemInputValue("**/##row_text_0", "3-5");
       ctx->Yield(1);
       ctx->ItemClick("**/+ Add OR row##summand_add");
@@ -4126,6 +4128,44 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
       IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
+    };
+  }
+
+  // T11 (scrum-334.3 H-A) — a single OR row carrying inline ';' alternatives
+  // ("1-3;3-5") commits without OK being disabled and preserves the whole
+  // token verbatim in the row's raypath_text. Fan-out to multiple summands
+  // happens at serialization time (see semicolon_row_equals_two_rows_composition
+  // in test_gui_import_export.cpp for the end-to-end equivalence), NOT at
+  // commit — so the on-disk row count stays at 1.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "semicolon_multi_raypath_single_row_commits");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/##row_text_0", "1-3;3-5");
+      ctx->Yield(2);
+
+      // OK must be enabled — ValidateSummandText now delegates to
+      // ValidateRaypathTextMultiSegment for raypath tokens, so inner ';' is
+      // accepted.
+      auto info_ok = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
+      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      const auto& f = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
+      IM_CHECK_EQ(f.param.size(), static_cast<size_t>(1));
+      IM_CHECK_STR_EQ(f.param[0].text.c_str(), "1-3;3-5");
+      // The row parses into a single raypath factor (the ';' is inside the
+      // token, not across factor boundaries).
+      IM_CHECK_EQ(f.param[0].factors.size(), static_cast<size_t>(1));
     };
   }
 }

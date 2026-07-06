@@ -615,11 +615,14 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   std::string filter_tooltip_storage;
   const char* filter_tooltip = nullptr;
   if (filter_opt.has_value() && !filter_opt->IsDegenerateSingleFactor()) {
-    filter_tooltip_storage = "OR of " + std::to_string(filter_opt->param.size()) + " row(s):";
-    for (const auto& s : filter_opt->param) {
-      filter_tooltip_storage += "\n  ";
-      filter_tooltip_storage += s.text.empty() ? "*" : s.text;
-    }
+    // Card tooltip visibility is intentionally gated by IsDegenerateSingleFactor()
+    // (i.e. only shown for genuinely non-degenerate multi-row / multi-factor
+    // filters), whereas the editor-side live preview uses a different, wider
+    // gate (any non-blank row). The formatting is shared via
+    // FormatSopExpansionPreview so both call sites cannot drift, but the
+    // visibility policy stays deliberately different — see edit_modals.cpp
+    // RenderSummandRowList for the editor gate rationale.
+    filter_tooltip_storage = gui::FormatSopExpansionPreview(filter_opt->param);
     filter_tooltip = filter_tooltip_storage.c_str();
   }
   emit_row(2, filter_text.c_str(), "Edit##fi", EditTarget::kFilter, "Filter", true, filter_tooltip);

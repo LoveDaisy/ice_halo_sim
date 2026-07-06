@@ -788,7 +788,54 @@ static void RenderSummandRowList() {
     ImGui::SetTooltip("Maximum OR rows reached (%zu)", kMaxSummandRows);
   }
 
-  ImGui::TextDisabled("e.g. 3-5  or  entry:2 & exit:4  or  3-5 & len:2-3");
+  // Static hint — includes ';' example post-334.3 (H-A). Kept as one line so
+  // it does not compete with the live-preview block below.
+  ImGui::TextDisabled("e.g. 3-5  or  1-3;3-5 (OR)  or  entry:2 & exit:4  or  3-5 & len:2-3");
+
+  // Token help icon: transparent SmallButton acts as a stable hover target
+  // (mirrors RenderSharedFilterControls' `kDTooltipText` icon pattern).
+  ImGui::SameLine();
+  ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0, 0, 0, 0));
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0, 0, 0, 0));
+  ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+  ImGui::SmallButton(ICON_FA_CIRCLE_INFO "##summand_token_help");
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor(4);
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip(
+        "Token syntax:\n"
+        "  3-5           face path (a raypath token)\n"
+        "  1-3;3-5       raypath OR alternatives (';' distributes over '&')\n"
+        "  entry:2       enter through face 2\n"
+        "  exit:4        exit through face 4\n"
+        "  len:2-3       ray length range\n"
+        "  entry:1,2     comma-list = 'entry:1 OR entry:2' (expanded at filter apply)\n"
+        "  & (AND)       within a row\n"
+        "  new row       = OR alternative (sum-of-products)\n"
+        "  blank row     = match all rays (no filter)");
+  }
+
+  // Live preview of the sum-of-products the current row buffers would
+  // expand to on commit. Uses the SAME parse/format helpers as the commit
+  // path (BuildSopFromRows -> FormatSopExpansionPreview) so what the user
+  // sees IS what will be serialized. Skipped when the row set is the
+  // trivial "single blank row" (match-all) state — otherwise the preview
+  // just repeats the hint line above with no new information.
+  const bool show_live_preview =
+      g_summand_rows.size() > 1 || (g_summand_rows.size() == 1 && g_summand_rows[0].text[0] != '\0');
+  if (show_live_preview) {
+    SumOfProducts live_sop = BuildSopFromRows(g_summand_rows);
+    // Row count here is small (soft cap = kMaxSummandRows, typically single
+    // digits). Per-frame re-parse cost is negligible for immediate-mode UI;
+    // no caching needed. If the cap ever grows materially, revisit.
+    ImGui::Separator();
+    ImGui::TextDisabled("Preview:");
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted(FormatSopExpansionPreview(live_sop).c_str());
+    ImGui::PopTextWrapPos();
+  }
 }
 
 // Returns true when the current entry's axis config satisfies D-symmetry

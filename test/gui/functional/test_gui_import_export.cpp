@@ -1021,6 +1021,113 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // scrum-334.3 H-A AC1: a single OR-row carrying inline ';' alternatives
+  // (`1-3;3-5`) must produce a serialized filter array structurally identical
+  // to the two-row form (`1-3` / `3-5`), because the ';' fan-out in
+  // ValidateRaypathTextMultiSegment + ExpandSopToClauses is meant to be the
+  // exact same expansion path both entry points feed into.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "semicolon_row_equals_two_rows_composition");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      auto build_and_serialize = [](const std::vector<std::string>& rows) -> nlohmann::json {
+        gui::g_state.layers.clear();
+        gui::g_state.filters.clear();
+        gui::Layer layer;
+        layer.probability = 0.0f;
+        gui::EntryCard entry;
+        gui::CrystalOf(gui::g_state, entry).type = gui::CrystalType::kPrism;
+        gui::CrystalOf(gui::g_state, entry).height = 1.0f;
+        for (int i = 0; i < 6; ++i) {
+          gui::CrystalOf(gui::g_state, entry).face_distance[i] = 1.0f;
+        }
+        entry.proportion = 100.0f;
+        gui::FilterConfig f;
+        gui::SumOfProducts sop;
+        for (const auto& row : rows) {
+          sop.push_back(gui::SummandText{ row, gui::ParseSummandText(row) });
+        }
+        f.param = std::move(sop);
+        gui::SetFilter(gui::g_state, entry, f);
+        layer.entries.push_back(entry);
+        gui::g_state.layers.push_back(layer);
+        return nlohmann::json::parse(gui::SerializeCoreConfig(gui::g_state));
+      };
+
+      const auto single_row = build_and_serialize({ "1-3;3-5" });
+      const auto two_rows = build_and_serialize({ "1-3", "3-5" });
+
+      // Same filter-array size (2 simple raypaths + 1 complex = 3).
+      IM_CHECK(single_row.contains("filter") && single_row["filter"].is_array());
+      IM_CHECK(two_rows.contains("filter") && two_rows["filter"].is_array());
+      IM_CHECK_EQ(static_cast<int>(single_row["filter"].size()), 3);
+      IM_CHECK_EQ(static_cast<int>(two_rows["filter"].size()), 3);
+
+      // Byte-identical filter subtrees (raypath children + complex composition).
+      // Serialization order is deterministic: FactorAlternatives → ExpandSopToClauses
+      // sees the same expanded summand list for both entry points, so ids and
+      // composition order match exactly.
+      IM_CHECK(single_row["filter"] == two_rows["filter"]);
+    };
+  }
+
+  // scrum-334.3 H-A AC1 (distributive form): the ';' alternation must
+  // distribute over an AND partner — `1-3;3-5 & entry:2` expands to two
+  // clauses `1-3 & entry:2` / `3-5 & entry:2`, identical to writing them
+  // across two separate rows.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "semicolon_row_distributes_over_and_factor");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      auto build_and_serialize = [](const std::vector<std::string>& rows) -> nlohmann::json {
+        gui::g_state.layers.clear();
+        gui::g_state.filters.clear();
+        gui::Layer layer;
+        layer.probability = 0.0f;
+        gui::EntryCard entry;
+        gui::CrystalOf(gui::g_state, entry).type = gui::CrystalType::kPrism;
+        gui::CrystalOf(gui::g_state, entry).height = 1.0f;
+        for (int i = 0; i < 6; ++i) {
+          gui::CrystalOf(gui::g_state, entry).face_distance[i] = 1.0f;
+        }
+        entry.proportion = 100.0f;
+        gui::FilterConfig f;
+        gui::SumOfProducts sop;
+        for (const auto& row : rows) {
+          sop.push_back(gui::SummandText{ row, gui::ParseSummandText(row) });
+        }
+        f.param = std::move(sop);
+        gui::SetFilter(gui::g_state, entry, f);
+        layer.entries.push_back(entry);
+        gui::g_state.layers.push_back(layer);
+        return nlohmann::json::parse(gui::SerializeCoreConfig(gui::g_state));
+      };
+
+      const auto single_row = build_and_serialize({ "1-3;3-5 & entry:2" });
+      const auto two_rows = build_and_serialize({ "1-3 & entry:2", "3-5 & entry:2" });
+
+      // Two AC1 checks in one test:
+      //   1. Both forms serialize to the SAME filter array (byte-identical
+      //      children + composition).
+      //   2. The composition has exactly 2 clauses (distributive law honored).
+      IM_CHECK(single_row["filter"] == two_rows["filter"]);
+      // Find the complex filter in the array (composition present).
+      const nlohmann::json* complex_filter = nullptr;
+      for (const auto& jf : single_row["filter"]) {
+        if (jf.contains("composition")) {
+          complex_filter = &jf;
+          break;
+        }
+      }
+      IM_CHECK(complex_filter != nullptr);
+      IM_CHECK_EQ(static_cast<int>((*complex_filter)["composition"].size()), 2);
+    };
+  }
+
   // task-data-model-and-serialization: legacy v=1 .lmc / GUI JSON without
   // `type` field falls back to RaypathParams (default raypath_text "").
   {

@@ -550,5 +550,112 @@ TEST(FilterSopGrammar, ParseLengthSpecRejectsMalformed) {
   EXPECT_FALSE(detail::ParseLengthSpec("<=0", mode, min_len, max_len));
 }
 
+// ===========================================================================
+// 334.3 H-A — single-row multi-raypath OR via ';' inside the AND grammar.
+//
+// Pre-334.3, ValidateSummandText rejected any raypath token containing ';'.
+// H-A relaxes that: a raypath token MAY carry ';'-alternatives which the
+// downstream FactorAlternatives/ExpandSopToClauses expand into multiple
+// summands at serialization time. The grammar contract for the validator is
+// now "delegate to ValidateRaypathTextMultiSegment" — leading/trailing/
+// consecutive ';' still reject (empty segment), inner ';' between valid
+// segments accepts.
+// ===========================================================================
+
+TEST(FilterSopGrammar, ValidateAcceptsSemicolonMultiRaypath) {
+  const char* good[] = {
+    "1-3;3-5",
+    "1-3;3-5 & entry:2",
+    "entry:2 & 1-3;3-5",
+    "1,2;3-5 & entry:2",           // ',' inside a raypath segment + ';' separator
+    "entry:2 & 1-3;3-5 & exit:4",  // ';' raypath sandwiched between EE factors
+  };
+  for (const char* g : good) {
+    EXPECT_EQ(ValidateSummandText(g, LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_VALID) << "expected VALID: " << g;
+  }
+}
+
+TEST(FilterSopGrammar, ValidateRejectsMalformedSemicolonRaypath) {
+  // Leading / trailing / consecutive ';' are rejected as "Empty raypath
+  // segment" by ValidateRaypathTextMultiSegment. Also cover ';'+'&'
+  // adjacency, which must not accidentally slip through as a valid segment.
+  const char* bad[] = {
+    ";3-5", "3-5;", "3;;5",
+    "3-5; & entry:2",  // ';' immediately before AND separator = trailing ';' in the raypath token
+  };
+  for (const char* b : bad) {
+    EXPECT_EQ(ValidateSummandText(b, LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_INVALID) << "expected INVALID: " << b;
+  }
+}
+
+TEST(FilterSopGrammar, SemicolonMultiRaypathRoundTrip) {
+  // ParseSummandText stores the whole ';'-carrying token verbatim in
+  // RaypathParams.raypath_text; FormatSummandText echoes it back byte for
+  // byte. Fan-out into multiple summands happens later, at serialization.
+  std::vector<Factor> factors{ Factor{ Rp("1-3;3-5") } };
+  ExpectFactorsRoundTrip(factors);
+
+  auto parsed = ParseSummandText("1-3;3-5");
+  ASSERT_EQ(parsed.size(), 1u);
+  ASSERT_TRUE(std::holds_alternative<RaypathParams>(parsed[0]));
+  EXPECT_EQ(std::get<RaypathParams>(parsed[0]).raypath_text, "1-3;3-5");
+
+  // With an AND partner, the ';' stays inside the single raypath factor;
+  // the row parses into 2 factors, not 3.
+  auto with_ee = ParseSummandText("1-3;3-5 & entry:2");
+  ASSERT_EQ(with_ee.size(), 2u);
+  ASSERT_TRUE(std::holds_alternative<RaypathParams>(with_ee[0]));
+  EXPECT_EQ(std::get<RaypathParams>(with_ee[0]).raypath_text, "1-3;3-5");
+  ASSERT_TRUE(std::holds_alternative<EntryExitParams>(with_ee[1]));
+}
+
+// ===========================================================================
+// 334.3 H-D — pure preview formatters. These NEVER drive filter behavior;
+// they mirror the syntactic ';' fan-out for the editor's live preview so
+// users can see what their row expands to before committing.
+// ===========================================================================
+
+TEST(FilterSopPreview, ExpandsSemicolonAlternatives) {
+  std::vector<Factor> factors{ Factor{ Rp("1-3;3-5") }, Factor{ Ee("2") } };
+  EXPECT_EQ(FormatSummandExpansionPreview(factors), "(1-3 OR 3-5) & entry:2");
+}
+
+TEST(FilterSopPreview, SingleSegmentRaypathUnchanged) {
+  // No ';' → no parentheses, byte-identical to FormatSummandText output.
+  std::vector<Factor> factors{ Factor{ Rp("3-5") } };
+  EXPECT_EQ(FormatSummandExpansionPreview(factors), "3-5");
+  EXPECT_EQ(FormatSummandExpansionPreview(factors), FormatSummandText(factors));
+}
+
+TEST(FilterSopPreview, EeCommaListNotReexpanded) {
+  // EE tokens have their own comma-list expansion semantics (handled
+  // downstream by ExpandSopToClauses in file_io.cpp); the preview helper
+  // MUST NOT re-implement that expansion — it shows the EE token verbatim.
+  std::vector<Factor> factors{ Factor{ Ee("1,2") } };
+  EXPECT_EQ(FormatSummandExpansionPreview(factors), "entry:1,2");
+}
+
+TEST(FilterSopPreview, SopOverviewListsAllRows) {
+  SumOfProducts sop;
+  sop.emplace_back(SummandText{ std::string{ "1-3;3-5" }, { Factor{ Rp("1-3;3-5") } } });
+  sop.emplace_back(SummandText{ std::string{ "entry:2" }, { Factor{ Ee("2") } } });
+  const std::string preview = FormatSopExpansionPreview(sop);
+  EXPECT_EQ(preview,
+            "OR of 2 row(s):"
+            "\n  (1-3 OR 3-5)"
+            "\n  entry:2");
+}
+
+TEST(FilterSopPreview, SopOverviewEmptyRowRenderedAsWildcard) {
+  // A single blank row (no factors) is the "match-all" sentinel; the SoP
+  // overview must show it as "*" — same convention as the pre-334.3 card
+  // tooltip, so migrating panels.cpp to FormatSopExpansionPreview is
+  // byte-identical for the empty-row case.
+  SumOfProducts sop;
+  sop.emplace_back(SummandText{ std::string{}, {} });
+  const std::string preview = FormatSopExpansionPreview(sop);
+  EXPECT_EQ(preview, "OR of 1 row(s):\n  *");
+}
+
 }  // namespace
 }  // namespace lumice::gui

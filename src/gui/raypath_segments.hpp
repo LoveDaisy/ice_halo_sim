@@ -535,21 +535,18 @@ inline GuiValidationResult ValidateSummandText(const std::string& text, LUMICE_C
       }
     } else {
       // Raypath token ends the current EE factor (flush + validate), then
-      // validate the raypath. Single-segment only (must not contain ';').
+      // validate the raypath. A raypath token MAY contain ';' as a summand-level
+      // OR alternative (H-A, 334.3): `1-3;3-5 & entry:2` distributes to
+      // `(1-3 & entry:2) OR (3-5 & entry:2)` in ExpandSopToClauses. We delegate
+      // to ValidateRaypathTextMultiSegment (already covered by 11 unit tests)
+      // which rejects leading/trailing/consecutive ';' and validates each
+      // segment via LUMICE_ValidateRaypathText — no new validation logic.
       if (!flush_ee()) {
         return result;
       }
-      if (tok.find(';') != std::string::npos) {
-        result.state = LUMICE_RAYPATH_INVALID;
-        result.message = "';' not allowed inside AND row";
-        return result;
-      }
-      char msg[256] = {};
-      LUMICE_RaypathValidationState st = LUMICE_RAYPATH_VALID;
-      LUMICE_ValidateRaypathText(tok.c_str(), kind, &st, msg, sizeof(msg));
-      if (st != LUMICE_RAYPATH_VALID) {
-        result.state = st;
-        result.message = msg;
+      auto seg_result = ValidateRaypathTextMultiSegment(tok, kind);
+      if (seg_result.state != LUMICE_RAYPATH_VALID) {
+        result = seg_result;
         return result;
       }
     }
@@ -639,6 +636,61 @@ inline std::string FormatSummandText(const std::vector<Factor>& factors) {
     }
     out += FormatFactor(f);
     first = false;
+  }
+  return out;
+}
+
+// Expand a summand row's raypath factors by their ';' OR-alternatives
+// (H-A, 334.3) for the live editor preview, e.g.
+//   "1-3;3-5 & entry:2"  ->  "(1-3 OR 3-5) & entry:2"
+// Raypath factors with a single segment are shown unparenthesized.
+// EE factors (entry:/exit:/len:) are shown verbatim via FormatFactor —
+// their comma-list multi-value semantics are a separate, pre-existing
+// expansion (handled at Cartesian-expand time by ExpandSopToClauses in
+// file_io.cpp) and are intentionally NOT re-expanded here so this preview
+// helper does not become a second source of truth for expansion semantics.
+inline std::string FormatSummandExpansionPreview(const std::vector<Factor>& factors) {
+  std::string out;
+  bool first = true;
+  for (const auto& f : factors) {
+    if (!first) {
+      out += " & ";
+    }
+    first = false;
+    if (const auto* rp = std::get_if<RaypathParams>(&f)) {
+      auto segs = SplitRaypathSegments(rp->raypath_text);
+      if (segs.size() <= 1) {
+        out += rp->raypath_text;
+      } else {
+        out += '(';
+        for (size_t i = 0; i < segs.size(); ++i) {
+          if (i != 0) {
+            out += " OR ";
+          }
+          out += segs[i];
+        }
+        out += ')';
+      }
+    } else {
+      out += FormatFactor(f);
+    }
+  }
+  return out;
+}
+
+// Build the "OR of N row(s)" live preview for a whole SoP: one expanded row
+// per line. Mirrors panels.cpp's committed-filter card tooltip format so both
+// call sites share a single formatting source (DRY). Empty rows render as
+// "*" (match-all sentinel, same as the card tooltip convention).
+inline std::string FormatSopExpansionPreview(const SumOfProducts& sop) {
+  std::string out = "OR of " + std::to_string(sop.size()) + " row(s):";
+  for (const auto& s : sop) {
+    out += "\n  ";
+    if (s.factors.empty()) {
+      out += s.text.empty() ? "*" : s.text;
+    } else {
+      out += FormatSummandExpansionPreview(s.factors);
+    }
   }
   return out;
 }
