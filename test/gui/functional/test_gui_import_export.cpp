@@ -1262,10 +1262,10 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
-      ctx->ItemClick("**/Entry-Exit##filter_type");
-      ctx->Yield(2);
-
-      ctx->ItemClick("**/Remove Filter##filter_ee");
+      // H5 (333.4): the FilterEditType radio was retired; Remove Filter is a
+      // single button (##filter). The pre-populated EE filter shows up as one
+      // row already; Remove Filter arms the intent flag, OK writes nullopt.
+      ctx->ItemClick("**/Remove Filter##filter");
       ctx->Yield(2);
       ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);

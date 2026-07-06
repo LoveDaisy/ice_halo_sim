@@ -566,7 +566,7 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   float text_w = std::max(40.0f, avail_w - kInputWidth - kLabelColWidth - spacing_x * 2);
 
   auto emit_row = [&](int row_idx, const char* text_content, const char* btn_id, EditTarget target,
-                      const char* row_label, bool clip_text) {
+                      const char* row_label, bool clip_text, const char* tooltip = nullptr) {
     ImVec2 line_start(right_x, thumb_pos.y + row_h * static_cast<float>(row_idx));
     ImGui::SetCursorScreenPos(line_start);
     if (clip_text) {
@@ -577,6 +577,13 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
       ImGui::PopClipRect();
     } else {
       ImGui::TextUnformatted(text_content);
+    }
+    // Optional hover tooltip — shows the full multi-row SoP for non-degenerate
+    // filters where the summary line is inherently lossy (only the first row
+    // + "(+N more)" fits). Follows the same "TextUnformatted then IsItemHovered"
+    // pattern as the fa-link badge below.
+    if (tooltip != nullptr && ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("%s", tooltip);
     }
     ImGui::SameLine();
     ImGui::SetCursorScreenPos(ImVec2(line_start.x + text_w + spacing_x, line_start.y));
@@ -596,13 +603,26 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   std::string preset = AxisPresetName(crystal_ref);
   emit_row(1, preset.c_str(), "Edit##ax", EditTarget::kAxis, "Axis", false);
 
-  // Row 3: Filter summary (may exceed text_w — clip so it doesn't overlap the Edit button)
+  // Row 3: Filter summary (may exceed text_w — clip so it doesn't overlap the Edit button).
+  // For non-degenerate SoP (>1 row or >1 factor), build a tooltip listing every
+  // row's canonical text so users can see the full predicate without opening
+  // the modal.
   std::optional<FilterConfig> filter_opt;
   if (entry.filter_id.has_value()) {
     filter_opt = state.filters[*entry.filter_id];
   }
   std::string filter_text = FilterSummary(filter_opt);
-  emit_row(2, filter_text.c_str(), "Edit##fi", EditTarget::kFilter, "Filter", true);
+  std::string filter_tooltip_storage;
+  const char* filter_tooltip = nullptr;
+  if (filter_opt.has_value() && !filter_opt->IsDegenerateSingleFactor()) {
+    filter_tooltip_storage = "OR of " + std::to_string(filter_opt->param.size()) + " row(s):";
+    for (const auto& s : filter_opt->param) {
+      filter_tooltip_storage += "\n  ";
+      filter_tooltip_storage += s.text.empty() ? "*" : s.text;
+    }
+    filter_tooltip = filter_tooltip_storage.c_str();
+  }
+  emit_row(2, filter_text.c_str(), "Edit##fi", EditTarget::kFilter, "Filter", true, filter_tooltip);
 
   // Row 4: Weight — reuse SliderWithInput for [slider][input] layout
   ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y + row_h * 3.0f));
