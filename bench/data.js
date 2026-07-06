@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783299872214,
+  "lastUpdate": 1783299875390,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4818,54 +4818,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "14383572230a4e449571244b98e6c988a07527b2",
-          "message": "Merge pull request #72 from LoveDaisy/feat/gui_polish\n\nfeat(gui): GUI polish — overlay labels, 导出管线重构 & modal 立即模式",
-          "timestamp": "2026-04-21T19:02:28+08:00",
-          "tree_id": "46011cd81e57f4a345bfd3f6a1eb819208300a17",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/14383572230a4e449571244b98e6c988a07527b2"
-        },
-        "date": 1776769642829,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 1056049.2,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1919727.6,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 1229362,
-            "unit": "rays/sec",
-            "extra": "CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 902815.4,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "6ea03e48619368357ee574c62b5c31388d6af037",
           "message": "Merge pull request #73 from LoveDaisy/feat/gui_polish\n\nfeat(gui-polish-v12): 7 子任务 — 滑杆/录屏/Immediate/弹窗布局/face number",
           "timestamp": "2026-04-22T18:41:08+08:00",
@@ -9602,6 +9554,54 @@ window.BENCHMARK_DATA = {
             "value": 676201.3,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7c47f07a520ff7130d21cc6c16755c008e6e5c8d",
+          "message": "Merge pull request #174 from LoveDaisy/feat/unify-orientation-sampling-cosine-measure\n\nUnify orientation latitude sampling to a cosine-measure inverse-CDF LUT",
+          "timestamp": "2026-07-06T08:58:34+08:00",
+          "tree_id": "5a7bb8bc6d9e114d130ac42451f7b3b85b9ea5ab",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/7c47f07a520ff7130d21cc6c16755c008e6e5c8d"
+        },
+        "date": 1783299874748,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 1225314.8,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1212673.5,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 797955,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 712433.1,
+            "unit": "rays/sec",
+            "extra": "CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz\\nCores: 4"
           }
         ]
       }
