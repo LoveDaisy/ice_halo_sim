@@ -162,7 +162,44 @@ Three independent angular distributions controlling crystal orientation: `zenith
 
 ### Filter Tab
 
-Ray-path filtering. A filter can match a specific face sequence (with symmetry options `P` / `B` / `D`) or simply restrict the entry / exit faces. A summary of the resulting filter is shown on the corresponding crystal card.
+Ray-path filtering for the crystal. The tab has two parts:
+
+1. **Shared controls** (apply to the whole filter): an **Action** radio, plus the **`P` / `B` / `D`** symmetry checkboxes — `P` prism-face reflection, `B` basal-face reflection, `D` a further symmetry that is only offered when the crystal's axis configuration makes it applicable.
+2. **A sum-of-products (SoP) row editor** where you type the predicate. A one-line summary of the resulting filter is shown on the corresponding crystal card.
+
+#### Filter input mini-DSL
+
+The predicate is a **sum-of-products**: an OR of rows, each row an AND of factors.
+
+- **Each row is one OR term.** Add rows with `+ Add OR row`; a filter matches a ray if **any** row matches.
+- **Within a row, `&` is AND.** `3-5 & entry:2` matches rays that satisfy both factors.
+- **A blank row means "match all rays"** (no filter / wildcard).
+
+A factor is either a **raypath** or an **entry-exit** token:
+
+| Factor | Syntax | Meaning |
+|--------|--------|---------|
+| Raypath | `3-5`, `1-3` | a face path |
+| Raypath OR-alternatives | `1-3;3-5` | `;` = OR between raypaths; **distributes over `&`** (see below) |
+| Entry face(s) | `entry:2`, `entry:1,2` | enter through face 2 (comma = face 1 **or** 2) |
+| Exit face(s) | `exit:4` | exit through face 4 |
+| Length (exact) | `len:3` | ray length **is exactly** 3 |
+| Length (at most) | `len:<=5` | ray length **≤** 5 |
+| Length (range) | `len:2-3` | ray length in **[2, 3]** |
+
+`entry:` / `exit:` / `len:` tokens in the **same row** merge into a single entry-exit factor (so `entry:2 & exit:4 & len:<=5` is one entry-exit predicate, not three). Repeating a token in one row is an error — use the comma list for multiple faces (`entry:2,3`, not `entry:2 & entry:3`).
+
+**Examples**
+
+| Intent | Type |
+|--------|------|
+| enter face 2 **and** exit face 4 **and** length ≤ 5 | `entry:2 & exit:4 & len:<=5` |
+| raypath `1-3` **or** raypath `3-5` | `1-3;3-5` (one row) or two rows `1-3` / `3-5` |
+| (`1-3` or `3-5`) **and** enter face 2 | `1-3;3-5 & entry:2` → `(1-3 & entry:2) OR (3-5 & entry:2)` |
+
+`;` (and the `entry:1,2` comma list) is display sugar only — it fans out to separate OR terms when the filter is applied, so the underlying model stays a plain sum-of-products. A **live preview** below the rows shows the expanded predicate as you type, and the **ⓘ icon** next to the hint lists the full token syntax.
+
+For the filter architecture behind this editor (physical gate semantics, the `ComplexFilterParam` sum-of-products, the 1:1 crystal binding), see [`filter-architecture.md`](filter-architecture.md).
 
 ## Status Bar
 
