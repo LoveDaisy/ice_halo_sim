@@ -158,6 +158,8 @@ class RandomNumberGenerator {
 };
 
 
+struct LatLut;  // core/lat_lut.hpp — prebuilt inverse-CDF table for kLutInverseCdf sampling.
+
 class RandomSampler {
  public:
   /*! @brief Generate points distributed uniformly on sphere, in spherical form, (lon, lat).
@@ -174,9 +176,14 @@ class RandomSampler {
    * @param data output data, (lon, lat, roll), in rad. Roll is sampled from axis_dist.roll_dist and
    *   adjusted by +π when a latitude fold (pole crossing) occurs, keeping roll coupled to the fold.
    * @param num number of points.
+   * @param lat_lut optional prebuilt inverse-CDF LUT (330.2). When SelectLatPath routes the
+   *   latitude distribution to kLutInverseCdf, the caller builds the LUT ONCE (per axis
+   *   distribution, amortized — never per ray) and passes it here. Ignored for other paths;
+   *   must be non-null when the path is kLutInverseCdf.
    * @note Caller must provide a buffer of at least 3×num floats.
    */
-  static void SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num = 1);
+  static void SampleSphericalPointsSph(const AxisDistribution& axis_dist, float* data, size_t num = 1,
+                                       const LatLut* lat_lut = nullptr);
 
   RandomSampler() = delete;
 };

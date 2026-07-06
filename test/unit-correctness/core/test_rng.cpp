@@ -1,11 +1,15 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
+#include <vector>
 
 #include "core/crystal.hpp"
+#include "core/lat_lut.hpp"
 #include "core/math.hpp"
 #include "core/shared/lat_path_selection.hpp"
+#include "core/shared/pcg_shared.h"
 #include "util/threading_pool.hpp"
 
 namespace {
@@ -827,13 +831,12 @@ TEST_F(SphericalSamplingTest, LaplacianHeavierTailThanGaussian) {
 }
 
 
-// scrum-328.4 (Laplacian tight-envelope area-measure sampling). Verifies the CPU sampler
-// reproduces the ANALYTICAL target p(theta) ∝ exp(-theta/b) · sin(theta) on the near-pole
-// tight-envelope branch (mean=90°, colatitude_center=0 → routes to kLaplacianTightEnvelope).
-// Deliberately NOT a KS-match against the pre-existing GenericReject Laplacian sampler,
-// which has a known M=cos(5b) tail-clamp bias (scrum-328.1 exp1); the tight-envelope path
-// is exact by construction (M=1), so matching the old sampler would flag a valid improvement
-// as regression (issue.md AC hardline).
+// scrum-328.4 / 330.2 (unified area-measure LUT). Verifies the CPU sampler reproduces the
+// ANALYTICAL target p(theta) ∝ exp(-theta/b) · sin(theta) for a near-pole Laplacian
+// (mean=90°, colatitude_center=0 → routes to the unified inverse-CDF LUT, kLutInverseCdf).
+// Deliberately NOT a KS-match against the retired GenericReject Laplacian sampler, which had a
+// known M=cos(5b) tail-clamp bias (scrum-328.1 exp1); the LUT is exact by construction, so
+// matching the old sampler would flag a valid improvement as regression (issue.md AC hardline).
 //
 // Uses moment + CDF-quantile matching against the analytical target rather than bin-by-bin
 // density matching — the latter suffers from bin-boundary MC artifacts at the θ→0 corner
@@ -845,11 +848,12 @@ TEST_F(SphericalSamplingTest, LaplacianTightEnvelopeExactness) {
   axis.latitude_dist = { lumice::DistributionType::kLaplacian, 90.0f, 5.0f };
   axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
 
-  // Sanity: confirm this config actually routes to the new path (else the test measures GenericReject).
+  // 330.2 S5: all Laplacian latitudes now route to the unified inverse-CDF LUT. The rest of this
+  // test is the valuable part — it validates the sampled colatitude against the ANALYTIC target
+  // p(θ) ∝ exp(-θ/b)·sin(θ) (the scrum-328 AC), which the LUT reproduces exactly.
   auto decision = lumice::lat_path::SelectLatPath(axis);
-  ASSERT_EQ(decision.kind, lumice::lat_path::LatPathKind::kLaplacianTightEnvelope)
-      << "Test configuration must trigger the tight-envelope branch; otherwise this test measures a different code "
-         "path.";
+  ASSERT_EQ(decision.kind, lumice::lat_path::LatPathKind::kLutInverseCdf)
+      << "Test configuration must route to the unified LUT path.";
 
   auto& rng = lumice::RandomNumberGenerator::GetInstance();
   rng.SetSeed(1234);
@@ -928,38 +932,36 @@ TEST_F(SphericalSamplingTest, LaplacianTightEnvelopeExactness) {
 }
 
 
-// scrum-328.4 (crossover cap fallback). Verifies that when Laplacian scale exceeds
-// kMaxTightEnvelopeLaplacianBRad, SelectLatPath routes to kGenericReject rather than
-// silently accepting a possibly-unsafe wide-b tight-envelope. Also confirms the runtime
-// sampler still produces valid latitudes (no safety-valve corruption).
-TEST_F(SphericalSamplingTest, LaplacianTightEnvelopeCrossoverFallback) {
-  // b=70° > 60° cap.
+// 330.3 (post branch-retirement smoke). The tight-envelope↔generic-reject crossover (b-cap,
+// polar threshold) it originally guarded no longer exists — every Laplacian latitude, near-pole
+// / off-pole / wide-b alike, routes to the single unified LUT path (kLutInverseCdf). What remains
+// worth guarding: all these configs route to the LUT and produce valid finite orientations.
+TEST_F(SphericalSamplingTest, LaplacianAllConfigsRouteToLut) {
+  // Wide b=70° (> old 60° cap): still routes to the LUT.
   lumice::AxisDistribution axis;
   axis.latitude_dist = { lumice::DistributionType::kLaplacian, 90.0f, 70.0f };
   axis.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
 
   auto decision = lumice::lat_path::SelectLatPath(axis);
-  EXPECT_EQ(decision.kind, lumice::lat_path::LatPathKind::kGenericReject)
-      << "Beyond the b cap, SelectLatPath must fall back to GenericReject.";
+  EXPECT_EQ(decision.kind, lumice::lat_path::LatPathKind::kLutInverseCdf)
+      << "Wide-b Laplacian must route to the unified LUT.";
 
-  // Also confirm the config just below the cap (b=59°) still triggers tight-envelope.
   lumice::AxisDistribution axis_within;
   axis_within.latitude_dist = { lumice::DistributionType::kLaplacian, 90.0f, 59.0f };
   axis_within.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
   auto decision_within = lumice::lat_path::SelectLatPath(axis_within);
-  EXPECT_EQ(decision_within.kind, lumice::lat_path::LatPathKind::kLaplacianTightEnvelope)
-      << "Just below the b cap the tight-envelope branch must remain active.";
+  EXPECT_EQ(decision_within.kind, lumice::lat_path::LatPathKind::kLutInverseCdf)
+      << "Near-pole Laplacian must route to the unified LUT.";
 
-  // Boundary-miss config: mean=80° → colatitude_center=10° > kPolarThresholdRad=0.5° → GenericReject
-  // even at b=5°. Guards against the polar threshold being accidentally widened.
+  // Off-pole (mean=80° → colatitude_center=10°) also routes to the LUT now (previously GenericReject).
   lumice::AxisDistribution axis_offpole;
   axis_offpole.latitude_dist = { lumice::DistributionType::kLaplacian, 80.0f, 5.0f };
   axis_offpole.azimuth_dist = { lumice::DistributionType::kUniform, 0.0f, 360.0f };
   auto decision_offpole = lumice::lat_path::SelectLatPath(axis_offpole);
-  EXPECT_EQ(decision_offpole.kind, lumice::lat_path::LatPathKind::kGenericReject)
-      << "Off-pole Laplacian (colatitude_center=10°) must not trigger tight-envelope.";
+  EXPECT_EQ(decision_offpole.kind, lumice::lat_path::LatPathKind::kLutInverseCdf)
+      << "Off-pole Laplacian must route to the unified LUT.";
 
-  // Runtime sanity for the wide-b GenericReject config: no NaN, latitudes in [-π/2, π/2].
+  // Runtime sanity for the wide-b config: no NaN, latitudes in [-π/2, π/2].
   auto& rng = lumice::RandomNumberGenerator::GetInstance();
   rng.SetSeed(2024);
   float lon_lat[3];
@@ -1207,9 +1209,12 @@ TEST(FoldRollFlipBalanceTest, RayleighNegativeMean) {
   }
 
   float flip_frac = static_cast<float>(flip_count) / kN;
-  // All samples near south pole → flip=true for all → roll≈π
-  EXPECT_GT(flip_frac, 0.99f) << "Rayleigh south-pole path must set flip=true for all samples";
-  EXPECT_EQ(negative_lat_count, 0) << "Rayleigh south-pole path must fold phi to positive";
+  // 330.2: the unified LUT PRESERVES the southern hemisphere. The retired Rayleigh abs() fold
+  // mapped a down-pointing c-axis to up (+ roll π) — an up/down-symmetry assumption that is wrong
+  // for up/down-asymmetric crystals (owner-confirmed 2026-07-05). So a mean=-89.9° c-axis stays at
+  // negative latitude, and with σ=0.01° no sample crosses the south pole → no fold, roll stays 0.
+  EXPECT_GT(negative_lat_count, kN * 99 / 100) << "unified LUT must keep down c-axis DOWN (negative latitude)";
+  EXPECT_LT(flip_frac, 0.01f) << "no south-pole crossing at σ=0.01° → flip≈0 (roll stays 0, not π)";
 }
 
 // Step 5 regression: positive-mean Rayleigh (north pole) must NOT trigger flip.
@@ -1283,8 +1288,11 @@ TEST(FoldRollFlipBalanceTest, LaplacianTightEnvelopeNegativeMean) {
     }
   }
   float flip_frac = static_cast<float>(flip_count) / kN;
-  EXPECT_GT(flip_frac, 0.99f) << "Laplacian tight-envelope south-pole path must set flip=true";
-  EXPECT_EQ(negative_lat_count, 0) << "Laplacian tight-envelope south-pole path must fold phi to positive";
+  // 330.2: unified LUT preserves the southern hemisphere (see RayleighNegativeMean). A down-pointing
+  // Laplacian c-axis (mean=-89.9°) stays at negative latitude; with b=0.01° no sample crosses the
+  // south pole → no fold. (Retired behavior folded it to positive latitude + flip.)
+  EXPECT_GT(negative_lat_count, kN * 99 / 100) << "unified LUT must keep down c-axis DOWN (negative latitude)";
+  EXPECT_LT(flip_frac, 0.05f) << "negligible south-pole crossing at b=0.01° → flip≈0";
 }
 
 
@@ -1339,6 +1347,192 @@ TEST_F(RngTest, LaplacianJsonRoundTrip) {
   EXPECT_EQ(parsed.type, DistributionType::kLaplacian);
   EXPECT_FLOAT_EQ(parsed.mean, 45.0f);
   EXPECT_FLOAT_EQ(parsed.std, 3.0f);
+}
+
+// --- 330.2 invert_lat_lut (unified area-measure inverse-CDF LUT) --------------
+// Pins the numeric contract of the pure single-source inversion used by BOTH the
+// CPU sampler and the device gen/transit kernels, independent of the
+// distribution-specific BuildLatLut (330.2 S2). Covers analytic tables with known
+// inverses + the fp32 monotonicity guards (degenerate bin, xi clamp at lifted
+// endpoints). Uniform-theta + fixed binary search (explore exp3/exp5).
+namespace {
+constexpr float kHalfPiF = 1.5707963267948966f;
+}
+
+TEST(InvertLatLutTest, LinearCdfIsLinearInverse) {
+  constexpr uint32_t kN = 257;  // 256 intervals (power of two -> constant 8-iter search)
+  std::vector<float> theta(kN), cdf(kN);
+  for (uint32_t i = 0; i < kN; ++i) {
+    const float t = static_cast<float>(i) / static_cast<float>(kN - 1);
+    theta[i] = kHalfPiF * t;
+    cdf[i] = t;  // linear CDF -> exact linear inverse
+  }
+  for (float xi : { 0.0f, 0.1f, 0.25f, 0.5f, 0.75f, 0.9f, 1.0f }) {
+    const float got = lm_pcg::invert_lat_lut(xi, theta.data(), cdf.data(), kN);
+    EXPECT_NEAR(got, xi * kHalfPiF, 1e-5f) << "xi=" << xi;
+  }
+}
+
+TEST(InvertLatLutTest, ClampsOutOfRangeAndLiftedEndpoints) {
+  // Endpoints deliberately != 0/1 (as after a monotonicity lift): xi outside
+  // [cdf[0], cdf[N-1]] must clamp to the boundary nodes, not read out of range.
+  constexpr uint32_t kN = 5;
+  const std::vector<float> theta = { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f };
+  const std::vector<float> cdf = { 0.1f, 0.3f, 0.6f, 0.8f, 0.95f };
+  EXPECT_FLOAT_EQ(lm_pcg::invert_lat_lut(-1.0f, theta.data(), cdf.data(), kN), 0.0f);
+  EXPECT_FLOAT_EQ(lm_pcg::invert_lat_lut(2.0f, theta.data(), cdf.data(), kN), 1.0f);
+  EXPECT_FLOAT_EQ(lm_pcg::invert_lat_lut(0.1f, theta.data(), cdf.data(), kN), 0.0f);
+  EXPECT_FLOAT_EQ(lm_pcg::invert_lat_lut(0.95f, theta.data(), cdf.data(), kN), 1.0f);
+}
+
+TEST(InvertLatLutTest, DegenerateBinNoNaN) {
+  // A flat CDF region (c1 == c0) must not divide by zero; returns a finite node value.
+  constexpr uint32_t kN = 5;
+  const std::vector<float> theta = { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f };
+  const std::vector<float> cdf = { 0.0f, 0.5f, 0.5f, 0.5f, 1.0f };  // flat middle
+  const float got = lm_pcg::invert_lat_lut(0.5f, theta.data(), cdf.data(), kN);
+  EXPECT_TRUE(std::isfinite(got));
+  EXPECT_GE(got, 0.0f);
+  EXPECT_LE(got, 1.0f);
+}
+
+TEST(InvertLatLutTest, MonotoneAndConvexCdfInverse) {
+  // Convex CDF F=t^2 (theta=kHalfPi*t) => inverse theta = kHalfPi*sqrt(xi).
+  constexpr uint32_t kN = 257;
+  std::vector<float> theta(kN), cdf(kN);
+  for (uint32_t i = 0; i < kN; ++i) {
+    const float t = static_cast<float>(i) / static_cast<float>(kN - 1);
+    theta[i] = kHalfPiF * t;
+    cdf[i] = t * t;
+  }
+  float prev = -1.0f;
+  for (int k = 0; k <= 100; ++k) {
+    const float xi = static_cast<float>(k) / 100.0f;
+    const float got = lm_pcg::invert_lat_lut(xi, theta.data(), cdf.data(), kN);
+    EXPECT_GE(got, prev - 1e-6f) << "non-monotone at xi=" << xi;
+    prev = got;
+  }
+  EXPECT_NEAR(lm_pcg::invert_lat_lut(0.25f, theta.data(), cdf.data(), kN), kHalfPiF * 0.5f, 2e-3f);
+}
+
+
+// --- 330.2 BuildLatLut: colatitude-marginal parity vs the real sampler ---------
+// The LUT's core job is to reproduce the folded area-measure colatitude distribution.
+// This marginal is flip-independent (flip rotates azimuth/roll, not latitude), so it
+// isolates the BuildLatLut quadrature/fold construction from the flip question.
+namespace {
+double KsStat(std::vector<double> a, std::vector<double> b) {
+  std::sort(a.begin(), a.end());
+  std::sort(b.begin(), b.end());
+  std::vector<double> all;
+  all.reserve(a.size() + b.size());
+  all.insert(all.end(), a.begin(), a.end());
+  all.insert(all.end(), b.begin(), b.end());
+  std::sort(all.begin(), all.end());
+  double d = 0.0;
+  for (double v : all) {
+    double ca = static_cast<double>(std::upper_bound(a.begin(), a.end(), v) - a.begin()) / a.size();
+    double cb = static_cast<double>(std::upper_bound(b.begin(), b.end(), v) - b.begin()) / b.size();
+    d = std::max(d, std::abs(ca - cb));
+  }
+  return d;
+}
+}  // namespace
+
+TEST(LatLutColatitudeTest, MatchesRealSamplerColatitudeMarginal) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+  struct Cfg {
+    float mean;
+    float std;
+    DistributionType type;
+    const char* label;
+  };
+  const Cfg cfgs[] = {
+    { 90.0f, 5.0f, DistributionType::kGaussian, "gauss near-pole (real=Rayleigh)" },
+    { 60.0f, 5.0f, DistributionType::kGaussian, "gauss off-pole (real=generic)" },
+    { 30.0f, 8.0f, DistributionType::kGaussian, "gauss mid-latitude" },
+    { 90.0f, 5.0f, DistributionType::kLaplacian, "laplacian near-pole (real=tight)" },
+    { 0.0f, 20.0f, DistributionType::kUniform, "uniform band" },
+  };
+  constexpr int kN = 500000;
+  const double crit = 1.63 * std::sqrt(2.0 / kN);
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
+  rng.SetSeed(20260705);
+
+  for (const auto& c : cfgs) {
+    SCOPED_TRACE(c.label);
+    AxisDistribution axis;
+    axis.latitude_dist = lumice::Distribution{ c.type, c.mean, c.std };
+    axis.azimuth_dist.type = DistributionType::kUniform;  // uniform az: flip is a no-op here
+
+    std::vector<double> real(kN);
+    float lon_lat[3];
+    for (int i = 0; i < kN; ++i) {
+      lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
+      real[i] = lumice::math::kPi_2 - lon_lat[1];  // colatitude-from-zenith
+    }
+
+    const lumice::LatLut table = lumice::BuildLatLut(axis.latitude_dist);
+    std::vector<double> lut(kN);
+    for (int i = 0; i < kN; ++i) {
+      const float xi = rng.GetUniform();
+      lut[i] = lm_pcg::invert_lat_lut(xi, table.theta.data(), table.cdf.data(), lumice::LatLut::kNodes);
+    }
+
+    // Allow a small slack over the two-sample KS crit for LUT node-resolution + fp32.
+    EXPECT_LT(KsStat(real, lut), crit * 2.0) << c.label;
+  }
+}
+
+// Full-direction parity for the COMMON regime (mean>0, uniform azimuth): the LUT must be
+// distributionally identical to the current sampler there — same colatitude AND same azimuth.
+// (For the edge regimes — southern near-pole, or near-pole + non-uniform azimuth — the LUT
+// intentionally diverges toward correctness: it preserves the up/down hemisphere the Rayleigh
+// abs() fold collapses, and keeps the over-vertical azimuth population Rayleigh drops. Those
+// are validated against the analytic target, not the old sampler, per the scrum-328 AC.)
+TEST(LatLutColatitudeTest, CommonRegimeAzimuthUnchanged) {
+  using lumice::AxisDistribution;
+  using lumice::DistributionType;
+  auto wrap = [](double a) {
+    const double two_pi = 2.0 * lumice::math::kPi;
+    a = std::fmod(a, two_pi);
+    return a < 0 ? a + two_pi : a;
+  };
+  const float means[] = { 90.0f, 60.0f, 30.0f };
+  constexpr int kN = 400000;
+  const double crit = 1.63 * std::sqrt(2.0 / kN);
+  auto& rng = lumice::RandomNumberGenerator::GetInstance();
+  rng.SetSeed(999);
+  for (float mean : means) {
+    SCOPED_TRACE(mean);
+    AxisDistribution axis;
+    axis.latitude_dist = lumice::Distribution{ DistributionType::kGaussian, mean, 5.0f };
+    // Full-circle uniform azimuth (std=360°) — the common near-pole case; flip is a no-op here.
+    // (A degenerate std=0 would fix azimuth at 0°, which IS the non-uniform edge case where the
+    // LUT intentionally diverges, so it must not be used to assert common-regime equivalence.)
+    axis.azimuth_dist = lumice::Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+    const lumice::LatLut table = lumice::BuildLatLut(axis.latitude_dist);
+
+    std::vector<double> az_real(kN), az_lut(kN);
+    float lon_lat[3];
+    for (int i = 0; i < kN; ++i) {
+      lumice::RandomSampler::SampleSphericalPointsSph(axis, lon_lat);
+      az_real[i] = wrap(lon_lat[0]);
+    }
+    for (int i = 0; i < kN; ++i) {
+      const float xi = rng.GetUniform();
+      const float th = lm_pcg::invert_lat_lut(xi, table.theta.data(), table.cdf.data(), lumice::LatLut::kNodes);
+      const uint32_t bin = lm_pcg::lat_lut_bin(th, table.theta.data(), lumice::LatLut::kNodes);
+      const bool flip = rng.GetUniform() < table.flip_prob[bin];
+      float az = rng.Get(axis.azimuth_dist) * lumice::math::kDegreeToRad;
+      if (flip) {
+        az += lumice::math::kPi;
+      }
+      az_lut[i] = wrap(az);
+    }
+    EXPECT_LT(KsStat(az_real, az_lut), crit * 2.0) << "azimuth must stay uniform (flip is a no-op here)";
+  }
 }
 
 

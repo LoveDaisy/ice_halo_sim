@@ -821,19 +821,13 @@ TEST(RngObservabilityFacilitySmoke, NearPoleUniformAcceptanceRateBeatsBaseline) 
   const AttemptStats stats = ComputeAttemptStats(attempts);
   EXPECT_EQ(stats.safety_valve_hits, 0u);
 
-  // Theoretical mean(attempts) ≈ 1.996 with new tight M; ±15% band absorbs MC
-  // noise + the exact fold-integral approximation. Tight enough to reject the
-  // old M=1.0 baseline (which would give ~15).
-  constexpr double kAnchor = 1.996;
-  const double lo = kAnchor * 0.85;
-  const double hi = kAnchor * 1.15;
-  EXPECT_GE(stats.mean, lo) << "uniform-near-pole mean(attempts)=" << stats.mean << " below anchor±15% [" << lo << ", "
-                            << hi << "] (anchor=" << kAnchor << ").";
-  EXPECT_LE(stats.mean, hi) << "uniform-near-pole mean(attempts)=" << stats.mean << " above anchor±15% [" << lo << ", "
-                            << hi << "] (anchor=" << kAnchor << ").";
-  // Independent rejection of old-M=1.0 baseline (would give ~15 attempts).
-  EXPECT_LT(stats.mean, 6.0) << "uniform-near-pole mean(attempts)=" << stats.mean
-                             << " — tight envelope not active? old M=1.0 baseline would give ~15.";
+  // 330.2 S5: the unified inverse-CDF LUT has NO rejection loop — every ray is exactly one draw,
+  // so mean(attempts) == 1 exactly. This is the strongest possible "beats baseline": the near-pole
+  // rejection cost (old rejection sampler gave ~2 at best, ~15 for the M=1.0 degenerate) is fully
+  // eliminated. attempts==1 also confirms the device LUT branch is active (any rejection path would
+  // report >1).
+  EXPECT_NEAR(stats.mean, 1.0, 1e-6) << "unified LUT is rejection-free → mean(attempts) must be 1; got " << stats.mean
+                                     << " (>1 would mean the device LUT branch is not active).";
 }
 
 // scrum-328.3 Step 4(c) — device (Metal) vs CPU (math.cpp::SampleSphericalPointsSph)

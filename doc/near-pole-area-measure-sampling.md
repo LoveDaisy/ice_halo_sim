@@ -1,8 +1,16 @@
 # 近极面积测度采样设计（Near-Pole Area-Measure Sampling）
 
-> 状态：设计蓝图（explore-326 GO + scrum-328 子任务 328.1 收敛，2026-07-04）。
-> 改近极朝向采样 / GPU device gen sampler / Rayleigh 路 / `ComputeJacobianEnvelope` 前先读。
+> 状态：设计蓝图（explore-326 GO + scrum-328 子任务 328.1 收敛，2026-07-04）。**已被统一 LUT 取代并落地——见下方「收尾（330.x）」。**
+> 改近极朝向采样 / GPU device gen sampler / 统一 LUT 路 前先读。
 > 关联：`crystal-orientation-sampling.md`、`numerical-robustness.md`、`gpu-single-engine-implementation.md`。
+
+> ## 收尾（330.x：统一 inverse-CDF LUT 取代本文 §2 分支）
+>
+> scrum-unify-orientation-sampling-cosine-measure 用**单一数值 inverse-CDF 面积测度 LUT**（`kLutInverseCdf`）取代了本文 §2 描述的**每分布 tight-envelope 分支**（Rayleigh / Gamma(2,b)）**及** off-pole generic-rejection：
+> - 330.2 落地统一 LUT（`lat_lut.cpp::BuildLatLut` + `pcg_shared.h::invert_lat_lut`/`lat_lut_bin`），三后端验证（CPU + Metal + CUDA dev49 parity 10/10），并把 `SelectLatPath` 全部路由到 `kLutInverseCdf`。
+> - 330.3 **删除**已不可达的死分支：`sample_lat_lon_roll` / `SampleSphericalPointsSph` 的 Rayleigh / LaplacianTightEnvelope / GenericReject 分支体、`ComputeJacobianEnvelope` 及其 host 镜像、`pcg_sinc`/`pcg_gamma2` helper、`LatPathKind` 的 kRayleigh(2)/kGenericReject(4)/kLaplacianTightEnvelope(5) 枚举值与对应 `lm_pcg::kLatPath*` 常量（wire 数值 0/1/3/6 保持不变，2/4/5 留空位）。
+> - §2 的**精确性推导（`sinθ≤θ` 上界、`base_pdf·θ` 提案、`sinθ/θ` 接受）仍是 LUT 目标密度 `∝ base_pdf(θ)·sinθ` 的理论依据**，故本文保留作设计记录；但 §2/§4 描述的分支实现已不在代码中。
+> - `GenRootKernelParams` 的 `lat_dist_type`/`lat_rejection_m` 字段现为死字段（wire 布局冻结，标注 `// dead post-330.3`）。
 
 ## 1. 问题
 
@@ -53,17 +61,19 @@ proposed 采样器**有意偏离**当前采样器（更精确）：
 
 **故 parity 绝不可 bit/KS-match 当前采样器**——须对**解析目标 `∝exp(−θ/b)·sinθ`** 或 `current(M=1)`（无 clamp 参照）验证。天真"匹配旧行为"的 parity 测试会对正确改进的代码判 FAIL。
 
-## 4. 三后端接线矩阵
+## 4. 三后端接线矩阵（330.x 后：统一 LUT 单路径）
 
-| 层 | 位置 | 改动 |
+> 历史注：本节原描述 Rayleigh / Gamma(2,b) / generic-rejection 三分支 × 三后端的接线。330.2/330.3 后**只剩单一 LUT 路径**，下表为 as-built。
+
+| 层 | 位置 | 现状（统一 LUT） |
 |----|------|------|
-| **device sampler（单源→Metal shader+CUDA）** | `pcg_shared.h::sample_lat_lon_roll` L269-320 | Rayleigh 分支 L281-290 加 `sinθ/θ` 接受；新增 Laplacian Gamma(2,b) 分支 + `pcg_gamma2` helper；新/扩 `lat_path` 常量 |
-| **CPU sampler** | `math.cpp::SampleSphericalPointsSph` L444-534 | 镜像同上 |
-| **host path-selection ×3** | `math.cpp:462-475` / `metal_trace_backend.mm:1456-1484` / `cuda_trace_backend.cu:296-324` | 触发放宽（mean≈±90 任意 σ）；⭐建议下沉共享 `SelectLatPath(axis_dist)→{lat_path, rejection_m}` 消 3× 镜像 |
-| **envelope ×3** | `math.cpp:422` / `metal.mm:202` / `cuda.cu:256` | uniform P0 修（M=cos min纬）；tight-envelope 路 M=1 |
-| **struct 镜像** | `GenRootKernelParams`（pcg_shared.h）↔ `metal.mm:159` | 布局自动化门禁 |
+| **device sampler（单源→Metal shader+CUDA）** | `pcg_shared.h::sample_lat_lon_roll` | 仅 `kLatPathLutInverseCdf` 分支：`invert_lat_lut` + `lat_lut_bin`（一次 uniform draw，无拒绝循环）；另存 `kFullSphere`/`kNoRandom`/`kGaussLegacy` 退化路 |
+| **CPU sampler** | `math.cpp::SampleSphericalPointsSph` | 镜像同上（共享 `invert_lat_lut`/`lat_lut_bin`）|
+| **LUT 构建（host）** | `lat_lut.cpp::BuildLatLut` | 一次性 per-axis 构建 theta/cdf/flip 节点表（`lm_pcg::normalize_latitude` 单源折叠），线程本地缓存 |
+| **host path-selection ×3** | `lat_path::SelectLatPath`（`lat_path_selection.hpp`，单源） | 非退化分布 → `{kLutInverseCdf, 1.0f}`；三后端各调同一函数 |
+| **struct 镜像** | `GenRootKernelParams`（pcg_shared.h）↔ `metal.mm` | 布局冻结（`lat_dist_type`/`lat_rejection_m` 死字段）；LUT 数组走独立 device buffer（不入 setBytes struct）|
 
-> `pcg_shared.h` 被 `lumice_trace.metal`(shader) + `cuda_trace_backend.cu` + `metal_trace_backend.mm` 同编 → device sampler 一处即两 GPU 后端；但 host 触发/envelope 三后端手工镜像。
+> `pcg_shared.h` 被 `lumice_trace.metal`(shader) + `cuda_trace_backend.cu` + `metal_trace_backend.mm` 同编 → device sampler 一处即两 GPU 后端；`SelectLatPath` 已在 `lat_path_selection.hpp` 单源，不再三后端手工镜像。
 
 ## 5. device RNG-stream 可观测性设施 co-design
 

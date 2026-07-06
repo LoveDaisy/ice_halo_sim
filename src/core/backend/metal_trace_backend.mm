@@ -34,13 +34,14 @@
 #include "core/exit_seam.hpp"
 #include "core/filter_spec.hpp"
 #include "core/geo3d.hpp"
+#include "core/lat_lut.hpp"          // BuildLatLut / LatLut (330.2 unified LUT sampler)
 #include "core/lens_proj_build.hpp"  // BuildProjParams / ProjParams (315.3 unified render projection)
 #include "core/math.hpp"
 #include "core/metal_filter_match_src.hpp"
 #include "core/backend/metal_trace_backend.hpp"
 #include "core/backend/metal_trace_backend_test_hooks.hpp"  // scrum-328.2 Step 3
 #include "core/backend/wl_pool.hpp"  // WlEntry / ComputeWlPool / ResolveWlPoolSize (296.6 single-sourced)
-#include "core/shared/lat_path_selection.hpp"  // SelectLatPath / ComputeJacobianEnvelope (single source)
+#include "core/shared/lat_path_selection.hpp"  // SelectLatPath (single source)
 #include "core/shared/pcg_shared.h"             // lm_pcg::kLatPath* (device sink values)
 // task-#283 (metal-build-time-metallib): build-generated headers — wrap their
 // content in `namespace lumice { ... }`, so they are #included at file scope
@@ -131,15 +132,10 @@ static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kFullSphere) == lm_pc
               "LatPathKind::kFullSphere must match lm_pcg::kLatPathFullSphere");
 static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kNoRandom) == lm_pcg::kLatPathNoRandom,
               "LatPathKind::kNoRandom must match lm_pcg::kLatPathNoRandom");
-static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kRayleigh) == lm_pcg::kLatPathRayleigh,
-              "LatPathKind::kRayleigh must match lm_pcg::kLatPathRayleigh");
 static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kGaussLegacy) == lm_pcg::kLatPathGaussLegacy,
               "LatPathKind::kGaussLegacy must match lm_pcg::kLatPathGaussLegacy");
-static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kGenericReject) == lm_pcg::kLatPathGenericReject,
-              "LatPathKind::kGenericReject must match lm_pcg::kLatPathGenericReject");
-static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kLaplacianTightEnvelope) ==
-                  lm_pcg::kLatPathLaplacianTightEnvelope,
-              "LatPathKind::kLaplacianTightEnvelope must match lm_pcg::kLatPathLaplacianTightEnvelope");
+static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kLutInverseCdf) == lm_pcg::kLatPathLutInverseCdf,
+              "LatPathKind::kLutInverseCdf must match lm_pcg::kLatPathLutInverseCdf");
 
 // Mirror of the Metal-side GenRootKernelParams (host layout MUST match the
 // MSL struct field-for-field — all 4-byte scalars, natural alignment).
@@ -168,10 +164,11 @@ struct GenRootKernelParams {
   // per-batch `ray_weight` (now per-ray from wl_pool[wl_idx].spd_weight).
   uint32_t wl_pool_size;
   uint32_t lat_path;
-  uint32_t lat_dist_type;   // DistributionType cast to uint
+  uint32_t lat_dist_type;   // dead post-330.3 (retired GenericReject path); wire layout frozen
   float    lat_mean_rad;
   float    lat_std_rad;
-  float    lat_rejection_m;
+  float    lat_rejection_m; // dead post-330.3 (surviving paths rejection-free); wire layout frozen
+  uint32_t lat_lut_n;       // node count for kLatPathLutInverseCdf (330.2); LUT arrays bound separately
   uint32_t az_type;
   float    az_mean_rad;
   float    az_std_rad;
@@ -181,7 +178,7 @@ struct GenRootKernelParams {
   float    roll_std_rad;
   float    roll_pad;
 };
-static_assert(sizeof(GenRootKernelParams) == 88u,
+static_assert(sizeof(GenRootKernelParams) == 92u,
               "GenRootKernelParams size mismatch — update host struct to match Metal-side layout");
 
 size_t ComputeOutCap(size_t n, size_t max_hits) {
@@ -569,6 +566,16 @@ struct MetalTraceBackend::Impl {
   id<MTLBuffer> tri_to_poly_buf_ = nil;  // N_tri × 1 uint16 (kInvalidId on miss)
   size_t        tri_buf_capacity_ = 0;
 
+  // Unified area-measure inverse-CDF latitude LUT (330.2). Three fixed-size
+  // (LatLut::kNodes float) shared buffers rebuilt per-ci by UploadLatLut when the
+  // orientation distribution routes to kLatPathLutInverseCdf. Metal forbids nil
+  // bindings, so the buffers are always allocated (EnsureLatLutBuffers) and bound
+  // at indices 14/15/16 in gen_root/transit_root; their CONTENTS are only read by
+  // the shader when gp.lat_path == kLatPathLutInverseCdf (gp.lat_lut_n > 0).
+  id<MTLBuffer> lat_lut_theta_buf_ = nil;  // LatLut::kNodes float (colatitude nodes)
+  id<MTLBuffer> lat_lut_cdf_buf_   = nil;  // LatLut::kNodes float (CDF)
+  id<MTLBuffer> lat_lut_flip_buf_  = nil;  // LatLut::kNodes float (flip prob)
+
   // Continuation ping-pong (indexed by ms_idx & 1).
   // scrum-267 task-fused-emit-gate Step 4b: the parallel cont_crystal_id /
   // cont_face_seq_* buffers (formerly slots 24-26) are removed — the emit gate
@@ -693,6 +700,12 @@ struct MetalTraceBackend::Impl {
   void EnsureFilterBuffers(const SessionSpec& session_spec);  // scrum-267.1
   void EnsureWlPoolBuffer();  // scrum-268.8 (DR-3) per-ray wavelength pool
   void UploadCrystal(const Crystal& crystal);
+  // 330.2 S3b: lazily allocate the three fixed-size (LatLut::kNodes float) shared
+  // LUT buffers (always bound, so they must always exist).
+  void EnsureLatLutBuffers();
+  // 330.2 S3b: rebuild + upload the latitude LUT for the given axis distribution
+  // when it routes to kLatPathLutInverseCdf (per-ci cadence; covers gen + transit).
+  void UploadLatLut(const AxisDistribution& axis);
   void ResolveLayerCrystalForCi(const ScatteringSetting& setting, bool use_host,
                                 const HostRayBatch& host_batch);
   size_t GenerateFirstLayerRootsForCi(const ScatteringSetting& setting,
@@ -1238,6 +1251,42 @@ void MetalTraceBackend::Impl::UploadCrystal(const Crystal& crystal) {
   }
 }
 
+// 330.2 S3b: allocate the three fixed-size shared LUT buffers if not yet present.
+// Metal validation forbids nil bindings, so gen_root/transit_root always bind
+// these at 14/15/16 even for non-LUT paths; their contents are read only when
+// gp.lat_path == kLatPathLutInverseCdf. The size never varies (LatLut::kNodes).
+void MetalTraceBackend::Impl::EnsureLatLutBuffers() {
+  constexpr NSUInteger kLen = static_cast<NSUInteger>(LatLut::kNodes) * sizeof(float);
+  if (lat_lut_theta_buf_ == nil) {
+    lat_lut_theta_buf_ = [device newBufferWithLength:kLen options:MTLResourceStorageModeShared];
+    assert(lat_lut_theta_buf_ != nil);
+  }
+  if (lat_lut_cdf_buf_ == nil) {
+    lat_lut_cdf_buf_ = [device newBufferWithLength:kLen options:MTLResourceStorageModeShared];
+    assert(lat_lut_cdf_buf_ != nil);
+  }
+  if (lat_lut_flip_buf_ == nil) {
+    lat_lut_flip_buf_ = [device newBufferWithLength:kLen options:MTLResourceStorageModeShared];
+    assert(lat_lut_flip_buf_ != nil);
+  }
+}
+
+// 330.2 S3b: rebuild the latitude LUT for this ci's orientation distribution and
+// memcpy the three arrays into the shared buffers. Only the LUT-routed families
+// consume the contents; other paths leave stale buffer data (never read). Called
+// at per-ci cadence from ResolveLayerCrystalForCi (covers gen AND transit).
+void MetalTraceBackend::Impl::UploadLatLut(const AxisDistribution& axis) {
+  EnsureLatLutBuffers();
+  if (lat_path::SelectLatPath(axis).kind != lat_path::LatPathKind::kLutInverseCdf) {
+    return;
+  }
+  LatLut lut = BuildLatLut(axis.latitude_dist);
+  constexpr size_t kLen = static_cast<size_t>(LatLut::kNodes) * sizeof(float);
+  std::memcpy([lat_lut_theta_buf_ contents], lut.theta.data(), kLen);
+  std::memcpy([lat_lut_cdf_buf_ contents], lut.cdf.data(), kLen);
+  std::memcpy([lat_lut_flip_buf_ contents], lut.flip_prob.data(), kLen);
+}
+
 void MetalTraceBackend::Impl::ResolveLayerCrystalForCi(const ScatteringSetting& setting,
                                                         bool use_host,
                                                         const HostRayBatch& host_batch) {
@@ -1256,6 +1305,10 @@ void MetalTraceBackend::Impl::ResolveLayerCrystalForCi(const ScatteringSetting& 
   }
   have_crystal = true;
   UploadCrystal(current_crystal);
+  // 330.2 S3b: rebuild the latitude LUT at the same per-ci cadence — it depends
+  // only on the axis distribution and is shared by the gen and transit passes of
+  // this ci. EnsureLatLutBuffers (inside) keeps the buffers non-nil for binding.
+  UploadLatLut(setting.crystal_.axis_);
   // scrum-268.8 (DR-3): pool upload moved to BeginSession — Crystal::
   // GetRefractiveIndex delegates to a global IceRefractiveIndex::Get so the
   // refractive index per wavelength is identical across every crystal shape
@@ -1465,6 +1518,11 @@ GenRootKernelParams MetalTraceBackend::Impl::BuildGenRootParams(
   gp.lat_mean_rad    = lat_mean_rad;
   gp.lat_std_rad     = lat_std_rad;
   gp.lat_rejection_m = decision.rejection_m;
+  // 330.2 S3b: node count is the shader-side signal that the LUT buffers hold
+  // valid data (0 for every non-LUT path). The arrays themselves bind separately.
+  gp.lat_lut_n = (decision.kind == lat_path::LatPathKind::kLutInverseCdf)
+                     ? lumice::LatLut::kNodes
+                     : 0u;
 
   gp.az_type     = static_cast<uint32_t>(axis_dist.azimuth_dist.type);
   gp.az_mean_rad = axis_dist.azimuth_dist.mean * math::kDegreeToRad;
@@ -1487,6 +1545,9 @@ GenRootKernelParams MetalTraceBackend::Impl::BuildGenRootParams(
 void MetalTraceBackend::Impl::EncodeGenRoot(id<MTLCommandBuffer> cb,
                                             const GenRootKernelParams& gp) {
   @autoreleasepool {
+    // 330.2 S3b: guarantee the LUT buffers exist before binding (Metal forbids
+    // nil bindings even on the non-LUT paths that never read their contents).
+    EnsureLatLutBuffers();
     id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
     [enc setComputePipelineState:gen_root_pso_];
     [enc setBuffer:root_d_buf     offset:0 atIndex:0];
@@ -1518,6 +1579,10 @@ void MetalTraceBackend::Impl::EncodeGenRoot(id<MTLCommandBuffer> cb,
     uint attempts_ctrl[2] = { attempts_enabled_ ? 1u : 0u,
                               static_cast<uint>(pending_attempts_ci_start_) };
     [enc setBytes:attempts_ctrl length:sizeof(attempts_ctrl) atIndex:13];
+    // 330.2 S3b: unified latitude LUT arrays (read only when lat_path==LutInverseCdf).
+    [enc setBuffer:lat_lut_theta_buf_ offset:0 atIndex:14];
+    [enc setBuffer:lat_lut_cdf_buf_   offset:0 atIndex:15];
+    [enc setBuffer:lat_lut_flip_buf_  offset:0 atIndex:16];
     NSUInteger threads = 64;
     NSUInteger groups = (static_cast<NSUInteger>(gp.num_rays) + threads - 1) / threads;
     [enc dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
@@ -1579,6 +1644,8 @@ void MetalTraceBackend::Impl::EncodeTransitRoot(
   assert(cont_d[in_slot] != nil && cont_w[in_slot] != nil &&
          "EncodeTransitRoot: cont buffers must be allocated by EnsureContBuffer");
   @autoreleasepool {
+    // 330.2 S3b: guarantee the LUT buffers exist before binding (see EncodeGenRoot).
+    EnsureLatLutBuffers();
     id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
     [enc setComputePipelineState:transit_root_pso_];
     NSUInteger d_off = static_cast<NSUInteger>(ci_start) * 3u * sizeof(float);
@@ -1600,6 +1667,10 @@ void MetalTraceBackend::Impl::EncodeTransitRoot(
     NSUInteger wl_off = static_cast<NSUInteger>(ci_start) * sizeof(uint32_t);
     [enc setBuffer:cont_wl_idx_buf_[in_slot] offset:wl_off atIndex:12];
     [enc setBuffer:root_wl_idx_buf_          offset:0      atIndex:13];
+    // 330.2 S3b: unified latitude LUT arrays (read only when lat_path==LutInverseCdf).
+    [enc setBuffer:lat_lut_theta_buf_        offset:0      atIndex:14];
+    [enc setBuffer:lat_lut_cdf_buf_          offset:0      atIndex:15];
+    [enc setBuffer:lat_lut_flip_buf_         offset:0      atIndex:16];
     NSUInteger threads = 64;
     NSUInteger groups  = (static_cast<NSUInteger>(gp.num_rays) + threads - 1) / threads;
     [enc dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
