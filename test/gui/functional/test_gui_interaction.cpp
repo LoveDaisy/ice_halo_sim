@@ -3964,6 +3964,129 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_STR_EQ(f.param[2].text.c_str(), "3-5 & entry:2");
     };
   }
+
+  // T8 — AC1 end-to-end witness: three rows edited via GUI → SaveLmcFile →
+  // LoadLmcFile → the reloaded FilterConfig equals the original (operator==
+  // on SoP text). Complements 333.3's `sop_lmc_roundtrip` (which builds the
+  // SoP programmatically) by closing the loop through the actual GUI editor.
+  // The same three-row scenario as `multi_row_commits_sop` — reused so the two
+  // tests together form one AC1 chain:
+  //   [GUI edit → correct SoP] (T7) + [SoP → save+reload → identical SoP] (T8)
+  //   ≡ [GUI edit → save+reload → same SoP that will drive the simulator].
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "sop_roundtrip_via_gui_editor");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/##row_text_0", "3-5");
+      ctx->Yield(1);
+      ctx->ItemClick("**/+ Add OR row##summand_add");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/##row_text_1", "entry:2 & exit:4");
+      ctx->Yield(1);
+      ctx->ItemClick("**/+ Add OR row##summand_add");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/##row_text_2", "3-5 & entry:2");
+      ctx->Yield(2);
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      const auto original = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
+
+      const char* tmp_path = "/tmp/lumice_gui_sop_roundtrip.lmc";
+      const bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
+      IM_CHECK(save_ok);
+
+      gui::DoNew();
+      std::vector<unsigned char> tex_data;
+      int tex_w = 0;
+      int tex_h = 0;
+      const bool load_ok = gui::LoadLmcFile(tmp_path, gui::g_state, tex_data, tex_w, tex_h);
+      IM_CHECK(load_ok);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      const auto& reloaded = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
+      IM_CHECK(reloaded == original);
+      IM_CHECK_EQ(reloaded.param.size(), static_cast<size_t>(3));
+      IM_CHECK_STR_EQ(reloaded.param[0].text.c_str(), "3-5");
+      IM_CHECK_STR_EQ(reloaded.param[1].text.c_str(), "entry:2 & exit:4");
+      IM_CHECK_STR_EQ(reloaded.param[2].text.c_str(), "3-5 & entry:2");
+      std::remove(tmp_path);
+    };
+  }
+
+  // T9 — AC3 stress: multiple rounds of add / type / delete-middle-row.
+  // Pins the plan §7 risk 1 mitigation (uid-encoded IDs prevent widget/buffer
+  // tearing when middle rows are removed). Each round:
+  //   1) Add a row (uid increases; existing rows keep their uid).
+  //   2) Type into the new row via its uid-derived ID.
+  //   3) Delete a middle row and verify the surviving rows' texts are still
+  //      addressable by their pre-delete uid — i.e. no ID collision or
+  //      buffer contents jumping to the wrong row (327 tearing symptom).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "row_dynamics_stress");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      // Row 0 has uid=0 (SetRowsFromSop resets the uid counter on open).
+      ctx->ItemInputValue("**/##row_text_0", "1-2");
+      ctx->Yield(1);
+
+      // Round 1: add row 1 (uid=1), type; expect both rows addressable.
+      ctx->ItemClick("**/+ Add OR row##summand_add");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/##row_text_1"));
+      ctx->ItemInputValue("**/##row_text_1", "3-4");
+      ctx->Yield(1);
+
+      // Round 2: add row 2 (uid=2), type.
+      ctx->ItemClick("**/+ Add OR row##summand_add");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/##row_text_2"));
+      ctx->ItemInputValue("**/##row_text_2", "entry:1 & exit:2");
+      ctx->Yield(1);
+
+      // Round 3: delete the middle row (uid=1). Row 0 (uid=0) and the former
+      // row 2 (uid=2) survive; the uid=2 row's ID must NOT shift to
+      // ##row_text_1 (that would prove the ID stack collided).
+      ctx->ItemClick("**/Remove##row_delete_1");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/##row_text_0"));
+      IM_CHECK(!ctx->ItemExists("**/##row_text_1"));
+      IM_CHECK(ctx->ItemExists("**/##row_text_2"));
+
+      // Round 4: add another row (uid=3); type; delete row 2 (uid=2).
+      ctx->ItemClick("**/+ Add OR row##summand_add");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/##row_text_3"));
+      ctx->ItemInputValue("**/##row_text_3", "5-6");
+      ctx->Yield(1);
+      ctx->ItemClick("**/Remove##row_delete_2");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/##row_text_0"));
+      IM_CHECK(!ctx->ItemExists("**/##row_text_2"));
+      IM_CHECK(ctx->ItemExists("**/##row_text_3"));
+
+      // Round 5: commit; expect 2 rows, uid=0 text "1-2" and uid=3 text "5-6".
+      // Row order matches iteration order in g_summand_rows (uid=0 then uid=3).
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      const auto& f = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
+      IM_CHECK_EQ(f.param.size(), static_cast<size_t>(2));
+      IM_CHECK_STR_EQ(f.param[0].text.c_str(), "1-2");
+      IM_CHECK_STR_EQ(f.param[1].text.c_str(), "5-6");
+    };
+  }
 }
 
 // ========== task-gui-linked-entries: pick-mode / unlink / duplicate / badge ==========
