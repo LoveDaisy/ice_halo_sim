@@ -86,55 +86,42 @@ static bool g_pending_tab_select = false;
 static CrystalConfig g_crystal_buf;
 static AxisDist g_axis_buf[3];  // zenith, azimuth, roll
 
-// Filter modal: type discriminator + per-type buffers (issue editor-modal-type-selection).
-// Each FilterEditType keeps its own sub-buffer so switching type is non-destructive
-// (T6 contract: "切到 EE 再切回 raypath, 之前输入仍在"). Commit assembles a
-// FilterConfig from g_filter_top (shared fields) + active type's sub-buffer.
-enum class FilterEditType { kRaypath = 0, kEntryExit = 1 };
-static FilterEditType g_filter_active_type = FilterEditType::kRaypath;
-static FilterEditType g_filter_active_type_snapshot = FilterEditType::kRaypath;
+// Filter modal — H5 sum-of-products editor (task-composition-editor-ui / 333.4).
+// One row per OR summand; each row is a single small-domain AND text box driven
+// by ValidateSummandText / ParseSummandText (raypath_segments.hpp). The prior
+// "FilterEditType + Raypath/EntryExit sub-panels + per-type buffers" scheme is
+// gone — every row can independently be raypath, entry-exit, or an AND mix.
+constexpr size_t kSummandRowBufSize = 256;
+// UI soft cap (kMaxSummandRows): prevents unbounded row growth from the "+ Add"
+// button before the real ABI-layer limits kick in. The authoritative overflow
+// gates live in file_io.cpp::FillLumiceConfig (ExpandSopToClauses → clauses vec
+// with LUMICE_kMaxComplexFilterClauses cap) and BuildExportJsonOrWarn; those
+// remain the last-word validators. 16 is the OR-summand row count and comfortably
+// fits typical multi-branch filters (a real config usually has ≤ 4 rows).
+constexpr size_t kMaxSummandRows = 16;
 
-// Shared filter fields (name / action / sym_*) — uses FilterConfig as the
-// container so existing operator== works, but the `param` field is never
-// mutated: it stays at default-constructed RaypathParams{} in both g_filter_top
-// and its snapshot, so equality reduces to the shared fields only. Per-type
-// payloads live in the dedicated *_params buffers below.
-//
-// INVARIANT: g_filter_top.param must remain default-constructed RaypathParams{}
-// at all times. The split is "top fields here, payload in *_params"; writing to
-// `param` would silently break the dirty-compare reduction since FilterConfig::
-// operator== compares param too. If subtype expansion (#4-#6) introduces a real
-// shared field beyond name/action/sym_*, prefer extracting a dedicated struct
-// over reusing FilterConfig.
+struct SummandRowBuf {
+  uint64_t uid;
+  char text[kSummandRowBufSize];
+};
+
+static std::vector<SummandRowBuf> g_summand_rows;
+static SumOfProducts g_summand_rows_snapshot;
+static uint64_t g_next_summand_row_uid = 0;
+
+// Shared filter fields (name / action / sym_*). `param` is never mutated on
+// g_filter_top — it stays at the default-constructed SoP so operator== reduces
+// to the top fields (payload lives in g_summand_rows).
 static FilterConfig g_filter_top;
 static FilterConfig g_filter_top_snapshot;
 
-// Per-type sub-buffers — switching type is non-destructive (each retains state).
-static RaypathParams g_raypath_params;
-static EntryExitParams g_ee_params;
-static RaypathParams g_raypath_params_snapshot;
-static EntryExitParams g_ee_params_snapshot;
-
-// Entry-Exit InputText backing buffers. ImGui needs persistent char arrays
-// for InputText; we mirror them with g_ee_params.{entry,exit}_text on
-// snapshot / commit (mirrors the g_raypath_buf ↔ g_raypath_params.raypath_text
-// pattern). 64 bytes comfortably holds a 6-value list of 2-digit faces
-// (e.g. "13,14,15,16,17,18" = 17 chars).
-static char g_ee_entry_buf[64];
-static char g_ee_exit_buf[64];
-
-// ImGui InputText backing store for the raypath text input. The raypath
-// sub-buffer's raypath_text is synced FROM this char array (canonical source)
-// at every commit / dirty-compare site (mirrors the pre-task convention).
-static char g_raypath_buf[4096];
-
 // Initial-present flag captured at modal open. Used by ApplyBuffersToEntry so
 // an untouched OK on a previously-empty filter does not silently materialize a
-// default-constructed filter into entry.filter. Combined with the "empty
-// raypath → nullopt" commit rule this also closes the "Remove button" path
-// without a separate state bit.
+// default-constructed filter into entry.filter. Combined with the
+// "effectively-empty → nullopt" commit rule this also closes the "Remove
+// Filter" button path together with g_filter_remove_intent.
 static bool g_filter_initial_present = false;
-static bool g_ee_remove_intent = false;
+static bool g_filter_remove_intent = false;
 
 // Snapshots captured on OpenEditModal for per-tab dirty-mark computation.
 // Filter already has its own snapshot above (used for a separate purpose in
@@ -260,24 +247,50 @@ bool SliderWithPresetEdit(const char* label, float* value, float min_val, float 
 
 namespace {
 
+// Build a SumOfProducts from the current row buffers. Each row's text is
+// re-parsed via ParseSummandText (tolerant parser: invalid tokens are dropped
+// so a mid-typing row still produces a coherent Factor vector).
+SumOfProducts BuildSopFromRows(const std::vector<SummandRowBuf>& rows) {
+  SumOfProducts out;
+  out.reserve(rows.size());
+  for (const auto& row : rows) {
+    std::string text = row.text;
+    auto factors = ParseSummandText(text);
+    out.push_back(SummandText{ std::move(text), std::move(factors) });
+  }
+  return out;
+}
+
+// Load an incoming SoP into the row buffers, resetting the uid counter. Always
+// ensures at least one row exists (mirrors FilterConfig's ≥1 row invariant).
+void SetRowsFromSop(const SumOfProducts& sop) {
+  g_summand_rows.clear();
+  g_next_summand_row_uid = 0;
+  if (sop.empty()) {
+    SummandRowBuf row{};
+    row.uid = g_next_summand_row_uid++;
+    row.text[0] = '\0';
+    g_summand_rows.push_back(row);
+    return;
+  }
+  for (const auto& s : sop) {
+    SummandRowBuf row{};
+    row.uid = g_next_summand_row_uid++;
+    snprintf(row.text, sizeof(row.text), "%s", s.text.c_str());
+    g_summand_rows.push_back(row);
+  }
+}
+
 // Re-snapshot all three buffers as the new dirty-compare baseline. Used by
 // OpenEditModal (initial snapshot) and the Immediate→Staged mode switch
-// (fresh baseline so dirty-mark starts from zero). Field coverage mirrors
-// OpenEditModal lines 210-215 (see plan §F10). Does NOT touch trackball
+// (fresh baseline so dirty-mark starts from zero). Does NOT touch trackball
 // save — that retains the Open-time baseline.
 //
 // Any new edit-buffer field added in the future must be appended here AND
 // in ApplyBuffersToEntry to keep the dirty-compare / commit paths symmetric.
 void SnapshotAllBuffers(const GuiState& state) {
-  // Sync UI char buffers back into the sub-buffers before snapshotting, so
-  // the snapshot reflects the current edit state.
-  g_raypath_params.raypath_text = g_raypath_buf;
-  g_ee_params.entry_text = g_ee_entry_buf;
-  g_ee_params.exit_text = g_ee_exit_buf;
   g_filter_top_snapshot = g_filter_top;
-  g_raypath_params_snapshot = g_raypath_params;
-  g_ee_params_snapshot = g_ee_params;
-  g_filter_active_type_snapshot = g_filter_active_type;
+  g_summand_rows_snapshot = BuildSopFromRows(g_summand_rows);
   g_crystal_buf_snapshot = g_crystal_buf;
   g_axis_buf_snapshot[0] = g_axis_buf[0];
   g_axis_buf_snapshot[1] = g_axis_buf[1];
@@ -364,9 +377,11 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   g_axis_buf[0] = src_crystal.zenith;
   g_axis_buf[1] = src_crystal.azimuth;
   g_axis_buf[2] = src_crystal.roll;
-  // Filter buffers: split top-level shared fields and per-type sub-buffer.
-  // Default to a Raypath alternative with empty text when the entry has no
-  // filter — preserves the pre-task semantics for nullopt entries.
+  // Filter buffers (H5 sum-of-products): top-level shared fields (name / action
+  // / sym_*) go into g_filter_top; per-row SoP text goes into g_summand_rows,
+  // keyed by stable uid. Default-constructed FilterConfig carries a 1-row empty
+  // SoP so "no filter" opens with exactly one blank row (matches the pre-task
+  // "empty raypath ≡ no filter" UX).
   const FilterConfig src = entry.filter_id.has_value() ? state.filters[*entry.filter_id] : FilterConfig{};
   g_filter_top = FilterConfig{};
   g_filter_top.name = src.name;
@@ -374,23 +389,8 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   g_filter_top.sym_p = src.sym_p;
   g_filter_top.sym_b = src.sym_b;
   g_filter_top.sym_d = src.sym_d;
-  // Reset all per-type buffers to defaults; load the active alternative.
-  // Default `g_filter_active_type` to kRaypath as a fallback so a future
-  // FilterParamVariant alternative not handled below leaves the modal in a
-  // safe state rather than carrying over the previous session's discriminator.
-  g_raypath_params = {};
-  g_ee_params = {};
-  g_filter_active_type = FilterEditType::kRaypath;
-  if (src.IsRaypath()) {
-    g_raypath_params = RaypathParams{ src.RaypathText() };
-    g_filter_active_type = FilterEditType::kRaypath;
-  } else if (src.IsEntryExit()) {
-    g_ee_params = src.EntryExitParamsValue();
-    g_filter_active_type = FilterEditType::kEntryExit;
-  }
-  snprintf(g_raypath_buf, sizeof(g_raypath_buf), "%s", g_raypath_params.raypath_text.c_str());
-  snprintf(g_ee_entry_buf, sizeof(g_ee_entry_buf), "%s", g_ee_params.entry_text.c_str());
-  snprintf(g_ee_exit_buf, sizeof(g_ee_exit_buf), "%s", g_ee_params.exit_text.c_str());
+  SetRowsFromSop(src.param);
+  g_filter_remove_intent = false;
   // Snapshot the dirty-compare baseline (Crystal/Axis/Filter buffers +
   // filter_initial_present). Trackball save is initialized separately below —
   // it's Open-time state, not snapshot.
@@ -670,133 +670,87 @@ static ImVec4 ValidationFrameBgColor(LUMICE_RaypathValidationState state) {
   return ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
 }
 
-static void RenderRaypathSubpanel() {
-  // Sync InputText backing buffer into the raypath sub-buffer before validation
-  // so the displayed hint reflects the current edit state.
-  g_raypath_params.raypath_text = g_raypath_buf;
-  const auto result = ValidateRaypathTextMultiSegment(g_raypath_params.raypath_text, CurrentValidationKind());
-  const auto validation = result.state;
-
-  // Row 1: Raypath text input (top-emphasized).
-  ImGui::PushStyleColor(ImGuiCol_FrameBg, ValidationFrameBgColor(validation));
-  ImGui::InputText("Raypath##filter_modal", g_raypath_buf, sizeof(g_raypath_buf));
-  ImGui::PopStyleColor();
-
-  // Validation hint immediately under the InputText.
-  switch (validation) {
-    case LUMICE_RAYPATH_VALID:
-      if (g_raypath_params.raypath_text.empty()) {
-        ImGui::TextDisabled("No raypath filter (match all)");
-      } else {
-        ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "Valid");
-      }
-      break;
-    case LUMICE_RAYPATH_INCOMPLETE:
-      ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.1f, 1.0f), "Incomplete (still typing?)");
-      break;
-    case LUMICE_RAYPATH_INVALID: {
-      const char* msg = result.message.empty() ? "Invalid raypath" : result.message.c_str();
-      // TextWrapped so multi-segment "Segment N: ..." messages don't overflow
-      // the modal's narrow vertical layout.
-      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.2f, 0.2f, 1.0f));
-      ImGui::TextWrapped("%s", msg);
-      ImGui::PopStyleColor();
-      break;
-    }
-  }
-
-  // Multi-raypath OR hint (issue range item 3): clarify the new ';'-separated syntax.
-  ImGui::TextDisabled("e.g. 3-5 or 3-5; 1-3");
-}
-
-// Entry-Exit sub-panel: two InputText fields validated via
-// raypath_validation::ValidateFaceNumberText. Border colour reflects the
-// validation state (green/yellow/red). Mirrors the raypath sub-panel
-// pattern so users get consistent feedback across filter types. Commit
-// (ApplyBuffersToEntry) parses the text → int at the core boundary; the
-// modal-level OK button is gated on both fields validating to kValid.
-//
-// Buffer sync timing: g_ee_*_buf are initialised from g_ee_params in
-// OpenEditModal (snprintf), written back to g_ee_params at
-// SnapshotAllBuffers and ApplyBuffersToEntry. Within this function we
-// only read the buffers for validation — InputText itself mutates the
-// char arrays in place across frames.
-static void RenderEntryExitSubpanel() {
+// Row-list editor for the sum-of-products (H5). Each row is one OR summand
+// expressed in the small AND grammar (`3-5 & entry:2 & len:3-5`), validated
+// with ValidateSummandText / ParseSummandText (raypath_segments.hpp). Stable
+// per-row `uid` is baked into the InputText ID so removing a middle row cannot
+// re-collide ImGui's internal id stack with a leftover buffer.
+static void RenderSummandRowList() {
   const auto kind = CurrentValidationKind();
-  const auto v_entry = GuiValidateFaceNumberListText(g_ee_entry_buf, kind);
-  const auto v_exit = GuiValidateFaceNumberListText(g_ee_exit_buf, kind);
+  size_t delete_idx = static_cast<size_t>(-1);
+  const bool can_delete_any = g_summand_rows.size() > 1;
 
-  // FrameBg tint mirrors RenderRaypathSubpanel (same helper). Empty text
-  // is a wildcard, hence kValid — the border stays neutral.
-  ImGui::PushStyleColor(ImGuiCol_FrameBg, ValidationFrameBgColor(v_entry.state));
-  ImGui::InputText("Entry##filter_ee_entry", g_ee_entry_buf, sizeof(g_ee_entry_buf));
-  ImGui::PopStyleColor();
+  for (size_t i = 0; i < g_summand_rows.size(); ++i) {
+    auto& row = g_summand_rows[i];
+    ImGui::PushID(static_cast<int>(row.uid));
 
-  ImGui::PushStyleColor(ImGuiCol_FrameBg, ValidationFrameBgColor(v_exit.state));
-  ImGui::InputText("Exit##filter_ee_exit", g_ee_exit_buf, sizeof(g_ee_exit_buf));
-  ImGui::PopStyleColor();
+    const auto v = ValidateSummandText(row.text, kind);
+    // Empty row keeps a neutral FrameBg (wildcard, matches "no filter" semantic).
+    const bool is_empty = (row.text[0] == '\0');
+    if (!is_empty) {
+      ImGui::PushStyleColor(ImGuiCol_FrameBg, ValidationFrameBgColor(v.state));
+    }
+    char text_id[64];
+    snprintf(text_id, sizeof(text_id), "##row_text_%llu", static_cast<unsigned long long>(row.uid));
+    ImGui::PushItemWidth(-140.0f);  // leave room for the Remove button on the right
+    ImGui::InputText(text_id, row.text, sizeof(row.text));
+    ImGui::PopItemWidth();
+    if (!is_empty) {
+      ImGui::PopStyleColor();
+    }
 
-  // Combined validation message (first non-valid wins, matching raypath).
-  if (!v_entry.message.empty()) {
-    ImGui::TextColored(ImVec4(0.86f, 0.24f, 0.24f, 1.0f), "Entry: %s", v_entry.message.c_str());
-  } else if (!v_exit.message.empty()) {
-    ImGui::TextColored(ImVec4(0.86f, 0.24f, 0.24f, 1.0f), "Exit: %s", v_exit.message.c_str());
-  }
+    ImGui::SameLine();
+    char del_id[64];
+    snprintf(del_id, sizeof(del_id), "Remove##row_delete_%llu", static_cast<unsigned long long>(row.uid));
+    ImGui::BeginDisabled(!can_delete_any);
+    if (ImGui::Button(del_id, ImVec2(120, 0))) {
+      delete_idx = i;
+    }
+    ImGui::EndDisabled();
 
-  // Shared hint — single value, multi-value OR, or wildcard (empty).
-  ImGui::TextDisabled("e.g. 3 or 3,4 (empty = any)");
-
-  // Length-mode dropdown: four discrete modes drive whether min / max
-  // numeric inputs render. Stored on g_ee_params directly because there is
-  // no large char-buffer to mirror like the text fields.
-  const char* kLengthModeLabels[4] = { "No constraint", "Strict N", "At most N", "Range [N,M]" };
-  if (ImGui::BeginCombo("Length##filter_ee_len_mode", kLengthModeLabels[g_ee_params.length_mode])) {
-    for (int i = 0; i < 4; ++i) {
-      const bool selected = (g_ee_params.length_mode == i);
-      if (ImGui::Selectable(kLengthModeLabels[i], selected)) {
-        g_ee_params.length_mode = i;
-        // Strict mode collapses to a single value: keep min/max in lockstep
-        // so the serializer's "strict N" path always sees a coherent pair.
-        if (i == 1) {
-          g_ee_params.max_len = g_ee_params.min_len;
+    // Per-row inline validation hint (first non-valid across the list is
+    // enough to gate OK; still show every offending row so the user can fix
+    // them in any order).
+    if (!is_empty) {
+      switch (v.state) {
+        case LUMICE_RAYPATH_VALID:
+          break;  // silent when valid
+        case LUMICE_RAYPATH_INCOMPLETE:
+          ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.1f, 1.0f), "Row %zu: incomplete", i + 1);
+          break;
+        case LUMICE_RAYPATH_INVALID: {
+          const char* msg = v.message.empty() ? "Invalid" : v.message.c_str();
+          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.2f, 0.2f, 1.0f));
+          ImGui::TextWrapped("Row %zu: %s", i + 1, msg);
+          ImGui::PopStyleColor();
+          break;
         }
       }
-      if (selected) {
-        ImGui::SetItemDefaultFocus();
-      }
     }
-    ImGui::EndCombo();
+
+    ImGui::PopID();
   }
 
-  if (g_ee_params.length_mode == 1) {
-    // Strict — one numeric input drives both bounds.
-    if (ImGui::InputInt("Length N##filter_ee_strict", &g_ee_params.min_len)) {
-      if (g_ee_params.min_len < 1) {
-        g_ee_params.min_len = 1;
-      }
-      g_ee_params.max_len = g_ee_params.min_len;
-    }
-  } else if (g_ee_params.length_mode == 2) {
-    if (ImGui::InputInt("Max length##filter_ee_max", &g_ee_params.max_len)) {
-      if (g_ee_params.max_len < 1) {
-        g_ee_params.max_len = 1;
-      }
-    }
-  } else if (g_ee_params.length_mode == 3) {
-    if (ImGui::InputInt("Min length##filter_ee_min", &g_ee_params.min_len)) {
-      if (g_ee_params.min_len < 1) {
-        g_ee_params.min_len = 1;
-      }
-      if (g_ee_params.max_len < g_ee_params.min_len) {
-        g_ee_params.max_len = g_ee_params.min_len;
-      }
-    }
-    if (ImGui::InputInt("Max length##filter_ee_max_range", &g_ee_params.max_len)) {
-      if (g_ee_params.max_len < g_ee_params.min_len) {
-        g_ee_params.max_len = g_ee_params.min_len;
-      }
-    }
+  if (delete_idx != static_cast<size_t>(-1)) {
+    g_summand_rows.erase(g_summand_rows.begin() + static_cast<std::ptrdiff_t>(delete_idx));
   }
+
+  // Add-row button: capped at kMaxSummandRows (soft UI cap; hard cap enforced by
+  // FillLumiceConfig / BuildExportJsonOrWarn at the ABI boundary).
+  const bool at_cap = g_summand_rows.size() >= kMaxSummandRows;
+  ImGui::BeginDisabled(at_cap);
+  if (ImGui::Button("+ Add OR row##summand_add", ImVec2(140, 0))) {
+    SummandRowBuf row{};
+    row.uid = g_next_summand_row_uid++;
+    row.text[0] = '\0';
+    g_summand_rows.push_back(row);
+  }
+  ImGui::EndDisabled();
+  if (at_cap && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip("Maximum OR rows reached (%zu)", kMaxSummandRows);
+  }
+
+  ImGui::TextDisabled("e.g. 3-5  or  entry:2 & exit:4  or  3-5 & len:2-3");
 }
 
 // Returns true when the current entry's axis config satisfies D-symmetry
@@ -833,105 +787,61 @@ static void RenderSharedFilterControls(bool d_applicable) {
     ImGui::SetTooltip("Hide rays matching the filter");
   }
 
-  // P/B/D Checkbox — H4 修正 (issue per-type-direction / 178.5): only raypath
-  // and entry_exit consume crystal symmetry at the core layer; the direction
-  // filter has no crystal-specific state and ignores symmetry reduction.
-  // Hiding the controls avoids misleading users — the underlying sym_p/b/d
-  // fields keep their default values and the serializer still writes the
-  // `symmetry` JSON field for cross-type round-trip compatibility.
-  const bool sym_active =
-      (g_filter_active_type == FilterEditType::kRaypath || g_filter_active_type == FilterEditType::kEntryExit);
-  if (sym_active) {
-    ImGui::Checkbox("P##filter_modal", &g_filter_top.sym_p);
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("Prism-face reflection symmetry");
-    }
+  // P/B/D Checkboxes: unconditional under H5 (every row is raypath / EE / an
+  // AND mix — both types consume crystal symmetry at the core layer). The
+  // pre-H5 `sym_active` gate was already effectively constant since only two
+  // discriminator values existed; H5 simply removes the discriminator.
+  ImGui::Checkbox("P##filter_modal", &g_filter_top.sym_p);
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Prism-face reflection symmetry");
+  }
+  ImGui::SameLine();
+  ImGui::Checkbox("B##filter_modal", &g_filter_top.sym_b);
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Basal-face reflection symmetry");
+  }
+  ImGui::SameLine();
+  ImGui::Checkbox("D##filter_modal", &g_filter_top.sym_d);
+  if (!d_applicable) {
     ImGui::SameLine();
-    ImGui::Checkbox("B##filter_modal", &g_filter_top.sym_b);
+    // SmallButton with transparent styling acts as a hover target for the
+    // tooltip (TextDisabled lacks a stable item ID needed by the test engine).
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+    ImGui::SmallButton(ICON_FA_CIRCLE_INFO "##d_tooltip_icon");
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(4);
     if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("Basal-face reflection symmetry");
-    }
-    ImGui::SameLine();
-    ImGui::Checkbox("D##filter_modal", &g_filter_top.sym_d);
-    if (!d_applicable) {
-      ImGui::SameLine();
-      // SmallButton with transparent styling acts as a hover target for the
-      // tooltip (TextDisabled lacks a stable item ID needed by the test engine).
-      ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0, 0, 0, 0));
-      ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0, 0, 0, 0));
-      ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-      ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
-      ImGui::SmallButton(ICON_FA_CIRCLE_INFO "##d_tooltip_icon");
-      ImGui::PopStyleVar();
-      ImGui::PopStyleColor(4);
-      if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("%s", kDTooltipText);
-      }
+      ImGui::SetTooltip("%s", kDTooltipText);
     }
   }
 }
 
-// Remove Filter button — clears the raypath InputText backing buffer.
-// Disabled when the raypath is empty; further wrapped in BeginDisabled(true)
-// when active type is a stub (the outer dispatch wrapper handles that).
+// Remove Filter — arms g_filter_remove_intent so ApplyBuffersToEntry writes
+// `filter_id = nullopt` on OK regardless of row validation state, and resets
+// the row buffers to a single blank row (matches the "empty ≡ no filter" UX).
+// Delayed-commit pattern (intent flag preserved across Cancel restore path) —
+// see imgui-modal-test.md.
 static void RenderRemoveFilterButton() {
-  const bool raypath_empty = (g_raypath_buf[0] == '\0');
-  ImGui::BeginDisabled(raypath_empty);
   if (ImGui::Button("Remove Filter##filter", ImVec2(120, 0))) {
-    g_raypath_buf[0] = '\0';
-    g_raypath_params.raypath_text.clear();
-  }
-  ImGui::EndDisabled();
-}
-
-// Remove Filter for Entry-Exit: always enabled (carries "delete filter data"
-// semantics — sets g_ee_remove_intent so ApplyBuffersToEntry bypasses kValid
-// gate and resets entry.filter to nullopt on OK).
-static void RenderRemoveEEFilterButton() {
-  if (ImGui::Button("Remove Filter##filter_ee", ImVec2(120, 0))) {
-    g_ee_entry_buf[0] = '\0';
-    g_ee_exit_buf[0] = '\0';
-    g_ee_params.entry_text.clear();
-    g_ee_params.exit_text.clear();
-    g_ee_remove_intent = true;
+    g_summand_rows.clear();
+    g_next_summand_row_uid = 0;
+    SummandRowBuf row{};
+    row.uid = g_next_summand_row_uid++;
+    row.text[0] = '\0';
+    g_summand_rows.push_back(row);
+    g_filter_remove_intent = true;
   }
 }
 
 static void RenderFilterModal() {
-  // Type radio — 3 options, SameLine horizontal (style-aligned with Crystal
-  // tab's Prism/Pyramid radios). Boolean form (RadioButton(label, active))
-  // matches the Action radio below and the Crystal-tab Prism/Pyramid radios,
-  // avoiding a "ImGui writes a temp int, branch writes the enum" double-write.
-  if (ImGui::RadioButton("Raypath##filter_type", g_filter_active_type == FilterEditType::kRaypath)) {
-    g_filter_active_type = FilterEditType::kRaypath;
-  }
-  ImGui::SameLine();
-  if (ImGui::RadioButton("Entry-Exit##filter_type", g_filter_active_type == FilterEditType::kEntryExit)) {
-    g_filter_active_type = FilterEditType::kEntryExit;
-  }
+  RenderSummandRowList();
 
   ImGui::Spacing();
 
-  // Type-specific dispatch. `default:` assert ensures any future
-  // FilterEditType extension is handled explicitly rather than silently
-  // dropped — mirrors the project convention of "exhaustive switch +
-  // assert tripwire" recorded in scratchpad/learnings.md.
-  switch (g_filter_active_type) {
-    case FilterEditType::kRaypath:
-      RenderRaypathSubpanel();
-      break;
-    case FilterEditType::kEntryExit:
-      RenderEntryExitSubpanel();
-      break;
-    default:
-      assert(false && "unhandled FilterEditType in RenderFilterModal dispatch");
-      break;
-  }
-
-  ImGui::Spacing();
-
-  // Shared controls (Action radio + P/B/D).
   bool d_applicable = false;
   {
     const int ly = g_modal_layer_idx;
@@ -947,12 +857,7 @@ static void RenderFilterModal() {
 
   ImGui::Spacing();
 
-  // Remove Filter — type-specific shortcut.
-  if (g_filter_active_type == FilterEditType::kRaypath) {
-    RenderRemoveFilterButton();
-  } else if (g_filter_active_type == FilterEditType::kEntryExit) {
-    RenderRemoveEEFilterButton();
-  }
+  RenderRemoveFilterButton();
 
   // OK / Cancel handled at modal level (RenderEditModals).
 }
@@ -1012,17 +917,11 @@ void ResetModalState() {
   g_axis_buf[2] = {};
   g_filter_top = {};
   g_filter_top_snapshot = {};
-  g_filter_active_type = FilterEditType::kRaypath;
-  g_filter_active_type_snapshot = FilterEditType::kRaypath;
-  g_raypath_params = {};
-  g_ee_params = {};
-  g_raypath_params_snapshot = {};
-  g_ee_params_snapshot = {};
+  g_summand_rows.clear();
+  g_summand_rows_snapshot.clear();
+  g_next_summand_row_uid = 0;
   g_filter_initial_present = false;
-  g_ee_remove_intent = false;
-  g_raypath_buf[0] = '\0';
-  g_ee_entry_buf[0] = '\0';
-  g_ee_exit_buf[0] = '\0';
+  g_filter_remove_intent = false;
   std::memset(g_saved_rotation, 0, sizeof(g_saved_rotation));
   g_saved_zoom = 1.0f;
   g_pending_open = false;
@@ -1054,32 +953,19 @@ LUMICE_CrystalKind CurrentValidationKind() {
   return (g_crystal_buf.type == CrystalType::kPrism) ? LUMICE_CRYSTAL_PRISM : LUMICE_CRYSTAL_PYRAMID;
 }
 
-// Filter-tab dirty predicate. Active-type-guarded form per plan §7 risk 6:
-// when the active type is X, only X's sub-buffer is compared against its
-// snapshot. This makes the dirty mark robust against future per-type input
-// controls (#4-#6 sub-tasks) — typing in EE while raypath is active must not
-// flip the dirty bit on either side until the user actually switches type.
+// Filter-tab dirty predicate. Compares the shared top fields (name / action /
+// sym_*) and the materialized SoP (row text list) against their open-time
+// snapshots. Since SummandText::operator== only compares `.text`, the parsed
+// factors cache is intentionally excluded — text is the single canonical form.
 //
 // Used by both the tab-label dirty mark in RenderEditModals AND the
-// `buf_changed` gate inside ApplyBuffersToEntry (commit decision). Keeping the
-// definition single-source means future sub-types only need an additional
-// case here; both consumers pick up the change automatically.
+// `buf_changed` gate inside ApplyBuffersToEntry (commit decision) so both
+// consumers share one definition.
 bool IsFilterDirty() {
-  if (g_filter_active_type != g_filter_active_type_snapshot) {
-    return true;
-  }
   if (g_filter_top != g_filter_top_snapshot) {
     return true;
   }
-  switch (g_filter_active_type) {
-    case FilterEditType::kRaypath:
-      return g_raypath_params != g_raypath_params_snapshot;
-    case FilterEditType::kEntryExit:
-      return g_ee_params != g_ee_params_snapshot;
-    default:
-      assert(false && "unhandled FilterEditType in IsFilterDirty");
-      return false;
-  }
+  return BuildSopFromRows(g_summand_rows) != g_summand_rows_snapshot;
 }
 
 // Result of applying edit buffers back to the entry. Used by both commit paths
@@ -1128,13 +1014,6 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
   pool_crystal.azimuth = g_axis_buf[1];
   pool_crystal.roll = g_axis_buf[2];
 
-  // Sync the ImGui InputText backing buffers back into the sub-buffers
-  // before any commit decision. The g_*_buf arrays are the canonical
-  // source while the modal is open.
-  g_raypath_params.raypath_text = g_raypath_buf;
-  g_ee_params.entry_text = g_ee_entry_buf;
-  g_ee_params.exit_text = g_ee_exit_buf;
-
   // Local helper: propagate a filter_id change from `entry` to all entries
   // that were "linked" with it before the change — i.e., entries sharing the
   // same (crystal_id, old_filter_id) pair. Preserves the "linked group is an
@@ -1172,54 +1051,45 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
     }
   };
 
-  // EntryExit commit branch. Validates entry/exit text against the current
-  // crystal kind; only commits when both fields are kValid. OK-button gating
-  // in RenderEditModals enforces the same condition, so the guard here is the
-  // model-layer invariant for Immediate-mode commits. Empty fields
-  // (kIncomplete) are treated as not-yet-typed and skip the commit —
-  // consistent with raypath's "empty ≡ no filter" semantic at the UI layer.
-  if (g_filter_active_type == FilterEditType::kEntryExit) {
-    if (g_ee_remove_intent) {
-      const std::optional<int> old_filter_id = entry.filter_id;
-      entry.filter_id = std::nullopt;  // pool slot becomes orphan (kept until save)
-      propagate_filter_id_to_linked(entry.crystal_id, old_filter_id);
-      g_ee_remove_intent = false;
-    } else {
-      const bool buf_changed = IsFilterDirty();
-      const auto kind = CurrentValidationKind();
-      const auto v_entry = GuiValidateFaceNumberListText(g_ee_params.entry_text, kind);
-      const auto v_exit = GuiValidateFaceNumberListText(g_ee_params.exit_text, kind);
-      const bool both_valid = v_entry.state == LUMICE_RAYPATH_VALID && v_exit.state == LUMICE_RAYPATH_VALID;
-      if ((g_filter_initial_present || buf_changed) && both_valid) {
-        FilterConfig out;
-        out.name = g_filter_top.name;
-        out.action = g_filter_top.action;
-        out.sym_p = g_filter_top.sym_p;
-        out.sym_b = g_filter_top.sym_b;
-        out.sym_d = g_filter_top.sym_d;
-        out.SetEntryExit(g_ee_params);
-        write_filter_to_pool(out);
-      }
-    }
-  } else if (g_filter_active_type == FilterEditType::kRaypath) {
-    // Raypath commit branch. Wrapped in an explicit `== kRaypath` guard so
-    // every FilterEditType has a symmetrical commit branch.
+  // H5 sum-of-products commit. Three exit paths:
+  //   1. Explicit Remove Filter (intent flag): drop filter_id unconditionally,
+  //      skip row validation.
+  //   2. Effectively-empty SoP (single blank row): drop filter_id — matches
+  //      the pre-task "empty raypath ≡ no filter" UX under H5 semantics.
+  //   3. All rows validate as kValid: materialize the SoP into the pool.
+  //      Rows that are kIncomplete / kInvalid gate the write out (mirrors the
+  //      pre-task per-type kValid gate).
+  if (g_filter_remove_intent) {
+    const std::optional<int> old_filter_id = entry.filter_id;
+    entry.filter_id = std::nullopt;
+    propagate_filter_id_to_linked(entry.crystal_id, old_filter_id);
+    g_filter_remove_intent = false;
+  } else {
     const bool buf_changed = IsFilterDirty();
-    if (g_raypath_params.raypath_text.empty()) {
-      // Empty raypath ≡ "no filter" at the UI layer.
+    SumOfProducts sop = BuildSopFromRows(g_summand_rows);
+    const bool effectively_empty = (sop.size() == 1 && sop[0].text.empty());
+    if (effectively_empty) {
       const std::optional<int> old_filter_id = entry.filter_id;
       entry.filter_id = std::nullopt;
       propagate_filter_id_to_linked(entry.crystal_id, old_filter_id);
     } else if (g_filter_initial_present || buf_changed) {
-      auto v = ValidateRaypathTextMultiSegment(g_raypath_params.raypath_text, CurrentValidationKind());
-      if (v.state == LUMICE_RAYPATH_VALID) {
+      const auto kind = CurrentValidationKind();
+      bool all_valid = true;
+      for (const auto& row : g_summand_rows) {
+        const auto v = ValidateSummandText(row.text, kind);
+        if (v.state != LUMICE_RAYPATH_VALID) {
+          all_valid = false;
+          break;
+        }
+      }
+      if (all_valid) {
         FilterConfig out;
         out.name = g_filter_top.name;
         out.action = g_filter_top.action;
         out.sym_p = g_filter_top.sym_p;
         out.sym_b = g_filter_top.sym_b;
         out.sym_d = g_filter_top.sym_d;
-        out.SetRaypath(g_raypath_params);
+        out.param = std::move(sop);
         write_filter_to_pool(out);
       }
     }
@@ -1584,10 +1454,9 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   // (otherwise the tab would lose its SelectedTabId the moment dirty flips,
   // falling back to the first tab and hiding the user's work-in-progress).
   // filter_dirty: delegate to IsFilterDirty() so the tab-label "*" and the
-  // commit-time `buf_changed` predicate share a single source of truth. Sync
-  // the InputText backing first so post-keystroke / post-Remove diffs are
-  // reflected on the same frame.
-  g_raypath_params.raypath_text = g_raypath_buf;
+  // commit-time `buf_changed` predicate share a single source of truth. Row
+  // text edits go directly through InputText → row.text (no separate char
+  // buffer to mirror any more under H5), so no pre-sync is needed here.
   const bool crystal_dirty = g_crystal_buf != g_crystal_buf_snapshot;
   const bool axis_dirty = g_axis_buf[0] != g_axis_buf_snapshot[0] || g_axis_buf[1] != g_axis_buf_snapshot[1] ||
                           g_axis_buf[2] != g_axis_buf_snapshot[2];
@@ -1666,41 +1535,28 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
     // typed something. This subsumes the previous "Remove intent" gating
     // branch without a dedicated flag.
     bool ok_disabled = false;
+    // ok_tooltip_storage owns the row-index-templated string; ok_tooltip points
+    // into it (or into a static literal). SetTooltip("%s", ok_tooltip) is only
+    // called after `.c_str()` is valid for the duration of the frame — the
+    // storage outlives the IsItemHovered check below.
+    std::string ok_tooltip_storage;
     const char* ok_tooltip = nullptr;
-    // Per-type validation gates. Direction needs no per-field gate (any
-    // angle is geometrically valid via cos/sin). Raypath / EntryExit each
-    // gate on their text-input validators.
-    if (g_filter_active_type == FilterEditType::kRaypath) {
-      g_raypath_params.raypath_text = g_raypath_buf;
-      if (!g_raypath_params.raypath_text.empty()) {
-        const auto v = ValidateRaypathTextMultiSegment(g_raypath_params.raypath_text, CurrentValidationKind());
-        if (v.state != LUMICE_RAYPATH_VALID) {
-          ok_disabled = true;
-          ok_tooltip = "Filter raypath invalid — fix it in the Filter tab";
+    if (!g_filter_remove_intent) {
+      const auto kind = CurrentValidationKind();
+      for (size_t i = 0; i < g_summand_rows.size(); ++i) {
+        const auto v = ValidateSummandText(g_summand_rows[i].text, kind);
+        if (v.state == LUMICE_RAYPATH_VALID) {
+          continue;
         }
-      }
-    } else if (g_filter_active_type == FilterEditType::kEntryExit) {
-      // Mirror the raypath gate: keep g_ee_params text fields in lockstep
-      // with the InputText char buffers each frame so any caller that
-      // reads g_ee_params before the next ApplyBuffersToEntry (e.g. the
-      // tab-label dirty mark) sees the live value.
-      g_ee_params.entry_text = g_ee_entry_buf;
-      g_ee_params.exit_text = g_ee_exit_buf;
-      // Remove intent bypasses the incomplete/invalid gate — OK is always
-      // enabled when the user has clicked Remove Filter.
-      if (!g_ee_remove_intent) {
-        const auto kind = CurrentValidationKind();
-        const auto ve = GuiValidateFaceNumberListText(g_ee_entry_buf, kind);
-        const auto vx = GuiValidateFaceNumberListText(g_ee_exit_buf, kind);
-        const bool incomplete = ve.state == LUMICE_RAYPATH_INCOMPLETE || vx.state == LUMICE_RAYPATH_INCOMPLETE;
-        const bool invalid = ve.state == LUMICE_RAYPATH_INVALID || vx.state == LUMICE_RAYPATH_INVALID;
-        if (invalid) {
-          ok_disabled = true;
-          ok_tooltip = "Filter face number invalid — fix it in the Filter tab";
-        } else if (incomplete) {
-          ok_disabled = true;
-          ok_tooltip = "Finish typing the face-number list (remove trailing comma)";
+        ok_disabled = true;
+        if (v.state == LUMICE_RAYPATH_INCOMPLETE) {
+          ok_tooltip_storage = "Row " + std::to_string(i + 1) + ": finish typing (incomplete)";
+        } else {
+          const char* msg = v.message.empty() ? "invalid" : v.message.c_str();
+          ok_tooltip_storage = "Row " + std::to_string(i + 1) + ": " + msg;
         }
+        ok_tooltip = ok_tooltip_storage.c_str();
+        break;
       }
     }
 
