@@ -3719,12 +3719,11 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // T2 — Multi-segment OR: typing "3-5; 1-3" in a single row (legacy sugar
-  // that the tolerant parser accepts) round-trips into a raypath filter
-  // whose text is preserved verbatim. Under H5 the canonical way to express
-  // OR is one row per summand, but the ';' sugar is still accepted by
-  // ParseSummandText's raypath-token branch — this test pins that
-  // backward-compat behavior.
+  // T2 — Multi-raypath OR across two rows: the H5 canonical way to express
+  // "(3-5) OR (1-3)" is one summand row per alternative ("3-5" then
+  // "+ Add OR row" then "1-3"), NOT the pre-H5 single-row ';' sugar (which
+  // ValidateSummandText now rejects inside a row). Pins that the two rows
+  // commit to a 2-summand SoP with each row's text preserved verbatim.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "filter_multi_raypath_or_e2e_via_modal");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -4085,6 +4084,48 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(f.param.size(), static_cast<size_t>(2));
       IM_CHECK_STR_EQ(f.param[0].text.c_str(), "1-2");
       IM_CHECK_STR_EQ(f.param[1].text.c_str(), "5-6");
+    };
+  }
+
+  // T10 — code-review-01 Major M1 regression: a blank OR row must NOT lower to
+  // a match-all clause. A forgotten empty row beside a real one used to
+  // materialize [{"3-5"}, {""}] → ExpandSopToClauses turns the factor-less row
+  // into a match-all term → OR(3-5, match-all): a silent no-op under filter_in,
+  // an all-black render under filter_out. The commit path now strips blank /
+  // whitespace-only rows before materializing; if none survive → no filter.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "blank_row_dropped_not_matchall");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Author a single real row "3-5", then add a blank OR row and commit.
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/##row_text_0", "3-5");
+      ctx->Yield(1);
+      ctx->ItemClick("**/+ Add OR row##summand_add");
+      ctx->Yield(2);
+      // Leave row 1 blank on purpose (the M1 footgun).
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(2);
+
+      // The blank row is stripped: exactly one summand "3-5", NOT two, and no
+      // match-all clause was injected.
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      const auto& f = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
+      IM_CHECK_EQ(f.param.size(), static_cast<size_t>(1));
+      IM_CHECK_STR_EQ(f.param[0].text.c_str(), "3-5");
+
+      // Reopen, blank out the sole real row's text too → all rows blank ≡ no
+      // filter (filter_id cleared, not a match-all filter left behind).
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/##row_text_0", "");
+      ctx->Yield(1);
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(2);
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
     };
   }
 }

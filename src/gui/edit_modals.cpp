@@ -1054,11 +1054,11 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
   // H5 sum-of-products commit. Three exit paths:
   //   1. Explicit Remove Filter (intent flag): drop filter_id unconditionally,
   //      skip row validation.
-  //   2. Effectively-empty SoP (single blank row): drop filter_id — matches
+  //   2. Effectively-empty SoP (no non-blank rows): drop filter_id — matches
   //      the pre-task "empty raypath ≡ no filter" UX under H5 semantics.
-  //   3. All rows validate as kValid: materialize the SoP into the pool.
-  //      Rows that are kIncomplete / kInvalid gate the write out (mirrors the
-  //      pre-task per-type kValid gate).
+  //   3. At least one non-blank row, all rows validate as kValid: materialize
+  //      the (blank-stripped) SoP into the pool. Rows that are kIncomplete /
+  //      kInvalid gate the write out (mirrors the pre-task per-type kValid gate).
   if (g_filter_remove_intent) {
     const std::optional<int> old_filter_id = entry.filter_id;
     entry.filter_id = std::nullopt;
@@ -1067,8 +1067,19 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
   } else {
     const bool buf_changed = IsFilterDirty();
     SumOfProducts sop = BuildSopFromRows(g_summand_rows);
-    const bool effectively_empty = (sop.size() == 1 && sop[0].text.empty());
-    if (effectively_empty) {
+    // Drop blank / whitespace-only summand rows before materializing. A blank
+    // row carries no predicate and must NOT lower to a match-all clause (which
+    // would make an OR filter a silent no-op, or under filter_out hide every
+    // ray — the black-render footgun). This generalizes the pre-task
+    // "empty ≡ no filter" UX from a single blank row to interior / extra blank
+    // rows in a multi-row SoP. Blank rows validate as kValid, so they never
+    // gate OK; stripping them here is the single point that keeps a forgotten
+    // empty row from corrupting the committed filter.
+    sop.erase(
+        std::remove_if(sop.begin(), sop.end(), [](const SummandText& s) { return TrimRaypathSegment(s.text).empty(); }),
+        sop.end());
+    if (sop.empty()) {
+      // No non-blank rows ≡ no filter.
       const std::optional<int> old_filter_id = entry.filter_id;
       entry.filter_id = std::nullopt;
       propagate_filter_id_to_linked(entry.crystal_id, old_filter_id);

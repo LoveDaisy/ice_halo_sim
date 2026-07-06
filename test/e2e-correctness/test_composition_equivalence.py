@@ -8,17 +8,23 @@ On save/export, src/gui/file_io.cpp's ExpandSopToClauses + SerializeFilterForCor
 lower that SoP to a core `complex` filter: one simple filter per (clause, term)
 with NO dedup, wrapped by a complex whose composition is [[1],[2],[3,4]].
 
-This test proves that lowering is the *same gate* the simulator applies when the
-identical predicate is authored idiomatically/deduped by hand in core
-([[1],[2],[1,3]] over 3 simple filters). The two configs share every other field
-byte-for-byte, so a render-compare isolates the filter encoding. If they render
-alike, AC1's "simulation applies the compound predicate correctly" holds.
+What THIS test mechanically proves: the exact lowered form the GUI emits for that
+SoP — [[1],[2],[3,4]] over 4 simple filters, no dedup (fixture A) — drives the
+simulator to the *same halo* as the identical predicate authored idiomatically by
+hand in core — [[1],[2],[1,3]] over 3 simple filters, deduped (fixture B). The two
+configs share every other field byte-for-byte, so a render-compare isolates the
+filter encoding: it confirms the no-dedup expansion the GUI produces is a
+gate-equivalent (not merely structurally-similar) way to express the compound
+predicate. Fixture A is a hand-checked transcription of ExpandSopToClauses'
+output — this test does not itself re-run the GUI lowering.
 
-Layered fidelity: this test guards the *rendering semantics*. That the GUI editor
-actually produces the SoP fixture A encodes (and round-trips it losslessly through
-.lmc) is guarded independently by the GUI tests p2_filter_type/multi_row_commits_sop
-and p2_filter_type/sop_roundtrip_via_gui_editor, and the struct-vs-JSON expansion by
-the unit test filter_expand_struct_vs_json.
+Layered fidelity (the full AC1 chain, transitively): that the GUI editor actually
+lowers the three rows to fixture A's structure, and round-trips the SoP losslessly
+through .lmc, is guarded by the GUI tests p2_filter_type/multi_row_commits_sop and
+p2_filter_type/sop_roundtrip_via_gui_editor (same three-row scenario), the
+struct-vs-JSON expansion by the unit test filter_expand_struct_vs_json, and the
+gate-equivalence of the emitted encoding by THIS test. Together: GUI edit → save/
+reload → the simulator applies the compound predicate correctly.
 
 PSNR threshold: calibrated 2026-07-06 over 18 back-to-back A/B render pairs
 (2M rays, 512x256) — 17/18 pixel-identical (PSNR=inf), worst finite = 53.31 dB.
