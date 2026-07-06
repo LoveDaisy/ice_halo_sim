@@ -222,7 +222,7 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
           return "*";
         }
       },
-      fc.param);
+      fc.DegenerateFactor());
 
   return body + FilterSummarySuffix(fc);
 }

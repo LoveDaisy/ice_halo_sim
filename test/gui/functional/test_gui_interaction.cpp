@@ -186,7 +186,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       // Programmatically set a filter so we can test clearing it
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-1-5" };
+      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
       gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
 
       // Verify filter is set
@@ -219,7 +219,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-1-5" };
+      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
       gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
 
       ctx->ItemClick("**/Edit##fi");
@@ -259,7 +259,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-1-5" };
+      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
       f.sym_p = true;
       f.sym_b = false;  // <-- non-default; reset would flip it to true.
       f.sym_d = true;
@@ -294,7 +294,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-1-5" };
+      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
       f.sym_p = true;
       f.sym_b = false;
       f.sym_d = true;
@@ -327,7 +327,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "1-3" };
+      f.SetRaypath(gui::RaypathParams{ "1-3" });
       gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
       ctx->Yield();
 
@@ -390,7 +390,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-1-5" };
+      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
       gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
       gui::g_state.committed_epoch = 5;
       gui::g_state.display_epoch_floor = 0;
@@ -607,7 +607,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       // Stage a filter on the entry so Remove Filter is a real change.
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-1-5" };
+      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
       gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
       // "finite rays just finished" snapshot state. run_intent=kLoaded pins the reconcile base to
       // kDone so the subsequent dirty edit surfaces as kModified (see companion test above).
@@ -2945,7 +2945,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
 
       // Pre-register a filter on the first entry so StartPerfSimulation's DoRun commits with it
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-1-5" };
+      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
       gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
 
       StartPerfSimulation();
@@ -4026,8 +4026,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
       const auto& f = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
-      IM_CHECK(std::holds_alternative<gui::EntryExitParams>(f.param));
-      const auto& ee = std::get<gui::EntryExitParams>(f.param);
+      IM_CHECK(f.IsEntryExit());
+      const auto& ee = f.EntryExitParamsValue();
       IM_CHECK_EQ(ee.entry_text, std::string("2"));
       IM_CHECK_EQ(ee.exit_text, std::string("5"));
       IM_CHECK_EQ(f.action, 1);
@@ -4078,8 +4078,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
       const auto& f = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
-      IM_CHECK(std::holds_alternative<gui::EntryExitParams>(f.param));
-      const auto& ee = std::get<gui::EntryExitParams>(f.param);
+      IM_CHECK(f.IsEntryExit());
+      const auto& ee = f.EntryExitParamsValue();
       IM_CHECK_EQ(ee.entry_text, std::string("3"));
       IM_CHECK_EQ(ee.exit_text, std::string("7"));
     };
@@ -4158,7 +4158,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
       const auto& f = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
-      const auto& ee = std::get<gui::EntryExitParams>(f.param);
+      const auto& ee = f.EntryExitParamsValue();
       IM_CHECK_EQ(ee.entry_text, std::string("3,4"));
       IM_CHECK_EQ(ee.exit_text, std::string("5"));
       IM_CHECK_EQ(ee.length_mode, 0);  // default
@@ -4183,7 +4183,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
         ee.length_mode = mode;
         ee.min_len = min_v;
         ee.max_len = max_v;
-        fc.param = ee;
+        fc.SetEntryExit(ee);
         return gui::FilterSummary(std::optional<gui::FilterConfig>{ fc });
       };
       IM_CHECK_STR_EQ(make_summary(0, 1, 1).c_str(), "EE:3-5 In PBD");
@@ -4218,7 +4218,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
       const auto& f = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
-      const auto& ee = std::get<gui::EntryExitParams>(f.param);
+      const auto& ee = f.EntryExitParamsValue();
       IM_CHECK(ee.entry_text.empty());
       IM_CHECK(ee.exit_text.empty());
       IM_CHECK_EQ(ee.length_mode, 0);
@@ -4241,7 +4241,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
         gui::EntryExitParams ee;
         ee.entry_text = "2";
         ee.exit_text = "5";
-        fc.param = ee;
+        fc.SetEntryExit(ee);
         gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], fc);
       }
       ctx->Yield(2);
@@ -4498,7 +4498,7 @@ void RegisterLinkedEntriesTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       // Two entries linked at (crystal_id=0, filter_id=<set>).
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-5" };
+      f.SetRaypath(gui::RaypathParams{ "3-5" });
       gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
       gui::EntryCard sibling;
       sibling.crystal_id = 0;
@@ -4533,7 +4533,7 @@ void RegisterLinkedEntriesTests(ImGuiTestEngine* engine) {
       gui::EntryCard sibling;
       sibling.crystal_id = 0;
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-5" };
+      f.SetRaypath(gui::RaypathParams{ "3-5" });
       gui::SetFilter(gui::g_state, sibling, f);
       gui::g_state.layers[0].entries.push_back(sibling);
 

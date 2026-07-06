@@ -245,7 +245,7 @@ static json SerializeFilterForGui(const FilterConfig& f, int id) {
           j["max_len"] = p.max_len;
         }
       },
-      f.param);
+      f.DegenerateFactor());
 
   return j;
 }
@@ -495,7 +495,7 @@ static FilterCoreResult SerializeFilterForCore(const FilterConfig& f, int next_f
           }
         }
       },
-      f.param);
+      f.DegenerateFactor());
 
   return result;
 }
@@ -699,7 +699,7 @@ static FilterConfig ParseFilterFromGuiJson(const json& jf) {
 
   std::string type = jf.value("type", "raypath");
   if (type == "raypath") {
-    f.param = RaypathParams{ jf.value("raypath_text", std::string{}) };
+    f.SetRaypath(RaypathParams{ jf.value("raypath_text", std::string{}) });
   } else if (type == "entry_exit") {
     // Prefer text fields (post-task-filter-modal-polish-v1 schema); fall
     // back to legacy v2 int "entry" / "exit" for older .lmc files. An int
@@ -733,10 +733,10 @@ static FilterConfig ParseFilterFromGuiJson(const json& jf) {
     if (p.max_len < 1) {
       p.max_len = 1;
     }
-    f.param = p;
+    f.SetEntryExit(p);
   } else {
     GUI_LOG_WARNING("[FileIO] Unknown filter type '{}', defaulting to raypath", type);
-    f.param = RaypathParams{ jf.value("raypath_text", std::string{}) };
+    f.SetRaypath(RaypathParams{ jf.value("raypath_text", std::string{}) });
   }
   return f;
 }
@@ -1011,10 +1011,10 @@ static bool ExpandFilterToStruct(const FilterConfig& f, int next_filter_id, LUMI
           *out_main_id = complex_id;
           return true;
         } else {
-          return false;  // unreachable: FilterParamVariant only has Raypath/EntryExit
+          return false;  // unreachable: Factor only has Raypath/EntryExit
         }
       },
-      f.param);
+      f.DegenerateFactor());
 }
 
 // Returns false if a filter expansion exceeded the ABI bounds (composition pool / clause /
@@ -1301,7 +1301,7 @@ static bool TryReconstructComplexFilter(const json& jf, const std::map<int, json
         text += std::to_string(cj["raypath"][k].get<int>());
       }
     }
-    f.param = RaypathParams{ text };
+    f.SetRaypath(RaypathParams{ text });
     out = f;
     return true;
   }
@@ -1381,7 +1381,7 @@ static bool TryReconstructComplexFilter(const json& jf, const std::map<int, json
     p.length_mode = first_length_mode;
     p.min_len = first_min_len;
     p.max_len = first_max_len;
-    f.param = p;
+    f.SetEntryExit(p);
     out = f;
     return true;
   }
@@ -1453,7 +1453,7 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
             text += std::to_string(jf["raypath"][i].get<int>());
           }
         }
-        f.param = RaypathParams{ text };
+        f.SetRaypath(RaypathParams{ text });
       } else if (type_str == "entry_exit") {
         // core JSON keeps int "entry" / "exit" — translate to GUI's text
         // representation. Absent or explicit-null fields are the wildcard
@@ -1464,10 +1464,10 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
         p.entry_text = DecodeEEFaceFromJson(jf, "entry");
         p.exit_text = DecodeEEFaceFromJson(jf, "exit");
         DecodeEELengthFromJson(jf, p.length_mode, p.min_len, p.max_len);
-        f.param = p;
+        f.SetEntryExit(p);
       } else {
         GUI_LOG_WARNING("[FileIO] Unknown filter type '{}' on core JSON import, defaulting to empty raypath", type_str);
-        f.param = RaypathParams{};
+        f.SetRaypath(RaypathParams{});
       }
       filter_map[id] = f;
     }

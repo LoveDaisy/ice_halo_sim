@@ -298,36 +298,125 @@ struct EntryExitParams {
   friend bool operator!=(const EntryExitParams& a, const EntryExitParams& b) { return !(a == b); }
 };
 
-using FilterParamVariant = std::variant<RaypathParams, EntryExitParams>;
+// One AND-factor within a summand row. A Factor is a single simple filter
+// alternative (raypath or entry-exit); AND-composition of multiple Factors is
+// expressed by the containing SummandText, OR-composition of multiple summands
+// is expressed by the containing SumOfProducts. Renamed from the pre-uplift
+// FilterParamVariant (which conflated "the filter's sole param" with "a factor")
+// to make the sum-of-products shape explicit at the type level.
+using Factor = std::variant<RaypathParams, EntryExitParams>;
+
+// Format an EntryExitParams into the small-domain AND grammar text used by
+// SummandText.text. Defined near EntryExitParams so raypath_segments.hpp can
+// call it without pulling in a reverse include; the grammar itself is spec'd
+// in raypath_segments.hpp (ValidateSummandText / ParseSummandText).
+//
+// Format rule (per plan §3):
+//   - Always emit `entry:<entry_text>` as the type anchor (even if entry_text
+//     is empty), so a serialized SummandText row can never be confused with
+//     the "empty raypath" default.
+//   - Append ` & exit:<exit_text>` only when exit_text is non-empty.
+//   - Append ` & len:<spec>` when length_mode != 0. Spec encoding:
+//       mode 1 (strict N)     → "<min_len>"
+//       mode 2 (at most N)    → "<=<max_len>"
+//       mode 3 (range [N,M])  → "<min_len>-<max_len>"
+inline std::string FormatEntryExitFactorText(const EntryExitParams& ep) {
+  std::string out = "entry:" + ep.entry_text;
+  if (!ep.exit_text.empty()) {
+    out += " & exit:" + ep.exit_text;
+  }
+  if (ep.length_mode == 1) {
+    out += " & len:" + std::to_string(ep.min_len);
+  } else if (ep.length_mode == 2) {
+    out += " & len:<=" + std::to_string(ep.max_len);
+  } else if (ep.length_mode == 3) {
+    out += " & len:" + std::to_string(ep.min_len) + "-" + std::to_string(ep.max_len);
+  }
+  return out;
+}
+
+// One OR-row of an AND-of-factors clause. `text` is the canonical form (small
+// AND grammar defined in raypath_segments.hpp); `factors` is a parse cache
+// derived from `text` and is intentionally excluded from operator== (mirrors
+// the RaypathParams::raypath_text convention where the parsed form is a view).
+struct SummandText {
+  std::string text;
+  std::vector<Factor> factors;
+
+  friend bool operator==(const SummandText& a, const SummandText& b) { return a.text == b.text; }
+  friend bool operator!=(const SummandText& a, const SummandText& b) { return !(a == b); }
+};
+
+// Sum-of-products container: an OR of AND-of-factors rows. Concrete type for
+// FilterConfig::param (replaces the pre-uplift Factor alias). An empty vector
+// is not a valid state — a "no filter" FilterConfig holds a single-row single-
+// factor SoP with an empty RaypathParams (see the FilterConfig default below).
+using SumOfProducts = std::vector<SummandText>;
 
 // GUI-only data structure: filter configuration.
 //
-// Top-level fields (name/action/sym_*) apply to all filter types; per-type
-// data lives inside `param`. Default-constructed FilterConfig holds a
-// Raypath alternative with empty text (the "no filter" state of pre-variant
-// builds).
+// Top-level fields (name/action/sym_*) apply to all filter types; per-summand
+// data lives inside `param` (sum-of-products of Factors). Default-constructed
+// FilterConfig holds a 1-row / 1-factor SoP containing an empty RaypathParams
+// (the "no filter" state of pre-variant builds).
 struct FilterConfig {
   std::string name;
   int action = 0;  // 0=filter_in, 1=filter_out
   bool sym_p = true;
   bool sym_b = true;
   bool sym_d = true;
-  FilterParamVariant param = RaypathParams{};
+  SumOfProducts param{ SummandText{ std::string{}, std::vector<Factor>{ Factor{ RaypathParams{} } } } };
 
-  // Convenience accessors. The g_filter_buf in edit_modals.cpp is guaranteed
-  // (within the data-model-and-serialization task scope) to always hold a
-  // RaypathParams alternative — type-switching UI is deferred to the next
-  // sub-task. These helpers concentrate the std::get<> calls so callsites stay
-  // readable and the assert fires near the misuse rather than deep inside
-  // libc++.
-  bool IsRaypath() const { return std::holds_alternative<RaypathParams>(param); }
+  // Compat accessors — degenerate single-factor path.
+  //
+  // Current callers (file_io.cpp / edit_modals.cpp / panels.cpp) still operate
+  // on the pre-uplift "one filter = one simple" mental model. These helpers
+  // present the SoP as if it were a single-factor variant when it structurally
+  // is one, so the existing sites can be adapted mechanically (see plan §4
+  // Step 3) without touching their logic.
+  //
+  // ⚠️ Grammar-conformance caveat (task-gui-sop-data-model): SetRaypath /
+  // SetEntryExit write a SummandText whose `text` is the tolerant legacy
+  // form (may contain the ';' multi-segment OR sugar for raypath). Such
+  // rows are NOT guaranteed to round-trip through ParseSummandText — the
+  // canonical grammar-conformant conversion path is FromLegacyRaypath /
+  // FromLegacyEntryExit in raypath_segments.hpp (they split ';' into rows
+  // and emit one factor per row). SetRaypath / SetEntryExit are the "keep
+  // callers working, defer real fan-out to 333.3" compat layer, not the
+  // canonical writer. Do not delete this comment without also retiring
+  // the compat callers.
+  bool IsDegenerateSingleFactor() const { return param.size() == 1 && param[0].factors.size() == 1; }
+  bool IsRaypath() const {
+    return IsDegenerateSingleFactor() && std::holds_alternative<RaypathParams>(param[0].factors[0]);
+  }
+  bool IsEntryExit() const {
+    return IsDegenerateSingleFactor() && std::holds_alternative<EntryExitParams>(param[0].factors[0]);
+  }
+  const Factor& DegenerateFactor() const {
+    assert(IsDegenerateSingleFactor() && "FilterConfig::DegenerateFactor() called on non-degenerate SoP");
+    return param[0].factors[0];
+  }
   const std::string& RaypathText() const {
-    assert(IsRaypath() && "FilterConfig::RaypathText() called on non-raypath alternative");
-    return std::get<RaypathParams>(param).raypath_text;
+    assert(IsRaypath() && "FilterConfig::RaypathText() called on non-raypath degenerate factor");
+    return std::get<RaypathParams>(param[0].factors[0]).raypath_text;
   }
   std::string& MutableRaypathText() {
-    assert(IsRaypath() && "FilterConfig::MutableRaypathText() called on non-raypath alternative");
-    return std::get<RaypathParams>(param).raypath_text;
+    assert(IsRaypath() && "FilterConfig::MutableRaypathText() called on non-raypath degenerate factor");
+    return std::get<RaypathParams>(param[0].factors[0]).raypath_text;
+  }
+  const EntryExitParams& EntryExitParamsValue() const {
+    assert(IsEntryExit() && "FilterConfig::EntryExitParamsValue() called on non-EE degenerate factor");
+    return std::get<EntryExitParams>(param[0].factors[0]);
+  }
+  // Compat writers — see the "grammar-conformance caveat" comment above for
+  // why these transparently pass rp.raypath_text through (including any ';'
+  // multi-segment sugar) instead of splitting into multiple rows.
+  void SetRaypath(RaypathParams rp) {
+    param.assign(1, SummandText{ rp.raypath_text, std::vector<Factor>{ Factor{ std::move(rp) } } });
+  }
+  void SetEntryExit(EntryExitParams ep) {
+    std::string text = FormatEntryExitFactorText(ep);
+    param.assign(1, SummandText{ std::move(text), std::vector<Factor>{ Factor{ std::move(ep) } } });
   }
 
   // Used by edit_modals.cpp to detect whether the user actually modified the
@@ -335,10 +424,14 @@ struct FilterConfig {
   // silently materialize a default-constructed filter into entry.filter).
   //
   // ⚠️ When adding a new field above, also:
-  //   1. Compare it here in operator== (variant `param` is compared as a unit)
+  //   1. Compare it here in operator== (`param` vector is compared elementwise
+  //      via SummandText::operator==, which compares `text` only)
   //   2. Update file_io.cpp serialization (SerializeFilterForGui/ParseFilterFromGuiJson)
   //   3. Update edit_modals.cpp Filter tab UI to expose it
-  //   4. Update FilterParamVariant alternatives if a new filter type is added
+  //   4. Update the Factor alternatives (variant) if a new simple-filter
+  //      factor type is added (also extend FromLegacyRaypath / FromLegacyEntryExit
+  //      / ValidateSummandText / ParseSummandText / FormatFactor in
+  //      raypath_segments.hpp accordingly)
   friend bool operator==(const FilterConfig& a, const FilterConfig& b) {
     return a.name == b.name && a.action == b.action && a.sym_p == b.sym_p && a.sym_b == b.sym_b && a.sym_d == b.sym_d &&
            a.param == b.param;

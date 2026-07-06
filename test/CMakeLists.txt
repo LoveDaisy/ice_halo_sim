@@ -57,7 +57,8 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_axis_presets.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_slider_mapping.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_window_sizing.cpp"
-  "${PROJ_TEST_DIR}/unit-correctness/gui/test_ev_auto.cpp")
+  "${PROJ_TEST_DIR}/unit-correctness/gui/test_ev_auto.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/gui/test_filter_sop_grammar.cpp")
 target_include_directories(unit_correctness_test
   PRIVATE ${PROJ_TEST_DIR})
 target_link_libraries(unit_correctness_test

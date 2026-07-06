@@ -190,7 +190,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::CrystalOf(gui::g_state, entry0).roll = gui::AxisDist{ gui::AxisDistType::kLaplacian, 5.0f, 2.0f };
       entry0.proportion = 75.0f;
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-1-5" };
+      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
       gui::SetFilter(gui::g_state, entry0, f);
 
       // Add a second entry with its own crystal pool slot (ID-pool model).
@@ -749,7 +749,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::CrystalOf(gui::g_state, entry).face_distance[5] = 1.0f;
       entry.proportion = 100.0f;
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-5; 1-3" };
+      f.SetRaypath(gui::RaypathParams{ "3-5; 1-3" });
       gui::SetFilter(gui::g_state, entry, f);
       layer.entries.push_back(entry);
       gui::g_state.layers.push_back(layer);
@@ -818,7 +818,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       }
       entry.proportion = 100.0f;
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-1-5" };
+      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
       gui::SetFilter(gui::g_state, entry, f);
       layer.entries.push_back(entry);
       gui::g_state.layers.push_back(layer);
@@ -850,7 +850,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::Layer layer;
       layer.probability = 0.0f;
 
-      auto make_entry = [](gui::FilterParamVariant param) {
+      auto make_entry = [](gui::Factor param) {
         // ID-pool model: each entry needs its own crystal + filter pool slot.
         gui::CrystalConfig c;
         c.type = gui::CrystalType::kPrism;
@@ -863,7 +863,11 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         gui::g_state.crystals.push_back(c);
         e.proportion = 25.0f;
         gui::FilterConfig f;
-        f.param = std::move(param);
+        if (std::holds_alternative<gui::RaypathParams>(param)) {
+          f.SetRaypath(std::get<gui::RaypathParams>(std::move(param)));
+        } else {
+          f.SetEntryExit(std::get<gui::EntryExitParams>(std::move(param)));
+        }
         gui::SetFilter(gui::g_state, e, f);
         return e;
       };
@@ -887,12 +891,12 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
 
       const auto& f0 = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
-      IM_CHECK(std::holds_alternative<gui::RaypathParams>(f0.param));
-      IM_CHECK_EQ(std::get<gui::RaypathParams>(f0.param).raypath_text, std::string("3-1-5"));
+      IM_CHECK(f0.IsRaypath());
+      IM_CHECK_EQ(f0.RaypathText(), std::string("3-1-5"));
 
       const auto& f1 = gui::g_state.filters[*gui::g_state.layers[0].entries[1].filter_id];
-      IM_CHECK(std::holds_alternative<gui::EntryExitParams>(f1.param));
-      const auto& ee = std::get<gui::EntryExitParams>(f1.param);
+      IM_CHECK(f1.IsEntryExit());
+      const auto& ee = f1.EntryExitParamsValue();
       IM_CHECK_EQ(ee.entry_text, std::string("7"));
       IM_CHECK_EQ(ee.exit_text, std::string("4"));
 
@@ -928,8 +932,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(loaded.layers[0].entries.size()), 1);
       IM_CHECK(loaded.layers[0].entries[0].filter_id.has_value());
       const auto& f = loaded.filters[*loaded.layers[0].entries[0].filter_id];
-      IM_CHECK(std::holds_alternative<gui::RaypathParams>(f.param));
-      IM_CHECK_EQ(std::get<gui::RaypathParams>(f.param).raypath_text, std::string("3-1-5"));
+      IM_CHECK(f.IsRaypath());
+      IM_CHECK_EQ(f.RaypathText(), std::string("3-1-5"));
     };
   }
 
@@ -962,7 +966,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       fc.sym_p = true;   // → "P" in symmetry suffix
       fc.sym_b = false;  // omitted
       fc.sym_d = true;   // → "D"
-      fc.param = gui::EntryExitParams{ /*entry_text=*/"2", /*exit_text=*/"5" };
+      fc.SetEntryExit(gui::EntryExitParams{ /*entry_text=*/"2", /*exit_text=*/"5" });
       gui::SetFilter(gui::g_state, e, fc);
 
       layer.entries.push_back(e);
@@ -1028,8 +1032,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       // direction type → unknown-type fallback → empty RaypathParams
       IM_CHECK(restored.layers[0].entries[0].filter_id.has_value());
       const auto& f = restored.filters[*restored.layers[0].entries[0].filter_id];
-      IM_CHECK(std::holds_alternative<gui::RaypathParams>(f.param));
-      IM_CHECK(std::get<gui::RaypathParams>(f.param).raypath_text.empty());
+      IM_CHECK(f.IsRaypath());
+      IM_CHECK(f.RaypathText().empty());
     };
   }
 
@@ -1064,8 +1068,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK(ok);
       IM_CHECK(restored.layers[0].entries[0].filter_id.has_value());
       const auto& f = restored.filters[*restored.layers[0].entries[0].filter_id];
-      IM_CHECK(std::holds_alternative<gui::EntryExitParams>(f.param));
-      const auto& ee = std::get<gui::EntryExitParams>(f.param);
+      IM_CHECK(f.IsEntryExit());
+      const auto& ee = f.EntryExitParamsValue();
       IM_CHECK_EQ(ee.entry_text, std::string("7"));
       IM_CHECK_EQ(ee.exit_text, std::string("4"));
 
@@ -1097,7 +1101,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         gui::EntryExitParams ee;
         ee.entry_text = "3";
         ee.exit_text = "6";
-        fc.param = ee;
+        fc.SetEntryExit(ee);
         gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], fc);
       }
       ctx->Yield(2);
@@ -1148,7 +1152,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       }
       entry.proportion = 100.0f;
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-5;1-3" };
+      f.SetRaypath(gui::RaypathParams{ "3-5;1-3" });
       gui::SetFilter(gui::g_state, entry, f);
       layer.entries.push_back(entry);
       gui::g_state.layers.push_back(layer);
@@ -1198,7 +1202,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::EntryExitParams ee;
       ee.entry_text = "3,4";
       ee.exit_text = "5,6";
-      f.param = ee;
+      f.SetEntryExit(ee);
       gui::SetFilter(gui::g_state, entry, f);
       layer.entries.push_back(entry);
       gui::g_state.layers.push_back(layer);
@@ -1213,8 +1217,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       const auto& loaded_entry = loaded.layers[0].entries[0];
       IM_CHECK(loaded_entry.filter_id.has_value());
       const auto& loaded_filter = loaded.filters[*loaded_entry.filter_id];
-      IM_CHECK(std::holds_alternative<gui::EntryExitParams>(loaded_filter.param));
-      const auto& p = std::get<gui::EntryExitParams>(loaded_filter.param);
+      IM_CHECK(loaded_filter.IsEntryExit());
+      const auto& p = loaded_filter.EntryExitParamsValue();
       // Order is sorted by reconstruct; both ASCII "3" < "4" and "5" < "6".
       IM_CHECK_STR_EQ(p.entry_text.c_str(), "3,4");
       IM_CHECK_STR_EQ(p.exit_text.c_str(), "5,6");
@@ -1249,7 +1253,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::EntryExitParams ee;
       ee.entry_text = "";  // wildcard entry
       ee.exit_text = "5,6";
-      f.param = ee;
+      f.SetEntryExit(ee);
       gui::SetFilter(gui::g_state, entry, f);
       layer.entries.push_back(entry);
       gui::g_state.layers.push_back(layer);
@@ -1264,8 +1268,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       const auto& loaded_entry = loaded.layers[0].entries[0];
       IM_CHECK(loaded_entry.filter_id.has_value());
       const auto& loaded_filter = loaded.filters[*loaded_entry.filter_id];
-      IM_CHECK(std::holds_alternative<gui::EntryExitParams>(loaded_filter.param));
-      const auto& p = std::get<gui::EntryExitParams>(loaded_filter.param);
+      IM_CHECK(loaded_filter.IsEntryExit());
+      const auto& p = loaded_filter.EntryExitParamsValue();
       IM_CHECK_STR_EQ(p.entry_text.c_str(), "");  // wildcard preserved
       IM_CHECK_STR_EQ(p.exit_text.c_str(), "5,6");
       IM_CHECK(gui::PeekImportComplexFilterWarning().empty());
@@ -1330,7 +1334,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "filter_expand_struct_vs_json");
     t->TestFunc = [](ImGuiTestContext*) {
-      auto cross_check = [](gui::FilterParamVariant param) {
+      auto cross_check = [](gui::Factor param) {
         ResetTestState();
         gui::g_state.crystals.clear();
         gui::g_state.filters.clear();
@@ -1343,7 +1347,11 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         }
         gui::g_state.crystals.push_back(c);
         gui::FilterConfig f;
-        f.param = std::move(param);
+        if (std::holds_alternative<gui::RaypathParams>(param)) {
+          f.SetRaypath(std::get<gui::RaypathParams>(std::move(param)));
+        } else {
+          f.SetEntryExit(std::get<gui::EntryExitParams>(std::move(param)));
+        }
         gui::g_state.filters.push_back(f);
         gui::Layer layer;
         layer.probability = 1.0f;
@@ -1433,7 +1441,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         }
         gui::FilterConfig f;
         f.name = "OverflowFilter";  // named so overflow.filter_name assertion below is meaningful
-        f.param = gui::RaypathParams{ too_many_segments };
+        f.SetRaypath(gui::RaypathParams{ too_many_segments });
         gui::g_state.filters.push_back(f);
         gui::Layer layer;
         layer.probability = 1.0f;

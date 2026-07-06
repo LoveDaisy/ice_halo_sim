@@ -381,11 +381,11 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   g_raypath_params = {};
   g_ee_params = {};
   g_filter_active_type = FilterEditType::kRaypath;
-  if (std::holds_alternative<RaypathParams>(src.param)) {
-    g_raypath_params = std::get<RaypathParams>(src.param);
+  if (src.IsRaypath()) {
+    g_raypath_params = RaypathParams{ src.RaypathText() };
     g_filter_active_type = FilterEditType::kRaypath;
-  } else if (std::holds_alternative<EntryExitParams>(src.param)) {
-    g_ee_params = std::get<EntryExitParams>(src.param);
+  } else if (src.IsEntryExit()) {
+    g_ee_params = src.EntryExitParamsValue();
     g_filter_active_type = FilterEditType::kEntryExit;
   }
   snprintf(g_raypath_buf, sizeof(g_raypath_buf), "%s", g_raypath_params.raypath_text.c_str());
@@ -1197,7 +1197,7 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
         out.sym_p = g_filter_top.sym_p;
         out.sym_b = g_filter_top.sym_b;
         out.sym_d = g_filter_top.sym_d;
-        out.param = g_ee_params;
+        out.SetEntryExit(g_ee_params);
         write_filter_to_pool(out);
       }
     }
@@ -1219,7 +1219,7 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
         out.sym_p = g_filter_top.sym_p;
         out.sym_b = g_filter_top.sym_b;
         out.sym_d = g_filter_top.sym_d;
-        out.param = g_raypath_params;
+        out.SetRaypath(g_raypath_params);
         write_filter_to_pool(out);
       }
     }
