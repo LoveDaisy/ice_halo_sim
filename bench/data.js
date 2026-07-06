@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783358455004,
+  "lastUpdate": 1783358456780,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9620,50 +9620,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "e63069a2c407830a197ccf0afe383644959d4b8e",
-          "message": "Merge pull request #75 from LoveDaisy/feat/gui_polish\n\nGUI polish v15: orthographic lens, modal H/V layout, detachable Immediate modal",
-          "timestamp": "2026-04-24T09:59:54+08:00",
-          "tree_id": "568063651932670da5f27b983647c867d4a87abc",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/e63069a2c407830a197ccf0afe383644959d4b8e"
-        },
-        "date": 1776996266014,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 94,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 72.8,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 75.4,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 67.1,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "08a2db71b84673557445aaceeeaed31fd09aa279",
           "message": "Merge pull request #76 from LoveDaisy/feat/coordinate_system\n\nCoordinate system overhaul: HaloRay v1 convention + modal preview unification",
           "timestamp": "2026-04-26T13:56:57+08:00",
@@ -14003,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 93.2,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fc59c7253b6ae043676a2692ef0b8e55ea060405",
+          "message": "Merge pull request #177 from LoveDaisy/feat/filter-editor-uplift\n\nfeat(gui): H5 sum-of-products filter editor + input ergonomics (scrum-333/334)",
+          "timestamp": "2026-07-07T01:14:22+08:00",
+          "tree_id": "adac9b7620bed310e892d5298d721d05c6f88500",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/fc59c7253b6ae043676a2692ef0b8e55ea060405"
+        },
+        "date": 1783358456383,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 111.3,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 95.4,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 94.4,
             "unit": "%"
           }
         ]
