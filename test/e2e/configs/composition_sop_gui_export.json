@@ -1,0 +1,50 @@
+{
+  "_comment": "AC1 (333.4) e2e fixture A — the CLI JSON as the GUI filter editor EXPORTS it for the sum-of-products (3-5) OR (entry:2 & exit:4) OR (3-5 & entry:2). This mirrors exactly what src/gui/file_io.cpp ExpandSopToClauses + SerializeFilterForCore emit: one simple filter per (clause,term) with NO dedup (note id 1 and id 3 are both raypath [3,5]), then a trailing complex whose composition is [[clause0-terms],[clause1-terms],[clause2-terms]] = [[1],[2],[3,4]]. Rendered against fixture B (composition_core_direct.json, the same predicate hand-authored/deduped) they must produce statistically identical halos — proving the GUI expansion is semantically equivalent to expressing the filter directly in core (AC1 'simulation applies the compound gate correctly'). Structural GUI->export fidelity is separately guarded by the GUI tests (p2_filter_type/multi_row_commits_sop, sop_roundtrip_via_gui_editor) and the unit test filter_expand_struct_vs_json.",
+  "crystal": [
+    {
+      "id": 1,
+      "type": "prism",
+      "shape": { "height": 1.2 },
+      "axis": {
+        "zenith":  { "type": "uniform", "mean": 90, "std": 360 },
+        "azimuth": { "type": "uniform", "mean": 0,  "std": 360 },
+        "roll":    { "type": "uniform", "mean": 0,  "std": 360 }
+      }
+    }
+  ],
+  "filter": [
+    { "id": 1, "type": "raypath",    "raypath": [3, 5],      "symmetry": "PBD", "action": "filter_in" },
+    { "id": 2, "type": "entry_exit", "entry": 2, "exit": 4,  "symmetry": "PBD", "action": "filter_in" },
+    { "id": 3, "type": "raypath",    "raypath": [3, 5],      "symmetry": "PBD", "action": "filter_in" },
+    { "id": 4, "type": "entry_exit", "entry": 2,             "symmetry": "PBD", "action": "filter_in" },
+    { "id": 5, "type": "complex",    "composition": [[1], [2], [3, 4]], "symmetry": "PBD", "action": "filter_in" }
+  ],
+  "scene": {
+    "light_source": {
+      "type": "sun",
+      "altitude": 20.0,
+      "spectrum": "D65"
+    },
+    "ray_num": 2000000,
+    "max_hits": 8,
+    "scattering": [
+      {
+        "prob": 1.0,
+        "entries": [
+          { "crystal": 1, "proportion": 100, "filter": 5 }
+        ]
+      }
+    ]
+  },
+  "render": [
+    {
+      "id": 1,
+      "lens": { "type": "dual_fisheye_equal_area", "fov": 180 },
+      "resolution": [512, 256],
+      "view": { "elevation": 0 },
+      "visible": "full",
+      "background": [0.0, 0.0, 0.0],
+      "intensity_factor": 1.0
+    }
+  ]
+}

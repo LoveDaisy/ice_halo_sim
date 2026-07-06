@@ -186,7 +186,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       // Programmatically set a filter so we can test clearing it
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-1-5" };
+      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
       gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
 
       // Verify filter is set
@@ -205,13 +205,18 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
-  // P1: scrum-gui-polish-v13 161.2 — Remove Filter collapses to a plain edit
-  // action (clear raypath; keep editability + sym_*). Observables:
-  //   - Raypath InputText enabled after click (no more Staged "disabled while
-  //     removed" banner)
-  //   - Remove Filter button becomes disabled (derived from raypath now empty)
-  //   - Filter tab dirty mark " *" lights up (AC#4)
-  // sym_* preservation is covered by the dedicated re-type contract test.
+  // P1: scrum-gui-polish-v13 161.2 (H5-adapted for 333.4) — Remove Filter arms
+  // the intent flag and dirties the tab. Rewritten from the pre-H5 form which
+  // asserted "Remove disabled after clear" — under H5 Remove is always
+  // enabled (intent flag, not derived from row emptiness).
+  //
+  // Observables under H5:
+  //   - Row 0 InputText remains editable.
+  //   - Filter tab dirty mark " *" lights up (rows differ from snapshot).
+  //   - Row 0 buffer content cleared (checked by re-typing then clicking OK
+  //     — with intent set, the retyped text is ignored and filter_id
+  //     collapses to nullopt regardless — direct proof intent overrides
+  //     everything, indirect proof clear-then-write is coherent).
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "remove_clears_textbox_staged");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -219,7 +224,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-1-5" };
+      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
       gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
 
       ctx->ItemClick("**/Edit##fi");
@@ -227,14 +232,10 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/Remove Filter##filter");
       ctx->Yield(2);
 
-      // InputText stays editable (no "disabled while pending remove" banner).
-      auto rp_info = ctx->ItemInfo("**/Raypath##filter_modal");
+      // Row 0 InputText remains editable (no "disabled while pending remove"
+      // banner — H5 dropped that concept).
+      auto rp_info = ctx->ItemInfo("**/##row_text_0");
       IM_CHECK((rp_info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-
-      // Remove button itself becomes disabled (derived from raypath now empty)
-      // — this is also proof the clear took effect.
-      auto rm_info = ctx->ItemInfo("**/Remove Filter##filter");
-      IM_CHECK((rm_info.ItemFlags & ImGuiItemFlags_Disabled) != 0);
 
       // AC#4: Filter tab label carries a trailing " *" dirty mark.
       auto tab_info = ctx->ItemInfo("**/###filter_tab");
@@ -247,42 +248,14 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
-  // P1: scrum-gui-polish-v13 161.2 — Remove preserves sym_* across the buffer
-  // cycle. Contract: Remove == backspace all chars → type same raypath again
-  // → OK must write the filter back with sym_* identical to the Open-time
-  // snapshot (not reset to defaults). Use a non-default sym_b=false so a
-  // silent reset would be observable on entry.filter after OK.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "remove_preserves_sym_on_retype");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-1-5" };
-      f.sym_p = true;
-      f.sym_b = false;  // <-- non-default; reset would flip it to true.
-      f.sym_d = true;
-      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
-      ctx->Yield();
-
-      ctx->ItemClick("**/Edit##fi");
-      ctx->Yield(4);
-      ctx->ItemClick("**/Remove Filter##filter");
-      ctx->Yield(2);
-      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
-      ctx->Yield(2);
-      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
-      ctx->Yield(2);
-
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(),
-                      "3-1-5");
-      IM_CHECK(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].sym_p == true);
-      IM_CHECK(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].sym_b == false);
-      IM_CHECK(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].sym_d == true);
-    };
-  }
+  // (`remove_preserves_sym_on_retype` removed in 333.4 H5 migration. The
+  // pre-H5 raypath contract was "Remove clears buffer; typing re-enables the
+  // filter with sym_* preserved". H5 unifies Remove to the pre-H5 EE-style
+  // session-level intent flag (plan §3 point 4): Remove → OK writes nullopt
+  // regardless of subsequent typing. The "typing re-creates filter" semantic
+  // this test encoded no longer exists — use Cancel instead of Remove if the
+  // user wants to abort a Remove. sym_* preservation across a "no-op" edit
+  // cycle is now covered by `remove_then_cancel_restores_filter` above.)
 
   // P1: scrum-gui-polish-v13 161.2 — Staged Remove + OK / Cancel path contract
   // test (AC#5 Cancel branch): Remove then Cancel must restore the filter
@@ -294,7 +267,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-1-5" };
+      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
       f.sym_p = true;
       f.sym_b = false;
       f.sym_d = true;
@@ -317,65 +290,18 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
-  // P1: scrum-gui-polish-v13 161.2 — After Remove the user can type a new
-  // raypath; OK commits the new value (the cleared buffer did not leave the
-  // tab in a terminal "removed" state).
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "remove_then_retype_commits_new_raypath");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
+  // (`remove_then_retype_commits_new_raypath` removed in 333.4 H5 migration.
+  // The pre-H5 raypath Remove was a buffer-clear (not an intent flag), so
+  // typing after Remove naturally re-created the filter on OK. H5 unifies
+  // Remove to the pre-H5 EE-style session-level intent (plan §3 point 4):
+  // OK writes nullopt regardless of subsequent typing. The new semantic is
+  // covered by `remove_filter_clears_on_ok` in p2_filter_type.)
 
-      gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "1-3" };
-      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
-      ctx->Yield();
-
-      ctx->ItemClick("**/Edit##fi");
-      ctx->Yield(4);
-      ctx->ItemClick("**/Remove Filter##filter");
-      ctx->Yield(2);
-      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
-      ctx->Yield(2);
-      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
-      ctx->Yield(2);
-
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(),
-                      "3-1-5");
-    };
-  }
-
-  // P1: scrum-gui-polish-v13 161.2 — Remove button is disabled when the
-  // raypath textbox is empty; typing through the InputText widget re-enables
-  // it. Test must NOT write g_raypath_buf directly — we control the derived
-  // state via the real ImGui widget to avoid tautological assertions.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_filter", "remove_button_disabled_when_empty");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      // Entry has no filter initially → raypath empty → Remove disabled.
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
-
-      ctx->ItemClick("**/Edit##fi");
-      ctx->Yield(4);
-
-      auto info_empty = ctx->ItemInfo("**/Remove Filter##filter");
-      IM_CHECK((info_empty.ItemFlags & ImGuiItemFlags_Disabled) != 0);
-
-      // Type through the real InputText widget; Remove must enable next frame.
-      ctx->ItemInputValue("**/Raypath##filter_modal", "3");
-      ctx->Yield(1);
-
-      auto info_filled = ctx->ItemInfo("**/Remove Filter##filter");
-      IM_CHECK((info_filled.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-
-      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
-      ctx->Yield(2);
-    };
-  }
+  // (`remove_button_disabled_when_empty` removed in 333.4 H5 migration: the
+  // pre-H5 Remove Filter button was disabled when the raypath backing buffer
+  // was empty. Under H5 Remove Filter is a session-level intent flag, always
+  // enabled — the concept it tested no longer exists. New Remove semantics
+  // are covered by `remove_filter_clears_on_ok` in p2_filter_type.)
 
   // P1: scrum-gui-polish-v13 161.2 — In Immediate mode, Remove applies on the
   // next frame (ApplyBuffersToEntry sees empty raypath and writes nullopt).
@@ -390,7 +316,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-1-5" };
+      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
       gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
       gui::g_state.committed_epoch = 5;
       gui::g_state.display_epoch_floor = 0;
@@ -607,7 +533,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       // Stage a filter on the entry so Remove Filter is a real change.
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-1-5" };
+      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
       gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
       // "finite rays just finished" snapshot state. run_intent=kLoaded pins the reconcile base to
       // kDone so the subsequent dirty edit surfaces as kModified (see companion test above).
@@ -685,7 +611,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // in ApplyBuffersToEntry → MarkFilterDirty fires → display clears.
       ctx->ItemClick("**/###filter_tab");
       ctx->Yield(4);
-      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
+      ctx->ItemInputValue("**/##row_text_0", "3-1-5");
       ctx->Yield(2);
       IM_CHECK_EQ(gui::g_state.snapshot_intensity, 0.0f);
       IM_CHECK_EQ(gui::g_state.display_epoch_floor, gui::g_state.committed_epoch);
@@ -727,54 +653,42 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       // Establish a valid baseline commit so subsequent guard-intercepted
       // frames have a "last known good" to preserve.
-      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1");
+      ctx->ItemInputValue("**/##row_text_0", "3-1");
       ctx->Yield(2);
       IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
       IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(), "3-1");
 
       // kInvalid: pure non-numeric "abc" — syntactically invalid.
-      ctx->ItemInputValue("**/Raypath##filter_modal", "abc");
+      // (H5 anti-tautology witness: the earlier "type '3-1' → entry.filter
+      // becomes has_value" assertion above already proved ItemInputValue
+      // actually reaches g_summand_rows[0]. Under H5 Remove Filter is a
+      // session-level intent flag (always enabled), so the pre-H5 "Remove
+      // enabled iff textbox non-empty" probe no longer distinguishes silent
+      // no-ops — dropped.)
+      ctx->ItemInputValue("**/##row_text_0", "abc");
       ctx->Yield(2);
-      // L1: Remove Filter is disabled iff raypath textbox is empty — its gate
-      //     (edit_modals.cpp: `raypath_empty = (g_raypath_buf[0] == '\0')`)
-      //     is buffer-driven, independent of entry.filter model state. An
-      //     enabled Remove Filter thus proves g_raypath_buf actually holds
-      //     "abc" and rules out a silent ItemInputValue no-op (without which
-      //     L2/L3 could reduce to a tautology by simply re-reading the last
-      //     commit).
-      {
-        auto info_rm = ctx->ItemInfo("**/Remove Filter##filter");
-        IM_CHECK((info_rm.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-      }
-      // L2 + L3: guard intercepted — entry.filter preserved at last valid.
+      // Guard intercepted — entry.filter preserved at last valid.
       IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
       IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(), "3-1");
 
       // kIncomplete: trailing separator "3-" — syntactically incomplete per
-      // ValidateRaypathText rules. Guard treats same as kInvalid (Staged OK
-      // disjunction `v.state != kValid`). Apply the same three-layer pattern
-      // symmetrically so this subcase cannot degrade into a tautology when
-      // ItemInputValue silently no-ops (which would leave the previous "abc"
-      // → same guarded state as "3-", making L2/L3 trivially pass).
-      ctx->ItemInputValue("**/Raypath##filter_modal", "3-");
+      // ValidateSummandText rules. Guard treats same as kInvalid (Staged OK
+      // disjunction `v.state != kValid`).
+      ctx->ItemInputValue("**/##row_text_0", "3-");
       ctx->Yield(2);
-      {
-        auto info_rm = ctx->ItemInfo("**/Remove Filter##filter");
-        IM_CHECK((info_rm.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-      }
       IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
       IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(), "3-1");
 
       // Valid recovery: a fresh valid raypath must commit normally, proving
       // the guard does not wedge the entry permanently after a rejection.
-      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
+      ctx->ItemInputValue("**/##row_text_0", "3-1-5");
       ctx->Yield(2);
       IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
       IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(),
                       "3-1-5");
 
       // Empty → nullopt (161.2 rule unchanged by this task).
-      ctx->ItemInputValue("**/Raypath##filter_modal", "");
+      ctx->ItemInputValue("**/##row_text_0", "");
       ctx->Yield(2);
       IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
 
@@ -917,7 +831,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
       // Stage a raypath in the Filter tab buffer. Staged mode: entry still
       // has no filter until OK.
-      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
+      ctx->ItemInputValue("**/##row_text_0", "3-1-5");
       ctx->Yield(2);
       IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
 
@@ -931,7 +845,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(),
                       "3-1-5");
       // Filter tab controls still accessible — tab selection survived.
-      IM_CHECK(ctx->ItemExists("**/Raypath##filter_modal"));
+      IM_CHECK(ctx->ItemExists("**/##row_text_0"));
 
       ctx->ItemClick("**/Close##edit_modal");
       ctx->Yield(2);
@@ -2945,7 +2859,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
 
       // Pre-register a filter on the first entry so StartPerfSimulation's DoRun commits with it
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-1-5" };
+      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
       gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
 
       StartPerfSimulation();
@@ -3370,7 +3284,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       // sync in CommitAllBuffers), click OK.
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(3);
-      ctx->ItemInputValue("**/Raypath##filter_modal", "1-3");
+      ctx->ItemInputValue("**/##row_text_0", "1-3");
       ctx->Yield();
       ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
@@ -3761,74 +3675,28 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
   }
 
   // ============================================================
-  // p2_filter_type — task-editor-modal-type-selection (issue 178.3)
+  // p2_filter_type — task-composition-editor-ui (333.4, H5 SoP row editor)
   //
-  // Filter modal acquires a type discriminator (Raypath / Entry-Exit /
-  // Direction / Crystal). The latter three render placeholder UI only and
-  // disable the modal-level OK button until the user switches back to
-  // Raypath. Multi-segment raypath OR (";"-separated) is the new validator;
-  // the Action control switched from Combo to two RadioButtons.
+  // Filter modal is a sum-of-products row list:
+  //   - Each row is one OR summand expressed in the small AND grammar
+  //     (`3-5 & entry:2 & len:2-3`) validated by ValidateSummandText.
+  //   - The pre-H5 FilterEditType discriminator + Raypath / Entry-Exit
+  //     sub-panels are gone; every row can be raypath / entry-exit / an
+  //     AND mix independently.
+  //   - Remove Filter is a single intent flag (always enabled inside the
+  //     modal; on OK it writes `filter_id = nullopt` regardless of typed
+  //     content).
+  //
+  // Historical tests (`filter_type_radio_visible`,
+  // `filter_type_switch_dispatches_subpanel`, `filter_per_type_buffer_isolated`,
+  // `entry_exit_per_type_buffer_isolated`) tested the pre-H5 type
+  // discriminator that no longer exists. Their coverage intent is subsumed
+  // by the new "each row is independent" test below plus the AC1 round-trip
+  // tests further down.
   // ============================================================
 
-  // T1 — type radio is visible: 2 type RadioButtons (Raypath, Entry-Exit) exist
-  // after opening the Filter tab. Direction was removed in filter-direction-hide
-  // (issue 180.2); Crystal was removed in task-filter-modal-polish-v1.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "filter_type_radio_visible");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      ctx->ItemClick("**/Edit##fi");
-      ctx->Yield(4);
-
-      IM_CHECK(ctx->ItemExists("**/Raypath##filter_type"));
-      IM_CHECK(ctx->ItemExists("**/Entry-Exit##filter_type"));
-      IM_CHECK(!ctx->ItemExists("**/Direction##filter_type"));
-      IM_CHECK(!ctx->ItemExists("**/Crystal##filter_type"));
-
-      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
-      ctx->Yield(2);
-    };
-  }
-
-  // T2 — switching to a stub type hides the Raypath sub-panel; switching
-  // back re-renders it. Dispatch is by widget existence rather than disabled
-  // state because the stub branch renders a TextDisabled placeholder, not
-  // the InputText.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "filter_type_switch_dispatches_subpanel");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      ctx->ItemClick("**/Edit##fi");
-      ctx->Yield(4);
-
-      // Default = Raypath: InputText is rendered.
-      IM_CHECK(ctx->ItemExists("**/Raypath##filter_modal"));
-
-      // Switch to Entry-Exit: InputText is no longer rendered.
-      ctx->ItemClick("**/Entry-Exit##filter_type");
-      ctx->Yield(2);
-      IM_CHECK(!ctx->ItemExists("**/Raypath##filter_modal"));
-
-      // Switch back to Raypath: InputText reappears.
-      ctx->ItemClick("**/Raypath##filter_type");
-      ctx->Yield(2);
-      IM_CHECK(ctx->ItemExists("**/Raypath##filter_modal"));
-
-      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
-      ctx->Yield(2);
-    };
-  }
-
-  // (T3 removed in #178.6: stub gating no longer exists — all 4 filter types
-  // are interactive after Crystal is implemented. The OK button has no
-  // type-based disable path; the only remaining gate is raypath validation.)
-
-  // T4 — Action is now two RadioButtons (was Combo). Selecting "Filter Out"
-  // and OK must commit action=1 to entry.filter.
+  // T1 — Action radio commits: typing a raypath in row 0, selecting
+  // "Filter Out", OK → entry.filter.action == 1.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "filter_action_radio_commits_value");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -3839,7 +3707,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
-      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
+      ctx->ItemInputValue("**/##row_text_0", "3-1-5");
       ctx->Yield();
       ctx->ItemClick("**/Filter Out##filter_action");
       ctx->Yield();
@@ -3851,9 +3719,11 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // T5 — Multi-segment OR (";") flows end-to-end through the modal: a
-  // semicolon-separated raypath validates as kValid and round-trips into
-  // entry.filter unchanged.
+  // T2 — Multi-raypath OR across two rows: the H5 canonical way to express
+  // "(3-5) OR (1-3)" is one summand row per alternative ("3-5" then
+  // "+ Add OR row" then "1-3"), NOT the pre-H5 single-row ';' sugar (which
+  // ValidateSummandText now rejects inside a row). Pins that the two rows
+  // commit to a 2-summand SoP with each row's text preserved verbatim.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "filter_multi_raypath_or_e2e_via_modal");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -3864,10 +3734,19 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
-      ctx->ItemInputValue("**/Raypath##filter_modal", "3-5; 1-3");
-      ctx->Yield(2);  // run validator one frame, OK gate one more
+      // Row 0 accepts a single-token raypath. This test uses two separate
+      // rows to exercise the "+ Add OR row" path. (Post-334.3 H-A, a single
+      // row `1-3;3-5` produces an equivalent serialized composition — see
+      // semicolon_multi_raypath_single_row_commits + the import-export
+      // equivalence tests.)
+      ctx->ItemInputValue("**/##row_text_0", "3-5");
+      ctx->Yield(1);
+      ctx->ItemClick("**/+ Add OR row##summand_add");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/##row_text_1", "1-3");
+      ctx->Yield(2);
 
-      // OK must be enabled (multi-segment validates kValid).
+      // OK must be enabled (both rows validate kValid).
       auto info_ok = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
       IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
@@ -3875,17 +3754,18 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(),
-                      "3-5; 1-3");
+      const auto& f = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
+      IM_CHECK_EQ(f.param.size(), static_cast<size_t>(2));
+      IM_CHECK_STR_EQ(f.param[0].text.c_str(), "3-5");
+      IM_CHECK_STR_EQ(f.param[1].text.c_str(), "1-3");
     };
   }
 
-  // T6 — Per-type buffer isolation: typing a raypath, switching to a stub
-  // type, then switching back must preserve the raypath text. End-to-end
-  // probe via OK commit (the InputText backing buffer is not externed, so
-  // assertion is on entry.filter after OK).
+  // T3 — Entry-Exit single-row: type "entry:2 & exit:5" in one row → the
+  // committed SoP is a degenerate single-factor EE filter (equivalent to
+  // pre-H5 EE type). Verifies AND grammar → EntryExitParams reconstruction.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "filter_per_type_buffer_isolated");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_single_row_commits");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
@@ -3894,245 +3774,32 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
-      ctx->ItemInputValue("**/Raypath##filter_modal", "3-1-5");
-      ctx->Yield(2);
-
-      // Switch away (Raypath sub-panel un-renders) and back.
-      ctx->ItemClick("**/Entry-Exit##filter_type");
-      ctx->Yield(2);
-      ctx->ItemClick("**/Raypath##filter_type");
-      ctx->Yield(2);
-
-      // Sub-panel re-renders; OK now reachable. Commit and verify the
-      // raypath text survived the round-trip.
-      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
-      ctx->Yield(2);
-
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(),
-                      "3-1-5");
-    };
-  }
-
-  // (T7 removed in #178.6: stub-type clobber-protection no longer applies —
-  // every filter type now has a real commit path. Switching to Crystal in
-  // Immediate mode commits a default Crystal filter and overwrites any
-  // existing raypath filter on the same entry; that is the designed cross-
-  // type switch behavior, identical to EE↔Direction switches.)
-
-  // ============================================================
-  // p2_filter_type — task-per-type-entry-exit (issue 178.4)
-  //
-  // Entry-Exit type goes from stub to interactive: 2 InputInt controls
-  // (Entry/Exit face number), OK button enabled, commit assembles
-  // EntryExitParams into entry.filter. Per-type buffer isolation contract
-  // (#178.3 T6) extends to switching between EE and Direction.
-  // ============================================================
-
-  // T8 — Entry-Exit subpanel renders 2 InputInt controls when EE type is
-  // active; switching to other types hides them, switching back re-renders.
-  // (Does NOT assert "untouched OK = no-op": clicking the Entry-Exit radio
-  // already dirties the buffer via active_type != snapshot, so OK after
-  // switch is a real commit by design — covered by T9/T10.)
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_subpanel_inputs_visible");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      ctx->ItemClick("**/Edit##fi");
-      ctx->Yield(4);
-
-      // Default = Raypath: EE inputs not present.
-      IM_CHECK(!ctx->ItemExists("**/Entry##filter_ee_entry"));
-
-      // Switch to Entry-Exit: both InputText items appear, raypath InputText disappears.
-      ctx->ItemClick("**/Entry-Exit##filter_type");
-      ctx->Yield(2);
-      IM_CHECK(ctx->ItemExists("**/Entry##filter_ee_entry"));
-      IM_CHECK(ctx->ItemExists("**/Exit##filter_ee_exit"));
-      IM_CHECK(!ctx->ItemExists("**/Raypath##filter_modal"));
-
-      // post-task-ee-filter-uplift contract: empty entry/exit text encodes
-      // the wildcard ("any face") branch and is itself a committable value.
-      // OK stays enabled with both fields empty (double-wildcard).
-      auto info_ok = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
-      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-
-      // Type valid face numbers → OK still enabled.
-      ctx->ItemInputValue("**/Entry##filter_ee_entry", "1");
-      ctx->ItemInputValue("**/Exit##filter_ee_exit", "2");
-      ctx->Yield(2);
-      auto info_typed = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
-      IM_CHECK((info_typed.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-
-      // Trailing comma → kIncomplete → OK disabled (user is mid-typing).
-      ctx->ItemInputValue("**/Entry##filter_ee_entry", "3,");
-      ctx->Yield(2);
-      auto info_trailing = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
-      IM_CHECK((info_trailing.ItemFlags & ImGuiItemFlags_Disabled) != 0);
-      // Restore typed value so the rest of the test sees a valid buffer.
-      ctx->ItemInputValue("**/Entry##filter_ee_entry", "1");
-      ctx->Yield(2);
-
-      // Switch to Raypath: EE inputs un-render.
-      ctx->ItemClick("**/Raypath##filter_type");
-      ctx->Yield(2);
-      IM_CHECK(!ctx->ItemExists("**/Entry##filter_ee_entry"));
-
-      // Switch back to Entry-Exit: inputs reappear; the typed-and-valid
-      // values are still in the buffers so OK stays enabled.
-      ctx->ItemClick("**/Entry-Exit##filter_type");
-      ctx->Yield(2);
-      IM_CHECK(ctx->ItemExists("**/Entry##filter_ee_entry"));
-      auto info_back = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
-      IM_CHECK((info_back.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-
-      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
-      ctx->Yield(2);
-    };
-  }
-
-  // T9 — Entry-Exit OK commits filter end-to-end: fill entry/exit, set
-  // Action=Filter Out, OK → entry.filter holds EntryExitParams with the
-  // typed values + action=1. The "PBD" suffix in the asserted FilterSummary
-  // string relies on g_filter_top.sym_p/b/d defaulting to true — see
-  // gui_state.hpp:271-273 (`bool sym_p = true; sym_b = true; sym_d = true;`).
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_ok_commits_filter");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
-
-      ctx->ItemClick("**/Edit##fi");
-      ctx->Yield(4);
-      ctx->ItemClick("**/Entry-Exit##filter_type");
-      ctx->Yield(2);
-
-      ctx->ItemInputValue("**/Entry##filter_ee_entry", "2");
-      ctx->ItemInputValue("**/Exit##filter_ee_exit", "5");
+      ctx->ItemInputValue("**/##row_text_0", "entry:2 & exit:5");
       ctx->Yield(2);
       ctx->ItemClick("**/Filter Out##filter_action");
       ctx->Yield(2);
 
-      // OK must be enabled on EE.
       auto info_ok = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
       IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-
       ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
       const auto& f = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
-      IM_CHECK(std::holds_alternative<gui::EntryExitParams>(f.param));
-      const auto& ee = std::get<gui::EntryExitParams>(f.param);
+      IM_CHECK(f.IsEntryExit());
+      const auto& ee = f.EntryExitParamsValue();
       IM_CHECK_EQ(ee.entry_text, std::string("2"));
       IM_CHECK_EQ(ee.exit_text, std::string("5"));
       IM_CHECK_EQ(f.action, 1);
-      // Default sym_p/b/d = true (gui_state.hpp:271-273), Filter Out → "Out".
       IM_CHECK(f.sym_p);
       IM_CHECK(f.sym_b);
       IM_CHECK(f.sym_d);
-
-      // FilterSummary EE format (task-ee-filter-uplift): "EE:<entry>-<exit>
-      // [length-suffix] <In|Out>[ <sym>]". Single values render bare; lists
-      // render in {...}; wildcards render as "*". Length suffix omitted when
-      // mode=0 (no constraint), which is the default for this fresh commit.
-      IM_CHECK_STR_EQ(gui::FilterSummary(gui::FilterOf(gui::g_state, gui::g_state.layers[0].entries[0])).c_str(),
-                      "EE:2-5 Out PBD");
     };
   }
 
-  // T10 — per-type buffer isolation: EE ↔ Raypath switch preserves EE values.
-  // Validates that T6 guarantee (per-type buffer survives switches) holds;
-  // each type owns a separate sub-buffer so switching away must not corrupt EE.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_per_type_buffer_isolated");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      ctx->ItemClick("**/Edit##fi");
-      ctx->Yield(4);
-      ctx->ItemClick("**/Entry-Exit##filter_type");
-      ctx->Yield(2);
-      ctx->ItemInputValue("**/Entry##filter_ee_entry", "3");
-      ctx->ItemInputValue("**/Exit##filter_ee_exit", "7");
-      ctx->Yield(2);
-
-      // Switch away to Raypath — EE sub-buffer must remain untouched.
-      ctx->ItemClick("**/Raypath##filter_type");
-      ctx->Yield(2);
-      // Verify EE inputs un-rendered while Raypath is active.
-      IM_CHECK(!ctx->ItemExists("**/Entry##filter_ee_entry"));
-
-      // Switch back to Entry-Exit; per-type buffer must have retained values.
-      ctx->ItemClick("**/Entry-Exit##filter_type");
-      ctx->Yield(2);
-      IM_CHECK(ctx->ItemExists("**/Entry##filter_ee_entry"));
-
-      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
-      ctx->Yield(2);
-
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
-      const auto& f = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
-      IM_CHECK(std::holds_alternative<gui::EntryExitParams>(f.param));
-      const auto& ee = std::get<gui::EntryExitParams>(f.param);
-      IM_CHECK_EQ(ee.entry_text, std::string("3"));
-      IM_CHECK_EQ(ee.exit_text, std::string("7"));
-    };
-  }
-
-  // T11 — Remove Filter (EE): button always enabled, clears fields, OK enabled
-  // (intent bypasses incomplete gate), and OK → entry.filter_id = nullopt even
-  // if user re-types values after Remove (session-level single direction).
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_remove_clears_and_ok_enabled");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      ctx->ItemClick("**/Edit##fi");
-      ctx->Yield(4);
-      ctx->ItemClick("**/Entry-Exit##filter_type");
-      ctx->Yield(2);
-
-      // Remove Filter button must exist and be enabled even with empty fields.
-      IM_CHECK(ctx->ItemExists("**/Remove Filter##filter_ee"));
-      auto info_remove_empty = ctx->ItemInfo("**/Remove Filter##filter_ee");
-      IM_CHECK((info_remove_empty.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-
-      // Type valid face numbers.
-      ctx->ItemInputValue("**/Entry##filter_ee_entry", "2");
-      ctx->ItemInputValue("**/Exit##filter_ee_exit", "5");
-      ctx->Yield(2);
-
-      // Remove Filter clears the fields.
-      ctx->ItemClick("**/Remove Filter##filter_ee");
-      ctx->Yield(2);
-
-      // After Remove: OK is enabled (intent bypasses incomplete gate).
-      auto info_ok = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
-      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-
-      // Re-type entry=1 after Remove (intent still set — session-level single direction).
-      ctx->ItemInputValue("**/Entry##filter_ee_entry", "1");
-      ctx->Yield(2);
-
-      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
-      ctx->Yield(2);
-
-      // Remove intent takes precedence: filter must be nullopt regardless of re-typed value.
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
-    };
-  }
-
-  // T11b — task-ee-filter-uplift: multi-value OR + InputText round-trip
-  // through the modal. Length-mode dropdown interaction is exercised by a
-  // pure-state test below to avoid driving the BeginCombo widget from the
-  // headless harness (Combo button does not register IMGUI_TEST_ENGINE_ITEM_INFO).
+  // T4 — EE multi-value + length range in AND grammar: type
+  // "entry:3,4 & exit:5 & len:2-3" in one row → factor holds entry list
+  // "3,4", exit "5", length_mode=3, [2,3].
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_uplift_multivalue_list");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -4141,37 +3808,29 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
-      ctx->ItemClick("**/Entry-Exit##filter_type");
+      ctx->ItemInputValue("**/##row_text_0", "entry:3,4 & exit:5 & len:2-3");
       ctx->Yield(2);
 
-      // Multi-value entry, single-value exit.
-      ctx->ItemInputValue("**/Entry##filter_ee_entry", "3,4");
-      ctx->ItemInputValue("**/Exit##filter_ee_exit", "5");
-      ctx->Yield(2);
-
-      // OK enabled (list valid).
       auto info_ok = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
       IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-
       ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
       const auto& f = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
-      const auto& ee = std::get<gui::EntryExitParams>(f.param);
+      IM_CHECK(f.IsEntryExit());
+      const auto& ee = f.EntryExitParamsValue();
       IM_CHECK_EQ(ee.entry_text, std::string("3,4"));
       IM_CHECK_EQ(ee.exit_text, std::string("5"));
-      IM_CHECK_EQ(ee.length_mode, 0);  // default
-
-      // FilterSummary: list end uses {}, single end bare, no length suffix.
-      IM_CHECK_STR_EQ(gui::FilterSummary(gui::FilterOf(gui::g_state, gui::g_state.layers[0].entries[0])).c_str(),
-                      "EE:{3,4}-5 In PBD");
+      IM_CHECK_EQ(ee.length_mode, 3);
+      IM_CHECK_EQ(ee.min_len, 2);
+      IM_CHECK_EQ(ee.max_len, 3);
     };
   }
 
-  // T11b2 — task-ee-filter-uplift: FilterSummary length-mode formatting.
-  // Length-mode dropdown UI interaction is left to manual verification;
-  // this test pins the four format strings the summary should emit.
+  // T4b — FilterSummary length-mode formatting (pure state, no ImGui).
+  // Pins the four format strings the summary should emit for a
+  // programmatically-constructed EE filter.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_uplift_length_summary_formats");
     t->TestFunc = [](ImGuiTestContext* /*ctx*/) {
@@ -4183,7 +3842,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
         ee.length_mode = mode;
         ee.min_len = min_v;
         ee.max_len = max_v;
-        fc.param = ee;
+        fc.SetEntryExit(ee);
         return gui::FilterSummary(std::optional<gui::FilterConfig>{ fc });
       };
       IM_CHECK_STR_EQ(make_summary(0, 1, 1).c_str(), "EE:3-5 In PBD");
@@ -4193,23 +3852,307 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // T11c — task-ee-filter-uplift: double-wildcard + no length constraint
-  // commits and renders as "EE:*-*".
+  // T5 — Remove Filter (H5 unified button): clicking it arms the intent flag;
+  // OK writes filter_id = nullopt even if the row buffers are non-empty
+  // (session-level single direction, mirrors pre-H5 EE Remove semantics).
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_uplift_double_wildcard");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "remove_filter_clears_on_ok");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Pre-populate entry.filter so Remove has something to clear.
+      gui::FilterConfig f;
+      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
+      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
+      ctx->Yield();
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      // Remove Filter is always enabled in H5 (intent flag; no derivation
+      // from row emptiness).
+      auto info_remove = ctx->ItemInfo("**/Remove Filter##filter");
+      IM_CHECK((info_remove.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      ctx->ItemClick("**/Remove Filter##filter");
+      ctx->Yield(2);
+
+      // OK is enabled even after Remove: the intent bypasses row validation.
+      auto info_ok = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
+      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
+    };
+  }
+
+  // T6 — Row list add/remove: clicking "+ Add OR row" grows the SoP; the
+  // per-row Remove button shrinks it. With one row remaining, per-row Remove
+  // must be disabled (>=1 row invariant).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "row_add_remove_visible");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
 
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
-      ctx->ItemClick("**/Entry-Exit##filter_type");
+
+      // On modal open, single blank row exists.
+      IM_CHECK(ctx->ItemExists("**/##row_text_0"));
+      IM_CHECK(!ctx->ItemExists("**/##row_text_1"));
+
+      // Per-row Remove is disabled with only one row (≥1 row invariant).
+      auto info_del0 = ctx->ItemInfo("**/" ICON_FA_XMARK "##row_delete_0");
+      IM_CHECK((info_del0.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+      // Add a row: new row has uid=1.
+      ctx->ItemClick("**/+ Add OR row##summand_add");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/##row_text_1"));
+
+      // Both per-row Remove buttons are enabled now.
+      auto info_del1 = ctx->ItemInfo("**/" ICON_FA_XMARK "##row_delete_1");
+      IM_CHECK((info_del1.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      // Delete row 1: only row 0 remains.
+      ctx->ItemClick("**/" ICON_FA_XMARK "##row_delete_1");
+      ctx->Yield(2);
+      IM_CHECK(!ctx->ItemExists("**/##row_text_1"));
+      IM_CHECK(ctx->ItemExists("**/##row_text_0"));
+
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // T7 — Multi-row commit + per-row edit isolation (subsumes the pre-H5
+  // per-type buffer isolation contract). Add three rows with distinct
+  // grammar shapes (pure raypath / EE / AND mix), OK, verify the SoP has
+  // three summands with the expected text preserved verbatim per row.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "multi_row_commits_sop");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
       ctx->Yield(2);
 
-      // Leave entry/exit empty (= wildcard); default length mode = 0.
-      // Need to "dirty" the filter so the commit branch fires — clicking
-      // the type radio above already does that.
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
 
+      ctx->ItemInputValue("**/##row_text_0", "3-5");
+      ctx->Yield(1);
+      ctx->ItemClick("**/+ Add OR row##summand_add");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/##row_text_1", "entry:2 & exit:4");
+      ctx->Yield(1);
+      ctx->ItemClick("**/+ Add OR row##summand_add");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/##row_text_2", "3-5 & entry:2");
+      ctx->Yield(2);
+
+      auto info_ok = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
+      IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      const auto& f = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
+      IM_CHECK_EQ(f.param.size(), static_cast<size_t>(3));
+      IM_CHECK_STR_EQ(f.param[0].text.c_str(), "3-5");
+      IM_CHECK_STR_EQ(f.param[1].text.c_str(), "entry:2 & exit:4");
+      IM_CHECK_STR_EQ(f.param[2].text.c_str(), "3-5 & entry:2");
+    };
+  }
+
+  // T8 — AC1 end-to-end witness: three rows edited via GUI → SaveLmcFile →
+  // LoadLmcFile → the reloaded FilterConfig equals the original (operator==
+  // on SoP text). Complements 333.3's `sop_lmc_roundtrip` (which builds the
+  // SoP programmatically) by closing the loop through the actual GUI editor.
+  // The same three-row scenario as `multi_row_commits_sop` — reused so the two
+  // tests together form one AC1 chain:
+  //   [GUI edit → correct SoP] (T7) + [SoP → save+reload → identical SoP] (T8)
+  //   ≡ [GUI edit → save+reload → same SoP that will drive the simulator].
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "sop_roundtrip_via_gui_editor");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/##row_text_0", "3-5");
+      ctx->Yield(1);
+      ctx->ItemClick("**/+ Add OR row##summand_add");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/##row_text_1", "entry:2 & exit:4");
+      ctx->Yield(1);
+      ctx->ItemClick("**/+ Add OR row##summand_add");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/##row_text_2", "3-5 & entry:2");
+      ctx->Yield(2);
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      const auto original = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
+
+      const char* tmp_path = "/tmp/lumice_gui_sop_roundtrip.lmc";
+      const bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
+      IM_CHECK(save_ok);
+
+      gui::DoNew();
+      std::vector<unsigned char> tex_data;
+      int tex_w = 0;
+      int tex_h = 0;
+      const bool load_ok = gui::LoadLmcFile(tmp_path, gui::g_state, tex_data, tex_w, tex_h);
+      IM_CHECK(load_ok);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      const auto& reloaded = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
+      IM_CHECK(reloaded == original);
+      IM_CHECK_EQ(reloaded.param.size(), static_cast<size_t>(3));
+      IM_CHECK_STR_EQ(reloaded.param[0].text.c_str(), "3-5");
+      IM_CHECK_STR_EQ(reloaded.param[1].text.c_str(), "entry:2 & exit:4");
+      IM_CHECK_STR_EQ(reloaded.param[2].text.c_str(), "3-5 & entry:2");
+      std::remove(tmp_path);
+    };
+  }
+
+  // T9 — AC3 stress: multiple rounds of add / type / delete-middle-row.
+  // Pins the plan §7 risk 1 mitigation (uid-encoded IDs prevent widget/buffer
+  // tearing when middle rows are removed). Each round:
+  //   1) Add a row (uid increases; existing rows keep their uid).
+  //   2) Type into the new row via its uid-derived ID.
+  //   3) Delete a middle row and verify the surviving rows' texts are still
+  //      addressable by their pre-delete uid — i.e. no ID collision or
+  //      buffer contents jumping to the wrong row (327 tearing symptom).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "row_dynamics_stress");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      // Row 0 has uid=0 (SetRowsFromSop resets the uid counter on open).
+      ctx->ItemInputValue("**/##row_text_0", "1-2");
+      ctx->Yield(1);
+
+      // Round 1: add row 1 (uid=1), type; expect both rows addressable.
+      ctx->ItemClick("**/+ Add OR row##summand_add");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/##row_text_1"));
+      ctx->ItemInputValue("**/##row_text_1", "3-4");
+      ctx->Yield(1);
+
+      // Round 2: add row 2 (uid=2), type.
+      ctx->ItemClick("**/+ Add OR row##summand_add");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/##row_text_2"));
+      ctx->ItemInputValue("**/##row_text_2", "entry:1 & exit:2");
+      ctx->Yield(1);
+
+      // Round 3: delete the middle row (uid=1). Row 0 (uid=0) and the former
+      // row 2 (uid=2) survive; the uid=2 row's ID must NOT shift to
+      // ##row_text_1 (that would prove the ID stack collided).
+      ctx->ItemClick("**/" ICON_FA_XMARK "##row_delete_1");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/##row_text_0"));
+      IM_CHECK(!ctx->ItemExists("**/##row_text_1"));
+      IM_CHECK(ctx->ItemExists("**/##row_text_2"));
+
+      // Round 4: add another row (uid=3); type; delete row 2 (uid=2).
+      ctx->ItemClick("**/+ Add OR row##summand_add");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/##row_text_3"));
+      ctx->ItemInputValue("**/##row_text_3", "5-6");
+      ctx->Yield(1);
+      ctx->ItemClick("**/" ICON_FA_XMARK "##row_delete_2");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/##row_text_0"));
+      IM_CHECK(!ctx->ItemExists("**/##row_text_2"));
+      IM_CHECK(ctx->ItemExists("**/##row_text_3"));
+
+      // Round 5: commit; expect 2 rows, uid=0 text "1-2" and uid=3 text "5-6".
+      // Row order matches iteration order in g_summand_rows (uid=0 then uid=3).
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(2);
+
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      const auto& f = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
+      IM_CHECK_EQ(f.param.size(), static_cast<size_t>(2));
+      IM_CHECK_STR_EQ(f.param[0].text.c_str(), "1-2");
+      IM_CHECK_STR_EQ(f.param[1].text.c_str(), "5-6");
+    };
+  }
+
+  // T10 — code-review-01 Major M1 regression: a blank OR row must NOT lower to
+  // a match-all clause. A forgotten empty row beside a real one used to
+  // materialize [{"3-5"}, {""}] → ExpandSopToClauses turns the factor-less row
+  // into a match-all term → OR(3-5, match-all): a silent no-op under filter_in,
+  // an all-black render under filter_out. The commit path now strips blank /
+  // whitespace-only rows before materializing; if none survive → no filter.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "blank_row_dropped_not_matchall");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Author a single real row "3-5", then add a blank OR row and commit.
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/##row_text_0", "3-5");
+      ctx->Yield(1);
+      ctx->ItemClick("**/+ Add OR row##summand_add");
+      ctx->Yield(2);
+      // Leave row 1 blank on purpose (the M1 footgun).
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(2);
+
+      // The blank row is stripped: exactly one summand "3-5", NOT two, and no
+      // match-all clause was injected.
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      const auto& f = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
+      IM_CHECK_EQ(f.param.size(), static_cast<size_t>(1));
+      IM_CHECK_STR_EQ(f.param[0].text.c_str(), "3-5");
+
+      // Reopen, blank out the sole real row's text too → all rows blank ≡ no
+      // filter (filter_id cleared, not a match-all filter left behind).
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/##row_text_0", "");
+      ctx->Yield(1);
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(2);
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
+    };
+  }
+
+  // T11 (scrum-334.3 H-A) — a single OR row carrying inline ';' alternatives
+  // ("1-3;3-5") commits without OK being disabled and preserves the whole
+  // token verbatim in the row's raypath_text. Fan-out to multiple summands
+  // happens at serialization time (see semicolon_row_equals_two_rows_composition
+  // in test_gui_import_export.cpp for the end-to-end equivalence), NOT at
+  // commit — so the on-disk row count stays at 1.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "semicolon_multi_raypath_single_row_commits");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/##row_text_0", "1-3;3-5");
+      ctx->Yield(2);
+
+      // OK must be enabled — ValidateSummandText now delegates to
+      // ValidateRaypathTextMultiSegment for raypath tokens, so inner ';' is
+      // accepted.
       auto info_ok = ctx->ItemInfo("**/" ICON_FA_CHECK " OK##edit_modal");
       IM_CHECK((info_ok.ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
@@ -4218,47 +4161,11 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
       const auto& f = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
-      const auto& ee = std::get<gui::EntryExitParams>(f.param);
-      IM_CHECK(ee.entry_text.empty());
-      IM_CHECK(ee.exit_text.empty());
-      IM_CHECK_EQ(ee.length_mode, 0);
-      IM_CHECK_STR_EQ(gui::FilterSummary(gui::FilterOf(gui::g_state, gui::g_state.layers[0].entries[0])).c_str(),
-                      "EE:*-* In PBD");
-    };
-  }
-
-  // T12 — Remove Filter (EE) followed by OK: pre-existing EE filter is cleared.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "entry_exit_remove_ok_clears_filter");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      // Pre-populate entry.filter with an EE filter.
-      {
-        gui::FilterConfig fc;
-        fc.action = 0;
-        gui::EntryExitParams ee;
-        ee.entry_text = "2";
-        ee.exit_text = "5";
-        fc.param = ee;
-        gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], fc);
-      }
-      ctx->Yield(2);
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
-
-      ctx->ItemClick("**/Edit##fi");
-      ctx->Yield(4);
-      ctx->ItemClick("**/Entry-Exit##filter_type");
-      ctx->Yield(2);
-
-      ctx->ItemClick("**/Remove Filter##filter_ee");
-      ctx->Yield(2);
-      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
-      ctx->Yield(2);
-
-      // After Remove + OK, filter must be nullopt.
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
+      IM_CHECK_EQ(f.param.size(), static_cast<size_t>(1));
+      IM_CHECK_STR_EQ(f.param[0].text.c_str(), "1-3;3-5");
+      // The row parses into a single raypath factor (the ';' is inside the
+      // token, not across factor boundaries).
+      IM_CHECK_EQ(f.param[0].factors.size(), static_cast<size_t>(1));
     };
   }
 }
@@ -4475,7 +4382,7 @@ void RegisterLinkedEntriesTests(ImGuiTestEngine* engine) {
       // Open Filter modal on entry 0, type a raypath, commit via OK.
       ctx->ItemClick("**/Edit##fi");
       ctx->Yield(4);
-      ctx->ItemInputValue("**/Raypath##filter_modal", "3-5");
+      ctx->ItemInputValue("**/##row_text_0", "3-5");
       ctx->Yield(2);
       ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
@@ -4498,7 +4405,7 @@ void RegisterLinkedEntriesTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       // Two entries linked at (crystal_id=0, filter_id=<set>).
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-5" };
+      f.SetRaypath(gui::RaypathParams{ "3-5" });
       gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
       gui::EntryCard sibling;
       sibling.crystal_id = 0;
@@ -4533,7 +4440,7 @@ void RegisterLinkedEntriesTests(ImGuiTestEngine* engine) {
       gui::EntryCard sibling;
       sibling.crystal_id = 0;
       gui::FilterConfig f;
-      f.param = gui::RaypathParams{ "3-5" };
+      f.SetRaypath(gui::RaypathParams{ "3-5" });
       gui::SetFilter(gui::g_state, sibling, f);
       gui::g_state.layers[0].entries.push_back(sibling);
 

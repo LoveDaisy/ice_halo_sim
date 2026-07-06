@@ -211,9 +211,13 @@ static std::string FilterSymmetryToString(const FilterConfig& f) {
 
 // GUI .lmc payload: per-filter JSON object.
 //
-// Schema v=2 introduces a `type` discriminator; v=1 callers wrote raypath_text
-// directly. Reader (ParseFilterFromGuiJson) defaults missing `type` to raypath
-// for backward compatibility.
+// Schema v=3 (task-serialization-bidirectional): a filter carries its full
+// sum-of-products as an array of canonical summand text rows under "summands"
+// (type discriminator "sop"). Each row string is the canonical AND grammar
+// (see raypath_segments.hpp). We store the SummandText.text verbatim — that is
+// the operator== identity (text-only), so this is lossless with respect to the
+// GUI's equality contract. v=1/v=2 forms (type "raypath"/"entry_exit") are still
+// READ by ParseFilterFromGuiJson for backward compatibility.
 static json SerializeFilterForGui(const FilterConfig& f, int id) {
   json j;
   j["id"] = id;
@@ -225,27 +229,12 @@ static json SerializeFilterForGui(const FilterConfig& f, int id) {
   j["sym_b"] = f.sym_b;
   j["sym_d"] = f.sym_d;
 
-  std::visit(
-      [&j](const auto& p) {
-        using T = std::decay_t<decltype(p)>;
-        if constexpr (std::is_same_v<T, RaypathParams>) {
-          j["type"] = "raypath";
-          j["raypath_text"] = p.raypath_text;
-        } else if constexpr (std::is_same_v<T, EntryExitParams>) {
-          // Persist as text so partial / invalid input round-trips without
-          // surprise int parsing; readers parse on the fly. Length mode and
-          // bounds are GUI-side state (the mode dictates which bound is
-          // user-visible); always serialize so Cancel/Reload preserves the
-          // dropdown selection.
-          j["type"] = "entry_exit";
-          j["entry_text"] = p.entry_text;
-          j["exit_text"] = p.exit_text;
-          j["length_mode"] = p.length_mode;
-          j["min_len"] = p.min_len;
-          j["max_len"] = p.max_len;
-        }
-      },
-      f.param);
+  j["type"] = "sop";
+  json summands = json::array();
+  for (const auto& s : f.param) {
+    summands.push_back(s.text);
+  }
+  j["summands"] = std::move(summands);
 
   return j;
 }
@@ -397,105 +386,226 @@ static int ClampIdValue(int v, const char* field_name) {
   return v;
 }
 
-// Translate a GUI FilterConfig into one or more core JSON filter entries.
+// ========== Unified sum-of-products expansion (single SYNC source) ==========
 //
-// raypath: single-segment → 1 simple raypath; multi-segment (';' OR) → N simple
-//          raypaths + 1 complex referencing them (composition: nested arrays of
-//          ids; see plan F3/F5).
-// entry_exit/direction: 1 simple filter of the matching type.
-// next_filter_id_base: caller's id counter; result.main_id = next_filter_id_base + filters.size() - 1
-//                      (matters only for multi-raypath where main_id is the complex filter's id).
-//
-// SYNC: this is the JSON-emit twin of ExpandFilterToStruct (the C-struct emit, below). Any
-// change to the raypath/EE expansion (segment/pair -> N simple + 1 complex-of-singletons)
-// must update both; the struct-vs-JSON cross-check test (filter_expand_struct_vs_json) will
-// catch a drift, but keep the two in step here too.
-static FilterCoreResult SerializeFilterForCore(const FilterConfig& f, int next_filter_id_base) {
-  FilterCoreResult result;
-  result.main_id = next_filter_id_base;
+// Backend-agnostic intermediate representation of a GUI FilterConfig fully
+// expanded to disjunctive normal form: an OR of clauses, each clause an AND of
+// simple-filter term descriptors. Both serialization twins (SerializeFilterForCore
+// = JSON, ExpandFilterToStruct = C struct) translate the SAME ExpandedFilter, so
+// they can never drift apart (the scrum-327 parallel-twin lesson: two hand-written
+// expansion loops caused three Majors).
+struct SimpleTermDesc {
+  bool is_raypath = true;
+  std::vector<int> raypath;         // valid when is_raypath (empty == match-all)
+  int entry = kEEWildcardSentinel;  // valid when !is_raypath
+  int exit = kEEWildcardSentinel;   // valid when !is_raypath
+  int min_len = 1;                  // decoded EE length bounds (see EELenBounds)
+  int max_len = -1;                 // -1 == unbounded
+};
+struct ExpandedFilter {
+  std::vector<std::vector<SimpleTermDesc>> clauses;  // OR of (AND of terms)
+  bool overflow = false;                             // set when expansion would exceed ABI clause/term caps
+};
 
+// Step A — one Factor → its OR-of-alternatives simple-term list (length >= 1).
+// Reuses the existing type-internal multi-value atoms (ParseRaypathTextMultiSegment
+// for ';' OR; ParseFaceNumberList + DecodeLengthMode for EE comma OR).
+static std::vector<SimpleTermDesc> FactorAlternatives(const Factor& factor) {
+  std::vector<SimpleTermDesc> alts;
   std::visit(
       [&](const auto& p) {
         using T = std::decay_t<decltype(p)>;
         if constexpr (std::is_same_v<T, RaypathParams>) {
-          // Multi-segment OR: emit N simple raypaths + 1 complex referencing them.
           auto segs = ParseRaypathTextMultiSegment(p.raypath_text);
-          if (segs.size() <= 1) {
-            // Single-segment (incl. empty text → empty raypath array).
-            int id = next_filter_id_base;
-            result.filters.push_back(BuildCoreSimpleFilterJson(
-                f, id, "raypath", [&](json& j) { j["raypath"] = segs.empty() ? std::vector<int>{} : segs[0]; }));
-            result.main_id = id;
+          if (segs.empty()) {
+            // Empty text == match-all raypath: a single alternative, empty seq.
+            alts.emplace_back();
           } else {
-            std::vector<int> child_ids;
-            child_ids.reserve(segs.size());
-            for (size_t i = 0; i < segs.size(); ++i) {
-              int id = next_filter_id_base + static_cast<int>(i);
-              child_ids.push_back(id);
-              result.filters.push_back(
-                  BuildCoreSimpleFilterJson(f, id, "raypath", [&](json& j) { j["raypath"] = segs[i]; }));
+            for (auto& seg : segs) {
+              SimpleTermDesc d;
+              d.is_raypath = true;
+              d.raypath = std::move(seg);
+              alts.push_back(std::move(d));
             }
-            int complex_id = next_filter_id_base + static_cast<int>(segs.size());
-            // Build composition as nested-array form [[id1],[id2],...] — matches
-            // ConfigManager two-pass parser (see plan F5).
-            json composition = json::array();
-            for (int cid : child_ids) {
-              composition.push_back(json::array({ cid }));
-            }
-            result.filters.push_back(BuildCoreSimpleFilterJson(
-                f, complex_id, "complex", [&composition](json& j) { j["composition"] = composition; }));
-            result.main_id = complex_id;
           }
         } else if constexpr (std::is_same_v<T, EntryExitParams>) {
-          // Multi-value OR is expanded to N×M EE SimpleFilters + 1 ComplexFilter,
-          // mirroring the raypath multi-segment path above. Wildcard (empty
-          // text) collapses to a single sentinel so the cartesian product
-          // still yields one pair → one filter. Length bounds (decoded from
-          // the GUI mode dropdown) are written onto each EE SimpleFilter.
           auto entries = ParseFaceNumberList(p.entry_text);
           auto exits = ParseFaceNumberList(p.exit_text);
           const auto bounds = DecodeLengthMode(p.length_mode, p.min_len, p.max_len);
-          const size_t pair_count = entries.size() * exits.size();
-
-          auto emit_ee = [&](int id, int entry_int, int exit_int) {
-            result.filters.push_back(BuildCoreSimpleFilterJson(f, id, "entry_exit", [&](json& j) {
-              if (entry_int != kEEWildcardSentinel) {
-                j["entry"] = ClampIdValue(entry_int, "entry");
-              }
-              if (exit_int != kEEWildcardSentinel) {
-                j["exit"] = ClampIdValue(exit_int, "exit");
-              }
-              WriteEELengthFields(j, bounds);
-            }));
-          };
-
-          if (pair_count <= 1) {
-            int id = next_filter_id_base;
-            emit_ee(id, entries[0], exits[0]);
-            result.main_id = id;
-          } else {
-            std::vector<int> child_ids;
-            child_ids.reserve(pair_count);
-            int idx = 0;
-            for (int e : entries) {
-              for (int x : exits) {
-                int id = next_filter_id_base + idx++;
-                child_ids.push_back(id);
-                emit_ee(id, e, x);
-              }
+          for (int e : entries) {
+            for (int x : exits) {
+              SimpleTermDesc d;
+              d.is_raypath = false;
+              d.entry = e;
+              d.exit = x;
+              d.min_len = bounds.min_len;
+              d.max_len = bounds.max_len;
+              alts.push_back(d);
             }
-            int complex_id = next_filter_id_base + static_cast<int>(pair_count);
-            json composition = json::array();
-            for (int cid : child_ids) {
-              composition.push_back(json::array({ cid }));
-            }
-            result.filters.push_back(BuildCoreSimpleFilterJson(
-                f, complex_id, "complex", [&composition](json& j) { j["composition"] = composition; }));
-            result.main_id = complex_id;
           }
         }
       },
-      f.param);
+      factor);
+  return alts;
+}
+
+// Steps A–C — GUI FilterConfig → OR of AND-clauses. A summand (AND-of-factors)
+// distributes over each factor's internal OR via a Cartesian product (DNF):
+// AND(EE{3,4}, RP) = OR(AND(EE3,RP), AND(EE4,RP)). Concatenating every summand's
+// clauses gives the full clause set. THIS is the single expansion source.
+static ExpandedFilter ExpandSopToClauses(const FilterConfig& f) {
+  ExpandedFilter ef;
+  const size_t kMaxClauses = static_cast<size_t>(LUMICE_MAX_CONFIG_CLAUSES);
+  const size_t kMaxTerms = static_cast<size_t>(LUMICE_MAX_CONFIG_TERMS);
+  for (const auto& summand : f.param) {
+    if (summand.factors.empty()) {
+      // A factor-less row (e.g. blank summand text) == match-all: one clause
+      // with a single match-all raypath term (mirrors the degenerate default).
+      if (ef.clauses.size() + 1 > kMaxClauses) {
+        ef.overflow = true;
+        break;
+      }
+      ef.clauses.push_back(std::vector<SimpleTermDesc>{ SimpleTermDesc{} });
+      continue;
+    }
+    // Multi-factor AND rows produce multi-term clauses; cap term count per clause.
+    if (summand.factors.size() > kMaxTerms) {
+      ef.overflow = true;
+      break;
+    }
+    // Cartesian product across the summand's factors. Per-factor alternative
+    // counts are individually bounded (facelist / raypath-segment sizes), but the
+    // cross-factor product (the AND-chain) is exponential — so cap the RUNNING
+    // product BEFORE materializing each level, and cap the total across summands,
+    // against the ABI clause limit. A crafted .lmc summands row (not input-box
+    // limited) can otherwise force unbounded materialization (code-review-01
+    // Major 2 / plan R4). On overflow, both emit twins degrade gracefully.
+    std::vector<std::vector<SimpleTermDesc>> acc{ {} };  // seed with one empty clause
+    for (const auto& factor : summand.factors) {
+      auto alts = FactorAlternatives(factor);
+      const size_t alt_n = alts.empty() ? 1 : alts.size();
+      if (ef.clauses.size() + acc.size() * alt_n > kMaxClauses) {
+        ef.overflow = true;
+        break;
+      }
+      std::vector<std::vector<SimpleTermDesc>> next;
+      next.reserve(acc.size() * alt_n);
+      for (const auto& clause : acc) {
+        for (const auto& alt : alts) {
+          auto extended = clause;
+          extended.push_back(alt);
+          next.push_back(std::move(extended));
+        }
+      }
+      acc = std::move(next);
+    }
+    if (ef.overflow) {
+      break;
+    }
+    for (auto& clause : acc) {
+      ef.clauses.push_back(std::move(clause));
+    }
+  }
+  if (ef.overflow) {
+    // Bounded degenerate stand-in so downstream never sees a huge tree; both
+    // emit twins detect ef.overflow and handle it (struct drops, JSON warns).
+    ef.clauses.clear();
+    ef.clauses.push_back(std::vector<SimpleTermDesc>{ SimpleTermDesc{} });
+    return ef;
+  }
+  // Defensive: a FilterConfig with an empty param vector is not a valid state
+  // (the default is a 1-row SoP), but never emit zero clauses.
+  if (ef.clauses.empty()) {
+    ef.clauses.push_back(std::vector<SimpleTermDesc>{ SimpleTermDesc{} });
+  }
+  return ef;
+}
+
+// True when the expansion collapses to a single simple filter (1 clause, 1 term):
+// single raypath / single EE / single-factor single-alternative row. Such filters
+// emit ONE simple filter with no wrapping complex (byte-equivalent to pre-uplift).
+//
+// ⚠️ NOT the same as gui_state.hpp's IsDegenerateSingleFactor (code-review-05 Minor 1):
+// this operates on the POST-Cartesian ExpandedFilter (clause/term level); that operates
+// on the FilterConfig SoP (row/factor level). They are NOT equivalent — e.g. a single-row
+// single-factor raypath with ';' multi-segments is IsDegenerateSingleFactor()==true but
+// expands to multiple clauses (IsDegenerateSingleTerm()==false). Do not assume they sync.
+static bool IsDegenerateSingleTerm(const ExpandedFilter& ef) {
+  return ef.clauses.size() == 1 && ef.clauses[0].size() == 1;
+}
+
+// Translate a GUI FilterConfig into one or more core JSON filter entries.
+//
+// Degenerate (1 clause 1 term) → 1 simple filter. Otherwise → N simple filters
+// (one per clause-term, no dedup — matches the pre-uplift OR-of-singletons and
+// keeps existing configs byte-equivalent) + 1 complex whose composition is the
+// nested-array [[t00,t01,..],[t10,..],..] (outer OR = clause, inner AND = terms).
+// next_filter_id_base: caller's id counter; result.main_id = the id a scattering
+// entry references (the complex id when expanded, else the sole simple id).
+//
+// SYNC: this is the JSON-emit twin of ExpandFilterToStruct (the C-struct emit,
+// below). Both translate the SAME ExpandSopToClauses(f) output — do NOT hand-write
+// a parallel expansion here. The struct-vs-JSON cross-check test
+// (filter_expand_struct_vs_json) is the enforcing gate.
+static FilterCoreResult SerializeFilterForCore(const FilterConfig& f, int next_filter_id_base) {
+  FilterCoreResult result;
+  result.main_id = next_filter_id_base;
+  const ExpandedFilter ef = ExpandSopToClauses(f);
+  if (ef.overflow) {
+    // Why the twins diverge on overflow (code-review-02 Minor 2): SerializeFilterForCore
+    // must stay a TOTAL function returning a valid FilterCoreResult (a scattering entry
+    // references result.main_id), so on overflow it emits a bounded match-all stand-in
+    // rather than failing. The struct twin (ExpandFilterToStruct) instead `return false`s
+    // because its caller FillLumiceConfig has a graceful bail. The stand-in must never
+    // reach a real export: the sole production caller of SerializeCoreConfig
+    // (DoExportConfigJson) pre-checks via FillLumiceConfig and aborts with a user-visible
+    // warning before serializing (code-review-02 Major 1). This log is the last-resort
+    // non-silent signal for any other caller.
+    GUI_LOG_WARNING(
+        "[FileIO] Filter '{}' expansion exceeds complex-filter limits ({} clauses / {} terms max); "
+        "emitting a bounded match-all stand-in (export path rejects this upstream).",
+        f.name, LUMICE_MAX_CONFIG_CLAUSES, LUMICE_MAX_CONFIG_TERMS);
+  }
+
+  auto build_simple = [&](int id, const SimpleTermDesc& t) -> json {
+    if (t.is_raypath) {
+      return BuildCoreSimpleFilterJson(f, id, "raypath", [&](json& j) { j["raypath"] = t.raypath; });
+    }
+    return BuildCoreSimpleFilterJson(f, id, "entry_exit", [&](json& j) {
+      if (t.entry != kEEWildcardSentinel) {
+        j["entry"] = ClampIdValue(t.entry, "entry");
+      }
+      if (t.exit != kEEWildcardSentinel) {
+        j["exit"] = ClampIdValue(t.exit, "exit");
+      }
+      WriteEELengthFields(j, EELenBounds{ t.min_len, t.max_len });
+    });
+  };
+
+  if (IsDegenerateSingleTerm(ef)) {
+    int id = next_filter_id_base;
+    result.filters.push_back(build_simple(id, ef.clauses[0][0]));
+    result.main_id = id;
+    return result;
+  }
+
+  // Emit all simple filters first (clause order, term order within clause), then
+  // the complex last — matching the "children first, complex last" id ordering.
+  json composition = json::array();
+  int running = 0;
+  for (const auto& clause : ef.clauses) {
+    json clause_ids = json::array();
+    for (const auto& term : clause) {
+      int id = next_filter_id_base + running++;
+      result.filters.push_back(build_simple(id, term));
+      clause_ids.push_back(id);
+    }
+    composition.push_back(std::move(clause_ids));
+  }
+  int complex_id = next_filter_id_base + running;
+  result.filters.push_back(
+      BuildCoreSimpleFilterJson(f, complex_id, "complex", [&composition](json& j) { j["composition"] = composition; }));
+  result.main_id = complex_id;
 
   return result;
 }
@@ -684,9 +794,14 @@ static RenderConfig ParseRendererFromGuiJson(const json& jr) {
 
 // ========== GUI JSON Filter Helper ==========
 // Shared between new-format and old-format .lmc deserialization paths.
-// v=2 payload introduces a `type` discriminator; missing type defaults to
-// "raypath" so v=1 .lmc files (and any external JSON without a type) still
-// load as the raypath alternative with the same field semantics as before.
+//
+// Two on-disk shapes are read:
+//   - v=3 (task-serialization-bidirectional): filter carries "summands" (array
+//     of canonical AND-grammar text rows) → parsed into a full SumOfProducts.
+//   - v=1/v=2 (legacy): a `type` discriminator ("raypath"/"entry_exit"; missing
+//     defaults to "raypath"). Read losslessly and UPGRADED to a SoP via the
+//     canonical FromLegacyRaypath / FromLegacyEntryExit converters (';' fan-out
+//     for raypath, single EE row otherwise).
 
 static FilterConfig ParseFilterFromGuiJson(const json& jf) {
   FilterConfig f;
@@ -697,10 +812,32 @@ static FilterConfig ParseFilterFromGuiJson(const json& jf) {
   f.sym_b = jf.value("sym_b", FilterConfig{}.sym_b);
   f.sym_d = jf.value("sym_d", FilterConfig{}.sym_d);
 
+  // New sum-of-products form: reconstruct each SummandText from its canonical
+  // text (factors are a parse cache derived from text).
+  if (jf.contains("summands") && jf["summands"].is_array()) {
+    SumOfProducts sop;
+    for (const auto& js : jf["summands"]) {
+      if (!js.is_string()) {
+        // Loud, not silent: a corrupt .lmc with a non-string summand row is
+        // dropped, but the user is told (code-review-01 Minor 1).
+        GUI_LOG_WARNING("[FileIO] Filter summands entry is not a string; skipping row.");
+        continue;
+      }
+      std::string text = js.get<std::string>();
+      sop.push_back(SummandText{ text, ParseSummandText(text) });
+    }
+    if (sop.empty()) {
+      // Defensive: an empty summands array is not a valid state — fall back to
+      // the default 1-row / 1-factor empty-raypath SoP.
+      sop.push_back(SummandText{ std::string{}, std::vector<Factor>{ Factor{ RaypathParams{} } } });
+    }
+    f.param = std::move(sop);
+    return f;
+  }
+
+  // Legacy type-discriminated form → upgrade to SoP.
   std::string type = jf.value("type", "raypath");
-  if (type == "raypath") {
-    f.param = RaypathParams{ jf.value("raypath_text", std::string{}) };
-  } else if (type == "entry_exit") {
+  if (type == "entry_exit") {
     // Prefer text fields (post-task-filter-modal-polish-v1 schema); fall
     // back to legacy v2 int "entry" / "exit" for older .lmc files. An int
     // 0 → empty string keeps the user-visible "no value typed yet" state
@@ -733,16 +870,42 @@ static FilterConfig ParseFilterFromGuiJson(const json& jf) {
     if (p.max_len < 1) {
       p.max_len = 1;
     }
-    f.param = p;
+    f.param = FromLegacyEntryExit(p);
   } else {
-    GUI_LOG_WARNING("[FileIO] Unknown filter type '{}', defaulting to raypath", type);
-    f.param = RaypathParams{ jf.value("raypath_text", std::string{}) };
+    if (type != "raypath") {
+      GUI_LOG_WARNING("[FileIO] Unknown filter type '{}', defaulting to raypath", type);
+    }
+    // FromLegacyRaypath splits ';' multi-segment sugar into canonical OR rows.
+    f.param = FromLegacyRaypath(RaypathParams{ jf.value("raypath_text", std::string{}) });
   }
   return f;
 }
 
 
 // ========== Core Config Serialization (for LUMICE_CommitConfig) ==========
+
+bool BuildExportJsonOrWarn(const GuiState& state, std::string* out_json, std::string* out_warning) {
+  // Reuse the SAME overflow contract the simulation-commit path (DoRun) uses, so export
+  // and simulation reject an over-limit filter consistently. Without this, the JSON twin
+  // would emit a semantically-opposite match-all stand-in and export would silently write
+  // a wrong config (code-review-02/03 Major). Pure — no dialog/filesystem — so this reject
+  // path is directly unit-testable.
+  LUMICE_Config probe{};
+  FilterOverflowInfo overflow;
+  if (!FillLumiceConfig(state, &probe, &overflow)) {
+    if (out_warning) {
+      const std::string locator = FormatOverflowLocator(overflow);
+      *out_warning = "This filter has too many OR segments / values to export (limit " +
+                     std::to_string(LUMICE_MAX_CONFIG_CLAUSES) + "; " + locator +
+                     ").\nNo config was exported. Simplify the filter and try again.";
+    }
+    return false;
+  }
+  if (out_json) {
+    *out_json = SerializeCoreConfig(state);
+  }
+  return true;
+}
 
 std::string SerializeCoreConfig(const GuiState& state) {
   json root;
@@ -903,17 +1066,18 @@ static void FillCrystalParam(const CrystalConfig& c, int id, LUMICE_CrystalParam
 }
 
 // Struct analog of SerializeFilterForCore: expand a GUI FilterConfig into one or more
-// LUMICE_FilterParam entries — a single simple filter, or (for multi-segment raypath /
-// multi-value EE) N simple filters + 1 complex referencing them via an out->compositions[]
-// slot. Appends to out->filters[] starting at *filter_idx, assigning ids from next_filter_id
-// (a running counter, matching SerializeCoreConfig). Sets *out_main_id to the id a scattering
-// entry should reference (the complex id when expanded, else the sole simple id). All ABI-
-// bounds checks are performed up front, so on overflow the function returns false WITHOUT any
-// partial writes to the counts (*filter_idx / composition_count untouched).
+// LUMICE_FilterParam entries — a single simple filter, or (for multi-clause / multi-term SoP)
+// N simple filters + 1 complex referencing them via an out->compositions[] slot. Appends to
+// out->filters[] starting at *filter_idx, assigning ids from next_filter_id (a running counter,
+// matching SerializeCoreConfig). Sets *out_main_id to the id a scattering entry should reference
+// (the complex id when expanded, else the sole simple id). All ABI-bounds checks are performed up
+// front, so on overflow the function returns false WITHOUT any partial writes to the counts
+// (*filter_idx / composition_count untouched).
 //
-// SYNC: this mirrors SerializeFilterForCore (the JSON-emit twin) — any change to the
-// raypath/EE expansion (segment/pair -> N simple + 1 complex-of-singletons) must update both;
-// guarded by the struct-vs-JSON cross-check test.
+// SYNC: this is the C-struct emit twin of SerializeFilterForCore (the JSON emit). Both translate
+// the SAME ExpandSopToClauses(f) output — the clause/term/id ordering is fixed by the shared
+// expander, so the two are structurally identical by construction. The struct-vs-JSON cross-check
+// test (filter_expand_struct_vs_json) is the enforcing gate.
 static bool ExpandFilterToStruct(const FilterConfig& f, int next_filter_id, LUMICE_Config* out, int* filter_idx,
                                  int* out_main_id) {
   const int action = f.action;
@@ -924,97 +1088,72 @@ static bool ExpandFilterToStruct(const FilterConfig& f, int next_filter_id, LUMI
     dst->action = action;
     dst->symmetry = symmetry;
   };
+  auto fill_term = [&](LUMICE_FilterParam* dst, int id, const SimpleTermDesc& t) {
+    if (t.is_raypath) {
+      set_common(dst, id, LUMICE_FILTER_TYPE_RAYPATH);
+      dst->raypath_count =
+          static_cast<int>(std::min(t.raypath.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_RAYPATH_LEN)));
+      for (int k = 0; k < dst->raypath_count; k++) {
+        dst->raypath[k] = t.raypath[k];
+      }
+    } else {
+      set_common(dst, id, LUMICE_FILTER_TYPE_ENTRY_EXIT);
+      dst->ee_entry = (t.entry == kEEWildcardSentinel) ? -1 : ClampIdValue(t.entry, "entry");
+      dst->ee_exit = (t.exit == kEEWildcardSentinel) ? -1 : ClampIdValue(t.exit, "exit");
+      dst->ee_min_len = t.min_len;
+      dst->ee_max_len = t.max_len;
+    }
+  };
 
-  return std::visit(
-      [&](const auto& p) -> bool {
-        using T = std::decay_t<decltype(p)>;
-        if constexpr (std::is_same_v<T, RaypathParams>) {
-          auto segs = ParseRaypathTextMultiSegment(p.raypath_text);
-          auto fill_rp = [&](LUMICE_FilterParam* dst, int id, const std::vector<int>& seg) {
-            set_common(dst, id, LUMICE_FILTER_TYPE_RAYPATH);
-            dst->raypath_count =
-                static_cast<int>(std::min(seg.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_RAYPATH_LEN)));
-            for (int k = 0; k < dst->raypath_count; k++) {
-              dst->raypath[k] = seg[k];
-            }
-          };
-          if (segs.size() <= 1) {
-            if (*filter_idx >= LUMICE_MAX_CONFIG_FILTERS) {
-              return false;
-            }
-            fill_rp(&out->filters[(*filter_idx)++], next_filter_id, segs.empty() ? std::vector<int>{} : segs[0]);
-            *out_main_id = next_filter_id;
-            return true;
-          }
-          // Multi-segment OR: N simple raypaths + 1 complex (OR of singleton clauses).
-          const int n = static_cast<int>(segs.size());
-          if (n > LUMICE_MAX_CONFIG_CLAUSES || out->composition_count >= LUMICE_MAX_CONFIG_COMPLEX ||
-              *filter_idx + n + 1 > LUMICE_MAX_CONFIG_FILTERS) {
-            return false;
-          }
-          int comp_idx = out->composition_count++;
-          LUMICE_ComplexComposition* comp = &out->compositions[comp_idx];
-          comp->clause_count = n;
-          for (int i = 0; i < n; i++) {
-            int cid = next_filter_id + i;
-            fill_rp(&out->filters[(*filter_idx)++], cid, segs[i]);
-            comp->term_counts[i] = 1;
-            comp->clauses[i][0] = cid;
-          }
-          int complex_id = next_filter_id + n;
-          LUMICE_FilterParam* cdst = &out->filters[(*filter_idx)++];
-          set_common(cdst, complex_id, LUMICE_FILTER_TYPE_COMPLEX);
-          cdst->composition_index = comp_idx;
-          *out_main_id = complex_id;
-          return true;
-        } else if constexpr (std::is_same_v<T, EntryExitParams>) {
-          auto entries = ParseFaceNumberList(p.entry_text);
-          auto exits = ParseFaceNumberList(p.exit_text);
-          const auto bounds = DecodeLengthMode(p.length_mode, p.min_len, p.max_len);
-          const int pair_count = static_cast<int>(entries.size() * exits.size());
-          auto fill_ee = [&](LUMICE_FilterParam* dst, int id, int e, int x) {
-            set_common(dst, id, LUMICE_FILTER_TYPE_ENTRY_EXIT);
-            dst->ee_entry = (e == kEEWildcardSentinel) ? -1 : ClampIdValue(e, "entry");
-            dst->ee_exit = (x == kEEWildcardSentinel) ? -1 : ClampIdValue(x, "exit");
-            dst->ee_min_len = bounds.min_len;
-            dst->ee_max_len = bounds.max_len;
-          };
-          if (pair_count <= 1) {
-            if (*filter_idx >= LUMICE_MAX_CONFIG_FILTERS) {
-              return false;
-            }
-            fill_ee(&out->filters[(*filter_idx)++], next_filter_id, entries[0], exits[0]);
-            *out_main_id = next_filter_id;
-            return true;
-          }
-          if (pair_count > LUMICE_MAX_CONFIG_CLAUSES || out->composition_count >= LUMICE_MAX_CONFIG_COMPLEX ||
-              *filter_idx + pair_count + 1 > LUMICE_MAX_CONFIG_FILTERS) {
-            return false;
-          }
-          int comp_idx = out->composition_count++;
-          LUMICE_ComplexComposition* comp = &out->compositions[comp_idx];
-          comp->clause_count = pair_count;
-          int i = 0;
-          for (int e : entries) {
-            for (int x : exits) {
-              int cid = next_filter_id + i;
-              fill_ee(&out->filters[(*filter_idx)++], cid, e, x);
-              comp->term_counts[i] = 1;
-              comp->clauses[i][0] = cid;
-              i++;
-            }
-          }
-          int complex_id = next_filter_id + pair_count;
-          LUMICE_FilterParam* cdst = &out->filters[(*filter_idx)++];
-          set_common(cdst, complex_id, LUMICE_FILTER_TYPE_COMPLEX);
-          cdst->composition_index = comp_idx;
-          *out_main_id = complex_id;
-          return true;
-        } else {
-          return false;  // unreachable: FilterParamVariant only has Raypath/EntryExit
-        }
-      },
-      f.param);
+  const ExpandedFilter ef = ExpandSopToClauses(f);
+  if (ef.overflow) {
+    return false;  // exceeds ABI clause/term caps — graceful drop (no partial write)
+  }
+
+  if (IsDegenerateSingleTerm(ef)) {
+    if (*filter_idx >= LUMICE_MAX_CONFIG_FILTERS) {
+      return false;
+    }
+    fill_term(&out->filters[(*filter_idx)++], next_filter_id, ef.clauses[0][0]);
+    *out_main_id = next_filter_id;
+    return true;
+  }
+
+  // ABI bounds pre-check — every limit is checked BEFORE any write so an overflow
+  // returns false with no partial mutation (the "no partial writes on overflow"
+  // contract FillLumiceConfig relies on for graceful degradation).
+  int total_terms = 0;
+  for (const auto& clause : ef.clauses) {
+    if (static_cast<int>(clause.size()) > LUMICE_MAX_CONFIG_TERMS) {
+      return false;  // AND terms per clause (newly reachable via multi-factor rows)
+    }
+    total_terms += static_cast<int>(clause.size());
+  }
+  if (static_cast<int>(ef.clauses.size()) > LUMICE_MAX_CONFIG_CLAUSES ||
+      out->composition_count >= LUMICE_MAX_CONFIG_COMPLEX ||
+      *filter_idx + total_terms + 1 > LUMICE_MAX_CONFIG_FILTERS) {
+    return false;
+  }
+
+  int comp_idx = out->composition_count++;
+  LUMICE_ComplexComposition* comp = &out->compositions[comp_idx];
+  comp->clause_count = static_cast<int>(ef.clauses.size());
+  int running = 0;
+  for (size_t cl = 0; cl < ef.clauses.size(); ++cl) {
+    const auto& clause = ef.clauses[cl];
+    comp->term_counts[cl] = static_cast<int>(clause.size());
+    for (size_t tt = 0; tt < clause.size(); ++tt) {
+      int cid = next_filter_id + running++;
+      fill_term(&out->filters[(*filter_idx)++], cid, clause[tt]);
+      comp->clauses[cl][tt] = cid;
+    }
+  }
+  int complex_id = next_filter_id + running;  // == next_filter_id + total_terms
+  LUMICE_FilterParam* cdst = &out->filters[(*filter_idx)++];
+  set_common(cdst, complex_id, LUMICE_FILTER_TYPE_COMPLEX);
+  cdst->composition_index = comp_idx;
+  *out_main_id = complex_id;
+  return true;
 }
 
 // Returns false if a filter expansion exceeded the ABI bounds (composition pool / clause /
@@ -1214,12 +1353,23 @@ static std::string DecodeEEFaceFromJson(const json& jf, const char* key) {
   return (v < 0) ? std::string{} : std::to_string(v);
 }
 
-// Reverse of SerializeFilterForCore for the degenerate forms it produces:
-// a core "complex" filter whose composition is a pure OR-of-singleton-product
-// over N child simple filters of one type (raypath OR entry_exit) is mapped
-// back to a single GUI FilterConfig with multi-segment RaypathParams or
-// multi-value EntryExitParams. Anything not strictly matching that shape
-// returns false with a fail_reason for the caller's loud warning.
+// Reverse of SerializeFilterForCore — reconstruct a GUI FilterConfig from a core
+// "complex" filter. The sum-of-products model (task-serialization-bidirectional)
+// makes the GUI able to express a general OR-of-(AND-of-terms): each composition
+// product (clause) becomes one SummandText, and each term id in the product
+// becomes one Factor (raypath / entry_exit). This GENERALIZES the earlier
+// explore-271 shape, which could only reverse a pure OR-of-singleton-products of
+// one uniform child type (true AND / mixed type / non-factorizable EE were
+// loudly rejected). Those are now reconstructed directly.
+//
+// Rejection is now reserved for genuinely non-representable inputs (GUI `Factor`
+// has only raypath / entry_exit arms):
+//   - a term id whose child type is not raypath/entry_exit (e.g. direction/crystal)
+//   - a term id that points to another complex filter (nested complex)
+//   - a term id with no matching child in the pool (dangling reference)
+//   - a malformed / empty composition or non-integer term id
+// On rejection returns false with fail_reason for the caller's loud warning
+// (explore-271 anti-silent-miscull contract preserved for the unsupported cases).
 static bool TryReconstructComplexFilter(const json& jf, const std::map<int, json>& raw, FilterConfig& out,
                                         std::string& fail_reason) {
   const int complex_id = jf.value("id", 0);
@@ -1227,42 +1377,6 @@ static bool TryReconstructComplexFilter(const json& jf, const std::map<int, json
   if (!jf.contains("composition") || !jf["composition"].is_array() || jf["composition"].empty()) {
     fail_reason = "complex filter id=" + std::to_string(complex_id) + ": composition missing/empty";
     return false;
-  }
-
-  std::vector<int> child_ids;
-  child_ids.reserve(jf["composition"].size());
-  for (const auto& product : jf["composition"]) {
-    if (!product.is_array() || product.size() != 1) {
-      fail_reason = "complex filter id=" + std::to_string(complex_id) +
-                    ": AND-of-products is not representable in GUI (only pure OR is)";
-      return false;
-    }
-    if (!product[0].is_number_integer()) {
-      fail_reason = "complex filter id=" + std::to_string(complex_id) + ": composition entry is not an integer id";
-      return false;
-    }
-    child_ids.push_back(product[0].get<int>());
-  }
-
-  std::vector<const json*> child_json;
-  child_json.reserve(child_ids.size());
-  std::string child_type;
-  for (int cid : child_ids) {
-    auto it = raw.find(cid);
-    if (it == raw.end()) {
-      fail_reason =
-          "complex filter id=" + std::to_string(complex_id) + ": child id=" + std::to_string(cid) + " not found";
-      return false;
-    }
-    const std::string t = it->second.value("type", std::string{});
-    if (child_type.empty()) {
-      child_type = t;
-    } else if (t != child_type) {
-      fail_reason = "complex filter id=" + std::to_string(complex_id) + ": child filter types are not uniform (mixed " +
-                    child_type + "/" + t + ")";
-      return false;
-    }
-    child_json.push_back(&it->second);
   }
 
   FilterConfig f;
@@ -1274,121 +1388,70 @@ static bool TryReconstructComplexFilter(const json& jf, const std::map<int, json
   f.sym_b = (sym.find('B') != std::string::npos);
   f.sym_d = (sym.find('D') != std::string::npos);
 
-  if (child_type == "raypath") {
-    std::string text;
-    for (size_t i = 0; i < child_json.size(); ++i) {
-      const auto& cj = *child_json[i];
-      if (!cj.contains("raypath") || !cj["raypath"].is_array()) {
-        fail_reason =
-            "complex filter id=" + std::to_string(complex_id) + ": child raypath filter missing 'raypath' array";
-        return false;
-      }
-      if (cj["raypath"].empty()) {
-        // An empty segment would yield a malformed multi-segment text (e.g.
-        // "3-5;;1-3"); SerializeFilterForCore never emits this, so refuse and
-        // let the loud warning fire rather than fabricate an illegal raypath.
-        fail_reason =
-            "complex filter id=" + std::to_string(complex_id) + ": child raypath filter has empty 'raypath' array";
-        return false;
-      }
-      if (i > 0) {
-        text += ';';
-      }
-      for (size_t k = 0; k < cj["raypath"].size(); ++k) {
-        if (k > 0) {
-          text += kRaypathSepStr;
-        }
-        text += std::to_string(cj["raypath"][k].get<int>());
-      }
-    }
-    f.param = RaypathParams{ text };
-    out = f;
-    return true;
-  }
-
-  if (child_type == "entry_exit") {
-    // Decode each child's (entry, exit) pair. Wildcard (missing / null) →
-    // empty text; otherwise stringified integer. Then enforce strict
-    // factorization: the children must be exactly the cartesian product of
-    // the unique entry texts × unique exit texts; if any pair is missing or
-    // duplicated, refuse the rebuild and let the loud warning fire.
-    std::vector<std::pair<std::string, std::string>> pairs;
-    pairs.reserve(child_json.size());
-
-    int first_length_mode = 0;
-    int first_min_len = 1;
-    int first_max_len = 1;
-    DecodeEELengthFromJson(*child_json[0], first_length_mode, first_min_len, first_max_len);
-
-    for (size_t i = 0; i < child_json.size(); ++i) {
-      const auto& cj = *child_json[i];
-      pairs.emplace_back(DecodeEEFaceFromJson(cj, "entry"), DecodeEEFaceFromJson(cj, "exit"));
-      if (i > 0) {
-        int lm = 0;
-        int mn = 1;
-        int mx = 1;
-        DecodeEELengthFromJson(cj, lm, mn, mx);
-        if (lm != first_length_mode || mn != first_min_len || mx != first_max_len) {
-          fail_reason =
-              "complex filter id=" + std::to_string(complex_id) + ": EE children have inconsistent length bounds";
-          return false;
-        }
-      }
-    }
-
-    std::vector<std::string> entries_unique;
-    std::vector<std::string> exits_unique;
-    for (const auto& [e, x] : pairs) {
-      if (std::find(entries_unique.begin(), entries_unique.end(), e) == entries_unique.end()) {
-        entries_unique.push_back(e);
-      }
-      if (std::find(exits_unique.begin(), exits_unique.end(), x) == exits_unique.end()) {
-        exits_unique.push_back(x);
-      }
-    }
-
-    if (entries_unique.size() * exits_unique.size() != pairs.size()) {
-      fail_reason = "complex filter id=" + std::to_string(complex_id) +
-                    ": EE pairs do not factorize (not a full cartesian product)";
+  SumOfProducts sop;
+  for (const auto& product : jf["composition"]) {  // product = clause = AND of term ids
+    if (!product.is_array() || product.empty()) {
+      fail_reason = "complex filter id=" + std::to_string(complex_id) + ": composition clause is not a non-empty array";
       return false;
     }
-    std::vector<std::vector<bool>> seen(entries_unique.size(), std::vector<bool>(exits_unique.size(), false));
-    for (const auto& [e, x] : pairs) {
-      auto ei = std::find(entries_unique.begin(), entries_unique.end(), e) - entries_unique.begin();
-      auto xi = std::find(exits_unique.begin(), exits_unique.end(), x) - exits_unique.begin();
-      if (seen[ei][xi]) {
-        fail_reason = "complex filter id=" + std::to_string(complex_id) + ": EE pair (" + e + "," + x + ") duplicated";
+    std::vector<Factor> factors;
+    factors.reserve(product.size());
+    for (const auto& term : product) {
+      if (!term.is_number_integer()) {
+        fail_reason = "complex filter id=" + std::to_string(complex_id) + ": composition entry is not an integer id";
         return false;
       }
-      seen[ei][xi] = true;
-    }
-
-    std::sort(entries_unique.begin(), entries_unique.end());
-    std::sort(exits_unique.begin(), exits_unique.end());
-    auto join_csv = [](const std::vector<std::string>& xs) {
-      std::string s;
-      for (size_t i = 0; i < xs.size(); ++i) {
-        if (i > 0) {
-          s += ',';
-        }
-        s += xs[i];
+      const int cid = term.get<int>();
+      auto it = raw.find(cid);
+      if (it == raw.end()) {
+        fail_reason =
+            "complex filter id=" + std::to_string(complex_id) + ": child id=" + std::to_string(cid) + " not found";
+        return false;
       }
-      return s;
-    };
-    EntryExitParams p;
-    p.entry_text = join_csv(entries_unique);
-    p.exit_text = join_csv(exits_unique);
-    p.length_mode = first_length_mode;
-    p.min_len = first_min_len;
-    p.max_len = first_max_len;
-    f.param = p;
-    out = f;
-    return true;
+      const json& cj = it->second;
+      const std::string ctype = cj.value("type", std::string{});
+      // NOTE: a MISSING/empty `type` is malformed core-JSON and must fall to the loud
+      // reject branch below (explore-271 anti-silent-miscull contract) — do NOT fold it
+      // into the raypath branch, which would silently rewrite it into a match-all filter
+      // (code-review-04 Major 1). Only an empty `raypath` ARRAY (with type=="raypath") is
+      // the legitimate match-all wildcard.
+      if (ctype == "raypath") {
+        // Join the raypath face ids with '-'. An empty/absent array is the
+        // match-all raypath (empty text) — representable as a wildcard factor.
+        std::string text;
+        if (cj.contains("raypath") && cj["raypath"].is_array()) {
+          for (size_t k = 0; k < cj["raypath"].size(); ++k) {
+            if (k > 0) {
+              text += kRaypathSepStr;
+            }
+            text += std::to_string(cj["raypath"][k].get<int>());
+          }
+        }
+        factors.emplace_back(RaypathParams{ text });
+      } else if (ctype == "entry_exit") {
+        EntryExitParams p;
+        p.entry_text = DecodeEEFaceFromJson(cj, "entry");
+        p.exit_text = DecodeEEFaceFromJson(cj, "exit");
+        DecodeEELengthFromJson(cj, p.length_mode, p.min_len, p.max_len);
+        factors.emplace_back(std::move(p));
+      } else if (ctype == "complex") {
+        fail_reason = "complex filter id=" + std::to_string(complex_id) + ": child id=" + std::to_string(cid) +
+                      " is itself a complex filter (nested complex not representable in GUI)";
+        return false;
+      } else {
+        fail_reason = "complex filter id=" + std::to_string(complex_id) + ": child id=" + std::to_string(cid) +
+                      " has unsupported type '" + ctype + "' (GUI factors are raypath / entry_exit only)";
+        return false;
+      }
+    }
+    // Canonical text is derived from the reconstructed factors; factors is the
+    // parse cache carried alongside it.
+    sop.push_back(SummandText{ FormatSummandText(factors), std::move(factors) });
   }
 
-  fail_reason =
-      "complex filter id=" + std::to_string(complex_id) + ": unsupported child filter type '" + child_type + "'";
-  return false;
+  f.param = std::move(sop);
+  out = f;
+  return true;
 }
 
 bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
@@ -1453,7 +1516,7 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
             text += std::to_string(jf["raypath"][i].get<int>());
           }
         }
-        f.param = RaypathParams{ text };
+        f.SetRaypath(RaypathParams{ text });
       } else if (type_str == "entry_exit") {
         // core JSON keeps int "entry" / "exit" — translate to GUI's text
         // representation. Absent or explicit-null fields are the wildcard
@@ -1464,20 +1527,19 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
         p.entry_text = DecodeEEFaceFromJson(jf, "entry");
         p.exit_text = DecodeEEFaceFromJson(jf, "exit");
         DecodeEELengthFromJson(jf, p.length_mode, p.min_len, p.max_len);
-        f.param = p;
+        f.SetEntryExit(p);
       } else {
         GUI_LOG_WARNING("[FileIO] Unknown filter type '{}' on core JSON import, defaulting to empty raypath", type_str);
-        f.param = RaypathParams{};
+        f.SetRaypath(RaypathParams{});
       }
       filter_map[id] = f;
     }
 
-    // Pass 2b: reverse-map degenerate complex filters (pure OR-of-singleton
-    // products over uniform-type simple children). Non-degenerate complex
-    // filters (real AND-of-ORs, mixed child types, non-factorizable EE pair
-    // sets) cannot be expressed in the GUI's flat FilterConfig — emit a loud
-    // warning so the user notices the silent culling change instead of
-    // staring at a wrong image (explore-271 root cause).
+    // Pass 2b: reverse-map complex filters into GUI sum-of-products (each
+    // composition clause → a SummandText, each term id → a Factor). Only
+    // genuinely non-representable inputs (child type not raypath/entry_exit,
+    // nested complex, dangling reference) are rejected with a loud warning so
+    // the user notices the silent culling instead of a wrong image (explore-271).
     for (const auto& entry : raw_filter_json) {
       const int id = entry.first;
       const json& jf = entry.second;
@@ -1725,10 +1787,12 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   root["right_panel_collapsed"] = state.right_panel_collapsed;
   root["modal_layout_vertical"] = state.modal_layout_vertical;
 
-  // Schema version (added in v=2 along with the filter `type` discriminator).
-  // Loader is tolerant of missing field (defaults to v=1 fallback path); this
-  // is a future-proofing signal, not a load gate (see plan §2 设计点 7).
-  root["schema_version"] = 2;
+  // Schema version. v=2 added the filter `type` discriminator; v=3
+  // (task-serialization-bidirectional) replaces the per-filter degenerate form
+  // with the full sum-of-products "summands" array. Loader is tolerant of older
+  // forms (v=1/v=2 filters upgrade to a SoP), so this is a soft signal, not a
+  // load gate — the binary kLmcVersion header is the actual gate (see §2.7).
+  root["schema_version"] = 3;
 
   return root.dump(2);
 }
@@ -1944,11 +2008,15 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
 
 static constexpr uint32_t kLmcMagic = 0x00434D4C;  // "LMC\0" as little-endian uint32
 // v=1 → v=2 bump introduced the FilterConfig variant + per-filter `type` field.
-// v=1 files are still loadable via the fallback path in LoadLmcFile (filter
-// payload silently defaults to type="raypath", matching the pre-variant
-// layout). v=2 files cannot be read by older binaries (they reject any
-// version != kLmcVersion). See plan §3 兼容性策略.
-static constexpr uint32_t kLmcVersion = 2;
+// v=2 → v=3 bump (task-serialization-bidirectional) replaces the per-filter
+// degenerate form with the sum-of-products "summands" array. v=1/v=2 files are
+// still loadable (their filters upgrade to a SoP via FromLegacyRaypath /
+// FromLegacyEntryExit); newer files are rejected by older binaries (they reject
+// any version > kLmcVersion). The bump is mandatory: without it an old binary
+// (gate=2) would pass a v=3 file's header and then silently load empty filters
+// (the summands array carries no legacy `type`/`raypath_text`). .lmc is a
+// GUI-internal git-ignored format with no external release contract.
+static constexpr uint32_t kLmcVersion = 3;
 static constexpr uint32_t kLmcHeaderSize = 44;
 static constexpr uint32_t kLmcFlagHasTexture = 0x1;
 

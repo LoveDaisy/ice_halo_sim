@@ -2,10 +2,13 @@
 #define LUMICE_GUI_RAYPATH_SEGMENTS_HPP
 
 #include <cctype>
+#include <charconv>
 #include <cstdio>
 #include <string>
+#include <variant>
 #include <vector>
 
+#include "gui/gui_state.hpp"  // Factor / SummandText / SumOfProducts / FormatEntryExitFactorText
 #include "include/lumice.h"
 
 namespace lumice::gui {
@@ -46,7 +49,7 @@ inline std::vector<std::string> SplitRaypathSegments(const std::string& text) {
   std::string cur;
   for (char c : text) {
     if (c == ';') {
-      out.push_back(TrimRaypathSegment(cur));
+      out.emplace_back(TrimRaypathSegment(cur));
       cur.clear();
     } else {
       cur.push_back(c);
@@ -272,6 +275,462 @@ inline std::vector<std::vector<int>> ParseRaypathTextMultiSegment(const std::str
       out.push_back(std::move(ints));
     }
   }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// AND-of-factors small-domain grammar (task-gui-sop-data-model).
+//
+// Row := factor_token ( '&' factor_token )*        // whitespace tolerated
+// factor_token := raypath_token | ee_token
+// raypath_token := single-segment raypath text (no ';')
+// ee_token    := 'entry:' facelist | 'exit:' facelist | 'len:' lengthspec
+// facelist    := comma-separated face-number list (empty → wildcard)
+// lengthspec  := 'N' (strict) | '<=N' (at most) | 'N-M' (range)
+//
+// Same-row entry:/exit:/len: tokens merge into a single EntryExitParams factor
+// (per plan §3.3). Raypath tokens produce independent RaypathParams factors
+// and flush any in-flight EE builder first.
+//
+// ⚠️ Cross-file: the EE token *formatter* (the inverse of ee_token parsing) is
+// `FormatEntryExitFactorText` in `gui_state.hpp` — kept there to avoid a reverse
+// include. When extending this grammar, update BOTH sides.
+// ---------------------------------------------------------------------------
+
+namespace detail {
+
+// Split a summand row on '&' into trimmed AND-factor tokens. Internal grammar
+// helper (not part of the public grammar interface) — hence in `detail::`.
+inline std::vector<std::string> SplitSummandTokens(const std::string& text) {
+  std::vector<std::string> out;
+  std::string cur;
+  bool any = false;
+  for (char c : text) {
+    if (c == '&') {
+      out.emplace_back(TrimRaypathSegment(cur));
+      cur.clear();
+      any = true;
+    } else {
+      cur.push_back(c);
+    }
+  }
+  if (any || !cur.empty()) {
+    out.emplace_back(TrimRaypathSegment(cur));
+  }
+  return out;
+}
+
+// True if `s` begins with `prefix` (case-sensitive).
+inline bool StartsWith(const std::string& s, const char* prefix) {
+  size_t i = 0;
+  while (prefix[i] != '\0') {
+    if (i >= s.size() || s[i] != prefix[i]) {
+      return false;
+    }
+    ++i;
+  }
+  return true;
+}
+
+// Parse a lengthspec into (mode, min_len, max_len). Returns true iff spec is
+// a legal `N` / `<=N` / `N-M` with N,M >= 1. Values are stored as-provided.
+inline bool ParseLengthSpec(const std::string& spec, int& mode, int& min_len, int& max_len) {
+  auto s = TrimRaypathSegment(spec);
+  if (s.empty()) {
+    return false;
+  }
+  auto is_digits = [](const std::string& t) {
+    if (t.empty()) {
+      return false;
+    }
+    for (char c : t) {
+      if (c < '0' || c > '9') {
+        return false;
+      }
+    }
+    return true;
+  };
+  // Range-safe digit->int: returns false on overflow (all-digit strings that
+  // exceed `int` would otherwise make std::stoi throw std::out_of_range, which
+  // no caller catches). std::from_chars reports overflow via errc instead.
+  auto to_int = [](const std::string& t, int& out) {
+    auto res = std::from_chars(t.data(), t.data() + t.size(), out);
+    return res.ec == std::errc{} && res.ptr == t.data() + t.size();
+  };
+  if (s.size() >= 2 && s[0] == '<' && s[1] == '=') {
+    auto n = TrimRaypathSegment(s.substr(2));
+    int v = 0;
+    if (!is_digits(n) || !to_int(n, v) || v < 1) {
+      return false;
+    }
+    mode = 2;
+    min_len = 1;
+    max_len = v;
+    return true;
+  }
+  auto dash = s.find('-');
+  if (dash != std::string::npos) {
+    auto lhs = TrimRaypathSegment(s.substr(0, dash));
+    auto rhs = TrimRaypathSegment(s.substr(dash + 1));
+    int a = 0;
+    int b = 0;
+    if (!is_digits(lhs) || !is_digits(rhs) || !to_int(lhs, a) || !to_int(rhs, b)) {
+      return false;
+    }
+    if (a < 1 || b < 1 || a > b) {
+      return false;
+    }
+    mode = 3;
+    min_len = a;
+    max_len = b;
+    return true;
+  }
+  int v = 0;
+  if (!is_digits(s) || !to_int(s, v) || v < 1) {
+    return false;
+  }
+  mode = 1;
+  min_len = v;
+  max_len = v;
+  return true;
+}
+
+// Merge an EE token (entry:/exit:/len:) into the in-flight builder. Returns
+// false on grammar error (unknown prefix, unparseable lengthspec, or attempt
+// to overwrite an already-set field). Whitespace inside facelist is preserved
+// as-is; the facelist validator handles trimming semantics.
+inline bool MergeEeToken(const std::string& tok, EntryExitParams& builder, bool& entry_set, bool& exit_set,
+                         bool& len_set, std::string& err) {
+  if (StartsWith(tok, "entry:")) {
+    if (entry_set) {
+      err = "duplicate entry: token in summand";
+      return false;
+    }
+    builder.entry_text = TrimRaypathSegment(tok.substr(6));
+    entry_set = true;
+    return true;
+  }
+  if (StartsWith(tok, "exit:")) {
+    if (exit_set) {
+      err = "duplicate exit: token in summand";
+      return false;
+    }
+    builder.exit_text = TrimRaypathSegment(tok.substr(5));
+    exit_set = true;
+    return true;
+  }
+  if (StartsWith(tok, "len:")) {
+    if (len_set) {
+      err = "duplicate len: token in summand";
+      return false;
+    }
+    int mode = 0;
+    int min_len = 1;
+    int max_len = 1;
+    if (!ParseLengthSpec(tok.substr(4), mode, min_len, max_len)) {
+      err = "invalid length spec '" + tok.substr(4) + "'";
+      return false;
+    }
+    builder.length_mode = mode;
+    builder.min_len = min_len;
+    builder.max_len = max_len;
+    len_set = true;
+    return true;
+  }
+  err = "unknown factor prefix '" + tok + "'";
+  return false;
+}
+
+// True if a token looks like an EE token (starts with a known prefix).
+inline bool IsEeToken(const std::string& tok) {
+  return StartsWith(tok, "entry:") || StartsWith(tok, "exit:") || StartsWith(tok, "len:");
+}
+
+}  // namespace detail
+
+// Strict validation of a summand row against the AND grammar. Empty input →
+// kValid (means "no filter" at the row level). Uses LUMICE_ValidateRaypathText
+// for raypath tokens and GuiValidateFaceNumberListText for entry:/exit:
+// facelists so the messages match the surrounding single-value paths.
+// Inherent grammar state-machine (token loop + EE flush/validate); NOLINTed per
+// the project convention of not fragmenting dense validators.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+inline GuiValidationResult ValidateSummandText(const std::string& text, LUMICE_CrystalKind kind) {
+  GuiValidationResult result;
+  auto trimmed = TrimRaypathSegment(text);
+  if (trimmed.empty()) {
+    result.state = LUMICE_RAYPATH_VALID;
+    return result;
+  }
+
+  // Reject leading / trailing / consecutive '&' (mirrors the ';' pre-flight in
+  // ValidateRaypathTextMultiSegment).
+  bool sep_pending = true;
+  for (char c : trimmed) {
+    if (c == '&') {
+      if (sep_pending) {
+        result.state = LUMICE_RAYPATH_INVALID;
+        result.message = "Empty AND factor";
+        return result;
+      }
+      sep_pending = true;
+    } else if (!std::isspace(static_cast<unsigned char>(c))) {
+      sep_pending = false;
+    }
+  }
+  if (sep_pending) {
+    result.state = LUMICE_RAYPATH_INVALID;
+    result.message = "Empty AND factor";
+    return result;
+  }
+
+  auto tokens = detail::SplitSummandTokens(trimmed);
+  EntryExitParams ee_builder;
+  bool entry_set = false;
+  bool exit_set = false;
+  bool len_set = false;
+  bool ee_started = false;
+  // Validate the in-flight EE facelists, then reset the EE state. Mirrors the
+  // flush_ee reset in ParseSummandText so the validator AGREES with the parser:
+  // a raypath token ends the current EE factor, and a following entry:/exit:
+  // begins a fresh EE factor (not a "duplicate" of the prior one). Without this,
+  // "entry:2 & 5 & entry:3" would be parsed+round-tripped fine but rejected here.
+  auto flush_ee = [&]() -> bool {
+    if (ee_started) {
+      if (entry_set) {
+        auto sr = GuiValidateFaceNumberListText(ee_builder.entry_text, kind);
+        if (sr.state != LUMICE_RAYPATH_VALID) {
+          result = sr;
+          return false;
+        }
+      }
+      if (exit_set) {
+        auto sr = GuiValidateFaceNumberListText(ee_builder.exit_text, kind);
+        if (sr.state != LUMICE_RAYPATH_VALID) {
+          result = sr;
+          return false;
+        }
+      }
+      ee_builder = EntryExitParams{};
+      entry_set = false;
+      exit_set = false;
+      len_set = false;
+      ee_started = false;
+    }
+    return true;
+  };
+  for (const auto& tok : tokens) {
+    if (tok.empty()) {
+      result.state = LUMICE_RAYPATH_INVALID;
+      result.message = "Empty AND factor";
+      return result;
+    }
+    if (detail::IsEeToken(tok)) {
+      ee_started = true;
+      std::string err;
+      if (!detail::MergeEeToken(tok, ee_builder, entry_set, exit_set, len_set, err)) {
+        result.state = LUMICE_RAYPATH_INVALID;
+        result.message = err;
+        return result;
+      }
+    } else {
+      // Raypath token ends the current EE factor (flush + validate), then
+      // validate the raypath. A raypath token MAY contain ';' as a summand-level
+      // OR alternative (H-A, 334.3): `1-3;3-5 & entry:2` distributes to
+      // `(1-3 & entry:2) OR (3-5 & entry:2)` in ExpandSopToClauses. We delegate
+      // to ValidateRaypathTextMultiSegment (already covered by 11 unit tests)
+      // which rejects leading/trailing/consecutive ';' and validates each
+      // segment via LUMICE_ValidateRaypathText — no new validation logic.
+      if (!flush_ee()) {
+        return result;
+      }
+      auto seg_result = ValidateRaypathTextMultiSegment(tok, kind);
+      if (seg_result.state != LUMICE_RAYPATH_VALID) {
+        result = seg_result;
+        return result;
+      }
+    }
+  }
+
+  // Validate the trailing EE factor (if the row ended mid-EE).
+  if (!flush_ee()) {
+    return result;
+  }
+
+  result.state = LUMICE_RAYPATH_VALID;
+  return result;
+}
+
+// Tolerant parse of a summand row into a Factor vector. Mirrors the
+// ParseRaypathTextMultiSegment "skip invalid tokens" philosophy. Empty input
+// → empty vector.
+inline std::vector<Factor> ParseSummandText(const std::string& text) {
+  std::vector<Factor> out;
+  auto trimmed = TrimRaypathSegment(text);
+  if (trimmed.empty()) {
+    return out;
+  }
+  auto tokens = detail::SplitSummandTokens(trimmed);
+  EntryExitParams ee_builder;
+  bool ee_started = false;
+  bool entry_set = false;
+  bool exit_set = false;
+  bool len_set = false;
+  auto flush_ee = [&]() {
+    if (ee_started) {
+      out.emplace_back(ee_builder);
+      ee_builder = EntryExitParams{};
+      ee_started = false;
+      entry_set = false;
+      exit_set = false;
+      len_set = false;
+    }
+  };
+  for (const auto& tok : tokens) {
+    if (tok.empty()) {
+      continue;
+    }
+    if (detail::IsEeToken(tok)) {
+      std::string err;
+      // Tolerant parse: a token that fails to merge (duplicate / bad lengthspec)
+      // is SKIPPED — it must NOT fabricate a factor. Only mark the EE factor
+      // "started" once a field was actually set, so an all-invalid EE run (e.g.
+      // "len:abc") yields no factor rather than a match-everything wildcard EE.
+      // Mirrors ValidateSummandText, which rejects such tokens (code-review-02
+      // Major 1).
+      if (detail::MergeEeToken(tok, ee_builder, entry_set, exit_set, len_set, err)) {
+        ee_started = true;
+      }
+    } else {
+      flush_ee();
+      RaypathParams rp;
+      rp.raypath_text = tok;
+      out.emplace_back(std::move(rp));
+    }
+  }
+  flush_ee();
+  return out;
+}
+
+// Format a single Factor back to canonical text.
+inline std::string FormatFactor(const Factor& f) {
+  return std::visit(
+      [](const auto& v) -> std::string {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr (std::is_same_v<T, RaypathParams>) {
+          return v.raypath_text;
+        } else if constexpr (std::is_same_v<T, EntryExitParams>) {
+          return FormatEntryExitFactorText(v);
+        }
+      },
+      f);
+}
+
+// Join Factors into a summand row using " & " as separator.
+inline std::string FormatSummandText(const std::vector<Factor>& factors) {
+  std::string out;
+  bool first = true;
+  for (const auto& f : factors) {
+    if (!first) {
+      out += " & ";
+    }
+    out += FormatFactor(f);
+    first = false;
+  }
+  return out;
+}
+
+// Expand a summand row's raypath factors by their ';' OR-alternatives
+// (H-A, 334.3) for the live editor preview, e.g.
+//   "1-3;3-5 & entry:2"  ->  "(1-3 OR 3-5) & entry:2"
+// Raypath factors with a single segment are shown unparenthesized.
+// EE factors (entry:/exit:/len:) are shown verbatim via FormatFactor —
+// their comma-list multi-value semantics are a separate, pre-existing
+// expansion (handled at Cartesian-expand time by ExpandSopToClauses in
+// file_io.cpp) and are intentionally NOT re-expanded here so this preview
+// helper does not become a second source of truth for expansion semantics.
+inline std::string FormatSummandExpansionPreview(const std::vector<Factor>& factors) {
+  std::string out;
+  bool first = true;
+  for (const auto& f : factors) {
+    if (!first) {
+      out += " & ";
+    }
+    first = false;
+    if (const auto* rp = std::get_if<RaypathParams>(&f)) {
+      auto segs = SplitRaypathSegments(rp->raypath_text);
+      if (segs.size() <= 1) {
+        out += rp->raypath_text;
+      } else {
+        out += '(';
+        for (size_t i = 0; i < segs.size(); ++i) {
+          if (i != 0) {
+            out += " OR ";
+          }
+          out += segs[i];
+        }
+        out += ')';
+      }
+    } else {
+      out += FormatFactor(f);
+    }
+  }
+  return out;
+}
+
+// Build the "OR of N row(s)" live preview for a whole SoP: one expanded row
+// per line. Mirrors panels.cpp's committed-filter card tooltip format so both
+// call sites share a single formatting source (DRY). Empty rows render as
+// "*" (match-all sentinel, same as the card tooltip convention).
+inline std::string FormatSopExpansionPreview(const SumOfProducts& sop) {
+  std::string out = "OR of " + std::to_string(sop.size()) + " row(s):";
+  for (const auto& s : sop) {
+    out += "\n  ";
+    if (s.factors.empty()) {
+      out += s.text.empty() ? "*" : s.text;
+    } else {
+      out += FormatSummandExpansionPreview(s.factors);
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Legacy → SoP converters (task-gui-sop-data-model).
+//
+// These are the *canonical, grammar-conformant* conversion paths — as opposed
+// to FilterConfig::SetRaypath / SetEntryExit which are the transparent compat
+// writers that do not split ';' multi-segment OR into rows. Test utilities and
+// (future) 333.3 serialization sites should use these instead of the compat
+// writers when the intent is a true SoP fan-out.
+// ---------------------------------------------------------------------------
+
+// Split RaypathParams.raypath_text on ';' into one OR-row per segment. Empty
+// input → single row with empty raypath (the "no filter" degenerate state, to
+// match the FilterConfig default).
+inline SumOfProducts FromLegacyRaypath(const RaypathParams& rp) {
+  SumOfProducts out;
+  if (rp.raypath_text.empty()) {
+    RaypathParams empty_rp;
+    out.push_back(SummandText{ std::string{}, std::vector<Factor>{ Factor{ empty_rp } } });
+    return out;
+  }
+  auto segs = SplitRaypathSegments(rp.raypath_text);
+  for (const auto& seg : segs) {
+    RaypathParams seg_rp;
+    seg_rp.raypath_text = seg;
+    out.push_back(SummandText{ seg, std::vector<Factor>{ Factor{ std::move(seg_rp) } } });
+  }
+  return out;
+}
+
+// Wrap an EntryExitParams into a single-row SoP. The comma-list multi-value OR
+// semantics inside entry_text / exit_text are preserved as-is (cartesian
+// expansion into multiple core simple filters is 333.3's job, not this task).
+inline SumOfProducts FromLegacyEntryExit(const EntryExitParams& ep) {
+  SumOfProducts out;
+  std::string text = FormatEntryExitFactorText(ep);
+  out.push_back(SummandText{ std::move(text), std::vector<Factor>{ Factor{ ep } } });
   return out;
 }
 

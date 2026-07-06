@@ -39,7 +39,7 @@ GuiState MakeModifiedState() {
 
   // Filter pool slot 0
   FilterConfig f;
-  f.param = RaypathParams{ "3-1-5" };
+  f.SetRaypath(RaypathParams{ "3-1-5" });
   f.sym_p = false;
   s.filters.push_back(f);
 

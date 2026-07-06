@@ -44,6 +44,15 @@ std::string FormatOverflowLocator(const FilterOverflowInfo& overflow);
 // Serialize GuiState to Core JSON string (for .lmc save and CLI compatibility)
 std::string SerializeCoreConfig(const GuiState& state);
 
+// Build the export Core-JSON for `state`, OR reject with a user-facing warning when a
+// filter's expansion exceeds the ABI clause/term bounds (which SerializeFilterForCore
+// would otherwise degrade to a semantically-opposite match-all stand-in). Pure — no file
+// dialog / filesystem — so the reject path is directly unit-testable (the file-dialog wrapper
+// DoExportConfigJson only supplies the path). Returns true and fills *out_json on success;
+// returns false and fills *out_warning (with a FormatOverflowLocator-bearing message) on
+// overflow, leaving *out_json untouched. Either out-param may be null.
+bool BuildExportJsonOrWarn(const GuiState& state, std::string* out_json, std::string* out_warning);
+
 // Deserialize Core JSON string to GuiState, returns true on success
 bool DeserializeFromJson(const std::string& json_str, GuiState& state);
 

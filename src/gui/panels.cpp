@@ -13,6 +13,7 @@
 #include "gui/edit_modals.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
+#include "gui/raypath_segments.hpp"  // FormatSummandText (non-degenerate SoP summary)
 #include "gui/slider_mapping.hpp"
 #include "imgui.h"
 #include "lumice.h"
@@ -177,52 +178,72 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
   }
   const auto& fc = f.value();
 
-  std::string body = std::visit(
-      [](const auto& p) -> std::string {
-        using T = std::decay_t<decltype(p)>;
-        if constexpr (std::is_same_v<T, RaypathParams>) {
-          if (p.raypath_text.empty()) {
-            return "*";
-          }
-          if (p.raypath_text.size() > 12) {
-            return p.raypath_text.substr(0, 12) + "...";
-          }
-          return p.raypath_text;
-        } else if constexpr (std::is_same_v<T, EntryExitParams>) {
-          // Format each end as "*" (wildcard / empty), the raw text (single
-          // value), or "{a,b,...}" (multi-value list). Length suffix encodes
-          // the four mode choices so the summary roundtrips with the edit
-          // modal's dropdown.
-          auto format_side = [](const std::string& t) -> std::string {
-            if (t.empty()) {
+  std::string body;
+  if (fc.IsDegenerateSingleFactor()) {
+    body = std::visit(
+        [](const auto& p) -> std::string {
+          using T = std::decay_t<decltype(p)>;
+          if constexpr (std::is_same_v<T, RaypathParams>) {
+            if (p.raypath_text.empty()) {
               return "*";
             }
-            if (t.find(',') == std::string::npos) {
-              return t;
+            if (p.raypath_text.size() > 12) {
+              return p.raypath_text.substr(0, 12) + "...";
             }
-            return std::string("{") + t + "}";
-          };
-          std::string body = std::string("EE:") + format_side(p.entry_text) + "-" + format_side(p.exit_text);
-          switch (p.length_mode) {
-            case 1:
-              body += " L=" + std::to_string(p.min_len);
-              break;
-            case 2:
-              body += " L<=" + std::to_string(p.max_len);
-              break;
-            case 3:
-              body += " L=[" + std::to_string(p.min_len) + "," + std::to_string(p.max_len) + "]";
-              break;
-            case 0:
-            default:
-              break;
+            return p.raypath_text;
+          } else if constexpr (std::is_same_v<T, EntryExitParams>) {
+            // Format each end as "*" (wildcard / empty), the raw text (single
+            // value), or "{a,b,...}" (multi-value list). Length suffix encodes
+            // the four mode choices so the summary roundtrips with the edit
+            // modal's dropdown.
+            auto format_side = [](const std::string& t) -> std::string {
+              if (t.empty()) {
+                return "*";
+              }
+              if (t.find(',') == std::string::npos) {
+                return t;
+              }
+              return std::string("{") + t + "}";
+            };
+            std::string body = std::string("EE:") + format_side(p.entry_text) + "-" + format_side(p.exit_text);
+            switch (p.length_mode) {
+              case 1:
+                body += " L=" + std::to_string(p.min_len);
+                break;
+              case 2:
+                body += " L<=" + std::to_string(p.max_len);
+                break;
+              case 3:
+                body += " L=[" + std::to_string(p.min_len) + "," + std::to_string(p.max_len) + "]";
+                break;
+              case 0:
+              default:
+                break;
+            }
+            return body;
+          } else {
+            return "*";
           }
-          return body;
-        } else {
-          return "*";
-        }
-      },
-      fc.param);
+        },
+        fc.DegenerateFactor());
+  } else {
+    // Non-degenerate sum-of-products (multiple OR rows and/or AND factors).
+    // DegenerateFactor() would assert/UB here, so summarize without it: show the
+    // first row's canonical text (truncated) + "(+N more)" when more rows exist.
+    // This is the minimal non-crash display (333.3); the full multi-summand
+    // editor UI is 333.4.
+    std::string first = fc.param.empty() ? std::string{} : FormatSummandText(fc.param[0].factors);
+    if (first.empty()) {
+      first = "*";
+    }
+    if (first.size() > 12) {
+      first = first.substr(0, 12) + "...";
+    }
+    body = first;
+    if (fc.param.size() > 1) {
+      body += " (+" + std::to_string(fc.param.size() - 1) + " more)";
+    }
+  }
 
   return body + FilterSummarySuffix(fc);
 }
@@ -545,7 +566,7 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   float text_w = std::max(40.0f, avail_w - kInputWidth - kLabelColWidth - spacing_x * 2);
 
   auto emit_row = [&](int row_idx, const char* text_content, const char* btn_id, EditTarget target,
-                      const char* row_label, bool clip_text) {
+                      const char* row_label, bool clip_text, const char* tooltip = nullptr) {
     ImVec2 line_start(right_x, thumb_pos.y + row_h * static_cast<float>(row_idx));
     ImGui::SetCursorScreenPos(line_start);
     if (clip_text) {
@@ -556,6 +577,13 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
       ImGui::PopClipRect();
     } else {
       ImGui::TextUnformatted(text_content);
+    }
+    // Optional hover tooltip — shows the full multi-row SoP for non-degenerate
+    // filters where the summary line is inherently lossy (only the first row
+    // + "(+N more)" fits). Follows the same "TextUnformatted then IsItemHovered"
+    // pattern as the fa-link badge below.
+    if (tooltip != nullptr && ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("%s", tooltip);
     }
     ImGui::SameLine();
     ImGui::SetCursorScreenPos(ImVec2(line_start.x + text_w + spacing_x, line_start.y));
@@ -575,13 +603,29 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   std::string preset = AxisPresetName(crystal_ref);
   emit_row(1, preset.c_str(), "Edit##ax", EditTarget::kAxis, "Axis", false);
 
-  // Row 3: Filter summary (may exceed text_w — clip so it doesn't overlap the Edit button)
+  // Row 3: Filter summary (may exceed text_w — clip so it doesn't overlap the Edit button).
+  // For non-degenerate SoP (>1 row or >1 factor), build a tooltip listing every
+  // row's canonical text so users can see the full predicate without opening
+  // the modal.
   std::optional<FilterConfig> filter_opt;
   if (entry.filter_id.has_value()) {
     filter_opt = state.filters[*entry.filter_id];
   }
   std::string filter_text = FilterSummary(filter_opt);
-  emit_row(2, filter_text.c_str(), "Edit##fi", EditTarget::kFilter, "Filter", true);
+  std::string filter_tooltip_storage;
+  const char* filter_tooltip = nullptr;
+  if (filter_opt.has_value() && !filter_opt->IsDegenerateSingleFactor()) {
+    // Card tooltip visibility is intentionally gated by IsDegenerateSingleFactor()
+    // (i.e. only shown for genuinely non-degenerate multi-row / multi-factor
+    // filters), whereas the editor-side live preview uses a different, wider
+    // gate (any non-blank row). The formatting is shared via
+    // FormatSopExpansionPreview so both call sites cannot drift, but the
+    // visibility policy stays deliberately different — see edit_modals.cpp
+    // RenderSummandRowList for the editor gate rationale.
+    filter_tooltip_storage = gui::FormatSopExpansionPreview(filter_opt->param);
+    filter_tooltip = filter_tooltip_storage.c_str();
+  }
+  emit_row(2, filter_text.c_str(), "Edit##fi", EditTarget::kFilter, "Filter", true, filter_tooltip);
 
   // Row 4: Weight — reuse SliderWithInput for [slider][input] layout
   ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y + row_h * 3.0f));

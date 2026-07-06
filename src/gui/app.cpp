@@ -431,11 +431,22 @@ void DoExportEquirectangularPng() {
 
 void DoExportConfigJson() {
   auto path = ShowExportJsonDialog();
-  if (!path.empty()) {
-    auto json_str = SerializeCoreConfig(g_state);
-    ExportConfigJson(path, json_str);
-    GUI_LOG_INFO("[GUI] Export config JSON: {}", PathToU8(path));
+  if (path.empty()) {
+    return;
   }
+  // Build-or-reject is a pure, unit-tested function (BuildExportJsonOrWarn): it refuses to
+  // produce a config when a filter overflows the ABI bounds — otherwise the JSON twin would
+  // emit a semantically-opposite match-all stand-in and we would silently write a wrong
+  // config (code-review-02/03 Major). This wrapper only owns the dialog path + user surface.
+  std::string json_str;
+  std::string warning;
+  if (!BuildExportJsonOrWarn(g_state, &json_str, &warning)) {
+    GUI_LOG_WARNING("[GUI] Export config JSON aborted: {}", warning);
+    SetGuiWarning(warning);
+    return;
+  }
+  ExportConfigJson(path, json_str);
+  GUI_LOG_INFO("[GUI] Export config JSON: {}", PathToU8(path));
 }
 
 // Helper: load image from path, downsample if needed, upload to bg texture.
