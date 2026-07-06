@@ -382,9 +382,14 @@ struct FilterConfig {
   // canonical grammar-conformant conversion path is FromLegacyRaypath /
   // FromLegacyEntryExit in raypath_segments.hpp (they split ';' into rows
   // and emit one factor per row). SetRaypath / SetEntryExit are the "keep
-  // callers working, defer real fan-out to 333.3" compat layer, not the
-  // canonical writer. Do not delete this comment without also retiring
-  // the compat callers.
+  // callers working" compat layer, not the canonical writer. Do not delete
+  // this comment without also retiring the compat callers.
+  //   NB (task-serialization-bidirectional, 333.3, landed): the GUI→core
+  //   serialization (file_io.cpp ExpandSopToClauses, the single source both
+  //   emit twins share) re-splits a factor's internal ';'/comma OR at emit
+  //   time, so a compat-written single-factor ';' row and a FromLegacy-split
+  //   multi-row SoP expand to the SAME core filters (and are operator==-equal
+  //   at the text layer). The `.lmc` writer persists SummandText.text verbatim.
   bool IsDegenerateSingleFactor() const { return param.size() == 1 && param[0].factors.size() == 1; }
   bool IsRaypath() const {
     return IsDegenerateSingleFactor() && std::holds_alternative<RaypathParams>(param[0].factors[0]);

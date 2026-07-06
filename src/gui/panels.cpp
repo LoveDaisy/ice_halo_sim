@@ -13,6 +13,7 @@
 #include "gui/edit_modals.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
+#include "gui/raypath_segments.hpp"  // FormatSummandText (non-degenerate SoP summary)
 #include "gui/slider_mapping.hpp"
 #include "imgui.h"
 #include "lumice.h"
@@ -177,52 +178,72 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
   }
   const auto& fc = f.value();
 
-  std::string body = std::visit(
-      [](const auto& p) -> std::string {
-        using T = std::decay_t<decltype(p)>;
-        if constexpr (std::is_same_v<T, RaypathParams>) {
-          if (p.raypath_text.empty()) {
-            return "*";
-          }
-          if (p.raypath_text.size() > 12) {
-            return p.raypath_text.substr(0, 12) + "...";
-          }
-          return p.raypath_text;
-        } else if constexpr (std::is_same_v<T, EntryExitParams>) {
-          // Format each end as "*" (wildcard / empty), the raw text (single
-          // value), or "{a,b,...}" (multi-value list). Length suffix encodes
-          // the four mode choices so the summary roundtrips with the edit
-          // modal's dropdown.
-          auto format_side = [](const std::string& t) -> std::string {
-            if (t.empty()) {
+  std::string body;
+  if (fc.IsDegenerateSingleFactor()) {
+    body = std::visit(
+        [](const auto& p) -> std::string {
+          using T = std::decay_t<decltype(p)>;
+          if constexpr (std::is_same_v<T, RaypathParams>) {
+            if (p.raypath_text.empty()) {
               return "*";
             }
-            if (t.find(',') == std::string::npos) {
-              return t;
+            if (p.raypath_text.size() > 12) {
+              return p.raypath_text.substr(0, 12) + "...";
             }
-            return std::string("{") + t + "}";
-          };
-          std::string body = std::string("EE:") + format_side(p.entry_text) + "-" + format_side(p.exit_text);
-          switch (p.length_mode) {
-            case 1:
-              body += " L=" + std::to_string(p.min_len);
-              break;
-            case 2:
-              body += " L<=" + std::to_string(p.max_len);
-              break;
-            case 3:
-              body += " L=[" + std::to_string(p.min_len) + "," + std::to_string(p.max_len) + "]";
-              break;
-            case 0:
-            default:
-              break;
+            return p.raypath_text;
+          } else if constexpr (std::is_same_v<T, EntryExitParams>) {
+            // Format each end as "*" (wildcard / empty), the raw text (single
+            // value), or "{a,b,...}" (multi-value list). Length suffix encodes
+            // the four mode choices so the summary roundtrips with the edit
+            // modal's dropdown.
+            auto format_side = [](const std::string& t) -> std::string {
+              if (t.empty()) {
+                return "*";
+              }
+              if (t.find(',') == std::string::npos) {
+                return t;
+              }
+              return std::string("{") + t + "}";
+            };
+            std::string body = std::string("EE:") + format_side(p.entry_text) + "-" + format_side(p.exit_text);
+            switch (p.length_mode) {
+              case 1:
+                body += " L=" + std::to_string(p.min_len);
+                break;
+              case 2:
+                body += " L<=" + std::to_string(p.max_len);
+                break;
+              case 3:
+                body += " L=[" + std::to_string(p.min_len) + "," + std::to_string(p.max_len) + "]";
+                break;
+              case 0:
+              default:
+                break;
+            }
+            return body;
+          } else {
+            return "*";
           }
-          return body;
-        } else {
-          return "*";
-        }
-      },
-      fc.DegenerateFactor());
+        },
+        fc.DegenerateFactor());
+  } else {
+    // Non-degenerate sum-of-products (multiple OR rows and/or AND factors).
+    // DegenerateFactor() would assert/UB here, so summarize without it: show the
+    // first row's canonical text (truncated) + "(+N more)" when more rows exist.
+    // This is the minimal non-crash display (333.3); the full multi-summand
+    // editor UI is 333.4.
+    std::string first = fc.param.empty() ? std::string{} : FormatSummandText(fc.param[0].factors);
+    if (first.empty()) {
+      first = "*";
+    }
+    if (first.size() > 12) {
+      first = first.substr(0, 12) + "...";
+    }
+    body = first;
+    if (fc.param.size() > 1) {
+      body += " (+" + std::to_string(fc.param.size() - 1) + " more)";
+    }
+  }
 
   return body + FilterSummarySuffix(fc);
 }

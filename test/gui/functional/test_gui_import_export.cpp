@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include "IconsFontAwesome6.h"
+#include "gui/raypath_segments.hpp"  // ParseSummandText / SumOfProducts (SoP round-trip tests)
 #include "test_gui_shared.hpp"
 
 // ========== Import/Export Tests ==========
@@ -904,6 +905,122 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // T2 (task-serialization-bidirectional, AC1): any sum-of-products (cross-type
+  // OR + AND + internal multi-value + multiple rows) survives GUI -> .lmc -> GUI
+  // with FilterConfig::operator== (text-layer) equality. Covers SerializeFilterForGui
+  // ("summands") and ParseFilterFromGuiJson's new-form reader.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "sop_lmc_roundtrip");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      // One entry per SoP filter shape. Each filter is built from canonical row
+      // texts (the operator== identity), so the round-trip must reproduce them.
+      const std::vector<std::vector<std::string>> shapes = {
+        { "3-1-5" },                       // degenerate single raypath
+        { "3-5", "1-3", "2-6" },           // multi-row raypath OR
+        { "entry:7 & exit:4" },            // single EE
+        { "entry:3 & exit:5 & len:2-6" },  // EE with length range
+        { "entry:", "exit:5" },            // wildcard EE rows
+        { "3-1-5", "entry:3 & exit:5" },   // cross-type OR
+        { "entry:3 & 7-1" },               // AND clause (EE + raypath)
+        { "entry:3,4 & 7-1", "2-6" },      // cross-type OR + AND + internal multi
+      };
+
+      gui::g_state.layers.clear();
+      gui::Layer layer;
+      layer.probability = 0.0f;
+      std::vector<gui::FilterConfig> originals;
+      for (const auto& rows : shapes) {
+        gui::CrystalConfig c;
+        c.type = gui::CrystalType::kPrism;
+        c.height = 1.0f;
+        for (int i = 0; i < 6; ++i) {
+          c.face_distance[i] = 1.0f;
+        }
+        gui::EntryCard e;
+        e.crystal_id = static_cast<int>(gui::g_state.crystals.size());
+        gui::g_state.crystals.push_back(c);
+        e.proportion = 100.0f;
+        gui::FilterConfig f;
+        gui::SumOfProducts sop;
+        for (const auto& row : rows) {
+          sop.push_back(gui::SummandText{ row, gui::ParseSummandText(row) });
+        }
+        f.param = std::move(sop);
+        originals.push_back(f);
+        gui::SetFilter(gui::g_state, e, f);
+        layer.entries.push_back(e);
+      }
+      gui::g_state.layers.push_back(layer);
+
+      const char* tmp_path = "/tmp/lumice_sop_roundtrip.lmc";
+      bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
+      IM_CHECK(save_ok);
+
+      gui::DoNew();
+      std::vector<unsigned char> tex_data;
+      int tex_w = 0;
+      int tex_h = 0;
+      bool load_ok = gui::LoadLmcFile(tmp_path, gui::g_state, tex_data, tex_w, tex_h);
+      IM_CHECK(load_ok);
+
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), static_cast<int>(shapes.size()));
+      for (size_t i = 0; i < shapes.size(); ++i) {
+        const auto& e = gui::g_state.layers[0].entries[i];
+        IM_CHECK(e.filter_id.has_value());
+        const auto& loaded = gui::g_state.filters[*e.filter_id];
+        // AC1: field-equal at the operator== (text) layer.
+        IM_CHECK(loaded == originals[i]);
+      }
+      std::remove(tmp_path);
+    };
+  }
+
+  // T7 (task-serialization-bidirectional, SUGGESTION-1 GAP): a non-degenerate
+  // SoP (multi-summand and/or multi-factor) must render a non-crash entry-card
+  // summary. FilterSummary (panels.cpp) previously called DegenerateFactor(),
+  // which asserts/UB on a non-degenerate SoP. Assert it returns a non-empty
+  // string without crashing. (Full multi-summand editor UI is 333.4.)
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "non_degenerate_sop_summary_no_crash");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      auto make_sop = [](const std::vector<std::string>& rows) {
+        gui::FilterConfig f;
+        gui::SumOfProducts sop;
+        for (const auto& row : rows) {
+          sop.push_back(gui::SummandText{ row, gui::ParseSummandText(row) });
+        }
+        f.param = std::move(sop);
+        return f;
+      };
+
+      // Multi-summand OR.
+      {
+        gui::FilterConfig f = make_sop({ "3-5", "1-3", "2-6" });
+        std::string s = gui::FilterSummary(std::optional<gui::FilterConfig>{ f });
+        IM_CHECK(!s.empty());
+        IM_CHECK(s.find("(+2 more)") != std::string::npos);
+      }
+      // Multi-factor AND (single row, non-degenerate: 1 row but 2 factors).
+      {
+        gui::FilterConfig f = make_sop({ "entry:3 & 7-1" });
+        std::string s = gui::FilterSummary(std::optional<gui::FilterConfig>{ f });
+        IM_CHECK(!s.empty());
+      }
+      // Mixed OR + AND.
+      {
+        gui::FilterConfig f = make_sop({ "entry:3,4 & 7-1", "2-6" });
+        std::string s = gui::FilterSummary(std::optional<gui::FilterConfig>{ f });
+        IM_CHECK(!s.empty());
+      }
+    };
+  }
+
   // task-data-model-and-serialization: legacy v=1 .lmc / GUI JSON without
   // `type` field falls back to RaypathParams (default raypath_text "").
   {
@@ -934,6 +1051,39 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       const auto& f = loaded.filters[*loaded.layers[0].entries[0].filter_id];
       IM_CHECK(f.IsRaypath());
       IM_CHECK_EQ(f.RaypathText(), std::string("3-1-5"));
+    };
+  }
+
+  // T4 (task-serialization-bidirectional, AC3): a legacy v2 .lmc raypath filter
+  // with ';' multi-segment sugar upgrades losslessly to a multi-row SoP via the
+  // canonical FromLegacyRaypath fan-out (one OR row per segment).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "legacy_v2_multisegment_raypath_upgrades_to_sop");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      const std::string v2_lmc = R"({
+        "schema_version": 2,
+        "layers": [{
+          "prob": 0.0,
+          "entries": [{
+            "crystal": {"type": "prism", "shape": {"height": 1.0}},
+            "proportion": 100.0,
+            "filter": {"type": "raypath", "action": "filter_in", "raypath_text": "3-5;1-3"}
+          }]
+        }]
+      })";
+
+      gui::GuiState restored;
+      bool ok = gui::DeserializeGuiStateJson(v2_lmc, restored);
+      IM_CHECK(ok);
+      IM_CHECK(restored.layers[0].entries[0].filter_id.has_value());
+      const auto& f = restored.filters[*restored.layers[0].entries[0].filter_id];
+      // Split into two OR rows: "3-5" and "1-3".
+      IM_CHECK_EQ(static_cast<int>(f.param.size()), 2);
+      IM_CHECK_STR_EQ(f.param[0].text.c_str(), "3-5");
+      IM_CHECK_STR_EQ(f.param[1].text.c_str(), "1-3");
     };
   }
 
@@ -1073,13 +1223,16 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(ee.entry_text, std::string("7"));
       IM_CHECK_EQ(ee.exit_text, std::string("4"));
 
-      // Re-serialization writes the new entry_text / exit_text fields.
+      // Re-serialization writes the v3 sum-of-products form: type "sop" +
+      // "summands" array of canonical row texts (the legacy EE int fields upgrade
+      // to the "entry:<e> & exit:<x>" grammar row).
       const std::string written = gui::SerializeGuiStateJson(restored);
       const auto j = nlohmann::json::parse(written);
       const auto& jf = j["layers"][0]["entries"][0]["filter"];
-      IM_CHECK_STR_EQ(jf["type"].get<std::string>().c_str(), "entry_exit");
-      IM_CHECK_STR_EQ(jf["entry_text"].get<std::string>().c_str(), "7");
-      IM_CHECK_STR_EQ(jf["exit_text"].get<std::string>().c_str(), "4");
+      IM_CHECK_STR_EQ(jf["type"].get<std::string>().c_str(), "sop");
+      IM_CHECK(jf["summands"].is_array());
+      IM_CHECK_EQ(static_cast<int>(jf["summands"].size()), 1);
+      IM_CHECK_STR_EQ(jf["summands"][0].get<std::string>().c_str(), "entry:7 & exit:4");
     };
   }
 
@@ -1130,10 +1283,12 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // task-gui-complex-filter-import-roundtrip: degenerate multi-segment raypath
-  // complex filter survives core-JSON round-trip. GUI emits N simple raypaths
-  // + 1 complex referencing them on serialize; import must reverse-map back to
-  // a multi-segment RaypathParams instead of dropping the complex (explore-271).
+  // task-serialization-bidirectional (explore-271 reject->reconstruct): a
+  // multi-segment raypath complex filter (N simple raypaths + 1 OR-of-singletons
+  // complex) reconstructs into an N-row sum-of-products (one raypath factor per
+  // row). Pre-uplift this merged back into a single ';'-joined RaypathParams; the
+  // SoP model now surfaces each OR row explicitly (semantically equivalent, and
+  // re-serialize byte-equivalent). No warning (fully representable).
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "complex_raypath_roundtrip");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -1164,23 +1319,30 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       bool ok = gui::DeserializeFromJson(core_json, loaded);
       IM_CHECK(ok);
 
-      // The scattering entry must reference a filter slot in the loaded state's
-      // filter pool, and that filter must be a multi-segment RaypathParams.
       IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), 1);
       IM_CHECK_EQ(static_cast<int>(loaded.layers[0].entries.size()), 1);
       const auto& loaded_entry = loaded.layers[0].entries[0];
       IM_CHECK(loaded_entry.filter_id.has_value());
       const auto& loaded_filter = loaded.filters[*loaded_entry.filter_id];
-      IM_CHECK(loaded_filter.IsRaypath());
-      IM_CHECK_STR_EQ(loaded_filter.RaypathText().c_str(), "3-5;1-3");
+      // Reconstructed as a 2-row SoP: row 0 = raypath "3-5", row 1 = raypath "1-3".
+      IM_CHECK_EQ(static_cast<int>(loaded_filter.param.size()), 2);
+      IM_CHECK_STR_EQ(loaded_filter.param[0].text.c_str(), "3-5");
+      IM_CHECK_STR_EQ(loaded_filter.param[1].text.c_str(), "1-3");
       // No warning should have fired for a well-formed GUI-emitted complex.
       IM_CHECK(gui::PeekImportComplexFilterWarning().empty());
+      // Re-serialize equivalence: the reconstructed filter emits the SAME core
+      // filter array (2 simple raypaths + 1 complex).
+      const auto j_orig = nlohmann::json::parse(core_json);
+      const auto j_reser = nlohmann::json::parse(gui::SerializeCoreConfig(loaded));
+      IM_CHECK(j_orig["filter"] == j_reser["filter"]);
     };
   }
 
-  // task-gui-complex-filter-import-roundtrip: degenerate EE multi-value
-  // (cartesian product) complex filter survives round-trip. entries × exits
-  // factorize back to entry_text / exit_text.
+  // task-serialization-bidirectional (explore-271 reject->reconstruct): an EE
+  // multi-value (cartesian product) complex filter reconstructs into one EE
+  // factor per (entry,exit) pair, one row per clause. "3,4" x "5,6" -> 4 rows
+  // (3,5),(3,6),(4,5),(4,6). Pre-uplift this re-factorized into comma lists;
+  // the SoP model keeps each pair as its own row (re-serialize byte-equivalent).
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "complex_ee_roundtrip");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -1217,21 +1379,25 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       const auto& loaded_entry = loaded.layers[0].entries[0];
       IM_CHECK(loaded_entry.filter_id.has_value());
       const auto& loaded_filter = loaded.filters[*loaded_entry.filter_id];
-      IM_CHECK(loaded_filter.IsEntryExit());
-      const auto& p = loaded_filter.EntryExitParamsValue();
-      // Order is sorted by reconstruct; both ASCII "3" < "4" and "5" < "6".
-      IM_CHECK_STR_EQ(p.entry_text.c_str(), "3,4");
-      IM_CHECK_STR_EQ(p.exit_text.c_str(), "5,6");
+      // 4 clauses -> 4 rows, each a single EE factor. Serialize order was e outer,
+      // x inner: (3,5),(3,6),(4,5),(4,6).
+      IM_CHECK_EQ(static_cast<int>(loaded_filter.param.size()), 4);
+      IM_CHECK_STR_EQ(loaded_filter.param[0].text.c_str(), "entry:3 & exit:5");
+      IM_CHECK_STR_EQ(loaded_filter.param[1].text.c_str(), "entry:3 & exit:6");
+      IM_CHECK_STR_EQ(loaded_filter.param[2].text.c_str(), "entry:4 & exit:5");
+      IM_CHECK_STR_EQ(loaded_filter.param[3].text.c_str(), "entry:4 & exit:6");
       IM_CHECK(gui::PeekImportComplexFilterWarning().empty());
+      const auto j_orig = nlohmann::json::parse(core_json);
+      const auto j_reser = nlohmann::json::parse(gui::SerializeCoreConfig(loaded));
+      IM_CHECK(j_orig["filter"] == j_reser["filter"]);
     };
   }
 
-  // task-gui-complex-filter-import-roundtrip (code-review Major): a wildcard
-  // entry (empty text) crossed with multiple exits still serializes to a
-  // complex filter (pair_count = 1 x N > 1). The reconstruct path must decode
-  // the absent "entry" field back to an empty (wildcard) string — exercising
-  // DecodeEEFaceFromJson's absent-field branch, which Test B's all-specific
-  // faces did not cover.
+  // task-serialization-bidirectional (explore-271 reject->reconstruct): a
+  // wildcard entry (empty text) crossed with multiple exits serializes to a
+  // complex filter (pair_count = 1 x N > 1). Reconstruct decodes the absent
+  // "entry" field back to an empty (wildcard) string per row — exercising
+  // DecodeEEFaceFromJson's absent-field branch. Two clauses -> two rows.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "complex_ee_wildcard_roundtrip");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -1268,29 +1434,32 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       const auto& loaded_entry = loaded.layers[0].entries[0];
       IM_CHECK(loaded_entry.filter_id.has_value());
       const auto& loaded_filter = loaded.filters[*loaded_entry.filter_id];
-      IM_CHECK(loaded_filter.IsEntryExit());
-      const auto& p = loaded_filter.EntryExitParamsValue();
-      IM_CHECK_STR_EQ(p.entry_text.c_str(), "");  // wildcard preserved
-      IM_CHECK_STR_EQ(p.exit_text.c_str(), "5,6");
+      // 2 clauses -> 2 rows; entry omitted (wildcard) so the canonical text is
+      // "entry: & exit:<N>" (empty entry_text after the "entry:" anchor).
+      IM_CHECK_EQ(static_cast<int>(loaded_filter.param.size()), 2);
+      IM_CHECK_STR_EQ(loaded_filter.param[0].text.c_str(), "entry: & exit:5");
+      IM_CHECK_STR_EQ(loaded_filter.param[1].text.c_str(), "entry: & exit:6");
       IM_CHECK(gui::PeekImportComplexFilterWarning().empty());
+      const auto j_orig = nlohmann::json::parse(core_json);
+      const auto j_reser = nlohmann::json::parse(gui::SerializeCoreConfig(loaded));
+      IM_CHECK(j_orig["filter"] == j_reser["filter"]);
     };
   }
 
-  // task-gui-complex-filter-import-roundtrip: a true AND-of-products complex
-  // filter (composition entry with >1 child id, expressing AND semantics) is
-  // not representable in the GUI's flat FilterConfig — import must drop it,
-  // leave the referencing scattering entry without a filter, AND queue a
-  // user-visible warning via SetImportComplexFilterWarning (no silent miscull).
+  // task-serialization-bidirectional (explore-271 reject->RECONSTRUCT): a true
+  // AND-of-products complex filter (a composition product with >1 child id,
+  // expressing AND) IS now representable — it reconstructs into a single OR row
+  // whose factors are the ANDed children. Pre-uplift this was loudly rejected;
+  // the SoP model makes it a first-class reconstruct (warning empty).
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "non_degenerate_complex_ignored_but_warned");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "and_of_products_complex_reconstructs");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       IM_UNUSED(ctx);
       ResetTestState();
       gui::ClearImportComplexFilterWarning();
 
       // Hand-authored core JSON: 2 raypath simples + 1 complex with an
-      // AND-of-products composition ([[1,2]] — id 1 AND id 2 in the same
-      // product), which the GUI cannot represent.
+      // AND-of-products composition ([[1,2]] — id 1 AND id 2 in the same clause).
       const std::string core_json = R"({
         "crystal": [
           {"id": 1, "type": "Prism", "height": 1.0,
@@ -1317,13 +1486,122 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK(ok);
       IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), 1);
       const auto& loaded_entry = loaded.layers[0].entries[0];
-      // Filter id=3 is the complex — it must not be materialized; entry's
-      // filter_id must be unset (no silent miscull on the rendered image).
-      IM_CHECK(!loaded_entry.filter_id.has_value());
-      // The loud warning must have fired so the user sees the modal.
-      const std::string warning = gui::PeekImportComplexFilterWarning();
-      IM_CHECK(!warning.empty());
-      gui::ClearImportComplexFilterWarning();
+      // The complex reconstructs — the entry references it.
+      IM_CHECK(loaded_entry.filter_id.has_value());
+      const auto& lf = loaded.filters[*loaded_entry.filter_id];
+      // One clause with two raypath terms -> one row with two raypath factors.
+      IM_CHECK_EQ(static_cast<int>(lf.param.size()), 1);
+      IM_CHECK_EQ(static_cast<int>(lf.param[0].factors.size()), 2);
+      IM_CHECK(std::holds_alternative<gui::RaypathParams>(lf.param[0].factors[0]));
+      IM_CHECK(std::holds_alternative<gui::RaypathParams>(lf.param[0].factors[1]));
+      IM_CHECK_STR_EQ(lf.param[0].text.c_str(), "3-5 & 1-3");
+      // No warning — fully representable now.
+      IM_CHECK(gui::PeekImportComplexFilterWarning().empty());
+      // Re-serialize equivalence: back to the identical 2 raypath + 1 complex form.
+      const auto j_orig = nlohmann::json::parse(core_json);
+      const auto j_reser = nlohmann::json::parse(gui::SerializeCoreConfig(loaded));
+      IM_CHECK(j_orig["filter"] == j_reser["filter"]);
+    };
+  }
+
+  // task-serialization-bidirectional: genuinely non-representable complex inputs
+  // still loudly reject (GUI `Factor` has only raypath / entry_exit arms). These
+  // KEEP the explore-271 anti-silent-miscull contract for the unsupported cases:
+  //   (a) child simple type not in {raypath, entry_exit} (e.g. "direction")
+  //   (b) a term id that points to another complex filter (nested complex)
+  //   (c) a term id with no matching child in the pool (dangling reference)
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "unsupported_complex_still_rejects");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+
+      // Drives DeserializeFromJson with a hand-authored core JSON, asserts the
+      // referenced complex filter is NOT materialized and a warning fires.
+      auto expect_reject = [](const std::string& core_json, int entry_filter_id) {
+        IM_UNUSED(entry_filter_id);
+        ResetTestState();
+        gui::ClearImportComplexFilterWarning();
+        gui::GuiState loaded = gui::InitDefaultState();
+        bool ok = gui::DeserializeFromJson(core_json, loaded);
+        IM_CHECK(ok);
+        IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), 1);
+        const auto& e = loaded.layers[0].entries[0];
+        IM_CHECK(!e.filter_id.has_value());  // unsupported complex not materialized
+        IM_CHECK(!gui::PeekImportComplexFilterWarning().empty());
+        gui::ClearImportComplexFilterWarning();
+      };
+
+      // (a) child type "direction" — unknown to the GUI Factor variant.
+      expect_reject(R"({
+        "crystal": [{"id": 1, "type": "Prism", "height": 1.0, "face_distance": [1,1,1,1,1,1]}],
+        "filter": [
+          {"id": 1, "type": "direction", "action": "filter_in", "az": 30.0, "el": 15.0},
+          {"id": 2, "type": "complex", "action": "filter_in", "composition": [[1]]}
+        ],
+        "scene": {
+          "light_source": {"altitude": 20.0, "diameter": 0.5}, "ray_num": 1000, "max_hits": 8,
+          "scattering": [{"prob": 1.0, "entries": [{"crystal": 1, "proportion": 100.0, "filter": 2}]}]
+        }
+      })",
+                    2);
+
+      // (b) nested complex: a term id points to another complex filter.
+      expect_reject(R"({
+        "crystal": [{"id": 1, "type": "Prism", "height": 1.0, "face_distance": [1,1,1,1,1,1]}],
+        "filter": [
+          {"id": 1, "type": "raypath", "action": "filter_in", "raypath": [3, 5]},
+          {"id": 2, "type": "complex", "action": "filter_in", "composition": [[1]]},
+          {"id": 3, "type": "complex", "action": "filter_in", "composition": [[2]]}
+        ],
+        "scene": {
+          "light_source": {"altitude": 20.0, "diameter": 0.5}, "ray_num": 1000, "max_hits": 8,
+          "scattering": [{"prob": 1.0, "entries": [{"crystal": 1, "proportion": 100.0, "filter": 3}]}]
+        }
+      })",
+                    3);
+
+      // (c) dangling reference: term id has no matching child in the pool.
+      expect_reject(R"({
+        "crystal": [{"id": 1, "type": "Prism", "height": 1.0, "face_distance": [1,1,1,1,1,1]}],
+        "filter": [
+          {"id": 1, "type": "complex", "action": "filter_in", "composition": [[99]]}
+        ],
+        "scene": {
+          "light_source": {"altitude": 20.0, "diameter": 0.5}, "ray_num": 1000, "max_hits": 8,
+          "scattering": [{"prob": 1.0, "entries": [{"crystal": 1, "proportion": 100.0, "filter": 1}]}]
+        }
+      })",
+                    1);
+
+      // (d) empty clause: a composition product with no terms (pins the explicit
+      // product.empty() reject added in TryReconstructComplexFilter; code-review-01 Minor 4).
+      expect_reject(R"({
+        "crystal": [{"id": 1, "type": "Prism", "height": 1.0, "face_distance": [1,1,1,1,1,1]}],
+        "filter": [
+          {"id": 1, "type": "raypath", "action": "filter_in", "raypath": [3, 5]},
+          {"id": 2, "type": "complex", "action": "filter_in", "composition": [[]]}
+        ],
+        "scene": {
+          "light_source": {"altitude": 20.0, "diameter": 0.5}, "ray_num": 1000, "max_hits": 8,
+          "scattering": [{"prob": 1.0, "entries": [{"crystal": 1, "proportion": 100.0, "filter": 2}]}]
+        }
+      })",
+                    2);
+
+      // (e) child filter with a MISSING "type" field — malformed core-JSON. Must loud-reject,
+      // NOT silently rebuild as a match-all raypath (code-review-04 Major 1).
+      expect_reject(R"({
+        "crystal": [{"id": 1, "type": "Prism", "height": 1.0, "face_distance": [1,1,1,1,1,1]}],
+        "filter": [
+          {"id": 1, "action": "filter_in", "raypath": [3, 5]},
+          {"id": 2, "type": "complex", "action": "filter_in", "composition": [[1]]}
+        ],
+        "scene": {
+          "light_source": {"altitude": 20.0, "diameter": 0.5}, "ray_num": 1000, "max_hits": 8,
+          "scattering": [{"prob": 1.0, "entries": [{"crystal": 1, "proportion": 100.0, "filter": 2}]}]
+        }
+      })",
+                    2);
     };
   }
 
@@ -1334,24 +1612,12 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "filter_expand_struct_vs_json");
     t->TestFunc = [](ImGuiTestContext*) {
-      auto cross_check = [](gui::Factor param) {
-        ResetTestState();
-        gui::g_state.crystals.clear();
+      // Core comparison: given a fully-built GuiState (single crystal, single
+      // filter, single entry) the struct path (ExpandFilterToStruct) and the JSON
+      // path (SerializeFilterForCore) must produce field-identical LUMICE_Config.
+      auto run_cross_check = [](const gui::FilterConfig& f) {
         gui::g_state.filters.clear();
         gui::g_state.layers.clear();
-        gui::CrystalConfig c;
-        c.type = gui::CrystalType::kPrism;
-        c.height = 1.0f;
-        for (int i = 0; i < 6; ++i) {
-          c.face_distance[i] = 1.0f;
-        }
-        gui::g_state.crystals.push_back(c);
-        gui::FilterConfig f;
-        if (std::holds_alternative<gui::RaypathParams>(param)) {
-          f.SetRaypath(std::get<gui::RaypathParams>(std::move(param)));
-        } else {
-          f.SetEntryExit(std::get<gui::EntryExitParams>(std::move(param)));
-        }
         gui::g_state.filters.push_back(f);
         gui::Layer layer;
         layer.probability = 1.0f;
@@ -1400,6 +1666,47 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
           }
         }
       };
+
+      auto fresh_state = []() {
+        ResetTestState();
+        gui::g_state.crystals.clear();
+        gui::g_state.filters.clear();
+        gui::g_state.layers.clear();
+        gui::CrystalConfig c;
+        c.type = gui::CrystalType::kPrism;
+        c.height = 1.0f;
+        for (int i = 0; i < 6; ++i) {
+          c.face_distance[i] = 1.0f;
+        }
+        gui::g_state.crystals.push_back(c);
+      };
+
+      // Degenerate / type-internal-OR cases (AC4 byte-equivalence guard): built via
+      // the compat SetRaypath / SetEntryExit writers, exactly as pre-uplift.
+      auto cross_check = [&](gui::Factor param) {
+        fresh_state();
+        gui::FilterConfig f;
+        if (std::holds_alternative<gui::RaypathParams>(param)) {
+          f.SetRaypath(std::get<gui::RaypathParams>(std::move(param)));
+        } else {
+          f.SetEntryExit(std::get<gui::EntryExitParams>(std::move(param)));
+        }
+        run_cross_check(f);
+      };
+
+      // Full sum-of-products cases (new capability): each canonical summand text
+      // becomes an OR row; ParseSummandText builds the AND-of-factors parse cache.
+      auto cross_check_sop = [&](const std::vector<std::string>& rows) {
+        fresh_state();
+        gui::FilterConfig f;
+        gui::SumOfProducts sop;
+        for (const auto& row : rows) {
+          sop.push_back(gui::SummandText{ row, gui::ParseSummandText(row) });
+        }
+        f.param = std::move(sop);
+        run_cross_check(f);
+      };
+
       cross_check(gui::RaypathParams{ "3-1-5" });          // single-segment -> 1 simple raypath
       cross_check(gui::RaypathParams{ "3-5; 1-4; 2-6" });  // multi-segment -> 3 simple + 1 complex
       cross_check(gui::EntryExitParams{ "3", "5" });       // single pair -> 1 simple EE
@@ -1416,6 +1723,15 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       cross_check(gui::EntryExitParams{ "3", "" });    // single entry + exit wildcard -> 1 simple EE
       cross_check(gui::EntryExitParams{ "3,5", "" });  // 2 entry values × wildcard exit -> 2 simple + 1 complex
       cross_check(gui::EntryExitParams{ "", "3,5" });  // wildcard entry × 2 exit values -> 2 simple + 1 complex
+
+      // Sum-of-products cases (T1, task-serialization-bidirectional):
+      // 1. cross-type OR: raypath row + EE row -> 2 clauses, 1 term each, mixed type.
+      cross_check_sop({ "3-1-5", "entry:3 & exit:5" });
+      // 2. AND clause: one row with an EE factor AND a raypath factor -> 1 clause, 2 terms.
+      cross_check_sop({ "entry:3 & 7-1" });
+      // 3. cross-type OR + AND + internal multi-value (Cartesian distribution):
+      //    "entry:3,4 & 7-1" -> 2 clauses (EE3&rp, EE4&rp) each 2 terms; "2-6" -> +1 clause.
+      cross_check_sop({ "entry:3,4 & 7-1", "2-6" });
 
       // Overflow: a raypath with more than LUMICE_MAX_CONFIG_CLAUSES OR segments exceeds the
       // composition ABI bounds -> FillLumiceConfig must return false (graceful degradation),
@@ -1466,6 +1782,162 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         // The locator string DoRun embeds in the modal + Log message (named filter form).
         IM_CHECK_STR_EQ(gui::FormatOverflowLocator(overflow).c_str(), "filter \"OverflowFilter\", Layer 1 / Entry 1");
       }
+
+      // Overflow (new trigger, task-serialization-bidirectional): a single OR row
+      // with more than LUMICE_MAX_CONFIG_TERMS AND factors exceeds the per-clause
+      // term ABI bound. Pre-uplift this was unreachable (clauses were always
+      // singletons); a multi-factor AND row can now hit it. Must return false with
+      // no partial write.
+      {
+        ResetTestState();
+        gui::g_state.crystals.clear();
+        gui::g_state.filters.clear();
+        gui::g_state.layers.clear();
+        gui::CrystalConfig c;
+        c.type = gui::CrystalType::kPrism;
+        c.height = 1.0f;
+        for (int i = 0; i < 6; ++i) {
+          c.face_distance[i] = 1.0f;
+        }
+        gui::g_state.crystals.push_back(c);
+        // LUMICE_MAX_CONFIG_TERMS + 1 raypath factors ANDed together in one row.
+        std::string too_many_terms;
+        for (int i = 0; i < LUMICE_MAX_CONFIG_TERMS + 1; ++i) {
+          if (i) {
+            too_many_terms += " & ";
+          }
+          too_many_terms += std::to_string(i + 1) + "-" + std::to_string(i + 2);
+        }
+        gui::FilterConfig f;
+        f.param = gui::SumOfProducts{ gui::SummandText{ too_many_terms, gui::ParseSummandText(too_many_terms) } };
+        gui::g_state.filters.push_back(f);
+        gui::Layer layer;
+        layer.probability = 1.0f;
+        gui::EntryCard e;
+        e.crystal_id = 0;
+        e.filter_id = 0;
+        e.proportion = 100.0f;
+        layer.entries.push_back(e);
+        gui::g_state.layers.push_back(layer);
+        LUMICE_Config over{};
+        IM_CHECK(!gui::FillLumiceConfig(gui::g_state, &over));  // term count > 8 -> false
+        IM_CHECK_EQ(over.filter_count, 0);
+        IM_CHECK_EQ(over.composition_count, 0);
+      }
+
+      // Overflow (code-review-01 Major 2): the cross-factor Cartesian is capped
+      // BEFORE materialization. Multiple multi-alternative factors whose product
+      // exceeds LUMICE_MAX_CONFIG_CLAUSES must be rejected gracefully without ever
+      // building the (potentially exponential) clause tree.
+      {
+        ResetTestState();
+        gui::g_state.crystals.clear();
+        gui::g_state.filters.clear();
+        gui::g_state.layers.clear();
+        gui::CrystalConfig c;
+        c.type = gui::CrystalType::kPrism;
+        c.height = 1.0f;
+        for (int i = 0; i < 6; ++i) {
+          c.face_distance[i] = 1.0f;
+        }
+        gui::g_state.crystals.push_back(c);
+        // Three raypath factors ANDed, each carrying 4 ';'-OR alternatives:
+        // 4 * 4 * 4 = 64 would-be clauses >> LUMICE_MAX_CONFIG_CLAUSES(16), but only
+        // 3 factors (<= term cap) — so this exercises the clause-product path, not
+        // the term-count path.
+        gui::SummandText row;
+        row.text = "1;2;3;4 & 1;2;3;4 & 1;2;3;4";
+        row.factors = {
+          gui::Factor{ gui::RaypathParams{ "1;2;3;4" } },
+          gui::Factor{ gui::RaypathParams{ "1;2;3;4" } },
+          gui::Factor{ gui::RaypathParams{ "1;2;3;4" } },
+        };
+        gui::FilterConfig f;
+        f.param = gui::SumOfProducts{ row };
+        gui::g_state.filters.push_back(f);
+        gui::Layer layer;
+        layer.probability = 1.0f;
+        gui::EntryCard e;
+        e.crystal_id = 0;
+        e.filter_id = 0;
+        e.proportion = 100.0f;
+        layer.entries.push_back(e);
+        gui::g_state.layers.push_back(layer);
+        LUMICE_Config over{};
+        IM_CHECK(!gui::FillLumiceConfig(gui::g_state, &over));  // Cartesian > 16 clauses -> false
+        IM_CHECK_EQ(over.filter_count, 0);
+        IM_CHECK_EQ(over.composition_count, 0);
+
+        // JSON-twin overflow behavior (code-review-02 Minor 2): SerializeFilterForCore is a
+        // total function, so it degrades the overflowing filter to a BOUNDED match-all
+        // stand-in (not the exponential tree, not a crash) — parses back as a single simple
+        // filter with no complex. The production export path (DoExportConfigJson) rejects
+        // overflow upstream via FillLumiceConfig before this is ever written (Major 1).
+        std::string core_json = gui::SerializeCoreConfig(gui::g_state);
+        IM_CHECK(!core_json.empty());
+        LUMICE_Config from_json{};
+        IM_CHECK_EQ(LUMICE_ParseConfigString(core_json.c_str(), &from_json), LUMICE_OK);
+        IM_CHECK_EQ(from_json.filter_count, 1);       // bounded match-all stand-in, not 64 clauses
+        IM_CHECK_EQ(from_json.composition_count, 0);  // no complex emitted for the stand-in
+      }
+    };
+  }
+
+  // Export overflow rejection (code-review-03 Major 1): the pure BuildExportJsonOrWarn — the
+  // logic DoExportConfigJson delegates to — must REFUSE to produce a config for an over-limit
+  // filter (never silently write a semantically-opposite match-all export) and hand back a
+  // locator-bearing warning. Pins the critical fix into the regression gate rather than
+  // relying on a one-time code read.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "export_json_rejects_overflow_filter");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::g_state.crystals.clear();
+      gui::g_state.filters.clear();
+      gui::g_state.layers.clear();
+      gui::CrystalConfig c;
+      c.type = gui::CrystalType::kPrism;
+      c.height = 1.0f;
+      for (int i = 0; i < 6; ++i) {
+        c.face_distance[i] = 1.0f;
+      }
+      gui::g_state.crystals.push_back(c);
+      // 3 raypath factors x 4 alternatives = 64 clauses >> LUMICE_MAX_CONFIG_CLAUSES.
+      gui::SummandText row;
+      row.text = "1;2;3;4 & 1;2;3;4 & 1;2;3;4";
+      row.factors = {
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4" } },
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4" } },
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4" } },
+      };
+      gui::FilterConfig f;
+      f.name = "BigFilter";
+      f.param = gui::SumOfProducts{ row };
+      gui::g_state.filters.push_back(f);
+      gui::Layer layer;
+      layer.probability = 1.0f;
+      gui::EntryCard e;
+      e.crystal_id = 0;
+      e.filter_id = 0;
+      e.proportion = 100.0f;
+      layer.entries.push_back(e);
+      gui::g_state.layers.push_back(layer);
+
+      // Overflow → refuse: no JSON produced, warning names the offending filter.
+      std::string json;
+      std::string warning;
+      IM_CHECK(!gui::BuildExportJsonOrWarn(gui::g_state, &json, &warning));
+      IM_CHECK(json.empty());  // out_json left untouched — nothing to write
+      IM_CHECK(!warning.empty());
+      IM_CHECK(warning.find("BigFilter") != std::string::npos);  // FormatOverflowLocator names it
+
+      // Sanity: a valid (degenerate) filter exports fine — no warning, JSON produced.
+      gui::g_state.filters[0].SetRaypath(gui::RaypathParams{ "3-5" });
+      std::string ok_json;
+      std::string ok_warning;
+      IM_CHECK(gui::BuildExportJsonOrWarn(gui::g_state, &ok_json, &ok_warning));
+      IM_CHECK(!ok_json.empty());
+      IM_CHECK(ok_warning.empty());
     };
   }
 
