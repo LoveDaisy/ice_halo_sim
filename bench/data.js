@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783307747824,
+  "lastUpdate": 1783307749647,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9620,50 +9620,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "6690144f4a571a7b62131587d5620b8f258c777b",
-          "message": "Merge pull request #74 from LoveDaisy/feat/gui_polish\n\nGUI polish: Immediate modal, filter guards, face-number overlay refine",
-          "timestamp": "2026-04-23T18:26:03+08:00",
-          "tree_id": "dcac66ac084932f8e7a41d73b925f2e1f4abfe50",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/6690144f4a571a7b62131587d5620b8f258c777b"
-        },
-        "date": 1776940238884,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 101.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 74.2,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 72.4,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 67.9,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "e63069a2c407830a197ccf0afe383644959d4b8e",
           "message": "Merge pull request #75 from LoveDaisy/feat/gui_polish\n\nGUI polish v15: orthographic lens, modal H/V layout, detachable Immediate modal",
           "timestamp": "2026-04-24T09:59:54+08:00",
@@ -14003,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 93.6,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b634945ce767a3531a89893427812f8f4a905607",
+          "message": "Merge pull request #176 from LoveDaisy/chore/pre-release\n\nchore: pre-release housekeeping + raypath-color phase-3 blueprint",
+          "timestamp": "2026-07-06T11:09:46+08:00",
+          "tree_id": "9f67656a300d6ed2c850553edb269e19f5effc58",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/b634945ce767a3531a89893427812f8f4a905607"
+        },
+        "date": 1783307749144,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 82.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96.5,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 93.2,
             "unit": "%"
           }
         ]
