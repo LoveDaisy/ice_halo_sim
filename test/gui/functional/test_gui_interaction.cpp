@@ -3903,7 +3903,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(!ctx->ItemExists("**/##row_text_1"));
 
       // Per-row Remove is disabled with only one row (≥1 row invariant).
-      auto info_del0 = ctx->ItemInfo("**/Remove##row_delete_0");
+      auto info_del0 = ctx->ItemInfo("**/" ICON_FA_XMARK "##row_delete_0");
       IM_CHECK((info_del0.ItemFlags & ImGuiItemFlags_Disabled) != 0);
 
       // Add a row: new row has uid=1.
@@ -3912,11 +3912,11 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(ctx->ItemExists("**/##row_text_1"));
 
       // Both per-row Remove buttons are enabled now.
-      auto info_del1 = ctx->ItemInfo("**/Remove##row_delete_1");
+      auto info_del1 = ctx->ItemInfo("**/" ICON_FA_XMARK "##row_delete_1");
       IM_CHECK((info_del1.ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
       // Delete row 1: only row 0 remains.
-      ctx->ItemClick("**/Remove##row_delete_1");
+      ctx->ItemClick("**/" ICON_FA_XMARK "##row_delete_1");
       ctx->Yield(2);
       IM_CHECK(!ctx->ItemExists("**/##row_text_1"));
       IM_CHECK(ctx->ItemExists("**/##row_text_0"));
@@ -4056,7 +4056,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       // Round 3: delete the middle row (uid=1). Row 0 (uid=0) and the former
       // row 2 (uid=2) survive; the uid=2 row's ID must NOT shift to
       // ##row_text_1 (that would prove the ID stack collided).
-      ctx->ItemClick("**/Remove##row_delete_1");
+      ctx->ItemClick("**/" ICON_FA_XMARK "##row_delete_1");
       ctx->Yield(2);
       IM_CHECK(ctx->ItemExists("**/##row_text_0"));
       IM_CHECK(!ctx->ItemExists("**/##row_text_1"));
@@ -4068,7 +4068,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(ctx->ItemExists("**/##row_text_3"));
       ctx->ItemInputValue("**/##row_text_3", "5-6");
       ctx->Yield(1);
-      ctx->ItemClick("**/Remove##row_delete_2");
+      ctx->ItemClick("**/" ICON_FA_XMARK "##row_delete_2");
       ctx->Yield(2);
       IM_CHECK(ctx->ItemExists("**/##row_text_0"));
       IM_CHECK(!ctx->ItemExists("**/##row_text_2"));

@@ -670,15 +670,42 @@ static ImVec4 ValidationFrameBgColor(LUMICE_RaypathValidationState state) {
   return ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
 }
 
+namespace {
+// Destructive (red) button palette for delete/remove buttons in this TU
+// (spectrum-row delete, summand-row delete). RGB values kept in sync with
+// panels.cpp's file-local kBtnDestructive*/PushDestructiveStyle — 2 independent
+// definitions synchronized by convention, not via a shared header. If a third
+// TU ever needs this palette, promote it to a shared header rather than
+// replicating a third copy.
+void PushDestructiveStyle() {
+  ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.22f, 0.22f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.30f, 0.30f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.15f, 0.15f, 1.0f));
+}
+void PopDestructiveStyle() {
+  ImGui::PopStyleColor(3);
+}
+}  // namespace
+
 // Row-list editor for the sum-of-products (H5). Each row is one OR summand
 // expressed in the small AND grammar (`3-5 & entry:2 & len:3-5`), validated
 // with ValidateSummandText / ParseSummandText (raypath_segments.hpp). Stable
-// per-row `uid` is baked into the InputText ID so removing a middle row cannot
-// re-collide ImGui's internal id stack with a leftover buffer.
+// per-row `uid` is baked into both the InputText and the delete-button IDs so
+// removing a middle row cannot re-collide ImGui's internal id stack with a
+// leftover buffer.
 static void RenderSummandRowList() {
   const auto kind = CurrentValidationKind();
   size_t delete_idx = static_cast<size_t>(-1);
   const bool can_delete_any = g_summand_rows.size() > 1;
+
+  // Reserve exactly the width the trailing "x" SmallButton needs (glyph + horizontal
+  // FramePadding on each side) plus one ItemSpacing for SameLine(). Formula mirrors
+  // panels.cpp's crystal-card hover-button sizing so per-row layout stays consistent
+  // across fonts/DPI without a hard-coded magic number.
+  const float frame_pad_x = ImGui::GetStyle().FramePadding.x;
+  const float item_spacing_x = ImGui::GetStyle().ItemSpacing.x;
+  const float del_btn_w = ImGui::CalcTextSize(ICON_FA_XMARK).x + frame_pad_x * 2.0f;
+  const float row_item_width = -(del_btn_w + item_spacing_x);
 
   for (size_t i = 0; i < g_summand_rows.size(); ++i) {
     auto& row = g_summand_rows[i];
@@ -692,7 +719,7 @@ static void RenderSummandRowList() {
     }
     char text_id[64];
     snprintf(text_id, sizeof(text_id), "##row_text_%llu", static_cast<unsigned long long>(row.uid));
-    ImGui::PushItemWidth(-140.0f);  // leave room for the Remove button on the right
+    ImGui::PushItemWidth(row_item_width);  // leave room for the trailing "x" delete button
     ImGui::InputText(text_id, row.text, sizeof(row.text));
     ImGui::PopItemWidth();
     if (!is_empty) {
@@ -701,12 +728,23 @@ static void RenderSummandRowList() {
 
     ImGui::SameLine();
     char del_id[64];
-    snprintf(del_id, sizeof(del_id), "Remove##row_delete_%llu", static_cast<unsigned long long>(row.uid));
-    ImGui::BeginDisabled(!can_delete_any);
-    if (ImGui::Button(del_id, ImVec2(120, 0))) {
+    snprintf(del_id, sizeof(del_id), ICON_FA_XMARK "##row_delete_%llu", static_cast<unsigned long long>(row.uid));
+    // Match crystal-card / spectrum-row convention: red destructive style when
+    // enabled, greyed-out (not tinted red) via BeginDisabled when the last row
+    // may not be removed.
+    if (can_delete_any) {
+      PushDestructiveStyle();
+    } else {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::SmallButton(del_id)) {
       delete_idx = i;
     }
-    ImGui::EndDisabled();
+    if (can_delete_any) {
+      PopDestructiveStyle();
+    } else {
+      ImGui::EndDisabled();
+    }
 
     // Per-row inline validation hint (first non-valid across the list is
     // enough to gate OK; still show every offending row so the user can fix
@@ -1746,13 +1784,9 @@ void RenderSpectrumModal(GuiState& state) {
     ImGui::SetNextItemWidth(80);
     ImGui::InputFloat("weight##wt", &g_spectrum_edit_buf[i].weight, 0.0f, 0.0f, "%.3f");
     ImGui::SameLine();
-    // Destructive red styling, matching the entry-card / layer-header delete buttons
-    // (panels.cpp kBtnDestructive* palette); replicated here since that palette is file-local.
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.22f, 0.22f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.30f, 0.30f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.15f, 0.15f, 1.0f));
+    PushDestructiveStyle();
     const bool remove_clicked = ImGui::SmallButton(ICON_FA_XMARK "##rm");
-    ImGui::PopStyleColor(3);
+    PopDestructiveStyle();
     if (remove_clicked) {
       remove_idx = i;
     }
