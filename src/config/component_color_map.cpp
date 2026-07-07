@@ -16,21 +16,22 @@ std::string FormatTriple(IdType layer, IdType crystal_id, IdType summand_idx) {
          ", summand=" + std::to_string(summand_idx) + ")";
 }
 
-const ComponentTableEntry* FindEntry(const ComponentTable& table, const RaypathColorEntry& e) {
+}  // namespace
+
+const ComponentTableEntry* FindComponentTableEntry(const ComponentTable& table, IdType layer, IdType crystal_id,
+                                                   IdType summand_idx) {
   for (const auto& te : table.entries_) {
-    if (te.layer_ == e.layer_ && te.crystal_id_ == e.crystal_id_ && te.summand_idx_ == e.summand_idx_) {
+    if (te.layer_ == layer && te.crystal_id_ == crystal_id && te.summand_idx_ == summand_idx) {
       return &te;
     }
   }
   return nullptr;
 }
 
-}  // namespace
-
 ComponentColorMap BuildComponentColorMap(const RaypathColorConfig& color_cfg, const ComponentTable& table) {
   ComponentColorMap map;
   for (const auto& e : color_cfg.entries_) {
-    const auto* entry = FindEntry(table, e);
+    const auto* entry = FindComponentTableEntry(table, e.layer_, e.crystal_id_, e.summand_idx_);
     if (entry == nullptr) {
       throw std::invalid_argument("raypath_color: no ComponentTable entry for " +
                                   FormatTriple(e.layer_, e.crystal_id_, e.summand_idx_));

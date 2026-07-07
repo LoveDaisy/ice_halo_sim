@@ -46,6 +46,17 @@ class RenderConsumer : public IConsume {
   // component bit at `bit`, or nullptr when `bit` is out of range or is not a
   // participating bit (`colored_mask_ >> bit) & 1 == 0`).
   const float* GetComponentLaneY(uint8_t bit) const;
+  // Image dimensions (config resolution). Exposed so the 336.3 compositor can
+  // size its output without reaching into the private config.
+  int ImageWidth() const { return config_.resolution_[0]; }
+  int ImageHeight() const { return config_.resolution_[1]; }
+
+  // task-336.3: the SINGLE mono-image exposure scale, the sole source of truth
+  // for both PostSnapshot() and the component compositor (plan §1.1). Returns
+  // config_.intensity_factor_ * kNormScale * total_pix / snapshot_intensity_,
+  // or 0 when total_pix<=0 or snapshot_intensity_<=0. Reads the frozen snapshot
+  // (snapshot_intensity_), so it is tearing-free once PrepareSnapshot() has run.
+  float ExposureScale() const;
 
  private:
   // task-336.2: split out lane accumulation so Consume()'s cognitive complexity

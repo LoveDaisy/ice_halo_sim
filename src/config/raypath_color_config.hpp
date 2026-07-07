@@ -2,6 +2,7 @@
 #define CONFIG_RAYPATH_COLOR_CONFIG_H_
 
 #include <nlohmann/json.hpp>
+#include <string>
 #include <vector>
 
 #include "core/def.hpp"
@@ -38,10 +39,21 @@ struct RaypathColorEntry {
   IdType crystal_id_ = 0;
   IdType summand_idx_ = 0;
   float color_[3]{};
+  // task-336.3: visibility axis, orthogonal to the composite mode. Absent in
+  // JSON → visible (default true) and not solo (default false) = the 336.1
+  // behavior (every colored bit participates). `solo_` (when any entry sets it)
+  // restricts the visible set to solo'd bits, overriding hide.
+  bool visible_ = true;
+  bool solo_ = false;
 };
 
 struct RaypathColorConfig {
   std::vector<RaypathColorEntry> entries_;
+  // task-336.3: display-time composite mode. "dominant" (default) | "additive" |
+  // "painter". Parsed into CompositeMode by BuildCompositeOptions; an unknown
+  // string falls back to dominant with a one-shot warning. Absent in JSON →
+  // "dominant" = the 336.1 behavior.
+  std::string mode_ = "dominant";
 };
 
 // JSON representation is a bare array. Missing top-level "raypath_color" key

@@ -25,6 +25,7 @@
 #if defined(LUMICE_CUDA_ENABLED)
 #include "core/backend/cuda_trace_backend.hpp"  // CudaDeviceAvailable() for ResolveGpuRoute
 #endif
+#include "server/component_compositor.hpp"
 #include "server/consumer.hpp"
 #include "server/ray_num_semantics.hpp"
 #include "server/render.hpp"
@@ -125,6 +126,14 @@ class ServerImpl {
   // raypath_color configured.
   uint64_t active_colored_mask_ = 0;
 
+  // task-336.3: the join products used to composite per-component Y-lanes into a
+  // colored image. Both are (re)built in CommitConfig's try block alongside
+  // active_colored_mask_ (bit→RGB map + display options); DoSnapshot Phase 2
+  // reads them to produce cached_composite_results_. Empty/default when no
+  // raypath_color is configured (active_colored_mask_ == 0).
+  ComponentColorMap component_color_map_;
+  CompositeOptions composite_options_;
+
   QueuePtrS<SimBatch> scene_queue_;
   QueuePtrS<SimData> data_queue_;
 
@@ -141,6 +150,26 @@ class ServerImpl {
   // Cached results under snapshot_mutex_ — populated by DoSnapshot, read by Get*Results
   std::vector<RenderResult> cached_render_results_;
   std::optional<StatsResult> cached_stats_result_;
+  // task-336.3: owning cache of composited colored images, one per RenderConsumer
+  // with a non-zero colored mask. Produced in DoSnapshot Phase 2, under
+  // snapshot_mutex_. Export to the C-API is deferred to 336.4 — for now this is
+  // internal (see GetCompositeResults() below). Empty when no raypath_color.
+  struct CompositeResult {
+    int renderer_id_;
+    int w_;
+    int h_;
+    std::vector<uint8_t> rgb_;  // W*H*3 sRGB
+  };
+  std::vector<CompositeResult> cached_composite_results_;
+
+ public:
+  // Internal getter (test/336.4 seam). Copies out under snapshot_mutex_.
+  std::vector<CompositeResult> GetCompositeResults() {
+    std::lock_guard<std::mutex> lock(snapshot_mutex_);
+    return cached_composite_results_;
+  }
+
+ private:
   std::vector<std::thread> simulator_threads_;
   mutable std::mutex prod_mutex_;
 
@@ -388,6 +417,10 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   // allocation is skipped and rendering stays pre-336 bit-for-bit. Declared
   // outside the try so it survives to the reuse-judgment below.
   ComponentColorMap color_map;
+  // task-336.3: the composite join products (bit→RGB map already above; display
+  // options here). Declared outside the try so they survive to the member
+  // assignment below, mirroring color_map.
+  CompositeOptions composite_options;
   try {
     new_config = config_json.get<ConfigManager>();
     // Fold the user raypath_color into the participating-bit mask so the rebuilt
@@ -397,6 +430,9 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
     // catch clause needed.
     ComponentTable component_table = BuildComponentTable(new_config.scene_);
     color_map = BuildComponentColorMap(new_config.raypath_color_, component_table);
+    // task-336.3: display-time composite mode + visibility masks, built from the
+    // same table so the masks agree with color_map.colored_mask_ bit-for-bit.
+    composite_options = BuildCompositeOptions(new_config.raypath_color_, component_table);
   } catch (const nlohmann::json::out_of_range& e) {
     ILOG_ERROR(logger_, "CommitConfig: Missing field: {}", e.what());
     {
@@ -444,6 +480,12 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   // NeedsRebuild() layout check below.
   bool color_mask_changed = (color_map.colored_mask_ != active_colored_mask_);
   active_colored_mask_ = color_map.colored_mask_;
+  // task-336.3: publish the compositor inputs in lockstep with the mask. Even a
+  // reused consumer set (same mask) may carry a new mode / visibility, so these
+  // are always refreshed. DoSnapshot reads them under snapshot_mutex_; Stop()
+  // above has drained all workers so there is no concurrent DoSnapshot here.
+  component_color_map_ = color_map;
+  composite_options_ = composite_options;
 
   bool can_reuse =
       !consumers_.empty() && !color_mask_changed && (old_renderers.size() == config_manager_.renderers_.size());
@@ -527,6 +569,8 @@ void ServerImpl::DoSnapshot() {
   // Phase 1: memcpy under consumer_mutex_ (short hold).
   // Copy shared_ptrs so consumers stay alive even if Stop() clears consumers_.
   std::vector<ConsumerPtrS> snapshot_consumers;
+  ComponentColorMap snap_color_map;
+  CompositeOptions snap_composite_options;
   {
     std::lock_guard<TicketMutex> lock(consumer_mutex_);
     if (!snapshot_dirty_) {
@@ -537,6 +581,11 @@ void ServerImpl::DoSnapshot() {
       c->PrepareSnapshot();
     }
     snapshot_consumers = consumers_;  // shared_ptr copy keeps consumers alive
+    // task-336.3: pair the compositor inputs with the consumer set captured
+    // above (plain PODs; copied under consumer_mutex_ so they are consistent
+    // with snapshot_consumers).
+    snap_color_map = component_color_map_;
+    snap_composite_options = composite_options_;
     snapshot_dirty_ = false;
   }
   // Phase 1.5: pixel counting outside consumer_mutex_ (snapshot_xyz_ is stable here).
@@ -549,6 +598,10 @@ void ServerImpl::DoSnapshot() {
   // Safe: snapshot_consumers holds shared_ptrs, objects won't be freed.
   std::vector<RenderResult> render_results;
   std::optional<StatsResult> stats_result;
+  // task-336.3: composite colored consumers into cached RGB images. Built
+  // outside the snapshot_mutex_ block (pure reads of the frozen snapshot lanes)
+  // and swapped in under the lock alongside the render results.
+  std::vector<CompositeResult> composite_results;
   {
     std::lock_guard<std::mutex> lock(snapshot_mutex_);
     for (const auto& c : snapshot_consumers) {
@@ -562,8 +615,33 @@ void ServerImpl::DoSnapshot() {
         stats_result = *s;
       }
     }
+    // task-336.3: only colored consumers (ColoredMask()!=0) produce a composite.
+    // Zero-config consumers (mask 0) are skipped → no composite, mono path
+    // untouched (plan §0 / risk-5 rollback).
+    for (const auto& c : snapshot_consumers) {
+      auto* rc = dynamic_cast<RenderConsumer*>(c.get());
+      if (rc == nullptr || rc->ColoredMask() == 0) {
+        continue;
+      }
+      std::vector<float> linear_rgb;
+      if (!CompositeComponentLinear(*rc, snap_color_map, snap_composite_options, linear_rgb)) {
+        continue;
+      }
+      CompositeResult cr;
+      cr.renderer_id_ = 0;
+      // Recover the renderer id from the mono result (RenderResult carries it).
+      auto mono = rc->GetResult();
+      if (auto* r = std::get_if<RenderResult>(&mono)) {
+        cr.renderer_id_ = r->renderer_id_;
+      }
+      cr.w_ = rc->ImageWidth();
+      cr.h_ = rc->ImageHeight();
+      LinearRgbToSrgbU8(linear_rgb, cr.rgb_);
+      composite_results.push_back(std::move(cr));
+    }
     cached_render_results_ = std::move(render_results);
     cached_stats_result_ = stats_result;
+    cached_composite_results_ = std::move(composite_results);
   }
 }
 

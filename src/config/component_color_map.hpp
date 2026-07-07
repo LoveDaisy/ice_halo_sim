@@ -44,6 +44,14 @@ struct ComponentColorMap {
 // and preserves pre-336 rendering behavior.
 ComponentColorMap BuildComponentColorMap(const RaypathColorConfig& color_cfg, const ComponentTable& table);
 
+// Shared (layer, crystal_id, summand_idx) → ComponentTableEntry lookup, the
+// single source of truth used by both BuildComponentColorMap and the 336.3
+// BuildCompositeOptions so the two agree bit-for-bit. Returns nullptr when no
+// entry matches the triple. `core/def.hpp` (IdType) is transitively available
+// via component_table.hpp.
+const ComponentTableEntry* FindComponentTableEntry(const ComponentTable& table, IdType layer, IdType crystal_id,
+                                                   IdType summand_idx);
+
 }  // namespace lumice
 
 #endif  // CONFIG_COMPONENT_COLOR_MAP_H_

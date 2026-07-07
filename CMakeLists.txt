@@ -410,6 +410,7 @@ endif()
 
 set(lumice_server_src
   "${PROJ_SRC_DIR}/server/c_api.cpp"
+  "${PROJ_SRC_DIR}/server/component_compositor.cpp"
   "${PROJ_SRC_DIR}/server/render.cpp"
   "${PROJ_SRC_DIR}/server/server.cpp"
   "${PROJ_SRC_DIR}/server/show_rays.cpp"

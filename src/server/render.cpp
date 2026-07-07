@@ -72,6 +72,17 @@ const float* RenderConsumer::GetComponentLaneY(uint8_t bit) const {
   return snapshot_lane_y_[bit].get();
 }
 
+// task-336.3: single source of truth for the mono-image exposure scale (see
+// plan §1.1). PostSnapshot() below calls this so the inline scale and the
+// compositor's scale can never drift apart.
+float RenderConsumer::ExposureScale() const {
+  int total_pix = config_.resolution_[0] * config_.resolution_[1];
+  if (total_pix <= 0 || snapshot_intensity_ <= 0.0f) {
+    return 0.0f;
+  }
+  return config_.intensity_factor_ * kNormScale * total_pix / snapshot_intensity_;
+}
+
 
 void RenderConsumer::ConsumeDeviceFused(const SimData& data) {
   // S1 device-fused: backend already accumulated XYZ on-device; skip
@@ -382,7 +393,11 @@ void RenderConsumer::PostSnapshot() {
 
   // Intensity scaling uses config_.intensity_factor_ (from CLI JSON / CommitConfig snapshot).
   // GUI rendering uses a separate path: exposure_offset → shader uniform (see app_panels.cpp).
-  float scale = config_.intensity_factor_ * kNormScale * total_pix / snapshot_intensity_;
+  // task-336.3: the scale expression now lives in ExposureScale() (single source
+  // shared with the compositor). We are past the total_pix/snapshot_intensity_
+  // guard above, so ExposureScale() returns the same non-zero value the inline
+  // expression used to compute — bit-identical.
+  float scale = ExposureScale();
   for (size_t i = 0; i < buf_size; i++) {
     float_data[i] *= scale;
   }
