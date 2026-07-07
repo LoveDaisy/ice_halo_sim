@@ -163,10 +163,26 @@ class ServerImpl {
   std::vector<CompositeResult> cached_composite_results_;
 
  public:
-  // Internal getter (test/336.4 seam). Copies out under snapshot_mutex_.
-  std::vector<CompositeResult> GetCompositeResults() {
+  // task-336.4: composite results getter, mirroring GetRenderResults so the
+  // C-API can export it via the existing RenderResult surface. Returns
+  // RenderResult handles whose img_buffer_ points into the ServerImpl-owned
+  // cached_composite_results_ (NOT owning copies) — same lifetime contract as
+  // GetRenderResults: valid until the next DoSnapshot() rebuild or CommitConfig.
+  // Empty when no raypath_color is configured (no colored consumer → no cache).
+  std::vector<RenderResult> GetCompositeResults() {
+    DoSnapshot();
     std::lock_guard<std::mutex> lock(snapshot_mutex_);
-    return cached_composite_results_;
+    std::vector<RenderResult> out;
+    out.reserve(cached_composite_results_.size());
+    for (const auto& cr : cached_composite_results_) {
+      RenderResult r;
+      r.renderer_id_ = cr.renderer_id_;
+      r.img_width_ = cr.w_;
+      r.img_height_ = cr.h_;
+      r.img_buffer_ = cr.rgb_.data();  // points into ServerImpl-owned cache
+      out.push_back(r);
+    }
+    return out;
   }
 
  private:
@@ -1298,6 +1314,14 @@ std::vector<RenderResult> Server::GetRenderResults() {
     return {};
   }
   return impl_->GetRenderResults();
+}
+
+std::vector<RenderResult> Server::GetCompositeResults() {
+  if (!impl_) {
+    LOG_WARNING("Server is terminated!");
+    return {};
+  }
+  return impl_->GetCompositeResults();
 }
 
 std::vector<RawXyzResult> Server::GetRawXyzResults() {

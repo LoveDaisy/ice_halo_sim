@@ -274,6 +274,16 @@ class Server {
   std::vector<RenderResult> GetRenderResults();
 
   /**
+   * @brief Get composited per-raypath colored results (task-336.4)
+   * @return Vector of RenderResult objects, one per colored renderer. Empty when
+   *         no `raypath_color` is configured (mono-only path). Reuses RenderResult
+   *         since a composite is just an RGB uint8 W*H*3 image; img_buffer_ points
+   *         into server-owned storage with the same lifetime contract as
+   *         GetRenderResults (valid until the next GetCompositeResults/CommitConfig).
+   */
+  std::vector<RenderResult> GetCompositeResults();
+
+  /**
    * @brief Get raw XYZ results (unconverted float data for GPU-side processing)
    * @return Vector of RawXyzResult. Empty if no render consumers.
    */

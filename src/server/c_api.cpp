@@ -981,6 +981,33 @@ LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderRes
 }
 
 
+LUMICE_ErrorCode LUMICE_GetCompositeResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count) {
+  if (!server || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+
+  auto composite_results = server->server_->GetCompositeResults();
+  int count = static_cast<int>(composite_results.size());
+  if (count > max_count) {
+    count = max_count;
+  }
+
+  for (int i = 0; i < count; i++) {
+    out[i].renderer_id = composite_results[i].renderer_id_;
+    out[i].img_width = composite_results[i].img_width_;
+    out[i].img_height = composite_results[i].img_height_;
+    out[i].img_buffer = composite_results[i].img_buffer_;
+  }
+
+  // Sentinel: see doc/capi-lifecycle-architecture.md §5.2 (fix: 5287efe).
+  if (count < max_count) {
+    std::memset(&out[count], 0, sizeof(LUMICE_RenderResult));
+  }
+
+  return LUMICE_OK;
+}
+
+
 LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzResult* out, int max_count) {
   if (!server || !out) {
     return LUMICE_ERR_NULL_ARG;
