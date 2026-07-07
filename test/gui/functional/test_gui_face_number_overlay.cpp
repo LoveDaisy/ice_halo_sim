@@ -745,4 +745,81 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
       }
     };
   }
+
+  // task-fix-crystal-preview-thumbnail Bug 1a: face_normals must be Y-Z swapped
+  // in the same coordinate frame as vertices before being handed to the overlay.
+  // Regression that ran without this test: BuildCrystalMeshData swapped
+  // vertices + edge_face_normals into GL frame but left face_normals in core
+  // frame, so ProjectLabelToScreen's front/back test compared a GL-frame center
+  // against a core-frame normal → systematic 90° error.
+  //
+  // Uses a view-independent geometric invariant instead of hard-coded face_number
+  // expectations (which are fragile against mesh topology changes): for a convex
+  // solid, every face normal must point away from the mesh centroid, i.e.
+  // dot(normal, center - centroid) > 0. This holds in ANY consistent frame; it
+  // fails only if the two vectors sit in different frames (the exact bug).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "unit", "face_number_normal_matches_center_frame");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      lumice::gui::ResetLastCrystalMesh();
+
+      // Two convex crystals of different topologies, exercising both prism
+      // faces and pyramid slanted faces so a partial swap (e.g. side faces only)
+      // would still trigger.
+      struct Case {
+        const char* label;
+        lumice::gui::CrystalConfig cfg;
+      };
+      lumice::gui::CrystalConfig prism_cfg;
+      prism_cfg.type = lumice::gui::CrystalType::kPrism;
+      prism_cfg.height = 1.0f;
+      lumice::gui::CrystalConfig pyramid_cfg;
+      pyramid_cfg.type = lumice::gui::CrystalType::kPyramid;
+      pyramid_cfg.prism_h = 1.0f;
+      pyramid_cfg.upper_h = 0.5f;
+      pyramid_cfg.lower_h = 0.5f;
+      pyramid_cfg.upper_alpha = 60.0f;
+      pyramid_cfg.lower_alpha = 60.0f;
+      const Case cases[] = { { "prism", prism_cfg }, { "pyramid", pyramid_cfg } };
+
+      for (const auto& c : cases) {
+        LUMICE_CrystalMesh mesh{};
+        IM_CHECK(lumice::gui::BuildCrystalMeshData(c.cfg, &mesh));
+        IM_CHECK_GT(mesh.face_count, 0);
+
+        // Centroid over the GL-frame vertex buffer (already swapped + AABB-
+        // normalized inside BuildCrystalMeshData).
+        float centroid[3] = { 0.0f, 0.0f, 0.0f };
+        for (int i = 0; i < mesh.vertex_count; ++i) {
+          centroid[0] += mesh.vertices[i * 3 + 0];
+          centroid[1] += mesh.vertices[i * 3 + 1];
+          centroid[2] += mesh.vertices[i * 3 + 2];
+        }
+        float inv_v = 1.0f / static_cast<float>(mesh.vertex_count);
+        centroid[0] *= inv_v;
+        centroid[1] *= inv_v;
+        centroid[2] *= inv_v;
+
+        FaceLabel labels[lumice::gui::kMaxFaceLabels] = {};
+        int n = AggregateFaceLabelsFromTopology(
+            mesh.vertices, mesh.vertex_count, mesh.face_count, mesh.face_numbers_by_face, mesh.face_vtx_offsets,
+            mesh.face_vtx_counts, mesh.face_vtx_pool, mesh.face_normals, labels, lumice::gui::kMaxFaceLabels);
+        IM_CHECK_GT(n, 0);
+
+        for (int i = 0; i < n; ++i) {
+          const float* ctr = labels[i].display_center;
+          const float* nrm = labels[i].display_normal;
+          float dx = ctr[0] - centroid[0];
+          float dy = ctr[1] - centroid[1];
+          float dz = ctr[2] - centroid[2];
+          float dot = nrm[0] * dx + nrm[1] * dy + nrm[2] * dz;
+          if (dot <= 0.0f) {
+            IM_ERRORF("crystal=%s face=%d dot(normal, center-centroid)=%f (must be > 0; frame mismatch)", c.label,
+                      labels[i].face_number, static_cast<double>(dot));
+          }
+        }
+      }
+    };
+  }
 }
