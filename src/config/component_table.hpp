@@ -1,6 +1,15 @@
 #ifndef CONFIG_COMPONENT_TABLE_H_
 #define CONFIG_COMPONENT_TABLE_H_
 
+// GPU / Fork-C legacy component-bit source. As of the Design-2 redirect
+// (2026-07-08, doc/gui-custom-spectrum-and-raypath-color.md §4.0) the CPU
+// backends have switched to the placement-scoped
+// `ColorGateTable` (see color_gate_table.hpp). This file remains untouched
+// as the source of truth for the Metal/CUDA device gates until scrum-3c
+// retires the Fork-C GPU path. Do NOT conflate the two: bit numberings are
+// independent — this table scans physical-filter summands, `ColorGateTable`
+// scans `raypath_color[].match[]` predicates.
+
 #include <cstddef>
 #include <cstdint>
 #include <vector>

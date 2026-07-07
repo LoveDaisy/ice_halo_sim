@@ -60,6 +60,7 @@
 #include "config/filter_config.hpp"
 #include "config/light_config.hpp"
 #include "config/proj_config.hpp"
+#include "config/raypath_color_config.hpp"
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/backend/cpu_trace_backend.hpp"
@@ -440,13 +441,46 @@ TEST(RenderConsumerComponentLanes, RealBackendMasksBucketedShareExposure) {
   constexpr size_t kMaxHits = 8;
   auto scene = MakeTwoCrystalColoredScene(kMaxHits);
 
-  auto table = BuildComponentTable(scene);
-  ASSERT_EQ(table.entries_.size(), 3u);
+  // Design 2: color bits come from a raypath_color config on the SessionSpec.
+  // The three predicates below match the three arcs originally produced by the
+  // Fork-C summand walk (crystal 0 whole-crystal + crystal 1's two EE clauses).
+  auto rpc = std::make_shared<RaypathColorConfig>();
+  {
+    ColorClassConfig c;
+    c.color_[0] = 1.0f;
+    RaypathColorRef r;
+    r.layer_ = 0;
+    r.crystal_ = 0;
+    r.predicate_ = SimpleFilterParam{ EntryExitFilterParam{ std::nullopt, std::nullopt, 1, std::nullopt } };
+    c.match_.push_back(r);
+    rpc->classes_.push_back(std::move(c));
+  }
+  {
+    ColorClassConfig c;
+    c.color_[1] = 1.0f;
+    RaypathColorRef r;
+    r.layer_ = 0;
+    r.crystal_ = 1;
+    r.predicate_ = SimpleFilterParam{ EntryExitFilterParam{ std::nullopt, std::nullopt, 2, 2 } };
+    c.match_.push_back(r);
+    rpc->classes_.push_back(std::move(c));
+  }
+  {
+    ColorClassConfig c;
+    c.color_[2] = 1.0f;
+    RaypathColorRef r;
+    r.layer_ = 0;
+    r.crystal_ = 1;
+    r.predicate_ = SimpleFilterParam{ EntryExitFilterParam{ std::nullopt, std::nullopt, 3, std::nullopt } };
+    c.match_.push_back(r);
+    rpc->classes_.push_back(std::move(c));
+  }
 
   RenderConfig render = MakeLaneRenderConfig();
   SessionSpec spec;
   spec.scene = &scene;
   spec.render = &render;
+  spec.raypath_color = rpc;
   spec.wl = WlParam{ kWl, 1.0f };
   spec.seed = 20240707u;
 
@@ -519,24 +553,27 @@ TEST(RenderConsumerComponentLanes, RealBackendMasksBucketedShareExposure) {
 namespace {
 
 // Minimal committable config. `color` selects which raypath_color block to
-// emit; the scene has TWO scattering slots (each with a single-summand simple
-// raypath filter) so bit0 / bit1 are separately addressable via (crystal,
-// filter) refs.
+// emit; the scene has TWO scattering slots on DISTINCT crystal_ids (1 and 2)
+// so each Design-2 `{layer, crystal}` ref resolves unambiguously per §3.2
+// decision 2(b). The two crystals share geometry — only the id differs.
 enum class ColorForm { kNone, kOneBit, kTwoSingleBitClasses, kOneTwoBitClass };
 
 nlohmann::json MakeReuseConfig(ColorForm color) {
   nlohmann::json root;
 
-  nlohmann::json cr;
-  cr["id"] = 1;
-  cr["type"] = "prism";
-  cr["shape"]["height"] = 1.5f;
-  cr["axis"]["zenith"] = { { "type", "gauss" }, { "mean", 90.0f }, { "std", 10.0f } };
-  cr["axis"]["azimuth"] = { { "type", "uniform" }, { "mean", 0.0f }, { "std", 180.0f } };
-  cr["axis"]["roll"] = { { "type", "uniform" }, { "mean", 0.0f }, { "std", 180.0f } };
-  root["crystal"] = nlohmann::json::array({ cr });
+  nlohmann::json cr1;
+  cr1["id"] = 1;
+  cr1["type"] = "prism";
+  cr1["shape"]["height"] = 1.5f;
+  cr1["axis"]["zenith"] = { { "type", "gauss" }, { "mean", 90.0f }, { "std", 10.0f } };
+  cr1["axis"]["azimuth"] = { { "type", "uniform" }, { "mean", 0.0f }, { "std", 180.0f } };
+  cr1["axis"]["roll"] = { { "type", "uniform" }, { "mean", 0.0f }, { "std", 180.0f } };
+  nlohmann::json cr2 = cr1;  // identical geometry, distinct id
+  cr2["id"] = 2;
+  root["crystal"] = nlohmann::json::array({ cr1, cr2 });
 
-  // Two simple raypath filters (distinct raypaths → distinct summand bits).
+  // Two simple raypath filters (distinct raypaths → distinct physical
+  // populations; Design-2 color refs are keyed by {layer, crystal} only).
   nlohmann::json flt1;
   flt1["id"] = 1;
   flt1["type"] = "raypath";
@@ -559,10 +596,12 @@ nlohmann::json MakeReuseConfig(ColorForm color) {
   scene["max_hits"] = 8;
   nlohmann::json ms;
   ms["prob"] = 0.0f;
-  // Two scattering slots: ci=0 → (crystal=1, filter=1) → bit0; ci=1 → (crystal=1, filter=2) → bit1.
+  // Two scattering slots on distinct crystals:
+  //   ci=0 → (crystal=1, filter=1) → color bit for {layer:0, crystal:1};
+  //   ci=1 → (crystal=2, filter=2) → color bit for {layer:0, crystal:2}.
   ms["entries"] = nlohmann::json::array({
       { { "crystal", 1 }, { "filter", 1 }, { "proportion", 0.5f } },
-      { { "crystal", 1 }, { "filter", 2 }, { "proportion", 0.5f } },
+      { { "crystal", 2 }, { "filter", 2 }, { "proportion", 0.5f } },
   });
   scene["scattering"] = nlohmann::json::array({ ms });
   root["scene"] = scene;
@@ -581,7 +620,9 @@ nlohmann::json MakeReuseConfig(ColorForm color) {
   rn["intensity_factor"] = 1.0f;
   root["render"] = nlohmann::json::array({ rn });
 
-  auto ref = [](int filter_id) { return nlohmann::json{ { "layer", 0 }, { "crystal", 1 }, { "filter", filter_id } }; };
+  // Design-2 whole-crystal ref (match-all predicate) — the JSON wire form is
+  // just {layer, crystal} (no `type` field means NoneFilterParam).
+  auto ref = [](int crystal_id) { return nlohmann::json{ { "layer", 0 }, { "crystal", crystal_id } }; };
 
   switch (color) {
     case ColorForm::kNone:

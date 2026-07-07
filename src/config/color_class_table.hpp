@@ -6,7 +6,7 @@
 
 namespace lumice {
 
-struct ComponentTable;
+struct ColorGateTable;
 struct RaypathColorConfig;
 struct SceneConfig;
 
@@ -35,27 +35,30 @@ struct ColorClassTable {
   uint64_t referenced_mask_ = 0;
 };
 
-// Pure function: 339.2 color-class DTO + scene (for id→ci resolution) + config
-// -time component table → runtime color-class table.
+// Pure function: Design 2 (2026-07-08) color-class DTO + scene (retained for
+// legacy signature parity; the ambiguity check now lives in
+// `BuildColorGateTable`) + placement-scoped color-gate table → runtime
+// color-class table.
+//
+// Each `RaypathColorRef` maps to exactly one bit via a lookup in
+// `ColorGateTable.entries_` matching (layer, crystal_id, predicate) —
+// removing the Fork-C omit-summand OR-union branch (Design 2 refs carry
+// exactly one predicate, so exactly one bit resolves per ref).
 //
 // Errors (all std::invalid_argument, caught by server → Error::InvalidConfig):
-//   - unknown `combine` string;
-//   - out-of-range layer;
-//   - crystal/filter id has no matching (crystal.id_, filter.id_) pair in
-//     scene.ms_[layer].setting_[];
-//   - degenerate duplicate: more than one setting with the same
-//     (crystal.id_, filter.id_) pair on the same layer;
-//   - explicit summand out of range for the referenced filter;
-//   - combine:"all" class with an omit-summand ref that resolves to >1 bits
-//     (decision 4 ban — keeps the flat member_bits_ representation safe for
-//     cross-layer AND). Error message carries the ref quadruple + remediation.
+//   - unknown `combine` string. (Ambiguity / out-of-range layer / missing
+//     placement were already reported by BuildColorGateTable; the caller
+//     invokes it first, so this function only encounters valid refs.)
+// Contract violation (assert / defensive throw): a ref whose
+//   (layer, crystal_id, predicate) has no matching gate-table entry — should
+//   be unreachable because both callers read the same config, but guarded so
+//   silent misresolution cannot happen.
 // Warnings (via LOG_WARNING, non-fatal):
-//   - a ref hits kNoBit (>64-summand overflow): skip that bit;
-//   - a class ends up with member_bits_ == 0 (empty match_ or all bits kNoBit):
+//   - a class ends up with member_bits_ == 0 (all its refs hit kNoBit):
 //     class is kept in the list to preserve z-order but contributes 0 to
 //     `referenced_mask_` and is a no-op at predicate time.
 ColorClassTable BuildColorClassTable(const RaypathColorConfig& color_cfg, const SceneConfig& scene,
-                                     const ComponentTable& table);
+                                     const ColorGateTable& gate_table);
 
 // Structural equality for consumer-rebuild eligibility (task-339.3 decision 1):
 // compares z-order-preserving (combine_, member_bits_) per class — NOT just the

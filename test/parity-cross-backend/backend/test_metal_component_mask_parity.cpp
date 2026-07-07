@@ -357,6 +357,19 @@ TEST(MetalComponentMaskParity, ShuffleInvariantJointDistribution_LandmineGuard) 
 }
 
 TEST(MetalComponentMaskParity, CpuMarginalBallpark) {
+  // Design-2 redirect (task-engine-redirect-design2,
+  // doc/gui-custom-spectrum-and-raypath-color.md §4.0): the CPU emit gate now
+  // derives its component mask from the placement-scoped `raypath_color`
+  // predicate list, NOT from the physical filter's summands (Fork-C). The
+  // Metal/CUDA backends are explicitly left on Fork-C ("三后端掩码机制…全不碰";
+  // GPU-side color evaluation is deferred to scrum-3c). This scene has no
+  // `raypath_color`, so the CPU now produces an all-zero mask while Metal still
+  // produces Fork-C bits — CPU-vs-GPU component-marginal parity therefore
+  // cannot hold until scrum-3c re-unifies the two bit sources. The Metal-only
+  // structural / cross-seed / shuffle-invariant tests above still validate the
+  // GPU's own Fork-C mask carry end-to-end.
+  GTEST_SKIP() << "CPU-vs-GPU component-marginal parity deferred to scrum-3c "
+                  "(Design-2: CPU mask source = raypath_color, GPU stays Fork-C)";
   if (ShouldSkipMetalTests()) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }

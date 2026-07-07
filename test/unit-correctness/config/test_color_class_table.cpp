@@ -1,10 +1,19 @@
-// Tests for src/config/color_class_table.hpp — BuildColorClassTable's
-// contract on the join of the task-339.2 color-class DTO ×
-// SceneConfig (id → ci resolution) × ComponentTable. Covers the §6 test
-// matrix (single ref / multi-ref any / cross-layer all / none-filter ref /
-// combine defaults + errors / degenerate scenes / kNoBit overflow / omit-
-// summand union / interim legacy adapter equivalence / empty-union class
-// retention).
+// Tests for src/config/color_class_table.hpp — Design 2 (2026-07-08,
+// doc/gui-custom-spectrum-and-raypath-color.md §4.0) BuildColorClassTable
+// contract on the join of DTO × SceneConfig × ColorGateTable.
+//
+// After Design 2, ambiguity / OOB errors have moved to BuildColorGateTable
+// (test_color_gate_table.cpp covers them). BuildColorClassTable now consumes
+// a pre-built gate table and translates each Design-2 predicate ref into its
+// assigned bit. This test suite covers:
+//   - single / multi-ref any → OR union
+//   - cross-layer combine=all → distinct bits
+//   - match-all whole-crystal (AC5: none-filter equivalence via default
+//     NoneFilterParam predicate)
+//   - combine defaults / unknown combine → throw
+//   - empty raypath_color → empty table (AC3 anchor)
+//   - kNoBit overflow → skipped, class retained with 0 bits, no throw
+//   - explicit empty match → class retained with 0 bits
 
 #include <gtest/gtest.h>
 
@@ -14,6 +23,7 @@
 #include <vector>
 
 #include "config/color_class_table.hpp"
+#include "config/color_gate_table.hpp"
 #include "config/component_table.hpp"
 #include "config/filter_config.hpp"
 #include "config/proj_config.hpp"
@@ -23,73 +33,55 @@
 namespace {
 
 using lumice::BuildColorClassTable;
-using lumice::BuildComponentTable;
+using lumice::BuildColorGateTable;
 using lumice::ColorClassCombine;
 using lumice::ColorClassConfig;
 using lumice::ColorClassTable;
-using lumice::ComplexFilterParam;
+using lumice::ComponentTable;
 using lumice::CrystalConfig;
-using lumice::CrystalFilterParam;
+using lumice::EntryExitFilterParam;
 using lumice::FilterConfig;
-using lumice::FilterParam;
 using lumice::IdType;
 using lumice::MsInfo;
 using lumice::NoneFilterParam;
 using lumice::RaypathColorConfig;
 using lumice::RaypathColorRef;
-using lumice::RaypathFilterParam;
 using lumice::ScatteringSetting;
 using lumice::SceneConfig;
 using lumice::SimpleFilterParam;
 
-ScatteringSetting MakeSetting(IdType crystal_id, IdType filter_id, FilterParam param) {
+ScatteringSetting MakeSetting(IdType crystal_id) {
   ScatteringSetting s{};
-  s.filter_.id_ = filter_id;
+  s.filter_.id_ = 0;
   s.filter_.symmetry_ = FilterConfig::kSymNone;
   s.filter_.action_ = FilterConfig::kFilterIn;
-  s.filter_.param_ = std::move(param);
+  s.filter_.param_ = SimpleFilterParam{ NoneFilterParam{} };
   s.crystal_ = CrystalConfig{};
   s.crystal_.id_ = crystal_id;
   s.crystal_proportion_ = 1.0f;
   return s;
 }
 
-ScatteringSetting MakeNoneSetting(IdType crystal_id) {
-  return MakeSetting(crystal_id, lumice::kInvalidId, SimpleFilterParam{ NoneFilterParam{} });
-}
-
-// The three-arcs scene (fixture-parallel): one MS layer with two settings —
-// (crystal=1, filter=1) simple raypath (1 summand) at ci=0, then
-// (crystal=1, filter=4) complex with 2 OR-summands at ci=1.
-SceneConfig MakeThreeArcsScene() {
-  RaypathFilterParam raypath;
-  raypath.raypath_ = { 3, 5 };
-
-  ComplexFilterParam complex;
-  complex.filters_.resize(2);
-  complex.filters_[0].emplace_back(IdType{ 0 }, SimpleFilterParam{ CrystalFilterParam{ 0 } });
-  complex.filters_[1].emplace_back(IdType{ 0 }, SimpleFilterParam{ CrystalFilterParam{ 1 } });
-
+SceneConfig MakeScene(const std::vector<std::vector<IdType>>& layers_crystal_ids) {
   SceneConfig scene{};
   scene.ray_num_ = 1;
   scene.max_hits_ = 1;
-  MsInfo ms{};
-  ms.prob_ = 0.5f;
-  ms.setting_.push_back(MakeSetting(1, 1, SimpleFilterParam{ raypath }));
-  ms.setting_.push_back(MakeSetting(1, 4, FilterParam{ complex }));
-  scene.ms_.push_back(std::move(ms));
+  for (const auto& ids : layers_crystal_ids) {
+    MsInfo ms{};
+    ms.prob_ = 0.5f;
+    for (auto id : ids) {
+      ms.setting_.push_back(MakeSetting(id));
+    }
+    scene.ms_.push_back(std::move(ms));
+  }
   return scene;
 }
 
-RaypathColorRef Ref(uint16_t layer, uint16_t crystal, bool has_filter, uint16_t filter, bool has_summand,
-                    uint16_t summand) {
+RaypathColorRef Ref(uint16_t layer, uint16_t crystal, SimpleFilterParam predicate = NoneFilterParam{}) {
   RaypathColorRef r{};
   r.layer_ = layer;
   r.crystal_ = crystal;
-  r.has_filter_ = has_filter;
-  r.filter_ = filter;
-  r.has_summand_ = has_summand;
-  r.summand_ = summand;
+  r.predicate_ = std::move(predicate);
   return r;
 }
 
@@ -104,262 +96,136 @@ ColorClassConfig Class(float r, float g, float b, std::vector<RaypathColorRef> m
 
 }  // namespace
 
-// ---- §6 case 1: single ref → single bit, combine=any (default) ----
+// ---- single ref → single bit, combine=any (default) ----
 
 TEST(BuildColorClassTable, SingleRefResolvesToSingleBit) {
-  auto scene = MakeThreeArcsScene();
-  auto table = BuildComponentTable(scene);
-  ASSERT_EQ(table.entries_.size(), 3u);
-
+  auto scene = MakeScene({ { 1 } });
   RaypathColorConfig cfg;
-  cfg.classes_.push_back(Class(1.0f, 0.0f, 0.0f, { Ref(0, 1, true, 4, true, 0) }));
-
-  auto ct = BuildColorClassTable(cfg, scene, table);
+  cfg.classes_.push_back(Class(1.0f, 0.0f, 0.0f, { Ref(0, 1) }));  // whole-crystal match-all
+  auto gate = BuildColorGateTable(cfg, scene);
+  auto ct = BuildColorClassTable(cfg, scene, gate);
   ASSERT_EQ(ct.classes_.size(), 1u);
   EXPECT_EQ(ct.classes_[0].combine_, ColorClassCombine::kAny);
-  // ci=1, summand=0 → bit 1 (bit 0 belongs to ci=0's single summand).
-  EXPECT_EQ(ct.classes_[0].member_bits_, static_cast<uint64_t>(1) << 1);
-  EXPECT_EQ(ct.referenced_mask_, static_cast<uint64_t>(1) << 1);
+  EXPECT_EQ(ct.classes_[0].member_bits_, static_cast<uint64_t>(1) << 0);
+  EXPECT_EQ(ct.referenced_mask_, static_cast<uint64_t>(1) << 0);
 }
 
-// ---- §6 case 2: multi-ref any → OR-union ----
+// ---- multi-ref any → OR-union ----
 
 TEST(BuildColorClassTable, MultiRefAnyIsOrUnion) {
-  auto scene = MakeThreeArcsScene();
-  auto table = BuildComponentTable(scene);
-
+  auto scene = MakeScene({ { 1 } });
+  EntryExitFilterParam ee2{};
+  ee2.min_len_ = 2;
+  ee2.max_len_ = 2;
+  EntryExitFilterParam ee3{};
+  ee3.min_len_ = 3;
   RaypathColorConfig cfg;
-  cfg.classes_.push_back(Class(0.5f, 0.5f, 0.5f, { Ref(0, 1, true, 4, true, 0), Ref(0, 1, true, 4, true, 1) }));
-
-  auto ct = BuildColorClassTable(cfg, scene, table);
+  cfg.classes_.push_back(
+      Class(0.5f, 0.5f, 0.5f, { Ref(0, 1, SimpleFilterParam{ ee2 }), Ref(0, 1, SimpleFilterParam{ ee3 }) }));
+  auto gate = BuildColorGateTable(cfg, scene);
+  auto ct = BuildColorClassTable(cfg, scene, gate);
   ASSERT_EQ(ct.classes_.size(), 1u);
   EXPECT_EQ(ct.classes_[0].combine_, ColorClassCombine::kAny);
-  // ci=1 → bits 1 and 2.
-  EXPECT_EQ(ct.classes_[0].member_bits_, (static_cast<uint64_t>(1) << 1) | (static_cast<uint64_t>(1) << 2));
+  EXPECT_EQ(ct.classes_[0].member_bits_, (static_cast<uint64_t>(1) << 0) | (static_cast<uint64_t>(1) << 1));
 }
 
-// ---- §6 case 3: multi-layer combine=all → cross-layer AND, distinct bits ----
+// ---- multi-layer combine=all → cross-layer AND, distinct bits (AC2 anchor) ----
 
 TEST(BuildColorClassTable, CrossLayerAllBitsAreDistinct) {
-  // Layer 0: crystal=1 filter=10 simple raypath (ci=0, bit 0)
-  // Layer 1: crystal=2 filter=20 simple raypath (ci=0, bit 1)
-  RaypathFilterParam raypath;
-  raypath.raypath_ = { 3, 5 };
-
-  SceneConfig scene{};
-  scene.ray_num_ = 1;
-  scene.max_hits_ = 1;
-  MsInfo ms0{};
-  ms0.prob_ = 0.5f;
-  ms0.setting_.push_back(MakeSetting(1, 10, SimpleFilterParam{ raypath }));
-  scene.ms_.push_back(std::move(ms0));
-  MsInfo ms1{};
-  ms1.prob_ = 0.5f;
-  ms1.setting_.push_back(MakeSetting(2, 20, SimpleFilterParam{ raypath }));
-  scene.ms_.push_back(std::move(ms1));
-
-  auto table = BuildComponentTable(scene);
-  ASSERT_EQ(table.entries_.size(), 2u);
-
-  ColorClassConfig cls = Class(1.0f, 1.0f, 1.0f, { Ref(0, 1, true, 10, false, 0), Ref(1, 2, true, 20, false, 0) });
+  auto scene = MakeScene({ { 1 }, { 2 } });
+  ColorClassConfig cls = Class(1.0f, 1.0f, 1.0f, { Ref(0, 1), Ref(1, 2) });
   cls.combine_ = "all";
   RaypathColorConfig cfg;
   cfg.classes_.push_back(cls);
-
-  auto ct = BuildColorClassTable(cfg, scene, table);
+  auto gate = BuildColorGateTable(cfg, scene);
+  auto ct = BuildColorClassTable(cfg, scene, gate);
   ASSERT_EQ(ct.classes_.size(), 1u);
   EXPECT_EQ(ct.classes_[0].combine_, ColorClassCombine::kAll);
-  const uint64_t bits = ct.classes_[0].member_bits_;
-  EXPECT_EQ(std::bitset<64>(bits).count(), 2u);  // MSVC-safe: no __builtin_popcountll
+  uint64_t bits = ct.classes_[0].member_bits_;
+  EXPECT_EQ(std::bitset<64>(bits).count(), 2u);
   EXPECT_EQ(bits, (static_cast<uint64_t>(1) << 0) | (static_cast<uint64_t>(1) << 1));
 }
 
-// ---- §6 case 4: none-filter {layer, crystal} ref ----
+// AC5: match-all whole-crystal ref (default NoneFilterParam predicate) is
+// how Design 2 expresses "染整颗晶体" — replaces the 339.1 none-filter special
+// case. Should resolve to a real bit, be non-zero, and drive predicate-fires.
 
-TEST(BuildColorClassTable, NoneFilterRefResolvesToWholeCrystalBit) {
-  SceneConfig scene{};
-  scene.ray_num_ = 1;
-  scene.max_hits_ = 1;
-  MsInfo ms{};
-  ms.prob_ = 0.5f;
-  ms.setting_.push_back(MakeNoneSetting(1));  // whole-crystal, one summand
-  scene.ms_.push_back(std::move(ms));
-
-  auto table = BuildComponentTable(scene);
-  ASSERT_EQ(table.entries_.size(), 1u);
-
+TEST(BuildColorClassTable, MatchAllWholeCrystalRefResolvesToBit) {
+  auto scene = MakeScene({ { 1 } });
   RaypathColorConfig cfg;
-  cfg.classes_.push_back(Class(0.0f, 1.0f, 0.0f, { Ref(0, 1, false, 0, false, 0) }));
-
-  auto ct = BuildColorClassTable(cfg, scene, table);
+  cfg.classes_.push_back(Class(0.0f, 1.0f, 0.0f, { Ref(0, 1) }));
+  auto gate = BuildColorGateTable(cfg, scene);
+  auto ct = BuildColorClassTable(cfg, scene, gate);
   ASSERT_EQ(ct.classes_.size(), 1u);
   EXPECT_EQ(ct.classes_[0].member_bits_, static_cast<uint64_t>(1) << 0);
 }
 
-// ---- §6 case 5: combine default = "any" ----
+// ---- combine default = "any" ----
 
 TEST(BuildColorClassTable, CombineDefaultIsAny) {
-  auto scene = MakeThreeArcsScene();
-  auto table = BuildComponentTable(scene);
+  auto scene = MakeScene({ { 1 } });
   RaypathColorConfig cfg;
-  cfg.classes_.push_back(Class(1.0f, 0.0f, 0.0f, { Ref(0, 1, true, 1, false, 0) }));
-  // combine_ left default "any" in ColorClassConfig.
-  auto ct = BuildColorClassTable(cfg, scene, table);
+  cfg.classes_.push_back(Class(1.0f, 0.0f, 0.0f, { Ref(0, 1) }));
+  auto gate = BuildColorGateTable(cfg, scene);
+  auto ct = BuildColorClassTable(cfg, scene, gate);
   ASSERT_EQ(ct.classes_.size(), 1u);
   EXPECT_EQ(ct.classes_[0].combine_, ColorClassCombine::kAny);
 }
 
-// ---- §6 case 6: unknown combine → throw ----
+// ---- unknown combine → throw ----
 
 TEST(BuildColorClassTable, UnknownCombineThrows) {
-  auto scene = MakeThreeArcsScene();
-  auto table = BuildComponentTable(scene);
-  ColorClassConfig cls = Class(1.0f, 0.0f, 0.0f, { Ref(0, 1, true, 1, false, 0) });
+  auto scene = MakeScene({ { 1 } });
+  ColorClassConfig cls = Class(1.0f, 0.0f, 0.0f, { Ref(0, 1) });
   cls.combine_ = "xor";
   RaypathColorConfig cfg;
   cfg.classes_.push_back(cls);
-  EXPECT_THROW(BuildColorClassTable(cfg, scene, table), std::invalid_argument);
+  auto gate = BuildColorGateTable(cfg, scene);
+  EXPECT_THROW(BuildColorClassTable(cfg, scene, gate), std::invalid_argument);
 }
 
-// ---- §6 case 7: degenerate duplicate (crystal,filter) → throw ----
-
-TEST(BuildColorClassTable, DegenerateDuplicateCrystalFilterPairThrows) {
-  RaypathFilterParam raypath;
-  raypath.raypath_ = { 3, 5 };
-  SceneConfig scene{};
-  scene.ray_num_ = 1;
-  scene.max_hits_ = 1;
-  MsInfo ms{};
-  ms.prob_ = 0.5f;
-  ms.setting_.push_back(MakeSetting(1, 7, SimpleFilterParam{ raypath }));
-  ms.setting_.push_back(MakeSetting(1, 7, SimpleFilterParam{ raypath }));  // duplicate pair
-  scene.ms_.push_back(std::move(ms));
-
-  auto table = BuildComponentTable(scene);
-  RaypathColorConfig cfg;
-  cfg.classes_.push_back(Class(1.0f, 0.0f, 0.0f, { Ref(0, 1, true, 7, false, 0) }));
-  EXPECT_THROW(BuildColorClassTable(cfg, scene, table), std::invalid_argument);
-}
-
-// ---- §6 case 8: OOB / not-found refs → throw ----
-
-TEST(BuildColorClassTable, LayerOutOfRangeThrows) {
-  auto scene = MakeThreeArcsScene();
-  auto table = BuildComponentTable(scene);
-  RaypathColorConfig cfg;
-  cfg.classes_.push_back(Class(1.0f, 0.0f, 0.0f, { Ref(9, 1, true, 1, false, 0) }));
-  EXPECT_THROW(BuildColorClassTable(cfg, scene, table), std::invalid_argument);
-}
-
-TEST(BuildColorClassTable, UnknownCrystalIdThrows) {
-  auto scene = MakeThreeArcsScene();
-  auto table = BuildComponentTable(scene);
-  RaypathColorConfig cfg;
-  cfg.classes_.push_back(Class(1.0f, 0.0f, 0.0f, { Ref(0, 99, true, 1, false, 0) }));
-  EXPECT_THROW(BuildColorClassTable(cfg, scene, table), std::invalid_argument);
-}
-
-TEST(BuildColorClassTable, UnknownFilterIdThrows) {
-  auto scene = MakeThreeArcsScene();
-  auto table = BuildComponentTable(scene);
-  RaypathColorConfig cfg;
-  cfg.classes_.push_back(Class(1.0f, 0.0f, 0.0f, { Ref(0, 1, true, 99, false, 0) }));
-  EXPECT_THROW(BuildColorClassTable(cfg, scene, table), std::invalid_argument);
-}
-
-TEST(BuildColorClassTable, ExplicitSummandOutOfRangeThrows) {
-  auto scene = MakeThreeArcsScene();
-  auto table = BuildComponentTable(scene);
-  RaypathColorConfig cfg;
-  // filter=1 is simple → only 1 summand; summand=1 is out of range.
-  cfg.classes_.push_back(Class(1.0f, 0.0f, 0.0f, { Ref(0, 1, true, 1, true, 1) }));
-  EXPECT_THROW(BuildColorClassTable(cfg, scene, table), std::invalid_argument);
-}
-
-// ---- §6 case 9: empty raypath_color → empty table ----
+// ---- empty raypath_color → empty table (AC3 anchor) ----
 
 TEST(BuildColorClassTable, EmptyConfigYieldsEmptyTable) {
-  auto scene = MakeThreeArcsScene();
-  auto table = BuildComponentTable(scene);
+  auto scene = MakeScene({ { 1 } });
   RaypathColorConfig empty;
-  auto ct = BuildColorClassTable(empty, scene, table);
+  auto gate = BuildColorGateTable(empty, scene);
+  auto ct = BuildColorClassTable(empty, scene, gate);
   EXPECT_TRUE(ct.classes_.empty());
   EXPECT_EQ(ct.referenced_mask_, 0u);
 }
 
-// ---- §6 case 10: omit-summand on multi-summand filter → OR-union ----
+// ---- kNoBit overflow → skipped, class retained with 0 bits, no throw ----
 
-TEST(BuildColorClassTable, OmitSummandOnComplexFilterUnionsAllBits) {
-  auto scene = MakeThreeArcsScene();
-  auto table = BuildComponentTable(scene);
+TEST(BuildColorClassTable, KNoBitOverflowClassRetainedWithZeroBits) {
+  auto scene = MakeScene({ { 1 } });
   RaypathColorConfig cfg;
-  cfg.classes_.push_back(Class(1.0f, 1.0f, 0.0f, { Ref(0, 1, true, 4, false, 0) }));
-  auto ct = BuildColorClassTable(cfg, scene, table);
-  ASSERT_EQ(ct.classes_.size(), 1u);
-  // ci=1 → bits 1 and 2, unioned.
-  EXPECT_EQ(ct.classes_[0].member_bits_, (static_cast<uint64_t>(1) << 1) | (static_cast<uint64_t>(1) << 2));
-}
-
-// ---- §6 case 11: combine=all + omit-summand producing >1 bit → throw (ban) ----
-
-TEST(BuildColorClassTable, CombineAllWithOmitSummandMultiBitRefThrows) {
-  auto scene = MakeThreeArcsScene();
-  auto table = BuildComponentTable(scene);
-  ColorClassConfig cls = Class(1.0f, 1.0f, 0.0f, { Ref(0, 1, true, 4, false, 0) });
-  cls.combine_ = "all";
-  RaypathColorConfig cfg;
-  cfg.classes_.push_back(cls);
-  EXPECT_THROW(BuildColorClassTable(cfg, scene, table), std::invalid_argument);
-}
-
-// ---- §6 case 12: kNoBit overflow → warn+skip, no throw ----
-
-TEST(BuildColorClassTable, KNoBitOverflowIsSkipped) {
-  constexpr size_t kTotalSummands = 70;
-  ComplexFilterParam complex;
-  complex.filters_.resize(kTotalSummands);
-  for (size_t i = 0; i < kTotalSummands; i++) {
-    complex.filters_[i].emplace_back(IdType{ 0 }, SimpleFilterParam{ CrystalFilterParam{ 0 } });
+  // 65 unique predicates on the same placement — 65th overflows (kNoBit).
+  ColorClassConfig overflow_cls;
+  overflow_cls.color_[0] = 1.0f;
+  for (size_t k = 0; k < ComponentTable::kMaxBits + 1; ++k) {
+    EntryExitFilterParam ee{};
+    ee.min_len_ = static_cast<size_t>(k + 1);
+    overflow_cls.match_.push_back(Ref(0, 1, SimpleFilterParam{ ee }));
   }
-  SceneConfig scene{};
-  scene.ray_num_ = 1;
-  scene.max_hits_ = 1;
-  MsInfo ms{};
-  ms.prob_ = 0.5f;
-  ms.setting_.push_back(MakeSetting(1, 1, FilterParam{ complex }));
-  scene.ms_.push_back(std::move(ms));
-
-  auto table = BuildComponentTable(scene);
-  ASSERT_EQ(table.entries_.size(), kTotalSummands);
-
-  RaypathColorConfig cfg;
-  cfg.classes_.push_back(Class(1.0f, 0.0f, 0.0f, { Ref(0, 1, true, 1, true, 65) }));  // overflow bit
-  cfg.classes_.push_back(Class(0.0f, 1.0f, 0.0f, { Ref(0, 1, true, 1, true, 3) }));   // in-cap bit
-
+  cfg.classes_.push_back(std::move(overflow_cls));
+  auto gate = BuildColorGateTable(cfg, scene);
   ColorClassTable ct;
-  EXPECT_NO_THROW(ct = BuildColorClassTable(cfg, scene, table));
-  ASSERT_EQ(ct.classes_.size(), 2u);
-  EXPECT_EQ(ct.classes_[0].member_bits_, 0u);  // overflow class kept, empty
-  EXPECT_EQ(ct.classes_[1].member_bits_, static_cast<uint64_t>(1) << 3);
-  EXPECT_EQ(ct.referenced_mask_, static_cast<uint64_t>(1) << 3);
+  EXPECT_NO_THROW(ct = BuildColorClassTable(cfg, scene, gate));
+  ASSERT_EQ(ct.classes_.size(), 1u);
+  // 64 real bits + 1 skipped kNoBit — member_bits_ has 64 bits set.
+  EXPECT_EQ(std::bitset<64>(ct.classes_[0].member_bits_).count(), ComponentTable::kMaxBits);
 }
 
-// ---- §6 case 13 (dropped in task-339.4): the ToLegacyColorMap /
-// ToLegacyCompositeOptions transitional adapters were deleted when the
-// compositor moved to per-color-class consumption. The DTO's own visible_/
-// solo_/mode_ semantics are exercised via test_component_compositor.cpp
-// (RaypathColorConfigJsonFormsRoundTrip) and via the compositor tests directly.
-
-// ---- §6 case 14: empty-union class retained + does not contribute ----
+// ---- explicit empty match → class retained with 0 bits ----
 
 TEST(BuildColorClassTable, ExplicitEmptyMatchClassKeptWithZeroBits) {
-  auto scene = MakeThreeArcsScene();
-  auto table = BuildComponentTable(scene);
+  auto scene = MakeScene({ { 1 } });
   RaypathColorConfig cfg;
-  cfg.classes_.push_back(Class(1.0f, 0.0f, 0.0f, {}));                                // empty match
-  cfg.classes_.push_back(Class(0.0f, 1.0f, 0.0f, { Ref(0, 1, true, 1, false, 0) }));  // valid bit 0
-
-  auto ct = BuildColorClassTable(cfg, scene, table);
+  cfg.classes_.push_back(Class(1.0f, 0.0f, 0.0f, {}));             // empty match
+  cfg.classes_.push_back(Class(0.0f, 1.0f, 0.0f, { Ref(0, 1) }));  // valid bit 0
+  auto gate = BuildColorGateTable(cfg, scene);
+  auto ct = BuildColorClassTable(cfg, scene, gate);
   ASSERT_EQ(ct.classes_.size(), 2u);
   EXPECT_EQ(ct.classes_[0].member_bits_, 0u);
   EXPECT_EQ(ct.classes_[1].member_bits_, static_cast<uint64_t>(1) << 0);

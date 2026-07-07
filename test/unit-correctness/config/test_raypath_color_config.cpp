@@ -1,15 +1,18 @@
 // Tests for src/config/raypath_color_config.hpp — JSON round-trip of the
-// task-339.2 color-class schema (supersedes 336.1 flat form) and its optional
+// Design-2 (2026-07-08, doc/gui-custom-spectrum-and-raypath-color.md §4.0
+// SUPERSEDES 339/§4.7) placement-scoped predicate schema and its optional
 // wiring through ConfigManager. The backward-compat guarantee (missing
-// top-level "raypath_color" key → empty classes_) is unchanged from 336.1.
+// top-level "raypath_color" key → empty classes_) is unchanged.
 
 #include <gtest/gtest.h>
 
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <variant>
 
 #include "config/config_manager.hpp"
+#include "config/filter_config.hpp"
 #include "config/raypath_color_config.hpp"
 
 extern std::string config_file_name;
@@ -18,18 +21,18 @@ namespace {
 
 using lumice::ColorClassConfig;
 using lumice::ConfigManager;
+using lumice::EntryExitFilterParam;
+using lumice::NoneFilterParam;
 using lumice::RaypathColorConfig;
 using lumice::RaypathColorRef;
+using lumice::RaypathFilterParam;
+using lumice::SimpleFilterParam;
 
-RaypathColorRef MakeRef(uint16_t layer, uint16_t crystal, bool has_filter, uint16_t filter, bool has_summand,
-                        uint16_t summand) {
+RaypathColorRef MakeRef(uint16_t layer, uint16_t crystal, SimpleFilterParam predicate = NoneFilterParam{}) {
   RaypathColorRef r{};
   r.layer_ = layer;
   r.crystal_ = crystal;
-  r.has_filter_ = has_filter;
-  r.filter_ = filter;
-  r.has_summand_ = has_summand;
-  r.summand_ = summand;
+  r.predicate_ = std::move(predicate);
   return r;
 }
 
@@ -44,53 +47,88 @@ ColorClassConfig MakeClass(float r, float g, float b, std::vector<RaypathColorRe
 
 }  // namespace
 
-// ---- RaypathColorRef JSON round-trip: full quadruple ----
+// ---- RaypathColorRef JSON round-trip ----
 
-TEST(RaypathColorRef, JsonRoundTripFullQuadruple) {
-  auto original = MakeRef(1, 2, true, 3, true, 4);
+TEST(RaypathColorRef, JsonRoundTripMatchAllDefault) {
+  auto original = MakeRef(1, 2);
   nlohmann::json j = original;
   EXPECT_EQ(j.at("layer").get<uint16_t>(), 1u);
   EXPECT_EQ(j.at("crystal").get<uint16_t>(), 2u);
-  EXPECT_EQ(j.at("filter").get<uint16_t>(), 3u);
-  EXPECT_EQ(j.at("summand").get<uint16_t>(), 4u);
+  // match-all whole-crystal ref emits NO predicate `type` on the wire
+  // (Design 2 minimal shape).
+  EXPECT_FALSE(j.contains("type"));
 
   auto restored = j.get<RaypathColorRef>();
   EXPECT_EQ(restored.layer_, 1);
   EXPECT_EQ(restored.crystal_, 2);
-  EXPECT_TRUE(restored.has_filter_);
-  EXPECT_EQ(restored.filter_, 3);
-  EXPECT_TRUE(restored.has_summand_);
-  EXPECT_EQ(restored.summand_, 4);
+  EXPECT_TRUE(std::holds_alternative<NoneFilterParam>(restored.predicate_));
 }
 
-TEST(RaypathColorRef, JsonOmitsAbsentFilterAndSummand) {
-  auto original = MakeRef(0, 5, false, 0, false, 0);
+TEST(RaypathColorRef, JsonRoundTripRaypathPredicate) {
+  RaypathFilterParam rp{ /*raypath=*/{ 3, 5, 1 } };
+  auto original = MakeRef(0, 1, SimpleFilterParam{ rp });
   nlohmann::json j = original;
-  EXPECT_TRUE(j.contains("layer"));
-  EXPECT_TRUE(j.contains("crystal"));
-  EXPECT_FALSE(j.contains("filter"));
-  EXPECT_FALSE(j.contains("summand"));
+  EXPECT_EQ(j.at("type").get<std::string>(), "raypath");
+  ASSERT_TRUE(j.at("raypath").is_array());
+  EXPECT_EQ(j.at("raypath").size(), 3u);
 
   auto restored = j.get<RaypathColorRef>();
-  EXPECT_FALSE(restored.has_filter_);
-  EXPECT_FALSE(restored.has_summand_);
+  ASSERT_TRUE(std::holds_alternative<RaypathFilterParam>(restored.predicate_));
+  const auto& rr = std::get<RaypathFilterParam>(restored.predicate_);
+  ASSERT_EQ(rr.raypath_.size(), 3u);
+  EXPECT_EQ(rr.raypath_[0], 3u);
+  EXPECT_EQ(rr.raypath_[1], 5u);
+  EXPECT_EQ(rr.raypath_[2], 1u);
 }
 
-TEST(RaypathColorRef, JsonFilterPresentSummandOmitted) {
-  auto original = MakeRef(0, 1, true, 2, false, 0);
+TEST(RaypathColorRef, JsonRoundTripEntryExitPredicate) {
+  EntryExitFilterParam ee{};
+  ee.min_len_ = 2;
+  ee.max_len_ = 2;
+  auto original = MakeRef(0, 5, SimpleFilterParam{ ee });
   nlohmann::json j = original;
-  EXPECT_TRUE(j.contains("filter"));
-  EXPECT_FALSE(j.contains("summand"));
+  EXPECT_EQ(j.at("type").get<std::string>(), "entry_exit");
+  EXPECT_EQ(j.at("min_len").get<size_t>(), 2u);
+  EXPECT_EQ(j.at("max_len").get<size_t>(), 2u);
+
   auto restored = j.get<RaypathColorRef>();
-  EXPECT_TRUE(restored.has_filter_);
-  EXPECT_EQ(restored.filter_, 2);
-  EXPECT_FALSE(restored.has_summand_);
+  ASSERT_TRUE(std::holds_alternative<EntryExitFilterParam>(restored.predicate_));
+  const auto& rr = std::get<EntryExitFilterParam>(restored.predicate_);
+  EXPECT_EQ(rr.min_len_, 2u);
+  ASSERT_TRUE(rr.max_len_.has_value());
+  EXPECT_EQ(*rr.max_len_, 2u);
+  EXPECT_FALSE(rr.entry_.has_value());
+  EXPECT_FALSE(rr.exit_.has_value());
+}
+
+// ---- SimpleFilterParam publicly exposed JSON round-trip (extracted from
+// FilterConfig so RaypathColorRef and FilterConfig share one wire form).
+
+TEST(SimpleFilterParam, JsonRoundTripNone) {
+  SimpleFilterParam p = NoneFilterParam{};
+  nlohmann::json j;
+  to_json(j, p);
+  EXPECT_EQ(j.at("type").get<std::string>(), "none");
+
+  SimpleFilterParam back{};
+  from_json(j, back);
+  EXPECT_TRUE(std::holds_alternative<NoneFilterParam>(back));
+}
+
+TEST(SimpleFilterParam, JsonMissingTypeIsMatchAll) {
+  // Missing `type` key is the RaypathColorRef whole-crystal default. Standalone
+  // helper must decode it as NoneFilterParam (single home; no per-caller
+  // divergence between FilterConfig and RaypathColorRef).
+  nlohmann::json j = nlohmann::json::object();
+  SimpleFilterParam p{};
+  from_json(j, p);
+  EXPECT_TRUE(std::holds_alternative<NoneFilterParam>(p));
 }
 
 // ---- ColorClassConfig JSON round-trip ----
 
 TEST(ColorClassConfig, JsonRoundTripDefaults) {
-  auto original = MakeClass(1.0f, 0.5f, 0.25f, { MakeRef(0, 1, true, 1, true, 0) });
+  auto original = MakeClass(1.0f, 0.5f, 0.25f, { MakeRef(0, 1) });
   nlohmann::json j = original;
   // Defaults omitted:
   EXPECT_FALSE(j.contains("combine"));
@@ -110,7 +148,7 @@ TEST(ColorClassConfig, JsonRoundTripDefaults) {
 }
 
 TEST(ColorClassConfig, JsonEmitsNonDefaultFields) {
-  auto cls = MakeClass(0.0f, 0.0f, 1.0f, { MakeRef(0, 1, false, 0, false, 0) });
+  auto cls = MakeClass(0.0f, 0.0f, 1.0f, { MakeRef(0, 1) });
   cls.combine_ = "all";
   cls.visible_ = false;
   cls.solo_ = true;
@@ -124,8 +162,10 @@ TEST(ColorClassConfig, JsonEmitsNonDefaultFields) {
 
 TEST(RaypathColorConfig, JsonRoundTripDefaultModeBareArray) {
   RaypathColorConfig cfg;
-  cfg.classes_.push_back(MakeClass(1.0f, 0.0f, 0.0f, { MakeRef(0, 1, true, 1, false, 0) }));
-  cfg.classes_.push_back(MakeClass(0.0f, 1.0f, 0.0f, { MakeRef(0, 1, true, 4, true, 0) }));
+  cfg.classes_.push_back(MakeClass(1.0f, 0.0f, 0.0f, { MakeRef(0, 1) }));
+  EntryExitFilterParam ee{};
+  ee.min_len_ = 3;
+  cfg.classes_.push_back(MakeClass(0.0f, 1.0f, 0.0f, { MakeRef(0, 1, SimpleFilterParam{ ee }) }));
 
   nlohmann::json j = cfg;
   ASSERT_TRUE(j.is_array());
@@ -136,12 +176,18 @@ TEST(RaypathColorConfig, JsonRoundTripDefaultModeBareArray) {
   EXPECT_EQ(restored.mode_, "dominant");
   EXPECT_FLOAT_EQ(restored.classes_[0].color_[0], 1.0f);
   EXPECT_FLOAT_EQ(restored.classes_[1].color_[1], 1.0f);
+  EXPECT_TRUE(std::holds_alternative<NoneFilterParam>(restored.classes_[0].match_[0].predicate_));
+  ASSERT_TRUE(std::holds_alternative<EntryExitFilterParam>(restored.classes_[1].match_[0].predicate_));
+  EXPECT_EQ(std::get<EntryExitFilterParam>(restored.classes_[1].match_[0].predicate_).min_len_, 3u);
 }
 
 TEST(RaypathColorConfig, JsonRoundTripNonDefaultModeObjectForm) {
   RaypathColorConfig cfg;
   cfg.mode_ = "additive";
-  cfg.classes_.push_back(MakeClass(0.0f, 0.0f, 1.0f, { MakeRef(0, 1, true, 4, true, 1) }));
+  EntryExitFilterParam ee{};
+  ee.min_len_ = 2;
+  ee.max_len_ = 2;
+  cfg.classes_.push_back(MakeClass(0.0f, 0.0f, 1.0f, { MakeRef(0, 1, SimpleFilterParam{ ee }) }));
 
   nlohmann::json j = cfg;
   ASSERT_TRUE(j.is_object());
@@ -192,7 +238,7 @@ TEST(ConfigManagerRaypathColor, ToJsonOmitsKeyWhenEmpty) {
       << "to_json must omit the key when classes_ is empty (matches crystal/filter/render convention)";
 }
 
-// ---- ConfigManager wiring: end-to-end round-trip with color-class schema ----
+// ---- ConfigManager wiring: end-to-end round-trip with Design-2 schema ----
 
 TEST(ConfigManagerRaypathColor, ParsesColorSectionWhenPresent) {
   std::ifstream f(config_file_name);
@@ -201,11 +247,15 @@ TEST(ConfigManagerRaypathColor, ParsesColorSectionWhenPresent) {
   f >> j_in;
 
   j_in["raypath_color"] = nlohmann::json::array({
-      { { "color", { 1.0f, 0.0f, 0.0f } }, { "match", { { { "layer", 0 }, { "crystal", 1 }, { "filter", 1 } } } } },
+      // Whole-crystal (match-all) — no `type` field on the wire.
+      { { "color", { 1.0f, 0.0f, 0.0f } }, { "match", { { { "layer", 0 }, { "crystal", 1 } } } } },
+      // EE predicate: len == 2.
       { { "color", { 0.0f, 1.0f, 0.0f } },
-        { "match", { { { "layer", 0 }, { "crystal", 1 }, { "filter", 4 }, { "summand", 0 } } } } },
+        { "match",
+          { { { "layer", 0 }, { "crystal", 1 }, { "type", "entry_exit" }, { "min_len", 2 }, { "max_len", 2 } } } } },
+      // EE predicate: len >= 3.
       { { "color", { 0.0f, 0.0f, 1.0f } },
-        { "match", { { { "layer", 0 }, { "crystal", 1 }, { "filter", 4 }, { "summand", 1 } } } } },
+        { "match", { { { "layer", 0 }, { "crystal", 1 }, { "type", "entry_exit" }, { "min_len", 3 } } } } },
   });
 
   auto manager = j_in.get<ConfigManager>();
@@ -214,13 +264,14 @@ TEST(ConfigManagerRaypathColor, ParsesColorSectionWhenPresent) {
   EXPECT_FLOAT_EQ(manager.raypath_color_.classes_[1].color_[1], 1.0f);
   EXPECT_FLOAT_EQ(manager.raypath_color_.classes_[2].color_[2], 1.0f);
   ASSERT_EQ(manager.raypath_color_.classes_[0].match_.size(), 1u);
-  EXPECT_TRUE(manager.raypath_color_.classes_[0].match_[0].has_filter_);
-  EXPECT_FALSE(manager.raypath_color_.classes_[0].match_[0].has_summand_);
+  EXPECT_TRUE(std::holds_alternative<NoneFilterParam>(manager.raypath_color_.classes_[0].match_[0].predicate_));
+  EXPECT_TRUE(std::holds_alternative<EntryExitFilterParam>(manager.raypath_color_.classes_[1].match_[0].predicate_));
+  EXPECT_TRUE(std::holds_alternative<EntryExitFilterParam>(manager.raypath_color_.classes_[2].match_[0].predicate_));
 }
 
 TEST(ConfigManagerRaypathColor, ToJsonEmitsColorSectionWhenPresent) {
   ConfigManager m{};
-  m.raypath_color_.classes_.push_back(MakeClass(0.25f, 0.5f, 0.75f, { MakeRef(0, 1, true, 1, false, 0) }));
+  m.raypath_color_.classes_.push_back(MakeClass(0.25f, 0.5f, 0.75f, { MakeRef(0, 1) }));
 
   nlohmann::json j = m;
   ASSERT_TRUE(j.contains("raypath_color"));
@@ -233,6 +284,6 @@ TEST(ConfigManagerRaypathColor, ToJsonEmitsColorSectionWhenPresent) {
   ASSERT_TRUE(j_cls.at("match").is_array());
   ASSERT_EQ(j_cls.at("match").size(), 1u);
   EXPECT_EQ(j_cls.at("match").at(0).at("crystal").get<uint16_t>(), 1u);
-  EXPECT_EQ(j_cls.at("match").at(0).at("filter").get<uint16_t>(), 1u);
-  EXPECT_FALSE(j_cls.at("match").at(0).contains("summand"));
+  // Design 2: match-all whole-crystal has no wire predicate.
+  EXPECT_FALSE(j_cls.at("match").at(0).contains("type"));
 }

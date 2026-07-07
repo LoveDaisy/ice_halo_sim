@@ -16,8 +16,9 @@
 #include <vector>
 
 #include "config/color_class_table.hpp"
-#include "config/component_table.hpp"
+#include "config/color_gate_table.hpp"
 #include "config/config_manager.hpp"
+#include "config/raypath_color_config.hpp"
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/def.hpp"
@@ -197,6 +198,12 @@ class ServerImpl {
   // attached to every SimBatch emitted by GenerateScene. Stays nullptr if no
   // CommitConfig has yet succeeded; consumers tolerate null.
   std::shared_ptr<const std::vector<RenderConfig>> active_renders_;
+  // Design 2 (task-engine-redirect-design2): snapshot of raypath_color paired
+  // with active_scene_ / active_renders_. Updated inside the same scene_mutex_
+  // critical section so a concurrent CommitConfig cannot tear the
+  // (scene, renders, raypath_color) triple. Null → no color configured (AC3
+  // zero-cost path).
+  std::shared_ptr<const RaypathColorConfig> active_raypath_color_;
   std::atomic<uint64_t> scene_generation_{ 0 };
   // Published lifecycle epoch (the backend-owned truth authority). Distinct from
   // scene_generation_ (an internal batch-staleness key): keeping them separate
@@ -447,8 +454,8 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
     // Error::InvalidConfig. class_table feeds directly into the RenderConsumer
     // (per-class Y-lane accumulation) and into the compositor
     // (CompositeColorClassesLinear); no legacy per-bit adapter layer.
-    ComponentTable component_table = BuildComponentTable(new_config.scene_);
-    class_table = BuildColorClassTable(new_config.raypath_color_, new_config.scene_, component_table);
+    ColorGateTable color_gate_table = BuildColorGateTable(new_config.raypath_color_, new_config.scene_);
+    class_table = BuildColorClassTable(new_config.raypath_color_, new_config.scene_, color_gate_table);
     composite_mode = ParseCompositeMode(new_config.raypath_color_.mode_);
   } catch (const nlohmann::json::out_of_range& e) {
     ILOG_ERROR(logger_, "CommitConfig: Missing field: {}", e.what());
@@ -559,10 +566,12 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   for (const auto& [_, r] : config_manager_.renderers_) {
     new_renders->push_back(r);
   }
+  auto new_raypath_color = std::make_shared<const RaypathColorConfig>(config_manager_.raypath_color_);
   {
     std::lock_guard<std::mutex> lock(scene_mutex_);
     active_scene_ = std::move(new_scene);
     active_renders_ = std::move(new_renders);
+    active_raypath_color_ = std::move(new_raypath_color);
     scene_generation_.fetch_add(1);
     // Publish the new lifecycle epoch alongside the accumulator reset. Stop()
     // above has drained all workers, so no in-flight batch reads a half-updated
@@ -1126,11 +1135,13 @@ void ServerImpl::GenerateScene() {
 
   std::shared_ptr<const SceneConfig> scene;
   std::shared_ptr<const std::vector<RenderConfig>> renders;
+  std::shared_ptr<const RaypathColorConfig> raypath_color;
   uint64_t generation = 0;
   {
     std::lock_guard<std::mutex> lock(scene_mutex_);
     scene = active_scene_;
     renders = active_renders_;
+    raypath_color = active_raypath_color_;
     generation = scene_generation_.load();
   }
   // task-268.4 commit↔batch decoupling: two independent knobs.
@@ -1212,7 +1223,7 @@ void ServerImpl::GenerateScene() {
   size_t committed_num = 0;
   while (per_wl_ray_num == kInfSize || committed_num < per_wl_ray_num) {
     size_t batch_ray_num = std::min(kBatchCap, per_wl_ray_num - committed_num);
-    scene_queue_->Emplace(SimBatch{ batch_ray_num, scene, generation, renders });
+    scene_queue_->Emplace(SimBatch{ batch_ray_num, scene, generation, renders, raypath_color });
     sim_scene_cnt_ += static_cast<int>(kNsimdataPerBatch);
     if (!first_batch_logged) {
       ILOG_INFO(logger_, "GenerateScene: first batch enqueued at {:.1f}ms after start",

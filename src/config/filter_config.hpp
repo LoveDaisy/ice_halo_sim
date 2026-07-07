@@ -64,6 +64,15 @@ struct FilterConfig {
 void to_json(nlohmann::json& j, const FilterConfig& f);
 void from_json(const nlohmann::json& j, FilterConfig& f);
 
+// SimpleFilterParam JSON round-trip. Emits `type` + type-specific fields onto
+// the SAME json object (no wrapping) so callers can inline the predicate into
+// their own JSON shape (e.g. raypath_color's placement-scoped predicate ref).
+// `from_json` accepts a missing `type` key as `NoneFilterParam` (match-all).
+// Kept in a single home so FilterConfig::to_json/from_json and any other
+// consumer (RaypathColorRef in Design 2) parse the same wire form.
+void to_json(nlohmann::json& j, const SimpleFilterParam& p);
+void from_json(const nlohmann::json& j, SimpleFilterParam& p);
+
 }  // namespace lumice
 
 #endif  // CONFIG_FILTER_CONFIG_H_

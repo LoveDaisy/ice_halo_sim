@@ -8,7 +8,9 @@
 #include <utility>
 #include <vector>
 
+#include "config/color_gate_table.hpp"
 #include "config/proj_config.hpp"
+#include "config/raypath_color_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/crystal.hpp"
 #include "core/filter_spec.hpp"
@@ -46,11 +48,14 @@ struct BatchTraceSpec {
   size_t max_hits;
   bool first_ms;
   uint8_t ms_layer_idx;  // current MS layer index (carried into ExitRayRecord)
-  // task-331.2: per-summand -> component-bit map for THIS (layer, crystal),
-  // sliced from CpuTraceBackend::component_table_. Handed to CollectData so the
-  // emit gate produces this layer's component bits. Null (no map) leaves masks
-  // untouched, matching the legacy path's nullptr-default behaviour.
-  const std::vector<uint8_t>* summand_bits = nullptr;
+  // Design 2 color pass parameters — parallel to filter_spec: an independent
+  // FilterSpec built from raypath_color predicates, plus a per-summand →
+  // global component bit map (same shape the legacy path uses for the
+  // synthesized ComplexFilterParam summands). Both null when no color
+  // predicate applies to this (layer, crystal_id), which is the zero-cost
+  // path (AC3).
+  const FilterSpec* color_spec = nullptr;
+  const std::vector<uint8_t>* color_bits = nullptr;
   // Host-ray injection (first_ms only). When non-null, TraceCrystalBatch
   // bypasses InitRayFirstMs's light-source sampling and populates workspace[0]
   // directly from host->d/p/w/tf (already in crystal-local space). Used by
@@ -160,7 +165,8 @@ void TraceCrystalBatch(RandomNumberGenerator& rng, const CrystalTraceSpec& cryst
       // We thread cont_collect through that slot via a temporary swap.
       RayBuffer init_for_collect[2]{};
       std::swap(init_for_collect[1], buffers.cont_collect);
-      CollectData(rng, batch.ms_info, batch.filter_spec, workspace, init_for_collect, batch.summand_bits);
+      CollectData(rng, batch.ms_info, batch.filter_spec, workspace, init_for_collect, batch.color_spec,
+                  batch.color_bits);
       std::swap(init_for_collect[1], buffers.cont_collect);
 
       // Copy traced rays to all_data + collect outgoing.
@@ -255,10 +261,12 @@ void CpuTraceBackend::BeginSession(const SessionSpec& spec) {
   exit_records_.clear();
   last_layer_crystal_count_ = 0;
 
-  // task-331.2: build the raypath-color component table for this scene once per
-  // session. Pure O(total summands) walk — TraceLayer slices it per (layer,
-  // crystal) so the emit gate can produce component bits.
-  component_table_ = BuildComponentTable(*spec.scene);
+  // Design 2 (task-engine-redirect-design2): build the placement-scoped color
+  // gate table for this session's scene × raypath_color config. Missing
+  // raypath_color → empty table → CollectData's color pass is a no-op (AC3).
+  RaypathColorConfig empty_color;
+  const RaypathColorConfig& color_cfg = spec.raypath_color ? *spec.raypath_color : empty_color;
+  color_gate_table_ = BuildColorGateTable(color_cfg, *spec.scene);
 }
 
 
@@ -353,12 +361,26 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
 
     auto filter_spec = FilterSpec::Create(setting.filter_, crystal, crystal_axis);
 
-    // task-331.2: slice the component table by the STATIC (layer, crystal-slot)
-    // key. `ci` is the setting-slot index BuildComponentTable used — NOT
-    // crystal_spec.crystal_id (which is the host-supplied crystal id on the
-    // ci==0 host-inject path). ms_idx_ is the current MS layer.
-    std::vector<uint8_t> summand_bits =
-        ComponentBitsFor(component_table_, static_cast<IdType>(ms_idx_), static_cast<IdType>(ci));
+    // Design 2: slice the placement-scoped color-gate table by the user-visible
+    // CrystalConfig::id_ (NOT ci, NOT crystal_spec.crystal_id) — the ref key
+    // authors write in raypath_color[].match[]. Placement is empty when no
+    // color predicates apply to this (layer, crystal_id).
+    ColorGatePlacement color_placement =
+        ColorGatePlacementFor(color_gate_table_, static_cast<IdType>(ms_idx_), setting.crystal_.id_);
+    std::unique_ptr<FilterSpec> color_spec;
+    if (!color_placement.predicates_.empty()) {
+      ComplexFilterParam cfp;
+      cfp.filters_.reserve(color_placement.predicates_.size());
+      for (const auto& pred : color_placement.predicates_) {
+        cfp.filters_.push_back({ { kInvalidId, pred } });
+      }
+      FilterConfig color_fc{};
+      color_fc.id_ = kInvalidId;
+      color_fc.symmetry_ = FilterConfig::kSymNone;
+      color_fc.action_ = FilterConfig::kFilterIn;
+      color_fc.param_ = FilterParam{ cfp };
+      color_spec = FilterSpec::Create(color_fc, crystal, crystal_axis);
+    }
 
     // ci_n = this population's ray count (cn loop bound); total_ray_num = the
     // whole layer's ray count, used to size the trace workspace (see
@@ -380,7 +402,8 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
                           spec_.scene->max_hits_,
                           first_ms,
                           static_cast<uint8_t>(ms_idx_),
-                          &summand_bits,
+                          color_spec.get(),
+                          &color_placement.bits_,
                           host_inject };
     BatchTraceBuffers buffers{ prev_init, init_ray_offset, all_data, cont_collect, outgoing_records };
     TraceCrystalBatch(rng_, crystal_spec, batch, buffers);
@@ -509,7 +532,7 @@ void CpuTraceBackend::EndSession() {
   xyz_buf_.reset();
   continuation_buf_ = RayBuffer{};
   exit_records_.clear();
-  component_table_ = ComponentTable{};  // task-331.2: lifecycle symmetry
+  color_gate_table_ = ColorGateTable{};  // Design 2: lifecycle symmetry with BeginSession
   spec_ = SessionSpec{};
 }
 

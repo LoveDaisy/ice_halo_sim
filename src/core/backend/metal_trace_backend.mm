@@ -1265,6 +1265,13 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
   // stride = kDeviceFilterMaxOrClauses (a Complex filter has ≤ that many
   // OR-summands; simple filters use only index 0). Entry = component bit index
   // in [0,64) or ComponentTable::kNoBit (0xFF) for over-budget/absent summands.
+  //
+  // Design-2 redirect (task-engine-redirect-design2, 2026-07-08): the CPU path
+  // moved off Fork-C to placement-scoped `raypath_color` predicates
+  // (config/color_gate_table.hpp). The GPU backends deliberately stay on
+  // Fork-C `BuildComponentTable` here ("三后端掩码机制…全不碰",
+  // doc/gui-custom-spectrum-and-raypath-color.md §4.0); unifying the GPU color
+  // bit source with the CPU's is deferred to scrum-3c.
   component_table_ = BuildComponentTable(*session_spec.scene);
   const size_t stride = kDeviceFilterMaxOrClauses;
   std::vector<uint8_t> comp_bits(n_slot * stride, ComponentTable::kNoBit);

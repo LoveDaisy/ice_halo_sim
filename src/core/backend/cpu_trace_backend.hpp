@@ -5,7 +5,7 @@
 #include <memory>
 #include <vector>
 
-#include "config/component_table.hpp"
+#include "config/color_gate_table.hpp"
 #include "config/sim_data.hpp"
 #include "core/backend/trace_backend.hpp"
 #include "core/geo3d.hpp"
@@ -100,12 +100,15 @@ class CpuTraceBackend : public TraceBackend {
   // EndSession reset; ReadbackExitRays moves out and returns the count.
   std::vector<ExitRayRecord> exit_records_;
 
-  // task-331.2: static (layer, crystal-slot, summand) -> component-bit table
-  // for the current session's scene. Built once in BeginSession; TraceLayer
-  // slices it per (ms_idx_, ci) via ComponentBitsFor and hands the map to
-  // CollectData, which OR-s the matched summands' bits into each surviving
-  // ray's mask (piped out through ExitRayRecord::component_mask).
-  ComponentTable component_table_;
+  // Design 2 (task-engine-redirect-design2): placement-scoped color-predicate
+  // → component-bit table, built from SessionSpec::raypath_color once in
+  // BeginSession. TraceLayer slices it per (ms_idx_, crystal_id) via
+  // ColorGatePlacementFor and hands the placement to CollectData, which
+  // evaluates the color predicates as a non-destructive pass and ORs the
+  // matched bits into each surviving ray's mask (piped out through
+  // ExitRayRecord::component_mask). Empty table (no raypath_color configured)
+  // → zero-cost no-op in the emit gate.
+  ColorGateTable color_gate_table_;
 
   bool in_session_ = false;
   // Track whether rng_ has been seeded by a prior BeginSession in this

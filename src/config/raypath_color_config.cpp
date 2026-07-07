@@ -1,6 +1,9 @@
 #include "config/raypath_color_config.hpp"
 
 #include <nlohmann/json.hpp>
+#include <variant>
+
+#include "config/filter_config.hpp"
 
 namespace lumice {
 
@@ -8,29 +11,20 @@ void to_json(nlohmann::json& j, const RaypathColorRef& r) {
   j = nlohmann::json::object();
   j["layer"] = r.layer_;
   j["crystal"] = r.crystal_;
-  if (r.has_filter_) {
-    j["filter"] = r.filter_;
-  }
-  if (r.has_summand_) {
-    j["summand"] = r.summand_;
+  // Match-all default (NoneFilterParam) is written as "no predicate fields on
+  // the wire" to keep the minimal Design-2 whole-crystal ref compact: just
+  // {layer, crystal}. Any other predicate emits its type-tagged fields inline.
+  if (!std::holds_alternative<NoneFilterParam>(r.predicate_)) {
+    to_json(j, r.predicate_);
   }
 }
 
 void from_json(const nlohmann::json& j, RaypathColorRef& r) {
   j.at("layer").get_to(r.layer_);
   j.at("crystal").get_to(r.crystal_);
-  r.has_filter_ = j.contains("filter");
-  if (r.has_filter_) {
-    j.at("filter").get_to(r.filter_);
-  } else {
-    r.filter_ = kInvalidId;
-  }
-  r.has_summand_ = j.contains("summand");
-  if (r.has_summand_) {
-    j.at("summand").get_to(r.summand_);
-  } else {
-    r.summand_ = 0;
-  }
+  // SimpleFilterParam::from_json treats a missing `type` key as match-all
+  // (NoneFilterParam) — matches Design-2's whole-crystal default.
+  from_json(j, r.predicate_);
 }
 
 void to_json(nlohmann::json& j, const ColorClassConfig& c) {

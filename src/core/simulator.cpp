@@ -15,10 +15,12 @@
 #include <thread>
 #include <variant>
 
+#include "config/color_gate_table.hpp"
 #include "config/component_table.hpp"
 #include "config/crystal_config.hpp"
 #include "config/light_config.hpp"
 #include "config/proj_config.hpp"
+#include "config/raypath_color_config.hpp"
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/backend/cpu_trace_backend.hpp"
@@ -479,7 +481,7 @@ void FillRayOtherInfo(const Crystal& curr_crystal, RayBuffer buffer_data[2]) {
 // See doc/raypath-rayseg-architecture.md §3 for the segment state-machine transition rules.
 void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input
                  RayBuffer* buffer_data, RayBuffer* init_data,                               // output
-                 const std::vector<uint8_t>* summand_bits) {                                 // input
+                 const FilterSpec* color_spec, const std::vector<uint8_t>* color_bits) {     // input
   for (size_t idx = 0; idx < buffer_data[1].size_; idx++) {
     auto& r = buffer_data[1][idx];
     const auto& rec = buffer_data[1].RecorderAt(idx);
@@ -495,41 +497,35 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       r.crystal_rot_.Apply(r.d_);
       r.crystal_rot_.Apply(r.p_);
 
-      // task-331.2: gate decision. When a raypath-color summand->bit map is
-      // provided, evaluate the filter in a SINGLE pass (CheckSummandMask also
-      // returns the per-summand match mask) so the component bits reuse the
-      // same evaluation that produces the gate boolean — no extra predicate
-      // pass. Without the map, keep the original short-circuit Check() so the
-      // gate decision, RNG order, and perf are bit-identical to pre-331.2.
+      // Design 2: gate decision is pure `spec->Check()` (physical filter);
+      // color predicates are a SEPARATE `color_spec->MatchSummandMask()` pass
+      // evaluated only AFTER the physical filter admits the ray. The two
+      // predicates are decoupled — physical filter decides survival, color
+      // spec decides tagging (never touches `w_` / `is_continue_`).
       const uint8_t* arena = buffer_data[1].OverflowArena();
-      uint64_t summand_mask = 0;
-      bool filter_pass = false;
-      if (spec == nullptr) {
-        filter_pass = true;
-      } else if (summand_bits != nullptr) {
-        filter_pass = spec->CheckSummandMask(r, rec, arena, &summand_mask);
-      } else {
-        filter_pass = spec->Check(r, rec, arena);
-      }
+      bool filter_pass = (spec == nullptr) ? true : spec->Check(r, rec, arena);
       if (filter_pass) {
-        // Produce this layer's component bits for the surviving ray and OR them
-        // into its carried mask (which the T1 transport then propagates to the
-        // emitted or continued copy below). Only outgoing candidates reach this
-        // branch, i.e. rays whose raypath (rec) is complete for this crystal —
-        // so per-summand matching is on the full current-layer path.
-        if (summand_bits != nullptr && summand_mask != 0) {
-          uint64_t produced = 0;
-          const std::vector<uint8_t>& sb = *summand_bits;
-          for (size_t k = 0; k < sb.size() && k < 64; k++) {
-            if ((summand_mask & (1ull << k)) != 0) {
-              uint8_t bit = sb[k];
-              if (bit < ComponentTable::kMaxBits) {
-                produced |= (1ull << bit);
+        // Non-destructive color pass: evaluate color_spec's per-summand mask
+        // and OR the mapped bits into the ray's carried mask. Only when a
+        // color spec + bit map is present — with `raypath_color` absent, both
+        // are null and this branch is a no-op (AC3/AC4).
+        if (color_spec != nullptr && color_bits != nullptr) {
+          uint64_t summand_mask = 0;
+          (void)color_spec->CheckSummandMask(r, rec, arena, &summand_mask);
+          if (summand_mask != 0) {
+            uint64_t produced = 0;
+            const std::vector<uint8_t>& cb = *color_bits;
+            for (size_t k = 0; k < cb.size() && k < 64; k++) {
+              if ((summand_mask & (1ull << k)) != 0) {
+                uint8_t bit = cb[k];
+                if (bit < ComponentTable::kMaxBits) {
+                  produced |= (1ull << bit);
+                }
               }
             }
-          }
-          if (produced != 0) {
-            buffer_data[1].SetComponent(idx, buffer_data[1].ComponentAt(idx) | produced);
+            if (produced != 0) {
+              buffer_data[1].SetComponent(idx, buffer_data[1].ComponentAt(idx) | produced);
+            }
           }
         }
         if (rng.GetUniform() < ms_info.prob_) {
@@ -837,11 +833,13 @@ void Simulator::Run() {
       // keeps the lambda safe if a future caller forgets — same effect as the
       // catch-block fallback (run the legacy CPU path, report "backend not used").
       if (!backend) {
-        SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation, ray_alloc_carry);
+        SimulateOneWavelength(config, batch.raypath_color_.get(), wl_param, batch.ray_num_, crystal_cache, workspace,
+                              generation, ray_alloc_carry);
         return false;
       }
       try {
-        SimulateOneWavelengthWithBackend(*backend, config, (*batch.renders_)[0], wl_param, batch.ray_num_, generation);
+        SimulateOneWavelengthWithBackend(*backend, config, (*batch.renders_)[0], batch.raypath_color_, wl_param,
+                                         batch.ray_num_, generation);
         return true;
       } catch (const BackendUnavailableError& e) {
         ILOG_WARN(
@@ -849,7 +847,8 @@ void Simulator::Run() {
             "TraceBackend unavailable ({}); dropping backend and falling back to legacy CPU for the rest of this Run()",
             e.what());
         backend.reset();
-        SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation, ray_alloc_carry);
+        SimulateOneWavelength(config, batch.raypath_color_.get(), wl_param, batch.ray_num_, crystal_cache, workspace,
+                              generation, ray_alloc_carry);
         return false;
       }
     };
@@ -881,8 +880,8 @@ void Simulator::Run() {
         if (use_backend) {
           run_with_backend(wl_param);
         } else {
-          SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation,
-                                ray_alloc_carry);
+          SimulateOneWavelength(config, batch.raypath_color_.get(), wl_param, batch.ray_num_, crystal_cache, workspace,
+                                generation, ray_alloc_carry);
         }
       }
     } else {
@@ -895,8 +894,8 @@ void Simulator::Run() {
         if (use_backend && backend) {
           run_with_backend(wl_param);
         } else {
-          SimulateOneWavelength(config, wl_param, batch.ray_num_, crystal_cache, workspace, generation,
-                                ray_alloc_carry);
+          SimulateOneWavelength(config, batch.raypath_color_.get(), wl_param, batch.ray_num_, crystal_cache, workspace,
+                                generation, ray_alloc_carry);
         }
       }
     }
@@ -909,8 +908,9 @@ void Simulator::Run() {
 }
 
 
-void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num,
-                                      CrystalCache& crystal_cache, SimWorkspace& workspace, uint64_t generation,
+void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathColorConfig* raypath_color,
+                                      const WlParam& wl_param, size_t ray_num, CrystalCache& crystal_cache,
+                                      SimWorkspace& workspace, uint64_t generation,
                                       std::vector<std::vector<double>>& ray_alloc_carry) {
   ILOG_TRACE(logger_, "Run: get config: ray({}), wl({:.1f},{:.2f})",  //
              ray_num, wl_param.wl_, wl_param.weight_);
@@ -918,19 +918,14 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
   float wl = wl_param.wl_;
   size_t original_ray_num = ray_num;  // ray_num is overwritten in the ms loop; keep original for normalization.
 
-  // task-331.1/2: static (layer, crystal-slot, summand) -> component-bit table.
-  // T2 consumes it at the emit gate: ComponentBitsFor(component_table, mi, ci)
-  // yields the per-summand bit map the gate ORs into each surviving ray's mask.
-  //
-  // NOTE (plan-review): calling BuildComponentTable per-wavelength is a
-  // TEMPORARY validation shape. A later task should hoist this to a
-  // per-simulation-run scope (config-load-time or Run() top), so multi-
-  // wavelength scenes don't rebuild the same static table dozens of times. The
-  // build is a pure O(total summands) walk (no I/O, no RNG), so the cost is
-  // negligible; not hoisting here to keep this task's diff focused on the gate
-  // producer rather than reshaping Run()'s per-run seam.
-  ComponentTable component_table = BuildComponentTable(config);
-  ILOG_DEBUG(logger_, "ComponentTable built: {} entries (legacy path)", component_table.entries_.size());
+  // Design 2 (task-engine-redirect-design2 Step 4): the CPU emit gate now
+  // scans `raypath_color[].match[]` predicates on demand (not physical-filter
+  // summands eagerly). Missing raypath_color → empty ColorGateTable → the
+  // color pass in `CollectData` becomes a no-op (AC3).
+  RaypathColorConfig empty_color;
+  const RaypathColorConfig& color_cfg = (raypath_color != nullptr) ? *raypath_color : empty_color;
+  ColorGateTable color_gate_table = BuildColorGateTable(color_cfg, config);
+  ILOG_DEBUG(logger_, "ColorGateTable built: {} entries (legacy path)", color_gate_table.entries_.size());
 
   RayBuffer all_data = AllocateAllData(config, ray_num);
   std::vector<float> outgoing_d;
@@ -977,15 +972,16 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
     for (size_t ci = 0; ci < ms_crystal_cnt && !stop_; ci++) {
       const auto& s = m.setting_[ci];
       std::unique_ptr<FilterSpec> spec;
+      std::unique_ptr<FilterSpec> color_spec;
 
-      // task-331.2: per-summand -> component-bit map for THIS (layer, crystal).
-      // The emit gate is always invoked from inside this (mi, ci) loop, so
-      // (mi, ci) is exactly the static key BuildComponentTable used — no need
-      // to resolve the runtime crystal_config_id_/crystal_idx_ (unstable across
-      // batches). Depends only on config, so compute once per ci (crystal
-      // instance re-sampling inside the cn loop does not affect it).
-      std::vector<uint8_t> summand_bits =
-          ComponentBitsFor(component_table, static_cast<IdType>(mi), static_cast<IdType>(ci));
+      // Design 2: color pass is keyed by CrystalConfig::id_ (user-visible id),
+      // not ci (setting-slot index). The predicates for this (layer, crystal_id)
+      // become a synthetic ComplexFilterParam (OR-of-singleton-AND-clauses) that
+      // we feed to the same `FilterSpec::Create` machinery — its
+      // `MatchSummandMask` then reports per-predicate matches without a second
+      // predicate implementation. Depends only on config, so compute once per ci.
+      ColorGatePlacement color_placement =
+          ColorGatePlacementFor(color_gate_table, static_cast<IdType>(mi), s.crystal_.id_);
 
       bool deterministic = IsDeterministic(s.crystal_.param_);
 
@@ -1033,6 +1029,26 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
         // Random crystals: rebuild per cn batch since each batch may produce a new crystal.
         if (!spec || !deterministic) {
           spec = FilterSpec::Create(s.filter_, curr_crystal, s.crystal_.axis_);
+          // Design 2: build a parallel color spec from the placement's predicate
+          // list. The synthetic FilterConfig is filter_in with kSymNone — color
+          // pass has no symmetry (see plan A1) — wrapping each predicate in its
+          // own AND-of-1 OR-summand so ComplexSpec's per-summand mask reports
+          // exactly which predicate matched.
+          if (!color_placement.predicates_.empty()) {
+            ComplexFilterParam cfp;
+            cfp.filters_.reserve(color_placement.predicates_.size());
+            for (const auto& p : color_placement.predicates_) {
+              cfp.filters_.push_back({ { kInvalidId, p } });
+            }
+            FilterConfig color_fc{};
+            color_fc.id_ = kInvalidId;
+            color_fc.symmetry_ = FilterConfig::kSymNone;
+            color_fc.action_ = FilterConfig::kFilterIn;
+            color_fc.param_ = FilterParam{ cfp };
+            color_spec = FilterSpec::Create(color_fc, curr_crystal, s.crystal_.axis_);
+          } else {
+            color_spec.reset();
+          }
         }
 
         // 1. Initialize data
@@ -1058,9 +1074,9 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const WlParam& 
           FillRayOtherInfo(curr_crystal, buffer_data);
 
           // 2.3 Collect data. And set ray properties: state.
-          CollectData(rng_, m, spec.get(),     // input
-                      buffer_data, init_data,  // output
-                      &summand_bits);          // input (task-331.2 component producer)
+          CollectData(rng_, m, spec.get(),                        // input
+                      buffer_data, init_data,                     // output
+                      color_spec.get(), &color_placement.bits_);  // input (Design-2 color producer)
 
           // 2.4 Copy to all_data + collect outgoing rays (d/w pre-pack).
           all_data.EmplaceBack(buffer_data[1]);
@@ -1195,8 +1211,9 @@ void Simulator::DrainDeviceXyz(TraceBackend* backend) {
 }
 
 void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const SceneConfig& scene,
-                                                 const RenderConfig& render, const WlParam& wl_param, size_t ray_num,
-                                                 uint64_t generation) {
+                                                 const RenderConfig& render,
+                                                 std::shared_ptr<const RaypathColorConfig> raypath_color,
+                                                 const WlParam& wl_param, size_t ray_num, uint64_t generation) {
   ILOG_TRACE(logger_, "Run(backend): ray({}), wl({:.1f},{:.2f})", ray_num, wl_param.wl_, wl_param.weight_);
 
   if (ray_num == 0 || scene.ms_.empty()) {
@@ -1212,7 +1229,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   // Task 260.6: hand the backend `effective_seed_` (non-zero) so device-gen
   // activates even when the user-facing `seed_` is 0 (default random mode).
   // When `seed_ != 0` this equals `seed_` → determinism contract unchanged.
-  SessionSpec spec{ &scene, &render, wl_param, effective_seed_ };
+  SessionSpec spec{ &scene, &render, wl_param, effective_seed_, std::move(raypath_color) };
   backend.BeginSession(spec);
   // RAII guard: EndSession() is called on all exit paths, including exceptions
   // thrown by TraceLayer/Recombine (which would otherwise skip EndSession).
