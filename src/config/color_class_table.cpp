@@ -171,6 +171,20 @@ ColorClassTable BuildColorClassTable(const RaypathColorConfig& color_cfg, const 
   return out;
 }
 
+bool NeedsRebuild(const ColorClassTable& old_table, const ColorClassTable& new_table) {
+  if (old_table.classes_.size() != new_table.classes_.size()) {
+    return true;
+  }
+  for (size_t i = 0; i < old_table.classes_.size(); ++i) {
+    const auto& a = old_table.classes_[i];
+    const auto& b = new_table.classes_[i];
+    if (a.combine_ != b.combine_ || a.member_bits_ != b.member_bits_) {
+      return true;
+    }
+  }
+  return false;
+}
+
 ComponentColorMap ToLegacyColorMap(const ColorClassTable& class_table) {
   ComponentColorMap map;
   for (const auto& cls : class_table.classes_) {

@@ -9,6 +9,7 @@
 #include <memory>
 #include <vector>
 
+#include "config/component_table.hpp"
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/color_util.hpp"
@@ -34,7 +35,7 @@ namespace lumice {
 
 
 // =============== Renderer ===============
-RenderConsumer::RenderConsumer(RenderConfig config, uint64_t colored_mask)
+RenderConsumer::RenderConsumer(RenderConfig config, ColorClassTable class_table)
     : config_(std::move(config)),
       short_pix_(static_cast<float>(std::min(config_.resolution_[0], config_.resolution_[1]))),
       internal_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
@@ -42,7 +43,7 @@ RenderConsumer::RenderConsumer(RenderConfig config, uint64_t colored_mask)
       snapshot_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_work_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_image_buffer_(std::make_unique<uint8_t[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
-      colored_mask_(colored_mask),
+      class_table_(std::move(class_table)),
       lane_pixel_count_(static_cast<size_t>(config_.resolution_[0]) * static_cast<size_t>(config_.resolution_[1])) {
   float ax_z[3]{ 0, 0, 1 };
   float ax_y[3]{ 0, 1, 0 };
@@ -50,26 +51,45 @@ RenderConsumer::RenderConsumer(RenderConfig config, uint64_t colored_mask)
       .Chain({ ax_y, (90.0f - config_.view_.el_) * math::kDegreeToRad })
       .Chain({ ax_z, config_.view_.az_ * math::kDegreeToRad });
 
-  // task-336.2: allocate one W*H Y-lane per participating component bit.
-  // Non-participating bits leave lane_y_[bit] / snapshot_lane_y_[bit] as
-  // nullptr (unique_ptr default), so zero-mask → zero heap allocations.
-  if (colored_mask_ != 0 && lane_pixel_count_ > 0) {
-    for (uint8_t bit = 0; bit < ComponentTable::kMaxBits; ++bit) {
-      if (((colored_mask_ >> bit) & 1ULL) == 0) {
-        continue;
-      }
-      participating_bits_.push_back(bit);
-      lane_y_[bit] = std::make_unique<float[]>(lane_pixel_count_);
-      snapshot_lane_y_[bit] = std::make_unique<float[]>(lane_pixel_count_);
+  // task-339.3: allocate one W*H Y-lane per color class (compact by z-order).
+  // Empty class table → no lane state, pre-336 zero heap allocations.
+  if (HasColorClasses() && lane_pixel_count_ > 0) {
+    size_t class_count = class_table_.classes_.size();
+    lane_y_.resize(class_count);
+    snapshot_lane_y_.resize(class_count);
+    for (size_t i = 0; i < class_count; ++i) {
+      lane_y_[i] = std::make_unique<float[]>(lane_pixel_count_);
+      snapshot_lane_y_[i] = std::make_unique<float[]>(lane_pixel_count_);
     }
   }
 }
 
+const float* RenderConsumer::GetColorClassLaneY(size_t class_idx) const {
+  if (class_idx >= snapshot_lane_y_.size()) {
+    return nullptr;
+  }
+  return snapshot_lane_y_[class_idx].get();
+}
+
+// task-339.3: bridge view for the 336.3 per-bit compositor. Scans classes for a
+// single-member class whose `member_bits_ == (1 << bit)` — that class's lane
+// carries exactly the Y for rays with `bit` set (and no other colored bit in
+// this class). Returns nullptr for out-of-range, for a multi-bit class owning
+// the bit (multi-summand any/all), or when no class owns exactly this single
+// bit — the current compositor's defensive nullptr-skip handles all of these
+// as "not painted via this bridge". 339.4's per-class compositor will replace
+// this scan altogether.
 const float* RenderConsumer::GetComponentLaneY(uint8_t bit) const {
   if (bit >= ComponentTable::kMaxBits) {
     return nullptr;
   }
-  return snapshot_lane_y_[bit].get();
+  uint64_t want = static_cast<uint64_t>(1) << bit;
+  for (size_t i = 0; i < class_table_.classes_.size(); ++i) {
+    if (class_table_.classes_[i].member_bits_ == want) {
+      return snapshot_lane_y_[i].get();
+    }
+  }
+  return nullptr;
 }
 
 // task-336.3: single source of truth for the mono-image exposure scale (see
@@ -98,7 +118,7 @@ void RenderConsumer::ConsumeDeviceFused(const SimData& data) {
   // outgoing_component_. Warn once so a user mixing GPU + raypath_color
   // sees a signal in the log instead of silently empty lanes. Handoff for
   // device-side component lanes is tracked as scrum-3c (see plan §7 risk 3).
-  if (colored_mask_ != 0 && !logged_missing_component_) {
+  if (HasColorClasses() && !logged_missing_component_) {
     ILOG_WARN(logger_,
               "RenderConsumer: raypath_color configured but the device-fused (GPU) path "
               "does not populate outgoing_component_ — component lanes will not accumulate. "
@@ -140,11 +160,11 @@ void RenderConsumer::Consume(const SimData& data) {
     // scrum-268.8 (DR-3): per-ray wavelength side-car, lock-step grow.
     wl_buf_ = std::make_unique<float[]>(buf_capacity_);
     overlap_wl_buf_ = std::make_unique<float[]>(buf_capacity_);
-    // task-336.2: per-ray component mask side-cars. Gated on colored_mask_!=0
+    // task-339.3: per-ray component mask side-cars. Gated on HasColorClasses()
     // so the pre-336 zero-config path stays at zero extra allocation (review
     // Minor #1). Once allocated, they follow the same grow-only capacity as
     // w_buf_ / overlap_w_buf_ / wl_buf_.
-    if (colored_mask_ != 0) {
+    if (HasColorClasses()) {
       comp_buf_ = std::make_unique<uint64_t[]>(buf_capacity_);
       overlap_comp_buf_ = std::make_unique<uint64_t[]>(buf_capacity_);
     }
@@ -190,8 +210,8 @@ void RenderConsumer::Consume(const SimData& data) {
     assert(data.outgoing_wl_.size() == filtered_ray_num && "outgoing_wl_ size must match outgoing_w_ when present");
     std::memcpy(wl_buf_.get(), data.outgoing_wl_.data(), filtered_ray_num * sizeof(float));
   }
-  // task-336.2: gather per-ray component masks alongside wavelengths.
-  bool has_lanes = colored_mask_ != 0;
+  // task-339.3: gather per-ray component masks alongside wavelengths.
+  bool has_lanes = HasColorClasses();
   bool has_component = has_lanes && !data.outgoing_component_.empty();
   if (has_component) {
     assert(data.outgoing_component_.size() == filtered_ray_num &&
@@ -268,13 +288,13 @@ void RenderConsumer::Consume(const SimData& data) {
     SpectrumToXyz(data.curr_wl_, w_buf_.get(), xy_buf_.get(), internal_xyz_.get(), main_n);
   }
   total_intensity_ += landed_weight;
-  // task-336.2: fan the same batch into per-component Y-lanes. Shares the
+  // task-339.3: fan the same batch into per-color-class Y-lanes. Shares the
   // wl / w / xy inputs of the SpectrumToXyz(PerRay) call above → same
-  // exposure, same projection, same rounding (see plan §3 shared-exposure
-  // hard invariant).
+  // exposure, same projection, same rounding (issue.md shared-exposure hard
+  // invariant).
   if (has_component) {
-    AccumulateComponentLanes(per_ray_wl, wl_buf_.get(), data.curr_wl_, w_buf_.get(), comp_buf_.get(), xy_buf_.get(),
-                             main_n);
+    AccumulateColorClassLanes(per_ray_wl, wl_buf_.get(), data.curr_wl_, w_buf_.get(), comp_buf_.get(), xy_buf_.get(),
+                              main_n);
   }
 
   if (overlap_n > 0) {
@@ -286,10 +306,10 @@ void RenderConsumer::Consume(const SimData& data) {
       SpectrumToXyz(data.curr_wl_, overlap_w_buf_.get(), xy_buf_.get() + filtered_ray_num, internal_xyz_.get(),
                     overlap_n);
     }
-    // task-336.2: overlap ring lane accumulation, symmetric with main pass.
+    // task-339.3: overlap ring lane accumulation, symmetric with main pass.
     if (has_component) {
-      AccumulateComponentLanes(per_ray_wl, overlap_wl_buf_.get(), data.curr_wl_, overlap_w_buf_.get(),
-                               overlap_comp_buf_.get(), xy_buf_.get() + filtered_ray_num, overlap_n);
+      AccumulateColorClassLanes(per_ray_wl, overlap_wl_buf_.get(), data.curr_wl_, overlap_w_buf_.get(),
+                                overlap_comp_buf_.get(), xy_buf_.get() + filtered_ray_num, overlap_n);
     }
   }
 
@@ -300,19 +320,32 @@ void RenderConsumer::Consume(const SimData& data) {
   consume_accum_us_ += std::chrono::duration<double, std::micro>(t3 - t2).count();
 }
 
-// task-336.2: per-ray → per-bit Y scatter. Only participating bits are visited
-// (participating_bits_.size() ≤ popcount(colored_mask_)); for each ray we mask
-// with colored_mask_ first, then walk the participating bits so unrelated
-// component bits carried by the mask (non-colored components) contribute
-// nothing (aligns with plan §1 "ignore uncolored/background bucket" accounting).
-void RenderConsumer::AccumulateComponentLanes(bool per_ray_wl, const float* wl_buf, float curr_wl, const float* w_buf,
-                                              const uint64_t* comp_buf, const int* xy_buf, size_t num) {
-  if (num == 0 || participating_bits_.empty()) {
+// task-339.3: per-ray → per-color-class Y scatter. For each ray we evaluate
+// every class's predicate (any / all) against the ray's raw component mask and,
+// on match, add the ray's Y into that class's lane. Overlap (a ray satisfies
+// multiple classes) is intentional: each class independently accumulates,
+// which is exactly what makes rule-lanes the source of AND (cross-layer via
+// `all`) and overlap (compositor at 339.4).
+//
+// referenced_mask_ short-circuit: a ray whose masked bits intersect no class
+// cannot satisfy any predicate. Safe for `any` (mask & bits == 0 → false) and
+// safe for `all` because the empty-member class guard (bits == 0 → skip)
+// prevents the vacuous-truth case (mask & 0 == 0 == 0 would otherwise fire).
+void RenderConsumer::AccumulateColorClassLanes(bool per_ray_wl, const float* wl_buf, float curr_wl, const float* w_buf,
+                                               const uint64_t* comp_buf, const int* xy_buf, size_t num) {
+  if (num == 0 || !HasColorClasses()) {
     return;
   }
+  uint64_t ref_mask = class_table_.referenced_mask_;
+  // Bound by lane_y_.size() (the allocated-lanes source of truth) — NOT
+  // class_table_.classes_.size() — to match PrepareSnapshot()/Reset() and stay
+  // safe if the two ever decouple (e.g. lane_pixel_count_ == 0 leaves lane_y_
+  // empty while HasColorClasses() is still true). lane_y_ is either empty or
+  // sized to classes_.size(), so classes_[c] stays in range for every c here.
+  size_t class_count = lane_y_.size();
   for (size_t i = 0; i < num; ++i) {
-    uint64_t mask = comp_buf[i] & colored_mask_;
-    if (mask == 0) {
+    uint64_t mask = comp_buf[i];
+    if ((mask & ref_mask) == 0) {
       continue;
     }
     float wl_i = per_ray_wl ? wl_buf[i] : curr_wl;
@@ -321,9 +354,20 @@ void RenderConsumer::AccumulateComponentLanes(bool per_ray_wl, const float* wl_b
       continue;
     }
     size_t pidx = static_cast<size_t>(xy_buf[i]);
-    for (uint8_t bit : participating_bits_) {
-      if (((mask >> bit) & 1ULL) != 0) {
-        lane_y_[bit][pidx] += y;
+    for (size_t c = 0; c < class_count; ++c) {
+      const auto& cls = class_table_.classes_[c];
+      uint64_t bits = cls.member_bits_;
+      if (bits == 0) {
+        // Defensive: an empty-member class never contributes energy. Guards
+        // the `all` vacuous-truth trap (`mask & 0 == 0 == bits` would be
+        // trivially satisfied by every ray). `any` is already safe here
+        // (mask & 0 == 0), but treating both branches uniformly removes a
+        // silent asymmetry a future reader could easily miss.
+        continue;
+      }
+      bool satisfied = (cls.combine_ == ColorClassCombine::kAny) ? ((mask & bits) != 0) : ((mask & bits) == bits);
+      if (satisfied) {
+        lane_y_[c][pidx] += y;
       }
     }
   }
@@ -354,14 +398,14 @@ void RenderConsumer::PrepareSnapshot() {
     snapshot_xyz_[i] = internal_xyz_[i] + comp_xyz_[i];
   }
   snapshot_intensity_ = total_intensity_;
-  // task-336.2: shadow participating component lanes into snapshot_lane_y_
-  // under the same two-phase snapshot protocol. lane_y_ has no Neumaier
-  // compensation counterpart (single-precision scatter Y is enough for
-  // display), so a plain memcpy matches internal_xyz_'s treatment when
-  // comp_xyz_ is all-zero on the legacy path. PostSnapshot is not touched:
-  // lanes carry raw Y, no EV/sRGB conversion (see plan §4 Step 4).
-  for (uint8_t bit : participating_bits_) {
-    std::memcpy(snapshot_lane_y_[bit].get(), lane_y_[bit].get(), lane_pixel_count_ * sizeof(float));
+  // task-339.3: shadow per-class lanes into snapshot_lane_y_ under the same
+  // two-phase snapshot protocol. lane_y_ has no Neumaier compensation
+  // counterpart (single-precision scatter Y is enough for display), so a plain
+  // memcpy matches internal_xyz_'s treatment when comp_xyz_ is all-zero on the
+  // legacy path. PostSnapshot is not touched: lanes carry raw Y, no EV/sRGB
+  // conversion (compositor multiplies by ExposureScale()).
+  for (size_t c = 0; c < lane_y_.size(); ++c) {
+    std::memcpy(snapshot_lane_y_[c].get(), lane_y_[c].get(), lane_pixel_count_ * sizeof(float));
   }
 }
 
@@ -471,10 +515,10 @@ void RenderConsumer::Reset() {
   auto buf_size = static_cast<size_t>(config_.resolution_[0]) * config_.resolution_[1] * 3;
   std::memset(internal_xyz_.get(), 0, buf_size * sizeof(float));
   std::memset(comp_xyz_.get(), 0, buf_size * sizeof(float));
-  // task-336.2: zero participating component lanes; snapshot_lane_y_ is not
-  // zeroed here (PrepareSnapshot will memcpy over it, mirroring snapshot_xyz_).
-  for (uint8_t bit : participating_bits_) {
-    std::memset(lane_y_[bit].get(), 0, lane_pixel_count_ * sizeof(float));
+  // task-339.3: zero per-class lanes; snapshot_lane_y_ is not zeroed here
+  // (PrepareSnapshot will memcpy over it, mirroring snapshot_xyz_).
+  for (auto& lane : lane_y_) {
+    std::memset(lane.get(), 0, lane_pixel_count_ * sizeof(float));
   }
   // snapshot_xyz_ not zeroed: PrepareSnapshot will memcpy over it.
   // has_ever_consumed_ = false (set in Stop) ensures GetRawXyzResults returns has_valid_data_=false

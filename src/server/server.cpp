@@ -120,12 +120,13 @@ class ServerImpl {
 
   ConfigManager config_manager_;
 
-  // task-336.2: participating-bit mask (ComponentColorMap::colored_mask_) of the
-  // currently committed config. Compared against the incoming config's mask in
-  // CommitConfig so a change in the colored-bit set forces a full consumer
-  // rebuild (a reused consumer would keep a stale lane layout). 0 == no
-  // raypath_color configured.
-  uint64_t active_colored_mask_ = 0;
+  // task-339.3: color-class table of the currently committed config. Compared
+  // structurally against the incoming table in CommitConfig (see NeedsRebuild
+  // in config/color_class_table.hpp) so any change in per-class (combine_,
+  // member_bits_) forces a full consumer rebuild — a reused consumer would keep
+  // a stale per-class lane layout. Default construction (empty classes_) equals
+  // "no raypath_color configured" (referenced_mask_ = 0).
+  ColorClassTable active_class_table_;
 
   // task-336.3: the join products used to composite per-component Y-lanes into a
   // colored image. Both are (re)built in CommitConfig's try block alongside
@@ -430,26 +431,27 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
 
   // Parse into a temporary first so that a parse failure leaves the running server untouched.
   ConfigManager new_config;
-  // task-336.2: default (colored_mask_ == 0) means "no raypath_color" → lane
-  // allocation is skipped and rendering stays pre-336 bit-for-bit. Declared
-  // outside the try so it survives to the reuse-judgment below.
+  // task-339.3: runtime color-class table (default = empty → no raypath_color,
+  // pre-336 behavior bit-for-bit). Declared outside the try so it survives to
+  // the reuse-judgment / consumer construction below.
+  ColorClassTable class_table;
+  // task-336.3: the composite join products. Declared outside the try so they
+  // survive to the member assignment below, mirroring class_table.
   ComponentColorMap color_map;
-  // task-336.3: the composite join products (bit→RGB map already above; display
-  // options here). Declared outside the try so they survive to the member
-  // assignment below, mirroring color_map.
   CompositeOptions composite_options;
   try {
     new_config = config_json.get<ConfigManager>();
-    // task-339.2: color-class schema build path. BuildColorClassTable resolves
-    // id → ci (setting_[] slot) using new_config.scene_ and may throw
+    // task-339.2/339.3: color-class schema build path. BuildColorClassTable
+    // resolves id → ci (setting_[] slot) using new_config.scene_ and may throw
     // std::invalid_argument on any config error (unknown combine, missing
     // (crystal,filter) pair, degenerate duplicate, out-of-range summand,
     // combine:"all" ban) — that lands in the std::exception catch below →
-    // Error::InvalidConfig. The interim ToLegacy* adapters produce the per-bit
-    // ComponentColorMap / CompositeOptions the current consumer/compositor
-    // still consume; 339.3/339.4 will consume ColorClassTable directly.
+    // Error::InvalidConfig. 339.3 feeds class_table directly into the
+    // RenderConsumer; the ToLegacyCompositeOptions adapter still produces the
+    // per-bit CompositeOptions the 336.3 compositor consumes (deleted with the
+    // compositor rewrite in 339.4).
     ComponentTable component_table = BuildComponentTable(new_config.scene_);
-    ColorClassTable class_table = BuildColorClassTable(new_config.raypath_color_, new_config.scene_, component_table);
+    class_table = BuildColorClassTable(new_config.raypath_color_, new_config.scene_, component_table);
     color_map = ToLegacyColorMap(class_table);
     composite_options = ToLegacyCompositeOptions(class_table, new_config.raypath_color_.mode_);
   } catch (const nlohmann::json::out_of_range& e) {
@@ -493,21 +495,25 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   auto old_renderers = config_manager_.renderers_;
   config_manager_ = std::move(new_config);
 
-  // task-336.2: a change in the colored-bit set is a scene-level (cross-renderer)
-  // change that must force a full consumer rebuild — a reused RenderConsumer would
-  // keep its old per-component lane layout. This is orthogonal to the per-renderer
+  // task-339.3: a change in the per-class (combine_, member_bits_) shape is a
+  // scene-level (cross-renderer) change that must force a full consumer rebuild
+  // — a reused RenderConsumer would keep its old per-class lane layout. Uses
+  // structural NeedsRebuild instead of the plain uint64 mask compare so a
+  // reshape at the same referenced_mask_ (e.g. "one 2-bit any class" ↔ "two
+  // 1-bit classes") still triggers a rebuild. Orthogonal to the per-renderer
   // NeedsRebuild() layout check below.
-  bool color_mask_changed = (color_map.colored_mask_ != active_colored_mask_);
-  active_colored_mask_ = color_map.colored_mask_;
-  // task-336.3: publish the compositor inputs in lockstep with the mask. Even a
-  // reused consumer set (same mask) may carry a new mode / visibility, so these
-  // are always refreshed. DoSnapshot reads them under snapshot_mutex_; Stop()
-  // above has drained all workers so there is no concurrent DoSnapshot here.
+  bool class_table_changed = NeedsRebuild(active_class_table_, class_table);
+  active_class_table_ = class_table;
+  // task-336.3: publish the compositor inputs in lockstep with the class table.
+  // Even a reused consumer set (same class shape) may carry new colors /
+  // mode / visibility, so these are always refreshed. DoSnapshot reads them
+  // under snapshot_mutex_; Stop() above has drained all workers so there is no
+  // concurrent DoSnapshot here.
   component_color_map_ = color_map;
   composite_options_ = composite_options;
 
   bool can_reuse =
-      !consumers_.empty() && !color_mask_changed && (old_renderers.size() == config_manager_.renderers_.size());
+      !consumers_.empty() && !class_table_changed && (old_renderers.size() == config_manager_.renderers_.size());
   if (can_reuse) {
     auto old_it = old_renderers.begin();
     auto new_it = config_manager_.renderers_.begin();
@@ -537,9 +543,9 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
       // Full rebuild path
       consumers_.clear();
       for (const auto& [_, r] : config_manager_.renderers_) {
-        // task-336.2: pass the participating-bit mask so each consumer allocates
-        // per-component Y-lanes (mask 0 → no lanes, pre-336 behavior).
-        consumers_.emplace_back(std::make_shared<RenderConsumer>(r, active_colored_mask_));
+        // task-339.3: pass the color-class table so each consumer allocates one
+        // Y-lane per class (empty table → no lanes, pre-336 behavior).
+        consumers_.emplace_back(std::make_shared<RenderConsumer>(r, active_class_table_));
       }
       consumers_.emplace_back(std::make_shared<StatsConsumer>());
     }

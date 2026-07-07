@@ -71,6 +71,20 @@ ColorClassTable BuildColorClassTable(const RaypathColorConfig& color_cfg, const 
 // are server concepts — config must not reverse-depend on server.
 ComponentColorMap ToLegacyColorMap(const ColorClassTable& class_table);
 
+// Structural equality for consumer-rebuild eligibility (task-339.3 decision 1):
+// compares z-order-preserving (combine_, member_bits_) per class — NOT just the
+// OR'd referenced_mask_, since two configs can share referenced_mask_ while
+// splitting/merging classes differently (same total bits, different lane count
+// / shape). Returns true when the RenderConsumer's per-class lane layout must
+// be rebuilt from scratch. `color_`/`visible_`/`solo_` do not affect lane
+// layout (they only steer the display-time compositor) and are refreshed
+// unconditionally by CommitConfig, so they intentionally do not participate.
+//
+// Mirrors the placement convention of `NeedsRebuild(const RenderConfig&,
+// const RenderConfig&)` (`src/config/render_config.{hpp,cpp}`) — same name, same
+// "compared type owns the predicate" home.
+bool NeedsRebuild(const ColorClassTable& old_table, const ColorClassTable& new_table);
+
 }  // namespace lumice
 
 #endif  // CONFIG_COLOR_CLASS_TABLE_H_

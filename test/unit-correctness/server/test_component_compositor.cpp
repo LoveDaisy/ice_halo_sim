@@ -82,6 +82,26 @@ SimData MakeBatch(const std::vector<uint64_t>& masks, const std::vector<float>& 
   return data;
 }
 
+// task-339.3: turn a legacy uint64_t "colored bits" mask into a ColorClassTable
+// with one single-member `kAny` class per set bit. Kept as a test-local helper
+// (matching the same-shape helper in test_render_consumer_component_lanes.cpp)
+// so this file's existing single-bit assertions carry over unchanged — the
+// RenderConsumer's construction API is the only thing that had to change.
+ColorClassTable MakeSingletonClassTable(uint64_t mask) {
+  ColorClassTable t;
+  for (uint8_t bit = 0; bit < ComponentTable::kMaxBits; ++bit) {
+    if (((mask >> bit) & 1ULL) == 0) {
+      continue;
+    }
+    ColorClass cls;
+    cls.combine_ = ColorClassCombine::kAny;
+    cls.member_bits_ = static_cast<uint64_t>(1) << bit;
+    t.classes_.push_back(cls);
+    t.referenced_mask_ |= cls.member_bits_;
+  }
+  return t;
+}
+
 // Build a color map with the given per-bit RGBs; colored_mask_ covers bits 0..n-1.
 ComponentColorMap MakeColorMap(const std::vector<std::array<float, 3>>& colors) {
   ComponentColorMap map;
@@ -119,7 +139,7 @@ TEST(ComponentCompositor, DominantAdditivePainterPerPixelMath) {
   RenderConfig cfg = MakeRenderConfig(kRes);
 
   // bit0 (weight a) is brighter than bit1 (weight b): a > b.
-  RenderConsumer rc(cfg, 0b11);
+  RenderConsumer rc(cfg, MakeSingletonClassTable(0b11));
   rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.6f, 0.4f }));
   rc.PrepareSnapshot();
 
@@ -161,7 +181,7 @@ TEST(ComponentCompositor, PainterVsDominantDivergeWhenTopBitDimmer) {
 
   // Now bit1 (weight 0.9) is BRIGHTER than bit0 (weight 0.3): dominant → bit1,
   // painter → bit0 (the top/lowest bit) regardless of strength.
-  RenderConsumer rc(cfg, 0b11);
+  RenderConsumer rc(cfg, MakeSingletonClassTable(0b11));
   rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.3f, 0.9f }));
   rc.PrepareSnapshot();
 
@@ -192,7 +212,7 @@ TEST(ComponentCompositor, DominantTieTakesMinBit) {
   RenderConfig cfg = MakeRenderConfig(kRes);
 
   // Equal weights → equal lanes → strict-`>` ascending scan keeps the min bit.
-  RenderConsumer rc(cfg, 0b11);
+  RenderConsumer rc(cfg, MakeSingletonClassTable(0b11));
   rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.5f, 0.5f }));
   rc.PrepareSnapshot();
 
@@ -219,7 +239,7 @@ TEST(ComponentCompositor, SharedExposureNoSelfNormalization) {
   const int total_pix = kRes * kRes;
   RenderConfig cfg = MakeRenderConfig(kRes);
 
-  RenderConsumer rc(cfg, 0b11);
+  RenderConsumer rc(cfg, MakeSingletonClassTable(0b11));
   rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.6f, 0.4f }));
   rc.PrepareSnapshot();
 
@@ -267,7 +287,7 @@ TEST(ComponentCompositor, VisibilityHideAndSoloAcrossModes) {
   RenderConfig cfg = MakeRenderConfig(kRes);
 
   // bit0 is brighter; without visibility overrides dominant would pick it.
-  RenderConsumer rc(cfg, 0b11);
+  RenderConsumer rc(cfg, MakeSingletonClassTable(0b11));
   rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.6f, 0.4f }));
   rc.PrepareSnapshot();
 
@@ -398,7 +418,7 @@ TEST(ComponentCompositor, DominantThreeArcsNoPhantomHue) {
   }
 
   const uint64_t kColored = 0b111;
-  RenderConsumer rc(render, kColored);
+  RenderConsumer rc(render, MakeSingletonClassTable(kColored));
   rc.Consume(data);
   rc.PrepareSnapshot();
 
@@ -457,7 +477,7 @@ TEST(ComponentCompositor, LinearToSrgbU8Smoke) {
 
 TEST(ComponentCompositor, ZeroColoredMaskProducesNoComposite) {
   RenderConfig cfg = MakeRenderConfig(8);
-  RenderConsumer rc(cfg, 0);  // pre-336 path, no lanes
+  RenderConsumer rc(cfg, ColorClassTable{});  // pre-336 path, no lanes
   rc.Consume(MakeBatch({ 0b00 }, { 0.5f }));
   rc.PrepareSnapshot();
 

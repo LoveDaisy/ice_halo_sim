@@ -1,12 +1,11 @@
 #ifndef CONSUMER_RENDER_H_
 #define CONSUMER_RENDER_H_
 
-#include <array>
 #include <cstdint>
 #include <memory>
 #include <vector>
 
-#include "config/component_table.hpp"
+#include "config/color_class_table.hpp"
 #include "config/render_config.hpp"
 #include "server/consumer.hpp"
 #include "util/logger.hpp"
@@ -19,10 +18,12 @@ constexpr int kMaxWavelength = 830;
 // See doc/accumulator-consumer-architecture.md §3 (state machine), §4 (thread safety), §6 (invariants).
 class RenderConsumer : public IConsume {
  public:
-  // task-336.2: `colored_mask` selects which uint64 component bits the
-  // consumer should keep as separate Y-lanes (bit i set → allocate lane i).
-  // Defaults to 0 → no lane state, pre-336 behavior bit-for-bit.
-  explicit RenderConsumer(RenderConfig config, uint64_t colored_mask = 0);
+  // task-339.3: `class_table` drives per-color-class rule-lane allocation
+  // (see doc/gui-custom-spectrum-and-raypath-color.md §4.7). Each class in the
+  // table gets one W*H Y-lane; Consume() runs each class's `any`/`all` predicate
+  // over every ray's component mask and accumulates Y into the matching lane.
+  // Default (empty table) = pre-336 behavior bit-for-bit (no lane state).
+  explicit RenderConsumer(RenderConfig config, ColorClassTable class_table = ColorClassTable{});
 
   void Consume(const SimData& data) override;
   // S1 device-fused (scrum-302): fold a backend-accumulated XYZ pixel buffer
@@ -38,13 +39,23 @@ class RenderConsumer : public IConsume {
   void ResetWith(const RenderConfig& new_config);
   void LogConsumeProfile() const;  // Dump accumulated profiling stats
 
-  // task-336.2 read-only accessors (consumed by 336.3 compositing + white-box
-  // tests). Both read snapshot state, mirroring GetRawXyzResult()'s tearing-free
-  // contract.
-  uint64_t ColoredMask() const { return colored_mask_; }
-  // Returns pointer to a W*H float array holding the accumulated Y for the
-  // component bit at `bit`, or nullptr when `bit` is out of range or is not a
-  // participating bit (`colored_mask_ >> bit) & 1 == 0`).
+  // task-339.3 read-only accessors. Both read snapshot state, mirroring
+  // GetRawXyzResult()'s tearing-free contract.
+  //
+  // ColoredMask(): union of all class member-bits. Zero when no raypath_color
+  // is configured; used by DoSnapshot to gate compositor invocation.
+  uint64_t ColoredMask() const { return class_table_.referenced_mask_; }
+  // Per-color-class lane accessor (339.4 will consume this directly). Returns
+  // pointer to a W*H float array of accumulated Y for the class at `class_idx`,
+  // or nullptr when the index is out of range.
+  const float* GetColorClassLaneY(size_t class_idx) const;
+  // Legacy per-bit accessor (bridge for 336.3's compositor until 339.4). Scans
+  // classes for a single-member class whose `member_bits_ == (1 << bit)` and
+  // returns its lane. Returns nullptr when no such class exists — the class
+  // owns multiple bits (multi-bit any/all), or two classes share the bit
+  // (overlap), or the bit is not configured. Both cases are exactly what
+  // 339.4's per-class compositor exists to handle; the legacy compositor
+  // silently omits them (matches its defensive nullptr-skip).
   const float* GetComponentLaneY(uint8_t bit) const;
   // Image dimensions (config resolution). Exposed so the 336.3 compositor can
   // size its output without reaching into the private config.
@@ -59,11 +70,17 @@ class RenderConsumer : public IConsume {
   float ExposureScale() const;
 
  private:
-  // task-336.2: split out lane accumulation so Consume()'s cognitive complexity
-  // does not grow with per-lane bookkeeping. Reads compacted arrays parallel to
-  // the SpectrumToXyz(PerRay) call that immediately precedes it.
-  void AccumulateComponentLanes(bool per_ray_wl, const float* wl_buf, float curr_wl, const float* w_buf,
-                                const uint64_t* comp_buf, const int* xy_buf, size_t num);
+  // task-339.3: per-class lane accumulation, split out of Consume() to keep its
+  // cognitive complexity bounded. For each ray it evaluates the class predicate
+  // (any / all) against the ray's component mask and adds the ray's Y into that
+  // class's lane if the predicate matches.
+  void AccumulateColorClassLanes(bool per_ray_wl, const float* wl_buf, float curr_wl, const float* w_buf,
+                                 const uint64_t* comp_buf, const int* xy_buf, size_t num);
+
+  // Whether this consumer has any color classes to accumulate into. The gate
+  // is checked in four places (constructor, Consume() buffer growth, Consume()
+  // has_lanes flag, ConsumeDeviceFused warning) so it lives as a helper.
+  bool HasColorClasses() const { return !class_table_.classes_.empty(); }
 
   RenderConfig config_;
   Rotation rot_;  // camera pose rotation
@@ -91,21 +108,20 @@ class RenderConsumer : public IConsume {
   std::unique_ptr<float[]> overlap_wl_buf_;
   size_t buf_capacity_ = 0;
 
-  // task-336.2: per-component Y-lane state. `colored_mask_` is bit-i-set for
-  // every component bit that carries a user-configured RGB (see
-  // ComponentColorMap::colored_mask_). Only participating bits allocate a
-  // W*H `float` lane; non-participating bits leave `lane_y_[bit]` as nullptr
-  // (unique_ptr default) so the zero-config path costs 64 stale pointers.
+  // task-339.3: per-color-class Y-lane state. `class_table_` is the runtime
+  // color-class table (list of classes, each with color + combine + member_bits
+  // + visible/solo). Lane arrays are compact: index i = class at index i in
+  // class_table_.classes_ (also z-order). Only allocated when the table has
+  // any classes → zero-config path stays at pre-336 zero heap allocations.
   // Snapshot lanes shadow lane_y_ under the two-phase snapshot protocol
   // (PrepareSnapshot memcpy).
-  uint64_t colored_mask_ = 0;
-  std::vector<uint8_t> participating_bits_;  // bits set in colored_mask_, sorted asc
-  std::array<std::unique_ptr<float[]>, ComponentTable::kMaxBits> lane_y_{};
-  std::array<std::unique_ptr<float[]>, ComponentTable::kMaxBits> snapshot_lane_y_{};
+  ColorClassTable class_table_;
+  std::vector<std::unique_ptr<float[]>> lane_y_;
+  std::vector<std::unique_ptr<float[]>> snapshot_lane_y_;
   size_t lane_pixel_count_ = 0;  // W * H
   // Per-ray component mask side-cars (parallel to w_buf_ / overlap_w_buf_).
-  // Grown in Consume() only when colored_mask_ != 0 (Minor #1 from review:
-  // zero-config = zero extra allocation).
+  // Grown in Consume() only when the class table is non-empty (Minor #1 from
+  // 336.2 review: zero-config = zero extra allocation).
   std::unique_ptr<uint64_t[]> comp_buf_;
   std::unique_ptr<uint64_t[]> overlap_comp_buf_;
   // One-shot warning latches for backends that do not yet populate

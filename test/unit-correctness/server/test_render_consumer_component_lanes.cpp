@@ -1,25 +1,50 @@
-// Tests for task-336.2 (component-lane consumer): RenderConsumer per-component
-// Y-lane accumulation and the server.cpp reuse-judgment wiring.
+// Tests for task-339.3 (rule-lane consumer): RenderConsumer per-color-class
+// Y-lane accumulation, the class-shape structural reuse-judgment, and legacy
+// per-bit bridge view. Supersedes the 336.2 per-bit lane tests — the API is
+// now driven by ColorClassTable, and the "per-bit lane" is just the degenerate
+// case of one single-member `any` class per bit (produced here by the local
+// MakeSingletonClassTable helper).
 //
-// Coverage (see plan §4 Step 6 + issue.md acceptance):
-//   1. Σlane == mono Y (white-box, shared exposure) — single-bit rays: the sum
-//      of the per-bit lanes equals the Y channel of the main image, proving the
-//      lanes share the main image's exposure/CMF (no per-lane normalization).
-//   2. Per-bit routing — a multi-bit ray contributes to every participating
-//      lane it carries; a non-participating bit gets no lane at all.
-//   3. Uncolored ray ignored — a ray with no colored bit lands in the main image
-//      but in no lane.
-//   4. Zero-regression — a consumer built with colored_mask=0 produces a main
-//      image bit-identical to one built with a non-zero mask on the same batch
-//      (lane accumulation must not perturb the main render path).
-//   5. Snapshot isolation — GetComponentLaneY reads the two-phase snapshot, so
-//      accumulation after PrepareSnapshot is not visible until the next snapshot;
-//      Reset zeroes the live lanes.
-//   6. Real backend — a two-crystal single-MS scene traced through
+// Coverage (plan §4 Step 3 + issue.md acceptance):
+//   1. Σlane == mono Y (white-box, shared exposure) — single-member classes:
+//      the sum of per-class lanes equals the Y channel of the main image,
+//      proving lanes share the main image's exposure/CMF (no per-lane
+//      normalization). Both accessors (GetColorClassLaneY and legacy
+//      GetComponentLaneY bridge) are checked.
+//   2. Zero-regression — a consumer built with an empty ColorClassTable
+//      produces a main image bit-identical to one built with a non-empty
+//      table on the same batch (lane accumulation must not perturb the main
+//      render path); accessors return nullptr.
+//   3. Snapshot isolation + Reset (single-member class, identical semantics
+//      to 336.2 coverage).
+//   4. Real backend — two-crystal single-MS scene traced through
 //      CpuTraceBackend produces real per-ray component masks; the consumer
-//      buckets them and the Σlane == mono Y invariant holds end-to-end.
-//   7. Server reuse-judgment [plan-review Minor #2, MANDATORY] — a colored-bit
-//      set change across two CommitConfig calls forces a full consumer rebuild.
+//      buckets them (three single-member classes) and Σlane == mono Y holds
+//      end-to-end.
+//   5. Multi-bit `any` class: a ray carrying multiple bits from the same
+//      class must contribute exactly ONCE to that class's lane (issue.md
+//      "any 谓词下一条光线的 Y 计一次进该类 lane"; new to 339.3 — 336.2
+//      routed the same ray to multiple per-bit lanes).
+//   6. Cross-layer `all` class: only rays whose masks contain all class
+//      members contribute — a ray that is missing any member is skipped
+//      (issue.md "cross-layer AND" / plan decision 3 white-box).
+//   7. Overlap: a ray satisfying multiple independent classes contributes
+//      to each class's lane (rule-lanes are the source of overlap; the
+//      compositor at 339.4 is what merges them into pixels).
+//   8. Empty-member class defense (plan decision 3): a class with
+//      member_bits_ == 0 must never contribute — the `all` predicate's
+//      vacuous-truth trap would otherwise let it swallow every ray.
+//   9. Legacy GetComponentLaneY bridge (plan decision 2): returns the lane
+//      for a single-member class owning exactly (1 << bit); returns nullptr
+//      when the bit is inside a multi-bit class or absent.
+//   10. Server reuse-judgment:
+//      a. ColorMaskChangeForcesFullRebuild — a colored-bit set change forces
+//         a full rebuild (existing 336.2 coverage, now via the new
+//         ColorClassTable structural comparison).
+//      b. [MANDATORY, plan decision 1] ClassShapeChangeWithSameMaskForcesRebuild
+//         — two configs with identical referenced_mask_ but a different
+//         class shape (one 2-bit any class vs two 1-bit classes) MUST still
+//         force a rebuild.
 
 #include <gtest/gtest.h>
 
@@ -30,6 +55,7 @@
 #include <optional>
 #include <vector>
 
+#include "config/color_class_table.hpp"
 #include "config/component_table.hpp"
 #include "config/crystal_config.hpp"
 #include "config/filter_config.hpp"
@@ -50,9 +76,6 @@ namespace {
 // Helpers
 // -----------------------------------------------------------------------------
 
-// Small fisheye render looking straight up: rays with dir=(0,0,-1) (sky.z=+1)
-// land near the image centre, safely in-bounds (mirrors the convention in
-// test_cpu_trace_backend.cpp Test D).
 RenderConfig MakeLaneRenderConfig() {
   RenderConfig cfg;
   cfg.id_ = 0;
@@ -67,8 +90,34 @@ RenderConfig MakeLaneRenderConfig() {
   return cfg;
 }
 
+// Turn a legacy uint64_t "colored bits" set into a ColorClassTable containing
+// one single-member `kAny` class per set bit, in ascending bit order. This is
+// the per-bit → per-class mapping that produces byte-for-byte equivalent lane
+// output to the 336.2 API, so tests inherited from 336.2 keep their meaning.
+ColorClassTable MakeSingletonClassTable(uint64_t mask) {
+  ColorClassTable t;
+  for (uint8_t bit = 0; bit < ComponentTable::kMaxBits; ++bit) {
+    if (((mask >> bit) & 1ULL) == 0) {
+      continue;
+    }
+    ColorClass cls;
+    cls.combine_ = ColorClassCombine::kAny;
+    cls.member_bits_ = static_cast<uint64_t>(1) << bit;
+    t.classes_.push_back(cls);
+    t.referenced_mask_ |= cls.member_bits_;
+  }
+  return t;
+}
+
+ColorClass MakeClass(ColorClassCombine combine, uint64_t member_bits) {
+  ColorClass cls;
+  cls.combine_ = combine;
+  cls.member_bits_ = member_bits;
+  return cls;
+}
+
 // Build a CPU-path SimData carrying explicit outgoing rays + per-ray component
-// masks. Every ray points straight up (single in-bounds pixel unless varied).
+// masks. Every ray points straight up (single in-bounds pixel).
 SimData MakeBatch(const std::vector<uint64_t>& masks, const std::vector<float>& weights, float wl) {
   SimData data;
   data.curr_wl_ = wl;
@@ -107,87 +156,192 @@ double SumLane(const float* lane, int w, int h) {
 constexpr float kWl = 550.0f;
 
 // -----------------------------------------------------------------------------
-// 1. Σlane == mono Y (single-bit rays → shared exposure / energy conservation)
+// 1. Σlane == mono Y (single-member classes → shared exposure)
 // -----------------------------------------------------------------------------
-TEST(RenderConsumerComponentLanes, SumOfLanesEqualsMainYForSingleBitRays) {
-  // Each ray carries exactly one colored bit → no double counting; every ray is
-  // colored → nothing escapes into the uncolored bucket. Σ_b lane_b == main Y.
+TEST(RenderConsumerComponentLanes, SumOfLanesEqualsMainYForSingletonClasses) {
+  // Each ray carries exactly one colored bit → no overlap. Two single-member
+  // classes cover bits 0 and 1; Σ_c lane_c == main Y.
   const std::vector<uint64_t> masks = { 0b01, 0b10, 0b01, 0b10 };
   const std::vector<float> weights = { 0.5f, 0.7f, 0.3f, 0.9f };
   auto data = MakeBatch(masks, weights, kWl);
 
   RenderConfig cfg = MakeLaneRenderConfig();
-  RenderConsumer rc(cfg, 0b11);
+  RenderConsumer rc(cfg, MakeSingletonClassTable(0b11));
   ASSERT_EQ(rc.ColoredMask(), 0b11u);
   rc.Consume(data);
   rc.PrepareSnapshot();
 
   const int w = cfg.resolution_[0];
   const int h = cfg.resolution_[1];
-  const double lane0 = SumLane(rc.GetComponentLaneY(0), w, h);
-  const double lane1 = SumLane(rc.GetComponentLaneY(1), w, h);
+  const double lane0 = SumLane(rc.GetColorClassLaneY(0), w, h);
+  const double lane1 = SumLane(rc.GetColorClassLaneY(1), w, h);
   const double main_y = SumMainY(rc.GetRawXyzResult());
 
-  // Hand-computed per-lane expectations (bit0 rays: idx 0,2; bit1 rays: idx 1,3).
   const double exp_lane0 = SpectrumToYSingle(kWl, weights[0]) + SpectrumToYSingle(kWl, weights[2]);
   const double exp_lane1 = SpectrumToYSingle(kWl, weights[1]) + SpectrumToYSingle(kWl, weights[3]);
 
   ASSERT_GT(main_y, 0.0);
   EXPECT_NEAR(lane0, exp_lane0, exp_lane0 * 1e-4 + 1e-6);
   EXPECT_NEAR(lane1, exp_lane1, exp_lane1 * 1e-4 + 1e-6);
-  // Headline invariant: Σ lanes == main Y (shared exposure, no lost energy).
   EXPECT_NEAR(lane0 + lane1, main_y, main_y * 1e-4 + 1e-6);
 
-  // Non-participating bit → no lane allocated.
+  // Legacy per-bit bridge points at the same lanes (each class owns exactly one bit).
+  EXPECT_NEAR(SumLane(rc.GetComponentLaneY(0), w, h), exp_lane0, exp_lane0 * 1e-4 + 1e-6);
+  EXPECT_NEAR(SumLane(rc.GetComponentLaneY(1), w, h), exp_lane1, exp_lane1 * 1e-4 + 1e-6);
+  // Non-configured bit → no lane at all.
   EXPECT_EQ(rc.GetComponentLaneY(2), nullptr);
+  EXPECT_EQ(rc.GetColorClassLaneY(2), nullptr);
 }
 
 // -----------------------------------------------------------------------------
-// 2 + 3. Multi-bit ray hits both lanes; uncolored rays land only in main Y.
+// 2. Multi-bit `any` class: no double count.
 // -----------------------------------------------------------------------------
-TEST(RenderConsumerComponentLanes, MultiBitRoutingAndUncoloredIgnored) {
-  //   idx0: bit0        idx1: bit1        idx2: bit0|bit1 (multi)
-  //   idx3: mask 0 (uncolored)            idx4: bit2 only (not in colored_mask)
-  const std::vector<uint64_t> masks = { 0b001, 0b010, 0b011, 0b000, 0b100 };
-  const std::vector<float> weights = { 0.5f, 0.7f, 0.9f, 0.3f, 0.4f };
+TEST(RenderConsumerComponentLanes, MultiBitAnyClassCountsRayOnce) {
+  // One class = {any, {bit0, bit1}}. Rays:
+  //   idx0: bit0        → satisfies (one bit hit)
+  //   idx1: bit1        → satisfies (one bit hit)
+  //   idx2: bit0|bit1   → satisfies EXACTLY once, not twice
+  //   idx3: no colored bits (bit2 only, but bit2 is not a class member)
+  const std::vector<uint64_t> masks = { 0b001, 0b010, 0b011, 0b100 };
+  const std::vector<float> weights = { 0.5f, 0.7f, 0.9f, 0.4f };
   auto data = MakeBatch(masks, weights, kWl);
 
+  ColorClassTable t;
+  t.classes_.push_back(MakeClass(ColorClassCombine::kAny, 0b011));
+  t.referenced_mask_ = 0b011;
+
   RenderConfig cfg = MakeLaneRenderConfig();
-  RenderConsumer rc(cfg, 0b011);  // only bits 0,1 colored
+  RenderConsumer rc(cfg, t);
   rc.Consume(data);
   rc.PrepareSnapshot();
 
   const int w = cfg.resolution_[0];
   const int h = cfg.resolution_[1];
-  const double lane0 = SumLane(rc.GetComponentLaneY(0), w, h);
-  const double lane1 = SumLane(rc.GetComponentLaneY(1), w, h);
-  const double main_y = SumMainY(rc.GetRawXyzResult());
+  const double lane = SumLane(rc.GetColorClassLaneY(0), w, h);
 
   const double y0 = SpectrumToYSingle(kWl, weights[0]);
   const double y1 = SpectrumToYSingle(kWl, weights[1]);
   const double y2 = SpectrumToYSingle(kWl, weights[2]);
-  const double y3 = SpectrumToYSingle(kWl, weights[3]);
-  const double y4 = SpectrumToYSingle(kWl, weights[4]);
+  // idx2 contributes exactly y2, NOT 2*y2.
+  const double exp_lane = y0 + y1 + y2;
+  EXPECT_NEAR(lane, exp_lane, exp_lane * 1e-4 + 1e-6);
 
-  // Multi-bit ray (idx2) contributes to BOTH participating lanes.
-  EXPECT_NEAR(lane0, y0 + y2, (y0 + y2) * 1e-4 + 1e-6);
-  EXPECT_NEAR(lane1, y1 + y2, (y1 + y2) * 1e-4 + 1e-6);
-
-  // Main Y counts every ray exactly once, including the two uncolored ones
-  // (idx3 = mask 0, idx4 = bit2 masked out by colored_mask).
-  const double exp_main = y0 + y1 + y2 + y3 + y4;
-  EXPECT_NEAR(main_y, exp_main, exp_main * 1e-4 + 1e-6);
-
-  // The uncolored energy (y3 + y4) never reaches a lane: main Y strictly exceeds
-  // the union of colored contributions (y0+y1+y2).
-  EXPECT_GT(main_y, y0 + y1 + y2 + 1e-6);
-
-  // bit2 is carried by a ray but is not a participating bit → no lane.
-  EXPECT_EQ(rc.GetComponentLaneY(2), nullptr);
+  // The legacy bridge returns nullptr for a multi-bit class — no single-member
+  // class owns bit0/bit1 individually here.
+  EXPECT_EQ(rc.GetComponentLaneY(0), nullptr);
+  EXPECT_EQ(rc.GetComponentLaneY(1), nullptr);
 }
 
 // -----------------------------------------------------------------------------
-// 4. Zero-regression: colored_mask=0 vs non-zero produce identical main images.
+// 3. Cross-layer `all`: only rays with ALL member bits contribute.
+// -----------------------------------------------------------------------------
+TEST(RenderConsumerComponentLanes, CrossLayerAllClassRequiresAllMembers) {
+  // Two "layer bits": 0b01 (layer A) and 0b10 (layer B). A class {all, 0b11}
+  // fires only when a ray passed through BOTH layers.
+  const std::vector<uint64_t> masks = { 0b01, 0b10, 0b11, 0b00 };
+  const std::vector<float> weights = { 0.5f, 0.6f, 0.7f, 0.9f };
+  auto data = MakeBatch(masks, weights, kWl);
+
+  ColorClassTable t;
+  t.classes_.push_back(MakeClass(ColorClassCombine::kAll, 0b11));
+  t.referenced_mask_ = 0b11;
+
+  RenderConfig cfg = MakeLaneRenderConfig();
+  RenderConsumer rc(cfg, t);
+  rc.Consume(data);
+  rc.PrepareSnapshot();
+
+  const int w = cfg.resolution_[0];
+  const int h = cfg.resolution_[1];
+  const double lane = SumLane(rc.GetColorClassLaneY(0), w, h);
+
+  const double y2 = SpectrumToYSingle(kWl, weights[2]);
+  EXPECT_NEAR(lane, y2, y2 * 1e-4 + 1e-6);
+}
+
+// -----------------------------------------------------------------------------
+// 4. Overlap: a ray satisfying multiple classes accumulates into each lane.
+// -----------------------------------------------------------------------------
+TEST(RenderConsumerComponentLanes, OverlappingRayAccumulatesIntoEveryMatchingLane) {
+  // Two single-member classes on disjoint bits, plus one ray that carries both
+  // bits — that ray must land in BOTH lanes.
+  const std::vector<uint64_t> masks = { 0b01, 0b10, 0b11 };
+  const std::vector<float> weights = { 0.4f, 0.5f, 0.6f };
+  auto data = MakeBatch(masks, weights, kWl);
+
+  RenderConfig cfg = MakeLaneRenderConfig();
+  RenderConsumer rc(cfg, MakeSingletonClassTable(0b11));
+  rc.Consume(data);
+  rc.PrepareSnapshot();
+
+  const int w = cfg.resolution_[0];
+  const int h = cfg.resolution_[1];
+  const double lane0 = SumLane(rc.GetColorClassLaneY(0), w, h);
+  const double lane1 = SumLane(rc.GetColorClassLaneY(1), w, h);
+
+  const double y0 = SpectrumToYSingle(kWl, weights[0]);
+  const double y1 = SpectrumToYSingle(kWl, weights[1]);
+  const double y2 = SpectrumToYSingle(kWl, weights[2]);
+  EXPECT_NEAR(lane0, y0 + y2, (y0 + y2) * 1e-4 + 1e-6);
+  EXPECT_NEAR(lane1, y1 + y2, (y1 + y2) * 1e-4 + 1e-6);
+  // Overlap: idx2's Y counted in both lanes, so Σ lanes exceeds the mono Y.
+  EXPECT_GT(lane0 + lane1, y0 + y1 + y2 + 1e-6);
+}
+
+// -----------------------------------------------------------------------------
+// 5. Empty-member class must NOT consume energy (`all` vacuous-truth guard).
+// -----------------------------------------------------------------------------
+TEST(RenderConsumerComponentLanes, EmptyMemberBitsClassNeverContributes) {
+  // A class with member_bits_ == 0. Without the guard, `all` would evaluate
+  // (mask & 0) == 0 == true for every ray and swallow the entire batch's Y
+  // into this lane. With the guard, the lane must stay at 0.
+  ColorClassTable t;
+  t.classes_.push_back(MakeClass(ColorClassCombine::kAll, 0));  // empty-member
+  t.classes_.push_back(MakeClass(ColorClassCombine::kAny, 0b01));
+  t.referenced_mask_ = 0b01;
+
+  const std::vector<uint64_t> masks = { 0b01, 0b01, 0b10, 0b00 };
+  const std::vector<float> weights = { 0.5f, 0.7f, 0.9f, 0.4f };
+  auto data = MakeBatch(masks, weights, kWl);
+
+  RenderConfig cfg = MakeLaneRenderConfig();
+  RenderConsumer rc(cfg, t);
+  rc.Consume(data);
+  rc.PrepareSnapshot();
+
+  const int w = cfg.resolution_[0];
+  const int h = cfg.resolution_[1];
+  const double empty_lane = SumLane(rc.GetColorClassLaneY(0), w, h);
+  const double any_lane = SumLane(rc.GetColorClassLaneY(1), w, h);
+
+  EXPECT_NEAR(empty_lane, 0.0, 1e-9) << "empty-member class must never absorb energy";
+  const double exp_any = SpectrumToYSingle(kWl, weights[0]) + SpectrumToYSingle(kWl, weights[1]);
+  EXPECT_NEAR(any_lane, exp_any, exp_any * 1e-4 + 1e-6);
+}
+
+// -----------------------------------------------------------------------------
+// 6. Legacy per-bit bridge: only a single-member class exposes its lane.
+// -----------------------------------------------------------------------------
+TEST(RenderConsumerComponentLanes, ComponentLaneBridgeOnlyMapsSingleMemberClasses) {
+  // Mixed table: one single-member class (bit0) and one two-bit class (bits 1,2).
+  ColorClassTable t;
+  t.classes_.push_back(MakeClass(ColorClassCombine::kAny, 0b001));  // single-member
+  t.classes_.push_back(MakeClass(ColorClassCombine::kAny, 0b110));  // multi-member
+  t.referenced_mask_ = 0b111;
+
+  RenderConfig cfg = MakeLaneRenderConfig();
+  RenderConsumer rc(cfg, t);
+  rc.Consume(MakeBatch({ 0b001 }, { 0.5f }, kWl));
+  rc.PrepareSnapshot();
+
+  EXPECT_NE(rc.GetComponentLaneY(0), nullptr) << "single-member class exposes its lane by bit";
+  EXPECT_EQ(rc.GetComponentLaneY(1), nullptr) << "bit inside multi-member class is not addressable via bridge";
+  EXPECT_EQ(rc.GetComponentLaneY(2), nullptr) << "bit inside multi-member class is not addressable via bridge";
+}
+
+// -----------------------------------------------------------------------------
+// 7. Zero-regression: empty class table vs single-member table produce the
+//    same main image on the same batch.
 // -----------------------------------------------------------------------------
 TEST(RenderConsumerComponentLanes, ColoredMaskDoesNotPerturbMainImage) {
   const std::vector<uint64_t> masks = { 0b01, 0b10, 0b11, 0b00 };
@@ -196,8 +350,8 @@ TEST(RenderConsumerComponentLanes, ColoredMaskDoesNotPerturbMainImage) {
   auto data_b = MakeBatch(masks, weights, kWl);
 
   RenderConfig cfg = MakeLaneRenderConfig();
-  RenderConsumer rc_plain(cfg, 0);     // pre-336 path
-  RenderConsumer rc_color(cfg, 0b11);  // lane path active
+  RenderConsumer rc_plain(cfg, ColorClassTable{});              // pre-336 path
+  RenderConsumer rc_color(cfg, MakeSingletonClassTable(0b11));  // lane path active
   rc_plain.Consume(data_a);
   rc_color.Consume(data_b);
   rc_plain.PrepareSnapshot();
@@ -216,42 +370,43 @@ TEST(RenderConsumerComponentLanes, ColoredMaskDoesNotPerturbMainImage) {
   // The plain consumer exposes no lanes at all.
   EXPECT_EQ(rc_plain.ColoredMask(), 0u);
   EXPECT_EQ(rc_plain.GetComponentLaneY(0), nullptr);
+  EXPECT_EQ(rc_plain.GetColorClassLaneY(0), nullptr);
 }
 
 // -----------------------------------------------------------------------------
-// 5. Snapshot isolation + Reset.
+// 8. Snapshot isolation + Reset.
 // -----------------------------------------------------------------------------
 TEST(RenderConsumerComponentLanes, LaneSnapshotIsolationAndReset) {
   RenderConfig cfg = MakeLaneRenderConfig();
-  RenderConsumer rc(cfg, 0b1);
+  RenderConsumer rc(cfg, MakeSingletonClassTable(0b1));
   const int w = cfg.resolution_[0];
   const int h = cfg.resolution_[1];
 
   auto batch_a = MakeBatch({ 0b1 }, { 0.5f }, kWl);
   rc.Consume(batch_a);
   rc.PrepareSnapshot();
-  const double after_a = SumLane(rc.GetComponentLaneY(0), w, h);
+  const double after_a = SumLane(rc.GetColorClassLaneY(0), w, h);
   EXPECT_GT(after_a, 0.0);
 
   // Accumulate more WITHOUT a new snapshot: the snapshot must stay frozen.
   auto batch_b = MakeBatch({ 0b1 }, { 0.7f }, kWl);
   rc.Consume(batch_b);
-  EXPECT_NEAR(SumLane(rc.GetComponentLaneY(0), w, h), after_a, after_a * 1e-4 + 1e-6)
-      << "GetComponentLaneY must read the frozen snapshot, not live accumulation";
+  EXPECT_NEAR(SumLane(rc.GetColorClassLaneY(0), w, h), after_a, after_a * 1e-4 + 1e-6)
+      << "GetColorClassLaneY must read the frozen snapshot, not live accumulation";
 
   // Now snapshot: both batches visible.
   rc.PrepareSnapshot();
-  const double after_b = SumLane(rc.GetComponentLaneY(0), w, h);
+  const double after_b = SumLane(rc.GetColorClassLaneY(0), w, h);
   EXPECT_GT(after_b, after_a);
 
   // Reset zeroes the live lanes; next snapshot reflects an empty lane.
   rc.Reset();
   rc.PrepareSnapshot();
-  EXPECT_NEAR(SumLane(rc.GetComponentLaneY(0), w, h), 0.0, 1e-9);
+  EXPECT_NEAR(SumLane(rc.GetColorClassLaneY(0), w, h), 0.0, 1e-9);
 }
 
 // -----------------------------------------------------------------------------
-// 6. Real backend: two-crystal single-MS scene → real per-ray masks → Σlane==Y.
+// 9. Real backend: two-crystal single-MS scene → real per-ray masks → Σlane==Y.
 // -----------------------------------------------------------------------------
 namespace {
 
@@ -273,14 +428,6 @@ FilterConfig MakeFilterIn(FilterParam param) {
   return f;
 }
 
-// Single MS layer, two crystal slots. This is the three-bit "three-arcs" TOPOLOGY
-// of the plan, but realised with entry/exit length-band filters instead of the
-// literal [3] / [3,5] raypath sequences: a length-1 raypath is physically near
-// zero-hit, whereas length bands guarantee non-zero, disjoint populations (plan
-// risk 5 explicitly permits this tuning). Bits:
-//   slot0  Simple(len>=1)                    → bit0 (all slot-0 rays)
-//   slot1  Complex[ len==2 , len>=3 ]        → bit1 (len==2), bit2 (len>=3)
-// Every emitted ray carries exactly one bit → Σ_b lane_b == main Y.
 SceneConfig MakeTwoCrystalColoredScene(size_t max_hits) {
   SceneConfig scene;
   scene.ray_num_ = 0;
@@ -289,9 +436,8 @@ SceneConfig MakeTwoCrystalColoredScene(size_t max_hits) {
   scene.light_source_.spectrum_ = std::vector<WlParam>{ { kWl, 1.0f } };
 
   MsInfo ms;
-  ms.prob_ = 0.0f;  // single (final) layer: all surviving rays emit.
+  ms.prob_ = 0.0f;
 
-  // slot0: everything (length >= 1) → one summand → bit0.
   {
     ScatteringSetting s;
     s.crystal_.id_ = 0;
@@ -300,7 +446,6 @@ SceneConfig MakeTwoCrystalColoredScene(size_t max_hits) {
     s.crystal_proportion_ = 0.5f;
     ms.setting_.push_back(std::move(s));
   }
-  // slot1: complex OR of two disjoint length bands → summands bit1, bit2.
   {
     ComplexFilterParam cf;
     cf.filters_.resize(2);
@@ -326,7 +471,6 @@ TEST(RenderConsumerComponentLanes, RealBackendMasksBucketedShareExposure) {
   constexpr size_t kMaxHits = 8;
   auto scene = MakeTwoCrystalColoredScene(kMaxHits);
 
-  // Sanity: the static table assigns exactly bits 0,1,2.
   auto table = BuildComponentTable(scene);
   ASSERT_EQ(table.entries_.size(), 3u);
 
@@ -343,7 +487,7 @@ TEST(RenderConsumerComponentLanes, RealBackendMasksBucketedShareExposure) {
   constexpr size_t kRayCount = 200000;
   HostRayBatch host;
   host.count = kRayCount;
-  host.crystal = nullptr;  // backend builds each slot's crystal via MakeCrystal.
+  host.crystal = nullptr;
 
   auto handle = backend.TraceLayer(RootRaySource::FromHost(host));
   ASSERT_NE(handle, nullptr);
@@ -353,8 +497,6 @@ TEST(RenderConsumerComponentLanes, RealBackendMasksBucketedShareExposure) {
   backend.EndSession();
   ASSERT_FALSE(records.empty());
 
-  // --- Risk-5 precheck: confirm every target bit actually got hits, and that no
-  //     emitted ray carries more than one colored bit (single-bit invariant). ---
   const uint64_t kColored = 0b111;
   size_t hits[3] = { 0, 0, 0 };
   for (const auto& rec : records) {
@@ -371,7 +513,6 @@ TEST(RenderConsumerComponentLanes, RealBackendMasksBucketedShareExposure) {
     ASSERT_GT(hits[b], 0u) << "bit " << b << " got zero hits — retune scene (plan risk 5)";
   }
 
-  // --- Feed the real exit rays into the consumer and check the invariant. ---
   SimData data;
   data.curr_wl_ = kWl;
   data.outgoing_d_.reserve(records.size() * 3);
@@ -385,35 +526,36 @@ TEST(RenderConsumerComponentLanes, RealBackendMasksBucketedShareExposure) {
     data.outgoing_component_.push_back(rec.component_mask);
   }
 
-  RenderConsumer rc(render, kColored);
+  RenderConsumer rc(render, MakeSingletonClassTable(kColored));
   rc.Consume(data);
   rc.PrepareSnapshot();
 
   const int w = render.resolution_[0];
   const int h = render.resolution_[1];
-  const double lane0 = SumLane(rc.GetComponentLaneY(0), w, h);
-  const double lane1 = SumLane(rc.GetComponentLaneY(1), w, h);
-  const double lane2 = SumLane(rc.GetComponentLaneY(2), w, h);
+  const double lane0 = SumLane(rc.GetColorClassLaneY(0), w, h);
+  const double lane1 = SumLane(rc.GetColorClassLaneY(1), w, h);
+  const double lane2 = SumLane(rc.GetColorClassLaneY(2), w, h);
   const double main_y = SumMainY(rc.GetRawXyzResult());
 
   EXPECT_GT(lane0, 0.0);
   EXPECT_GT(lane1, 0.0);
   EXPECT_GT(lane2, 0.0);
   ASSERT_GT(main_y, 0.0);
-  // Every emitted ray carries exactly one colored bit → Σ lanes == main Y
-  // (shared exposure, end-to-end through the real backend).
   EXPECT_NEAR(lane0 + lane1 + lane2, main_y, main_y * 1e-3 + 1e-6);
 }
 
 // -----------------------------------------------------------------------------
-// 7. Server reuse-judgment [plan-review Minor #2 — MANDATORY].
+// 10. Server reuse-judgment (color mask + class shape).
 // -----------------------------------------------------------------------------
 namespace {
 
-// Minimal committable config with one prism crystal, one raypath filter, one
-// scattering layer referencing them, and one renderer. `with_color` toggles the
-// raypath_color entry so the participating-bit set changes between commits.
-nlohmann::json MakeReuseConfig(bool with_color) {
+// Minimal committable config. `color` selects which raypath_color block to
+// emit; the scene has TWO scattering slots (each with a single-summand simple
+// raypath filter) so bit0 / bit1 are separately addressable via (crystal,
+// filter) refs.
+enum class ColorForm { kNone, kOneBit, kTwoSingleBitClasses, kOneTwoBitClass };
+
+nlohmann::json MakeReuseConfig(ColorForm color) {
   nlohmann::json root;
 
   nlohmann::json cr;
@@ -425,12 +567,18 @@ nlohmann::json MakeReuseConfig(bool with_color) {
   cr["axis"]["roll"] = { { "type", "uniform" }, { "mean", 0.0f }, { "std", 180.0f } };
   root["crystal"] = nlohmann::json::array({ cr });
 
-  nlohmann::json flt;
-  flt["id"] = 1;
-  flt["type"] = "raypath";
-  flt["raypath"] = { 3, 5 };
-  flt["action"] = "filter_in";
-  root["filter"] = nlohmann::json::array({ flt });
+  // Two simple raypath filters (distinct raypaths → distinct summand bits).
+  nlohmann::json flt1;
+  flt1["id"] = 1;
+  flt1["type"] = "raypath";
+  flt1["raypath"] = { 3 };
+  flt1["action"] = "filter_in";
+  nlohmann::json flt2;
+  flt2["id"] = 2;
+  flt2["type"] = "raypath";
+  flt2["raypath"] = { 5 };
+  flt2["action"] = "filter_in";
+  root["filter"] = nlohmann::json::array({ flt1, flt2 });
 
   nlohmann::json scene;
   scene["light_source"]["type"] = "sun";
@@ -442,7 +590,11 @@ nlohmann::json MakeReuseConfig(bool with_color) {
   scene["max_hits"] = 8;
   nlohmann::json ms;
   ms["prob"] = 0.0f;
-  ms["entries"] = nlohmann::json::array({ { { "crystal", 1 }, { "filter", 1 }, { "proportion", 1.0f } } });
+  // Two scattering slots: ci=0 → (crystal=1, filter=1) → bit0; ci=1 → (crystal=1, filter=2) → bit1.
+  ms["entries"] = nlohmann::json::array({
+      { { "crystal", 1 }, { "filter", 1 }, { "proportion", 0.5f } },
+      { { "crystal", 1 }, { "filter", 2 }, { "proportion", 0.5f } },
+  });
   scene["scattering"] = nlohmann::json::array({ ms });
   root["scene"] = scene;
 
@@ -460,10 +612,33 @@ nlohmann::json MakeReuseConfig(bool with_color) {
   rn["intensity_factor"] = 1.0f;
   root["render"] = nlohmann::json::array({ rn });
 
-  if (with_color) {
-    root["raypath_color"] = nlohmann::json::array({
-        { { "color", { 1.0f, 0.0f, 0.0f } }, { "match", { { { "layer", 0 }, { "crystal", 1 }, { "filter", 1 } } } } },
-    });
+  auto ref = [](int filter_id) { return nlohmann::json{ { "layer", 0 }, { "crystal", 1 }, { "filter", filter_id } }; };
+
+  switch (color) {
+    case ColorForm::kNone:
+      break;
+    case ColorForm::kOneBit:
+      root["raypath_color"] = nlohmann::json::array({
+          { { "color", { 1.0f, 0.0f, 0.0f } }, { "match", { ref(1) } } },
+      });
+      break;
+    case ColorForm::kTwoSingleBitClasses:
+      // Two independent single-member classes: referenced_mask_ = 0b11,
+      // classes.size() = 2.
+      root["raypath_color"] = nlohmann::json::array({
+          { { "color", { 1.0f, 0.0f, 0.0f } }, { "match", { ref(1) } } },
+          { { "color", { 0.0f, 1.0f, 0.0f } }, { "match", { ref(2) } } },
+      });
+      break;
+    case ColorForm::kOneTwoBitClass:
+      // Single class whose two refs union to bits {0, 1}: same referenced_mask_
+      // = 0b11 as the split shape, but classes.size() = 1 and member_bits_ =
+      // 0b11 — a NeedsRebuild that only compares uint64 masks would falsely
+      // reuse a split-shape consumer here.
+      root["raypath_color"] = nlohmann::json::array({
+          { { "color", { 1.0f, 1.0f, 0.0f } }, { "match", { ref(1), ref(2) } } },
+      });
+      break;
   }
   return root;
 }
@@ -472,8 +647,8 @@ nlohmann::json MakeReuseConfig(bool with_color) {
 
 TEST(ServerCommitConfigColorReuse, ColorMaskChangeForcesFullRebuild) {
   Server server(1);
-  const auto base = MakeReuseConfig(/*with_color=*/false);
-  const auto colored = MakeReuseConfig(/*with_color=*/true);
+  const auto base = MakeReuseConfig(ColorForm::kNone);
+  const auto colored = MakeReuseConfig(ColorForm::kOneBit);
 
   bool reused = true;
 
@@ -483,20 +658,47 @@ TEST(ServerCommitConfigColorReuse, ColorMaskChangeForcesFullRebuild) {
 
   // Re-commit the identical (uncolored) config: baseline reuse works.
   ASSERT_TRUE(server.CommitConfig(base, &reused).IsSuccess());
-  EXPECT_TRUE(reused) << "identical config with unchanged color mask should reuse consumers";
+  EXPECT_TRUE(reused) << "identical config with unchanged class table should reuse consumers";
 
-  // Add raypath_color (same renderer layout): the participating-bit set changes
-  // from 0 to non-zero → the consumer set MUST be fully rebuilt, not reused.
+  // Add raypath_color: class table goes empty → 1 class → rebuild.
   ASSERT_TRUE(server.CommitConfig(colored, &reused).IsSuccess());
-  EXPECT_FALSE(reused) << "a colored-bit set change must force a full consumer rebuild (plan §2 in-scope)";
+  EXPECT_FALSE(reused) << "a class-table change must force a full consumer rebuild";
 
-  // Re-commit the identical colored config: reuse resumes now the mask is stable.
+  // Re-commit the identical colored config: reuse resumes now the shape is stable.
   ASSERT_TRUE(server.CommitConfig(colored, &reused).IsSuccess());
-  EXPECT_TRUE(reused) << "stable colored mask should reuse consumers";
+  EXPECT_TRUE(reused) << "stable class table should reuse consumers";
 
-  // Remove the color again: mask returns to 0 → rebuild once more.
+  // Remove the color again: class table goes back to empty → rebuild.
   ASSERT_TRUE(server.CommitConfig(base, &reused).IsSuccess());
-  EXPECT_FALSE(reused) << "clearing the colored mask must also force a rebuild";
+  EXPECT_FALSE(reused) << "clearing raypath_color must also force a rebuild";
+}
+
+// MANDATORY plan decision 1: two configs with identical referenced_mask_ but
+// different class shape must STILL force a full consumer rebuild — a plain
+// uint64 mask compare would falsely reuse a stale-shape consumer.
+TEST(ServerCommitConfigColorReuse, ClassShapeChangeWithSameMaskForcesRebuild) {
+  Server server(1);
+  const auto split = MakeReuseConfig(ColorForm::kTwoSingleBitClasses);  // 2 classes, bits {0}/{1}
+  const auto merged = MakeReuseConfig(ColorForm::kOneTwoBitClass);      // 1 class,  bits {0,1}
+
+  bool reused = true;
+  ASSERT_TRUE(server.CommitConfig(split, &reused).IsSuccess());
+  EXPECT_FALSE(reused) << "first commit must build consumers from scratch";
+
+  ASSERT_TRUE(server.CommitConfig(split, &reused).IsSuccess());
+  EXPECT_TRUE(reused) << "identical split-class config should reuse consumers";
+
+  // referenced_mask_ is 0b11 in BOTH configs; only the class shape differs.
+  // The structural NeedsRebuild must catch this and force a rebuild.
+  ASSERT_TRUE(server.CommitConfig(merged, &reused).IsSuccess());
+  EXPECT_FALSE(reused) << "same referenced_mask_ but different class shape MUST force a rebuild";
+
+  ASSERT_TRUE(server.CommitConfig(merged, &reused).IsSuccess());
+  EXPECT_TRUE(reused) << "identical merged-class config should reuse consumers";
+
+  // Back to the split shape: rebuild again.
+  ASSERT_TRUE(server.CommitConfig(split, &reused).IsSuccess());
+  EXPECT_FALSE(reused) << "class shape change (merged → split) must force a rebuild";
 }
 
 }  // namespace
