@@ -248,12 +248,14 @@ set(lumice_include
   "${PROJ_SRC_DIR}")
 
 set(lumice_config_src
+  "${PROJ_SRC_DIR}/config/component_color_map.cpp"
   "${PROJ_SRC_DIR}/config/component_table.cpp"
   "${PROJ_SRC_DIR}/config/config_manager.cpp"
   "${PROJ_SRC_DIR}/config/crystal_config.cpp"
   "${PROJ_SRC_DIR}/config/filter_config.cpp"
   "${PROJ_SRC_DIR}/config/light_config.cpp"
   "${PROJ_SRC_DIR}/config/proj_config.cpp"
+  "${PROJ_SRC_DIR}/config/raypath_color_config.cpp"
   "${PROJ_SRC_DIR}/config/raypath_validation.cpp"
   "${PROJ_SRC_DIR}/config/render_config.cpp"
   "${PROJ_SRC_DIR}/config/sim_data.cpp")
