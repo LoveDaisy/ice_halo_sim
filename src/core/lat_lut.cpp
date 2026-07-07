@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
 #include <vector>
 
 #include "core/shared/pcg_shared.h"  // lm_pcg::normalize_latitude — single-source fold (device-matched)
@@ -175,6 +178,45 @@ LatLut BuildLatLut(const Distribution& lat_dist) {
   }
   lut.flip_prob[LatLut::kNodes - 1] = lut.flip_prob[LatLut::kNodes - 2];
   return lut;
+}
+
+namespace {
+
+// Cache key: the (type, mean, std) triple that fully determines a LatLut. Exact
+// float bit-equality matches the semantics of the old single-entry cache (a
+// re-configured but numerically identical distribution reuses the same LUT).
+struct LatLutKey {
+  DistributionType type;
+  float mean;
+  float std;
+  bool operator==(const LatLutKey& o) const { return type == o.type && mean == o.mean && std == o.std; }
+};
+
+struct LatLutKeyHash {
+  size_t operator()(const LatLutKey& k) const {
+    size_t h = std::hash<int>{}(static_cast<int>(k.type));
+    h = h * 1000003u ^ std::hash<float>{}(k.mean);
+    h = h * 1000003u ^ std::hash<float>{}(k.std);
+    return h;
+  }
+};
+
+}  // namespace
+
+const LatLut* GetSharedLatLut(const Distribution& lat_dist) {
+  // Process-lifetime memoization. unique_ptr gives a stable pointee address
+  // (unordered_map never rehashes the managed object, and we never erase), so
+  // the returned pointer stays valid and the immutable LatLut is safe to read
+  // concurrently without the lock. The mutex only serializes lookup/insert.
+  static std::mutex mu;
+  static std::unordered_map<LatLutKey, std::unique_ptr<LatLut>, LatLutKeyHash> cache;
+  const LatLutKey key{ lat_dist.type, lat_dist.mean, lat_dist.std };
+  std::lock_guard<std::mutex> lock(mu);
+  auto it = cache.find(key);
+  if (it == cache.end()) {
+    it = cache.emplace(key, std::make_unique<LatLut>(BuildLatLut(lat_dist))).first;
+  }
+  return it->second.get();
 }
 
 }  // namespace lumice

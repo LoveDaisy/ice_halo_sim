@@ -1375,11 +1375,13 @@ void MetalTraceBackend::Impl::UploadLatLut(const AxisDistribution& axis) {
   if (lat_path::SelectLatPath(axis).kind != lat_path::LatPathKind::kLutInverseCdf) {
     return;
   }
-  LatLut lut = BuildLatLut(axis.latitude_dist);
+  // task-335: shared build-once cache (was per-ci BuildLatLut = a full 65536-sample
+  // quadrature rebuilt on every crystal switch). Only the 3 KB memcpy stays per ci.
+  const LatLut* lut = GetSharedLatLut(axis.latitude_dist);
   constexpr size_t kLen = static_cast<size_t>(LatLut::kNodes) * sizeof(float);
-  std::memcpy([lat_lut_theta_buf_ contents], lut.theta.data(), kLen);
-  std::memcpy([lat_lut_cdf_buf_ contents], lut.cdf.data(), kLen);
-  std::memcpy([lat_lut_flip_buf_ contents], lut.flip_prob.data(), kLen);
+  std::memcpy([lat_lut_theta_buf_ contents], lut->theta.data(), kLen);
+  std::memcpy([lat_lut_cdf_buf_ contents], lut->cdf.data(), kLen);
+  std::memcpy([lat_lut_flip_buf_ contents], lut->flip_prob.data(), kLen);
 }
 
 void MetalTraceBackend::Impl::ResolveLayerCrystalForCi(const ScatteringSetting& setting,
