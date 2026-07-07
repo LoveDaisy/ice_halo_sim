@@ -190,6 +190,16 @@ bool BuildCrystalMeshData(const CrystalConfig& cr, LUMICE_CrystalMesh* out) {
       n[2] = -ny;
     }
   }
+  // Same Y-Z swap for per-face unit normals so face_number_overlay.cpp reads
+  // them in the same GL frame as `vertices` (both feed into ProjectLabelToScreen
+  // together — mixed frames flip front/back on the fixed 90° offset).
+  for (int fi = 0; fi < out->face_count; fi++) {
+    float* n = &out->face_normals[fi * 3];
+    float ny = n[1];
+    float nz = n[2];
+    n[1] = nz;
+    n[2] = -ny;
+  }
 
   // AABB normalization: scale to fit unit cube
   if (out->vertex_count > 0) {

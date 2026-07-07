@@ -325,6 +325,12 @@ void CrystalRenderer::UpdateMesh(const float* vertices, int vertex_count, const 
   glBufferData(GL_ELEMENT_ARRAY_BUFFER, triangle_count * 3 * sizeof(int), triangles, GL_DYNAMIC_DRAW);
 }
 
+void CrystalRenderer::ComputeEyeRotation(const float model_rotation[16], float out_m_eye[16]) {
+  float v_rot[16];
+  BuildViewRotation(v_rot);
+  Mul4x4Rot(v_rot, model_rotation, out_m_eye);
+}
+
 float CrystalRenderer::ComputeDist(float zoom) {
   float half_tan = std::tan(kFovDeg * kDeg2Rad * 0.5f);
   return zoom / half_tan;
@@ -355,11 +361,9 @@ void CrystalRenderer::ComputeMvp(const float model_rotation[16], float zoom, int
   // model_rotation is the user-controlled crystal orientation in world
   // coordinates. Mouse-drag mutates the model matrix (left-multiplied by
   // world-axis Rodrigues), so the camera stays put.
-  float v_rot[16];
-  BuildViewRotation(v_rot);
   float view[16];
-  Mul4x4Rot(v_rot, model_rotation, view);  // 3x3 rotation; translation=0
-  view[14] = -dist;                        // append camera-back translation
+  ComputeEyeRotation(model_rotation, view);  // 3x3 rotation; translation=0
+  view[14] = -dist;                          // append camera-back translation
 
   // MVP = proj * view
   for (int i = 0; i < 4; i++) {
@@ -404,10 +408,8 @@ void CrystalRenderer::Render(const float rotation[16], float zoom, CrystalStyle 
   // the shader uniform stays a pure rotation since dFdx/dFdy are
   // translation-invariant.
   float dist = ComputeDist(zoom);
-  float v_rot[16];
-  BuildViewRotation(v_rot);
   float m_eye[16];
-  Mul4x4Rot(v_rot, rotation, m_eye);  // 3x3 rotation, translation=0
+  ComputeEyeRotation(rotation, m_eye);  // 3x3 rotation, translation=0
   float view[16];
   std::memcpy(view, m_eye, 16 * sizeof(float));
   view[14] = -dist;  // append camera-back translation for eye-space midpoint

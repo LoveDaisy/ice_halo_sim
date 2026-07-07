@@ -73,6 +73,10 @@ constexpr float kEditModalMinHeightVertical = 0.0f;
 
 static ActiveModal g_active_modal = ActiveModal::kNone;
 static int g_modal_layer_idx = -1;
+// Tracks the crystal_id currently loaded into the preview trackball state so we
+// can detect card-to-card switches inside OpenEditModal (see Bug 2 fix). -1 =
+// no crystal loaded yet; cleared in ResetModalState alongside layer/entry idx.
+static int g_modal_view_crystal_id = -1;
 static int g_modal_entry_idx = -1;
 
 // Active tab is updated each frame inside the corresponding BeginTabItem true-branch
@@ -373,6 +377,19 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   // Pick-mode push_back paths (Link / Unlink / Duplicate) happen *after* the
   // modal closes, when no external references are held.
   const CrystalConfig& src_crystal = state.crystals[entry.crystal_id];
+
+  // Bug 2 fix: card-to-card switch must reset preview pose to the target
+  // crystal's axis default. Compare crystal_id (not layer/entry index) so that
+  // two linked entries backed by the same pool crystal don't spuriously reset
+  // (their trackball history is meaningful shared state). Skip when opening
+  // the same crystal_id we already had loaded — preserves the trackball state
+  // for "close then re-open the same entry" flows and keeps this idempotent
+  // relative to the existing pick-link-completion reset in app_panels.cpp:429.
+  if (entry.crystal_id != g_modal_view_crystal_id) {
+    ResetCrystalViewToCrystal(src_crystal);
+    g_modal_view_crystal_id = entry.crystal_id;
+  }
+
   g_crystal_buf = src_crystal;
   g_axis_buf[0] = src_crystal.zenith;
   g_axis_buf[1] = src_crystal.azimuth;
@@ -996,6 +1013,7 @@ void ResetModalState() {
   g_state.modal_immediate_mode = false;
   g_modal_layer_idx = -1;
   g_modal_entry_idx = -1;
+  g_modal_view_crystal_id = -1;
   g_crystal_buf = {};
   g_axis_buf[0] = {};
   g_axis_buf[1] = {};
