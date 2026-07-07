@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783434138243,
+  "lastUpdate": 1783434139983,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9620,50 +9620,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "6878c2d8eca3eb1fcb40efdb7b81fc896a559534",
-          "message": "Merge pull request #79 from LoveDaisy/feat/gui_polish\n\nfeat(gui): aspect ratio clamp warning + overlay label sampler refactor",
-          "timestamp": "2026-04-28T17:49:24+08:00",
-          "tree_id": "5c03cdff293a4b10bd73c61099429e2cbbf1b25e",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/6878c2d8eca3eb1fcb40efdb7b81fc896a559534"
-        },
-        "date": 1777370036515,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 96.1,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 68.8,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 72.4,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 57.1,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "ac272dc408c8e4a5df4ffcbaac9688ce08f0d1ac",
           "message": "Merge pull request #80 from LoveDaisy/feat/doc\n\ndocs: restructure README + add user manual + GUI guide rewrite",
           "timestamp": "2026-04-29T02:54:01+08:00",
@@ -14003,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 93.5,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8d88f08734051714d5bb893476504dc8be228f72",
+          "message": "Merge pull request #181 from LoveDaisy/fix/regen-auto-ev-refs\n\nfix(auto-ev): regen stale visual refs + recalibrate thresholds (kill 31% flake)",
+          "timestamp": "2026-07-07T22:15:20+08:00",
+          "tree_id": "41512c22064985ece3e71d5e151eba5e56362085",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/8d88f08734051714d5bb893476504dc8be228f72"
+        },
+        "date": 1783434139627,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 82.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 95.9,
             "unit": "%"
           }
         ]
