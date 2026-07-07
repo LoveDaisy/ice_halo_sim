@@ -480,6 +480,98 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // P1: task-fix-crystal-preview-thumbnail Bug 2 — opening the Edit modal on a
+  // different crystal card must snap the preview pose to the target crystal's
+  // axis default (equivalent to auto-clicking Reset View). Opening the SAME
+  // crystal_id twice in a row must preserve the trackball pose (so a user who
+  // dragged, closed, then re-opened the same entry sees the same view). The
+  // switch judge is crystal_id, not (layer_idx, entry_idx), so two entries
+  // sharing one pool crystal (Link scenario) share trackball history.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "preview_pose_follows_crystal_switch");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Seed a second crystal in the pool with Column-preset axis params, then
+      // add a second entry bound to it. Entry 0 keeps the default (Random)
+      // crystal that DoNew() emits.
+      const gui::AxisDist az_full{ gui::AxisDistType::kUniform, 0.0f, 360.0f };
+      const gui::AxisDist roll_full{ gui::AxisDistType::kUniform, 0.0f, 360.0f };
+      const gui::AxisDist zenith_column{ gui::AxisDistType::kGauss, 90.0f, 1.0f };
+
+      gui::CrystalConfig c_column;
+      c_column.zenith = zenith_column;
+      c_column.azimuth = az_full;
+      c_column.roll = roll_full;
+      IM_CHECK_EQ(static_cast<int>(gui::ClassifyAxisPreset(c_column.zenith, c_column.azimuth, c_column.roll)),
+                  static_cast<int>(gui::AxisPreset::kColumn));
+
+      gui::EntryCard e_column;
+      e_column.crystal_id = static_cast<int>(gui::g_state.crystals.size());
+      gui::g_state.crystals.push_back(c_column);
+      gui::g_state.layers[0].entries.push_back(e_column);
+      ctx->Yield(2);
+
+      // Expected default poses for each entry's crystal.
+      const auto& cr0 = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id];
+      gui::AxisDist params0[3] = { cr0.zenith, cr0.azimuth, cr0.roll };
+      float expected0[16] = { 0 };
+      gui::DefaultPreviewRotation(gui::ClassifyAxisPreset(cr0.zenith, cr0.azimuth, cr0.roll), params0, expected0);
+
+      gui::AxisDist params1[3] = { c_column.zenith, c_column.azimuth, c_column.roll };
+      float expected1[16] = { 0 };
+      gui::DefaultPreviewRotation(gui::AxisPreset::kColumn, params1, expected1);
+
+      // Open entry 0 (Random) via OpenEditModal (bypasses the Edit button so
+      // the assertion isolates OpenEditModal's own reset logic rather than the
+      // card-router indirection). The preview must snap to entry 0's default.
+      gui::EditRequest req0{ gui::EditTarget::kCrystal, /*layer_idx=*/0, /*entry_idx=*/0 };
+      gui::OpenEditModal(req0, gui::g_state);
+      ctx->Yield(2);
+      for (int i = 0; i < 16; ++i) {
+        if (gui::g_crystal_rotation[i] != expected0[i]) {
+          IM_ERRORF("entry0 (Random) idx=%d actual=%f expected=%f", i, static_cast<double>(gui::g_crystal_rotation[i]),
+                    static_cast<double>(expected0[i]));
+        }
+      }
+
+      // Simulate user trackball drag on entry 0's pose so we can prove entry 1
+      // opens with a DIFFERENT (target-specific) rotation, not the leftover.
+      gui::ApplyTrackballRotation(60.0f, 0.0f);
+      IM_CHECK(std::memcmp(gui::g_crystal_rotation, expected0, sizeof(expected0)) != 0);
+
+      // Direct card-to-card switch WITHOUT Cancel/OK — this is the exact user
+      // path the bug reproduces. Opening entry 1 must overwrite g_crystal_rotation
+      // with the Column default, discarding the dragged pose.
+      gui::EditRequest req1{ gui::EditTarget::kCrystal, /*layer_idx=*/0, /*entry_idx=*/1 };
+      gui::OpenEditModal(req1, gui::g_state);
+      ctx->Yield(2);
+      for (int i = 0; i < 16; ++i) {
+        if (gui::g_crystal_rotation[i] != expected1[i]) {
+          IM_ERRORF("entry1 (Column) idx=%d actual=%f expected=%f", i, static_cast<double>(gui::g_crystal_rotation[i]),
+                    static_cast<double>(expected1[i]));
+        }
+      }
+
+      // Re-open the same entry 1 after dragging: crystal_id matches the loaded
+      // one, so the trackball must survive (idempotent re-open). This is the
+      // invariant that makes the crystal_id judge distinct from a
+      // "always reset" fix — and protects the "same-entry Cancel then reopen"
+      // UX and the linked-entries share-history semantics.
+      gui::ApplyTrackballRotation(30.0f, 20.0f);
+      float after_drag[16];
+      std::memcpy(after_drag, gui::g_crystal_rotation, sizeof(after_drag));
+      IM_CHECK(std::memcmp(after_drag, expected1, sizeof(expected1)) != 0);
+      gui::OpenEditModal(req1, gui::g_state);
+      ctx->Yield(2);
+      IM_CHECK(std::memcmp(gui::g_crystal_rotation, after_drag, sizeof(after_drag)) == 0);
+
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
   // P1: Edit modal OK without any change must NOT clear the rendered preview
   // or arm Revert. Regression guard for scrum-gui-polish-v7 152.2: previously
   // CommitAllBuffers unconditionally MarkFilterDirty()'d after any OK,
