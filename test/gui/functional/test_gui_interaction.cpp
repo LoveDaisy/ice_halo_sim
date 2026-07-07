@@ -572,6 +572,135 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // P1: task-fix-modal-edit-state-leak (AC1, Filter tab) — in Immediate mode,
+  // switching to another entry while a filter InputText is mid-edit (cursor
+  // never left the box) must NOT carry the uncommitted text into the new entry.
+  // Root cause: crystal-card clicks are a raw hit-test (never a real ImGui
+  // widget), so the mid-edit InputText is never deactivated the normal way;
+  // SetRowsFromSop resets the row uid to 0 so the next entry's first row reuses
+  // the same InputText ID ("##row_text_0"), and ImGui replays the previous
+  // entry's text into it via g.InputTextDeactivatedState (deferred deactivation-
+  // writeback). Fix = per-(layer,entry) PushID scope around each tab's content
+  // in RenderModalTabBar, so the new entry's widget gets a DIFFERENT ID and none
+  // of ImGui's per-ID caches match. (ClearActiveID() does NOT fix this — it is
+  // what populates InputTextDeactivatedState.) Reproduced pre-fix (progress.md
+  // bisect); guards the fix from regressing.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "filter_edit_not_leaked_on_entry_switch");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = true;  // bug is Immediate-mode only
+
+      // Add a second entry bound to a DISTINCT crystal. This is load-bearing:
+      // entries that SHARE a crystal_id are an intentional "linked group" that
+      // shares filters atomically (ApplyBuffersToEntry::propagate_filter_id_to_
+      // linked), so a shared crystal would propagate entry 0's filter to entry 1
+      // by design and mask the actual bug. The reported bug is two DISTINCT
+      // crystals, where no such linking applies.
+      gui::CrystalConfig c_second;
+      c_second.height = 5.0f;
+      gui::EntryCard e_second;
+      e_second.crystal_id = static_cast<int>(gui::g_state.crystals.size());
+      gui::g_state.crystals.push_back(c_second);
+      gui::g_state.layers[0].entries.push_back(e_second);
+      ctx->Yield(2);
+      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
+      IM_CHECK(!gui::g_state.layers[0].entries[1].filter_id.has_value());
+
+      // Open entry 0's Filter tab and type into the first summand row WITHOUT
+      // committing (KeyCharsAppend does not send Enter, so the box stays active).
+      gui::EditRequest req0{ gui::EditTarget::kFilter, /*layer_idx=*/0, /*entry_idx=*/0 };
+      gui::OpenEditModal(req0, gui::g_state);
+      ctx->Yield(4);
+      ctx->ItemClick("**/##row_text_0");
+      ctx->KeyCharsAppend("3-5");
+      ctx->Yield(2);
+
+      // L1 precondition A: Immediate mode commits every frame, so entry 0 now
+      // actually carries the "3-5" filter (proves the input landed).
+      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(), "3-5");
+      // L1 precondition B: the InputText is still the active item (cursor未离开).
+      IM_CHECK(ImGui::GetActiveID() != 0);
+
+      // Switch to entry 1's Filter tab without leaving the box — the exact user
+      // path (clicking another crystal routes through OpenEditModal).
+      gui::EditRequest req1{ gui::EditTarget::kFilter, /*layer_idx=*/0, /*entry_idx=*/1 };
+      gui::OpenEditModal(req1, gui::g_state);
+      ctx->Yield(4);
+
+      // Core AC1: entry 1 must stay filter-less — "3-5" must not have bled in.
+      IM_CHECK(!gui::g_state.layers[0].entries[1].filter_id.has_value());
+
+      ctx->ItemClick("**/Close##edit_modal");  // Immediate mode: single Close button
+      ctx->Yield(2);
+    };
+  }
+
+  // P1: task-fix-modal-edit-state-leak (AC2, Crystal tab) — the same leak is a
+  // mechanism-level defect (not filter-specific): Crystal/Axis tab inputs use
+  // fixed, entry-agnostic widget IDs (e.g. "##Height##modal_cr_input"), so an
+  // uncommitted Height edit also carries across an entry switch via the same
+  // g.InputTextDeactivatedState replay. The per-(layer,entry) PushID scope is a
+  // single mechanism-level fix that covers all three tabs. This test proves
+  // AC2's "统一性" (unified coverage beyond the Filter tab).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "crystal_edit_not_leaked_on_entry_switch");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = true;
+
+      // Seed a second crystal with a distinct height so "unchanged" is a strong
+      // assertion, and bind a second entry to it.
+      gui::CrystalConfig c_second;
+      c_second.height = 5.0f;  // distinct from entry 0's default (1.0)
+      gui::EntryCard e_second;
+      e_second.crystal_id = static_cast<int>(gui::g_state.crystals.size());
+      gui::g_state.crystals.push_back(c_second);
+      gui::g_state.layers[0].entries.push_back(e_second);
+      ctx->Yield(2);
+      const int cid1 = gui::g_state.layers[0].entries[1].crystal_id;
+      const float orig_h1 = gui::g_state.crystals[cid1].height;
+      IM_CHECK_EQ(orig_h1, 5.0f);
+
+      // Open entry 0's Crystal tab, focus Height and type without committing.
+      gui::EditRequest req0{ gui::EditTarget::kCrystal, /*layer_idx=*/0, /*entry_idx=*/0 };
+      gui::OpenEditModal(req0, gui::g_state);
+      ctx->Yield(4);
+      ctx->ItemClick("**/##Height##modal_cr_input");
+      ctx->KeyCharsAppend("9");
+      ctx->Yield(2);
+      // Precondition: the Height input SPECIFICALLY is the active edit target, so
+      // the "9" keystroke actually landed in the leak source (an InputFloat
+      // commits on deactivation, not live, so we can't assert entry 0's height
+      // changed yet — instead pin the active item to Height's resolved ID). If
+      // the click/type ever stops landing, this fails loudly rather than letting
+      // the core assertion below pass vacuously.
+      const ImGuiID height_id = ctx->ItemInfo("**/##Height##modal_cr_input").ID;
+      IM_CHECK(height_id != 0);
+      IM_CHECK_EQ(ImGui::GetActiveID(), height_id);
+
+      // Switch to entry 1's Crystal tab, then deactivate the (pre-fix still
+      // active) Height input via Enter to force the InputFloat writeback. With
+      // the fix, entry 1's Height input has a different ID than entry 0's pending
+      // edit, so InputTextDeactivatedState never matches and Enter is a no-op.
+      gui::EditRequest req1{ gui::EditTarget::kCrystal, /*layer_idx=*/0, /*entry_idx=*/1 };
+      gui::OpenEditModal(req1, gui::g_state);
+      ctx->Yield(4);
+      ctx->KeyPress(ImGuiKey_Enter);
+      ctx->Yield(2);
+
+      // Core AC2: entry 1's crystal height must be unchanged (not polluted by
+      // the "9" typed into entry 0's Height field).
+      IM_CHECK_EQ(gui::g_state.crystals[cid1].height, orig_h1);
+
+      ctx->ItemClick("**/Close##edit_modal");  // Immediate mode: single Close button
+      ctx->Yield(2);
+    };
+  }
+
   // P1: Edit modal OK without any change must NOT clear the rendered preview
   // or arm Revert. Regression guard for scrum-gui-polish-v7 152.2: previously
   // CommitAllBuffers unconditionally MarkFilterDirty()'d after any OK,

@@ -1295,20 +1295,53 @@ void RenderModalTabBar(GuiState& state, const char* crystal_label, const char* a
   // Note: H/V layout toggle relocated to the bottom button row alongside the
   // Immediate checkbox for visual consistency (both are view-preference
   // toggles; gui-polish-v15 round 2 UX feedback). See RenderEditModals below.
+  //
+  // task-fix-modal-edit-state-leak — per-entry ID scope for all tab *content*.
+  // The "Edit Entry" window is a single persistent ImGui window reused for every
+  // entry, and the content widgets carry entry-agnostic IDs: filter rows reset
+  // their uid counter to 0 on each OpenEditModal (so the first row is always
+  // "##row_text_0"), and Crystal/Axis fields use fixed labels ("##Height##..").
+  // In Immediate mode the "Edit Entry" window is non-blocking, so a crystal-card
+  // click (a raw hit-test in panels.cpp — never a real ImGui widget) can switch
+  // the modal to another entry while an InputText is still mid-edit. Because the
+  // new entry's widget reuses the SAME ImGuiID, ImGui treats it as the same
+  // control and replays the previous entry's edit into it via
+  // g.InputTextDeactivatedState (the deferred deactivation-writeback path,
+  // imgui_widgets.cpp: "Handle reapplying final data on deactivation") — the
+  // uncommitted text leaks into the newly selected entry. Scoping each tab's
+  // content by (layer, entry) makes the IDs differ across entries, so none of
+  // ImGui's per-ID caches (ActiveId / InputTextState / InputTextDeactivatedState)
+  // can bleed one entry's edit into another. The TabBar / TabItem IDs are left
+  // unscoped on purpose — the tab-selection state machine (g_pending_tab_select
+  // + ImGuiTabItemFlags_SetSelected) is delicate and must keep a stable identity.
+  const int entry_layer = g_modal_layer_idx;
+  const int entry_index = g_modal_entry_idx;
   if (ImGui::BeginTabBar("##edit_modal_tabs")) {
     if (ImGui::BeginTabItem(crystal_label, nullptr, crystal_flags)) {
       g_active_tab = ActiveTab::kCrystal;
+      ImGui::PushID(entry_layer);
+      ImGui::PushID(entry_index);
       RenderCrystalModal(state);
+      ImGui::PopID();
+      ImGui::PopID();
       ImGui::EndTabItem();
     }
     if (ImGui::BeginTabItem(axis_label, nullptr, axis_flags)) {
       g_active_tab = ActiveTab::kAxis;
+      ImGui::PushID(entry_layer);
+      ImGui::PushID(entry_index);
       RenderAxisModal(state);
+      ImGui::PopID();
+      ImGui::PopID();
       ImGui::EndTabItem();
     }
     if (ImGui::BeginTabItem(filter_label, nullptr, filter_flags)) {
       g_active_tab = ActiveTab::kFilter;
+      ImGui::PushID(entry_layer);
+      ImGui::PushID(entry_index);
       RenderFilterModal();
+      ImGui::PopID();
+      ImGui::PopID();
       ImGui::EndTabItem();
     }
     ImGui::EndTabBar();
