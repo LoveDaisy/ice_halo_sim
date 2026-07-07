@@ -461,8 +461,9 @@ nlohmann::json MakeReuseConfig(bool with_color) {
   root["render"] = nlohmann::json::array({ rn });
 
   if (with_color) {
-    root["raypath_color"] = nlohmann::json::array(
-        { { { "layer", 0 }, { "crystal_slot", 0 }, { "summand", 0 }, { "color", { 1.0f, 0.0f, 0.0f } } } });
+    root["raypath_color"] = nlohmann::json::array({
+        { { "color", { 1.0f, 0.0f, 0.0f } }, { "match", { { { "layer", 0 }, { "crystal", 1 }, { "filter", 1 } } } } },
+    });
   }
   return root;
 }

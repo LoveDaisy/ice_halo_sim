@@ -35,9 +35,9 @@
     ]
   },
   "raypath_color": [
-    { "layer": 0, "crystal_slot": 0, "summand": 0, "color": [1.0, 0.0, 0.0] },
-    { "layer": 0, "crystal_slot": 1, "summand": 0, "color": [0.0, 1.0, 0.0] },
-    { "layer": 0, "crystal_slot": 1, "summand": 1, "color": [0.0, 0.0, 1.0] }
+    { "color": [1.0, 0.0, 0.0], "match": [ { "layer": 0, "crystal": 1, "filter": 1 } ] },
+    { "color": [0.0, 1.0, 0.0], "match": [ { "layer": 0, "crystal": 1, "filter": 4, "summand": 0 } ] },
+    { "color": [0.0, 0.0, 1.0], "match": [ { "layer": 0, "crystal": 1, "filter": 4, "summand": 1 } ] }
   ],
   "render": [
     {

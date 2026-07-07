@@ -32,10 +32,11 @@ void to_json(nlohmann::json& j, const ConfigManager& m) {
     j["render"].emplace_back(v);
   }
 
-  // Raypath color (task-336.1). Emit only when non-empty to preserve the
-  // "empty container ⇒ no key" convention used by crystal/filter/render and
-  // to keep round-trips of pre-336 configs byte-identical in the missing case.
-  if (!m.raypath_color_.entries_.empty()) {
+  // Raypath color (task-336.1 / 339.2). Emit only when non-empty to preserve
+  // the "empty container ⇒ no key" convention used by crystal/filter/render
+  // and to keep round-trips of pre-336 configs byte-identical in the missing
+  // case.
+  if (!m.raypath_color_.classes_.empty()) {
     j["raypath_color"] = m.raypath_color_;
   }
 }

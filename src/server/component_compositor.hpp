@@ -2,14 +2,14 @@
 #define SERVER_COMPONENT_COMPOSITOR_H_
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace lumice {
 
 class RenderConsumer;
 struct ComponentColorMap;
-struct ComponentTable;
-struct RaypathColorConfig;
+struct ColorClassTable;
 
 // task-336.3: how per-component Y-lanes are combined into one displayed color
 // per pixel (see plan §4). All three modes share the SINGLE mono-image exposure
@@ -17,18 +17,15 @@ struct RaypathColorConfig;
 // per-composite renormalization (that was the spike's false-color bug).
 enum class CompositeMode { kDominant, kAdditive, kPainter };
 
-// Runtime options for CompositeComponentLinear.
+// Runtime options for CompositeComponentLinear. Produced by
+// ToLegacyCompositeOptions(ColorClassTable) after task-339.2's schema switch to
+// color classes; the flat BuildCompositeOptions builder was retired alongside
+// BuildComponentColorMap. 339.3/339.4 will consume ColorClassTable directly.
 struct CompositeOptions {
   CompositeMode mode_ = CompositeMode::kDominant;
   uint64_t hidden_mask_ = 0;  // bit set → hide that component
   uint64_t solo_mask_ = 0;    // non-zero → restrict visible set to solo'd bits (overrides hide)
 };
-
-// Join a user-visible RaypathColorConfig with the config-time ComponentTable
-// into runtime CompositeOptions: parses `mode_` (unknown → dominant + warn once)
-// and folds each entry's visible_/solo_ into hidden_mask_/solo_mask_ using the
-// SAME (layer,crystal_slot,summand)→bit lookup as BuildComponentColorMap.
-CompositeOptions BuildCompositeOptions(const RaypathColorConfig& color_cfg, const ComponentTable& table);
 
 // Composite the consumer's per-component Y-lanes into a W*H*3 linear-RGB image.
 //
@@ -48,6 +45,14 @@ bool CompositeComponentLinear(const RenderConsumer& consumer, const ComponentCol
 // Convert a W*H*3 linear-RGB buffer (as produced above) to sRGB uint8, clamping
 // to [0,1] before the sRGB transfer (mirrors PostSnapshot's final stage).
 void LinearRgbToSrgbU8(const std::vector<float>& linear_rgb, std::vector<uint8_t>& out_srgb);
+
+// Transitional adapter (task-339.2): fold a ColorClassTable's per-class mode /
+// visible / solo into the 336.1 per-bit CompositeOptions the current compositor
+// consumes, until 339.4 rewrites the compositor per-class. Lives in the server
+// layer (not config/color_class_table) because CompositeOptions/CompositeMode
+// are server concepts — config must not reverse-depend on server (doc/
+// architecture.md Config→Server one-way layering).
+CompositeOptions ToLegacyCompositeOptions(const ColorClassTable& class_table, const std::string& mode);
 
 }  // namespace lumice
 

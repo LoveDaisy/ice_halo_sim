@@ -9,59 +9,64 @@
 
 namespace lumice {
 
-// User-visible schema for per-raypath color display (task-336.1).
+// User-visible schema for per-raypath color display (task-339.2 color-class
+// schema; supersedes 336.1's flat positional form). The top-level
+// `raypath_color` is an ordered list of color classes; each class binds one
+// RGB color to a boolean predicate over `component` bits (see
+// doc/gui-custom-spectrum-and-raypath-color.md §4.7 定案 2). List order is
+// z-order (used by 339.4's per-class compositor).
 //
-// Each entry pins one triple (layer, crystal_slot, summand) to an RGB color.
-// The triple keys directly into `ComponentTable::entries_`:
-//
-// - layer_          : index into `SceneConfig::ms_[]`
-// - crystal_id_     : index into `SceneConfig::ms_[layer].setting_[]` — the
-//                     STATIC config slot. JSON key is `crystal_slot` (not
-//                     `crystal`) to avoid collision with the top-level
-//                     `"crystal"` key which refers to `CrystalConfig::id_`.
-//                     The C++ field name mirrors `ComponentTableEntry::crystal_id_`
-//                     for consistency inside the codebase (see
-//                     `component_table.hpp` — same naming pitfall documented
-//                     there).
-// - summand_idx_    : index into the OR-of-AND summand list emitted by
-//                     `BuildComponentTable` (component_table.cpp:52-65). This
-//                     is an internal implementation detail of the current
-//                     filter-expansion algorithm; changes to the summand
-//                     enumeration order will silently invalidate existing
-//                     `summand` indices in user configs. Any refactor of the
-//                     filter-expansion pipeline must revisit this coupling.
-// - color_          : linear RGB in [0, 1], same convention as
-//                     `RenderConfig::background_` / `RenderConfig::ray_color_`.
-//                     No range validation (trust input, match existing
-//                     RenderConfig color-field behavior).
-struct RaypathColorEntry {
+// A `RaypathColorRef` picks one or more component bits by id (NOT by internal
+// setting_[] slot index). The `crystal`/`filter` fields refer to
+// `CrystalConfig::id_` / `FilterConfig::id_`, matching the ids used elsewhere
+// in scene config. Resolution to ci (setting_[] slot) and to bits happens in
+// the builder (BuildColorClassTable). `has_filter_ == false` means "the
+// none-filter scattering setting for that crystal" (whole-crystal virtual
+// summand emitted by task-339.1). `has_summand_ == false` means "any summand
+// of the referenced filter" (OR-union over all summand bits of that filter).
+
+struct RaypathColorRef {
   IdType layer_ = 0;
-  IdType crystal_id_ = 0;
-  IdType summand_idx_ = 0;
+  IdType crystal_ = kInvalidId;
+  IdType filter_ = kInvalidId;
+  IdType summand_ = 0;
+  bool has_filter_ = false;
+  bool has_summand_ = false;
+};
+
+// One color class = an RGB color, a boolean combine over the members, a set of
+// member refs, and per-class display-time visibility. `combine_` is the raw
+// string ("any" | "all"); unknown values are rejected by the builder (NOT the
+// DTO — DTO reads original text, semantics stays in builder).
+struct ColorClassConfig {
   float color_[3]{};
-  // task-336.3: visibility axis, orthogonal to the composite mode. Absent in
-  // JSON → visible (default true) and not solo (default false) = the 336.1
-  // behavior (every colored bit participates). `solo_` (when any entry sets it)
-  // restricts the visible set to solo'd bits, overriding hide.
+  std::string combine_ = "any";
   bool visible_ = true;
   bool solo_ = false;
+  std::vector<RaypathColorRef> match_;
 };
 
 struct RaypathColorConfig {
-  std::vector<RaypathColorEntry> entries_;
-  // task-336.3: display-time composite mode. "dominant" (default) | "additive" |
-  // "painter". Parsed into CompositeMode by BuildCompositeOptions; an unknown
-  // string falls back to dominant with a one-shot warning. Absent in JSON →
-  // "dominant" = the 336.1 behavior.
+  std::vector<ColorClassConfig> classes_;
+  // Display-time composite mode ("dominant" | "additive" | "painter"). Unknown
+  // strings degrade to dominant + warn (in the compositor adapter/builder); the
+  // DTO layer stores the string verbatim.
   std::string mode_ = "dominant";
 };
 
-// JSON representation is a bare array. Missing top-level "raypath_color" key
-// in an owning ConfigManager JSON is treated as an empty list (zero
-// regression against configs written before this feature existed) — handled
-// by ConfigManager's from_json, not here.
-void to_json(nlohmann::json& j, const RaypathColorEntry& e);
-void from_json(const nlohmann::json& j, RaypathColorEntry& e);
+// JSON representation:
+//   - bare-array of color classes when `mode_ == "dominant"` (preserves the
+//     minimal wire format for the default);
+//   - object `{ "mode": ..., "classes": [ ... ] }` when mode is non-default.
+// A missing top-level "raypath_color" key in the ConfigManager JSON is treated
+// as an empty config (zero regression against configs without color) —
+// handled by ConfigManager's from_json, not here. `to_json` omits default
+// per-class fields (combine=any, visible=true, solo=false) and per-ref
+// optional fields (filter/summand when not present) to keep configs small.
+void to_json(nlohmann::json& j, const RaypathColorRef& r);
+void from_json(const nlohmann::json& j, RaypathColorRef& r);
+void to_json(nlohmann::json& j, const ColorClassConfig& c);
+void from_json(const nlohmann::json& j, ColorClassConfig& c);
 void to_json(nlohmann::json& j, const RaypathColorConfig& c);
 void from_json(const nlohmann::json& j, RaypathColorConfig& c);
 

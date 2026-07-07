@@ -15,6 +15,7 @@
 #include <thread>
 #include <vector>
 
+#include "config/color_class_table.hpp"
 #include "config/component_color_map.hpp"
 #include "config/component_table.hpp"
 #include "config/config_manager.hpp"
@@ -439,16 +440,18 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   CompositeOptions composite_options;
   try {
     new_config = config_json.get<ConfigManager>();
-    // Fold the user raypath_color into the participating-bit mask so the rebuilt
-    // RenderConsumers can allocate per-component Y-lanes. BuildComponentColorMap
-    // may throw std::invalid_argument on a bad (layer, crystal, summand) triple —
-    // that lands in the std::exception catch below → Error::InvalidConfig, no new
-    // catch clause needed.
+    // task-339.2: color-class schema build path. BuildColorClassTable resolves
+    // id → ci (setting_[] slot) using new_config.scene_ and may throw
+    // std::invalid_argument on any config error (unknown combine, missing
+    // (crystal,filter) pair, degenerate duplicate, out-of-range summand,
+    // combine:"all" ban) — that lands in the std::exception catch below →
+    // Error::InvalidConfig. The interim ToLegacy* adapters produce the per-bit
+    // ComponentColorMap / CompositeOptions the current consumer/compositor
+    // still consume; 339.3/339.4 will consume ColorClassTable directly.
     ComponentTable component_table = BuildComponentTable(new_config.scene_);
-    color_map = BuildComponentColorMap(new_config.raypath_color_, component_table);
-    // task-336.3: display-time composite mode + visibility masks, built from the
-    // same table so the masks agree with color_map.colored_mask_ bit-for-bit.
-    composite_options = BuildCompositeOptions(new_config.raypath_color_, component_table);
+    ColorClassTable class_table = BuildColorClassTable(new_config.raypath_color_, new_config.scene_, component_table);
+    color_map = ToLegacyColorMap(class_table);
+    composite_options = ToLegacyCompositeOptions(class_table, new_config.raypath_color_.mode_);
   } catch (const nlohmann::json::out_of_range& e) {
     ILOG_ERROR(logger_, "CommitConfig: Missing field: {}", e.what());
     {

@@ -25,6 +25,7 @@
 #include <optional>
 #include <vector>
 
+#include "config/color_class_table.hpp"
 #include "config/component_color_map.hpp"
 #include "config/component_table.hpp"
 #include "config/crystal_config.hpp"
@@ -468,68 +469,91 @@ TEST(ComponentCompositor, ZeroColoredMaskProducesNoComposite) {
 }
 
 // -----------------------------------------------------------------------------
-// F. Config → runtime join: BuildCompositeOptions (mode parse + visible/solo
-//    fold via the same triple→bit lookup) and the object-form JSON round-trip.
-//    (code-review-01 Minor #1: this seam turns config-author intent into runtime
-//    masks and had no direct coverage.)
+// F. Config → runtime join (task-339.2): BuildColorClassTable + ToLegacy*
+//    adapters produce the same (mode, hidden_mask, solo_mask) tuple as the
+//    old flat BuildCompositeOptions and paint the same colored_mask when
+//    driven by single-member classes.
 // -----------------------------------------------------------------------------
-TEST(ComponentCompositor, BuildCompositeOptionsFoldsModeVisibilitySolo) {
+namespace {
+
+ColorClassConfig MakeCls(std::vector<float> rgb, std::vector<RaypathColorRef> match, bool visible = true,
+                         bool solo = false) {
+  ColorClassConfig c{};
+  c.color_[0] = rgb[0];
+  c.color_[1] = rgb[1];
+  c.color_[2] = rgb[2];
+  c.visible_ = visible;
+  c.solo_ = solo;
+  c.match_ = std::move(match);
+  return c;
+}
+
+RaypathColorRef MakeRef(uint16_t layer, uint16_t crystal, bool has_filter, uint16_t filter, bool has_summand,
+                        uint16_t summand) {
+  RaypathColorRef r{};
+  r.layer_ = layer;
+  r.crystal_ = crystal;
+  r.has_filter_ = has_filter;
+  r.filter_ = filter;
+  r.has_summand_ = has_summand;
+  r.summand_ = summand;
+  return r;
+}
+
+}  // namespace
+
+TEST(ComponentCompositor, ToLegacyCompositeOptionsFoldsModeVisibilitySolo) {
   auto scene = MakeTwoCrystalColoredScene(8);
   auto table = BuildComponentTable(scene);
-  ASSERT_EQ(table.entries_.size(), 3u);  // (0,0,0)->bit0, (0,1,0)->bit1, (0,1,1)->bit2
+  ASSERT_EQ(table.entries_.size(), 3u);
+  // Refs by id: crystal=0 filter=0 → ci=0 (simple, 1 summand, bit0);
+  //             crystal=1 filter=0 → ci=1 (complex, 2 summands, bits 1/2).
 
   RaypathColorConfig cfg;
   cfg.mode_ = "painter";
-  cfg.entries_.push_back({ 0, 0, 0, { 1.0f, 0.0f, 0.0f }, /*visible*/ true, /*solo*/ false });   // bit0
-  cfg.entries_.push_back({ 0, 1, 0, { 0.0f, 1.0f, 0.0f }, /*visible*/ false, /*solo*/ false });  // bit1 hidden
-  cfg.entries_.push_back({ 0, 1, 1, { 0.0f, 0.0f, 1.0f }, /*visible*/ true, /*solo*/ true });    // bit2 solo
+  cfg.classes_.push_back(MakeCls({ 1.0f, 0.0f, 0.0f }, { MakeRef(0, 0, true, 0, false, 0) }));  // bit0
+  cfg.classes_.push_back(
+      MakeCls({ 0.0f, 1.0f, 0.0f }, { MakeRef(0, 1, true, 0, true, 0) }, false, false));  // hidden bit1
+  cfg.classes_.push_back(MakeCls({ 0.0f, 0.0f, 1.0f }, { MakeRef(0, 1, true, 0, true, 1) }, true, true));  // solo bit2
 
-  CompositeOptions opt = BuildCompositeOptions(cfg, table);
+  ColorClassTable ct = BuildColorClassTable(cfg, scene, table);
+  CompositeOptions opt = ToLegacyCompositeOptions(ct, cfg.mode_);
   EXPECT_EQ(opt.mode_, CompositeMode::kPainter);
-  EXPECT_EQ(opt.hidden_mask_, 0b010ULL);  // only bit1 hidden
-  EXPECT_EQ(opt.solo_mask_, 0b100ULL);    // only bit2 solo'd
+  EXPECT_EQ(opt.hidden_mask_, 0b010ULL);
+  EXPECT_EQ(opt.solo_mask_, 0b100ULL);
 
-  cfg.mode_ = "additive";
-  EXPECT_EQ(BuildCompositeOptions(cfg, table).mode_, CompositeMode::kAdditive);
-
-  // Unknown mode string → dominant fallback, no throw.
-  cfg.mode_ = "bogus-typo";
-  EXPECT_EQ(BuildCompositeOptions(cfg, table).mode_, CompositeMode::kDominant);
-
-  // Absent triple (nonexistent layer/crystal/summand) → skipped, no bit folded, no crash.
-  RaypathColorConfig missing;
-  missing.entries_.push_back({ 9, 9, 9, { 1.0f, 1.0f, 1.0f }, /*visible*/ false, /*solo*/ true });
-  CompositeOptions mopt = BuildCompositeOptions(missing, table);
-  EXPECT_EQ(mopt.hidden_mask_, 0ULL);
-  EXPECT_EQ(mopt.solo_mask_, 0ULL);
+  EXPECT_EQ(ToLegacyCompositeOptions(ct, "additive").mode_, CompositeMode::kAdditive);
+  EXPECT_EQ(ToLegacyCompositeOptions(ct, "bogus-typo").mode_, CompositeMode::kDominant);
 }
 
 TEST(ComponentCompositor, RaypathColorConfigJsonFormsRoundTrip) {
-  // Non-default mode → object form {mode, entries}, preserving visible/solo.
+  // Non-default mode → object form {mode, classes}, preserving visible/solo.
   RaypathColorConfig cfg;
   cfg.mode_ = "additive";
-  cfg.entries_.push_back({ 0, 1, 0, { 0.2f, 0.4f, 0.6f }, /*visible*/ false, /*solo*/ true });
+  cfg.classes_.push_back(MakeCls({ 0.2f, 0.4f, 0.6f }, { MakeRef(0, 1, true, 0, true, 0) }, false, true));
   nlohmann::json j = cfg;
   EXPECT_TRUE(j.is_object());
   RaypathColorConfig back = j.get<RaypathColorConfig>();
   EXPECT_EQ(back.mode_, "additive");
-  ASSERT_EQ(back.entries_.size(), 1u);
-  EXPECT_EQ(back.entries_[0].crystal_id_, 1);
-  EXPECT_EQ(back.entries_[0].summand_idx_, 0);
-  EXPECT_FALSE(back.entries_[0].visible_);
-  EXPECT_TRUE(back.entries_[0].solo_);
-  EXPECT_FLOAT_EQ(back.entries_[0].color_[2], 0.6f);
+  ASSERT_EQ(back.classes_.size(), 1u);
+  EXPECT_FALSE(back.classes_[0].visible_);
+  EXPECT_TRUE(back.classes_[0].solo_);
+  EXPECT_FLOAT_EQ(back.classes_[0].color_[2], 0.6f);
+  ASSERT_EQ(back.classes_[0].match_.size(), 1u);
+  EXPECT_EQ(back.classes_[0].match_[0].crystal_, 1);
+  EXPECT_TRUE(back.classes_[0].match_[0].has_filter_);
+  EXPECT_TRUE(back.classes_[0].match_[0].has_summand_);
 
-  // Default mode → bare array form (byte-compatible with 336.1), still round-trips.
+  // Default mode → bare array form, still round-trips.
   RaypathColorConfig dom;
-  dom.entries_.push_back({ 0, 0, 0, { 1.0f, 0.0f, 0.0f }, /*visible*/ true, /*solo*/ false });
+  dom.classes_.push_back(MakeCls({ 1.0f, 0.0f, 0.0f }, { MakeRef(0, 0, true, 0, false, 0) }));
   nlohmann::json jd = dom;
-  EXPECT_TRUE(jd.is_array()) << "default-mode config must serialize as a bare array (336.1 byte-compat)";
+  EXPECT_TRUE(jd.is_array()) << "default-mode config must serialize as a bare array";
   RaypathColorConfig dback = jd.get<RaypathColorConfig>();
   EXPECT_EQ(dback.mode_, "dominant");
-  ASSERT_EQ(dback.entries_.size(), 1u);
-  EXPECT_TRUE(dback.entries_[0].visible_);
-  EXPECT_FALSE(dback.entries_[0].solo_);
+  ASSERT_EQ(dback.classes_.size(), 1u);
+  EXPECT_TRUE(dback.classes_[0].visible_);
+  EXPECT_FALSE(dback.classes_[0].solo_);
 }
 
 }  // namespace

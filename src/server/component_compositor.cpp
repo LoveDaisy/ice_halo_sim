@@ -2,57 +2,16 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <string>
 
+#include "config/color_class_table.hpp"
 #include "config/component_color_map.hpp"
 #include "config/component_table.hpp"
-#include "config/raypath_color_config.hpp"
 #include "server/render.hpp"
 #include "util/color_space.hpp"
 #include "util/logger.hpp"
 
 namespace lumice {
-
-CompositeOptions BuildCompositeOptions(const RaypathColorConfig& color_cfg, const ComponentTable& table) {
-  CompositeOptions options;
-
-  // Mode string → enum. Unknown strings fall back to dominant with a one-shot
-  // warning (a config typo should degrade to the sensible default, not fail).
-  if (color_cfg.mode_ == "dominant") {
-    options.mode_ = CompositeMode::kDominant;
-  } else if (color_cfg.mode_ == "additive") {
-    options.mode_ = CompositeMode::kAdditive;
-  } else if (color_cfg.mode_ == "painter") {
-    options.mode_ = CompositeMode::kPainter;
-  } else {
-    static bool logged_unknown_mode = false;
-    if (!logged_unknown_mode) {
-      LOG_WARNING("raypath_color: unknown composite mode \"{}\"; falling back to \"dominant\"", color_cfg.mode_);
-      logged_unknown_mode = true;
-    }
-    options.mode_ = CompositeMode::kDominant;
-  }
-
-  // Fold per-entry visibility into hidden_mask_/solo_mask_ via the SAME triple
-  // → bit lookup BuildComponentColorMap uses (so the masks agree bit-for-bit
-  // with color_map.colored_mask_). Overflowed / absent triples resolve to no
-  // usable bit and are skipped — BuildComponentColorMap already validated the
-  // triples (throw on absent, warn on overflow) before this runs.
-  for (const auto& e : color_cfg.entries_) {
-    const auto* entry = FindComponentTableEntry(table, e.layer_, e.crystal_id_, e.summand_idx_);
-    if (entry == nullptr || entry->bit_ == ComponentTable::kNoBit) {
-      continue;
-    }
-    const uint64_t bit_mask = static_cast<uint64_t>(1) << entry->bit_;
-    if (!e.visible_) {
-      options.hidden_mask_ |= bit_mask;
-    }
-    if (e.solo_) {
-      options.solo_mask_ |= bit_mask;
-    }
-  }
-
-  return options;
-}
 
 bool CompositeComponentLinear(const RenderConsumer& consumer, const ComponentColorMap& color_map,
                               const CompositeOptions& options, std::vector<float>& out_linear_rgb) {
@@ -166,6 +125,33 @@ void LinearRgbToSrgbU8(const std::vector<float>& linear_rgb, std::vector<uint8_t
     const float clamped = std::clamp(linear_rgb[i], 0.0f, 1.0f);
     out_srgb[i] = static_cast<uint8_t>(LinearToSrgb(clamped) * 255.0f);
   }
+}
+
+CompositeOptions ToLegacyCompositeOptions(const ColorClassTable& class_table, const std::string& mode) {
+  CompositeOptions options;
+  if (mode == "dominant") {
+    options.mode_ = CompositeMode::kDominant;
+  } else if (mode == "additive") {
+    options.mode_ = CompositeMode::kAdditive;
+  } else if (mode == "painter") {
+    options.mode_ = CompositeMode::kPainter;
+  } else {
+    static bool logged_unknown_mode = false;
+    if (!logged_unknown_mode) {
+      LOG_WARNING("raypath_color: unknown composite mode \"{}\"; falling back to \"dominant\"", mode);
+      logged_unknown_mode = true;
+    }
+    options.mode_ = CompositeMode::kDominant;
+  }
+  for (const auto& cls : class_table.classes_) {
+    if (!cls.visible_) {
+      options.hidden_mask_ |= cls.member_bits_;
+    }
+    if (cls.solo_) {
+      options.solo_mask_ |= cls.member_bits_;
+    }
+  }
+  return options;
 }
 
 }  // namespace lumice
