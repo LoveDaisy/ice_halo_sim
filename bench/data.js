@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783443124474,
+  "lastUpdate": 1783443127547,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4818,54 +4818,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "ac272dc408c8e4a5df4ffcbaac9688ce08f0d1ac",
-          "message": "Merge pull request #80 from LoveDaisy/feat/doc\n\ndocs: restructure README + add user manual + GUI guide rewrite",
-          "timestamp": "2026-04-29T02:54:01+08:00",
-          "tree_id": "0358f20d18af1bdf98c12138ee71013d445dc914",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/ac272dc408c8e4a5df4ffcbaac9688ce08f0d1ac"
-        },
-        "date": 1777402706726,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 1210406.5,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1998688.5,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 1195960,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 1028401.6,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "26e54569e59d8e18420bf4a3a58d92d268b91b5a",
           "message": "Merge pull request #81 from LoveDaisy/fix/modal_zorder\n\nfix(gui): show combo popups above detached Edit Entry modal",
           "timestamp": "2026-04-29T15:54:43+08:00",
@@ -9600,6 +9552,54 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 636655.6,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "11e8a6b1b736e3f9efad2e54fb068a48b09283d3",
+          "message": "Merge pull request #182 from LoveDaisy/feat/color-components\n\nfeat(raypath-color): per-raypath color engine — color-class schema + rule-lane compositor (CLI/core, CPU)",
+          "timestamp": "2026-07-08T00:44:52+08:00",
+          "tree_id": "7eb8f0d87c2ce98aeec8d87910abae09d1f52567",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/11e8a6b1b736e3f9efad2e54fb068a48b09283d3"
+        },
+        "date": 1783443127081,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 754424.4,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1175516,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 873227.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 628045.9,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
