@@ -7,7 +7,6 @@
 namespace lumice {
 
 struct ComponentTable;
-struct ComponentColorMap;
 struct RaypathColorConfig;
 struct SceneConfig;
 
@@ -27,11 +26,10 @@ struct ColorClass {
   uint64_t member_bits_ = 0;
 };
 
-// Ordered color-class list; list order = z-order for 339.4's per-class
+// Ordered color-class list; list order = z-order for the 339.4 per-class
 // compositor. `referenced_mask_` is the OR of all classes' `member_bits_` —
-// used by the server to decide whether to allocate per-component Y-lanes and
-// as the RenderConsumer's `colored_mask` input (drop-in replacement for
-// 336.1's ComponentColorMap::colored_mask_).
+// used by the server to decide whether to allocate per-color-class Y-lanes,
+// and as the compositor's early-exit gate.
 struct ColorClassTable {
   std::vector<ColorClass> classes_;
   uint64_t referenced_mask_ = 0;
@@ -58,18 +56,6 @@ struct ColorClassTable {
 //     `referenced_mask_` and is a no-op at predicate time.
 ColorClassTable BuildColorClassTable(const RaypathColorConfig& color_cfg, const SceneConfig& scene,
                                      const ComponentTable& table);
-
-// Transitional adapter to the 336.1 per-bit runtime shape (used by the current
-// consumer until 339.3 rewrites it per-class). Each class paints its color into
-// `colors_[bit]` for every bit in `member_bits_`. For the migrated e2e fixture
-// (all single-member classes) this is bit-for-bit equivalent to 336.1's
-// BuildComponentColorMap. Multi-member "any" classes are approximated per-bit;
-// per-class z-order and overlap upgrades ship in 339.4 (see plan R7).
-//
-// The composite-options adapter (ToLegacyCompositeOptions) lives in the SERVER
-// layer (server/component_compositor.hpp) because CompositeOptions/CompositeMode
-// are server concepts — config must not reverse-depend on server.
-ComponentColorMap ToLegacyColorMap(const ColorClassTable& class_table);
 
 // Structural equality for consumer-rebuild eligibility (task-339.3 decision 1):
 // compares z-order-preserving (combine_, member_bits_) per class — NOT just the

@@ -8,51 +8,51 @@
 namespace lumice {
 
 class RenderConsumer;
-struct ComponentColorMap;
 struct ColorClassTable;
 
-// task-336.3: how per-component Y-lanes are combined into one displayed color
-// per pixel (see plan §4). All three modes share the SINGLE mono-image exposure
-// scale (RenderConsumer::ExposureScale()) — there is never a per-lane /
-// per-composite renormalization (that was the spike's false-color bug).
+// task-339.4: how per-color-class Y-lanes are combined into one displayed color
+// per pixel (see doc/gui-custom-spectrum-and-raypath-color.md §4.7). All three
+// modes share the SINGLE mono-image exposure scale
+// (RenderConsumer::ExposureScale()) — there is never a per-lane / per-composite
+// renormalization (that was the spike's false-color bug).
 enum class CompositeMode { kDominant, kAdditive, kPainter };
 
-// Runtime options for CompositeComponentLinear. Produced by
-// ToLegacyCompositeOptions(ColorClassTable) after task-339.2's schema switch to
-// color classes; the flat BuildCompositeOptions builder was retired alongside
-// BuildComponentColorMap. 339.3/339.4 will consume ColorClassTable directly.
-struct CompositeOptions {
-  CompositeMode mode_ = CompositeMode::kDominant;
-  uint64_t hidden_mask_ = 0;  // bit set → hide that component
-  uint64_t solo_mask_ = 0;    // non-zero → restrict visible set to solo'd bits (overrides hide)
-};
+// Parse the RaypathColorConfig::mode_ string ("dominant" / "additive" /
+// "painter") into a CompositeMode. Any other value falls back to kDominant with
+// a one-shot LOG_WARNING (matching the transitional adapter's behavior kept
+// through 339.2/339.3).
+CompositeMode ParseCompositeMode(const std::string& mode_str);
 
-// Composite the consumer's per-component Y-lanes into a W*H*3 linear-RGB image.
+// Composite the consumer's per-color-class Y-lanes into a W*H*3 linear-RGB
+// image. Classes are traversed in `class_table.classes_` order — the list order
+// IS the z-order (see doc/gui-custom-spectrum-and-raypath-color.md §4.7). Per
+// pixel, each participating class c contributes exposed value
+// `ey_c = classLaneY_c[p] * s`, where `s = consumer.ExposureScale()` — the
+// single mono-image exposure. Modes:
+//   - kDominant: argmax_c ey_c (strict >, ascending scan → tie goes to the
+//     class earlier in the list), painted with that class's color.
+//   - kAdditive: Σ_c color_c × ey_c, per-channel clamped to [0,1].
+//   - kPainter : first class in list order with ey_c > 0 (list-first = top
+//     layer), painted with that class's color.
 //
-// Each visible bit b contributes exposed lane value `ey_b = laneY_b[p] * s`
-// where `s = consumer.ExposureScale()` — the single mono-image exposure. Modes:
-//   - kDominant: argmax_b ey_b (strict >, ascending → min-bit tie), color × ey.
-//   - kAdditive: Σ_b color_b × ey_b, per-channel clamped to [0,1].
-//   - kPainter : first (lowest) visible bit with ey_b > 0, color × ey.
+// Visibility:
+//   - If any class has solo_ == true, the participating set = {c : classes_[c]
+//     .solo_}.
+//   - Otherwise the participating set = {c : classes_[c].visible_}.
+// Overlap (a ray satisfying multiple classes → non-zero energy in each of their
+// lanes) is resolved naturally by the mode over the per-class lanes — no
+// dedicated overlap branch.
 //
-// Returns false (leaving out_linear_rgb untouched) when the consumer has no
-// colored bits (colored_mask == 0) or the exposure scale is 0 (no snapshot /
-// zero intensity). Otherwise resizes out_linear_rgb to W*H*3 and returns true —
-// even when every bit is hidden (a legitimately all-black composite).
-bool CompositeComponentLinear(const RenderConsumer& consumer, const ComponentColorMap& color_map,
-                              const CompositeOptions& options, std::vector<float>& out_linear_rgb);
+// Returns false (leaving out_linear_rgb untouched) when the class table has no
+// resolvable bits (referenced_mask_ == 0) or the exposure scale is 0 (no
+// snapshot / zero intensity). Otherwise resizes out_linear_rgb to W*H*3 and
+// returns true — even when every class is hidden (legitimately all-black).
+bool CompositeColorClassesLinear(const RenderConsumer& consumer, const ColorClassTable& class_table, CompositeMode mode,
+                                 std::vector<float>& out_linear_rgb);
 
 // Convert a W*H*3 linear-RGB buffer (as produced above) to sRGB uint8, clamping
 // to [0,1] before the sRGB transfer (mirrors PostSnapshot's final stage).
 void LinearRgbToSrgbU8(const std::vector<float>& linear_rgb, std::vector<uint8_t>& out_srgb);
-
-// Transitional adapter (task-339.2): fold a ColorClassTable's per-class mode /
-// visible / solo into the 336.1 per-bit CompositeOptions the current compositor
-// consumes, until 339.4 rewrites the compositor per-class. Lives in the server
-// layer (not config/color_class_table) because CompositeOptions/CompositeMode
-// are server concepts — config must not reverse-depend on server (doc/
-// architecture.md Config→Server one-way layering).
-CompositeOptions ToLegacyCompositeOptions(const ColorClassTable& class_table, const std::string& mode);
 
 }  // namespace lumice
 

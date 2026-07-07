@@ -3,20 +3,135 @@
 #include <algorithm>
 #include <cstddef>
 #include <string>
+#include <vector>
 
 #include "config/color_class_table.hpp"
-#include "config/component_color_map.hpp"
-#include "config/component_table.hpp"
 #include "server/render.hpp"
 #include "util/color_space.hpp"
 #include "util/logger.hpp"
 
 namespace lumice {
 
-bool CompositeComponentLinear(const RenderConsumer& consumer, const ComponentColorMap& color_map,
-                              const CompositeOptions& options, std::vector<float>& out_linear_rgb) {
-  const uint64_t participating = color_map.colored_mask_;
-  if (participating == 0) {
+namespace {
+
+// A color class that participates in this frame's composite, with the live
+// per-pixel exposed-Y lane it contributes.
+struct ActiveClass {
+  size_t idx;
+  const float* lane;
+};
+
+// Visibility axis (plan §4): solo (when any class is solo'd) restricts to the
+// solo set; otherwise the participating set is every visible class. List
+// order is preserved (list order = z-order). A class whose lane accessor
+// returns nullptr is defensively skipped (same spirit as the old per-bit
+// "visible bit without an allocated lane" guard).
+std::vector<ActiveClass> GatherActiveClasses(const RenderConsumer& consumer, const ColorClassTable& class_table) {
+  bool any_solo = false;
+  for (const auto& cls : class_table.classes_) {
+    if (cls.solo_) {
+      any_solo = true;
+      break;
+    }
+  }
+
+  std::vector<ActiveClass> active;
+  active.reserve(class_table.classes_.size());
+  for (size_t i = 0; i < class_table.classes_.size(); ++i) {
+    const auto& cls = class_table.classes_[i];
+    const bool participates = any_solo ? cls.solo_ : cls.visible_;
+    if (!participates) {
+      continue;
+    }
+    const float* lane = consumer.GetColorClassLaneY(i);
+    if (lane == nullptr) {
+      continue;
+    }
+    active.push_back({ i, lane });
+  }
+  return active;
+}
+
+// Dominant: argmax over participating classes at pixel p, strict > with
+// ascending scan → ties go to the class earlier in the list.
+void CompositeDominantPixel(const std::vector<ActiveClass>& active, const ColorClassTable& class_table, float s,
+                            size_t p, float* out) {
+  int best = -1;
+  float best_ey = 0.0f;
+  for (size_t k = 0; k < active.size(); ++k) {
+    const float ey = active[k].lane[p] * s;
+    if (ey > best_ey) {
+      best_ey = ey;
+      best = static_cast<int>(k);
+    }
+  }
+  if (best >= 0) {
+    const float* c = class_table.classes_[active[static_cast<size_t>(best)].idx].color_;
+    out[0] = c[0] * best_ey;
+    out[1] = c[1] * best_ey;
+    out[2] = c[2] * best_ey;
+  }
+}
+
+// Additive: sum every participating class's exposed contribution at pixel p,
+// clamped to [0, 1].
+void CompositeAdditivePixel(const std::vector<ActiveClass>& active, const ColorClassTable& class_table, float s,
+                            size_t p, float* out) {
+  float acc[3] = { 0.0f, 0.0f, 0.0f };
+  for (size_t k = 0; k < active.size(); ++k) {
+    const float ey = active[k].lane[p] * s;
+    if (ey <= 0.0f) {
+      continue;
+    }
+    const float* c = class_table.classes_[active[k].idx].color_;
+    acc[0] += c[0] * ey;
+    acc[1] += c[1] * ey;
+    acc[2] += c[2] * ey;
+  }
+  out[0] = std::clamp(acc[0], 0.0f, 1.0f);
+  out[1] = std::clamp(acc[1], 0.0f, 1.0f);
+  out[2] = std::clamp(acc[2], 0.0f, 1.0f);
+}
+
+// Painter: list order = z-order; the first (list-first) participating class
+// with a positive exposed value at pixel p wins (top layer occludes below).
+void CompositePainterPixel(const std::vector<ActiveClass>& active, const ColorClassTable& class_table, float s,
+                           size_t p, float* out) {
+  for (size_t k = 0; k < active.size(); ++k) {
+    const float ey = active[k].lane[p] * s;
+    if (ey > 0.0f) {
+      const float* c = class_table.classes_[active[k].idx].color_;
+      out[0] = c[0] * ey;
+      out[1] = c[1] * ey;
+      out[2] = c[2] * ey;
+      break;
+    }
+  }
+}
+
+}  // namespace
+
+CompositeMode ParseCompositeMode(const std::string& mode_str) {
+  if (mode_str == "dominant") {
+    return CompositeMode::kDominant;
+  }
+  if (mode_str == "additive") {
+    return CompositeMode::kAdditive;
+  }
+  if (mode_str == "painter") {
+    return CompositeMode::kPainter;
+  }
+  static bool logged_unknown_mode = false;
+  if (!logged_unknown_mode) {
+    LOG_WARNING("raypath_color: unknown composite mode \"{}\"; falling back to \"dominant\"", mode_str);
+    logged_unknown_mode = true;
+  }
+  return CompositeMode::kDominant;
+}
+
+bool CompositeColorClassesLinear(const RenderConsumer& consumer, const ColorClassTable& class_table, CompositeMode mode,
+                                 std::vector<float>& out_linear_rgb) {
+  if (class_table.referenced_mask_ == 0) {
     return false;
   }
   const float s = consumer.ExposureScale();
@@ -32,86 +147,23 @@ bool CompositeComponentLinear(const RenderConsumer& consumer, const ComponentCol
     return true;
   }
 
-  // Visibility axis (plan §4): solo (when any bit is solo'd) restricts to the
-  // solo set; otherwise the visible set is everything not hidden.
-  const uint64_t vis_mask =
-      (options.solo_mask_ != 0) ? (participating & options.solo_mask_) : (participating & ~options.hidden_mask_);
-  if (vis_mask == 0) {
+  const std::vector<ActiveClass> active = GatherActiveClasses(consumer, class_table);
+  if (active.empty()) {
     return true;  // nothing visible → all-black, still a valid composite
-  }
-
-  // Gather the visible participating bits (ascending) with a live lane.
-  std::vector<uint8_t> vis_bits;
-  const float* lanes[ComponentTable::kMaxBits] = {};
-  for (uint8_t bit = 0; bit < ComponentTable::kMaxBits; ++bit) {
-    if (((vis_mask >> bit) & 1ULL) == 0) {
-      continue;
-    }
-    const float* lane = consumer.GetComponentLaneY(bit);
-    if (lane == nullptr) {
-      continue;  // defensive: a visible bit without an allocated lane
-    }
-    vis_bits.push_back(bit);
-    lanes[bit] = lane;
-  }
-  if (vis_bits.empty()) {
-    return true;
   }
 
   for (size_t p = 0; p < n; ++p) {
     float* out = &out_linear_rgb[p * 3];
-    switch (options.mode_) {
-      case CompositeMode::kDominant: {
-        // argmax over visible bits, strict > with ascending scan → min-bit tie.
-        int best_bit = -1;
-        float best_ey = 0.0f;
-        for (uint8_t bit : vis_bits) {
-          const float ey = lanes[bit][p] * s;
-          if (ey > best_ey) {
-            best_ey = ey;
-            best_bit = bit;
-          }
-        }
-        if (best_bit >= 0) {
-          const float* c = color_map.colors_[best_bit];
-          out[0] = c[0] * best_ey;
-          out[1] = c[1] * best_ey;
-          out[2] = c[2] * best_ey;
-        }
+    switch (mode) {
+      case CompositeMode::kDominant:
+        CompositeDominantPixel(active, class_table, s, p, out);
         break;
-      }
-      case CompositeMode::kAdditive: {
-        float acc[3] = { 0.0f, 0.0f, 0.0f };
-        for (uint8_t bit : vis_bits) {
-          const float ey = lanes[bit][p] * s;
-          if (ey <= 0.0f) {
-            continue;
-          }
-          const float* c = color_map.colors_[bit];
-          acc[0] += c[0] * ey;
-          acc[1] += c[1] * ey;
-          acc[2] += c[2] * ey;
-        }
-        out[0] = std::clamp(acc[0], 0.0f, 1.0f);
-        out[1] = std::clamp(acc[1], 0.0f, 1.0f);
-        out[2] = std::clamp(acc[2], 0.0f, 1.0f);
+      case CompositeMode::kAdditive:
+        CompositeAdditivePixel(active, class_table, s, p, out);
         break;
-      }
-      case CompositeMode::kPainter: {
-        // Component order = bit ascending; the first (lowest) bit is the top
-        // layer. Take the first visible bit with a positive exposed value.
-        for (uint8_t bit : vis_bits) {
-          const float ey = lanes[bit][p] * s;
-          if (ey > 0.0f) {
-            const float* c = color_map.colors_[bit];
-            out[0] = c[0] * ey;
-            out[1] = c[1] * ey;
-            out[2] = c[2] * ey;
-            break;
-          }
-        }
+      case CompositeMode::kPainter:
+        CompositePainterPixel(active, class_table, s, p, out);
         break;
-      }
     }
   }
 
@@ -125,33 +177,6 @@ void LinearRgbToSrgbU8(const std::vector<float>& linear_rgb, std::vector<uint8_t
     const float clamped = std::clamp(linear_rgb[i], 0.0f, 1.0f);
     out_srgb[i] = static_cast<uint8_t>(LinearToSrgb(clamped) * 255.0f);
   }
-}
-
-CompositeOptions ToLegacyCompositeOptions(const ColorClassTable& class_table, const std::string& mode) {
-  CompositeOptions options;
-  if (mode == "dominant") {
-    options.mode_ = CompositeMode::kDominant;
-  } else if (mode == "additive") {
-    options.mode_ = CompositeMode::kAdditive;
-  } else if (mode == "painter") {
-    options.mode_ = CompositeMode::kPainter;
-  } else {
-    static bool logged_unknown_mode = false;
-    if (!logged_unknown_mode) {
-      LOG_WARNING("raypath_color: unknown composite mode \"{}\"; falling back to \"dominant\"", mode);
-      logged_unknown_mode = true;
-    }
-    options.mode_ = CompositeMode::kDominant;
-  }
-  for (const auto& cls : class_table.classes_) {
-    if (!cls.visible_) {
-      options.hidden_mask_ |= cls.member_bits_;
-    }
-    if (cls.solo_) {
-      options.solo_mask_ |= cls.member_bits_;
-    }
-  }
-  return options;
 }
 
 }  // namespace lumice

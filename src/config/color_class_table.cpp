@@ -4,7 +4,6 @@
 #include <string>
 #include <variant>
 
-#include "config/component_color_map.hpp"
 #include "config/component_table.hpp"
 #include "config/filter_config.hpp"
 #include "config/proj_config.hpp"
@@ -183,24 +182,6 @@ bool NeedsRebuild(const ColorClassTable& old_table, const ColorClassTable& new_t
     }
   }
   return false;
-}
-
-ComponentColorMap ToLegacyColorMap(const ColorClassTable& class_table) {
-  ComponentColorMap map;
-  for (const auto& cls : class_table.classes_) {
-    // Portable set-bit iteration (MSVC-safe: no __builtin_ctzll); matches the
-    // per-bit loop convention in render.cpp / component_compositor.cpp.
-    for (uint8_t bit = 0; bit < ComponentTable::kMaxBits; ++bit) {
-      if (((cls.member_bits_ >> bit) & 1ULL) == 0) {
-        continue;
-      }
-      map.colors_[bit][0] = cls.color_[0];
-      map.colors_[bit][1] = cls.color_[1];
-      map.colors_[bit][2] = cls.color_[2];
-      map.colored_mask_ |= (static_cast<uint64_t>(1) << bit);
-    }
-  }
-  return map;
 }
 
 }  // namespace lumice

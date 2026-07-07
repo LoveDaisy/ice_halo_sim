@@ -1,24 +1,37 @@
-// Tests for task-336.3 (component compositor): the three display-time composite
-// modes (dominant / additive / painter), the orthogonal show/hide/solo
-// visibility axis, and — the crux — the SHARED-EXPOSURE invariant: every mode
-// multiplies each component's raw-Y lane by the single mono-image exposure scale
-// (RenderConsumer::ExposureScale()) and nothing else. There is never a per-lane
-// / per-composite renormalization (that was the spike's false-color bug).
+// Tests for task-339.4 (per-color-class compositor): the three display-time
+// composite modes (dominant / additive / painter), the orthogonal show/hide/
+// solo visibility axis, and — the crux — the SHARED-EXPOSURE invariant: every
+// mode multiplies each color-class's raw-Y lane by the single mono-image
+// exposure scale (RenderConsumer::ExposureScale()) and nothing else. There is
+// never a per-lane / per-composite renormalization (that was the spike's
+// false-color bug).
 //
-// Coverage (plan §8 A–E):
+// Coverage (plan §4 A–E + AC additions):
 //   A — per-pixel mode math (dominant / additive / painter, incl. tie + painter
 //       vs dominant divergence).
 //   B — shared exposure: ExposureScale() == the mono PostSnapshot scale, and
 //       additive-white total == mono exposed Y (no self-normalization).
-//   C — visibility orthogonality (hide / solo, across modes).
+//   C — visibility orthogonality (hide / solo, across modes) applied
+//       per-color-class.
 //   D — dominant × three-arcs real backend: three colors appear, no phantom hue.
 //   E — linear→sRGB smoke + zero regression (compositor produces nothing when
-//       colored_mask == 0).
+//       the class table is empty).
+//   F — overlap: a ray satisfying multiple color classes → dominant/painter
+//       pick per z-order, additive mixes.
+//   G — cross-layer AND: combine:"all" class only shows where all members hit.
+//   H — ParseCompositeMode string parsing + fallback.
+//
+// The 336.3-era per-bit adapter tests (ToLegacyCompositeOptions round-trip,
+// ComponentColorMap layout) are gone: their functions were deleted with 339.4.
+// RaypathColorConfig JSON round-trip stays here (it's a compositor-adjacent
+// smoke check; SUMMARY notes we evaluated moving it to
+// test_color_class_table.cpp and kept the original file to minimise diff).
 
 #include <gtest/gtest.h>
 
 #include <array>
 #include <bitset>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <nlohmann/json.hpp>
@@ -26,7 +39,6 @@
 #include <vector>
 
 #include "config/color_class_table.hpp"
-#include "config/component_color_map.hpp"
 #include "config/component_table.hpp"
 #include "config/crystal_config.hpp"
 #include "config/filter_config.hpp"
@@ -82,41 +94,52 @@ SimData MakeBatch(const std::vector<uint64_t>& masks, const std::vector<float>& 
   return data;
 }
 
-// task-339.3: turn a legacy uint64_t "colored bits" mask into a ColorClassTable
-// with one single-member `kAny` class per set bit. Kept as a test-local helper
-// (matching the same-shape helper in test_render_consumer_component_lanes.cpp)
-// so this file's existing single-bit assertions carry over unchanged — the
-// RenderConsumer's construction API is the only thing that had to change.
-ColorClassTable MakeSingletonClassTable(uint64_t mask) {
+// Build one color class with the given color, combine and member bits. `visible`
+// and `solo` default to the per-class ColorClass defaults (visible=true,
+// solo=false). Kept flat here (no ctor overhead / no reliance on config DTO
+// path) — the DTO join is exercised in test_color_class_table.cpp.
+ColorClass MakeClass(const std::array<float, 3>& color, ColorClassCombine combine, uint64_t member_bits,
+                     bool visible = true, bool solo = false) {
+  ColorClass cls{};
+  cls.color_[0] = color[0];
+  cls.color_[1] = color[1];
+  cls.color_[2] = color[2];
+  cls.combine_ = combine;
+  cls.member_bits_ = member_bits;
+  cls.visible_ = visible;
+  cls.solo_ = solo;
+  return cls;
+}
+
+// One single-member `kAny` class per set bit; class colors follow `colors[i]`.
+// Colors must have as many entries as set bits. Kept as a helper so the mode-
+// math tests (dominant/additive/painter) match the 336.3 test skeleton — the
+// only change is "per bit" → "per single-member class".
+ColorClassTable MakeSingletonClassTable(uint64_t mask, const std::vector<std::array<float, 3>>& colors) {
+  assert(colors.size() >= std::bitset<64>(mask).count() && "colors must cover every set bit in mask");
   ColorClassTable t;
+  size_t ci = 0;
   for (uint8_t bit = 0; bit < ComponentTable::kMaxBits; ++bit) {
     if (((mask >> bit) & 1ULL) == 0) {
       continue;
     }
-    ColorClass cls;
-    cls.combine_ = ColorClassCombine::kAny;
-    cls.member_bits_ = static_cast<uint64_t>(1) << bit;
-    t.classes_.push_back(cls);
-    t.referenced_mask_ |= cls.member_bits_;
+    t.classes_.push_back(MakeClass(colors[ci], ColorClassCombine::kAny, static_cast<uint64_t>(1) << bit));
+    t.referenced_mask_ |= (static_cast<uint64_t>(1) << bit);
+    ++ci;
   }
   return t;
 }
 
-// Build a color map with the given per-bit RGBs; colored_mask_ covers bits 0..n-1.
-ComponentColorMap MakeColorMap(const std::vector<std::array<float, 3>>& colors) {
-  ComponentColorMap map;
-  for (uint8_t bit = 0; bit < colors.size(); ++bit) {
-    map.colors_[bit][0] = colors[bit][0];
-    map.colors_[bit][1] = colors[bit][1];
-    map.colors_[bit][2] = colors[bit][2];
-    map.colored_mask_ |= (static_cast<uint64_t>(1) << bit);
-  }
-  return map;
+// Overload for tests that don't care about lane colors (the constructor also
+// wires up the RenderConsumer's lane accumulation).
+ColorClassTable MakeSingletonClassTable(uint64_t mask) {
+  std::vector<std::array<float, 3>> greys(64, { 1.0f, 1.0f, 1.0f });
+  return MakeSingletonClassTable(mask, greys);
 }
 
-// Index of the single lit pixel (first with a positive lane-0 value).
+// Index of the single lit pixel (first with a positive class-0 lane value).
 int FindLitPixel(const RenderConsumer& rc, int total_pix) {
-  const float* lane0 = rc.GetComponentLaneY(0);
+  const float* lane0 = rc.GetColorClassLaneY(0);
   for (int p = 0; p < total_pix; ++p) {
     if (lane0 != nullptr && lane0[p] > 0.0f) {
       return p;
@@ -138,8 +161,10 @@ TEST(ComponentCompositor, DominantAdditivePainterPerPixelMath) {
   const int total_pix = kRes * kRes;
   RenderConfig cfg = MakeRenderConfig(kRes);
 
-  // bit0 (weight a) is brighter than bit1 (weight b): a > b.
-  RenderConsumer rc(cfg, MakeSingletonClassTable(0b11));
+  // class0 (bit0, red, weight a=0.6) is brighter than class1 (bit1, green,
+  // weight b=0.4). List order: class0 first (top layer for painter).
+  auto table = MakeSingletonClassTable(0b11, { kRed, kGreen });
+  RenderConsumer rc(cfg, table);
   rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.6f, 0.4f }));
   rc.PrepareSnapshot();
 
@@ -147,86 +172,85 @@ TEST(ComponentCompositor, DominantAdditivePainterPerPixelMath) {
   ASSERT_GE(p, 0);
   const float s = rc.ExposureScale();
   ASSERT_GT(s, 0.0f);
-  const float ey0 = rc.GetComponentLaneY(0)[p] * s;
-  const float ey1 = rc.GetComponentLaneY(1)[p] * s;
+  const float ey0 = rc.GetColorClassLaneY(0)[p] * s;
+  const float ey1 = rc.GetColorClassLaneY(1)[p] * s;
   ASSERT_GT(ey0, ey1);  // a > b
 
-  const auto colors = MakeColorMap({ kRed, kGreen });
   std::vector<float> out;
 
-  // dominant: brighter bit0 (red) wins → (ey0, 0, 0).
-  ASSERT_TRUE(CompositeComponentLinear(rc, colors, { CompositeMode::kDominant, 0, 0 }, out));
+  // dominant: brighter class0 (red) wins → (ey0, 0, 0).
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kDominant, out));
   EXPECT_FLOAT_EQ(out[p * 3 + 0], ey0);
   EXPECT_FLOAT_EQ(out[p * 3 + 1], 0.0f);
   EXPECT_FLOAT_EQ(out[p * 3 + 2], 0.0f);
 
   // additive: red*ey0 + green*ey1 → (ey0, ey1, 0), both < 1 so no clamp.
   ASSERT_LT(ey0 + ey1, 1.0f);
-  ASSERT_TRUE(CompositeComponentLinear(rc, colors, { CompositeMode::kAdditive, 0, 0 }, out));
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kAdditive, out));
   EXPECT_FLOAT_EQ(out[p * 3 + 0], ey0);
   EXPECT_FLOAT_EQ(out[p * 3 + 1], ey1);
   EXPECT_FLOAT_EQ(out[p * 3 + 2], 0.0f);
 
-  // painter (order = bit ascending; lowest bit = top layer): bit0 wins → red,
-  // same as dominant here because bit0 is both brighter AND on top.
-  ASSERT_TRUE(CompositeComponentLinear(rc, colors, { CompositeMode::kPainter, 0, 0 }, out));
+  // painter (list order = z-order; list-first class is the top layer): class0
+  // wins → red, same as dominant here because class0 is both brighter AND on top.
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kPainter, out));
   EXPECT_FLOAT_EQ(out[p * 3 + 0], ey0);
   EXPECT_FLOAT_EQ(out[p * 3 + 1], 0.0f);
 }
 
-TEST(ComponentCompositor, PainterVsDominantDivergeWhenTopBitDimmer) {
+TEST(ComponentCompositor, PainterVsDominantDivergeWhenTopClassDimmer) {
   constexpr int kRes = 3;
   const int total_pix = kRes * kRes;
   RenderConfig cfg = MakeRenderConfig(kRes);
 
-  // Now bit1 (weight 0.9) is BRIGHTER than bit0 (weight 0.3): dominant → bit1,
-  // painter → bit0 (the top/lowest bit) regardless of strength.
-  RenderConsumer rc(cfg, MakeSingletonClassTable(0b11));
+  // Now class1 (bit1, green, weight 0.9) is BRIGHTER than class0 (bit0, red,
+  // weight 0.3): dominant → class1, painter → class0 (the list-first / top).
+  auto table = MakeSingletonClassTable(0b11, { kRed, kGreen });
+  RenderConsumer rc(cfg, table);
   rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.3f, 0.9f }));
   rc.PrepareSnapshot();
 
   const int p = FindLitPixel(rc, total_pix);
   ASSERT_GE(p, 0);
   const float s = rc.ExposureScale();
-  const float ey0 = rc.GetComponentLaneY(0)[p] * s;
-  const float ey1 = rc.GetComponentLaneY(1)[p] * s;
-  ASSERT_GT(ey1, ey0);  // bit1 brighter
+  const float ey0 = rc.GetColorClassLaneY(0)[p] * s;
+  const float ey1 = rc.GetColorClassLaneY(1)[p] * s;
+  ASSERT_GT(ey1, ey0);  // class1 brighter
 
-  const auto colors = MakeColorMap({ kRed, kGreen });
   std::vector<float> out;
 
-  // dominant picks the brighter bit1 (green).
-  ASSERT_TRUE(CompositeComponentLinear(rc, colors, { CompositeMode::kDominant, 0, 0 }, out));
+  // dominant picks the brighter class1 (green).
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kDominant, out));
   EXPECT_FLOAT_EQ(out[p * 3 + 0], 0.0f);
   EXPECT_FLOAT_EQ(out[p * 3 + 1], ey1);
 
-  // painter picks the top (lowest-index) bit0 (red), even though it is dimmer.
-  ASSERT_TRUE(CompositeComponentLinear(rc, colors, { CompositeMode::kPainter, 0, 0 }, out));
+  // painter picks the top (list-first) class0 (red), even though it is dimmer.
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kPainter, out));
   EXPECT_FLOAT_EQ(out[p * 3 + 0], ey0);
   EXPECT_FLOAT_EQ(out[p * 3 + 1], 0.0f);
 }
 
-TEST(ComponentCompositor, DominantTieTakesMinBit) {
+TEST(ComponentCompositor, DominantTieTakesFirstClass) {
   constexpr int kRes = 3;
   const int total_pix = kRes * kRes;
   RenderConfig cfg = MakeRenderConfig(kRes);
 
-  // Equal weights → equal lanes → strict-`>` ascending scan keeps the min bit.
-  RenderConsumer rc(cfg, MakeSingletonClassTable(0b11));
+  // Equal weights → equal lanes → strict-`>` ascending scan keeps the list-first class.
+  auto table = MakeSingletonClassTable(0b11, { kRed, kGreen });
+  RenderConsumer rc(cfg, table);
   rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.5f, 0.5f }));
   rc.PrepareSnapshot();
 
   const int p = FindLitPixel(rc, total_pix);
   ASSERT_GE(p, 0);
   const float s = rc.ExposureScale();
-  const float ey0 = rc.GetComponentLaneY(0)[p] * s;
-  const float ey1 = rc.GetComponentLaneY(1)[p] * s;
+  const float ey0 = rc.GetColorClassLaneY(0)[p] * s;
+  const float ey1 = rc.GetColorClassLaneY(1)[p] * s;
   EXPECT_FLOAT_EQ(ey0, ey1);
 
-  const auto colors = MakeColorMap({ kRed, kGreen });
   std::vector<float> out;
-  ASSERT_TRUE(CompositeComponentLinear(rc, colors, { CompositeMode::kDominant, 0, 0 }, out));
-  // Tie → bit0 (red), not bit1.
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kDominant, out));
+  // Tie → class0 (red), not class1.
   EXPECT_FLOAT_EQ(out[p * 3 + 0], ey0);
   EXPECT_FLOAT_EQ(out[p * 3 + 1], 0.0f);
 }
@@ -239,7 +263,8 @@ TEST(ComponentCompositor, SharedExposureNoSelfNormalization) {
   const int total_pix = kRes * kRes;
   RenderConfig cfg = MakeRenderConfig(kRes);
 
-  RenderConsumer rc(cfg, MakeSingletonClassTable(0b11));
+  auto table = MakeSingletonClassTable(0b11, { kWhite, kWhite });
+  RenderConsumer rc(cfg, table);
   rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.6f, 0.4f }));
   rc.PrepareSnapshot();
 
@@ -258,20 +283,19 @@ TEST(ComponentCompositor, SharedExposureNoSelfNormalization) {
   const int p = FindLitPixel(rc, total_pix);
   ASSERT_GE(p, 0);
   const float s = rc.ExposureScale();
-  const float ey0 = rc.GetComponentLaneY(0)[p] * s;
-  const float ey1 = rc.GetComponentLaneY(1)[p] * s;
+  const float ey0 = rc.GetColorClassLaneY(0)[p] * s;
+  const float ey1 = rc.GetColorClassLaneY(1)[p] * s;
 
-  // (2) mono exposed Y at the lit pixel = mainY * s. With single-bit rays,
-  //     mainY == lane0 + lane1, so the exposed mono Y equals ey0 + ey1 —
-  //     precisely the additive-white total. No per-lane renormalization.
+  // (2) mono exposed Y at the lit pixel = mainY * s. With disjoint single-member
+  //     classes, mainY == lane0 + lane1, so the exposed mono Y equals ey0 + ey1
+  //     — precisely the additive-white total. No per-lane renormalization.
   const double mono_y = static_cast<double>(raw.xyz_buffer_[p * 3 + 1]);
   const double mono_exposed_y = mono_y * s;
   EXPECT_NEAR(mono_exposed_y, static_cast<double>(ey0 + ey1), 1e-4);
 
-  const auto white = MakeColorMap({ kWhite, kWhite });
   std::vector<float> out;
   ASSERT_LT(ey0 + ey1, 1.0f);  // keep below clamp so the equality is exact
-  ASSERT_TRUE(CompositeComponentLinear(rc, white, { CompositeMode::kAdditive, 0, 0 }, out));
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kAdditive, out));
   // Each channel of additive-white == ey0+ey1 == mono exposed Y (shared exposure).
   EXPECT_NEAR(out[p * 3 + 0], mono_exposed_y, 1e-4);
   EXPECT_NEAR(out[p * 3 + 1], mono_exposed_y, 1e-4);
@@ -279,44 +303,172 @@ TEST(ComponentCompositor, SharedExposureNoSelfNormalization) {
 }
 
 // -----------------------------------------------------------------------------
-// C. Visibility orthogonality (hide / solo), independent of mode.
+// C. Visibility orthogonality (per-color-class hide / solo), independent of mode.
 // -----------------------------------------------------------------------------
-TEST(ComponentCompositor, VisibilityHideAndSoloAcrossModes) {
+TEST(ComponentCompositor, PerClassVisibilityHideAndSoloAcrossModes) {
   constexpr int kRes = 3;
   const int total_pix = kRes * kRes;
   RenderConfig cfg = MakeRenderConfig(kRes);
 
-  // bit0 is brighter; without visibility overrides dominant would pick it.
-  RenderConsumer rc(cfg, MakeSingletonClassTable(0b11));
+  // class0 (bit0, red) is brighter than class1 (bit1, green); without hiding
+  // dominant would pick class0. Lane state is shared; per-class visibility is
+  // toggled on a fresh table copy for each mode assertion.
+  auto lane_table = MakeSingletonClassTable(0b11, { kRed, kGreen });
+  RenderConsumer rc(cfg, lane_table);
   rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.6f, 0.4f }));
   rc.PrepareSnapshot();
 
   const int p = FindLitPixel(rc, total_pix);
   ASSERT_GE(p, 0);
   const float s = rc.ExposureScale();
-  const float ey1 = rc.GetComponentLaneY(1)[p] * s;
+  const float ey1 = rc.GetColorClassLaneY(1)[p] * s;
 
-  const auto colors = MakeColorMap({ kRed, kGreen });
   std::vector<float> out;
 
-  // Hide bit0 → dominant must fall back to bit1 (green), even though bit0 brighter.
-  ASSERT_TRUE(CompositeComponentLinear(rc, colors, { CompositeMode::kDominant, /*hidden=*/0b01, 0 }, out));
-  EXPECT_FLOAT_EQ(out[p * 3 + 0], 0.0f);
-  EXPECT_FLOAT_EQ(out[p * 3 + 1], ey1);
+  // Hide class0 → dominant must fall back to class1 (green), even though class0 brighter.
+  {
+    auto t = lane_table;
+    t.classes_[0].visible_ = false;
+    ASSERT_TRUE(CompositeColorClassesLinear(rc, t, CompositeMode::kDominant, out));
+    EXPECT_FLOAT_EQ(out[p * 3 + 0], 0.0f);
+    EXPECT_FLOAT_EQ(out[p * 3 + 1], ey1);
 
-  // Hide bit0 under additive → only bit1 (green) contributes.
-  ASSERT_TRUE(CompositeComponentLinear(rc, colors, { CompositeMode::kAdditive, /*hidden=*/0b01, 0 }, out));
-  EXPECT_FLOAT_EQ(out[p * 3 + 0], 0.0f);
-  EXPECT_FLOAT_EQ(out[p * 3 + 1], ey1);
+    // Same table, additive: only class1 (green) contributes.
+    ASSERT_TRUE(CompositeColorClassesLinear(rc, t, CompositeMode::kAdditive, out));
+    EXPECT_FLOAT_EQ(out[p * 3 + 0], 0.0f);
+    EXPECT_FLOAT_EQ(out[p * 3 + 1], ey1);
+  }
 
-  // Solo bit1 → only bit1 visible regardless of mode.
-  ASSERT_TRUE(CompositeComponentLinear(rc, colors, { CompositeMode::kDominant, 0, /*solo=*/0b10 }, out));
-  EXPECT_FLOAT_EQ(out[p * 3 + 0], 0.0f);
-  EXPECT_FLOAT_EQ(out[p * 3 + 1], ey1);
+  // Solo class1 → only class1 visible regardless of mode.
+  {
+    auto t = lane_table;
+    t.classes_[1].solo_ = true;
+    ASSERT_TRUE(CompositeColorClassesLinear(rc, t, CompositeMode::kDominant, out));
+    EXPECT_FLOAT_EQ(out[p * 3 + 0], 0.0f);
+    EXPECT_FLOAT_EQ(out[p * 3 + 1], ey1);
+  }
 
-  // Solo overrides hide: everything hidden but bit1 solo'd → bit1 shows.
-  ASSERT_TRUE(CompositeComponentLinear(rc, colors, { CompositeMode::kDominant, /*hidden=*/0b11, /*solo=*/0b10 }, out));
-  EXPECT_FLOAT_EQ(out[p * 3 + 1], ey1);
+  // Solo overrides hide: everything hidden but class1 solo'd → class1 shows.
+  {
+    auto t = lane_table;
+    t.classes_[0].visible_ = false;
+    t.classes_[1].visible_ = false;
+    t.classes_[1].solo_ = true;
+    ASSERT_TRUE(CompositeColorClassesLinear(rc, t, CompositeMode::kDominant, out));
+    EXPECT_FLOAT_EQ(out[p * 3 + 1], ey1);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// F. Overlap: one ray satisfies two classes → dominant/painter by z-order,
+//    additive mixes. AC hard requirement (issue.md).
+// -----------------------------------------------------------------------------
+TEST(ComponentCompositor, OverlapDominantPicksBrighterAdditiveMixes) {
+  constexpr int kRes = 3;
+  const int total_pix = kRes * kRes;
+  RenderConfig cfg = MakeRenderConfig(kRes);
+
+  // Two overlapping classes on the same bit set:
+  //   classA (red)   = {any, 0b01}  → fires on masks touching bit0.
+  //   classB (green) = {any, 0b11}  → fires on masks touching bit0 OR bit1.
+  // Weight class-B's bit1 ray brighter so the two lanes diverge. Ray masks:
+  //   0b01 (weight wA_only) → contributes to A AND B (both match bit0).
+  //   0b10 (weight wB_only) → contributes to B only (bit1, not in A).
+  ColorClassTable t;
+  t.classes_.push_back(MakeClass(kRed, ColorClassCombine::kAny, 0b01));
+  t.classes_.push_back(MakeClass(kGreen, ColorClassCombine::kAny, 0b11));
+  t.referenced_mask_ = 0b11;
+
+  RenderConsumer rc(cfg, t);
+  rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.3f, 0.9f }));
+  rc.PrepareSnapshot();
+
+  const int p = FindLitPixel(rc, total_pix);
+  ASSERT_GE(p, 0);
+  const float s = rc.ExposureScale();
+  const float eyA = rc.GetColorClassLaneY(0)[p] * s;  // just the 0.3-ray
+  const float eyB = rc.GetColorClassLaneY(1)[p] * s;  // 0.3-ray + 0.9-ray
+  ASSERT_GT(eyB, eyA);                                // B accumulates the 0.9-ray too
+
+  std::vector<float> out;
+
+  // dominant: brighter B wins → pure green, not red-tinted, not per-lane
+  // normalized.
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, t, CompositeMode::kDominant, out));
+  EXPECT_FLOAT_EQ(out[p * 3 + 0], 0.0f) << "dominant must not paint the loser's color";
+  EXPECT_FLOAT_EQ(out[p * 3 + 1], eyB);
+
+  // painter: list-first = A (red) wins as long as it has energy > 0, even though
+  // B is brighter — mirrors PainterVsDominantDivergeWhenTopClassDimmer but under
+  // OVERLAPPING classes (AC "z-order 定色").
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, t, CompositeMode::kPainter, out));
+  EXPECT_FLOAT_EQ(out[p * 3 + 0], eyA);
+  EXPECT_FLOAT_EQ(out[p * 3 + 1], 0.0f);
+
+  // additive: red*eyA + green*eyB; both below clamp so exact per-channel.
+  ASSERT_LT(eyA + eyB, 1.0f);
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, t, CompositeMode::kAdditive, out));
+  EXPECT_FLOAT_EQ(out[p * 3 + 0], eyA);
+  EXPECT_FLOAT_EQ(out[p * 3 + 1], eyB);
+  EXPECT_FLOAT_EQ(out[p * 3 + 2], 0.0f);
+}
+
+// -----------------------------------------------------------------------------
+// G. Cross-layer AND: combine:"all" class only shows where all members hit.
+// -----------------------------------------------------------------------------
+TEST(ComponentCompositor, CrossLayerAllOnlyShowsWhereAllMembersHit) {
+  constexpr int kRes = 3;
+  const int total_pix = kRes * kRes;
+  RenderConfig cfg = MakeRenderConfig(kRes);
+
+  // Single class {all, 0b11}: only rays whose masks contain BOTH bit0 and bit1
+  // contribute. Ray masks match test_render_consumer_component_lanes' cross-
+  // layer AND fixture:
+  //   0b01 → only layer A → skipped
+  //   0b10 → only layer B → skipped
+  //   0b11 → both layers   → contributes
+  //   0b00 → neither       → skipped
+  ColorClassTable t;
+  t.classes_.push_back(MakeClass(kRed, ColorClassCombine::kAll, 0b11));
+  t.referenced_mask_ = 0b11;
+
+  RenderConsumer rc(cfg, t);
+  rc.Consume(MakeBatch({ 0b01, 0b10, 0b11, 0b00 }, { 0.5f, 0.6f, 0.7f, 0.9f }));
+  rc.PrepareSnapshot();
+
+  std::vector<float> out;
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, t, CompositeMode::kDominant, out));
+
+  // Exactly ONE pixel should be lit (the one all sky-up rays land in), and it
+  // must be pure red (class0's color × its exposed value).
+  int lit_count = 0;
+  for (int p = 0; p < total_pix; ++p) {
+    const float r = out[p * 3 + 0];
+    const float g = out[p * 3 + 1];
+    const float b = out[p * 3 + 2];
+    if (r == 0.0f && g == 0.0f && b == 0.0f) {
+      continue;
+    }
+    ++lit_count;
+    EXPECT_GT(r, 0.0f) << "combine:\"all\" class must paint its color where it fires";
+    EXPECT_FLOAT_EQ(g, 0.0f);
+    EXPECT_FLOAT_EQ(b, 0.0f);
+  }
+  EXPECT_EQ(lit_count, 1) << "only the ray with mask=0b11 should contribute to the all-class lane";
+}
+
+// -----------------------------------------------------------------------------
+// H. ParseCompositeMode string handling.
+// -----------------------------------------------------------------------------
+TEST(ComponentCompositor, ParseCompositeModeKnownStrings) {
+  EXPECT_EQ(ParseCompositeMode("dominant"), CompositeMode::kDominant);
+  EXPECT_EQ(ParseCompositeMode("additive"), CompositeMode::kAdditive);
+  EXPECT_EQ(ParseCompositeMode("painter"), CompositeMode::kPainter);
+}
+
+TEST(ComponentCompositor, ParseCompositeModeUnknownFallsBackToDominant) {
+  EXPECT_EQ(ParseCompositeMode("bogus-typo"), CompositeMode::kDominant);
+  EXPECT_EQ(ParseCompositeMode(""), CompositeMode::kDominant);
 }
 
 // -----------------------------------------------------------------------------
@@ -418,13 +570,13 @@ TEST(ComponentCompositor, DominantThreeArcsNoPhantomHue) {
   }
 
   const uint64_t kColored = 0b111;
-  RenderConsumer rc(render, MakeSingletonClassTable(kColored));
+  auto class_table = MakeSingletonClassTable(kColored, { kRed, kGreen, kBlue });
+  RenderConsumer rc(render, class_table);
   rc.Consume(data);
   rc.PrepareSnapshot();
 
-  const auto colors = MakeColorMap({ kRed, kGreen, kBlue });
   std::vector<float> out;
-  ASSERT_TRUE(CompositeComponentLinear(rc, colors, { CompositeMode::kDominant, 0, 0 }, out));
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, class_table, CompositeMode::kDominant, out));
 
   const int total_pix = render.resolution_[0] * render.resolution_[1];
   int red_px = 0;
@@ -475,24 +627,23 @@ TEST(ComponentCompositor, LinearToSrgbU8Smoke) {
   EXPECT_EQ(out[4], exp_one);   // >1 clamps to 1 → sRGB(1)
 }
 
-TEST(ComponentCompositor, ZeroColoredMaskProducesNoComposite) {
+TEST(ComponentCompositor, EmptyClassTableProducesNoComposite) {
   RenderConfig cfg = MakeRenderConfig(8);
   RenderConsumer rc(cfg, ColorClassTable{});  // pre-336 path, no lanes
   rc.Consume(MakeBatch({ 0b00 }, { 0.5f }));
   rc.PrepareSnapshot();
 
-  ComponentColorMap empty_map;         // colored_mask_ == 0
+  ColorClassTable empty_table;         // referenced_mask_ == 0
   std::vector<float> out = { 42.0f };  // sentinel — must be left untouched
-  EXPECT_FALSE(CompositeComponentLinear(rc, empty_map, { CompositeMode::kDominant, 0, 0 }, out));
+  EXPECT_FALSE(CompositeColorClassesLinear(rc, empty_table, CompositeMode::kDominant, out));
   ASSERT_EQ(out.size(), 1u);
-  EXPECT_FLOAT_EQ(out[0], 42.0f) << "compositor must not touch the output when colored_mask == 0";
+  EXPECT_FLOAT_EQ(out[0], 42.0f) << "compositor must not touch the output when the class table is empty";
 }
 
 // -----------------------------------------------------------------------------
-// F. Config → runtime join (task-339.2): BuildColorClassTable + ToLegacy*
-//    adapters produce the same (mode, hidden_mask, solo_mask) tuple as the
-//    old flat BuildCompositeOptions and paint the same colored_mask when
-//    driven by single-member classes.
+// Config-side smoke: RaypathColorConfig JSON round-trip (kept here to minimise
+// diff churn per plan risk 3; the DTO itself is exercised more fully in
+// test_color_class_table.cpp / test_raypath_color_config.cpp).
 // -----------------------------------------------------------------------------
 namespace {
 
@@ -521,30 +672,6 @@ RaypathColorRef MakeRef(uint16_t layer, uint16_t crystal, bool has_filter, uint1
 }
 
 }  // namespace
-
-TEST(ComponentCompositor, ToLegacyCompositeOptionsFoldsModeVisibilitySolo) {
-  auto scene = MakeTwoCrystalColoredScene(8);
-  auto table = BuildComponentTable(scene);
-  ASSERT_EQ(table.entries_.size(), 3u);
-  // Refs by id: crystal=0 filter=0 → ci=0 (simple, 1 summand, bit0);
-  //             crystal=1 filter=0 → ci=1 (complex, 2 summands, bits 1/2).
-
-  RaypathColorConfig cfg;
-  cfg.mode_ = "painter";
-  cfg.classes_.push_back(MakeCls({ 1.0f, 0.0f, 0.0f }, { MakeRef(0, 0, true, 0, false, 0) }));  // bit0
-  cfg.classes_.push_back(
-      MakeCls({ 0.0f, 1.0f, 0.0f }, { MakeRef(0, 1, true, 0, true, 0) }, false, false));  // hidden bit1
-  cfg.classes_.push_back(MakeCls({ 0.0f, 0.0f, 1.0f }, { MakeRef(0, 1, true, 0, true, 1) }, true, true));  // solo bit2
-
-  ColorClassTable ct = BuildColorClassTable(cfg, scene, table);
-  CompositeOptions opt = ToLegacyCompositeOptions(ct, cfg.mode_);
-  EXPECT_EQ(opt.mode_, CompositeMode::kPainter);
-  EXPECT_EQ(opt.hidden_mask_, 0b010ULL);
-  EXPECT_EQ(opt.solo_mask_, 0b100ULL);
-
-  EXPECT_EQ(ToLegacyCompositeOptions(ct, "additive").mode_, CompositeMode::kAdditive);
-  EXPECT_EQ(ToLegacyCompositeOptions(ct, "bogus-typo").mode_, CompositeMode::kDominant);
-}
 
 TEST(ComponentCompositor, RaypathColorConfigJsonFormsRoundTrip) {
   // Non-default mode → object form {mode, classes}, preserving visible/solo.

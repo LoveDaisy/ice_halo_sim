@@ -1,16 +1,18 @@
 // Tests for task-339.3 (rule-lane consumer): RenderConsumer per-color-class
-// Y-lane accumulation, the class-shape structural reuse-judgment, and legacy
-// per-bit bridge view. Supersedes the 336.2 per-bit lane tests — the API is
-// now driven by ColorClassTable, and the "per-bit lane" is just the degenerate
-// case of one single-member `any` class per bit (produced here by the local
+// Y-lane accumulation and the class-shape structural reuse-judgment. Driven by
+// ColorClassTable, with the "per-bit lane" as the degenerate case of one
+// single-member `any` class per bit (produced by the local
 // MakeSingletonClassTable helper).
+//
+// The 336.3-era `GetComponentLaneY(uint8_t bit)` bridge was removed in task-
+// 339.4 (the compositor now consumes GetColorClassLaneY directly), so the
+// legacy per-bit assertions that used to guard that bridge are gone.
 //
 // Coverage (plan §4 Step 3 + issue.md acceptance):
 //   1. Σlane == mono Y (white-box, shared exposure) — single-member classes:
 //      the sum of per-class lanes equals the Y channel of the main image,
 //      proving lanes share the main image's exposure/CMF (no per-lane
-//      normalization). Both accessors (GetColorClassLaneY and legacy
-//      GetComponentLaneY bridge) are checked.
+//      normalization).
 //   2. Zero-regression — a consumer built with an empty ColorClassTable
 //      produces a main image bit-identical to one built with a non-empty
 //      table on the same batch (lane accumulation must not perturb the main
@@ -34,10 +36,7 @@
 //   8. Empty-member class defense (plan decision 3): a class with
 //      member_bits_ == 0 must never contribute — the `all` predicate's
 //      vacuous-truth trap would otherwise let it swallow every ray.
-//   9. Legacy GetComponentLaneY bridge (plan decision 2): returns the lane
-//      for a single-member class owning exactly (1 << bit); returns nullptr
-//      when the bit is inside a multi-bit class or absent.
-//   10. Server reuse-judgment:
+//   9. Server reuse-judgment:
 //      a. ColorMaskChangeForcesFullRebuild — a colored-bit set change forces
 //         a full rebuild (existing 336.2 coverage, now via the new
 //         ColorClassTable structural comparison).
@@ -185,11 +184,7 @@ TEST(RenderConsumerComponentLanes, SumOfLanesEqualsMainYForSingletonClasses) {
   EXPECT_NEAR(lane1, exp_lane1, exp_lane1 * 1e-4 + 1e-6);
   EXPECT_NEAR(lane0 + lane1, main_y, main_y * 1e-4 + 1e-6);
 
-  // Legacy per-bit bridge points at the same lanes (each class owns exactly one bit).
-  EXPECT_NEAR(SumLane(rc.GetComponentLaneY(0), w, h), exp_lane0, exp_lane0 * 1e-4 + 1e-6);
-  EXPECT_NEAR(SumLane(rc.GetComponentLaneY(1), w, h), exp_lane1, exp_lane1 * 1e-4 + 1e-6);
-  // Non-configured bit → no lane at all.
-  EXPECT_EQ(rc.GetComponentLaneY(2), nullptr);
+  // Class index past the end → no lane at all.
   EXPECT_EQ(rc.GetColorClassLaneY(2), nullptr);
 }
 
@@ -225,11 +220,6 @@ TEST(RenderConsumerComponentLanes, MultiBitAnyClassCountsRayOnce) {
   // idx2 contributes exactly y2, NOT 2*y2.
   const double exp_lane = y0 + y1 + y2;
   EXPECT_NEAR(lane, exp_lane, exp_lane * 1e-4 + 1e-6);
-
-  // The legacy bridge returns nullptr for a multi-bit class — no single-member
-  // class owns bit0/bit1 individually here.
-  EXPECT_EQ(rc.GetComponentLaneY(0), nullptr);
-  EXPECT_EQ(rc.GetComponentLaneY(1), nullptr);
 }
 
 // -----------------------------------------------------------------------------
@@ -320,26 +310,6 @@ TEST(RenderConsumerComponentLanes, EmptyMemberBitsClassNeverContributes) {
 }
 
 // -----------------------------------------------------------------------------
-// 6. Legacy per-bit bridge: only a single-member class exposes its lane.
-// -----------------------------------------------------------------------------
-TEST(RenderConsumerComponentLanes, ComponentLaneBridgeOnlyMapsSingleMemberClasses) {
-  // Mixed table: one single-member class (bit0) and one two-bit class (bits 1,2).
-  ColorClassTable t;
-  t.classes_.push_back(MakeClass(ColorClassCombine::kAny, 0b001));  // single-member
-  t.classes_.push_back(MakeClass(ColorClassCombine::kAny, 0b110));  // multi-member
-  t.referenced_mask_ = 0b111;
-
-  RenderConfig cfg = MakeLaneRenderConfig();
-  RenderConsumer rc(cfg, t);
-  rc.Consume(MakeBatch({ 0b001 }, { 0.5f }, kWl));
-  rc.PrepareSnapshot();
-
-  EXPECT_NE(rc.GetComponentLaneY(0), nullptr) << "single-member class exposes its lane by bit";
-  EXPECT_EQ(rc.GetComponentLaneY(1), nullptr) << "bit inside multi-member class is not addressable via bridge";
-  EXPECT_EQ(rc.GetComponentLaneY(2), nullptr) << "bit inside multi-member class is not addressable via bridge";
-}
-
-// -----------------------------------------------------------------------------
 // 7. Zero-regression: empty class table vs single-member table produce the
 //    same main image on the same batch.
 // -----------------------------------------------------------------------------
@@ -369,7 +339,6 @@ TEST(RenderConsumerComponentLanes, ColoredMaskDoesNotPerturbMainImage) {
 
   // The plain consumer exposes no lanes at all.
   EXPECT_EQ(rc_plain.ColoredMask(), 0u);
-  EXPECT_EQ(rc_plain.GetComponentLaneY(0), nullptr);
   EXPECT_EQ(rc_plain.GetColorClassLaneY(0), nullptr);
 }
 

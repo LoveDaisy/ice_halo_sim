@@ -45,20 +45,13 @@ class RenderConsumer : public IConsume {
   // ColoredMask(): union of all class member-bits. Zero when no raypath_color
   // is configured; used by DoSnapshot to gate compositor invocation.
   uint64_t ColoredMask() const { return class_table_.referenced_mask_; }
-  // Per-color-class lane accessor (339.4 will consume this directly). Returns
-  // pointer to a W*H float array of accumulated Y for the class at `class_idx`,
-  // or nullptr when the index is out of range.
+  // Per-color-class lane accessor (task-339.4's compositor consumes this
+  // directly, one lane per class in list order = z-order). Returns pointer to
+  // a W*H float array of accumulated Y for the class at `class_idx`, or
+  // nullptr when the index is out of range.
   const float* GetColorClassLaneY(size_t class_idx) const;
-  // Legacy per-bit accessor (bridge for 336.3's compositor until 339.4). Scans
-  // classes for a single-member class whose `member_bits_ == (1 << bit)` and
-  // returns its lane. Returns nullptr when no such class exists — the class
-  // owns multiple bits (multi-bit any/all), or two classes share the bit
-  // (overlap), or the bit is not configured. Both cases are exactly what
-  // 339.4's per-class compositor exists to handle; the legacy compositor
-  // silently omits them (matches its defensive nullptr-skip).
-  const float* GetComponentLaneY(uint8_t bit) const;
-  // Image dimensions (config resolution). Exposed so the 336.3 compositor can
-  // size its output without reaching into the private config.
+  // Image dimensions (config resolution). Exposed so the compositor can size
+  // its output without reaching into the private config.
   int ImageWidth() const { return config_.resolution_[0]; }
   int ImageHeight() const { return config_.resolution_[1]; }
 

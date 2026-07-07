@@ -16,7 +16,6 @@
 #include <vector>
 
 #include "config/color_class_table.hpp"
-#include "config/component_color_map.hpp"
 #include "config/component_table.hpp"
 #include "config/config_manager.hpp"
 #include "config/render_config.hpp"
@@ -128,13 +127,13 @@ class ServerImpl {
   // "no raypath_color configured" (referenced_mask_ = 0).
   ColorClassTable active_class_table_;
 
-  // task-336.3: the join products used to composite per-component Y-lanes into a
-  // colored image. Both are (re)built in CommitConfig's try block alongside
-  // active_colored_mask_ (bit→RGB map + display options); DoSnapshot Phase 2
-  // reads them to produce cached_composite_results_. Empty/default when no
-  // raypath_color is configured (active_colored_mask_ == 0).
-  ComponentColorMap component_color_map_;
-  CompositeOptions composite_options_;
+  // task-339.4: the composite mode (dominant/additive/painter) currently in
+  // effect. Parsed in CommitConfig's try block from RaypathColorConfig::mode_;
+  // DoSnapshot Phase 2 pairs it with active_class_table_ to drive
+  // CompositeColorClassesLinear. Defaults to kDominant (matches the JSON schema
+  // default; no raypath_color → color class table is empty → composite gate
+  // skips the compositor anyway).
+  CompositeMode active_composite_mode_ = CompositeMode::kDominant;
 
   QueuePtrS<SimBatch> scene_queue_;
   QueuePtrS<SimData> data_queue_;
@@ -435,25 +434,22 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   // pre-336 behavior bit-for-bit). Declared outside the try so it survives to
   // the reuse-judgment / consumer construction below.
   ColorClassTable class_table;
-  // task-336.3: the composite join products. Declared outside the try so they
-  // survive to the member assignment below, mirroring class_table.
-  ComponentColorMap color_map;
-  CompositeOptions composite_options;
+  // task-339.4: the parsed composite mode. Declared outside the try so it
+  // survives to the member assignment below, mirroring class_table.
+  CompositeMode composite_mode = CompositeMode::kDominant;
   try {
     new_config = config_json.get<ConfigManager>();
-    // task-339.2/339.3: color-class schema build path. BuildColorClassTable
+    // task-339.2/339.3/339.4: color-class schema build path. BuildColorClassTable
     // resolves id → ci (setting_[] slot) using new_config.scene_ and may throw
     // std::invalid_argument on any config error (unknown combine, missing
     // (crystal,filter) pair, degenerate duplicate, out-of-range summand,
     // combine:"all" ban) — that lands in the std::exception catch below →
-    // Error::InvalidConfig. 339.3 feeds class_table directly into the
-    // RenderConsumer; the ToLegacyCompositeOptions adapter still produces the
-    // per-bit CompositeOptions the 336.3 compositor consumes (deleted with the
-    // compositor rewrite in 339.4).
+    // Error::InvalidConfig. class_table feeds directly into the RenderConsumer
+    // (per-class Y-lane accumulation) and into the compositor
+    // (CompositeColorClassesLinear); no legacy per-bit adapter layer.
     ComponentTable component_table = BuildComponentTable(new_config.scene_);
     class_table = BuildColorClassTable(new_config.raypath_color_, new_config.scene_, component_table);
-    color_map = ToLegacyColorMap(class_table);
-    composite_options = ToLegacyCompositeOptions(class_table, new_config.raypath_color_.mode_);
+    composite_mode = ParseCompositeMode(new_config.raypath_color_.mode_);
   } catch (const nlohmann::json::out_of_range& e) {
     ILOG_ERROR(logger_, "CommitConfig: Missing field: {}", e.what());
     {
@@ -504,13 +500,13 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   // NeedsRebuild() layout check below.
   bool class_table_changed = NeedsRebuild(active_class_table_, class_table);
   active_class_table_ = class_table;
-  // task-336.3: publish the compositor inputs in lockstep with the class table.
-  // Even a reused consumer set (same class shape) may carry new colors /
-  // mode / visibility, so these are always refreshed. DoSnapshot reads them
-  // under snapshot_mutex_; Stop() above has drained all workers so there is no
+  // task-339.4: publish the composite mode in lockstep with the class table.
+  // Even a reused consumer set (same class shape) may carry a new mode (or
+  // new per-class colors / visibility already carried by active_class_table_),
+  // so this is refreshed unconditionally. DoSnapshot reads it under
+  // consumer_mutex_; Stop() above has drained all workers so there is no
   // concurrent DoSnapshot here.
-  component_color_map_ = color_map;
-  composite_options_ = composite_options;
+  active_composite_mode_ = composite_mode;
 
   bool can_reuse =
       !consumers_.empty() && !class_table_changed && (old_renderers.size() == config_manager_.renderers_.size());
@@ -594,8 +590,8 @@ void ServerImpl::DoSnapshot() {
   // Phase 1: memcpy under consumer_mutex_ (short hold).
   // Copy shared_ptrs so consumers stay alive even if Stop() clears consumers_.
   std::vector<ConsumerPtrS> snapshot_consumers;
-  ComponentColorMap snap_color_map;
-  CompositeOptions snap_composite_options;
+  ColorClassTable snap_class_table;
+  CompositeMode snap_composite_mode = CompositeMode::kDominant;
   {
     std::lock_guard<TicketMutex> lock(consumer_mutex_);
     if (!snapshot_dirty_) {
@@ -606,11 +602,13 @@ void ServerImpl::DoSnapshot() {
       c->PrepareSnapshot();
     }
     snapshot_consumers = consumers_;  // shared_ptr copy keeps consumers alive
-    // task-336.3: pair the compositor inputs with the consumer set captured
-    // above (plain PODs; copied under consumer_mutex_ so they are consistent
-    // with snapshot_consumers).
-    snap_color_map = component_color_map_;
-    snap_composite_options = composite_options_;
+    // task-339.4: pair the compositor inputs with the consumer set captured
+    // above; copied under consumer_mutex_ so they stay consistent with
+    // snapshot_consumers. `snap_class_table` is a small std::vector copy
+    // (color-class count is O(config), typically ≤ tens) — same lock-hold
+    // discipline as before, negligible cost per snapshot.
+    snap_class_table = active_class_table_;
+    snap_composite_mode = active_composite_mode_;
     snapshot_dirty_ = false;
   }
   // Phase 1.5: pixel counting outside consumer_mutex_ (snapshot_xyz_ is stable here).
@@ -649,7 +647,7 @@ void ServerImpl::DoSnapshot() {
         continue;
       }
       std::vector<float> linear_rgb;
-      if (!CompositeComponentLinear(*rc, snap_color_map, snap_composite_options, linear_rgb)) {
+      if (!CompositeColorClassesLinear(*rc, snap_class_table, snap_composite_mode, linear_rgb)) {
         continue;
       }
       CompositeResult cr;

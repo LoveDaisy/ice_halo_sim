@@ -13,13 +13,11 @@
 #include <vector>
 
 #include "config/color_class_table.hpp"
-#include "config/component_color_map.hpp"
 #include "config/component_table.hpp"
 #include "config/filter_config.hpp"
 #include "config/proj_config.hpp"
 #include "config/raypath_color_config.hpp"
 #include "core/def.hpp"
-#include "server/component_compositor.hpp"
 
 namespace {
 
@@ -29,7 +27,6 @@ using lumice::ColorClassCombine;
 using lumice::ColorClassConfig;
 using lumice::ColorClassTable;
 using lumice::ComplexFilterParam;
-using lumice::CompositeMode;
 using lumice::CrystalConfig;
 using lumice::CrystalFilterParam;
 using lumice::FilterConfig;
@@ -43,8 +40,6 @@ using lumice::RaypathFilterParam;
 using lumice::ScatteringSetting;
 using lumice::SceneConfig;
 using lumice::SimpleFilterParam;
-using lumice::ToLegacyColorMap;
-using lumice::ToLegacyCompositeOptions;
 
 ScatteringSetting MakeSetting(IdType crystal_id, IdType filter_id, FilterParam param) {
   ScatteringSetting s{};
@@ -348,47 +343,11 @@ TEST(BuildColorClassTable, KNoBitOverflowIsSkipped) {
   EXPECT_EQ(ct.referenced_mask_, static_cast<uint64_t>(1) << 3);
 }
 
-// ---- §6 case 13: legacy adapter equivalence (single-member classes) ----
-
-TEST(ToLegacyColorMap, SingleMemberClassEquivalentToPerBit) {
-  auto scene = MakeThreeArcsScene();
-  auto table = BuildComponentTable(scene);
-  RaypathColorConfig cfg;
-  cfg.classes_.push_back(Class(1.0f, 0.0f, 0.0f, { Ref(0, 1, true, 1, false, 0) }));  // bit 0
-  cfg.classes_.push_back(Class(0.0f, 1.0f, 0.0f, { Ref(0, 1, true, 4, true, 0) }));   // bit 1
-  cfg.classes_.push_back(Class(0.0f, 0.0f, 1.0f, { Ref(0, 1, true, 4, true, 1) }));   // bit 2
-
-  auto ct = BuildColorClassTable(cfg, scene, table);
-  auto map = ToLegacyColorMap(ct);
-  EXPECT_EQ(map.colored_mask_, 0b111u);
-  EXPECT_FLOAT_EQ(map.colors_[0][0], 1.0f);
-  EXPECT_FLOAT_EQ(map.colors_[1][1], 1.0f);
-  EXPECT_FLOAT_EQ(map.colors_[2][2], 1.0f);
-}
-
-TEST(ToLegacyCompositeOptions, VisibleSoloFoldIntoMasks) {
-  auto scene = MakeThreeArcsScene();
-  auto table = BuildComponentTable(scene);
-  ColorClassConfig cls_hidden = Class(1.0f, 0.0f, 0.0f, { Ref(0, 1, true, 1, false, 0) });
-  cls_hidden.visible_ = false;
-  ColorClassConfig cls_solo = Class(0.0f, 1.0f, 0.0f, { Ref(0, 1, true, 4, true, 0) });
-  cls_solo.solo_ = true;
-  RaypathColorConfig cfg;
-  cfg.classes_.push_back(cls_hidden);
-  cfg.classes_.push_back(cls_solo);
-
-  auto ct = BuildColorClassTable(cfg, scene, table);
-  auto opts = ToLegacyCompositeOptions(ct, "additive");
-  EXPECT_EQ(opts.mode_, CompositeMode::kAdditive);
-  EXPECT_EQ(opts.hidden_mask_, static_cast<uint64_t>(1) << 0);
-  EXPECT_EQ(opts.solo_mask_, static_cast<uint64_t>(1) << 1);
-}
-
-TEST(ToLegacyCompositeOptions, UnknownModeFallsBackToDominant) {
-  ColorClassTable empty;
-  auto opts = ToLegacyCompositeOptions(empty, "greebles");
-  EXPECT_EQ(opts.mode_, CompositeMode::kDominant);
-}
+// ---- §6 case 13 (dropped in task-339.4): the ToLegacyColorMap /
+// ToLegacyCompositeOptions transitional adapters were deleted when the
+// compositor moved to per-color-class consumption. The DTO's own visible_/
+// solo_/mode_ semantics are exercised via test_component_compositor.cpp
+// (RaypathColorConfigJsonFormsRoundTrip) and via the compositor tests directly.
 
 // ---- §6 case 14: empty-union class retained + does not contribute ----
 

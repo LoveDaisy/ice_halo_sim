@@ -71,27 +71,6 @@ const float* RenderConsumer::GetColorClassLaneY(size_t class_idx) const {
   return snapshot_lane_y_[class_idx].get();
 }
 
-// task-339.3: bridge view for the 336.3 per-bit compositor. Scans classes for a
-// single-member class whose `member_bits_ == (1 << bit)` — that class's lane
-// carries exactly the Y for rays with `bit` set (and no other colored bit in
-// this class). Returns nullptr for out-of-range, for a multi-bit class owning
-// the bit (multi-summand any/all), or when no class owns exactly this single
-// bit — the current compositor's defensive nullptr-skip handles all of these
-// as "not painted via this bridge". 339.4's per-class compositor will replace
-// this scan altogether.
-const float* RenderConsumer::GetComponentLaneY(uint8_t bit) const {
-  if (bit >= ComponentTable::kMaxBits) {
-    return nullptr;
-  }
-  uint64_t want = static_cast<uint64_t>(1) << bit;
-  for (size_t i = 0; i < class_table_.classes_.size(); ++i) {
-    if (class_table_.classes_[i].member_bits_ == want) {
-      return snapshot_lane_y_[i].get();
-    }
-  }
-  return nullptr;
-}
-
 // task-336.3: single source of truth for the mono-image exposure scale (see
 // plan §1.1). PostSnapshot() below calls this so the inline scale and the
 // compositor's scale can never drift apart.
