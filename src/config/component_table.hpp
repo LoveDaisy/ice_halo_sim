@@ -51,7 +51,12 @@ struct ComponentTable {
 //
 // Summand counting rules (see plan §2 default assumptions — evaluated in
 // this order via std::visit on FilterParam / SimpleFilterParam):
-//   - NoneFilterParam       → 0 summands (contributes no entries)
+//   - NoneFilterParam       → 1 summand (whole-crystal virtual summand for
+//                             the raypath-color engine's {layer, crystal}
+//                             ref — task-339.1; the emitted per-ray mask is
+//                             always 0b1 because NoneSpec::Match() is always
+//                             true, so every ray traversing a None-filter
+//                             crystal picks up this crystal's bit)
 //   - Simple non-None       → 1 summand (the whole simple filter is a single
 //                             summand)
 //   - ComplexFilterParam    → filters_.size() summands (each OR-summand is
@@ -69,8 +74,9 @@ ComponentTable BuildComponentTable(const SceneConfig& scene);
 // summand_idx. Entry values are the assigned bit index in [0, kMaxBits) or
 // `ComponentTable::kNoBit` for over-budget summands. A summand index absent
 // from the table (should not happen for a well-formed table) also reads
-// kNoBit. Missing (layer, crystal_id) -> empty vector (e.g. a None-filter
-// crystal, which contributes no summands).
+// kNoBit. Missing (layer, crystal_id) -> empty vector (e.g. a crystal-slot
+// index that does not exist in the scene). None-filter crystals return a
+// 1-element vector (their whole-crystal bit) after task-339.1.
 //
 // The CPU emit gate calls this once per (layer, crystal-slot) and uses it to
 // map a FilterSpec's per-summand match mask (FilterSpec::CheckSummandMask)

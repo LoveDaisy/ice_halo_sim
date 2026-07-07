@@ -155,7 +155,10 @@ TEST(ComponentGateMatchSummand, OverlappingSummandsSetMultipleBits) {
   EXPECT_EQ(SummandMask(spec.get(), { 3, 4, 5 }), 0b01ull);
 }
 
-TEST(ComponentGateMatchSummand, NoneFilterProducesNoBits) {
+TEST(ComponentGateMatchSummand, NoneFilterProducesWholeCrystalBit) {
+  // task-339.1: None now exposes a single whole-crystal summand (mask=0b1)
+  // whose per-ray value ignores the raypath contents — every ray traversing a
+  // None-filter crystal picks up that crystal's bit.
   Crystal prism = Crystal::CreatePrism(1.0f);
   FilterConfig cfg{};
   cfg.id_ = 1;
@@ -166,9 +169,14 @@ TEST(ComponentGateMatchSummand, NoneFilterProducesNoBits) {
   ASSERT_NE(spec, nullptr);
 
   bool m = false;
-  // None passes every ray (matched=true) but exposes zero summands (mask=0).
-  EXPECT_EQ(SummandMask(spec.get(), { 3, 5 }, &m), 0ull);
-  EXPECT_TRUE(m) << "None gate boolean is always true even though it has no summands";
+  EXPECT_EQ(SummandMask(spec.get(), { 3, 5 }, &m), 0b1ull) << "None matches every ray -> summand 0 set";
+  EXPECT_TRUE(m);
+  // Different raypath contents produce the same whole-crystal mask.
+  EXPECT_EQ(SummandMask(spec.get(), { 1, 2, 3, 4 }, &m), 0b1ull) << "None ignores raypath contents";
+  EXPECT_TRUE(m);
+  // Empty raypath still matches (None does not consult the recorder at all).
+  EXPECT_EQ(SummandMask(spec.get(), {}, &m), 0b1ull);
+  EXPECT_TRUE(m);
 }
 
 TEST(ComponentGateMatchSummand, SimpleFilterExposesSingleSummand) {
@@ -353,6 +361,46 @@ TEST(ComponentGateCollectData, FilterFailProducesNoBits) {
 
   EXPECT_LT(fx.buffer_data[1].rays_[0].w_, 0.0f) << "filter-fail terminates the ray";
   EXPECT_EQ(fx.buffer_data[1].ComponentAt(0), 0ull) << "no summand matched -> no bits produced";
+}
+
+TEST(ComponentGateCollectData, NoneFilterTagsEveryRayRegardlessOfPath) {
+  // task-339.1 end-to-end: build a NoneSpec via FilterSpec::Create (not the
+  // Complex helper) and drive CollectData with a fixed summand_bits map. Every
+  // emitted ray — regardless of its raypath contents — must carry the mapped
+  // whole-crystal bit, mirroring how the CPU emit gate treats a None-filter
+  // crystal at runtime.
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  FilterConfig cfg{};
+  cfg.id_ = 1;
+  cfg.symmetry_ = FilterConfig::kSymNone;
+  cfg.action_ = FilterConfig::kFilterIn;
+  cfg.param_ = SimpleFilterParam{ NoneFilterParam{} };
+  auto spec = FilterSpec::Create(cfg, prism, MakeAxis());
+  ASSERT_NE(spec, nullptr);
+  // None-filter crystals now expose one whole-crystal summand (bit 0 in
+  // BuildComponentTable's local slot; here we pin it to bit 11 to prove the
+  // mapping is applied verbatim).
+  std::vector<uint8_t> summand_bits{ 11 };
+
+  RandomNumberGenerator rng(42);
+  MsInfo ms_info;
+  ms_info.prob_ = 0.0f;  // filter-pass + prob-fail -> emit
+
+  GateFixture fx;
+  // Three outgoing rays with wildly different raypath contents — None must
+  // treat them identically.
+  fx.buffer_data[1].EmplaceBack(MakeOutgoingCandidate(), ToRecorder({ 3, 5 }));
+  fx.buffer_data[1].EmplaceBack(MakeOutgoingCandidate(), ToRecorder({ 4, 6, 8 }));
+  fx.buffer_data[1].EmplaceBack(MakeOutgoingCandidate(), ToRecorder({}));
+
+  CollectData(rng, ms_info, spec.get(), fx.buffer_data, fx.init_data, &summand_bits);
+
+  ASSERT_EQ(fx.buffer_data[1].size_, 3u);
+  for (size_t i = 0; i < 3; i++) {
+    EXPECT_TRUE(fx.buffer_data[1].rays_[i].IsOutgoing()) << "ray " << i << " must survive None gate as outgoing";
+    EXPECT_EQ(fx.buffer_data[1].ComponentAt(i), (1ull << 11))
+        << "ray " << i << " must carry the whole-crystal bit regardless of raypath";
+  }
 }
 
 TEST(ComponentGateCollectData, NullMapLeavesMaskUntouched) {

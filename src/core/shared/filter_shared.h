@@ -323,7 +323,13 @@ LM_FN bool DeviceFilterCheck(const DeviceFilterDesc& f, const DeviceFilterDesc* 
 // mask needs. `out_matched` receives the pre-action collapse boolean
 // (== DeviceFilterMatch). Semantics:
 //   - Complex       : bit or_i set iff its AND-clause fully matched.
-//   - None          : 0 summands → mask 0, matched=true (mirrors NoneSpec).
+//   - None          : device emits mask 0, matched=true. NOTE (task-339.1):
+//                     host NoneSpec now yields a whole-crystal bit (mask 0b1,
+//                     1 summand) so BuildComponentTable allocates a None bit and
+//                     shifts later bits by +1. The device intentionally still
+//                     emits 0 here — None whole-crystal bits are host-only until
+//                     scrum-3c wires device-side per-class lanes. Do NOT treat
+//                     this as "mirrors NoneSpec" anymore.
 //   - other simple  : 1 summand → bit 0 iff matched (mirrors non-None simple).
 // The result is capped at kDeviceFilterMaxOrClauses summands (== the Complex
 // or_clause_count upper bound); the component-bit table uses the same stride.

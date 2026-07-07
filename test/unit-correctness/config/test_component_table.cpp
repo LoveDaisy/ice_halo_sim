@@ -66,10 +66,17 @@ SceneConfig MakeSceneWithLayers(std::vector<std::vector<lumice::FilterParam>> la
 
 // ---- Summand counting rule ----
 
-TEST(BuildComponentTable, NoneFilterParamContributesZeroSummands) {
+TEST(BuildComponentTable, NoneFilterParamContributesOneWholeCrystalSummand) {
+  // task-339.1: NoneFilterParam contributes exactly one whole-crystal virtual
+  // summand (summand_idx = 0) so the raypath-color engine's {layer, crystal}
+  // ref (color-class schema, task-339.2) can resolve to a component bit.
   auto scene = MakeSceneWithLayers({ { SimpleFilterParam{ NoneFilterParam{} } } });
   auto table = lumice::BuildComponentTable(scene);
-  EXPECT_TRUE(table.entries_.empty()) << "NoneFilterParam must not contribute any component-table entry";
+  ASSERT_EQ(table.entries_.size(), 1u) << "NoneFilterParam must contribute exactly one whole-crystal entry";
+  EXPECT_EQ(table.entries_[0].bit_, 0u);
+  EXPECT_EQ(table.entries_[0].layer_, 0);
+  EXPECT_EQ(table.entries_[0].crystal_id_, 0);
+  EXPECT_EQ(table.entries_[0].summand_idx_, 0);
 }
 
 TEST(BuildComponentTable, BareSimpleFilterParamContributesOneSummand) {
@@ -105,7 +112,8 @@ TEST(BuildComponentTable, ComplexFilterParamContributesFiltersSizeSummands) {
 // ---- Bit allocation ordered by (mi, ci, sk), unique across the whole scene ----
 
 TEST(BuildComponentTable, BitsAssignedInLayerCrystalSummandOrderAndAreUnique) {
-  // Layer 0: crystal 0 -> None (0 summands), crystal 1 -> Simple (1 summand).
+  // Layer 0: crystal 0 -> None (1 whole-crystal summand after task-339.1),
+  //          crystal 1 -> Simple (1 summand).
   // Layer 1: crystal 0 -> Complex with 2 summands, crystal 1 -> Simple (1 summand).
   ComplexFilterParam complex2;
   complex2.filters_.resize(2);
@@ -121,10 +129,14 @@ TEST(BuildComponentTable, BitsAssignedInLayerCrystalSummandOrderAndAreUnique) {
   });
 
   auto table = lumice::BuildComponentTable(scene);
-  // Expected entries in push order: (mi=0,ci=1,sk=0), (mi=1,ci=0,sk=0),
-  // (mi=1,ci=0,sk=1), (mi=1,ci=1,sk=0) — 4 total (the mi=0/ci=0 None
-  // contributes nothing).
-  ASSERT_EQ(table.entries_.size(), 4u);
+  // Expected entries in push order (task-339.1 — None-filter now contributes
+  // its whole-crystal summand, interleaved in the same (mi, ci, sk) traversal):
+  //   (mi=0,ci=0,sk=0)  None            -> bit 0
+  //   (mi=0,ci=1,sk=0)  raypath         -> bit 1
+  //   (mi=1,ci=0,sk=0)  complex2 sum 0  -> bit 2
+  //   (mi=1,ci=0,sk=1)  complex2 sum 1  -> bit 3
+  //   (mi=1,ci=1,sk=0)  raypath         -> bit 4
+  ASSERT_EQ(table.entries_.size(), 5u);
 
   std::vector<std::tuple<lumice::IdType, lumice::IdType, lumice::IdType>> keys;
   std::set<uint8_t> bits;
@@ -133,21 +145,27 @@ TEST(BuildComponentTable, BitsAssignedInLayerCrystalSummandOrderAndAreUnique) {
     bits.insert(e.bit_);
   }
   EXPECT_TRUE(std::is_sorted(keys.begin(), keys.end())) << "entries must be in (mi, ci, sk) lexicographic order";
-  EXPECT_EQ(bits.size(), 4u) << "bit_ values must be unique across the whole scene";
+  EXPECT_EQ(bits.size(), 5u) << "bit_ values must be unique across the whole scene";
 
-  // Bits themselves must be exactly {0,1,2,3} assigned in entries_ order.
+  // Bits themselves must be exactly {0,1,2,3,4} assigned in entries_ order.
   for (size_t i = 0; i < table.entries_.size(); i++) {
     EXPECT_EQ(table.entries_[i].bit_, static_cast<uint8_t>(i))
         << "bit " << i << " not assigned in strict (mi,ci,sk) push order";
   }
 
-  EXPECT_EQ(std::get<0>(keys[0]), 0);
-  EXPECT_EQ(std::get<1>(keys[0]), 1);
-  EXPECT_EQ(std::get<0>(keys[1]), 1);
-  EXPECT_EQ(std::get<1>(keys[1]), 0);
-  EXPECT_EQ(std::get<2>(keys[1]), 0);
-  EXPECT_EQ(std::get<2>(keys[2]), 1);
-  EXPECT_EQ(std::get<1>(keys[3]), 1);
+  // Reverse-lookup via ComponentBitsFor to avoid coupling every assertion to
+  // hard-coded numeric bit constants (plan §4 Step 1 test-point guidance).
+  auto l0c0 = lumice::ComponentBitsFor(table, /*layer=*/0, /*crystal_id=*/0);
+  auto l0c1 = lumice::ComponentBitsFor(table, /*layer=*/0, /*crystal_id=*/1);
+  auto l1c0 = lumice::ComponentBitsFor(table, /*layer=*/1, /*crystal_id=*/0);
+  auto l1c1 = lumice::ComponentBitsFor(table, /*layer=*/1, /*crystal_id=*/1);
+  ASSERT_EQ(l0c0.size(), 1u) << "None-filter crystal must expose exactly one whole-crystal bit";
+  ASSERT_EQ(l0c1.size(), 1u);
+  ASSERT_EQ(l1c0.size(), 2u);
+  ASSERT_EQ(l1c1.size(), 1u);
+  // Every reverse-lookup bit is distinct — the union covers the whole table.
+  std::set<uint8_t> covered{ l0c0[0], l0c1[0], l1c0[0], l1c0[1], l1c1[0] };
+  EXPECT_EQ(covered.size(), 5u) << "reverse lookups collectively cover every distinct bit";
 }
 
 // ---- Soft-cap overflow: >64 summands must not crash, overflow entries get kNoBit ----
@@ -172,4 +190,54 @@ TEST(BuildComponentTable, OverflowPast64SummandsGetsNoBitSentinelAndDoesNotCrash
     EXPECT_EQ(table.entries_[i].bit_, ComponentTable::kNoBit)
         << "summand " << i << " exceeds the 64-bit budget and must be the sentinel";
   }
+}
+
+TEST(BuildComponentTable, NoneFilterCountsTowardKMaxBitsOverflowBudget) {
+  // task-339.1 verifies that None's whole-crystal bit consumes a slot in the
+  // 64-bit budget just like any other summand. Construct a scene where the
+  // total summand count crosses `kMaxBits` (64) precisely because None crystals
+  // are contributing: 63 simple-filter summands + 2 None-filter crystals = 65
+  // total. The 65-th summand (whichever it happens to be in traversal order)
+  // must land on `kNoBit`, and both None entries must appear in `entries_`.
+  constexpr size_t kSimpleSummands = 63;
+  ComplexFilterParam big_complex;
+  big_complex.filters_.resize(kSimpleSummands);
+  for (size_t i = 0; i < kSimpleSummands; i++) {
+    big_complex.filters_[i].emplace_back(lumice::IdType{ 0 }, SimpleFilterParam{ CrystalFilterParam{ 0 } });
+  }
+
+  // Layout: [None, Complex(63), None] on layer 0 — traversal order puts the
+  // first None at bits[0], the 63 complex summands at bits[1..63], and the
+  // trailing None at bit index 64 which overflows to kNoBit.
+  auto scene = MakeSceneWithLayers({ {
+      SimpleFilterParam{ NoneFilterParam{} },
+      lumice::FilterParam{ big_complex },
+      SimpleFilterParam{ NoneFilterParam{} },
+  } });
+  auto table = lumice::BuildComponentTable(scene);
+
+  ASSERT_EQ(table.entries_.size(), kSimpleSummands + 2u)
+      << "None entries (including overflow) must still be recorded in entries_";
+
+  size_t assigned = 0;
+  size_t overflow = 0;
+  for (const auto& e : table.entries_) {
+    if (e.bit_ == ComponentTable::kNoBit) {
+      overflow++;
+    } else {
+      assigned++;
+      EXPECT_LT(e.bit_, ComponentTable::kMaxBits);
+    }
+  }
+  EXPECT_EQ(assigned, ComponentTable::kMaxBits) << "budget must be filled to exactly kMaxBits (64)";
+  EXPECT_EQ(overflow, 1u) << "exactly one summand must overflow to kNoBit";
+
+  // Confirm both None crystals still show up in reverse lookup (with the
+  // trailing one now carrying the sentinel).
+  auto first_none = lumice::ComponentBitsFor(table, /*layer=*/0, /*crystal_id=*/0);
+  auto trailing_none = lumice::ComponentBitsFor(table, /*layer=*/0, /*crystal_id=*/2);
+  ASSERT_EQ(first_none.size(), 1u);
+  ASSERT_EQ(trailing_none.size(), 1u);
+  EXPECT_EQ(first_none[0], 0u) << "first None-crystal grabs bit 0 in traversal order";
+  EXPECT_EQ(trailing_none[0], ComponentTable::kNoBit) << "trailing None-crystal overflows the 64-bit budget";
 }
