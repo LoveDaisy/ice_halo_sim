@@ -423,6 +423,18 @@ LUMICE_ErrorCode LUMICE_ConfigToJson(const LUMICE_Config* config, char* out_buf,
 // Returns sRGB uint8 image data (CPU-converted from XYZ).
 LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count);
 
+// Fill per-raypath composite results into out array (img_buffer == NULL sentinel
+// when count < max_count). Reuses LUMICE_RenderResult: a composite is an sRGB uint8
+// W*H*3 image, one per colored renderer. Empty (out[0] sentinel) when no
+// `raypath_color` is configured — the mono LUMICE_GetRenderResults path is
+// unaffected. Lifetime: img_buffer is read-only and server-owned. Unlike the mono
+// LUMICE_GetRenderResults buffer (which aliases a per-consumer image buffer), the
+// composite buffer is genuinely freed and rebuilt whenever a fresh snapshot is
+// materialized — so it is only guaranteed valid until the NEXT LUMICE_Get*Results()
+// call (render/composite/stats/xyz, any of which may trigger a snapshot) or
+// LUMICE_CommitConfig(). Copy the pixels before the next Get*Results if you need them.
+LUMICE_ErrorCode LUMICE_GetCompositeResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count);
+
 // Fill raw XYZ results into out array (xyz_buffer == NULL sentinel when count < max_count).
 // Returns unconverted XYZ float data + intensity scalars for GPU-side conversion.
 LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzResult* out, int max_count);

@@ -31,6 +31,14 @@ void to_json(nlohmann::json& j, const ConfigManager& m) {
   for (const auto& [_, v] : m.renderers_) {
     j["render"].emplace_back(v);
   }
+
+  // Raypath color (task-336.1 / 339.2). Emit only when non-empty to preserve
+  // the "empty container ⇒ no key" convention used by crystal/filter/render
+  // and to keep round-trips of pre-336 configs byte-identical in the missing
+  // case.
+  if (!m.raypath_color_.classes_.empty()) {
+    j["raypath_color"] = m.raypath_color_;
+  }
 }
 
 RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManager& /*m*/) {
@@ -183,6 +191,12 @@ void from_json(const nlohmann::json& j, ConfigManager& m) {
 
   // Scene (single object, light_source inlined)
   m.scene_ = ParseSceneConfig(j.at("scene"), m);
+
+  // Raypath color (task-336.1) — optional. Missing key ⇒ empty entries_ (zero
+  // regression on pre-336 configs).
+  if (j.contains("raypath_color")) {
+    j.at("raypath_color").get_to(m.raypath_color_);
+  }
 }
 
 }  // namespace lumice

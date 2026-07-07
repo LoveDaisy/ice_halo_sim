@@ -44,10 +44,14 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/config/test_render_config.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/config/test_sim_data.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/config/test_component_table.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/config/test_raypath_color_config.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/config/test_color_class_table.cpp"
   # server/
   "${PROJ_TEST_DIR}/unit-correctness/server/test_c_api.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_stats_consumer.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_ray_num_semantics.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_component_lanes.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_component_compositor.cpp"
   # util/
   "${PROJ_TEST_DIR}/unit-correctness/util/test_color_space.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/util/test_queue.cpp"

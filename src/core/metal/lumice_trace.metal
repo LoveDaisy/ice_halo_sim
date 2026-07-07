@@ -331,7 +331,10 @@ constant uint kDevComponentStride = 8u;
 // does not discard the per-summand info the component mask needs. `out_matched`
 // receives the pre-action collapse boolean (== DeviceFilterMatch). Semantics:
 //   - Complex : bit or_i set iff its AND-clause fully matched.
-//   - None    : 0 summands → mask 0, matched=true (mirrors NoneSpec).
+//   - None    : device emits mask 0, matched=true. NOTE (task-339.1): host
+//               NoneSpec now yields a whole-crystal bit (mask 0b1); the device
+//               intentionally still emits 0 here — None whole-crystal bits are
+//               host-only until scrum-3c. No longer "mirrors NoneSpec".
 //   - other simple : 1 summand → bit 0 iff matched (mirrors non-None simple).
 static inline uint DeviceFilterSummandMask(device const DeviceFilterDesc& f,
                                            device const DeviceFilterDesc* complex_sub_desc_buf,

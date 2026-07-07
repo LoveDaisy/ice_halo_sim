@@ -13,7 +13,11 @@ namespace {
 
 // Return the number of OR-summands the given filter contributes to the
 // component table, following the plan §2 rules:
-//   - NoneFilterParam       → 0
+//   - NoneFilterParam       → 1 (whole-crystal virtual summand for the
+//                             raypath-color engine's {layer, crystal} ref
+//                             resolution — see task-339.1; the summand's
+//                             per-ray mask is emitted by NoneSpec's default
+//                             MatchSummandMask which is always 0b1)
 //   - other simple filters  → 1
 //   - ComplexFilterParam    → filters_.size()
 size_t CountSummands(const FilterParam& param) {
@@ -21,16 +25,7 @@ size_t CountSummands(const FilterParam& param) {
       [](const auto& p) -> size_t {
         using T = std::decay_t<decltype(p)>;
         if constexpr (std::is_same_v<T, SimpleFilterParam>) {
-          return std::visit(
-              [](const auto& sp) -> size_t {
-                using ST = std::decay_t<decltype(sp)>;
-                if constexpr (std::is_same_v<ST, NoneFilterParam>) {
-                  return 0;
-                } else {
-                  return 1;
-                }
-              },
-              p);
+          return 1;
         } else if constexpr (std::is_same_v<T, ComplexFilterParam>) {
           return p.filters_.size();
         } else {

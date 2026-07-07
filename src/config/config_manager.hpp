@@ -8,6 +8,7 @@
 #include "config/filter_config.hpp"
 #include "config/light_config.hpp"
 #include "config/proj_config.hpp"
+#include "config/raypath_color_config.hpp"
 #include "config/render_config.hpp"
 
 namespace lumice {
@@ -17,6 +18,7 @@ struct ConfigManager {
   std::map<IdType, FilterConfig> filters_;
   std::map<IdType, RenderConfig> renderers_;
   SceneConfig scene_;
+  RaypathColorConfig raypath_color_;
 };
 
 // convert to/from json object

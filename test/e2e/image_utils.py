@@ -47,3 +47,90 @@ def compute_psnr(mse, max_val=255):
     if mse == 0:
         return float("inf")
     return 10 * math.log10(max_val**2 / mse)
+
+
+def classify_pixels_by_color_direction(
+    image_path,
+    class_colors,
+    luminance_floor=8.0,
+    cos_similarity_tol=0.98,
+):
+    """Classify pixels of a composite image by their RGB direction.
+
+    Contract (WHITE-BOX, keep in sync with compositor implementation):
+      This function assumes the composite image was produced by the
+      raypath-color compositor in `dominant` OR `painter` mode, where the
+      output pixel is `out = color_c * ey` for the winning class c (see
+      src/server/component_compositor.cpp CompositeDominantPixel /
+      CompositePainterPixel). Under that contract, a lit pixel's RGB
+      direction (after normalization) is EQUAL to the winning class's
+      `color_` direction, decoupled from the exposure scalar `ey`.
+      If the compositor's `additive` mode is used, this classifier is
+      NOT valid (linear class mix -> direction is a convex combination).
+      If the compositor's dominant/painter direction invariant changes,
+      this helper must be re-verified.
+
+    Args:
+      image_path: Path to a JPEG/PNG composite image.
+      class_colors: Iterable of (r,g,b) tuples in [0,1], one per class
+        (same convention as `raypath_color[i].color` in config JSON).
+      luminance_floor: Pixels with max(R,G,B) < floor (0..255) are
+        counted as background (unlit) — not misclassified.
+      cos_similarity_tol: A lit pixel's normalized RGB vector must have
+        cosine similarity >= tol against SOME class direction to be
+        classified; otherwise it is counted as `unclassified` (phantom
+        hue signal). Default 0.98 tolerates mild JPEG chroma bleeding.
+
+    Returns:
+      dict with keys:
+        - "background": int, count of pixels below luminance_floor.
+        - "unclassified": int, lit pixels not matching any class direction.
+        - "per_class": list[int] of length len(class_colors), pixel count
+          per class (best-match by cosine similarity above tolerance).
+        - "total": int, total pixel count.
+    """
+    if not HAS_PILLOW:
+        raise RuntimeError("Pillow is required for classify_pixels_by_color_direction")
+
+    class_dirs = []
+    for c in class_colors:
+        r, g, b = c[0], c[1], c[2]
+        norm = math.sqrt(r * r + g * g + b * b)
+        if norm <= 0.0:
+            raise ValueError(f"class color {c} is zero-vector")
+        class_dirs.append((r / norm, g / norm, b / norm))
+
+    per_class = [0] * len(class_dirs)
+    background = 0
+    unclassified = 0
+
+    with Image.open(image_path) as img:
+        rgb = img.convert("RGB")
+        pixels = list(rgb.getdata())
+
+    for r, g, b in pixels:
+        m = r if r >= g else g
+        if b > m:
+            m = b
+        if m < luminance_floor:
+            background += 1
+            continue
+        norm = math.sqrt(r * r + g * g + b * b)
+        best_idx = -1
+        best_cos = -1.0
+        for i, (cr, cg, cb) in enumerate(class_dirs):
+            cos = (r * cr + g * cg + b * cb) / norm
+            if cos > best_cos:
+                best_cos = cos
+                best_idx = i
+        if best_cos >= cos_similarity_tol:
+            per_class[best_idx] += 1
+        else:
+            unclassified += 1
+
+    return {
+        "background": background,
+        "unclassified": unclassified,
+        "per_class": per_class,
+        "total": len(pixels),
+    }

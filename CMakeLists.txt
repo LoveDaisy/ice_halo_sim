@@ -248,12 +248,14 @@ set(lumice_include
   "${PROJ_SRC_DIR}")
 
 set(lumice_config_src
+  "${PROJ_SRC_DIR}/config/color_class_table.cpp"
   "${PROJ_SRC_DIR}/config/component_table.cpp"
   "${PROJ_SRC_DIR}/config/config_manager.cpp"
   "${PROJ_SRC_DIR}/config/crystal_config.cpp"
   "${PROJ_SRC_DIR}/config/filter_config.cpp"
   "${PROJ_SRC_DIR}/config/light_config.cpp"
   "${PROJ_SRC_DIR}/config/proj_config.cpp"
+  "${PROJ_SRC_DIR}/config/raypath_color_config.cpp"
   "${PROJ_SRC_DIR}/config/raypath_validation.cpp"
   "${PROJ_SRC_DIR}/config/render_config.cpp"
   "${PROJ_SRC_DIR}/config/sim_data.cpp")
@@ -408,6 +410,7 @@ endif()
 
 set(lumice_server_src
   "${PROJ_SRC_DIR}/server/c_api.cpp"
+  "${PROJ_SRC_DIR}/server/component_compositor.cpp"
   "${PROJ_SRC_DIR}/server/render.cpp"
   "${PROJ_SRC_DIR}/server/server.cpp"
   "${PROJ_SRC_DIR}/server/show_rays.cpp"

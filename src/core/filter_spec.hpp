@@ -46,9 +46,10 @@ class FilterSpec {
 
   // Single-pass per-summand evaluation for the raypath-color foundation
   // (task-331.2). Returns a mask whose bit k is set iff OR-summand k matched,
-  // and (via out_matched) the pre-action collapse boolean == Match(). Simple
-  // non-None filters expose exactly one summand (bit 0); None exposes zero
-  // (mask stays 0). ComplexSpec overrides this to evaluate EVERY OR-summand
+  // and (via out_matched) the pre-action collapse boolean == Match(). All
+  // simple filters (including None after task-339.1) expose exactly one
+  // summand (bit 0); the base-class default `mask = Match() ? 1 : 0` handles
+  // this uniformly. ComplexSpec overrides this to evaluate EVERY OR-summand
   // (no short-circuit) so the gate's collapse-to-boolean does not discard the
   // per-summand information the component mask needs.
   //

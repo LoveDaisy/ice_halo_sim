@@ -15,6 +15,8 @@
 #include <thread>
 #include <vector>
 
+#include "config/color_class_table.hpp"
+#include "config/component_table.hpp"
 #include "config/config_manager.hpp"
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
@@ -23,6 +25,7 @@
 #if defined(LUMICE_CUDA_ENABLED)
 #include "core/backend/cuda_trace_backend.hpp"  // CudaDeviceAvailable() for ResolveGpuRoute
 #endif
+#include "server/component_compositor.hpp"
 #include "server/consumer.hpp"
 #include "server/ray_num_semantics.hpp"
 #include "server/render.hpp"
@@ -116,6 +119,22 @@ class ServerImpl {
 
   ConfigManager config_manager_;
 
+  // task-339.3: color-class table of the currently committed config. Compared
+  // structurally against the incoming table in CommitConfig (see NeedsRebuild
+  // in config/color_class_table.hpp) so any change in per-class (combine_,
+  // member_bits_) forces a full consumer rebuild — a reused consumer would keep
+  // a stale per-class lane layout. Default construction (empty classes_) equals
+  // "no raypath_color configured" (referenced_mask_ = 0).
+  ColorClassTable active_class_table_;
+
+  // task-339.4: the composite mode (dominant/additive/painter) currently in
+  // effect. Parsed in CommitConfig's try block from RaypathColorConfig::mode_;
+  // DoSnapshot Phase 2 pairs it with active_class_table_ to drive
+  // CompositeColorClassesLinear. Defaults to kDominant (matches the JSON schema
+  // default; no raypath_color → color class table is empty → composite gate
+  // skips the compositor anyway).
+  CompositeMode active_composite_mode_ = CompositeMode::kDominant;
+
   QueuePtrS<SimBatch> scene_queue_;
   QueuePtrS<SimData> data_queue_;
 
@@ -132,6 +151,42 @@ class ServerImpl {
   // Cached results under snapshot_mutex_ — populated by DoSnapshot, read by Get*Results
   std::vector<RenderResult> cached_render_results_;
   std::optional<StatsResult> cached_stats_result_;
+  // task-336.3: owning cache of composited colored images, one per RenderConsumer
+  // with a non-zero colored mask. Produced in DoSnapshot Phase 2, under
+  // snapshot_mutex_. Export to the C-API is deferred to 336.4 — for now this is
+  // internal (see GetCompositeResults() below). Empty when no raypath_color.
+  struct CompositeResult {
+    int renderer_id_;
+    int w_;
+    int h_;
+    std::vector<uint8_t> rgb_;  // W*H*3 sRGB
+  };
+  std::vector<CompositeResult> cached_composite_results_;
+
+ public:
+  // task-336.4: composite results getter, mirroring GetRenderResults so the
+  // C-API can export it via the existing RenderResult surface. Returns
+  // RenderResult handles whose img_buffer_ points into the ServerImpl-owned
+  // cached_composite_results_ (NOT owning copies) — same lifetime contract as
+  // GetRenderResults: valid until the next DoSnapshot() rebuild or CommitConfig.
+  // Empty when no raypath_color is configured (no colored consumer → no cache).
+  std::vector<RenderResult> GetCompositeResults() {
+    DoSnapshot();
+    std::lock_guard<std::mutex> lock(snapshot_mutex_);
+    std::vector<RenderResult> out;
+    out.reserve(cached_composite_results_.size());
+    for (const auto& cr : cached_composite_results_) {
+      RenderResult r;
+      r.renderer_id_ = cr.renderer_id_;
+      r.img_width_ = cr.w_;
+      r.img_height_ = cr.h_;
+      r.img_buffer_ = cr.rgb_.data();  // points into ServerImpl-owned cache
+      out.push_back(r);
+    }
+    return out;
+  }
+
+ private:
   std::vector<std::thread> simulator_threads_;
   mutable std::mutex prod_mutex_;
 
@@ -375,8 +430,26 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
 
   // Parse into a temporary first so that a parse failure leaves the running server untouched.
   ConfigManager new_config;
+  // task-339.3: runtime color-class table (default = empty → no raypath_color,
+  // pre-336 behavior bit-for-bit). Declared outside the try so it survives to
+  // the reuse-judgment / consumer construction below.
+  ColorClassTable class_table;
+  // task-339.4: the parsed composite mode. Declared outside the try so it
+  // survives to the member assignment below, mirroring class_table.
+  CompositeMode composite_mode = CompositeMode::kDominant;
   try {
     new_config = config_json.get<ConfigManager>();
+    // task-339.2/339.3/339.4: color-class schema build path. BuildColorClassTable
+    // resolves id → ci (setting_[] slot) using new_config.scene_ and may throw
+    // std::invalid_argument on any config error (unknown combine, missing
+    // (crystal,filter) pair, degenerate duplicate, out-of-range summand,
+    // combine:"all" ban) — that lands in the std::exception catch below →
+    // Error::InvalidConfig. class_table feeds directly into the RenderConsumer
+    // (per-class Y-lane accumulation) and into the compositor
+    // (CompositeColorClassesLinear); no legacy per-bit adapter layer.
+    ComponentTable component_table = BuildComponentTable(new_config.scene_);
+    class_table = BuildColorClassTable(new_config.raypath_color_, new_config.scene_, component_table);
+    composite_mode = ParseCompositeMode(new_config.raypath_color_.mode_);
   } catch (const nlohmann::json::out_of_range& e) {
     ILOG_ERROR(logger_, "CommitConfig: Missing field: {}", e.what());
     {
@@ -418,7 +491,25 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   auto old_renderers = config_manager_.renderers_;
   config_manager_ = std::move(new_config);
 
-  bool can_reuse = !consumers_.empty() && (old_renderers.size() == config_manager_.renderers_.size());
+  // task-339.3: a change in the per-class (combine_, member_bits_) shape is a
+  // scene-level (cross-renderer) change that must force a full consumer rebuild
+  // — a reused RenderConsumer would keep its old per-class lane layout. Uses
+  // structural NeedsRebuild instead of the plain uint64 mask compare so a
+  // reshape at the same referenced_mask_ (e.g. "one 2-bit any class" ↔ "two
+  // 1-bit classes") still triggers a rebuild. Orthogonal to the per-renderer
+  // NeedsRebuild() layout check below.
+  bool class_table_changed = NeedsRebuild(active_class_table_, class_table);
+  active_class_table_ = class_table;
+  // task-339.4: publish the composite mode in lockstep with the class table.
+  // Even a reused consumer set (same class shape) may carry a new mode (or
+  // new per-class colors / visibility already carried by active_class_table_),
+  // so this is refreshed unconditionally. DoSnapshot reads it under
+  // consumer_mutex_; Stop() above has drained all workers so there is no
+  // concurrent DoSnapshot here.
+  active_composite_mode_ = composite_mode;
+
+  bool can_reuse =
+      !consumers_.empty() && !class_table_changed && (old_renderers.size() == config_manager_.renderers_.size());
   if (can_reuse) {
     auto old_it = old_renderers.begin();
     auto new_it = config_manager_.renderers_.begin();
@@ -448,7 +539,9 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
       // Full rebuild path
       consumers_.clear();
       for (const auto& [_, r] : config_manager_.renderers_) {
-        consumers_.emplace_back(std::make_shared<RenderConsumer>(r));
+        // task-339.3: pass the color-class table so each consumer allocates one
+        // Y-lane per class (empty table → no lanes, pre-336 behavior).
+        consumers_.emplace_back(std::make_shared<RenderConsumer>(r, active_class_table_));
       }
       consumers_.emplace_back(std::make_shared<StatsConsumer>());
     }
@@ -497,6 +590,8 @@ void ServerImpl::DoSnapshot() {
   // Phase 1: memcpy under consumer_mutex_ (short hold).
   // Copy shared_ptrs so consumers stay alive even if Stop() clears consumers_.
   std::vector<ConsumerPtrS> snapshot_consumers;
+  ColorClassTable snap_class_table;
+  CompositeMode snap_composite_mode = CompositeMode::kDominant;
   {
     std::lock_guard<TicketMutex> lock(consumer_mutex_);
     if (!snapshot_dirty_) {
@@ -507,6 +602,13 @@ void ServerImpl::DoSnapshot() {
       c->PrepareSnapshot();
     }
     snapshot_consumers = consumers_;  // shared_ptr copy keeps consumers alive
+    // task-339.4: pair the compositor inputs with the consumer set captured
+    // above; copied under consumer_mutex_ so they stay consistent with
+    // snapshot_consumers. `snap_class_table` is a small std::vector copy
+    // (color-class count is O(config), typically ≤ tens) — same lock-hold
+    // discipline as before, negligible cost per snapshot.
+    snap_class_table = active_class_table_;
+    snap_composite_mode = active_composite_mode_;
     snapshot_dirty_ = false;
   }
   // Phase 1.5: pixel counting outside consumer_mutex_ (snapshot_xyz_ is stable here).
@@ -519,6 +621,10 @@ void ServerImpl::DoSnapshot() {
   // Safe: snapshot_consumers holds shared_ptrs, objects won't be freed.
   std::vector<RenderResult> render_results;
   std::optional<StatsResult> stats_result;
+  // task-336.3: composite colored consumers into cached RGB images. Built
+  // outside the snapshot_mutex_ block (pure reads of the frozen snapshot lanes)
+  // and swapped in under the lock alongside the render results.
+  std::vector<CompositeResult> composite_results;
   {
     std::lock_guard<std::mutex> lock(snapshot_mutex_);
     for (const auto& c : snapshot_consumers) {
@@ -532,8 +638,33 @@ void ServerImpl::DoSnapshot() {
         stats_result = *s;
       }
     }
+    // task-336.3: only colored consumers (ColoredMask()!=0) produce a composite.
+    // Zero-config consumers (mask 0) are skipped → no composite, mono path
+    // untouched (plan §0 / risk-5 rollback).
+    for (const auto& c : snapshot_consumers) {
+      auto* rc = dynamic_cast<RenderConsumer*>(c.get());
+      if (rc == nullptr || rc->ColoredMask() == 0) {
+        continue;
+      }
+      std::vector<float> linear_rgb;
+      if (!CompositeColorClassesLinear(*rc, snap_class_table, snap_composite_mode, linear_rgb)) {
+        continue;
+      }
+      CompositeResult cr;
+      cr.renderer_id_ = 0;
+      // Recover the renderer id from the mono result (RenderResult carries it).
+      auto mono = rc->GetResult();
+      if (auto* r = std::get_if<RenderResult>(&mono)) {
+        cr.renderer_id_ = r->renderer_id_;
+      }
+      cr.w_ = rc->ImageWidth();
+      cr.h_ = rc->ImageHeight();
+      LinearRgbToSrgbU8(linear_rgb, cr.rgb_);
+      composite_results.push_back(std::move(cr));
+    }
     cached_render_results_ = std::move(render_results);
     cached_stats_result_ = stats_result;
+    cached_composite_results_ = std::move(composite_results);
   }
 }
 
@@ -1190,6 +1321,14 @@ std::vector<RenderResult> Server::GetRenderResults() {
     return {};
   }
   return impl_->GetRenderResults();
+}
+
+std::vector<RenderResult> Server::GetCompositeResults() {
+  if (!impl_) {
+    LOG_WARNING("Server is terminated!");
+    return {};
+  }
+  return impl_->GetCompositeResults();
 }
 
 std::vector<RawXyzResult> Server::GetRawXyzResults() {

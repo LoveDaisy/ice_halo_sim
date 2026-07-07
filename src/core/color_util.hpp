@@ -40,6 +40,18 @@ inline void SpectrumToXyz(float wl, const float* v, const int* xy, float* xyz, s
   }
 }
 
+// Single-ray Y-only helper (task-336.2 component lanes).
+// Returns kCmfY[wl] * w for an in-range wavelength; 0 otherwise.
+// Deliberately mirrors SpectrumToXyz's wavelength clipping (rounding + range check)
+// so per-component Y lanes accumulate a strict Y-slice of the same batch.
+inline float SpectrumToYSingle(float wl, float w) {
+  int wl_key = static_cast<int>(wl + 0.5f);
+  if (wl_key < kCmfMinWavelength || wl_key > kCmfMaxWavelength) {
+    return 0.0f;
+  }
+  return kCmfY[wl_key - kCmfMinWavelength] * w;
+}
+
 // Per-ray variant — each ray i carries its own wavelength wl_per_ray[i].
 // Used by the Metal/DR-3 path where the photon's lifetime wavelength tag is
 // derived from a host-uploaded wavelength pool (see metal_trace_backend.mm's

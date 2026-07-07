@@ -160,10 +160,10 @@ int ParseBackend(std::string_view name) {
   return -1;
 }
 
-std::filesystem::path FormatImagePath(const std::filesystem::path& output_dir, int renderer_id,
-                                      std::string_view format) {
+std::filesystem::path FormatImagePath(const std::filesystem::path& output_dir, int renderer_id, std::string_view format,
+                                      std::string_view suffix = "") {
   std::ostringstream oss;
-  oss << "img_" << std::setfill('0') << std::setw(2) << renderer_id << "." << format;
+  oss << "img_" << std::setfill('0') << std::setw(2) << renderer_id << suffix << "." << format;
   return output_dir / oss.str();
 }
 
@@ -187,6 +187,38 @@ void SaveRenderResults(LUMICE_Server* server, const std::filesystem::path& outpu
     }
     if (ok) {
       std::cout << "Saved: " << filepath_u8 << " (" << renders[i].img_width << "x" << renders[i].img_height << ")\n";
+    } else {
+      std::cerr << "Error: failed to write " << filepath << "\n";
+    }
+  }
+}
+
+// task-336.4: additive per-raypath composite output. When `raypath_color` is
+// configured, LUMICE_GetCompositeResults yields one colored image per renderer
+// (written as img_XX_components.<fmt>); otherwise it returns an empty set
+// (out[0] sentinel) and nothing is written — the mono img_XX.<fmt> path above is
+// byte-for-byte unchanged (zero-regression).
+void SaveCompositeResults(LUMICE_Server* server, const std::filesystem::path& output_dir, std::string_view image_format,
+                          int jpeg_quality) {
+  LUMICE_RenderResult composites[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  if (LUMICE_GetCompositeResults(server, composites, LUMICE_MAX_RENDER_RESULTS) != LUMICE_OK) {
+    return;
+  }
+  for (int i = 0; composites[i].img_buffer != nullptr; i++) {
+    auto filepath = FormatImagePath(output_dir, composites[i].renderer_id, image_format, "_components");
+    auto filepath_u8 = filepath.u8string();
+    int ok = 0;
+    if (image_format == "png") {
+      int stride = composites[i].img_width * 3;
+      ok = stbi_write_png(filepath_u8.c_str(), composites[i].img_width, composites[i].img_height, 3,
+                          composites[i].img_buffer, stride);
+    } else {
+      ok = stbi_write_jpg(filepath_u8.c_str(), composites[i].img_width, composites[i].img_height, 3,
+                          composites[i].img_buffer, jpeg_quality);
+    }
+    if (ok) {
+      std::cout << "Saved: " << filepath_u8 << " (" << composites[i].img_width << "x" << composites[i].img_height
+                << ")\n";
     } else {
       std::cerr << "Error: failed to write " << filepath << "\n";
     }
@@ -590,6 +622,7 @@ int main(int argc, char** argv) {
   while (true) {
     std::this_thread::sleep_for(kPollInterval);
     SaveRenderResults(server, output_dir, image_format, jpeg_quality);
+    SaveCompositeResults(server, output_dir, image_format, jpeg_quality);
     PrintStats(server);
 
     // Completion via the explicit single-source lifecycle: COMPLETED = a finite
@@ -604,6 +637,7 @@ int main(int argc, char** argv) {
 
   // Final fetch after loop exit
   SaveRenderResults(server, output_dir, image_format, jpeg_quality);
+  SaveCompositeResults(server, output_dir, image_format, jpeg_quality);
   PrintStats(server);
 
   LUMICE_DestroyServer(server);

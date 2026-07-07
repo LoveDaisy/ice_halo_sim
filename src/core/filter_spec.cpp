@@ -151,20 +151,15 @@ RaypathOrbit BuildOrbit(const Crystal& crystal, const std::vector<IdType>& rp, u
   return orbit;
 }
 
+// task-339.1: None passes every ray AND now contributes a single whole-crystal
+// component bit (summand_idx=0) so the raypath-color engine's {layer, crystal}
+// ref resolves. The base-class MatchSummandMask default (mask = Match() ? 1 : 0)
+// already produces the right semantics — Match() is always true, so mask is
+// always 0b1 — so no override is needed here.
 class NoneSpec : public FilterSpec {
  public:
   bool Match(const RaySeg& /*ray*/, const RaypathRecorder& /*rec*/, const uint8_t* /*arena*/) const override {
     return true;
-  }
-  // None passes every ray but contributes no OR-summand (0 component bits), so
-  // the mask is always 0 even though the gate boolean is true. This mirrors
-  // BuildComponentTable's "NoneFilterParam -> 0 summands" counting rule.
-  uint64_t MatchSummandMask(const RaySeg& /*ray*/, const RaypathRecorder& /*rec*/, const uint8_t* /*arena*/,
-                            bool* out_matched) const override {
-    if (out_matched != nullptr) {
-      *out_matched = true;
-    }
-    return 0ull;
   }
 };
 

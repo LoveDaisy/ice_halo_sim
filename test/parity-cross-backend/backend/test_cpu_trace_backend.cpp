@@ -6,6 +6,7 @@
 #include <memory>
 #include <vector>
 
+#include "config/component_table.hpp"
 #include "config/crystal_config.hpp"
 #include "config/filter_config.hpp"
 #include "config/light_config.hpp"
@@ -535,6 +536,132 @@ TEST(CpuTraceBackend, GetLastBatchCrystalCountReturnsFinalLayerSettings) {
     backend.EndSession();
     // After EndSession the counter is reset by BeginSession on next open.
   }
+}
+
+// =============================================================================
+// task-339.1: NoneFilter whole-crystal component bit — every exit ray of a
+// None-filter crystal must carry that crystal's component bit; the bit
+// survives cross-layer hand-off unchanged (scrum-331 mechanism, exercised here
+// against a None-source bit).
+// =============================================================================
+TEST(CpuTraceBackend, NoneFilterCrystalTagsAllExitRaysWithWholeCrystalBit) {
+  // MakeSimpleScene's default `filter` argument is a default-constructed
+  // FilterConfig — action_ = kFilterIn, param_ = SimpleFilterParam{NoneFilterParam{}}.
+  // Single-layer, single-crystal → every exit ray belongs to (layer=0, crystal_id=0).
+  auto scene = MakeSimpleScene(/*max_hits=*/6, /*ms_layers=*/1);
+  auto render = MakeRenderConfig();
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  CpuTraceBackend backend;
+  backend.BeginSession(spec);
+
+  HostRayBatch host;
+  host.count = 1024;
+  host.crystal = nullptr;
+  auto handle = backend.TraceLayer(RootRaySource::FromHost(host));
+  ASSERT_NE(handle, nullptr);
+
+  std::vector<ExitRayRecord> exits;
+  size_t n = backend.ReadbackExitRays(exits);
+  ASSERT_EQ(n, exits.size());
+  ASSERT_GT(n, 0u) << "None-filter is pass-all; some exit rays must be emitted";
+
+  auto table = BuildComponentTable(scene);
+  auto bits = ComponentBitsFor(table, /*layer=*/0, /*crystal_id=*/0);
+  ASSERT_EQ(bits.size(), 1u) << "None-filter crystal exposes exactly one whole-crystal bit";
+  ASSERT_NE(bits[0], ComponentTable::kNoBit);
+  const uint64_t kWholeCrystalBit = (uint64_t{ 1 } << bits[0]);
+
+  for (size_t i = 0; i < exits.size(); i++) {
+    EXPECT_NE(exits[i].component_mask & kWholeCrystalBit, 0u)
+        << "exit ray " << i << " must carry the None crystal's whole-crystal bit; mask=" << exits[i].component_mask;
+    EXPECT_EQ(exits[i].ms_layer_idx, 0u);
+  }
+
+  backend.EndSession();
+}
+
+// Two-layer combined scene — L0 uses None, L1 uses a simple non-None filter
+// (EntryExit with both wildcards and min_len=1, always matches any non-empty
+// path). L1 exit rays must carry BOTH the L0 None bit (via scrum-331's cross-
+// layer OR-accumulation) and the L1 simple-filter bit. Continuation rays
+// therefore act as a targeted-sampling check that the whole-crystal bit rides
+// the shuffle+hand-off path together with any other bits produced downstream.
+TEST(CpuTraceBackend, NoneFilterBitSurvivesCrossLayerToNonNoneLayer) {
+  FilterConfig l1_filter{};
+  l1_filter.id_ = 0;
+  l1_filter.symmetry_ = FilterConfig::kSymNone;
+  l1_filter.action_ = FilterConfig::kFilterIn;
+  // EntryExitFilterParam with both wildcards + min_len=1 matches every path of
+  // length ≥ 1 — every exiting ray of L1 is filter-pass.
+  EntryExitFilterParam ee{};
+  ee.min_len_ = 1;
+  l1_filter.param_ = SimpleFilterParam{ ee };
+
+  // MakeSimpleScene applies the same filter to every layer, so build the
+  // 2-layer scene by hand: L0 = None, L1 = the simple EE above.
+  auto scene = MakeSimpleScene(/*max_hits=*/6, /*ms_layers=*/2);
+  scene.ms_[1].setting_.front().filter_ = l1_filter;
+  ASSERT_EQ(scene.ms_.size(), 2u);
+
+  auto render = MakeRenderConfig();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 7;
+
+  CpuTraceBackend backend;
+  backend.BeginSession(spec);
+
+  HostRayBatch host;
+  host.count = 1024;
+  host.crystal = nullptr;
+  auto h0 = backend.TraceLayer(RootRaySource::FromHost(host));
+  ASSERT_NE(h0, nullptr);
+
+  RecombineSpec rspec;
+  rspec.shuffle = true;
+  auto roots1 = backend.Recombine(std::move(h0), rspec);
+  ASSERT_TRUE(roots1.is_device);
+  ASSERT_GT(roots1.device.count, 0u) << "L0 must produce continuation rays for the cross-layer check";
+
+  auto h1 = backend.TraceLayer(roots1);
+  ASSERT_NE(h1, nullptr);
+
+  std::vector<ExitRayRecord> exits;
+  backend.ReadbackExitRays(exits);
+  ASSERT_GT(exits.size(), 0u);
+
+  auto table = BuildComponentTable(scene);
+  auto l0_bits = ComponentBitsFor(table, /*layer=*/0, /*crystal_id=*/0);
+  auto l1_bits = ComponentBitsFor(table, /*layer=*/1, /*crystal_id=*/0);
+  ASSERT_EQ(l0_bits.size(), 1u);
+  ASSERT_EQ(l1_bits.size(), 1u);
+  const uint64_t kL0Bit = (uint64_t{ 1 } << l0_bits[0]);
+  const uint64_t kL1Bit = (uint64_t{ 1 } << l1_bits[0]);
+  ASSERT_NE(kL0Bit, kL1Bit) << "layer key must yield distinct bits for L0-None vs L1-EE";
+
+  size_t l1_exits = 0;
+  for (const auto& e : exits) {
+    if (e.ms_layer_idx == 1) {
+      l1_exits++;
+      EXPECT_NE(e.component_mask & kL0Bit, 0u) << "L1 exit ray missing the L0 None bit — cross-layer carry broke";
+      EXPECT_NE(e.component_mask & kL1Bit, 0u) << "L1 exit ray missing its own layer's EE bit";
+    } else {
+      // L0 exit rays (emitted at L0 with ms_prob_ < 1) carry only the L0 bit.
+      EXPECT_NE(e.component_mask & kL0Bit, 0u) << "L0 exit ray missing the None bit";
+      EXPECT_EQ(e.component_mask & kL1Bit, 0u) << "L0 exit ray must not carry L1's bit";
+    }
+  }
+  EXPECT_GT(l1_exits, 0u) << "at least one L1 exit ray required to exercise the cross-layer bit carry";
+
+  backend.EndSession();
 }
 
 }  // namespace
