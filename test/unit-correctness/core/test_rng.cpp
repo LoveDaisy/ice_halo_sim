@@ -1535,5 +1535,41 @@ TEST(LatLutColatitudeTest, CommonRegimeAzimuthUnchanged) {
   }
 }
 
+// task-335: GetSharedLatLut is the single build-once cache that replaced the
+// per-thread single-entry cache whose most-recent-only policy thrashed when a
+// worker's crystal loop interleaved distinct latitude distributions. Lock its
+// contract: (1) same key -> same stable pointer (memoized, not rebuilt);
+// (2) distinct keys -> distinct entries; (3) content is bit-identical to a
+// direct BuildLatLut (memoization must not perturb the numeric result -> parity
+// preserved). Regression guard against reintroducing a thrashing / rebuilding cache.
+TEST(SharedLatLutTest, MemoizesAndMatchesBuildLatLut) {
+  using lumice::Distribution;
+  using lumice::DistributionType;
+
+  const Distribution plate{ DistributionType::kGaussian, 90.0f, 0.3f };
+  const Distribution column{ DistributionType::kGaussian, 0.0f, 0.3f };
+
+  // (1) Same key returns the same cached pointer across repeated (and interleaved) calls.
+  const lumice::LatLut* p1 = lumice::GetSharedLatLut(plate);
+  const lumice::LatLut* c1 = lumice::GetSharedLatLut(column);
+  const lumice::LatLut* p2 = lumice::GetSharedLatLut(plate);  // interleaved re-request
+  const lumice::LatLut* c2 = lumice::GetSharedLatLut(column);
+  ASSERT_NE(p1, nullptr);
+  ASSERT_NE(c1, nullptr);
+  EXPECT_EQ(p1, p2) << "same distribution must reuse the cached LUT (no rebuild)";
+  EXPECT_EQ(c1, c2) << "same distribution must reuse the cached LUT (no rebuild)";
+
+  // (2) Distinct keys map to distinct entries.
+  EXPECT_NE(p1, c1) << "distinct distributions must not collide to one entry";
+
+  // (3) Cached content is bit-identical to a fresh direct build (parity guarantee).
+  const lumice::LatLut fresh = lumice::BuildLatLut(plate);
+  for (uint32_t i = 0; i < lumice::LatLut::kNodes; ++i) {
+    EXPECT_EQ(p1->theta[i], fresh.theta[i]) << "theta[" << i << "]";
+    EXPECT_EQ(p1->cdf[i], fresh.cdf[i]) << "cdf[" << i << "]";
+    EXPECT_EQ(p1->flip_prob[i], fresh.flip_prob[i]) << "flip_prob[" << i << "]";
+  }
+}
+
 
 }  // namespace

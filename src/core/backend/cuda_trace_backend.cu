@@ -1994,13 +1994,15 @@ void CudaTraceBackend::Impl::UploadLatLut(const AxisDistribution& axis) {
   if (lat_path::SelectLatPath(axis).kind != lat_path::LatPathKind::kLutInverseCdf) {
     return;
   }
-  LatLut lut = BuildLatLut(axis.latitude_dist);
+  // task-335: shared build-once cache (was per-ci BuildLatLut = a full 65536-sample
+  // quadrature rebuilt on every crystal switch). Only the H2D copy stays per ci.
+  const LatLut* lut = GetSharedLatLut(axis.latitude_dist);
   constexpr size_t kBytes = static_cast<size_t>(LatLut::kNodes) * sizeof(float);
-  CheckCuda(cudaMemcpy(d_lat_lut_theta_, lut.theta.data(), kBytes, cudaMemcpyHostToDevice),
+  CheckCuda(cudaMemcpy(d_lat_lut_theta_, lut->theta.data(), kBytes, cudaMemcpyHostToDevice),
             "UploadLatLut cudaMemcpy d_lat_lut_theta");
-  CheckCuda(cudaMemcpy(d_lat_lut_cdf_, lut.cdf.data(), kBytes, cudaMemcpyHostToDevice),
+  CheckCuda(cudaMemcpy(d_lat_lut_cdf_, lut->cdf.data(), kBytes, cudaMemcpyHostToDevice),
             "UploadLatLut cudaMemcpy d_lat_lut_cdf");
-  CheckCuda(cudaMemcpy(d_lat_lut_flip_, lut.flip_prob.data(), kBytes, cudaMemcpyHostToDevice),
+  CheckCuda(cudaMemcpy(d_lat_lut_flip_, lut->flip_prob.data(), kBytes, cudaMemcpyHostToDevice),
             "UploadLatLut cudaMemcpy d_lat_lut_flip");
 }
 

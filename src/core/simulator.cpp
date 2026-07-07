@@ -26,8 +26,10 @@
 #include "core/buffer.hpp"
 #include "core/crystal.hpp"
 #include "core/filter_spec.hpp"
+#include "core/lat_lut.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
+#include "core/shared/lat_path_selection.hpp"
 #include "util/env_knobs.hpp"
 #include "util/illuminant.hpp"
 #include "util/logger.hpp"
@@ -163,9 +165,21 @@ Rotation BuildCrystalRotation(float azimuth_rad, float latitude_rad, float roll_
 void InitRay_rot(RandomNumberGenerator& rng, const AxisDistribution& crystal_axis,  // input
                  RayBuffer buffer_data[2]) {                                        // output
   float lon_lat_roll[3]{};
+  // Resolve the shared latitude LUT ONCE per crystal-batch: crystal_axis is
+  // constant across this buffer, so a per-ray cache lookup (the old CachedLatLut)
+  // is wasteful, and — worse — pulling the shared build-once cache on every ray
+  // would serialize all worker threads on its mutex. Resolve here, pass the
+  // pointer into the per-ray sampler (task-335). Only the LUT-routed families
+  // need it; full-sphere / legacy-gauss / no-random take their own sampler
+  // branch and ignore a nullptr.
+  const bool full_sphere = crystal_axis.IsFullSphereUniform();
+  const LatLut* lat_lut = nullptr;
+  if (!full_sphere && lat_path::SelectLatPath(crystal_axis).kind == lat_path::LatPathKind::kLutInverseCdf) {
+    lat_lut = GetSharedLatLut(crystal_axis.latitude_dist);
+  }
   for (auto& r : buffer_data[0]) {
-    if (!crystal_axis.IsFullSphereUniform()) {
-      RandomSampler::SampleSphericalPointsSph(crystal_axis, lon_lat_roll);
+    if (!full_sphere) {
+      RandomSampler::SampleSphericalPointsSph(crystal_axis, lon_lat_roll, 1, lat_lut);
     } else {
       // Randomly sample on sphere (with asin(u) Jacobian correction); roll sampled separately below.
       RandomSampler::SampleSphericalPointsSph(lon_lat_roll);

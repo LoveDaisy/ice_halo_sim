@@ -41,6 +41,24 @@ struct LatLut {
 // handled by their own paths and are not passed here.
 LatLut BuildLatLut(const Distribution& lat_dist);
 
+// Thread-safe, process-lifetime, build-once memoized accessor for the unified
+// area-measure latitude LUT, keyed on (type, mean, std). This is the SINGLE
+// source that amortizes BuildLatLut across all legacy-CPU worker threads and
+// both GPU backends (task-335). It replaced the per-thread single-entry cache
+// whose most-recent-only policy thrashed catastrophically when a worker's
+// crystal loop interleaved distinct latitude distributions (e.g. a plate
+// zenith~=90 alternating with a column zenith~=0): every crystal switch missed
+// and rebuilt the 65536-sample quadrature (measured 250000 builds / ~20x
+// slowdown on an 8-crystal mixed config).
+//
+// The returned pointer is stable (map elements are never erased) and the LatLut
+// is immutable once built, so callers may read it concurrently WITHOUT holding
+// any lock. The internal mutex only guards the lookup/insert, which happens once
+// per crystal-batch on CPU / once per ci on GPU — never per ray, so contention
+// is negligible. Intended for the LUT-routed families only (kGaussian / kUniform
+// / kZigzag / kLaplacian); callers gate on lat_path::SelectLatPath first.
+const LatLut* GetSharedLatLut(const Distribution& lat_dist);
+
 }  // namespace lumice
 
 #endif  // LM_LAT_LUT_H_
