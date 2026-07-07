@@ -392,24 +392,23 @@ bool ProjectLabelToScreen(const FaceLabel* label, const float rotation[16], cons
   // NDC.y is Y-up; screen is Y-down.
   *out_screen_y = image_pos_y + (1.0f - (ndc_y + 1.0f) * 0.5f) * image_height;
 
-  // Front-face test mirrors crystal_renderer.cpp:358-385 (dot(n_eye,p_eye)<0).
-  // `view_rot` = rotation(3x3) + translate (0,0,-dist); only the translation
-  // contributes beyond the rotated center.
-  //
-  // DO NOT modify this formula independently of crystal_renderer.cpp:358-385 —
-  // change crystal_renderer first, then sync here. The reason not to share a
-  // helper: crystal_renderer operates on edge midpoint + dual edge-face-normal,
-  // while face_number uses face center + single face normal. Correspondence
-  // is mechanically guarded by test
-  // `unit/face_number_cull_matches_crystal_renderer_formula`.
+  // Front-face test: dot(n_eye, p_eye) < 0 in the SAME model→eye frame the
+  // renderer uses for edge classification (crystal_renderer.cpp::Render). The
+  // eye rotation is composed via the shared CrystalRenderer::ComputeEyeRotation
+  // (V_rot · model), so the fixed camera tilt kCameraTiltDeg is applied here
+  // too — a bare `rotation` would sit in the pre-tilt model frame and mislabel
+  // faces near the horizon. Correspondence with the renderer's per-edge cull
+  // is mechanically guarded by unit/face_number_cull_matches_crystal_renderer_formula.
   const float* n = label->display_normal;
   float dist = CrystalRenderer::ComputeDist(zoom);
-  float px = rotation[0] * p[0] + rotation[4] * p[1] + rotation[8] * p[2];
-  float py = rotation[1] * p[0] + rotation[5] * p[1] + rotation[9] * p[2];
-  float pz = rotation[2] * p[0] + rotation[6] * p[1] + rotation[10] * p[2] - dist;
-  float nxe = rotation[0] * n[0] + rotation[4] * n[1] + rotation[8] * n[2];
-  float nye = rotation[1] * n[0] + rotation[5] * n[1] + rotation[9] * n[2];
-  float nze = rotation[2] * n[0] + rotation[6] * n[1] + rotation[10] * n[2];
+  float m_eye[16];
+  CrystalRenderer::ComputeEyeRotation(rotation, m_eye);
+  float px = m_eye[0] * p[0] + m_eye[4] * p[1] + m_eye[8] * p[2];
+  float py = m_eye[1] * p[0] + m_eye[5] * p[1] + m_eye[9] * p[2];
+  float pz = m_eye[2] * p[0] + m_eye[6] * p[1] + m_eye[10] * p[2] - dist;
+  float nxe = m_eye[0] * n[0] + m_eye[4] * n[1] + m_eye[8] * n[2];
+  float nye = m_eye[1] * n[0] + m_eye[5] * n[1] + m_eye[9] * n[2];
+  float nze = m_eye[2] * n[0] + m_eye[6] * n[1] + m_eye[10] * n[2];
   *out_front_facing = (nxe * px + nye * py + nze * pz) < 0.0f;
 
   return true;

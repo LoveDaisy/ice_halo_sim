@@ -39,6 +39,14 @@ class CrystalRenderer {
   // coordinates; changing this function must keep Render's internal use in sync.
   static void ComputeMvp(const float rotation[16], float zoom, int width, int height, float out_mvp[16]);
 
+  // Compose the model → eye rotation used for eye-space front/back classification.
+  // out_m_eye = V_rot(Rx(+kCameraTiltDeg)) · model_rotation (3×3 rotation part;
+  // translation left at 0, homogeneous slot at 1). Both Render() (edge cull)
+  // and face_number_overlay's ProjectLabelToScreen must use this same matrix —
+  // using the raw model_rotation drops the fixed camera tilt and mislabels
+  // faces near the horizon.
+  static void ComputeEyeRotation(const float model_rotation[16], float out_m_eye[16]);
+
   // Get the rendered texture ID for ImGui::Image()
   uintptr_t GetTextureId() const;
 

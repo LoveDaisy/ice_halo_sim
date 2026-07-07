@@ -29,24 +29,48 @@ void RotX180(float m[16]) {
   m[15] = 1.0f;
 }
 
-// Reference front-face test mirroring crystal_renderer.cpp:358-385 verbatim.
-// Adapted from the edge-midpoint + dual edge-face-normal path to the
-// face-center + single face-normal case (see F7 notes in plan.md). Formula is
-// structurally identical: p_eye = rotation_3x3 * center + (0, 0, -dist);
-// n_eye = rotation_3x3 * normal; front = dot(n_eye, p_eye) < 0.
+// Reference front-face test — INDEPENDENTLY re-derives the same eye-space
+// front/back formula the renderer uses, so this test mechanically guards
+// cross-file drift instead of being a tautology on the production helper.
 //
-// DO NOT modify this reference formula independently of
-// crystal_renderer.cpp:358-385 — change crystal_renderer first, then sync
-// here. The test face_number_cull_matches_crystal_renderer_formula uses this
-// to mechanically guard cross-file formula drift.
+// Formula: m_eye = Rx(+kCameraTiltDeg) · rotation; p_eye = m_eye · center +
+// (0, 0, -dist); n_eye = m_eye · normal; front = dot(n_eye, p_eye) < 0.
+//
+// The Rx(+kCameraTiltDeg) 3×3 components are hand-written here (NOT via
+// CrystalRenderer::ComputeEyeRotation) so a wrong tilt sign / missing V_rot /
+// swapped composition order in the production side is caught by
+// face_number_cull_matches_crystal_renderer_formula rather than silently
+// mirrored.
 bool ReferenceFrontFacing(const float rotation[16], float zoom, const float center[3], const float normal[3]) {
+  const float angle = lumice::gui::kCameraTiltDeg * lumice::gui::CrystalRenderer::kDeg2Rad;
+  const float c = std::cos(angle);
+  const float s = std::sin(angle);
+  // V_rot = Rx(+kCameraTiltDeg), column-major 3×3 (padded to 4×4 semantics).
+  // Row 0: (1, 0, 0), Row 1: (0, c, -s), Row 2: (0, s, c).
+  const float v_rot[9] = {
+    1.0f, 0.0f, 0.0f,  // col 0
+    0.0f, c,    s,     // col 1
+    0.0f, -s,   c,     // col 2
+  };
+  // m_eye_3x3 = v_rot * rotation_3x3, column-major.
+  float m_eye[9] = {};
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      float sum = 0.0f;
+      for (int k = 0; k < 3; ++k) {
+        // rotation is column-major 4×4 so column k lives at [k*4 + row].
+        sum += v_rot[i + k * 3] * rotation[k + j * 4];
+      }
+      m_eye[i + j * 3] = sum;
+    }
+  }
   float dist = lumice::gui::CrystalRenderer::ComputeDist(zoom);
-  float px = rotation[0] * center[0] + rotation[4] * center[1] + rotation[8] * center[2];
-  float py = rotation[1] * center[0] + rotation[5] * center[1] + rotation[9] * center[2];
-  float pz = rotation[2] * center[0] + rotation[6] * center[1] + rotation[10] * center[2] - dist;
-  float nx = rotation[0] * normal[0] + rotation[4] * normal[1] + rotation[8] * normal[2];
-  float ny = rotation[1] * normal[0] + rotation[5] * normal[1] + rotation[9] * normal[2];
-  float nz = rotation[2] * normal[0] + rotation[6] * normal[1] + rotation[10] * normal[2];
+  float px = m_eye[0] * center[0] + m_eye[3] * center[1] + m_eye[6] * center[2];
+  float py = m_eye[1] * center[0] + m_eye[4] * center[1] + m_eye[7] * center[2];
+  float pz = m_eye[2] * center[0] + m_eye[5] * center[1] + m_eye[8] * center[2] - dist;
+  float nx = m_eye[0] * normal[0] + m_eye[3] * normal[1] + m_eye[6] * normal[2];
+  float ny = m_eye[1] * normal[0] + m_eye[4] * normal[1] + m_eye[7] * normal[2];
+  float nz = m_eye[2] * normal[0] + m_eye[5] * normal[1] + m_eye[8] * normal[2];
   return (nx * px + ny * py + nz * pz) < 0.0f;
 }
 
@@ -453,10 +477,13 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
   }
 
   // Cross-file formula parity: ProjectLabelToScreen's front-face test must
-  // match the reference formula lifted from crystal_renderer.cpp:358-385
-  // (see ReferenceFrontFacing above). Three fixed input vectors spanning
-  // identity / off-axis / 180°-flipped configurations; **no randomness** to
-  // avoid CI flakiness.
+  // match the reference formula composed from CrystalRenderer::ComputeEyeRotation
+  // (see ReferenceFrontFacing above — independently re-derived, not a direct
+  // call, so the test guards drift rather than mirroring it). Four fixed
+  // cases spanning identity / off-axis / 180°-flipped / tilt-sensitive
+  // configurations; **no randomness** to avoid CI flakiness. Each case also
+  // carries an explicit `expected_front` so a bug that drops V_rot on BOTH
+  // sides is caught — pure ref==prod comparison alone would be a tautology.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "unit", "face_number_cull_matches_crystal_renderer_formula");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -468,36 +495,43 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
         float zoom;
         float center[3];
         float normal[3];
+        bool expected_front;
       };
-      std::array<Case, 3> cases{};
-      // Case 1: identity, center at origin, +Z normal → both say front.
+      std::array<Case, 4> cases{};
+      // Case 1: identity, center at origin, +Z normal → n_eye rotated by +15°
+      // pitches slightly downward but +Z dominance survives; still front.
       Identity4x4(cases[0].rot);
       cases[0].zoom = 2.0f;
-      cases[0].center[0] = 0.0f;
-      cases[0].center[1] = 0.0f;
       cases[0].center[2] = 0.0f;
-      cases[0].normal[0] = 0.0f;
-      cases[0].normal[1] = 0.0f;
       cases[0].normal[2] = 1.0f;
-      // Case 2: identity, off-axis center + tilted normal → both say back
-      // (matches the off_axis_back_facing test setup).
+      cases[0].expected_front = true;
+      // Case 2: identity, off-axis center + tilted normal → back
+      // (matches the off_axis_back_facing test setup; V_rot doesn't flip it
+      // because the +Y tilt of both p and n is small relative to the X terms).
       Identity4x4(cases[1].rot);
       cases[1].zoom = 0.5f;
       cases[1].center[0] = 0.8f;
-      cases[1].center[1] = 0.0f;
-      cases[1].center[2] = 0.0f;
       cases[1].normal[0] = 3.0f;
-      cases[1].normal[1] = 0.0f;
       cases[1].normal[2] = 1.0f;
-      // Case 3: X-180°, +Z normal → both say back.
+      cases[1].expected_front = false;
+      // Case 3: X-180°, +Z normal at origin → back.
       RotX180(cases[2].rot);
       cases[2].zoom = 2.0f;
-      cases[2].center[0] = 0.0f;
-      cases[2].center[1] = 0.0f;
-      cases[2].center[2] = 0.0f;
-      cases[2].normal[0] = 0.0f;
-      cases[2].normal[1] = 0.0f;
       cases[2].normal[2] = 1.0f;
+      cases[2].expected_front = false;
+      // Case 4 (tilt-sensitive): identity rotation, normal at 80° above the
+      // "back" hemisphere (0, sin80°, -cos80°) ≈ (0, 0.985, -0.174). Without
+      // V_rot, n_eye = normal, p_eye = (0,0,-dist), dot = +0.174·dist > 0 → back.
+      // With V_rot (Rx(+15°)), the normal tilts to θ=80°+15°=95° from +Z, giving
+      // a slightly forward-facing z-component, so dot flips to < 0 → front.
+      // A production regression that drops V_rot flips only prod's output;
+      // the reference (still composing V_rot) stays FRONT; IM_CHECK_EQ fires.
+      Identity4x4(cases[3].rot);
+      cases[3].zoom = 2.0f;
+      constexpr float kTiltCase4 = 80.0f * lumice::gui::CrystalRenderer::kDeg2Rad;
+      cases[3].normal[1] = std::sin(kTiltCase4);
+      cases[3].normal[2] = -std::cos(kTiltCase4);
+      cases[3].expected_front = true;
 
       for (const auto& c : cases) {
         FaceLabel label{};
@@ -513,6 +547,7 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
             ProjectLabelToScreen(&label, c.rot, mvp, c.zoom, 0.0f, 0.0f, 320.0f, 320.0f, &sx, &sy, &front_under_test));
         bool front_reference = ReferenceFrontFacing(c.rot, c.zoom, c.center, c.normal);
         IM_CHECK_EQ(front_under_test, front_reference);
+        IM_CHECK_EQ(front_under_test, c.expected_front);
       }
     };
   }
