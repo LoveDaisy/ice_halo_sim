@@ -27,7 +27,12 @@ from test.e2e.image_utils import HAS_PILLOW
 from test.e2e.runner import get_project_root
 
 if HAS_PILLOW:
-    from test.e2e.image_utils import compute_mse, compute_psnr, get_dimensions
+    from test.e2e.image_utils import (
+        classify_pixels_by_color_direction,
+        compute_mse,
+        compute_psnr,
+        get_dimensions,
+    )
 
 CONFIGS_DIR = get_project_root() / "test" / "e2e" / "configs"
 REFERENCES_DIR = get_project_root() / "test" / "e2e-correctness" / "references"
@@ -40,6 +45,52 @@ EXPECTED_DIMS = (512, 256)
 
 # See module docstring for calibration.
 PSNR_THRESHOLD = 20.0
+
+# ------ task-339.5 multi-layer full-semantics fixture (see class below) ------
+MULTI_LAYER_CONFIG = CONFIGS_DIR / "raypath_color_multi_layer.json"
+MULTI_LAYER_REFERENCE = REFERENCES_DIR / "raypath_color_multi_layer_components.jpg"
+
+# PSNR calibration (macOS host, 3 fresh CLI runs vs reference):
+#   Run 1/2/3 = 26.44 / 26.48 / 26.48 dB.
+#   min - 3 dB, floored to 0.5 dB -> 23.0 dB. Extra cross-platform margin
+#   (reference on macOS, CI on Linux) matching the ~1 dB safety used for
+#   `test_composite_output_and_psnr` -> 22.0 dB. A structural regression
+#   (wrong dominant winner, per-class lane wiring broken) drops PSNR far
+#   below 22 dB and the gate still fires.
+MULTI_LAYER_PSNR_THRESHOLD = 22.0
+
+# task-339.5 color-class list order in raypath_color_multi_layer.json.
+# Order matters: dominant-mode tie-break is list-first, and the classifier
+# receives colors in the same order so per_class[i] refers to class i.
+MULTI_LAYER_CLASS_COLORS = [
+    (1.0, 0.0, 1.0),   # 0: MAGENTA — cross-layer AND (case D)
+    (1.0, 0.55, 0.0),  # 1: ORANGE  — L1 crystal 3 none-filter (case E)
+    (1.0, 0.0, 0.0),   # 2: RED     — L0 C1 F3 single class (case A)
+    (0.0, 1.0, 0.0),   # 3: GREEN   — L0 C1 F4 OR-union of two summands (case B)
+]
+
+# task-339.5 per-class minimum pixel count. Calibration below matches
+# `classify_pixels_by_color_direction` with cos_similarity_tol=0.90.
+# Observed per-class counts on the reference run (macOS):
+#   MAGENTA/ORANGE/RED/GREEN = 10452 / 56638 / 10863 / 20761.
+# Threshold set to ~1/4 of the observed minimum (10452 -> 2500) so each
+# class is comfortably above zero (no wiring regression) and above MC noise
+# floor, while tolerating cross-platform / MC-seed variation.
+MULTI_LAYER_MIN_PIXELS_PER_CLASS = 2500
+
+# task-339.5 unclassified-pixel cap. Observed unc=2173 (2% of total) at
+# tol=0.90. Cap at 8% of total pixels (~10500 for 512x256) — a real
+# phantom-hue regression (compositor mode leaking to additive-like mix,
+# or class colors accidentally quantized off-direction) would blow past
+# this floor by an order of magnitude.
+MULTI_LAYER_MAX_UNCLASSIFIED_FRAC = 0.08
+
+# task-339.5 classifier cosine tolerance. See
+# `classify_pixels_by_color_direction` docstring — 0.90 tolerates the
+# chroma bleed introduced by JPEG encoding at halo boundaries. Above 0.95
+# the unclassified count grows into the 20%+ range (compression noise,
+# not a real defect).
+MULTI_LAYER_COS_TOL = 0.90
 
 
 class TestRaypathColor(LumiceTestCase):
@@ -88,4 +139,112 @@ class TestRaypathColor(LumiceTestCase):
                 psnr,
                 PSNR_THRESHOLD,
                 f"composite PSNR {psnr:.1f} dB < threshold {PSNR_THRESHOLD} dB",
+            )
+
+
+class TestRaypathColorMultiLayer(LumiceTestCase):
+    """CLI end-to-end for the 2-MS-layer full-semantics composite (task-339.5).
+
+    Fixture `raypath_color_multi_layer.json` is the scrum-raypath-color-engine
+    capstone regression: a 2-MS-layer scene with 4 color classes covering
+    all §4.7 case rows the engine supports today —
+      A single class (RED, `{L0,C1,F3}`)
+      B OR-union   (GREEN, `{L0,C1,F4}` summands 0+1)
+      C overlap    (ORANGE overlaps RED / GREEN via shared L1-C3 rays;
+                    dominant argmax + list-first tie-break decides)
+      D cross-layer AND (MAGENTA, `{L0,C1,F2}` ∧ `{L1,C2,F5}`)
+      E none-filter whole crystal (ORANGE, `{L1,C3}`)
+
+    Design constraint (learned during Step 2 iteration): the three L0
+    entries use disjoint filters (F2 / F3 / F4) so MAGENTA / RED / GREEN
+    ray-sets are pairwise disjoint. If they were subset-of-superset, the
+    dominant `>` argmax with list-first tie-break would swallow the more
+    specific class (empirically observed: MAGENTA with `{L0,C1,F1}` ∧
+    `{L1,C2,F5}` alongside RED = `{L0,C1,F1}` produced ~20 magenta pixels
+    total — nearly invisible). Crystal 2 is a plate (zenith gauss 0/1)
+    and Crystal 3 a rotating column so C2 and C3 halo footprints are
+    spatially distinct, letting ORANGE win the 22° halo cleanly.
+    """
+
+    def test_multi_layer_all_semantics(self):
+        """Multi-layer raypath_color config produces a well-formed composite
+        with all four classes visibly present and no phantom-hue regression.
+        """
+        if not MULTI_LAYER_CONFIG.exists():
+            self.skipTest(f"{MULTI_LAYER_CONFIG} not found")
+
+        result = self.run_lumice(["-f", str(MULTI_LAYER_CONFIG), "-o", self.output_dir])
+        self.assertEqual(
+            result.returncode, 0, f"Lumice failed:\n{result.stderr}"
+        )
+
+        composite = Path(self.output_dir) / "img_01_components.jpg"
+        mono = Path(self.output_dir) / "img_01.jpg"
+
+        # (a) Composite + mono produced (additive delivery, not replacement).
+        self.assertTrue(
+            composite.exists(), f"composite image not produced: {composite}"
+        )
+        self.assertGreater(
+            composite.stat().st_size, 0, f"{composite} is empty"
+        )
+        self.assertTrue(mono.exists(), f"mono image not produced: {mono}")
+        self.assertGreater(mono.stat().st_size, 0, f"{mono} is empty")
+
+        if HAS_PILLOW:
+            # (b) Composite resolution matches config.
+            self.assertEqual(
+                get_dimensions(str(composite)),
+                EXPECTED_DIMS,
+                "multi-layer composite resolution mismatch",
+            )
+
+            # (c) PSNR(composite, reference) >= threshold.
+            self.assertTrue(
+                MULTI_LAYER_REFERENCE.exists(),
+                f"multi-layer reference missing: {MULTI_LAYER_REFERENCE}",
+            )
+            mse = compute_mse(str(composite), str(MULTI_LAYER_REFERENCE))
+            psnr = compute_psnr(mse)
+            self.assertGreaterEqual(
+                psnr,
+                MULTI_LAYER_PSNR_THRESHOLD,
+                f"multi-layer composite PSNR {psnr:.1f} dB < "
+                f"threshold {MULTI_LAYER_PSNR_THRESHOLD} dB",
+            )
+
+            # (d) All four classes present in the composite output.
+            # Any class dropping to zero flags a per-class lane wiring
+            # regression (e.g. none-filter bit not carrying forward, AND
+            # predicate rejecting all rays, entry-gate mapping wrong).
+            result = classify_pixels_by_color_direction(
+                str(composite),
+                MULTI_LAYER_CLASS_COLORS,
+                cos_similarity_tol=MULTI_LAYER_COS_TOL,
+            )
+            class_labels = ["MAGENTA", "ORANGE", "RED", "GREEN"]
+            for idx, (label, count) in enumerate(
+                zip(class_labels, result["per_class"])
+            ):
+                self.assertGreaterEqual(
+                    count,
+                    MULTI_LAYER_MIN_PIXELS_PER_CLASS,
+                    f"class {idx} ({label}) has only {count} lit pixels, "
+                    f"below floor {MULTI_LAYER_MIN_PIXELS_PER_CLASS}; "
+                    f"predicate wiring likely regressed",
+                )
+
+            # (e) Phantom-hue floor: unclassified lit pixels must stay
+            # under the cap. Blowing past it signals the compositor
+            # switched modes silently (e.g. dominant -> additive) or a
+            # class color got quantized off-direction.
+            unclassified_cap = int(
+                result["total"] * MULTI_LAYER_MAX_UNCLASSIFIED_FRAC
+            )
+            self.assertLessEqual(
+                result["unclassified"],
+                unclassified_cap,
+                f"{result['unclassified']} unclassified lit pixels exceed "
+                f"cap {unclassified_cap} ({MULTI_LAYER_MAX_UNCLASSIFIED_FRAC:.0%} "
+                f"of {result['total']}); possible phantom-hue regression",
             )

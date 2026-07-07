@@ -1,0 +1,85 @@
+{
+  "crystal": [
+    {
+      "id": 1,
+      "type": "prism",
+      "shape": { "height": 1.2 },
+      "axis": {
+        "zenith":  { "type": "uniform", "mean": 90, "std": 360 },
+        "azimuth": { "type": "uniform", "mean": 0,  "std": 360 }
+      }
+    },
+    {
+      "id": 2,
+      "type": "prism",
+      "shape": { "height": 0.5 },
+      "axis": {
+        "zenith":  { "type": "gauss",   "mean": 0,  "std": 1 },
+        "azimuth": { "type": "uniform", "mean": 0,  "std": 360 },
+        "roll":    { "type": "uniform", "mean": 0,  "std": 360 }
+      }
+    },
+    {
+      "id": 3,
+      "type": "prism",
+      "shape": { "height": 2.0 },
+      "axis": {
+        "zenith":  { "type": "uniform", "mean": 90, "std": 360 },
+        "azimuth": { "type": "uniform", "mean": 0,  "std": 360 }
+      }
+    }
+  ],
+  "filter": [
+    { "id": 2, "type": "entry_exit", "min_len": 2, "max_len": 2, "action": "filter_in" },
+    { "id": 3, "type": "entry_exit", "min_len": 3, "action": "filter_in" },
+    { "id": 4, "type": "complex", "composition": [[2], [3]], "action": "filter_in" },
+    { "id": 5, "type": "entry_exit", "min_len": 1, "action": "filter_in" }
+  ],
+  "scene": {
+    "light_source": {
+      "type": "sun",
+      "altitude": 20.0,
+      "spectrum": "D65"
+    },
+    "ray_num": 4000000,
+    "max_hits": 10,
+    "scattering": [
+      {
+        "prob": 0.9,
+        "entries": [
+          { "crystal": 1, "proportion": 30, "filter": 2 },
+          { "crystal": 1, "proportion": 10, "filter": 3 },
+          { "crystal": 1, "proportion": 10, "filter": 4 }
+        ]
+      },
+      {
+        "prob": 0.0,
+        "entries": [
+          { "crystal": 2, "proportion": 10, "filter": 5 },
+          { "crystal": 3, "proportion": 10 }
+        ]
+      }
+    ]
+  },
+  "raypath_color": [
+    { "color": [1.0, 0.0, 1.0], "combine": "all", "match": [
+        { "layer": 0, "crystal": 1, "filter": 2 },
+        { "layer": 1, "crystal": 2, "filter": 5 }
+    ] },
+    { "color": [1.0, 0.55, 0.0], "match": [ { "layer": 1, "crystal": 3 } ] },
+    { "color": [1.0, 0.0, 0.0], "match": [ { "layer": 0, "crystal": 1, "filter": 3 } ] },
+    { "color": [0.0, 1.0, 0.0], "combine": "any", "match": [
+        { "layer": 0, "crystal": 1, "filter": 4, "summand": 0 },
+        { "layer": 0, "crystal": 1, "filter": 4, "summand": 1 }
+    ] }
+  ],
+  "render": [
+    {
+      "id": 1,
+      "lens": { "type": "dual_fisheye_equal_area", "fov": 180 },
+      "resolution": [512, 256],
+      "view": { "elevation": 0 },
+      "visible": "full"
+    }
+  ]
+}
