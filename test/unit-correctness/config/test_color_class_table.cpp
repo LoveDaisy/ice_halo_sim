@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include <bitset>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -169,7 +170,7 @@ TEST(BuildColorClassTable, CrossLayerAllBitsAreDistinct) {
   ASSERT_EQ(ct.classes_.size(), 1u);
   EXPECT_EQ(ct.classes_[0].combine_, ColorClassCombine::kAll);
   const uint64_t bits = ct.classes_[0].member_bits_;
-  EXPECT_EQ(__builtin_popcountll(bits), 2);
+  EXPECT_EQ(std::bitset<64>(bits).count(), 2u);  // MSVC-safe: no __builtin_popcountll
   EXPECT_EQ(bits, (static_cast<uint64_t>(1) << 0) | (static_cast<uint64_t>(1) << 1));
 }
 
