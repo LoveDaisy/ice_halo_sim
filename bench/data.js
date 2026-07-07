@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783410483962,
+  "lastUpdate": 1783410485638,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9620,50 +9620,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "c88a590f41460f51142553918e19cd6da61b6604",
-          "message": "Merge pull request #78 from LoveDaisy/feat/gui_polish\n\nfeat(gui): polish overlay labels and orthographic lens behavior",
-          "timestamp": "2026-04-27T14:49:09+08:00",
-          "tree_id": "49dcf8c39bac9be1da8ffe00b0684430d03fbb09",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/c88a590f41460f51142553918e19cd6da61b6604"
-        },
-        "date": 1777272881422,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 92.8,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 76.5,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 70.2,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 63,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "6878c2d8eca3eb1fcb40efdb7b81fc896a559534",
           "message": "Merge pull request #79 from LoveDaisy/feat/gui_polish\n\nfeat(gui): aspect ratio clamp warning + overlay label sampler refactor",
           "timestamp": "2026-04-28T17:49:24+08:00",
@@ -14003,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 94.3,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e5c2ab33efb98c2c0d0100e30facccc50e2782ab",
+          "message": "Merge pull request #180 from LoveDaisy/fix/modal-edit-state-leak\n\nfix(gui): stop edit-modal state leaking across crystal entries",
+          "timestamp": "2026-07-07T15:41:11+08:00",
+          "tree_id": "adc13365d8c0abdaf221ec7ba1ae23d7fae8414f",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/e5c2ab33efb98c2c0d0100e30facccc50e2782ab"
+        },
+        "date": 1783410485310,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 89.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 95.4,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 93.5,
             "unit": "%"
           }
         ]
