@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783395719201,
+  "lastUpdate": 1783395721406,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9620,50 +9620,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "cd819bf654497d43842d70955ab1150f677de6a5",
-          "message": "Merge pull request #77 from LoveDaisy/dev/misc\n\nchore: misc cleanup and version bump to 4.2.2",
-          "timestamp": "2026-04-26T23:44:03+08:00",
-          "tree_id": "b57679d8ec11db4aec618fac5ac9a2708914a4ef",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/cd819bf654497d43842d70955ab1150f677de6a5"
-        },
-        "date": 1777218494834,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 72.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 75.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 59.4,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 72.3,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "c88a590f41460f51142553918e19cd6da61b6604",
           "message": "Merge pull request #78 from LoveDaisy/feat/gui_polish\n\nfeat(gui): polish overlay labels and orthographic lens behavior",
           "timestamp": "2026-04-27T14:49:09+08:00",
@@ -14003,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 89.2,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3adb02485be2774b81a838d29d3e57f99be9cb2a",
+          "message": "Merge pull request #179 from LoveDaisy/fix/crystal-preview-thumbnail\n\nfix(gui): correct crystal-preview face labels + reset pose on card switch (task-337)",
+          "timestamp": "2026-07-07T11:36:30+08:00",
+          "tree_id": "29de997cfb09809b633bfdc7d7d31c581fc1679d",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/3adb02485be2774b81a838d29d3e57f99be9cb2a"
+        },
+        "date": 1783395720685,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 86.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 98.5,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 94.3,
             "unit": "%"
           }
         ]
