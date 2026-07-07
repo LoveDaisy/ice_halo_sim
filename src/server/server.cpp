@@ -84,6 +84,14 @@ class ServerImpl {
   bool IsIdle();
   void SetPreferredBackend(BackendKind backend);
 
+  // task-342.2: display-time update of the committed color classes without restarting the
+  // simulation. `class_count` must equal the currently active class count (mismatch =
+  // InvalidConfig: caller must re-commit). `z_order` is optional (nullptr = leave unchanged);
+  // when non-null, z_order must be a permutation of [0, class_count) where z_order[i] is the
+  // new drawing rank of class i (sorted ascending by the compositor). Runs under consumer_mutex_ only — never touches
+  // Stop/Start/scene_generation_/committed_epoch_/consumers_/scene_mutex_.
+  Error SetRaypathColors(const ColorClassDisplay* classes, int class_count, const int* z_order, CompositeMode mode);
+
  private:
   // task-268.7: single-engine orchestration — server now runs exactly one
   // Simulator. The legacy kDefaultSimulatorCnt = PhysicalCoreCount() was removed
@@ -1266,6 +1274,60 @@ void ServerImpl::SetPreferredBackend(BackendKind backend) {
 }
 
 
+// =============== ServerImpl::SetRaypathColors ===============
+// Display-time update of the color-class appearance without touching the simulation
+// lifecycle. Runs entirely under consumer_mutex_: color/visible/solo/z_order are appearance
+// fields (NeedsRebuild ignores them, so a full-rebuild is neither needed nor useful);
+// active_composite_mode_ is a per-frame plumbing input read under the same lock by
+// DoSnapshot. NO Stop/Start, NO scene_generation_/committed_epoch_ bump, NO consumers_
+// rebuild, NO scene_mutex_. AC2/AC3 requirement.
+Error ServerImpl::SetRaypathColors(const ColorClassDisplay* classes, int class_count, const int* z_order,
+                                   CompositeMode mode) {
+  if (class_count < 0 || (class_count > 0 && classes == nullptr)) {
+    return Error::InvalidValue("SetRaypathColors", "classes is null or class_count is negative");
+  }
+  std::lock_guard<TicketMutex> lock(consumer_mutex_);
+  if (static_cast<size_t>(class_count) != active_class_table_.classes_.size()) {
+    return Error::InvalidConfig("SetRaypathColors: class_count (" + std::to_string(class_count) +
+                                ") does not match active color-class count (" +
+                                std::to_string(active_class_table_.classes_.size()) +
+                                "); re-commit the config to change member structure");
+  }
+  // When supplied, z_order must be a permutation of [0, class_count): each z_order[i] is the
+  // new drawing priority (rank) of class i, and the ranks are the integers 0..class_count-1 in
+  // some order. Reject duplicates / out-of-range (e.g. {0,0,1}) as an all-or-nothing failure
+  // before mutating any state (plan §3.2.3, AC3).
+  if (z_order != nullptr) {
+    std::vector<bool> seen(static_cast<size_t>(class_count), false);
+    for (int k = 0; k < class_count; k++) {
+      if (z_order[k] < 0 || z_order[k] >= class_count || seen[static_cast<size_t>(z_order[k])]) {
+        return Error::InvalidConfig("SetRaypathColors: z_order must be a permutation of [0, class_count)");
+      }
+      seen[static_cast<size_t>(z_order[k])] = true;
+    }
+  }
+  // Apply appearance fields.
+  for (int i = 0; i < class_count; i++) {
+    auto& cls = active_class_table_.classes_[static_cast<size_t>(i)];
+    cls.color_[0] = classes[i].color_[0];
+    cls.color_[1] = classes[i].color_[1];
+    cls.color_[2] = classes[i].color_[2];
+    cls.visible_ = classes[i].visible_;
+    cls.solo_ = classes[i].solo_;
+    if (z_order != nullptr) {
+      cls.z_order_ = z_order[i];
+    }
+  }
+  active_composite_mode_ = mode;
+  // Force the next DoSnapshot to re-run the compositor even without new ray data — this is
+  // the mechanism that makes "change color and immediately see the new pixels" work when
+  // the accumulator is at steady state. snapshot_dirty_'s existing "has anything changed
+  // since last snapshot" semantics remain valid (a display-time change IS such a change).
+  snapshot_dirty_ = true;
+  return Error::Success();
+}
+
+
 // =============== ServerImpl::SetLogLevel ===============
 void ServerImpl::SetLogLevel(LogLevel level) {
   logger_.SetLevel(level);
@@ -1422,6 +1484,14 @@ uint64_t Server::CommittedEpoch() const {
 
 bool Server::IsIdle() const {
   return GetStatus() == ServerStatus::kIdle;
+}
+
+Error Server::SetRaypathColors(const ColorClassDisplay* classes, int class_count, const int* z_order,
+                               CompositeMode mode) {
+  if (!impl_) {
+    return Error::ServerNotReady("Server is terminated");
+  }
+  return impl_->SetRaypathColors(classes, class_count, z_order, mode);
 }
 
 }  // namespace lumice

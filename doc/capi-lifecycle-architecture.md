@@ -294,6 +294,7 @@ false and no snapshot is ever prepared). It still does **not** call
 | `LUMICE_GetRawXyzResults` | Yes | same as above | GUI polling thread uses this path |
 | `LUMICE_GetStatsResults` | Yes | same as above | Triggers DoSnapshot |
 | `LUMICE_GetCachedStats` | Yes | `snapshot_mutex_` | Read-only cache; no DoSnapshot |
+| `LUMICE_SetRaypathColors` | Yes* | `consumer_mutex_` (TicketMutex) | Display-time only: updates color/visible/solo/z-order/mode on the active class table, sets `snapshot_dirty_`. Never touches Stop/Start/`scene_generation_`/`committed_epoch_`/`consumers_`. *Safe vs `Get*Results`, but NOT vs concurrent `CommitConfig*` (same single-owner rule; `CommitConfig` writes `active_class_table_` partly outside `consumer_mutex_`, a pre-existing race — task-342.2 progress.md risk 3). |
 | `LUMICE_GetCrystalMesh` | Yes | — | No shared state (`server` param unused) |
 | `LUMICE_ValidateRaypathText` | Yes | — | Pure function |
 | `LUMICE_IsLegalFace` | Yes | — | Pure function |
@@ -440,6 +441,32 @@ produce **identical** `CommitConfig(json)` calls. The struct path exists to
 eliminate JSON string serialization overhead in the GUI's 50ms commit cycle
 (see task-52.2). The reuse flag (`out_reused`) lets the GUI detect whether
 buffer pointers remain valid.
+
+`raypath_color[]` (Design 2 per-raypath color classes, task-342.2) rides this
+same struct→JSON→`CommitConfig` path — there is **no** separate struct→core
+translation for color. `ConfigToJson` emits `raypath_color` in the exact wire
+shape core's `RaypathColorConfig::from_json` reads, so the JSON-string commit
+and the struct commit produce byte-identical composites for the same config
+(verified by `RaypathColorApi.JsonAndStructCommitPixelEquivalent`, AC1). A
+zero `raypath_color_count` omits the key entirely, keeping the mono JSON shape
+byte-for-byte unchanged (AC4).
+
+### §6.4 Display-time color setter (`LUMICE_SetRaypathColors`)
+
+Changing **member structure** (a class's `match[]` refs / `combine`) is a
+re-simulation event and must go through `CommitConfig*` (dirty → rebuild lanes →
+re-accumulate). Changing only **appearance** (per-class RGB, `visible`, `solo`,
+z-order, composite mode) does NOT need re-simulation: `LUMICE_SetRaypathColors`
+mutates the active class table in place under `consumer_mutex_`, sets
+`snapshot_dirty_`, and the next `Get*Results` re-composites the SAME accumulated
+per-class Y-lanes. It never advances the epoch or clears the accumulator (AC2).
+`class_count` must equal the committed `raypath_color_count` (mismatch =
+`LUMICE_ERR_INVALID_CONFIG` — the caller changed structure and must re-commit);
+`z_order`, when non-NULL, must be a permutation of `[0, class_count)` (AC3). The
+z-order is decoupled from the Y-lane physical index: the compositor sorts by
+z-order but always indexes lanes by the original class position, so reordering
+draw priority never re-binds a lane to another class's color (see
+`doc/gui-custom-spectrum-and-raypath-color.md` §4.0 as-built note).
 
 ---
 

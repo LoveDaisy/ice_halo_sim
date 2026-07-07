@@ -22,10 +22,15 @@ struct ActiveClass {
 };
 
 // Visibility axis (plan §4): solo (when any class is solo'd) restricts to the
-// solo set; otherwise the participating set is every visible class. List
-// order is preserved (list order = z-order). A class whose lane accessor
-// returns nullptr is defensively skipped (same spirit as the old per-bit
-// "visible bit without an allocated lane" guard).
+// solo set; otherwise the participating set is every visible class. Iteration
+// order = ascending z_order_ (task-342.2); ties preserved via stable sort so
+// classes with identical z_order_ still walk in vector order. The physical
+// index i (== vector position) is retained in ActiveClass::idx so lane access
+// through `consumer.GetColorClassLaneY(i)` continues to hit the same permanent
+// binding built at RenderConsumer construction — z_order_ ONLY reorders the
+// visit sequence, it does NOT reorder the accumulator lanes. A class whose
+// lane accessor returns nullptr is defensively skipped (same spirit as the old
+// per-bit "visible bit without an allocated lane" guard).
 std::vector<ActiveClass> GatherActiveClasses(const RenderConsumer& consumer, const ColorClassTable& class_table) {
   bool any_solo = false;
   for (const auto& cls : class_table.classes_) {
@@ -35,19 +40,27 @@ std::vector<ActiveClass> GatherActiveClasses(const RenderConsumer& consumer, con
     }
   }
 
+  std::vector<size_t> order(class_table.classes_.size());
+  for (size_t i = 0; i < order.size(); ++i) {
+    order[i] = i;
+  }
+  std::stable_sort(order.begin(), order.end(), [&class_table](size_t a, size_t b) {
+    return class_table.classes_[a].z_order_ < class_table.classes_[b].z_order_;
+  });
+
   std::vector<ActiveClass> active;
   active.reserve(class_table.classes_.size());
-  for (size_t i = 0; i < class_table.classes_.size(); ++i) {
-    const auto& cls = class_table.classes_[i];
+  for (size_t idx : order) {
+    const auto& cls = class_table.classes_[idx];
     const bool participates = any_solo ? cls.solo_ : cls.visible_;
     if (!participates) {
       continue;
     }
-    const float* lane = consumer.GetColorClassLaneY(i);
+    const float* lane = consumer.GetColorClassLaneY(idx);
     if (lane == nullptr) {
       continue;
     }
-    active.push_back({ i, lane });
+    active.push_back({ idx, lane });
   }
   return active;
 }

@@ -24,6 +24,14 @@ struct ColorClass {
   bool visible_ = true;
   bool solo_ = false;
   uint64_t member_bits_ = 0;
+  // Display-time drawing priority (task-342.2). NOT the vector position in classes_ — the
+  // compositor sorts by z_order_ ascending (lower draws first, hence lower wins in painter
+  // occlusion + dominant ties) BUT continues to index the RenderConsumer's per-class Y-lanes
+  // by the original vector position, keeping the accumulator's lane-to-class binding
+  // untouched. BuildColorClassTable defaults z_order_ to the vector position, so a config
+  // with no explicit z-order draws in list order — identical to pre-342.2 behavior. Not
+  // structural; NeedsRebuild ignores this field along with color_/visible_/solo_.
+  int z_order_ = 0;
 };
 
 // Ordered color-class list; list order = z-order for the 339.4 per-class
@@ -59,6 +67,16 @@ struct ColorClassTable {
 //     `referenced_mask_` and is a no-op at predicate time.
 ColorClassTable BuildColorClassTable(const RaypathColorConfig& color_cfg, const SceneConfig& scene,
                                      const ColorGateTable& gate_table);
+
+// Display-time appearance patch for one color class (task-342.2). Mirrors the C-API
+// LUMICE_ColorClassDisplay but lives in server-facing C++ land so ServerImpl does not need
+// to include lumice.h. Fed into ServerImpl::SetRaypathColors along with a z-order override
+// and a composite mode.
+struct ColorClassDisplay {
+  float color_[3]{};
+  bool visible_ = true;
+  bool solo_ = false;
+};
 
 // Structural equality for consumer-rebuild eligibility (task-339.3 decision 1):
 // compares z-order-preserving (combine_, member_bits_) per class — NOT just the

@@ -51,6 +51,11 @@ ColorClassTable BuildColorClassTable(const RaypathColorConfig& color_cfg, const 
     cls.color_[0] = cc.color_[0];
     cls.color_[1] = cc.color_[1];
     cls.color_[2] = cc.color_[2];
+    // Default z_order_ = the vector position at construction time. Config JSON currently
+    // carries no explicit z-order; without an override the compositor's ascending sort
+    // yields identical iteration order to the pre-342.2 code (which used the vector
+    // position directly). LUMICE_SetRaypathColors overrides this later at display-time.
+    cls.z_order_ = static_cast<int>(out.classes_.size());
     if (cc.combine_ == "any") {
       cls.combine_ = ColorClassCombine::kAny;
     } else if (cc.combine_ == "all") {

@@ -481,6 +481,88 @@ TEST(ComponentCompositor, CrossLayerAllOnlyShowsWhereAllMembersHit) {
 }
 
 // -----------------------------------------------------------------------------
+// F2. z_order decoupling (task-342.2): changing z_order_ reorders the draw
+//     sequence (painter top layer / dominant tie winner) but NEVER re-binds a
+//     class to a different physical Y-lane — the compositor must index lanes by
+//     the ORIGINAL vector position, not the sorted position. This is the direct
+//     regression against the "naively re-sort the classes_ vector" trap (plan
+//     §3.2 key design point 1): a wrong impl would paint a lane's accumulated
+//     energy with another class's color.
+// -----------------------------------------------------------------------------
+TEST(ComponentCompositor, ZOrderReordersDrawButNotLaneBinding) {
+  constexpr int kRes = 3;
+  const int total_pix = kRes * kRes;
+  RenderConfig cfg = MakeRenderConfig(kRes);
+
+  // class0 = red on bit0, class1 = green on bit1. Ray masks {0b01, 0b10} so lane0
+  // accumulates the 0b01 ray and lane1 the 0b10 ray — a permanent binding built at
+  // RenderConsumer construction.
+  auto table = MakeSingletonClassTable(0b11, { kRed, kGreen });
+  RenderConsumer rc(cfg, table);
+  rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.6f, 0.4f }));
+  rc.PrepareSnapshot();
+
+  const int p = FindLitPixel(rc, total_pix);
+  ASSERT_GE(p, 0);
+  const float s = rc.ExposureScale();
+  const float lane0 = rc.GetColorClassLaneY(0)[p];  // class0's physical lane
+  const float lane1 = rc.GetColorClassLaneY(1)[p];  // class1's physical lane
+  const float ey0 = lane0 * s;
+  const float ey1 = lane1 * s;
+
+  std::vector<float> out;
+
+  // Baseline z_order (0,1): painter draws list-first class0 (red) on top.
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kPainter, out));
+  EXPECT_FLOAT_EQ(out[p * 3 + 0], ey0);
+  EXPECT_FLOAT_EQ(out[p * 3 + 1], 0.0f);
+
+  // Swap z_order so class1 has the LOWER rank (draws first / top for painter). Only the
+  // display-time field changes; the vector order and lane data are untouched.
+  {
+    auto t = table;
+    t.classes_[0].z_order_ = 1;
+    t.classes_[1].z_order_ = 0;
+    ASSERT_TRUE(CompositeColorClassesLinear(rc, t, CompositeMode::kPainter, out));
+    // Painter top layer is now class1 (green) — draw order changed...
+    EXPECT_FLOAT_EQ(out[p * 3 + 0], 0.0f);
+    EXPECT_FLOAT_EQ(out[p * 3 + 1], ey1)
+        << "green must be painted with class1's OWN exposed lane value (lane1), not lane0's — "
+           "z_order must not re-bind lane index to class";
+    // ...but the value equals class1's own physical lane (lane1), proving the lane→class
+    // binding did NOT follow the reorder. If the impl naively re-sorted the vector, green
+    // would incorrectly carry lane0's value (ey0 != ey1 here since weights 0.6 != 0.4).
+    ASSERT_NE(ey0, ey1);
+  }
+
+  // Dominant tie: give both lanes equal energy and flip z_order to prove the tie winner
+  // follows draw order (ascending z_order), independent of lane index.
+  {
+    RenderConsumer rc_tie(cfg, table);
+    rc_tie.Consume(MakeBatch({ 0b01, 0b10 }, { 0.5f, 0.5f }));
+    rc_tie.PrepareSnapshot();
+    const int pt = FindLitPixel(rc_tie, total_pix);
+    ASSERT_GE(pt, 0);
+    const float st = rc_tie.ExposureScale();
+    const float eyt = rc_tie.GetColorClassLaneY(0)[pt] * st;  // == lane1 too (equal weights)
+
+    // Default z_order (0,1): dominant tie → class0 (red).
+    auto t0 = table;
+    ASSERT_TRUE(CompositeColorClassesLinear(rc_tie, t0, CompositeMode::kDominant, out));
+    EXPECT_FLOAT_EQ(out[pt * 3 + 0], eyt);
+    EXPECT_FLOAT_EQ(out[pt * 3 + 1], 0.0f);
+
+    // Flip z_order so class1 is scanned first: dominant tie → class1 (green).
+    auto t1 = table;
+    t1.classes_[0].z_order_ = 1;
+    t1.classes_[1].z_order_ = 0;
+    ASSERT_TRUE(CompositeColorClassesLinear(rc_tie, t1, CompositeMode::kDominant, out));
+    EXPECT_FLOAT_EQ(out[pt * 3 + 0], 0.0f);
+    EXPECT_FLOAT_EQ(out[pt * 3 + 1], eyt);
+  }
+}
+
+// -----------------------------------------------------------------------------
 // H. ParseCompositeMode string handling.
 // -----------------------------------------------------------------------------
 TEST(ComponentCompositor, ParseCompositeModeKnownStrings) {

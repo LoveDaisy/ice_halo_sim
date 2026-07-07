@@ -122,6 +122,12 @@ owner 计划扩展两个相关但不同的功能：
 
 **scrum-3b 自然分段（Design 2 下）**：① 引擎重定向到 Design 2（新 schema + `BuildComponentTable` 改源 + gate 非破坏颜色 pass，CPU，带回归）= a03 正确性地基先行；② C API 面（`raypath_color` 进 `LUMICE_Config` + 独立 display-time setter）；③ GUI 颜色窗（复用 H5 编辑器 + 色/combine/可见/z-order + 空弧反馈）；④ preview 合成 v1（host 侧 `GetCompositeResults`）。GPU device-side lane 仍是 scrum-3c。
 
+**⭐as-built（②C API 面，task-capi-color-surface / task-342.2）**：上面"API 按 re-sim 边界拆"已落地并焊死：
+- **成员/谓词路径**：`LUMICE_Config.raypath_color[]` / `raypath_color_count` / `raypath_color_mode`（BREAKING v4.7，镜像 `compositions[]` 先例）走既有 struct→JSON→`CommitConfig` 管线，**无独立 struct→core 分叉**——`ConfigToJson` 忠实 emit 与 `RaypathColorConfig::from_json` 同形状的 JSON，故 JSON-commit 与 struct-commit 逐像素等价（AC1，`RaypathColorApi.JsonAndStructCommitPixelEquivalent` 一手验）。谓词类型是 `LUMICE_FilterParam` 的**窄化复用**（raypath/entry_exit/direction/crystal/none，无 id/action/symmetry/complex）；`LUMICE_ColorPredicate.type==UNSET` 刻意 = match-all（与物理 filter 的 UNSET-reject 反向，对齐 core `NoneFilterParam` 默认）。
+- **display-time 路径**：`LUMICE_SetRaypathColors(server, classes[], class_count, z_order, mode)` 只在 `consumer_mutex_` 下原地改 `active_class_table_` 的 color/visible/solo/z_order + composite mode，置 `snapshot_dirty_`，**绝不碰 epoch / 累积器 / Stop/Start**（AC2 一手验：epoch 前后一致 + `sim_ray_count` 不减 + 新色确实生效）。`class_count` 须等于已提交的 `raypath_color_count`（不等 = 成员结构变了 → `INVALID_CONFIG`，逼重 commit）；`z_order` 非 NULL 时须是 `[0,class_count)` 的排列（AC3）。
+- **⭐z-order 与 Y-lane 物理下标解耦（关键正确性决策，白盒发现的陷阱）**：`ColorClass` 加 `int z_order_` 显示态字段（`BuildColorClassTable` 默认 = list 位置，`NeedsRebuild` 不比较它）。compositor `GatherActiveClasses` 按 `z_order_` 排序遍历，但**始终用原始下标 i 取 `GetColorClassLaneY(i)`**——遍历顺序（可被 setter 改）与 lane 物理绑定（构造时永久固定）彻底解耦。**天真地重排 `classes_` vector 会造成静默错误染色**（某条弧被涂错色），回归钉在 `test_component_compositor.cpp::ZOrderReordersDrawButNotLaneBinding`。
+- **pre-existing 观察（不在本任务修）**：`CommitConfig` 在 `consumer_mutex_` 锁外写 `active_class_table_`/`active_composite_mode_`，与 `DoSnapshot`/`SetRaypathColors`（锁内）间有既有竞态（单-owner 规则本就假设 `CommitConfig` 不与他调用并发）。
+
 ### 4.1 三层模型如何组合（门 / summand 色桶 / 跨层 rule）
 
 > ⚠️ **SUPERSEDED（2026-07-08，见 §4.0）**：本节 Fork C（色桶 = filter 的 summand）已被 Design-2 重定向推翻——颜色类现为**独立于物理 filter 的 placement-scoped 谓词列表**。以下保留作历史推理（§1 三层角色、去重、按需分配等思想仍有效），但**数据模型以 §4.0 为准**。

@@ -34,6 +34,7 @@ namespace {
 
 using lumice::BuildColorClassTable;
 using lumice::BuildColorGateTable;
+using lumice::ColorClass;
 using lumice::ColorClassCombine;
 using lumice::ColorClassConfig;
 using lumice::ColorClassTable;
@@ -43,6 +44,7 @@ using lumice::EntryExitFilterParam;
 using lumice::FilterConfig;
 using lumice::IdType;
 using lumice::MsInfo;
+using lumice::NeedsRebuild;
 using lumice::NoneFilterParam;
 using lumice::RaypathColorConfig;
 using lumice::RaypathColorRef;
@@ -230,4 +232,52 @@ TEST(BuildColorClassTable, ExplicitEmptyMatchClassKeptWithZeroBits) {
   EXPECT_EQ(ct.classes_[0].member_bits_, 0u);
   EXPECT_EQ(ct.classes_[1].member_bits_, static_cast<uint64_t>(1) << 0);
   EXPECT_EQ(ct.referenced_mask_, static_cast<uint64_t>(1) << 0);
+}
+
+// ---- z_order (task-342.2) ----
+
+// BuildColorClassTable seeds each class's z_order_ to its list position, so a config with no
+// explicit z-order draws in list order — identical to pre-342.2 behavior.
+TEST(BuildColorClassTable, AssignsSequentialZOrder) {
+  auto scene = MakeScene({ { 1 } });
+  RaypathColorConfig cfg;
+  cfg.classes_.push_back(Class(1.0f, 0.0f, 0.0f, { Ref(0, 1) }));
+  cfg.classes_.push_back(Class(0.0f, 1.0f, 0.0f, { Ref(0, 1) }));
+  cfg.classes_.push_back(Class(0.0f, 0.0f, 1.0f, { Ref(0, 1) }));
+  auto gate = BuildColorGateTable(cfg, scene);
+  auto ct = BuildColorClassTable(cfg, scene, gate);
+  ASSERT_EQ(ct.classes_.size(), 3u);
+  EXPECT_EQ(ct.classes_[0].z_order_, 0);
+  EXPECT_EQ(ct.classes_[1].z_order_, 1);
+  EXPECT_EQ(ct.classes_[2].z_order_, 2);
+}
+
+// NeedsRebuild must ignore z_order_ (it is a display-time field like color_/visible_/solo_).
+// This is the direct guarantee that SetRaypathColors' z-order change never triggers a
+// consumer/lane rebuild.
+TEST(NeedsRebuild, IgnoresZOrder) {
+  ColorClassTable a;
+  ColorClass c0{};
+  c0.combine_ = ColorClassCombine::kAny;
+  c0.member_bits_ = 0b01;
+  c0.z_order_ = 0;
+  ColorClass c1{};
+  c1.combine_ = ColorClassCombine::kAny;
+  c1.member_bits_ = 0b10;
+  c1.z_order_ = 1;
+  a.classes_ = { c0, c1 };
+
+  // Same combine_/member_bits_, only z_order_ (and color/visible/solo) differ.
+  ColorClassTable b = a;
+  b.classes_[0].z_order_ = 5;
+  b.classes_[1].z_order_ = 3;
+  b.classes_[0].color_[0] = 0.9f;
+  b.classes_[0].visible_ = false;
+  b.classes_[1].solo_ = true;
+  EXPECT_FALSE(NeedsRebuild(a, b));
+
+  // Sanity: a real member_bits_ change DOES require a rebuild.
+  ColorClassTable c = a;
+  c.classes_[0].member_bits_ = 0b100;
+  EXPECT_TRUE(NeedsRebuild(a, c));
 }

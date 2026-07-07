@@ -247,6 +247,49 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 - `LUMICE_ERR_FILE_NOT_FOUND`: file does not exist or cannot be opened
 - Other error codes: invalid configuration content
 
+#### Per-raypath color classes (`raypath_color`) and `LUMICE_SetRaypathColors`
+
+`LUMICE_Config` carries an optional `raypath_color[]` (Design 2, task-342.2):
+each *color class* has an RGB color plus a set of placement-scoped *match*
+predicates `{layer, crystal, predicate}` that decide which surviving rays get
+color-tagged. `raypath_color_mode` selects the display-time composite mode
+(`LUMICE_COLOR_MODE_DOMINANT` / `_ADDITIVE` / `_PAINTER`). `raypath_color_count
+== 0` disables color entirely — the mono `LUMICE_GetRenderResults` output and
+the emitted JSON are byte-identical to a config without the field.
+
+Two disjoint change paths — pick by whether the *members* change:
+
+- **Structure change** (`match[]` refs / `combine`) → **re-simulation**. Edit
+  `LUMICE_Config.raypath_color[]` and re-submit via `LUMICE_CommitConfig` (JSON
+  string) or `LUMICE_CommitConfigStruct` (C struct); both produce identical
+  composites. Read the composite images via `LUMICE_GetCompositeResults` (one
+  sRGB `LUMICE_RenderResult` per colored renderer).
+- **Appearance change** (RGB / visible / solo / z-order / composite mode) →
+  **no re-simulation**:
+
+```c
+LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server,
+                                         const LUMICE_ColorClassDisplay* classes,
+                                         int class_count, const int* z_order, int mode);
+```
+
+**Parameters**:
+- `classes`: per-class appearance patch (color, visible, solo). `class_count`
+  must equal the committed `raypath_color_count`.
+- `z_order`: optional (`NULL` = unchanged); when set, must be a permutation of
+  `[0, class_count)` where `z_order[i]` is the new drawing rank of class `i`.
+- `mode`: `LUMICE_COLOR_MODE_*`.
+
+**Return value**:
+- `LUMICE_OK`: success — the next `LUMICE_GetCompositeResults` re-composites the
+  already-accumulated data with the new appearance. The simulation epoch and
+  accumulator are untouched (no restart).
+- `LUMICE_ERR_NULL_ARG`: `server` is `NULL`, or `classes` is `NULL` with
+  `class_count > 0`.
+- `LUMICE_ERR_INVALID_VALUE`: `mode` out of range.
+- `LUMICE_ERR_INVALID_CONFIG`: `class_count` mismatch (structure changed —
+  re-commit the config) or `z_order` is not a valid permutation.
+
 ### Retrieving Results
 
 Result retrieval uses a unified array + sentinel pattern:
