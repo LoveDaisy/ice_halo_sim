@@ -15,6 +15,8 @@
 #include <thread>
 #include <vector>
 
+#include "config/component_color_map.hpp"
+#include "config/component_table.hpp"
 #include "config/config_manager.hpp"
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
@@ -115,6 +117,13 @@ class ServerImpl {
   void RunPersistentLoop(F work_fn);
 
   ConfigManager config_manager_;
+
+  // task-336.2: participating-bit mask (ComponentColorMap::colored_mask_) of the
+  // currently committed config. Compared against the incoming config's mask in
+  // CommitConfig so a change in the colored-bit set forces a full consumer
+  // rebuild (a reused consumer would keep a stale lane layout). 0 == no
+  // raypath_color configured.
+  uint64_t active_colored_mask_ = 0;
 
   QueuePtrS<SimBatch> scene_queue_;
   QueuePtrS<SimData> data_queue_;
@@ -375,8 +384,19 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
 
   // Parse into a temporary first so that a parse failure leaves the running server untouched.
   ConfigManager new_config;
+  // task-336.2: default (colored_mask_ == 0) means "no raypath_color" → lane
+  // allocation is skipped and rendering stays pre-336 bit-for-bit. Declared
+  // outside the try so it survives to the reuse-judgment below.
+  ComponentColorMap color_map;
   try {
     new_config = config_json.get<ConfigManager>();
+    // Fold the user raypath_color into the participating-bit mask so the rebuilt
+    // RenderConsumers can allocate per-component Y-lanes. BuildComponentColorMap
+    // may throw std::invalid_argument on a bad (layer, crystal, summand) triple —
+    // that lands in the std::exception catch below → Error::InvalidConfig, no new
+    // catch clause needed.
+    ComponentTable component_table = BuildComponentTable(new_config.scene_);
+    color_map = BuildComponentColorMap(new_config.raypath_color_, component_table);
   } catch (const nlohmann::json::out_of_range& e) {
     ILOG_ERROR(logger_, "CommitConfig: Missing field: {}", e.what());
     {
@@ -418,7 +438,15 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   auto old_renderers = config_manager_.renderers_;
   config_manager_ = std::move(new_config);
 
-  bool can_reuse = !consumers_.empty() && (old_renderers.size() == config_manager_.renderers_.size());
+  // task-336.2: a change in the colored-bit set is a scene-level (cross-renderer)
+  // change that must force a full consumer rebuild — a reused RenderConsumer would
+  // keep its old per-component lane layout. This is orthogonal to the per-renderer
+  // NeedsRebuild() layout check below.
+  bool color_mask_changed = (color_map.colored_mask_ != active_colored_mask_);
+  active_colored_mask_ = color_map.colored_mask_;
+
+  bool can_reuse =
+      !consumers_.empty() && !color_mask_changed && (old_renderers.size() == config_manager_.renderers_.size());
   if (can_reuse) {
     auto old_it = old_renderers.begin();
     auto new_it = config_manager_.renderers_.begin();
@@ -448,7 +476,9 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
       // Full rebuild path
       consumers_.clear();
       for (const auto& [_, r] : config_manager_.renderers_) {
-        consumers_.emplace_back(std::make_shared<RenderConsumer>(r));
+        // task-336.2: pass the participating-bit mask so each consumer allocates
+        // per-component Y-lanes (mask 0 → no lanes, pre-336 behavior).
+        consumers_.emplace_back(std::make_shared<RenderConsumer>(r, active_colored_mask_));
       }
       consumers_.emplace_back(std::make_shared<StatsConsumer>());
     }
