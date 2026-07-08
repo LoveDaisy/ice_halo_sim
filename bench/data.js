@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783443129659,
+  "lastUpdate": 1783501106767,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "26e54569e59d8e18420bf4a3a58d92d268b91b5a",
-          "message": "Merge pull request #81 from LoveDaisy/fix/modal_zorder\n\nfix(gui): show combo popups above detached Edit Entry modal",
-          "timestamp": "2026-04-29T15:54:43+08:00",
-          "tree_id": "6e2ad77922fffeadb6e2da7e47e4fa9f66c34300",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/26e54569e59d8e18420bf4a3a58d92d268b91b5a"
-        },
-        "date": 1777449559582,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 429091.7,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 608289.4,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 432789.5,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 376391.8,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4800,6 +4752,54 @@ window.BENCHMARK_DATA = {
             "value": 351320.6,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "79002e6775a0a895acab77df2ac4a9586a5e2105",
+          "message": "Merge pull request #183 from LoveDaisy/perf/gui-test-fixed-dt\n\nperf(gui-test): decouple frame budget from wall-clock (--fixed-dt, 16x faster correctness pool)",
+          "timestamp": "2026-07-08T16:52:29+08:00",
+          "tree_id": "e4db6edaea0749753c8f12e09e42ae50187e3c48",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/79002e6775a0a895acab77df2ac4a9586a5e2105"
+        },
+        "date": 1783501105154,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 456876.4,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 584702.8,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 399330.4,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 415537.8,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
           }
         ]
       }
