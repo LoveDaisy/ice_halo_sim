@@ -350,6 +350,14 @@ def check_struct_layout_parity() -> list[Violation]:
 # Known limitation (recorded in plan §3 design-point 6, out of scope for this
 # task): does not cover container-held instances (`std::vector<LUMICE_Config>`
 # etc.). Codebase audit found no such usage; extend the rule if it appears.
+#
+# Known limitation (code-review-01, round 1): Patterns 1a/1b/1c all require
+# the RHS to be a single bare identifier, so a function-call RHS such as
+# `LUMICE_Config x = SomeFactory();` is not matched. The codebase currently
+# avoids this shape (test factories were converted to out-param `Fill*` style
+# specifically to sidestep it), but a future by-value-returning factory would
+# not be caught — extend Pattern 1a's RHS match to also accept `\w+\(...\)`
+# (excluding aggregate-init syntax) if this shape reappears.
 CONFIG_TYPE = "LUMICE_Config"
 
 # Pattern 1a: copy-init  `LUMICE_Config a = b;`
