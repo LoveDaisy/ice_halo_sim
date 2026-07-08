@@ -2395,4 +2395,320 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(color_overflow.ref_index, LUMICE_MAX_CONFIG_COLOR_REFS);
     };
   }
+
+  // task-342.3 Step 4: SerializeCoreConfig / DeserializeFromJson raypath_color[] roundtrip.
+  // ---------------------------------------------------------------------------
+  // These tests exercise the JSON dual-twin path. Where meaningful they cross-check the JSON
+  // emit against the struct emit (FillLumiceConfig) to guarantee AC1 pixel-equivalence is a
+  // structural consequence of shared logic (single FillColorPredicate) rather than a
+  // coincidence between two independent implementations.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_serialize_omits_when_empty");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      // Empty raypath_color → JSON must not contain a "raypath_color" key so mono-only
+      // configs remain byte-identical with the pre-v4.7 shape (zero-regression contract).
+      const std::string js = gui::SerializeCoreConfig(gui::g_state);
+      auto j = nlohmann::json::parse(js);
+      IM_CHECK(!j.contains("raypath_color"));
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_serialize_object_shape");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig cls;
+      cls.color[0] = 1.0f;
+      cls.color[1] = 0.0f;
+      cls.color[2] = 0.0f;
+      gui::ColorClassRefConfig ref;
+      ref.crystal_pool_id = 0;
+      ref.match_all = false;
+      ref.predicate_text = "3-5";
+      cls.match.push_back(ref);
+      gui::g_state.raypath_color.push_back(cls);
+      gui::g_state.raypath_color_mode = LUMICE_COLOR_MODE_ADDITIVE;
+
+      auto j = nlohmann::json::parse(gui::SerializeCoreConfig(gui::g_state));
+      IM_CHECK(j.contains("raypath_color"));
+      const auto& jrc = j["raypath_color"];
+      IM_CHECK(jrc.is_object());
+      IM_CHECK_STR_EQ(jrc.value("mode", std::string{}).c_str(), "additive");
+      IM_CHECK(jrc.contains("classes") && jrc["classes"].is_array());
+      IM_CHECK_EQ(static_cast<int>(jrc["classes"].size()), 1);
+      const auto& jc = jrc["classes"][0];
+      IM_CHECK(jc["color"].is_array() && jc["color"].size() == 3);
+      IM_CHECK_EQ(jc["color"][0].get<float>(), 1.0f);
+      // "combine" and "visible" omitted at wire (default any / true).
+      IM_CHECK(!jc.contains("combine"));
+      IM_CHECK(!jc.contains("visible"));
+      IM_CHECK(!jc.contains("solo"));
+      IM_CHECK(jc["match"].is_array() && jc["match"].size() == 1);
+      const auto& jr = jc["match"][0];
+      IM_CHECK_EQ(jr["layer"].get<int>(), 0);
+      IM_CHECK_EQ(jr["crystal"].get<int>(), 1);  // pool 0 -> C-API id 1
+      IM_CHECK_STR_EQ(jr["type"].get<std::string>().c_str(), "raypath");
+      IM_CHECK(jr["raypath"].is_array() && jr["raypath"].size() == 2);
+      IM_CHECK_EQ(jr["raypath"][0].get<int>(), 3);
+      IM_CHECK_EQ(jr["raypath"][1].get<int>(), 5);
+    };
+  }
+  {
+    // Cross-check: JSON emit vs struct emit produce the same predicate (RAYPATH branch).
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_json_vs_struct_raypath");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig cls;
+      cls.color[0] = 0.5f;
+      cls.color[1] = 0.6f;
+      cls.color[2] = 0.7f;
+      cls.combine = LUMICE_COLOR_COMBINE_ALL;
+      cls.visible = false;
+      cls.solo = true;
+      gui::ColorClassRefConfig ref;
+      ref.crystal_pool_id = 0;
+      ref.match_all = false;
+      ref.predicate_text = "1-2-3-4";
+      cls.match.push_back(ref);
+      gui::g_state.raypath_color.push_back(cls);
+
+      // Struct emit.
+      LUMICE_Config cfg{};
+      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
+      const auto& sp = cfg.raypath_color[0].match[0].predicate;
+
+      // JSON emit.
+      auto j = nlohmann::json::parse(gui::SerializeCoreConfig(gui::g_state));
+      const auto& jr = j["raypath_color"]["classes"][0]["match"][0];
+
+      // Class-level fields agree.
+      IM_CHECK_EQ(cfg.raypath_color[0].combine, LUMICE_COLOR_COMBINE_ALL);
+      IM_CHECK_STR_EQ(j["raypath_color"]["classes"][0]["combine"].get<std::string>().c_str(), "all");
+      IM_CHECK_EQ(cfg.raypath_color[0].visible, 0);
+      IM_CHECK_EQ(j["raypath_color"]["classes"][0]["visible"].get<bool>(), false);
+      IM_CHECK_EQ(cfg.raypath_color[0].solo, 1);
+      IM_CHECK_EQ(j["raypath_color"]["classes"][0]["solo"].get<bool>(), true);
+
+      // Predicate fields agree — struct type RAYPATH ↔ JSON type "raypath" + raypath[] elements.
+      IM_CHECK_EQ(sp.type, LUMICE_FILTER_TYPE_RAYPATH);
+      IM_CHECK_STR_EQ(jr["type"].get<std::string>().c_str(), "raypath");
+      IM_CHECK_EQ(sp.raypath_count, static_cast<int>(jr["raypath"].size()));
+      for (int k = 0; k < sp.raypath_count; k++) {
+        IM_CHECK_EQ(sp.raypath[k], jr["raypath"][k].get<int>());
+      }
+    };
+  }
+  {
+    // Cross-check: JSON emit vs struct emit for entry_exit predicate + match-all.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_json_vs_struct_entry_exit_and_match_all");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig cls;
+      gui::ColorClassRefConfig ee_ref;
+      ee_ref.crystal_pool_id = 0;
+      ee_ref.match_all = false;
+      ee_ref.predicate_text = "entry:1 & exit:2";
+      gui::ColorClassRefConfig all_ref;
+      all_ref.crystal_pool_id = 0;
+      all_ref.match_all = true;
+      cls.match.push_back(ee_ref);
+      cls.match.push_back(all_ref);
+      gui::g_state.raypath_color.push_back(cls);
+
+      LUMICE_Config cfg{};
+      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
+      auto j = nlohmann::json::parse(gui::SerializeCoreConfig(gui::g_state));
+      const auto& jrefs = j["raypath_color"]["classes"][0]["match"];
+      IM_CHECK_EQ(cfg.raypath_color[0].match_count, 2);
+      IM_CHECK_EQ(static_cast<int>(jrefs.size()), 2);
+
+      // EE ref.
+      const auto& sp0 = cfg.raypath_color[0].match[0].predicate;
+      IM_CHECK_EQ(sp0.type, LUMICE_FILTER_TYPE_ENTRY_EXIT);
+      IM_CHECK_STR_EQ(jrefs[0]["type"].get<std::string>().c_str(), "entry_exit");
+      IM_CHECK_EQ(sp0.ee_entry, jrefs[0].value("entry", -1));
+      IM_CHECK_EQ(sp0.ee_exit, jrefs[0].value("exit", -1));
+
+      // Match-all ref: struct UNSET ↔ JSON has no "type" field.
+      const auto& sp1 = cfg.raypath_color[0].match[1].predicate;
+      IM_CHECK_EQ(sp1.type, LUMICE_FILTER_TYPE_UNSET);
+      IM_CHECK(!jrefs[1].contains("type"));
+    };
+  }
+  {
+    // Orphan / multi-factor refs are SKIPPED in JSON emit — matches the struct emit gate.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_serialize_skips_orphan_and_multi_factor");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      // Add an unreferenced crystal to pool → orphan pool id 1.
+      gui::CrystalConfig c2;
+      c2.type = gui::CrystalType::kPrism;
+      gui::g_state.crystals.push_back(c2);
+
+      gui::ColorClassConfig cls;
+      gui::ColorClassRefConfig orphan;
+      orphan.crystal_pool_id = 1;
+      orphan.match_all = true;
+      gui::ColorClassRefConfig multi_factor;
+      multi_factor.crystal_pool_id = 0;
+      multi_factor.match_all = false;
+      multi_factor.predicate_text = "3-5 & entry:2";
+      gui::ColorClassRefConfig ok;
+      ok.crystal_pool_id = 0;
+      ok.match_all = true;
+      cls.match.push_back(orphan);
+      cls.match.push_back(multi_factor);
+      cls.match.push_back(ok);
+      gui::g_state.raypath_color.push_back(cls);
+
+      auto j = nlohmann::json::parse(gui::SerializeCoreConfig(gui::g_state));
+      const auto& jrefs = j["raypath_color"]["classes"][0]["match"];
+      IM_CHECK_EQ(static_cast<int>(jrefs.size()), 1);
+      IM_CHECK_EQ(jrefs[0]["crystal"].get<int>(), 1);
+      IM_CHECK(!jrefs[0].contains("type"));  // ok was match_all
+    };
+  }
+  {
+    // GuiState → JSON → GuiState roundtrip preserves raypath_color content (via operator==).
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_json_roundtrip");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig cls_a;
+      cls_a.color[0] = 1.0f;
+      cls_a.color[1] = 0.2f;
+      cls_a.color[2] = 0.3f;
+      cls_a.combine = LUMICE_COLOR_COMBINE_ANY;
+      cls_a.visible = true;
+      cls_a.solo = false;
+      cls_a.z_order = 0;  // aligns with physical index — matches load-time default.
+      gui::ColorClassRefConfig ra;
+      ra.layer_idx = 0;
+      ra.crystal_pool_id = 0;
+      ra.match_all = false;
+      ra.predicate_text = "3-5-1";
+      cls_a.match.push_back(ra);
+
+      gui::ColorClassConfig cls_b;
+      cls_b.color[0] = 0.1f;
+      cls_b.color[1] = 0.8f;
+      cls_b.color[2] = 0.2f;
+      cls_b.combine = LUMICE_COLOR_COMBINE_ALL;
+      cls_b.visible = false;
+      cls_b.solo = true;
+      cls_b.z_order = 1;
+      gui::ColorClassRefConfig rb0;
+      rb0.layer_idx = 0;
+      rb0.crystal_pool_id = 0;
+      rb0.match_all = true;
+      gui::ColorClassRefConfig rb1;
+      rb1.layer_idx = 0;
+      rb1.crystal_pool_id = 0;
+      rb1.match_all = false;
+      rb1.predicate_text = "entry:1 & exit:2 & len:3";
+      cls_b.match.push_back(rb0);
+      cls_b.match.push_back(rb1);
+
+      gui::g_state.raypath_color.push_back(cls_a);
+      gui::g_state.raypath_color.push_back(cls_b);
+      gui::g_state.raypath_color_mode = LUMICE_COLOR_MODE_PAINTER;
+
+      const auto original = gui::g_state.raypath_color;
+      const int original_mode = gui::g_state.raypath_color_mode;
+
+      const std::string js = gui::SerializeCoreConfig(gui::g_state);
+      gui::GuiState loaded = gui::InitDefaultState();
+      IM_CHECK(gui::DeserializeFromJson(js, loaded));
+
+      IM_CHECK_EQ(loaded.raypath_color_mode, original_mode);
+      IM_CHECK_EQ(static_cast<int>(loaded.raypath_color.size()), static_cast<int>(original.size()));
+      for (size_t i = 0; i < original.size(); i++) {
+        IM_CHECK(loaded.raypath_color[i] == original[i]);
+      }
+    };
+  }
+  {
+    // Fixture-driven end-to-end roundtrip via the tracked three-arcs config.
+    // Deserialize → Serialize back → the round-tripped GuiState.raypath_color must equal
+    // the first-parse result. Structural fixed point, not a byte-diff (JSON formatting
+    // may differ).
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_fixture_roundtrip_three_arcs");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      std::ifstream ifs("test/e2e/configs/raypath_color_three_arcs.json");
+      IM_CHECK(ifs.is_open());
+      std::string js((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+      IM_CHECK(!js.empty());
+
+      gui::GuiState s1 = gui::InitDefaultState();
+      IM_CHECK(gui::DeserializeFromJson(js, s1));
+      IM_CHECK_EQ(static_cast<int>(s1.raypath_color.size()), 3);
+
+      const std::string js2 = gui::SerializeCoreConfig(s1);
+      gui::GuiState s2 = gui::InitDefaultState();
+      IM_CHECK(gui::DeserializeFromJson(js2, s2));
+
+      IM_CHECK_EQ(s2.raypath_color_mode, s1.raypath_color_mode);
+      IM_CHECK_EQ(static_cast<int>(s2.raypath_color.size()), static_cast<int>(s1.raypath_color.size()));
+      for (size_t i = 0; i < s1.raypath_color.size(); i++) {
+        IM_CHECK(s2.raypath_color[i] == s1.raypath_color[i]);
+      }
+    };
+  }
+  {
+    // Import via bare-array wire shape (dominant-only, no {mode, classes} wrapper).
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_bare_array_wire_import");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      const std::string js = R"({
+        "crystal": [{"id": 1, "type": "prism", "prism_h": 1.0}],
+        "filter": [],
+        "scene": {
+          "light_source": {"type": "sun", "altitude": 20, "spectrum": "D65"},
+          "ray_num": 1000000,
+          "max_hits": 8,
+          "scattering": [{"prob": 1.0, "entries": [{"crystal": 1, "proportion": 1.0}]}]
+        },
+        "render": [{"id": 1, "lens": {"type": "dual_fisheye_equal_area", "fov": 180}, "resolution": [512, 256]}],
+        "raypath_color": [
+          {"color": [1.0, 0.0, 0.0], "match": [{"layer": 0, "crystal": 1}]}
+        ]
+      })";
+      gui::GuiState loaded = gui::InitDefaultState();
+      IM_CHECK(gui::DeserializeFromJson(js, loaded));
+      IM_CHECK_EQ(loaded.raypath_color_mode, LUMICE_COLOR_MODE_DOMINANT);
+      IM_CHECK_EQ(static_cast<int>(loaded.raypath_color.size()), 1);
+      IM_CHECK_EQ(loaded.raypath_color[0].color[0], 1.0f);
+      IM_CHECK_EQ(static_cast<int>(loaded.raypath_color[0].match.size()), 1);
+      IM_CHECK(loaded.raypath_color[0].match[0].match_all);
+    };
+  }
+  {
+    // Import: unknown crystal id in match → ref skipped, class still loaded.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_import_skips_unknown_crystal_ref");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      const std::string js = R"({
+        "crystal": [{"id": 1, "type": "prism", "prism_h": 1.0}],
+        "filter": [],
+        "scene": {
+          "light_source": {"type": "sun", "altitude": 20, "spectrum": "D65"},
+          "ray_num": 1000000,
+          "max_hits": 8,
+          "scattering": [{"prob": 1.0, "entries": [{"crystal": 1, "proportion": 1.0}]}]
+        },
+        "render": [{"id": 1, "lens": {"type": "dual_fisheye_equal_area", "fov": 180}, "resolution": [512, 256]}],
+        "raypath_color": {"mode": "dominant", "classes": [
+          {"color": [0.5, 0.5, 0.5], "match": [
+            {"layer": 0, "crystal": 99},
+            {"layer": 0, "crystal": 1}
+          ]}
+        ]}
+      })";
+      gui::GuiState loaded = gui::InitDefaultState();
+      IM_CHECK(gui::DeserializeFromJson(js, loaded));
+      IM_CHECK_EQ(static_cast<int>(loaded.raypath_color.size()), 1);
+      IM_CHECK_EQ(static_cast<int>(loaded.raypath_color[0].match.size()), 1);
+      IM_CHECK_EQ(loaded.raypath_color[0].match[0].crystal_pool_id, 0);
+    };
+  }
 }

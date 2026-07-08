@@ -907,6 +907,16 @@ bool BuildExportJsonOrWarn(const GuiState& state, std::string* out_json, std::st
   return true;
 }
 
+// task-342.3 Step 4 forward decls: FillColorPredicate is the single source of truth for
+// (ColorClassRefConfig → LUMICE_ColorPredicate) translation; both the struct commit path
+// (FillColorClasses, below) and the JSON emit path (SerializeCoreConfig, below) go through
+// it so the AC1 struct/JSON pixel-equivalence is a structural guarantee, not a coincidence.
+// EmitColorPredicateJson mirrors c_api.cpp's ColorPredicateToJson (which is static and
+// inaccessible from GUI); the pair is guarded by a cross-check test that asserts the two
+// paths produce equivalent predicates for identical GUI input.
+static bool FillColorPredicate(LUMICE_ColorPredicate* dst, const ColorClassRefConfig& ref);
+static void EmitColorPredicateJson(const LUMICE_ColorPredicate& p, json& out);
+
 std::string SerializeCoreConfig(const GuiState& state) {
   json root;
 
@@ -1014,7 +1024,117 @@ std::string SerializeCoreConfig(const GuiState& state) {
     root["render"].push_back(jr);
   }
 
+  // Raypath color classes (task-342.3 Step 4). Emit only when non-empty so the mono/no-color
+  // case matches the pre-v4.7 JSON shape byte-for-byte (zero-regression contract). Wire shape
+  // matches c_api.cpp's ConfigToJson: object form {"mode": ..., "classes": [...]}. Uses the
+  // same crystal_pool_to_core built in the scattering loop above (no second walk) and the
+  // same ref-level filters (orphan crystal / non-single-atom predicate → SKIP) that
+  // FillColorClasses applies for struct commit, so struct↔JSON emits agree structurally.
+  // z_order is NOT emitted: the wire schema mirrors LUMICE_ColorClass which has no z_order
+  // (it lives in LUMICE_ColorClassDisplay, applied via the separate SetRaypathColors setter);
+  // GUI ColorClassConfig::z_order round-trips only when it matches the physical index (the
+  // default new-class placement), which is the state the plan's roundtrip test constructs.
+  if (!state.raypath_color.empty()) {
+    const char* mode_str = "dominant";
+    if (state.raypath_color_mode == LUMICE_COLOR_MODE_ADDITIVE) {
+      mode_str = "additive";
+    } else if (state.raypath_color_mode == LUMICE_COLOR_MODE_PAINTER) {
+      mode_str = "painter";
+    }
+    json classes = json::array();
+    for (size_t i = 0; i < state.raypath_color.size(); i++) {
+      const auto& cls = state.raypath_color[i];
+      json jc;
+      jc["color"] = { cls.color[0], cls.color[1], cls.color[2] };
+      // Mirror c_api emit: combine/visible/solo only when non-default (any/true/false).
+      if (cls.combine == LUMICE_COLOR_COMBINE_ALL) {
+        jc["combine"] = "all";
+      }
+      if (!cls.visible) {
+        jc["visible"] = false;
+      }
+      if (cls.solo) {
+        jc["solo"] = true;
+      }
+      json match = json::array();
+      for (size_t j = 0; j < cls.match.size(); j++) {
+        const auto& ref = cls.match[j];
+        auto it_c = crystal_pool_to_core.find(ref.crystal_pool_id);
+        if (it_c == crystal_pool_to_core.end()) {
+          GUI_LOG_WARNING(
+              "[FileIO] SerializeCoreConfig: raypath_color[{}].match[{}] references crystal pool {} not in scene; "
+              "skipped.",
+              i, j, ref.crystal_pool_id);
+          continue;
+        }
+        LUMICE_ColorPredicate probe{};
+        if (!FillColorPredicate(&probe, ref)) {
+          GUI_LOG_WARNING(
+              "[FileIO] SerializeCoreConfig: raypath_color[{}].match[{}] predicate not a single atom (\"{}\"); "
+              "skipped.",
+              i, j, ref.predicate_text);
+          continue;
+        }
+        json jr;
+        jr["layer"] = ref.layer_idx;
+        jr["crystal"] = it_c->second;
+        EmitColorPredicateJson(probe, jr);
+        match.push_back(jr);
+      }
+      jc["match"] = match;
+      classes.push_back(jc);
+    }
+    json jrc;
+    jrc["mode"] = mode_str;
+    jrc["classes"] = classes;
+    root["raypath_color"] = jrc;
+  }
+
   return root.dump(2);
+}
+
+// task-342.3 Step 4: emit a LUMICE_ColorPredicate as the "predicate arm" JSON fields
+// (mirrors c_api.cpp static ColorPredicateToJson; kept in sync via the JSON-vs-struct
+// cross-check test). UNSET emits nothing (match-all wire form: no `type` field). COMPLEX
+// and out-of-range types are unreachable — FillColorPredicate only produces UNSET / RAYPATH /
+// ENTRY_EXIT — but we assert defensively rather than silently emit a mis-typed class.
+static void EmitColorPredicateJson(const LUMICE_ColorPredicate& p, json& out) {
+  switch (p.type) {
+    case LUMICE_FILTER_TYPE_UNSET:
+      // Match-all: emit no predicate fields.
+      return;
+    case LUMICE_FILTER_TYPE_RAYPATH: {
+      out["type"] = "raypath";
+      json rp = json::array();
+      for (int k = 0; k < p.raypath_count; k++) {
+        rp.push_back(p.raypath[k]);
+      }
+      out["raypath"] = rp;
+      return;
+    }
+    case LUMICE_FILTER_TYPE_ENTRY_EXIT:
+      out["type"] = "entry_exit";
+      if (p.ee_entry >= 0) {
+        out["entry"] = p.ee_entry;
+      }
+      if (p.ee_exit >= 0) {
+        out["exit"] = p.ee_exit;
+      }
+      if (p.ee_min_len > 1) {
+        out["min_len"] = p.ee_min_len;
+      }
+      if (p.ee_max_len >= 0) {
+        out["max_len"] = p.ee_max_len;
+      }
+      return;
+    default:
+      // FillColorPredicate never emits NONE / DIRECTION / CRYSTAL / COMPLEX — reaching here
+      // means a bug in FillColorPredicate or an out-of-range type. Log loudly; skip the
+      // fields so the class stays match-all-shaped rather than half-serialized.
+      GUI_LOG_WARNING(
+          "[FileIO] EmitColorPredicateJson: unexpected LUMICE_ColorPredicate type {}; emitted as match-all.", p.type);
+      return;
+  }
 }
 
 
@@ -1770,6 +1890,124 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
           }
         }
         state.layers.push_back(layer);
+      }
+
+      // task-342.3 Step 4: parse top-level raypath_color into state. Placed inside the
+      // scattering block so crystal_id_to_pool (built above) is still in scope — GUI ref uses
+      // pool ids (indices into state.crystals), not JSON crystal ids. Accepts both wire
+      // shapes core RaypathColorConfig::from_json accepts: bare array (dominant-only) or
+      // object {"mode": ..., "classes": [...]}. z_order defaults to physical index i (the
+      // natural new-class placement) — the wire form has no z_order field (mirrors
+      // LUMICE_ColorClass / c_api.cpp ConfigToJson), so this default is what the plan's
+      // roundtrip test relies on to compare equal via ColorClassConfig::operator==.
+      if (root.contains("raypath_color")) {
+        const auto& jrc = root["raypath_color"];
+        const json* classes_arr = nullptr;
+        std::string mode_str = "dominant";
+        if (jrc.is_array()) {
+          classes_arr = &jrc;
+        } else if (jrc.is_object()) {
+          if (jrc.contains("mode") && jrc["mode"].is_string()) {
+            mode_str = jrc["mode"].get<std::string>();
+          }
+          if (jrc.contains("classes") && jrc["classes"].is_array()) {
+            classes_arr = &jrc["classes"];
+          }
+        }
+        if (mode_str == "additive") {
+          state.raypath_color_mode = LUMICE_COLOR_MODE_ADDITIVE;
+        } else if (mode_str == "painter") {
+          state.raypath_color_mode = LUMICE_COLOR_MODE_PAINTER;
+        } else {
+          state.raypath_color_mode = LUMICE_COLOR_MODE_DOMINANT;
+        }
+        if (classes_arr != nullptr) {
+          for (size_t ci = 0; ci < classes_arr->size(); ci++) {
+            const auto& jc = (*classes_arr)[ci];
+            if (!jc.is_object()) {
+              continue;
+            }
+            ColorClassConfig cls;
+            if (jc.contains("color") && jc["color"].is_array() && jc["color"].size() == 3) {
+              for (int k = 0; k < 3; k++) {
+                cls.color[k] = jc["color"][k].get<float>();
+              }
+            }
+            if (jc.contains("combine") && jc["combine"].is_string() && jc["combine"].get<std::string>() == "all") {
+              cls.combine = LUMICE_COLOR_COMBINE_ALL;
+            } else {
+              cls.combine = LUMICE_COLOR_COMBINE_ANY;
+            }
+            cls.visible = jc.value("visible", true);
+            cls.solo = jc.value("solo", false);
+            cls.z_order = static_cast<int>(ci);
+            if (jc.contains("match") && jc["match"].is_array()) {
+              for (const auto& jr : jc["match"]) {
+                if (!jr.is_object()) {
+                  continue;
+                }
+                ColorClassRefConfig ref;
+                ref.layer_idx = jr.value("layer", 0);
+                const int crystal_json = jr.value("crystal", -1);
+                auto it = crystal_id_to_pool.find(crystal_json);
+                if (it == crystal_id_to_pool.end()) {
+                  GUI_LOG_WARNING(
+                      "[FileIO] DeserializeFromJson: raypath_color class {} references crystal id {} not present "
+                      "in scattering; ref skipped.",
+                      ci, crystal_json);
+                  continue;
+                }
+                ref.crystal_pool_id = it->second;
+                if (!jr.contains("type")) {
+                  ref.match_all = true;
+                } else {
+                  const auto type_str = jr["type"].get<std::string>();
+                  if (type_str == "raypath") {
+                    std::string text;
+                    if (jr.contains("raypath") && jr["raypath"].is_array()) {
+                      for (size_t k = 0; k < jr["raypath"].size(); k++) {
+                        if (k > 0) {
+                          text += kRaypathSepStr;
+                        }
+                        text += std::to_string(jr["raypath"][k].get<int>());
+                      }
+                    }
+                    if (text.empty()) {
+                      // Empty raypath == whole-crystal (mirrors FillColorPredicate).
+                      ref.match_all = true;
+                    } else {
+                      ref.match_all = false;
+                      ref.predicate_text = text;
+                    }
+                  } else if (type_str == "entry_exit") {
+                    // Reconstruct a GUI EntryExitParams and format back to canonical text so
+                    // ParseSummandText re-parses to the same Factor on the return trip. Reuses
+                    // the shared DecodeEE* helpers so this branch reads identically to the
+                    // simple-filter EE decode branch above (no second source of truth).
+                    EntryExitParams p;
+                    p.entry_text = DecodeEEFaceFromJson(jr, "entry");
+                    p.exit_text = DecodeEEFaceFromJson(jr, "exit");
+                    DecodeEELengthFromJson(jr, p.length_mode, p.min_len, p.max_len);
+                    ref.match_all = false;
+                    ref.predicate_text = FormatEntryExitFactorText(p);
+                  } else {
+                    // Unsupported types (crystal / direction / complex / none) are outside
+                    // the GUI editor's expressible set (plan §2 Out of scope); skip loudly
+                    // rather than degrade to match-all (which would silently WIDEN the class
+                    // to the whole crystal).
+                    GUI_LOG_WARNING(
+                        "[FileIO] DeserializeFromJson: raypath_color class {} ref type '{}' unsupported in GUI; "
+                        "ref skipped.",
+                        ci, type_str);
+                    continue;
+                  }
+                }
+                cls.match.push_back(ref);
+              }
+            }
+            state.raypath_color.push_back(cls);
+          }
+        }
       }
     }
   }
