@@ -24,6 +24,7 @@
 #include "gui/gui_state.hpp"
 #include "gui/preview_renderer.hpp"
 #include "gui/raypath_segments.hpp"
+#include "include/lumice_config_scope.hpp"
 #include "util/path_utils.hpp"
 
 namespace lumice::gui {
@@ -897,6 +898,7 @@ bool BuildExportJsonOrWarn(const GuiState& state, std::string* out_json, std::st
   // a wrong config (code-review-02/03 Major). Pure — no dialog/filesystem — so this reject
   // path is directly unit-testable.
   LUMICE_Config probe{};
+  lumice::ConfigColorGuard probe_color_guard(probe);  // v4.8: release probe.raypath_color on scope exit
   FilterOverflowInfo overflow;
   ColorClassOverflowInfo color_overflow;
   if (!FillLumiceConfig(state, &probe, &overflow, &color_overflow)) {
@@ -1414,11 +1416,25 @@ static bool FillColorClasses(const GuiState& state, const std::map<int, int>& cr
       return false;
     }
   }
-  // Emit.
-  out->raypath_color_count = n_classes;
+  // Emit. task-344 (BREAKING v4.8): raypath_color is a heap-allocated pointer owned by
+  // `out`. Allocate on the caller's behalf via LUMICE_ConfigCreateColorClasses (implicit
+  // allocation contract — the caller of FillLumiceConfig cannot know n_classes in
+  // advance). Caller MUST release via LUMICE_ConfigReleaseColorClasses (see
+  // lumice::ConfigColorGuard in lumice_config_scope.hpp).
+  LUMICE_ColorClass* dst_array = nullptr;
+  if (n_classes > 0) {
+    dst_array = LUMICE_ConfigCreateColorClasses(out, n_classes);
+    if (dst_array == nullptr) {
+      // n_classes bounded above by LUMICE_MAX_CONFIG_COLOR_CLASSES; only OOM reaches here.
+      return false;
+    }
+  } else {
+    // Zero classes: keep raypath_color nullptr / count 0 (mono-only state).
+    out->raypath_color_count = 0;
+  }
   for (int i = 0; i < n_classes; i++) {
     const auto& cls = state.raypath_color[i];
-    LUMICE_ColorClass& dst = out->raypath_color[i];
+    LUMICE_ColorClass& dst = dst_array[i];
     dst.color[0] = cls.color[0];
     dst.color[1] = cls.color[1];
     dst.color[2] = cls.color[2];
@@ -1443,6 +1459,10 @@ static bool FillColorClasses(const GuiState& state, const std::map<int, int>& cr
 
 bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out, FilterOverflowInfo* overflow,
                       ColorClassOverflowInfo* color_overflow) {
+  // v4.8: raypath_color is an owning heap pointer. If `out` was reused across two Fill
+  // calls, memset would clobber the pointer without freeing it — release first so the
+  // memset that follows sees a defensibly-null field. Release is null-safe / idempotent.
+  LUMICE_ConfigReleaseColorClasses(out);
   std::memset(out, 0, sizeof(LUMICE_Config));
 
   // ID-pool model: walk entries, dedupe by pool id, emit one C crystal per reachable pool
