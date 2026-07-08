@@ -2668,7 +2668,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_fixture_roundtrip_three_arcs");
     t->TestFunc = [](ImGuiTestContext*) {
       ResetTestState();
-      std::ifstream ifs("test/e2e/configs/raypath_color_three_arcs.json");
+      std::ifstream ifs(LUMICE_E2E_CONFIG_DIR "/raypath_color_three_arcs.json");
       IM_CHECK(ifs.is_open());
       std::string js((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
       IM_CHECK(!js.empty());
