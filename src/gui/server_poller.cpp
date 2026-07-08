@@ -178,6 +178,18 @@ void ServerPoller::PollOnce() {
   LUMICE_RawXyzResult xyz_results[2]{};
   LUMICE_GetRawXyzResults(server, xyz_results, 1);
 
+  // task-342.4 Step 2: composite (raypath_color) surface — poll the second
+  // consumer in the same tick. Step 1 unified DoSnapshot() so this second call
+  // is race-free: either RawXyz or Composite (whichever arrives first) drives
+  // the dirty-flag consume, both see identical this-generation caches. The
+  // img_buffer sentinel (NULL when no raypath_color is configured; non-NULL
+  // when there is at least one colored consumer with a composite this
+  // generation) IS the raypath-color-active detector — no cross-thread state
+  // needs to be threaded through from the GUI (plan §3 keypoint 2).
+  LUMICE_RenderResult composite_results[2]{};
+  LUMICE_GetCompositeResults(server, composite_results, 1);
+  const bool composite_active = composite_results[0].img_buffer != nullptr;
+
   // Check if this is genuinely new snapshot data (generation changed)
   bool has_new_snapshot =
       xyz_results[0].xyz_buffer != nullptr && xyz_results[0].snapshot_generation != last_generation_;
@@ -233,6 +245,22 @@ void ServerPoller::PollOnce() {
       payload->texture_ray_count = cached_stats.sim_ray_num;
       payload->p99_y = ComputeP99Y(payload->xyz_data, payload->width, payload->height, kEvAutoDownsampleFactor);
       payload->payload_epoch = xyz_results[0].epoch;
+      // task-342.4 Step 2: if raypath_color is active, copy the composite RGB
+      // bytes alongside the XYZ float buffer. The main-thread upload path
+      // (SyncFromPoller) branches on is_composite to pick UploadTexture vs
+      // UploadXyzTexture. Composite width/height come from composite_results
+      // itself (not xyz's) — they must match by construction (same
+      // RenderConsumer), but taking the source's own dims makes the memcpy
+      // bounds self-consistent (plan §7 risk 2 mitigation).
+      if (composite_active) {
+        const size_t rgb_bytes = static_cast<size_t>(composite_results[0].img_width) *
+                                 static_cast<size_t>(composite_results[0].img_height) * 3;
+        payload->rgb_data.resize(rgb_bytes);
+        std::memcpy(payload->rgb_data.data(), composite_results[0].img_buffer, rgb_bytes);
+        payload->is_composite = true;
+      }
+      // (payload is default-constructed with rgb_data empty + is_composite=false,
+      // so the not-active branch is a no-op; explicit reset would be redundant.)
       new_payload = std::move(payload);
       GUI_LOG_VERBOSE("[Poller] staged: rays={} intensity={} gen={}", cached_stats.sim_ray_num,
                       xyz_results[0].snapshot_intensity, xyz_results[0].snapshot_generation);

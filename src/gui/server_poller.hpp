@@ -33,6 +33,18 @@ struct TexturePayload {
   // RawXyzResult.epoch: the lifecycle epoch this texture was produced under. May lag the
   // bundle epoch when carried forward (1.5 display keying distinguishes the two).
   unsigned long long payload_epoch = 0;
+
+  // task-342.4 Step 2: composite (raypath_color) surface.
+  // rgb_data is a sRGB uint8 buffer (W*H*3), populated ONLY when raypath_color is
+  // active on this snapshot. is_composite tells the main-thread upload path which
+  // GL texture format + shader mode to use:
+  //   is_composite == true  → UploadTexture(rgb_data, W, H) + u_xyz_mode=0
+  //   is_composite == false → UploadXyzTexture(xyz_data, W, H) + u_xyz_mode=1 (unchanged)
+  // xyz_data / p99_y / snapshot_intensity / effective_pixels are ALWAYS populated
+  // (auto-EV + quality gate are not touched by this change), even when is_composite
+  // is true — see plan §3 keypoint 3.
+  std::vector<unsigned char> rgb_data;
+  bool is_composite = false;
 };
 
 // The single cross-thread handoff unit. Constructed fully, then treated as const: the whole

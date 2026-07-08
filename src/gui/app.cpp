@@ -1008,7 +1008,19 @@ void SyncFromPoller() {
     GUI_LOG_VERBOSE("[GUI] SyncFromPoller: upload tex_rays={}, intensity={:.6f}, eff_pixels={}, factor={:.6f}",
                     payload->texture_ray_count, payload->snapshot_intensity, payload->effective_pixels,
                     payload->intensity_factor);
-    g_preview.UploadXyzTexture(payload->xyz_data.data(), payload->width, payload->height);
+    // task-342.4 Step 3: choose sRGB uint8 vs XYZ float upload path based on
+    // raypath_color activation. When active, poller populates rgb_data with the
+    // core-composited sRGB (host-side composite path, no shader change); when
+    // not, we stay on the original XYZ float path bit-for-bit. Auto-EV / stats
+    // / serial-dedup all keep reading xyz_data-derived fields (payload->p99_y,
+    // snapshot_intensity, effective_pixels) below — those are computed on the
+    // XYZ buffer, populated in both branches, so this pipe is not disturbed
+    // (plan §3 keypoint 3).
+    if (payload->is_composite) {
+      g_preview.UploadTexture(payload->rgb_data.data(), payload->width, payload->height);
+    } else {
+      g_preview.UploadXyzTexture(payload->xyz_data.data(), payload->width, payload->height);
+    }
     g_state.snapshot_intensity = payload->snapshot_intensity;
     g_state.effective_pixels = payload->effective_pixels;
     g_state.texture_upload_count++;
