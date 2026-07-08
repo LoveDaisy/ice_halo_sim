@@ -257,6 +257,61 @@ color-tagged. `raypath_color_mode` selects the display-time composite mode
 == 0` disables color entirely — the mono `LUMICE_GetRenderResults` output and
 the emitted JSON are byte-identical to a config without the field.
 
+##### Lifetime — `raypath_color` is a heap pointer (BREAKING v4.8)
+
+Since v4.8 (task-344), `LUMICE_Config.raypath_color` is a heap-allocated
+`LUMICE_ColorClass*`, **not** an inline fixed-size array. The change shrinks
+`sizeof(LUMICE_Config)` from ~467 KB to ~113 KB (fixed a stack overflow in
+the GUI test harness when two `LUMICE_Config` locals shared a single stack
+frame) and hands the caller explicit ownership of the color-class allocation.
+
+Two APIs manage the allocation:
+
+```c
+LUMICE_ColorClass* LUMICE_ConfigCreateColorClasses(LUMICE_Config* cfg, int count);
+void               LUMICE_ConfigReleaseColorClasses(LUMICE_Config* cfg);
+```
+
+- `Create` zero-initializes `count` `LUMICE_ColorClass` entries, writes them
+  into `cfg->raypath_color` (with `cfg->raypath_color_count = count`), and
+  returns the array pointer for the caller to fill. `count == 0` sets
+  `raypath_color = NULL / raypath_color_count = 0` (equivalent to "no color
+  classes"). Rejects `cfg == NULL`, `count < 0`, or
+  `count > LUMICE_MAX_CONFIG_COLOR_CLASSES` by returning `NULL`.
+  **Idempotent / create-or-replace**: if `cfg->raypath_color` is already
+  non-NULL (previous `Create` or implicit-alloc path), the old allocation
+  is freed first, so calling `Create` twice on the same `cfg` is safe.
+- `Release` frees the allocation and resets `raypath_color / raypath_color_count`
+  to zero. Null-safe and idempotent — safe to call on an already-released or
+  never-allocated `cfg`.
+
+**Implicit-alloc paths** (caller does NOT pre-call `Create`; the function
+allocates internally): `LUMICE_ParseConfigString` / `LUMICE_ParseConfigFile`
+and the GUI's `FillLumiceConfig` allocate `raypath_color` based on data they
+parse (JSON `classes` length or `GuiState.raypath_color.size()`). The caller
+still owns the resulting allocation and **must call `Release`** (directly or
+via the RAII guard below) once done, regardless of who triggered the alloc.
+
+**Do not copy `LUMICE_Config` by value.** Because `raypath_color` is an
+owning heap pointer, `LUMICE_Config b = a;` / by-value function parameters /
+`std::vector<LUMICE_Config>` alias the same allocation and double-free at
+second `Release`. Route through `LUMICE_Config*` or `const LUMICE_Config&`.
+`scripts/check_policies.py` (rule `no-config-by-value-copy`) enforces this
+statically for `src/` and `test/`.
+
+**RAII helper (C++ only)** — `src/include/lumice_config_scope.hpp` provides
+`lumice::ConfigColorGuard`, a non-copyable / non-movable scope guard that
+calls `Release` on the referenced `LUMICE_Config` at end of scope, covering
+all early-return paths (assertions, `IM_CHECK`, exceptions):
+
+```cpp
+LUMICE_Config cfg{};
+lumice::ConfigColorGuard _color_guard(cfg);   // frees raypath_color on scope exit
+LUMICE_ParseConfigString(json_str, strlen(json_str), &cfg);
+// ... use cfg ...
+```
+
+
 Two disjoint change paths — pick by whether the *members* change:
 
 - **Structure change** (`match[]` refs / `combine`) → **re-simulation**. Edit
