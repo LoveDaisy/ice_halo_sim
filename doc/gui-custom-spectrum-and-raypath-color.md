@@ -137,6 +137,18 @@ owner 计划扩展两个相关但不同的功能：
 - **写路径分流**（§4.0"API 按 re-sim 边界拆"在 GUI 侧的落地）：色/可见/solo/z_order/合成模式 → 立即调 `LUMICE_SetRaypathColors`（display-time，不重仿真）；谓词/combine/加删类/加删 ref → `MarkFilterDirty()`（走既有 debounce commit 管线）。
 - **测试**：`test/gui/functional/test_gui_color_window.cpp`（10 例，直接调 4 个纯 helper，无需驱动 ImGui 交互）+ Step 3/4 的 21 例 struct/JSON 结构等价 + `test_raypath_color.py` 端到端 PSNR 回归。AC6（owner on-screen 手感验收：拖 z-order、编谓词、导入、切模式）留给 owner 亲验，非 CI 可判定。
 
+**⭐as-built（④preview 合成 v1，task-preview-composite-v1 / task-342.4）**：GUI 预览按帧感知 `raypath_color` 激活状态，激活时用 host 侧合成图取代 XYZ 上传，未激活逐字节回落到 §4.0 上方设想的"零 shader 改、零新读 API"路径：
+- **Poller 双源采集**（`src/gui/server_poller.cpp` `PollOnce()`）：`LUMICE_GetRawXyzResults` 之后紧接一次 `LUMICE_GetCompositeResults(server, out, 1)`，以 `out[0].img_buffer != nullptr` 作为 raypath_color 是否激活的哨兵（`ColoredMask==0` 的 consumer 被 DoSnapshot Phase-2 skip，正是 §4.0 上方规定的 sentinel 语义）——**不引入跨线程状态**、无需从 GUI 主线程传 `GuiState::raypath_color` 到后台 poller。
+- **`TexturePayload` 双缓冲**（`src/gui/server_poller.hpp`）：新增 `rgb_data`（sRGB uint8, W×H×3）与 `is_composite`；XYZ float 缓冲 **始终**填充（auto-EV / p99 / effective_pixels / quality gate 全从 xyz_data 派生，激活与否不影响），激活时**追加**填 rgb_data；未激活时 default-constructed 的 empty/false 即正确态。约 +25% 帧内存换 auto-EV/quality gate 管线零改动。
+- **上传分流**（`src/gui/app.cpp` `SyncFromPoller`）：按 `payload->is_composite` 分派到既有 `UploadTexture`（`preview_renderer.cpp:617`，sRGB 上传 + `u_xyz_mode=0`）或 `UploadXyzTexture`（原路，`u_xyz_mode=1`）。**snapshot_intensity/effective_pixels/texture_upload_count/last_uploaded_texture_serial/p99_raw_y/ev_auto 一字未改**，继续统一来自 xyz_data 派生字段。
+- **⭐正确性地基（Step 1）——`DoSnapshot()` 收敛四类 consumer 共享单一物化入口**：白盒发现 `GetRawXyzResults` 与 `DoSnapshot`（`GetRenderResults`/`GetCompositeResults`/`GetStatsResult` 共享）**各自持有独立的 Phase-1 dirty 消费逻辑**，两套逻辑竞争同一 `snapshot_dirty_` 标志。本任务第一次在同一次 `PollOnce()` 里让 RawXyz + Composite 两个消费者同 tick 读取，两种朴素调用顺序都会破坏可观察行为——先 RawXyz 则 Composite 见 `snapshot_dirty_==false` → `cached_composite_results_` 永久陈旧（AC1/AC3 失效）；先 Composite 则 `snapshot_generation_` 从此不再增长（poller `has_new_snapshot` 恒假，纹理再也不更新）。修复：把 `snapshot_generation_++` 从 `GetRawXyzResults` 挪进 `DoSnapshot()` Phase-1 临界区、后者签名 `void`→`bool`；`GetRawXyzResults` 改为调用 `DoSnapshot()` 后再读结果（同 `GetRenderResults`/`GetCompositeResults`/`GetStatsResult`），删除末尾与 Phase-2 重复的非-RenderConsumer StatsResult 缓存分支。修复后不变量：**`snapshot_dirty_` 只被"第一个到达的 Get\* 调用"通过 `DoSnapshot` 消费一次，`PrepareSnapshot`/`PostSnapshot`/合成/`snapshot_generation_++` 作为同一原子事件发生**——正是 `gui-preview-lifecycle-architecture.md` 反复强调的"单一物化事件 + 多个只读视图"在第 4 个消费者身上的补课。回归钉在 `RaypathColorApi.RawXyzThenCompositeSeesFreshGeneration` / `.CompositeThenRawXyzGenerationStillAdvances`（`test/unit-correctness/server/test_c_api.cpp`）。**未来任何要求在 `PollOnce()` 里加第三/第四个消费者的改动，都必须走 `DoSnapshot()`，别再手搓 Phase-1**。
+- **测试**：
+  - unit-correctness `RaypathColorApi.RawXyzThenCompositeSeesFreshGeneration`/`.CompositeThenRawXyzGenerationStillAdvances`——同 tick 内两种调用顺序的正确性回归（AC1/AC3 前置）。
+  - gui_test `gui_composite_preview.raypath_color_active_populates_rgb_payload`——AC1 headless 锚点：payload `rgb_data` 与 `LUMICE_GetCompositeResults` 字节相等且非零。
+  - gui_test `gui_composite_preview.no_raypath_color_stays_on_xyz_path`——AC2 逐字节零回归锚点：`xyz_data` 与 `LUMICE_GetRawXyzResults` 相等、`is_composite==false`、composite 哨兵 NULL。
+- **AC4（切换激活/未激活无闪烁/撕裂 + 观感 + overlay 叠加）**：owner on-screen 人工闸，同 342.3 先例；本任务的自动化只覆盖机制层，视觉体验由 owner 亲验。
+- **未做**：多 lane shader（host 侧瞬时切模式 / per-class 透明度）延后到证明需要（a05/a14）；GPU device-side 颜色谓词评估仍归 scrum-3c。
+
 ### 4.1 三层模型如何组合（门 / summand 色桶 / 跨层 rule）
 
 > ⚠️ **SUPERSEDED（2026-07-08，见 §4.0）**：本节 Fork C（色桶 = filter 的 summand）已被 Design-2 重定向推翻——颜色类现为**独立于物理 filter 的 placement-scoped 谓词列表**。以下保留作历史推理（§1 三层角色、去重、按需分配等思想仍有效），但**数据模型以 §4.0 为准**。
