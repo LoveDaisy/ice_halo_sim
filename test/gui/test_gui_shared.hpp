@@ -155,6 +155,7 @@ void RegisterScreenshotTests(ImGuiTestEngine* engine);
 void RegisterVisualTests(ImGuiTestEngine* engine);
 void RegisterBgOverlayTests(ImGuiTestEngine* engine);
 void RegisterImportExportTests(ImGuiTestEngine* engine);
+void RegisterColorWindowTests(ImGuiTestEngine* engine);
 void RegisterCalibrationTests(ImGuiTestEngine* engine);
 void RegisterPerfTests(ImGuiTestEngine* engine);
 void RegisterP1InteractionTests(ImGuiTestEngine* engine);

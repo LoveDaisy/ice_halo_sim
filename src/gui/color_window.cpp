@@ -122,6 +122,8 @@ std::string BuildClassSummary(const GuiState& state, const ColorClassConfig& cls
   return out;
 }
 
+}  // namespace
+
 // Reassign z_order[] to a compact permutation [0, size) preserving the current
 // user-visible ordering. Called after delete-class (which may leave holes) so
 // the invariant expected by LUMICE_SetRaypathColors (z_order is a permutation)
@@ -149,6 +151,30 @@ void SwapZOrder(GuiState& state, size_t a, size_t b) {
   std::swap(state.raypath_color[a].z_order, state.raypath_color[b].z_order);
 }
 
+// Validate the user's per-ref text under the "single atom" (single Factor,
+// single alternative) rule expressed by decision 3 in plan §3. Returns
+// (state, message) so the row can render a red-tinted border + tooltip.
+GuiValidationResult ValidateSingleAtomText(const std::string& text) {
+  const std::string trimmed = TrimRaypathSegment(text);
+  if (trimmed.empty()) {
+    return GuiValidationResult{ LUMICE_RAYPATH_VALID, {} };
+  }
+  // Use PRISM as a permissive baseline for face-number legality: the color
+  // window's ref carries no crystal-kind info at edit time (it points to a
+  // pool id, and multiple placements of different kinds may share a class).
+  // LUMICE_IsLegalFace guards the physical raypath filter separately at
+  // commit time; here we only need syntactic validation + the single-atom rule.
+  auto base = ValidateSummandText(trimmed, LUMICE_CRYSTAL_PRISM);
+  if (base.state != LUMICE_RAYPATH_VALID) {
+    return base;
+  }
+  const auto factors = ParseSummandText(trimmed);
+  if (factors.size() != 1) {
+    return GuiValidationResult{ LUMICE_RAYPATH_INVALID, "single-atom only — use combine:all across refs for AND" };
+  }
+  return GuiValidationResult{ LUMICE_RAYPATH_VALID, {} };
+}
+
 // Import a GUI filter's SoP as ref[]s in a fresh ColorClassConfig. Multi-factor
 // AND rows are skipped with a queued warning (LUMICE_ColorPredicate is a single
 // atom; combine:all is cross-ref, not intra-ref). combine defaults to `any`
@@ -171,6 +197,8 @@ ColorClassConfig BuildClassFromFilter(int layer_idx, int crystal_pool_id, const 
   }
   return cls;
 }
+
+namespace {
 
 // Aggregate every (layer, entry) placement in the scene as an import target.
 struct PlacementRef {
@@ -236,32 +264,6 @@ void PushWarningStyle() {
 }
 void PopWarningStyle() {
   ImGui::PopStyleColor();
-}
-
-// -------------------- predicate editor helpers --------------------
-
-// Validate the user's per-ref text under the "single atom" (single Factor,
-// single alternative) rule expressed by decision 3 in plan §3. Returns
-// (state, message) so the row can render a red-tinted border + tooltip.
-GuiValidationResult ValidateSingleAtomText(const std::string& text) {
-  const std::string trimmed = TrimRaypathSegment(text);
-  if (trimmed.empty()) {
-    return GuiValidationResult{ LUMICE_RAYPATH_VALID, {} };
-  }
-  // Use PRISM as a permissive baseline for face-number legality: the color
-  // window's ref carries no crystal-kind info at edit time (it points to a
-  // pool id, and multiple placements of different kinds may share a class).
-  // LUMICE_IsLegalFace guards the physical raypath filter separately at
-  // commit time; here we only need syntactic validation + the single-atom rule.
-  auto base = ValidateSummandText(trimmed, LUMICE_CRYSTAL_PRISM);
-  if (base.state != LUMICE_RAYPATH_VALID) {
-    return base;
-  }
-  const auto factors = ParseSummandText(trimmed);
-  if (factors.size() != 1) {
-    return GuiValidationResult{ LUMICE_RAYPATH_INVALID, "single-atom only — use combine:all across refs for AND" };
-  }
-  return GuiValidationResult{ LUMICE_RAYPATH_VALID, {} };
 }
 
 // -------------------- window body --------------------
