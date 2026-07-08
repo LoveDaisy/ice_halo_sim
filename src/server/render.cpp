@@ -71,6 +71,22 @@ const float* RenderConsumer::GetColorClassLaneY(size_t class_idx) const {
   return snapshot_lane_y_[class_idx].get();
 }
 
+bool RenderConsumer::HasColorClassSignal(size_t class_idx) const {
+  if (class_idx >= snapshot_lane_y_.size()) {
+    return false;
+  }
+  const float* lane = snapshot_lane_y_[class_idx].get();
+  if (lane == nullptr) {
+    return false;
+  }
+  for (size_t i = 0; i < lane_pixel_count_; i++) {
+    if (lane[i] > 0.0f) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // task-336.3: single source of truth for the mono-image exposure scale (see
 // plan §1.1). PostSnapshot() below calls this so the inline scale and the
 // compositor's scale can never drift apart.

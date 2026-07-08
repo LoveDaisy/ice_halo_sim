@@ -247,6 +247,136 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 - `LUMICE_ERR_FILE_NOT_FOUND`: file does not exist or cannot be opened
 - Other error codes: invalid configuration content
 
+#### Per-raypath color classes (`raypath_color`) and `LUMICE_SetRaypathColors`
+
+`LUMICE_Config` carries an optional `raypath_color[]` (Design 2, task-342.2):
+each *color class* has an RGB color plus a set of placement-scoped *match*
+predicates `{layer, crystal, predicate}` that decide which surviving rays get
+color-tagged. `raypath_color_mode` selects the display-time composite mode
+(`LUMICE_COLOR_MODE_DOMINANT` / `_ADDITIVE` / `_PAINTER`). `raypath_color_count
+== 0` disables color entirely — the mono `LUMICE_GetRenderResults` output and
+the emitted JSON are byte-identical to a config without the field.
+
+##### Lifetime — `raypath_color` is a heap pointer (BREAKING v4.8)
+
+Since v4.8 (task-344), `LUMICE_Config.raypath_color` is a heap-allocated
+`LUMICE_ColorClass*`, **not** an inline fixed-size array. The change shrinks
+`sizeof(LUMICE_Config)` from ~467 KB to ~113 KB (fixed a stack overflow in
+the GUI test harness when two `LUMICE_Config` locals shared a single stack
+frame) and hands the caller explicit ownership of the color-class allocation.
+
+Two APIs manage the allocation:
+
+```c
+LUMICE_ColorClass* LUMICE_ConfigCreateColorClasses(LUMICE_Config* cfg, int count);
+void               LUMICE_ConfigReleaseColorClasses(LUMICE_Config* cfg);
+```
+
+- `Create` zero-initializes `count` `LUMICE_ColorClass` entries, writes them
+  into `cfg->raypath_color` (with `cfg->raypath_color_count = count`), and
+  returns the array pointer for the caller to fill. `count == 0` sets
+  `raypath_color = NULL / raypath_color_count = 0` (equivalent to "no color
+  classes"). Rejects `cfg == NULL`, `count < 0`, or
+  `count > LUMICE_MAX_CONFIG_COLOR_CLASSES` by returning `NULL`.
+  **Idempotent / create-or-replace**: if `cfg->raypath_color` is already
+  non-NULL (previous `Create` or implicit-alloc path), the old allocation
+  is freed first, so calling `Create` twice on the same `cfg` is safe.
+- `Release` frees the allocation and resets `raypath_color / raypath_color_count`
+  to zero. Null-safe and idempotent — safe to call on an already-released or
+  never-allocated `cfg`.
+
+**Implicit-alloc paths** (caller does NOT pre-call `Create`; the function
+allocates internally): `LUMICE_ParseConfigString` / `LUMICE_ParseConfigFile`
+and the GUI's `FillLumiceConfig` allocate `raypath_color` based on data they
+parse (JSON `classes` length or `GuiState.raypath_color.size()`). The caller
+still owns the resulting allocation and **must call `Release`** (directly or
+via the RAII guard below) once done, regardless of who triggered the alloc.
+
+**Do not copy `LUMICE_Config` by value.** Because `raypath_color` is an
+owning heap pointer, `LUMICE_Config b = a;` / by-value function parameters /
+`std::vector<LUMICE_Config>` alias the same allocation and double-free at
+second `Release`. Route through `LUMICE_Config*` or `const LUMICE_Config&`.
+`scripts/check_policies.py` (rule `no-config-by-value-copy`) enforces this
+statically for `src/` and `test/`.
+
+**RAII helper (C++ only)** — `src/include/lumice_config_scope.hpp` provides
+`lumice::ConfigColorGuard`, a non-copyable / non-movable scope guard that
+calls `Release` on the referenced `LUMICE_Config` at end of scope, covering
+all early-return paths (assertions, `IM_CHECK`, exceptions):
+
+```cpp
+LUMICE_Config cfg{};
+lumice::ConfigColorGuard _color_guard(cfg);   // frees raypath_color on scope exit
+LUMICE_ParseConfigString(json_str, strlen(json_str), &cfg);
+// ... use cfg ...
+```
+
+
+Two disjoint change paths — pick by whether the *members* change:
+
+- **Structure change** (`match[]` refs / `combine`) → **re-simulation**. Edit
+  `LUMICE_Config.raypath_color[]` and re-submit via `LUMICE_CommitConfig` (JSON
+  string) or `LUMICE_CommitConfigStruct` (C struct); both produce identical
+  composites. Read the composite images via `LUMICE_GetCompositeResults` (one
+  sRGB `LUMICE_RenderResult` per colored renderer).
+- **Appearance change** (RGB / visible / solo / z-order / composite mode) →
+  **no re-simulation**:
+
+```c
+LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server,
+                                         const LUMICE_ColorClassDisplay* classes,
+                                         int class_count, const int* z_order, int mode);
+```
+
+**Parameters**:
+- `classes`: per-class appearance patch (color, visible, solo). `class_count`
+  must equal the committed `raypath_color_count`.
+- `z_order`: optional (`NULL` = unchanged); when set, must be a permutation of
+  `[0, class_count)` where `z_order[i]` is the new drawing rank of class `i`.
+- `mode`: `LUMICE_COLOR_MODE_*`.
+
+**Return value**:
+- `LUMICE_OK`: success — the next `LUMICE_GetCompositeResults` re-composites the
+  already-accumulated data with the new appearance. The simulation epoch and
+  accumulator are untouched (no restart).
+- `LUMICE_ERR_NULL_ARG`: `server` is `NULL`, or `classes` is `NULL` with
+  `class_count > 0`.
+- `LUMICE_ERR_INVALID_VALUE`: `mode` out of range.
+- `LUMICE_ERR_INVALID_CONFIG`: `class_count` mismatch (structure changed —
+  re-commit the config) or `z_order` is not a valid permutation.
+
+#### LUMICE_GetColorClassSignal (AC4 empty-arc detector)
+
+```c
+LUMICE_ErrorCode LUMICE_GetColorClassSignal(LUMICE_Server* server, int* out_flags, int class_count);
+```
+
+For each committed color class, reports whether it has captured any rays yet —
+i.e. whether its snapshot Y-lane has any non-zero pixel on any active
+`RenderConsumer`. Intended for GUI empty-arc warnings when a physical filter
+has silently blocked all rays that would have matched a color class's
+predicate (a footgun the color-tag/physical-filter decoupling in §4.0 of
+`doc/gui-custom-spectrum-and-raypath-color.md` makes possible: a color
+predicate can reference a raypath the physical filter already excludes).
+
+**Parameters**:
+- `out_flags`: caller-owned buffer of length `class_count`. On success,
+  `out_flags[i] = 1` iff class `i` has signal, `0` otherwise.
+- `class_count`: must equal the committed `raypath_color_count`; `0` is a
+  valid no-op (`out_flags` untouched).
+
+**Return value**:
+- `LUMICE_OK`: success.
+- `LUMICE_ERR_NULL_ARG`: `server` is `NULL`, or `out_flags` is `NULL` with
+  `class_count > 0`.
+- `LUMICE_ERR_INVALID_CONFIG`: `class_count` mismatch.
+
+Reads the frozen snapshot state (no `DoSnapshot` trigger) — callers relying on
+freshness should query `LUMICE_GetCompositeResults` / `LUMICE_GetRawXyzResults`
+first. `O(W*H * class_count * consumers)` scan; intended for infrequent polls
+(commit-debounce cadence, ~1 Hz), not per render frame — the GUI color window
+throttles its poll to 500ms (`kSignalPollIntervalSec` in `color_window.cpp`).
+
 ### Retrieving Results
 
 Result retrieval uses a unified array + sentinel pattern:

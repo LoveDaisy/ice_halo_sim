@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "config/proj_config.hpp"
+#include "config/raypath_color_config.hpp"
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/backend/backend_kind.hpp"
@@ -40,6 +41,12 @@ struct SimBatch {
   // this field and tolerates null. shared_ptr<const ...> guarantees in-flight
   // SimBatches keep the snapshot alive after a later CommitConfig swap.
   std::shared_ptr<const std::vector<RenderConfig>> renders_;
+  // Snapshot of the raypath_color config active when this batch was emitted
+  // (task-engine-redirect-design2). Same locking discipline as `renders_` —
+  // captured under scene_mutex_ in GenerateScene so (scene, renders,
+  // raypath_color) is a consistent triple. NULL is treated as "no color
+  // configured" (AC3 zero-cost path) by both CPU emit gates.
+  std::shared_ptr<const RaypathColorConfig> raypath_color_;
 };
 
 class Simulator {
@@ -80,8 +87,9 @@ class Simulator {
     RayBuffer buffer_data[2]{};
     RayBuffer init_data[2]{};
   };
-  void SimulateOneWavelength(const SceneConfig& config, const WlParam& wl_param, size_t ray_num,
-                             CrystalCache& crystal_cache, SimWorkspace& workspace, uint64_t generation,
+  void SimulateOneWavelength(const SceneConfig& config, const RaypathColorConfig* raypath_color,
+                             const WlParam& wl_param, size_t ray_num, CrystalCache& crystal_cache,
+                             SimWorkspace& workspace, uint64_t generation,
                              std::vector<std::vector<double>>& ray_alloc_carry);
 
   // Backend-routed wavelength step (TraceBackend seam, scrum-258.1 exit-seam).
@@ -91,6 +99,7 @@ class Simulator {
   // projection (same downstream path as Metal-OFF). Only invoked when
   // CanUseBackend() returns true.
   void SimulateOneWavelengthWithBackend(TraceBackend& backend, const SceneConfig& scene, const RenderConfig& render,
+                                        std::shared_ptr<const RaypathColorConfig> raypath_color,
                                         const WlParam& wl_param, size_t ray_num, uint64_t generation);
 
   // scrum-312 (third-clock drain): for SupportsThirdClockDrain() backends the
@@ -152,18 +161,22 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& propo
 //
 // Internal: exposed for unit testing; not part of the public C API.
 //
-// task-331.2: when `summand_bits` is non-null, the emit gate produces the
-// current layer's raypath-color component bits for each surviving outgoing
-// candidate by reusing the FilterSpec's per-summand match (single pass, no
-// extra evaluation) and OR-ing the mapped bits into the ray's component mask
-// (carried forward by the T1 transport). `summand_bits[k]` = the global
-// component bit for OR-summand k of this (layer, crystal) filter (or
-// ComponentTable::kNoBit). Pass nullptr (default) to leave the mask untouched
-// — the gate decision and RNG order are then bit-identical to the pre-331.2
-// behaviour.
+// Design 2 (2026-07-08, doc/gui-custom-spectrum-and-raypath-color.md §4.0):
+// the emit gate has two decoupled predicates, evaluated on the same ray:
+//   - `spec` (physical filter) — decides whether the ray survives.
+//   - `color_spec` (color predicate, non-destructive pass) — decides which
+//     color component bits get OR'd into the ray's carried mask.
+// Both come from `FilterSpec::Create` with `action_=kFilterIn`; the ONLY
+// difference is which JSON they were built from (physical `filter` vs the
+// synthetic ComplexFilterParam we assemble from `raypath_color[].match[]`).
+// A null `color_spec` (default) leaves the mask untouched — zero cost when
+// no `raypath_color` is configured (AC3/AC4 anchors). `color_bits[k]` is the
+// global component bit for OR-summand k of the color spec (or
+// ComponentTable::kNoBit for budget-overflowed predicates).
 void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input
                  RayBuffer* buffer_data, RayBuffer* init_data,                               // output
-                 const std::vector<uint8_t>* summand_bits = nullptr);                        // input
+                 const FilterSpec* color_spec = nullptr,                                     // input
+                 const std::vector<uint8_t>* color_bits = nullptr);                          // input
 
 // Build the local-to-world rotation matrix for a crystal sample.
 // Implements the chain  R = Rz(az - pi) * Ry(-zenith) * Rz(roll),

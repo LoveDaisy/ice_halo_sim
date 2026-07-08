@@ -20,6 +20,7 @@
 #include "gui/gui_ev_auto.hpp"
 #include "gui/gui_logger.hpp"
 #include "gui/window_sizing.hpp"
+#include "include/lumice_config_scope.hpp"
 #include "util/path_utils.hpp"
 
 namespace lumice::gui {
@@ -614,6 +615,7 @@ void CalibrateQualityThreshold() {
 
   // Use current default state to build a calibration config
   LUMICE_Config config{};
+  lumice::ConfigColorGuard config_color_guard(config);  // v4.8: release raypath_color on any early return
   if (!FillLumiceConfig(g_state, &config)) {
     // Unlike DoRun (which pops SetGuiWarning), calibration degrades silently to the default
     // threshold: it does not touch the user's edited/committed config, so a log line is
@@ -771,30 +773,40 @@ void DoRun() {
   // (graceful degradation) — poller untouched, buffer not torn — rather than commit a
   // truncated config.
   LUMICE_Config config{};
+  lumice::ConfigColorGuard config_color_guard(config);  // v4.8: release raypath_color on any early return
   FilterOverflowInfo overflow;
-  if (!FillLumiceConfig(g_state, &config, &overflow)) {
-    // Locator ("filter \"NAME\", Layer L / Entry E", or "Layer L / Entry E" when unnamed)
-    // identifying which filter reference tripped the ABI bounds, captured inside
-    // FillLumiceConfig. Built by FormatOverflowLocator so the format is unit-testable
-    // (test_gui_import_export.cpp) rather than only exercised through on-screen GUI.
-    const std::string locator = FormatOverflowLocator(overflow);
-    // User-visible prompt (the Log panel is collapsed by default): the edit did NOT apply and
-    // the previous configuration was kept, so the user knows why nothing changed. The same
-    // locator-bearing text drives both the modal and the Log line so the two channels stay in
-    // sync (see Log-dedup comment below).
-    std::string warning_msg = "This filter has too many OR segments / values to apply (limit " +
-                              std::to_string(LUMICE_MAX_CONFIG_CLAUSES) + "; " + locator +
-                              ").\nThe previous configuration was kept. Simplify the filter and try again.";
+  ColorClassOverflowInfo color_overflow;
+  if (!FillLumiceConfig(g_state, &config, &overflow, &color_overflow)) {
+    // color_overflow.class_index >= 0 iff FillLumiceConfig failed on the color-class walk
+    // (which runs strictly after the filter walk), rather than a physical-filter overflow.
+    // Reusing the filter-overflow wording/limit for a color overflow would misattribute the
+    // resource type and print the wrong cap number to the user (code-review-01 Major 1).
+    std::string warning_msg;
+    std::string log_locator;
+    if (color_overflow.class_index >= 0) {
+      log_locator = FormatColorOverflowLocator(color_overflow);
+      // User-visible prompt (the Log panel is collapsed by default): the edit did NOT apply
+      // and the previous configuration was kept, so the user knows why nothing changed.
+      warning_msg = "This raypath color configuration exceeds its limits (" + log_locator +
+                    ").\nThe previous configuration was kept. Simplify the color configuration and try again.";
+    } else {
+      // Locator ("filter \"NAME\", Layer L / Entry E", or "Layer L / Entry E" when unnamed)
+      // identifying which filter reference tripped the ABI bounds, captured inside
+      // FillLumiceConfig. Built by FormatOverflowLocator so the format is unit-testable
+      // (test_gui_import_export.cpp) rather than only exercised through on-screen GUI.
+      log_locator = FormatOverflowLocator(overflow);
+      warning_msg = "This filter has too many OR segments / values to apply (limit " +
+                    std::to_string(LUMICE_MAX_CONFIG_CLAUSES) + "; " + log_locator +
+                    ").\nThe previous configuration was kept. Simplify the filter and try again.";
+    }
     // Log-panel dedup: gate the Log write on the SAME state SetGuiWarning uses for modal dedup
     // (in-flight message equals the new one). Sharing the key intentionally couples the two
     // channels — a wording change (e.g. new Layer/Entry after the user switches which filter
     // triggers the overflow) counts as a fresh event and re-logs. See plan.md §7 risk 1 for
     // why we did NOT introduce a separate `g_last_overlimit_log_msg` static variable.
     if (PeekGuiWarning() != warning_msg) {
-      GUI_LOG_WARNING(
-          "[GUI] DoRun: filter exceeds ABI limits (too many OR segments/values; {}); keeping the "
-          "previous configuration. Simplify the filter to apply the change.",
-          locator);
+      GUI_LOG_WARNING("[GUI] DoRun: {} exceeds ABI limits ({}); keeping the previous configuration.",
+                      color_overflow.class_index >= 0 ? "raypath color configuration" : "filter", log_locator);
     }
     SetGuiWarning(warning_msg);
     return;
@@ -999,7 +1011,19 @@ void SyncFromPoller() {
     GUI_LOG_VERBOSE("[GUI] SyncFromPoller: upload tex_rays={}, intensity={:.6f}, eff_pixels={}, factor={:.6f}",
                     payload->texture_ray_count, payload->snapshot_intensity, payload->effective_pixels,
                     payload->intensity_factor);
-    g_preview.UploadXyzTexture(payload->xyz_data.data(), payload->width, payload->height);
+    // task-342.4 Step 3: choose sRGB uint8 vs XYZ float upload path based on
+    // raypath_color activation. When active, poller populates rgb_data with the
+    // core-composited sRGB (host-side composite path, no shader change); when
+    // not, we stay on the original XYZ float path bit-for-bit. Auto-EV / stats
+    // / serial-dedup all keep reading xyz_data-derived fields (payload->p99_y,
+    // snapshot_intensity, effective_pixels) below — those are computed on the
+    // XYZ buffer, populated in both branches, so this pipe is not disturbed
+    // (plan §3 keypoint 3).
+    if (payload->is_composite) {
+      g_preview.UploadTexture(payload->rgb_data.data(), payload->width, payload->height);
+    } else {
+      g_preview.UploadXyzTexture(payload->xyz_data.data(), payload->width, payload->height);
+    }
     g_state.snapshot_intensity = payload->snapshot_intensity;
     g_state.effective_pixels = payload->effective_pixels;
     g_state.texture_upload_count++;

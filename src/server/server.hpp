@@ -10,7 +10,9 @@
 #include <variant>
 #include <vector>
 
+#include "config/color_class_table.hpp"
 #include "core/backend/backend_kind.hpp"
+#include "server/component_compositor.hpp"
 #include "util/logger.hpp"
 
 
@@ -366,6 +368,37 @@ class Server {
    * @note Convenience method, equivalent to GetStatus() == ServerStatus::kIdle
    */
   bool IsIdle() const;
+
+  /**
+   * @brief Display-time update of the committed color classes' appearance (task-342.2).
+   * @param classes     Per-class appearance patch (color, visible, solo).
+   * @param class_count Must equal the currently active color-class count; mismatch =
+   *                    Error::InvalidConfig (caller must re-commit the config to change
+   *                    member structure).
+   * @param z_order     Optional (nullptr = leave unchanged). When non-null, must be a
+   *                    permutation of [0, class_count): z_order[i] is the new drawing rank of
+   *                    class i (compositor sorts ascending — lower rank / rank 0 = drawn first,
+   *                    hence on top / wins painter and dominant ties). A non-permutation returns
+   *                    Error::InvalidConfig.
+   * @param mode        Composite mode (dominant/additive/painter).
+   * @return Error::Success on success. Never restarts the simulation — accumulator, epoch,
+   *         and consumers stay put. Only the next Get*Results call re-composites.
+   */
+  Error SetRaypathColors(const ColorClassDisplay* classes, int class_count, const int* z_order, CompositeMode mode);
+
+  /**
+   * @brief Per-color-class empty-arc detector (task-342.3 AC4).
+   * @param out_flags   Caller-owned buffer of length class_count. On success, each byte is set
+   *                    to 1 iff the corresponding class has any non-zero pixel in its snapshot
+   *                    Y-lane on any active RenderConsumer, 0 otherwise.
+   * @param class_count Must equal the currently active color-class count; mismatch =
+   *                    Error::InvalidConfig.
+   * @return Error::Success on success. Reads the frozen snapshot (no DoSnapshot trigger);
+   *         callers relying on freshness should poll GetCompositeResults / GetRawXyzResults
+   *         first. O(W*H * class_count * consumers) scan; intended for infrequent GUI polls
+   *         (commit-debounce cadence), not per-render-frame.
+   */
+  Error GetColorClassSignals(uint8_t* out_flags, int class_count);
 
  private:
   std::shared_ptr<ServerImpl> impl_;

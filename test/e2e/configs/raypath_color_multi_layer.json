@@ -27,6 +27,24 @@
         "zenith":  { "type": "uniform", "mean": 90, "std": 360 },
         "azimuth": { "type": "uniform", "mean": 0,  "std": 360 }
       }
+    },
+    {
+      "id": 4,
+      "type": "prism",
+      "shape": { "height": 1.2 },
+      "axis": {
+        "zenith":  { "type": "uniform", "mean": 90, "std": 360 },
+        "azimuth": { "type": "uniform", "mean": 0,  "std": 360 }
+      }
+    },
+    {
+      "id": 5,
+      "type": "prism",
+      "shape": { "height": 1.2 },
+      "axis": {
+        "zenith":  { "type": "uniform", "mean": 90, "std": 360 },
+        "azimuth": { "type": "uniform", "mean": 0,  "std": 360 }
+      }
     }
   ],
   "filter": [
@@ -48,8 +66,8 @@
         "prob": 0.9,
         "entries": [
           { "crystal": 1, "proportion": 30, "filter": 2 },
-          { "crystal": 1, "proportion": 10, "filter": 3 },
-          { "crystal": 1, "proportion": 10, "filter": 4 }
+          { "crystal": 4, "proportion": 10, "filter": 3 },
+          { "crystal": 5, "proportion": 10, "filter": 4 }
         ]
       },
       {
@@ -63,14 +81,14 @@
   },
   "raypath_color": [
     { "color": [1.0, 0.0, 1.0], "combine": "all", "match": [
-        { "layer": 0, "crystal": 1, "filter": 2 },
-        { "layer": 1, "crystal": 2, "filter": 5 }
+        { "layer": 0, "crystal": 1 },
+        { "layer": 1, "crystal": 2 }
     ] },
     { "color": [1.0, 0.55, 0.0], "match": [ { "layer": 1, "crystal": 3 } ] },
-    { "color": [1.0, 0.0, 0.0], "match": [ { "layer": 0, "crystal": 1, "filter": 3 } ] },
+    { "color": [1.0, 0.0, 0.0], "match": [ { "layer": 0, "crystal": 4 } ] },
     { "color": [0.0, 1.0, 0.0], "combine": "any", "match": [
-        { "layer": 0, "crystal": 1, "filter": 4, "summand": 0 },
-        { "layer": 0, "crystal": 1, "filter": 4, "summand": 1 }
+        { "layer": 0, "crystal": 5, "type": "entry_exit", "min_len": 2, "max_len": 2 },
+        { "layer": 0, "crystal": 5, "type": "entry_exit", "min_len": 3 }
     ] }
   ],
   "render": [

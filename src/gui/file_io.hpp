@@ -24,14 +24,30 @@ struct FilterOverflowInfo {
   std::string filter_name;  // FilterConfig::name (may be empty if user did not name the filter)
 };
 
+// task-342.3 (Step 3): identifies which raypath color-class ref triggered an ABI-bounds
+// overflow inside FillLumiceConfig (LUMICE_MAX_CONFIG_COLOR_CLASSES / _COLOR_REFS caps).
+// Populated only when FillLumiceConfig returns false due to color-class overflow AND the
+// caller passed a non-null pointer. class_index is 0-based (+1 for user-facing display);
+// ref_index is -1 for a class-cap overflow (too many classes) or 0-based when the class
+// itself has too many refs. class_over_cap distinguishes the class-cap case from a ref-cap
+// case (ref_index == -1 with class_over_cap == false is unused).
+struct ColorClassOverflowInfo {
+  int class_index = -1;         // 0-based color-class index (present to caller as +1); -1 = no overflow
+  int ref_index = -1;           // 0-based ref index within the class; -1 for class-cap overflow
+  bool class_over_cap = false;  // true = state.raypath_color.size() exceeds _COLOR_CLASSES
+};
+
 // Fill LUMICE_Config C struct from GuiState (for LUMICE_CommitConfigStruct, bypasses JSON serialization)
 // Fill a LUMICE_Config from GuiState for the typed-struct commit path. Returns false if a
-// filter expansion exceeded the ABI bounds (composition pool / clause / filter capacity),
-// in which case the caller must NOT commit `out` and should keep the prior committed state.
-// When `overflow` is non-null and the return is false, it receives the identity of the first
-// (layer, entry, filter name) that triggered the overflow so the caller can build a locating
-// message; the value is untouched on success.
-bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out, FilterOverflowInfo* overflow = nullptr);
+// filter expansion exceeded the ABI bounds (composition pool / clause / filter capacity)
+// OR a raypath color class/ref exceeded LUMICE_MAX_CONFIG_COLOR_{CLASSES,REFS}. In either
+// case the caller must NOT commit `out` and should keep the prior committed state.
+// When `filter_overflow` is non-null and the return is false due to a filter overflow, it
+// receives the identity of the first offending (layer, entry, filter name). Symmetric
+// contract for `color_overflow` on color-class overflow. Only one overflow is reported per
+// call (whichever is hit first, in file order: filter walk before color walk).
+bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out, FilterOverflowInfo* filter_overflow = nullptr,
+                      ColorClassOverflowInfo* color_overflow = nullptr);
 
 // Format a human-readable locator ("filter \"NAME\", Layer L / Entry E", or just
 // "Layer L / Entry E" when the filter is unnamed) from a FilterOverflowInfo, using 1-based
@@ -40,6 +56,13 @@ bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out, FilterOverflowI
 // exercised through on-screen GUI. Returns the inner text WITHOUT surrounding parentheses so the
 // caller can embed it inside its own "(limit N; ...)" grouping.
 std::string FormatOverflowLocator(const FilterOverflowInfo& overflow);
+
+// Format a human-readable, limit-bearing description of a ColorClassOverflowInfo — the
+// color-class-overflow counterpart to FormatOverflowLocator above. Pure so the message format
+// is unit-testable. Only valid to call when the overflow struct was actually populated (i.e.
+// `overflow.class_index >= 0`, the same discriminator callers use to tell a color-class
+// overflow apart from a physical-filter overflow after FillLumiceConfig returns false).
+std::string FormatColorOverflowLocator(const ColorClassOverflowInfo& overflow);
 
 // Serialize GuiState to Core JSON string (for .lmc save and CLI compatibility)
 std::string SerializeCoreConfig(const GuiState& state);

@@ -153,6 +153,29 @@ const std::array<float, 3> kGreen{ 0.0f, 1.0f, 0.0f };
 const std::array<float, 3> kBlue{ 0.0f, 0.0f, 1.0f };
 const std::array<float, 3> kWhite{ 1.0f, 1.0f, 1.0f };
 
+// Config-DTO helpers (shared with RaypathColorConfigJsonFormsRoundTrip below;
+// also consumed by DominantThreeArcsNoPhantomHue to build a Design-2
+// raypath_color config for the CPU emit gate).
+ColorClassConfig MakeCls(std::vector<float> rgb, std::vector<RaypathColorRef> match, bool visible = true,
+                         bool solo = false) {
+  ColorClassConfig c{};
+  c.color_[0] = rgb[0];
+  c.color_[1] = rgb[1];
+  c.color_[2] = rgb[2];
+  c.visible_ = visible;
+  c.solo_ = solo;
+  c.match_ = std::move(match);
+  return c;
+}
+
+RaypathColorRef MakeRef(uint16_t layer, uint16_t crystal, SimpleFilterParam predicate = NoneFilterParam{}) {
+  RaypathColorRef r{};
+  r.layer_ = layer;
+  r.crystal_ = crystal;
+  r.predicate_ = std::move(predicate);
+  return r;
+}
+
 // -----------------------------------------------------------------------------
 // A. Per-pixel mode math.
 // -----------------------------------------------------------------------------
@@ -458,6 +481,88 @@ TEST(ComponentCompositor, CrossLayerAllOnlyShowsWhereAllMembersHit) {
 }
 
 // -----------------------------------------------------------------------------
+// F2. z_order decoupling (task-342.2): changing z_order_ reorders the draw
+//     sequence (painter top layer / dominant tie winner) but NEVER re-binds a
+//     class to a different physical Y-lane — the compositor must index lanes by
+//     the ORIGINAL vector position, not the sorted position. This is the direct
+//     regression against the "naively re-sort the classes_ vector" trap (plan
+//     §3.2 key design point 1): a wrong impl would paint a lane's accumulated
+//     energy with another class's color.
+// -----------------------------------------------------------------------------
+TEST(ComponentCompositor, ZOrderReordersDrawButNotLaneBinding) {
+  constexpr int kRes = 3;
+  const int total_pix = kRes * kRes;
+  RenderConfig cfg = MakeRenderConfig(kRes);
+
+  // class0 = red on bit0, class1 = green on bit1. Ray masks {0b01, 0b10} so lane0
+  // accumulates the 0b01 ray and lane1 the 0b10 ray — a permanent binding built at
+  // RenderConsumer construction.
+  auto table = MakeSingletonClassTable(0b11, { kRed, kGreen });
+  RenderConsumer rc(cfg, table);
+  rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.6f, 0.4f }));
+  rc.PrepareSnapshot();
+
+  const int p = FindLitPixel(rc, total_pix);
+  ASSERT_GE(p, 0);
+  const float s = rc.ExposureScale();
+  const float lane0 = rc.GetColorClassLaneY(0)[p];  // class0's physical lane
+  const float lane1 = rc.GetColorClassLaneY(1)[p];  // class1's physical lane
+  const float ey0 = lane0 * s;
+  const float ey1 = lane1 * s;
+
+  std::vector<float> out;
+
+  // Baseline z_order (0,1): painter draws list-first class0 (red) on top.
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kPainter, out));
+  EXPECT_FLOAT_EQ(out[p * 3 + 0], ey0);
+  EXPECT_FLOAT_EQ(out[p * 3 + 1], 0.0f);
+
+  // Swap z_order so class1 has the LOWER rank (draws first / top for painter). Only the
+  // display-time field changes; the vector order and lane data are untouched.
+  {
+    auto t = table;
+    t.classes_[0].z_order_ = 1;
+    t.classes_[1].z_order_ = 0;
+    ASSERT_TRUE(CompositeColorClassesLinear(rc, t, CompositeMode::kPainter, out));
+    // Painter top layer is now class1 (green) — draw order changed...
+    EXPECT_FLOAT_EQ(out[p * 3 + 0], 0.0f);
+    EXPECT_FLOAT_EQ(out[p * 3 + 1], ey1)
+        << "green must be painted with class1's OWN exposed lane value (lane1), not lane0's — "
+           "z_order must not re-bind lane index to class";
+    // ...but the value equals class1's own physical lane (lane1), proving the lane→class
+    // binding did NOT follow the reorder. If the impl naively re-sorted the vector, green
+    // would incorrectly carry lane0's value (ey0 != ey1 here since weights 0.6 != 0.4).
+    ASSERT_NE(ey0, ey1);
+  }
+
+  // Dominant tie: give both lanes equal energy and flip z_order to prove the tie winner
+  // follows draw order (ascending z_order), independent of lane index.
+  {
+    RenderConsumer rc_tie(cfg, table);
+    rc_tie.Consume(MakeBatch({ 0b01, 0b10 }, { 0.5f, 0.5f }));
+    rc_tie.PrepareSnapshot();
+    const int pt = FindLitPixel(rc_tie, total_pix);
+    ASSERT_GE(pt, 0);
+    const float st = rc_tie.ExposureScale();
+    const float eyt = rc_tie.GetColorClassLaneY(0)[pt] * st;  // == lane1 too (equal weights)
+
+    // Default z_order (0,1): dominant tie → class0 (red).
+    auto t0 = table;
+    ASSERT_TRUE(CompositeColorClassesLinear(rc_tie, t0, CompositeMode::kDominant, out));
+    EXPECT_FLOAT_EQ(out[pt * 3 + 0], eyt);
+    EXPECT_FLOAT_EQ(out[pt * 3 + 1], 0.0f);
+
+    // Flip z_order so class1 is scanned first: dominant tie → class1 (green).
+    auto t1 = table;
+    t1.classes_[0].z_order_ = 1;
+    t1.classes_[1].z_order_ = 0;
+    ASSERT_TRUE(CompositeColorClassesLinear(rc_tie, t1, CompositeMode::kDominant, out));
+    EXPECT_FLOAT_EQ(out[pt * 3 + 0], 0.0f);
+    EXPECT_FLOAT_EQ(out[pt * 3 + 1], eyt);
+  }
+}
+
+// -----------------------------------------------------------------------------
 // H. ParseCompositeMode string handling.
 // -----------------------------------------------------------------------------
 TEST(ComponentCompositor, ParseCompositeModeKnownStrings) {
@@ -531,13 +636,29 @@ SceneConfig MakeTwoCrystalColoredScene(size_t max_hits) {
 TEST(ComponentCompositor, DominantThreeArcsNoPhantomHue) {
   constexpr size_t kMaxHits = 8;
   auto scene = MakeTwoCrystalColoredScene(kMaxHits);
-  auto table = BuildComponentTable(scene);
-  ASSERT_EQ(table.entries_.size(), 3u);
+
+  // Design 2: color bits come from a raypath_color config carried on the
+  // SessionSpec (see task-engine-redirect-design2 Step 5). The 3 predicates
+  // below reproduce the pre-migration three-arc bit allocation:
+  //   bit 0: crystal 0 (whole crystal — its only filter is EE{min=1}, which
+  //          is match-all across surviving paths on that placement)
+  //   bit 1: crystal 1, EE{min=2, max=2}
+  //   bit 2: crystal 1, EE{min=3}
+  auto rpc = std::make_shared<RaypathColorConfig>();
+  rpc->classes_.push_back(
+      MakeCls({ 1.0f, 0.0f, 0.0f }, { MakeRef(0, 0, SimpleFilterParam{ EntryExitFilterParam{} }) }));
+  rpc->classes_.push_back(
+      MakeCls({ 0.0f, 1.0f, 0.0f },
+              { MakeRef(0, 1, SimpleFilterParam{ EntryExitFilterParam{ std::nullopt, std::nullopt, 2, 2 } }) }));
+  rpc->classes_.push_back(MakeCls(
+      { 0.0f, 0.0f, 1.0f },
+      { MakeRef(0, 1, SimpleFilterParam{ EntryExitFilterParam{ std::nullopt, std::nullopt, 3, std::nullopt } }) }));
 
   RenderConfig render = MakeRenderConfig(64);
   SessionSpec spec;
   spec.scene = &scene;
   spec.render = &render;
+  spec.raypath_color = rpc;
   spec.wl = WlParam{ kWl, 1.0f };
   spec.seed = 20240707u;
 
@@ -644,40 +765,17 @@ TEST(ComponentCompositor, EmptyClassTableProducesNoComposite) {
 // Config-side smoke: RaypathColorConfig JSON round-trip (kept here to minimise
 // diff churn per plan risk 3; the DTO itself is exercised more fully in
 // test_color_class_table.cpp / test_raypath_color_config.cpp).
+// (MakeCls / MakeRef were promoted into the top-level anonymous namespace so
+// DominantThreeArcsNoPhantomHue can share them.)
 // -----------------------------------------------------------------------------
-namespace {
-
-ColorClassConfig MakeCls(std::vector<float> rgb, std::vector<RaypathColorRef> match, bool visible = true,
-                         bool solo = false) {
-  ColorClassConfig c{};
-  c.color_[0] = rgb[0];
-  c.color_[1] = rgb[1];
-  c.color_[2] = rgb[2];
-  c.visible_ = visible;
-  c.solo_ = solo;
-  c.match_ = std::move(match);
-  return c;
-}
-
-RaypathColorRef MakeRef(uint16_t layer, uint16_t crystal, bool has_filter, uint16_t filter, bool has_summand,
-                        uint16_t summand) {
-  RaypathColorRef r{};
-  r.layer_ = layer;
-  r.crystal_ = crystal;
-  r.has_filter_ = has_filter;
-  r.filter_ = filter;
-  r.has_summand_ = has_summand;
-  r.summand_ = summand;
-  return r;
-}
-
-}  // namespace
-
 TEST(ComponentCompositor, RaypathColorConfigJsonFormsRoundTrip) {
   // Non-default mode → object form {mode, classes}, preserving visible/solo.
+  // Design 2: match-all whole-crystal ref (default NoneFilterParam predicate)
+  // is the Design-2 equivalent of the pre-migration `has_filter=true,
+  // has_summand=true, summand=0` shape on a single-summand filter.
   RaypathColorConfig cfg;
   cfg.mode_ = "additive";
-  cfg.classes_.push_back(MakeCls({ 0.2f, 0.4f, 0.6f }, { MakeRef(0, 1, true, 0, true, 0) }, false, true));
+  cfg.classes_.push_back(MakeCls({ 0.2f, 0.4f, 0.6f }, { MakeRef(0, 1) }, false, true));
   nlohmann::json j = cfg;
   EXPECT_TRUE(j.is_object());
   RaypathColorConfig back = j.get<RaypathColorConfig>();
@@ -688,12 +786,11 @@ TEST(ComponentCompositor, RaypathColorConfigJsonFormsRoundTrip) {
   EXPECT_FLOAT_EQ(back.classes_[0].color_[2], 0.6f);
   ASSERT_EQ(back.classes_[0].match_.size(), 1u);
   EXPECT_EQ(back.classes_[0].match_[0].crystal_, 1);
-  EXPECT_TRUE(back.classes_[0].match_[0].has_filter_);
-  EXPECT_TRUE(back.classes_[0].match_[0].has_summand_);
+  EXPECT_TRUE(std::holds_alternative<NoneFilterParam>(back.classes_[0].match_[0].predicate_));
 
   // Default mode → bare array form, still round-trips.
   RaypathColorConfig dom;
-  dom.classes_.push_back(MakeCls({ 1.0f, 0.0f, 0.0f }, { MakeRef(0, 0, true, 0, false, 0) }));
+  dom.classes_.push_back(MakeCls({ 1.0f, 0.0f, 0.0f }, { MakeRef(0, 0) }));
   nlohmann::json jd = dom;
   EXPECT_TRUE(jd.is_array()) << "default-mode config must serialize as a bare array";
   RaypathColorConfig dback = jd.get<RaypathColorConfig>();

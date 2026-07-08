@@ -154,6 +154,44 @@ void ServerPoller::WorkerLoop() {
   }
 }
 
+// Composite width/height come from composite_result itself (not xyz's) — they must match by
+// construction (same RenderConsumer), but taking the source's own dims makes the memcpy bounds
+// self-consistent (plan §7 risk 2 mitigation).
+//
+// Copies immediately (before the generation-drift recheck below, which per lumice.h's
+// Get*Results aliasing contract invalidates composite_result.img_buffer) — tightens the
+// capture-to-memcpy window to match xyz's own capture-then-copy discipline.
+//
+// Generation-drift guard: the composite call in PollOnce() may have consumed a dirty-flag event
+// that landed strictly after the RawXyz call captured xyz_generation — pairing that newer
+// composite with older xyz-derived stats would silently mix two materialization events into one
+// payload, breaking the "single materialization event, multiple read-only views" invariant this
+// task's Step 1 refactor was meant to establish. LUMICE_RenderResult carries no generation field
+// (out of scope to add one), so detect the drift host-side via a cheap recheck call — safe here
+// because both the xyz buffer (copied by the caller before calling this) and
+// composite_result.img_buffer (copied below) are already captured.
+void ServerPoller::PopulateCompositePayload(LUMICE_Server* server, const LUMICE_RenderResult& composite_result,
+                                            unsigned long long xyz_generation, TexturePayload* payload) {
+  const size_t rgb_bytes =
+      static_cast<size_t>(composite_result.img_width) * static_cast<size_t>(composite_result.img_height) * 3;
+  payload->rgb_data.resize(rgb_bytes);
+  std::memcpy(payload->rgb_data.data(), composite_result.img_buffer, rgb_bytes);
+
+  LUMICE_RawXyzResult regen_check[2]{};
+  LUMICE_GetRawXyzResults(server, regen_check, 1);
+  if (regen_check[0].snapshot_generation == xyz_generation) {
+    payload->is_composite = true;
+    return;
+  }
+  // Drop this tick's composite; keep the xyz-only payload so stats/auto-EV/quality-gate still
+  // advance. Next poll will retry once a composite paired with the then-current xyz generation
+  // exists.
+  payload->rgb_data.clear();
+  payload->rgb_data.shrink_to_fit();
+  GUI_LOG_VERBOSE("[Poller] composite generation drift: xyz_gen={} recheck_gen={}, dropping this tick's composite",
+                  xyz_generation, regen_check[0].snapshot_generation);
+}
+
 // See doc/accumulator-consumer-architecture.md §8.1 (polling contract), §8.3 (data flow).
 //
 // Reads the two server clocks (lifecycle heartbeat, raw XYZ) then builds ONE coherent immutable
@@ -177,10 +215,10 @@ void ServerPoller::PollOnce() {
   // Get raw XYZ results (skips CPU XYZ→RGB, for GPU conversion)
   LUMICE_RawXyzResult xyz_results[2]{};
   LUMICE_GetRawXyzResults(server, xyz_results, 1);
+  const unsigned long long captured_xyz_generation = xyz_results[0].snapshot_generation;
 
   // Check if this is genuinely new snapshot data (generation changed)
-  bool has_new_snapshot =
-      xyz_results[0].xyz_buffer != nullptr && xyz_results[0].snapshot_generation != last_generation_;
+  bool has_new_snapshot = xyz_results[0].xyz_buffer != nullptr && captured_xyz_generation != last_generation_;
 
   // ---- Prepare candidate stats + texture payload OUTSIDE publish_mutex_ (no prev dependency).
   // The 24MB pixel memcpy happens here, never inside the publish critical section.
@@ -191,7 +229,7 @@ void ServerPoller::PollOnce() {
 
   if (has_new_snapshot) {
     // Always consume this generation (same generation data won't improve by waiting)
-    last_generation_ = xyz_results[0].snapshot_generation;
+    last_generation_ = captured_xyz_generation;
 
     // Get stats (used independently for status bar display)
     LUMICE_StatsResult cached_stats{};
@@ -224,6 +262,13 @@ void ServerPoller::PollOnce() {
       auto payload = std::make_shared<TexturePayload>();
       size_t float_count = static_cast<size_t>(xyz_results[0].img_width) * xyz_results[0].img_height * 3;
       payload->xyz_data.resize(float_count);
+      // Copy xyz bytes BEFORE any further Get*Results call (see GetCompositeResults()
+      // call below): snapshot_xyz_ is a persistent per-RenderConsumer buffer that
+      // PrepareSnapshot() overwrites IN PLACE (not reallocated) — xyz_results[0].xyz_buffer
+      // aliases it, so a Get*Results call made after capturing this pointer but before this
+      // memcpy could silently rewrite the memory out from under us if it consumes a
+      // newly-landed dirty event. Copying first eliminates that window entirely rather than
+      // trying to detect it after the fact.
       std::memcpy(payload->xyz_data.data(), xyz_results[0].xyz_buffer, float_count * sizeof(float));
       payload->width = xyz_results[0].img_width;
       payload->height = xyz_results[0].img_height;
@@ -233,6 +278,22 @@ void ServerPoller::PollOnce() {
       payload->texture_ray_count = cached_stats.sim_ray_num;
       payload->p99_y = ComputeP99Y(payload->xyz_data, payload->width, payload->height, kEvAutoDownsampleFactor);
       payload->payload_epoch = xyz_results[0].epoch;
+
+      // task-342.4 Step 2: composite (raypath_color) surface — poll the second
+      // consumer in the same tick, now that the xyz bytes are safely copied. The
+      // img_buffer sentinel (NULL when no raypath_color is configured; non-NULL
+      // when there is at least one colored consumer with a composite this
+      // generation) IS the raypath-color-active detector — no cross-thread state
+      // needs to be threaded through from the GUI (plan §3 keypoint 2).
+      LUMICE_RenderResult composite_results[2]{};
+      LUMICE_GetCompositeResults(server, composite_results, 1);
+      if (composite_results[0].img_buffer != nullptr) {
+        // Bytes copied and generation-drift-checked inside — see
+        // PopulateCompositePayload's doc comment above.
+        PopulateCompositePayload(server, composite_results[0], captured_xyz_generation, payload.get());
+      }
+      // (payload is default-constructed with rgb_data empty + is_composite=false,
+      // so the not-active branch is a no-op; explicit reset would be redundant.)
       new_payload = std::move(payload);
       GUI_LOG_VERBOSE("[Poller] staged: rays={} intensity={} gen={}", cached_stats.sim_ray_num,
                       xyz_results[0].snapshot_intensity, xyz_results[0].snapshot_generation);

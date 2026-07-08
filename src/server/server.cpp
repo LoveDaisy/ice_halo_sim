@@ -16,8 +16,9 @@
 #include <vector>
 
 #include "config/color_class_table.hpp"
-#include "config/component_table.hpp"
+#include "config/color_gate_table.hpp"
 #include "config/config_manager.hpp"
+#include "config/raypath_color_config.hpp"
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/def.hpp"
@@ -83,6 +84,21 @@ class ServerImpl {
   bool IsIdle();
   void SetPreferredBackend(BackendKind backend);
 
+  // task-342.2: display-time update of the committed color classes without restarting the
+  // simulation. `class_count` must equal the currently active class count (mismatch =
+  // InvalidConfig: caller must re-commit). `z_order` is optional (nullptr = leave unchanged);
+  // when non-null, z_order must be a permutation of [0, class_count) where z_order[i] is the
+  // new drawing rank of class i (sorted ascending by the compositor). Runs under consumer_mutex_ only — never touches
+  // Stop/Start/scene_generation_/committed_epoch_/consumers_/scene_mutex_.
+  Error SetRaypathColors(const ColorClassDisplay* classes, int class_count, const int* z_order, CompositeMode mode);
+
+  // task-342.3 AC4: per-color-class empty-arc detector. Reads the frozen snapshot
+  // lanes (no DoSnapshot trigger — GUI polling loop is expected to already query
+  // GetCompositeResults / GetRawXyzResults). Writes 1 into out_flags[i] when
+  // any RenderConsumer has a non-zero pixel in class i's snapshot Y-lane; 0
+  // otherwise. class_count must equal the active color-class count.
+  Error GetColorClassSignals(uint8_t* out_flags, int class_count);
+
  private:
   // task-268.7: single-engine orchestration — server now runs exactly one
   // Simulator. The legacy kDefaultSimulatorCnt = PhysicalCoreCount() was removed
@@ -111,7 +127,13 @@ class ServerImpl {
 
   void ConsumeData();
   void GenerateScene();
-  void DoSnapshot();
+  // task-342.4 Step 1: unified snapshot consumer. Returns true iff this call
+  // actually consumed a dirty snapshot (Phase 1..2 executed); false if
+  // snapshot_dirty_ was clear on entry (nothing to do). Merges the previously
+  // duplicate Phase-1 in GetRawXyzResults into a single dirty-flag owner so
+  // any pair of Get*Results calls in the same poll tick see coherent state
+  // (see plan §3 keypoint 1).
+  bool DoSnapshot();
 
   // Persistent thread loop: wait for Start(), run work_fn, repeat until kTerminating.
   template <typename F>
@@ -197,6 +219,12 @@ class ServerImpl {
   // attached to every SimBatch emitted by GenerateScene. Stays nullptr if no
   // CommitConfig has yet succeeded; consumers tolerate null.
   std::shared_ptr<const std::vector<RenderConfig>> active_renders_;
+  // Design 2 (task-engine-redirect-design2): snapshot of raypath_color paired
+  // with active_scene_ / active_renders_. Updated inside the same scene_mutex_
+  // critical section so a concurrent CommitConfig cannot tear the
+  // (scene, renders, raypath_color) triple. Null → no color configured (AC3
+  // zero-cost path).
+  std::shared_ptr<const RaypathColorConfig> active_raypath_color_;
   std::atomic<uint64_t> scene_generation_{ 0 };
   // Published lifecycle epoch (the backend-owned truth authority). Distinct from
   // scene_generation_ (an internal batch-staleness key): keeping them separate
@@ -447,8 +475,8 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
     // Error::InvalidConfig. class_table feeds directly into the RenderConsumer
     // (per-class Y-lane accumulation) and into the compositor
     // (CompositeColorClassesLinear); no legacy per-bit adapter layer.
-    ComponentTable component_table = BuildComponentTable(new_config.scene_);
-    class_table = BuildColorClassTable(new_config.raypath_color_, new_config.scene_, component_table);
+    ColorGateTable color_gate_table = BuildColorGateTable(new_config.raypath_color_, new_config.scene_);
+    class_table = BuildColorClassTable(new_config.raypath_color_, new_config.scene_, color_gate_table);
     composite_mode = ParseCompositeMode(new_config.raypath_color_.mode_);
   } catch (const nlohmann::json::out_of_range& e) {
     ILOG_ERROR(logger_, "CommitConfig: Missing field: {}", e.what());
@@ -559,10 +587,12 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   for (const auto& [_, r] : config_manager_.renderers_) {
     new_renders->push_back(r);
   }
+  auto new_raypath_color = std::make_shared<const RaypathColorConfig>(config_manager_.raypath_color_);
   {
     std::lock_guard<std::mutex> lock(scene_mutex_);
     active_scene_ = std::move(new_scene);
     active_renders_ = std::move(new_renders);
+    active_raypath_color_ = std::move(new_raypath_color);
     scene_generation_.fetch_add(1);
     // Publish the new lifecycle epoch alongside the accumulator reset. Stop()
     // above has drained all workers, so no in-flight batch reads a half-updated
@@ -586,7 +616,12 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
 
 
 // See doc/accumulator-consumer-architecture.md §4.2 (two-phase snapshot protocol).
-void ServerImpl::DoSnapshot() {
+// task-342.4 Step 1: this is the single owner of the snapshot_dirty_ flag and
+// snapshot_generation_ counter. Any Get*Results method that needs an up-to-date
+// materialized snapshot funnels through here so that two consumers in the same
+// poll tick (e.g. RawXyz + Composite) see a coherent Phase-1..2 atomic event
+// rather than racing the dirty flag against each other (plan §3 keypoint 1).
+bool ServerImpl::DoSnapshot() {
   // Phase 1: memcpy under consumer_mutex_ (short hold).
   // Copy shared_ptrs so consumers stay alive even if Stop() clears consumers_.
   std::vector<ConsumerPtrS> snapshot_consumers;
@@ -596,7 +631,7 @@ void ServerImpl::DoSnapshot() {
     std::lock_guard<TicketMutex> lock(consumer_mutex_);
     if (!snapshot_dirty_) {
       ILOG_DEBUG(logger_, "DoSnapshot: skip (snapshot_dirty_=false)");
-      return;
+      return false;
     }
     for (const auto& c : consumers_) {
       c->PrepareSnapshot();
@@ -610,6 +645,12 @@ void ServerImpl::DoSnapshot() {
     snap_class_table = active_class_table_;
     snap_composite_mode = active_composite_mode_;
     snapshot_dirty_ = false;
+    // task-342.4 Step 1: bumping the generation is now the shared owner's
+    // responsibility (previously lived only in GetRawXyzResults's Phase-1).
+    // The counter is the single mechanism by which poller detects new
+    // snapshots, so it must be tied to the dirty-consume event itself, not
+    // to any one consumer accessor.
+    snapshot_generation_++;
   }
   // Phase 1.5: pixel counting outside consumer_mutex_ (snapshot_xyz_ is stable here).
   for (const auto& c : snapshot_consumers) {
@@ -666,6 +707,7 @@ void ServerImpl::DoSnapshot() {
     cached_stats_result_ = stats_result;
     cached_composite_results_ = std::move(composite_results);
   }
+  return true;
 }
 
 std::vector<RenderResult> ServerImpl::GetRenderResults() {
@@ -675,32 +717,23 @@ std::vector<RenderResult> ServerImpl::GetRenderResults() {
 }
 
 std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
-  // Phase 1: PrepareSnapshot under consumer_mutex_ (TicketMutex guarantees FIFO — no starvation).
+  // task-342.4 Step 1: funnel through the shared DoSnapshot() so the
+  // dirty-flag / snapshot_generation_ / cached_* fields have exactly one
+  // owner. Previously this method carried its own copy of Phase-1 (dirty
+  // consume + generation bump + PrepareSnapshot loop + CountEffectivePixels
+  // + non-RenderConsumer StatsResult cache update). All of that now lives
+  // inside DoSnapshot(); calling it here yields identical semantics to the
+  // old implementation when only RawXyz consumers are wired, plus race-free
+  // interleaving with GetCompositeResults() (plan §3 keypoint 1).
+  DoSnapshot();
   std::vector<ConsumerPtrS> snapshot_consumers;
-  bool did_snapshot = false;
   bool valid_data = false;
   uint64_t generation = 0;
   {
     std::lock_guard<TicketMutex> lock(consumer_mutex_);
-    if (snapshot_dirty_) {
-      for (const auto& c : consumers_) {
-        c->PrepareSnapshot();
-      }
-      snapshot_dirty_ = false;
-      snapshot_generation_++;
-      did_snapshot = true;
-    }
     valid_data = has_ever_consumed_;
     generation = snapshot_generation_;
     snapshot_consumers = consumers_;
-  }
-  // Pixel counting outside consumer_mutex_ (snapshot_xyz_ is stable here).
-  if (did_snapshot) {
-    for (const auto& c : snapshot_consumers) {
-      if (auto* rc = dynamic_cast<RenderConsumer*>(c.get())) {
-        rc->CountEffectivePixels();
-      }
-    }
   }
   std::vector<RawXyzResult> results;
   std::lock_guard<std::mutex> lock(snapshot_mutex_);
@@ -717,17 +750,12 @@ std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
       results.push_back(r);
     }
   }
-  if (did_snapshot) {
-    for (const auto& c : snapshot_consumers) {
-      if (dynamic_cast<RenderConsumer*>(c.get()) != nullptr) {
-        continue;
-      }
-      auto result = c->GetResult();
-      if (auto* s = std::get_if<StatsResult>(&result)) {
-        cached_stats_result_ = *s;
-      }
-    }
-  }
+  // task-342.4 Step 1: the previous "if (did_snapshot) { cache non-RenderConsumer
+  // StatsResult }" block that used to live here has been removed. It was a
+  // duplicate of DoSnapshot() Phase-2's existing per-consumer GetResult() /
+  // StatsResult caching (see the loop that writes cached_stats_result_ above),
+  // which now runs unconditionally through DoSnapshot() from every accessor —
+  // so cached_stats_result_ stays up to date via a single owner.
   return results;
 }
 
@@ -1126,11 +1154,13 @@ void ServerImpl::GenerateScene() {
 
   std::shared_ptr<const SceneConfig> scene;
   std::shared_ptr<const std::vector<RenderConfig>> renders;
+  std::shared_ptr<const RaypathColorConfig> raypath_color;
   uint64_t generation = 0;
   {
     std::lock_guard<std::mutex> lock(scene_mutex_);
     scene = active_scene_;
     renders = active_renders_;
+    raypath_color = active_raypath_color_;
     generation = scene_generation_.load();
   }
   // task-268.4 commit↔batch decoupling: two independent knobs.
@@ -1212,7 +1242,7 @@ void ServerImpl::GenerateScene() {
   size_t committed_num = 0;
   while (per_wl_ray_num == kInfSize || committed_num < per_wl_ray_num) {
     size_t batch_ray_num = std::min(kBatchCap, per_wl_ray_num - committed_num);
-    scene_queue_->Emplace(SimBatch{ batch_ray_num, scene, generation, renders });
+    scene_queue_->Emplace(SimBatch{ batch_ray_num, scene, generation, renders, raypath_color });
     sim_scene_cnt_ += static_cast<int>(kNsimdataPerBatch);
     if (!first_batch_logged) {
       ILOG_INFO(logger_, "GenerateScene: first batch enqueued at {:.1f}ms after start",
@@ -1252,6 +1282,99 @@ void ServerImpl::SetPreferredBackend(BackendKind backend) {
   for (auto& s : simulators_) {
     s.SetPreferredBackend(backend);
   }
+}
+
+
+// =============== ServerImpl::SetRaypathColors ===============
+// Display-time update of the color-class appearance without touching the simulation
+// lifecycle. Runs entirely under consumer_mutex_: color/visible/solo/z_order are appearance
+// fields (NeedsRebuild ignores them, so a full-rebuild is neither needed nor useful);
+// active_composite_mode_ is a per-frame plumbing input read under the same lock by
+// DoSnapshot. NO Stop/Start, NO scene_generation_/committed_epoch_ bump, NO consumers_
+// rebuild, NO scene_mutex_. AC2/AC3 requirement.
+Error ServerImpl::SetRaypathColors(const ColorClassDisplay* classes, int class_count, const int* z_order,
+                                   CompositeMode mode) {
+  if (class_count < 0 || (class_count > 0 && classes == nullptr)) {
+    return Error::InvalidValue("SetRaypathColors", "classes is null or class_count is negative");
+  }
+  std::lock_guard<TicketMutex> lock(consumer_mutex_);
+  if (static_cast<size_t>(class_count) != active_class_table_.classes_.size()) {
+    return Error::InvalidConfig("SetRaypathColors: class_count (" + std::to_string(class_count) +
+                                ") does not match active color-class count (" +
+                                std::to_string(active_class_table_.classes_.size()) +
+                                "); re-commit the config to change member structure");
+  }
+  // When supplied, z_order must be a permutation of [0, class_count): each z_order[i] is the
+  // new drawing priority (rank) of class i, and the ranks are the integers 0..class_count-1 in
+  // some order. Reject duplicates / out-of-range (e.g. {0,0,1}) as an all-or-nothing failure
+  // before mutating any state (plan §3.2.3, AC3).
+  if (z_order != nullptr) {
+    std::vector<bool> seen(static_cast<size_t>(class_count), false);
+    for (int k = 0; k < class_count; k++) {
+      if (z_order[k] < 0 || z_order[k] >= class_count || seen[static_cast<size_t>(z_order[k])]) {
+        return Error::InvalidConfig("SetRaypathColors: z_order must be a permutation of [0, class_count)");
+      }
+      seen[static_cast<size_t>(z_order[k])] = true;
+    }
+  }
+  // Apply appearance fields.
+  for (int i = 0; i < class_count; i++) {
+    auto& cls = active_class_table_.classes_[static_cast<size_t>(i)];
+    cls.color_[0] = classes[i].color_[0];
+    cls.color_[1] = classes[i].color_[1];
+    cls.color_[2] = classes[i].color_[2];
+    cls.visible_ = classes[i].visible_;
+    cls.solo_ = classes[i].solo_;
+    if (z_order != nullptr) {
+      cls.z_order_ = z_order[i];
+    }
+  }
+  active_composite_mode_ = mode;
+  // Force the next DoSnapshot to re-run the compositor even without new ray data — this is
+  // the mechanism that makes "change color and immediately see the new pixels" work when
+  // the accumulator is at steady state. snapshot_dirty_'s existing "has anything changed
+  // since last snapshot" semantics remain valid (a display-time change IS such a change).
+  snapshot_dirty_ = true;
+  return Error::Success();
+}
+
+
+// =============== ServerImpl::GetColorClassSignals ===============
+// task-342.3 AC4: reads snapshot Y-lanes (no DoSnapshot trigger; caller has been
+// polling composite/xyz results and thus has a fresh snapshot). Aggregates
+// across RenderConsumer instances (OR), so a class with any signal on any
+// renderer reads as present.
+Error ServerImpl::GetColorClassSignals(uint8_t* out_flags, int class_count) {
+  if (class_count < 0) {
+    return Error::InvalidValue("GetColorClassSignals", "class_count is negative");
+  }
+  std::lock_guard<TicketMutex> lock(consumer_mutex_);
+  if (static_cast<size_t>(class_count) != active_class_table_.classes_.size()) {
+    return Error::InvalidConfig("GetColorClassSignals: class_count (" + std::to_string(class_count) +
+                                ") does not match active color-class count (" +
+                                std::to_string(active_class_table_.classes_.size()) + ")");
+  }
+  if (class_count == 0) {
+    return Error::Success();
+  }
+  if (out_flags == nullptr) {
+    return Error::InvalidValue("GetColorClassSignals", "out_flags is null");
+  }
+  for (int i = 0; i < class_count; i++) {
+    out_flags[i] = 0;
+  }
+  for (const auto& c : consumers_) {
+    const auto* rc = dynamic_cast<const RenderConsumer*>(c.get());
+    if (rc == nullptr) {
+      continue;
+    }
+    for (int i = 0; i < class_count; i++) {
+      if (out_flags[i] == 0 && rc->HasColorClassSignal(static_cast<size_t>(i))) {
+        out_flags[i] = 1;
+      }
+    }
+  }
+  return Error::Success();
 }
 
 
@@ -1411,6 +1534,21 @@ uint64_t Server::CommittedEpoch() const {
 
 bool Server::IsIdle() const {
   return GetStatus() == ServerStatus::kIdle;
+}
+
+Error Server::SetRaypathColors(const ColorClassDisplay* classes, int class_count, const int* z_order,
+                               CompositeMode mode) {
+  if (!impl_) {
+    return Error::ServerNotReady("Server is terminated");
+  }
+  return impl_->SetRaypathColors(classes, class_count, z_order, mode);
+}
+
+Error Server::GetColorClassSignals(uint8_t* out_flags, int class_count) {
+  if (!impl_) {
+    return Error::ServerNotReady("Server is terminated");
+  }
+  return impl_->GetColorClassSignals(out_flags, class_count);
 }
 
 }  // namespace lumice

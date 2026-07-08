@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -197,6 +198,62 @@ static nlohmann::json AxisDistToJson(const LUMICE_AxisDist& d) {
   j["mean"] = d.mean;
   j["std"] = d.std;
   return j;
+}
+
+// Emit the arm fields of a Color Predicate (task-342.2). Mirrors the raypath / entry_exit /
+// direction / crystal switch in JsonToFilter/ConfigToJson but WITHOUT id/action/symmetry/
+// composition — Design 2 color predicates are single-atom and carry no filter identity. A
+// predicate whose type is LUMICE_FILTER_TYPE_UNSET intentionally emits NO fields at all: the
+// resulting ref JSON is just {"layer", "crystal"}, which core RaypathColorRef::from_json
+// interprets as match-all (whole-crystal color). See lumice.h LUMICE_ColorPredicate for the
+// UNSET-as-match-all rationale.
+static void ColorPredicateToJson(const LUMICE_ColorPredicate& p, nlohmann::json& j) {
+  switch (p.type) {
+    case LUMICE_FILTER_TYPE_UNSET:
+      // Match-all: emit no predicate fields (wire form for NoneFilterParam default).
+      return;
+    case LUMICE_FILTER_TYPE_NONE:
+      j["type"] = "none";
+      return;
+    case LUMICE_FILTER_TYPE_RAYPATH: {
+      j["type"] = "raypath";
+      nlohmann::json rp = nlohmann::json::array();
+      for (int k = 0; k < p.raypath_count; k++) {
+        rp.push_back(p.raypath[k]);
+      }
+      j["raypath"] = rp;
+      return;
+    }
+    case LUMICE_FILTER_TYPE_ENTRY_EXIT:
+      j["type"] = "entry_exit";
+      if (p.ee_entry >= 0) {
+        j["entry"] = p.ee_entry;
+      }
+      if (p.ee_exit >= 0) {
+        j["exit"] = p.ee_exit;
+      }
+      if (p.ee_min_len > 1) {
+        j["min_len"] = p.ee_min_len;
+      }
+      if (p.ee_max_len >= 0) {
+        j["max_len"] = p.ee_max_len;
+      }
+      return;
+    case LUMICE_FILTER_TYPE_DIRECTION:
+      j["type"] = "direction";
+      j["az"] = p.dir_az;
+      j["el"] = p.dir_el;
+      j["radii"] = p.dir_radii;
+      return;
+    case LUMICE_FILTER_TYPE_CRYSTAL:
+      j["type"] = "crystal";
+      j["crystal_id"] = p.crystal_id;
+      return;
+    default:
+      // COMPLEX and any out-of-range discriminant is unsupported for color predicates.
+      throw std::invalid_argument("LUMICE_ColorPredicate.type is invalid for a color predicate: " +
+                                  std::to_string(p.type));
+  }
 }
 
 // Non-static (declared in server/c_api_internal.hpp) so unit tests can assert the
@@ -404,8 +461,185 @@ nlohmann::json ConfigToJson(const LUMICE_Config& c) {
     root["render"].push_back(jr);
   }
 
+  // Raypath color classes (task-342.2). Only emit when non-empty so the mono/no-color case
+  // matches the pre-v4.7 JSON shape byte-for-byte (AC4). The wire form always uses the object
+  // shape `{"mode": ..., "classes": [...]}` — core RaypathColorConfig::from_json accepts both
+  // the bare-array (dominant-only) and object shapes, so emitting the object form does not
+  // constrain the reader; it simplifies the emit path (no mode string comparison branch).
+  if (c.raypath_color_count > 0) {
+    const char* mode_str = "dominant";
+    switch (c.raypath_color_mode) {
+      case LUMICE_COLOR_MODE_DOMINANT:
+        mode_str = "dominant";
+        break;
+      case LUMICE_COLOR_MODE_ADDITIVE:
+        mode_str = "additive";
+        break;
+      case LUMICE_COLOR_MODE_PAINTER:
+        mode_str = "painter";
+        break;
+      default:
+        throw std::invalid_argument("LUMICE_Config.raypath_color_mode is invalid: " +
+                                    std::to_string(c.raypath_color_mode));
+    }
+    nlohmann::json classes = nlohmann::json::array();
+    for (int i = 0; i < c.raypath_color_count; i++) {
+      const auto& cls = c.raypath_color[i];
+      nlohmann::json jc;
+      jc["color"] = { cls.color[0], cls.color[1], cls.color[2] };
+      // Mirror core to_json: combine/visible/solo emitted only when non-default (any/true/false).
+      // any is the default; only emit "combine":"all" when explicitly set.
+      if (cls.combine == LUMICE_COLOR_COMBINE_ALL) {
+        jc["combine"] = "all";
+      } else if (cls.combine != LUMICE_COLOR_COMBINE_ANY) {
+        throw std::invalid_argument("LUMICE_ColorClass.combine is invalid: " + std::to_string(cls.combine));
+      }
+      if (!cls.visible) {
+        jc["visible"] = false;
+      }
+      if (cls.solo) {
+        jc["solo"] = true;
+      }
+      nlohmann::json match = nlohmann::json::array();
+      for (int k = 0; k < cls.match_count; k++) {
+        const auto& ref = cls.match[k];
+        nlohmann::json jr;
+        jr["layer"] = ref.layer;
+        jr["crystal"] = ref.crystal;
+        ColorPredicateToJson(ref.predicate, jr);
+        match.push_back(jr);
+      }
+      jc["match"] = match;
+      classes.push_back(jc);
+    }
+    nlohmann::json rc;
+    rc["mode"] = mode_str;
+    rc["classes"] = classes;
+    root["raypath_color"] = rc;
+  }
+
   return root;
 }
+
+// Display-time color update: see doc/capi-lifecycle-architecture.md §4 / §6.4.
+// task-342.2: does NOT restart the simulation — accumulator, epoch, and consumers are
+// untouched. Only the next Get*Results call re-composites with the new appearance.
+LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server, const LUMICE_ColorClassDisplay* classes,
+                                         int class_count, const int* z_order, int mode) {
+  if (!server) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  if (class_count < 0 || (class_count > 0 && classes == nullptr)) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  ns::CompositeMode composite_mode = ns::CompositeMode::kDominant;
+  switch (mode) {
+    case LUMICE_COLOR_MODE_DOMINANT:
+      composite_mode = ns::CompositeMode::kDominant;
+      break;
+    case LUMICE_COLOR_MODE_ADDITIVE:
+      composite_mode = ns::CompositeMode::kAdditive;
+      break;
+    case LUMICE_COLOR_MODE_PAINTER:
+      composite_mode = ns::CompositeMode::kPainter;
+      break;
+    default:
+      return LUMICE_ERR_INVALID_VALUE;
+  }
+  std::vector<ns::ColorClassDisplay> internal;
+  internal.reserve(static_cast<size_t>(class_count));
+  for (int i = 0; i < class_count; i++) {
+    ns::ColorClassDisplay d;
+    d.color_[0] = classes[i].color[0];
+    d.color_[1] = classes[i].color[1];
+    d.color_[2] = classes[i].color[2];
+    d.visible_ = classes[i].visible != 0;
+    d.solo_ = classes[i].solo != 0;
+    internal.push_back(d);
+  }
+  auto err = server->server_->SetRaypathColors(internal.data(), class_count, z_order, composite_mode);
+  if (err) {
+    LOG_ERROR("LUMICE_SetRaypathColors failed: {}", err.message);
+    return MapErrorCode(err.code);
+  }
+  return LUMICE_OK;
+}
+
+
+// task-342.3 AC4: per-color-class empty-arc detector.
+LUMICE_ErrorCode LUMICE_GetColorClassSignal(LUMICE_Server* server, int* out_flags, int class_count) {
+  if (!server) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  if (class_count < 0) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  if (class_count > 0 && out_flags == nullptr) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  std::vector<uint8_t> tmp(static_cast<size_t>(class_count), 0);
+  auto err = server->server_->GetColorClassSignals(tmp.data(), class_count);
+  if (err) {
+    LOG_ERROR("LUMICE_GetColorClassSignal failed: {}", err.message);
+    return MapErrorCode(err.code);
+  }
+  for (int i = 0; i < class_count; i++) {
+    out_flags[i] = tmp[static_cast<size_t>(i)] ? 1 : 0;
+  }
+  return LUMICE_OK;
+}
+
+
+// =============== Raypath Color Classes lifecycle (task-344, BREAKING v4.8) ===============
+// See lumice.h for the full ownership contract. Uses calloc/free (not new[]/delete[])
+// deliberately: LUMICE_Config crosses the C ABI boundary and non-C++ bindings must be
+// able to release the raypath_color allocation without a C++ runtime — a documented
+// exception to the "no raw new/delete" project rule (AGENTS.md).
+LUMICE_ColorClass* LUMICE_ConfigCreateColorClasses(LUMICE_Config* cfg, int count) {
+  if (!cfg) {
+    return nullptr;
+  }
+  if (count < 0 || count > LUMICE_MAX_CONFIG_COLOR_CLASSES) {
+    return nullptr;
+  }
+  // Create-or-replace: any existing allocation must be released before we overwrite the
+  // pointer. Guards the "consecutive Create with different counts" pattern from leaking
+  // the previous allocation, and pairs with the memset-before-Release fix in JsonToConfig /
+  // FillLumiceConfig (both call Release explicitly to make the intent obvious).
+  if (cfg->raypath_color) {
+    std::free(cfg->raypath_color);  // NOLINT(cppcoreguidelines-no-malloc): C ABI boundary; see block comment above.
+    cfg->raypath_color = nullptr;
+  }
+  if (count == 0) {
+    // Explicitly skip calloc(0, ...) — implementation-defined behavior. Zero classes is a
+    // valid state (mono-only); leave pointer nullptr and count 0.
+    cfg->raypath_color_count = 0;
+    return nullptr;
+  }
+  auto* buf = static_cast<LUMICE_ColorClass*>(
+      std::calloc(  // NOLINT(cppcoreguidelines-no-malloc): C ABI boundary; see block comment above.
+          static_cast<size_t>(count), sizeof(LUMICE_ColorClass)));
+  if (!buf) {
+    // OOM: leave cfg in the "no classes" state, callers must check the return value.
+    cfg->raypath_color_count = 0;
+    return nullptr;
+  }
+  cfg->raypath_color = buf;
+  cfg->raypath_color_count = count;
+  return buf;
+}
+
+void LUMICE_ConfigReleaseColorClasses(LUMICE_Config* cfg) {
+  if (!cfg) {
+    return;
+  }
+  if (cfg->raypath_color) {
+    std::free(cfg->raypath_color);  // NOLINT(cppcoreguidelines-no-malloc): C ABI boundary; see block comment above.
+    cfg->raypath_color = nullptr;
+  }
+  cfg->raypath_color_count = 0;
+}
+
 
 // Struct->JSON path: see doc/capi-lifecycle-architecture.md §6.2.
 LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_Config* config, int* out_reused) {
@@ -416,8 +650,20 @@ LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_C
   // Bounds check
   if (config->crystal_count > LUMICE_MAX_CONFIG_CRYSTALS || config->filter_count > LUMICE_MAX_CONFIG_FILTERS ||
       config->renderer_count > LUMICE_MAX_CONFIG_RENDERERS ||
-      config->scatter_count > LUMICE_MAX_CONFIG_SCATTER_LAYERS) {
+      config->scatter_count > LUMICE_MAX_CONFIG_SCATTER_LAYERS || config->raypath_color_count < 0 ||
+      config->raypath_color_count > LUMICE_MAX_CONFIG_COLOR_CLASSES) {
     return LUMICE_ERR_INVALID_CONFIG;
+  }
+  // v4.8: raypath_color is a heap pointer; reject the inconsistent state where count > 0
+  // but the pointer is null (would dereference null on the loop below).
+  if (config->raypath_color_count > 0 && config->raypath_color == nullptr) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  for (int i = 0; i < config->raypath_color_count; i++) {
+    if (config->raypath_color[i].match_count < 0 ||
+        config->raypath_color[i].match_count > LUMICE_MAX_CONFIG_COLOR_REFS) {
+      return LUMICE_ERR_INVALID_CONFIG;
+    }
   }
 
   // ConfigToJson is a new throw source (std::invalid_argument on an unset/invalid filter
@@ -660,6 +906,175 @@ static LUMICE_ErrorCode JsonToFilter(const nlohmann::json& fj, LUMICE_FilterPara
   return LUMICE_OK;
 }
 
+// Parse the arm fields of one Color Predicate from JSON, mirroring ColorPredicateToJson.
+// A ref JSON with no "type" key means match-all: sets predicate.type = UNSET and returns OK,
+// which the C-API commit path re-serializes as "no predicate fields on the wire", the same
+// form core RaypathColorRef::from_json treats as NoneFilterParam / whole-crystal.
+static LUMICE_ErrorCode JsonToColorPredicate(const nlohmann::json& j, LUMICE_ColorPredicate* p) {
+  std::memset(p, 0, sizeof(*p));
+  p->ee_entry = -1;
+  p->ee_exit = -1;
+  p->ee_min_len = 1;
+  p->ee_max_len = -1;
+  if (!j.contains("type")) {
+    p->type = LUMICE_FILTER_TYPE_UNSET;  // match-all
+    return LUMICE_OK;
+  }
+  auto type_str = j.at("type").get<std::string>();
+  if (type_str == "none") {
+    p->type = LUMICE_FILTER_TYPE_NONE;
+  } else if (type_str == "raypath") {
+    p->type = LUMICE_FILTER_TYPE_RAYPATH;
+    if (j.contains("raypath") && j.at("raypath").is_array()) {
+      const auto& rp = j.at("raypath");
+      p->raypath_count = static_cast<int>(rp.size());
+      if (p->raypath_count > LUMICE_MAX_CONFIG_RAYPATH_LEN) {
+        return LUMICE_ERR_INVALID_CONFIG;
+      }
+      for (int k = 0; k < p->raypath_count; k++) {
+        p->raypath[k] = rp[k].get<int>();
+      }
+    }
+  } else if (type_str == "entry_exit") {
+    p->type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+    p->ee_entry = (j.contains("entry") && !j.at("entry").is_null()) ? j.at("entry").get<int>() : -1;
+    p->ee_exit = (j.contains("exit") && !j.at("exit").is_null()) ? j.at("exit").get<int>() : -1;
+    p->ee_min_len = (j.contains("min_len") && !j.at("min_len").is_null()) ? j.at("min_len").get<int>() : 1;
+    p->ee_max_len = (j.contains("max_len") && !j.at("max_len").is_null()) ? j.at("max_len").get<int>() : -1;
+  } else if (type_str == "direction") {
+    p->type = LUMICE_FILTER_TYPE_DIRECTION;
+    p->dir_az = j.at("az").get<float>();
+    p->dir_el = j.at("el").get<float>();
+    p->dir_radii = j.at("radii").get<float>();
+  } else if (type_str == "crystal") {
+    p->type = LUMICE_FILTER_TYPE_CRYSTAL;
+    p->crystal_id = j.at("crystal_id").get<int>();
+  } else {
+    // Anything else (including "complex") is not a legal color predicate.
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  return LUMICE_OK;
+}
+
+// Parse a single color class from JSON (mirrors core ColorClassConfig::from_json). Missing
+// fields fall back to core defaults: combine="any", visible=true, solo=false.
+static LUMICE_ErrorCode JsonToColorClass(const nlohmann::json& j, LUMICE_ColorClass* cls) {
+  std::memset(cls, 0, sizeof(*cls));
+  cls->visible = 1;
+  cls->solo = 0;
+  cls->combine = LUMICE_COLOR_COMBINE_ANY;
+
+  if (!j.contains("color") || !j.at("color").is_array() || j.at("color").size() != 3) {
+    return LUMICE_ERR_MISSING_FIELD;
+  }
+  const auto& jc = j.at("color");
+  cls->color[0] = jc.at(0).get<float>();
+  cls->color[1] = jc.at(1).get<float>();
+  cls->color[2] = jc.at(2).get<float>();
+
+  if (j.contains("combine")) {
+    auto s = j.at("combine").get<std::string>();
+    if (s == "any") {
+      cls->combine = LUMICE_COLOR_COMBINE_ANY;
+    } else if (s == "all") {
+      cls->combine = LUMICE_COLOR_COMBINE_ALL;
+    } else {
+      return LUMICE_ERR_INVALID_VALUE;
+    }
+  }
+  if (j.contains("visible")) {
+    cls->visible = j.at("visible").get<bool>() ? 1 : 0;
+  }
+  if (j.contains("solo")) {
+    cls->solo = j.at("solo").get<bool>() ? 1 : 0;
+  }
+
+  if (!j.contains("match") || !j.at("match").is_array()) {
+    return LUMICE_ERR_MISSING_FIELD;
+  }
+  const auto& match = j.at("match");
+  if (static_cast<int>(match.size()) > LUMICE_MAX_CONFIG_COLOR_REFS) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  cls->match_count = static_cast<int>(match.size());
+  for (int k = 0; k < cls->match_count; k++) {
+    const auto& jr = match[k];
+    auto& ref = cls->match[k];
+    if (!jr.contains("layer") || !jr.contains("crystal")) {
+      return LUMICE_ERR_MISSING_FIELD;
+    }
+    ref.layer = jr.at("layer").get<int>();
+    ref.crystal = jr.at("crystal").get<int>();
+    auto err = JsonToColorPredicate(jr, &ref.predicate);
+    if (err != LUMICE_OK) {
+      return err;
+    }
+  }
+  return LUMICE_OK;
+}
+
+// Parse the top-level "raypath_color" JSON (both bare-array and object forms) into
+// LUMICE_Config. Mirrors core RaypathColorConfig::from_json.
+static LUMICE_ErrorCode JsonToRaypathColor(const nlohmann::json& j, LUMICE_Config* out) {
+  const nlohmann::json* classes_arr = nullptr;
+  std::string mode_str = "dominant";
+  if (j.is_array()) {
+    classes_arr = &j;
+  } else if (j.is_object()) {
+    if (j.contains("mode")) {
+      mode_str = j.at("mode").get<std::string>();
+    }
+    if (j.contains("classes") && j.at("classes").is_array()) {
+      classes_arr = &j.at("classes");
+    }
+  } else {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+
+  if (mode_str == "additive") {
+    out->raypath_color_mode = LUMICE_COLOR_MODE_ADDITIVE;
+  } else if (mode_str == "painter") {
+    out->raypath_color_mode = LUMICE_COLOR_MODE_PAINTER;
+  } else {
+    // "dominant" is the default; any other unknown mode degrades to dominant here to mirror
+    // core's tolerance (the compositor warns once on unknown modes).
+    out->raypath_color_mode = LUMICE_COLOR_MODE_DOMINANT;
+  }
+
+  if (classes_arr == nullptr) {
+    // Explicitly clear any prior allocation (Release is null-safe).
+    LUMICE_ConfigReleaseColorClasses(out);
+    return LUMICE_OK;
+  }
+  if (static_cast<int>(classes_arr->size()) > LUMICE_MAX_CONFIG_COLOR_CLASSES) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  const int count = static_cast<int>(classes_arr->size());
+  if (count == 0) {
+    LUMICE_ConfigReleaseColorClasses(out);
+    return LUMICE_OK;
+  }
+  // Implicit allocation (task-344): callers of LUMICE_ParseConfigString/File cannot know
+  // the class count before parsing, so we allocate on their behalf here. Ownership is
+  // transferred to `out`; the caller must eventually call
+  // LUMICE_ConfigReleaseColorClasses (or use a RAII guard).
+  LUMICE_ColorClass* classes = LUMICE_ConfigCreateColorClasses(out, count);
+  if (!classes) {
+    // count is bounded above by LUMICE_MAX_CONFIG_COLOR_CLASSES; only OOM reaches here.
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  // Validate/fill each class. On mid-array failure release the allocation so the caller
+  // does not observe a half-populated array (mirrors the spectrum_entries discipline).
+  for (int i = 0; i < count; i++) {
+    auto err = JsonToColorClass((*classes_arr)[i], &classes[i]);
+    if (err != LUMICE_OK) {
+      LUMICE_ConfigReleaseColorClasses(out);
+      return err;
+    }
+  }
+  return LUMICE_OK;
+}
+
 static LUMICE_ErrorCode JsonToScene(const nlohmann::json& scene, LUMICE_Config* out) {
   // Light source
   if (scene.contains("light_source")) {
@@ -849,6 +1264,10 @@ static LUMICE_ErrorCode JsonToComplexComposition(const nlohmann::json& fj, LUMIC
 }
 
 static LUMICE_ErrorCode JsonToConfig(const nlohmann::json& root, LUMICE_Config* out) {
+  // v4.8: raypath_color is an owning heap pointer. If `out` was reused across two Parse
+  // calls, memset would clobber the pointer without freeing it — release first so the
+  // memset that follows sees a defensibly-null field. Release is null-safe / idempotent.
+  LUMICE_ConfigReleaseColorClasses(out);
   std::memset(out, 0, sizeof(LUMICE_Config));
   out->spectrum = "D65";  // Safe default (memset leaves nullptr)
 
@@ -907,6 +1326,14 @@ static LUMICE_ErrorCode JsonToConfig(const nlohmann::json& root, LUMICE_Config* 
   // Renderers (optional)
   if (root.contains("render") && root.at("render").is_array()) {
     err = JsonToRenderers(root.at("render"), out);
+    if (err != LUMICE_OK) {
+      return err;
+    }
+  }
+
+  // Raypath color classes (optional, Design 2 / task-342.2)
+  if (root.contains("raypath_color")) {
+    err = JsonToRaypathColor(root.at("raypath_color"), out);
     if (err != LUMICE_OK) {
       return err;
     }

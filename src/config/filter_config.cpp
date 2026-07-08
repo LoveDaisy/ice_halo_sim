@@ -10,7 +10,9 @@
 
 namespace lumice {
 
-// =============== FilterConfig ===============
+// =============== SimpleFilterParam JSON ===============
+namespace {
+
 struct SimpleFilterParamToJson {
   nlohmann::json& j_;
 
@@ -50,10 +52,79 @@ struct SimpleFilterParamToJson {
   }
 };
 
+}  // namespace
+
+void to_json(nlohmann::json& j, const SimpleFilterParam& p) {
+  std::visit(SimpleFilterParamToJson{ j }, p);
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void from_json(const nlohmann::json& j, SimpleFilterParam& p) {
+  // Missing `type` defaults to match-all (NoneFilterParam). Used by
+  // Design-2 RaypathColorRef where the only required fields on the wire are
+  // {layer, crystal} and predicate defaults to match-all whole-crystal.
+  if (!j.contains("type")) {
+    p = NoneFilterParam{};
+    return;
+  }
+  const auto& type = j.at("type");
+  if (type == "none") {
+    p = NoneFilterParam{};
+  } else if (type == "raypath") {
+    RaypathFilterParam rp{};
+    j.at("raypath").get_to(rp.raypath_);
+    p = rp;
+  } else if (type == "entry_exit") {
+    EntryExitFilterParam ee{};
+    if (j.contains("entry") && !j.at("entry").is_null()) {
+      ee.entry_ = j.at("entry").get<IdType>();
+    }
+    if (j.contains("exit") && !j.at("exit").is_null()) {
+      ee.exit_ = j.at("exit").get<IdType>();
+    }
+    if (j.contains("min_len") && !j.at("min_len").is_null()) {
+      ee.min_len_ = j.at("min_len").get<size_t>();
+    }
+    if (j.contains("max_len") && !j.at("max_len").is_null()) {
+      ee.max_len_ = j.at("max_len").get<size_t>();
+    }
+    if (ee.min_len_ < 1) {
+      throw std::runtime_error("entry_exit filter: min_len must be >= 1, got " + std::to_string(ee.min_len_));
+    }
+    if (ee.max_len_.has_value()) {
+      if (*ee.max_len_ < ee.min_len_) {
+        throw std::runtime_error("entry_exit filter: max_len (" + std::to_string(*ee.max_len_) +
+                                 ") must be >= min_len (" + std::to_string(ee.min_len_) + ")");
+      }
+      if (*ee.max_len_ > kMaxHits) {
+        throw std::runtime_error("entry_exit filter: max_len (" + std::to_string(*ee.max_len_) +
+                                 ") exceeds kMaxHits (" + std::to_string(kMaxHits) + ")");
+      }
+    }
+    p = ee;
+  } else if (type == "direction") {
+    DirectionFilterParam d{};
+    j.at("az").get_to(d.lon_);
+    j.at("el").get_to(d.lat_);
+    j.at("radii").get_to(d.radii_);
+    p = d;
+  } else if (type == "crystal") {
+    CrystalFilterParam c{};
+    j.at("crystal_id").get_to(c.crystal_id_);
+    p = c;
+  } else {
+    throw std::runtime_error("SimpleFilterParam: unknown type " + type.dump());
+  }
+}
+
+// =============== FilterConfig ===============
+
+namespace {
+
 struct FilterParamToJson {
   nlohmann::json& j_;
 
-  void operator()(const SimpleFilterParam& p) { std::visit(SimpleFilterParamToJson{ j_ }, p); }
+  void operator()(const SimpleFilterParam& p) { to_json(j_, p); }
 
   void operator()(const ComplexFilterParam& p) {
     j_["type"] = "complex";
@@ -70,6 +141,8 @@ struct FilterParamToJson {
     }
   }
 };
+
+}  // namespace
 
 void to_json(nlohmann::json& j, const FilterConfig& f) {
   j["id"] = f.id_;
@@ -98,60 +171,18 @@ void to_json(nlohmann::json& j, const FilterConfig& f) {
   std::visit(FilterParamToJson{ j }, f.param_);
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void from_json(const nlohmann::json& j, FilterConfig& f) {
   j.at("id").get_to(f.id_);
 
   const auto& type = j.at("type");
-  if (type == "none") {
-    f.param_ = NoneFilterParam();
-  } else if (type == "raypath") {
-    RaypathFilterParam p{};
-    j.at("raypath").get_to(p.raypath_);
-    f.param_ = p;
-  } else if (type == "entry_exit") {
-    EntryExitFilterParam p{};
-    if (j.contains("entry") && !j.at("entry").is_null()) {
-      p.entry_ = j.at("entry").get<IdType>();
-    }
-    if (j.contains("exit") && !j.at("exit").is_null()) {
-      p.exit_ = j.at("exit").get<IdType>();
-    }
-    if (j.contains("min_len") && !j.at("min_len").is_null()) {
-      p.min_len_ = j.at("min_len").get<size_t>();
-    }
-    if (j.contains("max_len") && !j.at("max_len").is_null()) {
-      p.max_len_ = j.at("max_len").get<size_t>();
-    }
-    // Validation per plan §8 AC: min_len >= 1; if max_len set, min_len <= max_len <= kMaxHits.
-    if (p.min_len_ < 1) {
-      throw std::runtime_error("entry_exit filter: min_len must be >= 1, got " + std::to_string(p.min_len_));
-    }
-    if (p.max_len_.has_value()) {
-      if (*p.max_len_ < p.min_len_) {
-        throw std::runtime_error("entry_exit filter: max_len (" + std::to_string(*p.max_len_) +
-                                 ") must be >= min_len (" + std::to_string(p.min_len_) + ")");
-      }
-      if (*p.max_len_ > kMaxHits) {
-        throw std::runtime_error("entry_exit filter: max_len (" + std::to_string(*p.max_len_) + ") exceeds kMaxHits (" +
-                                 std::to_string(kMaxHits) + ")");
-      }
-    }
-    f.param_ = p;
-  } else if (type == "direction") {
-    DirectionFilterParam p{};
-    j.at("az").get_to(p.lon_);
-    j.at("el").get_to(p.lat_);
-    j.at("radii").get_to(p.radii_);
-    f.param_ = p;
-  } else if (type == "crystal") {
-    CrystalFilterParam p{};
-    j.at("crystal_id").get_to(p.crystal_id_);
-    f.param_ = p;
-  } else if (type == "complex") {
+  if (type == "complex") {
     // NOTE: It is **INCOMPLETED**. Other data will be set in ConfigManager.
-    ComplexFilterParam p{};
-    f.param_ = p;
+    f.param_ = ComplexFilterParam{};
+  } else {
+    // All simple types share a single home in SimpleFilterParam's from_json.
+    SimpleFilterParam sp{};
+    from_json(j, sp);
+    f.param_ = sp;
   }
 
   f.symmetry_ = FilterConfig::kSymNone;

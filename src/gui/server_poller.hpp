@@ -33,6 +33,18 @@ struct TexturePayload {
   // RawXyzResult.epoch: the lifecycle epoch this texture was produced under. May lag the
   // bundle epoch when carried forward (1.5 display keying distinguishes the two).
   unsigned long long payload_epoch = 0;
+
+  // task-342.4 Step 2: composite (raypath_color) surface.
+  // rgb_data is a sRGB uint8 buffer (W*H*3), populated ONLY when raypath_color is
+  // active on this snapshot. is_composite tells the main-thread upload path which
+  // GL texture format + shader mode to use:
+  //   is_composite == true  → UploadTexture(rgb_data, W, H) + u_xyz_mode=0
+  //   is_composite == false → UploadXyzTexture(xyz_data, W, H) + u_xyz_mode=1 (unchanged)
+  // xyz_data / p99_y / snapshot_intensity / effective_pixels are ALWAYS populated
+  // (auto-EV + quality gate are not touched by this change), even when is_composite
+  // is true — see plan §3 keypoint 3.
+  std::vector<unsigned char> rgb_data;
+  bool is_composite = false;
 };
 
 // The single cross-thread handoff unit. Constructed fully, then treated as const: the whole
@@ -122,11 +134,30 @@ class ServerPoller {
   // server's current generation as new (what Start() does, minus the worker thread).
   void ResetGenerationForTest() { last_generation_ = 0; }
 
+  // Test-only: drives PopulateCompositePayload() directly with caller-supplied
+  // (composite_result, xyz_generation) so a regression test can force the generation-drift
+  // drop branch deterministically (arm a real drift via LUMICE_SetRaypathColors + a second
+  // LUMICE_GetCompositeResults call, then pass the ORIGINAL xyz_generation here) instead of
+  // racing two threads through the narrow window inside a real PollOnce() call. See
+  // test/gui/functional/test_gui_composite_preview.cpp. Not used in production.
+  void PopulateCompositePayloadForTest(LUMICE_Server* server, const LUMICE_RenderResult& composite_result,
+                                       unsigned long long xyz_generation, TexturePayload* payload) {
+    PopulateCompositePayload(server, composite_result, xyz_generation, payload);
+  }
+
  private:
   enum class State { kPaused, kRunning, kTerminating };
 
   void WorkerLoop();
   void PollOnce();
+
+  // Copies composite_results[0]'s RGB bytes into payload->rgb_data and sets
+  // is_composite=true, UNLESS a generation-drift recheck shows the composite call
+  // consumed a dirty-flag event newer than xyz_generation — in which case the copy
+  // is discarded and payload stays xyz-only for this tick. Split out of PollOnce()
+  // to keep its cognitive complexity down.
+  void PopulateCompositePayload(LUMICE_Server* server, const LUMICE_RenderResult& composite_result,
+                                unsigned long long xyz_generation, TexturePayload* payload);
 
   // Published-snapshot access helpers. C++17 has no std::atomic<std::shared_ptr<T>>, so we use
   // the C++11 free functions std::atomic_load/atomic_store (deprecated in C++20 but valid here).

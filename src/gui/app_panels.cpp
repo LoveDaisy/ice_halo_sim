@@ -1037,11 +1037,19 @@ void RenderStatusBar(float window_width, float window_height) {
     }
   }
 
-  // Log panel toggle button (right-aligned)
+  // Log panel + Colors window toggle buttons (right-aligned)
   {
     const char* log_label = g_state.log_panel_open ? ICON_FA_CHEVRON_DOWN " Log" : ICON_FA_CHEVRON_RIGHT " Log";
-    float button_w = ImGui::CalcTextSize(log_label).x + ImGui::GetStyle().FramePadding.x * 2;
-    ImGui::SameLine(ImGui::GetWindowWidth() - button_w - ImGui::GetStyle().WindowPadding.x);
+    const char* color_label = ICON_FA_PALETTE " Colors";
+    const float pad_x = ImGui::GetStyle().FramePadding.x * 2;
+    const float log_w = ImGui::CalcTextSize(log_label).x + pad_x;
+    const float color_w = ImGui::CalcTextSize(color_label).x + pad_x;
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    ImGui::SameLine(ImGui::GetWindowWidth() - log_w - color_w - spacing - ImGui::GetStyle().WindowPadding.x);
+    if (ImGui::SmallButton(color_label)) {
+      g_state.color_window_open = !g_state.color_window_open;
+    }
+    ImGui::SameLine();
     if (ImGui::SmallButton(log_label)) {
       g_state.log_panel_open = !g_state.log_panel_open;
     }

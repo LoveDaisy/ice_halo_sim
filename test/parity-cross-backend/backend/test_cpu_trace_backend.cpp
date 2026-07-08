@@ -6,11 +6,13 @@
 #include <memory>
 #include <vector>
 
+#include "config/color_gate_table.hpp"
 #include "config/component_table.hpp"
 #include "config/crystal_config.hpp"
 #include "config/filter_config.hpp"
 #include "config/light_config.hpp"
 #include "config/proj_config.hpp"
+#include "config/raypath_color_config.hpp"
 #include "config/render_config.hpp"
 #include "core/backend/cpu_trace_backend.hpp"
 #include "core/backend/trace_backend.hpp"
@@ -544,16 +546,29 @@ TEST(CpuTraceBackend, GetLastBatchCrystalCountReturnsFinalLayerSettings) {
 // survives cross-layer hand-off unchanged (scrum-331 mechanism, exercised here
 // against a None-source bit).
 // =============================================================================
-TEST(CpuTraceBackend, NoneFilterCrystalTagsAllExitRaysWithWholeCrystalBit) {
-  // MakeSimpleScene's default `filter` argument is a default-constructed
-  // FilterConfig — action_ = kFilterIn, param_ = SimpleFilterParam{NoneFilterParam{}}.
-  // Single-layer, single-crystal → every exit ray belongs to (layer=0, crystal_id=0).
+TEST(CpuTraceBackend, MatchAllColorPredicateTagsEveryExitRayWithWholeCrystalBit) {
+  // Design 2 equivalent of the pre-migration None-filter special case
+  // (AC5): the user requests whole-crystal tagging by writing a match-all
+  // predicate (default NoneFilterParam) via raypath_color. The CPU emit
+  // gate's color pass then applies the bit to every surviving ray.
   auto scene = MakeSimpleScene(/*max_hits=*/6, /*ms_layers=*/1);
   auto render = MakeRenderConfig();
+
+  auto rpc = std::make_shared<RaypathColorConfig>();
+  {
+    ColorClassConfig c;
+    c.color_[0] = 1.0f;
+    RaypathColorRef r;
+    r.layer_ = 0;
+    r.crystal_ = scene.ms_[0].setting_[0].crystal_.id_;  // whole-crystal ref, default predicate = match-all
+    c.match_.push_back(r);
+    rpc->classes_.push_back(std::move(c));
+  }
 
   SessionSpec spec;
   spec.scene = &scene;
   spec.render = &render;
+  spec.raypath_color = rpc;
   spec.wl = WlParam{ 550.0f, 1.0f };
   spec.seed = 42;
 
@@ -571,15 +586,13 @@ TEST(CpuTraceBackend, NoneFilterCrystalTagsAllExitRaysWithWholeCrystalBit) {
   ASSERT_EQ(n, exits.size());
   ASSERT_GT(n, 0u) << "None-filter is pass-all; some exit rays must be emitted";
 
-  auto table = BuildComponentTable(scene);
-  auto bits = ComponentBitsFor(table, /*layer=*/0, /*crystal_id=*/0);
-  ASSERT_EQ(bits.size(), 1u) << "None-filter crystal exposes exactly one whole-crystal bit";
-  ASSERT_NE(bits[0], ComponentTable::kNoBit);
-  const uint64_t kWholeCrystalBit = (uint64_t{ 1 } << bits[0]);
+  auto gate = BuildColorGateTable(*rpc, scene);
+  ASSERT_EQ(gate.entries_.size(), 1u);
+  const uint64_t kWholeCrystalBit = (uint64_t{ 1 } << gate.entries_[0].bit_);
 
   for (size_t i = 0; i < exits.size(); i++) {
     EXPECT_NE(exits[i].component_mask & kWholeCrystalBit, 0u)
-        << "exit ray " << i << " must carry the None crystal's whole-crystal bit; mask=" << exits[i].component_mask;
+        << "exit ray " << i << " must carry the match-all bit; mask=" << exits[i].component_mask;
     EXPECT_EQ(exits[i].ms_layer_idx, 0u);
   }
 
@@ -592,7 +605,7 @@ TEST(CpuTraceBackend, NoneFilterCrystalTagsAllExitRaysWithWholeCrystalBit) {
 // layer OR-accumulation) and the L1 simple-filter bit. Continuation rays
 // therefore act as a targeted-sampling check that the whole-crystal bit rides
 // the shuffle+hand-off path together with any other bits produced downstream.
-TEST(CpuTraceBackend, NoneFilterBitSurvivesCrossLayerToNonNoneLayer) {
+TEST(CpuTraceBackend, MatchAllColorBitSurvivesCrossLayerToPredicateLayer) {
   FilterConfig l1_filter{};
   l1_filter.id_ = 0;
   l1_filter.symmetry_ = FilterConfig::kSymNone;
@@ -609,10 +622,34 @@ TEST(CpuTraceBackend, NoneFilterBitSurvivesCrossLayerToNonNoneLayer) {
   scene.ms_[1].setting_.front().filter_ = l1_filter;
   ASSERT_EQ(scene.ms_.size(), 2u);
 
+  // Design 2: tag L0 (whole-crystal, match-all) and L1 (an EE min_len>=1
+  // predicate). Layer key makes their bits distinct — AC2 anchor.
+  auto rpc = std::make_shared<RaypathColorConfig>();
+  {
+    ColorClassConfig c;
+    c.color_[0] = 1.0f;
+    RaypathColorRef r;
+    r.layer_ = 0;
+    r.crystal_ = scene.ms_[0].setting_[0].crystal_.id_;  // match-all
+    c.match_.push_back(r);
+    rpc->classes_.push_back(std::move(c));
+  }
+  {
+    ColorClassConfig c;
+    c.color_[1] = 1.0f;
+    RaypathColorRef r;
+    r.layer_ = 1;
+    r.crystal_ = scene.ms_[1].setting_[0].crystal_.id_;
+    r.predicate_ = SimpleFilterParam{ ee };
+    c.match_.push_back(r);
+    rpc->classes_.push_back(std::move(c));
+  }
+
   auto render = MakeRenderConfig();
   SessionSpec spec;
   spec.scene = &scene;
   spec.render = &render;
+  spec.raypath_color = rpc;
   spec.wl = WlParam{ 550.0f, 1.0f };
   spec.seed = 7;
 
@@ -638,14 +675,11 @@ TEST(CpuTraceBackend, NoneFilterBitSurvivesCrossLayerToNonNoneLayer) {
   backend.ReadbackExitRays(exits);
   ASSERT_GT(exits.size(), 0u);
 
-  auto table = BuildComponentTable(scene);
-  auto l0_bits = ComponentBitsFor(table, /*layer=*/0, /*crystal_id=*/0);
-  auto l1_bits = ComponentBitsFor(table, /*layer=*/1, /*crystal_id=*/0);
-  ASSERT_EQ(l0_bits.size(), 1u);
-  ASSERT_EQ(l1_bits.size(), 1u);
-  const uint64_t kL0Bit = (uint64_t{ 1 } << l0_bits[0]);
-  const uint64_t kL1Bit = (uint64_t{ 1 } << l1_bits[0]);
-  ASSERT_NE(kL0Bit, kL1Bit) << "layer key must yield distinct bits for L0-None vs L1-EE";
+  auto gate = BuildColorGateTable(*rpc, scene);
+  ASSERT_EQ(gate.entries_.size(), 2u);
+  const uint64_t kL0Bit = (uint64_t{ 1 } << gate.entries_[0].bit_);
+  const uint64_t kL1Bit = (uint64_t{ 1 } << gate.entries_[1].bit_);
+  ASSERT_NE(kL0Bit, kL1Bit) << "layer key must yield distinct bits for L0-match-all vs L1-EE";
 
   size_t l1_exits = 0;
   for (const auto& e : exits) {

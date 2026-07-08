@@ -20,6 +20,13 @@ Checks:
      have identical ordered (type, name) field lists. Catches same-size field
      reorders that sizeof-based `static_assert`s do not detect (scrum-328.2
      Step 6).
+  6. no-config-by-value-copy — LUMICE_Config owns a heap allocation via its
+     raypath_color pointer (task-344, v4.8). Copying the struct by value
+     (copy-init, direct-init, list-init, by-value parameter, or later-line
+     assignment `y = x;`) aliases the same heap block and double-frees on
+     double Release. Route through pointer or `const LUMICE_Config&`, and
+     manage lifetime via LUMICE_ConfigCreateColorClasses / Release (or
+     lumice::ConfigColorGuard).
 
 Add a new check as a function returning a list of Violation and append it to
 CHECKS. Keep each check deterministic and artifact-inspecting.
@@ -333,12 +340,209 @@ def check_struct_layout_parity() -> list[Violation]:
     return out
 
 
+# no-config-by-value-copy: LUMICE_Config carries an owning heap pointer
+# (raypath_color) since task-344 / v4.8. Any by-value copy — copy/direct/list
+# initialization, by-value parameter, or later-line assignment `y = x;` between
+# two same-type locals — aliases the same heap block and double-frees at Release.
+# Route through pointer or `const LUMICE_Config&`, and manage lifetime via
+# LUMICE_ConfigCreateColorClasses / Release (or lumice::ConfigColorGuard).
+#
+# Known limitation (recorded in plan §3 design-point 6, out of scope for this
+# task): does not cover container-held instances (`std::vector<LUMICE_Config>`
+# etc.). Codebase audit found no such usage; extend the rule if it appears.
+#
+# Known limitation (code-review-01, round 1): Patterns 1a/1b/1c all require
+# the RHS to be a single bare identifier, so a function-call RHS such as
+# `LUMICE_Config x = SomeFactory();` is not matched. The codebase currently
+# avoids this shape (test factories were converted to out-param `Fill*` style
+# specifically to sidestep it), but a future by-value-returning factory would
+# not be caught — extend Pattern 1a's RHS match to also accept `\w+\(...\)`
+# (excluding aggregate-init syntax) if this shape reappears.
+CONFIG_TYPE = "LUMICE_Config"
+
+# Pattern 1a: copy-init  `LUMICE_Config a = b;`
+CONFIG_COPY_INIT_RE = re.compile(
+    r"\b" + CONFIG_TYPE + r"\s+(\w+)\s*=\s*(\w+)\s*;"
+)
+# Pattern 1b: direct-init  `LUMICE_Config a(b);`
+CONFIG_DIRECT_INIT_RE = re.compile(
+    r"\b" + CONFIG_TYPE + r"\s+(\w+)\s*\(\s*(\w+)\s*\)\s*;"
+)
+# Pattern 1c: list-init  `LUMICE_Config a{b};`  (excludes `LUMICE_Config a{};`
+# and multi-field aggregate init `LUMICE_Config a{...,...}` — the initializer
+# must be a single bare identifier).
+CONFIG_LIST_INIT_RE = re.compile(
+    r"\b" + CONFIG_TYPE + r"\s+(\w+)\s*\{\s*(\w+)\s*\}\s*;"
+)
+# Pattern 2: by-value parameter  in a signature `... LUMICE_Config x, ...`
+# Excludes pointer/reference (`LUMICE_Config*` / `LUMICE_Config&`) and `const`
+# qualifiers via the "no `*`/`&` immediately before the name" clause. Anchors on
+# `,` or `)` following the identifier so we only match parameter positions.
+CONFIG_BY_VALUE_PARAM_RE = re.compile(
+    r"\b" + CONFIG_TYPE + r"\s+(\w+)\s*[,)]"
+)
+# Pattern 3: declaration collector  `LUMICE_Config name` (any suffix); the
+# alias-guard drops pointers/references separately.
+CONFIG_DECL_RE = re.compile(r"\b" + CONFIG_TYPE + r"(\s*[*&]?)\s*(\w+)")
+
+
+def _is_pointer_or_ref_decl(match: "re.Match[str]") -> bool:
+    return "*" in match.group(1) or "&" in match.group(1)
+
+
+def check_no_config_by_value_copy() -> list[Violation]:
+    out: list[Violation] = []
+    for path in cxx_sources(SRC):
+        out.extend(_scan_config_copies(path))
+    test_root = REPO_ROOT / "test"
+    if test_root.exists():
+        for path in cxx_sources(test_root):
+            out.extend(_scan_config_copies(path))
+    return out
+
+
+def _scan_config_copies(path: Path) -> list[Violation]:
+    out: list[Violation] = []
+    # First pass: collect all `LUMICE_Config <name>` value declarations by name.
+    # Excludes pointer/reference declarations. Used only for Pattern 3
+    # (later-line bare assignment) to keep the check anchored on same-type
+    # locals rather than any arbitrary `a = b`.
+    value_decls: set[str] = set()
+    for _lineno, _orig, code in code_lines(path):
+        for m in CONFIG_DECL_RE.finditer(code):
+            if _is_pointer_or_ref_decl(m):
+                continue
+            value_decls.add(m.group(2))
+
+    for lineno, _orig, code in code_lines(path):
+        # Patterns 1a/1b/1c: copy/direct/list initialization from a single
+        # existing identifier. All three share the "RHS is one bare
+        # identifier" judgement — aggregate init `{}`, `= {}`, `{a, b}`,
+        # function call `foo()` are not matched.
+        for m in CONFIG_COPY_INIT_RE.finditer(code):
+            lhs, rhs = m.group(1), m.group(2)
+            if lhs == rhs:
+                continue
+            out.append(
+                Violation(
+                    path,
+                    lineno,
+                    "no-config-by-value-copy",
+                    f"copy-init `{CONFIG_TYPE} {lhs} = {rhs};` aliases the "
+                    "raypath_color heap allocation; use a pointer or reference.",
+                )
+            )
+        for m in CONFIG_DIRECT_INIT_RE.finditer(code):
+            lhs, rhs = m.group(1), m.group(2)
+            if lhs == rhs:
+                continue
+            out.append(
+                Violation(
+                    path,
+                    lineno,
+                    "no-config-by-value-copy",
+                    f"direct-init `{CONFIG_TYPE} {lhs}({rhs});` aliases the "
+                    "raypath_color heap allocation; use a pointer or reference.",
+                )
+            )
+        for m in CONFIG_LIST_INIT_RE.finditer(code):
+            lhs, rhs = m.group(1), m.group(2)
+            if lhs == rhs:
+                continue
+            out.append(
+                Violation(
+                    path,
+                    lineno,
+                    "no-config-by-value-copy",
+                    f"list-init `{CONFIG_TYPE} {lhs}{{{rhs}}};` aliases the "
+                    "raypath_color heap allocation; use a pointer or reference.",
+                )
+            )
+        # Pattern 2: by-value function parameter. The `\s+` after LUMICE_Config
+        # already excludes `LUMICE_Config*name` / `LUMICE_Config&name`
+        # (adjacent `*`/`&` binds to the type token with no space). Explicit
+        # spaced variants like `LUMICE_Config * name` or `... & name` still
+        # match Pattern 2 as a false positive — the plan accepts this because
+        # the codebase uses adjacent `*`/`&` universally and the spaced form
+        # would violate the local style anyway.
+        for m in CONFIG_BY_VALUE_PARAM_RE.finditer(code):
+            # Guard against matching a value declaration inside a function
+            # body (which Patterns 1a/1b/1c already own): parameter positions
+            # are directly preceded by `(` or `,` (possibly with whitespace),
+            # while local declarations are typically preceded by `{`, `;`, or
+            # start-of-line.
+            start = m.start()
+            prefix = code[:start]
+            # Walk backwards past whitespace to find the nearest non-space char.
+            j = len(prefix) - 1
+            while j >= 0 and prefix[j] in " \t":
+                j -= 1
+            preceding = prefix[j] if j >= 0 else ""
+            if preceding not in ("(", ","):
+                continue
+            # Skip trivial `LUMICE_Config x` where x is followed by `[` in
+            # e.g. `LUMICE_Config x[]` — that's an array parameter, not a
+            # by-value scalar. The regex ends on `[,)]` so an array param
+            # `LUMICE_Config x[]` would already not match (the `]` is not `,`
+            # or `)`), no extra guard needed.
+            name = m.group(1)
+            out.append(
+                Violation(
+                    path,
+                    lineno,
+                    "no-config-by-value-copy",
+                    f"by-value parameter `{CONFIG_TYPE} {name}` aliases the "
+                    "raypath_color heap allocation; use "
+                    f"`const {CONFIG_TYPE}&` or `{CONFIG_TYPE}*`.",
+                )
+            )
+        # Pattern 3: `a = b;` where both `a` and `b` are same-type locals we
+        # saw declared in this file. Skips self-assignment. Skips lines that
+        # already look like an initialization (would be caught by Pattern 1a).
+        if "=" in code and value_decls:
+            # Cheap containment prefilter; avoid a Cartesian regex sweep for
+            # files with hundreds of unrelated `=` lines.
+            for name_lhs in value_decls:
+                for name_rhs in value_decls:
+                    if name_lhs == name_rhs:
+                        continue
+                    assign_re = re.compile(
+                        r"(?<![*&\w])\b"
+                        + re.escape(name_lhs)
+                        + r"\s*=\s*"
+                        + re.escape(name_rhs)
+                        + r"\s*;"
+                    )
+                    if assign_re.search(code):
+                        # Filter out the declaration line itself (would double-
+                        # count with Pattern 1a). Detected by checking that
+                        # `LUMICE_Config` does not immediately precede name_lhs
+                        # on this line.
+                        decl_here = re.compile(
+                            r"\b" + CONFIG_TYPE + r"\s+" + re.escape(name_lhs) + r"\b"
+                        )
+                        if decl_here.search(code):
+                            continue
+                        out.append(
+                            Violation(
+                                path,
+                                lineno,
+                                "no-config-by-value-copy",
+                                f"assignment `{name_lhs} = {name_rhs};` between two "
+                                f"{CONFIG_TYPE} locals aliases the raypath_color "
+                                "heap allocation; use a pointer/reference.",
+                            )
+                        )
+    return out
+
+
 CHECKS = [
     check_getenv_centralization,
     check_env_knob_registration,
     check_gui_api_boundary,
     check_no_using_namespace,
     check_struct_layout_parity,
+    check_no_config_by_value_copy,
 ]
 
 
@@ -358,7 +562,10 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    print("Policy check passed (env centralization, knob registration, GUI API boundary, using-namespace, struct-layout parity).")
+    print(
+        "Policy check passed (env centralization, knob registration, GUI API boundary, "
+        "using-namespace, struct-layout parity, no-config-by-value-copy)."
+    )
     return 0
 
 

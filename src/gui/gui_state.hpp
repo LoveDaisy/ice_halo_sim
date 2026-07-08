@@ -515,6 +515,41 @@ struct Layer {
   std::vector<EntryCard> entries;
 };
 
+// task-342.3 (scrum-raypath-color-design2): GUI-side raypath color model.
+// Mirrors LUMICE_ColorClassRef / LUMICE_ColorClass but with GUI-friendly types
+// (crystal pool ids instead of LUMICE C-API ids, predicate text instead of a
+// filled LUMICE_ColorPredicate). Full design in
+// doc/gui-custom-spectrum-and-raypath-color.md §4.0.
+struct ColorClassRefConfig {
+  int layer_idx = 0;           // scattering layer index
+  int crystal_pool_id = 0;     // index into GuiState::crystals (NOT the LUMICE C-API id)
+  bool match_all = true;       // true → LUMICE_FILTER_TYPE_UNSET (whole crystal); false → parse predicate_text
+  std::string predicate_text;  // parsed via raypath_segments.hpp; must yield exactly one Factor
+
+  friend bool operator==(const ColorClassRefConfig& a, const ColorClassRefConfig& b) {
+    return a.layer_idx == b.layer_idx && a.crystal_pool_id == b.crystal_pool_id && a.match_all == b.match_all &&
+           a.predicate_text == b.predicate_text;
+  }
+  friend bool operator!=(const ColorClassRefConfig& a, const ColorClassRefConfig& b) { return !(a == b); }
+};
+
+struct ColorClassConfig {
+  // Note: label / summary is rebuilt on the fly from `match` at render time,
+  // no cache field kept (plan-review Minor #1; a05 减法优先).
+  float color[3] = { 1.0f, 1.0f, 1.0f };
+  int combine = 0;      // 0 = LUMICE_COLOR_COMBINE_ANY, 1 = LUMICE_COLOR_COMBINE_ALL
+  bool visible = true;  // A4 footgun: LUMICE_ColorClass zero-init has visible=0 (hidden). GUI new-class must be true.
+  bool solo = false;
+  int z_order = 0;  // display-only; never used as vector index (task-342.2 z-order/lane-binding decoupling).
+  std::vector<ColorClassRefConfig> match;
+
+  friend bool operator==(const ColorClassConfig& a, const ColorClassConfig& b) {
+    return std::equal(std::begin(a.color), std::end(a.color), std::begin(b.color)) && a.combine == b.combine &&
+           a.visible == b.visible && a.solo == b.solo && a.z_order == b.z_order && a.match == b.match;
+  }
+  friend bool operator!=(const ColorClassConfig& a, const ColorClassConfig& b) { return !(a == b); }
+};
+
 // MS layer prob helpers (single source of truth for both panels.cpp last-layer
 // four-state UI and app_panels.cpp "+ Layer" continuation-prob promotion).
 // Keep these in one place: if the two sites diverge, a slider-dragged near-zero
@@ -563,6 +598,14 @@ struct GuiState {
   // Renderer (copy model: GuiState owns a single renderer directly).
   // Single-renderer enforced by the GUI; if multi-renderer is ever needed, revisit.
   RenderConfig renderer;
+
+  // Raypath color classes (task-342.3 GUI, atop task-342.2 C API surface).
+  // Physical array order == LUMICE class id == lane binding. `z_order` inside
+  // ColorClassConfig is a separate display-only field — the UI list may be
+  // rendered in z_order but this vector's order MUST stay stable across
+  // reorder-drag operations (see doc/gui-custom-spectrum-and-raypath-color.md §4.0).
+  std::vector<ColorClassConfig> raypath_color;
+  int raypath_color_mode = 0;  // LUMICE_COLOR_MODE_DOMINANT / _ADDITIVE / _PAINTER
 
   // Aspect ratio (view preference, not simulation parameter — does not call MarkDirty)
   AspectPreset aspect_preset = AspectPreset::kFree;
@@ -702,6 +745,9 @@ struct GuiState {
   int core_log_level = 3;  // Same mapping
   bool log_to_file = false;
   bool log_panel_open = false;
+
+  // Color window (task-342.3, view preference, session-only, NOT serialized).
+  bool color_window_open = false;
 
   // Simulation state — DERIVED, not directly written. ReconcileSimState (app.cpp) is the single
   // owner (I2): it maps (run_intent, committed_epoch, last backend observation, dirty) → sim_state

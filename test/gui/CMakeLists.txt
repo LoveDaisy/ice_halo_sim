@@ -10,9 +10,11 @@ add_executable(gui_test
     functional/test_gui_interaction.cpp
     functional/test_gui_export.cpp
     functional/test_gui_import_export.cpp
+    functional/test_gui_color_window.cpp
     functional/test_gui_face_number_overlay.cpp
     functional/test_gui_overlay_labels.cpp
     functional/test_gui_lifecycle.cpp
+    functional/test_gui_composite_preview.cpp
     functional/test_project_world_dir.cpp
     functional/test_render_handedness_guard.cpp
     visual/test_gui_visual.cpp

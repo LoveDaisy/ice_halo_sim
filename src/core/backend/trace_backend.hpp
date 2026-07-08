@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "config/proj_config.hpp"
+#include "config/raypath_color_config.hpp"
 #include "config/render_config.hpp"
 #include "core/crystal.hpp"
 #include "core/def.hpp"
@@ -196,6 +197,12 @@ struct SessionSpec {
   const RenderConfig* render;  // lens / resolution / view pose
   WlParam wl;                  // wavelength + spectral weight
   uint32_t seed;               // 0 = non-deterministic
+  // Design 2 (task-engine-redirect-design2): raypath_color snapshot for the
+  // CPU emit gate's non-destructive color pass. Null → no color configured
+  // (AC3 zero-cost path). shared_ptr<const ...> so in-flight sessions keep
+  // the snapshot alive after a subsequent CommitConfig swap; captured by
+  // server.cpp's GenerateScene alongside `scene` under the scene_mutex_.
+  std::shared_ptr<const RaypathColorConfig> raypath_color;
 };
 
 // -----------------------------------------------------------------------------

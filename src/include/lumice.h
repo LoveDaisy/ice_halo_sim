@@ -172,6 +172,13 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 #define LUMICE_MAX_CONFIG_COMPLEX 32  // max complex-filter composition records per config
 #define LUMICE_MAX_CONFIG_CLAUSES 16  // max OR clauses per complex filter
 #define LUMICE_MAX_CONFIG_TERMS 8     // max AND terms per clause
+// Raypath color-class (Design 2, task-342.2) ABI bounds. Same "widen (breaking bump)" rule as
+// LUMICE_MAX_CONFIG_COMPLEX / _CLAUSES / _TERMS. LUMICE_MAX_CONFIG_COLOR_CLASSES upper-aligns
+// with core ComponentTable::kMaxBits (64), the deduped predicate-atom budget of a scene.
+// LUMICE_MAX_CONFIG_COLOR_REFS is a per-class ref-count ceiling with generous headroom over
+// the OR/AND expansion seen in practice.
+#define LUMICE_MAX_CONFIG_COLOR_CLASSES 64
+#define LUMICE_MAX_CONFIG_COLOR_REFS 32
 
 // Axis distribution type constants for LUMICE_AxisDist.type
 #define LUMICE_AXIS_DIST_GAUSS 0
@@ -308,6 +315,86 @@ _Static_assert(sizeof(LUMICE_SpectrumEntry) == 2 * sizeof(float),
                "LUMICE_SpectrumEntry must be tightly packed (2 floats, no padding) for ABI stability");
 #endif
 
+// =============== Raypath Color Classes (task-342.2, BREAKING v4.7) ===============
+// Design 2 (2026-07-08, doc/gui-custom-spectrum-and-raypath-color.md §4.0): each color class
+// is decoupled from the physical filter. A class has an RGB color + a set of "match" refs;
+// each ref is a placement-scoped predicate {layer, crystal, predicate} that decides which
+// surviving rays get color-tagged. Predicate types are a NARROWED reuse of LUMICE_FilterParam
+// (raypath / entry_exit / direction / crystal / none) — no id, action, symmetry, composition,
+// complex.
+
+// A predicate is a match rule, not a filter. Field naming mirrors the equivalent arms of
+// LUMICE_FilterParam. type selects the active arm:
+//   LUMICE_FILTER_TYPE_UNSET (0) — DELIBERATELY DIFFERENT from LUMICE_FilterParam's zero-init
+//     guard: for a color PREDICATE, UNSET means "match-all whole-crystal" (aligns with core's
+//     RaypathColorRef default `NoneFilterParam{}`, whose wire form is "no `type` key"). The
+//     UNSET-reject convention on LUMICE_FilterParam guards against silently defaulting a
+//     physical filter to no-op; a color predicate has no such physical-safety risk, so
+//     zero-init reasonably means "whole-crystal color tag on this placement".
+//   LUMICE_FILTER_TYPE_{NONE, RAYPATH, ENTRY_EXIT, DIRECTION, CRYSTAL} — same field semantics
+//     as the LUMICE_FilterParam arms; see there.
+//   LUMICE_FILTER_TYPE_COMPLEX is REJECTED (Design 2 color predicates are single-atom).
+typedef struct LUMICE_ColorPredicate_ {
+  int type;  // LUMICE_FILTER_TYPE_* (UNSET=0 means match-all; COMPLEX rejected at commit)
+
+  // Raypath arm
+  int raypath[LUMICE_MAX_CONFIG_RAYPATH_LEN];
+  int raypath_count;
+
+  // EntryExit arm. -1 sentinels; ee_min_len semantics mirror LUMICE_FilterParam.
+  int ee_entry;
+  int ee_exit;
+  int ee_min_len;
+  int ee_max_len;
+
+  // Direction arm (degrees)
+  float dir_az;
+  float dir_el;
+  float dir_radii;
+
+  // Crystal arm
+  int crystal_id;
+} LUMICE_ColorPredicate;
+
+// One placement-scoped color ref = the atom `{layer, crystal_id, predicate}`. Fields carry
+// the same identifiers used elsewhere in scene config (scattering layer index, crystal id).
+typedef struct LUMICE_ColorClassRef_ {
+  int layer;    // scattering layer index (0-based)
+  int crystal;  // crystal id
+  LUMICE_ColorPredicate predicate;
+} LUMICE_ColorClassRef;
+
+// Combine strategy over the match[] refs (mirrors core ColorClassCombine).
+#define LUMICE_COLOR_COMBINE_ANY 0
+#define LUMICE_COLOR_COMBINE_ALL 1
+
+// One color class = an RGB color, a boolean combine over its refs, per-class display-time
+// visibility. A class carries `match[]` refs (semantic bits, decides which rays contribute)
+// and display-time appearance (color, visible, solo — mutable via LUMICE_SetRaypathColors
+// without re-simulation). match[]/combine are STRUCTURAL: changing them re-simulates.
+//
+// WARNING (A4): visible/solo are plain 0/1 booleans; zero-initializing `LUMICE_ColorClass{}`
+// lands visible=0 (INVISIBLE), which is the OPPOSITE of the core JSON default `true`.
+// Callers must explicitly set visible=1 for the class to appear in composited output — the
+// class is otherwise silently omitted from the compositor. This mirrors LUMICE_FILTER_TYPE_UNSET's
+// "zero-init requires explicit follow-up" discipline; the GUI FillLumiceConfig equivalent for
+// task-3 must not forget this.
+typedef struct LUMICE_ColorClass_ {
+  float color[3];                                            // linear RGB in [0, 1]
+  int combine;                                               // LUMICE_COLOR_COMBINE_ANY / _ALL
+  int visible;                                               // 0 = hidden, non-zero = visible (see WARNING above)
+  int solo;                                                  // non-zero = restrict composite to solo'd classes
+  LUMICE_ColorClassRef match[LUMICE_MAX_CONFIG_COLOR_REFS];  // predicate atoms
+  int match_count;
+} LUMICE_ColorClass;
+
+// Composite modes for the display-time compositor (mirrors core CompositeMode / the JSON
+// "mode" field: "dominant" | "additive" | "painter"). Default dominant matches the wire
+// default; painter uses the class list's z-order (see LUMICE_SetRaypathColors).
+#define LUMICE_COLOR_MODE_DOMINANT 0
+#define LUMICE_COLOR_MODE_ADDITIVE 1
+#define LUMICE_COLOR_MODE_PAINTER 2
+
 // BREAKING (v4.3): norm_mode field removed; struct layout changed. Callers must recompile against this header.
 typedef struct LUMICE_RenderParam_ {
   int id;
@@ -324,6 +411,21 @@ typedef struct LUMICE_RenderParam_ {
 // BREAKING (v4.6): added compositions[]/composition_count for complex (sum-of-products)
 // filters. Layout changed; callers must recompile. A filters[] entry with type ==
 // LUMICE_FILTER_TYPE_COMPLEX indexes into compositions[] via its composition_index.
+// BREAKING (v4.7): added raypath_color[]/raypath_color_count/raypath_color_mode for
+// per-raypath color classes (Design 2). Layout changed; callers must recompile.
+// raypath_color_count == 0 → no color classes configured (mono-only, zero regression).
+// BREAKING (v4.8): raypath_color[] is no longer an inline array — it is now a heap-allocated
+// `LUMICE_ColorClass*` owned by this struct. The inline `LUMICE_ColorClass[64]` layout was
+// ~354 KB and pushed `LUMICE_Config` to 467 KB, which overflowed the ImGui test engine's
+// ~512 KB thread stack when two configs coexisted in one function. Callers now allocate via
+// `LUMICE_ConfigCreateColorClasses` and must release via `LUMICE_ConfigReleaseColorClasses`
+// (or via a C++ RAII guard such as `lumice::ConfigColorGuard`; see
+// `src/include/lumice_config_scope.hpp`). Layout changed; callers must recompile.
+//
+// Do not copy this struct by value (assignment, by-value parameter, or storing it in a
+// container) — `raypath_color` is an owning heap pointer; copies alias the same allocation
+// and cause double-free on double Release. Pass `LUMICE_Config*` or `const LUMICE_Config&`
+// instead. See LUMICE_ConfigCreateColorClasses / LUMICE_ConfigReleaseColorClasses.
 typedef struct LUMICE_Config_ {
   // Crystals
   LUMICE_CrystalParam crystals[LUMICE_MAX_CONFIG_CRYSTALS];
@@ -359,10 +461,135 @@ typedef struct LUMICE_Config_ {
   // Scene: scattering
   LUMICE_ScatterLayer scattering[LUMICE_MAX_CONFIG_SCATTER_LAYERS];
   int scatter_count;
+
+  // Raypath color classes (Design 2, task-342.2; BREAKING v4.8: heap-allocated pointer).
+  // raypath_color_count == 0 disables the color path entirely — mono
+  // LUMICE_GetRenderResults output is byte-identical to the pre-v4.7 struct layout.
+  // Non-zero enables per-raypath color: LUMICE_GetCompositeResults returns one composite
+  // RGB image per colored renderer.
+  //
+  // Ownership: raypath_color is owned by this LUMICE_Config and must be allocated /
+  // released only through LUMICE_ConfigCreateColorClasses / LUMICE_ConfigReleaseColorClasses.
+  // Zero-initializing this struct (e.g. `LUMICE_Config cfg{};`) leaves raypath_color ==
+  // nullptr / raypath_color_count == 0, which is the "no color classes" state and is safe
+  // to release (Release is idempotent / null-safe).
+  LUMICE_ColorClass* raypath_color;
+  int raypath_color_count;
+  int raypath_color_mode;  // LUMICE_COLOR_MODE_DOMINANT / _ADDITIVE / _PAINTER
 } LUMICE_Config;
+
+// Bound the LUMICE_Config growth: this struct is passed by value from callers that may put
+// it on the stack (unit tests, GUI wrappers). Static assertion fails loudly if a future
+// field addition explodes the size. Bound is a hard ceiling; keep it low enough that
+// Windows' 1 MB default stack still leaves reasonable headroom.
+//
+// v4.8 (task-344): tightened from 768 KB to 160 KB after raypath_color[64] was moved off
+// the inline layout onto the heap. Measured sizeof(LUMICE_Config) drops from 467 KB to
+// ~113 KB (plan §3 point 5); the 160 KB ceiling keeps ~40 % headroom for future fields
+// while still catching accidental re-inlining or unbounded array additions early.
+#if defined(__cplusplus)
+static_assert(sizeof(LUMICE_Config) <= 160u * 1024u,
+              "LUMICE_Config exceeded its 160 KB ABI ceiling — either shrink a field or bump the ceiling deliberately");
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(
+    sizeof(LUMICE_Config) <= 160u * 1024u,
+    "LUMICE_Config exceeded its 160 KB ABI ceiling — either shrink a field or bump the ceiling deliberately");
+#endif
 
 // out_reused: if non-NULL, set to 1 if consumers were reused (no buffer realloc), 0 if rebuilt.
 LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_Config* config, int* out_reused);
+
+// =============== Raypath Color Classes lifecycle (task-344, BREAKING v4.8) ===============
+// Allocate `count` zero-initialized LUMICE_ColorClass entries and attach them to `cfg`.
+// On success, `cfg->raypath_color` points to the new array, `cfg->raypath_color_count` is
+// set to `count`, and the returned pointer aliases `cfg->raypath_color` for the caller to
+// fill.
+//
+// Semantics:
+//   - `cfg == nullptr` → returns nullptr (no side effect).
+//   - `count < 0` or `count > LUMICE_MAX_CONFIG_COLOR_CLASSES` → returns nullptr; `cfg`
+//     is left untouched.
+//   - `count == 0` → releases any existing allocation, sets pointer to nullptr and
+//     count to 0, returns nullptr. This is the "no color classes" state (mono-only).
+//   - `count > 0` → this call is create-or-replace: if `cfg->raypath_color` was already
+//     non-null (e.g. a prior Create call), it is released first, then a fresh
+//     zero-initialized array of `count` entries is allocated. Safe to call multiple times
+//     on the same `cfg` with different counts.
+//   - Allocator is calloc/free; the returned pointer must eventually be released via
+//     LUMICE_ConfigReleaseColorClasses (or its C++ RAII wrapper).
+//
+// Ownership contract: whether the caller invokes Create directly OR indirectly triggers
+// allocation via LUMICE_ParseConfigString / LUMICE_ParseConfigFile (both allocate
+// implicitly based on the parsed JSON), the caller MUST call Release once done with
+// `cfg`. In C++ code, prefer the `lumice::ConfigColorGuard` RAII wrapper in
+// `src/include/lumice_config_scope.hpp`.
+LUMICE_ColorClass* LUMICE_ConfigCreateColorClasses(LUMICE_Config* cfg, int count);
+
+// Release the raypath_color allocation owned by `cfg`, if any. Idempotent and null-safe:
+//   - `cfg == nullptr` → no-op.
+//   - `cfg->raypath_color == nullptr` → clears count only, no free.
+//   - Otherwise → free(cfg->raypath_color), then nullptr / count=0.
+// Safe to call multiple times; safe to call on a freshly zero-initialized LUMICE_Config.
+void LUMICE_ConfigReleaseColorClasses(LUMICE_Config* cfg);
+
+// =============== Raypath Color Display-Time Setter (task-342.2) ===============
+// Display-time appearance of one color class (mutable without re-simulation): the RGB
+// color, the visible/solo toggles. Structural fields (match[]/combine) live on
+// LUMICE_ColorClass and require re-simulation to change (LUMICE_CommitConfig{,Struct}).
+// WARNING (same footgun as LUMICE_ColorClass): visible/solo are applied verbatim, so a
+// zero-initialized LUMICE_ColorClassDisplay{} has visible==0 (INVISIBLE). Callers MUST set
+// visible=1 explicitly for every class they want shown, or the next composite hides them.
+typedef struct LUMICE_ColorClassDisplay_ {
+  float color[3];
+  int visible;
+  int solo;
+} LUMICE_ColorClassDisplay;
+
+// Update display-time appearance of the committed color classes WITHOUT restarting the
+// simulation. Colors, visibility, solo, z-order, composite mode — none of these touch the
+// accumulator, the epoch, or the consumer set. The compositor re-runs on the SAME
+// already-accumulated per-class Y-lanes and produces new pixel output on the next
+// LUMICE_GetCompositeResults call.
+//
+// classes[i] targets committed color class i (physical index in raypath_color[]; the
+// server's active class table). class_count MUST equal the current raypath_color_count of
+// the committed config, otherwise LUMICE_ERR_INVALID_CONFIG is returned — a count mismatch
+// signals the caller changed member structure and must re-commit the config.
+//
+// z_order: OPTIONAL — pass NULL to leave existing z-order unchanged. When non-NULL, z_order
+// MUST be a permutation of [0, class_count): z_order[i] is the NEW drawing rank of class i
+// (the ranks are the integers 0..class_count-1 in some order — the natural output of a GUI
+// drag-reorder). The compositor sorts ascending, so rank 0 (the LOWEST rank) draws first and
+// therefore lands on top for painter mode / wins dominant ties (first-drawn wins). A z_order
+// that is not a valid
+// permutation (out-of-range or duplicate rank, e.g. {0,0,1}) returns LUMICE_ERR_INVALID_CONFIG
+// and leaves all state unchanged (all-or-nothing).
+//
+// mode: composite mode (LUMICE_COLOR_MODE_DOMINANT / _ADDITIVE / _PAINTER). Values outside
+// this range return LUMICE_ERR_INVALID_VALUE.
+//
+// Thread safety: display-time only; safe relative to OTHER display-time getters (Get*Results,
+// LUMICE_GetSimLifecycle, etc.). NOT thread-safe with concurrent LUMICE_CommitConfig{,Struct}
+// — the existing single-owner CommitConfig rule (doc/capi-lifecycle-architecture.md §4) still
+// applies to this setter.
+LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server, const LUMICE_ColorClassDisplay* classes,
+                                         int class_count, const int* z_order, int mode);
+
+// Per-color-class empty-arc detector (task-342.3 AC4). For each committed color class, reports
+// whether the class has any non-zero pixel in its snapshot Y-lane on any active RenderConsumer
+// — i.e. whether it has captured any rays yet. Intended for GUI empty-arc warnings when a
+// physical filter has silently blocked all rays that would have matched the class predicate.
+//
+// out_flags is a caller-owned buffer of length class_count. On success, out_flags[i] = 1 iff
+// class i has signal, 0 otherwise. class_count MUST equal the current raypath_color_count of
+// the committed config, otherwise LUMICE_ERR_INVALID_CONFIG. class_count == 0 is a valid no-op
+// (returns LUMICE_OK; out_flags is not touched).
+//
+// Reads the frozen snapshot state (no DoSnapshot trigger); callers relying on freshness should
+// query LUMICE_GetCompositeResults / LUMICE_GetRawXyzResults first. O(W*H * class_count *
+// consumers) scan; intended for infrequent polls (commit-debounce cadence, ~1 Hz), not per
+// render frame.
+LUMICE_ErrorCode LUMICE_GetColorClassSignal(LUMICE_Server* server, int* out_flags, int class_count);
 
 // =============== Configuration Parsing (JSON -> LUMICE_Config) ===============
 // Parse JSON into LUMICE_Config struct, enabling load-modify-commit workflows.

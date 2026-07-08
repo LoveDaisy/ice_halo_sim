@@ -17,6 +17,7 @@
 #include <thread>
 
 #include "gui/app.hpp"
+#include "gui/color_window.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/file_io.hpp"
 #include "gui/font_init.hpp"
@@ -342,6 +343,7 @@ int main(int argc, char** argv) {
     gui::RenderRightPanel(window, layout_width, layout_height);
     gui::RenderPreviewPanel(window, layout_width, layout_height);
     gui::RenderLogPanel(layout_width, layout_height);
+    gui::RenderColorWindow(gui::g_state, gui::g_server);
     gui::RenderStatusBar(layout_width, layout_height);
     gui::RenderEditModals(gui::g_state, window);
     gui::RenderSpectrumModal(gui::g_state);

@@ -377,7 +377,11 @@ TEST(CrossLayerAccumulation, OrsBothLayerBitsWithDistinctLayerKeys) {
   bd0[1].EmplaceBack(MakeOutgoingCandidate(), ToRecorder({ 3, 5 }));
   MsInfo ms_cont;
   ms_cont.prob_ = 1.0f;
-  CollectData(rng, ms_cont, spec_l0.get(), bd0, id0, &bits_l0);
+  // Design 2 CollectData signature: physical filter (spec_l0) and color spec
+  // both point at the same FilterSpec here — the raypath-color pass then
+  // reproduces the old Fork-C "summand mask maps to component bits" behaviour,
+  // which is the mechanism this cross-layer regression test guards.
+  CollectData(rng, ms_cont, spec_l0.get(), bd0, id0, spec_l0.get(), &bits_l0);
   ASSERT_TRUE(bd0[1].rays_[0].IsContinue());
   ASSERT_EQ(id0[1].size_, 1u);
   const uint64_t carried = id0[1].ComponentAt(0);
@@ -396,7 +400,7 @@ TEST(CrossLayerAccumulation, OrsBothLayerBitsWithDistinctLayerKeys) {
   bd1[1].SetComponent(0, carried);  // cross-layer hand-off of the accumulated mask
   MsInfo ms_emit;
   ms_emit.prob_ = 0.0f;
-  CollectData(rng, ms_emit, spec_l1.get(), bd1, id1, &bits_l1);
+  CollectData(rng, ms_emit, spec_l1.get(), bd1, id1, spec_l1.get(), &bits_l1);
 
   ASSERT_TRUE(bd1[1].rays_[0].IsOutgoing());
   const uint64_t final_mask = bd1[1].ComponentAt(0);
@@ -444,7 +448,7 @@ TEST(CrossLayerAccumulation, NonMatchingSecondLayerAddsNoBit) {
   bd[1].SetComponent(0, carried);
   MsInfo ms_emit;
   ms_emit.prob_ = 0.0f;
-  CollectData(rng, ms_emit, spec_l1.get(), bd, id, &bits_l1);
+  CollectData(rng, ms_emit, spec_l1.get(), bd, id, spec_l1.get(), &bits_l1);
 
   const uint64_t mask = bd[1].ComponentAt(0);
   EXPECT_LT(bd[1].rays_[0].w_, 0.0f) << "non-matching filter-In ray terminates";

@@ -5,33 +5,30 @@
 #include <string>
 #include <vector>
 
+#include "config/filter_config.hpp"
 #include "core/def.hpp"
 
 namespace lumice {
 
-// User-visible schema for per-raypath color display (task-339.2 color-class
-// schema; supersedes 336.1's flat positional form). The top-level
-// `raypath_color` is an ordered list of color classes; each class binds one
-// RGB color to a boolean predicate over `component` bits (see
-// doc/gui-custom-spectrum-and-raypath-color.md §4.7 定案 2). List order is
-// z-order (used by 339.4's per-class compositor).
+// User-visible schema for per-raypath color display.
 //
-// A `RaypathColorRef` picks one or more component bits by id (NOT by internal
-// setting_[] slot index). The `crystal`/`filter` fields refer to
-// `CrystalConfig::id_` / `FilterConfig::id_`, matching the ids used elsewhere
-// in scene config. Resolution to ci (setting_[] slot) and to bits happens in
-// the builder (BuildColorClassTable). `has_filter_ == false` means "the
-// none-filter scattering setting for that crystal" (whole-crystal virtual
-// summand emitted by task-339.1). `has_summand_ == false` means "any summand
-// of the referenced filter" (OR-union over all summand bits of that filter).
+// Design 2 (2026-07-08, doc/gui-custom-spectrum-and-raypath-color.md §4.0
+// SUPERSEDES §4.1 Fork C + §4.7): a color class is decoupled from the physical
+// filter. `match[]` is a list of placement-scoped color PREDICATES — each
+// atom `{layer, crystal, <predicate>}` is one component bit, evaluated as a
+// non-destructive pass on the CPU gate (physical filter still decides
+// survival; the color predicate decides which surviving rays get tagged).
+//
+// `layer` / `crystal` reference the same ids used elsewhere in scene config
+// (`SceneConfig::ms_[layer]` and `CrystalConfig::id_`). Predicate types reuse
+// `SimpleFilterParam` verbatim (raypath / entry_exit / direction / crystal /
+// none) — see filter_config.hpp. Default `predicate_` = `NoneFilterParam{}`
+// is the wire-form "no `type` field", meaning match-all (whole-crystal color).
 
 struct RaypathColorRef {
   IdType layer_ = 0;
   IdType crystal_ = kInvalidId;
-  IdType filter_ = kInvalidId;
-  IdType summand_ = 0;
-  bool has_filter_ = false;
-  bool has_summand_ = false;
+  SimpleFilterParam predicate_ = NoneFilterParam{};
 };
 
 // One color class = an RGB color, a boolean combine over the members, a set of
@@ -61,8 +58,8 @@ struct RaypathColorConfig {
 // A missing top-level "raypath_color" key in the ConfigManager JSON is treated
 // as an empty config (zero regression against configs without color) —
 // handled by ConfigManager's from_json, not here. `to_json` omits default
-// per-class fields (combine=any, visible=true, solo=false) and per-ref
-// optional fields (filter/summand when not present) to keep configs small.
+// per-class fields (combine=any, visible=true, solo=false) and omits the
+// predicate `type` field when it is `NoneFilterParam` (match-all whole-crystal).
 void to_json(nlohmann::json& j, const RaypathColorRef& r);
 void from_json(const nlohmann::json& j, RaypathColorRef& r);
 void to_json(nlohmann::json& j, const ColorClassConfig& c);

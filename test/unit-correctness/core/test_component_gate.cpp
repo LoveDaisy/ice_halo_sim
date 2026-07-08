@@ -1,17 +1,19 @@
-// Tests for task-331.2 (cpu-gate-produce-components): the CPU emit gate
-// produces per-layer raypath-color component bits by reusing the Complex
-// filter's per-summand match (single pass) and mapping matched summands onto
-// component bits via the T1 component_table.
+// Tests for the Design-2 CPU emit gate (task-engine-redirect-design2):
 //
 // Coverage (whitebox / captured rays, not statistical contrast):
 //   - FilterSpec::MatchSummandMask / CheckSummandMask per-summand semantics
 //     (disjoint OR-terms -> one bit; overlapping summands -> multiple bits;
 //      None -> zero bits; simple filter -> single bit; action-out mask).
-//   - ComponentBitsFor + BuildComponentTable layer-key correctness (same
-//     crystal-slot/summand at different layers -> different global bits).
-//   - CollectData end-to-end: a surviving ray matching summand k gets the
-//     mapped bit OR'd into its carried mask (emit + continue), filter-fail and
-//     nullptr-map leave the mask untouched.
+//     [Unchanged from task-331.2 — this is the shared per-predicate mechanism
+//      Design 2 reuses for the color pass.]
+//   - ComponentBitsFor + BuildComponentTable layer-key correctness — GPU
+//     (Fork-C) code path only, preserved by A4.
+//   - CollectData end-to-end (Design 2): a surviving ray matching color
+//     summand k gets `color_bits[k]` OR'd into its carried mask (emit +
+//     continue); physical-filter-fail terminates the ray BEFORE the color
+//     pass runs (AC4); a null color spec is a zero-cost no-op.
+//   - AC4 anchor: `color_spec` never touches `w_` — a ray whose physical
+//     filter accepts and whose color spec accepts nothing still emits.
 
 #include <gtest/gtest.h>
 
@@ -285,11 +287,25 @@ struct GateFixture {
 };
 }  // namespace
 
-TEST(ComponentGateCollectData, EmitRayGetsMappedBitForMatchedSummand) {
+// Design 2 CollectData tests share this helper: a match-all physical filter
+// (None) so we can vary the color spec independently.
+namespace {
+std::unique_ptr<FilterSpec> MakeNoneSpec(const Crystal& crystal) {
+  FilterConfig cfg{};
+  cfg.id_ = 1;
+  cfg.symmetry_ = FilterConfig::kSymNone;
+  cfg.action_ = FilterConfig::kFilterIn;
+  cfg.param_ = SimpleFilterParam{ NoneFilterParam{} };
+  return FilterSpec::Create(cfg, crystal, MakeAxis());
+}
+}  // namespace
+
+TEST(ComponentGateCollectData, EmitRayGetsMappedBitForMatchedColorSummand) {
   Crystal prism = Crystal::CreatePrism(1.0f);
-  auto spec = MakeComplexFromSummands(prism, { Raypath({ 3, 5 }), Raypath({ 5, 7 }) });
+  auto phys = MakeNoneSpec(prism);
+  auto color = MakeComplexFromSummands(prism, { Raypath({ 3, 5 }), Raypath({ 5, 7 }) });
   // summand 0 -> bit 7, summand 1 -> bit 3.
-  std::vector<uint8_t> summand_bits{ 7, 3 };
+  std::vector<uint8_t> color_bits{ 7, 3 };
 
   RandomNumberGenerator rng(42);
   MsInfo ms_info;
@@ -298,17 +314,18 @@ TEST(ComponentGateCollectData, EmitRayGetsMappedBitForMatchedSummand) {
   GateFixture fx;
   fx.buffer_data[1].EmplaceBack(MakeOutgoingCandidate(), ToRecorder({ 3, 5 }));
 
-  CollectData(rng, ms_info, spec.get(), fx.buffer_data, fx.init_data, &summand_bits);
+  CollectData(rng, ms_info, phys.get(), fx.buffer_data, fx.init_data, color.get(), &color_bits);
 
   ASSERT_EQ(fx.buffer_data[1].size_, 1u);
   EXPECT_TRUE(fx.buffer_data[1].rays_[0].IsOutgoing());
-  EXPECT_EQ(fx.buffer_data[1].ComponentAt(0), (1ull << 7)) << "matched summand 0 -> mapped bit 7";
+  EXPECT_EQ(fx.buffer_data[1].ComponentAt(0), (1ull << 7)) << "matched color summand 0 -> mapped bit 7";
 }
 
 TEST(ComponentGateCollectData, ContinueRayCarriesMappedBitIntoNextLayerInit) {
   Crystal prism = Crystal::CreatePrism(1.0f);
-  auto spec = MakeComplexFromSummands(prism, { Raypath({ 3, 5 }), Raypath({ 5, 7 }) });
-  std::vector<uint8_t> summand_bits{ 7, 3 };
+  auto phys = MakeNoneSpec(prism);
+  auto color = MakeComplexFromSummands(prism, { Raypath({ 3, 5 }), Raypath({ 5, 7 }) });
+  std::vector<uint8_t> color_bits{ 7, 3 };
 
   RandomNumberGenerator rng(42);
   MsInfo ms_info;
@@ -317,17 +334,19 @@ TEST(ComponentGateCollectData, ContinueRayCarriesMappedBitIntoNextLayerInit) {
   GateFixture fx;
   fx.buffer_data[1].EmplaceBack(MakeOutgoingCandidate(), ToRecorder({ 5, 7 }));
 
-  CollectData(rng, ms_info, spec.get(), fx.buffer_data, fx.init_data, &summand_bits);
+  CollectData(rng, ms_info, phys.get(), fx.buffer_data, fx.init_data, color.get(), &color_bits);
 
   ASSERT_TRUE(fx.buffer_data[1].rays_[0].IsContinue());
   ASSERT_EQ(fx.init_data[1].size_, 1u);
-  EXPECT_EQ(fx.init_data[1].ComponentAt(0), (1ull << 3)) << "matched summand 1 -> mapped bit 3, carried forward";
+  EXPECT_EQ(fx.init_data[1].ComponentAt(0), (1ull << 3))
+      << "matched color summand 1 -> mapped bit 3, carried forward across layers";
 }
 
 TEST(ComponentGateCollectData, ProducedBitsOrIntoCarriedMask) {
   Crystal prism = Crystal::CreatePrism(1.0f);
-  auto spec = MakeComplexFromSummands(prism, { Raypath({ 3, 5 }), Raypath({ 5, 7 }) });
-  std::vector<uint8_t> summand_bits{ 7, 3 };
+  auto phys = MakeNoneSpec(prism);
+  auto color = MakeComplexFromSummands(prism, { Raypath({ 3, 5 }), Raypath({ 5, 7 }) });
+  std::vector<uint8_t> color_bits{ 7, 3 };
 
   RandomNumberGenerator rng(42);
   MsInfo ms_info;
@@ -339,73 +358,88 @@ TEST(ComponentGateCollectData, ProducedBitsOrIntoCarriedMask) {
   constexpr uint64_t kPrior = (1ull << 20);
   fx.buffer_data[1].SetComponent(0, kPrior);
 
-  CollectData(rng, ms_info, spec.get(), fx.buffer_data, fx.init_data, &summand_bits);
+  CollectData(rng, ms_info, phys.get(), fx.buffer_data, fx.init_data, color.get(), &color_bits);
 
   EXPECT_EQ(fx.buffer_data[1].ComponentAt(0), kPrior | (1ull << 7)) << "new bit OR-accumulates onto carried mask";
 }
 
-TEST(ComponentGateCollectData, FilterFailProducesNoBits) {
+// AC4 anchor #1 (physical-fail short-circuits the color pass — no cheating
+// tag can outlive a rejected ray).
+TEST(ComponentGateCollectData, PhysicalFailTerminatesRayAndProducesNoBits) {
   Crystal prism = Crystal::CreatePrism(1.0f);
-  auto spec = MakeComplexFromSummands(prism, { Raypath({ 3, 5 }), Raypath({ 5, 7 }) });
-  std::vector<uint8_t> summand_bits{ 7, 3 };
+  // Physical filter: filter_in matching {3,5} only.
+  auto phys = MakeComplexFromSummands(prism, { Raypath({ 3, 5 }) });
+  // Color spec that WOULD tag the same ray, but must not be evaluated.
+  auto color = MakeComplexFromSummands(prism, { Raypath({ 4, 6 }) });
+  std::vector<uint8_t> color_bits{ 9 };
 
   RandomNumberGenerator rng(42);
   MsInfo ms_info;
   ms_info.prob_ = 0.0f;
 
   GateFixture fx;
-  // {4,6} matches neither summand -> filter-fail (action In) -> ray terminates.
+  // {4,6} fails the physical filter (raypath not in set) — ray terminates.
   fx.buffer_data[1].EmplaceBack(MakeOutgoingCandidate(), ToRecorder({ 4, 6 }));
 
-  CollectData(rng, ms_info, spec.get(), fx.buffer_data, fx.init_data, &summand_bits);
+  CollectData(rng, ms_info, phys.get(), fx.buffer_data, fx.init_data, color.get(), &color_bits);
 
-  EXPECT_LT(fx.buffer_data[1].rays_[0].w_, 0.0f) << "filter-fail terminates the ray";
-  EXPECT_EQ(fx.buffer_data[1].ComponentAt(0), 0ull) << "no summand matched -> no bits produced";
+  EXPECT_LT(fx.buffer_data[1].rays_[0].w_, 0.0f) << "physical-fail terminates the ray";
+  EXPECT_EQ(fx.buffer_data[1].ComponentAt(0), 0ull) << "physical-fail short-circuits the color pass";
 }
 
-TEST(ComponentGateCollectData, NoneFilterTagsEveryRayRegardlessOfPath) {
-  // task-339.1 end-to-end: build a NoneSpec via FilterSpec::Create (not the
-  // Complex helper) and drive CollectData with a fixed summand_bits map. Every
-  // emitted ray — regardless of its raypath contents — must carry the mapped
-  // whole-crystal bit, mirroring how the CPU emit gate treats a None-filter
-  // crystal at runtime.
+// AC4 anchor #2 (decoupled predicates): physical filter accepts a ray whose
+// color spec matches nothing → ray still emits, mask stays 0. Color pass
+// cannot influence physical survival.
+TEST(ComponentGateCollectData, ColorMissDoesNotAffectPhysicalSurvival) {
   Crystal prism = Crystal::CreatePrism(1.0f);
-  FilterConfig cfg{};
-  cfg.id_ = 1;
-  cfg.symmetry_ = FilterConfig::kSymNone;
-  cfg.action_ = FilterConfig::kFilterIn;
-  cfg.param_ = SimpleFilterParam{ NoneFilterParam{} };
-  auto spec = FilterSpec::Create(cfg, prism, MakeAxis());
-  ASSERT_NE(spec, nullptr);
-  // None-filter crystals now expose one whole-crystal summand (bit 0 in
-  // BuildComponentTable's local slot; here we pin it to bit 11 to prove the
-  // mapping is applied verbatim).
-  std::vector<uint8_t> summand_bits{ 11 };
+  auto phys = MakeNoneSpec(prism);  // always passes
+  auto color = MakeComplexFromSummands(prism, { Raypath({ 3, 5 }) });
+  std::vector<uint8_t> color_bits{ 4 };
 
   RandomNumberGenerator rng(42);
   MsInfo ms_info;
-  ms_info.prob_ = 0.0f;  // filter-pass + prob-fail -> emit
+  ms_info.prob_ = 0.0f;
 
   GateFixture fx;
-  // Three outgoing rays with wildly different raypath contents — None must
-  // treat them identically.
+  // {4,6} does NOT match the color predicate {3,5} — but physical filter
+  // (None) accepts everything → ray must still emit, without a color bit.
+  fx.buffer_data[1].EmplaceBack(MakeOutgoingCandidate(), ToRecorder({ 4, 6 }));
+
+  CollectData(rng, ms_info, phys.get(), fx.buffer_data, fx.init_data, color.get(), &color_bits);
+
+  EXPECT_TRUE(fx.buffer_data[1].rays_[0].IsOutgoing()) << "physical accepts → ray emits regardless of color match";
+  EXPECT_EQ(fx.buffer_data[1].ComponentAt(0), 0ull) << "color miss leaves the mask clean";
+}
+
+TEST(ComponentGateCollectData, MatchAllColorSpecTagsEveryRayRegardlessOfPath) {
+  // Design 2's whole-crystal color = match-all NoneFilterParam predicate.
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  auto phys = MakeNoneSpec(prism);
+  auto color = MakeNoneSpec(prism);  // color = None (match-all)
+  std::vector<uint8_t> color_bits{ 11 };
+
+  RandomNumberGenerator rng(42);
+  MsInfo ms_info;
+  ms_info.prob_ = 0.0f;
+
+  GateFixture fx;
   fx.buffer_data[1].EmplaceBack(MakeOutgoingCandidate(), ToRecorder({ 3, 5 }));
   fx.buffer_data[1].EmplaceBack(MakeOutgoingCandidate(), ToRecorder({ 4, 6, 8 }));
   fx.buffer_data[1].EmplaceBack(MakeOutgoingCandidate(), ToRecorder({}));
 
-  CollectData(rng, ms_info, spec.get(), fx.buffer_data, fx.init_data, &summand_bits);
+  CollectData(rng, ms_info, phys.get(), fx.buffer_data, fx.init_data, color.get(), &color_bits);
 
   ASSERT_EQ(fx.buffer_data[1].size_, 3u);
   for (size_t i = 0; i < 3; i++) {
-    EXPECT_TRUE(fx.buffer_data[1].rays_[i].IsOutgoing()) << "ray " << i << " must survive None gate as outgoing";
+    EXPECT_TRUE(fx.buffer_data[1].rays_[i].IsOutgoing()) << "ray " << i << " must survive";
     EXPECT_EQ(fx.buffer_data[1].ComponentAt(i), (1ull << 11))
         << "ray " << i << " must carry the whole-crystal bit regardless of raypath";
   }
 }
 
-TEST(ComponentGateCollectData, NullMapLeavesMaskUntouched) {
+TEST(ComponentGateCollectData, NullColorSpecLeavesMaskUntouched) {
   Crystal prism = Crystal::CreatePrism(1.0f);
-  auto spec = MakeComplexFromSummands(prism, { Raypath({ 3, 5 }), Raypath({ 5, 7 }) });
+  auto phys = MakeNoneSpec(prism);
 
   RandomNumberGenerator rng(42);
   MsInfo ms_info;
@@ -416,11 +450,12 @@ TEST(ComponentGateCollectData, NullMapLeavesMaskUntouched) {
   constexpr uint64_t kPrior = (1ull << 20);
   fx.buffer_data[1].SetComponent(0, kPrior);
 
-  // No summand_bits map -> production disabled, gate behaviour unchanged.
-  CollectData(rng, ms_info, spec.get(), fx.buffer_data, fx.init_data, nullptr);
+  // Design 2 zero-cost path: no color spec → mask untouched, ray still emits.
+  CollectData(rng, ms_info, phys.get(), fx.buffer_data, fx.init_data, /*color_spec=*/nullptr,
+              /*color_bits=*/nullptr);
 
   EXPECT_TRUE(fx.buffer_data[1].rays_[0].IsOutgoing());
-  EXPECT_EQ(fx.buffer_data[1].ComponentAt(0), kPrior) << "nullptr map: no production, mask carried verbatim";
+  EXPECT_EQ(fx.buffer_data[1].ComponentAt(0), kPrior) << "nullptr color spec: no production, mask carried verbatim";
 }
 
 }  // namespace
