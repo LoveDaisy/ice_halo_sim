@@ -57,6 +57,13 @@ bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out, FilterOverflowI
 // caller can embed it inside its own "(limit N; ...)" grouping.
 std::string FormatOverflowLocator(const FilterOverflowInfo& overflow);
 
+// Format a human-readable, limit-bearing description of a ColorClassOverflowInfo — the
+// color-class-overflow counterpart to FormatOverflowLocator above. Pure so the message format
+// is unit-testable. Only valid to call when the overflow struct was actually populated (i.e.
+// `overflow.class_index >= 0`, the same discriminator callers use to tell a color-class
+// overflow apart from a physical-filter overflow after FillLumiceConfig returns false).
+std::string FormatColorOverflowLocator(const ColorClassOverflowInfo& overflow);
+
 // Serialize GuiState to Core JSON string (for .lmc save and CLI compatibility)
 std::string SerializeCoreConfig(const GuiState& state);
 

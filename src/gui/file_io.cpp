@@ -449,6 +449,12 @@ static std::vector<SimpleTermDesc> FactorAlternatives(const Factor& factor) {
   return alts;
 }
 
+// Declared in raypath_segments.hpp — shared single-alternative gate consumed by
+// color_window.cpp so its front-end pre-checks can never drift from FillColorPredicate below.
+int CountFactorAlternatives(const Factor& factor) {
+  return static_cast<int>(FactorAlternatives(factor).size());
+}
+
 // Steps A–C — GUI FilterConfig → OR of AND-clauses. A summand (AND-of-factors)
 // distributes over each factor's internal OR via a Cartesian product (DNF):
 // AND(EE{3,4}, RP) = OR(AND(EE3,RP), AND(EE4,RP)). Concatenating every summand's
@@ -892,12 +898,23 @@ bool BuildExportJsonOrWarn(const GuiState& state, std::string* out_json, std::st
   // path is directly unit-testable.
   LUMICE_Config probe{};
   FilterOverflowInfo overflow;
-  if (!FillLumiceConfig(state, &probe, &overflow)) {
+  ColorClassOverflowInfo color_overflow;
+  if (!FillLumiceConfig(state, &probe, &overflow, &color_overflow)) {
     if (out_warning) {
-      const std::string locator = FormatOverflowLocator(overflow);
-      *out_warning = "This filter has too many OR segments / values to export (limit " +
-                     std::to_string(LUMICE_MAX_CONFIG_CLAUSES) + "; " + locator +
-                     ").\nNo config was exported. Simplify the filter and try again.";
+      // color_overflow.class_index >= 0 iff FillLumiceConfig failed on the color-class walk
+      // (which runs strictly after the filter walk) rather than a physical-filter overflow —
+      // reusing the filter-overflow wording here would misattribute the resource and the
+      // limit number (code-review-01 Major 1).
+      if (color_overflow.class_index >= 0) {
+        *out_warning = "This raypath color configuration exceeds its limits (" +
+                       FormatColorOverflowLocator(color_overflow) +
+                       ").\nNo config was exported. Simplify the color configuration and try again.";
+      } else {
+        const std::string locator = FormatOverflowLocator(overflow);
+        *out_warning = "This filter has too many OR segments / values to export (limit " +
+                       std::to_string(LUMICE_MAX_CONFIG_CLAUSES) + "; " + locator +
+                       ").\nNo config was exported. Simplify the filter and try again.";
+      }
     }
     return false;
   }
@@ -1289,6 +1306,15 @@ std::string FormatOverflowLocator(const FilterOverflowInfo& overflow) {
     return "filter \"" + overflow.filter_name + "\", " + pos;
   }
   return pos;
+}
+
+std::string FormatColorOverflowLocator(const ColorClassOverflowInfo& overflow) {
+  if (overflow.class_over_cap) {
+    return "too many color classes (limit " + std::to_string(LUMICE_MAX_CONFIG_COLOR_CLASSES) + ")";
+  }
+  // 1-based class index to match the panel's user-facing numbering convention.
+  return "color class " + std::to_string(overflow.class_index + 1) + " has too many match references (limit " +
+         std::to_string(LUMICE_MAX_CONFIG_COLOR_REFS) + ")";
 }
 
 // task-342.3 Step 3: fill a single LUMICE_ColorPredicate from a GUI ColorClassRefConfig.

@@ -150,13 +150,18 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "validate_single_atom_rejects_semicolon_or");
     t->TestFunc = [](ImGuiTestContext*) {
-      // A ';' inside a single ref would be a summand OR-separator (SoP wire
-      // notation) — the base ValidateSummandText already rejects it before
-      // the single-atom gate has a chance to look at it, which is exactly
-      // right: the color window's per-ref textbox represents ONE atom, and
-      // cross-ref OR is expressed with combine:any across refs.
-      auto v = gui::ValidateSingleAtomText("3-5;7-9");
+      // "1-3;5-7" uses only legal PRISM face numbers (1-8), so the base
+      // ValidateSummandText / face-range checks pass — the rejection here
+      // must come from the alternative-count check (CountFactorAlternatives
+      // == 2), NOT a coincidental face-number-out-of-range failure. This
+      // exercises the same gate FillColorPredicate enforces at commit time
+      // (code-review-01 Major 2): a ';' inside a single ref is a
+      // summand-level OR-separator that expands to >1 alternative, which a
+      // single-atom LUMICE_ColorPredicate cannot carry — cross-ref OR is
+      // expressed with combine:any across refs instead.
+      auto v = gui::ValidateSingleAtomText("1-3;5-7");
       IM_CHECK_EQ(v.state, LUMICE_RAYPATH_INVALID);
+      IM_CHECK(!v.message.empty());
     };
   }
 
@@ -225,6 +230,34 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       IM_CHECK(cls.match[0].match_all);
       IM_CHECK_EQ(cls.match[0].layer_idx, 1);
       IM_CHECK_EQ(cls.match[0].crystal_pool_id, 3);
+    };
+  }
+
+  // BuildClassFromFilter — a row whose single Factor still expands to more
+  // than one alternative ("1-3;5-7", the same ';' OR-separator case as
+  // validate_single_atom_rejects_semicolon_or) must be skipped like an
+  // AND-row, not silently imported as a legal single-atom ref that
+  // FillColorPredicate would then drop at the next commit (code-review-01
+  // Minor 1, same root cause as Major 2). Uses gui::ParseSummandText for
+  // `.factors` (rather than the dummy single-Factor placeholder the other
+  // cases here use) so CountFactorAlternatives sees the real ';' content.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "build_class_from_filter_skips_multi_alt_row");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::FilterConfig f;
+      f.param.clear();
+      const std::string text = "1-3;5-7";
+      f.param.push_back(gui::SummandText{ text, gui::ParseSummandText(text) });
+      f.param.push_back(
+          gui::SummandText{ std::string{ "3-5" }, std::vector<gui::Factor>{ gui::Factor{ gui::RaypathParams{} } } });
+
+      int skipped = -1;
+      gui::ColorClassConfig cls = gui::BuildClassFromFilter(0, 2, f, skipped);
+
+      IM_CHECK_EQ(skipped, 1);
+      IM_CHECK_EQ(static_cast<int>(cls.match.size()), 1);
+      IM_CHECK_EQ(cls.match[0].predicate_text, "3-5");
     };
   }
 }

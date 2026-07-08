@@ -169,7 +169,13 @@ GuiValidationResult ValidateSingleAtomText(const std::string& text) {
     return base;
   }
   const auto factors = ParseSummandText(trimmed);
-  if (factors.size() != 1) {
+  // Mirrors FillColorPredicate's authoritative gate exactly (factors.size()==1 AND
+  // CountFactorAlternatives==1): a text like "1-3;5-7" parses to a single Factor (no ' & ')
+  // but that Factor still expands to 2 alternatives via the ';' OR-separator, which
+  // LUMICE_ColorPredicate cannot carry. Without this second check the row would look valid
+  // here and then get silently dropped by FillColorPredicate at the next commit
+  // (code-review-01 Major).
+  if (factors.size() != 1 || CountFactorAlternatives(factors[0]) != 1) {
     return GuiValidationResult{ LUMICE_RAYPATH_INVALID, "single-atom only — use combine:all across refs for AND" };
   }
   return GuiValidationResult{ LUMICE_RAYPATH_VALID, {} };
@@ -184,7 +190,11 @@ ColorClassConfig BuildClassFromFilter(int layer_idx, int crystal_pool_id, const 
   cls.combine = LUMICE_COLOR_COMBINE_ANY;
   skipped_rows = 0;
   for (const auto& row : f.param) {
-    if (row.factors.size() != 1) {
+    // Same single-atom gate as ValidateSingleAtomText / FillColorPredicate: a row whose
+    // (cached) Factor resolves to more than one alternative (e.g. "1-3;5-7") must be skipped
+    // here too, or it silently disappears at the next structural commit instead of triggering
+    // the Step 8 import-skip warning (code-review-01 Minor 1, same root cause as Major 2).
+    if (row.factors.size() != 1 || CountFactorAlternatives(row.factors[0]) != 1) {
       skipped_rows++;
       continue;
     }

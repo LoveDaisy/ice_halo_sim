@@ -612,6 +612,17 @@ inline std::vector<Factor> ParseSummandText(const std::string& text) {
   return out;
 }
 
+// Returns how many OR-alternatives `factor` expands to (raypath ';' multi-segment, or EE
+// comma-separated entry x exit product; everything else is exactly 1). A single-atom carrier
+// like LUMICE_ColorPredicate requires exactly one alternative — this is declared here (the
+// shared Factor toolkit) and DEFINED in file_io.cpp (where the EE/raypath decode helpers that
+// back it already live), so the commit-time gate (FillColorPredicate) and the GUI-side
+// pre-checks (color_window.cpp ValidateSingleAtomText / BuildClassFromFilter) share a single
+// source of truth and can never drift apart again (code-review-01 Major: the front end accepted
+// "1-3;5-7" as a valid single-atom predicate, then FillColorPredicate silently dropped it at
+// the next commit because it resolves to 2 alternatives).
+int CountFactorAlternatives(const Factor& factor);
+
 // Format a single Factor back to canonical text.
 inline std::string FormatFactor(const Factor& f) {
   return std::visit(
