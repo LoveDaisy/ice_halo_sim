@@ -518,6 +518,22 @@ typedef struct LUMICE_ColorClassDisplay_ {
 LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server, const LUMICE_ColorClassDisplay* classes,
                                          int class_count, const int* z_order, int mode);
 
+// Per-color-class empty-arc detector (task-342.3 AC4). For each committed color class, reports
+// whether the class has any non-zero pixel in its snapshot Y-lane on any active RenderConsumer
+// — i.e. whether it has captured any rays yet. Intended for GUI empty-arc warnings when a
+// physical filter has silently blocked all rays that would have matched the class predicate.
+//
+// out_flags is a caller-owned buffer of length class_count. On success, out_flags[i] = 1 iff
+// class i has signal, 0 otherwise. class_count MUST equal the current raypath_color_count of
+// the committed config, otherwise LUMICE_ERR_INVALID_CONFIG. class_count == 0 is a valid no-op
+// (returns LUMICE_OK; out_flags is not touched).
+//
+// Reads the frozen snapshot state (no DoSnapshot trigger); callers relying on freshness should
+// query LUMICE_GetCompositeResults / LUMICE_GetRawXyzResults first. O(W*H * class_count *
+// consumers) scan; intended for infrequent polls (commit-debounce cadence, ~1 Hz), not per
+// render frame.
+LUMICE_ErrorCode LUMICE_GetColorClassSignal(LUMICE_Server* server, int* out_flags, int class_count);
+
 // =============== Configuration Parsing (JSON -> LUMICE_Config) ===============
 // Parse JSON into LUMICE_Config struct, enabling load-modify-commit workflows.
 //

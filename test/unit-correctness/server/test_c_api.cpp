@@ -2776,3 +2776,106 @@ TEST(RaypathColorApi, CommitConfigStructOverCapRejected) {
   LUMICE_StopServer(s);
   LUMICE_DestroyServer(s);
 }
+
+// task-342.3 Step 2: LUMICE_GetColorClassSignal (AC4 empty-arc detector).
+TEST(RaypathColorApi, GetColorClassSignalBasic) {
+  // MakeColorSimConfigJson: class0 = red match-all (always fires),
+  //                        class1 = green {entry_exit min_len>=3} (subset that fires for prism).
+  // Both should report signal=1 after sim drains.
+  LUMICE_ServerConfig sc{};
+  sc.num_workers = 1;
+  sc.sim_seed = 12345u;
+  LUMICE_Server* s = LUMICE_CreateServerEx(&sc);
+  ASSERT_NE(s, nullptr);
+  ASSERT_EQ(LUMICE_CommitConfig(s, MakeColorSimConfigJson().c_str()), LUMICE_OK);
+  ASSERT_TRUE(WaitForIdle(s, 10000));
+
+  // Trigger a snapshot so lane data is materialized (mirror the GUI polling contract).
+  LUMICE_RenderResult composite[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetCompositeResults(s, composite, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+
+  int flags[2] = { -1, -1 };
+  EXPECT_EQ(LUMICE_GetColorClassSignal(s, flags, 2), LUMICE_OK);
+  EXPECT_EQ(flags[0], 1) << "class0 (match-all red) must have signal after sim";
+  EXPECT_EQ(flags[1], 1) << "class1 (entry_exit min_len>=3) must have signal after sim";
+
+  LUMICE_StopServer(s);
+  LUMICE_DestroyServer(s);
+}
+
+TEST(RaypathColorApi, GetColorClassSignalEmptyClassReportsZero) {
+  // A class whose predicate matches nothing (raypath referring to face IDs the crystal
+  // doesn't have, e.g. large indices on a hex prism) must report signal=0.
+  nlohmann::json rc;
+  rc["mode"] = "dominant";
+  nlohmann::json c0 = ColorClassJson({ 1.0f, 0.0f, 0.0f }, nlohmann::json::array({ ColorRefJson(0, 1) }));
+  // class1: impossible raypath [99, 99] — face 99 does not exist on a hex prism.
+  nlohmann::json r1 = ColorRefJson(0, 1);
+  r1["type"] = "raypath";
+  r1["raypath"] = nlohmann::json::array({ 99, 99 });
+  nlohmann::json c1 = ColorClassJson({ 0.0f, 1.0f, 0.0f }, nlohmann::json::array({ r1 }));
+  rc["classes"] = nlohmann::json::array({ c0, c1 });
+  const std::string json = FullConfigWithRaypathColorJson(rc);
+
+  LUMICE_ServerConfig sc{};
+  sc.num_workers = 1;
+  sc.sim_seed = 4321u;
+  LUMICE_Server* s = LUMICE_CreateServerEx(&sc);
+  ASSERT_NE(s, nullptr);
+  ASSERT_EQ(LUMICE_CommitConfig(s, json.c_str()), LUMICE_OK);
+  ASSERT_TRUE(WaitForIdle(s, 10000));
+
+  LUMICE_RenderResult composite[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetCompositeResults(s, composite, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+
+  int flags[2] = { -1, -1 };
+  EXPECT_EQ(LUMICE_GetColorClassSignal(s, flags, 2), LUMICE_OK);
+  EXPECT_EQ(flags[0], 1) << "class0 (match-all) must have signal";
+  EXPECT_EQ(flags[1], 0) << "class1 (impossible raypath) must be empty";
+
+  LUMICE_StopServer(s);
+  LUMICE_DestroyServer(s);
+}
+
+TEST(RaypathColorApi, GetColorClassSignalCountMismatchRejected) {
+  LUMICE_ServerConfig sc{};
+  sc.num_workers = 1;
+  LUMICE_Server* s = LUMICE_CreateServerEx(&sc);
+  ASSERT_NE(s, nullptr);
+  ASSERT_EQ(LUMICE_CommitConfig(s, MakeColorSimConfigJson().c_str()), LUMICE_OK);
+  ASSERT_TRUE(WaitForIdle(s, 10000));
+
+  int one[1] = { -1 };
+  EXPECT_EQ(LUMICE_GetColorClassSignal(s, one, 1), LUMICE_ERR_INVALID_CONFIG) << "active=2, count=1 must be rejected";
+  int three[3] = { -1, -1, -1 };
+  EXPECT_EQ(LUMICE_GetColorClassSignal(s, three, 3), LUMICE_ERR_INVALID_CONFIG) << "active=2, count=3 must be rejected";
+
+  LUMICE_StopServer(s);
+  LUMICE_DestroyServer(s);
+}
+
+TEST(RaypathColorApi, GetColorClassSignalNullAndZeroCount) {
+  // Null server.
+  int flags[2] = { -1, -1 };
+  EXPECT_EQ(LUMICE_GetColorClassSignal(nullptr, flags, 2), LUMICE_ERR_NULL_ARG);
+
+  LUMICE_ServerConfig sc{};
+  sc.num_workers = 1;
+  LUMICE_Server* s = LUMICE_CreateServerEx(&sc);
+  ASSERT_NE(s, nullptr);
+
+  // Zero color-classes committed (minimal config with no raypath_color).
+  ASSERT_EQ(LUMICE_CommitConfig(s, MakeMinimalConfigJson().c_str()), LUMICE_OK);
+  // class_count=0 with any out_flags (including nullptr) must be OK no-op.
+  EXPECT_EQ(LUMICE_GetColorClassSignal(s, nullptr, 0), LUMICE_OK);
+
+  // Non-null server, positive count, but null out_flags → NULL_ARG.
+  ASSERT_EQ(LUMICE_CommitConfig(s, MakeColorSimConfigJson().c_str()), LUMICE_OK);
+  ASSERT_TRUE(WaitForIdle(s, 10000));
+  EXPECT_EQ(LUMICE_GetColorClassSignal(s, nullptr, 2), LUMICE_ERR_NULL_ARG);
+  // Negative count → INVALID_VALUE.
+  EXPECT_EQ(LUMICE_GetColorClassSignal(s, flags, -1), LUMICE_ERR_INVALID_VALUE);
+
+  LUMICE_StopServer(s);
+  LUMICE_DestroyServer(s);
+}

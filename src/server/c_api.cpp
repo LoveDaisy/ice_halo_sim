@@ -565,6 +565,30 @@ LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server, const LUMICE_Col
 }
 
 
+// task-342.3 AC4: per-color-class empty-arc detector.
+LUMICE_ErrorCode LUMICE_GetColorClassSignal(LUMICE_Server* server, int* out_flags, int class_count) {
+  if (!server) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  if (class_count < 0) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  if (class_count > 0 && out_flags == nullptr) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  std::vector<uint8_t> tmp(static_cast<size_t>(class_count), 0);
+  auto err = server->server_->GetColorClassSignals(tmp.data(), class_count);
+  if (err) {
+    LOG_ERROR("LUMICE_GetColorClassSignal failed: {}", err.message);
+    return MapErrorCode(err.code);
+  }
+  for (int i = 0; i < class_count; i++) {
+    out_flags[i] = tmp[static_cast<size_t>(i)] ? 1 : 0;
+  }
+  return LUMICE_OK;
+}
+
+
 // Struct->JSON path: see doc/capi-lifecycle-architecture.md §6.2.
 LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_Config* config, int* out_reused) {
   if (!server || !config) {

@@ -92,6 +92,13 @@ class ServerImpl {
   // Stop/Start/scene_generation_/committed_epoch_/consumers_/scene_mutex_.
   Error SetRaypathColors(const ColorClassDisplay* classes, int class_count, const int* z_order, CompositeMode mode);
 
+  // task-342.3 AC4: per-color-class empty-arc detector. Reads the frozen snapshot
+  // lanes (no DoSnapshot trigger — GUI polling loop is expected to already query
+  // GetCompositeResults / GetRawXyzResults). Writes 1 into out_flags[i] when
+  // any RenderConsumer has a non-zero pixel in class i's snapshot Y-lane; 0
+  // otherwise. class_count must equal the active color-class count.
+  Error GetColorClassSignals(uint8_t* out_flags, int class_count);
+
  private:
   // task-268.7: single-engine orchestration — server now runs exactly one
   // Simulator. The legacy kDefaultSimulatorCnt = PhysicalCoreCount() was removed
@@ -1328,6 +1335,45 @@ Error ServerImpl::SetRaypathColors(const ColorClassDisplay* classes, int class_c
 }
 
 
+// =============== ServerImpl::GetColorClassSignals ===============
+// task-342.3 AC4: reads snapshot Y-lanes (no DoSnapshot trigger; caller has been
+// polling composite/xyz results and thus has a fresh snapshot). Aggregates
+// across RenderConsumer instances (OR), so a class with any signal on any
+// renderer reads as present.
+Error ServerImpl::GetColorClassSignals(uint8_t* out_flags, int class_count) {
+  if (class_count < 0) {
+    return Error::InvalidValue("GetColorClassSignals", "class_count is negative");
+  }
+  std::lock_guard<TicketMutex> lock(consumer_mutex_);
+  if (static_cast<size_t>(class_count) != active_class_table_.classes_.size()) {
+    return Error::InvalidConfig("GetColorClassSignals: class_count (" + std::to_string(class_count) +
+                                ") does not match active color-class count (" +
+                                std::to_string(active_class_table_.classes_.size()) + ")");
+  }
+  if (class_count == 0) {
+    return Error::Success();
+  }
+  if (out_flags == nullptr) {
+    return Error::InvalidValue("GetColorClassSignals", "out_flags is null");
+  }
+  for (int i = 0; i < class_count; i++) {
+    out_flags[i] = 0;
+  }
+  for (const auto& c : consumers_) {
+    const auto* rc = dynamic_cast<const RenderConsumer*>(c.get());
+    if (rc == nullptr) {
+      continue;
+    }
+    for (int i = 0; i < class_count; i++) {
+      if (out_flags[i] == 0 && rc->HasColorClassSignal(static_cast<size_t>(i))) {
+        out_flags[i] = 1;
+      }
+    }
+  }
+  return Error::Success();
+}
+
+
 // =============== ServerImpl::SetLogLevel ===============
 void ServerImpl::SetLogLevel(LogLevel level) {
   logger_.SetLevel(level);
@@ -1492,6 +1538,13 @@ Error Server::SetRaypathColors(const ColorClassDisplay* classes, int class_count
     return Error::ServerNotReady("Server is terminated");
   }
   return impl_->SetRaypathColors(classes, class_count, z_order, mode);
+}
+
+Error Server::GetColorClassSignals(uint8_t* out_flags, int class_count) {
+  if (!impl_) {
+    return Error::ServerNotReady("Server is terminated");
+  }
+  return impl_->GetColorClassSignals(out_flags, class_count);
 }
 
 }  // namespace lumice

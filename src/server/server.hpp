@@ -386,6 +386,20 @@ class Server {
    */
   Error SetRaypathColors(const ColorClassDisplay* classes, int class_count, const int* z_order, CompositeMode mode);
 
+  /**
+   * @brief Per-color-class empty-arc detector (task-342.3 AC4).
+   * @param out_flags   Caller-owned buffer of length class_count. On success, each byte is set
+   *                    to 1 iff the corresponding class has any non-zero pixel in its snapshot
+   *                    Y-lane on any active RenderConsumer, 0 otherwise.
+   * @param class_count Must equal the currently active color-class count; mismatch =
+   *                    Error::InvalidConfig.
+   * @return Error::Success on success. Reads the frozen snapshot (no DoSnapshot trigger);
+   *         callers relying on freshness should poll GetCompositeResults / GetRawXyzResults
+   *         first. O(W*H * class_count * consumers) scan; intended for infrequent GUI polls
+   *         (commit-debounce cadence), not per-render-frame.
+   */
+  Error GetColorClassSignals(uint8_t* out_flags, int class_count);
+
  private:
   std::shared_ptr<ServerImpl> impl_;
 };

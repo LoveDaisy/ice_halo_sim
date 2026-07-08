@@ -50,6 +50,12 @@ class RenderConsumer : public IConsume {
   // a W*H float array of accumulated Y for the class at `class_idx`, or
   // nullptr when the index is out of range.
   const float* GetColorClassLaneY(size_t class_idx) const;
+  // task-342.3 (AC4 empty-arc feedback): whether the given class has any
+  // non-zero pixel in its snapshot Y-lane. O(W*H) scan; only called from the
+  // GUI empty-warning path (once per commit-debounce tick, not per render
+  // frame). Reads snapshot state under the same tearing-free contract as
+  // GetColorClassLaneY. Returns false for out-of-range indices.
+  bool HasColorClassSignal(size_t class_idx) const;
   // Image dimensions (config resolution). Exposed so the compositor can size
   // its output without reaching into the private config.
   int ImageWidth() const { return config_.resolution_[0]; }
