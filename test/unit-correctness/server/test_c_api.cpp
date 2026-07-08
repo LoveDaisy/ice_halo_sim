@@ -2683,6 +2683,78 @@ TEST(RaypathColorApi, SetRaypathColorsDoesNotRestartSim) {
   LUMICE_DestroyServer(s);
 }
 
+// task-342.4 Step 1 regression: RawXyz then Composite in the same tick must
+// both reflect the current data generation. Before the DoSnapshot()/GetRawXyz
+// unification, RawXyz would consume snapshot_dirty_ first and Composite's
+// DoSnapshot() would then early-return, leaving cached_composite_results_ stale
+// (empty or last-tick's pixels). See plan §3 keypoint 1.
+TEST(RaypathColorApi, RawXyzThenCompositeSeesFreshGeneration) {
+  LUMICE_ServerConfig sc{};
+  sc.num_workers = 1;
+  sc.sim_seed = 4242u;
+  LUMICE_Server* s = LUMICE_CreateServerEx(&sc);
+  ASSERT_NE(s, nullptr);
+  ASSERT_EQ(LUMICE_CommitConfig(s, MakeColorSimConfigJson().c_str()), LUMICE_OK);
+  ASSERT_TRUE(WaitForIdle(s, 10000));
+
+  // Same-tick double consume: RawXyz first (previously the dirty-flag hog),
+  // Composite second. Both must see this-generation results.
+  LUMICE_RawXyzResult raw[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetRawXyzResults(s, raw, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_NE(raw[0].xyz_buffer, nullptr);
+  ASSERT_NE(raw[0].has_valid_data, 0);
+  const unsigned long long gen_after_rawxyz = raw[0].snapshot_generation;
+  EXPECT_GT(gen_after_rawxyz, 0ull) << "generation must advance on first consume";
+
+  LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetCompositeResults(s, comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_NE(comp[0].img_buffer, nullptr) << "composite must be populated (class0 is match-all red)";
+  const size_t nbytes = static_cast<size_t>(comp[0].img_width) * static_cast<size_t>(comp[0].img_height) * 3;
+  uint64_t sum = 0;
+  for (size_t i = 0; i < nbytes; ++i) {
+    sum += comp[0].img_buffer[i];
+  }
+  EXPECT_GT(sum, 0u) << "composite must reflect the current-tick data, not an all-zero stale cache";
+
+  // A second RawXyz call in the same tick must not regress the generation
+  // (no new dirty snapshot arrived; both cached values are consistent).
+  LUMICE_RawXyzResult raw2[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetRawXyzResults(s, raw2, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  EXPECT_GE(raw2[0].snapshot_generation, gen_after_rawxyz);
+
+  LUMICE_StopServer(s);
+  LUMICE_DestroyServer(s);
+}
+
+// task-342.4 Step 1 regression: reverse order (Composite then RawXyz). Before
+// the fix, Composite's DoSnapshot() would consume the dirty flag but NOT bump
+// snapshot_generation_ (that lived only in RawXyz's Phase-1), so RawXyz would
+// see generation stuck forever and the poller's has_new_snapshot check would
+// permanently return false. See plan §3 keypoint 1.
+TEST(RaypathColorApi, CompositeThenRawXyzGenerationStillAdvances) {
+  LUMICE_ServerConfig sc{};
+  sc.num_workers = 1;
+  sc.sim_seed = 5151u;
+  LUMICE_Server* s = LUMICE_CreateServerEx(&sc);
+  ASSERT_NE(s, nullptr);
+  ASSERT_EQ(LUMICE_CommitConfig(s, MakeColorSimConfigJson().c_str()), LUMICE_OK);
+  ASSERT_TRUE(WaitForIdle(s, 10000));
+
+  LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetCompositeResults(s, comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_NE(comp[0].img_buffer, nullptr);
+
+  LUMICE_RawXyzResult raw[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetRawXyzResults(s, raw, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_NE(raw[0].xyz_buffer, nullptr);
+  EXPECT_NE(raw[0].has_valid_data, 0) << "RawXyz must see the snapshot that Composite consumed";
+  EXPECT_GT(raw[0].snapshot_generation, 0ull)
+      << "generation must advance even when Composite consumed the dirty flag first";
+
+  LUMICE_StopServer(s);
+  LUMICE_DestroyServer(s);
+}
+
 TEST(RaypathColorApi, SetRaypathColorsRejectsBadArgsAllOrNothing) {
   // AC3: class_count mismatch and non-permutation z_order are rejected without mutating state.
   LUMICE_ServerConfig sc{};

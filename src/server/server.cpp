@@ -127,7 +127,13 @@ class ServerImpl {
 
   void ConsumeData();
   void GenerateScene();
-  void DoSnapshot();
+  // task-342.4 Step 1: unified snapshot consumer. Returns true iff this call
+  // actually consumed a dirty snapshot (Phase 1..2 executed); false if
+  // snapshot_dirty_ was clear on entry (nothing to do). Merges the previously
+  // duplicate Phase-1 in GetRawXyzResults into a single dirty-flag owner so
+  // any pair of Get*Results calls in the same poll tick see coherent state
+  // (see plan §3 keypoint 1).
+  bool DoSnapshot();
 
   // Persistent thread loop: wait for Start(), run work_fn, repeat until kTerminating.
   template <typename F>
@@ -610,7 +616,12 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
 
 
 // See doc/accumulator-consumer-architecture.md §4.2 (two-phase snapshot protocol).
-void ServerImpl::DoSnapshot() {
+// task-342.4 Step 1: this is the single owner of the snapshot_dirty_ flag and
+// snapshot_generation_ counter. Any Get*Results method that needs an up-to-date
+// materialized snapshot funnels through here so that two consumers in the same
+// poll tick (e.g. RawXyz + Composite) see a coherent Phase-1..2 atomic event
+// rather than racing the dirty flag against each other (plan §3 keypoint 1).
+bool ServerImpl::DoSnapshot() {
   // Phase 1: memcpy under consumer_mutex_ (short hold).
   // Copy shared_ptrs so consumers stay alive even if Stop() clears consumers_.
   std::vector<ConsumerPtrS> snapshot_consumers;
@@ -620,7 +631,7 @@ void ServerImpl::DoSnapshot() {
     std::lock_guard<TicketMutex> lock(consumer_mutex_);
     if (!snapshot_dirty_) {
       ILOG_DEBUG(logger_, "DoSnapshot: skip (snapshot_dirty_=false)");
-      return;
+      return false;
     }
     for (const auto& c : consumers_) {
       c->PrepareSnapshot();
@@ -634,6 +645,12 @@ void ServerImpl::DoSnapshot() {
     snap_class_table = active_class_table_;
     snap_composite_mode = active_composite_mode_;
     snapshot_dirty_ = false;
+    // task-342.4 Step 1: bumping the generation is now the shared owner's
+    // responsibility (previously lived only in GetRawXyzResults's Phase-1).
+    // The counter is the single mechanism by which poller detects new
+    // snapshots, so it must be tied to the dirty-consume event itself, not
+    // to any one consumer accessor.
+    snapshot_generation_++;
   }
   // Phase 1.5: pixel counting outside consumer_mutex_ (snapshot_xyz_ is stable here).
   for (const auto& c : snapshot_consumers) {
@@ -690,6 +707,7 @@ void ServerImpl::DoSnapshot() {
     cached_stats_result_ = stats_result;
     cached_composite_results_ = std::move(composite_results);
   }
+  return true;
 }
 
 std::vector<RenderResult> ServerImpl::GetRenderResults() {
@@ -699,32 +717,23 @@ std::vector<RenderResult> ServerImpl::GetRenderResults() {
 }
 
 std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
-  // Phase 1: PrepareSnapshot under consumer_mutex_ (TicketMutex guarantees FIFO — no starvation).
+  // task-342.4 Step 1: funnel through the shared DoSnapshot() so the
+  // dirty-flag / snapshot_generation_ / cached_* fields have exactly one
+  // owner. Previously this method carried its own copy of Phase-1 (dirty
+  // consume + generation bump + PrepareSnapshot loop + CountEffectivePixels
+  // + non-RenderConsumer StatsResult cache update). All of that now lives
+  // inside DoSnapshot(); calling it here yields identical semantics to the
+  // old implementation when only RawXyz consumers are wired, plus race-free
+  // interleaving with GetCompositeResults() (plan §3 keypoint 1).
+  DoSnapshot();
   std::vector<ConsumerPtrS> snapshot_consumers;
-  bool did_snapshot = false;
   bool valid_data = false;
   uint64_t generation = 0;
   {
     std::lock_guard<TicketMutex> lock(consumer_mutex_);
-    if (snapshot_dirty_) {
-      for (const auto& c : consumers_) {
-        c->PrepareSnapshot();
-      }
-      snapshot_dirty_ = false;
-      snapshot_generation_++;
-      did_snapshot = true;
-    }
     valid_data = has_ever_consumed_;
     generation = snapshot_generation_;
     snapshot_consumers = consumers_;
-  }
-  // Pixel counting outside consumer_mutex_ (snapshot_xyz_ is stable here).
-  if (did_snapshot) {
-    for (const auto& c : snapshot_consumers) {
-      if (auto* rc = dynamic_cast<RenderConsumer*>(c.get())) {
-        rc->CountEffectivePixels();
-      }
-    }
   }
   std::vector<RawXyzResult> results;
   std::lock_guard<std::mutex> lock(snapshot_mutex_);
@@ -741,17 +750,12 @@ std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
       results.push_back(r);
     }
   }
-  if (did_snapshot) {
-    for (const auto& c : snapshot_consumers) {
-      if (dynamic_cast<RenderConsumer*>(c.get()) != nullptr) {
-        continue;
-      }
-      auto result = c->GetResult();
-      if (auto* s = std::get_if<StatsResult>(&result)) {
-        cached_stats_result_ = *s;
-      }
-    }
-  }
+  // task-342.4 Step 1: the previous "if (did_snapshot) { cache non-RenderConsumer
+  // StatsResult }" block that used to live here has been removed. It was a
+  // duplicate of DoSnapshot() Phase-2's existing per-consumer GetResult() /
+  // StatsResult caching (see the loop that writes cached_stats_result_ above),
+  // which now runs unconditionally through DoSnapshot() from every accessor —
+  // so cached_stats_result_ stays up to date via a single owner.
   return results;
 }
 
