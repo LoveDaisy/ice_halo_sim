@@ -140,6 +140,14 @@ class ServerPoller {
   void WorkerLoop();
   void PollOnce();
 
+  // Copies composite_results[0]'s RGB bytes into payload->rgb_data and sets
+  // is_composite=true, UNLESS a generation-drift recheck shows the composite call
+  // consumed a dirty-flag event newer than xyz_generation — in which case the copy
+  // is discarded and payload stays xyz-only for this tick. Split out of PollOnce()
+  // to keep its cognitive complexity down (code-review-01 Major 1 fix).
+  void PopulateCompositePayload(LUMICE_Server* server, const LUMICE_RenderResult& composite_result,
+                                unsigned long long xyz_generation, TexturePayload* payload);
+
   // Published-snapshot access helpers. C++17 has no std::atomic<std::shared_ptr<T>>, so we use
   // the C++11 free functions std::atomic_load/atomic_store (deprecated in C++20 but valid here).
   // MIGRATION: when the project moves to C++20, change published_ to
