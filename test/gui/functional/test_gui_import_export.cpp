@@ -3,7 +3,8 @@
 #include <nlohmann/json.hpp>
 
 #include "IconsFontAwesome6.h"
-#include "gui/raypath_segments.hpp"  // ParseSummandText / SumOfProducts (SoP round-trip tests)
+#include "gui/raypath_segments.hpp"         // ParseSummandText / SumOfProducts (SoP round-trip tests)
+#include "include/lumice_config_scope.hpp"  // lumice::ConfigColorGuard for LUMICE_Config RAII
 #include "test_gui_shared.hpp"
 
 // ========== Import/Export Tests ==========
@@ -87,7 +88,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       // Feed the DESERIALIZED state (not the original g_state) so this is the
       // full end-to-end chain: file JSON -> deserialize -> loaded -> C struct
       // -> core (code-review r2 Minor-1).
-      LUMICE_Config cfg;
+      LUMICE_Config cfg{};
+      lumice::ConfigColorGuard cfg_guard(cfg);
       gui::FillLumiceConfig(loaded, &cfg);
       IM_CHECK_EQ(cfg.scatter_count, 2);
       IM_CHECK_EQ(cfg.scattering[0].probability, 0.3f);
@@ -295,6 +297,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
 
       // (4) FillLumiceConfig populates spectrum_entries[]/spectrum_count.
       LUMICE_Config cfg{};
+      lumice::ConfigColorGuard cfg_guard(cfg);
       gui::FillLumiceConfig(gui::g_state, &cfg);
       IM_CHECK_EQ(cfg.spectrum_count, 3);
       IM_CHECK_EQ(cfg.spectrum_entries[0].wavelength, 450.0f);
@@ -1736,9 +1739,12 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         gui::g_state.layers.push_back(layer);
 
         LUMICE_Config from_struct{};
+
+        lumice::ConfigColorGuard from_struct_guard(from_struct);
         IM_CHECK(gui::FillLumiceConfig(gui::g_state, &from_struct));  // struct path (ExpandFilterToStruct)
         std::string json = gui::SerializeCoreConfig(gui::g_state);    // JSON path (SerializeFilterForCore)
         LUMICE_Config from_json{};
+        lumice::ConfigColorGuard from_json_guard(from_json);
         IM_CHECK_EQ(LUMICE_ParseConfigString(json.c_str(), &from_json), LUMICE_OK);
 
         IM_CHECK_EQ(from_struct.filter_count, from_json.filter_count);
@@ -1875,6 +1881,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         layer.entries.push_back(e);
         gui::g_state.layers.push_back(layer);
         LUMICE_Config over{};
+        lumice::ConfigColorGuard over_guard(over);
         gui::FilterOverflowInfo overflow;
         IM_CHECK(!gui::FillLumiceConfig(gui::g_state, &over, &overflow));  // over ABI bounds -> false
         // "no partial writes on overflow" contract (ExpandFilterToStruct doc): the overflowing
@@ -1927,6 +1934,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         layer.entries.push_back(e);
         gui::g_state.layers.push_back(layer);
         LUMICE_Config over{};
+        lumice::ConfigColorGuard over_guard(over);
         IM_CHECK(!gui::FillLumiceConfig(gui::g_state, &over));  // term count > 8 -> false
         IM_CHECK_EQ(over.filter_count, 0);
         IM_CHECK_EQ(over.composition_count, 0);
@@ -1971,6 +1979,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         layer.entries.push_back(e);
         gui::g_state.layers.push_back(layer);
         LUMICE_Config over{};
+        lumice::ConfigColorGuard over_guard(over);
         IM_CHECK(!gui::FillLumiceConfig(gui::g_state, &over));  // Cartesian > 16 clauses -> false
         IM_CHECK_EQ(over.filter_count, 0);
         IM_CHECK_EQ(over.composition_count, 0);
@@ -1983,6 +1992,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         std::string core_json = gui::SerializeCoreConfig(gui::g_state);
         IM_CHECK(!core_json.empty());
         LUMICE_Config from_json{};
+        lumice::ConfigColorGuard from_json_guard(from_json);
         IM_CHECK_EQ(LUMICE_ParseConfigString(core_json.c_str(), &from_json), LUMICE_OK);
         IM_CHECK_EQ(from_json.filter_count, 1);       // bounded match-all stand-in, not 64 clauses
         IM_CHECK_EQ(from_json.composition_count, 0);  // no complex emitted for the stand-in
@@ -2128,6 +2138,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext*) {
       ResetTestState();
       LUMICE_Config cfg{};
+      lumice::ConfigColorGuard cfg_guard(cfg);
       IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
       IM_CHECK_EQ(cfg.raypath_color_count, 0);
       IM_CHECK_EQ(cfg.raypath_color_mode, 0);
@@ -2153,6 +2164,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::g_state.raypath_color.push_back(cls);
 
       LUMICE_Config cfg{};
+
+      lumice::ConfigColorGuard cfg_guard(cfg);
       IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
       IM_CHECK_EQ(cfg.raypath_color_count, 1);
       const auto& c = cfg.raypath_color[0];
@@ -2185,6 +2198,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::g_state.raypath_color.push_back(cls);
 
       LUMICE_Config cfg{};
+
+      lumice::ConfigColorGuard cfg_guard(cfg);
       IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
       IM_CHECK_EQ(cfg.raypath_color_count, 1);
       IM_CHECK_EQ(cfg.raypath_color[0].match_count, 1);
@@ -2204,6 +2219,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::g_state.raypath_color.push_back(cls);
 
       LUMICE_Config cfg{};
+
+      lumice::ConfigColorGuard cfg_guard(cfg);
       IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
       IM_CHECK_EQ(cfg.raypath_color_count, 1);
       IM_CHECK_EQ(cfg.raypath_color[0].match[0].predicate.type, LUMICE_FILTER_TYPE_UNSET);
@@ -2222,6 +2239,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::g_state.raypath_color.push_back(cls);
 
       LUMICE_Config cfg{};
+
+      lumice::ConfigColorGuard cfg_guard(cfg);
       IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
       IM_CHECK_EQ(cfg.raypath_color_count, 1);
       const auto& p = cfg.raypath_color[0].match[0].predicate;
@@ -2258,6 +2277,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::g_state.raypath_color.push_back(cls);
 
       LUMICE_Config cfg{};
+
+      lumice::ConfigColorGuard cfg_guard(cfg);
       IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
       IM_CHECK_EQ(cfg.raypath_color_count, 1);
       IM_CHECK_EQ(cfg.raypath_color[0].combine, LUMICE_COLOR_COMBINE_ALL);
@@ -2281,6 +2302,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::g_state.raypath_color_mode = LUMICE_COLOR_MODE_ADDITIVE;
 
       LUMICE_Config cfg{};
+
+      lumice::ConfigColorGuard cfg_guard(cfg);
       IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
       IM_CHECK_EQ(cfg.raypath_color[0].visible, 0);
       IM_CHECK_EQ(cfg.raypath_color[0].solo, 1);
@@ -2309,6 +2332,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::g_state.raypath_color.push_back(cls);
 
       LUMICE_Config cfg{};
+
+      lumice::ConfigColorGuard cfg_guard(cfg);
       IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
       IM_CHECK_EQ(cfg.raypath_color_count, 1);
       IM_CHECK_EQ(cfg.raypath_color[0].match_count, 1);  // orphan dropped
@@ -2332,6 +2357,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::g_state.raypath_color.push_back(cls);
 
       LUMICE_Config cfg{};
+
+      lumice::ConfigColorGuard cfg_guard(cfg);
       IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
       IM_CHECK_EQ(cfg.raypath_color_count, 1);
       IM_CHECK_EQ(cfg.raypath_color[0].match_count, 1);
@@ -2351,6 +2378,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::g_state.raypath_color.push_back(cls);
 
       LUMICE_Config cfg{};
+
+      lumice::ConfigColorGuard cfg_guard(cfg);
       IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
       IM_CHECK_EQ(cfg.raypath_color_count, 1);
       IM_CHECK_EQ(cfg.raypath_color[0].match_count, 0);
@@ -2369,6 +2398,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         gui::g_state.raypath_color.push_back(cls);
       }
       LUMICE_Config cfg{};
+      lumice::ConfigColorGuard cfg_guard(cfg);
       gui::ColorClassOverflowInfo color_overflow;
       IM_CHECK(!gui::FillLumiceConfig(gui::g_state, &cfg, nullptr, &color_overflow));
       IM_CHECK(color_overflow.class_over_cap);
@@ -2388,6 +2418,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       }
       gui::g_state.raypath_color.push_back(cls);
       LUMICE_Config cfg{};
+      lumice::ConfigColorGuard cfg_guard(cfg);
       gui::ColorClassOverflowInfo color_overflow;
       IM_CHECK(!gui::FillLumiceConfig(gui::g_state, &cfg, nullptr, &color_overflow));
       IM_CHECK(!color_overflow.class_over_cap);
@@ -2474,6 +2505,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
 
       // Struct emit.
       LUMICE_Config cfg{};
+      lumice::ConfigColorGuard cfg_guard(cfg);
       IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
       const auto& sp = cfg.raypath_color[0].match[0].predicate;
 
@@ -2516,6 +2548,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::g_state.raypath_color.push_back(cls);
 
       LUMICE_Config cfg{};
+
+      lumice::ConfigColorGuard cfg_guard(cfg);
       IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
       auto j = nlohmann::json::parse(gui::SerializeCoreConfig(gui::g_state));
       const auto& jrefs = j["raypath_color"]["classes"][0]["match"];
