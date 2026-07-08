@@ -53,6 +53,13 @@ int g_main_loop_restart_count = 0;
 unsigned long g_main_loop_cumulative_rays = 0;
 // Set by --keep-export-png; used by scripts/regen_gui_test_refs.py to collect per-run PNGs.
 bool g_keep_export_png = false;
+// Set by --fixed-dt: inject a deterministic per-frame dt (1/60s) and skip the
+// frame-limit sleep. Decouples VSync frame-budget semantics from wall-clock cost
+// so correctness tests run at full speed. See scratchpad/task-gui-test-fixed-dt.
+bool g_enable_fixed_dt = false;
+// Set by --export-junit <path>: emit per-test results as JUnit XML (general
+// CI/regression-diff capability, not throwaway scaffolding).
+const char* g_export_junit_path = nullptr;
 
 // Synthetic texture for export tests
 std::vector<unsigned char> g_synth_tex;
@@ -134,6 +141,15 @@ int main(int argc, char** argv) {
     } else if (strcmp(argv[i], "--keep-export-png") == 0) {
       // Suppress std::remove in CheckAgainstReference so regen_gui_test_refs.py can collect PNGs.
       g_keep_export_png = true;
+    } else if (strcmp(argv[i], "--fixed-dt") == 0) {
+      // Inject deterministic 16.67ms per-frame dt via the test engine and skip
+      // the frame-limit sleep (decouples VSync frame-budget semantics from
+      // wall-clock cost). Used by the build.sh correctness pool.
+      g_enable_fixed_dt = true;
+      g_enable_frame_limit = false;
+    } else if (strcmp(argv[i], "--export-junit") == 0 && i + 1 < argc) {
+      // Emit per-test results as JUnit XML for per-case pass/fail diffing.
+      g_export_junit_path = argv[++i];
     } else if (strcmp(argv[i], "--log-level") == 0 && i + 1 < argc) {
       // Set both core and GUI log level: trace/debug/info/warning/error/off
       const char* level = argv[++i];
@@ -209,6 +225,9 @@ int main(int argc, char** argv) {
     fprintf(stderr, "[DIAG] Frame limit mode enabled: %dms target frame time (simulates VSync)\n",
             gui::kTargetFrameTimeMs);
   }
+  if (g_enable_fixed_dt) {
+    fprintf(stderr, "[DIAG] Fixed-dt mode enabled: dt=16.67ms injected per frame, frame-limit sleep skipped\n");
+  }
 
   if (!gui::InitGLLoader()) {
     glfwDestroyWindow(window);
@@ -279,6 +298,19 @@ int main(int argc, char** argv) {
   test_io.ConfigLogToTTY = true;
   test_io.ConfigRunSpeed = ImGuiTestRunSpeed_Fast;
   test_io.ConfigNoThrottle = true;
+  // Fixed-dt mode: inject a deterministic 1/60s dt every frame (applied via
+  // PostSwap's ConfigFixedDeltaTime path) instead of deriving dt from the real
+  // frame clock. Paired with the skipped frame-limit sleep, correctness tests get
+  // production-faithful 60fps frame-budget semantics at full wall-clock speed.
+  if (g_enable_fixed_dt) {
+    test_io.ConfigFixedDeltaTime = 1.0f / 60.0f;
+  }
+  // JUnit XML export (opt-in via --export-junit). ImGuiTestEngine_Export() runs
+  // automatically at batch end / engine stop, so setting these fields suffices.
+  if (g_export_junit_path != nullptr) {
+    test_io.ExportResultsFilename = g_export_junit_path;
+    test_io.ExportResultsFormat = ImGuiTestEngineExportFormat_JUnitXml;
+  }
 
   ImGuiTestEngine_Start(engine, ImGui::GetCurrentContext());
   ImGuiTestEngine_InstallDefaultCrashHandler();

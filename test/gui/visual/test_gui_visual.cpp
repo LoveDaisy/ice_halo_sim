@@ -578,6 +578,13 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
   // End-to-end: Run simulation → Save → Open → verify visual consistency.
   // Tests the actual user workflow: the reopened file should look the same as the live display.
   // Regression test for PostSnapshot using stale CommitConfig-time EV instead of current GUI EV.
+  //
+  // REAL-TIMING TEST: this case compares the live poller preview (which converges over the ~30
+  // Yield()s below via real wall-clock simulation) against the saved snapshot, so it needs real
+  // frame timing. build.sh runs it in the isolated real-timing pool, NOT the --fixed-dt pool
+  // (fixed-dt skips the frame-limit sleep and starves that accumulation, dropping PSNR ~7 dB).
+  // If this test is renamed, update the --filter lists in scripts/build.sh. See
+  // scratchpad/task-gui-test-fixed-dt.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "visual", "save_open_visual_consistency");
     t->GuiFunc = [](ImGuiTestContext* /*ctx*/) {

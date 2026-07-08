@@ -31,9 +31,25 @@ build() {
     else
       GUI_TEST_BIN="${ROOT_DIR}/build/${BUILD_TYPE}/bin/gui_test"
       if [[ -x "$GUI_TEST_BIN" ]]; then
-        echo "Running GUI tests..."
-        "$GUI_TEST_BIN"
+        # Two pools (see scratchpad/task-gui-test-fixed-dt):
+        #  1. Correctness pool: --fixed-dt injects a deterministic 1/60s frame dt
+        #     and skips the frame-limit sleep, so functional/visual tests run at
+        #     full wall-clock speed.
+        #  2. Real-timing pool: real frame timing + real dt, run in isolation.
+        #     Holds tests whose meaning depends on real wall-clock:
+        #       - perf_test: measures main-loop FPS / rays-per-sec.
+        #       - save_open_visual_consistency: compares the live poller preview
+        #         (which converges over ~30 frames of real wall-clock simulation)
+        #         against the saved snapshot; fixed-dt starves that accumulation
+        #         and drops its PSNR ~7 dB below threshold.
+        echo "Running GUI correctness tests (fixed-dt, fast)..."
+        "$GUI_TEST_BIN" --fixed-dt --filter "-perf_test,-save_open_visual_consistency"
         ret=$?
+        if [[ $ret == 0 ]]; then
+          echo "Running GUI real-timing tests (perf + wall-clock-dependent, isolated)..."
+          "$GUI_TEST_BIN" --filter "perf_test,save_open_visual_consistency"
+          ret=$?
+        fi
       else
         echo "Warning: $GUI_TEST_BIN not found, skipping GUI tests"
       fi
