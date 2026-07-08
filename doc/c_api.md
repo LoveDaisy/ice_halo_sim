@@ -290,6 +290,38 @@ LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server,
 - `LUMICE_ERR_INVALID_CONFIG`: `class_count` mismatch (structure changed —
   re-commit the config) or `z_order` is not a valid permutation.
 
+#### LUMICE_GetColorClassSignal (AC4 empty-arc detector)
+
+```c
+LUMICE_ErrorCode LUMICE_GetColorClassSignal(LUMICE_Server* server, int* out_flags, int class_count);
+```
+
+For each committed color class, reports whether it has captured any rays yet —
+i.e. whether its snapshot Y-lane has any non-zero pixel on any active
+`RenderConsumer`. Intended for GUI empty-arc warnings when a physical filter
+has silently blocked all rays that would have matched a color class's
+predicate (a footgun the color-tag/physical-filter decoupling in §4.0 of
+`doc/gui-custom-spectrum-and-raypath-color.md` makes possible: a color
+predicate can reference a raypath the physical filter already excludes).
+
+**Parameters**:
+- `out_flags`: caller-owned buffer of length `class_count`. On success,
+  `out_flags[i] = 1` iff class `i` has signal, `0` otherwise.
+- `class_count`: must equal the committed `raypath_color_count`; `0` is a
+  valid no-op (`out_flags` untouched).
+
+**Return value**:
+- `LUMICE_OK`: success.
+- `LUMICE_ERR_NULL_ARG`: `server` is `NULL`, or `out_flags` is `NULL` with
+  `class_count > 0`.
+- `LUMICE_ERR_INVALID_CONFIG`: `class_count` mismatch.
+
+Reads the frozen snapshot state (no `DoSnapshot` trigger) — callers relying on
+freshness should query `LUMICE_GetCompositeResults` / `LUMICE_GetRawXyzResults`
+first. `O(W*H * class_count * consumers)` scan; intended for infrequent polls
+(commit-debounce cadence, ~1 Hz), not per render frame — the GUI color window
+throttles its poll to 500ms (`kSignalPollIntervalSec` in `color_window.cpp`).
+
 ### Retrieving Results
 
 Result retrieval uses a unified array + sentinel pattern:

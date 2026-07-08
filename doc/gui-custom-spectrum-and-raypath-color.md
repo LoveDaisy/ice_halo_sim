@@ -128,6 +128,15 @@ owner 计划扩展两个相关但不同的功能：
 - **⭐z-order 与 Y-lane 物理下标解耦（关键正确性决策，白盒发现的陷阱）**：`ColorClass` 加 `int z_order_` 显示态字段（`BuildColorClassTable` 默认 = list 位置，`NeedsRebuild` 不比较它）。compositor `GatherActiveClasses` 按 `z_order_` 排序遍历，但**始终用原始下标 i 取 `GetColorClassLaneY(i)`**——遍历顺序（可被 setter 改）与 lane 物理绑定（构造时永久固定）彻底解耦。**天真地重排 `classes_` vector 会造成静默错误染色**（某条弧被涂错色），回归钉在 `test_component_compositor.cpp::ZOrderReordersDrawButNotLaneBinding`。
 - **pre-existing 观察（不在本任务修）**：`CommitConfig` 在 `consumer_mutex_` 锁外写 `active_class_table_`/`active_composite_mode_`，与 `DoSnapshot`/`SetRaypathColors`（锁内）间有既有竞态（单-owner 规则本就假设 `CommitConfig` 不与他调用并发）。
 
+**⭐as-built（③GUI 颜色窗，task-gui-color-window / task-342.3）**：`src/gui/color_window.{hpp,cpp}` 落地非模态浮动窗 `RenderColorWindow`，顶栏按钮开关，只经 `include/lumice.h` 访问 core（GUI API 边界门禁）：
+- **外壳 + 类行**：按 `z_order` 升序展示，每行 = 上/下箭头 / 色块 `ColorEdit3` / 可见性 / solo / 空弧警告 ⚠️ / delete。窗头下拉切合成模式（`dominant/additive/painter`）。
+- **z-order/物理下标解耦在 GUI 层的复现**：`SwapZOrder(state, phys_a, phys_b)` 只交换两个 class 的 `z_order` 标量字段，`state.raypath_color[]` vector 物理顺序永不变；这是 §4.0 上方"z-order 与 Y-lane 物理下标解耦"契约在 GUI 层的镜像，回归钉在 `test_gui_color_window.cpp`（`swap_zorder_*` 系列用例）。删除类后 `CompactZOrder` 把留空的 `z_order` 压缩回 `[0,N)` 排列（`LUMICE_SetRaypathColors` 的 `z_order` 参数硬要求）。
+- **ref 编辑器**：per-class 展开区含 combine（any/all）+ per-ref layer/crystal 下拉（从当前 layer 已有 placement 反查去重，从源头消除孤儿引用）+ whole-crystal checkbox + 谓词文本框，复用 333/334 已建的 H5 SoP 单-atom 校验（`ValidateSingleAtomText`：空文本=whole-crystal 合法、单 raypath 合法、多 factor 或 `;`-OR 拒绝——一条 ref 只能是单谓词原子，跨谓词的 AND 走 combine:all 的多条 ref，不进单条文本框）。
+- **从 filter 导入**：`BuildClassFromFilter` 把一个物理 filter 的 SoP 逐行转 ref，单-factor 行转 ref，多-factor 行跳过并计入 `skipped_rows`（复用既有 Import Warning 弹窗提示）；`combine` 默认 `any`（§4.0"Design 1 的价值保留为非绑定便捷"——只是预填模板，非结构耦合）。
+- **AC4 空弧警告**：轮询 `LUMICE_GetColorClassSignal`，500ms 节流（`kSignalPollIntervalSec`，对齐 lumice.h 头注释"debounce cadence, not per-frame"契约），`match_count>0 && signal==0` 时显示 ⚠️。
+- **写路径分流**（§4.0"API 按 re-sim 边界拆"在 GUI 侧的落地）：色/可见/solo/z_order/合成模式 → 立即调 `LUMICE_SetRaypathColors`（display-time，不重仿真）；谓词/combine/加删类/加删 ref → `MarkFilterDirty()`（走既有 debounce commit 管线）。
+- **测试**：`test/gui/functional/test_gui_color_window.cpp`（10 例，直接调 4 个纯 helper，无需驱动 ImGui 交互）+ Step 3/4 的 21 例 struct/JSON 结构等价 + `test_raypath_color.py` 端到端 PSNR 回归。AC6（owner on-screen 手感验收：拖 z-order、编谓词、导入、切模式）留给 owner 亲验，非 CI 可判定。
+
 ### 4.1 三层模型如何组合（门 / summand 色桶 / 跨层 rule）
 
 > ⚠️ **SUPERSEDED（2026-07-08，见 §4.0）**：本节 Fork C（色桶 = filter 的 summand）已被 Design-2 重定向推翻——颜色类现为**独立于物理 filter 的 placement-scoped 谓词列表**。以下保留作历史推理（§1 三层角色、去重、按需分配等思想仍有效），但**数据模型以 §4.0 为准**。
