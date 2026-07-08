@@ -2117,4 +2117,282 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::ClearGuiWarning();
     };
   }
+
+  // task-342.3 Step 3: FillLumiceConfig raypath_color[] emission
+  // ---------------------------------------------------------------------------
+  // ColorClassConfig (GUI-side) -> LUMICE_ColorClass (C struct) translation.
+  // Uses the plain FillLumiceConfig no-imgui-interaction pattern shared by the
+  // sibling overflow / SoP cross-check tests above (no ItemClick / no UI).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_empty_emits_zero_count");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      LUMICE_Config cfg{};
+      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
+      IM_CHECK_EQ(cfg.raypath_color_count, 0);
+      IM_CHECK_EQ(cfg.raypath_color_mode, 0);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_single_class_raypath_ref");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig cls;
+      cls.color[0] = 0.8f;
+      cls.color[1] = 0.3f;
+      cls.color[2] = 0.1f;
+      cls.combine = 0;
+      cls.visible = true;
+      cls.solo = false;
+      gui::ColorClassRefConfig ref;
+      ref.layer_idx = 0;
+      ref.crystal_pool_id = 0;
+      ref.match_all = false;
+      ref.predicate_text = "3-5-1";
+      cls.match.push_back(ref);
+      gui::g_state.raypath_color.push_back(cls);
+
+      LUMICE_Config cfg{};
+      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
+      IM_CHECK_EQ(cfg.raypath_color_count, 1);
+      const auto& c = cfg.raypath_color[0];
+      IM_CHECK_EQ(c.color[0], 0.8f);
+      IM_CHECK_EQ(c.color[1], 0.3f);
+      IM_CHECK_EQ(c.color[2], 0.1f);
+      IM_CHECK_EQ(c.combine, LUMICE_COLOR_COMBINE_ANY);
+      IM_CHECK_EQ(c.visible, 1);
+      IM_CHECK_EQ(c.solo, 0);
+      IM_CHECK_EQ(c.match_count, 1);
+      IM_CHECK_EQ(c.match[0].layer, 0);
+      IM_CHECK_EQ(c.match[0].crystal, 1);  // pool 0 -> C-API id 1
+      IM_CHECK_EQ(c.match[0].predicate.type, LUMICE_FILTER_TYPE_RAYPATH);
+      IM_CHECK_EQ(c.match[0].predicate.raypath_count, 3);
+      IM_CHECK_EQ(c.match[0].predicate.raypath[0], 3);
+      IM_CHECK_EQ(c.match[0].predicate.raypath[1], 5);
+      IM_CHECK_EQ(c.match[0].predicate.raypath[2], 1);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_match_all_emits_unset");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig cls;
+      gui::ColorClassRefConfig ref;
+      ref.crystal_pool_id = 0;
+      ref.match_all = true;
+      ref.predicate_text = "3-5";  // ignored when match_all=true
+      cls.match.push_back(ref);
+      gui::g_state.raypath_color.push_back(cls);
+
+      LUMICE_Config cfg{};
+      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
+      IM_CHECK_EQ(cfg.raypath_color_count, 1);
+      IM_CHECK_EQ(cfg.raypath_color[0].match_count, 1);
+      IM_CHECK_EQ(cfg.raypath_color[0].match[0].predicate.type, LUMICE_FILTER_TYPE_UNSET);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_empty_text_emits_unset");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig cls;
+      gui::ColorClassRefConfig ref;
+      ref.crystal_pool_id = 0;
+      ref.match_all = false;
+      ref.predicate_text = "  ";  // whitespace-only -> match-all
+      cls.match.push_back(ref);
+      gui::g_state.raypath_color.push_back(cls);
+
+      LUMICE_Config cfg{};
+      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
+      IM_CHECK_EQ(cfg.raypath_color_count, 1);
+      IM_CHECK_EQ(cfg.raypath_color[0].match[0].predicate.type, LUMICE_FILTER_TYPE_UNSET);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_entry_exit_predicate");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig cls;
+      gui::ColorClassRefConfig ref;
+      ref.crystal_pool_id = 0;
+      ref.match_all = false;
+      ref.predicate_text = "entry:1 & exit:2";
+      cls.match.push_back(ref);
+      gui::g_state.raypath_color.push_back(cls);
+
+      LUMICE_Config cfg{};
+      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
+      IM_CHECK_EQ(cfg.raypath_color_count, 1);
+      const auto& p = cfg.raypath_color[0].match[0].predicate;
+      IM_CHECK_EQ(p.type, LUMICE_FILTER_TYPE_ENTRY_EXIT);
+      IM_CHECK_EQ(p.ee_entry, 1);
+      IM_CHECK_EQ(p.ee_exit, 2);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_combine_all_two_refs");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      // Add a second layer sharing crystal pool 0 (InitDefaultState set up 1 crystal + 1 layer).
+      gui::Layer layer1;
+      gui::EntryCard e;
+      e.crystal_id = 0;
+      layer1.entries.push_back(e);
+      gui::g_state.layers.push_back(layer1);
+
+      gui::ColorClassConfig cls;
+      cls.combine = 1;  // ALL
+      gui::ColorClassRefConfig r0;
+      r0.layer_idx = 0;
+      r0.crystal_pool_id = 0;
+      r0.match_all = false;
+      r0.predicate_text = "3-5";
+      gui::ColorClassRefConfig r1;
+      r1.layer_idx = 1;
+      r1.crystal_pool_id = 0;
+      r1.match_all = false;
+      r1.predicate_text = "1-3";
+      cls.match.push_back(r0);
+      cls.match.push_back(r1);
+      gui::g_state.raypath_color.push_back(cls);
+
+      LUMICE_Config cfg{};
+      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
+      IM_CHECK_EQ(cfg.raypath_color_count, 1);
+      IM_CHECK_EQ(cfg.raypath_color[0].combine, LUMICE_COLOR_COMBINE_ALL);
+      IM_CHECK_EQ(cfg.raypath_color[0].match_count, 2);
+      IM_CHECK_EQ(cfg.raypath_color[0].match[0].layer, 0);
+      IM_CHECK_EQ(cfg.raypath_color[0].match[1].layer, 1);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_display_flags_and_mode");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig cls;
+      cls.visible = false;
+      cls.solo = true;
+      gui::ColorClassRefConfig ref;
+      ref.crystal_pool_id = 0;
+      ref.match_all = true;
+      cls.match.push_back(ref);
+      gui::g_state.raypath_color.push_back(cls);
+      gui::g_state.raypath_color_mode = LUMICE_COLOR_MODE_ADDITIVE;
+
+      LUMICE_Config cfg{};
+      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
+      IM_CHECK_EQ(cfg.raypath_color[0].visible, 0);
+      IM_CHECK_EQ(cfg.raypath_color[0].solo, 1);
+      IM_CHECK_EQ(cfg.raypath_color_mode, LUMICE_COLOR_MODE_ADDITIVE);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_orphan_ref_skipped");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      // Add a second crystal to the pool but do NOT reference it in any scattering
+      // entry — pool id 1 becomes orphaned in crystal_pool_to_core.
+      gui::CrystalConfig c2;
+      c2.type = gui::CrystalType::kPrism;
+      gui::g_state.crystals.push_back(c2);
+
+      gui::ColorClassConfig cls;
+      gui::ColorClassRefConfig r_orphan;
+      r_orphan.crystal_pool_id = 1;
+      r_orphan.match_all = true;
+      gui::ColorClassRefConfig r_ok;
+      r_ok.crystal_pool_id = 0;
+      r_ok.match_all = true;
+      cls.match.push_back(r_orphan);
+      cls.match.push_back(r_ok);
+      gui::g_state.raypath_color.push_back(cls);
+
+      LUMICE_Config cfg{};
+      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
+      IM_CHECK_EQ(cfg.raypath_color_count, 1);
+      IM_CHECK_EQ(cfg.raypath_color[0].match_count, 1);  // orphan dropped
+      IM_CHECK_EQ(cfg.raypath_color[0].match[0].crystal, 1);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_multi_factor_predicate_skipped");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig cls;
+      gui::ColorClassRefConfig r_bad;
+      r_bad.crystal_pool_id = 0;
+      r_bad.match_all = false;
+      r_bad.predicate_text = "3-5 & entry:2";  // 2 factors -- not expressible as a single atom
+      gui::ColorClassRefConfig r_ok;
+      r_ok.crystal_pool_id = 0;
+      r_ok.match_all = true;
+      cls.match.push_back(r_bad);
+      cls.match.push_back(r_ok);
+      gui::g_state.raypath_color.push_back(cls);
+
+      LUMICE_Config cfg{};
+      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
+      IM_CHECK_EQ(cfg.raypath_color_count, 1);
+      IM_CHECK_EQ(cfg.raypath_color[0].match_count, 1);
+      IM_CHECK_EQ(cfg.raypath_color[0].match[0].predicate.type, LUMICE_FILTER_TYPE_UNSET);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_multi_alt_raypath_skipped");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig cls;
+      gui::ColorClassRefConfig r_bad;
+      r_bad.crystal_pool_id = 0;
+      r_bad.match_all = false;
+      r_bad.predicate_text = "1-3;5-7";  // ';' OR alternatives -- 1 Factor but multiple alternatives
+      cls.match.push_back(r_bad);
+      gui::g_state.raypath_color.push_back(cls);
+
+      LUMICE_Config cfg{};
+      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
+      IM_CHECK_EQ(cfg.raypath_color_count, 1);
+      IM_CHECK_EQ(cfg.raypath_color[0].match_count, 0);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_class_over_cap");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      for (int i = 0; i < LUMICE_MAX_CONFIG_COLOR_CLASSES + 1; i++) {
+        gui::ColorClassConfig cls;
+        gui::ColorClassRefConfig ref;
+        ref.crystal_pool_id = 0;
+        ref.match_all = true;
+        cls.match.push_back(ref);
+        gui::g_state.raypath_color.push_back(cls);
+      }
+      LUMICE_Config cfg{};
+      gui::ColorClassOverflowInfo color_overflow;
+      IM_CHECK(!gui::FillLumiceConfig(gui::g_state, &cfg, nullptr, &color_overflow));
+      IM_CHECK(color_overflow.class_over_cap);
+      IM_CHECK_EQ(color_overflow.class_index, LUMICE_MAX_CONFIG_COLOR_CLASSES);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_ref_over_cap");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig cls;
+      for (int j = 0; j < LUMICE_MAX_CONFIG_COLOR_REFS + 1; j++) {
+        gui::ColorClassRefConfig ref;
+        ref.crystal_pool_id = 0;
+        ref.match_all = true;
+        cls.match.push_back(ref);
+      }
+      gui::g_state.raypath_color.push_back(cls);
+      LUMICE_Config cfg{};
+      gui::ColorClassOverflowInfo color_overflow;
+      IM_CHECK(!gui::FillLumiceConfig(gui::g_state, &cfg, nullptr, &color_overflow));
+      IM_CHECK(!color_overflow.class_over_cap);
+      IM_CHECK_EQ(color_overflow.class_index, 0);
+      IM_CHECK_EQ(color_overflow.ref_index, LUMICE_MAX_CONFIG_COLOR_REFS);
+    };
+  }
 }

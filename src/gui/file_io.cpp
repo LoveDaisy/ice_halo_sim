@@ -1171,7 +1171,132 @@ std::string FormatOverflowLocator(const FilterOverflowInfo& overflow) {
   return pos;
 }
 
-bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out, FilterOverflowInfo* overflow) {
+// task-342.3 Step 3: fill a single LUMICE_ColorPredicate from a GUI ColorClassRefConfig.
+// `match_all=true` (or empty/whitespace predicate_text) → LUMICE_FILTER_TYPE_UNSET.
+// Non-empty text is parsed via raypath_segments::ParseSummandText; only single-Factor and
+// single-alternative results are accepted (LUMICE_ColorPredicate is a single-atom carrier per
+// Design 2). If the text does not resolve to exactly one atom, returns false — caller
+// (FillColorClasses below) treats it as "skip this ref" (mirrors the plan §3 decision:
+// arbitrary AND/multi-alt goes through combine:all across refs, not inside one predicate).
+static bool FillColorPredicate(LUMICE_ColorPredicate* dst, const ColorClassRefConfig& ref) {
+  *dst = LUMICE_ColorPredicate{};
+  const std::string trimmed = TrimRaypathSegment(ref.predicate_text);
+  if (ref.match_all || trimmed.empty()) {
+    dst->type = LUMICE_FILTER_TYPE_UNSET;  // match-all whole-crystal
+    return true;
+  }
+  const auto factors = ParseSummandText(trimmed);
+  if (factors.size() != 1) {
+    return false;
+  }
+  const auto alts = FactorAlternatives(factors[0]);
+  if (alts.size() != 1) {
+    return false;
+  }
+  const SimpleTermDesc& t = alts[0];
+  if (t.is_raypath) {
+    if (t.raypath.empty()) {
+      // Match-all raypath (whole-crystal via empty raypath) — represent as UNSET to align
+      // with core RaypathColorRef default (no `type` field == NoneFilterParam == match-all).
+      dst->type = LUMICE_FILTER_TYPE_UNSET;
+      return true;
+    }
+    dst->type = LUMICE_FILTER_TYPE_RAYPATH;
+    dst->raypath_count =
+        static_cast<int>(std::min(t.raypath.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_RAYPATH_LEN)));
+    for (int k = 0; k < dst->raypath_count; k++) {
+      dst->raypath[k] = t.raypath[k];
+    }
+    return true;
+  }
+  dst->type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+  dst->ee_entry = (t.entry == kEEWildcardSentinel) ? -1 : ClampIdValue(t.entry, "entry");
+  dst->ee_exit = (t.exit == kEEWildcardSentinel) ? -1 : ClampIdValue(t.exit, "exit");
+  dst->ee_min_len = t.min_len;
+  dst->ee_max_len = t.max_len;
+  return true;
+}
+
+// task-342.3 Step 3: walk state.raypath_color and populate out->raypath_color[]. Returns
+// false on ABI-bounds overflow (class count or per-class ref count over cap) and reports
+// the offending index via `color_overflow` (when non-null); on success writes counts and
+// returns true. Orphan refs (crystal_pool_id not in `crystal_pool_to_core` because the
+// referenced crystal isn't in any active scattering entry) are SKIPPED at the ref level
+// (not the class) with a warning log — mirrors the plan §3 graceful degradation for
+// referenced placements the user removed after configuring the color class. Bad predicate
+// text (multi-factor / multi-alt) is likewise skipped at the ref level.
+static bool FillColorClasses(const GuiState& state, const std::map<int, int>& crystal_pool_to_core, LUMICE_Config* out,
+                             ColorClassOverflowInfo* color_overflow) {
+  const int n_classes = static_cast<int>(state.raypath_color.size());
+  if (n_classes > LUMICE_MAX_CONFIG_COLOR_CLASSES) {
+    if (color_overflow != nullptr) {
+      color_overflow->class_index = LUMICE_MAX_CONFIG_COLOR_CLASSES;
+      color_overflow->ref_index = -1;
+      color_overflow->class_over_cap = true;
+    }
+    return false;
+  }
+  // ABI-bounds pre-check on per-class ref counts (COUNTING orphan/invalid refs would be
+  // wrong — those will be skipped; count only the surviving refs to compare with the cap).
+  // Two-pass approach: first count surviving refs per class, reject any class over cap;
+  // then emit. Same "no partial writes on overflow" contract as ExpandFilterToStruct.
+  std::vector<std::vector<int>> keep_refs(n_classes);  // per-class list of surviving ref indices
+  for (int i = 0; i < n_classes; i++) {
+    const auto& cls = state.raypath_color[i];
+    for (int j = 0; j < static_cast<int>(cls.match.size()); j++) {
+      const auto& ref = cls.match[j];
+      if (crystal_pool_to_core.find(ref.crystal_pool_id) == crystal_pool_to_core.end()) {
+        GUI_LOG_WARNING(
+            "[FileIO] raypath_color[{}].match[{}] references crystal pool {} not present in scene; skipped.", i, j,
+            ref.crystal_pool_id);
+        continue;
+      }
+      LUMICE_ColorPredicate probe{};
+      if (!FillColorPredicate(&probe, ref)) {
+        GUI_LOG_WARNING("[FileIO] raypath_color[{}].match[{}] predicate not a single atom (\"{}\"); skipped.", i, j,
+                        ref.predicate_text);
+        continue;
+      }
+      keep_refs[i].push_back(j);
+    }
+    if (static_cast<int>(keep_refs[i].size()) > LUMICE_MAX_CONFIG_COLOR_REFS) {
+      if (color_overflow != nullptr) {
+        color_overflow->class_index = i;
+        color_overflow->ref_index = LUMICE_MAX_CONFIG_COLOR_REFS;
+        color_overflow->class_over_cap = false;
+      }
+      return false;
+    }
+  }
+  // Emit.
+  out->raypath_color_count = n_classes;
+  for (int i = 0; i < n_classes; i++) {
+    const auto& cls = state.raypath_color[i];
+    LUMICE_ColorClass& dst = out->raypath_color[i];
+    dst.color[0] = cls.color[0];
+    dst.color[1] = cls.color[1];
+    dst.color[2] = cls.color[2];
+    dst.combine = cls.combine;  // 0 (any) / 1 (all) — matches LUMICE_COLOR_COMBINE_*
+    dst.visible = cls.visible ? 1 : 0;
+    dst.solo = cls.solo ? 1 : 0;
+    int m = 0;
+    for (int j : keep_refs[i]) {
+      const auto& ref = cls.match[j];
+      LUMICE_ColorClassRef& dref = dst.match[m++];
+      dref.layer = ref.layer_idx;
+      dref.crystal = crystal_pool_to_core.at(ref.crystal_pool_id);
+      // FillColorPredicate already validated this ref in the pre-check; assumed to succeed.
+      (void)FillColorPredicate(&dref.predicate, ref);
+    }
+    dst.match_count = m;
+  }
+  // raypath_color_mode: pass through verbatim; c_api emit validates the enum range.
+  out->raypath_color_mode = state.raypath_color_mode;
+  return true;
+}
+
+bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out, FilterOverflowInfo* overflow,
+                      ColorClassOverflowInfo* color_overflow) {
   std::memset(out, 0, sizeof(LUMICE_Config));
 
   // ID-pool model: walk entries, dedupe by pool id, emit one C crystal per reachable pool
@@ -1294,6 +1419,15 @@ bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out, FilterOverflowI
   out->infinite = state.sim.infinite ? 1 : 0;
   out->ray_num = static_cast<LUMICE_RayCount>(state.sim.ray_num_millions * 1e6);
   out->max_hits = state.sim.max_hits;
+
+  // task-342.3 Step 3: raypath color classes. Reuses `crystal_pool_to_core` built above so
+  // ref.crystal_pool_id (GUI pool index) resolves to the same 1-based C-API crystal id the
+  // scattering entries reference. Orphan/invalid refs are skipped at ref level; class-cap /
+  // ref-cap overflow returns false with color_overflow populated (no partial writes: on
+  // failure the caller must not commit `out`, same contract as the filter branch above).
+  if (!FillColorClasses(state, crystal_pool_to_core, out, color_overflow)) {
+    return false;
+  }
 
   return true;
 }
