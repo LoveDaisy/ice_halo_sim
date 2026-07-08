@@ -160,18 +160,16 @@ void ServerPoller::WorkerLoop() {
 //
 // Copies immediately (before the generation-drift recheck below, which per lumice.h's
 // Get*Results aliasing contract invalidates composite_result.img_buffer) — tightens the
-// capture-to-memcpy window to match xyz's own capture-then-copy discipline (code-review-01
-// Minor 1).
+// capture-to-memcpy window to match xyz's own capture-then-copy discipline.
 //
-// Generation-drift guard (code-review-01 Major 1): the composite call in PollOnce() may have
-// consumed a dirty-flag event that landed strictly after the RawXyz call captured
-// xyz_generation — pairing that newer composite with older xyz-derived stats would silently mix
-// two materialization events into one payload, breaking the "single materialization event,
-// multiple read-only views" invariant this task's Step 1 refactor was meant to establish.
-// LUMICE_RenderResult carries no generation field (out of scope to add one), so detect the drift
-// host-side via a cheap recheck call — safe here because both the xyz buffer (copied by the
-// caller before calling this) and composite_result.img_buffer (copied below) are already
-// captured.
+// Generation-drift guard: the composite call in PollOnce() may have consumed a dirty-flag event
+// that landed strictly after the RawXyz call captured xyz_generation — pairing that newer
+// composite with older xyz-derived stats would silently mix two materialization events into one
+// payload, breaking the "single materialization event, multiple read-only views" invariant this
+// task's Step 1 refactor was meant to establish. LUMICE_RenderResult carries no generation field
+// (out of scope to add one), so detect the drift host-side via a cheap recheck call — safe here
+// because both the xyz buffer (copied by the caller before calling this) and
+// composite_result.img_buffer (copied below) are already captured.
 void ServerPoller::PopulateCompositePayload(LUMICE_Server* server, const LUMICE_RenderResult& composite_result,
                                             unsigned long long xyz_generation, TexturePayload* payload) {
   const size_t rgb_bytes =
@@ -265,13 +263,12 @@ void ServerPoller::PollOnce() {
       size_t float_count = static_cast<size_t>(xyz_results[0].img_width) * xyz_results[0].img_height * 3;
       payload->xyz_data.resize(float_count);
       // Copy xyz bytes BEFORE any further Get*Results call (see GetCompositeResults()
-      // call below). code-review-02 Major 1: snapshot_xyz_ is a persistent
-      // per-RenderConsumer buffer that PrepareSnapshot() overwrites IN PLACE (not
-      // reallocated) — xyz_results[0].xyz_buffer aliases it, so a Get*Results call
-      // made after capturing this pointer but before this memcpy could silently
-      // rewrite the memory out from under us if it consumes a newly-landed dirty
-      // event. Copying first eliminates that window entirely rather than trying to
-      // detect it after the fact.
+      // call below): snapshot_xyz_ is a persistent per-RenderConsumer buffer that
+      // PrepareSnapshot() overwrites IN PLACE (not reallocated) — xyz_results[0].xyz_buffer
+      // aliases it, so a Get*Results call made after capturing this pointer but before this
+      // memcpy could silently rewrite the memory out from under us if it consumes a
+      // newly-landed dirty event. Copying first eliminates that window entirely rather than
+      // trying to detect it after the fact.
       std::memcpy(payload->xyz_data.data(), xyz_results[0].xyz_buffer, float_count * sizeof(float));
       payload->width = xyz_results[0].img_width;
       payload->height = xyz_results[0].img_height;
@@ -292,8 +289,7 @@ void ServerPoller::PollOnce() {
       LUMICE_GetCompositeResults(server, composite_results, 1);
       if (composite_results[0].img_buffer != nullptr) {
         // Bytes copied and generation-drift-checked inside — see
-        // PopulateCompositePayload's doc comment (code-review-01 Major 1 /
-        // code-review-02 Minor 1).
+        // PopulateCompositePayload's doc comment above.
         PopulateCompositePayload(server, composite_results[0], captured_xyz_generation, payload.get());
       }
       // (payload is default-constructed with rgb_data empty + is_composite=false,

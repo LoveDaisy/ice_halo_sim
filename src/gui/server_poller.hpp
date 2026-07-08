@@ -134,6 +134,17 @@ class ServerPoller {
   // server's current generation as new (what Start() does, minus the worker thread).
   void ResetGenerationForTest() { last_generation_ = 0; }
 
+  // Test-only: drives PopulateCompositePayload() directly with caller-supplied
+  // (composite_result, xyz_generation) so a regression test can force the generation-drift
+  // drop branch deterministically (arm a real drift via LUMICE_SetRaypathColors + a second
+  // LUMICE_GetCompositeResults call, then pass the ORIGINAL xyz_generation here) instead of
+  // racing two threads through the narrow window inside a real PollOnce() call. See
+  // test/gui/functional/test_gui_composite_preview.cpp. Not used in production.
+  void PopulateCompositePayloadForTest(LUMICE_Server* server, const LUMICE_RenderResult& composite_result,
+                                       unsigned long long xyz_generation, TexturePayload* payload) {
+    PopulateCompositePayload(server, composite_result, xyz_generation, payload);
+  }
+
  private:
   enum class State { kPaused, kRunning, kTerminating };
 
@@ -144,7 +155,7 @@ class ServerPoller {
   // is_composite=true, UNLESS a generation-drift recheck shows the composite call
   // consumed a dirty-flag event newer than xyz_generation — in which case the copy
   // is discarded and payload stays xyz-only for this tick. Split out of PollOnce()
-  // to keep its cognitive complexity down (code-review-01 Major 1 fix).
+  // to keep its cognitive complexity down.
   void PopulateCompositePayload(LUMICE_Server* server, const LUMICE_RenderResult& composite_result,
                                 unsigned long long xyz_generation, TexturePayload* payload);
 

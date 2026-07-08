@@ -200,4 +200,71 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     local.Stop();
     LUMICE_DestroyServer(server);
   };
+
+  // code-review-03 regression: actually drives ServerPoller::PopulateCompositePayload()'s
+  // generation-drift decision branch (not just the C-API-level drift precondition that
+  // RaypathColorApi.CompositeGenerationDriftDetectableViaRecheck in test_c_api.cpp pins).
+  // Arms a REAL drift via LUMICE_SetRaypathColors (same deterministic technique as that C-API
+  // test) between an xyz-generation capture and the composite call, then calls
+  // PopulateCompositePayloadForTest with the STALE captured generation so the function's own
+  // internal regen_check genuinely observes a mismatch — proving the drop branch
+  // (rgb_data cleared, is_composite left false) actually executes. Then repeats the sequence
+  // without an intervening drift to prove the very next pairing recovers (is_composite==true,
+  // bytes match a direct LUMICE_GetCompositeResults read).
+  ImGuiTest* t3 = IM_REGISTER_TEST(engine, "gui_composite_preview", "generation_drift_drop_then_recover");
+  t3->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    const bool ok = RunToIdleWithData(server, kColorConfig);
+    IM_CHECK(ok);
+    if (!ok) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+
+    gui::ServerPoller local;
+
+    // ---- Drop branch: arm a real drift in the exact window PopulateCompositePayload guards. ----
+    LUMICE_RawXyzResult xyz1[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetRawXyzResults(server, xyz1, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    const unsigned long long stale_xyz_generation = xyz1[0].snapshot_generation;
+
+    // kColorConfig commits exactly one raypath_color class — class_count must match.
+    LUMICE_ColorClassDisplay disp[1]{};
+    disp[0].color[2] = 1.0f;  // red->blue: forces a visible display-state change (dirty).
+    disp[0].visible = 1;
+    IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp, 1, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
+
+    // Consumes the freshly-armed dirty flag: comp1 belongs to a generation newer than
+    // stale_xyz_generation — exactly the mismatch PopulateCompositePayload's regen_check must
+    // detect when handed stale_xyz_generation below.
+    LUMICE_RenderResult comp1[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, comp1, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(comp1[0].img_buffer != nullptr);
+
+    gui::TexturePayload drop_payload;
+    local.PopulateCompositePayloadForTest(server, comp1[0], stale_xyz_generation, &drop_payload);
+    IM_CHECK(!drop_payload.is_composite);
+    IM_CHECK(drop_payload.rgb_data.empty());
+
+    // ---- Recovery: the very next correctly-paired call must succeed. ----
+    LUMICE_RawXyzResult xyz2[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetRawXyzResults(server, xyz2, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    const unsigned long long paired_xyz_generation = xyz2[0].snapshot_generation;
+
+    LUMICE_RenderResult comp2[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, comp2, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(comp2[0].img_buffer != nullptr);
+    const size_t nbytes = static_cast<size_t>(comp2[0].img_width) * static_cast<size_t>(comp2[0].img_height) * 3;
+
+    gui::TexturePayload recovered_payload;
+    local.PopulateCompositePayloadForTest(server, comp2[0], paired_xyz_generation, &recovered_payload);
+    IM_CHECK(recovered_payload.is_composite);
+    IM_CHECK_EQ(recovered_payload.rgb_data.size(), nbytes);
+    IM_CHECK_EQ(std::memcmp(recovered_payload.rgb_data.data(), comp2[0].img_buffer, nbytes), 0);
+
+    local.Stop();
+    LUMICE_DestroyServer(server);
+  };
 }
