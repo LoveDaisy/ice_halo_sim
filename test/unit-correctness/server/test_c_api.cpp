@@ -19,7 +19,8 @@
 #include "core/crystal.hpp"
 #include "core/def.hpp"
 #include "include/lumice.h"
-#include "server/c_api_internal.hpp"  // ConfigToJson (test-only exposure) for emit-shape assertions
+#include "include/lumice_config_scope.hpp"  // lumice::ConfigColorGuard RAII for raypath_color
+#include "server/c_api_internal.hpp"        // ConfigToJson (test-only exposure) for emit-shape assertions
 
 // Regression guard (task-fix-stats-ray-count-u32-overflow): ray-count fields must be
 // 64-bit so totals > 2^32 never truncate on Windows, where `unsigned long` is 32-bit
@@ -481,6 +482,7 @@ static std::string MakeFullConfigJson() {
 TEST(ParseConfigApi, MinimalPrismConfig) {
   auto json = MakeMinimalConfigJson();
   LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
   EXPECT_EQ(LUMICE_ParseConfigString(json.c_str(), &config), LUMICE_OK);
 
   EXPECT_EQ(config.crystal_count, 1);
@@ -522,6 +524,8 @@ TEST(ParseConfigApi, RayNumAbove32BitNotTruncated) {
   root["scene"]["ray_num"] = kBigRayNum;
 
   LUMICE_Config config{};
+
+  lumice::ConfigColorGuard config_guard(config);
   EXPECT_EQ(LUMICE_ParseConfigString(root.dump().c_str(), &config), LUMICE_OK);
   EXPECT_EQ(config.infinite, 0);
   // Pre-fix on Windows this truncated to 705'032'704; post-fix it holds the full value.
@@ -532,6 +536,7 @@ TEST(ParseConfigApi, RayNumAbove32BitNotTruncated) {
 TEST(ParseConfigApi, FullConfigWithPyramidAndFilter) {
   auto json = MakeFullConfigJson();
   LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
   EXPECT_EQ(LUMICE_ParseConfigString(json.c_str(), &config), LUMICE_OK);
 
   // Two crystals
@@ -575,6 +580,7 @@ TEST(ParseConfigApi, FullConfigWithPyramidAndFilter) {
 TEST(ParseConfigApi, ParseModifyCommit) {
   auto json = MakeMinimalConfigJson();
   LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
   ASSERT_EQ(LUMICE_ParseConfigString(json.c_str(), &config), LUMICE_OK);
 
   // Modify ray_num
@@ -605,6 +611,8 @@ TEST(ParseConfigApi, ParseConfigFile) {
   }
 
   LUMICE_Config config{};
+
+  lumice::ConfigColorGuard config_guard(config);
   EXPECT_EQ(LUMICE_ParseConfigFile(tmp_path.u8string().c_str(), &config), LUMICE_OK);
   EXPECT_EQ(config.crystal_count, 1);
   EXPECT_FLOAT_EQ(config.crystals[0].height, 1.5f);
@@ -615,6 +623,7 @@ TEST(ParseConfigApi, ParseConfigFile) {
 
 TEST(ParseConfigApi, NullArgs) {
   LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
   EXPECT_EQ(LUMICE_ParseConfigString(nullptr, &config), LUMICE_ERR_NULL_ARG);
   EXPECT_EQ(LUMICE_ParseConfigString("{}", nullptr), LUMICE_ERR_NULL_ARG);
   EXPECT_EQ(LUMICE_ParseConfigFile(nullptr, &config), LUMICE_ERR_NULL_ARG);
@@ -624,6 +633,7 @@ TEST(ParseConfigApi, NullArgs) {
 
 TEST(ParseConfigApi, InvalidJson) {
   LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
   EXPECT_EQ(LUMICE_ParseConfigString("not json at all", &config), LUMICE_ERR_INVALID_JSON);
   EXPECT_EQ(LUMICE_ParseConfigString("{invalid", &config), LUMICE_ERR_INVALID_JSON);
 }
@@ -631,6 +641,7 @@ TEST(ParseConfigApi, InvalidJson) {
 
 TEST(ParseConfigApi, MissingCrystalSection) {
   LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
   // Valid JSON but missing "crystal" key
   EXPECT_EQ(LUMICE_ParseConfigString(R"({"scene": {}})", &config), LUMICE_ERR_MISSING_FIELD);
 }
@@ -638,6 +649,7 @@ TEST(ParseConfigApi, MissingCrystalSection) {
 
 TEST(ParseConfigApi, FileNotFound) {
   LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
   EXPECT_EQ(LUMICE_ParseConfigFile("/tmp/nonexistent_lumice_config_12345.json", &config), LUMICE_ERR_FILE_NOT_FOUND);
 }
 
@@ -649,6 +661,8 @@ TEST(ParseConfigApi, UnsupportedFilterType) {
   root["filter"] = nlohmann::json::array({ { { "id", 1 }, { "type", "direction" }, { "action", "filter_in" } } });
 
   LUMICE_Config config{};
+
+  lumice::ConfigColorGuard config_guard(config);
   EXPECT_EQ(LUMICE_ParseConfigString(root.dump().c_str(), &config), LUMICE_ERR_INVALID_VALUE);
 }
 
@@ -668,6 +682,8 @@ TEST(ParseConfigApi, ArraySpectrumParsed) {
   root["scene"]["ray_num"] = 1000;
 
   LUMICE_Config config{};
+
+  lumice::ConfigColorGuard config_guard(config);
   ASSERT_EQ(LUMICE_ParseConfigString(root.dump().c_str(), &config), LUMICE_OK);
   EXPECT_EQ(config.spectrum_count, 2);
   EXPECT_FLOAT_EQ(config.spectrum_entries[0].wavelength, 450.0f);
@@ -683,6 +699,7 @@ TEST(ParseConfigApi, StructSpectrumRoundTrip) {
   // the array shape core light_config expects (mirrors GUI struct→commit path).
   auto json = MakeMinimalConfigJson();
   LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
   ASSERT_EQ(LUMICE_ParseConfigString(json.c_str(), &config), LUMICE_OK);
 
   config.spectrum_count = 3;
@@ -711,6 +728,8 @@ TEST(ParseConfigApi, ArraySpectrumOverCap) {
   root["scene"]["light_source"]["spectrum"] = arr;
 
   LUMICE_Config config{};
+
+  lumice::ConfigColorGuard config_guard(config);
   EXPECT_EQ(LUMICE_ParseConfigString(root.dump().c_str(), &config), LUMICE_ERR_INVALID_CONFIG);
 }
 
@@ -723,6 +742,8 @@ TEST(ParseConfigApi, SpectrumEnumerations) {
     root["scene"]["light_source"]["spectrum"] = sp;
 
     LUMICE_Config config{};
+
+    lumice::ConfigColorGuard config_guard(config);
     ASSERT_EQ(LUMICE_ParseConfigString(root.dump().c_str(), &config), LUMICE_OK) << "Failed for spectrum: " << sp;
     EXPECT_STREQ(config.spectrum, sp);
     EXPECT_EQ(config.spectrum_count, 0);
@@ -734,6 +755,8 @@ TEST(ParseConfigApi, SpectrumEnumerations) {
   root["scene"]["light_source"]["spectrum"] = "UnknownIlluminant";
 
   LUMICE_Config config{};
+
+  lumice::ConfigColorGuard config_guard(config);
   EXPECT_EQ(LUMICE_ParseConfigString(root.dump().c_str(), &config), LUMICE_ERR_INVALID_VALUE);
 }
 
@@ -1355,11 +1378,12 @@ namespace {
 // Other sections stay empty (counts 0) so ConfigToJson's crystal/render/scatter loops are
 // no-ops; spectrum == nullptr resolves to "D65". ConfigToJson does not validate, so this
 // is enough to inspect the emitted filter shape without a server.
-LUMICE_Config MakeOneFilterConfig(const LUMICE_FilterParam& f) {
-  LUMICE_Config config{};
-  config.filter_count = 1;
-  config.filters[0] = f;
-  return config;
+// task-344: caller-owned out-param (LUMICE_Config is now non-copyable — raypath_color owns
+// a heap allocation; returning by value would leave two aliased copies). Caller must attach
+// a lumice::ConfigColorGuard to `out` before calling.
+void FillOneFilterConfig(LUMICE_Config* out, const LUMICE_FilterParam& f) {
+  out->filter_count = 1;
+  out->filters[0] = f;
 }
 
 // Assert the emitted filter object has EXACTLY this key set — catches both a missing
@@ -1379,7 +1403,10 @@ TEST(StructFilterEmit, None) {
   f.id = 7;
   f.action = 0;  // filter_in
   f.type = LUMICE_FILTER_TYPE_NONE;
-  auto root = ConfigToJson(MakeOneFilterConfig(f));
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneFilterConfig(&config, f);
+  auto root = ConfigToJson(config);
   const auto& jf = root.at("filter").at(0);
   EXPECT_EQ(jf.at("id").get<int>(), 7);
   EXPECT_EQ(jf.at("type").get<std::string>(), "none");
@@ -1398,7 +1425,10 @@ TEST(StructFilterEmit, Raypath) {
   f.raypath[1] = 1;
   f.raypath[2] = 5;
   f.symmetry = 1 | 2;  // P | B
-  auto root = ConfigToJson(MakeOneFilterConfig(f));
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneFilterConfig(&config, f);
+  auto root = ConfigToJson(config);
   const auto& jf = root.at("filter").at(0);
   EXPECT_EQ(jf.at("type").get<std::string>(), "raypath");
   EXPECT_EQ(jf.at("action").get<std::string>(), "filter_out");
@@ -1418,7 +1448,10 @@ TEST(StructFilterEmit, EntryExitAllFields) {
   f.ee_exit = 5;
   f.ee_min_len = 2;
   f.ee_max_len = 8;
-  auto root = ConfigToJson(MakeOneFilterConfig(f));
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneFilterConfig(&config, f);
+  auto root = ConfigToJson(config);
   const auto& jf = root.at("filter").at(0);
   EXPECT_EQ(jf.at("type").get<std::string>(), "entry_exit");
   EXPECT_EQ(jf.at("entry").get<int>(), 3);
@@ -1438,7 +1471,10 @@ TEST(StructFilterEmit, EntryExitWildcardsOmitted) {
   f.ee_exit = -1;
   f.ee_min_len = 1;
   f.ee_max_len = -1;
-  auto root = ConfigToJson(MakeOneFilterConfig(f));
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneFilterConfig(&config, f);
+  auto root = ConfigToJson(config);
   const auto& jf = root.at("filter").at(0);
   EXPECT_EQ(jf.at("type").get<std::string>(), "entry_exit");
   EXPECT_FALSE(jf.contains("entry"));
@@ -1455,7 +1491,10 @@ TEST(StructFilterEmit, Direction) {
   f.dir_az = 120.0f;
   f.dir_el = -15.0f;
   f.dir_radii = 2.5f;
-  auto root = ConfigToJson(MakeOneFilterConfig(f));
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneFilterConfig(&config, f);
+  auto root = ConfigToJson(config);
   const auto& jf = root.at("filter").at(0);
   EXPECT_EQ(jf.at("type").get<std::string>(), "direction");
   EXPECT_FLOAT_EQ(jf.at("az").get<float>(), 120.0f);
@@ -1469,7 +1508,10 @@ TEST(StructFilterEmit, Crystal) {
   f.id = 5;
   f.type = LUMICE_FILTER_TYPE_CRYSTAL;
   f.crystal_id = 2;
-  auto root = ConfigToJson(MakeOneFilterConfig(f));
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneFilterConfig(&config, f);
+  auto root = ConfigToJson(config);
   const auto& jf = root.at("filter").at(0);
   EXPECT_EQ(jf.at("type").get<std::string>(), "crystal");
   EXPECT_EQ(jf.at("crystal_id").get<int>(), 2);
@@ -1480,14 +1522,20 @@ TEST(StructFilterEmit, UnsetTypeThrows) {
   // Zero-init guard: type == UNSET(0) must throw, not silently emit "none".
   LUMICE_FilterParam f{};  // type defaults to 0 == UNSET
   f.id = 1;
-  EXPECT_THROW(ConfigToJson(MakeOneFilterConfig(f)), std::invalid_argument);
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneFilterConfig(&config, f);
+  EXPECT_THROW(ConfigToJson(config), std::invalid_argument);
 }
 
 TEST(StructFilterEmit, OutOfRangeTypeThrows) {
   LUMICE_FilterParam f{};
   f.id = 1;
   f.type = 99;  // out of range
-  EXPECT_THROW(ConfigToJson(MakeOneFilterConfig(f)), std::invalid_argument);
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneFilterConfig(&config, f);
+  EXPECT_THROW(ConfigToJson(config), std::invalid_argument);
 }
 
 // --- Isomorphism cross-check against core's own to_json -------------------------------
@@ -1499,7 +1547,10 @@ TEST(StructFilterEmit, OutOfRangeTypeThrows) {
 namespace {
 void ExpectEmitMatchesCore(const LUMICE_FilterParam& lf, const lumice::FilterConfig& fc) {
   nlohmann::json core_j = fc;  // ADL -> lumice::to_json(json&, const FilterConfig&)
-  auto my_j = ConfigToJson(MakeOneFilterConfig(lf)).at("filter").at(0);
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneFilterConfig(&config, lf);
+  auto my_j = ConfigToJson(config).at("filter").at(0);
   EXPECT_EQ(my_j, core_j) << "C-API emit:\n" << my_j.dump(2) << "\ncore to_json:\n" << core_j.dump(2);
 }
 }  // namespace
@@ -1624,20 +1675,22 @@ namespace {
 // Parse the full config (crystals + scene + one referenced filter), then replace that
 // filter (keeping its id, so the scattering reference stays valid) with `f` and shrink to
 // a fast finite sim. Returns the config ready for LUMICE_CommitConfigStruct.
-LUMICE_Config MakeCommitConfigWithFilter(const LUMICE_FilterParam& f) {
-  LUMICE_Config config{};
-  EXPECT_EQ(LUMICE_ParseConfigString(MakeFullConfigJson().c_str(), &config), LUMICE_OK);
-  EXPECT_GE(config.filter_count, 1);
-  const int fid = config.filters[0].id;
-  config.filters[0] = f;
-  config.filters[0].id = fid;
-  config.infinite = 0;
-  config.ray_num = 100;
-  return config;
+// task-344: caller-owned out-param. Populates `out` via LUMICE_ParseConfigString then
+// overrides filter[0] and finiteness. Caller must attach ConfigColorGuard first.
+void FillCommitConfigWithFilter(LUMICE_Config* out, const LUMICE_FilterParam& f) {
+  EXPECT_EQ(LUMICE_ParseConfigString(MakeFullConfigJson().c_str(), out), LUMICE_OK);
+  EXPECT_GE(out->filter_count, 1);
+  const int fid = out->filters[0].id;
+  out->filters[0] = f;
+  out->filters[0].id = fid;
+  out->infinite = 0;
+  out->ray_num = 100;
 }
 
 int CommitFilter(const LUMICE_FilterParam& f) {
-  LUMICE_Config config = MakeCommitConfigWithFilter(f);
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillCommitConfigWithFilter(&config, f);
   auto* server = LUMICE_CreateServer();
   EXPECT_NE(server, nullptr);
   int reused = -1;
@@ -1706,7 +1759,9 @@ namespace {
 // struct -> JSON (public LUMICE_ConfigToJson) -> struct (LUMICE_ParseConfigString). Returns
 // the round-tripped filters[0]. Exercises both new 327.1 pieces end to end.
 LUMICE_FilterParam RoundTripFilter(const LUMICE_FilterParam& in) {
-  LUMICE_Config cfg = MakeOneFilterConfig(in);
+  LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
+  FillOneFilterConfig(&cfg, in);
   // Zero-init so that if LUMICE_ConfigToJson unexpectedly fails, the subsequent
   // LUMICE_ParseConfigString sees a valid empty C-string (loud parse error) rather than
   // reading uninitialized stack memory (ASSERT_EQ can't be used in this value-returning
@@ -1716,6 +1771,7 @@ LUMICE_FilterParam RoundTripFilter(const LUMICE_FilterParam& in) {
   EXPECT_EQ(LUMICE_ConfigToJson(&cfg, buf, sizeof(buf), &len), LUMICE_OK);
   EXPECT_LT(len, sizeof(buf));  // these small configs never truncate
   LUMICE_Config out{};
+  lumice::ConfigColorGuard out_guard(out);
   EXPECT_EQ(LUMICE_ParseConfigString(buf, &out), LUMICE_OK);
   EXPECT_EQ(out.filter_count, 1);
   return out.filters[0];
@@ -1820,6 +1876,7 @@ TEST(StructFilterParse, NonRaypathTypesNoLongerRejected) {
   auto json = FullConfigWithFilterJson(
       { { "id", 1 }, { "action", "filter_in" }, { "type", "entry_exit" }, { "entry", 3 }, { "exit", 5 } });
   LUMICE_Config out{};
+  lumice::ConfigColorGuard out_guard(out);
   EXPECT_EQ(LUMICE_ParseConfigString(json.c_str(), &out), LUMICE_OK);
   ASSERT_GE(out.filter_count, 1);
   EXPECT_EQ(out.filters[0].type, LUMICE_FILTER_TYPE_ENTRY_EXIT);
@@ -1834,6 +1891,7 @@ TEST(StructFilterParse, ComplexWithoutCompositionRejected) {
   // filter missing its required "composition" array is rejected with MISSING_FIELD.
   auto json = FullConfigWithFilterJson({ { "id", 1 }, { "action", "filter_in" }, { "type", "complex" } });
   LUMICE_Config out{};
+  lumice::ConfigColorGuard out_guard(out);
   EXPECT_EQ(LUMICE_ParseConfigString(json.c_str(), &out), LUMICE_ERR_MISSING_FIELD);
 }
 
@@ -1841,6 +1899,7 @@ TEST(StructFilterParse, UnknownTypeRejected) {
   // The default branch also covers arbitrary unknown type strings (not just "complex").
   auto json = FullConfigWithFilterJson({ { "id", 1 }, { "action", "filter_in" }, { "type", "bogus" } });
   LUMICE_Config out{};
+  lumice::ConfigColorGuard out_guard(out);
   EXPECT_EQ(LUMICE_ParseConfigString(json.c_str(), &out), LUMICE_ERR_INVALID_VALUE);
 }
 
@@ -1852,6 +1911,7 @@ TEST(StructFilterParse, IllegalEntryExitValuePassesThroughLikeCore) {
   auto json = FullConfigWithFilterJson(
       { { "id", 1 }, { "action", "filter_in" }, { "type", "entry_exit" }, { "entry", 3 }, { "min_len", 0 } });
   LUMICE_Config out{};
+  lumice::ConfigColorGuard out_guard(out);
   EXPECT_EQ(LUMICE_ParseConfigString(json.c_str(), &out), LUMICE_OK);
   ASSERT_GE(out.filter_count, 1);
   EXPECT_EQ(out.filters[0].ee_min_len, 0);  // stored verbatim, not normalized/rejected here
@@ -1868,6 +1928,7 @@ void ExpectParseMatchesCore(const nlohmann::json& jf) {
   nlohmann::json core_out = fc;
   // my path: ParseConfigString -> struct -> LUMICE_ConfigToJson -> filter[0]
   LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
   ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithFilterJson(jf).c_str(), &cfg), LUMICE_OK);
   char buf[8192];
   size_t len = 0;
@@ -1923,7 +1984,9 @@ TEST(StructFilterParse, ConfigToJsonBufferTruncationContract) {
   f.raypath_count = 2;
   f.raypath[0] = 3;
   f.raypath[1] = 5;
-  LUMICE_Config cfg = MakeOneFilterConfig(f);
+  LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
+  FillOneFilterConfig(&cfg, f);
 
   // NULL config -> NULL_ARG.
   size_t tmp = 0;
@@ -2001,6 +2064,8 @@ void ExpectComplexMatchesCore(const nlohmann::json& filter_array, int complex_id
   nlohmann::json core_j = fc;  // core to_json
 
   LUMICE_Config cfg{};
+
+  lumice::ConfigColorGuard cfg_guard(cfg);
   ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filter_array).c_str(), &cfg), LUMICE_OK);
   char buf[16384];
   size_t len = 0;
@@ -2051,6 +2116,7 @@ TEST(StructFilterComplex, StructRoundTrip) {
   // Build a complex config struct directly, round-trip through the public serialize+parse
   // APIs, and assert the composition survives (clause/term/id fidelity).
   LUMICE_Config in{};
+  lumice::ConfigColorGuard in_guard(in);
   in.filter_count = 3;
   in.filters[0].id = 1;
   in.filters[0].type = LUMICE_FILTER_TYPE_RAYPATH;
@@ -2078,6 +2144,7 @@ TEST(StructFilterComplex, StructRoundTrip) {
   size_t len = 0;
   ASSERT_EQ(LUMICE_ConfigToJson(&in, buf, sizeof(buf), &len), LUMICE_OK);
   LUMICE_Config out{};
+  lumice::ConfigColorGuard out_guard(out);
   ASSERT_EQ(LUMICE_ParseConfigString(buf, &out), LUMICE_OK);
 
   ASSERT_EQ(out.filter_count, 3);
@@ -2099,6 +2166,7 @@ TEST(StructFilterComplex, CommitStructEndToEnd) {
       { { "id", 3 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 1, 2 } } },
   });
   LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
   ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_OK);
   cfg.infinite = 0;
   cfg.ray_num = 100;
@@ -2124,6 +2192,7 @@ TEST(StructFilterComplex, ComplexFilterCommitReusesOnNonRendererChange) {
       { { "id", 3 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 1, 2 } } },
   });
   LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
   ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_OK);
   cfg.infinite = 0;
   cfg.ray_num = 100;
@@ -2150,6 +2219,7 @@ TEST(StructFilterComplex, DanglingReferenceRejected) {
       { { "id", 3 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 99 } } },  // 99 not defined
   });
   LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
   EXPECT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_ERR_INVALID_CONFIG);
 }
 
@@ -2161,6 +2231,7 @@ TEST(StructFilterComplex, ReferenceToComplexRejected) {
       { { "id", 3 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 2 } } },  // refs complex 2
   });
   LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
   EXPECT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_ERR_INVALID_CONFIG);
 }
 
@@ -2178,6 +2249,7 @@ TEST(StructFilterComplex, TooManyTermsRejected) {
                       { "type", "complex" },
                       { "composition", nlohmann::json::array({ big_clause }) } });
   LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
   EXPECT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_ERR_INVALID_CONFIG);
 }
 
@@ -2192,6 +2264,7 @@ TEST(StructFilterComplex, TooManyClausesRejected) {
       { { "id", 2 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", comp } },
   });
   LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
   EXPECT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_ERR_INVALID_CONFIG);
 }
 
@@ -2205,6 +2278,7 @@ TEST(StructFilterComplex, TooManyCompositionsRejected) {
         { { "id", 100 + i }, { "action", "filter_in" }, { "type", "complex" }, { "composition", { 1 } } });
   }
   LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
   EXPECT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_ERR_INVALID_CONFIG);
 }
 
@@ -2215,6 +2289,7 @@ TEST(StructFilterComplex, EmptyCompositionAccepted) {
       { { "id", 2 }, { "action", "filter_in" }, { "type", "complex" }, { "composition", nlohmann::json::array() } },
   });
   LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
   ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_OK);
   ASSERT_GE(cfg.filter_count, 2);
   EXPECT_EQ(cfg.filters[1].type, LUMICE_FILTER_TYPE_COMPLEX);
@@ -2231,12 +2306,14 @@ TEST(StructFilterComplex, EmptyCompositionAccepted) {
 namespace {
 
 // Minimal LUMICE_Config carrying exactly one color class, for ConfigToJson emit assertions.
-LUMICE_Config MakeOneColorClassConfig(const LUMICE_ColorClass& cls, int mode = LUMICE_COLOR_MODE_DOMINANT) {
-  LUMICE_Config config{};
-  config.raypath_color_count = 1;
-  config.raypath_color[0] = cls;
-  config.raypath_color_mode = mode;
-  return config;
+// task-344: `out` must be a caller-owned LUMICE_Config with a lifetime-bound
+// lumice::ConfigColorGuard already attached. This function allocates raypath_color via
+// LUMICE_ConfigCreateColorClasses on `out` — the guard's destructor releases it.
+void FillOneColorClassConfig(LUMICE_Config* out, const LUMICE_ColorClass& cls, int mode = LUMICE_COLOR_MODE_DOMINANT) {
+  LUMICE_ColorClass* classes = LUMICE_ConfigCreateColorClasses(out, 1);
+  ASSERT_NE(classes, nullptr);
+  classes[0] = cls;
+  out->raypath_color_mode = mode;
 }
 
 // A whole-crystal (match-all) class on {layer 0, crystal 1}: predicate zero-init => UNSET =>
@@ -2306,7 +2383,10 @@ std::string MakeColorSimConfigJson() {
 // ---- Emit shape (StructColorClassEmit) ----
 
 TEST(StructColorClassEmit, MatchAllDefaultOmitsPredicateType) {
-  auto root = ConfigToJson(MakeOneColorClassConfig(MakeWholeCrystalClass()));
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneColorClassConfig(&config, MakeWholeCrystalClass());
+  auto root = ConfigToJson(config);
   ASSERT_TRUE(root.contains("raypath_color"));
   EXPECT_EQ(root.at("raypath_color").at("mode").get<std::string>(), "dominant");
   const auto& jc = EmitFirstColorClass(root);
@@ -2325,7 +2405,10 @@ TEST(StructColorClassEmit, RaypathPredicate) {
   cls.match[0].predicate.raypath_count = 2;
   cls.match[0].predicate.raypath[0] = 3;
   cls.match[0].predicate.raypath[1] = 5;
-  auto root = ConfigToJson(MakeOneColorClassConfig(cls));
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneColorClassConfig(&config, cls);
+  auto root = ConfigToJson(config);
   const auto& ref = EmitFirstColorClass(root).at("match").at(0);
   EXPECT_EQ(JsonKeySet(ref), (std::set<std::string>{ "layer", "crystal", "type", "raypath" }));
   EXPECT_EQ(ref.at("type").get<std::string>(), "raypath");
@@ -2341,7 +2424,10 @@ TEST(StructColorClassEmit, EntryExitPredicateAllFields) {
   cls.match[0].predicate.ee_exit = 5;
   cls.match[0].predicate.ee_min_len = 2;
   cls.match[0].predicate.ee_max_len = 8;
-  auto root = ConfigToJson(MakeOneColorClassConfig(cls));
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneColorClassConfig(&config, cls);
+  auto root = ConfigToJson(config);
   const auto& ref = EmitFirstColorClass(root).at("match").at(0);
   EXPECT_EQ(JsonKeySet(ref),
             (std::set<std::string>{ "layer", "crystal", "type", "entry", "exit", "min_len", "max_len" }));
@@ -2359,7 +2445,10 @@ TEST(StructColorClassEmit, EntryExitWildcardsOmitted) {
   cls.match[0].predicate.ee_exit = -1;
   cls.match[0].predicate.ee_min_len = 1;
   cls.match[0].predicate.ee_max_len = -1;
-  auto root = ConfigToJson(MakeOneColorClassConfig(cls));
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneColorClassConfig(&config, cls);
+  auto root = ConfigToJson(config);
   const auto& ref = EmitFirstColorClass(root).at("match").at(0);
   EXPECT_EQ(JsonKeySet(ref), (std::set<std::string>{ "layer", "crystal", "type" }));
   EXPECT_EQ(ref.at("type").get<std::string>(), "entry_exit");
@@ -2371,7 +2460,10 @@ TEST(StructColorClassEmit, DirectionPredicate) {
   cls.match[0].predicate.dir_az = 120.0f;
   cls.match[0].predicate.dir_el = -15.0f;
   cls.match[0].predicate.dir_radii = 2.5f;
-  auto root = ConfigToJson(MakeOneColorClassConfig(cls));
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneColorClassConfig(&config, cls);
+  auto root = ConfigToJson(config);
   const auto& ref = EmitFirstColorClass(root).at("match").at(0);
   EXPECT_EQ(JsonKeySet(ref), (std::set<std::string>{ "layer", "crystal", "type", "az", "el", "radii" }));
   EXPECT_EQ(ref.at("type").get<std::string>(), "direction");
@@ -2384,7 +2476,10 @@ TEST(StructColorClassEmit, CrystalPredicate) {
   LUMICE_ColorClass cls = MakeWholeCrystalClass();
   cls.match[0].predicate.type = LUMICE_FILTER_TYPE_CRYSTAL;
   cls.match[0].predicate.crystal_id = 7;
-  auto root = ConfigToJson(MakeOneColorClassConfig(cls));
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneColorClassConfig(&config, cls);
+  auto root = ConfigToJson(config);
   const auto& ref = EmitFirstColorClass(root).at("match").at(0);
   EXPECT_EQ(JsonKeySet(ref), (std::set<std::string>{ "layer", "crystal", "type", "crystal_id" }));
   EXPECT_EQ(ref.at("type").get<std::string>(), "crystal");
@@ -2396,7 +2491,10 @@ TEST(StructColorClassEmit, CombineAllVisibleFalseSoloTrueEmitted) {
   cls.combine = LUMICE_COLOR_COMBINE_ALL;
   cls.visible = 0;  // A4: zero-init default would also be 0 (invisible)
   cls.solo = 1;
-  auto root = ConfigToJson(MakeOneColorClassConfig(cls));
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneColorClassConfig(&config, cls);
+  auto root = ConfigToJson(config);
   const auto& jc = EmitFirstColorClass(root);
   EXPECT_EQ(jc.at("combine").get<std::string>(), "all");
   EXPECT_FALSE(jc.at("visible").get<bool>());
@@ -2409,7 +2507,10 @@ TEST(StructColorClassEmit, ZeroInitClassIsInvisible) {
   LUMICE_ColorClass cls{};
   cls.match_count = 1;
   cls.match[0].crystal = 1;
-  auto root = ConfigToJson(MakeOneColorClassConfig(cls));
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneColorClassConfig(&config, cls);
+  auto root = ConfigToJson(config);
   const auto& jc = EmitFirstColorClass(root);
   ASSERT_TRUE(jc.contains("visible"));
   EXPECT_FALSE(jc.at("visible").get<bool>());
@@ -2418,16 +2519,27 @@ TEST(StructColorClassEmit, ZeroInitClassIsInvisible) {
 TEST(StructColorClassEmit, ZeroCountOmitsKey) {
   // AC4: no color classes => no "raypath_color" key => JSON byte-shape identical to pre-v4.7.
   LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
   config.raypath_color_count = 0;
   auto root = ConfigToJson(config);
   EXPECT_FALSE(root.contains("raypath_color"));
 }
 
 TEST(StructColorClassEmit, ModeAdditiveAndPainterEmitted) {
-  auto add = ConfigToJson(MakeOneColorClassConfig(MakeWholeCrystalClass(), LUMICE_COLOR_MODE_ADDITIVE));
-  EXPECT_EQ(add.at("raypath_color").at("mode").get<std::string>(), "additive");
-  auto pnt = ConfigToJson(MakeOneColorClassConfig(MakeWholeCrystalClass(), LUMICE_COLOR_MODE_PAINTER));
-  EXPECT_EQ(pnt.at("raypath_color").at("mode").get<std::string>(), "painter");
+  {
+    LUMICE_Config config{};
+    lumice::ConfigColorGuard config_guard(config);
+    FillOneColorClassConfig(&config, MakeWholeCrystalClass(), LUMICE_COLOR_MODE_ADDITIVE);
+    auto add = ConfigToJson(config);
+    EXPECT_EQ(add.at("raypath_color").at("mode").get<std::string>(), "additive");
+  }
+  {
+    LUMICE_Config config{};
+    lumice::ConfigColorGuard config_guard(config);
+    FillOneColorClassConfig(&config, MakeWholeCrystalClass(), LUMICE_COLOR_MODE_PAINTER);
+    auto pnt = ConfigToJson(config);
+    EXPECT_EQ(pnt.at("raypath_color").at("mode").get<std::string>(), "painter");
+  }
 }
 
 // ---- Emit/parse isomorphism cross-checked against core (StructColorClassEmitIsomorphism) ----
@@ -2456,6 +2568,8 @@ TEST(StructColorClassEmitIsomorphism, RoundTripThroughCore) {
   nlohmann::json core_src = from_src;  // core canonical form
 
   LUMICE_Config cfg{};
+
+  lumice::ConfigColorGuard cfg_guard(cfg);
   ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithRaypathColorJson(rc).c_str(), &cfg), LUMICE_OK);
   ASSERT_EQ(cfg.raypath_color_count, 2);
   ASSERT_EQ(cfg.raypath_color_mode, LUMICE_COLOR_MODE_ADDITIVE);
@@ -2472,6 +2586,7 @@ TEST(ParseConfigApi, RaypathColorArrayFormParsed) {
   nlohmann::json rc =
       nlohmann::json::array({ ColorClassJson({ 1.0f, 0.0f, 0.0f }, nlohmann::json::array({ ColorRefJson(0, 1) })) });
   LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
   ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithRaypathColorJson(rc).c_str(), &cfg), LUMICE_OK);
   EXPECT_EQ(cfg.raypath_color_count, 1);
   EXPECT_EQ(cfg.raypath_color_mode, LUMICE_COLOR_MODE_DOMINANT);  // bare array => dominant
@@ -2491,6 +2606,7 @@ TEST(ParseConfigApi, RaypathColorObjectFormParsed) {
   c0["solo"] = true;
   rc["classes"] = nlohmann::json::array({ c0 });
   LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
   ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithRaypathColorJson(rc).c_str(), &cfg), LUMICE_OK);
   EXPECT_EQ(cfg.raypath_color_count, 1);
   EXPECT_EQ(cfg.raypath_color_mode, LUMICE_COLOR_MODE_PAINTER);
@@ -2515,6 +2631,7 @@ TEST(ParseConfigApi, RaypathColorPredicateArms) {
   cry["crystal_id"] = 9;
   nlohmann::json rc = nlohmann::json::array({ ColorClassJson({ 1, 0, 0 }, nlohmann::json::array({ ee, dir, cry })) });
   LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
   ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithRaypathColorJson(rc).c_str(), &cfg), LUMICE_OK);
   ASSERT_EQ(cfg.raypath_color_count, 1);
   ASSERT_EQ(cfg.raypath_color[0].match_count, 3);
@@ -2533,6 +2650,7 @@ TEST(ParseConfigApi, RaypathColorComplexPredicateRejected) {
   bad["type"] = "complex";
   nlohmann::json rc = nlohmann::json::array({ ColorClassJson({ 1, 0, 0 }, nlohmann::json::array({ bad })) });
   LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
   EXPECT_EQ(LUMICE_ParseConfigString(FullConfigWithRaypathColorJson(rc).c_str(), &cfg), LUMICE_ERR_INVALID_VALUE);
 }
 
@@ -2544,6 +2662,7 @@ TEST(ParseConfigApi, RaypathColorClassesOverCapRejected) {
   nlohmann::json rc;
   rc["classes"] = classes;
   LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
   EXPECT_EQ(LUMICE_ParseConfigString(FullConfigWithRaypathColorJson(rc).c_str(), &cfg), LUMICE_ERR_INVALID_CONFIG);
 }
 
@@ -2554,6 +2673,7 @@ TEST(ParseConfigApi, RaypathColorRefsOverCapRejected) {
   }
   nlohmann::json rc = nlohmann::json::array({ ColorClassJson({ 1, 0, 0 }, match) });
   LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
   EXPECT_EQ(LUMICE_ParseConfigString(FullConfigWithRaypathColorJson(rc).c_str(), &cfg), LUMICE_ERR_INVALID_CONFIG);
 }
 
@@ -2592,6 +2712,7 @@ TEST(RaypathColorApi, JsonAndStructCommitPixelEquivalent) {
   LUMICE_Server* b = LUMICE_CreateServerEx(&sc);
   ASSERT_NE(b, nullptr);
   LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
   ASSERT_EQ(LUMICE_ParseConfigString(json.c_str(), &cfg), LUMICE_OK);
   ASSERT_EQ(cfg.raypath_color_count, 2);
   ASSERT_EQ(LUMICE_CommitConfigStruct(b, &cfg, nullptr), LUMICE_OK);
@@ -2900,18 +3021,80 @@ TEST(RaypathColorApi, CommitConfigStructOverCapRejected) {
   ASSERT_NE(s, nullptr);
 
   // raypath_color_count over the class cap: rejected before any simulation touch.
+  // v4.8: leave raypath_color == nullptr and only set the count field so the count-bounds
+  // branch fires before any dereference (this test never intended to allocate an
+  // out-of-cap array, and Create would reject the count anyway).
   LUMICE_Config over_classes{};
+  lumice::ConfigColorGuard over_classes_guard(over_classes);
   over_classes.raypath_color_count = LUMICE_MAX_CONFIG_COLOR_CLASSES + 1;
   EXPECT_EQ(LUMICE_CommitConfigStruct(s, &over_classes, nullptr), LUMICE_ERR_INVALID_CONFIG);
 
-  // match_count over the ref cap: rejected in the per-class bounds loop.
+  // match_count over the ref cap: rejected in the per-class bounds loop. v4.8: raypath_color
+  // is a heap pointer, so we must Create a 1-class array before writing match_count — the
+  // previous inline-array pattern (`over_refs.raypath_color[0].match_count = ...`) would
+  // deref a nullptr under the new ABI.
   LUMICE_Config over_refs{};
-  over_refs.raypath_color_count = 1;
-  over_refs.raypath_color[0].match_count = LUMICE_MAX_CONFIG_COLOR_REFS + 1;
+  lumice::ConfigColorGuard over_refs_guard(over_refs);
+  LUMICE_ColorClass* classes = LUMICE_ConfigCreateColorClasses(&over_refs, 1);
+  ASSERT_NE(classes, nullptr);
+  classes[0].match_count = LUMICE_MAX_CONFIG_COLOR_REFS + 1;
   EXPECT_EQ(LUMICE_CommitConfigStruct(s, &over_refs, nullptr), LUMICE_ERR_INVALID_CONFIG);
 
   LUMICE_StopServer(s);
   LUMICE_DestroyServer(s);
+}
+
+// task-344 regression 1: v4.8 ABI added a defensive null check to LUMICE_CommitConfigStruct
+// so the per-class match_count bounds loop never dereferences a null raypath_color pointer.
+// Trigger it by setting count > 0 while leaving the pointer nullptr.
+TEST(RaypathColorApi, CommitConfigStructRejectsNullArrayWithNonzeroCount) {
+  LUMICE_ServerConfig sc{};
+  sc.num_workers = 1;
+  LUMICE_Server* s = LUMICE_CreateServerEx(&sc);
+  ASSERT_NE(s, nullptr);
+
+  LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
+  cfg.raypath_color_count = 1;  // > 0
+  cfg.raypath_color = nullptr;  // but no allocation
+  EXPECT_EQ(LUMICE_CommitConfigStruct(s, &cfg, nullptr), LUMICE_ERR_INVALID_CONFIG);
+
+  LUMICE_StopServer(s);
+  LUMICE_DestroyServer(s);
+}
+
+// task-344 regression 2: connect JsonToConfig's Release-before-memset fix. Parsing two
+// different color configs into the same LUMICE_Config must land the SECOND set of classes
+// verbatim (i.e. the first parse's classes must not leak into the second). This test only
+// verifies value semantics — removing the added Release call would still let the second
+// parse pass (it just leaks the first allocation). Leak detection itself lives in the
+// task's plan §6 valgrind cross-check, not here.
+TEST(RaypathColorApi, ConsecutiveParseIntoSameConfigOverridesCorrectly) {
+  LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
+
+  // First parse: 2 classes.
+  nlohmann::json c0 = ColorClassJson({ 1.0f, 0.0f, 0.0f }, nlohmann::json::array({ ColorRefJson(0, 1) }));
+  nlohmann::json c1 = ColorClassJson({ 0.0f, 1.0f, 0.0f }, nlohmann::json::array({ ColorRefJson(0, 1) }));
+  nlohmann::json rc_two;
+  rc_two["mode"] = "dominant";
+  rc_two["classes"] = nlohmann::json::array({ c0, c1 });
+  ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithRaypathColorJson(rc_two).c_str(), &cfg), LUMICE_OK);
+  ASSERT_EQ(cfg.raypath_color_count, 2);
+  ASSERT_NE(cfg.raypath_color, nullptr);
+
+  // Second parse into the SAME cfg: only 1 class, with a distinct color.
+  nlohmann::json c2 = ColorClassJson({ 0.0f, 0.0f, 1.0f }, nlohmann::json::array({ ColorRefJson(0, 1) }));
+  nlohmann::json rc_one;
+  rc_one["mode"] = "additive";
+  rc_one["classes"] = nlohmann::json::array({ c2 });
+  ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithRaypathColorJson(rc_one).c_str(), &cfg), LUMICE_OK);
+  ASSERT_EQ(cfg.raypath_color_count, 1);
+  ASSERT_NE(cfg.raypath_color, nullptr);
+  EXPECT_EQ(cfg.raypath_color_mode, LUMICE_COLOR_MODE_ADDITIVE);
+  EXPECT_FLOAT_EQ(cfg.raypath_color[0].color[0], 0.0f);
+  EXPECT_FLOAT_EQ(cfg.raypath_color[0].color[1], 0.0f);
+  EXPECT_FLOAT_EQ(cfg.raypath_color[0].color[2], 1.0f);
 }
 
 // task-342.3 Step 2: LUMICE_GetColorClassSignal (AC4 empty-arc detector).
