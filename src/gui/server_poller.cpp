@@ -219,20 +219,6 @@ void ServerPoller::PollOnce() {
   LUMICE_GetRawXyzResults(server, xyz_results, 1);
   const unsigned long long captured_xyz_generation = xyz_results[0].snapshot_generation;
 
-  // task-342.4 Step 2: composite (raypath_color) surface — poll the second
-  // consumer in the same tick. Step 1 unified DoSnapshot() makes the two calls
-  // agree on *which* dirty event each one that lands exactly here consumes,
-  // but the background producer can commit and re-mark dirty again in the gap
-  // between this call and the RawXyz call above — that gap is what the
-  // generation-drift recheck below guards against (code-review-01 Major 1).
-  // The img_buffer sentinel (NULL when no raypath_color is configured;
-  // non-NULL when there is at least one colored consumer with a composite
-  // this generation) IS the raypath-color-active detector — no cross-thread
-  // state needs to be threaded through from the GUI (plan §3 keypoint 2).
-  LUMICE_RenderResult composite_results[2]{};
-  LUMICE_GetCompositeResults(server, composite_results, 1);
-  const bool composite_active = composite_results[0].img_buffer != nullptr;
-
   // Check if this is genuinely new snapshot data (generation changed)
   bool has_new_snapshot = xyz_results[0].xyz_buffer != nullptr && captured_xyz_generation != last_generation_;
 
@@ -278,6 +264,14 @@ void ServerPoller::PollOnce() {
       auto payload = std::make_shared<TexturePayload>();
       size_t float_count = static_cast<size_t>(xyz_results[0].img_width) * xyz_results[0].img_height * 3;
       payload->xyz_data.resize(float_count);
+      // Copy xyz bytes BEFORE any further Get*Results call (see GetCompositeResults()
+      // call below). code-review-02 Major 1: snapshot_xyz_ is a persistent
+      // per-RenderConsumer buffer that PrepareSnapshot() overwrites IN PLACE (not
+      // reallocated) — xyz_results[0].xyz_buffer aliases it, so a Get*Results call
+      // made after capturing this pointer but before this memcpy could silently
+      // rewrite the memory out from under us if it consumes a newly-landed dirty
+      // event. Copying first eliminates that window entirely rather than trying to
+      // detect it after the fact.
       std::memcpy(payload->xyz_data.data(), xyz_results[0].xyz_buffer, float_count * sizeof(float));
       payload->width = xyz_results[0].img_width;
       payload->height = xyz_results[0].img_height;
@@ -287,12 +281,19 @@ void ServerPoller::PollOnce() {
       payload->texture_ray_count = cached_stats.sim_ray_num;
       payload->p99_y = ComputeP99Y(payload->xyz_data, payload->width, payload->height, kEvAutoDownsampleFactor);
       payload->payload_epoch = xyz_results[0].epoch;
-      // task-342.4 Step 2: if raypath_color is active, copy the composite RGB
-      // bytes alongside the XYZ float buffer (and guard against the two Get*Results
-      // calls straddling two different materializations — code-review-01 Major 1).
-      // The main-thread upload path (SyncFromPoller) branches on is_composite to
-      // pick UploadTexture vs UploadXyzTexture.
-      if (composite_active) {
+
+      // task-342.4 Step 2: composite (raypath_color) surface — poll the second
+      // consumer in the same tick, now that the xyz bytes are safely copied. The
+      // img_buffer sentinel (NULL when no raypath_color is configured; non-NULL
+      // when there is at least one colored consumer with a composite this
+      // generation) IS the raypath-color-active detector — no cross-thread state
+      // needs to be threaded through from the GUI (plan §3 keypoint 2).
+      LUMICE_RenderResult composite_results[2]{};
+      LUMICE_GetCompositeResults(server, composite_results, 1);
+      if (composite_results[0].img_buffer != nullptr) {
+        // Bytes copied and generation-drift-checked inside — see
+        // PopulateCompositePayload's doc comment (code-review-01 Major 1 /
+        // code-review-02 Minor 1).
         PopulateCompositePayload(server, composite_results[0], captured_xyz_generation, payload.get());
       }
       // (payload is default-constructed with rgb_data empty + is_composite=false,

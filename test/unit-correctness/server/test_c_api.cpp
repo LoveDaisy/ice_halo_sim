@@ -2755,6 +2755,71 @@ TEST(RaypathColorApi, CompositeThenRawXyzGenerationStillAdvances) {
   LUMICE_DestroyServer(s);
 }
 
+// code-review-02 Major 2 regression: deterministically reproduce the generation-drift
+// scenario ServerPoller::PopulateCompositePayload() (server_poller.cpp) guards against — a
+// Get*Results call landing strictly between an initial LUMICE_GetRawXyzResults() capture and
+// a later re-check must be observable as a newer snapshot_generation, and that drift must be
+// exactly what a "recheck != captured" comparison flags. Uses LUMICE_SetRaypathColors() to
+// deterministically arm snapshot_dirty_ without depending on background-thread timing (AC2:
+// it forces the next DoSnapshot() to re-run even without new ray data) — this is functionally
+// identical to a background batch commit landing in that window, but reproducible on demand.
+TEST(RaypathColorApi, CompositeGenerationDriftDetectableViaRecheck) {
+  LUMICE_ServerConfig sc{};
+  sc.num_workers = 1;
+  sc.sim_seed = 8181u;
+  LUMICE_Server* s = LUMICE_CreateServerEx(&sc);
+  ASSERT_NE(s, nullptr);
+  ASSERT_EQ(LUMICE_CommitConfig(s, MakeColorSimConfigJson().c_str()), LUMICE_OK);
+  ASSERT_TRUE(WaitForIdle(s, 10000));
+
+  // Baseline (no drift armed yet): mirrors PopulateCompositePayload's happy path, where the
+  // recheck observes the same generation that was captured before the composite call.
+  LUMICE_RawXyzResult raw1[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetRawXyzResults(s, raw1, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  const unsigned long long captured_xyz_generation = raw1[0].snapshot_generation;
+
+  LUMICE_RenderResult comp1[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetCompositeResults(s, comp1, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_NE(comp1[0].img_buffer, nullptr);
+  const size_t nbytes = static_cast<size_t>(comp1[0].img_width) * static_cast<size_t>(comp1[0].img_height) * 3;
+  std::vector<uint8_t> comp1_px(comp1[0].img_buffer, comp1[0].img_buffer + nbytes);
+
+  LUMICE_RawXyzResult regen_check1[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetRawXyzResults(s, regen_check1, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  EXPECT_EQ(regen_check1[0].snapshot_generation, captured_xyz_generation)
+      << "no drift armed yet: recheck must observe the same generation that was captured before Composite";
+
+  // Deterministically arm a new dirty event exactly in the window PopulateCompositePayload's
+  // recheck is meant to catch: after xyz was "captured" above, but before the recheck below.
+  LUMICE_ColorClassDisplay disp[2]{};
+  disp[0].color[2] = 1.0f;  // class0 red->blue
+  disp[0].visible = 1;
+  disp[1].color[2] = 1.0f;  // class1 green->blue
+  disp[1].visible = 1;
+  ASSERT_EQ(LUMICE_SetRaypathColors(s, disp, 2, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
+
+  // Plays the role of PollOnce()'s LUMICE_GetCompositeResults(): consumes the freshly-armed
+  // dirty flag and materializes a generation newer than captured_xyz_generation.
+  LUMICE_RenderResult comp2[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetCompositeResults(s, comp2, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_NE(comp2[0].img_buffer, nullptr);
+  EXPECT_NE(std::memcmp(comp1_px.data(), comp2[0].img_buffer, nbytes), 0)
+      << "comp2 must reflect the recolor, proving it genuinely belongs to a newer generation "
+         "than captured_xyz_generation rather than a stale cache hit";
+
+  // Plays the role of PopulateCompositePayload's regen_check: must observe a generation newer
+  // than captured_xyz_generation — exactly the condition PopulateCompositePayload uses to
+  // decide whether to drop this tick's composite (server_poller.cpp).
+  LUMICE_RawXyzResult regen_check2[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetRawXyzResults(s, regen_check2, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  EXPECT_GT(regen_check2[0].snapshot_generation, captured_xyz_generation)
+      << "drift must be detectable: recheck.snapshot_generation != captured_xyz_generation is "
+         "the exact condition PopulateCompositePayload checks to drop a mismatched composite";
+
+  LUMICE_StopServer(s);
+  LUMICE_DestroyServer(s);
+}
+
 TEST(RaypathColorApi, SetRaypathColorsRejectsBadArgsAllOrNothing) {
   // AC3: class_count mismatch and non-permutation z_order are rejected without mutating state.
   LUMICE_ServerConfig sc{};
