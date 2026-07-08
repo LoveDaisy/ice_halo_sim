@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -589,6 +590,57 @@ LUMICE_ErrorCode LUMICE_GetColorClassSignal(LUMICE_Server* server, int* out_flag
 }
 
 
+// =============== Raypath Color Classes lifecycle (task-344, BREAKING v4.8) ===============
+// See lumice.h for the full ownership contract. Uses calloc/free (not new[]/delete[])
+// deliberately: LUMICE_Config crosses the C ABI boundary and non-C++ bindings must be
+// able to release the raypath_color allocation without a C++ runtime — a documented
+// exception to the "no raw new/delete" project rule (AGENTS.md).
+LUMICE_ColorClass* LUMICE_ConfigCreateColorClasses(LUMICE_Config* cfg, int count) {
+  if (!cfg) {
+    return nullptr;
+  }
+  if (count < 0 || count > LUMICE_MAX_CONFIG_COLOR_CLASSES) {
+    return nullptr;
+  }
+  // Create-or-replace: any existing allocation must be released before we overwrite the
+  // pointer. Guards the "consecutive Create with different counts" pattern from leaking
+  // the previous allocation, and pairs with the memset-before-Release fix in JsonToConfig /
+  // FillLumiceConfig (both call Release explicitly to make the intent obvious).
+  if (cfg->raypath_color) {
+    std::free(cfg->raypath_color);  // NOLINT(cppcoreguidelines-no-malloc): C ABI boundary; see block comment above.
+    cfg->raypath_color = nullptr;
+  }
+  if (count == 0) {
+    // Explicitly skip calloc(0, ...) — implementation-defined behavior. Zero classes is a
+    // valid state (mono-only); leave pointer nullptr and count 0.
+    cfg->raypath_color_count = 0;
+    return nullptr;
+  }
+  auto* buf = static_cast<LUMICE_ColorClass*>(
+      std::calloc(  // NOLINT(cppcoreguidelines-no-malloc): C ABI boundary; see block comment above.
+          static_cast<size_t>(count), sizeof(LUMICE_ColorClass)));
+  if (!buf) {
+    // OOM: leave cfg in the "no classes" state, callers must check the return value.
+    cfg->raypath_color_count = 0;
+    return nullptr;
+  }
+  cfg->raypath_color = buf;
+  cfg->raypath_color_count = count;
+  return buf;
+}
+
+void LUMICE_ConfigReleaseColorClasses(LUMICE_Config* cfg) {
+  if (!cfg) {
+    return;
+  }
+  if (cfg->raypath_color) {
+    std::free(cfg->raypath_color);  // NOLINT(cppcoreguidelines-no-malloc): C ABI boundary; see block comment above.
+    cfg->raypath_color = nullptr;
+  }
+  cfg->raypath_color_count = 0;
+}
+
+
 // Struct->JSON path: see doc/capi-lifecycle-architecture.md §6.2.
 LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_Config* config, int* out_reused) {
   if (!server || !config) {
@@ -600,6 +652,11 @@ LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_C
       config->renderer_count > LUMICE_MAX_CONFIG_RENDERERS ||
       config->scatter_count > LUMICE_MAX_CONFIG_SCATTER_LAYERS || config->raypath_color_count < 0 ||
       config->raypath_color_count > LUMICE_MAX_CONFIG_COLOR_CLASSES) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  // v4.8: raypath_color is a heap pointer; reject the inconsistent state where count > 0
+  // but the pointer is null (would dereference null on the loop below).
+  if (config->raypath_color_count > 0 && config->raypath_color == nullptr) {
     return LUMICE_ERR_INVALID_CONFIG;
   }
   for (int i = 0; i < config->raypath_color_count; i++) {
@@ -985,24 +1042,36 @@ static LUMICE_ErrorCode JsonToRaypathColor(const nlohmann::json& j, LUMICE_Confi
   }
 
   if (classes_arr == nullptr) {
-    out->raypath_color_count = 0;
+    // Explicitly clear any prior allocation (Release is null-safe).
+    LUMICE_ConfigReleaseColorClasses(out);
     return LUMICE_OK;
   }
   if (static_cast<int>(classes_arr->size()) > LUMICE_MAX_CONFIG_COLOR_CLASSES) {
     return LUMICE_ERR_INVALID_CONFIG;
   }
   const int count = static_cast<int>(classes_arr->size());
-  // Validate/fill each class BEFORE publishing the count, so a mid-array failure returns an
-  // error without leaving the struct in a half-populated state (same discipline as
-  // spectrum_entries above).
-  out->raypath_color_count = 0;
+  if (count == 0) {
+    LUMICE_ConfigReleaseColorClasses(out);
+    return LUMICE_OK;
+  }
+  // Implicit allocation (task-344): callers of LUMICE_ParseConfigString/File cannot know
+  // the class count before parsing, so we allocate on their behalf here. Ownership is
+  // transferred to `out`; the caller must eventually call
+  // LUMICE_ConfigReleaseColorClasses (or use a RAII guard).
+  LUMICE_ColorClass* classes = LUMICE_ConfigCreateColorClasses(out, count);
+  if (!classes) {
+    // count is bounded above by LUMICE_MAX_CONFIG_COLOR_CLASSES; only OOM reaches here.
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  // Validate/fill each class. On mid-array failure release the allocation so the caller
+  // does not observe a half-populated array (mirrors the spectrum_entries discipline).
   for (int i = 0; i < count; i++) {
-    auto err = JsonToColorClass((*classes_arr)[i], &out->raypath_color[i]);
+    auto err = JsonToColorClass((*classes_arr)[i], &classes[i]);
     if (err != LUMICE_OK) {
+      LUMICE_ConfigReleaseColorClasses(out);
       return err;
     }
   }
-  out->raypath_color_count = count;
   return LUMICE_OK;
 }
 
@@ -1195,6 +1264,10 @@ static LUMICE_ErrorCode JsonToComplexComposition(const nlohmann::json& fj, LUMIC
 }
 
 static LUMICE_ErrorCode JsonToConfig(const nlohmann::json& root, LUMICE_Config* out) {
+  // v4.8: raypath_color is an owning heap pointer. If `out` was reused across two Parse
+  // calls, memset would clobber the pointer without freeing it — release first so the
+  // memset that follows sees a defensibly-null field. Release is null-safe / idempotent.
+  LUMICE_ConfigReleaseColorClasses(out);
   std::memset(out, 0, sizeof(LUMICE_Config));
   out->spectrum = "D65";  // Safe default (memset leaves nullptr)
 

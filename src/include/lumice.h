@@ -414,6 +414,18 @@ typedef struct LUMICE_RenderParam_ {
 // BREAKING (v4.7): added raypath_color[]/raypath_color_count/raypath_color_mode for
 // per-raypath color classes (Design 2). Layout changed; callers must recompile.
 // raypath_color_count == 0 → no color classes configured (mono-only, zero regression).
+// BREAKING (v4.8): raypath_color[] is no longer an inline array — it is now a heap-allocated
+// `LUMICE_ColorClass*` owned by this struct. The inline `LUMICE_ColorClass[64]` layout was
+// ~354 KB and pushed `LUMICE_Config` to 467 KB, which overflowed the ImGui test engine's
+// ~512 KB thread stack when two configs coexisted in one function. Callers now allocate via
+// `LUMICE_ConfigCreateColorClasses` and must release via `LUMICE_ConfigReleaseColorClasses`
+// (or via a C++ RAII guard such as `lumice::ConfigColorGuard`; see
+// `src/include/lumice_config_scope.hpp`). Layout changed; callers must recompile.
+//
+// Do not copy this struct by value (assignment, by-value parameter, or storing it in a
+// container) — `raypath_color` is an owning heap pointer; copies alias the same allocation
+// and cause double-free on double Release. Pass `LUMICE_Config*` or `const LUMICE_Config&`
+// instead. See LUMICE_ConfigCreateColorClasses / LUMICE_ConfigReleaseColorClasses.
 typedef struct LUMICE_Config_ {
   // Crystals
   LUMICE_CrystalParam crystals[LUMICE_MAX_CONFIG_CRYSTALS];
@@ -450,11 +462,18 @@ typedef struct LUMICE_Config_ {
   LUMICE_ScatterLayer scattering[LUMICE_MAX_CONFIG_SCATTER_LAYERS];
   int scatter_count;
 
-  // Raypath color classes (Design 2, task-342.2). raypath_color_count == 0 disables the
-  // color path entirely — mono LUMICE_GetRenderResults output is byte-identical to the
-  // pre-v4.7 struct layout. Non-zero enables per-raypath color: LUMICE_GetCompositeResults
-  // returns one composite RGB image per colored renderer.
-  LUMICE_ColorClass raypath_color[LUMICE_MAX_CONFIG_COLOR_CLASSES];
+  // Raypath color classes (Design 2, task-342.2; BREAKING v4.8: heap-allocated pointer).
+  // raypath_color_count == 0 disables the color path entirely — mono
+  // LUMICE_GetRenderResults output is byte-identical to the pre-v4.7 struct layout.
+  // Non-zero enables per-raypath color: LUMICE_GetCompositeResults returns one composite
+  // RGB image per colored renderer.
+  //
+  // Ownership: raypath_color is owned by this LUMICE_Config and must be allocated /
+  // released only through LUMICE_ConfigCreateColorClasses / LUMICE_ConfigReleaseColorClasses.
+  // Zero-initializing this struct (e.g. `LUMICE_Config cfg{};`) leaves raypath_color ==
+  // nullptr / raypath_color_count == 0, which is the "no color classes" state and is safe
+  // to release (Release is idempotent / null-safe).
+  LUMICE_ColorClass* raypath_color;
   int raypath_color_count;
   int raypath_color_mode;  // LUMICE_COLOR_MODE_DOMINANT / _ADDITIVE / _PAINTER
 } LUMICE_Config;
@@ -463,17 +482,55 @@ typedef struct LUMICE_Config_ {
 // it on the stack (unit tests, GUI wrappers). Static assertion fails loudly if a future
 // field addition explodes the size. Bound is a hard ceiling; keep it low enough that
 // Windows' 1 MB default stack still leaves reasonable headroom.
+//
+// v4.8 (task-344): tightened from 768 KB to 160 KB after raypath_color[64] was moved off
+// the inline layout onto the heap. Measured sizeof(LUMICE_Config) drops from 467 KB to
+// ~113 KB (plan §3 point 5); the 160 KB ceiling keeps ~40 % headroom for future fields
+// while still catching accidental re-inlining or unbounded array additions early.
 #if defined(__cplusplus)
-static_assert(sizeof(LUMICE_Config) <= 768u * 1024u,
-              "LUMICE_Config exceeded its 768 KB ABI ceiling — either shrink a field or bump the ceiling deliberately");
+static_assert(sizeof(LUMICE_Config) <= 160u * 1024u,
+              "LUMICE_Config exceeded its 160 KB ABI ceiling — either shrink a field or bump the ceiling deliberately");
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 _Static_assert(
-    sizeof(LUMICE_Config) <= 768u * 1024u,
-    "LUMICE_Config exceeded its 768 KB ABI ceiling — either shrink a field or bump the ceiling deliberately");
+    sizeof(LUMICE_Config) <= 160u * 1024u,
+    "LUMICE_Config exceeded its 160 KB ABI ceiling — either shrink a field or bump the ceiling deliberately");
 #endif
 
 // out_reused: if non-NULL, set to 1 if consumers were reused (no buffer realloc), 0 if rebuilt.
 LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_Config* config, int* out_reused);
+
+// =============== Raypath Color Classes lifecycle (task-344, BREAKING v4.8) ===============
+// Allocate `count` zero-initialized LUMICE_ColorClass entries and attach them to `cfg`.
+// On success, `cfg->raypath_color` points to the new array, `cfg->raypath_color_count` is
+// set to `count`, and the returned pointer aliases `cfg->raypath_color` for the caller to
+// fill.
+//
+// Semantics:
+//   - `cfg == nullptr` → returns nullptr (no side effect).
+//   - `count < 0` or `count > LUMICE_MAX_CONFIG_COLOR_CLASSES` → returns nullptr; `cfg`
+//     is left untouched.
+//   - `count == 0` → releases any existing allocation, sets pointer to nullptr and
+//     count to 0, returns nullptr. This is the "no color classes" state (mono-only).
+//   - `count > 0` → this call is create-or-replace: if `cfg->raypath_color` was already
+//     non-null (e.g. a prior Create call), it is released first, then a fresh
+//     zero-initialized array of `count` entries is allocated. Safe to call multiple times
+//     on the same `cfg` with different counts.
+//   - Allocator is calloc/free; the returned pointer must eventually be released via
+//     LUMICE_ConfigReleaseColorClasses (or its C++ RAII wrapper).
+//
+// Ownership contract: whether the caller invokes Create directly OR indirectly triggers
+// allocation via LUMICE_ParseConfigString / LUMICE_ParseConfigFile (both allocate
+// implicitly based on the parsed JSON), the caller MUST call Release once done with
+// `cfg`. In C++ code, prefer the `lumice::ConfigColorGuard` RAII wrapper in
+// `src/include/lumice_config_scope.hpp`.
+LUMICE_ColorClass* LUMICE_ConfigCreateColorClasses(LUMICE_Config* cfg, int count);
+
+// Release the raypath_color allocation owned by `cfg`, if any. Idempotent and null-safe:
+//   - `cfg == nullptr` → no-op.
+//   - `cfg->raypath_color == nullptr` → clears count only, no free.
+//   - Otherwise → free(cfg->raypath_color), then nullptr / count=0.
+// Safe to call multiple times; safe to call on a freshly zero-initialized LUMICE_Config.
+void LUMICE_ConfigReleaseColorClasses(LUMICE_Config* cfg);
 
 // =============== Raypath Color Display-Time Setter (task-342.2) ===============
 // Display-time appearance of one color class (mutable without re-simulation): the RGB
