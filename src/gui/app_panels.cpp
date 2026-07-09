@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <string>
 
 #include "IconsFontAwesome6.h"
@@ -842,6 +843,54 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     pp.view_proj = BuildPreviewViewProjFromRenderer(rc);
     float ev_total = rc.exposure_offset + g_state.ev_auto;
     pp.exposure.intensity_factor = std::pow(2.0f, ev_total);
+
+    // task-345.3: mirror the mono shader-uniform EV onto the composite bake so
+    // the colored image visibly follows the same EV slider. The plumbing is
+    // orthogonal to the mono path (server keeps a separate display_ev_total_
+    // that only feeds the composite compositor — mono LinearRgbToSrgbU8 output
+    // is untouched).
+    //
+    // Two guards keep this from degrading composite into a per-frame re-bake:
+    //   (1) value guard — only push when ev_total has meaningfully changed
+    //       since the last push (epsilon just above float rounding noise).
+    //       ImGui produces an unchanged slider value on every frame the user
+    //       isn't dragging, so without this guard we'd hit the server ~60x/s
+    //       and force a Phase-2 recomposite each poll.
+    //   (2) off→on transition guard (plan-review Minor #2) — the value guard
+    //       alone has a hole: if the user set EV to non-default while the
+    //       raypath_color list was empty (composite disabled), the "last
+    //       pushed" cache stays at the default and the numeric comparison
+    //       would suppress the push at the moment composite first goes live,
+    //       so the first composite bake would use the SERVER's stale
+    //       display_ev_total_. Track composite-active edges and force-push on
+    //       the false→true transition, WITHOUT resetting the last-pushed
+    //       cache on off (a re-enable at the SAME numeric ev_total still
+    //       fires because the edge condition alone is sufficient).
+    //
+    // No push when no composite is being rendered — saves the round-trip +
+    // poller wake for the CLI-like "no raypath_color" mode where the slider
+    // only drives the mono shader path.
+    {
+      static float s_last_pushed_ev = std::numeric_limits<float>::quiet_NaN();
+      static bool s_last_composite_active = false;
+      constexpr float kCompositeEvPushEpsilon = 1e-4f;
+      const bool composite_active = g_server != nullptr && !g_state.raypath_color.empty();
+      if (composite_active) {
+        const bool edge_on = !s_last_composite_active;
+        const bool value_changed =
+            std::isnan(s_last_pushed_ev) || std::fabs(ev_total - s_last_pushed_ev) > kCompositeEvPushEpsilon;
+        if (edge_on || value_changed) {
+          LUMICE_SetCompositeExposure(g_server, ev_total);
+          // Wake a paused poller so the next frame can pick up the freshly re-baked
+          // composite even after a finite sim has completed (same rationale as the
+          // color-window PushDisplayState path — see task-345.2 (③) in color_window.cpp).
+          // No-op when the poller is already running.
+          g_server_poller.EnsureRunning(g_server);
+          s_last_pushed_ev = ev_total;
+        }
+      }
+      s_last_composite_active = composite_active;
+    }
     float norm_intensity = g_state.snapshot_intensity;
     pp.exposure.intensity_scale = norm_intensity > 0 ? pp.exposure.intensity_factor / norm_intensity : 0.0f;
     // Overlap parameters for dual fisheye texture sampling.

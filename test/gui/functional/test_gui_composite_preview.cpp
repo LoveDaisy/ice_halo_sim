@@ -386,4 +386,124 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     gui::g_server_poller.Stop();
     LUMICE_DestroyServer(server);
   };
+
+  // task-345.3 anchor: LUMICE_SetCompositeExposure applied AFTER a finite completion changes
+  // the composite bytes (mechanistic proof the display-time EV multiplier reaches the
+  // Phase-2 compositor) without touching lifecycle epoch or sim ray count (322 clock
+  // decoupling — same non-restart guarantee as SetRaypathColors, since both share the
+  // snapshot_dirty_ flip pattern). Also confirms the composite-only P99 anchor is populated
+  // through the C API surface (mono getters must leave it at 0).
+  ImGuiTest* t5 =
+      IM_REGISTER_TEST(engine, "gui_composite_preview", "display_time_composite_exposure_reaches_compositor");
+  t5->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    const bool ok = RunToIdleWithData(server, kColorConfig);
+    IM_CHECK(ok);
+    if (!ok) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+
+    LUMICE_SimLifecycleResult lc_before{};
+    IM_CHECK_EQ(LUMICE_GetSimLifecycle(server, &lc_before), LUMICE_OK);
+    IM_CHECK_EQ(lc_before.lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+    const unsigned long long done_epoch = lc_before.epoch;
+
+    LUMICE_RayCount ray_count_before = 0;
+    IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_before), LUMICE_OK);
+
+    // Baseline composite (EV=0 → scale 1.0 → default behavior) via direct C-API read.
+    LUMICE_RenderResult baseline[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, baseline, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(baseline[0].img_buffer != nullptr);
+    const size_t rgb_bytes =
+        static_cast<size_t>(baseline[0].img_width) * static_cast<size_t>(baseline[0].img_height) * 3;
+    std::vector<uint8_t> baseline_rgb(baseline[0].img_buffer, baseline[0].img_buffer + rgb_bytes);
+    // Composite-only P99 anchor must be populated on the composite path.
+    IM_CHECK(baseline[0].composite_p99_y > 0.0f);
+
+    // Mono getter must NOT populate the composite-only anchor field.
+    LUMICE_RenderResult mono_out[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetRenderResults(server, mono_out, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(mono_out[0].img_buffer != nullptr);
+    IM_CHECK_EQ(mono_out[0].composite_p99_y, 0.0f);
+
+    // Push a positive EV → next Get*Results triggers a rebake with 2^ev > 1 → bytes change.
+    IM_CHECK_EQ(LUMICE_SetCompositeExposure(server, 2.0f), LUMICE_OK);
+    LUMICE_RenderResult brighter[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, brighter, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(brighter[0].img_buffer != nullptr);
+    IM_CHECK_EQ(brighter[0].img_width, baseline[0].img_width);
+    IM_CHECK_EQ(brighter[0].img_height, baseline[0].img_height);
+    IM_CHECK(std::memcmp(brighter[0].img_buffer, baseline_rgb.data(), rgb_bytes) != 0);
+    // P99 anchor is over UNEXPOSED lane values — must not move with EV.
+    IM_CHECK_EQ(brighter[0].composite_p99_y, baseline[0].composite_p99_y);
+
+    // Push a negative EV → different bytes from both the baseline and the brighter output.
+    IM_CHECK_EQ(LUMICE_SetCompositeExposure(server, -2.0f), LUMICE_OK);
+    LUMICE_RenderResult dimmer[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, dimmer, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(dimmer[0].img_buffer != nullptr);
+    IM_CHECK(std::memcmp(dimmer[0].img_buffer, baseline_rgb.data(), rgb_bytes) != 0);
+    IM_CHECK(std::memcmp(dimmer[0].img_buffer, brighter[0].img_buffer, rgb_bytes) != 0);
+
+    // Non-restart guarantee (322 clock decoupling): lifecycle epoch + sim ray count both
+    // preserved despite three separate composite re-bakes above.
+    LUMICE_SimLifecycleResult lc_after{};
+    IM_CHECK_EQ(LUMICE_GetSimLifecycle(server, &lc_after), LUMICE_OK);
+    IM_CHECK_EQ(lc_after.lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+    IM_CHECK_EQ(lc_after.epoch, done_epoch);
+    LUMICE_RayCount ray_count_after = 0;
+    IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_after), LUMICE_OK);
+    IM_CHECK(ray_count_after >= ray_count_before);
+
+    LUMICE_DestroyServer(server);
+  };
+
+  // task-345.3 review Minor #2: the "value guard" alone would miss the off→on transition
+  // (composite becomes active while the last-pushed cache equals the current ev_total —
+  // e.g., default 0.0f). This test doesn't exercise the GUI state guard directly (that
+  // lives inside RenderPreviewPanel, not on the C-API surface), but it does anchor the
+  // orthogonal property that makes the guard SAFE to add without semantic risk: setting
+  // EV to the SAME value it was reset to is a no-op at the C-API level and does not
+  // reintroduce restart behavior. If a future refactor collapses the two guards into a
+  // single "only push on value change", this test would still pass — the guard hole is
+  // GUI-side and gets covered by a separate ImGui interaction test rather than a
+  // C-API-level regression.
+  ImGuiTest* t6 =
+      IM_REGISTER_TEST(engine, "gui_composite_preview", "composite_exposure_idempotent_when_value_unchanged");
+  t6->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    const bool ok = RunToIdleWithData(server, kColorConfig);
+    IM_CHECK(ok);
+    if (!ok) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+    LUMICE_SimLifecycleResult lc_before{};
+    IM_CHECK_EQ(LUMICE_GetSimLifecycle(server, &lc_before), LUMICE_OK);
+    const unsigned long long done_epoch = lc_before.epoch;
+
+    // Set the same EV twice — both must return LUMICE_OK, neither must bump the
+    // lifecycle epoch or reset sim ray count.
+    LUMICE_RayCount ray_count_before = 0;
+    IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_before), LUMICE_OK);
+    IM_CHECK_EQ(LUMICE_SetCompositeExposure(server, 1.5f), LUMICE_OK);
+    IM_CHECK_EQ(LUMICE_SetCompositeExposure(server, 1.5f), LUMICE_OK);
+    LUMICE_SimLifecycleResult lc_after{};
+    IM_CHECK_EQ(LUMICE_GetSimLifecycle(server, &lc_after), LUMICE_OK);
+    IM_CHECK_EQ(lc_after.epoch, done_epoch);
+    LUMICE_RayCount ray_count_after = 0;
+    IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_after), LUMICE_OK);
+    IM_CHECK(ray_count_after >= ray_count_before);
+
+    // Null-server rejection.
+    IM_CHECK_EQ(LUMICE_SetCompositeExposure(nullptr, 0.0f), LUMICE_ERR_NULL_ARG);
+
+    LUMICE_DestroyServer(server);
+  };
 }

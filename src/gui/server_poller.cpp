@@ -264,7 +264,6 @@ void ServerPoller::PollOnce() {
       payload->intensity_factor = xyz_results[0].intensity_factor;
       payload->effective_pixels = xyz_results[0].effective_pixels;
       payload->texture_ray_count = cached_stats.sim_ray_num;
-      payload->p99_y = ComputeP99Y(payload->xyz_data, payload->width, payload->height, kEvAutoDownsampleFactor);
       payload->payload_epoch = xyz_results[0].epoch;
 
       // task-345.2: composite already fetched by the atomic combined call above (see xyz block).
@@ -275,6 +274,16 @@ void ServerPoller::PollOnce() {
         // Same-generation guarantee is structural (from LUMICE_GetRawXyzAndCompositeResults);
         // no host-side drift-check needed anymore. See PopulateCompositePayload's doc comment.
         PopulateCompositePayload(composite_results[0], payload.get());
+      }
+      // task-345.3: composite P99 anchor comes from the server (union of participating
+      // classes' unexposed lanes — see doc/ev-pipeline-architecture.md §2.4 for the
+      // "P99 is composite-only C API field" carve-out). Mono/non-composite path stays on
+      // the client-side xyz_data statistic; the two paths do NOT converge — mixing full-
+      // spectrum pixels back in was the "composite too dim" root cause this task fixes.
+      if (payload->is_composite) {
+        payload->p99_y = composite_results[0].composite_p99_y;
+      } else {
+        payload->p99_y = ComputeP99Y(payload->xyz_data, payload->width, payload->height, kEvAutoDownsampleFactor);
       }
       // (payload is default-constructed with rgb_data empty + is_composite=false,
       // so the not-active branch is a no-op; explicit reset would be redundant.)

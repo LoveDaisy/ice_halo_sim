@@ -110,11 +110,42 @@ not be changed without re-calibrating the brightness baseline.
 | `snapshot_generation` | Increments per snapshot; compare to detect data changes |
 | `effective_pixels` | Non-zero pixel count (stats display) |
 
-The EV anchor (P99) is **not** a C API field — it is derived GUI-side from
-`xyz_buffer` (§2.5). C API consumers that need an anchor must compute their own.
+The EV anchor (P99) is **not** a C API field on the mono / full-spectrum path — it is
+derived GUI-side from `xyz_buffer` (§2.5). C API consumers that need an anchor for the
+mono path must compute their own.
+
+> **Composite-path exception (task-345.3)**: `LUMICE_RenderResult::composite_p99_y`
+> IS a C API field, but ONLY on the composite path (`LUMICE_GetCompositeResults` /
+> `LUMICE_GetRawXyzAndCompositeResults`'s `composite_out`). Semantics:
+>
+> - **Composite path** — populated with the P99 over the union of NON-ZERO
+>   UNEXPOSED (raw lane) Y values across every participating color class (visible or
+>   solo). This is the anchor the GUI's auto-EV feeds into `ComputeEvAuto` for the
+>   composite display.
+> - **Mono path** (`LUMICE_GetRenderResults`) — always `0`; consumers must ignore it
+>   on the mono getter.
+>
+> The carve-out exists because the per-color-class lane data does not cross the C API
+> boundary (`src/gui/` may only see the C API surface), so the GUI cannot derive this
+> statistic itself the way it does for the mono path. Also, the composite path needs
+> a "participating classes union" anchor rather than the mono full-spectrum P99: mixing
+> non-participating pixels back in was the "composite too dim" root cause task-345.3
+> fixes. The algorithm (`nth_element` at `⌊count × 0.99⌋`) is structurally identical to
+> the fine path of `ComputeP99Y` in `gui_ev_auto.hpp` — the two implementations live
+> apart because pulling a shared header down would drag one layer into the other. If
+> you touch one, mirror the change in the other file (cross-reference comments in
+> both locations).
 
 **Lifetime**: the `xyz_buffer` pointer is valid until the next
 `LUMICE_GetRawXyzResults()` or `LUMICE_CommitConfig()` call.
+
+**Composite EV setter**: `LUMICE_SetCompositeExposure(server, ev_total)` (task-345.3) is
+the display-time counterpart to `LUMICE_SetRaypathColors` — the GUI uses it to push the
+combined manual + auto EV onto the composite bake. `ev_total` is applied as `2^ev_total`
+inside the compositor as a single global scalar shared by every color class (per-lane
+renormalization stays structurally excluded — that was the false-color bug from the
+scrum-336 spike). No accumulator reset, no epoch bump; flips `snapshot_dirty_` so the
+next `Get*Results` rebakes the composite. Mono path is untouched.
 
 ### §2.5 GUI Poller and SyncFromPoller
 
