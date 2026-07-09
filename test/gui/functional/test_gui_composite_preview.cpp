@@ -310,6 +310,12 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     IM_CHECK_EQ(lc_before.lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
     const unsigned long long done_epoch = lc_before.epoch;
 
+    // AC1 explicit sub-clause ("sim_ray_count 不减"): capture the live accumulated ray
+    // count before the display-time edit so it can be compared post-edit below. Uses
+    // the O(1) live counter (task-317), not the DoSnapshot-cached stats path.
+    LUMICE_RayCount ray_count_before = 0;
+    IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_before), LUMICE_OK);
+
     // Baseline poll to freeze current composite for a byte-diff below.
     gui::ServerPoller local;
     local.ResetGenerationForTest();
@@ -366,6 +372,13 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
 
     // Payload's epoch also stays == done_epoch (no accumulator reset).
     IM_CHECK_EQ(snap_after->payload->payload_epoch, done_epoch);
+
+    // AC1 explicit sub-clause ("sim_ray_count 不减"): a display-time color edit must not
+    // reset or decrement the accumulated sim ray count — that would be a tell-tale sign
+    // of an accidental restart (LUMICE_Start/CommitConfig) hiding behind the wake path.
+    LUMICE_RayCount ray_count_after = 0;
+    IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_after), LUMICE_OK);
+    IM_CHECK(ray_count_after >= ray_count_before);
 
     // Post-test cleanup on both the local ServerPoller and the global one that EnsureRunning
     // above nudged into kRunning — Stop() is synchronous and idempotent.
