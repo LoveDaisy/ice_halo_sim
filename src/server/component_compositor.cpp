@@ -168,7 +168,7 @@ float ComputeParticipatingP99Y(const std::vector<ActiveClass>& active, size_t pi
   // harmless (vector grows); pre-reserving avoids repeated reallocation in
   // the additive-overlap case where multiple classes contribute at the same
   // pixel.
-  y_vals.reserve(pixel_count);
+  y_vals.reserve(active.size() * pixel_count);
   for (const auto& ac : active) {
     for (size_t p = 0; p < pixel_count; ++p) {
       const float v = ac.lane[p];
