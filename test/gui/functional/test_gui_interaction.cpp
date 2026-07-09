@@ -1472,10 +1472,15 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      // AC4 — no color classes ⇒ no checkbox anywhere.
+      // AC4 — no color classes ⇒ no checkbox anywhere (new top-bar path nor the
+      // now-deleted status-bar path, so a future regression that re-adds the
+      // widget to the status bar is caught here too, not just inferred from
+      // "the code block was deleted").
       IM_CHECK(gui::g_state.raypath_color.empty());
       IM_CHECK(!ctx->ItemExists("##TopBar/" ICON_FA_PALETTE " Colored##CompositePreviewToggle"));
       IM_CHECK(!ctx->ItemExists("##TopBar/" ICON_FA_PALETTE " Full Spectrum##CompositePreviewToggle"));
+      IM_CHECK(!ctx->ItemExists("##StatusBar/" ICON_FA_PALETTE " Colored##CompositePreviewToggle"));
+      IM_CHECK(!ctx->ItemExists("##StatusBar/" ICON_FA_PALETTE " Full Spectrum##CompositePreviewToggle"));
 
       // Install one color class + pin the ground truth to "not composite" so
       // the label is deterministically "Full Spectrum".

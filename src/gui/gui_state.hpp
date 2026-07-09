@@ -791,14 +791,15 @@ struct GuiState {
   // choice on which already-produced payload buffer to upload, orthogonal to
   // the sim/dirty/Revert lifecycle (blueprint §4.0).
   // Ownership contract (single-writer discipline, review Suggestion #1):
-  //   - `show_composite_preview`: user preference. WRITTEN ONLY by the status-bar
-  //     toggle button in RenderStatusBar (src/gui/app_panels.cpp). READ by
+  //   - `show_composite_preview`: user preference. WRITTEN ONLY by the top-bar
+  //     checkbox in RenderTopBar (src/gui/app_panels.cpp; relocated from
+  //     RenderStatusBar by task-colored-toggle-to-topbar / 346.3). READ by
   //     SyncFromPoller (folded into effective_composite via
-  //     ShouldUseCompositeUpload) and RenderStatusBar (button label/highlight
+  //     ShouldUseCompositeUpload) and RenderTopBar (checkbox label/highlight
   //     computed from `last_uploaded_as_composite`, not this field directly, to
   //     avoid the transient-hallucination race described in the plan §3 keypoint 2).
   //   - `last_uploaded_as_composite`: ground truth. WRITTEN ONLY by SyncFromPoller
-  //     (src/gui/app.cpp) after a successful upload. READ by RenderStatusBar to
+  //     (src/gui/app.cpp) after a successful upload. READ by RenderTopBar to
   //     drive the persistent mode indicator.
   bool show_composite_preview = true;
   bool last_uploaded_as_composite = false;

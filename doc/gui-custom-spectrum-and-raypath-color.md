@@ -153,7 +153,7 @@ owner 计划扩展两个相关但不同的功能：
 
 **⭐as-built（⑤染色 / 全光谱显示态切换 + 持久标记，task-colored-mode-affordance / task-345.4）**：④之上加一层"用户偏好"的 display-time 开关，用户不必删除颜色类就能临时看回全光谱视图，且激活状态下界面持久可见"当前处于染色模式"标记（关闭 Colors 窗仍可见）。零 C API / core 改动，纯 `src/gui/` 内。
 - **两个 GuiState 显示态字段**（`src/gui/gui_state.hpp`，均不参与 dirty/Revert 生命周期，均不进 `ConfigSnapshot`）：
-  - `show_composite_preview`（用户偏好，默认 true）——单一写点是状态栏切换按钮；
+  - `show_composite_preview`（用户偏好，默认 true）——单一写点是顶栏 checkbox（346.3 起；345.4 首版位于状态栏）；
   - `last_uploaded_as_composite`（ground truth，`SyncFromPoller` 上传成功后写入）——供 UI 读作"屏幕上实际显示的是什么"。绑定 ground truth 而非用户偏好，结构性消除偏好翻转到下一次上传之间的一帧"标记撒谎"竞态。
   - backend swap（CPU↔GPU）时随其他显示态字段一起清 `last_uploaded_as_composite = false`，`show_composite_preview` 刻意保留（用户偏好，不由 backend 变更代做选择）。
 - **纯谓词单源**（`src/gui/app.{hpp,cpp}`）：新增两条 pure predicate 与既有 `ShouldUploadPayload` 同一测试契约：
@@ -168,7 +168,7 @@ owner 计划扩展两个相关但不同的功能：
   - gui_test `gui_composite_preview.mode_toggle_hidden_when_no_color_classes`——AC4 render-gate condition 断言 + fire-gate 与 `ShouldUploadPayload` 等价证明（mode_changed 结构性不可能触发）。
   - 端到端 `SyncFromPoller()` GL 上传路径**不**从此 functional 测试驱动（coroutine 无 GL context，`g_preview.UploadTexture` 会 SIGILL；实测过），实际 GL 与视觉体验交给 AC5 owner on-screen 与既有 visual 测试。
 - **AC5**：owner on-screen 人工闸——切换手感 / 标记辨识度。若纯色高亮不够醒目，低成本备选是让图标随状态变（而非仅换色/文案），plan §risk 2 已记录。
-- **未做**：Colors 窗内镜像镜像同一开关（单一状态栏控件已同时满足 AC1+AC3，属 a05）；.lmc 序列化该开关（会话内状态，与 `color_window_open` 同类）；server 侧是否节流合成计算（issue 只要求显示态切换）。
+- **未做**：Colors 窗内镜像同一开关（单一顶栏控件已同时满足 AC1+AC3，属 a05）；.lmc 序列化该开关（会话内状态，与 `color_window_open` 同类）；server 侧是否节流合成计算（issue 只要求显示态切换）。
 
 **⭐as-built（`raypath_color` 堆指针化，task-raypath-color-dynamic-abi / task-344，BREAKING v4.8）**：342.2 以 `LUMICE_ColorClass raypath_color[LUMICE_MAX_CONFIG_COLOR_CLASSES]` 内联定长数组落地，每类 ~5.6 KB × 64 类 → `sizeof(LUMICE_Config)` 膨胀到 **467 KB**。全量 `gui_test`（不带 `--filter`）里 `filter_expand_struct_vs_json` 用例在同一函数体声明两个局部 `LUMICE_Config`（934 KB），在 ImGui 测试引擎线程 ~512 KB 栈上确定性 `EXC_BAD_ACCESS` in `___chkstk_darwin`（回归被 342.3 用 targeted `--filter` 掩过一次）。**344 的解**：
 - **ABI 改**：`LUMICE_ColorClass raypath_color[64]` → `LUMICE_ColorClass* raypath_color;`（`raypath_color_count` / `_mode` 保留；`match[32]` 继续内联，owner 明确不缩容）。`sizeof(LUMICE_Config)` 从 467 KB 降至 **~113 KB**（`static_assert` 上限 160 KB，保 ~40% headroom）。C/C++ 侧的 `cfg.raypath_color[i]` 下标语法保持源码兼容——指针支持相同下标；只有 value-init/copy 语义变化（零初始化后 `raypath_color == NULL`，而非 64 个零初始化 `LUMICE_ColorClass`）。
