@@ -727,6 +727,61 @@ TEST(ComponentCompositor, DominantThreeArcsNoPhantomHue) {
   EXPECT_GT(red_px, 0);
   EXPECT_GT(green_px, 0);
   EXPECT_GT(blue_px, 0);
+
+  // task-345.3 AC1 white-box: display_exposure_scale must NEVER shift the hue at
+  // any non-zero pixel — dominant is argmax over lane*s with a shared s, so
+  // scaling s only scales the pre-argmax product uniformly. Verify by comparing
+  // a scale=0.5 render against the scale=1.0 baseline pixel-for-pixel:
+  //   (a) argmax (which lane wins) is invariant;
+  //   (b) the winning channel's value scales exactly linearly (no re-normalization,
+  //       no per-lane bleed).
+  // This is the strongest structural proof of "no phantom hue under EV" that
+  // can be made without an on-screen owner check (AC5) — it directly encodes
+  // the color-space invariant the scrum-336 spike bug violated.
+  std::vector<float> out_half;
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, class_table, CompositeMode::kDominant, 0.5f, out_half, nullptr));
+  ASSERT_EQ(out_half.size(), out.size());
+  int compared = 0;
+  for (int p = 0; p < total_pix; ++p) {
+    const float r1 = out[p * 3 + 0];
+    const float g1 = out[p * 3 + 1];
+    const float b1 = out[p * 3 + 2];
+    const float r_h = out_half[p * 3 + 0];
+    const float g_h = out_half[p * 3 + 1];
+    const float b_h = out_half[p * 3 + 2];
+    if (r1 == 0.0f && g1 == 0.0f && b1 == 0.0f) {
+      // Background pixel — must stay background at the alternate scale, too.
+      EXPECT_FLOAT_EQ(r_h, 0.0f);
+      EXPECT_FLOAT_EQ(g_h, 0.0f);
+      EXPECT_FLOAT_EQ(b_h, 0.0f);
+      continue;
+    }
+    // Winning channel invariance: whichever channel is non-zero at scale 1.0 must
+    // be the SAME channel at scale 0.5 (dominant argmax is invariant under uniform
+    // rescale). And its value must be exactly r1 * 0.5.
+    if (r1 > 0.0f) {
+      EXPECT_GT(r_h, 0.0f) << "pixel " << p << ": red arc lost dominance under EV=-1";
+      EXPECT_FLOAT_EQ(g_h, 0.0f);
+      EXPECT_FLOAT_EQ(b_h, 0.0f);
+      EXPECT_NEAR(r_h, r1 * 0.5f, 1e-5f);
+    } else if (g1 > 0.0f) {
+      EXPECT_GT(g_h, 0.0f);
+      EXPECT_FLOAT_EQ(r_h, 0.0f);
+      EXPECT_FLOAT_EQ(b_h, 0.0f);
+      EXPECT_NEAR(g_h, g1 * 0.5f, 1e-5f);
+    } else {
+      EXPECT_GT(b_h, 0.0f);
+      EXPECT_FLOAT_EQ(r_h, 0.0f);
+      EXPECT_FLOAT_EQ(g_h, 0.0f);
+      EXPECT_NEAR(b_h, b1 * 0.5f, 1e-5f);
+    }
+    ++compared;
+  }
+  // Three-arcs fixture is thin arcs (~O(10) lit pixels/arc at 64x64) — set the floor
+  // just above the arc-count total so an empty three-arc render can't false-pass.
+  EXPECT_GT(compared, red_px + green_px + blue_px - 1)
+      << "AC1 invariance check must cover every non-background pixel found in the baseline";
+  EXPECT_GE(compared, 3) << "at least one pixel from each of the three arcs expected";
 }
 
 // -----------------------------------------------------------------------------
