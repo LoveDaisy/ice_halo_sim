@@ -248,6 +248,18 @@ void RenderTopBar(float window_width) {
     }
   }
 
+  ImGui::SameLine();
+  ImGui::TextDisabled("|");
+  ImGui::SameLine();
+
+  // task-345.5 (⑥): dedicated "feature button" group, immediately right of
+  // New/Open/Save. Colors is the first occupant; future cross-cutting toggles
+  // unrelated to file I/O or panel layout should land here rather than
+  // competing for status-bar space.
+  if (ImGui::Button(ICON_FA_PALETTE " Colors")) {
+    g_state.color_window_open = !g_state.color_window_open;
+  }
+
   // Right-panel collapse toggle — right-aligned so it sits flush with the right panel's outer edge.
   // Also note: when the right panel is already collapsed, RenderCollapsedStrip's internal button
   // still expands it; this top-bar toggle simply offers a symmetric alternate entry point.
@@ -1069,26 +1081,26 @@ void RenderStatusBar(float window_width, float window_height) {
     }
   }
 
-  // task-345.4: display-mode toggle + Colors window + Log panel buttons (right-aligned cluster).
+  // task-345.4: display-mode toggle + Log panel buttons (right-aligned cluster).
   // The mode toggle is only shown when at least one raypath_color class is committed (AC4:
   // no color classes ⇒ no toggle, no persistent marker — behavior identical to pre-345.4).
   // Its label/highlight reads GROUND TRUTH (`last_uploaded_as_composite`), not the raw user
   // preference — during the single frame between "user clicks" and "SyncFromPoller uploads"
   // the ground truth is what the screen actually shows (plan §3 keypoint 2).
+  // task-345.5 (⑥): the Colors button moved to the top bar's feature-button
+  // group; the width formula below dropped `color_w` and the trailing `spacing`
+  // term that used to separate Colors from Log.
   {
     const char* log_label = g_state.log_panel_open ? ICON_FA_CHEVRON_DOWN " Log" : ICON_FA_CHEVRON_RIGHT " Log";
-    const char* color_label = ICON_FA_PALETTE " Colors";
     const bool show_mode_toggle = !g_state.raypath_color.empty();
     const bool composite_now = g_state.last_uploaded_as_composite;
     const char* mode_label = composite_now ? ICON_FA_PALETTE " Colored" : ICON_FA_PALETTE " Full Spectrum";
     const float pad_x = ImGui::GetStyle().FramePadding.x * 2;
     const float log_w = ImGui::CalcTextSize(log_label).x + pad_x;
-    const float color_w = ImGui::CalcTextSize(color_label).x + pad_x;
     const float mode_w = show_mode_toggle ? (ImGui::CalcTextSize(mode_label).x + pad_x) : 0.0f;
     const float spacing = ImGui::GetStyle().ItemSpacing.x;
     const float mode_gap = show_mode_toggle ? spacing : 0.0f;
-    ImGui::SameLine(ImGui::GetWindowWidth() - log_w - color_w - mode_w - mode_gap - spacing -
-                    ImGui::GetStyle().WindowPadding.x);
+    ImGui::SameLine(ImGui::GetWindowWidth() - log_w - mode_w - mode_gap - ImGui::GetStyle().WindowPadding.x);
     if (show_mode_toggle) {
       if (composite_now) {
         // Accent color for the "colored" state; owner AC5 handles final palette tuning.
@@ -1111,10 +1123,6 @@ void RenderStatusBar(float window_width, float window_height) {
       }
       ImGui::SameLine();
     }
-    if (ImGui::SmallButton(color_label)) {
-      g_state.color_window_open = !g_state.color_window_open;
-    }
-    ImGui::SameLine();
     if (ImGui::SmallButton(log_label)) {
       g_state.log_panel_open = !g_state.log_panel_open;
     }
