@@ -201,17 +201,22 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     LUMICE_DestroyServer(server);
   };
 
-  // code-review-03 regression: actually drives ServerPoller::PopulateCompositePayload()'s
-  // generation-drift decision branch (not just the C-API-level drift precondition that
-  // RaypathColorApi.CompositeGenerationDriftDetectableViaRecheck in test_c_api.cpp pins).
-  // Arms a REAL drift via LUMICE_SetRaypathColors (same deterministic technique as that C-API
-  // test) between an xyz-generation capture and the composite call, then calls
-  // PopulateCompositePayloadForTest with the STALE captured generation so the function's own
-  // internal regen_check genuinely observes a mismatch — proving the drop branch
-  // (rgb_data cleared, is_composite left false) actually executes. Then repeats the sequence
-  // without an intervening drift to prove the very next pairing recovers (is_composite==true,
-  // bytes match a direct LUMICE_GetCompositeResults read).
-  ImGuiTest* t3 = IM_REGISTER_TEST(engine, "gui_composite_preview", "generation_drift_drop_then_recover");
+  // task-345.2 AC3 anchor (rewrite of the old code-review-03 "drift_drop_then_recover" test).
+  // Pre-345.2 the poller pulled xyz + composite via three independent C-API calls (xyz →
+  // composite → xyz recheck) whose cross-call window was near-guaranteed to be crossed by
+  // ConsumeData batch churn under an active sim — the old test forced that mismatch and
+  // asserted the drop branch fired. Post-345.2 the poller uses the atomic
+  // LUMICE_GetRawXyzAndCompositeResults which fuses both reads into a single server-side
+  // DoSnapshot() call; cross-generation pairing is structurally impossible upstream. There is
+  // no drop branch left to force, so the test is refocused on the surviving invariant AC3
+  // demanded ("composite与其渲染源xyz不跨代混装的保护仍在"): repeatedly arm dirty via
+  // LUMICE_SetRaypathColors between combined calls (churn simulator) and assert that every
+  // call yields (a) composite bytes byte-identical to what a same-tick direct
+  // LUMICE_GetCompositeResults returns (paired-with-just-fetched-xyz proof), and
+  // (b) PopulateCompositePayloadForTest builds is_composite=true + rgb_data populated from
+  // that composite. Same fixture and deterministic dirty-arming technique as the retired
+  // drop-branch test.
+  ImGuiTest* t3 = IM_REGISTER_TEST(engine, "gui_composite_preview", "same_generation_invariant_under_churn");
   t3->TestFunc = [](ImGuiTestContext* ctx) {
     IM_UNUSED(ctx);
     LUMICE_Server* server = LUMICE_CreateServer();
@@ -224,45 +229,53 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     }
 
     gui::ServerPoller local;
+    unsigned long long prev_gen = 0ull;
 
-    // ---- Drop branch: arm a real drift in the exact window PopulateCompositePayload guards. ----
-    LUMICE_RawXyzResult xyz1[LUMICE_MAX_RENDER_RESULTS + 1]{};
-    IM_CHECK_EQ(LUMICE_GetRawXyzResults(server, xyz1, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-    const unsigned long long stale_xyz_generation = xyz1[0].snapshot_generation;
+    // 4 churn rounds — each round arms a fresh dirty via LUMICE_SetRaypathColors (functionally
+    // identical to a background ConsumeData batch commit landing in the poll window), then
+    // exercises the atomic combined getter the poller now uses. Every round MUST:
+    //   1. See the generation strictly advance (proving the churn armed a real snapshot).
+    //   2. Get a non-null composite (raypath_color is active, so DoSnapshot Phase-2 produced one).
+    //   3. Byte-match a same-tick direct LUMICE_GetCompositeResults read (proving the composite
+    //      returned by the combined call is the one that pairs with this call's xyz, not a
+    //      cross-generation mix — the "真不变量" AC3 requires).
+    //   4. Populate the poller payload as a composite (proving PopulateCompositePayload still
+    //      writes rgb_data + sets is_composite, the same behavior the retired drop-recover
+    //      test's "recovery" branch pinned).
+    for (int round = 0; round < 4; ++round) {
+      LUMICE_ColorClassDisplay disp[1]{};
+      disp[0].color[2] = static_cast<float>(round % 3) / 2.0f;
+      disp[0].visible = 1;
+      IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp, 1, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
 
-    // kColorConfig commits exactly one raypath_color class — class_count must match.
-    LUMICE_ColorClassDisplay disp[1]{};
-    disp[0].color[2] = 1.0f;  // red->blue: forces a visible display-state change (dirty).
-    disp[0].visible = 1;
-    IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp, 1, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
+      LUMICE_RawXyzResult xyz[LUMICE_MAX_RENDER_RESULTS + 1]{};
+      LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
+      IM_CHECK_EQ(
+          LUMICE_GetRawXyzAndCompositeResults(server, xyz, LUMICE_MAX_RENDER_RESULTS, comp, LUMICE_MAX_RENDER_RESULTS),
+          LUMICE_OK);
+      IM_CHECK(xyz[0].xyz_buffer != nullptr);
+      IM_CHECK(comp[0].img_buffer != nullptr);
+      IM_CHECK(xyz[0].snapshot_generation > prev_gen);
+      prev_gen = xyz[0].snapshot_generation;
 
-    // Consumes the freshly-armed dirty flag: comp1 belongs to a generation newer than
-    // stale_xyz_generation — exactly the mismatch PopulateCompositePayload's regen_check must
-    // detect when handed stale_xyz_generation below.
-    LUMICE_RenderResult comp1[LUMICE_MAX_RENDER_RESULTS + 1]{};
-    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, comp1, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-    IM_CHECK(comp1[0].img_buffer != nullptr);
+      // (3) Same-generation guarantee: a same-tick direct composite read must land on the same
+      // frozen snapshot (nothing else armed dirty between these two calls). Copy first — bytes
+      // pointed to by combined-call composite alias the same server-side buffer that
+      // LUMICE_Get*Results contract may invalidate.
+      const size_t nbytes = static_cast<size_t>(comp[0].img_width) * static_cast<size_t>(comp[0].img_height) * 3;
+      std::vector<uint8_t> combined_composite(comp[0].img_buffer, comp[0].img_buffer + nbytes);
+      LUMICE_RenderResult direct[LUMICE_MAX_RENDER_RESULTS + 1]{};
+      IM_CHECK_EQ(LUMICE_GetCompositeResults(server, direct, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+      IM_CHECK(direct[0].img_buffer != nullptr);
+      IM_CHECK_EQ(std::memcmp(combined_composite.data(), direct[0].img_buffer, nbytes), 0);
 
-    gui::TexturePayload drop_payload;
-    local.PopulateCompositePayloadForTest(server, comp1[0], stale_xyz_generation, &drop_payload);
-    IM_CHECK(!drop_payload.is_composite);
-    IM_CHECK(drop_payload.rgb_data.empty());
-
-    // ---- Recovery: the very next correctly-paired call must succeed. ----
-    LUMICE_RawXyzResult xyz2[LUMICE_MAX_RENDER_RESULTS + 1]{};
-    IM_CHECK_EQ(LUMICE_GetRawXyzResults(server, xyz2, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-    const unsigned long long paired_xyz_generation = xyz2[0].snapshot_generation;
-
-    LUMICE_RenderResult comp2[LUMICE_MAX_RENDER_RESULTS + 1]{};
-    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, comp2, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-    IM_CHECK(comp2[0].img_buffer != nullptr);
-    const size_t nbytes = static_cast<size_t>(comp2[0].img_width) * static_cast<size_t>(comp2[0].img_height) * 3;
-
-    gui::TexturePayload recovered_payload;
-    local.PopulateCompositePayloadForTest(server, comp2[0], paired_xyz_generation, &recovered_payload);
-    IM_CHECK(recovered_payload.is_composite);
-    IM_CHECK_EQ(recovered_payload.rgb_data.size(), nbytes);
-    IM_CHECK_EQ(std::memcmp(recovered_payload.rgb_data.data(), comp2[0].img_buffer, nbytes), 0);
+      // (4) PopulateCompositePayload builds the composite payload from the combined-call bytes.
+      gui::TexturePayload payload;
+      local.PopulateCompositePayloadForTest(direct[0], &payload);
+      IM_CHECK(payload.is_composite);
+      IM_CHECK_EQ(payload.rgb_data.size(), nbytes);
+      IM_CHECK_EQ(std::memcmp(payload.rgb_data.data(), direct[0].img_buffer, nbytes), 0);
+    }
 
     local.Stop();
     LUMICE_DestroyServer(server);

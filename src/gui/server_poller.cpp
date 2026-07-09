@@ -156,40 +156,21 @@ void ServerPoller::WorkerLoop() {
 
 // Composite width/height come from composite_result itself (not xyz's) — they must match by
 // construction (same RenderConsumer), but taking the source's own dims makes the memcpy bounds
-// self-consistent (plan §7 risk 2 mitigation).
+// self-consistent.
 //
-// Copies immediately (before the generation-drift recheck below, which per lumice.h's
-// Get*Results aliasing contract invalidates composite_result.img_buffer) — tightens the
-// capture-to-memcpy window to match xyz's own capture-then-copy discipline.
-//
-// Generation-drift guard: the composite call in PollOnce() may have consumed a dirty-flag event
-// that landed strictly after the RawXyz call captured xyz_generation — pairing that newer
-// composite with older xyz-derived stats would silently mix two materialization events into one
-// payload, breaking the "single materialization event, multiple read-only views" invariant this
-// task's Step 1 refactor was meant to establish. LUMICE_RenderResult carries no generation field
-// (out of scope to add one), so detect the drift host-side via a cheap recheck call — safe here
-// because both the xyz buffer (copied by the caller before calling this) and
-// composite_result.img_buffer (copied below) are already captured.
-void ServerPoller::PopulateCompositePayload(LUMICE_Server* server, const LUMICE_RenderResult& composite_result,
-                                            unsigned long long xyz_generation, TexturePayload* payload) {
+// Post-345.2: the drift-guard (regen_check + drop-and-clear path) is GONE. The caller now sources
+// xyz + composite from a single LUMICE_GetRawXyzAndCompositeResults() call — one server-side
+// DoSnapshot() with a Phase-2 rebuild inside — so composite is structurally guaranteed to belong
+// to the same snapshot_generation as its paired xyz. Cross-generation pairing is no longer a
+// window that can be missed; it is impossible upstream. That eliminates the entire "recheck →
+// mismatch → drop" branch and the `GUI_LOG_VERBOSE("[Poller] composite generation drift ...")` log
+// line the plan's AC5 tracked. See scratchpad/scrum-raypath-color-gui-polish/task-fix-live-color-refresh/plan.md §3.
+void ServerPoller::PopulateCompositePayload(const LUMICE_RenderResult& composite_result, TexturePayload* payload) {
   const size_t rgb_bytes =
       static_cast<size_t>(composite_result.img_width) * static_cast<size_t>(composite_result.img_height) * 3;
   payload->rgb_data.resize(rgb_bytes);
   std::memcpy(payload->rgb_data.data(), composite_result.img_buffer, rgb_bytes);
-
-  LUMICE_RawXyzResult regen_check[2]{};
-  LUMICE_GetRawXyzResults(server, regen_check, 1);
-  if (regen_check[0].snapshot_generation == xyz_generation) {
-    payload->is_composite = true;
-    return;
-  }
-  // Drop this tick's composite; keep the xyz-only payload so stats/auto-EV/quality-gate still
-  // advance. Next poll will retry once a composite paired with the then-current xyz generation
-  // exists.
-  payload->rgb_data.clear();
-  payload->rgb_data.shrink_to_fit();
-  GUI_LOG_VERBOSE("[Poller] composite generation drift: xyz_gen={} recheck_gen={}, dropping this tick's composite",
-                  xyz_generation, regen_check[0].snapshot_generation);
+  payload->is_composite = true;
 }
 
 // See doc/accumulator-consumer-architecture.md §8.1 (polling contract), §8.3 (data flow).
@@ -212,9 +193,16 @@ void ServerPoller::PollOnce() {
   LUMICE_SimLifecycleResult lc{};
   LUMICE_GetSimLifecycle(server, &lc);
 
-  // Get raw XYZ results (skips CPU XYZ→RGB, for GPU conversion)
+  // task-345.2: atomic combined C-API — single server-side DoSnapshot() plus one snapshot_mutex_
+  // critical section produces xyz + composite that share the same snapshot_generation by
+  // construction (④ drift-guard root cause fix). Replaces the pre-345.2 three-call sequence
+  // (LUMICE_GetRawXyzResults → LUMICE_GetCompositeResults → LUMICE_GetRawXyzResults recheck)
+  // whose ~ms window between call#1 and call#3 was near-guaranteed to be crossed by
+  // ConsumeData batch churn under an active sim, dropping composites every poll until sim
+  // stopped. See scratchpad/scrum-raypath-color-gui-polish/task-fix-live-color-refresh/plan.md §3.
   LUMICE_RawXyzResult xyz_results[2]{};
-  LUMICE_GetRawXyzResults(server, xyz_results, 1);
+  LUMICE_RenderResult composite_results[2]{};
+  LUMICE_GetRawXyzAndCompositeResults(server, xyz_results, 1, composite_results, 1);
   const unsigned long long captured_xyz_generation = xyz_results[0].snapshot_generation;
 
   // Check if this is genuinely new snapshot data (generation changed)
@@ -279,18 +267,14 @@ void ServerPoller::PollOnce() {
       payload->p99_y = ComputeP99Y(payload->xyz_data, payload->width, payload->height, kEvAutoDownsampleFactor);
       payload->payload_epoch = xyz_results[0].epoch;
 
-      // task-342.4 Step 2: composite (raypath_color) surface — poll the second
-      // consumer in the same tick, now that the xyz bytes are safely copied. The
-      // img_buffer sentinel (NULL when no raypath_color is configured; non-NULL
-      // when there is at least one colored consumer with a composite this
-      // generation) IS the raypath-color-active detector — no cross-thread state
-      // needs to be threaded through from the GUI (plan §3 keypoint 2).
-      LUMICE_RenderResult composite_results[2]{};
-      LUMICE_GetCompositeResults(server, composite_results, 1);
+      // task-345.2: composite already fetched by the atomic combined call above (see xyz block).
+      // The img_buffer sentinel (NULL when no raypath_color is configured; non-NULL when there is
+      // at least one colored consumer with a composite this generation) IS the raypath-color-
+      // active detector — no cross-thread state needs to be threaded through from the GUI.
       if (composite_results[0].img_buffer != nullptr) {
-        // Bytes copied and generation-drift-checked inside — see
-        // PopulateCompositePayload's doc comment above.
-        PopulateCompositePayload(server, composite_results[0], captured_xyz_generation, payload.get());
+        // Same-generation guarantee is structural (from LUMICE_GetRawXyzAndCompositeResults);
+        // no host-side drift-check needed anymore. See PopulateCompositePayload's doc comment.
+        PopulateCompositePayload(composite_results[0], payload.get());
       }
       // (payload is default-constructed with rgb_data empty + is_composite=false,
       // so the not-active branch is a no-op; explicit reset would be redundant.)

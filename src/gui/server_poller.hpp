@@ -135,14 +135,14 @@ class ServerPoller {
   void ResetGenerationForTest() { last_generation_ = 0; }
 
   // Test-only: drives PopulateCompositePayload() directly with caller-supplied
-  // (composite_result, xyz_generation) so a regression test can force the generation-drift
-  // drop branch deterministically (arm a real drift via LUMICE_SetRaypathColors + a second
-  // LUMICE_GetCompositeResults call, then pass the ORIGINAL xyz_generation here) instead of
-  // racing two threads through the narrow window inside a real PollOnce() call. See
-  // test/gui/functional/test_gui_composite_preview.cpp. Not used in production.
-  void PopulateCompositePayloadForTest(LUMICE_Server* server, const LUMICE_RenderResult& composite_result,
-                                       unsigned long long xyz_generation, TexturePayload* payload) {
-    PopulateCompositePayload(server, composite_result, xyz_generation, payload);
+  // composite_result so a regression test can pin the "composite bytes are
+  // copied and is_composite becomes true" invariant against the same code path
+  // PollOnce() drives. Post-345.2 there is no drift-guard branch to exercise
+  // separately — the atomic combined C-API (LUMICE_GetRawXyzAndCompositeResults)
+  // makes cross-generation pairing structurally impossible upstream. See
+  // test/gui/functional/test_gui_composite_preview.cpp.
+  void PopulateCompositePayloadForTest(const LUMICE_RenderResult& composite_result, TexturePayload* payload) {
+    PopulateCompositePayload(composite_result, payload);
   }
 
  private:
@@ -152,12 +152,11 @@ class ServerPoller {
   void PollOnce();
 
   // Copies composite_results[0]'s RGB bytes into payload->rgb_data and sets
-  // is_composite=true, UNLESS a generation-drift recheck shows the composite call
-  // consumed a dirty-flag event newer than xyz_generation — in which case the copy
-  // is discarded and payload stays xyz-only for this tick. Split out of PollOnce()
-  // to keep its cognitive complexity down.
-  void PopulateCompositePayload(LUMICE_Server* server, const LUMICE_RenderResult& composite_result,
-                                unsigned long long xyz_generation, TexturePayload* payload);
+  // is_composite=true. Split out of PollOnce() to keep its cognitive
+  // complexity down. Post-345.2: no drift-guard — the caller already sourced
+  // xyz + composite from a single LUMICE_GetRawXyzAndCompositeResults() call,
+  // so they belong to the same server snapshot_generation by construction.
+  void PopulateCompositePayload(const LUMICE_RenderResult& composite_result, TexturePayload* payload);
 
   // Published-snapshot access helpers. C++17 has no std::atomic<std::shared_ptr<T>>, so we use
   // the C++11 free functions std::atomic_load/atomic_store (deprecated in C++20 but valid here).
