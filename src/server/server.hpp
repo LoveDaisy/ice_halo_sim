@@ -292,6 +292,25 @@ class Server {
   std::vector<RawXyzResult> GetRawXyzResults();
 
   /**
+   * @brief Atomically get raw XYZ + composite results from a single DoSnapshot().
+   * @details task-345.2: kills the poller drift-guard (④). Because only ONE
+   *          DoSnapshot() is triggered here, no concurrent ConsumeData bump
+   *          can insert a second Phase-2 rebuild between reading xyz and
+   *          composite — so the paired results are guaranteed to share the
+   *          same snapshot_generation_ by construction (structural, not
+   *          probabilistic). Prefer this over calling
+   *          GetRawXyzResults() + GetCompositeResults() separately when the
+   *          caller needs both in one coherent view (e.g. the GUI poller).
+   * @param xyz_out Raw XYZ results (one per RenderConsumer).
+   * @param composite_out Composite RGB results (one per colored consumer;
+   *        empty when no raypath_color is configured).
+   * @note Lifetime: same as the individual getters — img_buffer_/xyz_buffer_
+   *       pointers stay valid until the NEXT DoSnapshot() rebuild or
+   *       CommitConfig.
+   */
+  void GetRawXyzAndCompositeResults(std::vector<RawXyzResult>& xyz_out, std::vector<RenderResult>& composite_out);
+
+  /**
    * @brief Get statistics result
    * @return Optional StatsResult. Returns std::nullopt if no statistics result available.
    * @note This is a non-blocking call. It returns immediately even if processing is ongoing.

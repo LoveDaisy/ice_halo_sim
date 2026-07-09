@@ -72,6 +72,11 @@ class ServerImpl {
   Error CommitConfig(const nlohmann::json& config_json, bool* out_reused = nullptr);
   std::vector<RenderResult> GetRenderResults();
   std::vector<RawXyzResult> GetRawXyzResults();
+  // task-345.2: atomic combined getter — one DoSnapshot() call, so xyz and
+  // composite are guaranteed to belong to the same snapshot_generation_ by
+  // construction (kills the poller's drift-guard, ④). See
+  // Server::GetRawXyzAndCompositeResults docstring for rationale.
+  void GetRawXyzAndCompositeResults(std::vector<RawXyzResult>& xyz_out, std::vector<RenderResult>& composite_out);
   std::optional<StatsResult> GetStatsResult();
   std::optional<StatsResult> GetCachedStatsResult();
   size_t GetLiveSimRayCount();
@@ -757,6 +762,54 @@ std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
   // which now runs unconditionally through DoSnapshot() from every accessor —
   // so cached_stats_result_ stays up to date via a single owner.
   return results;
+}
+
+// task-345.2: atomic combined read. Kills the ServerPoller drift-guard (④) by
+// funneling xyz + composite through exactly ONE DoSnapshot() trigger — a
+// concurrent ConsumeData bump cannot slip a second Phase-2 rebuild between the
+// two reads, so composite_out is guaranteed to belong to xyz_out[0]'s
+// snapshot_generation_ by construction (structural, not probabilistic).
+//
+// The lock discipline mirrors GetRawXyzResults + GetCompositeResults verbatim
+// (consumer_mutex_ then snapshot_mutex_; the two mutexes are never held
+// nested), so no new lock-ordering surface. Body kept a direct merge (not
+// helper-extracted) — plan-review flagged the light duplication with the two
+// existing getters as a code-review-time follow-up, not a blocker; see plan
+// §7 risk 2 mitigation ("严格镜像现有加锁顺序").
+void ServerImpl::GetRawXyzAndCompositeResults(std::vector<RawXyzResult>& xyz_out,
+                                              std::vector<RenderResult>& composite_out) {
+  xyz_out.clear();
+  composite_out.clear();
+  DoSnapshot();
+  std::vector<ConsumerPtrS> snapshot_consumers;
+  bool valid_data = false;
+  uint64_t generation = 0;
+  {
+    std::lock_guard<TicketMutex> lock(consumer_mutex_);
+    valid_data = has_ever_consumed_;
+    generation = snapshot_generation_;
+    snapshot_consumers = consumers_;
+  }
+  std::lock_guard<std::mutex> lock(snapshot_mutex_);
+  for (const auto& c : snapshot_consumers) {
+    auto* render_consumer = dynamic_cast<RenderConsumer*>(c.get());
+    if (render_consumer) {
+      auto r = render_consumer->GetRawXyzResult();
+      r.has_valid_data_ = valid_data;
+      r.snapshot_generation_ = generation;
+      r.epoch_ = committed_epoch_.load(std::memory_order_acquire);
+      xyz_out.push_back(r);
+    }
+  }
+  composite_out.reserve(cached_composite_results_.size());
+  for (const auto& cr : cached_composite_results_) {
+    RenderResult r;
+    r.renderer_id_ = cr.renderer_id_;
+    r.img_width_ = cr.w_;
+    r.img_height_ = cr.h_;
+    r.img_buffer_ = cr.rgb_.data();
+    composite_out.push_back(r);
+  }
 }
 
 std::optional<StatsResult> ServerImpl::GetStatsResult() {
@@ -1460,6 +1513,17 @@ std::vector<RawXyzResult> Server::GetRawXyzResults() {
     return {};
   }
   return impl_->GetRawXyzResults();
+}
+
+void Server::GetRawXyzAndCompositeResults(std::vector<RawXyzResult>& xyz_out,
+                                          std::vector<RenderResult>& composite_out) {
+  xyz_out.clear();
+  composite_out.clear();
+  if (!impl_) {
+    LOG_WARNING("Server is terminated!");
+    return;
+  }
+  impl_->GetRawXyzAndCompositeResults(xyz_out, composite_out);
 }
 
 std::optional<StatsResult> Server::GetStatsResult() {

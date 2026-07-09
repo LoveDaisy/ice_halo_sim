@@ -666,6 +666,27 @@ LUMICE_ErrorCode LUMICE_GetCompositeResults(LUMICE_Server* server, LUMICE_Render
 // Returns unconverted XYZ float data + intensity scalars for GPU-side conversion.
 LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzResult* out, int max_count);
 
+// task-345.2: atomic combined getter — fills raw XYZ + composite results from a
+// SINGLE server-side snapshot. Composite results are guaranteed to belong to
+// xyz_out[0].snapshot_generation by construction (structural, not
+// probabilistic). Prefer this over calling LUMICE_GetRawXyzResults() +
+// LUMICE_GetCompositeResults() separately when the caller needs both in one
+// coherent view (e.g. the GUI poller under an active simulation, where
+// concurrent batch churn between two independent calls otherwise pairs xyz
+// with a newer-generation composite).
+//
+// Sentinels: xyz_out[xyz_count].xyz_buffer == NULL when xyz_count < xyz_max_count;
+// composite_out[composite_count].img_buffer == NULL when composite_count < composite_max_count.
+// Composite is empty (composite_out[0] sentinel) when no `raypath_color` is configured.
+//
+// Lifetime: same as the individual getters — pointers stay valid until the
+// NEXT LUMICE_Get*Results() call (which may trigger a new snapshot) or
+// LUMICE_CommitConfig(). Copy the pixels before the next Get*Results if you
+// need them.
+LUMICE_ErrorCode LUMICE_GetRawXyzAndCompositeResults(LUMICE_Server* server, LUMICE_RawXyzResult* xyz_out,
+                                                     int xyz_max_count, LUMICE_RenderResult* composite_out,
+                                                     int composite_max_count);
+
 // Fill stats results into out array (sim_ray_num == 0 sentinel when count < max_count).
 // Note: triggers DoSnapshot internally (includes PostSnapshot XYZ→RGB conversion).
 LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResult* out, int max_count);
