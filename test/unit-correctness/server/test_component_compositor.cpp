@@ -800,5 +800,133 @@ TEST(ComponentCompositor, RaypathColorConfigJsonFormsRoundTrip) {
   EXPECT_FALSE(dback.classes_[0].solo_);
 }
 
+// -----------------------------------------------------------------------------
+// task-345.3: display-time EV multiplier + participating-P99 union anchor.
+//
+// The invariants under test map to the plan's Step 1 / Step 2 core acceptance:
+//   1. `display_exposure_scale` scales EVERY mode's output linearly and does
+//      NOT introduce any per-class renormalization (extends the shared-exposure
+//      invariant to the new axis).
+//   2. Additive mode's clamp bites AFTER the display scale is applied — a
+//      value that stays sub-clamp at scale 1.0 but reaches clamp at scale 2.0
+//      must saturate, not be truncated pre-scale.
+//   3. `ComputeParticipatingP99Y` only ever sees participating (visible/solo)
+//      classes' UNEXPOSED lane values; hidden classes' bright pixels never
+//      leak into the anchor.
+// -----------------------------------------------------------------------------
+TEST(ComponentCompositor, DisplayExposureScalesEveryModeLinearly) {
+  constexpr int kRes = 3;
+  const int total_pix = kRes * kRes;
+  RenderConfig cfg = MakeRenderConfig(kRes);
+  auto table = MakeSingletonClassTable(0b11, { kRed, kGreen });
+  RenderConsumer rc(cfg, table);
+  // Keep exposed values small so the composite output stays sub-clamp at
+  // both display scales — the equality below is otherwise saturated.
+  rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.06f, 0.04f }));
+  rc.PrepareSnapshot();
+
+  const int p = FindLitPixel(rc, total_pix);
+  ASSERT_GE(p, 0);
+
+  std::vector<float> out_1x;
+  std::vector<float> out_2x;
+  for (CompositeMode mode : { CompositeMode::kDominant, CompositeMode::kAdditive, CompositeMode::kPainter }) {
+    ASSERT_TRUE(CompositeColorClassesLinear(rc, table, mode, 1.0f, out_1x, nullptr));
+    ASSERT_TRUE(CompositeColorClassesLinear(rc, table, mode, 2.0f, out_2x, nullptr));
+    for (int i = 0; i < 3; ++i) {
+      // 2x display scale → every channel doubles (linear pre-clamp region).
+      // The dominant/painter branches pick the SAME winner regardless of
+      // scale (both lanes scale uniformly, argmax invariant) — no hue shift.
+      EXPECT_NEAR(out_2x[p * 3 + i], out_1x[p * 3 + i] * 2.0f, 1e-4)
+          << "mode=" << static_cast<int>(mode) << " channel=" << i;
+    }
+  }
+}
+
+TEST(ComponentCompositor, DisplayExposureClampBitesAfterScale) {
+  // additive mode: at scale 1.0 the additive sum is below the clamp; scale
+  // 8.0 pushes it past 1.0 and the compositor must clamp AFTER scaling.
+  // Truncating pre-scale would return a proportionally-scaled sub-1 value.
+  constexpr int kRes = 3;
+  const int total_pix = kRes * kRes;
+  RenderConfig cfg = MakeRenderConfig(kRes);
+  auto table = MakeSingletonClassTable(0b11, { kWhite });
+  RenderConsumer rc(cfg, table);
+  rc.Consume(MakeBatch({ 0b01 }, { 0.5f }));
+  rc.PrepareSnapshot();
+
+  const int p = FindLitPixel(rc, total_pix);
+  ASSERT_GE(p, 0);
+  const float ey_at_1x = rc.GetColorClassLaneY(0)[p] * rc.ExposureScale();
+  ASSERT_LT(ey_at_1x, 1.0f);
+  ASSERT_GT(ey_at_1x * 8.0f, 1.0f);
+
+  std::vector<float> out;
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kAdditive, 8.0f, out, nullptr));
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_FLOAT_EQ(out[p * 3 + i], 1.0f);  // saturated to clamp ceiling.
+  }
+}
+
+TEST(ComponentCompositor, ParticipatingP99IgnoresHiddenClass) {
+  // Two classes: class0 = dim, class1 = 10x brighter. Hide class1 and confirm
+  // the participating P99 comes strictly from class0's lane — bright hidden
+  // pixels must not leak into the anchor (the "no full-spectrum dilution"
+  // fix motivating task-345.3).
+  constexpr int kRes = 4;
+  RenderConfig cfg = MakeRenderConfig(kRes);
+  auto table = MakeSingletonClassTable(0b11, { kWhite, kWhite });
+  RenderConsumer rc(cfg, table);
+  rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.05f, 0.5f }));
+  rc.PrepareSnapshot();
+
+  // Baseline: both classes visible — P99 should be dominated by class1.
+  float p99_both = 0.0f;
+  {
+    std::vector<float> out;
+    ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kDominant, 1.0f, out, &p99_both));
+    EXPECT_GT(p99_both, 0.0f);
+  }
+
+  // Hide class1 — the bright lane must vanish from the anchor.
+  ColorClassTable hidden_table = table;
+  hidden_table.classes_[1].visible_ = false;
+  float p99_hidden = 0.0f;
+  {
+    std::vector<float> out;
+    ASSERT_TRUE(CompositeColorClassesLinear(rc, hidden_table, CompositeMode::kDominant, 1.0f, out, &p99_hidden));
+  }
+  EXPECT_GT(p99_both, p99_hidden * 3.0f)
+      << "hiding the 10x brighter class must significantly lower the participating P99";
+
+  // Solo class0 alone — same effect (solo restricts participating set).
+  ColorClassTable solo_table = table;
+  solo_table.classes_[0].solo_ = true;
+  float p99_solo = 0.0f;
+  {
+    std::vector<float> out;
+    ASSERT_TRUE(CompositeColorClassesLinear(rc, solo_table, CompositeMode::kDominant, 1.0f, out, &p99_solo));
+  }
+  EXPECT_NEAR(p99_solo, p99_hidden, 1e-6f) << "solo of the only remaining class must match hiding the others";
+}
+
+TEST(ComponentCompositor, ParticipatingP99IndependentOfDisplayExposureScale) {
+  // The anchor is over UNEXPOSED lane values — changing the display EV must
+  // NOT move the P99 (otherwise the auto-EV feedback loop compounds).
+  constexpr int kRes = 3;
+  RenderConfig cfg = MakeRenderConfig(kRes);
+  auto table = MakeSingletonClassTable(0b11, { kWhite });
+  RenderConsumer rc(cfg, table);
+  rc.Consume(MakeBatch({ 0b01 }, { 0.5f }));
+  rc.PrepareSnapshot();
+
+  float p99_a = 0.0f;
+  float p99_b = 0.0f;
+  std::vector<float> out;
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kDominant, 0.25f, out, &p99_a));
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kDominant, 4.0f, out, &p99_b));
+  EXPECT_FLOAT_EQ(p99_a, p99_b);
+}
+
 }  // namespace
 }  // namespace lumice

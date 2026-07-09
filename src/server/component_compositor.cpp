@@ -142,12 +142,65 @@ CompositeMode ParseCompositeMode(const std::string& mode_str) {
   return CompositeMode::kDominant;
 }
 
+namespace {
+
+// P99 over the union of NON-ZERO UNEXPOSED (raw lane) Y values across every
+// participating class — the composite-path auto-EV anchor (task-345.3 Step 2).
+// Kept as the union-of-lanes rather than a post-composite scan so it stays
+// mode-independent (dominant / additive / painter all share the same anchor)
+// and does not create a circular dependency between EV-scaled composite and
+// the very P99 that drives EV. Non-participating classes (invisible / masked
+// by solo) are excluded by construction — GatherActiveClasses has already
+// dropped them — which is the whole point of "participating union" vs the
+// pre-345.3 mono-xyz-derived P99 that mixed in unrelated pixels.
+//
+// NOTE (task-345.3 review Minor #1): the (idx * 0.99) partial-sort algorithm
+// here is structurally identical to `gui_ev_auto.hpp::ComputeP99Y`'s fine
+// path — the two live apart because pulling a shared header down to server/
+// or up to gui/ would drag one layer into the other. If you touch one, mirror
+// the change here.
+float ComputeParticipatingP99Y(const std::vector<ActiveClass>& active, size_t pixel_count) {
+  if (active.empty() || pixel_count == 0) {
+    return 0.0f;
+  }
+  std::vector<float> y_vals;
+  // Upper bound: every pixel non-zero on every class. Under-allocating is
+  // harmless (vector grows); pre-reserving avoids repeated reallocation in
+  // the additive-overlap case where multiple classes contribute at the same
+  // pixel.
+  y_vals.reserve(pixel_count);
+  for (const auto& ac : active) {
+    for (size_t p = 0; p < pixel_count; ++p) {
+      const float v = ac.lane[p];
+      if (v > 0.0f) {
+        y_vals.push_back(v);
+      }
+    }
+  }
+  if (y_vals.empty()) {
+    return 0.0f;
+  }
+  auto idx = static_cast<size_t>(static_cast<float>(y_vals.size()) * 0.99f);
+  if (idx >= y_vals.size()) {
+    idx = y_vals.size() - 1;
+  }
+  std::nth_element(y_vals.begin(), y_vals.begin() + static_cast<ptrdiff_t>(idx), y_vals.end());
+  return y_vals[idx];
+}
+
+}  // namespace
+
 bool CompositeColorClassesLinear(const RenderConsumer& consumer, const ColorClassTable& class_table, CompositeMode mode,
-                                 std::vector<float>& out_linear_rgb) {
+                                 float display_exposure_scale, std::vector<float>& out_linear_rgb,
+                                 float* out_participating_p99_y) {
   if (class_table.referenced_mask_ == 0) {
     return false;
   }
-  const float s = consumer.ExposureScale();
+  // Single-scalar exposure invariant (a03 / doc §4.3): ExposureScale() is the
+  // one mono-image scale shared with the mono path; display_exposure_scale is
+  // one global GUI EV multiplier. Their product `s` is used identically by
+  // every mode below — never per-class, never per-lane. Do not split.
+  const float s = consumer.ExposureScale() * display_exposure_scale;
   if (s <= 0.0f) {
     return false;
   }
@@ -157,11 +210,17 @@ bool CompositeColorClassesLinear(const RenderConsumer& consumer, const ColorClas
   const size_t n = static_cast<size_t>(w) * static_cast<size_t>(h);
   out_linear_rgb.assign(n * 3, 0.0f);
   if (n == 0) {
+    if (out_participating_p99_y != nullptr) {
+      *out_participating_p99_y = 0.0f;
+    }
     return true;
   }
 
   const std::vector<ActiveClass> active = GatherActiveClasses(consumer, class_table);
   if (active.empty()) {
+    if (out_participating_p99_y != nullptr) {
+      *out_participating_p99_y = 0.0f;
+    }
     return true;  // nothing visible → all-black, still a valid composite
   }
 
@@ -178,6 +237,10 @@ bool CompositeColorClassesLinear(const RenderConsumer& consumer, const ColorClas
         CompositePainterPixel(active, class_table, s, p, out);
         break;
     }
+  }
+
+  if (out_participating_p99_y != nullptr) {
+    *out_participating_p99_y = ComputeParticipatingP99Y(active, n);
   }
 
   return true;

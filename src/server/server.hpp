@@ -120,6 +120,13 @@ struct RenderResult {
    */
   const uint8_t* img_buffer_;
 
+  // task-345.3: composite path's auto-EV anchor — P99 over the union of
+  // NON-ZERO UNEXPOSED (raw lane) Y values across every participating class.
+  // ONLY populated by the composite Get*Results paths; mono paths leave this
+  // at 0 and consumers ignore it (see doc/ev-pipeline-architecture.md §2.4
+  // for why this is a composite-only field).
+  float composite_p99_y_ = 0.0f;
+
   /**
    * @brief Copy image data to a new vector
    * @return Vector containing image data (RGB format)
@@ -418,6 +425,15 @@ class Server {
    *         (commit-debounce cadence), not per-render-frame.
    */
   Error GetColorClassSignals(uint8_t* out_flags, int class_count);
+
+  /**
+   * @brief task-345.3: display-time EV multiplier for the composite path only.
+   * @param ev_total Total EV (manual + auto) to apply as 2^ev_total inside DoSnapshot Phase 2.
+   * @return Error::Success. Mono path is untouched — only the composite result carries the
+   *         resulting brightness change. Flips snapshot_dirty_ so the next Get*Results
+   *         re-bakes the composite; no epoch bump, no accumulator reset.
+   */
+  Error SetCompositeExposure(float ev_total);
 
  private:
   std::shared_ptr<ServerImpl> impl_;

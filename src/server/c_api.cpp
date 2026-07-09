@@ -566,6 +566,25 @@ LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server, const LUMICE_Col
 }
 
 
+// task-345.3: display-time EV multiplier for the composite path. See the
+// LUMICE_SetCompositeExposure comment in include/lumice.h for the semantics
+// (single scalar, mono path untouched, snapshot_dirty_ flipped so the next
+// Get*Results rebakes the composite). No ev_total validation: the GUI is the
+// only in-tree caller and already clamps to [-6, 6]; server-side double-clamp
+// would hide caller bugs without preventing any real hazard.
+LUMICE_ErrorCode LUMICE_SetCompositeExposure(LUMICE_Server* server, float ev_total) {
+  if (!server) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  auto err = server->server_->SetCompositeExposure(ev_total);
+  if (err) {
+    LOG_ERROR("LUMICE_SetCompositeExposure failed: {}", err.message);
+    return MapErrorCode(err.code);
+  }
+  return LUMICE_OK;
+}
+
+
 // task-342.3 AC4: per-color-class empty-arc detector.
 LUMICE_ErrorCode LUMICE_GetColorClassSignal(LUMICE_Server* server, int* out_flags, int class_count) {
   if (!server) {
@@ -1397,6 +1416,8 @@ LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderRes
     out[i].img_width = render_results[i].img_width_;
     out[i].img_height = render_results[i].img_height_;
     out[i].img_buffer = render_results[i].img_buffer_;
+    // task-345.3: mono path — composite_p99_y is composite-only; leave at 0.
+    out[i].composite_p99_y = 0.0f;
   }
 
   // Sentinel: see doc/capi-lifecycle-architecture.md §5.2 (fix: 5287efe).
@@ -1424,6 +1445,8 @@ LUMICE_ErrorCode LUMICE_GetCompositeResults(LUMICE_Server* server, LUMICE_Render
     out[i].img_width = composite_results[i].img_width_;
     out[i].img_height = composite_results[i].img_height_;
     out[i].img_buffer = composite_results[i].img_buffer_;
+    // task-345.3: composite path — participating-classes union P99 (auto-EV anchor).
+    out[i].composite_p99_y = composite_results[i].composite_p99_y_;
   }
 
   // Sentinel: see doc/capi-lifecycle-architecture.md §5.2 (fix: 5287efe).
@@ -1508,6 +1531,8 @@ LUMICE_ErrorCode LUMICE_GetRawXyzAndCompositeResults(LUMICE_Server* server, LUMI
     composite_out[i].img_width = composite_results[i].img_width_;
     composite_out[i].img_height = composite_results[i].img_height_;
     composite_out[i].img_buffer = composite_results[i].img_buffer_;
+    // task-345.3: composite path — participating-classes union P99 (auto-EV anchor).
+    composite_out[i].composite_p99_y = composite_results[i].composite_p99_y_;
   }
   if (composite_count < composite_max_count) {
     std::memset(&composite_out[composite_count], 0, sizeof(LUMICE_RenderResult));
