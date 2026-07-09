@@ -328,6 +328,39 @@ re-derives from the new filtered image (§5).
 A `static_assert(sizeof(RenderConfig) == 136)` guards against silent field additions
 (`render_config.cpp:167`).
 
+### §6.5 GUI Run Path: `intensity_factor` is Neutral (task-346.1)
+
+The GUI Run path (`FillLumiceConfig` in `src/gui/file_io.cpp`) **always** commits
+`renderers[i].intensity_factor = 1.0f`, matching `RenderConfig::intensity_factor_`'s
+default. It **never** bakes `exposure_offset` into this field.
+
+Rationale — manual + auto EV in the GUI are entirely display-time:
+
+- Mono preview: `app.cpp RefreshPreviewParams` writes `pp.exposure.intensity_factor = 2^ev_total`
+  directly to the shader uniform (§4.1). It never reads `RenderConfig::intensity_factor_`.
+- Composite preview: `RenderPreviewPanel` pushes `LUMICE_SetCompositeExposure(ev_total)`
+  per frame → `display_ev_total_` → `display_exposure_scale = 2^display_ev_total_` →
+  the compositor multiplies it into the single shared exposure scalar
+  `s = ExposureScale() × display_exposure_scale` (§2.4 composite-path exception).
+  `ExposureScale() = config_.intensity_factor_ × kNormScale × total_pix / snapshot_intensity_`
+  (`render.cpp:93`); if `intensity_factor_` also carried `2^exposure_offset`, the manual EV
+  portion would be counted twice in `s`, producing 2× amplification on Re-Run.
+
+The **CLI/config export path** (`SerializeCoreConfig` in `src/gui/file_io.cpp`) is
+different — it DOES bake `2^exposure_offset` into the exported JSON's
+`render[].intensity_factor`. That is the legal semantic for CLI (which has no
+display-time EV concept): a config exported at GUI EV=E must reproduce the same
+brightness when re-run via CLI. Two paths, two semantics for the same field, both
+intentional. Cross-referenced in the code comments of both call sites.
+
+Regression pins:
+
+- `test/gui/functional/test_gui_import_export.cpp` →
+  `intensity_factor_ignores_exposure_offset_in_gui_run_path` (AC5 mechanism-layer).
+- `test/gui/functional/test_gui_composite_preview.cpp` →
+  `rerun_with_same_ev_produces_identical_composite` (AC1 end-to-end),
+  `display_time_visibility_reanchors_participating_p99` (AC2 display-time re-anchor).
+
 ---
 
 ## §7 Source Reference Table
