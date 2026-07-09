@@ -266,6 +266,43 @@ void RenderTopBar(float window_width) {
     g_state.color_window_open = !g_state.color_window_open;
   }
 
+  // task-colored-toggle-to-topbar (346.3): colored/full-spectrum display-time
+  // toggle, relocated from the status bar (task-345.4) to sit next to Colors.
+  // Gated identically (raypath_color non-empty) so it renders only when at
+  // least one color class exists (AC4: no color classes ⇒ no checkbox,
+  // matching pre-346.3 status-bar behavior). Label/checked-state reads
+  // GROUND TRUTH (last_uploaded_as_composite), click writes the user
+  // preference (show_composite_preview) — same read/write split as
+  // gui_state.hpp:794-803. The checkbox living in ##TopBar (a window
+  // independent of the Colors window's own render call) is itself the
+  // persistent "currently in colored mode" marker required by AC3: closing
+  // Colors does not touch this window.
+  if (!g_state.raypath_color.empty()) {
+    ImGui::SameLine();
+    const bool composite_now = g_state.last_uploaded_as_composite;
+    const char* mode_label = composite_now ? ICON_FA_PALETTE " Colored" : ICON_FA_PALETTE " Full Spectrum";
+    std::string checkbox_id = std::string(mode_label) + "##CompositePreviewToggle";
+    bool checked = composite_now;
+    if (composite_now) {
+      // Checkbox renders as frame background + check mark, not a button — the
+      // 345.4 accent used ImGuiCol_Button which does not apply here.
+      ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.35f, 0.55f, 0.85f, 1.0f));
+      ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.45f, 0.65f, 0.95f, 1.0f));
+      ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+    }
+    if (ImGui::Checkbox(checkbox_id.c_str(), &checked)) {
+      g_state.show_composite_preview = !g_state.show_composite_preview;
+    }
+    if (composite_now) {
+      ImGui::PopStyleColor(3);
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(
+          "Toggle colored composite / full-spectrum preview.\n"
+          "Display-time only -- does not re-simulate or discard color classes.");
+    }
+  }
+
   // Right-panel collapse toggle — right-aligned so it sits flush with the right panel's outer edge.
   // Also note: when the right panel is already collapsed, RenderCollapsedStrip's internal button
   // still expands it; this top-bar toggle simply offers a symmetric alternate entry point.
@@ -1093,48 +1130,15 @@ void RenderStatusBar(float window_width, float window_height) {
     }
   }
 
-  // task-345.4: display-mode toggle + Log panel buttons (right-aligned cluster).
-  // The mode toggle is only shown when at least one raypath_color class is committed (AC4:
-  // no color classes ⇒ no toggle, no persistent marker — behavior identical to pre-345.4).
-  // Its label/highlight reads GROUND TRUTH (`last_uploaded_as_composite`), not the raw user
-  // preference — during the single frame between "user clicks" and "SyncFromPoller uploads"
-  // the ground truth is what the screen actually shows (plan §3 keypoint 2).
-  // task-345.5 (⑥): the Colors button moved to the top bar's feature-button
-  // group; the width formula below dropped `color_w` and the trailing `spacing`
-  // term that used to separate Colors from Log.
+  // task-colored-toggle-to-topbar (346.3): the colored/full-spectrum mode toggle
+  // that used to sit here (task-345.4) moved to the top bar next to the Colors
+  // button. The status bar right cluster now contains only the Log button; the
+  // width formula below dropped `mode_w` and its trailing `mode_gap` term.
   {
     const char* log_label = g_state.log_panel_open ? ICON_FA_CHEVRON_DOWN " Log" : ICON_FA_CHEVRON_RIGHT " Log";
-    const bool show_mode_toggle = !g_state.raypath_color.empty();
-    const bool composite_now = g_state.last_uploaded_as_composite;
-    const char* mode_label = composite_now ? ICON_FA_PALETTE " Colored" : ICON_FA_PALETTE " Full Spectrum";
     const float pad_x = ImGui::GetStyle().FramePadding.x * 2;
     const float log_w = ImGui::CalcTextSize(log_label).x + pad_x;
-    const float mode_w = show_mode_toggle ? (ImGui::CalcTextSize(mode_label).x + pad_x) : 0.0f;
-    const float spacing = ImGui::GetStyle().ItemSpacing.x;
-    const float mode_gap = show_mode_toggle ? spacing : 0.0f;
-    ImGui::SameLine(ImGui::GetWindowWidth() - log_w - mode_w - mode_gap - ImGui::GetStyle().WindowPadding.x);
-    if (show_mode_toggle) {
-      if (composite_now) {
-        // Accent color for the "colored" state; owner AC5 handles final palette tuning.
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.55f, 0.85f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.45f, 0.65f, 0.95f, 1.0f));
-      }
-      // Lock the ImGui ID against the (composite_now-dependent) label so ImGuiTestEngine
-      // ItemClick("...##CompositePreviewToggle") is stable across state flips.
-      std::string btn_id = std::string(mode_label) + "##CompositePreviewToggle";
-      if (ImGui::SmallButton(btn_id.c_str())) {
-        g_state.show_composite_preview = !g_state.show_composite_preview;
-      }
-      if (composite_now) {
-        ImGui::PopStyleColor(2);
-      }
-      if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(
-            "Toggle colored composite / full-spectrum preview.\n"
-            "Display-time only -- does not re-simulate or discard color classes.");
-      }
-      ImGui::SameLine();
-    }
+    ImGui::SameLine(ImGui::GetWindowWidth() - log_w - ImGui::GetStyle().WindowPadding.x);
     if (ImGui::SmallButton(log_label)) {
       g_state.log_panel_open = !g_state.log_panel_open;
     }
