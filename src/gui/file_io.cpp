@@ -1037,6 +1037,11 @@ std::string SerializeCoreConfig(const GuiState& state) {
     jr["visible"] = "full";
     jr["background"] = { 0.0f, 0.0f, 0.0f };
     jr["opacity"] = r.opacity;
+    // CLI 导出路径：intensity_factor 必须烘焙 2^exposure_offset——CLI 没有独立的
+    // display-time EV 概念，导出的 config.json 用 CLI 重跑时亮度需与 GUI 当前视图
+    // 一致（Save Config 语义承诺）。这与 FillLumiceConfig（本文件 ~L1554 附近）
+    // 的 struct 提交路径**故意**不同——那条路径由 display-time 承担 EV，此处不能
+    // 一致化，否则 GUI Run 会双叠加。task-346.1 / doc/ev-pipeline-architecture.md §2.4。
     jr["intensity_factor"] = std::pow(2.0f, r.exposure_offset);
     jr["overlap"] = kDualFisheyeOverlap;
 
@@ -1551,7 +1556,20 @@ bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out, FilterOverflowI
     dst.resolution_w = res * 2;
     dst.resolution_h = res;
     dst.opacity = r.opacity;
-    dst.intensity_factor = std::pow(2.0f, r.exposure_offset);
+    // task-346.1: GUI Run 路径的 intensity_factor 必须恒为 RenderConfig::intensity_factor_
+    // 的默认值（config/render_config.hpp 里的 1.0f；这里用字面量绑定，因 GUI API
+    // 边界禁止 src/gui/ 直接 include core/config 头——若未来该默认值变更需同步此处）。
+    // 语义：GUI 的手动 + 自动 EV 完全由 display-time 路径承担：mono 走 shader uniform
+    // （app.cpp RefreshPreviewParams），composite 走 LUMICE_SetCompositeExposure
+    // （每帧从 RenderPreviewPanel 推送，作为 display_exposure_scale 参与 compositor
+    // 的单一共享曝光标量 s = ExposureScale() × display_exposure_scale）。
+    // 若在此烘焙 2^exposure_offset，则在 re-run 且 EV≠0 时会与 display-time 推送
+    // 双叠加 → 手动 EV 被计算两次。
+    // ⚠️ 注意：CLI/config 导出路径（SerializeCoreConfig，本文件 ~L1040 附近）
+    // 反而必须写入 2^exposure_offset，因为 CLI 没有独立的 display-time EV 概念——
+    // 同一字段两种合法语义、互不影响，勿一致化。
+    // 详见 doc/ev-pipeline-architecture.md §2.4/§4。
+    dst.intensity_factor = 1.0f;
     dst.overlap = kDualFisheyeOverlap;
   }
 
