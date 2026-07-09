@@ -780,8 +780,12 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   if (pick_active) {
     if (!pick_target_disabled) {
       const ImVec2 card_max(card_win_pos.x + card_win_sz.x, card_win_pos.y + card_win_sz.y);
-      if (ImGui::IsMouseHoveringRect(card_win_pos, card_max) && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-          !ImGui::IsAnyItemHovered()) {
+      // IsWindowHovered() gates against floating windows (e.g. Colors) covering the card:
+      // ImGui's FindHoveredWindow already resolved z-order for this frame, and returns false
+      // here when the ##card child is not the top-most window under the cursor. AND with the
+      // existing rect test keeps no-overlap behavior identical (task-color-window-mouse-capture).
+      if (ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(card_win_pos, card_max) &&
+          ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered()) {
         // "Link A to B" semantics: A (the entry whose modal opened the picker —
         // pick_link_source) adopts B's (the clicked card's) crystal/filter ids.
         // So in ApplyPickLink(source, target) the *clicked card* is the source
@@ -803,8 +807,9 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
     }
   } else {
     const ImVec2 card_max(card_win_pos.x + card_win_sz.x, card_win_pos.y + card_win_sz.y);
-    if (ImGui::IsMouseHoveringRect(card_win_pos, card_max) && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-        !ImGui::IsAnyItemHovered()) {
+    // See pick-mode branch above for IsWindowHovered() rationale.
+    if (ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(card_win_pos, card_max) &&
+        ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered()) {
       g_edit_request = { EditTarget::kCard, layer_idx, entry_idx };
     }
   }

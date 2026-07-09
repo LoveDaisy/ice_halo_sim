@@ -1957,6 +1957,54 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // p1_card/card_click_blocked_when_covered_by_colors_window — AC1 regression
+  // for task-color-window-mouse-capture: the Colors window is a floating
+  // ImGui::Begin above the LeftPanel; when it covers a crystal card the manual
+  // click detection in RenderEntryCard must not fire (issue.md AC1).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_card", "card_click_blocked_when_covered_by_colors_window");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      IM_CHECK_EQ(gui::IsEditModalOpen(), false);
+
+      // Reuse the anchor logic from card_wide_click_opens_modal so both tests
+      // move together if the LeftPanel layout shifts.
+      auto edit_info = ctx->ItemInfo("**/Edit##cr");
+      IM_CHECK(edit_info.ID != 0);
+      float card_left = edit_info.RectFull.Min.x - 200.0f;
+      float card_top = edit_info.RectFull.Min.y;
+      ImVec2 thumb_center(card_left + 30.0f, card_top + 20.0f);
+
+      // Open the Colors window and move it so its client area covers
+      // thumb_center. The default size is 720x480 (color_window.cpp:505); by
+      // anchoring the top-left ~300px above and ~300px left of thumb_center,
+      // thumb_center lands ~mid-window, well past the header / composite-mode
+      // combo / Add Class button row / separator (~70px from top).
+      // raypath_color is empty after DoNew(), so no color-class row extends
+      // down into that region — the click point falls on the empty class table
+      // area, which contains no ImGui item.
+      gui::g_state.color_window_open = true;
+      ctx->Yield(2);
+
+      ImVec2 colors_pos(thumb_center.x - 300.0f, thumb_center.y - 240.0f);
+      ctx->WindowMove(ICON_FA_PALETTE " Colors", colors_pos);
+      ctx->Yield(2);
+
+      ctx->MouseMoveToPos(thumb_center);
+      ctx->MouseClick(0);
+      ctx->Yield(4);
+
+      // Core AC1 assertion: the covered click must NOT open the edit modal.
+      IM_CHECK_EQ(gui::IsEditModalOpen(), false);
+
+      // Cleanup
+      gui::g_state.color_window_open = false;
+      ctx->Yield(2);
+    };
+  }
+
   // p1_card/card_wide_click_noop_same_card — card click on already-open card is no-op
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_card", "card_wide_click_noop_same_card");

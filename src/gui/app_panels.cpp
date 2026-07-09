@@ -294,7 +294,13 @@ bool OverlayButton(const char* label, float local_x, float local_y) {
 
   ImDrawList* fg = ImGui::GetForegroundDrawList();
   ImGuiIO& io = ImGui::GetIO();
-  bool hovered = (io.MousePos.x >= pos.x && io.MousePos.x <= max.x && io.MousePos.y >= pos.y && io.MousePos.y <= max.y);
+  // The collapse strip is drawn directly to ForegroundDrawList without a Begin(), so no
+  // ImGui window exists to gate against. Fall back to WantCaptureMouse, which is set by
+  // NewFrame() when any real ImGui window (e.g. Colors) sits under the cursor. This
+  // prevents click-through when a floating window covers the strip
+  // (task-color-window-mouse-capture).
+  bool hovered = !io.WantCaptureMouse &&
+                 (io.MousePos.x >= pos.x && io.MousePos.x <= max.x && io.MousePos.y >= pos.y && io.MousePos.y <= max.y);
   bool clicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
 
   ImU32 bg_col = ImGui::GetColorU32(clicked ? ImGuiCol_ButtonActive :
