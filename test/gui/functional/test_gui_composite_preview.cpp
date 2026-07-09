@@ -280,4 +280,97 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     local.Stop();
     LUMICE_DestroyServer(server);
   };
+
+  // task-345.2 AC1 anchor (③ wake-poller): after a finite sim reaches COMPLETED and the poller
+  // self-pauses, a display-time color edit (LUMICE_SetRaypathColors) must be able to drive one
+  // fresh composite materialization without restarting the sim (epoch unchanged, lifecycle stays
+  // COMPLETED). Pins the two coupled invariants:
+  //   (a) MECHANISM: the poll after SetRaypathColors + EnsureRunning yields a payload whose
+  //       rgb_data reflects the new colors and is byte-identical to a direct LUMICE_GetCompositeResults
+  //       (proving the display-time dirty flag was consumed, not lost).
+  //   (b) NON-RESTART: LUMICE_GetSimLifecycle still reports COMPLETED with the SAME epoch
+  //       observed before the edit (322 clock decoupling: display-time edit does NOT bump
+  //       committed_epoch_ and does NOT flip sim state back to RUNNING).
+  ImGuiTest* t4 = IM_REGISTER_TEST(engine, "gui_composite_preview", "display_time_color_edit_repaints_without_restart");
+  t4->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    const bool ok = RunToIdleWithData(server, kColorConfig);
+    IM_CHECK(ok);
+    if (!ok) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+
+    // Snapshot the terminal (finite-completion) lifecycle: this is what a display-time edit
+    // MUST NOT bump.
+    LUMICE_SimLifecycleResult lc_before{};
+    IM_CHECK_EQ(LUMICE_GetSimLifecycle(server, &lc_before), LUMICE_OK);
+    IM_CHECK_EQ(lc_before.lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+    const unsigned long long done_epoch = lc_before.epoch;
+
+    // Baseline poll to freeze current composite for a byte-diff below.
+    gui::ServerPoller local;
+    local.ResetGenerationForTest();
+    local.PollOnceForTest(server);
+    auto snap_before = local.LoadSnapshot();
+    IM_CHECK(snap_before != nullptr);
+    IM_CHECK(snap_before->valid);
+    IM_CHECK(snap_before->payload != nullptr);
+    IM_CHECK(snap_before->payload->is_composite);
+    std::vector<uint8_t> composite_before(snap_before->payload->rgb_data.begin(), snap_before->payload->rgb_data.end());
+
+    // Display-time edit: swap the class-0 color from red → blue. kColorConfig commits exactly
+    // one raypath_color class, so class_count == 1 matches.
+    LUMICE_ColorClassDisplay disp[1]{};
+    disp[0].color[0] = 0.0f;
+    disp[0].color[1] = 0.0f;
+    disp[0].color[2] = 1.0f;  // blue
+    disp[0].visible = 1;
+    IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp, 1, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
+    // The very wake call PushDisplayState() invokes in production, exercised on the global poller
+    // that would drive DoSnapshot() consumption when a background worker was actually running.
+    // For this synchronous test seam, EnsureRunning + PollOnceForTest together stand in for
+    // "worker wakes up and runs one PollOnce, then self-pauses at COMPLETED".
+    gui::g_server_poller.EnsureRunning(server);
+
+    // (a) MECHANISM: the poll after the edit must produce a composite reflecting the new colors —
+    // i.e., not byte-identical to composite_before (the color changed, so the rendered image must
+    // differ). And it must byte-match a same-tick direct C-API read.
+    local.PollOnceForTest(server);
+    auto snap_after = local.LoadSnapshot();
+    IM_CHECK(snap_after != nullptr);
+    IM_CHECK(snap_after->valid);
+    IM_CHECK(snap_after->payload != nullptr);
+    IM_CHECK(snap_after->payload->is_composite);
+    IM_CHECK_EQ(snap_after->payload->rgb_data.size(), composite_before.size());
+    IM_CHECK(std::memcmp(snap_after->payload->rgb_data.data(), composite_before.data(), composite_before.size()) != 0);
+
+    LUMICE_RenderResult direct[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, direct, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(direct[0].img_buffer != nullptr);
+    IM_CHECK_EQ(
+        std::memcmp(snap_after->payload->rgb_data.data(), direct[0].img_buffer, snap_after->payload->rgb_data.size()),
+        0);
+
+    // (b) NON-RESTART: lifecycle stays COMPLETED with the SAME epoch. This is the 322 clock-
+    // decoupling guarantee — a display-time edit re-materializes but does NOT reset the
+    // accumulator or bump the committed_epoch. If ③'s wake path ever regressed to calling
+    // LUMICE_Start / LUMICE_CommitConfig, this would flip lifecycle back to RUNNING and/or
+    // bump the epoch.
+    LUMICE_SimLifecycleResult lc_after{};
+    IM_CHECK_EQ(LUMICE_GetSimLifecycle(server, &lc_after), LUMICE_OK);
+    IM_CHECK_EQ(lc_after.lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+    IM_CHECK_EQ(lc_after.epoch, done_epoch);
+
+    // Payload's epoch also stays == done_epoch (no accumulator reset).
+    IM_CHECK_EQ(snap_after->payload->payload_epoch, done_epoch);
+
+    // Post-test cleanup on both the local ServerPoller and the global one that EnsureRunning
+    // above nudged into kRunning — Stop() is synchronous and idempotent.
+    local.Stop();
+    gui::g_server_poller.Stop();
+    LUMICE_DestroyServer(server);
+  };
 }

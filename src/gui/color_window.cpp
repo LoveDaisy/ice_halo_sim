@@ -70,6 +70,18 @@ bool PushDisplayState(const GuiState& state, LUMICE_Server* server) {
                   static_cast<int>(ec), n);
     return false;
   }
+  // task-345.2 (③): after a finite sim completes, ServerPoller self-pauses (server_poller.cpp)
+  // and no one drives DoSnapshot() anymore, so the LUMICE_SetRaypathColors() call above sets
+  // snapshot_dirty_ but that flag would never get consumed — the preview stays on the old colors
+  // until the user restarts the sim. Wake the poller here so it runs ONE more PollOnce() cycle
+  // to materialize a fresh composite with the new colors, then self-pauses again (its own
+  // COMPLETED-edge self-pause fires at the end of that same PollOnce, see server_poller.cpp).
+  // No epoch bump, no accumulator reset, no sim restart — display-time semantics preserved
+  // (322 lifecycle clock decoupling, doc/gui-preview-lifecycle-architecture.md I1–I6).
+  //
+  // If the poller is already running (infinite sim / mid-run edit), EnsureRunning is a
+  // zero-overhead no-op (server_poller.hpp).
+  g_server_poller.EnsureRunning(server);
   return true;
 }
 
