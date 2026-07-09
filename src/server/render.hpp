@@ -68,6 +68,21 @@ class RenderConsumer : public IConsume {
   // (snapshot_intensity_), so it is tearing-free once PrepareSnapshot() has run.
   float ExposureScale() const;
 
+  // task-347 (Fix B): server-side self-anchored exposure scale for the
+  // composite (raypath_color) path. Given the participating-P99 of the current
+  // frame's active class union (raw, unexposed Y), returns the scalar that
+  // brings that P99 up to the sRGB target_white=135 linear equivalent — so
+  // hiding a bright class instantly re-brightens the remaining dim classes,
+  // in the same DoSnapshot call, without any GUI auto-EV round-trip.
+  //   = config_.intensity_factor_ * target_linear * snapshot_intensity_ / participating_p99_y
+  // (see doc/ev-pipeline-architecture.md §6.6). Returns 0 when
+  // participating_p99_y<=0 or snapshot_intensity_<=0. MIRROR: the target_white
+  // constant and sRGB reverse transform below are duplicated from
+  // gui_ev_auto.hpp::ComputeEvAuto (server/ and gui/ layers cannot share a
+  // header without dragging one into the other — same precedent as the
+  // ComputeParticipatingP99Y / ComputeP99Y pair; keep the two in sync).
+  float ParticipatingExposureScale(float participating_p99_y) const;
+
  private:
   // task-339.3: per-class lane accumulation, split out of Consume() to keep its
   // cognitive complexity bounded. For each ray it evaluates the class predicate

@@ -98,6 +98,26 @@ float RenderConsumer::ExposureScale() const {
   return config_.intensity_factor_ * kNormScale * total_pix / snapshot_intensity_;
 }
 
+// task-347 (Fix B): composite-path self-anchored exposure scale. See
+// declaration comment in render.hpp for the full contract + mirror-precedent
+// note vs gui_ev_auto.hpp::ComputeEvAuto.
+float RenderConsumer::ParticipatingExposureScale(float participating_p99_y) const {
+  if (participating_p99_y <= 0.0f || snapshot_intensity_ <= 0.0f) {
+    return 0.0f;
+  }
+  // MIRROR gui_ev_auto.hpp::ComputeEvAuto: target_white=135 on the 0-255 sRGB
+  // scale, converted to linear via the piecewise sRGB reverse transform. If
+  // you change either constant, mirror the change in the other file.
+  constexpr float kTargetWhite = 135.0f;
+  constexpr float kTargetWhiteSrgb = kTargetWhite / 255.0f;
+  const float target_linear =
+      kTargetWhiteSrgb <= 0.04045f ? kTargetWhiteSrgb / 12.92f : std::pow((kTargetWhiteSrgb + 0.055f) / 1.055f, 2.4f);
+  if (target_linear <= 0.0f) {
+    return 0.0f;
+  }
+  return config_.intensity_factor_ * target_linear * snapshot_intensity_ / participating_p99_y;
+}
+
 
 void RenderConsumer::ConsumeDeviceFused(const SimData& data) {
   // S1 device-fused: backend already accumulated XYZ on-device; skip

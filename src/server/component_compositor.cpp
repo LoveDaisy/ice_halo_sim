@@ -196,14 +196,6 @@ bool CompositeColorClassesLinear(const RenderConsumer& consumer, const ColorClas
   if (class_table.referenced_mask_ == 0) {
     return false;
   }
-  // Single-scalar exposure invariant (a03 / doc §4.3): ExposureScale() is the
-  // one mono-image scale shared with the mono path; display_exposure_scale is
-  // one global GUI EV multiplier. Their product `s` is used identically by
-  // every mode below — never per-class, never per-lane. Do not split.
-  const float s = consumer.ExposureScale() * display_exposure_scale;
-  if (s <= 0.0f) {
-    return false;
-  }
 
   const int w = consumer.ImageWidth();
   const int h = consumer.ImageHeight();
@@ -216,12 +208,39 @@ bool CompositeColorClassesLinear(const RenderConsumer& consumer, const ColorClas
     return true;
   }
 
+  // task-347 (Fix B) reorder: gather participants + compute the anchor P99
+  // BEFORE the exposure scalar. The old order ran ComputeParticipatingP99Y
+  // AFTER the pixel loop (only as an out-parameter report); moving it here
+  // lets the P99 feed ParticipatingExposureScale so a visibility change
+  // re-anchors the composite in the SAME DoSnapshot call.
   const std::vector<ActiveClass> active = GatherActiveClasses(consumer, class_table);
   if (active.empty()) {
     if (out_participating_p99_y != nullptr) {
       *out_participating_p99_y = 0.0f;
     }
     return true;  // nothing visible → all-black, still a valid composite
+  }
+  const float participating_p99 = ComputeParticipatingP99Y(active, n);
+
+  // Single-scalar exposure invariant (a03 / doc §4.3): every participating
+  // lane sees the SAME `s`; per-lane / per-class renormalization is the
+  // scrum-336 spike's false-color bug and is structurally excluded. Fix B:
+  // `s` comes from the participating-P99 self-anchor (not the mono
+  // ExposureScale) so hiding a bright class instantly re-anchors the rest;
+  // `display_exposure_scale` is the optional GUI EV multiplier bolted on top.
+  const float s = consumer.ParticipatingExposureScale(participating_p99) * display_exposure_scale;
+  if (s <= 0.0f) {
+    // task-347 semantic tightening: `participating_p99` is now known even on
+    // this early-return path (it was computed above). Publish it so consumers
+    // that read the anchor field regardless of return value see the true
+    // current value (all in-tree consumers either skip the false-return
+    // renderer entirely or pre-zero the field, so this is a no-op in practice
+    // — kept for defense-in-depth against a caller that inspects the field
+    // without checking the return).
+    if (out_participating_p99_y != nullptr) {
+      *out_participating_p99_y = participating_p99;
+    }
+    return false;
   }
 
   for (size_t p = 0; p < n; ++p) {
@@ -240,7 +259,7 @@ bool CompositeColorClassesLinear(const RenderConsumer& consumer, const ColorClas
   }
 
   if (out_participating_p99_y != nullptr) {
-    *out_participating_p99_y = ComputeParticipatingP99Y(active, n);
+    *out_participating_p99_y = participating_p99;
   }
 
   return true;

@@ -906,11 +906,14 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     float ev_total = rc.exposure_offset + g_state.ev_auto;
     pp.exposure.intensity_factor = std::pow(2.0f, ev_total);
 
-    // task-345.3: mirror the mono shader-uniform EV onto the composite bake so
-    // the colored image visibly follows the same EV slider. The plumbing is
-    // orthogonal to the mono path (server keeps a separate display_ev_total_
-    // that only feeds the composite compositor — mono LinearRgbToSrgbU8 output
-    // is untouched).
+    // task-347 (Fix B) DECOUPLE: the composite path is now server-side self-
+    // anchored on participating-P99 (see doc/ev-pipeline-architecture.md §6.6).
+    // GUI must push ONLY the manual `exposure_offset` here — folding `ev_auto`
+    // back in would multiply the auto-anchor by the auto-EV a second time and
+    // reintroduce the double-count that Fix B is meant to eliminate. The mono
+    // shader-uniform path above still uses `ev_total = exposure_offset +
+    // ev_auto` because the mono pipeline anchors off the mono ExposureScale
+    // (integral over the whole image), not off a self-anchored P99.
     //
     // Push guard logic (value-changed OR off->on edge) lives in
     // ShouldPushCompositeExposure (gui/composite_exposure_push.hpp,
@@ -923,15 +926,17 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       static bool s_last_composite_active = false;
       constexpr float kCompositeEvPushEpsilon = 1e-4f;
       const bool composite_active = g_server != nullptr && !g_state.raypath_color.empty();
-      if (lumice::gui::ShouldPushCompositeExposure(composite_active, s_last_composite_active, ev_total,
+      // Fix B: push value == manual EV offset only (no ev_auto).
+      const float composite_ev_push = rc.exposure_offset;
+      if (lumice::gui::ShouldPushCompositeExposure(composite_active, s_last_composite_active, composite_ev_push,
                                                    s_last_pushed_ev, kCompositeEvPushEpsilon)) {
-        LUMICE_SetCompositeExposure(g_server, ev_total);
+        LUMICE_SetCompositeExposure(g_server, composite_ev_push);
         // Wake a paused poller so the next frame can pick up the freshly re-baked
         // composite even after a finite sim has completed (same rationale as the
         // color-window PushDisplayState path — see task-345.2 (③) in color_window.cpp).
         // No-op when the poller is already running.
         g_server_poller.EnsureRunning(g_server);
-        s_last_pushed_ev = ev_total;
+        s_last_pushed_ev = composite_ev_push;
       }
       s_last_composite_active = composite_active;
     }

@@ -28,12 +28,17 @@ CompositeMode ParseCompositeMode(const std::string& mode_str);
 // IS the z-order (see doc/gui-custom-spectrum-and-raypath-color.md §4.7). Per
 // pixel, each participating class c contributes exposed value
 // `ey_c = classLaneY_c[p] * s`, where
-//   `s = consumer.ExposureScale() * display_exposure_scale`
-// — the single mono-image exposure multiplied by an OPTIONAL display-time
-// scalar (default 1.0 = pre-345.3 behavior). `display_exposure_scale` is one
-// global scalar shared by every lane in every mode; per-lane renormalization
-// is the assumed-invalid "false-color" bug from the scrum-336 spike and is
-// structurally excluded here (a03 / doc §4.3). Modes:
+//   `s = consumer.ParticipatingExposureScale(participating_p99_y) * display_exposure_scale`
+// — task-347 (Fix B): the composite exposure scalar is server-side self-anchored
+// off the participating-P99 of the currently-visible class union (computed
+// BEFORE the pixel loop, in-scope of the same call). Hiding a bright class
+// therefore shrinks the participating set → lowers the anchor P99 → raises
+// `s` → the remaining dim classes brighten in the same DoSnapshot, with no
+// GUI auto-EV feedback round-trip. `display_exposure_scale` is an optional
+// display-time multiplier (default 1.0) — one global scalar shared by every
+// lane in every mode; per-lane renormalization is the assumed-invalid
+// "false-color" bug from the scrum-336 spike and is structurally excluded
+// here (a03 / doc §4.3). Modes:
 //   - kDominant: argmax_c ey_c (strict >, ascending scan → tie goes to the
 //     class earlier in the list), painted with that class's color.
 //   - kAdditive: Σ_c color_c × ey_c, per-channel clamped to [0,1].
@@ -50,15 +55,28 @@ CompositeMode ParseCompositeMode(const std::string& mode_str);
 //
 // out_participating_p99_y (optional, may be nullptr): P99 of the union of
 // non-zero UNEXPOSED (raw) Y values across the participating classes' lanes
-// — the anchor the GUI's auto-EV feeds ComputeEvAuto with for composite
-// display (mono path continues to use xyz_data-derived P99). Written iff
-// non-null AND the function returns true; set to 0 when no participating
-// class carries any positive Y.
+// — the anchor now consumed both by the internal ParticipatingExposureScale
+// (self-anchor) AND by the C API surface (composite_p99_y, still reported so
+// the GUI has a diagnostic view of the current anchor). Written iff non-null
+// AND the class table has any resolvable bits AND at least one participating
+// class exists; set to 0 when no participating class carries any positive Y.
+// task-347 (Fix B) NOTE: with participating-P99 now computed BEFORE `s`,
+// the exposure-scale early-return branch (`s <= 0`) also writes this value
+// (equal to what the P99 pass produced) — a semantic tightening vs the
+// pre-347 "left untouched on false return" behavior. All in-tree consumers
+// (server.cpp DoSnapshot loops that skip false-return renderers, the C API
+// mono path which explicitly writes 0, tests initializing to 0 before the
+// call) are unaffected — the write-on-false path can only observe the
+// tightening when the caller passes a non-null pointer AND ignores the
+// return value AND does NOT pre-zero the field, which no consumer does.
 //
 // Returns false (leaving out_linear_rgb untouched) when the class table has no
-// resolvable bits (referenced_mask_ == 0) or the exposure scale is 0 (no
-// snapshot / zero intensity). Otherwise resizes out_linear_rgb to W*H*3 and
-// returns true — even when every class is hidden (legitimately all-black).
+// resolvable bits (referenced_mask_ == 0) or the participating-P99 anchor is
+// zero / snapshot intensity is zero (no snapshot data / all lanes empty /
+// every class hidden with no positive lane values). Otherwise resizes
+// out_linear_rgb to W*H*3 and returns true — even when every class is hidden
+// yielding a legitimately all-black composite (participating-P99==0 branch is
+// promoted to false because the self-anchor cannot brighten a zero signal).
 bool CompositeColorClassesLinear(const RenderConsumer& consumer, const ColorClassTable& class_table, CompositeMode mode,
                                  float display_exposure_scale, std::vector<float>& out_linear_rgb,
                                  float* out_participating_p99_y);
