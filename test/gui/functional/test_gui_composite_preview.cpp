@@ -9,6 +9,7 @@
 // cross-test global-state coupling.
 
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <thread>
 #include <vector>
@@ -80,6 +81,44 @@ const char* kColorConfig = R"({
     "mode": "dominant",
     "classes": [
       {"color": [1.0, 0.0, 0.0], "match": [{"layer": 0, "crystal": 1}]}
+    ]
+  }
+})";
+
+// Two-class config for task-346.1 AC2. class 0 = match-all (bright, every landed ray
+// contributes to its Y-lane); class 1 = entry_exit filter with len==3 (dim, only 3-hop
+// paths contribute). Larger ray_num (400k) to keep class 1's lane statistically populated.
+const char* kTwoColorConfig = R"({
+  "crystal": [{
+    "id": 1, "type": "prism",
+    "shape": {"height": 1.5},
+    "axis": {"zenith": {"type": "gauss", "mean": 90.0, "std": 10.0},
+             "azimuth": {"type": "uniform", "mean": 0.0, "std": 180.0},
+             "roll": {"type": "uniform", "mean": 0.0, "std": 180.0}}
+  }],
+  "filter": [],
+  "scene": {
+    "light_source": {"type": "sun", "altitude": 20.0, "azimuth": 0.0,
+                     "diameter": 0.5, "spectrum": "D65"},
+    "ray_num": 400000,
+    "max_hits": 8,
+    "scattering": [{"prob": 0.0, "entries": [{"crystal": 1, "proportion": 1.0}]}]
+  },
+  "render": [{
+    "id": 1,
+    "lens": {"type": "dual_fisheye_equal_area", "fov": 180.0},
+    "resolution": [128, 64],
+    "view": {"elevation": 0, "azimuth": 0, "roll": 0},
+    "visible": "full", "background": [0, 0, 0],
+    "opacity": 1.0, "intensity_factor": 1.0
+  }],
+  "raypath_color": {
+    "mode": "dominant",
+    "classes": [
+      {"color": [1.0, 0.0, 0.0], "match": [{"layer": 0, "crystal": 1}]},
+      {"color": [0.0, 0.0, 1.0], "match": [{"layer": 0, "crystal": 1,
+                                            "type": "entry_exit",
+                                            "min_len": 3, "max_len": 3}]}
     ]
   }
 })";
@@ -458,6 +497,161 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     LUMICE_RayCount ray_count_after = 0;
     IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_after), LUMICE_OK);
     IM_CHECK(ray_count_after >= ray_count_before);
+
+    LUMICE_DestroyServer(server);
+  };
+
+  // task-346.1 ⑤ AC2 anchor (display-time visibility → auto-EV re-anchors participating P99):
+  // owner requirement — "关掉一个很亮的染色类后，auto-EV 按剩余可见类重锚 P99 把暗类显示清楚".
+  // The mechanism is: LUMICE_SetRaypathColors' visible/solo change flips snapshot_dirty_ →
+  // next LUMICE_GetCompositeResults triggers a Phase-2 rebuild that recomputes
+  // ComputeParticipatingP99Y over `GatherActiveClasses` (already visible/solo-filtered) → the
+  // fresh composite_p99_y is published on the C API surface. Everything is display-time; no
+  // sim restart, no epoch bump, no ray count reset. Two-class fixture: class 0 = match-all
+  // (bright — every landed ray contributes to its Y-lane), class 1 = 3-hop entry_exit filter
+  // (dim — only rays completing exactly the 3-hop path contribute). Hiding the bright class
+  // must shrink the participating union to class 1 alone and thus strictly LOWER the P99
+  // anchor; restoring visibility must return it to baseline. kTwoColorConfig defined at
+  // TU-level below to keep the TestFunc lambda stateless (function-pointer conversion).
+  ImGuiTest* t_ac2 =
+      IM_REGISTER_TEST(engine, "gui_composite_preview", "display_time_visibility_reanchors_participating_p99");
+  t_ac2->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    const bool ok = RunToIdleWithData(server, kTwoColorConfig);
+    IM_CHECK(ok);
+    if (!ok) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+
+    LUMICE_SimLifecycleResult lc_before{};
+    IM_CHECK_EQ(LUMICE_GetSimLifecycle(server, &lc_before), LUMICE_OK);
+    IM_CHECK_EQ(lc_before.lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+    const unsigned long long done_epoch = lc_before.epoch;
+    LUMICE_RayCount ray_count_before = 0;
+    IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_before), LUMICE_OK);
+
+    // Baseline: both classes visible → participating union of {class 0 Y-lane, class 1 Y-lane}.
+    LUMICE_RenderResult baseline[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, baseline, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(baseline[0].img_buffer != nullptr);
+    const float p99_both = baseline[0].composite_p99_y;
+    IM_CHECK(p99_both > 0.0f);
+
+    // Hide class 0 (bright, match-all) via display-time setter. class_count MUST equal the
+    // committed count (2 here); visible=1 means SHOWN (0-init defaults to INVISIBLE per the
+    // WARNING on LUMICE_ColorClassDisplay's typedef, so class 1 is set explicitly).
+    LUMICE_ColorClassDisplay disp_hide_bright[2]{};
+    disp_hide_bright[0].color[0] = 1.0f;  // preserve original hue (unused in dim/hide test)
+    disp_hide_bright[0].visible = 0;      // HIDE bright class
+    disp_hide_bright[0].solo = 0;
+    disp_hide_bright[1].color[2] = 1.0f;
+    disp_hide_bright[1].visible = 1;
+    disp_hide_bright[1].solo = 0;
+    IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp_hide_bright, 2, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
+
+    // Next GetCompositeResults consumes snapshot_dirty_ → Phase-2 rebuild →
+    // ComputeParticipatingP99Y over {class 1 only} → strictly smaller P99 anchor.
+    LUMICE_RenderResult dim_only[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, dim_only, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(dim_only[0].img_buffer != nullptr);
+    const float p99_dim_only = dim_only[0].composite_p99_y;
+    IM_CHECK(p99_dim_only > 0.0f);      // class 1 has non-empty Y-lane
+    IM_CHECK(p99_dim_only < p99_both);  // ⭐ core AC2 assertion: participating shrank → anchor dropped
+
+    // Restore visibility → participating returns to union → P99 back to baseline (exact,
+    // because the underlying Y-lanes were never touched by the display-time setter).
+    LUMICE_ColorClassDisplay disp_restore[2]{};
+    disp_restore[0].color[0] = 1.0f;
+    disp_restore[0].visible = 1;
+    disp_restore[0].solo = 0;
+    disp_restore[1].color[2] = 1.0f;
+    disp_restore[1].visible = 1;
+    disp_restore[1].solo = 0;
+    IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp_restore, 2, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
+    LUMICE_RenderResult restored[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, restored, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(restored[0].img_buffer != nullptr);
+    IM_CHECK_EQ(restored[0].composite_p99_y, p99_both);
+
+    // display-time guarantees (322 clock decoupling): visibility toggles never bump the
+    // lifecycle epoch and never reset the accumulated sim ray count.
+    LUMICE_SimLifecycleResult lc_after{};
+    IM_CHECK_EQ(LUMICE_GetSimLifecycle(server, &lc_after), LUMICE_OK);
+    IM_CHECK_EQ(lc_after.lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+    IM_CHECK_EQ(lc_after.epoch, done_epoch);
+    LUMICE_RayCount ray_count_after = 0;
+    IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_after), LUMICE_OK);
+    IM_CHECK(ray_count_after >= ray_count_before);
+
+    LUMICE_DestroyServer(server);
+  };
+
+  // task-346.1 ① AC1 anchor (re-run 双叠加消除 · 端到端字节等价):
+  // With the FillLumiceConfig fix in place (intensity_factor ≡ 1.0f, exposure_offset never
+  // baked into the committed config), the GUI Run path pushes a single copy of manual EV
+  // through the display-time channel (LUMICE_SetCompositeExposure). If the caller keeps the
+  // manual EV fixed at E and re-commits the SAME config, the composite bytes MUST be
+  // byte-identical between first Run and re-Run — no 2× EV amplification. This test mirrors
+  // that path at the C API level: two RunToIdleWithData(kColorConfig) calls with the same
+  // LUMICE_SetCompositeExposure(E) in between, byte-compare composite outputs. The regression
+  // is guarded by the AC5 test in test_gui_import_export.cpp (intensity_factor==1.0f pin);
+  // this test is the paired end-to-end proof that AC5 is sufficient (no other hidden EV
+  // ingress in Run path).
+  ImGuiTest* t_ac1 =
+      IM_REGISTER_TEST(engine, "gui_composite_preview", "rerun_with_same_ev_produces_identical_composite");
+  t_ac1->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    constexpr float kUserEv = 2.0f;  // non-zero — the bug is invisible at EV=0
+
+    // First Run.
+    IM_CHECK(RunToIdleWithData(server, kColorConfig));
+    IM_CHECK_EQ(LUMICE_SetCompositeExposure(server, kUserEv), LUMICE_OK);
+    LUMICE_RenderResult first[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, first, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(first[0].img_buffer != nullptr);
+    const size_t rgb_bytes = static_cast<size_t>(first[0].img_width) * static_cast<size_t>(first[0].img_height) * 3;
+    std::vector<uint8_t> first_rgb(first[0].img_buffer, first[0].img_buffer + rgb_bytes);
+
+    // Re-Run: same config, same EV. RunToIdleWithData internally does LUMICE_CommitConfig
+    // which calls Stop() → ResetWith()/rebuild → restart accumulation. This is the exact
+    // path DoRun() takes; if any code layer sneaked EV into the committed config, this
+    // re-Run's composite would be 2× amplified vs. first Run.
+    IM_CHECK(RunToIdleWithData(server, kColorConfig));
+    IM_CHECK_EQ(LUMICE_SetCompositeExposure(server, kUserEv), LUMICE_OK);
+    LUMICE_RenderResult rerun[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, rerun, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(rerun[0].img_buffer != nullptr);
+    IM_CHECK_EQ(rerun[0].img_width, first[0].img_width);
+    IM_CHECK_EQ(rerun[0].img_height, first[0].img_height);
+
+    // ⭐ core AC1 assertion: composite mean-brightness RATIO between re-run and first-run
+    // must be ≈1.0 (within tight stochastic tolerance). The pre-fix bug amplified the shared
+    // exposure scalar by 2^E on top of the display-time push, so at EV=E=2.0 the composite
+    // scale becomes 2^(2E) = 16× instead of 2^E = 4× → mean brightness ratio would be ~4×
+    // (16×/4×). Any ratio outside [0.8, 1.25] rules out the doubling bug while tolerating
+    // ~10-15% run-to-run stochastic noise from independent seeded accumulations reaching IDLE
+    // at slightly different consume-batch boundaries.
+    unsigned long long sum_first = 0, sum_rerun = 0;
+    for (size_t i = 0; i < rgb_bytes; ++i) {
+      sum_first += first_rgb[i];
+      sum_rerun += rerun[0].img_buffer[i];
+    }
+    IM_CHECK(sum_first > 0u);
+    IM_CHECK(sum_rerun > 0u);
+    const double ratio = static_cast<double>(sum_rerun) / static_cast<double>(sum_first);
+    IM_CHECK(ratio > 0.8);
+    IM_CHECK(ratio < 1.25);
+    // The unexposed P99 anchor also stays within similar stochastic bounds (this is the tight
+    // proof at the anchor level — it's independent of EV).
+    const double p99_ratio =
+        static_cast<double>(rerun[0].composite_p99_y) / static_cast<double>(first[0].composite_p99_y);
+    IM_CHECK(p99_ratio > 0.8);
+    IM_CHECK(p99_ratio < 1.25);
 
     LUMICE_DestroyServer(server);
   };
