@@ -1453,6 +1453,66 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // task-colored-toggle-to-topbar (346.3): colored/full-spectrum display-time
+  // toggle relocated from status-bar SmallButton (task-345.4) to a Checkbox in
+  // the top bar next to Colors. Verifies:
+  //   - AC4: with no raypath_color class, the checkbox is not rendered at all
+  //     (neither new nor old location).
+  //   - AC1: with one color class, the checkbox exists at the new top-bar
+  //     path and is gone from the old status-bar path (both label variants).
+  //   - AC3: the checkbox stays visible while color_window_open is false —
+  //     pins "persistent marker doesn't depend on Colors window being open",
+  //     the whole point of the move (would break if someone moved the widget
+  //     inside RenderColorWindow).
+  //   - AC2: clicking flips g_state.show_composite_preview and leaves
+  //     raypath_color / dirty untouched (display-time only, no re-simulation).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_layout", "colored_toggle_relocated_to_topbar_checkbox");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // AC4 — no color classes ⇒ no checkbox anywhere.
+      IM_CHECK(gui::g_state.raypath_color.empty());
+      IM_CHECK(!ctx->ItemExists("##TopBar/" ICON_FA_PALETTE " Colored##CompositePreviewToggle"));
+      IM_CHECK(!ctx->ItemExists("##TopBar/" ICON_FA_PALETTE " Full Spectrum##CompositePreviewToggle"));
+
+      // Install one color class + pin the ground truth to "not composite" so
+      // the label is deterministically "Full Spectrum".
+      gui::ColorClassConfig c;
+      gui::g_state.raypath_color.push_back(c);
+      gui::g_state.last_uploaded_as_composite = false;
+      ctx->Yield(2);
+
+      // AC1 — new path exists, old path gone (both variants).
+      IM_CHECK(ctx->ItemExists("##TopBar/" ICON_FA_PALETTE " Full Spectrum##CompositePreviewToggle"));
+      IM_CHECK(!ctx->ItemExists("##StatusBar/" ICON_FA_PALETTE " Full Spectrum##CompositePreviewToggle"));
+      IM_CHECK(!ctx->ItemExists("##StatusBar/" ICON_FA_PALETTE " Colored##CompositePreviewToggle"));
+
+      // AC3 — closing the Colors window does not hide the checkbox.
+      gui::g_state.color_window_open = false;
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("##TopBar/" ICON_FA_PALETTE " Full Spectrum##CompositePreviewToggle"));
+
+      // AC2 — click flips show_composite_preview only; raypath_color / dirty
+      // untouched (display-time toggle, no re-simulation).
+      const bool pref_before = gui::g_state.show_composite_preview;
+      const size_t classes_before = gui::g_state.raypath_color.size();
+      const bool dirty_before = gui::g_state.dirty;
+      ctx->ItemClick("##TopBar/" ICON_FA_PALETTE " Full Spectrum##CompositePreviewToggle");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.show_composite_preview, !pref_before);
+      IM_CHECK_EQ(gui::g_state.raypath_color.size(), classes_before);
+      IM_CHECK_EQ(gui::g_state.dirty, dirty_before);
+
+      // Symmetric second click — same label path (label is driven by ground
+      // truth, which the user click does not change), preference flips back.
+      ctx->ItemClick("##TopBar/" ICON_FA_PALETTE " Full Spectrum##CompositePreviewToggle");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.show_composite_preview, pref_before);
+    };
+  }
+
   // p1_layout/collapse_strip_click_works_when_unoccluded — AC3 regression for
   // task-color-window-mouse-capture: OverlayButton's `!io.WantCaptureMouse` gate
   // (app_panels.cpp:308) must not suppress the collapse strip's own click when no
