@@ -1428,6 +1428,31 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // task-345.5 (⑥): Colors button moved from status bar into a new
+  // "feature button" group on the top bar, right of Save. Verifies:
+  //   - new top-bar item exists at the expected path,
+  //   - old status-bar item is gone,
+  //   - clicking toggles color_window_open (both directions).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_layout", "colors_button_relocated_to_topbar");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      IM_CHECK(ctx->ItemExists("##TopBar/" ICON_FA_PALETTE " Colors"));
+      IM_CHECK(!ctx->ItemExists("##StatusBar/" ICON_FA_PALETTE " Colors"));
+
+      const bool initial = gui::g_state.color_window_open;
+      ctx->ItemClick("##TopBar/" ICON_FA_PALETTE " Colors");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.color_window_open, !initial);
+
+      ctx->ItemClick("##TopBar/" ICON_FA_PALETTE " Colors");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.color_window_open, initial);
+    };
+  }
+
   // P1: Unsaved Changes Popup
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_file", "unsaved_popup");
