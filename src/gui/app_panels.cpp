@@ -52,6 +52,12 @@
 //     - "Unsaved Changes" (BeginPopupModal)
 //     - "##LogPanel" — user-toggleable; raisable on click; sits naturally
 //       above the LeftPanel / RightPanel cluster.
+//     - ICON_FA_PALETTE " Colors" (color_window.cpp:508) — user-toggleable
+//       floating window. Manual click detection in the background cluster
+//       (e.g. RenderEntryCard's IsMouseHoveringRect path) MUST gate on
+//       IsWindowHovered() or !io.WantCaptureMouse to avoid click-through
+//       when Colors covers the panels beneath it
+//       (task-color-window-mouse-capture / 346.2).
 //
 //   Background cluster (NoBringToFrontOnFocus, push_front on creation
 //                       -> bottom of g.Windows):

@@ -1453,6 +1453,40 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // p1_layout/collapse_strip_click_works_when_unoccluded — AC3 regression for
+  // task-color-window-mouse-capture: OverlayButton's `!io.WantCaptureMouse` gate
+  // (app_panels.cpp:308) must not suppress the collapse strip's own click when no
+  // floating window covers it (code-review round 1, Major finding on the missing
+  // no-occlusion verification for this gate).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_layout", "collapse_strip_click_works_when_unoccluded");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.left_panel_collapsed = true;
+      ctx->Yield(2);
+
+      // Mirror RenderCollapsedStrip/OverlayButton geometry (app_panels.cpp:291-333): the
+      // strip spans [kTopBarHeight, window_height - kStatusBarHeight) and the button (local
+      // anonymous-namespace constexpr kCollapseBtnSize=20.0f, not exported outside
+      // app_panels.cpp) sits vertically centered within it.
+      const ImGuiViewport* vp = ImGui::GetMainViewport();
+      constexpr float kCollapseBtnSize = 20.0f;  // mirrors app_panels.cpp:291
+      float strip_h = vp->Size.y - gui::kTopBarHeight - gui::kStatusBarHeight;
+      float btn_y = gui::kTopBarHeight + (strip_h - kCollapseBtnSize) * 0.5f;
+      ImVec2 click_pos(vp->Pos.x + kCollapseBtnSize * 0.5f, vp->Pos.y + btn_y + kCollapseBtnSize * 0.5f);
+
+      ctx->MouseMoveToPos(click_pos);
+      ctx->MouseClick(0);
+      ctx->Yield(2);
+
+      // Core AC3 assertion: with nothing occluding the strip, io.WantCaptureMouse is false
+      // at this position, so the click still expands the panel as before this task's change.
+      IM_CHECK_EQ(gui::g_state.left_panel_collapsed, false);
+    };
+  }
+
   // P1: Unsaved Changes Popup
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_file", "unsaved_popup");
