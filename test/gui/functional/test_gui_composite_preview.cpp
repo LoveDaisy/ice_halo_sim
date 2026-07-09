@@ -501,18 +501,21 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     LUMICE_DestroyServer(server);
   };
 
-  // task-346.1 ⑤ AC2 anchor (display-time visibility → auto-EV re-anchors participating P99):
-  // owner requirement — "关掉一个很亮的染色类后，auto-EV 按剩余可见类重锚 P99 把暗类显示清楚".
-  // The mechanism is: LUMICE_SetRaypathColors' visible/solo change flips snapshot_dirty_ →
-  // next LUMICE_GetCompositeResults triggers a Phase-2 rebuild that recomputes
-  // ComputeParticipatingP99Y over `GatherActiveClasses` (already visible/solo-filtered) → the
-  // fresh composite_p99_y is published on the C API surface. Everything is display-time; no
-  // sim restart, no epoch bump, no ray count reset. Two-class fixture: class 0 = match-all
-  // (bright — every landed ray contributes to its Y-lane), class 1 = 3-hop entry_exit filter
-  // (dim — only rays completing exactly the 3-hop path contribute). Hiding the bright class
-  // must shrink the participating union to class 1 alone and thus strictly LOWER the P99
-  // anchor; restoring visibility must return it to baseline. kTwoColorConfig defined at
-  // TU-level below to keep the TestFunc lambda stateless (function-pointer conversion).
+  // task-fix-composite-participating-exposure-anchor AC1 core gate (owner ⑤ requirement):
+  // "关掉一个很亮的染色类后，剩余的暗类立即变亮 (auto-EV / server-side self-anchor
+  // according to remaining visible participating P99)". Fix B (this task) makes the composite
+  // exposure scalar self-anchor on participating-P99 inside the same DoSnapshot call as the
+  // visibility toggle — hiding a bright class shrinks `active`, the recomputed P99 drops,
+  // and s = ParticipatingExposureScale(p99) grows, so the remaining (dim) class's pixels
+  // become brighter in ACTUAL RGB bytes. This test reads the actual RGB byte at a class-1
+  // signal pixel and asserts strict brightness gain — NOT just the intermediate p99 y
+  // proxy (that was the failure mode of 346.1, which passed p99 but the on-screen picture
+  // never changed). Additive mode is used because class 1's landing set is a strict subset
+  // of class 0's — in dominant mode class 1 never wins argmax when class 0 is visible, so
+  // dominant cannot express "same pixel gets brighter"; additive puts each class on its own
+  // color channel (class 0 = red, class 1 = blue) so blue-channel byte at a class-1 pixel
+  // is a direct measure of class-1's contribution. The dominant-mode structural counterpart
+  // is `_dominant` variant below (owner ⑤ real usage is closer to dominant).
   ImGuiTest* t_ac2 =
       IM_REGISTER_TEST(engine, "gui_composite_preview", "display_time_visibility_reanchors_participating_p99");
   t_ac2->TestFunc = [](ImGuiTestContext* ctx) {
@@ -533,36 +536,87 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     LUMICE_RayCount ray_count_before = 0;
     IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_before), LUMICE_OK);
 
-    // Baseline: both classes visible → participating union of {class 0 Y-lane, class 1 Y-lane}.
+    // Baseline: additive mode, both classes visible → participating union of both lanes,
+    // p99 is dominated by the bright match-all class (class 0).
+    LUMICE_ColorClassDisplay disp_both[2]{};
+    disp_both[0].color[0] = 1.0f;  // class 0 red
+    disp_both[0].visible = 1;
+    disp_both[0].solo = 0;
+    disp_both[1].color[2] = 1.0f;  // class 1 blue
+    disp_both[1].visible = 1;
+    disp_both[1].solo = 0;
+    IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp_both, 2, nullptr, LUMICE_COLOR_MODE_ADDITIVE), LUMICE_OK);
     LUMICE_RenderResult baseline[LUMICE_MAX_RENDER_RESULTS + 1]{};
     IM_CHECK_EQ(LUMICE_GetCompositeResults(server, baseline, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
     IM_CHECK(baseline[0].img_buffer != nullptr);
+    const int w = baseline[0].img_width;
+    const int h = baseline[0].img_height;
+    const size_t nbytes = static_cast<size_t>(w) * static_cast<size_t>(h) * 3;
     const float p99_both = baseline[0].composite_p99_y;
     IM_CHECK(p99_both > 0.0f);
+    std::vector<uint8_t> baseline_rgb(baseline[0].img_buffer, baseline[0].img_buffer + nbytes);
 
-    // Hide class 0 (bright, match-all) via display-time setter. class_count MUST equal the
-    // committed count (2 here); visible=1 means SHOWN (0-init defaults to INVISIBLE per the
-    // WARNING on LUMICE_ColorClassDisplay's typedef, so class 1 is set explicitly).
+    // Population: every pixel where class 1 has ANY blue signal in the baseline. The
+    // population-average blue byte must strictly grow when hiding class 0 enlarges s,
+    // because blue_linear = class_1_lane[p] * s (additive only mixes class 1 into blue)
+    // and sRGB(byte) is monotonic in blue_linear until saturation at 1.0 → 255. Bounding
+    // to already-blue pixels (b > 0) excludes the class-1-never-hit background so the
+    // ratio isn't diluted by a huge 0-vs-0 term.
+    std::vector<size_t> probe_pixels;
+    for (int y = 0; y < h; ++y) {
+      for (int x = 0; x < w; ++x) {
+        const size_t off = (static_cast<size_t>(y) * w + x) * 3;
+        if (baseline_rgb[off + 2] > 0) {
+          probe_pixels.push_back(off);
+        }
+      }
+    }
+    IM_CHECK(probe_pixels.size() >= 32);  // class 1 has a non-trivial blue population
+    unsigned long long blue_sum_before = 0;
+    for (size_t off : probe_pixels) {
+      blue_sum_before += baseline_rgb[off + 2];
+    }
+    const double blue_before = static_cast<double>(blue_sum_before) / probe_pixels.size();
+
+    // Hide class 0 (bright, match-all). The next GetCompositeResults consumes snapshot_dirty_
+    // → Phase-2 rebuild. Fix B: same call recomputes participating-P99 over {class 1 only},
+    // recomputes s = ParticipatingExposureScale(smaller_p99), and re-lands the pixel bytes
+    // with the LARGER scalar → the blue byte at (probe_x, probe_y) MUST strictly increase.
     LUMICE_ColorClassDisplay disp_hide_bright[2]{};
-    disp_hide_bright[0].color[0] = 1.0f;  // preserve original hue (unused in dim/hide test)
-    disp_hide_bright[0].visible = 0;      // HIDE bright class
+    disp_hide_bright[0].color[0] = 1.0f;
+    disp_hide_bright[0].visible = 0;  // HIDE bright class
     disp_hide_bright[0].solo = 0;
     disp_hide_bright[1].color[2] = 1.0f;
     disp_hide_bright[1].visible = 1;
     disp_hide_bright[1].solo = 0;
-    IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp_hide_bright, 2, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
+    IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp_hide_bright, 2, nullptr, LUMICE_COLOR_MODE_ADDITIVE), LUMICE_OK);
 
-    // Next GetCompositeResults consumes snapshot_dirty_ → Phase-2 rebuild →
-    // ComputeParticipatingP99Y over {class 1 only} → strictly smaller P99 anchor.
     LUMICE_RenderResult dim_only[LUMICE_MAX_RENDER_RESULTS + 1]{};
     IM_CHECK_EQ(LUMICE_GetCompositeResults(server, dim_only, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
     IM_CHECK(dim_only[0].img_buffer != nullptr);
     const float p99_dim_only = dim_only[0].composite_p99_y;
-    IM_CHECK(p99_dim_only > 0.0f);      // class 1 has non-empty Y-lane
-    IM_CHECK(p99_dim_only < p99_both);  // ⭐ core AC2 assertion: participating shrank → anchor dropped
+    IM_CHECK(p99_dim_only > 0.0f);
+    IM_CHECK(p99_dim_only < p99_both);  // structural佐证: participating shrank → anchor dropped
+    unsigned long long blue_sum_after = 0;
+    for (size_t off : probe_pixels) {
+      blue_sum_after += dim_only[0].img_buffer[off + 2];
+    }
+    const double blue_after = static_cast<double>(blue_sum_after) / probe_pixels.size();
+    // ⭐ core AC1 assertion (task's raison d'être): the population-average blue byte at
+    // class-1 signal pixels is STRICTLY brighter after hiding class 0. The theoretical
+    // growth ratio in linear space is s_after/s_before = p99_both/p99_dim ≈ 2.7× on this
+    // fixture; sRGB gamma compresses that to ~1.6× in byte space (empirically 1.72× at
+    // 400k rays), with additional attenuation from top-decile pixels saturating first.
+    // 1.3× is a conservative floor that survives MC noise across seeds while still ruling
+    // out the pre-fix behavior (where the average would stay ≈ constant because s was
+    // sourced from mono ExposureScale() and never recomputed on visibility toggle).
+    IM_CHECK(blue_after > blue_before);
+    IM_CHECK(blue_after >= blue_before * 1.3);
 
-    // Restore visibility → participating returns to union → P99 back to baseline (exact,
-    // because the underlying Y-lanes were never touched by the display-time setter).
+    // Restore visibility → blue-population average must return to baseline (byte-exact per
+    // pixel, because the underlying Y-lanes were never touched by the display-time setter
+    // and s is a pure function of the participating set + intensity_factor +
+    // snapshot_intensity). We assert byte-exactness on every probe pixel, not just the mean.
     LUMICE_ColorClassDisplay disp_restore[2]{};
     disp_restore[0].color[0] = 1.0f;
     disp_restore[0].visible = 1;
@@ -570,11 +624,14 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     disp_restore[1].color[2] = 1.0f;
     disp_restore[1].visible = 1;
     disp_restore[1].solo = 0;
-    IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp_restore, 2, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
+    IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp_restore, 2, nullptr, LUMICE_COLOR_MODE_ADDITIVE), LUMICE_OK);
     LUMICE_RenderResult restored[LUMICE_MAX_RENDER_RESULTS + 1]{};
     IM_CHECK_EQ(LUMICE_GetCompositeResults(server, restored, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
     IM_CHECK(restored[0].img_buffer != nullptr);
     IM_CHECK_EQ(restored[0].composite_p99_y, p99_both);
+    for (size_t off : probe_pixels) {
+      IM_CHECK_EQ(restored[0].img_buffer[off + 2], baseline_rgb[off + 2]);
+    }
 
     // display-time guarantees (322 clock decoupling): visibility toggles never bump the
     // lifecycle epoch and never reset the accumulated sim ray count.
@@ -585,6 +642,102 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     LUMICE_RayCount ray_count_after = 0;
     IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_after), LUMICE_OK);
     IM_CHECK(ray_count_after >= ray_count_before);
+
+    LUMICE_DestroyServer(server);
+  };
+
+  // task-fix-composite-participating-exposure-anchor AC1 dominant-mode structural counterpart
+  // (plan §4 Step 4 Minor #1 — owner ⑤ real usage is closer to dominant than additive; the
+  // additive version above validates the "same channel gets brighter" mechanism, this one
+  // validates the "hidden-under-brighter-class → becomes visible" mechanism). Because class 1's
+  // landing set is a STRICT subset of class 0's, in dominant mode with both visible every
+  // class-1 pixel is masked by class-0's argmax win (composite shows RED at those pixels).
+  // Hiding class 0 flips those exact pixels to class 1's dominant color (BLUE). Uses solo mode
+  // to pre-locate a class-1-signal pixel (that's the only C API way to isolate class 1's
+  // landing without direct Y-lane access), then asserts the color-class flip after visibility
+  // change. No brightness-ratio assertion here — dominance is a masking relation, not additive
+  // combination; ratio semantics belong to the additive test above.
+  ImGuiTest* t_ac2_dominant =
+      IM_REGISTER_TEST(engine, "gui_composite_preview", "display_time_visibility_reanchors_participating_p99_dominant");
+  t_ac2_dominant->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    const bool ok = RunToIdleWithData(server, kTwoColorConfig);
+    IM_CHECK(ok);
+    if (!ok) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+
+    // Step 1: solo class 1 → composite shows ONLY class 1's landing pixels, in blue. Scan for
+    // a probe pixel where the blue byte is well above the quantization floor.
+    LUMICE_ColorClassDisplay disp_solo_c1[2]{};
+    disp_solo_c1[0].color[0] = 1.0f;
+    disp_solo_c1[0].visible = 1;  // solo on class 1 mutes this regardless
+    disp_solo_c1[0].solo = 0;
+    disp_solo_c1[1].color[2] = 1.0f;
+    disp_solo_c1[1].visible = 1;
+    disp_solo_c1[1].solo = 1;
+    IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp_solo_c1, 2, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
+    LUMICE_RenderResult solo1[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, solo1, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(solo1[0].img_buffer != nullptr);
+    const int w = solo1[0].img_width;
+    const int h = solo1[0].img_height;
+    int probe_x = -1, probe_y = -1;
+    for (int y = 0; y < h && probe_x < 0; ++y) {
+      for (int x = 0; x < w; ++x) {
+        const size_t off = (static_cast<size_t>(y) * w + x) * 3;
+        if (solo1[0].img_buffer[off + 2] >= 16 && solo1[0].img_buffer[off + 0] < 8) {
+          probe_x = x;
+          probe_y = y;
+          break;
+        }
+      }
+    }
+    IM_CHECK(probe_x >= 0);  // class 1 solo picture has a clearly blue pixel
+
+    // Step 2: both visible, dominant mode. class 0 (match-all) argmax-wins at every pixel that
+    // has any landing signal, so the probe pixel now shows RED (class 0's color), not blue.
+    LUMICE_ColorClassDisplay disp_both[2]{};
+    disp_both[0].color[0] = 1.0f;
+    disp_both[0].visible = 1;
+    disp_both[0].solo = 0;
+    disp_both[1].color[2] = 1.0f;
+    disp_both[1].visible = 1;
+    disp_both[1].solo = 0;
+    IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp_both, 2, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
+    LUMICE_RenderResult both[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, both, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(both[0].img_buffer != nullptr);
+    const size_t probe_off = (static_cast<size_t>(probe_y) * w + probe_x) * 3;
+    const uint8_t r_both = both[0].img_buffer[probe_off + 0];
+    const uint8_t b_both = both[0].img_buffer[probe_off + 2];
+    // class 0's argmax-win expresses as red > blue at the probe pixel (r dominant, b ≈ 0).
+    IM_CHECK(r_both > b_both);
+    IM_CHECK(r_both >= 16);  // pixel is clearly lit in the class-0 color
+
+    // Step 3: hide class 0. The probe pixel's argmax winner is now class 1; the composite at
+    // that pixel becomes BLUE. This is the owner ⑤ "from-invisible-to-visible" flip.
+    LUMICE_ColorClassDisplay disp_hide_c0[2]{};
+    disp_hide_c0[0].color[0] = 1.0f;
+    disp_hide_c0[0].visible = 0;  // HIDE bright class
+    disp_hide_c0[0].solo = 0;
+    disp_hide_c0[1].color[2] = 1.0f;
+    disp_hide_c0[1].visible = 1;
+    disp_hide_c0[1].solo = 0;
+    IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp_hide_c0, 2, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
+    LUMICE_RenderResult c1_visible[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, c1_visible, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(c1_visible[0].img_buffer != nullptr);
+    const uint8_t r_after = c1_visible[0].img_buffer[probe_off + 0];
+    const uint8_t b_after = c1_visible[0].img_buffer[probe_off + 2];
+    // Now blue wins (class 1's color). AND thanks to Fix B's self-anchor, blue_after must
+    // also be BRIGHT (not just "wins by 1 unit") — after hiding the bright class the p99
+    // shrinks to class 1's own lane, s grows, and class 1's pixels light up clearly.
+    IM_CHECK(b_after > r_after);
+    IM_CHECK(b_after >= 16);  // clearly visible (self-anchor made it bright)
 
     LUMICE_DestroyServer(server);
   };

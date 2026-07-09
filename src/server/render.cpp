@@ -101,6 +101,19 @@ float RenderConsumer::ExposureScale() const {
 // task-347 (Fix B): composite-path self-anchored exposure scale. See
 // declaration comment in render.hpp for the full contract + mirror-precedent
 // note vs gui_ev_auto.hpp::ComputeEvAuto.
+//
+// Formula derivation: `ComputeEvAuto` returns EV = log2(target_linear ·
+// snapshot_intensity / p99_raw_y), and the mono pipeline consumes it as
+// `intensity_factor = 2^ev`, then the shader multiplies raw pixel Y by
+// `intensity_scale = intensity_factor / snapshot_intensity`. So the effective
+// per-pixel multiplier the mono pipeline applies to the raw Y-lane at anchor
+// is `target_linear / p99_raw_y` — the snapshot_intensity factor CANCELS.
+// The composite pipeline applies our returned `s` directly to lane[p], so `s`
+// must reproduce that same effective multiplier without the intermediate
+// `pow(2, log2(...))` round-trip. Hence the formula below — no
+// snapshot_intensity in the numerator (a naive mirror of ComputeEvAuto's
+// numerator would give `s = target_linear · snapshot_intensity / p99`,
+// blowing up bytes by snapshot_intensity, which is 10^7 on a 400k-ray fixture).
 float RenderConsumer::ParticipatingExposureScale(float participating_p99_y) const {
   if (participating_p99_y <= 0.0f || snapshot_intensity_ <= 0.0f) {
     return 0.0f;
@@ -115,7 +128,7 @@ float RenderConsumer::ParticipatingExposureScale(float participating_p99_y) cons
   if (target_linear <= 0.0f) {
     return 0.0f;
   }
-  return config_.intensity_factor_ * target_linear * snapshot_intensity_ / participating_p99_y;
+  return config_.intensity_factor_ * target_linear / participating_p99_y;
 }
 
 

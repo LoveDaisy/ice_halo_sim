@@ -74,13 +74,18 @@ class RenderConsumer : public IConsume {
   // brings that P99 up to the sRGB target_white=135 linear equivalent — so
   // hiding a bright class instantly re-brightens the remaining dim classes,
   // in the same DoSnapshot call, without any GUI auto-EV round-trip.
-  //   = config_.intensity_factor_ * target_linear * snapshot_intensity_ / participating_p99_y
-  // (see doc/ev-pipeline-architecture.md §6.6). Returns 0 when
-  // participating_p99_y<=0 or snapshot_intensity_<=0. MIRROR: the target_white
-  // constant and sRGB reverse transform below are duplicated from
-  // gui_ev_auto.hpp::ComputeEvAuto (server/ and gui/ layers cannot share a
-  // header without dragging one into the other — same precedent as the
-  // ComputeParticipatingP99Y / ComputeP99Y pair; keep the two in sync).
+  //   = config_.intensity_factor_ * target_linear / participating_p99_y
+  // (see doc/ev-pipeline-architecture.md §6.6). Note: the snapshot_intensity
+  // factor that appears in ComputeEvAuto's numerator does NOT appear here —
+  // that factor cancels against the mono shader's `intensity_scale =
+  // intensity_factor / snapshot_intensity` post-processing step. Composite
+  // applies `s` directly to lane[p], so the effective per-pixel multiplier
+  // must be reproduced without the cancelling factor. Returns 0 when
+  // participating_p99_y<=0 or snapshot_intensity_<=0 (guard against pre-first
+  // snapshot). MIRROR: the target_white constant and sRGB reverse transform
+  // below are duplicated from gui_ev_auto.hpp::ComputeEvAuto (server/ and gui/
+  // layers cannot share a header without dragging one into the other — same
+  // precedent as the ComputeParticipatingP99Y / ComputeP99Y pair; keep in sync).
   float ParticipatingExposureScale(float participating_p99_y) const;
 
  private:

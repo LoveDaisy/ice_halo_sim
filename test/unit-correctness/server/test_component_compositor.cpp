@@ -342,12 +342,15 @@ TEST(ComponentCompositor, SharedExposureNoSelfNormalization) {
   //     layer cross-check, not a same-source self-check).
   const float p99 = FetchParticipatingP99(rc, table, CompositeMode::kAdditive);
   ASSERT_GT(p99, 0.0f);
-  const float sum_w = 0.6f + 0.4f;  // both rays land → snapshot_intensity_
+  // snapshot_intensity_ does NOT appear in the formula — it cancels against the
+  // mono shader's downstream `intensity_scale = intensity_factor/snapshot_intensity`
+  // step, so the effective per-pixel multiplier reduces to target_linear/p99. See
+  // the derivation block above ParticipatingExposureScale in render.cpp.
   constexpr float kTargetWhite = 135.0f;
   constexpr float kTargetSrgb = kTargetWhite / 255.0f;
   const float target_linear =
       kTargetSrgb <= 0.04045f ? kTargetSrgb / 12.92f : std::pow((kTargetSrgb + 0.055f) / 1.055f, 2.4f);
-  const float expected_s = cfg.intensity_factor_ * target_linear * sum_w / p99;
+  const float expected_s = cfg.intensity_factor_ * target_linear / p99;
   EXPECT_NEAR(rc.ParticipatingExposureScale(p99), expected_s, expected_s * 1e-5f);
 
   const int p = FindLitPixel(rc, total_pix);
@@ -1100,16 +1103,28 @@ TEST(ComponentConsumer, ParticipatingExposureScaleFormulaCrossCheck) {
   RenderConsumer rc(cfg, table);
   rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.6f, 0.4f }));
   rc.PrepareSnapshot();
-  const float snapshot_intensity = 1.0f;  // sum of weights, all rays land in-bounds
 
+  // snapshot_intensity_ is intentionally NOT in the expected formula — it cancels
+  // against the downstream mono shader's intensity_scale=intensity_factor/snapshot_intensity
+  // step. See derivation block above ParticipatingExposureScale in render.cpp.
   constexpr float kTargetWhite = 135.0f;
   constexpr float kTargetSrgb = kTargetWhite / 255.0f;
   const float target_linear =
       kTargetSrgb <= 0.04045f ? kTargetSrgb / 12.92f : std::pow((kTargetSrgb + 0.055f) / 1.055f, 2.4f);
 
   const float p99 = 0.02f;  // arbitrary positive value in the plausible range
-  const float expected = cfg.intensity_factor_ * target_linear * snapshot_intensity / p99;
+  const float expected = cfg.intensity_factor_ * target_linear / p99;
   EXPECT_NEAR(rc.ParticipatingExposureScale(p99), expected, expected * 1e-5f);
+
+  // snapshot_intensity independence: a second consumer whose Consume batch has
+  // a very different total weight must produce the SAME s at the same p99. This
+  // is the tight structural check that snapshot_intensity does not leak into
+  // the composite formula (it would have if we naively mirrored ComputeEvAuto's
+  // numerator, and the AC1 gate would still pass by accident when weights=1).
+  RenderConsumer rc_heavy(cfg, table);
+  rc_heavy.Consume(MakeBatch({ 0b01, 0b10 }, { 6.0f, 4.0f }));  // 10x the mass
+  rc_heavy.PrepareSnapshot();
+  EXPECT_NEAR(rc_heavy.ParticipatingExposureScale(p99), expected, expected * 1e-5f);
 
   // intensity_factor linearity: doubling the config's static exposure knob
   // must double the returned scalar (CLI JSON exposure retains its meaning
