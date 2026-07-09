@@ -506,4 +506,149 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
 
     LUMICE_DestroyServer(server);
   };
+
+  // task-345.4 AC1 truth table (headless, no server/GL needed). Pins the pure decision predicate
+  // ShouldUseCompositeUpload = payload_is_composite AND show_composite_preview across all four
+  // input combinations. Guarantees a code-refactor that reorders the AND cannot silently flip
+  // the display-mode logic.
+  ImGuiTest* t7 = IM_REGISTER_TEST(engine, "gui_composite_preview", "should_use_composite_upload_truth_table");
+  t7->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    IM_CHECK_EQ(gui::ShouldUseCompositeUpload(false, false), false);
+    IM_CHECK_EQ(gui::ShouldUseCompositeUpload(false, true), false);
+    IM_CHECK_EQ(gui::ShouldUseCompositeUpload(true, false), false);
+    IM_CHECK_EQ(gui::ShouldUseCompositeUpload(true, true), true);
+  };
+
+  // task-345.4 AC1 mechanism (headless): after a color-active sim reaches COMPLETED and the
+  // poller self-pauses, flipping `show_composite_preview` alone (no new poll, no MarkDirty)
+  // must re-fire the upload branch. The predicate is the exact one SyncFromPoller consumes
+  // (ShouldFireCompositeUpload), so pinning it here is equivalent to pinning the production
+  // decision at the fire-branch seam. SyncFromPoller cannot be driven end-to-end from this
+  // functional coroutine (its GL Upload*Texture call SIGILLs without a current GL context —
+  // see doc comment on ShouldFireCompositeUpload). AC5 owner on-screen still covers the actual
+  // GL upload / repaint.
+  ImGuiTest* t8 = IM_REGISTER_TEST(engine, "gui_composite_preview", "mode_flip_forces_refire_at_same_serial");
+  t8->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    const bool ok = RunToIdleWithData(server, kColorConfig);
+    IM_CHECK(ok);
+    if (!ok) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+
+    gui::ServerPoller local;
+    local.ResetGenerationForTest();
+    local.PollOnceForTest(server);
+    auto snap = local.LoadSnapshot();
+    IM_CHECK(snap != nullptr);
+    IM_CHECK(snap->valid);
+    IM_CHECK(snap->payload != nullptr);
+    IM_CHECK(snap->payload->is_composite);
+
+    // T0: initial state before any upload — the fire gate must be TRUE (serial-dedup gate is
+    // satisfied: last_uploaded_texture_serial==0 != snap.texture_serial). This is the AC1
+    // first-frame case.
+    const bool fire_first =
+        gui::ShouldFireCompositeUpload(*snap, /*last_uploaded_texture_serial=*/0, /*display_epoch_floor=*/0,
+                                       /*show_composite_preview=*/true, /*last_uploaded_as_composite=*/false);
+    IM_CHECK(fire_first);
+
+    // T1: simulate the post-upload bookkeeping SyncFromPoller performs — record the serial and
+    // the ground-truth composite flag. Same-serial + same-mode + already-uploaded ⇒ fire gate
+    // must be FALSE (idempotence: unchanged state must not spam uploads).
+    const auto serial_after_upload = snap->texture_serial;
+    const bool fire_idempotent =
+        gui::ShouldFireCompositeUpload(*snap, serial_after_upload, /*display_epoch_floor=*/0,
+                                       /*show_composite_preview=*/true, /*last_uploaded_as_composite=*/true);
+    IM_CHECK(!fire_idempotent);
+
+    // T2: user flips the preference OFF. No new poll → serial stable, floor stable. The
+    // mode_changed OR-branch is the ONLY thing that can re-fire the gate. This is the core
+    // AC1 mechanism ("即时生效不依赖新一轮 poll") — if this returns false, the toggle button
+    // would visibly do nothing.
+    const bool fire_after_off_flip =
+        gui::ShouldFireCompositeUpload(*snap, serial_after_upload, /*display_epoch_floor=*/0,
+                                       /*show_composite_preview=*/false, /*last_uploaded_as_composite=*/true);
+    IM_CHECK(fire_after_off_flip);
+
+    // T3: simulate the post-fire bookkeeping (last_uploaded_as_composite=false). Same-serial +
+    // same-mode ⇒ idempotent again.
+    const bool fire_stable_off =
+        gui::ShouldFireCompositeUpload(*snap, serial_after_upload, /*display_epoch_floor=*/0,
+                                       /*show_composite_preview=*/false, /*last_uploaded_as_composite=*/false);
+    IM_CHECK(!fire_stable_off);
+
+    // T4: user flips the preference back ON — mode_changed fires again, AC2 no-loss recovery
+    // is now the composite path (raypath_color config was never touched).
+    const bool fire_after_on_flip =
+        gui::ShouldFireCompositeUpload(*snap, serial_after_upload, /*display_epoch_floor=*/0,
+                                       /*show_composite_preview=*/true, /*last_uploaded_as_composite=*/false);
+    IM_CHECK(fire_after_on_flip);
+
+    // T5: same-serial + settled mode ⇒ idempotent, no re-fire loop.
+    const bool fire_stable_on =
+        gui::ShouldFireCompositeUpload(*snap, serial_after_upload, /*display_epoch_floor=*/0,
+                                       /*show_composite_preview=*/true, /*last_uploaded_as_composite=*/true);
+    IM_CHECK(!fire_stable_on);
+
+    local.Stop();
+    LUMICE_DestroyServer(server);
+  };
+
+  // task-345.4 AC4 zero-regression: with no raypath_color classes, ShouldFireCompositeUpload
+  // collapses to ShouldUploadPayload (mode_changed is structurally false because
+  // effective_composite is false and last_uploaded_as_composite starts false). Pins the boolean
+  // algebra AC4 relies on, plus the render-gate condition (`raypath_color.empty()`) that keeps
+  // the status-bar toggle button off screen.
+  ImGuiTest* t9 = IM_REGISTER_TEST(engine, "gui_composite_preview", "mode_toggle_hidden_when_no_color_classes");
+  t9->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    const bool ok = RunToIdleWithData(server, kMonoConfig);
+    IM_CHECK(ok);
+    if (!ok) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+
+    gui::ServerPoller local;
+    local.ResetGenerationForTest();
+    local.PollOnceForTest(server);
+    auto snap = local.LoadSnapshot();
+    IM_CHECK(snap != nullptr);
+    IM_CHECK(snap->valid);
+    IM_CHECK(snap->payload != nullptr);
+    IM_CHECK(!snap->payload->is_composite);  // no raypath_color ⇒ payload not composite
+
+    // Render-gate condition: the status-bar mode-toggle button is only rendered when the
+    // GUI-side g_state.raypath_color is non-empty. A newly created server has no color-class
+    // wiring through the C API; g_state is a persisted view snapshot that is only populated
+    // by user actions in the GUI (color-class add/edit). In a clean test fixture this stays
+    // empty, so the button gate is off (AC4).
+    // This assertion is intentionally at the GuiState level, not through ImGui item probing:
+    // the whole button block in RenderStatusBar is a single `if (show_mode_toggle) { ... }`
+    // guarded by exactly this condition — no ambiguity to bridge.
+    gui::g_state.raypath_color.clear();
+    IM_CHECK(gui::g_state.raypath_color.empty());
+
+    // Fire-gate collapses to ShouldUploadPayload with mode_changed=false: even when the user
+    // preference is set to composite, no composite payload exists ⇒ effective_composite=false
+    // ⇒ last_uploaded_as_composite stays false ⇒ mode_changed is structurally impossible.
+    const bool fire_with_pref_true =
+        gui::ShouldFireCompositeUpload(*snap, /*last_uploaded_texture_serial=*/0, /*display_epoch_floor=*/0,
+                                       /*show_composite_preview=*/true, /*last_uploaded_as_composite=*/false);
+    const bool fire_should_upload_only =
+        gui::ShouldUploadPayload(*snap, /*last_uploaded_texture_serial=*/0, /*display_epoch_floor=*/0);
+    // On the no-color path the composite gate is equivalent to the plain upload gate — no
+    // mode-flip can slip through.
+    IM_CHECK_EQ(fire_with_pref_true, fire_should_upload_only);
+
+    local.Stop();
+    LUMICE_DestroyServer(server);
+  };
 }

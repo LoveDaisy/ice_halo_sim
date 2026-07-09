@@ -1069,15 +1069,48 @@ void RenderStatusBar(float window_width, float window_height) {
     }
   }
 
-  // Log panel + Colors window toggle buttons (right-aligned)
+  // task-345.4: display-mode toggle + Colors window + Log panel buttons (right-aligned cluster).
+  // The mode toggle is only shown when at least one raypath_color class is committed (AC4:
+  // no color classes ⇒ no toggle, no persistent marker — behavior identical to pre-345.4).
+  // Its label/highlight reads GROUND TRUTH (`last_uploaded_as_composite`), not the raw user
+  // preference — during the single frame between "user clicks" and "SyncFromPoller uploads"
+  // the ground truth is what the screen actually shows (plan §3 keypoint 2).
   {
     const char* log_label = g_state.log_panel_open ? ICON_FA_CHEVRON_DOWN " Log" : ICON_FA_CHEVRON_RIGHT " Log";
     const char* color_label = ICON_FA_PALETTE " Colors";
+    const bool show_mode_toggle = !g_state.raypath_color.empty();
+    const bool composite_now = g_state.last_uploaded_as_composite;
+    const char* mode_label = composite_now ? ICON_FA_PALETTE " Colored" : ICON_FA_PALETTE " Full Spectrum";
     const float pad_x = ImGui::GetStyle().FramePadding.x * 2;
     const float log_w = ImGui::CalcTextSize(log_label).x + pad_x;
     const float color_w = ImGui::CalcTextSize(color_label).x + pad_x;
+    const float mode_w = show_mode_toggle ? (ImGui::CalcTextSize(mode_label).x + pad_x) : 0.0f;
     const float spacing = ImGui::GetStyle().ItemSpacing.x;
-    ImGui::SameLine(ImGui::GetWindowWidth() - log_w - color_w - spacing - ImGui::GetStyle().WindowPadding.x);
+    const float mode_gap = show_mode_toggle ? spacing : 0.0f;
+    ImGui::SameLine(ImGui::GetWindowWidth() - log_w - color_w - mode_w - mode_gap - spacing -
+                    ImGui::GetStyle().WindowPadding.x);
+    if (show_mode_toggle) {
+      if (composite_now) {
+        // Accent color for the "colored" state; owner AC5 handles final palette tuning.
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.55f, 0.85f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.45f, 0.65f, 0.95f, 1.0f));
+      }
+      // Lock the ImGui ID against the (composite_now-dependent) label so ImGuiTestEngine
+      // ItemClick("...##CompositePreviewToggle") is stable across state flips.
+      std::string btn_id = std::string(mode_label) + "##CompositePreviewToggle";
+      if (ImGui::SmallButton(btn_id.c_str())) {
+        g_state.show_composite_preview = !g_state.show_composite_preview;
+      }
+      if (composite_now) {
+        ImGui::PopStyleColor(2);
+      }
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "Toggle colored composite / full-spectrum preview.\n"
+            "Display-time only -- does not re-simulate or discard color classes.");
+      }
+      ImGui::SameLine();
+    }
     if (ImGui::SmallButton(color_label)) {
       g_state.color_window_open = !g_state.color_window_open;
     }
