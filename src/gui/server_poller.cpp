@@ -109,8 +109,8 @@ void ServerPoller::InvalidateStagedTexture() {
   // Suppress the last materialized-but-unuploaded texture by publishing a payload=null copy. The
   // consumer's `payload != nullptr` guard then skips upload; GL keeps showing the already-uploaded
   // frame (no black flicker). serial is left unchanged so a genuinely new future texture still gets
-  // a fresh serial and uploads. Test seam only (see header) — production fences stale data via the
-  // display epoch floor.
+  // a fresh serial and uploads. Called from production (DoOpen/DoNew document-switch fencing) and
+  // from tests (see header).
   std::lock_guard<std::mutex> lk(publish_mutex_);
   auto prev = LoadPublished();
   if (!prev) {

@@ -519,6 +519,10 @@ void DoOpen(const std::filesystem::path& path) {
       g_thumbnail_cache.OnLayerStructureChanged();
       g_preview.ClearTexture();
       g_preview.ClearBackground();
+      // Fence the poller-side staged composite so SyncFromPoller won't re-upload the previous
+      // scene's snapshot over the just-cleared preview. Order relative to ClearTexture() is
+      // irrelevant: the two act on disjoint subsystems (g_preview vs g_server_poller).
+      g_server_poller.InvalidateStagedTexture();
       // Reset modal preview trackball to the imported config's first entry.
       if (!g_state.layers.empty() && !g_state.layers[0].entries.empty()) {
         ResetCrystalViewToCrystal(g_state.crystals[g_state.layers[0].entries[0].crystal_id]);
@@ -541,6 +545,11 @@ void DoOpen(const std::filesystem::path& path) {
       ResetCrystalViewToCrystal(g_state.crystals[g_state.layers[0].entries[0].crystal_id]);
     }
     GUI_LOG_INFO("[GUI] DoOpen: {}", PathToU8(path));
+    // Fence the poller-side staged composite before either sub-branch touches g_preview:
+    // otherwise SyncFromPoller can re-upload the previous scene over a baked or blank .lmc.
+    // Order relative to ClearTexture()/UploadTexture() is irrelevant — disjoint subsystems
+    // (g_preview vs g_server_poller).
+    g_server_poller.InvalidateStagedTexture();
     if (!tex_data.empty()) {
       g_preview.UploadTexture(tex_data.data(), tex_w, tex_h);
       // Intent: a baked static result (→ kDone via ReconcileSimState, no server run).
@@ -574,6 +583,10 @@ void DoNew() {
   g_thumbnail_cache.OnLayerStructureChanged();
   g_preview.ClearTexture();
   g_preview.ClearBackground();
+  // Fence the poller-side staged composite so SyncFromPoller won't re-upload the previous
+  // scene's snapshot. Order relative to ClearTexture() is irrelevant — disjoint subsystems
+  // (g_preview vs g_server_poller).
+  g_server_poller.InvalidateStagedTexture();
   g_crystal_mesh_hash = 0;
   // Reset modal preview trackball to the new default entry's preset view —
   // otherwise a stale drag pose from before New persists into the new doc.
