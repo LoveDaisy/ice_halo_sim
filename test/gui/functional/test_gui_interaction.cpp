@@ -1453,83 +1453,93 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
-  // task-348.3 (⑤): the colored/full-spectrum display-time toggle in the top
-  // bar was simplified to an icon-only Button whose whole surface highlights
-  // when Colored is active (346.3 Checkbox → 348.3 Button — see
-  // app_panels.cpp Colored toggle block). The widget path changed from
-  //   "##TopBar/<PALETTE> Colored##CompositePreviewToggle" (label varied by mode)
-  // to a single label-free form:
-  //   "##TopBar/<PALETTE>##CompositePreviewToggle"
-  // The four semantic assertions this test pins are otherwise unchanged from
-  // 346.3:
-  //   - AC4: no raypath_color class ⇒ no toggle anywhere (new top-bar path
-  //     nor the now-deleted status-bar path, so a future regression that
-  //     re-adds the widget to the status bar is caught here too).
-  //   - AC1: with one color class, the toggle exists at the new top-bar
-  //     path and is gone from the old status-bar paths.
+  // task-349.3 (#4): the colored/full-spectrum display-time toggle evolved as
+  //   346.3 Checkbox → 348.3 icon-only Button → 349.3 plain-text Checkbox
+  // (owner: two adjacent PALETTE-icon controls confused which was the toggle
+  // vs. the window opener). Widget path is once again label-dependent:
+  //   "##TopBar/Colored##CompositePreviewToggle"       (composite_now == true)
+  //   "##TopBar/Full Spectrum##CompositePreviewToggle" (composite_now == false)
+  // The four semantic assertions pinned here mirror the 346.3 originals — the
+  // 348.3 icon-Button widget path and the 346.3 icon-plus-label Checkbox path
+  // are both retained as legacy negative regressions.
+  //   - AC4: no raypath_color class ⇒ no toggle anywhere (any new/legacy path,
+  //     top bar or status bar).
+  //   - AC1: with one color class, the toggle exists at the appropriate new
+  //     top-bar Checkbox path and is gone from every legacy path.
   //   - AC3 (346.3, ≠ 348.3 AC3): the toggle stays visible while
-  //     color_window_open is false — pins "persistent marker doesn't depend
-  //     on Colors window being open", the whole point of the 346.3 move.
+  //     color_window_open is false — persistent marker independent of the
+  //     Colors window's own render call.
   //   - AC2 (346.3): clicking flips g_state.show_composite_preview and leaves
   //     raypath_color / dirty untouched (display-time only, no re-simulation).
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_layout", "colored_toggle_topbar_button");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_layout", "colored_toggle_topbar_checkbox");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
 
-      // Label-free Button path (348.3) + the two legacy Checkbox label variants
-      // (346.3) that must all be absent when there are no color classes.
-      const char* new_path = "##TopBar/" ICON_FA_PALETTE "##CompositePreviewToggle";
-      const char* legacy_colored = "##TopBar/" ICON_FA_PALETTE " Colored##CompositePreviewToggle";
-      const char* legacy_full = "##TopBar/" ICON_FA_PALETTE " Full Spectrum##CompositePreviewToggle";
+      // Compute the current Checkbox path from ground truth — label swaps with
+      // last_uploaded_as_composite, so the expected id must be recomputed on
+      // every assertion rather than cached as a static string (349.3 review
+      // Minor #3: converge to a single "recompute on each check" pattern).
+      auto current_path = []() {
+        return gui::g_state.last_uploaded_as_composite ? std::string("##TopBar/Colored##CompositePreviewToggle") :
+                                                         std::string("##TopBar/Full Spectrum##CompositePreviewToggle");
+      };
+      const char* legacy_icon_only = "##TopBar/" ICON_FA_PALETTE "##CompositePreviewToggle";
+      const char* legacy_icon_colored = "##TopBar/" ICON_FA_PALETTE " Colored##CompositePreviewToggle";
+      const char* legacy_icon_full = "##TopBar/" ICON_FA_PALETTE " Full Spectrum##CompositePreviewToggle";
       const char* legacy_status_colored = "##StatusBar/" ICON_FA_PALETTE " Colored##CompositePreviewToggle";
       const char* legacy_status_full = "##StatusBar/" ICON_FA_PALETTE " Full Spectrum##CompositePreviewToggle";
 
-      // AC4 — no color classes ⇒ nothing rendered at any known path.
+      // AC4 — no color classes ⇒ nothing rendered at any known path (new
+      // Checkbox path in either mode + every legacy path).
       IM_CHECK(gui::g_state.raypath_color.empty());
-      IM_CHECK(!ctx->ItemExists(new_path));
-      IM_CHECK(!ctx->ItemExists(legacy_colored));
-      IM_CHECK(!ctx->ItemExists(legacy_full));
+      IM_CHECK(!ctx->ItemExists("##TopBar/Colored##CompositePreviewToggle"));
+      IM_CHECK(!ctx->ItemExists("##TopBar/Full Spectrum##CompositePreviewToggle"));
+      IM_CHECK(!ctx->ItemExists(legacy_icon_only));
+      IM_CHECK(!ctx->ItemExists(legacy_icon_colored));
+      IM_CHECK(!ctx->ItemExists(legacy_icon_full));
       IM_CHECK(!ctx->ItemExists(legacy_status_colored));
       IM_CHECK(!ctx->ItemExists(legacy_status_full));
 
-      // Install one color class + pin the ground truth to "not composite".
-      // The Button path is label-free, so the widget id no longer depends on
-      // the composite_now state (unlike the 346.3 Checkbox that swapped label).
+      // Install one color class + pin the ground truth to "not composite" so
+      // the initial label is "Full Spectrum".
       gui::ColorClassConfig c;
       gui::g_state.raypath_color.push_back(c);
       gui::g_state.last_uploaded_as_composite = false;
       ctx->Yield(2);
 
-      // AC1 — new Button path exists, all legacy paths (both top-bar Checkbox
-      // labels and both status-bar labels) are gone.
-      IM_CHECK(ctx->ItemExists(new_path));
-      IM_CHECK(!ctx->ItemExists(legacy_colored));
-      IM_CHECK(!ctx->ItemExists(legacy_full));
+      // AC1 — new Checkbox path exists at the mode-appropriate label; all
+      // legacy paths (icon-only Button, icon-plus-label Checkbox, and both
+      // status-bar variants) are gone.
+      IM_CHECK(ctx->ItemExists(current_path().c_str()));
+      IM_CHECK(!ctx->ItemExists(legacy_icon_only));
+      IM_CHECK(!ctx->ItemExists(legacy_icon_colored));
+      IM_CHECK(!ctx->ItemExists(legacy_icon_full));
       IM_CHECK(!ctx->ItemExists(legacy_status_colored));
       IM_CHECK(!ctx->ItemExists(legacy_status_full));
 
       // AC3 (346.3) — closing the Colors window does not hide the toggle.
       gui::g_state.color_window_open = false;
       ctx->Yield(2);
-      IM_CHECK(ctx->ItemExists(new_path));
+      IM_CHECK(ctx->ItemExists(current_path().c_str()));
 
       // AC2 (346.3) — click flips show_composite_preview only; raypath_color
-      // / dirty untouched (display-time toggle, no re-simulation).
+      // / dirty untouched (display-time toggle, no re-simulation). Recompute
+      // the path before every click so we survive the label swap that follows
+      // once ground truth propagates.
       const bool pref_before = gui::g_state.show_composite_preview;
       const size_t classes_before = gui::g_state.raypath_color.size();
       const bool dirty_before = gui::g_state.dirty;
-      ctx->ItemClick(new_path);
+      ctx->ItemClick(current_path().c_str());
       ctx->Yield(2);
       IM_CHECK_EQ(gui::g_state.show_composite_preview, !pref_before);
       IM_CHECK_EQ(gui::g_state.raypath_color.size(), classes_before);
       IM_CHECK_EQ(gui::g_state.dirty, dirty_before);
 
-      // Symmetric second click — the label-free path is stable regardless of
-      // ground truth (unlike the 346.3 Checkbox whose label swapped), so the
-      // same string finds the widget both times.
-      ctx->ItemClick(new_path);
+      // Symmetric second click — recompute the path from current ground truth
+      // to survive the label swap.
+      ctx->ItemClick(current_path().c_str());
       ctx->Yield(2);
       IM_CHECK_EQ(gui::g_state.show_composite_preview, pref_before);
     };

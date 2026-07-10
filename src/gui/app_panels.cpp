@@ -302,32 +302,43 @@ void RenderTopBar(float window_width) {
   // Colors does not touch this window.
   if (!g_state.raypath_color.empty()) {
     ImGui::SameLine();
-    // task-348.3 AC1 (⑤): icon-only Button whose whole surface goes highlight-blue
-    // when Colored is active, replacing the earlier text-plus-checkbox form. The
-    // display state still reads GROUND TRUTH (last_uploaded_as_composite) and the
-    // click still writes the user preference via the shared ToggleCompositePreview
-    // (345.4 read/write split preserved). Tooltip carries the "Colored / Full
-    // Spectrum" text that used to live on the control itself so hover still tells
-    // the user which mode is active.
+    // task-349.3 (#4): revert 348.3 icon-only Button back to a plain-text Checkbox
+    // (no ICON_FA_PALETTE prefix) so this display-time toggle reads visually
+    // distinct from the icon-bearing "Colors" open-window button one slot to the
+    // left (owner-rejected: two adjacent palette-icon controls confused which was
+    // the toggle vs. the window opener). Semantic split unchanged from 345.4/346.3:
+    // label + `checked` read GROUND TRUTH (last_uploaded_as_composite), click
+    // writes via shared ToggleCompositePreview(g_state) — the shared writer was
+    // introduced in 348.3 and stays after the widget-shape revert (a12: two
+    // control sites, one write path).
     //
     // task-349.2 Step 3 (#6): read the shared signal cache BEFORE rendering the
     // Colored toggle so we can wrap it in BeginDisabled() when every configured
-    // color class matches zero rays (composite would be empty; button would
+    // color class matches zero rays (composite would be empty; control would
     // appear "unclickable / non-responding" without visual explanation). The
     // 500 ms throttled poll is unaffected by call-site order — same source as
     // the Colors window and the aggregate pip below, so all three cannot drift.
+    //
+    // Style tokens: Checkbox renders as frame background + check mark, not a
+    // button surface — accent must go on FrameBg/FrameBgHovered/CheckMark. Using
+    // ImGuiCol_Button here would silently no-op (this was the 346.3→348.3 pitfall
+    // recorded in learnings/code-quality.md; reverting the widget type must
+    // re-swap the token set).
     const bool composite_now = g_state.last_uploaded_as_composite;
     const std::vector<int>& signal_flags = RefreshColorClassSignals(g_state, g_server);
     const bool all_unmatched = AllConfiguredColorClassesUnmatched(g_state, signal_flags);
+    const char* mode_label = composite_now ? "Colored" : "Full Spectrum";
+    const std::string checkbox_id = std::string(mode_label) + "##CompositePreviewToggle";
+    bool checked = composite_now;
     if (composite_now) {
-      ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.55f, 0.85f, 1.0f));
-      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.45f, 0.65f, 0.95f, 1.0f));
-      ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.25f, 0.45f, 0.75f, 1.0f));
+      ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.35f, 0.55f, 0.85f, 1.0f));
+      ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.45f, 0.65f, 0.95f, 1.0f));
+      ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
     }
     if (all_unmatched) {
       ImGui::BeginDisabled();
     }
-    if (ImGui::Button(ICON_FA_PALETTE "##CompositePreviewToggle")) {
+    if (ImGui::Checkbox(checkbox_id.c_str(), &checked)) {
       ToggleCompositePreview(g_state);
     }
     if (all_unmatched) {

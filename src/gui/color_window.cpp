@@ -621,29 +621,45 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
   const std::vector<int>& signal_flags = RefreshColorClassSignals(state, server);
   const bool all_unmatched = AllConfiguredColorClassesUnmatched(state, signal_flags);
 
-  // task-348.3 AC2 (⑥): mirror the top-bar Colored toggle inside the window so users
-  // who already have Colors open do not need to reach for the top bar. Same field,
-  // same read/write split as RenderTopBar (app_panels.cpp:Colored button): the checked
-  // state reads GROUND TRUTH (state.last_uploaded_as_composite) so the two indicators
-  // cannot visually disagree (a12 single source, same convention as the top-bar pip),
-  // and the click writes via the shared ToggleCompositePreview() writer — the boolean
-  // ImGui writes back into `checked` on click is intentionally discarded (real state
-  // lives in `show_composite_preview`, whose toggled value will surface here via
-  // last_uploaded_as_composite on the next poll). Unlike the top-bar toggle, this
-  // checkbox is NOT gated on raypath_color.empty(): it stays visible even with zero
-  // classes so it can act as the visible counterpart to AC3's "open with no classes →
-  // default enabled" behavior.
-  //
-  // task-349.2 Step 3 (#6): when all_unmatched, wrap in BeginDisabled and swap
-  // tooltip to the shared "no matches" copy (kColorsDisabledNoMatchTooltip in
-  // color_window.hpp) — the top-bar Colored toggle reads the same constant so
-  // the two disabled cues cannot drift.
+  // Header row: composite mode + import + add + Enable colors (right-aligned).
+  RenderCompositeModeCombo(state, server);
+  ImGui::SameLine();
+  RenderImportFromFilterUI(state);
+  ImGui::SameLine();
+  if (ImGui::Button(ICON_FA_PLUS " Add Class")) {
+    ColorClassConfig c;
+    c.color[0] = 1.0f;
+    c.color[1] = 1.0f;
+    c.color[2] = 1.0f;
+    c.visible = true;
+    c.z_order = static_cast<int>(state.raypath_color.size());
+    state.raypath_color.push_back(c);
+    state.MarkFilterDirty();
+  }
+
+  // task-349.3 (#3): "Enable colors" mirrors the top-bar Colored toggle inside
+  // the window and lives on the same header row as "+ Add Class", right-aligned
+  // to read as a distinct control group from the mode/import/add cluster on the
+  // left (owner on-screen feedback after 348.3 landed the top-bar icon toggle).
+  // Semantics unchanged from 348.3 AC2 (⑥) / 349.2 Step 3 (#6): checked reads
+  // GROUND TRUTH (last_uploaded_as_composite), click writes via shared
+  // ToggleCompositePreview(); when all_unmatched, wrap in BeginDisabled and
+  // swap the tooltip to kColorsDisabledNoMatchTooltip (shared with the top-bar
+  // mirror so the two disabled cues cannot drift).
   {
+    ImGui::SameLine();
+    const char* label = "Enable colors";
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float w = ImGui::CalcTextSize(label).x + ImGui::GetFrameHeight() + style.ItemInnerSpacing.x;
+    const float right_edge = ImGui::GetWindowContentRegionMax().x;
+    if (right_edge - w > ImGui::GetCursorPosX()) {
+      ImGui::SetCursorPosX(right_edge - w);
+    }
     bool checked = state.last_uploaded_as_composite;
     if (all_unmatched) {
       ImGui::BeginDisabled();
     }
-    if (ImGui::Checkbox("Enable colors", &checked)) {
+    if (ImGui::Checkbox(label, &checked)) {
       ToggleCompositePreview(state);
     }
     if (all_unmatched) {
@@ -658,22 +674,6 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
             "Synced with the top-bar toggle -- same display-time preference.");
       }
     }
-  }
-
-  // Header row: composite mode + import + add.
-  RenderCompositeModeCombo(state, server);
-  ImGui::SameLine();
-  RenderImportFromFilterUI(state);
-  ImGui::SameLine();
-  if (ImGui::Button(ICON_FA_PLUS " Add Class")) {
-    ColorClassConfig c;
-    c.color[0] = 1.0f;
-    c.color[1] = 1.0f;
-    c.color[2] = 1.0f;
-    c.visible = true;
-    c.z_order = static_cast<int>(state.raypath_color.size());
-    state.raypath_color.push_back(c);
-    state.MarkFilterDirty();
   }
 
   ImGui::Separator();

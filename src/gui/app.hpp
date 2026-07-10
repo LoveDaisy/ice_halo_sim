@@ -161,10 +161,11 @@ bool ShouldFireCompositeUpload(const PreviewSnapshot& snap, unsigned long long l
 bool ShouldDefaultEnableColorsOnOpen(bool raypath_color_empty);
 
 // task-348.3 AC1/AC2 shared writer: toggle the user preference `show_composite_preview`.
-// Called from both the top-bar Colored button (app_panels.cpp) and the in-window
-// "Enable colors" checkbox (color_window.cpp) so the two write sites cannot drift.
-// Read side stays split (both sites read the ground truth `last_uploaded_as_composite`
-// for their display state — see 345.4 read/write split contract).
+// Called from both the top-bar Colored checkbox (app_panels.cpp; icon-only Button in
+// 348.3, reverted to a plain-text Checkbox in 349.3 #4) and the in-window "Enable
+// colors" checkbox (color_window.cpp) so the two write sites cannot drift. Read side
+// stays split (both sites read the ground truth `last_uploaded_as_composite` for
+// their display state — see 345.4 read/write split contract).
 void ToggleCompositePreview(GuiState& state);
 
 // Panel rendering

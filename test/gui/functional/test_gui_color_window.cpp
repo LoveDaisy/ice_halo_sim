@@ -856,8 +856,12 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
 
       // With server=nullptr, RefreshColorClassSignals resizes the cache to
       // (n, 1) — all classes report "matched / unknown", predicate returns
-      // false, controls stay enabled.
-      auto top_info = ctx->ItemInfo("##TopBar/" ICON_FA_PALETTE "##CompositePreviewToggle");
+      // false, controls stay enabled. After 349.3 (#4) the top-bar toggle is a
+      // plain-text Checkbox again, so the widget id is label-dependent
+      // ("Colored" vs "Full Spectrum"). ResetTestState() / DoNew() leave
+      // last_uploaded_as_composite at its default `false`, so the initial label
+      // is "Full Spectrum".
+      auto top_info = ctx->ItemInfo("##TopBar/Full Spectrum##CompositePreviewToggle");
       IM_CHECK((top_info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
       ctx->SetRef("//" ICON_FA_PALETTE " Colors");
