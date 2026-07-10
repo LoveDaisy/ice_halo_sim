@@ -2833,41 +2833,60 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
   }
 
   {
-    // Audit: a .lmc saved with a baked preview truly ships that texture in the file payload.
-    // Guards Step 2 change from accidentally breaking the "has baked img" branch's save side.
-    // We stop at LoadLmcFile (not DoOpen) because the has-baked branch calls the GL UploadTexture
-    // which cannot run from TestFunc — but LoadLmcFile alone proves the tex_data payload is
-    // preserved end-to-end, which is what DoOpen would then feed into UploadTexture in prod.
+    // Audit: a .lmc saved with a baked preview replaces the stale texture via a real DoOpen(path)
+    // call — the "has baked img" branch's UploadTexture is a GL call, which crashes (SIGILL) if
+    // invoked from TestFunc's coroutine worker thread (no GL context bound there; see the
+    // threading note above). Calling DoOpen(path) from GuiFunc instead runs it on the main render
+    // thread, where the GL context is current — mirrors the trackball GuiFunc-upload pattern
+    // (test_gui_interaction.cpp's lens_*_trackball group).
+    static bool s_open_with_preview_done = false;
+    static std::string s_open_with_preview_path;
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "open_lmc_with_preview_replaces_stale_texture");
-    t->TestFunc = [](ImGuiTestContext*) {
+    t->GuiFunc = [](ImGuiTestContext*) {
+      if (!s_open_with_preview_done && !s_open_with_preview_path.empty()) {
+        gui::DoOpen(s_open_with_preview_path);
+        s_open_with_preview_done = true;
+      }
+    };
+    t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      s_open_with_preview_done = false;
+      s_open_with_preview_path.clear();
 
-      // 1) Prime g_preview's CPU-side texture with "target" data (the one to be baked into .lmc).
+      // 1) Simulate "previous scene rendered": populate g_preview's CPU-side texture state
+      //    with a *different* size than the one that will be baked into the .lmc below, so a
+      //    dimension match after DoOpen proves real replacement, not stale-data coincidence.
+      const int stale_w = 8;
+      const int stale_h = 4;
+      std::vector<unsigned char> stale(stale_w * stale_h * 3, 0xAB);
+      gui::g_preview.UpdateCpuTextureData(stale.data(), stale_w, stale_h);
+      IM_CHECK(gui::g_preview.HasTexture());  // precondition: stale state truly present
+
+      // 2) Save a .lmc with a baked preview (save_texture=true) holding "target" pixel data.
       const int target_w = 12;
       const int target_h = 6;
       std::vector<unsigned char> target(target_w * target_h * 3, 0x33);
       gui::g_preview.UpdateCpuTextureData(target.data(), target_w, target_h);
-      IM_CHECK(gui::g_preview.HasTexture());
-      IM_CHECK_EQ(gui::g_preview.GetTextureWidth(), target_w);
-      IM_CHECK_EQ(gui::g_preview.GetTextureHeight(), target_h);
-
       const char* tmp_path = "/tmp/lumice_open_with_preview.lmc";
       bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, /*save_texture=*/true);
       IM_CHECK(save_ok);
 
-      // 2) Load the .lmc via the file-side path; DoOpen delegates to LoadLmcFile for the same.
-      std::vector<unsigned char> loaded_tex;
-      int loaded_w = 0;
-      int loaded_h = 0;
-      bool load_ok = gui::LoadLmcFile(tmp_path, gui::g_state, loaded_tex, loaded_w, loaded_h);
-      IM_CHECK(load_ok);
+      // 3) Re-arm stale state (save above consumed g_preview to build the fixture; now put the
+      //    "previous scene" texture back so DoOpen has something real to replace).
+      gui::g_preview.UpdateCpuTextureData(stale.data(), stale_w, stale_h);
+      IM_CHECK(gui::g_preview.HasTexture());
+      IM_CHECK_EQ(gui::g_preview.GetTextureWidth(), stale_w);
 
-      // 3) File-side round-trip proof: the .lmc did ship the baked texture with the right dims.
-      //    DoOpen's `if (!tex_data.empty())` branch then feeds this into UploadTexture; if the
-      //    payload is preserved here, the branch predicate is correctly true in prod.
-      IM_CHECK(!loaded_tex.empty());
-      IM_CHECK_EQ(loaded_w, target_w);
-      IM_CHECK_EQ(loaded_h, target_h);
+      // 4) Drive gui::DoOpen(path) for real via GuiFunc (see threading note above), then wait
+      //    for it to run (main-thread GuiFunc ticks while TestFunc's coroutine yields).
+      s_open_with_preview_path = tmp_path;
+      ctx->Yield(3);
+
+      // 5) AC2 assertion: DoOpen's "has baked img" branch replaced the stale texture with the
+      //    file's baked one — this is the real production entry point, not a file-side proxy.
+      IM_CHECK(gui::g_preview.HasTexture());
+      IM_CHECK_EQ(gui::g_preview.GetTextureWidth(), target_w);
+      IM_CHECK_EQ(gui::g_preview.GetTextureHeight(), target_h);
 
       std::remove(tmp_path);
     };
