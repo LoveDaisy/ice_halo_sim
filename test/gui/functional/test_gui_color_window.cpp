@@ -501,6 +501,129 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // task-list-row-ergonomics ④: SetRefMatchAll must NOT clear predicate_text.
+  // Root fix — pre-fix the whole checkbox's `.clear()` path wiped the field so
+  // un-checking whole left the row blank. AC2 machine gate.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "set_ref_match_all_true_preserves_predicate_text");
+    t->TestFunc = [](ImGuiTestContext*) {
+      gui::ColorClassRefConfig ref;
+      ref.predicate_text = "3-5";
+      ref.match_all = false;
+      gui::SetRefMatchAll(ref, true);
+      IM_CHECK(ref.match_all);
+      IM_CHECK_EQ(ref.predicate_text, std::string("3-5"));
+    };
+  }
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "color_window", "set_ref_match_all_false_restores_editability_with_original_text");
+    t->TestFunc = [](ImGuiTestContext*) {
+      gui::ColorClassRefConfig ref;
+      ref.predicate_text = "3-5";
+      ref.match_all = true;  // as if user had checked "whole"
+      gui::SetRefMatchAll(ref, false);
+      IM_CHECK(!ref.match_all);
+      IM_CHECK_EQ(ref.predicate_text, std::string("3-5"));
+    };
+  }
+
+  // task-list-row-ergonomics ③: HandleEyeClick — plain click only touches
+  // `visible`, Alt+click enforces exclusive solo. AC3 machine gate.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "handle_eye_click_plain_click_toggles_visible_only");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig a;
+      a.visible = true;
+      a.solo = false;
+      gui::ColorClassConfig b = a;
+      gui::g_state.raypath_color.push_back(a);
+      gui::g_state.raypath_color.push_back(b);
+
+      gui::HandleEyeClick(gui::g_state.raypath_color, 0, /*alt_down=*/false);
+
+      IM_CHECK(!gui::g_state.raypath_color[0].visible);
+      IM_CHECK(gui::g_state.raypath_color[1].visible);
+      IM_CHECK(!gui::g_state.raypath_color[0].solo);
+      IM_CHECK(!gui::g_state.raypath_color[1].solo);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "handle_eye_click_alt_sets_exclusive_solo");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      for (int i = 0; i < 3; i++) {
+        gui::ColorClassConfig c;
+        c.visible = true;
+        c.solo = false;
+        gui::g_state.raypath_color.push_back(c);
+      }
+      gui::HandleEyeClick(gui::g_state.raypath_color, 1, /*alt_down=*/true);
+
+      IM_CHECK(!gui::g_state.raypath_color[0].solo);
+      IM_CHECK(gui::g_state.raypath_color[1].solo);
+      IM_CHECK(!gui::g_state.raypath_color[2].solo);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "handle_eye_click_alt_second_click_clears_solo");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      for (int i = 0; i < 3; i++) {
+        gui::ColorClassConfig c;
+        c.visible = true;
+        c.solo = false;
+        gui::g_state.raypath_color.push_back(c);
+      }
+      // First Alt+click: idx=1 becomes solo.
+      gui::HandleEyeClick(gui::g_state.raypath_color, 1, /*alt_down=*/true);
+      IM_CHECK(gui::g_state.raypath_color[1].solo);
+      // Second Alt+click on the same idx clears every solo (compositor's any_solo
+      // becomes false, falls back to per-visible composition).
+      gui::HandleEyeClick(gui::g_state.raypath_color, 1, /*alt_down=*/true);
+      IM_CHECK(!gui::g_state.raypath_color[0].solo);
+      IM_CHECK(!gui::g_state.raypath_color[1].solo);
+      IM_CHECK(!gui::g_state.raypath_color[2].solo);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "handle_eye_click_alt_switching_target_moves_exclusively");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      for (int i = 0; i < 3; i++) {
+        gui::ColorClassConfig c;
+        c.visible = true;
+        c.solo = false;
+        gui::g_state.raypath_color.push_back(c);
+      }
+      gui::g_state.raypath_color[0].solo = true;  // seed: someone else already solo'd
+      gui::HandleEyeClick(gui::g_state.raypath_color, 2, /*alt_down=*/true);
+      // Even though phys=2 was not previously solo, the seeded phys=0 must be
+      // cleared — the "clear all → set target" ordering (not just "toggle self")
+      // enforces the at-most-one invariant across the full class list.
+      IM_CHECK(!gui::g_state.raypath_color[0].solo);
+      IM_CHECK(!gui::g_state.raypath_color[1].solo);
+      IM_CHECK(gui::g_state.raypath_color[2].solo);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "handle_eye_click_out_of_range_is_noop");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig c;
+      c.visible = true;
+      c.solo = false;
+      gui::g_state.raypath_color.push_back(c);
+
+      gui::HandleEyeClick(gui::g_state.raypath_color, 99, /*alt_down=*/false);
+      gui::HandleEyeClick(gui::g_state.raypath_color, 99, /*alt_down=*/true);
+
+      IM_CHECK(gui::g_state.raypath_color[0].visible);
+      IM_CHECK(!gui::g_state.raypath_color[0].solo);
+    };
+  }
+
   // BuildClassFromFilter — a row whose single Factor still expands to more
   // than one alternative ("1-3;5-7", the same ';' OR-separator case as
   // validate_single_atom_rejects_semicolon_or) must be skipped like an
