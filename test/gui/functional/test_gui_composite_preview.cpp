@@ -809,6 +809,86 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     LUMICE_DestroyServer(server);
   };
 
+  // task-348.1 M2 (Step 2) — "add a color class after idle" bounded convergence.
+  // Owner's ② report combines two visible symptoms: (a) instantly-appearing "no rays matched"
+  // on every pre-existing class (M1 fixes this — the resize/mismatch default-value bug), and
+  // (b) the rendered picture appears to keep the OLD class set for a moment before showing
+  // the new. Symptom (b) is by design (anti-flicker carry-forward while the accumulator
+  // rebuilds), not a stall. This test pins the "bounded" part of the design contract:
+  // starting from a color-active IDLE (1 class committed), re-commit a 2-class config with
+  // the SAME crystal fixture and drive PollOnceForTest until we see a payload that:
+  //   (1) advanced past the pre-edit lifecycle epoch (proving CommitConfig rebooted the sim
+  //       accumulator, not just wrote a new color list into the old snapshot), AND
+  //   (2) is_composite == true (proving the composite consumer got rebuilt and re-populated
+  //       through DoSnapshot Phase-2), AND
+  //   (3) has non-empty rgb_data (proving the composite bytes are real, not a stub).
+  // The loop has a hard 300-iteration cap (~3s wall-clock) — any convergence past that is a
+  // stall, not just carry-forward, and would signal the §3.1 assumption in plan.md ("陈旧
+  // 是自愈") is wrong and requires追加 server_poller.* fixes. Same-tick tearing is not
+  // re-verified here; it's covered by `same_generation_invariant_under_churn` above.
+  ImGuiTest* t_add_class =
+      IM_REGISTER_TEST(engine, "gui_composite_preview", "add_class_after_idle_reconverges_within_bound");
+  t_add_class->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+
+    // Phase A: single-class color config → idle.
+    IM_CHECK(RunToIdleWithData(server, kColorConfig));
+    LUMICE_SimLifecycleResult lc0{};
+    IM_CHECK_EQ(LUMICE_GetSimLifecycle(server, &lc0), LUMICE_OK);
+    IM_CHECK_EQ(lc0.lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+    const unsigned long long epoch_before = lc0.epoch;
+
+    gui::ServerPoller local;
+    local.ResetGenerationForTest();
+    local.PollOnceForTest(server);
+    {
+      auto snap = local.LoadSnapshot();
+      IM_CHECK(snap != nullptr);
+      IM_CHECK(snap->valid);
+      IM_CHECK(snap->payload != nullptr);
+      IM_CHECK(snap->payload->is_composite);  // baseline is a valid composite frame
+    }
+
+    // Phase B: user adds a class → GUI-side re-commits the 2-class config. This is the
+    // same code path RenderColorWindow's "Add Class" button triggers (state.MarkFilterDirty
+    // → next debounce → LUMICE_CommitConfigStruct → re-sim + RenderConsumer rebuild).
+    IM_CHECK_EQ(LUMICE_CommitConfig(server, kTwoColorConfig), LUMICE_OK);
+
+    // Bounded convergence: 300 polls × 10 ms = 3s hard ceiling. The fixture (400k rays,
+    // 128x64) typically converges in under 500ms on release build. Anything beyond the
+    // ceiling is a stall, not carry-forward → plan §3.1 assumption is wrong and Step 2's
+    // decision gate flips to "追加修复" (see plan §4 Step 2).
+    bool converged = false;
+    int polls = 0;
+    for (; polls < 300; ++polls) {
+      local.PollOnceForTest(server);
+      auto snap = local.LoadSnapshot();
+      if (snap != nullptr && snap->valid && snap->payload != nullptr && snap->payload->is_composite &&
+          snap->payload->payload_epoch > epoch_before && !snap->payload->rgb_data.empty()) {
+        converged = true;
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    IM_CHECK(converged);
+
+    // Both classes are configured with non-empty match[] in kTwoColorConfig; after
+    // convergence both should show signal (class 0 is match-all → all landing rays;
+    // class 1 is entry_exit len==3 → a subset). This is the paired proof that the
+    // "全类都报 no rays matched" symptom is gone at the truth level: not just because
+    // the GUI-side signal_flags cache defaults to 1 (M1 fix), but because the actual
+    // server-side signal is non-zero for both classes.
+    int flags[2] = { -1, -1 };
+    IM_CHECK_EQ(LUMICE_GetColorClassSignal(server, flags, 2), LUMICE_OK);
+    IM_CHECK_EQ(flags[0], 1);
+    IM_CHECK_EQ(flags[1], 1);
+
+    local.Stop();
+    LUMICE_DestroyServer(server);
+  };
+
   // task-345.3 review Minor #2: the "value guard" alone would miss the off→on transition
   // (composite becomes active while the last-pushed cache equals the current ev_total —
   // e.g., default 0.0f). This test doesn't exercise the GUI state guard directly (that
