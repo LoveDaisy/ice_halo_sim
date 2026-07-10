@@ -147,6 +147,37 @@ void SwapZOrder(GuiState& state, size_t a, size_t b) {
   std::swap(state.raypath_color[a].z_order, state.raypath_color[b].z_order);
 }
 
+// task-list-row-ergonomics ④: setter that toggles match_all without clearing
+// predicate_text. file_io.cpp:1337 FillColorPredicate reads match_all FIRST,
+// so retaining stale text under match_all=true does NOT contaminate commit
+// output (whole-crystal is emitted). Toggling back restores the same text.
+void SetRefMatchAll(ColorClassRefConfig& ref, bool match_all) {
+  ref.match_all = match_all;
+}
+
+// task-list-row-ergonomics ③: eye-icon click handler with Alt+click = solo.
+// Plain click toggles `visible` only. Alt+click enforces exclusive solo (or
+// clears solo when the clicked class is already solo'd, restoring per-visible
+// composition). Out-of-range is a defensive no-op. The compositor's solo/visible
+// dispatch (`GatherActiveClasses` in ColorClassTable) is unchanged — this only
+// shapes the UI-driven state so the solo set has size 0 or 1.
+void HandleEyeClick(std::vector<ColorClassConfig>& classes, size_t phys, bool alt_down) {
+  if (phys >= classes.size()) {
+    return;
+  }
+  if (!alt_down) {
+    classes[phys].visible = !classes[phys].visible;
+    return;
+  }
+  const bool was_solo = classes[phys].solo;
+  for (auto& c : classes) {
+    c.solo = false;
+  }
+  if (!was_solo) {
+    classes[phys].solo = true;
+  }
+}
+
 // Validate the user's per-ref text under the "single atom" (single Factor,
 // single alternative) rule expressed by decision 3 in plan §3. Returns
 // (state, message) so the row can render a red-tinted border + tooltip.
@@ -399,58 +430,72 @@ void RenderRefRow(GuiState& state, ColorClassConfig& cls, size_t ref_idx, bool& 
   }
   ImGui::PopItemWidth();
 
-  // Whole-crystal checkbox.
+  // Whole-crystal checkbox. task-list-row-ergonomics ④: SetRefMatchAll keeps
+  // predicate_text so the InputText below can freeze (BeginDisabled) instead
+  // of vanishing, and restore the same text when the user un-checks whole.
   ImGui::SameLine();
-  if (ImGui::Checkbox("whole", &ref.match_all)) {
-    if (ref.match_all) {
-      ref.predicate_text.clear();
-    }
+  bool whole = ref.match_all;
+  if (ImGui::Checkbox("whole", &whole)) {
+    SetRefMatchAll(ref, whole);
     state.MarkFilterDirty();
   }
-
-  // Predicate text (only when not whole-crystal).
-  if (!ref.match_all) {
-    ImGui::SameLine();
-    ImGui::PushItemWidth(180);
-    char buf[256];
-    std::snprintf(buf, sizeof(buf), "%s", ref.predicate_text.c_str());
-    const auto validation = ValidateSingleAtomText(ref.predicate_text);
-    const bool invalid = validation.state != LUMICE_RAYPATH_VALID;
-    if (invalid) {
-      ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
-      ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);
-    }
-    if (ImGui::InputText("##pred", buf, sizeof(buf))) {
-      // Only stamp state dirty when the new text also validates OK; keep the
-      // last-good text unchanged on transient invalid input (mirrors the
-      // filter editor convention: preserve the last committed atom rather
-      // than propagate a half-typed line to the next debounce commit).
-      const std::string new_text = buf;
-      const auto v2 = ValidateSingleAtomText(new_text);
-      ref.predicate_text = new_text;  // let the user see what they typed
-      if (v2.state == LUMICE_RAYPATH_VALID) {
-        state.MarkFilterDirty();
-      }
-    }
-    if (invalid) {
-      ImGui::PopStyleVar();
-      ImGui::PopStyleColor();
-    }
-    // Single SetTooltip for the item — syntax hint always; the validation error
-    // (if any) is appended below it, so hover text is stable across valid /
-    // invalid states without two overlapping tooltip calls.
-    if (ImGui::IsItemHovered()) {
-      static constexpr const char* kSyntaxHint =
-          "Same token syntax as the filter editor (e.g. 3-5, entry:2, exit:4, len:2-3).\n"
-          "Single atom only here -- no ';' OR / '&' AND; add another ref + Combine below for that.";
-      if (invalid && !validation.message.empty()) {
-        ImGui::SetTooltip("%s\n\n%s", kSyntaxHint, validation.message.c_str());
-      } else {
-        ImGui::SetTooltip("%s", kSyntaxHint);
-      }
-    }
-    ImGui::PopItemWidth();
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip(
+        "Match every raypath through the whole crystal (ignores the predicate text\n"
+        "below, which stays but is frozen while this is checked).");
   }
+
+  // Predicate text — always rendered so its layout does not disappear when
+  // whole is checked; BeginDisabled greys it out under match_all. Suppress the
+  // invalid red border while frozen: the text is not participating in the
+  // filter, so a "please fix" red frame would be misleading visual noise.
+  ImGui::SameLine();
+  ImGui::PushItemWidth(180);
+  char buf[256];
+  std::snprintf(buf, sizeof(buf), "%s", ref.predicate_text.c_str());
+  const auto validation = ValidateSingleAtomText(ref.predicate_text);
+  const bool invalid = !ref.match_all && validation.state != LUMICE_RAYPATH_VALID;
+  if (invalid) {
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);
+  }
+  if (ref.match_all) {
+    ImGui::BeginDisabled();
+  }
+  if (ImGui::InputText("##pred", buf, sizeof(buf))) {
+    // Only stamp state dirty when the new text also validates OK; keep the
+    // last-good text unchanged on transient invalid input (mirrors the
+    // filter editor convention: preserve the last committed atom rather
+    // than propagate a half-typed line to the next debounce commit).
+    const std::string new_text = buf;
+    const auto v2 = ValidateSingleAtomText(new_text);
+    ref.predicate_text = new_text;  // let the user see what they typed
+    if (v2.state == LUMICE_RAYPATH_VALID) {
+      state.MarkFilterDirty();
+    }
+  }
+  if (ref.match_all) {
+    ImGui::EndDisabled();
+  }
+  if (invalid) {
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+  }
+  // Single SetTooltip for the item — syntax hint always; the validation error
+  // (if any) is appended below it. AllowWhenDisabled so users still see the
+  // hint while whole freezes the field (mirrors the up/down arrow tooltips
+  // that also survive their at_top / at_bot disabled states).
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    static constexpr const char* kSyntaxHint =
+        "Same token syntax as the filter editor (e.g. 3-5, entry:2, exit:4, len:2-3).\n"
+        "Single atom only here -- no ';' OR / '&' AND; add another ref + Combine below for that.";
+    if (invalid && !validation.message.empty()) {
+      ImGui::SetTooltip("%s\n\n%s", kSyntaxHint, validation.message.c_str());
+    } else {
+      ImGui::SetTooltip("%s", kSyntaxHint);
+    }
+  }
+  ImGui::PopItemWidth();
 
   // Delete this ref.
   ImGui::SameLine();
@@ -642,26 +687,19 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
       PushDisplayState(state, server);
     }
 
-    // Visible / solo.
+    // Visible / solo — task-list-row-ergonomics ③: the standalone solo column
+    // is removed; solo now rides on the eye icon via Alt+click. Plain click
+    // toggles `visible`; Alt+click enforces exclusive solo (or clears it).
     ImGui::SameLine();
     const char* eye = cls.visible ? ICON_FA_EYE : ICON_FA_EYE_SLASH;
     if (ImGui::SmallButton(eye)) {
-      cls.visible = !cls.visible;
+      HandleEyeClick(state.raypath_color, phys, ImGui::GetIO().KeyAlt);
       PushDisplayState(state, server);
     }
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip(
-          "Show/hide this class in the composite preview (display-time only -- the underlying filter is unchanged).");
-    }
-    ImGui::SameLine();
-    bool solo = cls.solo;
-    if (ImGui::Checkbox("solo", &solo)) {
-      cls.solo = solo;
-      PushDisplayState(state, server);
-    }
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip(
-          "While any class is solo'd, only solo'd classes show in the composite; Visible is ignored for the rest.");
+          "Click: show/hide this class in the composite (display-time only).\n"
+          "Alt+Click: solo this class (hide all others); Alt+Click again to restore all.");
     }
 
     // Empty warning (AC4).

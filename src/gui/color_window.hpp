@@ -84,6 +84,24 @@ bool AllConfiguredColorClassesUnmatched(const GuiState& state, const std::vector
 // deterministic, single-shot assertions.
 // ---------------------------------------------------------------------------
 
+// Set the ref's `match_all` flag WITHOUT clearing `predicate_text`. The core
+// invariant this codifies: file_io.cpp FillColorPredicate reads `match_all`
+// FIRST and emits UNSET (whole-crystal) whenever it is true, so the retained
+// predicate_text does NOT leak into a commit while whole is checked. Toggling
+// whole off then restores the same text the user last typed — no undo history.
+void SetRefMatchAll(ColorClassRefConfig& ref, bool match_all);
+
+// Handle a click on the visible/eye icon in the class list. Plain click toggles
+// `visible` only; Alt+click implements exclusive solo:
+//   - not currently solo → clear all others' solo, set this one's solo=true
+//   - currently solo    → clear all solo (compositor's any_solo becomes false,
+//                         falls back to per-class `visible`)
+// UI never puts more than one class into the solo set. Compositor's
+// `GatherActiveClasses` "any solo → take solo set, otherwise visible set"
+// semantics are unchanged; this helper only shapes the UI-driven state.
+// Out-of-range `phys` is a defensive no-op (mirrors SwapZOrder).
+void HandleEyeClick(std::vector<ColorClassConfig>& classes, size_t phys, bool alt_down);
+
 // Poll LUMICE_GetColorClassSignal into caller-owned buffer. Semantics on failure:
 // if the C API rejects the class_count (settling window between GUI-side
 // push_back and server-side commit), `out_flags` is LEFT UNCHANGED — the
