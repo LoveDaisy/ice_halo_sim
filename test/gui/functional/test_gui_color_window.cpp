@@ -15,9 +15,72 @@
 // on-screen manual pass; direct helpers cover the invariants that a UI test
 // would only reach indirectly and much more slowly.
 
+#include <chrono>
+#include <thread>
+
 #include "gui/color_window.hpp"
 #include "gui/raypath_segments.hpp"
 #include "test_gui_shared.hpp"
+
+namespace {
+
+// Minimal single-class raypath_color config so a real server has exactly one
+// active color class to commit against. Mirrors kColorConfig in
+// test_gui_composite_preview.cpp; recreated here (not shared) because that
+// fixture lives in a TU-private anon namespace and is not linkable across the
+// gui_test target (same rationale as that file's own header comment).
+const char* kSingleClassConfig = R"({
+  "crystal": [{
+    "id": 1, "type": "prism",
+    "shape": {"height": 1.5},
+    "axis": {"zenith": {"type": "gauss", "mean": 90.0, "std": 10.0},
+             "azimuth": {"type": "uniform", "mean": 0.0, "std": 180.0},
+             "roll": {"type": "uniform", "mean": 0.0, "std": 180.0}}
+  }],
+  "filter": [],
+  "scene": {
+    "light_source": {"type": "sun", "altitude": 20.0, "azimuth": 0.0,
+                     "diameter": 0.5, "spectrum": "D65"},
+    "ray_num": 200000,
+    "max_hits": 8,
+    "scattering": [{"prob": 0.0, "entries": [{"crystal": 1, "proportion": 1.0}]}]
+  },
+  "render": [{
+    "id": 1,
+    "lens": {"type": "dual_fisheye_equal_area", "fov": 180.0},
+    "resolution": [128, 64],
+    "view": {"elevation": 0, "azimuth": 0, "roll": 0},
+    "visible": "full", "background": [0, 0, 0],
+    "opacity": 1.0, "intensity_factor": 1.0
+  }],
+  "raypath_color": {
+    "mode": "dominant",
+    "classes": [
+      {"color": [1.0, 0.0, 0.0], "match": [{"layer": 0, "crystal": 1}]}
+    ]
+  }
+})";
+
+bool RunToIdleWithData(LUMICE_Server* server, const char* json) {
+  if (LUMICE_CommitConfig(server, json) != LUMICE_OK) {
+    return false;
+  }
+  for (int waited = 0; waited < 5000; waited += 10) {
+    LUMICE_ServerState st = LUMICE_SERVER_RUNNING;
+    LUMICE_QueryServerState(server, &st);
+    if (st == LUMICE_SERVER_IDLE) {
+      LUMICE_RawXyzResult xyz[2]{};
+      LUMICE_GetRawXyzResults(server, xyz, 1);
+      if (xyz[0].has_valid_data) {
+        return true;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return false;
+}
+
+}  // namespace
 
 void RegisterColorWindowTests(ImGuiTestEngine* engine) {
   // SwapZOrder swaps only the z_order scalars; vector entries stay pinned
@@ -283,6 +346,50 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // code-review-01 Major 2: the two tests above drive PollColorClassSignal with
+  // server=nullptr, which returns before ever calling LUMICE_GetColorClassSignal —
+  // they exercise the resize path but never the "server rejects class_count"
+  // branch (issue.md ② root cause 2: the 500 ms throttled poll hits the server's
+  // strict class_count check during the settling window between a GUI-side
+  // push_back and the server picking up the committed class table). This test
+  // drives that branch for real: commit a 1-class config to a real server, then
+  // grow g_state.raypath_color to 2 WITHOUT committing, so PollColorClassSignal's
+  // `n` (2) mismatches the server's active class count (1) and
+  // LUMICE_GetColorClassSignal returns LUMICE_ERR_INVALID_CONFIG.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "color_window", "poll_signal_preserves_on_real_server_class_count_mismatch");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      LUMICE_Server* server = LUMICE_CreateServer();
+      IM_CHECK(server != nullptr);
+      const bool ok = RunToIdleWithData(server, kSingleClassConfig);
+      IM_CHECK(ok);
+      if (!ok) {
+        LUMICE_DestroyServer(server);
+        return;
+      }
+
+      // Local state grows to 2 classes; the server still only knows about 1
+      // (no commit happened), so this mirrors the real add-class settling window.
+      gui::ColorClassConfig c;
+      gui::g_state.raypath_color.push_back(c);
+      gui::g_state.raypath_color.push_back(c);
+
+      // Sentinel values distinguishable from both a real signal (0/1) and the
+      // resize-appended default (1): if the mismatch branch is skipped and the
+      // real poll result gets moved into out_flags, these would be overwritten.
+      std::vector<int> flags = { 7, 7 };
+      gui::PollColorClassSignal(gui::g_state, server, flags);
+
+      IM_CHECK_EQ(static_cast<int>(flags.size()), 2);
+      IM_CHECK_EQ(flags[0], 7);
+      IM_CHECK_EQ(flags[1], 7);
+
+      LUMICE_DestroyServer(server);
+    };
+  }
+
   // Aggregate predicate for the top-bar warning (task-348.1 Step 3). Same
   // semantics as the per-row warning in RenderColorWindow: warn only when the
   // user has configured at least one class with non-empty match[] AND every
@@ -351,6 +458,45 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       gui::g_state.raypath_color.push_back(configured);
       gui::g_state.raypath_color.push_back(empty_cls);
       std::vector<int> flags = { 0, 0 };
+      IM_CHECK(gui::AllConfiguredColorClassesUnmatched(gui::g_state, flags));
+    };
+  }
+
+  // code-review-01 Minor 1 (this task): a configured class whose index falls
+  // outside signal_flags (caller's cache hasn't grown to match state.raypath_color
+  // yet) must be treated as "unknown", not as a confirmed no-signal — matching
+  // PollColorClassSignal's own "we don't know yet" default (resize(n, 1)). The
+  // only configured class is out of range: pre-fix, `any_configured` was set
+  // before the bounds check and the missing entry could never disqualify the
+  // warning, so this would have returned true (false-positive warn). Post-fix
+  // it must return false — there is no known data, so nothing to warn about yet.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "color_window", "all_configured_unmatched_treats_out_of_range_index_as_unknown");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig configured;
+      gui::ColorClassRefConfig r;
+      configured.match.push_back(r);
+      gui::g_state.raypath_color.push_back(configured);
+      std::vector<int> flags;  // empty: index 0 is out of range
+      IM_CHECK(!gui::AllConfiguredColorClassesUnmatched(gui::g_state, flags));
+    };
+  }
+  // A genuinely known no-signal class must still trigger the warning even when a
+  // second, out-of-range (unknown) class is also configured — the fix must not
+  // over-correct into "any unknown entry suppresses the whole aggregate".
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window",
+                                    "all_configured_unmatched_true_when_known_entry_unmatched_despite_unknown_peer");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig configured;
+      gui::ColorClassRefConfig r;
+      configured.match.push_back(r);
+      gui::g_state.raypath_color.push_back(configured);
+      gui::g_state.raypath_color.push_back(configured);
+      std::vector<int> flags = { 0 };  // index 0 known + unmatched; index 1 out of range (unknown)
       IM_CHECK(gui::AllConfiguredColorClassesUnmatched(gui::g_state, flags));
     };
   }

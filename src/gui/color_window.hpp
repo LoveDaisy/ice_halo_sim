@@ -71,8 +71,10 @@ void PollColorClassSignal(const GuiState& state, LUMICE_Server* server, std::vec
 // the top-bar aggregate warning (a12) so the two indicators can't drift. Safe
 // to call multiple times per frame — throttle key + shared static cache make
 // same-frame calls idempotent (subsequent calls just resize + return the same
-// vector). Returned reference is valid until the next call.
-const std::vector<int>& RefreshColorClassSignals(const GuiState& state, LUMICE_Server* server);
+// vector). Returns a copy (code-review-01 Minor 2): the vector is tiny (one int
+// per color class), so this trades a negligible copy for not exposing the
+// internal throttle cache by reference across module boundaries.
+std::vector<int> RefreshColorClassSignals(const GuiState& state, LUMICE_Server* server);
 
 // True when the user has configured at least one color class with non-empty
 // `match[]`, AND every such class currently reports no signal (all warned).
