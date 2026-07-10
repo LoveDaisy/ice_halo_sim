@@ -85,22 +85,6 @@ bool PushDisplayState(const GuiState& state, LUMICE_Server* server) {
   return true;
 }
 
-// Poll GetColorClassSignal into a caller-owned buffer sized to
-// state.raypath_color.size(). Buffer is resized here so callers can pass an
-// empty vector on the first call.
-void PollColorClassSignal(const GuiState& state, LUMICE_Server* server, std::vector<int>& out_flags) {
-  const int n = static_cast<int>(state.raypath_color.size());
-  out_flags.assign(static_cast<size_t>(n), 0);
-  if (server == nullptr || n == 0) {
-    return;
-  }
-  const LUMICE_ErrorCode ec = LUMICE_GetColorClassSignal(server, out_flags.data(), n);
-  if (ec != LUMICE_OK) {
-    // Same class_count mismatch story as PushDisplayState — settle silently.
-    std::fill(out_flags.begin(), out_flags.end(), 0);
-  }
-}
-
 // Human-readable summary of a class's match[] used for the collapsed row label.
 // Rebuilt from state on every render (a05 减法 — no cache field).
 std::string BuildClassSummary(const GuiState& state, const ColorClassConfig& cls) {
@@ -497,6 +481,66 @@ WindowLocalState& GetLocalState() {
 
 }  // namespace
 
+// task-348.1 fix: poll GetColorClassSignal into a caller-owned buffer sized to
+// state.raypath_color.size(). Resize semantics: new entries default to 1
+// ("settling / no warning") instead of the pre-fix 0 ("no rays matched"). On
+// C-API rejection (class_count mismatch during the debounce window between
+// GUI-side push_back and server-side commit), out_flags is LEFT UNCHANGED —
+// the previously observed signal is preserved rather than clobbered to 0.
+// This closes the "add a class → every pre-existing class instantly shows the
+// no-match warning" bug (② in issue.md): resize no longer wipes old signals,
+// and mismatch no longer treats "we don't know yet" as "we know it's zero".
+void PollColorClassSignal(const GuiState& state, LUMICE_Server* server, std::vector<int>& out_flags) {
+  const size_t n = state.raypath_color.size();
+  out_flags.resize(n, 1);
+  if (server == nullptr || n == 0) {
+    return;
+  }
+  std::vector<int> tmp(n, 0);
+  const LUMICE_ErrorCode ec = LUMICE_GetColorClassSignal(server, tmp.data(), static_cast<int>(n));
+  if (ec == LUMICE_OK) {
+    out_flags = std::move(tmp);
+  }
+  // ec != LUMICE_OK: settling window (server hasn't picked up the new class_count yet).
+  // Leave out_flags with resize-preserved prior values; the next successful poll heals.
+}
+
+// Orchestration wrapper: 500 ms throttled poll + resize + shared cache. Same-frame
+// idempotent (subsequent calls hit the throttle and just resize + return); it is
+// therefore safe for both RenderColorWindow (per-row) and RenderTopBar (aggregate)
+// to call this in the same frame. The trailing resize guarantees the returned
+// vector always matches state.raypath_color.size() even in the frames between
+// two throttled polls (a fresh add/remove between windows must not leave the
+// cache out-of-sync).
+const std::vector<int>& RefreshColorClassSignals(const GuiState& state, LUMICE_Server* server) {
+  auto& local = GetLocalState();
+  const float now = static_cast<float>(ImGui::GetTime());
+  if (now - local.last_poll_time > kSignalPollIntervalSec) {
+    PollColorClassSignal(state, server, local.signal_flags);
+    local.last_poll_time = now;
+  }
+  local.signal_flags.resize(state.raypath_color.size(), 1);
+  return local.signal_flags;
+}
+
+// True when the user has configured at least one color class with non-empty
+// match[] AND every such class currently reports no signal. Same-semantics as
+// the per-row warning in RenderColorWindow so the top-bar aggregate pip
+// cannot disagree with the row-level pips.
+bool AllConfiguredColorClassesUnmatched(const GuiState& state, const std::vector<int>& signal_flags) {
+  bool any_configured = false;
+  for (size_t i = 0; i < state.raypath_color.size(); i++) {
+    if (state.raypath_color[i].match.empty()) {
+      continue;
+    }
+    any_configured = true;
+    if (i < signal_flags.size() && signal_flags[i] != 0) {
+      return false;
+    }
+  }
+  return any_configured;
+}
+
 void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
   if (!state.color_window_open) {
     return;
@@ -529,16 +573,10 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
 
   ImGui::Separator();
 
-  // Debounced signal poll for AC4 empty-arc warning.
-  auto& local = GetLocalState();
-  const float now = static_cast<float>(ImGui::GetTime());
-  if (now - local.last_poll_time > kSignalPollIntervalSec) {
-    PollColorClassSignal(state, server, local.signal_flags);
-    local.last_poll_time = now;
-  }
-  if (local.signal_flags.size() != state.raypath_color.size()) {
-    local.signal_flags.assign(state.raypath_color.size(), 0);
-  }
+  // Debounced signal poll for the AC4 empty-arc warning. Reads the shared
+  // orchestration cache — same source the top-bar aggregate warning reads,
+  // so the two indicators cannot drift (a12 single source; task-348.1 fix).
+  const std::vector<int>& signal_flags = RefreshColorClassSignals(state, server);
 
   // Sort classes by z_order for display (physical vector order stays put).
   const size_t n = state.raypath_color.size();
@@ -616,7 +654,7 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
     }
 
     // Empty warning (AC4).
-    if (phys < local.signal_flags.size() && !cls.match.empty() && local.signal_flags[phys] == 0) {
+    if (phys < signal_flags.size() && !cls.match.empty() && signal_flags[phys] == 0) {
       ImGui::SameLine();
       PushWarningStyle();
       ImGui::TextUnformatted(ICON_FA_TRIANGLE_EXCLAMATION);

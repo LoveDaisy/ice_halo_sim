@@ -233,6 +233,128 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // task-348.1 Step 1 fix — PollColorClassSignal resize semantics.
+  // Pre-fix: `assign(n, 0)` unconditionally zeroed every class on every call, so
+  // `state.raypath_color.push_back()` immediately made every pre-existing class
+  // read signal==0 → "no rays matched" warning on ALL classes for one frame.
+  // Post-fix: `resize(n, 1)` preserves existing signals and defaults new entries
+  // to 1 (settling / no warning). This test pins the resize invariant directly
+  // (no need for a real server, no C-API roundtrip, no throttle timing).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "poll_signal_resize_preserves_existing_and_defaults_new");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      // Seed g_state with 2 classes and a caller-owned buffer that already carries
+      // "known matched" for both. The buffer stands in for the shared cache the
+      // orchestration wrapper would hold across frames.
+      gui::ColorClassConfig c;
+      gui::g_state.raypath_color.push_back(c);
+      gui::g_state.raypath_color.push_back(c);
+      std::vector<int> flags = { 1, 1 };
+
+      // Simulate "user added a third class in this frame": grow raypath_color
+      // to 3 WITHOUT a server commit. server=nullptr forces the early return
+      // AFTER resize, so we exercise the resize path in isolation.
+      gui::g_state.raypath_color.push_back(c);
+      gui::PollColorClassSignal(gui::g_state, nullptr, flags);
+
+      // Pre-fix: [0,0,0]. Post-fix: existing [0]/[1] preserved as 1; new [2] defaults to 1.
+      IM_CHECK_EQ(static_cast<int>(flags.size()), 3);
+      IM_CHECK_EQ(flags[0], 1);
+      IM_CHECK_EQ(flags[1], 1);
+      IM_CHECK_EQ(flags[2], 1);
+    };
+  }
+
+  // Shrink path: user deletes a class. resize(n, 1) still applies — extra entries
+  // beyond the new size are dropped; kept prefix retains its values.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "poll_signal_resize_shrinks_and_keeps_prefix");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig c;
+      gui::g_state.raypath_color.push_back(c);
+      std::vector<int> flags = { 1, 1, 0 };  // caller cache larger than state
+
+      gui::PollColorClassSignal(gui::g_state, nullptr, flags);
+
+      IM_CHECK_EQ(static_cast<int>(flags.size()), 1);
+      IM_CHECK_EQ(flags[0], 1);
+    };
+  }
+
+  // Aggregate predicate for the top-bar warning (task-348.1 Step 3). Same
+  // semantics as the per-row warning in RenderColorWindow: warn only when the
+  // user has configured at least one class with non-empty match[] AND every
+  // such class currently reports no signal.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "all_configured_unmatched_returns_false_when_empty_pool");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      std::vector<int> flags;
+      IM_CHECK(!gui::AllConfiguredColorClassesUnmatched(gui::g_state, flags));
+    };
+  }
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "color_window", "all_configured_unmatched_returns_false_when_no_match_configured");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      // Two classes, both with empty match[] (user added them but hasn't wired refs yet).
+      gui::ColorClassConfig c;
+      gui::g_state.raypath_color.push_back(c);
+      gui::g_state.raypath_color.push_back(c);
+      std::vector<int> flags = { 0, 0 };
+      // No configured refs anywhere ⇒ nothing to warn about, top bar stays quiet.
+      IM_CHECK(!gui::AllConfiguredColorClassesUnmatched(gui::g_state, flags));
+    };
+  }
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "color_window", "all_configured_unmatched_true_when_every_configured_class_is_zero");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig c;
+      gui::ColorClassRefConfig r;
+      c.match.push_back(r);
+      gui::g_state.raypath_color.push_back(c);
+      gui::g_state.raypath_color.push_back(c);
+      std::vector<int> flags = { 0, 0 };
+      IM_CHECK(gui::AllConfiguredColorClassesUnmatched(gui::g_state, flags));
+    };
+  }
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "color_window", "all_configured_unmatched_false_when_any_configured_class_has_signal");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig c;
+      gui::ColorClassRefConfig r;
+      c.match.push_back(r);
+      gui::g_state.raypath_color.push_back(c);
+      gui::g_state.raypath_color.push_back(c);
+      std::vector<int> flags = { 0, 1 };
+      IM_CHECK(!gui::AllConfiguredColorClassesUnmatched(gui::g_state, flags));
+    };
+  }
+  {
+    // Mixed pool: class[0] configured but silent, class[1] empty match. The
+    // top-bar warning should fire (class[0] alone is enough — class[1] adds
+    // nothing to warn about since it has no configured refs).
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "all_configured_unmatched_ignores_empty_match_classes");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig configured;
+      gui::ColorClassRefConfig r;
+      configured.match.push_back(r);
+      gui::ColorClassConfig empty_cls;
+      gui::g_state.raypath_color.push_back(configured);
+      gui::g_state.raypath_color.push_back(empty_cls);
+      std::vector<int> flags = { 0, 0 };
+      IM_CHECK(gui::AllConfiguredColorClassesUnmatched(gui::g_state, flags));
+    };
+  }
+
   // BuildClassFromFilter — a row whose single Factor still expands to more
   // than one alternative ("1-3;5-7", the same ';' OR-separator case as
   // validate_single_atom_rejects_semicolon_or) must be skipped like an
