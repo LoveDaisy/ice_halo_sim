@@ -7,6 +7,22 @@
 #include "include/lumice_config_scope.hpp"  // lumice::ConfigColorGuard for LUMICE_Config RAII
 #include "test_gui_shared.hpp"
 
+// task-349.4 wait-until-condition helper — bounded polling that yields to the main render
+// thread until `condition()` returns true or `max_yields` frames elapse. Predicates should
+// mirror the immediately-following IM_CHECK so a real production regression (condition
+// never becomes true) still surfaces as a failure at the same assertion line, just after
+// waiting up to the bound instead of after a fixed frame count.
+namespace {
+constexpr int kDoOpenSettleYieldLimit = 60;
+
+template <typename Fn>
+void YieldUntilTrue(ImGuiTestContext* ctx, int max_yields, Fn&& condition) {
+  for (int i = 0; i < max_yields && !condition(); ++i) {
+    ctx->Yield();
+  }
+}
+}  // namespace
+
 // ========== Import/Export Tests ==========
 
 void RegisterImportExportTests(ImGuiTestEngine* engine) {
@@ -2817,13 +2833,15 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
 
       // 3) DoOpen(path) hits the `.lmc`-else branch (no baked img). Expected: ClearTexture().
       gui::DoOpen(tmp_path);
-      // When this test isn't first in the run queue, the ClearTexture() effect on the shared
-      // g_preview state isn't yet visible to the very next IM_CHECK unless the coroutine
-      // worker thread (running TestFunc) hands control back to the main render thread for a
-      // few real frames first. Root-caused via bisection (isolated run: always passes; any
-      // preceding test: always fails without a yield) — a test-harness synchronization gap,
-      // not a production bug (reverting the fix still fails here with or without the yield).
-      ctx->Yield(3);
+      // task-349.4: DoOpen's ClearTexture() runs synchronously on the TestFunc coroutine
+      // worker thread — the CPU-side g_preview state IS empty by the time this line returns.
+      // The historical Yield(3) was masking a different bug: SyncFromPoller() on the main
+      // render thread re-uploaded a prior test's leaked PreviewSnapshot payload (see
+      // ResetTestState() in test_gui_main.cpp for the fixture-level fix). Bounded
+      // wait-until acts as defense-in-depth: if the fixture invalidation ever regresses
+      // or a future test leaks state through a new path, this loop times out at
+      // kDoOpenSettleYieldLimit and IM_CHECK still fails deterministically — no bug is hidden.
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return !gui::g_preview.HasTexture(); });
 
       // 4) AC1 assertion: pre-fix this would FAIL (stale dims retained).
       IM_CHECK(!gui::g_preview.HasTexture());
@@ -2879,8 +2897,16 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
 
       // 4) Drive gui::DoOpen(path) for real via GuiFunc (see threading note above), then wait
       //    for it to run (main-thread GuiFunc ticks while TestFunc's coroutine yields).
+      //    task-349.4: bounded wait-until — main thread must actually tick GuiFunc, which
+      //    sets s_open_with_preview_done and (via LoadLmcFile + UploadTexture) resizes
+      //    g_preview to target dims. Predicate mirrors the following IM_CHECK exactly so a
+      //    real regression (DoOpen wiring breaks) still fails at line :NNNN, just after
+      //    kDoOpenSettleYieldLimit frames instead of a fixed 3.
       s_open_with_preview_path = tmp_path;
-      ctx->Yield(3);
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [target_w, target_h] {
+        return gui::g_preview.HasTexture() && gui::g_preview.GetTextureWidth() == target_w &&
+               gui::g_preview.GetTextureHeight() == target_h;
+      });
 
       // 5) AC2 assertion: DoOpen's "has baked img" branch replaced the stale texture with the
       //    file's baked one — this is the real production entry point, not a file-side proxy.
