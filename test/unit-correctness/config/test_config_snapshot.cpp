@@ -67,6 +67,26 @@ GuiState MakeModifiedState() {
   s.renderer.azimuth = -20.0f;
   s.renderer.exposure_offset = 0.5f;
 
+  // task-349.2 Step 2: raypath_color is a configuration field (structural
+  // edits go through MarkFilterDirty); ConfigSnapshot must round-trip it so
+  // Revert restores color-class edits. Populate with non-default values so
+  // From()/ApplyTo() coverage catches missing field mirroring.
+  ColorClassConfig cls;
+  cls.color[0] = 0.2f;
+  cls.color[1] = 0.7f;
+  cls.color[2] = 0.9f;
+  cls.combine = 1;  // LUMICE_COLOR_COMBINE_ALL — non-default (default is 0/ANY)
+  cls.visible = false;
+  cls.solo = true;
+  cls.z_order = 3;
+  ColorClassRefConfig ref;
+  ref.layer_idx = 0;
+  ref.crystal_pool_id = 1;
+  ref.match_all = false;
+  ref.predicate_text = "3-5";
+  cls.match.push_back(ref);
+  s.raypath_color.push_back(cls);
+
   return s;
 }
 
@@ -99,6 +119,18 @@ TEST(ConfigSnapshot, FromCapturesAllConfigFields) {
   EXPECT_FLOAT_EQ(snap.renderer.elevation, 15.0f);
   EXPECT_FLOAT_EQ(snap.renderer.azimuth, -20.0f);
   EXPECT_FLOAT_EQ(snap.renderer.exposure_offset, 0.5f);
+
+  // task-349.2 Step 2: raypath_color mirror.
+  ASSERT_EQ(snap.raypath_color.size(), s.raypath_color.size());
+  EXPECT_FLOAT_EQ(snap.raypath_color[0].color[0], 0.2f);
+  EXPECT_EQ(snap.raypath_color[0].combine, 1);
+  EXPECT_FALSE(snap.raypath_color[0].visible);
+  EXPECT_TRUE(snap.raypath_color[0].solo);
+  EXPECT_EQ(snap.raypath_color[0].z_order, 3);
+  ASSERT_EQ(snap.raypath_color[0].match.size(), 1u);
+  EXPECT_EQ(snap.raypath_color[0].match[0].predicate_text, "3-5");
+  EXPECT_FALSE(snap.raypath_color[0].match[0].match_all);
+  EXPECT_EQ(snap.raypath_color[0].match[0].crystal_pool_id, 1);
 }
 
 // Spot-check (not exhaustive): this verifies a representative whitelist of runtime /
@@ -112,6 +144,14 @@ TEST(ConfigSnapshot, ApplyToRestoresConfigFieldsAndPreservesRuntimeState) {
   // Build a target state that differs in BOTH config AND runtime fields.
   GuiState target = InitDefaultState();
   target.sun.altitude = 99.0f;  // Will be overwritten by ApplyTo.
+
+  // task-349.2 Step 2: target's raypath_color is CONFIG, must be overwritten
+  // by ApplyTo (Revert must fully restore the last-committed color-class list,
+  // including the case where the target had garbage classes at revert time).
+  ColorClassConfig junk;
+  junk.color[0] = 42.0f;
+  target.raypath_color.push_back(junk);
+  target.raypath_color.push_back(junk);
 
   // Runtime / view-preference fields: these must NOT be touched by ApplyTo.
   target.dirty = true;
@@ -144,6 +184,13 @@ TEST(ConfigSnapshot, ApplyToRestoresConfigFieldsAndPreservesRuntimeState) {
   EXPECT_EQ(target.renderer.lens_type, source.renderer.lens_type);
   EXPECT_FLOAT_EQ(target.renderer.fov, source.renderer.fov);
   EXPECT_FLOAT_EQ(target.renderer.exposure_offset, source.renderer.exposure_offset);
+  // task-349.2 Step 2: raypath_color is CONFIG, ApplyTo replaces it (junk
+  // classes seeded above are gone, source content restored 1:1).
+  ASSERT_EQ(target.raypath_color.size(), source.raypath_color.size());
+  EXPECT_EQ(target.raypath_color[0].combine, source.raypath_color[0].combine);
+  EXPECT_FLOAT_EQ(target.raypath_color[0].color[1], source.raypath_color[0].color[1]);
+  ASSERT_EQ(target.raypath_color[0].match.size(), source.raypath_color[0].match.size());
+  EXPECT_EQ(target.raypath_color[0].match[0].predicate_text, source.raypath_color[0].match[0].predicate_text);
 
   // Runtime / view fields: unchanged.
   EXPECT_TRUE(target.dirty);
@@ -214,6 +261,13 @@ TEST(ConfigSnapshot, RoundTripFromThenApplyRestoresConfig) {
   EXPECT_FLOAT_EQ(restored.crystals[restored_e0.crystal_id].face_distance[0], 1.3f);
   EXPECT_EQ(restored.crystals[restored_e0.crystal_id].zenith.type, AxisDistType::kGauss);
   EXPECT_FLOAT_EQ(restored.crystals[restored_e0.crystal_id].zenith.mean, 30.0f);
+
+  // task-349.2 Step 2: raypath_color survives From → ApplyTo round-trip.
+  ASSERT_EQ(restored.raypath_color.size(), original.raypath_color.size());
+  EXPECT_EQ(restored.raypath_color[0].combine, original.raypath_color[0].combine);
+  EXPECT_EQ(restored.raypath_color[0].z_order, original.raypath_color[0].z_order);
+  ASSERT_EQ(restored.raypath_color[0].match.size(), 1u);
+  EXPECT_EQ(restored.raypath_color[0].match[0].predicate_text, "3-5");
 }
 
 // ID-pool round-trip: build state with shared crystal_id across two entries,
@@ -250,7 +304,7 @@ TEST(ConfigSnapshot, RoundTripPoolAndEntries) {
 // Mirror the production sizeof() guard at test scope as an extra reminder on the
 // baseline platform. Platform-gated because std::vector size varies across stdlibs.
 #if defined(__APPLE__) && defined(__aarch64__)
-static_assert(sizeof(GuiState::ConfigSnapshot) == 192,
+static_assert(sizeof(GuiState::ConfigSnapshot) == 216,
               "Test mirror: ConfigSnapshot size changed; update From/ApplyTo in gui_state.hpp");
 #endif
 

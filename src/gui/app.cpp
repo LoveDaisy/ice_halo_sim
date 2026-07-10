@@ -491,7 +491,10 @@ static bool LoadAndUploadBgImage(const std::filesystem::path& path) {
 }
 
 void DoOpen() {
-  auto path = ShowOpenDialog();
+  DoOpen(ShowOpenDialog());
+}
+
+void DoOpen(const std::filesystem::path& path) {
   if (path.empty()) {
     return;
   }
@@ -516,6 +519,10 @@ void DoOpen() {
       g_thumbnail_cache.OnLayerStructureChanged();
       g_preview.ClearTexture();
       g_preview.ClearBackground();
+      // Fence the poller-side staged composite so SyncFromPoller won't re-upload the previous
+      // scene's snapshot over the just-cleared preview. Order relative to ClearTexture() is
+      // irrelevant: the two act on disjoint subsystems (g_preview vs g_server_poller).
+      g_server_poller.InvalidateStagedTexture();
       // Reset modal preview trackball to the imported config's first entry.
       if (!g_state.layers.empty() && !g_state.layers[0].entries.empty()) {
         ResetCrystalViewToCrystal(g_state.crystals[g_state.layers[0].entries[0].crystal_id]);
@@ -538,6 +545,11 @@ void DoOpen() {
       ResetCrystalViewToCrystal(g_state.crystals[g_state.layers[0].entries[0].crystal_id]);
     }
     GUI_LOG_INFO("[GUI] DoOpen: {}", PathToU8(path));
+    // Fence the poller-side staged composite before either sub-branch touches g_preview:
+    // otherwise SyncFromPoller can re-upload the previous scene over a baked or blank .lmc.
+    // Order relative to ClearTexture()/UploadTexture() is irrelevant — disjoint subsystems
+    // (g_preview vs g_server_poller).
+    g_server_poller.InvalidateStagedTexture();
     if (!tex_data.empty()) {
       g_preview.UploadTexture(tex_data.data(), tex_w, tex_h);
       // Intent: a baked static result (→ kDone via ReconcileSimState, no server run).
@@ -545,6 +557,9 @@ void DoOpen() {
     } else {
       // Intent: no result to show (→ kIdle).
       g_state.run_intent = RunIntent::kNone;
+      // Clear stale texture from previous scene — mirrors DoNew() / JSON-import
+      // semantics: "no preview data = clear screen, wait for user to Run".
+      g_preview.ClearTexture();
     }
 
     // Restore background image from saved path (uses deserialized alpha, not reset to 0.5)
@@ -568,6 +583,10 @@ void DoNew() {
   g_thumbnail_cache.OnLayerStructureChanged();
   g_preview.ClearTexture();
   g_preview.ClearBackground();
+  // Fence the poller-side staged composite so SyncFromPoller won't re-upload the previous
+  // scene's snapshot. Order relative to ClearTexture() is irrelevant — disjoint subsystems
+  // (g_preview vs g_server_poller).
+  g_server_poller.InvalidateStagedTexture();
   g_crystal_mesh_hash = 0;
   // Reset modal preview trackball to the new default entry's preset view —
   // otherwise a stale drag pose from before New persists into the new doc.
@@ -985,6 +1004,21 @@ bool ShouldFireCompositeUpload(const PreviewSnapshot& snap, unsigned long long l
       payload_available && ShouldUseCompositeUpload(snap.payload->is_composite, show_composite_preview);
   const bool mode_changed = payload_available && effective_composite != last_uploaded_as_composite;
   return ShouldUploadPayload(snap, last_uploaded_texture_serial, display_epoch_floor) || mode_changed;
+}
+
+// task-348.3 (⑦) — see app.hpp. Pure predicate: no globals, no GL. Kept trivial on purpose
+// so the "only fire on false→true transition" time-guard lives at the call site and is
+// obvious in the diff (RenderTopBar), while this function pins the decision boundary that
+// gui_test can assert without an ImGui/GL context.
+bool ShouldDefaultEnableColorsOnOpen(bool raypath_color_empty) {
+  return raypath_color_empty;
+}
+
+// task-348.3 (⑤/⑥) shared writer — see app.hpp. Two-line function on purpose: the whole
+// point is that both write sites go through the same left-value assignment so future
+// code cannot introduce a third variant that reads/writes the wrong field.
+void ToggleCompositePreview(GuiState& state) {
+  state.show_composite_preview = !state.show_composite_preview;
 }
 
 void SyncFromPoller() {

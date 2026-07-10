@@ -88,6 +88,16 @@ void ResetTestState() {
   gui::g_show_unsaved_popup = false;
   gui::g_pending_action = gui::PendingAction::kNone;
   gui::g_server_poller.Stop();  // Stop poller before nulling server
+  // task-349.4: Stop() only kPaused the worker — the last published PreviewSnapshot
+  // survives (production keeps it on purpose for slider-scrub carry-forward, see
+  // server_poller.hpp:113). But `g_state = InitDefaultState()` above just zeroed
+  // last_uploaded_texture_serial / display_epoch_floor / committed_epoch, so if a
+  // prior test's snapshot is still valid with a non-zero texture_serial, the very
+  // next SyncFromPoller() would re-upload it and any test that expects
+  // g_preview.HasTexture() to reflect this test's own CPU-side ClearTexture()
+  // observes the leaked prior texture instead. Use the dedicated test seam to drop
+  // the payload (valid stays true → ReconcileSimState still runs correctly).
+  gui::g_server_poller.InvalidateStagedTexture();
   gui::g_server = nullptr;
   gui::ResetPendingDeleteState();
 

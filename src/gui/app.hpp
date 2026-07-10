@@ -4,6 +4,7 @@
 #include <spdlog/sinks/basic_file_sink.h>
 
 #include <atomic>
+#include <filesystem>
 #include <memory>
 
 #include "gui/crystal_preview.hpp"
@@ -105,6 +106,7 @@ void DoExportDualFisheyeEqualAreaPng();
 void DoExportEquirectangularPng();
 void DoExportConfigJson();
 void DoOpen();
+void DoOpen(const std::filesystem::path& path);
 void DoNew();
 void CalibrateQualityThreshold();
 void DoRun();
@@ -149,6 +151,22 @@ bool ShouldUseCompositeUpload(bool payload_is_composite, bool show_composite_pre
 bool ShouldFireCompositeUpload(const PreviewSnapshot& snap, unsigned long long last_uploaded_texture_serial,
                                uint64_t display_epoch_floor, bool show_composite_preview,
                                bool last_uploaded_as_composite);
+
+// task-348.3 AC3 (⑦): decide whether opening the Colors window should force
+// show_composite_preview=true. True only when no color classes exist yet (nothing
+// to remember, default to "on" so a newly-added first class is visible immediately);
+// false when classes already exist (memory — caller must leave the existing preference
+// untouched). Pure predicate; the caller is responsible for applying it ONLY on the
+// false→true color_window_open transition (see RenderTopBar), not per-frame.
+bool ShouldDefaultEnableColorsOnOpen(bool raypath_color_empty);
+
+// task-348.3 AC1/AC2 shared writer: toggle the user preference `show_composite_preview`.
+// Called from both the top-bar Colored checkbox (app_panels.cpp; icon-only Button in
+// 348.3, reverted to a plain-text Checkbox in 349.3 #4) and the in-window "Enable
+// colors" checkbox (color_window.cpp) so the two write sites cannot drift. Read side
+// stays split (both sites read the ground truth `last_uploaded_as_composite` for
+// their display state — see 345.4 read/write split contract).
+void ToggleCompositePreview(GuiState& state);
 
 // Panel rendering
 void RenderTopBar(float window_width);

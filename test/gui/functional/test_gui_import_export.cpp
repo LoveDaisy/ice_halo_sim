@@ -3,9 +3,118 @@
 #include <nlohmann/json.hpp>
 
 #include "IconsFontAwesome6.h"
+#include "gui/export_fbo_renderer.hpp"      // RenderExportToRgba for GL pixel-level assertions
 #include "gui/raypath_segments.hpp"         // ParseSummandText / SumOfProducts (SoP round-trip tests)
 #include "include/lumice_config_scope.hpp"  // lumice::ConfigColorGuard for LUMICE_Config RAII
 #include "test_gui_shared.hpp"
+
+// task-349.4 wait-until-condition helper — bounded polling that yields to the main render
+// thread until `condition()` returns true or `max_yields` frames elapse. Predicates should
+// mirror the immediately-following IM_CHECK so a real production regression (condition
+// never becomes true) still surfaces as a failure at the same assertion line, just after
+// waiting up to the bound instead of after a fixed frame count.
+namespace {
+constexpr int kDoOpenSettleYieldLimit = 60;
+
+template <typename Fn>
+void YieldUntilTrue(ImGuiTestContext* ctx, int max_yields, Fn&& condition) {
+  for (int i = 0; i < max_yields && !condition(); ++i) {
+    ctx->Yield();
+  }
+}
+
+// task-350: shared request/response scaffolding for the "gl_render_*" subcases (see the
+// block at the end of RegisterImportExportTests). Kept out here so GlOpGuiFunc below is a
+// plain non-capturing function — ImGuiTestGuiFunc is `void (*)(ImGuiTestContext*)` and
+// rejects capturing lambdas.
+struct GlOpTestState {
+  bool requested = false;
+  bool done = false;
+  // Inputs (TestFunc → GuiFunc): sequence of GL ops to run this frame.
+  bool do_upload_stale = false;
+  bool do_upload_bg = false;
+  bool do_clear = false;
+  bool do_upload_fresh_after_clear = false;
+  bool bg_enabled = false;
+  int dst_w = 32;
+  int dst_h = 16;
+  // Outputs (GuiFunc → TestFunc).
+  bool export_ok = false;
+  unsigned char center_r = 0;
+  unsigned char center_g = 0;
+  unsigned char center_b = 0;
+  void Reset() { *this = GlOpTestState{}; }
+};
+
+GlOpTestState g_gl_op;
+
+// Stable fills. Chosen so a single center-pixel channel check discriminates
+// {stale sim} vs {black post-clear} vs {bg composited} vs {fresh upload} with no tolerance.
+constexpr unsigned char kStaleMagenta[3] = { 0xFF, 0x00, 0xFF };  // r=255, g=0,   b=255
+constexpr unsigned char kFreshCyan[3] = { 0x00, 0xFF, 0xFF };     // r=0,   g=255, b=255
+constexpr unsigned char kBgGreen[3] = { 0x00, 0xFF, 0x00 };       // r=0,   g=255, b=0
+
+void FillSolid(std::vector<unsigned char>& buf, int w, int h, const unsigned char rgb[3]) {
+  buf.resize(static_cast<size_t>(w) * h * 3);
+  for (int i = 0; i < w * h; ++i) {
+    buf[i * 3 + 0] = rgb[0];
+    buf[i * 3 + 1] = rgb[1];
+    buf[i * 3 + 2] = rgb[2];
+  }
+}
+
+// GuiFunc body: dispatch requested GL operations in a single main-thread frame so the
+// interleaved "clear then upload before any Render()" case is exercised without an
+// intervening PreviewRenderer::Render() — RenderExportToRgba's internal Render() is the
+// sole Render() call in the request-fulfillment window.
+void GlOpGuiFunc(ImGuiTestContext*) {
+  if (!g_gl_op.requested || g_gl_op.done)
+    return;
+  const int tex_w = 16;
+  const int tex_h = 8;
+  std::vector<unsigned char> pixels;
+  if (g_gl_op.do_upload_stale) {
+    FillSolid(pixels, tex_w, tex_h, kStaleMagenta);
+    lumice::gui::g_preview.UploadTexture(pixels.data(), tex_w, tex_h);
+  }
+  if (g_gl_op.do_upload_bg) {
+    FillSolid(pixels, tex_w, tex_h, kBgGreen);
+    lumice::gui::g_preview.UploadBgTexture(pixels.data(), tex_w, tex_h);
+  }
+  if (g_gl_op.do_clear) {
+    lumice::gui::g_preview.ClearTexture();
+  }
+  if (g_gl_op.do_upload_fresh_after_clear) {
+    FillSolid(pixels, tex_w, tex_h, kFreshCyan);
+    lumice::gui::g_preview.UploadTexture(pixels.data(), tex_w, tex_h);
+  }
+  // Rectangular/equirect lens fills the full viewport with texture samples, so a uniformly
+  // colored source texture yields a uniformly colored output — center-pixel probe suffices
+  // (no fisheye visibility cutout at frame center).
+  lumice::gui::PreviewParams params;
+  lumice::gui::ConfigureEquirectExportParams(params);
+  params.exposure.intensity_factor = 1.0f;
+  params.exposure.intensity_scale = 0.0f;  // RGB (non-XYZ) mode: texture sampled as-is
+  if (g_gl_op.bg_enabled) {
+    params.bg.enabled = true;
+    params.bg.alpha = 0.0f;  // shader: bg * (1 - alpha) + sim * alpha — alpha=0 = pure bg
+    params.bg.aspect = static_cast<float>(tex_w) / static_cast<float>(tex_h);
+  }
+  auto rgba =
+      lumice::gui::RenderExportToRgba(lumice::gui::g_preview, params, g_gl_op.dst_w, g_gl_op.dst_h, std::nullopt);
+  g_gl_op.export_ok = !rgba.empty();
+  if (g_gl_op.export_ok) {
+    // RenderExportToRgba returns RGBA8, row-major, top-down (matches stbi_write_png).
+    const int cx = g_gl_op.dst_w / 2;
+    const int cy = g_gl_op.dst_h / 2;
+    const size_t off = (static_cast<size_t>(cy) * g_gl_op.dst_w + cx) * 4;
+    g_gl_op.center_r = rgba[off + 0];
+    g_gl_op.center_g = rgba[off + 1];
+    g_gl_op.center_b = rgba[off + 2];
+  }
+  g_gl_op.done = true;
+}
+}  // namespace
 
 // ========== Import/Export Tests ==========
 
@@ -2775,6 +2884,266 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         // live on the display-time path (mono shader uniform / LUMICE_SetCompositeExposure).
         IM_CHECK_EQ(cfg.renderers[0].intensity_factor, 1.0f);
       }
+    };
+  }
+
+  // task-fix-stale-render-on-open (scrum-349.1) — 4-path preview-reset audit for DoOpen/DoNew.
+  //
+  // AC1 root cause: DoOpen's `.lmc`-else branch (no baked preview image) previously only set
+  // run_intent=kNone but forgot to ClearTexture(), leaving the previous scene's rendered image
+  // stuck on screen. Fix: mirror DoNew() / JSON-import — both call ClearTexture() unconditionally.
+  //
+  // These tests directly drive the real production DoOpen(path) overload (the same code path
+  // that the interactive DoOpen() shell invokes via ShowOpenDialog + forward), so a regression
+  // in the else-branch clear will surface here mechanically. The DoNew() path is implicitly
+  // guarded by test_gui_interaction.cpp:59 (`gui::g_preview.HasTexture() == false` after DoNew).
+  //
+  // Threading note: TestFunc runs on the ImGui-test-engine scheduler thread with no active
+  // OpenGL context bind, so any GL call from here (glBindTexture / glTexImage2D) crashes with
+  // SIGILL. Setup uses `UpdateCpuTextureData` (pure CPU-side — tex_width_/tex_height_/tex_data_)
+  // to simulate stale texture state without touching GL; ClearTexture (the code under test) is
+  // itself pure CPU-side, so the fix-vs-bug distinction is fully observable via HasTexture().
+  // Test 2 (baked-img branch) uses LoadLmcFile directly to observe the file-side payload, since
+  // driving DoOpen through UploadTexture would require GL and can't run in TestFunc.
+  {
+    // AC1 core: Open a .lmc with NO baked preview clears the stale texture from a prior scene.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "open_lmc_no_preview_clears_stale_texture");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // 1) Save a .lmc without a baked preview image (save_texture=false).
+      const char* tmp_path = "/tmp/lumice_open_no_preview.lmc";
+      bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
+      IM_CHECK(save_ok);
+
+      // 2) Simulate "previous scene rendered": populate g_preview's CPU-side texture state.
+      //    UpdateCpuTextureData flips HasTexture() to true without GL calls (see threading note).
+      const int stale_w = 8;
+      const int stale_h = 4;
+      std::vector<unsigned char> stale(stale_w * stale_h * 3, 0xAB);
+      gui::g_preview.UpdateCpuTextureData(stale.data(), stale_w, stale_h);
+      IM_CHECK(gui::g_preview.HasTexture());  // precondition: stale state truly present
+
+      // 3) DoOpen(path) hits the `.lmc`-else branch (no baked img). Expected: ClearTexture().
+      gui::DoOpen(tmp_path);
+      // task-349.4: DoOpen's ClearTexture() runs synchronously on the TestFunc coroutine
+      // worker thread — the CPU-side g_preview state IS empty by the time this line returns.
+      // The historical Yield(3) was masking a different bug: SyncFromPoller() on the main
+      // render thread re-uploaded a prior test's leaked PreviewSnapshot payload (see
+      // ResetTestState() in test_gui_main.cpp for the fixture-level fix). Bounded
+      // wait-until acts as defense-in-depth: if the fixture invalidation ever regresses
+      // or a future test leaks state through a new path, this loop times out at
+      // kDoOpenSettleYieldLimit and IM_CHECK still fails deterministically — no bug is hidden.
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return !gui::g_preview.HasTexture(); });
+
+      // 4) AC1 assertion: pre-fix this would FAIL (stale dims retained).
+      IM_CHECK(!gui::g_preview.HasTexture());
+
+      std::remove(tmp_path);
+    };
+  }
+
+  {
+    // Audit: a .lmc saved with a baked preview replaces the stale texture via a real DoOpen(path)
+    // call — the "has baked img" branch's UploadTexture is a GL call, which crashes (SIGILL) if
+    // invoked from TestFunc's coroutine worker thread (no GL context bound there; see the
+    // threading note above). Calling DoOpen(path) from GuiFunc instead runs it on the main render
+    // thread, where the GL context is current — mirrors the trackball GuiFunc-upload pattern
+    // (test_gui_interaction.cpp's lens_*_trackball group).
+    static bool s_open_with_preview_done = false;
+    static std::string s_open_with_preview_path;
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "open_lmc_with_preview_replaces_stale_texture");
+    t->GuiFunc = [](ImGuiTestContext*) {
+      if (!s_open_with_preview_done && !s_open_with_preview_path.empty()) {
+        gui::DoOpen(s_open_with_preview_path);
+        s_open_with_preview_done = true;
+      }
+    };
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      s_open_with_preview_done = false;
+      s_open_with_preview_path.clear();
+
+      // 1) Simulate "previous scene rendered": populate g_preview's CPU-side texture state
+      //    with a *different* size than the one that will be baked into the .lmc below, so a
+      //    dimension match after DoOpen proves real replacement, not stale-data coincidence.
+      const int stale_w = 8;
+      const int stale_h = 4;
+      std::vector<unsigned char> stale(stale_w * stale_h * 3, 0xAB);
+      gui::g_preview.UpdateCpuTextureData(stale.data(), stale_w, stale_h);
+      IM_CHECK(gui::g_preview.HasTexture());  // precondition: stale state truly present
+
+      // 2) Save a .lmc with a baked preview (save_texture=true) holding "target" pixel data.
+      const int target_w = 12;
+      const int target_h = 6;
+      std::vector<unsigned char> target(target_w * target_h * 3, 0x33);
+      gui::g_preview.UpdateCpuTextureData(target.data(), target_w, target_h);
+      const char* tmp_path = "/tmp/lumice_open_with_preview.lmc";
+      bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, /*save_texture=*/true);
+      IM_CHECK(save_ok);
+
+      // 3) Re-arm stale state (save above consumed g_preview to build the fixture; now put the
+      //    "previous scene" texture back so DoOpen has something real to replace).
+      gui::g_preview.UpdateCpuTextureData(stale.data(), stale_w, stale_h);
+      IM_CHECK(gui::g_preview.HasTexture());
+      IM_CHECK_EQ(gui::g_preview.GetTextureWidth(), stale_w);
+
+      // 4) Drive gui::DoOpen(path) for real via GuiFunc (see threading note above), then wait
+      //    for it to run (main-thread GuiFunc ticks while TestFunc's coroutine yields).
+      //    task-349.4: bounded wait-until — main thread must actually tick GuiFunc, which
+      //    sets s_open_with_preview_done and (via LoadLmcFile + UploadTexture) resizes
+      //    g_preview to target dims. Predicate mirrors the following IM_CHECK exactly so a
+      //    real regression (DoOpen wiring breaks) still fails at line :NNNN, just after
+      //    kDoOpenSettleYieldLimit frames instead of a fixed 3.
+      s_open_with_preview_path = tmp_path;
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [target_w, target_h] {
+        return gui::g_preview.HasTexture() && gui::g_preview.GetTextureWidth() == target_w &&
+               gui::g_preview.GetTextureHeight() == target_h;
+      });
+
+      // 5) AC2 assertion: DoOpen's "has baked img" branch replaced the stale texture with the
+      //    file's baked one — this is the real production entry point, not a file-side proxy.
+      IM_CHECK(gui::g_preview.HasTexture());
+      IM_CHECK_EQ(gui::g_preview.GetTextureWidth(), target_w);
+      IM_CHECK_EQ(gui::g_preview.GetTextureHeight(), target_h);
+
+      std::remove(tmp_path);
+    };
+  }
+
+  {
+    // Audit: Open a CLI JSON config (import path) clears the stale texture.
+    // Already correct pre-fix — locked in as a regression anchor for the 4-path audit.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "open_json_import_clears_stale_texture");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+
+      // 1) Write a valid CLI-shape JSON to tmp (SerializeCoreConfig round-trip).
+      std::string json = gui::SerializeCoreConfig(gui::g_state);
+      const char* tmp_path = "/tmp/lumice_open_json_import.json";
+      bool write_ok = gui::ExportConfigJson(tmp_path, json);
+      IM_CHECK(write_ok);
+
+      // 2) Simulate "previous scene rendered" via CPU-side texture state (see threading note).
+      const int stale_w = 8;
+      const int stale_h = 4;
+      std::vector<unsigned char> stale(stale_w * stale_h * 3, 0x77);
+      gui::g_preview.UpdateCpuTextureData(stale.data(), stale_w, stale_h);
+      IM_CHECK(gui::g_preview.HasTexture());
+
+      // 3) DoOpen(json_path) hits the JSON-import branch → ClearTexture().
+      gui::DoOpen(tmp_path);
+
+      // 4) Assertion.
+      IM_CHECK(!gui::g_preview.HasTexture());
+
+      std::remove(tmp_path);
+    };
+  }
+
+  // ========== task-350: GL pixel-level regression tests for stale-render on Open ==========
+  //
+  // task-349.1 (which added the three open_*_clears_stale_texture tests above) validated the
+  // CPU-side HasTexture() flag but never sampled the GL texture itself — the underlying bug
+  // (ClearTexture() left the GL texture_ handle holding the previous scene's pixels and
+  // Render() kept sampling them) survived that green test suite until owner on-screen
+  // regression. This block re-verifies the same code path at the true output layer via
+  // RenderExportToRgba, which internally invokes PreviewRenderer::Render() and reads back
+  // the FBO — a real production-shaped Render() call, not a CPU-side proxy.
+  //
+  // Threading: PreviewRenderer::UploadTexture / RenderExportToRgba both require a GL
+  // context and must run on the main render thread (GuiFunc). ClearTexture() itself is
+  // safe from the coroutine worker (task-349.4 fixture invariant) — the deferred blank
+  // is consumed by the next Render() on the main thread. See preview_renderer.hpp
+  // needs_gl_blank_ contract.
+  //
+  // Test scaffolding (GlOpTestState / GlOpGuiFunc / kStale* / FillSolid) lives in the
+  // anonymous namespace at the top of this file so the GuiFunc can be a plain non-capturing
+  // function pointer (ImGuiTestGuiFunc rejects capturing lambdas).
+
+  {
+    // AC1 (GL layer): ClearTexture() followed by Render() must leave the sim layer black,
+    // not sampling the previous scene's pixels. Real production Render() is invoked via
+    // RenderExportToRgba on the main thread.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "gl_render_clears_stale_sim_pixels");
+    t->GuiFunc = GlOpGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // Frame A: upload distinctive stale pixels + render once — establishes the "stale
+      // state truly present in GL storage" precondition (analogue of the CPU-side
+      // HasTexture() precondition in the sibling open_*_clears_stale_texture tests).
+      g_gl_op.Reset();
+      g_gl_op.requested = true;
+      g_gl_op.do_upload_stale = true;
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return g_gl_op.done; });
+      IM_CHECK(g_gl_op.export_ok);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_r), 0xFF);  // stale magenta really sampled from GL
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_g), 0x00);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_b), 0xFF);
+
+      // Frame B: ClearTexture() then render — AC1 core assertion. Pre-fix (ClearTexture
+      // only touching CPU state) this frame would still sample the stale magenta.
+      g_gl_op.Reset();
+      g_gl_op.requested = true;
+      g_gl_op.do_clear = true;
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return g_gl_op.done; });
+      IM_CHECK(g_gl_op.export_ok);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_r), 0x00);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_g), 0x00);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_b), 0x00);
+    };
+  }
+
+  {
+    // AC2 (bg not connected out): after ClearTexture(), if a background image is loaded and
+    // bg.enabled=true, the background must still show through — the fix must not hide bg
+    // as collateral damage. Uses bg.alpha=0 so the shader outputs pure bg (sim contribution
+    // zeroed out), making the assertion a direct color check on bg content.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "gl_render_preserves_bg_after_clear");
+    t->GuiFunc = GlOpGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      g_gl_op.Reset();
+      g_gl_op.requested = true;
+      g_gl_op.do_upload_stale = true;
+      g_gl_op.do_upload_bg = true;
+      g_gl_op.do_clear = true;
+      g_gl_op.bg_enabled = true;
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return g_gl_op.done; });
+      IM_CHECK(g_gl_op.export_ok);
+      // Expect pure bg (green). Not stale magenta (would mean bg alpha inverted or fix
+      // regressed to draw stale sim on top) and not all black (would mean bg was
+      // connected-out along with the sim layer).
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_r), 0x00);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_g), 0xFF);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_b), 0x00);
+    };
+  }
+
+  {
+    // Interleaved sequence: ClearTexture() then UploadTexture(fresh) with NO intervening
+    // Render() — the deferred-blank flag must be dropped by UploadTexture so the very next
+    // Render() shows the freshly uploaded pixels, not black. Directly locks in the "newest
+    // real write wins" invariant added in task-350 (plan-review round-1 Major fix).
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "gl_upload_after_clear_wins_over_pending_blank");
+    t->GuiFunc = GlOpGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      g_gl_op.Reset();
+      g_gl_op.requested = true;
+      g_gl_op.do_upload_stale = true;              // seed with something distinctive
+      g_gl_op.do_clear = true;                     // set pending blank
+      g_gl_op.do_upload_fresh_after_clear = true;  // must drop the pending blank
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return g_gl_op.done; });
+      IM_CHECK(g_gl_op.export_ok);
+      // Expect fresh cyan, not black — if UploadTexture failed to clear needs_gl_blank_,
+      // Render() would have overwritten the just-uploaded cyan with the 1x1 kBlack helper.
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_r), 0x00);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_g), 0xFF);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_b), 0xFF);
     };
   }
 }

@@ -111,10 +111,12 @@ class ServerPoller {
   std::shared_ptr<const PreviewSnapshot> LoadSnapshot() const { return LoadPublished(); }
 
   // Display-invalidate seam: publish a payload=null copy of the current snapshot so the consumer's
-  // upload gate skips this frame (GL keeps the already-uploaded texture — no black flicker). Not
-  // called in production anymore (the epoch floor fences stale data — see MarkFilterDirty); retained
-  // as a test seam (test_gui_lifecycle drives no-GL-context interleavings through it) and for a
-  // future optimistic-clear path.
+  // upload gate skips this frame (GL keeps the already-uploaded texture — no black flicker). serial
+  // is left unchanged so a genuinely new future texture still gets a fresh serial and uploads.
+  // Production callers: DoOpen (.json + .lmc) and DoNew — document-switch fences the staged
+  // composite so SyncFromPoller won't re-upload the previous scene's snapshot over the just-cleared
+  // preview (mode_changed OR-branch does not honor the epoch floor; must drop the payload). Also
+  // retained as a test seam (test_gui_lifecycle drives no-GL-context interleavings through it).
   void InvalidateStagedTexture();
 
   // Set calibrated quality gate threshold (called once at startup after calibration run).

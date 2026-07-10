@@ -8,6 +8,7 @@
 
 #include "IconsFontAwesome6.h"
 #include "gui/app.hpp"
+#include "gui/color_window.hpp"
 #include "gui/composite_exposure_push.hpp"
 #include "gui/crystal_preview.hpp"
 #include "gui/edit_modals.hpp"
@@ -185,6 +186,18 @@ void RenderTopBar(float window_width) {
   }
   ImGui::SameLine();
   ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), ICON_FA_CIRCLE_EXCLAMATION);
+  // task-349.2 Step 2 (AC1/AC3): tooltip explains what the ⚠ + Revert row
+  // means. Source-agnostic wording (config changed, not "you added a color
+  // class") — main-scene edits and color-class edits reach kModified through
+  // the same ReconcileSimState pipeline, so a single tooltip covers both.
+  // Attached to the icon rather than the button so the button's own hover
+  // action (click to revert) is not shadowed. Only shown when modified,
+  // since the row is BeginDisabled(alpha=0) otherwise.
+  if (modified && ImGui::IsItemHovered()) {
+    ImGui::SetTooltip(
+        "Configuration changed since the last run.\n"
+        "Click Run to re-simulate, or Revert to discard the changes.");
+  }
   ImGui::SameLine();
   if (ImGui::SmallButton("Revert") && modified) {  // `&& modified`: redundant safety guard over BeginDisabled
     DoRevert();
@@ -263,7 +276,17 @@ void RenderTopBar(float window_width) {
   // unrelated to file I/O or panel layout should land here rather than
   // competing for status-bar space.
   if (ImGui::Button(ICON_FA_PALETTE " Colors")) {
+    // task-348.3 AC3 (⑦): apply the "default enable on open with no classes" rule
+    // ONLY on the false→true transition of color_window_open. Doing it here (inside
+    // the click branch, guarded by `opening`) — not per-frame inside RenderColorWindow
+    // — is what makes the behavior "memory-preserving": the user can still manually
+    // toggle Colored off after opening, and subsequent focus changes / clicks that do
+    // not close-then-reopen the window will not overwrite that choice.
+    const bool opening = !g_state.color_window_open;
     g_state.color_window_open = !g_state.color_window_open;
+    if (opening && ShouldDefaultEnableColorsOnOpen(g_state.raypath_color.empty())) {
+      g_state.show_composite_preview = true;
+    }
   }
 
   // task-colored-toggle-to-topbar (346.3): colored/full-spectrum display-time
@@ -279,27 +302,89 @@ void RenderTopBar(float window_width) {
   // Colors does not touch this window.
   if (!g_state.raypath_color.empty()) {
     ImGui::SameLine();
+    // task-349.3 (#4): revert 348.3 icon-only Button back to a plain-text Checkbox
+    // (no ICON_FA_PALETTE prefix) so this display-time toggle reads visually
+    // distinct from the icon-bearing "Colors" open-window button one slot to the
+    // left (owner-rejected: two adjacent palette-icon controls confused which was
+    // the toggle vs. the window opener). Semantic split unchanged from 345.4/346.3:
+    // label + `checked` read GROUND TRUTH (last_uploaded_as_composite), click
+    // writes via shared ToggleCompositePreview(g_state) — the shared writer was
+    // introduced in 348.3 and stays after the widget-shape revert (a12: two
+    // control sites, one write path).
+    //
+    // task-349.2 Step 3 (#6): read the shared signal cache BEFORE rendering the
+    // Colored toggle so we can wrap it in BeginDisabled() when every configured
+    // color class matches zero rays (composite would be empty; control would
+    // appear "unclickable / non-responding" without visual explanation). The
+    // 500 ms throttled poll is unaffected by call-site order — same source as
+    // the Colors window and the aggregate pip below, so all three cannot drift.
+    //
+    // Style tokens: Checkbox renders as frame background + check mark, not a
+    // button surface — accent must go on FrameBg/FrameBgHovered/CheckMark. Using
+    // ImGuiCol_Button here would silently no-op (this was the 346.3→348.3 pitfall
+    // recorded in learnings/code-quality.md; reverting the widget type must
+    // re-swap the token set).
     const bool composite_now = g_state.last_uploaded_as_composite;
-    const char* mode_label = composite_now ? ICON_FA_PALETTE " Colored" : ICON_FA_PALETTE " Full Spectrum";
-    std::string checkbox_id = std::string(mode_label) + "##CompositePreviewToggle";
+    const std::vector<int>& signal_flags = RefreshColorClassSignals(g_state, g_server);
+    const bool all_unmatched = AllConfiguredColorClassesUnmatched(g_state, signal_flags);
+    const char* mode_label = composite_now ? "Colored" : "Full Spectrum";
+    const std::string checkbox_id = std::string(mode_label) + "##CompositePreviewToggle";
     bool checked = composite_now;
     if (composite_now) {
-      // Checkbox renders as frame background + check mark, not a button — the
-      // 345.4 accent used ImGuiCol_Button which does not apply here.
       ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.35f, 0.55f, 0.85f, 1.0f));
       ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.45f, 0.65f, 0.95f, 1.0f));
       ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
     }
+    if (all_unmatched) {
+      ImGui::BeginDisabled();
+    }
     if (ImGui::Checkbox(checkbox_id.c_str(), &checked)) {
-      g_state.show_composite_preview = !g_state.show_composite_preview;
+      ToggleCompositePreview(g_state);
+    }
+    if (all_unmatched) {
+      ImGui::EndDisabled();
     }
     if (composite_now) {
       ImGui::PopStyleColor(3);
     }
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip(
-          "Toggle colored composite / full-spectrum preview.\n"
-          "Display-time only -- does not re-simulate or discard color classes.");
+    // Tooltip logic (both enabled and disabled cases): AllowWhenDisabled so the
+    // BeginDisabled() wrapper does not eat the hover. When disabled, show the
+    // "no matches" reason (a12: shared string with the Colors-window mirror);
+    // when enabled, show the existing "Currently: Colored / Full Spectrum" hint.
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      if (all_unmatched) {
+        ImGui::SetTooltip("%s", kColorsDisabledNoMatchTooltip);
+      } else {
+        ImGui::SetTooltip(
+            "Toggle colored composite / full-spectrum preview.\n"
+            "Display-time only -- does not re-simulate or discard color classes.\n"
+            "%s",
+            composite_now ? "Currently: Colored" : "Currently: Full Spectrum");
+      }
+    }
+
+    // task-348.1 Step 3 (① 反馈缺失): when every configured color class has no
+    // matching rays, the Colored composite is empty and the button above appears
+    // "unclickable / non-responding" (last_uploaded_as_composite never flips true).
+    // Surface an aggregate warning pip here so the user sees WHY nothing changes —
+    // reads the same shared signal cache as the Colors window's per-row warnings
+    // (single source, a12), so both indicators agree by construction. Silent when
+    // no class has non-empty match[] (matches per-row semantics).
+    //
+    // task-349.2 Step 3: the pip stays alongside the disabled button (both driven
+    // by all_unmatched) — the two indicators are complementary, not redundant:
+    // the button greying is the immediate visual cue "cannot toggle now", the
+    // pip is the persistent per-row / aggregate warning surface.
+    if (all_unmatched) {
+      ImGui::SameLine();
+      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.2f, 1.0f));
+      ImGui::TextUnformatted(ICON_FA_TRIANGLE_EXCLAMATION);
+      ImGui::PopStyleColor();
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "None of the color classes matched any rays (they may be blocked by a physical filter).\n"
+            "Open the Colors window to inspect per-class details.");
+      }
     }
   }
 

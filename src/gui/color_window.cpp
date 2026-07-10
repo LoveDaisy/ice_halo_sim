@@ -85,22 +85,6 @@ bool PushDisplayState(const GuiState& state, LUMICE_Server* server) {
   return true;
 }
 
-// Poll GetColorClassSignal into a caller-owned buffer sized to
-// state.raypath_color.size(). Buffer is resized here so callers can pass an
-// empty vector on the first call.
-void PollColorClassSignal(const GuiState& state, LUMICE_Server* server, std::vector<int>& out_flags) {
-  const int n = static_cast<int>(state.raypath_color.size());
-  out_flags.assign(static_cast<size_t>(n), 0);
-  if (server == nullptr || n == 0) {
-    return;
-  }
-  const LUMICE_ErrorCode ec = LUMICE_GetColorClassSignal(server, out_flags.data(), n);
-  if (ec != LUMICE_OK) {
-    // Same class_count mismatch story as PushDisplayState — settle silently.
-    std::fill(out_flags.begin(), out_flags.end(), 0);
-  }
-}
-
 // Human-readable summary of a class's match[] used for the collapsed row label.
 // Rebuilt from state on every render (a05 减法 — no cache field).
 std::string BuildClassSummary(const GuiState& state, const ColorClassConfig& cls) {
@@ -161,6 +145,37 @@ void SwapZOrder(GuiState& state, size_t a, size_t b) {
     return;
   }
   std::swap(state.raypath_color[a].z_order, state.raypath_color[b].z_order);
+}
+
+// task-list-row-ergonomics ④: setter that toggles match_all without clearing
+// predicate_text. file_io.cpp:1337 FillColorPredicate reads match_all FIRST,
+// so retaining stale text under match_all=true does NOT contaminate commit
+// output (whole-crystal is emitted). Toggling back restores the same text.
+void SetRefMatchAll(ColorClassRefConfig& ref, bool match_all) {
+  ref.match_all = match_all;
+}
+
+// task-list-row-ergonomics ③: eye-icon click handler with Alt+click = solo.
+// Plain click toggles `visible` only. Alt+click enforces exclusive solo (or
+// clears solo when the clicked class is already solo'd, restoring per-visible
+// composition). Out-of-range is a defensive no-op. The compositor's solo/visible
+// dispatch (`GatherActiveClasses` in ColorClassTable) is unchanged — this only
+// shapes the UI-driven state so the solo set has size 0 or 1.
+void HandleEyeClick(std::vector<ColorClassConfig>& classes, size_t phys, bool alt_down) {
+  if (phys >= classes.size()) {
+    return;
+  }
+  if (!alt_down) {
+    classes[phys].visible = !classes[phys].visible;
+    return;
+  }
+  const bool was_solo = classes[phys].solo;
+  for (auto& c : classes) {
+    c.solo = false;
+  }
+  if (!was_solo) {
+    classes[phys].solo = true;
+  }
 }
 
 // Validate the user's per-ref text under the "single atom" (single Factor,
@@ -415,58 +430,72 @@ void RenderRefRow(GuiState& state, ColorClassConfig& cls, size_t ref_idx, bool& 
   }
   ImGui::PopItemWidth();
 
-  // Whole-crystal checkbox.
+  // Whole-crystal checkbox. task-list-row-ergonomics ④: SetRefMatchAll keeps
+  // predicate_text so the InputText below can freeze (BeginDisabled) instead
+  // of vanishing, and restore the same text when the user un-checks whole.
   ImGui::SameLine();
-  if (ImGui::Checkbox("whole", &ref.match_all)) {
-    if (ref.match_all) {
-      ref.predicate_text.clear();
-    }
+  bool whole = ref.match_all;
+  if (ImGui::Checkbox("whole", &whole)) {
+    SetRefMatchAll(ref, whole);
     state.MarkFilterDirty();
   }
-
-  // Predicate text (only when not whole-crystal).
-  if (!ref.match_all) {
-    ImGui::SameLine();
-    ImGui::PushItemWidth(180);
-    char buf[256];
-    std::snprintf(buf, sizeof(buf), "%s", ref.predicate_text.c_str());
-    const auto validation = ValidateSingleAtomText(ref.predicate_text);
-    const bool invalid = validation.state != LUMICE_RAYPATH_VALID;
-    if (invalid) {
-      ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
-      ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);
-    }
-    if (ImGui::InputText("##pred", buf, sizeof(buf))) {
-      // Only stamp state dirty when the new text also validates OK; keep the
-      // last-good text unchanged on transient invalid input (mirrors the
-      // filter editor convention: preserve the last committed atom rather
-      // than propagate a half-typed line to the next debounce commit).
-      const std::string new_text = buf;
-      const auto v2 = ValidateSingleAtomText(new_text);
-      ref.predicate_text = new_text;  // let the user see what they typed
-      if (v2.state == LUMICE_RAYPATH_VALID) {
-        state.MarkFilterDirty();
-      }
-    }
-    if (invalid) {
-      ImGui::PopStyleVar();
-      ImGui::PopStyleColor();
-    }
-    // Single SetTooltip for the item — syntax hint always; the validation error
-    // (if any) is appended below it, so hover text is stable across valid /
-    // invalid states without two overlapping tooltip calls.
-    if (ImGui::IsItemHovered()) {
-      static constexpr const char* kSyntaxHint =
-          "Same token syntax as the filter editor (e.g. 3-5, entry:2, exit:4, len:2-3).\n"
-          "Single atom only here -- no ';' OR / '&' AND; add another ref + Combine below for that.";
-      if (invalid && !validation.message.empty()) {
-        ImGui::SetTooltip("%s\n\n%s", kSyntaxHint, validation.message.c_str());
-      } else {
-        ImGui::SetTooltip("%s", kSyntaxHint);
-      }
-    }
-    ImGui::PopItemWidth();
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip(
+        "Match every raypath through the whole crystal (ignores the predicate text\n"
+        "below, which stays but is frozen while this is checked).");
   }
+
+  // Predicate text — always rendered so its layout does not disappear when
+  // whole is checked; BeginDisabled greys it out under match_all. Suppress the
+  // invalid red border while frozen: the text is not participating in the
+  // filter, so a "please fix" red frame would be misleading visual noise.
+  ImGui::SameLine();
+  ImGui::PushItemWidth(180);
+  char buf[256];
+  std::snprintf(buf, sizeof(buf), "%s", ref.predicate_text.c_str());
+  const auto validation = ValidateSingleAtomText(ref.predicate_text);
+  const bool invalid = !ref.match_all && validation.state != LUMICE_RAYPATH_VALID;
+  if (invalid) {
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);
+  }
+  if (ref.match_all) {
+    ImGui::BeginDisabled();
+  }
+  if (ImGui::InputText("##pred", buf, sizeof(buf))) {
+    // Only stamp state dirty when the new text also validates OK; keep the
+    // last-good text unchanged on transient invalid input (mirrors the
+    // filter editor convention: preserve the last committed atom rather
+    // than propagate a half-typed line to the next debounce commit).
+    const std::string new_text = buf;
+    const auto v2 = ValidateSingleAtomText(new_text);
+    ref.predicate_text = new_text;  // let the user see what they typed
+    if (v2.state == LUMICE_RAYPATH_VALID) {
+      state.MarkFilterDirty();
+    }
+  }
+  if (ref.match_all) {
+    ImGui::EndDisabled();
+  }
+  if (invalid) {
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+  }
+  // Single SetTooltip for the item — syntax hint always; the validation error
+  // (if any) is appended below it. AllowWhenDisabled so users still see the
+  // hint while whole freezes the field (mirrors the up/down arrow tooltips
+  // that also survive their at_top / at_bot disabled states).
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    static constexpr const char* kSyntaxHint =
+        "Same token syntax as the filter editor (e.g. 3-5, entry:2, exit:4, len:2-3).\n"
+        "Single atom only here -- no ';' OR / '&' AND; add another ref + Combine below for that.";
+    if (invalid && !validation.message.empty()) {
+      ImGui::SetTooltip("%s\n\n%s", kSyntaxHint, validation.message.c_str());
+    } else {
+      ImGui::SetTooltip("%s", kSyntaxHint);
+    }
+  }
+  ImGui::PopItemWidth();
 
   // Delete this ref.
   ImGui::SameLine();
@@ -497,6 +526,77 @@ WindowLocalState& GetLocalState() {
 
 }  // namespace
 
+// task-348.1 fix: poll GetColorClassSignal into a caller-owned buffer sized to
+// state.raypath_color.size(). Resize semantics: new entries default to 1
+// ("settling / no warning") instead of the pre-fix 0 ("no rays matched"). On
+// C-API rejection (class_count mismatch during the debounce window between
+// GUI-side push_back and server-side commit), out_flags is LEFT UNCHANGED —
+// the previously observed signal is preserved rather than clobbered to 0.
+// This closes the "add a class → every pre-existing class instantly shows the
+// no-match warning" bug (② in issue.md): resize no longer wipes old signals,
+// and mismatch no longer treats "we don't know yet" as "we know it's zero".
+void PollColorClassSignal(const GuiState& state, LUMICE_Server* server, std::vector<int>& out_flags) {
+  const size_t n = state.raypath_color.size();
+  out_flags.resize(n, 1);
+  if (server == nullptr || n == 0) {
+    return;
+  }
+  std::vector<int> tmp(n, 0);
+  const LUMICE_ErrorCode ec = LUMICE_GetColorClassSignal(server, tmp.data(), static_cast<int>(n));
+  if (ec == LUMICE_OK) {
+    out_flags = std::move(tmp);
+  }
+  // ec != LUMICE_OK: settling window (server hasn't picked up the new class_count yet).
+  // Leave out_flags with resize-preserved prior values; the next successful poll heals.
+}
+
+// Orchestration wrapper: 500 ms throttled poll + resize + shared cache. Same-frame
+// idempotent (subsequent calls hit the throttle and just resize + return); it is
+// therefore safe for both RenderColorWindow (per-row) and RenderTopBar (aggregate)
+// to call this in the same frame. The trailing resize guarantees the returned
+// vector always matches state.raypath_color.size() even in the frames between
+// two throttled polls (a fresh add/remove between windows must not leave the
+// cache out-of-sync). Returns a copy: the vector is at most a handful of ints
+// (one per color class), so the copy is negligible, and it keeps the internal
+// throttle cache from being exposed by reference to cross-module callers
+// (app_panels.cpp's top-bar pip) whose lifetime/threading assumptions this file
+// cannot enforce.
+std::vector<int> RefreshColorClassSignals(const GuiState& state, LUMICE_Server* server) {
+  auto& local = GetLocalState();
+  const float now = static_cast<float>(ImGui::GetTime());
+  if (now - local.last_poll_time > kSignalPollIntervalSec) {
+    PollColorClassSignal(state, server, local.signal_flags);
+    local.last_poll_time = now;
+  }
+  local.signal_flags.resize(state.raypath_color.size(), 1);
+  return local.signal_flags;
+}
+
+// True when the user has configured at least one color class with non-empty
+// match[] AND every such class currently reports no signal. Same-semantics as
+// the per-row warning in RenderColorWindow so the top-bar aggregate pip
+// cannot disagree with the row-level pips.
+bool AllConfiguredColorClassesUnmatched(const GuiState& state, const std::vector<int>& signal_flags) {
+  bool any_configured = false;
+  for (size_t i = 0; i < state.raypath_color.size(); i++) {
+    if (state.raypath_color[i].match.empty()) {
+      continue;
+    }
+    // Out-of-range index means the caller's cache hasn't caught up with
+    // state.raypath_color yet (same "we don't know yet" window PollColorClassSignal's
+    // resize(n, 1) models) -- treat as unknown, not as a confirmed no-signal, so it
+    // neither counts toward any_configured nor disqualifies the aggregate.
+    if (i >= signal_flags.size()) {
+      continue;
+    }
+    any_configured = true;
+    if (signal_flags[i] != 0) {
+      return false;
+    }
+  }
+  return any_configured;
+}
+
 void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
   if (!state.color_window_open) {
     return;
@@ -511,7 +611,17 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
     return;
   }
 
-  // Header row: composite mode + import + add.
+  // task-349.2 Step 3 (#6): fetch the shared signal cache BEFORE the Enable
+  // colors checkbox so we can wrap that checkbox (and its top-bar mirror in
+  // RenderTopBar) in BeginDisabled() when every configured class matches zero
+  // rays. Same throttled source as the top-bar and the per-row pips below;
+  // moving the fetch earlier does not change the poll cost (single 500 ms
+  // throttle) and does not race the per-row pip logic that reads
+  // `signal_flags[phys]` further down — that logic still sees the same cache.
+  const std::vector<int>& signal_flags = RefreshColorClassSignals(state, server);
+  const bool all_unmatched = AllConfiguredColorClassesUnmatched(state, signal_flags);
+
+  // Header row: composite mode + import + add + Enable colors (right-aligned).
   RenderCompositeModeCombo(state, server);
   ImGui::SameLine();
   RenderImportFromFilterUI(state);
@@ -527,18 +637,46 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
     state.MarkFilterDirty();
   }
 
-  ImGui::Separator();
+  // task-349.3 (#3): "Enable colors" mirrors the top-bar Colored toggle inside
+  // the window and lives on the same header row as "+ Add Class", right-aligned
+  // to read as a distinct control group from the mode/import/add cluster on the
+  // left (owner on-screen feedback after 348.3 landed the top-bar icon toggle).
+  // Semantics unchanged from 348.3 AC2 (⑥) / 349.2 Step 3 (#6): checked reads
+  // GROUND TRUTH (last_uploaded_as_composite), click writes via shared
+  // ToggleCompositePreview(); when all_unmatched, wrap in BeginDisabled and
+  // swap the tooltip to kColorsDisabledNoMatchTooltip (shared with the top-bar
+  // mirror so the two disabled cues cannot drift).
+  {
+    ImGui::SameLine();
+    const char* label = "Enable colors";
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float w = ImGui::CalcTextSize(label).x + ImGui::GetFrameHeight() + style.ItemInnerSpacing.x;
+    const float right_edge = ImGui::GetWindowContentRegionMax().x;
+    if (right_edge - w > ImGui::GetCursorPosX()) {
+      ImGui::SetCursorPosX(right_edge - w);
+    }
+    bool checked = state.last_uploaded_as_composite;
+    if (all_unmatched) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Checkbox(label, &checked)) {
+      ToggleCompositePreview(state);
+    }
+    if (all_unmatched) {
+      ImGui::EndDisabled();
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      if (all_unmatched) {
+        ImGui::SetTooltip("%s", kColorsDisabledNoMatchTooltip);
+      } else {
+        ImGui::SetTooltip(
+            "Toggle colored composite / full-spectrum preview.\n"
+            "Synced with the top-bar toggle -- same display-time preference.");
+      }
+    }
+  }
 
-  // Debounced signal poll for AC4 empty-arc warning.
-  auto& local = GetLocalState();
-  const float now = static_cast<float>(ImGui::GetTime());
-  if (now - local.last_poll_time > kSignalPollIntervalSec) {
-    PollColorClassSignal(state, server, local.signal_flags);
-    local.last_poll_time = now;
-  }
-  if (local.signal_flags.size() != state.raypath_color.size()) {
-    local.signal_flags.assign(state.raypath_color.size(), 0);
-  }
+  ImGui::Separator();
 
   // Sort classes by z_order for display (physical vector order stays put).
   const size_t n = state.raypath_color.size();
@@ -593,30 +731,23 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
       PushDisplayState(state, server);
     }
 
-    // Visible / solo.
+    // Visible / solo — task-list-row-ergonomics ③: the standalone solo column
+    // is removed; solo now rides on the eye icon via Alt+click. Plain click
+    // toggles `visible`; Alt+click enforces exclusive solo (or clears it).
     ImGui::SameLine();
     const char* eye = cls.visible ? ICON_FA_EYE : ICON_FA_EYE_SLASH;
     if (ImGui::SmallButton(eye)) {
-      cls.visible = !cls.visible;
+      HandleEyeClick(state.raypath_color, phys, ImGui::GetIO().KeyAlt);
       PushDisplayState(state, server);
     }
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip(
-          "Show/hide this class in the composite preview (display-time only -- the underlying filter is unchanged).");
-    }
-    ImGui::SameLine();
-    bool solo = cls.solo;
-    if (ImGui::Checkbox("solo", &solo)) {
-      cls.solo = solo;
-      PushDisplayState(state, server);
-    }
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip(
-          "While any class is solo'd, only solo'd classes show in the composite; Visible is ignored for the rest.");
+          "Click: show/hide this class in the composite (display-time only).\n"
+          "Alt+Click: solo this class (hide all others); Alt+Click again to restore all.");
     }
 
     // Empty warning (AC4).
-    if (phys < local.signal_flags.size() && !cls.match.empty() && local.signal_flags[phys] == 0) {
+    if (phys < signal_flags.size() && !cls.match.empty() && signal_flags[phys] == 0) {
       ImGui::SameLine();
       PushWarningStyle();
       ImGui::TextUnformatted(ICON_FA_TRIANGLE_EXCLAMATION);

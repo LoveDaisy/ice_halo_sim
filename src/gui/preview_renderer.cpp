@@ -535,12 +535,14 @@ bool PreviewRenderer::Init() {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);  // dual fisheye: no horizontal wrap
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glBindTexture(GL_TEXTURE_2D, 0);
   // Initialize with 1x1 black pixel so the texture has valid GL storage.
   // This allows the shader to sample black (transparent) when no simulation data exists,
   // enabling background-only rendering before the simulation is started.
-  static const unsigned char kBlack[3] = { 0, 0, 0 };
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, kBlack);
-  glBindTexture(GL_TEXTURE_2D, 0);
+  // Shared with Render()'s needs_gl_blank_ consumer so a single code path owns
+  // "sim layer reset to black" (both init and post-ClearTexture reuse the same
+  // GL sequence + xyz_mode_ = false side effect).
+  UploadBlankSimTexture();
 
   // Create background texture
   glGenTextures(1, &bg_texture_);
@@ -602,6 +604,27 @@ void PreviewRenderer::ClearTexture() {
   tex_width_ = 0;
   tex_height_ = 0;
   tex_data_.clear();
+  // GL reset deferred to next Render() (main thread) — this method is called
+  // from gui_test coroutine workers with no GL context; a direct gl* call
+  // would SIGILL. See preview_renderer.hpp needs_gl_blank_ contract.
+  needs_gl_blank_ = true;
+}
+
+// Upload a 1x1 black pixel into the GL texture_ storage and reset xyz_mode_.
+// Reused by Init() (initial GL storage) and Render() (post-ClearTexture
+// deferred reset). Must be called on the main thread (owns GL context).
+// Does NOT touch tex_width_/tex_height_ — those track "does the app have
+// real sim/loaded pixel data" (drives HasTexture()) and must stay 0 across
+// this call so ClearTexture()'s CPU-side "cleared" state remains visible to
+// callers like Save. Side effect: xyz_mode_ = false, because a 1x1 RGB uint8
+// pixel is not XYZ float data — leaving xyz_mode_ = true would mislead the
+// shader on the next real upload path.
+void PreviewRenderer::UploadBlankSimTexture() {
+  static const unsigned char kBlack[3] = { 0, 0, 0 };
+  glBindTexture(GL_TEXTURE_2D, texture_);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, kBlack);
+  glBindTexture(GL_TEXTURE_2D, 0);
+  xyz_mode_ = false;
 }
 
 void PreviewRenderer::UpdateCpuTextureData(const unsigned char* data, int width, int height) {
@@ -618,6 +641,10 @@ void PreviewRenderer::UploadTexture(const unsigned char* data, int width, int he
   if (!texture_ || !data) {
     return;
   }
+  // Fresh real pixel data is about to land in texture_; make the newest write
+  // win over any pending deferred blank so a Clear→Upload sequence (with no
+  // intervening Render) doesn't get overwritten with black on the next frame.
+  needs_gl_blank_ = false;
 
   // Keep CPU-side copy for .lmc file save
   size_t byte_count = static_cast<size_t>(width) * height * 3;
@@ -643,6 +670,9 @@ void PreviewRenderer::UploadXyzTexture(const float* data, int width, int height)
   if (!texture_ || !data || width <= 0 || height <= 0) {
     return;
   }
+  // Fresh real pixel data is about to land in texture_; make the newest write
+  // win over any pending deferred blank (see UploadTexture for rationale).
+  needs_gl_blank_ = false;
 
   // Do NOT update tex_data_ (CPU copy) — XYZ float data is not suitable for .lmc save.
   size_t byte_count = static_cast<size_t>(width) * height * 3 * sizeof(float);
@@ -1007,6 +1037,16 @@ std::array<float, 2> ProjectWorldDirToScreen(const ViewProjection& vp, const flo
 void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const PreviewParams& params) {
   if (!shader_program_ || !texture_ || vp_w <= 0 || vp_h <= 0) {
     return;
+  }
+
+  // Consume any deferred GL blank request queued by ClearTexture() before
+  // any texture binding / sampling below runs, so the sim layer samples a
+  // fresh 1x1 black instead of the previous scene's stale pixels. Must run
+  // before glActiveTexture/glBindTexture(texture_) below to avoid stashing
+  // state; UploadBlankSimTexture unbinds itself.
+  if (needs_gl_blank_) {
+    UploadBlankSimTexture();
+    needs_gl_blank_ = false;
   }
 
   // Save/restore GL state that ImGui might depend on
