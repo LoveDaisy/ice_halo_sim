@@ -147,7 +147,7 @@ TEST(ConfigSnapshot, ApplyToRestoresConfigFieldsAndPreservesRuntimeState) {
 
   // task-349.2 Step 2: target's raypath_color is CONFIG, must be overwritten
   // by ApplyTo (Revert must fully restore the last-committed color-class list,
-  // including the case where the target had garbage classes at 拖回 time).
+  // including the case where the target had garbage classes at revert time).
   ColorClassConfig junk;
   junk.color[0] = 42.0f;
   target.raypath_color.push_back(junk);
