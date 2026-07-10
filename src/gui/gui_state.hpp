@@ -806,12 +806,16 @@ struct GuiState {
 
   // Last committed config snapshot (for Revert — config fields only, no runtime state).
   //
-  // Field-sync scope (audited 2026-04):
+  // Field-sync scope (audited 2026-04; raypath_color added 2026-07 by task-349.2):
   //   Fields mirrored here must be the subset of GuiState classified as "configuration"
   //   (i.e. those reached by MarkDirty, contributing to the dirty/Revert lifecycle).
+  //   raypath_color IS configuration: structural color-class edits go through
+  //   MarkFilterDirty, so Revert must restore them; the field was missing from the
+  //   original 2026-04 audit and re-added by task-349.2 (Step 2 of plan §3.4).
   //   View preferences (aspect_preset, bg_*, horizon/grid/sun circles, log levels,
-  //   left_panel_collapsed, right_panel_collapsed, show_composite_preview), runtime state
-  //   (sim_state, run_intent, committed_epoch, display_epoch_floor,
+  //   left_panel_collapsed, right_panel_collapsed, show_composite_preview,
+  //   raypath_color_mode — display state via PushDisplayState, not through MarkDirty),
+  //   runtime state (sim_state, run_intent, committed_epoch, display_epoch_floor,
   //   last_uploaded_texture_serial, last_uploaded_as_composite, stats_*, snapshot_intensity,
   //   texture_upload_count), and file management (current_file_path, dirty, save_texture)
   //   are intentionally excluded.
@@ -829,6 +833,7 @@ struct GuiState {
     SunConfig sun;
     SimConfig sim;
     RenderConfig renderer;
+    std::vector<ColorClassConfig> raypath_color;
 
     // Build a snapshot from the configuration fields of `state`. Implementation is
     // out-of-class (after GuiState is complete) because GuiState is incomplete here.
@@ -852,7 +857,10 @@ struct GuiState {
 // Size bumped from 160 → 192 by task-gui-custom-spectrum: SunConfig gained a
 // std::vector<WlWeight> field (custom_spectrum). From()/ApplyTo() copy `sun`
 // wholesale, so this addition is covered without further field-level audit.
-static_assert(sizeof(GuiState::ConfigSnapshot) == 192,
+// Size bumped from 192 → 216 by task-349.2: added `raypath_color` field
+// (std::vector<ColorClassConfig>) so Revert restores color-class edits that
+// go through MarkFilterDirty (Revert-completeness fix, plan §3.4).
+static_assert(sizeof(GuiState::ConfigSnapshot) == 216,
               "GuiState::ConfigSnapshot size changed; audit From()/ApplyTo() implementations below");
 #endif
 
@@ -867,6 +875,7 @@ inline GuiState::ConfigSnapshot GuiState::ConfigSnapshot::From(const GuiState& s
   s.sun = state.sun;
   s.sim = state.sim;
   s.renderer = state.renderer;
+  s.raypath_color = state.raypath_color;
   return s;
 }
 
@@ -877,6 +886,7 @@ inline void GuiState::ConfigSnapshot::ApplyTo(GuiState& state) const {
   state.sun = sun;
   state.sim = sim;
   state.renderer = renderer;
+  state.raypath_color = raypath_color;
 }
 
 // Convenience helpers (intended for tests + ad-hoc call sites). Production

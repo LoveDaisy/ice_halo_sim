@@ -186,6 +186,18 @@ void RenderTopBar(float window_width) {
   }
   ImGui::SameLine();
   ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), ICON_FA_CIRCLE_EXCLAMATION);
+  // task-349.2 Step 2 (AC1/AC3): tooltip explains what the ⚠ + Revert row
+  // means. Source-agnostic wording (config changed, not "you added a color
+  // class") — main-scene edits and color-class edits reach kModified through
+  // the same ReconcileSimState pipeline, so a single tooltip covers both.
+  // Attached to the icon rather than the button so the button's own hover
+  // action (click to revert) is not shadowed. Only shown when modified,
+  // since the row is BeginDisabled(alpha=0) otherwise.
+  if (modified && ImGui::IsItemHovered()) {
+    ImGui::SetTooltip(
+        "Configuration changed since the last run.\n"
+        "Click Run to re-simulate, or Revert to discard the changes.");
+  }
   ImGui::SameLine();
   if (ImGui::SmallButton("Revert") && modified) {  // `&& modified`: redundant safety guard over BeginDisabled
     DoRevert();

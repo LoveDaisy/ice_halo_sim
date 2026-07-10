@@ -756,4 +756,70 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
     };
   }
+
+  // task-349.2 Step 2 (§3.4 Revert-completeness fix): after +Add Class flips
+  // sim_state to kModified, clicking the top-bar Revert button must restore
+  // raypath_color to its pre-edit size AND settle sim_state back to a
+  // non-Modified state. Both are required: pre-fix, ConfigSnapshot silently
+  // omitted raypath_color, so Revert cleared `dirty` (settling sim_state) but
+  // left the added class behind — a check on sim_state alone would have
+  // reported "green" while the color edit stealthily remained.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "add_class_then_revert_restores_color_state");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Seed a single, non-default color class as the "last-committed" baseline
+      // (with fingerprint fields the assertion can distinguish from a default-
+      // constructed junk class if the round-trip drops content silently).
+      gui::ColorClassConfig baseline;
+      baseline.color[0] = 0.25f;
+      baseline.color[1] = 0.5f;
+      baseline.color[2] = 0.75f;
+      baseline.combine = 1;
+      baseline.visible = false;
+      gui::g_state.raypath_color.push_back(baseline);
+      // Snapshot the baseline INTO last_committed_state, mirroring what
+      // FillLumiceConfig + CommitConfigStruct do after a successful commit.
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
+
+      // Pin reconcile base to kDone so a subsequent dirty edit surfaces as
+      // kModified. Same seed shape as the two tests above.
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
+      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+      gui::g_state.committed_epoch = 5;
+      gui::g_state.display_epoch_floor = 0;
+      gui::g_state.dirty = false;
+      gui::g_state.color_window_open = true;
+      ctx->Yield(4);
+
+      // Structural edit: +Add Class → raypath_color grows to 2, sim_state → kModified.
+      ctx->ItemClick("**/" ICON_FA_PLUS " Add Class");
+      ctx->Yield(2);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.raypath_color.size()), 2);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+
+      // Click Revert. Post-fix: raypath_color shrinks back to 1 (the baseline
+      // is restored from last_committed_state), sim_state settles back to a
+      // non-Modified state (kDone under the current reconcile). Pre-fix, only
+      // the sim_state assertion would pass and the size assertion would fail —
+      // that is the entire point of this regression guard.
+      ctx->ItemClick("##TopBar/Revert");
+      ctx->Yield(2);
+
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.raypath_color.size()), 1);
+      IM_CHECK_NE(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+      // Content-level check: the baseline's fingerprint survived — proves
+      // ApplyTo copied the raypath_color vector by value rather than default-
+      // initializing an empty replacement (belt + suspenders with the
+      // unit-correctness test on ConfigSnapshot itself).
+      IM_CHECK_EQ(gui::g_state.raypath_color[0].combine, 1);
+      IM_CHECK_EQ(gui::g_state.raypath_color[0].visible, false);
+      IM_CHECK_EQ(gui::g_state.raypath_color[0].color[1], 0.5f);
+
+      gui::g_state.color_window_open = false;
+      ctx->Yield(2);
+    };
+  }
 }
