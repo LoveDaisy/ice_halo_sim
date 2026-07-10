@@ -309,40 +309,62 @@ void RenderTopBar(float window_width) {
     // (345.4 read/write split preserved). Tooltip carries the "Colored / Full
     // Spectrum" text that used to live on the control itself so hover still tells
     // the user which mode is active.
+    //
+    // task-349.2 Step 3 (#6): read the shared signal cache BEFORE rendering the
+    // Colored toggle so we can wrap it in BeginDisabled() when every configured
+    // color class matches zero rays (composite would be empty; button would
+    // appear "unclickable / non-responding" without visual explanation). The
+    // 500 ms throttled poll is unaffected by call-site order — same source as
+    // the Colors window and the aggregate pip below, so all three cannot drift.
     const bool composite_now = g_state.last_uploaded_as_composite;
+    const std::vector<int>& signal_flags = RefreshColorClassSignals(g_state, g_server);
+    const bool all_unmatched = AllConfiguredColorClassesUnmatched(g_state, signal_flags);
     if (composite_now) {
       ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.55f, 0.85f, 1.0f));
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.45f, 0.65f, 0.95f, 1.0f));
       ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.25f, 0.45f, 0.75f, 1.0f));
     }
+    if (all_unmatched) {
+      ImGui::BeginDisabled();
+    }
     if (ImGui::Button(ICON_FA_PALETTE "##CompositePreviewToggle")) {
       ToggleCompositePreview(g_state);
+    }
+    if (all_unmatched) {
+      ImGui::EndDisabled();
     }
     if (composite_now) {
       ImGui::PopStyleColor(3);
     }
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip(
-          "Toggle colored composite / full-spectrum preview.\n"
-          "Display-time only -- does not re-simulate or discard color classes.\n"
-          "%s",
-          composite_now ? "Currently: Colored" : "Currently: Full Spectrum");
+    // Tooltip logic (both enabled and disabled cases): AllowWhenDisabled so the
+    // BeginDisabled() wrapper does not eat the hover. When disabled, show the
+    // "no matches" reason (a12: shared string with the Colors-window mirror);
+    // when enabled, show the existing "Currently: Colored / Full Spectrum" hint.
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      if (all_unmatched) {
+        ImGui::SetTooltip("%s", kColorsDisabledNoMatchTooltip);
+      } else {
+        ImGui::SetTooltip(
+            "Toggle colored composite / full-spectrum preview.\n"
+            "Display-time only -- does not re-simulate or discard color classes.\n"
+            "%s",
+            composite_now ? "Currently: Colored" : "Currently: Full Spectrum");
+      }
     }
 
     // task-348.1 Step 3 (① 反馈缺失): when every configured color class has no
-    // matching rays, the Colored composite is empty and the checkbox above appears
+    // matching rays, the Colored composite is empty and the button above appears
     // "unclickable / non-responding" (last_uploaded_as_composite never flips true).
     // Surface an aggregate warning pip here so the user sees WHY nothing changes —
     // reads the same shared signal cache as the Colors window's per-row warnings
     // (single source, a12), so both indicators agree by construction. Silent when
     // no class has non-empty match[] (matches per-row semantics).
     //
-    // Design note: this call site drives the shared throttled poll (RefreshColor-
-    // ClassSignals) even when the Colors window is closed — deliberate: the top-bar
-    // pip must reflect the current signal regardless of window visibility. The 500 ms
-    // throttle keeps the extra polling cost negligible.
-    const std::vector<int>& signal_flags = RefreshColorClassSignals(g_state, g_server);
-    if (AllConfiguredColorClassesUnmatched(g_state, signal_flags)) {
+    // task-349.2 Step 3: the pip stays alongside the disabled button (both driven
+    // by all_unmatched) — the two indicators are complementary, not redundant:
+    // the button greying is the immediate visual cue "cannot toggle now", the
+    // pip is the persistent per-row / aggregate warning surface.
+    if (all_unmatched) {
       ImGui::SameLine();
       ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.2f, 1.0f));
       ImGui::TextUnformatted(ICON_FA_TRIANGLE_EXCLAMATION);

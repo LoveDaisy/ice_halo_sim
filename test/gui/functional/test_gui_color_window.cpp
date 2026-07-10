@@ -822,4 +822,51 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
     };
   }
+
+  // task-349.2 Step 3 (#6, AC2 machine gate): when there are configured color
+  // classes with matches, the top-bar Colored button + Colors-window "Enable
+  // colors" checkbox must NOT be BeginDisabled(). This is the "wiring is
+  // present" check — 7 pure unit tests above already cover the predicate
+  // `AllConfiguredColorClassesUnmatched`; here we drive the real UI with a
+  // configured class + non-empty signal and confirm the two controls stay
+  // enabled. The complementary "predicate=true → disabled" state depends on
+  // driving the internal 500 ms signal cache to zeros, which requires a real
+  // 0-match server config (plan §7 risk 4 called this out as potentially
+  // flaky); we cover it via the pure predicate unit tests + owner on-screen
+  // AC4 pass, not a fragile end-to-end here.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "color_window", "enable_controls_stay_enabled_when_predicate_reports_matches");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Seed one configured class (non-empty match) so the top-bar Colored
+      // button (which is gated on !raypath_color.empty()) actually renders.
+      gui::ColorClassConfig cls;
+      cls.color[0] = 1.0f;
+      gui::ColorClassRefConfig ref;
+      ref.layer_idx = 0;
+      ref.crystal_pool_id = 0;
+      ref.match_all = true;
+      cls.match.push_back(ref);
+      gui::g_state.raypath_color.push_back(cls);
+      gui::g_state.color_window_open = true;
+      ctx->Yield(4);
+
+      // With server=nullptr, RefreshColorClassSignals resizes the cache to
+      // (n, 1) — all classes report "matched / unknown", predicate returns
+      // false, controls stay enabled.
+      auto top_info = ctx->ItemInfo("##TopBar/" ICON_FA_PALETTE "##CompositePreviewToggle");
+      IM_CHECK((top_info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->SetRef("//" ICON_FA_PALETTE " Colors");
+      auto win_info = ctx->ItemInfo("**/Enable colors");
+      IM_CHECK((win_info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      ctx->SetRef("");
+
+      gui::g_state.color_window_open = false;
+      ctx->Yield(2);
+    };
+  }
 }

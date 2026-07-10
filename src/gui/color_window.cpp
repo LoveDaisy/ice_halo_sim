@@ -611,6 +611,16 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
     return;
   }
 
+  // task-349.2 Step 3 (#6): fetch the shared signal cache BEFORE the Enable
+  // colors checkbox so we can wrap that checkbox (and its top-bar mirror in
+  // RenderTopBar) in BeginDisabled() when every configured class matches zero
+  // rays. Same throttled source as the top-bar and the per-row pips below;
+  // moving the fetch earlier does not change the poll cost (single 500 ms
+  // throttle) and does not race the per-row pip logic that reads
+  // `signal_flags[phys]` further down — that logic still sees the same cache.
+  const std::vector<int>& signal_flags = RefreshColorClassSignals(state, server);
+  const bool all_unmatched = AllConfiguredColorClassesUnmatched(state, signal_flags);
+
   // task-348.3 AC2 (⑥): mirror the top-bar Colored toggle inside the window so users
   // who already have Colors open do not need to reach for the top bar. Same field,
   // same read/write split as RenderTopBar (app_panels.cpp:Colored button): the checked
@@ -623,15 +633,30 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
   // checkbox is NOT gated on raypath_color.empty(): it stays visible even with zero
   // classes so it can act as the visible counterpart to AC3's "open with no classes →
   // default enabled" behavior.
+  //
+  // task-349.2 Step 3 (#6): when all_unmatched, wrap in BeginDisabled and swap
+  // tooltip to the shared "no matches" copy (kColorsDisabledNoMatchTooltip in
+  // color_window.hpp) — the top-bar Colored toggle reads the same constant so
+  // the two disabled cues cannot drift.
   {
     bool checked = state.last_uploaded_as_composite;
+    if (all_unmatched) {
+      ImGui::BeginDisabled();
+    }
     if (ImGui::Checkbox("Enable colors", &checked)) {
       ToggleCompositePreview(state);
     }
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip(
-          "Toggle colored composite / full-spectrum preview.\n"
-          "Synced with the top-bar toggle -- same display-time preference.");
+    if (all_unmatched) {
+      ImGui::EndDisabled();
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      if (all_unmatched) {
+        ImGui::SetTooltip("%s", kColorsDisabledNoMatchTooltip);
+      } else {
+        ImGui::SetTooltip(
+            "Toggle colored composite / full-spectrum preview.\n"
+            "Synced with the top-bar toggle -- same display-time preference.");
+      }
     }
   }
 
@@ -652,11 +677,6 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
   }
 
   ImGui::Separator();
-
-  // Debounced signal poll for the AC4 empty-arc warning. Reads the shared
-  // orchestration cache — same source the top-bar aggregate warning reads,
-  // so the two indicators cannot drift (a12 single source; task-348.1 fix).
-  const std::vector<int>& signal_flags = RefreshColorClassSignals(state, server);
 
   // Sort classes by z_order for display (physical vector order stays put).
   const size_t n = state.raypath_color.size();

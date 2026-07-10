@@ -77,6 +77,15 @@ std::vector<int> RefreshColorClassSignals(const GuiState& state, LUMICE_Server* 
 // counted either way), not as a confirmed no-signal.
 bool AllConfiguredColorClassesUnmatched(const GuiState& state, const std::vector<int>& signal_flags);
 
+// task-349.2 Step 3 (#6): shared tooltip text for the disabled "enable colors"
+// controls (top-bar Colored toggle + Colors-window Enable checkbox). Single
+// source so the two indicators cannot drift; kept as a header-scope constant
+// rather than duplicated string literals per plan-review Suggestion 1.
+inline constexpr const char* kColorsDisabledNoMatchTooltip =
+    "No rays currently match any color class -- the composite would be empty.\n"
+    "The class predicates may be blocked by a physical filter, or the last run\n"
+    "produced no matching data. Re-run or adjust the color classes.";
+
 // ---------------------------------------------------------------------------
 // Exported for gui_test only — do not call from production code. Production
 // code should go through RefreshColorClassSignals above, which adds the
