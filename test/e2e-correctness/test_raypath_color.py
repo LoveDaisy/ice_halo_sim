@@ -15,13 +15,18 @@ crystal 2. All three classes get non-zero hits (verified via the color-direction
 classifier: RED/GREEN/BLUE ~= 52937 / 2780 / 35663).
 
 PSNR threshold calibration (e2e methodology, matches test_smoke.py):
-  Reference regenerated on macOS against the Design-2 renderer. Three fresh CLI
-  runs vs the reference measured PSNR = 24.39 / 24.32 / 24.37 dB (stable — MC
-  orientation noise only). threshold = min - 3 dB, floored to 0.5, with extra
-  cross-platform margin (reference generated on macOS, CI runs on Linux) ->
-  20.0 dB. A structural regression (composite chain broken -> wrong/black image,
-  or mono leaking into the composite slot) drops PSNR far below 20 dB, so the
-  gate still catches it.
+  Reference regenerated on macOS against the participating-P99 self-anchor
+  compositor (task-fix-composite-participating-exposure-anchor). Three fresh
+  CLI runs vs the reference measured PSNR = 20.90 / 20.86 / 20.91 dB (stable —
+  MC orientation noise only). The absolute PSNR floor is lower than the
+  pre-anchor version (~24 dB) because the new anchor produces a significantly
+  brighter composite — every MC-varied pixel now sits at a higher byte value,
+  amplifying MC noise error rms even though the underlying orientation seeds
+  are equivalently stable. threshold = min - 3 dB, floored to 0.5 = 17.5, with
+  extra cross-platform margin (reference generated on macOS, CI runs on Linux)
+  -> 16.5 dB. A structural regression (composite chain broken -> wrong/black
+  image, or mono leaking into the composite slot) still drops PSNR into the
+  single-digit range, so the gate still catches it.
 """
 
 from pathlib import Path
@@ -48,21 +53,23 @@ REFERENCE = REFERENCES_DIR / "raypath_color_three_arcs_components.jpg"
 EXPECTED_DIMS = (512, 256)
 
 # See module docstring for calibration.
-PSNR_THRESHOLD = 20.0
+PSNR_THRESHOLD = 16.5
 
 # ------ task-339.5 multi-layer full-semantics fixture (see class below) ------
 MULTI_LAYER_CONFIG = CONFIGS_DIR / "raypath_color_multi_layer.json"
 MULTI_LAYER_REFERENCE = REFERENCES_DIR / "raypath_color_multi_layer_components.jpg"
 
-# PSNR calibration (macOS host, reference regenerated against the Design-2
-# renderer, 3 fresh CLI runs vs reference):
-#   Run 1/2/3 = 26.47 / 26.42 / 26.45 dB.
-#   min - 3 dB, floored to 0.5 dB -> 23.5 dB. Extra cross-platform margin
-#   (reference on macOS, CI on Linux) matching the ~1 dB safety used for
-#   `test_composite_output_and_psnr` -> 22.0 dB. A structural regression
-#   (wrong dominant winner, per-class lane wiring broken) drops PSNR far
-#   below 22 dB and the gate still fires.
-MULTI_LAYER_PSNR_THRESHOLD = 22.0
+# PSNR calibration (macOS host, reference regenerated against the
+# participating-P99 self-anchor compositor,
+# task-fix-composite-participating-exposure-anchor):
+#   Run 1/2/3 = 20.011 / 19.987 / 19.986 dB (stable, MC noise only).
+#   Absolute PSNR floor is lower than the pre-anchor version (~26 dB) for the
+#   same reason as three-arcs — brighter composite amplifies MC noise error rms.
+#   min - 3 dB, floored to 0.5 dB -> 16.5 dB. Extra cross-platform margin
+#   (reference on macOS, CI on Linux) matching the ~1 dB safety used above
+#   -> 15.5 dB. A structural regression (wrong dominant winner, per-class lane
+#   wiring broken) drops PSNR far below 15.5 dB and the gate still fires.
+MULTI_LAYER_PSNR_THRESHOLD = 15.5
 
 # task-339.5 color-class list order in raypath_color_multi_layer.json.
 # Order matters: dominant-mode tie-break is list-first, and the classifier

@@ -566,6 +566,25 @@ LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server, const LUMICE_Col
 }
 
 
+// task-345.3: display-time EV multiplier for the composite path. See the
+// LUMICE_SetCompositeExposure comment in include/lumice.h for the semantics
+// (single scalar, mono path untouched, snapshot_dirty_ flipped so the next
+// Get*Results rebakes the composite). No ev_total validation: the GUI is the
+// only in-tree caller and already clamps to [-6, 6]; server-side double-clamp
+// would hide caller bugs without preventing any real hazard.
+LUMICE_ErrorCode LUMICE_SetCompositeExposure(LUMICE_Server* server, float ev_total) {
+  if (!server) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  auto err = server->server_->SetCompositeExposure(ev_total);
+  if (err) {
+    LOG_ERROR("LUMICE_SetCompositeExposure failed: {}", err.message);
+    return MapErrorCode(err.code);
+  }
+  return LUMICE_OK;
+}
+
+
 // task-342.3 AC4: per-color-class empty-arc detector.
 LUMICE_ErrorCode LUMICE_GetColorClassSignal(LUMICE_Server* server, int* out_flags, int class_count) {
   if (!server) {
@@ -1397,6 +1416,8 @@ LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderRes
     out[i].img_width = render_results[i].img_width_;
     out[i].img_height = render_results[i].img_height_;
     out[i].img_buffer = render_results[i].img_buffer_;
+    // task-345.3: mono path — composite_p99_y is composite-only; leave at 0.
+    out[i].composite_p99_y = 0.0f;
   }
 
   // Sentinel: see doc/capi-lifecycle-architecture.md §5.2 (fix: 5287efe).
@@ -1424,6 +1445,8 @@ LUMICE_ErrorCode LUMICE_GetCompositeResults(LUMICE_Server* server, LUMICE_Render
     out[i].img_width = composite_results[i].img_width_;
     out[i].img_height = composite_results[i].img_height_;
     out[i].img_buffer = composite_results[i].img_buffer_;
+    // task-345.3: composite path — participating-classes union P99 (auto-EV anchor).
+    out[i].composite_p99_y = composite_results[i].composite_p99_y_;
   }
 
   // Sentinel: see doc/capi-lifecycle-architecture.md §5.2 (fix: 5287efe).
@@ -1462,6 +1485,57 @@ LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzRes
   // Sentinel: see doc/capi-lifecycle-architecture.md §5.2 (fix: 5287efe).
   if (count < max_count) {
     std::memset(&out[count], 0, sizeof(LUMICE_RawXyzResult));
+  }
+
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_GetRawXyzAndCompositeResults(LUMICE_Server* server, LUMICE_RawXyzResult* xyz_out,
+                                                     int xyz_max_count, LUMICE_RenderResult* composite_out,
+                                                     int composite_max_count) {
+  if (!server || !xyz_out || !composite_out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+
+  std::vector<lumice::RawXyzResult> xyz_results;
+  std::vector<lumice::RenderResult> composite_results;
+  server->server_->GetRawXyzAndCompositeResults(xyz_results, composite_results);
+
+  int xyz_count = static_cast<int>(xyz_results.size());
+  if (xyz_count > xyz_max_count) {
+    xyz_count = xyz_max_count;
+  }
+  for (int i = 0; i < xyz_count; i++) {
+    xyz_out[i].renderer_id = xyz_results[i].renderer_id_;
+    xyz_out[i].img_width = xyz_results[i].img_width_;
+    xyz_out[i].img_height = xyz_results[i].img_height_;
+    xyz_out[i].xyz_buffer = xyz_results[i].xyz_buffer_;
+    xyz_out[i].snapshot_intensity = xyz_results[i].snapshot_intensity_;
+    xyz_out[i].intensity_factor = xyz_results[i].intensity_factor_;
+    xyz_out[i].has_valid_data = xyz_results[i].has_valid_data_ ? 1 : 0;
+    xyz_out[i].snapshot_generation = xyz_results[i].snapshot_generation_;
+    xyz_out[i].effective_pixels = xyz_results[i].effective_pixels_;
+    xyz_out[i].epoch = xyz_results[i].epoch_;
+  }
+  if (xyz_count < xyz_max_count) {
+    std::memset(&xyz_out[xyz_count], 0, sizeof(LUMICE_RawXyzResult));
+  }
+
+  int composite_count = static_cast<int>(composite_results.size());
+  if (composite_count > composite_max_count) {
+    composite_count = composite_max_count;
+  }
+  for (int i = 0; i < composite_count; i++) {
+    composite_out[i].renderer_id = composite_results[i].renderer_id_;
+    composite_out[i].img_width = composite_results[i].img_width_;
+    composite_out[i].img_height = composite_results[i].img_height_;
+    composite_out[i].img_buffer = composite_results[i].img_buffer_;
+    // task-345.3: composite path — participating-classes union P99 (auto-EV anchor).
+    composite_out[i].composite_p99_y = composite_results[i].composite_p99_y_;
+  }
+  if (composite_count < composite_max_count) {
+    std::memset(&composite_out[composite_count], 0, sizeof(LUMICE_RenderResult));
   }
 
   return LUMICE_OK;

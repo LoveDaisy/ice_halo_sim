@@ -2941,6 +2941,124 @@ TEST(RaypathColorApi, CompositeGenerationDriftDetectableViaRecheck) {
   LUMICE_DestroyServer(s);
 }
 
+// task-345.2 Step 2 regression: the atomic combined getter must pair xyz +
+// composite from a SINGLE snapshot — i.e., composite_out[0] MUST belong to
+// xyz_out[0].snapshot_generation, even when repeated churn arms a fresh dirty
+// event between each call. Contrast with CompositeGenerationDriftDetectableViaRecheck
+// above, which proves the OPPOSITE property for the three-call sequence
+// (xyz → composite → recheck) that the fix eliminates from the poller path.
+TEST(RaypathColorApi, RawXyzAndCompositeSameGenerationUnderChurn) {
+  LUMICE_ServerConfig sc{};
+  sc.num_workers = 1;
+  sc.sim_seed = 1919u;
+  LUMICE_Server* s = LUMICE_CreateServerEx(&sc);
+  ASSERT_NE(s, nullptr);
+  ASSERT_EQ(LUMICE_CommitConfig(s, MakeColorSimConfigJson().c_str()), LUMICE_OK);
+  ASSERT_TRUE(WaitForIdle(s, 10000));
+
+  unsigned long long prev_generation = 0ull;
+  for (int round = 0; round < 8; ++round) {
+    // Arm a fresh dirty event before every combined call (deterministic
+    // stand-in for background ConsumeData batch churn in the GUI hot path).
+    LUMICE_ColorClassDisplay disp[2]{};
+    // Rotate blue channel per round so every LUMICE_SetRaypathColors is a
+    // genuine display-state change (never a no-op that skips setting dirty).
+    disp[0].color[2] = static_cast<float>(round % 3) / 2.0f;
+    disp[0].visible = 1;
+    disp[1].color[2] = static_cast<float>((round + 1) % 3) / 2.0f;
+    disp[1].visible = 1;
+    ASSERT_EQ(LUMICE_SetRaypathColors(s, disp, 2, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
+
+    LUMICE_RawXyzResult xyz[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    ASSERT_EQ(LUMICE_GetRawXyzAndCompositeResults(s, xyz, LUMICE_MAX_RENDER_RESULTS, comp, LUMICE_MAX_RENDER_RESULTS),
+              LUMICE_OK)
+        << "round " << round;
+    ASSERT_NE(xyz[0].xyz_buffer, nullptr) << "round " << round;
+    ASSERT_NE(comp[0].img_buffer, nullptr) << "round " << round << ": raypath_color is configured";
+
+    // Same-generation invariant (structural property of one-DoSnapshot() call).
+    // The composite that the getter returns MUST correspond to this call's xyz
+    // snapshot_generation — no cross-generation mix is possible when there is
+    // exactly ONE DoSnapshot() trigger inside the atomic call.
+    EXPECT_GT(xyz[0].snapshot_generation, prev_generation)
+        << "round " << round << ": SetRaypathColors armed dirty → generation must advance";
+    prev_generation = xyz[0].snapshot_generation;
+
+    // Cross-check: an immediate independent LUMICE_GetRawXyzResults() call
+    // right after the combined call must observe the same generation
+    // (nothing else bumps it in this thread), i.e. the combined call did
+    // NOT leave the server in a "generation drift is armed for the next
+    // observer" state.
+    LUMICE_RawXyzResult recheck[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    ASSERT_EQ(LUMICE_GetRawXyzResults(s, recheck, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    EXPECT_EQ(recheck[0].snapshot_generation, xyz[0].snapshot_generation)
+        << "round " << round << ": no drift armed between combined call and immediate recheck";
+  }
+
+  LUMICE_StopServer(s);
+  LUMICE_DestroyServer(s);
+}
+
+// The combined getter's xyz/composite outputs must byte-match what the two
+// individual getters would return when called in the ordinary "no churn armed
+// between them" case — proves the merged code path preserves the semantics of
+// its two callees, not just adds a new atomic guarantee.
+TEST(RaypathColorApi, RawXyzAndCompositeMatchesIndividualGettersNoChurn) {
+  LUMICE_ServerConfig sc{};
+  sc.num_workers = 1;
+  sc.sim_seed = 2929u;
+  LUMICE_Server* s = LUMICE_CreateServerEx(&sc);
+  ASSERT_NE(s, nullptr);
+  ASSERT_EQ(LUMICE_CommitConfig(s, MakeColorSimConfigJson().c_str()), LUMICE_OK);
+  ASSERT_TRUE(WaitForIdle(s, 10000));
+
+  LUMICE_RawXyzResult xyz_c[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  LUMICE_RenderResult comp_c[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetRawXyzAndCompositeResults(s, xyz_c, LUMICE_MAX_RENDER_RESULTS, comp_c, LUMICE_MAX_RENDER_RESULTS),
+            LUMICE_OK);
+  ASSERT_NE(xyz_c[0].xyz_buffer, nullptr);
+  ASSERT_NE(comp_c[0].img_buffer, nullptr);
+  const int width = xyz_c[0].img_width;
+  const int height = xyz_c[0].img_height;
+  const size_t rgb_bytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
+  const size_t xyz_floats = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
+  std::vector<uint8_t> comp_copy(comp_c[0].img_buffer, comp_c[0].img_buffer + rgb_bytes);
+  std::vector<float> xyz_copy(xyz_c[0].xyz_buffer, xyz_c[0].xyz_buffer + xyz_floats);
+  const unsigned long long combined_generation = xyz_c[0].snapshot_generation;
+
+  // Idle server → no dirty → the individual getters must land on the SAME
+  // frozen snapshot the combined call just materialized (generation stable).
+  LUMICE_RawXyzResult xyz_i[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetRawXyzResults(s, xyz_i, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  EXPECT_EQ(xyz_i[0].snapshot_generation, combined_generation);
+  EXPECT_EQ(std::memcmp(xyz_i[0].xyz_buffer, xyz_copy.data(), xyz_floats * sizeof(float)), 0);
+
+  LUMICE_RenderResult comp_i[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetCompositeResults(s, comp_i, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_NE(comp_i[0].img_buffer, nullptr);
+  EXPECT_EQ(std::memcmp(comp_i[0].img_buffer, comp_copy.data(), rgb_bytes), 0);
+
+  LUMICE_StopServer(s);
+  LUMICE_DestroyServer(s);
+}
+
+// NULL-arg guard mirrors the two individual getters.
+TEST(RaypathColorApi, RawXyzAndCompositeRejectsNullArgs) {
+  LUMICE_Server* s = LUMICE_CreateServer();
+  ASSERT_NE(s, nullptr);
+  LUMICE_RawXyzResult xyz[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  EXPECT_EQ(
+      LUMICE_GetRawXyzAndCompositeResults(nullptr, xyz, LUMICE_MAX_RENDER_RESULTS, comp, LUMICE_MAX_RENDER_RESULTS),
+      LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_GetRawXyzAndCompositeResults(s, nullptr, LUMICE_MAX_RENDER_RESULTS, comp, LUMICE_MAX_RENDER_RESULTS),
+            LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_GetRawXyzAndCompositeResults(s, xyz, LUMICE_MAX_RENDER_RESULTS, nullptr, LUMICE_MAX_RENDER_RESULTS),
+            LUMICE_ERR_NULL_ARG);
+  LUMICE_DestroyServer(s);
+}
+
 TEST(RaypathColorApi, SetRaypathColorsRejectsBadArgsAllOrNothing) {
   // AC3: class_count mismatch and non-permutation z_order are rejected without mutating state.
   LUMICE_ServerConfig sc{};

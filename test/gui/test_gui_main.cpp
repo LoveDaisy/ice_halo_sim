@@ -18,6 +18,7 @@
 
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "gui/app.hpp"
+#include "gui/color_window.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/font_init.hpp"
 #include "gui/gl_capture.hpp"
@@ -405,6 +406,12 @@ int main(int argc, char** argv) {
     if (g_enable_log_panel) {
       gui::RenderLogPanel(layout_width, layout_height);
     }
+    // task-345.5: Colors window was previously never rendered by the harness
+    // main loop, leaving its ImGui-level widgets (including new tooltips) zero-
+    // covered. Adding it here mirrors src/gui/main.cpp:346. RenderColorWindow
+    // early-returns when color_window_open is false, so cost for existing
+    // tests is negligible.
+    gui::RenderColorWindow(gui::g_state, gui::g_server);
     gui::RenderStatusBar(layout_width, layout_height);
     // Intentional deviation from plan (which suggested nullptr): the test
     // harness owns a real GLFW window (hidden in CI), so passing it yields

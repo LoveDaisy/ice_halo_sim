@@ -70,6 +70,18 @@ bool PushDisplayState(const GuiState& state, LUMICE_Server* server) {
                   static_cast<int>(ec), n);
     return false;
   }
+  // task-345.2 (③): after a finite sim completes, ServerPoller self-pauses (server_poller.cpp)
+  // and no one drives DoSnapshot() anymore, so the LUMICE_SetRaypathColors() call above sets
+  // snapshot_dirty_ but that flag would never get consumed — the preview stays on the old colors
+  // until the user restarts the sim. Wake the poller here so it runs ONE more PollOnce() cycle
+  // to materialize a fresh composite with the new colors, then self-pauses again (its own
+  // COMPLETED-edge self-pause fires at the end of that same PollOnce, see server_poller.cpp).
+  // No epoch bump, no accumulator reset, no sim restart — display-time semantics preserved
+  // (322 lifecycle clock decoupling, doc/gui-preview-lifecycle-architecture.md I1–I6).
+  //
+  // If the poller is already running (infinite sim / mid-run edit), EnsureRunning is a
+  // zero-overhead no-op (server_poller.hpp).
+  g_server_poller.EnsureRunning(server);
   return true;
 }
 
@@ -291,6 +303,13 @@ void RenderCompositeModeCombo(GuiState& state, LUMICE_Server* server) {
     state.raypath_color_mode = mode;
     PushDisplayState(state, server);
   }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip(
+        "How overlapping color classes combine per pixel:\n"
+        "  dominant -- brightest participating class wins\n"
+        "  additive -- colors sum (clamped to white)\n"
+        "  painter  -- highest-priority class with any signal wins, regardless of brightness");
+  }
   ImGui::PopItemWidth();
 }
 
@@ -432,8 +451,18 @@ void RenderRefRow(GuiState& state, ColorClassConfig& cls, size_t ref_idx, bool& 
     if (invalid) {
       ImGui::PopStyleVar();
       ImGui::PopStyleColor();
-      if (ImGui::IsItemHovered() && !validation.message.empty()) {
-        ImGui::SetTooltip("%s", validation.message.c_str());
+    }
+    // Single SetTooltip for the item — syntax hint always; the validation error
+    // (if any) is appended below it, so hover text is stable across valid /
+    // invalid states without two overlapping tooltip calls.
+    if (ImGui::IsItemHovered()) {
+      static constexpr const char* kSyntaxHint =
+          "Same token syntax as the filter editor (e.g. 3-5, entry:2, exit:4, len:2-3).\n"
+          "Single atom only here -- no ';' OR / '&' AND; add another ref + Combine below for that.";
+      if (invalid && !validation.message.empty()) {
+        ImGui::SetTooltip("%s\n\n%s", kSyntaxHint, validation.message.c_str());
+      } else {
+        ImGui::SetTooltip("%s", kSyntaxHint);
       }
     }
     ImGui::PopItemWidth();
@@ -541,6 +570,9 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
     if (at_top) {
       ImGui::EndDisabled();
     }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("Raise priority -- wins ties in Dominant mode and paints over lower classes in Painter mode.");
+    }
     ImGui::SameLine();
     if (at_bot) {
       ImGui::BeginDisabled();
@@ -550,6 +582,9 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
     }
     if (at_bot) {
       ImGui::EndDisabled();
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("Lower priority (opposite of the arrow above).");
     }
 
     // Color swatch.
@@ -565,11 +600,19 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
       cls.visible = !cls.visible;
       PushDisplayState(state, server);
     }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(
+          "Show/hide this class in the composite preview (display-time only -- the underlying filter is unchanged).");
+    }
     ImGui::SameLine();
     bool solo = cls.solo;
     if (ImGui::Checkbox("solo", &solo)) {
       cls.solo = solo;
       PushDisplayState(state, server);
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(
+          "While any class is solo'd, only solo'd classes show in the composite; Visible is ignored for the rest.");
     }
 
     // Empty warning (AC4).
@@ -603,6 +646,11 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
       if (ImGui::Combo("##combine", &combine_val, kCombineNames, 2)) {
         cls.combine = combine_val;
         state.MarkFilterDirty();
+      }
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "any -- a ray belongs to this class if it matches AT LEAST ONE ref below (OR)\n"
+            "all -- a ray belongs to this class only if it matches EVERY ref below (AND)");
       }
       ImGui::PopItemWidth();
 

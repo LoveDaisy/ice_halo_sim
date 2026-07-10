@@ -3,10 +3,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <string>
 
 #include "IconsFontAwesome6.h"
 #include "gui/app.hpp"
+#include "gui/composite_exposure_push.hpp"
 #include "gui/crystal_preview.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/gui_constants.hpp"
@@ -50,6 +52,12 @@
 //     - "Unsaved Changes" (BeginPopupModal)
 //     - "##LogPanel" — user-toggleable; raisable on click; sits naturally
 //       above the LeftPanel / RightPanel cluster.
+//     - ICON_FA_PALETTE " Colors" (color_window.cpp:508) — user-toggleable
+//       floating window. Manual click detection in the background cluster
+//       (e.g. RenderEntryCard's IsMouseHoveringRect path) MUST gate on
+//       IsWindowHovered() or !io.WantCaptureMouse to avoid click-through
+//       when Colors covers the panels beneath it
+//       (task-color-window-mouse-capture / 346.2).
 //
 //   Background cluster (NoBringToFrontOnFocus, push_front on creation
 //                       -> bottom of g.Windows):
@@ -246,6 +254,55 @@ void RenderTopBar(float window_width) {
     }
   }
 
+  ImGui::SameLine();
+  ImGui::TextDisabled("|");
+  ImGui::SameLine();
+
+  // task-345.5 (⑥): dedicated "feature button" group, immediately right of
+  // New/Open/Save. Colors is the first occupant; future cross-cutting toggles
+  // unrelated to file I/O or panel layout should land here rather than
+  // competing for status-bar space.
+  if (ImGui::Button(ICON_FA_PALETTE " Colors")) {
+    g_state.color_window_open = !g_state.color_window_open;
+  }
+
+  // task-colored-toggle-to-topbar (346.3): colored/full-spectrum display-time
+  // toggle, relocated from the status bar (task-345.4) to sit next to Colors.
+  // Gated identically (raypath_color non-empty) so it renders only when at
+  // least one color class exists (AC4: no color classes ⇒ no checkbox,
+  // matching pre-346.3 status-bar behavior). Label/checked-state reads
+  // GROUND TRUTH (last_uploaded_as_composite), click writes the user
+  // preference (show_composite_preview) — same read/write split as
+  // gui_state.hpp:794-803. The checkbox living in ##TopBar (a window
+  // independent of the Colors window's own render call) is itself the
+  // persistent "currently in colored mode" marker required by AC3: closing
+  // Colors does not touch this window.
+  if (!g_state.raypath_color.empty()) {
+    ImGui::SameLine();
+    const bool composite_now = g_state.last_uploaded_as_composite;
+    const char* mode_label = composite_now ? ICON_FA_PALETTE " Colored" : ICON_FA_PALETTE " Full Spectrum";
+    std::string checkbox_id = std::string(mode_label) + "##CompositePreviewToggle";
+    bool checked = composite_now;
+    if (composite_now) {
+      // Checkbox renders as frame background + check mark, not a button — the
+      // 345.4 accent used ImGuiCol_Button which does not apply here.
+      ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.35f, 0.55f, 0.85f, 1.0f));
+      ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.45f, 0.65f, 0.95f, 1.0f));
+      ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+    }
+    if (ImGui::Checkbox(checkbox_id.c_str(), &checked)) {
+      g_state.show_composite_preview = !g_state.show_composite_preview;
+    }
+    if (composite_now) {
+      ImGui::PopStyleColor(3);
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(
+          "Toggle colored composite / full-spectrum preview.\n"
+          "Display-time only -- does not re-simulate or discard color classes.");
+    }
+  }
+
   // Right-panel collapse toggle — right-aligned so it sits flush with the right panel's outer edge.
   // Also note: when the right panel is already collapsed, RenderCollapsedStrip's internal button
   // still expands it; this top-bar toggle simply offers a symmetric alternate entry point.
@@ -280,7 +337,13 @@ bool OverlayButton(const char* label, float local_x, float local_y) {
 
   ImDrawList* fg = ImGui::GetForegroundDrawList();
   ImGuiIO& io = ImGui::GetIO();
-  bool hovered = (io.MousePos.x >= pos.x && io.MousePos.x <= max.x && io.MousePos.y >= pos.y && io.MousePos.y <= max.y);
+  // The collapse strip is drawn directly to ForegroundDrawList without a Begin(), so no
+  // ImGui window exists to gate against. Fall back to WantCaptureMouse, which is set by
+  // NewFrame() when any real ImGui window (e.g. Colors) sits under the cursor. This
+  // prevents click-through when a floating window covers the strip
+  // (task-color-window-mouse-capture).
+  bool hovered = !io.WantCaptureMouse &&
+                 (io.MousePos.x >= pos.x && io.MousePos.x <= max.x && io.MousePos.y >= pos.y && io.MousePos.y <= max.y);
   bool clicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
 
   ImU32 bg_col = ImGui::GetColorU32(clicked ? ImGuiCol_ButtonActive :
@@ -842,6 +905,41 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     pp.view_proj = BuildPreviewViewProjFromRenderer(rc);
     float ev_total = rc.exposure_offset + g_state.ev_auto;
     pp.exposure.intensity_factor = std::pow(2.0f, ev_total);
+
+    // task-347 (Fix B) DECOUPLE: the composite path is now server-side self-
+    // anchored on participating-P99 (see doc/ev-pipeline-architecture.md §6.6).
+    // GUI must push ONLY the manual `exposure_offset` here — folding `ev_auto`
+    // back in would multiply the auto-anchor by the auto-EV a second time and
+    // reintroduce the double-count that Fix B is meant to eliminate. The mono
+    // shader-uniform path above still uses `ev_total = exposure_offset +
+    // ev_auto` because the mono pipeline anchors off the mono ExposureScale
+    // (integral over the whole image), not off a self-anchored P99.
+    //
+    // Push guard logic (value-changed OR off->on edge) lives in
+    // ShouldPushCompositeExposure (gui/composite_exposure_push.hpp,
+    // code-review round 1 Major #1 + Minor #1) so the four branches are
+    // independently unit-testable rather than only reachable through a full
+    // ImGui frame. See that header for the off->on rationale (plan-review
+    // Minor #2).
+    {
+      static float s_last_pushed_ev = std::numeric_limits<float>::quiet_NaN();
+      static bool s_last_composite_active = false;
+      constexpr float kCompositeEvPushEpsilon = 1e-4f;
+      const bool composite_active = g_server != nullptr && !g_state.raypath_color.empty();
+      // Fix B: push value == manual EV offset only (no ev_auto).
+      const float composite_ev_push = rc.exposure_offset;
+      if (lumice::gui::ShouldPushCompositeExposure(composite_active, s_last_composite_active, composite_ev_push,
+                                                   s_last_pushed_ev, kCompositeEvPushEpsilon)) {
+        LUMICE_SetCompositeExposure(g_server, composite_ev_push);
+        // Wake a paused poller so the next frame can pick up the freshly re-baked
+        // composite even after a finite sim has completed (same rationale as the
+        // color-window PushDisplayState path — see task-345.2 (③) in color_window.cpp).
+        // No-op when the poller is already running.
+        g_server_poller.EnsureRunning(g_server);
+        s_last_pushed_ev = composite_ev_push;
+      }
+      s_last_composite_active = composite_active;
+    }
     float norm_intensity = g_state.snapshot_intensity;
     pp.exposure.intensity_scale = norm_intensity > 0 ? pp.exposure.intensity_factor / norm_intensity : 0.0f;
     // Overlap parameters for dual fisheye texture sampling.
@@ -1037,19 +1135,15 @@ void RenderStatusBar(float window_width, float window_height) {
     }
   }
 
-  // Log panel + Colors window toggle buttons (right-aligned)
+  // task-colored-toggle-to-topbar (346.3): the colored/full-spectrum mode toggle
+  // that used to sit here (task-345.4) moved to the top bar next to the Colors
+  // button. The status bar right cluster now contains only the Log button; the
+  // width formula below dropped `mode_w` and its trailing `mode_gap` term.
   {
     const char* log_label = g_state.log_panel_open ? ICON_FA_CHEVRON_DOWN " Log" : ICON_FA_CHEVRON_RIGHT " Log";
-    const char* color_label = ICON_FA_PALETTE " Colors";
     const float pad_x = ImGui::GetStyle().FramePadding.x * 2;
     const float log_w = ImGui::CalcTextSize(log_label).x + pad_x;
-    const float color_w = ImGui::CalcTextSize(color_label).x + pad_x;
-    const float spacing = ImGui::GetStyle().ItemSpacing.x;
-    ImGui::SameLine(ImGui::GetWindowWidth() - log_w - color_w - spacing - ImGui::GetStyle().WindowPadding.x);
-    if (ImGui::SmallButton(color_label)) {
-      g_state.color_window_open = !g_state.color_window_open;
-    }
-    ImGui::SameLine();
+    ImGui::SameLine(ImGui::GetWindowWidth() - log_w - ImGui::GetStyle().WindowPadding.x);
     if (ImGui::SmallButton(log_label)) {
       g_state.log_panel_open = !g_state.log_panel_open;
     }

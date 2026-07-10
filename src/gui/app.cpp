@@ -967,6 +967,26 @@ bool ShouldUploadPayload(const PreviewSnapshot& snap, unsigned long long last_up
          payload->payload_epoch > display_epoch_floor;
 }
 
+// task-345.4 effective composite/xyz choice — see app.hpp. Pure boolean AND: server must have
+// produced a composite (raypath_color active) AND the user preference must be "show composite".
+// When raypath_color is empty the poller leaves is_composite=false → this returns false → the
+// upload branch falls back to the XYZ float path (AC4 zero-regression).
+bool ShouldUseCompositeUpload(bool payload_is_composite, bool show_composite_preview) {
+  return payload_is_composite && show_composite_preview;
+}
+
+// task-345.4 fire-branch gate — see app.hpp. Combines the standard serial-dedup gate and the
+// mode-change OR-branch that keeps display-time preference flips responsive without a new poll.
+bool ShouldFireCompositeUpload(const PreviewSnapshot& snap, unsigned long long last_uploaded_texture_serial,
+                               uint64_t display_epoch_floor, bool show_composite_preview,
+                               bool last_uploaded_as_composite) {
+  const bool payload_available = snap.payload != nullptr;
+  const bool effective_composite =
+      payload_available && ShouldUseCompositeUpload(snap.payload->is_composite, show_composite_preview);
+  const bool mode_changed = payload_available && effective_composite != last_uploaded_as_composite;
+  return ShouldUploadPayload(snap, last_uploaded_texture_serial, display_epoch_floor) || mode_changed;
+}
+
 void SyncFromPoller() {
   // Atomically load the whole immutable snapshot (invariant I5). One lock-free atomic_load; the
   // consumer never observes a half-updated field combination.
@@ -1003,27 +1023,31 @@ void SyncFromPoller() {
     g_state.stats_sim_ray_num = snap->stats_sim_ray_num;
   }
 
-  // Upload XYZ float texture (GL call — must be on main thread). Gate is the pure ShouldUploadPayload
-  // predicate (epoch-keyed, see §3). Exact-once is enforced by serial dedup; the cursor now lives in
-  // GuiState (migrated from a file-scope static in 1.4).
-  if (ShouldUploadPayload(*snap, g_state.last_uploaded_texture_serial, g_state.display_epoch_floor)) {
-    const auto& payload = snap->payload;
+  // Upload XYZ float texture (GL call — must be on main thread). Gate is the pure
+  // ShouldFireCompositeUpload predicate (epoch-keyed serial dedup OR mode-change OR-branch — see
+  // app.hpp comment). Single source of truth shared with the regression test so the exact production
+  // fire-decision is pinned headlessly. AC4 zero-regression is preserved by boolean algebra: no
+  // raypath_color ⇒ is_composite==false ⇒ effective_composite==false ⇒ mode_changed==false ⇒ path
+  // is bit-identical to pre-345.4.
+  const auto& payload = snap->payload;
+  const bool effective_composite =
+      payload != nullptr && ShouldUseCompositeUpload(payload->is_composite, g_state.show_composite_preview);
+
+  if (ShouldFireCompositeUpload(*snap, g_state.last_uploaded_texture_serial, g_state.display_epoch_floor,
+                                g_state.show_composite_preview, g_state.last_uploaded_as_composite)) {
     GUI_LOG_VERBOSE("[GUI] SyncFromPoller: upload tex_rays={}, intensity={:.6f}, eff_pixels={}, factor={:.6f}",
                     payload->texture_ray_count, payload->snapshot_intensity, payload->effective_pixels,
                     payload->intensity_factor);
-    // task-342.4 Step 3: choose sRGB uint8 vs XYZ float upload path based on
-    // raypath_color activation. When active, poller populates rgb_data with the
-    // core-composited sRGB (host-side composite path, no shader change); when
-    // not, we stay on the original XYZ float path bit-for-bit. Auto-EV / stats
-    // / serial-dedup all keep reading xyz_data-derived fields (payload->p99_y,
-    // snapshot_intensity, effective_pixels) below — those are computed on the
-    // XYZ buffer, populated in both branches, so this pipe is not disturbed
-    // (plan §3 keypoint 3).
-    if (payload->is_composite) {
+    // task-342.4 Step 3 + task-345.4: choose sRGB uint8 vs XYZ float upload path. Server produces
+    // composite iff raypath_color is active; user can toggle back to full-spectrum via the status
+    // bar (`show_composite_preview`). Auto-EV / stats / serial-dedup still consume xyz_data-derived
+    // fields below — those are populated in both branches (plan §3 keypoint 3).
+    if (effective_composite) {
       g_preview.UploadTexture(payload->rgb_data.data(), payload->width, payload->height);
     } else {
       g_preview.UploadXyzTexture(payload->xyz_data.data(), payload->width, payload->height);
     }
+    g_state.last_uploaded_as_composite = effective_composite;
     g_state.snapshot_intensity = payload->snapshot_intensity;
     g_state.effective_pixels = payload->effective_pixels;
     g_state.texture_upload_count++;

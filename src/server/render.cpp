@@ -98,6 +98,39 @@ float RenderConsumer::ExposureScale() const {
   return config_.intensity_factor_ * kNormScale * total_pix / snapshot_intensity_;
 }
 
+// task-347 (Fix B): composite-path self-anchored exposure scale. See
+// declaration comment in render.hpp for the full contract + mirror-precedent
+// note vs gui_ev_auto.hpp::ComputeEvAuto.
+//
+// Formula derivation: `ComputeEvAuto` returns EV = log2(target_linear ·
+// snapshot_intensity / p99_raw_y), and the mono pipeline consumes it as
+// `intensity_factor = 2^ev`, then the shader multiplies raw pixel Y by
+// `intensity_scale = intensity_factor / snapshot_intensity`. So the effective
+// per-pixel multiplier the mono pipeline applies to the raw Y-lane at anchor
+// is `target_linear / p99_raw_y` — the snapshot_intensity factor CANCELS.
+// The composite pipeline applies our returned `s` directly to lane[p], so `s`
+// must reproduce that same effective multiplier without the intermediate
+// `pow(2, log2(...))` round-trip. Hence the formula below — no
+// snapshot_intensity in the numerator (a naive mirror of ComputeEvAuto's
+// numerator would give `s = target_linear · snapshot_intensity / p99`,
+// blowing up bytes by snapshot_intensity, which is 10^7 on a 400k-ray fixture).
+float RenderConsumer::ParticipatingExposureScale(float participating_p99_y) const {
+  if (participating_p99_y <= 0.0f || snapshot_intensity_ <= 0.0f) {
+    return 0.0f;
+  }
+  // MIRROR gui_ev_auto.hpp::ComputeEvAuto: target_white=135 on the 0-255 sRGB
+  // scale, converted to linear via the piecewise sRGB reverse transform. If
+  // you change either constant, mirror the change in the other file.
+  constexpr float kTargetWhite = 135.0f;
+  constexpr float kTargetWhiteSrgb = kTargetWhite / 255.0f;
+  const float target_linear =
+      kTargetWhiteSrgb <= 0.04045f ? kTargetWhiteSrgb / 12.92f : std::pow((kTargetWhiteSrgb + 0.055f) / 1.055f, 2.4f);
+  if (target_linear <= 0.0f) {
+    return 0.0f;
+  }
+  return config_.intensity_factor_ * target_linear / participating_p99_y;
+}
+
 
 void RenderConsumer::ConsumeDeviceFused(const SimData& data) {
   // S1 device-fused: backend already accumulated XYZ on-device; skip

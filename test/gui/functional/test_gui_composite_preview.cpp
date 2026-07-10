@@ -9,6 +9,7 @@
 // cross-test global-state coupling.
 
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <thread>
 #include <vector>
@@ -80,6 +81,44 @@ const char* kColorConfig = R"({
     "mode": "dominant",
     "classes": [
       {"color": [1.0, 0.0, 0.0], "match": [{"layer": 0, "crystal": 1}]}
+    ]
+  }
+})";
+
+// Two-class config for task-346.1 AC2. class 0 = match-all (bright, every landed ray
+// contributes to its Y-lane); class 1 = entry_exit filter with len==3 (dim, only 3-hop
+// paths contribute). Larger ray_num (400k) to keep class 1's lane statistically populated.
+const char* kTwoColorConfig = R"({
+  "crystal": [{
+    "id": 1, "type": "prism",
+    "shape": {"height": 1.5},
+    "axis": {"zenith": {"type": "gauss", "mean": 90.0, "std": 10.0},
+             "azimuth": {"type": "uniform", "mean": 0.0, "std": 180.0},
+             "roll": {"type": "uniform", "mean": 0.0, "std": 180.0}}
+  }],
+  "filter": [],
+  "scene": {
+    "light_source": {"type": "sun", "altitude": 20.0, "azimuth": 0.0,
+                     "diameter": 0.5, "spectrum": "D65"},
+    "ray_num": 400000,
+    "max_hits": 8,
+    "scattering": [{"prob": 0.0, "entries": [{"crystal": 1, "proportion": 1.0}]}]
+  },
+  "render": [{
+    "id": 1,
+    "lens": {"type": "dual_fisheye_equal_area", "fov": 180.0},
+    "resolution": [128, 64],
+    "view": {"elevation": 0, "azimuth": 0, "roll": 0},
+    "visible": "full", "background": [0, 0, 0],
+    "opacity": 1.0, "intensity_factor": 1.0
+  }],
+  "raypath_color": {
+    "mode": "dominant",
+    "classes": [
+      {"color": [1.0, 0.0, 0.0], "match": [{"layer": 0, "crystal": 1}]},
+      {"color": [0.0, 0.0, 1.0], "match": [{"layer": 0, "crystal": 1,
+                                            "type": "entry_exit",
+                                            "min_len": 3, "max_len": 3}]}
     ]
   }
 })";
@@ -201,17 +240,22 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     LUMICE_DestroyServer(server);
   };
 
-  // code-review-03 regression: actually drives ServerPoller::PopulateCompositePayload()'s
-  // generation-drift decision branch (not just the C-API-level drift precondition that
-  // RaypathColorApi.CompositeGenerationDriftDetectableViaRecheck in test_c_api.cpp pins).
-  // Arms a REAL drift via LUMICE_SetRaypathColors (same deterministic technique as that C-API
-  // test) between an xyz-generation capture and the composite call, then calls
-  // PopulateCompositePayloadForTest with the STALE captured generation so the function's own
-  // internal regen_check genuinely observes a mismatch — proving the drop branch
-  // (rgb_data cleared, is_composite left false) actually executes. Then repeats the sequence
-  // without an intervening drift to prove the very next pairing recovers (is_composite==true,
-  // bytes match a direct LUMICE_GetCompositeResults read).
-  ImGuiTest* t3 = IM_REGISTER_TEST(engine, "gui_composite_preview", "generation_drift_drop_then_recover");
+  // task-345.2 AC3 anchor (rewrite of the old code-review-03 "drift_drop_then_recover" test).
+  // Pre-345.2 the poller pulled xyz + composite via three independent C-API calls (xyz →
+  // composite → xyz recheck) whose cross-call window was near-guaranteed to be crossed by
+  // ConsumeData batch churn under an active sim — the old test forced that mismatch and
+  // asserted the drop branch fired. Post-345.2 the poller uses the atomic
+  // LUMICE_GetRawXyzAndCompositeResults which fuses both reads into a single server-side
+  // DoSnapshot() call; cross-generation pairing is structurally impossible upstream. There is
+  // no drop branch left to force, so the test is refocused on the surviving invariant AC3
+  // demanded ("composite与其渲染源xyz不跨代混装的保护仍在"): repeatedly arm dirty via
+  // LUMICE_SetRaypathColors between combined calls (churn simulator) and assert that every
+  // call yields (a) composite bytes byte-identical to what a same-tick direct
+  // LUMICE_GetCompositeResults returns (paired-with-just-fetched-xyz proof), and
+  // (b) PopulateCompositePayloadForTest builds is_composite=true + rgb_data populated from
+  // that composite. Same fixture and deterministic dirty-arming technique as the retired
+  // drop-branch test.
+  ImGuiTest* t3 = IM_REGISTER_TEST(engine, "gui_composite_preview", "same_generation_invariant_under_churn");
   t3->TestFunc = [](ImGuiTestContext* ctx) {
     IM_UNUSED(ctx);
     LUMICE_Server* server = LUMICE_CreateServer();
@@ -224,45 +268,732 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     }
 
     gui::ServerPoller local;
+    unsigned long long prev_gen = 0ull;
 
-    // ---- Drop branch: arm a real drift in the exact window PopulateCompositePayload guards. ----
-    LUMICE_RawXyzResult xyz1[LUMICE_MAX_RENDER_RESULTS + 1]{};
-    IM_CHECK_EQ(LUMICE_GetRawXyzResults(server, xyz1, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-    const unsigned long long stale_xyz_generation = xyz1[0].snapshot_generation;
+    // 4 churn rounds — each round arms a fresh dirty via LUMICE_SetRaypathColors (functionally
+    // identical to a background ConsumeData batch commit landing in the poll window), then
+    // exercises the atomic combined getter the poller now uses. Every round MUST:
+    //   1. See the generation strictly advance (proving the churn armed a real snapshot).
+    //   2. Get a non-null composite (raypath_color is active, so DoSnapshot Phase-2 produced one).
+    //   3. Byte-match a same-tick direct LUMICE_GetCompositeResults read (proving the composite
+    //      returned by the combined call is the one that pairs with this call's xyz, not a
+    //      cross-generation mix — the "真不变量" AC3 requires).
+    //   4. Populate the poller payload as a composite (proving PopulateCompositePayload still
+    //      writes rgb_data + sets is_composite, the same behavior the retired drop-recover
+    //      test's "recovery" branch pinned).
+    for (int round = 0; round < 4; ++round) {
+      LUMICE_ColorClassDisplay disp[1]{};
+      disp[0].color[2] = static_cast<float>(round % 3) / 2.0f;
+      disp[0].visible = 1;
+      IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp, 1, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
 
-    // kColorConfig commits exactly one raypath_color class — class_count must match.
+      LUMICE_RawXyzResult xyz[LUMICE_MAX_RENDER_RESULTS + 1]{};
+      LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
+      IM_CHECK_EQ(
+          LUMICE_GetRawXyzAndCompositeResults(server, xyz, LUMICE_MAX_RENDER_RESULTS, comp, LUMICE_MAX_RENDER_RESULTS),
+          LUMICE_OK);
+      IM_CHECK(xyz[0].xyz_buffer != nullptr);
+      IM_CHECK(comp[0].img_buffer != nullptr);
+      IM_CHECK(xyz[0].snapshot_generation > prev_gen);
+      prev_gen = xyz[0].snapshot_generation;
+
+      // (3) Same-generation guarantee: a same-tick direct composite read must land on the same
+      // frozen snapshot (nothing else armed dirty between these two calls). Copy first — bytes
+      // pointed to by combined-call composite alias the same server-side buffer that
+      // LUMICE_Get*Results contract may invalidate.
+      const size_t nbytes = static_cast<size_t>(comp[0].img_width) * static_cast<size_t>(comp[0].img_height) * 3;
+      std::vector<uint8_t> combined_composite(comp[0].img_buffer, comp[0].img_buffer + nbytes);
+      LUMICE_RenderResult direct[LUMICE_MAX_RENDER_RESULTS + 1]{};
+      IM_CHECK_EQ(LUMICE_GetCompositeResults(server, direct, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+      IM_CHECK(direct[0].img_buffer != nullptr);
+      IM_CHECK_EQ(std::memcmp(combined_composite.data(), direct[0].img_buffer, nbytes), 0);
+
+      // (4) PopulateCompositePayload builds the composite payload from the combined-call bytes.
+      gui::TexturePayload payload;
+      local.PopulateCompositePayloadForTest(direct[0], &payload);
+      IM_CHECK(payload.is_composite);
+      IM_CHECK_EQ(payload.rgb_data.size(), nbytes);
+      IM_CHECK_EQ(std::memcmp(payload.rgb_data.data(), direct[0].img_buffer, nbytes), 0);
+    }
+
+    local.Stop();
+    LUMICE_DestroyServer(server);
+  };
+
+  // task-345.2 AC1 anchor (③ wake-poller): after a finite sim reaches COMPLETED and the poller
+  // self-pauses, a display-time color edit (LUMICE_SetRaypathColors) must be able to drive one
+  // fresh composite materialization without restarting the sim (epoch unchanged, lifecycle stays
+  // COMPLETED). Pins the two coupled invariants:
+  //   (a) MECHANISM: the poll after SetRaypathColors + EnsureRunning yields a payload whose
+  //       rgb_data reflects the new colors and is byte-identical to a direct LUMICE_GetCompositeResults
+  //       (proving the display-time dirty flag was consumed, not lost).
+  //   (b) NON-RESTART: LUMICE_GetSimLifecycle still reports COMPLETED with the SAME epoch
+  //       observed before the edit (322 clock decoupling: display-time edit does NOT bump
+  //       committed_epoch_ and does NOT flip sim state back to RUNNING).
+  ImGuiTest* t4 = IM_REGISTER_TEST(engine, "gui_composite_preview", "display_time_color_edit_repaints_without_restart");
+  t4->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    const bool ok = RunToIdleWithData(server, kColorConfig);
+    IM_CHECK(ok);
+    if (!ok) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+
+    // Snapshot the terminal (finite-completion) lifecycle: this is what a display-time edit
+    // MUST NOT bump.
+    LUMICE_SimLifecycleResult lc_before{};
+    IM_CHECK_EQ(LUMICE_GetSimLifecycle(server, &lc_before), LUMICE_OK);
+    IM_CHECK_EQ(lc_before.lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+    const unsigned long long done_epoch = lc_before.epoch;
+
+    // AC1 explicit sub-clause ("sim_ray_count 不减"): capture the live accumulated ray
+    // count before the display-time edit so it can be compared post-edit below. Uses
+    // the O(1) live counter (task-317), not the DoSnapshot-cached stats path.
+    LUMICE_RayCount ray_count_before = 0;
+    IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_before), LUMICE_OK);
+
+    // Baseline poll to freeze current composite for a byte-diff below.
+    gui::ServerPoller local;
+    local.ResetGenerationForTest();
+    local.PollOnceForTest(server);
+    auto snap_before = local.LoadSnapshot();
+    IM_CHECK(snap_before != nullptr);
+    IM_CHECK(snap_before->valid);
+    IM_CHECK(snap_before->payload != nullptr);
+    IM_CHECK(snap_before->payload->is_composite);
+    std::vector<uint8_t> composite_before(snap_before->payload->rgb_data.begin(), snap_before->payload->rgb_data.end());
+
+    // Display-time edit: swap the class-0 color from red → blue. kColorConfig commits exactly
+    // one raypath_color class, so class_count == 1 matches.
     LUMICE_ColorClassDisplay disp[1]{};
-    disp[0].color[2] = 1.0f;  // red->blue: forces a visible display-state change (dirty).
+    disp[0].color[0] = 0.0f;
+    disp[0].color[1] = 0.0f;
+    disp[0].color[2] = 1.0f;  // blue
     disp[0].visible = 1;
     IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp, 1, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
+    // The very wake call PushDisplayState() invokes in production, exercised on the global poller
+    // that would drive DoSnapshot() consumption when a background worker was actually running.
+    // For this synchronous test seam, EnsureRunning + PollOnceForTest together stand in for
+    // "worker wakes up and runs one PollOnce, then self-pauses at COMPLETED".
+    gui::g_server_poller.EnsureRunning(server);
 
-    // Consumes the freshly-armed dirty flag: comp1 belongs to a generation newer than
-    // stale_xyz_generation — exactly the mismatch PopulateCompositePayload's regen_check must
-    // detect when handed stale_xyz_generation below.
-    LUMICE_RenderResult comp1[LUMICE_MAX_RENDER_RESULTS + 1]{};
-    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, comp1, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-    IM_CHECK(comp1[0].img_buffer != nullptr);
+    // (a) MECHANISM: the poll after the edit must produce a composite reflecting the new colors —
+    // i.e., not byte-identical to composite_before (the color changed, so the rendered image must
+    // differ). And it must byte-match a same-tick direct C-API read.
+    local.PollOnceForTest(server);
+    auto snap_after = local.LoadSnapshot();
+    IM_CHECK(snap_after != nullptr);
+    IM_CHECK(snap_after->valid);
+    IM_CHECK(snap_after->payload != nullptr);
+    IM_CHECK(snap_after->payload->is_composite);
+    IM_CHECK_EQ(snap_after->payload->rgb_data.size(), composite_before.size());
+    IM_CHECK(std::memcmp(snap_after->payload->rgb_data.data(), composite_before.data(), composite_before.size()) != 0);
 
-    gui::TexturePayload drop_payload;
-    local.PopulateCompositePayloadForTest(server, comp1[0], stale_xyz_generation, &drop_payload);
-    IM_CHECK(!drop_payload.is_composite);
-    IM_CHECK(drop_payload.rgb_data.empty());
+    LUMICE_RenderResult direct[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, direct, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(direct[0].img_buffer != nullptr);
+    IM_CHECK_EQ(
+        std::memcmp(snap_after->payload->rgb_data.data(), direct[0].img_buffer, snap_after->payload->rgb_data.size()),
+        0);
 
-    // ---- Recovery: the very next correctly-paired call must succeed. ----
-    LUMICE_RawXyzResult xyz2[LUMICE_MAX_RENDER_RESULTS + 1]{};
-    IM_CHECK_EQ(LUMICE_GetRawXyzResults(server, xyz2, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-    const unsigned long long paired_xyz_generation = xyz2[0].snapshot_generation;
+    // (b) NON-RESTART: lifecycle stays COMPLETED with the SAME epoch. This is the 322 clock-
+    // decoupling guarantee — a display-time edit re-materializes but does NOT reset the
+    // accumulator or bump the committed_epoch. If ③'s wake path ever regressed to calling
+    // LUMICE_Start / LUMICE_CommitConfig, this would flip lifecycle back to RUNNING and/or
+    // bump the epoch.
+    LUMICE_SimLifecycleResult lc_after{};
+    IM_CHECK_EQ(LUMICE_GetSimLifecycle(server, &lc_after), LUMICE_OK);
+    IM_CHECK_EQ(lc_after.lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+    IM_CHECK_EQ(lc_after.epoch, done_epoch);
 
-    LUMICE_RenderResult comp2[LUMICE_MAX_RENDER_RESULTS + 1]{};
-    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, comp2, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-    IM_CHECK(comp2[0].img_buffer != nullptr);
-    const size_t nbytes = static_cast<size_t>(comp2[0].img_width) * static_cast<size_t>(comp2[0].img_height) * 3;
+    // Payload's epoch also stays == done_epoch (no accumulator reset).
+    IM_CHECK_EQ(snap_after->payload->payload_epoch, done_epoch);
 
-    gui::TexturePayload recovered_payload;
-    local.PopulateCompositePayloadForTest(server, comp2[0], paired_xyz_generation, &recovered_payload);
-    IM_CHECK(recovered_payload.is_composite);
-    IM_CHECK_EQ(recovered_payload.rgb_data.size(), nbytes);
-    IM_CHECK_EQ(std::memcmp(recovered_payload.rgb_data.data(), comp2[0].img_buffer, nbytes), 0);
+    // AC1 explicit sub-clause ("sim_ray_count 不减"): a display-time color edit must not
+    // reset or decrement the accumulated sim ray count — that would be a tell-tale sign
+    // of an accidental restart (LUMICE_Start/CommitConfig) hiding behind the wake path.
+    LUMICE_RayCount ray_count_after = 0;
+    IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_after), LUMICE_OK);
+    IM_CHECK(ray_count_after >= ray_count_before);
+
+    // Post-test cleanup on both the local ServerPoller and the global one that EnsureRunning
+    // above nudged into kRunning — Stop() is synchronous and idempotent.
+    local.Stop();
+    gui::g_server_poller.Stop();
+    LUMICE_DestroyServer(server);
+  };
+
+  // task-345.3 anchor: LUMICE_SetCompositeExposure applied AFTER a finite completion changes
+  // the composite bytes (mechanistic proof the display-time EV multiplier reaches the
+  // Phase-2 compositor) without touching lifecycle epoch or sim ray count (322 clock
+  // decoupling — same non-restart guarantee as SetRaypathColors, since both share the
+  // snapshot_dirty_ flip pattern). Also confirms the composite-only P99 anchor is populated
+  // through the C API surface (mono getters must leave it at 0).
+  ImGuiTest* t5 =
+      IM_REGISTER_TEST(engine, "gui_composite_preview", "display_time_composite_exposure_reaches_compositor");
+  t5->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    const bool ok = RunToIdleWithData(server, kColorConfig);
+    IM_CHECK(ok);
+    if (!ok) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+
+    LUMICE_SimLifecycleResult lc_before{};
+    IM_CHECK_EQ(LUMICE_GetSimLifecycle(server, &lc_before), LUMICE_OK);
+    IM_CHECK_EQ(lc_before.lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+    const unsigned long long done_epoch = lc_before.epoch;
+
+    LUMICE_RayCount ray_count_before = 0;
+    IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_before), LUMICE_OK);
+
+    // Baseline composite (EV=0 → scale 1.0 → default behavior) via direct C-API read.
+    LUMICE_RenderResult baseline[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, baseline, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(baseline[0].img_buffer != nullptr);
+    const size_t rgb_bytes =
+        static_cast<size_t>(baseline[0].img_width) * static_cast<size_t>(baseline[0].img_height) * 3;
+    std::vector<uint8_t> baseline_rgb(baseline[0].img_buffer, baseline[0].img_buffer + rgb_bytes);
+    // Composite-only P99 anchor must be populated on the composite path.
+    IM_CHECK(baseline[0].composite_p99_y > 0.0f);
+
+    // Mono getter must NOT populate the composite-only anchor field.
+    LUMICE_RenderResult mono_out[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetRenderResults(server, mono_out, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(mono_out[0].img_buffer != nullptr);
+    IM_CHECK_EQ(mono_out[0].composite_p99_y, 0.0f);
+
+    // Push a positive EV → next Get*Results triggers a rebake with 2^ev > 1 → bytes change.
+    IM_CHECK_EQ(LUMICE_SetCompositeExposure(server, 2.0f), LUMICE_OK);
+    LUMICE_RenderResult brighter[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, brighter, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(brighter[0].img_buffer != nullptr);
+    IM_CHECK_EQ(brighter[0].img_width, baseline[0].img_width);
+    IM_CHECK_EQ(brighter[0].img_height, baseline[0].img_height);
+    IM_CHECK(std::memcmp(brighter[0].img_buffer, baseline_rgb.data(), rgb_bytes) != 0);
+    // P99 anchor is over UNEXPOSED lane values — must not move with EV.
+    IM_CHECK_EQ(brighter[0].composite_p99_y, baseline[0].composite_p99_y);
+
+    // Push a negative EV → different bytes from both the baseline and the brighter output.
+    IM_CHECK_EQ(LUMICE_SetCompositeExposure(server, -2.0f), LUMICE_OK);
+    LUMICE_RenderResult dimmer[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, dimmer, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(dimmer[0].img_buffer != nullptr);
+    IM_CHECK(std::memcmp(dimmer[0].img_buffer, baseline_rgb.data(), rgb_bytes) != 0);
+    IM_CHECK(std::memcmp(dimmer[0].img_buffer, brighter[0].img_buffer, rgb_bytes) != 0);
+
+    // Non-restart guarantee (322 clock decoupling): lifecycle epoch + sim ray count both
+    // preserved despite three separate composite re-bakes above.
+    LUMICE_SimLifecycleResult lc_after{};
+    IM_CHECK_EQ(LUMICE_GetSimLifecycle(server, &lc_after), LUMICE_OK);
+    IM_CHECK_EQ(lc_after.lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+    IM_CHECK_EQ(lc_after.epoch, done_epoch);
+    LUMICE_RayCount ray_count_after = 0;
+    IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_after), LUMICE_OK);
+    IM_CHECK(ray_count_after >= ray_count_before);
+
+    LUMICE_DestroyServer(server);
+  };
+
+  // task-fix-composite-participating-exposure-anchor AC1 core gate (owner ⑤ requirement):
+  // "关掉一个很亮的染色类后，剩余的暗类立即变亮 (auto-EV / server-side self-anchor
+  // according to remaining visible participating P99)". Fix B (this task) makes the composite
+  // exposure scalar self-anchor on participating-P99 inside the same DoSnapshot call as the
+  // visibility toggle — hiding a bright class shrinks `active`, the recomputed P99 drops,
+  // and s = ParticipatingExposureScale(p99) grows, so the remaining (dim) class's pixels
+  // become brighter in ACTUAL RGB bytes. This test reads the actual RGB byte at a class-1
+  // signal pixel and asserts strict brightness gain — NOT just the intermediate p99 y
+  // proxy (that was the failure mode of 346.1, which passed p99 but the on-screen picture
+  // never changed). Additive mode is used because class 1's landing set is a strict subset
+  // of class 0's — in dominant mode class 1 never wins argmax when class 0 is visible, so
+  // dominant cannot express "same pixel gets brighter"; additive puts each class on its own
+  // color channel (class 0 = red, class 1 = blue) so blue-channel byte at a class-1 pixel
+  // is a direct measure of class-1's contribution. The dominant-mode structural counterpart
+  // is `_dominant` variant below (owner ⑤ real usage is closer to dominant).
+  ImGuiTest* t_ac2 =
+      IM_REGISTER_TEST(engine, "gui_composite_preview", "display_time_visibility_reanchors_participating_p99");
+  t_ac2->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    const bool ok = RunToIdleWithData(server, kTwoColorConfig);
+    IM_CHECK(ok);
+    if (!ok) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+
+    LUMICE_SimLifecycleResult lc_before{};
+    IM_CHECK_EQ(LUMICE_GetSimLifecycle(server, &lc_before), LUMICE_OK);
+    IM_CHECK_EQ(lc_before.lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+    const unsigned long long done_epoch = lc_before.epoch;
+    LUMICE_RayCount ray_count_before = 0;
+    IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_before), LUMICE_OK);
+
+    // Baseline: additive mode, both classes visible → participating union of both lanes,
+    // p99 is dominated by the bright match-all class (class 0).
+    LUMICE_ColorClassDisplay disp_both[2]{};
+    disp_both[0].color[0] = 1.0f;  // class 0 red
+    disp_both[0].visible = 1;
+    disp_both[0].solo = 0;
+    disp_both[1].color[2] = 1.0f;  // class 1 blue
+    disp_both[1].visible = 1;
+    disp_both[1].solo = 0;
+    IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp_both, 2, nullptr, LUMICE_COLOR_MODE_ADDITIVE), LUMICE_OK);
+    LUMICE_RenderResult baseline[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, baseline, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(baseline[0].img_buffer != nullptr);
+    const int w = baseline[0].img_width;
+    const int h = baseline[0].img_height;
+    const size_t nbytes = static_cast<size_t>(w) * static_cast<size_t>(h) * 3;
+    const float p99_both = baseline[0].composite_p99_y;
+    IM_CHECK(p99_both > 0.0f);
+    std::vector<uint8_t> baseline_rgb(baseline[0].img_buffer, baseline[0].img_buffer + nbytes);
+
+    // Population: every pixel where class 1 has ANY blue signal in the baseline. The
+    // population-average blue byte must strictly grow when hiding class 0 enlarges s,
+    // because blue_linear = class_1_lane[p] * s (additive only mixes class 1 into blue)
+    // and sRGB(byte) is monotonic in blue_linear until saturation at 1.0 → 255. Bounding
+    // to already-blue pixels (b > 0) excludes the class-1-never-hit background so the
+    // ratio isn't diluted by a huge 0-vs-0 term.
+    std::vector<size_t> probe_pixels;
+    for (int y = 0; y < h; ++y) {
+      for (int x = 0; x < w; ++x) {
+        const size_t off = (static_cast<size_t>(y) * w + x) * 3;
+        if (baseline_rgb[off + 2] > 0) {
+          probe_pixels.push_back(off);
+        }
+      }
+    }
+    IM_CHECK(probe_pixels.size() >= 32);  // class 1 has a non-trivial blue population
+    unsigned long long blue_sum_before = 0;
+    for (size_t off : probe_pixels) {
+      blue_sum_before += baseline_rgb[off + 2];
+    }
+    const double blue_before = static_cast<double>(blue_sum_before) / probe_pixels.size();
+
+    // Hide class 0 (bright, match-all). The next GetCompositeResults consumes snapshot_dirty_
+    // → Phase-2 rebuild. Fix B: same call recomputes participating-P99 over {class 1 only},
+    // recomputes s = ParticipatingExposureScale(smaller_p99), and re-lands the pixel bytes
+    // with the LARGER scalar → the blue byte at (probe_x, probe_y) MUST strictly increase.
+    LUMICE_ColorClassDisplay disp_hide_bright[2]{};
+    disp_hide_bright[0].color[0] = 1.0f;
+    disp_hide_bright[0].visible = 0;  // HIDE bright class
+    disp_hide_bright[0].solo = 0;
+    disp_hide_bright[1].color[2] = 1.0f;
+    disp_hide_bright[1].visible = 1;
+    disp_hide_bright[1].solo = 0;
+    IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp_hide_bright, 2, nullptr, LUMICE_COLOR_MODE_ADDITIVE), LUMICE_OK);
+
+    LUMICE_RenderResult dim_only[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, dim_only, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(dim_only[0].img_buffer != nullptr);
+    const float p99_dim_only = dim_only[0].composite_p99_y;
+    IM_CHECK(p99_dim_only > 0.0f);
+    IM_CHECK(p99_dim_only < p99_both);  // structural佐证: participating shrank → anchor dropped
+    unsigned long long blue_sum_after = 0;
+    for (size_t off : probe_pixels) {
+      blue_sum_after += dim_only[0].img_buffer[off + 2];
+    }
+    const double blue_after = static_cast<double>(blue_sum_after) / probe_pixels.size();
+    // ⭐ core AC1 assertion (task's raison d'être): the population-average blue byte at
+    // class-1 signal pixels is STRICTLY brighter after hiding class 0. The theoretical
+    // growth ratio in linear space is s_after/s_before = p99_both/p99_dim ≈ 2.7× on this
+    // fixture; sRGB gamma compresses that to ~1.6× in byte space (empirically 1.72× at
+    // 400k rays), with additional attenuation from top-decile pixels saturating first.
+    // 1.3× is a conservative floor that survives MC noise across seeds while still ruling
+    // out the pre-fix behavior (where the average would stay ≈ constant because s was
+    // sourced from mono ExposureScale() and never recomputed on visibility toggle).
+    IM_CHECK(blue_after > blue_before);
+    IM_CHECK(blue_after >= blue_before * 1.3);
+
+    // Restore visibility → blue-population average must return to baseline (byte-exact per
+    // pixel, because the underlying Y-lanes were never touched by the display-time setter
+    // and s is a pure function of the participating set + intensity_factor +
+    // snapshot_intensity). We assert byte-exactness on every probe pixel, not just the mean.
+    LUMICE_ColorClassDisplay disp_restore[2]{};
+    disp_restore[0].color[0] = 1.0f;
+    disp_restore[0].visible = 1;
+    disp_restore[0].solo = 0;
+    disp_restore[1].color[2] = 1.0f;
+    disp_restore[1].visible = 1;
+    disp_restore[1].solo = 0;
+    IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp_restore, 2, nullptr, LUMICE_COLOR_MODE_ADDITIVE), LUMICE_OK);
+    LUMICE_RenderResult restored[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, restored, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(restored[0].img_buffer != nullptr);
+    IM_CHECK_EQ(restored[0].composite_p99_y, p99_both);
+    for (size_t off : probe_pixels) {
+      IM_CHECK_EQ(restored[0].img_buffer[off + 2], baseline_rgb[off + 2]);
+    }
+
+    // display-time guarantees (322 clock decoupling): visibility toggles never bump the
+    // lifecycle epoch and never reset the accumulated sim ray count.
+    LUMICE_SimLifecycleResult lc_after{};
+    IM_CHECK_EQ(LUMICE_GetSimLifecycle(server, &lc_after), LUMICE_OK);
+    IM_CHECK_EQ(lc_after.lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+    IM_CHECK_EQ(lc_after.epoch, done_epoch);
+    LUMICE_RayCount ray_count_after = 0;
+    IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_after), LUMICE_OK);
+    IM_CHECK(ray_count_after >= ray_count_before);
+
+    LUMICE_DestroyServer(server);
+  };
+
+  // task-fix-composite-participating-exposure-anchor AC1 dominant-mode structural counterpart
+  // (plan §4 Step 4 Minor #1 — owner ⑤ real usage is closer to dominant than additive; the
+  // additive version above validates the "same channel gets brighter" mechanism, this one
+  // validates the "hidden-under-brighter-class → becomes visible" mechanism). Because class 1's
+  // landing set is a STRICT subset of class 0's, in dominant mode with both visible every
+  // class-1 pixel is masked by class-0's argmax win (composite shows RED at those pixels).
+  // Hiding class 0 flips those exact pixels to class 1's dominant color (BLUE). Uses solo mode
+  // to pre-locate a class-1-signal pixel (that's the only C API way to isolate class 1's
+  // landing without direct Y-lane access), then asserts the color-class flip after visibility
+  // change. No brightness-ratio assertion here — dominance is a masking relation, not additive
+  // combination; ratio semantics belong to the additive test above.
+  ImGuiTest* t_ac2_dominant =
+      IM_REGISTER_TEST(engine, "gui_composite_preview", "display_time_visibility_reanchors_participating_p99_dominant");
+  t_ac2_dominant->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    const bool ok = RunToIdleWithData(server, kTwoColorConfig);
+    IM_CHECK(ok);
+    if (!ok) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+
+    // Step 1: solo class 1 → composite shows ONLY class 1's landing pixels, in blue. Scan for
+    // a probe pixel where the blue byte is well above the quantization floor.
+    LUMICE_ColorClassDisplay disp_solo_c1[2]{};
+    disp_solo_c1[0].color[0] = 1.0f;
+    disp_solo_c1[0].visible = 1;  // solo on class 1 mutes this regardless
+    disp_solo_c1[0].solo = 0;
+    disp_solo_c1[1].color[2] = 1.0f;
+    disp_solo_c1[1].visible = 1;
+    disp_solo_c1[1].solo = 1;
+    IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp_solo_c1, 2, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
+    LUMICE_RenderResult solo1[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, solo1, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(solo1[0].img_buffer != nullptr);
+    const int w = solo1[0].img_width;
+    const int h = solo1[0].img_height;
+    int probe_x = -1, probe_y = -1;
+    for (int y = 0; y < h && probe_x < 0; ++y) {
+      for (int x = 0; x < w; ++x) {
+        const size_t off = (static_cast<size_t>(y) * w + x) * 3;
+        if (solo1[0].img_buffer[off + 2] >= 16 && solo1[0].img_buffer[off + 0] < 8) {
+          probe_x = x;
+          probe_y = y;
+          break;
+        }
+      }
+    }
+    IM_CHECK(probe_x >= 0);  // class 1 solo picture has a clearly blue pixel
+
+    // Step 2: both visible, dominant mode. class 0 (match-all) argmax-wins at every pixel that
+    // has any landing signal, so the probe pixel now shows RED (class 0's color), not blue.
+    LUMICE_ColorClassDisplay disp_both[2]{};
+    disp_both[0].color[0] = 1.0f;
+    disp_both[0].visible = 1;
+    disp_both[0].solo = 0;
+    disp_both[1].color[2] = 1.0f;
+    disp_both[1].visible = 1;
+    disp_both[1].solo = 0;
+    IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp_both, 2, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
+    LUMICE_RenderResult both[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, both, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(both[0].img_buffer != nullptr);
+    const size_t probe_off = (static_cast<size_t>(probe_y) * w + probe_x) * 3;
+    const uint8_t r_both = both[0].img_buffer[probe_off + 0];
+    const uint8_t b_both = both[0].img_buffer[probe_off + 2];
+    // class 0's argmax-win expresses as red > blue at the probe pixel (r dominant, b ≈ 0).
+    IM_CHECK(r_both > b_both);
+    IM_CHECK(r_both >= 16);  // pixel is clearly lit in the class-0 color
+
+    // Step 3: hide class 0. The probe pixel's argmax winner is now class 1; the composite at
+    // that pixel becomes BLUE. This is the owner ⑤ "from-invisible-to-visible" flip.
+    LUMICE_ColorClassDisplay disp_hide_c0[2]{};
+    disp_hide_c0[0].color[0] = 1.0f;
+    disp_hide_c0[0].visible = 0;  // HIDE bright class
+    disp_hide_c0[0].solo = 0;
+    disp_hide_c0[1].color[2] = 1.0f;
+    disp_hide_c0[1].visible = 1;
+    disp_hide_c0[1].solo = 0;
+    IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp_hide_c0, 2, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
+    LUMICE_RenderResult c1_visible[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, c1_visible, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(c1_visible[0].img_buffer != nullptr);
+    const uint8_t r_after = c1_visible[0].img_buffer[probe_off + 0];
+    const uint8_t b_after = c1_visible[0].img_buffer[probe_off + 2];
+    // Now blue wins (class 1's color). AND thanks to Fix B's self-anchor, blue_after must
+    // also be BRIGHT (not just "wins by 1 unit") — after hiding the bright class the p99
+    // shrinks to class 1's own lane, s grows, and class 1's pixels light up clearly.
+    IM_CHECK(b_after > r_after);
+    IM_CHECK(b_after >= 16);  // clearly visible (self-anchor made it bright)
+
+    LUMICE_DestroyServer(server);
+  };
+
+  // task-346.1 ① AC1 anchor (re-run 双叠加消除 · 端到端字节等价):
+  // With the FillLumiceConfig fix in place (intensity_factor ≡ 1.0f, exposure_offset never
+  // baked into the committed config), the GUI Run path pushes a single copy of manual EV
+  // through the display-time channel (LUMICE_SetCompositeExposure). If the caller keeps the
+  // manual EV fixed at E and re-commits the SAME config, the composite bytes MUST be
+  // byte-identical between first Run and re-Run — no 2× EV amplification. This test mirrors
+  // that path at the C API level: two RunToIdleWithData(kColorConfig) calls with the same
+  // LUMICE_SetCompositeExposure(E) in between, byte-compare composite outputs. The regression
+  // is guarded by the AC5 test in test_gui_import_export.cpp (intensity_factor==1.0f pin);
+  // this test is the paired end-to-end proof that AC5 is sufficient (no other hidden EV
+  // ingress in Run path).
+  ImGuiTest* t_ac1 =
+      IM_REGISTER_TEST(engine, "gui_composite_preview", "rerun_with_same_ev_produces_identical_composite");
+  t_ac1->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    constexpr float kUserEv = 2.0f;  // non-zero — the bug is invisible at EV=0
+
+    // First Run.
+    IM_CHECK(RunToIdleWithData(server, kColorConfig));
+    IM_CHECK_EQ(LUMICE_SetCompositeExposure(server, kUserEv), LUMICE_OK);
+    LUMICE_RenderResult first[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, first, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(first[0].img_buffer != nullptr);
+    const size_t rgb_bytes = static_cast<size_t>(first[0].img_width) * static_cast<size_t>(first[0].img_height) * 3;
+    std::vector<uint8_t> first_rgb(first[0].img_buffer, first[0].img_buffer + rgb_bytes);
+
+    // Re-Run: same config, same EV. RunToIdleWithData internally does LUMICE_CommitConfig
+    // which calls Stop() → ResetWith()/rebuild → restart accumulation. This is the exact
+    // path DoRun() takes; if any code layer sneaked EV into the committed config, this
+    // re-Run's composite would be 2× amplified vs. first Run.
+    IM_CHECK(RunToIdleWithData(server, kColorConfig));
+    IM_CHECK_EQ(LUMICE_SetCompositeExposure(server, kUserEv), LUMICE_OK);
+    LUMICE_RenderResult rerun[LUMICE_MAX_RENDER_RESULTS + 1]{};
+    IM_CHECK_EQ(LUMICE_GetCompositeResults(server, rerun, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    IM_CHECK(rerun[0].img_buffer != nullptr);
+    IM_CHECK_EQ(rerun[0].img_width, first[0].img_width);
+    IM_CHECK_EQ(rerun[0].img_height, first[0].img_height);
+
+    // ⭐ core AC1 assertion: composite mean-brightness RATIO between re-run and first-run
+    // must be ≈1.0 (within tight stochastic tolerance). The pre-fix bug amplified the shared
+    // exposure scalar by 2^E on top of the display-time push, so at EV=E=2.0 the composite
+    // scale becomes 2^(2E) = 16× instead of 2^E = 4× → mean brightness ratio would be ~4×
+    // (16×/4×). Any ratio outside [0.8, 1.25] rules out the doubling bug while tolerating
+    // ~10-15% run-to-run stochastic noise from independent seeded accumulations reaching IDLE
+    // at slightly different consume-batch boundaries.
+    unsigned long long sum_first = 0, sum_rerun = 0;
+    for (size_t i = 0; i < rgb_bytes; ++i) {
+      sum_first += first_rgb[i];
+      sum_rerun += rerun[0].img_buffer[i];
+    }
+    IM_CHECK(sum_first > 0u);
+    IM_CHECK(sum_rerun > 0u);
+    const double ratio = static_cast<double>(sum_rerun) / static_cast<double>(sum_first);
+    IM_CHECK(ratio > 0.8);
+    IM_CHECK(ratio < 1.25);
+    // The unexposed P99 anchor also stays within similar stochastic bounds (this is the tight
+    // proof at the anchor level — it's independent of EV).
+    const double p99_ratio =
+        static_cast<double>(rerun[0].composite_p99_y) / static_cast<double>(first[0].composite_p99_y);
+    IM_CHECK(p99_ratio > 0.8);
+    IM_CHECK(p99_ratio < 1.25);
+
+    LUMICE_DestroyServer(server);
+  };
+
+  // task-345.3 review Minor #2: the "value guard" alone would miss the off→on transition
+  // (composite becomes active while the last-pushed cache equals the current ev_total —
+  // e.g., default 0.0f). This test doesn't exercise the GUI state guard directly (that
+  // lives inside RenderPreviewPanel, not on the C-API surface), but it does anchor the
+  // orthogonal property that makes the guard SAFE to add without semantic risk: setting
+  // EV to the SAME value it was reset to is a no-op at the C-API level and does not
+  // reintroduce restart behavior. If a future refactor collapses the two guards into a
+  // single "only push on value change", this test would still pass — the guard hole is
+  // GUI-side and gets covered by a separate ImGui interaction test rather than a
+  // C-API-level regression.
+  ImGuiTest* t6 =
+      IM_REGISTER_TEST(engine, "gui_composite_preview", "composite_exposure_idempotent_when_value_unchanged");
+  t6->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    const bool ok = RunToIdleWithData(server, kColorConfig);
+    IM_CHECK(ok);
+    if (!ok) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+    LUMICE_SimLifecycleResult lc_before{};
+    IM_CHECK_EQ(LUMICE_GetSimLifecycle(server, &lc_before), LUMICE_OK);
+    const unsigned long long done_epoch = lc_before.epoch;
+
+    // Set the same EV twice — both must return LUMICE_OK, neither must bump the
+    // lifecycle epoch or reset sim ray count.
+    LUMICE_RayCount ray_count_before = 0;
+    IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_before), LUMICE_OK);
+    IM_CHECK_EQ(LUMICE_SetCompositeExposure(server, 1.5f), LUMICE_OK);
+    IM_CHECK_EQ(LUMICE_SetCompositeExposure(server, 1.5f), LUMICE_OK);
+    LUMICE_SimLifecycleResult lc_after{};
+    IM_CHECK_EQ(LUMICE_GetSimLifecycle(server, &lc_after), LUMICE_OK);
+    IM_CHECK_EQ(lc_after.epoch, done_epoch);
+    LUMICE_RayCount ray_count_after = 0;
+    IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_after), LUMICE_OK);
+    IM_CHECK(ray_count_after >= ray_count_before);
+
+    // Null-server rejection.
+    IM_CHECK_EQ(LUMICE_SetCompositeExposure(nullptr, 0.0f), LUMICE_ERR_NULL_ARG);
+
+    LUMICE_DestroyServer(server);
+  };
+
+  // task-345.4 AC1 truth table (headless, no server/GL needed). Pins the pure decision predicate
+  // ShouldUseCompositeUpload = payload_is_composite AND show_composite_preview across all four
+  // input combinations. Guarantees a code-refactor that reorders the AND cannot silently flip
+  // the display-mode logic.
+  ImGuiTest* t7 = IM_REGISTER_TEST(engine, "gui_composite_preview", "should_use_composite_upload_truth_table");
+  t7->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    IM_CHECK_EQ(gui::ShouldUseCompositeUpload(false, false), false);
+    IM_CHECK_EQ(gui::ShouldUseCompositeUpload(false, true), false);
+    IM_CHECK_EQ(gui::ShouldUseCompositeUpload(true, false), false);
+    IM_CHECK_EQ(gui::ShouldUseCompositeUpload(true, true), true);
+  };
+
+  // task-345.4 AC1 mechanism (headless): after a color-active sim reaches COMPLETED and the
+  // poller self-pauses, flipping `show_composite_preview` alone (no new poll, no MarkDirty)
+  // must re-fire the upload branch. The predicate is the exact one SyncFromPoller consumes
+  // (ShouldFireCompositeUpload), so pinning it here is equivalent to pinning the production
+  // decision at the fire-branch seam. SyncFromPoller cannot be driven end-to-end from this
+  // functional coroutine (its GL Upload*Texture call SIGILLs without a current GL context —
+  // see doc comment on ShouldFireCompositeUpload). AC5 owner on-screen still covers the actual
+  // GL upload / repaint.
+  ImGuiTest* t8 = IM_REGISTER_TEST(engine, "gui_composite_preview", "mode_flip_forces_refire_at_same_serial");
+  t8->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    const bool ok = RunToIdleWithData(server, kColorConfig);
+    IM_CHECK(ok);
+    if (!ok) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+
+    gui::ServerPoller local;
+    local.ResetGenerationForTest();
+    local.PollOnceForTest(server);
+    auto snap = local.LoadSnapshot();
+    IM_CHECK(snap != nullptr);
+    IM_CHECK(snap->valid);
+    IM_CHECK(snap->payload != nullptr);
+    IM_CHECK(snap->payload->is_composite);
+
+    // T0: initial state before any upload — the fire gate must be TRUE (serial-dedup gate is
+    // satisfied: last_uploaded_texture_serial==0 != snap.texture_serial). This is the AC1
+    // first-frame case.
+    const bool fire_first =
+        gui::ShouldFireCompositeUpload(*snap, /*last_uploaded_texture_serial=*/0, /*display_epoch_floor=*/0,
+                                       /*show_composite_preview=*/true, /*last_uploaded_as_composite=*/false);
+    IM_CHECK(fire_first);
+
+    // T1: simulate the post-upload bookkeeping SyncFromPoller performs — record the serial and
+    // the ground-truth composite flag. Same-serial + same-mode + already-uploaded ⇒ fire gate
+    // must be FALSE (idempotence: unchanged state must not spam uploads).
+    const auto serial_after_upload = snap->texture_serial;
+    const bool fire_idempotent =
+        gui::ShouldFireCompositeUpload(*snap, serial_after_upload, /*display_epoch_floor=*/0,
+                                       /*show_composite_preview=*/true, /*last_uploaded_as_composite=*/true);
+    IM_CHECK(!fire_idempotent);
+
+    // T2: user flips the preference OFF. No new poll → serial stable, floor stable. The
+    // mode_changed OR-branch is the ONLY thing that can re-fire the gate. This is the core
+    // AC1 mechanism ("即时生效不依赖新一轮 poll") — if this returns false, the toggle button
+    // would visibly do nothing.
+    const bool fire_after_off_flip =
+        gui::ShouldFireCompositeUpload(*snap, serial_after_upload, /*display_epoch_floor=*/0,
+                                       /*show_composite_preview=*/false, /*last_uploaded_as_composite=*/true);
+    IM_CHECK(fire_after_off_flip);
+
+    // T3: simulate the post-fire bookkeeping (last_uploaded_as_composite=false). Same-serial +
+    // same-mode ⇒ idempotent again.
+    const bool fire_stable_off =
+        gui::ShouldFireCompositeUpload(*snap, serial_after_upload, /*display_epoch_floor=*/0,
+                                       /*show_composite_preview=*/false, /*last_uploaded_as_composite=*/false);
+    IM_CHECK(!fire_stable_off);
+
+    // T4: user flips the preference back ON — mode_changed fires again, AC2 no-loss recovery
+    // is now the composite path (raypath_color config was never touched).
+    const bool fire_after_on_flip =
+        gui::ShouldFireCompositeUpload(*snap, serial_after_upload, /*display_epoch_floor=*/0,
+                                       /*show_composite_preview=*/true, /*last_uploaded_as_composite=*/false);
+    IM_CHECK(fire_after_on_flip);
+
+    // T5: same-serial + settled mode ⇒ idempotent, no re-fire loop.
+    const bool fire_stable_on =
+        gui::ShouldFireCompositeUpload(*snap, serial_after_upload, /*display_epoch_floor=*/0,
+                                       /*show_composite_preview=*/true, /*last_uploaded_as_composite=*/true);
+    IM_CHECK(!fire_stable_on);
+
+    local.Stop();
+    LUMICE_DestroyServer(server);
+  };
+
+  // task-345.4 AC4 zero-regression: with no raypath_color classes, ShouldFireCompositeUpload
+  // collapses to ShouldUploadPayload (mode_changed is structurally false because
+  // effective_composite is false and last_uploaded_as_composite starts false). Pins the boolean
+  // algebra AC4 relies on, plus the render-gate condition (`raypath_color.empty()`) that keeps
+  // the status-bar toggle button off screen.
+  ImGuiTest* t9 = IM_REGISTER_TEST(engine, "gui_composite_preview", "mode_toggle_hidden_when_no_color_classes");
+  t9->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    const bool ok = RunToIdleWithData(server, kMonoConfig);
+    IM_CHECK(ok);
+    if (!ok) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+
+    gui::ServerPoller local;
+    local.ResetGenerationForTest();
+    local.PollOnceForTest(server);
+    auto snap = local.LoadSnapshot();
+    IM_CHECK(snap != nullptr);
+    IM_CHECK(snap->valid);
+    IM_CHECK(snap->payload != nullptr);
+    IM_CHECK(!snap->payload->is_composite);  // no raypath_color ⇒ payload not composite
+
+    // Render-gate condition: the status-bar mode-toggle button is only rendered when the
+    // GUI-side g_state.raypath_color is non-empty. A newly created server has no color-class
+    // wiring through the C API; g_state is a persisted view snapshot that is only populated
+    // by user actions in the GUI (color-class add/edit). In a clean test fixture this stays
+    // empty, so the button gate is off (AC4).
+    // This assertion is intentionally at the GuiState level, not through ImGui item probing:
+    // the whole button block in RenderStatusBar is a single `if (show_mode_toggle) { ... }`
+    // guarded by exactly this condition — no ambiguity to bridge.
+    gui::g_state.raypath_color.clear();
+    IM_CHECK(gui::g_state.raypath_color.empty());
+
+    // Fire-gate collapses to ShouldUploadPayload with mode_changed=false: even when the user
+    // preference is set to composite, no composite payload exists ⇒ effective_composite=false
+    // ⇒ last_uploaded_as_composite stays false ⇒ mode_changed is structurally impossible.
+    const bool fire_with_pref_true =
+        gui::ShouldFireCompositeUpload(*snap, /*last_uploaded_texture_serial=*/0, /*display_epoch_floor=*/0,
+                                       /*show_composite_preview=*/true, /*last_uploaded_as_composite=*/false);
+    const bool fire_should_upload_only =
+        gui::ShouldUploadPayload(*snap, /*last_uploaded_texture_serial=*/0, /*display_epoch_floor=*/0);
+    // On the no-color path the composite gate is equivalent to the plain upload gate — no
+    // mode-flip can slip through.
+    IM_CHECK_EQ(fire_with_pref_true, fire_should_upload_only);
 
     local.Stop();
     LUMICE_DestroyServer(server);

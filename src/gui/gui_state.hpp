@@ -728,6 +728,10 @@ struct GuiState {
     last_uploaded_texture_serial = 0;
     snapshot_intensity = 0;  // immediate clear; the new backend's first payload fills it back in
     p99_raw_y = 0.0f;
+    // task-345.4: the new backend has not uploaded anything yet — clear the ground-truth mode
+    // record. show_composite_preview is deliberately NOT reset (it is a user preference; a
+    // backend swap must not silently flip the user's chosen display mode).
+    last_uploaded_as_composite = false;
   }
 
   // Panel state (view preference — does not call MarkDirty)
@@ -782,16 +786,35 @@ struct GuiState {
   float ev_auto = 0.0f;         // P99-anchored auto-EV in stops; recomputed from p99_raw_y
   float target_white = 135.0f;  // Target P99 brightness on 0-255 sRGB scale
 
+  // task-345.4: display-time raypath-color composite vs full-spectrum toggle.
+  // Neither field triggers MarkDirty/MarkFilterDirty — this is a display-time
+  // choice on which already-produced payload buffer to upload, orthogonal to
+  // the sim/dirty/Revert lifecycle (blueprint §4.0).
+  // Ownership contract (single-writer discipline, review Suggestion #1):
+  //   - `show_composite_preview`: user preference. WRITTEN ONLY by the top-bar
+  //     checkbox in RenderTopBar (src/gui/app_panels.cpp; relocated from
+  //     RenderStatusBar by task-colored-toggle-to-topbar / 346.3). READ by
+  //     SyncFromPoller (folded into effective_composite via
+  //     ShouldUseCompositeUpload) and RenderTopBar (checkbox label/highlight
+  //     computed from `last_uploaded_as_composite`, not this field directly, to
+  //     avoid the transient-hallucination race described in the plan §3 keypoint 2).
+  //   - `last_uploaded_as_composite`: ground truth. WRITTEN ONLY by SyncFromPoller
+  //     (src/gui/app.cpp) after a successful upload. READ by RenderTopBar to
+  //     drive the persistent mode indicator.
+  bool show_composite_preview = true;
+  bool last_uploaded_as_composite = false;
+
   // Last committed config snapshot (for Revert — config fields only, no runtime state).
   //
   // Field-sync scope (audited 2026-04):
   //   Fields mirrored here must be the subset of GuiState classified as "configuration"
   //   (i.e. those reached by MarkDirty, contributing to the dirty/Revert lifecycle).
   //   View preferences (aspect_preset, bg_*, horizon/grid/sun circles, log levels,
-  //   left_panel_collapsed, right_panel_collapsed), runtime state (sim_state, run_intent,
-  //   committed_epoch, display_epoch_floor, last_uploaded_texture_serial, stats_*,
-  //   snapshot_intensity, texture_upload_count), and file management (current_file_path,
-  //   dirty, save_texture) are intentionally excluded.
+  //   left_panel_collapsed, right_panel_collapsed, show_composite_preview), runtime state
+  //   (sim_state, run_intent, committed_epoch, display_epoch_floor,
+  //   last_uploaded_texture_serial, last_uploaded_as_composite, stats_*, snapshot_intensity,
+  //   texture_upload_count), and file management (current_file_path, dirty, save_texture)
+  //   are intentionally excluded.
   //
   // Protection model (plan.md S1):
   //   - sizeof(ConfigSnapshot) guard below fires when THIS struct's fields change,

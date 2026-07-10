@@ -72,6 +72,11 @@ class ServerImpl {
   Error CommitConfig(const nlohmann::json& config_json, bool* out_reused = nullptr);
   std::vector<RenderResult> GetRenderResults();
   std::vector<RawXyzResult> GetRawXyzResults();
+  // task-345.2: atomic combined getter — one DoSnapshot() call, so xyz and
+  // composite are guaranteed to belong to the same snapshot_generation_ by
+  // construction (kills the poller's drift-guard, ④). See
+  // Server::GetRawXyzAndCompositeResults docstring for rationale.
+  void GetRawXyzAndCompositeResults(std::vector<RawXyzResult>& xyz_out, std::vector<RenderResult>& composite_out);
   std::optional<StatsResult> GetStatsResult();
   std::optional<StatsResult> GetCachedStatsResult();
   size_t GetLiveSimRayCount();
@@ -91,6 +96,14 @@ class ServerImpl {
   // new drawing rank of class i (sorted ascending by the compositor). Runs under consumer_mutex_ only — never touches
   // Stop/Start/scene_generation_/committed_epoch_/consumers_/scene_mutex_.
   Error SetRaypathColors(const ColorClassDisplay* classes, int class_count, const int* z_order, CompositeMode mode);
+
+  // task-345.3: display-time update of the composite-path EV multiplier.
+  // `ev_total` is applied as `2^ev_total` inside DoSnapshot Phase 2 (a single
+  // scalar shared across every lane / every mode — per-lane renormalization
+  // remains structurally excluded). No sim restart, no epoch bump: flips
+  // snapshot_dirty_ so the next Get*Results triggers one composite rebake
+  // with the new EV. Mono path is untouched (structural AC4).
+  Error SetCompositeExposure(float ev_total);
 
   // task-342.3 AC4: per-color-class empty-arc detector. Reads the frozen snapshot
   // lanes (no DoSnapshot trigger — GUI polling loop is expected to already query
@@ -157,6 +170,15 @@ class ServerImpl {
   // skips the compositor anyway).
   CompositeMode active_composite_mode_ = CompositeMode::kDominant;
 
+  // task-345.3: display-time EV for the composite path only. Zero (default) →
+  // 2^0 = 1.0 → composite behavior is bit-for-bit pre-345.3 (structural AC4
+  // for the CLI path, which never touches SetCompositeExposure). Written by
+  // SetCompositeExposure (also flips snapshot_dirty_) and consumed by
+  // DoSnapshot Phase 2's CompositeColorClassesLinear call — nowhere else.
+  // Read/write both go through consumer_mutex_ so it composes with the
+  // display-time class table under one lock.
+  float display_ev_total_ = 0.0f;
+
   QueuePtrS<SimBatch> scene_queue_;
   QueuePtrS<SimData> data_queue_;
 
@@ -182,6 +204,11 @@ class ServerImpl {
     int w_;
     int h_;
     std::vector<uint8_t> rgb_;  // W*H*3 sRGB
+    // task-345.3: P99 over the union of NON-ZERO UNEXPOSED (raw lane) Y
+    // values across every participating class. The composite-path auto-EV
+    // anchor consumed by the GUI (mono path keeps xyz_data-derived P99).
+    // 0 when no participating class carries any positive Y.
+    float p99_y_ = 0.0f;
   };
   std::vector<CompositeResult> cached_composite_results_;
 
@@ -203,6 +230,7 @@ class ServerImpl {
       r.img_width_ = cr.w_;
       r.img_height_ = cr.h_;
       r.img_buffer_ = cr.rgb_.data();  // points into ServerImpl-owned cache
+      r.composite_p99_y_ = cr.p99_y_;
       out.push_back(r);
     }
     return out;
@@ -627,6 +655,7 @@ bool ServerImpl::DoSnapshot() {
   std::vector<ConsumerPtrS> snapshot_consumers;
   ColorClassTable snap_class_table;
   CompositeMode snap_composite_mode = CompositeMode::kDominant;
+  float snap_display_ev_total = 0.0f;
   {
     std::lock_guard<TicketMutex> lock(consumer_mutex_);
     if (!snapshot_dirty_) {
@@ -644,6 +673,7 @@ bool ServerImpl::DoSnapshot() {
     // discipline as before, negligible cost per snapshot.
     snap_class_table = active_class_table_;
     snap_composite_mode = active_composite_mode_;
+    snap_display_ev_total = display_ev_total_;
     snapshot_dirty_ = false;
     // task-342.4 Step 1: bumping the generation is now the shared owner's
     // responsibility (previously lived only in GetRawXyzResults's Phase-1).
@@ -688,7 +718,14 @@ bool ServerImpl::DoSnapshot() {
         continue;
       }
       std::vector<float> linear_rgb;
-      if (!CompositeColorClassesLinear(*rc, snap_class_table, snap_composite_mode, linear_rgb)) {
+      // task-345.3: display-time EV multiplier + participating-P99 anchor
+      // both flow through the compositor in one pass. `display_exposure_scale
+      // = 2^snap_display_ev_total`; CLI paths never call SetCompositeExposure
+      // so snap_display_ev_total stays at 0 → 2^0 = 1.0 → no behavior change.
+      const float display_exposure_scale = std::pow(2.0f, snap_display_ev_total);
+      float participating_p99 = 0.0f;
+      if (!CompositeColorClassesLinear(*rc, snap_class_table, snap_composite_mode, display_exposure_scale, linear_rgb,
+                                       &participating_p99)) {
         continue;
       }
       CompositeResult cr;
@@ -701,6 +738,7 @@ bool ServerImpl::DoSnapshot() {
       cr.w_ = rc->ImageWidth();
       cr.h_ = rc->ImageHeight();
       LinearRgbToSrgbU8(linear_rgb, cr.rgb_);
+      cr.p99_y_ = participating_p99;
       composite_results.push_back(std::move(cr));
     }
     cached_render_results_ = std::move(render_results);
@@ -757,6 +795,54 @@ std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
   // which now runs unconditionally through DoSnapshot() from every accessor —
   // so cached_stats_result_ stays up to date via a single owner.
   return results;
+}
+
+// task-345.2: atomic combined read. Kills the ServerPoller drift-guard (④) by
+// funneling xyz + composite through exactly ONE DoSnapshot() trigger — a
+// concurrent ConsumeData bump cannot slip a second Phase-2 rebuild between the
+// two reads, so composite_out is guaranteed to belong to xyz_out[0]'s
+// snapshot_generation_ by construction (structural, not probabilistic).
+//
+// The lock discipline mirrors GetRawXyzResults + GetCompositeResults verbatim
+// (consumer_mutex_ then snapshot_mutex_; the two mutexes are never held
+// nested), so no new lock-ordering surface. Body kept a direct merge (not
+// helper-extracted) — plan-review flagged the light duplication with the two
+// existing getters as a code-review-time follow-up, not a blocker; see plan
+// §7 risk 2 mitigation ("严格镜像现有加锁顺序").
+void ServerImpl::GetRawXyzAndCompositeResults(std::vector<RawXyzResult>& xyz_out,
+                                              std::vector<RenderResult>& composite_out) {
+  xyz_out.clear();
+  composite_out.clear();
+  DoSnapshot();
+  std::vector<ConsumerPtrS> snapshot_consumers;
+  bool valid_data = false;
+  uint64_t generation = 0;
+  {
+    std::lock_guard<TicketMutex> lock(consumer_mutex_);
+    valid_data = has_ever_consumed_;
+    generation = snapshot_generation_;
+    snapshot_consumers = consumers_;
+  }
+  std::lock_guard<std::mutex> lock(snapshot_mutex_);
+  for (const auto& c : snapshot_consumers) {
+    auto* render_consumer = dynamic_cast<RenderConsumer*>(c.get());
+    if (render_consumer) {
+      auto r = render_consumer->GetRawXyzResult();
+      r.has_valid_data_ = valid_data;
+      r.snapshot_generation_ = generation;
+      r.epoch_ = committed_epoch_.load(std::memory_order_acquire);
+      xyz_out.push_back(r);
+    }
+  }
+  composite_out.reserve(cached_composite_results_.size());
+  for (const auto& cr : cached_composite_results_) {
+    RenderResult r;
+    r.renderer_id_ = cr.renderer_id_;
+    r.img_width_ = cr.w_;
+    r.img_height_ = cr.h_;
+    r.img_buffer_ = cr.rgb_.data();
+    composite_out.push_back(r);
+  }
 }
 
 std::optional<StatsResult> ServerImpl::GetStatsResult() {
@@ -1339,6 +1425,23 @@ Error ServerImpl::SetRaypathColors(const ColorClassDisplay* classes, int class_c
 }
 
 
+// =============== ServerImpl::SetCompositeExposure ===============
+// task-345.3: display-time EV for the composite path. Same shape as
+// SetRaypathColors: writes one field under consumer_mutex_ then flips
+// snapshot_dirty_ so the next Get*Results triggers exactly one composite
+// rebake with the new EV. No validation on ev_total — any finite float is
+// legitimate (the GUI already clamps to [-6, 6] before calling; the server
+// intentionally does not double-clamp so a hypothetical future caller can
+// pass through). No epoch bump, no consumers rebuild, no scene_mutex_
+// touched — see SetRaypathColors for the identical discipline this follows.
+Error ServerImpl::SetCompositeExposure(float ev_total) {
+  std::lock_guard<TicketMutex> lock(consumer_mutex_);
+  display_ev_total_ = ev_total;
+  snapshot_dirty_ = true;
+  return Error::Success();
+}
+
+
 // =============== ServerImpl::GetColorClassSignals ===============
 // task-342.3 AC4: reads snapshot Y-lanes (no DoSnapshot trigger; caller has been
 // polling composite/xyz results and thus has a fresh snapshot). Aggregates
@@ -1462,6 +1565,17 @@ std::vector<RawXyzResult> Server::GetRawXyzResults() {
   return impl_->GetRawXyzResults();
 }
 
+void Server::GetRawXyzAndCompositeResults(std::vector<RawXyzResult>& xyz_out,
+                                          std::vector<RenderResult>& composite_out) {
+  xyz_out.clear();
+  composite_out.clear();
+  if (!impl_) {
+    LOG_WARNING("Server is terminated!");
+    return;
+  }
+  impl_->GetRawXyzAndCompositeResults(xyz_out, composite_out);
+}
+
 std::optional<StatsResult> Server::GetStatsResult() {
   if (!impl_) {
     LOG_WARNING("Server is terminated!");
@@ -1542,6 +1656,13 @@ Error Server::SetRaypathColors(const ColorClassDisplay* classes, int class_count
     return Error::ServerNotReady("Server is terminated");
   }
   return impl_->SetRaypathColors(classes, class_count, z_order, mode);
+}
+
+Error Server::SetCompositeExposure(float ev_total) {
+  if (!impl_) {
+    return Error::ServerNotReady("Server is terminated");
+  }
+  return impl_->SetCompositeExposure(ev_total);
 }
 
 Error Server::GetColorClassSignals(uint8_t* out_flags, int class_count) {

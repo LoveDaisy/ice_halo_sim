@@ -98,6 +98,16 @@ typedef struct LUMICE_RenderResult_ {
   const unsigned char* img_buffer;  // Read-only, managed by Server.
                                     // Valid until next LUMICE_GetRenderResults() or LUMICE_CommitConfig().
                                     // Sentinel: img_buffer == NULL
+  // task-345.3: composite-only auto-EV anchor. Populated by
+  // LUMICE_GetCompositeResults / LUMICE_GetRawXyzAndCompositeResults's composite_out —
+  // MEANINGFUL ONLY on the composite path. LUMICE_GetRenderResults (mono/full-spectrum)
+  // leaves this at 0 and consumers must ignore it there. Composite path: P99 over the
+  // union of NON-ZERO UNEXPOSED (raw lane) Y values across every participating color
+  // class (the anchor the GUI's auto-EV feeds into ComputeEvAuto for composite display).
+  // 0 on the composite path means no participating class carried any positive Y this
+  // snapshot (all-black composite / all classes hidden). See doc/ev-pipeline-architecture.md
+  // §2.4 for why this field is composite-only.
+  float composite_p99_y;
 } LUMICE_RenderResult;
 
 typedef struct LUMICE_RawXyzResult_ {
@@ -575,6 +585,23 @@ typedef struct LUMICE_ColorClassDisplay_ {
 LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server, const LUMICE_ColorClassDisplay* classes,
                                          int class_count, const int* z_order, int mode);
 
+// task-345.3: display-time EV for the composite (raypath_color) path only.
+// `ev_total` is applied as `2^ev_total` inside the composite bake — a single scalar shared
+// by every participating color class (per-class renormalization stays structurally excluded;
+// the mono / non-composite path is unaffected).
+//
+// No accumulator reset / no epoch bump / no sim restart — the setter just flips the internal
+// snapshot_dirty_ flag, so the next LUMICE_GetCompositeResults() (or GetRawXyzAndComposite)
+// rebuilds the composite with the new EV. Callers that already keep the poller running (a
+// live sim, or a display-time refresh triggered by other setters) get the new brightness on
+// the next poll; callers that stopped the poller must wake it (mirrors the
+// LUMICE_SetRaypathColors + poller-wake pattern used by the GUI).
+//
+// Thread safety: display-time only; safe relative to other display-time getters (Get*Results,
+// LUMICE_GetSimLifecycle, LUMICE_SetRaypathColors, etc.). NOT thread-safe with concurrent
+// LUMICE_CommitConfig{,Struct} (same single-owner rule as the rest of the display-time surface).
+LUMICE_ErrorCode LUMICE_SetCompositeExposure(LUMICE_Server* server, float ev_total);
+
 // Per-color-class empty-arc detector (task-342.3 AC4). For each committed color class, reports
 // whether the class has any non-zero pixel in its snapshot Y-lane on any active RenderConsumer
 // — i.e. whether it has captured any rays yet. Intended for GUI empty-arc warnings when a
@@ -665,6 +692,27 @@ LUMICE_ErrorCode LUMICE_GetCompositeResults(LUMICE_Server* server, LUMICE_Render
 // Fill raw XYZ results into out array (xyz_buffer == NULL sentinel when count < max_count).
 // Returns unconverted XYZ float data + intensity scalars for GPU-side conversion.
 LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzResult* out, int max_count);
+
+// task-345.2: atomic combined getter — fills raw XYZ + composite results from a
+// SINGLE server-side snapshot. Composite results are guaranteed to belong to
+// xyz_out[0].snapshot_generation by construction (structural, not
+// probabilistic). Prefer this over calling LUMICE_GetRawXyzResults() +
+// LUMICE_GetCompositeResults() separately when the caller needs both in one
+// coherent view (e.g. the GUI poller under an active simulation, where
+// concurrent batch churn between two independent calls otherwise pairs xyz
+// with a newer-generation composite).
+//
+// Sentinels: xyz_out[xyz_count].xyz_buffer == NULL when xyz_count < xyz_max_count;
+// composite_out[composite_count].img_buffer == NULL when composite_count < composite_max_count.
+// Composite is empty (composite_out[0] sentinel) when no `raypath_color` is configured.
+//
+// Lifetime: same as the individual getters — pointers stay valid until the
+// NEXT LUMICE_Get*Results() call (which may trigger a new snapshot) or
+// LUMICE_CommitConfig(). Copy the pixels before the next Get*Results if you
+// need them.
+LUMICE_ErrorCode LUMICE_GetRawXyzAndCompositeResults(LUMICE_Server* server, LUMICE_RawXyzResult* xyz_out,
+                                                     int xyz_max_count, LUMICE_RenderResult* composite_out,
+                                                     int composite_max_count);
 
 // Fill stats results into out array (sim_ray_num == 0 sentinel when count < max_count).
 // Note: triggers DoSnapshot internally (includes PostSnapshot XYZ→RGB conversion).

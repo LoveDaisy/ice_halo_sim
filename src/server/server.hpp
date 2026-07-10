@@ -120,6 +120,13 @@ struct RenderResult {
    */
   const uint8_t* img_buffer_;
 
+  // task-345.3: composite path's auto-EV anchor — P99 over the union of
+  // NON-ZERO UNEXPOSED (raw lane) Y values across every participating class.
+  // ONLY populated by the composite Get*Results paths; mono paths leave this
+  // at 0 and consumers ignore it (see doc/ev-pipeline-architecture.md §2.4
+  // for why this is a composite-only field).
+  float composite_p99_y_ = 0.0f;
+
   /**
    * @brief Copy image data to a new vector
    * @return Vector containing image data (RGB format)
@@ -292,6 +299,25 @@ class Server {
   std::vector<RawXyzResult> GetRawXyzResults();
 
   /**
+   * @brief Atomically get raw XYZ + composite results from a single DoSnapshot().
+   * @details task-345.2: kills the poller drift-guard (④). Because only ONE
+   *          DoSnapshot() is triggered here, no concurrent ConsumeData bump
+   *          can insert a second Phase-2 rebuild between reading xyz and
+   *          composite — so the paired results are guaranteed to share the
+   *          same snapshot_generation_ by construction (structural, not
+   *          probabilistic). Prefer this over calling
+   *          GetRawXyzResults() + GetCompositeResults() separately when the
+   *          caller needs both in one coherent view (e.g. the GUI poller).
+   * @param xyz_out Raw XYZ results (one per RenderConsumer).
+   * @param composite_out Composite RGB results (one per colored consumer;
+   *        empty when no raypath_color is configured).
+   * @note Lifetime: same as the individual getters — img_buffer_/xyz_buffer_
+   *       pointers stay valid until the NEXT DoSnapshot() rebuild or
+   *       CommitConfig.
+   */
+  void GetRawXyzAndCompositeResults(std::vector<RawXyzResult>& xyz_out, std::vector<RenderResult>& composite_out);
+
+  /**
    * @brief Get statistics result
    * @return Optional StatsResult. Returns std::nullopt if no statistics result available.
    * @note This is a non-blocking call. It returns immediately even if processing is ongoing.
@@ -399,6 +425,15 @@ class Server {
    *         (commit-debounce cadence), not per-render-frame.
    */
   Error GetColorClassSignals(uint8_t* out_flags, int class_count);
+
+  /**
+   * @brief task-345.3: display-time EV multiplier for the composite path only.
+   * @param ev_total Total EV (manual + auto) to apply as 2^ev_total inside DoSnapshot Phase 2.
+   * @return Error::Success. Mono path is untouched — only the composite result carries the
+   *         resulting brightness change. Flips snapshot_dirty_ so the next Get*Results
+   *         re-bakes the composite; no epoch bump, no accumulator reset.
+   */
+  Error SetCompositeExposure(float ev_total);
 
  private:
   std::shared_ptr<ServerImpl> impl_;

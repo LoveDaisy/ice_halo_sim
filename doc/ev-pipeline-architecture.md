@@ -110,11 +110,42 @@ not be changed without re-calibrating the brightness baseline.
 | `snapshot_generation` | Increments per snapshot; compare to detect data changes |
 | `effective_pixels` | Non-zero pixel count (stats display) |
 
-The EV anchor (P99) is **not** a C API field — it is derived GUI-side from
-`xyz_buffer` (§2.5). C API consumers that need an anchor must compute their own.
+The EV anchor (P99) is **not** a C API field on the mono / full-spectrum path — it is
+derived GUI-side from `xyz_buffer` (§2.5). C API consumers that need an anchor for the
+mono path must compute their own.
+
+> **Composite-path exception (task-345.3)**: `LUMICE_RenderResult::composite_p99_y`
+> IS a C API field, but ONLY on the composite path (`LUMICE_GetCompositeResults` /
+> `LUMICE_GetRawXyzAndCompositeResults`'s `composite_out`). Semantics:
+>
+> - **Composite path** — populated with the P99 over the union of NON-ZERO
+>   UNEXPOSED (raw lane) Y values across every participating color class (visible or
+>   solo). This is the anchor the GUI's auto-EV feeds into `ComputeEvAuto` for the
+>   composite display.
+> - **Mono path** (`LUMICE_GetRenderResults`) — always `0`; consumers must ignore it
+>   on the mono getter.
+>
+> The carve-out exists because the per-color-class lane data does not cross the C API
+> boundary (`src/gui/` may only see the C API surface), so the GUI cannot derive this
+> statistic itself the way it does for the mono path. Also, the composite path needs
+> a "participating classes union" anchor rather than the mono full-spectrum P99: mixing
+> non-participating pixels back in was the "composite too dim" root cause task-345.3
+> fixes. The algorithm (`nth_element` at `⌊count × 0.99⌋`) is structurally identical to
+> the fine path of `ComputeP99Y` in `gui_ev_auto.hpp` — the two implementations live
+> apart because pulling a shared header down would drag one layer into the other. If
+> you touch one, mirror the change in the other file (cross-reference comments in
+> both locations).
 
 **Lifetime**: the `xyz_buffer` pointer is valid until the next
 `LUMICE_GetRawXyzResults()` or `LUMICE_CommitConfig()` call.
+
+**Composite EV setter**: `LUMICE_SetCompositeExposure(server, ev_total)` (task-345.3) is
+the display-time counterpart to `LUMICE_SetRaypathColors` — the GUI uses it to push the
+combined manual + auto EV onto the composite bake. `ev_total` is applied as `2^ev_total`
+inside the compositor as a single global scalar shared by every color class (per-lane
+renormalization stays structurally excluded — that was the false-color bug from the
+scrum-336 spike). No accumulator reset, no epoch bump; flips `snapshot_dirty_` so the
+next `Get*Results` rebakes the composite. Mono path is untouched.
 
 ### §2.5 GUI Poller and SyncFromPoller
 
@@ -296,6 +327,95 @@ re-derives from the new filtered image (§5).
 
 A `static_assert(sizeof(RenderConfig) == 136)` guards against silent field additions
 (`render_config.cpp:167`).
+
+### §6.5 GUI Run Path: `intensity_factor` is Neutral (task-346.1)
+
+The GUI Run path (`FillLumiceConfig` in `src/gui/file_io.cpp`) **always** commits
+`renderers[i].intensity_factor = 1.0f`, matching `RenderConfig::intensity_factor_`'s
+default. It **never** bakes `exposure_offset` into this field.
+
+Rationale — manual + auto EV in the GUI are entirely display-time:
+
+- Mono preview: `app.cpp RefreshPreviewParams` writes `pp.exposure.intensity_factor = 2^ev_total`
+  directly to the shader uniform (§4.1). It never reads `RenderConfig::intensity_factor_`.
+- Composite preview: `RenderPreviewPanel` pushes `LUMICE_SetCompositeExposure(ev_total)`
+  per frame → `display_ev_total_` → `display_exposure_scale = 2^display_ev_total_` →
+  the compositor multiplies it into the single shared exposure scalar
+  `s = ExposureScale() × display_exposure_scale` (§2.4 composite-path exception).
+  `ExposureScale() = config_.intensity_factor_ × kNormScale × total_pix / snapshot_intensity_`
+  (`render.cpp:93`); if `intensity_factor_` also carried `2^exposure_offset`, the manual EV
+  portion would be counted twice in `s`, producing 2× amplification on Re-Run.
+
+The **CLI/config export path** (`SerializeCoreConfig` in `src/gui/file_io.cpp`) is
+different — it DOES bake `2^exposure_offset` into the exported JSON's
+`render[].intensity_factor`. That is the legal semantic for CLI (which has no
+display-time EV concept): a config exported at GUI EV=E must reproduce the same
+brightness when re-run via CLI. Two paths, two semantics for the same field, both
+intentional. Cross-referenced in the code comments of both call sites.
+
+Regression pins:
+
+- `test/gui/functional/test_gui_import_export.cpp` →
+  `intensity_factor_ignores_exposure_offset_in_gui_run_path` (AC5 mechanism-layer).
+- `test/gui/functional/test_gui_composite_preview.cpp` →
+  `rerun_with_same_ev_produces_identical_composite` (AC1 end-to-end),
+  `display_time_visibility_reanchors_participating_p99` (AC2 display-time re-anchor).
+
+### §6.6 Composite-path server-side self-anchor (task-fix-composite-participating-exposure-anchor)
+
+The composite exposure scalar `s` was originally sourced from `RenderConsumer::ExposureScale()`
+— the same mono-path integrated-intensity normalization used by the standalone Y-lane. That
+worked for the initial delivery but broke the display-time visibility-toggle behavior owner ⑤
+wanted: "hide a bright color class → the remaining dim classes should immediately brighten in
+the same DoSnapshot." The pre-fix behavior only shifted the intermediate `composite_p99_y`
+proxy that GUI auto-EV read from — the actual composite RGB bytes were still anchored on the
+mono integral, so hiding a class did NOT rebrighten the visible ones on-screen. GUI auto-EV
+was the only path that could effect the intended rebrightening, and that path was a
+multi-frame indirect feedback loop that broke under poller steady-state auto-pause.
+
+Fix B — **serve-side self-anchor at the compositor**:
+
+- `RenderConsumer::ParticipatingExposureScale(participating_p99_y)` (render.cpp) is a sibling
+  of `ExposureScale()` that returns `intensity_factor * target_linear / participating_p99_y`,
+  where `target_linear` is the sRGB reverse transform of `target_white = 135` (mirror of
+  `gui_ev_auto.hpp::ComputeEvAuto`). `snapshot_intensity` does **not** appear in the numerator
+  — it cancels against the mono shader's downstream `intensity_scale = intensity_factor /
+  snapshot_intensity` step, which the composite path lacks (composite applies `s` directly to
+  `lane[p]`).
+- `CompositeColorClassesLinear` (component_compositor.cpp) reorders internal steps to
+  `GatherActiveClasses → ComputeParticipatingP99Y → ParticipatingExposureScale(p99) *
+  display_exposure_scale → per-pixel composite`. Every visibility/solo change flips
+  `snapshot_dirty_` and the next `LUMICE_GetCompositeResults` recomputes p99 over the (now
+  smaller) active set, so `s` grows, and the remaining classes' pixels brighten in the same
+  call — no GUI round-trip needed.
+- **GUI decoupling**: `RenderPreviewPanel` (app_panels.cpp) now pushes only the manual
+  `exposure_offset` for the composite path (`LUMICE_SetCompositeExposure(composite_ev_push)`),
+  not `ev_total = exposure_offset + ev_auto`. Auto-EV continues to drive only the mono
+  shader uniform. Server-side auto-anchoring makes the GUI auto-EV term redundant on the
+  composite side, and stripping it prevents the double-exposure (server self-anchor × GUI
+  auto-EV) that would otherwise stack.
+
+Invariants preserved:
+
+- Single shared exposure scalar (no per-lane normalization) → hue-angle continues to hold.
+- Mono path (`ExposureScale()`, mono shader `intensity_scale`) is not touched, so `AC5`
+  ("no raypath_color → mono path zero regression") holds structurally, not by test.
+- The `s <= 0` early-return path now writes `*out_participating_p99_y` with the actual
+  computed p99 (previously left untouched). No in-tree consumer depended on the untouched
+  behavior; the tightening is pinned by `EarlyReturnPublishesParticipatingP99`.
+
+Regression pins:
+
+- `test/unit-correctness/server/test_component_compositor.cpp` →
+  `ParticipatingExposureScaleGuards`, `ParticipatingExposureScaleFormulaCrossCheck`
+  (mechanism-layer independent recomputation, including a `rc_heavy` sibling asserting
+  `snapshot_intensity` does not leak into `s`), `EarlyReturnPublishesParticipatingP99`.
+- `test/gui/functional/test_gui_composite_preview.cpp` →
+  `display_time_visibility_reanchors_participating_p99` (AC1 additive-mode pixel-byte gate),
+  `display_time_visibility_reanchors_participating_p99_dominant` (AC1 dominant-mode
+  visibility-flip counterpart).
+- CLI e2e: `test/e2e-correctness/test_raypath_color.py` (references regenerated against the
+  new anchor; thresholds recalibrated).
 
 ---
 

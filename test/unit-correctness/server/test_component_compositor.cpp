@@ -1,10 +1,18 @@
 // Tests for task-339.4 (per-color-class compositor): the three display-time
 // composite modes (dominant / additive / painter), the orthogonal show/hide/
 // solo visibility axis, and — the crux — the SHARED-EXPOSURE invariant: every
-// mode multiplies each color-class's raw-Y lane by the single mono-image
-// exposure scale (RenderConsumer::ExposureScale()) and nothing else. There is
-// never a per-lane / per-composite renormalization (that was the spike's
-// false-color bug).
+// mode multiplies each color-class's raw-Y lane by ONE scalar `s` and nothing
+// else. There is never a per-lane / per-composite renormalization (that was
+// the spike's false-color bug).
+//
+// task-347 (Fix B): `s` is now server-side self-anchored on the participating
+// -P99 (RenderConsumer::ParticipatingExposureScale(p99)) rather than the mono
+// ExposureScale — so hiding a bright class instantly re-anchors the composite
+// off the surviving dim class(es). The SHARED-nature of `s` still holds
+// (single float, one per participating-class union), but the ANCHOR formula
+// changed. Every test below that predicts a pixel value now sources `s` via
+// a per-variant p99 probe + rc.ParticipatingExposureScale, not the mono
+// ExposureScale (which would decouple silently from the compositor after Fix B).
 //
 // Coverage (plan §4 A–E + AC additions):
 //   A — per-pixel mode math (dominant / additive / painter, incl. tie + painter
@@ -148,6 +156,19 @@ int FindLitPixel(const RenderConsumer& rc, int total_pix) {
   return -1;
 }
 
+// task-347 (Fix B) helper: run the compositor once purely to retrieve the
+// participating-P99 anchor without asserting on the RGB output; used by the
+// exposure-anchor tests below to independently recompute the expected `s`
+// via rc.ParticipatingExposureScale(p99). Assumes the class table has at
+// least one active lit lane (participating union non-empty).
+float FetchParticipatingP99(const RenderConsumer& rc, const ColorClassTable& table, CompositeMode mode) {
+  std::vector<float> tmp;
+  float p99 = 0.0f;
+  const bool ok = CompositeColorClassesLinear(rc, table, mode, 1.0f, tmp, &p99);
+  (void)ok;
+  return p99;
+}
+
 const std::array<float, 3> kRed{ 1.0f, 0.0f, 0.0f };
 const std::array<float, 3> kGreen{ 0.0f, 1.0f, 0.0f };
 const std::array<float, 3> kBlue{ 0.0f, 0.0f, 1.0f };
@@ -193,7 +214,14 @@ TEST(ComponentCompositor, DominantAdditivePainterPerPixelMath) {
 
   const int p = FindLitPixel(rc, total_pix);
   ASSERT_GE(p, 0);
-  const float s = rc.ExposureScale();
+  // task-347 (Fix B): the compositor now anchors `s` off the participating-P99,
+  // not off the mono ExposureScale. Fetch p99 from a probe compositor call, then
+  // independently recompute the expected `s` via rc.ParticipatingExposureScale(p99).
+  // This is the same "independent cross-check" style the SharedExposureNoSelfNormalization
+  // test uses further down (plan §4 Step 2 test point).
+  const float p99 = FetchParticipatingP99(rc, table, CompositeMode::kDominant);
+  ASSERT_GT(p99, 0.0f);
+  const float s = rc.ParticipatingExposureScale(p99);
   ASSERT_GT(s, 0.0f);
   const float ey0 = rc.GetColorClassLaneY(0)[p] * s;
   const float ey1 = rc.GetColorClassLaneY(1)[p] * s;
@@ -235,7 +263,11 @@ TEST(ComponentCompositor, PainterVsDominantDivergeWhenTopClassDimmer) {
 
   const int p = FindLitPixel(rc, total_pix);
   ASSERT_GE(p, 0);
-  const float s = rc.ExposureScale();
+  // task-347 (Fix B): recover `s` via the participating-P99 anchor (see
+  // DominantAdditivePainterPerPixelMath for rationale).
+  const float p99 = FetchParticipatingP99(rc, table, CompositeMode::kDominant);
+  ASSERT_GT(p99, 0.0f);
+  const float s = rc.ParticipatingExposureScale(p99);
   const float ey0 = rc.GetColorClassLaneY(0)[p] * s;
   const float ey1 = rc.GetColorClassLaneY(1)[p] * s;
   ASSERT_GT(ey1, ey0);  // class1 brighter
@@ -266,7 +298,10 @@ TEST(ComponentCompositor, DominantTieTakesFirstClass) {
 
   const int p = FindLitPixel(rc, total_pix);
   ASSERT_GE(p, 0);
-  const float s = rc.ExposureScale();
+  // task-347 (Fix B): anchor `s` via ParticipatingExposureScale(p99).
+  const float p99 = FetchParticipatingP99(rc, table, CompositeMode::kDominant);
+  ASSERT_GT(p99, 0.0f);
+  const float s = rc.ParticipatingExposureScale(p99);
   const float ey0 = rc.GetColorClassLaneY(0)[p] * s;
   const float ey1 = rc.GetColorClassLaneY(1)[p] * s;
   EXPECT_FLOAT_EQ(ey0, ey1);
@@ -279,7 +314,13 @@ TEST(ComponentCompositor, DominantTieTakesFirstClass) {
 }
 
 // -----------------------------------------------------------------------------
-// B. Shared exposure (crux): the compositor uses the mono exposure, unmodified.
+// B. Shared exposure (crux): every participating lane sees ONE scalar `s`,
+//    never per-lane / per-composite renormalization. task-347 (Fix B): `s` is
+//    now sourced from the participating-P99 self-anchor (not the mono
+//    ExposureScale). The invariant under test is the SHARED-nature of `s`,
+//    not its numeric equality to the mono scale — and it is verified by an
+//    independent recomputation of the exposed-Y equality (additive white
+//    == sum of the per-class exposed lanes) using the anchor from a probe.
 // -----------------------------------------------------------------------------
 TEST(ComponentCompositor, SharedExposureNoSelfNormalization) {
   constexpr int kRes = 3;
@@ -291,38 +332,46 @@ TEST(ComponentCompositor, SharedExposureNoSelfNormalization) {
   rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.6f, 0.4f }));
   rc.PrepareSnapshot();
 
-  // (1) ExposureScale() must equal the mono PostSnapshot scale expression
-  //     intensity_factor * kNormScale * total_pix / snapshot_intensity_.
-  //     All rays land in-bounds, so snapshot_intensity_ == Σ weights = 1.0 — an
-  //     independent reconstruction of the scale from the known batch inputs.
-  const auto raw = rc.GetRawXyzResult();
-  const float sum_w = 0.6f + 0.4f;  // both rays land → snapshot_intensity_
-  const float mono_scale = cfg.intensity_factor_ * kNormScale * static_cast<float>(total_pix) / sum_w;
-  EXPECT_NEAR(rc.ExposureScale(), mono_scale, mono_scale * 1e-5f);
-  // Cross-check against RawXyzResult (whose reported intensity is per-pixel):
-  // scale == intensity_factor / per_pixel_intensity.
-  EXPECT_NEAR(rc.ExposureScale(), raw.intensity_factor_ / raw.snapshot_intensity_, mono_scale * 1e-5f);
+  // (1) task-347 (Fix B): the compositor's `s` must equal the ParticipatingExposureScale
+  //     applied to the current participating-P99 anchor — the sole path by which
+  //     hiding a bright class re-brightens the rest inside one DoSnapshot.
+  //     Independent reconstruction: fetch p99 from a probe compositor call,
+  //     then recompute the expected `s` via a hand-recreated version of the
+  //     ParticipatingExposureScale formula. If the formula in render.cpp is
+  //     ever tweaked, this test must be updated in lock-step (a04: mechanism-
+  //     layer cross-check, not a same-source self-check).
+  const float p99 = FetchParticipatingP99(rc, table, CompositeMode::kAdditive);
+  ASSERT_GT(p99, 0.0f);
+  // snapshot_intensity_ does NOT appear in the formula — it cancels against the
+  // mono shader's downstream `intensity_scale = intensity_factor/snapshot_intensity`
+  // step, so the effective per-pixel multiplier reduces to target_linear/p99. See
+  // the derivation block above ParticipatingExposureScale in render.cpp.
+  constexpr float kTargetWhite = 135.0f;
+  constexpr float kTargetSrgb = kTargetWhite / 255.0f;
+  const float target_linear =
+      kTargetSrgb <= 0.04045f ? kTargetSrgb / 12.92f : std::pow((kTargetSrgb + 0.055f) / 1.055f, 2.4f);
+  const float expected_s = cfg.intensity_factor_ * target_linear / p99;
+  EXPECT_NEAR(rc.ParticipatingExposureScale(p99), expected_s, expected_s * 1e-5f);
 
   const int p = FindLitPixel(rc, total_pix);
   ASSERT_GE(p, 0);
-  const float s = rc.ExposureScale();
+  const float s = rc.ParticipatingExposureScale(p99);
   const float ey0 = rc.GetColorClassLaneY(0)[p] * s;
   const float ey1 = rc.GetColorClassLaneY(1)[p] * s;
 
-  // (2) mono exposed Y at the lit pixel = mainY * s. With disjoint single-member
-  //     classes, mainY == lane0 + lane1, so the exposed mono Y equals ey0 + ey1
-  //     — precisely the additive-white total. No per-lane renormalization.
-  const double mono_y = static_cast<double>(raw.xyz_buffer_[p * 3 + 1]);
-  const double mono_exposed_y = mono_y * s;
-  EXPECT_NEAR(mono_exposed_y, static_cast<double>(ey0 + ey1), 1e-4);
-
+  // (2) SHARED-EXPOSURE INVARIANT: additive-white composite at the lit pixel
+  //     must equal ey0 + ey1 — the same shared `s` was applied to both lanes,
+  //     no per-lane renormalization. This is the direct falsification of the
+  //     scrum-336 spike's false-color bug and remains meaningful under Fix B
+  //     (the anchor formula changed but the "one `s` for all lanes" contract
+  //     didn't).
   std::vector<float> out;
   ASSERT_LT(ey0 + ey1, 1.0f);  // keep below clamp so the equality is exact
   ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kAdditive, out));
-  // Each channel of additive-white == ey0+ey1 == mono exposed Y (shared exposure).
-  EXPECT_NEAR(out[p * 3 + 0], mono_exposed_y, 1e-4);
-  EXPECT_NEAR(out[p * 3 + 1], mono_exposed_y, 1e-4);
-  EXPECT_NEAR(out[p * 3 + 2], mono_exposed_y, 1e-4);
+  const double sum_exposed_y = static_cast<double>(ey0 + ey1);
+  EXPECT_NEAR(out[p * 3 + 0], sum_exposed_y, 1e-4);
+  EXPECT_NEAR(out[p * 3 + 1], sum_exposed_y, 1e-4);
+  EXPECT_NEAR(out[p * 3 + 2], sum_exposed_y, 1e-4);
 }
 
 // -----------------------------------------------------------------------------
@@ -343,15 +392,23 @@ TEST(ComponentCompositor, PerClassVisibilityHideAndSoloAcrossModes) {
 
   const int p = FindLitPixel(rc, total_pix);
   ASSERT_GE(p, 0);
-  const float s = rc.ExposureScale();
-  const float ey1 = rc.GetColorClassLaneY(1)[p] * s;
 
   std::vector<float> out;
+
+  // task-347 (Fix B): each visibility variant below re-anchors on its OWN
+  // participating-P99 (that is precisely the behavior under test). Recompute
+  // the expected class1 exposed-Y per variant via a per-variant p99 probe —
+  // do NOT hoist a single `s` out (it would silently paper over the anchor
+  // change that motivates this whole task).
 
   // Hide class0 → dominant must fall back to class1 (green), even though class0 brighter.
   {
     auto t = lane_table;
     t.classes_[0].visible_ = false;
+    const float p99 = FetchParticipatingP99(rc, t, CompositeMode::kDominant);
+    ASSERT_GT(p99, 0.0f);
+    const float s = rc.ParticipatingExposureScale(p99);
+    const float ey1 = rc.GetColorClassLaneY(1)[p] * s;
     ASSERT_TRUE(CompositeColorClassesLinear(rc, t, CompositeMode::kDominant, out));
     EXPECT_FLOAT_EQ(out[p * 3 + 0], 0.0f);
     EXPECT_FLOAT_EQ(out[p * 3 + 1], ey1);
@@ -366,6 +423,10 @@ TEST(ComponentCompositor, PerClassVisibilityHideAndSoloAcrossModes) {
   {
     auto t = lane_table;
     t.classes_[1].solo_ = true;
+    const float p99 = FetchParticipatingP99(rc, t, CompositeMode::kDominant);
+    ASSERT_GT(p99, 0.0f);
+    const float s = rc.ParticipatingExposureScale(p99);
+    const float ey1 = rc.GetColorClassLaneY(1)[p] * s;
     ASSERT_TRUE(CompositeColorClassesLinear(rc, t, CompositeMode::kDominant, out));
     EXPECT_FLOAT_EQ(out[p * 3 + 0], 0.0f);
     EXPECT_FLOAT_EQ(out[p * 3 + 1], ey1);
@@ -377,6 +438,10 @@ TEST(ComponentCompositor, PerClassVisibilityHideAndSoloAcrossModes) {
     t.classes_[0].visible_ = false;
     t.classes_[1].visible_ = false;
     t.classes_[1].solo_ = true;
+    const float p99 = FetchParticipatingP99(rc, t, CompositeMode::kDominant);
+    ASSERT_GT(p99, 0.0f);
+    const float s = rc.ParticipatingExposureScale(p99);
+    const float ey1 = rc.GetColorClassLaneY(1)[p] * s;
     ASSERT_TRUE(CompositeColorClassesLinear(rc, t, CompositeMode::kDominant, out));
     EXPECT_FLOAT_EQ(out[p * 3 + 1], ey1);
   }
@@ -408,7 +473,10 @@ TEST(ComponentCompositor, OverlapDominantPicksBrighterAdditiveMixes) {
 
   const int p = FindLitPixel(rc, total_pix);
   ASSERT_GE(p, 0);
-  const float s = rc.ExposureScale();
+  // task-347 (Fix B): anchor `s` via ParticipatingExposureScale(p99).
+  const float p99 = FetchParticipatingP99(rc, t, CompositeMode::kDominant);
+  ASSERT_GT(p99, 0.0f);
+  const float s = rc.ParticipatingExposureScale(p99);
   const float eyA = rc.GetColorClassLaneY(0)[p] * s;  // just the 0.3-ray
   const float eyB = rc.GetColorClassLaneY(1)[p] * s;  // 0.3-ray + 0.9-ray
   ASSERT_GT(eyB, eyA);                                // B accumulates the 0.9-ray too
@@ -504,7 +572,12 @@ TEST(ComponentCompositor, ZOrderReordersDrawButNotLaneBinding) {
 
   const int p = FindLitPixel(rc, total_pix);
   ASSERT_GE(p, 0);
-  const float s = rc.ExposureScale();
+  // task-347 (Fix B): anchor `s` via ParticipatingExposureScale(p99). z_order
+  // does NOT change the participating set (all classes visible), so this p99
+  // is stable across the baseline and z_order-swap variants.
+  const float p99 = FetchParticipatingP99(rc, table, CompositeMode::kPainter);
+  ASSERT_GT(p99, 0.0f);
+  const float s = rc.ParticipatingExposureScale(p99);
   const float lane0 = rc.GetColorClassLaneY(0)[p];  // class0's physical lane
   const float lane1 = rc.GetColorClassLaneY(1)[p];  // class1's physical lane
   const float ey0 = lane0 * s;
@@ -543,7 +616,11 @@ TEST(ComponentCompositor, ZOrderReordersDrawButNotLaneBinding) {
     rc_tie.PrepareSnapshot();
     const int pt = FindLitPixel(rc_tie, total_pix);
     ASSERT_GE(pt, 0);
-    const float st = rc_tie.ExposureScale();
+    // task-347 (Fix B): rc_tie has different lane values → different p99 than
+    // the outer scope; probe locally.
+    const float p99_tie = FetchParticipatingP99(rc_tie, table, CompositeMode::kDominant);
+    ASSERT_GT(p99_tie, 0.0f);
+    const float st = rc_tie.ParticipatingExposureScale(p99_tie);
     const float eyt = rc_tie.GetColorClassLaneY(0)[pt] * st;  // == lane1 too (equal weights)
 
     // Default z_order (0,1): dominant tie → class0 (red).
@@ -727,6 +804,61 @@ TEST(ComponentCompositor, DominantThreeArcsNoPhantomHue) {
   EXPECT_GT(red_px, 0);
   EXPECT_GT(green_px, 0);
   EXPECT_GT(blue_px, 0);
+
+  // task-345.3 AC1 white-box: display_exposure_scale must NEVER shift the hue at
+  // any non-zero pixel — dominant is argmax over lane*s with a shared s, so
+  // scaling s only scales the pre-argmax product uniformly. Verify by comparing
+  // a scale=0.5 render against the scale=1.0 baseline pixel-for-pixel:
+  //   (a) argmax (which lane wins) is invariant;
+  //   (b) the winning channel's value scales exactly linearly (no re-normalization,
+  //       no per-lane bleed).
+  // This is the strongest structural proof of "no phantom hue under EV" that
+  // can be made without an on-screen owner check (AC5) — it directly encodes
+  // the color-space invariant the scrum-336 spike bug violated.
+  std::vector<float> out_half;
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, class_table, CompositeMode::kDominant, 0.5f, out_half, nullptr));
+  ASSERT_EQ(out_half.size(), out.size());
+  int compared = 0;
+  for (int p = 0; p < total_pix; ++p) {
+    const float r1 = out[p * 3 + 0];
+    const float g1 = out[p * 3 + 1];
+    const float b1 = out[p * 3 + 2];
+    const float r_h = out_half[p * 3 + 0];
+    const float g_h = out_half[p * 3 + 1];
+    const float b_h = out_half[p * 3 + 2];
+    if (r1 == 0.0f && g1 == 0.0f && b1 == 0.0f) {
+      // Background pixel — must stay background at the alternate scale, too.
+      EXPECT_FLOAT_EQ(r_h, 0.0f);
+      EXPECT_FLOAT_EQ(g_h, 0.0f);
+      EXPECT_FLOAT_EQ(b_h, 0.0f);
+      continue;
+    }
+    // Winning channel invariance: whichever channel is non-zero at scale 1.0 must
+    // be the SAME channel at scale 0.5 (dominant argmax is invariant under uniform
+    // rescale). And its value must be exactly r1 * 0.5.
+    if (r1 > 0.0f) {
+      EXPECT_GT(r_h, 0.0f) << "pixel " << p << ": red arc lost dominance under EV=-1";
+      EXPECT_FLOAT_EQ(g_h, 0.0f);
+      EXPECT_FLOAT_EQ(b_h, 0.0f);
+      EXPECT_NEAR(r_h, r1 * 0.5f, 1e-5f);
+    } else if (g1 > 0.0f) {
+      EXPECT_GT(g_h, 0.0f);
+      EXPECT_FLOAT_EQ(r_h, 0.0f);
+      EXPECT_FLOAT_EQ(b_h, 0.0f);
+      EXPECT_NEAR(g_h, g1 * 0.5f, 1e-5f);
+    } else {
+      EXPECT_GT(b_h, 0.0f);
+      EXPECT_FLOAT_EQ(r_h, 0.0f);
+      EXPECT_FLOAT_EQ(g_h, 0.0f);
+      EXPECT_NEAR(b_h, b1 * 0.5f, 1e-5f);
+    }
+    ++compared;
+  }
+  // Three-arcs fixture is thin arcs (~O(10) lit pixels/arc at 64x64) — set the floor
+  // just above the arc-count total so an empty three-arc render can't false-pass.
+  EXPECT_GT(compared, red_px + green_px + blue_px - 1)
+      << "AC1 invariance check must cover every non-background pixel found in the baseline";
+  EXPECT_GE(compared, 3) << "at least one pixel from each of the three arcs expected";
 }
 
 // -----------------------------------------------------------------------------
@@ -798,6 +930,244 @@ TEST(ComponentCompositor, RaypathColorConfigJsonFormsRoundTrip) {
   ASSERT_EQ(dback.classes_.size(), 1u);
   EXPECT_TRUE(dback.classes_[0].visible_);
   EXPECT_FALSE(dback.classes_[0].solo_);
+}
+
+// -----------------------------------------------------------------------------
+// task-345.3: display-time EV multiplier + participating-P99 union anchor.
+//
+// The invariants under test map to the plan's Step 1 / Step 2 core acceptance:
+//   1. `display_exposure_scale` scales EVERY mode's output linearly and does
+//      NOT introduce any per-class renormalization (extends the shared-exposure
+//      invariant to the new axis).
+//   2. Additive mode's clamp bites AFTER the display scale is applied — a
+//      value that stays sub-clamp at scale 1.0 but reaches clamp at scale 2.0
+//      must saturate, not be truncated pre-scale.
+//   3. `ComputeParticipatingP99Y` only ever sees participating (visible/solo)
+//      classes' UNEXPOSED lane values; hidden classes' bright pixels never
+//      leak into the anchor.
+// -----------------------------------------------------------------------------
+TEST(ComponentCompositor, DisplayExposureScalesEveryModeLinearly) {
+  constexpr int kRes = 3;
+  const int total_pix = kRes * kRes;
+  RenderConfig cfg = MakeRenderConfig(kRes);
+  auto table = MakeSingletonClassTable(0b11, { kRed, kGreen });
+  RenderConsumer rc(cfg, table);
+  // Keep exposed values small so the composite output stays sub-clamp at
+  // both display scales — the equality below is otherwise saturated.
+  rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.06f, 0.04f }));
+  rc.PrepareSnapshot();
+
+  const int p = FindLitPixel(rc, total_pix);
+  ASSERT_GE(p, 0);
+
+  std::vector<float> out_1x;
+  std::vector<float> out_2x;
+  for (CompositeMode mode : { CompositeMode::kDominant, CompositeMode::kAdditive, CompositeMode::kPainter }) {
+    ASSERT_TRUE(CompositeColorClassesLinear(rc, table, mode, 1.0f, out_1x, nullptr));
+    ASSERT_TRUE(CompositeColorClassesLinear(rc, table, mode, 2.0f, out_2x, nullptr));
+    for (int i = 0; i < 3; ++i) {
+      // 2x display scale → every channel doubles (linear pre-clamp region).
+      // The dominant/painter branches pick the SAME winner regardless of
+      // scale (both lanes scale uniformly, argmax invariant) — no hue shift.
+      EXPECT_NEAR(out_2x[p * 3 + i], out_1x[p * 3 + i] * 2.0f, 1e-4)
+          << "mode=" << static_cast<int>(mode) << " channel=" << i;
+    }
+  }
+}
+
+TEST(ComponentCompositor, DisplayExposureClampBitesAfterScale) {
+  // additive mode: at scale 1.0 the additive sum is below the clamp; a larger
+  // display_exposure_scale pushes it past 1.0 and the compositor must clamp
+  // AFTER scaling. Truncating pre-scale would return a proportionally-scaled
+  // sub-1 value.
+  constexpr int kRes = 3;
+  const int total_pix = kRes * kRes;
+  RenderConfig cfg = MakeRenderConfig(kRes);
+  auto table = MakeSingletonClassTable(0b11, { kWhite });
+  RenderConsumer rc(cfg, table);
+  rc.Consume(MakeBatch({ 0b01 }, { 0.5f }));
+  rc.PrepareSnapshot();
+
+  const int p = FindLitPixel(rc, total_pix);
+  ASSERT_GE(p, 0);
+  // task-347 (Fix B): baseline exposed-Y comes from the participating-P99
+  // self-anchor. Sanity-check that at scale=1x we are safely sub-clamp and
+  // pick a scale large enough to blow past 1.0 given the anchor formula.
+  const float p99 = FetchParticipatingP99(rc, table, CompositeMode::kAdditive);
+  ASSERT_GT(p99, 0.0f);
+  const float ey_at_1x = rc.GetColorClassLaneY(0)[p] * rc.ParticipatingExposureScale(p99);
+  ASSERT_LT(ey_at_1x, 1.0f);
+  // Choose scale so the exposed Y comfortably exceeds 1.0.
+  const float scale = 4.0f / ey_at_1x;
+  ASSERT_GT(ey_at_1x * scale, 1.0f);
+
+  std::vector<float> out;
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kAdditive, scale, out, nullptr));
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_FLOAT_EQ(out[p * 3 + i], 1.0f);  // saturated to clamp ceiling.
+  }
+}
+
+TEST(ComponentCompositor, ParticipatingP99IgnoresHiddenClass) {
+  // Two classes: class0 = dim, class1 = 10x brighter. Hide class1 and confirm
+  // the participating P99 comes strictly from class0's lane — bright hidden
+  // pixels must not leak into the anchor (the "no full-spectrum dilution"
+  // fix motivating task-345.3).
+  constexpr int kRes = 4;
+  RenderConfig cfg = MakeRenderConfig(kRes);
+  auto table = MakeSingletonClassTable(0b11, { kWhite, kWhite });
+  RenderConsumer rc(cfg, table);
+  rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.05f, 0.5f }));
+  rc.PrepareSnapshot();
+
+  // Baseline: both classes visible — P99 should be dominated by class1.
+  float p99_both = 0.0f;
+  {
+    std::vector<float> out;
+    ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kDominant, 1.0f, out, &p99_both));
+    EXPECT_GT(p99_both, 0.0f);
+  }
+
+  // Hide class1 — the bright lane must vanish from the anchor.
+  ColorClassTable hidden_table = table;
+  hidden_table.classes_[1].visible_ = false;
+  float p99_hidden = 0.0f;
+  {
+    std::vector<float> out;
+    ASSERT_TRUE(CompositeColorClassesLinear(rc, hidden_table, CompositeMode::kDominant, 1.0f, out, &p99_hidden));
+  }
+  EXPECT_GT(p99_both, p99_hidden * 3.0f)
+      << "hiding the 10x brighter class must significantly lower the participating P99";
+
+  // Solo class0 alone — same effect (solo restricts participating set).
+  ColorClassTable solo_table = table;
+  solo_table.classes_[0].solo_ = true;
+  float p99_solo = 0.0f;
+  {
+    std::vector<float> out;
+    ASSERT_TRUE(CompositeColorClassesLinear(rc, solo_table, CompositeMode::kDominant, 1.0f, out, &p99_solo));
+  }
+  EXPECT_NEAR(p99_solo, p99_hidden, 1e-6f) << "solo of the only remaining class must match hiding the others";
+}
+
+TEST(ComponentCompositor, ParticipatingP99IndependentOfDisplayExposureScale) {
+  // The anchor is over UNEXPOSED lane values — changing the display EV must
+  // NOT move the P99 (otherwise the auto-EV feedback loop compounds).
+  constexpr int kRes = 3;
+  RenderConfig cfg = MakeRenderConfig(kRes);
+  auto table = MakeSingletonClassTable(0b11, { kWhite });
+  RenderConsumer rc(cfg, table);
+  rc.Consume(MakeBatch({ 0b01 }, { 0.5f }));
+  rc.PrepareSnapshot();
+
+  float p99_a = 0.0f;
+  float p99_b = 0.0f;
+  std::vector<float> out;
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kDominant, 0.25f, out, &p99_a));
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kDominant, 4.0f, out, &p99_b));
+  EXPECT_FLOAT_EQ(p99_a, p99_b);
+}
+
+// -----------------------------------------------------------------------------
+// task-347 (Fix B) direct unit coverage: ParticipatingExposureScale contract
+// (0-guard branches + numeric equivalence to a hand-recomputed formula +
+// intensity_factor linearity) and the s<=0 early-return semantic tightening
+// (participating_p99 is now published on the false-return path).
+// -----------------------------------------------------------------------------
+TEST(ComponentConsumer, ParticipatingExposureScaleGuards) {
+  constexpr int kRes = 3;
+  RenderConfig cfg = MakeRenderConfig(kRes);
+  auto table = MakeSingletonClassTable(0b11, { kWhite });
+  RenderConsumer rc(cfg, table);
+  rc.Consume(MakeBatch({ 0b01 }, { 0.5f }));
+  rc.PrepareSnapshot();
+
+  // p99<=0 branch: returns 0 regardless of internal state.
+  EXPECT_FLOAT_EQ(rc.ParticipatingExposureScale(0.0f), 0.0f);
+  EXPECT_FLOAT_EQ(rc.ParticipatingExposureScale(-1.0f), 0.0f);
+
+  // snapshot_intensity<=0 branch: a fresh consumer without any Consume/Prepare
+  // still has snapshot_intensity_==0 → guard fires even with a positive p99.
+  RenderConsumer rc_empty(cfg, table);
+  EXPECT_FLOAT_EQ(rc_empty.ParticipatingExposureScale(0.5f), 0.0f);
+}
+
+TEST(ComponentConsumer, ParticipatingExposureScaleFormulaCrossCheck) {
+  // Independent recomputation of the formula (a04: mechanism-layer check, not
+  // same-source self-check). Any drift in render.cpp's target_white / sRGB
+  // reverse transform / intensity_factor multiplier flips this test red.
+  constexpr int kRes = 3;
+  RenderConfig cfg = MakeRenderConfig(kRes);
+  cfg.intensity_factor_ = 1.0f;
+  auto table = MakeSingletonClassTable(0b11, { kWhite });
+  RenderConsumer rc(cfg, table);
+  rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.6f, 0.4f }));
+  rc.PrepareSnapshot();
+
+  // snapshot_intensity_ is intentionally NOT in the expected formula — it cancels
+  // against the downstream mono shader's intensity_scale=intensity_factor/snapshot_intensity
+  // step. See derivation block above ParticipatingExposureScale in render.cpp.
+  constexpr float kTargetWhite = 135.0f;
+  constexpr float kTargetSrgb = kTargetWhite / 255.0f;
+  const float target_linear =
+      kTargetSrgb <= 0.04045f ? kTargetSrgb / 12.92f : std::pow((kTargetSrgb + 0.055f) / 1.055f, 2.4f);
+
+  const float p99 = 0.02f;  // arbitrary positive value in the plausible range
+  const float expected = cfg.intensity_factor_ * target_linear / p99;
+  EXPECT_NEAR(rc.ParticipatingExposureScale(p99), expected, expected * 1e-5f);
+
+  // snapshot_intensity independence: a second consumer whose Consume batch has
+  // a very different total weight must produce the SAME s at the same p99. This
+  // is the tight structural check that snapshot_intensity does not leak into
+  // the composite formula (it would have if we naively mirrored ComputeEvAuto's
+  // numerator, and the AC1 gate would still pass by accident when weights=1).
+  RenderConsumer rc_heavy(cfg, table);
+  rc_heavy.Consume(MakeBatch({ 0b01, 0b10 }, { 6.0f, 4.0f }));  // 10x the mass
+  rc_heavy.PrepareSnapshot();
+  EXPECT_NEAR(rc_heavy.ParticipatingExposureScale(p99), expected, expected * 1e-5f);
+
+  // intensity_factor linearity: doubling the config's static exposure knob
+  // must double the returned scalar (CLI JSON exposure retains its meaning
+  // on the composite path, plan §2 default assumption).
+  RenderConfig cfg2 = cfg;
+  cfg2.intensity_factor_ = 2.0f;
+  RenderConsumer rc2(cfg2, table);
+  rc2.Consume(MakeBatch({ 0b01, 0b10 }, { 0.6f, 0.4f }));
+  rc2.PrepareSnapshot();
+  EXPECT_NEAR(rc2.ParticipatingExposureScale(p99), 2.0f * expected, expected * 1e-5f);
+}
+
+TEST(ComponentCompositor, EarlyReturnPublishesParticipatingP99) {
+  // task-347 (Fix B) semantic tightening: on the s<=0 early-return path, the
+  // participating_p99 out parameter (when non-null) is now written with the
+  // actual computed p99 (previously left untouched). No in-tree consumer
+  // depends on either behavior — but the tightening is worth pinning so a
+  // future regression doesn't silently un-tighten it.
+  //
+  // Reproduce s<=0 via display_exposure_scale=0.0f: p99 will be computed
+  // normally, then ParticipatingExposureScale(p99)*0 == 0 fires the guard.
+  constexpr int kRes = 3;
+  RenderConfig cfg = MakeRenderConfig(kRes);
+  auto table = MakeSingletonClassTable(0b11, { kWhite });
+  RenderConsumer rc(cfg, table);
+  rc.Consume(MakeBatch({ 0b01 }, { 0.5f }));
+  rc.PrepareSnapshot();
+
+  // Independent reference p99 from a successful call at scale=1.0.
+  float p99_reference = 0.0f;
+  std::vector<float> ref_out;
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kDominant, 1.0f, ref_out, &p99_reference));
+  ASSERT_GT(p99_reference, 0.0f);
+
+  // Early-return path (scale=0). Return value is false; sentinel-init the out
+  // pointer to a distinct value so a "left untouched" behavior would fail.
+  constexpr float kSentinel = -12345.0f;
+  float p99_early = kSentinel;
+  std::vector<float> out;
+  const bool ok = CompositeColorClassesLinear(rc, table, CompositeMode::kDominant, 0.0f, out, &p99_early);
+  EXPECT_FALSE(ok);
+  EXPECT_NE(p99_early, kSentinel) << "p99 must be written on the s<=0 early-return path (task-347 tightening)";
+  EXPECT_FLOAT_EQ(p99_early, p99_reference);
 }
 
 }  // namespace

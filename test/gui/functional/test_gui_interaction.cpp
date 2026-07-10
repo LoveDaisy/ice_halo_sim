@@ -1428,6 +1428,130 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // task-345.5 (⑥): Colors button moved from status bar into a new
+  // "feature button" group on the top bar, right of Save. Verifies:
+  //   - new top-bar item exists at the expected path,
+  //   - old status-bar item is gone,
+  //   - clicking toggles color_window_open (both directions).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_layout", "colors_button_relocated_to_topbar");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      IM_CHECK(ctx->ItemExists("##TopBar/" ICON_FA_PALETTE " Colors"));
+      IM_CHECK(!ctx->ItemExists("##StatusBar/" ICON_FA_PALETTE " Colors"));
+
+      const bool initial = gui::g_state.color_window_open;
+      ctx->ItemClick("##TopBar/" ICON_FA_PALETTE " Colors");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.color_window_open, !initial);
+
+      ctx->ItemClick("##TopBar/" ICON_FA_PALETTE " Colors");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.color_window_open, initial);
+    };
+  }
+
+  // task-colored-toggle-to-topbar (346.3): colored/full-spectrum display-time
+  // toggle relocated from status-bar SmallButton (task-345.4) to a Checkbox in
+  // the top bar next to Colors. Verifies:
+  //   - AC4: with no raypath_color class, the checkbox is not rendered at all
+  //     (neither new nor old location).
+  //   - AC1: with one color class, the checkbox exists at the new top-bar
+  //     path and is gone from the old status-bar path (both label variants).
+  //   - AC3: the checkbox stays visible while color_window_open is false —
+  //     pins "persistent marker doesn't depend on Colors window being open",
+  //     the whole point of the move (would break if someone moved the widget
+  //     inside RenderColorWindow).
+  //   - AC2: clicking flips g_state.show_composite_preview and leaves
+  //     raypath_color / dirty untouched (display-time only, no re-simulation).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_layout", "colored_toggle_relocated_to_topbar_checkbox");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // AC4 — no color classes ⇒ no checkbox anywhere (new top-bar path nor the
+      // now-deleted status-bar path, so a future regression that re-adds the
+      // widget to the status bar is caught here too, not just inferred from
+      // "the code block was deleted").
+      IM_CHECK(gui::g_state.raypath_color.empty());
+      IM_CHECK(!ctx->ItemExists("##TopBar/" ICON_FA_PALETTE " Colored##CompositePreviewToggle"));
+      IM_CHECK(!ctx->ItemExists("##TopBar/" ICON_FA_PALETTE " Full Spectrum##CompositePreviewToggle"));
+      IM_CHECK(!ctx->ItemExists("##StatusBar/" ICON_FA_PALETTE " Colored##CompositePreviewToggle"));
+      IM_CHECK(!ctx->ItemExists("##StatusBar/" ICON_FA_PALETTE " Full Spectrum##CompositePreviewToggle"));
+
+      // Install one color class + pin the ground truth to "not composite" so
+      // the label is deterministically "Full Spectrum".
+      gui::ColorClassConfig c;
+      gui::g_state.raypath_color.push_back(c);
+      gui::g_state.last_uploaded_as_composite = false;
+      ctx->Yield(2);
+
+      // AC1 — new path exists, old path gone (both variants).
+      IM_CHECK(ctx->ItemExists("##TopBar/" ICON_FA_PALETTE " Full Spectrum##CompositePreviewToggle"));
+      IM_CHECK(!ctx->ItemExists("##StatusBar/" ICON_FA_PALETTE " Full Spectrum##CompositePreviewToggle"));
+      IM_CHECK(!ctx->ItemExists("##StatusBar/" ICON_FA_PALETTE " Colored##CompositePreviewToggle"));
+
+      // AC3 — closing the Colors window does not hide the checkbox.
+      gui::g_state.color_window_open = false;
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("##TopBar/" ICON_FA_PALETTE " Full Spectrum##CompositePreviewToggle"));
+
+      // AC2 — click flips show_composite_preview only; raypath_color / dirty
+      // untouched (display-time toggle, no re-simulation).
+      const bool pref_before = gui::g_state.show_composite_preview;
+      const size_t classes_before = gui::g_state.raypath_color.size();
+      const bool dirty_before = gui::g_state.dirty;
+      ctx->ItemClick("##TopBar/" ICON_FA_PALETTE " Full Spectrum##CompositePreviewToggle");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.show_composite_preview, !pref_before);
+      IM_CHECK_EQ(gui::g_state.raypath_color.size(), classes_before);
+      IM_CHECK_EQ(gui::g_state.dirty, dirty_before);
+
+      // Symmetric second click — same label path (label is driven by ground
+      // truth, which the user click does not change), preference flips back.
+      ctx->ItemClick("##TopBar/" ICON_FA_PALETTE " Full Spectrum##CompositePreviewToggle");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.show_composite_preview, pref_before);
+    };
+  }
+
+  // p1_layout/collapse_strip_click_works_when_unoccluded — AC3 regression for
+  // task-color-window-mouse-capture: OverlayButton's `!io.WantCaptureMouse` gate
+  // (app_panels.cpp:308) must not suppress the collapse strip's own click when no
+  // floating window covers it (code-review round 1, Major finding on the missing
+  // no-occlusion verification for this gate).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_layout", "collapse_strip_click_works_when_unoccluded");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.left_panel_collapsed = true;
+      ctx->Yield(2);
+
+      // Mirror RenderCollapsedStrip/OverlayButton geometry (app_panels.cpp:291-333): the
+      // strip spans [kTopBarHeight, window_height - kStatusBarHeight) and the button (local
+      // anonymous-namespace constexpr kCollapseBtnSize=20.0f, not exported outside
+      // app_panels.cpp) sits vertically centered within it.
+      const ImGuiViewport* vp = ImGui::GetMainViewport();
+      constexpr float kCollapseBtnSize = 20.0f;  // mirrors app_panels.cpp:291
+      float strip_h = vp->Size.y - gui::kTopBarHeight - gui::kStatusBarHeight;
+      float btn_y = gui::kTopBarHeight + (strip_h - kCollapseBtnSize) * 0.5f;
+      ImVec2 click_pos(vp->Pos.x + kCollapseBtnSize * 0.5f, vp->Pos.y + btn_y + kCollapseBtnSize * 0.5f);
+
+      ctx->MouseMoveToPos(click_pos);
+      ctx->MouseClick(0);
+      ctx->Yield(2);
+
+      // Core AC3 assertion: with nothing occluding the strip, io.WantCaptureMouse is false
+      // at this position, so the click still expands the panel as before this task's change.
+      IM_CHECK_EQ(gui::g_state.left_panel_collapsed, false);
+    };
+  }
+
   // P1: Unsaved Changes Popup
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_file", "unsaved_popup");
@@ -1928,6 +2052,54 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
 
       // Cleanup: close modal
       ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // p1_card/card_click_blocked_when_covered_by_colors_window — AC1 regression
+  // for task-color-window-mouse-capture: the Colors window is a floating
+  // ImGui::Begin above the LeftPanel; when it covers a crystal card the manual
+  // click detection in RenderEntryCard must not fire (issue.md AC1).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_card", "card_click_blocked_when_covered_by_colors_window");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      IM_CHECK_EQ(gui::IsEditModalOpen(), false);
+
+      // Reuse the anchor logic from card_wide_click_opens_modal so both tests
+      // move together if the LeftPanel layout shifts.
+      auto edit_info = ctx->ItemInfo("**/Edit##cr");
+      IM_CHECK(edit_info.ID != 0);
+      float card_left = edit_info.RectFull.Min.x - 200.0f;
+      float card_top = edit_info.RectFull.Min.y;
+      ImVec2 thumb_center(card_left + 30.0f, card_top + 20.0f);
+
+      // Open the Colors window and move it so its client area covers
+      // thumb_center. The default size is 720x480 (color_window.cpp:505); by
+      // anchoring the top-left ~300px above and ~300px left of thumb_center,
+      // thumb_center lands ~mid-window, well past the header / composite-mode
+      // combo / Add Class button row / separator (~70px from top).
+      // raypath_color is empty after DoNew(), so no color-class row extends
+      // down into that region — the click point falls on the empty class table
+      // area, which contains no ImGui item.
+      gui::g_state.color_window_open = true;
+      ctx->Yield(2);
+
+      ImVec2 colors_pos(thumb_center.x - 300.0f, thumb_center.y - 240.0f);
+      ctx->WindowMove(ICON_FA_PALETTE " Colors", colors_pos);
+      ctx->Yield(2);
+
+      ctx->MouseMoveToPos(thumb_center);
+      ctx->MouseClick(0);
+      ctx->Yield(4);
+
+      // Core AC1 assertion: the covered click must NOT open the edit modal.
+      IM_CHECK_EQ(gui::IsEditModalOpen(), false);
+
+      // Cleanup
+      gui::g_state.color_window_open = false;
       ctx->Yield(2);
     };
   }

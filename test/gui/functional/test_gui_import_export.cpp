@@ -2745,4 +2745,36 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(loaded.raypath_color[0].match[0].crystal_pool_id, 0);
     };
   }
+
+  // task-346.1 (①) AC5 mechanism-layer regression: pin the invariant that the GUI Run
+  // path never bakes `exposure_offset` into `LUMICE_Config.renderers[0].intensity_factor`.
+  // Root cause of the composite re-run 2× EV bug (see plan §3.1): the old code wrote
+  // `intensity_factor = 2^exposure_offset`, which then multiplied `display_exposure_scale`
+  // (already carrying the same manual EV pushed via LUMICE_SetCompositeExposure) inside
+  // the compositor's single shared exposure scalar. This regression fires the second any
+  // future refactor reintroduces that bake — without needing to run a real re-run scenario.
+  //
+  // Note: the paired invariant on the CLI/config export path (SerializeCoreConfig, which
+  // DOES bake 2^exposure_offset — different, legal semantics) is exercised by the existing
+  // GuiJsonRoundtrip tests that cover exposure_offset ∈ {1.5f, -1.25f, ...}. Two paths,
+  // two semantics, both pinned.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "import_export", "intensity_factor_ignores_exposure_offset_in_gui_run_path");
+    t->TestFunc = [](ImGuiTestContext*) {
+      const float kOffsets[] = { 0.0f, 2.5f, -3.0f, 6.0f };
+      for (float offset : kOffsets) {
+        ResetTestState();
+        gui::g_state.renderer.exposure_offset = offset;
+
+        LUMICE_Config cfg{};
+        lumice::ConfigColorGuard cfg_guard(cfg);
+        IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
+        IM_CHECK_EQ(cfg.renderer_count, 1);
+        // The GUI Run path must NEVER bake exposure_offset here. Manual + auto EV both
+        // live on the display-time path (mono shader uniform / LUMICE_SetCompositeExposure).
+        IM_CHECK_EQ(cfg.renderers[0].intensity_factor, 1.0f);
+      }
+    };
+  }
 }

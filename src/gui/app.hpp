@@ -130,6 +130,26 @@ GuiState::SimState ReconcileSimState(RunIntent intent, uint64_t committed_epoch,
 bool ShouldUploadPayload(const PreviewSnapshot& snap, unsigned long long last_uploaded_texture_serial,
                          uint64_t display_epoch_floor);
 
+// Effective per-frame composite/xyz upload decision (task-345.4). Folds server-side composite
+// availability (`payload_is_composite`) with the user's display-time preference
+// (`show_composite_preview`) into a single boolean the upload branch consumes. Pure predicate,
+// no globals/GL — mirrors ShouldUploadPayload's testable-contract convention above so the
+// truth-table can be unit-tested headlessly (see test_gui_composite_preview.cpp).
+bool ShouldUseCompositeUpload(bool payload_is_composite, bool show_composite_preview);
+
+// task-345.4 fire-branch gate: single predicate that both the SyncFromPoller upload branch AND
+// the regression test consume, so the test proves the exact decision production uses. Returns
+// true when the upload branch should fire this frame, which is EITHER the standard serial-dedup
+// gate (fresh snapshot, epoch clears the floor) OR a display-mode flip that alone produces no
+// new poller snapshot (the OR-branch — see SyncFromPoller comment). Pure predicate, no globals.
+// SyncFromPoller cannot be driven end-to-end from a functional-test coroutine (no GL context —
+// the g_preview.Upload*Texture() call in the branch is a GL call and SIGILLs on the worker
+// thread), so a headless regression pins the decision at THIS seam and leaves the actual GL
+// upload to the on-screen visual/ integration tests + owner AC5.
+bool ShouldFireCompositeUpload(const PreviewSnapshot& snap, unsigned long long last_uploaded_texture_serial,
+                               uint64_t display_epoch_floor, bool show_composite_preview,
+                               bool last_uploaded_as_composite);
+
 // Panel rendering
 void RenderTopBar(float window_width);
 void RenderLeftPanel(float window_height);

@@ -55,6 +55,14 @@ inline std::vector<float> DownsampleBoxSumY(const std::vector<float>& xyz_data, 
 // See doc/ev-pipeline-architecture.md §2.2 (zero-skip semantics), §2.5 (GUI usage)
 // Compute the P99 of the non-zero Y values in a packed XYZ buffer.
 //
+// NOTE (task-345.3 review Minor #1): the fine-path (idx = floor(size * 0.99),
+// nth_element) partial-sort algorithm here is structurally identical to
+// `src/server/component_compositor.cpp`'s ComputeParticipatingP99Y (the
+// server-side composite anchor). They cannot share a header without dragging
+// one layer into the other (server/ ↔ gui/ is the C API boundary). If you
+// touch this algorithm — epsilon, index rounding, non-zero rule — mirror the
+// change in the other file.
+//
 // When `downsample_factor > 1`, the Y channel is first box-summed onto a
 // coarse grid (see DownsampleBoxSumY) and the P99 is taken over non-zero
 // coarse bins, then divided by `downsample_factor^2` so the returned value
