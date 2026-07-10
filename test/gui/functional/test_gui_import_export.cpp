@@ -2799,7 +2799,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
   {
     // AC1 core: Open a .lmc with NO baked preview clears the stale texture from a prior scene.
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "open_lmc_no_preview_clears_stale_texture");
-    t->TestFunc = [](ImGuiTestContext*) {
+    t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
 
       // 1) Save a .lmc without a baked preview image (save_texture=false).
@@ -2817,6 +2817,13 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
 
       // 3) DoOpen(path) hits the `.lmc`-else branch (no baked img). Expected: ClearTexture().
       gui::DoOpen(tmp_path);
+      // When this test isn't first in the run queue, the ClearTexture() effect on the shared
+      // g_preview state isn't yet visible to the very next IM_CHECK unless the coroutine
+      // worker thread (running TestFunc) hands control back to the main render thread for a
+      // few real frames first. Root-caused via bisection (isolated run: always passes; any
+      // preceding test: always fails without a yield) — a test-harness synchronization gap,
+      // not a production bug (reverting the fix still fails here with or without the yield).
+      ctx->Yield(3);
 
       // 4) AC1 assertion: pre-fix this would FAIL (stale dims retained).
       IM_CHECK(!gui::g_preview.HasTexture());
