@@ -18,7 +18,9 @@
 #include <chrono>
 #include <thread>
 
+#include "IconsFontAwesome6.h"  // ICON_FA_* selectors for locating icon-prefixed buttons.
 #include "gui/color_window.hpp"
+#include "gui/gui_state.hpp"
 #include "gui/raypath_segments.hpp"
 #include "test_gui_shared.hpp"
 
@@ -649,6 +651,109 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(skipped, 1);
       IM_CHECK_EQ(static_cast<int>(cls.match.size()), 1);
       IM_CHECK_EQ(cls.match[0].predicate_text, "3-5");
+    };
+  }
+
+  // task-349.2 Step 1 (AC1 white-box lockdown): structural color-class edits on
+  // top of a completed simulation must surface as SimState::kModified through
+  // the shared dirty → ReconcileSimState pipeline (the same route the main-
+  // scene "changed since last run" ⚠ + Revert ride on). Driven by REAL UI
+  // clicks (not a hand poke of state.dirty) so the test can catch a future
+  // rewrite that quietly bypasses MarkFilterDirty on any color-window control.
+  //
+  // Seed pattern (kDone + committed_epoch>0 + run_intent=kLoaded + dirty=false)
+  // mirrors p1_edit/ok_no_change_preserves_state so the reconcile base pins to
+  // kDone and the subsequent dirty edit flips it to kModified.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "add_class_via_ui_marks_modified");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
+      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+      gui::g_state.committed_epoch = 5;
+      gui::g_state.display_epoch_floor = 0;
+      gui::g_state.dirty = false;
+      gui::g_state.color_window_open = true;
+      ctx->Yield(4);
+
+      // Click the "+ Add Class" button in the Colors window. `**/` wildcard
+      // walks any window path, so we don't need to hardcode the window ID.
+      ctx->ItemClick("**/" ICON_FA_PLUS " Add Class");
+      ctx->Yield(2);
+
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.raypath_color.size()), 1);
+      IM_CHECK(gui::g_state.dirty);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+      // The top-bar Revert affordance is the user-visible surface of kModified;
+      // presence here proves the ReconcileSimState → RenderTopBar wire is live
+      // for a color-driven dirty (not just a main-scene edit).
+      IM_CHECK(ctx->ItemExists("##TopBar/Revert"));
+
+      // Close the Colors window so it does not overlay the next test's clicks.
+      gui::g_state.color_window_open = false;
+      ctx->Yield(2);
+    };
+  }
+
+  // Whole-crystal checkbox is the #2 case from issue.md: a display-affecting
+  // structural edit whose current implementation is `SetRefMatchAll(ref, ...);
+  // state.MarkFilterDirty();` — must surface as kModified for the same reason
+  // as Add Class.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "toggle_whole_via_ui_marks_modified");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Seed one color class with one ref (match_all=false) so the "whole"
+      // checkbox is unchecked and toggling it flips to true. Do this BEFORE
+      // pinning kDone so the seeding does not itself dirty the reconcile input.
+      gui::ColorClassConfig cls;
+      cls.color[0] = 1.0f;
+      cls.visible = true;
+      gui::ColorClassRefConfig ref;
+      ref.layer_idx = 0;
+      ref.crystal_pool_id = gui::g_state.layers[0].entries[0].crystal_id;
+      ref.match_all = false;
+      cls.match.push_back(ref);
+      gui::g_state.raypath_color.push_back(cls);
+      // Baseline snapshot for the config-vs-snapshot dirty check inside
+      // ReconcileSimState (dirty is set explicitly below anyway; snapshot just
+      // ensures we start from a clean reconciled kDone before the UI edit).
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
+
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
+      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+      gui::g_state.committed_epoch = 5;
+      gui::g_state.display_epoch_floor = 0;
+      gui::g_state.dirty = false;
+      gui::g_state.color_window_open = true;
+      ctx->Yield(4);
+
+      // Expand every tree node in the Colors window so RenderRefRow (and its
+      // "whole" checkbox) becomes part of the frame's item table. ItemOpenAll
+      // walks the window's item tree; wildcard-locating `##body` under the
+      // class's PushID(phys=int) is fragile because PushID(int) hashes an
+      // integer, not the string "0".
+      ctx->ItemOpenAll("//" ICON_FA_PALETTE " Colors");
+      ctx->Yield(2);
+
+      ctx->SetRef("//" ICON_FA_PALETTE " Colors");
+      ctx->ItemClick("**/whole");
+      ctx->Yield(2);
+      ctx->SetRef("");
+
+      IM_CHECK(gui::g_state.raypath_color[0].match[0].match_all);
+      IM_CHECK(gui::g_state.dirty);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+      IM_CHECK(ctx->ItemExists("##TopBar/Revert"));
+
+      // Close the Colors window so the next test's frame does not still show
+      // an overlay on top of top-bar controls it needs to click.
+      gui::g_state.color_window_open = false;
+      ctx->Yield(2);
     };
   }
 }
