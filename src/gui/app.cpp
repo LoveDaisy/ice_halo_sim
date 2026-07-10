@@ -987,6 +987,21 @@ bool ShouldFireCompositeUpload(const PreviewSnapshot& snap, unsigned long long l
   return ShouldUploadPayload(snap, last_uploaded_texture_serial, display_epoch_floor) || mode_changed;
 }
 
+// task-348.3 (⑦) — see app.hpp. Pure predicate: no globals, no GL. Kept trivial on purpose
+// so the "only fire on false→true transition" time-guard lives at the call site and is
+// obvious in the diff (RenderTopBar), while this function pins the decision boundary that
+// gui_test can assert without an ImGui/GL context.
+bool ShouldDefaultEnableColorsOnOpen(bool raypath_color_empty) {
+  return raypath_color_empty;
+}
+
+// task-348.3 (⑤/⑥) shared writer — see app.hpp. Two-line function on purpose: the whole
+// point is that both write sites go through the same left-value assignment so future
+// code cannot introduce a third variant that reads/writes the wrong field.
+void ToggleCompositePreview(GuiState& state) {
+  state.show_composite_preview = !state.show_composite_preview;
+}
+
 void SyncFromPoller() {
   // Atomically load the whole immutable snapshot (invariant I5). One lock-free atomic_load; the
   // consumer never observes a half-updated field combination.

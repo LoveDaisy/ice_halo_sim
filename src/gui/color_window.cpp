@@ -611,6 +611,30 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
     return;
   }
 
+  // task-348.3 AC2 (⑥): mirror the top-bar Colored toggle inside the window so users
+  // who already have Colors open do not need to reach for the top bar. Same field,
+  // same read/write split as RenderTopBar (app_panels.cpp:Colored button): the checked
+  // state reads GROUND TRUTH (state.last_uploaded_as_composite) so the two indicators
+  // cannot visually disagree (a12 single source, same convention as the top-bar pip),
+  // and the click writes via the shared ToggleCompositePreview() writer — the boolean
+  // ImGui writes back into `checked` on click is intentionally discarded (real state
+  // lives in `show_composite_preview`, whose toggled value will surface here via
+  // last_uploaded_as_composite on the next poll). Unlike the top-bar toggle, this
+  // checkbox is NOT gated on raypath_color.empty(): it stays visible even with zero
+  // classes so it can act as the visible counterpart to AC3's "open with no classes →
+  // default enabled" behavior.
+  {
+    bool checked = state.last_uploaded_as_composite;
+    if (ImGui::Checkbox("Enable colors", &checked)) {
+      ToggleCompositePreview(state);
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(
+          "Toggle colored composite / full-spectrum preview.\n"
+          "Synced with the top-bar toggle -- same display-time preference.");
+    }
+  }
+
   // Header row: composite mode + import + add.
   RenderCompositeModeCombo(state, server);
   ImGui::SameLine();

@@ -264,7 +264,17 @@ void RenderTopBar(float window_width) {
   // unrelated to file I/O or panel layout should land here rather than
   // competing for status-bar space.
   if (ImGui::Button(ICON_FA_PALETTE " Colors")) {
+    // task-348.3 AC3 (⑦): apply the "default enable on open with no classes" rule
+    // ONLY on the false→true transition of color_window_open. Doing it here (inside
+    // the click branch, guarded by `opening`) — not per-frame inside RenderColorWindow
+    // — is what makes the behavior "memory-preserving": the user can still manually
+    // toggle Colored off after opening, and subsequent focus changes / clicks that do
+    // not close-then-reopen the window will not overwrite that choice.
+    const bool opening = !g_state.color_window_open;
     g_state.color_window_open = !g_state.color_window_open;
+    if (opening && ShouldDefaultEnableColorsOnOpen(g_state.raypath_color.empty())) {
+      g_state.show_composite_preview = true;
+    }
   }
 
   // task-colored-toggle-to-topbar (346.3): colored/full-spectrum display-time
@@ -280,19 +290,21 @@ void RenderTopBar(float window_width) {
   // Colors does not touch this window.
   if (!g_state.raypath_color.empty()) {
     ImGui::SameLine();
+    // task-348.3 AC1 (⑤): icon-only Button whose whole surface goes highlight-blue
+    // when Colored is active, replacing the earlier text-plus-checkbox form. The
+    // display state still reads GROUND TRUTH (last_uploaded_as_composite) and the
+    // click still writes the user preference via the shared ToggleCompositePreview
+    // (345.4 read/write split preserved). Tooltip carries the "Colored / Full
+    // Spectrum" text that used to live on the control itself so hover still tells
+    // the user which mode is active.
     const bool composite_now = g_state.last_uploaded_as_composite;
-    const char* mode_label = composite_now ? ICON_FA_PALETTE " Colored" : ICON_FA_PALETTE " Full Spectrum";
-    std::string checkbox_id = std::string(mode_label) + "##CompositePreviewToggle";
-    bool checked = composite_now;
     if (composite_now) {
-      // Checkbox renders as frame background + check mark, not a button — the
-      // 345.4 accent used ImGuiCol_Button which does not apply here.
-      ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.35f, 0.55f, 0.85f, 1.0f));
-      ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.45f, 0.65f, 0.95f, 1.0f));
-      ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+      ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.55f, 0.85f, 1.0f));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.45f, 0.65f, 0.95f, 1.0f));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.25f, 0.45f, 0.75f, 1.0f));
     }
-    if (ImGui::Checkbox(checkbox_id.c_str(), &checked)) {
-      g_state.show_composite_preview = !g_state.show_composite_preview;
+    if (ImGui::Button(ICON_FA_PALETTE "##CompositePreviewToggle")) {
+      ToggleCompositePreview(g_state);
     }
     if (composite_now) {
       ImGui::PopStyleColor(3);
@@ -300,7 +312,9 @@ void RenderTopBar(float window_width) {
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip(
           "Toggle colored composite / full-spectrum preview.\n"
-          "Display-time only -- does not re-simulate or discard color classes.");
+          "Display-time only -- does not re-simulate or discard color classes.\n"
+          "%s",
+          composite_now ? "Currently: Colored" : "Currently: Full Spectrum");
     }
 
     // task-348.1 Step 3 (① 反馈缺失): when every configured color class has no

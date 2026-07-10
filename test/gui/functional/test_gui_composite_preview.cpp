@@ -1078,4 +1078,34 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     local.Stop();
     LUMICE_DestroyServer(server);
   };
+
+  // task-348.3 AC3 (⑦): pin the pure decision boundary for "opening the Colors window
+  // should default show_composite_preview=true". True iff no color classes exist yet
+  // (nothing to remember); false when classes exist so the caller keeps the user's
+  // memory. The "apply only on false→true transition" time-guard lives at the call
+  // site in RenderTopBar and is not testable from this headless coroutine (no ImGui
+  // click surface without the real event loop), but factoring out this predicate
+  // makes the branch inside the click handler a single conditional that is obvious
+  // in the diff and cannot silently invert.
+  ImGuiTest* t10 = IM_REGISTER_TEST(engine, "gui_composite_preview", "should_default_enable_colors_on_open_predicate");
+  t10->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    IM_CHECK_EQ(gui::ShouldDefaultEnableColorsOnOpen(true), true);
+    IM_CHECK_EQ(gui::ShouldDefaultEnableColorsOnOpen(false), false);
+  };
+
+  // task-348.3 AC1/AC2 shared writer: ToggleCompositePreview flips exactly one field
+  // (show_composite_preview) and touches nothing else. Kept alongside the predicate
+  // tests so both write sites (top-bar Button, Colors-window Checkbox) share a
+  // single asserted invariant: "toggle" is negation, nothing more.
+  ImGuiTest* t11 = IM_REGISTER_TEST(engine, "gui_composite_preview", "toggle_composite_preview_negates_field");
+  t11->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    gui::GuiState s;
+    s.show_composite_preview = false;
+    gui::ToggleCompositePreview(s);
+    IM_CHECK_EQ(s.show_composite_preview, true);
+    gui::ToggleCompositePreview(s);
+    IM_CHECK_EQ(s.show_composite_preview, false);
+  };
 }
