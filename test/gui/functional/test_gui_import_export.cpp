@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include "IconsFontAwesome6.h"
+#include "gui/export_fbo_renderer.hpp"      // RenderExportToRgba for GL pixel-level assertions
 #include "gui/raypath_segments.hpp"         // ParseSummandText / SumOfProducts (SoP round-trip tests)
 #include "include/lumice_config_scope.hpp"  // lumice::ConfigColorGuard for LUMICE_Config RAII
 #include "test_gui_shared.hpp"
@@ -20,6 +21,98 @@ void YieldUntilTrue(ImGuiTestContext* ctx, int max_yields, Fn&& condition) {
   for (int i = 0; i < max_yields && !condition(); ++i) {
     ctx->Yield();
   }
+}
+
+// task-350: shared request/response scaffolding for the "gl_render_*" subcases (see the
+// block at the end of RegisterImportExportTests). Kept out here so GlOpGuiFunc below is a
+// plain non-capturing function — ImGuiTestGuiFunc is `void (*)(ImGuiTestContext*)` and
+// rejects capturing lambdas.
+struct GlOpTestState {
+  bool requested = false;
+  bool done = false;
+  // Inputs (TestFunc → GuiFunc): sequence of GL ops to run this frame.
+  bool do_upload_stale = false;
+  bool do_upload_bg = false;
+  bool do_clear = false;
+  bool do_upload_fresh_after_clear = false;
+  bool bg_enabled = false;
+  int dst_w = 32;
+  int dst_h = 16;
+  // Outputs (GuiFunc → TestFunc).
+  bool export_ok = false;
+  unsigned char center_r = 0;
+  unsigned char center_g = 0;
+  unsigned char center_b = 0;
+  void Reset() { *this = GlOpTestState{}; }
+};
+
+GlOpTestState g_gl_op;
+
+// Stable fills. Chosen so a single center-pixel channel check discriminates
+// {stale sim} vs {black post-clear} vs {bg composited} vs {fresh upload} with no tolerance.
+constexpr unsigned char kStaleMagenta[3] = { 0xFF, 0x00, 0xFF };  // r=255, g=0,   b=255
+constexpr unsigned char kFreshCyan[3] = { 0x00, 0xFF, 0xFF };     // r=0,   g=255, b=255
+constexpr unsigned char kBgGreen[3] = { 0x00, 0xFF, 0x00 };       // r=0,   g=255, b=0
+
+void FillSolid(std::vector<unsigned char>& buf, int w, int h, const unsigned char rgb[3]) {
+  buf.resize(static_cast<size_t>(w) * h * 3);
+  for (int i = 0; i < w * h; ++i) {
+    buf[i * 3 + 0] = rgb[0];
+    buf[i * 3 + 1] = rgb[1];
+    buf[i * 3 + 2] = rgb[2];
+  }
+}
+
+// GuiFunc body: dispatch requested GL operations in a single main-thread frame so the
+// interleaved "clear then upload before any Render()" case is exercised without an
+// intervening PreviewRenderer::Render() — RenderExportToRgba's internal Render() is the
+// sole Render() call in the request-fulfillment window.
+void GlOpGuiFunc(ImGuiTestContext*) {
+  if (!g_gl_op.requested || g_gl_op.done)
+    return;
+  const int tex_w = 16;
+  const int tex_h = 8;
+  std::vector<unsigned char> pixels;
+  if (g_gl_op.do_upload_stale) {
+    FillSolid(pixels, tex_w, tex_h, kStaleMagenta);
+    lumice::gui::g_preview.UploadTexture(pixels.data(), tex_w, tex_h);
+  }
+  if (g_gl_op.do_upload_bg) {
+    FillSolid(pixels, tex_w, tex_h, kBgGreen);
+    lumice::gui::g_preview.UploadBgTexture(pixels.data(), tex_w, tex_h);
+  }
+  if (g_gl_op.do_clear) {
+    lumice::gui::g_preview.ClearTexture();
+  }
+  if (g_gl_op.do_upload_fresh_after_clear) {
+    FillSolid(pixels, tex_w, tex_h, kFreshCyan);
+    lumice::gui::g_preview.UploadTexture(pixels.data(), tex_w, tex_h);
+  }
+  // Rectangular/equirect lens fills the full viewport with texture samples, so a uniformly
+  // colored source texture yields a uniformly colored output — center-pixel probe suffices
+  // (no fisheye visibility cutout at frame center).
+  lumice::gui::PreviewParams params;
+  lumice::gui::ConfigureEquirectExportParams(params);
+  params.exposure.intensity_factor = 1.0f;
+  params.exposure.intensity_scale = 0.0f;  // RGB (non-XYZ) mode: texture sampled as-is
+  if (g_gl_op.bg_enabled) {
+    params.bg.enabled = true;
+    params.bg.alpha = 0.0f;  // shader: bg * (1 - alpha) + sim * alpha — alpha=0 = pure bg
+    params.bg.aspect = static_cast<float>(tex_w) / static_cast<float>(tex_h);
+  }
+  auto rgba =
+      lumice::gui::RenderExportToRgba(lumice::gui::g_preview, params, g_gl_op.dst_w, g_gl_op.dst_h, std::nullopt);
+  g_gl_op.export_ok = !rgba.empty();
+  if (g_gl_op.export_ok) {
+    // RenderExportToRgba returns RGBA8, row-major, top-down (matches stbi_write_png).
+    const int cx = g_gl_op.dst_w / 2;
+    const int cy = g_gl_op.dst_h / 2;
+    const size_t off = (static_cast<size_t>(cy) * g_gl_op.dst_w + cx) * 4;
+    g_gl_op.center_r = rgba[off + 0];
+    g_gl_op.center_g = rgba[off + 1];
+    g_gl_op.center_b = rgba[off + 2];
+  }
+  g_gl_op.done = true;
 }
 }  // namespace
 
@@ -2945,6 +3038,112 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK(!gui::g_preview.HasTexture());
 
       std::remove(tmp_path);
+    };
+  }
+
+  // ========== task-350: GL pixel-level regression tests for stale-render on Open ==========
+  //
+  // task-349.1 (which added the three open_*_clears_stale_texture tests above) validated the
+  // CPU-side HasTexture() flag but never sampled the GL texture itself — the underlying bug
+  // (ClearTexture() left the GL texture_ handle holding the previous scene's pixels and
+  // Render() kept sampling them) survived that green test suite until owner on-screen
+  // regression. This block re-verifies the same code path at the true output layer via
+  // RenderExportToRgba, which internally invokes PreviewRenderer::Render() and reads back
+  // the FBO — a real production-shaped Render() call, not a CPU-side proxy.
+  //
+  // Threading: PreviewRenderer::UploadTexture / RenderExportToRgba both require a GL
+  // context and must run on the main render thread (GuiFunc). ClearTexture() itself is
+  // safe from the coroutine worker (task-349.4 fixture invariant) — the deferred blank
+  // is consumed by the next Render() on the main thread. See preview_renderer.hpp
+  // needs_gl_blank_ contract.
+  //
+  // Test scaffolding (GlOpTestState / GlOpGuiFunc / kStale* / FillSolid) lives in the
+  // anonymous namespace at the top of this file so the GuiFunc can be a plain non-capturing
+  // function pointer (ImGuiTestGuiFunc rejects capturing lambdas).
+
+  {
+    // AC1 (GL layer): ClearTexture() followed by Render() must leave the sim layer black,
+    // not sampling the previous scene's pixels. Real production Render() is invoked via
+    // RenderExportToRgba on the main thread.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "gl_render_clears_stale_sim_pixels");
+    t->GuiFunc = GlOpGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // Frame A: upload distinctive stale pixels + render once — establishes the "stale
+      // state truly present in GL storage" precondition (analogue of the CPU-side
+      // HasTexture() precondition in the sibling open_*_clears_stale_texture tests).
+      g_gl_op.Reset();
+      g_gl_op.requested = true;
+      g_gl_op.do_upload_stale = true;
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return g_gl_op.done; });
+      IM_CHECK(g_gl_op.export_ok);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_r), 0xFF);  // stale magenta really sampled from GL
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_g), 0x00);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_b), 0xFF);
+
+      // Frame B: ClearTexture() then render — AC1 core assertion. Pre-fix (ClearTexture
+      // only touching CPU state) this frame would still sample the stale magenta.
+      g_gl_op.Reset();
+      g_gl_op.requested = true;
+      g_gl_op.do_clear = true;
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return g_gl_op.done; });
+      IM_CHECK(g_gl_op.export_ok);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_r), 0x00);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_g), 0x00);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_b), 0x00);
+    };
+  }
+
+  {
+    // AC2 (bg not connected out): after ClearTexture(), if a background image is loaded and
+    // bg.enabled=true, the background must still show through — the fix must not hide bg
+    // as collateral damage. Uses bg.alpha=0 so the shader outputs pure bg (sim contribution
+    // zeroed out), making the assertion a direct color check on bg content.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "gl_render_preserves_bg_after_clear");
+    t->GuiFunc = GlOpGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      g_gl_op.Reset();
+      g_gl_op.requested = true;
+      g_gl_op.do_upload_stale = true;
+      g_gl_op.do_upload_bg = true;
+      g_gl_op.do_clear = true;
+      g_gl_op.bg_enabled = true;
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return g_gl_op.done; });
+      IM_CHECK(g_gl_op.export_ok);
+      // Expect pure bg (green). Not stale magenta (would mean bg alpha inverted or fix
+      // regressed to draw stale sim on top) and not all black (would mean bg was
+      // connected-out along with the sim layer).
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_r), 0x00);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_g), 0xFF);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_b), 0x00);
+    };
+  }
+
+  {
+    // Interleaved sequence: ClearTexture() then UploadTexture(fresh) with NO intervening
+    // Render() — the deferred-blank flag must be dropped by UploadTexture so the very next
+    // Render() shows the freshly uploaded pixels, not black. Directly locks in the "newest
+    // real write wins" invariant added in task-350 (plan-review round-1 Major fix).
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "gl_upload_after_clear_wins_over_pending_blank");
+    t->GuiFunc = GlOpGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      g_gl_op.Reset();
+      g_gl_op.requested = true;
+      g_gl_op.do_upload_stale = true;              // seed with something distinctive
+      g_gl_op.do_clear = true;                     // set pending blank
+      g_gl_op.do_upload_fresh_after_clear = true;  // must drop the pending blank
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return g_gl_op.done; });
+      IM_CHECK(g_gl_op.export_ok);
+      // Expect fresh cyan, not black — if UploadTexture failed to clear needs_gl_blank_,
+      // Render() would have overwritten the just-uploaded cyan with the 1x1 kBlack helper.
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_r), 0x00);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_g), 0xFF);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_b), 0xFF);
     };
   }
 }

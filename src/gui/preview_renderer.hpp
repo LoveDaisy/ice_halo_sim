@@ -147,6 +147,17 @@ class PreviewRenderer {
   std::vector<unsigned char> tex_data_;  // CPU-side copy of texture (RGB uint8, for .lmc save)
   bool xyz_mode_ = false;                // true when texture contains XYZ float data
 
+  // Deferred GL blank request. ClearTexture() sets this from any thread
+  // (callable from coroutine workers without a GL context); Render() (main
+  // thread, GL context) consumes it by re-uploading a 1x1 black pixel into
+  // texture_ so the sim layer stops sampling stale pixels. Any method that
+  // writes fresh real pixel data into texture_ MUST clear this flag first,
+  // so the newest real write always wins over a pending blank (invariant not
+  // enforced by the compiler — grep this comment before adding a new upload).
+  bool needs_gl_blank_ = false;
+
+  void UploadBlankSimTexture();
+
   // PBO double-buffer for async XYZ texture upload (GLsync stored as void* to
   // avoid including GL headers in this header; cast to GLsync in the .cpp).
   std::array<unsigned int, 2> pbo_ = { 0, 0 };
