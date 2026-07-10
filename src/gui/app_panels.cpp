@@ -8,6 +8,7 @@
 
 #include "IconsFontAwesome6.h"
 #include "gui/app.hpp"
+#include "gui/color_window.hpp"
 #include "gui/composite_exposure_push.hpp"
 #include "gui/crystal_preview.hpp"
 #include "gui/edit_modals.hpp"
@@ -300,6 +301,31 @@ void RenderTopBar(float window_width) {
       ImGui::SetTooltip(
           "Toggle colored composite / full-spectrum preview.\n"
           "Display-time only -- does not re-simulate or discard color classes.");
+    }
+
+    // task-348.1 Step 3 (① 反馈缺失): when every configured color class has no
+    // matching rays, the Colored composite is empty and the checkbox above appears
+    // "unclickable / non-responding" (last_uploaded_as_composite never flips true).
+    // Surface an aggregate warning pip here so the user sees WHY nothing changes —
+    // reads the same shared signal cache as the Colors window's per-row warnings
+    // (single source, a12), so both indicators agree by construction. Silent when
+    // no class has non-empty match[] (matches per-row semantics).
+    //
+    // Design note: this call site drives the shared throttled poll (RefreshColor-
+    // ClassSignals) even when the Colors window is closed — deliberate: the top-bar
+    // pip must reflect the current signal regardless of window visibility. The 500 ms
+    // throttle keeps the extra polling cost negligible.
+    const std::vector<int>& signal_flags = RefreshColorClassSignals(g_state, g_server);
+    if (AllConfiguredColorClassesUnmatched(g_state, signal_flags)) {
+      ImGui::SameLine();
+      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.2f, 1.0f));
+      ImGui::TextUnformatted(ICON_FA_TRIANGLE_EXCLAMATION);
+      ImGui::PopStyleColor();
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "None of the color classes matched any rays (they may be blocked by a physical filter).\n"
+            "Open the Colors window to inspect per-class details.");
+      }
     }
   }
 
