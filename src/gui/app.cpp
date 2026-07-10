@@ -491,7 +491,10 @@ static bool LoadAndUploadBgImage(const std::filesystem::path& path) {
 }
 
 void DoOpen() {
-  auto path = ShowOpenDialog();
+  DoOpen(ShowOpenDialog());
+}
+
+void DoOpen(const std::filesystem::path& path) {
   if (path.empty()) {
     return;
   }
@@ -545,6 +548,9 @@ void DoOpen() {
     } else {
       // Intent: no result to show (→ kIdle).
       g_state.run_intent = RunIntent::kNone;
+      // Clear stale texture from previous scene — mirrors DoNew() / JSON-import
+      // semantics: "no preview data = clear screen, wait for user to Run".
+      g_preview.ClearTexture();
     }
 
     // Restore background image from saved path (uses deserialized alpha, not reset to 0.5)

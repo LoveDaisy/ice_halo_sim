@@ -4,6 +4,7 @@
 #include <spdlog/sinks/basic_file_sink.h>
 
 #include <atomic>
+#include <filesystem>
 #include <memory>
 
 #include "gui/crystal_preview.hpp"
@@ -105,6 +106,7 @@ void DoExportDualFisheyeEqualAreaPng();
 void DoExportEquirectangularPng();
 void DoExportConfigJson();
 void DoOpen();
+void DoOpen(const std::filesystem::path& path);
 void DoNew();
 void CalibrateQualityThreshold();
 void DoRun();
