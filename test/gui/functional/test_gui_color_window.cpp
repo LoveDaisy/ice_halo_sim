@@ -69,7 +69,7 @@ bool RunToIdleWithData(LUMICE_Server* server, const char* json) {
     LUMICE_ServerState st = LUMICE_SERVER_RUNNING;
     LUMICE_QueryServerState(server, &st);
     if (st == LUMICE_SERVER_IDLE) {
-      LUMICE_RawXyzResult xyz[2]{};
+      LUMICE_RawXyzResult xyz[1]{};
       LUMICE_GetRawXyzResults(server, xyz, 1);
       if (xyz[0].has_valid_data) {
         return true;
@@ -346,8 +346,8 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // code-review-01 Major 2: the two tests above drive PollColorClassSignal with
-  // server=nullptr, which returns before ever calling LUMICE_GetColorClassSignal —
+  // The two tests above drive PollColorClassSignal with server=nullptr, which
+  // returns before ever calling LUMICE_GetColorClassSignal —
   // they exercise the resize path but never the "server rejects class_count"
   // branch (issue.md ② root cause 2: the 500 ms throttled poll hits the server's
   // strict class_count check during the settling window between a GUI-side
@@ -462,9 +462,9 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // code-review-01 Minor 1 (this task): a configured class whose index falls
-  // outside signal_flags (caller's cache hasn't grown to match state.raypath_color
-  // yet) must be treated as "unknown", not as a confirmed no-signal — matching
+  // A configured class whose index falls outside signal_flags (caller's cache
+  // hasn't grown to match state.raypath_color yet) must be treated as "unknown",
+  // not as a confirmed no-signal — matching
   // PollColorClassSignal's own "we don't know yet" default (resize(n, 1)). The
   // only configured class is out of range: pre-fix, `any_configured` was set
   // before the bounds check and the missing entry could never disqualify the

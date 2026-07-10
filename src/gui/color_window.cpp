@@ -511,11 +511,11 @@ void PollColorClassSignal(const GuiState& state, LUMICE_Server* server, std::vec
 // to call this in the same frame. The trailing resize guarantees the returned
 // vector always matches state.raypath_color.size() even in the frames between
 // two throttled polls (a fresh add/remove between windows must not leave the
-// cache out-of-sync). Returns a copy (code-review-01 Minor 2): the vector is at
-// most a handful of ints (one per color class), so the copy is negligible, and it
-// keeps the internal throttle cache from being exposed by reference to cross-module
-// callers (app_panels.cpp's top-bar pip) whose lifetime/threading assumptions this
-// file cannot enforce.
+// cache out-of-sync). Returns a copy: the vector is at most a handful of ints
+// (one per color class), so the copy is negligible, and it keeps the internal
+// throttle cache from being exposed by reference to cross-module callers
+// (app_panels.cpp's top-bar pip) whose lifetime/threading assumptions this file
+// cannot enforce.
 std::vector<int> RefreshColorClassSignals(const GuiState& state, LUMICE_Server* server) {
   auto& local = GetLocalState();
   const float now = static_cast<float>(ImGui::GetTime());

@@ -57,23 +57,14 @@ ColorClassConfig BuildClassFromFilter(int layer_idx, int crystal_pool_id, const 
 // whole-crystal). Returns the rejection message when factors!=1 or alts!=1.
 GuiValidationResult ValidateSingleAtomText(const std::string& text);
 
-// Poll LUMICE_GetColorClassSignal into caller-owned buffer. Semantics on failure
-// (task-348.1 fix): if the C API rejects the class_count (settling window between
-// GUI-side push_back and server-side commit), `out_flags` is LEFT UNCHANGED —
-// the previously observed signal is preserved rather than clobbered to zero.
-// `out_flags.resize(n, 1)` before the C call: new entries default to 1
-// ("settling / not yet warned") so that adding a class does not immediately mark
-// all pre-existing classes as unmatched.
-void PollColorClassSignal(const GuiState& state, LUMICE_Server* server, std::vector<int>& out_flags);
-
-// Orchestration wrapper (task-348.1): 500 ms throttled poll + resize + shared
-// cache. Single source consumed by both the Colors window per-row warnings and
-// the top-bar aggregate warning (a12) so the two indicators can't drift. Safe
-// to call multiple times per frame — throttle key + shared static cache make
-// same-frame calls idempotent (subsequent calls just resize + return the same
-// vector). Returns a copy (code-review-01 Minor 2): the vector is tiny (one int
-// per color class), so this trades a negligible copy for not exposing the
-// internal throttle cache by reference across module boundaries.
+// Orchestration wrapper: 500 ms throttled poll + resize + shared cache. Single
+// source consumed by both the Colors window per-row warnings and the top-bar
+// aggregate warning (a12) so the two indicators can't drift. Safe to call
+// multiple times per frame — throttle key + shared static cache make same-frame
+// calls idempotent (subsequent calls just resize + return the same vector).
+// Returns a copy: the vector is tiny (one int per color class), so this trades
+// a negligible copy for not exposing the internal throttle cache by reference
+// across module boundaries.
 std::vector<int> RefreshColorClassSignals(const GuiState& state, LUMICE_Server* server);
 
 // True when the user has configured at least one color class with non-empty
@@ -81,8 +72,26 @@ std::vector<int> RefreshColorClassSignals(const GuiState& state, LUMICE_Server* 
 // Drives the top-bar aggregate warning pip; matches the per-row warning
 // condition in RenderColorWindow (`!match.empty() && signal_flags[phys]==0`)
 // so the two never disagree. Returns false when raypath_color is empty or
-// when every class has empty match[] (nothing to warn about yet).
+// when every class has empty match[] (nothing to warn about yet). A configured
+// class whose index falls outside `signal_flags` is treated as unknown (not
+// counted either way), not as a confirmed no-signal.
 bool AllConfiguredColorClassesUnmatched(const GuiState& state, const std::vector<int>& signal_flags);
+
+// ---------------------------------------------------------------------------
+// Exported for gui_test only — do not call from production code. Production
+// code should go through RefreshColorClassSignals above, which adds the
+// throttle + shared-cache semantics these tests need to bypass for
+// deterministic, single-shot assertions.
+// ---------------------------------------------------------------------------
+
+// Poll LUMICE_GetColorClassSignal into caller-owned buffer. Semantics on failure:
+// if the C API rejects the class_count (settling window between GUI-side
+// push_back and server-side commit), `out_flags` is LEFT UNCHANGED — the
+// previously observed signal is preserved rather than clobbered to zero.
+// `out_flags.resize(n, 1)` before the C call: new entries default to 1
+// ("settling / not yet warned") so that adding a class does not immediately mark
+// all pre-existing classes as unmatched.
+void PollColorClassSignal(const GuiState& state, LUMICE_Server* server, std::vector<int>& out_flags);
 
 }  // namespace lumice::gui
 
