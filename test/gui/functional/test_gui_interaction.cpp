@@ -34,6 +34,61 @@ static bool WaitForSimRestartAtLeast(ImGuiTestContext* ctx, unsigned long baseli
   return false;
 }
 
+// AC2 core deliverable evidence (task-classic-params-migration, code-review-01.md merged Major
+// #1): plan.md §4 Step 6 calls out "same filter edit via CommitAllBuffers (Staged OK) vs
+// CommitAllBuffersImmediate (Immediate) produces identical GuiEffects" as the task's core
+// observable proof that S6 (staged/immediate unification) is real. Drives ONE logical
+// filter-presence edit through either commit path from an identical "finite rays done" baseline
+// and returns the effect-observable triple for cross-path comparison. A free function (not a
+// capturing lambda) because ImGuiTest::TestFunc is a raw function pointer typedef and cannot bind
+// captures.
+struct Ac2Outcome {
+  bool dirty;
+  gui::GuiState::SimState sim_state;
+  unsigned long long display_epoch_floor;
+};
+
+static Ac2Outcome RunFilterPresenceToggleScenario(ImGuiTestContext* ctx, bool start_with_filter, bool immediate) {
+  ResetTestState();
+  gui::g_state.modal_immediate_mode = immediate;
+  if (start_with_filter) {
+    gui::FilterConfig f;
+    f.SetRaypath(gui::RaypathParams{ "3-1-5" });
+    gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
+  }
+  gui::g_state.run_intent = gui::RunIntent::kLoaded;
+  gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+  gui::g_state.snapshot_intensity = 0.5f;
+  gui::g_state.committed_epoch = 5;
+  gui::g_state.display_epoch_floor = 0;
+  gui::g_state.dirty = false;
+  gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
+  ctx->Yield(2);
+
+  ctx->ItemClick("**/Edit##fi");
+  ctx->Yield(4);
+  ctx->ItemClick("**/###filter_tab");
+  ctx->Yield(4);
+  if (start_with_filter) {
+    ctx->ItemClick("**/Remove Filter##filter");
+  } else {
+    ctx->ItemInputValue("**/##row_text_0", "3-1-5");
+  }
+  ctx->Yield(2);
+  if (immediate) {
+    ctx->ItemClick("**/Close##edit_modal");
+  } else {
+    ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+  }
+  ctx->Yield(2);
+
+  const Ac2Outcome out{ gui::g_state.dirty, gui::g_state.sim_state, gui::g_state.display_epoch_floor };
+  if (immediate) {
+    gui::g_state.modal_immediate_mode = false;
+  }
+  return out;
+}
+
 // P0 tests
 void RegisterP0Tests(ImGuiTestEngine* engine) {
   // P0: New
@@ -787,6 +842,69 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Render-invalidation MUST have fired (all four effects):
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+      IM_CHECK_EQ(gui::g_state.snapshot_intensity, 0.0f);
+      IM_CHECK_EQ(gui::g_state.display_epoch_floor, gui::g_state.committed_epoch);
+      IM_CHECK(gui::g_state.dirty);
+    };
+  }
+
+  // AC2 case 1/2: filter ADD (nullopt→"3-1-5") — Staged vs Immediate must agree.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "ac2_staged_vs_immediate_filter_add");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const Ac2Outcome staged = RunFilterPresenceToggleScenario(ctx, /*start_with_filter=*/false, /*immediate=*/false);
+      const Ac2Outcome immediate =
+          RunFilterPresenceToggleScenario(ctx, /*start_with_filter=*/false, /*immediate=*/true);
+      IM_CHECK_EQ(staged.dirty, immediate.dirty);
+      IM_CHECK_EQ(static_cast<int>(staged.sim_state), static_cast<int>(immediate.sim_state));
+      IM_CHECK_EQ(staged.display_epoch_floor, immediate.display_epoch_floor);
+      // Non-vacuous witness: both paths actually fired the hard reset (not a "both no-op" pass).
+      IM_CHECK(staged.dirty);
+      IM_CHECK_EQ(static_cast<int>(staged.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+    };
+  }
+
+  // AC2 case 2/2: filter REMOVE ("3-1-5"→nullopt) — Staged vs Immediate must agree.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "ac2_staged_vs_immediate_filter_remove");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const Ac2Outcome staged = RunFilterPresenceToggleScenario(ctx, /*start_with_filter=*/true, /*immediate=*/false);
+      const Ac2Outcome immediate = RunFilterPresenceToggleScenario(ctx, /*start_with_filter=*/true, /*immediate=*/true);
+      IM_CHECK_EQ(staged.dirty, immediate.dirty);
+      IM_CHECK_EQ(static_cast<int>(staged.sim_state), static_cast<int>(immediate.sim_state));
+      IM_CHECK_EQ(staged.display_epoch_floor, immediate.display_epoch_floor);
+      IM_CHECK(staged.dirty);
+      IM_CHECK_EQ(static_cast<int>(staged.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+    };
+  }
+
+  // [code-review-01.md merged Major #1 companion ask] Duplicate hard-reset widget-level
+  // regression: cloning an entry that carries a filter appends a new `filters` pool slot, which
+  // the field's kStructHard auto-diff picks up unconditionally on the next reconcile (see
+  // progress.md Step 3-6 entry — this is pre-existing production behavior via T0's
+  // main.cpp:367 ApplyGuiEffects, not new to this task; the removed hand-written MarkDirty was
+  // redundant). Pins the observable effect end-to-end through the real Duplicate button.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "duplicate_with_filter_triggers_hard_reset");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::FilterConfig f;
+      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
+      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
+      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+      gui::g_state.snapshot_intensity = 0.5f;
+      gui::g_state.committed_epoch = 5;
+      gui::g_state.display_epoch_floor = 0;
+      gui::g_state.dirty = false;
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/" ICON_FA_COPY "##dup_0_0");
+      ctx->Yield(2);
+
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
       IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
       IM_CHECK_EQ(gui::g_state.snapshot_intensity, 0.0f);
       IM_CHECK_EQ(gui::g_state.display_epoch_floor, gui::g_state.committed_epoch);
