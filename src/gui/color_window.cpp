@@ -33,12 +33,13 @@
 
 namespace lumice::gui {
 
-namespace {
-
 // Rebuild the display-only arrays that LUMICE_SetRaypathColors consumes and
-// push them to the server. Called on every display-time edit (see write-path
-// table in file header). LUMICE_SetRaypathColors is whole-table — a single
-// row change still forces a full rebuild of classes[]/z_order[].
+// push them to the server. task-color-migration (T1): exported via
+// color_window.hpp so the frame-tail reconciler + DoRun/DoRevert repush
+// discipline can drive it (widgets themselves no longer call this directly —
+// they only write GuiState fields; the reconciler diffs and pushes).
+// LUMICE_SetRaypathColors is whole-table — a single row change still forces a
+// full rebuild of classes[]/z_order[].
 //
 // Returns true on LUMICE_OK; on failure the caller may want to log — we only
 // warn once here rather than pollute the log with a per-frame error stream.
@@ -84,6 +85,8 @@ bool PushDisplayState(const GuiState& state, LUMICE_Server* server) {
   g_server_poller.EnsureRunning(server);
   return true;
 }
+
+namespace {
 
 // Human-readable summary of a class's match[] used for the collapsed row label.
 // Rebuilt from state on every render (a05 减法 — no cache field).

@@ -888,7 +888,43 @@ struct GuiState {
   static_assert(std::is_copy_constructible_v<ConfigSnapshot>, "ConfigSnapshot must be copyable");
   static_assert(std::is_copy_assignable_v<ConfigSnapshot>, "ConfigSnapshot must be copy-assignable");
   std::optional<ConfigSnapshot> last_committed_state;
+
+  // task-color-migration (T1) — edge-trigger baseline for the display-state push (plan §3 D3).
+  // The frame-tail reconciler diffs the ColorClassDisplayState sub-part of every raypath_color
+  // entry + raypath_color_mode against this baseline; a change fires need_display_push,
+  // ApplyGuiEffects invokes PushDisplayState, and on success the baseline is updated to the
+  // current value — so an idle frame between edits produces zero pushes.
+  //
+  // Independent from last_committed_state so that (a) pure display edits between two commits
+  // still push, (b) commits do not spuriously push if nothing display-side changed. Cleared to
+  // nullopt by DoRun success / DoRevert / backend swap via InvalidateEffectsBaselines
+  // (plan §4 Step 6): the next frame's reconcile then unconditionally re-pushes the full display
+  // state (repush discipline; fixes 偏离 B' — z_order lost after Run). Same-cardinality gate
+  // (see gui_state_reconcile.cpp) skips pushing while structural class-count edits settle so we
+  // do not spam LUMICE_SetRaypathColors with reject-on-mismatch retries.
+  struct DisplayStateBaseline {
+    std::vector<ColorClassDisplayState> color_display;
+    int raypath_color_mode = 0;
+
+    friend bool operator==(const DisplayStateBaseline& a, const DisplayStateBaseline& b) {
+      return a.color_display == b.color_display && a.raypath_color_mode == b.raypath_color_mode;
+    }
+    friend bool operator!=(const DisplayStateBaseline& a, const DisplayStateBaseline& b) { return !(a == b); }
+  };
+  std::optional<DisplayStateBaseline> last_pushed_display_state;
 };
+
+// task-color-migration (T1) — collapse all edge-trigger baselines behind a single reset entry
+// (plan §4 Step 6 / Round 1 review Suggestion 2). Callers reset all baselines via this one
+// function so a future third baseline does not require chasing three DoRun/DoRevert/backend-swap
+// call sites separately (a12：统一原理优先于分类打补丁). Kept out-of-class so it can call
+// LUMICE_SetRaypathColors-driven repushes without recursively including anything.
+inline void InvalidateEffectsBaselines(GuiState& state) {
+  // last_committed_state is deliberately NOT reset here — it is Revert's snapshot, its lifecycle
+  // is owned by DoRun (writes) / DoRevert (reads); commingling it with display-baseline reset
+  // would silently break Revert.
+  state.last_pushed_display_state.reset();
+}
 
 // Size guard for ConfigSnapshot. If any field changes here, From/ApplyTo below must
 // be audited for matching changes. Apple Silicon + libc++ only (std::vector size varies

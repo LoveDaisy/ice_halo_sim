@@ -30,6 +30,16 @@ struct ColorClassConfig;
 // state.color_window_open is false.
 void RenderColorWindow(GuiState& state, LUMICE_Server* server);
 
+// task-color-migration (T1) — export the display-state push so the frame-tail
+// reconciler (gui_state_reconcile.cpp) and DoRun/DoRevert repush discipline can
+// drive it. Contract: server MUST be non-null; state.raypath_color may be empty
+// (early-return false). Rebuilds the whole {classes[], z_order[]} arrays and
+// calls LUMICE_SetRaypathColors + WakeForRefresh on the server poller. Returns
+// true iff LUMICE_SetRaypathColors returned LUMICE_OK. On failure (settling
+// window with class-count mismatch), the caller MUST NOT update its "last
+// pushed" baseline — the next reconcile diff retries. See plan.md §3 D3.
+bool PushDisplayState(const GuiState& state, LUMICE_Server* server);
+
 // --- Pure helpers, exposed for direct unit-tests (Step 10). ---
 //
 // Swap the z_order values of two physical class slots (identified by their

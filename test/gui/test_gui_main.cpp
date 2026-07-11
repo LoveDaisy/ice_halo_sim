@@ -438,7 +438,7 @@ int main(int argc, char** argv) {
     // edits driven by ImGuiTestEngine land in state.dirty within the same frame (rather than one
     // frame late as they would if this were folded into SyncFromPoller). Required for AC2
     // same-frame regression coverage.
-    gui::ApplyGuiEffects(gui::g_state, gui::ReconcileGuiEffects(gui::g_state));
+    gui::ApplyGuiEffects(gui::g_state, gui::g_server, gui::ReconcileGuiEffects(gui::g_state));
 
     ImGui::Render();
 

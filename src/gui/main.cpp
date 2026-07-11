@@ -364,7 +364,7 @@ int main(int argc, char** argv) {
     // synchronous semantics. Placing it at frame top (inside SyncFromPoller) would leave a
     // one-frame delay behind widget writes. Coexists idempotently with legacy DIRTY_IF sites during
     // T1-T4 migration; see gui_state_reconcile.hpp for the field participation set.
-    gui::ApplyGuiEffects(gui::g_state, gui::ReconcileGuiEffects(gui::g_state));
+    gui::ApplyGuiEffects(gui::g_state, gui::g_server, gui::ReconcileGuiEffects(gui::g_state));
 
     // Rendering
     ImGui::Render();

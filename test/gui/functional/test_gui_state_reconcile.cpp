@@ -42,6 +42,15 @@ GuiState MakeBaselineState() {
   s.layers.emplace_back();
   s.raypath_color.emplace_back();
   s.last_committed_state = GuiState::ConfigSnapshot::From(s);
+  // T1: populate the display-push baseline in the same "everything committed" state so a bare
+  // reconcile is fully quiet (both baselines match). Widget tests that need the "first push
+  // after reset" edge should call InvalidateEffectsBaselines(s) explicitly.
+  GuiState::DisplayStateBaseline dsb;
+  for (const auto& cls : s.raypath_color) {
+    dsb.color_display.push_back(static_cast<const gui::ColorClassDisplayState&>(cls));
+  }
+  dsb.raypath_color_mode = s.raypath_color_mode;
+  s.last_pushed_display_state = std::move(dsb);
   return s;
 }
 
@@ -121,15 +130,52 @@ void RegisterStateReconcileTests(ImGuiTestEngine* engine) {
       IM_CHECK(e.need_hard_reset);
     }
 
-    // Auto-diff-excluded fields must NOT drive effects even when they differ from baseline
-    // (raypath_color: reason is ColorClassConfig mixes structural + display sub-fields; the T1
-    // migration will split it. See gui_state_reconcile.hpp header comment.)
+    // task-color-migration (T1): raypath_color struct-part (combine/match) change → hard-reset lane.
+    // Vector cardinality change (add class) also counts as structural (add/remove filter topology).
     {
       GuiState s = MakeBaselineState();
       s.raypath_color.emplace_back();
       GuiEffects e = ReconcileGuiEffects(s);
+      IM_CHECK(e.need_resim);
+      IM_CHECK(e.need_hard_reset);
+    }
+    // combine change (same cardinality, struct-part only) → hard-reset lane.
+    {
+      GuiState s = MakeBaselineState();
+      s.raypath_color[0].combine = 1;  // was 0
+      GuiEffects e = ReconcileGuiEffects(s);
+      IM_CHECK(e.need_resim);
+      IM_CHECK(e.need_hard_reset);
+    }
+    // Display-only change (color) with matching cardinality → need_display_push only,
+    // no re-sim / hard-reset.
+    {
+      GuiState s = MakeBaselineState();
+      s.raypath_color[0].color[0] = 0.5f;  // was 1.0f
+      GuiEffects e = ReconcileGuiEffects(s);
       IM_CHECK(!e.need_resim);
       IM_CHECK(!e.need_hard_reset);
+      IM_CHECK(e.need_display_push);
+    }
+    // raypath_color_mode change (kDisplay tier) → need_display_push only.
+    {
+      GuiState s = MakeBaselineState();
+      s.raypath_color_mode = s.raypath_color_mode == 0 ? 1 : 0;
+      GuiEffects e = ReconcileGuiEffects(s);
+      IM_CHECK(!e.need_resim);
+      IM_CHECK(!e.need_hard_reset);
+      IM_CHECK(e.need_display_push);
+    }
+    // Cardinality mismatch between live vector and last_pushed_display_state MUST suppress
+    // need_display_push (D3 same-cardinality gate) — a settling-window push would be rejected
+    // by LUMICE_SetRaypathColors.
+    {
+      GuiState s = MakeBaselineState();
+      GuiState::DisplayStateBaseline stale;
+      // Baseline snapshot represents "pre-add" state (size 0); live vector has 1 entry.
+      s.last_pushed_display_state = stale;
+      GuiEffects e = ReconcileGuiEffects(s);
+      IM_CHECK(!e.need_display_push);
     }
     // use_gpu_backend is not in ConfigSnapshot::From so it cannot participate in the diff even
     // conceptually — legacy DIRTY_IF wrapper owns it. Toggling it must not drive effects.
@@ -166,9 +212,10 @@ void RegisterStateReconcileTests(ImGuiTestEngine* engine) {
     IM_UNUSED(ctx);
 
     // Assertion (a): every registered-non-excluded field must change GuiEffects when mutated.
-    // Six auto-diff-participating fields per gui_state_reconcile.cpp:
+    // Seven auto-diff-participating fields per gui_state_reconcile.cpp:
     //   soft: crystals, layers, sun, sim, renderer
     //   hard: filters
+    //   hard/display split: raypath_color (T1 task-color-migration dropped auto_diff_excluded)
     struct Mutator {
       const char* field;
       void (*apply)(GuiState&);
@@ -180,6 +227,9 @@ void RegisterStateReconcileTests(ImGuiTestEngine* engine) {
       { "sim", [](GuiState& s) { s.sim.ray_num_millions += 1.0f; } },
       { "renderer", [](GuiState& s) { s.renderer.sim_resolution_index += 1; } },
       { "filters", [](GuiState& s) { s.filters.emplace_back(); } },
+      // T1: mutate struct-part so the assertion below (`after.need_resim == true`) holds — a
+      // pure display-part mutation would only fire need_display_push, not need_resim.
+      { "raypath_color", [](GuiState& s) { s.raypath_color[0].combine = 1; } },
     };
     for (const auto& mut : kMutators) {
       GuiState s = MakeBaselineState();
@@ -211,16 +261,18 @@ void RegisterStateReconcileTests(ImGuiTestEngine* engine) {
     IM_CHECK(expected_fields == mutator_fields);
 
     // Assertion (b/c) analog: auto-diff-excluded struct-tier fields must NOT drive effects when
-    // mutated. Currently only raypath_color (auto_diff_excluded=true in kFieldTierTable).
+    // mutated. Post-T1 there is exactly ONE excluded struct-tier entry: use_gpu_backend (kept
+    // out of ConfigSnapshot; legacy DIRTY_IF wrapper owns it).
     {
       GuiState s = MakeBaselineState();
-      s.raypath_color.emplace_back();
+      s.use_gpu_backend = !s.use_gpu_backend;
       GuiEffects e = ReconcileGuiEffects(s);
       IM_CHECK_EQ(e, GuiEffects{});
     }
-    // Meta: exactly one auto-diff-excluded struct-tier entry today. If T1 flips raypath_color's
-    // exclusion (splits ColorClassConfig), this count changes and the assertion catches the
-    // omission of a paired wiring update.
+    // Meta: exactly ONE auto-diff-excluded struct-tier entry today (use_gpu_backend). T1 dropped
+    // raypath_color's exclusion after splitting ColorClassConfig; if a later task adds a new
+    // exception this count changes and the assertion catches the omission of a paired wiring
+    // update.
     int excluded_struct_count = 0;
     for (const auto& entry : gui::kFieldTierTable) {
       const bool is_struct = entry.tier == FieldTier::kStructHard || entry.tier == FieldTier::kStructSoft;
@@ -228,15 +280,17 @@ void RegisterStateReconcileTests(ImGuiTestEngine* engine) {
         ++excluded_struct_count;
       }
     }
-    IM_CHECK_EQ(excluded_struct_count, 2);  // raypath_color + use_gpu_backend
+    IM_CHECK_EQ(excluded_struct_count, 1);  // use_gpu_backend only
 
-    // Non-struct tiers (kDisplay/kView/kSession) are outside the reconciler's remit; they must not
-    // drive effects. Spot-check with raypath_color_mode (kDisplay).
+    // Display-tier field mutation → need_display_push only (no need_resim / need_hard_reset).
+    // raypath_color_mode is the only kDisplay entry today.
     {
       GuiState s = MakeBaselineState();
       s.raypath_color_mode = s.raypath_color_mode == 0 ? 1 : 0;
       GuiEffects e = ReconcileGuiEffects(s);
-      IM_CHECK_EQ(e, GuiEffects{});
+      IM_CHECK(!e.need_resim);
+      IM_CHECK(!e.need_hard_reset);
+      IM_CHECK(e.need_display_push);
     }
   };
 
@@ -251,7 +305,7 @@ void RegisterStateReconcileTests(ImGuiTestEngine* engine) {
       s.dirty = false;
       const uint64_t floor_before = s.display_epoch_floor;
       const float p99_before = s.p99_raw_y;
-      ApplyGuiEffects(s, GuiEffects{});
+      ApplyGuiEffects(s, nullptr, GuiEffects{});
       IM_CHECK(!s.dirty);
       IM_CHECK_EQ(s.display_epoch_floor, floor_before);
       IM_CHECK_EQ(s.p99_raw_y, p99_before);
@@ -265,7 +319,7 @@ void RegisterStateReconcileTests(ImGuiTestEngine* engine) {
       s.p99_raw_y = 1.5f;
       GuiEffects e;
       e.need_resim = true;
-      ApplyGuiEffects(s, e);
+      ApplyGuiEffects(s, nullptr, e);
       IM_CHECK(s.dirty);
       IM_CHECK_EQ(s.display_epoch_floor, 0u);  // MarkDirty does NOT raise floor
       IM_CHECK_EQ(s.p99_raw_y, 1.5f);          // MarkDirty does NOT clear p99
@@ -286,7 +340,7 @@ void RegisterStateReconcileTests(ImGuiTestEngine* engine) {
       GuiEffects e;
       e.need_resim = true;
       e.need_hard_reset = true;
-      ApplyGuiEffects(s, e);
+      ApplyGuiEffects(s, nullptr, e);
       IM_CHECK(s.dirty);
       IM_CHECK_EQ(s.display_epoch_floor, 5u);  // raised to committed_epoch
       IM_CHECK_EQ(s.p99_raw_y, 0.0f);

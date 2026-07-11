@@ -60,13 +60,19 @@ inline constexpr FieldTierEntry kFieldTierTable[] = {
 
     // ==== T-struct·hard: re-sim + display clear + epoch floor bump ==============================
     { "filters",                    FieldTier::kStructHard, false },
-    // raypath_color: nominally kStructHard, excluded from auto-diff until T1 splits
-    // ColorClassConfig into structural (combine/match) vs display (color/visible/solo/z_order)
-    // sub-structs. Diffing the whole vector as one hard-tier struct today would spuriously fire
-    // re-sim on pure display-time color/visibility edits. See doc/gui-state-governance.md T1.
-    { "raypath_color",              FieldTier::kStructHard, true  },
+    // raypath_color: T1 (task-color-migration) split ColorClassConfig into structural
+    // (ColorClassStructState: combine/match) vs display (ColorClassDisplayState:
+    // color/visible/solo/z_order) sub-structs, so the reconciler can now diff each part on
+    // its own channel — struct-part diff → need_hard_reset (drives MarkFilterDirty);
+    // display-part diff → need_display_push (drives LUMICE_SetRaypathColors, orthogonal to
+    // dirty/epoch). Formerly auto_diff_excluded=true; the exclusion is dropped now that the
+    // routing is expressible in the diff logic. See doc/gui-state-governance.md T1.
+    { "raypath_color",              FieldTier::kStructHard, false },
 
     // ==== T-display: display-time push, no dirty/epoch touch ====================================
+    // raypath_color_mode participates in the display-state edge-trigger baseline
+    // (last_pushed_display_state) alongside the ColorClassDisplayState of every raypath_color
+    // entry; diff → need_display_push. Not auto_diff_excluded — same rationale as above.
     { "raypath_color_mode",         FieldTier::kDisplay,    false },
 
     // ==== T-view: pure client-side view preference ==============================================
@@ -140,6 +146,11 @@ inline constexpr const char* kDerivedFieldsExcludeList[] = {
     "last_uploaded_as_composite",
     // Revert baseline
     "last_committed_state",
+    // task-color-migration (T1) edge-trigger baseline for display-state push. Updated by
+    // ApplyGuiEffects after a successful LUMICE_SetRaypathColors; cleared by
+    // InvalidateEffectsBaselines on DoRun / DoRevert / backend swap so the next reconcile
+    // unconditionally re-pushes (repush discipline; fixes 偏离 B').
+    "last_pushed_display_state",
     // Dirty flag (this is the effect output, not an input to the reconciler)
     "dirty",
     // Runtime-derived aspect clamp info (populated by ApplyAspectRatio)
