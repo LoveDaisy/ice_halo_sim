@@ -150,6 +150,12 @@ class ServerPoller {
   // server's current generation as new (what Start() does, minus the worker thread).
   void ResetGenerationForTest() { last_generation_ = 0; }
 
+  // Test-only: exposes the private PublishValidReset() seam so a regression test can construct the
+  // exact "valid=false snapshot published while under a kRunning intent" observation that used to
+  // pull a completed sim back into kSimulating (AC1 activity bug root cause (a), before the
+  // WakeForRefresh split). Not used in production.
+  void PublishValidResetForTest() { PublishValidReset(); }
+
   // Test-only: drives PopulateCompositePayload() directly with caller-supplied
   // composite_result so a regression test can pin the "composite bytes are
   // copied and is_composite becomes true" invariant against the same code path

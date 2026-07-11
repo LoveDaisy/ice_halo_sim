@@ -299,6 +299,28 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
     IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(RunIntent::kStopped, 7, nullptr, true)),
                 static_cast<int>(SimState::kModified));
 
+    // task-color-migration §3 D4 — kRunCompleted (latched natural completion) → kDone regardless
+    // of the observation. This is the load-bearing row: even a valid=false observation (root cause
+    // (a)) or a stale-epoch observation must NOT pull the latched terminal back to kSimulating.
+    // RED手法: forgetting the case in the switch would fall through to a default and mis-derive.
+    IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(RunIntent::kRunCompleted, 5, nullptr, false)),
+                static_cast<int>(SimState::kDone));
+    IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(RunIntent::kRunCompleted, 5, nullptr, true)),
+                static_cast<int>(SimState::kModified));  // +dirty → kModified (kDone is demotable)
+    {
+      auto s_invalid = mk(false, 5, kDone_lc);
+      // valid=false observation must NOT pull kRunCompleted back to kSimulating — this row is the
+      // structural guarantee AC1's activity bug root cause (b) relied on and this test pins.
+      IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(RunIntent::kRunCompleted, 5, &s_invalid, false)),
+                  static_cast<int>(SimState::kDone));
+      auto s_stale = mk(true, 3, kDone_lc);  // stale epoch (< committed)
+      IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(RunIntent::kRunCompleted, 5, &s_stale, false)),
+                  static_cast<int>(SimState::kDone));
+      auto s_running = mk(true, 5, kRun_lc);  // even a fresh RUNNING observation stays latched
+      IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(RunIntent::kRunCompleted, 5, &s_running, false)),
+                  static_cast<int>(SimState::kDone));
+    }
+
     // kStopping (async Stop draining, 1.6) → kStopping, for ANY observation/dirty. Pure optimistic
     // intent: not pulled by a fresh COMPLETED, and NOT demoted by dirty (a draining run is not an
     // editable completed result). RED手法: mis-mapping the kStopping case to S::kSimulating turns
@@ -599,6 +621,67 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
 
     local.Stop();
     LUMICE_DestroyServer(server);
+  };
+
+  // ---- Test 6b: task-color-migration §3 D4 — kRunCompleted Mealy latch (integration) ----
+  // Pins the SyncFromPoller-side Mealy edge: under a kRunning intent, the first fresh COMPLETED
+  // observation at the committed epoch promotes the intent to kRunCompleted, and any later
+  // valid=false observation cannot pull the reconciled state back to kSimulating (root cause (b)
+  // of the AC1 activity bug — the structural belt paired with WakeForRefresh's suspenders).
+  //
+  // Uses the same DoRun-driven real-server flow as Test 2 (gpu_run_reaches_done) so the intent
+  // advance goes through the actual production SyncFromPoller path, not a hand-rolled reconcile
+  // call.
+  ImGuiTest* t6b = IM_REGISTER_TEST(engine, "gui_lifecycle", "run_completed_latch_survives_invalid_snapshot");
+  t6b->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    // Fresh server + baseline (mirrors gpu_run_reaches_done setup).
+    gui::g_server_poller.Stop();
+    gui::g_server = LUMICE_CreateServer();
+    IM_CHECK(gui::g_server != nullptr);
+    gui::g_server_is_gpu = false;
+    gui::g_state = gui::InitDefaultState();
+    gui::g_state.sim.infinite = false;
+    gui::g_state.sim.ray_num_millions = 0.5f;
+    gui::g_state.sim.max_hits = 8;
+#if defined(__APPLE__)
+    gui::g_state.use_gpu_backend = true;
+#endif
+
+    gui::DoRun();
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunning));
+
+    // Drive SyncFromPoller until the reconcile settles on kDone (natural completion).
+    for (int i = 0; i < 500 && static_cast<int>(gui::g_state.sim_state) != static_cast<int>(SimState::kDone); ++i) {
+      ctx->Yield();
+    }
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kDone));
+
+    // Mealy latch invariant: on the first frame that observes fresh COMPLETED, SyncFromPoller
+    // must have promoted the intent to kRunCompleted (kRunning → kRunCompleted). Give the poller
+    // one more Yield to run the promotion path if it hasn't yet.
+    for (int i = 0; i < 3 && gui::g_state.run_intent != RunIntent::kRunCompleted; ++i) {
+      ctx->Yield();
+    }
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunCompleted));
+
+    // Load-bearing check: fabricate a valid=false observation on the global poller (the exact
+    // shape that WakeForRestart's PublishValidReset used to produce, and that the AC1 root cause
+    // (b) required to demote the completed state). With the kRunCompleted latch in effect, a
+    // subsequent SyncFromPoller must NOT pull sim_state back to kSimulating — the intent-latched
+    // terminal is structurally immune (this is the belt-and-suspenders duality with WakeForRefresh).
+    gui::g_server_poller.PublishValidResetForTest();
+    gui::SyncFromPoller();
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kDone));
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunCompleted));
+
+    // Cleanup.
+    gui::g_server_poller.Stop();
+    LUMICE_DestroyServer(gui::g_server);
+    gui::g_server = nullptr;
+    gui::g_state.run_intent = RunIntent::kNone;
+    gui::g_state.committed_epoch = 0;
+    gui::g_state.display_epoch_floor = 0;
   };
 
   // ---- Test 7: task-color-migration M4 — WakeForRefresh preserves valid across the wake edge ----

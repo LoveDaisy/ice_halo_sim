@@ -22,14 +22,24 @@ enum class CrystalType { kPrism, kPyramid };
 // Last user run-intent (blueprint §5 CQS "last command" channel). This is one of the two
 // inputs to ReconcileSimState (the other being the last backend observation). The GUI sets
 // this on DoRun/DoStop/DoOpen; SyncFromPoller derives sim_state from it each frame.
-//   kNone     — fresh session / CLI-JSON import / .lmc with no baked texture (→ kIdle)
-//   kLoaded   — .lmc loaded with a baked result texture (static result, no server run → kDone)
-//   kRunning  — Run committed; sim_state follows the fresh backend lifecycle
-//   kStopping — Stop issued but the backend is still draining the in-flight batch (async, 1.6).
-//               Optimistic intent-latched display state (→ kStopping); advanced to kStopped by
-//               SyncFromPoller once the background stop completes (g_stop_inflight clears).
-//   kStopped  — Stop drained; intent-latched terminal state (→ kStopEndState = kDone, see app.cpp)
-enum class RunIntent { kNone, kLoaded, kRunning, kStopping, kStopped };
+//   kNone         — fresh session / CLI-JSON import / .lmc with no baked texture (→ kIdle)
+//   kLoaded       — .lmc loaded with a baked result texture (static result, no run → kDone)
+//   kRunning      — Run committed; sim_state follows the fresh backend lifecycle
+//   kStopping     — Stop issued but the backend is still draining the in-flight batch (async, 1.6).
+//                   Optimistic intent-latched display state (→ kStopping); advanced to kStopped by
+//                   SyncFromPoller once the background stop completes (g_stop_inflight clears).
+//   kStopped      — Stop drained; intent-latched terminal state (→ kStopEndState = kDone, app.cpp)
+//   kRunCompleted — Run reached a natural (finite) completion. Intent-latched terminal state
+//                   mirroring the kStopping→kStopped Mealy pattern: SyncFromPoller advances
+//                   kRunning→kRunCompleted the first time it observes a fresh COMPLETED snapshot
+//                   at the current committed_epoch. Once latched, ReconcileSimState maps this
+//                   directly to kDone regardless of subsequent snapshot volatility (e.g. a
+//                   transient valid=false observation) — closing off AC1's root cause (b)
+//                   "completion state not latched, recomputed each frame from volatile inputs"
+//                   (task-color-migration §3 D4 / doc/gui-state-governance.md §4 支柱 2).
+//                   DoRun writes run_intent = kRunning unconditionally on a successful commit
+//                   (app.cpp), naturally re-arming the latch for the next run.
+enum class RunIntent { kNone, kLoaded, kRunning, kStopping, kStopped, kRunCompleted };
 
 // Axis distribution type for crystal orientation.
 // Values must stay contiguous 0..N-1 — ImGui RadioButton relies on static_cast<int>.

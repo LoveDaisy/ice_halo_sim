@@ -975,6 +975,15 @@ GuiState::SimState ReconcileSimState(RunIntent intent, uint64_t committed_epoch,
     case RunIntent::kStopped:
       base = kStopEndState;  // drained terminal state; single flip point (see kStopEndState above)
       break;
+    case RunIntent::kRunCompleted:
+      // task-color-migration §3 D4: intent-latched terminal state for a natural (finite) run
+      // completion. Once SyncFromPoller has advanced the intent to kRunCompleted (having observed
+      // a fresh COMPLETED snapshot at the committed epoch — see the Mealy edge below), the base
+      // stays kDone regardless of subsequent snapshot volatility. Structurally immune to a
+      // transient valid=false observation pulling the completed run back into kSimulating — the
+      // second layer of the AC1 activity-bug defense (belt-and-suspenders with WakeForRefresh).
+      base = S::kDone;
+      break;
     case RunIntent::kRunning:
       base = (fresh && snap->lifecycle == LUMICE_LIFECYCLE_COMPLETED) ? S::kDone : S::kSimulating;
       break;
@@ -1065,6 +1074,21 @@ void SyncFromPoller() {
   // so the terminal kStopEndState paints on the NEXT frame's reconcile.
   if (g_state.run_intent == RunIntent::kStopping && !g_stop_inflight.load()) {
     g_state.run_intent = RunIntent::kStopped;
+  }
+
+  // Mealy next-intent advance for a natural run completion (task-color-migration §3 D4 /
+  // doc/gui-state-governance.md §4 支柱 2). Symmetric to the kStopping→kStopped promote above:
+  // the first time we observe a fresh COMPLETED snapshot at the committed epoch under a kRunning
+  // intent, latch the intent to kRunCompleted so subsequent frames stay kDone even if a later
+  // snapshot briefly observes valid=false. Same "writes INTENT only, reconcile is single-owner
+  // over sim_state" contract as the Stopping→Stopped promote. Placed AFTER the reconcile so the
+  // latched terminal state paints on the NEXT frame's reconcile.
+  //
+  // DoRun re-arms this by unconditionally writing run_intent=kRunning on a successful commit
+  // (see app.cpp:855), so any subsequent Run naturally invalidates the prior latch.
+  if (g_state.run_intent == RunIntent::kRunning && snap && snap->valid && snap->epoch == g_state.committed_epoch &&
+      snap->lifecycle == LUMICE_LIFECYCLE_COMPLETED) {
+    g_state.run_intent = RunIntent::kRunCompleted;
   }
 
   if (!snap || !snap->valid) {
