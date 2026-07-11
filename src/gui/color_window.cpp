@@ -476,13 +476,20 @@ void RenderRefRow(GuiState& state, ColorClassConfig& cls, size_t ref_idx, bool& 
     ImGui::BeginDisabled();
   }
   if (ImGui::InputText("##pred", buf, sizeof(buf))) {
-    // T1: reconciler routes the resulting struct-part diff to hard-reset. Note: transient
-    // invalid text will now propagate through the diff → next auto-commit; FillColorPredicate
-    // (file_io.cpp) silently skips refs whose predicate does not parse as a single atom, so
-    // this is safe — but any user-visible flicker during rapid-typing invalid intermediates
-    // is a known follow-up (T6 cleanup-hardening) that a widget-local shadow buffer would
-    // fix without re-introducing the widget-side MarkFilterDirty guard.
-    ref.predicate_text = std::string(buf);
+    // T1: reconciler routes any change to `ref.predicate_text` through struct-part diff to
+    // hard-reset (RaypathColorStructChanged in gui_state_reconcile.cpp), unconditionally —
+    // there is no separate imperative MarkFilterDirty call left to gate on validity the way
+    // the pre-migration code did. So gate the WRITE itself: only commit `buf` into the diffed
+    // field once it validates as a single atom (code-review round-1 Major-2), mirroring the
+    // pre-migration "only MarkFilterDirty when valid" behavior and avoiding a hard-reset (and
+    // its user-visible flicker) on every keystroke of a transient invalid predicate.
+    // ImGui's InputText keeps its own live edit buffer for an active item — reasserting `buf`
+    // from `ref.predicate_text` at the top of next frame (the std::snprintf above) does not
+    // clobber what the user is mid-typing, so this is safe even while the field stays uncommitted.
+    const std::string typed = std::string(buf);
+    if (ValidateSingleAtomText(typed).state == LUMICE_RAYPATH_VALID) {
+      ref.predicate_text = typed;
+    }
   }
   if (ref.match_all) {
     ImGui::EndDisabled();

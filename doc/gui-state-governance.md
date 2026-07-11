@@ -69,6 +69,7 @@
 ### 支柱 2 — 每通道单一序列化器 + 重推纪律
 - commit 通道与 display 通道**都从同一个显示态子结构派生完整 payload** → 字段子集割裂（偏离 B）在结构上不可能。
 - **重推纪律（新不变量 I-repush）**：任何改动 committed 显示态或重建 server-side consumer 的操作（`DoRun` / `DoRevert` / 后端切换）都必须重建完整 display 态 → 消偏离 B'（Run 后 z_order）+ 偏离 C（Revert）。
+- **T1 落地方式的适用范围（code-review round-1 Minor-1）**：T1（染色域）把 `gui_state_reconcile.cpp` 直接 `#include` 具体 widget 头文件 `color_window.hpp` 来调用其 `PushDisplayState`。单域下这是可接受的最小实现，但**不是**要被 T2/T3 逐域字面复制的模式——若每条 `need_X_push` 通道都让通用 reconciler 反过来 include 对应 widget 头文件，reconciler.cpp 会随迁移域数量线性堆积对所有域 widget 头文件的依赖，违反"widget 依赖 reconciler 抽象、reconciler 不反向依赖 widget"的分层方向。T2 立项前应评估一层轻量的 push-handler 注册/分派抽象（例如按域注册回调，reconciler 只依赖注册表而非具体头文件），再决定是否值得为多域场景引入。
 
 ### 支柱 3 — latch 派生态 + display-time 操作禁碰 re-sim/lifecycle 原语
 - (a) `PushDisplayState` 唤醒 poller 用**"刷新唤醒"**（不做 `PublishValidReset`，无 valid=false 窗口）——把 `EnsureRunning` 拆成 `WakeForRestart`（带 valid 复位，给真重启）vs `WakeForRefresh`（不带，给 display 刷新）。

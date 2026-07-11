@@ -534,6 +534,14 @@ int main(int argc, char** argv) {
   fprintf(stderr, "[GUI Tests] %d/%d tests passed\n", count_success, count_tested);
 
   // Cleanup
+  // Stop the background poller before global static destructors run, mirroring the real app's exit
+  // teardown (src/gui/main.cpp:413-414). The M6 frame-tail ApplyGuiEffects can leave the poller
+  // RUNNING (display-push WakeForRefresh) after the final test; without an explicit Stop() here the
+  // static g_server_poller dtor's worker-join hangs at process exit — gui_test runs every test,
+  // prints the summary, then never returns.
+  gui::JoinPendingStop();
+  gui::g_server_poller.Stop();
+
   ImGuiTestEngine_Stop(engine);
 
   gui::g_thumbnail_cache.Destroy();

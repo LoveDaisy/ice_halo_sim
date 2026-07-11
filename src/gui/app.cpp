@@ -851,7 +851,7 @@ void DoRun() {
     // §3 D2). This is the single fix for the "Run 后 z_order 不生效" bug (AC2, plan §1 偏离 B').
     // Single entry point for all edge-trigger baselines — future third baseline picks up its
     // reset here (a12: 统一原理优先于分类打补丁).
-    InvalidateEffectsBaselines(g_state);
+    g_state.InvalidateEffectsBaselines();
     // Intent + epoch readback (I1): the synchronous commit above has already minted (or reused)
     // the lifecycle epoch; read it back so ReconcileSimState keys the display on THIS generation.
     // A filter change always rebuilds (epoch++), so the new epoch strictly exceeds any
@@ -943,7 +943,7 @@ void DoRevert() {
     // server still holds the post-edit display state — invalidating the display-push baseline
     // forces the next frame's reconciler to re-push the restored display payload so the server
     // catches up to Revert. Fixes the "Revert 不重推颜色 display 态" bug (plan §1 偏离 C).
-    InvalidateEffectsBaselines(g_state);
+    g_state.InvalidateEffectsBaselines();
     g_thumbnail_cache.OnLayerStructureChanged();
     // Revert restores config == committed, so it is no longer dirty. This is load-bearing under
     // the single-owner reconcile: with the old direct sim_state=kDone write gone, a leftover

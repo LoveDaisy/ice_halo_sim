@@ -44,7 +44,7 @@ GuiState MakeBaselineState() {
   s.last_committed_state = GuiState::ConfigSnapshot::From(s);
   // T1: populate the display-push baseline in the same "everything committed" state so a bare
   // reconcile is fully quiet (both baselines match). Widget tests that need the "first push
-  // after reset" edge should call InvalidateEffectsBaselines(s) explicitly.
+  // after reset" edge should call s.InvalidateEffectsBaselines() explicitly.
   GuiState::DisplayStateBaseline dsb;
   for (const auto& cls : s.raypath_color) {
     dsb.color_display.push_back(static_cast<const gui::ColorClassDisplayState&>(cls));
@@ -196,7 +196,7 @@ void RegisterStateReconcileTests(ImGuiTestEngine* engine) {
       GuiState s = MakeBaselineState();
       IM_CHECK(!s.raypath_color.empty());                 // sanity: MakeBaselineState puts one class in
       IM_CHECK(s.last_pushed_display_state.has_value());  // sanity: MakeBaselineState seeds it
-      InvalidateEffectsBaselines(s);
+      s.InvalidateEffectsBaselines();
       IM_CHECK(!s.last_pushed_display_state.has_value());
       GuiEffects e = ReconcileGuiEffects(s);
       IM_CHECK(e.need_display_push);  // nullopt baseline + non-empty vector → fire
@@ -208,7 +208,7 @@ void RegisterStateReconcileTests(ImGuiTestEngine* engine) {
     {
       GuiState s = MakeBaselineState();
       s.raypath_color.clear();
-      InvalidateEffectsBaselines(s);
+      s.InvalidateEffectsBaselines();
       GuiEffects e = ReconcileGuiEffects(s);
       IM_CHECK(!e.need_display_push);
     }
@@ -220,7 +220,7 @@ void RegisterStateReconcileTests(ImGuiTestEngine* engine) {
       GuiState s = MakeBaselineState();
       const bool commit_present_before = s.last_committed_state.has_value();
       IM_CHECK(commit_present_before);
-      InvalidateEffectsBaselines(s);
+      s.InvalidateEffectsBaselines();
       IM_CHECK(s.last_committed_state.has_value());  // preserved across the reset
     }
   };

@@ -29,6 +29,7 @@
 #include <memory>
 #include <thread>
 
+#include "IconsFontAwesome6.h"  // ICON_FA_* selectors for the real-UI-click AC1 regression (Test 8b).
 #include "gui/server_poller.hpp"
 #include "test_gui_shared.hpp"
 
@@ -857,6 +858,145 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
     scan_invariant("mode");
 
     // Cleanup mirrors Test 2 / Test 6b.
+    gui::g_server_poller.Stop();
+    if (gui::g_server) {
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+    }
+    gui::g_server_is_gpu = false;
+    gui::g_state.run_intent = RunIntent::kNone;
+    gui::g_state.committed_epoch = 0;
+    gui::g_state.display_epoch_floor = 0;
+  };
+
+  // AC1 real-UI-click regression (code-review round-1 Major-3): Test 8 above proves the
+  // reconciler-level AC1/AC4 invariants given a raw field write, but M3 made every color-window
+  // widget a pure field-writer that is ALSO reached through real ImGui widget code (button click,
+  // combo popup, held-Alt modifier, color-picker popup) before that field write happens — the
+  // multi-frame widget interaction itself (popup open/close, a frame where the mouse is down but
+  // the click hasn't registered yet, modifier-key state) is exactly the kind of thing a direct
+  // field poke cannot exercise. This test drives the same five display-time categories through
+  // their actual widget code paths (`ctx->ItemClick`/`ctx->ComboClick`, held Alt for solo) instead
+  // of assigning GuiState fields directly.
+  ImGuiTest* t8b = IM_REGISTER_TEST(engine, "gui_lifecycle", "display_edits_via_real_ui_clicks_do_not_disturb_done");
+  t8b->TestFunc = [](ImGuiTestContext* ctx) {
+    gui::g_server_poller.Stop();
+    gui::g_server = LUMICE_CreateServer();
+    IM_CHECK(gui::g_server != nullptr);
+    gui::g_server_is_gpu = false;
+    gui::g_state = gui::InitDefaultState();
+    gui::g_state.sim.infinite = false;
+    gui::g_state.sim.ray_num_millions = 0.5f;
+    gui::g_state.sim.max_hits = 8;
+#if defined(__APPLE__)
+    gui::g_state.use_gpu_backend = true;
+#endif
+
+    // Two match-all classes on the default crystal, seeded BEFORE DoRun (same rationale as Test
+    // 8: a non-empty committed raypath_color so the push lane is actually exercised). z_order is
+    // seeded in ascending rank order (rank 0 == phys 0) so the wildcard item lookups below —
+    // which resolve to the FIRST matching item in this frame's submission order (see
+    // ImGuiTestEngineHook_ItemInfo_ResolveFindByLabel: `OutItemId == 0` guard means first-match-
+    // wins, not an ambiguity error) — deterministically hit the rank-0 row without needing a
+    // fragile PushID(int)-based hardcoded path (the same fragility `toggle_whole_via_ui_marks_
+    // modified` in test_gui_color_window.cpp already called out for `##body`).
+    gui::ColorClassConfig c0;
+    c0.color[0] = 1.0f;
+    c0.visible = true;
+    c0.solo = false;
+    c0.z_order = 0;
+    gui::ColorClassRefConfig ref0;
+    ref0.layer_idx = 0;
+    ref0.crystal_pool_id = gui::g_state.layers[0].entries[0].crystal_id;
+    ref0.match_all = true;
+    c0.match.push_back(ref0);
+    gui::ColorClassConfig c1;
+    c1.color[1] = 1.0f;
+    c1.visible = true;
+    c1.solo = false;
+    c1.z_order = 1;
+    c1.match.push_back(ref0);
+    gui::g_state.raypath_color.push_back(c0);
+    gui::g_state.raypath_color.push_back(c1);
+
+    gui::DoRun();
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunning));
+    auto start = std::chrono::steady_clock::now();
+    while (gui::g_state.sim_state != SimState::kDone || gui::g_state.run_intent != RunIntent::kRunCompleted) {
+      ctx->Yield();
+      if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start).count() > 20) {
+        break;
+      }
+    }
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kDone));
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunCompleted));
+
+    const uint64_t baseline_epoch = gui::g_state.committed_epoch;
+
+    // Same multi-frame scan rationale as Test 8's scan_invariant: AC1 is "does not flash", so a
+    // single post-click assertion would miss a one-frame regression window.
+    auto scan_invariant = [&]() {
+      for (int frame = 0; frame < 5; ++frame) {
+        ctx->Yield();
+        IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kDone));
+        IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunCompleted));
+        IM_CHECK_EQ(gui::g_state.committed_epoch, baseline_epoch);
+      }
+    };
+
+    gui::g_state.color_window_open = true;
+    ctx->Yield(2);
+    ctx->SetRef("//" ICON_FA_PALETTE " Colors");
+
+    // Click 1: color swatch -> opens the ColorPicker popup -> click inside its "sv" square. The
+    // default ItemClick position is the item rect's center, which is never the current pure-red
+    // S=1,V=1 corner, so this always produces a value_changed edit (see ColorPicker4's `IsItemActive
+    // () && !is_readonly` branch in imgui_widgets.cpp) -> close the popup.
+    ctx->ItemClick("**/##color");
+    ctx->Yield();
+    ctx->ItemClick("**/sv");
+    ctx->PopupCloseAll();
+    scan_invariant();
+    IM_CHECK_NE(gui::g_state.raypath_color[0].color[0], 1.0f);  // sanity: the click actually landed
+
+    // Click 2: eye icon plain click -> visible toggle.
+    IM_CHECK(gui::g_state.raypath_color[0].visible);
+    ctx->ItemClick("**/" ICON_FA_EYE);
+    scan_invariant();
+    IM_CHECK(!gui::g_state.raypath_color[0].visible);  // sanity: the click actually landed
+
+    // Click 3: Alt+eye icon -> solo. Rank-0's icon is now ICON_FA_EYE_SLASH (visible was just
+    // toggled off above) while rank-1's is still plain ICON_FA_EYE, so this lookup is unambiguous
+    // by construction, independent of the first-match tie-break described above.
+    ctx->KeyDown(ImGuiMod_Alt);
+    ctx->ItemClick("**/" ICON_FA_EYE_SLASH);
+    ctx->KeyUp(ImGuiMod_Alt);
+    scan_invariant();
+    IM_CHECK(gui::g_state.raypath_color[0].solo);  // sanity: the click actually landed
+
+    // Click 4: z_order down-arrow on the rank-0 row. Rank-0's up-arrow is disabled (top of stack);
+    // its down-arrow is the enabled one, and first-match resolves to rank-0 since it is rendered
+    // first in the z_order-sorted loop.
+    const int z0_before = gui::g_state.raypath_color[0].z_order;
+    const int z1_before = gui::g_state.raypath_color[1].z_order;
+    ctx->ItemClick("**/" ICON_FA_ARROW_DOWN "##down");
+    scan_invariant();
+    IM_CHECK_EQ(gui::g_state.raypath_color[0].z_order, z1_before);  // sanity: the swap landed
+    IM_CHECK_EQ(gui::g_state.raypath_color[1].z_order, z0_before);
+
+    // Click 5: composite mode combo -> "painter" is combo item index 2 (see kModeNames in
+    // RenderCompositeModeCombo), distinct from the default index 0 ("dominant").
+    const int mode_before = gui::g_state.raypath_color_mode;
+    ctx->ComboClick("##ColorMode/painter");
+    scan_invariant();
+    IM_CHECK_NE(gui::g_state.raypath_color_mode, mode_before);  // sanity: the click actually landed
+    IM_CHECK_EQ(gui::g_state.raypath_color_mode, 2);
+
+    ctx->SetRef("");
+    gui::g_state.color_window_open = false;
+    ctx->Yield(2);
+
     gui::g_server_poller.Stop();
     if (gui::g_server) {
       LUMICE_StopServer(gui::g_server);

@@ -1614,4 +1614,216 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     gui::g_server_poller.Stop();
     LUMICE_DestroyServer(server);
   };
+
+  // AC2 real-server regression (code-review round-1 Major-1): the AC3 test above pins the
+  // reconciler-vs-direct-push EQUIVALENCE, but never drives a real gui::DoRun() — so it cannot
+  // catch a regression in the repush discipline that DoRun() itself owns (InvalidateEffectsBaselines
+  // on commit success, app.cpp:854). This test drives the actual "drag z_order, click Run again"
+  // flow: two fully-overlapping match-all classes on the single default crystal in painter mode (so
+  // the higher z_order class wins every landed pixel regardless of brightness, making z_order
+  // priority directly observable), swap z_order via the Step 2/3 field-write path (simulating a
+  // drag-reorder), then re-run with no further color edits and assert the swapped order survives —
+  // the exact "Run 后 z_order 不生效" bug (plan §1 偏离 B') a stale baseline would reintroduce.
+  ImGuiTest* t_ac2_rerun = IM_REGISTER_TEST(engine, "gui_composite_preview", "zorder_priority_persists_across_rerun");
+  t_ac2_rerun->TestFunc = [](ImGuiTestContext* ctx) {
+    gui::g_server_poller.Stop();
+    gui::g_server = LUMICE_CreateServer();
+    IM_CHECK(gui::g_server != nullptr);
+    gui::g_server_is_gpu = false;
+    gui::g_state = gui::InitDefaultState();
+    gui::g_state.sim.infinite = false;
+    gui::g_state.sim.ray_num_millions = 0.5f;
+    gui::g_state.sim.max_hits = 8;
+    // Deliberately CPU-only (default use_gpu_backend=false): the device-fused GPU path does not
+    // populate outgoing_component_ / raypath-color lanes yet (RenderConsumer warns and produces an
+    // empty composite) — this task's lane display targets CPU only, so forcing GPU here (as Test 8
+    // in test_gui_lifecycle.cpp does for its pure lifecycle assertions) would make the composite
+    // pixel reads below vacuous.
+
+    auto MakeMatchAllClass = [](float r, float g, float b, int z_order) {
+      gui::ColorClassConfig c;
+      c.color[0] = r;
+      c.color[1] = g;
+      c.color[2] = b;
+      c.visible = true;
+      c.solo = false;
+      c.z_order = z_order;
+      gui::ColorClassRefConfig ref;
+      ref.layer_idx = 0;
+      ref.crystal_pool_id = gui::g_state.layers[0].entries[0].crystal_id;
+      ref.match_all = true;
+      c.match.push_back(ref);
+      return c;
+    };
+    gui::g_state.raypath_color.push_back(MakeMatchAllClass(1.0f, 0.0f, 0.0f, /*z_order=*/0));  // red
+    gui::g_state.raypath_color.push_back(MakeMatchAllClass(0.0f, 0.0f, 1.0f, /*z_order=*/1));  // blue
+    gui::g_state.raypath_color_mode = LUMICE_COLOR_MODE_PAINTER;
+
+    auto RunToDoneAndCheckIntent = [&]() {
+      gui::DoRun();
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(gui::RunIntent::kRunning));
+      auto start = std::chrono::steady_clock::now();
+      while (gui::g_state.sim_state != gui::GuiState::SimState::kDone ||
+             gui::g_state.run_intent != gui::RunIntent::kRunCompleted) {
+        ctx->Yield();
+        if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start).count() > 20) {
+          break;
+        }
+      }
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kDone));
+    };
+
+    // First run: establish blue-on-top (z_order 1) as the committed baseline.
+    RunToDoneAndCheckIntent();
+
+    // Void output-param idiom (not a bool-returning lambda): IM_CHECK's failure path is a bare
+    // `return;`, which cannot coexist with a non-void lambda return type.
+    auto ReadRedBlueSums = [&](unsigned long long& sum_r, unsigned long long& sum_b) {
+      LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
+      IM_CHECK_EQ(LUMICE_GetCompositeResults(gui::g_server, comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+      IM_CHECK(comp[0].img_buffer != nullptr);
+      const size_t nbytes = static_cast<size_t>(comp[0].img_width) * static_cast<size_t>(comp[0].img_height) * 3;
+      sum_r = 0;
+      sum_b = 0;
+      for (size_t i = 0; i + 2 < nbytes; i += 3) {
+        sum_r += comp[0].img_buffer[i + 0];
+        sum_b += comp[0].img_buffer[i + 2];
+      }
+      IM_CHECK(sum_r + sum_b > 0u);  // sanity: something landed
+    };
+    unsigned long long r_init = 0;
+    unsigned long long b_init = 0;
+    ReadRedBlueSums(r_init, b_init);
+    IM_CHECK(b_init > r_init);  // painter: z_order=1 (blue) on top of z_order=0 (red)
+
+    // Field-write path (Step 2/3 channel): drag-reorder swap — promote red to the top. Pure
+    // display-time edit; yield a few frames so the frame-tail reconciler pushes it.
+    gui::g_state.raypath_color[0].z_order = 1;
+    gui::g_state.raypath_color[1].z_order = 0;
+    ctx->Yield(3);
+    unsigned long long r_swapped = 0;
+    unsigned long long b_swapped = 0;
+    ReadRedBlueSums(r_swapped, b_swapped);
+    IM_CHECK(r_swapped > b_swapped);  // sanity: the swap took effect pre-Run (red now on top)
+
+    // AC2 core: click Run again (no color-field change) — the M6 repush discipline must not let
+    // the re-commit silently fall back to the committed z_order order; the swapped order must
+    // survive the round trip.
+    RunToDoneAndCheckIntent();
+    unsigned long long r_rerun = 0;
+    unsigned long long b_rerun = 0;
+    ReadRedBlueSums(r_rerun, b_rerun);
+    IM_CHECK(r_rerun > b_rerun);  // still red on top after the re-run
+
+    gui::g_server_poller.Stop();
+    if (gui::g_server) {
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+    }
+    gui::g_server_is_gpu = false;
+    gui::g_state.run_intent = gui::RunIntent::kNone;
+    gui::g_state.committed_epoch = 0;
+    gui::g_state.display_epoch_floor = 0;
+  };
+
+  // AC-偏离C real-server regression (code-review round-1 Major-1): DoRevert() must repush the
+  // restored display state to the SERVER, not just restore GuiState fields — this is the
+  // g_state.InvalidateEffectsBaselines() call in DoRevert (app.cpp:946) fixing "Revert 不重推颜色
+  // display 态" (plan §1 偏离 C). Establishes a committed red baseline, edits color to green
+  // (display-time only, no re-sim), confirms the edit actually reached the server, then Reverts and
+  // confirms the server falls back to red (not stuck on the pre-revert green).
+  ImGuiTest* t_revert_repush =
+      IM_REGISTER_TEST(engine, "gui_composite_preview", "revert_repushes_server_display_state");
+  t_revert_repush->TestFunc = [](ImGuiTestContext* ctx) {
+    gui::g_server_poller.Stop();
+    gui::g_server = LUMICE_CreateServer();
+    IM_CHECK(gui::g_server != nullptr);
+    gui::g_server_is_gpu = false;
+    gui::g_state = gui::InitDefaultState();
+    gui::g_state.sim.infinite = false;
+    gui::g_state.sim.ray_num_millions = 0.5f;
+    gui::g_state.sim.max_hits = 8;
+    // Deliberately CPU-only (default use_gpu_backend=false): the device-fused GPU path does not
+    // populate outgoing_component_ / raypath-color lanes yet (RenderConsumer warns and produces an
+    // empty composite) — this task's lane display targets CPU only, so forcing GPU here (as Test 8
+    // in test_gui_lifecycle.cpp does for its pure lifecycle assertions) would make the composite
+    // pixel reads below vacuous.
+
+    gui::ColorClassConfig cls;
+    cls.color[0] = 1.0f;  // red
+    cls.color[1] = 0.0f;
+    cls.color[2] = 0.0f;
+    cls.visible = true;
+    cls.solo = false;
+    cls.z_order = 0;
+    gui::ColorClassRefConfig ref;
+    ref.layer_idx = 0;
+    ref.crystal_pool_id = gui::g_state.layers[0].entries[0].crystal_id;
+    ref.match_all = true;
+    cls.match.push_back(ref);
+    gui::g_state.raypath_color.push_back(cls);
+    gui::g_state.raypath_color_mode = LUMICE_COLOR_MODE_DOMINANT;
+
+    gui::DoRun();
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(gui::RunIntent::kRunning));
+    auto start = std::chrono::steady_clock::now();
+    while (gui::g_state.sim_state != gui::GuiState::SimState::kDone ||
+           gui::g_state.run_intent != gui::RunIntent::kRunCompleted) {
+      ctx->Yield();
+      if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start).count() > 20) {
+        break;
+      }
+    }
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kDone));
+
+    auto ReadRedGreenSums = [&](unsigned long long& sum_r, unsigned long long& sum_g) {
+      LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
+      IM_CHECK_EQ(LUMICE_GetCompositeResults(gui::g_server, comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+      IM_CHECK(comp[0].img_buffer != nullptr);
+      const size_t nbytes = static_cast<size_t>(comp[0].img_width) * static_cast<size_t>(comp[0].img_height) * 3;
+      sum_r = 0;
+      sum_g = 0;
+      for (size_t i = 0; i + 2 < nbytes; i += 3) {
+        sum_r += comp[0].img_buffer[i + 0];
+        sum_g += comp[0].img_buffer[i + 1];
+      }
+    };
+
+    unsigned long long r0 = 0;
+    unsigned long long g0 = 0;
+    ReadRedGreenSums(r0, g0);
+    IM_CHECK(r0 > g0);  // committed baseline: red dominates
+
+    // Display-time edit: red -> green. Pure display-time field write, no re-sim.
+    gui::g_state.raypath_color[0].color[0] = 0.0f;
+    gui::g_state.raypath_color[0].color[1] = 1.0f;
+    ctx->Yield(3);
+    unsigned long long r1 = 0;
+    unsigned long long g1 = 0;
+    ReadRedGreenSums(r1, g1);
+    IM_CHECK(g1 > r1);  // sanity: the edit reached the server before Revert
+
+    // AC-偏离C core: Revert must restore the committed (red) display state on the server too, not
+    // just in GuiState.
+    gui::DoRevert();
+    IM_CHECK_EQ(gui::g_state.raypath_color[0].color[0], 1.0f);
+    IM_CHECK_EQ(gui::g_state.raypath_color[0].color[1], 0.0f);
+    ctx->Yield(3);
+    unsigned long long r2 = 0;
+    unsigned long long g2 = 0;
+    ReadRedGreenSums(r2, g2);
+    IM_CHECK(r2 > g2);  // server-side display state now matches the reverted (red) GuiState
+
+    gui::g_server_poller.Stop();
+    if (gui::g_server) {
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+    }
+    gui::g_server_is_gpu = false;
+    gui::g_state.run_intent = gui::RunIntent::kNone;
+    gui::g_state.committed_epoch = 0;
+    gui::g_state.display_epoch_floor = 0;
+  };
 }

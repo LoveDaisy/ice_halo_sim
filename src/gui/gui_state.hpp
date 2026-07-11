@@ -784,12 +784,13 @@ struct GuiState {
     last_uploaded_as_composite = false;
     // task-color-migration §4 M6 (repush discipline): a backend swap constructs a fresh server
     // with no display state — reset the edge-trigger baseline so the reconciler re-pushes the
-    // full display payload on the next reconcile. Inlined here rather than routed through the
-    // free InvalidateEffectsBaselines(state) because that free helper is declared below the
-    // class body; the tie-off point (last_pushed_display_state.reset()) is trivially small and
-    // any future baseline additions belong in both places anyway (baseline additions are rare
-    // enough to accept the two-line update).
-    last_pushed_display_state.reset();
+    // full display payload on the next reconcile. Routed through the single-entry
+    // InvalidateEffectsBaselines() member (code-review round-1 Minor-3) so a future third
+    // baseline only needs to be added there, not chased across every reset call site. A member
+    // method (rather than a free function) sidesteps the forward-reference problem entirely —
+    // sibling member functions may call each other regardless of declaration order within the
+    // class body (code-review round-1 Minor-2), so no out-of-class definition is needed.
+    InvalidateEffectsBaselines();
   }
 
   // Panel state (view preference — does not call MarkDirty)
@@ -930,19 +931,21 @@ struct GuiState {
     friend bool operator!=(const DisplayStateBaseline& a, const DisplayStateBaseline& b) { return !(a == b); }
   };
   std::optional<DisplayStateBaseline> last_pushed_display_state;
-};
 
-// task-color-migration (T1) — collapse all edge-trigger baselines behind a single reset entry
-// (plan §4 Step 6 / Round 1 review Suggestion 2). Callers reset all baselines via this one
-// function so a future third baseline does not require chasing three DoRun/DoRevert/backend-swap
-// call sites separately (a12：统一原理优先于分类打补丁). Kept out-of-class so it can call
-// LUMICE_SetRaypathColors-driven repushes without recursively including anything.
-inline void InvalidateEffectsBaselines(GuiState& state) {
-  // last_committed_state is deliberately NOT reset here — it is Revert's snapshot, its lifecycle
-  // is owned by DoRun (writes) / DoRevert (reads); commingling it with display-baseline reset
-  // would silently break Revert.
-  state.last_pushed_display_state.reset();
-}
+  // task-color-migration (T1) — collapse all edge-trigger baselines behind a single reset entry
+  // (plan §4 Step 6 / Round 1 review Suggestion 2). Callers reset all baselines via this one
+  // method so a future third baseline does not require chasing three DoRun/DoRevert/backend-swap
+  // call sites separately (a12：统一原理优先于分类打补丁). A member method (not a free function,
+  // code-review round-1 Minor-2) — sibling member functions may reference each other regardless
+  // of declaration order within the class body, so this needs no forward declaration and no
+  // out-of-class definition, unlike the free-function form this replaced.
+  void InvalidateEffectsBaselines() {
+    // last_committed_state is deliberately NOT reset here — it is Revert's snapshot, its
+    // lifecycle is owned by DoRun (writes) / DoRevert (reads); commingling it with the
+    // display-baseline reset would silently break Revert.
+    last_pushed_display_state.reset();
+  }
+};
 
 // Size guard for ConfigSnapshot. If any field changes here, From/ApplyTo below must
 // be audited for matching changes. Apple Silicon + libc++ only (std::vector size varies
