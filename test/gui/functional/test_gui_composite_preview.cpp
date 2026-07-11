@@ -1620,10 +1620,13 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
   // catch a regression in the repush discipline that DoRun() itself owns (InvalidateEffectsBaselines
   // on commit success, app.cpp:854). This test drives the actual "drag z_order, click Run again"
   // flow: two fully-overlapping match-all classes on the single default crystal in painter mode (so
-  // the higher z_order class wins every landed pixel regardless of brightness, making z_order
-  // priority directly observable), swap z_order via the Step 2/3 field-write path (simulating a
-  // drag-reorder), then re-run with no further color edits and assert the swapped order survives —
-  // the exact "Run 后 z_order 不生效" bug (plan §1 偏离 B') a stale baseline would reintroduce.
+  // the LOWER z_order class wins every landed pixel regardless of brightness — see
+  // CompositePainterPixel in component_compositor.cpp: the active list is sorted ascending by
+  // z_order and the first participating class with a positive value wins, i.e. z_order 0 is the
+  // top/occluding layer — making z_order priority directly observable), swap z_order via the
+  // Step 2/3 field-write path (simulating a drag-reorder), then re-run with no further color
+  // edits and assert the swapped order survives — the exact "Run 后 z_order 不生效" bug (plan §1
+  // 偏离 B') a stale baseline would reintroduce.
   ImGuiTest* t_ac2_rerun = IM_REGISTER_TEST(engine, "gui_composite_preview", "zorder_priority_persists_across_rerun");
   t_ac2_rerun->TestFunc = [](ImGuiTestContext* ctx) {
     gui::g_server_poller.Stop();
@@ -1673,7 +1676,8 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kDone));
     };
 
-    // First run: establish blue-on-top (z_order 1) as the committed baseline.
+    // First run: establish red-on-top (z_order 0, the lower value == higher painter priority)
+    // as the committed baseline.
     RunToDoneAndCheckIntent();
 
     // Void output-param idiom (not a bool-returning lambda): IM_CHECK's failure path is a bare
@@ -1694,17 +1698,18 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     unsigned long long r_init = 0;
     unsigned long long b_init = 0;
     ReadRedBlueSums(r_init, b_init);
-    IM_CHECK(b_init > r_init);  // painter: z_order=1 (blue) on top of z_order=0 (red)
+    IM_CHECK(r_init > b_init);  // painter: z_order=0 (red) on top of z_order=1 (blue)
 
-    // Field-write path (Step 2/3 channel): drag-reorder swap — promote red to the top. Pure
-    // display-time edit; yield a few frames so the frame-tail reconciler pushes it.
+    // Field-write path (Step 2/3 channel): drag-reorder swap — promote blue to the top (lower
+    // z_order == higher painter priority). Pure display-time edit; yield a few frames so the
+    // frame-tail reconciler pushes it.
     gui::g_state.raypath_color[0].z_order = 1;
     gui::g_state.raypath_color[1].z_order = 0;
     ctx->Yield(3);
     unsigned long long r_swapped = 0;
     unsigned long long b_swapped = 0;
     ReadRedBlueSums(r_swapped, b_swapped);
-    IM_CHECK(r_swapped > b_swapped);  // sanity: the swap took effect pre-Run (red now on top)
+    IM_CHECK(b_swapped > r_swapped);  // sanity: the swap took effect pre-Run (blue now on top)
 
     // AC2 core: click Run again (no color-field change) — the M6 repush discipline must not let
     // the re-commit silently fall back to the committed z_order order; the swapped order must
@@ -1713,7 +1718,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     unsigned long long r_rerun = 0;
     unsigned long long b_rerun = 0;
     ReadRedBlueSums(r_rerun, b_rerun);
-    IM_CHECK(r_rerun > b_rerun);  // still red on top after the re-run
+    IM_CHECK(b_rerun > r_rerun);  // still blue on top after the re-run
 
     gui::g_server_poller.Stop();
     if (gui::g_server) {

@@ -947,13 +947,31 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
 
     gui::g_state.color_window_open = true;
     ctx->Yield(2);
+    // The Colors window's ImGui-internal position/size persist across tests within the same
+    // process (window ID is stable, keyed by title) — an unrelated earlier test
+    // (p1_card/card_click_blocked_when_covered_by_colors_window) deliberately WindowMove()s it
+    // off to the left to cover a crystal card and never restores it, which can clip the row's
+    // leftmost items (the z_order up/down arrows) out of view for whichever test opens the
+    // window next. Pin position + size explicitly so this test's wildcard item lookups don't
+    // depend on what ran before it.
+    ctx->WindowMove("//" ICON_FA_PALETTE " Colors", ImVec2(50, 50));
+    ctx->WindowResize("//" ICON_FA_PALETTE " Colors", ImVec2(720, 480));
+    ctx->Yield(2);
     ctx->SetRef("//" ICON_FA_PALETTE " Colors");
 
     // Click 1: color swatch -> opens the ColorPicker popup -> click inside its "sv" square. The
     // default ItemClick position is the item rect's center, which is never the current pure-red
     // S=1,V=1 corner, so this always produces a value_changed edit (see ColorPicker4's `IsItemActive
-    // () && !is_readonly` branch in imgui_widgets.cpp) -> close the popup.
-    ctx->ItemClick("**/##color");
+    // () && !is_readonly` branch in imgui_widgets.cpp) -> close the popup. Two ID-resolution quirks
+    // stack here: (1) `##color` is the PushID scope ColorEdit3 opens around itself, not an item —
+    // with ImGuiColorEditFlags_NoInputs the only clickable child is the swatch button, which ImGui
+    // names "##ColorButton" (see ColorEdit4 in imgui_widgets.cpp); (2) unlike Button/SmallButton,
+    // ImGui::ColorButton() never calls IMGUI_TEST_ENGINE_ITEM_INFO(), so it has no registered debug
+    // label and a "**/" wildcard search (which matches by label) can never find it. A literal path
+    // sidesteps both: `$$0` reproduces PushID(phys=0)'s int hash (ImHashDecoratedPath's documented
+    // literal-encoding syntax, imgui_te_utils.cpp), and literal (non-wildcard) resolution looks the
+    // item up by its already-known ID rather than by label, which works for any ItemAdd()'d widget.
+    ctx->ItemClick("$$0/##color/##ColorButton");
     ctx->Yield();
     ctx->ItemClick("**/sv");
     ctx->PopupCloseAll();
