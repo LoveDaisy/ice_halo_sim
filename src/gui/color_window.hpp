@@ -130,6 +130,17 @@ void HandleEyeClick(std::vector<ColorClassConfig>& classes, size_t phys, bool al
 // all pre-existing classes as unmatched.
 void PollColorClassSignal(const GuiState& state, LUMICE_Server* server, std::vector<int>& out_flags);
 
+// task-cleanup-hardening S5 — test-only accessors on the RefreshColorClassSignals
+// throttle cache. Production code MUST NOT use these; they exist so gui_test can
+// observe the (server, committed_epoch) invalidation keys and the cached flags
+// size / poll-time directly, without needing two real servers whose signals
+// happen to differ. AC2 verifies that a domain change (server pointer OR
+// committed_epoch) forces the next RefreshColorClassSignals call to bypass the
+// 500 ms throttle and re-poll immediately.
+void GetColorClassSignalCacheKeysForTest(LUMICE_Server** server_out, uint64_t* epoch_out, size_t* flags_size_out,
+                                         float* last_poll_time_out);
+void ResetColorClassSignalCacheForTest();
+
 }  // namespace lumice::gui
 
 #endif  // LUMICE_GUI_COLOR_WINDOW_HPP

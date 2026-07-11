@@ -101,6 +101,14 @@ void ResetTestState() {
   gui::g_server_poller.InvalidateStagedTexture();
   gui::g_server = nullptr;
   gui::ResetPendingDeleteState();
+  // task-cleanup-hardening S5: the RefreshColorClassSignals cache is a static
+  // WindowLocalState inside color_window.cpp. Its (server, epoch) invalidation
+  // keys survive across tests via a leaked stale server pointer or committed_epoch
+  // if not reset here, which can mask AC2 behavior (either false-positive
+  // "invalidated" because the prior test's server is now dangling, or false-
+  // negative "hit throttle" because the prior test's keys happen to match).
+  // Deterministic per-test reset restores the same-invariant as g_state.
+  gui::ResetColorClassSignalCacheForTest();
 
   // Modal state (edit_modals.cpp file-scope statics)
   gui::ResetModalState();

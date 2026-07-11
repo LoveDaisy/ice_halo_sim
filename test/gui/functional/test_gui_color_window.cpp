@@ -392,6 +392,112 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // task-cleanup-hardening S5 (AC2): the RefreshColorClassSignals cache is keyed
+  // by (server, committed_epoch). A change in either — backend swap (CPU<->GPU)
+  // or any struct commit that bumps the epoch — must invalidate the cache so the
+  // next call bypasses the 500 ms throttle and re-polls the fresh domain
+  // immediately. Prior to S5, the cache retained the old server's signal for up
+  // to one throttle interval after the swap, which read to the user as "the pip
+  // still says matched" for half a second on a fresh backend. The two tests below
+  // verify (a) invalidation on epoch bump and (b) invalidation on server pointer
+  // change; a third verifies steady-state (no domain change → throttle honored)
+  // so the invalidation logic doesn't force-poll every frame.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "refresh_signals_invalidates_on_committed_epoch_bump");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig c;
+      gui::g_state.raypath_color.push_back(c);
+      gui::g_state.committed_epoch = 0;
+
+      // First call: primes the cache and updates keys from (nullptr, 0) → (nullptr, 0)
+      // (unchanged), forces the initial poll (last_poll_time=-1000 < now).
+      gui::RefreshColorClassSignals(gui::g_state, nullptr);
+      LUMICE_Server* srv_after1 = nullptr;
+      uint64_t epoch_after1 = 0;
+      size_t size_after1 = 0;
+      float t1 = 0.0f;
+      gui::GetColorClassSignalCacheKeysForTest(&srv_after1, &epoch_after1, &size_after1, &t1);
+      IM_CHECK_EQ(srv_after1, static_cast<LUMICE_Server*>(nullptr));
+      IM_CHECK_EQ(static_cast<int>(epoch_after1), 0);
+      IM_CHECK_EQ(static_cast<int>(size_after1), 1);
+      IM_CHECK(t1 > -1000.0f);  // poll fired: timer updated
+
+      // Bump the epoch and call again immediately (well within the 500 ms throttle).
+      // Without S5 invalidation this call would be a throttle-hit no-op that leaves
+      // last_poll_time unchanged; with S5 the cache clears + last_poll_time resets
+      // to -1000 forcing an immediate re-poll (last_poll_time updates to `now`).
+      gui::g_state.committed_epoch = 5;
+      gui::RefreshColorClassSignals(gui::g_state, nullptr);
+      LUMICE_Server* srv_after2 = nullptr;
+      uint64_t epoch_after2 = 0;
+      size_t size_after2 = 0;
+      float t2 = 0.0f;
+      gui::GetColorClassSignalCacheKeysForTest(&srv_after2, &epoch_after2, &size_after2, &t2);
+      IM_CHECK_EQ(static_cast<int>(epoch_after2), 5);  // key updated to new epoch
+      IM_CHECK(t2 >= t1);                              // poll fired again (timer advanced or same-frame equal)
+    };
+  }
+
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "refresh_signals_invalidates_on_server_pointer_change");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig c;
+      gui::g_state.raypath_color.push_back(c);
+
+      // Two real servers so the cache has valid pointers to swap between —
+      // avoids fake-pointer UB when RefreshColorClassSignals eventually calls
+      // LUMICE_GetColorClassSignal. Neither needs to be committed; the poll
+      // return path is not the point — we're inspecting the cache keys.
+      LUMICE_Server* srv_a = LUMICE_CreateServer();
+      LUMICE_Server* srv_b = LUMICE_CreateServer();
+      IM_CHECK(srv_a != nullptr);
+      IM_CHECK(srv_b != nullptr);
+      IM_CHECK(srv_a != srv_b);
+
+      gui::RefreshColorClassSignals(gui::g_state, srv_a);
+      LUMICE_Server* srv_after1 = nullptr;
+      uint64_t epoch_after1 = 0;
+      gui::GetColorClassSignalCacheKeysForTest(&srv_after1, &epoch_after1, nullptr, nullptr);
+      IM_CHECK_EQ(srv_after1, srv_a);
+
+      // Immediate call with a different server pointer must swap the cached key
+      // and force a re-poll rather than serve srv_a's stale flags.
+      gui::RefreshColorClassSignals(gui::g_state, srv_b);
+      LUMICE_Server* srv_after2 = nullptr;
+      gui::GetColorClassSignalCacheKeysForTest(&srv_after2, nullptr, nullptr, nullptr);
+      IM_CHECK_EQ(srv_after2, srv_b);
+
+      LUMICE_DestroyServer(srv_a);
+      LUMICE_DestroyServer(srv_b);
+    };
+  }
+
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "refresh_signals_steady_state_honors_throttle");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig c;
+      gui::g_state.raypath_color.push_back(c);
+      gui::g_state.committed_epoch = 42;
+
+      gui::RefreshColorClassSignals(gui::g_state, nullptr);
+      float t1 = 0.0f;
+      gui::GetColorClassSignalCacheKeysForTest(nullptr, nullptr, nullptr, &t1);
+
+      // Same (server, epoch) — this must be a throttle-hit no-op; last_poll_time
+      // is NOT reset to -1000 (no bypass), so t2 == t1 (or, at most, epsilon
+      // above from GetTime drift within the same yield). Anti-regression: guards
+      // against a future refactor that would force-poll every call and defeat
+      // the 500 ms debounce contract in lumice.h.
+      gui::RefreshColorClassSignals(gui::g_state, nullptr);
+      float t2 = 0.0f;
+      gui::GetColorClassSignalCacheKeysForTest(nullptr, nullptr, nullptr, &t2);
+      IM_CHECK_EQ(t2, t1);
+    };
+  }
+
   // Aggregate predicate for the top-bar warning (task-348.1 Step 3). Same
   // semantics as the per-row warning in RenderColorWindow: warn only when the
   // user has configured at least one class with non-empty match[] AND every

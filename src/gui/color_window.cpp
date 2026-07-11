@@ -534,6 +534,24 @@ constexpr float kSignalPollIntervalSec = 0.5f;
 struct WindowLocalState {
   std::vector<int> signal_flags;
   float last_poll_time = -1000.0f;
+  // task-cleanup-hardening (S5): cache-invalidation keys. The polled signal_flags
+  // belong to a specific (server, committed_epoch) domain — a backend swap destroys
+  // the old server and mints a fresh one whose committed_epoch resets to 0 (see
+  // GuiState::ResetDisplayGenerationForBackendSwap), and any struct commit bumps
+  // committed_epoch. Carrying the previous domain's flags across such a boundary
+  // would display up to kSignalPollIntervalSec (500 ms) of stale server signal —
+  // visually, a color-class pip claiming "matched" while the new backend has not
+  // yet been polled. RefreshColorClassSignals compares (last_server, last_committed_epoch)
+  // against the current pair and, on any mismatch, forces an immediate re-poll so the
+  // next frame sees fresh flags (AC2).
+  //
+  // Hook rationale (reviewer Minor-2/3): we deliberately do NOT reuse
+  // GuiState::ResetDisplayGenerationForBackendSwap — that owner drives the
+  // display-generation epoch/floor/texture, a different domain from the signal-cache
+  // liveness. Comparing the keys at poll entry keeps the two domains independent and
+  // single-owner per doc/gui-state-governance.md 支柱 2 (per-channel single serializer).
+  LUMICE_Server* last_server = nullptr;
+  uint64_t last_committed_epoch = 0;
 };
 
 WindowLocalState& GetLocalState() {
@@ -581,12 +599,52 @@ void PollColorClassSignal(const GuiState& state, LUMICE_Server* server, std::vec
 std::vector<int> RefreshColorClassSignals(const GuiState& state, LUMICE_Server* server) {
   auto& local = GetLocalState();
   const float now = static_cast<float>(ImGui::GetTime());
+
+  // task-cleanup-hardening (S5): cache-invalidation on backend swap or epoch bump.
+  // A change in (server, committed_epoch) means the flags in cache describe a
+  // domain that no longer exists (destroyed server) or a stale generation (pre-commit
+  // signal). Clear them and force an immediate re-poll so the next display frame
+  // shows the new domain's flags, not the old.
+  const bool domain_changed = (server != local.last_server) || (state.committed_epoch != local.last_committed_epoch);
+  if (domain_changed) {
+    local.signal_flags.clear();
+    local.last_poll_time = -1000.0f;  // force poll below the throttle
+    local.last_server = server;
+    local.last_committed_epoch = state.committed_epoch;
+  }
+
   if (now - local.last_poll_time > kSignalPollIntervalSec) {
     PollColorClassSignal(state, server, local.signal_flags);
     local.last_poll_time = now;
   }
   local.signal_flags.resize(state.raypath_color.size(), 1);
   return local.signal_flags;
+}
+
+// task-cleanup-hardening S5: test-only accessors (see color_window.hpp).
+void GetColorClassSignalCacheKeysForTest(LUMICE_Server** server_out, uint64_t* epoch_out, size_t* flags_size_out,
+                                         float* last_poll_time_out) {
+  const auto& local = GetLocalState();
+  if (server_out != nullptr) {
+    *server_out = local.last_server;
+  }
+  if (epoch_out != nullptr) {
+    *epoch_out = local.last_committed_epoch;
+  }
+  if (flags_size_out != nullptr) {
+    *flags_size_out = local.signal_flags.size();
+  }
+  if (last_poll_time_out != nullptr) {
+    *last_poll_time_out = local.last_poll_time;
+  }
+}
+
+void ResetColorClassSignalCacheForTest() {
+  auto& local = GetLocalState();
+  local.signal_flags.clear();
+  local.last_poll_time = -1000.0f;
+  local.last_server = nullptr;
+  local.last_committed_epoch = 0;
 }
 
 // True when the user has configured at least one color class with non-empty
