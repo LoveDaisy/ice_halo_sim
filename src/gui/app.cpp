@@ -571,22 +571,15 @@ void DoOpen(const std::filesystem::path& path) {
     std::string json_str((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     GuiState new_state = InitDefaultState();
     if (DeserializeFromJson(json_str, new_state)) {
+      // Data restore + command-semantic fields (path/dirty/run_intent stay in handler per
+      // plan §2 — they are command intent, not frontend reset).
       g_state = new_state;
       g_state.current_file_path.clear();  // Don't set .json path as save target
       g_state.dirty = true;               // Unsaved new project
       // Intent: no server run behind this import (→ kIdle via ReconcileSimState).
       g_state.run_intent = RunIntent::kNone;
-      g_thumbnail_cache.OnLayerStructureChanged();
-      g_preview.ClearTexture();
-      g_preview.ClearBackground();
-      // Fence the poller-side staged composite so SyncFromPoller won't re-upload the previous
-      // scene's snapshot over the just-cleared preview. Order relative to ClearTexture() is
-      // irrelevant: the two act on disjoint subsystems (g_preview vs g_server_poller).
-      g_server_poller.InvalidateStagedTexture();
-      // Reset modal preview trackball to the imported config's first entry.
-      if (!g_state.layers.empty() && !g_state.layers[0].entries.empty()) {
-        ResetCrystalViewToCrystal(g_state.crystals[g_state.layers[0].entries[0].crystal_id]);
-      }
+      // Frontend reset delegated to the single owner.
+      ResetFrontendState(g_state, FrontendResetReason::kOpenJson);
       GUI_LOG_INFO("[GUI] DoOpen (JSON import): {}", PathToU8(path));
     }
     return;
@@ -597,33 +590,25 @@ void DoOpen(const std::filesystem::path& path) {
   int tex_w = 0;
   int tex_h = 0;
   if (LoadLmcFile(path, g_state, tex_data, tex_w, tex_h)) {
+    // Data restore + command-semantic fields (path/dirty/run_intent stay in handler).
     g_state.current_file_path = path;
     g_state.dirty = false;
-    g_thumbnail_cache.OnLayerStructureChanged();
-    // Reset modal preview trackball to the loaded file's first entry.
-    if (!g_state.layers.empty() && !g_state.layers[0].entries.empty()) {
-      ResetCrystalViewToCrystal(g_state.crystals[g_state.layers[0].entries[0].crystal_id]);
-    }
-    GUI_LOG_INFO("[GUI] DoOpen: {}", PathToU8(path));
-    // Fence the poller-side staged composite before either sub-branch touches g_preview:
-    // otherwise SyncFromPoller can re-upload the previous scene over a baked or blank .lmc.
-    // Order relative to ClearTexture()/UploadTexture() is irrelevant — disjoint subsystems
-    // (g_preview vs g_server_poller).
-    g_server_poller.InvalidateStagedTexture();
     if (!tex_data.empty()) {
-      g_preview.UploadTexture(tex_data.data(), tex_w, tex_h);
       // Intent: a baked static result (→ kDone via ReconcileSimState, no server run).
       g_state.run_intent = RunIntent::kLoaded;
+      FrontendTexturePayload payload{ tex_data.data(), tex_w, tex_h };
+      ResetFrontendState(g_state, FrontendResetReason::kOpenBaked, &payload);
     } else {
-      // Intent: no result to show (→ kIdle).
-      g_state.run_intent = RunIntent::kNone;
-      // Clear stale texture from previous scene — mirrors DoNew() / JSON-import
+      // Intent: no result to show (→ kIdle). Mirrors DoNew() / JSON-import
       // semantics: "no preview data = clear screen, wait for user to Run".
-      g_preview.ClearTexture();
+      g_state.run_intent = RunIntent::kNone;
+      ResetFrontendState(g_state, FrontendResetReason::kOpenLmcBlank);
     }
+    GUI_LOG_INFO("[GUI] DoOpen: {}", PathToU8(path));
 
-    // Restore background image from saved path (uses deserialized alpha, not reset to 0.5)
-    g_preview.ClearBackground();
+    // Background image restore from saved path — DATA recovery (not a frontend reset). Uses
+    // the deserialized alpha, not a hard-coded value. Runs after ResetFrontendState which
+    // already ClearBackground()'d, so a missing bg_path leaves the preview blank (as before).
     if (!g_state.bg_path.empty()) {
       if (LoadAndUploadBgImage(g_state.bg_path)) {
         // bg_show and bg_alpha already restored from deserialization
@@ -639,20 +624,10 @@ void DoOpen(const std::filesystem::path& path) {
 }
 
 void DoNew() {
+  // Data reset (default state), then delegate every frontend reset (preview clear + poller
+  // fence + mesh-hash zero + trackball) to the single owner.
   g_state = InitDefaultState();
-  g_thumbnail_cache.OnLayerStructureChanged();
-  g_preview.ClearTexture();
-  g_preview.ClearBackground();
-  // Fence the poller-side staged composite so SyncFromPoller won't re-upload the previous
-  // scene's snapshot. Order relative to ClearTexture() is irrelevant — disjoint subsystems
-  // (g_preview vs g_server_poller).
-  g_server_poller.InvalidateStagedTexture();
-  g_crystal_mesh_hash = 0;
-  // Reset modal preview trackball to the new default entry's preset view —
-  // otherwise a stale drag pose from before New persists into the new doc.
-  if (!g_state.layers.empty() && !g_state.layers[0].entries.empty()) {
-    ResetCrystalViewToCrystal(g_state.crystals[g_state.layers[0].entries[0].crystal_id]);
-  }
+  ResetFrontendState(g_state, FrontendResetReason::kNewDocument);
   GUI_LOG_INFO("[GUI] DoNew");
 }
 
@@ -995,20 +970,17 @@ void DoRevert() {
   if (g_state.last_committed_state) {
     const auto& snapshot = *g_state.last_committed_state;
     // Restore configuration fields atomically, then fire GUI side effects.
-    // Order rationale: ApplyTo() is pure field assignment. OnLayerStructureChanged()
-    // currently only touches the thumbnail cache (see thumbnail_cache.cpp) and does
-    // not read other g_state fields, so invoking it after full assignment is
-    // equivalent to the previous order (layers assigned -> callback -> other fields).
-    // If OnLayerStructureChanged ever starts reading g_state.sun/sim/renderers, this
-    // order remains correct (callback sees fully restored state). Runtime state (run_intent,
+    // Order rationale: ApplyTo() is pure field assignment. Runtime state (run_intent,
     // committed_epoch, poller counters, etc.) is intentionally preserved by ApplyTo.
     snapshot.ApplyTo(g_state);
-    // task-color-migration §4 M6 (repush discipline): revert restores display fields but the
-    // server still holds the post-edit display state — invalidating the display-push baseline
-    // forces the next frame's reconciler to re-push the restored display payload so the server
-    // catches up to Revert. Fixes the "Revert 不重推颜色 display 态" bug (plan §1 偏离 C).
-    g_state.InvalidateEffectsBaselines();
-    g_thumbnail_cache.OnLayerStructureChanged();
+    // Frontend reset delegated to the single owner (kRevert subset = OnLayerStructureChanged +
+    // InvalidateEffectsBaselines only; preview/staged/trackball preserved because Revert is
+    // config restore, not a document switch). InvalidateEffectsBaselines is task-color-migration
+    // §4 M6 (repush discipline): revert restores display fields but the server still holds the
+    // post-edit display state — invalidating the display-push baseline forces the next frame's
+    // reconciler to re-push the restored display payload so the server catches up to Revert.
+    // Fixes the "Revert 不重推颜色 display 态" bug (plan §1 偏离 C).
+    ResetFrontendState(g_state, FrontendResetReason::kRevert);
     // Revert restores config == committed, so it is no longer dirty. This is load-bearing under
     // the single-owner reconcile: with the old direct sim_state=kDone write gone, a leftover
     // dirty=true would make ReconcileSimState re-derive kDone+dirty → kModified every frame
