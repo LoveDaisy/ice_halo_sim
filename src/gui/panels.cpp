@@ -783,16 +783,12 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
         // So in ApplyPickLink(source, target) the *clicked card* is the source
         // (model) and pick_link_source is the target (modified).
         const auto pick_source_ref = *state.pick_link_source;
-        const auto& editing_entry = state.layers[pick_source_ref.layer_idx].entries[pick_source_ref.entry_idx];
-        const std::optional<int> old_filter_id = editing_entry.filter_id;
         ApplyPickLink(state, GuiState::EntryRef{ layer_idx, entry_idx }, pick_source_ref);
         state.pick_link_source.reset();
-        state.MarkDirty();
-        // Re-read editing entry after pool re-bind to compare filter existence.
-        const auto& editing_after = state.layers[pick_source_ref.layer_idx].entries[pick_source_ref.entry_idx];
-        if (old_filter_id.has_value() != editing_after.filter_id.has_value()) {
-          state.MarkFilterDirty();
-        }
+        // Effects derived centrally by ReconcileGuiEffects: rebinding entry.filter_id
+        // shows up as a `layers` diff (soft), and filter presence-toggle (nullopt↔some)
+        // is caught by AnyEntryFilterPresenceChanged (hard) — see gui_state_reconcile.cpp.
+        // Pure some(A)→some(B) rebinding stays soft, matching pre-migration behavior.
         // No explicit Invalidate: editing entry now shares clicked card's
         // crystal_id; that crystal already has a cache entry from this frame.
       }
