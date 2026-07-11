@@ -27,6 +27,15 @@ Checks:
      double Release. Route through pointer or `const LUMICE_Config&`, and
      manage lifetime via LUMICE_ConfigCreateColorClasses / Release (or
      lumice::ConfigColorGuard).
+  7. gui-state-field-tier-registration — every top-level field of
+     `struct GuiState` (src/gui/gui_state.hpp) must be registered in EXACTLY
+     one of the two tables in src/gui/gui_state_tiers.hpp: `kFieldTierTable`
+     (a governed tier — struct-hard/soft, display, view, session) or
+     `kDerivedFieldsExcludeList` (runtime-derived / not governed). Adding a
+     new GuiState field without touching the tiers header is a violation.
+     Closes the "unregistered field silently escapes governance" loophole
+     that block-A of scrum-gui-state-reconcile T0 was built to prevent
+     (doc/gui-state-governance.md).
 
 Add a new check as a function returning a list of Violation and append it to
 CHECKS. Keep each check deterministic and artifact-inspecting.
@@ -536,6 +545,193 @@ def _scan_config_copies(path: Path) -> list[Violation]:
     return out
 
 
+# gui-state-field-tier-registration: coverage-union check between the top-level
+# fields of `struct GuiState` (src/gui/gui_state.hpp) and the two registries in
+# `src/gui/gui_state_tiers.hpp` (`kFieldTierTable` + `kDerivedFieldsExcludeList`).
+# This closes the "silently un-governed field" loophole — the whole point of the
+# reconcile-foundation geodetics — by failing the build when a GuiState field is
+# missing from BOTH tables, is registered in BOTH, or has been removed from the
+# struct but is still referenced in a table (stale entry).
+#
+# Parser scope: `struct GuiState` is much richer than `GenRootKernelParams`
+# (nested struct declarations, method bodies, enum decls, array fields with
+# aggregate initializers). We can't reuse `_extract_struct_fields`. Instead we
+# walk the struct body line-by-line, tracking depth so nested-struct / method
+# bodies are ignored, and match top-level field lines with a bespoke regex.
+GUI_STATE_HPP = SRC / "gui" / "gui_state.hpp"
+GUI_STATE_TIERS_HPP = SRC / "gui" / "gui_state_tiers.hpp"
+
+GUI_FIELD_LINE_RE = re.compile(
+    r"^"
+    r"\s*"
+    r"(?:(?:static|inline|mutable|constexpr|volatile)\s+)*"
+    r"[A-Za-z_][\w:<>\s,\*&]*?"
+    r"\s"
+    r"(?P<name>[A-Za-z_]\w*)"
+    r"(?:\s*\[[^\]]*\])?"
+    r"\s*(?:=[^;]*|\{[^;]*\})?"
+    r"\s*;"
+    r"\s*$"
+)
+
+GUI_FIELD_SKIP_KEYWORDS_RE = re.compile(
+    r"^(struct|enum|class|union|friend|static_assert|template|typedef|using|return)\b"
+)
+
+
+def _extract_gui_state_top_level_fields(path: Path) -> tuple[set[str], int]:
+    text = path.read_text(encoding="utf-8")
+    stripped = strip_comments(text)
+    m = re.search(r"\bstruct\s+GuiState\s*\{", stripped)
+    if not m:
+        return set(), -1
+    open_line = stripped.count("\n", 0, m.start()) + 1
+    body_start = m.end()
+    depth = 1
+    i = body_start
+    while i < len(stripped) and depth > 0:
+        c = stripped[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        i += 1
+    body = stripped[body_start:i]
+
+    fields: set[str] = set()
+    nested_depth = 0
+    for raw in body.splitlines():
+        line = raw.strip()
+        opens = line.count("{")
+        closes = line.count("}")
+        pre_depth = nested_depth
+        nested_depth += opens - closes
+        # Only lines fully at depth 0 (both before and after) can carry a
+        # top-level field. Nested struct/method-body lines are skipped.
+        if pre_depth != 0 or nested_depth != 0:
+            continue
+        if not line or line.startswith("#"):
+            continue
+        if re.match(r"^(public|private|protected)\s*:", line):
+            continue
+        if GUI_FIELD_SKIP_KEYWORDS_RE.match(line):
+            continue
+        # A method declaration/definition contains '(' before its terminating
+        # ';' or '{'. Top-level GuiState fields never use parenthesized
+        # initializers, so this filter is safe.
+        if "(" in line:
+            continue
+        fm = GUI_FIELD_LINE_RE.match(line)
+        if fm:
+            fields.add(fm.group("name"))
+    return fields, open_line
+
+
+TIERS_TABLE_ENTRY_RE = re.compile(
+    r'\{\s*"(?P<name>[A-Za-z_]\w*)"\s*,\s*FieldTier::'
+)
+TIERS_EXCLUDE_ENTRY_RE = re.compile(r'"(?P<name>[A-Za-z_]\w*)"')
+
+
+def _extract_tier_table_names(path: Path) -> tuple[set[str], set[str], int]:
+    text = path.read_text(encoding="utf-8")
+    stripped = strip_comments(text)
+
+    def _extract_body(marker: str) -> tuple[str, int]:
+        m = re.search(re.escape(marker) + r"\s*\[\s*\]\s*=\s*\{", stripped)
+        if not m:
+            return "", -1
+        open_line = stripped.count("\n", 0, m.start()) + 1
+        depth = 1
+        i = m.end()
+        while i < len(stripped) and depth > 0:
+            c = stripped[i]
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        return stripped[m.end():i], open_line
+
+    tier_body, tier_line = _extract_body("kFieldTierTable")
+    exclude_body, _ = _extract_body("kDerivedFieldsExcludeList")
+
+    tier_names = {m.group("name") for m in TIERS_TABLE_ENTRY_RE.finditer(tier_body)}
+    exclude_names = {m.group("name") for m in TIERS_EXCLUDE_ENTRY_RE.finditer(exclude_body)}
+    return tier_names, exclude_names, tier_line
+
+
+def check_gui_state_field_tier_registration() -> list[Violation]:
+    out: list[Violation] = []
+    if not GUI_STATE_HPP.exists() or not GUI_STATE_TIERS_HPP.exists():
+        return out
+    struct_fields, struct_open_line = _extract_gui_state_top_level_fields(GUI_STATE_HPP)
+    if not struct_fields:
+        out.append(
+            Violation(
+                GUI_STATE_HPP,
+                struct_open_line if struct_open_line > 0 else 1,
+                "gui-state-field-tier-registration",
+                "could not extract any top-level fields from `struct GuiState` — "
+                "the parser likely regressed; investigate before trusting the gate.",
+            )
+        )
+        return out
+    tier_names, exclude_names, tiers_open_line = _extract_tier_table_names(GUI_STATE_TIERS_HPP)
+    if not tier_names and not exclude_names:
+        out.append(
+            Violation(
+                GUI_STATE_TIERS_HPP,
+                tiers_open_line if tiers_open_line > 0 else 1,
+                "gui-state-field-tier-registration",
+                "kFieldTierTable / kDerivedFieldsExcludeList not found or empty in "
+                "gui_state_tiers.hpp; the field-tier registry is missing.",
+            )
+        )
+        return out
+    registered = tier_names | exclude_names
+    missing = sorted(struct_fields - registered)
+    for name in missing:
+        out.append(
+            Violation(
+                GUI_STATE_TIERS_HPP,
+                tiers_open_line,
+                "gui-state-field-tier-registration",
+                f"GuiState field `{name}` is not registered in kFieldTierTable "
+                "or kDerivedFieldsExcludeList (src/gui/gui_state_tiers.hpp); "
+                "pick a FieldTier or add it to kDerivedFieldsExcludeList "
+                "(see doc/gui-state-governance.md).",
+            )
+        )
+    dup = sorted(tier_names & exclude_names)
+    for name in dup:
+        out.append(
+            Violation(
+                GUI_STATE_TIERS_HPP,
+                tiers_open_line,
+                "gui-state-field-tier-registration",
+                f"field `{name}` appears in BOTH kFieldTierTable and "
+                "kDerivedFieldsExcludeList; a field must be in exactly one.",
+            )
+        )
+    stale = sorted(registered - struct_fields)
+    for name in stale:
+        out.append(
+            Violation(
+                GUI_STATE_TIERS_HPP,
+                tiers_open_line,
+                "gui-state-field-tier-registration",
+                f"registered name `{name}` is not a top-level field of "
+                "`struct GuiState`; the entry is stale or misspelled.",
+            )
+        )
+    return out
+
+
 CHECKS = [
     check_getenv_centralization,
     check_env_knob_registration,
@@ -543,6 +739,7 @@ CHECKS = [
     check_no_using_namespace,
     check_struct_layout_parity,
     check_no_config_by_value_copy,
+    check_gui_state_field_tier_registration,
 ]
 
 
@@ -564,7 +761,8 @@ def main() -> int:
         return 1
     print(
         "Policy check passed (env centralization, knob registration, GUI API boundary, "
-        "using-namespace, struct-layout parity, no-config-by-value-copy)."
+        "using-namespace, struct-layout parity, no-config-by-value-copy, "
+        "gui-state-field-tier-registration)."
     )
     return 0
 

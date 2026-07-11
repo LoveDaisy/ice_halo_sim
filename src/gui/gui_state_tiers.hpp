@@ -52,7 +52,11 @@ inline constexpr FieldTierEntry kFieldTierTable[] = {
     { "sun",                        FieldTier::kStructSoft, false },
     { "sim",                        FieldTier::kStructSoft, false },
     { "renderer",                   FieldTier::kStructSoft, false },
-    { "use_gpu_backend",            FieldTier::kStructSoft, false },
+    // use_gpu_backend: registered kStructSoft for governance coverage, but NOT in ConfigSnapshot's
+    // From/ApplyTo (view/session field intentionally excluded from Revert baseline). No baseline →
+    // no diff possible; legacy DIRTY_IF wrapper (panels.cpp:1067) drives dirty. See SUMMARY.md AC1
+    // for the second predicted exception found during M2 implementation (per plan §7 risk 5 门槛).
+    { "use_gpu_backend",            FieldTier::kStructSoft, true  },
 
     // ==== T-struct·hard: re-sim + display clear + epoch floor bump ==============================
     { "filters",                    FieldTier::kStructHard, false },
