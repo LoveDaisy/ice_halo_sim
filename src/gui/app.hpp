@@ -117,6 +117,47 @@ void DoClearBackground();
 void SyncFromPoller();
 void CheckUnsavedAndDo(PendingAction action);
 
+// Single frontend-reset owner (task-command-reset-owner, backlog #5; doc §4 "文档重置 owner",
+// doc §5 I-reset-complete). Each command (`DoNew` / `DoOpen(.lmc±baked/.json)` / `DoRevert`)
+// declares its intent via `FrontendResetReason` and delegates ALL preview / poller-staged /
+// trackball / mesh-hash / effects-baseline resets to this owner instead of hand-picking a
+// subset — cures the "each command resets a different subset, forgetting an adjacent layer"
+// class of bug that led to task-349.1 → 350 → 351's three-round fix cycle.
+//
+// Subset per reason (逐条对照 as-built 精确复刻，see plan §3):
+//   kNewDocument  : ClearTexture + ClearBackground + InvalidateStagedTexture +
+//                   crystal_mesh_hash=0 + trackball reset + OnLayerStructureChanged
+//   kOpenBaked    : UploadTexture(baked) + ClearBackground + InvalidateStagedTexture +
+//                   trackball reset + OnLayerStructureChanged
+//   kOpenLmcBlank : ClearTexture + ClearBackground + InvalidateStagedTexture +
+//                   trackball reset + OnLayerStructureChanged
+//   kOpenJson     : ClearTexture + ClearBackground + InvalidateStagedTexture +
+//                   trackball reset + OnLayerStructureChanged
+//   kRevert       : InvalidateEffectsBaselines + OnLayerStructureChanged
+//                   (no texture / staged / trackball / mesh-hash touch — Revert is
+//                    config restore, not document switch)
+//
+// The `baked` texture payload MUST be non-null iff `reason == kOpenBaked` (owner asserts
+// this invariant; passing an inconsistent pair is a caller bug). `bg_path` restore stays in
+// `DoOpen(.lmc)` handler (it is per-file DATA recovery, not a document-switch reset).
+enum class FrontendResetReason {
+  kNewDocument,
+  kOpenBaked,
+  kOpenLmcBlank,
+  kOpenJson,
+  kRevert,
+};
+
+// Baked-texture payload for `kOpenBaked`. `data` must remain valid for the duration of the
+// `ResetFrontendState` call; the owner does not retain the pointer.
+struct FrontendTexturePayload {
+  const unsigned char* data;
+  int width;
+  int height;
+};
+
+void ResetFrontendState(GuiState& state, FrontendResetReason reason, const FrontendTexturePayload* baked = nullptr);
+
 // Single-owner sim_state reconcile (I2, blueprint §4/§5). Pure function of the last user intent,
 // the epoch the GUI committed, the last backend observation (may be null before the first poll),
 // and whether the config is dirty. No globals / GL / server access — declared here (not in a .cpp

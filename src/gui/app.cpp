@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -489,6 +490,64 @@ static bool LoadAndUploadBgImage(const std::filesystem::path& path) {
 
   g_preview.UploadBgTexture(data.data(), w, h);
   return true;
+}
+
+void ResetFrontendState(GuiState& state, FrontendResetReason reason, const FrontendTexturePayload* baked) {
+  // reason/payload consistency: baked payload is present iff and only if kOpenBaked.
+  // A caller mismatch is a programming error — assert here so it fails fast in debug builds
+  // instead of silently doing the wrong thing (UB deref if kOpenBaked && baked==nullptr, or
+  // silently ignoring a payload for the other reasons).
+  assert((reason == FrontendResetReason::kOpenBaked) == (baked != nullptr));
+
+  // Every reason invalidates the thumbnail cache: New / Open replace the entire layer/entry
+  // structure; Revert restores it from snapshot — same reason to refresh thumbnails either way.
+  g_thumbnail_cache.OnLayerStructureChanged();
+
+  // Preview texture / background — as-built subset per reason. `.lmc` variants both call
+  // ClearBackground (post-branch shared line in the pre-refactor DoOpen); the DoOpen(.lmc)
+  // handler then does bg_path restore separately (data recovery, not reset).
+  switch (reason) {
+    case FrontendResetReason::kNewDocument:
+    case FrontendResetReason::kOpenLmcBlank:
+    case FrontendResetReason::kOpenJson:
+      g_preview.ClearTexture();
+      g_preview.ClearBackground();
+      break;
+    case FrontendResetReason::kOpenBaked:
+      g_preview.UploadTexture(baked->data, baked->width, baked->height);
+      g_preview.ClearBackground();
+      break;
+    case FrontendResetReason::kRevert:
+      // Revert preserves current preview — it is a config restore, not a document switch.
+      break;
+  }
+
+  // Poller-side staged composite fence: document-switch reasons must discard any in-flight
+  // snapshot from the previous scene (task-351 class regression). Revert keeps current staged.
+  if (reason != FrontendResetReason::kRevert) {
+    g_server_poller.InvalidateStagedTexture();
+  }
+
+  // crystal_mesh_hash reset — as-built: only DoNew clears it (Open branches don't touch it;
+  // edit_modals writes -1 as a distinct "force re-upload" signal, not a "no mesh" reset).
+  if (reason == FrontendResetReason::kNewDocument) {
+    g_crystal_mesh_hash = 0;
+  }
+
+  // Effects-baseline invalidation — as-built: only DoRevert (color-migration §4 M6, plan §1
+  // 偏离 C 修复). Forces the next reconciler tick to re-push the restored display payload so
+  // the server catches up to Revert without further user interaction.
+  if (reason == FrontendResetReason::kRevert) {
+    state.InvalidateEffectsBaselines();
+  }
+
+  // Trackball reset for the modal-preview view — document-switch reasons only. Revert keeps
+  // current trackball pose (config restore, not scene switch).
+  if (reason != FrontendResetReason::kRevert) {
+    if (!state.layers.empty() && !state.layers[0].entries.empty()) {
+      ResetCrystalViewToCrystal(state.crystals[state.layers[0].entries[0].crystal_id]);
+    }
+  }
 }
 
 void DoOpen() {
