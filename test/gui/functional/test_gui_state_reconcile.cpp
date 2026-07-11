@@ -187,6 +187,79 @@ void RegisterStateReconcileTests(ImGuiTestEngine* engine) {
       IM_CHECK(!e.need_hard_reset);
     }
 
+    // task-classic-params-migration (T2 / AC3): renderer.exposure_offset is display-time only
+    // (RenderConfigResimEqual excludes it). Mutating EV alone MUST NOT drive re-sim /
+    // hard-reset / display-push. This is the pin that dragging the EV slider never falsely
+    // demotes a finished sim to kModified.
+    {
+      GuiState s = MakeBaselineState();
+      s.renderer.exposure_offset = 2.0f;  // was 0.0f
+      GuiEffects e = ReconcileGuiEffects(s);
+      IM_CHECK(!e.need_resim);
+      IM_CHECK(!e.need_hard_reset);
+      IM_CHECK(!e.need_display_push);
+    }
+    // Non-EV renderer field (fov) still drives re-sim (regression pin for the T2 default
+    // assumption — pre-T2 there was no dedicated coverage for fov / elevation / azimuth /
+    // roll / lens_type, they relied on the whole-struct comparison).
+    {
+      GuiState s = MakeBaselineState();
+      s.renderer.fov = 45.0f;  // was 90.0f
+      GuiEffects e = ReconcileGuiEffects(s);
+      IM_CHECK(e.need_resim);
+      IM_CHECK(!e.need_hard_reset);
+    }
+
+    // task-classic-params-migration (T2 Step 2 / AC2): filter presence-toggle at same-shape
+    // must promote to hard-reset (soft would silently drop the display-clear). Both
+    // directions (nullopt → some, some → nullopt).
+    {
+      GuiState s = MakeBaselineState();
+      s.layers[0].entries.emplace_back();  // one entry, no filter_id
+      s.last_committed_state = GuiState::ConfigSnapshot::From(s);
+      // Now toggle presence: assign a filter to that entry.
+      s.layers[0].entries[0].filter_id = 0;
+      GuiEffects e = ReconcileGuiEffects(s);
+      IM_CHECK(e.need_resim);
+      IM_CHECK(e.need_hard_reset);
+    }
+    {
+      GuiState s = MakeBaselineState();
+      s.layers[0].entries.emplace_back();
+      s.layers[0].entries[0].filter_id = 0;  // start with filter
+      s.last_committed_state = GuiState::ConfigSnapshot::From(s);
+      s.layers[0].entries[0].filter_id.reset();  // clear presence
+      GuiEffects e = ReconcileGuiEffects(s);
+      IM_CHECK(e.need_resim);
+      IM_CHECK(e.need_hard_reset);
+    }
+    // Pure some(A) → some(B) rebind (presence unchanged) must stay soft — NOT promoted to
+    // hard by AnyEntryFilterPresenceChanged. This is the "don't over-correct" pin (plan §3
+    // design 2 explicitly excludes this case from the promotion).
+    {
+      GuiState s = MakeBaselineState();
+      s.filters.emplace_back();  // filter slot 1 exists
+      s.layers[0].entries.emplace_back();
+      s.layers[0].entries[0].filter_id = 0;
+      s.last_committed_state = GuiState::ConfigSnapshot::From(s);
+      s.layers[0].entries[0].filter_id = 1;  // rebind, still has_value()
+      GuiEffects e = ReconcileGuiEffects(s);
+      IM_CHECK(e.need_resim);
+      IM_CHECK(!e.need_hard_reset);
+    }
+    // Shape mismatch (entries.size() differs): AnyEntryFilterPresenceChanged returns false,
+    // the existing layers-diff produces soft, and adding a new entry with no filter must NOT
+    // be misclassified as hard by the new detector.
+    {
+      GuiState s = MakeBaselineState();
+      s.layers[0].entries.emplace_back();  // baseline: 1 entry
+      s.last_committed_state = GuiState::ConfigSnapshot::From(s);
+      s.layers[0].entries.emplace_back();  // live: 2 entries, both no filter
+      GuiEffects e = ReconcileGuiEffects(s);
+      IM_CHECK(e.need_resim);        // layers diff still fires
+      IM_CHECK(!e.need_hard_reset);  // no presence-toggle inside the shape overlap
+    }
+
     // task-color-migration §4 M6 (repush discipline): after InvalidateEffectsBaselines resets the
     // display-push baseline to nullopt, the next reconcile MUST fire need_display_push against a
     // non-empty raypath_color vector. This is the mechanism that fixes偏离 B' (AC2: Run 后
@@ -328,6 +401,16 @@ void RegisterStateReconcileTests(ImGuiTestEngine* engine) {
       IM_CHECK(!e.need_resim);
       IM_CHECK(!e.need_hard_reset);
       IM_CHECK(e.need_display_push);
+    }
+
+    // task-classic-params-migration (T2): mutating exposure_offset alone MUST NOT change
+    // GuiEffects — this pins the RenderConfigResimEqual exclusion so a future refactor
+    // cannot silently re-add EV to the resim diff. Pair to the truth-table pin above.
+    {
+      GuiState s = MakeBaselineState();
+      s.renderer.exposure_offset += 1.0f;
+      GuiEffects e = ReconcileGuiEffects(s);
+      IM_CHECK_EQ(e, GuiEffects{});
     }
   };
 

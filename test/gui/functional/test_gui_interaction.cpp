@@ -321,6 +321,12 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
       gui::g_state.committed_epoch = 5;
       gui::g_state.display_epoch_floor = 0;
+      // task-classic-params-migration: seed last_committed_state after the filter is
+      // present so removing it later trips AnyEntryFilterPresenceChanged in the reconciler.
+      // Pre-migration this test worked because CommitAllBuffersImmediate manually fired
+      // MarkFilterDirty regardless of baseline; post-migration the effect flows through the
+      // reconciler and requires a real baseline to diff against.
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
       ctx->Yield();
 
       // Pre-condition guard: MarkFilterDirty has not fired yet (floor still below committed).
@@ -765,6 +771,12 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       gui::g_state.committed_epoch = 5;
       gui::g_state.display_epoch_floor = 0;
       gui::g_state.dirty = false;
+      // task-classic-params-migration: seed last_committed_state at the "filter present"
+      // baseline so ReconcileGuiEffects fires need_resim/hard-reset when Remove Filter takes
+      // effect. Pre-migration this test worked because CommitAllBuffers manually fired
+      // MarkDirty+MarkFilterDirty unconditionally; post-migration the effect requires a real
+      // baseline diff.
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
       ctx->Yield();
 
       ctx->ItemClick("**/Edit##fi");
@@ -802,6 +814,11 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       gui::g_state.committed_epoch = 5;
       gui::g_state.display_epoch_floor = 0;
       gui::g_state.dirty = false;
+      // task-classic-params-migration: seed baseline so Crystal edits produce a real
+      // `crystals` diff in ReconcileGuiEffects. Pre-migration this test worked because
+      // CommitAllBuffersImmediate manually MarkDirty'd unconditionally; post-migration the
+      // dirty flag is only set by the reconciler when it sees a diff against the baseline.
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
       ctx->Yield();
 
       const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height;
