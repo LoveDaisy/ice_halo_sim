@@ -845,6 +845,13 @@ void DoRun() {
     // A good commit clears any prior over-bounds warning so a later re-occurrence warns again.
     ClearGuiWarning();
     g_state.last_committed_state = GuiState::ConfigSnapshot::From(g_state);
+    // task-color-migration §4 M6 (repush discipline): a fresh commit invalidates every edge-
+    // trigger baseline so the next frame's reconciler unconditionally re-pushes the full
+    // display-state payload (incl. z_order — the field the commit channel cannot carry, see
+    // §3 D2). This is the single fix for the "Run 后 z_order 不生效" bug (AC2, plan §1 偏离 B').
+    // Single entry point for all edge-trigger baselines — future third baseline picks up its
+    // reset here (a12: 统一原理优先于分类打补丁).
+    InvalidateEffectsBaselines(g_state);
     // Intent + epoch readback (I1): the synchronous commit above has already minted (or reused)
     // the lifecycle epoch; read it back so ReconcileSimState keys the display on THIS generation.
     // A filter change always rebuilds (epoch++), so the new epoch strictly exceeds any
@@ -932,6 +939,11 @@ void DoRevert() {
     // order remains correct (callback sees fully restored state). Runtime state (run_intent,
     // committed_epoch, poller counters, etc.) is intentionally preserved by ApplyTo.
     snapshot.ApplyTo(g_state);
+    // task-color-migration §4 M6 (repush discipline): revert restores display fields but the
+    // server still holds the post-edit display state — invalidating the display-push baseline
+    // forces the next frame's reconciler to re-push the restored display payload so the server
+    // catches up to Revert. Fixes the "Revert 不重推颜色 display 态" bug (plan §1 偏离 C).
+    InvalidateEffectsBaselines(g_state);
     g_thumbnail_cache.OnLayerStructureChanged();
     // Revert restores config == committed, so it is no longer dirty. This is load-bearing under
     // the single-owner reconcile: with the old direct sim_state=kDone write gone, a leftover

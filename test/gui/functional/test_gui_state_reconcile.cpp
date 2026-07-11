@@ -186,6 +186,43 @@ void RegisterStateReconcileTests(ImGuiTestEngine* engine) {
       IM_CHECK(!e.need_resim);
       IM_CHECK(!e.need_hard_reset);
     }
+
+    // task-color-migration §4 M6 (repush discipline): after InvalidateEffectsBaselines resets the
+    // display-push baseline to nullopt, the next reconcile MUST fire need_display_push against a
+    // non-empty raypath_color vector. This is the mechanism that fixes偏离 B' (AC2: Run 后
+    // z_order 立即生效) — z_order cannot travel through the commit payload (D2), so the fix is
+    // to re-push the full display state after every DoRun / DoRevert / backend swap.
+    {
+      GuiState s = MakeBaselineState();
+      IM_CHECK(!s.raypath_color.empty());                 // sanity: MakeBaselineState puts one class in
+      IM_CHECK(s.last_pushed_display_state.has_value());  // sanity: MakeBaselineState seeds it
+      InvalidateEffectsBaselines(s);
+      IM_CHECK(!s.last_pushed_display_state.has_value());
+      GuiEffects e = ReconcileGuiEffects(s);
+      IM_CHECK(e.need_display_push);  // nullopt baseline + non-empty vector → fire
+      IM_CHECK(!e.need_resim);        // commit baseline is untouched, no re-sim needed
+      IM_CHECK(!e.need_hard_reset);
+    }
+    // Boundary: InvalidateEffectsBaselines against an EMPTY raypath_color must not fire the push
+    // (nothing to push). Guards against a future refactor that treats nullopt as unconditional.
+    {
+      GuiState s = MakeBaselineState();
+      s.raypath_color.clear();
+      InvalidateEffectsBaselines(s);
+      GuiEffects e = ReconcileGuiEffects(s);
+      IM_CHECK(!e.need_display_push);
+    }
+    // Boundary: InvalidateEffectsBaselines must NOT touch last_committed_state — that field is
+    // owned by DoRun (writes) / DoRevert (reads); commingling would silently break Revert.
+    // (RED手法: implementing InvalidateEffectsBaselines as `state = GuiState{}` or resetting
+    // last_committed_state alongside would flip this to a break.)
+    {
+      GuiState s = MakeBaselineState();
+      const bool commit_present_before = s.last_committed_state.has_value();
+      IM_CHECK(commit_present_before);
+      InvalidateEffectsBaselines(s);
+      IM_CHECK(s.last_committed_state.has_value());  // preserved across the reset
+    }
   };
 
   // ---- Test 2: meta anti-drift — reconciler ↔ tier table equivalence ----

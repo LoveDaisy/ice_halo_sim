@@ -782,6 +782,14 @@ struct GuiState {
     // record. show_composite_preview is deliberately NOT reset (it is a user preference; a
     // backend swap must not silently flip the user's chosen display mode).
     last_uploaded_as_composite = false;
+    // task-color-migration §4 M6 (repush discipline): a backend swap constructs a fresh server
+    // with no display state — reset the edge-trigger baseline so the reconciler re-pushes the
+    // full display payload on the next reconcile. Inlined here rather than routed through the
+    // free InvalidateEffectsBaselines(state) because that free helper is declared below the
+    // class body; the tie-off point (last_pushed_display_state.reset()) is trivially small and
+    // any future baseline additions belong in both places anyway (baseline additions are rare
+    // enough to accept the two-line update).
+    last_pushed_display_state.reset();
   }
 
   // Panel state (view preference — does not call MarkDirty)
