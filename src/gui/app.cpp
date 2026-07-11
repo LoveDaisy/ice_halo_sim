@@ -19,6 +19,7 @@
 #include "gui/file_io.hpp"
 #include "gui/gui_ev_auto.hpp"
 #include "gui/gui_logger.hpp"
+#include "gui/gui_state_reconcile.hpp"
 #include "gui/window_sizing.hpp"
 #include "include/lumice_config_scope.hpp"
 #include "util/path_utils.hpp"
@@ -1025,6 +1026,16 @@ void SyncFromPoller() {
   // Atomically load the whole immutable snapshot (invariant I5). One lock-free atomic_load; the
   // consumer never observes a half-updated field combination.
   auto snap = g_server_poller.LoadSnapshot();
+
+  // Field-tier reconcile (scrum-gui-state-reconcile T0): diff GuiState auto-diff-participating
+  // fields against last_committed_state and route the derived effects (need_resim /
+  // need_hard_reset) into GuiState.dirty via the existing single-writer methods (MarkDirty /
+  // MarkFilterDirty). Runs BEFORE ReconcileSimState so any dirty derived from field diffs in this
+  // frame is visible to sim_state derivation below (kDone + dirty → kModified in the same frame,
+  // preserving the pre-migration "widget edit surfaces as Modified immediately" behavior).
+  // Coexists idempotently with legacy DIRTY_IF wrappers during T1-T4 migration; see
+  // gui_state_reconcile.hpp for the field participation set.
+  ApplyGuiEffects(g_state, ReconcileGuiEffects(g_state));
 
   // Level-triggered single-owner reconcile (I2/I3): unconditionally derive sim_state every frame
   // from (intent, committed_epoch, observation, dirty). No early-return on !=kSimulating — the

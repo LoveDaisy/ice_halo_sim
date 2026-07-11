@@ -966,13 +966,17 @@ void RenderScatteringSection(GuiState& state) {
 void RenderSceneControls(GuiState& state) {
   ImGui::SeparatorText("Sun");
   ImGui::BeginGroup();
-  DIRTY_IF(SliderWithInput("Altitude", &state.sun.altitude, -90.0f, 90.0f));
+  // AC2 migration path (scrum-gui-state-reconcile T0): widget only writes state.sun.altitude; the
+  // resulting dirty is derived by ReconcileGuiEffects in SyncFromPoller (diff on state.sun vs.
+  // last_committed_state.sun). The pre-migration DIRTY_IF wrapper is retired at this call site.
+  SliderWithInput("Altitude", &state.sun.altitude, -90.0f, 90.0f);
   ImGui::EndGroup();
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Sun elevation angle above the horizon");
   }
   ImGui::BeginGroup();
-  DIRTY_IF(SliderWithInput("Diameter", &state.sun.diameter, 0.1f, 5.0f));
+  // AC2 migration path: same rationale as sun.altitude above.
+  SliderWithInput("Diameter", &state.sun.diameter, 0.1f, 5.0f);
   ImGui::EndGroup();
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Angular diameter of the sun disk");
