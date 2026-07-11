@@ -1,5 +1,12 @@
 #include "gui/gui_state_reconcile.hpp"
 
+#include <cassert>
+
+// T1 (task-color-migration) landed this as the reconciler's only concrete-widget dependency,
+// inverting the intended "widget depends on reconciler abstraction" layering direction (doc/
+// gui-state-governance.md §4 支柱 2) for a single domain. Do NOT copy this include-and-call
+// pattern for T2/T3 — evaluate a push-handler registration/dispatch abstraction before a second
+// domain would otherwise add a second widget-header include here.
 #include "gui/color_window.hpp"  // PushDisplayState (T1 export)
 #include "gui/gui_state.hpp"
 // Tier semantics for the fields diffed below are documented in gui/gui_state_tiers.hpp — the .cpp
@@ -121,8 +128,11 @@ void ApplyGuiEffects(GuiState& state, LUMICE_Server* server, const GuiEffects& e
   // Orthogonal lane: display-state edge-trigger push. Only reads `server` when this bit fires;
   // unit-test fixtures that pass server=nullptr must ensure effects.need_display_push==false
   // (contract documented in gui_state_reconcile.hpp — dereferencing nullptr here is a caller
-  // violation, not a case we defensively guard against).
+  // violation, not a case we defensively guard against). Debug-only assert makes the contract
+  // verifiable instead of a purely textual claim; no release-mode guard per this task's
+  // established "contract violation, not a defensive boundary" convention.
   if (effects.need_display_push) {
+    assert(server != nullptr);
     if (PushDisplayState(state, server)) {
       state.last_pushed_display_state = SnapshotDisplayState(state);
     }
