@@ -1079,15 +1079,17 @@ bool IsFilterDirty() {
 // changes; the commit path computes it by comparing the pool slot before vs
 // after the write, plus the entry's own id fields.
 struct ApplyBuffersResult {
-  bool valid;           // false if g_modal_layer_idx / g_modal_entry_idx out of range
-  bool entry_changed;   // crystal/axis/filter content or entry ids changed
-  bool filter_changed;  // filter pool content or entry.filter_id changed
+  bool valid;          // false if g_modal_layer_idx / g_modal_entry_idx out of range
+  bool entry_changed;  // crystal/axis/filter content or entry ids changed
 };
 
 // Single source of truth for buffer→entry field assignment. Both
 // CommitAllBuffers (Staged OK) and CommitAllBuffersImmediate (Immediate
-// per-frame) delegate here; the two commits only differ in which
-// MarkDirty / MarkFilterDirty calls they fire based on the returned flags.
+// per-frame) delegate here. Post task-classic-params-migration (T2) both callers
+// only branch on `entry_changed` (as a local early-return gate for GUI-cache
+// invalidation) — the resim/hard-reset lane is derived centrally by
+// gui_state_reconcile.cpp from field diffs, so neither caller writes MarkDirty /
+// MarkFilterDirty here anymore.
 //
 // Adding a new edit-buffer field? Update this function AND SnapshotAllBuffers
 // in the same change (the pair drives both commit path and dirty-compare baseline).
@@ -1096,7 +1098,7 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
   const int en = g_modal_entry_idx;
   if (ly < 0 || ly >= static_cast<int>(state.layers.size()) || en < 0 ||
       en >= static_cast<int>(state.layers[ly].entries.size())) {
-    return { false, false, false };
+    return { false, false };
   }
   auto& entry = state.layers[ly].entries[en];
 
@@ -1217,11 +1219,17 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
   const bool crystal_changed = pool_crystal != old_crystal;
   const bool filter_changed = new_filter != old_filter;
   const bool entry_changed = crystal_changed || filter_changed || entry != old_entry;
-  return { true, entry_changed, filter_changed };
+  return { true, entry_changed };
 }
 
-// Staged OK path: any entry change clears the display + restarts simulation
-// (existing semantics — OK implies user commits and sim will re-run).
+// Staged OK path and Immediate per-frame path share the same commit body: apply
+// the buffer to the pool, then invalidate GUI-side caches (thumbnail + crystal
+// mesh hash). The resim/hard-reset lane is derived centrally by
+// gui_state_reconcile.cpp — pool content diffs promote to soft, filter pool /
+// presence changes promote to hard. That covers what the pre-T2 code did via
+// unconditional MarkDirty+MarkFilterDirty (staged) and the local
+// filter_changed-gated MarkFilterDirty (immediate); those two paths now share a
+// single source of truth, closing S6.
 void CommitAllBuffers(GuiState& state) {
   const auto r = ApplyBuffersToEntry(state);
   if (!r.valid || !r.entry_changed) {
@@ -1229,25 +1237,15 @@ void CommitAllBuffers(GuiState& state) {
   }
   // Invalidate by crystal_id: all entries sharing this crystal get a fresh thumbnail.
   g_thumbnail_cache.Invalidate(state.layers[g_modal_layer_idx].entries[g_modal_entry_idx].crystal_id);
-  state.MarkDirty();
-  state.MarkFilterDirty();
   g_crystal_mesh_hash = -1;
 }
 
-// Immediate path: crystal/axis edits only MarkDirty; MarkFilterDirty (which
-// clears snapshot_intensity and raises the display epoch floor to fence stale
-// old-generation textures) is gated on filter actually changing. This is what
-// allows infinite-rays accumulation to persist while the user drags a crystal slider.
 void CommitAllBuffersImmediate(GuiState& state) {
   const auto r = ApplyBuffersToEntry(state);
   if (!r.valid || !r.entry_changed) {
     return;
   }
   g_thumbnail_cache.Invalidate(state.layers[g_modal_layer_idx].entries[g_modal_entry_idx].crystal_id);
-  state.MarkDirty();
-  if (r.filter_changed) {
-    state.MarkFilterDirty();
-  }
   g_crystal_mesh_hash = -1;
 }
 
@@ -1585,7 +1583,9 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
             g_axis_buf[1] = src_crystal.azimuth;
             g_axis_buf[2] = src_crystal.roll;
             SnapshotAllBuffers(state);
-            state.MarkDirty();
+            // No manual MarkDirty: UnlinkEntryFromPool appends to state.crystals/
+            // state.filters pool, so the reconciler's crystals/filters diff catches
+            // the change on the next frame's ReconcileGuiEffects tick.
           }
         }
       }
@@ -1940,7 +1940,8 @@ void RenderSpectrumModal(GuiState& state) {
     // — OK is gated on a non-empty buffer (ok_disabled) above.
     state.sun.custom_spectrum = g_spectrum_edit_buf;
     state.sun.spectrum_index = kCustomSpectrumIndex;
-    state.MarkDirty();
+    // No manual MarkDirty: both fields belong to `sun`, which participates in the
+    // reconciler auto-diff (kFieldTierTable → kStructSoft).
     ImGui::CloseCurrentPopup();
   }
   if (ok_disabled) {

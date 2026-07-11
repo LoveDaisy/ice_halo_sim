@@ -533,7 +533,6 @@ void RenderLeftPanel(float window_height) {
     }
     g_state.layers.push_back(std::move(new_layer));
     g_thumbnail_cache.OnLayerStructureChanged();
-    g_state.MarkDirty();
   }
 
   // Process edit request: open modal if an edit button or card area was clicked
@@ -710,7 +709,6 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       r.elevation = d.elevation;
       r.azimuth = d.azimuth;
       r.roll = d.roll;
-      g_state.MarkDirty();
     }
 
     ImGui::PopItemWidth();
@@ -722,9 +720,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     ImGui::SeparatorText("Rendering");
     const char* res_labels[] = { "512", "1024", "2048", "4096" };
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.45f, 0.28f, 0.12f, 0.6f));
-    if (ImGui::Combo("Resolution##display", &r.sim_resolution_index, res_labels, kSimResolutionCount)) {
-      g_state.MarkDirty();
-    }
+    ImGui::Combo("Resolution##display", &r.sim_resolution_index, res_labels, kSimResolutionCount);
     ImGui::PopStyleColor();
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
