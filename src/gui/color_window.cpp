@@ -86,9 +86,12 @@ bool PushDisplayState(const GuiState& state, LUMICE_Server* server) {
   // No epoch bump, no accumulator reset, no sim restart — display-time semantics preserved
   // (322 lifecycle clock decoupling, doc/gui-preview-lifecycle-architecture.md I1–I6).
   //
-  // If the poller is already running (infinite sim / mid-run edit), EnsureRunning is a
-  // zero-overhead no-op (server_poller.hpp).
-  g_server_poller.EnsureRunning(server);
+  // If the poller is already running (infinite sim / mid-run edit), WakeForRefresh is a
+  // zero-overhead no-op (server_poller.hpp). WakeForRefresh (not WakeForRestart) is
+  // mandatory here: display-time refresh must not publish valid=false, else SyncFromPoller
+  // observes an invalid snapshot and ReconcileSimState pulls a completed sim back into
+  // kSimulating — task-color-migration AC1 activity bug root cause (a).
+  g_server_poller.WakeForRefresh(server);
   return true;
 }
 

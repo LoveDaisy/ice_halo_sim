@@ -869,8 +869,11 @@ void DoRun() {
     }
     // Unconditionally ensure poller is running — covers all edge cases:
     // DoStop→DoRun (poller was paused), PollOnce self-pause (finite rays done), etc.
-    // If already kRunning, this is a no-op (zero overhead).
-    g_server_poller.EnsureRunning(g_server);
+    // If already kRunning, this is a no-op (zero overhead). WakeForRestart (not
+    // WakeForRefresh): a fresh commit is a real re-arm, so valid=false publish is
+    // desired (consumers must ignore any stale terminal snapshot until the worker
+    // republishes for the new epoch).
+    g_server_poller.WakeForRestart(g_server);
     // No staged-texture invalidate here: the epoch floor (raised by MarkFilterDirty) already
     // fences the old generation's payloads, and the freshly committed epoch (read back above)
     // lifts that fence. Crystal-scrub reuse (no filter change) MUST keep carry-forward, so we
@@ -880,9 +883,15 @@ void DoRun() {
                  std::chrono::duration<double, std::milli>(run_end - run_start).count());
   } else {
     GUI_LOG_WARNING("[GUI] CommitConfig FAILED with error code {}", static_cast<int>(err));
-    // Restore poller if it was stopped for rebuild but CommitConfig failed
+    // Restore poller if it was stopped for rebuild but CommitConfig failed.
+    // task-color-migration Minor 4: mechanical rename from the former EnsureRunning
+    // to WakeForRestart. Semantics of this failure-recovery branch are unchanged (the
+    // former name's behavior — publish valid=false on the wake edge — is preserved by
+    // WakeForRestart). A deeper review of this branch's behavior is out of scope for
+    // this task (§7 risk 5); if further changes are needed, they will be independently
+    // scoped.
     if (expect_rebuild) {
-      g_server_poller.EnsureRunning(g_server);
+      g_server_poller.WakeForRestart(g_server);
     }
   }
 }

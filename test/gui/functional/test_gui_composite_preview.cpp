@@ -381,7 +381,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
   // self-pauses, a display-time color edit (LUMICE_SetRaypathColors) must be able to drive one
   // fresh composite materialization without restarting the sim (epoch unchanged, lifecycle stays
   // COMPLETED). Pins the two coupled invariants:
-  //   (a) MECHANISM: the poll after SetRaypathColors + EnsureRunning yields a payload whose
+  //   (a) MECHANISM: the poll after SetRaypathColors + WakeForRefresh yields a payload whose
   //       rgb_data reflects the new colors and is byte-identical to a direct LUMICE_GetCompositeResults
   //       (proving the display-time dirty flag was consumed, not lost).
   //   (b) NON-RESTART: LUMICE_GetSimLifecycle still reports COMPLETED with the SAME epoch
@@ -433,9 +433,9 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp, 1, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
     // The very wake call PushDisplayState() invokes in production, exercised on the global poller
     // that would drive DoSnapshot() consumption when a background worker was actually running.
-    // For this synchronous test seam, EnsureRunning + PollOnceForTest together stand in for
+    // For this synchronous test seam, WakeForRefresh + PollOnceForTest together stand in for
     // "worker wakes up and runs one PollOnce, then self-pauses at COMPLETED".
-    gui::g_server_poller.EnsureRunning(server);
+    gui::g_server_poller.WakeForRefresh(server);
 
     // (a) MECHANISM: the poll after the edit must produce a composite reflecting the new colors —
     // i.e., not byte-identical to composite_before (the color changed, so the rendered image must
@@ -476,7 +476,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_after), LUMICE_OK);
     IM_CHECK(ray_count_after >= ray_count_before);
 
-    // Post-test cleanup on both the local ServerPoller and the global one that EnsureRunning
+    // Post-test cleanup on both the local ServerPoller and the global one that WakeForRefresh
     // above nudged into kRunning — Stop() is synchronous and idempotent.
     local.Stop();
     gui::g_server_poller.Stop();

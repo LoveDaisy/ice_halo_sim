@@ -99,10 +99,24 @@ class ServerPoller {
   // it is no longer accessing the server. Safe to call multiple times.
   void Stop();
 
-  // Idempotent: ensure the worker is in kRunning state.
+  // Idempotent: ensure the worker is in kRunning state for a fresh sim generation.
   // If already kRunning, this is a no-op (zero overhead for the hot slider path).
-  // If kPaused (after Stop/DoStop/self-pause), resumes polling with the given server.
-  void EnsureRunning(LUMICE_Server* server);
+  // If kPaused (after Stop/DoStop/self-pause), resumes polling with the given server
+  // AND publishes a valid=false copy of the current snapshot so consumers ignore stale
+  // stats/lifecycle until the worker republishes. Callers: DoRun success (fresh commit),
+  // DoRun failure recovery (task-color-migration Minor 4). Do NOT call this from display-
+  // time edits (color/visible/solo/z_order/mode/composite EV) — see WakeForRefresh.
+  void WakeForRestart(LUMICE_Server* server);
+
+  // Idempotent: ensure the worker is in kRunning state for a display-time refresh, WITHOUT
+  // publishing valid=false. The distinction is critical: display-time edits (after a finite
+  // sim has completed) must not open a valid=false window that would let SyncFromPoller
+  // observe an invalid snapshot and pull sim_state back into kSimulating (doc/gui-state-
+  // governance.md §4 支柱 2, task-color-migration AC1 / activity bug root cause (a)).
+  // Callers: PushDisplayState (color-window color/visible/solo/z_order/mode edits) and
+  // app_panels composite EV push. If kPaused, resumes polling with the given server; if
+  // already kRunning or kTerminating, no-op.
+  void WakeForRefresh(LUMICE_Server* server);
 
   // Main thread (hot path, every frame): atomically load the latest published snapshot.
   // Lock-free (single atomic_load of a shared_ptr) — never blocks the main thread. Returns a
@@ -169,7 +183,7 @@ class ServerPoller {
   void StorePublished(std::shared_ptr<const PreviewSnapshot> next) { std::atomic_store(&published_, std::move(next)); }
 
   // Publish a valid=false copy of the current snapshot (preserving payload for anti-flicker).
-  // Serializes under publish_mutex_. Called from Start()/EnsureRunning() on the main thread.
+  // Serializes under publish_mutex_. Called from Start()/WakeForRestart() on the main thread.
   void PublishValidReset();
 
   std::thread worker_;
@@ -185,7 +199,7 @@ class ServerPoller {
   // read-modify-write publish under publish_mutex_.
   std::shared_ptr<const PreviewSnapshot> published_;
   // Serializes producer-side RMW (build-from-prev + store) so concurrent publishers
-  // (worker PollOnce ‖ main-thread InvalidateStagedTexture/Start/EnsureRunning) never lose an
+  // (worker PollOnce ‖ main-thread InvalidateStagedTexture/Start/WakeForRestart/WakeForRefresh) never lose an
   // update. Consumers never take this lock. The 24MB pixel memcpy is prepared OUTSIDE this lock;
   // the critical section is pointer/refcount-level only (see PollOnce).
   std::mutex publish_mutex_;

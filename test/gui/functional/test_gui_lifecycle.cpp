@@ -600,4 +600,66 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
     local.Stop();
     LUMICE_DestroyServer(server);
   };
+
+  // ---- Test 7: task-color-migration M4 — WakeForRefresh preserves valid across the wake edge ----
+  // Pins the semantic distinction between the two poller wake seams introduced by M4:
+  //   WakeForRestart publishes valid=false on the kPaused→kRunning edge (fresh commit: consumers
+  //     must ignore stale terminal snapshots).
+  //   WakeForRefresh preserves valid across the wake edge (display-time refresh: SyncFromPoller
+  //     must not observe a transient valid=false window that would let ReconcileSimState pull a
+  //     completed sim back into kSimulating — activity bug AC1 root cause (a),
+  //     doc/gui-state-governance.md §4 支柱 2).
+  // Same-shape white-box test: bring poller to kPaused with a valid=true snapshot published, then
+  // exercise each wake variant and diff the immediately-following LoadSnapshot()->valid.
+  ImGuiTest* t7 = IM_REGISTER_TEST(engine, "gui_lifecycle", "wake_for_refresh_preserves_valid");
+  t7->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    // Clean baseline: detach the global poller from any prior test's server.
+    gui::g_server_poller.Stop();
+    gui::g_server = nullptr;
+
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    const bool completed = RunFiniteToCompletion(server);
+    IM_CHECK(completed);
+    if (!completed) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+
+    // Baseline: publish a fresh valid=true terminal snapshot via a synchronous poll, then Stop the
+    // worker so state_ == kPaused. Both wake variants below start from this identical baseline.
+    auto seed_baseline = [server]() {
+      gui::g_server_poller.Stop();
+      gui::g_server_poller.ResetGenerationForTest();
+      gui::g_server_poller.PollOnceForTest(server);
+      auto snap = gui::g_server_poller.LoadSnapshot();
+      IM_CHECK(snap != nullptr);
+      IM_CHECK(snap->valid);  // baseline invariant: seed snapshot is valid before the wake
+      gui::g_server_poller.Stop();
+    };
+
+    // (A) WakeForRestart: valid must flip to false after the wake (PublishValidReset called).
+    seed_baseline();
+    gui::g_server_poller.WakeForRestart(server);
+    {
+      auto snap = gui::g_server_poller.LoadSnapshot();
+      IM_CHECK(snap != nullptr);
+      IM_CHECK(!snap->valid);  // WakeForRestart publishes valid=false on the wake edge
+    }
+
+    // (B) WakeForRefresh: valid must be preserved as true (no PublishValidReset). This is the
+    // load-bearing behavior for AC1 — a display-time edit's wake path must not fabricate a
+    // valid=false window that ReconcileSimState would classify as kSimulating.
+    seed_baseline();
+    gui::g_server_poller.WakeForRefresh(server);
+    {
+      auto snap = gui::g_server_poller.LoadSnapshot();
+      IM_CHECK(snap != nullptr);
+      IM_CHECK(snap->valid);  // WakeForRefresh preserves valid across the wake edge
+    }
+
+    gui::g_server_poller.Stop();
+    LUMICE_DestroyServer(server);
+  };
 }
