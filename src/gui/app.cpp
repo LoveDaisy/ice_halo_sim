@@ -70,6 +70,10 @@ int g_programmatic_resize = 0;
 bool g_show_unsaved_popup = false;
 PendingAction g_pending_action = PendingAction::kNone;
 
+// task-cleanup-hardening AC4: Save-modified prompt state.
+bool g_show_save_modified_popup = false;
+PendingSaveKind g_pending_save_kind = PendingSaveKind::kNone;
+
 float ComputeGridStep(float fov) {
   // FOV here is full-angle in degrees (matches RenderConfig::fov / ViewProjection::fov).
   // Aim: ~4–6 grid lines across the visible FOV; round to a "nice" step.
@@ -300,7 +304,13 @@ static void RefreshCpuTextureForSave() {
   g_preview.UpdateCpuTextureData(srgb.data(), w, h);
 }
 
-void DoSave() {
+// task-cleanup-hardening AC4: PerformSave / PerformSaveAs are the actual
+// serialization body (existing DoSave/DoSaveAs pre-353.5). DoSave / DoSaveAs
+// now front them with a sim_state == kModified check that opens
+// RenderSaveModifiedPopup; PerformSave / PerformSaveAs bypass the check
+// (called by the popup's "Save anyway" and by RenderUnsavedPopup, which is
+// the save prompt on the dirty axis — chaining two prompts would be bad UX).
+void PerformSave() {
   if (g_state.current_file_path.empty()) {
     g_state.current_file_path = ShowSaveDialog();
     if (g_state.current_file_path.empty()) {
@@ -314,7 +324,7 @@ void DoSave() {
   }
 }
 
-void DoSaveAs() {
+void PerformSaveAs() {
   auto path = ShowSaveDialog();
   if (!path.empty()) {
     g_state.current_file_path = path;
@@ -324,6 +334,28 @@ void DoSaveAs() {
       GUI_LOG_INFO("[GUI] DoSaveAs: {}", PathToU8(path));
     }
   }
+}
+
+void DoSave() {
+  // Gate on kModified: the last committed run does not reflect the current
+  // config, so the on-screen preview being about to serialize is a snapshot
+  // of a stale config. Rather than silently freeze it and clear Modified,
+  // prompt: Run first / Save anyway / Cancel.
+  if (g_state.sim_state == GuiState::SimState::kModified) {
+    g_show_save_modified_popup = true;
+    g_pending_save_kind = PendingSaveKind::kSave;
+    return;
+  }
+  PerformSave();
+}
+
+void DoSaveAs() {
+  if (g_state.sim_state == GuiState::SimState::kModified) {
+    g_show_save_modified_popup = true;
+    g_pending_save_kind = PendingSaveKind::kSaveAs;
+    return;
+  }
+  PerformSaveAs();
 }
 
 // Build PreviewParams for export: copy current preview viewport params, but override

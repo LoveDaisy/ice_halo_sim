@@ -1345,7 +1345,11 @@ void RenderUnsavedPopup(GLFWwindow* window) {
     ImGui::Separator();
 
     if (ImGui::Button("Save", ImVec2(80, 0))) {
-      DoSave();
+      // task-cleanup-hardening AC4: bypass the kModified prompt here — the user
+      // has just confirmed "Save before continuing" on the Unsaved-Changes
+      // prompt, chaining a second modal ("but the sim is also modified") would
+      // be bad UX and defeat the point of a confirmation flow.
+      PerformSave();
       switch (g_pending_action) {
         case PendingAction::kNew:
           DoNew();
@@ -1383,6 +1387,73 @@ void RenderUnsavedPopup(GLFWwindow* window) {
     ImGui::SameLine();
     if (ImGui::Button("Cancel", ImVec2(80, 0))) {
       g_pending_action = PendingAction::kNone;
+      ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+  }
+}
+
+// task-cleanup-hardening AC4: RenderSaveModifiedPopup — the "Save while
+// sim_state == kModified" prompt. The owner ruling (issue.md §偏离-E) is that
+// silently serializing "stale preview + fresh config + dirty=false" and
+// clearing Modified is a bug: the .lmc records a preview that does NOT match
+// its own config, and the user loses the visual warning that a re-run is
+// needed. This popup gates that flow — the user picks one of three:
+//   - "Run first"  : DoRun() to produce a fresh preview matching the current
+//                    config, then close the popup; the user re-invokes Save
+//                    when ready. Disabled if no live server (kIdle).
+//   - "Save anyway": PerformSave / PerformSaveAs (bypass the check). Freezes
+//                    the last committed run's preview into the .lmc — legit
+//                    when the user knowingly wants to snapshot pre-edit state.
+//   - "Cancel"     : Clears the pending save kind and closes; no side effect.
+void RenderSaveModifiedPopup(GLFWwindow* window) {
+  (void)window;  // no window-level ops needed (unlike Unsaved's kQuit path)
+  if (g_show_save_modified_popup) {
+    ImGui::OpenPopup("Save Modified Config");
+    g_show_save_modified_popup = false;
+  }
+
+  if (ImGui::BeginPopupModal("Save Modified Config", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::Text("The config has been modified since the last simulation run.");
+    ImGui::Text("The on-screen preview reflects the previous config, not the current one.");
+    ImGui::Separator();
+
+    // "Run first" is only meaningful when there is a live server to run on and
+    // no run is already inflight. Disabled otherwise (matches the top-bar Run
+    // button gating semantics; single-source would be nicer but the top bar's
+    // enable predicate is inlined and not exported).
+    const bool can_run = (g_server != nullptr) && (g_state.sim_state != GuiState::SimState::kSimulating) &&
+                         (g_state.sim_state != GuiState::SimState::kStopping);
+    if (!can_run) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Run first", ImVec2(100, 0))) {
+      DoRun();
+      g_pending_save_kind = PendingSaveKind::kNone;
+      ImGui::CloseCurrentPopup();
+    }
+    if (!can_run) {
+      ImGui::EndDisabled();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Save anyway", ImVec2(120, 0))) {
+      switch (g_pending_save_kind) {
+        case PendingSaveKind::kSave:
+          PerformSave();
+          break;
+        case PendingSaveKind::kSaveAs:
+          PerformSaveAs();
+          break;
+        case PendingSaveKind::kNone:
+          break;
+      }
+      g_pending_save_kind = PendingSaveKind::kNone;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(80, 0))) {
+      g_pending_save_kind = PendingSaveKind::kNone;
       ImGui::CloseCurrentPopup();
     }
 

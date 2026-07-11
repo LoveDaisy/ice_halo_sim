@@ -88,6 +88,8 @@ void ResetTestState() {
   // Runtime state
   gui::g_show_unsaved_popup = false;
   gui::g_pending_action = gui::PendingAction::kNone;
+  gui::g_show_save_modified_popup = false;
+  gui::g_pending_save_kind = gui::PendingSaveKind::kNone;
   gui::g_server_poller.Stop();  // Stop poller before nulling server
   // task-349.4: Stop() only kPaused the worker — the last published PreviewSnapshot
   // survives (production keeps it on purpose for slider-scrub carry-forward, see

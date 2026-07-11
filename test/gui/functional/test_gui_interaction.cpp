@@ -1,6 +1,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <thread>
 
 #include "IconsFontAwesome6.h"  // ICON_FA_* selectors used to match new icon-prefixed button labels
@@ -3619,6 +3620,109 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(load_ok);
       IM_CHECK_EQ(gui::CrystalOf(loaded, loaded.layers[0].entries[0]).type, gui::CrystalType::kPyramid);
       IM_CHECK_EQ(gui::CrystalOf(loaded, loaded.layers[0].entries[0]).prism_h, 3.5f);
+
+      std::remove(tmp_path);
+    };
+  }
+
+  // task-cleanup-hardening AC4: DoSave under sim_state == kModified must NOT
+  // silently write the stale-preview .lmc + clear Modified. It must front a
+  // popup ("Config modified — Run first / Save anyway / Cancel"). This test
+  // pins the "gate + no side-effect" contract at the call-level (DoSave
+  // returns without touching the file); a second test below covers the
+  // "Save anyway resumes serialization" branch, and a third pins that the
+  // non-kModified path stays silent (regression guard for the pre-353.5
+  // direct-serialize semantics).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "save_on_kmodified_opens_prompt_no_file_write");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      const char* tmp_path = "/tmp/lumice_savemod_gate.lmc";
+      std::remove(tmp_path);
+      gui::g_state.current_file_path = tmp_path;
+      // Force sim_state == kModified via the reconciled base (kDone) + dirty
+      // (any struct edit lands here through the field-tier reconciler).
+      gui::g_state.sim_state = gui::GuiState::SimState::kModified;
+      gui::g_state.dirty = true;
+
+      // Precondition: no popup pending, no kind pending.
+      IM_CHECK(!gui::g_show_save_modified_popup);
+      IM_CHECK_EQ(static_cast<int>(gui::g_pending_save_kind), static_cast<int>(gui::PendingSaveKind::kNone));
+
+      gui::DoSave();
+
+      // The gate opened the popup + queued kSave, and the .lmc was NOT touched
+      // (silent serialization would leave the file on disk).
+      IM_CHECK(gui::g_show_save_modified_popup);
+      IM_CHECK_EQ(static_cast<int>(gui::g_pending_save_kind), static_cast<int>(gui::PendingSaveKind::kSave));
+      std::ifstream f(tmp_path);
+      IM_CHECK(!f.good());
+
+      // dirty stays true (the gate must not clear it — that only happens on
+      // successful serialization).
+      IM_CHECK(gui::g_state.dirty);
+
+      // Cleanup — pretend the popup was resolved by Cancel.
+      gui::g_show_save_modified_popup = false;
+      gui::g_pending_save_kind = gui::PendingSaveKind::kNone;
+    };
+  }
+
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "save_anyway_resumes_serialization");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      const char* tmp_path = "/tmp/lumice_savemod_anyway.lmc";
+      std::remove(tmp_path);
+      gui::g_state.current_file_path = tmp_path;
+      gui::g_state.sim_state = gui::GuiState::SimState::kModified;
+      gui::g_state.dirty = true;
+
+      // Gate opens the popup; then simulate the user pressing "Save anyway"
+      // by calling PerformSave directly (the popup's Save-anyway button body).
+      gui::DoSave();
+      IM_CHECK(gui::g_show_save_modified_popup);
+      gui::PerformSave();
+
+      // File written; dirty cleared. sim_state stays kModified — the popup
+      // deliberately does NOT silently clear it (that would erase the
+      // user-visible "config differs from render" cue for future edits).
+      std::ifstream f(tmp_path);
+      IM_CHECK(f.good());
+      IM_CHECK(!gui::g_state.dirty);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+
+      gui::g_show_save_modified_popup = false;
+      gui::g_pending_save_kind = gui::PendingSaveKind::kNone;
+      std::remove(tmp_path);
+    };
+  }
+
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "save_bypasses_prompt_when_not_kmodified");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      const char* tmp_path = "/tmp/lumice_savemod_bypass.lmc";
+      std::remove(tmp_path);
+      gui::g_state.current_file_path = tmp_path;
+      // kIdle: no run has happened yet — nothing "modified" to warn about.
+      gui::g_state.sim_state = gui::GuiState::SimState::kIdle;
+      gui::g_state.dirty = true;
+
+      gui::DoSave();
+
+      // No popup queued; the file was written directly.
+      IM_CHECK(!gui::g_show_save_modified_popup);
+      IM_CHECK_EQ(static_cast<int>(gui::g_pending_save_kind), static_cast<int>(gui::PendingSaveKind::kNone));
+      std::ifstream f(tmp_path);
+      IM_CHECK(f.good());
+      IM_CHECK(!gui::g_state.dirty);
 
       std::remove(tmp_path);
     };

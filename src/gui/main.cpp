@@ -349,6 +349,7 @@ int main(int argc, char** argv) {
     gui::RenderEditModals(gui::g_state, window);
     gui::RenderSpectrumModal(gui::g_state);
     gui::RenderUnsavedPopup(window);
+    gui::RenderSaveModifiedPopup(window);
     gui::RenderImportWarningPopup();
     gui::RenderGuiWarningPopup();
 

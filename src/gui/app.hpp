@@ -34,6 +34,17 @@ struct PreviewViewport {
 
 enum class PendingAction { kNone, kNew, kOpen, kQuit };
 
+// task-cleanup-hardening AC4 (Save-偏离-E owner ruling = 提示需 Run):
+// When the user invokes Save while sim_state == kModified (config edited since
+// the last committed run), the on-screen preview is not a render of the
+// current config. Rather than silently serialize "stale render + fresh config
+// + dirty=false" and quietly clear Modified (the pre-353.5 behavior — the
+// bug), we now front a prompt: "Config has been modified since the last run.
+// Run first (to render the current config), Save anyway (freeze the last
+// run's preview into the .lmc), or Cancel?" The kind identifies which
+// deferred save path resumes after the user picks Save anyway.
+enum class PendingSaveKind { kNone, kSave, kSaveAs };
+
 // Global state — accessible for test engine
 extern GuiState g_state;
 extern PreviewRenderer g_preview;
@@ -63,6 +74,14 @@ extern int g_programmatic_resize;  // Counter: decremented by WindowSizeCallback
 // Unsaved changes popup state
 extern bool g_show_unsaved_popup;
 extern PendingAction g_pending_action;
+
+// task-cleanup-hardening AC4: Save-modified prompt state. Set by DoSave /
+// DoSaveAs when sim_state == kModified; consumed by RenderSaveModifiedPopup.
+// PerformSave / PerformSaveAs bypass the check (called from the popup's
+// "Save anyway" and from RenderUnsavedPopup, which is itself a save prompt
+// on a different axis — chaining two prompts would be bad UX).
+extern bool g_show_save_modified_popup;
+extern PendingSaveKind g_pending_save_kind;
 
 // Queue a user-visible warning surfaced by RenderImportWarningPopup; consecutive
 // calls within one import concatenate so all offending filters are reported.
@@ -99,8 +118,25 @@ OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConf
 float ComputeGridStep(float fov);
 
 // Business operations
+//
+// DoSave / DoSaveAs — the user-invoked save entry points (menu / keyboard
+// shortcut). Gate on sim_state == kModified: if the last committed run does
+// not reflect the current config, queue g_show_save_modified_popup and
+// return; RenderSaveModifiedPopup resumes the actual serialization if the
+// user picks Save anyway. When sim_state != kModified, fall through to
+// PerformSave / PerformSaveAs directly (no popup).
+//
+// PerformSave / PerformSaveAs — internal, do the actual RefreshCpuTextureForSave
+// + SaveLmcFile + dirty=false sequence. Exposed here (not just a .cpp static)
+// so RenderUnsavedPopup can bypass the kModified gate: the Unsaved-changes
+// popup is itself a save prompt on a different axis (dirty vs run intent),
+// and chaining two consecutive prompts is bad UX. Once the user has
+// explicitly answered the Unsaved prompt with "Save", we perform the save
+// unconditionally.
 void DoSave();
 void DoSaveAs();
+void PerformSave();
+void PerformSaveAs();
 void DoExportPreviewPng();
 void DoExportDualFisheyeEqualAreaPng();
 void DoExportEquirectangularPng();
@@ -216,6 +252,13 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
 void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height);
 void RenderStatusBar(float window_width, float window_height);
 void RenderUnsavedPopup(GLFWwindow* window);
+// task-cleanup-hardening AC4: Save-modified prompt. Rendered once per frame
+// after RenderUnsavedPopup. Opens iff g_show_save_modified_popup is true;
+// resumes the deferred save according to g_pending_save_kind on "Save anyway",
+// or clears the pending state on "Cancel". A "Run first" button (when a live
+// server exists and no run is inflight) invokes DoRun so the user can produce
+// a fresh render matching the current config, then re-invoke Save.
+void RenderSaveModifiedPopup(GLFWwindow* window);
 void RenderImportWarningPopup();
 // Generic GUI warning modal (see app_panels.cpp). SetGuiWarning queues a message (idempotent
 // while the same message is in-flight, so a persistent condition re-detected every debounced
