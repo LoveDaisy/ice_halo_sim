@@ -16,8 +16,11 @@
 #include <vector>
 
 #include "gui/app.hpp"                  // g_server_poller / g_preview / DoOpen / DoNew / SyncFromPoller
+#include "gui/color_window.hpp"         // PushDisplayState (M8 AC3 direct-push path)
 #include "gui/export_fbo_renderer.hpp"  // RenderExportToRgba for AC2 pixel-level assertion
 #include "gui/file_io.hpp"              // SerializeCoreConfig / ExportConfigJson / SaveLmcFile
+#include "gui/gui_state.hpp"            // GuiState + DisplayStateBaseline (M8 AC3)
+#include "gui/gui_state_reconcile.hpp"  // ReconcileGuiEffects / ApplyGuiEffects (M8 AC3 reconciler-path)
 #include "gui/server_poller.hpp"
 #include "test_gui_shared.hpp"
 
@@ -1453,6 +1456,161 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     IM_CHECK(snap_post->payload == nullptr);
     IM_CHECK_EQ(snap_post->texture_serial, serial_pre);
 
+    gui::g_server_poller.Stop();
+    LUMICE_DestroyServer(server);
+  };
+
+  // task-color-migration M8 AC3 — pixel-level equivalence between reconciler-driven display push and
+  // direct PushDisplayState. After Step 3 migration, widgets no longer call PushDisplayState inline;
+  // the frame-tail reconciler + ApplyGuiEffects call it in response to a display-state field diff.
+  // This test pins that "reconciler triggering timing is equivalent to widget inline calling" by
+  // exercising both paths back-to-back on identical GuiState mutations and asserting byte-identical
+  // composite output. PushDisplayState is used as the shared truth source — the test does NOT
+  // re-verify its internals; it verifies the reconciler's edge-trigger produces the SAME server-side
+  // C-API sequence as an inline call would have. Covers all five display-time edit types
+  // (color / visible / solo / z_order / mode) in a single test, since each mutation independently
+  // asserts identity — no gain from splitting into 5 sub-tests (plan §4 Step 8).
+  ImGuiTest* t_ac3 =
+      IM_REGISTER_TEST(engine, "gui_composite_preview", "reconciler_display_push_matches_direct_push_byte_identical");
+  t_ac3->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    const bool ok = RunToIdleWithData(server, kTwoColorConfig);
+    IM_CHECK(ok);
+    if (!ok) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+
+    // Build a GuiState mirror of the committed kTwoColorConfig display defaults — class 0 = red
+    // match-all, class 1 = blue entry_exit len=3. PushDisplayState reads only
+    // {color, visible, solo, z_order, raypath_color_mode} from state (match/combine are struct-tier,
+    // not on the display-push channel), so match[] content doesn't have to be JSON-perfect —
+    // populating any non-empty match[] with plausible values is sufficient. Structural fields are
+    // NOT read by PushDisplayState (verified: color_window.cpp:52-70).
+    auto MakeBaseline = []() {
+      gui::GuiState s;
+      s.raypath_color.resize(2);
+      s.raypath_color[0].color[0] = 1.0f;  // red
+      s.raypath_color[0].color[1] = 0.0f;
+      s.raypath_color[0].color[2] = 0.0f;
+      s.raypath_color[0].visible = true;
+      s.raypath_color[0].solo = false;
+      s.raypath_color[0].z_order = 0;
+      s.raypath_color[1].color[0] = 0.0f;
+      s.raypath_color[1].color[1] = 0.0f;
+      s.raypath_color[1].color[2] = 1.0f;  // blue
+      s.raypath_color[1].visible = true;
+      s.raypath_color[1].solo = false;
+      s.raypath_color[1].z_order = 1;
+      s.raypath_color_mode = LUMICE_COLOR_MODE_DOMINANT;
+      return s;
+    };
+
+    // Seed last_pushed_display_state from a GuiState — mirrors MakeBaselineState in
+    // test_gui_state_reconcile.cpp. Reconciler treats nullopt as "first push after Reset" (need_push
+    // still fires when raypath_color non-empty, but for AC3 we want the DIFF edge, not the reset
+    // edge, so we seed a matching baseline and rely on the mutation to create the diff).
+    auto SeedDisplayBaseline = [](gui::GuiState& s) {
+      gui::GuiState::DisplayStateBaseline dsb;
+      for (const auto& cls : s.raypath_color) {
+        dsb.color_display.push_back(static_cast<const gui::ColorClassDisplayState&>(cls));
+      }
+      dsb.raypath_color_mode = s.raypath_color_mode;
+      s.last_pushed_display_state = std::move(dsb);
+    };
+
+    auto ReadComposite = [&](std::vector<uint8_t>& out) {
+      LUMICE_RenderResult r[LUMICE_MAX_RENDER_RESULTS + 1]{};
+      IM_CHECK_EQ(LUMICE_GetCompositeResults(server, r, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+      IM_CHECK(r[0].img_buffer != nullptr);
+      const size_t nbytes = static_cast<size_t>(r[0].img_width) * static_cast<size_t>(r[0].img_height) * 3;
+      out.assign(r[0].img_buffer, r[0].img_buffer + nbytes);
+    };
+
+    // Establish server-side baseline display so `pathA_baseline` and `pathB_baseline` are shared.
+    // Uses PushDisplayState (the same API both paths converge on) so the baseline itself is not a
+    // hidden divergence source.
+    const gui::GuiState baseline = MakeBaseline();
+    IM_CHECK(gui::PushDisplayState(baseline, server));
+    std::vector<uint8_t> composite_baseline;
+    ReadComposite(composite_baseline);
+
+    // Five mutation lambdas — one per display-time edit type. Each MUST produce a composite
+    // measurably different from baseline (sanity gate: if the mutation is invisible, the equivalence
+    // assertion below is vacuous).
+    struct Mutation {
+      const char* name;
+      void (*apply)(gui::GuiState&);
+    };
+    const Mutation muts[] = {
+      { "color", [](gui::GuiState& s) { s.raypath_color[0].color[0] = 0.25f; } },   // dim class 0 red
+      { "visible", [](gui::GuiState& s) { s.raypath_color[0].visible = false; } },  // hide bright class
+      { "solo", [](gui::GuiState& s) { s.raypath_color[1].solo = true; } },         // solo dim class
+      { "z_order",
+        [](gui::GuiState& s) {
+          // Swap z_order to promote class 1 to the top; dominant mode is invariant to z_order (arg
+          // max wins regardless of layer stacking), but painter mode is not — so switch to painter
+          // AND swap z_order together to make the mutation observable while keeping this the
+          // "z_order lane" of the test.
+          s.raypath_color[0].z_order = 1;
+          s.raypath_color[1].z_order = 0;
+          s.raypath_color_mode = LUMICE_COLOR_MODE_PAINTER;
+        } },
+      { "mode", [](gui::GuiState& s) { s.raypath_color_mode = LUMICE_COLOR_MODE_ADDITIVE; } },
+    };
+
+    for (const auto& m : muts) {
+      // -- Path A: reconciler-driven --
+      IM_CHECK(gui::PushDisplayState(baseline, server));  // reset server display to baseline
+      std::vector<uint8_t> reset_check;
+      ReadComposite(reset_check);
+      IM_CHECK_EQ(std::memcmp(reset_check.data(), composite_baseline.data(), composite_baseline.size()), 0);
+
+      gui::GuiState sA = MakeBaseline();
+      SeedDisplayBaseline(sA);
+      m.apply(sA);
+      gui::GuiEffects effA = gui::ReconcileGuiEffects(sA);
+      // Every mutation touches at least one display-state sub-field or raypath_color_mode → the
+      // reconciler MUST route it to need_display_push (structural lane is quiet: no combine/match
+      // change in these mutations).
+      IM_CHECK(effA.need_display_push);
+      IM_CHECK(!effA.need_hard_reset);
+      IM_CHECK(!effA.need_resim);
+      gui::ApplyGuiEffects(sA, server, effA);
+      std::vector<uint8_t> compositeA;
+      ReadComposite(compositeA);
+
+      // Sanity: the mutation actually rendered (composite bytes differ from baseline).
+      IM_CHECK(compositeA.size() == composite_baseline.size());
+      IM_CHECK(std::memcmp(compositeA.data(), composite_baseline.data(), composite_baseline.size()) != 0);
+
+      // Reconciler must also have updated last_pushed_display_state on success so a follow-up
+      // reconcile with no further mutation is a quiet no-op (edge-triggered contract).
+      IM_CHECK(sA.last_pushed_display_state.has_value());
+      gui::GuiEffects effA_quiet = gui::ReconcileGuiEffects(sA);
+      IM_CHECK(!effA_quiet.need_display_push);
+
+      // -- Path B: direct PushDisplayState --
+      IM_CHECK(gui::PushDisplayState(baseline, server));  // reset server display to baseline
+      gui::GuiState sB = MakeBaseline();
+      m.apply(sB);
+      IM_CHECK(gui::PushDisplayState(sB, server));
+      std::vector<uint8_t> compositeB;
+      ReadComposite(compositeB);
+
+      // ⭐ AC3 core assertion: reconciler-driven and direct-push paths produce byte-identical
+      // composite. Both funnel through PushDisplayState with the same GuiState → same C-API args →
+      // same server-side snapshot_dirty_ → same Phase-2 rebake. Any drift here would signal the
+      // reconciler is mutating state between diff and push, or ApplyGuiEffects is calling something
+      // other than PushDisplayState on the need_display_push branch.
+      IM_CHECK_EQ(compositeA.size(), compositeB.size());
+      IM_CHECK_EQ(std::memcmp(compositeA.data(), compositeB.data(), compositeA.size()), 0);
+    }
+
+    // WakeForRefresh inside PushDisplayState may have started the global poller worker; Stop it so
+    // subsequent tests start clean.
     gui::g_server_poller.Stop();
     LUMICE_DestroyServer(server);
   };
