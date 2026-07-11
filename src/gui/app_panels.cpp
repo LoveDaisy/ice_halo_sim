@@ -1019,10 +1019,8 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
         // Wake a paused poller so the next frame can pick up the freshly re-baked
         // composite even after a finite sim has completed (same rationale as the
         // color-window PushDisplayState path — see task-345.2 (③) in color_window.cpp).
-        // No-op when the poller is already running. WakeForRefresh (not WakeForRestart)
-        // preserves valid=true across the wake edge — same display-time-inert contract
-        // as color/visible/solo/z_order edits (task-color-migration §3 D3).
-        g_server_poller.WakeForRefresh(g_server);
+        // No-op when the poller is already running.
+        g_server_poller.WakeForRestart(g_server);
         s_last_pushed_ev = composite_ev_push;
       }
       s_last_composite_active = composite_active;
