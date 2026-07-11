@@ -745,4 +745,127 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
     gui::g_server_poller.Stop();
     LUMICE_DestroyServer(server);
   };
+
+  // ---- Test 8: task-color-migration M7 — AC1/AC4 display-time edits do not disturb kDone ----
+  // The user-visible activity bug (plan §1 偏离 A): after a finite run completes, toggling any of
+  // color / visible / solo / z_order / mode used to flash Run→Stop and briefly display
+  // "Simulating…" in the status bar. Two root causes had to be fixed together (doc §7 反模式
+  // "同一 bug 连修错误层"):
+  //   (a) M4 WakeForRefresh — display-time refresh must not publish valid=false through the
+  //       poller's kPaused→kRunning wake edge (Test 7 pins the seam-level invariant);
+  //   (b) M5 kRunCompleted latch — a completed intent is structurally immune to any late
+  //       valid=false observation (Test 6b pins the reconcile-side latch);
+  //   (c) M6 InvalidateEffectsBaselines — DoRun / DoRevert / backend-swap reset the display-push
+  //       baseline so the next reconcile re-pushes (Test 2 in test_gui_state_reconcile pins the
+  //       baseline invariant).
+  //
+  // This test is the END-TO-END integration guard for AC1/AC4: it drives a real finite DoRun→
+  // completion, then exercises each of the five display-time edit categories by writing the
+  // widget-level field directly (M3 made the widgets pure field-writers — the reconciler picks
+  // up the diff on the frame tail — so a field poke is behaviorally identical to a `ctx->ItemClick`
+  // on the corresponding widget, minus the ImGui click-plumbing complexity). Across a multi-frame
+  // scan after each edit, sim_state must remain kDone (AC1), run_intent must remain kRunCompleted
+  // and committed_epoch must NOT advance (AC4: display-time is inert to the sim-lifecycle clock).
+  //
+  // Multi-frame scan (not just one post-edit assert) is load-bearing: AC1 phrasing is "does not
+  // flash" — a single-frame assertion would miss a one-frame regression window. The scan iterates
+  // ctx->Yield() five times and asserts the invariant on every intermediate frame.
+  ImGuiTest* t8 = IM_REGISTER_TEST(engine, "gui_lifecycle", "display_edits_do_not_disturb_done");
+  t8->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    // Setup mirrors Test 6b (real-server finite DoRun through the reconcile pipeline).
+    gui::g_server_poller.Stop();
+    gui::g_server = LUMICE_CreateServer();
+    IM_CHECK(gui::g_server != nullptr);
+    gui::g_server_is_gpu = false;
+    gui::g_state = gui::InitDefaultState();
+    gui::g_state.sim.infinite = false;
+    gui::g_state.sim.ray_num_millions = 0.5f;
+    gui::g_state.sim.max_hits = 8;
+#if defined(__APPLE__)
+    gui::g_state.use_gpu_backend = true;
+#endif
+
+    // Seed two color classes BEFORE DoRun so the committed config carries them and post-completion
+    // display-time edits have a non-empty vector to push through the reconciler (empty raypath_color
+    // short-circuits DiffAgainstDisplayBaseline; we want the actual push lane exercised).
+    gui::ColorClassConfig c0;
+    c0.color[0] = 1.0f;
+    c0.visible = true;
+    c0.solo = false;
+    c0.z_order = 0;
+    gui::ColorClassConfig c1;
+    c1.color[1] = 1.0f;
+    c1.visible = true;
+    c1.solo = false;
+    c1.z_order = 1;
+    gui::g_state.raypath_color.push_back(c0);
+    gui::g_state.raypath_color.push_back(c1);
+
+    gui::DoRun();
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunning));
+
+    // Drive until sim_state == kDone AND intent has latched to kRunCompleted (Mealy edge in
+    // SyncFromPoller runs one frame after the reconcile settles).
+    auto start = std::chrono::steady_clock::now();
+    while (gui::g_state.sim_state != SimState::kDone || gui::g_state.run_intent != RunIntent::kRunCompleted) {
+      ctx->Yield();
+      if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start).count() > 20) {
+        break;
+      }
+    }
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kDone));
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunCompleted));
+
+    // AC4 baseline: display-time is inert to the sim-lifecycle clock. Capture the epoch here;
+    // display-time edits must NOT advance it.
+    const uint64_t baseline_epoch = gui::g_state.committed_epoch;
+
+    // Multi-frame scan invariant: sim_state stays kDone, run_intent stays kRunCompleted,
+    // committed_epoch does not advance, across N post-edit frames. RED手法: a single-frame
+    // valid=false blip (pre-M4) would slip past a one-shot assertion but this loop catches it.
+    auto scan_invariant = [&](const char* edit_label) {
+      IM_UNUSED(edit_label);
+      for (int frame = 0; frame < 5; ++frame) {
+        ctx->Yield();
+        IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kDone));
+        IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunCompleted));
+        IM_CHECK_EQ(gui::g_state.committed_epoch, baseline_epoch);
+      }
+    };
+
+    // Edit 1: color (ColorClassDisplayState.color[]) — the color swatch widget's field write.
+    gui::g_state.raypath_color[0].color[0] = 0.5f;
+    gui::g_state.raypath_color[0].color[1] = 0.25f;
+    scan_invariant("color");
+
+    // Edit 2: visible (eye icon plain click).
+    gui::g_state.raypath_color[0].visible = false;
+    scan_invariant("visible");
+
+    // Edit 3: solo (eye icon Alt+click). Note: solo alone semantically implies visible=false on
+    // the non-solo class; here we just flip solo on class 0 to exercise the display-state field.
+    gui::g_state.raypath_color[0].solo = true;
+    scan_invariant("solo");
+
+    // Edit 4: z_order (up/down arrow buttons swap z_order values between two classes).
+    std::swap(gui::g_state.raypath_color[0].z_order, gui::g_state.raypath_color[1].z_order);
+    scan_invariant("z_order");
+
+    // Edit 5: mode (composite mode combo).
+    gui::g_state.raypath_color_mode = (gui::g_state.raypath_color_mode + 1) % 3;
+    scan_invariant("mode");
+
+    // Cleanup mirrors Test 2 / Test 6b.
+    gui::g_server_poller.Stop();
+    if (gui::g_server) {
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+    }
+    gui::g_server_is_gpu = false;
+    gui::g_state.run_intent = RunIntent::kNone;
+    gui::g_state.committed_epoch = 0;
+    gui::g_state.display_epoch_floor = 0;
+  };
 }
