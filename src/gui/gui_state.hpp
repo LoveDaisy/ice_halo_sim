@@ -104,12 +104,23 @@ struct SunConfig {
   //            must be non-empty). Enforced at every write site (edit modal OK, file_io load).
   int spectrum_index = 2;  // Index into kSpectrumNames: 0=D50,1=D55,2=D65,3=D75,4=A,5=E, 6=Custom...
   std::vector<WlWeight> custom_spectrum;
+
+  friend bool operator==(const SunConfig& a, const SunConfig& b) {
+    return a.altitude == b.altitude && a.diameter == b.diameter && a.spectrum_index == b.spectrum_index &&
+           a.custom_spectrum == b.custom_spectrum;
+  }
+  friend bool operator!=(const SunConfig& a, const SunConfig& b) { return !(a == b); }
 };
 
 struct SimConfig {
   float ray_num_millions = 5.0f;
   int max_hits = 8;
   bool infinite = false;
+
+  friend bool operator==(const SimConfig& a, const SimConfig& b) {
+    return a.ray_num_millions == b.ray_num_millions && a.max_hits == b.max_hits && a.infinite == b.infinite;
+  }
+  friend bool operator!=(const SimConfig& a, const SimConfig& b) { return !(a == b); }
 };
 
 // Lens type names (order must match Core's LensParam::LensType enum)
@@ -513,6 +524,11 @@ static_assert(sizeof(EntryCard) == 16,
 struct Layer {
   float probability = 0.0f;  // Probability of multi-scatter continuation (0 = single scatter), range [0,1]
   std::vector<EntryCard> entries;
+
+  friend bool operator==(const Layer& a, const Layer& b) {
+    return a.probability == b.probability && a.entries == b.entries;
+  }
+  friend bool operator!=(const Layer& a, const Layer& b) { return !(a == b); }
 };
 
 // task-342.3 (scrum-raypath-color-design2): GUI-side raypath color model.
