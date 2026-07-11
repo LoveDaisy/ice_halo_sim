@@ -15,6 +15,9 @@
 //  3. gui_state_reconcile/apply_effects_priority — pins the hard-shadows-soft precedence in
 //     ApplyGuiEffects and the "no baseline → no-op" contract.
 
+#include <set>
+#include <string>
+
 #include "gui/gui_state_reconcile.hpp"
 #include "gui/gui_state_tiers.hpp"
 #include "test_gui_shared.hpp"
@@ -190,17 +193,22 @@ void RegisterStateReconcileTests(ImGuiTestEngine* engine) {
       IM_UNUSED(mut.field);  // name is here for debug-print if IM_CHECK fires
     }
 
-    // Cross-check: the 6 mutators above match the auto-diff set from kFieldTierTable. Compute it
-    // from the header table at test time so a table edit that changes the set immediately makes
-    // the mutator list stale — the mismatch flags the diff as needing hand-review.
-    int expected_auto_diff_count = 0;
+    // Cross-check: the 6 mutators above match the auto-diff *name set* from kFieldTierTable, not
+    // just its cardinality — an equal-size swap (e.g. excluding `filters` while un-excluding
+    // `use_gpu_backend`) would pass a count-only check but must fail here, since the mutator list
+    // would then be testing the wrong fields entirely.
+    std::set<std::string> expected_fields;
     for (const auto& entry : gui::kFieldTierTable) {
       const bool is_struct = entry.tier == FieldTier::kStructHard || entry.tier == FieldTier::kStructSoft;
       if (is_struct && !entry.auto_diff_excluded) {
-        ++expected_auto_diff_count;
+        expected_fields.insert(entry.name);
       }
     }
-    IM_CHECK_EQ(expected_auto_diff_count, static_cast<int>(sizeof(kMutators) / sizeof(kMutators[0])));
+    std::set<std::string> mutator_fields;
+    for (const auto& mut : kMutators) {
+      mutator_fields.insert(mut.field);
+    }
+    IM_CHECK(expected_fields == mutator_fields);
 
     // Assertion (b/c) analog: auto-diff-excluded struct-tier fields must NOT drive effects when
     // mutated. Currently only raypath_color (auto_diff_excluded=true in kFieldTierTable).

@@ -34,8 +34,8 @@ Checks:
      `kDerivedFieldsExcludeList` (runtime-derived / not governed). Adding a
      new GuiState field without touching the tiers header is a violation.
      Closes the "unregistered field silently escapes governance" loophole
-     that block-A of scrum-gui-state-reconcile T0 was built to prevent
-     (doc/gui-state-governance.md).
+     that scrum-gui-state-reconcile T0 (reconcile-foundation) was built to
+     prevent (doc/gui-state-governance.md).
 
 Add a new check as a function returning a list of Violation and append it to
 CHECKS. Keep each check deterministic and artifact-inspecting.
@@ -618,10 +618,17 @@ def _extract_gui_state_top_level_fields(path: Path) -> tuple[set[str], int]:
             continue
         if GUI_FIELD_SKIP_KEYWORDS_RE.match(line):
             continue
-        # A method declaration/definition contains '(' before its terminating
-        # ';' or '{'. Top-level GuiState fields never use parenthesized
-        # initializers, so this filter is safe.
-        if "(" in line:
+        # A method declaration/definition has '(' in its declarator (before any
+        # '=' default-value token, since a default parameter's '=' can only
+        # occur *inside* the already-open param list). A field with a
+        # call-style default initializer (`Type foo = SomeFunc();`) has no
+        # '(' before its own first '=', so checking only the pre-'=' segment
+        # tells the two apart. Residual gap: a field using call-style
+        # brace-init with no '=' at all (`Type foo{SomeFunc()};`) is still
+        # misclassified as a method; no such field exists in GuiState today
+        # (verified: 62/62 fields extracted, zero false positives/negatives).
+        declarator = line.split("=", 1)[0]
+        if "(" in declarator:
             continue
         fm = GUI_FIELD_LINE_RE.match(line)
         if fm:
