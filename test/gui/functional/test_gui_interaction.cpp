@@ -362,7 +362,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
   // P1: scrum-gui-polish-v13 161.2 — In Immediate mode, Remove applies on the
   // next frame (ApplyBuffersToEntry sees empty raypath and writes nullopt).
   // Dual observable: entry.filter_id = nullopt (direct) + display_epoch_floor
-  // (MarkFilterDirty side effect — raises the floor to committed_epoch). Seed a
+  // (MarkStructHardDirty side effect — raises the floor to committed_epoch). Seed a
   // non-zero committed_epoch with the floor at 0 so the bump is observable, and the
   // pre-condition asserts the floor starts below committed_epoch to avoid tautologies.
   {
@@ -379,12 +379,12 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // task-classic-params-migration: seed last_committed_state after the filter is
       // present so removing it later trips AnyEntryFilterPresenceChanged in the reconciler.
       // Pre-migration this test worked because CommitAllBuffersImmediate manually fired
-      // MarkFilterDirty regardless of baseline; post-migration the effect flows through the
+      // MarkStructHardDirty regardless of baseline; post-migration the effect flows through the
       // reconciler and requires a real baseline to diff against.
       gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
       ctx->Yield();
 
-      // Pre-condition guard: MarkFilterDirty has not fired yet (floor still below committed).
+      // Pre-condition guard: MarkStructHardDirty has not fired yet (floor still below committed).
       IM_CHECK_EQ(gui::g_state.display_epoch_floor, 0u);
 
       ctx->ItemClick("**/Edit##fi");
@@ -765,7 +765,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
   // P1: Edit modal OK without any change must NOT clear the rendered preview
   // or arm Revert. Regression guard for scrum-gui-polish-v7 152.2: previously
-  // CommitAllBuffers unconditionally MarkFilterDirty()'d after any OK,
+  // CommitAllBuffers unconditionally MarkStructHardDirty()'d after any OK,
   // wiping snapshot_intensity + flipping sim_state to kModified.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit", "ok_no_change_preserves_state");
@@ -829,7 +829,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // task-classic-params-migration: seed last_committed_state at the "filter present"
       // baseline so ReconcileGuiEffects fires need_resim/hard-reset when Remove Filter takes
       // effect. Pre-migration this test worked because CommitAllBuffers manually fired
-      // MarkDirty+MarkFilterDirty unconditionally; post-migration the effect requires a real
+      // MarkDirty+MarkStructHardDirty unconditionally; post-migration the effect requires a real
       // baseline diff.
       gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
       ctx->Yield();
@@ -914,9 +914,9 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
   // P1: scrum-gui-polish-v11 / task-modal-immediate-mode M2 gate — in
   // Immediate mode, crystal-only buffer edits must MarkDirty but NOT
-  // MarkFilterDirty. This is what keeps infinite-rays accumulation alive
+  // MarkStructHardDirty. This is what keeps infinite-rays accumulation alive
   // while the user drags a Crystal slider. Filter edits still fire
-  // MarkFilterDirty (identical to Staged OK semantics for filter changes).
+  // MarkStructHardDirty (identical to Staged OK semantics for filter changes).
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_crystal_does_not_clear_display");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -954,7 +954,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
                       // 1 for OpenPopup, plus a little slack for tab SetSelected.
 
       // Crystal-only edit: change Height via the Crystal tab input. Must
-      // MarkDirty (state.dirty == true) but must NOT MarkFilterDirty
+      // MarkDirty (state.dirty == true) but must NOT MarkStructHardDirty
       // (snapshot_intensity preserved, display_epoch_floor NOT raised).
       ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 1.0f);
       ctx->Yield(2);
@@ -965,7 +965,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // Filter edit: switch to the Filter tab and type a raypath. Because the
       // entry had no filter at modal open (initial_present=false), the first
       // raypath edit is itself the filter creation — filter_changed == true
-      // in ApplyBuffersToEntry → MarkFilterDirty fires → display clears.
+      // in ApplyBuffersToEntry → MarkStructHardDirty fires → display clears.
       ctx->ItemClick("**/###filter_tab");
       ctx->Yield(4);
       ctx->ItemInputValue("**/##row_text_0", "3-1-5");
@@ -3451,7 +3451,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
   }
 
   // p1_running/filter_change_triggers_restart (extension)
-  // Filter changes call MarkFilterDirty() which raises display_epoch_floor to committed_epoch,
+  // Filter changes call MarkStructHardDirty() which raises display_epoch_floor to committed_epoch,
   // fencing the old generation's textures until DoRun re-commits and mints a newer epoch that
   // clears the floor. End-to-end exercise of the epoch-keyed anti-flicker gate.
   {
@@ -3491,7 +3491,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
 
       // Act: change filter raypath, mark filter dirty, commit
       gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].MutableRaypathText() = "3-1-5-7";
-      gui::g_state.MarkFilterDirty();
+      gui::g_state.MarkStructHardDirty();
       gui::DoRun();
 
       // Filter changes may take slightly longer (epoch-floor fence until re-commit); use 2000ms

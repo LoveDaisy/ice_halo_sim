@@ -158,10 +158,10 @@ GuiEffects ReconcileGuiEffects(const GuiState& state) {
 }
 
 void ApplyGuiEffects(GuiState& state, LUMICE_Server* server, const GuiEffects& effects) {
-  // Explicit priority: MarkFilterDirty internally calls MarkDirty, so an else-if avoids
+  // Explicit priority: MarkStructHardDirty internally calls MarkDirty, so an else-if avoids
   // double-invocation and makes the "hard shadows soft" precedence obvious to a future reader.
   if (effects.need_hard_reset) {
-    state.MarkFilterDirty();
+    state.MarkStructHardDirty();
   } else if (effects.need_resim) {
     state.MarkDirty();
   }

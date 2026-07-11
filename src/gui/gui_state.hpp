@@ -758,7 +758,7 @@ struct GuiState {
   // Immediate mode (default, gui-polish-v15 round 2): ImGui::Begin + single
   // Close button + no dirty-mark; every frame commits buffer to state via
   // CommitAllBuffersImmediate (crystal/axis edits only MarkDirty — filter
-  // edits still MarkFilterDirty — so infinite-rays accumulation persists
+  // edits still MarkStructHardDirty — so infinite-rays accumulation persists
   // while the user drags a crystal slider).
   bool modal_immediate_mode = true;
 
@@ -767,9 +767,12 @@ struct GuiState {
   // kModified via that reconcile (base kDone + dirty), not via a direct write.
   void MarkDirty() { dirty = true; }
 
-  // Mark a filter-related change. A filter edit changes the server's filter topology, so the
-  // next struct commit rebuilds (epoch++) rather than reusing consumers; this does two
-  // orthogonal things:
+  // Mark a struct-tier hard change. Any struct-tier field diff (filter topology, MS layer
+  // count, projection, ray_num, etc. — see gui_state_tiers.hpp T-struct·hard) requires the
+  // next struct commit to rebuild the server (epoch++) rather than reuse consumers. Named
+  // "struct-hard" to align with doc/gui-state-governance.md §档位表 T-struct·hard; the
+  // pre-353.5 name `MarkFilterDirty` was misleading (it never was filter-only — any struct
+  // hard-reset routed through here). This does two orthogonal things:
   //   (a) immediate display clear — snapshot_intensity/p99 reset so the shader renders black
   //       right away (a legitimate display action, not a lock);
   //   (b) raise display_epoch_floor to the current committed_epoch so any payload still being
@@ -779,7 +782,7 @@ struct GuiState {
   //       a monotone epoch key (blueprint §7 / I1).
   // MarkDirty (crystal/sun scrub) deliberately does NOT raise the floor, so carry-forward of
   // the previous generation's texture keeps the preview alive with no black flicker (§3.3).
-  void MarkFilterDirty() {
+  void MarkStructHardDirty() {
     MarkDirty();
     snapshot_intensity = 0;
     p99_raw_y = 0.0f;
@@ -851,7 +854,7 @@ struct GuiState {
   RunIntent run_intent = RunIntent::kNone;  // last user command channel (blueprint §5)
   uint64_t committed_epoch = 0;             // epoch the GUI last committed (DoRun reads it back)
   // Epoch floor for the display upload gate (blueprint §7). A payload uploads only when
-  // payload_epoch > display_epoch_floor. Raised by MarkFilterDirty to committed_epoch to fence
+  // payload_epoch > display_epoch_floor. Raised by MarkStructHardDirty to committed_epoch to fence
   // off the old generation's textures; monotone. Replaces the old intensity_locked boolean.
   uint64_t display_epoch_floor = 0;
   // Consumer-side exact-once upload cursor (migrated from a SyncFromPoller file-scope static in
@@ -871,7 +874,7 @@ struct GuiState {
   float target_white = 135.0f;  // Target P99 brightness on 0-255 sRGB scale
 
   // task-345.4: display-time raypath-color composite vs full-spectrum toggle.
-  // Neither field triggers MarkDirty/MarkFilterDirty — this is a display-time
+  // Neither field triggers MarkDirty/MarkStructHardDirty — this is a display-time
   // choice on which already-produced payload buffer to upload, orthogonal to
   // the sim/dirty/Revert lifecycle (blueprint §4.0).
   // Ownership contract (single-writer discipline, review Suggestion #1):
@@ -894,7 +897,7 @@ struct GuiState {
   //   Fields mirrored here must be the subset of GuiState classified as "configuration"
   //   (i.e. those reached by MarkDirty, contributing to the dirty/Revert lifecycle).
   //   raypath_color IS configuration: structural color-class edits go through
-  //   MarkFilterDirty, so Revert must restore them; the field was missing from the
+  //   MarkStructHardDirty, so Revert must restore them; the field was missing from the
   //   original 2026-04 audit and re-added by task-349.2 (Step 2 of plan §3.4).
   //   View preferences (aspect_preset, bg_*, horizon/grid/sun circles, log levels,
   //   left_panel_collapsed, right_panel_collapsed, show_composite_preview,
@@ -981,7 +984,7 @@ struct GuiState {
 // wholesale, so this addition is covered without further field-level audit.
 // Size bumped from 192 → 216 by task-349.2: added `raypath_color` field
 // (std::vector<ColorClassConfig>) so Revert restores color-class edits that
-// go through MarkFilterDirty (Revert-completeness fix, plan §3.4).
+// go through MarkStructHardDirty (Revert-completeness fix, plan §3.4).
 static_assert(sizeof(GuiState::ConfigSnapshot) == 216,
               "GuiState::ConfigSnapshot size changed; audit From()/ApplyTo() implementations below");
 #endif

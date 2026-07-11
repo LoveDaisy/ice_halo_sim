@@ -17,7 +17,7 @@
 // (combine/match) and display-only (color/visible/solo/z_order) semantics; auto-diffing the whole
 // vector as one hard-tier struct would spuriously fire re-sim on pure display edits until the
 // scrum's later task (raypath_color migration) splits ColorClassConfig into structural + display
-// sub-structs. Until then the field keeps its existing MarkFilterDirty call sites.
+// sub-structs. Until then the field keeps its existing MarkStructHardDirty call sites.
 //
 // `kDerivedFieldsExcludeList` is a separate registry for fields that are outputs / runtime-derived
 // state (sim_state, epoch bookkeeping, stats readbacks, auto-EV runtime, etc.) — they are NOT
@@ -63,7 +63,7 @@ inline constexpr FieldTierEntry kFieldTierTable[] = {
     // raypath_color: T1 (task-color-migration) split ColorClassConfig into structural
     // (ColorClassStructState: combine/match) vs display (ColorClassDisplayState:
     // color/visible/solo/z_order) sub-structs, so the reconciler can now diff each part on
-    // its own channel — struct-part diff → need_hard_reset (drives MarkFilterDirty);
+    // its own channel — struct-part diff → need_hard_reset (drives MarkStructHardDirty);
     // display-part diff → need_display_push (drives LUMICE_SetRaypathColors, orthogonal to
     // dirty/epoch). Formerly auto_diff_excluded=true; the exclusion is dropped now that the
     // routing is expressible in the diff logic. See doc/gui-state-governance.md T1.

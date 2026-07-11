@@ -659,7 +659,7 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
   // the shared dirty → ReconcileSimState pipeline (the same route the main-
   // scene "changed since last run" ⚠ + Revert ride on). Driven by REAL UI
   // clicks (not a hand poke of state.dirty) so the test can catch a future
-  // rewrite that quietly bypasses MarkFilterDirty on any color-window control.
+  // rewrite that quietly bypasses MarkStructHardDirty on any color-window control.
   //
   // Seed pattern (kDone + committed_epoch>0 + run_intent=kLoaded + dirty=false)
   // mirrors p1_edit/ok_no_change_preserves_state so the reconcile base pins to
@@ -673,7 +673,7 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       // T1: the reconciler diffs against last_committed_state; without a baseline it is a no-op
       // before the first commit (mirrors real Run-then-edit flow). Seed the baseline BEFORE the
       // edit so the subsequent Add Class becomes a diff — under the OLD widget-side
-      // MarkFilterDirty call this seeding was unnecessary; T1 makes the baseline a first-class
+      // MarkStructHardDirty call this seeding was unnecessary; T1 makes the baseline a first-class
       // input. (toggle_whole_via_ui_marks_modified below already followed this pattern.)
       gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
       gui::g_state.run_intent = gui::RunIntent::kLoaded;
@@ -705,7 +705,7 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
 
   // Whole-crystal checkbox is the #2 case from issue.md: a display-affecting
   // structural edit whose current implementation is `SetRefMatchAll(ref, ...);
-  // state.MarkFilterDirty();` — must surface as kModified for the same reason
+  // state.MarkStructHardDirty();` — must surface as kModified for the same reason
   // as Add Class.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "toggle_whole_via_ui_marks_modified");

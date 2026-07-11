@@ -894,7 +894,7 @@ void DoRun() {
     // Intent + epoch readback (I1): the synchronous commit above has already minted (or reused)
     // the lifecycle epoch; read it back so ReconcileSimState keys the display on THIS generation.
     // A filter change always rebuilds (epoch++), so the new epoch strictly exceeds any
-    // display_epoch_floor MarkFilterDirty raised — the floor lifts itself with no explicit unlock.
+    // display_epoch_floor MarkStructHardDirty raised — the floor lifts itself with no explicit unlock.
     LUMICE_SimLifecycleResult lc{};
     LUMICE_GetSimLifecycle(g_server, &lc);
     g_state.committed_epoch = lc.epoch;
@@ -920,7 +920,7 @@ void DoRun() {
     // desired (consumers must ignore any stale terminal snapshot until the worker
     // republishes for the new epoch).
     g_server_poller.WakeForRestart(g_server);
-    // No staged-texture invalidate here: the epoch floor (raised by MarkFilterDirty) already
+    // No staged-texture invalidate here: the epoch floor (raised by MarkStructHardDirty) already
     // fences the old generation's payloads, and the freshly committed epoch (read back above)
     // lifts that fence. Crystal-scrub reuse (no filter change) MUST keep carry-forward, so we
     // deliberately do not drop the staged texture.
@@ -1043,7 +1043,7 @@ GuiState::SimState ReconcileSimState(RunIntent intent, uint64_t committed_epoch,
 
 // Display upload gate (I1/I6) — pure predicate, see app.hpp. Uploads a payload only when it is a
 // fresh (unseen serial), non-empty frame (intensity>0 or a valid zero-ray terminal frame) whose
-// epoch clears display_epoch_floor. The floor (raised by MarkFilterDirty) fences the old
+// epoch clears display_epoch_floor. The floor (raised by MarkStructHardDirty) fences the old
 // generation; a null / cold-start payload is skipped so GL keeps the last frame (no black flicker).
 bool ShouldUploadPayload(const PreviewSnapshot& snap, unsigned long long last_uploaded_texture_serial,
                          uint64_t display_epoch_floor) {

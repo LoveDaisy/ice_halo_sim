@@ -8,7 +8,7 @@
 //   - Display-time edits (color / visible / solo / z_order / composite mode)
 //     call LUMICE_SetRaypathColors directly — no epoch bump, no re-simulation.
 //   - Structural edits (predicate text / combine any↔all / add/remove class or
-//     ref) call GuiState::MarkFilterDirty(), which the main-loop debounce
+//     ref) call GuiState::MarkStructHardDirty(), which the main-loop debounce
 //     will pick up on its next FillLumiceConfig + CommitConfigStruct pass.
 //   - z_order and the physical vector index are strictly decoupled: reorder
 //     swaps z_order values only; the underlying vector position stays put so

@@ -4,7 +4,7 @@
 // (T1) migrated all edit sites onto the T0 field-tier reconciler pattern: widgets ONLY write
 // GuiState fields; the frame-tail ReconcileGuiEffects (gui_state_reconcile.cpp) diffs
 // live-vs-baseline every frame and routes effects onto their proper channels via
-// ApplyGuiEffects. There are NO `state.MarkFilterDirty()` / `PushDisplayState(...)` calls in
+// ApplyGuiEffects. There are NO `state.MarkStructHardDirty()` / `PushDisplayState(...)` calls in
 // this file's widget code anymore — those are effects, and the reconciler is the sole owner
 // (single-writer discipline, doc/gui-state-governance.md 支柱 2).
 //
@@ -389,7 +389,7 @@ void RenderImportFromFilterUI(GuiState& state) {
   }
 }
 
-// Render one member ref (structural edits go through MarkFilterDirty).
+// Render one member ref (structural edits go through MarkStructHardDirty).
 void RenderRefRow(GuiState& state, ColorClassConfig& cls, size_t ref_idx, bool& delete_this_ref) {
   ImGui::PushID(static_cast<int>(ref_idx));
   auto& ref = cls.match[ref_idx];
@@ -478,10 +478,10 @@ void RenderRefRow(GuiState& state, ColorClassConfig& cls, size_t ref_idx, bool& 
   if (ImGui::InputText("##pred", buf, sizeof(buf))) {
     // T1: reconciler routes any change to `ref.predicate_text` through struct-part diff to
     // hard-reset (RaypathColorStructChanged in gui_state_reconcile.cpp), unconditionally —
-    // there is no separate imperative MarkFilterDirty call left to gate on validity the way
+    // there is no separate imperative MarkStructHardDirty call left to gate on validity the way
     // the pre-migration code did. So gate the WRITE itself: only commit `buf` into the diffed
     // field once it validates as a single atom (code-review round-1 Major-2), mirroring the
-    // pre-migration "only MarkFilterDirty when valid" behavior and avoiding a hard-reset (and
+    // pre-migration "only MarkStructHardDirty when valid" behavior and avoiding a hard-reset (and
     // its user-visible flicker) on every keystroke of a transient invalid predicate.
     // ImGui's InputText keeps its own live edit buffer for an active item — reasserting `buf`
     // from `ref.predicate_text` at the top of next frame (the std::snprintf above) does not

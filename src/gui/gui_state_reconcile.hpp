@@ -8,7 +8,7 @@
 //
 // This is the second single-owner reconciler in the GUI (companion to ReconcileSimState in app.cpp).
 // It closes the "widget → dirty" seam that today is scattered across ~30 DIRTY_IF / MarkDirty /
-// MarkFilterDirty call sites in panels.cpp / edit_modals.cpp / app_panels.cpp.
+// MarkStructHardDirty call sites in panels.cpp / edit_modals.cpp / app_panels.cpp.
 //
 // Contract:
 //   ReconcileGuiEffects(state) — PURE. Diffs two independent baselines against state:
@@ -19,7 +19,7 @@
 //     Reads state; does not write.
 //   ApplyGuiEffects(state, server, effects) — writes the effect via existing single-writer
 //     methods:
-//       need_resim / need_hard_reset → MarkDirty / MarkFilterDirty (idempotent; hard shadows soft).
+//       need_resim / need_hard_reset → MarkDirty / MarkStructHardDirty (idempotent; hard shadows soft).
 //       need_display_push            → PushDisplayState(state, server), and on success updates
 //                                       `last_pushed_display_state` so the next reconcile diff
 //                                       is quiet (edge-triggered).
@@ -76,9 +76,9 @@ struct GuiEffects {
 // diff a no-op (both first-commit and first-repush-after-Reset gates are natural nullopt).
 GuiEffects ReconcileGuiEffects(const GuiState& state);
 
-// Applies the effect via existing single-writer methods on GuiState (MarkDirty / MarkFilterDirty)
+// Applies the effect via existing single-writer methods on GuiState (MarkDirty / MarkStructHardDirty)
 // and, for need_display_push, via PushDisplayState(state, server) with baseline update on
-// success. Uses explicit else-if precedence between resim and hard-reset (MarkFilterDirty
+// success. Uses explicit else-if precedence between resim and hard-reset (MarkStructHardDirty
 // internally calls MarkDirty; else-if avoids double-invocation). need_display_push is orthogonal
 // to the resim/hard-reset lane and always evaluated on top.
 void ApplyGuiEffects(GuiState& state, LUMICE_Server* server, const GuiEffects& effects);

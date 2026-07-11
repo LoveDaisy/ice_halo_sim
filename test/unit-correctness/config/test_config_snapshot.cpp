@@ -68,7 +68,7 @@ GuiState MakeModifiedState() {
   s.renderer.exposure_offset = 0.5f;
 
   // task-349.2 Step 2: raypath_color is a configuration field (structural
-  // edits go through MarkFilterDirty); ConfigSnapshot must round-trip it so
+  // edits go through MarkStructHardDirty); ConfigSnapshot must round-trip it so
   // Revert restores color-class edits. Populate with non-default values so
   // From()/ApplyTo() coverage catches missing field mirroring.
   ColorClassConfig cls;

@@ -18,7 +18,7 @@
 //  2. gui_lifecycle/gpu_run_reaches_done — INTEGRATION e2e through the real DoRun→completion flow.
 //  3. gui_lifecycle/reconcile_truth_table — PURE unit test of ReconcileSimState (I2), no server/GL.
 //  4. gui_lifecycle/anti_flicker_epoch_floor — PURE structural test of the epoch-floor upload gate
-//     (I1/§3.3): MarkFilterDirty fences the old generation; MarkDirty carries it forward.
+//     (I1/§3.3): MarkStructHardDirty fences the old generation; MarkDirty carries it forward.
 //  5. gui_lifecycle/optimistic_async_stop — INTEGRATION of the 1.6 async Stop (blueprint §5/§8):
 //     DoStop returns immediately with run_intent==kStopping (optimistic, non-blocking); the reconcile
 //     maps that to the kStopping display state; JoinPendingStop drains the background thread and the
@@ -384,9 +384,9 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
   };
 
   // ---- Test 4: anti-flicker epoch-floor upload gate (I1/§3.3), pure/headless ----
-  // Pins that MarkFilterDirty raises display_epoch_floor to fence the OLD generation's payload
+  // Pins that MarkStructHardDirty raises display_epoch_floor to fence the OLD generation's payload
   // (blocked by ShouldUploadPayload) while MarkDirty leaves the floor so a carried-forward payload
-  // passes. Bites the real production predicate (ShouldUploadPayload) + the real MarkFilterDirty /
+  // passes. Bites the real production predicate (ShouldUploadPayload) + the real MarkStructHardDirty /
   // MarkDirty split — the mechanism behind "filter change clears + no stale refill" vs "crystal
   // scrub keeps the last frame with no black flicker", which manual Metal scrub can't check in CI.
   ImGuiTest* t4 = IM_REGISTER_TEST(engine, "gui_lifecycle", "anti_flicker_epoch_floor");
@@ -406,12 +406,12 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
     snap.payload = old_payload;
     snap.texture_serial = 1;  // unseen (cursor starts at 0)
 
-    // --- filter change: MarkFilterDirty raises the floor to committed_epoch ⇒ old payload BLOCKED.
+    // --- filter change: MarkStructHardDirty raises the floor to committed_epoch ⇒ old payload BLOCKED.
     {
       gui::GuiState st;
       st.committed_epoch = kGen;
       st.display_epoch_floor = 0;
-      st.MarkFilterDirty();
+      st.MarkStructHardDirty();
       IM_CHECK_EQ(st.display_epoch_floor, kGen);  // floor bumped to the current generation
       IM_CHECK_EQ(st.snapshot_intensity, 0.0f);   // immediate display clear preserved
       // payload_epoch (kGen) is NOT > floor (kGen) ⇒ gate rejects the stale texture.

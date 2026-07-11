@@ -445,9 +445,9 @@ void RegisterStateReconcileTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(s.p99_raw_y, 1.5f);          // MarkDirty does NOT clear p99
     }
 
-    // need_hard_reset → MarkFilterDirty path (dirty=true AND floor raised AND intensity cleared).
-    // RED手法: writing `if (need_resim) MarkDirty(); if (need_hard_reset) MarkFilterDirty();` (no
-    // else) would call BOTH — MarkFilterDirty calls MarkDirty internally, so dirty stays true but
+    // need_hard_reset → MarkStructHardDirty path (dirty=true AND floor raised AND intensity cleared).
+    // RED手法: writing `if (need_resim) MarkDirty(); if (need_hard_reset) MarkStructHardDirty();` (no
+    // else) would call BOTH — MarkStructHardDirty calls MarkDirty internally, so dirty stays true but
     // the epoch floor is written twice. Semantically not visibly broken; but the else-if precedence
     // is the contracted shape, and this test pins it so a future refactor can't silently switch to
     // the flatter form.

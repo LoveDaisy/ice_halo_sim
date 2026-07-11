@@ -912,7 +912,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     }
 
     // Phase B: user adds a class → GUI-side re-commits the 2-class config. This is the
-    // same code path RenderColorWindow's "Add Class" button triggers (state.MarkFilterDirty
+    // same code path RenderColorWindow's "Add Class" button triggers (state.MarkStructHardDirty
     // → next debounce → LUMICE_CommitConfigStruct → re-sim + RenderConsumer rebuild).
     IM_CHECK_EQ(LUMICE_CommitConfig(server, kTwoColorConfig), LUMICE_OK);
 

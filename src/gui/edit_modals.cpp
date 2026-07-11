@@ -1089,7 +1089,7 @@ struct ApplyBuffersResult {
 // only branch on `entry_changed` (as a local early-return gate for GUI-cache
 // invalidation) — the resim/hard-reset lane is derived centrally by
 // gui_state_reconcile.cpp from field diffs, so neither caller writes MarkDirty /
-// MarkFilterDirty here anymore.
+// MarkStructHardDirty here anymore.
 //
 // Adding a new edit-buffer field? Update this function AND SnapshotAllBuffers
 // in the same change (the pair drives both commit path and dirty-compare baseline).
@@ -1227,8 +1227,8 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
 // mesh hash). The resim/hard-reset lane is derived centrally by
 // gui_state_reconcile.cpp — pool content diffs promote to soft, filter pool /
 // presence changes promote to hard. That covers what the pre-T2 code did via
-// unconditional MarkDirty+MarkFilterDirty (staged) and the local
-// filter_changed-gated MarkFilterDirty (immediate); those two paths now share a
+// unconditional MarkDirty+MarkStructHardDirty (staged) and the local
+// filter_changed-gated MarkStructHardDirty (immediate); those two paths now share a
 // single source of truth, closing S6.
 void CommitAllBuffers(GuiState& state) {
   const auto r = ApplyBuffersToEntry(state);
@@ -1762,7 +1762,7 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
     if (state.modal_immediate_mode) {
       // Staged → Immediate: commit in-flight buffer to state so any pending
       // edits become the live baseline. Use the Immediate path (not
-      // CommitAllBuffers) to avoid MarkFilterDirty clearing the display on
+      // CommitAllBuffers) to avoid MarkStructHardDirty clearing the display on
       // crystal-only changes — that would zero infinite-rays accumulation
       // at the exact moment the user wants to start observing live changes.
       CommitAllBuffersImmediate(state);
