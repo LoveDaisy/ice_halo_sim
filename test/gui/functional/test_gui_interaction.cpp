@@ -12,7 +12,8 @@
 // convention block at the top of src/gui/app_panels.cpp. Any ImGui upgrade
 // that alters either rule must update both that comment and the
 // p1_layout / p1_edit_modal z-order assertions below.
-#include "gui/panels.hpp"  // FilterSummary declaration (also re-exposes gui_state.hpp transitively)
+#include "gui/panels.hpp"         // FilterSummary declaration (also re-exposes gui_state.hpp transitively)
+#include "gui/server_poller.hpp"  // LUMICE_CreateServer/StopServer/DestroyServer (real-commit tests)
 #include "imgui_internal.h"
 #include "test_gui_shared.hpp"  // declares g_enable_log_panel (toggle gate for RenderLogPanel)
 
@@ -2361,6 +2362,42 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->ItemInputValue("**/##Altitude_input", 90.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.sun.altitude, 90.0f);
+    };
+  }
+
+  // p1_slider/altitude_edit_after_commit_marks_dirty — AC2 end-to-end regression
+  // (scrum-gui-state-reconcile T0, plan §4 Step 4 point 3 / §7 risk 1). Drives the real Altitude
+  // widget after a real DoRun() commit has populated last_committed_state, then asserts dirty
+  // becomes true via the production SyncFromPoller() -> ReconcileGuiEffects() path — the legacy
+  // DIRTY_IF wrapper was retired at this call site (panels.cpp RenderSceneControls), so this is
+  // the only test that exercises sun.altitude's post-migration dirty derivation end-to-end rather
+  // than by constructing a GuiState by hand (see test_gui_state_reconcile.cpp for the pure variant).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "altitude_edit_after_commit_marks_dirty");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_server = LUMICE_CreateServer();
+      IM_CHECK(gui::g_server != nullptr);
+      gui::g_state.sim.infinite = false;
+      gui::g_state.sim.ray_num_millions = 0.5f;
+      gui::DoRun();  // real Run path: synchronous commit populates last_committed_state.
+      IM_CHECK(gui::g_state.last_committed_state.has_value());
+      gui::g_state.dirty = false;  // DoRun doesn't touch dirty; pin a known pre-edit baseline.
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.dirty, false);
+
+      ctx->ItemInputValue("**/##Altitude_input", gui::g_state.sun.altitude + 5.0f);
+      ctx->Yield();
+      IM_CHECK(gui::g_state.dirty);
+
+      // Cleanup: leave a clean global state for subsequent tests.
+      gui::g_server_poller.Stop();
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+      gui::g_state.run_intent = gui::RunIntent::kNone;
+      gui::g_state.committed_epoch = 0;
+      gui::g_state.dirty = false;
     };
   }
 
