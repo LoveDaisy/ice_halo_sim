@@ -670,6 +670,12 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
+      // T1: the reconciler diffs against last_committed_state; without a baseline it is a no-op
+      // before the first commit (mirrors real Run-then-edit flow). Seed the baseline BEFORE the
+      // edit so the subsequent Add Class becomes a diff — under the OLD widget-side
+      // MarkFilterDirty call this seeding was unnecessary; T1 makes the baseline a first-class
+      // input. (toggle_whole_via_ui_marks_modified below already followed this pattern.)
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
       gui::g_state.run_intent = gui::RunIntent::kLoaded;
       gui::g_state.sim_state = gui::GuiState::SimState::kDone;
       gui::g_state.committed_epoch = 5;
