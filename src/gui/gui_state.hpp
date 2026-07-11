@@ -549,19 +549,43 @@ struct ColorClassRefConfig {
   friend bool operator!=(const ColorClassRefConfig& a, const ColorClassRefConfig& b) { return !(a == b); }
 };
 
-struct ColorClassConfig {
-  // Note: label / summary is rebuilt on the fly from `match` at render time,
-  // no cache field kept (plan-review Minor #1; a05 减法优先).
+// task-color-migration (T1) — ColorClassConfig split into structural vs display sub-structs so
+// the reconciler can route them onto separate channels (doc/gui-state-governance.md §4 支柱 1).
+// Public inheritance chosen over nested named members: keeps every existing `cls.combine` /
+// `cls.color` / `cls.z_order` etc. field-access site working unchanged (base-class member lookup),
+// while giving the type system the "a function signature that receives `const ColorClassStructState&`
+// structurally cannot see display fields" guarantee (plan §3 D1). No aggregate initialisation
+// use, no sizeof-static_assert on this type — verified by grep before choosing inheritance.
+struct ColorClassStructState {
+  int combine = 0;  // 0 = LUMICE_COLOR_COMBINE_ANY, 1 = LUMICE_COLOR_COMBINE_ALL
+  std::vector<ColorClassRefConfig> match;
+
+  friend bool operator==(const ColorClassStructState& a, const ColorClassStructState& b) {
+    return a.combine == b.combine && a.match == b.match;
+  }
+  friend bool operator!=(const ColorClassStructState& a, const ColorClassStructState& b) { return !(a == b); }
+};
+
+struct ColorClassDisplayState {
   float color[3] = { 1.0f, 1.0f, 1.0f };
-  int combine = 0;      // 0 = LUMICE_COLOR_COMBINE_ANY, 1 = LUMICE_COLOR_COMBINE_ALL
   bool visible = true;  // A4 footgun: LUMICE_ColorClass zero-init has visible=0 (hidden). GUI new-class must be true.
   bool solo = false;
   int z_order = 0;  // display-only; never used as vector index (task-342.2 z-order/lane-binding decoupling).
-  std::vector<ColorClassRefConfig> match;
+
+  friend bool operator==(const ColorClassDisplayState& a, const ColorClassDisplayState& b) {
+    return std::equal(std::begin(a.color), std::end(a.color), std::begin(b.color)) && a.visible == b.visible &&
+           a.solo == b.solo && a.z_order == b.z_order;
+  }
+  friend bool operator!=(const ColorClassDisplayState& a, const ColorClassDisplayState& b) { return !(a == b); }
+};
+
+struct ColorClassConfig : ColorClassStructState, ColorClassDisplayState {
+  // Note: label / summary is rebuilt on the fly from `match` at render time,
+  // no cache field kept (plan-review Minor #1; a05 减法优先).
 
   friend bool operator==(const ColorClassConfig& a, const ColorClassConfig& b) {
-    return std::equal(std::begin(a.color), std::end(a.color), std::begin(b.color)) && a.combine == b.combine &&
-           a.visible == b.visible && a.solo == b.solo && a.z_order == b.z_order && a.match == b.match;
+    return static_cast<const ColorClassStructState&>(a) == static_cast<const ColorClassStructState&>(b) &&
+           static_cast<const ColorClassDisplayState&>(a) == static_cast<const ColorClassDisplayState&>(b);
   }
   friend bool operator!=(const ColorClassConfig& a, const ColorClassConfig& b) { return !(a == b); }
 };
