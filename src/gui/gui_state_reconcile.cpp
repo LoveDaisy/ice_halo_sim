@@ -48,6 +48,38 @@ bool DisplayStateEqualAtCurrentSize(const GuiState& state, const GuiState::Displ
   return true;
 }
 
+// task-classic-params-migration (T2) — filter presence-toggle detector. Any entry whose
+// filter_id transitions from nullopt→some or some→nullopt (relative to the commit baseline)
+// promotes the diff to hard-reset. Reason: pick-link (panels.cpp) and Remove-Filter
+// (edit_modals.cpp) only rebind entry.filter_id — they do NOT change state.filters (the pool),
+// so the existing `filters` / `layers` diffs alone would miss this topology change and
+// silently downgrade it to soft. Nulling this out was the root of S6's asymmetry between
+// staged and immediate commit paths.
+//
+// Shape-mismatch policy: when layers or per-layer entry counts differ, this function returns
+// false and lets the existing state.layers / state.filters diffs handle the cardinality change
+// (they already fire on any shape delta). ImGui is immediate-mode single-write-per-frame, so
+// a same-frame combination of "entry added" + "another entry's filter presence toggled" is
+// unreachable via UI interaction (each widget event writes one class of field per frame).
+bool AnyEntryFilterPresenceChanged(const GuiState& state, const GuiState::ConfigSnapshot& baseline) {
+  if (state.layers.size() != baseline.layers.size()) {
+    return false;
+  }
+  for (size_t li = 0; li < state.layers.size(); ++li) {
+    const auto& live_entries = state.layers[li].entries;
+    const auto& base_entries = baseline.layers[li].entries;
+    if (live_entries.size() != base_entries.size()) {
+      continue;
+    }
+    for (size_t ei = 0; ei < live_entries.size(); ++ei) {
+      if (live_entries[ei].filter_id.has_value() != base_entries[ei].filter_id.has_value()) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // task-color-migration (T1) — raypath_color STRUCT part diff. Vector-cardinality change or any
 // per-entry ColorClassStructState (combine/match) mismatch means the physical filter topology
 // changed → hard-reset lane.
@@ -73,14 +105,23 @@ void DiffAgainstCommitBaseline(const GuiState& state, GuiEffects& effects) {
   }
   const auto& baseline = *state.last_committed_state;
 
-  // T-struct·soft: re-sim carry-forward.
+  // T-struct·soft: re-sim carry-forward. Renderer comparison uses RenderConfigResimEqual
+  // (defined in gui_state.hpp): it excludes `exposure_offset`, which is a pure display-time
+  // field pushed every frame via LUMICE_SetCompositeExposure and never baked into the sim
+  // (doc/ev-pipeline-architecture.md §6.4/§6.5). Excluding EV here is what makes dragging the
+  // EV slider not falsely flip a finished sim into kModified. app.cpp::DoRun's expect_rebuild
+  // predicate consumes the same helper — single source of truth (see T2 plan §3 design point 1).
   if (state.crystals != baseline.crystals || state.layers != baseline.layers || state.sun != baseline.sun ||
-      state.sim != baseline.sim || state.renderer != baseline.renderer) {
+      state.sim != baseline.sim || !RenderConfigResimEqual(state.renderer, baseline.renderer)) {
     effects.need_resim = true;
   }
 
   // T-struct·hard: re-sim + hard reset (clear display + raise epoch floor).
-  if (state.filters != baseline.filters || RaypathColorStructChanged(state, baseline)) {
+  // AnyEntryFilterPresenceChanged closes S6's presence-toggle gap: pick-link and Remove-Filter
+  // rebind entry.filter_id without touching the filters pool, so they would otherwise be
+  // silently downgraded to soft (T2 plan §3 design 2).
+  if (state.filters != baseline.filters || RaypathColorStructChanged(state, baseline) ||
+      AnyEntryFilterPresenceChanged(state, baseline)) {
     effects.need_resim = true;
     effects.need_hard_reset = true;
   }

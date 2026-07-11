@@ -780,8 +780,13 @@ void DoRun() {
   // NeedsRebuild comparison: RenderConfig::id was removed during the renderer copy-model
   // migration; since `id` was always 1 pre-migration, operator== behavior is strictly looser
   // and cannot produce new false-positive reuse paths.
+  // Renderer comparison uses RenderConfigResimEqual (gui_state.hpp) — same helper used by
+  // gui_state_reconcile.cpp::DiffAgainstCommitBaseline, so this predicate and the reconciler's
+  // resim/dirty verdict stay in lock-step (single source of truth; see T2 plan §3 design 1).
+  // Excludes exposure_offset because EV is display-time only (§6.5) — dragging the EV slider
+  // must not cause a poller Stop here.
   bool expect_rebuild = backend_reconstructed || !g_state.last_committed_state.has_value() ||
-                        g_state.renderer != g_state.last_committed_state->renderer;
+                        !RenderConfigResimEqual(g_state.renderer, g_state.last_committed_state->renderer);
 
   // Single typed-struct commit path (327.4): all filter types — including multi-segment
   // raypath / multi-value EE (expanded to N simple + 1 complex) — go through the C struct, so

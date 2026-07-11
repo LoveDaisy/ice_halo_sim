@@ -228,6 +228,31 @@ struct RenderConfig {
   bool operator!=(const RenderConfig& o) const { return !(*this == o); }
 };
 
+// task-classic-params-migration (T2) — resim-eligibility comparator for RenderConfig.
+// Compares every field EXCEPT `exposure_offset`. Rationale: EV is a pure display-time
+// parameter (doc/ev-pipeline-architecture.md §6.4/§6.5 — GUI Run path never bakes EV; the
+// core-side NeedsRebuild() already lists intensity_factor / opacity / background / ray_color
+// as appearance-only). Among those, only `exposure_offset` has no need to travel through a
+// commit at all (it is pushed every frame via RefreshPreviewParams / LUMICE_SetCompositeExposure),
+// so it is the single field that should be excluded from the resim/rebuild diff.
+// Callers: gui_state_reconcile.cpp::DiffAgainstCommitBaseline and app.cpp::DoRun expect_rebuild
+// (single source of truth — do not fork).
+inline bool RenderConfigResimEqual(const RenderConfig& a, const RenderConfig& b) {
+  return a.lens_type == b.lens_type && a.fov == b.fov && a.elevation == b.elevation && a.azimuth == b.azimuth &&
+         a.roll == b.roll && a.sim_resolution_index == b.sim_resolution_index && a.visible == b.visible &&
+         a.front == b.front && std::equal(a.background, a.background + 3, b.background) &&
+         std::equal(a.ray_color, a.ray_color + 3, b.ray_color) && a.opacity == b.opacity;
+}
+
+// Apple Silicon + libc++ only. RenderConfig layout pin: mirrors the EntryCard pattern
+// (see below). If this size assertion fires, a field was added/removed from RenderConfig —
+// the author must inspect `RenderConfigResimEqual` above and either include the new field
+// (if it participates in resim eligibility) or explicitly exclude it (like exposure_offset).
+// Linux/Windows CI still compiles the struct; this only pins the Apple main-dev platform.
+#if defined(__APPLE__) && defined(__aarch64__)
+static_assert(sizeof(RenderConfig) == 64, "RenderConfig size changed — check RenderConfigResimEqual for new fields");
+#endif
+
 // Resettable subset of RenderConfig (the View `Reset` button targets these
 // four fields). Adding a resettable field here requires adding the matching
 // field to RenderConfig and updating every DefaultViewParamsFor branch.
