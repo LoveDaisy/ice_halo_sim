@@ -2368,10 +2368,17 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
   // p1_slider/altitude_edit_after_commit_marks_dirty — AC2 end-to-end regression
   // (scrum-gui-state-reconcile T0, plan §4 Step 4 point 3 / §7 risk 1). Drives the real Altitude
   // widget after a real DoRun() commit has populated last_committed_state, then asserts dirty
-  // becomes true via the production SyncFromPoller() -> ReconcileGuiEffects() path — the legacy
-  // DIRTY_IF wrapper was retired at this call site (panels.cpp RenderSceneControls), so this is
-  // the only test that exercises sun.altitude's post-migration dirty derivation end-to-end rather
-  // than by constructing a GuiState by hand (see test_gui_state_reconcile.cpp for the pure variant).
+  // becomes true via the production frame-tail ReconcileGuiEffects() path — the legacy DIRTY_IF
+  // wrapper was retired at this call site (panels.cpp RenderSceneControls), so this is the only
+  // test that exercises sun.altitude's post-migration dirty derivation end-to-end rather than by
+  // constructing a GuiState by hand (see test_gui_state_reconcile.cpp for the pure variant).
+  //
+  // M6 same-frame contract: the effects reconcile runs at frame TAIL (after all Render*() calls,
+  // before ImGui::Render()) in both prod (main.cpp) and this harness (test_gui_main.cpp). That
+  // means the LAST frame of an ItemInputValue interaction — which writes state.sun.altitude
+  // during widget rendering — reaches its own frame-tail reconcile before returning to us. So we
+  // assert dirty immediately, with no intervening ctx->Yield(). The absence of that Yield is the
+  // structural evidence that dirty was set in the SAME frame as the edit (Round 3 Major #1 fix).
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "altitude_edit_after_commit_marks_dirty");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -2387,7 +2394,10 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.dirty, false);
 
       ctx->ItemInputValue("**/##Altitude_input", gui::g_state.sun.altitude + 5.0f);
-      ctx->Yield();
+      // Deliberately NO Yield() here — see block comment above: with the M6 frame-tail placement,
+      // dirty must be true by the end of the frame that received the widget edit. An intervening
+      // Yield would silently accept next-frame semantics and let a future regression to top-of-
+      // frame reconcile placement slip through.
       IM_CHECK(gui::g_state.dirty);
 
       // Cleanup: leave a clean global state for subsequent tests.

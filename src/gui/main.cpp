@@ -24,6 +24,7 @@
 #include "gui/gl_common.h"
 #include "gui/gl_init.h"
 #include "gui/gui_logger.hpp"
+#include "gui/gui_state_reconcile.hpp"
 #include "gui/log_sink.hpp"
 #include "gui/window_sizing.hpp"
 #include "imgui.h"
@@ -356,6 +357,14 @@ int main(int argc, char** argv) {
         gui::g_state.right_panel_collapsed != prev_right_collapsed) {
       gui::g_state.aspect_preset = gui::AspectPreset::kFree;
     }
+
+    // Field-tier effect reconcile (scrum-gui-state-reconcile T0, M6). Runs at frame TAIL — after all
+    // widget-writing Render*() calls have executed and before ImGui::Render() — so a widget edit in
+    // this frame lands in state.dirty this same frame, matching the legacy DIRTY_IF wrappers'
+    // synchronous semantics. Placing it at frame top (inside SyncFromPoller) would leave a
+    // one-frame delay behind widget writes. Coexists idempotently with legacy DIRTY_IF sites during
+    // T1-T4 migration; see gui_state_reconcile.hpp for the field participation set.
+    gui::ApplyGuiEffects(gui::g_state, gui::ReconcileGuiEffects(gui::g_state));
 
     // Rendering
     ImGui::Render();

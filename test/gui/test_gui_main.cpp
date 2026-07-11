@@ -25,6 +25,7 @@
 #include "gui/gl_init.h"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_logger.hpp"
+#include "gui/gui_state_reconcile.hpp"
 #include "gui/log_sink.hpp"
 #include "gui/panels.hpp"
 #include "imgui.h"
@@ -432,6 +433,12 @@ int main(int argc, char** argv) {
     gui::RenderEditModals(gui::g_state, window);
     gui::RenderSpectrumModal(gui::g_state);
     gui::RenderUnsavedPopup(window);
+
+    // Field-tier effect reconcile at frame TAIL — mirrors src/gui/main.cpp M6 placement so widget
+    // edits driven by ImGuiTestEngine land in state.dirty within the same frame (rather than one
+    // frame late as they would if this were folded into SyncFromPoller). Required for AC2
+    // same-frame regression coverage.
+    gui::ApplyGuiEffects(gui::g_state, gui::ReconcileGuiEffects(gui::g_state));
 
     ImGui::Render();
 

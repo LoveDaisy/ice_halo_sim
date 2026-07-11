@@ -1027,15 +1027,16 @@ void SyncFromPoller() {
   // consumer never observes a half-updated field combination.
   auto snap = g_server_poller.LoadSnapshot();
 
-  // Field-tier reconcile (scrum-gui-state-reconcile T0): diff GuiState auto-diff-participating
-  // fields against last_committed_state and route the derived effects (need_resim /
-  // need_hard_reset) into GuiState.dirty via the existing single-writer methods (MarkDirty /
-  // MarkFilterDirty). Runs BEFORE ReconcileSimState so any dirty derived from field diffs in this
-  // frame is visible to sim_state derivation below (kDone + dirty → kModified in the same frame,
-  // preserving the pre-migration "widget edit surfaces as Modified immediately" behavior).
-  // Coexists idempotently with legacy DIRTY_IF wrappers during T1-T4 migration; see
-  // gui_state_reconcile.hpp for the field participation set.
-  ApplyGuiEffects(g_state, ReconcileGuiEffects(g_state));
+  // NOTE (scrum-gui-state-reconcile T0, M6): the ApplyGuiEffects(ReconcileGuiEffects(...)) call
+  // that used to live here was moved to the end of the main-loop frame (main.cpp, after all
+  // Render*() calls). Rationale: SyncFromPoller runs at the TOP of each frame (main.cpp:278),
+  // BEFORE widget rendering — so a frame-top reconcile could only observe field edits from the
+  // PREVIOUS frame, introducing a one-frame delay vs. the legacy DIRTY_IF wrappers which set
+  // dirty synchronously in the widget call site (code-review Round 3 Major #1, CONFIRMED).
+  // Placing the reconcile at frame tail restores same-frame semantics: edit in frame N → tail
+  // reconcile of frame N sets dirty → frame N+1's SyncFromPoller-driven ReconcileSimState below
+  // observes it exactly like the legacy path did. ReconcileSimState stays at frame top because
+  // it depends on the freshly-loaded poller snapshot.
 
   // Level-triggered single-owner reconcile (I2/I3): unconditionally derive sim_state every frame
   // from (intent, committed_epoch, observation, dirty). No early-return on !=kSimulating — the
