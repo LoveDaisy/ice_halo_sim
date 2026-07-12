@@ -15,13 +15,13 @@
 
 - **sim 生命周期本体治理严整**，是正解样板：`ReconcileSimState`（app.cpp:945）是生产环境唯一写 `sim_state` 的地方（I2），每帧从 `(run_intent, committed_epoch, snapshot 观测, dirty)` 纯函数派生；业务操作只写这三个输入；epoch 栅栏（I1）弃陈旧世代；immediate 模式 filter/crystal 的 diff-gated 双档 mark 干净。
 - **散乱集中在交界**：display 通道（`PushDisplayState`→`LUMICE_SetRaypathColors`+`EnsureRunning`）与 sim 通道（`FillColorClasses`→`CommitConfigStruct`）字段割裂、互不重推、且 display-time 操作会借用 re-sim 味的原语污染 sim_state。
-- **根因不是缺中心数据结构，是缺"字段 → 转换档位 → 下游通道"的单一分类器**——今天每个 widget 就地决定发 `MarkDirty` / `MarkFilterDirty` / `PushDisplayState` / 直接赋值。
+- **根因不是缺中心数据结构，是缺"字段 → 转换档位 → 下游通道"的单一分类器**——今天每个 widget 就地决定发 `MarkDirty` / `MarkStructHardDirty`（旧名 `MarkFilterDirty`） / `PushDisplayState` / 直接赋值。
 
 ## 2. 两组正交的转换档位（读表前必读）
 
 | 档位 | 语义 | 机制（现状） | 触发者示例 |
 |---|---|---|---|
-| **T-struct·hard** | 拓扑变，清屏 + 抬 epoch floor 栅栏旧世代纹理 | `MarkFilterDirty()`（gui_state.hpp:707）= MarkDirty + snapshot_intensity=0 + p99_raw_y=0 + display_epoch_floor=committed_epoch | 编辑谓词/combine/增删类/增删 ref、filter 结构变、staged filter commit |
+| **T-struct·hard** | 拓扑变，清屏 + 抬 epoch floor 栅栏旧世代纹理 | `MarkStructHardDirty()`（gui_state.hpp:782；scrum-353.5 前名 `MarkFilterDirty`，被 S4 正名）= MarkDirty + snapshot_intensity=0 + p99_raw_y=0 + display_epoch_floor=committed_epoch | 编辑谓词/combine/增删类/增删 ref、filter 结构变、staged filter commit |
 | **T-struct·soft** | 配置脏但保留 carry-forward 纹理（不清屏） | `MarkDirty()`（gui_state.hpp:693）只置 dirty | 晶体几何/朝向、光谱、layer/prob、sim_resolution |
 | **T-display** | 纯显示，即时下发 server，**不 dirty / 不 epoch** | `PushDisplayState`→`LUMICE_SetRaypathColors` | color rgb / visible / solo / z_order / composite mode |
 | **T-view** | 纯客户端，仅 preview shader 实时重投影 | 无 server 下发（仿真投影固定全天空 dual-fisheye） | lens / fov / view / exposure / opacity / bg |
@@ -54,9 +54,9 @@
 
 ### 其它（已固化，供裁定，非本次主线）
 - **S2** `show_composite_preview` 双写路径（app.cpp:1021 vs app_panels.cpp:288）违背自声明单写者契约。
-- **S4** `MarkFilterDirty` 名不副实（实为拓扑硬重置 + epoch 栅栏，被 color-class 结构编辑复用）。
-- **S5** signal 缓存（color_window.cpp WindowLocalState static）无 server/epoch 键控，后端切换后最多 500ms 展示旧 server 信号。
-- **偏离 E（设计问题待裁定）** Save kModified 态：`RefreshCpuTextureForSave` 存当前预览（上次 sim）+ 新 config + `dirty=false`（app.cpp:310）→ 落盘图≠配置且静默去 Modified。可能是"保存所见"的有意行为。
+- **S4** ~~`MarkFilterDirty` 名不副实~~ **已由 scrum-353.5 落地正名为 `MarkStructHardDirty`**（gui_state.hpp:782），与档位表 T-struct·hard 对齐。
+- **S5** ~~signal 缓存无 server/epoch 键控~~ **已由 scrum-353.5 落地**：`RefreshColorClassSignals`（color_window.cpp）在入口比较 `(server, committed_epoch)`，任一 mismatch 即清 `signal_flags` + `last_poll_time=-1000` 强制立即重 poll，后端切换/epoch 递增不再展示旧信号。
+- **偏离 E（Save 裁定，已落地）**：owner 裁定 = kModified 态 Save 前弹提示（"Run first / Save anyway / Cancel"）——scrum-353.5 落地。Save anyway 保留"存所见"能力，但由用户显式确认；同时**不清 kModified**（保留视觉线索）。
 - **已证伪**：sim_resolution 改动**确实** MarkDirty（app_panels.cpp:726）——非偏离。
 
 ## 4. 目标模型：三支柱 + 文档重置 owner
@@ -101,7 +101,7 @@
 | **T3** 结构拆分（使能后续） | 拆 ColorClassConfig 结构态/显示态子结构（D）+ 两序列化器共派生显示态子结构（B） | 单序列化器；加字段不能使通道脱同步（编译期）；逐像素等价回归 | T2 |
 | **T4** 重推纪律 | DoRun/DoRevert/后端切换重建完整 display 态（B'+C） | Revert 掉颜色编辑后 composite 无需再交互即匹配；Run 后 z_order 即时生效 | T3 |
 | **T5** 文档重置 owner（backlog #5） | 单一 ResetFrontendState(reason) 覆盖 New/Open×3/Revert（可选 epoch 递增） | 各路重置完整前端集（GL 像素 + poller staged + display 态） | T3（受益） |
-| **T6** 清理/加固（可选） | MarkFilterDirty 正名（S4）、signal cache 按 epoch/server 键控（S5）、裁定 Save（偏离 E）、删 docking 死状态 | 各自小 AC | 收尾 |
+| **T6** 清理/加固（scrum-353.5，已落地） | ✅ MarkFilterDirty→MarkStructHardDirty 正名（S4）、✅ signal cache 按 epoch/server 键控（S5）、✅ 裁定 Save（偏离 E owner 裁定 = 提示需 Run + 用户显式确认 Save anyway）、审计确认无 docking 死状态可删（活功能，a01 优先于 a05） | 各自小 AC，全部收敛 | 收尾 |
 
 推荐序：T1→T2→T3→T4→T5→T6（T1、T2 可并行）。
 
