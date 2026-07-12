@@ -1723,6 +1723,66 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // chore-filter-reconstruct-empty-raypath-test (scrum-333/334 residual debt C):
+  // an empty `raypath:[]` term (match-all wildcard) co-existing with a non-empty
+  // raypath term as separate OR clauses of the SAME complex filter. Behavior is
+  // already correct (TryReconstructComplexFilter's raypath branch treats an
+  // empty/absent array as the match-all wildcard factor) — this pins it with a
+  // regression test so future reconstruct-logic changes can't silently break it.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "complex_match_all_and_nonempty_raypath_coexist");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+      gui::ClearImportComplexFilterWarning();
+
+      // Hand-authored core JSON: 2 raypath simples (one match-all via empty
+      // `raypath: []`, one non-empty) OR'd via a 2-clause composition.
+      const std::string core_json = R"({
+        "crystal": [
+          {"id": 1, "type": "Prism", "height": 1.0,
+           "face_distance": [1,1,1,1,1,1]}
+        ],
+        "filter": [
+          {"id": 1, "type": "raypath", "action": "filter_in", "raypath": []},
+          {"id": 2, "type": "raypath", "action": "filter_in", "raypath": [3, 5]},
+          {"id": 3, "type": "complex", "action": "filter_in",
+           "composition": [[1], [2]]}
+        ],
+        "scene": {
+          "light_source": {"altitude": 20.0, "diameter": 0.5},
+          "ray_num": 1000,
+          "max_hits": 8,
+          "scattering": [
+            {"prob": 1.0, "entries": [{"crystal": 1, "proportion": 100.0, "filter": 3}]}
+          ]
+        }
+      })";
+
+      gui::GuiState loaded = gui::InitDefaultState();
+      bool ok = gui::DeserializeFromJson(core_json, loaded);
+      IM_CHECK(ok);
+      IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), 1);
+      const auto& loaded_entry = loaded.layers[0].entries[0];
+      // The complex reconstructs — the entry references it.
+      IM_CHECK(loaded_entry.filter_id.has_value());
+      const auto& lf = loaded.filters[*loaded_entry.filter_id];
+      // 2 clauses -> 2 rows: row 0 = match-all wildcard (empty text), row 1 = "3-5".
+      IM_CHECK_EQ(static_cast<int>(lf.param.size()), 2);
+      IM_CHECK_EQ(static_cast<int>(lf.param[0].factors.size()), 1);
+      IM_CHECK(std::holds_alternative<gui::RaypathParams>(lf.param[0].factors[0]));
+      IM_CHECK(std::get<gui::RaypathParams>(lf.param[0].factors[0]).raypath_text.empty());
+      IM_CHECK_STR_EQ(lf.param[0].text.c_str(), "");
+      IM_CHECK_STR_EQ(lf.param[1].text.c_str(), "3-5");
+      // Legal form (match-all is a first-class wildcard factor) — no warning.
+      IM_CHECK(gui::PeekImportComplexFilterWarning().empty());
+      // Re-serialize equivalence: back to the identical 2 raypath + 1 complex form.
+      const auto j_orig = nlohmann::json::parse(core_json);
+      const auto j_reser = nlohmann::json::parse(gui::SerializeCoreConfig(loaded));
+      IM_CHECK(j_orig["filter"] == j_reser["filter"]);
+    };
+  }
+
   // task-serialization-bidirectional: genuinely non-representable complex inputs
   // still loudly reject (GUI `Factor` has only raypath / entry_exit arms). These
   // KEEP the explore-271 anti-silent-miscull contract for the unsupported cases:
