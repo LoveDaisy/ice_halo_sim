@@ -479,9 +479,17 @@ void FillRayOtherInfo(const Crystal& curr_crystal, RayBuffer buffer_data[2]) {
 
 // Design A filter semantics: filter-fail = ray terminates (not outgoing, not continue).
 // See doc/raypath-rayseg-architecture.md §3 for the segment state-machine transition rules.
+//
+// Multi-group implementation (scrum-color-predicate-symmetry): `color_groups`
+// carries one entry per distinct color-predicate symmetry value at this
+// placement. Physical filter check + prob roll still happen exactly once per
+// ray (outside the group loop) so RNG order is invariant to color-config
+// changes. Each group contributes its matched summand bits into the ray's
+// mask via OR; distinct groups are additive.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input
                  RayBuffer* buffer_data, RayBuffer* init_data,                               // output
-                 const FilterSpec* color_spec, const std::vector<uint8_t>* color_bits) {     // input
+                 const std::vector<ColorSpecGroup>* color_groups) {                          // input
   for (size_t idx = 0; idx < buffer_data[1].size_; idx++) {
     auto& r = buffer_data[1][idx];
     const auto& rec = buffer_data[1].RecorderAt(idx);
@@ -505,16 +513,21 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       const uint8_t* arena = buffer_data[1].OverflowArena();
       bool filter_pass = (spec == nullptr) ? true : spec->Check(r, rec, arena);
       if (filter_pass) {
-        // Non-destructive color pass: evaluate color_spec's per-summand mask
-        // and OR the mapped bits into the ray's carried mask. Only when a
-        // color spec + bit map is present — with `raypath_color` absent, both
-        // are null and this branch is a no-op (AC3/AC4).
-        if (color_spec != nullptr && color_bits != nullptr) {
-          uint64_t summand_mask = 0;
-          (void)color_spec->CheckSummandMask(r, rec, arena, &summand_mask);
-          if (summand_mask != 0) {
-            uint64_t produced = 0;
-            const std::vector<uint8_t>& cb = *color_bits;
+        // Non-destructive color pass: for each symmetry-group color spec,
+        // evaluate its per-summand mask and OR the mapped bits into the ray's
+        // carried mask. Zero-cost when color_groups is null / empty (AC3).
+        if (color_groups != nullptr && !color_groups->empty()) {
+          uint64_t produced = 0;
+          for (const auto& g : *color_groups) {
+            if (g.spec == nullptr || g.bits == nullptr) {
+              continue;
+            }
+            uint64_t summand_mask = 0;
+            (void)g.spec->CheckSummandMask(r, rec, arena, &summand_mask);
+            if (summand_mask == 0) {
+              continue;
+            }
+            const std::vector<uint8_t>& cb = *g.bits;
             for (size_t k = 0; k < cb.size() && k < 64; k++) {
               if ((summand_mask & (1ull << k)) != 0) {
                 uint8_t bit = cb[k];
@@ -523,9 +536,9 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
                 }
               }
             }
-            if (produced != 0) {
-              buffer_data[1].SetComponent(idx, buffer_data[1].ComponentAt(idx) | produced);
-            }
+          }
+          if (produced != 0) {
+            buffer_data[1].SetComponent(idx, buffer_data[1].ComponentAt(idx) | produced);
           }
         }
         if (rng.GetUniform() < ms_info.prob_) {
@@ -571,6 +584,22 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       }
     }
   }
+}
+
+// Two-parameter overload preserved so existing single-spec / single-bits-vector
+// call sites (unit tests + any consumer that has not migrated to the multi-group
+// path) keep compiling. Forwards to the multi-group implementation by wrapping
+// the pair into a single-element ColorSpecGroup, or by passing null when the
+// caller signalled "no color pass".
+void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input
+                 RayBuffer* buffer_data, RayBuffer* init_data,                               // output
+                 const FilterSpec* color_spec, const std::vector<uint8_t>* color_bits) {     // input
+  if (color_spec == nullptr || color_bits == nullptr) {
+    CollectData(rng, ms_info, spec, buffer_data, init_data, static_cast<const std::vector<ColorSpecGroup>*>(nullptr));
+    return;
+  }
+  std::vector<ColorSpecGroup> groups{ { color_spec, color_bits } };
+  CollectData(rng, ms_info, spec, buffer_data, init_data, &groups);
 }
 
 
@@ -972,7 +1001,8 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
     for (size_t ci = 0; ci < ms_crystal_cnt && !stop_; ci++) {
       const auto& s = m.setting_[ci];
       std::unique_ptr<FilterSpec> spec;
-      std::unique_ptr<FilterSpec> color_spec;
+      std::vector<ColorSpecGroupOwned> color_groups_owned;
+      std::vector<ColorSpecGroup> color_groups;
 
       // Design 2: color pass is keyed by CrystalConfig::id_ (user-visible id),
       // not ci (setting-slot index). The predicates for this (layer, crystal_id)
@@ -1029,25 +1059,17 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
         // Random crystals: rebuild per cn batch since each batch may produce a new crystal.
         if (!spec || !deterministic) {
           spec = FilterSpec::Create(s.filter_, curr_crystal, s.crystal_.axis_);
-          // Design 2: build a parallel color spec from the placement's predicate
-          // list. The synthetic FilterConfig is filter_in with kSymNone — color
-          // pass has no symmetry (see plan A1) — wrapping each predicate in its
-          // own AND-of-1 OR-summand so ComplexSpec's per-summand mask reports
-          // exactly which predicate matched.
-          if (!color_placement.predicates_.empty()) {
-            ComplexFilterParam cfp;
-            cfp.filters_.reserve(color_placement.predicates_.size());
-            for (const auto& p : color_placement.predicates_) {
-              cfp.filters_.push_back({ { kInvalidId, p } });
-            }
-            FilterConfig color_fc{};
-            color_fc.id_ = kInvalidId;
-            color_fc.symmetry_ = FilterConfig::kSymNone;
-            color_fc.action_ = FilterConfig::kFilterIn;
-            color_fc.param_ = FilterParam{ cfp };
-            color_spec = FilterSpec::Create(color_fc, curr_crystal, s.crystal_.axis_);
-          } else {
-            color_spec.reset();
+          // Design 2 + scrum-color-predicate-symmetry: build per-symmetry
+          // color spec groups. Each group synthesises one ComplexFilterParam
+          // (its predicates as OR-summands) wrapped in a FilterConfig carrying
+          // the group's symmetry — so `FilterSpec::Create` runs
+          // `ReduceRaypath`/`ExpandRaypath` on the color predicates the same
+          // way it does on the physical filter (a12: no re-implementation).
+          color_groups_owned = BuildColorSpecGroups(color_placement, curr_crystal, s.crystal_.axis_);
+          color_groups.clear();
+          color_groups.reserve(color_groups_owned.size());
+          for (auto& g : color_groups_owned) {
+            color_groups.push_back({ g.spec.get(), &g.bits });
           }
         }
 
@@ -1074,9 +1096,9 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
           FillRayOtherInfo(curr_crystal, buffer_data);
 
           // 2.3 Collect data. And set ray properties: state.
-          CollectData(rng_, m, spec.get(),                        // input
-                      buffer_data, init_data,                     // output
-                      color_spec.get(), &color_placement.bits_);  // input (Design-2 color producer)
+          CollectData(rng_, m, spec.get(),                              // input
+                      buffer_data, init_data,                           // output
+                      color_groups.empty() ? nullptr : &color_groups);  // input (Design-2 color producer)
 
           // 2.4 Copy to all_data + collect outgoing rays (d/w pre-pack).
           all_data.EmplaceBack(buffer_data[1]);

@@ -39,6 +39,12 @@ struct ColorGateEntry {
   IdType crystal_id_;
   uint8_t bit_;
   SimpleFilterParam predicate_;
+  // P/B/D bitmask (reuses FilterConfig::kSymP/kSymB/kSymD/kSymNone). Same
+  // semantics as `RaypathColorRef::symmetry_`; carried into the dedup key so
+  // two refs with the same predicate literal but different symmetries are
+  // treated as distinct color-matching equivalence classes and each gets its
+  // own bit (see scrum-color-predicate-symmetry §3 decision 2 — AC2).
+  uint8_t symmetry_ = FilterConfig::kSymNone;
 };
 
 struct ColorGateTable {
@@ -51,6 +57,16 @@ struct ColorGateTable {
 struct ColorGatePlacement {
   std::vector<SimpleFilterParam> predicates_;
   std::vector<uint8_t> bits_;
+  // Same index-parallel array shape as predicates_/bits_ — symmetries_[k] is the
+  // symmetry bitmask attached to predicates_[k] / bits_[k]. Carried so the
+  // downstream consumer (BuildColorSpecGroups) can group predicates by symmetry
+  // value before handing each group to FilterSpec::Create.
+  //
+  // Insertion order matches predicates_/bits_ (both derived from the same walk
+  // over ColorGateTable.entries_). Rationale for a third parallel array vs a
+  // single vector<ColorGateMember>: only three fields today; refactor to a
+  // struct-of-arrays if a fourth appears (see plan §3 decision 2 memo).
+  std::vector<uint8_t> symmetries_;
 };
 
 // Build the CPU-only color-predicate → component-bit table for one commit.

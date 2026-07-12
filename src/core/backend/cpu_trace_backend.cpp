@@ -48,14 +48,14 @@ struct BatchTraceSpec {
   size_t max_hits;
   bool first_ms;
   uint8_t ms_layer_idx;  // current MS layer index (carried into ExitRayRecord)
-  // Design 2 color pass parameters — parallel to filter_spec: an independent
-  // FilterSpec built from raypath_color predicates, plus a per-summand →
-  // global component bit map (same shape the legacy path uses for the
-  // synthesized ComplexFilterParam summands). Both null when no color
+  // Design 2 + scrum-color-predicate-symmetry color pass parameters —
+  // parallel to filter_spec: a non-owning view of the per-symmetry color spec
+  // groups produced by `BuildColorSpecGroups`. Null / empty when no color
   // predicate applies to this (layer, crystal_id), which is the zero-cost
-  // path (AC3).
-  const FilterSpec* color_spec = nullptr;
-  const std::vector<uint8_t>* color_bits = nullptr;
+  // path (AC3). Multi-group semantics: each group carries its own symmetry
+  // value and evaluates on every surviving ray; physical filter + prob roll
+  // still happen once (independent of color config) — see CollectData.
+  const std::vector<ColorSpecGroup>* color_groups = nullptr;
   // Host-ray injection (first_ms only). When non-null, TraceCrystalBatch
   // bypasses InitRayFirstMs's light-source sampling and populates workspace[0]
   // directly from host->d/p/w/tf (already in crystal-local space). Used by
@@ -165,8 +165,7 @@ void TraceCrystalBatch(RandomNumberGenerator& rng, const CrystalTraceSpec& cryst
       // We thread cont_collect through that slot via a temporary swap.
       RayBuffer init_for_collect[2]{};
       std::swap(init_for_collect[1], buffers.cont_collect);
-      CollectData(rng, batch.ms_info, batch.filter_spec, workspace, init_for_collect, batch.color_spec,
-                  batch.color_bits);
+      CollectData(rng, batch.ms_info, batch.filter_spec, workspace, init_for_collect, batch.color_groups);
       std::swap(init_for_collect[1], buffers.cont_collect);
 
       // Copy traced rays to all_data + collect outgoing.
@@ -367,19 +366,15 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
     // color predicates apply to this (layer, crystal_id).
     ColorGatePlacement color_placement =
         ColorGatePlacementFor(color_gate_table_, static_cast<IdType>(ms_idx_), setting.crystal_.id_);
-    std::unique_ptr<FilterSpec> color_spec;
-    if (!color_placement.predicates_.empty()) {
-      ComplexFilterParam cfp;
-      cfp.filters_.reserve(color_placement.predicates_.size());
-      for (const auto& pred : color_placement.predicates_) {
-        cfp.filters_.push_back({ { kInvalidId, pred } });
-      }
-      FilterConfig color_fc{};
-      color_fc.id_ = kInvalidId;
-      color_fc.symmetry_ = FilterConfig::kSymNone;
-      color_fc.action_ = FilterConfig::kFilterIn;
-      color_fc.param_ = FilterParam{ cfp };
-      color_spec = FilterSpec::Create(color_fc, crystal, crystal_axis);
+    // scrum-color-predicate-symmetry: per-symmetry color spec groups produced
+    // by the shared helper (a12, same code path as legacy simulator.cpp). Owned
+    // vector's lifetime covers TraceCrystalBatch below via the non-owning
+    // `color_groups` view passed through BatchTraceSpec.
+    auto color_groups_owned = BuildColorSpecGroups(color_placement, crystal, crystal_axis);
+    std::vector<ColorSpecGroup> color_groups;
+    color_groups.reserve(color_groups_owned.size());
+    for (auto& g : color_groups_owned) {
+      color_groups.push_back({ g.spec.get(), &g.bits });
     }
 
     // ci_n = this population's ray count (cn loop bound); total_ray_num = the
@@ -402,8 +397,7 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
                           spec_.scene->max_hits_,
                           first_ms,
                           static_cast<uint8_t>(ms_idx_),
-                          color_spec.get(),
-                          &color_placement.bits_,
+                          color_groups.empty() ? nullptr : &color_groups,
                           host_inject };
     BatchTraceBuffers buffers{ prev_init, init_ray_offset, all_data, cont_collect, outgoing_records };
     TraceCrystalBatch(rng_, crystal_spec, batch, buffers);

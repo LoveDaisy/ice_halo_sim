@@ -31,7 +31,14 @@ std::string FormatRef(const RaypathColorRef& r) {
 // unreachable.
 uint8_t ResolveRefToBit(const RaypathColorRef& ref, const ColorGateTable& table) {
   for (const auto& e : table.entries_) {
-    if (e.layer_ == ref.layer_ && e.crystal_id_ == ref.crystal_ && e.predicate_ == ref.predicate_) {
+    // Symmetry is part of the lookup key (matches BuildColorGateTable's dedup
+    // key in scrum-color-predicate-symmetry): once the gate table splits refs
+    // by symmetry into distinct bits, the class-table resolver must key on the
+    // same tuple or a ref with non-default symmetry_ would silently resolve to
+    // the first same-predicate entry (default symmetry) and inherit its bit —
+    // directly violating AC2 (bit map preserved across symmetry).
+    if (e.layer_ == ref.layer_ && e.crystal_id_ == ref.crystal_ && e.predicate_ == ref.predicate_ &&
+        e.symmetry_ == ref.symmetry_) {
       return e.bit_;
     }
   }

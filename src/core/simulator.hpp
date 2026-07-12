@@ -178,6 +178,32 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
                  const FilterSpec* color_spec = nullptr,                                     // input
                  const std::vector<uint8_t>* color_bits = nullptr);                          // input
 
+// Non-owning view of one per-symmetry color spec group produced by
+// `BuildColorSpecGroups`. Referenced by the multi-group `CollectData` overload
+// so the CPU emit gate can evaluate several symmetry-scoped color passes on
+// each surviving ray, with physical-filter check + prob roll still done once.
+struct ColorSpecGroup {
+  const FilterSpec* spec;
+  const std::vector<uint8_t>* bits;
+};
+
+// Multi-group overload of `CollectData` — same contract as the two-parameter
+// overload above, except the non-destructive color pass runs `color_groups`
+// (one per symmetry value produced by `BuildColorSpecGroups`) instead of a
+// single `color_spec`/`color_bits` pair. Each group contributes its matched
+// summand bits into the ray's carried component mask via OR.
+//
+// The physical filter check (`spec->Check`) and the MS `prob_` roll
+// (`rng.GetUniform() < ms_info.prob_`) still execute exactly once per ray —
+// they must not depend on `color_groups`, otherwise the RNG stream (and hence
+// continue/emit routing) would drift with the color config.
+//
+// A null `color_groups` behaves identically to a null `color_spec` in the
+// two-parameter overload (AC3 zero-cost path when no color predicates apply).
+void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input
+                 RayBuffer* buffer_data, RayBuffer* init_data,                               // output
+                 const std::vector<ColorSpecGroup>* color_groups);                           // input
+
 // Build the local-to-world rotation matrix for a crystal sample.
 // Implements the chain  R = Rz(az - pi) * Ry(-zenith) * Rz(roll),
 // where zenith = pi/2 - latitude. Inputs are in radians and follow the convention

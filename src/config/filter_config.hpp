@@ -2,8 +2,10 @@
 #define CONFIG_FILTER_CONFIG_H_
 
 #include <cstddef>
+#include <cstdint>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -72,6 +74,14 @@ void from_json(const nlohmann::json& j, FilterConfig& f);
 // consumer (RaypathColorRef in Design 2) parse the same wire form.
 void to_json(nlohmann::json& j, const SimpleFilterParam& p);
 void from_json(const nlohmann::json& j, SimpleFilterParam& p);
+
+// Symmetry (P/B/D bitmask) ↔ compact string ("P" / "B" / "D" / combinations)
+// encoding. Extracted from FilterConfig::to_json/from_json so any consumer of
+// the same wire form (RaypathColorRef in scrum-color-predicate-symmetry) can
+// reuse the exact encoding without divergence. Callers still decide their own
+// omission strategy — these helpers only convert the bitmask ↔ string.
+std::string FilterSymmetryToString(uint8_t symmetry);
+uint8_t FilterSymmetryFromString(const std::string& s);
 
 }  // namespace lumice
 

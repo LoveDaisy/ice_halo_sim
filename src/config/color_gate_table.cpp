@@ -63,13 +63,17 @@ ColorGateTable BuildColorGateTable(const RaypathColorConfig& color_cfg, const Sc
     for (const auto& ref : cc.match_) {
       VerifyRefPlacementIsUnambiguous(ref, scene);
 
-      // Structural dedup: same (layer, crystal_id, predicate) reuses the same
-      // bit. Deliberate O(N*M) linear scan — bit budget is capped at 64, so
-      // this loop is tiny.
+      // Structural dedup: same (layer, crystal_id, predicate, symmetry) reuses
+      // the same bit. Symmetry is part of the dedup key because two refs that
+      // share predicate literal but differ in symmetry match different
+      // equivalence classes of raypaths (semantically distinct color-matching
+      // criteria) and must occupy separate bits — otherwise two color classes
+      // would "contaminate" each other's hits. Deliberate O(N*M) linear scan —
+      // bit budget is capped at 64, so this loop is tiny.
       bool duplicate = false;
       for (const auto& existing : table.entries_) {
         if (existing.layer_ == ref.layer_ && existing.crystal_id_ == ref.crystal_ &&
-            existing.predicate_ == ref.predicate_) {
+            existing.predicate_ == ref.predicate_ && existing.symmetry_ == ref.symmetry_) {
           duplicate = true;
           break;
         }
@@ -82,6 +86,7 @@ ColorGateTable BuildColorGateTable(const RaypathColorConfig& color_cfg, const Sc
       entry.layer_ = ref.layer_;
       entry.crystal_id_ = ref.crystal_;
       entry.predicate_ = ref.predicate_;
+      entry.symmetry_ = ref.symmetry_;
       if (next_bit < ComponentTable::kMaxBits) {
         entry.bit_ = static_cast<uint8_t>(next_bit);
         ++next_bit;
@@ -108,6 +113,7 @@ ColorGatePlacement ColorGatePlacementFor(const ColorGateTable& table, IdType lay
     }
     out.predicates_.push_back(e.predicate_);
     out.bits_.push_back(e.bit_);
+    out.symmetries_.push_back(e.symmetry_);
   }
   return out;
 }
