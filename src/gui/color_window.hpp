@@ -136,6 +136,15 @@ inline constexpr const char* kColorsDisabledNoMatchTooltip =
 // whole off then restores the same text the user last typed — no undo history.
 void SetRefMatchAll(ColorClassRefConfig& ref, bool match_all);
 
+// task-356.3 — true when per-ref P/B/D symmetry checkboxes should be user-editable.
+// A whole-crystal ref (`match_all=true`) already matches every raypath through
+// that placement, so P/B/D bits are a no-op (core groups them together via the
+// per-symmetry filter split). The Colors window BeginDisabled-freezes (does NOT
+// clear) the checkboxes when this returns false — mirrors how the predicate
+// text field freezes under match_all so a subsequent un-whole restores the
+// user's prior selections.
+bool IsRefSymmetryEditable(const ColorClassRefConfig& ref);
+
 // Handle a click on the visible/eye icon in the class list. Plain click toggles
 // `visible` only; Alt+click implements exclusive solo:
 //   - not currently solo → clear all others' solo, set this one's solo=true

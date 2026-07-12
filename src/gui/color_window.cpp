@@ -34,6 +34,7 @@
 #include "gui/gui_logger.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/raypath_segments.hpp"
+#include "gui/symmetry_ui.hpp"
 #include "imgui.h"
 #include "include/lumice.h"
 
@@ -165,6 +166,12 @@ void SwapZOrder(GuiState& state, size_t a, size_t b) {
 // output (whole-crystal is emitted). Toggling back restores the same text.
 void SetRefMatchAll(ColorClassRefConfig& ref, bool match_all) {
   ref.match_all = match_all;
+}
+
+// task-356.3 — see color_window.hpp for the doc comment. Pure predicate on the
+// ref alone; caller BeginDisabled-freezes the P/B/D row when this returns false.
+bool IsRefSymmetryEditable(const ColorClassRefConfig& ref) {
+  return !ref.match_all;
 }
 
 // task-list-row-ergonomics ③: eye-icon click handler with Alt+click = solo.
@@ -513,6 +520,35 @@ void RenderRefRow(GuiState& state, ColorClassConfig& cls, size_t ref_idx, bool& 
     }
   }
   ImGui::PopItemWidth();
+
+  // task-356.3 — per-ref P/B/D symmetry checkboxes.
+  //
+  // D-applicability is computed from THIS ref's bound crystal (not a modal-scoped
+  // "current" crystal like the filter modal has), because different refs in the
+  // same color class can point to different crystals (scrum.md 决策 1 per-ref).
+  // Bounds-check the crystal id so a stale pool reference (crystal removed after
+  // the ref was created — parallels the `<no placements>` fallback earlier in
+  // this function) degrades gracefully to "D not applicable" without a crash.
+  ImGui::SameLine();
+  bool d_applicable = false;
+  if (ref.crystal_pool_id >= 0 && static_cast<size_t>(ref.crystal_pool_id) < state.crystals.size()) {
+    const auto& cr = state.crystals[static_cast<size_t>(ref.crystal_pool_id)];
+    d_applicable = IsDApplicableGuiAxis(cr.azimuth, cr.roll);
+  }
+  const bool sym_editable = IsRefSymmetryEditable(ref);
+  if (!sym_editable) {
+    ImGui::BeginDisabled();
+  }
+  // The ref_idx (via PushID at RenderRefRow top) already disambiguates rows,
+  // so a per-row-static suffix is enough. Symmetry writes here land on
+  // ColorClassStructState via the reconciler's frame-tail diff — no explicit
+  // MarkStructHardDirty call needed (see gui_state_reconcile.cpp
+  // RaypathColorStructChanged; the operator== extension in gui_state.hpp is
+  // what wires new fields into that diff).
+  RenderSymmetryCheckboxes(ref.sym_p, ref.sym_b, ref.sym_d, d_applicable, "color_ref");
+  if (!sym_editable) {
+    ImGui::EndDisabled();
+  }
 
   // Delete this ref.
   ImGui::SameLine();
