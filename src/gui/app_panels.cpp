@@ -1334,6 +1334,28 @@ void RenderGuiWarningPopup() {
   }
 }
 
+// Executes the New/Open/Quit action queued in g_pending_action (if any) and
+// clears it. Shared by the three button branches below and in
+// RenderSaveModifiedPopup that resume a deferred action once it is safe to do
+// so (code-review-02 M2: was three independent copies of the same 4-branch
+// switch; consolidated to a single call site).
+void ResolvePendingAction(GLFWwindow* window) {
+  switch (g_pending_action) {
+    case PendingAction::kNew:
+      DoNew();
+      break;
+    case PendingAction::kOpen:
+      DoOpen();
+      break;
+    case PendingAction::kQuit:
+      glfwSetWindowShouldClose(window, GLFW_TRUE);
+      break;
+    default:
+      break;
+  }
+  g_pending_action = PendingAction::kNone;
+}
+
 void RenderUnsavedPopup(GLFWwindow* window) {
   if (g_show_unsaved_popup) {
     ImGui::OpenPopup("Unsaved Changes");
@@ -1353,39 +1375,13 @@ void RenderUnsavedPopup(GLFWwindow* window) {
       // DoSave() falls through to PerformSave() synchronously, same as before.
       DoSave();
       if (!g_show_save_modified_popup) {
-        switch (g_pending_action) {
-          case PendingAction::kNew:
-            DoNew();
-            break;
-          case PendingAction::kOpen:
-            DoOpen();
-            break;
-          case PendingAction::kQuit:
-            glfwSetWindowShouldClose(window, GLFW_TRUE);
-            break;
-          default:
-            break;
-        }
-        g_pending_action = PendingAction::kNone;
+        ResolvePendingAction(window);
       }
       ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
     if (ImGui::Button("Don't Save", ImVec2(100, 0))) {
-      switch (g_pending_action) {
-        case PendingAction::kNew:
-          DoNew();
-          break;
-        case PendingAction::kOpen:
-          DoOpen();
-          break;
-        case PendingAction::kQuit:
-          glfwSetWindowShouldClose(window, GLFW_TRUE);
-          break;
-        default:
-          break;
-      }
-      g_pending_action = PendingAction::kNone;
+      ResolvePendingAction(window);
       ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
@@ -1424,6 +1420,22 @@ void RenderUnsavedPopup(GLFWwindow* window) {
 void RenderSaveModifiedPopup(GLFWwindow* window) {
   // window is used by the "Save anyway" branch's chained kQuit case (see
   // code-review-01 M1 doc comment above).
+  //
+  // code-review-02 M1 investigated whether Escape can dismiss this modal
+  // without going through any of the three buttons below, which would leave
+  // g_pending_save_kind / g_pending_action stale for a later, unrelated Save
+  // to misfire on. Verified NOT reachable in this codebase: Dear ImGui's
+  // NavUpdateCancelRequest() (imgui.cpp) only routes Escape to
+  // ClosePopupToLevel() when the topmost open popup does NOT have
+  // ImGuiWindowFlags_Modal set — BeginPopupModal always sets that flag, so
+  // Escape never reaches the close path for ANY modal in this app,
+  // regardless of p_open or window flags (io.ConfigFlags has
+  // ImGuiConfigFlags_NavEnableKeyboard on in both main.cpp:126 and
+  // test_gui_main.cpp:264, so the nav-active precondition is satisfied — the
+  // modal exclusion is what actually blocks it). Modals also block
+  // click-outside-to-close by design. The only exits are the three buttons.
+  // gui_test p2_modal/save_modified_popup_escape_is_a_noop pins this via a
+  // real ctx->KeyPress(ImGuiKey_Escape) against the live popup.
   if (g_show_save_modified_popup) {
     ImGui::OpenPopup("Save Modified Config");
     g_show_save_modified_popup = false;
@@ -1471,20 +1483,7 @@ void RenderSaveModifiedPopup(GLFWwindow* window) {
       // (see doc comment above) — a real save just happened, so it's safe to
       // proceed. No-op when this popup was opened directly (g_pending_action
       // is kNone in that path).
-      switch (g_pending_action) {
-        case PendingAction::kNew:
-          DoNew();
-          break;
-        case PendingAction::kOpen:
-          DoOpen();
-          break;
-        case PendingAction::kQuit:
-          glfwSetWindowShouldClose(window, GLFW_TRUE);
-          break;
-        default:
-          break;
-      }
-      g_pending_action = PendingAction::kNone;
+      ResolvePendingAction(window);
       ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();

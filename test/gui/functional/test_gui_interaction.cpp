@@ -3824,6 +3824,70 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // code-review-02 M1 investigated whether RenderSaveModifiedPopup can be
+  // dismissed via Escape, bypassing all three button branches and leaving
+  // g_pending_action / g_pending_save_kind stale for a later, unrelated Save
+  // to misfire on. White-box mechanism check (see the doc comment on
+  // RenderSaveModifiedPopup) found Dear ImGui's NavUpdateCancelRequest()
+  // never routes Escape to ClosePopupToLevel() for a window with
+  // ImGuiWindowFlags_Modal set — which BeginPopupModal always sets — so this
+  // popup (like every modal in this app) cannot be dismissed via Escape at
+  // all. This test drives the real key press against the live popup to pin
+  // that verified fact as a regression guard: if a future Dear ImGui upgrade
+  // ever changes this, the popup will start closing here and the test fails,
+  // flagging that the pending-sentinel leak this review worried about has
+  // become reachable and needs the edge-detect fix reviewers originally asked
+  // for.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "save_modified_popup_escape_is_a_noop");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      const char* tmp_path = "/tmp/lumice_savemod_escape.lmc";
+      std::remove(tmp_path);
+      gui::g_state.current_file_path = tmp_path;
+      gui::g_state.layers[0].entries.push_back(gui::EntryCard{});
+      // See unsaved_save_chains_to_save_modified_popup above for why kLoaded
+      // (not a direct sim_state write) is needed to survive the frame Yield.
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
+      gui::g_state.dirty = true;
+      ctx->Yield();
+
+      ctx->ItemClick("##TopBar/New");
+      ctx->Yield(2);
+      ctx->ItemClick("Unsaved Changes/Save");
+      // See the sibling test above for why this hop needs 3 frames.
+      ctx->Yield(3);
+      IM_CHECK(ImGui::IsPopupOpen("Save Modified Config"));
+      IM_CHECK_EQ(static_cast<int>(gui::g_pending_action), static_cast<int>(gui::PendingAction::kNew));
+
+      // Escape must NOT dismiss this modal (see doc comment above).
+      ctx->KeyPress(ImGuiKey_Escape);
+      ctx->Yield(2);
+      IM_CHECK(ImGui::IsPopupOpen("Save Modified Config"));
+
+      // Nothing fired, and the queued intent is untouched — consistent with
+      // the popup never having closed.
+      std::ifstream f(tmp_path);
+      IM_CHECK(!f.good());
+      IM_CHECK(gui::g_state.dirty);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
+      IM_CHECK_EQ(static_cast<int>(gui::g_pending_action), static_cast<int>(gui::PendingAction::kNew));
+      IM_CHECK_EQ(static_cast<int>(gui::g_pending_save_kind), static_cast<int>(gui::PendingSaveKind::kSave));
+
+      // The popup is still open — resolve it via a real button so the test
+      // doesn't leak an open modal into the next test.
+      ctx->ItemClick("Save Modified Config/Save anyway");
+      ctx->Yield(2);
+      std::ifstream f2(tmp_path);
+      IM_CHECK(f2.good());
+      IM_CHECK_EQ(static_cast<int>(gui::g_pending_action), static_cast<int>(gui::PendingAction::kNone));
+
+      std::remove(tmp_path);
+    };
+  }
+
   // p2_modal/crystal_modal_open_cancel — open crystal modal, cancel, verify no state change
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "crystal_modal_open_cancel");
