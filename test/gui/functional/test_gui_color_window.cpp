@@ -731,6 +731,141 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // task-fix-color-window-visibility-consistency: AnySolo + EffectiveVisible
+  // are render-time derived helpers that MUST mirror the compositor's
+  // GatherActiveClasses:55 rule (`any_solo ? cls.solo_ : cls.visible_`).
+  // These pure-helper unit tests pin that mirror to the compositor's actual
+  // predicate; the Colors-window eye-icon rendering and the merged
+  // NoVisibleMatchedColorClass predicate both read through these helpers, so
+  // a drift here would immediately surface as a UI↔composite disagreement.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "any_solo_false_when_pool_empty_or_all_flags_false");
+    t->TestFunc = [](ImGuiTestContext*) {
+      std::vector<gui::ColorClassConfig> classes;
+      IM_CHECK(!gui::AnySolo(classes));
+      gui::ColorClassConfig c;
+      c.solo = false;
+      classes.push_back(c);
+      classes.push_back(c);
+      IM_CHECK(!gui::AnySolo(classes));
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "any_solo_true_when_any_flag_set");
+    t->TestFunc = [](ImGuiTestContext*) {
+      std::vector<gui::ColorClassConfig> classes;
+      gui::ColorClassConfig a;
+      a.solo = false;
+      gui::ColorClassConfig b;
+      b.solo = true;
+      classes.push_back(a);
+      classes.push_back(b);
+      IM_CHECK(gui::AnySolo(classes));
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "effective_visible_falls_back_to_visible_when_no_solo");
+    t->TestFunc = [](ImGuiTestContext*) {
+      gui::ColorClassConfig c;
+      c.visible = true;
+      c.solo = false;
+      IM_CHECK(gui::EffectiveVisible(c, /*any_solo=*/false));
+      c.visible = false;
+      IM_CHECK(!gui::EffectiveVisible(c, /*any_solo=*/false));
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "effective_visible_reads_solo_when_any_solo");
+    t->TestFunc = [](ImGuiTestContext*) {
+      // AC2 core: with any_solo=true, a non-solo peer (visible=true) is
+      // effectively hidden — the eye icon must render EYE_SLASH, not EYE.
+      gui::ColorClassConfig peer;
+      peer.visible = true;
+      peer.solo = false;
+      IM_CHECK(!gui::EffectiveVisible(peer, /*any_solo=*/true));
+      // The solo'd class itself remains visible even if its own visible=false.
+      gui::ColorClassConfig soloed;
+      soloed.visible = false;
+      soloed.solo = true;
+      IM_CHECK(gui::EffectiveVisible(soloed, /*any_solo=*/true));
+    };
+  }
+
+  // task-fix-color-window-visibility-consistency: merged predicate coverage.
+  // The rename from AllConfiguredColorClassesUnmatched left the "no match"
+  // scenarios above intact (defaults visible=true, solo=false ⇒ EffectiveVisible=true
+  // ⇒ old semantics preserved). The tests below cover the NEW cases where
+  // matched signals exist but are hidden — either by `visible=false` (AC1) or
+  // by another class being solo'd (AC2 storage-level).
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "color_window", "no_visible_matched_true_when_matched_class_hidden_via_visible_false");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      // Two configured classes, both with signal=1 (matched), both with
+      // visible=false (user hid every matched class). Composite would be empty.
+      gui::ColorClassConfig c;
+      gui::ColorClassRefConfig r;
+      c.match.push_back(r);
+      c.visible = false;
+      c.solo = false;
+      gui::g_state.raypath_color.push_back(c);
+      gui::g_state.raypath_color.push_back(c);
+      std::vector<int> flags = { 1, 1 };
+      IM_CHECK(gui::NoVisibleMatchedColorClass(gui::g_state, flags));
+    };
+  }
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "color_window", "no_visible_matched_true_when_matched_class_hidden_by_peer_solo");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      // Two configured+matched classes. Class 0 is solo'd → class 1 is
+      // effectively hidden. But class 1 has no signal (0), so composite has
+      // "class 0 solo'd and matched" — should return false. Then flip: put
+      // signal on class 1 only, solo on class 0 — composite is empty because
+      // the only matched class (1) is effectively hidden by the peer's solo.
+      gui::ColorClassConfig c;
+      gui::ColorClassRefConfig r;
+      c.match.push_back(r);
+      c.visible = true;
+      gui::g_state.raypath_color.push_back(c);
+      gui::g_state.raypath_color.push_back(c);
+      gui::g_state.raypath_color[0].solo = true;
+
+      // Case A: matched-and-solo'd class 0 satisfies the predicate → false.
+      std::vector<int> flags_a = { 1, 1 };
+      IM_CHECK(!gui::NoVisibleMatchedColorClass(gui::g_state, flags_a));
+
+      // Case B: only class 1 has signal, but class 0 is solo'd → class 1 is
+      // effectively hidden → composite would be empty → true.
+      std::vector<int> flags_b = { 0, 1 };
+      IM_CHECK(gui::NoVisibleMatchedColorClass(gui::g_state, flags_b));
+    };
+  }
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "color_window", "no_visible_matched_false_when_soloed_class_is_the_matched_one");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      // Storage semantic: HandleEyeClick sets solo but does NOT touch visible
+      // of peers. Confirm the merged predicate still returns false when the
+      // solo'd class is itself the (matched) one — the composite is non-empty.
+      gui::ColorClassConfig c;
+      gui::ColorClassRefConfig r;
+      c.match.push_back(r);
+      c.visible = true;
+      gui::g_state.raypath_color.push_back(c);
+      gui::g_state.raypath_color.push_back(c);
+      gui::g_state.raypath_color[1].solo = true;
+
+      std::vector<int> flags = { 1, 1 };
+      // AnySolo=true → only class 1 counts as effectively visible. Class 1 has
+      // signal → composite is non-empty → predicate returns false.
+      IM_CHECK(!gui::NoVisibleMatchedColorClass(gui::g_state, flags));
+    };
+  }
+
   // BuildClassFromFilter — a row whose single Factor still expands to more
   // than one alternative ("1-3;5-7", the same ';' OR-separator case as
   // validate_single_atom_rejects_semicolon_or) must be skipped like an
@@ -978,6 +1113,127 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       ctx->SetRef("//" ICON_FA_PALETTE " Colors");
       auto win_info = ctx->ItemInfo("**/Enable colors");
       IM_CHECK((win_info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      ctx->SetRef("");
+
+      gui::g_state.color_window_open = false;
+      ctx->Yield(2);
+    };
+  }
+
+  // task-fix-color-window-visibility-consistency AC1: with multiple configured+
+  // matched classes, hiding every matched class (visible=false, no solo) must
+  // grey out BOTH the top-bar Colored toggle AND the Colors-window Enable
+  // checkbox. Pre-fix, only "all classes have signal=0" would disable them;
+  // the "matched but all hidden" branch (composite genuinely empty) left the
+  // controls enabled but non-responsive because last_uploaded_as_composite
+  // could not flip on. This is the merged-predicate wiring gate — the pure
+  // unit tests above cover the semantics; this drives the real UI to confirm
+  // both mirror sites (app_panels.cpp + color_window.cpp) route through it.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window",
+                                    "enable_controls_disabled_when_matched_classes_hidden_via_visible_false");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Two configured classes, both hidden by the user (visible=false, no
+      // solo). RefreshColorClassSignals with server=nullptr resizes cache to
+      // (n, 1) = "matched" for both. NoVisibleMatchedColorClass then sees
+      // matched+hidden across the pool → true → BeginDisabled fires on both.
+      gui::ColorClassRefConfig ref;
+      ref.layer_idx = 0;
+      ref.crystal_pool_id = 0;
+      ref.match_all = true;
+      for (int i = 0; i < 2; i++) {
+        gui::ColorClassConfig cls;
+        cls.match.push_back(ref);
+        cls.visible = false;
+        cls.solo = false;
+        gui::g_state.raypath_color.push_back(cls);
+      }
+      gui::g_state.color_window_open = true;
+      ctx->Yield(4);
+
+      auto top_info = ctx->ItemInfo("##TopBar/Full Spectrum##CompositePreviewToggle");
+      IM_CHECK((top_info.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+      ctx->SetRef("//" ICON_FA_PALETTE " Colors");
+      auto win_info = ctx->ItemInfo("**/Enable colors");
+      IM_CHECK((win_info.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      ctx->SetRef("");
+
+      // Flipping ONE class back to visible releases the disable — the composite
+      // is once again non-empty. This is the direct AC1 recovery path.
+      gui::g_state.raypath_color[0].visible = true;
+      ctx->Yield(4);
+
+      top_info = ctx->ItemInfo("##TopBar/Full Spectrum##CompositePreviewToggle");
+      IM_CHECK((top_info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      ctx->SetRef("//" ICON_FA_PALETTE " Colors");
+      win_info = ctx->ItemInfo("**/Enable colors");
+      IM_CHECK((win_info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      ctx->SetRef("");
+
+      gui::g_state.color_window_open = false;
+      ctx->Yield(2);
+    };
+  }
+
+  // task-fix-color-window-visibility-consistency AC2: after Alt+click solos a
+  // class, peer classes' eye icons must render ICON_FA_EYE_SLASH (not
+  // ICON_FA_EYE) — the storage layer keeps peer.visible=true (HandleEyeClick
+  // storage semantics are unchanged), but the compositor hides them via the
+  // any_solo branch, and the UI now reads through EffectiveVisible to agree.
+  // We drive HandleEyeClick directly (state seed) so this test is decoupled
+  // from the eye button's widget path (the button label itself IS what we're
+  // testing here), then inspect the class rows' widget IDs. Both eye buttons
+  // in the Colors window live under PushID(phys) — literal $$<int> per the
+  // integer-PushID selector convention (learnings/gui-test-integer-pushid).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "eye_icon_shows_slash_on_peers_when_another_class_solo");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      for (int i = 0; i < 2; i++) {
+        gui::ColorClassConfig cls;
+        cls.visible = true;
+        cls.solo = false;
+        gui::g_state.raypath_color.push_back(cls);
+      }
+      // Alt+click class 1 → solo it. Class 0 keeps visible=true / solo=false —
+      // its eye must now show EYE_SLASH via EffectiveVisible(any_solo=true).
+      gui::HandleEyeClick(gui::g_state.raypath_color, /*phys=*/1, /*alt_down=*/true);
+      IM_CHECK(gui::g_state.raypath_color[0].visible);
+      IM_CHECK(!gui::g_state.raypath_color[0].solo);
+      IM_CHECK(gui::g_state.raypath_color[1].solo);
+
+      gui::g_state.color_window_open = true;
+      ctx->Yield(4);
+
+      ctx->SetRef("//" ICON_FA_PALETTE " Colors");
+      // Class 0 (peer): eye must be EYE_SLASH; the plain EYE variant must NOT
+      // exist under $$0. Class 1 (solo'd): eye must be EYE; the SLASH variant
+      // must NOT exist under $$1. Two-sided assertion pins the widget label —
+      // a regression that ignored any_solo would show EYE on $$0 (pre-fix).
+      IM_CHECK(ctx->ItemExists("**/$$0/" ICON_FA_EYE_SLASH));
+      IM_CHECK(!ctx->ItemExists("**/$$0/" ICON_FA_EYE));
+      IM_CHECK(ctx->ItemExists("**/$$1/" ICON_FA_EYE));
+      IM_CHECK(!ctx->ItemExists("**/$$1/" ICON_FA_EYE_SLASH));
+      ctx->SetRef("");
+
+      // Clear the solo (second alt+click on the solo'd class) — icons must
+      // revert: both back to EYE since visible is still true on both.
+      gui::HandleEyeClick(gui::g_state.raypath_color, /*phys=*/1, /*alt_down=*/true);
+      IM_CHECK(!gui::g_state.raypath_color[0].solo);
+      IM_CHECK(!gui::g_state.raypath_color[1].solo);
+      ctx->Yield(4);
+
+      ctx->SetRef("//" ICON_FA_PALETTE " Colors");
+      IM_CHECK(ctx->ItemExists("**/$$0/" ICON_FA_EYE));
+      IM_CHECK(!ctx->ItemExists("**/$$0/" ICON_FA_EYE_SLASH));
+      IM_CHECK(ctx->ItemExists("**/$$1/" ICON_FA_EYE));
+      IM_CHECK(!ctx->ItemExists("**/$$1/" ICON_FA_EYE_SLASH));
       ctx->SetRef("");
 
       gui::g_state.color_window_open = false;
