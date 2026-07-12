@@ -7,12 +7,13 @@
 #include <memory>
 #include <vector>
 
-#include "config/color_gate_table.hpp"
 #include "config/filter_config.hpp"
 #include "core/crystal.hpp"
 #include "core/raypath.hpp"
 
 namespace lumice {
+
+struct ColorGatePlacement;
 
 // RaypathOrbit: canonical representative + membership test under symmetry.
 struct RaypathOrbit {

@@ -69,11 +69,12 @@ SceneConfig MakeScene(const std::vector<std::vector<lumice::IdType>>& layers_cry
 }
 
 RaypathColorRef MakeRef(lumice::IdType layer, lumice::IdType crystal_id,
-                        SimpleFilterParam predicate = NoneFilterParam{}) {
+                        SimpleFilterParam predicate = NoneFilterParam{}, uint8_t symmetry = FilterConfig::kSymNone) {
   RaypathColorRef r{};
   r.layer_ = layer;
   r.crystal_ = crystal_id;
   r.predicate_ = std::move(predicate);
+  r.symmetry_ = symmetry;
   return r;
 }
 
@@ -156,6 +157,35 @@ TEST(BuildColorGateTable, DifferentCrystalIdsKeepDistinctBits) {
   auto table = lumice::BuildColorGateTable(cfg, scene);
   ASSERT_EQ(table.entries_.size(), 2u);
   EXPECT_NE(table.entries_[0].bit_, table.entries_[1].bit_);
+}
+
+// scrum-color-predicate-symmetry: dedup key must include symmetry so two refs
+// sharing (layer, crystal_id, predicate) but differing on symmetry_ each get
+// their own bit (AC2 anchor — otherwise the two color classes would resolve
+// to a shared bit and cross-contaminate hits).
+TEST(BuildColorGateTable, SamePredicateDifferentSymmetryGetsDistinctBits) {
+  SceneConfig scene = MakeScene({ { 1 } });
+  RaypathColorConfig cfg;
+  cfg.classes_.push_back(MakeClass({ MakeRef(0, 1, NoneFilterParam{}, FilterConfig::kSymNone) }));
+  cfg.classes_.push_back(MakeClass({ MakeRef(0, 1, NoneFilterParam{}, FilterConfig::kSymP) }));
+  auto table = lumice::BuildColorGateTable(cfg, scene);
+  ASSERT_EQ(table.entries_.size(), 2u);
+  EXPECT_NE(table.entries_[0].bit_, table.entries_[1].bit_);
+  EXPECT_EQ(table.entries_[0].symmetry_, FilterConfig::kSymNone);
+  EXPECT_EQ(table.entries_[1].symmetry_, FilterConfig::kSymP);
+}
+
+// Regression anchor: dedup did not become stricter than necessary — two refs
+// with identical (predicate, symmetry) still collapse to a single bit.
+TEST(BuildColorGateTable, SamePredicateSameSymmetryStillCollapses) {
+  SceneConfig scene = MakeScene({ { 1 } });
+  RaypathColorConfig cfg;
+  cfg.classes_.push_back(MakeClass({ MakeRef(0, 1, NoneFilterParam{}, FilterConfig::kSymP) }));
+  cfg.classes_.push_back(MakeClass({ MakeRef(0, 1, NoneFilterParam{}, FilterConfig::kSymP) }));
+  auto table = lumice::BuildColorGateTable(cfg, scene);
+  ASSERT_EQ(table.entries_.size(), 1u);
+  EXPECT_EQ(table.entries_[0].bit_, 0u);
+  EXPECT_EQ(table.entries_[0].symmetry_, FilterConfig::kSymP);
 }
 
 // ---- Design 2 §3.2 decision 2(b): throw-on-ambiguity ----
@@ -243,8 +273,32 @@ TEST(ColorGatePlacementFor, ReturnsInsertionOrderPredicatesAndBits) {
   ColorGatePlacement p = lumice::ColorGatePlacementFor(table, 0, 1);
   ASSERT_EQ(p.predicates_.size(), 2u);
   ASSERT_EQ(p.bits_.size(), 2u);
+  ASSERT_EQ(p.symmetries_.size(), 2u);
   EXPECT_EQ(p.bits_[0], 0u);
   EXPECT_EQ(p.bits_[1], 1u);
+  EXPECT_EQ(p.symmetries_[0], FilterConfig::kSymNone);
+  EXPECT_EQ(p.symmetries_[1], FilterConfig::kSymNone);
+}
+
+// scrum-color-predicate-symmetry: placement view carries per-ref symmetry_
+// parallel to predicates_/bits_. Preserves insertion order across the third
+// parallel array.
+TEST(ColorGatePlacementFor, ReturnsSymmetriesParallelToBits) {
+  SceneConfig scene = MakeScene({ { 1 } });
+  RaypathColorConfig cfg;
+  EntryExitFilterParam ee2{};
+  ee2.min_len_ = 2;
+  EntryExitFilterParam ee3{};
+  ee3.min_len_ = 3;
+  cfg.classes_.push_back(MakeClass({
+      MakeRef(0, 1, SimpleFilterParam{ ee2 }, FilterConfig::kSymP),
+      MakeRef(0, 1, SimpleFilterParam{ ee3 }, FilterConfig::kSymB),
+  }));
+  auto table = lumice::BuildColorGateTable(cfg, scene);
+  ColorGatePlacement p = lumice::ColorGatePlacementFor(table, 0, 1);
+  ASSERT_EQ(p.symmetries_.size(), 2u);
+  EXPECT_EQ(p.symmetries_[0], FilterConfig::kSymP);
+  EXPECT_EQ(p.symmetries_[1], FilterConfig::kSymB);
 }
 
 TEST(ColorGatePlacementFor, MissingPlacementReturnsEmpty) {

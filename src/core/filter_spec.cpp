@@ -10,6 +10,7 @@
 #include <variant>
 #include <vector>
 
+#include "config/color_gate_table.hpp"
 #include "config/filter_config.hpp"
 #include "core/crystal.hpp"
 #include "core/def.hpp"

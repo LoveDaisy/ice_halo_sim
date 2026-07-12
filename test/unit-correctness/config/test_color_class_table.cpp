@@ -79,11 +79,13 @@ SceneConfig MakeScene(const std::vector<std::vector<IdType>>& layers_crystal_ids
   return scene;
 }
 
-RaypathColorRef Ref(uint16_t layer, uint16_t crystal, SimpleFilterParam predicate = NoneFilterParam{}) {
+RaypathColorRef Ref(uint16_t layer, uint16_t crystal, SimpleFilterParam predicate = NoneFilterParam{},
+                    uint8_t symmetry = FilterConfig::kSymNone) {
   RaypathColorRef r{};
   r.layer_ = layer;
   r.crystal_ = crystal;
   r.predicate_ = std::move(predicate);
+  r.symmetry_ = symmetry;
   return r;
 }
 
@@ -232,6 +234,27 @@ TEST(BuildColorClassTable, ExplicitEmptyMatchClassKeptWithZeroBits) {
   EXPECT_EQ(ct.classes_[0].member_bits_, 0u);
   EXPECT_EQ(ct.classes_[1].member_bits_, static_cast<uint64_t>(1) << 0);
   EXPECT_EQ(ct.referenced_mask_, static_cast<uint64_t>(1) << 0);
+}
+
+// scrum-color-predicate-symmetry AC2: two refs sharing predicate but differing
+// symmetry_ must each resolve to their own bit — the class-table resolver's
+// lookup key includes symmetry (else the second ref would silently inherit
+// the first's bit, cross-contaminating two semantically distinct color
+// classes).
+TEST(BuildColorClassTable, SamePredicateDifferentSymmetryResolvesToOwnBit) {
+  auto scene = MakeScene({ { 1 } });
+  RaypathColorConfig cfg;
+  cfg.classes_.push_back(Class(1.0f, 0.0f, 0.0f, { Ref(0, 1, NoneFilterParam{}, FilterConfig::kSymNone) }));
+  cfg.classes_.push_back(Class(0.0f, 0.0f, 1.0f, { Ref(0, 1, NoneFilterParam{}, FilterConfig::kSymP) }));
+  auto gate = BuildColorGateTable(cfg, scene);
+  auto ct = BuildColorClassTable(cfg, scene, gate);
+  ASSERT_EQ(ct.classes_.size(), 2u);
+  // Each class references a single bit; the two bits are disjoint.
+  EXPECT_EQ(std::bitset<64>(ct.classes_[0].member_bits_).count(), 1u);
+  EXPECT_EQ(std::bitset<64>(ct.classes_[1].member_bits_).count(), 1u);
+  EXPECT_EQ(ct.classes_[0].member_bits_ & ct.classes_[1].member_bits_, 0u);
+  // referenced_mask is the union.
+  EXPECT_EQ(ct.referenced_mask_, ct.classes_[0].member_bits_ | ct.classes_[1].member_bits_);
 }
 
 // ---- z_order (task-342.2) ----
