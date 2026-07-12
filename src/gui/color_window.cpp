@@ -647,29 +647,34 @@ void ResetColorClassSignalCacheForTest() {
   local.last_committed_epoch = 0;
 }
 
-// True when the user has configured at least one color class with non-empty
-// match[] AND every such class currently reports no signal. Same-semantics as
-// the per-row warning in RenderColorWindow so the top-bar aggregate pip
-// cannot disagree with the row-level pips.
-bool AllConfiguredColorClassesUnmatched(const GuiState& state, const std::vector<int>& signal_flags) {
-  bool any_configured = false;
+// task-fix-color-window-visibility-consistency: single owner for
+// "composite would be empty right now". Merges the two prior triggers
+// (all-configured-classes-unmatched AND matched-but-hidden) behind one
+// predicate so the Enable-colors checkbox greying + top-bar pip + row-level
+// warning cannot disagree. Return-true iff no configured class is
+// simultaneously matched AND effectively visible. See color_window.hpp
+// docstring for the "unknown index" caveat.
+bool NoVisibleMatchedColorClass(const GuiState& state, const std::vector<int>& signal_flags) {
+  const bool any_solo = AnySolo(state.raypath_color);
+  bool any_configured_known = false;
   for (size_t i = 0; i < state.raypath_color.size(); i++) {
-    if (state.raypath_color[i].match.empty()) {
+    const auto& cls = state.raypath_color[i];
+    if (cls.match.empty()) {
       continue;
     }
     // Out-of-range index means the caller's cache hasn't caught up with
     // state.raypath_color yet (same "we don't know yet" window PollColorClassSignal's
-    // resize(n, 1) models) -- treat as unknown, not as a confirmed no-signal, so it
-    // neither counts toward any_configured nor disqualifies the aggregate.
+    // resize(n, 1) models) -- treat as unknown, so it neither counts toward
+    // any_configured_known nor disqualifies the aggregate.
     if (i >= signal_flags.size()) {
       continue;
     }
-    any_configured = true;
-    if (signal_flags[i] != 0) {
+    any_configured_known = true;
+    if (signal_flags[i] != 0 && EffectiveVisible(cls, any_solo)) {
       return false;
     }
   }
-  return any_configured;
+  return any_configured_known;
 }
 
 void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
@@ -694,7 +699,8 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
   // throttle) and does not race the per-row pip logic that reads
   // `signal_flags[phys]` further down — that logic still sees the same cache.
   const std::vector<int>& signal_flags = RefreshColorClassSignals(state, server);
-  const bool all_unmatched = AllConfiguredColorClassesUnmatched(state, signal_flags);
+  const bool composite_empty = NoVisibleMatchedColorClass(state, signal_flags);
+  const bool any_solo = AnySolo(state.raypath_color);
 
   // Header row: composite mode + import + add + Enable colors (right-aligned).
   RenderCompositeModeCombo(state);
@@ -731,17 +737,17 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
       ImGui::SetCursorPosX(right_edge - w);
     }
     bool checked = state.last_uploaded_as_composite;
-    if (all_unmatched) {
+    if (composite_empty) {
       ImGui::BeginDisabled();
     }
     if (ImGui::Checkbox(label, &checked)) {
       ToggleCompositePreview(state);
     }
-    if (all_unmatched) {
+    if (composite_empty) {
       ImGui::EndDisabled();
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      if (all_unmatched) {
+      if (composite_empty) {
         ImGui::SetTooltip("%s", kColorsDisabledNoMatchTooltip);
       } else {
         ImGui::SetTooltip(
@@ -809,8 +815,12 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
     // Visible / solo — task-list-row-ergonomics ③: the standalone solo column
     // is removed; solo now rides on the eye icon via Alt+click. Plain click
     // toggles `visible`; Alt+click enforces exclusive solo (or clears it).
+    // task-fix-color-window-visibility-consistency: read EffectiveVisible (not
+    // raw `cls.visible`) so a solo'd class hides the eye on peers whose visible
+    // flag stayed true — mirrors compositor GatherActiveClasses:55 so the UI
+    // cannot say "this class is showing" while the composite has excluded it.
     ImGui::SameLine();
-    const char* eye = cls.visible ? ICON_FA_EYE : ICON_FA_EYE_SLASH;
+    const char* eye = EffectiveVisible(cls, any_solo) ? ICON_FA_EYE : ICON_FA_EYE_SLASH;
     if (ImGui::SmallButton(eye)) {
       HandleEyeClick(state.raypath_color, phys, ImGui::GetIO().KeyAlt);
       // T1: display-only (visible/solo) → reconciler routes to need_display_push.

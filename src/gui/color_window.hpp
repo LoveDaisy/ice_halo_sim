@@ -77,24 +77,50 @@ GuiValidationResult ValidateSingleAtomText(const std::string& text);
 // across module boundaries.
 std::vector<int> RefreshColorClassSignals(const GuiState& state, LUMICE_Server* server);
 
-// True when the user has configured at least one color class with non-empty
-// `match[]`, AND every such class currently reports no signal (all warned).
-// Drives the top-bar aggregate warning pip; matches the per-row warning
-// condition in RenderColorWindow (`!match.empty() && signal_flags[phys]==0`)
-// so the two never disagree. Returns false when raypath_color is empty or
-// when every class has empty match[] (nothing to warn about yet). A configured
-// class whose index falls outside `signal_flags` is treated as unknown (not
-// counted either way), not as a confirmed no-signal.
-bool AllConfiguredColorClassesUnmatched(const GuiState& state, const std::vector<int>& signal_flags);
+// task-fix-color-window-visibility-consistency: render-time derived
+// "effective visibility" that mirrors the compositor's per-class participation
+// rule (src/server/component_compositor.cpp GatherActiveClasses:55 —
+// `any_solo ? cls.solo_ : cls.visible_`). Kept as a pure inline helper so the
+// UI (`RenderColorWindow` eye icon, `NoVisibleMatchedColorClass`) cannot drift
+// from the compositor's actual filter without recompiling. Do NOT persist —
+// this is a per-frame derived quantity, never a stored field.
+inline bool AnySolo(const std::vector<ColorClassConfig>& classes) {
+  for (const auto& c : classes) {
+    if (c.solo) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool EffectiveVisible(const ColorClassConfig& cls, bool any_solo) {
+  return any_solo ? cls.solo : cls.visible;
+}
+
+// True when the composite would be empty at this instant — i.e. NO configured
+// class (non-empty `match[]`) is simultaneously matched (`signal_flags[i]!=0`)
+// AND effectively visible (`EffectiveVisible(cls, AnySolo(...))`). Drives the
+// top-bar aggregate warning pip AND the Colors-window Enable-checkbox greying;
+// merges the two prior "empty composite" states (fully unmatched vs. matched
+// but every match hidden) into a single owner. Same signal source as the
+// per-row warning in `RenderColorWindow`. Returns false when raypath_color is
+// empty or when every class has empty match[] (nothing to warn about yet). A
+// configured class whose index falls outside `signal_flags` is treated as
+// unknown (not counted either way), not as a confirmed no-signal.
+bool NoVisibleMatchedColorClass(const GuiState& state, const std::vector<int>& signal_flags);
 
 // task-349.2 Step 3 (#6): shared tooltip text for the disabled "enable colors"
 // controls (top-bar Colored toggle + Colors-window Enable checkbox). Single
 // source so the two indicators cannot drift; kept as a header-scope constant
-// rather than duplicated string literals per plan-review Suggestion 1.
+// rather than duplicated string literals per plan-review Suggestion 1. Wording
+// covers both empty-composite roots: (a) no rays match any class; (b) matches
+// exist but every matching class is currently hidden (visible=false, or solo'd
+// out by another class).
 inline constexpr const char* kColorsDisabledNoMatchTooltip =
-    "No rays currently match any color class -- the composite would be empty.\n"
-    "The class predicates may be blocked by a physical filter, or the last run\n"
-    "produced no matching data. Re-run or adjust the color classes.";
+    "No visible color class currently matches any rays -- the composite would be empty.\n"
+    "Either no rays match any configured class (a physical filter may be blocking them,\n"
+    "or the last run produced no matching data), or every matching class is currently\n"
+    "hidden. Re-run, adjust the color classes, or make a matching class visible.";
 
 // ---------------------------------------------------------------------------
 // Exported for gui_test only — do not call from production code. Production

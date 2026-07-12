@@ -326,7 +326,12 @@ void RenderTopBar(float window_width) {
     // re-swap the token set).
     const bool composite_now = g_state.last_uploaded_as_composite;
     const std::vector<int>& signal_flags = RefreshColorClassSignals(g_state, g_server);
-    const bool all_unmatched = AllConfiguredColorClassesUnmatched(g_state, signal_flags);
+    // task-fix-color-window-visibility-consistency: merged "composite would be
+    // empty" predicate covers both prior triggers — no rays match, OR every
+    // matching class is currently hidden (visible=false, or solo'd out by
+    // another class). Single owner shared with the Colors-window Enable
+    // checkbox so the two indicators cannot disagree.
+    const bool composite_empty = NoVisibleMatchedColorClass(g_state, signal_flags);
     const char* mode_label = composite_now ? "Colored" : "Full Spectrum";
     const std::string checkbox_id = std::string(mode_label) + "##CompositePreviewToggle";
     bool checked = composite_now;
@@ -335,13 +340,13 @@ void RenderTopBar(float window_width) {
       ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.45f, 0.65f, 0.95f, 1.0f));
       ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
     }
-    if (all_unmatched) {
+    if (composite_empty) {
       ImGui::BeginDisabled();
     }
     if (ImGui::Checkbox(checkbox_id.c_str(), &checked)) {
       ToggleCompositePreview(g_state);
     }
-    if (all_unmatched) {
+    if (composite_empty) {
       ImGui::EndDisabled();
     }
     if (composite_now) {
@@ -352,7 +357,7 @@ void RenderTopBar(float window_width) {
     // "no matches" reason (a12: shared string with the Colors-window mirror);
     // when enabled, show the existing "Currently: Colored / Full Spectrum" hint.
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      if (all_unmatched) {
+      if (composite_empty) {
         ImGui::SetTooltip("%s", kColorsDisabledNoMatchTooltip);
       } else {
         ImGui::SetTooltip(
@@ -372,18 +377,19 @@ void RenderTopBar(float window_width) {
     // no class has non-empty match[] (matches per-row semantics).
     //
     // task-349.2 Step 3: the pip stays alongside the disabled button (both driven
-    // by all_unmatched) — the two indicators are complementary, not redundant:
+    // by composite_empty) — the two indicators are complementary, not redundant:
     // the button greying is the immediate visual cue "cannot toggle now", the
     // pip is the persistent per-row / aggregate warning surface.
-    if (all_unmatched) {
+    if (composite_empty) {
       ImGui::SameLine();
       ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.2f, 1.0f));
       ImGui::TextUnformatted(ICON_FA_TRIANGLE_EXCLAMATION);
       ImGui::PopStyleColor();
       if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(
-            "None of the color classes matched any rays (they may be blocked by a physical filter).\n"
-            "Open the Colors window to inspect per-class details.");
+            "No visible color class currently matches any rays -- the composite would be empty.\n"
+            "Either no rays match (they may be blocked by a physical filter), or every matching\n"
+            "class is currently hidden. Open the Colors window to inspect per-class details.");
       }
     }
   }

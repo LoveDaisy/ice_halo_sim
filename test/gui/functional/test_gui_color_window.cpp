@@ -503,16 +503,16 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
   // user has configured at least one class with non-empty match[] AND every
   // such class currently reports no signal.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "all_configured_unmatched_returns_false_when_empty_pool");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "no_visible_matched_returns_false_when_empty_pool");
     t->TestFunc = [](ImGuiTestContext*) {
       ResetTestState();
       std::vector<int> flags;
-      IM_CHECK(!gui::AllConfiguredColorClassesUnmatched(gui::g_state, flags));
+      IM_CHECK(!gui::NoVisibleMatchedColorClass(gui::g_state, flags));
     };
   }
   {
     ImGuiTest* t =
-        IM_REGISTER_TEST(engine, "color_window", "all_configured_unmatched_returns_false_when_no_match_configured");
+        IM_REGISTER_TEST(engine, "color_window", "no_visible_matched_returns_false_when_no_match_configured");
     t->TestFunc = [](ImGuiTestContext*) {
       ResetTestState();
       // Two classes, both with empty match[] (user added them but hasn't wired refs yet).
@@ -521,12 +521,12 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       gui::g_state.raypath_color.push_back(c);
       std::vector<int> flags = { 0, 0 };
       // No configured refs anywhere ⇒ nothing to warn about, top bar stays quiet.
-      IM_CHECK(!gui::AllConfiguredColorClassesUnmatched(gui::g_state, flags));
+      IM_CHECK(!gui::NoVisibleMatchedColorClass(gui::g_state, flags));
     };
   }
   {
     ImGuiTest* t =
-        IM_REGISTER_TEST(engine, "color_window", "all_configured_unmatched_true_when_every_configured_class_is_zero");
+        IM_REGISTER_TEST(engine, "color_window", "no_visible_matched_true_when_every_configured_class_is_zero");
     t->TestFunc = [](ImGuiTestContext*) {
       ResetTestState();
       gui::ColorClassConfig c;
@@ -535,12 +535,12 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       gui::g_state.raypath_color.push_back(c);
       gui::g_state.raypath_color.push_back(c);
       std::vector<int> flags = { 0, 0 };
-      IM_CHECK(gui::AllConfiguredColorClassesUnmatched(gui::g_state, flags));
+      IM_CHECK(gui::NoVisibleMatchedColorClass(gui::g_state, flags));
     };
   }
   {
     ImGuiTest* t =
-        IM_REGISTER_TEST(engine, "color_window", "all_configured_unmatched_false_when_any_configured_class_has_signal");
+        IM_REGISTER_TEST(engine, "color_window", "no_visible_matched_false_when_any_configured_class_has_signal");
     t->TestFunc = [](ImGuiTestContext*) {
       ResetTestState();
       gui::ColorClassConfig c;
@@ -549,14 +549,14 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       gui::g_state.raypath_color.push_back(c);
       gui::g_state.raypath_color.push_back(c);
       std::vector<int> flags = { 0, 1 };
-      IM_CHECK(!gui::AllConfiguredColorClassesUnmatched(gui::g_state, flags));
+      IM_CHECK(!gui::NoVisibleMatchedColorClass(gui::g_state, flags));
     };
   }
   {
     // Mixed pool: class[0] configured but silent, class[1] empty match. The
     // top-bar warning should fire (class[0] alone is enough — class[1] adds
     // nothing to warn about since it has no configured refs).
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "all_configured_unmatched_ignores_empty_match_classes");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "no_visible_matched_ignores_empty_match_classes");
     t->TestFunc = [](ImGuiTestContext*) {
       ResetTestState();
       gui::ColorClassConfig configured;
@@ -566,7 +566,7 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       gui::g_state.raypath_color.push_back(configured);
       gui::g_state.raypath_color.push_back(empty_cls);
       std::vector<int> flags = { 0, 0 };
-      IM_CHECK(gui::AllConfiguredColorClassesUnmatched(gui::g_state, flags));
+      IM_CHECK(gui::NoVisibleMatchedColorClass(gui::g_state, flags));
     };
   }
 
@@ -579,8 +579,7 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
   // warning, so this would have returned true (false-positive warn). Post-fix
   // it must return false — there is no known data, so nothing to warn about yet.
   {
-    ImGuiTest* t =
-        IM_REGISTER_TEST(engine, "color_window", "all_configured_unmatched_treats_out_of_range_index_as_unknown");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "no_visible_matched_treats_out_of_range_index_as_unknown");
     t->TestFunc = [](ImGuiTestContext*) {
       ResetTestState();
       gui::ColorClassConfig configured;
@@ -588,7 +587,7 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       configured.match.push_back(r);
       gui::g_state.raypath_color.push_back(configured);
       std::vector<int> flags;  // empty: index 0 is out of range
-      IM_CHECK(!gui::AllConfiguredColorClassesUnmatched(gui::g_state, flags));
+      IM_CHECK(!gui::NoVisibleMatchedColorClass(gui::g_state, flags));
     };
   }
   // A genuinely known no-signal class must still trigger the warning even when a
@@ -596,7 +595,7 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
   // over-correct into "any unknown entry suppresses the whole aggregate".
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window",
-                                    "all_configured_unmatched_true_when_known_entry_unmatched_despite_unknown_peer");
+                                    "no_visible_matched_true_when_known_entry_unmatched_despite_unknown_peer");
     t->TestFunc = [](ImGuiTestContext*) {
       ResetTestState();
       gui::ColorClassConfig configured;
@@ -605,7 +604,7 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       gui::g_state.raypath_color.push_back(configured);
       gui::g_state.raypath_color.push_back(configured);
       std::vector<int> flags = { 0 };  // index 0 known + unmatched; index 1 out of range (unknown)
-      IM_CHECK(gui::AllConfiguredColorClassesUnmatched(gui::g_state, flags));
+      IM_CHECK(gui::NoVisibleMatchedColorClass(gui::g_state, flags));
     };
   }
 
@@ -939,7 +938,7 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
   // classes with matches, the top-bar Colored button + Colors-window "Enable
   // colors" checkbox must NOT be BeginDisabled(). This is the "wiring is
   // present" check — 7 pure unit tests above already cover the predicate
-  // `AllConfiguredColorClassesUnmatched`; here we drive the real UI with a
+  // `NoVisibleMatchedColorClass`; here we drive the real UI with a
   // configured class + non-empty signal and confirm the two controls stay
   // enabled. The complementary "predicate=true → disabled" state depends on
   // driving the internal 500 ms signal cache to zeros, which requires a real
