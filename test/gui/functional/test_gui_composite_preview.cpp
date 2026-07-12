@@ -1537,6 +1537,17 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     // Stop() drains any in-flight PollOnce(); the next PushDisplayState() re-wakes the poller,
     // so no display-time behavior is lost. AC2 memcmp==0 is preserved; AC4 zero core/config is
     // preserved (test-only fix).
+    //
+    // code-review round-1 Major (mechanism cross-check, see progress.md DECISION): this Stop()
+    // only serializes ServerImpl::DoSnapshot()/cached_composite_results_ — it is unrelated to
+    // g_server_poller's separate published_/staged-snapshot pipeline (StorePublished/LoadSnapshot,
+    // consumed by SyncFromPoller/g_preview) that the "ServerPoller.Stop[] only pauses, doesn't
+    // clear published snapshot" trap in flaky-and-determinism-testing.md actually concerns. This
+    // test reads composites via the C API (LUMICE_GetCompositeResults) directly, never through
+    // LoadSnapshot(), so that trap's failure mode cannot manifest here. Leaving the poller paused
+    // at test end until the next PushDisplayState wakes it is also the same convention already
+    // used at every other test's teardown in this file (see the sibling g_server_poller.Stop()
+    // call sites above and below), so this is not a new cross-test risk.
     auto ReadComposite = [&](std::vector<uint8_t>& out) {
       gui::g_server_poller.Stop();
       LUMICE_RenderResult r[LUMICE_MAX_RENDER_RESULTS + 1]{};
