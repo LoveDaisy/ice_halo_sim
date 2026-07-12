@@ -29,6 +29,13 @@ struct RaypathColorRef {
   IdType layer_ = 0;
   IdType crystal_ = kInvalidId;
   SimpleFilterParam predicate_ = NoneFilterParam{};
+  // P/B/D bitmask (reuses FilterConfig::kSymP/kSymB/kSymD/kSymNone). Default
+  // kSymNone matches literal single-orientation predicate (pre-symmetry
+  // behaviour). Non-default values make the CPU color pass symmetry-aware:
+  // the predicate matches the entire orbit under the encoded PBD symmetry
+  // — same semantics as the physical filter's `symmetry` field, evaluated
+  // via the same `Crystal::ReduceRaypath` / `FilterSpec::Create` pipeline.
+  uint8_t symmetry_ = FilterConfig::kSymNone;
 };
 
 // One color class = an RGB color, a boolean combine over the members, a set of

@@ -101,6 +101,60 @@ TEST(RaypathColorRef, JsonRoundTripEntryExitPredicate) {
   EXPECT_FALSE(rr.exit_.has_value());
 }
 
+// ---- Symmetry field (scrum-color-predicate-symmetry AC4) — default omitted,
+// non-default round-trips via the same P/B/D encoding as FilterConfig.
+
+TEST(RaypathColorRef, JsonRoundTripSymmetryOmittedWhenDefault) {
+  auto original = MakeRef(0, 1);
+  ASSERT_EQ(original.symmetry_, lumice::FilterConfig::kSymNone);
+  nlohmann::json j = original;
+  EXPECT_FALSE(j.contains("symmetry")) << "default kSymNone must be omitted on the wire (AC4)";
+  auto restored = j.get<RaypathColorRef>();
+  EXPECT_EQ(restored.symmetry_, lumice::FilterConfig::kSymNone);
+}
+
+TEST(RaypathColorRef, JsonRoundTripSymmetryNonDefaultPB) {
+  auto original = MakeRef(0, 1);
+  original.symmetry_ = lumice::FilterConfig::kSymP | lumice::FilterConfig::kSymB;
+  nlohmann::json j = original;
+  ASSERT_TRUE(j.contains("symmetry"));
+  EXPECT_EQ(j.at("symmetry").get<std::string>(), "PB") << "encoding must match FilterConfig::to_json's P/B/D order";
+  auto restored = j.get<RaypathColorRef>();
+  EXPECT_EQ(restored.symmetry_, lumice::FilterConfig::kSymP | lumice::FilterConfig::kSymB);
+}
+
+TEST(RaypathColorRef, JsonRoundTripSymmetryAllPBD) {
+  auto original = MakeRef(1, 2);
+  original.symmetry_ = lumice::FilterConfig::kSymP | lumice::FilterConfig::kSymB | lumice::FilterConfig::kSymD;
+  nlohmann::json j = original;
+  EXPECT_EQ(j.at("symmetry").get<std::string>(), "PBD");
+  auto restored = j.get<RaypathColorRef>();
+  EXPECT_EQ(restored.symmetry_,
+            lumice::FilterConfig::kSymP | lumice::FilterConfig::kSymB | lumice::FilterConfig::kSymD);
+}
+
+TEST(RaypathColorRef, JsonRoundTripSymmetryEncodingMatchesFilterConfig) {
+  // Cross-check: the single-source helpers used by both FilterConfig::to_json
+  // and RaypathColorRef::to_json must produce the same P/B/D string encoding
+  // (AC4 anchor — a divergence would mean a user's config could parse under
+  // FilterConfig but not RaypathColorRef or vice versa).
+  uint8_t combos[] = {
+    lumice::FilterConfig::kSymNone,
+    lumice::FilterConfig::kSymP,
+    lumice::FilterConfig::kSymB,
+    lumice::FilterConfig::kSymD,
+    static_cast<uint8_t>(lumice::FilterConfig::kSymP | lumice::FilterConfig::kSymB),
+    static_cast<uint8_t>(lumice::FilterConfig::kSymP | lumice::FilterConfig::kSymD),
+    static_cast<uint8_t>(lumice::FilterConfig::kSymB | lumice::FilterConfig::kSymD),
+    static_cast<uint8_t>(lumice::FilterConfig::kSymP | lumice::FilterConfig::kSymB | lumice::FilterConfig::kSymD),
+  };
+  for (uint8_t sym : combos) {
+    std::string encoded = lumice::FilterSymmetryToString(sym);
+    uint8_t decoded = lumice::FilterSymmetryFromString(encoded);
+    EXPECT_EQ(decoded, sym) << "encoding round-trip failed for symmetry=" << int(sym) << " (" << encoded << ")";
+  }
+}
+
 // ---- SimpleFilterParam publicly exposed JSON round-trip (extracted from
 // FilterConfig so RaypathColorRef and FilterConfig share one wire form).
 

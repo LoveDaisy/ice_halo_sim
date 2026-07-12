@@ -5,12 +5,15 @@
 
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "config/filter_config.hpp"
 #include "core/crystal.hpp"
 #include "core/raypath.hpp"
 
 namespace lumice {
+
+struct ColorGatePlacement;
 
 // RaypathOrbit: canonical representative + membership test under symmetry.
 struct RaypathOrbit {
@@ -87,6 +90,47 @@ class FilterSpec {
   // constructed; derived constructors must not depend on its value.
   FilterConfig::Action action_ = FilterConfig::kFilterIn;
 };
+
+// Owning wrapper around one per-symmetry-group synthetic color FilterSpec, plus
+// the placement-original bit-index map for its OR-summands. Produced by
+// `BuildColorSpecGroups`; consumed by `CollectData` (via the non-owning
+// `ColorSpecGroup` view) to OR component bits into a ray's carried mask on the
+// CPU emit gate.
+//
+// The group split is by `ColorGatePlacement::symmetries_` value: predicates
+// carrying the same P/B/D bitmask share one synthesized `FilterConfig`
+// (`symmetry_ = that value`, one OR-summand per predicate); different symmetry
+// values live in separate groups. Within a group, summand order == the group's
+// predicates' placement-original order, so `bits[k]` recovers the placement's
+// bit index for local summand k without a second lookup.
+struct ColorSpecGroupOwned {
+  std::unique_ptr<FilterSpec> spec;
+  std::vector<uint8_t> bits;  // local summand idx (in this group's ComplexFilterParam) -> global component bit
+};
+
+// Split a ColorGatePlacement into per-symmetry-value groups. Each group becomes
+// one synthetic `ComplexFilterParam` (OR-of-singleton-AND-clauses) wrapped in a
+// `FilterConfig{symmetry_=<group's value>, action_=kFilterIn}` and handed to
+// `FilterSpec::Create` — so the same `Crystal::ReduceRaypath`/`ExpandRaypath`
+// pipeline that runs for a physical filter with `symmetry=X` runs for the color
+// pass with `symmetry=X`, giving the two orbits by construction (a12: no
+// re-implementation of the symmetry match).
+//
+// Group formation uses "first-occurrence-of-symmetry-value" order; within a
+// group, predicate order == placement's original order — so a placement of
+// symmetries [None, P, None, P] yields two groups (None with predicates 0 and
+// 2, then P with predicates 1 and 3) and each summand's `bits` entry maps back
+// to the placement's `bits_[k]`.
+//
+// Empty placement returns an empty vector (AC3 zero-cost path — the caller
+// passes `nullptr` to CollectData when there's nothing to OR).
+//
+// When every ref in `placement` carries the default `kSymNone`, this produces
+// exactly one group containing all predicates in placement order — a
+// bit-for-bit no-op relative to the pre-refactor "single synthesized
+// ComplexFilterParam with kSymNone" call site (AC3).
+std::vector<ColorSpecGroupOwned> BuildColorSpecGroups(const ColorGatePlacement& placement, const Crystal& crystal,
+                                                      const AxisDistribution& axis_dist);
 
 namespace detail {
 // In-place canonicalisation of a raypath byte buffer under (symmetry, sigma_a,

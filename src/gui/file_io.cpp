@@ -1125,8 +1125,10 @@ std::string SerializeCoreConfig(const GuiState& state) {
 static void EmitColorPredicateJson(const LUMICE_ColorPredicate& p, json& out) {
   switch (p.type) {
     case LUMICE_FILTER_TYPE_UNSET:
-      // Match-all: emit no predicate fields.
-      return;
+      // Match-all: no type/raypath/entry_exit fields. Symmetry, if non-default,
+      // is still legal (mirrors c_api.cpp's ColorPredicateFromJson which accepts
+      // UNSET + non-default symmetry as a valid Design-2 state).
+      break;
     case LUMICE_FILTER_TYPE_RAYPATH: {
       out["type"] = "raypath";
       json rp = json::array();
@@ -1134,7 +1136,7 @@ static void EmitColorPredicateJson(const LUMICE_ColorPredicate& p, json& out) {
         rp.push_back(p.raypath[k]);
       }
       out["raypath"] = rp;
-      return;
+      break;
     }
     case LUMICE_FILTER_TYPE_ENTRY_EXIT:
       out["type"] = "entry_exit";
@@ -1150,14 +1152,32 @@ static void EmitColorPredicateJson(const LUMICE_ColorPredicate& p, json& out) {
       if (p.ee_max_len >= 0) {
         out["max_len"] = p.ee_max_len;
       }
-      return;
+      break;
     default:
       // FillColorPredicate never emits NONE / DIRECTION / CRYSTAL / COMPLEX — reaching here
       // means a bug in FillColorPredicate or an out-of-range type. Log loudly; skip the
-      // fields so the class stays match-all-shaped rather than half-serialized.
+      // type/raypath fields so the class stays match-all-shaped rather than half-serialized.
       GUI_LOG_WARNING(
           "[FileIO] EmitColorPredicateJson: unexpected LUMICE_ColorPredicate type {}; emitted as match-all.", p.type);
-      return;
+      break;
+  }
+  // task-356.3 — symmetry is a predicate-level field applying uniformly across
+  // predicate types (matches c_api.cpp ColorPredicateToJson wire form: non-default
+  // emits a "PBD"-subset string; default omitted for backward-compat with pre-v4.9
+  // GUI project files). Literal 1/2/4 kept in sync with c_api.cpp:207
+  // SymmetryBitsToString — no named LUMICE_SYM_* constant in the public header.
+  if (p.symmetry != 0) {
+    std::string sym;
+    if (p.symmetry & 1) {
+      sym += "P";
+    }
+    if (p.symmetry & 2) {
+      sym += "B";
+    }
+    if (p.symmetry & 4) {
+      sym += "D";
+    }
+    out["symmetry"] = sym;
   }
 }
 
@@ -1333,6 +1353,11 @@ std::string FormatColorOverflowLocator(const ColorClassOverflowInfo& overflow) {
 // arbitrary AND/multi-alt goes through combine:all across refs, not inside one predicate).
 static bool FillColorPredicate(LUMICE_ColorPredicate* dst, const ColorClassRefConfig& ref) {
   *dst = LUMICE_ColorPredicate{};
+  // task-356.3 — symmetry bitmask (1=P, 2=B, 4=D). Applies uniformly to all
+  // predicate types (UNSET/RAYPATH/ENTRY_EXIT) so it lives before the type
+  // dispatch. Literal 1/2/4 mirrors src/server/c_api.cpp SymmetryBitsToString
+  // (no named LUMICE_SYM_* constants in the public header today); keep in sync.
+  dst->symmetry = (ref.sym_p ? 1 : 0) | (ref.sym_b ? 2 : 0) | (ref.sym_d ? 4 : 0);
   const std::string trimmed = TrimRaypathSegment(ref.predicate_text);
   if (ref.match_all || trimmed.empty()) {
     dst->type = LUMICE_FILTER_TYPE_UNSET;  // match-all whole-crystal
@@ -2022,6 +2047,15 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
                   continue;
                 }
                 ref.crystal_pool_id = it->second;
+                // task-356.3 — decode per-ref symmetry ("PBD" subset; absent
+                // string means kSymNone). Mirrors the filter/complex-filter
+                // decode blocks above (file_io.cpp:1704-1707).
+                {
+                  const auto sym = jr.value("symmetry", std::string{});
+                  ref.sym_p = sym.find('P') != std::string::npos;
+                  ref.sym_b = sym.find('B') != std::string::npos;
+                  ref.sym_d = sym.find('D') != std::string::npos;
+                }
                 if (!jr.contains("type")) {
                   ref.match_all = true;
                 } else {

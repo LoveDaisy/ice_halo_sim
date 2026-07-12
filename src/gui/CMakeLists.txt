@@ -54,6 +54,7 @@ add_library(lumice_gui_obj OBJECT
     ${PROJ_SRC_DIR}/gui/overlay_labels.cpp
     ${PROJ_SRC_DIR}/gui/server_poller.cpp
     ${PROJ_SRC_DIR}/gui/stb_impl.cpp
+    ${PROJ_SRC_DIR}/gui/symmetry_ui.cpp
     ${PROJ_SRC_DIR}/gui/window_sizing.cpp
     ${FA_TTF_EMBED_CPP}
     ${IMGUI_SOURCES})

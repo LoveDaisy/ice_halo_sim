@@ -200,21 +200,56 @@ static nlohmann::json AxisDistToJson(const LUMICE_AxisDist& d) {
   return j;
 }
 
-// Emit the arm fields of a Color Predicate (task-342.2). Mirrors the raypath / entry_exit /
-// direction / crystal switch in JsonToFilter/ConfigToJson but WITHOUT id/action/symmetry/
-// composition — Design 2 color predicates are single-atom and carry no filter identity. A
-// predicate whose type is LUMICE_FILTER_TYPE_UNSET intentionally emits NO fields at all: the
-// resulting ref JSON is just {"layer", "crystal"}, which core RaypathColorRef::from_json
-// interprets as match-all (whole-crystal color). See lumice.h LUMICE_ColorPredicate for the
-// UNSET-as-match-all rationale.
+// Encode a P/B/D symmetry bitmask (1=P, 2=B, 4=D) as its canonical string form. Single home
+// for the wire encoding shared between LUMICE_FilterParam and LUMICE_ColorPredicate — callers
+// each own their own emit-condition policy (FilterParam emits unconditionally; ColorPredicate
+// emits only when non-default), the helper itself is oblivious to that decision.
+static std::string SymmetryBitsToString(int bits) {
+  std::string sym;
+  if (bits & 1) {
+    sym += "P";
+  }
+  if (bits & 2) {
+    sym += "B";
+  }
+  if (bits & 4) {
+    sym += "D";
+  }
+  return sym;
+}
+
+// Decode a P/B/D symmetry string back into its bitmask. Unknown characters are ignored (same
+// tolerance as the previous inline loops); paired with SymmetryBitsToString above.
+static int SymmetryStringToBits(const std::string& s) {
+  int bits = 0;
+  for (char ch : s) {
+    if (ch == 'P') {
+      bits |= 1;
+    } else if (ch == 'B') {
+      bits |= 2;
+    } else if (ch == 'D') {
+      bits |= 4;
+    }
+  }
+  return bits;
+}
+
+// Emit the arm fields of a Color Predicate (task-342.2, symmetry added task-356.2). Mirrors
+// the raypath / entry_exit / direction / crystal switch in JsonToFilter/ConfigToJson but
+// WITHOUT id/action/composition — Design 2 color predicates are single-atom and carry no
+// filter identity. A predicate whose type is LUMICE_FILTER_TYPE_UNSET intentionally emits NO
+// arm fields at all: the resulting ref JSON is just {"layer", "crystal"} (plus optional
+// "symmetry" if non-default), which core RaypathColorRef::from_json interprets as match-all
+// (whole-crystal color). See lumice.h LUMICE_ColorPredicate for the UNSET-as-match-all
+// rationale.
 static void ColorPredicateToJson(const LUMICE_ColorPredicate& p, nlohmann::json& j) {
   switch (p.type) {
     case LUMICE_FILTER_TYPE_UNSET:
-      // Match-all: emit no predicate fields (wire form for NoneFilterParam default).
-      return;
+      // Match-all: emit no arm fields (wire form for NoneFilterParam default).
+      break;
     case LUMICE_FILTER_TYPE_NONE:
       j["type"] = "none";
-      return;
+      break;
     case LUMICE_FILTER_TYPE_RAYPATH: {
       j["type"] = "raypath";
       nlohmann::json rp = nlohmann::json::array();
@@ -222,7 +257,7 @@ static void ColorPredicateToJson(const LUMICE_ColorPredicate& p, nlohmann::json&
         rp.push_back(p.raypath[k]);
       }
       j["raypath"] = rp;
-      return;
+      break;
     }
     case LUMICE_FILTER_TYPE_ENTRY_EXIT:
       j["type"] = "entry_exit";
@@ -238,21 +273,28 @@ static void ColorPredicateToJson(const LUMICE_ColorPredicate& p, nlohmann::json&
       if (p.ee_max_len >= 0) {
         j["max_len"] = p.ee_max_len;
       }
-      return;
+      break;
     case LUMICE_FILTER_TYPE_DIRECTION:
       j["type"] = "direction";
       j["az"] = p.dir_az;
       j["el"] = p.dir_el;
       j["radii"] = p.dir_radii;
-      return;
+      break;
     case LUMICE_FILTER_TYPE_CRYSTAL:
       j["type"] = "crystal";
       j["crystal_id"] = p.crystal_id;
-      return;
+      break;
     default:
       // COMPLEX and any out-of-range discriminant is unsupported for color predicates.
       throw std::invalid_argument("LUMICE_ColorPredicate.type is invalid for a color predicate: " +
                                   std::to_string(p.type));
+  }
+  // Symmetry is a common field regardless of predicate arm (including match-all). Mirrors
+  // core RaypathColorRef::to_json — emitted ONLY when non-default (kSymNone omitted), which
+  // is DIFFERENT from LUMICE_FilterParam's "always emit (empty when no bits)" convention.
+  // Keeps legacy / no-symmetry wire form byte-identical (AC3).
+  if (p.symmetry != 0) {
+    j["symmetry"] = SymmetryBitsToString(p.symmetry);
   }
 }
 
@@ -382,14 +424,7 @@ nlohmann::json ConfigToJson(const LUMICE_Config& c) {
     // and applies to all arms — do not fold it into the raypath case. Emitted
     // UNCONDITIONALLY (empty string when no bits set) to stay byte-isomorphic with core,
     // whose to_json always writes j["symmetry"] = sym.
-    std::string sym;
-    if (f.symmetry & 1)
-      sym += "P";
-    if (f.symmetry & 2)
-      sym += "B";
-    if (f.symmetry & 4)
-      sym += "D";
-    j["symmetry"] = sym;
+    j["symmetry"] = SymmetryBitsToString(f.symmetry);
     root["filter"].push_back(j);
   }
 
@@ -910,25 +945,16 @@ static LUMICE_ErrorCode JsonToFilter(const nlohmann::json& fj, LUMICE_FilterPara
   }
 
   // Symmetry: common field for all types. "PBD" -> bitmask.
-  f->symmetry = 0;
-  if (fj.contains("symmetry")) {
-    for (char ch : fj.at("symmetry").get<std::string>()) {
-      if (ch == 'P') {
-        f->symmetry |= 1;
-      } else if (ch == 'B') {
-        f->symmetry |= 2;
-      } else if (ch == 'D') {
-        f->symmetry |= 4;
-      }
-    }
-  }
+  f->symmetry = fj.contains("symmetry") ? SymmetryStringToBits(fj.at("symmetry").get<std::string>()) : 0;
   return LUMICE_OK;
 }
 
 // Parse the arm fields of one Color Predicate from JSON, mirroring ColorPredicateToJson.
-// A ref JSON with no "type" key means match-all: sets predicate.type = UNSET and returns OK,
-// which the C-API commit path re-serializes as "no predicate fields on the wire", the same
-// form core RaypathColorRef::from_json treats as NoneFilterParam / whole-crystal.
+// A ref JSON with no "type" key means match-all: sets predicate.type = UNSET, which the
+// C-API commit path re-serializes as "no predicate fields on the wire", the same form
+// core RaypathColorRef::from_json treats as NoneFilterParam / whole-crystal. The `symmetry`
+// key is parsed at the tail and is independent of the arm type — including match-all, where
+// (UNSET + non-default symmetry) is a legal state (task-356.2).
 static LUMICE_ErrorCode JsonToColorPredicate(const nlohmann::json& j, LUMICE_ColorPredicate* p) {
   std::memset(p, 0, sizeof(*p));
   p->ee_entry = -1;
@@ -936,42 +962,44 @@ static LUMICE_ErrorCode JsonToColorPredicate(const nlohmann::json& j, LUMICE_Col
   p->ee_min_len = 1;
   p->ee_max_len = -1;
   if (!j.contains("type")) {
-    p->type = LUMICE_FILTER_TYPE_UNSET;  // match-all
-    return LUMICE_OK;
-  }
-  auto type_str = j.at("type").get<std::string>();
-  if (type_str == "none") {
-    p->type = LUMICE_FILTER_TYPE_NONE;
-  } else if (type_str == "raypath") {
-    p->type = LUMICE_FILTER_TYPE_RAYPATH;
-    if (j.contains("raypath") && j.at("raypath").is_array()) {
-      const auto& rp = j.at("raypath");
-      p->raypath_count = static_cast<int>(rp.size());
-      if (p->raypath_count > LUMICE_MAX_CONFIG_RAYPATH_LEN) {
-        return LUMICE_ERR_INVALID_CONFIG;
-      }
-      for (int k = 0; k < p->raypath_count; k++) {
-        p->raypath[k] = rp[k].get<int>();
-      }
-    }
-  } else if (type_str == "entry_exit") {
-    p->type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
-    p->ee_entry = (j.contains("entry") && !j.at("entry").is_null()) ? j.at("entry").get<int>() : -1;
-    p->ee_exit = (j.contains("exit") && !j.at("exit").is_null()) ? j.at("exit").get<int>() : -1;
-    p->ee_min_len = (j.contains("min_len") && !j.at("min_len").is_null()) ? j.at("min_len").get<int>() : 1;
-    p->ee_max_len = (j.contains("max_len") && !j.at("max_len").is_null()) ? j.at("max_len").get<int>() : -1;
-  } else if (type_str == "direction") {
-    p->type = LUMICE_FILTER_TYPE_DIRECTION;
-    p->dir_az = j.at("az").get<float>();
-    p->dir_el = j.at("el").get<float>();
-    p->dir_radii = j.at("radii").get<float>();
-  } else if (type_str == "crystal") {
-    p->type = LUMICE_FILTER_TYPE_CRYSTAL;
-    p->crystal_id = j.at("crystal_id").get<int>();
+    p->type = LUMICE_FILTER_TYPE_UNSET;  // match-all — falls through to shared symmetry tail.
   } else {
-    // Anything else (including "complex") is not a legal color predicate.
-    return LUMICE_ERR_INVALID_VALUE;
+    auto type_str = j.at("type").get<std::string>();
+    if (type_str == "none") {
+      p->type = LUMICE_FILTER_TYPE_NONE;
+    } else if (type_str == "raypath") {
+      p->type = LUMICE_FILTER_TYPE_RAYPATH;
+      if (j.contains("raypath") && j.at("raypath").is_array()) {
+        const auto& rp = j.at("raypath");
+        p->raypath_count = static_cast<int>(rp.size());
+        if (p->raypath_count > LUMICE_MAX_CONFIG_RAYPATH_LEN) {
+          return LUMICE_ERR_INVALID_CONFIG;
+        }
+        for (int k = 0; k < p->raypath_count; k++) {
+          p->raypath[k] = rp[k].get<int>();
+        }
+      }
+    } else if (type_str == "entry_exit") {
+      p->type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+      p->ee_entry = (j.contains("entry") && !j.at("entry").is_null()) ? j.at("entry").get<int>() : -1;
+      p->ee_exit = (j.contains("exit") && !j.at("exit").is_null()) ? j.at("exit").get<int>() : -1;
+      p->ee_min_len = (j.contains("min_len") && !j.at("min_len").is_null()) ? j.at("min_len").get<int>() : 1;
+      p->ee_max_len = (j.contains("max_len") && !j.at("max_len").is_null()) ? j.at("max_len").get<int>() : -1;
+    } else if (type_str == "direction") {
+      p->type = LUMICE_FILTER_TYPE_DIRECTION;
+      p->dir_az = j.at("az").get<float>();
+      p->dir_el = j.at("el").get<float>();
+      p->dir_radii = j.at("radii").get<float>();
+    } else if (type_str == "crystal") {
+      p->type = LUMICE_FILTER_TYPE_CRYSTAL;
+      p->crystal_id = j.at("crystal_id").get<int>();
+    } else {
+      // Anything else (including "complex") is not a legal color predicate.
+      return LUMICE_ERR_INVALID_VALUE;
+    }
   }
+  // Symmetry: common field for all arms (including match-all). Missing key => 0 / kSymNone.
+  p->symmetry = j.contains("symmetry") ? SymmetryStringToBits(j.at("symmetry").get<std::string>()) : 0;
   return LUMICE_OK;
 }
 

@@ -330,8 +330,10 @@ _Static_assert(sizeof(LUMICE_SpectrumEntry) == 2 * sizeof(float),
 // is decoupled from the physical filter. A class has an RGB color + a set of "match" refs;
 // each ref is a placement-scoped predicate {layer, crystal, predicate} that decides which
 // surviving rays get color-tagged. Predicate types are a NARROWED reuse of LUMICE_FilterParam
-// (raypath / entry_exit / direction / crystal / none) — no id, action, symmetry, composition,
-// complex.
+// (raypath / entry_exit / direction / crystal / none) — no id, action, composition, complex.
+// Per-ref symmetry (P/B/D bitmask) is carried as a common field on the predicate (task-356.2,
+// v4.9): matching semantics mirror the physical filter's symmetry (both feed the same
+// Crystal::ReduceRaypath expansion on the core side).
 
 // A predicate is a match rule, not a filter. Field naming mirrors the equivalent arms of
 // LUMICE_FilterParam. type selects the active arm:
@@ -344,7 +346,14 @@ _Static_assert(sizeof(LUMICE_SpectrumEntry) == 2 * sizeof(float),
 //   LUMICE_FILTER_TYPE_{NONE, RAYPATH, ENTRY_EXIT, DIRECTION, CRYSTAL} — same field semantics
 //     as the LUMICE_FilterParam arms; see there.
 //   LUMICE_FILTER_TYPE_COMPLEX is REJECTED (Design 2 color predicates are single-atom).
+//
+// BREAKING (v4.9): added `symmetry` field to LUMICE_ColorPredicate. Layout changed; callers
+// must recompile against this header.
 typedef struct LUMICE_ColorPredicate_ {
+  // Symmetry is a common field for ALL predicate arms (mirrors LUMICE_FilterParam.symmetry /
+  // core RaypathColorRef.symmetry_), not raypath-only. Bitmask: 1=P, 2=B, 4=D; 0=kSymNone
+  // (literal single-orientation match — default, wire-omitted; see RaypathColorRef::to_json).
+  int symmetry;
   int type;  // LUMICE_FILTER_TYPE_* (UNSET=0 means match-all; COMPLEX rejected at commit)
 
   // Raypath arm

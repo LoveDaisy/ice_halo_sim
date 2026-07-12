@@ -17,6 +17,13 @@ void to_json(nlohmann::json& j, const RaypathColorRef& r) {
   if (!std::holds_alternative<NoneFilterParam>(r.predicate_)) {
     to_json(j, r.predicate_);
   }
+  // Symmetry: emit only when non-default (kSymNone) — keeps legacy JSON stable
+  // (unchanged wire form when the color pass is not symmetry-aware) and honours
+  // the AC4 "default omitted" contract. Encoding is shared with FilterConfig's
+  // `symmetry` field via FilterSymmetryToString (single home).
+  if (r.symmetry_ != FilterConfig::kSymNone) {
+    j["symmetry"] = FilterSymmetryToString(r.symmetry_);
+  }
 }
 
 void from_json(const nlohmann::json& j, RaypathColorRef& r) {
@@ -25,6 +32,10 @@ void from_json(const nlohmann::json& j, RaypathColorRef& r) {
   // SimpleFilterParam::from_json treats a missing `type` key as match-all
   // (NoneFilterParam) — matches Design-2's whole-crystal default.
   from_json(j, r.predicate_);
+  r.symmetry_ = FilterConfig::kSymNone;
+  if (j.contains("symmetry")) {
+    r.symmetry_ = FilterSymmetryFromString(j.at("symmetry").get<std::string>());
+  }
 }
 
 void to_json(nlohmann::json& j, const ColorClassConfig& c) {

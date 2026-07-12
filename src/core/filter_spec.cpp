@@ -10,6 +10,7 @@
 #include <variant>
 #include <vector>
 
+#include "config/color_gate_table.hpp"
 #include "config/filter_config.hpp"
 #include "core/crystal.hpp"
 #include "core/def.hpp"
@@ -383,6 +384,58 @@ std::unique_ptr<FilterSpec> FilterSpec::Create(const FilterConfig& config, const
   auto spec = std::visit(TopSpecCreator{ crystal, config.symmetry_, sigma_a, d_applicable }, config.param_);
   spec->action_ = config.action_;
   return spec;
+}
+
+std::vector<ColorSpecGroupOwned> BuildColorSpecGroups(const ColorGatePlacement& placement, const Crystal& crystal,
+                                                      const AxisDistribution& axis_dist) {
+  std::vector<ColorSpecGroupOwned> groups;
+  if (placement.predicates_.empty()) {
+    return groups;  // AC3 zero-cost fast path.
+  }
+  size_t n = placement.predicates_.size();
+  // In-order group formation: first pass records each distinct symmetry value's
+  // group index (first-occurrence order). Second pass populates each group's
+  // ComplexFilterParam with its predicates + parallel bits vector.
+  std::vector<size_t> group_of(n, 0);
+  std::vector<uint8_t> group_symmetry;
+  group_symmetry.reserve(n);
+  for (size_t k = 0; k < n; ++k) {
+    uint8_t sym = placement.symmetries_[k];
+    size_t gi = group_symmetry.size();
+    for (size_t i = 0; i < group_symmetry.size(); ++i) {
+      if (group_symmetry[i] == sym) {
+        gi = i;
+        break;
+      }
+    }
+    if (gi == group_symmetry.size()) {
+      group_symmetry.push_back(sym);
+    }
+    group_of[k] = gi;
+  }
+
+  size_t group_count = group_symmetry.size();
+  std::vector<ComplexFilterParam> cfps(group_count);
+  groups.resize(group_count);
+  for (size_t k = 0; k < n; ++k) {
+    size_t gi = group_of[k];
+    // One OR-summand (single-clause AND-of-1) per predicate — matches the
+    // pre-refactor synthesized shape so ComplexSpec's per-summand mask reports
+    // exactly which predicate matched. Preserves placement-original order
+    // within the group (bits[j] recovers placement's bit for local summand j).
+    cfps[gi].filters_.push_back({ { kInvalidId, placement.predicates_[k] } });
+    groups[gi].bits.push_back(placement.bits_[k]);
+  }
+
+  for (size_t gi = 0; gi < group_count; ++gi) {
+    FilterConfig fc{};
+    fc.id_ = kInvalidId;
+    fc.symmetry_ = group_symmetry[gi];
+    fc.action_ = FilterConfig::kFilterIn;
+    fc.param_ = FilterParam{ cfps[gi] };
+    groups[gi].spec = FilterSpec::Create(fc, crystal, axis_dist);
+  }
+  return groups;
 }
 
 }  // namespace lumice

@@ -2591,6 +2591,42 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK(jr["raypath"].is_array() && jr["raypath"].size() == 2);
       IM_CHECK_EQ(jr["raypath"][0].get<int>(), 3);
       IM_CHECK_EQ(jr["raypath"][1].get<int>(), 5);
+
+      // task-356.3 — default symmetry (kSymNone) MUST omit the "symmetry" key
+      // (backward compat with pre-v4.9 project files that have no such field).
+      IM_CHECK(!jr.contains("symmetry"));
+    };
+  }
+  {
+    // task-356.3 — non-default symmetry surfaces as a "PBD"-subset string, and
+    // the struct-side LUMICE_ColorPredicate.symmetry bitmask matches. Guards
+    // against Emit/Fill divergence and against forgetting to write the field.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_json_symmetry_non_default_pd");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ColorClassConfig cls;
+      cls.color[0] = 0.1f;
+      gui::ColorClassRefConfig ref;
+      ref.crystal_pool_id = 0;
+      ref.match_all = false;
+      ref.predicate_text = "3-5";
+      ref.sym_p = true;
+      ref.sym_d = true;  // sym_b left false — combination is "PD" (bits 1|4 == 5).
+      cls.match.push_back(ref);
+      gui::g_state.raypath_color.push_back(cls);
+
+      // Struct emit carries the bitmask.
+      LUMICE_Config cfg{};
+      lumice::ConfigColorGuard cfg_guard(cfg);
+      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
+      const auto& sp = cfg.raypath_color[0].match[0].predicate;
+      IM_CHECK_EQ(sp.symmetry, 5);  // P|D
+
+      // JSON emit carries the string form.
+      auto j = nlohmann::json::parse(gui::SerializeCoreConfig(gui::g_state));
+      const auto& jr = j["raypath_color"]["classes"][0]["match"][0];
+      IM_CHECK(jr.contains("symmetry"));
+      IM_CHECK_STR_EQ(jr["symmetry"].get<std::string>().c_str(), "PD");
     };
   }
   {
@@ -2729,6 +2765,11 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       ra.crystal_pool_id = 0;
       ra.match_all = false;
       ra.predicate_text = "3-5-1";
+      // task-356.3 — non-default symmetry on ra so the operator== round-trip
+      // below naturally covers the new fields (catches "wrote Emit but forgot
+      // Deserialize" or vice-versa).
+      ra.sym_p = true;
+      ra.sym_b = true;
       cls_a.match.push_back(ra);
 
       gui::ColorClassConfig cls_b;

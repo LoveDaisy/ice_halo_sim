@@ -230,6 +230,88 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // task-356.3 AC1 — per-ref symmetry read/write is a pure struct-field concern
+  // (writes land on ColorClassStructState via the reconciler's frame-tail diff).
+  // These direct-manipulation tests nail down the field independence + the
+  // whole-crystal freeze predicate without needing to drive ImGui.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "ref_symmetry_defaults_and_single_bits");
+    t->TestFunc = [](ImGuiTestContext*) {
+      gui::ColorClassRefConfig ref;
+      // Default: mirrors core RaypathColorRef::symmetry_ = kSymNone. Diverges from
+      // FilterConfig deliberately (see raypath_color_config.hpp:32-38).
+      IM_CHECK(!ref.sym_p);
+      IM_CHECK(!ref.sym_b);
+      IM_CHECK(!ref.sym_d);
+
+      ref.sym_p = true;
+      IM_CHECK(ref.sym_p);
+      IM_CHECK(!ref.sym_b);
+      IM_CHECK(!ref.sym_d);
+
+      gui::ColorClassRefConfig ref_b;
+      ref_b.sym_b = true;
+      IM_CHECK(!ref_b.sym_p);
+      IM_CHECK(ref_b.sym_b);
+      IM_CHECK(!ref_b.sym_d);
+
+      gui::ColorClassRefConfig ref_d;
+      ref_d.sym_d = true;
+      IM_CHECK(!ref_d.sym_p);
+      IM_CHECK(!ref_d.sym_b);
+      IM_CHECK(ref_d.sym_d);
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "ref_symmetry_combination_bits_independent");
+    t->TestFunc = [](ImGuiTestContext*) {
+      gui::ColorClassRefConfig ref;
+      ref.sym_p = true;
+      ref.sym_d = true;
+      IM_CHECK(ref.sym_p);
+      IM_CHECK(!ref.sym_b);
+      IM_CHECK(ref.sym_d);
+      // Clearing one leaves the other untouched.
+      ref.sym_p = false;
+      IM_CHECK(!ref.sym_p);
+      IM_CHECK(ref.sym_d);
+    };
+  }
+  {
+    // operator== must see all three new fields — otherwise the frame-tail
+    // reconciler (gui_state_reconcile.cpp RaypathColorStructChanged) would
+    // silently miss a symmetry edit and never trigger the re-sim path. This
+    // guard exercises each bit independently so a partial addition to
+    // operator== fails here rather than surfacing as a subtle re-sim miss.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "ref_symmetry_operator_eq_covers_all_bits");
+    t->TestFunc = [](ImGuiTestContext*) {
+      gui::ColorClassRefConfig a;
+      gui::ColorClassRefConfig b;
+      IM_CHECK(a == b);
+      b.sym_p = true;
+      IM_CHECK(a != b);
+      b = a;
+      b.sym_b = true;
+      IM_CHECK(a != b);
+      b = a;
+      b.sym_d = true;
+      IM_CHECK(a != b);
+    };
+  }
+  {
+    // Whole-crystal freeze: a match_all ref matches every raypath through the
+    // placement, so per-ref P/B/D is a no-op. UI freezes the checkboxes rather
+    // than clearing them so a subsequent un-whole restores prior selections.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "ref_symmetry_editable_only_when_not_whole");
+    t->TestFunc = [](ImGuiTestContext*) {
+      gui::ColorClassRefConfig ref;
+      ref.match_all = true;
+      IM_CHECK(!gui::IsRefSymmetryEditable(ref));
+      ref.match_all = false;
+      IM_CHECK(gui::IsRefSymmetryEditable(ref));
+    };
+  }
+
   // BuildClassFromFilter — AC5 "Import from filter" backbone. Verifies:
   //   (a) each single-factor SoP row lands as one ref with the same text
   //       (empty → match_all = true; non-empty → predicate_text mirrors);
@@ -998,6 +1080,79 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
 
       // Close the Colors window so the next test's frame does not still show
       // an overlay on top of top-bar controls it needs to click.
+      gui::g_state.color_window_open = false;
+      ctx->Yield(2);
+    };
+  }
+
+  // task-356.3 AC2 — clicking any of P/B/D on a per-ref row must land on the
+  // structural-dirty path (same route as toggling whole / editing predicate
+  // text). The three clicks are asserted independently in a single test so a
+  // regression in any one operator== field surfaces here.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "toggle_pbd_symmetry_via_ui_marks_modified");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Seed one color class with one non-match-all ref so P/B/D are editable
+      // (not BeginDisabled-frozen).
+      gui::ColorClassConfig cls;
+      cls.color[0] = 1.0f;
+      cls.visible = true;
+      gui::ColorClassRefConfig ref;
+      ref.layer_idx = 0;
+      ref.crystal_pool_id = gui::g_state.layers[0].entries[0].crystal_id;
+      ref.match_all = false;
+      ref.predicate_text = "3-5";  // valid single atom so IM_CHECK on state.dirty later
+                                   // reflects OUR symmetry clicks, not a re-edit noise.
+      cls.match.push_back(ref);
+      gui::g_state.raypath_color.push_back(cls);
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
+
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
+      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+      gui::g_state.committed_epoch = 5;
+      gui::g_state.display_epoch_floor = 0;
+      gui::g_state.dirty = false;
+      gui::g_state.color_window_open = true;
+      ctx->Yield(4);
+
+      ctx->ItemOpenAll("//" ICON_FA_PALETTE " Colors");
+      ctx->Yield(2);
+      ctx->SetRef("//" ICON_FA_PALETTE " Colors");
+
+      // Click P. All three symmetry fields are wired identically at the widget
+      // layer, so a single click already exercises the reconciler-dirty path.
+      // The subsequent B/D clicks are the plan-review Minor #3 belt-and-braces
+      // coverage: each bit must independently participate in operator== (else
+      // the reconciler diff would not observe the second/third click as a
+      // change AT ALL).
+      ctx->ItemClick("**/P##color_ref");
+      ctx->Yield(2);
+      IM_CHECK(gui::g_state.raypath_color[0].match[0].sym_p);
+      IM_CHECK(gui::g_state.dirty);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+
+      ctx->ItemClick("**/B##color_ref");
+      ctx->Yield(2);
+      IM_CHECK(gui::g_state.raypath_color[0].match[0].sym_b);
+      IM_CHECK(gui::g_state.dirty);
+
+      ctx->ItemClick("**/D##color_ref");
+      ctx->Yield(2);
+      IM_CHECK(gui::g_state.raypath_color[0].match[0].sym_d);
+      IM_CHECK(gui::g_state.dirty);
+
+      // Symmetry is per-field independent — P and B remain set after clicking D.
+      IM_CHECK(gui::g_state.raypath_color[0].match[0].sym_p);
+      IM_CHECK(gui::g_state.raypath_color[0].match[0].sym_b);
+
+      // Reset ref before probing an absolute-path item, mirroring
+      // toggle_whole_via_ui_marks_modified.
+      ctx->SetRef("");
+      IM_CHECK(ctx->ItemExists("##TopBar/Revert"));
+
       gui::g_state.color_window_open = false;
       ctx->Yield(2);
     };

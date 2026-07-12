@@ -144,6 +144,36 @@ struct FilterParamToJson {
 
 }  // namespace
 
+std::string FilterSymmetryToString(uint8_t symmetry) {
+  std::string sym;
+  if (symmetry & FilterConfig::kSymP) {
+    sym += "P";
+  }
+  if (symmetry & FilterConfig::kSymB) {
+    sym += "B";
+  }
+  if (symmetry & FilterConfig::kSymD) {
+    sym += "D";
+  }
+  return sym;
+}
+
+uint8_t FilterSymmetryFromString(const std::string& s) {
+  uint8_t symmetry = FilterConfig::kSymNone;
+  for (auto c : s) {
+    if (c == 'P') {
+      symmetry |= FilterConfig::kSymP;
+    }
+    if (c == 'B') {
+      symmetry |= FilterConfig::kSymB;
+    }
+    if (c == 'D') {
+      symmetry |= FilterConfig::kSymD;
+    }
+  }
+  return symmetry;
+}
+
 void to_json(nlohmann::json& j, const FilterConfig& f) {
   j["id"] = f.id_;
 
@@ -156,17 +186,7 @@ void to_json(nlohmann::json& j, const FilterConfig& f) {
       break;
   }
 
-  std::string sym;
-  if (f.symmetry_ & FilterConfig::kSymP) {
-    sym += "P";
-  }
-  if (f.symmetry_ & FilterConfig::kSymB) {
-    sym += "B";
-  }
-  if (f.symmetry_ & FilterConfig::kSymD) {
-    sym += "D";
-  }
-  j["symmetry"] = sym;
+  j["symmetry"] = FilterSymmetryToString(f.symmetry_);
 
   std::visit(FilterParamToJson{ j }, f.param_);
 }
@@ -187,19 +207,7 @@ void from_json(const nlohmann::json& j, FilterConfig& f) {
 
   f.symmetry_ = FilterConfig::kSymNone;
   if (j.contains("symmetry")) {
-    // Symmetry
-    auto sym = j.at("symmetry").get<std::string>();
-    for (auto c : sym) {
-      if (c == 'P') {
-        f.symmetry_ |= FilterConfig::kSymP;
-      }
-      if (c == 'B') {
-        f.symmetry_ |= FilterConfig::kSymB;
-      }
-      if (c == 'D') {
-        f.symmetry_ |= FilterConfig::kSymD;
-      }
-    }
+    f.symmetry_ = FilterSymmetryFromString(j.at("symmetry").get<std::string>());
   }
 
   f.action_ = FilterConfig::kFilterIn;
