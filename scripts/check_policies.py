@@ -36,6 +36,13 @@ Checks:
      Closes the "unregistered field silently escapes governance" loophole
      that scrum-gui-state-reconcile T0 (reconcile-foundation) was built to
      prevent (doc/gui-state-governance.md).
+  8. no-msvc-unsafe-builtin — MSVC does not recognise the GCC/Clang
+     `__builtin_popcount*` / `__builtin_ctz*` / `__builtin_clz*` intrinsic
+     families and reports C3861. src/ and test/ must route through
+     `lumice::PopCount` (src/util/bit_utils.hpp) or an equivalent portable
+     implementation. Scope is intentionally narrow: only the popcount/ctz/clz
+     families are pinned (task-popcount-helper), extend the regex when a new
+     MSVC-unsafe `__builtin_*` family surfaces.
 
 Add a new check as a function returning a list of Violation and append it to
 CHECKS. Keep each check deterministic and artifact-inspecting.
@@ -153,6 +160,11 @@ GETENV_LUMICE = re.compile(r'getenv\s*\(\s*"(LUMICE_[A-Z0-9_]+)"')
 # (core|config) keeps it from matching substrings like "score/" or "mycore/".
 GUI_FORBIDDEN_INCLUDE = re.compile(r'#\s*include\s*[<"][^">]*\b(core|config)/')
 USING_NAMESPACE = re.compile(r"\busing\s+namespace\b")
+# `\w*` after the family root absorbs all known length suffixes (`ll`, `l`,
+# `s`, `g`) without enumerating each. Only the popcount/ctz/clz families are
+# pinned: PR#182 was specifically about `__builtin_popcountll`; extend the
+# alternation when a new MSVC-unsafe family surfaces.
+MSVC_UNSAFE_BUILTIN = re.compile(r"\b__builtin_(?:popcount|ctz|clz)\w*")
 
 
 def check_getenv_centralization() -> list[Violation]:
@@ -739,6 +751,39 @@ def check_gui_state_field_tier_registration() -> list[Violation]:
     return out
 
 
+def check_no_msvc_unsafe_builtin() -> list[Violation]:
+    out: list[Violation] = []
+    for path in cxx_sources(SRC):
+        for lineno, _orig, code in code_lines(path):
+            if MSVC_UNSAFE_BUILTIN.search(code):
+                out.append(
+                    Violation(
+                        path,
+                        lineno,
+                        "no-msvc-unsafe-builtin",
+                        "`__builtin_popcount`/`ctz`/`clz` are GCC/Clang-only "
+                        "(MSVC reports C3861); use `lumice::PopCount` "
+                        "(src/util/bit_utils.hpp) or an equivalent portable helper.",
+                    )
+                )
+    test_root = REPO_ROOT / "test"
+    if test_root.exists():
+        for path in cxx_sources(test_root):
+            for lineno, _orig, code in code_lines(path):
+                if MSVC_UNSAFE_BUILTIN.search(code):
+                    out.append(
+                        Violation(
+                            path,
+                            lineno,
+                            "no-msvc-unsafe-builtin",
+                            "`__builtin_popcount`/`ctz`/`clz` are GCC/Clang-only "
+                            "(MSVC reports C3861); use `lumice::PopCount` "
+                            "(src/util/bit_utils.hpp) or an equivalent portable helper.",
+                        )
+                    )
+    return out
+
+
 CHECKS = [
     check_getenv_centralization,
     check_env_knob_registration,
@@ -747,6 +792,7 @@ CHECKS = [
     check_struct_layout_parity,
     check_no_config_by_value_copy,
     check_gui_state_field_tier_registration,
+    check_no_msvc_unsafe_builtin,
 ]
 
 
@@ -769,7 +815,7 @@ def main() -> int:
     print(
         "Policy check passed (env centralization, knob registration, GUI API boundary, "
         "using-namespace, struct-layout parity, no-config-by-value-copy, "
-        "gui-state-field-tier-registration)."
+        "gui-state-field-tier-registration, no-msvc-unsafe-builtin)."
     )
     return 0
 

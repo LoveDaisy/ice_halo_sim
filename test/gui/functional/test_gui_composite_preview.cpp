@@ -1709,6 +1709,13 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     // Void output-param idiom (not a bool-returning lambda): IM_CHECK's failure path is a bare
     // `return;`, which cannot coexist with a non-void lambda return type.
     auto ReadRedBlueSums = [&](unsigned long long& sum_r, unsigned long long& sum_b) {
+      // task-composite-preview-sibling-race: Stop() the global poller so its background
+      // DoSnapshot() cannot race the synchronous LUMICE_GetCompositeResults() call below.
+      // Same Stop()-before-read serialization as ReadComposite() above; see the essay on
+      // that lambda (task-fix-composite-byte-identical-flake) for the full race explanation
+      // — this test has 3 direct composite reads (below at L1726/L1737/L1746) all funneled
+      // through here, so one Stop() at the lambda head covers them all.
+      gui::g_server_poller.Stop();
       LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
       IM_CHECK_EQ(LUMICE_GetCompositeResults(gui::g_server, comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
       IM_CHECK(comp[0].img_buffer != nullptr);
@@ -1809,6 +1816,13 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kDone));
 
     auto ReadRedGreenSums = [&](unsigned long long& sum_r, unsigned long long& sum_g) {
+      // task-composite-preview-sibling-race: Stop() the global poller so its background
+      // DoSnapshot() cannot race the synchronous LUMICE_GetCompositeResults() call below.
+      // Same Stop()-before-read serialization as ReadComposite() above; see the essay on
+      // that lambda (task-fix-composite-byte-identical-flake) for the full race explanation
+      // — this test has 3 direct composite reads (below at L1826/L1835/L1846) all funneled
+      // through here, so one Stop() at the lambda head covers them all.
+      gui::g_server_poller.Stop();
       LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
       IM_CHECK_EQ(LUMICE_GetCompositeResults(gui::g_server, comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
       IM_CHECK(comp[0].img_buffer != nullptr);

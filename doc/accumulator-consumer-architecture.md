@@ -60,7 +60,7 @@ Two concrete implementations:
 
 - **`RenderConsumer`**: projects rays through the lens model, accumulates into
   `internal_xyz_`, snapshots to `snapshot_xyz_`, converts to sRGB in
-  `PostSnapshot()`. Also manages the anchor lane for filter-independent EV.
+  `PostSnapshot()`.
 - **`StatsConsumer`**: counts `total_rays_`, `sim_rays_`, `crystals_`.
 
 Both are held via `shared_ptr<IConsume>` in `ServerImpl::consumers_`.
@@ -129,7 +129,7 @@ State flags:
 
 | Lock | Type | Guards | Writer thread | Reader thread |
 |------|------|--------|---------------|---------------|
-| `consumer_mutex_` | `TicketMutex` (FIFO) | `consumers_` list, all consumer mutable state (`internal_xyz_`, `total_intensity_`, anchor buffers) | `ConsumeData` thread (high frequency) | Poller → `GetRawXyzResults` (low frequency); `CommitConfig` caller (rebuild/reset) |
+| `consumer_mutex_` | `TicketMutex` (FIFO) | `consumers_` list, all consumer mutable state (`internal_xyz_`, `total_intensity_`) | `ConsumeData` thread (high frequency) | Poller → `GetRawXyzResults` (low frequency); `CommitConfig` caller (rebuild/reset) |
 | `snapshot_mutex_` | `std::mutex` | `cached_render_results_`, `cached_stats_result_` | `DoSnapshot` / `GetRawXyzResults` (after snapshot) | `Get*Results` callers |
 
 **Why TicketMutex**: on Windows, `std::mutex` uses SRWLOCK which provides no
@@ -250,25 +250,10 @@ destroying and reconstructing consumers (~0.5ms vs. ~30ms for full rebuild).
 | `snapshot_xyz_` size = `W × H × 3` floats | `render.cpp:325` (constructor) | Same allocation as internal |
 | `snapshot_work_` size = `W × H × 3` floats | `render.cpp:326` (constructor) | Preserves `snapshot_xyz_` during `PostSnapshot` |
 | `snapshot_image_buffer_` size = `W × H × 3` bytes | `render.cpp:327` (constructor) | sRGB output for CLI |
-| Anchor buffers size = `W × H × 3` floats | `render.cpp:506–513` (lazy alloc) | Only allocated on first filter-fail emission |
 | `d_buf_`/`w_buf_`/`xy_buf_`/`overlap_w_buf_` capacity ≥ max(rays, outgoing) | `render.cpp:347–354` | Grow-only; never shrink |
 | `snapshot_xyz_` read-only between `PrepareSnapshot()` calls | `render.cpp:674` (`GetRawXyzResult` returns raw pointer) | Enables lock-free read in Phase 1.5 and result delivery |
 | `snapshot_image_buffer_` valid until next `GetRenderResults`/`CommitConfig` | `server.hpp` (`RenderResult` doc) | Pointer-based result; caller must consume before next snapshot |
 | StatsConsumer snapshot fields zeroed on `Reset()` | `stats.cpp:23–30` | Both accumulation and snapshot counters cleared |
-
-### §6.1 Anchor Buffer Lifecycle
-
-Anchor buffers (`anchor_internal_xyz_`, `anchor_snapshot_xyz_`) follow a lazy
-allocation pattern:
-
-1. **Constructor**: not allocated (null). Zero cost when no filter is configured.
-2. **First filter-fail emission** (`render.cpp:506–513`): allocated at
-   `W × H × 3` floats, matching the main buffer size.
-3. **Reset()**: if allocated, zeroed via `memset` but **not deallocated**.
-   This preserves the allocation across `ResetWith` cycles. If
-   `anchor_internal_xyz_` is null, it stays null — the no-filter zero-cost
-   path is preserved.
-4. **Destruction**: freed with the `RenderConsumer` (unique_ptr).
 
 ---
 
@@ -286,25 +271,31 @@ When a filter spec changes:
 1. `CommitConfig` is called with new config.
 2. `Stop()` drains all threads.
 3. `NeedsRebuild` returns `false` (filter is not in `RenderConfig`).
-4. `ResetWith` resets accumulators (zeros `internal_xyz_`, anchor buffers).
+4. `ResetWith` resets accumulators (zeros `internal_xyz_`).
 5. `Start()` resumes simulation with new scene config (new filter).
-6. New simulation rounds fill `anchor_d_` / `anchor_w_` according to the new
-   filter (ON mode: empty anchor, OFF mode: filter-fail rays populate anchor).
+6. Filter-fail rays terminate in the simulator (`w_ = -1.0f` TIR sentinel) and
+   never reach the consumer — `outgoing_*` only ever carries filter-pass
+   emission (`doc/filter-architecture.md §7`). The accumulator therefore always
+   describes the currently visible (filtered) image; there is no separate
+   filter-independent lane to fill.
 
-### §7.2 Anchor Lane Design
+### §7.2 EV Reference: The Visible Framebuffer, Not a Filter-Independent Lane
 
-The anchor lane accumulates filter-fail emission to provide a
-filter-independent EV reference. Key properties:
+**Note (scrum-237, 2026-05-28)**: an earlier design accumulated filter-fail
+emission into a separate "anchor lane" (`anchor_internal_xyz_` /
+`anchor_snapshot_xyz_`) to provide a filter-independent EV reference. That
+lane was removed — filter-fail rays now terminate immediately in
+`CollectData` and never reach the consumer at all (`doc/filter-architecture.md
+§7`).
 
-- **ON mode** (filter active): `anchor_d_`/`anchor_w_` from simulator carry
-  filter-fail rays → accumulated into `anchor_internal_xyz_`.
-- **OFF mode** (no filter): simulator produces no filter-fail rays →
-  `anchor_d_` stays empty → anchor buffers remain null (zero cost).
-- **At snapshot time**: combined emission = filter-pass (`snapshot_xyz_`) +
-  filter-fail (`anchor_snapshot_xyz_`), yielding filter-independent total
-  intensity and P99.5 Y for stable EV anchoring across filter toggles.
+Under the current design (Design A) there is no separate filter-independent
+statistic — the EV always anchors on the visible (filtered) framebuffer:
+`snapshot_xyz_`, its P99 anchor, and `snapshot_intensity` all describe exactly
+what filter-pass emission produced. Switching filters changes the EV anchor
+because the visible image changed; this is intentional.
 
-See `doc/ev-pipeline-architecture.md §2` for the full EV data flow.
+See `doc/ev-pipeline-architecture.md §5` for the full before/after rationale
+and `§2` for the EV data flow.
 
 ---
 
