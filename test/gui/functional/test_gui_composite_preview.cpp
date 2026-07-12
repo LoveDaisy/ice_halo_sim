@@ -1521,7 +1521,24 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
       s.last_pushed_display_state = std::move(dsb);
     };
 
+    // task-fix-composite-byte-identical-flake: pause the global poller so its background
+    // DoSnapshot() cannot race the synchronous LUMICE_GetCompositeResults() call below. Each
+    // preceding PushDisplayState() calls g_server_poller.WakeForRefresh(server) — that starts
+    // the worker's PollOnce() → DoSnapshot() on another thread. Without this Stop(), the poller
+    // can (a) Phase-1 the just-pushed display state (clearing snapshot_dirty_) BEFORE T's
+    // GetCompositeResults sees it, then be still inside Phase-2 when T reads cached_composite_
+    // results_ — so T returns a stale composite from a prior iteration, and the reset_check
+    // memcmp below fires with ~40% probability under real timing (0% under --fixed-dt, whose
+    // frame-scheduling coincidence keeps T ahead of the poller). The C API is contractually
+    // single-caller; this test happens to have two (T + the process-global poller), which is
+    // the source of the race — NOT a production bug (production only has the poller call site
+    // reading composites, and the poller consumes its own DoSnapshot output coherently).
+    //
+    // Stop() drains any in-flight PollOnce(); the next PushDisplayState() re-wakes the poller,
+    // so no display-time behavior is lost. AC2 memcmp==0 is preserved; AC4 zero core/config is
+    // preserved (test-only fix).
     auto ReadComposite = [&](std::vector<uint8_t>& out) {
+      gui::g_server_poller.Stop();
       LUMICE_RenderResult r[LUMICE_MAX_RENDER_RESULTS + 1]{};
       IM_CHECK_EQ(LUMICE_GetCompositeResults(server, r, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
       IM_CHECK(r[0].img_buffer != nullptr);
