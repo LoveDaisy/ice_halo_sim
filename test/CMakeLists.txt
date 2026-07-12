@@ -62,6 +62,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/util/test_queue.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/util/test_threading_pool.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/util/test_cpu_info.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/util/test_bit_utils.cpp"
   # gui/
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_axis_presets.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_slider_mapping.cpp"

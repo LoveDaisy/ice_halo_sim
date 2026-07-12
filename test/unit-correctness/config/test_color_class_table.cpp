@@ -17,7 +17,6 @@
 
 #include <gtest/gtest.h>
 
-#include <bitset>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -29,6 +28,7 @@
 #include "config/proj_config.hpp"
 #include "config/raypath_color_config.hpp"
 #include "core/def.hpp"
+#include "util/bit_utils.hpp"
 
 namespace {
 
@@ -46,6 +46,7 @@ using lumice::IdType;
 using lumice::MsInfo;
 using lumice::NeedsRebuild;
 using lumice::NoneFilterParam;
+using lumice::PopCount;
 using lumice::RaypathColorConfig;
 using lumice::RaypathColorRef;
 using lumice::ScatteringSetting;
@@ -146,7 +147,7 @@ TEST(BuildColorClassTable, CrossLayerAllBitsAreDistinct) {
   ASSERT_EQ(ct.classes_.size(), 1u);
   EXPECT_EQ(ct.classes_[0].combine_, ColorClassCombine::kAll);
   uint64_t bits = ct.classes_[0].member_bits_;
-  EXPECT_EQ(std::bitset<64>(bits).count(), 2u);
+  EXPECT_EQ(static_cast<size_t>(PopCount(bits)), 2u);
   EXPECT_EQ(bits, (static_cast<uint64_t>(1) << 0) | (static_cast<uint64_t>(1) << 1));
 }
 
@@ -218,7 +219,7 @@ TEST(BuildColorClassTable, KNoBitOverflowClassRetainedWithZeroBits) {
   EXPECT_NO_THROW(ct = BuildColorClassTable(cfg, scene, gate));
   ASSERT_EQ(ct.classes_.size(), 1u);
   // 64 real bits + 1 skipped kNoBit — member_bits_ has 64 bits set.
-  EXPECT_EQ(std::bitset<64>(ct.classes_[0].member_bits_).count(), ComponentTable::kMaxBits);
+  EXPECT_EQ(static_cast<size_t>(PopCount(ct.classes_[0].member_bits_)), ComponentTable::kMaxBits);
 }
 
 // ---- explicit empty match → class retained with 0 bits ----
@@ -250,8 +251,8 @@ TEST(BuildColorClassTable, SamePredicateDifferentSymmetryResolvesToOwnBit) {
   auto ct = BuildColorClassTable(cfg, scene, gate);
   ASSERT_EQ(ct.classes_.size(), 2u);
   // Each class references a single bit; the two bits are disjoint.
-  EXPECT_EQ(std::bitset<64>(ct.classes_[0].member_bits_).count(), 1u);
-  EXPECT_EQ(std::bitset<64>(ct.classes_[1].member_bits_).count(), 1u);
+  EXPECT_EQ(static_cast<size_t>(PopCount(ct.classes_[0].member_bits_)), 1u);
+  EXPECT_EQ(static_cast<size_t>(PopCount(ct.classes_[1].member_bits_)), 1u);
   EXPECT_EQ(ct.classes_[0].member_bits_ & ct.classes_[1].member_bits_, 0u);
   // referenced_mask is the union.
   EXPECT_EQ(ct.referenced_mask_, ct.classes_[0].member_bits_ | ct.classes_[1].member_bits_);
