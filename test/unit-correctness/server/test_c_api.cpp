@@ -2378,6 +2378,22 @@ std::string MakeColorSimConfigJson() {
   return FullConfigWithRaypathColorJson(rc);
 }
 
+// AC1 sibling of MakeColorSimConfigJson: same shape but class1's entry_exit ref carries
+// symmetry="P". If either commit path drops the symmetry bit during struct<->JSON round-trip,
+// the two composites diverge — this is the pixel-level AC1 pin for the new field.
+std::string MakeColorSimConfigWithSymmetryJson() {
+  nlohmann::json rc;
+  rc["mode"] = "dominant";
+  nlohmann::json c0 = ColorClassJson({ 1.0f, 0.0f, 0.0f }, nlohmann::json::array({ ColorRefJson(0, 1) }));
+  nlohmann::json r1 = ColorRefJson(0, 1);
+  r1["type"] = "entry_exit";
+  r1["min_len"] = 3;
+  r1["symmetry"] = "P";  // non-default: prism symmetry expansion for the entry_exit predicate
+  nlohmann::json c1 = ColorClassJson({ 0.0f, 1.0f, 0.0f }, nlohmann::json::array({ r1 }));
+  rc["classes"] = nlohmann::json::array({ c0, c1 });
+  return FullConfigWithRaypathColorJson(rc);
+}
+
 }  // namespace
 
 // ---- Emit shape (StructColorClassEmit) ----
@@ -2542,6 +2558,69 @@ TEST(StructColorClassEmit, ModeAdditiveAndPainterEmitted) {
   }
 }
 
+// task-356.2: symmetry emit — single bit, combined bits, match-all + symmetry, default omission.
+TEST(StructColorClassEmit, SymmetrySingleBitEmitted) {
+  LUMICE_ColorClass cls = MakeWholeCrystalClass();
+  cls.match[0].predicate.type = LUMICE_FILTER_TYPE_RAYPATH;
+  cls.match[0].predicate.raypath_count = 1;
+  cls.match[0].predicate.raypath[0] = 3;
+  cls.match[0].predicate.symmetry = 1;  // P
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneColorClassConfig(&config, cls);
+  auto root = ConfigToJson(config);
+  const auto& ref = EmitFirstColorClass(root).at("match").at(0);
+  EXPECT_EQ(JsonKeySet(ref), (std::set<std::string>{ "layer", "crystal", "type", "raypath", "symmetry" }));
+  EXPECT_EQ(ref.at("symmetry").get<std::string>(), "P");
+}
+
+TEST(StructColorClassEmit, SymmetryCombinedBitsEmitted) {
+  LUMICE_ColorClass cls = MakeWholeCrystalClass();
+  cls.match[0].predicate.type = LUMICE_FILTER_TYPE_CRYSTAL;
+  cls.match[0].predicate.crystal_id = 1;
+  cls.match[0].predicate.symmetry = 1 | 2 | 4;  // PBD
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneColorClassConfig(&config, cls);
+  auto root = ConfigToJson(config);
+  const auto& ref = EmitFirstColorClass(root).at("match").at(0);
+  EXPECT_EQ(ref.at("symmetry").get<std::string>(), "PBD");
+}
+
+TEST(StructColorClassEmit, SymmetryWithMatchAll) {
+  // Match-all (UNSET) + non-default symmetry: legal state — arm fields omitted, symmetry emitted.
+  // Direct pin on the Step 3 emit refactor (each arm's early `return` became `break` so the
+  // shared symmetry-emit tail is reached from UNSET too).
+  LUMICE_ColorClass cls = MakeWholeCrystalClass();
+  cls.match[0].predicate.type = LUMICE_FILTER_TYPE_UNSET;
+  cls.match[0].predicate.symmetry = 2;  // B
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneColorClassConfig(&config, cls);
+  auto root = ConfigToJson(config);
+  const auto& ref = EmitFirstColorClass(root).at("match").at(0);
+  EXPECT_EQ(JsonKeySet(ref), (std::set<std::string>{ "layer", "crystal", "symmetry" }));
+  EXPECT_EQ(ref.at("symmetry").get<std::string>(), "B");
+}
+
+// AC3 pin: symmetry == 0 must NOT produce a "symmetry" key (byte-identical wire vs pre-v4.9).
+// StructColorClassEmit.MatchAllDefaultOmitsPredicateType covers this for UNSET; here we pin
+// it explicitly for a typed arm (raypath).
+TEST(StructColorClassEmit, SymmetryOmittedWhenDefaultOnTypedArm) {
+  LUMICE_ColorClass cls = MakeWholeCrystalClass();
+  cls.match[0].predicate.type = LUMICE_FILTER_TYPE_RAYPATH;
+  cls.match[0].predicate.raypath_count = 1;
+  cls.match[0].predicate.raypath[0] = 3;
+  // cls.match[0].predicate.symmetry left at 0 (zero-init).
+  LUMICE_Config config{};
+  lumice::ConfigColorGuard config_guard(config);
+  FillOneColorClassConfig(&config, cls);
+  auto root = ConfigToJson(config);
+  const auto& ref = EmitFirstColorClass(root).at("match").at(0);
+  EXPECT_EQ(JsonKeySet(ref), (std::set<std::string>{ "layer", "crystal", "type", "raypath" }));
+  EXPECT_FALSE(ref.contains("symmetry"));
+}
+
 // ---- Emit/parse isomorphism cross-checked against core (StructColorClassEmitIsomorphism) ----
 
 TEST(StructColorClassEmitIsomorphism, RoundTripThroughCore) {
@@ -2553,9 +2632,11 @@ TEST(StructColorClassEmitIsomorphism, RoundTripThroughCore) {
   ee["type"] = "entry_exit";
   ee["min_len"] = 2;
   ee["max_len"] = 2;
+  ee["symmetry"] = "PD";  // task-356.2: cover symmetry survives struct<->JSON via core canonical form
   nlohmann::json rp = ColorRefJson(1, 2);
   rp["type"] = "raypath";
   rp["raypath"] = { 3, 5 };
+  rp["symmetry"] = "B";
   nlohmann::json c1 = ColorClassJson({ 0.0f, 1.0f, 0.0f }, nlohmann::json::array({ ee, rp }));
   c1["combine"] = "all";
   c1["visible"] = false;
@@ -2643,6 +2724,68 @@ TEST(ParseConfigApi, RaypathColorPredicateArms) {
   EXPECT_FLOAT_EQ(m[1].predicate.dir_az, 22.0f);
   EXPECT_EQ(m[2].predicate.type, LUMICE_FILTER_TYPE_CRYSTAL);
   EXPECT_EQ(m[2].predicate.crystal_id, 9);
+}
+
+// task-356.2 AC2 parse side: symmetry parses correctly on every named arm (raypath /
+// entry_exit / direction / crystal) and on match-all (UNSET). Direct pin on Step 3
+// parse refactor — each named arm falls through to the shared symmetry tail.
+TEST(ParseConfigApi, RaypathColorPredicateSymmetryParsed) {
+  nlohmann::json rp = ColorRefJson(0, 1);
+  rp["type"] = "raypath";
+  rp["raypath"] = { 3, 5 };
+  rp["symmetry"] = "PB";  // bits 1|2 = 3
+  nlohmann::json ee = ColorRefJson(0, 1);
+  ee["type"] = "entry_exit";
+  ee["min_len"] = 2;
+  ee["symmetry"] = "P";  // bit 1
+  nlohmann::json dir = ColorRefJson(0, 1);
+  dir["type"] = "direction";
+  dir["az"] = 22.0f;
+  dir["el"] = 33.0f;
+  dir["radii"] = 4.0f;
+  dir["symmetry"] = "B";  // bit 2
+  nlohmann::json cry = ColorRefJson(0, 1);
+  cry["type"] = "crystal";
+  cry["crystal_id"] = 9;
+  cry["symmetry"] = "PBD";  // bits 1|2|4 = 7
+  // Match-all + symmetry (no "type" key, non-default symmetry).
+  nlohmann::json ma = ColorRefJson(0, 1);
+  ma["symmetry"] = "D";  // bit 4
+  nlohmann::json rc =
+      nlohmann::json::array({ ColorClassJson({ 1, 0, 0 }, nlohmann::json::array({ rp, ee, dir, cry, ma })) });
+  LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
+  ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithRaypathColorJson(rc).c_str(), &cfg), LUMICE_OK);
+  ASSERT_EQ(cfg.raypath_color_count, 1);
+  ASSERT_EQ(cfg.raypath_color[0].match_count, 5);
+  const auto& m = cfg.raypath_color[0].match;
+  EXPECT_EQ(m[0].predicate.type, LUMICE_FILTER_TYPE_RAYPATH);
+  EXPECT_EQ(m[0].predicate.symmetry, 3);
+  EXPECT_EQ(m[1].predicate.type, LUMICE_FILTER_TYPE_ENTRY_EXIT);
+  EXPECT_EQ(m[1].predicate.symmetry, 1);
+  EXPECT_EQ(m[2].predicate.type, LUMICE_FILTER_TYPE_DIRECTION);
+  EXPECT_EQ(m[2].predicate.symmetry, 2);
+  EXPECT_EQ(m[3].predicate.type, LUMICE_FILTER_TYPE_CRYSTAL);
+  EXPECT_EQ(m[3].predicate.symmetry, 7);
+  // Match-all (no "type" key) still gets symmetry parsed from the shared tail.
+  EXPECT_EQ(m[4].predicate.type, LUMICE_FILTER_TYPE_UNSET);
+  EXPECT_EQ(m[4].predicate.symmetry, 4);
+}
+
+// task-356.2 AC3 zero-regression: missing "symmetry" key must yield symmetry == 0 on every
+// arm (including match-all). Pins the "default omission" side of the parse round-trip.
+TEST(ParseConfigApi, RaypathColorPredicateSymmetryOmittedDefaultsToZero) {
+  nlohmann::json rp = ColorRefJson(0, 1);
+  rp["type"] = "raypath";
+  rp["raypath"] = { 3, 5 };
+  nlohmann::json ma = ColorRefJson(0, 1);
+  nlohmann::json rc = nlohmann::json::array({ ColorClassJson({ 1, 0, 0 }, nlohmann::json::array({ rp, ma })) });
+  LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
+  ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithRaypathColorJson(rc).c_str(), &cfg), LUMICE_OK);
+  ASSERT_EQ(cfg.raypath_color[0].match_count, 2);
+  EXPECT_EQ(cfg.raypath_color[0].match[0].predicate.symmetry, 0);
+  EXPECT_EQ(cfg.raypath_color[0].match[1].predicate.symmetry, 0);
 }
 
 TEST(ParseConfigApi, RaypathColorComplexPredicateRejected) {
@@ -2742,6 +2885,64 @@ TEST(RaypathColorApi, JsonAndStructCommitPixelEquivalent) {
 
   EXPECT_EQ(std::memcmp(a_px.data(), ob[0].img_buffer, nbytes), 0)
       << "JSON-commit and struct-commit composites must be byte-identical";
+
+  LUMICE_StopServer(a);
+  LUMICE_DestroyServer(a);
+  LUMICE_StopServer(b);
+  LUMICE_DestroyServer(b);
+}
+
+// task-356.2 AC1 (硬约束) with symmetry: same shape as JsonAndStructCommitPixelEquivalent
+// but the entry_exit ref carries symmetry="P". If either commit path drops the symmetry bit,
+// the two composites diverge — pixel-level pin that the new field survives struct<->JSON.
+TEST(RaypathColorApi, JsonAndStructCommitPixelEquivalentWithSymmetry) {
+  const std::string json = MakeColorSimConfigWithSymmetryJson();
+
+  LUMICE_ServerConfig sc{};
+  sc.num_workers = 1;
+  sc.sim_seed = 12345u;
+
+  LUMICE_Server* a = LUMICE_CreateServerEx(&sc);
+  ASSERT_NE(a, nullptr);
+  ASSERT_EQ(LUMICE_CommitConfig(a, json.c_str()), LUMICE_OK);
+  ASSERT_TRUE(WaitForIdle(a, 10000));
+
+  LUMICE_Server* b = LUMICE_CreateServerEx(&sc);
+  ASSERT_NE(b, nullptr);
+  LUMICE_Config cfg{};
+  lumice::ConfigColorGuard cfg_guard(cfg);
+  ASSERT_EQ(LUMICE_ParseConfigString(json.c_str(), &cfg), LUMICE_OK);
+  ASSERT_EQ(cfg.raypath_color_count, 2);
+  // Direct assertion that the struct path carries the symmetry bit (redundant with the
+  // parse-side test but pins this fixture's precondition — a struct with symmetry=0 here
+  // would make the "byte-identical" check vacuous).
+  ASSERT_EQ(cfg.raypath_color[1].match_count, 1);
+  ASSERT_EQ(cfg.raypath_color[1].match[0].predicate.symmetry, 1);  // "P"
+  ASSERT_EQ(LUMICE_CommitConfigStruct(b, &cfg, nullptr), LUMICE_OK);
+  ASSERT_TRUE(WaitForIdle(b, 10000));
+
+  LUMICE_RenderResult oa[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  LUMICE_RenderResult ob[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetCompositeResults(a, oa, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_NE(oa[0].img_buffer, nullptr);
+  const int w = oa[0].img_width;
+  const int h = oa[0].img_height;
+  const size_t nbytes = static_cast<size_t>(w) * static_cast<size_t>(h) * 3;
+  std::vector<uint8_t> a_px(oa[0].img_buffer, oa[0].img_buffer + nbytes);
+
+  ASSERT_EQ(LUMICE_GetCompositeResults(b, ob, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_NE(ob[0].img_buffer, nullptr);
+  ASSERT_EQ(ob[0].img_width, w);
+  ASSERT_EQ(ob[0].img_height, h);
+
+  uint64_t sum = 0;
+  for (uint8_t v : a_px) {
+    sum += v;
+  }
+  EXPECT_GT(sum, 0u) << "composite unexpectedly all-black — equivalence would be vacuous";
+
+  EXPECT_EQ(std::memcmp(a_px.data(), ob[0].img_buffer, nbytes), 0)
+      << "JSON-commit and struct-commit composites must be byte-identical (with symmetry='P')";
 
   LUMICE_StopServer(a);
   LUMICE_DestroyServer(a);
