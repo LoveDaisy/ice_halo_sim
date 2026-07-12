@@ -254,7 +254,7 @@ stateless — no per-ray mutation.
 ### Cross-References
 
 - Raypath face-number encoding and PBD symmetry: `doc/raypath-symmetry.md`
-- Filter routing design (Design A), anchor-lane semantics: `doc/filter-architecture.md §2/§7`
+- Filter routing design (Design A), post-anchor-lane-removal branch table: `doc/filter-architecture.md §2/§7`
 - Filter JSON configuration schema: `doc/configuration.md`
 - Crystal orientation sampling: `doc/crystal-orientation-sampling.md`
 
