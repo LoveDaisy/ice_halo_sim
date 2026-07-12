@@ -1,13 +1,19 @@
 // task-342.3 Steps 5-9: Colors window.
 //
-// Non-modal floating panel driving the GuiState::raypath_color pool. Two write
-// paths keep re-simulation vs. display-only edits decoupled (plan §3 decision 2):
+// Non-modal floating panel driving the GuiState::raypath_color pool. task-color-migration
+// (T1) migrated all edit sites onto the T0 field-tier reconciler pattern: widgets ONLY write
+// GuiState fields; the frame-tail ReconcileGuiEffects (gui_state_reconcile.cpp) diffs
+// live-vs-baseline every frame and routes effects onto their proper channels via
+// ApplyGuiEffects. There are NO `state.MarkStructHardDirty()` / `PushDisplayState(...)` calls in
+// this file's widget code anymore — those are effects, and the reconciler is the sole owner
+// (single-writer discipline, doc/gui-state-governance.md 支柱 2).
 //
-//   Display-time (immediate, no epoch bump)      → LUMICE_SetRaypathColors
-//     color / visible / solo / z_order / composite mode
-//
-//   Structural (dirty→next debounce commit)      → state.MarkFilterDirty()
-//     predicate text / match_all toggle / combine any↔all / add/remove class or ref
+// Routing (which channel a widget mutation lands on) is derived from the ColorClassConfig
+// split introduced in M1:
+//   Structural (re-sim; dirty → next commit): combine/match on ColorClassStructState, plus
+//   vector cardinality (Add/Delete class/ref, Import from filter).
+//   Display-time (no epoch bump / no dirty): color/visible/solo/z_order on
+//   ColorClassDisplayState, plus raypath_color_mode.
 //
 // z_order (display) is strictly decoupled from the physical vector index
 // (plan §3 decision 1). Reordering (up/down buttons) swaps z_order values
@@ -33,12 +39,13 @@
 
 namespace lumice::gui {
 
-namespace {
-
 // Rebuild the display-only arrays that LUMICE_SetRaypathColors consumes and
-// push them to the server. Called on every display-time edit (see write-path
-// table in file header). LUMICE_SetRaypathColors is whole-table — a single
-// row change still forces a full rebuild of classes[]/z_order[].
+// push them to the server. task-color-migration (T1): exported via
+// color_window.hpp so the frame-tail reconciler + DoRun/DoRevert repush
+// discipline can drive it (widgets themselves no longer call this directly —
+// they only write GuiState fields; the reconciler diffs and pushes).
+// LUMICE_SetRaypathColors is whole-table — a single row change still forces a
+// full rebuild of classes[]/z_order[].
 //
 // Returns true on LUMICE_OK; on failure the caller may want to log — we only
 // warn once here rather than pollute the log with a per-frame error stream.
@@ -79,11 +86,16 @@ bool PushDisplayState(const GuiState& state, LUMICE_Server* server) {
   // No epoch bump, no accumulator reset, no sim restart — display-time semantics preserved
   // (322 lifecycle clock decoupling, doc/gui-preview-lifecycle-architecture.md I1–I6).
   //
-  // If the poller is already running (infinite sim / mid-run edit), EnsureRunning is a
-  // zero-overhead no-op (server_poller.hpp).
-  g_server_poller.EnsureRunning(server);
+  // If the poller is already running (infinite sim / mid-run edit), WakeForRefresh is a
+  // zero-overhead no-op (server_poller.hpp). WakeForRefresh (not WakeForRestart) is
+  // mandatory here: display-time refresh must not publish valid=false, else SyncFromPoller
+  // observes an invalid snapshot and ReconcileSimState pulls a completed sim back into
+  // kSimulating — task-color-migration AC1 activity bug root cause (a).
+  g_server_poller.WakeForRefresh(server);
   return true;
 }
+
+namespace {
 
 // Human-readable summary of a class's match[] used for the collapsed row label.
 // Rebuilt from state on every render (a05 减法 — no cache field).
@@ -305,7 +317,9 @@ void PopWarningStyle() {
 
 // -------------------- window body --------------------
 
-void RenderCompositeModeCombo(GuiState& state, LUMICE_Server* server) {
+// T1: no `server` parameter — display push derived by the frame-tail reconciler from the
+// raypath_color_mode diff; this widget only writes the field.
+void RenderCompositeModeCombo(GuiState& state) {
   static const char* const kModeNames[] = { "dominant", "additive", "painter" };
   int mode = state.raypath_color_mode;
   if (mode < 0 || mode >= 3) {
@@ -316,7 +330,6 @@ void RenderCompositeModeCombo(GuiState& state, LUMICE_Server* server) {
   ImGui::PushItemWidth(120);
   if (ImGui::Combo("##ColorMode", &mode, kModeNames, 3)) {
     state.raypath_color_mode = mode;
-    PushDisplayState(state, server);
   }
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip(
@@ -360,7 +373,7 @@ void RenderImportFromFilterUI(GuiState& state) {
         ColorClassConfig new_cls = BuildClassFromFilter(p.layer_idx, p.crystal_pool_id, f, skipped);
         new_cls.z_order = static_cast<int>(state.raypath_color.size());
         state.raypath_color.push_back(new_cls);
-        state.MarkFilterDirty();
+        // T1: structural add (vector cardinality change) → reconciler routes to hard-reset lane.
         if (skipped > 0) {
           char msg[256];
           std::snprintf(msg, sizeof(msg),
@@ -376,7 +389,7 @@ void RenderImportFromFilterUI(GuiState& state) {
   }
 }
 
-// Render one member ref (structural edits go through MarkFilterDirty).
+// Render one member ref (structural edits go through MarkStructHardDirty).
 void RenderRefRow(GuiState& state, ColorClassConfig& cls, size_t ref_idx, bool& delete_this_ref) {
   ImGui::PushID(static_cast<int>(ref_idx));
   auto& ref = cls.match[ref_idx];
@@ -399,7 +412,7 @@ void RenderRefRow(GuiState& state, ColorClassConfig& cls, size_t ref_idx, bool& 
     if (!pools.empty() && std::find(pools.begin(), pools.end(), ref.crystal_pool_id) == pools.end()) {
       ref.crystal_pool_id = pools.front();
     }
-    state.MarkFilterDirty();
+    // T1: structural (ColorClassStructState.match) → reconciler routes to hard-reset lane.
   }
   ImGui::PopItemWidth();
 
@@ -423,7 +436,7 @@ void RenderRefRow(GuiState& state, ColorClassConfig& cls, size_t ref_idx, bool& 
     }
     if (ImGui::Combo("##crystal", &current_choice, crystal_ptrs.data(), static_cast<int>(pools.size()))) {
       ref.crystal_pool_id = pools[static_cast<size_t>(current_choice)];
-      state.MarkFilterDirty();
+      // T1: structural → reconciler.
     }
   } else {
     ImGui::TextDisabled("<no placements>");
@@ -437,7 +450,7 @@ void RenderRefRow(GuiState& state, ColorClassConfig& cls, size_t ref_idx, bool& 
   bool whole = ref.match_all;
   if (ImGui::Checkbox("whole", &whole)) {
     SetRefMatchAll(ref, whole);
-    state.MarkFilterDirty();
+    // T1: structural → reconciler.
   }
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip(
@@ -463,15 +476,19 @@ void RenderRefRow(GuiState& state, ColorClassConfig& cls, size_t ref_idx, bool& 
     ImGui::BeginDisabled();
   }
   if (ImGui::InputText("##pred", buf, sizeof(buf))) {
-    // Only stamp state dirty when the new text also validates OK; keep the
-    // last-good text unchanged on transient invalid input (mirrors the
-    // filter editor convention: preserve the last committed atom rather
-    // than propagate a half-typed line to the next debounce commit).
-    const std::string new_text = buf;
-    const auto v2 = ValidateSingleAtomText(new_text);
-    ref.predicate_text = new_text;  // let the user see what they typed
-    if (v2.state == LUMICE_RAYPATH_VALID) {
-      state.MarkFilterDirty();
+    // T1: reconciler routes any change to `ref.predicate_text` through struct-part diff to
+    // hard-reset (RaypathColorStructChanged in gui_state_reconcile.cpp), unconditionally —
+    // there is no separate imperative MarkStructHardDirty call left to gate on validity the way
+    // the pre-migration code did. So gate the WRITE itself: only commit `buf` into the diffed
+    // field once it validates as a single atom (code-review round-1 Major-2), mirroring the
+    // pre-migration "only MarkStructHardDirty when valid" behavior and avoiding a hard-reset (and
+    // its user-visible flicker) on every keystroke of a transient invalid predicate.
+    // ImGui's InputText keeps its own live edit buffer for an active item — reasserting `buf`
+    // from `ref.predicate_text` at the top of next frame (the std::snprintf above) does not
+    // clobber what the user is mid-typing, so this is safe even while the field stays uncommitted.
+    const std::string typed = std::string(buf);
+    if (ValidateSingleAtomText(typed).state == LUMICE_RAYPATH_VALID) {
+      ref.predicate_text = typed;
     }
   }
   if (ref.match_all) {
@@ -517,6 +534,24 @@ constexpr float kSignalPollIntervalSec = 0.5f;
 struct WindowLocalState {
   std::vector<int> signal_flags;
   float last_poll_time = -1000.0f;
+  // task-cleanup-hardening (S5): cache-invalidation keys. The polled signal_flags
+  // belong to a specific (server, committed_epoch) domain — a backend swap destroys
+  // the old server and mints a fresh one whose committed_epoch resets to 0 (see
+  // GuiState::ResetDisplayGenerationForBackendSwap), and any struct commit bumps
+  // committed_epoch. Carrying the previous domain's flags across such a boundary
+  // would display up to kSignalPollIntervalSec (500 ms) of stale server signal —
+  // visually, a color-class pip claiming "matched" while the new backend has not
+  // yet been polled. RefreshColorClassSignals compares (last_server, last_committed_epoch)
+  // against the current pair and, on any mismatch, forces an immediate re-poll so the
+  // next frame sees fresh flags (AC2).
+  //
+  // Hook rationale (reviewer Minor-2/3): we deliberately do NOT reuse
+  // GuiState::ResetDisplayGenerationForBackendSwap — that owner drives the
+  // display-generation epoch/floor/texture, a different domain from the signal-cache
+  // liveness. Comparing the keys at poll entry keeps the two domains independent and
+  // single-owner per doc/gui-state-governance.md 支柱 2 (per-channel single serializer).
+  LUMICE_Server* last_server = nullptr;
+  uint64_t last_committed_epoch = 0;
 };
 
 WindowLocalState& GetLocalState() {
@@ -564,6 +599,20 @@ void PollColorClassSignal(const GuiState& state, LUMICE_Server* server, std::vec
 std::vector<int> RefreshColorClassSignals(const GuiState& state, LUMICE_Server* server) {
   auto& local = GetLocalState();
   const float now = static_cast<float>(ImGui::GetTime());
+
+  // task-cleanup-hardening (S5): cache-invalidation on backend swap or epoch bump.
+  // A change in (server, committed_epoch) means the flags in cache describe a
+  // domain that no longer exists (destroyed server) or a stale generation (pre-commit
+  // signal). Clear them and force an immediate re-poll so the next display frame
+  // shows the new domain's flags, not the old.
+  const bool domain_changed = (server != local.last_server) || (state.committed_epoch != local.last_committed_epoch);
+  if (domain_changed) {
+    local.signal_flags.clear();
+    local.last_poll_time = -1000.0f;  // force poll below the throttle
+    local.last_server = server;
+    local.last_committed_epoch = state.committed_epoch;
+  }
+
   if (now - local.last_poll_time > kSignalPollIntervalSec) {
     PollColorClassSignal(state, server, local.signal_flags);
     local.last_poll_time = now;
@@ -572,29 +621,60 @@ std::vector<int> RefreshColorClassSignals(const GuiState& state, LUMICE_Server* 
   return local.signal_flags;
 }
 
-// True when the user has configured at least one color class with non-empty
-// match[] AND every such class currently reports no signal. Same-semantics as
-// the per-row warning in RenderColorWindow so the top-bar aggregate pip
-// cannot disagree with the row-level pips.
-bool AllConfiguredColorClassesUnmatched(const GuiState& state, const std::vector<int>& signal_flags) {
-  bool any_configured = false;
+// task-cleanup-hardening S5: test-only accessors (see color_window.hpp).
+void GetColorClassSignalCacheKeysForTest(LUMICE_Server** server_out, uint64_t* epoch_out, size_t* flags_size_out,
+                                         float* last_poll_time_out) {
+  const auto& local = GetLocalState();
+  if (server_out != nullptr) {
+    *server_out = local.last_server;
+  }
+  if (epoch_out != nullptr) {
+    *epoch_out = local.last_committed_epoch;
+  }
+  if (flags_size_out != nullptr) {
+    *flags_size_out = local.signal_flags.size();
+  }
+  if (last_poll_time_out != nullptr) {
+    *last_poll_time_out = local.last_poll_time;
+  }
+}
+
+void ResetColorClassSignalCacheForTest() {
+  auto& local = GetLocalState();
+  local.signal_flags.clear();
+  local.last_poll_time = -1000.0f;
+  local.last_server = nullptr;
+  local.last_committed_epoch = 0;
+}
+
+// task-fix-color-window-visibility-consistency: single owner for
+// "composite would be empty right now". Merges the two prior triggers
+// (all-configured-classes-unmatched AND matched-but-hidden) behind one
+// predicate so the Enable-colors checkbox greying + top-bar pip + row-level
+// warning cannot disagree. Return-true iff no configured class is
+// simultaneously matched AND effectively visible. See color_window.hpp
+// docstring for the "unknown index" caveat.
+bool NoVisibleMatchedColorClass(const GuiState& state, const std::vector<int>& signal_flags) {
+  const bool any_solo = AnySolo(state.raypath_color);
+  bool any_configured_known = false;
   for (size_t i = 0; i < state.raypath_color.size(); i++) {
-    if (state.raypath_color[i].match.empty()) {
+    const auto& cls = state.raypath_color[i];
+    if (cls.match.empty()) {
       continue;
     }
     // Out-of-range index means the caller's cache hasn't caught up with
     // state.raypath_color yet (same "we don't know yet" window PollColorClassSignal's
-    // resize(n, 1) models) -- treat as unknown, not as a confirmed no-signal, so it
-    // neither counts toward any_configured nor disqualifies the aggregate.
+    // resize(n, 1) models) -- treat as unknown, so it neither counts toward
+    // any_configured_known nor disqualifies the aggregate.
     if (i >= signal_flags.size()) {
       continue;
     }
-    any_configured = true;
-    if (signal_flags[i] != 0) {
+    any_configured_known = true;
+    if (signal_flags[i] != 0 && EffectiveVisible(cls, any_solo)) {
       return false;
     }
   }
-  return any_configured;
+  return any_configured_known;
 }
 
 void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
@@ -619,10 +699,11 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
   // throttle) and does not race the per-row pip logic that reads
   // `signal_flags[phys]` further down — that logic still sees the same cache.
   const std::vector<int>& signal_flags = RefreshColorClassSignals(state, server);
-  const bool all_unmatched = AllConfiguredColorClassesUnmatched(state, signal_flags);
+  const bool composite_empty = NoVisibleMatchedColorClass(state, signal_flags);
+  const bool any_solo = AnySolo(state.raypath_color);
 
   // Header row: composite mode + import + add + Enable colors (right-aligned).
-  RenderCompositeModeCombo(state, server);
+  RenderCompositeModeCombo(state);
   ImGui::SameLine();
   RenderImportFromFilterUI(state);
   ImGui::SameLine();
@@ -634,7 +715,7 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
     c.visible = true;
     c.z_order = static_cast<int>(state.raypath_color.size());
     state.raypath_color.push_back(c);
-    state.MarkFilterDirty();
+    // T1: structural cardinality change → reconciler routes to hard-reset lane.
   }
 
   // task-349.3 (#3): "Enable colors" mirrors the top-bar Colored toggle inside
@@ -656,17 +737,17 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
       ImGui::SetCursorPosX(right_edge - w);
     }
     bool checked = state.last_uploaded_as_composite;
-    if (all_unmatched) {
+    if (composite_empty) {
       ImGui::BeginDisabled();
     }
     if (ImGui::Checkbox(label, &checked)) {
       ToggleCompositePreview(state);
     }
-    if (all_unmatched) {
+    if (composite_empty) {
       ImGui::EndDisabled();
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      if (all_unmatched) {
+      if (composite_empty) {
         ImGui::SetTooltip("%s", kColorsDisabledNoMatchTooltip);
       } else {
         ImGui::SetTooltip(
@@ -728,17 +809,21 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
     // Color swatch.
     ImGui::SameLine();
     if (ImGui::ColorEdit3("##color", cls.color, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
-      PushDisplayState(state, server);
+      // T1: display-only (ColorClassDisplayState.color) → reconciler routes to need_display_push.
     }
 
     // Visible / solo — task-list-row-ergonomics ③: the standalone solo column
     // is removed; solo now rides on the eye icon via Alt+click. Plain click
     // toggles `visible`; Alt+click enforces exclusive solo (or clears it).
+    // task-fix-color-window-visibility-consistency: read EffectiveVisible (not
+    // raw `cls.visible`) so a solo'd class hides the eye on peers whose visible
+    // flag stayed true — mirrors compositor GatherActiveClasses:55 so the UI
+    // cannot say "this class is showing" while the composite has excluded it.
     ImGui::SameLine();
-    const char* eye = cls.visible ? ICON_FA_EYE : ICON_FA_EYE_SLASH;
+    const char* eye = EffectiveVisible(cls, any_solo) ? ICON_FA_EYE : ICON_FA_EYE_SLASH;
     if (ImGui::SmallButton(eye)) {
       HandleEyeClick(state.raypath_color, phys, ImGui::GetIO().KeyAlt);
-      PushDisplayState(state, server);
+      // T1: display-only (visible/solo) → reconciler routes to need_display_push.
     }
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip(
@@ -776,7 +861,7 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
       ImGui::PushItemWidth(80);
       if (ImGui::Combo("##combine", &combine_val, kCombineNames, 2)) {
         cls.combine = combine_val;
-        state.MarkFilterDirty();
+        // T1: structural (ColorClassStructState.combine) → reconciler routes to hard-reset.
       }
       if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(
@@ -803,11 +888,11 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
         r.crystal_pool_id = pools.empty() ? 0 : pools.front();
         r.match_all = true;
         cls.match.push_back(r);
-        state.MarkFilterDirty();
+        // T1: structural (match[] append) → reconciler routes to hard-reset lane.
       }
       if (ref_to_delete.has_value()) {
         cls.match.erase(cls.match.begin() + static_cast<std::ptrdiff_t>(*ref_to_delete));
-        state.MarkFilterDirty();
+        // T1: structural → reconciler.
       }
 
       ImGui::TreePop();
@@ -818,12 +903,14 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
 
   if (pending_zswap.has_value()) {
     SwapZOrder(state, pending_zswap->first, pending_zswap->second);
-    PushDisplayState(state, server);
+    // T1: display-only (ColorClassDisplayState.z_order) → reconciler routes to need_display_push.
   }
   if (pending_delete.has_value()) {
     state.raypath_color.erase(state.raypath_color.begin() + static_cast<std::ptrdiff_t>(*pending_delete));
     CompactZOrder(state);
-    state.MarkFilterDirty();
+    // T1: structural (vector cardinality change) → reconciler routes to hard-reset lane.
+    // CompactZOrder is a data-shape maintenance step (keeps z_order a permutation), NOT an
+    // effect — kept in the widget.
   }
 
   ImGui::End();

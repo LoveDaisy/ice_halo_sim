@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -19,6 +20,7 @@
 #include "gui/file_io.hpp"
 #include "gui/gui_ev_auto.hpp"
 #include "gui/gui_logger.hpp"
+#include "gui/gui_state_reconcile.hpp"
 #include "gui/window_sizing.hpp"
 #include "include/lumice_config_scope.hpp"
 #include "util/path_utils.hpp"
@@ -67,6 +69,10 @@ int g_programmatic_resize = 0;
 
 bool g_show_unsaved_popup = false;
 PendingAction g_pending_action = PendingAction::kNone;
+
+// task-cleanup-hardening AC4: Save-modified prompt state.
+bool g_show_save_modified_popup = false;
+PendingSaveKind g_pending_save_kind = PendingSaveKind::kNone;
 
 float ComputeGridStep(float fov) {
   // FOV here is full-angle in degrees (matches RenderConfig::fov / ViewProjection::fov).
@@ -298,7 +304,14 @@ static void RefreshCpuTextureForSave() {
   g_preview.UpdateCpuTextureData(srgb.data(), w, h);
 }
 
-void DoSave() {
+// task-cleanup-hardening AC4: PerformSave / PerformSaveAs are the actual
+// serialization body (existing DoSave/DoSaveAs pre-353.5). DoSave / DoSaveAs
+// now front them with a sim_state == kModified check that opens
+// RenderSaveModifiedPopup; PerformSave / PerformSaveAs are called directly
+// only by that popup's "Save anyway" branch and by DoSave/DoSaveAs' own
+// non-kModified fallthrough below (code-review-01 M1: RenderUnsavedPopup no
+// longer bypasses the gate — it now calls DoSave()/DoSaveAs()).
+void PerformSave() {
   if (g_state.current_file_path.empty()) {
     g_state.current_file_path = ShowSaveDialog();
     if (g_state.current_file_path.empty()) {
@@ -312,7 +325,7 @@ void DoSave() {
   }
 }
 
-void DoSaveAs() {
+void PerformSaveAs() {
   auto path = ShowSaveDialog();
   if (!path.empty()) {
     g_state.current_file_path = path;
@@ -322,6 +335,28 @@ void DoSaveAs() {
       GUI_LOG_INFO("[GUI] DoSaveAs: {}", PathToU8(path));
     }
   }
+}
+
+void DoSave() {
+  // Gate on kModified: the last committed run does not reflect the current
+  // config, so the on-screen preview being about to serialize is a snapshot
+  // of a stale config. Rather than silently freeze it and clear Modified,
+  // prompt: Run first / Save anyway / Cancel.
+  if (g_state.sim_state == GuiState::SimState::kModified) {
+    g_show_save_modified_popup = true;
+    g_pending_save_kind = PendingSaveKind::kSave;
+    return;
+  }
+  PerformSave();
+}
+
+void DoSaveAs() {
+  if (g_state.sim_state == GuiState::SimState::kModified) {
+    g_show_save_modified_popup = true;
+    g_pending_save_kind = PendingSaveKind::kSaveAs;
+    return;
+  }
+  PerformSaveAs();
 }
 
 // Build PreviewParams for export: copy current preview viewport params, but override
@@ -490,6 +525,64 @@ static bool LoadAndUploadBgImage(const std::filesystem::path& path) {
   return true;
 }
 
+void ResetFrontendState(GuiState& state, FrontendResetReason reason, const FrontendTexturePayload* baked) {
+  // reason/payload consistency: baked payload is present iff and only if kOpenBaked.
+  // A caller mismatch is a programming error — assert here so it fails fast in debug builds
+  // instead of silently doing the wrong thing (UB deref if kOpenBaked && baked==nullptr, or
+  // silently ignoring a payload for the other reasons).
+  assert((reason == FrontendResetReason::kOpenBaked) == (baked != nullptr));
+
+  // Every reason invalidates the thumbnail cache: New / Open replace the entire layer/entry
+  // structure; Revert restores it from snapshot — same reason to refresh thumbnails either way.
+  g_thumbnail_cache.OnLayerStructureChanged();
+
+  // Preview texture / background — as-built subset per reason. `.lmc` variants both call
+  // ClearBackground (post-branch shared line in the pre-refactor DoOpen); the DoOpen(.lmc)
+  // handler then does bg_path restore separately (data recovery, not reset).
+  switch (reason) {
+    case FrontendResetReason::kNewDocument:
+    case FrontendResetReason::kOpenLmcBlank:
+    case FrontendResetReason::kOpenJson:
+      g_preview.ClearTexture();
+      g_preview.ClearBackground();
+      break;
+    case FrontendResetReason::kOpenBaked:
+      g_preview.UploadTexture(baked->data, baked->width, baked->height);
+      g_preview.ClearBackground();
+      break;
+    case FrontendResetReason::kRevert:
+      // Revert preserves current preview — it is a config restore, not a document switch.
+      break;
+  }
+
+  // Poller-side staged composite fence: document-switch reasons must discard any in-flight
+  // snapshot from the previous scene (task-351 class regression). Revert keeps current staged.
+  if (reason != FrontendResetReason::kRevert) {
+    g_server_poller.InvalidateStagedTexture();
+  }
+
+  // crystal_mesh_hash reset — as-built: only DoNew clears it (Open branches don't touch it;
+  // edit_modals writes -1 as a distinct "force re-upload" signal, not a "no mesh" reset).
+  if (reason == FrontendResetReason::kNewDocument) {
+    g_crystal_mesh_hash = 0;
+  }
+
+  // Effects-baseline invalidation — as-built: only DoRevert (color-migration §4 M6, plan §1
+  // 偏离 C 修复). Forces the next reconciler tick to re-push the restored display payload so
+  // the server catches up to Revert without further user interaction.
+  if (reason == FrontendResetReason::kRevert) {
+    state.InvalidateEffectsBaselines();
+  }
+
+  // Trackball reset for the modal-preview view — document-switch reasons only. Revert keeps
+  // current trackball pose (config restore, not scene switch).
+  if (reason != FrontendResetReason::kRevert) {
+    if (!state.layers.empty() && !state.layers[0].entries.empty()) {
+      ResetCrystalViewToCrystal(state.crystals[state.layers[0].entries[0].crystal_id]);
+    }
+  }
+}
+
 void DoOpen() {
   DoOpen(ShowOpenDialog());
 }
@@ -511,22 +604,15 @@ void DoOpen(const std::filesystem::path& path) {
     std::string json_str((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     GuiState new_state = InitDefaultState();
     if (DeserializeFromJson(json_str, new_state)) {
+      // Data restore + command-semantic fields (path/dirty/run_intent stay in handler per
+      // plan §2 — they are command intent, not frontend reset).
       g_state = new_state;
       g_state.current_file_path.clear();  // Don't set .json path as save target
       g_state.dirty = true;               // Unsaved new project
       // Intent: no server run behind this import (→ kIdle via ReconcileSimState).
       g_state.run_intent = RunIntent::kNone;
-      g_thumbnail_cache.OnLayerStructureChanged();
-      g_preview.ClearTexture();
-      g_preview.ClearBackground();
-      // Fence the poller-side staged composite so SyncFromPoller won't re-upload the previous
-      // scene's snapshot over the just-cleared preview. Order relative to ClearTexture() is
-      // irrelevant: the two act on disjoint subsystems (g_preview vs g_server_poller).
-      g_server_poller.InvalidateStagedTexture();
-      // Reset modal preview trackball to the imported config's first entry.
-      if (!g_state.layers.empty() && !g_state.layers[0].entries.empty()) {
-        ResetCrystalViewToCrystal(g_state.crystals[g_state.layers[0].entries[0].crystal_id]);
-      }
+      // Frontend reset delegated to the single owner.
+      ResetFrontendState(g_state, FrontendResetReason::kOpenJson);
       GUI_LOG_INFO("[GUI] DoOpen (JSON import): {}", PathToU8(path));
     }
     return;
@@ -537,33 +623,25 @@ void DoOpen(const std::filesystem::path& path) {
   int tex_w = 0;
   int tex_h = 0;
   if (LoadLmcFile(path, g_state, tex_data, tex_w, tex_h)) {
+    // Data restore + command-semantic fields (path/dirty/run_intent stay in handler).
     g_state.current_file_path = path;
     g_state.dirty = false;
-    g_thumbnail_cache.OnLayerStructureChanged();
-    // Reset modal preview trackball to the loaded file's first entry.
-    if (!g_state.layers.empty() && !g_state.layers[0].entries.empty()) {
-      ResetCrystalViewToCrystal(g_state.crystals[g_state.layers[0].entries[0].crystal_id]);
-    }
-    GUI_LOG_INFO("[GUI] DoOpen: {}", PathToU8(path));
-    // Fence the poller-side staged composite before either sub-branch touches g_preview:
-    // otherwise SyncFromPoller can re-upload the previous scene over a baked or blank .lmc.
-    // Order relative to ClearTexture()/UploadTexture() is irrelevant — disjoint subsystems
-    // (g_preview vs g_server_poller).
-    g_server_poller.InvalidateStagedTexture();
     if (!tex_data.empty()) {
-      g_preview.UploadTexture(tex_data.data(), tex_w, tex_h);
       // Intent: a baked static result (→ kDone via ReconcileSimState, no server run).
       g_state.run_intent = RunIntent::kLoaded;
+      FrontendTexturePayload payload{ tex_data.data(), tex_w, tex_h };
+      ResetFrontendState(g_state, FrontendResetReason::kOpenBaked, &payload);
     } else {
-      // Intent: no result to show (→ kIdle).
-      g_state.run_intent = RunIntent::kNone;
-      // Clear stale texture from previous scene — mirrors DoNew() / JSON-import
+      // Intent: no result to show (→ kIdle). Mirrors DoNew() / JSON-import
       // semantics: "no preview data = clear screen, wait for user to Run".
-      g_preview.ClearTexture();
+      g_state.run_intent = RunIntent::kNone;
+      ResetFrontendState(g_state, FrontendResetReason::kOpenLmcBlank);
     }
+    GUI_LOG_INFO("[GUI] DoOpen: {}", PathToU8(path));
 
-    // Restore background image from saved path (uses deserialized alpha, not reset to 0.5)
-    g_preview.ClearBackground();
+    // Background image restore from saved path — DATA recovery (not a frontend reset). Uses
+    // the deserialized alpha, not a hard-coded value. Runs after ResetFrontendState which
+    // already ClearBackground()'d, so a missing bg_path leaves the preview blank (as before).
     if (!g_state.bg_path.empty()) {
       if (LoadAndUploadBgImage(g_state.bg_path)) {
         // bg_show and bg_alpha already restored from deserialization
@@ -579,20 +657,10 @@ void DoOpen(const std::filesystem::path& path) {
 }
 
 void DoNew() {
+  // Data reset (default state), then delegate every frontend reset (preview clear + poller
+  // fence + mesh-hash zero + trackball) to the single owner.
   g_state = InitDefaultState();
-  g_thumbnail_cache.OnLayerStructureChanged();
-  g_preview.ClearTexture();
-  g_preview.ClearBackground();
-  // Fence the poller-side staged composite so SyncFromPoller won't re-upload the previous
-  // scene's snapshot. Order relative to ClearTexture() is irrelevant — disjoint subsystems
-  // (g_preview vs g_server_poller).
-  g_server_poller.InvalidateStagedTexture();
-  g_crystal_mesh_hash = 0;
-  // Reset modal preview trackball to the new default entry's preset view —
-  // otherwise a stale drag pose from before New persists into the new doc.
-  if (!g_state.layers.empty() && !g_state.layers[0].entries.empty()) {
-    ResetCrystalViewToCrystal(g_state.crystals[g_state.layers[0].entries[0].crystal_id]);
-  }
+  ResetFrontendState(g_state, FrontendResetReason::kNewDocument);
   GUI_LOG_INFO("[GUI] DoNew");
 }
 
@@ -779,8 +847,13 @@ void DoRun() {
   // NeedsRebuild comparison: RenderConfig::id was removed during the renderer copy-model
   // migration; since `id` was always 1 pre-migration, operator== behavior is strictly looser
   // and cannot produce new false-positive reuse paths.
+  // Renderer comparison uses RenderConfigResimEqual (gui_state.hpp) — same helper used by
+  // gui_state_reconcile.cpp::DiffAgainstCommitBaseline, so this predicate and the reconciler's
+  // resim/dirty verdict stay in lock-step (single source of truth; see T2 plan §3 design 1).
+  // Excludes exposure_offset because EV is display-time only (§6.5) — dragging the EV slider
+  // must not cause a poller Stop here.
   bool expect_rebuild = backend_reconstructed || !g_state.last_committed_state.has_value() ||
-                        g_state.renderer != g_state.last_committed_state->renderer;
+                        !RenderConfigResimEqual(g_state.renderer, g_state.last_committed_state->renderer);
 
   // Single typed-struct commit path (327.4): all filter types — including multi-segment
   // raypath / multi-value EE (expanded to N simple + 1 complex) — go through the C struct, so
@@ -844,10 +917,17 @@ void DoRun() {
     // A good commit clears any prior over-bounds warning so a later re-occurrence warns again.
     ClearGuiWarning();
     g_state.last_committed_state = GuiState::ConfigSnapshot::From(g_state);
+    // task-color-migration §4 M6 (repush discipline): a fresh commit invalidates every edge-
+    // trigger baseline so the next frame's reconciler unconditionally re-pushes the full
+    // display-state payload (incl. z_order — the field the commit channel cannot carry, see
+    // §3 D2). This is the single fix for the "Run 后 z_order 不生效" bug (AC2, plan §1 偏离 B').
+    // Single entry point for all edge-trigger baselines — future third baseline picks up its
+    // reset here (a12: 统一原理优先于分类打补丁).
+    g_state.InvalidateEffectsBaselines();
     // Intent + epoch readback (I1): the synchronous commit above has already minted (or reused)
     // the lifecycle epoch; read it back so ReconcileSimState keys the display on THIS generation.
     // A filter change always rebuilds (epoch++), so the new epoch strictly exceeds any
-    // display_epoch_floor MarkFilterDirty raised — the floor lifts itself with no explicit unlock.
+    // display_epoch_floor MarkStructHardDirty raised — the floor lifts itself with no explicit unlock.
     LUMICE_SimLifecycleResult lc{};
     LUMICE_GetSimLifecycle(g_server, &lc);
     g_state.committed_epoch = lc.epoch;
@@ -868,9 +948,12 @@ void DoRun() {
     }
     // Unconditionally ensure poller is running — covers all edge cases:
     // DoStop→DoRun (poller was paused), PollOnce self-pause (finite rays done), etc.
-    // If already kRunning, this is a no-op (zero overhead).
-    g_server_poller.EnsureRunning(g_server);
-    // No staged-texture invalidate here: the epoch floor (raised by MarkFilterDirty) already
+    // If already kRunning, this is a no-op (zero overhead). WakeForRestart (not
+    // WakeForRefresh): a fresh commit is a real re-arm, so valid=false publish is
+    // desired (consumers must ignore any stale terminal snapshot until the worker
+    // republishes for the new epoch).
+    g_server_poller.WakeForRestart(g_server);
+    // No staged-texture invalidate here: the epoch floor (raised by MarkStructHardDirty) already
     // fences the old generation's payloads, and the freshly committed epoch (read back above)
     // lifts that fence. Crystal-scrub reuse (no filter change) MUST keep carry-forward, so we
     // deliberately do not drop the staged texture.
@@ -879,9 +962,15 @@ void DoRun() {
                  std::chrono::duration<double, std::milli>(run_end - run_start).count());
   } else {
     GUI_LOG_WARNING("[GUI] CommitConfig FAILED with error code {}", static_cast<int>(err));
-    // Restore poller if it was stopped for rebuild but CommitConfig failed
+    // Restore poller if it was stopped for rebuild but CommitConfig failed.
+    // task-color-migration Minor 4: mechanical rename from the former EnsureRunning
+    // to WakeForRestart. Semantics of this failure-recovery branch are unchanged (the
+    // former name's behavior — publish valid=false on the wake edge — is preserved by
+    // WakeForRestart). A deeper review of this branch's behavior is out of scope for
+    // this task (§7 risk 5); if further changes are needed, they will be independently
+    // scoped.
     if (expect_rebuild) {
-      g_server_poller.EnsureRunning(g_server);
+      g_server_poller.WakeForRestart(g_server);
     }
   }
 }
@@ -914,15 +1003,17 @@ void DoRevert() {
   if (g_state.last_committed_state) {
     const auto& snapshot = *g_state.last_committed_state;
     // Restore configuration fields atomically, then fire GUI side effects.
-    // Order rationale: ApplyTo() is pure field assignment. OnLayerStructureChanged()
-    // currently only touches the thumbnail cache (see thumbnail_cache.cpp) and does
-    // not read other g_state fields, so invoking it after full assignment is
-    // equivalent to the previous order (layers assigned -> callback -> other fields).
-    // If OnLayerStructureChanged ever starts reading g_state.sun/sim/renderers, this
-    // order remains correct (callback sees fully restored state). Runtime state (run_intent,
+    // Order rationale: ApplyTo() is pure field assignment. Runtime state (run_intent,
     // committed_epoch, poller counters, etc.) is intentionally preserved by ApplyTo.
     snapshot.ApplyTo(g_state);
-    g_thumbnail_cache.OnLayerStructureChanged();
+    // Frontend reset delegated to the single owner (kRevert subset = OnLayerStructureChanged +
+    // InvalidateEffectsBaselines only; preview/staged/trackball preserved because Revert is
+    // config restore, not a document switch). InvalidateEffectsBaselines is task-color-migration
+    // §4 M6 (repush discipline): revert restores display fields but the server still holds the
+    // post-edit display state — invalidating the display-push baseline forces the next frame's
+    // reconciler to re-push the restored display payload so the server catches up to Revert.
+    // Fixes the "Revert 不重推颜色 display 态" bug (plan §1 偏离 C).
+    ResetFrontendState(g_state, FrontendResetReason::kRevert);
     // Revert restores config == committed, so it is no longer dirty. This is load-bearing under
     // the single-owner reconcile: with the old direct sim_state=kDone write gone, a leftover
     // dirty=true would make ReconcileSimState re-derive kDone+dirty → kModified every frame
@@ -965,6 +1056,15 @@ GuiState::SimState ReconcileSimState(RunIntent intent, uint64_t committed_epoch,
     case RunIntent::kStopped:
       base = kStopEndState;  // drained terminal state; single flip point (see kStopEndState above)
       break;
+    case RunIntent::kRunCompleted:
+      // task-color-migration §3 D4: intent-latched terminal state for a natural (finite) run
+      // completion. Once SyncFromPoller has advanced the intent to kRunCompleted (having observed
+      // a fresh COMPLETED snapshot at the committed epoch — see the Mealy edge below), the base
+      // stays kDone regardless of subsequent snapshot volatility. Structurally immune to a
+      // transient valid=false observation pulling the completed run back into kSimulating — the
+      // second layer of the AC1 activity-bug defense (belt-and-suspenders with WakeForRefresh).
+      base = S::kDone;
+      break;
     case RunIntent::kRunning:
       base = (fresh && snap->lifecycle == LUMICE_LIFECYCLE_COMPLETED) ? S::kDone : S::kSimulating;
       break;
@@ -976,7 +1076,7 @@ GuiState::SimState ReconcileSimState(RunIntent intent, uint64_t committed_epoch,
 
 // Display upload gate (I1/I6) — pure predicate, see app.hpp. Uploads a payload only when it is a
 // fresh (unseen serial), non-empty frame (intensity>0 or a valid zero-ray terminal frame) whose
-// epoch clears display_epoch_floor. The floor (raised by MarkFilterDirty) fences the old
+// epoch clears display_epoch_floor. The floor (raised by MarkStructHardDirty) fences the old
 // generation; a null / cold-start payload is skipped so GL keeps the last frame (no black flicker).
 bool ShouldUploadPayload(const PreviewSnapshot& snap, unsigned long long last_uploaded_texture_serial,
                          uint64_t display_epoch_floor) {
@@ -1026,6 +1126,17 @@ void SyncFromPoller() {
   // consumer never observes a half-updated field combination.
   auto snap = g_server_poller.LoadSnapshot();
 
+  // NOTE (scrum-gui-state-reconcile T0, M6): the ApplyGuiEffects(ReconcileGuiEffects(...)) call
+  // that used to live here was moved to the end of the main-loop frame (main.cpp, after all
+  // Render*() calls). Rationale: SyncFromPoller runs at the TOP of each frame (main.cpp:278),
+  // BEFORE widget rendering — so a frame-top reconcile could only observe field edits from the
+  // PREVIOUS frame, introducing a one-frame delay vs. the legacy DIRTY_IF wrappers which set
+  // dirty synchronously in the widget call site (code-review Round 3 Major #1, CONFIRMED).
+  // Placing the reconcile at frame tail restores same-frame semantics: edit in frame N → tail
+  // reconcile of frame N sets dirty → frame N+1's SyncFromPoller-driven ReconcileSimState below
+  // observes it exactly like the legacy path did. ReconcileSimState stays at frame top because
+  // it depends on the freshly-loaded poller snapshot.
+
   // Level-triggered single-owner reconcile (I2/I3): unconditionally derive sim_state every frame
   // from (intent, committed_epoch, observation, dirty). No early-return on !=kSimulating — the
   // durable COMPLETED snapshot self-heals to kDone on any future frame even after the poller
@@ -1044,6 +1155,21 @@ void SyncFromPoller() {
   // so the terminal kStopEndState paints on the NEXT frame's reconcile.
   if (g_state.run_intent == RunIntent::kStopping && !g_stop_inflight.load()) {
     g_state.run_intent = RunIntent::kStopped;
+  }
+
+  // Mealy next-intent advance for a natural run completion (task-color-migration §3 D4 /
+  // doc/gui-state-governance.md §4 支柱 2). Symmetric to the kStopping→kStopped promote above:
+  // the first time we observe a fresh COMPLETED snapshot at the committed epoch under a kRunning
+  // intent, latch the intent to kRunCompleted so subsequent frames stay kDone even if a later
+  // snapshot briefly observes valid=false. Same "writes INTENT only, reconcile is single-owner
+  // over sim_state" contract as the Stopping→Stopped promote. Placed AFTER the reconcile so the
+  // latched terminal state paints on the NEXT frame's reconcile.
+  //
+  // DoRun re-arms this by unconditionally writing run_intent=kRunning on a successful commit
+  // (see app.cpp:855), so any subsequent Run naturally invalidates the prior latch.
+  if (g_state.run_intent == RunIntent::kRunning && snap && snap->valid && snap->epoch == g_state.committed_epoch &&
+      snap->lifecycle == LUMICE_LIFECYCLE_COMPLETED) {
+    g_state.run_intent = RunIntent::kRunCompleted;
   }
 
   if (!snap || !snap->valid) {

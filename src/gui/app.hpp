@@ -34,6 +34,17 @@ struct PreviewViewport {
 
 enum class PendingAction { kNone, kNew, kOpen, kQuit };
 
+// task-cleanup-hardening AC4 (Save-偏离-E owner ruling = 提示需 Run):
+// When the user invokes Save while sim_state == kModified (config edited since
+// the last committed run), the on-screen preview is not a render of the
+// current config. Rather than silently serialize "stale render + fresh config
+// + dirty=false" and quietly clear Modified (the pre-353.5 behavior — the
+// bug), we now front a prompt: "Config has been modified since the last run.
+// Run first (to render the current config), Save anyway (freeze the last
+// run's preview into the .lmc), or Cancel?" The kind identifies which
+// deferred save path resumes after the user picks Save anyway.
+enum class PendingSaveKind { kNone, kSave, kSaveAs };
+
 // Global state — accessible for test engine
 extern GuiState g_state;
 extern PreviewRenderer g_preview;
@@ -63,6 +74,16 @@ extern int g_programmatic_resize;  // Counter: decremented by WindowSizeCallback
 // Unsaved changes popup state
 extern bool g_show_unsaved_popup;
 extern PendingAction g_pending_action;
+
+// task-cleanup-hardening AC4: Save-modified prompt state. Set by DoSave /
+// DoSaveAs when sim_state == kModified; consumed by RenderSaveModifiedPopup.
+// PerformSave / PerformSaveAs bypass the check directly — the only caller
+// besides RenderSaveModifiedPopup's own "Save anyway" branch is DoSave /
+// DoSaveAs themselves (non-kModified fallthrough). RenderUnsavedPopup's
+// "Save" button routes through DoSave() (code-review-01 M1), so it defers to
+// this popup rather than bypassing the check.
+extern bool g_show_save_modified_popup;
+extern PendingSaveKind g_pending_save_kind;
 
 // Queue a user-visible warning surfaced by RenderImportWarningPopup; consecutive
 // calls within one import concatenate so all offending filters are reported.
@@ -99,8 +120,27 @@ OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConf
 float ComputeGridStep(float fov);
 
 // Business operations
+//
+// DoSave / DoSaveAs — the user-invoked save entry points (menu / keyboard
+// shortcut). Gate on sim_state == kModified: if the last committed run does
+// not reflect the current config, queue g_show_save_modified_popup and
+// return; RenderSaveModifiedPopup resumes the actual serialization if the
+// user picks Save anyway. When sim_state != kModified, fall through to
+// PerformSave / PerformSaveAs directly (no popup).
+//
+// PerformSave / PerformSaveAs — internal, do the actual RefreshCpuTextureForSave
+// + SaveLmcFile + dirty=false sequence. Exposed here (not just a .cpp static)
+// because RenderSaveModifiedPopup's "Save anyway" branch calls them directly
+// after the user has explicitly acknowledged the kModified warning.
+// RenderUnsavedPopup's "Save" button does NOT call these directly — it routes
+// through DoSave()/DoSaveAs() (code-review-01 M1) so the kModified gate still
+// applies; when that defers to RenderSaveModifiedPopup, the pending
+// New/Open/Quit action is threaded through g_pending_action and only resumes
+// once "Save anyway" actually performs the save (see app_panels.cpp).
 void DoSave();
 void DoSaveAs();
+void PerformSave();
+void PerformSaveAs();
 void DoExportPreviewPng();
 void DoExportDualFisheyeEqualAreaPng();
 void DoExportEquirectangularPng();
@@ -116,6 +156,47 @@ void DoLoadBackground(GLFWwindow* window);
 void DoClearBackground();
 void SyncFromPoller();
 void CheckUnsavedAndDo(PendingAction action);
+
+// Single frontend-reset owner (task-command-reset-owner, backlog #5; doc §4 "文档重置 owner",
+// doc §5 I-reset-complete). Each command (`DoNew` / `DoOpen(.lmc±baked/.json)` / `DoRevert`)
+// declares its intent via `FrontendResetReason` and delegates ALL preview / poller-staged /
+// trackball / mesh-hash / effects-baseline resets to this owner instead of hand-picking a
+// subset — cures the "each command resets a different subset, forgetting an adjacent layer"
+// class of bug that led to task-349.1 → 350 → 351's three-round fix cycle.
+//
+// Subset per reason (逐条对照 as-built 精确复刻，see plan §3):
+//   kNewDocument  : ClearTexture + ClearBackground + InvalidateStagedTexture +
+//                   crystal_mesh_hash=0 + trackball reset + OnLayerStructureChanged
+//   kOpenBaked    : UploadTexture(baked) + ClearBackground + InvalidateStagedTexture +
+//                   trackball reset + OnLayerStructureChanged
+//   kOpenLmcBlank : ClearTexture + ClearBackground + InvalidateStagedTexture +
+//                   trackball reset + OnLayerStructureChanged
+//   kOpenJson     : ClearTexture + ClearBackground + InvalidateStagedTexture +
+//                   trackball reset + OnLayerStructureChanged
+//   kRevert       : InvalidateEffectsBaselines + OnLayerStructureChanged
+//                   (no texture / staged / trackball / mesh-hash touch — Revert is
+//                    config restore, not document switch)
+//
+// The `baked` texture payload MUST be non-null iff `reason == kOpenBaked` (owner asserts
+// this invariant; passing an inconsistent pair is a caller bug). `bg_path` restore stays in
+// `DoOpen(.lmc)` handler (it is per-file DATA recovery, not a document-switch reset).
+enum class FrontendResetReason {
+  kNewDocument,
+  kOpenBaked,
+  kOpenLmcBlank,
+  kOpenJson,
+  kRevert,
+};
+
+// Baked-texture payload for `kOpenBaked`. `data` must remain valid for the duration of the
+// `ResetFrontendState` call; the owner does not retain the pointer.
+struct FrontendTexturePayload {
+  const unsigned char* data;
+  int width;
+  int height;
+};
+
+void ResetFrontendState(GuiState& state, FrontendResetReason reason, const FrontendTexturePayload* baked = nullptr);
 
 // Single-owner sim_state reconcile (I2, blueprint §4/§5). Pure function of the last user intent,
 // the epoch the GUI committed, the last backend observation (may be null before the first poll),
@@ -175,6 +256,13 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
 void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height);
 void RenderStatusBar(float window_width, float window_height);
 void RenderUnsavedPopup(GLFWwindow* window);
+// task-cleanup-hardening AC4: Save-modified prompt. Rendered once per frame
+// after RenderUnsavedPopup. Opens iff g_show_save_modified_popup is true;
+// resumes the deferred save according to g_pending_save_kind on "Save anyway",
+// or clears the pending state on "Cancel". A "Run first" button (when a live
+// server exists and no run is inflight) invokes DoRun so the user can produce
+// a fresh render matching the current config, then re-invoke Save.
+void RenderSaveModifiedPopup(GLFWwindow* window);
 void RenderImportWarningPopup();
 // Generic GUI warning modal (see app_panels.cpp). SetGuiWarning queues a message (idempotent
 // while the same message is in-flight, so a persistent condition re-detected every debounced

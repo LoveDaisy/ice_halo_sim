@@ -15,6 +15,7 @@ add_executable(gui_test
     functional/test_gui_overlay_labels.cpp
     functional/test_gui_lifecycle.cpp
     functional/test_gui_composite_preview.cpp
+    functional/test_gui_state_reconcile.cpp
     functional/test_project_world_dir.cpp
     functional/test_render_handedness_guard.cpp
     visual/test_gui_visual.cpp
@@ -43,7 +44,11 @@ target_compile_definitions(gui_test PRIVATE
     IMGUI_ENABLE_TEST_ENGINE
     IMGUI_TEST_ENGINE_ENABLE_COROUTINE_STDTHREAD_IMPL=1
     LUMICE_TEST_REF_DIR="${CMAKE_CURRENT_SOURCE_DIR}/references"
-    LUMICE_E2E_CONFIG_DIR="${CMAKE_SOURCE_DIR}/test/e2e/configs")
+    LUMICE_E2E_CONFIG_DIR="${CMAKE_SOURCE_DIR}/test/e2e/configs"
+    # task-command-reset-owner AC4: source-scan single-owner gate — the test
+    # reads app.cpp to prove reset primitives (InvalidateStagedTexture,
+    # g_crystal_mesh_hash=0) only appear inside ResetFrontendState.
+    LUMICE_GUI_APP_CPP_PATH="${CMAKE_SOURCE_DIR}/src/gui/app.cpp")
 
 # macOS frameworks required by GLFW
 if(APPLE)

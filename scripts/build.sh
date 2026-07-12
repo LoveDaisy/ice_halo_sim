@@ -42,12 +42,20 @@ build() {
         #         (which converges over ~30 frames of real wall-clock simulation)
         #         against the saved snapshot; fixed-dt starves that accumulation
         #         and drops its PSNR ~7 dB below threshold.
+        #       - revert_repushes_server_display_state, zorder_priority_persists_across_rerun
+        #         (task-color-migration code-review round-1 revision): both assert on
+        #         LUMICE_GetCompositeResults() right after a display-time PushDisplayState()
+        #         edit (color edit / z_order swap); the edit only materializes in the
+        #         composite once the background ServerPoller's WakeForRefresh-triggered
+        #         PollOnce() actually runs, which needs real wall-clock time between
+        #         ctx->Yield() calls — fixed-dt (and --no-frame-limit) starve that thread
+        #         the same way they starve save_open_visual_consistency's accumulation.
         echo "Running GUI correctness tests (fixed-dt, fast)..."
-        "$GUI_TEST_BIN" --fixed-dt --filter "-perf_test,-save_open_visual_consistency"
+        "$GUI_TEST_BIN" --fixed-dt --filter "-perf_test,-save_open_visual_consistency,-revert_repushes_server_display_state,-zorder_priority_persists_across_rerun"
         ret=$?
         if [[ $ret == 0 ]]; then
           echo "Running GUI real-timing tests (perf + wall-clock-dependent, isolated)..."
-          "$GUI_TEST_BIN" --filter "perf_test,save_open_visual_consistency"
+          "$GUI_TEST_BIN" --filter "perf_test,save_open_visual_consistency,revert_repushes_server_display_state,zorder_priority_persists_across_rerun"
           ret=$?
         fi
       else

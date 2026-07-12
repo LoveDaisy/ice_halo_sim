@@ -16,8 +16,11 @@
 #include <vector>
 
 #include "gui/app.hpp"                  // g_server_poller / g_preview / DoOpen / DoNew / SyncFromPoller
+#include "gui/color_window.hpp"         // PushDisplayState (M8 AC3 direct-push path)
 #include "gui/export_fbo_renderer.hpp"  // RenderExportToRgba for AC2 pixel-level assertion
 #include "gui/file_io.hpp"              // SerializeCoreConfig / ExportConfigJson / SaveLmcFile
+#include "gui/gui_state.hpp"            // GuiState + DisplayStateBaseline (M8 AC3)
+#include "gui/gui_state_reconcile.hpp"  // ReconcileGuiEffects / ApplyGuiEffects (M8 AC3 reconciler-path)
 #include "gui/server_poller.hpp"
 #include "test_gui_shared.hpp"
 
@@ -381,7 +384,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
   // self-pauses, a display-time color edit (LUMICE_SetRaypathColors) must be able to drive one
   // fresh composite materialization without restarting the sim (epoch unchanged, lifecycle stays
   // COMPLETED). Pins the two coupled invariants:
-  //   (a) MECHANISM: the poll after SetRaypathColors + EnsureRunning yields a payload whose
+  //   (a) MECHANISM: the poll after SetRaypathColors + WakeForRefresh yields a payload whose
   //       rgb_data reflects the new colors and is byte-identical to a direct LUMICE_GetCompositeResults
   //       (proving the display-time dirty flag was consumed, not lost).
   //   (b) NON-RESTART: LUMICE_GetSimLifecycle still reports COMPLETED with the SAME epoch
@@ -433,9 +436,9 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     IM_CHECK_EQ(LUMICE_SetRaypathColors(server, disp, 1, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
     // The very wake call PushDisplayState() invokes in production, exercised on the global poller
     // that would drive DoSnapshot() consumption when a background worker was actually running.
-    // For this synchronous test seam, EnsureRunning + PollOnceForTest together stand in for
+    // For this synchronous test seam, WakeForRefresh + PollOnceForTest together stand in for
     // "worker wakes up and runs one PollOnce, then self-pauses at COMPLETED".
-    gui::g_server_poller.EnsureRunning(server);
+    gui::g_server_poller.WakeForRefresh(server);
 
     // (a) MECHANISM: the poll after the edit must produce a composite reflecting the new colors —
     // i.e., not byte-identical to composite_before (the color changed, so the rendered image must
@@ -476,7 +479,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     IM_CHECK_EQ(LUMICE_GetSimRayCount(server, &ray_count_after), LUMICE_OK);
     IM_CHECK(ray_count_after >= ray_count_before);
 
-    // Post-test cleanup on both the local ServerPoller and the global one that EnsureRunning
+    // Post-test cleanup on both the local ServerPoller and the global one that WakeForRefresh
     // above nudged into kRunning — Stop() is synchronous and idempotent.
     local.Stop();
     gui::g_server_poller.Stop();
@@ -909,7 +912,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     }
 
     // Phase B: user adds a class → GUI-side re-commits the 2-class config. This is the
-    // same code path RenderColorWindow's "Add Class" button triggers (state.MarkFilterDirty
+    // same code path RenderColorWindow's "Add Class" button triggers (state.MarkStructHardDirty
     // → next debounce → LUMICE_CommitConfigStruct → re-sim + RenderConsumer rebuild).
     IM_CHECK_EQ(LUMICE_CommitConfig(server, kTwoColorConfig), LUMICE_OK);
 
@@ -1455,5 +1458,403 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
 
     gui::g_server_poller.Stop();
     LUMICE_DestroyServer(server);
+  };
+
+  // task-color-migration M8 AC3 — pixel-level equivalence between reconciler-driven display push and
+  // direct PushDisplayState. After Step 3 migration, widgets no longer call PushDisplayState inline;
+  // the frame-tail reconciler + ApplyGuiEffects call it in response to a display-state field diff.
+  // This test pins that "reconciler triggering timing is equivalent to widget inline calling" by
+  // exercising both paths back-to-back on identical GuiState mutations and asserting byte-identical
+  // composite output. PushDisplayState is used as the shared truth source — the test does NOT
+  // re-verify its internals; it verifies the reconciler's edge-trigger produces the SAME server-side
+  // C-API sequence as an inline call would have. Covers all five display-time edit types
+  // (color / visible / solo / z_order / mode) in a single test, since each mutation independently
+  // asserts identity — no gain from splitting into 5 sub-tests (plan §4 Step 8).
+  ImGuiTest* t_ac3 =
+      IM_REGISTER_TEST(engine, "gui_composite_preview", "reconciler_display_push_matches_direct_push_byte_identical");
+  t_ac3->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    const bool ok = RunToIdleWithData(server, kTwoColorConfig);
+    IM_CHECK(ok);
+    if (!ok) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+
+    // Build a GuiState mirror of the committed kTwoColorConfig display defaults — class 0 = red
+    // match-all, class 1 = blue entry_exit len=3. PushDisplayState reads only
+    // {color, visible, solo, z_order, raypath_color_mode} from state (match/combine are struct-tier,
+    // not on the display-push channel), so match[] content doesn't have to be JSON-perfect —
+    // populating any non-empty match[] with plausible values is sufficient. Structural fields are
+    // NOT read by PushDisplayState (verified: color_window.cpp:52-70).
+    auto MakeBaseline = []() {
+      gui::GuiState s;
+      s.raypath_color.resize(2);
+      s.raypath_color[0].color[0] = 1.0f;  // red
+      s.raypath_color[0].color[1] = 0.0f;
+      s.raypath_color[0].color[2] = 0.0f;
+      s.raypath_color[0].visible = true;
+      s.raypath_color[0].solo = false;
+      s.raypath_color[0].z_order = 0;
+      s.raypath_color[1].color[0] = 0.0f;
+      s.raypath_color[1].color[1] = 0.0f;
+      s.raypath_color[1].color[2] = 1.0f;  // blue
+      s.raypath_color[1].visible = true;
+      s.raypath_color[1].solo = false;
+      s.raypath_color[1].z_order = 1;
+      s.raypath_color_mode = LUMICE_COLOR_MODE_DOMINANT;
+      return s;
+    };
+
+    // Seed last_pushed_display_state from a GuiState — mirrors MakeBaselineState in
+    // test_gui_state_reconcile.cpp. Reconciler treats nullopt as "first push after Reset" (need_push
+    // still fires when raypath_color non-empty, but for AC3 we want the DIFF edge, not the reset
+    // edge, so we seed a matching baseline and rely on the mutation to create the diff).
+    auto SeedDisplayBaseline = [](gui::GuiState& s) {
+      gui::GuiState::DisplayStateBaseline dsb;
+      for (const auto& cls : s.raypath_color) {
+        dsb.color_display.push_back(static_cast<const gui::ColorClassDisplayState&>(cls));
+      }
+      dsb.raypath_color_mode = s.raypath_color_mode;
+      s.last_pushed_display_state = std::move(dsb);
+    };
+
+    // task-fix-composite-byte-identical-flake: pause the global poller so its background
+    // DoSnapshot() cannot race the synchronous LUMICE_GetCompositeResults() call below. Each
+    // preceding PushDisplayState() calls g_server_poller.WakeForRefresh(server) — that starts
+    // the worker's PollOnce() → DoSnapshot() on another thread. Without this Stop(), the poller
+    // can (a) Phase-1 the just-pushed display state (clearing snapshot_dirty_) BEFORE T's
+    // GetCompositeResults sees it, then be still inside Phase-2 when T reads cached_composite_
+    // results_ — so T returns a stale composite from a prior iteration, and the reset_check
+    // memcmp below fires with ~40% probability under real timing (0% under --fixed-dt, whose
+    // frame-scheduling coincidence keeps T ahead of the poller). The C API is contractually
+    // single-caller; this test happens to have two (T + the process-global poller), which is
+    // the source of the race — NOT a production bug (production only has the poller call site
+    // reading composites, and the poller consumes its own DoSnapshot output coherently).
+    //
+    // Stop() drains any in-flight PollOnce(); the next PushDisplayState() re-wakes the poller,
+    // so no display-time behavior is lost. AC2 memcmp==0 is preserved; AC4 zero core/config is
+    // preserved (test-only fix).
+    //
+    // This Stop() only serializes ServerImpl::DoSnapshot()/cached_composite_results_ — a
+    // separate data path from g_server_poller's published_/staged-snapshot pipeline
+    // (StorePublished/LoadSnapshot, consumed by SyncFromPoller/g_preview). This test reads
+    // composites via the C API (LUMICE_GetCompositeResults) directly, never through
+    // LoadSnapshot(), so a stale published_ snapshot cannot leak through this path. Leaving the
+    // poller paused at test end until the next PushDisplayState wakes it is also the same
+    // convention already used at every other test's teardown in this file (see the sibling
+    // g_server_poller.Stop() call sites above and below), so this is not a new cross-test risk.
+    auto ReadComposite = [&](std::vector<uint8_t>& out) {
+      gui::g_server_poller.Stop();
+      LUMICE_RenderResult r[LUMICE_MAX_RENDER_RESULTS + 1]{};
+      IM_CHECK_EQ(LUMICE_GetCompositeResults(server, r, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+      IM_CHECK(r[0].img_buffer != nullptr);
+      const size_t nbytes = static_cast<size_t>(r[0].img_width) * static_cast<size_t>(r[0].img_height) * 3;
+      out.assign(r[0].img_buffer, r[0].img_buffer + nbytes);
+    };
+
+    // Establish server-side baseline display so `pathA_baseline` and `pathB_baseline` are shared.
+    // Uses PushDisplayState (the same API both paths converge on) so the baseline itself is not a
+    // hidden divergence source.
+    const gui::GuiState baseline = MakeBaseline();
+    IM_CHECK(gui::PushDisplayState(baseline, server));
+    std::vector<uint8_t> composite_baseline;
+    ReadComposite(composite_baseline);
+
+    // Five mutation lambdas — one per display-time edit type. Each MUST produce a composite
+    // measurably different from baseline (sanity gate: if the mutation is invisible, the equivalence
+    // assertion below is vacuous).
+    struct Mutation {
+      const char* name;
+      void (*apply)(gui::GuiState&);
+    };
+    const Mutation muts[] = {
+      { "color", [](gui::GuiState& s) { s.raypath_color[0].color[0] = 0.25f; } },   // dim class 0 red
+      { "visible", [](gui::GuiState& s) { s.raypath_color[0].visible = false; } },  // hide bright class
+      { "solo", [](gui::GuiState& s) { s.raypath_color[1].solo = true; } },         // solo dim class
+      { "z_order",
+        [](gui::GuiState& s) {
+          // Swap z_order to promote class 1 to the top; dominant mode is invariant to z_order (arg
+          // max wins regardless of layer stacking), but painter mode is not — so switch to painter
+          // AND swap z_order together to make the mutation observable while keeping this the
+          // "z_order lane" of the test.
+          s.raypath_color[0].z_order = 1;
+          s.raypath_color[1].z_order = 0;
+          s.raypath_color_mode = LUMICE_COLOR_MODE_PAINTER;
+        } },
+      { "mode", [](gui::GuiState& s) { s.raypath_color_mode = LUMICE_COLOR_MODE_ADDITIVE; } },
+    };
+
+    for (const auto& m : muts) {
+      // -- Path A: reconciler-driven --
+      IM_CHECK(gui::PushDisplayState(baseline, server));  // reset server display to baseline
+      std::vector<uint8_t> reset_check;
+      ReadComposite(reset_check);
+      IM_CHECK_EQ(std::memcmp(reset_check.data(), composite_baseline.data(), composite_baseline.size()), 0);
+
+      gui::GuiState sA = MakeBaseline();
+      SeedDisplayBaseline(sA);
+      m.apply(sA);
+      gui::GuiEffects effA = gui::ReconcileGuiEffects(sA);
+      // Every mutation touches at least one display-state sub-field or raypath_color_mode → the
+      // reconciler MUST route it to need_display_push (structural lane is quiet: no combine/match
+      // change in these mutations).
+      IM_CHECK(effA.need_display_push);
+      IM_CHECK(!effA.need_hard_reset);
+      IM_CHECK(!effA.need_resim);
+      gui::ApplyGuiEffects(sA, server, effA);
+      std::vector<uint8_t> compositeA;
+      ReadComposite(compositeA);
+
+      // Sanity: the mutation actually rendered (composite bytes differ from baseline).
+      IM_CHECK(compositeA.size() == composite_baseline.size());
+      IM_CHECK(std::memcmp(compositeA.data(), composite_baseline.data(), composite_baseline.size()) != 0);
+
+      // Reconciler must also have updated last_pushed_display_state on success so a follow-up
+      // reconcile with no further mutation is a quiet no-op (edge-triggered contract).
+      IM_CHECK(sA.last_pushed_display_state.has_value());
+      gui::GuiEffects effA_quiet = gui::ReconcileGuiEffects(sA);
+      IM_CHECK(!effA_quiet.need_display_push);
+
+      // -- Path B: direct PushDisplayState --
+      IM_CHECK(gui::PushDisplayState(baseline, server));  // reset server display to baseline
+      gui::GuiState sB = MakeBaseline();
+      m.apply(sB);
+      IM_CHECK(gui::PushDisplayState(sB, server));
+      std::vector<uint8_t> compositeB;
+      ReadComposite(compositeB);
+
+      // ⭐ AC3 core assertion: reconciler-driven and direct-push paths produce byte-identical
+      // composite. Both funnel through PushDisplayState with the same GuiState → same C-API args →
+      // same server-side snapshot_dirty_ → same Phase-2 rebake. Any drift here would signal the
+      // reconciler is mutating state between diff and push, or ApplyGuiEffects is calling something
+      // other than PushDisplayState on the need_display_push branch.
+      IM_CHECK_EQ(compositeA.size(), compositeB.size());
+      IM_CHECK_EQ(std::memcmp(compositeA.data(), compositeB.data(), compositeA.size()), 0);
+    }
+
+    // WakeForRefresh inside PushDisplayState may have started the global poller worker; Stop it so
+    // subsequent tests start clean.
+    gui::g_server_poller.Stop();
+    LUMICE_DestroyServer(server);
+  };
+
+  // AC2 real-server regression (code-review round-1 Major-1): the AC3 test above pins the
+  // reconciler-vs-direct-push EQUIVALENCE, but never drives a real gui::DoRun() — so it cannot
+  // catch a regression in the repush discipline that DoRun() itself owns (InvalidateEffectsBaselines
+  // on commit success, app.cpp:854). This test drives the actual "drag z_order, click Run again"
+  // flow: two fully-overlapping match-all classes on the single default crystal in painter mode (so
+  // the LOWER z_order class wins every landed pixel regardless of brightness — see
+  // CompositePainterPixel in component_compositor.cpp: the active list is sorted ascending by
+  // z_order and the first participating class with a positive value wins, i.e. z_order 0 is the
+  // top/occluding layer — making z_order priority directly observable), swap z_order via the
+  // Step 2/3 field-write path (simulating a drag-reorder), then re-run with no further color
+  // edits and assert the swapped order survives — the exact "Run 后 z_order 不生效" bug (plan §1
+  // 偏离 B') a stale baseline would reintroduce.
+  ImGuiTest* t_ac2_rerun = IM_REGISTER_TEST(engine, "gui_composite_preview", "zorder_priority_persists_across_rerun");
+  t_ac2_rerun->TestFunc = [](ImGuiTestContext* ctx) {
+    gui::g_server_poller.Stop();
+    gui::g_server = LUMICE_CreateServer();
+    IM_CHECK(gui::g_server != nullptr);
+    gui::g_server_is_gpu = false;
+    gui::g_state = gui::InitDefaultState();
+    gui::g_state.sim.infinite = false;
+    gui::g_state.sim.ray_num_millions = 0.5f;
+    gui::g_state.sim.max_hits = 8;
+    // Deliberately CPU-only (default use_gpu_backend=false): the device-fused GPU path does not
+    // populate outgoing_component_ / raypath-color lanes yet (RenderConsumer warns and produces an
+    // empty composite) — this task's lane display targets CPU only, so forcing GPU here (as Test 8
+    // in test_gui_lifecycle.cpp does for its pure lifecycle assertions) would make the composite
+    // pixel reads below vacuous.
+
+    auto MakeMatchAllClass = [](float r, float g, float b, int z_order) {
+      gui::ColorClassConfig c;
+      c.color[0] = r;
+      c.color[1] = g;
+      c.color[2] = b;
+      c.visible = true;
+      c.solo = false;
+      c.z_order = z_order;
+      gui::ColorClassRefConfig ref;
+      ref.layer_idx = 0;
+      ref.crystal_pool_id = gui::g_state.layers[0].entries[0].crystal_id;
+      ref.match_all = true;
+      c.match.push_back(ref);
+      return c;
+    };
+    gui::g_state.raypath_color.push_back(MakeMatchAllClass(1.0f, 0.0f, 0.0f, /*z_order=*/0));  // red
+    gui::g_state.raypath_color.push_back(MakeMatchAllClass(0.0f, 0.0f, 1.0f, /*z_order=*/1));  // blue
+    gui::g_state.raypath_color_mode = LUMICE_COLOR_MODE_PAINTER;
+
+    auto RunToDoneAndCheckIntent = [&]() {
+      gui::DoRun();
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(gui::RunIntent::kRunning));
+      auto start = std::chrono::steady_clock::now();
+      while (gui::g_state.sim_state != gui::GuiState::SimState::kDone ||
+             gui::g_state.run_intent != gui::RunIntent::kRunCompleted) {
+        ctx->Yield();
+        if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start).count() > 20) {
+          break;
+        }
+      }
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kDone));
+    };
+
+    // First run: establish red-on-top (z_order 0, the lower value == higher painter priority)
+    // as the committed baseline.
+    RunToDoneAndCheckIntent();
+
+    // Void output-param idiom (not a bool-returning lambda): IM_CHECK's failure path is a bare
+    // `return;`, which cannot coexist with a non-void lambda return type.
+    auto ReadRedBlueSums = [&](unsigned long long& sum_r, unsigned long long& sum_b) {
+      LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
+      IM_CHECK_EQ(LUMICE_GetCompositeResults(gui::g_server, comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+      IM_CHECK(comp[0].img_buffer != nullptr);
+      const size_t nbytes = static_cast<size_t>(comp[0].img_width) * static_cast<size_t>(comp[0].img_height) * 3;
+      sum_r = 0;
+      sum_b = 0;
+      for (size_t i = 0; i + 2 < nbytes; i += 3) {
+        sum_r += comp[0].img_buffer[i + 0];
+        sum_b += comp[0].img_buffer[i + 2];
+      }
+      IM_CHECK(sum_r + sum_b > 0u);  // sanity: something landed
+    };
+    unsigned long long r_init = 0;
+    unsigned long long b_init = 0;
+    ReadRedBlueSums(r_init, b_init);
+    IM_CHECK(r_init > b_init);  // painter: z_order=0 (red) on top of z_order=1 (blue)
+
+    // Field-write path (Step 2/3 channel): drag-reorder swap — promote blue to the top (lower
+    // z_order == higher painter priority). Pure display-time edit; yield a few frames so the
+    // frame-tail reconciler pushes it.
+    gui::g_state.raypath_color[0].z_order = 1;
+    gui::g_state.raypath_color[1].z_order = 0;
+    ctx->Yield(3);
+    unsigned long long r_swapped = 0;
+    unsigned long long b_swapped = 0;
+    ReadRedBlueSums(r_swapped, b_swapped);
+    IM_CHECK(b_swapped > r_swapped);  // sanity: the swap took effect pre-Run (blue now on top)
+
+    // AC2 core: click Run again (no color-field change) — the M6 repush discipline must not let
+    // the re-commit silently fall back to the committed z_order order; the swapped order must
+    // survive the round trip.
+    RunToDoneAndCheckIntent();
+    unsigned long long r_rerun = 0;
+    unsigned long long b_rerun = 0;
+    ReadRedBlueSums(r_rerun, b_rerun);
+    IM_CHECK(b_rerun > r_rerun);  // still blue on top after the re-run
+
+    gui::g_server_poller.Stop();
+    if (gui::g_server) {
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+    }
+    gui::g_server_is_gpu = false;
+    gui::g_state.run_intent = gui::RunIntent::kNone;
+    gui::g_state.committed_epoch = 0;
+    gui::g_state.display_epoch_floor = 0;
+  };
+
+  // AC-偏离C real-server regression (code-review round-1 Major-1): DoRevert() must repush the
+  // restored display state to the SERVER, not just restore GuiState fields — this is the
+  // g_state.InvalidateEffectsBaselines() call in DoRevert (app.cpp:946) fixing "Revert 不重推颜色
+  // display 态" (plan §1 偏离 C). Establishes a committed red baseline, edits color to green
+  // (display-time only, no re-sim), confirms the edit actually reached the server, then Reverts and
+  // confirms the server falls back to red (not stuck on the pre-revert green).
+  ImGuiTest* t_revert_repush =
+      IM_REGISTER_TEST(engine, "gui_composite_preview", "revert_repushes_server_display_state");
+  t_revert_repush->TestFunc = [](ImGuiTestContext* ctx) {
+    gui::g_server_poller.Stop();
+    gui::g_server = LUMICE_CreateServer();
+    IM_CHECK(gui::g_server != nullptr);
+    gui::g_server_is_gpu = false;
+    gui::g_state = gui::InitDefaultState();
+    gui::g_state.sim.infinite = false;
+    gui::g_state.sim.ray_num_millions = 0.5f;
+    gui::g_state.sim.max_hits = 8;
+    // Deliberately CPU-only (default use_gpu_backend=false): the device-fused GPU path does not
+    // populate outgoing_component_ / raypath-color lanes yet (RenderConsumer warns and produces an
+    // empty composite) — this task's lane display targets CPU only, so forcing GPU here (as Test 8
+    // in test_gui_lifecycle.cpp does for its pure lifecycle assertions) would make the composite
+    // pixel reads below vacuous.
+
+    gui::ColorClassConfig cls;
+    cls.color[0] = 1.0f;  // red
+    cls.color[1] = 0.0f;
+    cls.color[2] = 0.0f;
+    cls.visible = true;
+    cls.solo = false;
+    cls.z_order = 0;
+    gui::ColorClassRefConfig ref;
+    ref.layer_idx = 0;
+    ref.crystal_pool_id = gui::g_state.layers[0].entries[0].crystal_id;
+    ref.match_all = true;
+    cls.match.push_back(ref);
+    gui::g_state.raypath_color.push_back(cls);
+    gui::g_state.raypath_color_mode = LUMICE_COLOR_MODE_DOMINANT;
+
+    gui::DoRun();
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(gui::RunIntent::kRunning));
+    auto start = std::chrono::steady_clock::now();
+    while (gui::g_state.sim_state != gui::GuiState::SimState::kDone ||
+           gui::g_state.run_intent != gui::RunIntent::kRunCompleted) {
+      ctx->Yield();
+      if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start).count() > 20) {
+        break;
+      }
+    }
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kDone));
+
+    auto ReadRedGreenSums = [&](unsigned long long& sum_r, unsigned long long& sum_g) {
+      LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
+      IM_CHECK_EQ(LUMICE_GetCompositeResults(gui::g_server, comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+      IM_CHECK(comp[0].img_buffer != nullptr);
+      const size_t nbytes = static_cast<size_t>(comp[0].img_width) * static_cast<size_t>(comp[0].img_height) * 3;
+      sum_r = 0;
+      sum_g = 0;
+      for (size_t i = 0; i + 2 < nbytes; i += 3) {
+        sum_r += comp[0].img_buffer[i + 0];
+        sum_g += comp[0].img_buffer[i + 1];
+      }
+    };
+
+    unsigned long long r0 = 0;
+    unsigned long long g0 = 0;
+    ReadRedGreenSums(r0, g0);
+    IM_CHECK(r0 > g0);  // committed baseline: red dominates
+
+    // Display-time edit: red -> green. Pure display-time field write, no re-sim.
+    gui::g_state.raypath_color[0].color[0] = 0.0f;
+    gui::g_state.raypath_color[0].color[1] = 1.0f;
+    ctx->Yield(3);
+    unsigned long long r1 = 0;
+    unsigned long long g1 = 0;
+    ReadRedGreenSums(r1, g1);
+    IM_CHECK(g1 > r1);  // sanity: the edit reached the server before Revert
+
+    // AC-偏离C core: Revert must restore the committed (red) display state on the server too, not
+    // just in GuiState.
+    gui::DoRevert();
+    IM_CHECK_EQ(gui::g_state.raypath_color[0].color[0], 1.0f);
+    IM_CHECK_EQ(gui::g_state.raypath_color[0].color[1], 0.0f);
+    ctx->Yield(3);
+    unsigned long long r2 = 0;
+    unsigned long long g2 = 0;
+    ReadRedGreenSums(r2, g2);
+    IM_CHECK(r2 > g2);  // server-side display state now matches the reverted (red) GuiState
+
+    gui::g_server_poller.Stop();
+    if (gui::g_server) {
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+    }
+    gui::g_server_is_gpu = false;
+    gui::g_state.run_intent = gui::RunIntent::kNone;
+    gui::g_state.committed_epoch = 0;
+    gui::g_state.display_epoch_floor = 0;
   };
 }

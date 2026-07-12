@@ -250,11 +250,6 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
 
 namespace {
 
-// Helper: wrap ImGui control and mark dirty on change
-#define DIRTY_IF(expr) \
-  if (expr)            \
-  state.MarkDirty()
-
 // Card layout: height is driven by ImGuiChildFlags_AutoResizeY so font/theme
 // changes adapt automatically (kThumbnailSize lives in gui_constants.hpp).
 
@@ -631,9 +626,7 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y + row_h * 3.0f));
   char prop_label[32];
   snprintf(prop_label, sizeof(prop_label), "Weight##prop_%d_%d", layer_idx, entry_idx);
-  if (SliderWithInput(prop_label, &entry.proportion, 0.0f, 100.0f, "%.1f")) {
-    state.MarkDirty();
-  }
+  SliderWithInput(prop_label, &entry.proportion, 0.0f, 100.0f, "%.1f");
 
   // Hover action buttons: stacked vertically at the right edge of the card —
   // Delete (×) on top, Duplicate (D) below, separated by kHoverBtnGap. Alpha is
@@ -713,7 +706,6 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
     auto& entries = state.layers[layer_idx].entries;
     entries.push_back(new_entry);
     g_thumbnail_cache.OnLayerStructureChanged();
-    state.MarkDirty();
   }
 
   // Persist hover state for next frame (computed while still inside the child
@@ -791,16 +783,12 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
         // So in ApplyPickLink(source, target) the *clicked card* is the source
         // (model) and pick_link_source is the target (modified).
         const auto pick_source_ref = *state.pick_link_source;
-        const auto& editing_entry = state.layers[pick_source_ref.layer_idx].entries[pick_source_ref.entry_idx];
-        const std::optional<int> old_filter_id = editing_entry.filter_id;
         ApplyPickLink(state, GuiState::EntryRef{ layer_idx, entry_idx }, pick_source_ref);
         state.pick_link_source.reset();
-        state.MarkDirty();
-        // Re-read editing entry after pool re-bind to compare filter existence.
-        const auto& editing_after = state.layers[pick_source_ref.layer_idx].entries[pick_source_ref.entry_idx];
-        if (old_filter_id.has_value() != editing_after.filter_id.has_value()) {
-          state.MarkFilterDirty();
-        }
+        // Effects derived centrally by ReconcileGuiEffects: rebinding entry.filter_id
+        // shows up as a `layers` diff (soft), and filter presence-toggle (nullopt↔some)
+        // is caught by AnyEntryFilterPresenceChanged (hard) — see gui_state_reconcile.cpp.
+        // Pure some(A)→some(B) rebinding stays soft, matching pre-migration behavior.
         // No explicit Invalidate: editing entry now shares clicked card's
         // crystal_id; that crystal already has a cache entry from this frame.
       }
@@ -864,7 +852,6 @@ void RenderLayer(GuiState& state, int layer_idx) {
   if (layer_delete_clicked && can_delete_layer) {
     state.layers.erase(state.layers.begin() + layer_idx);
     g_thumbnail_cache.OnLayerStructureChanged();
-    state.MarkDirty();
     ImGui::PopID();
     return;  // Skip rendering the rest; layer has been erased.
   }
@@ -887,7 +874,7 @@ void RenderLayer(GuiState& state, int layer_idx) {
     bool disable_slider = is_last_layer && prob_is_zero;
     ImGui::BeginDisabled(disable_slider);
     ImGui::BeginGroup();
-    DIRTY_IF(SliderWithInput(prob_id, &layer.probability, 0.0f, 1.0f, "%.2f"));
+    SliderWithInput(prob_id, &layer.probability, 0.0f, 1.0f, "%.2f");
     ImGui::EndGroup();
     ImGui::EndDisabled();
     const char* prob_tip = nullptr;
@@ -927,7 +914,6 @@ void RenderLayer(GuiState& state, int layer_idx) {
     if (pending_delete_entry >= 0 && layer.entries.size() > 1) {
       layer.entries.erase(layer.entries.begin() + pending_delete_entry);
       g_thumbnail_cache.OnLayerStructureChanged();
-      state.MarkDirty();
     }
 
     // Add entry button. Bind the new entry to a fresh pool slot so it is
@@ -943,7 +929,6 @@ void RenderLayer(GuiState& state, int layer_idx) {
       state.crystals.emplace_back();
       layer.entries.push_back(new_entry);
       g_thumbnail_cache.OnLayerStructureChanged();
-      state.MarkDirty();
     }
   }
 
@@ -966,13 +951,17 @@ void RenderScatteringSection(GuiState& state) {
 void RenderSceneControls(GuiState& state) {
   ImGui::SeparatorText("Sun");
   ImGui::BeginGroup();
-  DIRTY_IF(SliderWithInput("Altitude", &state.sun.altitude, -90.0f, 90.0f));
+  // AC2 migration path (scrum-gui-state-reconcile T0): widget only writes state.sun.altitude; the
+  // resulting dirty is derived by ReconcileGuiEffects in SyncFromPoller (diff on state.sun vs.
+  // last_committed_state.sun). The pre-migration DIRTY_IF wrapper is retired at this call site.
+  SliderWithInput("Altitude", &state.sun.altitude, -90.0f, 90.0f);
   ImGui::EndGroup();
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Sun elevation angle above the horizon");
   }
   ImGui::BeginGroup();
-  DIRTY_IF(SliderWithInput("Diameter", &state.sun.diameter, 0.1f, 5.0f));
+  // AC2 migration path: same rationale as sun.altitude above.
+  SliderWithInput("Diameter", &state.sun.diameter, 0.1f, 5.0f);
   ImGui::EndGroup();
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Angular diameter of the sun disk");
@@ -1000,7 +989,6 @@ void RenderSceneControls(GuiState& state) {
       state.sun.spectrum_index = combo_sel;
       // Keep custom_spectrum intact — it is only read when spectrum_index==kCustomSpectrumIndex, so
       // switching to a preset and back restores the user's edits instead of silently discarding them.
-      state.MarkDirty();
     }
   }
   if (ImGui::IsItemHovered()) {
@@ -1017,14 +1005,14 @@ void RenderSceneControls(GuiState& state) {
 
   ImGui::SeparatorText("Simulation");
   ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-  DIRTY_IF(ImGui::Checkbox("Infinite rays", &state.sim.infinite));
+  ImGui::Checkbox("Infinite rays", &state.sim.infinite);
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Run simulation continuously until manually stopped");
   }
   ImGui::PopItemWidth();
   ImGui::BeginGroup();
   if (!state.sim.infinite) {
-    DIRTY_IF(SliderWithInput("Rays(M)", &state.sim.ray_num_millions, 0.1f, 100.0f));
+    SliderWithInput("Rays(M)", &state.sim.ray_num_millions, 0.1f, 100.0f);
   } else {
     ImGui::BeginDisabled();
     SliderWithInput("Rays(M)", &state.sim.ray_num_millions, 0.1f, 100.0f);
@@ -1038,18 +1026,21 @@ void RenderSceneControls(GuiState& state) {
         "ceil(total / N_wavelengths) per wavelength.");
   }
   ImGui::BeginGroup();
-  DIRTY_IF(SliderIntWithInput("Max hits", &state.sim.max_hits, 1, 64));
+  SliderIntWithInput("Max hits", &state.sim.max_hits, 1, 64);
   ImGui::EndGroup();
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Maximum number of crystal face hits per ray path");
   }
 
-  // GPU backend toggle (Metal on Apple, CUDA on NVIDIA). Wired through DIRTY_IF so
+  // GPU backend toggle (Metal on Apple, CUDA on NVIDIA). Marked dirty explicitly so
   // the next Apply/Run reconstructs the server for the chosen backend
   // (MaybeReconstructServerForBackend in app.cpp) — CPU N-worker vs GPU single
   // engine are different orchestration topologies, so the server is rebuilt and the
   // accumulated image resets on toggle. Falls back to CPU silently if the active
   // config is not GPU-compatible.
+  // use_gpu_backend is intentionally excluded from ConfigSnapshot (session/view field,
+  // see gui_state.hpp field-sync scope comment), so it cannot participate in the
+  // reconciler auto-diff — the manual MarkDirty call below is the T0 documented exception.
   // Runtime gate: only show the checkbox when a GPU backend is actually available
   // (Metal device on Apple / NVIDIA device + usable CUDA on Windows-Linux), so it
   // never appears on CPU-only hosts or machines with very old hardware / broken GPU
@@ -1064,7 +1055,9 @@ void RenderSceneControls(GuiState& state) {
     if (busy) {
       ImGui::BeginDisabled();
     }
-    DIRTY_IF(ImGui::Checkbox("Use GPU", &state.use_gpu_backend));
+    if (ImGui::Checkbox("Use GPU", &state.use_gpu_backend)) {
+      state.MarkDirty();
+    }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
       ImGui::SetTooltip("Use the GPU for simulation (falls back to CPU if incompatible)");
     }
@@ -1073,7 +1066,5 @@ void RenderSceneControls(GuiState& state) {
     }
   }
 }
-
-#undef DIRTY_IF
 
 }  // namespace lumice::gui

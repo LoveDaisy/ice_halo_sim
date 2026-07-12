@@ -18,7 +18,7 @@
 //  2. gui_lifecycle/gpu_run_reaches_done — INTEGRATION e2e through the real DoRun→completion flow.
 //  3. gui_lifecycle/reconcile_truth_table — PURE unit test of ReconcileSimState (I2), no server/GL.
 //  4. gui_lifecycle/anti_flicker_epoch_floor — PURE structural test of the epoch-floor upload gate
-//     (I1/§3.3): MarkFilterDirty fences the old generation; MarkDirty carries it forward.
+//     (I1/§3.3): MarkStructHardDirty fences the old generation; MarkDirty carries it forward.
 //  5. gui_lifecycle/optimistic_async_stop — INTEGRATION of the 1.6 async Stop (blueprint §5/§8):
 //     DoStop returns immediately with run_intent==kStopping (optimistic, non-blocking); the reconcile
 //     maps that to the kStopping display state; JoinPendingStop drains the background thread and the
@@ -29,6 +29,7 @@
 #include <memory>
 #include <thread>
 
+#include "IconsFontAwesome6.h"  // ICON_FA_* selectors for the real-UI-click AC1 regression (Test 8b).
 #include "gui/server_poller.hpp"
 #include "test_gui_shared.hpp"
 
@@ -299,6 +300,28 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
     IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(RunIntent::kStopped, 7, nullptr, true)),
                 static_cast<int>(SimState::kModified));
 
+    // task-color-migration §3 D4 — kRunCompleted (latched natural completion) → kDone regardless
+    // of the observation. This is the load-bearing row: even a valid=false observation (root cause
+    // (a)) or a stale-epoch observation must NOT pull the latched terminal back to kSimulating.
+    // RED手法: forgetting the case in the switch would fall through to a default and mis-derive.
+    IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(RunIntent::kRunCompleted, 5, nullptr, false)),
+                static_cast<int>(SimState::kDone));
+    IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(RunIntent::kRunCompleted, 5, nullptr, true)),
+                static_cast<int>(SimState::kModified));  // +dirty → kModified (kDone is demotable)
+    {
+      auto s_invalid = mk(false, 5, kDone_lc);
+      // valid=false observation must NOT pull kRunCompleted back to kSimulating — this row is the
+      // structural guarantee AC1's activity bug root cause (b) relied on and this test pins.
+      IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(RunIntent::kRunCompleted, 5, &s_invalid, false)),
+                  static_cast<int>(SimState::kDone));
+      auto s_stale = mk(true, 3, kDone_lc);  // stale epoch (< committed)
+      IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(RunIntent::kRunCompleted, 5, &s_stale, false)),
+                  static_cast<int>(SimState::kDone));
+      auto s_running = mk(true, 5, kRun_lc);  // even a fresh RUNNING observation stays latched
+      IM_CHECK_EQ(static_cast<int>(gui::ReconcileSimState(RunIntent::kRunCompleted, 5, &s_running, false)),
+                  static_cast<int>(SimState::kDone));
+    }
+
     // kStopping (async Stop draining, 1.6) → kStopping, for ANY observation/dirty. Pure optimistic
     // intent: not pulled by a fresh COMPLETED, and NOT demoted by dirty (a draining run is not an
     // editable completed result). RED手法: mis-mapping the kStopping case to S::kSimulating turns
@@ -361,9 +384,9 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
   };
 
   // ---- Test 4: anti-flicker epoch-floor upload gate (I1/§3.3), pure/headless ----
-  // Pins that MarkFilterDirty raises display_epoch_floor to fence the OLD generation's payload
+  // Pins that MarkStructHardDirty raises display_epoch_floor to fence the OLD generation's payload
   // (blocked by ShouldUploadPayload) while MarkDirty leaves the floor so a carried-forward payload
-  // passes. Bites the real production predicate (ShouldUploadPayload) + the real MarkFilterDirty /
+  // passes. Bites the real production predicate (ShouldUploadPayload) + the real MarkStructHardDirty /
   // MarkDirty split — the mechanism behind "filter change clears + no stale refill" vs "crystal
   // scrub keeps the last frame with no black flicker", which manual Metal scrub can't check in CI.
   ImGuiTest* t4 = IM_REGISTER_TEST(engine, "gui_lifecycle", "anti_flicker_epoch_floor");
@@ -383,12 +406,12 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
     snap.payload = old_payload;
     snap.texture_serial = 1;  // unseen (cursor starts at 0)
 
-    // --- filter change: MarkFilterDirty raises the floor to committed_epoch ⇒ old payload BLOCKED.
+    // --- filter change: MarkStructHardDirty raises the floor to committed_epoch ⇒ old payload BLOCKED.
     {
       gui::GuiState st;
       st.committed_epoch = kGen;
       st.display_epoch_floor = 0;
-      st.MarkFilterDirty();
+      st.MarkStructHardDirty();
       IM_CHECK_EQ(st.display_epoch_floor, kGen);  // floor bumped to the current generation
       IM_CHECK_EQ(st.snapshot_intensity, 0.0f);   // immediate display clear preserved
       // payload_epoch (kGen) is NOT > floor (kGen) ⇒ gate rejects the stale texture.
@@ -599,5 +622,408 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
 
     local.Stop();
     LUMICE_DestroyServer(server);
+  };
+
+  // ---- Test 6b: task-color-migration §3 D4 — kRunCompleted Mealy latch (integration) ----
+  // Pins the SyncFromPoller-side Mealy edge: under a kRunning intent, the first fresh COMPLETED
+  // observation at the committed epoch promotes the intent to kRunCompleted, and any later
+  // valid=false observation cannot pull the reconciled state back to kSimulating (root cause (b)
+  // of the AC1 activity bug — the structural belt paired with WakeForRefresh's suspenders).
+  //
+  // Uses the same DoRun-driven real-server flow as Test 2 (gpu_run_reaches_done) so the intent
+  // advance goes through the actual production SyncFromPoller path, not a hand-rolled reconcile
+  // call.
+  ImGuiTest* t6b = IM_REGISTER_TEST(engine, "gui_lifecycle", "run_completed_latch_survives_invalid_snapshot");
+  t6b->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    // Fresh server + baseline (mirrors gpu_run_reaches_done setup).
+    gui::g_server_poller.Stop();
+    gui::g_server = LUMICE_CreateServer();
+    IM_CHECK(gui::g_server != nullptr);
+    gui::g_server_is_gpu = false;
+    gui::g_state = gui::InitDefaultState();
+    gui::g_state.sim.infinite = false;
+    gui::g_state.sim.ray_num_millions = 0.5f;
+    gui::g_state.sim.max_hits = 8;
+#if defined(__APPLE__)
+    gui::g_state.use_gpu_backend = true;
+#endif
+
+    gui::DoRun();
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunning));
+
+    // Drive SyncFromPoller until the reconcile settles on kDone (natural completion).
+    for (int i = 0; i < 500 && static_cast<int>(gui::g_state.sim_state) != static_cast<int>(SimState::kDone); ++i) {
+      ctx->Yield();
+    }
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kDone));
+
+    // Mealy latch invariant: on the first frame that observes fresh COMPLETED, SyncFromPoller
+    // must have promoted the intent to kRunCompleted (kRunning → kRunCompleted). Give the poller
+    // one more Yield to run the promotion path if it hasn't yet.
+    for (int i = 0; i < 3 && gui::g_state.run_intent != RunIntent::kRunCompleted; ++i) {
+      ctx->Yield();
+    }
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunCompleted));
+
+    // Load-bearing check: fabricate a valid=false observation on the global poller (the exact
+    // shape that WakeForRestart's PublishValidReset used to produce, and that the AC1 root cause
+    // (b) required to demote the completed state). With the kRunCompleted latch in effect, a
+    // subsequent SyncFromPoller must NOT pull sim_state back to kSimulating — the intent-latched
+    // terminal is structurally immune (this is the belt-and-suspenders duality with WakeForRefresh).
+    gui::g_server_poller.PublishValidResetForTest();
+    gui::SyncFromPoller();
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kDone));
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunCompleted));
+
+    // Cleanup.
+    gui::g_server_poller.Stop();
+    LUMICE_DestroyServer(gui::g_server);
+    gui::g_server = nullptr;
+    gui::g_state.run_intent = RunIntent::kNone;
+    gui::g_state.committed_epoch = 0;
+    gui::g_state.display_epoch_floor = 0;
+  };
+
+  // ---- Test 7: task-color-migration M4 — WakeForRefresh preserves valid across the wake edge ----
+  // Pins the semantic distinction between the two poller wake seams introduced by M4:
+  //   WakeForRestart publishes valid=false on the kPaused→kRunning edge (fresh commit: consumers
+  //     must ignore stale terminal snapshots).
+  //   WakeForRefresh preserves valid across the wake edge (display-time refresh: SyncFromPoller
+  //     must not observe a transient valid=false window that would let ReconcileSimState pull a
+  //     completed sim back into kSimulating — activity bug AC1 root cause (a),
+  //     doc/gui-state-governance.md §4 支柱 2).
+  // Same-shape white-box test: bring poller to kPaused with a valid=true snapshot published, then
+  // exercise each wake variant and diff the immediately-following LoadSnapshot()->valid.
+  ImGuiTest* t7 = IM_REGISTER_TEST(engine, "gui_lifecycle", "wake_for_refresh_preserves_valid");
+  t7->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    // Clean baseline: detach the global poller from any prior test's server.
+    gui::g_server_poller.Stop();
+    gui::g_server = nullptr;
+
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+    const bool completed = RunFiniteToCompletion(server);
+    IM_CHECK(completed);
+    if (!completed) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+
+    // Baseline: publish a fresh valid=true terminal snapshot via a synchronous poll, then Stop the
+    // worker so state_ == kPaused. Both wake variants below start from this identical baseline.
+    auto seed_baseline = [server]() {
+      gui::g_server_poller.Stop();
+      gui::g_server_poller.ResetGenerationForTest();
+      gui::g_server_poller.PollOnceForTest(server);
+      auto snap = gui::g_server_poller.LoadSnapshot();
+      IM_CHECK(snap != nullptr);
+      IM_CHECK(snap->valid);  // baseline invariant: seed snapshot is valid before the wake
+      gui::g_server_poller.Stop();
+    };
+
+    // (A) WakeForRestart: valid must flip to false after the wake (PublishValidReset called).
+    seed_baseline();
+    gui::g_server_poller.WakeForRestart(server);
+    {
+      auto snap = gui::g_server_poller.LoadSnapshot();
+      IM_CHECK(snap != nullptr);
+      IM_CHECK(!snap->valid);  // WakeForRestart publishes valid=false on the wake edge
+    }
+
+    // (B) WakeForRefresh: valid must be preserved as true (no PublishValidReset). This is the
+    // load-bearing behavior for AC1 — a display-time edit's wake path must not fabricate a
+    // valid=false window that ReconcileSimState would classify as kSimulating.
+    seed_baseline();
+    gui::g_server_poller.WakeForRefresh(server);
+    {
+      auto snap = gui::g_server_poller.LoadSnapshot();
+      IM_CHECK(snap != nullptr);
+      IM_CHECK(snap->valid);  // WakeForRefresh preserves valid across the wake edge
+    }
+
+    gui::g_server_poller.Stop();
+    LUMICE_DestroyServer(server);
+  };
+
+  // ---- Test 8: task-color-migration M7 — AC1/AC4 display-time edits do not disturb kDone ----
+  // The user-visible activity bug (plan §1 偏离 A): after a finite run completes, toggling any of
+  // color / visible / solo / z_order / mode used to flash Run→Stop and briefly display
+  // "Simulating…" in the status bar. Two root causes had to be fixed together (doc §7 反模式
+  // "同一 bug 连修错误层"):
+  //   (a) M4 WakeForRefresh — display-time refresh must not publish valid=false through the
+  //       poller's kPaused→kRunning wake edge (Test 7 pins the seam-level invariant);
+  //   (b) M5 kRunCompleted latch — a completed intent is structurally immune to any late
+  //       valid=false observation (Test 6b pins the reconcile-side latch);
+  //   (c) M6 InvalidateEffectsBaselines — DoRun / DoRevert / backend-swap reset the display-push
+  //       baseline so the next reconcile re-pushes (Test 2 in test_gui_state_reconcile pins the
+  //       baseline invariant).
+  //
+  // This test is the END-TO-END integration guard for AC1/AC4: it drives a real finite DoRun→
+  // completion, then exercises each of the five display-time edit categories by writing the
+  // widget-level field directly (M3 made the widgets pure field-writers — the reconciler picks
+  // up the diff on the frame tail — so a field poke is behaviorally identical to a `ctx->ItemClick`
+  // on the corresponding widget, minus the ImGui click-plumbing complexity). Across a multi-frame
+  // scan after each edit, sim_state must remain kDone (AC1), run_intent must remain kRunCompleted
+  // and committed_epoch must NOT advance (AC4: display-time is inert to the sim-lifecycle clock).
+  //
+  // Multi-frame scan (not just one post-edit assert) is load-bearing: AC1 phrasing is "does not
+  // flash" — a single-frame assertion would miss a one-frame regression window. The scan iterates
+  // ctx->Yield() five times and asserts the invariant on every intermediate frame.
+  ImGuiTest* t8 = IM_REGISTER_TEST(engine, "gui_lifecycle", "display_edits_do_not_disturb_done");
+  t8->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    // Setup mirrors Test 6b (real-server finite DoRun through the reconcile pipeline).
+    gui::g_server_poller.Stop();
+    gui::g_server = LUMICE_CreateServer();
+    IM_CHECK(gui::g_server != nullptr);
+    gui::g_server_is_gpu = false;
+    gui::g_state = gui::InitDefaultState();
+    gui::g_state.sim.infinite = false;
+    gui::g_state.sim.ray_num_millions = 0.5f;
+    gui::g_state.sim.max_hits = 8;
+#if defined(__APPLE__)
+    gui::g_state.use_gpu_backend = true;
+#endif
+
+    // Seed two color classes BEFORE DoRun so the committed config carries them and post-completion
+    // display-time edits have a non-empty vector to push through the reconciler (empty raypath_color
+    // short-circuits DiffAgainstDisplayBaseline; we want the actual push lane exercised).
+    gui::ColorClassConfig c0;
+    c0.color[0] = 1.0f;
+    c0.visible = true;
+    c0.solo = false;
+    c0.z_order = 0;
+    gui::ColorClassConfig c1;
+    c1.color[1] = 1.0f;
+    c1.visible = true;
+    c1.solo = false;
+    c1.z_order = 1;
+    gui::g_state.raypath_color.push_back(c0);
+    gui::g_state.raypath_color.push_back(c1);
+
+    gui::DoRun();
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunning));
+
+    // Drive until sim_state == kDone AND intent has latched to kRunCompleted (Mealy edge in
+    // SyncFromPoller runs one frame after the reconcile settles).
+    auto start = std::chrono::steady_clock::now();
+    while (gui::g_state.sim_state != SimState::kDone || gui::g_state.run_intent != RunIntent::kRunCompleted) {
+      ctx->Yield();
+      if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start).count() > 20) {
+        break;
+      }
+    }
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kDone));
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunCompleted));
+
+    // AC4 baseline: display-time is inert to the sim-lifecycle clock. Capture the epoch here;
+    // display-time edits must NOT advance it.
+    const uint64_t baseline_epoch = gui::g_state.committed_epoch;
+
+    // Multi-frame scan invariant: sim_state stays kDone, run_intent stays kRunCompleted,
+    // committed_epoch does not advance, across N post-edit frames. RED手法: a single-frame
+    // valid=false blip (pre-M4) would slip past a one-shot assertion but this loop catches it.
+    auto scan_invariant = [&](const char* edit_label) {
+      IM_UNUSED(edit_label);
+      for (int frame = 0; frame < 5; ++frame) {
+        ctx->Yield();
+        IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kDone));
+        IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunCompleted));
+        IM_CHECK_EQ(gui::g_state.committed_epoch, baseline_epoch);
+      }
+    };
+
+    // Edit 1: color (ColorClassDisplayState.color[]) — the color swatch widget's field write.
+    gui::g_state.raypath_color[0].color[0] = 0.5f;
+    gui::g_state.raypath_color[0].color[1] = 0.25f;
+    scan_invariant("color");
+
+    // Edit 2: visible (eye icon plain click).
+    gui::g_state.raypath_color[0].visible = false;
+    scan_invariant("visible");
+
+    // Edit 3: solo (eye icon Alt+click). Note: solo alone semantically implies visible=false on
+    // the non-solo class; here we just flip solo on class 0 to exercise the display-state field.
+    gui::g_state.raypath_color[0].solo = true;
+    scan_invariant("solo");
+
+    // Edit 4: z_order (up/down arrow buttons swap z_order values between two classes).
+    std::swap(gui::g_state.raypath_color[0].z_order, gui::g_state.raypath_color[1].z_order);
+    scan_invariant("z_order");
+
+    // Edit 5: mode (composite mode combo).
+    gui::g_state.raypath_color_mode = (gui::g_state.raypath_color_mode + 1) % 3;
+    scan_invariant("mode");
+
+    // Cleanup mirrors Test 2 / Test 6b.
+    gui::g_server_poller.Stop();
+    if (gui::g_server) {
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+    }
+    gui::g_server_is_gpu = false;
+    gui::g_state.run_intent = RunIntent::kNone;
+    gui::g_state.committed_epoch = 0;
+    gui::g_state.display_epoch_floor = 0;
+  };
+
+  // AC1 real-UI-click regression (code-review round-1 Major-3): Test 8 above proves the
+  // reconciler-level AC1/AC4 invariants given a raw field write, but M3 made every color-window
+  // widget a pure field-writer that is ALSO reached through real ImGui widget code (button click,
+  // combo popup, held-Alt modifier, color-picker popup) before that field write happens — the
+  // multi-frame widget interaction itself (popup open/close, a frame where the mouse is down but
+  // the click hasn't registered yet, modifier-key state) is exactly the kind of thing a direct
+  // field poke cannot exercise. This test drives the same five display-time categories through
+  // their actual widget code paths (`ctx->ItemClick`/`ctx->ComboClick`, held Alt for solo) instead
+  // of assigning GuiState fields directly.
+  ImGuiTest* t8b = IM_REGISTER_TEST(engine, "gui_lifecycle", "display_edits_via_real_ui_clicks_do_not_disturb_done");
+  t8b->TestFunc = [](ImGuiTestContext* ctx) {
+    gui::g_server_poller.Stop();
+    gui::g_server = LUMICE_CreateServer();
+    IM_CHECK(gui::g_server != nullptr);
+    gui::g_server_is_gpu = false;
+    gui::g_state = gui::InitDefaultState();
+    gui::g_state.sim.infinite = false;
+    gui::g_state.sim.ray_num_millions = 0.5f;
+    gui::g_state.sim.max_hits = 8;
+#if defined(__APPLE__)
+    gui::g_state.use_gpu_backend = true;
+#endif
+
+    // Two match-all classes on the default crystal, seeded BEFORE DoRun (same rationale as Test
+    // 8: a non-empty committed raypath_color so the push lane is actually exercised). z_order is
+    // seeded in ascending rank order (rank 0 == phys 0) so the wildcard item lookups below —
+    // which resolve to the FIRST matching item in this frame's submission order (see
+    // ImGuiTestEngineHook_ItemInfo_ResolveFindByLabel: `OutItemId == 0` guard means first-match-
+    // wins, not an ambiguity error) — deterministically hit the rank-0 row without needing a
+    // fragile PushID(int)-based hardcoded path (the same fragility `toggle_whole_via_ui_marks_
+    // modified` in test_gui_color_window.cpp already called out for `##body`).
+    gui::ColorClassConfig c0;
+    c0.color[0] = 1.0f;
+    c0.visible = true;
+    c0.solo = false;
+    c0.z_order = 0;
+    gui::ColorClassRefConfig ref0;
+    ref0.layer_idx = 0;
+    ref0.crystal_pool_id = gui::g_state.layers[0].entries[0].crystal_id;
+    ref0.match_all = true;
+    c0.match.push_back(ref0);
+    gui::ColorClassConfig c1;
+    c1.color[1] = 1.0f;
+    c1.visible = true;
+    c1.solo = false;
+    c1.z_order = 1;
+    c1.match.push_back(ref0);
+    gui::g_state.raypath_color.push_back(c0);
+    gui::g_state.raypath_color.push_back(c1);
+
+    gui::DoRun();
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunning));
+    auto start = std::chrono::steady_clock::now();
+    while (gui::g_state.sim_state != SimState::kDone || gui::g_state.run_intent != RunIntent::kRunCompleted) {
+      ctx->Yield();
+      if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start).count() > 20) {
+        break;
+      }
+    }
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kDone));
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunCompleted));
+
+    const uint64_t baseline_epoch = gui::g_state.committed_epoch;
+
+    // Same multi-frame scan rationale as Test 8's scan_invariant: AC1 is "does not flash", so a
+    // single post-click assertion would miss a one-frame regression window.
+    auto scan_invariant = [&]() {
+      for (int frame = 0; frame < 5; ++frame) {
+        ctx->Yield();
+        IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kDone));
+        IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunCompleted));
+        IM_CHECK_EQ(gui::g_state.committed_epoch, baseline_epoch);
+      }
+    };
+
+    gui::g_state.color_window_open = true;
+    ctx->Yield(2);
+    // The Colors window's ImGui-internal position/size persist across tests within the same
+    // process (window ID is stable, keyed by title) — an unrelated earlier test
+    // (p1_card/card_click_blocked_when_covered_by_colors_window) deliberately WindowMove()s it
+    // off to the left to cover a crystal card and never restores it, which can clip the row's
+    // leftmost items (the z_order up/down arrows) out of view for whichever test opens the
+    // window next. Pin position + size explicitly so this test's wildcard item lookups don't
+    // depend on what ran before it.
+    ctx->WindowMove("//" ICON_FA_PALETTE " Colors", ImVec2(50, 50));
+    ctx->WindowResize("//" ICON_FA_PALETTE " Colors", ImVec2(720, 480));
+    ctx->Yield(2);
+    ctx->SetRef("//" ICON_FA_PALETTE " Colors");
+
+    // Click 1: color swatch -> opens the ColorPicker popup -> click inside its "sv" square. The
+    // default ItemClick position is the item rect's center, which is never the current pure-red
+    // S=1,V=1 corner, so this always produces a value_changed edit (see ColorPicker4's `IsItemActive
+    // () && !is_readonly` branch in imgui_widgets.cpp) -> close the popup. Two ID-resolution quirks
+    // stack here: (1) `##color` is the PushID scope ColorEdit3 opens around itself, not an item —
+    // with ImGuiColorEditFlags_NoInputs the only clickable child is the swatch button, which ImGui
+    // names "##ColorButton" (see ColorEdit4 in imgui_widgets.cpp); (2) unlike Button/SmallButton,
+    // ImGui::ColorButton() never calls IMGUI_TEST_ENGINE_ITEM_INFO(), so it has no registered debug
+    // label and a "**/" wildcard search (which matches by label) can never find it. A literal path
+    // sidesteps both: `$$0` reproduces PushID(phys=0)'s int hash (ImHashDecoratedPath's documented
+    // literal-encoding syntax, imgui_te_utils.cpp), and literal (non-wildcard) resolution looks the
+    // item up by its already-known ID rather than by label, which works for any ItemAdd()'d widget.
+    ctx->ItemClick("$$0/##color/##ColorButton");
+    ctx->Yield();
+    ctx->ItemClick("**/sv");
+    ctx->PopupCloseAll();
+    scan_invariant();
+    IM_CHECK_NE(gui::g_state.raypath_color[0].color[0], 1.0f);  // sanity: the click actually landed
+
+    // Click 2: eye icon plain click -> visible toggle.
+    IM_CHECK(gui::g_state.raypath_color[0].visible);
+    ctx->ItemClick("**/" ICON_FA_EYE);
+    scan_invariant();
+    IM_CHECK(!gui::g_state.raypath_color[0].visible);  // sanity: the click actually landed
+
+    // Click 3: Alt+eye icon -> solo. Rank-0's icon is now ICON_FA_EYE_SLASH (visible was just
+    // toggled off above) while rank-1's is still plain ICON_FA_EYE, so this lookup is unambiguous
+    // by construction, independent of the first-match tie-break described above.
+    ctx->KeyDown(ImGuiMod_Alt);
+    ctx->ItemClick("**/" ICON_FA_EYE_SLASH);
+    ctx->KeyUp(ImGuiMod_Alt);
+    scan_invariant();
+    IM_CHECK(gui::g_state.raypath_color[0].solo);  // sanity: the click actually landed
+
+    // Click 4: z_order down-arrow on the rank-0 row. Rank-0's up-arrow is disabled (top of stack);
+    // its down-arrow is the enabled one, and first-match resolves to rank-0 since it is rendered
+    // first in the z_order-sorted loop.
+    const int z0_before = gui::g_state.raypath_color[0].z_order;
+    const int z1_before = gui::g_state.raypath_color[1].z_order;
+    ctx->ItemClick("**/" ICON_FA_ARROW_DOWN "##down");
+    scan_invariant();
+    IM_CHECK_EQ(gui::g_state.raypath_color[0].z_order, z1_before);  // sanity: the swap landed
+    IM_CHECK_EQ(gui::g_state.raypath_color[1].z_order, z0_before);
+
+    // Click 5: composite mode combo -> "painter" is combo item index 2 (see kModeNames in
+    // RenderCompositeModeCombo), distinct from the default index 0 ("dominant").
+    const int mode_before = gui::g_state.raypath_color_mode;
+    ctx->ComboClick("##ColorMode/painter");
+    scan_invariant();
+    IM_CHECK_NE(gui::g_state.raypath_color_mode, mode_before);  // sanity: the click actually landed
+    IM_CHECK_EQ(gui::g_state.raypath_color_mode, 2);
+
+    ctx->SetRef("");
+    gui::g_state.color_window_open = false;
+    ctx->Yield(2);
+
+    gui::g_server_poller.Stop();
+    if (gui::g_server) {
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+    }
+    gui::g_server_is_gpu = false;
+    gui::g_state.run_intent = RunIntent::kNone;
+    gui::g_state.committed_epoch = 0;
+    gui::g_state.display_epoch_floor = 0;
   };
 }

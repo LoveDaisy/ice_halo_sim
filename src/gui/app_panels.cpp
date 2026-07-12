@@ -326,7 +326,12 @@ void RenderTopBar(float window_width) {
     // re-swap the token set).
     const bool composite_now = g_state.last_uploaded_as_composite;
     const std::vector<int>& signal_flags = RefreshColorClassSignals(g_state, g_server);
-    const bool all_unmatched = AllConfiguredColorClassesUnmatched(g_state, signal_flags);
+    // task-fix-color-window-visibility-consistency: merged "composite would be
+    // empty" predicate covers both prior triggers — no rays match, OR every
+    // matching class is currently hidden (visible=false, or solo'd out by
+    // another class). Single owner shared with the Colors-window Enable
+    // checkbox so the two indicators cannot disagree.
+    const bool composite_empty = NoVisibleMatchedColorClass(g_state, signal_flags);
     const char* mode_label = composite_now ? "Colored" : "Full Spectrum";
     const std::string checkbox_id = std::string(mode_label) + "##CompositePreviewToggle";
     bool checked = composite_now;
@@ -335,13 +340,13 @@ void RenderTopBar(float window_width) {
       ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.45f, 0.65f, 0.95f, 1.0f));
       ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
     }
-    if (all_unmatched) {
+    if (composite_empty) {
       ImGui::BeginDisabled();
     }
     if (ImGui::Checkbox(checkbox_id.c_str(), &checked)) {
       ToggleCompositePreview(g_state);
     }
-    if (all_unmatched) {
+    if (composite_empty) {
       ImGui::EndDisabled();
     }
     if (composite_now) {
@@ -352,7 +357,7 @@ void RenderTopBar(float window_width) {
     // "no matches" reason (a12: shared string with the Colors-window mirror);
     // when enabled, show the existing "Currently: Colored / Full Spectrum" hint.
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      if (all_unmatched) {
+      if (composite_empty) {
         ImGui::SetTooltip("%s", kColorsDisabledNoMatchTooltip);
       } else {
         ImGui::SetTooltip(
@@ -372,18 +377,19 @@ void RenderTopBar(float window_width) {
     // no class has non-empty match[] (matches per-row semantics).
     //
     // task-349.2 Step 3: the pip stays alongside the disabled button (both driven
-    // by all_unmatched) — the two indicators are complementary, not redundant:
+    // by composite_empty) — the two indicators are complementary, not redundant:
     // the button greying is the immediate visual cue "cannot toggle now", the
     // pip is the persistent per-row / aggregate warning surface.
-    if (all_unmatched) {
+    if (composite_empty) {
       ImGui::SameLine();
       ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.2f, 1.0f));
       ImGui::TextUnformatted(ICON_FA_TRIANGLE_EXCLAMATION);
       ImGui::PopStyleColor();
       if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(
-            "None of the color classes matched any rays (they may be blocked by a physical filter).\n"
-            "Open the Colors window to inspect per-class details.");
+            "No visible color class currently matches any rays -- the composite would be empty.\n"
+            "Either no rays match (they may be blocked by a physical filter), or every matching\n"
+            "class is currently hidden. Open the Colors window to inspect per-class details.");
       }
     }
   }
@@ -533,7 +539,6 @@ void RenderLeftPanel(float window_height) {
     }
     g_state.layers.push_back(std::move(new_layer));
     g_thumbnail_cache.OnLayerStructureChanged();
-    g_state.MarkDirty();
   }
 
   // Process edit request: open modal if an edit button or card area was clicked
@@ -710,7 +715,6 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       r.elevation = d.elevation;
       r.azimuth = d.azimuth;
       r.roll = d.roll;
-      g_state.MarkDirty();
     }
 
     ImGui::PopItemWidth();
@@ -722,9 +726,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     ImGui::SeparatorText("Rendering");
     const char* res_labels[] = { "512", "1024", "2048", "4096" };
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.45f, 0.28f, 0.12f, 0.6f));
-    if (ImGui::Combo("Resolution##display", &r.sim_resolution_index, res_labels, kSimResolutionCount)) {
-      g_state.MarkDirty();
-    }
+    ImGui::Combo("Resolution##display", &r.sim_resolution_index, res_labels, kSimResolutionCount);
     ImGui::PopStyleColor();
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
@@ -1019,8 +1021,10 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
         // Wake a paused poller so the next frame can pick up the freshly re-baked
         // composite even after a finite sim has completed (same rationale as the
         // color-window PushDisplayState path — see task-345.2 (③) in color_window.cpp).
-        // No-op when the poller is already running.
-        g_server_poller.EnsureRunning(g_server);
+        // No-op when the poller is already running. WakeForRefresh (not WakeForRestart)
+        // preserves valid=true across the wake edge — same display-time-inert contract
+        // as color/visible/solo/z_order edits (task-color-migration §3 D3).
+        g_server_poller.WakeForRefresh(g_server);
         s_last_pushed_ev = composite_ev_push;
       }
       s_last_composite_active = composite_active;
@@ -1336,6 +1340,28 @@ void RenderGuiWarningPopup() {
   }
 }
 
+// Executes the New/Open/Quit action queued in g_pending_action (if any) and
+// clears it. Shared by the three button branches below and in
+// RenderSaveModifiedPopup that resume a deferred action once it is safe to do
+// so (code-review-02 M2: was three independent copies of the same 4-branch
+// switch; consolidated to a single call site).
+void ResolvePendingAction(GLFWwindow* window) {
+  switch (g_pending_action) {
+    case PendingAction::kNew:
+      DoNew();
+      break;
+    case PendingAction::kOpen:
+      DoOpen();
+      break;
+    case PendingAction::kQuit:
+      glfwSetWindowShouldClose(window, GLFW_TRUE);
+      break;
+    default:
+      break;
+  }
+  g_pending_action = PendingAction::kNone;
+}
+
 void RenderUnsavedPopup(GLFWwindow* window) {
   if (g_show_unsaved_popup) {
     ImGui::OpenPopup("Unsaved Changes");
@@ -1347,43 +1373,129 @@ void RenderUnsavedPopup(GLFWwindow* window) {
     ImGui::Separator();
 
     if (ImGui::Button("Save", ImVec2(80, 0))) {
+      // task-cleanup-hardening AC4 code-review-01 M1: route through the
+      // kModified gate (DoSave) instead of bypassing it via PerformSave. If
+      // sim_state == kModified, DoSave() defers to RenderSaveModifiedPopup and
+      // leaves g_pending_action queued — its three branches below decide
+      // whether the deferred New/Open/Quit actually runs. If not modified,
+      // DoSave() falls through to PerformSave() synchronously, same as before.
       DoSave();
-      switch (g_pending_action) {
-        case PendingAction::kNew:
-          DoNew();
-          break;
-        case PendingAction::kOpen:
-          DoOpen();
-          break;
-        case PendingAction::kQuit:
-          glfwSetWindowShouldClose(window, GLFW_TRUE);
-          break;
-        default:
-          break;
+      if (!g_show_save_modified_popup) {
+        ResolvePendingAction(window);
       }
-      g_pending_action = PendingAction::kNone;
       ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
     if (ImGui::Button("Don't Save", ImVec2(100, 0))) {
-      switch (g_pending_action) {
-        case PendingAction::kNew:
-          DoNew();
-          break;
-        case PendingAction::kOpen:
-          DoOpen();
-          break;
-        case PendingAction::kQuit:
-          glfwSetWindowShouldClose(window, GLFW_TRUE);
-          break;
-        default:
-          break;
-      }
-      g_pending_action = PendingAction::kNone;
+      ResolvePendingAction(window);
       ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
     if (ImGui::Button("Cancel", ImVec2(80, 0))) {
+      g_pending_action = PendingAction::kNone;
+      ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+  }
+}
+
+// task-cleanup-hardening AC4: RenderSaveModifiedPopup — the "Save while
+// sim_state == kModified" prompt. The owner ruling (issue.md §偏离-E) is that
+// silently serializing "stale preview + fresh config + dirty=false" and
+// clearing Modified is a bug: the .lmc records a preview that does NOT match
+// its own config, and the user loses the visual warning that a re-run is
+// needed. This popup gates that flow — the user picks one of three:
+//   - "Run first"  : DoRun() to produce a fresh preview matching the current
+//                    config, then close the popup; the user re-invokes Save
+//                    when ready. Disabled if no live server (kIdle).
+//   - "Save anyway": PerformSave / PerformSaveAs (bypass the check). Freezes
+//                    the last committed run's preview into the .lmc — legit
+//                    when the user knowingly wants to snapshot pre-edit state.
+//   - "Cancel"     : Clears the pending save kind and closes; no side effect.
+//
+// code-review-01 M1: this popup can also be reached via RenderUnsavedPopup's
+// "Save" button (DoSave() defers here when kModified), which leaves a
+// g_pending_action (New/Open/Quit) queued. Only "Save anyway" — the branch
+// that actually performs a serialization — resumes that deferred action;
+// "Run first" and "Cancel" both clear it, since neither persists anything and
+// silently proceeding with New/Open/Quit would discard the edit the original
+// Unsaved-changes prompt was protecting. When this popup is opened directly
+// from the top-bar Save button, g_pending_action is always kNone already, so
+// clearing/switching on it here is a no-op in that path.
+void RenderSaveModifiedPopup(GLFWwindow* window) {
+  // window is used by the "Save anyway" branch's chained kQuit case (see
+  // code-review-01 M1 doc comment above).
+  //
+  // code-review-02 M1 investigated whether Escape can dismiss this modal
+  // without going through any of the three buttons below, which would leave
+  // g_pending_save_kind / g_pending_action stale for a later, unrelated Save
+  // to misfire on. Verified NOT reachable in this codebase: Dear ImGui's
+  // NavUpdateCancelRequest() (imgui.cpp) only routes Escape to
+  // ClosePopupToLevel() when the topmost open popup does NOT have
+  // ImGuiWindowFlags_Modal set — BeginPopupModal always sets that flag, so
+  // Escape never reaches the close path for ANY modal in this app,
+  // regardless of p_open or window flags (io.ConfigFlags has
+  // ImGuiConfigFlags_NavEnableKeyboard on in both main.cpp:126 and
+  // test_gui_main.cpp:264, so the nav-active precondition is satisfied — the
+  // modal exclusion is what actually blocks it). Modals also block
+  // click-outside-to-close by design. The only exits are the three buttons.
+  // gui_test p2_modal/save_modified_popup_escape_is_a_noop pins this via a
+  // real ctx->KeyPress(ImGuiKey_Escape) against the live popup.
+  if (g_show_save_modified_popup) {
+    ImGui::OpenPopup("Save Modified Config");
+    g_show_save_modified_popup = false;
+  }
+
+  if (ImGui::BeginPopupModal("Save Modified Config", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::Text("The config has been modified since the last simulation run.");
+    ImGui::Text("The on-screen preview reflects the previous config, not the current one.");
+    ImGui::Separator();
+
+    // "Run first" is only meaningful when there is a live server to run on and
+    // no run is already inflight. Disabled otherwise (matches the top-bar Run
+    // button gating semantics; single-source would be nicer but the top bar's
+    // enable predicate is inlined and not exported).
+    const bool can_run = (g_server != nullptr) && (g_state.sim_state != GuiState::SimState::kSimulating) &&
+                         (g_state.sim_state != GuiState::SimState::kStopping);
+    if (!can_run) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Run first", ImVec2(100, 0))) {
+      DoRun();
+      g_pending_save_kind = PendingSaveKind::kNone;
+      // Abort any chained New/Open/Quit (see doc comment above) — Run doesn't
+      // persist anything, so proceeding now would still discard the edit.
+      g_pending_action = PendingAction::kNone;
+      ImGui::CloseCurrentPopup();
+    }
+    if (!can_run) {
+      ImGui::EndDisabled();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Save anyway", ImVec2(120, 0))) {
+      switch (g_pending_save_kind) {
+        case PendingSaveKind::kSave:
+          PerformSave();
+          break;
+        case PendingSaveKind::kSaveAs:
+          PerformSaveAs();
+          break;
+        case PendingSaveKind::kNone:
+          break;
+      }
+      g_pending_save_kind = PendingSaveKind::kNone;
+      // Resume the New/Open/Quit deferred by RenderUnsavedPopup's Save button
+      // (see doc comment above) — a real save just happened, so it's safe to
+      // proceed. No-op when this popup was opened directly (g_pending_action
+      // is kNone in that path).
+      ResolvePendingAction(window);
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(80, 0))) {
+      g_pending_save_kind = PendingSaveKind::kNone;
+      // Abort any chained New/Open/Quit — see doc comment above.
       g_pending_action = PendingAction::kNone;
       ImGui::CloseCurrentPopup();
     }

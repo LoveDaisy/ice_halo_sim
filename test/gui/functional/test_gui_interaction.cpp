@@ -1,6 +1,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <thread>
 
 #include "IconsFontAwesome6.h"  // ICON_FA_* selectors used to match new icon-prefixed button labels
@@ -12,7 +13,8 @@
 // convention block at the top of src/gui/app_panels.cpp. Any ImGui upgrade
 // that alters either rule must update both that comment and the
 // p1_layout / p1_edit_modal z-order assertions below.
-#include "gui/panels.hpp"  // FilterSummary declaration (also re-exposes gui_state.hpp transitively)
+#include "gui/panels.hpp"         // FilterSummary declaration (also re-exposes gui_state.hpp transitively)
+#include "gui/server_poller.hpp"  // LUMICE_CreateServer/StopServer/DestroyServer (real-commit tests)
 #include "imgui_internal.h"
 #include "test_gui_shared.hpp"  // declares g_enable_log_panel (toggle gate for RenderLogPanel)
 
@@ -31,6 +33,61 @@ static bool WaitForSimRestartAtLeast(ImGuiTestContext* ctx, unsigned long baseli
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
   return false;
+}
+
+// AC2 core deliverable evidence (task-classic-params-migration, code-review-01.md merged Major
+// #1): plan.md §4 Step 6 calls out "same filter edit via CommitAllBuffers (Staged OK) vs
+// CommitAllBuffersImmediate (Immediate) produces identical GuiEffects" as the task's core
+// observable proof that S6 (staged/immediate unification) is real. Drives ONE logical
+// filter-presence edit through either commit path from an identical "finite rays done" baseline
+// and returns the effect-observable triple for cross-path comparison. A free function (not a
+// capturing lambda) because ImGuiTest::TestFunc is a raw function pointer typedef and cannot bind
+// captures.
+struct Ac2Outcome {
+  bool dirty;
+  gui::GuiState::SimState sim_state;
+  unsigned long long display_epoch_floor;
+};
+
+static Ac2Outcome RunFilterPresenceToggleScenario(ImGuiTestContext* ctx, bool start_with_filter, bool immediate) {
+  ResetTestState();
+  gui::g_state.modal_immediate_mode = immediate;
+  if (start_with_filter) {
+    gui::FilterConfig f;
+    f.SetRaypath(gui::RaypathParams{ "3-1-5" });
+    gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
+  }
+  gui::g_state.run_intent = gui::RunIntent::kLoaded;
+  gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+  gui::g_state.snapshot_intensity = 0.5f;
+  gui::g_state.committed_epoch = 5;
+  gui::g_state.display_epoch_floor = 0;
+  gui::g_state.dirty = false;
+  gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
+  ctx->Yield(2);
+
+  ctx->ItemClick("**/Edit##fi");
+  ctx->Yield(4);
+  ctx->ItemClick("**/###filter_tab");
+  ctx->Yield(4);
+  if (start_with_filter) {
+    ctx->ItemClick("**/Remove Filter##filter");
+  } else {
+    ctx->ItemInputValue("**/##row_text_0", "3-1-5");
+  }
+  ctx->Yield(2);
+  if (immediate) {
+    ctx->ItemClick("**/Close##edit_modal");
+  } else {
+    ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+  }
+  ctx->Yield(2);
+
+  const Ac2Outcome out{ gui::g_state.dirty, gui::g_state.sim_state, gui::g_state.display_epoch_floor };
+  if (immediate) {
+    gui::g_state.modal_immediate_mode = false;
+  }
+  return out;
 }
 
 // P0 tests
@@ -306,7 +363,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
   // P1: scrum-gui-polish-v13 161.2 — In Immediate mode, Remove applies on the
   // next frame (ApplyBuffersToEntry sees empty raypath and writes nullopt).
   // Dual observable: entry.filter_id = nullopt (direct) + display_epoch_floor
-  // (MarkFilterDirty side effect — raises the floor to committed_epoch). Seed a
+  // (MarkStructHardDirty side effect — raises the floor to committed_epoch). Seed a
   // non-zero committed_epoch with the floor at 0 so the bump is observable, and the
   // pre-condition asserts the floor starts below committed_epoch to avoid tautologies.
   {
@@ -320,9 +377,15 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
       gui::g_state.committed_epoch = 5;
       gui::g_state.display_epoch_floor = 0;
+      // task-classic-params-migration: seed last_committed_state after the filter is
+      // present so removing it later trips AnyEntryFilterPresenceChanged in the reconciler.
+      // Pre-migration this test worked because CommitAllBuffersImmediate manually fired
+      // MarkStructHardDirty regardless of baseline; post-migration the effect flows through the
+      // reconciler and requires a real baseline to diff against.
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
       ctx->Yield();
 
-      // Pre-condition guard: MarkFilterDirty has not fired yet (floor still below committed).
+      // Pre-condition guard: MarkStructHardDirty has not fired yet (floor still below committed).
       IM_CHECK_EQ(gui::g_state.display_epoch_floor, 0u);
 
       ctx->ItemClick("**/Edit##fi");
@@ -703,7 +766,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
   // P1: Edit modal OK without any change must NOT clear the rendered preview
   // or arm Revert. Regression guard for scrum-gui-polish-v7 152.2: previously
-  // CommitAllBuffers unconditionally MarkFilterDirty()'d after any OK,
+  // CommitAllBuffers unconditionally MarkStructHardDirty()'d after any OK,
   // wiping snapshot_intensity + flipping sim_state to kModified.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit", "ok_no_change_preserves_state");
@@ -764,6 +827,12 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       gui::g_state.committed_epoch = 5;
       gui::g_state.display_epoch_floor = 0;
       gui::g_state.dirty = false;
+      // task-classic-params-migration: seed last_committed_state at the "filter present"
+      // baseline so ReconcileGuiEffects fires need_resim/hard-reset when Remove Filter takes
+      // effect. Pre-migration this test worked because CommitAllBuffers manually fired
+      // MarkDirty+MarkStructHardDirty unconditionally; post-migration the effect requires a real
+      // baseline diff.
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
       ctx->Yield();
 
       ctx->ItemClick("**/Edit##fi");
@@ -781,11 +850,74 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
+  // AC2 case 1/2: filter ADD (nullopt→"3-1-5") — Staged vs Immediate must agree.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "ac2_staged_vs_immediate_filter_add");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const Ac2Outcome staged = RunFilterPresenceToggleScenario(ctx, /*start_with_filter=*/false, /*immediate=*/false);
+      const Ac2Outcome immediate =
+          RunFilterPresenceToggleScenario(ctx, /*start_with_filter=*/false, /*immediate=*/true);
+      IM_CHECK_EQ(staged.dirty, immediate.dirty);
+      IM_CHECK_EQ(static_cast<int>(staged.sim_state), static_cast<int>(immediate.sim_state));
+      IM_CHECK_EQ(staged.display_epoch_floor, immediate.display_epoch_floor);
+      // Non-vacuous witness: both paths actually fired the hard reset (not a "both no-op" pass).
+      IM_CHECK(staged.dirty);
+      IM_CHECK_EQ(static_cast<int>(staged.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+    };
+  }
+
+  // AC2 case 2/2: filter REMOVE ("3-1-5"→nullopt) — Staged vs Immediate must agree.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "ac2_staged_vs_immediate_filter_remove");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const Ac2Outcome staged = RunFilterPresenceToggleScenario(ctx, /*start_with_filter=*/true, /*immediate=*/false);
+      const Ac2Outcome immediate = RunFilterPresenceToggleScenario(ctx, /*start_with_filter=*/true, /*immediate=*/true);
+      IM_CHECK_EQ(staged.dirty, immediate.dirty);
+      IM_CHECK_EQ(static_cast<int>(staged.sim_state), static_cast<int>(immediate.sim_state));
+      IM_CHECK_EQ(staged.display_epoch_floor, immediate.display_epoch_floor);
+      IM_CHECK(staged.dirty);
+      IM_CHECK_EQ(static_cast<int>(staged.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+    };
+  }
+
+  // [code-review-01.md merged Major #1 companion ask] Duplicate hard-reset widget-level
+  // regression: cloning an entry that carries a filter appends a new `filters` pool slot, which
+  // the field's kStructHard auto-diff picks up unconditionally on the next reconcile (see
+  // progress.md Step 3-6 entry — this is pre-existing production behavior via T0's
+  // main.cpp:367 ApplyGuiEffects, not new to this task; the removed hand-written MarkDirty was
+  // redundant). Pins the observable effect end-to-end through the real Duplicate button.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_linked", "duplicate_with_filter_triggers_hard_reset");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::FilterConfig f;
+      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
+      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
+      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+      gui::g_state.snapshot_intensity = 0.5f;
+      gui::g_state.committed_epoch = 5;
+      gui::g_state.display_epoch_floor = 0;
+      gui::g_state.dirty = false;
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/" ICON_FA_COPY "##dup_0_0");
+      ctx->Yield(2);
+
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+      IM_CHECK_EQ(gui::g_state.snapshot_intensity, 0.0f);
+      IM_CHECK_EQ(gui::g_state.display_epoch_floor, gui::g_state.committed_epoch);
+      IM_CHECK(gui::g_state.dirty);
+    };
+  }
+
   // P1: scrum-gui-polish-v11 / task-modal-immediate-mode M2 gate — in
   // Immediate mode, crystal-only buffer edits must MarkDirty but NOT
-  // MarkFilterDirty. This is what keeps infinite-rays accumulation alive
+  // MarkStructHardDirty. This is what keeps infinite-rays accumulation alive
   // while the user drags a Crystal slider. Filter edits still fire
-  // MarkFilterDirty (identical to Staged OK semantics for filter changes).
+  // MarkStructHardDirty (identical to Staged OK semantics for filter changes).
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "immediate_crystal_does_not_clear_display");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -801,6 +933,11 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       gui::g_state.committed_epoch = 5;
       gui::g_state.display_epoch_floor = 0;
       gui::g_state.dirty = false;
+      // task-classic-params-migration: seed baseline so Crystal edits produce a real
+      // `crystals` diff in ReconcileGuiEffects. Pre-migration this test worked because
+      // CommitAllBuffersImmediate manually MarkDirty'd unconditionally; post-migration the
+      // dirty flag is only set by the reconciler when it sees a diff against the baseline.
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
       ctx->Yield();
 
       const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height;
@@ -818,7 +955,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
                       // 1 for OpenPopup, plus a little slack for tab SetSelected.
 
       // Crystal-only edit: change Height via the Crystal tab input. Must
-      // MarkDirty (state.dirty == true) but must NOT MarkFilterDirty
+      // MarkDirty (state.dirty == true) but must NOT MarkStructHardDirty
       // (snapshot_intensity preserved, display_epoch_floor NOT raised).
       ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 1.0f);
       ctx->Yield(2);
@@ -829,7 +966,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // Filter edit: switch to the Filter tab and type a raypath. Because the
       // entry had no filter at modal open (initial_present=false), the first
       // raypath edit is itself the filter creation — filter_changed == true
-      // in ApplyBuffersToEntry → MarkFilterDirty fires → display clears.
+      // in ApplyBuffersToEntry → MarkStructHardDirty fires → display clears.
       ctx->ItemClick("**/###filter_tab");
       ctx->Yield(4);
       ctx->ItemInputValue("**/##row_text_0", "3-1-5");
@@ -2364,6 +2501,52 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // p1_slider/altitude_edit_after_commit_marks_dirty — AC2 end-to-end regression
+  // (scrum-gui-state-reconcile T0, plan §4 Step 4 point 3 / §7 risk 1). Drives the real Altitude
+  // widget after a real DoRun() commit has populated last_committed_state, then asserts dirty
+  // becomes true via the production frame-tail ReconcileGuiEffects() path — the legacy DIRTY_IF
+  // wrapper was retired at this call site (panels.cpp RenderSceneControls), so this is the only
+  // test that exercises sun.altitude's post-migration dirty derivation end-to-end rather than by
+  // constructing a GuiState by hand (see test_gui_state_reconcile.cpp for the pure variant).
+  //
+  // M6 same-frame contract: the effects reconcile runs at frame TAIL (after all Render*() calls,
+  // before ImGui::Render()) in both prod (main.cpp) and this harness (test_gui_main.cpp). That
+  // means the LAST frame of an ItemInputValue interaction — which writes state.sun.altitude
+  // during widget rendering — reaches its own frame-tail reconcile before returning to us. So we
+  // assert dirty immediately, with no intervening ctx->Yield(). The absence of that Yield is the
+  // structural evidence that dirty was set in the SAME frame as the edit (Round 3 Major #1 fix).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "altitude_edit_after_commit_marks_dirty");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_server = LUMICE_CreateServer();
+      IM_CHECK(gui::g_server != nullptr);
+      gui::g_state.sim.infinite = false;
+      gui::g_state.sim.ray_num_millions = 0.5f;
+      gui::DoRun();  // real Run path: synchronous commit populates last_committed_state.
+      IM_CHECK(gui::g_state.last_committed_state.has_value());
+      gui::g_state.dirty = false;  // DoRun doesn't touch dirty; pin a known pre-edit baseline.
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.dirty, false);
+
+      ctx->ItemInputValue("**/##Altitude_input", gui::g_state.sun.altitude + 5.0f);
+      // Deliberately NO Yield() here — see block comment above: with the M6 frame-tail placement,
+      // dirty must be true by the end of the frame that received the widget edit. An intervening
+      // Yield would silently accept next-frame semantics and let a future regression to top-of-
+      // frame reconcile placement slip through.
+      IM_CHECK(gui::g_state.dirty);
+
+      // Cleanup: leave a clean global state for subsequent tests.
+      gui::g_server_poller.Stop();
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+      gui::g_state.run_intent = gui::RunIntent::kNone;
+      gui::g_state.committed_epoch = 0;
+      gui::g_state.dirty = false;
+    };
+  }
+
   // p1_slider/altitude_out_of_range_no_dirty — out-of-range input at upper boundary does not trigger dirty
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "altitude_out_of_range_no_dirty");
@@ -3269,7 +3452,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
   }
 
   // p1_running/filter_change_triggers_restart (extension)
-  // Filter changes call MarkFilterDirty() which raises display_epoch_floor to committed_epoch,
+  // Filter changes call MarkStructHardDirty() which raises display_epoch_floor to committed_epoch,
   // fencing the old generation's textures until DoRun re-commits and mints a newer epoch that
   // clears the floor. End-to-end exercise of the epoch-keyed anti-flicker gate.
   {
@@ -3309,7 +3492,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
 
       // Act: change filter raypath, mark filter dirty, commit
       gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].MutableRaypathText() = "3-1-5-7";
-      gui::g_state.MarkFilterDirty();
+      gui::g_state.MarkStructHardDirty();
       gui::DoRun();
 
       // Filter changes may take slightly longer (epoch-floor fence until re-commit); use 2000ms
@@ -3437,6 +3620,269 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(load_ok);
       IM_CHECK_EQ(gui::CrystalOf(loaded, loaded.layers[0].entries[0]).type, gui::CrystalType::kPyramid);
       IM_CHECK_EQ(gui::CrystalOf(loaded, loaded.layers[0].entries[0]).prism_h, 3.5f);
+
+      std::remove(tmp_path);
+    };
+  }
+
+  // task-cleanup-hardening AC4: DoSave under sim_state == kModified must NOT
+  // silently write the stale-preview .lmc + clear Modified. It must front a
+  // popup ("Config modified — Run first / Save anyway / Cancel"). This test
+  // pins the "gate + no side-effect" contract at the call-level (DoSave
+  // returns without touching the file); a second test below covers the
+  // "Save anyway resumes serialization" branch, and a third pins that the
+  // non-kModified path stays silent (regression guard for the pre-353.5
+  // direct-serialize semantics).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "save_on_kmodified_opens_prompt_no_file_write");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      const char* tmp_path = "/tmp/lumice_savemod_gate.lmc";
+      std::remove(tmp_path);
+      gui::g_state.current_file_path = tmp_path;
+      // Force sim_state == kModified via the reconciled base (kDone) + dirty
+      // (any struct edit lands here through the field-tier reconciler).
+      gui::g_state.sim_state = gui::GuiState::SimState::kModified;
+      gui::g_state.dirty = true;
+
+      // Precondition: no popup pending, no kind pending.
+      IM_CHECK(!gui::g_show_save_modified_popup);
+      IM_CHECK_EQ(static_cast<int>(gui::g_pending_save_kind), static_cast<int>(gui::PendingSaveKind::kNone));
+
+      gui::DoSave();
+
+      // The gate opened the popup + queued kSave, and the .lmc was NOT touched
+      // (silent serialization would leave the file on disk).
+      IM_CHECK(gui::g_show_save_modified_popup);
+      IM_CHECK_EQ(static_cast<int>(gui::g_pending_save_kind), static_cast<int>(gui::PendingSaveKind::kSave));
+      std::ifstream f(tmp_path);
+      IM_CHECK(!f.good());
+
+      // dirty stays true (the gate must not clear it — that only happens on
+      // successful serialization).
+      IM_CHECK(gui::g_state.dirty);
+
+      // Cleanup — pretend the popup was resolved by Cancel.
+      gui::g_show_save_modified_popup = false;
+      gui::g_pending_save_kind = gui::PendingSaveKind::kNone;
+    };
+  }
+
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "save_anyway_resumes_serialization");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      const char* tmp_path = "/tmp/lumice_savemod_anyway.lmc";
+      std::remove(tmp_path);
+      gui::g_state.current_file_path = tmp_path;
+      gui::g_state.sim_state = gui::GuiState::SimState::kModified;
+      gui::g_state.dirty = true;
+
+      // Gate opens the popup; then simulate the user pressing "Save anyway"
+      // by calling PerformSave directly (the popup's Save-anyway button body).
+      gui::DoSave();
+      IM_CHECK(gui::g_show_save_modified_popup);
+      gui::PerformSave();
+
+      // File written; dirty cleared. sim_state stays kModified — the popup
+      // deliberately does NOT silently clear it (that would erase the
+      // user-visible "config differs from render" cue for future edits).
+      std::ifstream f(tmp_path);
+      IM_CHECK(f.good());
+      IM_CHECK(!gui::g_state.dirty);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+
+      gui::g_show_save_modified_popup = false;
+      gui::g_pending_save_kind = gui::PendingSaveKind::kNone;
+      std::remove(tmp_path);
+    };
+  }
+
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "save_bypasses_prompt_when_not_kmodified");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      const char* tmp_path = "/tmp/lumice_savemod_bypass.lmc";
+      std::remove(tmp_path);
+      gui::g_state.current_file_path = tmp_path;
+      // kIdle: no run has happened yet — nothing "modified" to warn about.
+      gui::g_state.sim_state = gui::GuiState::SimState::kIdle;
+      gui::g_state.dirty = true;
+
+      gui::DoSave();
+
+      // No popup queued; the file was written directly.
+      IM_CHECK(!gui::g_show_save_modified_popup);
+      IM_CHECK_EQ(static_cast<int>(gui::g_pending_save_kind), static_cast<int>(gui::PendingSaveKind::kNone));
+      std::ifstream f(tmp_path);
+      IM_CHECK(f.good());
+      IM_CHECK(!gui::g_state.dirty);
+
+      std::remove(tmp_path);
+    };
+  }
+
+  // code-review-01 M1: RenderUnsavedPopup's "Save" button must route through
+  // the kModified gate (DoSave) rather than bypassing it — clicking Save
+  // while both dirty and kModified must chain to RenderSaveModifiedPopup, not
+  // silently serialize the stale preview. This drives the real button click
+  // path (unlike save_on_kmodified_opens_prompt_no_file_write, which calls
+  // DoSave() directly), pinning the last-mile button wiring the Pragmatist
+  // review flagged as untested: Unsaved-Save → Save-Modified popup opens →
+  // click "Save anyway" → file written AND the deferred New actually runs.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "unsaved_save_chains_to_save_modified_popup");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      const char* tmp_path = "/tmp/lumice_unsaved_chain_anyway.lmc";
+      std::remove(tmp_path);
+      gui::g_state.current_file_path = tmp_path;
+      gui::g_state.layers[0].entries.push_back(gui::EntryCard{});
+      // sim_state is re-derived every frame by ReconcileSimState (I2) from
+      // run_intent, so a direct sim_state write would not survive the Yield()
+      // calls below. kLoaded is the "static loaded result" intent (base=kDone
+      // regardless of server/committed_epoch) — combined with dirty=true it
+      // reconciles to kModified each frame, same as loading a .lmc then editing.
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
+      gui::g_state.dirty = true;
+      ctx->Yield();
+
+      // Click New → Unsaved popup → Save. Since sim_state == kModified, this
+      // must NOT write the file yet — it must open Save-Modified instead.
+      ctx->ItemClick("##TopBar/New");
+      ctx->Yield(2);
+      ctx->ItemClick("Unsaved Changes/Save");
+      // DoSave() (invoked by the click handler above) sets
+      // g_show_save_modified_popup mid-frame; RenderSaveModifiedPopup —
+      // called right after RenderUnsavedPopup in both main.cpp and this
+      // harness's GuiFunc — consumes it and opens the popup the same frame.
+      ctx->Yield(3);
+
+      IM_CHECK(ImGui::IsPopupOpen("Save Modified Config"));
+
+      std::ifstream not_yet(tmp_path);
+      IM_CHECK(!not_yet.good());
+      // New must not have run yet — the entry added above is still present.
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
+
+      // Click "Save anyway" — the deferred save runs, and so does the New
+      // that was queued by the original Unsaved-Save click.
+      ctx->ItemClick("Save Modified Config/Save anyway");
+      ctx->Yield(2);
+
+      std::ifstream f(tmp_path);
+      IM_CHECK(f.good());
+      IM_CHECK_EQ(static_cast<int>(gui::g_pending_action), static_cast<int>(gui::PendingAction::kNone));
+      // DoNew() reset the document, so the pushed-back entry is gone.
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
+
+      std::remove(tmp_path);
+    };
+  }
+
+  // code-review-01 M1 companion: "Cancel" on the chained Save-Modified popup
+  // must abort the deferred New too (not silently proceed without a save).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "unsaved_save_chain_cancel_aborts_pending_action");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      const char* tmp_path = "/tmp/lumice_unsaved_chain_cancel.lmc";
+      std::remove(tmp_path);
+      gui::g_state.current_file_path = tmp_path;
+      gui::g_state.layers[0].entries.push_back(gui::EntryCard{});
+      // See unsaved_save_chains_to_save_modified_popup above for why kLoaded
+      // (not a direct sim_state write) is needed to survive the frame Yield.
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
+      gui::g_state.dirty = true;
+      ctx->Yield();
+
+      ctx->ItemClick("##TopBar/New");
+      ctx->Yield(2);
+      ctx->ItemClick("Unsaved Changes/Save");
+      // See the sibling test above for why this hop needs 3 frames.
+      ctx->Yield(3);
+
+      ctx->ItemClick("Save Modified Config/Cancel");
+      ctx->Yield(2);
+
+      // Neither the save nor the New happened.
+      std::ifstream f(tmp_path);
+      IM_CHECK(!f.good());
+      IM_CHECK(gui::g_state.dirty);
+      IM_CHECK_EQ(static_cast<int>(gui::g_pending_action), static_cast<int>(gui::PendingAction::kNone));
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
+    };
+  }
+
+  // code-review-02 M1 investigated whether RenderSaveModifiedPopup can be
+  // dismissed via Escape, bypassing all three button branches and leaving
+  // g_pending_action / g_pending_save_kind stale for a later, unrelated Save
+  // to misfire on. White-box mechanism check (see the doc comment on
+  // RenderSaveModifiedPopup) found Dear ImGui's NavUpdateCancelRequest()
+  // never routes Escape to ClosePopupToLevel() for a window with
+  // ImGuiWindowFlags_Modal set — which BeginPopupModal always sets — so this
+  // popup (like every modal in this app) cannot be dismissed via Escape at
+  // all. This test drives the real key press against the live popup to pin
+  // that verified fact as a regression guard: if a future Dear ImGui upgrade
+  // ever changes this, the popup will start closing here and the test fails,
+  // flagging that the pending-sentinel leak this review worried about has
+  // become reachable and needs the edge-detect fix reviewers originally asked
+  // for.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "save_modified_popup_escape_is_a_noop");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      const char* tmp_path = "/tmp/lumice_savemod_escape.lmc";
+      std::remove(tmp_path);
+      gui::g_state.current_file_path = tmp_path;
+      gui::g_state.layers[0].entries.push_back(gui::EntryCard{});
+      // See unsaved_save_chains_to_save_modified_popup above for why kLoaded
+      // (not a direct sim_state write) is needed to survive the frame Yield.
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
+      gui::g_state.dirty = true;
+      ctx->Yield();
+
+      ctx->ItemClick("##TopBar/New");
+      ctx->Yield(2);
+      ctx->ItemClick("Unsaved Changes/Save");
+      // See the sibling test above for why this hop needs 3 frames.
+      ctx->Yield(3);
+      IM_CHECK(ImGui::IsPopupOpen("Save Modified Config"));
+      IM_CHECK_EQ(static_cast<int>(gui::g_pending_action), static_cast<int>(gui::PendingAction::kNew));
+
+      // Escape must NOT dismiss this modal (see doc comment above).
+      ctx->KeyPress(ImGuiKey_Escape);
+      ctx->Yield(2);
+      IM_CHECK(ImGui::IsPopupOpen("Save Modified Config"));
+
+      // Nothing fired, and the queued intent is untouched — consistent with
+      // the popup never having closed.
+      std::ifstream f(tmp_path);
+      IM_CHECK(!f.good());
+      IM_CHECK(gui::g_state.dirty);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
+      IM_CHECK_EQ(static_cast<int>(gui::g_pending_action), static_cast<int>(gui::PendingAction::kNew));
+      IM_CHECK_EQ(static_cast<int>(gui::g_pending_save_kind), static_cast<int>(gui::PendingSaveKind::kSave));
+
+      // The popup is still open — resolve it via a real button so the test
+      // doesn't leak an open modal into the next test.
+      ctx->ItemClick("Save Modified Config/Save anyway");
+      ctx->Yield(2);
+      std::ifstream f2(tmp_path);
+      IM_CHECK(f2.good());
+      IM_CHECK_EQ(static_cast<int>(gui::g_pending_action), static_cast<int>(gui::PendingAction::kNone));
 
       std::remove(tmp_path);
     };

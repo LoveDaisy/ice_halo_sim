@@ -172,5 +172,6 @@ void RegisterProjectWorldDirTests(ImGuiTestEngine* engine);
 void RegisterHandednessGuardTests(ImGuiTestEngine* engine);
 void RegisterLifecycleTests(ImGuiTestEngine* engine);
 void RegisterCompositePreviewTests(ImGuiTestEngine* engine);
+void RegisterStateReconcileTests(ImGuiTestEngine* engine);
 
 #endif  // LUMICE_TEST_GUI_SHARED_HPP

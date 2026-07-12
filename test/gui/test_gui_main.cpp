@@ -25,6 +25,7 @@
 #include "gui/gl_init.h"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_logger.hpp"
+#include "gui/gui_state_reconcile.hpp"
 #include "gui/log_sink.hpp"
 #include "gui/panels.hpp"
 #include "imgui.h"
@@ -87,6 +88,8 @@ void ResetTestState() {
   // Runtime state
   gui::g_show_unsaved_popup = false;
   gui::g_pending_action = gui::PendingAction::kNone;
+  gui::g_show_save_modified_popup = false;
+  gui::g_pending_save_kind = gui::PendingSaveKind::kNone;
   gui::g_server_poller.Stop();  // Stop poller before nulling server
   // task-349.4: Stop() only kPaused the worker — the last published PreviewSnapshot
   // survives (production keeps it on purpose for slider-scrub carry-forward, see
@@ -100,6 +103,14 @@ void ResetTestState() {
   gui::g_server_poller.InvalidateStagedTexture();
   gui::g_server = nullptr;
   gui::ResetPendingDeleteState();
+  // task-cleanup-hardening S5: the RefreshColorClassSignals cache is a static
+  // WindowLocalState inside color_window.cpp. Its (server, epoch) invalidation
+  // keys survive across tests via a leaked stale server pointer or committed_epoch
+  // if not reset here, which can mask AC2 behavior (either false-positive
+  // "invalidated" because the prior test's server is now dangling, or false-
+  // negative "hit throttle" because the prior test's keys happen to match).
+  // Deterministic per-test reset restores the same-invariant as g_state.
+  gui::ResetColorClassSignalCacheForTest();
 
   // Modal state (edit_modals.cpp file-scope statics)
   gui::ResetModalState();
@@ -355,6 +366,7 @@ int main(int argc, char** argv) {
   RegisterHandednessGuardTests(engine);
   RegisterLifecycleTests(engine);
   RegisterCompositePreviewTests(engine);
+  RegisterStateReconcileTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
 
   // Main loop — runs until all tests complete
@@ -431,6 +443,18 @@ int main(int argc, char** argv) {
     gui::RenderEditModals(gui::g_state, window);
     gui::RenderSpectrumModal(gui::g_state);
     gui::RenderUnsavedPopup(window);
+    // task-cleanup-hardening code-review-01 M1: RenderSaveModifiedPopup was
+    // added to src/gui/main.cpp's frame loop (AC4) but never mirrored here,
+    // so its widgets (Run first / Save anyway / Cancel) were unreachable by
+    // any UI-driven gui_test — the existing p2_modal AC4 tests could only
+    // exercise DoSave()/PerformSave() directly. Mirrors main.cpp:352.
+    gui::RenderSaveModifiedPopup(window);
+
+    // Field-tier effect reconcile at frame TAIL — mirrors src/gui/main.cpp M6 placement so widget
+    // edits driven by ImGuiTestEngine land in state.dirty within the same frame (rather than one
+    // frame late as they would if this were folded into SyncFromPoller). Required for AC2
+    // same-frame regression coverage.
+    gui::ApplyGuiEffects(gui::g_state, gui::g_server, gui::ReconcileGuiEffects(gui::g_state));
 
     ImGui::Render();
 
@@ -526,6 +550,14 @@ int main(int argc, char** argv) {
   fprintf(stderr, "[GUI Tests] %d/%d tests passed\n", count_success, count_tested);
 
   // Cleanup
+  // Stop the background poller before global static destructors run, mirroring the real app's exit
+  // teardown (src/gui/main.cpp:413-414). The M6 frame-tail ApplyGuiEffects can leave the poller
+  // RUNNING (display-push WakeForRefresh) after the final test; without an explicit Stop() here the
+  // static g_server_poller dtor's worker-join hangs at process exit — gui_test runs every test,
+  // prints the summary, then never returns.
+  gui::JoinPendingStop();
+  gui::g_server_poller.Stop();
+
   ImGuiTestEngine_Stop(engine);
 
   gui::g_thumbnail_cache.Destroy();

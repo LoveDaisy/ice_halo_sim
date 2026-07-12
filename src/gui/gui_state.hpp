@@ -22,14 +22,24 @@ enum class CrystalType { kPrism, kPyramid };
 // Last user run-intent (blueprint §5 CQS "last command" channel). This is one of the two
 // inputs to ReconcileSimState (the other being the last backend observation). The GUI sets
 // this on DoRun/DoStop/DoOpen; SyncFromPoller derives sim_state from it each frame.
-//   kNone     — fresh session / CLI-JSON import / .lmc with no baked texture (→ kIdle)
-//   kLoaded   — .lmc loaded with a baked result texture (static result, no server run → kDone)
-//   kRunning  — Run committed; sim_state follows the fresh backend lifecycle
-//   kStopping — Stop issued but the backend is still draining the in-flight batch (async, 1.6).
-//               Optimistic intent-latched display state (→ kStopping); advanced to kStopped by
-//               SyncFromPoller once the background stop completes (g_stop_inflight clears).
-//   kStopped  — Stop drained; intent-latched terminal state (→ kStopEndState = kDone, see app.cpp)
-enum class RunIntent { kNone, kLoaded, kRunning, kStopping, kStopped };
+//   kNone         — fresh session / CLI-JSON import / .lmc with no baked texture (→ kIdle)
+//   kLoaded       — .lmc loaded with a baked result texture (static result, no run → kDone)
+//   kRunning      — Run committed; sim_state follows the fresh backend lifecycle
+//   kStopping     — Stop issued but the backend is still draining the in-flight batch (async, 1.6).
+//                   Optimistic intent-latched display state (→ kStopping); advanced to kStopped by
+//                   SyncFromPoller once the background stop completes (g_stop_inflight clears).
+//   kStopped      — Stop drained; intent-latched terminal state (→ kStopEndState = kDone, app.cpp)
+//   kRunCompleted — Run reached a natural (finite) completion. Intent-latched terminal state
+//                   mirroring the kStopping→kStopped Mealy pattern: SyncFromPoller advances
+//                   kRunning→kRunCompleted the first time it observes a fresh COMPLETED snapshot
+//                   at the current committed_epoch. Once latched, ReconcileSimState maps this
+//                   directly to kDone regardless of subsequent snapshot volatility (e.g. a
+//                   transient valid=false observation) — closing off AC1's root cause (b)
+//                   "completion state not latched, recomputed each frame from volatile inputs"
+//                   (task-color-migration §3 D4 / doc/gui-state-governance.md §4 支柱 2).
+//                   DoRun writes run_intent = kRunning unconditionally on a successful commit
+//                   (app.cpp), naturally re-arming the latch for the next run.
+enum class RunIntent { kNone, kLoaded, kRunning, kStopping, kStopped, kRunCompleted };
 
 // Axis distribution type for crystal orientation.
 // Values must stay contiguous 0..N-1 — ImGui RadioButton relies on static_cast<int>.
@@ -104,12 +114,23 @@ struct SunConfig {
   //            must be non-empty). Enforced at every write site (edit modal OK, file_io load).
   int spectrum_index = 2;  // Index into kSpectrumNames: 0=D50,1=D55,2=D65,3=D75,4=A,5=E, 6=Custom...
   std::vector<WlWeight> custom_spectrum;
+
+  friend bool operator==(const SunConfig& a, const SunConfig& b) {
+    return a.altitude == b.altitude && a.diameter == b.diameter && a.spectrum_index == b.spectrum_index &&
+           a.custom_spectrum == b.custom_spectrum;
+  }
+  friend bool operator!=(const SunConfig& a, const SunConfig& b) { return !(a == b); }
 };
 
 struct SimConfig {
   float ray_num_millions = 5.0f;
   int max_hits = 8;
   bool infinite = false;
+
+  friend bool operator==(const SimConfig& a, const SimConfig& b) {
+    return a.ray_num_millions == b.ray_num_millions && a.max_hits == b.max_hits && a.infinite == b.infinite;
+  }
+  friend bool operator!=(const SimConfig& a, const SimConfig& b) { return !(a == b); }
 };
 
 // Lens type names (order must match Core's LensParam::LensType enum)
@@ -206,6 +227,31 @@ struct RenderConfig {
   }
   bool operator!=(const RenderConfig& o) const { return !(*this == o); }
 };
+
+// task-classic-params-migration (T2) — resim-eligibility comparator for RenderConfig.
+// Compares every field EXCEPT `exposure_offset`. Rationale: EV is a pure display-time
+// parameter (doc/ev-pipeline-architecture.md §6.4/§6.5 — GUI Run path never bakes EV; the
+// core-side NeedsRebuild() already lists intensity_factor / opacity / background / ray_color
+// as appearance-only). Among those, only `exposure_offset` has no need to travel through a
+// commit at all (it is pushed every frame via RefreshPreviewParams / LUMICE_SetCompositeExposure),
+// so it is the single field that should be excluded from the resim/rebuild diff.
+// Callers: gui_state_reconcile.cpp::DiffAgainstCommitBaseline and app.cpp::DoRun expect_rebuild
+// (single source of truth — do not fork).
+inline bool RenderConfigResimEqual(const RenderConfig& a, const RenderConfig& b) {
+  return a.lens_type == b.lens_type && a.fov == b.fov && a.elevation == b.elevation && a.azimuth == b.azimuth &&
+         a.roll == b.roll && a.sim_resolution_index == b.sim_resolution_index && a.visible == b.visible &&
+         a.front == b.front && std::equal(a.background, a.background + 3, b.background) &&
+         std::equal(a.ray_color, a.ray_color + 3, b.ray_color) && a.opacity == b.opacity;
+}
+
+// Apple Silicon + libc++ only. RenderConfig layout pin: mirrors the EntryCard pattern
+// (see below). If this size assertion fires, a field was added/removed from RenderConfig —
+// the author must inspect `RenderConfigResimEqual` above and either include the new field
+// (if it participates in resim eligibility) or explicitly exclude it (like exposure_offset).
+// Linux/Windows CI still compiles the struct; this only pins the Apple main-dev platform.
+#if defined(__APPLE__) && defined(__aarch64__)
+static_assert(sizeof(RenderConfig) == 64, "RenderConfig size changed — check RenderConfigResimEqual for new fields");
+#endif
 
 // Resettable subset of RenderConfig (the View `Reset` button targets these
 // four fields). Adding a resettable field here requires adding the matching
@@ -513,6 +559,11 @@ static_assert(sizeof(EntryCard) == 16,
 struct Layer {
   float probability = 0.0f;  // Probability of multi-scatter continuation (0 = single scatter), range [0,1]
   std::vector<EntryCard> entries;
+
+  friend bool operator==(const Layer& a, const Layer& b) {
+    return a.probability == b.probability && a.entries == b.entries;
+  }
+  friend bool operator!=(const Layer& a, const Layer& b) { return !(a == b); }
 };
 
 // task-342.3 (scrum-raypath-color-design2): GUI-side raypath color model.
@@ -533,19 +584,43 @@ struct ColorClassRefConfig {
   friend bool operator!=(const ColorClassRefConfig& a, const ColorClassRefConfig& b) { return !(a == b); }
 };
 
-struct ColorClassConfig {
-  // Note: label / summary is rebuilt on the fly from `match` at render time,
-  // no cache field kept (plan-review Minor #1; a05 减法优先).
+// task-color-migration (T1) — ColorClassConfig split into structural vs display sub-structs so
+// the reconciler can route them onto separate channels (doc/gui-state-governance.md §4 支柱 1).
+// Public inheritance chosen over nested named members: keeps every existing `cls.combine` /
+// `cls.color` / `cls.z_order` etc. field-access site working unchanged (base-class member lookup),
+// while giving the type system the "a function signature that receives `const ColorClassStructState&`
+// structurally cannot see display fields" guarantee (plan §3 D1). No aggregate initialisation
+// use, no sizeof-static_assert on this type — verified by grep before choosing inheritance.
+struct ColorClassStructState {
+  int combine = 0;  // 0 = LUMICE_COLOR_COMBINE_ANY, 1 = LUMICE_COLOR_COMBINE_ALL
+  std::vector<ColorClassRefConfig> match;
+
+  friend bool operator==(const ColorClassStructState& a, const ColorClassStructState& b) {
+    return a.combine == b.combine && a.match == b.match;
+  }
+  friend bool operator!=(const ColorClassStructState& a, const ColorClassStructState& b) { return !(a == b); }
+};
+
+struct ColorClassDisplayState {
   float color[3] = { 1.0f, 1.0f, 1.0f };
-  int combine = 0;      // 0 = LUMICE_COLOR_COMBINE_ANY, 1 = LUMICE_COLOR_COMBINE_ALL
   bool visible = true;  // A4 footgun: LUMICE_ColorClass zero-init has visible=0 (hidden). GUI new-class must be true.
   bool solo = false;
   int z_order = 0;  // display-only; never used as vector index (task-342.2 z-order/lane-binding decoupling).
-  std::vector<ColorClassRefConfig> match;
+
+  friend bool operator==(const ColorClassDisplayState& a, const ColorClassDisplayState& b) {
+    return std::equal(std::begin(a.color), std::end(a.color), std::begin(b.color)) && a.visible == b.visible &&
+           a.solo == b.solo && a.z_order == b.z_order;
+  }
+  friend bool operator!=(const ColorClassDisplayState& a, const ColorClassDisplayState& b) { return !(a == b); }
+};
+
+struct ColorClassConfig : ColorClassStructState, ColorClassDisplayState {
+  // Note: label / summary is rebuilt on the fly from `match` at render time,
+  // no cache field kept (plan-review Minor #1; a05 减法优先).
 
   friend bool operator==(const ColorClassConfig& a, const ColorClassConfig& b) {
-    return std::equal(std::begin(a.color), std::end(a.color), std::begin(b.color)) && a.combine == b.combine &&
-           a.visible == b.visible && a.solo == b.solo && a.z_order == b.z_order && a.match == b.match;
+    return static_cast<const ColorClassStructState&>(a) == static_cast<const ColorClassStructState&>(b) &&
+           static_cast<const ColorClassDisplayState&>(a) == static_cast<const ColorClassDisplayState&>(b);
   }
   friend bool operator!=(const ColorClassConfig& a, const ColorClassConfig& b) { return !(a == b); }
 };
@@ -683,7 +758,7 @@ struct GuiState {
   // Immediate mode (default, gui-polish-v15 round 2): ImGui::Begin + single
   // Close button + no dirty-mark; every frame commits buffer to state via
   // CommitAllBuffersImmediate (crystal/axis edits only MarkDirty — filter
-  // edits still MarkFilterDirty — so infinite-rays accumulation persists
+  // edits still MarkStructHardDirty — so infinite-rays accumulation persists
   // while the user drags a crystal slider).
   bool modal_immediate_mode = true;
 
@@ -692,9 +767,12 @@ struct GuiState {
   // kModified via that reconcile (base kDone + dirty), not via a direct write.
   void MarkDirty() { dirty = true; }
 
-  // Mark a filter-related change. A filter edit changes the server's filter topology, so the
-  // next struct commit rebuilds (epoch++) rather than reusing consumers; this does two
-  // orthogonal things:
+  // Mark a struct-tier hard change. Any struct-tier field diff (filter topology, MS layer
+  // count, projection, ray_num, etc. — see gui_state_tiers.hpp T-struct·hard) requires the
+  // next struct commit to rebuild the server (epoch++) rather than reuse consumers. Named
+  // "struct-hard" to align with doc/gui-state-governance.md §档位表 T-struct·hard; the
+  // pre-353.5 name `MarkFilterDirty` was misleading (it never was filter-only — any struct
+  // hard-reset routed through here). This does two orthogonal things:
   //   (a) immediate display clear — snapshot_intensity/p99 reset so the shader renders black
   //       right away (a legitimate display action, not a lock);
   //   (b) raise display_epoch_floor to the current committed_epoch so any payload still being
@@ -704,7 +782,7 @@ struct GuiState {
   //       a monotone epoch key (blueprint §7 / I1).
   // MarkDirty (crystal/sun scrub) deliberately does NOT raise the floor, so carry-forward of
   // the previous generation's texture keeps the preview alive with no black flicker (§3.3).
-  void MarkFilterDirty() {
+  void MarkStructHardDirty() {
     MarkDirty();
     snapshot_intensity = 0;
     p99_raw_y = 0.0f;
@@ -732,6 +810,15 @@ struct GuiState {
     // record. show_composite_preview is deliberately NOT reset (it is a user preference; a
     // backend swap must not silently flip the user's chosen display mode).
     last_uploaded_as_composite = false;
+    // task-color-migration §4 M6 (repush discipline): a backend swap constructs a fresh server
+    // with no display state — reset the edge-trigger baseline so the reconciler re-pushes the
+    // full display payload on the next reconcile. Routed through the single-entry
+    // InvalidateEffectsBaselines() member (code-review round-1 Minor-3) so a future third
+    // baseline only needs to be added there, not chased across every reset call site. A member
+    // method (rather than a free function) sidesteps the forward-reference problem entirely —
+    // sibling member functions may call each other regardless of declaration order within the
+    // class body (code-review round-1 Minor-2), so no out-of-class definition is needed.
+    InvalidateEffectsBaselines();
   }
 
   // Panel state (view preference — does not call MarkDirty)
@@ -767,7 +854,7 @@ struct GuiState {
   RunIntent run_intent = RunIntent::kNone;  // last user command channel (blueprint §5)
   uint64_t committed_epoch = 0;             // epoch the GUI last committed (DoRun reads it back)
   // Epoch floor for the display upload gate (blueprint §7). A payload uploads only when
-  // payload_epoch > display_epoch_floor. Raised by MarkFilterDirty to committed_epoch to fence
+  // payload_epoch > display_epoch_floor. Raised by MarkStructHardDirty to committed_epoch to fence
   // off the old generation's textures; monotone. Replaces the old intensity_locked boolean.
   uint64_t display_epoch_floor = 0;
   // Consumer-side exact-once upload cursor (migrated from a SyncFromPoller file-scope static in
@@ -787,7 +874,7 @@ struct GuiState {
   float target_white = 135.0f;  // Target P99 brightness on 0-255 sRGB scale
 
   // task-345.4: display-time raypath-color composite vs full-spectrum toggle.
-  // Neither field triggers MarkDirty/MarkFilterDirty — this is a display-time
+  // Neither field triggers MarkDirty/MarkStructHardDirty — this is a display-time
   // choice on which already-produced payload buffer to upload, orthogonal to
   // the sim/dirty/Revert lifecycle (blueprint §4.0).
   // Ownership contract (single-writer discipline, review Suggestion #1):
@@ -810,7 +897,7 @@ struct GuiState {
   //   Fields mirrored here must be the subset of GuiState classified as "configuration"
   //   (i.e. those reached by MarkDirty, contributing to the dirty/Revert lifecycle).
   //   raypath_color IS configuration: structural color-class edits go through
-  //   MarkFilterDirty, so Revert must restore them; the field was missing from the
+  //   MarkStructHardDirty, so Revert must restore them; the field was missing from the
   //   original 2026-04 audit and re-added by task-349.2 (Step 2 of plan §3.4).
   //   View preferences (aspect_preset, bg_*, horizon/grid/sun circles, log levels,
   //   left_panel_collapsed, right_panel_collapsed, show_composite_preview,
@@ -848,6 +935,44 @@ struct GuiState {
   static_assert(std::is_copy_constructible_v<ConfigSnapshot>, "ConfigSnapshot must be copyable");
   static_assert(std::is_copy_assignable_v<ConfigSnapshot>, "ConfigSnapshot must be copy-assignable");
   std::optional<ConfigSnapshot> last_committed_state;
+
+  // task-color-migration (T1) — edge-trigger baseline for the display-state push (plan §3 D3).
+  // The frame-tail reconciler diffs the ColorClassDisplayState sub-part of every raypath_color
+  // entry + raypath_color_mode against this baseline; a change fires need_display_push,
+  // ApplyGuiEffects invokes PushDisplayState, and on success the baseline is updated to the
+  // current value — so an idle frame between edits produces zero pushes.
+  //
+  // Independent from last_committed_state so that (a) pure display edits between two commits
+  // still push, (b) commits do not spuriously push if nothing display-side changed. Cleared to
+  // nullopt by DoRun success / DoRevert / backend swap via InvalidateEffectsBaselines
+  // (plan §4 Step 6): the next frame's reconcile then unconditionally re-pushes the full display
+  // state (repush discipline; fixes 偏离 B' — z_order lost after Run). Same-cardinality gate
+  // (see gui_state_reconcile.cpp) skips pushing while structural class-count edits settle so we
+  // do not spam LUMICE_SetRaypathColors with reject-on-mismatch retries.
+  struct DisplayStateBaseline {
+    std::vector<ColorClassDisplayState> color_display;
+    int raypath_color_mode = 0;
+
+    friend bool operator==(const DisplayStateBaseline& a, const DisplayStateBaseline& b) {
+      return a.color_display == b.color_display && a.raypath_color_mode == b.raypath_color_mode;
+    }
+    friend bool operator!=(const DisplayStateBaseline& a, const DisplayStateBaseline& b) { return !(a == b); }
+  };
+  std::optional<DisplayStateBaseline> last_pushed_display_state;
+
+  // task-color-migration (T1) — collapse all edge-trigger baselines behind a single reset entry
+  // (plan §4 Step 6 / Round 1 review Suggestion 2). Callers reset all baselines via this one
+  // method so a future third baseline does not require chasing three DoRun/DoRevert/backend-swap
+  // call sites separately (a12：统一原理优先于分类打补丁). A member method (not a free function,
+  // code-review round-1 Minor-2) — sibling member functions may reference each other regardless
+  // of declaration order within the class body, so this needs no forward declaration and no
+  // out-of-class definition, unlike the free-function form this replaced.
+  void InvalidateEffectsBaselines() {
+    // last_committed_state is deliberately NOT reset here — it is Revert's snapshot, its
+    // lifecycle is owned by DoRun (writes) / DoRevert (reads); commingling it with the
+    // display-baseline reset would silently break Revert.
+    last_pushed_display_state.reset();
+  }
 };
 
 // Size guard for ConfigSnapshot. If any field changes here, From/ApplyTo below must
@@ -859,7 +984,7 @@ struct GuiState {
 // wholesale, so this addition is covered without further field-level audit.
 // Size bumped from 192 → 216 by task-349.2: added `raypath_color` field
 // (std::vector<ColorClassConfig>) so Revert restores color-class edits that
-// go through MarkFilterDirty (Revert-completeness fix, plan §3.4).
+// go through MarkStructHardDirty (Revert-completeness fix, plan §3.4).
 static_assert(sizeof(GuiState::ConfigSnapshot) == 216,
               "GuiState::ConfigSnapshot size changed; audit From()/ApplyTo() implementations below");
 #endif

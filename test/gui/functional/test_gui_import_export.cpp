@@ -3146,4 +3146,325 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(g_gl_op.center_b), 0xFF);
     };
   }
+
+  // ========== task-command-reset-owner: end-to-end + AC4 single-owner gate ==========
+  //
+  // These tests are the last line of defense for the ResetFrontendState consolidation
+  // (backlog #5 / doc §4 "文档重置 owner"):
+  //   - `donew_end_to_end_blanks_gl_via_owner` drives the REAL `DoNew()` (which delegates
+  //     to ResetFrontendState internally) after a stale GL upload, then samples the next
+  //     Render() at the GL pixel layer to confirm the owner's deferred-blank propagated
+  //     through the full DoNew → owner → next-frame Render chain. This complements the
+  //     existing gl_render_clears_stale_sim_pixels test (which drives ClearTexture
+  //     directly) by covering the outer command handler.
+  //   - `reset_primitives_are_owner_single_source` reads src/gui/app.cpp and asserts the
+  //     ResetFrontendState-owned primitives (`InvalidateStagedTexture`, mesh-hash zero)
+  //     have exactly one production call site — the owner. A future PR that re-scatters
+  //     the primitives back into command handlers (the exact bug class that produced the
+  //     task-349.1 → 350 → 351 fix cycle) fails here mechanically instead of surviving
+  //     until owner on-screen regression.
+
+  {
+    // AC1 end-to-end: `DoNew()` must leave the sim layer black at the GL pixel level (not just
+    // CPU-side HasTexture()==false), driven through the REAL command handler that delegates to
+    // ResetFrontendState. Precondition: stale GL pixels really present. Postcondition: next
+    // Render() samples black — proves ClearTexture()'s deferred-blank propagated through the
+    // owner's kNewDocument branch and got consumed by the next main-thread Render.
+    //
+    // Threading: DoNew()'s reset primitives are all CPU-safe (no GL calls) from the coroutine
+    // worker — ClearTexture is a flag flip, ClearBackground is a flag flip, InvalidateStagedTexture
+    // is a poller mutex op, ResetCrystalViewToCrystal is CPU-only. The GL blank consumption happens
+    // on the next Render() via GlOpGuiFunc (main thread). See preview_renderer.hpp needs_gl_blank_.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "donew_end_to_end_blanks_gl_via_owner");
+    t->GuiFunc = GlOpGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // Frame A: seed distinctive stale pixels via GuiFunc + render — establishes the "stale
+      // pixels really present in GL storage" precondition (mirrors gl_render_clears_stale_sim_pixels).
+      g_gl_op.Reset();
+      g_gl_op.requested = true;
+      g_gl_op.do_upload_stale = true;
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return g_gl_op.done; });
+      IM_CHECK(g_gl_op.export_ok);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_r), 0xFF);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_g), 0x00);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_b), 0xFF);
+
+      // Real production DoNew() — coroutine-safe (see threading note above). Sets the pending-blank
+      // via the owner's kNewDocument branch (ClearTexture flag flip).
+      gui::DoNew();
+
+      // Frame B: pure Render() — no direct GL ops requested, just consume the deferred blank
+      // that DoNew's ResetFrontendState(kNewDocument) staged.
+      g_gl_op.Reset();
+      g_gl_op.requested = true;
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return g_gl_op.done; });
+      IM_CHECK(g_gl_op.export_ok);
+      // Expected: pure black. A regression (owner drops the ClearTexture call, or command handler
+      // re-adds a texture upload after the owner call) samples the stale magenta.
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_r), 0x00);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_g), 0x00);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_b), 0x00);
+    };
+  }
+
+  {
+    // AC4 single-owner gate: source-scan src/gui/app.cpp to prove the owner-managed reset
+    // primitives (`g_server_poller.InvalidateStagedTexture()`, `g_crystal_mesh_hash = 0`) appear
+    // exactly once — inside `ResetFrontendState`. If a future change re-scatters them into
+    // command handlers (the exact class of bug that produced task-349.1 → 350 → 351), this
+    // count-based assertion fails deterministically at build+test time, no on-screen regression
+    // required. Reads the file via LUMICE_GUI_APP_CPP_PATH (CMake compile-def) so the assertion
+    // stays anchored to the tracked source, not a stale copy.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "reset_primitives_are_owner_single_source");
+    t->TestFunc = [](ImGuiTestContext*) {
+      std::ifstream in(LUMICE_GUI_APP_CPP_PATH);
+      IM_CHECK(in.is_open());
+      std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+      IM_CHECK(!src.empty());
+
+      auto count_occurrences = [&src](const std::string& needle) {
+        int count = 0;
+        size_t pos = 0;
+        while ((pos = src.find(needle, pos)) != std::string::npos) {
+          ++count;
+          pos += needle.size();
+        }
+        return count;
+      };
+
+      // Each primitive: exactly one production call site (the ResetFrontendState body).
+      // The needle strings are chosen to be unambiguous — spaces / operator forms match the
+      // owner's actual code shape (see app.cpp `void ResetFrontendState(...)`).
+      IM_CHECK_EQ(count_occurrences("g_server_poller.InvalidateStagedTexture()"), 1);
+      IM_CHECK_EQ(count_occurrences("g_crystal_mesh_hash = 0"), 1);
+    };
+  }
+
+  {
+    // AC1 end-to-end: `DoOpen(.json)` runs the owner's kOpenJson branch — ClearTexture +
+    // ClearBackground + InvalidateStagedTexture + trackball reset. GL-level assertion: after a
+    // stale sim upload, importing a CLI JSON config leaves the sim layer black on the next
+    // Render(). Complements the CPU-side `open_json_import_clears_stale_texture` (HasTexture()
+    // proxy) by covering the actual pixel output through the full command → owner → main-thread
+    // Render() chain, which is the task-351 regression surface.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "doopen_json_end_to_end_blanks_gl_via_owner");
+    t->GuiFunc = GlOpGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // Prepare a valid CLI-shape JSON config on disk (round-trips through SerializeCoreConfig).
+      std::string json = gui::SerializeCoreConfig(gui::g_state);
+      const char* tmp_path = "/tmp/lumice_reset_owner_json_import.json";
+      IM_CHECK(gui::ExportConfigJson(tmp_path, json));
+
+      // Frame A: seed stale GL pixels — the "previous scene still showing" precondition.
+      g_gl_op.Reset();
+      g_gl_op.requested = true;
+      g_gl_op.do_upload_stale = true;
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return g_gl_op.done; });
+      IM_CHECK(g_gl_op.export_ok);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_r), 0xFF);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_g), 0x00);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_b), 0xFF);
+
+      // Real production DoOpen(.json) — CPU-safe from the coroutine worker (owner's kOpenJson
+      // branch only flips flags; the GL blank is consumed by the next Render()).
+      gui::DoOpen(tmp_path);
+
+      // Frame B: pure Render() — must sample black (owner's deferred blank propagated through).
+      g_gl_op.Reset();
+      g_gl_op.requested = true;
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return g_gl_op.done; });
+      IM_CHECK(g_gl_op.export_ok);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_r), 0x00);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_g), 0x00);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_b), 0x00);
+
+      std::remove(tmp_path);
+    };
+  }
+
+  {
+    // AC1 end-to-end: `DoOpen(.lmc no-baked)` runs the owner's kOpenLmcBlank branch — same
+    // ClearTexture+ClearBackground+InvalidateStagedTexture+trackball subset as kOpenJson, but
+    // sourced from an .lmc file with no baked preview payload (save_texture=false path).
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "doopen_lmc_blank_end_to_end_blanks_gl_via_owner");
+    t->GuiFunc = GlOpGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // Write an .lmc file WITHOUT a baked preview — DoOpen hits the kOpenLmcBlank branch.
+      const char* tmp_path = "/tmp/lumice_reset_owner_lmc_blank.lmc";
+      IM_CHECK(gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, /*save_texture=*/false));
+
+      // Frame A: seed stale GL pixels.
+      g_gl_op.Reset();
+      g_gl_op.requested = true;
+      g_gl_op.do_upload_stale = true;
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return g_gl_op.done; });
+      IM_CHECK(g_gl_op.export_ok);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_r), 0xFF);
+
+      // DoOpen(.lmc no-baked) — CPU-safe (owner's kOpenLmcBlank branch is CPU-only flag flips).
+      gui::DoOpen(tmp_path);
+
+      // Frame B: pure Render() — must sample black.
+      g_gl_op.Reset();
+      g_gl_op.requested = true;
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return g_gl_op.done; });
+      IM_CHECK(g_gl_op.export_ok);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_r), 0x00);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_g), 0x00);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_b), 0x00);
+
+      std::remove(tmp_path);
+    };
+  }
+
+  {
+    // AC1 end-to-end: `DoOpen(.lmc baked)` runs the owner's kOpenBaked branch — UploadTexture
+    // with the file's payload + ClearBackground + InvalidateStagedTexture + trackball reset.
+    // Postcondition is DIFFERENT from the other document-switch branches: preview must show the
+    // BAKED bytes (not black), proving the owner uploads the payload rather than falling back
+    // to a blanket ClearTexture. GL-level assertion catches a regression where the owner drops
+    // the UploadTexture call (would sample black) or forgets to override the pending blank
+    // (would sample black after the deferred-clear consumes it).
+    //
+    // Threading: UploadTexture is a GL call — must run on the main thread (GuiFunc). Mirrors
+    // the existing `open_lmc_with_preview_replaces_stale_texture` staging pattern: TestFunc
+    // arms an s_open_path, GuiFunc invokes DoOpen once when it becomes non-empty.
+    static bool s_open_baked_done = false;
+    static std::string s_open_baked_path;
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "doopen_lmc_baked_end_to_end_uploads_gl_via_owner");
+    t->GuiFunc = [](ImGuiTestContext* ctx) {
+      // First tick: run the GlOp seed/probe if requested (same body as GlOpGuiFunc).
+      GlOpGuiFunc(ctx);
+      // Second phase: DoOpen(baked) invocation — GL-context-bound so runs from GuiFunc.
+      if (!s_open_baked_done && !s_open_baked_path.empty()) {
+        gui::DoOpen(s_open_baked_path);
+        s_open_baked_done = true;
+      }
+    };
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      s_open_baked_done = false;
+      s_open_baked_path.clear();
+
+      // Build an .lmc that holds a distinctive baked payload (kFreshCyan = 0x00,0xFF,0xFF).
+      // Injecting the payload through g_preview.UpdateCpuTextureData is a CPU-side seam that
+      // SaveLmcFile serializes, so the resulting file's baked bytes match kFreshCyan exactly.
+      const int baked_w = 12;
+      const int baked_h = 6;
+      std::vector<unsigned char> baked(static_cast<size_t>(baked_w) * baked_h * 3);
+      for (int i = 0; i < baked_w * baked_h; ++i) {
+        baked[i * 3 + 0] = kFreshCyan[0];
+        baked[i * 3 + 1] = kFreshCyan[1];
+        baked[i * 3 + 2] = kFreshCyan[2];
+      }
+      gui::g_preview.UpdateCpuTextureData(baked.data(), baked_w, baked_h);
+      const char* tmp_path = "/tmp/lumice_reset_owner_lmc_baked.lmc";
+      IM_CHECK(gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, /*save_texture=*/true));
+
+      // Frame A: seed stale magenta pixels through the real GL path.
+      g_gl_op.Reset();
+      g_gl_op.requested = true;
+      g_gl_op.do_upload_stale = true;
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return g_gl_op.done; });
+      IM_CHECK(g_gl_op.export_ok);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_r), 0xFF);
+
+      // Drive DoOpen(.lmc baked) via GuiFunc — see threading note above.
+      s_open_baked_path = tmp_path;
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return s_open_baked_done; });
+      IM_CHECK(s_open_baked_done);
+
+      // Frame B: pure Render() — must sample the FRESH baked pixels (cyan), not stale magenta
+      // and not black. Regression modes: owner drops UploadTexture (→ black or magenta), owner
+      // fails to override the pending-blank flag (→ black), or handler bypasses owner and calls
+      // ClearTexture directly (→ black).
+      g_gl_op.Reset();
+      g_gl_op.requested = true;
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return g_gl_op.done; });
+      IM_CHECK(g_gl_op.export_ok);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_r), 0x00);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_g), 0xFF);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_b), 0xFF);
+
+      std::remove(tmp_path);
+    };
+  }
+
+  {
+    // AC1 end-to-end (kRevert branch): `DoRevert()` must NOT clear the preview — it is a config
+    // restore, not a document switch. GL-level assertion: after uploading distinctive pixels,
+    // Revert leaves those pixels intact on the next Render(). Regression mode: a well-meaning
+    // future change generalises the owner's kRevert branch to also ClearTexture (matching the
+    // other reasons); this test catches it because the "stale" pixels are the current preview
+    // that Revert must preserve, not stale content to be cleared.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "dorevert_preserves_gl_preview_via_owner");
+    t->GuiFunc = GlOpGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // Arm a revert snapshot so DoRevert actually runs its body (guarded by
+      // `if (g_state.last_committed_state)` — see app.cpp DoRevert). Any snapshot works: the
+      // preview retention is independent of what the config restore does.
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
+
+      // Frame A: upload distinctive pixels — this is now the "current preview", not stale.
+      g_gl_op.Reset();
+      g_gl_op.requested = true;
+      g_gl_op.do_upload_stale = true;  // reuses the magenta seed; label irrelevant to the assertion
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return g_gl_op.done; });
+      IM_CHECK(g_gl_op.export_ok);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_r), 0xFF);
+
+      // Real production DoRevert() — CPU-safe (ApplyTo is pure assignment; the owner's kRevert
+      // branch touches no GL).
+      gui::DoRevert();
+
+      // Frame B: pure Render() — must STILL sample the current preview (magenta). Not black
+      // (which would mean Revert wrongly ClearTexture'd or InvalidateStagedTexture'd through
+      // the wrong branch).
+      g_gl_op.Reset();
+      g_gl_op.requested = true;
+      YieldUntilTrue(ctx, kDoOpenSettleYieldLimit, [] { return g_gl_op.done; });
+      IM_CHECK(g_gl_op.export_ok);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_r), 0xFF);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_g), 0x00);
+      IM_CHECK_EQ(static_cast<int>(g_gl_op.center_b), 0xFF);
+    };
+  }
+
+  {
+    // AC2 mechanism: `DoRevert()` invalidates `last_pushed_display_state` so the next reconcile
+    // re-pushes the restored display payload without further user interaction (plan §1 偏离 C,
+    // fixed by task-color-migration §4 M6 and preserved by the owner's kRevert branch). This is
+    // the CPU-level proof that the owner still routes the invalidation through — a full server
+    // round-trip is not needed to prove the mechanism, only that the baseline reset actually
+    // happens after DoRevert. Regression mode: a future change to the owner's kRevert branch
+    // drops `state.InvalidateEffectsBaselines()`; this test then fails because the baseline is
+    // still set after DoRevert.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "dorevert_invalidates_effects_baselines_via_owner");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+
+      // Preconditions: (a) a revert snapshot exists (DoRevert's `if` guard), (b) a display-state
+      // baseline exists (so we can observe the reset). Both are pure struct assignments — no
+      // simulator round-trip required.
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
+      gui::g_state.last_pushed_display_state = gui::GuiState::DisplayStateBaseline{};
+      IM_CHECK(gui::g_state.last_pushed_display_state.has_value());
+
+      // Real production DoRevert() — owner's kRevert branch calls state.InvalidateEffectsBaselines().
+      gui::DoRevert();
+
+      // Postcondition: baseline cleared → next reconciler tick will re-push the full display
+      // payload (plan §1 偏离 C fix). A regression that removes InvalidateEffectsBaselines from
+      // the kRevert branch leaves the baseline populated and this assertion fails.
+      IM_CHECK(!gui::g_state.last_pushed_display_state.has_value());
+    };
+  }
 }
