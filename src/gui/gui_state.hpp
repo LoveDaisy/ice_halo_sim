@@ -576,10 +576,17 @@ struct ColorClassRefConfig {
   int crystal_pool_id = 0;     // index into GuiState::crystals (NOT the LUMICE C-API id)
   bool match_all = true;       // true → LUMICE_FILTER_TYPE_UNSET (whole crystal); false → parse predicate_text
   std::string predicate_text;  // parsed via raypath_segments.hpp; must yield exactly one Factor
+  // task-356.3 — per-ref P/B/D symmetry bitmask. Defaults are all false (kSymNone) to
+  // mirror core RaypathColorRef::symmetry_ (literal single-orientation match); this
+  // deliberately diverges from FilterConfig's default-all-true — see
+  // src/config/raypath_color_config.hpp:32 for the design rationale.
+  bool sym_p = false;
+  bool sym_b = false;
+  bool sym_d = false;
 
   friend bool operator==(const ColorClassRefConfig& a, const ColorClassRefConfig& b) {
     return a.layer_idx == b.layer_idx && a.crystal_pool_id == b.crystal_pool_id && a.match_all == b.match_all &&
-           a.predicate_text == b.predicate_text;
+           a.predicate_text == b.predicate_text && a.sym_p == b.sym_p && a.sym_b == b.sym_b && a.sym_d == b.sym_d;
   }
   friend bool operator!=(const ColorClassRefConfig& a, const ColorClassRefConfig& b) { return !(a == b); }
 };

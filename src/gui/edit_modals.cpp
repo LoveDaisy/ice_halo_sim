@@ -20,6 +20,7 @@
 #include "gui/gui_state.hpp"
 #include "gui/panels.hpp"
 #include "gui/raypath_segments.hpp"
+#include "gui/symmetry_ui.hpp"
 #include "gui/window_sizing.hpp"
 #include "imgui.h"
 
@@ -855,23 +856,12 @@ static void RenderSummandRowList() {
   }
 }
 
-// Returns true when the current entry's axis config satisfies D-symmetry
-// conditions: azimuth uniform 360° AND roll mean a multiple of 30°.
-// Mirrors core detail::IsDApplicable (src/core/crystal.cpp). Keep in sync.
-static bool IsDApplicableGuiAxis(const AxisDist& az, const AxisDist& roll) {
-  const bool az_sym = az.type == AxisDistType::kUniform && std::fabs(az.std - 360.0f) < 1e-3f;
-  const float rem = std::fmod(std::fmod(roll.mean, 30.0f) + 30.0f, 30.0f);
-  const bool roll_ok = rem < 1e-3f || std::fabs(rem - 30.0f) < 1e-3f;
-  return az_sym && roll_ok;
-}
-
-static constexpr const char* kDTooltipText =
-    "D applies when azimuth = uniform 360\xc2\xb0 and roll mean is a multiple of 30\xc2\xb0.\n"
-    "Current config does not meet this condition, so D has no effect.";
-
 // Shared filter controls (Action radio + P/B/D), rendered after the
 // type-specific dispatch. Always uses g_filter_top so type switches don't
 // reset shared user preferences.
+//
+// task-356.3 — P/B/D rendering and IsDApplicableGuiAxis moved to
+// gui/symmetry_ui.hpp so color_window.cpp (per-ref row) can reuse them (a12).
 static void RenderSharedFilterControls(bool d_applicable) {
   // Action: two RadioButtons (was Combo pre-task; aligns with Crystal tab style).
   // Always rendered — filter_in / filter_out semantics apply to every type.
@@ -889,37 +879,7 @@ static void RenderSharedFilterControls(bool d_applicable) {
     ImGui::SetTooltip("Hide rays matching the filter");
   }
 
-  // P/B/D Checkboxes: unconditional under H5 (every row is raypath / EE / an
-  // AND mix — both types consume crystal symmetry at the core layer). The
-  // pre-H5 `sym_active` gate was already effectively constant since only two
-  // discriminator values existed; H5 simply removes the discriminator.
-  ImGui::Checkbox("P##filter_modal", &g_filter_top.sym_p);
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Prism-face reflection symmetry");
-  }
-  ImGui::SameLine();
-  ImGui::Checkbox("B##filter_modal", &g_filter_top.sym_b);
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Basal-face reflection symmetry");
-  }
-  ImGui::SameLine();
-  ImGui::Checkbox("D##filter_modal", &g_filter_top.sym_d);
-  if (!d_applicable) {
-    ImGui::SameLine();
-    // SmallButton with transparent styling acts as a hover target for the
-    // tooltip (TextDisabled lacks a stable item ID needed by the test engine).
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
-    ImGui::SmallButton(ICON_FA_CIRCLE_INFO "##d_tooltip_icon");
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor(4);
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("%s", kDTooltipText);
-    }
-  }
+  RenderSymmetryCheckboxes(g_filter_top.sym_p, g_filter_top.sym_b, g_filter_top.sym_d, d_applicable, "filter_modal");
 }
 
 // Remove Filter — arms g_filter_remove_intent so ApplyBuffersToEntry writes
