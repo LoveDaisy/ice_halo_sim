@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783836075466,
+  "lastUpdate": 1783836077173,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9620,50 +9620,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "efafa43354b35f824c02394d62dbc328464441ba",
-          "message": "Merge pull request #85 from LoveDaisy/feat/more_filters\n\nfeat: per-type filter subpanels (Raypath / EntryExit / Direction / Crystal) with .lmc v2 serialization",
-          "timestamp": "2026-05-06T11:32:12+08:00",
-          "tree_id": "c65cfd36e780f84271a95de1b162d2f55d96cbbf",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/efafa43354b35f824c02394d62dbc328464441ba"
-        },
-        "date": 1778038623147,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 81.2,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 76.5,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 74.9,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 70.1,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "f04e1ad447d4f4ccdeef564955f7043422e706e6",
           "message": "Merge pull request #86 from LoveDaisy/feat/globe_view\n\nfeat: Globe↔other lens combo transform, visibility radio buttons, View panel regroup",
           "timestamp": "2026-05-06T12:27:33+08:00",
@@ -14003,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 86.9,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5e45e77b49c06d5ed9f7ccc5f96770da8e6a371d",
+          "message": "Merge pull request #187 from LoveDaisy/feat/gui-state-reconcile\n\nGUI 状态治理专项：统一状态转换范式（explore-352 → scrum-353 + 354/355）",
+          "timestamp": "2026-07-12T13:55:17+08:00",
+          "tree_id": "a31a72d3fb0389df9c193f47ffdf4a14a1e33b30",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5e45e77b49c06d5ed9f7ccc5f96770da8e6a371d"
+        },
+        "date": 1783836076832,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 78.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.3,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 98.5,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 93.9,
             "unit": "%"
           }
         ]
