@@ -307,9 +307,10 @@ static void RefreshCpuTextureForSave() {
 // task-cleanup-hardening AC4: PerformSave / PerformSaveAs are the actual
 // serialization body (existing DoSave/DoSaveAs pre-353.5). DoSave / DoSaveAs
 // now front them with a sim_state == kModified check that opens
-// RenderSaveModifiedPopup; PerformSave / PerformSaveAs bypass the check
-// (called by the popup's "Save anyway" and by RenderUnsavedPopup, which is
-// the save prompt on the dirty axis — chaining two prompts would be bad UX).
+// RenderSaveModifiedPopup; PerformSave / PerformSaveAs are called directly
+// only by that popup's "Save anyway" branch and by DoSave/DoSaveAs' own
+// non-kModified fallthrough below (code-review-01 M1: RenderUnsavedPopup no
+// longer bypasses the gate — it now calls DoSave()/DoSaveAs()).
 void PerformSave() {
   if (g_state.current_file_path.empty()) {
     g_state.current_file_path = ShowSaveDialog();

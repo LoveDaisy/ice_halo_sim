@@ -1345,25 +1345,29 @@ void RenderUnsavedPopup(GLFWwindow* window) {
     ImGui::Separator();
 
     if (ImGui::Button("Save", ImVec2(80, 0))) {
-      // task-cleanup-hardening AC4: bypass the kModified prompt here — the user
-      // has just confirmed "Save before continuing" on the Unsaved-Changes
-      // prompt, chaining a second modal ("but the sim is also modified") would
-      // be bad UX and defeat the point of a confirmation flow.
-      PerformSave();
-      switch (g_pending_action) {
-        case PendingAction::kNew:
-          DoNew();
-          break;
-        case PendingAction::kOpen:
-          DoOpen();
-          break;
-        case PendingAction::kQuit:
-          glfwSetWindowShouldClose(window, GLFW_TRUE);
-          break;
-        default:
-          break;
+      // task-cleanup-hardening AC4 code-review-01 M1: route through the
+      // kModified gate (DoSave) instead of bypassing it via PerformSave. If
+      // sim_state == kModified, DoSave() defers to RenderSaveModifiedPopup and
+      // leaves g_pending_action queued — its three branches below decide
+      // whether the deferred New/Open/Quit actually runs. If not modified,
+      // DoSave() falls through to PerformSave() synchronously, same as before.
+      DoSave();
+      if (!g_show_save_modified_popup) {
+        switch (g_pending_action) {
+          case PendingAction::kNew:
+            DoNew();
+            break;
+          case PendingAction::kOpen:
+            DoOpen();
+            break;
+          case PendingAction::kQuit:
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+            break;
+          default:
+            break;
+        }
+        g_pending_action = PendingAction::kNone;
       }
-      g_pending_action = PendingAction::kNone;
       ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
@@ -1407,8 +1411,19 @@ void RenderUnsavedPopup(GLFWwindow* window) {
 //                    the last committed run's preview into the .lmc — legit
 //                    when the user knowingly wants to snapshot pre-edit state.
 //   - "Cancel"     : Clears the pending save kind and closes; no side effect.
+//
+// code-review-01 M1: this popup can also be reached via RenderUnsavedPopup's
+// "Save" button (DoSave() defers here when kModified), which leaves a
+// g_pending_action (New/Open/Quit) queued. Only "Save anyway" — the branch
+// that actually performs a serialization — resumes that deferred action;
+// "Run first" and "Cancel" both clear it, since neither persists anything and
+// silently proceeding with New/Open/Quit would discard the edit the original
+// Unsaved-changes prompt was protecting. When this popup is opened directly
+// from the top-bar Save button, g_pending_action is always kNone already, so
+// clearing/switching on it here is a no-op in that path.
 void RenderSaveModifiedPopup(GLFWwindow* window) {
-  (void)window;  // no window-level ops needed (unlike Unsaved's kQuit path)
+  // window is used by the "Save anyway" branch's chained kQuit case (see
+  // code-review-01 M1 doc comment above).
   if (g_show_save_modified_popup) {
     ImGui::OpenPopup("Save Modified Config");
     g_show_save_modified_popup = false;
@@ -1431,6 +1446,9 @@ void RenderSaveModifiedPopup(GLFWwindow* window) {
     if (ImGui::Button("Run first", ImVec2(100, 0))) {
       DoRun();
       g_pending_save_kind = PendingSaveKind::kNone;
+      // Abort any chained New/Open/Quit (see doc comment above) — Run doesn't
+      // persist anything, so proceeding now would still discard the edit.
+      g_pending_action = PendingAction::kNone;
       ImGui::CloseCurrentPopup();
     }
     if (!can_run) {
@@ -1449,11 +1467,31 @@ void RenderSaveModifiedPopup(GLFWwindow* window) {
           break;
       }
       g_pending_save_kind = PendingSaveKind::kNone;
+      // Resume the New/Open/Quit deferred by RenderUnsavedPopup's Save button
+      // (see doc comment above) — a real save just happened, so it's safe to
+      // proceed. No-op when this popup was opened directly (g_pending_action
+      // is kNone in that path).
+      switch (g_pending_action) {
+        case PendingAction::kNew:
+          DoNew();
+          break;
+        case PendingAction::kOpen:
+          DoOpen();
+          break;
+        case PendingAction::kQuit:
+          glfwSetWindowShouldClose(window, GLFW_TRUE);
+          break;
+        default:
+          break;
+      }
+      g_pending_action = PendingAction::kNone;
       ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
     if (ImGui::Button("Cancel", ImVec2(80, 0))) {
       g_pending_save_kind = PendingSaveKind::kNone;
+      // Abort any chained New/Open/Quit — see doc comment above.
+      g_pending_action = PendingAction::kNone;
       ImGui::CloseCurrentPopup();
     }
 

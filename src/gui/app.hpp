@@ -77,9 +77,11 @@ extern PendingAction g_pending_action;
 
 // task-cleanup-hardening AC4: Save-modified prompt state. Set by DoSave /
 // DoSaveAs when sim_state == kModified; consumed by RenderSaveModifiedPopup.
-// PerformSave / PerformSaveAs bypass the check (called from the popup's
-// "Save anyway" and from RenderUnsavedPopup, which is itself a save prompt
-// on a different axis — chaining two prompts would be bad UX).
+// PerformSave / PerformSaveAs bypass the check directly — the only caller
+// besides RenderSaveModifiedPopup's own "Save anyway" branch is DoSave /
+// DoSaveAs themselves (non-kModified fallthrough). RenderUnsavedPopup's
+// "Save" button routes through DoSave() (code-review-01 M1), so it defers to
+// this popup rather than bypassing the check.
 extern bool g_show_save_modified_popup;
 extern PendingSaveKind g_pending_save_kind;
 
@@ -128,11 +130,13 @@ float ComputeGridStep(float fov);
 //
 // PerformSave / PerformSaveAs — internal, do the actual RefreshCpuTextureForSave
 // + SaveLmcFile + dirty=false sequence. Exposed here (not just a .cpp static)
-// so RenderUnsavedPopup can bypass the kModified gate: the Unsaved-changes
-// popup is itself a save prompt on a different axis (dirty vs run intent),
-// and chaining two consecutive prompts is bad UX. Once the user has
-// explicitly answered the Unsaved prompt with "Save", we perform the save
-// unconditionally.
+// because RenderSaveModifiedPopup's "Save anyway" branch calls them directly
+// after the user has explicitly acknowledged the kModified warning.
+// RenderUnsavedPopup's "Save" button does NOT call these directly — it routes
+// through DoSave()/DoSaveAs() (code-review-01 M1) so the kModified gate still
+// applies; when that defers to RenderSaveModifiedPopup, the pending
+// New/Open/Quit action is threaded through g_pending_action and only resumes
+// once "Save anyway" actually performs the save (see app_panels.cpp).
 void DoSave();
 void DoSaveAs();
 void PerformSave();

@@ -443,6 +443,12 @@ int main(int argc, char** argv) {
     gui::RenderEditModals(gui::g_state, window);
     gui::RenderSpectrumModal(gui::g_state);
     gui::RenderUnsavedPopup(window);
+    // task-cleanup-hardening code-review-01 M1: RenderSaveModifiedPopup was
+    // added to src/gui/main.cpp's frame loop (AC4) but never mirrored here,
+    // so its widgets (Run first / Save anyway / Cancel) were unreachable by
+    // any UI-driven gui_test — the existing p2_modal AC4 tests could only
+    // exercise DoSave()/PerformSave() directly. Mirrors main.cpp:352.
+    gui::RenderSaveModifiedPopup(window);
 
     // Field-tier effect reconcile at frame TAIL — mirrors src/gui/main.cpp M6 placement so widget
     // edits driven by ImGuiTestEngine land in state.dirty within the same frame (rather than one

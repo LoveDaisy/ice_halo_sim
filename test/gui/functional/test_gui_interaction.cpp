@@ -3728,6 +3728,102 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // code-review-01 M1: RenderUnsavedPopup's "Save" button must route through
+  // the kModified gate (DoSave) rather than bypassing it — clicking Save
+  // while both dirty and kModified must chain to RenderSaveModifiedPopup, not
+  // silently serialize the stale preview. This drives the real button click
+  // path (unlike save_on_kmodified_opens_prompt_no_file_write, which calls
+  // DoSave() directly), pinning the last-mile button wiring the Pragmatist
+  // review flagged as untested: Unsaved-Save → Save-Modified popup opens →
+  // click "Save anyway" → file written AND the deferred New actually runs.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "unsaved_save_chains_to_save_modified_popup");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      const char* tmp_path = "/tmp/lumice_unsaved_chain_anyway.lmc";
+      std::remove(tmp_path);
+      gui::g_state.current_file_path = tmp_path;
+      gui::g_state.layers[0].entries.push_back(gui::EntryCard{});
+      // sim_state is re-derived every frame by ReconcileSimState (I2) from
+      // run_intent, so a direct sim_state write would not survive the Yield()
+      // calls below. kLoaded is the "static loaded result" intent (base=kDone
+      // regardless of server/committed_epoch) — combined with dirty=true it
+      // reconciles to kModified each frame, same as loading a .lmc then editing.
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
+      gui::g_state.dirty = true;
+      ctx->Yield();
+
+      // Click New → Unsaved popup → Save. Since sim_state == kModified, this
+      // must NOT write the file yet — it must open Save-Modified instead.
+      ctx->ItemClick("##TopBar/New");
+      ctx->Yield(2);
+      ctx->ItemClick("Unsaved Changes/Save");
+      // DoSave() (invoked by the click handler above) sets
+      // g_show_save_modified_popup mid-frame; RenderSaveModifiedPopup —
+      // called right after RenderUnsavedPopup in both main.cpp and this
+      // harness's GuiFunc — consumes it and opens the popup the same frame.
+      ctx->Yield(3);
+
+      IM_CHECK(ImGui::IsPopupOpen("Save Modified Config"));
+
+      std::ifstream not_yet(tmp_path);
+      IM_CHECK(!not_yet.good());
+      // New must not have run yet — the entry added above is still present.
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
+
+      // Click "Save anyway" — the deferred save runs, and so does the New
+      // that was queued by the original Unsaved-Save click.
+      ctx->ItemClick("Save Modified Config/Save anyway");
+      ctx->Yield(2);
+
+      std::ifstream f(tmp_path);
+      IM_CHECK(f.good());
+      IM_CHECK_EQ(static_cast<int>(gui::g_pending_action), static_cast<int>(gui::PendingAction::kNone));
+      // DoNew() reset the document, so the pushed-back entry is gone.
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
+
+      std::remove(tmp_path);
+    };
+  }
+
+  // code-review-01 M1 companion: "Cancel" on the chained Save-Modified popup
+  // must abort the deferred New too (not silently proceed without a save).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "unsaved_save_chain_cancel_aborts_pending_action");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      const char* tmp_path = "/tmp/lumice_unsaved_chain_cancel.lmc";
+      std::remove(tmp_path);
+      gui::g_state.current_file_path = tmp_path;
+      gui::g_state.layers[0].entries.push_back(gui::EntryCard{});
+      // See unsaved_save_chains_to_save_modified_popup above for why kLoaded
+      // (not a direct sim_state write) is needed to survive the frame Yield.
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
+      gui::g_state.dirty = true;
+      ctx->Yield();
+
+      ctx->ItemClick("##TopBar/New");
+      ctx->Yield(2);
+      ctx->ItemClick("Unsaved Changes/Save");
+      // See the sibling test above for why this hop needs 3 frames.
+      ctx->Yield(3);
+
+      ctx->ItemClick("Save Modified Config/Cancel");
+      ctx->Yield(2);
+
+      // Neither the save nor the New happened.
+      std::ifstream f(tmp_path);
+      IM_CHECK(!f.good());
+      IM_CHECK(gui::g_state.dirty);
+      IM_CHECK_EQ(static_cast<int>(gui::g_pending_action), static_cast<int>(gui::PendingAction::kNone));
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
+    };
+  }
+
   // p2_modal/crystal_modal_open_cancel — open crystal modal, cancel, verify no state change
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "crystal_modal_open_cancel");
