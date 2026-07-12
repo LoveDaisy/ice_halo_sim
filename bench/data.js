@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783873680137,
+  "lastUpdate": 1783873681781,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9620,50 +9620,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "629b323b216916714ed81f72579bb132517b2088",
-          "message": "Merge pull request #87 from LoveDaisy/feat/gui_polish\n\nfeat(gui-polish-v18): visibility row, drop Direction filter, EE align Raypath",
-          "timestamp": "2026-05-07T12:18:21+08:00",
-          "tree_id": "cba0b9455d12d07982d550091a56b3c28e98d010",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/629b323b216916714ed81f72579bb132517b2088"
-        },
-        "date": 1778127817754,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 86.2,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 78,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 72.4,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 70.8,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "702fec607e094345d83386ea8011b67d9ccc5718",
           "message": "Merge pull request #88 from LoveDaisy/feat/raypath_symmetry\n\nRaypath P/B/D symmetry redesign + fold/roll fix + e2e regression",
           "timestamp": "2026-05-09T12:44:27+08:00",
@@ -14003,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 93.3,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5e97f32dfff1df95c079d3e6a6dcf1d31ff2b870",
+          "message": "Merge pull request #189 from LoveDaisy/feat/local-cleanup-sweep\n\nchore: local cleanup sweep — popcount gate, sibling-race, filter test, doc fixup (scrum-357)",
+          "timestamp": "2026-07-13T00:20:25+08:00",
+          "tree_id": "c297e4cca53bbc42294ff1e88146c4bcf2c33696",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5e97f32dfff1df95c079d3e6a6dcf1d31ff2b870"
+        },
+        "date": 1783873681451,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 77.3,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 98.6,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 94.4,
             "unit": "%"
           }
         ]
