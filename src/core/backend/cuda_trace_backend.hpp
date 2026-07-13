@@ -104,6 +104,14 @@ class CudaTraceBackend : public TraceBackend {
   // to legacy CPU via simulator backend dispatch.
   bool HasDeviceXyzAccum() const override;
   void ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight) override;
+  // task-358.2 Step 4 (AC3 device-side Y-lane accumulation). CUDA override of
+  // the base virtual: copies the flattened `class_count * W * H` atomic-float
+  // buffer to host and zeros the device side for the next window. Called from
+  // the simulator right after ReadbackXyzAccum (same drain cadence). No-op
+  // (lane_data empty, class_count=0) when the session carries no
+  // raypath_color config — the RenderConsumer then falls back to its host-side
+  // rule-lane accumulation path (AC4 zero-cost).
+  void ReadbackClassLanes(std::vector<float>& lane_data, size_t& class_count) override;
   // [TEST-ONLY] task-331.6 (raypath-color foundation) component-mask parity.
   // CUDA sibling of MetalTraceBackend::SetCaptureComponent /
   // ReadbackComponentCapture. SetCaptureComponent(true) makes the emit gate
