@@ -25,8 +25,10 @@
 #include <variant>
 #include <vector>
 
+#include "config/color_gate_table.hpp"  // task-358.1 Design-2 color-gate migration
 #include "config/component_table.hpp"  // task-331.5 raypath-color foundation
 #include "config/proj_config.hpp"
+#include "config/raypath_color_config.hpp"  // task-358.1
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/color_util.hpp"
@@ -73,6 +75,17 @@ namespace {
 constexpr int kTraceKernelRecCap = 64;
 static_assert(kDevFilterMatchRecCap == kTraceKernelRecCap,
               "kDevRecCap (filter-match helper) and kRecCap (trace kernel) must match");
+
+// task-358.1 (metal-color-parity, Design-2 migration): per-slot max number of
+// color-descriptor symmetry groups (each group = one synthesized
+// ComplexFilterParam wrapping predicates that share the same P/B/D bitmask).
+// The 3-bit P/B/D bitmask spans 8 values in principle, but production
+// raypath_color configs cluster on {kSymNone, kSymP, kSymB, kSymPB} — 4 is a
+// tight soft cap; assert fires on overflow (mirrors kDeviceFilterMaxOrClauses).
+// Raising it: bump this constant AND the MSL sibling (kColorMaxGroupsPerSlot in
+// lumice_trace.metal) together, and audit color_desc_offset / color_bits_offset
+// arithmetic downstream. See plan §4 Step 1 + assumption B.
+constexpr size_t kColorMaxGroupsPerSlot = 4;
 
 // Continuation-pool shuffle PCG nonce (task-gpu-backend-recombine-shuffle).
 // MUST equal the CUDA-side kCudaShuffleNonce so the two backends derive the
@@ -121,12 +134,35 @@ struct KernelParams {
   // component work), 1 in the CPU-parity test (produce per-summand bits + append
   // (mask, weight) to the capture ring). Mirrors MSL KernelParams::capture_component.
   uint32_t capture_component;
+  // task-358.1 (metal-color-parity, Design-2 ColorGateTable migration):
+  //   has_color_groups        : 1 iff ColorGateTable non-empty AND at least one
+  //                             placement has ≥1 color group in this session; 0
+  //                             skips the color pass entirely (zero-cost path).
+  //   color_desc_offset       : index (in DeviceFilterDesc units) into
+  //                             filter_desc_buf_ where the color-descriptor
+  //                             region starts (= physical n_slot). Kernel reads
+  //                             gate_filter_desc[color_desc_offset +
+  //                                              gate_slot * kColorMaxGroupsPerSlot + g]
+  //                             for group g of the current slot. See plan §4
+  //                             Step 1 addressing公式 + assumption B.
+  //   color_bits_offset       : index (in uint8_t units) into
+  //                             gate_component_bits_buf_ where the color-region
+  //                             begins (= physical n_slot * stride).
+  //   color_max_groups_per_slot: stride for the color-descriptor region and the
+  //                              color-component-bit region (kColorMaxGroupsPerSlot,
+  //                              currently 4). Passed as a param to avoid
+  //                              hard-coding in MSL.
+  uint32_t has_color_groups;
+  uint32_t color_desc_offset;
+  uint32_t color_bits_offset;
+  uint32_t color_max_groups_per_slot;
 };
 // sizeof(ProjParams) == 76 (6 ints + 4 floats + float[9]); the 15 leading
 // 4-byte KernelParams scalars add 60, + proj 76 + capture_component 4 → 140
-// total. All members 4-byte aligned, no padding.
+// pre-358.1. task-358.1 adds 4 more 4-byte fields (color has/offset/bits/stride)
+// → 156 total. All members 4-byte aligned, no padding.
 static_assert(sizeof(lm_proj::ProjParams) == 76u, "ProjParams layout drift — check projection_shared.h");
-static_assert(sizeof(KernelParams) == 140u,
+static_assert(sizeof(KernelParams) == 156u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 
 // Device root-gen latitude path tags. Numeric wire encoding is single-sourced
@@ -665,6 +701,29 @@ struct MetalTraceBackend::Impl {
   ComponentTable component_table_{};
   std::vector<uint64_t> captured_masks_;
   std::vector<float>    captured_ws_;
+
+  // task-358.1 (metal-color-parity): Design-2 ColorGateTable state built once
+  // per BeginSession from spec.raypath_color. Empty when no raypath_color config
+  // is active — has_color_groups_ then stays false and the emit gate skips the
+  // color pass entirely (zero-cost hot-path, AC4).
+  //   color_gate_table_       : per-(layer, crystal_id) predicate → color-bit map
+  //                             (config/color_gate_table.hpp). Owned by Impl for
+  //                             the session's lifetime; EnsureFilterBuffers reads
+  //                             it while synthesizing per-slot symmetry groups.
+  //   has_color_groups_       : true iff at least one (layer, ci) placement in
+  //                             this session produced ≥1 color group. When
+  //                             false, KernelParams.has_color_groups = 0 and the
+  //                             MSL color pass is compile-out-equivalent.
+  //   color_desc_offset_      : n_slot (offset in filter_desc_buf_ where color
+  //                             descriptors start; kernel reads at
+  //                             color_desc_offset_ + gate_slot * K + g).
+  //   color_bits_offset_      : n_slot * kDeviceFilterMaxOrClauses (offset in
+  //                             gate_component_bits_buf_ where color bit table
+  //                             starts). Same stride for both physical + color.
+  ColorGateTable color_gate_table_{};
+  bool           has_color_groups_  = false;
+  uint32_t       color_desc_offset_ = 0u;
+  uint32_t       color_bits_offset_ = 0u;
   // BeginSession captures the spectrum mode + per-batch sentinel so
   // ResolveLayerCrystalForCi can rebuild the WlEntry pool against the active
   // crystal's refractive index each ci dispatch. illuminant_mode_=true uses
@@ -1124,6 +1183,11 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
   getfn_offsets_buf_ = nil;
   getfn_bytes_buf_ = nil;
   complex_sub_desc_buf_ = nil;
+  // task-358.1: reset color state up-front; the descriptor append below turns
+  // it back on when at least one placement produces groups.
+  has_color_groups_  = false;
+  color_desc_offset_ = 0u;
+  color_bits_offset_ = 0u;
   // scrum-267 task-fused-emit-gate Step 3a (R5 fix): the trace kernel's emit
   // gate unconditionally binds filter_desc_buf_ / getfn_offsets_buf_ /
   // getfn_bytes_buf_ / complex_sub_desc_buf_ at buffer slots 24-27 (plan §3
@@ -1213,13 +1277,131 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
     // surfaces as a benign true rather than a memory fault.
   }
 
-  // Upload descs.
+  // task-358.1 (metal-color-parity): APPEND color-group descriptors after the
+  // physical filter descriptors, into the SAME filter_desc_buf_ + complex_sub_
+  // desc_buf_ (buffer-slot budget assumption B; new bindings would exceed
+  // Metal's per-stage 30-buffer ceiling). Addressing公式 for the kernel:
+  //   color_slot = color_desc_offset_ + gate_slot * kColorMaxGroupsPerSlot + g
+  // where color_desc_offset_ = n_slot (physical-region size). The formula is
+  // TIGHTLY COUPLED to the physical-descriptor region size — if a future
+  // maintainer changes the physical layout above (e.g. adds trailing padding
+  // for a new descriptor field), color_desc_offset_ MUST track that change.
+  // See plan §4 Step 1 Minor 1 + assumption B for the slot-budget derivation.
+  //
+  // Per placement (mi, ci), we build ColorSpecGroups via BuildColorSpecGroups
+  // (same code path as CPU cpu_trace_backend.cpp:367-373 → SimulateOneWavelength
+  // → CollectData). Each group carries:
+  //   - one ComplexFilterParam (OR-of-singleton-AND-clauses over predicates
+  //     sharing a P/B/D symmetry)
+  //   - a parallel `bits[]` array mapping local summand idx → global color bit
+  // We synthesize a `FilterConfig{ symmetry_=group.sym, action_=kFilterIn }`,
+  // hand it to BuildDeviceFilterDesc / BuildComplexSubDescs (same as physical),
+  // and append. Empty group slots stay zero-initialised (type=None), which the
+  // MSL DeviceFilterSummandMask treats as "no summand matches" (mask=0) —
+  // guaranteed benign no-op, matching the physical-region convention.
+  color_desc_offset_ = static_cast<uint32_t>(n_slot);
+  color_bits_offset_ = static_cast<uint32_t>(n_slot * kDeviceFilterMaxOrClauses);
+  const size_t color_desc_region = n_slot * kColorMaxGroupsPerSlot;
+  std::vector<DeviceFilterDesc> color_descs(color_desc_region);  // zero-init
+  const size_t color_bits_region = color_desc_region * kDeviceFilterMaxOrClauses;
+  std::vector<uint8_t> color_bit_map(color_bits_region, ComponentTable::kNoBit);
+  bool any_color_group = false;
+
+  // Per-slot color-region build. Inlines BuildColorSpecGroups's per-symmetry
+  // grouping (filter_spec.cpp:389-410) rather than calling it, because the MSL
+  // side needs DeviceFilterDescs while BuildColorSpecGroups returns owning
+  // FilterSpecs; sharing one call path would require refactoring the CPU helper
+  // to also expose the per-group synthesized FilterConfig. The two loops MUST
+  // agree bit-for-bit on group ordering + summand ordering — that discipline is
+  // load-bearing for AC1 (逐位一致).
+  for (size_t mi = 0; mi < n_layers; ++mi) {
+    const auto& ms = session_spec.scene->ms_[mi];
+    for (size_t ci = 0; ci < ms.setting_.size(); ++ci) {
+      const auto& setting = ms.setting_[ci];
+      ColorGatePlacement placement = ColorGatePlacementFor(
+          color_gate_table_, static_cast<IdType>(mi), setting.crystal_.id_);
+      if (placement.predicates_.empty()) { continue; }
+      RandomNumberGenerator color_proto_rng(0xC0FEFEEDu ^
+                                            static_cast<uint32_t>(mi * 65537u + ci));
+      Crystal proto = MakeCrystal(color_proto_rng, setting.crystal_.param_);
+      // Inline the per-symmetry grouping (mirrors filter_spec.cpp:389-410 in
+      // BuildColorSpecGroups so we control the per-group symmetry value + bit
+      // ordering here). Ordering discipline MUST match BuildColorSpecGroups
+      // exactly, or CPU vs Metal color-bit assignment will disagree.
+      std::vector<uint8_t> group_symmetry;
+      group_symmetry.reserve(placement.predicates_.size());
+      std::vector<size_t> group_of(placement.predicates_.size(), 0);
+      for (size_t k = 0; k < placement.predicates_.size(); ++k) {
+        uint8_t sym = placement.symmetries_[k];
+        size_t gi = group_symmetry.size();
+        for (size_t i = 0; i < group_symmetry.size(); ++i) {
+          if (group_symmetry[i] == sym) { gi = i; break; }
+        }
+        if (gi == group_symmetry.size()) { group_symmetry.push_back(sym); }
+        group_of[k] = gi;
+      }
+      const size_t group_count = group_symmetry.size();
+      assert(group_count <= kColorMaxGroupsPerSlot &&
+             "Color placement produced more symmetry groups than "
+             "kColorMaxGroupsPerSlot; raise the constant + MSL sibling together");
+      any_color_group = true;
+      size_t gate_slot = mi * max_ci + ci;
+      for (size_t gi = 0; gi < group_count; ++gi) {
+        uint8_t sym = group_symmetry[gi];
+        // Rebuild the ComplexFilterParam (singleton AND-clauses in placement
+        // order, filtered to this group's symmetry).
+        ComplexFilterParam cfp;
+        std::vector<uint8_t> local_bits;
+        for (size_t k = 0; k < placement.predicates_.size(); ++k) {
+          if (group_of[k] != gi) continue;
+          cfp.filters_.push_back({ { kInvalidId, placement.predicates_[k] } });
+          local_bits.push_back(placement.bits_[k]);
+        }
+        // Build the top-level Complex DeviceFilterDesc with the group's
+        // symmetry (routed into ReduceRaypath canonical bytes) + kFilterIn
+        // action, mirroring BuildColorSpecGroups's synthesized FilterConfig.
+        FilterConfig fc{};
+        fc.id_ = kInvalidId;
+        fc.symmetry_ = sym;
+        fc.action_ = FilterConfig::kFilterIn;
+        fc.param_ = FilterParam{ cfp };
+        DeviceFilterDesc top = detail::BuildDeviceFilterDesc(fc, proto, setting.crystal_.axis_);
+        // sub_desc_start assigned BEFORE BuildComplexSubDescs appends (mirrors
+        // the physical-slot loop above).
+        top.sub_desc_start = static_cast<uint32_t>(all_sub_descs.size());
+        detail::BuildComplexSubDescs(cfp, proto, top.symmetry, top.sigma_a,
+                                     top.d_applicable != 0u, all_sub_descs);
+        // Place the descriptor at color_slot = gate_slot * K + gi (region-local
+        // index; absolute filter_desc_buf_ index adds n_slot when we upload).
+        size_t color_slot = gate_slot * kColorMaxGroupsPerSlot + gi;
+        assert(color_slot < color_desc_region);
+        color_descs[color_slot] = top;
+        // Populate the color bit map at the SAME region-local stride the MSL
+        // will index with: color_slot * kDeviceFilterMaxOrClauses + summand.
+        assert(local_bits.size() <= kDeviceFilterMaxOrClauses &&
+               "Color group has more OR-summands than kDeviceFilterMaxOrClauses");
+        size_t bit_base = color_slot * kDeviceFilterMaxOrClauses;
+        for (size_t s = 0; s < local_bits.size(); ++s) {
+          color_bit_map[bit_base + s] = local_bits[s];
+        }
+      }
+    }
+  }
+  has_color_groups_ = any_color_group;
+
+  // Upload physical + color descs together.
   filter_desc_count_ = n_slot;
-  size_t descs_bytes = n_slot * sizeof(DeviceFilterDesc);
+  size_t total_desc_count = n_slot + color_desc_region;
+  size_t descs_bytes = total_desc_count * sizeof(DeviceFilterDesc);
   filter_desc_buf_ = [device newBufferWithLength:descs_bytes
                                           options:MTLResourceStorageModeShared];
   assert(filter_desc_buf_ != nil);
-  std::memcpy([filter_desc_buf_ contents], descs.data(), descs_bytes);
+  {
+    DeviceFilterDesc* dst = static_cast<DeviceFilterDesc*>([filter_desc_buf_ contents]);
+    std::memcpy(dst, descs.data(), n_slot * sizeof(DeviceFilterDesc));
+    std::memcpy(dst + n_slot, color_descs.data(),
+                color_desc_region * sizeof(DeviceFilterDesc));
+  }
 
   // Upload GetFn prefix-sum offsets + flat byte stream.
   std::vector<uint32_t> offsets(n_slot + 1, 0u);
@@ -1274,7 +1456,18 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
   // bit source with the CPU's is deferred to scrum-3c.
   component_table_ = BuildComponentTable(*session_spec.scene);
   const size_t stride = kDeviceFilterMaxOrClauses;
-  std::vector<uint8_t> comp_bits(n_slot * stride, ComponentTable::kNoBit);
+  const size_t physical_bits_count = n_slot * stride;
+  // task-358.1: APPEND color region after physical. Layout:
+  //   [0 .. physical_bits_count)             : Fork-C summand → component bit
+  //   [color_bits_offset_ .. total)          : Design-2 color group summand → color bit
+  // color_bits_offset_ was set to physical_bits_count above (matches the region
+  // boundary). Kernel indexes color with:
+  //   color_bit = gate_component_bits[color_bits_offset_
+  //                                   + color_slot * kDeviceFilterMaxOrClauses + summand]
+  // where color_slot = gate_slot * kColorMaxGroupsPerSlot + g.
+  const size_t color_bits_count = color_bits_region;
+  const size_t total_bits_count = physical_bits_count + color_bits_count;
+  std::vector<uint8_t> comp_bits(total_bits_count, ComponentTable::kNoBit);
   for (size_t mi = 0; mi < n_layers; ++mi) {
     const auto& ms = session_spec.scene->ms_[mi];
     for (size_t ci = 0; ci < ms.setting_.size(); ++ci) {
@@ -1286,6 +1479,9 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
       }
     }
   }
+  // Copy the color-region bit map computed above into the trailing bytes.
+  std::memcpy(comp_bits.data() + physical_bits_count, color_bit_map.data(),
+              color_bits_count);
   gate_component_bits_buf_ = [device newBufferWithLength:comp_bits.size() * sizeof(uint8_t)
                                                 options:MTLResourceStorageModeShared];
   assert(gate_component_bits_buf_ != nil);
@@ -1853,6 +2049,17 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   params.proj     = proj_params_;
   // task-331.5: gate component-mask production + capture (test-only; 0 in prod).
   params.capture_component = capture_component_ ? 1u : 0u;
+  // task-358.1 (metal-color-parity): Design-2 color-gate hot-path knobs.
+  // has_color_groups = 0 when the session has no raypath_color config (or the
+  // ColorGateTable has no matching placements) → MSL color pass is skipped
+  // entirely (AC4 zero-cost). When 1, the MSL indexes color descriptors at
+  // color_desc_offset + gate_slot * color_max_groups_per_slot + g, and color
+  // component-bits at color_bits_offset + color_slot * kDeviceFilterMaxOrClauses
+  // + summand. Offsets computed in EnsureFilterBuffers.
+  params.has_color_groups = has_color_groups_ ? 1u : 0u;
+  params.color_desc_offset = color_desc_offset_;
+  params.color_bits_offset = color_bits_offset_;
+  params.color_max_groups_per_slot = static_cast<uint32_t>(kColorMaxGroupsPerSlot);
   // S1 device-fused: exit_cap and face_seq_cap are unused (exit buffers gone).
   params.exit_cap     = 0u;
   params.crystal_id   = crystal_id;
@@ -2277,6 +2484,17 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   if (!spec.scene->ms_.empty()) {
     impl_->last_ms_layer_idx_ =
         static_cast<uint8_t>(spec.scene->ms_.size() - 1);
+  }
+
+  // task-358.1 (metal-color-parity): build the Design-2 placement-scoped color
+  // gate table BEFORE EnsureFilterBuffers reads it. Empty raypath_color →
+  // empty ColorGateTable → EnsureFilterBuffers appends only zero-init color
+  // descriptors and leaves has_color_groups_ = false (AC4 zero-cost path).
+  // Mirrors CPU cpu_trace_backend.cpp:263-268 BuildColorGateTable call.
+  {
+    RaypathColorConfig empty_color;
+    const RaypathColorConfig& color_cfg = spec.raypath_color ? *spec.raypath_color : empty_color;
+    impl_->color_gate_table_ = BuildColorGateTable(color_cfg, *spec.scene);
   }
 
   // scrum-267 task-msl-filter-match-port (Step 4): upload per-session device

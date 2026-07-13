@@ -458,6 +458,25 @@ struct KernelParams {
   // production (no consumer yet) → the gate skips all component work and only
   // propagates the (all-zero) carried mask through cont_component. Test-only.
   uint capture_component;
+  // task-358.1 (metal-color-parity, Design-2 ColorGateTable migration):
+  //   has_color_groups        : 0 → skip color pass entirely (AC4 zero-cost).
+  //                             1 → run the color pass (production path when
+  //                             raypath_color is configured).
+  //   color_desc_offset       : gate_filter_desc index where the color region
+  //                             starts (= physical n_slot). Access:
+  //                               color_desc[color_slot] =
+  //                                 gate_filter_desc[color_desc_offset +
+  //                                                  gate_slot * color_max_groups_per_slot + g]
+  //   color_bits_offset       : gate_component_bits index where the color
+  //                             bit-map region starts (= n_slot * K, where K =
+  //                             kDeviceFilterMaxOrClauses).
+  //   color_max_groups_per_slot: per-slot group budget (host kColorMaxGroupsPer
+  //                             Slot; MUST match `kColorMaxGroupsPerSlot`
+  //                             sibling below).
+  uint has_color_groups;
+  uint color_desc_offset;
+  uint color_bits_offset;
+  uint color_max_groups_per_slot;
 };
 
 kernel void trace_layer_kernel(
@@ -703,6 +722,41 @@ kernel void trace_layer_kernel(
                 }
               }
             }
+            // task-358.1 (metal-color-parity, Design-2 ColorGateTable):
+            // production per-raypath color pass. Runs in parallel to the
+            // Fork-C capture_component pass above — both OR into this_mask
+            // (Fork-C bits and color bits use disjoint slices of the same
+            // 64-bit space in practice; see doc/gui-custom-spectrum-and-raypath
+            // -color.md §4.0). Gated by prm.has_color_groups so no
+            // raypath_color session → single branch skip (AC4 zero-cost).
+            // Each color group is a synthesized ComplexFilterParam whose
+            // OR-summands correspond to placement.predicates_; the summand
+            // mask (bit k = "summand k matched") is looked up against the
+            // color-bit map to build the OR-accumulated component mask.
+            // Mirrors CPU simulator.cpp CollectData:519-543 semantics.
+            if (prm.has_color_groups != 0u) {
+              for (uint g = 0u; g < prm.color_max_groups_per_slot; g++) {
+                uint color_slot_idx = gate_slot * prm.color_max_groups_per_slot + g;
+                // Empty groups are stored as zero-init DeviceFilterDesc
+                // (type=None); DeviceFilterSummandMask returns mask=0 for
+                // that shape → the inner loop is a no-op. No extra branch
+                // needed here.
+                bool matched_col = false;
+                uint c_smask = DeviceFilterSummandMask(
+                    gate_filter_desc[prm.color_desc_offset + color_slot_idx],
+                    gate_sub_desc_buf,
+                    path_local, gate_len, gate_getfn_bytes, gate_getfn_offsets,
+                    gate_slot, ray_dir_w, prm.crystal_config_id, &matched_col);
+                for (uint k = 0u; k < kDevComponentStride; k++) {
+                  if ((c_smask & (1u << k)) != 0u) {
+                    uchar bit = gate_component_bits[
+                        prm.color_bits_offset +
+                        color_slot_idx * kDevComponentStride + k];
+                    if (bit < 64u) { this_mask |= (1ul << (ulong)bit); }
+                  }
+                }
+              }
+            }
             // Independent PCG stream for the prob draw — gate_seed is derived
             // from gen_seed_ XOR (ms_layer_idx, crystal_id) on the host so
             // two dispatches with the same global_idx draw different prob
@@ -822,6 +876,36 @@ kernel void trace_layer_kernel(
                   if (bit < 64u) { this_mask_f |= (1ul << (ulong)bit); }
                 }
               }
+            }
+            // task-358.1: final-layer Design-2 color pass (mirror of the
+            // ms_mode==1 color pass above). MUST stay symmetric with the
+            // mid-layer branch — this_mask_f vs this_mask, gate_slot_f vs
+            // gate_slot, path_local_f vs path_local, ray_dir_w_f vs ray_dir_w.
+            // A silent asymmetry here re-introduces the exact class of bug the
+            // three landmine-guard tests protect against.
+            if (prm.has_color_groups != 0u) {
+              for (uint g = 0u; g < prm.color_max_groups_per_slot; g++) {
+                uint color_slot_idx_f = gate_slot_f * prm.color_max_groups_per_slot + g;
+                bool matched_col_f = false;
+                uint c_smask_f = DeviceFilterSummandMask(
+                    gate_filter_desc[prm.color_desc_offset + color_slot_idx_f],
+                    gate_sub_desc_buf,
+                    path_local_f, gate_len_f, gate_getfn_bytes, gate_getfn_offsets,
+                    gate_slot_f, ray_dir_w_f, prm.crystal_config_id, &matched_col_f);
+                for (uint k = 0u; k < kDevComponentStride; k++) {
+                  if ((c_smask_f & (1u << k)) != 0u) {
+                    uchar bit = gate_component_bits[
+                        prm.color_bits_offset +
+                        color_slot_idx_f * kDevComponentStride + k];
+                    if (bit < 64u) { this_mask_f |= (1ul << (ulong)bit); }
+                  }
+                }
+              }
+            }
+            // Capture ring append moved OUT of the capture_component branch so
+            // it stays open regardless of whether Fork-C is producing bits —
+            // colour parity tests want the capture path even without Fork-C.
+            if (prm.capture_component != 0u) {
               uint cslot = atomic_fetch_add_explicit(exit_comp_cnt, 1u, memory_order_relaxed);
               if (cslot < prm.out_cap) {
                 exit_comp_mask[cslot] = this_mask_f;
