@@ -462,12 +462,13 @@ struct KernelParams {
   // host CPU (scatter_accum.hpp) and CUDA. Replaces the former loose az0 /
   // proj_type / r_scale / max_abs_dz fields.
   lm_proj::ProjParams proj;
-  // task-331.5 (raypath-color foundation): when non-zero, the emit gate
-  // produces per-summand component bits, OR's them into the ray's carried
-  // uint64 mask, and appends (mask, weight) to the capture buffers. 0 in
-  // production (no consumer yet) → the gate skips all component work and only
-  // propagates the (all-zero) carried mask through cont_component. Test-only.
-  uint capture_component;
+  // task-358.3 (renamed from capture_component after Fork-C retirement): when
+  // non-zero, the emit gate appends (this_mask, weight) of every emitted ray
+  // to the capture ring. `this_mask` is now purely Design-2 colour bits (the
+  // Fork-C physical-bit produce branch has been deleted). 0 in production →
+  // the append branch is skipped; carried-mask cross-layer flow stays on.
+  // Test-only.
+  uint capture_ray_mask;
   // task-358.1 (metal-color-parity, Design-2 ColorGateTable migration):
   //   has_color_groups        : 0 → skip color pass entirely (AC4 zero-cost).
   //                             1 → run the color pass (production path when
@@ -734,31 +735,14 @@ kernel void trace_layer_kernel(
               gate_getfn_bytes, gate_getfn_offsets,
               gate_slot, ray_dir_w, prm.crystal_config_id);
           if (filter_pass) {
-            // task-331.5: produce this layer's component bits for the surviving
-            // ray and OR them into the carried mask (mirror CollectData
-            // simulator.cpp:500-519). Gated by capture_component so production
-            // (no consumer) pays only the carried-mask copy below.
+            // task-358.3: Fork-C physical-bits produce branch removed. `this_mask`
+            // now starts from the carried mask and is OR-accumulated by ONLY the
+            // Design-2 color pass below (production truth). The append-to-capture
+            // branch further down is gated by capture_ray_mask (test-only).
             ulong this_mask = carried_component;
-            if (prm.capture_component != 0u) {
-              bool matched_c = false;
-              uint smask = DeviceFilterSummandMask(
-                  gate_filter_desc[gate_slot], gate_sub_desc_buf,
-                  path_local, gate_len, gate_getfn_bytes, gate_getfn_offsets,
-                  gate_slot, ray_dir_w, prm.crystal_config_id, &matched_c);
-              for (uint k = 0u; k < kDevComponentStride; k++) {
-                if ((smask & (1u << k)) != 0u) {
-                  uchar bit = gate_component_bits[gate_slot * kDevComponentStride + k];
-                  if (bit < 64u) { this_mask |= (1ul << (ulong)bit); }
-                }
-              }
-            }
             // task-358.1 (metal-color-parity, Design-2 ColorGateTable):
-            // production per-raypath color pass. Runs in parallel to the
-            // Fork-C capture_component pass above — both OR into this_mask
-            // (Fork-C bits and color bits use disjoint slices of the same
-            // 64-bit space in practice; see doc/gui-custom-spectrum-and-raypath
-            // -color.md §4.0). Gated by prm.has_color_groups so no
-            // raypath_color session → single branch skip (AC4 zero-cost).
+            // production per-raypath color pass. Gated by prm.has_color_groups
+            // so no raypath_color session → single branch skip (AC4 zero-cost).
             // Each color group is a synthesized ComplexFilterParam whose
             // OR-summands correspond to placement.predicates_; the summand
             // mask (bit k = "summand k matched") is looked up against the
@@ -863,9 +847,10 @@ kernel void trace_layer_kernel(
                   }
                 }
               }
-              // task-331.5: capture this emitted (mid-exit) ray's mask+weight
-              // for host-side CPU parity (per-mask-value histogram).
-              if (prm.capture_component != 0u) {
+              // task-358.3 (renamed from capture_component): append this
+              // emitted ray's (this_mask, weight) to the capture ring for the
+              // host-side CPU parity harness.
+              if (prm.capture_ray_mask != 0u) {
                 uint cslot = atomic_fetch_add_explicit(exit_comp_cnt, 1u, memory_order_relaxed);
                 if (cslot < prm.out_cap) {
                   exit_comp_mask[cslot] = this_mask;
@@ -913,27 +898,16 @@ kernel void trace_layer_kernel(
           gate_stream_f.slot       = 0u;
           bool prob_drop_f = (pcg_uniform(gate_stream_f) < prm.ms_prob);
           if (filter_pass_f && !prob_drop_f) {
-            // task-331.5: final-layer component bits (mirror ms_mode==1 gate).
+            // task-358.3: Fork-C physical-bits produce branch removed (see
+            // ms_mode==1 mirror above). `this_mask_f` starts from the carried
+            // mask; only the Design-2 color pass below accumulates into it.
             ulong this_mask_f = carried_component;
-            if (prm.capture_component != 0u) {
-              bool matched_cf = false;
-              uint smask_f = DeviceFilterSummandMask(
-                  gate_filter_desc[gate_slot_f], gate_sub_desc_buf,
-                  path_local_f, gate_len_f, gate_getfn_bytes, gate_getfn_offsets,
-                  gate_slot_f, ray_dir_w_f, prm.crystal_config_id, &matched_cf);
-              for (uint k = 0u; k < kDevComponentStride; k++) {
-                if ((smask_f & (1u << k)) != 0u) {
-                  uchar bit = gate_component_bits[gate_slot_f * kDevComponentStride + k];
-                  if (bit < 64u) { this_mask_f |= (1ul << (ulong)bit); }
-                }
-              }
-            }
             // task-358.1: final-layer Design-2 color pass (mirror of the
             // ms_mode==1 color pass above). MUST stay symmetric with the
             // mid-layer branch — this_mask_f vs this_mask, gate_slot_f vs
             // gate_slot, path_local_f vs path_local, ray_dir_w_f vs ray_dir_w.
             // A silent asymmetry here re-introduces the exact class of bug the
-            // three landmine-guard tests protect against.
+            // two landmine-guard tests protect against.
             if (prm.has_color_groups != 0u) {
               for (uint g = 0u; g < prm.color_max_groups_per_slot; g++) {
                 uint color_slot_idx_f = gate_slot_f * prm.color_max_groups_per_slot + g;
@@ -953,15 +927,11 @@ kernel void trace_layer_kernel(
                 }
               }
             }
-            // task-358.1: the Fork-C bit computation above and this capture-ring
-            // append used to live inside one `if (capture_component)` block;
-            // splitting them (to insert the Design-2 colour pass above, between
-            // Fork-C bit computation and this capture) means `this_mask_f` now
-            // finishes accumulating both Fork-C AND colour bits before capture
-            // reads it — capture itself is still gated on capture_component,
-            // same as before (code-review-01 Minor #3: prior wording implied
-            // capture became unconditional, which it did not).
-            if (prm.capture_component != 0u) {
+            // task-358.3 (renamed from capture_component): final-layer capture-
+            // ring append. `this_mask_f` now carries only Design-2 colour bits
+            // (Fork-C physical-bit branch retired); the append itself is still
+            // gated on capture_ray_mask so production dispatches skip it.
+            if (prm.capture_ray_mask != 0u) {
               uint cslot = atomic_fetch_add_explicit(exit_comp_cnt, 1u, memory_order_relaxed);
               if (cslot < prm.out_cap) {
                 exit_comp_mask[cslot] = this_mask_f;

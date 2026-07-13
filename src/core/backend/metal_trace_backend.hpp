@@ -90,15 +90,17 @@ class MetalTraceBackend : public TraceBackend {
   // production exit egress uses DrainExits(). Used by the CPU-vs-Metal parity
   // harness; keep callers on the concrete type, not a polymorphic base reference.
   void ReadbackImage(XyzImageData& out);
-  // [TEST-ONLY] task-331.5 (raypath-color foundation) component-mask parity.
-  // SetCaptureComponent(true) makes the emit gate produce per-summand component
-  // bits, OR them into each ray's carried uint64 mask (carried across MS layers
-  // on device), and append (mask, weight) of every emitted ray to a per-session
-  // capture ring. Must be called before BeginSession. Default false → zero
-  // production overhead (gate skips all component work). ReadbackComponentCapture
-  // returns the accumulated (mask, weight) pairs for CPU parity comparison.
-  void SetCaptureComponent(bool enable);
-  void ReadbackComponentCapture(std::vector<uint64_t>& masks, std::vector<float>& weights) const;
+  // [TEST-ONLY] task-358.3 (renamed from SetCaptureComponent / ReadbackComponent
+  // Capture after Fork-C retirement, closing blueprint §6(c) decoupling): the
+  // ray's per-layer `this_mask` is now purely Design-2 colour bits (Fork-C
+  // physical-bit produce branch removed). SetCaptureRayMask(true) enables the
+  // per-session capture ring — the emit gate appends (this_mask, weight) of
+  // every emitted ray, and cross-layer carry stays on regardless. Must be
+  // called before BeginSession. Default false → the append branch is skipped
+  // (production zero-cost). ReadbackRayMask returns the accumulated (mask,
+  // weight) pairs for CPU parity comparison.
+  void SetCaptureRayMask(bool enable);
+  void ReadbackRayMask(std::vector<uint64_t>& masks, std::vector<float>& weights) const;
   // [PARITY-ONLY] Exit seam buffer-egress contract — see base class.
   // Returns rich `ExitRayRecord` (36B each) — see core/exit_seam.hpp.
   // Not invoked on the production path; DrainExits is the production exit

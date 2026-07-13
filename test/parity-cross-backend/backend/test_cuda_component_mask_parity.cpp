@@ -1,13 +1,15 @@
-// CPU-vs-CUDA parity harness for the raypath-color component mask
-// (task-331.6, scrum raypath-color-foundation, sub-task 6/6).
+// CPU-vs-CUDA parity harness for the raypath-color per-ray mask
+// (task-331.6 foundation → task-358.2 Design-2 color pass → task-358.3
+// Fork-C retirement + landmine tests migrated to the color path).
 //
-// CUDA sibling of test_metal_component_mask_parity.cpp. The CUDA emit gate now
-// produces the SAME per-ray uint64 component mask the CPU backend produces
-// (per-summand Complex match → component bit via the uploaded component table),
-// OR-accumulates it across MS layers on device (d_root_component_ /
-// d_cont_component_ siblings of the wl_idx carrier), carries it through the
-// transit kernel + the continuation shuffle gather + the Recombine handle swap
-// (LANDMINE), and the host reads it back via ReadbackComponentCapture.
+// CUDA sibling of test_metal_component_mask_parity.cpp. The CUDA emit gate
+// produces a per-ray uint64 mask whose bits are the Design-2 raypath_color
+// bits (`ColorGateTable` / `raypath_color`), OR-accumulates it across MS
+// layers on device (d_root_component_ / d_cont_component_ siblings of the
+// wl_idx carrier), carries it through the transit kernel + the continuation
+// shuffle gather + the Recombine handle swap (LANDMINE), and the host reads
+// it back via ReadbackRayMask. The pre-Design-2 Fork-C `ComponentTable`
+// produce branch has been retired (task-358.3).
 //
 // Why the parity is STRUCTURAL + STATISTICAL, not per-ray byte-exact
 //   CudaTraceBackend follows a single refract-priority path per ray while
@@ -18,7 +20,7 @@
 //     - structural: no spurious bits, cross-layer joint bits present (proves the
 //       mask survives transit + shuffle + the Recombine handle swap end-to-end);
 //     - energy: captured weight > 0;
-//     - cross-seed self-consistency (CUDA-only);
+//     - color-configured cross-seed self-consistency (CUDA-only);
 //     - per-component marginal ballpark vs CPU (loose — populations diverge);
 //     - LANDMINE guard: per-mask-VALUE (joint) histogram is shuffle-invariant
 //       under correct carry (a forgotten swap/gather of the mask decorrelates it
@@ -62,75 +64,16 @@ namespace {
 
 using cuda_test::MakeFullViewRender;
 
-// A 2-layer prism scene whose per-layer filter is a Complex OR of two
-// length-gated EntryExit summands (both entry/exit wildcard → length-only
-// match). Different exit-path lengths match different summands, so the produced
-// component masks vary; the cross-layer OR then joins L0's bits {0,1} with L1's
-// bits {2,3}. Random axis so the exit population is rich (and device-gen draws
-// differ per seed). Layer 0 continues (prob 0.7) into layer 1 (final, prob 0).
-SceneConfig MakeComplexMaskScene(size_t max_hits) {
-  SceneConfig scene;
-  scene.ray_num_ = 0;
-  scene.max_hits_ = max_hits;
-  scene.light_source_.param_ = SunParam{ 30.0f, 0.0f, 0.5f };
-  scene.light_source_.spectrum_ = std::vector<WlParam>{ { 550.0f, 1.0f } };
-
-  for (int layer = 0; layer < 2; ++layer) {
-    MsInfo ms;
-    ms.prob_ = (layer == 0) ? 0.7f : 0.0f;  // final layer keeps 0.0
-    ScatteringSetting s;
-    s.filter_ = FilterConfig{};
-    s.crystal_.id_ = 0;
-    PrismCrystalParam prism;
-    prism.h_ = Distribution{ DistributionType::kNoRandom, 1.0f, 0.0f };
-    for (auto& d : prism.d_) {
-      d = Distribution{ DistributionType::kNoRandom, 1.0f, 0.0f };
-    }
-    s.crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
-    s.crystal_.axis_.latitude_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
-    s.crystal_.param_ = prism;
-    s.crystal_proportion_ = 1.0f;
-
-    FilterConfig& fc = s.filter_;
-    fc.id_ = 0;
-    fc.symmetry_ = FilterConfig::kSymNone;
-    fc.action_ = FilterConfig::kFilterIn;
-    ComplexFilterParam cx;
-    // summand 0: path length >= 2 (almost every exit); summand 1: length >= 4.
-    EntryExitFilterParam ee0;
-    ee0.entry_ = std::nullopt;
-    ee0.exit_ = std::nullopt;
-    ee0.min_len_ = 2;
-    EntryExitFilterParam ee1;
-    ee1.entry_ = std::nullopt;
-    ee1.exit_ = std::nullopt;
-    ee1.min_len_ = 4;
-    cx.filters_.push_back({ { 0, SimpleFilterParam{ ee0 } } });
-    cx.filters_.push_back({ { 0, SimpleFilterParam{ ee1 } } });
-    fc.param_ = cx;
-
-    ms.setting_.push_back(std::move(s));
-    scene.ms_.push_back(std::move(ms));
-  }
-  return scene;
-}
-
-size_t ComponentBitCount(const SceneConfig& scene) {
-  ComponentTable t = BuildComponentTable(scene);
-  size_t n = 0;
-  for (const auto& e : t.entries_) {
-    if (e.bit_ != ComponentTable::kNoBit) {
-      n++;
-    }
-  }
-  return n;
-}
+// task-358.3: `MakeComplexMaskScene` + `ComponentBitCount` (Fork-C physical
+// bit-map scaffolds) retired alongside the Fork-C GPU produce path. All tests
+// below source their bits from the Design-2 `MakeColorConfiguredScene` +
+// `MakeColorConfiguredColorConfig` + `ColorGateBitCount` fixtures further down.
 
 // task-358.2 (cuda-color-parity) fixture — bit-for-bit STRUCTURAL mirror of
-// Metal `MakeColorConfiguredScene` (test_metal_component_mask_parity.cpp:184-
-// 197). Physical filter set to `NoneFilterParam` on both layers so Fork-C
-// contributes 0 bits (only the Design-2 color pass writes bits into the
-// captured mask), letting per-color-bit marginals be directly compared to CPU.
+// Metal `MakeColorConfiguredScene` (test_metal_component_mask_parity.cpp).
+// Physical filter set to `NoneFilterParam` on both layers — after task-358.3
+// this means every mask bit comes exclusively from the Design-2 color pass,
+// letting per-color-bit marginals be directly compared to CPU.
 // Critical detail: `crystal_.id_ = static_cast<IdType>(mi)` so BuildColorGate
 // Table can key each layer's placement by a distinct crystal_id (the 4-ref
 // color config below binds bit0/bit1 to crystal=0 and bit2/bit3 to crystal=1).
@@ -331,7 +274,7 @@ Capture RunCuda(const SceneConfig& scene, const RenderConfig& render, uint32_t s
 
   Capture cap;
   CudaTraceBackend cuda;
-  cuda.SetCaptureComponent(true);
+  cuda.SetCaptureRayMask(true);
   cuda.BeginSession(spec);
   RootRaySource roots = RootRaySource::FromHost(host);
   for (size_t mi = 0; mi < scene.ms_.size(); mi++) {
@@ -344,7 +287,7 @@ Capture RunCuda(const SceneConfig& scene, const RenderConfig& render, uint32_t s
     rspec.shuffle = shuffle;
     roots = cuda.Recombine(std::move(h), rspec);
   }
-  cuda.ReadbackComponentCapture(cap.masks, cap.weights);
+  cuda.ReadbackRayMask(cap.masks, cap.weights);
   cuda.EndSession();
   for (float w : cap.weights) {
     cap.total_w += static_cast<double>(w);
@@ -416,14 +359,18 @@ TEST(CudaComponentMaskParity, StructuralAndCrossLayerCarry) {
     GTEST_SKIP() << "no CUDA device enumerated";
   }
 
-  SceneConfig scene = MakeComplexMaskScene(kMaxHits);
+  // task-358.3: migrated to the Design-2 color-configured scene. The bit
+  // layout coincidentally matches the retired Fork-C scene (2 refs per layer
+  // × 2 layers = 4 bits with `low_bits=0b0011`/`high_bits=0b1100`).
+  SceneConfig scene = MakeColorConfiguredScene(kMaxHits);
   RenderConfig render = MakeFullViewRender();
-  size_t n_bits = ComponentBitCount(scene);
-  ASSERT_EQ(n_bits, 4u) << "expected 2 summands × 2 layers = 4 component bits";
-  const uint64_t low_bits = 0b0011ull;   // layer-0 summands
-  const uint64_t high_bits = 0b1100ull;  // layer-1 summands
+  auto color_cfg = MakeColorConfiguredColorConfig();
+  size_t n_bits = ColorGateBitCount(scene, *color_cfg);
+  ASSERT_EQ(n_bits, 4u) << "expected 2 refs × 2 layers = 4 color bits";
+  const uint64_t low_bits = 0b0011ull;   // layer-0 refs
+  const uint64_t high_bits = 0b1100ull;  // layer-1 refs
 
-  Capture cuda = RunCuda(scene, render, /*seed=*/7, kRayCount, /*shuffle=*/true);
+  Capture cuda = RunCuda(scene, render, /*seed=*/7, kRayCount, /*shuffle=*/true, color_cfg);
 
   // Non-degenerate: rays were emitted and carry non-zero masks.
   ASSERT_FALSE(cuda.masks.empty()) << "CUDA captured no emitted rays";
@@ -452,53 +399,27 @@ TEST(CudaComponentMaskParity, StructuralAndCrossLayerCarry) {
           mf[3]);
 }
 
-TEST(CudaComponentMaskParity, CrossSeedSelfConsistency) {
-  if (ShouldSkipCudaTests()) {
-    GTEST_SKIP() << "no CUDA device enumerated";
-  }
-
-  SceneConfig scene = MakeComplexMaskScene(kMaxHits);
-  RenderConfig render = MakeFullViewRender();
-  size_t n_bits = ComponentBitCount(scene);
-
-  const uint32_t seeds[3] = { 7, 101, 9001 };
-  std::vector<std::vector<double>> fracs;
-  for (uint32_t s : seeds) {
-    Capture c = RunCuda(scene, render, s, kRayCount, /*shuffle=*/true);
-    ASSERT_FALSE(c.masks.empty());
-    fracs.push_back(ComponentFractions(c, n_bits));
-  }
-  double max_drift = 0.0;
-  for (size_t b = 0; b < n_bits; b++) {
-    double lo = fracs[0][b], hi = fracs[0][b];
-    for (const auto& f : fracs) {
-      lo = std::min(lo, f[b]);
-      hi = std::max(hi, f[b]);
-    }
-    max_drift = std::max(max_drift, hi - lo);
-    fprintf(stderr, "[component-mask] cross-seed b%zu: %.4f %.4f %.4f\n", b, fracs[0][b], fracs[1][b], fracs[2][b]);
-  }
-  fprintf(stderr, "[component-mask] cross-seed max per-component drift = %.4f\n", max_drift);
-  // Per-component fractions are Monte-Carlo estimates of the same underlying
-  // distribution — stable across seeds (loose bound for the 8192-ray sample).
-  EXPECT_LT(max_drift, 0.10) << "per-component fraction drifts too much across seeds";
-}
+// task-358.3: retired `CrossSeedSelfConsistency` (Fork-C physical-bit scene
+// version). Cross-seed self-consistency coverage on the color path is provided
+// by `ColorConfiguredCrossSeedSelfConsistency` (task-358.1/358.2 landing).
 
 TEST(CudaComponentMaskParity, ShuffleInvariantJointDistribution_LandmineGuard) {
   if (ShouldSkipCudaTests()) {
     GTEST_SKIP() << "no CUDA device enumerated";
   }
 
-  SceneConfig scene = MakeComplexMaskScene(kMaxHits);
+  // task-358.3: migrated to the Design-2 color-configured scene.
+  SceneConfig scene = MakeColorConfiguredScene(kMaxHits);
   RenderConfig render = MakeFullViewRender();
+  auto color_cfg = MakeColorConfiguredColorConfig();
 
   // Under CORRECT carry the mask travels with its ray through the shuffle gather
   // AND the Recombine handle swap, so shuffle on/off give statistically-equal
   // JOINT (per-mask-value) distributions. A forgotten swap/gather of the mask
   // decorrelates it from its ray only when shuffle is on → the joint histogram
   // shifts while marginals stay put (the CPU T3/T4 bug, on device).
-  Capture on = RunCuda(scene, render, /*seed=*/7, kRayCount, /*shuffle=*/true);
-  Capture off = RunCuda(scene, render, /*seed=*/7, kRayCount, /*shuffle=*/false);
+  Capture on = RunCuda(scene, render, /*seed=*/7, kRayCount, /*shuffle=*/true, color_cfg);
+  Capture off = RunCuda(scene, render, /*seed=*/7, kRayCount, /*shuffle=*/false, color_cfg);
   ASSERT_FALSE(on.masks.empty());
   ASSERT_FALSE(off.masks.empty());
 
@@ -526,9 +447,8 @@ TEST(CudaComponentMaskParity, CpuMarginalBallpark) {
   // (scrum-engine-redirect-design2). CudaTraceBackend now runs the Design-2
   // color pass (Step 1 host upload + Step 2 device emit gate) alongside the
   // CPU path, so per-color-bit marginals are directly comparable. Uses
-  // MakeColorConfiguredScene (physical filter = None → Fork-C contribution =
-  // 0 on device; all mask bits come from raypath_color). Mirrors Metal
-  // CpuMarginalBallpark (test_metal_component_mask_parity.cpp:478-519).
+  // MakeColorConfiguredScene (physical filter = None → after task-358.3 all
+  // mask bits come from raypath_color). Mirrors Metal CpuMarginalBallpark.
   if (ShouldSkipCudaTests()) {
     GTEST_SKIP() << "no CUDA device enumerated";
   }

@@ -1,12 +1,14 @@
-// CPU-vs-Metal parity harness for the raypath-color component mask
-// (task-331.5, scrum raypath-color-foundation, sub-task 5/6).
+// CPU-vs-Metal parity harness for the raypath-color per-ray mask
+// (task-331.5 foundation → task-358.1 Design-2 color pass → task-358.3
+// Fork-C retirement + landmine tests migrated to the color path).
 //
 // What this validates
-//   The Metal emit gate now produces the SAME per-ray uint64 component mask the
-//   CPU backend produces (per-summand Complex match → component bit via the
-//   uploaded component table), OR-accumulates it across MS layers on device
-//   (root_component / cont_component siblings of the wl_idx carrier), and the
-//   host reads it back via ReadbackComponentCapture.
+//   The Metal emit gate produces a per-ray uint64 mask whose bits are the
+//   Design-2 raypath_color bits (`ColorGateTable` / `raypath_color`), OR-
+//   accumulates it across MS layers on device (root_component / cont_component
+//   siblings of the wl_idx carrier), and the host reads it back via
+//   ReadbackRayMask. The pre-Design-2 Fork-C `ComponentTable` produce branch
+//   has been retired (task-358.3).
 //
 // Why the parity is STRUCTURAL + STATISTICAL, not per-ray byte-exact
 //   MetalTraceBackend follows a single refract-priority path per ray while
@@ -17,7 +19,7 @@
 //     - structural: no spurious bits, cross-layer joint bits present (proves the
 //       mask survives transit + shuffle + the Recombine handle swap end-to-end);
 //     - energy: captured weight > 0 and stable;
-//     - cross-seed self-consistency (Metal-only);
+//     - color-configured cross-seed self-consistency (Metal-only);
 //     - per-component marginal ballpark vs CPU (loose — populations diverge);
 //     - LANDMINE guard: per-mask-VALUE (joint) histogram is shuffle-invariant
 //       under correct carry (a forgotten swap decorrelates the mask from its ray
@@ -59,48 +61,10 @@ using metal_test::MakeMetalScene;
 using metal_test::MakeRectangularRender;
 using metal_test::ShouldSkipMetalTests;
 
-// A 2-layer scene whose per-layer filter is a Complex OR of two length-gated
-// EntryExit summands (both entry/exit wildcard → length-only match). Different
-// exit-path lengths match different summands, so the produced component masks
-// vary; the cross-layer OR then joins L0's bits {0,1} with L1's bits {2,3}.
-SceneConfig MakeComplexMaskScene(size_t max_hits) {
-  SceneConfig scene = MakeMetalScene(max_hits, /*ms_layers=*/2);
-  for (auto& ms : scene.ms_) {
-    // Non-final continuation prob so rays reach layer 1 (final layer keeps 0.0).
-    if (&ms != &scene.ms_.back()) {
-      ms.prob_ = 0.7f;
-    }
-    FilterConfig& fc = ms.setting_[0].filter_;
-    fc.id_ = 0;
-    fc.symmetry_ = FilterConfig::kSymNone;
-    fc.action_ = FilterConfig::kFilterIn;
-    ComplexFilterParam cx;
-    // summand 0: path length >= 2 (almost every exit); summand 1: length >= 4.
-    EntryExitFilterParam ee0;
-    ee0.entry_ = std::nullopt;
-    ee0.exit_ = std::nullopt;
-    ee0.min_len_ = 2;
-    EntryExitFilterParam ee1;
-    ee1.entry_ = std::nullopt;
-    ee1.exit_ = std::nullopt;
-    ee1.min_len_ = 4;
-    cx.filters_.push_back({ { 0, SimpleFilterParam{ ee0 } } });
-    cx.filters_.push_back({ { 0, SimpleFilterParam{ ee1 } } });
-    fc.param_ = cx;
-  }
-  return scene;
-}
-
-size_t ComponentBitCount(const SceneConfig& scene) {
-  ComponentTable t = BuildComponentTable(scene);
-  size_t n = 0;
-  for (const auto& e : t.entries_) {
-    if (e.bit_ != ComponentTable::kNoBit) {
-      n++;
-    }
-  }
-  return n;
-}
+// task-358.3: `MakeComplexMaskScene` + `ComponentBitCount` (Fork-C physical
+// bit-map scaffolds) retired alongside the Fork-C GPU produce path. All tests
+// below source their bits from the Design-2 `MakeColorConfiguredScene` +
+// `MakeColorConfiguredColorConfig` + `ColorGateBitCount` fixtures further down.
 
 struct Capture {
   std::vector<uint64_t> masks;
@@ -160,12 +124,10 @@ double MaskValueL1(const std::map<uint64_t, double>& a, const std::map<uint64_t,
 }
 
 // task-358.1 (Step 5 fixture): a 2-layer scene whose physical filter is a bare
-// NoneFilterParam (Fork-C `BuildComponentTable` produces bits, but on the
-// device side kDeviceFilterTypeNone routes through the top-level `type=None`
-// branch in `DeviceFilterSummandMask` which fixed-returns mask=0 — the
-// physical Fork-C contribution to `this_mask` is thus 0 for every ray). All
-// mask bits come from the raypath_color pass alone, so CPU (Design-2 color
-// pass) and Metal (task-358.1 Step 2 color pass) can be compared bit-for-bit.
+// NoneFilterParam — after task-358.3 all mask bits come exclusively from the
+// Design-2 raypath_color pass (Fork-C physical-bit produce branch retired),
+// so CPU (Design-2 color pass) and Metal (task-358.1 Step 2 color pass) can be
+// compared bit-for-bit.
 //
 // Layout of color-gate bits (bit ordering follows BuildColorGateTable insertion
 // order, which walks color_cfg.classes_[].match_[] in declaration order):
@@ -287,7 +249,7 @@ Capture RunMetal(const SceneConfig& scene, const RenderConfig& render, uint32_t 
 
   Capture cap;
   MetalTraceBackend metal;
-  metal.SetCaptureComponent(true);
+  metal.SetCaptureRayMask(true);
   metal.BeginSession(spec);
   RootRaySource roots = RootRaySource::FromHost(host);
   for (size_t mi = 0; mi < scene.ms_.size(); mi++) {
@@ -300,7 +262,7 @@ Capture RunMetal(const SceneConfig& scene, const RenderConfig& render, uint32_t 
     rspec.shuffle = shuffle;
     roots = metal.Recombine(std::move(h), rspec);
   }
-  metal.ReadbackComponentCapture(cap.masks, cap.weights);
+  metal.ReadbackRayMask(cap.masks, cap.weights);
   metal.EndSession();
   for (float w : cap.weights) {
     cap.total_w += static_cast<double>(w);
@@ -369,14 +331,19 @@ TEST(MetalComponentMaskParity, StructuralAndCrossLayerCarry) {
   }
   ForceHostGenForByteIdentity();
 
-  SceneConfig scene = MakeComplexMaskScene(kMaxHits);
+  // task-358.3: migrated to the Design-2 color-configured scene. The bit
+  // layout coincidentally matches the retired Fork-C scene (2 refs per layer
+  // × 2 layers = 4 bits with `low_bits=0b0011`/`high_bits=0b1100`), see the
+  // MakeColorConfiguredColorConfig comment above for bit numbering.
+  SceneConfig scene = MakeColorConfiguredScene(kMaxHits);
   RenderConfig render = MakeRectangularRender();
-  size_t n_bits = ComponentBitCount(scene);
-  ASSERT_EQ(n_bits, 4u) << "expected 2 summands × 2 layers = 4 component bits";
-  const uint64_t low_bits = 0b0011ull;   // layer-0 summands
-  const uint64_t high_bits = 0b1100ull;  // layer-1 summands
+  auto color_cfg = MakeColorConfiguredColorConfig();
+  size_t n_bits = ColorGateBitCount(scene, *color_cfg);
+  ASSERT_EQ(n_bits, 4u) << "expected 2 refs × 2 layers = 4 color bits";
+  const uint64_t low_bits = 0b0011ull;   // layer-0 refs
+  const uint64_t high_bits = 0b1100ull;  // layer-1 refs
 
-  Capture metal = RunMetal(scene, render, /*seed=*/7, kRayCount, /*shuffle=*/true);
+  Capture metal = RunMetal(scene, render, /*seed=*/7, kRayCount, /*shuffle=*/true, color_cfg);
 
   // Non-degenerate: rays were emitted and carry non-zero masks.
   ASSERT_FALSE(metal.masks.empty()) << "Metal captured no emitted rays";
@@ -405,38 +372,9 @@ TEST(MetalComponentMaskParity, StructuralAndCrossLayerCarry) {
           mf[3]);
 }
 
-TEST(MetalComponentMaskParity, CrossSeedSelfConsistency) {
-  if (ShouldSkipMetalTests()) {
-    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
-  }
-  ForceHostGenForByteIdentity();
-
-  SceneConfig scene = MakeComplexMaskScene(kMaxHits);
-  RenderConfig render = MakeRectangularRender();
-  size_t n_bits = ComponentBitCount(scene);
-
-  const uint32_t seeds[3] = { 7, 101, 9001 };
-  std::vector<std::vector<double>> fracs;
-  for (uint32_t s : seeds) {
-    Capture c = RunMetal(scene, render, s, kRayCount, /*shuffle=*/true);
-    ASSERT_FALSE(c.masks.empty());
-    fracs.push_back(ComponentFractions(c, n_bits));
-  }
-  double max_drift = 0.0;
-  for (size_t b = 0; b < n_bits; b++) {
-    double lo = fracs[0][b], hi = fracs[0][b];
-    for (const auto& f : fracs) {
-      lo = std::min(lo, f[b]);
-      hi = std::max(hi, f[b]);
-    }
-    max_drift = std::max(max_drift, hi - lo);
-    fprintf(stderr, "[component-mask] cross-seed b%zu: %.4f %.4f %.4f\n", b, fracs[0][b], fracs[1][b], fracs[2][b]);
-  }
-  fprintf(stderr, "[component-mask] cross-seed max per-component drift = %.4f\n", max_drift);
-  // Per-component fractions are Monte-Carlo estimates of the same underlying
-  // distribution — stable across seeds (loose bound for the 8192-ray sample).
-  EXPECT_LT(max_drift, 0.10) << "per-component fraction drifts too much across seeds";
-}
+// task-358.3: retired `CrossSeedSelfConsistency` (Fork-C physical-bit scene
+// version). Cross-seed self-consistency coverage on the color path is provided
+// by `ColorConfiguredCrossSeedSelfConsistency` (task-358.1/358.2 landing).
 
 TEST(MetalComponentMaskParity, ShuffleInvariantJointDistribution_LandmineGuard) {
   if (ShouldSkipMetalTests()) {
@@ -444,16 +382,18 @@ TEST(MetalComponentMaskParity, ShuffleInvariantJointDistribution_LandmineGuard) 
   }
   ForceHostGenForByteIdentity();
 
-  SceneConfig scene = MakeComplexMaskScene(kMaxHits);
+  // task-358.3: migrated to the Design-2 color-configured scene.
+  SceneConfig scene = MakeColorConfiguredScene(kMaxHits);
   RenderConfig render = MakeRectangularRender();
+  auto color_cfg = MakeColorConfiguredColorConfig();
 
   // Under CORRECT carry the mask travels with its ray through the shuffle gather
   // AND the Recombine handle swap, so shuffle on/off give statistically-equal
   // JOINT (per-mask-value) distributions. A forgotten swap/gather of the mask
   // decorrelates it from its ray only when shuffle is on → the joint histogram
   // shifts while marginals stay put (the CPU T3/T4 bug, on device).
-  Capture on = RunMetal(scene, render, /*seed=*/7, kRayCount, /*shuffle=*/true);
-  Capture off = RunMetal(scene, render, /*seed=*/7, kRayCount, /*shuffle=*/false);
+  Capture on = RunMetal(scene, render, /*seed=*/7, kRayCount, /*shuffle=*/true, color_cfg);
+  Capture off = RunMetal(scene, render, /*seed=*/7, kRayCount, /*shuffle=*/false, color_cfg);
   ASSERT_FALSE(on.masks.empty());
   ASSERT_FALSE(off.masks.empty());
 

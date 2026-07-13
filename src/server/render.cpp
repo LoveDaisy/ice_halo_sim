@@ -9,7 +9,6 @@
 #include <memory>
 #include <vector>
 
-#include "config/component_table.hpp"
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/color_util.hpp"

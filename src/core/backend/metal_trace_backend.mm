@@ -143,10 +143,11 @@ struct KernelParams {
   // lm_proj::ProjectExitToPixel in the kernel exit tail. Replaced the former
   // loose az0 / proj_type / r_scale / max_abs_dz fields.
   lm_proj::ProjParams proj;
-  // task-331.5 (raypath-color foundation): 0 in production (emit gate skips all
-  // component work), 1 in the CPU-parity test (produce per-summand bits + append
-  // (mask, weight) to the capture ring). Mirrors MSL KernelParams::capture_component.
-  uint32_t capture_component;
+  // task-358.3 (renamed from capture_component after Fork-C retirement): 0 in
+  // production (emit gate skips capture-ring append), 1 in the CPU-parity test
+  // (append the ray's (this_mask, weight) — now purely Design-2 colour bits —
+  // to the capture ring). Mirrors MSL KernelParams::capture_ray_mask.
+  uint32_t capture_ray_mask;
   // task-358.1 (metal-color-parity, Design-2 ColorGateTable migration):
   //   has_color_groups        : 1 iff ColorGateTable non-empty AND at least one
   //                             placement has ≥1 color group in this session; 0
@@ -187,11 +188,13 @@ struct KernelParams {
   uint8_t  color_class_combine[kMaxColorClassesDevice];
 };
 // sizeof(ProjParams) == 76 (6 ints + 4 floats + float[9]); the 15 leading
-// 4-byte KernelParams scalars add 60, + proj 76 + capture_component 4 → 140
+// 4-byte KernelParams scalars add 60, + proj 76 + capture_ray_mask 4 → 140
 // pre-358.1. task-358.1 Step 1+2 adds 4 more 4-byte fields (color has/offset/
 // bits/stride) → 156. Step 4 adds color_class_count (4, at offset 156) +
 // color_class_bits[16] (128, at 160, naturally 8-aligned) +
 // color_class_combine[16] (16, at 288) → 304. 304 % 8 = 0 → no trailing pad.
+// task-358.3 renamed capture_component → capture_ray_mask (same 4B slot, no
+// layout change; the 304 assert below is unaffected).
 static_assert(sizeof(lm_proj::ProjParams) == 76u, "ProjParams layout drift — check projection_shared.h");
 static_assert(sizeof(KernelParams) == 304u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
@@ -715,12 +718,18 @@ struct MetalTraceBackend::Impl {
   //   * cont_component_buf_[2]: out_cap × uint64, ping-pong with cont_d/cont_w/
   //     cont_wl_idx — MUST move in lockstep through the shuffle gather + the
   //     Recombine handle swap (LANDMINE, mirror CPU RayBuffer::SwapRay).
-  //   * gate_component_bits_buf_: (n_slot × kDeviceFilterMaxOrClauses) uint8,
-  //     summand→component-bit table keyed by gate_slot (mi*max_ci+ci), built in
-  //     EnsureFilterBuffers from BuildComponentTable/ComponentBitsFor.
+  //   * gate_component_bits_buf_: Design-2 color-region summand → color-bit map
+  //     (task-358.3 removed the leading Fork-C physical-bits region — the buffer
+  //     now holds ONLY the color-region bytes, starting at offset 0). Built in
+  //     EnsureFilterBuffers alongside filter_desc_buf_'s color region.
   //   * exit_comp_* : per-batch capture ring for emitted rays (mid-exit +
   //     final). Drained per layer into captured_masks_/captured_ws_ when
-  //     capture_component_ is on (test-only; production leaves capture off).
+  //     capture_ray_mask_ is on (test-only; production leaves capture off).
+  //     Buffer names retain the *_comp_* / *_component_* legacy for historical
+  //     reasons (task-358.3 renamed only the flag/API layer to avoid touching
+  //     the buffer-allocation and MSL binding-slot code); semantically these
+  //     hold the ray's uint64 `this_mask` (== capture_ray_mask), which is now
+  //     purely Design-2 colour bits.
   id<MTLBuffer> root_component_buf_    = nil;
   id<MTLBuffer> cont_component_buf_[2] = { nil, nil };
   id<MTLBuffer> gate_component_bits_buf_ = nil;
@@ -728,8 +737,7 @@ struct MetalTraceBackend::Impl {
   id<MTLBuffer> exit_comp_w_buf_    = nil;
   id<MTLBuffer> exit_comp_cnt_buf_  = nil;
   size_t        exit_comp_capacity_ = 0;
-  bool          capture_component_  = false;
-  ComponentTable component_table_{};
+  bool          capture_ray_mask_   = false;
   std::vector<uint64_t> captured_masks_;
   std::vector<float>    captured_ws_;
 
@@ -747,10 +755,17 @@ struct MetalTraceBackend::Impl {
   //                             MSL color pass is compile-out-equivalent.
   //   color_desc_offset_      : n_slot (offset in filter_desc_buf_ where color
   //                             descriptors start; kernel reads at
-  //                             color_desc_offset_ + gate_slot * K + g).
-  //   color_bits_offset_      : n_slot * kDeviceFilterMaxOrClauses (offset in
-  //                             gate_component_bits_buf_ where color bit table
-  //                             starts). Same stride for both physical + color.
+  //                             color_desc_offset_ + gate_slot * K + g). The
+  //                             filter-desc buffer still carries the physical
+  //                             filter descriptors up-front (used by filter
+  //                             matching itself); the color region is appended
+  //                             after them (see EnsureFilterBuffers).
+  //   color_bits_offset_      : 0 (task-358.3 removed the leading Fork-C
+  //                             physical-bits region from gate_component_bits_
+  //                             buf_; the color region now begins at buffer
+  //                             offset 0). Kept as a KernelParams field for
+  //                             symmetry with color_desc_offset and to keep the
+  //                             MSL addressing formula unchanged.
   ColorGateTable color_gate_table_{};
   bool           has_color_groups_  = false;
   uint32_t       color_desc_offset_ = 0u;
@@ -1192,8 +1207,8 @@ void MetalTraceBackend::Impl::EnsureContBuffer(int slot) {
 
 void MetalTraceBackend::Impl::EnsureComponentCaptureBuffers(size_t cap) {
   // task-331.5: grow-only per-batch capture ring for emitted (mid-exit + final)
-  // rays. Only allocated when capture_component_ is on; production never calls
-  // this (the kernel's capture branch is gated by KernelParams.capture_component).
+  // rays. Only allocated when capture_ray_mask_ is on; production never calls
+  // this (the kernel's capture branch is gated by KernelParams.capture_ray_mask).
   // The atomic counter buffer is allocated once (1 × uint32).
   if (exit_comp_cnt_buf_ == nil) {
     exit_comp_cnt_buf_ = [device newBufferWithLength:sizeof(uint32_t)
@@ -1377,7 +1392,9 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
   // MSL DeviceFilterSummandMask treats as "no summand matches" (mask=0) —
   // guaranteed benign no-op, matching the physical-region convention.
   color_desc_offset_ = static_cast<uint32_t>(n_slot);
-  color_bits_offset_ = static_cast<uint32_t>(n_slot * kDeviceFilterMaxOrClauses);
+  // task-358.3: Fork-C physical-bits region deleted; color region starts at
+  // buffer offset 0 (see gate_component_bits_buf_ comment).
+  color_bits_offset_ = 0u;
   const size_t color_desc_region = n_slot * kColorMaxGroupsPerSlot;
   std::vector<DeviceFilterDesc> color_descs(color_desc_region);  // zero-init
   const size_t color_bits_region = color_desc_region * kDeviceFilterMaxOrClauses;
@@ -1536,50 +1553,17 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
     std::memcpy([complex_sub_desc_buf_ contents], all_sub_descs.data(), sub_desc_bytes);
   }
 
-  // task-331.5: build the summand→component-bit table, keyed by the SAME
-  // gate_slot = mi * max_ci + ci layout the device filter descs use. Dense
-  // stride = kDeviceFilterMaxOrClauses (a Complex filter has ≤ that many
-  // OR-summands; simple filters use only index 0). Entry = component bit index
-  // in [0,64) or ComponentTable::kNoBit (0xFF) for over-budget/absent summands.
-  //
-  // Design-2 redirect (task-engine-redirect-design2, 2026-07-08): the CPU path
-  // moved off Fork-C to placement-scoped `raypath_color` predicates
-  // (config/color_gate_table.hpp). The GPU backends deliberately stay on
-  // Fork-C `BuildComponentTable` here ("三后端掩码机制…全不碰",
-  // doc/gui-custom-spectrum-and-raypath-color.md §4.0); unifying the GPU color
-  // bit source with the CPU's is deferred to scrum-3c.
-  component_table_ = BuildComponentTable(*session_spec.scene);
-  const size_t stride = kDeviceFilterMaxOrClauses;
-  const size_t physical_bits_count = n_slot * stride;
-  // task-358.1: APPEND color region after physical. Layout:
-  //   [0 .. physical_bits_count)             : Fork-C summand → component bit
-  //   [color_bits_offset_ .. total)          : Design-2 color group summand → color bit
-  // color_bits_offset_ was set to physical_bits_count above (matches the region
-  // boundary). Kernel indexes color with:
+  // task-358.3: upload the Design-2 color-region bit map as the sole content of
+  // gate_component_bits_buf_ (the leading Fork-C physical-bits region is gone;
+  // color_bits_offset_ is now 0). Kernel indexes color with:
   //   color_bit = gate_component_bits[color_bits_offset_
   //                                   + color_slot * kDeviceFilterMaxOrClauses + summand]
   // where color_slot = gate_slot * kColorMaxGroupsPerSlot + g.
   const size_t color_bits_count = color_bits_region;
-  const size_t total_bits_count = physical_bits_count + color_bits_count;
-  std::vector<uint8_t> comp_bits(total_bits_count, ComponentTable::kNoBit);
-  for (size_t mi = 0; mi < n_layers; ++mi) {
-    const auto& ms = session_spec.scene->ms_[mi];
-    for (size_t ci = 0; ci < ms.setting_.size(); ++ci) {
-      std::vector<uint8_t> bits =
-          ComponentBitsFor(component_table_, static_cast<IdType>(mi), static_cast<IdType>(ci));
-      size_t slot = mi * max_ci + ci;
-      for (size_t k = 0; k < bits.size() && k < stride; ++k) {
-        comp_bits[slot * stride + k] = bits[k];
-      }
-    }
-  }
-  // Copy the color-region bit map computed above into the trailing bytes.
-  std::memcpy(comp_bits.data() + physical_bits_count, color_bit_map.data(),
-              color_bits_count);
-  gate_component_bits_buf_ = [device newBufferWithLength:comp_bits.size() * sizeof(uint8_t)
+  gate_component_bits_buf_ = [device newBufferWithLength:color_bits_count * sizeof(uint8_t)
                                                 options:MTLResourceStorageModeShared];
   assert(gate_component_bits_buf_ != nil);
-  std::memcpy([gate_component_bits_buf_ contents], comp_bits.data(), comp_bits.size());
+  std::memcpy([gate_component_bits_buf_ contents], color_bit_map.data(), color_bits_count);
 }
 
 void MetalTraceBackend::Impl::UploadCrystal(const Crystal& crystal) {
@@ -2141,8 +2125,9 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   // 315.3: single POD carries all projection routing (proj_type / az0 /
   // r_scale / max_abs_dz / scale / rot / etc.) into the kernel exit tail.
   params.proj     = proj_params_;
-  // task-331.5: gate component-mask production + capture (test-only; 0 in prod).
-  params.capture_component = capture_component_ ? 1u : 0u;
+  // task-358.3 (renamed from capture_component): gate the test-only capture
+  // ring append (0 in prod → append branch skipped).
+  params.capture_ray_mask = capture_ray_mask_ ? 1u : 0u;
   // task-358.1 (metal-color-parity): Design-2 color-gate hot-path knobs.
   // has_color_groups = 0 when the session has no raypath_color config (or the
   // ColorGateTable has no matching placements) → MSL color pass is skipped
@@ -2210,8 +2195,8 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   EnsureContBuffer(out_slot);
   // task-331.5: capture ring must be bindable (Metal disallows nil buffers).
   // Sized to out_cap when capturing; a 1-element dummy otherwise (kernel's
-  // capture branch is gated by KernelParams.capture_component == 0).
-  EnsureComponentCaptureBuffers(capture_component_ ? out_cap : 1u);
+  // capture branch is gated by KernelParams.capture_ray_mask == 0).
+  EnsureComponentCaptureBuffers(capture_ray_mask_ ? out_cap : 1u);
   // Multi-ci append semantics: counter_init carries the running offset of
   // already-written continuation rays from previous ci dispatches; the
   // kernel's atomic_fetch_add resumes from there. ci=0 always passes 0
@@ -2299,7 +2284,7 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   // task-331.5 (raypath-color foundation): per-ray component-mask carry (19/20),
   // summand→bit table (21), and the emit capture ring (22/23/28). All bound
   // unconditionally (Metal disallows nil); the kernel's capture branch is gated
-  // by KernelParams.capture_component so production dispatches skip them.
+  // by KernelParams.capture_ray_mask so production dispatches skip them.
   [enc setBuffer:root_component_buf_       offset:0 atIndex:19];
   [enc setBuffer:cont_component_buf_[out_slot] offset:0 atIndex:20];
   [enc setBuffer:gate_component_bits_buf_  offset:0 atIndex:21];
@@ -2648,8 +2633,8 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   // window — mirrors the landed_weight_buf_ lifecycle.
   impl_->EnsureClassLaneBuf(impl_->width, impl_->height);
 
-  // task-331.5: reset the per-session component-mask capture accumulators
-  // (component_table_ is rebuilt inside EnsureFilterBuffers above).
+  // task-358.3: reset the per-session ray-mask capture accumulators (renamed
+  // from component-mask; Fork-C ComponentTable retired).
   impl_->captured_masks_.clear();
   impl_->captured_ws_.clear();
 }
@@ -2752,7 +2737,7 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     //     (transit_root_kernel overwrites root_component for layer≥1).
     //   - Reset the capture-ring counter so each layer's emits append from 0;
     //     the per-layer drain after the ci loop reads exactly this layer's count.
-    if (impl_->capture_component_) {
+    if (impl_->capture_ray_mask_) {
       impl_->EnsureComponentCaptureBuffers(impl_->out_cap);
       if (first_ms && impl_->root_component_buf_ != nil) {
         std::memset([impl_->root_component_buf_ contents], 0, total_ray_num * sizeof(uint64_t));
@@ -2925,7 +2910,7 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     // session accumulators (test-only). All trace CBs are already waited above,
     // so the counter + buffers are coherent. Clamp to capacity (the kernel's
     // `cslot < out_cap` guard drops overflow; assert-free like the cont ring).
-    if (impl_->capture_component_) {
+    if (impl_->capture_ray_mask_) {
       uint32_t n_cap = *static_cast<uint32_t*>([impl_->exit_comp_cnt_buf_ contents]);
       size_t n = std::min<size_t>(n_cap, impl_->exit_comp_capacity_);
       const uint64_t* mptr = static_cast<const uint64_t*>([impl_->exit_comp_mask_buf_ contents]);
@@ -3025,14 +3010,14 @@ void MetalTraceBackend::ReadbackImage(XyzImageData& out) {
   std::memcpy(out.data, [impl_->xyz_image contents], pix * 3 * sizeof(float));
 }
 
-void MetalTraceBackend::SetCaptureComponent(bool enable) {
+void MetalTraceBackend::SetCaptureRayMask(bool enable) {
   // Must be set before BeginSession — the capture-ring sizing + per-layer
   // memset/reset in TraceLayer read this flag.
-  impl_->capture_component_ = enable;
+  impl_->capture_ray_mask_ = enable;
 }
 
-void MetalTraceBackend::ReadbackComponentCapture(std::vector<uint64_t>& masks,
-                                                 std::vector<float>& weights) const {
+void MetalTraceBackend::ReadbackRayMask(std::vector<uint64_t>& masks,
+                                        std::vector<float>& weights) const {
   masks = impl_->captured_masks_;
   weights = impl_->captured_ws_;
 }
