@@ -1213,6 +1213,11 @@ void Simulator::DrainDeviceXyz(TraceBackend* backend) {
     xyz_out.width = xyz_win_.w;
     xyz_out.height = xyz_win_.h;
     backend->ReadbackXyzAccum(xyz_out, sim_data.xyz_landed_weight_);
+    // task-358.1 Step 4: drain the device per-color-class Y-lane accumulator.
+    // No-op (empty vector, class_count=0) when the backend / session carries no
+    // raypath_color config — consumer's ConsumeDeviceFused path stays byte-
+    // identical to pre-358.1 (AC4).
+    backend->ReadbackClassLanes(sim_data.lane_pixel_data_, sim_data.lane_class_count_);
   } else {
     // Degraded path (code-review round-2 Major): backend went null mid-window via
     // the task-282 fallback. The device image is unrecoverable, but we MUST still
@@ -1366,6 +1371,9 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
     xyz_out.width = w;
     xyz_out.height = h;
     backend.ReadbackXyzAccum(xyz_out, sim_data.xyz_landed_weight_);
+    // task-358.1 Step 4: drain the device per-color-class Y-lane accumulator.
+    // No-op when the backend / session has no raypath_color config (AC4).
+    backend.ReadbackClassLanes(sim_data.lane_pixel_data_, sim_data.lane_class_count_);
     data_queue_->Emplace(std::move(sim_data));
     return;
   }

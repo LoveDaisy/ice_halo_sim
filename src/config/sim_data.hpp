@@ -196,6 +196,18 @@ struct SimData {
   // xyz_landed_weight_: total weight of in-bounds primary-pixel writes this batch.
   std::vector<float> xyz_pixel_data_;
   float xyz_landed_weight_ = 0.0f;
+  // task-358.1 Step 4 (AC3 device-side per-color-class Y-lane accumulation):
+  // per-class flattened Y accumulator produced by GPU backends that also fuse
+  // rule-lane accumulation on-device. Layout:
+  //     lane_pixel_data_[c * W*H + (py*W+px)] = Y for class c at (px, py)
+  // Populated by Simulator::DrainDeviceXyz via TraceBackend::ReadbackClassLanes
+  // and folded into RenderConsumer::lane_y_ by ConsumeDeviceFused. Empty when
+  // the session has no raypath_color config OR the backend does not accumulate
+  // on device (CPU path stays on per-ray outgoing_component_).
+  // `lane_class_count_` is a redundant witness of `lane_pixel_data_.size() /
+  // (W*H)` — carried so the consumer can validate the shape without knowing W/H.
+  std::vector<float> lane_pixel_data_;
+  size_t lane_class_count_ = 0;
 
   // --- Consumer-side bookkeeping (NOT physical render payload) ---
   // The fields below are counters the server/consumer use for stats + queue

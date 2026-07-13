@@ -25,6 +25,7 @@
 #include <variant>
 #include <vector>
 
+#include "config/color_class_table.hpp"  // task-358.1 Step 4 device Y-lane accumulation
 #include "config/color_gate_table.hpp"  // task-358.1 Design-2 color-gate migration
 #include "config/component_table.hpp"  // task-331.5 raypath-color foundation
 #include "config/proj_config.hpp"
@@ -86,6 +87,18 @@ static_assert(kDevFilterMatchRecCap == kTraceKernelRecCap,
 // lumice_trace.metal) together, and audit color_desc_offset / color_bits_offset
 // arithmetic downstream. See plan §4 Step 1 + assumption B.
 constexpr size_t kColorMaxGroupsPerSlot = 4;
+
+// task-358.1 Step 4 (AC3 device-side Y-lane accumulation): host-side upper
+// bound on the number of runtime color classes shipped into the trace kernel.
+// KernelParams carries `color_class_count`, `color_class_bits[kMaxColorClassesDevice]`
+// (uint64) and `color_class_combine[kMaxColorClassesDevice]` (uint8) — sizing
+// these arrays statically keeps the parameter block simple and avoids the
+// extra buffer binding a variable-length descriptor would need. 16 comfortably
+// covers current + planned raypath_color palettes (typical GUI configs use 2-8
+// classes; scrum-342 documented palettes up to 12). Assert fires on overflow;
+// raising the cap = bump this constant AND the MSL sibling
+// (`kMaxColorClassesDeviceMsl`) together.
+constexpr size_t kMaxColorClassesDevice = 16;
 
 // Continuation-pool shuffle PCG nonce (task-gpu-backend-recombine-shuffle).
 // MUST equal the CUDA-side kCudaShuffleNonce so the two backends derive the
@@ -156,13 +169,31 @@ struct KernelParams {
   uint32_t color_desc_offset;
   uint32_t color_bits_offset;
   uint32_t color_max_groups_per_slot;
+  // task-358.1 Step 4 (AC3 device-side Y-lane accumulation): per-class predicate
+  // over each ray's OR-accumulated component mask, evaluated in the emit gate.
+  //   color_class_count       : number of active classes (0 → skip lane accum
+  //                             entirely; class_lane_buf_ stays a 4-byte dummy).
+  //   color_class_bits        : per-class OR-union of member component bits
+  //                             (matches ColorClass.member_bits_).
+  //   color_class_combine     : per-class predicate combinator; 0 = kAny (mask &
+  //                             bits) != 0, 1 = kAll (mask & bits) == bits.
+  //
+  // Layout: color_class_count sits at offset 156 (the 4 preceding step-1+2
+  // fields bring the running offset to 156, itself 4-aligned but not 8-aligned).
+  // A single uint32_t at 156 lands color_class_bits at offset 160 which is
+  // exactly 8-aligned (uint64_t's requirement) — no explicit padding needed.
+  uint32_t color_class_count;
+  uint64_t color_class_bits[kMaxColorClassesDevice];
+  uint8_t  color_class_combine[kMaxColorClassesDevice];
 };
 // sizeof(ProjParams) == 76 (6 ints + 4 floats + float[9]); the 15 leading
 // 4-byte KernelParams scalars add 60, + proj 76 + capture_component 4 → 140
-// pre-358.1. task-358.1 adds 4 more 4-byte fields (color has/offset/bits/stride)
-// → 156 total. All members 4-byte aligned, no padding.
+// pre-358.1. task-358.1 Step 1+2 adds 4 more 4-byte fields (color has/offset/
+// bits/stride) → 156. Step 4 adds color_class_count (4, at offset 156) +
+// color_class_bits[16] (128, at 160, naturally 8-aligned) +
+// color_class_combine[16] (16, at 288) → 304. 304 % 8 = 0 → no trailing pad.
 static_assert(sizeof(lm_proj::ProjParams) == 76u, "ProjParams layout drift — check projection_shared.h");
-static_assert(sizeof(KernelParams) == 156u,
+static_assert(sizeof(KernelParams) == 304u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 
 // Device root-gen latitude path tags. Numeric wire encoding is single-sourced
@@ -724,6 +755,29 @@ struct MetalTraceBackend::Impl {
   bool           has_color_groups_  = false;
   uint32_t       color_desc_offset_ = 0u;
   uint32_t       color_bits_offset_ = 0u;
+
+  // task-358.1 Step 4 (AC3 device-side Y-lane accumulation).
+  //   class_table_          : runtime color-class table (parity with server-side
+  //                           RenderConsumer::class_table_). Built in
+  //                           BeginSession from spec.raypath_color; empty when
+  //                           no color config → class_lane_buf_ stays a dummy
+  //                           4-byte allocation and KernelParams.color_class_
+  //                           count == 0 (MSL branch skipped end-to-end).
+  //   class_count_          : cached class_table_.classes_.size() for hot-path
+  //                           reads (KernelParams populate + readback sizing).
+  //                           Bounded by kMaxColorClassesDevice (assert).
+  //   class_lane_buf_       : atomic_float[class_count * W * H] on device.
+  //                           Layout matches MSL indexing: class_lane_buf_
+  //                           [c * W * H + pix]. Zeroed at
+  //                           BeginSession (mirror landed_weight_buf_) and
+  //                           re-zeroed by ReadbackClassLanes after each drain.
+  //   class_lane_pix_capacity_ : the (class_count * pix) allocation actually
+  //                           held by class_lane_buf_. Regrown lazily by
+  //                           EnsureClassLaneBuf on shape / class-count change.
+  ColorClassTable class_table_{};
+  size_t          class_count_ = 0;
+  id<MTLBuffer>   class_lane_buf_ = nil;
+  size_t          class_lane_pix_capacity_ = 0;
   // BeginSession captures the spectrum mode + per-batch sentinel so
   // ResolveLayerCrystalForCi can rebuild the WlEntry pool against the active
   // crystal's refractive index each ci dispatch. illuminant_mode_=true uses
@@ -780,6 +834,12 @@ struct MetalTraceBackend::Impl {
   void EnsureDevice();
   void EnsurePso();
   void EnsureImage(int w, int h);
+  // task-358.1 Step 4 (AC3 device-side Y-lane accumulation): allocate/resize
+  // class_lane_buf_ to class_count_ * w * h atomic_floats (or a 4-byte dummy
+  // when class_count_==0 to keep the buffer(30) binding non-nil). Zeroes the
+  // freshly allocated buffer. Idempotent: no-op when the requested capacity
+  // matches the current allocation and shape.
+  void EnsureClassLaneBuf(int w, int h);
   void EnsurePolyBuffers(size_t poly_cnt);
   void EnsureRootBuffers(size_t n);
   void EnsureTriBuffers(size_t tri_cnt);
@@ -1010,6 +1070,23 @@ void MetalTraceBackend::Impl::EnsureImage(int w, int h) {
     alloc_xyz_w_ = w;
     alloc_xyz_h_ = h;
   }
+}
+
+void MetalTraceBackend::Impl::EnsureClassLaneBuf(int w, int h) {
+  // class_lane_pix_capacity_ is the total float capacity currently held
+  // (class_count * W * H, or 1 for the dummy branch). Regrown only when the
+  // requested layout would need more floats than the current allocation.
+  const size_t pix = static_cast<size_t>(w) * static_cast<size_t>(h);
+  const size_t needed_elems = (class_count_ == 0) ? 1u : (class_count_ * pix);
+  if (class_lane_buf_ == nil || needed_elems > class_lane_pix_capacity_) {
+    class_lane_buf_ = [device newBufferWithLength:needed_elems * sizeof(float)
+                                          options:MTLResourceStorageModeShared];
+    assert(class_lane_buf_ != nil);
+    class_lane_pix_capacity_ = needed_elems;
+  }
+  // Zero the active region every BeginSession (mirrors the twin
+  // xyz_image/landed_weight_buf_ reset in EnsureImage).
+  std::memset([class_lane_buf_ contents], 0, needed_elems * sizeof(float));
 }
 
 void MetalTraceBackend::Impl::EnsurePolyBuffers(size_t poly_cnt) {
@@ -2060,6 +2137,18 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   params.color_desc_offset = color_desc_offset_;
   params.color_bits_offset = color_bits_offset_;
   params.color_max_groups_per_slot = static_cast<uint32_t>(kColorMaxGroupsPerSlot);
+  // task-358.1 Step 4 (AC3 device-side Y-lane accumulation): pack the runtime
+  // class table into KernelParams. class_count_==0 → hot-path branch skip in
+  // MSL (AC4 zero-cost); non-zero → per-class predicate over this_mask + atomic
+  // add of cmf_y * cw into class_lane_buf_[c * W*H + pix].
+  params.color_class_count = static_cast<uint32_t>(class_count_);
+  std::memset(params.color_class_bits, 0, sizeof(params.color_class_bits));
+  std::memset(params.color_class_combine, 0, sizeof(params.color_class_combine));
+  for (size_t c = 0; c < class_count_; ++c) {
+    const auto& cls = class_table_.classes_[c];
+    params.color_class_bits[c] = cls.member_bits_;
+    params.color_class_combine[c] = (cls.combine_ == ColorClassCombine::kAll) ? 1u : 0u;
+  }
   // S1 device-fused: exit_cap and face_seq_cap are unused (exit buffers gone).
   params.exit_cap     = 0u;
   params.crystal_id   = crystal_id;
@@ -2200,6 +2289,11 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   [enc setBuffer:exit_comp_mask_buf_       offset:0 atIndex:22];
   [enc setBuffer:exit_comp_w_buf_          offset:0 atIndex:23];
   [enc setBuffer:exit_comp_cnt_buf_        offset:0 atIndex:28];
+  // task-358.1 Step 4 (AC3 device-side Y-lane accumulation): slot 30 = per-
+  // class atomic_float accumulator (dummy 4-byte alloc when class_count==0).
+  // Slots 0-29 are fully occupied by the trace kernel — 30 is the only free
+  // slot under Metal's per-stage 30-buffer ceiling (assumption B).
+  [enc setBuffer:class_lane_buf_           offset:0 atIndex:30];
 
   NSUInteger tg = std::min<NSUInteger>(256, pso.maxTotalThreadsPerThreadgroup);
   [enc dispatchThreads:MTLSizeMake(num_rays, 1, 1)
@@ -2495,6 +2589,16 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
     RaypathColorConfig empty_color;
     const RaypathColorConfig& color_cfg = spec.raypath_color ? *spec.raypath_color : empty_color;
     impl_->color_gate_table_ = BuildColorGateTable(color_cfg, *spec.scene);
+    // task-358.1 Step 4: build the runtime color-class table (server-side
+    // parity — same input, same output, matches RenderConsumer::class_table_).
+    // Empty raypath_color → empty class_table → class_count_==0 → MSL color
+    // lane accumulation branch is skipped (AC4 zero-cost) and class_lane_buf_
+    // stays a 4-byte dummy allocation (Metal requires non-nil bindings).
+    impl_->class_table_ = BuildColorClassTable(color_cfg, *spec.scene, impl_->color_gate_table_);
+    impl_->class_count_ = impl_->class_table_.classes_.size();
+    assert(impl_->class_count_ <= kMaxColorClassesDevice &&
+           "raypath_color class count exceeds kMaxColorClassesDevice; raise both host + MSL "
+           "sibling and audit KernelParams padding.");
   }
 
   // scrum-267 task-msl-filter-match-port (Step 4): upload per-session device
@@ -2503,6 +2607,13 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   // ensures the descriptors are available to the parity harness and that
   // sizing is exercised against real session configs.
   impl_->EnsureFilterBuffers(spec);
+
+  // task-358.1 Step 4: allocate/resize the device Y-lane accumulator. Layout is
+  // atomic_float[class_count * W * H] with class_count==0 collapsing to a
+  // 4-byte dummy (Metal binding must be non-nil). Content is zeroed here (per
+  // BeginSession), then re-zeroed by ReadbackClassLanes after every drain
+  // window — mirrors the landed_weight_buf_ lifecycle.
+  impl_->EnsureClassLaneBuf(impl_->width, impl_->height);
 
   // task-331.5: reset the per-session component-mask capture accumulators
   // (component_table_ is rebuilt inside EnsureFilterBuffers above).
@@ -2947,6 +3058,33 @@ void MetalTraceBackend::ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight
   // no longer clears them). Unified memory → a plain host memset/store suffices.
   std::memset([impl_->xyz_image contents], 0, pix * 3 * sizeof(float));
   *static_cast<float*>([impl_->landed_weight_buf_ contents]) = 0.0f;
+}
+
+// task-358.1 Step 4 (AC3 device-side Y-lane accumulation): drain the flattened
+// per-color-class Y accumulator into `lane_data` and reset the device side for
+// the next window. Called by Simulator::DrainDeviceXyz right after
+// ReadbackXyzAccum, so any pending command buffer is already flushed. Layout
+// (matches the MSL kernel's write side): lane_data[c * W*H + (py*W+px)].
+//
+// When class_count_==0 this is a no-op (empty vector, class_count=0) — the
+// consumer's ConsumeDeviceFused stays byte-identical to pre-358.1 (AC4).
+void MetalTraceBackend::ReadbackClassLanes(std::vector<float>& lane_data, size_t& class_count) {
+  class_count = impl_->class_count_;
+  if (impl_->class_count_ == 0 || impl_->class_lane_buf_ == nil) {
+    lane_data.clear();
+    return;
+  }
+  const size_t pix = static_cast<size_t>(impl_->alloc_xyz_w_) *
+                     static_cast<size_t>(impl_->alloc_xyz_h_);
+  assert(pix > 0);
+  const size_t total = impl_->class_count_ * pix;
+  assert(total <= impl_->class_lane_pix_capacity_ &&
+         "class_lane_buf_ under-allocated for the current class_count * W * H");
+  lane_data.resize(total);
+  std::memcpy(lane_data.data(), [impl_->class_lane_buf_ contents], total * sizeof(float));
+  // Reset the device accumulator so the next window starts clean (mirrors
+  // ReadbackXyzAccum's post-copy zero on xyz_image / landed_weight_buf_).
+  std::memset([impl_->class_lane_buf_ contents], 0, total * sizeof(float));
 }
 
 // task-268.4 per-layer destructive drain. Identical to ReadbackExitRays

@@ -116,6 +116,10 @@ class MetalTraceBackend : public TraceBackend {
   // of materialising per-exit records.
   bool HasDeviceXyzAccum() const override { return true; }
   void ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight) override;
+  // task-358.1 Step 4 (AC3 device-side Y-lane accumulation): copy the flattened
+  // per-color-class Y accumulator to host and reset the device side for the
+  // next window. See TraceBackend::ReadbackClassLanes for contract + layout.
+  void ReadbackClassLanes(std::vector<float>& lane_data, size_t& class_count) override;
   // scrum-312.4: Metal joins the third clock (persistent cross-batch XYZ
   // accumulator + display-cadence drain). Unlike CUDA the payoff is architectural
   // uniformity, not throughput — unified-memory readback was already ~free.

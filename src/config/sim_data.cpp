@@ -33,7 +33,9 @@ namespace lumice {
 // (components_ unique_ptr) so the rays_ member's contribution to sizeof(SimData)
 // bumps by 8B → total 264 + 24 (outgoing_component_) + 8 (RayBuffer.components_)
 // = 296.
-static_assert(sizeof(SimData) == 296, "SimData size changed — update copy/move ctors and operators");
+// task-358.1 Step 4 adds lane_pixel_data_ (vector<float>, 24B) + lane_class_count_
+// (size_t, 8B) for the device-side Y-lane drain, bumping 296 → 328.
+static_assert(sizeof(SimData) == 328, "SimData size changed — update copy/move ctors and operators");
 
 namespace {
 
@@ -388,7 +390,8 @@ SimData::SimData(const SimData& other)
       crystal_axis_dists_(other.crystal_axis_dists_), outgoing_d_(other.outgoing_d_), outgoing_w_(other.outgoing_w_),
       outgoing_wl_(other.outgoing_wl_), outgoing_component_(other.outgoing_component_),
       exit_records_(other.exit_records_), xyz_pixel_data_(other.xyz_pixel_data_),
-      xyz_landed_weight_(other.xyz_landed_weight_), root_ray_count_(other.root_ray_count_),
+      xyz_landed_weight_(other.xyz_landed_weight_), lane_pixel_data_(other.lane_pixel_data_),
+      lane_class_count_(other.lane_class_count_), root_ray_count_(other.root_ray_count_),
       crystal_count_(other.crystal_count_), sim_scene_credit_(other.sim_scene_credit_) {}
 
 SimData::SimData(SimData&& other) noexcept
@@ -397,7 +400,8 @@ SimData::SimData(SimData&& other) noexcept
       outgoing_d_(std::move(other.outgoing_d_)), outgoing_w_(std::move(other.outgoing_w_)),
       outgoing_wl_(std::move(other.outgoing_wl_)), outgoing_component_(std::move(other.outgoing_component_)),
       exit_records_(std::move(other.exit_records_)), xyz_pixel_data_(std::move(other.xyz_pixel_data_)),
-      xyz_landed_weight_(other.xyz_landed_weight_), root_ray_count_(other.root_ray_count_),
+      xyz_landed_weight_(other.xyz_landed_weight_), lane_pixel_data_(std::move(other.lane_pixel_data_)),
+      lane_class_count_(other.lane_class_count_), root_ray_count_(other.root_ray_count_),
       crystal_count_(other.crystal_count_), sim_scene_credit_(other.sim_scene_credit_) {}
 
 SimData& SimData::operator=(const SimData& other) {
@@ -417,6 +421,11 @@ SimData& SimData::operator=(const SimData& other) {
   exit_records_ = other.exit_records_;
   xyz_pixel_data_ = other.xyz_pixel_data_;
   xyz_landed_weight_ = other.xyz_landed_weight_;
+  // task-358.1 Step 4: same move-assign trap as outgoing_wl_ / outgoing_component_ —
+  // the copy path uses copy assignment which is safe; the move path (below) must
+  // std::move to avoid dropping the drained per-class Y lanes.
+  lane_pixel_data_ = other.lane_pixel_data_;
+  lane_class_count_ = other.lane_class_count_;
   root_ray_count_ = other.root_ray_count_;
   crystal_count_ = other.crystal_count_;
   sim_scene_credit_ = other.sim_scene_credit_;
@@ -448,6 +457,8 @@ SimData& SimData::operator=(SimData&& other) noexcept {
   exit_records_ = std::move(other.exit_records_);
   xyz_pixel_data_ = std::move(other.xyz_pixel_data_);
   xyz_landed_weight_ = other.xyz_landed_weight_;
+  lane_pixel_data_ = std::move(other.lane_pixel_data_);  // task-358.1 Step 4
+  lane_class_count_ = other.lane_class_count_;
   root_ray_count_ = other.root_ray_count_;
   crystal_count_ = other.crystal_count_;
   sim_scene_credit_ = other.sim_scene_credit_;

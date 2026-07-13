@@ -142,15 +142,44 @@ void RenderConsumer::ConsumeDeviceFused(const SimData& data) {
     NeumaierAdd(internal_xyz_[i], comp_xyz_[i], data.xyz_pixel_data_[i]);
   }
   total_intensity_ += data.xyz_landed_weight_;
-  // task-336.2 out-of-scope: GPU device-fused path does not populate
-  // outgoing_component_. Warn once so a user mixing GPU + raypath_color
-  // sees a signal in the log instead of silently empty lanes. Handoff for
-  // device-side component lanes is tracked as scrum-3c (see plan §7 risk 3).
-  if (HasColorClasses() && !logged_missing_component_) {
+  // task-358.1 Step 4 (AC3): fold the device per-color-class Y-lane accumulator
+  // into lane_y_. Layout (matches Metal MSL write side):
+  //     lane_pixel_data_[c * (W*H) + (py*W+px)]
+  // Simple += (not Neumaier) mirrors CPU AccumulateColorClassLanes at
+  // render.cpp:398 — the two are numerically comparable for the AC3 visual
+  // parity target. Note: on-device order of atomic_fetch_add per pixel is
+  // non-deterministic, so Y values are numerically-close-not-bitwise-identical
+  // to CPU — this affects AC3 visual (which is exact-parity-not-required) but
+  // NOT AC1 mask parity (mask bits are OR-accumulated → order-independent).
+  const size_t pix_wh = static_cast<size_t>(config_.resolution_[0]) * static_cast<size_t>(config_.resolution_[1]);
+  const size_t lane_slots = lane_y_.size();
+  if (!data.lane_pixel_data_.empty() && lane_slots > 0 && data.lane_class_count_ > 0 && pix_wh > 0) {
+    // Sanity: SimData carries N classes × W*H floats. Never accept a
+    // shape-mismatched drain (guards against the case where the backend and
+    // consumer disagree on class_count / resolution).
+    assert(data.lane_pixel_data_.size() == data.lane_class_count_ * pix_wh &&
+           "lane_pixel_data_ size must equal lane_class_count_ * W * H");
+    // Iterate min(server-side lane count, drained class count) — the server
+    // sizes lane_y_ from RaypathColorConfig at consumer construction so both
+    // paths should agree, but tolerate a smaller drain gracefully rather than
+    // walking past the smaller allocation.
+    const size_t n_classes = std::min(lane_slots, data.lane_class_count_);
+    for (size_t c = 0; c < n_classes; ++c) {
+      float* dst = lane_y_[c].get();
+      const float* src = data.lane_pixel_data_.data() + c * pix_wh;
+      for (size_t p = 0; p < pix_wh; ++p) {
+        dst[p] += src[p];
+      }
+    }
+  } else if (HasColorClasses() && !logged_missing_component_) {
+    // Backend has raypath_color but delivered no lane data (either the
+    // backend was not extended for device-side lanes yet, or class_count
+    // mismatch collapsed the drain). Log once so a config author sees the
+    // regression rather than silently empty lanes.
     ILOG_WARN(logger_,
-              "RenderConsumer: raypath_color configured but the device-fused (GPU) path "
-              "does not populate outgoing_component_ — component lanes will not accumulate. "
-              "This scrum's lane display targets CPU only.");
+              "RenderConsumer: raypath_color configured but this device-fused batch delivered no "
+              "per-class Y-lane data (lane_pixel_data_ empty). Backend may not be extended for "
+              "device-side lane accumulation yet.");
     logged_missing_component_ = true;
   }
   // Count toward the consume profile (proj=0: device did the projection).

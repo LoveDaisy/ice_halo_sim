@@ -477,6 +477,17 @@ struct KernelParams {
   uint color_desc_offset;
   uint color_bits_offset;
   uint color_max_groups_per_slot;
+  // task-358.1 Step 4 (AC3 device-side Y-lane accumulation):
+  //   color_class_count   : number of active color classes (0 → skip lane
+  //                         accumulation, class_lane_buf is a 4-byte dummy).
+  //   color_class_bits[]  : per-class OR-union of member component bits (matches
+  //                         host ColorClass.member_bits_; ulong for MSL uint64).
+  //   color_class_combine[]: per-class combinator; 0 = kAny ((mask & bits) != 0),
+  //                         1 = kAll ((mask & bits) == bits).
+  // See host kMaxColorClassesDevice; MUST match kMaxColorClassesDeviceMsl below.
+  uint  color_class_count;
+  ulong color_class_bits[16];  // kMaxColorClassesDeviceMsl (must equal host)
+  uchar color_class_combine[16];
 };
 
 kernel void trace_layer_kernel(
@@ -550,6 +561,15 @@ kernel void trace_layer_kernel(
     device ulong*                  exit_comp_mask      [[buffer(22)]],
     device float*                  exit_comp_w         [[buffer(23)]],
     device atomic_uint*            exit_comp_cnt       [[buffer(28)]],
+    // task-358.1 Step 4 (AC3 device-side Y-lane accumulation): per-color-class
+    // atomic-float accumulator. Layout is column-major-by-class:
+    //   class_lane_buf[class_idx * (img_w * img_h) + (py * img_w + px)]
+    // The host allocates class_count * W * H atomic_floats (or a 4-byte dummy
+    // when class_count==0 so this binding stays non-nil). Each emit adds
+    // cmf_y * cw to every class whose predicate matches the ray's this_mask;
+    // read back + folded into RenderConsumer::lane_y_ each drain window. See
+    // plan §4 Step 4 for the accumulation semantics + rollback contract.
+    device atomic_float*           class_lane_buf      [[buffer(30)]],
     uint tid [[thread_position_in_grid]]) {
   if (tid >= prm.num_rays) { return; }
   // task-331.5: load the carried component mask once (constant for the whole
@@ -805,10 +825,31 @@ kernel void trace_layer_kernel(
                 int px_m = pr_m.hits[hi].px;
                 int py_m = pr_m.hits[hi].py;
                 if (px_m >= 0 && px_m < iw_i && py_m >= 0 && py_m < ih_i) {
-                  AccumXyzToPixel(image, uint(py_m) * prm.img_w + uint(px_m),
-                                  cmf_x, cmf_y, cmf_z, cw);
+                  uint pix_m = uint(py_m) * prm.img_w + uint(px_m);
+                  AccumXyzToPixel(image, pix_m, cmf_x, cmf_y, cmf_z, cw);
                   if (pr_m.hits[hi].bump_landed) {
                     atomic_fetch_add_explicit(landed_weight, cw, memory_order_relaxed);
+                  }
+                  // task-358.1 Step 4 (AC3 device-side Y-lane accumulation):
+                  // fan this ray's Y (cmf_y * cw) into each active color class
+                  // whose predicate matches this_mask. Mirrors CPU
+                  // RenderConsumer::AccumulateColorClassLanes semantics.
+                  // Zero-cost when color_class_count == 0 (single branch skip).
+                  if (prm.color_class_count != 0u) {
+                    uint pix_stride = prm.img_w * prm.img_h;
+                    float y_val = cmf_y * cw;
+                    for (uint c = 0u; c < prm.color_class_count; c++) {
+                      ulong bits = prm.color_class_bits[c];
+                      if (bits == 0ul) { continue; }
+                      ulong matched = this_mask & bits;
+                      bool satisfied = (prm.color_class_combine[c] == 0u)
+                                           ? (matched != 0ul)
+                                           : (matched == bits);
+                      if (satisfied) {
+                        atomic_fetch_add_explicit(&class_lane_buf[c * pix_stride + pix_m],
+                                                  y_val, memory_order_relaxed);
+                      }
+                    }
                   }
                 }
               }
@@ -924,12 +965,35 @@ kernel void trace_layer_kernel(
               int px_f = pr_f.hits[hi].px;
               int py_f = pr_f.hits[hi].py;
               if (px_f >= 0 && px_f < iw_i && py_f >= 0 && py_f < ih_i) {
-                uint pix = (uint(py_f) * prm.img_w + uint(px_f)) * 3u;
+                uint pix_f_lin = uint(py_f) * prm.img_w + uint(px_f);
+                uint pix = pix_f_lin * 3u;
                 atomic_fetch_add_explicit(&image[pix + 0u], cmf_x * cw, memory_order_relaxed);
                 atomic_fetch_add_explicit(&image[pix + 1u], cmf_y * cw, memory_order_relaxed);
                 atomic_fetch_add_explicit(&image[pix + 2u], cmf_z * cw, memory_order_relaxed);
                 if (pr_f.hits[hi].bump_landed) {
                   atomic_fetch_add_explicit(landed_weight, cw, memory_order_relaxed);
+                }
+                // task-358.1 Step 4: final-layer per-class Y-lane accumulation.
+                // MUST stay symmetric with the mid-exit path above (this_mask_f
+                // vs this_mask, pix_f_lin vs pix_m). Includes overlap-ring hits
+                // (bump_landed=false) to match CPU RenderConsumer's Pass 2
+                // AccumulateColorClassLanes semantics — overlap contributes to
+                // lane Y without contributing to landed_weight.
+                if (prm.color_class_count != 0u) {
+                  uint pix_stride = prm.img_w * prm.img_h;
+                  float y_val = cmf_y * cw;
+                  for (uint c = 0u; c < prm.color_class_count; c++) {
+                    ulong bits = prm.color_class_bits[c];
+                    if (bits == 0ul) { continue; }
+                    ulong matched = this_mask_f & bits;
+                    bool satisfied = (prm.color_class_combine[c] == 0u)
+                                         ? (matched != 0ul)
+                                         : (matched == bits);
+                    if (satisfied) {
+                      atomic_fetch_add_explicit(&class_lane_buf[c * pix_stride + pix_f_lin],
+                                                y_val, memory_order_relaxed);
+                    }
+                  }
                 }
               }
             }
