@@ -118,4 +118,26 @@ ColorGatePlacement ColorGatePlacementFor(const ColorGateTable& table, IdType lay
   return out;
 }
 
+ColorPlacementGrouping GroupPlacementBySymmetry(const ColorGatePlacement& placement) {
+  ColorPlacementGrouping grouping;
+  size_t n = placement.predicates_.size();
+  grouping.group_of_.assign(n, 0);
+  grouping.group_symmetry_.reserve(n);
+  for (size_t k = 0; k < n; ++k) {
+    uint8_t sym = placement.symmetries_[k];
+    size_t gi = grouping.group_symmetry_.size();
+    for (size_t i = 0; i < grouping.group_symmetry_.size(); ++i) {
+      if (grouping.group_symmetry_[i] == sym) {
+        gi = i;
+        break;
+      }
+    }
+    if (gi == grouping.group_symmetry_.size()) {
+      grouping.group_symmetry_.push_back(sym);
+    }
+    grouping.group_of_[k] = gi;
+  }
+  return grouping;
+}
+
 }  // namespace lumice

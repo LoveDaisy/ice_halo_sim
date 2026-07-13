@@ -310,3 +310,82 @@ TEST(ColorGatePlacementFor, MissingPlacementReturnsEmpty) {
   EXPECT_TRUE(p.predicates_.empty());
   EXPECT_TRUE(p.bits_.empty());
 }
+
+// ---- GroupPlacementBySymmetry ----
+//
+// task-358.1 code-review round 2: this is the single shared authority both
+// CPU (BuildColorSpecGroups, filter_spec.cpp) and Metal
+// (MetalTraceBackend::Impl::EnsureFilterBuffers) call for the "group
+// predicates by first-occurrence symmetry" step — see test_color_spec_groups.cpp
+// for the CPU-side FilterSpec-building test that now exercises this same
+// function transitively. These tests lock the grouping contract itself
+// (order, group_of_ indices) directly against ColorGatePlacement inputs.
+
+TEST(GroupPlacementBySymmetry, EmptyPlacementYieldsNoGroups) {
+  ColorGatePlacement p;
+  auto g = lumice::GroupPlacementBySymmetry(p);
+  EXPECT_TRUE(g.group_symmetry_.empty());
+  EXPECT_TRUE(g.group_of_.empty());
+}
+
+TEST(GroupPlacementBySymmetry, AllSameSymmetryCollapsesToOneGroup) {
+  ColorGatePlacement p;
+  p.predicates_ = { NoneFilterParam{}, NoneFilterParam{}, NoneFilterParam{} };
+  p.bits_ = { 0, 1, 2 };
+  p.symmetries_ = { FilterConfig::kSymP, FilterConfig::kSymP, FilterConfig::kSymP };
+  auto g = lumice::GroupPlacementBySymmetry(p);
+  ASSERT_EQ(g.group_symmetry_.size(), 1u);
+  EXPECT_EQ(g.group_symmetry_[0], FilterConfig::kSymP);
+  ASSERT_EQ(g.group_of_.size(), 3u);
+  EXPECT_EQ(g.group_of_[0], 0u);
+  EXPECT_EQ(g.group_of_[1], 0u);
+  EXPECT_EQ(g.group_of_[2], 0u);
+}
+
+// First-occurrence order (not sorted, not stable-by-value): the group list
+// must list each distinct symmetry the first time it's seen while walking
+// predicates_ in placement order, and group_of_ must route every predicate
+// with a repeated symmetry back to that same earlier group index — this is
+// the exact ordering discipline that used to be duplicated (and only
+// comment-enforced) between CPU and Metal.
+TEST(GroupPlacementBySymmetry, MixedSymmetriesGroupByFirstOccurrenceOrder) {
+  ColorGatePlacement p;
+  p.predicates_ = { NoneFilterParam{}, NoneFilterParam{}, NoneFilterParam{}, NoneFilterParam{} };
+  p.bits_ = { 0, 1, 2, 3 };
+  // Order: B, P, B, D — expect groups in first-occurrence order [B, P, D].
+  p.symmetries_ = { FilterConfig::kSymB, FilterConfig::kSymP, FilterConfig::kSymB, FilterConfig::kSymD };
+  auto g = lumice::GroupPlacementBySymmetry(p);
+  ASSERT_EQ(g.group_symmetry_.size(), 3u);
+  EXPECT_EQ(g.group_symmetry_[0], FilterConfig::kSymB);
+  EXPECT_EQ(g.group_symmetry_[1], FilterConfig::kSymP);
+  EXPECT_EQ(g.group_symmetry_[2], FilterConfig::kSymD);
+  ASSERT_EQ(g.group_of_.size(), 4u);
+  EXPECT_EQ(g.group_of_[0], 0u);  // B -> group 0
+  EXPECT_EQ(g.group_of_[1], 1u);  // P -> group 1
+  EXPECT_EQ(g.group_of_[2], 0u);  // B (repeat) -> group 0
+  EXPECT_EQ(g.group_of_[3], 2u);  // D -> group 2
+}
+
+// Regression anchor for the code-review round-2 Major: a placement whose
+// distinct-symmetry count exceeds Metal's kColorMaxGroupsPerSlot budget (4)
+// must still be grouped correctly by this shared function — the overflow
+// guard lives in MetalTraceBackend::Impl::EnsureFilterBuffers (clamped +
+// logged there), not here; this function itself has no group-count cap.
+TEST(GroupPlacementBySymmetry, MoreThanFourDistinctSymmetriesGroupCorrectly) {
+  ColorGatePlacement p;
+  // 5 distinct symmetry bitmask values (kSymNone=0 plus 4 more bit patterns),
+  // one predicate each.
+  const std::vector<uint8_t> kSyms = { 0, FilterConfig::kSymP, FilterConfig::kSymB, FilterConfig::kSymD,
+                                       static_cast<uint8_t>(FilterConfig::kSymP | FilterConfig::kSymB) };
+  for (size_t k = 0; k < kSyms.size(); ++k) {
+    p.predicates_.emplace_back(NoneFilterParam{});
+    p.bits_.push_back(static_cast<uint8_t>(k));
+    p.symmetries_.push_back(kSyms[k]);
+  }
+  auto g = lumice::GroupPlacementBySymmetry(p);
+  ASSERT_EQ(g.group_symmetry_.size(), 5u);
+  for (size_t k = 0; k < kSyms.size(); ++k) {
+    EXPECT_EQ(g.group_symmetry_[k], kSyms[k]);
+    EXPECT_EQ(g.group_of_[k], k);  // every predicate is its own group (all distinct)
+  }
+}

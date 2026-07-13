@@ -1384,13 +1384,12 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
   std::vector<uint8_t> color_bit_map(color_bits_region, ComponentTable::kNoBit);
   bool any_color_group = false;
 
-  // Per-slot color-region build. Inlines BuildColorSpecGroups's per-symmetry
-  // grouping (filter_spec.cpp:389-410) rather than calling it, because the MSL
-  // side needs DeviceFilterDescs while BuildColorSpecGroups returns owning
-  // FilterSpecs; sharing one call path would require refactoring the CPU helper
-  // to also expose the per-group synthesized FilterConfig. The two loops MUST
-  // agree bit-for-bit on group ordering + summand ordering — that discipline is
-  // load-bearing for AC1 (逐位一致).
+  // Per-slot color-region build. Group formation delegated to the shared
+  // authority (GroupPlacementBySymmetry, config/color_gate_table.hpp) so this
+  // path and CPU's BuildColorSpecGroups (filter_spec.cpp) can never silently
+  // disagree on group order (task-358.1 code-review round 2: this used to be
+  // an inline copy of the CPU algorithm, kept in sync only by comment
+  // discipline).
   for (size_t mi = 0; mi < n_layers; ++mi) {
     const auto& ms = session_spec.scene->ms_[mi];
     for (size_t ci = 0; ci < ms.setting_.size(); ++ci) {
@@ -1401,23 +1400,28 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
       RandomNumberGenerator color_proto_rng(0xC0FEFEEDu ^
                                             static_cast<uint32_t>(mi * 65537u + ci));
       Crystal proto = MakeCrystal(color_proto_rng, setting.crystal_.param_);
-      // Inline the per-symmetry grouping (mirrors filter_spec.cpp:389-410 in
-      // BuildColorSpecGroups so we control the per-group symmetry value + bit
-      // ordering here). Ordering discipline MUST match BuildColorSpecGroups
-      // exactly, or CPU vs Metal color-bit assignment will disagree.
-      std::vector<uint8_t> group_symmetry;
-      group_symmetry.reserve(placement.predicates_.size());
-      std::vector<size_t> group_of(placement.predicates_.size(), 0);
-      for (size_t k = 0; k < placement.predicates_.size(); ++k) {
-        uint8_t sym = placement.symmetries_[k];
-        size_t gi = group_symmetry.size();
-        for (size_t i = 0; i < group_symmetry.size(); ++i) {
-          if (group_symmetry[i] == sym) { gi = i; break; }
-        }
-        if (gi == group_symmetry.size()) { group_symmetry.push_back(sym); }
-        group_of[k] = gi;
+      ColorPlacementGrouping grouping = GroupPlacementBySymmetry(placement);
+      const std::vector<uint8_t>& group_symmetry = grouping.group_symmetry_;
+      const std::vector<size_t>& group_of = grouping.group_of_;
+      const size_t group_count_raw = group_symmetry.size();
+      // Runtime clamp (not just the assert below, which -DNDEBUG release
+      // builds compile out): color_descs/color_bit_map are sized for exactly
+      // kColorMaxGroupsPerSlot groups per gate slot. A placement producing
+      // more distinct symmetry groups than that budget must drop the excess
+      // groups rather than write past color_descs/color_bit_map's allocation
+      // (code-review round 2 Major: this was assert-only, i.e. a
+      // heap-buffer-overflow write in release for any placement exceeding the
+      // as-yet-unaudited-in-production kColorMaxGroupsPerSlot=4 cap).
+      if (group_count_raw > kColorMaxGroupsPerSlot) {
+        ILOG_ERROR(EffectiveLogger(logger_),
+                   "MetalTraceBackend::EnsureFilterBuffers: color placement (layer={}, crystal_id={}) produced {} "
+                   "symmetry groups, exceeding kColorMaxGroupsPerSlot={} — dropping the excess {} group(s) rather "
+                   "than overflowing color_descs/color_bit_map. Raise kColorMaxGroupsPerSlot (+ MSL sibling) if this "
+                   "config is intentional.",
+                   mi, setting.crystal_.id_, group_count_raw, kColorMaxGroupsPerSlot,
+                   group_count_raw - kColorMaxGroupsPerSlot);
       }
-      const size_t group_count = group_symmetry.size();
+      const size_t group_count = std::min(group_count_raw, kColorMaxGroupsPerSlot);
       assert(group_count <= kColorMaxGroupsPerSlot &&
              "Color placement produced more symmetry groups than "
              "kColorMaxGroupsPerSlot; raise the constant + MSL sibling together");
@@ -1431,6 +1435,19 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
         std::vector<uint8_t> local_bits;
         for (size_t k = 0; k < placement.predicates_.size(); ++k) {
           if (group_of[k] != gi) continue;
+          // Runtime clamp (same failure class as the group-count guard
+          // above): color_bit_map reserves exactly kDeviceFilterMaxOrClauses
+          // summand slots per color_slot. Stop accepting summands once full
+          // instead of writing past this slot's span into the next one (or
+          // past the vector end for the last slot).
+          if (local_bits.size() >= kDeviceFilterMaxOrClauses) {
+            ILOG_ERROR(EffectiveLogger(logger_),
+                       "MetalTraceBackend::EnsureFilterBuffers: color group (layer={}, crystal_id={}, symmetry={}) "
+                       "has more than kDeviceFilterMaxOrClauses={} OR-summands — dropping the remainder rather than "
+                       "overflowing color_bit_map.",
+                       mi, setting.crystal_.id_, static_cast<int>(sym), kDeviceFilterMaxOrClauses);
+            break;
+          }
           cfp.filters_.push_back({ { kInvalidId, placement.predicates_[k] } });
           local_bits.push_back(placement.bits_[k]);
         }
@@ -2595,7 +2612,23 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
     // lane accumulation branch is skipped (AC4 zero-cost) and class_lane_buf_
     // stays a 4-byte dummy allocation (Metal requires non-nil bindings).
     impl_->class_table_ = BuildColorClassTable(color_cfg, *spec.scene, impl_->color_gate_table_);
-    impl_->class_count_ = impl_->class_table_.classes_.size();
+    const size_t class_count_raw = impl_->class_table_.classes_.size();
+    // Runtime clamp (not just the assert below, which -DNDEBUG release builds
+    // compile out): KernelParams.color_class_bits/combine are fixed-size
+    // [kMaxColorClassesDevice] arrays. DispatchLayer writes them for
+    // c < class_count_ with no further bound, so an unclamped class_count_
+    // above kMaxColorClassesDevice is a real out-of-bounds write into
+    // KernelParams on every dispatched layer (code-review round 2 Major —
+    // triggerable by ordinary user config, no backend/consumer race needed).
+    if (class_count_raw > kMaxColorClassesDevice) {
+      ILOG_ERROR(EffectiveLogger(impl_->logger_),
+                 "MetalTraceBackend::BeginSession: raypath_color configured {} color classes, exceeding "
+                 "kMaxColorClassesDevice={} — dropping the excess {} class(es) rather than overflowing "
+                 "KernelParams.color_class_bits/combine. Raise kMaxColorClassesDevice (+ MSL sibling) if this "
+                 "config is intentional.",
+                 class_count_raw, kMaxColorClassesDevice, class_count_raw - kMaxColorClassesDevice);
+    }
+    impl_->class_count_ = std::min(class_count_raw, kMaxColorClassesDevice);
     assert(impl_->class_count_ <= kMaxColorClassesDevice &&
            "raypath_color class count exceeds kMaxColorClassesDevice; raise both host + MSL "
            "sibling and audit KernelParams padding.");
