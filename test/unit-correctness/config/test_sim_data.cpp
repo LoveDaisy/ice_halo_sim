@@ -53,7 +53,10 @@ static_assert(sizeof(void*) == 8, "SimData layout assumes 64-bit pointers");
 // balance, bumping 256 → 264. task-331.1 adds outgoing_component_
 // (vector<uint64_t>, 24B) + RayBuffer::components_ (unique_ptr, 8B),
 // bumping 264 → 296.
-static_assert(sizeof(SimData) == 296,
+// task-358.1 Step 4 adds lane_pixel_data_ (vector<float>, 24B) +
+// lane_class_count_ (size_t, 8B) for the device-side per-color-class Y-lane
+// drain, bumping 296 → 328.
+static_assert(sizeof(SimData) == 328,
               "SimData layout changed — update test_sim_data.cpp DeepCopy/Move assertions "
               "and sim_data.cpp's static_assert.");
 #endif
@@ -111,6 +114,12 @@ SimData MakePopulatedSimData() {
   // S1 device-fused: xyz_pixel_data_ + xyz_landed_weight_ coverage.
   s.xyz_pixel_data_ = { 0.1f, 0.2f, 0.3f };
   s.xyz_landed_weight_ = 1.5f;
+  // task-358.1 Step 4: lane_pixel_data_ + lane_class_count_ deep-copy / move
+  // coverage. Shares the same move-assign trap as outgoing_wl_ / outgoing_
+  // component_ above — omitting the move in operator=(SimData&&) silently drops
+  // the drained per-class Y lanes on the consumer queue's move path.
+  s.lane_pixel_data_ = { 0.11f, 0.22f, 0.33f, 0.44f };
+  s.lane_class_count_ = 2;
   s.crystals_.emplace_back();
   // task-exit-seam-crystal-count: propagation coverage for the new field.
   s.crystal_count_ = 4;
@@ -961,6 +970,8 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
   EXPECT_EQ(copy.exit_records_[1].ms_layer_idx, 1u);
   EXPECT_EQ(copy.xyz_pixel_data_, original.xyz_pixel_data_);  // S1 device-fused
   EXPECT_FLOAT_EQ(copy.xyz_landed_weight_, 1.5f);
+  EXPECT_EQ(copy.lane_pixel_data_, original.lane_pixel_data_);  // task-358.1 Step 4
+  EXPECT_EQ(copy.lane_class_count_, 2u) << "lane_class_count_ not copied";
   EXPECT_EQ(copy.crystal_count_, 4u) << "crystal_count_ not copied";         // task-exit-seam-crystal-count
   EXPECT_EQ(copy.sim_scene_credit_, 11u) << "sim_scene_credit_ not copied";  // scrum-312
 
@@ -979,6 +990,9 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
 
   copy.outgoing_component_.clear();
   EXPECT_EQ(original.outgoing_component_.size(), 2u) << "outgoing_component_ not deep-copied";
+
+  copy.lane_pixel_data_.clear();
+  EXPECT_EQ(original.lane_pixel_data_.size(), 4u) << "lane_pixel_data_ not deep-copied";
 
   copy.exit_records_.clear();
   EXPECT_EQ(original.exit_records_.size(), 2u) << "exit_records_ not deep-copied";
@@ -1011,6 +1025,8 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   EXPECT_EQ(target.exit_records_[0].crystal_id, 7u);
   EXPECT_EQ(target.xyz_pixel_data_, original.xyz_pixel_data_);  // S1 device-fused
   EXPECT_FLOAT_EQ(target.xyz_landed_weight_, 1.5f);
+  EXPECT_EQ(target.lane_pixel_data_, original.lane_pixel_data_);  // task-358.1 Step 4
+  EXPECT_EQ(target.lane_class_count_, 2u) << "lane_class_count_ not assigned";
   EXPECT_EQ(target.crystal_count_, 4u) << "crystal_count_ not assigned";         // task-exit-seam-crystal-count
   EXPECT_EQ(target.sim_scene_credit_, 11u) << "sim_scene_credit_ not assigned";  // scrum-312
 
@@ -1067,6 +1083,8 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_EQ(moved.crystals_.size(), 1u);
   EXPECT_EQ(moved.xyz_pixel_data_.size(), 3u);  // S1 device-fused
   EXPECT_FLOAT_EQ(moved.xyz_landed_weight_, 1.5f);
+  EXPECT_EQ(moved.lane_pixel_data_.size(), 4u);  // task-358.1 Step 4
+  EXPECT_EQ(moved.lane_class_count_, 2u) << "lane_class_count_ not moved";
   EXPECT_EQ(moved.crystal_count_, 4u) << "crystal_count_ not moved";         // task-exit-seam-crystal-count
   EXPECT_EQ(moved.sim_scene_credit_, 11u) << "sim_scene_credit_ not moved";  // scrum-312
 
@@ -1085,6 +1103,13 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_TRUE(original.outgoing_w_.empty());
   EXPECT_TRUE(original.outgoing_component_.empty());  // task-331.1
   EXPECT_TRUE(original.exit_records_.empty());
+  // task-358.1 Step 4 (code-review-01 Suggestion #3): pin the same
+  // "moved-from empty, not merely target-correct" invariant this comment
+  // block already exercises for the other vector fields — a copy instead of
+  // std::move on lane_pixel_data_ would still pass the `moved.` assertions
+  // above (this is exactly the "same move-assign trap as outgoing_wl_" the
+  // Step 4 comment at sim_data.cpp warns about).
+  EXPECT_TRUE(original.lane_pixel_data_.empty());
 
   // (c) POD scalar fields are NOT reset on move — this is the current
   // contract. We deliberately do NOT assert curr_wl_/generation_/etc. to be
@@ -1114,12 +1139,20 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   ASSERT_EQ(dst.outgoing_component_.size(), 2u) << "outgoing_component_ not move-assigned";
   EXPECT_EQ(dst.outgoing_component_[0], 0x0102030405060708ull);
   EXPECT_EQ(dst.outgoing_component_[1], 0x1122334455667788ull);
+  // task-358.1 Step 4: lane_pixel_data_ move-assign coverage (same failure
+  // mode as outgoing_wl_ / outgoing_component_).
+  ASSERT_EQ(dst.lane_pixel_data_.size(), 4u) << "lane_pixel_data_ not move-assigned";
+  EXPECT_FLOAT_EQ(dst.lane_pixel_data_[0], 0.11f);
+  EXPECT_EQ(dst.lane_class_count_, 2u) << "lane_class_count_ not move-assigned";
 
   // Source moved-from state.
   EXPECT_EQ(src.rays_.rays_, nullptr);
   EXPECT_EQ(src.rays_.size_, 0u);
   EXPECT_EQ(src.rays_.capacity_, 0u);
   EXPECT_TRUE(src.crystals_.empty());
+  // task-358.1 Step 4 (code-review-01 Suggestion #3): same rationale as
+  // MoveConstructTransfersOwnership above.
+  EXPECT_TRUE(src.lane_pixel_data_.empty());
 
   // Self-move-assignment must preserve all fields (source code has
   // &other == this guard). Snapshot → self-move → assert preservation.

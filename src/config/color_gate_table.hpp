@@ -103,6 +103,26 @@ ColorGateTable BuildColorGateTable(const RaypathColorConfig& color_cfg, const Sc
 // do for that placement).
 ColorGatePlacement ColorGatePlacementFor(const ColorGateTable& table, IdType layer, IdType crystal_id);
 
+// In-order group formation of a placement's predicates by symmetry value
+// (first-occurrence order): predicates sharing the same P/B/D symmetry
+// bitmask land in the same group. `group_of_[k]` is the group index for
+// `placement.predicates_[k]`/`bits_[k]`; `group_symmetry_[gi]` is that
+// group's symmetry value.
+//
+// This is the single authoritative implementation of that grouping step —
+// both CPU (`BuildColorSpecGroups`, filter_spec.cpp) and Metal
+// (`MetalTraceBackend::Impl::EnsureFilterBuffers`) call it instead of each
+// maintaining their own copy. Bit-for-bit group-order agreement across
+// backends used to depend on manually keeping two independent loops in sync
+// (task-358.1 code-review round 2 flagged this as a load-bearing,
+// undocumented duplication risk); a single shared function removes the
+// drift risk structurally rather than by comment discipline.
+struct ColorPlacementGrouping {
+  std::vector<uint8_t> group_symmetry_;
+  std::vector<size_t> group_of_;
+};
+ColorPlacementGrouping GroupPlacementBySymmetry(const ColorGatePlacement& placement);
+
 }  // namespace lumice
 
 #endif  // CONFIG_COLOR_GATE_TABLE_H_

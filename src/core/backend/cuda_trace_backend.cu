@@ -63,6 +63,8 @@
 #include <variant>
 #include <vector>
 
+#include "config/color_class_table.hpp"  // task-358.2 Design-2 per-class rule-lane
+#include "config/color_gate_table.hpp"   // task-358.2 Design-2 color-gate migration
 #include "config/component_table.hpp"  // task-331.6 raypath-color foundation
 #include "config/crystal_config.hpp"
 #include "config/filter_config.hpp"
@@ -256,6 +258,53 @@ constexpr uint32_t kCudaDrainNonce   = 0xD5A1B3C7u;
 // independent (Metal-side kMetalShuffleNonce takes the same value, symmetric).
 constexpr uint32_t kCudaShuffleNonce = 0xB17CA3D9u;
 
+// task-358.2 (cuda-color-parity): Design-2 color-gate hot-path sizing constants.
+// Mirror Metal `kColorMaxGroupsPerSlot` (metal_trace_backend.mm:89) and
+// `kMaxColorClassesDevice` (metal_trace_backend.mm:101) — kept as CUDA-file
+// constants (not a shared header) since Metal's sibling values sit in the
+// Metal-only namespace. Both platforms must be bumped together if either
+// changes; MSL/CUDA-side sibling code enforces the same cap.
+constexpr size_t kColorMaxGroupsPerSlot = 4u;
+constexpr size_t kMaxColorClassesDevice = 16u;
+
+// Per-dispatch color-gate parameter POD (plan D2). CUDA's `trace_single_ms_kernel`
+// takes a flat parameter list (no host/MSL KernelParams equivalent); packing the
+// 4 Design-2 color-desc addressing scalars + the 3 per-class Y-lane arrays into
+// one struct-by-value avoids adding 7 more散装 params to a ~50-arg signature and
+// keeps field names grep-alignable with Metal `KernelParams.color_*`
+// (metal_trace_backend.mm:168-187).
+//   has_color_groups        : 1 → run color-descriptor pass; 0 → single branch
+//                             skip (AC4 zero-cost).
+//   color_desc_offset       : ignored (CUDA uses independent d_color_filter_desc_
+//                             buffer, no offset math). Kept for grep-parity with
+//                             Metal — if the CUDA path ever appends into the
+//                             physical filter buffer (Metal's技法), this becomes
+//                             the region start index. 0 in the independent-buffer
+//                             layout.
+//   color_bits_offset       : same as color_desc_offset — 0 in the independent
+//                             d_color_bit_map_ layout, kept for name parity.
+//   color_class_count       : number of active color classes (0 → skip lane
+//                             accumulation; d_class_lane_buf_ stays a 4-byte
+//                             dummy).
+//   color_class_bits[]      : per-class OR-union of member component bits (matches
+//                             ColorClass.member_bits_).
+//   color_class_combine[]   : per-class predicate combinator (0 = kAny; 1 = kAll).
+struct ColorGateParams {
+  uint32_t has_color_groups;
+  uint32_t color_desc_offset;
+  uint32_t color_bits_offset;
+  uint32_t color_class_count;
+  unsigned long long color_class_bits[kMaxColorClassesDevice];
+  uint8_t  color_class_combine[kMaxColorClassesDevice];
+};
+// Layout audit: 4 uint32 (16B) + ulong[16] (128B, at 16 → 8-aligned) +
+// uint8[16] (16B, at 144). Total 160B; trailing pad to align to 8B not needed
+// (160 % 8 == 0). This is CUDA-only and passed by value to the kernel; unlike
+// Metal's KernelParams the layout does not need to match a MSL sibling struct.
+static_assert(sizeof(ColorGateParams) == 160u,
+              "ColorGateParams size mismatch — update layout audit above if fields "
+              "are added or reordered");
+
 // Pairwise static_assert: LatPathKind wire values must match lm_pcg::kLatPath*
 // (device sink). Guards against silent enum-value drift.
 static_assert(lat_path::ToWireValue(lat_path::LatPathKind::kFullSphere) == lm_pcg::kLatPathFullSphere,
@@ -363,6 +412,16 @@ __device__ inline float dot3(const float* a, const float* b) {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
+// Forward declaration for FanColorClassLanes (defined below, alongside the
+// Design-2 colour pass). EmitToDeviceXyz calls it inside its projection loop
+// but sits above the definition — CUDA `__device__` inline functions require
+// the callee to be at least declared before the caller's body.
+__device__ inline void FanColorClassLanes(float* d_class_lane_buf,
+                                           const ColorGateParams& color_params,
+                                           unsigned long long this_mask, uint32_t pix,
+                                           uint32_t img_w, uint32_t img_h,
+                                           float cmf_y, float weight);
+
 // S2 device-fused projection + XYZ accumulation for the ms_mode==0 emit gate.
 // Mirrors the Metal final-layer `proj_type==0 / proj_type==1` blocks
 // (lumice_trace.metal:743-811). `exit_world` is the world-space exit direction
@@ -371,6 +430,14 @@ __device__ inline float dot3(const float* a, const float* b) {
 // `d_landed_weight` tallies only in-bounds primary writes; overlap dual-write
 // (dual-fisheye opposite-hemisphere) does NOT bump landed_weight (matches
 // ScatterOutgoingToXyz Pass 2 / Metal lumice_trace.metal:788-810).
+// task-358.2 (cuda-color-parity) Step 4: extended to also fan per-class Y-lane
+// after the XYZ atomic add, on each projected hit (primary + overlap-ring).
+// Overlap-ring hits are included to match CPU RenderConsumer's Pass 2
+// AccumulateColorClassLanes semantics (Metal MSL: lumice_trace.metal:848-863
+// / :997-1010) — an overlap hit contributes to lane Y without contributing to
+// landed_weight. Zero-cost when color_params.color_class_count == 0 (single
+// branch skip inside FanColorClassLanes) so the existing physical-filter path
+// pays nothing when no raypath_color config is present.
 __device__ inline void EmitToDeviceXyz(float* __restrict__ d_xyz_buf,
                                        float* __restrict__ d_landed_weight,
                                        const float exit_world[3],
@@ -378,7 +445,15 @@ __device__ inline void EmitToDeviceXyz(float* __restrict__ d_xyz_buf,
                                        float cmf_y,
                                        float cmf_z,
                                        float w_emit,
-                                       const lm_proj::ProjParams& proj) {
+                                       const lm_proj::ProjParams& proj,
+                                       // task-358.2 Y-lane fan-out args. Pass
+                                       // nullptr for d_class_lane_buf when the
+                                       // caller has no lane accumulator; the
+                                       // FanColorClassLanes call is skipped
+                                       // whenever color_class_count == 0.
+                                       float* d_class_lane_buf,
+                                       const ColorGateParams& color_params,
+                                       unsigned long long this_mask) {
   // 315.3: single-source projection via lm_proj::ProjectExitToPixel (shared
   // with host CPU scatter_accum.hpp + Metal). Pass the WORLD exit dir — the
   // function negates internally to the sky direction, matching
@@ -400,39 +475,89 @@ __device__ inline void EmitToDeviceXyz(float* __restrict__ d_xyz_buf,
       if (r.hits[hi].bump_landed) {
         atomicAdd(d_landed_weight, w_emit);
       }
+      // task-358.2 Step 4 (AC3): fan the ray's Y into every satisfied color
+      // class at this projected pixel. Overlap-ring hits included (bump_landed
+      // may be false) to match CPU/Metal semantics — an overlap contributes to
+      // lane Y though not to landed_weight.
+      if (d_class_lane_buf != nullptr) {
+        FanColorClassLanes(d_class_lane_buf, color_params, this_mask, pix_flat,
+                           static_cast<uint32_t>(proj.img_w), static_cast<uint32_t>(proj.img_h), cmf_y, w_emit);
+      }
     }
   }
 }
 
-// task-331.6 (raypath-color foundation): produce THIS layer's component bits
-// for a surviving exit ray and OR them into the carried uint64 mask (device
-// mirror of CPU CollectData simulator.cpp:500-519 + Metal lumice_trace.metal).
-// `carried` is the OR-accumulated mask entering this layer; the returned mask
-// adds this layer's summand→component bits. gate_component_bits is keyed by
-// gate_slot * kDeviceFilterMaxOrClauses + summand. Only called when
-// capture_component != 0 (production skips it → the carried mask passes through
-// unchanged, no filter re-evaluation cost).
-__device__ inline unsigned long long ApplyLayerComponentBits(unsigned long long carried,
-                                                             const DeviceFilterDesc& f,
-                                                             const DeviceFilterDesc* complex_sub_desc,
-                                                             const uint8_t* path, uint32_t path_len,
-                                                             const uint8_t* getfn_bytes, const uint32_t* getfn_offsets,
-                                                             uint32_t gate_slot, const float* ray_dir,
-                                                             uint32_t crystal_config_id,
-                                                             const uint8_t* gate_component_bits) {
-  bool matched = false;
-  uint32_t smask = lm_filter::DeviceFilterSummandMask(f, complex_sub_desc, path, path_len, getfn_bytes, getfn_offsets,
-                                                      gate_slot, ray_dir, crystal_config_id, &matched);
+// task-358.2 (cuda-color-parity): production per-raypath color pass. Mirrors
+// MSL `if (prm.has_color_groups != 0u) { ... }` (lumice_trace.metal color
+// pass). task-358.3 retired the sibling Fork-C `ApplyLayerComponentBits`
+// (`this_mask` now carries ONLY Design-2 colour bits).
+//
+// Each color group is a synthesized ComplexFilterParam whose OR-summands
+// correspond to placement.predicates_. `DeviceFilterSummandMask` returns bit
+// k = "summand k matched"; the color-bit map indexes each matched summand to
+// its assigned global color bit and ORs it into the mask.
+//
+// Empty group slots (no ColorGateEntries for a (layer, crystal) placement) are
+// zero-init DeviceFilterDesc{type=None} → DeviceFilterSummandMask returns
+// mask=0 → inner loop no-op, no extra branch needed. gate_slot is the same
+// composite index `mi * max_ci + ci` used by the physical filter — passing
+// this composite (not crystal_id) is the [[project_gpu_laplacian_green_tint_
+// wl_slot_collision]] lesson.
+__device__ inline unsigned long long ApplyLayerColorBits(unsigned long long carried,
+                                                          const DeviceFilterDesc* d_color_filter_desc,
+                                                          const DeviceFilterDesc* d_complex_sub_desc,
+                                                          const uint8_t* d_color_bit_map,
+                                                          const uint8_t* path, uint32_t path_len,
+                                                          const uint8_t* getfn_bytes,
+                                                          const uint32_t* getfn_offsets,
+                                                          uint32_t gate_slot, const float* ray_dir,
+                                                          uint32_t crystal_config_id) {
   unsigned long long m = carried;
-  for (uint32_t k = 0u; k < kDeviceFilterMaxOrClauses; ++k) {
-    if ((smask & (1u << k)) != 0u) {
-      uint8_t bit = gate_component_bits[gate_slot * kDeviceFilterMaxOrClauses + k];
-      if (bit < 64u) {
-        m |= (1ull << static_cast<unsigned long long>(bit));
+  for (uint32_t g = 0u; g < static_cast<uint32_t>(kColorMaxGroupsPerSlot); ++g) {
+    const uint32_t color_slot_idx = gate_slot * static_cast<uint32_t>(kColorMaxGroupsPerSlot) + g;
+    bool matched_c = false;
+    const uint32_t c_smask = lm_filter::DeviceFilterSummandMask(
+        d_color_filter_desc[color_slot_idx], d_complex_sub_desc, path, path_len, getfn_bytes, getfn_offsets, gate_slot,
+        ray_dir, crystal_config_id, &matched_c);
+    for (uint32_t k = 0u; k < kDeviceFilterMaxOrClauses; ++k) {
+      if ((c_smask & (1u << k)) != 0u) {
+        const uint8_t bit = d_color_bit_map[color_slot_idx * kDeviceFilterMaxOrClauses + k];
+        if (bit < 64u) {
+          m |= (1ull << static_cast<unsigned long long>(bit));
+        }
       }
     }
   }
   return m;
+}
+
+// task-358.2 Step 4 (AC3 device-side Y-lane accumulation). Mirrors MSL
+// (lumice_trace.metal:848-863 and :997-1010): fan each ray's Y (cmf_y * w)
+// into every active color class whose predicate over `this_mask` is
+// satisfied. Zero-cost when class_count==0 (single branch skip); no-op when
+// bits==0 (class contributes no lanes). CUDA `atomicAdd(float*, float)` is
+// direct (no `atomic_float` type wrapper needed, unlike MSL).
+__device__ inline void FanColorClassLanes(float* d_class_lane_buf,
+                                           const ColorGateParams& color_params,
+                                           unsigned long long this_mask, uint32_t pix,
+                                           uint32_t img_w, uint32_t img_h,
+                                           float cmf_y, float weight) {
+  if (color_params.color_class_count == 0u) {
+    return;
+  }
+  const uint32_t pix_stride = img_w * img_h;
+  const float y_val = cmf_y * weight;
+  for (uint32_t c = 0u; c < color_params.color_class_count; ++c) {
+    const unsigned long long bits = color_params.color_class_bits[c];
+    if (bits == 0ull) {
+      continue;
+    }
+    const unsigned long long matched = this_mask & bits;
+    const bool satisfied = (color_params.color_class_combine[c] == 0u) ? (matched != 0ull) : (matched == bits);
+    if (satisfied) {
+      atomicAdd(&d_class_lane_buf[c * pix_stride + pix], y_val);
+    }
+  }
 }
 
 // task-331.6: append an emitted (mid-exit + final) exit ray's (mask, weight) to
@@ -550,25 +675,50 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                        // d_rng_probe[tid + probe_ci_start]. 0 in
                                        // production and in single-ci tests.
                                        uint32_t probe_ci_start,
-                                       // task-331.6 (raypath-color foundation): per-ray uint64
-                                       // component mask carrier (sibling of d_root_wl_idx /
-                                       // d_cont_wl_idx). d_root_component read INTO this layer
-                                       // (0 on layer 0; transit copies cont→root for layer≥1);
-                                       // d_cont_component written OUT to the continuation ring
-                                       // (ms_mode==1). gate_component_bits = summand→bit table.
-                                       // The exit_comp_* ring + capture_component are TEST-ONLY:
-                                       // capture_component==0 in production → the gate skips all
-                                       // produce/capture work and only propagates the carried
-                                       // (all-zero) mask; the exit_comp_* / gate_component_bits
-                                       // pointers may be nullptr in that case.
+                                       // task-358.3 (renamed from capture_component after Fork-C
+                                       // retirement): per-ray uint64 mask carrier (sibling of
+                                       // d_root_wl_idx / d_cont_wl_idx). d_root_component read
+                                       // INTO this layer (0 on layer 0; transit copies cont→root
+                                       // for layer≥1); d_cont_component written OUT to the
+                                       // continuation ring (ms_mode==1). The exit_comp_* ring +
+                                       // capture_ray_mask flag are TEST-ONLY: capture_ray_mask==0
+                                       // in production → the gate skips the capture-ring append
+                                       // and only propagates the carried mask through
+                                       // d_cont_component. The mask itself is purely Design-2
+                                       // colour bits (Fork-C physical-bits path retired).
                                        const unsigned long long* __restrict__ d_root_component,
                                        unsigned long long* __restrict__ d_cont_component,
-                                       const uint8_t* __restrict__ d_gate_component_bits,
                                        unsigned long long* __restrict__ d_exit_comp_mask,
                                        float* __restrict__ d_exit_comp_w,
                                        uint32_t* d_exit_comp_cnt,
                                        uint32_t comp_cap,
-                                       uint32_t capture_component) {
+                                       uint32_t capture_ray_mask,
+                                       // task-358.2 (cuda-color-parity): Design-2
+                                       // color-pass params. See ColorGateParams
+                                       // comment for field semantics + zero-cost
+                                       // (has_color_groups==0 / class_count==0)
+                                       // gating.
+                                       ColorGateParams color_params,
+                                       // task-358.2: independent color-region
+                                       // filter descriptors + summand→color-bit
+                                       // map (plan D1). Non-null even when
+                                       // has_color_groups==0 (Impl allocates a
+                                       // 1-byte dummy so the pointer is always
+                                       // bindable, mirroring the physical-filter
+                                       // dummy fallback above).
+                                       const DeviceFilterDesc* __restrict__ d_color_filter_desc,
+                                       const uint8_t* __restrict__ d_color_bit_map,
+                                       // task-358.2 Step 4 (device Y-lane
+                                       // accumulator, AC3). Sized class_count *
+                                       // W * H floats; a 4B dummy when
+                                       // class_count==0 (kernel branch skip so
+                                       // no read/write occurs). Written via
+                                       // atomicAdd(float*, float). Pixel
+                                       // stride (img_w * img_h) is derived
+                                       // inside EmitToDeviceXyz from
+                                       // proj.img_w / proj.img_h so no
+                                       // separate size params are needed here.
+                                       float* __restrict__ d_class_lane_buf) {
   const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_roots) {
     return;
@@ -708,14 +858,18 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
             d_filter_desc[gate_slot], d_complex_sub_desc, path_rec, rec_len, d_getfn_bytes, d_getfn_offsets, gate_slot,
             exit_world, crystal_config_id);
         if (filter_pass) {
-          // task-331.6: produce this layer's component bits for the surviving
-          // ray and OR them into the carried mask (gated by capture_component;
-          // production pays only the carried-mask copy below).
+          // task-358.3: Fork-C physical-bit produce branch removed. `this_mask`
+          // now starts from the carried mask and is OR-accumulated by ONLY the
+          // Design-2 color pass below (production truth). The append-to-capture
+          // branch further down is gated by capture_ray_mask (test-only).
           unsigned long long this_mask = carried_component;
-          if (capture_component != 0u) {
-            this_mask = ApplyLayerComponentBits(carried_component, d_filter_desc[gate_slot], d_complex_sub_desc,
-                                                path_rec, rec_len, d_getfn_bytes, d_getfn_offsets, gate_slot,
-                                                exit_world, crystal_config_id, d_gate_component_bits);
+          // task-358.2 (cuda-color-parity): Design-2 color pass. Gated by
+          // color_params.has_color_groups so no raypath_color session → single
+          // branch skip (AC4 zero-cost). Mirrors MSL lumice_trace.metal.
+          if (color_params.has_color_groups != 0u) {
+            this_mask = ApplyLayerColorBits(this_mask, d_color_filter_desc, d_complex_sub_desc, d_color_bit_map,
+                                            path_rec, rec_len, d_getfn_bytes, d_getfn_offsets, gate_slot, exit_world,
+                                            crystal_config_id);
           }
           // Prob gate (prob-pass → continuation; prob-fail → mid-exit). The
           // gate_stream advances on each pcg_uniform draw so the per-bounce
@@ -745,11 +899,16 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
             const float cmf_x = d_wl_pool[wl_idx].cmf_x;
             const float cmf_y = d_wl_pool[wl_idx].cmf_y;
             const float cmf_z = d_wl_pool[wl_idx].cmf_z;
+            // task-358.2 Step 4: EmitToDeviceXyz also fans per-class Y-lane on
+            // each projected hit; d_class_lane_buf may be nullptr / a 4B dummy
+            // when class_count==0 (kernel skips the inner loop). task-358.3:
+            // this_mask now carries only Design-2 colour bits (Fork-C retired).
             EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                             cmf_x, cmf_y, cmf_z, w_refl_e,
-                            proj);
-            // task-331.6: capture this mid-exit ray's mask+weight for CPU parity.
-            if (capture_component != 0u) {
+                            proj, d_class_lane_buf, color_params, this_mask);
+            // task-358.3 (renamed from capture_component): capture the mid-exit
+            // ray's (this_mask, weight) for the CPU parity harness.
+            if (capture_ray_mask != 0u) {
               CaptureComponentExit(d_exit_comp_mask, d_exit_comp_w, d_exit_comp_cnt, comp_cap, this_mask, w_refl_e);
             }
           }
@@ -779,15 +938,24 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
             const float cmf_x = d_wl_pool[wl_idx].cmf_x;
             const float cmf_y = d_wl_pool[wl_idx].cmf_y;
             const float cmf_z = d_wl_pool[wl_idx].cmf_z;
+            // task-358.3: Fork-C physical-bit produce branch removed (see mid-
+            // exit sibling above). `this_mask` starts from carried_component and
+            // is OR-accumulated by ONLY the Design-2 color pass. Must stay
+            // SYMMETRIC with the mid-exit branch — any silent asymmetry re-
+            // introduces the exact class of bug the two landmine-guard tests
+            // protect against.
+            unsigned long long this_mask = carried_component;
+            if (color_params.has_color_groups != 0u) {
+              this_mask = ApplyLayerColorBits(this_mask, d_color_filter_desc, d_complex_sub_desc, d_color_bit_map,
+                                              path_rec, rec_len, d_getfn_bytes, d_getfn_offsets, gate_slot_e, exit_world,
+                                              crystal_config_id);
+            }
             EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                             cmf_x, cmf_y, cmf_z, w_refl_e,
-                            proj);
-            // task-331.6: final-layer component bits (mirror ms_mode==0 gate).
-            // Produce + capture only under the test flag.
-            if (capture_component != 0u) {
-              unsigned long long this_mask = ApplyLayerComponentBits(
-                  carried_component, d_filter_desc[gate_slot_e], d_complex_sub_desc, path_rec, rec_len, d_getfn_bytes,
-                  d_getfn_offsets, gate_slot_e, exit_world, crystal_config_id, d_gate_component_bits);
+                            proj, d_class_lane_buf, color_params, this_mask);
+            // task-358.3 (renamed from capture_component): final-layer capture
+            // (mirror of the ms_mode==1 branch).
+            if (capture_ray_mask != 0u) {
               CaptureComponentExit(d_exit_comp_mask, d_exit_comp_w, d_exit_comp_cnt, comp_cap, this_mask, w_refl_e);
             }
           }
@@ -907,12 +1075,14 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               d_filter_desc[gate_slot], d_complex_sub_desc, path_rec, rec_len, d_getfn_bytes, d_getfn_offsets,
               gate_slot, exit_world, crystal_config_id);
           if (filter_pass) {
-            // task-331.6: produce this layer's component bits (gated).
+            // task-358.3: Fork-C produce branch retired; only Design-2 color
+            // pass accumulates into this_mask (per-bounce mid-exit sibling of
+            // the entry-face gate above).
             unsigned long long this_mask = carried_component;
-            if (capture_component != 0u) {
-              this_mask = ApplyLayerComponentBits(carried_component, d_filter_desc[gate_slot], d_complex_sub_desc,
-                                                  path_rec, rec_len, d_getfn_bytes, d_getfn_offsets, gate_slot,
-                                                  exit_world, crystal_config_id, d_gate_component_bits);
+            if (color_params.has_color_groups != 0u) {
+              this_mask = ApplyLayerColorBits(this_mask, d_color_filter_desc, d_complex_sub_desc, d_color_bit_map,
+                                              path_rec, rec_len, d_getfn_bytes, d_getfn_offsets, gate_slot, exit_world,
+                                              crystal_config_id);
             }
             bool do_continue = (lm_pcg::pcg_uniform(gate_stream) < ms_prob);
             if (do_continue) {
@@ -936,9 +1106,10 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               const float cmf_z = d_wl_pool[wl_idx].cmf_z;
               EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                               cmf_x, cmf_y, cmf_z, w_refr,
-                              proj);
-              // task-331.6: capture this mid-exit ray's mask+weight for parity.
-              if (capture_component != 0u) {
+                              proj, d_class_lane_buf, color_params, this_mask);
+              // task-358.3 (renamed from capture_component): per-bounce mid-
+              // exit capture.
+              if (capture_ray_mask != 0u) {
                 CaptureComponentExit(d_exit_comp_mask, d_exit_comp_w, d_exit_comp_cnt, comp_cap, this_mask, w_refr);
               }
             }
@@ -964,14 +1135,22 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               const float cmf_x = d_wl_pool[wl_idx].cmf_x;
               const float cmf_y = d_wl_pool[wl_idx].cmf_y;
               const float cmf_z = d_wl_pool[wl_idx].cmf_z;
+              // task-358.3: Fork-C produce branch retired; per-bounce refracted
+              // exit accumulates ONLY Design-2 colour bits into this_mask. Must
+              // stay symmetric with the per-bounce ms_mode==1 branch above (the
+              // two landmine-guard tests catch any silent asymmetry).
+              unsigned long long this_mask = carried_component;
+              if (color_params.has_color_groups != 0u) {
+                this_mask = ApplyLayerColorBits(this_mask, d_color_filter_desc, d_complex_sub_desc, d_color_bit_map,
+                                                path_rec, rec_len, d_getfn_bytes, d_getfn_offsets, gate_slot_r,
+                                                exit_world, crystal_config_id);
+              }
               EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                               cmf_x, cmf_y, cmf_z, w_refr,
-                              proj);
-              // task-331.6: final-layer component bits (produce + capture, gated).
-              if (capture_component != 0u) {
-                unsigned long long this_mask = ApplyLayerComponentBits(
-                    carried_component, d_filter_desc[gate_slot_r], d_complex_sub_desc, path_rec, rec_len,
-                    d_getfn_bytes, d_getfn_offsets, gate_slot_r, exit_world, crystal_config_id, d_gate_component_bits);
+                              proj, d_class_lane_buf, color_params, this_mask);
+              // task-358.3 (renamed from capture_component): final-layer capture
+              // on the per-bounce refracted exit (gated by capture_ray_mask).
+              if (capture_ray_mask != 0u) {
                 CaptureComponentExit(d_exit_comp_mask, d_exit_comp_w, d_exit_comp_cnt, comp_cap, this_mask, w_refr);
               }
             }
@@ -1622,23 +1801,51 @@ struct CudaTraceBackend::Impl {
   uint32_t          filter_n_slot_       = 0u;       // total descriptor slots
   uint32_t          crystal_config_id_   = 0xFFFFu;  // for DeviceFilterMatchCrystal
 
-  // --- task-331.6 (raypath-color foundation) component-mask production ------
-  // Summand→component-bit table, keyed by gate_slot * kDeviceFilterMaxOrClauses
-  // + summand (built in EnsureFilterBuffers from BuildComponentTable /
-  // ComponentBitsFor, mirroring Metal gate_component_bits_buf_). Bound to the
-  // trace kernel; only read when capture_component_ is on. nullptr for no-scene
-  // sessions (the kernel's produce branch is gated off in that case).
-  uint8_t*          d_gate_component_bits_ = nullptr;
-  ComponentTable    component_table_{};
+  // task-358.2 (cuda-color-parity): Design-2 ColorGateTable state — built once
+  // per scene in EnsureFilterBuffers (via BuildColorGateTable / BuildColorClass
+  // Table), mirroring Metal `color_gate_table_` / `class_table_`. Independent
+  // device buffers per plan D1 (CUDA has no Metal 30-buffer binding ceiling, so
+  // the append-into-existing-buffer trick does not carry benefit here).
+  //
+  // task-358.3 note: the sibling Fork-C `d_gate_component_bits_` /
+  // `component_table_` fields have been removed; the Design-2 colour bit map
+  // below is now the only summand→bit table on the CUDA side.
+  ColorGateTable    color_gate_table_{};
+  ColorClassTable   class_table_{};
+  size_t            class_count_       = 0;
+  bool              has_color_groups_  = false;
+  // color_desc_offset_ / color_bits_offset_ are kept for grep-parity with Metal
+  // `KernelParams.color_*` field names — CUDA uses INDEPENDENT buffers so the
+  // offsets are structurally 0 in this backend.
+  uint32_t          color_desc_offset_ = 0u;
+  uint32_t          color_bits_offset_ = 0u;
+  // Design-2 color-region descriptors + summand→color-bit map. Independent
+  // allocations. Sized `n_slot * kColorMaxGroupsPerSlot` descriptors, `n_slot *
+  // kColorMaxGroupsPerSlot * kDeviceFilterMaxOrClauses` uint8 bits. 1-byte
+  // dummies for the no-scene fallback so the kernel pointers are always
+  // bindable (kernel color pass gated by `color_params.has_color_groups`).
+  DeviceFilterDesc* d_color_filter_desc_ = nullptr;
+  uint8_t*          d_color_bit_map_     = nullptr;
+  // task-358.2 Step 4 (AC3 device Y-lane): per-class atomic-float accumulator.
+  //   `class_count_ * W * H` floats when class_count_ > 0; a 4-byte dummy
+  //   otherwise so the kernel pointer stays bindable. Zeroed on allocation and
+  //   after each drain (ReadbackClassLanes). Layout matches MSL and CPU
+  //   RenderConsumer: buf[c * (W * H) + (py * W + px)]. Regrown lazily by
+  //   EnsureClassLaneBuf on shape / class-count change. Mirrors Metal
+  //   `class_lane_buf_` (metal_trace_backend.mm:779).
+  float*  d_class_lane_buf_        = nullptr;
+  size_t  class_lane_pix_capacity_ = 0;  // element count d_class_lane_buf_ was allocated for
   // [TEST-ONLY] per-session capture ring for emitted (mid-exit + final) rays,
-  // drained per layer into captured_masks_/captured_ws_ when capture_component_
+  // drained per layer into captured_masks_/captured_ws_ when capture_ray_mask_
   // is on. Only allocated under capture (production never touches it — the
-  // kernel's capture branch is gated by the capture_component kernel arg).
+  // kernel's capture branch is gated by the capture_ray_mask kernel arg).
+  // task-358.3: buffer/field names still carry `_comp_*` / `_component_*` for
+  // grep continuity — the mask itself is now purely Design-2 colour bits.
   unsigned long long* d_exit_comp_mask_ = nullptr;
   float*              d_exit_comp_w_    = nullptr;
   uint32_t*           d_exit_comp_cnt_  = nullptr;
   size_t              exit_comp_cap_    = 0;
-  bool                capture_component_ = false;
+  bool                capture_ray_mask_  = false;
   std::vector<uint64_t> captured_masks_;
   std::vector<float>    captured_ws_;
 
@@ -1712,10 +1919,18 @@ struct CudaTraceBackend::Impl {
   // layer. Mirrors Metal EnsureRootBuffers(total)+EnsureContBuffer(out_slot).
   void EnsureContCapacity(size_t n_in, int out_slot);
 
-  // task-331.6 (test-only): grow-only allocation of the component-mask capture
-  // ring (mask/weight buffers + a 1-uint32 atomic counter). Only invoked when
-  // capture_component_ is on; production never calls it.
+  // task-358.3 (test-only, renamed from component-mask capture ring after
+  // Fork-C retirement): grow-only allocation of the ray-mask capture ring
+  // (mask/weight buffers + a 1-uint32 atomic counter). Only invoked when
+  // capture_ray_mask_ is on; production never calls it.
   void EnsureComponentCaptureBuffers(size_t cap);
+
+  // task-358.2 Step 4: grow-only allocation of the per-class Y-lane accumulator
+  // (class_count_ * W * H floats, or a 4B dummy when class_count_==0 so the
+  // kernel pointer stays bindable). Zeroes the buffer on alloc + on regrow.
+  // Post-drain (ReadbackClassLanes) zeroing lives in the readback itself.
+  // Mirrors Metal EnsureClassLaneBuf (metal_trace_backend.mm:1075-1090).
+  void EnsureClassLaneBuf(int w, int h);
 
   // Per-CI geometry (multi-CI, mirrors Metal UploadCrystal/Ensure*Buffers).
   // EnsureGeomCapacity grows d_poly_*/d_tri_* (grow-only) to hold a crystal of
@@ -1802,7 +2017,17 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
     cudaFree(d_getfn_offsets_);    d_getfn_offsets_ = nullptr;
     cudaFree(d_getfn_bytes_);      d_getfn_bytes_ = nullptr;
     cudaFree(d_complex_sub_desc_); d_complex_sub_desc_ = nullptr;
-    cudaFree(d_gate_component_bits_); d_gate_component_bits_ = nullptr;  // task-331.6
+    // task-358.2 (cuda-color-parity): Design-2 color-region buffers persist with
+    // the physical filter descriptors (built together in EnsureFilterBuffers);
+    // free them together on full teardown.
+    cudaFree(d_color_filter_desc_);   d_color_filter_desc_ = nullptr;
+    cudaFree(d_color_bit_map_);       d_color_bit_map_     = nullptr;
+    color_gate_table_ = ColorGateTable{};
+    class_table_      = ColorClassTable{};
+    class_count_      = 0;
+    has_color_groups_ = false;
+    color_desc_offset_ = 0u;
+    color_bits_offset_ = 0u;
     filter_built_ = false;
     wl_pool_uploaded_ = false;
     filter_desc_max_ci_ = 0u;
@@ -1844,6 +2069,11 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
     cudaFree(d_landed_weight_); d_landed_weight_ = nullptr;
     alloc_xyz_w_ = 0u;  // scrum-312: buffer freed → clear its remembered dims
     alloc_xyz_h_ = 0u;
+    // task-358.2 Step 4 (AC3): per-class Y-lane accumulator (class_count_ *
+    // W * H floats). Freed on full teardown; ReadbackClassLanes handles the
+    // per-batch drain-and-zero.
+    cudaFree(d_class_lane_buf_); d_class_lane_buf_ = nullptr;
+    class_lane_pix_capacity_ = 0;
 
     cudaFreeHost(pinned_dirs_);        pinned_dirs_ = nullptr;
     cudaFreeHost(pinned_pos_);         pinned_pos_ = nullptr;
@@ -2268,10 +2498,11 @@ void CudaTraceBackend::Impl::EnsureContCapacity(size_t n_in, int out_slot) {
   }
 }
 
-// task-331.6 (test-only): grow-only allocation of the component-mask capture
-// ring. The atomic counter is allocated once (1 × uint32); the mask/weight
-// buffers grow to `cap`. Only reached under capture_component_ (production never
-// allocates these — the kernel's capture branch is gated by capture_component).
+// task-358.3 (test-only, renamed from component-mask capture ring): grow-only
+// allocation of the ray-mask capture ring. The atomic counter is allocated
+// once (1 × uint32); the mask/weight buffers grow to `cap`. Only reached under
+// capture_ray_mask_ (production never allocates these — the kernel's capture
+// branch is gated by capture_ray_mask).
 void CudaTraceBackend::Impl::EnsureComponentCaptureBuffers(size_t cap) {
   auto ck = [this](cudaError_t e, const char* ctx) {
     if (e != cudaSuccess) {
@@ -2291,6 +2522,30 @@ void CudaTraceBackend::Impl::EnsureComponentCaptureBuffers(size_t cap) {
   ck(cudaMalloc(&d_exit_comp_mask_, cap * sizeof(unsigned long long)), "cudaMalloc d_exit_comp_mask");
   ck(cudaMalloc(&d_exit_comp_w_,    cap * sizeof(float)),              "cudaMalloc d_exit_comp_w");
   exit_comp_cap_ = cap;
+}
+
+// task-358.2 Step 4 (AC3 device-side Y-lane accumulation). Mirrors Metal
+// EnsureClassLaneBuf (metal_trace_backend.mm:1075-1090): grow-only allocation
+// of the atomic-float accumulator, sized `class_count_ * W * H` when active
+// or a single float when class_count_==0 (bindable dummy for the kernel arg).
+// Zeroed on alloc + on regrow via cudaMemset; per-batch drain-and-zero lives
+// in ReadbackClassLanes. Called from BeginSession after class_count_ is known.
+void CudaTraceBackend::Impl::EnsureClassLaneBuf(int w, int h) {
+  auto ck = [this](cudaError_t e, const char* ctx) {
+    if (e != cudaSuccess) {
+      Reset();
+      throw BackendUnavailableError(std::string{"CudaTraceBackend::EnsureClassLaneBuf: "} + ctx + ": " +
+                                    cudaGetErrorString(e));
+    }
+  };
+  const size_t pix = static_cast<size_t>(std::max(w, 0)) * static_cast<size_t>(std::max(h, 0));
+  const size_t needed_elems = (class_count_ == 0) ? 1u : (class_count_ * pix);
+  if (d_class_lane_buf_ == nullptr || needed_elems > class_lane_pix_capacity_) {
+    cudaFree(d_class_lane_buf_); d_class_lane_buf_ = nullptr;
+    ck(cudaMalloc(&d_class_lane_buf_, needed_elems * sizeof(float)), "cudaMalloc d_class_lane_buf");
+    class_lane_pix_capacity_ = needed_elems;
+  }
+  ck(cudaMemset(d_class_lane_buf_, 0, needed_elems * sizeof(float)), "cudaMemset d_class_lane_buf");
 }
 
 // EnsureFilterBuffers — mirror of Metal `EnsureFilterBuffers`
@@ -2316,8 +2571,15 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
   cudaFree(d_getfn_offsets_);     d_getfn_offsets_     = nullptr;
   cudaFree(d_getfn_bytes_);       d_getfn_bytes_       = nullptr;
   cudaFree(d_complex_sub_desc_);  d_complex_sub_desc_  = nullptr;
-  cudaFree(d_gate_component_bits_); d_gate_component_bits_ = nullptr;  // task-331.6
-  component_table_ = ComponentTable{};
+  // task-358.2: free any prior session's independent color-region buffers.
+  cudaFree(d_color_filter_desc_);   d_color_filter_desc_ = nullptr;
+  cudaFree(d_color_bit_map_);       d_color_bit_map_     = nullptr;
+  color_gate_table_ = ColorGateTable{};
+  class_table_      = ColorClassTable{};
+  class_count_      = 0;
+  has_color_groups_ = false;
+  color_desc_offset_ = 0u;
+  color_bits_offset_ = 0u;
   filter_desc_max_ci_ = 0u;
   filter_n_slot_      = 0u;
 
@@ -2341,10 +2603,19 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
        "cudaMemcpy d_getfn_offsets (dummy)");
     ck(cudaMalloc(&d_getfn_bytes_, 1u), "cudaMalloc d_getfn_bytes (dummy)");
     ck(cudaMalloc(&d_complex_sub_desc_, sizeof(DeviceFilterDesc)), "cudaMalloc d_complex_sub_desc (dummy)");
-    // task-331.6: 1-byte dummy so the kernel's gate_component_bits pointer is
-    // always bindable; never read when capture_component is off (no-scene path).
-    ck(cudaMalloc(&d_gate_component_bits_, 1u), "cudaMalloc d_gate_component_bits (dummy)");
-    component_table_ = ComponentTable{};
+    // task-358.2: independent color-region buffers — 1-byte dummies for the
+    // no-scene fallback so the kernel color-pass pointers are always bindable
+    // (the color pass is gated by color_params.has_color_groups; a no-scene
+    // session sets this to 0 in the kernel arg block, so the dummies are never
+    // read).
+    ck(cudaMalloc(&d_color_filter_desc_, sizeof(DeviceFilterDesc)), "cudaMalloc d_color_filter_desc (dummy)");
+    ck(cudaMalloc(&d_color_bit_map_,     1u), "cudaMalloc d_color_bit_map (dummy)");
+    color_gate_table_ = ColorGateTable{};
+    class_table_      = ColorClassTable{};
+    class_count_      = 0;
+    has_color_groups_ = false;
+    color_desc_offset_ = 0u;
+    color_bits_offset_ = 0u;
     filter_desc_max_ci_ = 1u;
     filter_n_slot_      = 1u;
     filter_built_       = true;
@@ -2443,38 +2714,170 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
        "cudaMemcpy d_complex_sub_desc");
   }
 
-  // task-331.6 (raypath-color foundation): build the summand→component-bit table,
-  // keyed by the SAME gate_slot = mi * max_ci + ci layout the device filter descs
-  // use. Dense stride = kDeviceFilterMaxOrClauses (a Complex filter has ≤ that
-  // many OR-summands; simple filters use only index 0). Entry = component bit
-  // index in [0,64) or ComponentTable::kNoBit (0xFF) for over-budget/absent
-  // summands. Mirrors Metal EnsureFilterBuffers gate_component_bits build.
+  // task-358.3: Fork-C `BuildComponentTable` upload retired. The independent
+  // Design-2 colour-region build below is now the only summand→bit table on
+  // the CUDA side.
+
+  // task-358.2 (cuda-color-parity): Design-2 ColorGateTable pass. Mirrors
+  // Metal's color-region build (metal_trace_backend.mm:1357-1583) but uses
+  // INDEPENDENT device buffers (plan D1): CUDA has no Metal 30-buffer binding
+  // ceiling, so appending into the existing filter buffers carries no benefit.
+  // Delegates group formation to the single-source `GroupPlacementBySymmetry`
+  // (config/color_gate_table.hpp) — the same function the CPU (BuildColorSpec
+  // Groups) and Metal (EnsureFilterBuffers) call, so all three backends cannot
+  // silently disagree on group order (task-358.1 code-review round 2: this used
+  // to be an inline copy of the CPU algorithm, kept in sync only by comment
+  // discipline).
   //
-  // Design-2 redirect (task-engine-redirect-design2, 2026-07-08): the CPU path
-  // moved off Fork-C to placement-scoped `raypath_color` predicates
-  // (config/color_gate_table.hpp). The GPU backends deliberately stay on
-  // Fork-C `BuildComponentTable` here ("三后端掩码机制…全不碰",
-  // doc/gui-custom-spectrum-and-raypath-color.md §4.0); unifying the GPU color
-  // bit source with the CPU's is deferred to scrum-3c.
-  component_table_ = BuildComponentTable(*spec.scene);
-  {
-    const size_t stride = kDeviceFilterMaxOrClauses;
-    std::vector<uint8_t> comp_bits(n_slot * stride, ComponentTable::kNoBit);
+  // Runtime clamps (plan §3 D5): follow the 358.1 code-review lesson —
+  // group_count and local_bits are ILOG_ERROR + std::min clamped at first
+  // landing (NOT assert-only), so a release `-DNDEBUG` build never overflows
+  // color_descs / color_bit_map on placements exceeding the per-slot budget.
+  const size_t color_desc_region = n_slot * kColorMaxGroupsPerSlot;
+  const size_t color_bits_region = color_desc_region * kDeviceFilterMaxOrClauses;
+  std::vector<DeviceFilterDesc> color_descs(color_desc_region);  // zero-init
+  std::vector<uint8_t> color_bit_map(color_bits_region, ComponentTable::kNoBit);
+  bool any_color_group = false;
+  color_gate_table_ = ColorGateTable{};
+  class_table_      = ColorClassTable{};
+  class_count_      = 0;
+  color_desc_offset_ = 0u;  // CUDA uses independent buffers → structural 0
+  color_bits_offset_ = 0u;
+  if (spec.raypath_color != nullptr) {
+    const RaypathColorConfig& color_cfg = *spec.raypath_color;
+    color_gate_table_ = BuildColorGateTable(color_cfg, *spec.scene);
+    class_table_      = BuildColorClassTable(color_cfg, *spec.scene, color_gate_table_);
+    const size_t class_count_raw = class_table_.classes_.size();
+    // Runtime clamp (mirrors Metal metal_trace_backend.mm:2619-2632): the
+    // ColorGateParams::color_class_bits[]/color_class_combine[] arrays are
+    // fixed-size to kMaxColorClassesDevice. An unclamped class_count_ would
+    // let the kernel read past the array (heap-buffer-overflow in release).
+    Logger& color_logger = logger != nullptr ? *logger : GetGlobalLogger();
+    if (class_count_raw > kMaxColorClassesDevice) {
+      ILOG_ERROR(color_logger,
+                 "CudaTraceBackend::EnsureFilterBuffers: color class count {} exceeds kMaxColorClassesDevice={} — "
+                 "dropping the excess {} class(es); raise the constant (+ Metal sibling) if this config is intentional.",
+                 class_count_raw, kMaxColorClassesDevice, class_count_raw - kMaxColorClassesDevice);
+    }
+    class_count_ = std::min(class_count_raw, kMaxColorClassesDevice);
+    assert(class_count_ <= kMaxColorClassesDevice &&
+           "class_count_ exceeds kMaxColorClassesDevice after clamp — bump the constant + Metal sibling together");
+
     for (size_t mi = 0; mi < n_layers; ++mi) {
       const auto& ms = spec.scene->ms_[mi];
       for (size_t ci = 0; ci < ms.setting_.size(); ++ci) {
-        std::vector<uint8_t> bits =
-            ComponentBitsFor(component_table_, static_cast<IdType>(mi), static_cast<IdType>(ci));
-        size_t slot = mi * max_ci + ci;
-        for (size_t k = 0; k < bits.size() && k < stride; ++k) {
-          comp_bits[slot * stride + k] = bits[k];
+        const auto& setting = ms.setting_[ci];
+        ColorGatePlacement placement = ColorGatePlacementFor(
+            color_gate_table_, static_cast<IdType>(mi), setting.crystal_.id_);
+        if (placement.predicates_.empty()) {
+          continue;
+        }
+        RandomNumberGenerator color_proto_rng(0xC0FEFEEDu ^
+                                              static_cast<uint32_t>(mi * 65537u + ci));
+        Crystal proto = MakeCrystal(color_proto_rng, setting.crystal_.param_);
+        ColorPlacementGrouping grouping = GroupPlacementBySymmetry(placement);
+        const std::vector<uint8_t>& group_symmetry = grouping.group_symmetry_;
+        const std::vector<size_t>& group_of = grouping.group_of_;
+        const size_t group_count_raw = group_symmetry.size();
+        // Runtime clamp (mirrors Metal metal_trace_backend.mm:1415-1424 —
+        // 358.1 code-review Major #1). Release `-DNDEBUG` compiles out asserts.
+        if (group_count_raw > kColorMaxGroupsPerSlot) {
+          ILOG_ERROR(color_logger,
+                     "CudaTraceBackend::EnsureFilterBuffers: color placement (layer={}, crystal_id={}) produced {} "
+                     "symmetry groups, exceeding kColorMaxGroupsPerSlot={} — dropping the excess {} group(s) rather "
+                     "than overflowing color_descs / color_bit_map. Raise kColorMaxGroupsPerSlot (+ Metal sibling) "
+                     "if this config is intentional.",
+                     mi, setting.crystal_.id_, group_count_raw, kColorMaxGroupsPerSlot,
+                     group_count_raw - kColorMaxGroupsPerSlot);
+        }
+        const size_t group_count = std::min(group_count_raw, kColorMaxGroupsPerSlot);
+        assert(group_count <= kColorMaxGroupsPerSlot &&
+               "Color placement produced more symmetry groups than kColorMaxGroupsPerSlot; raise the constant + "
+               "Metal sibling together");
+        any_color_group = true;
+        const size_t gate_slot = mi * max_ci + ci;
+        for (size_t gi = 0; gi < group_count; ++gi) {
+          const uint8_t sym = group_symmetry[gi];
+          ComplexFilterParam cfp;
+          std::vector<uint8_t> local_bits;
+          for (size_t k = 0; k < placement.predicates_.size(); ++k) {
+            if (group_of[k] != gi) {
+              continue;
+            }
+            // Runtime clamp for OR-summands per color slot (same failure class
+            // as group_count above). color_bit_map reserves exactly
+            // kDeviceFilterMaxOrClauses summand slots per color_slot.
+            if (local_bits.size() >= kDeviceFilterMaxOrClauses) {
+              ILOG_ERROR(color_logger,
+                         "CudaTraceBackend::EnsureFilterBuffers: color group (layer={}, crystal_id={}, symmetry={}) "
+                         "has more than kDeviceFilterMaxOrClauses={} OR-summands — dropping the remainder rather "
+                         "than overflowing color_bit_map.",
+                         mi, setting.crystal_.id_, static_cast<int>(sym), kDeviceFilterMaxOrClauses);
+              break;
+            }
+            cfp.filters_.push_back({ { kInvalidId, placement.predicates_[k] } });
+            local_bits.push_back(placement.bits_[k]);
+          }
+          FilterConfig fc{};
+          fc.id_ = kInvalidId;
+          fc.symmetry_ = sym;
+          fc.action_ = FilterConfig::kFilterIn;
+          fc.param_ = FilterParam{ cfp };
+          DeviceFilterDesc top = detail::BuildDeviceFilterDesc(fc, proto, setting.crystal_.axis_);
+          top.sub_desc_start = static_cast<uint32_t>(all_sub_descs.size());
+          detail::BuildComplexSubDescs(cfp, proto, top.symmetry, top.sigma_a,
+                                       top.d_applicable != 0u, all_sub_descs);
+          const size_t color_slot = gate_slot * kColorMaxGroupsPerSlot + gi;
+          assert(color_slot < color_desc_region);
+          color_descs[color_slot] = top;
+          assert(local_bits.size() <= kDeviceFilterMaxOrClauses);
+          const size_t bit_base = color_slot * kDeviceFilterMaxOrClauses;
+          for (size_t s = 0; s < local_bits.size(); ++s) {
+            color_bit_map[bit_base + s] = local_bits[s];
+          }
         }
       }
     }
-    ck(cudaMalloc(&d_gate_component_bits_, comp_bits.size() * sizeof(uint8_t)), "cudaMalloc d_gate_component_bits");
-    ck(cudaMemcpy(d_gate_component_bits_, comp_bits.data(), comp_bits.size() * sizeof(uint8_t),
-                  cudaMemcpyHostToDevice),
-       "cudaMemcpy d_gate_component_bits");
+  }
+  has_color_groups_ = any_color_group;
+
+  // Re-upload the (possibly grown) Complex sub-desc buffer AFTER the color pass:
+  // color groups append additional sub-descs into all_sub_descs (same vector the
+  // physical-filter loop populated above), so the previous upload at "Upload
+  // Complex sub-descs" is stale if any_color_group. Redo the malloc + memcpy so
+  // both physical and color slots resolve their sub-descs correctly. When the
+  // color pass added nothing, the vector is unchanged and re-uploading is a
+  // no-op waste — but the check is cheaper than diverging code paths.
+  if (any_color_group) {
+    const size_t sub_desc_bytes_v2 = all_sub_descs.size() * sizeof(DeviceFilterDesc);
+    const size_t sub_alloc_bytes_v2 = std::max<size_t>(sub_desc_bytes_v2, sizeof(DeviceFilterDesc));
+    cudaFree(d_complex_sub_desc_);
+    d_complex_sub_desc_ = nullptr;
+    ck(cudaMalloc(&d_complex_sub_desc_, sub_alloc_bytes_v2), "cudaMalloc d_complex_sub_desc (color rebuild)");
+    if (sub_desc_bytes_v2 > 0) {
+      ck(cudaMemcpy(d_complex_sub_desc_, all_sub_descs.data(), sub_desc_bytes_v2, cudaMemcpyHostToDevice),
+         "cudaMemcpy d_complex_sub_desc (color rebuild)");
+    }
+  }
+
+  // Upload the independent color-region buffers. Always allocate at least 1
+  // element so the kernel pointer stays bindable even when has_color_groups==0
+  // (matches the physical-region dummy discipline above).
+  {
+    const size_t desc_bytes  = std::max<size_t>(color_desc_region * sizeof(DeviceFilterDesc), sizeof(DeviceFilterDesc));
+    const size_t bits_bytes  = std::max<size_t>(color_bits_region * sizeof(uint8_t), 1u);
+    ck(cudaMalloc(&d_color_filter_desc_, desc_bytes), "cudaMalloc d_color_filter_desc");
+    ck(cudaMalloc(&d_color_bit_map_,     bits_bytes), "cudaMalloc d_color_bit_map");
+    if (color_desc_region > 0) {
+      ck(cudaMemcpy(d_color_filter_desc_, color_descs.data(), color_desc_region * sizeof(DeviceFilterDesc),
+                    cudaMemcpyHostToDevice),
+         "cudaMemcpy d_color_filter_desc");
+    }
+    if (color_bits_region > 0) {
+      ck(cudaMemcpy(d_color_bit_map_, color_bit_map.data(), color_bits_region * sizeof(uint8_t),
+                    cudaMemcpyHostToDevice),
+         "cudaMemcpy d_color_bit_map");
+    }
   }
 
   // Capture final-layer host filter state PER-CI — DrainExits applies FilterSpec
@@ -2693,8 +3096,8 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     // info is captured for DrainExits. Idempotent across BeginSession calls.
     impl_->EnsureFilterBuffers(spec);
 
-    // task-331.6: reset the per-session component-mask capture accumulators
-    // (component_table_ is rebuilt inside EnsureFilterBuffers above).
+    // task-358.3: reset the per-session ray-mask capture accumulators (renamed
+    // from component-mask; Fork-C ComponentTable retired).
     impl_->captured_masks_.clear();
     impl_->captured_ws_.clear();
 
@@ -2767,6 +3170,14 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
       impl_->alloc_xyz_w_ = impl_->img_w_;
       impl_->alloc_xyz_h_ = impl_->img_h_;
     }
+
+    // task-358.2 Step 4 (AC3 device-side Y-lane accumulation). Sized against
+    // class_count_ (set inside EnsureFilterBuffers above) and current
+    // resolution. Zeroed per-batch (EnsureClassLaneBuf memset) so the drain
+    // window starts clean regardless of prior batches. When class_count_==0
+    // this allocates a 4B dummy (kernel branch skip means it is never read).
+    // Mirrors Metal BeginSession's EnsureClassLaneBuf call (metal:2647).
+    impl_->EnsureClassLaneBuf(static_cast<int>(impl_->img_w_), static_cast<int>(impl_->img_h_));
 
     // Per-ray rotation matrix device buffer (cont_cap_ × 9) is allocated
     // lazily in EnsureSessionBuffers, not here — n_roots is unknown until the
@@ -2902,7 +3313,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
   //     sole initializer for the first layer.
   //   - Reset the capture-ring counter so each layer's emits append from 0; the
   //     per-layer drain after the ci-loop reads exactly this layer's count.
-  if (impl_->capture_component_) {
+  if (impl_->capture_ray_mask_) {
     impl_->EnsureComponentCaptureBuffers(ComputeContCap(n, impl_->scene_->max_hits_));
     if (first_ms && impl_->d_root_component_ != nullptr) {
       ck_reset(cudaMemset(impl_->d_root_component_, 0, n * sizeof(unsigned long long)),
@@ -3123,6 +3534,22 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
                                impl_->probe_stream_ == RngProbeStream::kGateFinal))
                                  ? impl_->d_rng_probe_
                                  : nullptr;
+    // task-358.2 (cuda-color-parity): pack Design-2 color-gate hot-path knobs
+    // into the ColorGateParams POD. has_color_groups==0 → kernel single branch
+    // skip (AC4 zero-cost). Per-class Y-lane fields (color_class_count /
+    // color_class_bits[] / color_class_combine[]) copied from class_table_
+    // (built once per scene in EnsureFilterBuffers). See ColorGateParams
+    // comment for field semantics + the layout static_assert.
+    ColorGateParams color_params{};
+    color_params.has_color_groups   = impl_->has_color_groups_ ? 1u : 0u;
+    color_params.color_desc_offset  = impl_->color_desc_offset_;  // 0 in CUDA's independent-buffer layout
+    color_params.color_bits_offset  = impl_->color_bits_offset_;
+    color_params.color_class_count  = static_cast<uint32_t>(impl_->class_count_);
+    for (size_t c = 0; c < impl_->class_count_; ++c) {
+      const auto& cls = impl_->class_table_.classes_[c];
+      color_params.color_class_bits[c]    = cls.member_bits_;
+      color_params.color_class_combine[c] = (cls.combine_ == ColorClassCombine::kAll) ? 1u : 0u;
+    }
     trace_single_ms_kernel<<<grid, 256, 0, impl_->stream_>>>(
         impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
         cin, geom_poly_n, geom_poly_d,
@@ -3155,19 +3582,27 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
         gate_split.hi,
         trace_probe_arg,
         static_cast<uint32_t>(impl_->probe_ci_start_ + probe_win_off),
-        // task-331.6 (raypath-color foundation) component-mask carry + capture.
-        // d_root_component read always (carried load); d_cont_component written
-        // only on ms_mode==1 (nullptr on final, mirroring d_cont_wl_idx). The
-        // capture ring + gate bits are bound unconditionally; the kernel's
-        // produce/capture branch is gated by capture_component (0 in production).
+        // task-358.3 (renamed from capture_component after Fork-C retirement)
+        // ray-mask carry + capture. d_root_component read always (carried
+        // load); d_cont_component written only on ms_mode==1 (nullptr on final,
+        // mirroring d_cont_wl_idx). The capture ring is bound unconditionally;
+        // the kernel's append branch is gated by capture_ray_mask (0 in
+        // production).
         impl_->d_root_component_,
         ms_mode == 1u ? impl_->d_cont_component_[out_slot] : nullptr,
-        impl_->d_gate_component_bits_,
         impl_->d_exit_comp_mask_,
         impl_->d_exit_comp_w_,
         impl_->d_exit_comp_cnt_,
         static_cast<uint32_t>(impl_->exit_comp_cap_),
-        impl_->capture_component_ ? 1u : 0u);
+        impl_->capture_ray_mask_ ? 1u : 0u,
+        // task-358.2 (cuda-color-parity): Design-2 color-pass args (POD by value
+        // + independent color descriptors + per-class Y-lane buffer). Zero-cost
+        // when has_color_groups_==false / class_count_==0: the kernel branches
+        // skip the entire pass, dummies never read.
+        color_params,
+        impl_->d_color_filter_desc_,
+        impl_->d_color_bit_map_,
+        impl_->d_class_lane_buf_);
     ck_reset(cudaPeekAtLastError(), "kernel launch");
     // S2: ev_end_kernel_ recorded inside the loop captures real kernel time.
     // The original outside-loop placement (right next to ev_end_h2d_) collapsed
@@ -3189,12 +3624,13 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
   cudaEventRecord(impl_->ev_end_d2h_, impl_->stream_);
   cudaEventSynchronize(impl_->ev_end_d2h_);
 
-  // task-331.6 (test-only): drain this layer's component-mask capture ring into
-  // the session accumulators. All trace kernels are waited above (the 4B
-  // readback + event sync), so the counter + buffers are coherent. Clamp to
-  // capacity (the kernel's `cslot < comp_cap` guard drops overflow — assert-free
-  // like the cont ring). Accumulates across MS layers into captured_masks_/ws_.
-  if (impl_->capture_component_ && impl_->d_exit_comp_cnt_ != nullptr) {
+  // task-358.3 (test-only, renamed from component-mask capture ring): drain
+  // this layer's ray-mask capture ring into the session accumulators. All trace
+  // kernels are waited above (the 4B readback + event sync), so the counter +
+  // buffers are coherent. Clamp to capacity (the kernel's `cslot < comp_cap`
+  // guard drops overflow — assert-free like the cont ring). Accumulates across
+  // MS layers into captured_masks_/ws_.
+  if (impl_->capture_ray_mask_ && impl_->d_exit_comp_cnt_ != nullptr) {
     uint32_t n_cap = 0u;
     ck_reset(cudaMemcpy(&n_cap, impl_->d_exit_comp_cnt_, sizeof(uint32_t), cudaMemcpyDeviceToHost),
              "component capture count readback");
@@ -3519,17 +3955,61 @@ void CudaTraceBackend::EndSession() {
 // throughput to 0.10–0.12× legacy CPU.
 bool CudaTraceBackend::HasDeviceXyzAccum() const { return true; }
 
-// task-331.6 (test-only) component-mask parity. Mirrors
-// MetalTraceBackend::SetCaptureComponent / ReadbackComponentCapture.
-void CudaTraceBackend::SetCaptureComponent(bool enable) {
+// task-358.3 (test-only, renamed from SetCaptureComponent / ReadbackComponent
+// Capture after Fork-C retirement). Mirrors MetalTraceBackend::SetCaptureRay
+// Mask / ReadbackRayMask.
+void CudaTraceBackend::SetCaptureRayMask(bool enable) {
   // Must be set before BeginSession — the capture-ring sizing + per-layer
   // memset/reset in TraceLayer read this flag.
-  impl_->capture_component_ = enable;
+  impl_->capture_ray_mask_ = enable;
 }
 
-void CudaTraceBackend::ReadbackComponentCapture(std::vector<uint64_t>& masks, std::vector<float>& weights) const {
+void CudaTraceBackend::ReadbackRayMask(std::vector<uint64_t>& masks, std::vector<float>& weights) const {
   masks = impl_->captured_masks_;
   weights = impl_->captured_ws_;
+}
+
+// task-358.2 Step 4 (AC3 device-side per-color-class Y-lane accumulation).
+// Mirrors MetalTraceBackend::ReadbackClassLanes (metal_trace_backend.mm:3104-
+// 3138): D2H copy of the flattened `class_count * W * H` accumulator + a
+// device-side memset so the next window starts clean. Called from the
+// simulator right after ReadbackXyzAccum. Guards on the buffer being
+// allocated + class_count_ non-zero — the base virtual returns empty when the
+// session carries no raypath_color config (AC4 zero-cost).
+void CudaTraceBackend::ReadbackClassLanes(std::vector<float>& lane_data, size_t& class_count) {
+  class_count = impl_->class_count_;
+  if (impl_->class_count_ == 0 || impl_->d_class_lane_buf_ == nullptr) {
+    lane_data.clear();
+    return;
+  }
+  // Same wait discipline as Metal / ReadbackXyzAccum — the trace kernel's
+  // atomicAdd writes into d_class_lane_buf_ must finalize before the D2H copy.
+  cudaDeviceSynchronize();
+  const size_t pix = static_cast<size_t>(impl_->alloc_xyz_w_) * static_cast<size_t>(impl_->alloc_xyz_h_);
+  const size_t total = impl_->class_count_ * pix;
+  // Under-allocation guard (release-safe, mirrors ReadbackXyzAccum's Bug-1
+  // fix): d_class_lane_buf_ sizing is driven by EnsureClassLaneBuf(img_w,
+  // img_h) at BeginSession, but if a caller resizes render dims mid-window
+  // without a full teardown, the buffer would be smaller than `total`.
+  // Throwing (rather than asserting) surfaces the mismatch under -DNDEBUG.
+  if (total > impl_->class_lane_pix_capacity_) {
+    Logger& log = impl_->logger != nullptr ? *impl_->logger : GetGlobalLogger();
+    ILOG_ERROR(log,
+               "CudaTraceBackend::ReadbackClassLanes: d_class_lane_buf_ under-allocated (capacity {} floats, requested "
+               "class_count {} × W×H {} = {} floats)",
+               impl_->class_lane_pix_capacity_, impl_->class_count_, pix, total);
+    assert(false && "d_class_lane_buf_ under-allocated for the current class_count * W * H");
+    lane_data.clear();
+    class_count = 0;
+    return;
+  }
+  lane_data.resize(total);
+  CheckCuda(cudaMemcpy(lane_data.data(), impl_->d_class_lane_buf_, total * sizeof(float),
+                       cudaMemcpyDeviceToHost),
+            "ReadbackClassLanes D2H d_class_lane_buf");
+  // Zero for the next window (mirror Metal std::memset — CUDA uses cudaMemset).
+  CheckCuda(cudaMemset(impl_->d_class_lane_buf_, 0, total * sizeof(float)),
+            "ReadbackClassLanes cudaMemset d_class_lane_buf");
 }
 
 // scrum-312 third-clock drain: copies the PERSISTENT cross-batch d_xyz_buf_ +

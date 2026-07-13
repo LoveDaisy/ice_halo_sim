@@ -393,26 +393,12 @@ std::vector<ColorSpecGroupOwned> BuildColorSpecGroups(const ColorGatePlacement& 
     return groups;  // AC3 zero-cost fast path.
   }
   size_t n = placement.predicates_.size();
-  // In-order group formation: first pass records each distinct symmetry value's
-  // group index (first-occurrence order). Second pass populates each group's
-  // ComplexFilterParam with its predicates + parallel bits vector.
-  std::vector<size_t> group_of(n, 0);
-  std::vector<uint8_t> group_symmetry;
-  group_symmetry.reserve(n);
-  for (size_t k = 0; k < n; ++k) {
-    uint8_t sym = placement.symmetries_[k];
-    size_t gi = group_symmetry.size();
-    for (size_t i = 0; i < group_symmetry.size(); ++i) {
-      if (group_symmetry[i] == sym) {
-        gi = i;
-        break;
-      }
-    }
-    if (gi == group_symmetry.size()) {
-      group_symmetry.push_back(sym);
-    }
-    group_of[k] = gi;
-  }
+  // Group formation delegated to the shared authority (GroupPlacementBySymmetry,
+  // color_gate_table.hpp) so this CPU path and Metal's EnsureFilterBuffers can
+  // never silently disagree on group order (task-358.1 code-review round 2).
+  ColorPlacementGrouping grouping = GroupPlacementBySymmetry(placement);
+  const std::vector<size_t>& group_of = grouping.group_of_;
+  const std::vector<uint8_t>& group_symmetry = grouping.group_symmetry_;
 
   size_t group_count = group_symmetry.size();
   std::vector<ComplexFilterParam> cfps(group_count);

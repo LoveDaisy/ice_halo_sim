@@ -104,18 +104,27 @@ class CudaTraceBackend : public TraceBackend {
   // to legacy CPU via simulator backend dispatch.
   bool HasDeviceXyzAccum() const override;
   void ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight) override;
-  // [TEST-ONLY] task-331.6 (raypath-color foundation) component-mask parity.
-  // CUDA sibling of MetalTraceBackend::SetCaptureComponent /
-  // ReadbackComponentCapture. SetCaptureComponent(true) makes the emit gate
-  // produce per-summand component bits, OR them into each ray's carried uint64
-  // mask (carried across MS layers on device via d_root_component_ /
-  // d_cont_component_), and append (mask, weight) of every emitted (mid + final)
-  // exit ray to a per-session capture ring. Must be called before BeginSession.
-  // Default false → zero production overhead (the gate skips all produce/capture
-  // work; only the all-zero carried mask propagates). ReadbackComponentCapture
-  // returns the accumulated (mask, weight) pairs for CPU parity comparison.
-  void SetCaptureComponent(bool enable);
-  void ReadbackComponentCapture(std::vector<uint64_t>& masks, std::vector<float>& weights) const;
+  // task-358.2 Step 4 (AC3 device-side Y-lane accumulation). CUDA override of
+  // the base virtual: copies the flattened `class_count * W * H` atomic-float
+  // buffer to host and zeros the device side for the next window. Called from
+  // the simulator right after ReadbackXyzAccum (same drain cadence). No-op
+  // (lane_data empty, class_count=0) when the session carries no
+  // raypath_color config — the RenderConsumer then falls back to its host-side
+  // rule-lane accumulation path (AC4 zero-cost).
+  void ReadbackClassLanes(std::vector<float>& lane_data, size_t& class_count) override;
+  // [TEST-ONLY] task-358.3 (renamed from SetCaptureComponent / ReadbackComponent
+  // Capture after Fork-C retirement, closing blueprint §6(c) decoupling): the
+  // ray's per-layer `this_mask` is now purely Design-2 colour bits (Fork-C
+  // physical-bit produce branch removed). CUDA sibling of MetalTraceBackend::
+  // SetCaptureRayMask / ReadbackRayMask. SetCaptureRayMask(true) enables the
+  // per-session capture ring — the emit gate appends (this_mask, weight) of
+  // every emitted (mid + final) exit ray, and cross-layer carry stays on
+  // regardless (via d_root_component_ / d_cont_component_). Must be called
+  // before BeginSession. Default false → the append branch is skipped
+  // (production zero-cost). ReadbackRayMask returns the accumulated (mask,
+  // weight) pairs for CPU parity comparison.
+  void SetCaptureRayMask(bool enable);
+  void ReadbackRayMask(std::vector<uint64_t>& masks, std::vector<float>& weights) const;
   // scrum-312: CUDA opts into third-clock drain (persistent device accumulator +
   // display-cadence readback) to shed the per-batch synchronous D2H readback tax.
   bool SupportsThirdClockDrain() const override { return true; }

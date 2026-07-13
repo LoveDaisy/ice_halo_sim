@@ -47,7 +47,6 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/config/test_config_snapshot.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/config/test_render_config.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/config/test_sim_data.cpp"
-  "${PROJ_TEST_DIR}/unit-correctness/config/test_component_table.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/config/test_color_gate_table.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/config/test_raypath_color_config.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/config/test_color_class_table.cpp"

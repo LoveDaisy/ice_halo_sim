@@ -456,6 +456,30 @@ class TraceBackend {
     landed_weight = 0.0f;
   }
 
+  // task-358.1 Step 4 (AC3 device-side per-color-class Y-lane accumulation).
+  //
+  // Backends that also fuse per-color-class rule-lane accumulation on device
+  // (currently Metal, CUDA to follow in 358.2) copy the flattened
+  // `class_count * W * H` atomic-float buffer here and reset the device side
+  // for the next window. Called by the simulator right after ReadbackXyzAccum
+  // (same drain cadence), so the caller MUST already have waited on any
+  // outstanding device work (mirrored guarantee).
+  //
+  // `lane_data` is resized to `class_count * W * H` on populate; when the
+  // session carries no raypath_color config (`class_count == 0` = default),
+  // the base impl leaves it empty and the consumer's ConsumeDeviceFused path
+  // stays byte-identical to pre-358.1 (AC4 zero-cost). Layout inside the
+  // vector matches the MSL kernel's write layout:
+  //     lane_data[c * (W * H) + (py * W + px)]
+  //
+  // Default: no-op (CPU stays on the per-ray outgoing_component_ path;
+  // CUDA/Metal-without-lane-support fall back to the RenderConsumer host-side
+  // rule-lane accumulation).
+  virtual void ReadbackClassLanes(std::vector<float>& lane_data, size_t& class_count) {
+    lane_data.clear();
+    class_count = 0;
+  }
+
   // scrum-312 (third-clock drain): true = the device XYZ accumulator PERSISTS
   // across per-batch BeginSession/EndSession cycles (BeginSession does not zero
   // it), so the simulator may decouple readback from the trace clock and drain

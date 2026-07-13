@@ -64,6 +64,16 @@ constant uchar kDevSymD    = 4;
 constant int   kDevFnPeriodHex = 6;
 constant uint  kDevRecCap = 64;  // kMaxHits
 
+// task-358.1 Step 4: MUST match host kMaxColorClassesDevice
+// (metal_trace_backend.mm). Previously this was a bare `16` literal in
+// KernelParams below, referenced by a comment claiming a named
+// `kMaxColorClassesDeviceMsl` sibling that didn't actually exist — code-
+// review-01 Suggestion #2 flagged the dangling reference. This is now that
+// named sibling; raising the cap = bump both this and kMaxColorClassesDevice
+// together (no compiler can check MSL vs. C++ across the two languages, so
+// the sync is still comment/discipline-enforced, just against a real symbol).
+constant uint  kMaxColorClassesDeviceMsl = 16;
+
 // --- ReduceBuffer (E4 spike, byte-identical to lumice::detail::ReduceBuffer) -
 
 static inline void PCanonicalShiftInPlace_dev(thread uchar* data, uint size) {
@@ -452,12 +462,43 @@ struct KernelParams {
   // host CPU (scatter_accum.hpp) and CUDA. Replaces the former loose az0 /
   // proj_type / r_scale / max_abs_dz fields.
   lm_proj::ProjParams proj;
-  // task-331.5 (raypath-color foundation): when non-zero, the emit gate
-  // produces per-summand component bits, OR's them into the ray's carried
-  // uint64 mask, and appends (mask, weight) to the capture buffers. 0 in
-  // production (no consumer yet) → the gate skips all component work and only
-  // propagates the (all-zero) carried mask through cont_component. Test-only.
-  uint capture_component;
+  // task-358.3 (renamed from capture_component after Fork-C retirement): when
+  // non-zero, the emit gate appends (this_mask, weight) of every emitted ray
+  // to the capture ring. `this_mask` is now purely Design-2 colour bits (the
+  // Fork-C physical-bit produce branch has been deleted). 0 in production →
+  // the append branch is skipped; carried-mask cross-layer flow stays on.
+  // Test-only.
+  uint capture_ray_mask;
+  // task-358.1 (metal-color-parity, Design-2 ColorGateTable migration):
+  //   has_color_groups        : 0 → skip color pass entirely (AC4 zero-cost).
+  //                             1 → run the color pass (production path when
+  //                             raypath_color is configured).
+  //   color_desc_offset       : gate_filter_desc index where the color region
+  //                             starts (= physical n_slot). Access:
+  //                               color_desc[color_slot] =
+  //                                 gate_filter_desc[color_desc_offset +
+  //                                                  gate_slot * color_max_groups_per_slot + g]
+  //   color_bits_offset       : gate_component_bits index where the color
+  //                             bit-map region starts (= n_slot * K, where K =
+  //                             kDeviceFilterMaxOrClauses).
+  //   color_max_groups_per_slot: per-slot group budget (host kColorMaxGroupsPer
+  //                             Slot; MUST match `kColorMaxGroupsPerSlot`
+  //                             sibling below).
+  uint has_color_groups;
+  uint color_desc_offset;
+  uint color_bits_offset;
+  uint color_max_groups_per_slot;
+  // task-358.1 Step 4 (AC3 device-side Y-lane accumulation):
+  //   color_class_count   : number of active color classes (0 → skip lane
+  //                         accumulation, class_lane_buf is a 4-byte dummy).
+  //   color_class_bits[]  : per-class OR-union of member component bits (matches
+  //                         host ColorClass.member_bits_; ulong for MSL uint64).
+  //   color_class_combine[]: per-class combinator; 0 = kAny ((mask & bits) != 0),
+  //                         1 = kAll ((mask & bits) == bits).
+  // See host kMaxColorClassesDevice; MUST match kMaxColorClassesDeviceMsl above.
+  uint  color_class_count;
+  ulong color_class_bits[kMaxColorClassesDeviceMsl];
+  uchar color_class_combine[kMaxColorClassesDeviceMsl];
 };
 
 kernel void trace_layer_kernel(
@@ -531,6 +572,15 @@ kernel void trace_layer_kernel(
     device ulong*                  exit_comp_mask      [[buffer(22)]],
     device float*                  exit_comp_w         [[buffer(23)]],
     device atomic_uint*            exit_comp_cnt       [[buffer(28)]],
+    // task-358.1 Step 4 (AC3 device-side Y-lane accumulation): per-color-class
+    // atomic-float accumulator. Layout is column-major-by-class:
+    //   class_lane_buf[class_idx * (img_w * img_h) + (py * img_w + px)]
+    // The host allocates class_count * W * H atomic_floats (or a 4-byte dummy
+    // when class_count==0 so this binding stays non-nil). Each emit adds
+    // cmf_y * cw to every class whose predicate matches the ray's this_mask;
+    // read back + folded into RenderConsumer::lane_y_ each drain window. See
+    // plan §4 Step 4 for the accumulation semantics + rollback contract.
+    device atomic_float*           class_lane_buf      [[buffer(30)]],
     uint tid [[thread_position_in_grid]]) {
   if (tid >= prm.num_rays) { return; }
   // task-331.5: load the carried component mask once (constant for the whole
@@ -685,21 +735,39 @@ kernel void trace_layer_kernel(
               gate_getfn_bytes, gate_getfn_offsets,
               gate_slot, ray_dir_w, prm.crystal_config_id);
           if (filter_pass) {
-            // task-331.5: produce this layer's component bits for the surviving
-            // ray and OR them into the carried mask (mirror CollectData
-            // simulator.cpp:500-519). Gated by capture_component so production
-            // (no consumer) pays only the carried-mask copy below.
+            // task-358.3: Fork-C physical-bits produce branch removed. `this_mask`
+            // now starts from the carried mask and is OR-accumulated by ONLY the
+            // Design-2 color pass below (production truth). The append-to-capture
+            // branch further down is gated by capture_ray_mask (test-only).
             ulong this_mask = carried_component;
-            if (prm.capture_component != 0u) {
-              bool matched_c = false;
-              uint smask = DeviceFilterSummandMask(
-                  gate_filter_desc[gate_slot], gate_sub_desc_buf,
-                  path_local, gate_len, gate_getfn_bytes, gate_getfn_offsets,
-                  gate_slot, ray_dir_w, prm.crystal_config_id, &matched_c);
-              for (uint k = 0u; k < kDevComponentStride; k++) {
-                if ((smask & (1u << k)) != 0u) {
-                  uchar bit = gate_component_bits[gate_slot * kDevComponentStride + k];
-                  if (bit < 64u) { this_mask |= (1ul << (ulong)bit); }
+            // task-358.1 (metal-color-parity, Design-2 ColorGateTable):
+            // production per-raypath color pass. Gated by prm.has_color_groups
+            // so no raypath_color session → single branch skip (AC4 zero-cost).
+            // Each color group is a synthesized ComplexFilterParam whose
+            // OR-summands correspond to placement.predicates_; the summand
+            // mask (bit k = "summand k matched") is looked up against the
+            // color-bit map to build the OR-accumulated component mask.
+            // Mirrors CPU simulator.cpp CollectData:519-543 semantics.
+            if (prm.has_color_groups != 0u) {
+              for (uint g = 0u; g < prm.color_max_groups_per_slot; g++) {
+                uint color_slot_idx = gate_slot * prm.color_max_groups_per_slot + g;
+                // Empty groups are stored as zero-init DeviceFilterDesc
+                // (type=None); DeviceFilterSummandMask returns mask=0 for
+                // that shape → the inner loop is a no-op. No extra branch
+                // needed here.
+                bool matched_col = false;
+                uint c_smask = DeviceFilterSummandMask(
+                    gate_filter_desc[prm.color_desc_offset + color_slot_idx],
+                    gate_sub_desc_buf,
+                    path_local, gate_len, gate_getfn_bytes, gate_getfn_offsets,
+                    gate_slot, ray_dir_w, prm.crystal_config_id, &matched_col);
+                for (uint k = 0u; k < kDevComponentStride; k++) {
+                  if ((c_smask & (1u << k)) != 0u) {
+                    uchar bit = gate_component_bits[
+                        prm.color_bits_offset +
+                        color_slot_idx * kDevComponentStride + k];
+                    if (bit < 64u) { this_mask |= (1ul << (ulong)bit); }
+                  }
                 }
               }
             }
@@ -751,16 +819,38 @@ kernel void trace_layer_kernel(
                 int px_m = pr_m.hits[hi].px;
                 int py_m = pr_m.hits[hi].py;
                 if (px_m >= 0 && px_m < iw_i && py_m >= 0 && py_m < ih_i) {
-                  AccumXyzToPixel(image, uint(py_m) * prm.img_w + uint(px_m),
-                                  cmf_x, cmf_y, cmf_z, cw);
+                  uint pix_m = uint(py_m) * prm.img_w + uint(px_m);
+                  AccumXyzToPixel(image, pix_m, cmf_x, cmf_y, cmf_z, cw);
                   if (pr_m.hits[hi].bump_landed) {
                     atomic_fetch_add_explicit(landed_weight, cw, memory_order_relaxed);
                   }
+                  // task-358.1 Step 4 (AC3 device-side Y-lane accumulation):
+                  // fan this ray's Y (cmf_y * cw) into each active color class
+                  // whose predicate matches this_mask. Mirrors CPU
+                  // RenderConsumer::AccumulateColorClassLanes semantics.
+                  // Zero-cost when color_class_count == 0 (single branch skip).
+                  if (prm.color_class_count != 0u) {
+                    uint pix_stride = prm.img_w * prm.img_h;
+                    float y_val = cmf_y * cw;
+                    for (uint c = 0u; c < prm.color_class_count; c++) {
+                      ulong bits = prm.color_class_bits[c];
+                      if (bits == 0ul) { continue; }
+                      ulong matched = this_mask & bits;
+                      bool satisfied = (prm.color_class_combine[c] == 0u)
+                                           ? (matched != 0ul)
+                                           : (matched == bits);
+                      if (satisfied) {
+                        atomic_fetch_add_explicit(&class_lane_buf[c * pix_stride + pix_m],
+                                                  y_val, memory_order_relaxed);
+                      }
+                    }
+                  }
                 }
               }
-              // task-331.5: capture this emitted (mid-exit) ray's mask+weight
-              // for host-side CPU parity (per-mask-value histogram).
-              if (prm.capture_component != 0u) {
+              // task-358.3 (renamed from capture_component): append this
+              // emitted ray's (this_mask, weight) to the capture ring for the
+              // host-side CPU parity harness.
+              if (prm.capture_ray_mask != 0u) {
                 uint cslot = atomic_fetch_add_explicit(exit_comp_cnt, 1u, memory_order_relaxed);
                 if (cslot < prm.out_cap) {
                   exit_comp_mask[cslot] = this_mask;
@@ -808,20 +898,40 @@ kernel void trace_layer_kernel(
           gate_stream_f.slot       = 0u;
           bool prob_drop_f = (pcg_uniform(gate_stream_f) < prm.ms_prob);
           if (filter_pass_f && !prob_drop_f) {
-            // task-331.5: final-layer component bits (mirror ms_mode==1 gate).
+            // task-358.3: Fork-C physical-bits produce branch removed (see
+            // ms_mode==1 mirror above). `this_mask_f` starts from the carried
+            // mask; only the Design-2 color pass below accumulates into it.
             ulong this_mask_f = carried_component;
-            if (prm.capture_component != 0u) {
-              bool matched_cf = false;
-              uint smask_f = DeviceFilterSummandMask(
-                  gate_filter_desc[gate_slot_f], gate_sub_desc_buf,
-                  path_local_f, gate_len_f, gate_getfn_bytes, gate_getfn_offsets,
-                  gate_slot_f, ray_dir_w_f, prm.crystal_config_id, &matched_cf);
-              for (uint k = 0u; k < kDevComponentStride; k++) {
-                if ((smask_f & (1u << k)) != 0u) {
-                  uchar bit = gate_component_bits[gate_slot_f * kDevComponentStride + k];
-                  if (bit < 64u) { this_mask_f |= (1ul << (ulong)bit); }
+            // task-358.1: final-layer Design-2 color pass (mirror of the
+            // ms_mode==1 color pass above). MUST stay symmetric with the
+            // mid-layer branch — this_mask_f vs this_mask, gate_slot_f vs
+            // gate_slot, path_local_f vs path_local, ray_dir_w_f vs ray_dir_w.
+            // A silent asymmetry here re-introduces the exact class of bug the
+            // two landmine-guard tests protect against.
+            if (prm.has_color_groups != 0u) {
+              for (uint g = 0u; g < prm.color_max_groups_per_slot; g++) {
+                uint color_slot_idx_f = gate_slot_f * prm.color_max_groups_per_slot + g;
+                bool matched_col_f = false;
+                uint c_smask_f = DeviceFilterSummandMask(
+                    gate_filter_desc[prm.color_desc_offset + color_slot_idx_f],
+                    gate_sub_desc_buf,
+                    path_local_f, gate_len_f, gate_getfn_bytes, gate_getfn_offsets,
+                    gate_slot_f, ray_dir_w_f, prm.crystal_config_id, &matched_col_f);
+                for (uint k = 0u; k < kDevComponentStride; k++) {
+                  if ((c_smask_f & (1u << k)) != 0u) {
+                    uchar bit = gate_component_bits[
+                        prm.color_bits_offset +
+                        color_slot_idx_f * kDevComponentStride + k];
+                    if (bit < 64u) { this_mask_f |= (1ul << (ulong)bit); }
+                  }
                 }
               }
+            }
+            // task-358.3 (renamed from capture_component): final-layer capture-
+            // ring append. `this_mask_f` now carries only Design-2 colour bits
+            // (Fork-C physical-bit branch retired); the append itself is still
+            // gated on capture_ray_mask so production dispatches skip it.
+            if (prm.capture_ray_mask != 0u) {
               uint cslot = atomic_fetch_add_explicit(exit_comp_cnt, 1u, memory_order_relaxed);
               if (cslot < prm.out_cap) {
                 exit_comp_mask[cslot] = this_mask_f;
@@ -840,12 +950,35 @@ kernel void trace_layer_kernel(
               int px_f = pr_f.hits[hi].px;
               int py_f = pr_f.hits[hi].py;
               if (px_f >= 0 && px_f < iw_i && py_f >= 0 && py_f < ih_i) {
-                uint pix = (uint(py_f) * prm.img_w + uint(px_f)) * 3u;
+                uint pix_f_lin = uint(py_f) * prm.img_w + uint(px_f);
+                uint pix = pix_f_lin * 3u;
                 atomic_fetch_add_explicit(&image[pix + 0u], cmf_x * cw, memory_order_relaxed);
                 atomic_fetch_add_explicit(&image[pix + 1u], cmf_y * cw, memory_order_relaxed);
                 atomic_fetch_add_explicit(&image[pix + 2u], cmf_z * cw, memory_order_relaxed);
                 if (pr_f.hits[hi].bump_landed) {
                   atomic_fetch_add_explicit(landed_weight, cw, memory_order_relaxed);
+                }
+                // task-358.1 Step 4: final-layer per-class Y-lane accumulation.
+                // MUST stay symmetric with the mid-exit path above (this_mask_f
+                // vs this_mask, pix_f_lin vs pix_m). Includes overlap-ring hits
+                // (bump_landed=false) to match CPU RenderConsumer's Pass 2
+                // AccumulateColorClassLanes semantics — overlap contributes to
+                // lane Y without contributing to landed_weight.
+                if (prm.color_class_count != 0u) {
+                  uint pix_stride = prm.img_w * prm.img_h;
+                  float y_val = cmf_y * cw;
+                  for (uint c = 0u; c < prm.color_class_count; c++) {
+                    ulong bits = prm.color_class_bits[c];
+                    if (bits == 0ul) { continue; }
+                    ulong matched = this_mask_f & bits;
+                    bool satisfied = (prm.color_class_combine[c] == 0u)
+                                         ? (matched != 0ul)
+                                         : (matched == bits);
+                    if (satisfied) {
+                      atomic_fetch_add_explicit(&class_lane_buf[c * pix_stride + pix_f_lin],
+                                                y_val, memory_order_relaxed);
+                    }
+                  }
                 }
               }
             }

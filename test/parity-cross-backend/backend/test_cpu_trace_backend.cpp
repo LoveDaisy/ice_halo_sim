@@ -7,7 +7,6 @@
 #include <vector>
 
 #include "config/color_gate_table.hpp"
-#include "config/component_table.hpp"
 #include "config/crystal_config.hpp"
 #include "config/filter_config.hpp"
 #include "config/light_config.hpp"
