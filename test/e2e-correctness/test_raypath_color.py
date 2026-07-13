@@ -153,6 +153,59 @@ class TestRaypathColor(LumiceTestCase):
                 f"composite PSNR {psnr:.1f} dB < threshold {PSNR_THRESHOLD} dB",
             )
 
+    def test_metal_device_lane_multibatch_density(self):
+        """explore-359 regression: the device per-color-class Y-lane accumulator
+        (class_lane_buf_) MUST persist across trace batches within a drain window.
+
+        The original task-358.1 EnsureClassLaneBuf memset'd class_lane_buf_ on
+        EVERY BeginSession — but BeginSession runs PER BATCH, so for
+        ray_num > LUMICE_DISPATCH_RAY_NUM (multiple batches per drain) every batch
+        wiped the prior batches' lane accumulation, leaving only the LAST batch.
+        The XYZ accumulator (xyz_image / d_xyz_buf_) had no such bug — it's a
+        scrum-312 persistent accumulator (shape-change-only reset) — so
+        FULL-SPECTRUM matched CPU while the COLOR composite came out ~30-50x
+        sparser. The parity harness never caught it: it validates the per-ray
+        MASK, not the Y-lane accumulation.
+
+        three_arcs has ray_num=2M >> the ~32768 dispatch size, so it exercises
+        the multi-batch path. Post-fix the Metal composite lights ~102k pixels
+        (≈ CPU); the bug collapsed it to ~3k. Metal-only (skips off macOS; on
+        Linux CI Metal is unavailable → --backend metal falls back to CPU, which
+        is the correct reference so the density floor still holds).
+        """
+        if not HAS_PILLOW:
+            self.skipTest("Pillow not available")
+        if not CONFIG.exists():
+            self.skipTest(f"{CONFIG} not found")
+
+        result = self.run_lumice(
+            ["-f", str(CONFIG), "-o", self.output_dir, "--backend", "metal"]
+        )
+        self.assertEqual(
+            result.returncode, 0, f"Lumice (metal) failed:\n{result.stderr}"
+        )
+        composite = Path(self.output_dir) / "img_01_components.jpg"
+        self.assertTrue(
+            composite.exists(), f"metal composite not produced: {composite}"
+        )
+
+        # three_arcs classes: RED / GREEN / BLUE (see raypath_color_three_arcs.json).
+        three_arcs_colors = [(1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)]
+        res = classify_pixels_by_color_direction(
+            str(composite), three_arcs_colors, cos_similarity_tol=0.90
+        )
+        lit = sum(res["per_class"])
+        # Correct density ~102k lit px; the multi-batch-loss bug collapsed it to
+        # ~3k. Floor at 40000 catches the regression with huge margin while
+        # tolerating single-path-vs-fan-out MC noise + JPEG chroma bleed.
+        self.assertGreater(
+            lit,
+            40000,
+            f"Metal color composite only {lit} lit pixels (expected ~100k) — the "
+            f"device Y-lane multi-batch accumulation regressed; see explore-359 / "
+            f"EnsureClassLaneBuf (metal_trace_backend.mm / cuda_trace_backend.cu).",
+        )
+
 
 class TestRaypathColorMultiLayer(LumiceTestCase):
     """CLI end-to-end for the 2-MS-layer full-semantics composite (task-339.5).

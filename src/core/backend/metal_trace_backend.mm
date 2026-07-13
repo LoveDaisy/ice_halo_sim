@@ -1093,15 +1093,25 @@ void MetalTraceBackend::Impl::EnsureClassLaneBuf(int w, int h) {
   // requested layout would need more floats than the current allocation.
   const size_t pix = static_cast<size_t>(w) * static_cast<size_t>(h);
   const size_t needed_elems = (class_count_ == 0) ? 1u : (class_count_ * pix);
+  // explore-359 FIX: zero ONLY on (re)allocation — NOT every BeginSession.
+  // class_lane_buf_ is a scrum-312 third-clock PERSISTENT accumulator (twin of
+  // xyz_image): it accumulates across batches within a drain window and is
+  // reset per-window by ReadbackClassLanes' post-read memset (mm:3122).
+  // The old code memset'd every BeginSession — but BeginSession runs PER BATCH,
+  // so with ray_num > LUMICE_DISPATCH_RAY_NUM (multiple batches per drain) every
+  // batch wiped the prior batches' lane accumulation, leaving only the LAST
+  // batch. xyz_image did NOT have this bug (EnsureImage only zeroes on a shape
+  // change, which rides a generation flush/drain). Net effect: device Y-lanes
+  // delivered ~1/N_batches of the energy → GPU-color composites 30-50× sparser
+  // than CPU while full-spectrum matched. Mirror EnsureImage: zero on alloc,
+  // let the drain own the per-window reset.
   if (class_lane_buf_ == nil || needed_elems > class_lane_pix_capacity_) {
     class_lane_buf_ = [device newBufferWithLength:needed_elems * sizeof(float)
                                           options:MTLResourceStorageModeShared];
     assert(class_lane_buf_ != nil);
     class_lane_pix_capacity_ = needed_elems;
+    std::memset([class_lane_buf_ contents], 0, needed_elems * sizeof(float));
   }
-  // Zero the active region every BeginSession (mirrors the twin
-  // xyz_image/landed_weight_buf_ reset in EnsureImage).
-  std::memset([class_lane_buf_ contents], 0, needed_elems * sizeof(float));
 }
 
 void MetalTraceBackend::Impl::EnsurePolyBuffers(size_t poly_cnt) {

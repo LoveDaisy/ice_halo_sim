@@ -2540,12 +2540,21 @@ void CudaTraceBackend::Impl::EnsureClassLaneBuf(int w, int h) {
   };
   const size_t pix = static_cast<size_t>(std::max(w, 0)) * static_cast<size_t>(std::max(h, 0));
   const size_t needed_elems = (class_count_ == 0) ? 1u : (class_count_ * pix);
+  // explore-359 FIX (mirror Metal metal_trace_backend.mm EnsureClassLaneBuf):
+  // zero ONLY on (re)allocation, NOT every BeginSession. d_class_lane_buf_ is a
+  // scrum-312 third-clock PERSISTENT accumulator (twin of d_xyz_buf_): it
+  // accumulates across batches within a drain window and is reset per-window by
+  // ReadbackClassLanes' post-read cudaMemset. BeginSession runs PER BATCH, so an
+  // unconditional memset here wiped prior batches' lanes for any ray_num >
+  // LUMICE_DISPATCH_RAY_NUM (multiple batches/drain), leaving only the LAST batch
+  // (d_xyz_buf_ had no such bug — persistent, shape-change-only reset). Symptom:
+  // CUDA-color composites 30-50× sparser than CPU while full-spectrum matched.
   if (d_class_lane_buf_ == nullptr || needed_elems > class_lane_pix_capacity_) {
     cudaFree(d_class_lane_buf_); d_class_lane_buf_ = nullptr;
     ck(cudaMalloc(&d_class_lane_buf_, needed_elems * sizeof(float)), "cudaMalloc d_class_lane_buf");
     class_lane_pix_capacity_ = needed_elems;
+    ck(cudaMemset(d_class_lane_buf_, 0, needed_elems * sizeof(float)), "cudaMemset d_class_lane_buf");
   }
-  ck(cudaMemset(d_class_lane_buf_, 0, needed_elems * sizeof(float)), "cudaMemset d_class_lane_buf");
 }
 
 // EnsureFilterBuffers — mirror of Metal `EnsureFilterBuffers`
