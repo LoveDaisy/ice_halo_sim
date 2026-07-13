@@ -64,6 +64,16 @@ constant uchar kDevSymD    = 4;
 constant int   kDevFnPeriodHex = 6;
 constant uint  kDevRecCap = 64;  // kMaxHits
 
+// task-358.1 Step 4: MUST match host kMaxColorClassesDevice
+// (metal_trace_backend.mm). Previously this was a bare `16` literal in
+// KernelParams below, referenced by a comment claiming a named
+// `kMaxColorClassesDeviceMsl` sibling that didn't actually exist — code-
+// review-01 Suggestion #2 flagged the dangling reference. This is now that
+// named sibling; raising the cap = bump both this and kMaxColorClassesDevice
+// together (no compiler can check MSL vs. C++ across the two languages, so
+// the sync is still comment/discipline-enforced, just against a real symbol).
+constant uint  kMaxColorClassesDeviceMsl = 16;
+
 // --- ReduceBuffer (E4 spike, byte-identical to lumice::detail::ReduceBuffer) -
 
 static inline void PCanonicalShiftInPlace_dev(thread uchar* data, uint size) {
@@ -484,10 +494,10 @@ struct KernelParams {
   //                         host ColorClass.member_bits_; ulong for MSL uint64).
   //   color_class_combine[]: per-class combinator; 0 = kAny ((mask & bits) != 0),
   //                         1 = kAll ((mask & bits) == bits).
-  // See host kMaxColorClassesDevice; MUST match kMaxColorClassesDeviceMsl below.
+  // See host kMaxColorClassesDevice; MUST match kMaxColorClassesDeviceMsl above.
   uint  color_class_count;
-  ulong color_class_bits[16];  // kMaxColorClassesDeviceMsl (must equal host)
-  uchar color_class_combine[16];
+  ulong color_class_bits[kMaxColorClassesDeviceMsl];
+  uchar color_class_combine[kMaxColorClassesDeviceMsl];
 };
 
 kernel void trace_layer_kernel(
@@ -943,9 +953,14 @@ kernel void trace_layer_kernel(
                 }
               }
             }
-            // Capture ring append moved OUT of the capture_component branch so
-            // it stays open regardless of whether Fork-C is producing bits —
-            // colour parity tests want the capture path even without Fork-C.
+            // task-358.1: the Fork-C bit computation above and this capture-ring
+            // append used to live inside one `if (capture_component)` block;
+            // splitting them (to insert the Design-2 colour pass above, between
+            // Fork-C bit computation and this capture) means `this_mask_f` now
+            // finishes accumulating both Fork-C AND colour bits before capture
+            // reads it — capture itself is still gated on capture_component,
+            // same as before (code-review-01 Minor #3: prior wording implied
+            // capture became unconditional, which it did not).
             if (prm.capture_component != 0u) {
               uint cslot = atomic_fetch_add_explicit(exit_comp_cnt, 1u, memory_order_relaxed);
               if (cslot < prm.out_cap) {

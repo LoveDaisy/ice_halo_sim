@@ -533,6 +533,13 @@ TEST(MetalComponentMaskParity, NoneWholeCrystalBits_AC5) {
   SceneConfig scene = MakeColorConfiguredScene(kMaxHits);
   RenderConfig render = MakeRectangularRender();
   auto color_cfg = MakeColorConfiguredColorConfig();
+  // Pin the bit layout this test hardcodes (bit0/bit2 = whole-crystal refs)
+  // before relying on it below — if BuildColorGateTable's insertion order
+  // ever changes, fail loudly here instead of silently asserting on the
+  // wrong bits (code-review-01 Minor #5).
+  ASSERT_EQ(ColorGateBitCount(scene, *color_cfg), 4u)
+      << "expected 4 color bits (2 refs × 2 layers); bit0/bit2 whole-crystal assumption below depends on this "
+         "exact layout";
 
   Capture metal = RunMetal(scene, render, /*seed=*/7, kRayCount, /*shuffle=*/true, color_cfg);
   ASSERT_FALSE(metal.masks.empty());
@@ -626,6 +633,12 @@ TEST(MetalComponentMaskParity, ColorConfiguredMaskPopcountWhitebox) {
   SceneConfig scene = MakeColorConfiguredScene(kMaxHits);
   RenderConfig render = MakeRectangularRender();
   auto color_cfg = MakeColorConfiguredColorConfig();
+  // Pin the bit layout this test hardcodes (4-bit budget, layer1_bits mask
+  // below) before relying on it — same rationale as NoneWholeCrystalBits_AC5
+  // (code-review-01 Minor #5).
+  ASSERT_EQ(ColorGateBitCount(scene, *color_cfg), 4u)
+      << "expected 4 color bits (2 refs × 2 layers); layer1_bits/popcount-range assumptions below depend on this "
+         "exact layout";
 
   Capture metal = RunMetal(scene, render, /*seed=*/7, kRayCount, /*shuffle=*/true, color_cfg);
   ASSERT_FALSE(metal.masks.empty());

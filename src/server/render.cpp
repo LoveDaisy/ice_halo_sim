@@ -153,12 +153,15 @@ void RenderConsumer::ConsumeDeviceFused(const SimData& data) {
   // NOT AC1 mask parity (mask bits are OR-accumulated → order-independent).
   const size_t pix_wh = static_cast<size_t>(config_.resolution_[0]) * static_cast<size_t>(config_.resolution_[1]);
   const size_t lane_slots = lane_y_.size();
-  if (!data.lane_pixel_data_.empty() && lane_slots > 0 && data.lane_class_count_ > 0 && pix_wh > 0) {
-    // Sanity: SimData carries N classes × W*H floats. Never accept a
-    // shape-mismatched drain (guards against the case where the backend and
-    // consumer disagree on class_count / resolution).
-    assert(data.lane_pixel_data_.size() == data.lane_class_count_ * pix_wh &&
-           "lane_pixel_data_ size must equal lane_class_count_ * W * H");
+  // Shape check gates the accumulation loop itself (not just an assert) —
+  // release builds compile out assert (-DNDEBUG), so a backend/consumer
+  // resolution or class_count disagreement must fall through to the warn
+  // branch below instead of indexing lane_pixel_data_ with a stride that
+  // doesn't match its actual size (code-review-01 Major: this used to be an
+  // assert-only guard, i.e. a heap-buffer-overflow read in release).
+  const bool lane_shape_ok = !data.lane_pixel_data_.empty() && lane_slots > 0 && data.lane_class_count_ > 0 &&
+                             pix_wh > 0 && data.lane_pixel_data_.size() == data.lane_class_count_ * pix_wh;
+  if (lane_shape_ok) {
     // Iterate min(server-side lane count, drained class count) — the server
     // sizes lane_y_ from RaypathColorConfig at consumer construction so both
     // paths should agree, but tolerate a smaller drain gracefully rather than
@@ -172,14 +175,17 @@ void RenderConsumer::ConsumeDeviceFused(const SimData& data) {
       }
     }
   } else if (HasColorClasses() && !logged_missing_component_) {
-    // Backend has raypath_color but delivered no lane data (either the
-    // backend was not extended for device-side lanes yet, or class_count
-    // mismatch collapsed the drain). Log once so a config author sees the
-    // regression rather than silently empty lanes.
+    // Backend has raypath_color but delivered no usable lane data — either
+    // no lane data at all (backend not extended for device-side lanes yet),
+    // or a class_count/resolution mismatch that would have produced a
+    // shape-mismatched drain. Log once so a config author sees the
+    // regression rather than silently empty/skipped lanes.
     ILOG_WARN(logger_,
-              "RenderConsumer: raypath_color configured but this device-fused batch delivered no "
-              "per-class Y-lane data (lane_pixel_data_ empty). Backend may not be extended for "
-              "device-side lane accumulation yet.");
+              "RenderConsumer: raypath_color configured but this device-fused batch delivered no usable "
+              "per-class Y-lane data (lane_pixel_data_ empty or shape mismatch: size={} expected={}). Backend "
+              "may not be extended for device-side lane accumulation yet, or class_count/resolution disagree "
+              "between backend and consumer.",
+              data.lane_pixel_data_.size(), data.lane_class_count_ * pix_wh);
     logged_missing_component_ = true;
   }
   // Count toward the consume profile (proj=0: device did the projection).

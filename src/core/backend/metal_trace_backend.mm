@@ -3078,8 +3078,25 @@ void MetalTraceBackend::ReadbackClassLanes(std::vector<float>& lane_data, size_t
                      static_cast<size_t>(impl_->alloc_xyz_h_);
   assert(pix > 0);
   const size_t total = impl_->class_count_ * pix;
-  assert(total <= impl_->class_lane_pix_capacity_ &&
-         "class_lane_buf_ under-allocated for the current class_count * W * H");
+  // Runtime gate (not just the assert below, which -DNDEBUG release builds
+  // compile out): alloc_xyz_w_/alloc_xyz_h_ (set by EnsureImage) and the w/h
+  // EnsureClassLaneBuf sized class_lane_buf_ against (impl_->width/height)
+  // are both driven from the same BeginSession snapshot with no intervening
+  // resize path, so `total` should never exceed class_lane_pix_capacity_ in
+  // practice — but if that invariant is ever broken by a future change,
+  // degrade to an empty drain rather than reading past the allocation
+  // (code-review-01 Minor #3, same failure class as the render.cpp Major).
+  if (total > impl_->class_lane_pix_capacity_) {
+    ILOG_ERROR(EffectiveLogger(impl_->logger_),
+               "MetalTraceBackend::ReadbackClassLanes: class_lane_buf_ under-allocated "
+               "(need {} floats, have {}) — alloc_xyz_w_/h_ and width/height diverged. "
+               "Dropping this window's per-class lane drain.",
+               total, impl_->class_lane_pix_capacity_);
+    assert(false && "class_lane_buf_ under-allocated for the current class_count * W * H");
+    lane_data.clear();
+    class_count = 0;
+    return;
+  }
   lane_data.resize(total);
   std::memcpy(lane_data.data(), [impl_->class_lane_buf_ contents], total * sizeof(float));
   // Reset the device accumulator so the next window starts clean (mirrors

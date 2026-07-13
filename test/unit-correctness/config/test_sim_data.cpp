@@ -1103,6 +1103,13 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_TRUE(original.outgoing_w_.empty());
   EXPECT_TRUE(original.outgoing_component_.empty());  // task-331.1
   EXPECT_TRUE(original.exit_records_.empty());
+  // task-358.1 Step 4 (code-review-01 Suggestion #3): pin the same
+  // "moved-from empty, not merely target-correct" invariant this comment
+  // block already exercises for the other vector fields — a copy instead of
+  // std::move on lane_pixel_data_ would still pass the `moved.` assertions
+  // above (this is exactly the "same move-assign trap as outgoing_wl_" the
+  // Step 4 comment at sim_data.cpp warns about).
+  EXPECT_TRUE(original.lane_pixel_data_.empty());
 
   // (c) POD scalar fields are NOT reset on move — this is the current
   // contract. We deliberately do NOT assert curr_wl_/generation_/etc. to be
@@ -1143,6 +1150,9 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   EXPECT_EQ(src.rays_.size_, 0u);
   EXPECT_EQ(src.rays_.capacity_, 0u);
   EXPECT_TRUE(src.crystals_.empty());
+  // task-358.1 Step 4 (code-review-01 Suggestion #3): same rationale as
+  // MoveConstructTransfersOwnership above.
+  EXPECT_TRUE(src.lane_pixel_data_.empty());
 
   // Self-move-assignment must preserve all fields (source code has
   // &other == this guard). Snapshot → self-move → assert preservation.
