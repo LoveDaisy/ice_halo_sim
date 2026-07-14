@@ -50,7 +50,6 @@ doc/
 
 - **[自适应亮度](adaptive-brightness.zh.md)**: GUI 自动 EV 归一化
   - P99.5 锚点算法与目标白点映射（始终启用，无开关）
-  - F1 anchor lane：filter-independent EV 刻度，互补 filter 的 XYZ 线性可加性
   - sRGB gamma 非线性 caveat
 
 - **[Raypath 对称性](raypath-symmetry.zh.md)**: P、B、D 过滤器开关语义

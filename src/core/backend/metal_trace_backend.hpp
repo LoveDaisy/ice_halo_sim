@@ -112,11 +112,11 @@ class MetalTraceBackend : public TraceBackend {
   // be recycled across MS layers. See base class doc for the contract.
   size_t DrainExits(std::vector<ExitRayRecord>& out) override;
   // task-metal-device-fused-consumer (S1): device-fused XYZ accumulation.
-  // HasDeviceXyzAccum() = true for this backend — the trace kernel emits
+  // SupportsDeviceXyzAccum() = true for this backend — the trace kernel emits
   // directly into a session-resident W*H*3 atomic_float buffer, and the
   // simulator reads it back once per batch via ReadbackXyzAccum instead
   // of materialising per-exit records.
-  bool HasDeviceXyzAccum() const override { return true; }
+  bool SupportsDeviceXyzAccum() const override { return true; }
   void ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight) override;
   // task-358.1 Step 4 (AC3 device-side Y-lane accumulation): copy the flattened
   // per-color-class Y accumulator to host and reset the device side for the

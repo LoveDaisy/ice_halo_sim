@@ -97,12 +97,12 @@ class CudaTraceBackend : public TraceBackend {
   size_t ReadbackExitRays(std::vector<ExitRayRecord>& out) override;
   size_t DrainExits(std::vector<ExitRayRecord>& out) override;
   // S2 device-fused XYZ accumulation overrides — mirrors MetalTraceBackend.
-  // HasDeviceXyzAccum reports true so the simulator routes per-batch egress
+  // SupportsDeviceXyzAccum reports true so the simulator routes per-batch egress
   // through ReadbackXyzAccum (W*H*3 D2H) instead of the per-exit DrainExits
   // round-trip. IsCompatible mirrors Metal's constraints (rectangular @ zenith
   // view, or dual_fisheye_equal_area @ fov≈180); other lens configs fall back
   // to legacy CPU via simulator backend dispatch.
-  bool HasDeviceXyzAccum() const override;
+  bool SupportsDeviceXyzAccum() const override;
   void ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight) override;
   // task-358.2 Step 4 (AC3 device-side Y-lane accumulation). CUDA override of
   // the base virtual: copies the flattened `class_count * W * H` atomic-float
