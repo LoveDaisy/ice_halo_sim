@@ -446,15 +446,103 @@ inline bool IsEeToken(const std::string& tok) {
   return StartsWith(tok, "entry:") || StartsWith(tok, "exit:") || StartsWith(tok, "len:");
 }
 
+// Callback return value for WalkSummandEeFlush. Uniform semantics across all
+// four callbacks — kAbort stops traversal, kContinue proceeds. No polarity
+// inversion between callbacks: the validator returns kAbort on any rejection
+// and kContinue otherwise; the parser returns kContinue from every callback.
+enum class WalkAction { kContinue, kAbort };
+
+// Shared token traversal for ValidateSummandText (strict) and ParseSummandText
+// (tolerant). The skeleton owns the EE accumulation state (ee_builder /
+// entry_set / exit_set / len_set / ee_started) and drives:
+//   - empty-token dispatch  → on_empty_token()
+//   - EE token merge         → MergeEeToken(); on success sets ee_started, on
+//                              failure calls on_ee_merge_fail (skeleton itself
+//                              does NOT touch EE state on failure, preserving
+//                              first-wins accumulation across a mid-run skip)
+//   - raypath token          → on_flush (only if ee_started), then reset EE
+//                              state, then on_raypath_token
+//   - end of loop            → one trailing on_flush (only if ee_started)
+// The four callbacks decide policy at each decision point; the skeleton is
+// oblivious to whether the caller is a validator or a parser. Callback
+// semantics: the validator returns kAbort on the first rejection (empty token,
+// EE merge failure, invalid entry/exit facelist, or invalid raypath) and
+// kContinue otherwise; the parser returns kContinue from every callback,
+// skipping invalid tokens and emitting factors via side effects. on_ee_merge_fail
+// receives (tok, err); current callers read only err — tok is available for
+// future error-context use.
+// Return value: true if the traversal completed without any kAbort; false if
+// some callback requested kAbort (caller's state — result / out — has been
+// mutated by the callback before it returned kAbort).
+template <typename OnEmptyToken, typename OnEeMergeFail, typename OnFlush, typename OnRaypathToken>
+inline bool WalkSummandEeFlush(const std::vector<std::string>& tokens,
+                               OnEmptyToken&& on_empty_token,      // () -> WalkAction
+                               OnEeMergeFail&& on_ee_merge_fail,   // (const std::string& tok,
+                                                                   //  const std::string& err) -> WalkAction
+                               OnFlush&& on_flush,                 // (const EntryExitParams& ee,
+                                                                   //  bool entry_set, bool exit_set) -> WalkAction
+                               OnRaypathToken&& on_raypath_token)  // (const std::string& tok) -> WalkAction
+{
+  EntryExitParams ee_builder;
+  bool entry_set = false;
+  bool exit_set = false;
+  bool len_set = false;
+  bool ee_started = false;
+  auto reset_ee = [&]() {
+    ee_builder = EntryExitParams{};
+    entry_set = false;
+    exit_set = false;
+    len_set = false;
+    ee_started = false;
+  };
+  for (const auto& tok : tokens) {
+    if (tok.empty()) {
+      if (on_empty_token() == WalkAction::kAbort) {
+        return false;
+      }
+      continue;
+    }
+    if (IsEeToken(tok)) {
+      std::string err;
+      if (MergeEeToken(tok, ee_builder, entry_set, exit_set, len_set, err)) {
+        ee_started = true;
+      } else if (on_ee_merge_fail(tok, err) == WalkAction::kAbort) {
+        return false;
+      }
+      // On merge failure with kContinue: intentionally leave EE state untouched
+      // so a subsequent valid EE token can accumulate into the same factor
+      // (first-wins across a mid-run skip).
+      continue;
+    }
+    // Raypath token: flush any in-flight EE factor (validate its facelists or
+    // emit it), then reset EE state, then hand the raypath token off.
+    if (ee_started) {
+      if (on_flush(ee_builder, entry_set, exit_set) == WalkAction::kAbort) {
+        return false;
+      }
+      reset_ee();
+    }
+    if (on_raypath_token(tok) == WalkAction::kAbort) {
+      return false;
+    }
+  }
+  if (ee_started) {
+    if (on_flush(ee_builder, entry_set, exit_set) == WalkAction::kAbort) {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace detail
 
 // Strict validation of a summand row against the AND grammar. Empty input →
 // kValid (means "no filter" at the row level). Uses LUMICE_ValidateRaypathText
 // for raypath tokens and GuiValidateFaceNumberListText for entry:/exit:
-// facelists so the messages match the surrounding single-value paths.
-// Inherent grammar state-machine (token loop + EE flush/validate); NOLINTed per
-// the project convention of not fragmenting dense validators.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+// facelists so the messages match the surrounding single-value paths. Shares
+// the EE-flush traversal state machine with ParseSummandText via
+// detail::WalkSummandEeFlush; policy differences (strict vs tolerant) live in
+// the four callbacks below.
 inline GuiValidationResult ValidateSummandText(const std::string& text, LUMICE_CrystalKind kind) {
   GuiValidationResult result;
   auto trimmed = TrimRaypathSegment(text);
@@ -485,85 +573,62 @@ inline GuiValidationResult ValidateSummandText(const std::string& text, LUMICE_C
   }
 
   auto tokens = detail::SplitSummandTokens(trimmed);
-  EntryExitParams ee_builder;
-  bool entry_set = false;
-  bool exit_set = false;
-  bool len_set = false;
-  bool ee_started = false;
-  // Validate the in-flight EE facelists, then reset the EE state. Mirrors the
-  // flush_ee reset in ParseSummandText so the validator AGREES with the parser:
-  // a raypath token ends the current EE factor, and a following entry:/exit:
-  // begins a fresh EE factor (not a "duplicate" of the prior one). Without this,
-  // "entry:2 & 5 & entry:3" would be parsed+round-tripped fine but rejected here.
-  auto flush_ee = [&]() -> bool {
-    if (ee_started) {
-      if (entry_set) {
-        auto sr = GuiValidateFaceNumberListText(ee_builder.entry_text, kind);
-        if (sr.state != LUMICE_RAYPATH_VALID) {
-          result = sr;
-          return false;
-        }
-      }
-      if (exit_set) {
-        auto sr = GuiValidateFaceNumberListText(ee_builder.exit_text, kind);
-        if (sr.state != LUMICE_RAYPATH_VALID) {
-          result = sr;
-          return false;
-        }
-      }
-      ee_builder = EntryExitParams{};
-      entry_set = false;
-      exit_set = false;
-      len_set = false;
-      ee_started = false;
-    }
-    return true;
-  };
-  for (const auto& tok : tokens) {
-    if (tok.empty()) {
-      result.state = LUMICE_RAYPATH_INVALID;
-      result.message = "Empty AND factor";
-      return result;
-    }
-    if (detail::IsEeToken(tok)) {
-      ee_started = true;
-      std::string err;
-      if (!detail::MergeEeToken(tok, ee_builder, entry_set, exit_set, len_set, err)) {
+  const bool ok = detail::WalkSummandEeFlush(
+      tokens,
+      [&]() -> detail::WalkAction {
+        result.state = LUMICE_RAYPATH_INVALID;
+        result.message = "Empty AND factor";
+        return detail::WalkAction::kAbort;
+      },
+      [&](const std::string& /*tok*/, const std::string& err) -> detail::WalkAction {
         result.state = LUMICE_RAYPATH_INVALID;
         result.message = err;
-        return result;
-      }
-    } else {
-      // Raypath token ends the current EE factor (flush + validate), then
-      // validate the raypath. A raypath token MAY contain ';' as a summand-level
-      // OR alternative (H-A, 334.3): `1-3;3-5 & entry:2` distributes to
-      // `(1-3 & entry:2) OR (3-5 & entry:2)` in ExpandSopToClauses. We delegate
-      // to ValidateRaypathTextMultiSegment (already covered by 11 unit tests)
-      // which rejects leading/trailing/consecutive ';' and validates each
-      // segment via LUMICE_ValidateRaypathText — no new validation logic.
-      if (!flush_ee()) {
-        return result;
-      }
-      auto seg_result = ValidateRaypathTextMultiSegment(tok, kind);
-      if (seg_result.state != LUMICE_RAYPATH_VALID) {
-        result = seg_result;
-        return result;
-      }
-    }
-  }
-
-  // Validate the trailing EE factor (if the row ended mid-EE).
-  if (!flush_ee()) {
+        return detail::WalkAction::kAbort;
+      },
+      [&](const EntryExitParams& ee, bool entry_set, bool exit_set) -> detail::WalkAction {
+        if (entry_set) {
+          auto sr = GuiValidateFaceNumberListText(ee.entry_text, kind);
+          if (sr.state != LUMICE_RAYPATH_VALID) {
+            result = sr;
+            return detail::WalkAction::kAbort;
+          }
+        }
+        if (exit_set) {
+          auto sr = GuiValidateFaceNumberListText(ee.exit_text, kind);
+          if (sr.state != LUMICE_RAYPATH_VALID) {
+            result = sr;
+            return detail::WalkAction::kAbort;
+          }
+        }
+        return detail::WalkAction::kContinue;
+      },
+      [&](const std::string& tok) -> detail::WalkAction {
+        // A raypath token MAY contain ';' as a summand-level OR alternative
+        // (H-A, 334.3): `1-3;3-5 & entry:2` distributes to
+        // `(1-3 & entry:2) OR (3-5 & entry:2)` in ExpandSopToClauses. We
+        // delegate to ValidateRaypathTextMultiSegment (already covered by 11
+        // unit tests) which rejects leading/trailing/consecutive ';' and
+        // validates each segment via LUMICE_ValidateRaypathText.
+        auto seg_result = ValidateRaypathTextMultiSegment(tok, kind);
+        if (seg_result.state != LUMICE_RAYPATH_VALID) {
+          result = seg_result;
+          return detail::WalkAction::kAbort;
+        }
+        return detail::WalkAction::kContinue;
+      });
+  if (!ok) {
     return result;
   }
-
   result.state = LUMICE_RAYPATH_VALID;
   return result;
 }
 
 // Tolerant parse of a summand row into a Factor vector. Mirrors the
 // ParseRaypathTextMultiSegment "skip invalid tokens" philosophy. Empty input
-// → empty vector.
+// → empty vector. Shares the EE-flush traversal state machine with
+// ValidateSummandText via detail::WalkSummandEeFlush; every callback here
+// returns kContinue (parse never aborts) — the only policy differences from
+// the validator live in what each callback does.
 inline std::vector<Factor> ParseSummandText(const std::string& text) {
   std::vector<Factor> out;
   auto trimmed = TrimRaypathSegment(text);
@@ -571,44 +636,29 @@ inline std::vector<Factor> ParseSummandText(const std::string& text) {
     return out;
   }
   auto tokens = detail::SplitSummandTokens(trimmed);
-  EntryExitParams ee_builder;
-  bool ee_started = false;
-  bool entry_set = false;
-  bool exit_set = false;
-  bool len_set = false;
-  auto flush_ee = [&]() {
-    if (ee_started) {
-      out.emplace_back(ee_builder);
-      ee_builder = EntryExitParams{};
-      ee_started = false;
-      entry_set = false;
-      exit_set = false;
-      len_set = false;
-    }
-  };
-  for (const auto& tok : tokens) {
-    if (tok.empty()) {
-      continue;
-    }
-    if (detail::IsEeToken(tok)) {
-      std::string err;
-      // Tolerant parse: a token that fails to merge (duplicate / bad lengthspec)
-      // is SKIPPED — it must NOT fabricate a factor. Only mark the EE factor
-      // "started" once a field was actually set, so an all-invalid EE run (e.g.
-      // "len:abc") yields no factor rather than a match-everything wildcard EE.
-      // Mirrors ValidateSummandText, which rejects such tokens (code-review-02
-      // Major 1).
-      if (detail::MergeEeToken(tok, ee_builder, entry_set, exit_set, len_set, err)) {
-        ee_started = true;
-      }
-    } else {
-      flush_ee();
-      RaypathParams rp;
-      rp.raypath_text = tok;
-      out.emplace_back(std::move(rp));
-    }
-  }
-  flush_ee();
+  detail::WalkSummandEeFlush(
+      tokens,
+      []() -> detail::WalkAction {
+        // Empty AND factor: silently skip (tolerant).
+        return detail::WalkAction::kContinue;
+      },
+      [](const std::string& /*tok*/, const std::string& /*err*/) -> detail::WalkAction {
+        // Merge failure: skip the token. Skeleton preserves EE state so that a
+        // subsequent valid EE token still accumulates into the same factor
+        // (first-wins across a mid-run skip); an all-invalid EE run yields no
+        // factor rather than a match-everything wildcard EE.
+        return detail::WalkAction::kContinue;
+      },
+      [&](const EntryExitParams& ee, bool /*entry_set*/, bool /*exit_set*/) -> detail::WalkAction {
+        out.emplace_back(ee);
+        return detail::WalkAction::kContinue;
+      },
+      [&](const std::string& tok) -> detail::WalkAction {
+        RaypathParams rp;
+        rp.raypath_text = tok;
+        out.emplace_back(std::move(rp));
+        return detail::WalkAction::kContinue;
+      });
   return out;
 }
 
