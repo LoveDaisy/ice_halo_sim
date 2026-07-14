@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784027020296,
+  "lastUpdate": 1784046634669,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "fa8e6cfb354f00e5922cc8d458b330670ff7fb29",
-          "message": "Merge pull request #93 from LoveDaisy/feat/query-filter-uplift-v2\n\nfeat(core): uplift query filter to RenderConsumer, fix OFF-mode normalization",
-          "timestamp": "2026-05-18T10:04:37+08:00",
-          "tree_id": "25b4ddbbd0c316a6ae1f3b02b2309815af457d9c",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/fa8e6cfb354f00e5922cc8d458b330670ff7fb29"
-        },
-        "date": 1779070170439,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 341941.8,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 608250.4,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 414637.9,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 442914.5,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4800,6 +4752,54 @@ window.BENCHMARK_DATA = {
             "value": 349202.5,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "20112ea074c4336866f0877a7e8247f1f897c1f1",
+          "message": "Merge pull request #195 from LoveDaisy/fix/gui-view-lens-no-resim\n\nfix(gui-state): view/lens/hemisphere changes must not trigger re-sim",
+          "timestamp": "2026-07-15T00:23:26+08:00",
+          "tree_id": "2a7de6a9dc50ccfc7d036982abeb09fc8c8215bb",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/20112ea074c4336866f0877a7e8247f1f897c1f1"
+        },
+        "date": 1784046633207,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 308500.4,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 592981.7,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 471731.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 319194.9,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
           }
         ]
       }
