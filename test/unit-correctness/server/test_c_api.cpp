@@ -38,6 +38,19 @@ static_assert(sizeof(((LUMICE_Config*)nullptr)->ray_num) >= 8, "config ray_num m
 // two in lockstep (measured, not assumed — ctypes.sizeof == 64).
 static_assert(sizeof(LUMICE_RawXyzResult) == 64, "LUMICE_RawXyzResult ABI must be 64 bytes (capi_runner.py mirror)");
 
+// ABI guards for the other structs test/e2e/capi_runner.py mirrors. Added after
+// task-cuda-ctypes-teardown-crash: LUMICE_RenderResult grew from 24 → 32 bytes
+// in task-345.3 when composite_p99_y was appended (float@24 + 4 pad, 8-aligned),
+// but the ctypes mirror was not updated. Result: LUMICE_GetRenderResults wrote
+// 8 bytes past the Python-allocated (LUMICE_RenderResult * 1)() buffer on every
+// poll, corrupting the Python heap and aborting under _ctypes teardown or the
+// next glibc malloc/free check. LUMICE_ServerConfig has the same failure mode
+// (12 vs 8 byte drift after preferred_backend was appended). Static-assert both
+// so a future field addition breaks the build instead of silently corrupting
+// pytest heaps.
+static_assert(sizeof(LUMICE_RenderResult) == 32, "LUMICE_RenderResult ABI must be 32 bytes (capi_runner.py mirror)");
+static_assert(sizeof(LUMICE_ServerConfig) == 12, "LUMICE_ServerConfig ABI must be 12 bytes (capi_runner.py mirror)");
+
 TEST(CrystalMeshApi, PrismVerticesAndEdges) {
   LUMICE_CrystalMesh mesh{};
   const char* json = R"({"type": "prism", "shape": {"height": 1.0}})";
