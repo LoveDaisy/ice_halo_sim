@@ -546,6 +546,19 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
     IM_CHECK(!gui::g_stop_inflight.load());  // background thread returned ⇒ backend drained
     // The intent-advance lives after the reconcile line in SyncFromPoller, so it takes two frames to
     // reach the terminal display: frame 1 advances kStopping→kStopped, frame 2 reconciles to kDone.
+    //
+    // GL-upload guard: this terminal reconcile drives SyncFromPoller() directly on the ImGui
+    // test-engine coroutine thread, which has NO current GL context (the context is current on the
+    // main frame-loop thread — see the app.hpp SyncFromPoller note). If a fresh, not-yet-uploaded
+    // XYZ payload is staged, SyncFromPoller's upload branch reaches UploadXyzTexture → glClientWaitSync,
+    // which dereferences a null GL dispatch table → intermittent EXC_BAD_ACCESS. Unlike
+    // terminal_idle_reaches_done (test 1 section B), which drives the poller manually and can guard
+    // with InvalidateStagedTexture() alone, this test runs a LIVE poller, so we must first Stop() it
+    // (Stop() waits for the worker to leave the poll loop) so no background WorkerLoop can re-stage a
+    // fresh payload after we drop it, THEN drop the staged texture. Reconcile only reads run_intent /
+    // committed_epoch / the (surviving) snapshot, so pausing the poller does not affect the assertions.
+    gui::g_server_poller.Stop();
+    gui::g_server_poller.InvalidateStagedTexture();
     for (int i = 0; i < 4 && gui::g_state.sim_state != SimState::kDone; ++i) {
       gui::SyncFromPoller();
     }
