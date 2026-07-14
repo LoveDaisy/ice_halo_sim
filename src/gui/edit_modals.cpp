@@ -15,6 +15,7 @@
 #include "gui/axis_presets.hpp"
 #include "gui/crystal_preview.hpp"
 #include "gui/crystal_renderer.hpp"
+#include "gui/destructive_style.hpp"
 #include "gui/face_number_overlay.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
@@ -688,22 +689,10 @@ static ImVec4 ValidationFrameBgColor(LUMICE_RaypathValidationState state) {
   return ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
 }
 
-namespace {
-// Destructive (red) button palette for delete/remove buttons in this TU
-// (spectrum-row delete, summand-row delete). RGB values kept in sync with
-// panels.cpp's file-local kBtnDestructive*/PushDestructiveStyle — 2 independent
-// definitions synchronized by convention, not via a shared header. If a third
-// TU ever needs this palette, promote it to a shared header rather than
-// replicating a third copy.
-void PushDestructiveStyle() {
-  ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.22f, 0.22f, 1.0f));
-  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.30f, 0.30f, 1.0f));
-  ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.15f, 0.15f, 1.0f));
-}
-void PopDestructiveStyle() {
-  ImGui::PopStyleColor(3);
-}
-}  // namespace
+// Destructive-button palette (delete/remove) lives in gui/destructive_style.hpp
+// after task-color-window-controls-polish promoted the previously file-local copy
+// so the spectrum-row / summand-row delete and the color-window class/ref delete
+// share one source.
 
 // Row-list editor for the sum-of-products (H5). Each row is one OR summand
 // expressed in the small AND grammar (`3-5 & entry:2 & len:3-5`), validated

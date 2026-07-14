@@ -1025,6 +1025,66 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // task-color-window-controls-polish (A5): the "Remove All" button clears
+  // raypath_color in one click and rides the same T1 structural hard-reset
+  // channel as single-row delete (vector cardinality change → reconciler ->
+  // hard-reset lane). This test mirrors add_class_via_ui_marks_modified's
+  // seed shape so we can compare the two channels symmetrically: N add clicks
+  // then one Remove All must land raypath_color at 0 and sim_state at
+  // kModified (structural change against the committed baseline).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "remove_all_clears_raypath_color");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Same reconcile baseline seed as add_class_via_ui_marks_modified: pin
+      // to kDone so structural edits below flip sim_state to kModified.
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
+      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+      gui::g_state.committed_epoch = 5;
+      gui::g_state.display_epoch_floor = 0;
+      gui::g_state.dirty = false;
+      gui::g_state.color_window_open = true;
+      ctx->Yield(4);
+
+      // Add three classes so the "Remove All" click has non-trivial work.
+      ctx->ItemClick("**/" ICON_FA_PLUS " Add Class");
+      ctx->Yield(2);
+      ctx->ItemClick("**/" ICON_FA_PLUS " Add Class");
+      ctx->Yield(2);
+      ctx->ItemClick("**/" ICON_FA_PLUS " Add Class");
+      ctx->Yield(2);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.raypath_color.size()), 3);
+
+      // Click Remove All. Vector cardinality drops to 0; the reconciler routes
+      // this as a structural change (same lane as three individual erases),
+      // so sim_state stays at kModified against the empty committed baseline.
+      ctx->ItemClick("**/" ICON_FA_TRASH " Remove All");
+      ctx->Yield(2);
+
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.raypath_color.size()), 0);
+      // The Add Class path (add_class_via_ui_marks_modified above) already
+      // proved sim_state → kModified when raypath_color grows; the mirror
+      // guarantee for shrinkage is that Remove All is routed through the same
+      // structural channel (not a display-only mutation that would be
+      // silently swallowed). sim_state must NOT be kDone/kIdle here — if the
+      // reconciler misrouted the clear onto need_display_push, the 3 Add
+      // Class kModified flag would silently clear and the UI would claim
+      // "nothing to commit" while the vector shrank from 3 to 0.
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+
+      // The button still renders (BeginDisabled greys it out but ItemInfo can
+      // locate it) — this proves the "+ Add Class" row keeps the Remove All
+      // affordance visible even when nothing is left to remove.
+      IM_CHECK(ctx->ItemExists("**/" ICON_FA_TRASH " Remove All"));
+
+      gui::g_state.color_window_open = false;
+      ctx->Yield(2);
+    };
+  }
+
   // Whole-crystal checkbox is the #2 case from issue.md: a display-affecting
   // structural edit whose current implementation is `SetRefMatchAll(ref, ...);
   // state.MarkStructHardDirty();` — must surface as kModified for the same reason

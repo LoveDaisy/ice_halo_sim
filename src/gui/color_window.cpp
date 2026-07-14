@@ -31,6 +31,7 @@
 
 #include "IconsFontAwesome6.h"
 #include "gui/app.hpp"
+#include "gui/destructive_style.hpp"
 #include "gui/gui_logger.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/raypath_segments.hpp"
@@ -552,9 +553,11 @@ void RenderRefRow(GuiState& state, ColorClassConfig& cls, size_t ref_idx, bool& 
 
   // Delete this ref.
   ImGui::SameLine();
+  PushDestructiveStyle();
   if (ImGui::SmallButton(ICON_FA_XMARK "##ref_del")) {
     delete_this_ref = true;
   }
+  PopDestructiveStyle();
 
   ImGui::PopID();
 }
@@ -754,6 +757,30 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
     // T1: structural cardinality change → reconciler routes to hard-reset lane.
   }
 
+  // Bulk clear — one-shot for users who imported N filters and want a clean
+  // slate. Cleared vector is a structural cardinality change, so the reconciler
+  // routes it through the same T1 hard-reset lane as single-row erase (see
+  // gui_state_reconcile.cpp RaypathColorStructChanged). Disabled when there is
+  // nothing to remove so an idle press cannot dirty the state.
+  ImGui::SameLine();
+  const bool no_classes = state.raypath_color.empty();
+  if (no_classes) {
+    ImGui::BeginDisabled();
+  }
+  PushDestructiveStyle();
+  if (ImGui::Button(ICON_FA_TRASH " Remove All")) {
+    state.raypath_color.clear();
+    // T1: structural cardinality change → reconciler routes to hard-reset lane
+    // (same channel as the single-row delete path below).
+  }
+  PopDestructiveStyle();
+  if (no_classes) {
+    ImGui::EndDisabled();
+  }
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip("Remove every raypath-color class in one click.");
+  }
+
   // task-349.3 (#3): "Enable colors" mirrors the top-bar Colored toggle inside
   // the window and lives on the same header row as "+ Add Class", right-aligned
   // to read as a distinct control group from the mode/import/add cluster on the
@@ -807,6 +834,16 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
   std::optional<size_t> pending_delete;
   std::optional<std::pair<size_t, size_t>> pending_zswap;  // (phys_a, phys_b)
 
+  // Precompute the eye-icon button width once so it does not change as the
+  // per-row glyph flips between ICON_FA_EYE and ICON_FA_EYE_SLASH (they have
+  // different advance widths; without a fixed width the whole row shifts
+  // horizontally on every toggle — AC2 zero-jitter requirement).
+  // FramePadding.y is pushed to 0 at render time so the height matches the
+  // surrounding SmallButtons on the same row.
+  const ImGuiStyle& row_style = ImGui::GetStyle();
+  const float eye_btn_w = std::max(ImGui::CalcTextSize(ICON_FA_EYE).x, ImGui::CalcTextSize(ICON_FA_EYE_SLASH).x) +
+                          row_style.FramePadding.x * 2.0f;
+
   for (size_t rank = 0; rank < phys_by_rank.size(); rank++) {
     const size_t phys = phys_by_rank[rank];
     auto& cls = state.raypath_color[phys];
@@ -857,10 +894,15 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
     // cannot say "this class is showing" while the composite has excluded it.
     ImGui::SameLine();
     const char* eye = EffectiveVisible(cls, any_solo) ? ICON_FA_EYE : ICON_FA_EYE_SLASH;
-    if (ImGui::SmallButton(eye)) {
+    // Fixed-width Button (with FramePadding.y=0 to match SmallButton height on
+    // this row) so toggling ICON_FA_EYE ↔ ICON_FA_EYE_SLASH does not shift the
+    // trailing controls (warning triangle, delete x). See eye_btn_w above.
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(row_style.FramePadding.x, 0.0f));
+    if (ImGui::Button(eye, ImVec2(eye_btn_w, 0.0f))) {
       HandleEyeClick(state.raypath_color, phys, ImGui::GetIO().KeyAlt);
       // T1: display-only (visible/solo) → reconciler routes to need_display_push.
     }
+    ImGui::PopStyleVar();
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip(
           "Click: show/hide this class in the composite (display-time only).\n"
@@ -880,9 +922,11 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
 
     // Delete.
     ImGui::SameLine();
+    PushDestructiveStyle();
     if (ImGui::SmallButton(ICON_FA_XMARK "##cls_del")) {
       pending_delete = phys;
     }
+    PopDestructiveStyle();
 
     // Summary + tree expand for the ref editor.
     ImGui::SameLine();

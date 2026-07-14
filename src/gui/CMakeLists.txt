@@ -41,6 +41,7 @@ add_library(lumice_gui_obj OBJECT
     ${PROJ_SRC_DIR}/gui/app_panels.cpp
     ${PROJ_SRC_DIR}/gui/color_window.cpp
     ${PROJ_SRC_DIR}/gui/crystal_preview.cpp
+    ${PROJ_SRC_DIR}/gui/destructive_style.cpp
     ${PROJ_SRC_DIR}/gui/face_number_overlay.cpp
     ${PROJ_SRC_DIR}/gui/export_fbo_renderer.cpp
     ${PROJ_SRC_DIR}/gui/edit_modals.cpp

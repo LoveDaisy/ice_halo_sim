@@ -10,6 +10,7 @@
 #include "gui/app.hpp"
 #include "gui/axis_presets.hpp"
 #include "gui/crystal_preview.hpp"
+#include "gui/destructive_style.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
@@ -252,22 +253,8 @@ namespace {
 
 // Card layout: height is driven by ImGuiChildFlags_AutoResizeY so font/theme
 // changes adapt automatically (kThumbnailSize lives in gui_constants.hpp).
-
-// Destructive action button palette (delete/remove). Shared by entry-card and
-// layer-header "x" buttons so the visual language stays consistent.
-constexpr ImVec4 kBtnDestructiveNormal{ 0.70f, 0.22f, 0.22f, 1.0f };
-constexpr ImVec4 kBtnDestructiveHovered{ 0.85f, 0.30f, 0.30f, 1.0f };
-constexpr ImVec4 kBtnDestructiveActive{ 0.60f, 0.15f, 0.15f, 1.0f };
-
-void PushDestructiveStyle() {
-  ImGui::PushStyleColor(ImGuiCol_Button, kBtnDestructiveNormal);
-  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kBtnDestructiveHovered);
-  ImGui::PushStyleColor(ImGuiCol_ButtonActive, kBtnDestructiveActive);
-}
-
-void PopDestructiveStyle() {
-  ImGui::PopStyleColor(3);
-}
+// Destructive-button palette (delete/remove) lives in gui/destructive_style.hpp
+// after task-color-window-controls-polish promoted the previously file-local copy.
 
 }  // namespace
 
