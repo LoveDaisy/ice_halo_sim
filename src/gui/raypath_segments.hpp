@@ -533,10 +533,10 @@ inline bool WalkSummandEeFlush(const std::vector<std::string>& tokens,
 // Strict validation of a summand row against the AND grammar. Empty input →
 // kValid (means "no filter" at the row level). Uses LUMICE_ValidateRaypathText
 // for raypath tokens and GuiValidateFaceNumberListText for entry:/exit:
-// facelists so the messages match the surrounding single-value paths.
-// Inherent grammar state-machine (token loop + EE flush/validate); NOLINTed per
-// the project convention of not fragmenting dense validators.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+// facelists so the messages match the surrounding single-value paths. Shares
+// the EE-flush traversal state machine with ParseSummandText via
+// detail::WalkSummandEeFlush; policy differences (strict vs tolerant) live in
+// the four callbacks below.
 inline GuiValidationResult ValidateSummandText(const std::string& text, LUMICE_CrystalKind kind) {
   GuiValidationResult result;
   auto trimmed = TrimRaypathSegment(text);
@@ -567,78 +567,52 @@ inline GuiValidationResult ValidateSummandText(const std::string& text, LUMICE_C
   }
 
   auto tokens = detail::SplitSummandTokens(trimmed);
-  EntryExitParams ee_builder;
-  bool entry_set = false;
-  bool exit_set = false;
-  bool len_set = false;
-  bool ee_started = false;
-  // Validate the in-flight EE facelists, then reset the EE state. Mirrors the
-  // flush_ee reset in ParseSummandText so the validator AGREES with the parser:
-  // a raypath token ends the current EE factor, and a following entry:/exit:
-  // begins a fresh EE factor (not a "duplicate" of the prior one). Without this,
-  // "entry:2 & 5 & entry:3" would be parsed+round-tripped fine but rejected here.
-  auto flush_ee = [&]() -> bool {
-    if (ee_started) {
-      if (entry_set) {
-        auto sr = GuiValidateFaceNumberListText(ee_builder.entry_text, kind);
-        if (sr.state != LUMICE_RAYPATH_VALID) {
-          result = sr;
-          return false;
-        }
-      }
-      if (exit_set) {
-        auto sr = GuiValidateFaceNumberListText(ee_builder.exit_text, kind);
-        if (sr.state != LUMICE_RAYPATH_VALID) {
-          result = sr;
-          return false;
-        }
-      }
-      ee_builder = EntryExitParams{};
-      entry_set = false;
-      exit_set = false;
-      len_set = false;
-      ee_started = false;
-    }
-    return true;
-  };
-  for (const auto& tok : tokens) {
-    if (tok.empty()) {
-      result.state = LUMICE_RAYPATH_INVALID;
-      result.message = "Empty AND factor";
-      return result;
-    }
-    if (detail::IsEeToken(tok)) {
-      ee_started = true;
-      std::string err;
-      if (!detail::MergeEeToken(tok, ee_builder, entry_set, exit_set, len_set, err)) {
+  const bool ok = detail::WalkSummandEeFlush(
+      tokens,
+      [&]() -> detail::WalkAction {
+        result.state = LUMICE_RAYPATH_INVALID;
+        result.message = "Empty AND factor";
+        return detail::WalkAction::kAbort;
+      },
+      [&](const std::string& /*tok*/, const std::string& err) -> detail::WalkAction {
         result.state = LUMICE_RAYPATH_INVALID;
         result.message = err;
-        return result;
-      }
-    } else {
-      // Raypath token ends the current EE factor (flush + validate), then
-      // validate the raypath. A raypath token MAY contain ';' as a summand-level
-      // OR alternative (H-A, 334.3): `1-3;3-5 & entry:2` distributes to
-      // `(1-3 & entry:2) OR (3-5 & entry:2)` in ExpandSopToClauses. We delegate
-      // to ValidateRaypathTextMultiSegment (already covered by 11 unit tests)
-      // which rejects leading/trailing/consecutive ';' and validates each
-      // segment via LUMICE_ValidateRaypathText — no new validation logic.
-      if (!flush_ee()) {
-        return result;
-      }
-      auto seg_result = ValidateRaypathTextMultiSegment(tok, kind);
-      if (seg_result.state != LUMICE_RAYPATH_VALID) {
-        result = seg_result;
-        return result;
-      }
-    }
-  }
-
-  // Validate the trailing EE factor (if the row ended mid-EE).
-  if (!flush_ee()) {
+        return detail::WalkAction::kAbort;
+      },
+      [&](const EntryExitParams& ee, bool entry_set, bool exit_set) -> detail::WalkAction {
+        if (entry_set) {
+          auto sr = GuiValidateFaceNumberListText(ee.entry_text, kind);
+          if (sr.state != LUMICE_RAYPATH_VALID) {
+            result = sr;
+            return detail::WalkAction::kAbort;
+          }
+        }
+        if (exit_set) {
+          auto sr = GuiValidateFaceNumberListText(ee.exit_text, kind);
+          if (sr.state != LUMICE_RAYPATH_VALID) {
+            result = sr;
+            return detail::WalkAction::kAbort;
+          }
+        }
+        return detail::WalkAction::kContinue;
+      },
+      [&](const std::string& tok) -> detail::WalkAction {
+        // A raypath token MAY contain ';' as a summand-level OR alternative
+        // (H-A, 334.3): `1-3;3-5 & entry:2` distributes to
+        // `(1-3 & entry:2) OR (3-5 & entry:2)` in ExpandSopToClauses. We
+        // delegate to ValidateRaypathTextMultiSegment (already covered by 11
+        // unit tests) which rejects leading/trailing/consecutive ';' and
+        // validates each segment via LUMICE_ValidateRaypathText.
+        auto seg_result = ValidateRaypathTextMultiSegment(tok, kind);
+        if (seg_result.state != LUMICE_RAYPATH_VALID) {
+          result = seg_result;
+          return detail::WalkAction::kAbort;
+        }
+        return detail::WalkAction::kContinue;
+      });
+  if (!ok) {
     return result;
   }
-
   result.state = LUMICE_RAYPATH_VALID;
   return result;
 }
