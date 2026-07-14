@@ -20,8 +20,10 @@
 
 #include "IconsFontAwesome6.h"  // ICON_FA_* selectors for locating icon-prefixed buttons.
 #include "gui/color_window.hpp"
+#include "gui/file_io.hpp"  // FillLumiceConfig — pipeline assertion for AC4 default flow-through.
 #include "gui/gui_state.hpp"
 #include "gui/raypath_segments.hpp"
+#include "include/lumice_config_scope.hpp"  // ConfigColorGuard — auto-releases raypath_color for AC4 test.
 #include "test_gui_shared.hpp"
 
 namespace {
@@ -349,6 +351,16 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       IM_CHECK(!cls.match[0].match_all);
       IM_CHECK_EQ(cls.match[0].predicate_text, "3-5");
       IM_CHECK_EQ(cls.match[1].predicate_text, "1-2-3");
+
+      // task-color-default-pbd AC2: every ref built by BuildClassFromFilter
+      // defaults to P|B|D symmetry (owner-preferred). Covers the loop-body
+      // (multi-iteration) placement of the flag set — not once-outside-loop.
+      IM_CHECK(cls.match[0].sym_p);
+      IM_CHECK(cls.match[0].sym_b);
+      IM_CHECK(cls.match[0].sym_d);
+      IM_CHECK(cls.match[1].sym_p);
+      IM_CHECK(cls.match[1].sym_b);
+      IM_CHECK(cls.match[1].sym_d);
 
       // (d) AC5 decoupling: mutating the filter after import must not touch
       // the class. Change the source filter row text and verify the class's
@@ -1025,6 +1037,66 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // task-color-window-controls-polish (A5): the "Remove All" button clears
+  // raypath_color in one click and rides the same T1 structural hard-reset
+  // channel as single-row delete (vector cardinality change → reconciler ->
+  // hard-reset lane). This test mirrors add_class_via_ui_marks_modified's
+  // seed shape so we can compare the two channels symmetrically: N add clicks
+  // then one Remove All must land raypath_color at 0 and sim_state at
+  // kModified (structural change against the committed baseline).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "remove_all_clears_raypath_color");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Same reconcile baseline seed as add_class_via_ui_marks_modified: pin
+      // to kDone so structural edits below flip sim_state to kModified.
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
+      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+      gui::g_state.committed_epoch = 5;
+      gui::g_state.display_epoch_floor = 0;
+      gui::g_state.dirty = false;
+      gui::g_state.color_window_open = true;
+      ctx->Yield(4);
+
+      // Add three classes so the "Remove All" click has non-trivial work.
+      ctx->ItemClick("**/" ICON_FA_PLUS " Add Class");
+      ctx->Yield(2);
+      ctx->ItemClick("**/" ICON_FA_PLUS " Add Class");
+      ctx->Yield(2);
+      ctx->ItemClick("**/" ICON_FA_PLUS " Add Class");
+      ctx->Yield(2);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.raypath_color.size()), 3);
+
+      // Click Remove All. Vector cardinality drops to 0; the reconciler routes
+      // this as a structural change (same lane as three individual erases),
+      // so sim_state stays at kModified against the empty committed baseline.
+      ctx->ItemClick("**/" ICON_FA_TRASH " Remove All");
+      ctx->Yield(2);
+
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.raypath_color.size()), 0);
+      // The Add Class path (add_class_via_ui_marks_modified above) already
+      // proved sim_state → kModified when raypath_color grows; the mirror
+      // guarantee for shrinkage is that Remove All is routed through the same
+      // structural channel (not a display-only mutation that would be
+      // silently swallowed). sim_state must NOT be kDone/kIdle here — if the
+      // reconciler misrouted the clear onto need_display_push, the 3 Add
+      // Class kModified flag would silently clear and the UI would claim
+      // "nothing to commit" while the vector shrank from 3 to 0.
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+
+      // The button still renders (BeginDisabled greys it out but ItemInfo can
+      // locate it) — this proves the "+ Add Class" row keeps the Remove All
+      // affordance visible even when nothing is left to remove.
+      IM_CHECK(ctx->ItemExists("**/" ICON_FA_TRASH " Remove All"));
+
+      gui::g_state.color_window_open = false;
+      ctx->Yield(2);
+    };
+  }
+
   // Whole-crystal checkbox is the #2 case from issue.md: a display-affecting
   // structural edit whose current implementation is `SetRefMatchAll(ref, ...);
   // state.MarkStructHardDirty();` — must surface as kModified for the same reason
@@ -1152,6 +1224,70 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       // toggle_whole_via_ui_marks_modified.
       ctx->SetRef("");
       IM_CHECK(ctx->ItemExists("##TopBar/Revert"));
+
+      gui::g_state.color_window_open = false;
+      ctx->Yield(2);
+    };
+  }
+
+  // task-color-default-pbd (A4) AC1 + AC4 — clicking "+ Add Ref" on an existing
+  // class seeds the new ref with sym_p/sym_b/sym_d = true (owner-preferred PBD
+  // default), and this default propagates through FillLumiceConfig into the
+  // core LUMICE_ColorPredicate.symmetry bitmask as P|B|D (bits 1|2|4 == 7).
+  // AC3's dual (deserialization NOT re-labeled to PBD) lives in
+  // test_gui_import_export.cpp — a struct-default assertion, orthogonal to
+  // this call-site test.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "add_ref_defaults_to_pbd_symmetry");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Seed one empty class so "+ Add Ref" has a target class to append into.
+      // Do it BEFORE the reconcile baseline snapshot so the seeding itself is
+      // part of the "committed" state and the subsequent Add Ref click is the
+      // only diff observed by the reconciler.
+      gui::ColorClassConfig cls;
+      cls.color[0] = 1.0f;
+      cls.visible = true;
+      gui::g_state.raypath_color.push_back(cls);
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
+
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
+      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+      gui::g_state.committed_epoch = 5;
+      gui::g_state.display_epoch_floor = 0;
+      gui::g_state.dirty = false;
+      gui::g_state.color_window_open = true;
+      ctx->Yield(4);
+
+      // Expand tree nodes so the "+ Add Ref" SmallButton (nested under the
+      // per-class TreeNode "##body") is part of the frame's item table. Same
+      // pattern as toggle_whole_via_ui_marks_modified and
+      // toggle_pbd_symmetry_via_ui_marks_modified above.
+      ctx->ItemOpenAll("//" ICON_FA_PALETTE " Colors");
+      ctx->Yield(2);
+
+      ctx->SetRef("//" ICON_FA_PALETTE " Colors");
+      ctx->ItemClick("**/" ICON_FA_PLUS " Add Ref");
+      ctx->Yield(2);
+      ctx->SetRef("");
+
+      // AC1: the new ref must default to P|B|D all true (call-site owner —
+      // struct default in ColorClassRefConfig stays false).
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.raypath_color[0].match.size()), 1);
+      IM_CHECK(gui::g_state.raypath_color[0].match[0].sym_p);
+      IM_CHECK(gui::g_state.raypath_color[0].match[0].sym_b);
+      IM_CHECK(gui::g_state.raypath_color[0].match[0].sym_d);
+
+      // AC4: the default flows through FillLumiceConfig into the core
+      // LUMICE_ColorPredicate.symmetry bitmask (P|B|D = 1|2|4 == 7). Proves
+      // the new default reaches the scrum-356 per-ref symmetry pipeline
+      // without any renderer-side changes.
+      LUMICE_Config cfg{};
+      lumice::ConfigColorGuard cfg_guard(cfg);
+      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
+      IM_CHECK_EQ(cfg.raypath_color[0].match[0].predicate.symmetry, 7);
 
       gui::g_state.color_window_open = false;
       ctx->Yield(2);

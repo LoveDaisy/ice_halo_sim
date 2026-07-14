@@ -137,7 +137,7 @@ TEST(MetalGoldenRay, NormalIncidenceParallelSlab) {
   }
   // S1 device-fused: ReadbackExitRays now returns empty (exit records eliminated).
   // Per-ray physics correctness is covered by parity-cross-backend XYZ accumulation.
-  if (MetalTraceBackend{}.HasDeviceXyzAccum()) {
+  if (MetalTraceBackend{}.SupportsDeviceXyzAccum()) {
     GTEST_SKIP() << "device-fused path (S1): exit records not materialised; parity-cross-backend verifies physics";
   }
   ForceHostGenForByteIdentity();
@@ -218,7 +218,7 @@ TEST(MetalGoldenRay, Snell30ParallelSlab) {
   if (ShouldSkipMetalTests()) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
-  if (MetalTraceBackend{}.HasDeviceXyzAccum()) {
+  if (MetalTraceBackend{}.SupportsDeviceXyzAccum()) {
     GTEST_SKIP() << "device-fused path (S1): exit records not materialised; parity-cross-backend verifies physics";
   }
   ForceHostGenForByteIdentity();
@@ -302,7 +302,7 @@ TEST(MetalGoldenRay, EnergyConservationSingleRay) {
   if (ShouldSkipMetalTests()) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
-  if (MetalTraceBackend{}.HasDeviceXyzAccum()) {
+  if (MetalTraceBackend{}.SupportsDeviceXyzAccum()) {
     GTEST_SKIP() << "device-fused path (S1): exit records not materialised; parity-cross-backend verifies physics";
   }
   ForceHostGenForByteIdentity();
@@ -392,7 +392,7 @@ TEST(MetalGoldenRay, MultiMsContinuationNormalIncidence) {
   if (ShouldSkipMetalTests()) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
-  if (MetalTraceBackend{}.HasDeviceXyzAccum()) {
+  if (MetalTraceBackend{}.SupportsDeviceXyzAccum()) {
     GTEST_SKIP() << "device-fused path (S1): exit records not materialised; parity-cross-backend verifies physics";
   }
   ForceHostGenForByteIdentity();

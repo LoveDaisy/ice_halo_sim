@@ -1335,7 +1335,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   // returned empty vectors so exit_records is empty. The consumer's Neumaier
   // path in RenderConsumer::Consume picks up xyz_pixel_data_ instead of the
   // ScatterOutgoingToXyz path.
-  if (backend.HasDeviceXyzAccum()) {
+  if (backend.SupportsDeviceXyzAccum()) {
     if (backend.SupportsThirdClockDrain()) {
       // scrum-312 third-clock: the device XYZ accumulator persists across
       // batches (BeginSession no longer zeroes it). Accumulate this batch's

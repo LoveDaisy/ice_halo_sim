@@ -444,13 +444,13 @@ class TraceBackend {
   //
   // Default: false / no-op. CpuTraceBackend stays on the exit-record path.
   // MetalTraceBackend overrides to true; CudaTraceBackend will follow in S2.
-  virtual bool HasDeviceXyzAccum() const { return false; }
+  virtual bool SupportsDeviceXyzAccum() const { return false; }
 
   // Copies the device-accumulated W*H*3 XYZ image into `xyz.data` and the
   // running landed-weight scalar into `landed_weight`. Must wait for any
   // outstanding device work to complete before returning. Called once per
   // wavelength batch AFTER the layer loop. No-op (xyz untouched,
-  // landed_weight = 0) unless HasDeviceXyzAccum() is true.
+  // landed_weight = 0) unless SupportsDeviceXyzAccum() is true.
   virtual void ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight) {
     (void)xyz;
     landed_weight = 0.0f;

@@ -189,7 +189,7 @@ void CheckCuda(cudaError_t err, const char* ctx) {
   }
 }
 
-// scrum-306.2: CUDA's HasDeviceXyzAccum() is unconditionally true, so every exit
+// scrum-306.2: CUDA's SupportsDeviceXyzAccum() is unconditionally true, so every exit
 // is accumulated into d_xyz_buf_ via EmitToDeviceXyz — the trace kernel writes
 // NOTHING to d_exit_ / d_exit_count_ (DrainExits always reads 0 records). The
 // d_exit_/pinned_exit_ pool is therefore dead weight; sizing it to the analytic
@@ -197,7 +197,7 @@ void CheckCuda(cudaError_t err, const char* ctx) {
 // ComputeExitCap helper) ballooned to GBs at large LUMICE_DISPATCH_RAY_NUM,
 // causing the big-dispatch throughput collapse + parity OOM. Allocate a token
 // slot so the kernel's (unused) d_exit pointer stays bindable. If
-// HasDeviceXyzAccum ever goes false, restore that analytic-bound sizing (see
+// SupportsDeviceXyzAccum ever goes false, restore that analytic-bound sizing (see
 // ComputeContCap below for the still-live formula) AND the kernel's d_exit
 // write path together.
 constexpr size_t kCudaDeadExitCap = 256u;
@@ -893,7 +893,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
             // Project + accumulate into the device XYZ buffer, mirroring Metal
             // mid-exit (lumice_trace.metal:635-702). NO further prob draw —
             // !do_continue already IS the mid-exit outcome. Previously this wrote
-            // an ExitRayRecord into d_exit, which HasDeviceXyzAccum()==true makes
+            // an ExitRayRecord into d_exit, which SupportsDeviceXyzAccum()==true makes
             // the simulator discard (exit_records dropped) → every mid-layer's
             // exits were silently lost → energy = 1/(layers) deficit.
             const float cmf_x = d_wl_pool[wl_idx].cmf_x;
@@ -1099,7 +1099,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               // scrum-302 S2 device-fused MID-EXIT (per-bounce refracted,
               // filter-pass && !do_continue). Project + accumulate, mirror Metal
               // mid-exit (lumice_trace.metal:635-702). No further prob draw.
-              // Was: ExitRayRecord write → discarded under HasDeviceXyzAccum →
+              // Was: ExitRayRecord write → discarded under SupportsDeviceXyzAccum →
               // mid-layer energy loss (see entry-face branch above).
               const float cmf_x = d_wl_pool[wl_idx].cmf_x;
               const float cmf_y = d_wl_pool[wl_idx].cmf_y;
@@ -2436,7 +2436,7 @@ void CudaTraceBackend::Impl::EnsureExitCapacity(size_t n) {
   // the exit pool may need to grow for this layer's fan-out. exit_cap_ tracks the
   // logical cap used by the kernel/overflow-clamp; alloc_exit_cap_ tracks the
   // physical d_exit_ allocation so we realloc only when genuinely insufficient.
-  // scrum-306.2: d_exit_ is dead (device-fused XYZ; HasDeviceXyzAccum() always
+  // scrum-306.2: d_exit_ is dead (device-fused XYZ; SupportsDeviceXyzAccum() always
   // true → the kernel never writes d_exit_/d_exit_count_). It never needs to grow;
   // keep the token capacity. See kCudaDeadExitCap.
   (void)n;
@@ -3958,11 +3958,11 @@ void CudaTraceBackend::EndSession() {
   impl_->Reset(/*keep_persistent_buffers=*/true);
 }
 
-// S2 device-fused XYZ accumulation: mirrors MetalTraceBackend::HasDeviceXyzAccum.
+// S2 device-fused XYZ accumulation: mirrors MetalTraceBackend::SupportsDeviceXyzAccum.
 // Reports `true` so the simulator routes egress through ReadbackXyzAccum (W*H*3
 // D2H) instead of the per-exit DrainExits PCIe round-trip that flattened CUDA
 // throughput to 0.10–0.12× legacy CPU.
-bool CudaTraceBackend::HasDeviceXyzAccum() const { return true; }
+bool CudaTraceBackend::SupportsDeviceXyzAccum() const { return true; }
 
 // task-358.3 (test-only, renamed from SetCaptureComponent / ReadbackComponent
 // Capture after Fork-C retirement). Mirrors MetalTraceBackend::SetCaptureRay
@@ -4000,7 +4000,8 @@ void CudaTraceBackend::ReadbackClassLanes(std::vector<float>& lane_data, size_t&
   // fix): d_class_lane_buf_ sizing is driven by EnsureClassLaneBuf(img_w,
   // img_h) at BeginSession, but if a caller resizes render dims mid-window
   // without a full teardown, the buffer would be smaller than `total`.
-  // Throwing (rather than asserting) surfaces the mismatch under -DNDEBUG.
+  // Logs an ILOG_ERROR and clears+returns (the assert below is a no-op under
+  // -DNDEBUG, so release builds degrade silently rather than crashing).
   if (total > impl_->class_lane_pix_capacity_) {
     Logger& log = impl_->logger != nullptr ? *impl_->logger : GetGlobalLogger();
     ILOG_ERROR(log,

@@ -50,7 +50,6 @@ For users of this project:
 
 - **[Adaptive Brightness](adaptive-brightness.md)**: Automatic EV normalization in the GUI
   - P99.5-anchored algorithm and target-white mapping (always on, no toggle)
-  - F1 anchor lane: filter-independent EV scale, XYZ linear additivity for complementary filters
   - sRGB gamma caveat
 
 - **[Raypath Symmetry](raypath-symmetry.md)**: P, B, D filter toggle semantics
