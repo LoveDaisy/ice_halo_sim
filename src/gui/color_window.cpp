@@ -250,6 +250,12 @@ ColorClassConfig BuildClassFromFilter(int layer_idx, int crystal_pool_id, const 
     ref.crystal_pool_id = crystal_pool_id;
     ref.match_all = row.text.empty();
     ref.predicate_text = row.text;
+    // task-color-default-pbd: GUI-created ref defaults to P|B|D symmetry (owner-preferred).
+    // Only applied at this call site — struct default in ColorClassRefConfig stays false to
+    // preserve deserialization semantics for legacy configs missing `sym_*` keys.
+    ref.sym_p = true;
+    ref.sym_b = true;
+    ref.sym_d = true;
     cls.match.push_back(ref);
   }
   return cls;
@@ -967,6 +973,10 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
         const auto pools = CrystalPoolsInLayer(state, 0);
         r.crystal_pool_id = pools.empty() ? 0 : pools.front();
         r.match_all = true;
+        // task-color-default-pbd: GUI-created ref defaults to P|B|D symmetry (owner-preferred).
+        r.sym_p = true;
+        r.sym_b = true;
+        r.sym_d = true;
         cls.match.push_back(r);
         // T1: structural (match[] append) → reconciler routes to hard-reset lane.
       }

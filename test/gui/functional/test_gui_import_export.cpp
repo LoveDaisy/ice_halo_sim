@@ -2899,6 +2899,55 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
   {
+    // task-color-default-pbd (A4) AC3 — the GUI new-ref PBD-default (owner-preferred)
+    // must NOT leak into DeserializeFromJson: an old core JSON whose match[] entries
+    // omit the "symmetry" key must land with sym_p/sym_b/sym_d all false (struct
+    // default kSymNone), preserving pre-existing rendering semantics for legacy
+    // configs. A companion entry with explicit "symmetry": "P" pins that partial
+    // symmetry is stored verbatim (not silently upgraded to full PBD).
+    //
+    // This test is orthogonal to Steps 1/2 (Add Ref / Import from Filter) — it
+    // should stay green regardless of whether the call-site defaults ship, and
+    // going red here after those ship means the change accidentally touched the
+    // deserialization path (file_io.cpp ~2050-2058) — hard rollback signal.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_deserialize_preserves_legacy_symmetry");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      const std::string js = R"({
+        "crystal": [{"id": 1, "type": "prism", "prism_h": 1.0}],
+        "filter": [],
+        "scene": {
+          "light_source": {"type": "sun", "altitude": 20, "spectrum": "D65"},
+          "ray_num": 1000000,
+          "max_hits": 8,
+          "scattering": [{"prob": 1.0, "entries": [{"crystal": 1, "proportion": 1.0}]}]
+        },
+        "render": [{"id": 1, "lens": {"type": "dual_fisheye_equal_area", "fov": 180}, "resolution": [512, 256]}],
+        "raypath_color": {"mode": "dominant", "classes": [
+          {"color": [1.0, 0.0, 0.0], "match": [
+            {"layer": 0, "crystal": 1, "type": "raypath", "raypath": [3, 5]},
+            {"layer": 0, "crystal": 1, "type": "raypath", "raypath": [1, 2], "symmetry": "P"}
+          ]}
+        ]}
+      })";
+      gui::GuiState loaded = gui::InitDefaultState();
+      IM_CHECK(gui::DeserializeFromJson(js, loaded));
+      IM_CHECK_EQ(static_cast<int>(loaded.raypath_color.size()), 1);
+      IM_CHECK_EQ(static_cast<int>(loaded.raypath_color[0].match.size()), 2);
+
+      // No "symmetry" key → struct default (all false). NOT the GUI new-ref
+      // default of all true — that's the invariant this test defends.
+      IM_CHECK(!loaded.raypath_color[0].match[0].sym_p);
+      IM_CHECK(!loaded.raypath_color[0].match[0].sym_b);
+      IM_CHECK(!loaded.raypath_color[0].match[0].sym_d);
+
+      // Explicit "symmetry": "P" → sym_p only, sym_b/sym_d stay false.
+      IM_CHECK(loaded.raypath_color[0].match[1].sym_p);
+      IM_CHECK(!loaded.raypath_color[0].match[1].sym_b);
+      IM_CHECK(!loaded.raypath_color[0].match[1].sym_d);
+    };
+  }
+  {
     // Import via bare-array wire shape (dominant-only, no {mode, classes} wrapper).
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_bare_array_wire_import");
     t->TestFunc = [](ImGuiTestContext*) {

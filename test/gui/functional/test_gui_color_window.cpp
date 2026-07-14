@@ -20,8 +20,10 @@
 
 #include "IconsFontAwesome6.h"  // ICON_FA_* selectors for locating icon-prefixed buttons.
 #include "gui/color_window.hpp"
+#include "gui/file_io.hpp"  // FillLumiceConfig — pipeline assertion for AC4 default flow-through.
 #include "gui/gui_state.hpp"
 #include "gui/raypath_segments.hpp"
+#include "include/lumice_config_scope.hpp"  // ConfigColorGuard — auto-releases raypath_color for AC4 test.
 #include "test_gui_shared.hpp"
 
 namespace {
@@ -349,6 +351,16 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       IM_CHECK(!cls.match[0].match_all);
       IM_CHECK_EQ(cls.match[0].predicate_text, "3-5");
       IM_CHECK_EQ(cls.match[1].predicate_text, "1-2-3");
+
+      // task-color-default-pbd AC2: every ref built by BuildClassFromFilter
+      // defaults to P|B|D symmetry (owner-preferred). Covers the loop-body
+      // (multi-iteration) placement of the flag set — not once-outside-loop.
+      IM_CHECK(cls.match[0].sym_p);
+      IM_CHECK(cls.match[0].sym_b);
+      IM_CHECK(cls.match[0].sym_d);
+      IM_CHECK(cls.match[1].sym_p);
+      IM_CHECK(cls.match[1].sym_b);
+      IM_CHECK(cls.match[1].sym_d);
 
       // (d) AC5 decoupling: mutating the filter after import must not touch
       // the class. Change the source filter row text and verify the class's
@@ -1212,6 +1224,70 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       // toggle_whole_via_ui_marks_modified.
       ctx->SetRef("");
       IM_CHECK(ctx->ItemExists("##TopBar/Revert"));
+
+      gui::g_state.color_window_open = false;
+      ctx->Yield(2);
+    };
+  }
+
+  // task-color-default-pbd (A4) AC1 + AC4 — clicking "+ Add Ref" on an existing
+  // class seeds the new ref with sym_p/sym_b/sym_d = true (owner-preferred PBD
+  // default), and this default propagates through FillLumiceConfig into the
+  // core LUMICE_ColorPredicate.symmetry bitmask as P|B|D (bits 1|2|4 == 7).
+  // AC3's dual (deserialization NOT re-labeled to PBD) lives in
+  // test_gui_import_export.cpp — a struct-default assertion, orthogonal to
+  // this call-site test.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "add_ref_defaults_to_pbd_symmetry");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Seed one empty class so "+ Add Ref" has a target class to append into.
+      // Do it BEFORE the reconcile baseline snapshot so the seeding itself is
+      // part of the "committed" state and the subsequent Add Ref click is the
+      // only diff observed by the reconciler.
+      gui::ColorClassConfig cls;
+      cls.color[0] = 1.0f;
+      cls.visible = true;
+      gui::g_state.raypath_color.push_back(cls);
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
+
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
+      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+      gui::g_state.committed_epoch = 5;
+      gui::g_state.display_epoch_floor = 0;
+      gui::g_state.dirty = false;
+      gui::g_state.color_window_open = true;
+      ctx->Yield(4);
+
+      // Expand tree nodes so the "+ Add Ref" SmallButton (nested under the
+      // per-class TreeNode "##body") is part of the frame's item table. Same
+      // pattern as toggle_whole_via_ui_marks_modified and
+      // toggle_pbd_symmetry_via_ui_marks_modified above.
+      ctx->ItemOpenAll("//" ICON_FA_PALETTE " Colors");
+      ctx->Yield(2);
+
+      ctx->SetRef("//" ICON_FA_PALETTE " Colors");
+      ctx->ItemClick("**/" ICON_FA_PLUS " Add Ref");
+      ctx->Yield(2);
+      ctx->SetRef("");
+
+      // AC1: the new ref must default to P|B|D all true (call-site owner —
+      // struct default in ColorClassRefConfig stays false).
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.raypath_color[0].match.size()), 1);
+      IM_CHECK(gui::g_state.raypath_color[0].match[0].sym_p);
+      IM_CHECK(gui::g_state.raypath_color[0].match[0].sym_b);
+      IM_CHECK(gui::g_state.raypath_color[0].match[0].sym_d);
+
+      // AC4: the default flows through FillLumiceConfig into the core
+      // LUMICE_ColorPredicate.symmetry bitmask (P|B|D = 1|2|4 == 7). Proves
+      // the new default reaches the scrum-356 per-ref symmetry pipeline
+      // without any renderer-side changes.
+      LUMICE_Config cfg{};
+      lumice::ConfigColorGuard cfg_guard(cfg);
+      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
+      IM_CHECK_EQ(cfg.raypath_color[0].match[0].predicate.symmetry, 7);
 
       gui::g_state.color_window_open = false;
       ctx->Yield(2);
