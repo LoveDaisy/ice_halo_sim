@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783989361539,
+  "lastUpdate": 1783989364281,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9620,50 +9620,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "940557be35656483ccb5c98a4312d48e7a6b8359",
-          "message": "Merge pull request #89 from LoveDaisy/feat/auto_ev\n\nfeat: Adaptive Brightness (P99-anchored auto-EV) for GUI",
-          "timestamp": "2026-05-13T09:57:49+08:00",
-          "tree_id": "503baee7a3d600f6b16282f53e78474e03be1b8a",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/940557be35656483ccb5c98a4312d48e7a6b8359"
-        },
-        "date": 1778637762990,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 84.8,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 72.3,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 72.7,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 67.5,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "94e4edf61c07a64640c38d90c1b2dc3fda974653",
           "message": "Merge pull request #90 from LoveDaisy/dev/refactor_c_api\n\nRefactor: enforce GUI/core API boundary via 4 new C API entries",
           "timestamp": "2026-05-14T20:00:37+08:00",
@@ -14003,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 90.3,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "86c3a72400dd77867bcdfc25f39d58157cb37d9e",
+          "message": "Merge pull request #191 from LoveDaisy/fix/gpu-color-lane-multibatch-loss\n\nfix(gpu-color): device Y-lane accumulator persist across batches (multi-batch density loss)",
+          "timestamp": "2026-07-14T08:28:32+08:00",
+          "tree_id": "5210bc3b8aeb4997b8fe168b59b8e149bfe01690",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/86c3a72400dd77867bcdfc25f39d58157cb37d9e"
+        },
+        "date": 1783989363495,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 82.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 95.4,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 91.2,
             "unit": "%"
           }
         ]
