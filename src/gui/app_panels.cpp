@@ -1012,9 +1012,17 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       static float s_last_pushed_ev = std::numeric_limits<float>::quiet_NaN();
       static bool s_last_composite_active = false;
       constexpr float kCompositeEvPushEpsilon = 1e-4f;
+      // Fixed +1.0 EV (2x) brightness boost baked into the composite-mode
+      // exposure baseline (task-color-ev-boost / A1). owner-observed perceptual
+      // gap: single-color composite reads dimmer than full-spectrum at the same
+      // manual exposure offset. Stacked on top of rc.exposure_offset (baseline,
+      // not override). Independent of Fix B's "no ev_auto" constraint — this is
+      // a static perceptual compensation, not an auto-anchored term.
+      constexpr float kColorModeEvBoost = 1.0f;
       const bool composite_active = g_server != nullptr && !g_state.raypath_color.empty();
       // Fix B: push value == manual EV offset only (no ev_auto).
-      const float composite_ev_push = rc.exposure_offset;
+      // + kColorModeEvBoost: static composite-mode brightness baseline (see above).
+      const float composite_ev_push = rc.exposure_offset + kColorModeEvBoost;
       if (lumice::gui::ShouldPushCompositeExposure(composite_active, s_last_composite_active, composite_ev_push,
                                                    s_last_pushed_ev, kCompositeEvPushEpsilon)) {
         LUMICE_SetCompositeExposure(g_server, composite_ev_push);
