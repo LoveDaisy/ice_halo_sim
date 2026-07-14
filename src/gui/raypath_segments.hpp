@@ -446,6 +446,88 @@ inline bool IsEeToken(const std::string& tok) {
   return StartsWith(tok, "entry:") || StartsWith(tok, "exit:") || StartsWith(tok, "len:");
 }
 
+// Callback return value for WalkSummandEeFlush. Uniform semantics across all
+// four callbacks — kAbort stops traversal, kContinue proceeds. No polarity
+// inversion between callbacks (see plan.md §3 truth table).
+enum class WalkAction { kContinue, kAbort };
+
+// Shared token traversal for ValidateSummandText (strict) and ParseSummandText
+// (tolerant). The skeleton owns the EE accumulation state (ee_builder /
+// entry_set / exit_set / len_set / ee_started) and drives:
+//   - empty-token dispatch  → on_empty_token()
+//   - EE token merge         → MergeEeToken(); on success sets ee_started, on
+//                              failure calls on_ee_merge_fail (skeleton itself
+//                              does NOT touch EE state on failure, preserving
+//                              first-wins accumulation across a mid-run skip)
+//   - raypath token          → on_flush (only if ee_started), then reset EE
+//                              state, then on_raypath_token
+//   - end of loop            → one trailing on_flush (only if ee_started)
+// The four callbacks decide policy at each decision point; the skeleton is
+// oblivious to whether the caller is a validator or a parser. See plan.md §3
+// truth table for validate/parse callback semantics.
+// Return value: true if the traversal completed without any kAbort; false if
+// some callback requested kAbort (caller's state — result / out — has been
+// mutated by the callback before it returned kAbort).
+template <typename OnEmptyToken, typename OnEeMergeFail, typename OnFlush, typename OnRaypathToken>
+inline bool WalkSummandEeFlush(const std::vector<std::string>& tokens,
+                               OnEmptyToken&& on_empty_token,      // () -> WalkAction
+                               OnEeMergeFail&& on_ee_merge_fail,   // (const std::string& tok,
+                                                                   //  const std::string& err) -> WalkAction
+                               OnFlush&& on_flush,                 // (const EntryExitParams& ee,
+                                                                   //  bool entry_set, bool exit_set) -> WalkAction
+                               OnRaypathToken&& on_raypath_token)  // (const std::string& tok) -> WalkAction
+{
+  EntryExitParams ee_builder;
+  bool entry_set = false;
+  bool exit_set = false;
+  bool len_set = false;
+  bool ee_started = false;
+  auto reset_ee = [&]() {
+    ee_builder = EntryExitParams{};
+    entry_set = false;
+    exit_set = false;
+    len_set = false;
+    ee_started = false;
+  };
+  for (const auto& tok : tokens) {
+    if (tok.empty()) {
+      if (on_empty_token() == WalkAction::kAbort) {
+        return false;
+      }
+      continue;
+    }
+    if (IsEeToken(tok)) {
+      std::string err;
+      if (MergeEeToken(tok, ee_builder, entry_set, exit_set, len_set, err)) {
+        ee_started = true;
+      } else if (on_ee_merge_fail(tok, err) == WalkAction::kAbort) {
+        return false;
+      }
+      // On merge failure with kContinue: intentionally leave EE state untouched
+      // so a subsequent valid EE token can accumulate into the same factor
+      // (first-wins across a mid-run skip, per plan §3).
+      continue;
+    }
+    // Raypath token: flush any in-flight EE factor (validate its facelists or
+    // emit it), then reset EE state, then hand the raypath token off.
+    if (ee_started) {
+      if (on_flush(ee_builder, entry_set, exit_set) == WalkAction::kAbort) {
+        return false;
+      }
+      reset_ee();
+    }
+    if (on_raypath_token(tok) == WalkAction::kAbort) {
+      return false;
+    }
+  }
+  if (ee_started) {
+    if (on_flush(ee_builder, entry_set, exit_set) == WalkAction::kAbort) {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace detail
 
 // Strict validation of a summand row against the AND grammar. Empty input →
