@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784007182217,
+  "lastUpdate": 1784007184608,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4818,54 +4818,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "94e4edf61c07a64640c38d90c1b2dc3fda974653",
-          "message": "Merge pull request #90 from LoveDaisy/dev/refactor_c_api\n\nRefactor: enforce GUI/core API boundary via 4 new C API entries",
-          "timestamp": "2026-05-14T20:00:37+08:00",
-          "tree_id": "99603c8703022d6dc31ab9fa8440052434a0ba84",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/94e4edf61c07a64640c38d90c1b2dc3fda974653"
-        },
-        "date": 1778760319239,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 1187025.7,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1781948.7,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 1170389.8,
-            "unit": "rays/sec",
-            "extra": "CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 906392.1,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "8d97704a2cc32149478a5e9fade9bfca321483d6",
           "message": "Merge pull request #91 from LoveDaisy/feat/update_test_ref\n\nUpdate GUI test references with mean-ref pipeline",
           "timestamp": "2026-05-14T20:18:50+08:00",
@@ -9600,6 +9552,54 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 582263.2,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "72f7619e19cd36fe102149a76d53fe42c350d600",
+          "message": "Merge pull request #192 from LoveDaisy/feat/raypath-color-gui-polish-4\n\nfeat(raypath-color-gui): polish-4 UX 打磨 + 机械债扫尾 (scrum-360)",
+          "timestamp": "2026-07-14T13:25:31+08:00",
+          "tree_id": "cdf71a2e216f076b14a1ab4c78f740627e0934c8",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/72f7619e19cd36fe102149a76d53fe42c350d600"
+        },
+        "date": 1784007184343,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 957142.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1174039.2,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 780061.9,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 625861.4,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
