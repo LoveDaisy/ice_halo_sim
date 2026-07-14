@@ -448,7 +448,8 @@ inline bool IsEeToken(const std::string& tok) {
 
 // Callback return value for WalkSummandEeFlush. Uniform semantics across all
 // four callbacks — kAbort stops traversal, kContinue proceeds. No polarity
-// inversion between callbacks (see plan.md §3 truth table).
+// inversion between callbacks: the validator returns kAbort on any rejection
+// and kContinue otherwise; the parser returns kContinue from every callback.
 enum class WalkAction { kContinue, kAbort };
 
 // Shared token traversal for ValidateSummandText (strict) and ParseSummandText
@@ -463,8 +464,13 @@ enum class WalkAction { kContinue, kAbort };
 //                              state, then on_raypath_token
 //   - end of loop            → one trailing on_flush (only if ee_started)
 // The four callbacks decide policy at each decision point; the skeleton is
-// oblivious to whether the caller is a validator or a parser. See plan.md §3
-// truth table for validate/parse callback semantics.
+// oblivious to whether the caller is a validator or a parser. Callback
+// semantics: the validator returns kAbort on the first rejection (empty token,
+// EE merge failure, invalid entry/exit facelist, or invalid raypath) and
+// kContinue otherwise; the parser returns kContinue from every callback,
+// skipping invalid tokens and emitting factors via side effects. on_ee_merge_fail
+// receives (tok, err); current callers read only err — tok is available for
+// future error-context use.
 // Return value: true if the traversal completed without any kAbort; false if
 // some callback requested kAbort (caller's state — result / out — has been
 // mutated by the callback before it returned kAbort).
@@ -505,7 +511,7 @@ inline bool WalkSummandEeFlush(const std::vector<std::string>& tokens,
       }
       // On merge failure with kContinue: intentionally leave EE state untouched
       // so a subsequent valid EE token can accumulate into the same factor
-      // (first-wins across a mid-run skip, per plan §3).
+      // (first-wins across a mid-run skip).
       continue;
     }
     // Raypath token: flush any in-flight EE factor (validate its facelists or
@@ -640,8 +646,7 @@ inline std::vector<Factor> ParseSummandText(const std::string& text) {
         // Merge failure: skip the token. Skeleton preserves EE state so that a
         // subsequent valid EE token still accumulates into the same factor
         // (first-wins across a mid-run skip); an all-invalid EE run yields no
-        // factor rather than a match-everything wildcard EE (code-review-02
-        // Major 1).
+        // factor rather than a match-everything wildcard EE.
         return detail::WalkAction::kContinue;
       },
       [&](const EntryExitParams& ee, bool /*entry_set*/, bool /*exit_set*/) -> detail::WalkAction {
