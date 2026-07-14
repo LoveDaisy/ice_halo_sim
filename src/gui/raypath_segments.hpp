@@ -619,7 +619,10 @@ inline GuiValidationResult ValidateSummandText(const std::string& text, LUMICE_C
 
 // Tolerant parse of a summand row into a Factor vector. Mirrors the
 // ParseRaypathTextMultiSegment "skip invalid tokens" philosophy. Empty input
-// → empty vector.
+// → empty vector. Shares the EE-flush traversal state machine with
+// ValidateSummandText via detail::WalkSummandEeFlush; every callback here
+// returns kContinue (parse never aborts) — the only policy differences from
+// the validator live in what each callback does.
 inline std::vector<Factor> ParseSummandText(const std::string& text) {
   std::vector<Factor> out;
   auto trimmed = TrimRaypathSegment(text);
@@ -627,44 +630,30 @@ inline std::vector<Factor> ParseSummandText(const std::string& text) {
     return out;
   }
   auto tokens = detail::SplitSummandTokens(trimmed);
-  EntryExitParams ee_builder;
-  bool ee_started = false;
-  bool entry_set = false;
-  bool exit_set = false;
-  bool len_set = false;
-  auto flush_ee = [&]() {
-    if (ee_started) {
-      out.emplace_back(ee_builder);
-      ee_builder = EntryExitParams{};
-      ee_started = false;
-      entry_set = false;
-      exit_set = false;
-      len_set = false;
-    }
-  };
-  for (const auto& tok : tokens) {
-    if (tok.empty()) {
-      continue;
-    }
-    if (detail::IsEeToken(tok)) {
-      std::string err;
-      // Tolerant parse: a token that fails to merge (duplicate / bad lengthspec)
-      // is SKIPPED — it must NOT fabricate a factor. Only mark the EE factor
-      // "started" once a field was actually set, so an all-invalid EE run (e.g.
-      // "len:abc") yields no factor rather than a match-everything wildcard EE.
-      // Mirrors ValidateSummandText, which rejects such tokens (code-review-02
-      // Major 1).
-      if (detail::MergeEeToken(tok, ee_builder, entry_set, exit_set, len_set, err)) {
-        ee_started = true;
-      }
-    } else {
-      flush_ee();
-      RaypathParams rp;
-      rp.raypath_text = tok;
-      out.emplace_back(std::move(rp));
-    }
-  }
-  flush_ee();
+  detail::WalkSummandEeFlush(
+      tokens,
+      []() -> detail::WalkAction {
+        // Empty AND factor: silently skip (tolerant).
+        return detail::WalkAction::kContinue;
+      },
+      [](const std::string& /*tok*/, const std::string& /*err*/) -> detail::WalkAction {
+        // Merge failure: skip the token. Skeleton preserves EE state so that a
+        // subsequent valid EE token still accumulates into the same factor
+        // (first-wins across a mid-run skip); an all-invalid EE run yields no
+        // factor rather than a match-everything wildcard EE (code-review-02
+        // Major 1).
+        return detail::WalkAction::kContinue;
+      },
+      [&](const EntryExitParams& ee, bool /*entry_set*/, bool /*exit_set*/) -> detail::WalkAction {
+        out.emplace_back(ee);
+        return detail::WalkAction::kContinue;
+      },
+      [&](const std::string& tok) -> detail::WalkAction {
+        RaypathParams rp;
+        rp.raypath_text = tok;
+        out.emplace_back(std::move(rp));
+        return detail::WalkAction::kContinue;
+      });
   return out;
 }
 
