@@ -509,6 +509,29 @@ TEST(FilterSopGrammar, DuplicateEeTokenParserFirstWinsValidatorRejects) {
   EXPECT_EQ(std::get<EntryExitParams>(dup_len[0]).min_len, 3);
 }
 
+// Contract lock (task-gui-filter-grammar-statemachine-unify): after unifying
+// Validate/Parse onto detail::WalkSummandEeFlush, a merge-failed EE token in
+// the MIDDLE of an EE run must NOT terminate the run for the parser — the
+// skeleton leaves EE state untouched on merge failure, so a subsequent valid
+// EE token (`exit:3` here) still accumulates into the same factor as the
+// prior valid token (`entry:2`). Validator rejects at the failed token.
+// Existing "entry:2 & len:abc" (ParseSkipsAllInvalidEeRun) is a TAIL failure,
+// not mid-run; this locks the mid-run case that had no coverage before.
+TEST(FilterSopGrammar, MidRunEeMergeSkipDoesNotTerminateFactor) {
+  // Validator: rejects at the `len:abc` token.
+  auto v = ValidateSummandText("entry:2 & len:abc & exit:3", LUMICE_CRYSTAL_PRISM);
+  EXPECT_EQ(v.state, LUMICE_RAYPATH_INVALID);
+  // Parser: skips `len:abc`, accumulates `entry:2` + `exit:3` into ONE factor
+  // (not two — mid-run merge failure must not fabricate a factor boundary).
+  auto parsed = ParseSummandText("entry:2 & len:abc & exit:3");
+  ASSERT_EQ(parsed.size(), 1u);
+  ASSERT_TRUE(std::holds_alternative<EntryExitParams>(parsed[0]));
+  const auto& ee = std::get<EntryExitParams>(parsed[0]);
+  EXPECT_EQ(ee.entry_text, "2");
+  EXPECT_EQ(ee.exit_text, "3");
+  EXPECT_EQ(ee.length_mode, 0);  // bad len skipped, no length constraint
+}
+
 TEST(FilterSopGrammar, ParseLengthSpecStrict) {
   int mode = 0;
   int min_len = 0;
