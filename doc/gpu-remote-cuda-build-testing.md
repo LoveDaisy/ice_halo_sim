@@ -33,12 +33,22 @@
   `rsync -az --delete src/ 49-GPU:/home/work/zjj/ice-halo-sim/src/` + 同理 test/，
   排除 `__pycache__`/`references/`）。非 git 仓，rsync 覆盖即可。
 - **CUDA docker 镜像**：
-  `registry.cn-zhangjiakou.aliyuncs.com/weizhendev/wzffm-centos7-cuda11.6:20250811T094454Z-e7555768`
-  （CUDA 11.6）。
+  - ⭐**优先用本地镜像 `lumice-cuda-test:11.6-py`**（dev49 本地 tag，`docker images` 可见）。它 = 下方 base 镜像 **+ 预装 `pytest`/`numpy`/`Pillow`**（explore-359 打的，避免每次 `docker run` 重装；`--rm` 只删容器不删镜像故持久留存）。**用它就不用再写 `pip install` 行**。
+  - base 镜像（新镜像的 FROM、也是纯 build 用）：
+    `registry.cn-zhangjiakou.aliyuncs.com/weizhendev/wzffm-centos7-cuda11.6:20250811T094454Z-e7555768`（CUDA 11.6）。
+  - **若本地镜像丢失（换机/清 docker）→ 一条命令重建**：
+    ```bash
+    ssh 49-GPU 'mkdir -p /tmp/lumice-img-build && printf "%s\n%s\n" \
+      "FROM registry.cn-zhangjiakou.aliyuncs.com/weizhendev/wzffm-centos7-cuda11.6:20250811T094454Z-e7555768" \
+      "RUN python3 -m pip install --no-cache-dir pytest numpy Pillow" \
+      > /tmp/lumice-img-build/Dockerfile && \
+      docker build -t lumice-cuda-test:11.6-py /tmp/lumice-img-build'
+    ```
+    baked 版本（首建时）：pytest 8.4.2 / numpy 2.0.2 / Pillow 11.3.0。
 - **build dir**：`build/cmake_build_cuda`（已配好，Ninja，`LUMICE_CUDA_ENABLED=ON`，86-virtual PTX）。
 - **build**：
   ```bash
-  ssh 49-GPU 'cd /home/work/zjj/ice-halo-sim && IMG=<镜像> && \
+  ssh 49-GPU 'cd /home/work/zjj/ice-halo-sim && IMG=lumice-cuda-test:11.6-py && \
     docker run --rm --gpus all -v /home/work/zjj/ice-halo-sim:/work \
       -w /work/build/cmake_build_cuda $IMG bash -lc "ninja"'
   ```
@@ -46,17 +56,27 @@
   ninja <该 .o target>`；grep `177-D`/`declared but never referenced` 查死代码告警
   （既有噪声：spdlog/fmt 的 `#128-D loop is not reachable`、`trace_backend.hpp` multi-line comment，
   与改动无关）。
-- **parity**：docker 默认 `/usr/local/bin/python3` **无 pytest/numpy**，需一次性装：
+- **parity（⭐首选 C++ gtest，不是 pytest）**：dev49 上 **pytest CUDA parity battery 会 `Fatal Python error: Aborted`（`free(): invalid next size`）**——backlog #1 记录的既存 ctypes teardown 堆污染，a01 已复核 pre-existing、与改动无关，但它会**吞掉 pytest 的 pass/fail 汇总**（尤其 `-q` 下崩在 summary 前）。**CLI 直跑和 C++ gtest 都不触发此崩溃**，故 parity 回归门走 gtest `parity_test`（用新镜像，无需 pip install）：
   ```bash
-  docker run --rm --gpus all -v /home/work/zjj/ice-halo-sim:/work -w /work $IMG bash -lc '
-    python3 -m pip install -q pytest numpy Pillow
+  docker run --rm --gpus all -v /home/work/zjj/ice-halo-sim:/work -w /work lumice-cuda-test:11.6-py bash -lc '
+    export LUMICE_HAS_CUDA=1 LUMICE_CUDA_ENABLED=1
+    export LD_LIBRARY_PATH=/work/build/Release/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+    /work/build/Release/bin/parity_test --gtest_filter="Cuda*:*ComponentMask*"'
+  ```
+  覆盖 `CudaRichExit`（2 个 in-test `GTEST_SKIP`）、`CudaBackendCrystalCount`、`CudaRngHiWiring`(4)、
+  `CudaComponentMaskParity`(6，染色 parity)。**判据 = 进程退出码 0 且 0 failed**（skip 不算失败）。耗时 ~2s。
+- **pytest parity（仅当必须，明知会 teardown 崩）**：用新镜像 + `-v -p no:faulthandler` 让每条 `PASSED`
+  在崩溃前流式打出（`-q` 下崩溃会让你什么都看不到）：
+  ```bash
+  docker run --rm --gpus all -v /home/work/zjj/ice-halo-sim:/work -w /work lumice-cuda-test:11.6-py bash -lc '
     export LUMICE_HAS_CUDA=1 LUMICE_CUDA_ENABLED=1
     export LUMICE_LIB=/work/build/Release/lib/liblumice.so
     export LD_LIBRARY_PATH=/work/build/Release/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-    python3 -m pytest -v test/parity-cross-backend/backend/test_cuda_{exit_seam,filter,multi_ms}_parity.py'
+    python3 -m pytest -v -p no:faulthandler test/parity-cross-backend/backend/test_cuda_{exit_seam,filter,multi_ms}_parity.py'
   ```
-  （ctest 的 `CudaMultiMsParity` 因 cmake `PYTEST_EXECUTABLE` cache 指向不存在路径会 Not Run，
-  直接 `python3 -m pytest` 绕过。）耗时 ~7min。
+  （ctest 的 `CudaMultiMsParity` 因 cmake `PYTEST_EXECUTABLE` cache 指向不存在路径会 Not Run；直接 `python3 -m pytest` 绕过。）
+- **染色密度验证（本 bug / 任何 Y-lane composite 改动的功能门，parity 只测 mask 是盲区）**：three_arcs 2M
+  跑 `--backend cuda` vs `--backend cpu`，比 `img_01_components.jpg` 的 lit-px 密度（用新镜像，`test/e2e/image_utils.py::classify_pixels_by_color_direction`）。修复后 CUDA≈CPU（~100k）；explore-359 pre-fix 塌到 65k(CUDA)/3k(Metal)。
 - **CLI 冒烟**：`Lumice -f examples/config_example.json --backend cuda -o /tmp`
   （`-o` 是**目录**不是文件），grep `Stats: ... crystals=N`。
 - **坑**：shared 机 CPU 争用使 host-bound 吞吐剧烈抖动（只信 interleaved，perf 才在意）；
