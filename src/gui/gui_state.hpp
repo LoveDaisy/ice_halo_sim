@@ -228,19 +228,32 @@ struct RenderConfig {
   bool operator!=(const RenderConfig& o) const { return !(*this == o); }
 };
 
-// task-classic-params-migration (T2) — resim-eligibility comparator for RenderConfig.
-// Compares every field EXCEPT `exposure_offset`. Rationale: EV is a pure display-time
-// parameter (doc/ev-pipeline-architecture.md §6.4/§6.5 — GUI Run path never bakes EV; the
-// core-side NeedsRebuild() already lists intensity_factor / opacity / background / ray_color
-// as appearance-only). Among those, only `exposure_offset` has no need to travel through a
-// commit at all (it is pushed every frame via RefreshPreviewParams / LUMICE_SetCompositeExposure),
-// so it is the single field that should be excluded from the resim/rebuild diff.
+// resim-eligibility comparator for RenderConfig. Compares ONLY fields whose change genuinely
+// requires re-running / rebuilding the simulation. Everything else is client-side display state.
+//
+// EXCLUDED — T-view fields (doc/gui-state-governance.md §2 row "T-view"): the simulation always
+// renders a fixed full-sky dual-fisheye and the GUI reprojects it in the preview GL shader, so
+// these are pure client-side reprojection / crop parameters uploaded as shader uniforms
+// (preview_renderer.cpp: u_lens_type / u_visible / u_front) and never travel to the server:
+//   lens_type, fov, elevation, azimuth, roll  — camera view angle + projection (mouse orbit /
+//                                                lens combo). Including them made every drag /
+//                                                lens switch falsely trigger a re-sim (auto-restart
+//                                                in infinite-rays mode; "Configuration changed" in
+//                                                finite mode). That was the scrum-353 T2 regression:
+//                                                only exposure_offset had been carved out.
+//   visible, front                            — upper/lower/full hemisphere clip (display crop).
+//   exposure_offset                           — EV (doc/ev-pipeline-architecture.md §6.4/§6.5;
+//                                                pushed every frame via LUMICE_SetCompositeExposure).
+//
+// INCLUDED — sim_resolution_index (changes the sim render grid → genuine re-sim) plus the
+// appearance fields the core NeedsRebuild() treats as appearance-only but which currently reach
+// the server only through the commit payload (background / ray_color / opacity); leave them in so
+// they still get applied on Run until they gain a display-time push path.
+//
 // Callers: gui_state_reconcile.cpp::DiffAgainstCommitBaseline and app.cpp::DoRun expect_rebuild
 // (single source of truth — do not fork).
 inline bool RenderConfigResimEqual(const RenderConfig& a, const RenderConfig& b) {
-  return a.lens_type == b.lens_type && a.fov == b.fov && a.elevation == b.elevation && a.azimuth == b.azimuth &&
-         a.roll == b.roll && a.sim_resolution_index == b.sim_resolution_index && a.visible == b.visible &&
-         a.front == b.front && std::equal(a.background, a.background + 3, b.background) &&
+  return a.sim_resolution_index == b.sim_resolution_index && std::equal(a.background, a.background + 3, b.background) &&
          std::equal(a.ray_color, a.ray_color + 3, b.ray_color) && a.opacity == b.opacity;
 }
 

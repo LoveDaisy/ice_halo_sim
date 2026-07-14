@@ -199,15 +199,45 @@ void RegisterStateReconcileTests(ImGuiTestEngine* engine) {
       IM_CHECK(!e.need_hard_reset);
       IM_CHECK(!e.need_display_push);
     }
-    // Non-EV renderer field (fov) still drives re-sim (regression pin for the T2 default
-    // assumption — pre-T2 there was no dedicated coverage for fov / elevation / azimuth /
-    // roll / lens_type, they relied on the whole-struct comparison).
+    // fix/gui-view-lens-no-resim (regression pin): the T-view fields — camera view angle,
+    // lens/projection, fov, roll, and the hemisphere clip (visible / front) — are pure client-side
+    // reprojection (the sim renders a fixed full-sky dual-fisheye; the GUI reprojects it in the
+    // preview shader). Mutating any of them alone MUST NOT drive re-sim / hard-reset / display-push.
+    // Before the fix, dragging the view or switching the lens falsely re-triggered the sim
+    // (auto-restart in infinite-rays mode; "Configuration changed" in finite mode) because
+    // RenderConfigResimEqual compared these fields. This pin prevents a silent re-add.
+    {
+      struct ViewMutator {
+        const char* field;
+        void (*apply)(GuiState&);
+      };
+      const ViewMutator kViewMutators[] = {
+        { "lens_type", [](GuiState& s) { s.renderer.lens_type = 1; } },  // was 0
+        { "fov", [](GuiState& s) { s.renderer.fov = 45.0f; } },          // was 90.0f
+        { "elevation", [](GuiState& s) { s.renderer.elevation = 15.0f; } },
+        { "azimuth", [](GuiState& s) { s.renderer.azimuth = 30.0f; } },
+        { "roll", [](GuiState& s) { s.renderer.roll = 10.0f; } },
+        { "visible", [](GuiState& s) { s.renderer.visible = 0; } },  // was 2 (full)
+        { "front", [](GuiState& s) { s.renderer.front = !s.renderer.front; } },
+      };
+      for (const auto& mut : kViewMutators) {
+        GuiState s = MakeBaselineState();
+        mut.apply(s);
+        GuiEffects e = ReconcileGuiEffects(s);
+        IM_CHECK(!e.need_resim);
+        IM_CHECK(!e.need_hard_reset);
+        IM_CHECK(!e.need_display_push);
+        IM_UNUSED(mut.field);  // name is here for debug-print if IM_CHECK fires
+      }
+    }
+    // Counterpart: sim_resolution_index is the one RenderConfig field that IS structural — it must
+    // still drive re-sim (already covered by the soft-tier renderer case above, restated here so the
+    // T-view exclusions above cannot be over-broadened to swallow the whole struct).
     {
       GuiState s = MakeBaselineState();
-      s.renderer.fov = 45.0f;  // was 90.0f
+      s.renderer.sim_resolution_index += 1;
       GuiEffects e = ReconcileGuiEffects(s);
       IM_CHECK(e.need_resim);
-      IM_CHECK(!e.need_hard_reset);
     }
 
     // task-classic-params-migration (T2 Step 2 / AC2): filter presence-toggle at same-shape

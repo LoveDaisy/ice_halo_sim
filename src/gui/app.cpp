@@ -850,8 +850,10 @@ void DoRun() {
   // Renderer comparison uses RenderConfigResimEqual (gui_state.hpp) — same helper used by
   // gui_state_reconcile.cpp::DiffAgainstCommitBaseline, so this predicate and the reconciler's
   // resim/dirty verdict stay in lock-step (single source of truth; see T2 plan §3 design 1).
-  // Excludes exposure_offset because EV is display-time only (§6.5) — dragging the EV slider
-  // must not cause a poller Stop here.
+  // Excludes all T-view fields (lens_type / fov / elevation / azimuth / roll / visible / front /
+  // exposure_offset) because they are client-side reprojection only — the sim renders a fixed
+  // full-sky dual-fisheye and the GUI reprojects it (see gui_state.hpp comment). Dragging the
+  // view / switching the lens / toggling the hemisphere clip must not cause a poller Stop here.
   bool expect_rebuild = backend_reconstructed || !g_state.last_committed_state.has_value() ||
                         !RenderConfigResimEqual(g_state.renderer, g_state.last_committed_state->renderer);
 
