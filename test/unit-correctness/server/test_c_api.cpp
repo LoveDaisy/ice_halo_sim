@@ -2683,7 +2683,7 @@ TEST(ParseConfigApi, RaypathColorArrayFormParsed) {
   lumice::ConfigColorGuard cfg_guard(cfg);
   ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithRaypathColorJson(rc).c_str(), &cfg), LUMICE_OK);
   EXPECT_EQ(cfg.raypath_color_count, 1);
-  // task-painter-alpha-over-composite (doc §4.8): bare-array wire form now
+  // doc §4.8: bare-array wire form now
   // defaults to painter — kept in lockstep with core RaypathColorConfig::from_json.
   EXPECT_EQ(cfg.raypath_color_mode, LUMICE_COLOR_MODE_PAINTER);
   ASSERT_EQ(cfg.raypath_color[0].match_count, 1);

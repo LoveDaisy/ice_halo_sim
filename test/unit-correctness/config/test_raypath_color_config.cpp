@@ -227,7 +227,7 @@ TEST(RaypathColorConfig, JsonRoundTripDefaultModeBareArray) {
 
   auto restored = j.get<RaypathColorConfig>();
   ASSERT_EQ(restored.classes_.size(), 2u);
-  // task-painter-alpha-over-composite (doc §4.8): default mode is now painter;
+  // doc §4.8: default mode is now painter;
   // bare-array wire form defaults to it via kDefaultCompositeMode.
   EXPECT_EQ(restored.mode_, "painter");
   EXPECT_FLOAT_EQ(restored.classes_[0].color_[0], 1.0f);

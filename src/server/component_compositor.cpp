@@ -242,7 +242,7 @@ bool CompositeColorClassesLinear(const RenderConsumer& consumer, const ColorClas
   // the anchor `A` comes from the participating-P99 self-anchor (not the mono
   // ExposureScale) so hiding a bright class instantly re-anchors the rest.
   //
-  // task-painter-alpha-over-composite (doc §4.8): split A / s.
+  // doc §4.8: split A / s.
   //   - dominant / additive: keep the pre-existing single scalar
   //     `s = A * display_exposure_scale` (byte-for-byte behavior preserved).
   //   - painter: alpha driven by `A` alone (self-anchor only) so the occluder

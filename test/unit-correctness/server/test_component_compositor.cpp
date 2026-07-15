@@ -242,7 +242,7 @@ TEST(ComponentCompositor, DominantAdditivePainterPerPixelMath) {
   EXPECT_FLOAT_EQ(out[p * 3 + 1], ey1);
   EXPECT_FLOAT_EQ(out[p * 3 + 2], 0.0f);
 
-  // painter (task-painter-alpha-over-composite / doc §4.8): Porter-Duff over,
+  // painter (doc §4.8): Porter-Duff over,
   // list-first = top. Both classes contribute because alpha < 1: top-layer
   // class0 (red) contributes `alpha0 * red`, class1 (green) shows through with
   // transmittance `1 - alpha0` → `(1-alpha0) * alpha1 * green`. With ey_c < 1,
@@ -260,7 +260,7 @@ TEST(ComponentCompositor, PainterAlphaOverBlendsTopAndBottomDominantPicksBrighte
 
   // Now class1 (bit1, green, weight 0.9) is BRIGHTER than class0 (bit0, red,
   // weight 0.3): dominant picks the brighter class1 (green). Painter (post
-  // task-painter-alpha-over-composite / doc §4.8) blends both via Porter-Duff
+  // doc §4.8) blends both via Porter-Duff
   // over — the top-layer class0 partially occludes but does NOT hide class1.
   auto table = MakeSingletonClassTable(0b11, { kRed, kGreen });
   RenderConsumer rc(cfg, table);
@@ -328,7 +328,7 @@ TEST(ComponentCompositor, DominantTieTakesFirstClass) {
 }
 
 // -----------------------------------------------------------------------------
-// A2. task-painter-alpha-over-composite (doc §4.8) painter-specific coverage:
+// A2. doc §4.8 painter-specific coverage:
 //     black-hole fix, EV independence of occluder structure, single-class
 //     f(ey)·color (no ey² double-count), full-opacity color ceiling.
 // -----------------------------------------------------------------------------
@@ -660,7 +660,7 @@ TEST(ComponentCompositor, OverlapDominantPicksBrighterAdditiveMixes) {
   EXPECT_FLOAT_EQ(out[p * 3 + 0], 0.0f) << "dominant must not paint the loser's color";
   EXPECT_FLOAT_EQ(out[p * 3 + 1], eyB);
 
-  // painter (post task-painter-alpha-over-composite / doc §4.8) alpha-over on
+  // painter (doc §4.8) alpha-over on
   // OVERLAPPING classes: list-first = A (red) is top, its alpha_A = eyA (< 1)
   // does not fully occlude, so class B (green) still shows through with
   // transmittance (1 - alpha_A). Divergence from dominant survives (dominant
@@ -831,7 +831,7 @@ TEST(ComponentCompositor, ParseCompositeModeKnownStrings) {
 }
 
 TEST(ComponentCompositor, ParseCompositeModeUnknownFallsBackToPainter) {
-  // task-painter-alpha-over-composite (doc §4.8): default composite mode is
+  // doc §4.8: default composite mode is
   // now painter; the unknown-string fallback follows the default.
   EXPECT_EQ(ParseCompositeMode("bogus-typo"), CompositeMode::kPainter);
   EXPECT_EQ(ParseCompositeMode(""), CompositeMode::kPainter);
@@ -1104,8 +1104,8 @@ TEST(ComponentCompositor, RaypathColorConfigJsonFormsRoundTrip) {
   EXPECT_EQ(back.classes_[0].match_[0].crystal_, 1);
   EXPECT_TRUE(std::holds_alternative<NoneFilterParam>(back.classes_[0].match_[0].predicate_));
 
-  // Default mode → bare array form, still round-trips. task-painter-alpha-over-composite
-  // (doc §4.8): default is now painter (kDefaultCompositeMode).
+  // Default mode → bare array form, still round-trips.
+  // doc §4.8: default is now painter (kDefaultCompositeMode).
   RaypathColorConfig dom;
   dom.classes_.push_back(MakeCls({ 1.0f, 0.0f, 0.0f }, { MakeRef(0, 0) }));
   nlohmann::json jd = dom;
@@ -1329,7 +1329,7 @@ TEST(ComponentCompositor, EarlyReturnPublishesParticipatingP99) {
   // depends on either behavior — but the tightening is worth pinning so a
   // future regression doesn't silently un-tighten it.
   //
-  // task-painter-alpha-over-composite (doc §4.8): the guard formerly triggered
+  // doc §4.8: the guard formerly triggered
   // on `s = A * display_exposure_scale <= 0` (via scale=0). Since the split
   // A vs s, `display_exposure_scale = 0` is now a legitimate painter input
   // (post-composite black-out) that keeps the alpha structure — so the early-

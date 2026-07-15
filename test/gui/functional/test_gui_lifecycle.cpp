@@ -1018,7 +1018,7 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
 
     // Click 5: composite mode combo -> transition observed by first setting a
     // non-painter baseline then clicking "painter" (combo item index 2 — see
-    // kModeNames in RenderCompositeModeCombo). Post task-painter-alpha-over-composite
+    // kModeNames in RenderCompositeModeCombo). Per doc §4.8
     // (doc §4.8) the default is now painter, so a fresh state already sits at
     // index 2; we click "dominant" first to guarantee mode_before != painter, then
     // observe the click's transition to painter.

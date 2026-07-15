@@ -21,7 +21,7 @@ enum class CompositeMode { kDominant, kAdditive, kPainter };
 
 // Parse the RaypathColorConfig::mode_ string ("dominant" / "additive" /
 // "painter") into a CompositeMode. Any other value falls back to kPainter with
-// a one-shot LOG_WARNING (task-painter-alpha-over-composite: default is now
+// a one-shot LOG_WARNING (doc §4.8: default is now
 // painter; §4.8).
 CompositeMode ParseCompositeMode(const std::string& mode_str);
 
