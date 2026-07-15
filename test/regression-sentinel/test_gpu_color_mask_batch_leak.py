@@ -1,5 +1,4 @@
-"""End-to-end regression test for the GPU per-raypath color-mask batch leak
-(fix/gpu-color-mask-batch-leak / explore-365).
+"""End-to-end regression test for the GPU per-raypath color-mask batch leak.
 
 Bug (before fix)
     Metal + CUDA gated the layer-0 `root_component` per-batch memset inside
@@ -22,10 +21,9 @@ Regression contract
     per-class marginals across backends and drops the min/max ratio well
     below the band (issue.md measured ~0.14–0.32 on broken code).
 
-Test protocol (issue-scenario contract, `feedback_test_must_use_issue_scenario`)
-    - Reuses the exact explore-365 fixture
-      (`test/e2e/configs/raypath_color_multi_layer.json`) — same knobs
-      that triggered the bug in prod.
+Test protocol (issue-scenario contract)
+    - Reuses the exact fixture that reproduced the bug in prod
+      (`test/e2e/configs/raypath_color_multi_layer.json`).
     - Runs a REAL server via `run_lumice` CLI (not a raw backend harness).
       The bug only reproduces when the backend is reused across per-batch
       BeginSession cycles, which the CLI does but the raw-backend +
@@ -192,6 +190,6 @@ def test_multi_batch_per_class_ratio_cpu_vs_metal_within_band():
         assert not failures, (
             "per-class dominant-pixel CPU/Metal ratio outside band — "
             "possible reintroduction of the layer-0 carried-mask cross-batch "
-            "leak (explore-365):\n" + "\n".join(failures) +
+            "leak:\n" + "\n".join(failures) +
             f"\n  full: CPU={cpu_counts} Metal={metal_counts}"
         )

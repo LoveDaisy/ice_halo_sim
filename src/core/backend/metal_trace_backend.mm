@@ -2765,23 +2765,21 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     impl_->last_stats = LayerStats{};
     impl_->cont_counts[out_slot] = 0;
 
-    // task-331.5: per-layer component-mask setup (test-only capture path).
-    //   - Layer 0's root rays start with an all-zero carried mask; memset here
-    //     (transit_root_kernel overwrites root_component for layer≥1).
-    //   - Reset the capture-ring counter so each layer's emits append from 0;
-    //     the per-layer drain after the ci loop reads exactly this layer's count.
-    // explore-365 FIX: the layer-0 carried-mask reset MUST run in production
-    // too, not only under the test-only capture_ray_mask_ path. The trace kernel
-    // always reads root_component[tid] as the carried mask (production color
-    // path), and root_component_buf_ is REUSED across per-batch BeginSession
-    // cycles — layer≥1's transit_root_kernel writes it, so without a per-first-
-    // layer memset batch N's layer-0 rays inherit batch N-1's final-layer carried
-    // color bits, merging color-class masks across batches (only visible with
-    // multi-crystal L0 + multi-batch; parity harness masked it by enabling
-    // capture_ray_mask_, which used to gate this reset).
+    // Layer-0 root rays must start with an all-zero carried color-class mask.
+    // root_component_buf_ is reused across per-batch BeginSession cycles and the
+    // trace kernel reads it on the production color path (transit_root_kernel
+    // overwrites it for layer≥1), so this reset MUST be unconditional for the
+    // first layer — NOT gated on the test-only capture path below — or batch N's
+    // layer-0 rays inherit batch N-1's carried bits and color-class masks merge
+    // across batches (observable only with multi-crystal L0 + multi-batch).
     if (first_ms && impl_->root_component_buf_ != nil) {
       std::memset([impl_->root_component_buf_ contents], 0, total_ray_num * sizeof(uint64_t));
     }
+    // task-331.5: test-only capture-ring maintenance for the whole block below —
+    // (re)allocate the capture buffers AND reset the ring counter so each layer's
+    // emits append from 0 (the per-layer drain after the ci loop reads exactly
+    // this layer's count). Entirely gated on the test-only capture path; a
+    // disjoint buffer set from the production reset above.
     if (impl_->capture_ray_mask_) {
       impl_->EnsureComponentCaptureBuffers(impl_->out_cap);
       *static_cast<uint32_t*>([impl_->exit_comp_cnt_buf_ contents]) = 0u;

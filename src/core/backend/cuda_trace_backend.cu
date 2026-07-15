@@ -3315,25 +3315,23 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
   ck_reset(cudaMemset(impl_->d_cont_count_[out_slot], 0, sizeof(uint32_t)),
            "cudaMemset d_cont_count_[out_slot]");
 
-  // task-331.6 (test-only) component-mask capture setup:
-  //   - Layer 0's root rays start with an all-zero carried mask; memset here
-  //     (transit_multi_ms_kernel overwrites d_root_component_ for layer≥1).
-  //     Gen/host-gen paths do NOT write d_root_component_, so this memset is the
-  //     sole initializer for the first layer.
-  //   - Reset the capture-ring counter so each layer's emits append from 0; the
-  //     per-layer drain after the ci-loop reads exactly this layer's count.
-  // explore-365 FIX: the layer-0 carried-mask reset MUST run in production too,
-  // not only under the test-only capture_ray_mask_ path. The trace kernel always
-  // reads d_root_component[tid] as the carried mask (production color path), and
-  // d_root_component_ is REUSED across per-batch BeginSession cycles — layer≥1's
-  // transit kernel writes it, so without a per-first-layer memset batch N's
-  // layer-0 rays inherit batch N-1's final-layer carried color bits, merging
-  // color-class masks across batches (only visible with multi-crystal L0 +
-  // multi-batch). Mirrors the MetalTraceBackend fix at the same site.
+  // Layer-0 root rays must start with an all-zero carried color-class mask.
+  // d_root_component_ is reused across per-batch BeginSession cycles and the
+  // trace kernel reads it on the production color path (transit_multi_ms_kernel
+  // overwrites it for layer≥1; gen/host-gen paths do NOT write it, so this is the
+  // sole first-layer initializer), so this reset MUST be unconditional — NOT
+  // gated on the test-only capture path below — or batch N's layer-0 rays inherit
+  // batch N-1's carried bits and color-class masks merge across batches
+  // (observable only with multi-crystal L0 + multi-batch). Mirrors MetalTraceBackend.
   if (first_ms && impl_->d_root_component_ != nullptr) {
     ck_reset(cudaMemset(impl_->d_root_component_, 0, n * sizeof(unsigned long long)),
              "cudaMemset d_root_component (layer 0)");
   }
+  // task-331.6: test-only capture-ring maintenance for the whole block below —
+  // (re)allocate the capture buffers AND reset the ring counter so each layer's
+  // emits append from 0 (the per-layer drain after the ci-loop reads exactly this
+  // layer's count). Entirely gated on the test-only capture path; a disjoint
+  // buffer set from the production reset above.
   if (impl_->capture_ray_mask_) {
     impl_->EnsureComponentCaptureBuffers(ComputeContCap(n, impl_->scene_->max_hits_));
     ck_reset(cudaMemset(impl_->d_exit_comp_cnt_, 0, sizeof(uint32_t)), "cudaMemset d_exit_comp_cnt");
