@@ -2235,6 +2235,47 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // task-gui-feedback-affordances Step 3 (AC4): SummarizeSopExpansion delegates
+  // to the same ExpandSopToClauses as the commit path so the live preview and
+  // the ABI enforcement point share the exact same arithmetic (no drift).
+  // Single-row default (blank) collapses to 1 clause, non-overflow; a 6561-
+  // would-be-clause row (4 × 9-alt) trips the LUMICE_MAX_CONFIG_CLAUSES=4096
+  // cap and reports overflow with the bounded degenerate stand-in.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "summarize_sop_expansion_delegates_to_commit_path");
+    t->TestFunc = [](ImGuiTestContext*) {
+      gui::FilterConfig f_ok;
+      f_ok.SetRaypath(gui::RaypathParams{ "3-5" });
+      const auto s_ok = gui::SummarizeSopExpansion(f_ok);
+      IM_CHECK(!s_ok.overflow);
+      IM_CHECK_EQ(s_ok.clause_count, static_cast<size_t>(1));
+
+      // Multi-alternative single-row: `;`-OR expands but stays well below cap.
+      gui::FilterConfig f_multi;
+      f_multi.SetRaypath(gui::RaypathParams{ "3-5;1-2" });
+      const auto s_multi = gui::SummarizeSopExpansion(f_multi);
+      IM_CHECK(!s_multi.overflow);
+      IM_CHECK_EQ(s_multi.clause_count, static_cast<size_t>(2));
+
+      // Overflow: 4 × 9-alt = 6561 > LUMICE_MAX_CONFIG_CLAUSES(4096).
+      gui::SummandText row;
+      row.text = "1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4";
+      row.factors = {
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4;5;6;7;8;3-4" } },
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4;5;6;7;8;3-4" } },
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4;5;6;7;8;3-4" } },
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4;5;6;7;8;3-4" } },
+      };
+      gui::FilterConfig f_over;
+      f_over.param = gui::SumOfProducts{ row };
+      const auto s_over = gui::SummarizeSopExpansion(f_over);
+      IM_CHECK(s_over.overflow);
+      // ExpandSopToClauses replaces the huge tree with a bounded degenerate
+      // stand-in (1 clause) on overflow — the summary reflects that.
+      IM_CHECK_EQ(s_over.clause_count, static_cast<size_t>(1));
+    };
+  }
+
   // FormatOverflowLocator format contract (pure function, no GUI): the unnamed form drops the
   // filter clause and keeps 1-based Layer/Entry, and the indices are presented as +1.
   {

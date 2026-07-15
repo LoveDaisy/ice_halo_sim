@@ -528,6 +528,19 @@ static ExpandedFilter ExpandSopToClauses(const FilterConfig& f) {
   return ef;
 }
 
+// task-gui-feedback-affordances Step 3 (AC4) — see file_io.hpp. Cheap on-typing
+// summary that delegates to ExpandSopToClauses so the live preview and the
+// commit path share the same expansion arithmetic (no drift). Only the total
+// clause count + overflow flag are exposed; the callers do not need to see the
+// clause contents.
+SopExpansionSummary SummarizeSopExpansion(const FilterConfig& f) {
+  const ExpandedFilter ef = ExpandSopToClauses(f);
+  SopExpansionSummary summary;
+  summary.clause_count = ef.clauses.size();
+  summary.overflow = ef.overflow;
+  return summary;
+}
+
 // True when the expansion collapses to a single simple filter (1 clause, 1 term):
 // single raypath / single EE / single-factor single-alternative row. Such filters
 // emit ONE simple filter with no wrapping complex (byte-equivalent to pre-uplift).

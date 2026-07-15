@@ -17,6 +17,7 @@
 #include "gui/crystal_renderer.hpp"
 #include "gui/destructive_style.hpp"
 #include "gui/face_number_overlay.hpp"
+#include "gui/file_io.hpp"  // SummarizeSopExpansion (Step 3 AC4 live preview)
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/panels.hpp"
@@ -852,6 +853,30 @@ static void RenderSummandRowList() {
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextUnformatted(FormatSopExpansionPreview(live_sop).c_str());
     ImGui::PopTextWrapPos();
+
+    // task-gui-feedback-affordances Step 3 (AC4): show the post-Cartesian
+    // expanded clause count against LUMICE_MAX_CONFIG_CLAUSES so the user
+    // learns early — before hitting OK / Run — that a ';'-heavy row will
+    // trip the ABI cap. Delegates to SummarizeSopExpansion, which shares
+    // ExpandSopToClauses with the commit path (file_io.hpp — single source).
+    // The commit path (DoRun's FillLumiceConfig branch) remains the ABI
+    // enforcement point; this preview is diagnostic-only (issue.md D "越界
+    // 有可见提示"; plan §2/§3 D "仅标红，不禁用 OK").
+    FilterConfig probe;  // throwaway wrapper — SummarizeSopExpansion only reads .param
+    probe.param = live_sop;
+    const SopExpansionSummary sop_summary = SummarizeSopExpansion(probe);
+    char clause_line[128] = { 0 };
+    std::snprintf(clause_line, sizeof(clause_line), "Clauses: %zu / %d", sop_summary.clause_count,
+                  LUMICE_MAX_CONFIG_CLAUSES);
+    if (sop_summary.overflow) {
+      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+      ImGui::TextUnformatted(clause_line);
+      ImGui::SameLine();
+      ImGui::TextUnformatted("(exceeds limit — the previous config will be kept on OK)");
+      ImGui::PopStyleColor();
+    } else {
+      ImGui::TextDisabled("%s", clause_line);
+    }
   }
 }
 

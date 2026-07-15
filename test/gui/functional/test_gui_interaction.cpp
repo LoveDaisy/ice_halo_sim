@@ -5352,6 +5352,44 @@ void RegisterLinkedEntriesTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // task-gui-feedback-affordances Step 3 (AC4): the filter Edit modal live
+  // preview must render its "Clauses: N / <limit>" line for both the normal
+  // case and the overflow case (red-styled). This test opens the Edit modal,
+  // types an over-cap row (4 × 9-alt = 6561 clauses > 4096), yields frames so
+  // the immediate-mode preview runs — exercising the new PushStyleColor /
+  // PopStyleColor branch — then Cancels out. The primary assertion is that no
+  // ImGui style-stack assertion fires (branch balance is correct) and that
+  // the modal remains navigable. The precise clause-count value is locked by
+  // the sibling summarize_sop_expansion_delegates_to_commit_path unit test.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "live_preview_clause_count_overflow_no_crash");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      // Non-overflow first: a simple row keeps the preview in the disabled-text
+      // branch. Yield extra frames so ImGui commits at least one full render
+      // pass through the preview code.
+      ctx->ItemInputValue("**/##row_text_0", "3-5");
+      ctx->Yield(3);
+
+      // Now push into overflow territory: 4 factors × 9 alternatives each →
+      // 6561 clauses, well above LUMICE_MAX_CONFIG_CLAUSES = 4096.
+      ctx->ItemInputValue("**/##row_text_0",
+                          "1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4");
+      ctx->Yield(3);
+
+      // The Edit modal is still open and its Cancel item is still clickable —
+      // proving the preview render did not throw an ImGui assertion (which
+      // would tear down the modal / test).
+      IM_CHECK(ctx->ItemExists("**/" ICON_FA_XMARK " Cancel##edit_modal"));
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
   // task-gui-feedback-affordances Step 2 (AC3): a user-clicked Run always
   // re-opens the warning modal when the overflow condition persists, even
   // after the user dismissed the previous popup with OK. DoRun(true) calls
