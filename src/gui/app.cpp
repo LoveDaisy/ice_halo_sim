@@ -845,6 +845,14 @@ bool DoRun() {
   //     rebuild and reuse branches, so `> 0` is equivalent to "first batch landed".)
   //   - Timer is keyed by lifecycle.epoch, not a raw wall-clock static. Epoch changes → timer
   //     resets, so a stale timer from a previous gui_test scenario cannot leak into a new one.
+  //     Contract (task-364 review): this relies on lifecycle.epoch being a per-server monotonic
+  //     generation counter that never reuses 0 for a live-but-unconsumed Run. It is minted by the
+  //     server on each Start/CommitConfig (see ServerImpl epoch increment); the failure mode if
+  //     that ever regressed to "new server restarts epoch at 0, colliding with the initial
+  //     gate_epoch==0" is fail-OPEN (gate opens early, worst case reverts to the pre-task-364
+  //     0-rays symptom in a narrow window) — never a deadlock. The `!gate_since.has_value()`
+  //     guard below also forces a fresh timer whenever the timer was cleared, covering the
+  //     epoch==0-collision edge without depending on the counter's absolute value.
   //   - kQualityGateTimeoutMs (500ms) is a defensive ceiling reused from server_poller.cpp:
   //     if a Run somehow never lands a batch (hung backend), the gate opens after 500ms with
   //     a WARNING rather than blocking commits forever. See plan R2.
