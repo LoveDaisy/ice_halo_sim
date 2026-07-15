@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784083194608,
+  "lastUpdate": 1784083196853,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9620,50 +9620,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "de1ce7ae90f4d4404c0fc55b92f4a267c52da934",
-          "message": "Merge pull request #95 from LoveDaisy/feat/mesh_per_face\n\nfeat(core): scrum-193 leftovers batch — per-face topology + polygon-only tracing",
-          "timestamp": "2026-05-18T18:12:13+08:00",
-          "tree_id": "e40e53678e278c0e378b085931d4091084ba7f98",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/de1ce7ae90f4d4404c0fc55b92f4a267c52da934"
-        },
-        "date": 1779099458375,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 101.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 75.1,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 69.9,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 63.5,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "5908ce3f2446e604b823aeea72293bb87451f589",
           "message": "Merge pull request #96 from LoveDaisy/dev/refactor_rayseg\n\nrefactor: redesign RaySeg state + sentinel (scrum-206)",
           "timestamp": "2026-05-19T09:32:23+08:00",
@@ -14003,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 82.1,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6a2fa9ca79842740355bd10165ea2eb02cd8f279",
+          "message": "Merge pull request #197 from LoveDaisy/feat/metal-gui-commit-backpressure\n\nfix(gui): Metal GUI commit backpressure — O2 PSO 进程级缓存 + 自适应背压门",
+          "timestamp": "2026-07-15T10:32:02+08:00",
+          "tree_id": "44dfcceb98f7237b697f2a21d2028562645450e3",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/6a2fa9ca79842740355bd10165ea2eb02cd8f279"
+        },
+        "date": 1784083196117,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 80.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 97,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 93.7,
             "unit": "%"
           }
         ]
