@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784104658850,
+  "lastUpdate": 1784104661149,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9620,50 +9620,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "35e35f3275c09d626a2ebadc49c026d8d790ff17",
-          "message": "Merge pull request #98 from LoveDaisy/feat/filter_performance\n\nfeat(core): canonical-form FilterSpec + fix per-ray symmetry hot path",
-          "timestamp": "2026-05-20T09:41:53+08:00",
-          "tree_id": "fb556e78e23a0fafa29a2be152e168d43f33bfa3",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/35e35f3275c09d626a2ebadc49c026d8d790ff17"
-        },
-        "date": 1779241581911,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 89.2,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 77.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 70.3,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 66.1,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "ea5ab5ed603b0df052058857dc75ee0a822d6df4",
           "message": "Merge pull request #99 from LoveDaisy/feat/ux_polish\n\nfeat(gui): ux polish v2 + dead-code cleanup (panels.cpp::SliderWithPreset)",
           "timestamp": "2026-05-20T11:55:13+08:00",
@@ -14003,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 95.4,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e8f266452c9b204f5f067a0e9b7de29251e583e6",
+          "message": "Merge pull request #200 from LoveDaisy/test/painter-default-e2e-coverage\n\ntest(painter-default-e2e): 补 painter 默认合成模式的 e2e 全链路覆盖",
+          "timestamp": "2026-07-15T16:30:15+08:00",
+          "tree_id": "e9f46c194ddee502cab098deb32fc54ec94eba1b",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/e8f266452c9b204f5f067a0e9b7de29251e583e6"
+        },
+        "date": 1784104660387,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 80.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 95.8,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 92.5,
             "unit": "%"
           }
         ]
