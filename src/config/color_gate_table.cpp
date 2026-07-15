@@ -102,6 +102,11 @@ ColorGateTable BuildColorGateTable(const RaypathColorConfig& color_cfg, const Sc
     LOG_WARNING("ColorGateTable: {} predicate(s) exceeded the {}-bit component budget and were assigned kNoBit",
                 overflow_count, ComponentTable::kMaxBits);
   }
+  // task-gui-feedback-affordances Step 5 (AC1): carry the drop count out for
+  // the GUI modal surfacing (ServerImpl::CommitConfig persists it, then
+  // LUMICE_GetColorOverflowInfo exposes it). Existing LOG_WARNING behavior
+  // unchanged — this counter is additive, not a replacement.
+  table.component_overflow_count_ = overflow_count;
   return table;
 }
 

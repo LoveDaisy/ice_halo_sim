@@ -112,6 +112,12 @@ class ServerImpl {
   // otherwise. class_count must equal the active color-class count.
   Error GetColorClassSignals(uint8_t* out_flags, int class_count);
 
+  // task-gui-feedback-affordances Step 5 (AC1): synchronous accessor for the
+  // component-bit overflow count captured in the most recent CommitConfig.
+  size_t GetLastColorComponentOverflowCount() const {
+    return last_color_component_overflow_count_.load(std::memory_order_acquire);
+  }
+
  private:
   // task-268.7: single-engine orchestration — server now runs exactly one
   // Simulator. The legacy kDefaultSimulatorCnt = PhysicalCoreCount() was removed
@@ -169,6 +175,14 @@ class ServerImpl {
   // default; no raypath_color → color class table is empty → composite gate
   // skips the compositor anyway).
   CompositeMode active_composite_mode_ = CompositeMode::kDominant;
+
+  // task-gui-feedback-affordances Step 5 (AC1): number of color predicates
+  // that hit `kNoBit` in the most recent BuildColorGateTable call. Carried
+  // out synchronously in CommitConfig (see server.cpp:506 nearby). Exposed
+  // via LUMICE_GetColorOverflowInfo so DoRun's post-commit surface can pop a
+  // "coloring degraded" modal. Written under status_mutex_ (single writer =
+  // CommitConfig, atomic read by the C API path is safe).
+  std::atomic<size_t> last_color_component_overflow_count_{ 0 };
 
   // task-345.3: display-time EV for the composite path only. Zero (default) →
   // 2^0 = 1.0 → composite behavior is bit-for-bit pre-345.3 (structural AC4
@@ -504,6 +518,13 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
     // (per-class Y-lane accumulation) and into the compositor
     // (CompositeColorClassesLinear); no legacy per-bit adapter layer.
     ColorGateTable color_gate_table = BuildColorGateTable(new_config.raypath_color_, new_config.scene_);
+    // task-gui-feedback-affordances Step 5 (AC1): carry the component-bit
+    // overflow count (predicates that hit `kNoBit`) out so the GUI DoRun path
+    // can surface a "coloring degraded" modal via LUMICE_GetColorOverflowInfo.
+    // Written on the successful (non-throwing) branch — a parse/config error
+    // above leaves the prior counter untouched, matching the "keep prior
+    // committed state" semantics of the surrounding try/catch.
+    last_color_component_overflow_count_.store(color_gate_table.component_overflow_count_, std::memory_order_release);
     class_table = BuildColorClassTable(new_config.raypath_color_, new_config.scene_, color_gate_table);
     composite_mode = ParseCompositeMode(new_config.raypath_color_.mode_);
   } catch (const nlohmann::json::out_of_range& e) {
@@ -1648,6 +1669,13 @@ uint64_t Server::CommittedEpoch() const {
 
 bool Server::IsIdle() const {
   return GetStatus() == ServerStatus::kIdle;
+}
+
+size_t Server::GetLastColorComponentOverflowCount() const {
+  if (!impl_) {
+    return 0;
+  }
+  return impl_->GetLastColorComponentOverflowCount();
 }
 
 Error Server::SetRaypathColors(const ColorClassDisplay* classes, int class_count, const int* z_order,

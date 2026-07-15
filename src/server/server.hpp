@@ -427,6 +427,17 @@ class Server {
   Error GetColorClassSignals(uint8_t* out_flags, int class_count);
 
   /**
+   * @brief task-gui-feedback-affordances Step 5 (AC1): number of color predicates
+   *        that hit `kNoBit` in the most recent BuildColorGateTable call
+   *        (component-bit budget, kMaxBits=64, exhausted). Written synchronously
+   *        inside CommitConfig; read by LUMICE_GetColorOverflowInfo so the GUI
+   *        DoRun path can pop a "coloring degraded" modal without waiting for
+   *        the first backend batch to land.
+   * @return 0 iff no predicate was dropped; else the drop count.
+   */
+  size_t GetLastColorComponentOverflowCount() const;
+
+  /**
    * @brief task-345.3: display-time EV multiplier for the composite path only.
    * @param ev_total Total EV (manual + auto) to apply as 2^ev_total inside DoSnapshot Phase 2.
    * @return Error::Success. Mono path is untouched — only the composite result carries the

@@ -49,6 +49,14 @@ struct ColorGateEntry {
 
 struct ColorGateTable {
   std::vector<ColorGateEntry> entries_;
+  // task-gui-feedback-affordances Step 5 (AC1): number of predicates that hit
+  // `kNoBit` (component budget exhausted, `ComponentTable::kMaxBits=64`)
+  // during this build. Existing behavior (LOG_WARNING + assign kNoBit)
+  // preserved; this counter lets ServerImpl carry the count out of
+  // BuildColorGateTable so the GUI DoRun path can surface a user-visible
+  // "coloring degraded" modal (see server.cpp CommitConfig / c_api.cpp
+  // LUMICE_GetColorOverflowInfo).
+  size_t component_overflow_count_ = 0;
 };
 
 // Per-placement view for the CPU emit gate: predicates + parallel bit array
