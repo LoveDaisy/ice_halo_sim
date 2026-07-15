@@ -321,6 +321,71 @@ TEST(MetalTraceBackend, GetLastBatchCrystalCountReturnsFinalLayerSettings) {
   }
 }
 
+// =============================================================================
+// task-metal-gui-commit-backpressure O2 AC1: two independently-constructed
+// MetalTraceBackend instances must observe the same underlying MTLDevice /
+// trace_layer_kernel MTLComputePipelineState pointers. This is the direct
+// whitebox proof that PSO/library/device construction was hoisted to a process-
+// level cache (per-Run rebuilds were the ~150ms cost that starved Metal slider
+// drag under the 70ms commit clock). Pointer identity — not throughput — is
+// the mechanism-level claim; throughput noise would let a broken cache pass
+// this test even if it silently rebuilt.
+// =============================================================================
+TEST(MetalTraceBackend, DeviceAndPsoSharedAcrossInstances) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+
+  auto scene = MakeMetalScene(/*max_hits=*/8, /*ms_layers=*/1);
+  auto render = MakeRectangularRender();
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 7;
+
+  HostRayBatch host;
+  host.count = 256;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  const void* dev0 = nullptr;
+  const void* pso0 = nullptr;
+  {
+    MetalTraceBackend backend_a;
+    backend_a.BeginSession(spec);
+    auto h = backend_a.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h, nullptr);
+    dev0 = backend_a.GetDevicePtrForTest();
+    pso0 = backend_a.GetPsoPtrForTest();
+    backend_a.EndSession();
+  }
+  ASSERT_NE(dev0, nullptr) << "First instance did not populate device";
+  ASSERT_NE(pso0, nullptr) << "First instance did not populate trace_layer PSO";
+
+  const void* dev1 = nullptr;
+  const void* pso1 = nullptr;
+  {
+    MetalTraceBackend backend_b;
+    backend_b.BeginSession(spec);
+    auto h = backend_b.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h, nullptr);
+    dev1 = backend_b.GetDevicePtrForTest();
+    pso1 = backend_b.GetPsoPtrForTest();
+    backend_b.EndSession();
+  }
+
+  EXPECT_EQ(dev0, dev1) << "MTLDevice pointer differs across MetalTraceBackend instances — the "
+                           "process-level device cache is not being shared, meaning per-Run "
+                           "commits will rebuild the device and pay the ~100-150ms library-load "
+                           "cost that regresses Metal slider-drag responsiveness.";
+  EXPECT_EQ(pso0, pso1) << "trace_layer_kernel MTLComputePipelineState pointer differs across "
+                           "MetalTraceBackend instances — the process-level PSO cache is not "
+                           "being shared. Per-Run PSO rebuilds were the ~150ms first-batch cost "
+                           "that starved commit-outpaces-batch under the 70ms GUI commit clock.";
+}
+
 }  // namespace
 }  // namespace lumice
 
