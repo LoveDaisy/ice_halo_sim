@@ -11,39 +11,47 @@ class RenderConsumer;
 struct ColorClassTable;
 
 // task-339.4: how per-color-class Y-lanes are combined into one displayed color
-// per pixel (see doc/gui-custom-spectrum-and-raypath-color.md §4.7). All three
-// modes share the SINGLE mono-image exposure scale
+// per pixel (see doc/gui-custom-spectrum-and-raypath-color.md §4.7 + §4.8).
+// dominant / additive share the SINGLE mono-image exposure scale
 // (RenderConsumer::ExposureScale()) — there is never a per-lane / per-composite
-// renormalization (that was the spike's false-color bug).
+// renormalization (that was the spike's false-color bug). painter's exposure
+// path is decoupled (§4.8): alpha uses the self-anchor A only,
+// display_exposure_scale is a post-composite brightness multiplier.
 enum class CompositeMode { kDominant, kAdditive, kPainter };
 
 // Parse the RaypathColorConfig::mode_ string ("dominant" / "additive" /
-// "painter") into a CompositeMode. Any other value falls back to kDominant with
-// a one-shot LOG_WARNING (matching the transitional adapter's behavior kept
-// through 339.2/339.3).
+// "painter") into a CompositeMode. Any other value falls back to kPainter with
+// a one-shot LOG_WARNING (doc §4.8: default is now
+// painter; §4.8).
 CompositeMode ParseCompositeMode(const std::string& mode_str);
 
 // Composite the consumer's per-color-class Y-lanes into a W*H*3 linear-RGB
-// image. Classes are traversed in `class_table.classes_` order — the list order
-// IS the z-order (see doc/gui-custom-spectrum-and-raypath-color.md §4.7). Per
-// pixel, each participating class c contributes exposed value
-// `ey_c = classLaneY_c[p] * s`, where
-//   `s = consumer.ParticipatingExposureScale(participating_p99_y) * display_exposure_scale`
-// — task-347 (Fix B): the composite exposure scalar is server-side self-anchored
-// off the participating-P99 of the currently-visible class union (computed
-// BEFORE the pixel loop, in-scope of the same call). Hiding a bright class
-// therefore shrinks the participating set → lowers the anchor P99 → raises
-// `s` → the remaining dim classes brighten in the same DoSnapshot, with no
-// GUI auto-EV feedback round-trip. `display_exposure_scale` is an optional
-// display-time multiplier (default 1.0) — one global scalar shared by every
-// lane in every mode; per-lane renormalization is the assumed-invalid
-// "false-color" bug from the scrum-336 spike and is structurally excluded
-// here (a03 / doc §4.3). Modes:
-//   - kDominant: argmax_c ey_c (strict >, ascending scan → tie goes to the
-//     class earlier in the list), painted with that class's color.
-//   - kAdditive: Σ_c color_c × ey_c, per-channel clamped to [0,1].
-//   - kPainter : first class in list order with ey_c > 0 (list-first = top
-//     layer), painted with that class's color.
+// image. Classes are traversed in ascending z_order (list-first = top layer,
+// see doc/gui-custom-spectrum-and-raypath-color.md §4.7). The self-anchor
+//   `A = consumer.ParticipatingExposureScale(participating_p99_y)`
+// is task-347 (Fix B): server-side self-anchored off the participating-P99 of
+// the currently-visible class union (computed BEFORE the pixel loop, in-scope
+// of the same call). Hiding a bright class therefore shrinks the participating
+// set → lowers the anchor P99 → raises A → the remaining dim classes brighten
+// in the same DoSnapshot, with no GUI auto-EV feedback round-trip.
+// `display_exposure_scale` is an optional display-time GUI EV multiplier
+// (default 1.0); one global scalar shared by every lane. Per-lane
+// renormalization is the assumed-invalid "false-color" bug from the scrum-336
+// spike and is structurally excluded here (a03 / doc §4.3). Modes:
+//   - kDominant: `ey_c = laneY_c[p] * (A * display_exposure_scale)`; argmax
+//     over c (strict >, ascending scan → tie goes to the class earlier in
+//     the list), painted with `color_c * ey_c` (byte-for-byte pre-§4.8).
+//   - kAdditive: `ey_c = laneY_c[p] * (A * display_exposure_scale)`;
+//     Σ_c color_c × ey_c, per-channel clamped to [0,1] (byte-for-byte pre-§4.8).
+//   - kPainter : Porter-Duff "over" front-to-back with `alpha_c = min(ey_c, 1)`
+//     where `ey_c = laneY_c[p] * A` (self-anchor ONLY — display_exposure_scale
+//     is NOT in the alpha path). The `over` colour slot holds the class's
+//     pure hue `color_c` (not `color_c * ey_c` — reserving the brightness slot
+//     for alpha avoids double-counting). Result is post-multiplied by
+//     `display_exposure_scale` and clamped to [0,1]^3 per pixel. This is the
+//     doc §4.8 redesign: fixes the pre-§4.8 "binary occluder" black-hole where
+//     a dim top-layer class 100% masked bright classes below; painter output
+//     is capped by `color_c` (no HDR headroom — a designed property, not a bug).
 //
 // Visibility:
 //   - If any class has solo_ == true, the participating set = {c : classes_[c]

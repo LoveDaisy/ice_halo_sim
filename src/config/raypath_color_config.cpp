@@ -71,11 +71,11 @@ void from_json(const nlohmann::json& j, ColorClassConfig& c) {
 }
 
 // Wire format:
-//   - default mode ("dominant"): bare array of ColorClassConfig — minimal.
+//   - default mode (kDefaultCompositeMode): bare array of ColorClassConfig — minimal.
 //   - non-default mode: { "mode": ..., "classes": [ ... ] } object form.
 // from_json accepts both shapes so either version parses.
 void to_json(nlohmann::json& j, const RaypathColorConfig& c) {
-  if (c.mode_ == "dominant") {
+  if (c.mode_ == kDefaultCompositeMode) {
     j = nlohmann::json::array();
     for (const auto& cls : c.classes_) {
       j.emplace_back(cls);
@@ -92,9 +92,9 @@ void to_json(nlohmann::json& j, const RaypathColorConfig& c) {
 
 void from_json(const nlohmann::json& j, RaypathColorConfig& c) {
   c.classes_.clear();
-  c.mode_ = "dominant";
+  c.mode_ = kDefaultCompositeMode;
   if (j.is_object()) {
-    c.mode_ = j.value("mode", std::string("dominant"));
+    c.mode_ = j.value("mode", std::string(kDefaultCompositeMode));
     if (j.contains("classes")) {
       for (const auto& jc : j.at("classes")) {
         c.classes_.emplace_back(jc.get<ColorClassConfig>());

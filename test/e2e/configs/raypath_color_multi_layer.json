@@ -79,18 +79,21 @@
       }
     ]
   },
-  "raypath_color": [
-    { "color": [1.0, 0.0, 1.0], "combine": "all", "match": [
-        { "layer": 0, "crystal": 1 },
-        { "layer": 1, "crystal": 2 }
-    ] },
-    { "color": [1.0, 0.55, 0.0], "match": [ { "layer": 1, "crystal": 3 } ] },
-    { "color": [1.0, 0.0, 0.0], "match": [ { "layer": 0, "crystal": 4 } ] },
-    { "color": [0.0, 1.0, 0.0], "combine": "any", "match": [
-        { "layer": 0, "crystal": 5, "type": "entry_exit", "min_len": 2, "max_len": 2 },
-        { "layer": 0, "crystal": 5, "type": "entry_exit", "min_len": 3 }
-    ] }
-  ],
+  "raypath_color": {
+    "mode": "dominant",
+    "classes": [
+      { "color": [1.0, 0.0, 1.0], "combine": "all", "match": [
+          { "layer": 0, "crystal": 1 },
+          { "layer": 1, "crystal": 2 }
+      ] },
+      { "color": [1.0, 0.55, 0.0], "match": [ { "layer": 1, "crystal": 3 } ] },
+      { "color": [1.0, 0.0, 0.0], "match": [ { "layer": 0, "crystal": 4 } ] },
+      { "color": [0.0, 1.0, 0.0], "combine": "any", "match": [
+          { "layer": 0, "crystal": 5, "type": "entry_exit", "min_len": 2, "max_len": 2 },
+          { "layer": 0, "crystal": 5, "type": "entry_exit", "min_len": 3 }
+      ] }
+    ]
+  },
   "render": [
     {
       "id": 1,

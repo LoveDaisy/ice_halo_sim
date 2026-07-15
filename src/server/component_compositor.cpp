@@ -106,19 +106,33 @@ void CompositeAdditivePixel(const std::vector<ActiveClass>& active, const ColorC
   out[2] = std::clamp(acc[2], 0.0f, 1.0f);
 }
 
-// Painter: list order = z-order; the first (list-first) participating class
-// with a positive exposed value at pixel p wins (top layer occludes below).
-void CompositePainterPixel(const std::vector<ActiveClass>& active, const ColorClassTable& class_table, float s,
-                           size_t p, float* out) {
-  for (size_t k = 0; k < active.size(); ++k) {
-    const float ey = active[k].lane[p] * s;
-    if (ey > 0.0f) {
-      const float* c = class_table.classes_[active[k].idx].color_;
-      out[0] = c[0] * ey;
-      out[1] = c[1] * ey;
-      out[2] = c[2] * ey;
-      break;
+// Painter: Porter-Duff "over" front-to-back with `alpha = min(ey, 1)` where
+// `ey = lane[p] * participating_exposure_scale` (self-anchor only — NO
+// display_exposure_scale here; the caller post-multiplies display EV after
+// composite; see doc/gui-custom-spectrum-and-raypath-color.md §4.8). List
+// order is ascending z_order (list-first = top layer), so the front-to-back
+// recurrence walks the list in-order without reversing:
+//   T = 1 (unoccluded transmittance)
+//   for k in top..bottom while T > 0:
+//     alpha = min(ey_k, 1)
+//     out  += T * alpha * color_k   // color slot holds PURE HUE, not color*ey
+//     T    *= (1 - alpha)
+// out ∈ [0,1]^3 by construction (Σ T_k·alpha_k ≤ 1 - T_final ≤ 1, per-channel
+// color ∈ [0,1]). Fixes the old "binary occluder" black-hole where a top-layer
+// class with any positive ey (however dim) 100% masked brighter classes below.
+void CompositePainterPixel(const std::vector<ActiveClass>& active, const ColorClassTable& class_table,
+                           float participating_exposure_scale, size_t p, float* out) {
+  float T = 1.0f;
+  for (size_t k = 0; k < active.size() && T > 0.0f; ++k) {
+    const float alpha = std::min(active[k].lane[p] * participating_exposure_scale, 1.0f);
+    if (alpha <= 0.0f) {
+      continue;
     }
+    const float* c = class_table.classes_[active[k].idx].color_;
+    out[0] += T * alpha * c[0];
+    out[1] += T * alpha * c[1];
+    out[2] += T * alpha * c[2];
+    T *= (1.0f - alpha);
   }
 }
 
@@ -136,10 +150,10 @@ CompositeMode ParseCompositeMode(const std::string& mode_str) {
   }
   static bool logged_unknown_mode = false;
   if (!logged_unknown_mode) {
-    LOG_WARNING("raypath_color: unknown composite mode \"{}\"; falling back to \"dominant\"", mode_str);
+    LOG_WARNING("raypath_color: unknown composite mode \"{}\"; falling back to \"painter\"", mode_str);
     logged_unknown_mode = true;
   }
-  return CompositeMode::kDominant;
+  return CompositeMode::kPainter;
 }
 
 namespace {
@@ -223,13 +237,19 @@ bool CompositeColorClassesLinear(const RenderConsumer& consumer, const ColorClas
   const float participating_p99 = ComputeParticipatingP99Y(active, n);
 
   // Single-scalar exposure invariant (a03 / doc §4.3): every participating
-  // lane sees the SAME `s`; per-lane / per-class renormalization is the
+  // lane sees the SAME anchor; per-lane / per-class renormalization is the
   // scrum-336 spike's false-color bug and is structurally excluded. Fix B:
-  // `s` comes from the participating-P99 self-anchor (not the mono
-  // ExposureScale) so hiding a bright class instantly re-anchors the rest;
-  // `display_exposure_scale` is the optional GUI EV multiplier bolted on top.
-  const float s = consumer.ParticipatingExposureScale(participating_p99) * display_exposure_scale;
-  if (s <= 0.0f) {
+  // the anchor `A` comes from the participating-P99 self-anchor (not the mono
+  // ExposureScale) so hiding a bright class instantly re-anchors the rest.
+  //
+  // doc §4.8: split A / s.
+  //   - dominant / additive: keep the pre-existing single scalar
+  //     `s = A * display_exposure_scale` (byte-for-byte behavior preserved).
+  //   - painter: alpha driven by `A` alone (self-anchor only) so the occluder
+  //     structure is EV-independent; `display_exposure_scale` becomes a pure
+  //     post-composite brightness multiplier + clamp, applied per-pixel below.
+  const float A = consumer.ParticipatingExposureScale(participating_p99);
+  if (A <= 0.0f) {
     // task-347 semantic tightening: `participating_p99` is now known even on
     // this early-return path (it was computed above). Publish it so consumers
     // that read the anchor field regardless of return value see the true
@@ -242,6 +262,7 @@ bool CompositeColorClassesLinear(const RenderConsumer& consumer, const ColorClas
     }
     return false;
   }
+  const float s = A * display_exposure_scale;
 
   for (size_t p = 0; p < n; ++p) {
     float* out = &out_linear_rgb[p * 3];
@@ -253,7 +274,12 @@ bool CompositeColorClassesLinear(const RenderConsumer& consumer, const ColorClas
         CompositeAdditivePixel(active, class_table, s, p, out);
         break;
       case CompositeMode::kPainter:
-        CompositePainterPixel(active, class_table, s, p, out);
+        CompositePainterPixel(active, class_table, A, p, out);
+        // display EV = pure post-composite brightness (doc §4.8): the painter
+        // occluder structure is set by `A` alone; clamp keeps output ∈ [0,1]^3.
+        out[0] = std::clamp(out[0] * display_exposure_scale, 0.0f, 1.0f);
+        out[1] = std::clamp(out[1] * display_exposure_scale, 0.0f, 1.0f);
+        out[2] = std::clamp(out[2] * display_exposure_scale, 0.0f, 1.0f);
         break;
     }
   }

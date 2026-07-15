@@ -242,20 +242,26 @@ TEST(ComponentCompositor, DominantAdditivePainterPerPixelMath) {
   EXPECT_FLOAT_EQ(out[p * 3 + 1], ey1);
   EXPECT_FLOAT_EQ(out[p * 3 + 2], 0.0f);
 
-  // painter (list order = z-order; list-first class is the top layer): class0
-  // wins → red, same as dominant here because class0 is both brighter AND on top.
+  // painter (doc §4.8): Porter-Duff over,
+  // list-first = top. Both classes contribute because alpha < 1: top-layer
+  // class0 (red) contributes `alpha0 * red`, class1 (green) shows through with
+  // transmittance `1 - alpha0` → `(1-alpha0) * alpha1 * green`. With ey_c < 1,
+  // alpha_c == ey_c (min-clamp is a no-op).
   ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kPainter, out));
   EXPECT_FLOAT_EQ(out[p * 3 + 0], ey0);
-  EXPECT_FLOAT_EQ(out[p * 3 + 1], 0.0f);
+  EXPECT_FLOAT_EQ(out[p * 3 + 1], (1.0f - ey0) * ey1);
+  EXPECT_FLOAT_EQ(out[p * 3 + 2], 0.0f);
 }
 
-TEST(ComponentCompositor, PainterVsDominantDivergeWhenTopClassDimmer) {
+TEST(ComponentCompositor, PainterAlphaOverBlendsTopAndBottomDominantPicksBrighter) {
   constexpr int kRes = 3;
   const int total_pix = kRes * kRes;
   RenderConfig cfg = MakeRenderConfig(kRes);
 
   // Now class1 (bit1, green, weight 0.9) is BRIGHTER than class0 (bit0, red,
-  // weight 0.3): dominant → class1, painter → class0 (the list-first / top).
+  // weight 0.3): dominant picks the brighter class1 (green). Painter (post
+  // doc §4.8) blends both via Porter-Duff
+  // over — the top-layer class0 partially occludes but does NOT hide class1.
   auto table = MakeSingletonClassTable(0b11, { kRed, kGreen });
   RenderConsumer rc(cfg, table);
   rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.3f, 0.9f }));
@@ -264,7 +270,9 @@ TEST(ComponentCompositor, PainterVsDominantDivergeWhenTopClassDimmer) {
   const int p = FindLitPixel(rc, total_pix);
   ASSERT_GE(p, 0);
   // task-347 (Fix B): recover `s` via the participating-P99 anchor (see
-  // DominantAdditivePainterPerPixelMath for rationale).
+  // DominantAdditivePainterPerPixelMath for rationale). display_exposure_scale
+  // defaults to 1.0f in the probe, so `s == A` (the self-anchor used by
+  // painter's alpha path — no divergence between old `s` and new `A` here).
   const float p99 = FetchParticipatingP99(rc, table, CompositeMode::kDominant);
   ASSERT_GT(p99, 0.0f);
   const float s = rc.ParticipatingExposureScale(p99);
@@ -279,10 +287,16 @@ TEST(ComponentCompositor, PainterVsDominantDivergeWhenTopClassDimmer) {
   EXPECT_FLOAT_EQ(out[p * 3 + 0], 0.0f);
   EXPECT_FLOAT_EQ(out[p * 3 + 1], ey1);
 
-  // painter picks the top (list-first) class0 (red), even though it is dimmer.
+  // painter alpha-over: top (list-first) class0 (red) contributes `alpha0 * red`,
+  // class1 (green) shows through with transmittance `(1 - alpha0)` — both classes
+  // contribute, unlike the pre-§4.8 binary-occluder behaviour that painted only
+  // red. alpha_c == ey_c since ey < 1 (min-clamp is a no-op).
+  ASSERT_LT(ey0, 1.0f);
+  ASSERT_LT(ey1, 1.0f);
   ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kPainter, out));
   EXPECT_FLOAT_EQ(out[p * 3 + 0], ey0);
-  EXPECT_FLOAT_EQ(out[p * 3 + 1], 0.0f);
+  EXPECT_FLOAT_EQ(out[p * 3 + 1], (1.0f - ey0) * ey1);
+  EXPECT_FLOAT_EQ(out[p * 3 + 2], 0.0f);
 }
 
 TEST(ComponentCompositor, DominantTieTakesFirstClass) {
@@ -310,6 +324,163 @@ TEST(ComponentCompositor, DominantTieTakesFirstClass) {
   ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kDominant, out));
   // Tie → class0 (red), not class1.
   EXPECT_FLOAT_EQ(out[p * 3 + 0], ey0);
+  EXPECT_FLOAT_EQ(out[p * 3 + 1], 0.0f);
+}
+
+// -----------------------------------------------------------------------------
+// A2. doc §4.8 painter-specific coverage:
+//     black-hole fix, EV independence of occluder structure, single-class
+//     f(ey)·color (no ey² double-count), full-opacity color ceiling.
+// -----------------------------------------------------------------------------
+
+// (1) Dim top-layer class must NOT 100%-mask a bright bottom-layer class.
+// This is the pre-§4.8 painter's "black hole": a class with a small positive
+// ey on top would blank out every class below it — the whole point of the
+// redesign. The post-§4.8 recurrence gives `T = 1 - alpha_top` transmittance
+// to the layers below, so the bright bottom shines through with (1-alpha_top)
+// times its own contribution.
+TEST(ComponentCompositor, PainterAlphaOverDimTopDoesNotBlockBrightBottom) {
+  constexpr int kRes = 3;
+  const int total_pix = kRes * kRes;
+  RenderConfig cfg = MakeRenderConfig(kRes);
+
+  // class0 (bit0, red) is the DIM top layer; class1 (bit1, green) is the BRIGHT
+  // bottom. Weights push class1 significantly brighter than class0 so the pre-§4.8
+  // "list-first wins" bug would output near-black-red instead of green shining through.
+  auto table = MakeSingletonClassTable(0b11, { kRed, kGreen });
+  RenderConsumer rc(cfg, table);
+  rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.05f, 0.9f }));  // top very dim, bottom bright
+  rc.PrepareSnapshot();
+
+  const int p = FindLitPixel(rc, total_pix);
+  ASSERT_GE(p, 0);
+  const float p99 = FetchParticipatingP99(rc, table, CompositeMode::kPainter);
+  ASSERT_GT(p99, 0.0f);
+  const float A = rc.ParticipatingExposureScale(p99);
+  const float ey0 = rc.GetColorClassLaneY(0)[p] * A;  // top, dim
+  const float ey1 = rc.GetColorClassLaneY(1)[p] * A;  // bottom, bright
+  ASSERT_LT(ey0, 1.0f);
+  ASSERT_LT(ey1, 1.0f);
+  ASSERT_LT(ey0, ey1);  // top strictly dimmer than bottom
+
+  std::vector<float> out;
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kPainter, out));
+  // Green (bottom) must contribute (1-ey0)*ey1. Because ey0 is small (top is
+  // dim), the transmittance (1-ey0) is close to 1, so green stays close to ey1
+  // — dominates the red contribution ey0.
+  EXPECT_FLOAT_EQ(out[p * 3 + 0], ey0);
+  EXPECT_FLOAT_EQ(out[p * 3 + 1], (1.0f - ey0) * ey1);
+  EXPECT_GT(out[p * 3 + 1], out[p * 3 + 0]) << "bright bottom must dominate through dim top (black-hole fix)";
+}
+
+// (2) EV pulls only brightness, not occluder structure — the whole point of
+// EV decoupling. Doubling display_exposure_scale below the clamp doubles every
+// channel exactly; the ratio between channels (i.e. the alpha-over structure)
+// is invariant.
+TEST(ComponentCompositor, PainterDisplayEvOnlyScalesBrightnessNotOccluderStructure) {
+  constexpr int kRes = 3;
+  const int total_pix = kRes * kRes;
+  RenderConfig cfg = MakeRenderConfig(kRes);
+
+  // Two classes both partially opaque, both contribute — use very small values
+  // so that after 2x EV boost neither channel touches the clamp.
+  auto table = MakeSingletonClassTable(0b11, { kRed, kGreen });
+  RenderConsumer rc(cfg, table);
+  rc.Consume(MakeBatch({ 0b01, 0b10 }, { 0.15f, 0.20f }));
+  rc.PrepareSnapshot();
+
+  const int p = FindLitPixel(rc, total_pix);
+  ASSERT_GE(p, 0);
+
+  std::vector<float> out_lo;
+  std::vector<float> out_hi;
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kPainter, 1.0f, out_lo, nullptr));
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kPainter, 2.0f, out_hi, nullptr));
+
+  // Neither channel may hit clamp under 2x (assertions on ratio require it).
+  ASSERT_LT(out_hi[p * 3 + 0], 1.0f);
+  ASSERT_LT(out_hi[p * 3 + 1], 1.0f);
+  // Every non-zero channel doubled — brightness scales, structure invariant.
+  EXPECT_NEAR(out_hi[p * 3 + 0], 2.0f * out_lo[p * 3 + 0], 1e-5f);
+  EXPECT_NEAR(out_hi[p * 3 + 1], 2.0f * out_lo[p * 3 + 1], 1e-5f);
+  EXPECT_FLOAT_EQ(out_lo[p * 3 + 2], 0.0f);
+  EXPECT_FLOAT_EQ(out_hi[p * 3 + 2], 0.0f);
+}
+
+// (3) Single-class output is `f(ey) * color`, NOT `ey * color * ey = ey² * color`.
+// Guards against the reviewer-flagged "color slot holds color*ey" anti-pattern
+// (§4.8): if the pure-hue rule were broken, this test's assertion would show
+// `ey² * red` = a much smaller value than `ey * red`.
+TEST(ComponentCompositor, PainterSingleClassNoBrightnessDoubleCount) {
+  constexpr int kRes = 3;
+  const int total_pix = kRes * kRes;
+  RenderConfig cfg = MakeRenderConfig(kRes);
+
+  auto table = MakeSingletonClassTable(0b01, { kRed });
+  RenderConsumer rc(cfg, table);
+  rc.Consume(MakeBatch({ 0b01 }, { 0.5f }));
+  rc.PrepareSnapshot();
+
+  const int p = FindLitPixel(rc, total_pix);
+  ASSERT_GE(p, 0);
+  const float p99 = FetchParticipatingP99(rc, table, CompositeMode::kPainter);
+  ASSERT_GT(p99, 0.0f);
+  const float A = rc.ParticipatingExposureScale(p99);
+  const float ey0 = rc.GetColorClassLaneY(0)[p] * A;
+  ASSERT_LT(ey0, 1.0f);
+  ASSERT_GT(ey0, 0.01f);  // above the noise floor so ey vs ey² is visible
+
+  std::vector<float> out;
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kPainter, out));
+  // Expected: alpha * color = ey0 * (1, 0, 0). Anti-pattern would give ey0 * ey0.
+  EXPECT_FLOAT_EQ(out[p * 3 + 0], ey0);
+  EXPECT_FLOAT_EQ(out[p * 3 + 1], 0.0f);
+  EXPECT_FLOAT_EQ(out[p * 3 + 2], 0.0f);
+}
+
+// (4) Full opacity (ey >= 1) caps painter output at the class color — no HDR
+// headroom. This is a designed property (§4.8), not a bug: painter is a display
+// mode; overexposure is dominant/additive's territory. Verify via a large
+// display_exposure_scale that pushes alpha_top to the min-clamp.
+TEST(ComponentCompositor, PainterFullOpacityCeilsAtClassColor) {
+  constexpr int kRes = 3;
+  const int total_pix = kRes * kRes;
+  RenderConfig cfg = MakeRenderConfig(kRes);
+
+  auto table = MakeSingletonClassTable(0b01, { kRed });
+  RenderConsumer rc(cfg, table);
+  rc.Consume(MakeBatch({ 0b01 }, { 0.5f }));
+  rc.PrepareSnapshot();
+
+  const int p = FindLitPixel(rc, total_pix);
+  ASSERT_GE(p, 0);
+
+  // Painter alpha uses ONLY A (self-anchor), not display_exposure_scale — so
+  // a large display EV cannot drive alpha above the min(ey, 1) clamp on its
+  // own. To realise alpha == 1, the raw lane * A must reach 1; here we bump
+  // intensity_factor so A grows enough that lane * A >= 1. (This mirrors the
+  // "class energy fills the pixel" scenario in production, where full opacity
+  // is possible but capped.)
+  //
+  // Use a cranked intensity_factor to guarantee alpha == 1.
+  RenderConfig cfg_bright = cfg;
+  cfg_bright.intensity_factor_ = 1e6f;  // driven high so lane * A >= 1
+  RenderConsumer rc2(cfg_bright, table);
+  rc2.Consume(MakeBatch({ 0b01 }, { 0.5f }));
+  rc2.PrepareSnapshot();
+
+  std::vector<float> out;
+  // Post-composite EV is also 1.0, so a saturated alpha yields exactly the
+  // class color (1, 0, 0) — no HDR headroom.
+  ASSERT_TRUE(CompositeColorClassesLinear(rc2, table, CompositeMode::kPainter, 1.0f, out, nullptr));
+  EXPECT_FLOAT_EQ(out[p * 3 + 0], 1.0f);
+  EXPECT_FLOAT_EQ(out[p * 3 + 1], 0.0f);
+  EXPECT_FLOAT_EQ(out[p * 3 + 2], 0.0f);
+
+  // Post-composite EV > 1 keeps the clamp firing at the class color ceiling —
+  // no overshoot, no HDR headroom.
+  ASSERT_TRUE(CompositeColorClassesLinear(rc2, table, CompositeMode::kPainter, 4.0f, out, nullptr));
+  EXPECT_FLOAT_EQ(out[p * 3 + 0], 1.0f);
   EXPECT_FLOAT_EQ(out[p * 3 + 1], 0.0f);
 }
 
@@ -489,12 +660,18 @@ TEST(ComponentCompositor, OverlapDominantPicksBrighterAdditiveMixes) {
   EXPECT_FLOAT_EQ(out[p * 3 + 0], 0.0f) << "dominant must not paint the loser's color";
   EXPECT_FLOAT_EQ(out[p * 3 + 1], eyB);
 
-  // painter: list-first = A (red) wins as long as it has energy > 0, even though
-  // B is brighter — mirrors PainterVsDominantDivergeWhenTopClassDimmer but under
-  // OVERLAPPING classes (AC "z-order 定色").
+  // painter (doc §4.8) alpha-over on
+  // OVERLAPPING classes: list-first = A (red) is top, its alpha_A = eyA (< 1)
+  // does not fully occlude, so class B (green) still shows through with
+  // transmittance (1 - alpha_A). Divergence from dominant survives (dominant
+  // paints pure green, painter paints red+attenuated-green), but the pre-§4.8
+  // binary occluder was "red only" — now it's blend.
+  ASSERT_LT(eyA, 1.0f);
+  ASSERT_LT(eyB, 1.0f);
   ASSERT_TRUE(CompositeColorClassesLinear(rc, t, CompositeMode::kPainter, out));
   EXPECT_FLOAT_EQ(out[p * 3 + 0], eyA);
-  EXPECT_FLOAT_EQ(out[p * 3 + 1], 0.0f);
+  EXPECT_FLOAT_EQ(out[p * 3 + 1], (1.0f - eyA) * eyB);
+  EXPECT_FLOAT_EQ(out[p * 3 + 2], 0.0f);
 
   // additive: red*eyA + green*eyB; both below clamp so exact per-channel.
   ASSERT_LT(eyA + eyB, 1.0f);
@@ -585,26 +762,31 @@ TEST(ComponentCompositor, ZOrderReordersDrawButNotLaneBinding) {
 
   std::vector<float> out;
 
-  // Baseline z_order (0,1): painter draws list-first class0 (red) on top.
+  // Baseline z_order (0,1): painter alpha-over walks class0 first (top layer).
+  // Under §4.8: out = (alpha0*red + (1-alpha0)*alpha1*0, (1-alpha0)*alpha1*green
+  //                    + alpha0*0, 0) = (ey0, (1-ey0)*ey1, 0) with alpha_c==ey_c
+  // when ey_c < 1.
+  ASSERT_LT(ey0, 1.0f);
+  ASSERT_LT(ey1, 1.0f);
   ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kPainter, out));
   EXPECT_FLOAT_EQ(out[p * 3 + 0], ey0);
-  EXPECT_FLOAT_EQ(out[p * 3 + 1], 0.0f);
+  EXPECT_FLOAT_EQ(out[p * 3 + 1], (1.0f - ey0) * ey1);
 
-  // Swap z_order so class1 has the LOWER rank (draws first / top for painter). Only the
-  // display-time field changes; the vector order and lane data are untouched.
+  // Swap z_order so class1 has the LOWER rank (drawn FIRST / on top for painter).
+  // Only the display-time field changes; the vector order and lane data are untouched.
   {
     auto t = table;
     t.classes_[0].z_order_ = 1;
     t.classes_[1].z_order_ = 0;
     ASSERT_TRUE(CompositeColorClassesLinear(rc, t, CompositeMode::kPainter, out));
-    // Painter top layer is now class1 (green) — draw order changed...
-    EXPECT_FLOAT_EQ(out[p * 3 + 0], 0.0f);
+    // Painter walks class1 first now. out = ((1-ey1)*ey0, ey1, 0). Green must
+    // be painted with class1's OWN exposed lane value (ey1), not ey0 — z_order
+    // reorders DRAW sequence, it does NOT re-bind physical lane → class. If the
+    // impl naively re-sorted the vector, green would carry lane0's value (ey0
+    // != ey1 here since weights 0.6 != 0.4).
+    EXPECT_FLOAT_EQ(out[p * 3 + 0], (1.0f - ey1) * ey0);
     EXPECT_FLOAT_EQ(out[p * 3 + 1], ey1)
-        << "green must be painted with class1's OWN exposed lane value (lane1), not lane0's — "
-           "z_order must not re-bind lane index to class";
-    // ...but the value equals class1's own physical lane (lane1), proving the lane→class
-    // binding did NOT follow the reorder. If the impl naively re-sorted the vector, green
-    // would incorrectly carry lane0's value (ey0 != ey1 here since weights 0.6 != 0.4).
+        << "green must reflect class1's OWN lane (ey1), not the swapped position's lane";
     ASSERT_NE(ey0, ey1);
   }
 
@@ -648,9 +830,11 @@ TEST(ComponentCompositor, ParseCompositeModeKnownStrings) {
   EXPECT_EQ(ParseCompositeMode("painter"), CompositeMode::kPainter);
 }
 
-TEST(ComponentCompositor, ParseCompositeModeUnknownFallsBackToDominant) {
-  EXPECT_EQ(ParseCompositeMode("bogus-typo"), CompositeMode::kDominant);
-  EXPECT_EQ(ParseCompositeMode(""), CompositeMode::kDominant);
+TEST(ComponentCompositor, ParseCompositeModeUnknownFallsBackToPainter) {
+  // doc §4.8: default composite mode is
+  // now painter; the unknown-string fallback follows the default.
+  EXPECT_EQ(ParseCompositeMode("bogus-typo"), CompositeMode::kPainter);
+  EXPECT_EQ(ParseCompositeMode(""), CompositeMode::kPainter);
 }
 
 // -----------------------------------------------------------------------------
@@ -921,12 +1105,13 @@ TEST(ComponentCompositor, RaypathColorConfigJsonFormsRoundTrip) {
   EXPECT_TRUE(std::holds_alternative<NoneFilterParam>(back.classes_[0].match_[0].predicate_));
 
   // Default mode → bare array form, still round-trips.
+  // doc §4.8: default is now painter (kDefaultCompositeMode).
   RaypathColorConfig dom;
   dom.classes_.push_back(MakeCls({ 1.0f, 0.0f, 0.0f }, { MakeRef(0, 0) }));
   nlohmann::json jd = dom;
   EXPECT_TRUE(jd.is_array()) << "default-mode config must serialize as a bare array";
   RaypathColorConfig dback = jd.get<RaypathColorConfig>();
-  EXPECT_EQ(dback.mode_, "dominant");
+  EXPECT_EQ(dback.mode_, "painter");
   ASSERT_EQ(dback.classes_.size(), 1u);
   EXPECT_TRUE(dback.classes_[0].visible_);
   EXPECT_FALSE(dback.classes_[0].solo_);
@@ -1138,36 +1323,34 @@ TEST(ComponentConsumer, ParticipatingExposureScaleFormulaCrossCheck) {
 }
 
 TEST(ComponentCompositor, EarlyReturnPublishesParticipatingP99) {
-  // task-347 (Fix B) semantic tightening: on the s<=0 early-return path, the
+  // task-347 (Fix B) semantic tightening: on the A<=0 early-return path, the
   // participating_p99 out parameter (when non-null) is now written with the
   // actual computed p99 (previously left untouched). No in-tree consumer
   // depends on either behavior — but the tightening is worth pinning so a
   // future regression doesn't silently un-tighten it.
   //
-  // Reproduce s<=0 via display_exposure_scale=0.0f: p99 will be computed
-  // normally, then ParticipatingExposureScale(p99)*0 == 0 fires the guard.
+  // doc §4.8: the guard formerly triggered
+  // on `s = A * display_exposure_scale <= 0` (via scale=0). Since the split
+  // A vs s, `display_exposure_scale = 0` is now a legitimate painter input
+  // (post-composite black-out) that keeps the alpha structure — so the early-
+  // return only fires on true "no signal" (A <= 0). Reproduce here by
+  // consuming no rays: participating_p99 == 0 → A == 0.
   constexpr int kRes = 3;
   RenderConfig cfg = MakeRenderConfig(kRes);
   auto table = MakeSingletonClassTable(0b11, { kWhite });
   RenderConsumer rc(cfg, table);
-  rc.Consume(MakeBatch({ 0b01 }, { 0.5f }));
+  // No Consume — snapshot has zero signal, participating-P99 = 0 → A = 0.
   rc.PrepareSnapshot();
 
-  // Independent reference p99 from a successful call at scale=1.0.
-  float p99_reference = 0.0f;
-  std::vector<float> ref_out;
-  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kDominant, 1.0f, ref_out, &p99_reference));
-  ASSERT_GT(p99_reference, 0.0f);
-
-  // Early-return path (scale=0). Return value is false; sentinel-init the out
-  // pointer to a distinct value so a "left untouched" behavior would fail.
+  // Sentinel-init the out pointer to a distinct value so a "left untouched"
+  // behavior would fail.
   constexpr float kSentinel = -12345.0f;
   float p99_early = kSentinel;
   std::vector<float> out;
-  const bool ok = CompositeColorClassesLinear(rc, table, CompositeMode::kDominant, 0.0f, out, &p99_early);
+  const bool ok = CompositeColorClassesLinear(rc, table, CompositeMode::kDominant, 1.0f, out, &p99_early);
   EXPECT_FALSE(ok);
-  EXPECT_NE(p99_early, kSentinel) << "p99 must be written on the s<=0 early-return path (task-347 tightening)";
-  EXPECT_FLOAT_EQ(p99_early, p99_reference);
+  EXPECT_NE(p99_early, kSentinel) << "p99 must be written on the A<=0 early-return path (task-347 tightening)";
+  EXPECT_FLOAT_EQ(p99_early, 0.0f);
 }
 
 }  // namespace

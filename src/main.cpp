@@ -104,10 +104,19 @@ void PrintColorClassSignal(LUMICE_Server* server, const nlohmann::json& j_cfg) {
       return;
     }
     const auto& j_rc = j_cfg.at("raypath_color");
-    if (!j_rc.is_array() || j_rc.empty()) {
+    // Accept both wire forms core RaypathColorConfig::from_json accepts:
+    //   - bare array [ ... ]  (default-mode short form)
+    //   - object {"mode": ..., "classes": [ ... ]}  (non-default / explicit)
+    const nlohmann::json* j_classes = nullptr;
+    if (j_rc.is_array()) {
+      j_classes = &j_rc;
+    } else if (j_rc.is_object() && j_rc.contains("classes") && j_rc.at("classes").is_array()) {
+      j_classes = &j_rc.at("classes");
+    }
+    if (j_classes == nullptr || j_classes->empty()) {
       return;
     }
-    class_count = static_cast<int>(j_rc.size());
+    class_count = static_cast<int>(j_classes->size());
   } catch (const nlohmann::json::exception&) {
     return;
   }
