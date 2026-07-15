@@ -10,6 +10,16 @@
 
 namespace lumice {
 
+// Default composite mode string — single source of truth for the wire-format
+// default (`raypath_color` value with no explicit "mode" field) across the
+// core `from_json`/`to_json` paths and the C API JSON bridge
+// (server/c_api.cpp::JsonToRaypathColor). GUI-side defaults live in
+// src/gui/{gui_state,file_io}.cpp — the GUI layer cannot include this header
+// per AGENTS.md (GUI→core goes through the C API), so those literals are
+// mirrored there and kept in sync by convention. See
+// doc/gui-custom-spectrum-and-raypath-color.md §4.8.
+inline constexpr const char* kDefaultCompositeMode = "painter";
+
 // User-visible schema for per-raypath color display.
 //
 // Design 2 (2026-07-08, doc/gui-custom-spectrum-and-raypath-color.md §4.0
@@ -53,14 +63,15 @@ struct ColorClassConfig {
 struct RaypathColorConfig {
   std::vector<ColorClassConfig> classes_;
   // Display-time composite mode ("dominant" | "additive" | "painter"). Unknown
-  // strings degrade to dominant + warn (in the compositor adapter/builder); the
-  // DTO layer stores the string verbatim.
-  std::string mode_ = "dominant";
+  // strings degrade to `kDefaultCompositeMode` + warn (in the compositor
+  // adapter/builder); the DTO layer stores the string verbatim. Default matches
+  // `kDefaultCompositeMode` — currently "painter" per doc §4.8.
+  std::string mode_ = kDefaultCompositeMode;
 };
 
 // JSON representation:
-//   - bare-array of color classes when `mode_ == "dominant"` (preserves the
-//     minimal wire format for the default);
+//   - bare-array of color classes when `mode_ == kDefaultCompositeMode`
+//     (preserves the minimal wire format for the default);
 //   - object `{ "mode": ..., "classes": [ ... ] }` when mode is non-default.
 // A missing top-level "raypath_color" key in the ConfigManager JSON is treated
 // as an empty config (zero regression against configs without color) —

@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "config/raypath_color_config.hpp"  // ns::kDefaultCompositeMode (single-source default)
 #include "config/raypath_validation.hpp"
 #include "config/render_config.hpp"
 #include "core/crystal.hpp"
@@ -1064,7 +1065,10 @@ static LUMICE_ErrorCode JsonToColorClass(const nlohmann::json& j, LUMICE_ColorCl
 // LUMICE_Config. Mirrors core RaypathColorConfig::from_json.
 static LUMICE_ErrorCode JsonToRaypathColor(const nlohmann::json& j, LUMICE_Config* out) {
   const nlohmann::json* classes_arr = nullptr;
-  std::string mode_str = "dominant";
+  // Single-source default: track the core `kDefaultCompositeMode` (currently
+  // "painter" per doc §4.8) so a bare-array config / object with no "mode"
+  // field resolves to the SAME enum here as it does in core from_json.
+  std::string mode_str = ns::kDefaultCompositeMode;
   if (j.is_array()) {
     classes_arr = &j;
   } else if (j.is_object()) {
@@ -1078,14 +1082,14 @@ static LUMICE_ErrorCode JsonToRaypathColor(const nlohmann::json& j, LUMICE_Confi
     return LUMICE_ERR_INVALID_VALUE;
   }
 
-  if (mode_str == "additive") {
-    out->raypath_color_mode = LUMICE_COLOR_MODE_ADDITIVE;
-  } else if (mode_str == "painter") {
-    out->raypath_color_mode = LUMICE_COLOR_MODE_PAINTER;
-  } else {
-    // "dominant" is the default; any other unknown mode degrades to dominant here to mirror
-    // core's tolerance (the compositor warns once on unknown modes).
+  if (mode_str == "dominant") {
     out->raypath_color_mode = LUMICE_COLOR_MODE_DOMINANT;
+  } else if (mode_str == "additive") {
+    out->raypath_color_mode = LUMICE_COLOR_MODE_ADDITIVE;
+  } else {
+    // "painter" is the default; any other unknown mode degrades to painter here
+    // to mirror core ParseCompositeMode's fallback (see doc §4.8).
+    out->raypath_color_mode = LUMICE_COLOR_MODE_PAINTER;
   }
 
   if (classes_arr == nullptr) {

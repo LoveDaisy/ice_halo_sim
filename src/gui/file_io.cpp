@@ -1992,7 +1992,11 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       if (root.contains("raypath_color")) {
         const auto& jrc = root["raypath_color"];
         const json* classes_arr = nullptr;
-        std::string mode_str = "dominant";
+        // Bare-array wire form / object with no "mode" field defaults to painter
+        // — mirrors core RaypathColorConfig::from_json's default (doc §4.8).
+        // GUI cannot include config/raypath_color_config.hpp per AGENTS.md, so
+        // this literal is kept in sync by convention with kDefaultCompositeMode.
+        std::string mode_str = "painter";
         if (jrc.is_array()) {
           classes_arr = &jrc;
         } else if (jrc.is_object()) {
@@ -2003,12 +2007,13 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
             classes_arr = &jrc["classes"];
           }
         }
-        if (mode_str == "additive") {
-          state.raypath_color_mode = LUMICE_COLOR_MODE_ADDITIVE;
-        } else if (mode_str == "painter") {
-          state.raypath_color_mode = LUMICE_COLOR_MODE_PAINTER;
-        } else {
+        if (mode_str == "dominant") {
           state.raypath_color_mode = LUMICE_COLOR_MODE_DOMINANT;
+        } else if (mode_str == "additive") {
+          state.raypath_color_mode = LUMICE_COLOR_MODE_ADDITIVE;
+        } else {
+          // "painter" (default) + unknown fallback — matches core.
+          state.raypath_color_mode = LUMICE_COLOR_MODE_PAINTER;
         }
         if (classes_arr != nullptr) {
           for (size_t ci = 0; ci < classes_arr->size(); ci++) {

@@ -700,7 +700,10 @@ struct GuiState {
   // rendered in z_order but this vector's order MUST stay stable across
   // reorder-drag operations (see doc/gui-custom-spectrum-and-raypath-color.md §4.0).
   std::vector<ColorClassConfig> raypath_color;
-  int raypath_color_mode = 0;  // LUMICE_COLOR_MODE_DOMINANT / _ADDITIVE / _PAINTER
+  // Default = painter (mirrors core `kDefaultCompositeMode` per doc §4.8). GUI
+  // cannot include config/raypath_color_config.hpp per AGENTS.md, so the enum
+  // literal is duplicated here and kept in sync with the core default.
+  int raypath_color_mode = LUMICE_COLOR_MODE_PAINTER;  // _DOMINANT / _ADDITIVE / _PAINTER
 
   // Aspect ratio (view preference, not simulation parameter — does not call MarkDirty)
   AspectPreset aspect_preset = AspectPreset::kFree;

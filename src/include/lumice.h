@@ -408,8 +408,9 @@ typedef struct LUMICE_ColorClass_ {
 } LUMICE_ColorClass;
 
 // Composite modes for the display-time compositor (mirrors core CompositeMode / the JSON
-// "mode" field: "dominant" | "additive" | "painter"). Default dominant matches the wire
-// default; painter uses the class list's z-order (see LUMICE_SetRaypathColors).
+// "mode" field: "dominant" | "additive" | "painter"). Default painter matches the wire
+// default (task-painter-alpha-over-composite / doc §4.8); painter uses the class list's
+// z-order (see LUMICE_SetRaypathColors).
 #define LUMICE_COLOR_MODE_DOMINANT 0
 #define LUMICE_COLOR_MODE_ADDITIVE 1
 #define LUMICE_COLOR_MODE_PAINTER 2
