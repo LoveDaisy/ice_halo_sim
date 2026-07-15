@@ -275,6 +275,18 @@ void RenderTopBar(float window_width) {
   // New/Open/Save. Colors is the first occupant; future cross-cutting toggles
   // unrelated to file I/O or panel layout should land here rather than
   // competing for status-bar space.
+  //
+  // task-gui-feedback-affordances Step 1 (AC2): visually distinguish "has color
+  // classes" vs "no color classes" so the topbar signals whether coloring is
+  // configured before the window is opened. Derived state (empty check on
+  // raypath_color) — no new state source. Blue/purple tint avoids collision
+  // with Run (green) / Stop (red).
+  const bool tint_colors_button = ShouldTintColorsButton(g_state.raypath_color.empty());
+  if (tint_colors_button) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.30f, 0.35f, 0.65f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.40f, 0.45f, 0.75f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.25f, 0.28f, 0.55f, 1.0f));
+  }
   if (ImGui::Button(ICON_FA_PALETTE " Colors")) {
     // task-348.3 AC3 (⑦): apply the "default enable on open with no classes" rule
     // ONLY on the false→true transition of color_window_open. Doing it here (inside
@@ -287,6 +299,9 @@ void RenderTopBar(float window_width) {
     if (opening && ShouldDefaultEnableColorsOnOpen(g_state.raypath_color.empty())) {
       g_state.show_composite_preview = true;
     }
+  }
+  if (tint_colors_button) {
+    ImGui::PopStyleColor(3);
   }
 
   // task-colored-toggle-to-topbar (346.3): colored/full-spectrum display-time

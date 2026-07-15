@@ -1167,6 +1167,14 @@ bool ShouldDefaultEnableColorsOnOpen(bool raypath_color_empty) {
   return raypath_color_empty;
 }
 
+// task-gui-feedback-affordances Step 1 (AC2) — see app.hpp. Pure predicate,
+// intentionally trivial: the tint decision boundary is `raypath_color` is
+// non-empty, and pinning it in a testable function prevents the top-bar
+// rendering call site from drifting away from the same read.
+bool ShouldTintColorsButton(bool raypath_color_empty) {
+  return !raypath_color_empty;
+}
+
 // task-348.3 (⑤/⑥) shared writer — see app.hpp. Two-line function on purpose: the whole
 // point is that both write sites go through the same left-value assignment so future
 // code cannot introduce a third variant that reads/writes the wrong field.

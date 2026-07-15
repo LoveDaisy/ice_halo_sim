@@ -263,6 +263,13 @@ bool ShouldFireCompositeUpload(const PreviewSnapshot& snap, unsigned long long l
 // false→true color_window_open transition (see RenderTopBar), not per-frame.
 bool ShouldDefaultEnableColorsOnOpen(bool raypath_color_empty);
 
+// task-gui-feedback-affordances Step 1 (AC2): decide whether the top-bar Colors
+// button should render with a distinct tint. True iff at least one color class
+// is configured (derived state; single source is `raypath_color.empty()` — no
+// new state source per scrum-353 GUI state governance). Pure predicate; the
+// caller in RenderTopBar wraps ImGui::Button with PushStyleColor when true.
+bool ShouldTintColorsButton(bool raypath_color_empty);
+
 // task-348.3 AC1/AC2 shared writer: toggle the user preference `show_composite_preview`.
 // Called from both the top-bar Colored checkbox (app_panels.cpp; icon-only Button in
 // 348.3, reverted to a plain-text Checkbox in 349.3 #4) and the in-window "Enable
