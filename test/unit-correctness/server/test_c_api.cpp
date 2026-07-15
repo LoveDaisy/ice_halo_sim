@@ -952,6 +952,60 @@ TEST_F(ServerLifecycleApi, GetSimLifecycleNullArgs) {
   EXPECT_EQ(LUMICE_GetSimLifecycle(server_, nullptr), LUMICE_ERR_NULL_ARG);
 }
 
+// task-gui-feedback-affordances Step 7 (AC1): LUMICE_GetColorOverflowInfo
+// exposes the component-bit overflow count captured synchronously during
+// CommitConfig. A well-formed color config (no overflow) reads 0; a config
+// with > 64 distinct predicates on one placement reads the number dropped.
+TEST_F(ServerLifecycleApi, GetColorOverflowInfoZeroWhenNoOverflow) {
+  auto json = MakeSmallSimConfigJson();
+  ASSERT_EQ(LUMICE_CommitConfig(server_, json.c_str()), LUMICE_OK);
+  LUMICE_ColorOverflowInfo info{};
+  ASSERT_EQ(LUMICE_GetColorOverflowInfo(server_, &info), LUMICE_OK);
+  EXPECT_EQ(info.component_overflow_count, 0);
+  EXPECT_EQ(info.symmetry_group_overflow_count, 0);  // reserved field always 0 in this task
+}
+
+TEST_F(ServerLifecycleApi, GetColorOverflowInfoReportsPredicateDrops) {
+  // Build a config where the color config has 65 unique predicates on the
+  // single placement (layer 0, crystal 1). 65 - 64 (ComponentTable::kMaxBits)
+  // = 1 predicate must be dropped to kNoBit.
+  auto base = nlohmann::json::parse(MakeSmallSimConfigJson());
+  nlohmann::json classes = nlohmann::json::array();
+  nlohmann::json cls;
+  cls["color"] = { 1.0, 0.0, 0.0 };
+  nlohmann::json matches = nlohmann::json::array();
+  for (int k = 0; k < 65; ++k) {
+    // Each ref carries a structurally-unique EE predicate (distinct min_len),
+    // so dedup does NOT collapse them; every ref consumes one component bit.
+    // Fields sit at the ref's top level (Design-2 RaypathColorRef inline
+    // predicate schema — see raypath_color_config.cpp from_json).
+    nlohmann::json ref;
+    ref["layer"] = 0;
+    ref["crystal"] = 1;
+    ref["type"] = "entry_exit";
+    ref["entry"] = 1;
+    ref["exit"] = 1;
+    ref["min_len"] = k + 1;
+    matches.push_back(ref);
+  }
+  cls["match"] = matches;
+  classes.push_back(cls);
+  base["raypath_color"]["classes"] = classes;
+  const std::string json = base.dump();
+
+  ASSERT_EQ(LUMICE_CommitConfig(server_, json.c_str()), LUMICE_OK);
+  LUMICE_ColorOverflowInfo info{};
+  ASSERT_EQ(LUMICE_GetColorOverflowInfo(server_, &info), LUMICE_OK);
+  EXPECT_EQ(info.component_overflow_count, 1);  // 65 - 64 = 1 predicate dropped
+  EXPECT_EQ(info.symmetry_group_overflow_count, 0);
+}
+
+TEST_F(ServerLifecycleApi, GetColorOverflowInfoNullArgs) {
+  LUMICE_ColorOverflowInfo info{};
+  EXPECT_EQ(LUMICE_GetColorOverflowInfo(nullptr, &info), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_GetColorOverflowInfo(server_, nullptr), LUMICE_ERR_NULL_ARG);
+}
+
 
 TEST_F(ServerLifecycleApi, GetRenderResults) {
   CommitAndWaitForIdle();

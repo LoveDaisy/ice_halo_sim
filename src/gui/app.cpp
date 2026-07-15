@@ -975,6 +975,43 @@ bool DoRun(bool user_initiated) {
   if (err == LUMICE_OK) {
     // A good commit clears any prior over-bounds warning so a later re-occurrence warns again.
     ClearGuiWarning();
+
+    // task-gui-feedback-affordances Step 7 (AC1): the ABI check above passed
+    // (filter / raypath tracing / geometry all fit within their caps), but
+    // the CORE may still have dropped color-classification predicates that
+    // overflowed the 64-bit component budget (BuildColorGateTable → kNoBit).
+    // Surface that as a modal so the user sees "coloring degraded" rather
+    // than staring at a partially-uncolored render with no explanation. The
+    // Log panel is collapsed by default, so a log-only warning is invisible
+    // to most users — this is the fix for the "core degrades silently" trap
+    // that was called out in this task's issue.md §A.
+    //
+    // Two mutually-exclusive branches feed SetGuiWarning inside DoRun:
+    //  1) FillLumiceConfig failure (above) → commit was REJECTED, previous
+    //     config kept. That branch already gated on `user_initiated` to force
+    //     a refire on explicit user Runs (Step 2 AC3).
+    //  2) This one → commit SUCCEEDED, coloring degrades gracefully. Uses a
+    //     different message string (SetGuiWarning's identity-dedup means two
+    //     different messages cannot swallow each other). Applies the same
+    //     `user_initiated` refire policy so a user who dismisses the modal
+    //     and re-Runs with the same still-oversized color config sees the
+    //     modal again.
+    LUMICE_ColorOverflowInfo color_over{};
+    LUMICE_GetColorOverflowInfo(g_server, &color_over);
+    if (color_over.component_overflow_count > 0 || color_over.symmetry_group_overflow_count > 0) {
+      std::string degrade_msg =
+          "This raypath color configuration exceeds its predicate/symmetry-group budget (" +
+          std::to_string(color_over.component_overflow_count) + " predicate(s) and/or " +
+          std::to_string(color_over.symmetry_group_overflow_count) +
+          " symmetry-group(s) dropped).\n"
+          "Affected rays/crystals will render with missing or incomplete color. The underlying "
+          "filtering/geometry is unaffected — only color assignment degrades.\n"
+          "Simplify the color configuration (fewer distinct predicates per class / fewer symmetry variants) to fix.";
+      if (user_initiated) {
+        ClearGuiWarning();
+      }
+      SetGuiWarning(degrade_msg);
+    }
     g_state.last_committed_state = GuiState::ConfigSnapshot::From(g_state);
     // task-color-migration §4 M6 (repush discipline): a fresh commit invalidates every edge-
     // trigger baseline so the next frame's reconciler unconditionally re-pushes the full

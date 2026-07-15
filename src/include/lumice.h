@@ -78,6 +78,25 @@ typedef struct LUMICE_SimLifecycleResult_ {
   unsigned long long epoch;
 } LUMICE_SimLifecycleResult;
 
+// task-gui-feedback-affordances Step 7 (AC1): summary of how many color-
+// classification predicates / symmetry groups the CORE dropped during the
+// most recent commit. Used by the GUI DoRun path to surface a modal warning
+// that coloring will be truncated (the filter / geometry / raypath tracing
+// path is UNAFFECTED — only color assignment degrades).
+//
+// component_overflow_count is set SYNCHRONOUSLY inside CommitConfig (predicates
+// past the 64-bit ComponentTable budget were assigned kNoBit).
+// symmetry_group_overflow_count is RESERVED for a follow-up task — the CPU/
+// Metal/CUDA `EnsureFilterBuffers` per-slot symmetry-group cap
+// (kColorMaxGroupsPerSlot=4) fires asynchronously on the worker thread's
+// first batch, so surfacing it requires poll infrastructure not yet wired.
+// Currently always 0; the field is kept in the ABI struct so future clients
+// do not need to re-widen it later.
+typedef struct LUMICE_ColorOverflowInfo_ {
+  int component_overflow_count;
+  int symmetry_group_overflow_count;
+} LUMICE_ColorOverflowInfo;
+
 // =============== Ray Count Type ===============
 // 64-bit count type for ray / ray-segment / crystal totals. Must stay >= 64-bit:
 // `unsigned long` is only 32-bit on Windows (LLP64), which silently truncated
@@ -869,6 +888,14 @@ LUMICE_ErrorCode LUMICE_QueryServerState(LUMICE_Server* server, LUMICE_ServerSta
 // LUMICE_QueryServerState is a projection of this. After a synchronous commit,
 // call this to read back the just-minted epoch (no commit-signature change).
 LUMICE_ErrorCode LUMICE_GetSimLifecycle(LUMICE_Server* server, LUMICE_SimLifecycleResult* out);
+
+// task-gui-feedback-affordances Step 7 (AC1): synchronous readback of the
+// most recent commit's color-classification overflow counters (see the
+// LUMICE_ColorOverflowInfo doc block above). The GUI DoRun path calls this
+// after CommitConfigStruct returns OK; a non-zero component_overflow_count
+// triggers a modal "coloring degraded" prompt. LUMICE_OK on success;
+// LUMICE_ERR_NULL_ARG if server or out is null.
+LUMICE_ErrorCode LUMICE_GetColorOverflowInfo(LUMICE_Server* server, LUMICE_ColorOverflowInfo* out);
 
 void LUMICE_StopServer(LUMICE_Server* server);
 

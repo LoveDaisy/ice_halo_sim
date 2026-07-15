@@ -5352,6 +5352,93 @@ void RegisterLinkedEntriesTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // task-gui-feedback-affordances Step 7 (AC1): the end-to-end degrade-warning
+  // wire. Big-OR filter (host-side ABI-legal) + a color config with > 64
+  // distinct predicates on one placement — the ABI check passes (commit is
+  // NOT rejected), the CORE drops the excess predicates (kNoBit), and DoRun
+  // surfaces the "coloring degraded" modal via SetGuiWarning with a message
+  // string DIFFERENT from the ABI-overflow message (identity-dedup safety).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "big_or_filter_with_color_overflow_surfaces_warning");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ClearGuiWarning();
+      gui::g_server = LUMICE_CreateServer();
+      IM_CHECK(gui::g_server != nullptr);
+
+      // Populate raypath_color across 3 classes × 22 refs = 66 unique
+      // raypath predicates on the (layer 0, crystal 1) placement. Each ref
+      // uses a distinct 2-face raypath text ("f1-f2") so structural dedup
+      // does not collapse them across classes; face numbers stay in the
+      // valid prism range 1..8 (kMaxHits is 64, well above our lengths).
+      // ABI caps allow 32 refs/class and 64 classes; splitting across
+      // classes is the only way to get > 64 predicates through the ABI to
+      // the CORE, where BuildColorGateTable dedupes across classes and hits
+      // ComponentTable::kMaxBits=64 → 66-64 = 2 predicates dropped.
+      gui::g_state.raypath_color.clear();
+      constexpr int kNumClasses = 3;
+      constexpr int kRefsPerClass = 22;
+      static_assert(kNumClasses * kRefsPerClass > 64, "must exceed ComponentTable::kMaxBits");
+      int uid = 0;  // index into a 64-combo (f1,f2) grid; overflow refs (>=64) use 3-face raypaths
+      for (int c = 0; c < kNumClasses; ++c) {
+        gui::ColorClassConfig cls;
+        cls.color[0] = 1.0f - c * 0.2f;
+        cls.color[1] = 0.5f;
+        cls.color[2] = 0.0f + c * 0.2f;
+        cls.combine = 0;
+        cls.visible = true;
+        cls.solo = false;
+        for (int k = 0; k < kRefsPerClass; ++k, ++uid) {
+          gui::ColorClassRefConfig ref;
+          ref.layer_idx = 0;
+          ref.crystal_pool_id = 0;  // maps to CrystalConfig::id_ = 1 in ResetTestState()
+          ref.match_all = false;
+          if (uid < 64) {
+            const int f1 = 1 + (uid % 8);
+            const int f2 = 1 + (uid / 8);
+            ref.predicate_text = std::to_string(f1) + "-" + std::to_string(f2);
+          } else {
+            // Two extra 3-face raypaths past the 64-combo grid — structurally
+            // distinct from all length-2 predicates above so total unique
+            // predicates = 66 → 2 overflow past kMaxBits.
+            const int tail = uid - 63;  // 1, 2
+            ref.predicate_text = "1-1-" + std::to_string(tail);
+          }
+          cls.match.push_back(ref);
+        }
+        gui::g_state.raypath_color.push_back(cls);
+      }
+
+      // Sim ray count small so the run finishes quickly if it starts.
+      gui::g_state.sim.infinite = false;
+      gui::g_state.sim.ray_num_millions = 0.001f;
+
+      gui::DoRun(/*user_initiated=*/true);
+
+      // Commit MUST succeed (ABI accepts the config); the drop is a
+      // display-layer degradation only.
+      const std::string warning = gui::PeekGuiWarning();
+      IM_CHECK(!warning.empty());
+      IM_CHECK(warning.find("color") != std::string::npos || warning.find("Color") != std::string::npos);
+      // The message MUST be distinct from the two existing ABI-overflow msgs
+      // (filter cap / color-class cap), else SetGuiWarning's identity-dedup
+      // would silently collapse them (regression anchor per plan §7 risk 3).
+      IM_CHECK(warning.find("This raypath color configuration exceeds its predicate") != std::string::npos);
+      IM_CHECK(warning.find("Simplify the color configuration") != std::string::npos);
+
+      // Cleanup.
+      gui::ClearGuiWarning();
+      gui::g_state.raypath_color.clear();
+      gui::g_server_poller.Stop();
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+      gui::g_state.run_intent = gui::RunIntent::kNone;
+      gui::g_state.committed_epoch = 0;
+      gui::g_state.dirty = false;
+    };
+  }
+
   // task-gui-feedback-affordances Step 3 (AC4): the filter Edit modal live
   // preview must render its "Clauses: N / <limit>" line for both the normal
   // case and the overflow case (red-styled). This test opens the Edit modal,

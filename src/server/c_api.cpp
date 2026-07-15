@@ -1864,6 +1864,21 @@ LUMICE_ErrorCode LUMICE_GetSimLifecycle(LUMICE_Server* server, LUMICE_SimLifecyc
 }
 
 
+// task-gui-feedback-affordances Step 7 (AC1): synchronous readback of the
+// component-bit overflow counter written inside CommitConfig.
+// symmetry_group_overflow_count is reserved (currently always 0) — the async
+// polling path is scheduled for a follow-up task (see progress.md Step 4
+// DECISION 2026-07-15 23:00).
+LUMICE_ErrorCode LUMICE_GetColorOverflowInfo(LUMICE_Server* server, LUMICE_ColorOverflowInfo* out) {
+  if (!server || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  out->component_overflow_count = static_cast<int>(server->server_->GetLastColorComponentOverflowCount());
+  out->symmetry_group_overflow_count = 0;  // reserved — see follow-up backlog
+  return LUMICE_OK;
+}
+
+
 void LUMICE_StopServer(LUMICE_Server* server) {
   if (!server) {
     return;
