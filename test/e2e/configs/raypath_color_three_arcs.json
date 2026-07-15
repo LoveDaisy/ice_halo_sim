@@ -43,11 +43,14 @@
       }
     ]
   },
-  "raypath_color": [
-    { "color": [1.0, 0.0, 0.0], "match": [ { "layer": 0, "crystal": 1 } ] },
-    { "color": [0.0, 1.0, 0.0], "match": [ { "layer": 0, "crystal": 2, "type": "entry_exit", "min_len": 2, "max_len": 2 } ] },
-    { "color": [0.0, 0.0, 1.0], "match": [ { "layer": 0, "crystal": 2, "type": "entry_exit", "min_len": 3 } ] }
-  ],
+  "raypath_color": {
+    "mode": "dominant",
+    "classes": [
+      { "color": [1.0, 0.0, 0.0], "match": [ { "layer": 0, "crystal": 1 } ] },
+      { "color": [0.0, 1.0, 0.0], "match": [ { "layer": 0, "crystal": 2, "type": "entry_exit", "min_len": 2, "max_len": 2 } ] },
+      { "color": [0.0, 0.0, 1.0], "match": [ { "layer": 0, "crystal": 2, "type": "entry_exit", "min_len": 3 } ] }
+    ]
+  },
   "render": [
     {
       "id": 1,
