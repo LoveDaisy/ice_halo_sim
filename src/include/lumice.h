@@ -598,12 +598,25 @@ void LUMICE_ConfigReleaseColorClasses(LUMICE_Config* cfg);
 // triple. This is the ONLY supported writer for the composition storage — direct field writes
 // (previously legal against the old inline `clauses[16][8]`) are no longer defined.
 //
+// Unlike LUMICE_ConfigCreateColorClasses's two-phase allocate-then-fill-in-place pattern, this
+// API is a one-shot value write (Set): every production caller already holds the complete
+// (clause_count, term_counts, term_ids) triple on the stack before calling, so there is no
+// caller-visible "allocated but not yet populated" intermediate state to expose. Reach for this
+// same shape (Set over Create) for a future owning field only if callers likewise assemble the
+// full value before writing it in.
+//
 // Semantics:
 //   - `comp == nullptr` → returns LUMICE_ERR_NULL_ARG.
-//   - `clause_count < 0` → returns LUMICE_ERR_INVALID_CONFIG, `comp` left untouched.
-//   - `clause_count > 0 && (term_counts == nullptr || term_ids == nullptr)` → LUMICE_ERR_NULL_ARG.
-//   - Any `term_counts[i] < 0` → LUMICE_ERR_INVALID_CONFIG (full clause-count validation runs
-//     before any allocation; `comp` untouched on rejection).
+//   - `clause_count < 0` or `clause_count > LUMICE_MAX_CONFIG_CLAUSES` → returns
+//     LUMICE_ERR_INVALID_CONFIG, `comp` left untouched.
+//   - `clause_count > 0 && term_counts == nullptr` → LUMICE_ERR_NULL_ARG.
+//   - Any `term_counts[i] < 0` or `term_counts[i] > LUMICE_MAX_CONFIG_TERMS` →
+//     LUMICE_ERR_INVALID_CONFIG (full clause-count validation runs before any allocation;
+//     `comp` untouched on rejection).
+//   - `term_ids == nullptr` is only rejected (LUMICE_ERR_NULL_ARG) once `sum(term_counts[0..
+//     clause_count))` (total term count) is computed and found > 0 — i.e. `term_ids` may
+//     legitimately be null when every clause has 0 terms; see LUMICE_CompositionClauseTerms's
+//     doc comment for the resulting storage state.
 //   - `clause_count == 0` → release any existing allocation and land in the "OR of nothing"
 //     state (term_ids/term_counts nullptr, clause_count 0). term_counts/term_ids inputs
 //     are ignored in this branch.

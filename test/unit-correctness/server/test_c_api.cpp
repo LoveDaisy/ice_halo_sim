@@ -2320,39 +2320,48 @@ TEST(StructFilterComplex, EmptyCompositionAccepted) {
 }
 
 TEST(StructFilterComplex, EmptyClauseWithinCompositionCommitEndToEnd) {
-  // Regression (code-review-01, round 1, Major): LUMICE_CompositionSetClauses only allocates
-  // term_ids when total_terms > 0, so a composition where every clause has 0 terms
+  // Regression (code-review-01/02, round 1+2, Major): LUMICE_CompositionSetClauses only
+  // allocates term_ids when total_terms > 0, so a composition where every clause has 0 terms
   // (clause_count > 0, total_terms == 0) legitimately ends up with term_ids == nullptr while
-  // term_counts stays allocated (non-null). Before the fix, LUMICE_CommitConfigStruct's
-  // composition validation conflated term_ids == nullptr with term_counts == nullptr and
-  // rejected this state with LUMICE_ERR_INVALID_CONFIG.
-  //
-  // NOTE: this exact state is NOT reachable via the JSON `"composition": [[]]` path today —
-  // JsonToComplexComposition builds term_ids via std::vector<int>::push_back, so a 0-term
-  // clause leaves that vector empty, and its `.data()` is nullptr, which independently trips
-  // LUMICE_CompositionSetClauses's own "term_ids == nullptr" *argument* check (verified: Parse
-  // returns LUMICE_ERR_NULL_ARG for that JSON shape, never reaching Commit). This test instead
-  // constructs the composition directly through the public C API — any caller (including a
-  // future non-C++ binding) can reach this state by passing a non-null-but-unused term_ids
-  // buffer alongside all-zero term_counts — which is the state LUMICE_CommitConfigStruct must
-  // defensively accept.
+  // term_counts stays allocated (non-null). Round 1 fixed LUMICE_CommitConfigStruct's read-side
+  // check but left SetClauses's own entry-point null-check requiring term_ids unconditionally
+  // non-null whenever clause_count > 0 — which rejected exactly this legitimate shape earlier,
+  // at LUMICE_ParseConfigString time, for the two real production callers (JsonToComplexComposition
+  // / ExpandFilterToStruct) whose std::vector<int> term_ids accumulator is left empty (and thus
+  // .data() == nullptr) when total_terms == 0. Round 2 fixes SetClauses itself to only require
+  // term_ids non-null once total_terms is known to be > 0, restoring pre-v4.9 JSON round-trip
+  // behavior for this shape end-to-end (Parse -> Commit), covering both `[[]]` (one empty
+  // clause) and `[[],[]]` (two empty clauses) per round 1's original ask.
+  nlohmann::json filters = nlohmann::json::array({
+      { { "id", 1 }, { "action", "filter_in" }, { "type", "raypath" }, { "raypath", { 3, 5 } } },
+      { { "id", 2 },
+        { "action", "filter_in" },
+        { "type", "complex" },
+        { "composition", nlohmann::json::array({ nlohmann::json::array() }) } },  // [[]]
+      { { "id", 3 },
+        { "action", "filter_in" },
+        { "type", "complex" },
+        { "composition", nlohmann::json::array({ nlohmann::json::array(), nlohmann::json::array() }) } },  // [[],[]]
+  });
   LUMICE_Config cfg{};
   lumice::ConfigOwningGuard cfg_guard(cfg);
-  ASSERT_EQ(LUMICE_ParseConfigString(MakeFullConfigJson().c_str(), &cfg), LUMICE_OK);
-  ASSERT_EQ(cfg.filter_count, 1);  // MakeFullConfigJson's single raypath filter, id 1
+  ASSERT_EQ(LUMICE_ParseConfigString(FullConfigWithFiltersJson(filters).c_str(), &cfg), LUMICE_OK);
+  ASSERT_GE(cfg.filter_count, 3);
+  EXPECT_EQ(cfg.filters[1].type, LUMICE_FILTER_TYPE_COMPLEX);
+  EXPECT_EQ(cfg.filters[2].type, LUMICE_FILTER_TYPE_COMPLEX);
 
-  cfg.filters[1].id = 2;
-  cfg.filters[1].type = LUMICE_FILTER_TYPE_COMPLEX;
-  cfg.filters[1].composition_index = 0;
-  cfg.filter_count = 2;
-  cfg.composition_count = 1;
+  const auto& comp1 = cfg.compositions[cfg.filters[1].composition_index];
+  EXPECT_EQ(comp1.clause_count, 1);
+  EXPECT_NE(comp1.term_counts, nullptr);
+  EXPECT_EQ(comp1.term_counts[0], 0);
+  EXPECT_EQ(comp1.term_ids, nullptr);
 
-  int zero_term_counts[1] = { 0 };
-  int dummy_term_ids[1] = { 0 };  // never dereferenced (total_terms == 0); must be non-null
-  ASSERT_EQ(LUMICE_CompositionSetClauses(&cfg.compositions[0], 1, zero_term_counts, dummy_term_ids), LUMICE_OK);
-  EXPECT_EQ(cfg.compositions[0].clause_count, 1);
-  EXPECT_NE(cfg.compositions[0].term_counts, nullptr);
-  EXPECT_EQ(cfg.compositions[0].term_ids, nullptr);
+  const auto& comp2 = cfg.compositions[cfg.filters[2].composition_index];
+  EXPECT_EQ(comp2.clause_count, 2);
+  EXPECT_NE(comp2.term_counts, nullptr);
+  EXPECT_EQ(comp2.term_counts[0], 0);
+  EXPECT_EQ(comp2.term_counts[1], 0);
+  EXPECT_EQ(comp2.term_ids, nullptr);
 
   cfg.infinite = 0;
   cfg.ray_num = 100;

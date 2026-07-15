@@ -712,7 +712,17 @@ LUMICE_ErrorCode LUMICE_CompositionSetClauses(LUMICE_ComplexComposition* comp, i
   if (clause_count < 0 || clause_count > LUMICE_MAX_CONFIG_CLAUSES) {
     return LUMICE_ERR_INVALID_CONFIG;
   }
-  if (clause_count > 0 && (term_counts == nullptr || term_ids == nullptr)) {
+  // term_counts is required whenever clause_count > 0 (every clause needs its own count).
+  // term_ids, however, must NOT be required upfront: a composition where every clause has 0
+  // terms (total_terms == 0) is legitimate (LUMICE_CompositionClauseTerms's doc comment and
+  // LUMICE_CommitConfigStruct's validation both already treat it as such), and a caller with
+  // total_terms == 0 may reasonably pass term_ids == nullptr for that empty flat buffer — e.g.
+  // JsonToComplexComposition's std::vector<int> term_ids_vec, whose .data() is nullptr when
+  // never push_back'd into. Requiring non-null unconditionally rejected exactly that legitimate
+  // shape at the ONLY writer, before CommitConfigStruct ever saw it (code-review round 2,
+  // Major — round 1's fix only patched CommitConfigStruct's read-side check, not this entry
+  // point). So the term_ids null-check is deferred until total_terms is known.
+  if (clause_count > 0 && term_counts == nullptr) {
     return LUMICE_ERR_NULL_ARG;
   }
   // Full validation BEFORE any allocation so an invalid input leaves `comp` untouched
@@ -726,6 +736,9 @@ LUMICE_ErrorCode LUMICE_CompositionSetClauses(LUMICE_ComplexComposition* comp, i
       return LUMICE_ERR_INVALID_CONFIG;
     }
     total_terms += static_cast<size_t>(term_counts[cl]);
+  }
+  if (total_terms > 0 && term_ids == nullptr) {
+    return LUMICE_ERR_NULL_ARG;
   }
 
   // Create-or-replace: release any prior allocation before overwriting the pointers,
