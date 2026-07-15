@@ -288,22 +288,33 @@ void RegisterPerfTests(ImGuiTestEngine* engine) {
 
         // Throttled commit: when --main-loop-commit, the main loop handles DoRun on the main thread
         // (matching real app behavior). Otherwise, DoRun fires here on the test thread.
+        // ⚠️ MIRROR of src/gui/main.cpp:284-301 — if that throttle/accounting block changes
+        // (dirty-clear timing, restart counting, DoRun return-value handling), MIRROR the change
+        // here. task-metal-gui-commit-backpressure §4 Step 4.
         if (!g_enable_main_loop_commit) {
           auto now = std::chrono::steady_clock::now();
           auto commit_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
           if (commit_elapsed >= gui::kCommitIntervalMs) {
+            // task-metal-gui-commit-backpressure: only account/clear-dirty/mark-restart when
+            // DoRun actually pushed the commit. Reading server rays BEFORE the DoRun call so
+            // committed==true captures the just-ending sim's ray count; committed==false means
+            // the sim under the previous epoch is still going and its counter will roll into
+            // the NEXT successful commit's snapshot (no double-count). `last_commit` always
+            // advances so the 70ms cadence check is unchanged.
             auto rays_this_cycle = read_server_rays();
-            per_restart_rays.push_back(rays_this_cycle);
-            cumulative_rays += rays_this_cycle;
-            gui::g_state.dirty = false;
-            gui::DoRun();
+            bool committed = gui::DoRun();
+            if (committed) {
+              per_restart_rays.push_back(rays_this_cycle);
+              cumulative_rays += rays_this_cycle;
+              gui::g_state.dirty = false;
+              last_dorun_time = now;
+              waiting_first_upload = true;
+              restart_count++;
+            }
             if (g_dorun_delay_ms > 0) {
               std::this_thread::sleep_for(std::chrono::milliseconds(g_dorun_delay_ms));
             }
             last_commit = now;
-            last_dorun_time = now;
-            waiting_first_upload = true;
-            restart_count++;
           }
         }
       }

@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <fstream>
 #include <future>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -825,14 +826,52 @@ bool MaybeReconstructServerForBackend() {
   return true;
 }
 
-void DoRun() {
+bool DoRun() {
   if (!g_server) {
-    return;
+    return true;
   }
   // R1: a previous Stop may still be draining on the background thread. It calls poller.Stop() +
   // LUMICE_StopServer on this same server; joining first makes the DoRun commit/rebuild below
   // race-free (and the reused-consumer / poller-pointer reasoning valid).
   JoinPendingStop();
+
+  // task-metal-gui-commit-backpressure §3 design point 3/6: epoch-keyed backpressure gate.
+  // Rationale: kCommitIntervalMs=70ms is faster than Metal's first-batch consume latency
+  // (~150ms cold, ~50-80ms after the O2 PSO cache) — without a gate, continuous slider drag
+  // restarts the sim before StatsConsumer processes a single batch, starving the preview.
+  // Design:
+  //   - Gate only fires when a Run is actively RUNNING AND has not yet consumed any rays.
+  //     (LiveSimRays counts root rays consumed by StatsConsumer, reset in CommitConfig on both
+  //     rebuild and reuse branches, so `> 0` is equivalent to "first batch landed".)
+  //   - Timer is keyed by lifecycle.epoch, not a raw wall-clock static. Epoch changes → timer
+  //     resets, so a stale timer from a previous gui_test scenario cannot leak into a new one.
+  //   - kQualityGateTimeoutMs (500ms) is a defensive ceiling reused from server_poller.cpp:
+  //     if a Run somehow never lands a batch (hung backend), the gate opens after 500ms with
+  //     a WARNING rather than blocking commits forever. See plan R2.
+  //   - Return false keeps g_state.dirty=true in main.cpp so the next 70ms tick retries with
+  //     g_state's latest values ("continuously reflect the latest edit" — plan §3 dp 3).
+  static uint64_t gate_epoch = 0;
+  static std::optional<std::chrono::steady_clock::time_point> gate_since;
+  LUMICE_SimLifecycleResult lc0{};
+  LUMICE_GetSimLifecycle(g_server, &lc0);
+  if (lc0.lifecycle == LUMICE_LIFECYCLE_RUNNING) {
+    LUMICE_RayCount live_rays = 0;
+    LUMICE_GetSimRayCount(g_server, &live_rays);
+    if (live_rays == 0) {
+      auto now = std::chrono::steady_clock::now();
+      if (gate_epoch != lc0.epoch || !gate_since.has_value()) {
+        gate_epoch = lc0.epoch;
+        gate_since = now;
+      }
+      auto blocked_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - *gate_since).count();
+      if (blocked_ms < gui::kQualityGateTimeoutMs) {
+        return false;
+      }
+      GUI_LOG_WARNING("[GUI] DoRun: backpressure gate timeout ({}ms, epoch={}) — forcing commit with 0 rays landed",
+                      blocked_ms, lc0.epoch);
+    }
+  }
+
   auto run_start = std::chrono::steady_clock::now();
 
   // Backend toggle reconstructs the server (per-backend orchestration topology).
@@ -903,7 +942,7 @@ void DoRun() {
                       color_overflow.class_index >= 0 ? "raypath color configuration" : "filter", log_locator);
     }
     SetGuiWarning(warning_msg);
-    return;
+    return true;
   }
 
   if (expect_rebuild) {
@@ -975,6 +1014,10 @@ void DoRun() {
       g_server_poller.WakeForRestart(g_server);
     }
   }
+  // Both err==LUMICE_OK and err!=LUMICE_OK paths issued LUMICE_CommitConfigStruct;
+  // "committed" here means "gate did not defer this attempt", not "commit succeeded".
+  // Callers use this to gate throttle-side accounting (see main.cpp / test_gui_perf.cpp).
+  return true;
 }
 
 void DoStop() {

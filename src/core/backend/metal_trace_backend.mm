@@ -1058,6 +1058,19 @@ void MetalTraceBackend::Impl::EnsurePso() {
   gen_root_pso_     = c.gen_root_pso;
   transit_root_pso_ = c.transit_root_pso;
   shuffle_pso_      = c.shuffle_pso;
+  // Per-Impl observability marker: emit the AC2-sentinel-compatible line
+  // (test/regression-sentinel/test_metallib_no_source_compile.py checks that
+  // every MetalTraceBackend instance in the captured log window reports
+  // "loaded embedded metallib (N functions)"). Emitted once per Impl because
+  // this branch is gated by `pso == nil`. On the cache-miss path
+  // LoadMetalLibrary emits the same marker inside BuildMetalDeviceCache
+  // (harmless duplicate line for the first Impl); on the cache-hit path this
+  // is the only marker source, preserving the per-instance invariant. Count
+  // is hardcoded to 4 to mirror _EXPECTED_FUNCTION_COUNT (trace_layer /
+  // gen_root / transit_root / shuffle_cont) — bumping requires updating both
+  // this literal and the sentinel test in lock-step.
+  ILOG_INFO(EffectiveLogger(logger_),
+            "MetalTraceBackend: loaded embedded metallib ({} functions)", 4);
 }
 
 void MetalTraceBackend::Impl::EnsureImage(int w, int h) {

@@ -149,7 +149,18 @@ void DoOpen();
 void DoOpen(const std::filesystem::path& path);
 void DoNew();
 void CalibrateQualityThreshold();
-void DoRun();
+// task-metal-gui-commit-backpressure: DoRun now returns `true` when it actually
+// issued a LUMICE_CommitConfigStruct (successful or otherwise — the config was
+// pushed), and `false` when the backpressure gate deferred this attempt because
+// the current Run has not yet produced its first consumed batch (avoids the
+// commit-outpaces-batch starvation that made Metal slider drag show 0 rays).
+// Callers that mirror main.cpp's 70ms throttle (dirty-clear / restart accounting)
+// MUST gate those side effects on the returned bool — see main.cpp,
+// test/gui/test_gui_main.cpp, test/gui/responsiveness/test_gui_perf.cpp.
+// Callers outside the auto-commit throttle (button clicks, DoOpen/DoNew paths)
+// happen when the current Run is not RUNNING and the gate short-circuits open,
+// so they may discard the return value without behavior change.
+bool DoRun();
 void DoStop();
 void DoRevert();
 void DoLoadBackground(GLFWwindow* window);

@@ -374,9 +374,12 @@ int main(int argc, char** argv) {
     glfwPollEvents();
     gui::SyncFromPoller();  // Sync server data for perf tests (no-op when g_server is null)
 
-    // Auto-commit on main thread (matches real app's main.cpp:214-228).
+    // Auto-commit on main thread (matches real app's main.cpp:284-301).
     // When enabled, DoRun() blocks the main loop just like in the real app,
     // so VSync frame budget effects are faithfully reproduced.
+    // ⚠️ MIRROR of src/gui/main.cpp:284-301 — if that throttle/accounting block
+    // changes (dirty-clear timing, restart counting, DoRun return-value handling),
+    // MIRROR the change here. task-metal-gui-commit-backpressure §4 Step 4.
     if (g_enable_main_loop_commit && gui::g_server) {
       static auto last_commit = std::chrono::steady_clock::now();
       if (gui::g_state.dirty) {
@@ -386,14 +389,23 @@ int main(int argc, char** argv) {
           auto now = std::chrono::steady_clock::now();
           auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
           if (elapsed >= gui::kCommitIntervalMs) {
-            // Record rays from current cycle before restart
+            // task-metal-gui-commit-backpressure: only account/clear-dirty when DoRun
+            // actually pushed the commit. When the backpressure gate defers (Metal
+            // first batch not landed), DoRun returns false; a false-return path must
+            // NOT count as a restart nor accumulate stats[0].sim_ray_num (the sim
+            // never restarted, so its counter is still growing under the previous
+            // epoch — double-counting would appear as inflated cumulative rays).
+            // `last_commit` always advances so the 70ms cadence check is unchanged.
             LUMICE_StatsResult stats[2]{};
             LUMICE_GetStatsResults(gui::g_server, stats, 1);
-            g_main_loop_cumulative_rays += stats[0].sim_ray_num;
-            g_main_loop_restart_count++;
+            unsigned long snapshot_rays = stats[0].sim_ray_num;
 
-            gui::g_state.dirty = false;
-            gui::DoRun();
+            bool committed = gui::DoRun();
+            if (committed) {
+              g_main_loop_cumulative_rays += snapshot_rays;
+              g_main_loop_restart_count++;
+              gui::g_state.dirty = false;
+            }
             if (g_dorun_delay_ms > 0) {
               std::this_thread::sleep_for(std::chrono::milliseconds(g_dorun_delay_ms));
             }
