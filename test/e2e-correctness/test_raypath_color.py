@@ -81,15 +81,6 @@ MULTI_LAYER_CLASS_COLORS = [
     (0.0, 1.0, 0.0),   # 3: GREEN   — L0 C5 OR-union of two length predicates (case B)
 ]
 
-# task-339.5 per-class minimum pixel count. Calibration below matches
-# `classify_pixels_by_color_direction` with cos_similarity_tol=0.90.
-# Observed per-class counts on the reference run (macOS, Design-2 renderer):
-#   MAGENTA/ORANGE/RED/GREEN = 10528 / 56360 / 11155 / 20341.
-# Threshold set to ~1/4 of the observed minimum (~10500 -> 2500) so each
-# class is comfortably above zero (no wiring regression) and above MC noise
-# floor, while tolerating cross-platform / MC-seed variation.
-MULTI_LAYER_MIN_PIXELS_PER_CLASS = 2500
-
 # task-339.5 unclassified-pixel cap. Observed unc=2173 (2% of total) at
 # tol=0.90. Cap at 8% of total pixels (~10500 for 512x256) — a real
 # phantom-hue regression (compositor mode leaking to additive-like mix,
@@ -280,26 +271,23 @@ class TestRaypathColorMultiLayer(LumiceTestCase):
                 f"threshold {MULTI_LAYER_PSNR_THRESHOLD} dB",
             )
 
-            # (d) All four classes present in the composite output.
-            # Any class dropping to zero flags a per-class lane wiring
-            # regression (e.g. none-filter bit not carrying forward, AND
-            # predicate rejecting all rays, entry-gate mapping wrong).
+            # (d) — the per-class dominant-pixel-count floor (retired
+            # 2026-07-14, task-metal-green-pixel-floor) previously lived
+            # here. It failed on Metal because dominant-argmax pixel counts
+            # are a winner-takes-all indicator, not a per-class lane
+            # signal: MAGENTA/ORANGE Y-lane radiance stayed 1:1 with CPU
+            # but their pixels lost the argmax to denser L0 classes on
+            # Metal (37x sparser), making the floor a false Metal-only
+            # failure. The replacement lane-signal check now lives in
+            # `test_multi_layer_color_class_signal_{cpu,metal}` below,
+            # which reads `LUMICE_GetColorClassSignal` via a CLI stdout
+            # line (`ColorClassSignal:`); see progress.md 2026-07-14
+            # (orchestrator inline 白盒调查) for the full evidence chain.
             result = classify_pixels_by_color_direction(
                 str(composite),
                 MULTI_LAYER_CLASS_COLORS,
                 cos_similarity_tol=MULTI_LAYER_COS_TOL,
             )
-            class_labels = ["MAGENTA", "ORANGE", "RED", "GREEN"]
-            for idx, (label, count) in enumerate(
-                zip(class_labels, result["per_class"])
-            ):
-                self.assertGreaterEqual(
-                    count,
-                    MULTI_LAYER_MIN_PIXELS_PER_CLASS,
-                    f"class {idx} ({label}) has only {count} lit pixels, "
-                    f"below floor {MULTI_LAYER_MIN_PIXELS_PER_CLASS}; "
-                    f"predicate wiring likely regressed",
-                )
 
             # (e) Phantom-hue floor: unclassified lit pixels must stay
             # under the cap. Blowing past it signals the compositor
@@ -315,3 +303,58 @@ class TestRaypathColorMultiLayer(LumiceTestCase):
                 f"cap {unclassified_cap} ({MULTI_LAYER_MAX_UNCLASSIFIED_FRAC:.0%} "
                 f"of {result['total']}); possible phantom-hue regression",
             )
+
+    def _assert_multi_layer_all_classes_present(self, backend_args):
+        """Run the multi-layer config through the CLI and assert every
+        color class has a non-zero Y-lane (via LUMICE_GetColorClassSignal
+        surfaced as a `ColorClassSignal:` stdout line by main.cpp).
+
+        Replaces the retired dominant pixel-count floor; see
+        `test_multi_layer_all_semantics` docstring / progress.md for why
+        the argmax-based indicator was cross-backend non-portable.
+        """
+        if not MULTI_LAYER_CONFIG.exists():
+            self.skipTest(f"{MULTI_LAYER_CONFIG} not found")
+
+        result = self.run_lumice(
+            ["-f", str(MULTI_LAYER_CONFIG), "-o", self.output_dir, *backend_args]
+        )
+        self.assertEqual(
+            result.returncode, 0, f"Lumice failed:\n{result.stderr}"
+        )
+
+        signal_line = None
+        for line in result.stdout.splitlines():
+            if line.startswith("ColorClassSignal:"):
+                signal_line = line
+                break
+        self.assertIsNotNone(
+            signal_line,
+            f"CLI stdout missing `ColorClassSignal:` line (backend_args={backend_args}); "
+            f"stdout:\n{result.stdout}\n---stderr:\n{result.stderr}",
+        )
+
+        flags = signal_line.split()[1:]
+        class_labels = ["MAGENTA", "ORANGE", "RED", "GREEN"]
+        self.assertEqual(
+            len(flags),
+            len(class_labels),
+            f"ColorClassSignal expected {len(class_labels)} flags, got {len(flags)}: {signal_line!r}",
+        )
+        missing = [
+            class_labels[idx] for idx, flag in enumerate(flags) if flag == "0"
+        ]
+        self.assertFalse(
+            missing,
+            f"color classes with empty Y-lane (backend_args={backend_args}): {missing}; "
+            f"ColorClassSignal line: {signal_line!r}",
+        )
+
+    def test_multi_layer_color_class_signal_cpu(self):
+        """Every color class captures at least one non-zero pixel (CPU backend)."""
+        self._assert_multi_layer_all_classes_present([])
+
+    def test_multi_layer_color_class_signal_metal(self):
+        """Every color class captures at least one non-zero pixel (Metal backend;
+        silently falls back to CPU on Linux CI, equivalent to a second CPU run)."""
+        self._assert_multi_layer_all_classes_present(["--backend", "metal"])

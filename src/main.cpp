@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 // clang-format off
 #ifdef _WIN32
 #include <windows.h>   // Must come before shellapi.h (defines EXTERN_C etc.)
@@ -86,6 +87,54 @@ void WarnIfLastScatteringLayerProbNonzero(const std::filesystem::path& config_pa
     WarnIfLastScatteringLayerProbNonzero(j);
   } catch (const nlohmann::json::exception&) {
     // As above: let the core parser surface real errors.
+  }
+}
+
+// task-metal-green-pixel-floor: emit a stdout line reporting per-color-class
+// signal presence (0/1 per class) after the final composite fetch. Consumed by
+// test/e2e-correctness/test_raypath_color.py to assert every class captured at
+// least one non-zero pixel — a per-class lane-wiring smoke test that stays
+// cross-backend stable (the retired dominant-argmax pixel-count floor was
+// CPU-calibrated and unstable on Metal). No-op unless the config declares
+// `raypath_color`.
+void PrintColorClassSignal(LUMICE_Server* server, const nlohmann::json& j_cfg) {
+  int class_count = 0;
+  try {
+    if (!j_cfg.contains("raypath_color")) {
+      return;
+    }
+    const auto& j_rc = j_cfg.at("raypath_color");
+    if (!j_rc.is_array() || j_rc.empty()) {
+      return;
+    }
+    class_count = static_cast<int>(j_rc.size());
+  } catch (const nlohmann::json::exception&) {
+    return;
+  }
+  std::vector<int> flags(static_cast<std::size_t>(class_count), 0);
+  auto rc = LUMICE_GetColorClassSignal(server, flags.data(), class_count);
+  if (rc != LUMICE_OK) {
+    std::cerr << "Warning: LUMICE_GetColorClassSignal returned " << rc << "; skipping ColorClassSignal line\n";
+    return;
+  }
+  std::cout << "ColorClassSignal:";
+  for (int f : flags) {
+    std::cout << " " << f;
+  }
+  std::cout << "\n";
+}
+
+void PrintColorClassSignal(LUMICE_Server* server, const std::filesystem::path& config_path) {
+  std::ifstream f(config_path);
+  if (!f.is_open()) {
+    return;
+  }
+  try {
+    nlohmann::json j;
+    f >> j;
+    PrintColorClassSignal(server, j);
+  } catch (const nlohmann::json::exception&) {
+    // Malformed config: no-op, do not fail the CLI.
   }
 }
 // Fine poll granularity (was 100ms). At 100ms the IDLE-detection quantization
@@ -639,6 +688,7 @@ int main(int argc, char** argv) {
   SaveRenderResults(server, output_dir, image_format, jpeg_quality);
   SaveCompositeResults(server, output_dir, image_format, jpeg_quality);
   PrintStats(server);
+  PrintColorClassSignal(server, config_filename);
 
   LUMICE_DestroyServer(server);
   return 0;

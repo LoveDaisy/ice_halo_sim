@@ -56,7 +56,21 @@
   ninja <该 .o target>`；grep `177-D`/`declared but never referenced` 查死代码告警
   （既有噪声：spdlog/fmt 的 `#128-D loop is not reachable`、`trace_backend.hpp` multi-line comment，
   与改动无关）。
-- **parity（⭐首选 C++ gtest，不是 pytest）**：dev49 上 **pytest CUDA parity battery 会 `Fatal Python error: Aborted`（`free(): invalid next size`）**——backlog #1 记录的既存 ctypes teardown 堆污染，a01 已复核 pre-existing、与改动无关，但它会**吞掉 pytest 的 pass/fail 汇总**（尤其 `-q` 下崩在 summary 前）。**CLI 直跑和 C++ gtest 都不触发此崩溃**，故 parity 回归门走 gtest `parity_test`（用新镜像，无需 pip install）：
+- **parity（⭐首选 pytest，已修复）**：dev49 上 pytest CUDA parity battery 曾经 `Fatal Python error: Aborted`
+  （`free(): invalid next size`）——根因是 `test/e2e/capi_runner.py` 的 ctypes 镜像结构（`LUMICE_RenderResult`/
+  `LUMICE_ServerConfig`）比 C 侧头文件 sizeof 小 8/4 字节，导致每次 poll 调用堆越界写、污染 Python ctypes
+  相邻堆块（task-cuda-ctypes-teardown-crash 修复，已补 ctypes 字段 + C++ 侧 `static_assert(sizeof(...))`
+  编译期护栏）。**现在 pytest 不再崩溃**，恢复为首选验证路径（用新镜像，无需 pip install）：
+  ```bash
+  docker run --rm --gpus all -v /home/work/zjj/ice-halo-sim:/work -w /work lumice-cuda-test:11.6-py bash -lc '
+    export LUMICE_HAS_CUDA=1 LUMICE_CUDA_ENABLED=1
+    export LUMICE_LIB=/work/build/Release/lib/liblumice.so
+    export LD_LIBRARY_PATH=/work/build/Release/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+    python3 -m pytest -v test/parity-cross-backend/backend/test_cuda_{exit_seam,filter,multi_ms}_parity.py'
+  ```
+  判据 = 退出码 0 且看到 `N passed`（无需再加 `-p no:faulthandler`）。
+  （ctest 的 `CudaMultiMsParity` 因 cmake `PYTEST_EXECUTABLE` cache 指向不存在路径会 Not Run；直接 `python3 -m pytest` 绕过。）
+- **gtest parity（快速冒烟补充）**：C++ gtest `parity_test` 更快（~2s），适合改动后先跑一遍再上 pytest 全量：
   ```bash
   docker run --rm --gpus all -v /home/work/zjj/ice-halo-sim:/work -w /work lumice-cuda-test:11.6-py bash -lc '
     export LUMICE_HAS_CUDA=1 LUMICE_CUDA_ENABLED=1
@@ -64,17 +78,7 @@
     /work/build/Release/bin/parity_test --gtest_filter="Cuda*:*ComponentMask*"'
   ```
   覆盖 `CudaRichExit`（2 个 in-test `GTEST_SKIP`）、`CudaBackendCrystalCount`、`CudaRngHiWiring`(4)、
-  `CudaComponentMaskParity`(6，染色 parity)。**判据 = 进程退出码 0 且 0 failed**（skip 不算失败）。耗时 ~2s。
-- **pytest parity（仅当必须，明知会 teardown 崩）**：用新镜像 + `-v -p no:faulthandler` 让每条 `PASSED`
-  在崩溃前流式打出（`-q` 下崩溃会让你什么都看不到）：
-  ```bash
-  docker run --rm --gpus all -v /home/work/zjj/ice-halo-sim:/work -w /work lumice-cuda-test:11.6-py bash -lc '
-    export LUMICE_HAS_CUDA=1 LUMICE_CUDA_ENABLED=1
-    export LUMICE_LIB=/work/build/Release/lib/liblumice.so
-    export LD_LIBRARY_PATH=/work/build/Release/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-    python3 -m pytest -v -p no:faulthandler test/parity-cross-backend/backend/test_cuda_{exit_seam,filter,multi_ms}_parity.py'
-  ```
-  （ctest 的 `CudaMultiMsParity` 因 cmake `PYTEST_EXECUTABLE` cache 指向不存在路径会 Not Run；直接 `python3 -m pytest` 绕过。）
+  `CudaComponentMaskParity`(6，染色 parity)。**判据 = 进程退出码 0 且 0 failed**（skip 不算失败）。
 - **染色密度验证（本 bug / 任何 Y-lane composite 改动的功能门，parity 只测 mask 是盲区）**：three_arcs 2M
   跑 `--backend cuda` vs `--backend cpu`，比 `img_01_components.jpg` 的 lit-px 密度（用新镜像，`test/e2e/image_utils.py::classify_pixels_by_color_direction`）。修复后 CUDA≈CPU（~100k）；explore-359 pre-fix 塌到 65k(CUDA)/3k(Metal)。
 - **CLI 冒烟**：`Lumice -f examples/config_example.json --backend cuda -o /tmp`

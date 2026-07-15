@@ -64,32 +64,44 @@ assert ctypes.sizeof(LUMICE_RawXyzResult) == 64, (
 )
 
 
-# Mirrors LUMICE_RenderResult in src/include/lumice.h (lumice.h:57-64).
+# Mirrors LUMICE_RenderResult in src/include/lumice.h. task-345.3 grew this
+# struct by adding composite_p99_y (float at offset 24, 8-byte aligned = 32
+# bytes total); the ctypes mirror must include it or LUMICE_GetRenderResults
+# will overflow the out array by 8 bytes and corrupt the Python heap
+# (task-cuda-ctypes-teardown-crash root cause). C++-side static_assert lives
+# in test/unit-correctness/server/test_c_api.cpp.
 class LUMICE_RenderResult(ctypes.Structure):
     _fields_ = [
-        ("renderer_id",  ctypes.c_int),
-        ("img_width",    ctypes.c_int),
-        ("img_height",   ctypes.c_int),
-        ("img_buffer",   ctypes.POINTER(ctypes.c_ubyte)),
+        ("renderer_id",       ctypes.c_int),
+        ("img_width",         ctypes.c_int),
+        ("img_height",        ctypes.c_int),
+        ("img_buffer",        ctypes.POINTER(ctypes.c_ubyte)),
+        ("composite_p99_y",   ctypes.c_float),
     ]
 
-assert ctypes.sizeof(LUMICE_RenderResult) == 24, (
+assert ctypes.sizeof(LUMICE_RenderResult) == 32, (
     "LUMICE_RenderResult size mismatch — verify lumice.h field layout"
 )
 
 # Backend constants (lumice.h:391-392).
 LUMICE_BACKEND_CPU = 0
 LUMICE_BACKEND_METAL = 1
+LUMICE_BACKEND_CUDA = 2
 
 
+# Mirrors LUMICE_ServerConfig in src/include/lumice.h. Must include
+# preferred_backend or LUMICE_CreateServerEx will read 4 bytes past the
+# ctypes-allocated struct (undefined behavior; contributed to the ctypes
+# teardown crash root cause).
 class LUMICE_ServerConfig(ctypes.Structure):
     _fields_ = [
-        ("num_workers", ctypes.c_int),
-        ("sim_seed",    ctypes.c_uint),
+        ("num_workers",       ctypes.c_int),
+        ("sim_seed",          ctypes.c_uint),
+        ("preferred_backend", ctypes.c_int),
     ]
 
 
-assert ctypes.sizeof(LUMICE_ServerConfig) == 8, (
+assert ctypes.sizeof(LUMICE_ServerConfig) == 12, (
     "LUMICE_ServerConfig size mismatch — verify lumice.h field layout"
 )
 

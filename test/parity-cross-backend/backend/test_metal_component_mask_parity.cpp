@@ -58,6 +58,7 @@ namespace {
 
 using metal_test::ForceHostGenForByteIdentity;
 using metal_test::MakeMetalScene;
+using metal_test::MakeMetalSceneWithProb;
 using metal_test::MakeRectangularRender;
 using metal_test::ShouldSkipMetalTests;
 
@@ -614,6 +615,93 @@ TEST(MetalComponentMaskParity, ColorConfiguredMaskPopcountWhitebox) {
           metal.masks.size());
   EXPECT_EQ(bad_mid, 0u) << "mid-layer emit popcount out of range — color pass produced spurious/missing bits";
   EXPECT_EQ(bad_final, 0u) << "final-layer emit popcount out of range — cross-layer OR carry or color pass broken";
+}
+
+// task-metal-ms-prob-gate-per-exit (AC1): the Metal MS survival prob-gate
+// must draw an INDEPENDENT PCG value at each polygon-exit on the same ray,
+// mirroring CUDA (`cuda_trace_backend.cu:775-778` construct-once + slot++
+// advance on each `pcg_uniform` call) and CPU legacy (`simulator.cpp:544`
+// per-emit `rng.GetUniform()`).
+//
+// Bug shape it guards against: before this task the kernel constructed a
+// fresh `PcgStream{seed=gate_seed, global_idx=tid, slot=0}` at every exit
+// site, so `pcg_uniform` — a pure hash of `(seed, global_idx, slot)` —
+// returned the SAME float for every exit of the same tid. That collapses
+// MS survival into "per-ray all-or-nothing": a single ray either emits ALL
+// its would-be exits or NONE. The mean `P(continue)=ms_prob` is preserved,
+// so this test explicitly does NOT rely on radiance/energy checks; it
+// probes the SHAPE of the per-ray count distribution.
+//
+// Test design: single ray (`ray_count=1` → only tid=0 exists, so every draw
+// on this ray shares `(seed, tid)` and is distinguished only by `slot`).
+// Single-layer scene (`ms_layers=1` → the ms_mode=0 final-layer gate at
+// `lumice_trace.metal:911` is exercised; both branches share the hoisted
+// stream so this proves both by proxy). For each seed:
+//   - prob=0.0 run → `pcg_uniform(...) < 0.0` is always false → keep every
+//     filter-pass exit. `k_seed = masks.size()` = number of would-be exits.
+//   - prob=0.5 run → each exit's decision depends on that call's draw.
+//     `emit_seed = masks.size()`.
+// Under bug: `emit_seed ∈ {0, k_seed}` mathematically (single draw). Under
+// fix: `emit_seed ∈ {0, 1, …, k_seed}` because each slot advances.
+//
+// Death signal: `strictly_between = #{seed : 0 < emit_seed < k_seed}`.
+// Under bug this is impossible (== 0 always). Under fix with k=2 exits the
+// P(count=1)=0.5; over kNumSeeds usable multi-exit sessions the probability
+// of NEVER seeing a strictly-between count is ≤ 0.5^kNumSeeds (≪ 1e-9 at
+// kNumSeeds=32) — the assertion is judgmentally deterministic, not just
+// statistically likely.
+TEST(MetalGateStreamPerExit, ProbGateSlotAdvancesPerExit_AC1) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  ForceHostGenForByteIdentity();
+
+  RenderConfig render = MakeRectangularRender();
+
+  constexpr size_t kSeedProbeMaxHits = 6;
+  constexpr uint32_t kNumSeeds = 32u;
+
+  // Baseline (prob=0.0) scene shared across seeds — cheap to keep re-using.
+  SceneConfig scene_keep = MakeMetalSceneWithProb(kSeedProbeMaxHits, /*ms_layers=*/1, /*prob=*/0.0f);
+  SceneConfig scene_p5 = MakeMetalSceneWithProb(kSeedProbeMaxHits, /*ms_layers=*/1, /*prob=*/0.5f);
+
+  size_t usable_seeds = 0;      // seeds with k_seed >= 2 (any signal at all)
+  size_t strictly_between = 0;  // death signal: 0 < emit_seed < k_seed
+  for (uint32_t seed = 1u; seed <= kNumSeeds; seed++) {
+    Capture cap_keep = RunMetal(scene_keep, render, seed, /*ray_count=*/1, /*shuffle=*/true);
+    size_t k = cap_keep.masks.size();
+    if (k < 2) {
+      continue;  // this seed's orientation produces <2 exits — no signal.
+    }
+    usable_seeds++;
+
+    Capture cap_p5 = RunMetal(scene_p5, render, seed, /*ray_count=*/1, /*shuffle=*/true);
+    size_t emit = cap_p5.masks.size();
+    // Sanity: prob=0.5 emit count cannot exceed the prob=0.0 "keep-all" count;
+    // if it does, geometry/orientation is drifting between runs and the test
+    // is not measuring what it thinks it is.
+    ASSERT_LE(emit, k) << "seed=" << seed << " prob=0.5 emit=" << emit << " > prob=0.0 k=" << k
+                       << " — orientation not deterministic across sessions with same seed";
+    if (emit > 0 && emit < k) {
+      strictly_between++;
+    }
+    fprintf(stderr, "[gate-per-exit] seed=%u k=%zu emit=%zu\n", seed, k, emit);
+  }
+
+  // If almost no seed produced ≥2 exits the geometry can't exercise the bug.
+  // MakeMetalSceneWithProb (SunParam{30,0,0.5}, max_hits=6) has empirically
+  // produced multi-exit rays on the vast majority of seeds; the loose ≥25%
+  // floor here defends against unrelated geometry changes silently defanging
+  // this regression test rather than tuning to a specific number.
+  ASSERT_GE(usable_seeds, kNumSeeds / 4) << "only " << usable_seeds << " of " << kNumSeeds
+                                         << " seeds produced ≥2 filter-pass exits — geometry can't distinguish "
+                                            "per-ray vs per-exit gate draws";
+  EXPECT_GT(strictly_between, 0u) << "across " << usable_seeds
+                                  << " multi-exit sessions, NO session had a per-ray exit count strictly "
+                                     "between 0 and k — gate draws collapsed to per-ray all-or-nothing "
+                                     "(regression of task-metal-ms-prob-gate-per-exit: gate_stream "
+                                     "constructed with slot=0 at every exit instead of the hoisted "
+                                     "persistent stream advancing slot via pcg_uniform).";
 }
 
 }  // namespace

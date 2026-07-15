@@ -626,6 +626,23 @@ kernel void trace_layer_kernel(
   ushort path[kRecCap];
   uint   rec_len = 0u;
 
+  // task-metal-ms-prob-gate-per-exit: single persistent PcgStream shared by
+  // both prob-gate call sites (mid-layer emit gate + final-layer gate).
+  // `pcg_uniform` bumps `s.slot++` internally, so consecutive draws on the
+  // same ray consume disjoint slots — the per-exit independence that CUDA
+  // (`cuda_trace_backend.cu:775-778`, "gate_stream advances on each
+  // pcg_uniform draw") and legacy CPU (`simulator.cpp:544`, per-emit
+  // `rng.GetUniform()`) already provide. `prm.ms_mode` is a dispatch-level
+  // constant, so only one of the two consumer branches runs per dispatch —
+  // no cross-branch interleaving concern. `gate_seed` is host-derived from
+  // `gen_seed_ XOR (ms_layer_idx, crystal_id)` (see `metal_trace_backend.mm`
+  // `KernelParams` comment), so dispatches at different layers already draw
+  // disjoint values without needing a per-branch nonce shift.
+  PcgStream gate_stream;
+  gate_stream.seed       = prm.gate_seed;
+  gate_stream.global_idx = tid;
+  gate_stream.slot       = 0u;
+
   for (uint hit = 0u; hit < prm.max_hits; hit++) {
     if (to_face == kInvalidId) { break; }
     if (rec_len < kRecCap) { path[rec_len] = to_face; rec_len += 1u; }
@@ -771,15 +788,11 @@ kernel void trace_layer_kernel(
                 }
               }
             }
-            // Independent PCG stream for the prob draw — gate_seed is derived
-            // from gen_seed_ XOR (ms_layer_idx, crystal_id) on the host so
-            // two dispatches with the same global_idx draw different prob
-            // values. tid as global_idx gives statistical (not bit-exact)
-            // parity with the legacy host mt19937 stream (scrum-267 §3.6).
-            PcgStream gate_stream;
-            gate_stream.seed       = prm.gate_seed;
-            gate_stream.global_idx = tid;
-            gate_stream.slot       = 0u;
+            // Per-exit independent prob draw via the persistent gate_stream
+            // hoisted above the hit loop — each `pcg_uniform` call advances
+            // `slot`, so consecutive exits on the same ray consume disjoint
+            // draws (was per-ray-constant before task-metal-ms-prob-gate-per-
+            // exit, which turned MS survival into "per-ray all-or-nothing").
             bool do_continue = (pcg_uniform(gate_stream) < prm.ms_prob);
             if (do_continue) {
               // scrum-268.8: out_p / out_tf retired (transit_root_kernel
@@ -890,13 +903,12 @@ kernel void trace_layer_kernel(
               path_local_f, gate_len_f,
               gate_getfn_bytes, gate_getfn_offsets,
               gate_slot_f, ray_dir_w_f, prm.crystal_config_id);
-          // Final-layer prob draw — independent PCG stream per dispatch (same
-          // construction as the ms_mode==1 emit gate). rng<ms_prob → drop.
-          PcgStream gate_stream_f;
-          gate_stream_f.seed       = prm.gate_seed;
-          gate_stream_f.global_idx = tid;
-          gate_stream_f.slot       = 0u;
-          bool prob_drop_f = (pcg_uniform(gate_stream_f) < prm.ms_prob);
+          // Final-layer prob draw — reuse the persistent gate_stream hoisted
+          // above the hit loop (same one the ms_mode==1 branch consumes; only
+          // one branch runs per dispatch because ms_mode is a dispatch-level
+          // constant). Each pcg_uniform bumps slot so consecutive final-layer
+          // exits on the same ray draw disjoint values.
+          bool prob_drop_f = (pcg_uniform(gate_stream) < prm.ms_prob);
           if (filter_pass_f && !prob_drop_f) {
             // task-358.3: Fork-C physical-bits produce branch removed (see
             // ms_mode==1 mirror above). `this_mask_f` starts from the carried
