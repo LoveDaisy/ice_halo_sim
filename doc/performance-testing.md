@@ -436,6 +436,32 @@ for *why* a number is high or low.
 nsys profile --trace=cuda --stats=true -o /tmp/rep <Lumice ...>   # see TOOLCHAIN.md
 ```
 
+### Filter OR-summand scaling — no throughput cliff (scrum-filter-form-big-or de-risk, 2026-07-16)
+
+> **De-risk sanity result, NOT a canonical throughput point** (uses synthetic N-summand
+> filter configs, not the canonical scene set). Records why raising the device filter
+> OR-clause cap from 8 to 4096 is throughput-safe.
+
+Concern: a Complex filter with N OR-summands walks up to N `complex_sub_desc_buf` global
+reads per exit (device match). Would large N (256) cause a GPU memory-pressure cliff?
+
+Measured `--benchmark` (`mode:multi` rays_per_sec) across N=8/64/256 summands, filter-only
+(no color), per-backend baselines (Metal+CPU on Mac, CUDA+CPU on dev49 4060Ti):
+
+| backend | N=8 | N=64 | N=256 | 256/8 |
+|---|---|---|---|---|
+| CUDA (dev49 4060Ti) | 419.7M | 91.2M | **754.3M** | 1.80× |
+| Metal (Mac) | ~48.7M | 14.8M | **68.5M** | 1.41× |
+| CPU (Mac / dev49) | 5.0M / 10.0M | 3.2M / 6.6M | 5.6M / 10.2M | 1.1× / 1.0× |
+
+**No cliff.** On both GPUs N=256 is the throughput *peak* (256 never slower than 8). The
+curve is a non-monotonic N=64-trough U-shape on **all four backends including CPU** — since
+CPU has no GPU global-memory notion, the variation is raypath-geometry/survival-driven, not
+summand-count or GPU-memory. Cross-backend consistency decisively rules out a memory cliff.
+Confound (honest): summand count can't be isolated from raypath geometry (more summands ⇒ more
+distinct raypaths); the CPU cross-check is what disambiguates. Owner spot-verified CUDA N=8=425M
+/ N=256=772M independently. → OR-clause cap 8→4096 is throughput-safe.
+
 ### CI Automated Benchmark
 
 Every push triggers a CLI benchmark on all 4 CI platforms (Ubuntu x64/ARM, macOS ARM,

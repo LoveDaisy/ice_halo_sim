@@ -186,6 +186,13 @@ struct KernelParams {
   uint32_t color_class_count;
   uint64_t color_class_bits[kMaxColorClassesDevice];
   uint8_t  color_class_combine[kMaxColorClassesDevice];
+  // task-device-flat-and-terms: byte offset (in bytes) inside the shared
+  // complex_sub_desc_buf_ where the flat `and_term_counts` region begins. The
+  // kernel derives `gate_and_term_counts = base + offset` via reinterpret_cast
+  // (both regions share buffer 27 to stay within Metal's 30-buffer per-stage
+  // cap). Zero when no Complex filter is present. Must match the MSL field of
+  // the same name in `KernelParams`.
+  uint32_t and_term_counts_base_offset;
 };
 // sizeof(ProjParams) == 76 (6 ints + 4 floats + float[9]); the 15 leading
 // 4-byte KernelParams scalars add 60, + proj 76 + capture_ray_mask 4 → 140
@@ -196,7 +203,11 @@ struct KernelParams {
 // task-358.3 renamed capture_component → capture_ray_mask (same 4B slot, no
 // layout change; the 304 assert below is unaffected).
 static_assert(sizeof(lm_proj::ProjParams) == 76u, "ProjParams layout drift — check projection_shared.h");
-static_assert(sizeof(KernelParams) == 304u,
+// task-device-flat-and-terms: appends a single uint32_t field
+// `and_term_counts_base_offset` (offset 304 → 308 bytes) but the struct's
+// alignment is 8 (uint64_t member `color_class_bits`), so the tail is rounded
+// up to 312.
+static_assert(sizeof(KernelParams) == 312u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 
 // Device root-gen latitude path tags. Numeric wire encoding is single-sourced
@@ -942,6 +953,13 @@ struct MetalTraceBackend::Impl {
   size_t filter_desc_count_    = 0;  // total descs uploaded (flattened slots)
   size_t filter_desc_max_ci_   = 0;  // per-layer ci stride; flattened slot
                                      // (mi, ci) → mi * max_ci + ci
+  // task-device-flat-and-terms: byte offset inside `complex_sub_desc_buf_`
+  // where the flat AND-term counts region begins (packed AFTER the
+  // DeviceFilterDesc[] region in the SAME MTLBuffer allocation to stay under
+  // Metal's 30-buffer per-stage cap). Populated by EnsureFilterBuffers along
+  // with the desc/count layout; propagated to the kernel via
+  // `KernelParams::and_term_counts_base_offset`.
+  uint32_t and_term_counts_base_offset_ = 0u;
   // Layer dispatch helpers.
   void EnsureDevice();
   void EnsurePso();
@@ -1308,6 +1326,7 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
   getfn_offsets_buf_ = nil;
   getfn_bytes_buf_ = nil;
   complex_sub_desc_buf_ = nil;
+  and_term_counts_base_offset_ = 0u;
   // task-358.1: reset color state up-front; the descriptor append below turns
   // it back on when at least one placement produces groups.
   has_color_groups_  = false;
@@ -1376,6 +1395,12 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
   // Complex slot's `sub_desc_start` is recorded BEFORE pushing its sub-descs —
   // avoids needing a separate (slot, ComplexFilterParam) map for a second pass.
   std::vector<DeviceFilterDesc> all_sub_descs;
+  // task-device-flat-and-terms: flat AND-term counts buffer, one uint8 per
+  // OR-clause across all Complex filters, packed in OR-clause order under each
+  // parent desc. `and_terms_start` on the parent indexes here; two-region
+  // packing into `complex_sub_desc_buf_` keeps Metal's 30-buffer per-stage cap
+  // intact (single binding at atIndex:27; kernel reinterprets the tail).
+  std::vector<uint8_t> and_term_counts_flat;
   for (size_t mi = 0; mi < n_layers; ++mi) {
     const auto& ms = session_spec.scene->ms_[mi];
     for (size_t ci = 0; ci < ms.setting_.size(); ++ci) {
@@ -1391,9 +1416,10 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
         // get_if must succeed (defensive against future variant additions).
         assert(complex_p != nullptr && "Complex desc type without ComplexFilterParam variant");
         descs[slot].sub_desc_start = static_cast<uint32_t>(all_sub_descs.size());
+        descs[slot].and_terms_start = static_cast<uint32_t>(and_term_counts_flat.size());
         detail::BuildComplexSubDescs(*complex_p, proto, descs[slot].symmetry,
                                      descs[slot].sigma_a, descs[slot].d_applicable != 0u,
-                                     all_sub_descs);
+                                     all_sub_descs, and_term_counts_flat);
       }
     }
     // Empty trailing slots (ms.setting_.size() < max_ci) keep zero-init
@@ -1510,11 +1536,12 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
         fc.action_ = FilterConfig::kFilterIn;
         fc.param_ = FilterParam{ cfp };
         DeviceFilterDesc top = detail::BuildDeviceFilterDesc(fc, proto, setting.crystal_.axis_);
-        // sub_desc_start assigned BEFORE BuildComplexSubDescs appends (mirrors
-        // the physical-slot loop above).
+        // sub_desc_start / and_terms_start assigned BEFORE BuildComplexSubDescs
+        // appends (mirrors the physical-slot loop above).
         top.sub_desc_start = static_cast<uint32_t>(all_sub_descs.size());
+        top.and_terms_start = static_cast<uint32_t>(and_term_counts_flat.size());
         detail::BuildComplexSubDescs(cfp, proto, top.symmetry, top.sigma_a,
-                                     top.d_applicable != 0u, all_sub_descs);
+                                     top.d_applicable != 0u, all_sub_descs, and_term_counts_flat);
         // Place the descriptor at color_slot = gate_slot * K + gi (region-local
         // index; absolute filter_desc_buf_ index adds n_slot when we upload).
         size_t color_slot = gate_slot * kColorMaxGroupsPerSlot + gi;
@@ -1574,17 +1601,37 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
     }
   }
 
-  // Upload Complex sub-desc flat buffer (267.1b). Allocate a 1-byte dummy when
-  // there are no Complex filters so the kernel's buffer(11) binding is always
-  // valid (Metal disallows nil buffer binds).
+  // Upload Complex sub-desc flat buffer (267.1b) + flat AND-term counts
+  // (task-device-flat-and-terms) packed after it. Allocate a 1-byte dummy when
+  // both are empty so the kernel's buffer(27) binding is always valid (Metal
+  // disallows nil buffer binds). Kernel derives the counts pointer via
+  // `reinterpret_cast<device const uchar*>(sub_desc_buf) + and_term_counts_base_offset`.
+  //
+  // Layout audit: `sub_desc_bytes` is finalized BEFORE `and_term_counts_flat`
+  // is packed onto the tail (both vectors were populated in the same pass over
+  // Complex descriptors above), so `and_term_counts_base_offset_` cannot drift
+  // during the packing.
+  //
+  // Future extension: if a third distinct region ever needs to piggy-back on
+  // this buffer, replace the hand-tracked offsets with a small region table
+  // (offset + length per region) instead of adding another hand-computed
+  // constant — the "handful of offsets in KernelParams" pattern does not
+  // scale. See doc/gpu-porting-checklist.md for how to record shared-buffer
+  // regions when propagating to CUDA / future GPU backends.
   size_t sub_desc_bytes = all_sub_descs.size() * sizeof(DeviceFilterDesc);
-  size_t sub_alloc_bytes = std::max<size_t>(sub_desc_bytes, 1);
+  size_t and_term_bytes = and_term_counts_flat.size();
+  size_t sub_alloc_bytes = std::max<size_t>(sub_desc_bytes + and_term_bytes, 1);
   complex_sub_desc_buf_ = [device newBufferWithLength:sub_alloc_bytes
                                               options:MTLResourceStorageModeShared];
   assert(complex_sub_desc_buf_ != nil);
   if (sub_desc_bytes > 0) {
     std::memcpy([complex_sub_desc_buf_ contents], all_sub_descs.data(), sub_desc_bytes);
   }
+  if (and_term_bytes > 0) {
+    auto* base = static_cast<uint8_t*>([complex_sub_desc_buf_ contents]);
+    std::memcpy(base + sub_desc_bytes, and_term_counts_flat.data(), and_term_bytes);
+  }
+  and_term_counts_base_offset_ = static_cast<uint32_t>(sub_desc_bytes);
 
   // task-358.3: upload the Design-2 color-region bit map as the sole content of
   // gate_component_bits_buf_ (the leading Fork-C physical-bits region is gone;
@@ -2212,6 +2259,9 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   params.gate_seed = gen_seed_ ^
                      (ms_layer_idx * 65537u + crystal_id * 2654435761u);
   params.filter_desc_max_ci = static_cast<uint32_t>(filter_desc_max_ci_);
+  // task-device-flat-and-terms: kernel derives `gate_and_term_counts` from the
+  // shared `gate_sub_desc_buf` via this byte offset.
+  params.and_term_counts_base_offset = and_term_counts_base_offset_;
   // crystal_config_id is consumed only by DeviceFilterMatchCrystal; current
   // canonical configs leave it at kInvalidId (0xffff) so the filter rejects.
   uint16_t cfg_id = current_crystal.config_id_;
@@ -2458,6 +2508,7 @@ void MetalTraceBackend::Impl::Reset() {
   getfn_offsets_buf_ = nil;
   getfn_bytes_buf_ = nil;
   complex_sub_desc_buf_ = nil;
+  and_term_counts_base_offset_ = 0u;
   spec = SessionSpec{};
 }
 

@@ -620,7 +620,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
         r.visible = 2;
         r.exposure_offset = 0.0f;
       }
-      gui::DoRun();
+      gui::DoRun(/*user_initiated=*/true);
 
       // Wait for first texture upload (up to 10s)
       auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);

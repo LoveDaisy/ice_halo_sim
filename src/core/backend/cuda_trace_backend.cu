@@ -506,6 +506,7 @@ __device__ inline void EmitToDeviceXyz(float* __restrict__ d_xyz_buf,
 __device__ inline unsigned long long ApplyLayerColorBits(unsigned long long carried,
                                                           const DeviceFilterDesc* d_color_filter_desc,
                                                           const DeviceFilterDesc* d_complex_sub_desc,
+                                                          const uint8_t* d_and_term_counts,
                                                           const uint8_t* d_color_bit_map,
                                                           const uint8_t* path, uint32_t path_len,
                                                           const uint8_t* getfn_bytes,
@@ -517,8 +518,8 @@ __device__ inline unsigned long long ApplyLayerColorBits(unsigned long long carr
     const uint32_t color_slot_idx = gate_slot * static_cast<uint32_t>(kColorMaxGroupsPerSlot) + g;
     bool matched_c = false;
     const uint32_t c_smask = lm_filter::DeviceFilterSummandMask(
-        d_color_filter_desc[color_slot_idx], d_complex_sub_desc, path, path_len, getfn_bytes, getfn_offsets, gate_slot,
-        ray_dir, crystal_config_id, &matched_c);
+        d_color_filter_desc[color_slot_idx], d_complex_sub_desc, d_and_term_counts, path, path_len, getfn_bytes,
+        getfn_offsets, gate_slot, ray_dir, crystal_config_id, &matched_c);
     for (uint32_t k = 0u; k < kDeviceFilterMaxOrClauses; ++k) {
       if ((c_smask & (1u << k)) != 0u) {
         const uint8_t bit = d_color_bit_map[color_slot_idx * kDeviceFilterMaxOrClauses + k];
@@ -646,6 +647,12 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                        const uint32_t* __restrict__ d_getfn_offsets,
                                        const uint8_t* __restrict__ d_getfn_bytes,
                                        const DeviceFilterDesc* __restrict__ d_complex_sub_desc,
+                                       // task-device-flat-and-terms: parallel flat AND-term counts
+                                       // buffer, indexed via each Complex parent's `and_terms_start`.
+                                       // CUDA has no per-stage binding cap so this is an
+                                       // independent device pointer (Metal packs it into buffer 27
+                                       // via KernelParams.and_term_counts_base_offset instead).
+                                       const uint8_t* __restrict__ d_and_term_counts,
                                        uint32_t filter_desc_max_ci,
                                        uint32_t crystal_config_id,
                                        // S2 device-fused accumulation (ms_mode==0 final-layer emit).
@@ -855,8 +862,8 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
         const uint32_t gate_slot = static_cast<uint32_t>(ms_layer_idx) * filter_desc_max_ci +
                                    static_cast<uint32_t>(crystal_id);
         const bool filter_pass = lm_filter::DeviceFilterCheck(
-            d_filter_desc[gate_slot], d_complex_sub_desc, path_rec, rec_len, d_getfn_bytes, d_getfn_offsets, gate_slot,
-            exit_world, crystal_config_id);
+            d_filter_desc[gate_slot], d_complex_sub_desc, d_and_term_counts, path_rec, rec_len, d_getfn_bytes,
+            d_getfn_offsets, gate_slot, exit_world, crystal_config_id);
         if (filter_pass) {
           // task-358.3: Fork-C physical-bit produce branch removed. `this_mask`
           // now starts from the carried mask and is OR-accumulated by ONLY the
@@ -867,9 +874,9 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
           // color_params.has_color_groups so no raypath_color session → single
           // branch skip (AC4 zero-cost). Mirrors MSL lumice_trace.metal.
           if (color_params.has_color_groups != 0u) {
-            this_mask = ApplyLayerColorBits(this_mask, d_color_filter_desc, d_complex_sub_desc, d_color_bit_map,
-                                            path_rec, rec_len, d_getfn_bytes, d_getfn_offsets, gate_slot, exit_world,
-                                            crystal_config_id);
+            this_mask = ApplyLayerColorBits(this_mask, d_color_filter_desc, d_complex_sub_desc, d_and_term_counts,
+                                            d_color_bit_map, path_rec, rec_len, d_getfn_bytes, d_getfn_offsets,
+                                            gate_slot, exit_world, crystal_config_id);
           }
           // Prob gate (prob-pass → continuation; prob-fail → mid-exit). The
           // gate_stream advances on each pcg_uniform draw so the per-bounce
@@ -923,8 +930,8 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
         const uint32_t gate_slot_e = static_cast<uint32_t>(ms_layer_idx) * filter_desc_max_ci +
                                      static_cast<uint32_t>(crystal_id);
         const bool filter_pass_e = lm_filter::DeviceFilterCheck(
-            d_filter_desc[gate_slot_e], d_complex_sub_desc, path_rec, rec_len, d_getfn_bytes, d_getfn_offsets,
-            gate_slot_e, exit_world, crystal_config_id);
+            d_filter_desc[gate_slot_e], d_complex_sub_desc, d_and_term_counts, path_rec, rec_len, d_getfn_bytes,
+            d_getfn_offsets, gate_slot_e, exit_world, crystal_config_id);
         if (filter_pass_e) {
           lm_pcg::PcgStream gate_f;
           gate_f.seed       = gate_final_mixed_seed;
@@ -946,9 +953,9 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
             // protect against.
             unsigned long long this_mask = carried_component;
             if (color_params.has_color_groups != 0u) {
-              this_mask = ApplyLayerColorBits(this_mask, d_color_filter_desc, d_complex_sub_desc, d_color_bit_map,
-                                              path_rec, rec_len, d_getfn_bytes, d_getfn_offsets, gate_slot_e, exit_world,
-                                              crystal_config_id);
+              this_mask = ApplyLayerColorBits(this_mask, d_color_filter_desc, d_complex_sub_desc, d_and_term_counts,
+                                              d_color_bit_map, path_rec, rec_len, d_getfn_bytes, d_getfn_offsets,
+                                              gate_slot_e, exit_world, crystal_config_id);
             }
             EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                             cmf_x, cmf_y, cmf_z, w_refl_e,
@@ -1072,17 +1079,17 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
           const uint32_t gate_slot = static_cast<uint32_t>(ms_layer_idx) * filter_desc_max_ci +
                                    static_cast<uint32_t>(crystal_id);
           const bool filter_pass = lm_filter::DeviceFilterCheck(
-              d_filter_desc[gate_slot], d_complex_sub_desc, path_rec, rec_len, d_getfn_bytes, d_getfn_offsets,
-              gate_slot, exit_world, crystal_config_id);
+              d_filter_desc[gate_slot], d_complex_sub_desc, d_and_term_counts, path_rec, rec_len, d_getfn_bytes,
+              d_getfn_offsets, gate_slot, exit_world, crystal_config_id);
           if (filter_pass) {
             // task-358.3: Fork-C produce branch retired; only Design-2 color
             // pass accumulates into this_mask (per-bounce mid-exit sibling of
             // the entry-face gate above).
             unsigned long long this_mask = carried_component;
             if (color_params.has_color_groups != 0u) {
-              this_mask = ApplyLayerColorBits(this_mask, d_color_filter_desc, d_complex_sub_desc, d_color_bit_map,
-                                              path_rec, rec_len, d_getfn_bytes, d_getfn_offsets, gate_slot, exit_world,
-                                              crystal_config_id);
+              this_mask = ApplyLayerColorBits(this_mask, d_color_filter_desc, d_complex_sub_desc, d_and_term_counts,
+                                              d_color_bit_map, path_rec, rec_len, d_getfn_bytes, d_getfn_offsets,
+                                              gate_slot, exit_world, crystal_config_id);
             }
             bool do_continue = (lm_pcg::pcg_uniform(gate_stream) < ms_prob);
             if (do_continue) {
@@ -1123,8 +1130,8 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
           const uint32_t gate_slot_r = static_cast<uint32_t>(ms_layer_idx) * filter_desc_max_ci +
                                        static_cast<uint32_t>(crystal_id);
           const bool filter_pass_r = lm_filter::DeviceFilterCheck(
-              d_filter_desc[gate_slot_r], d_complex_sub_desc, path_rec, rec_len, d_getfn_bytes, d_getfn_offsets,
-              gate_slot_r, exit_world, crystal_config_id);
+              d_filter_desc[gate_slot_r], d_complex_sub_desc, d_and_term_counts, path_rec, rec_len, d_getfn_bytes,
+              d_getfn_offsets, gate_slot_r, exit_world, crystal_config_id);
           if (filter_pass_r) {
             lm_pcg::PcgStream gate_f;
             gate_f.seed       = gate_final_mixed_seed;
@@ -1141,9 +1148,9 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               // two landmine-guard tests catch any silent asymmetry).
               unsigned long long this_mask = carried_component;
               if (color_params.has_color_groups != 0u) {
-                this_mask = ApplyLayerColorBits(this_mask, d_color_filter_desc, d_complex_sub_desc, d_color_bit_map,
-                                                path_rec, rec_len, d_getfn_bytes, d_getfn_offsets, gate_slot_r,
-                                                exit_world, crystal_config_id);
+                this_mask = ApplyLayerColorBits(this_mask, d_color_filter_desc, d_complex_sub_desc, d_and_term_counts,
+                                                d_color_bit_map, path_rec, rec_len, d_getfn_bytes, d_getfn_offsets,
+                                                gate_slot_r, exit_world, crystal_config_id);
               }
               EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                               cmf_x, cmf_y, cmf_z, w_refr,
@@ -1797,6 +1804,12 @@ struct CudaTraceBackend::Impl {
   uint32_t*         d_getfn_offsets_     = nullptr;  // (n_slot + 1) uint32 prefix-sum (or 1B dummy)
   uint8_t*          d_getfn_bytes_       = nullptr;  // flat GetFn byte stream (or 1B dummy)
   DeviceFilterDesc* d_complex_sub_desc_  = nullptr;  // flat Complex sub-descs (or 1B dummy)
+  // task-device-flat-and-terms: parallel flat buffer, one uint8 per OR-clause
+  // across all Complex descs (physical + color). CUDA uses an INDEPENDENT
+  // allocation (no Metal-style 30-buffer cap to worry about); mirrors the
+  // discipline of `d_color_bit_map_` / `d_getfn_bytes_`. 1-byte dummy in the
+  // no-Complex fallback so the kernel pointer stays bindable.
+  uint8_t*          d_and_term_counts_   = nullptr;
   uint32_t          filter_desc_max_ci_  = 0u;       // per-layer ci stride (MVP=1)
   uint32_t          filter_n_slot_       = 0u;       // total descriptor slots
   uint32_t          crystal_config_id_   = 0xFFFFu;  // for DeviceFilterMatchCrystal
@@ -2017,6 +2030,10 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
     cudaFree(d_getfn_offsets_);    d_getfn_offsets_ = nullptr;
     cudaFree(d_getfn_bytes_);      d_getfn_bytes_ = nullptr;
     cudaFree(d_complex_sub_desc_); d_complex_sub_desc_ = nullptr;
+    // task-device-flat-and-terms: parallel flat buffer for AND-term counts;
+    // rebuilt alongside d_complex_sub_desc_ (including the color-rebuild
+    // re-upload — see EnsureFilterBuffers).
+    cudaFree(d_and_term_counts_);  d_and_term_counts_ = nullptr;
     // task-358.2 (cuda-color-parity): Design-2 color-region buffers persist with
     // the physical filter descriptors (built together in EnsureFilterBuffers);
     // free them together on full teardown.
@@ -2580,6 +2597,7 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
   cudaFree(d_getfn_offsets_);     d_getfn_offsets_     = nullptr;
   cudaFree(d_getfn_bytes_);       d_getfn_bytes_       = nullptr;
   cudaFree(d_complex_sub_desc_);  d_complex_sub_desc_  = nullptr;
+  cudaFree(d_and_term_counts_);   d_and_term_counts_   = nullptr;
   // task-358.2: free any prior session's independent color-region buffers.
   cudaFree(d_color_filter_desc_);   d_color_filter_desc_ = nullptr;
   cudaFree(d_color_bit_map_);       d_color_bit_map_     = nullptr;
@@ -2612,6 +2630,9 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
        "cudaMemcpy d_getfn_offsets (dummy)");
     ck(cudaMalloc(&d_getfn_bytes_, 1u), "cudaMalloc d_getfn_bytes (dummy)");
     ck(cudaMalloc(&d_complex_sub_desc_, sizeof(DeviceFilterDesc)), "cudaMalloc d_complex_sub_desc (dummy)");
+    // task-device-flat-and-terms: 1-byte dummy so the kernel pointer stays
+    // bindable in no-Complex sessions (the Complex branch is never entered).
+    ck(cudaMalloc(&d_and_term_counts_, 1u), "cudaMalloc d_and_term_counts (dummy)");
     // task-358.2: independent color-region buffers — 1-byte dummies for the
     // no-scene fallback so the kernel color-pass pointers are always bindable
     // (the color pass is gated by color_params.has_color_groups; a no-scene
@@ -2660,6 +2681,9 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
   std::vector<DeviceFilterDesc> descs(n_slot);
   std::vector<std::vector<uint8_t>> per_slot_bytes(n_slot);
   std::vector<DeviceFilterDesc> all_sub_descs;
+  // task-device-flat-and-terms: parallel flat buffer of per-OR-clause AND-term
+  // counts, indexed via `and_terms_start` on each Complex parent desc.
+  std::vector<uint8_t> and_term_counts_flat;
 
   for (size_t mi = 0; mi < n_layers; ++mi) {
     const auto& ms = spec.scene->ms_[mi];
@@ -2675,8 +2699,9 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
         // ComplexFilterParam; absence here is a programming error.
         assert(complex_p != nullptr && "Complex desc type without ComplexFilterParam variant");
         descs[slot].sub_desc_start = static_cast<uint32_t>(all_sub_descs.size());
+        descs[slot].and_terms_start = static_cast<uint32_t>(and_term_counts_flat.size());
         detail::BuildComplexSubDescs(*complex_p, proto, descs[slot].symmetry, descs[slot].sigma_a,
-                                     descs[slot].d_applicable != 0u, all_sub_descs);
+                                     descs[slot].d_applicable != 0u, all_sub_descs, and_term_counts_flat);
       }
     }
     // Trailing slots (ms.setting_.size() < max_ci) keep zero-init
@@ -2721,6 +2746,22 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
   if (sub_desc_bytes > 0) {
     ck(cudaMemcpy(d_complex_sub_desc_, all_sub_descs.data(), sub_desc_bytes, cudaMemcpyHostToDevice),
        "cudaMemcpy d_complex_sub_desc");
+  }
+  // task-device-flat-and-terms: parallel flat AND-term counts buffer. 1-byte
+  // dummy fallback so the kernel pointer stays bindable when no Complex filter
+  // exists. This upload is REDONE in the color-rebuild step below when the
+  // color pass appends further Complex sub-descs; see the mirroring `if
+  // (any_color_group)` block. Missing that mirror is exactly the risk the plan
+  // §7 Risk 4 flagged (silent stale-data bug in color+big-OR configs).
+  {
+    const size_t and_term_bytes = and_term_counts_flat.size();
+    const size_t and_term_alloc = std::max<size_t>(and_term_bytes, 1u);
+    ck(cudaMalloc(&d_and_term_counts_, and_term_alloc), "cudaMalloc d_and_term_counts");
+    if (and_term_bytes > 0) {
+      ck(cudaMemcpy(d_and_term_counts_, and_term_counts_flat.data(), and_term_bytes,
+                    cudaMemcpyHostToDevice),
+         "cudaMemcpy d_and_term_counts");
+    }
   }
 
   // task-358.3: Fork-C `BuildComponentTable` upload retired. The independent
@@ -2834,8 +2875,9 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
           fc.param_ = FilterParam{ cfp };
           DeviceFilterDesc top = detail::BuildDeviceFilterDesc(fc, proto, setting.crystal_.axis_);
           top.sub_desc_start = static_cast<uint32_t>(all_sub_descs.size());
+          top.and_terms_start = static_cast<uint32_t>(and_term_counts_flat.size());
           detail::BuildComplexSubDescs(cfp, proto, top.symmetry, top.sigma_a,
-                                       top.d_applicable != 0u, all_sub_descs);
+                                       top.d_applicable != 0u, all_sub_descs, and_term_counts_flat);
           const size_t color_slot = gate_slot * kColorMaxGroupsPerSlot + gi;
           assert(color_slot < color_desc_region);
           color_descs[color_slot] = top;
@@ -2866,6 +2908,25 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
     if (sub_desc_bytes_v2 > 0) {
       ck(cudaMemcpy(d_complex_sub_desc_, all_sub_descs.data(), sub_desc_bytes_v2, cudaMemcpyHostToDevice),
          "cudaMemcpy d_complex_sub_desc (color rebuild)");
+    }
+    // task-device-flat-and-terms: MIRROR the sub-desc re-upload for the flat
+    // AND-term counts buffer. The color pass appends into
+    // `and_term_counts_flat` in lockstep with `all_sub_descs`, so skipping this
+    // rebuild would leave `d_and_term_counts_` pointing at the pre-color-pass
+    // snapshot → in color+big-OR configs the kernel would read stale/misaligned
+    // counts and silently miscount AND-terms. This mirror is plan §7 Risk 4's
+    // headline failure mode; the "big OR + color共存" CUDA e2e config (see the
+    // filter-parity test suite) exists specifically to lock the mirror in.
+    const size_t and_term_bytes_v2 = and_term_counts_flat.size();
+    const size_t and_term_alloc_v2 = std::max<size_t>(and_term_bytes_v2, 1u);
+    cudaFree(d_and_term_counts_);
+    d_and_term_counts_ = nullptr;
+    ck(cudaMalloc(&d_and_term_counts_, and_term_alloc_v2),
+       "cudaMalloc d_and_term_counts (color rebuild)");
+    if (and_term_bytes_v2 > 0) {
+      ck(cudaMemcpy(d_and_term_counts_, and_term_counts_flat.data(), and_term_bytes_v2,
+                    cudaMemcpyHostToDevice),
+         "cudaMemcpy d_and_term_counts (color rebuild)");
     }
   }
 
@@ -3585,6 +3646,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
         impl_->d_getfn_offsets_,
         impl_->d_getfn_bytes_,
         impl_->d_complex_sub_desc_,
+        impl_->d_and_term_counts_,
         impl_->filter_desc_max_ci_,
         ci_cfg_id,
         // S2 device-fused accumulation params.

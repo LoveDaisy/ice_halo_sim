@@ -528,6 +528,19 @@ static ExpandedFilter ExpandSopToClauses(const FilterConfig& f) {
   return ef;
 }
 
+// task-gui-feedback-affordances Step 3 (AC4) — see file_io.hpp. Cheap on-typing
+// summary that delegates to ExpandSopToClauses so the live preview and the
+// commit path share the same expansion arithmetic (no drift). Only the total
+// clause count + overflow flag are exposed; the callers do not need to see the
+// clause contents.
+SopExpansionSummary SummarizeSopExpansion(const FilterConfig& f) {
+  const ExpandedFilter ef = ExpandSopToClauses(f);
+  SopExpansionSummary summary;
+  summary.clause_count = ef.clauses.size();
+  summary.overflow = ef.overflow;
+  return summary;
+}
+
 // True when the expansion collapses to a single simple filter (1 clause, 1 term):
 // single raypath / single EE / single-factor single-alternative row. Such filters
 // emit ONE simple filter with no wrapping complex (byte-equivalent to pre-uplift).
@@ -898,7 +911,7 @@ bool BuildExportJsonOrWarn(const GuiState& state, std::string* out_json, std::st
   // a wrong config (code-review-02/03 Major). Pure — no dialog/filesystem — so this reject
   // path is directly unit-testable.
   LUMICE_Config probe{};
-  lumice::ConfigColorGuard probe_color_guard(probe);  // v4.8: release probe.raypath_color on scope exit
+  lumice::ConfigOwningGuard probe_color_guard(probe);  // v4.8: release probe.raypath_color on scope exit
   FilterOverflowInfo overflow;
   ColorClassOverflowInfo color_overflow;
   if (!FillLumiceConfig(state, &probe, &overflow, &color_overflow)) {
@@ -1299,23 +1312,45 @@ static bool ExpandFilterToStruct(const FilterConfig& f, int next_filter_id, LUMI
     return false;
   }
 
-  int comp_idx = out->composition_count++;
-  LUMICE_ComplexComposition* comp = &out->compositions[comp_idx];
-  comp->clause_count = static_cast<int>(ef.clauses.size());
+  // v4.9 (task-host-abi-cpu-caps): compose the (term_counts, term_ids) triple on the stack
+  // first, then commit via LUMICE_CompositionSetClauses in one shot — mirrors the pattern
+  // used on the JsonToComplexComposition side. filter_idx / composition_count are advanced
+  // after Set succeeds; on Set failure (OOM) the caller sees "no partial write" (composition
+  // slot untouched, filters[] untouched, counters unchanged).
+  const int clause_n = static_cast<int>(ef.clauses.size());
+  std::vector<int> term_counts_vec;
+  std::vector<int> term_ids_vec;
+  term_counts_vec.reserve(static_cast<size_t>(clause_n));
+  term_ids_vec.reserve(static_cast<size_t>(total_terms));
+  int pending_filter_idx = *filter_idx;
   int running = 0;
   for (size_t cl = 0; cl < ef.clauses.size(); ++cl) {
     const auto& clause = ef.clauses[cl];
-    comp->term_counts[cl] = static_cast<int>(clause.size());
+    term_counts_vec.push_back(static_cast<int>(clause.size()));
     for (size_t tt = 0; tt < clause.size(); ++tt) {
-      int cid = next_filter_id + running++;
-      fill_term(&out->filters[(*filter_idx)++], cid, clause[tt]);
-      comp->clauses[cl][tt] = cid;
+      term_ids_vec.push_back(next_filter_id + running++);
     }
   }
-  int complex_id = next_filter_id + running;  // == next_filter_id + total_terms
-  LUMICE_FilterParam* cdst = &out->filters[(*filter_idx)++];
+  const int comp_idx = out->composition_count;
+  LUMICE_ComplexComposition* comp = &out->compositions[comp_idx];
+  if (LUMICE_CompositionSetClauses(comp, clause_n, term_counts_vec.data(), term_ids_vec.data()) != LUMICE_OK) {
+    return false;
+  }
+  // Set succeeded — now emit the per-term simple filters and the complex filter itself.
+  int emit_running = 0;
+  for (size_t cl = 0; cl < ef.clauses.size(); ++cl) {
+    const auto& clause = ef.clauses[cl];
+    for (size_t tt = 0; tt < clause.size(); ++tt) {
+      int cid = next_filter_id + emit_running++;
+      fill_term(&out->filters[pending_filter_idx++], cid, clause[tt]);
+    }
+  }
+  int complex_id = next_filter_id + emit_running;  // == next_filter_id + total_terms
+  LUMICE_FilterParam* cdst = &out->filters[pending_filter_idx++];
   set_common(cdst, complex_id, LUMICE_FILTER_TYPE_COMPLEX);
   cdst->composition_index = comp_idx;
+  *filter_idx = pending_filter_idx;
+  out->composition_count = comp_idx + 1;
   *out_main_id = complex_id;
   return true;
 }
@@ -1450,7 +1485,7 @@ static bool FillColorClasses(const GuiState& state, const std::map<int, int>& cr
   // `out`. Allocate on the caller's behalf via LUMICE_ConfigCreateColorClasses (implicit
   // allocation contract — the caller of FillLumiceConfig cannot know n_classes in
   // advance). Caller MUST release via LUMICE_ConfigReleaseColorClasses (see
-  // lumice::ConfigColorGuard in lumice_config_scope.hpp).
+  // lumice::ConfigOwningGuard in lumice_config_scope.hpp).
   LUMICE_ColorClass* dst_array = nullptr;
   if (n_classes > 0) {
     dst_array = LUMICE_ConfigCreateColorClasses(out, n_classes);
@@ -1493,6 +1528,9 @@ bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out, FilterOverflowI
   // calls, memset would clobber the pointer without freeing it — release first so the
   // memset that follows sees a defensibly-null field. Release is null-safe / idempotent.
   LUMICE_ConfigReleaseColorClasses(out);
+  // v4.9 (task-host-abi-cpu-caps): compositions[i].term_ids/term_counts are also owning
+  // heap pointers — same memset-would-leak hazard as raypath_color; release first.
+  LUMICE_ConfigReleaseCompositions(out);
   std::memset(out, 0, sizeof(LUMICE_Config));
 
   // ID-pool model: walk entries, dedupe by pool id, emit one C crystal per reachable pool

@@ -17,6 +17,7 @@
 #include "gui/crystal_renderer.hpp"
 #include "gui/destructive_style.hpp"
 #include "gui/face_number_overlay.hpp"
+#include "gui/file_io.hpp"  // SummarizeSopExpansion (Step 3 AC4 live preview)
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/panels.hpp"
@@ -101,10 +102,20 @@ constexpr size_t kSummandRowBufSize = 256;
 // UI soft cap (kMaxSummandRows): prevents unbounded row growth from the "+ Add"
 // button before the real ABI-layer limits kick in. The authoritative overflow
 // gates live in file_io.cpp::FillLumiceConfig (ExpandSopToClauses → clauses vec
-// with LUMICE_kMaxComplexFilterClauses cap) and BuildExportJsonOrWarn; those
-// remain the last-word validators. 16 is the OR-summand row count and comfortably
-// fits typical multi-branch filters (a real config usually has ≤ 4 rows).
-constexpr size_t kMaxSummandRows = 16;
+// with LUMICE_MAX_CONFIG_CLAUSES cap) and BuildExportJsonOrWarn; those remain
+// the last-word validators. The ABI ceiling is now much higher (v4.9,
+// task-host-abi-cpu-caps: LUMICE_MAX_CONFIG_CLAUSES=4096), but this UI soft
+// cap sits below it — ImGui re-renders every row per frame without
+// virtualization, so several-thousand rows would tank the editor's frame rate.
+// 256 covers real "few-hundred OR summands" use cases with comfortable
+// headroom while staying inside the practical UI budget; a proper virtualized
+// / big-list mode is the task-369.4 D-item's job.
+constexpr size_t kMaxSummandRows = 256;
+// task-host-abi-cpu-caps AC4: compile-time sentinel — the whole point of v4.9 is to let
+// the GUI accept > 16 OR rows without the pre-v4.9 hard cap. If a future change accidentally
+// lowers this back to the historical 16, the intent is lost silently — the assert makes
+// that regression a build-time failure.
+static_assert(kMaxSummandRows > 16, "kMaxSummandRows must stay above the pre-v4.9 cap of 16");
 
 struct SummandRowBuf {
   uint64_t uid;
@@ -842,6 +853,30 @@ static void RenderSummandRowList() {
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextUnformatted(FormatSopExpansionPreview(live_sop).c_str());
     ImGui::PopTextWrapPos();
+
+    // task-gui-feedback-affordances Step 3 (AC4): show the post-Cartesian
+    // expanded clause count against LUMICE_MAX_CONFIG_CLAUSES so the user
+    // learns early — before hitting OK / Run — that a ';'-heavy row will
+    // trip the ABI cap. Delegates to SummarizeSopExpansion, which shares
+    // ExpandSopToClauses with the commit path (file_io.hpp — single source).
+    // The commit path (DoRun's FillLumiceConfig branch) remains the ABI
+    // enforcement point; this preview is diagnostic-only (issue.md D "越界
+    // 有可见提示"; plan §2/§3 D "仅标红，不禁用 OK").
+    FilterConfig probe;  // throwaway wrapper — SummarizeSopExpansion only reads .param
+    probe.param = live_sop;
+    const SopExpansionSummary sop_summary = SummarizeSopExpansion(probe);
+    char clause_line[128] = { 0 };
+    std::snprintf(clause_line, sizeof(clause_line), "Clauses: %zu / %d", sop_summary.clause_count,
+                  LUMICE_MAX_CONFIG_CLAUSES);
+    if (sop_summary.overflow) {
+      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+      ImGui::TextUnformatted(clause_line);
+      ImGui::SameLine();
+      ImGui::TextUnformatted("(exceeds limit — the previous config will be kept on OK)");
+      ImGui::PopStyleColor();
+    } else {
+      ImGui::TextDisabled("%s", clause_line);
+    }
   }
 }
 

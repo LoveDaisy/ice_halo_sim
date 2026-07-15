@@ -400,12 +400,14 @@ nlohmann::json ConfigToJson(const LUMICE_Config& c) {
         json composition = json::array();
         for (int cl = 0; cl < comp.clause_count; cl++) {
           // Mirror core to_json: a 1-term clause emits a bare id; a multi-term clause an array.
-          if (comp.term_counts[cl] == 1) {
-            composition.push_back(comp.clauses[cl][0]);
+          int term_n = 0;
+          const int* terms_p = LUMICE_CompositionClauseTerms(&comp, cl, &term_n);
+          if (term_n == 1 && terms_p != nullptr) {
+            composition.push_back(terms_p[0]);
           } else {
             json terms = json::array();
-            for (int t = 0; t < comp.term_counts[cl]; t++) {
-              terms.push_back(comp.clauses[cl][t]);
+            for (int t = 0; t < term_n; t++) {
+              terms.push_back(terms_p[t]);
             }
             composition.push_back(terms);
           }
@@ -696,6 +698,149 @@ void LUMICE_ConfigReleaseColorClasses(LUMICE_Config* cfg) {
 }
 
 
+// =============== Complex-Composition storage lifecycle (task-host-abi-cpu-caps, BREAKING v4.9) ===============
+// Same C-ABI-boundary rationale for calloc/free as LUMICE_ConfigCreateColorClasses above:
+// LUMICE_Config crosses the C ABI, and non-C++ bindings must be able to release the
+// composition storage without a C++ runtime — a documented exception to the "no raw
+// new/delete" project rule (AGENTS.md).
+
+LUMICE_ErrorCode LUMICE_CompositionSetClauses(LUMICE_ComplexComposition* comp, int clause_count, const int* term_counts,
+                                              const int* term_ids) {
+  if (!comp) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  if (clause_count < 0 || clause_count > LUMICE_MAX_CONFIG_CLAUSES) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  // term_counts is required whenever clause_count > 0 (every clause needs its own count).
+  // term_ids, however, must NOT be required upfront: a composition where every clause has 0
+  // terms (total_terms == 0) is legitimate (LUMICE_CompositionClauseTerms's doc comment and
+  // LUMICE_CommitConfigStruct's validation both already treat it as such), and a caller with
+  // total_terms == 0 may reasonably pass term_ids == nullptr for that empty flat buffer — e.g.
+  // JsonToComplexComposition's std::vector<int> term_ids_vec, whose .data() is nullptr when
+  // never push_back'd into. Requiring non-null unconditionally rejected exactly that legitimate
+  // shape at the ONLY writer, before CommitConfigStruct ever saw it (code-review round 2,
+  // Major — round 1's fix only patched CommitConfigStruct's read-side check, not this entry
+  // point). So the term_ids null-check is deferred until total_terms is known.
+  if (clause_count > 0 && term_counts == nullptr) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  // Full validation BEFORE any allocation so an invalid input leaves `comp` untouched
+  // (mirrors the "no partial writes on rejection" contract other Set-style API here follow).
+  // Upper bounds are enforced here (not just by callers) because this is documented as
+  // the ONLY supported writer, including non-C++ bindings that cannot be trusted to
+  // pre-check LUMICE_MAX_CONFIG_CLAUSES/_TERMS themselves (code-review round 1, Major).
+  size_t total_terms = 0;
+  for (int cl = 0; cl < clause_count; cl++) {
+    if (term_counts[cl] < 0 || term_counts[cl] > LUMICE_MAX_CONFIG_TERMS) {
+      return LUMICE_ERR_INVALID_CONFIG;
+    }
+    total_terms += static_cast<size_t>(term_counts[cl]);
+  }
+  if (total_terms > 0 && term_ids == nullptr) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+
+  // Create-or-replace: release any prior allocation before overwriting the pointers,
+  // guarding "consecutive Set with different clause_count" from leaking the previous
+  // allocation. Pairs with the memset-before-Release fix in JsonToConfig / FillLumiceConfig.
+  LUMICE_CompositionReleaseClauses(comp);
+
+  if (clause_count == 0) {
+    // "OR of nothing" state — no allocation, both pointers stay nullptr.
+    return LUMICE_OK;
+  }
+
+  auto* counts_buf =
+      static_cast<int*>(std::calloc(  // NOLINT(cppcoreguidelines-no-malloc): C ABI boundary; see block comment above.
+          static_cast<size_t>(clause_count), sizeof(int)));
+  if (!counts_buf) {
+    // OOM: fall back to "OR of nothing" (already released above); mirror ColorClasses OOM policy.
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  int* ids_buf = nullptr;
+  if (total_terms > 0) {
+    ids_buf =
+        static_cast<int*>(std::calloc(  // NOLINT(cppcoreguidelines-no-malloc): C ABI boundary; see block comment above.
+            total_terms, sizeof(int)));
+    if (!ids_buf) {
+      std::free(counts_buf);  // NOLINT(cppcoreguidelines-no-malloc): C ABI boundary.
+      return LUMICE_ERR_INVALID_CONFIG;
+    }
+  }
+  // Both allocations succeeded — commit.
+  for (int cl = 0; cl < clause_count; cl++) {
+    counts_buf[cl] = term_counts[cl];
+  }
+  for (size_t i = 0; i < total_terms; i++) {
+    ids_buf[i] = term_ids[i];
+  }
+  comp->term_counts = counts_buf;
+  comp->term_ids = ids_buf;
+  comp->clause_count = clause_count;
+  return LUMICE_OK;
+}
+
+void LUMICE_CompositionReleaseClauses(LUMICE_ComplexComposition* comp) {
+  if (!comp) {
+    return;
+  }
+  if (comp->term_counts) {
+    std::free(comp->term_counts);  // NOLINT(cppcoreguidelines-no-malloc): C ABI boundary; see block comment above.
+    comp->term_counts = nullptr;
+  }
+  if (comp->term_ids) {
+    std::free(comp->term_ids);  // NOLINT(cppcoreguidelines-no-malloc): C ABI boundary; see block comment above.
+    comp->term_ids = nullptr;
+  }
+  comp->clause_count = 0;
+}
+
+void LUMICE_ConfigReleaseCompositions(LUMICE_Config* cfg) {
+  if (!cfg) {
+    return;
+  }
+  // Composition_count is a plain int written by callers; iterate up to whatever they set,
+  // but never past the ABI ceiling (defends against a garbage / uninitialized count value).
+  int n = cfg->composition_count;
+  if (n < 0) {
+    n = 0;
+  }
+  if (n > LUMICE_MAX_CONFIG_COMPLEX) {
+    n = LUMICE_MAX_CONFIG_COMPLEX;
+  }
+  for (int i = 0; i < n; i++) {
+    LUMICE_CompositionReleaseClauses(&cfg->compositions[i]);
+  }
+  // Leave composition_count alone — this Release only frees the intra-record heap storage;
+  // the inline compositions[] array itself is part of LUMICE_Config's own layout.
+}
+
+const int* LUMICE_CompositionClauseTerms(const LUMICE_ComplexComposition* comp, int clause_index, int* out_term_count) {
+  if (!comp) {
+    if (out_term_count) {
+      *out_term_count = 0;
+    }
+    return nullptr;
+  }
+  if (clause_index < 0 || clause_index >= comp->clause_count) {
+    if (out_term_count) {
+      *out_term_count = 0;
+    }
+    return nullptr;
+  }
+  // Prefix-sum offset into the flat term_ids buffer.
+  size_t offset = 0;
+  for (int cl = 0; cl < clause_index; cl++) {
+    offset += static_cast<size_t>(comp->term_counts[cl]);
+  }
+  if (out_term_count) {
+    *out_term_count = comp->term_counts[clause_index];
+  }
+  return (comp->term_ids != nullptr) ? (comp->term_ids + offset) : nullptr;
+}
+
+
 // Struct->JSON path: see doc/capi-lifecycle-architecture.md §6.2.
 LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_Config* config, int* out_reused) {
   if (!server || !config) {
@@ -717,6 +862,38 @@ LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_C
   for (int i = 0; i < config->raypath_color_count; i++) {
     if (config->raypath_color[i].match_count < 0 ||
         config->raypath_color[i].match_count > LUMICE_MAX_CONFIG_COLOR_REFS) {
+      return LUMICE_ERR_INVALID_CONFIG;
+    }
+  }
+  // v4.9 (task-host-abi-cpu-caps): compositions[i].term_ids/term_counts are heap pointers;
+  // mirror the raypath_color null-pointer defense above and enforce the ABI sanity
+  // ceilings (clause/term storage moved off inline layout, but the CLAUSES/TERMS constants
+  // are retained as DoS-guard caps against malformed input).
+  if (config->composition_count < 0 || config->composition_count > LUMICE_MAX_CONFIG_COMPLEX) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  for (int i = 0; i < config->composition_count; i++) {
+    const auto& comp = config->compositions[i];
+    if (comp.clause_count < 0 || comp.clause_count > LUMICE_MAX_CONFIG_CLAUSES) {
+      return LUMICE_ERR_INVALID_CONFIG;
+    }
+    // term_counts is always required once clause_count > 0 (LUMICE_CompositionSetClauses
+    // always allocates it in that case). term_ids, however, legitimately stays nullptr
+    // when every clause has 0 terms (total_terms == 0) — SetClauses skips that allocation
+    // on purpose. Conflating the two here would reject a state SetClauses itself produces
+    // (code-review round 1, Major; e.g. JSON `"composition": [[]]` round-tripped through
+    // Parse then CommitConfigStruct).
+    if (comp.clause_count > 0 && comp.term_counts == nullptr) {
+      return LUMICE_ERR_INVALID_CONFIG;
+    }
+    size_t comp_total_terms = 0;
+    for (int cl = 0; cl < comp.clause_count; cl++) {
+      if (comp.term_counts[cl] < 0 || comp.term_counts[cl] > LUMICE_MAX_CONFIG_TERMS) {
+        return LUMICE_ERR_INVALID_CONFIG;
+      }
+      comp_total_terms += static_cast<size_t>(comp.term_counts[cl]);
+    }
+    if (comp_total_terms > 0 && comp.term_ids == nullptr) {
       return LUMICE_ERR_INVALID_CONFIG;
     }
   }
@@ -1269,47 +1446,58 @@ static LUMICE_ErrorCode JsonToComplexComposition(const nlohmann::json& fj, LUMIC
     return LUMICE_ERR_MISSING_FIELD;
   }
   const auto& cmp = fj.at("composition");
-  // Bounds are checked before writing into the pool slot so a rejected input never leaves a
-  // clause_count inconsistent with the ABI ceiling. An empty composition ([]) is accepted as
-  // a degenerate "OR of nothing" (clause_count == 0), mirroring core (no non-empty requirement).
-  if (out->composition_count >= LUMICE_MAX_CONFIG_COMPLEX || static_cast<int>(cmp.size()) > LUMICE_MAX_CONFIG_CLAUSES) {
+  // v4.9 (task-host-abi-cpu-caps): build the full (term_counts, term_ids) triple on the
+  // stack first, then commit atomically via LUMICE_CompositionSetClauses AFTER all
+  // validation succeeds. This also removes the pre-v4.9 "composition_count++ before
+  // per-clause validation" partial-write hazard (§3.5 in the plan).
+  const int clause_count = static_cast<int>(cmp.size());
+  if (out->composition_count >= LUMICE_MAX_CONFIG_COMPLEX || clause_count > LUMICE_MAX_CONFIG_CLAUSES) {
     return LUMICE_ERR_INVALID_CONFIG;
   }
-  int comp_idx = out->composition_count++;
-  LUMICE_ComplexComposition* comp = &out->compositions[comp_idx];
-  comp->clause_count = static_cast<int>(cmp.size());
-  for (int cl = 0; cl < comp->clause_count; cl++) {
+  std::vector<int> term_counts_vec;
+  std::vector<int> term_ids_vec;
+  term_counts_vec.reserve(static_cast<size_t>(clause_count));
+  for (int cl = 0; cl < clause_count; cl++) {
     const auto& clause = cmp[cl];
     // A clause is either a bare id (1-term) or an array of ids (matches core to_json).
     if (clause.is_array()) {
-      comp->term_counts[cl] = static_cast<int>(clause.size());
-      if (comp->term_counts[cl] > LUMICE_MAX_CONFIG_TERMS) {
+      const int tn = static_cast<int>(clause.size());
+      if (tn > LUMICE_MAX_CONFIG_TERMS) {
         return LUMICE_ERR_INVALID_CONFIG;
       }
-      for (int t = 0; t < comp->term_counts[cl]; t++) {
-        comp->clauses[cl][t] = clause[t].get<int>();
+      term_counts_vec.push_back(tn);
+      for (int t = 0; t < tn; t++) {
+        term_ids_vec.push_back(clause[t].get<int>());
       }
     } else {
-      comp->term_counts[cl] = 1;
-      comp->clauses[cl][0] = clause.get<int>();
-    }
-    // Reference integrity: each term must name an existing SIMPLE filter (dangling ids and
-    // references to a complex filter are rejected — the latter matches core semantics, which
-    // only allow SimpleFilterParam in a composition, so cycles are impossible by construction).
-    for (int t = 0; t < comp->term_counts[cl]; t++) {
-      int ref_id = comp->clauses[cl][t];
-      bool found_simple = false;
-      for (int k = 0; k < out->filter_count; k++) {
-        if (out->filters[k].id == ref_id && out->filters[k].type != LUMICE_FILTER_TYPE_COMPLEX) {
-          found_simple = true;
-          break;
-        }
-      }
-      if (!found_simple) {
-        return LUMICE_ERR_INVALID_CONFIG;
-      }
+      term_counts_vec.push_back(1);
+      term_ids_vec.push_back(clause.get<int>());
     }
   }
+  // Reference integrity: each term must name an existing SIMPLE filter (dangling ids and
+  // references to a complex filter are rejected — the latter matches core semantics, which
+  // only allow SimpleFilterParam in a composition, so cycles are impossible by construction).
+  for (int ref_id : term_ids_vec) {
+    bool found_simple = false;
+    for (int k = 0; k < out->filter_count; k++) {
+      if (out->filters[k].id == ref_id && out->filters[k].type != LUMICE_FILTER_TYPE_COMPLEX) {
+        found_simple = true;
+        break;
+      }
+    }
+    if (!found_simple) {
+      return LUMICE_ERR_INVALID_CONFIG;
+    }
+  }
+  const int comp_idx = out->composition_count;
+  LUMICE_ComplexComposition* comp = &out->compositions[comp_idx];
+  auto err = LUMICE_CompositionSetClauses(comp, clause_count, term_counts_vec.data(), term_ids_vec.data());
+  if (err != LUMICE_OK) {
+    return err;
+  }
+  // Publish the composition to the config only after Set succeeds — matches the "advance
+  // count last" pattern already used elsewhere in this file (e.g. spectrum_entries).
+  out->composition_count = comp_idx + 1;
   f->composition_index = comp_idx;
   return LUMICE_OK;
 }
@@ -1319,6 +1507,9 @@ static LUMICE_ErrorCode JsonToConfig(const nlohmann::json& root, LUMICE_Config* 
   // calls, memset would clobber the pointer without freeing it — release first so the
   // memset that follows sees a defensibly-null field. Release is null-safe / idempotent.
   LUMICE_ConfigReleaseColorClasses(out);
+  // v4.9 (task-host-abi-cpu-caps): compositions[i].term_ids/term_counts are also owning
+  // heap pointers — same memset-would-leak hazard as raypath_color; release first.
+  LUMICE_ConfigReleaseCompositions(out);
   std::memset(out, 0, sizeof(LUMICE_Config));
   out->spectrum = "D65";  // Safe default (memset leaves nullptr)
 
@@ -1669,6 +1860,21 @@ LUMICE_ErrorCode LUMICE_GetSimLifecycle(LUMICE_Server* server, LUMICE_SimLifecyc
   }
   out->epoch = static_cast<unsigned long long>(server->server_->CommittedEpoch());
 
+  return LUMICE_OK;
+}
+
+
+// task-gui-feedback-affordances Step 7 (AC1): synchronous readback of the
+// component-bit overflow counter written inside CommitConfig.
+// symmetry_group_overflow_count is reserved (currently always 0) — the async
+// polling path is scheduled for a follow-up task (see progress.md Step 4
+// DECISION 2026-07-15 23:00).
+LUMICE_ErrorCode LUMICE_GetColorOverflowInfo(LUMICE_Server* server, LUMICE_ColorOverflowInfo* out) {
+  if (!server || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  out->component_overflow_count = static_cast<int>(server->server_->GetLastColorComponentOverflowCount());
+  out->symmetry_group_overflow_count = 0;  // reserved — see follow-up backlog
   return LUMICE_OK;
 }
 

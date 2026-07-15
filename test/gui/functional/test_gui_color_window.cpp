@@ -19,11 +19,12 @@
 #include <thread>
 
 #include "IconsFontAwesome6.h"  // ICON_FA_* selectors for locating icon-prefixed buttons.
+#include "gui/app.hpp"          // ShouldTintColorsButton — Step 1 predicate for AC2.
 #include "gui/color_window.hpp"
 #include "gui/file_io.hpp"  // FillLumiceConfig — pipeline assertion for AC4 default flow-through.
 #include "gui/gui_state.hpp"
 #include "gui/raypath_segments.hpp"
-#include "include/lumice_config_scope.hpp"  // ConfigColorGuard — auto-releases raypath_color for AC4 test.
+#include "include/lumice_config_scope.hpp"  // ConfigOwningGuard — auto-releases raypath_color for AC4 test.
 #include "test_gui_shared.hpp"
 
 namespace {
@@ -1285,7 +1286,7 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       // the new default reaches the scrum-356 per-ref symmetry pipeline
       // without any renderer-side changes.
       LUMICE_Config cfg{};
-      lumice::ConfigColorGuard cfg_guard(cfg);
+      lumice::ConfigOwningGuard cfg_guard(cfg);
       IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
       IM_CHECK_EQ(cfg.raypath_color[0].match[0].predicate.symmetry, 7);
 
@@ -1526,6 +1527,60 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       IM_CHECK(ctx->ItemExists("**/$$1/" ICON_FA_EYE));
       IM_CHECK(!ctx->ItemExists("**/$$1/" ICON_FA_EYE_SLASH));
       ctx->SetRef("");
+
+      gui::g_state.color_window_open = false;
+      ctx->Yield(2);
+    };
+  }
+
+  // task-gui-feedback-affordances Step 1 (AC2): the topbar Colors button must
+  // render with a distinct tint when at least one color class is configured.
+  // The tint decision is pinned in the pure predicate ShouldTintColorsButton
+  // so this test locks the decision boundary directly (raypath_color empty →
+  // no tint; non-empty → tint), without depending on ImGuiTestEngine's ability
+  // to read pushed style colors (which its ItemInfo API does not expose).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "topbar_colors_button_tint_predicate");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      IM_CHECK(!gui::ShouldTintColorsButton(true));  // empty → no tint
+      IM_CHECK(gui::ShouldTintColorsButton(false));  // has classes → tint
+    };
+  }
+
+  // task-gui-feedback-affordances Step 1 (AC2): end-to-end wire — after
+  // clicking + Add Class the raypath_color vector grows, the predicate flips
+  // true, and the Colors button remains rendered/clickable in the tinted
+  // state. This exercises the real ImGui frame path (top-bar renders the
+  // button, PushStyleColor stack balances, layout intact), which is the
+  // "GUI test 实际验证" leg of AC5.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "topbar_colors_button_renders_in_both_states");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      // Empty state: predicate false, button exists.
+      IM_CHECK(gui::g_state.raypath_color.empty());
+      IM_CHECK(!gui::ShouldTintColorsButton(gui::g_state.raypath_color.empty()));
+      IM_CHECK(ctx->ItemExists("##TopBar/" ICON_FA_PALETTE " Colors"));
+
+      // Populate raypath_color via the Colors window (real UI path).
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
+      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+      gui::g_state.committed_epoch = 5;
+      gui::g_state.display_epoch_floor = 0;
+      gui::g_state.dirty = false;
+      gui::g_state.color_window_open = true;
+      ctx->Yield(4);
+      ctx->ItemClick("**/" ICON_FA_PLUS " Add Class");
+      ctx->Yield(2);
+
+      // Non-empty state: predicate true, button still exists and remains
+      // clickable (PushStyleColor stack balanced ⇒ no ImGui assertion).
+      IM_CHECK(!gui::g_state.raypath_color.empty());
+      IM_CHECK(gui::ShouldTintColorsButton(gui::g_state.raypath_color.empty()));
+      IM_CHECK(ctx->ItemExists("##TopBar/" ICON_FA_PALETTE " Colors"));
 
       gui::g_state.color_window_open = false;
       ctx->Yield(2);

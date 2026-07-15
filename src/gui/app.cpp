@@ -703,7 +703,7 @@ void CalibrateQualityThreshold() {
 
   // Use current default state to build a calibration config
   LUMICE_Config config{};
-  lumice::ConfigColorGuard config_color_guard(config);  // v4.8: release raypath_color on any early return
+  lumice::ConfigOwningGuard config_color_guard(config);  // v4.8: release raypath_color on any early return
   if (!FillLumiceConfig(g_state, &config)) {
     // Unlike DoRun (which pops SetGuiWarning), calibration degrades silently to the default
     // threshold: it does not touch the user's edited/committed config, so a log line is
@@ -826,7 +826,7 @@ bool MaybeReconstructServerForBackend() {
   return true;
 }
 
-bool DoRun() {
+bool DoRun(bool user_initiated) {
   if (!g_server) {
     return true;
   }
@@ -914,7 +914,7 @@ bool DoRun() {
   // (graceful degradation) — poller untouched, buffer not torn — rather than commit a
   // truncated config.
   LUMICE_Config config{};
-  lumice::ConfigColorGuard config_color_guard(config);  // v4.8: release raypath_color on any early return
+  lumice::ConfigOwningGuard config_color_guard(config);  // v4.8: release raypath_color on any early return
   FilterOverflowInfo overflow;
   ColorClassOverflowInfo color_overflow;
   if (!FillLumiceConfig(g_state, &config, &overflow, &color_overflow)) {
@@ -949,6 +949,16 @@ bool DoRun() {
       GUI_LOG_WARNING("[GUI] DoRun: {} exceeds ABI limits ({}); keeping the previous configuration.",
                       color_overflow.class_index >= 0 ? "raypath color configuration" : "filter", log_locator);
     }
+    // task-gui-feedback-affordances Step 2 (AC3): a user-clicked Run always
+    // opens the warning modal, even when the previous OK dismissed it and the
+    // overflow condition is unchanged. SetGuiWarning's identity-dedup would
+    // otherwise silently swallow the second Run. The auto-commit (70ms) path
+    // sets user_initiated=false so a stuck-overflow slider drag does not
+    // reopen the modal every tick and freeze the UI (app_panels.cpp:1315-1320
+    // records why "OK to clear" alone is wrong).
+    if (user_initiated) {
+      ClearGuiWarning();
+    }
     SetGuiWarning(warning_msg);
     return true;
   }
@@ -963,8 +973,58 @@ bool DoRun() {
   int reused = 0;
   LUMICE_ErrorCode err = LUMICE_CommitConfigStruct(g_server, &config, &reused);
   if (err == LUMICE_OK) {
-    // A good commit clears any prior over-bounds warning so a later re-occurrence warns again.
-    ClearGuiWarning();
+    // task-gui-feedback-affordances Step 7 (AC1): the ABI check above passed
+    // (filter / raypath tracing / geometry all fit within their caps), but
+    // the CORE may still have dropped color-classification predicates that
+    // overflowed the 64-bit component budget (BuildColorGateTable → kNoBit).
+    // Surface that as a modal so the user sees "coloring degraded" rather
+    // than staring at a partially-uncolored render with no explanation. The
+    // Log panel is collapsed by default, so a log-only warning is invisible
+    // to most users — this is the fix for the "core degrades silently" trap
+    // that was called out in this task's issue.md §A.
+    //
+    // Two mutually-exclusive branches feed SetGuiWarning inside DoRun:
+    //  1) FillLumiceConfig failure (above) → commit was REJECTED, previous
+    //     config kept. That branch already gated on `user_initiated` to force
+    //     a refire on explicit user Runs (Step 2 AC3).
+    //  2) This one → commit SUCCEEDED, coloring degrades gracefully. Uses a
+    //     different message string (SetGuiWarning's identity-dedup means two
+    //     different messages cannot swallow each other). Applies the same
+    //     `user_initiated` refire policy so a user who dismisses the modal
+    //     and re-Runs with the same still-oversized color config sees the
+    //     modal again.
+    LUMICE_ColorOverflowInfo color_over{};
+    LUMICE_GetColorOverflowInfo(g_server, &color_over);
+    // symmetry_group_overflow_count is currently hardcoded to 0 in c_api.cpp (the Metal/CUDA
+    // symmetry-group counter is not yet wired to a consumer — see backlog "symmetry_group
+    // overflow GUI surfacing"); the OR term is future-reserved dead code until that lands.
+    if (color_over.component_overflow_count > 0 || color_over.symmetry_group_overflow_count > 0) {
+      std::string degrade_msg =
+          "This raypath color configuration exceeds its predicate/symmetry-group budget (" +
+          std::to_string(color_over.component_overflow_count) + " predicate(s) and/or " +
+          std::to_string(color_over.symmetry_group_overflow_count) +
+          " symmetry-group(s) dropped).\n"
+          "Affected rays/crystals will render with missing or incomplete color. The underlying "
+          "filtering/geometry is unaffected — only color assignment degrades.\n"
+          "Simplify the color configuration (fewer distinct predicates per class / fewer symmetry variants) to fix.";
+      // Same user_initiated-gated-clear discipline as the FillLumiceConfig-failure branch
+      // above (AC3): only force-reopen on an explicit user Run. Do NOT unconditionally
+      // ClearGuiWarning() before this check (code-review-01 Critical 1) — that would zero
+      // g_gui_warning_current ahead of the comparison below, so SetGuiWarning's
+      // identity-dedup always sees an empty prior message and reopens the modal on every
+      // auto-commit tick (user_initiated=false) even when the SAME overflow persists,
+      // reproducing the "70ms slider drag freezes the UI" regression this task's Step 2
+      // fixed for the sibling branch.
+      if (user_initiated) {
+        ClearGuiWarning();
+      }
+      SetGuiWarning(degrade_msg);
+    } else {
+      // No color overflow: clear any prior over-bounds warning (the ABI-reject warning from
+      // the branch above, or a previous color-degrade warning that has now resolved) so a
+      // later re-occurrence of either warns again.
+      ClearGuiWarning();
+    }
     g_state.last_committed_state = GuiState::ConfigSnapshot::From(g_state);
     // task-color-migration §4 M6 (repush discipline): a fresh commit invalidates every edge-
     // trigger baseline so the next frame's reconciler unconditionally re-pushes the full
@@ -1165,6 +1225,14 @@ bool ShouldFireCompositeUpload(const PreviewSnapshot& snap, unsigned long long l
 // gui_test can assert without an ImGui/GL context.
 bool ShouldDefaultEnableColorsOnOpen(bool raypath_color_empty) {
   return raypath_color_empty;
+}
+
+// task-gui-feedback-affordances Step 1 (AC2) — see app.hpp. Pure predicate,
+// intentionally trivial: the tint decision boundary is `raypath_color` is
+// non-empty, and pinning it in a testable function prevents the top-bar
+// rendering call site from drifting away from the same read.
+bool ShouldTintColorsButton(bool raypath_color_empty) {
+  return !raypath_color_empty;
 }
 
 // task-348.3 (⑤/⑥) shared writer — see app.hpp. Two-line function on purpose: the whole

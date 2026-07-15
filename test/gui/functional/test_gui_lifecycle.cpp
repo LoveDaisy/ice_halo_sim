@@ -236,7 +236,7 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
     gui::g_state.use_gpu_backend = true;  // -> Metal single engine via MaybeReconstructServerForBackend
 #endif
 
-    gui::DoRun();  // real product Run path: sets run_intent=kRunning + commits + starts poller.
+    gui::DoRun(/*user_initiated=*/true);  // real product Run path: sets run_intent=kRunning + commits + starts poller.
     // DoRun no longer writes sim_state (it is reconcile-derived), so assert the INTENT it set.
     IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunning));
 
@@ -508,7 +508,7 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
     gui::g_state = gui::InitDefaultState();
     gui::g_state.sim.infinite = true;
 
-    gui::DoRun();  // real Run path: run_intent=kRunning, commit, start poller.
+    gui::DoRun(/*user_initiated=*/true);  // real Run path: run_intent=kRunning, commit, start poller.
     IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunning));
 
     // Drive frames until the display reflects the running backend (kSimulating).
@@ -662,7 +662,7 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
     gui::g_state.use_gpu_backend = true;
 #endif
 
-    gui::DoRun();
+    gui::DoRun(/*user_initiated=*/true);
     IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunning));
 
     // Drive SyncFromPoller until the reconcile settles on kDone (natural completion).
@@ -816,7 +816,7 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
     gui::g_state.raypath_color.push_back(c0);
     gui::g_state.raypath_color.push_back(c1);
 
-    gui::DoRun();
+    gui::DoRun(/*user_initiated=*/true);
     IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunning));
 
     // Drive until sim_state == kDone AND intent has latched to kRunCompleted (Mealy edge in
@@ -933,7 +933,7 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
     gui::g_state.raypath_color.push_back(c0);
     gui::g_state.raypath_color.push_back(c1);
 
-    gui::DoRun();
+    gui::DoRun(/*user_initiated=*/true);
     IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kRunning));
     auto start = std::chrono::steady_clock::now();
     while (gui::g_state.sim_state != SimState::kDone || gui::g_state.run_intent != RunIntent::kRunCompleted) {

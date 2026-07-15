@@ -260,15 +260,15 @@ LM_FN bool DeviceFilterMatchSimple(const DeviceFilterDesc& f, const uint8_t* pat
 // filter_spec.cpp:274-288; DO NOT change to true — would silently disable
 // deferred-construction Complex filters).
 LM_FN bool DeviceFilterMatchComplex(const DeviceFilterDesc& f, const DeviceFilterDesc* complex_sub_desc_buf,
-                                    const uint8_t* path, uint32_t path_len, const uint8_t* getfn_bytes,
-                                    const uint32_t* getfn_offsets, uint32_t crystal_slot, const float* ray_dir,
-                                    uint32_t ray_crystal_config_id) {
+                                    const uint8_t* and_term_counts_buf, const uint8_t* path, uint32_t path_len,
+                                    const uint8_t* getfn_bytes, const uint32_t* getfn_offsets, uint32_t crystal_slot,
+                                    const float* ray_dir, uint32_t ray_crystal_config_id) {
   if (f.or_clause_count == 0u) {
     return false;
   }
   uint32_t sub_idx = f.sub_desc_start;
   for (uint32_t or_i = 0; or_i < static_cast<uint32_t>(f.or_clause_count); ++or_i) {
-    uint32_t and_n = static_cast<uint32_t>(f.and_term_counts[or_i]);
+    uint32_t and_n = static_cast<uint32_t>(and_term_counts_buf[f.and_terms_start + or_i]);
     bool and_ok = true;
     for (uint32_t and_j = 0; and_j < and_n; ++and_j) {
       if (!DeviceFilterMatchSimple(complex_sub_desc_buf[sub_idx], path, path_len, getfn_bytes, getfn_offsets,
@@ -292,12 +292,12 @@ LM_FN bool DeviceFilterMatchComplex(const DeviceFilterDesc& f, const DeviceFilte
 // Top-level dispatch — Complex → DeviceFilterMatchComplex; everything else →
 // DeviceFilterMatchSimple. Static call graph stays acyclic.
 LM_FN bool DeviceFilterMatch(const DeviceFilterDesc& f, const DeviceFilterDesc* complex_sub_desc_buf,
-                             const uint8_t* path, uint32_t path_len, const uint8_t* getfn_bytes,
-                             const uint32_t* getfn_offsets, uint32_t crystal_slot, const float* ray_dir,
-                             uint32_t ray_crystal_config_id) {
+                             const uint8_t* and_term_counts_buf, const uint8_t* path, uint32_t path_len,
+                             const uint8_t* getfn_bytes, const uint32_t* getfn_offsets, uint32_t crystal_slot,
+                             const float* ray_dir, uint32_t ray_crystal_config_id) {
   if (f.type == kDeviceFilterTypeComplex) {
-    return DeviceFilterMatchComplex(f, complex_sub_desc_buf, path, path_len, getfn_bytes, getfn_offsets, crystal_slot,
-                                    ray_dir, ray_crystal_config_id);
+    return DeviceFilterMatchComplex(f, complex_sub_desc_buf, and_term_counts_buf, path, path_len, getfn_bytes,
+                                    getfn_offsets, crystal_slot, ray_dir, ray_crystal_config_id);
   }
   return DeviceFilterMatchSimple(f, path, path_len, getfn_bytes, getfn_offsets, crystal_slot, ray_dir,
                                  ray_crystal_config_id);
@@ -306,11 +306,11 @@ LM_FN bool DeviceFilterMatch(const DeviceFilterDesc& f, const DeviceFilterDesc* 
 // Check = Match XOR (action == filter_out). Same algebra as
 // filter_spec.hpp:42-45.
 LM_FN bool DeviceFilterCheck(const DeviceFilterDesc& f, const DeviceFilterDesc* complex_sub_desc_buf,
-                             const uint8_t* path, uint32_t path_len, const uint8_t* getfn_bytes,
-                             const uint32_t* getfn_offsets, uint32_t crystal_slot, const float* ray_dir,
-                             uint32_t ray_crystal_config_id) {
-  bool m = DeviceFilterMatch(f, complex_sub_desc_buf, path, path_len, getfn_bytes, getfn_offsets, crystal_slot, ray_dir,
-                             ray_crystal_config_id);
+                             const uint8_t* and_term_counts_buf, const uint8_t* path, uint32_t path_len,
+                             const uint8_t* getfn_bytes, const uint32_t* getfn_offsets, uint32_t crystal_slot,
+                             const float* ray_dir, uint32_t ray_crystal_config_id) {
+  bool m = DeviceFilterMatch(f, complex_sub_desc_buf, and_term_counts_buf, path, path_len, getfn_bytes, getfn_offsets,
+                             crystal_slot, ray_dir, ray_crystal_config_id);
   return (f.action == 0u) ? m : !m;
 }
 
@@ -334,15 +334,21 @@ LM_FN bool DeviceFilterCheck(const DeviceFilterDesc& f, const DeviceFilterDesc* 
 // The result is capped at kDeviceFilterMaxOrClauses summands (== the Complex
 // or_clause_count upper bound); the component-bit table uses the same stride.
 LM_FN uint32_t DeviceFilterSummandMask(const DeviceFilterDesc& f, const DeviceFilterDesc* complex_sub_desc_buf,
-                                       const uint8_t* path, uint32_t path_len, const uint8_t* getfn_bytes,
-                                       const uint32_t* getfn_offsets, uint32_t crystal_slot, const float* ray_dir,
-                                       uint32_t ray_crystal_config_id, bool* out_matched) {
+                                       const uint8_t* and_term_counts_buf, const uint8_t* path, uint32_t path_len,
+                                       const uint8_t* getfn_bytes, const uint32_t* getfn_offsets, uint32_t crystal_slot,
+                                       const float* ray_dir, uint32_t ray_crystal_config_id, bool* out_matched) {
   if (f.type == kDeviceFilterTypeComplex) {
     uint32_t mask = 0u;
     uint32_t sub_idx = f.sub_desc_start;
+    // task-device-flat-and-terms: the `or_i < kDeviceFilterMaxOrClauses` cap
+    // is INTENTIONAL here — this function is a color-path helper (see the
+    // comment block above) and the color bit map / uint32 mask are still
+    // stride-limited to `kDeviceFilterMaxOrClauses` summands. Physical-filter
+    // Complex descriptors that carry more OR-clauses use `DeviceFilterCheck`,
+    // whose loop is bounded only by `f.or_clause_count` (no color-side cap).
     for (uint32_t or_i = 0u; or_i < static_cast<uint32_t>(f.or_clause_count) && or_i < kDeviceFilterMaxOrClauses;
          ++or_i) {
-      uint32_t and_n = static_cast<uint32_t>(f.and_term_counts[or_i]);
+      uint32_t and_n = static_cast<uint32_t>(and_term_counts_buf[f.and_terms_start + or_i]);
       bool and_ok = true;
       for (uint32_t and_j = 0u; and_j < and_n; ++and_j) {
         if (!DeviceFilterMatchSimple(complex_sub_desc_buf[sub_idx], path, path_len, getfn_bytes, getfn_offsets,

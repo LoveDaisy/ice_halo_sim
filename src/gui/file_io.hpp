@@ -11,6 +11,7 @@ namespace lumice::gui {
 
 struct GuiState;
 struct PreviewViewport;
+struct FilterConfig;
 class PreviewRenderer;
 
 // Identifies which filter reference triggered an ABI-bounds overflow inside FillLumiceConfig.
@@ -75,6 +76,18 @@ std::string SerializeCoreConfig(const GuiState& state);
 // returns false and fills *out_warning (with a FormatOverflowLocator-bearing message) on
 // overflow, leaving *out_json untouched. Either out-param may be null.
 bool BuildExportJsonOrWarn(const GuiState& state, std::string* out_json, std::string* out_warning);
+
+// task-gui-feedback-affordances Step 3 (AC4): summary of how many post-Cartesian
+// clauses a SoP would expand to and whether the ABI clause/term cap was hit.
+// Delegates to the same ExpandSopToClauses used by SerializeFilterForCore and
+// FillLumiceConfig, so the live preview cannot drift from the commit path
+// (issue.md hard constraint — no re-implementation on the GUI side). Meant
+// only for cheap on-typing preview: value bounded by LUMICE_MAX_CONFIG_CLAUSES.
+struct SopExpansionSummary {
+  size_t clause_count = 0;  // 1..LUMICE_MAX_CONFIG_CLAUSES; degenerate default is 1
+  bool overflow = false;    // true iff the expansion tripped the clause/term cap
+};
+SopExpansionSummary SummarizeSopExpansion(const FilterConfig& f);
 
 // Deserialize Core JSON string to GuiState, returns true on success
 bool DeserializeFromJson(const std::string& json_str, GuiState& state);

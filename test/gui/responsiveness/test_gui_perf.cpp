@@ -86,7 +86,7 @@ void StartPerfSimulation() {
 #if defined(__APPLE__)
         gui::g_state.use_gpu_backend = want_metal;  // set AFTER deserialize (it resets g_state)
 #endif
-        gui::DoRun();
+        gui::DoRun(/*user_initiated=*/true);
         return;
       }
     }
@@ -112,7 +112,7 @@ void StartPerfSimulation() {
 #if defined(__APPLE__)
   gui::g_state.use_gpu_backend = want_metal;
 #endif
-  gui::DoRun();
+  gui::DoRun(/*user_initiated=*/true);
 }
 
 void StopPerfSimulation() {
@@ -302,7 +302,7 @@ void RegisterPerfTests(ImGuiTestEngine* engine) {
             // the NEXT successful commit's snapshot (no double-count). `last_commit` always
             // advances so the 70ms cadence check is unchanged.
             auto rays_this_cycle = read_server_rays();
-            bool committed = gui::DoRun();
+            bool committed = gui::DoRun(/*user_initiated=*/false);
             if (committed) {
               per_restart_rays.push_back(rays_this_cycle);
               cumulative_rays += rays_this_cycle;

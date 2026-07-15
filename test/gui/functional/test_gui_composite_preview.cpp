@@ -1689,7 +1689,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     gui::g_state.raypath_color_mode = LUMICE_COLOR_MODE_PAINTER;
 
     auto RunToDoneAndCheckIntent = [&]() {
-      gui::DoRun();
+      gui::DoRun(/*user_initiated=*/true);
       IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(gui::RunIntent::kRunning));
       auto start = std::chrono::steady_clock::now();
       while (gui::g_state.sim_state != gui::GuiState::SimState::kDone ||
@@ -1803,7 +1803,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     gui::g_state.raypath_color.push_back(cls);
     gui::g_state.raypath_color_mode = LUMICE_COLOR_MODE_DOMINANT;
 
-    gui::DoRun();
+    gui::DoRun(/*user_initiated=*/true);
     IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(gui::RunIntent::kRunning));
     auto start = std::chrono::steady_clock::now();
     while (gui::g_state.sim_state != gui::GuiState::SimState::kDone ||

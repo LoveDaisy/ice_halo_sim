@@ -264,3 +264,56 @@ def test_cuda_multi_ms_filter_cross_seed_self_consistency():
         "verify (transit_seed, transit_ray_count + tid) tuple stays disjoint "
         "across seed-{42, 7} runs."
     )
+
+
+# --------------------------------------------------------------------------- #
+# task-device-flat-and-terms AC1/AC4 — big OR-clause Complex + color coexist.
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.slow
+def test_cuda_big_or_complex_with_color_parity_vs_legacy():
+    """Task-device-flat-and-terms plan §7 Risk 4: physical filter is a 12-clause
+    OR Complex filter (>8, exercises the new flat AND-term counts buffer) AND
+    ``raypath_color`` is enabled → the color pass appends further sub-descs
+    into ``all_sub_descs`` and ``and_term_counts_flat`` after the physical loop.
+
+    The CUDA-side ``EnsureFilterBuffers`` rebuilds ``d_complex_sub_desc_`` under
+    ``if (any_color_group)``; task-device-flat-and-terms MUST mirror that
+    rebuild for ``d_and_term_counts_`` — otherwise, in color+big-OR configs the
+    kernel reads stale/misaligned AND-term counts and mis-evaluates the
+    physical filter (silently invisible to configs without color, since the
+    v1 upload matches the v1 vector).
+
+    Failure mode = "big-OR OK on its own, color OK on its own, but combining
+    them scrambles the physical filter". Pure device-side bug — invisible on
+    the CPU-shared logic test.
+    """
+    cfg = "parity_big_or_with_color"
+    legacy = _run(cfg, "legacy", seed=_SEED)
+    cuda = _run(cfg, "cuda", seed=_SEED)
+
+    _assert_routed(legacy, "legacy", cfg)
+    _assert_routed(cuda, "cuda", cfg)
+
+    corr = _raw_corr_ds(cuda, legacy)
+    cuda_Y = float(cuda.flt_buf[..., 1].sum())
+    legacy_Y = float(legacy.flt_buf[..., 1].sum())
+    assert legacy_Y > 0.0, f"{cfg}: legacy total Y == 0; cannot form energy ratio"
+    energy_ratio = cuda_Y / legacy_Y
+
+    print(
+        f"[parity] {cfg}: cuda ds_corr={corr:.4f} "
+        f"energy_ratio={energy_ratio:.4f} (tol ±{_T_ENERGY_TOL})"
+    )
+
+    assert corr >= _T_RAW_CORR_DS, (
+        f"{cfg}: ds_corr {corr:.4f} < {_T_RAW_CORR_DS}. Suspect the CUDA "
+        "color-rebuild path skipping d_and_term_counts_ re-upload (see "
+        "cuda_trace_backend.cu color rebuild block) — physical filter reads "
+        "the pre-color-pass counts snapshot in color+big-OR configs."
+    )
+    assert abs(energy_ratio - 1.0) <= _T_ENERGY_TOL, (
+        f"{cfg}: cuda/legacy total-Y ratio {energy_ratio:.4f} outside "
+        f"[1 ± {_T_ENERGY_TOL}]. Same suspects as above; a mis-indexed "
+        "and_term_counts read can turn AND-terms into no-ops or double-count."
+    )

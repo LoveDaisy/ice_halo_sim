@@ -303,7 +303,7 @@ int main(int argc, char** argv) {
             // test/gui/responsiveness/test_gui_perf.cpp (slider_drag scenario) copy this
             // same throttle+accounting block. Any change here MUST be mirrored there — the
             // gated-vs-committed distinction affects restart counting and rays accounting.
-            bool committed = gui::DoRun();
+            bool committed = gui::DoRun(/*user_initiated=*/false);
             if (committed) {
               gui::g_state.dirty = false;
             }

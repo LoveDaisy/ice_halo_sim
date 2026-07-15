@@ -2523,7 +2523,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       IM_CHECK(gui::g_server != nullptr);
       gui::g_state.sim.infinite = false;
       gui::g_state.sim.ray_num_millions = 0.5f;
-      gui::DoRun();  // real Run path: synchronous commit populates last_committed_state.
+      gui::DoRun(/*user_initiated=*/true);  // real Run path: synchronous commit populates last_committed_state.
       IM_CHECK(gui::g_state.last_committed_state.has_value());
       gui::g_state.dirty = false;  // DoRun doesn't touch dirty; pin a known pre-edit baseline.
       ctx->Yield(2);
@@ -3441,7 +3441,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
       // Act: change a crystal parameter, mark dirty, commit on test thread
       gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height = 2.5f;
       gui::g_state.dirty = true;
-      gui::DoRun();
+      gui::DoRun(/*user_initiated=*/true);
 
       // Assert: a new texture upload happens within timeout
       bool ok = WaitForSimRestartAtLeast(ctx, baseline, 1500);
@@ -3493,7 +3493,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
       // Act: change filter raypath, mark filter dirty, commit
       gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].MutableRaypathText() = "3-1-5-7";
       gui::g_state.MarkStructHardDirty();
-      gui::DoRun();
+      gui::DoRun(/*user_initiated=*/true);
 
       // Filter changes may take slightly longer (epoch-floor fence until re-commit); use 2000ms
       bool ok = WaitForSimRestartAtLeast(ctx, baseline, 2000);
@@ -3541,7 +3541,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
       gui::g_state.sim.infinite = false;
       gui::g_state.sim.ray_num_millions = 0.5f;  // small enough that the run can finish
       gui::g_state.dirty = true;
-      gui::DoRun();
+      gui::DoRun(/*user_initiated=*/true);
 
       bool ok = WaitForSimRestartAtLeast(ctx, baseline, 2000);
 
@@ -4794,6 +4794,41 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // T6b — AC4 (scrum-369.1 host-abi-cpu-caps): the "+ Add OR row" soft cap was
+  // raised from 16 to kMaxSummandRows=256, so the button must stay ENABLED past
+  // the old 16-row limit. Click it up to 20 rows and assert (a) the button never
+  // reports Disabled below the cap and (b) row uid 16 (the 17th row) exists —
+  // proving growth past 16. First-hand runtime verification of AC4 via the real
+  // GUI widget path (owner decision 2026-07-15, in lieu of a manual click).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "add_rows_past_16_enabled");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      // Fresh modal starts with one blank row (uid 0). Add 19 more → uids 0..19.
+      for (int i = 0; i < 19; ++i) {
+        auto info_add = ctx->ItemInfo("**/+ Add OR row##summand_add");
+        IM_CHECK((info_add.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        ctx->ItemClick("**/+ Add OR row##summand_add");
+        ctx->Yield(2);
+      }
+
+      // Row uid 16 = the 17th row: the button admitted growth well past 16.
+      IM_CHECK(ctx->ItemExists("**/##row_text_16"));
+      IM_CHECK(ctx->ItemExists("**/##row_text_19"));
+      // Still below kMaxSummandRows=256, so the button remains enabled.
+      auto info_add_final = ctx->ItemInfo("**/+ Add OR row##summand_add");
+      IM_CHECK((info_add_final.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
   // T7 — Multi-row commit + per-row edit isolation (subsumes the pre-H5
   // per-type buffer isolation contract). Add three rows with distinct
   // grammar shapes (pure raypath / EE / AND mix), OK, verify the SoP has
@@ -5314,6 +5349,330 @@ void RegisterLinkedEntriesTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::nullopt), 1);
       // Pair (0, 0) is unique to entry 1.
       IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::optional<int>{ 0 }), 1);
+    };
+  }
+
+  // task-gui-feedback-affordances Step 7 (AC1): the end-to-end degrade-warning
+  // wire. Big-OR filter (host-side ABI-legal) + a color config with > 64
+  // distinct predicates on one placement — the ABI check passes (commit is
+  // NOT rejected), the CORE drops the excess predicates (kNoBit), and DoRun
+  // surfaces the "coloring degraded" modal via SetGuiWarning with a message
+  // string DIFFERENT from the ABI-overflow message (identity-dedup safety).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "big_or_filter_with_color_overflow_surfaces_warning");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ClearGuiWarning();
+      gui::g_server = LUMICE_CreateServer();
+      IM_CHECK(gui::g_server != nullptr);
+
+      // Populate raypath_color across 3 classes × 22 refs = 66 unique
+      // raypath predicates on the (layer 0, crystal 1) placement. Each ref
+      // uses a distinct 2-face raypath text ("f1-f2") so structural dedup
+      // does not collapse them across classes; face numbers stay in the
+      // valid prism range 1..8 (kMaxHits is 64, well above our lengths).
+      // ABI caps allow 32 refs/class and 64 classes; splitting across
+      // classes is the only way to get > 64 predicates through the ABI to
+      // the CORE, where BuildColorGateTable dedupes across classes and hits
+      // ComponentTable::kMaxBits=64 → 66-64 = 2 predicates dropped.
+      gui::g_state.raypath_color.clear();
+      constexpr int kNumClasses = 3;
+      constexpr int kRefsPerClass = 22;
+      static_assert(kNumClasses * kRefsPerClass > 64, "must exceed ComponentTable::kMaxBits");
+      int uid = 0;  // index into a 64-combo (f1,f2) grid; overflow refs (>=64) use 3-face raypaths
+      for (int c = 0; c < kNumClasses; ++c) {
+        gui::ColorClassConfig cls;
+        cls.color[0] = 1.0f - c * 0.2f;
+        cls.color[1] = 0.5f;
+        cls.color[2] = 0.0f + c * 0.2f;
+        cls.combine = 0;
+        cls.visible = true;
+        cls.solo = false;
+        for (int k = 0; k < kRefsPerClass; ++k, ++uid) {
+          gui::ColorClassRefConfig ref;
+          ref.layer_idx = 0;
+          ref.crystal_pool_id = 0;  // maps to CrystalConfig::id_ = 1 in ResetTestState()
+          ref.match_all = false;
+          if (uid < 64) {
+            const int f1 = 1 + (uid % 8);
+            const int f2 = 1 + (uid / 8);
+            ref.predicate_text = std::to_string(f1) + "-" + std::to_string(f2);
+          } else {
+            // Two extra 3-face raypaths past the 64-combo grid — structurally
+            // distinct from all length-2 predicates above so total unique
+            // predicates = 66 → 2 overflow past kMaxBits.
+            const int tail = uid - 63;  // 1, 2
+            ref.predicate_text = "1-1-" + std::to_string(tail);
+          }
+          cls.match.push_back(ref);
+        }
+        gui::g_state.raypath_color.push_back(cls);
+      }
+
+      // Sim ray count small so the run finishes quickly if it starts.
+      gui::g_state.sim.infinite = false;
+      gui::g_state.sim.ray_num_millions = 0.001f;
+
+      gui::DoRun(/*user_initiated=*/true);
+
+      // Commit MUST succeed (ABI accepts the config); the drop is a
+      // display-layer degradation only.
+      const std::string warning = gui::PeekGuiWarning();
+      IM_CHECK(!warning.empty());
+      IM_CHECK(warning.find("color") != std::string::npos || warning.find("Color") != std::string::npos);
+      // The message MUST be distinct from the two existing ABI-overflow msgs
+      // (filter cap / color-class cap), else SetGuiWarning's identity-dedup
+      // would silently collapse them (regression anchor per plan §7 risk 3).
+      IM_CHECK(warning.find("This raypath color configuration exceeds its predicate") != std::string::npos);
+      IM_CHECK(warning.find("Simplify the color configuration") != std::string::npos);
+
+      // Precise count lock (code-review-01 Suggestion): 66 unique predicates - kMaxBits(64) = 2
+      // dropped. Ties the end-to-end GUI test to the same exact number the Step 5/7 unit tests
+      // assert, rather than only the message substring.
+      LUMICE_ColorOverflowInfo color_over{};
+      IM_CHECK(LUMICE_GetColorOverflowInfo(gui::g_server, &color_over) == LUMICE_OK);
+      IM_CHECK(color_over.component_overflow_count == 2);
+
+      // Cleanup.
+      gui::ClearGuiWarning();
+      gui::g_state.raypath_color.clear();
+      gui::g_server_poller.Stop();
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+      gui::g_state.run_intent = gui::RunIntent::kNone;
+      gui::g_state.committed_epoch = 0;
+      gui::g_state.dirty = false;
+    };
+  }
+
+  // task-gui-feedback-affordances code-review-01 Critical 1 regression anchor: a persistent
+  // color-overflow condition (unlike the FillLumiceConfig-REJECT branch covered by the sibling
+  // `overflow_auto_commit_dedup` test) goes through the commit-SUCCEEDED branch of DoRun. That
+  // branch used to call ClearGuiWarning() unconditionally before checking for a color overflow,
+  // which zeroed the identity-dedup state ahead of the comparison and made every auto-commit
+  // tick (user_initiated=false) reopen the modal even though the SAME overflow persisted —
+  // reproducing the "70ms slider drag freezes the UI" regression Step 2 fixed for the ABI-reject
+  // branch. This test drives two auto-commit ticks against the same 66-predicate overflow setup
+  // as `big_or_filter_with_color_overflow_surfaces_warning` and asserts the second tick does NOT
+  // respawn the modal.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "color_overflow_auto_commit_dedup");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ClearGuiWarning();
+      gui::g_server = LUMICE_CreateServer();
+      IM_CHECK(gui::g_server != nullptr);
+
+      gui::g_state.raypath_color.clear();
+      constexpr int kNumClasses = 3;
+      constexpr int kRefsPerClass = 22;
+      static_assert(kNumClasses * kRefsPerClass > 64, "must exceed ComponentTable::kMaxBits");
+      int uid = 0;
+      for (int c = 0; c < kNumClasses; ++c) {
+        gui::ColorClassConfig cls;
+        cls.color[0] = 1.0f - c * 0.2f;
+        cls.color[1] = 0.5f;
+        cls.color[2] = 0.0f + c * 0.2f;
+        cls.combine = 0;
+        cls.visible = true;
+        cls.solo = false;
+        for (int k = 0; k < kRefsPerClass; ++k, ++uid) {
+          gui::ColorClassRefConfig ref;
+          ref.layer_idx = 0;
+          ref.crystal_pool_id = 0;
+          ref.match_all = false;
+          if (uid < 64) {
+            const int f1 = 1 + (uid % 8);
+            const int f2 = 1 + (uid / 8);
+            ref.predicate_text = std::to_string(f1) + "-" + std::to_string(f2);
+          } else {
+            const int tail = uid - 63;
+            ref.predicate_text = "1-1-" + std::to_string(tail);
+          }
+          cls.match.push_back(ref);
+        }
+        gui::g_state.raypath_color.push_back(cls);
+      }
+
+      gui::g_state.sim.infinite = false;
+      gui::g_state.sim.ray_num_millions = 0.001f;
+
+      // First auto-commit tick: overflow persists → commit succeeds, color-degrade warning set.
+      gui::DoRun(/*user_initiated=*/false);
+      IM_CHECK(!gui::PeekGuiWarning().empty());
+      IM_CHECK(gui::IsGuiWarningPending());
+      const std::string first_msg = gui::PeekGuiWarning();
+
+      // Frame consumes OpenPopup; trigger cleared, message retained.
+      gui::internal_test::ConsumeGuiWarningPending();
+      IM_CHECK(!gui::IsGuiWarningPending());
+
+      // Second auto-commit tick with the SAME overflow: dedup MUST hold (no modal respawn).
+      gui::DoRun(/*user_initiated=*/false);
+      IM_CHECK_STR_EQ(gui::PeekGuiWarning().c_str(), first_msg.c_str());
+      IM_CHECK(!gui::IsGuiWarningPending());
+
+      // Cleanup.
+      gui::ClearGuiWarning();
+      gui::g_state.raypath_color.clear();
+      gui::g_server_poller.Stop();
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+      gui::g_state.run_intent = gui::RunIntent::kNone;
+      gui::g_state.committed_epoch = 0;
+      gui::g_state.dirty = false;
+    };
+  }
+
+  // task-gui-feedback-affordances Step 3 (AC4): the filter Edit modal live
+  // preview must render its "Clauses: N / <limit>" line for both the normal
+  // case and the overflow case (red-styled). This test opens the Edit modal,
+  // types an over-cap row (4 × 9-alt = 6561 clauses > 4096), yields frames so
+  // the immediate-mode preview runs — exercising the new PushStyleColor /
+  // PopStyleColor branch — then Cancels out. The primary assertion is that no
+  // ImGui style-stack assertion fires (branch balance is correct) and that
+  // the modal remains navigable. The precise clause-count value is locked by
+  // the sibling summarize_sop_expansion_delegates_to_commit_path unit test.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "live_preview_clause_count_overflow_no_crash");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      // Non-overflow first: a simple row keeps the preview in the disabled-text
+      // branch. Yield extra frames so ImGui commits at least one full render
+      // pass through the preview code.
+      ctx->ItemInputValue("**/##row_text_0", "3-5");
+      ctx->Yield(3);
+
+      // Now push into overflow territory: 4 factors × 9 alternatives each →
+      // 6561 clauses, well above LUMICE_MAX_CONFIG_CLAUSES = 4096.
+      ctx->ItemInputValue("**/##row_text_0",
+                          "1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4");
+      ctx->Yield(3);
+
+      // The Edit modal is still open and its Cancel item is still clickable —
+      // proving the preview render did not throw an ImGui assertion (which
+      // would tear down the modal / test).
+      IM_CHECK(ctx->ItemExists("**/" ICON_FA_XMARK " Cancel##edit_modal"));
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // task-gui-feedback-affordances Step 2 (AC3): a user-clicked Run always
+  // re-opens the warning modal when the overflow condition persists, even
+  // after the user dismissed the previous popup with OK. DoRun(true) calls
+  // ClearGuiWarning() before SetGuiWarning() so the identity-dedup does NOT
+  // swallow the second Run. Uses the same 4-factor × 9-alt raypath (6561
+  // would-be clauses > LUMICE_MAX_CONFIG_CLAUSES=4096) as the export_json
+  // overflow tests so the overflow trigger stays a single source of truth.
+  //
+  // We assert via IsGuiWarningPending() — the internal "OpenPopup pending"
+  // flag — rather than driving a full frame + clicking "OK", because:
+  //   1) The dedup semantics live entirely in SetGuiWarning/ClearGuiWarning
+  //      and their observable is precisely that flag transition.
+  //   2) Running frames while a modal is open makes the harness fight the
+  //      popup's input capture, obscuring the invariant this test is here
+  //      to lock.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "overflow_user_initiated_run_refires");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ClearGuiWarning();
+      gui::g_server = LUMICE_CreateServer();
+      IM_CHECK(gui::g_server != nullptr);
+
+      // Same over-cap recipe as import_export/export_json_rejects_overflow_filter:
+      // 4 raypath factors × 9 alternatives = 6561 clauses > 4096.
+      gui::SummandText row;
+      row.text = "1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4";
+      row.factors = {
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4;5;6;7;8;3-4" } },
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4;5;6;7;8;3-4" } },
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4;5;6;7;8;3-4" } },
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4;5;6;7;8;3-4" } },
+      };
+      gui::FilterConfig f;
+      f.name = "OverflowFilter";
+      f.param = gui::SumOfProducts{ row };
+      gui::g_state.filters.push_back(f);
+      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], gui::g_state.filters.back());
+
+      // First user Run: overflow → warning set + trigger set.
+      gui::DoRun(/*user_initiated=*/true);
+      IM_CHECK(!gui::PeekGuiWarning().empty());
+      IM_CHECK(gui::IsGuiWarningPending());
+      const std::string first_msg = gui::PeekGuiWarning();
+
+      // Simulate the frame that consumes OpenPopup (RenderGuiWarningPopup
+      // clears the trigger after calling OpenPopup) without touching the
+      // in-flight message — matches what happens after a real frame renders.
+      gui::internal_test::ConsumeGuiWarningPending();
+      IM_CHECK(!gui::PeekGuiWarning().empty());
+      IM_CHECK(!gui::IsGuiWarningPending());
+
+      // Second user Run with the same overflow: MUST re-open the modal.
+      gui::DoRun(/*user_initiated=*/true);
+      IM_CHECK_STR_EQ(gui::PeekGuiWarning().c_str(), first_msg.c_str());
+      IM_CHECK(gui::IsGuiWarningPending());
+
+      // Cleanup.
+      gui::ClearGuiWarning();
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+    };
+  }
+
+  // task-gui-feedback-affordances Step 2 (AC3): main-loop auto-commit
+  // (DoRun(user_initiated=false)) MUST preserve dedup so a persistent
+  // overflow condition re-detected every 70ms tick does not respawn the
+  // modal (which would freeze user interaction the moment a slider drag
+  // pushes them into overflow). Same overflow setup as the sibling test.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "overflow_auto_commit_dedup");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ClearGuiWarning();
+      gui::g_server = LUMICE_CreateServer();
+      IM_CHECK(gui::g_server != nullptr);
+
+      gui::SummandText row;
+      row.text = "1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4";
+      row.factors = {
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4;5;6;7;8;3-4" } },
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4;5;6;7;8;3-4" } },
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4;5;6;7;8;3-4" } },
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4;5;6;7;8;3-4" } },
+      };
+      gui::FilterConfig f;
+      f.name = "OverflowFilter";
+      f.param = gui::SumOfProducts{ row };
+      gui::g_state.filters.push_back(f);
+      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], gui::g_state.filters.back());
+
+      // First auto-commit tick: overflow → warning set + trigger set.
+      gui::DoRun(/*user_initiated=*/false);
+      IM_CHECK(!gui::PeekGuiWarning().empty());
+      IM_CHECK(gui::IsGuiWarningPending());
+
+      // Frame consumes OpenPopup; trigger cleared, message retained.
+      gui::internal_test::ConsumeGuiWarningPending();
+      IM_CHECK(!gui::IsGuiWarningPending());
+
+      // Second auto-commit tick with the SAME overflow: dedup MUST hold.
+      gui::DoRun(/*user_initiated=*/false);
+      IM_CHECK(!gui::IsGuiWarningPending());  // no modal respawn
+
+      gui::ClearGuiWarning();
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
     };
   }
 }

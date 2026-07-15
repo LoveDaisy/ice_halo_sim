@@ -79,8 +79,14 @@ using metal_test::ShouldSkipMetalTests;
 // Layout sanity — guards future struct edits (parity harness reuploads bytes
 // verbatim so any host-side reshape that changes sizeof must be intentional).
 TEST(DeviceFilterDescLayout, SizeFitsBudget) {
-  // Post-267.1b: 108B → 120B (or_clause_count reuses former _pad0;
-  // and_term_counts[8] + sub_desc_start appended for Complex filter support).
+  // task-device-flat-and-terms: `and_term_counts[8]` inline array retired
+  // (moved to a separate host-built flat buffer indexed by `and_terms_start`).
+  // `or_clause_count` was a uint8 (1B); it is now uint16 (2B) plus a trailing
+  // uint16 padding. Former `or_clause_count` position now holds a 1-byte
+  // `_pad_reserved`. Net swap: -8B (inline array) +4B (and_terms_start) +2B
+  // (or_clause_count widen) +2B (trailing pad) = 0B. Total stays 120B; assert
+  // the exact number so any host layout drift is caught early. The <256 belt
+  // is the coarser budget.
   EXPECT_EQ(sizeof(DeviceFilterDesc), static_cast<size_t>(120));
   EXPECT_LE(sizeof(DeviceFilterDesc), static_cast<size_t>(256));
 }
@@ -262,7 +268,7 @@ size_t DispatchParity(MetalHarness& h,
                       id<MTLBuffer> ray_cslot, id<MTLBuffer> ray_cid,
                       id<MTLBuffer> ray_dir, id<MTLBuffer> ray_filter,
                       id<MTLBuffer> out_match, const FilterMatchTestParams& prm,
-                      id<MTLBuffer> complex_sub_desc) {
+                      id<MTLBuffer> complex_sub_desc, id<MTLBuffer> and_term_counts) {
   @autoreleasepool {
     id<MTLBuffer> prm_buf = [h.device newBufferWithLength:sizeof(FilterMatchTestParams)
                                                   options:MTLResourceStorageModeShared];
@@ -282,6 +288,8 @@ size_t DispatchParity(MetalHarness& h,
     [enc setBuffer:out_match        offset:0 atIndex:9];
     [enc setBuffer:prm_buf          offset:0 atIndex:10];
     [enc setBuffer:complex_sub_desc offset:0 atIndex:11];
+    // task-device-flat-and-terms: parallel flat AND-term counts buffer.
+    [enc setBuffer:and_term_counts  offset:0 atIndex:12];
     NSUInteger tg = std::min<NSUInteger>(256, h.pso.maxTotalThreadsPerThreadgroup);
     [enc dispatchThreads:MTLSizeMake(prm.n, 1, 1) threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
     [enc endEncoding];
@@ -325,6 +333,9 @@ struct ParityFixture {
   // Flat Complex sub-spec descs. Each Complex slot in `descs` carries
   // sub_desc_start indexing here; non-Complex slots leave the field at 0.
   std::vector<DeviceFilterDesc> complex_sub_descs;
+  // task-device-flat-and-terms: parallel flat AND-term counts buffer indexed
+  // via each Complex parent's `and_terms_start`.
+  std::vector<uint8_t> and_term_counts;
   std::vector<std::unique_ptr<FilterSpec>> host_specs;
   std::vector<FilterConfig> filter_configs;  // kept alive for FilterSpec::Create
   AxisDistribution axis;
@@ -515,6 +526,29 @@ ParityFixture BuildFixture(bool d_applicable_axis) {
         FilterConfig::kFilterIn,
         { { SimpleFilterParam{ a }, SimpleFilterParam{ c } } }));
   }
+  // Complex-E — task-device-flat-and-terms: 20 OR-clauses × 1 AND, direct
+  // >8-clause coverage on the real Metal GPU (AC1's second evidence line
+  // alongside the host-shared-logic test). Face pairs are the same 20 real hex
+  // combinations the host-side test uses so any parity failure surfaces on the
+  // exact same fixture that the CPU-shared matcher already validates.
+  {
+    std::vector<std::vector<SimpleFilterParam>> or_clauses;
+    or_clauses.reserve(20);
+    static constexpr std::pair<IdType, IdType> kFacePairs[20] = {
+        {3, 5}, {3, 6}, {3, 7}, {3, 8}, {4, 5}, {4, 6}, {4, 7}, {4, 8},
+        {5, 3}, {5, 4}, {5, 6}, {5, 7}, {6, 3}, {6, 4}, {6, 5}, {6, 7},
+        {7, 3}, {7, 4}, {7, 5}, {8, 3},
+    };
+    for (const auto& fp : kFacePairs) {
+      RaypathFilterParam p;
+      p.raypath_ = std::vector<IdType>{ fp.first, fp.second };
+      or_clauses.push_back({ SimpleFilterParam{ p } });
+    }
+    push(MakeComplexConfig(
+        static_cast<uint8_t>(FilterConfig::kSymP | FilterConfig::kSymB | FilterConfig::kSymD),
+        FilterConfig::kFilterIn,
+        std::move(or_clauses)));
+  }
 
   fx.descs.reserve(fx.filter_configs.size());
   fx.host_specs.reserve(fx.filter_configs.size());
@@ -523,14 +557,16 @@ ParityFixture BuildFixture(bool d_applicable_axis) {
     DeviceFilterDesc desc = detail::BuildDeviceFilterDesc(cfg, fx.crystal, fx.axis);
     // Inline Complex sub-desc collection — mirrors EnsureFilterBuffers in
     // metal_trace_backend.mm so the fixture exercises the same layout
-    // production uploads.
+    // production uploads. task-device-flat-and-terms: `and_terms_start` +
+    // `and_term_counts` flat buffer added as a fifth argument.
     if (desc.type == kDeviceFilterTypeComplex) {
       const auto* cp = std::get_if<ComplexFilterParam>(&cfg.param_);
       assert(cp != nullptr && "Complex desc type without ComplexFilterParam variant");
       desc.sub_desc_start = static_cast<uint32_t>(fx.complex_sub_descs.size());
+      desc.and_terms_start = static_cast<uint32_t>(fx.and_term_counts.size());
       detail::BuildComplexSubDescs(*cp, fx.crystal, desc.symmetry,
                                    desc.sigma_a, desc.d_applicable != 0u,
-                                   fx.complex_sub_descs);
+                                   fx.complex_sub_descs, fx.and_term_counts);
     }
     fx.descs.push_back(desc);
     fx.host_specs.push_back(FilterSpec::Create(cfg, fx.crystal, fx.axis));
@@ -663,6 +699,12 @@ void RunSweep(MetalHarness& h, const ParityFixture& fx, std::mt19937& rng,
   // dispatch which only triggers on Complex filter slots.
   id<MTLBuffer> complex_sub_buf = MakeShared(h.device, fx.complex_sub_descs.data(),
                                              fx.complex_sub_descs.size() * sizeof(DeviceFilterDesc));
+  // task-device-flat-and-terms: parallel flat AND-term counts (buffer 12).
+  // Test harness uses an independent binding — there are plenty of free slots
+  // (production Metal packs it into buffer 27 via
+  // KernelParams.and_term_counts_base_offset to stay under the 30-buffer cap).
+  id<MTLBuffer> and_term_buf = MakeShared(h.device, fx.and_term_counts.data(),
+                                          fx.and_term_counts.size());
   auto rb = UploadRays(h.device, rays, fx.face_seq_cap);
 
   FilterMatchTestParams prm{};
@@ -671,7 +713,7 @@ void RunSweep(MetalHarness& h, const ParityFixture& fx, std::mt19937& rng,
   prm.check_mode = check_mode;
   DispatchParity(h, filter_desc_buf, offsets_buf, getfn_buf,
                  rb.path, rb.path_len, rb.cslot, rb.cid, rb.dir, rb.filter,
-                 rb.out_match, prm, complex_sub_buf);
+                 rb.out_match, prm, complex_sub_buf, and_term_buf);
 
   const uint8_t* dev_out = static_cast<const uint8_t*>([rb.out_match contents]);
   size_t mism = 0;
@@ -722,9 +764,11 @@ TEST(MetalFilterMatchParity, RandomSequencesAcrossAxisAndCheckMode) {
   size_t total = 0, mism = 0;
   for (int axis_d_app : { 0, 1 }) {
     ParityFixture fx = BuildFixture(axis_d_app != 0);
-    // 10 Simple + 4 Complex (A/B/C/D). When this count changes, update both
-    // BuildFixture and this constant.
-    constexpr size_t kFilterCnt = 14;
+    // 10 Simple + 5 Complex (A/B/C/D/E). When this count changes, update both
+    // BuildFixture and this constant. task-device-flat-and-terms added
+    // Complex-E (20 OR-clauses × 1 AND) so the sweep exercises >8 OR-clauses on
+    // the real GPU.
+    constexpr size_t kFilterCnt = 15;
     ASSERT_EQ(fx.descs.size(), kFilterCnt);
     // Guard against the "double pass-through" trap: if all Complex descs had
     // or_clause_count==0, both host (empty Complex → false) and device (early

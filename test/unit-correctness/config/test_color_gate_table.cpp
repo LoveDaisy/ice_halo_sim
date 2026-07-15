@@ -232,6 +232,30 @@ TEST(BuildColorGateTable, PredicatesBeyondBudgetGetKNoBit) {
   auto table = lumice::BuildColorGateTable(cfg, scene);
   ASSERT_EQ(table.entries_.size(), ComponentTable::kMaxBits + 1);
   EXPECT_EQ(table.entries_[ComponentTable::kMaxBits].bit_, ComponentTable::kNoBit);
+  // task-gui-feedback-affordances Step 5 (AC1): the drop count is carried out
+  // on the same table so ServerImpl::CommitConfig can persist it for the GUI
+  // modal surfacing. 65 predicates - 64 bits = 1 dropped.
+  EXPECT_EQ(table.component_overflow_count_, static_cast<size_t>(1));
+}
+
+// task-gui-feedback-affordances Step 5 (AC1): the additive component_overflow_
+// count_ field on ColorGateTable is 0 whenever no predicate overflowed —
+// existing (non-overflow) fixtures must not regress into false positives on
+// the new counter.
+TEST(BuildColorGateTable, ComponentOverflowCountZeroBelowBudget) {
+  SceneConfig scene = MakeScene({ { 1 } });
+  RaypathColorConfig cfg;
+  ColorClassConfig cls;
+  cls.color_[0] = 1.0f;
+  // 3 unique predicates on the same placement — well below the 64-bit cap.
+  for (size_t k = 0; k < 3; ++k) {
+    EntryExitFilterParam ee{};
+    ee.min_len_ = static_cast<size_t>(k + 1);
+    cls.match_.push_back(MakeRef(0, 1, SimpleFilterParam{ ee }));
+  }
+  cfg.classes_.push_back(std::move(cls));
+  auto table = lumice::BuildColorGateTable(cfg, scene);
+  EXPECT_EQ(table.component_overflow_count_, static_cast<size_t>(0));
 }
 
 // ---- pure-function idempotence ----

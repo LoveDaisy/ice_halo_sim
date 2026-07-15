@@ -87,6 +87,9 @@ struct Fixture {
   std::vector<uint8_t> getfn;
   uint32_t getfn_offsets[2] = { 0u, 0u };
   std::vector<DeviceFilterDesc> complex_subs;
+  // task-device-flat-and-terms: parallel flat AND-term counts buffer,
+  // indexed via each Complex parent's `and_terms_start`.
+  std::vector<uint8_t> and_term_counts;
   std::vector<FilterConfig> filter_configs;
   std::vector<std::unique_ptr<FilterSpec>> host_specs;
 };
@@ -190,6 +193,26 @@ Fixture BuildFixture(bool d_applicable_axis) {
     push(MakeComplexConfig(static_cast<uint8_t>(FilterConfig::kSymP | FilterConfig::kSymB | FilterConfig::kSymD),
                            FilterConfig::kFilterIn, { { SimpleFilterParam{ a }, SimpleFilterParam{ c } } }));
   }
+  // 9: task-device-flat-and-terms — big-OR Complex, 20 OR-clauses × 1 AND
+  // (raypath), sweeping realistic hex face pairs. Directly exercises the flat
+  // `and_term_counts_buf` path (host-inline array is gone) with a clause count
+  // well above the legacy 8-cap. AC1's primary evidence: >8-clause Complex on
+  // the shared device matcher must match FilterSpec::Check byte-for-byte.
+  {
+    std::vector<std::vector<SimpleFilterParam>> or_clauses;
+    or_clauses.reserve(20);
+    static constexpr std::pair<IdType, IdType> kFacePairs[20] = {
+      { 3, 5 }, { 3, 6 }, { 3, 7 }, { 3, 8 }, { 4, 5 }, { 4, 6 }, { 4, 7 }, { 4, 8 }, { 5, 3 }, { 5, 4 },
+      { 5, 6 }, { 5, 7 }, { 6, 3 }, { 6, 4 }, { 6, 5 }, { 6, 7 }, { 7, 3 }, { 7, 4 }, { 7, 5 }, { 8, 3 },
+    };
+    for (const auto& fp : kFacePairs) {
+      RaypathFilterParam p;
+      p.raypath_ = std::vector<IdType>{ fp.first, fp.second };
+      or_clauses.push_back({ SimpleFilterParam{ p } });
+    }
+    push(MakeComplexConfig(static_cast<uint8_t>(FilterConfig::kSymP | FilterConfig::kSymB | FilterConfig::kSymD),
+                           FilterConfig::kFilterIn, std::move(or_clauses)));
+  }
 
   fx.descs.reserve(fx.filter_configs.size());
   fx.host_specs.reserve(fx.filter_configs.size());
@@ -198,8 +221,9 @@ Fixture BuildFixture(bool d_applicable_axis) {
     if (desc.type == kDeviceFilterTypeComplex) {
       const auto* cp = std::get_if<ComplexFilterParam>(&cfg.param_);
       desc.sub_desc_start = static_cast<uint32_t>(fx.complex_subs.size());
+      desc.and_terms_start = static_cast<uint32_t>(fx.and_term_counts.size());
       detail::BuildComplexSubDescs(*cp, fx.crystal, desc.symmetry, desc.sigma_a, desc.d_applicable != 0u,
-                                   fx.complex_subs);
+                                   fx.complex_subs, fx.and_term_counts);
     }
     fx.descs.push_back(desc);
     fx.host_specs.push_back(FilterSpec::Create(cfg, fx.crystal, fx.axis));
@@ -213,6 +237,9 @@ Fixture BuildFixture(bool d_applicable_axis) {
   // always carries Complex entries).
   if (fx.complex_subs.empty()) {
     fx.complex_subs.push_back(DeviceFilterDesc{});
+  }
+  if (fx.and_term_counts.empty()) {
+    fx.and_term_counts.push_back(0u);
   }
   return fx;
 }
@@ -281,8 +308,8 @@ bool HostCheck(const Fixture& fx, const Ray& r) {
 }
 
 bool DeviceCheck(const Fixture& fx, const Ray& r) {
-  return lm_filter::DeviceFilterCheck(fx.descs[r.filter_idx], fx.complex_subs.data(), r.raw_poly.data(), r.path_len,
-                                      fx.getfn.data(), fx.getfn_offsets,
+  return lm_filter::DeviceFilterCheck(fx.descs[r.filter_idx], fx.complex_subs.data(), fx.and_term_counts.data(),
+                                      r.raw_poly.data(), r.path_len, fx.getfn.data(), fx.getfn_offsets,
                                       /*crystal_slot=*/0u, r.dir, static_cast<uint32_t>(r.crystal_config_id));
 }
 

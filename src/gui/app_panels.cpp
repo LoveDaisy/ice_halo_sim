@@ -171,7 +171,7 @@ void RenderTopBar(float window_width) {
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.55f, 0.2f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.35f, 0.1f, 1.0f));
     if (ImGui::Button(kRunLabel, ImVec2(run_stop_width, 0))) {
-      DoRun();
+      DoRun(/*user_initiated=*/true);
     }
     ImGui::PopStyleColor(3);
   }
@@ -275,6 +275,18 @@ void RenderTopBar(float window_width) {
   // New/Open/Save. Colors is the first occupant; future cross-cutting toggles
   // unrelated to file I/O or panel layout should land here rather than
   // competing for status-bar space.
+  //
+  // task-gui-feedback-affordances Step 1 (AC2): visually distinguish "has color
+  // classes" vs "no color classes" so the topbar signals whether coloring is
+  // configured before the window is opened. Derived state (empty check on
+  // raypath_color) — no new state source. Blue/purple tint avoids collision
+  // with Run (green) / Stop (red).
+  const bool tint_colors_button = ShouldTintColorsButton(g_state.raypath_color.empty());
+  if (tint_colors_button) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.30f, 0.35f, 0.65f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.40f, 0.45f, 0.75f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.25f, 0.28f, 0.55f, 1.0f));
+  }
   if (ImGui::Button(ICON_FA_PALETTE " Colors")) {
     // task-348.3 AC3 (⑦): apply the "default enable on open with no classes" rule
     // ONLY on the false→true transition of color_window_open. Doing it here (inside
@@ -287,6 +299,9 @@ void RenderTopBar(float window_width) {
     if (opening && ShouldDefaultEnableColorsOnOpen(g_state.raypath_color.empty())) {
       g_state.show_composite_preview = true;
     }
+  }
+  if (tint_colors_button) {
+    ImGui::PopStyleColor(3);
   }
 
   // task-colored-toggle-to-topbar (346.3): colored/full-spectrum display-time
@@ -1330,6 +1345,17 @@ std::string PeekGuiWarning() {
   return g_gui_warning_current;
 }
 
+// Test accessor: is a modal re-open pending on the next render? See app.hpp.
+bool IsGuiWarningPending() {
+  return g_gui_warning_trigger;
+}
+
+namespace internal_test {
+void ConsumeGuiWarningPending() {
+  g_gui_warning_trigger = false;
+}
+}  // namespace internal_test
+
 void RenderGuiWarningPopup() {
   if (g_gui_warning_trigger) {
     g_gui_warning_trigger = false;
@@ -1470,7 +1496,7 @@ void RenderSaveModifiedPopup(GLFWwindow* window) {
       ImGui::BeginDisabled();
     }
     if (ImGui::Button("Run first", ImVec2(100, 0))) {
-      DoRun();
+      DoRun(/*user_initiated=*/true);
       g_pending_save_kind = PendingSaveKind::kNone;
       // Abort any chained New/Open/Quit (see doc comment above) — Run doesn't
       // persist anything, so proceeding now would still discard the edit.
