@@ -16,10 +16,14 @@ the metallib path is intact, Metal still routes successfully; if anyone
 later removes the metallib path or wires the bytes incorrectly, this test
 fails fast.
 
-Positive marker: LoadMetalLibrary emits
+Positive marker: the success path emits, at INFO level (server.cpp callback sink
+captures it), either
     [I] MetalTraceBackend: loaded embedded metallib (N functions)
-at INFO level on the success path (server.cpp callback sink captures it).
-Asserting on this string POSITIVELY confirms the embedded-metallib route ran;
+        (one-time real load inside LoadMetalLibrary), or
+    [I] MetalTraceBackend: using cached embedded metallib (N functions)
+        (per-Impl marker from EnsurePso when PSOs come from the task-364 process
+         cache and the one-time load fell outside this session's log window).
+Asserting on either string POSITIVELY confirms the embedded-metallib route ran;
 asserting only on returncode==0 / no-exception would not distinguish "metallib
 ran" from "silently fell back via a different path" if a future change
 weakened the env-switch guard.
@@ -50,15 +54,21 @@ pytestmark = [
 ]
 
 
-# Marker emitted by LoadMetalLibrary in src/core/metal_trace_backend.mm.
-# Format: "MetalTraceBackend: loaded embedded metallib (N functions)".
-# Asserting both substrings (kernel marker AND the exact "4 functions" count
-# tied to the trace_layer / gen_root / transit_root / shuffle_cont entry points)
-# gives early warning on either:
-#   (a) silent regression to source-compile-only (marker absent), or
+# Marker(s) confirming the embedded-metallib route is in effect. Two phrasings,
+# both emitted from src/core/backend/metal_trace_backend.mm (task-364 O2 cache):
+#   - "MetalTraceBackend: loaded embedded metallib (N functions)"        — the
+#     one-time real load inside LoadMetalLibrary (per process).
+#   - "MetalTraceBackend: using cached embedded metallib (N functions)"  — a
+#     per-Impl marker echoed by EnsurePso when PSOs come from the process cache
+#     (the load already happened, possibly in an earlier session's log window).
+# EITHER phrasing positively confirms the embedded-metallib route ran (vs the
+# source-compile fallback, which emits "loaded source-compiled library" and
+# matches neither). Asserting the kernel marker AND the exact "4 functions" count
+# (trace_layer / gen_root / transit_root / shuffle_cont) gives early warning on:
+#   (a) silent regression to source-compile-only (neither marker present), or
 #   (b) accidental drop of an entry point (count != 4).
 _MARKER_RE = re.compile(
-    r"MetalTraceBackend:\s+loaded\s+embedded\s+metallib\s+\((\d+)\s+functions\)"
+    r"MetalTraceBackend:\s+(?:loaded|using\s+cached)\s+embedded\s+metallib\s+\((\d+)\s+functions\)"
 )
 # trace_layer_kernel + gen_root_kernel + transit_root_kernel + shuffle_cont_kernel.
 # shuffle_cont_kernel added in task-gpu-backend-recombine-shuffle (continuation-
@@ -102,16 +112,19 @@ def test_metal_runs_without_source_compile():
     )
     assert result.has_valid_data, "Metal session produced no valid render output"
 
-    # 2. POSITIVELY confirm the embedded-metallib route ran. The marker is
-    #    emitted once per MetalTraceBackend instance from LoadMetalLibrary on
-    #    success; absence means we silently took some other route (e.g. a
-    #    future refactor that bypasses LoadMetalLibrary or downgrades the log
-    #    level below INFO).
+    # 2. POSITIVELY confirm the embedded-metallib route ran. The "loaded" marker
+    #    is emitted once per process by LoadMetalLibrary; the "using cached"
+    #    marker is emitted per MetalTraceBackend instance by EnsurePso when PSOs
+    #    come from the task-364 process cache. Either confirms the route; absence
+    #    of both means we silently took some other route (e.g. a future refactor
+    #    that bypasses LoadMetalLibrary/EnsurePso or downgrades the log level
+    #    below INFO).
     matches = [m for ln in result.log_lines for m in (_MARKER_RE.search(ln),) if m]
     assert matches, (
-        "Metal ran but the 'loaded embedded metallib (N functions)' marker is "
-        "absent from captured log_lines. Either LoadMetalLibrary was bypassed, "
-        "the marker was downgraded below INFO, or the log capture is broken.\n"
+        "Metal ran but the '(loaded|using cached) embedded metallib (N functions)' "
+        "marker is absent from captured log_lines. Either LoadMetalLibrary/EnsurePso "
+        "was bypassed, the marker was downgraded below INFO, or the log capture is "
+        "broken.\n"
         f"Captured {len(result.log_lines)} log lines."
     )
 

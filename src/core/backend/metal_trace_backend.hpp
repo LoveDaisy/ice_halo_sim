@@ -148,6 +148,16 @@ class MetalTraceBackend : public TraceBackend {
   // (drop triggers R1 option B = split gate into its own dispatch).
   size_t TraceLayerKernelMaxThreadsForTest() const;
 
+  // [TEST-ONLY] task-metal-gui-commit-backpressure O2 AC1 whitebox: expose
+  // opaque device / trace_layer_kernel PSO pointer identity for the cross-
+  // instance regression guard (two MetalTraceBackend instances must observe
+  // the same underlying MTLDevice / MTLComputePipelineState pointers, proving
+  // the process-level cache is shared). Returns nullptr before BeginSession
+  // has populated Impl::device / Impl::pso via EnsureDevice / EnsurePso.
+  // Void-pointer return keeps the header pure C++ (no MTLDevice leak).
+  const void* GetDevicePtrForTest() const;
+  const void* GetPsoPtrForTest() const;
+
   // scrum-328.2 Step 3: test-only observation + injection points migrated to
   // `MetalTraceBackendTestHooks` (see `metal_trace_backend_test_hooks.hpp`).
   // Known exception retained on this class: `TraceLayerKernelMaxThreadsForTest`

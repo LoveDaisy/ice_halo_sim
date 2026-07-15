@@ -149,7 +149,29 @@ void DoOpen();
 void DoOpen(const std::filesystem::path& path);
 void DoNew();
 void CalibrateQualityThreshold();
-void DoRun();
+// task-metal-gui-commit-backpressure: DoRun returns `true` when this call reached
+// a terminal outcome that needs NO retry next tick — EITHER it issued a
+// LUMICE_CommitConfigStruct, OR it hit an unrecoverable pre-commit validation
+// failure (config overflow) where retrying would not help. (So `true` is NOT
+// strictly "CommitConfigStruct was called" — the overflow branch returns true
+// without reaching it.) It returns `false` ONLY when the backpressure gate
+// deferred this attempt because the current Run has not yet produced its first
+// consumed batch (avoids the commit-outpaces-batch starvation that made Metal
+// slider drag show 0 rays); the caller should keep g_state.dirty set so the next
+// tick retries with the latest values.
+// Callers that mirror main.cpp's 70ms throttle (dirty-clear / restart accounting)
+// MUST gate those side effects on the returned bool — see main.cpp,
+// test/gui/test_gui_main.cpp, test/gui/responsiveness/test_gui_perf.cpp.
+// Callers outside the auto-commit throttle (button clicks, DoOpen/DoNew paths)
+// are expected to run when the current Run is not RUNNING, so the gate
+// short-circuits open and they may discard the return value. This expectation is
+// NOT code-enforced: a non-throttle DoRun racing into the narrow
+// RUNNING-but-first-batch-not-yet-landed window would be gated and its commit
+// dropped with no automatic retry. That window is transient (first batch is
+// ~O(100ms)) and no current non-throttle caller is reachable during it; revisit
+// (add an explicit retry or assert) if a future UI path can trigger DoRun
+// mid-first-batch.
+bool DoRun();
 void DoStop();
 void DoRevert();
 void DoLoadBackground(GLFWwindow* window);

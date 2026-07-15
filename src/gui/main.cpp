@@ -293,8 +293,20 @@ int main(int argc, char** argv) {
           auto now = std::chrono::steady_clock::now();
           auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_commit).count();
           if (elapsed >= gui::kCommitIntervalMs) {
-            gui::g_state.dirty = false;
-            gui::DoRun();
+            // task-metal-gui-commit-backpressure: dirty is cleared iff DoRun actually
+            // pushed the commit. When the gate defers (Metal first batch not yet landed),
+            // DoRun returns false; keep dirty=true so the next 70ms tick retries with
+            // g_state's latest edits. `last_commit` always advances so the check cadence
+            // is unchanged (still 70ms retry window, plan §4 Step 4).
+            //
+            // ⚠️ MIRROR: test/gui/test_gui_main.cpp (g_enable_main_loop_commit path) and
+            // test/gui/responsiveness/test_gui_perf.cpp (slider_drag scenario) copy this
+            // same throttle+accounting block. Any change here MUST be mirrored there — the
+            // gated-vs-committed distinction affects restart counting and rays accounting.
+            bool committed = gui::DoRun();
+            if (committed) {
+              gui::g_state.dirty = false;
+            }
             last_commit = now;
           }
         }
