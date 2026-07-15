@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784100155159,
+  "lastUpdate": 1784100157450,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4818,54 +4818,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "c680dcc6a69433924731db037eb416920fd012a4",
-          "message": "Merge pull request #97 from LoveDaisy/feat/editor_window_ux\n\nfeat(gui): edit modal UX polish (raypath buffer + pyramid slider alignment)",
-          "timestamp": "2026-05-19T11:22:18+08:00",
-          "tree_id": "b896575144a36ab9ccd7b0d844d85b5edf0a7929",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/c680dcc6a69433924731db037eb416920fd012a4"
-        },
-        "date": 1779161219625,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 1005113.7,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1781034.9,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 1181417.6,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 977412.5,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "35e35f3275c09d626a2ebadc49c026d8d790ff17",
           "message": "Merge pull request #98 from LoveDaisy/feat/filter_performance\n\nfeat(core): canonical-form FilterSpec + fix per-ray symmetry hot path",
           "timestamp": "2026-05-20T09:41:53+08:00",
@@ -9602,6 +9554,54 @@ window.BENCHMARK_DATA = {
             "value": 644501.4,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2cbcffd86aaaf5817d43b9b2504d063d705d802c",
+          "message": "Merge pull request #199 from LoveDaisy/feat/painter-alpha-over\n\nfeat(painter-composite): painter 改亮度即 alpha 的 Porter-Duff over 合成 + 设默认",
+          "timestamp": "2026-07-15T15:15:11+08:00",
+          "tree_id": "8745cf535cc23d151ae929caa4af4ab41d872d10",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/2cbcffd86aaaf5817d43b9b2504d063d705d802c"
+        },
+        "date": 1784100157102,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 723534.1,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1182461,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 947133.1,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 607847.2,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
           }
         ]
       }
