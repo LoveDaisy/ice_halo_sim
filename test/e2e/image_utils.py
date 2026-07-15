@@ -58,17 +58,19 @@ def classify_pixels_by_color_direction(
     """Classify pixels of a composite image by their RGB direction.
 
     Contract (WHITE-BOX, keep in sync with compositor implementation):
-      This function assumes the composite image was produced by the
-      raypath-color compositor in `dominant` OR `painter` mode, where the
-      output pixel is `out = color_c * ey` for the winning class c (see
-      src/server/component_compositor.cpp CompositeDominantPixel /
-      CompositePainterPixel). Under that contract, a lit pixel's RGB
-      direction (after normalization) is EQUAL to the winning class's
-      `color_` direction, decoupled from the exposure scalar `ey`.
-      If the compositor's `additive` mode is used, this classifier is
-      NOT valid (linear class mix -> direction is a convex combination).
-      If the compositor's dominant/painter direction invariant changes,
-      this helper must be re-verified.
+      This function is valid ONLY for the compositor's `dominant` mode, where
+      the output pixel is `out = color_c * ey` for the single winning class c
+      (see src/server/component_compositor.cpp CompositeDominantPixel). Under
+      that contract, a lit pixel's RGB direction (after normalization) is
+      EQUAL to the winning class's `color_` direction, decoupled from the
+      exposure scalar `ey`.
+      It is NOT valid for `painter` mode: since the alpha-over redesign
+      (doc/gui-custom-spectrum-and-raypath-color.md §4.8) painter composites
+      `out = over(alpha_c * color_c)`, blending several classes, so a lit
+      pixel's direction is a convex combination rather than one class's color.
+      It is likewise NOT valid for `additive` mode (linear class mix ->
+      direction is a convex combination). If the compositor's `dominant`
+      direction invariant changes, this helper must be re-verified.
 
     Args:
       image_path: Path to a JPEG/PNG composite image.
