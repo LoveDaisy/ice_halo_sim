@@ -171,7 +171,18 @@ void CalibrateQualityThreshold();
 // ~O(100ms)) and no current non-throttle caller is reachable during it; revisit
 // (add an explicit retry or assert) if a future UI path can trigger DoRun
 // mid-first-batch.
-bool DoRun();
+//
+// task-gui-feedback-affordances Step 2 (AC3) — `user_initiated` distinguishes
+// user-clicked Run (top-bar Run button, "Run first" in the Save-Modified
+// popup) from the main-loop 70ms auto-commit path. When true, DoRun calls
+// ClearGuiWarning() BEFORE any conditional SetGuiWarning so a persistent
+// overflow condition re-opens the warning modal on every explicit Run;
+// when false, SetGuiWarning's identity-dedup is preserved so a slider drag
+// producing a stuck-overflow commit each 70ms tick does not reopen the modal
+// (which would freeze the UI). No default value — every call site must make
+// this choice explicit so a future new caller cannot silently inherit the
+// wrong dedup semantics.
+bool DoRun(bool user_initiated);
 void DoStop();
 void DoRevert();
 void DoLoadBackground(GLFWwindow* window);
@@ -300,6 +311,21 @@ void RenderImportWarningPopup();
 void SetGuiWarning(const std::string& msg);
 void ClearGuiWarning();
 std::string PeekGuiWarning();  // test accessor: current in-flight message ("" if none)
+// task-gui-feedback-affordances Step 2 (AC3) test accessor: is a modal re-open
+// pending on the next RenderGuiWarningPopup? True between SetGuiWarning (fresh
+// or after ClearGuiWarning) and the frame that consumes it via OpenPopup. Lets
+// tests observe DoRun(user_initiated=true)'s "force-reopen on every explicit
+// Run" contract without spinning up a full ImGui frame.
+bool IsGuiWarningPending();
+
+namespace internal_test {
+// task-gui-feedback-affordances Step 2 (AC3) test helper: consume the pending
+// modal-open flag exactly as RenderGuiWarningPopup would on the next frame,
+// without touching the in-flight message. Lets AC3 tests exercise the
+// "OK dismissed the popup but the persistent overflow remains" state without
+// running a full ImGui frame that would fight the popup's input capture.
+void ConsumeGuiWarningPending();
+}  // namespace internal_test
 void RenderGuiWarningPopup();
 void RenderLogPanel(float window_width, float window_height);
 

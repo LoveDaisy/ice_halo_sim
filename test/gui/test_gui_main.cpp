@@ -400,7 +400,7 @@ int main(int argc, char** argv) {
             LUMICE_GetStatsResults(gui::g_server, stats, 1);
             unsigned long snapshot_rays = stats[0].sim_ray_num;
 
-            bool committed = gui::DoRun();
+            bool committed = gui::DoRun(/*user_initiated=*/false);
             if (committed) {
               g_main_loop_cumulative_rays += snapshot_rays;
               g_main_loop_restart_count++;

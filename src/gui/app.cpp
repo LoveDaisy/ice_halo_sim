@@ -826,7 +826,7 @@ bool MaybeReconstructServerForBackend() {
   return true;
 }
 
-bool DoRun() {
+bool DoRun(bool user_initiated) {
   if (!g_server) {
     return true;
   }
@@ -948,6 +948,16 @@ bool DoRun() {
     if (PeekGuiWarning() != warning_msg) {
       GUI_LOG_WARNING("[GUI] DoRun: {} exceeds ABI limits ({}); keeping the previous configuration.",
                       color_overflow.class_index >= 0 ? "raypath color configuration" : "filter", log_locator);
+    }
+    // task-gui-feedback-affordances Step 2 (AC3): a user-clicked Run always
+    // opens the warning modal, even when the previous OK dismissed it and the
+    // overflow condition is unchanged. SetGuiWarning's identity-dedup would
+    // otherwise silently swallow the second Run. The auto-commit (70ms) path
+    // sets user_initiated=false so a stuck-overflow slider drag does not
+    // reopen the modal every tick and freeze the UI (app_panels.cpp:1315-1320
+    // records why "OK to clear" alone is wrong).
+    if (user_initiated) {
+      ClearGuiWarning();
     }
     SetGuiWarning(warning_msg);
     return true;

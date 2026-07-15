@@ -171,7 +171,7 @@ void RenderTopBar(float window_width) {
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.55f, 0.2f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.35f, 0.1f, 1.0f));
     if (ImGui::Button(kRunLabel, ImVec2(run_stop_width, 0))) {
-      DoRun();
+      DoRun(/*user_initiated=*/true);
     }
     ImGui::PopStyleColor(3);
   }
@@ -1345,6 +1345,17 @@ std::string PeekGuiWarning() {
   return g_gui_warning_current;
 }
 
+// Test accessor: is a modal re-open pending on the next render? See app.hpp.
+bool IsGuiWarningPending() {
+  return g_gui_warning_trigger;
+}
+
+namespace internal_test {
+void ConsumeGuiWarningPending() {
+  g_gui_warning_trigger = false;
+}
+}  // namespace internal_test
+
 void RenderGuiWarningPopup() {
   if (g_gui_warning_trigger) {
     g_gui_warning_trigger = false;
@@ -1485,7 +1496,7 @@ void RenderSaveModifiedPopup(GLFWwindow* window) {
       ImGui::BeginDisabled();
     }
     if (ImGui::Button("Run first", ImVec2(100, 0))) {
-      DoRun();
+      DoRun(/*user_initiated=*/true);
       g_pending_save_kind = PendingSaveKind::kNone;
       // Abort any chained New/Open/Quit (see doc comment above) — Run doesn't
       // persist anything, so proceeding now would still discard the edit.

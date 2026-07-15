@@ -2523,7 +2523,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       IM_CHECK(gui::g_server != nullptr);
       gui::g_state.sim.infinite = false;
       gui::g_state.sim.ray_num_millions = 0.5f;
-      gui::DoRun();  // real Run path: synchronous commit populates last_committed_state.
+      gui::DoRun(/*user_initiated=*/true);  // real Run path: synchronous commit populates last_committed_state.
       IM_CHECK(gui::g_state.last_committed_state.has_value());
       gui::g_state.dirty = false;  // DoRun doesn't touch dirty; pin a known pre-edit baseline.
       ctx->Yield(2);
@@ -3441,7 +3441,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
       // Act: change a crystal parameter, mark dirty, commit on test thread
       gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height = 2.5f;
       gui::g_state.dirty = true;
-      gui::DoRun();
+      gui::DoRun(/*user_initiated=*/true);
 
       // Assert: a new texture upload happens within timeout
       bool ok = WaitForSimRestartAtLeast(ctx, baseline, 1500);
@@ -3493,7 +3493,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
       // Act: change filter raypath, mark filter dirty, commit
       gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].MutableRaypathText() = "3-1-5-7";
       gui::g_state.MarkStructHardDirty();
-      gui::DoRun();
+      gui::DoRun(/*user_initiated=*/true);
 
       // Filter changes may take slightly longer (epoch-floor fence until re-commit); use 2000ms
       bool ok = WaitForSimRestartAtLeast(ctx, baseline, 2000);
@@ -3541,7 +3541,7 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine) {
       gui::g_state.sim.infinite = false;
       gui::g_state.sim.ray_num_millions = 0.5f;  // small enough that the run can finish
       gui::g_state.dirty = true;
-      gui::DoRun();
+      gui::DoRun(/*user_initiated=*/true);
 
       bool ok = WaitForSimRestartAtLeast(ctx, baseline, 2000);
 
@@ -5349,6 +5349,118 @@ void RegisterLinkedEntriesTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::nullopt), 1);
       // Pair (0, 0) is unique to entry 1.
       IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::optional<int>{ 0 }), 1);
+    };
+  }
+
+  // task-gui-feedback-affordances Step 2 (AC3): a user-clicked Run always
+  // re-opens the warning modal when the overflow condition persists, even
+  // after the user dismissed the previous popup with OK. DoRun(true) calls
+  // ClearGuiWarning() before SetGuiWarning() so the identity-dedup does NOT
+  // swallow the second Run. Uses the same 4-factor × 9-alt raypath (6561
+  // would-be clauses > LUMICE_MAX_CONFIG_CLAUSES=4096) as the export_json
+  // overflow tests so the overflow trigger stays a single source of truth.
+  //
+  // We assert via IsGuiWarningPending() — the internal "OpenPopup pending"
+  // flag — rather than driving a full frame + clicking "OK", because:
+  //   1) The dedup semantics live entirely in SetGuiWarning/ClearGuiWarning
+  //      and their observable is precisely that flag transition.
+  //   2) Running frames while a modal is open makes the harness fight the
+  //      popup's input capture, obscuring the invariant this test is here
+  //      to lock.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "overflow_user_initiated_run_refires");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ClearGuiWarning();
+      gui::g_server = LUMICE_CreateServer();
+      IM_CHECK(gui::g_server != nullptr);
+
+      // Same over-cap recipe as import_export/export_json_rejects_overflow_filter:
+      // 4 raypath factors × 9 alternatives = 6561 clauses > 4096.
+      gui::SummandText row;
+      row.text = "1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4";
+      row.factors = {
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4;5;6;7;8;3-4" } },
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4;5;6;7;8;3-4" } },
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4;5;6;7;8;3-4" } },
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4;5;6;7;8;3-4" } },
+      };
+      gui::FilterConfig f;
+      f.name = "OverflowFilter";
+      f.param = gui::SumOfProducts{ row };
+      gui::g_state.filters.push_back(f);
+      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], gui::g_state.filters.back());
+
+      // First user Run: overflow → warning set + trigger set.
+      gui::DoRun(/*user_initiated=*/true);
+      IM_CHECK(!gui::PeekGuiWarning().empty());
+      IM_CHECK(gui::IsGuiWarningPending());
+      const std::string first_msg = gui::PeekGuiWarning();
+
+      // Simulate the frame that consumes OpenPopup (RenderGuiWarningPopup
+      // clears the trigger after calling OpenPopup) without touching the
+      // in-flight message — matches what happens after a real frame renders.
+      gui::internal_test::ConsumeGuiWarningPending();
+      IM_CHECK(!gui::PeekGuiWarning().empty());
+      IM_CHECK(!gui::IsGuiWarningPending());
+
+      // Second user Run with the same overflow: MUST re-open the modal.
+      gui::DoRun(/*user_initiated=*/true);
+      IM_CHECK_STR_EQ(gui::PeekGuiWarning().c_str(), first_msg.c_str());
+      IM_CHECK(gui::IsGuiWarningPending());
+
+      // Cleanup.
+      gui::ClearGuiWarning();
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+    };
+  }
+
+  // task-gui-feedback-affordances Step 2 (AC3): main-loop auto-commit
+  // (DoRun(user_initiated=false)) MUST preserve dedup so a persistent
+  // overflow condition re-detected every 70ms tick does not respawn the
+  // modal (which would freeze user interaction the moment a slider drag
+  // pushes them into overflow). Same overflow setup as the sibling test.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "overflow_auto_commit_dedup");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ClearGuiWarning();
+      gui::g_server = LUMICE_CreateServer();
+      IM_CHECK(gui::g_server != nullptr);
+
+      gui::SummandText row;
+      row.text = "1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4";
+      row.factors = {
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4;5;6;7;8;3-4" } },
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4;5;6;7;8;3-4" } },
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4;5;6;7;8;3-4" } },
+        gui::Factor{ gui::RaypathParams{ "1;2;3;4;5;6;7;8;3-4" } },
+      };
+      gui::FilterConfig f;
+      f.name = "OverflowFilter";
+      f.param = gui::SumOfProducts{ row };
+      gui::g_state.filters.push_back(f);
+      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], gui::g_state.filters.back());
+
+      // First auto-commit tick: overflow → warning set + trigger set.
+      gui::DoRun(/*user_initiated=*/false);
+      IM_CHECK(!gui::PeekGuiWarning().empty());
+      IM_CHECK(gui::IsGuiWarningPending());
+
+      // Frame consumes OpenPopup; trigger cleared, message retained.
+      gui::internal_test::ConsumeGuiWarningPending();
+      IM_CHECK(!gui::IsGuiWarningPending());
+
+      // Second auto-commit tick with the SAME overflow: dedup MUST hold.
+      gui::DoRun(/*user_initiated=*/false);
+      IM_CHECK(!gui::IsGuiWarningPending());  // no modal respawn
+
+      gui::ClearGuiWarning();
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
     };
   }
 }

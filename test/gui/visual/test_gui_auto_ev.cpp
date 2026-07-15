@@ -155,7 +155,7 @@ void RegisterAutoEvRegressionTests(ImGuiTestEngine* engine) {
       // 4. DoRun → triggers SerializeCoreConfig (dual-fisheye override) → starts poller.
       // DoRun sets the intent (run_intent=kRunning); sim_state is reconcile-derived on the next
       // frame, so assert the intent here (the wait loop below drives frames to kSimulating/data).
-      gui::DoRun();
+      gui::DoRun(/*user_initiated=*/true);
       IM_CHECK_EQ((int)gui::g_state.run_intent, (int)gui::RunIntent::kRunning);
 
       // 5. Reset counter so the wait loop below starts from 0
