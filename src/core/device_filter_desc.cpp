@@ -92,27 +92,19 @@ struct SimpleVisitor {
   void operator()(const CrystalFilterParam& p) const { FillCrystal(p, out); }
 };
 
-// Fill the Complex filter's top-level fields (type / or_clause_count /
-// and_term_counts[]). Does NOT touch sub_desc_start — that field is owned by
-// the caller (`EnsureFilterBuffers`) which assigns it before appending the
-// sub-descs via `BuildComplexSubDescs` (plan §3 D5).
+// Fill the Complex filter's top-level fields (type / or_clause_count). Does
+// NOT touch sub_desc_start / and_terms_start — those fields are owned by the
+// caller (`EnsureFilterBuffers`) which assigns them before appending the
+// sub-descs and AND-term counts via `BuildComplexSubDescs`.
+//
+// task-device-flat-and-terms: the former inline `and_term_counts[8]` array
+// has been removed; per-OR-clause AND-term counts now live in a separate
+// host-built flat buffer that `BuildComplexSubDescs` appends into.
 void FillComplexDescTop(const ComplexFilterParam& p, DeviceFilterDesc& out) {
-  // The OR-clause count is bounded by the struct-level `and_term_counts[]`
-  // array length (MSL has no dynamic allocation). Raising the limit requires
-  // updating `kDeviceFilterMaxOrClauses` + the C++/MSL array length together.
-  assert(p.filters_.size() <= kDeviceFilterMaxOrClauses &&
-         "Complex filter exceeds kDeviceFilterMaxOrClauses (8); raise constant + arrays together");
+  assert(p.filters_.size() <= kDeviceFilterOrClauseSanityCap &&
+         "Complex filter exceeds kDeviceFilterOrClauseSanityCap sanity bound; check host ABI clamp");
   out.type = kDeviceFilterTypeComplex;
-  out.or_clause_count = static_cast<uint8_t>(p.filters_.size());
-  // and_term_counts[] is zero-initialized by `DeviceFilterDesc desc{}` at the
-  // top of BuildDeviceFilterDesc; only set the slots we use.
-  for (size_t i = 0; i < p.filters_.size(); ++i) {
-    // and_term_counts[i] is uint8_t (0..255); AND-term count is far smaller in
-    // practice (the canonical ms3 config uses 1 per clause). The 255 ceiling
-    // is sufficient; raising would only require widening this field.
-    assert(p.filters_[i].size() <= 255u && "Complex AND-term count exceeds uint8_t (255)");
-    out.and_term_counts[i] = static_cast<uint8_t>(p.filters_[i].size());
-  }
+  out.or_clause_count = static_cast<uint16_t>(p.filters_.size());
 }
 
 struct TopVisitor {
@@ -150,13 +142,18 @@ DeviceFilterDesc BuildDeviceFilterDesc(const FilterConfig& config, const Crystal
 }
 
 void BuildComplexSubDescs(const ComplexFilterParam& p, const Crystal& crystal, uint8_t symmetry, int sigma_a,
-                          bool d_applicable, std::vector<DeviceFilterDesc>& out_sub_descs) {
-  assert(p.filters_.size() <= kDeviceFilterMaxOrClauses &&
-         "Complex filter exceeds kDeviceFilterMaxOrClauses (8); raise constant + arrays together");
+                          bool d_applicable, std::vector<DeviceFilterDesc>& out_sub_descs,
+                          std::vector<uint8_t>& out_and_term_counts) {
+  assert(p.filters_.size() <= kDeviceFilterOrClauseSanityCap &&
+         "Complex filter exceeds kDeviceFilterOrClauseSanityCap sanity bound; check host ABI clamp");
   for (const auto& or_clause : p.filters_) {
-    // Same uint8_t bound as FillComplexDescTop; kept here so an unsynced caller
-    // (e.g. tests bypassing FillComplexDescTop) still trips the check.
+    // Same uint8_t bound as before; kept here so an unsynced caller trips it
+    // even if the top-level desc builder is bypassed.
     assert(or_clause.size() <= 255u && "Complex AND-term count exceeds uint8_t (255)");
+    // task-device-flat-and-terms: same pass as sub-desc collection appends the
+    // per-OR-clause AND-term count into the parallel flat buffer, avoiding a
+    // second traversal.
+    out_and_term_counts.push_back(static_cast<uint8_t>(or_clause.size()));
     for (const auto& and_entry : or_clause) {
       // Mirror ComplexSpec ctor (filter_spec.cpp:316): sub-spec inherits the
       // parent Complex's symmetry / sigma_a / d_applicable. and_entry.first

@@ -37,6 +37,13 @@ struct FilterMatchTestParams {
 //   9  out_match_buf         : uchar[n]
 //   10 params                : FilterMatchTestParams
 //   11 complex_sub_desc_buf  : DeviceFilterDesc[] (Complex sub-specs, flat)
+//   12 and_term_counts_buf   : uchar[] (task-device-flat-and-terms — parallel
+//                              flat AND-term counts, one uint8 per OR-clause
+//                              across every Complex parent; indexed via
+//                              `and_terms_start`). Independent MTLBuffer here
+//                              (test kernel has plenty of free bindings —
+//                              production Metal packs it into buffer 27 via
+//                              KernelParams.and_term_counts_base_offset).
 kernel void filter_match_test_kernel(
     device const DeviceFilterDesc* filter_desc        [[buffer(0)]],
     device const uint*             getfn_offsets      [[buffer(1)]],
@@ -50,6 +57,7 @@ kernel void filter_match_test_kernel(
     device uchar*                  out_match          [[buffer(9)]],
     constant FilterMatchTestParams& prm               [[buffer(10)]],
     device const DeviceFilterDesc* complex_sub_desc   [[buffer(11)]],
+    device const uchar*            and_term_counts    [[buffer(12)]],
     uint tid [[thread_position_in_grid]]) {
   if (tid >= prm.n) { return; }
   uint len = (uint)ray_path_len[tid];
@@ -67,10 +75,10 @@ kernel void filter_match_test_kernel(
   device const DeviceFilterDesc& f = filter_desc[fi];
   bool result;
   if (prm.check_mode == 0u) {
-    result = DeviceFilterMatch(f, complex_sub_desc, path_local, len, getfn_bytes, getfn_offsets,
+    result = DeviceFilterMatch(f, complex_sub_desc, and_term_counts, path_local, len, getfn_bytes, getfn_offsets,
                                (uint)ray_cslot[tid], dir_local, (uint)ray_cid[tid]);
   } else {
-    result = DeviceFilterCheck(f, complex_sub_desc, path_local, len, getfn_bytes, getfn_offsets,
+    result = DeviceFilterCheck(f, complex_sub_desc, and_term_counts, path_local, len, getfn_bytes, getfn_offsets,
                                (uint)ray_cslot[tid], dir_local, (uint)ray_cid[tid]);
   }
   out_match[tid] = result ? 1u : 0u;

@@ -22,9 +22,10 @@ using namespace metal;
 using namespace lm_pcg;
 
 // --- DeviceFilterDesc mirror (must match src/core/device_filter_desc.hpp) ---
-// Field-by-field bit-exact alignment of host layout. sizeof must be 120 bytes
-// post-267.1b (Complex filter trailer added: or_clause_count reuses former
-// _pad0 byte; and_term_counts[8] + sub_desc_start appended). Verified by
+// Field-by-field bit-exact alignment of host layout. task-device-flat-and-terms:
+// `and_term_counts[8]` inline array removed (moved to a separate flat buffer
+// `and_term_counts_buf` indexed via `and_terms_start`); `or_clause_count`
+// widened to ushort so 4096-clause physical Complex filters fit. Verified by
 // host-side static_assert; MSL has no static_assert across strings, so the
 // parity harness uploads a single host-built desc and the kernel reads it
 // back — any layout drift surfaces as a mismatch.
@@ -39,14 +40,16 @@ struct DeviceFilterDesc {
   uchar  canonical_len;
   uchar  has_entry;
   uchar  has_exit;
-  uchar  or_clause_count;        // Complex only; 0 for non-Complex (was _pad0)
+  uchar  _pad_reserved;          // former or_clause_count uint8 slot; padding-only now
   uint   min_len;
   uint   max_len;
   float  dir[3];
   float  radii_c;
   uint   crystal_id;
-  uchar  and_term_counts[8];     // Complex only: # AND-terms per OR-clause
   uint   sub_desc_start;         // Complex only: flat start index in complex_sub_desc_buf
+  uint   and_terms_start;        // Complex only: flat start index in and_term_counts_buf
+  ushort or_clause_count;        // Complex only; 0 for non-Complex
+  ushort _pad_or_tail;           // trailing padding
 };
 
 // Device filter type tags. Mirror kDeviceFilterType* in device_filter_desc.hpp.
@@ -263,6 +266,7 @@ static inline bool DeviceFilterMatchSimple(device const DeviceFilterDesc& f,
 // silently disable any deferred-construction Complex filter.
 static inline bool DeviceFilterMatchComplex(device const DeviceFilterDesc& f,
                                             device const DeviceFilterDesc* complex_sub_desc_buf,
+                                            device const uchar* and_term_counts_buf,
                                             thread const uchar* path, uint path_len,
                                             device const uchar* getfn_bytes,
                                             device const uint*  getfn_offsets,
@@ -272,7 +276,7 @@ static inline bool DeviceFilterMatchComplex(device const DeviceFilterDesc& f,
   if (f.or_clause_count == 0) { return false; }  // see comment above
   uint sub_idx = f.sub_desc_start;
   for (uint or_i = 0; or_i < (uint)f.or_clause_count; or_i++) {
-    uint and_n = (uint)f.and_term_counts[or_i];
+    uint and_n = (uint)and_term_counts_buf[f.and_terms_start + or_i];
     bool and_ok = true;
     for (uint and_j = 0; and_j < and_n; and_j++) {
       if (!DeviceFilterMatchSimple(complex_sub_desc_buf[sub_idx],
@@ -297,6 +301,7 @@ static inline bool DeviceFilterMatchComplex(device const DeviceFilterDesc& f,
 // here, so the MSL static call graph stays acyclic).
 static inline bool DeviceFilterMatch(device const DeviceFilterDesc& f,
                                      device const DeviceFilterDesc* complex_sub_desc_buf,
+                                     device const uchar* and_term_counts_buf,
                                      thread const uchar* path, uint path_len,
                                      device const uchar* getfn_bytes,
                                      device const uint*  getfn_offsets,
@@ -304,7 +309,7 @@ static inline bool DeviceFilterMatch(device const DeviceFilterDesc& f,
                                      thread const float* ray_dir,
                                      uint  ray_crystal_config_id) {
   if (f.type == kDevFilterTypeComplex) {
-    return DeviceFilterMatchComplex(f, complex_sub_desc_buf,
+    return DeviceFilterMatchComplex(f, complex_sub_desc_buf, and_term_counts_buf,
                                     path, path_len, getfn_bytes, getfn_offsets,
                                     crystal_slot, ray_dir, ray_crystal_config_id);
   }
@@ -316,13 +321,14 @@ static inline bool DeviceFilterMatch(device const DeviceFilterDesc& f,
 // filter_spec.hpp:42-45.
 static inline bool DeviceFilterCheck(device const DeviceFilterDesc& f,
                                      device const DeviceFilterDesc* complex_sub_desc_buf,
+                                     device const uchar* and_term_counts_buf,
                                      thread const uchar* path, uint path_len,
                                      device const uchar* getfn_bytes,
                                      device const uint*  getfn_offsets,
                                      uint  crystal_slot,
                                      thread const float* ray_dir,
                                      uint  ray_crystal_config_id) {
-  bool m = DeviceFilterMatch(f, complex_sub_desc_buf,
+  bool m = DeviceFilterMatch(f, complex_sub_desc_buf, and_term_counts_buf,
                              path, path_len, getfn_bytes, getfn_offsets,
                              crystal_slot, ray_dir, ray_crystal_config_id);
   return (f.action == 0u) ? m : !m;
@@ -348,6 +354,7 @@ constant uint kDevComponentStride = 8u;
 //   - other simple : 1 summand → bit 0 iff matched (mirrors non-None simple).
 static inline uint DeviceFilterSummandMask(device const DeviceFilterDesc& f,
                                            device const DeviceFilterDesc* complex_sub_desc_buf,
+                                           device const uchar* and_term_counts_buf,
                                            thread const uchar* path, uint path_len,
                                            device const uchar* getfn_bytes,
                                            device const uint*  getfn_offsets,
@@ -358,8 +365,11 @@ static inline uint DeviceFilterSummandMask(device const DeviceFilterDesc& f,
   if (f.type == kDevFilterTypeComplex) {
     uint mask = 0u;
     uint sub_idx = f.sub_desc_start;
+    // task-device-flat-and-terms: color-path helper, so `or_i <
+    // kDevComponentStride` stays as an explicit cap (color bit map + uint mask
+    // are still stride-limited to kDeviceFilterMaxOrClauses summands).
     for (uint or_i = 0u; or_i < (uint)f.or_clause_count && or_i < kDevComponentStride; or_i++) {
-      uint and_n = (uint)f.and_term_counts[or_i];
+      uint and_n = (uint)and_term_counts_buf[f.and_terms_start + or_i];
       bool and_ok = true;
       for (uint and_j = 0u; and_j < and_n; and_j++) {
         if (!DeviceFilterMatchSimple(complex_sub_desc_buf[sub_idx],
@@ -499,6 +509,12 @@ struct KernelParams {
   uint  color_class_count;
   ulong color_class_bits[kMaxColorClassesDeviceMsl];
   uchar color_class_combine[kMaxColorClassesDeviceMsl];
+  // task-device-flat-and-terms: byte offset (in bytes) into the
+  // complex_sub_desc_buf allocation where the AND-term counts region begins.
+  // The kernel reinterprets `gate_sub_desc_buf + and_term_counts_base_offset`
+  // as a `device const uchar*` (both regions share buffer 27 to stay within
+  // Metal's 30-buffer per-stage cap). Zero when no Complex filter is present.
+  uint  and_term_counts_base_offset;
 };
 
 kernel void trace_layer_kernel(
@@ -586,6 +602,14 @@ kernel void trace_layer_kernel(
   // task-331.5: load the carried component mask once (constant for the whole
   // in-crystal path, exactly like the wl_idx lifetime tag below).
   ulong carried_component = root_component[tid];
+
+  // task-device-flat-and-terms: the AND-term counts region shares buffer 27
+  // with the Complex sub-desc region (Metal's per-stage 30-buffer cap left no
+  // room for a separate binding). Host `EnsureFilterBuffers` packs
+  // `[DeviceFilterDesc...][uint8 and_term_counts...]` into one allocation and
+  // supplies the byte offset via `KernelParams::and_term_counts_base_offset`.
+  device const uchar* gate_and_term_counts =
+      reinterpret_cast<device const uchar*>(gate_sub_desc_buf) + prm.and_term_counts_base_offset;
 
   float dx = root_d[tid * 3u + 0u];
   float dy = root_d[tid * 3u + 1u];
@@ -747,7 +771,7 @@ kernel void trace_layer_kernel(
           // prm.crystal_id" for the full derivation; multi-MS filter parity
           // proves this is the working form. Do NOT "fix" back to crystal_id.)
           bool filter_pass = DeviceFilterCheck(
-              gate_filter_desc[gate_slot], gate_sub_desc_buf,
+              gate_filter_desc[gate_slot], gate_sub_desc_buf, gate_and_term_counts,
               path_local, gate_len,
               gate_getfn_bytes, gate_getfn_offsets,
               gate_slot, ray_dir_w, prm.crystal_config_id);
@@ -775,7 +799,7 @@ kernel void trace_layer_kernel(
                 bool matched_col = false;
                 uint c_smask = DeviceFilterSummandMask(
                     gate_filter_desc[prm.color_desc_offset + color_slot_idx],
-                    gate_sub_desc_buf,
+                    gate_sub_desc_buf, gate_and_term_counts,
                     path_local, gate_len, gate_getfn_bytes, gate_getfn_offsets,
                     gate_slot, ray_dir_w, prm.crystal_config_id, &matched_col);
                 for (uint k = 0u; k < kDevComponentStride; k++) {
@@ -899,7 +923,7 @@ kernel void trace_layer_kernel(
           uint  gate_slot_f = prm.ms_layer_idx * prm.filter_desc_max_ci + prm.crystal_id;
           float ray_dir_w_f[3] = { wx, wy, wz };
           bool filter_pass_f = DeviceFilterCheck(
-              gate_filter_desc[gate_slot_f], gate_sub_desc_buf,
+              gate_filter_desc[gate_slot_f], gate_sub_desc_buf, gate_and_term_counts,
               path_local_f, gate_len_f,
               gate_getfn_bytes, gate_getfn_offsets,
               gate_slot_f, ray_dir_w_f, prm.crystal_config_id);
@@ -926,7 +950,7 @@ kernel void trace_layer_kernel(
                 bool matched_col_f = false;
                 uint c_smask_f = DeviceFilterSummandMask(
                     gate_filter_desc[prm.color_desc_offset + color_slot_idx_f],
-                    gate_sub_desc_buf,
+                    gate_sub_desc_buf, gate_and_term_counts,
                     path_local_f, gate_len_f, gate_getfn_bytes, gate_getfn_offsets,
                     gate_slot_f, ray_dir_w_f, prm.crystal_config_id, &matched_col_f);
                 for (uint k = 0u; k < kDevComponentStride; k++) {
