@@ -227,7 +227,9 @@ TEST(RaypathColorConfig, JsonRoundTripDefaultModeBareArray) {
 
   auto restored = j.get<RaypathColorConfig>();
   ASSERT_EQ(restored.classes_.size(), 2u);
-  EXPECT_EQ(restored.mode_, "dominant");
+  // task-painter-alpha-over-composite (doc §4.8): default mode is now painter;
+  // bare-array wire form defaults to it via kDefaultCompositeMode.
+  EXPECT_EQ(restored.mode_, "painter");
   EXPECT_FLOAT_EQ(restored.classes_[0].color_[0], 1.0f);
   EXPECT_FLOAT_EQ(restored.classes_[1].color_[1], 1.0f);
   EXPECT_TRUE(std::holds_alternative<NoneFilterParam>(restored.classes_[0].match_[0].predicate_));
@@ -262,7 +264,9 @@ TEST(RaypathColorConfig, EmptyJsonRoundTrip) {
   EXPECT_EQ(j.size(), 0u);
   auto restored = j.get<RaypathColorConfig>();
   EXPECT_TRUE(restored.classes_.empty());
-  EXPECT_EQ(restored.mode_, "dominant");
+  // Default construction and empty-array round-trip both resolve to
+  // kDefaultCompositeMode (painter per doc §4.8).
+  EXPECT_EQ(restored.mode_, "painter");
 }
 
 // ---- ConfigManager wiring: backward compatibility ----

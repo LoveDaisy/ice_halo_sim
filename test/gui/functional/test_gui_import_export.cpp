@@ -2310,7 +2310,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       lumice::ConfigColorGuard cfg_guard(cfg);
       IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
       IM_CHECK_EQ(cfg.raypath_color_count, 0);
-      IM_CHECK_EQ(cfg.raypath_color_mode, 0);
+      // task-painter-alpha-over-composite (doc §4.8): GUI default is now painter.
+      IM_CHECK_EQ(cfg.raypath_color_mode, LUMICE_COLOR_MODE_PAINTER);
     };
   }
   {
@@ -2948,7 +2949,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
   {
-    // Import via bare-array wire shape (dominant-only, no {mode, classes} wrapper).
+    // Import via bare-array wire shape (default-mode, no {mode, classes} wrapper).
+    // task-painter-alpha-over-composite (doc §4.8): bare-array default is now painter.
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_bare_array_wire_import");
     t->TestFunc = [](ImGuiTestContext*) {
       ResetTestState();
@@ -2968,7 +2970,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       })";
       gui::GuiState loaded = gui::InitDefaultState();
       IM_CHECK(gui::DeserializeFromJson(js, loaded));
-      IM_CHECK_EQ(loaded.raypath_color_mode, LUMICE_COLOR_MODE_DOMINANT);
+      IM_CHECK_EQ(loaded.raypath_color_mode, LUMICE_COLOR_MODE_PAINTER);
       IM_CHECK_EQ(static_cast<int>(loaded.raypath_color.size()), 1);
       IM_CHECK_EQ(loaded.raypath_color[0].color[0], 1.0f);
       IM_CHECK_EQ(static_cast<int>(loaded.raypath_color[0].match.size()), 1);
