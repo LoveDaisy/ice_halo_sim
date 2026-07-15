@@ -30,10 +30,26 @@ than a statistical hope:
     saturated -> nearly all lit pixels have BOTH R and B nonzero.
 
   * dominant mode (same config wrapped in ``{"mode": "dominant", "classes": [...]}``):
-    ``CompositeDominantPixel`` at src/server/component_compositor.cpp:76 uses
-    ``if (ey > best_ey)`` (STRICT greater-than) walking classes in list order
-    -> equal Y-lane values keep the list-first (RED) class as winner -> B
-    channel is exactly zero on every lit pixel.
+    ``CompositeDominantPixel`` uses ``if (ey > best_ey)`` (STRICT greater-than)
+    walking classes in list order -> equal Y-lane values keep the list-first
+    (RED) class as winner -> B channel is exactly zero on every lit pixel.
+
+Why the two lanes are bit-for-bit equal (white-box, platform-independent)
+-------------------------------------------------------------------------
+``RenderConsumer::AccumulateColorClassLanes`` walks rays in an outer loop and,
+per ray, adds the SAME scalar ``y`` to every class lane whose predicate is
+satisfied (``lane_y_[c][pidx] += y``). RED and BLUE carry the IDENTICAL match
+predicate, so for every ray ``satisfied`` is identical for both classes and
+each lane receives the exact same sequence of float additions in the same
+order. The two lanes are therefore bit-identical regardless of worker-thread
+scheduling or reduction order -- any float non-associativity affects both lanes
+symmetrically and cancels. Hence ``ey_RED == ey_BLUE`` exactly, on any
+platform, and the strict-`>` tie-break deterministically picks RED, so the
+dominant B channel is exactly 0. This is why the dominant tolerance below is a
+hard zero rather than an epsilon (plan §7 risk 2 considered an epsilon; the
+accumulation-symmetry proof makes it unnecessary -- a nonzero B channel would
+be a genuine tie-break / accumulation regression worth failing on, not float
+noise). The PR CI run validates this across Ubuntu/macOS/Windows before merge.
 
 Structural assertion (see plan.md §3 "Key design point 2")
 ----------------------------------------------------------
@@ -89,8 +105,6 @@ if HAS_PILLOW:
 
 CONFIG = get_project_root() / "test" / "e2e" / "configs" / "painter_default_overlap.json"
 
-EXPECTED_DIMS = (128, 64)
-
 LUMINANCE_FLOOR = 8
 
 PAINTER_BOTH_NZ_FRAC_MIN = 0.90
@@ -125,8 +139,11 @@ class TestPainterDefaultComposite(LumiceTestCase):
         enough here; the blend-vs-occlude structural assertion lives in the
         next test.
         """
-        if not CONFIG.exists():
-            self.skipTest(f"{CONFIG} not found")
+        self.assertTrue(
+            CONFIG.exists(),
+            f"fixture {CONFIG} missing -- this regression guard must FAIL "
+            f"(not silently skip) if the painter-default fixture is deleted/moved",
+        )
 
         result = self.run_lumice(
             ["-f", str(CONFIG), "-o", self.output_dir, "--format", "png"]
@@ -148,10 +165,13 @@ class TestPainterDefaultComposite(LumiceTestCase):
         self.assertGreater(mono.stat().st_size, 0, f"{mono} is empty")
 
         if HAS_PILLOW:
+            with open(CONFIG) as f:
+                res = json.load(f)["render"][0]["resolution"]
+            expected_dims = (res[0], res[1])
             self.assertEqual(
                 get_dimensions(str(composite)),
-                EXPECTED_DIMS,
-                "composite resolution mismatch",
+                expected_dims,
+                "composite resolution must match config render[0].resolution",
             )
 
     def test_painter_blends_dominant_occludes(self):
@@ -162,8 +182,11 @@ class TestPainterDefaultComposite(LumiceTestCase):
         """
         if not HAS_PILLOW:
             self.skipTest("Pillow not available")
-        if not CONFIG.exists():
-            self.skipTest(f"{CONFIG} not found")
+        self.assertTrue(
+            CONFIG.exists(),
+            f"fixture {CONFIG} missing -- this regression guard must FAIL "
+            f"(not silently skip) if the painter-default fixture is deleted/moved",
+        )
 
         painter_out = Path(self.output_dir) / "painter"
         painter_out.mkdir()
@@ -231,10 +254,4 @@ class TestPainterDefaultComposite(LumiceTestCase):
             f"{DOMINANT_BOTH_NZ_MAX} (lit={d_lit}); dominant tie-break in "
             f"CompositeDominantPixel appears to have changed from strict `>` "
             f"or list-first walk order.",
-        )
-
-        self.assertGreater(
-            p_frac, d_frac + 0.5,
-            f"painter blend fraction ({p_frac:.4f}) not clearly separated "
-            f"from dominant ({d_frac:.4f})",
         )
