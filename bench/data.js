@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784159462411,
+  "lastUpdate": 1784159464544,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9620,50 +9620,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "2506276291a8c48473a44af1f0e849671d260ff4",
-          "message": "Merge pull request #100 from LoveDaisy/fix/capi\n\nfix(c-api): guard sentinel write past max_count + slow regression test",
-          "timestamp": "2026-05-20T16:47:27+08:00",
-          "tree_id": "64f28a12c3e3144dd31b56a51b4ab9f90d1e4a96",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/2506276291a8c48473a44af1f0e849671d260ff4"
-        },
-        "date": 1779267140077,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 87.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 74.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 71.9,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 65.7,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "dec91f357ae70588ef872acc48f9e3268e0d21aa",
           "message": "Merge pull request #101 from LoveDaisy/fix/capi_shared_lib\n\nfix(gui-shared-lib): expose XyzToSrgbUint8 via C API; restore GUI/core boundary",
           "timestamp": "2026-05-20T18:14:57+08:00",
@@ -14003,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 94.7,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6ee81825abca90286b1eaef923f6aeaaaabae056",
+          "message": "Merge pull request #202 from LoveDaisy/feat/filter-form-big-or\n\nfeat: 放开 filter OR-clause 上限 8/16→4096(纯过滤,染色 mask 不动)",
+          "timestamp": "2026-07-16T07:43:52+08:00",
+          "tree_id": "c02e2eebc9625ec984d3d85fbb779cf8f25ea060",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/6ee81825abca90286b1eaef923f6aeaaaabae056"
+        },
+        "date": 1784159463852,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 80.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96.5,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 92.6,
             "unit": "%"
           }
         ]
