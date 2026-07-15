@@ -178,10 +178,15 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 // Discrete-spectrum entry cap. Mirrors core wl_pool.hpp::kWlPoolSizeMax (255).
 #define LUMICE_MAX_CONFIG_SPECTRUM_ENTRIES 255
 // Complex (sum-of-products) filter composition bounds. See LUMICE_ComplexComposition.
-// These are ABI ceilings baked into the struct layout; widen (breaking bump) if needed.
-#define LUMICE_MAX_CONFIG_COMPLEX 32  // max complex-filter composition records per config
-#define LUMICE_MAX_CONFIG_CLAUSES 16  // max OR clauses per complex filter
-#define LUMICE_MAX_CONFIG_TERMS 8     // max AND terms per clause
+// LUMICE_MAX_CONFIG_COMPLEX remains an ABI ceiling baked into the LUMICE_Config layout
+// (bounds the inline compositions[] array). LUMICE_MAX_CONFIG_CLAUSES / _TERMS are no
+// longer inline-array dimensions (v4.9, task-host-abi-cpu-caps): clause/term storage is
+// heap-allocated via LUMICE_CompositionSetClauses, and these two constants are pure
+// sanity ceilings that cap a single filter's OR/AND fan-out (defensive DoS bound against
+// malformed .lmc/JSON input). Widen (breaking bump) if needed.
+#define LUMICE_MAX_CONFIG_COMPLEX 32    // max complex-filter composition records per config
+#define LUMICE_MAX_CONFIG_CLAUSES 4096  // sanity ceiling: max OR clauses per complex filter
+#define LUMICE_MAX_CONFIG_TERMS 64      // sanity ceiling: max AND terms per clause
 // Raypath color-class (Design 2, task-342.2) ABI bounds. Same "widen (breaking bump)" rule as
 // LUMICE_MAX_CONFIG_COMPLEX / _CLAUSES / _TERMS. LUMICE_MAX_CONFIG_COLOR_CLASSES upper-aligns
 // with core ComponentTable::kMaxBits (64), the deduped predicate-atom budget of a scene.
@@ -289,15 +294,36 @@ typedef struct LUMICE_FilterParam_ {
 
 // Sum-of-products composition for a complex filter, referenced by
 // LUMICE_FilterParam.composition_index. The outer level is an OR over clauses; each clause
-// is an AND over its terms; each term (clauses[c][t]) is the ID of a SIMPLE filter in the
-// same config's filters[] pool (referenced by id — reorder-robust — not by array index;
-// a term may never reference another complex filter, matching core config semantics).
+// is an AND over its terms; each term is the ID of a SIMPLE filter in the same config's
+// filters[] pool (referenced by id — reorder-robust — not by array index; a term may never
+// reference another complex filter, matching core config semantics).
 // INVARIANT: compositions[] is rebuilt wholesale together with its host LUMICE_Config;
 // records are not individually reordered (composition_index is a pool index valid only
 // within one config snapshot). Consumers (e.g. GUI) must respect this whole-rebuild model.
+//
+// BREAKING (v4.9, task-host-abi-cpu-caps): storage layout changed from inline
+// `clauses[16][8]` / `term_counts[16]` to a pair of owned heap pointers with a
+// clause-major flat encoding. Rationale: at 16×8 inline the ceiling was too low for
+// real "OR of several hundred raypaths" use cases; naively widening the inline array
+// (e.g. to 4096×64) would push LUMICE_Config well past its 160 KB stack budget and
+// re-run the raypath_color[64] stack-overflow that task-344 already fixed on the
+// color path. Callers now populate one record via LUMICE_CompositionSetClauses and
+// must release via LUMICE_CompositionReleaseClauses (or via LUMICE_ConfigReleaseCompositions
+// / the C++ RAII guard lumice::ConfigOwningGuard). Do NOT copy this struct by value —
+// term_ids/term_counts are owning pointers; aliasing copies would double-free on double
+// Release (enforced by scripts/check_policies.py's `no-config-by-value-copy` gate).
+//
+// Fields:
+//   term_ids     — owned; flat array of simple-filter IDs, clause-major
+//                  (clause 0's terms, then clause 1's terms, …). Length = sum(term_counts[0..clause_count)).
+//   term_counts  — owned; term_counts[c] is the AND-term count of clause c. Length = clause_count.
+//   clause_count — number of OR clauses in this composition. 0 is a valid "OR of nothing" state
+//                  (both pointers nullptr); >0 requires both pointers non-null.
+//
+// Use LUMICE_CompositionClauseTerms to iterate a specific clause without recomputing the offset.
 typedef struct LUMICE_ComplexComposition_ {
-  int clauses[LUMICE_MAX_CONFIG_CLAUSES][LUMICE_MAX_CONFIG_TERMS];  // simple-filter IDs
-  int term_counts[LUMICE_MAX_CONFIG_CLAUSES];                       // number of terms in each clause
+  int* term_ids;     // owned; flat AND-term simple-filter IDs, clause-major (see block comment)
+  int* term_counts;  // owned; term_counts[c] = clause c's AND-term count; length == clause_count
   int clause_count;
 } LUMICE_ComplexComposition;
 
@@ -439,13 +465,23 @@ typedef struct LUMICE_RenderParam_ {
 // ~354 KB and pushed `LUMICE_Config` to 467 KB, which overflowed the ImGui test engine's
 // ~512 KB thread stack when two configs coexisted in one function. Callers now allocate via
 // `LUMICE_ConfigCreateColorClasses` and must release via `LUMICE_ConfigReleaseColorClasses`
-// (or via a C++ RAII guard such as `lumice::ConfigColorGuard`; see
+// (or via a C++ RAII guard such as `lumice::ConfigOwningGuard`; see
 // `src/include/lumice_config_scope.hpp`). Layout changed; callers must recompile.
+// BREAKING (v4.9, task-host-abi-cpu-caps): LUMICE_ComplexComposition's clause/term storage
+// moved off the inline layout onto a pair of owning heap pointers (term_ids / term_counts).
+// The outer `compositions[LUMICE_MAX_CONFIG_COMPLEX]` inline array is retained; only the
+// intra-record clause/term storage was heap-ified — which SHRINKS sizeof(LUMICE_Config)
+// (each record drops from ~580 B inline to ~24 B ptr+count). Callers populate a record via
+// LUMICE_CompositionSetClauses and release per-record via LUMICE_CompositionReleaseClauses
+// or config-wide via LUMICE_ConfigReleaseCompositions; the C++ RAII guard
+// `lumice::ConfigOwningGuard` releases both raypath_color AND compositions in one shot.
 //
 // Do not copy this struct by value (assignment, by-value parameter, or storing it in a
-// container) — `raypath_color` is an owning heap pointer; copies alias the same allocation
-// and cause double-free on double Release. Pass `LUMICE_Config*` or `const LUMICE_Config&`
-// instead. See LUMICE_ConfigCreateColorClasses / LUMICE_ConfigReleaseColorClasses.
+// container) — `raypath_color` AND each `compositions[i].term_ids/term_counts` are owning
+// heap pointers; copies alias the same allocations and cause double-free on double Release.
+// Pass `LUMICE_Config*` or `const LUMICE_Config&` instead. See
+// LUMICE_ConfigCreateColorClasses / LUMICE_ConfigReleaseColorClasses,
+// LUMICE_CompositionSetClauses / LUMICE_ConfigReleaseCompositions.
 typedef struct LUMICE_Config_ {
   // Crystals
   LUMICE_CrystalParam crystals[LUMICE_MAX_CONFIG_CRYSTALS];
@@ -507,6 +543,11 @@ typedef struct LUMICE_Config_ {
 // the inline layout onto the heap. Measured sizeof(LUMICE_Config) drops from 467 KB to
 // ~113 KB (plan §3 point 5); the 160 KB ceiling keeps ~40 % headroom for future fields
 // while still catching accidental re-inlining or unbounded array additions early.
+// v4.9 (task-host-abi-cpu-caps): LUMICE_ComplexComposition's inline `clauses[16][8]` /
+// `term_counts[16]` (~580 B/record × 32 records ≈ 18.6 KB) moved off inline onto per-record
+// heap pointers (24 B/record × 32 records = 768 B); measured sizeof(LUMICE_Config) drops from
+// ~113 KB to ~96 KB (~98 280 B on this platform), so the 160 KB ceiling still holds with even
+// more headroom than pre-v4.9.
 #if defined(__cplusplus)
 static_assert(sizeof(LUMICE_Config) <= 160u * 1024u,
               "LUMICE_Config exceeded its 160 KB ABI ceiling — either shrink a field or bump the ceiling deliberately");
@@ -541,8 +582,8 @@ LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_C
 // Ownership contract: whether the caller invokes Create directly OR indirectly triggers
 // allocation via LUMICE_ParseConfigString / LUMICE_ParseConfigFile (both allocate
 // implicitly based on the parsed JSON), the caller MUST call Release once done with
-// `cfg`. In C++ code, prefer the `lumice::ConfigColorGuard` RAII wrapper in
-// `src/include/lumice_config_scope.hpp`.
+// `cfg`. In C++ code, prefer the `lumice::ConfigOwningGuard` RAII wrapper in
+// `src/include/lumice_config_scope.hpp` (also releases compositions).
 LUMICE_ColorClass* LUMICE_ConfigCreateColorClasses(LUMICE_Config* cfg, int count);
 
 // Release the raypath_color allocation owned by `cfg`, if any. Idempotent and null-safe:
@@ -551,6 +592,63 @@ LUMICE_ColorClass* LUMICE_ConfigCreateColorClasses(LUMICE_Config* cfg, int count
 //   - Otherwise → free(cfg->raypath_color), then nullptr / count=0.
 // Safe to call multiple times; safe to call on a freshly zero-initialized LUMICE_Config.
 void LUMICE_ConfigReleaseColorClasses(LUMICE_Config* cfg);
+
+// =============== Complex-Composition storage lifecycle (task-host-abi-cpu-caps, BREAKING v4.9) ===============
+// Populate `comp` in one shot from an application-owned (clause_count, term_counts[], term_ids[])
+// triple. This is the ONLY supported writer for the composition storage — direct field writes
+// (previously legal against the old inline `clauses[16][8]`) are no longer defined.
+//
+// Semantics:
+//   - `comp == nullptr` → returns LUMICE_ERR_NULL_ARG.
+//   - `clause_count < 0` → returns LUMICE_ERR_INVALID_CONFIG, `comp` left untouched.
+//   - `clause_count > 0 && (term_counts == nullptr || term_ids == nullptr)` → LUMICE_ERR_NULL_ARG.
+//   - Any `term_counts[i] < 0` → LUMICE_ERR_INVALID_CONFIG (full clause-count validation runs
+//     before any allocation; `comp` untouched on rejection).
+//   - `clause_count == 0` → release any existing allocation and land in the "OR of nothing"
+//     state (term_ids/term_counts nullptr, clause_count 0). term_counts/term_ids inputs
+//     are ignored in this branch.
+//   - `clause_count > 0` → this call is CREATE-OR-REPLACE: if `comp` already held a prior
+//     allocation, it is released before the new one is allocated. On OOM, `comp` falls back
+//     to the "OR of nothing" state (fully-cleared, safe to Release again) and the function
+//     returns LUMICE_ERR_INVALID_CONFIG — mirrors LUMICE_ConfigCreateColorClasses's OOM policy.
+//   - `term_ids` must be a clause-major flat array of length `sum(term_counts[0..clause_count))`.
+//     Elements are simple-filter IDs; reference-integrity checks (each id resolves to an
+//     existing SIMPLE filter in the enclosing LUMICE_Config) are the CALLER's responsibility
+//     (the c_api / GUI writers already run this pre-check; see LUMICE_CommitConfigStruct).
+//   - Allocator is calloc/free; callers must eventually release via
+//     LUMICE_CompositionReleaseClauses (or its config-wide sibling / RAII guard).
+LUMICE_ErrorCode LUMICE_CompositionSetClauses(LUMICE_ComplexComposition* comp, int clause_count, const int* term_counts,
+                                              const int* term_ids);
+
+// Release the term_ids / term_counts allocations owned by `comp`, if any. Idempotent and null-safe:
+//   - `comp == nullptr` → no-op.
+//   - Otherwise → free both pointers (either may already be null), then leave `comp` in the
+//     "OR of nothing" state (both nullptr, clause_count=0).
+void LUMICE_CompositionReleaseClauses(LUMICE_ComplexComposition* comp);
+
+// Release the composition storage owned by every record in `cfg->compositions[0..composition_count)`.
+// Does NOT touch `composition_count` or the inline compositions[] array itself — those remain
+// part of the LUMICE_Config's own layout. Idempotent and null-safe:
+//   - `cfg == nullptr` → no-op.
+//   - Otherwise → iterates and calls LUMICE_CompositionReleaseClauses on each record.
+// Callers who reuse a `LUMICE_Config` across successive Parse / Fill invocations must call
+// this before the memset that clears the struct (otherwise the record pointers leak); the
+// C++ RAII guard `lumice::ConfigOwningGuard` calls it on scope exit alongside
+// LUMICE_ConfigReleaseColorClasses.
+void LUMICE_ConfigReleaseCompositions(LUMICE_Config* cfg);
+
+// Read-only convenience accessor: return a pointer to clause `clause_index`'s first AND-term
+// inside `comp->term_ids` (i.e. the address of `term_ids[prefix_sum(term_counts[0..clause_index))]`)
+// and write `term_counts[clause_index]` into `*out_term_count`. Encapsulates the prefix-sum
+// offset math so callers (ConfigToJson emit, tests, GUI diagnostics) don't recompute it.
+//
+// Semantics:
+//   - `comp == nullptr`                                       → returns nullptr, `*out_term_count` untouched.
+//   - `clause_index < 0` or `clause_index >= comp->clause_count` → returns nullptr, `*out_term_count`
+//                                                                 set to 0 if non-null.
+//   - Otherwise → returns the term-pointer and (if non-null) writes the per-clause term count.
+//     A 0-term clause returns a valid pointer to the (empty) slice and out_term_count = 0.
+const int* LUMICE_CompositionClauseTerms(const LUMICE_ComplexComposition* comp, int clause_index, int* out_term_count);
 
 // =============== Raypath Color Display-Time Setter (task-342.2) ===============
 // Display-time appearance of one color class (mutable without re-simulation): the RGB

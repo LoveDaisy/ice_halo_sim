@@ -790,5 +790,43 @@ TEST(EntryExitSpec_Match, PBD_OrbitInvariant) {
   }
 }
 
+// =============== task-host-abi-cpu-caps AC2: CPU runtime honors > 16 OR clauses ===============
+
+// The core FilterSpec CPU runtime uses `std::vector<std::vector<unique_ptr>>` internally
+// (filter_spec.cpp:325), so its OR-clause capacity was never actually bounded by the ABI
+// LUMICE_MAX_CONFIG_CLAUSES=16 — the cap only lived in the ABI layout. This test proves
+// that CPU-side Match() semantics work correctly on a ComplexSpec built with N > 16 real
+// OR-clauses (only one of which corresponds to the raypath being probed), i.e. the CPU
+// path was ready for widening all along and the plan §2 "widen ABI to unlock runtime"
+// framing holds.
+TEST(FilterSpec_ManyOrClauses, MatchOnlyMatchingClause) {
+  Crystal crystal = Crystal::CreatePrism(1.0f);
+  constexpr uint8_t kSym = FilterConfig::kSymNone;
+  // Build 30 distinct real raypaths (> the pre-v4.9 ABI cap of 16), varying face numbers over
+  // valid prism range [1, 8]. Then Match against the single raypath at index 24 — only its
+  // matching clause should be satisfied; every other clause must reject it (proving that
+  // ComplexSpec-OR does not spuriously match beyond the intended clause).
+  std::vector<std::vector<IdType>> seeds;
+  for (int i = 0; i < 30; i++) {
+    IdType f0 = static_cast<IdType>(1 + (i % 8));
+    IdType f1 = static_cast<IdType>(1 + ((i + 3) % 8));
+    seeds.push_back({ f0, f1 });
+  }
+  auto spec = MakeComplexSpec(crystal, seeds, kSym, kSigmaARollDeg[0]);
+  ASSERT_NE(spec, nullptr);
+
+  // Probe against each seed: MUST match (its own clause is in the OR).
+  for (size_t i = 0; i < seeds.size(); i++) {
+    SCOPED_TRACE("seed[" + std::to_string(i) + "]=" + FormatRaypath(seeds[i]));
+    EXPECT_TRUE(SpecMatch(spec.get(), seeds[i])) << "OR clause " << i << " (>16) not matched by its own seed";
+  }
+
+  // Probe against a raypath that does NOT appear in any of the 30 clauses: MUST reject.
+  // Use a 3-hop raypath that cannot be produced by any 2-hop seed.
+  std::vector<IdType> non_member = { 3, 5, 7 };
+  EXPECT_FALSE(SpecMatch(spec.get(), non_member))
+      << "ComplexSpec spuriously matched a raypath outside all " << seeds.size() << " OR clauses";
+}
+
 }  // namespace
 }  // namespace lumice

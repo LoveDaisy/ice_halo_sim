@@ -23,7 +23,7 @@
 #include "gui/file_io.hpp"  // FillLumiceConfig — pipeline assertion for AC4 default flow-through.
 #include "gui/gui_state.hpp"
 #include "gui/raypath_segments.hpp"
-#include "include/lumice_config_scope.hpp"  // ConfigColorGuard — auto-releases raypath_color for AC4 test.
+#include "include/lumice_config_scope.hpp"  // ConfigOwningGuard — auto-releases raypath_color for AC4 test.
 #include "test_gui_shared.hpp"
 
 namespace {
@@ -1285,7 +1285,7 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       // the new default reaches the scrum-356 per-ref symmetry pipeline
       // without any renderer-side changes.
       LUMICE_Config cfg{};
-      lumice::ConfigColorGuard cfg_guard(cfg);
+      lumice::ConfigOwningGuard cfg_guard(cfg);
       IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
       IM_CHECK_EQ(cfg.raypath_color[0].match[0].predicate.symmetry, 7);
 

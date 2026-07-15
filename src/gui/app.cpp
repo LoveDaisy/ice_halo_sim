@@ -703,7 +703,7 @@ void CalibrateQualityThreshold() {
 
   // Use current default state to build a calibration config
   LUMICE_Config config{};
-  lumice::ConfigColorGuard config_color_guard(config);  // v4.8: release raypath_color on any early return
+  lumice::ConfigOwningGuard config_color_guard(config);  // v4.8: release raypath_color on any early return
   if (!FillLumiceConfig(g_state, &config)) {
     // Unlike DoRun (which pops SetGuiWarning), calibration degrades silently to the default
     // threshold: it does not touch the user's edited/committed config, so a log line is
@@ -914,7 +914,7 @@ bool DoRun() {
   // (graceful degradation) — poller untouched, buffer not torn — rather than commit a
   // truncated config.
   LUMICE_Config config{};
-  lumice::ConfigColorGuard config_color_guard(config);  // v4.8: release raypath_color on any early return
+  lumice::ConfigOwningGuard config_color_guard(config);  // v4.8: release raypath_color on any early return
   FilterOverflowInfo overflow;
   ColorClassOverflowInfo color_overflow;
   if (!FillLumiceConfig(g_state, &config, &overflow, &color_overflow)) {

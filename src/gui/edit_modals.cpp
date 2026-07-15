@@ -101,10 +101,20 @@ constexpr size_t kSummandRowBufSize = 256;
 // UI soft cap (kMaxSummandRows): prevents unbounded row growth from the "+ Add"
 // button before the real ABI-layer limits kick in. The authoritative overflow
 // gates live in file_io.cpp::FillLumiceConfig (ExpandSopToClauses → clauses vec
-// with LUMICE_kMaxComplexFilterClauses cap) and BuildExportJsonOrWarn; those
-// remain the last-word validators. 16 is the OR-summand row count and comfortably
-// fits typical multi-branch filters (a real config usually has ≤ 4 rows).
-constexpr size_t kMaxSummandRows = 16;
+// with LUMICE_MAX_CONFIG_CLAUSES cap) and BuildExportJsonOrWarn; those remain
+// the last-word validators. The ABI ceiling is now much higher (v4.9,
+// task-host-abi-cpu-caps: LUMICE_MAX_CONFIG_CLAUSES=4096), but this UI soft
+// cap sits below it — ImGui re-renders every row per frame without
+// virtualization, so several-thousand rows would tank the editor's frame rate.
+// 256 covers real "few-hundred OR summands" use cases with comfortable
+// headroom while staying inside the practical UI budget; a proper virtualized
+// / big-list mode is the task-369.4 D-item's job.
+constexpr size_t kMaxSummandRows = 256;
+// task-host-abi-cpu-caps AC4: compile-time sentinel — the whole point of v4.9 is to let
+// the GUI accept > 16 OR rows without the pre-v4.9 hard cap. If a future change accidentally
+// lowers this back to the historical 16, the intent is lost silently — the assert makes
+// that regression a build-time failure.
+static_assert(kMaxSummandRows > 16, "kMaxSummandRows must stay above the pre-v4.9 cap of 16");
 
 struct SummandRowBuf {
   uint64_t uid;
