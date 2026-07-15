@@ -1016,9 +1016,16 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
     IM_CHECK_EQ(gui::g_state.raypath_color[0].z_order, z1_before);  // sanity: the swap landed
     IM_CHECK_EQ(gui::g_state.raypath_color[1].z_order, z0_before);
 
-    // Click 5: composite mode combo -> "painter" is combo item index 2 (see kModeNames in
-    // RenderCompositeModeCombo), distinct from the default index 0 ("dominant").
+    // Click 5: composite mode combo -> transition observed by first setting a
+    // non-painter baseline then clicking "painter" (combo item index 2 — see
+    // kModeNames in RenderCompositeModeCombo). Post task-painter-alpha-over-composite
+    // (doc §4.8) the default is now painter, so a fresh state already sits at
+    // index 2; we click "dominant" first to guarantee mode_before != painter, then
+    // observe the click's transition to painter.
+    ctx->ComboClick("##ColorMode/dominant");
+    scan_invariant();
     const int mode_before = gui::g_state.raypath_color_mode;
+    IM_CHECK_EQ(mode_before, 0);  // dominant baseline established
     ctx->ComboClick("##ColorMode/painter");
     scan_invariant();
     IM_CHECK_NE(gui::g_state.raypath_color_mode, mode_before);  // sanity: the click actually landed
