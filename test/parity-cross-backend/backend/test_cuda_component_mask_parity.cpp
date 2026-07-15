@@ -12,10 +12,14 @@
 // produce branch has been retired (task-358.3).
 //
 // Why the parity is STRUCTURAL + STATISTICAL, not per-ray byte-exact
-//   CudaTraceBackend follows a single refract-priority path per ray while
-//   CpuTraceBackend fans out (reflect + refract) per hit and area-weight
-//   re-samples continuation entry — the two produce DIFFERENT ray populations.
-//   So per-ray mask equality is impossible; we compare weighted distributions +
+//   Both backends emit reflect + refract per hit (see CUDA trace kernel channel
+//   loop mirroring lumice_trace.metal:677 and CPU HitSurface at optics.cpp:18
+//   writing 2 branches per input); the difference is CONTINUATION:
+//   CudaTraceBackend advances only the refract branch (single-path
+//   continuation, refract-priority), while CpuTraceBackend keeps both reflect
+//   + refract branches as continuations (fan-out) and area-weight re-samples
+//   continuation entry — the two produce DIFFERENT ray populations. So per-ray
+//   mask equality is impossible; we compare weighted distributions +
 //   self-consistency invariants (mirrors the Metal harness rationale):
 //     - structural: no spurious bits, cross-layer joint bits present (proves the
 //       mask survives transit + shuffle + the Recombine handle swap end-to-end);
@@ -476,7 +480,8 @@ TEST(CudaComponentMaskParity, CpuMarginalBallpark) {
   fprintf(stderr, "[component-mask] CPU-vs-CUDA max |per-component frac| = %.4f\n", max_abs);
   // Same predicate-match + component-table logic on both backends → the per-
   // component marginals live in the same ballpark. LOOSE bound: the two
-  // backends trace DIFFERENT ray populations (single-path vs fan-out), so this
+  // backends trace DIFFERENT ray populations (CUDA continues one branch,
+  // CPU fans out reflect + refract as continuations — see header), so this
   // is a sanity anchor, not a tight numeric parity. Whole-crystal (None) bits
   // 0 and 2 are the tightest signal — they should be near 1.0 on both backends
   // (every emitted ray hit layer 0 / layer 1 respectively), while length-gated

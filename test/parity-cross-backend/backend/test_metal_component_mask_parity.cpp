@@ -11,11 +11,15 @@
 //   has been retired (task-358.3).
 //
 // Why the parity is STRUCTURAL + STATISTICAL, not per-ray byte-exact
-//   MetalTraceBackend follows a single refract-priority path per ray while
-//   CpuTraceBackend fans out (reflect + refract) per hit and area-weight
-//   re-samples continuation entry — the two produce DIFFERENT ray populations
-//   (see test_metal_trace_parity.cpp header). So per-ray mask equality is
-//   impossible; we compare weighted distributions + self-consistency invariants:
+//   Both backends emit reflect + refract per hit (see lumice_trace.metal:677's
+//   `ch=0..2` loop and CPU HitSurface at optics.cpp:18 writing 2 branches per
+//   input); the difference is CONTINUATION: MetalTraceBackend advances only the
+//   refract branch (single-path continuation, `cont_face` refract-priority),
+//   while CpuTraceBackend keeps both reflect + refract branches as
+//   continuations (fan-out) and area-weight re-samples continuation entry — the
+//   two produce DIFFERENT ray populations (see test_metal_trace_parity.cpp
+//   header). So per-ray mask equality is impossible; we compare weighted
+//   distributions + self-consistency invariants:
 //     - structural: no spurious bits, cross-layer joint bits present (proves the
 //       mask survives transit + shuffle + the Recombine handle swap end-to-end);
 //     - energy: captured weight > 0 and stable;
@@ -451,7 +455,8 @@ TEST(MetalComponentMaskParity, CpuMarginalBallpark) {
   fprintf(stderr, "[component-mask] CPU-vs-Metal max |per-component frac| = %.4f\n", max_abs);
   // Same predicate-match + component-table logic on both backends → the per-
   // component marginals live in the same ballpark. LOOSE bound: the two
-  // backends trace DIFFERENT ray populations (single-path vs fan-out), so this
+  // backends trace DIFFERENT ray populations (Metal continues one branch,
+  // CPU fans out reflect + refract as continuations — see header), so this
   // is a sanity anchor, not a tight numeric parity. Whole-crystal (None) bits
   // 0 and 2 are the tightest signal — they should be near 1.0 on both backends
   // (every emitted ray hit layer 0 / layer 1 respectively), while length-gated
