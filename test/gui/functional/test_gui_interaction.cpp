@@ -4794,6 +4794,41 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // T6b — AC4 (scrum-369.1 host-abi-cpu-caps): the "+ Add OR row" soft cap was
+  // raised from 16 to kMaxSummandRows=256, so the button must stay ENABLED past
+  // the old 16-row limit. Click it up to 20 rows and assert (a) the button never
+  // reports Disabled below the cap and (b) row uid 16 (the 17th row) exists —
+  // proving growth past 16. First-hand runtime verification of AC4 via the real
+  // GUI widget path (owner decision 2026-07-15, in lieu of a manual click).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "add_rows_past_16_enabled");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##fi");
+      ctx->Yield(4);
+
+      // Fresh modal starts with one blank row (uid 0). Add 19 more → uids 0..19.
+      for (int i = 0; i < 19; ++i) {
+        auto info_add = ctx->ItemInfo("**/+ Add OR row##summand_add");
+        IM_CHECK((info_add.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        ctx->ItemClick("**/+ Add OR row##summand_add");
+        ctx->Yield(2);
+      }
+
+      // Row uid 16 = the 17th row: the button admitted growth well past 16.
+      IM_CHECK(ctx->ItemExists("**/##row_text_16"));
+      IM_CHECK(ctx->ItemExists("**/##row_text_19"));
+      // Still below kMaxSummandRows=256, so the button remains enabled.
+      auto info_add_final = ctx->ItemInfo("**/+ Add OR row##summand_add");
+      IM_CHECK((info_add_final.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
   // T7 — Multi-row commit + per-row edit isolation (subsumes the pre-H5
   // per-type buffer isolation contract). Add three rows with distinct
   // grammar shapes (pure raypath / EE / AND mix), OK, verify the SoP has
