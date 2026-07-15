@@ -5426,6 +5426,93 @@ void RegisterLinkedEntriesTests(ImGuiTestEngine* engine) {
       IM_CHECK(warning.find("This raypath color configuration exceeds its predicate") != std::string::npos);
       IM_CHECK(warning.find("Simplify the color configuration") != std::string::npos);
 
+      // Precise count lock (code-review-01 Suggestion): 66 unique predicates - kMaxBits(64) = 2
+      // dropped. Ties the end-to-end GUI test to the same exact number the Step 5/7 unit tests
+      // assert, rather than only the message substring.
+      LUMICE_ColorOverflowInfo color_over{};
+      IM_CHECK(LUMICE_GetColorOverflowInfo(gui::g_server, &color_over) == LUMICE_OK);
+      IM_CHECK(color_over.component_overflow_count == 2);
+
+      // Cleanup.
+      gui::ClearGuiWarning();
+      gui::g_state.raypath_color.clear();
+      gui::g_server_poller.Stop();
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+      gui::g_state.run_intent = gui::RunIntent::kNone;
+      gui::g_state.committed_epoch = 0;
+      gui::g_state.dirty = false;
+    };
+  }
+
+  // task-gui-feedback-affordances code-review-01 Critical 1 regression anchor: a persistent
+  // color-overflow condition (unlike the FillLumiceConfig-REJECT branch covered by the sibling
+  // `overflow_auto_commit_dedup` test) goes through the commit-SUCCEEDED branch of DoRun. That
+  // branch used to call ClearGuiWarning() unconditionally before checking for a color overflow,
+  // which zeroed the identity-dedup state ahead of the comparison and made every auto-commit
+  // tick (user_initiated=false) reopen the modal even though the SAME overflow persisted —
+  // reproducing the "70ms slider drag freezes the UI" regression Step 2 fixed for the ABI-reject
+  // branch. This test drives two auto-commit ticks against the same 66-predicate overflow setup
+  // as `big_or_filter_with_color_overflow_surfaces_warning` and asserts the second tick does NOT
+  // respawn the modal.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_filter_type", "color_overflow_auto_commit_dedup");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetTestState();
+      gui::ClearGuiWarning();
+      gui::g_server = LUMICE_CreateServer();
+      IM_CHECK(gui::g_server != nullptr);
+
+      gui::g_state.raypath_color.clear();
+      constexpr int kNumClasses = 3;
+      constexpr int kRefsPerClass = 22;
+      static_assert(kNumClasses * kRefsPerClass > 64, "must exceed ComponentTable::kMaxBits");
+      int uid = 0;
+      for (int c = 0; c < kNumClasses; ++c) {
+        gui::ColorClassConfig cls;
+        cls.color[0] = 1.0f - c * 0.2f;
+        cls.color[1] = 0.5f;
+        cls.color[2] = 0.0f + c * 0.2f;
+        cls.combine = 0;
+        cls.visible = true;
+        cls.solo = false;
+        for (int k = 0; k < kRefsPerClass; ++k, ++uid) {
+          gui::ColorClassRefConfig ref;
+          ref.layer_idx = 0;
+          ref.crystal_pool_id = 0;
+          ref.match_all = false;
+          if (uid < 64) {
+            const int f1 = 1 + (uid % 8);
+            const int f2 = 1 + (uid / 8);
+            ref.predicate_text = std::to_string(f1) + "-" + std::to_string(f2);
+          } else {
+            const int tail = uid - 63;
+            ref.predicate_text = "1-1-" + std::to_string(tail);
+          }
+          cls.match.push_back(ref);
+        }
+        gui::g_state.raypath_color.push_back(cls);
+      }
+
+      gui::g_state.sim.infinite = false;
+      gui::g_state.sim.ray_num_millions = 0.001f;
+
+      // First auto-commit tick: overflow persists → commit succeeds, color-degrade warning set.
+      gui::DoRun(/*user_initiated=*/false);
+      IM_CHECK(!gui::PeekGuiWarning().empty());
+      IM_CHECK(gui::IsGuiWarningPending());
+      const std::string first_msg = gui::PeekGuiWarning();
+
+      // Frame consumes OpenPopup; trigger cleared, message retained.
+      gui::internal_test::ConsumeGuiWarningPending();
+      IM_CHECK(!gui::IsGuiWarningPending());
+
+      // Second auto-commit tick with the SAME overflow: dedup MUST hold (no modal respawn).
+      gui::DoRun(/*user_initiated=*/false);
+      IM_CHECK_STR_EQ(gui::PeekGuiWarning().c_str(), first_msg.c_str());
+      IM_CHECK(!gui::IsGuiWarningPending());
+
       // Cleanup.
       gui::ClearGuiWarning();
       gui::g_state.raypath_color.clear();

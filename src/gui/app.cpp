@@ -973,9 +973,6 @@ bool DoRun(bool user_initiated) {
   int reused = 0;
   LUMICE_ErrorCode err = LUMICE_CommitConfigStruct(g_server, &config, &reused);
   if (err == LUMICE_OK) {
-    // A good commit clears any prior over-bounds warning so a later re-occurrence warns again.
-    ClearGuiWarning();
-
     // task-gui-feedback-affordances Step 7 (AC1): the ABI check above passed
     // (filter / raypath tracing / geometry all fit within their caps), but
     // the CORE may still have dropped color-classification predicates that
@@ -998,6 +995,9 @@ bool DoRun(bool user_initiated) {
     //     modal again.
     LUMICE_ColorOverflowInfo color_over{};
     LUMICE_GetColorOverflowInfo(g_server, &color_over);
+    // symmetry_group_overflow_count is currently hardcoded to 0 in c_api.cpp (the Metal/CUDA
+    // symmetry-group counter is not yet wired to a consumer — see backlog "symmetry_group
+    // overflow GUI surfacing"); the OR term is future-reserved dead code until that lands.
     if (color_over.component_overflow_count > 0 || color_over.symmetry_group_overflow_count > 0) {
       std::string degrade_msg =
           "This raypath color configuration exceeds its predicate/symmetry-group budget (" +
@@ -1007,10 +1007,23 @@ bool DoRun(bool user_initiated) {
           "Affected rays/crystals will render with missing or incomplete color. The underlying "
           "filtering/geometry is unaffected — only color assignment degrades.\n"
           "Simplify the color configuration (fewer distinct predicates per class / fewer symmetry variants) to fix.";
+      // Same user_initiated-gated-clear discipline as the FillLumiceConfig-failure branch
+      // above (AC3): only force-reopen on an explicit user Run. Do NOT unconditionally
+      // ClearGuiWarning() before this check (code-review-01 Critical 1) — that would zero
+      // g_gui_warning_current ahead of the comparison below, so SetGuiWarning's
+      // identity-dedup always sees an empty prior message and reopens the modal on every
+      // auto-commit tick (user_initiated=false) even when the SAME overflow persists,
+      // reproducing the "70ms slider drag freezes the UI" regression this task's Step 2
+      // fixed for the sibling branch.
       if (user_initiated) {
         ClearGuiWarning();
       }
       SetGuiWarning(degrade_msg);
+    } else {
+      // No color overflow: clear any prior over-bounds warning (the ABI-reject warning from
+      // the branch above, or a previous color-degrade warning that has now resolved) so a
+      // later re-occurrence of either warns again.
+      ClearGuiWarning();
     }
     g_state.last_committed_state = GuiState::ConfigSnapshot::From(g_state);
     // task-color-migration §4 M6 (repush discipline): a fresh commit invalidates every edge-

@@ -91,7 +91,8 @@ typedef struct LUMICE_SimLifecycleResult_ {
 // (kColorMaxGroupsPerSlot=4) fires asynchronously on the worker thread's
 // first batch, so surfacing it requires poll infrastructure not yet wired.
 // Currently always 0; the field is kept in the ABI struct so future clients
-// do not need to re-widen it later.
+// do not need to re-widen it later. Tracked in backlog.md: "[GUI / 染色]
+// symmetry_group_overflow 的 GUI surfacing（poll infrastructure 待建）".
 typedef struct LUMICE_ColorOverflowInfo_ {
   int component_overflow_count;
   int symmetry_group_overflow_count;
