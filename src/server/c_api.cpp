@@ -709,7 +709,7 @@ LUMICE_ErrorCode LUMICE_CompositionSetClauses(LUMICE_ComplexComposition* comp, i
   if (!comp) {
     return LUMICE_ERR_NULL_ARG;
   }
-  if (clause_count < 0) {
+  if (clause_count < 0 || clause_count > LUMICE_MAX_CONFIG_CLAUSES) {
     return LUMICE_ERR_INVALID_CONFIG;
   }
   if (clause_count > 0 && (term_counts == nullptr || term_ids == nullptr)) {
@@ -717,9 +717,12 @@ LUMICE_ErrorCode LUMICE_CompositionSetClauses(LUMICE_ComplexComposition* comp, i
   }
   // Full validation BEFORE any allocation so an invalid input leaves `comp` untouched
   // (mirrors the "no partial writes on rejection" contract other Set-style API here follow).
+  // Upper bounds are enforced here (not just by callers) because this is documented as
+  // the ONLY supported writer, including non-C++ bindings that cannot be trusted to
+  // pre-check LUMICE_MAX_CONFIG_CLAUSES/_TERMS themselves (code-review round 1, Major).
   size_t total_terms = 0;
   for (int cl = 0; cl < clause_count; cl++) {
-    if (term_counts[cl] < 0) {
+    if (term_counts[cl] < 0 || term_counts[cl] > LUMICE_MAX_CONFIG_TERMS) {
       return LUMICE_ERR_INVALID_CONFIG;
     }
     total_terms += static_cast<size_t>(term_counts[cl]);
@@ -861,13 +864,24 @@ LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_C
     if (comp.clause_count < 0 || comp.clause_count > LUMICE_MAX_CONFIG_CLAUSES) {
       return LUMICE_ERR_INVALID_CONFIG;
     }
-    if (comp.clause_count > 0 && (comp.term_ids == nullptr || comp.term_counts == nullptr)) {
+    // term_counts is always required once clause_count > 0 (LUMICE_CompositionSetClauses
+    // always allocates it in that case). term_ids, however, legitimately stays nullptr
+    // when every clause has 0 terms (total_terms == 0) — SetClauses skips that allocation
+    // on purpose. Conflating the two here would reject a state SetClauses itself produces
+    // (code-review round 1, Major; e.g. JSON `"composition": [[]]` round-tripped through
+    // Parse then CommitConfigStruct).
+    if (comp.clause_count > 0 && comp.term_counts == nullptr) {
       return LUMICE_ERR_INVALID_CONFIG;
     }
+    size_t comp_total_terms = 0;
     for (int cl = 0; cl < comp.clause_count; cl++) {
       if (comp.term_counts[cl] < 0 || comp.term_counts[cl] > LUMICE_MAX_CONFIG_TERMS) {
         return LUMICE_ERR_INVALID_CONFIG;
       }
+      comp_total_terms += static_cast<size_t>(comp.term_counts[cl]);
+    }
+    if (comp_total_terms > 0 && comp.term_ids == nullptr) {
+      return LUMICE_ERR_INVALID_CONFIG;
     }
   }
 

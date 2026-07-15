@@ -2319,6 +2319,51 @@ TEST(StructFilterComplex, EmptyCompositionAccepted) {
   EXPECT_EQ(cfg.compositions[cfg.filters[1].composition_index].clause_count, 0);
 }
 
+TEST(StructFilterComplex, EmptyClauseWithinCompositionCommitEndToEnd) {
+  // Regression (code-review-01, round 1, Major): LUMICE_CompositionSetClauses only allocates
+  // term_ids when total_terms > 0, so a composition where every clause has 0 terms
+  // (clause_count > 0, total_terms == 0) legitimately ends up with term_ids == nullptr while
+  // term_counts stays allocated (non-null). Before the fix, LUMICE_CommitConfigStruct's
+  // composition validation conflated term_ids == nullptr with term_counts == nullptr and
+  // rejected this state with LUMICE_ERR_INVALID_CONFIG.
+  //
+  // NOTE: this exact state is NOT reachable via the JSON `"composition": [[]]` path today —
+  // JsonToComplexComposition builds term_ids via std::vector<int>::push_back, so a 0-term
+  // clause leaves that vector empty, and its `.data()` is nullptr, which independently trips
+  // LUMICE_CompositionSetClauses's own "term_ids == nullptr" *argument* check (verified: Parse
+  // returns LUMICE_ERR_NULL_ARG for that JSON shape, never reaching Commit). This test instead
+  // constructs the composition directly through the public C API — any caller (including a
+  // future non-C++ binding) can reach this state by passing a non-null-but-unused term_ids
+  // buffer alongside all-zero term_counts — which is the state LUMICE_CommitConfigStruct must
+  // defensively accept.
+  LUMICE_Config cfg{};
+  lumice::ConfigOwningGuard cfg_guard(cfg);
+  ASSERT_EQ(LUMICE_ParseConfigString(MakeFullConfigJson().c_str(), &cfg), LUMICE_OK);
+  ASSERT_EQ(cfg.filter_count, 1);  // MakeFullConfigJson's single raypath filter, id 1
+
+  cfg.filters[1].id = 2;
+  cfg.filters[1].type = LUMICE_FILTER_TYPE_COMPLEX;
+  cfg.filters[1].composition_index = 0;
+  cfg.filter_count = 2;
+  cfg.composition_count = 1;
+
+  int zero_term_counts[1] = { 0 };
+  int dummy_term_ids[1] = { 0 };  // never dereferenced (total_terms == 0); must be non-null
+  ASSERT_EQ(LUMICE_CompositionSetClauses(&cfg.compositions[0], 1, zero_term_counts, dummy_term_ids), LUMICE_OK);
+  EXPECT_EQ(cfg.compositions[0].clause_count, 1);
+  EXPECT_NE(cfg.compositions[0].term_counts, nullptr);
+  EXPECT_EQ(cfg.compositions[0].term_ids, nullptr);
+
+  cfg.infinite = 0;
+  cfg.ray_num = 100;
+  auto* server = LUMICE_CreateServer();
+  ASSERT_NE(server, nullptr);
+  int reused = -1;
+  EXPECT_EQ(LUMICE_CommitConfigStruct(server, &cfg, &reused), LUMICE_OK);
+  LUMICE_StopServer(server);
+  LUMICE_DestroyServer(server);
+}
+
 // task-host-abi-cpu-caps AC1 (§4 Step 8): a `complex` filter that OR's N > 16 real raypath
 // simple filters (well past the pre-v4.9 LUMICE_MAX_CONFIG_CLAUSES=16 cap) survives the full
 // C-API round-trip (JSON parse ↔ ConfigToJson emit ↔ core to_json cross-check). Uses the same

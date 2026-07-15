@@ -385,7 +385,20 @@ def check_struct_layout_parity() -> list[Violation]:
 # pointers (term_ids / term_counts) via LUMICE_CompositionSetClauses, so it
 # joins the ban list on the same "aliased owning pointer → double-free"
 # grounds as LUMICE_Config. Same 4 patterns run for each type.
+#
+# code-review-01 (round 1, Major) fix: the RHS of Patterns 1a/1b/1c originally
+# matched only a bare identifier (`\w+`), so the exact risk this task's own
+# issue.md/plan called out — `LUMICE_ComplexComposition rec = cfg.compositions[i];`
+# aliasing the owning term_ids/term_counts heap allocation — was invisible to the
+# gate. `_RHS_EXPR` below widens the RHS to also accept member (`.field`),
+# pointer-member (`->field`), and subscript (`[expr]`) chains so member/subscript
+# copy sources are caught too. The (still-open) function-call-RHS limitation
+# above is unrelated and unchanged.
 GUARDED_OWNING_TYPES = ["LUMICE_Config", "LUMICE_ComplexComposition"]
+
+# A bare identifier optionally followed by any number of `.field`, `->field`,
+# or `[expr]` accessors — e.g. `cfg`, `cfg.compositions[i]`, `arr[i]->comp`.
+_RHS_EXPR = r"\w+(?:\.\w+|->\w+|\[[^\[\]]+\])*"
 
 
 def _make_owning_type_patterns(type_name: str):
@@ -394,9 +407,9 @@ def _make_owning_type_patterns(type_name: str):
     compiled set — the four regexes are identical in shape but bound to the
     specific type token so error messages / self-assignment guards read
     naturally."""
-    copy_init = re.compile(r"\b" + type_name + r"\s+(\w+)\s*=\s*(\w+)\s*;")
-    direct_init = re.compile(r"\b" + type_name + r"\s+(\w+)\s*\(\s*(\w+)\s*\)\s*;")
-    list_init = re.compile(r"\b" + type_name + r"\s+(\w+)\s*\{\s*(\w+)\s*\}\s*;")
+    copy_init = re.compile(r"\b" + type_name + r"\s+(\w+)\s*=\s*(" + _RHS_EXPR + r")\s*;")
+    direct_init = re.compile(r"\b" + type_name + r"\s+(\w+)\s*\(\s*(" + _RHS_EXPR + r")\s*\)\s*;")
+    list_init = re.compile(r"\b" + type_name + r"\s+(\w+)\s*\{\s*(" + _RHS_EXPR + r")\s*\}\s*;")
     by_value_param = re.compile(r"\b" + type_name + r"\s+(\w+)\s*[,)]")
     decl = re.compile(r"\b" + type_name + r"(\s*[*&]?)\s*(\w+)")
     return copy_init, direct_init, list_init, by_value_param, decl

@@ -643,11 +643,17 @@ void LUMICE_ConfigReleaseCompositions(LUMICE_Config* cfg);
 // offset math so callers (ConfigToJson emit, tests, GUI diagnostics) don't recompute it.
 //
 // Semantics:
-//   - `comp == nullptr`                                       → returns nullptr, `*out_term_count` untouched.
+//   - `comp == nullptr`                                       → returns nullptr, `*out_term_count`
+//                                                                 set to 0 if non-null.
 //   - `clause_index < 0` or `clause_index >= comp->clause_count` → returns nullptr, `*out_term_count`
 //                                                                 set to 0 if non-null.
-//   - Otherwise → returns the term-pointer and (if non-null) writes the per-clause term count.
-//     A 0-term clause returns a valid pointer to the (empty) slice and out_term_count = 0.
+//   - Otherwise → `*out_term_count` (if non-null) is always set to `term_counts[clause_index]`.
+//     The returned pointer is nullptr whenever `comp->term_ids` itself is null — which is the
+//     legitimate state when every clause in the composition has 0 terms (LUMICE_CompositionSetClauses
+//     skips that allocation entirely in that case); this applies even to a 0-term clause, so callers
+//     must not unconditionally dereference a non-null out_term_count as "safe to iterate".
+//     When `comp->term_ids` is non-null, the returned pointer (including for a 0-term clause) is a
+//     valid address into that buffer for the (possibly empty) slice.
 const int* LUMICE_CompositionClauseTerms(const LUMICE_ComplexComposition* comp, int clause_index, int* out_term_count);
 
 // =============== Raypath Color Display-Time Setter (task-342.2) ===============

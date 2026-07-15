@@ -1309,7 +1309,7 @@ static bool ExpandFilterToStruct(const FilterConfig& f, int next_filter_id, LUMI
   std::vector<int> term_ids_vec;
   term_counts_vec.reserve(static_cast<size_t>(clause_n));
   term_ids_vec.reserve(static_cast<size_t>(total_terms));
-  int probe_filter_idx = *filter_idx;
+  int pending_filter_idx = *filter_idx;
   int running = 0;
   for (size_t cl = 0; cl < ef.clauses.size(); ++cl) {
     const auto& clause = ef.clauses[cl];
@@ -1329,14 +1329,14 @@ static bool ExpandFilterToStruct(const FilterConfig& f, int next_filter_id, LUMI
     const auto& clause = ef.clauses[cl];
     for (size_t tt = 0; tt < clause.size(); ++tt) {
       int cid = next_filter_id + emit_running++;
-      fill_term(&out->filters[probe_filter_idx++], cid, clause[tt]);
+      fill_term(&out->filters[pending_filter_idx++], cid, clause[tt]);
     }
   }
   int complex_id = next_filter_id + emit_running;  // == next_filter_id + total_terms
-  LUMICE_FilterParam* cdst = &out->filters[probe_filter_idx++];
+  LUMICE_FilterParam* cdst = &out->filters[pending_filter_idx++];
   set_common(cdst, complex_id, LUMICE_FILTER_TYPE_COMPLEX);
   cdst->composition_index = comp_idx;
-  *filter_idx = probe_filter_idx;
+  *filter_idx = pending_filter_idx;
   out->composition_count = comp_idx + 1;
   *out_main_id = complex_id;
   return true;
