@@ -3322,12 +3322,20 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
   //     sole initializer for the first layer.
   //   - Reset the capture-ring counter so each layer's emits append from 0; the
   //     per-layer drain after the ci-loop reads exactly this layer's count.
+  // explore-365 FIX: the layer-0 carried-mask reset MUST run in production too,
+  // not only under the test-only capture_ray_mask_ path. The trace kernel always
+  // reads d_root_component[tid] as the carried mask (production color path), and
+  // d_root_component_ is REUSED across per-batch BeginSession cycles — layer≥1's
+  // transit kernel writes it, so without a per-first-layer memset batch N's
+  // layer-0 rays inherit batch N-1's final-layer carried color bits, merging
+  // color-class masks across batches (only visible with multi-crystal L0 +
+  // multi-batch). Mirrors the MetalTraceBackend fix at the same site.
+  if (first_ms && impl_->d_root_component_ != nullptr) {
+    ck_reset(cudaMemset(impl_->d_root_component_, 0, n * sizeof(unsigned long long)),
+             "cudaMemset d_root_component (layer 0)");
+  }
   if (impl_->capture_ray_mask_) {
     impl_->EnsureComponentCaptureBuffers(ComputeContCap(n, impl_->scene_->max_hits_));
-    if (first_ms && impl_->d_root_component_ != nullptr) {
-      ck_reset(cudaMemset(impl_->d_root_component_, 0, n * sizeof(unsigned long long)),
-               "cudaMemset d_root_component (layer 0)");
-    }
     ck_reset(cudaMemset(impl_->d_exit_comp_cnt_, 0, sizeof(uint32_t)), "cudaMemset d_exit_comp_cnt");
   }
 
