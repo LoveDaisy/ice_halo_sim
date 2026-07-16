@@ -1004,10 +1004,13 @@ bool DoRun(bool user_initiated) {
     //     modal again.
     LUMICE_ColorOverflowInfo color_over{};
     LUMICE_GetColorOverflowInfo(g_server, &color_over);
-    // symmetry_group_overflow_count is currently hardcoded to 0 in c_api.cpp (the Metal/CUDA
-    // symmetry-group counter is not yet wired to a consumer — see backlog "symmetry_group
-    // overflow GUI surfacing"); the OR term is future-reserved dead code until that lands.
-    if (color_over.component_overflow_count > 0 || color_over.symmetry_group_overflow_count > 0) {
+    // Only component_overflow_count is meaningful HERE: it is set synchronously in
+    // CommitConfig (host-side predicate budget), so it is already populated at this
+    // post-commit point. The three GPU-only async caps (symmetry-group / OR-summand
+    // / color-class) are 0 at DoRun time — CommitConfig just reset them and they are
+    // re-populated only on the worker's first batch — so they are surfaced separately
+    // by the poll tick in SyncFromPoller. task-color-degrade-gui-surfacing.
+    if (color_over.component_overflow_count > 0) {
       std::string degrade_msg =
           "This raypath color configuration exceeds its predicate/symmetry-group budget (" +
           std::to_string(color_over.component_overflow_count) + " predicate(s) and/or " +

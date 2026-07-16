@@ -1370,6 +1370,11 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
     sim_data.generation_ = generation;
     sim_data.root_ray_count_ = ray_num;
     sim_data.crystal_count_ = backend.GetLastBatchCrystalCount();
+    // task-color-degrade-gui-surfacing: carry the GPU color-degrade tally on the
+    // legacy per-batch drain too. Dead for today's backends (Metal + CUDA both take
+    // the third-clock window branch above), but keeps this path from silently
+    // dropping the warning if a device-XYZ / non-third-clock backend is ever added.
+    sim_data.color_degrade_counts_ = backend.GetLastColorDegradeCounts();
     size_t pix = static_cast<size_t>(w) * static_cast<size_t>(h);
     sim_data.xyz_pixel_data_.resize(pix * 3u);
     XyzImageData xyz_out;
