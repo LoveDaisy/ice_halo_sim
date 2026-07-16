@@ -46,6 +46,17 @@ commit as its move; there the whole file is scanned, which is the correct answer
 because an author who rewrote most of a small file is writing this prose, not
 inheriting it.
 
+A copy is the neighbouring case and is deliberately not treated like a rename.
+Only rename detection is enabled, so `cp old new && git add new` is reported as
+a plain whole-file add and every line of the new path is scanned — including the
+prose carried over from the source. That is the intended answer rather than a
+gap: a rename relocates content its author never wrote, whereas a copy puts that
+content at a path the author decided to bring into existence. The new path holds
+that prose on its own terms, and whoever created the path is standing behind it.
+Hence the diff filter names only A, M and R. A `C` there would be worse than
+redundant: git cannot emit that status without --find-copies-harder, so the
+letter could never fire, and it would read as a protection that is not there.
+
 Scope
 -----
 Only natural-language regions are scanned: comments in every language, Python
@@ -201,8 +212,14 @@ def added_lines(diff_args: list[str]) -> dict[str, set[int]]:
     floor: a small file largely rewritten in the same commit as its move falls
     under it and is scanned whole. See the module docstring for why that case is
     the correct answer rather than a gap.
+
+    Copies are not detected and not meant to be: a copied file is a new path its
+    author chose to create, so its whole content is theirs to stand behind and
+    reads here as added. The filter says AMR and not ACMR for that reason — git
+    only reports the copy status under --find-copies-harder, so a `C` here could
+    never match and would claim a protection that is absent.
     """
-    out = _git(["diff", "-U0", "--no-color", "-M", "--diff-filter=ACMR", *diff_args])
+    out = _git(["diff", "-U0", "--no-color", "-M", "--diff-filter=AMR", *diff_args])
     result: dict[str, set[int]] = {}
     path: str | None = None
     lineno = 0

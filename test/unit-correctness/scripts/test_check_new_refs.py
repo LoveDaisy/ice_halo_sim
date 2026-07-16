@@ -55,6 +55,10 @@ class Repo:
         (self.root / dst).parent.mkdir(parents=True, exist_ok=True)
         self._git("mv", src, dst)
 
+    def cp(self, src: str, dst: str) -> None:
+        (self.root / dst).parent.mkdir(parents=True, exist_ok=True)
+        (self.root / dst).write_bytes((self.root / src).read_bytes())
+
     def commit(self, msg: str = "wip") -> str:
         self._git("add", "-A")
         self._git("commit", "-q", "-m", msg)
@@ -185,6 +189,34 @@ def test_small_file_rewritten_while_moved_is_scanned_whole(repo: Repo) -> None:
     # is the fourth line — which this commit never touched. Nothing but a
     # whole-file scan can produce that hit.
     assert repo.hits() == [("doc/new.md", 4)]
+
+
+def test_copy_is_scanned_whole_unlike_a_rename(repo: Repo) -> None:
+    """A copied file is in scope for all of it, deliberately — not like a move.
+
+    The two operations look adjacent and are opposites here. A rename relocates
+    content its author never wrote, so billing them for it is the exact burden
+    this gate is scoped away from. A copy leaves the source in place and brings a
+    second path into existence: whoever did that chose to put this prose at this
+    path, and the fourth line below is theirs to stand behind even though they
+    typed none of it.
+
+    The mechanism is that only rename detection is enabled, so git reports the
+    copy as a plain whole-file add. Pinning the behaviour rather than the flags
+    keeps this honest in both directions: turning copy detection on would make
+    the new path either filtered away or hunk-less, and either way this goes red
+    rather than quietly conceding a protection nobody decided to grant.
+    """
+    repo.write(
+        "doc/source.md",
+        "# Doc\n\nintro paragraph.\ncites scratchpad/example-name/ for detail.\n",
+    )
+    repo.commit()
+
+    repo.cp("doc/source.md", "doc/copy.md")
+
+    assert repo.added() == {"doc/copy.md": {1, 2, 3, 4}}
+    assert repo.hits() == [("doc/copy.md", 4)]
 
 
 # --- header parsing: the prefixes are ambiguous, position is not --------------
