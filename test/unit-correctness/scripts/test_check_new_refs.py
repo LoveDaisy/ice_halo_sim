@@ -88,12 +88,9 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Repo:
     r._git("init", "-q", "-b", "main")
     r._git("config", "user.email", "t@example.com")
     r._git("config", "user.name", "T")
-    # REPO_ROOT has to be rebound in BOTH modules, and the second one is easy to
-    # miss: the git helpers and the blob reader close over the name imported into
-    # check_new_refs, but Violation.render() resolves it in the module where
-    # Violation is defined. Patch only the first and everything passes until a
-    # test reaches the renderer, which is the one path the gate takes when it has
-    # something to say.
+    # Both bindings, per the note at the check_policies.REPO_ROOT definition: the
+    # git helpers and the blob reader use the copy imported into check_new_refs,
+    # while Violation.render() resolves the name in the module defining it.
     monkeypatch.setattr(check_new_refs, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(check_policies, "REPO_ROOT", tmp_path)
     r.write("seed.txt", "seed\n")

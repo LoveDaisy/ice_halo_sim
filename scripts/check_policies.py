@@ -56,6 +56,14 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+# Anyone overriding this to point the checks at another tree must rebind it in
+# every module that imported it, not just this one: `from check_policies import
+# REPO_ROOT` copies the value, so a later assignment here is invisible to the
+# importer. The two bindings then disagree silently, and the split does not
+# surface where it is made — Violation.render() below resolves the name in this
+# module, while an importer's own path handling resolves its private copy. Rebind
+# one and everything works until the first violation reaches the renderer, which
+# is the only code path taken when there is something to report.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC = REPO_ROOT / "src"
 ENV_KNOBS_CPP = SRC / "util" / "env_knobs.cpp"
