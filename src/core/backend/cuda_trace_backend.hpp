@@ -140,6 +140,8 @@ class CudaTraceBackend : public TraceBackend {
   // current session. Backed by Impl::final_layer_crystals_ populated during
   // BeginSession — safe to read anytime the session is open.
   size_t GetLastBatchCrystalCount() const override;
+  // task-color-degrade-gui-surfacing: per-config GPU color-degrade tally.
+  ColorDegradeCounts GetLastColorDegradeCounts() const override;
 
   // scrum-328.2 Step 3: all test-only observation + injection points have
   // migrated to `CudaTraceBackendTestHooks` (see

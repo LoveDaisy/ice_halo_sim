@@ -230,6 +230,15 @@ struct SimData {
   // invariant balanced (else the counter never reaches 0 and the server hangs /
   // never idles). See simulator.cpp DrainDeviceXyz + server.cpp ConsumeData.
   size_t sim_scene_credit_ = 1;
+
+  // task-color-degrade-gui-surfacing: per-committed-config tally of GPU-side
+  // raypath-color drops (symmetry-group / OR-summand / color-class caps).
+  // Populated from TraceBackend::GetLastColorDegradeCounts(); OVERWRITE (config
+  // constant), never accumulate. CPU backend leaves it all-zero. Flows to the
+  // server's atomics and out via LUMICE_GetColorOverflowInfo so the GUI surfaces
+  // a degrade modal instead of a silent log. Placed last so the SimData
+  // member-init-list order (sim_data.cpp) stays declaration-ordered.
+  ColorDegradeCounts color_degrade_counts_{};
 };
 
 using SimDataPtrS = std::shared_ptr<SimData>;

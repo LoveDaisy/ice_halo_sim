@@ -12,6 +12,7 @@
 
 #include "config/color_class_table.hpp"
 #include "core/backend/backend_kind.hpp"
+#include "core/def.hpp"  // ColorDegradeCounts (task-color-degrade-gui-surfacing)
 #include "server/component_compositor.hpp"
 #include "util/logger.hpp"
 
@@ -436,6 +437,18 @@ class Server {
    * @return 0 iff no predicate was dropped; else the drop count.
    */
   size_t GetLastColorComponentOverflowCount() const;
+
+  /**
+   * @brief task-color-degrade-gui-surfacing: GPU-only raypath-color drop tally
+   *        (symmetry-group / OR-summand / color-class device caps). Unlike the
+   *        component count above, these fire on the backend's FIRST batch and
+   *        are published ASYNCHRONOUSLY via ConsumeData, so the GUI polls this
+   *        each tick (LUMICE_GetColorOverflowInfo) rather than reading it once
+   *        at DoRun. Reset to zero synchronously on CommitConfig. CPU backend
+   *        has no such caps and always reports all-zeros.
+   * @return all-zero iff nothing was dropped; else the per-cap drop counts.
+   */
+  ColorDegradeCounts GetLastColorDegradeCounts() const;
 
   /**
    * @brief task-345.3: display-time EV multiplier for the composite path only.

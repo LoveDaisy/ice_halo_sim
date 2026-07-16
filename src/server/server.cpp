@@ -118,6 +118,16 @@ class ServerImpl {
     return last_color_component_overflow_count_.load(std::memory_order_acquire);
   }
 
+  // task-color-degrade-gui-surfacing: accessor for the GPU color-degrade tally
+  // (symmetry-group / OR-summand / color-class caps). Unlike the component count
+  // above (set synchronously in CommitConfig), these are populated ASYNCHRONOUSLY
+  // from the worker's first batch via ConsumeData, so the GUI must poll for them.
+  ColorDegradeCounts GetLastColorDegradeCounts() const {
+    return { last_color_symmetry_group_overflow_.load(std::memory_order_acquire),
+             last_color_or_summand_overflow_.load(std::memory_order_acquire),
+             last_color_class_overflow_.load(std::memory_order_acquire) };
+  }
+
  private:
   // task-268.7: single-engine orchestration — server now runs exactly one
   // Simulator. The legacy kDefaultSimulatorCnt = PhysicalCoreCount() was removed
@@ -183,6 +193,17 @@ class ServerImpl {
   // "coloring degraded" modal. Written under status_mutex_ (single writer =
   // CommitConfig, atomic read by the C API path is safe).
   std::atomic<size_t> last_color_component_overflow_count_{ 0 };
+
+  // task-color-degrade-gui-surfacing: GPU-only color-degrade tally, populated
+  // ASYNCHRONOUSLY from the worker's SimData in ConsumeData (generation-matched
+  // branch) — the caps fire on the backend's first batch, too late for the
+  // synchronous CommitConfig path above. Reset to 0 synchronously in
+  // CommitConfig (so a config switch does not leave a stale non-zero value that
+  // would falsely trip the GUI degrade modal before the first batch lands).
+  // Read atomically by the C API poll path (LUMICE_GetColorOverflowInfo).
+  std::atomic<size_t> last_color_symmetry_group_overflow_{ 0 };
+  std::atomic<size_t> last_color_or_summand_overflow_{ 0 };
+  std::atomic<size_t> last_color_class_overflow_{ 0 };
 
   // task-345.3: display-time EV for the composite path only. Zero (default) →
   // 2^0 = 1.0 → composite behavior is bit-for-bit pre-345.3 (structural AC4
@@ -525,6 +546,15 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
     // above leaves the prior counter untouched, matching the "keep prior
     // committed state" semantics of the surrounding try/catch.
     last_color_component_overflow_count_.store(color_gate_table.component_overflow_count_, std::memory_order_release);
+    // task-color-degrade-gui-surfacing: synchronously reset the async GPU
+    // color-degrade tally on commit. These are re-populated from the worker's
+    // first batch (ConsumeData); zeroing here ensures that switching FROM an
+    // overflowing config TO a non-overflowing one does not leave a stale count
+    // that the GUI poll path would read (before the first batch lands) and
+    // falsely surface a degrade modal for the new, clean config.
+    last_color_symmetry_group_overflow_.store(0, std::memory_order_release);
+    last_color_or_summand_overflow_.store(0, std::memory_order_release);
+    last_color_class_overflow_.store(0, std::memory_order_release);
     class_table = BuildColorClassTable(new_config.raypath_color_, new_config.scene_, color_gate_table);
     composite_mode = ParseCompositeMode(new_config.raypath_color_.mode_);
   } catch (const nlohmann::json::out_of_range& e) {
@@ -1119,6 +1149,17 @@ void ServerImpl::ConsumeData() {
         ILOG_DEBUG(logger_, "ConsumeData: discarding batch (generation {} != {})", sim_data.generation_,
                    scene_generation_.load());
       } else {
+        // task-color-degrade-gui-surfacing: this batch belongs to the current
+        // committed config (generation matches) — publish its GPU color-degrade
+        // tally to the atomics the C API poll path reads. OVERWRITE, not +=:
+        // the value is a config constant, identical on every batch, so the last
+        // writer simply refreshes it. GPU-only; CPU SimData carries all-zeros.
+        last_color_symmetry_group_overflow_.store(sim_data.color_degrade_counts_.symmetry_group_overflow,
+                                                  std::memory_order_release);
+        last_color_or_summand_overflow_.store(sim_data.color_degrade_counts_.or_summand_overflow,
+                                              std::memory_order_release);
+        last_color_class_overflow_.store(sim_data.color_degrade_counts_.color_class_overflow,
+                                         std::memory_order_release);
         // 0-exit-batch guard: backend exit-seam path may emplace a SimData with
         // outgoing_d_/rays_ both empty when all rays were filtered/absorbed
         // (e.g. selective BD filter). Skip consumer projection so we don't
@@ -1676,6 +1717,13 @@ size_t Server::GetLastColorComponentOverflowCount() const {
     return 0;
   }
   return impl_->GetLastColorComponentOverflowCount();
+}
+
+ColorDegradeCounts Server::GetLastColorDegradeCounts() const {
+  if (!impl_) {
+    return {};
+  }
+  return impl_->GetLastColorDegradeCounts();
 }
 
 Error Server::SetRaypathColors(const ColorClassDisplay* classes, int class_count, const int* z_order,

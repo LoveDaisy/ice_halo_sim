@@ -49,6 +49,15 @@ PreviewViewport g_preview_vp;
 // SyncFromPoller to advance the intent to kStopped. Both live at file scope (single GUI thread
 // owns the future; the atomic crosses the one background thread).
 std::atomic<bool> g_stop_inflight{ false };
+
+// task-color-degrade-gui-surfacing: epoch of the committed config for which the
+// async GPU color-degrade modal has already been surfaced. The three GPU device
+// caps (symmetry-group / OR-summand / color-class) fire on the worker's first
+// batch — too late for DoRun's synchronous component check — so SyncFromPoller
+// polls LUMICE_GetColorOverflowInfo each frame and warns once per committed
+// epoch (a new Run mints a new epoch and re-arms, mirroring the DoRun modal's
+// re-warn-on-Run policy). Sentinel ~0ull = nothing warned yet.
+unsigned long long g_color_degrade_warned_epoch = ~0ull;
 namespace {
 std::future<void> g_stop_future;
 }  // namespace
@@ -995,10 +1004,13 @@ bool DoRun(bool user_initiated) {
     //     modal again.
     LUMICE_ColorOverflowInfo color_over{};
     LUMICE_GetColorOverflowInfo(g_server, &color_over);
-    // symmetry_group_overflow_count is currently hardcoded to 0 in c_api.cpp (the Metal/CUDA
-    // symmetry-group counter is not yet wired to a consumer — see backlog "symmetry_group
-    // overflow GUI surfacing"); the OR term is future-reserved dead code until that lands.
-    if (color_over.component_overflow_count > 0 || color_over.symmetry_group_overflow_count > 0) {
+    // Only component_overflow_count is meaningful HERE: it is set synchronously in
+    // CommitConfig (host-side predicate budget), so it is already populated at this
+    // post-commit point. The three GPU-only async caps (symmetry-group / OR-summand
+    // / color-class) are 0 at DoRun time — CommitConfig just reset them and they are
+    // re-populated only on the worker's first batch — so they are surfaced separately
+    // by the poll tick in SyncFromPoller. task-color-degrade-gui-surfacing.
+    if (color_over.component_overflow_count > 0) {
       std::string degrade_msg =
           "This raypath color configuration exceeds its predicate/symmetry-group budget (" +
           std::to_string(color_over.component_overflow_count) + " predicate(s) and/or " +
@@ -1291,6 +1303,44 @@ void SyncFromPoller() {
   if (g_state.run_intent == RunIntent::kRunning && snap && snap->valid && snap->epoch == g_state.committed_epoch &&
       snap->lifecycle == LUMICE_LIFECYCLE_COMPLETED) {
     g_state.run_intent = RunIntent::kRunCompleted;
+  }
+
+  // task-color-degrade-gui-surfacing: poll the ASYNC GPU color-degrade tally and
+  // surface a modal once per committed epoch. The three GPU device caps
+  // (symmetry-group / OR-summand / color-class) fire on the worker's first batch,
+  // AFTER DoRun's synchronous component check, so the poll tick is the only place
+  // they can be observed. Epoch-keyed dedup keeps it from re-firing every frame
+  // while letting a new Run (new epoch) re-warn — mirrors the DoRun modal policy.
+  // CPU backend has no such caps and always reports zeros, so this never fires on
+  // CPU. Runs before the snapshot-validity early-return below because the tally
+  // comes from the C API, not the poller snapshot.
+  {
+    LUMICE_ColorOverflowInfo co{};
+    if (LUMICE_GetColorOverflowInfo(g_server, &co) == LUMICE_OK &&
+        (co.symmetry_group_overflow_count > 0 || co.or_summand_overflow_count > 0 ||
+         co.color_class_overflow_count > 0) &&
+        g_color_degrade_warned_epoch != g_state.committed_epoch) {
+      g_color_degrade_warned_epoch = g_state.committed_epoch;
+      std::string msg =
+          "Raypath coloring is degraded on the GPU backend — this configuration exceeds a device "
+          "capacity and some color assignment was dropped:\n";
+      if (co.symmetry_group_overflow_count > 0) {
+        msg += "  - " + std::to_string(co.symmetry_group_overflow_count) +
+               " symmetry group(s) dropped (too many distinct P/B/D variants on one crystal slot).\n";
+      }
+      if (co.or_summand_overflow_count > 0) {
+        msg += "  - " + std::to_string(co.or_summand_overflow_count) +
+               " OR-summand(s) dropped (too many predicates in one color group).\n";
+      }
+      if (co.color_class_overflow_count > 0) {
+        msg += "  - " + std::to_string(co.color_class_overflow_count) +
+               " color class(es) dropped (more than the device color-class limit).\n";
+      }
+      msg +=
+          "Affected rays render with missing or incomplete color. The filtering / geometry / raypath tracing is "
+          "UNAFFECTED — only color assignment degrades. Simplify the color configuration to fix.";
+      SetGuiWarning(msg);
+    }
   }
 
   if (!snap || !snap->valid) {

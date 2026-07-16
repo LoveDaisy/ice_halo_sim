@@ -56,7 +56,9 @@ static_assert(sizeof(void*) == 8, "SimData layout assumes 64-bit pointers");
 // task-358.1 Step 4 adds lane_pixel_data_ (vector<float>, 24B) +
 // lane_class_count_ (size_t, 8B) for the device-side per-color-class Y-lane
 // drain, bumping 296 → 328.
-static_assert(sizeof(SimData) == 328,
+// task-color-degrade-gui-surfacing adds color_degrade_counts_ (ColorDegradeCounts
+// = 3 × size_t = 24B) for the GPU color-degrade tally, bumping 328 → 352.
+static_assert(sizeof(SimData) == 352,
               "SimData layout changed — update test_sim_data.cpp DeepCopy/Move assertions "
               "and sim_data.cpp's static_assert.");
 #endif
@@ -125,6 +127,8 @@ SimData MakePopulatedSimData() {
   s.crystal_count_ = 4;
   // scrum-312: third-clock drain counter-balance credit propagation coverage.
   s.sim_scene_credit_ = 11;
+  // task-color-degrade-gui-surfacing: GPU color-degrade tally propagation coverage.
+  s.color_degrade_counts_ = { 5u, 6u, 7u };
   return s;
 }
 
@@ -974,6 +978,9 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
   EXPECT_EQ(copy.lane_class_count_, 2u) << "lane_class_count_ not copied";
   EXPECT_EQ(copy.crystal_count_, 4u) << "crystal_count_ not copied";         // task-exit-seam-crystal-count
   EXPECT_EQ(copy.sim_scene_credit_, 11u) << "sim_scene_credit_ not copied";  // scrum-312
+  EXPECT_EQ(copy.color_degrade_counts_.symmetry_group_overflow, 5u) << "color_degrade symmetry not copied";
+  EXPECT_EQ(copy.color_degrade_counts_.or_summand_overflow, 6u) << "color_degrade or_summand not copied";
+  EXPECT_EQ(copy.color_degrade_counts_.color_class_overflow, 7u) << "color_degrade color_class not copied";
 
   // Deep copy independence — each pointer/container field independently.
   copy.rays_[0].w_ = 999.0f;
@@ -1029,6 +1036,9 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   EXPECT_EQ(target.lane_class_count_, 2u) << "lane_class_count_ not assigned";
   EXPECT_EQ(target.crystal_count_, 4u) << "crystal_count_ not assigned";         // task-exit-seam-crystal-count
   EXPECT_EQ(target.sim_scene_credit_, 11u) << "sim_scene_credit_ not assigned";  // scrum-312
+  EXPECT_EQ(target.color_degrade_counts_.symmetry_group_overflow, 5u) << "color_degrade symmetry not assigned";
+  EXPECT_EQ(target.color_degrade_counts_.or_summand_overflow, 6u) << "color_degrade or_summand not assigned";
+  EXPECT_EQ(target.color_degrade_counts_.color_class_overflow, 7u) << "color_degrade color_class not assigned";
 
   // Deep copy independence.
   target.rays_[0].w_ = 999.0f;
@@ -1087,6 +1097,9 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_EQ(moved.lane_class_count_, 2u) << "lane_class_count_ not moved";
   EXPECT_EQ(moved.crystal_count_, 4u) << "crystal_count_ not moved";         // task-exit-seam-crystal-count
   EXPECT_EQ(moved.sim_scene_credit_, 11u) << "sim_scene_credit_ not moved";  // scrum-312
+  EXPECT_EQ(moved.color_degrade_counts_.symmetry_group_overflow, 5u) << "color_degrade symmetry not moved";
+  EXPECT_EQ(moved.color_degrade_counts_.or_summand_overflow, 6u) << "color_degrade or_summand not moved";
+  EXPECT_EQ(moved.color_degrade_counts_.color_class_overflow, 7u) << "color_degrade color_class not moved";
 
   // Moved-from source contract — three categories:
   // (a) rays_ pointer ownership transferred → nullptr + zeroed size/capacity.
@@ -1133,6 +1146,9 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   EXPECT_EQ(dst.crystals_.size(), 1u);
   EXPECT_EQ(dst.crystal_count_, 4u) << "crystal_count_ not move-assigned";         // task-exit-seam-crystal-count
   EXPECT_EQ(dst.sim_scene_credit_, 11u) << "sim_scene_credit_ not move-assigned";  // scrum-312
+  EXPECT_EQ(dst.color_degrade_counts_.symmetry_group_overflow, 5u) << "color_degrade symmetry not move-assigned";
+  EXPECT_EQ(dst.color_degrade_counts_.or_summand_overflow, 6u) << "color_degrade or_summand not move-assigned";
+  EXPECT_EQ(dst.color_degrade_counts_.color_class_overflow, 7u) << "color_degrade color_class not move-assigned";
   // task-331.1: the outgoing_wl_ move-assign trap (scrum-268.8) is the closest
   // precedent — assert outgoing_component_ survives move-assign so we don't
   // repeat that failure mode.

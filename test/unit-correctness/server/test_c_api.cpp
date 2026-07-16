@@ -962,7 +962,11 @@ TEST_F(ServerLifecycleApi, GetColorOverflowInfoZeroWhenNoOverflow) {
   LUMICE_ColorOverflowInfo info{};
   ASSERT_EQ(LUMICE_GetColorOverflowInfo(server_, &info), LUMICE_OK);
   EXPECT_EQ(info.component_overflow_count, 0);
-  EXPECT_EQ(info.symmetry_group_overflow_count, 0);  // reserved field always 0 in this task
+  // The three GPU-only async caps are 0 here: no overflow, and this CPU-backend
+  // config never touches the device buffer-layout limits. task-color-degrade-gui-surfacing.
+  EXPECT_EQ(info.symmetry_group_overflow_count, 0);
+  EXPECT_EQ(info.or_summand_overflow_count, 0);
+  EXPECT_EQ(info.color_class_overflow_count, 0);
 }
 
 TEST_F(ServerLifecycleApi, GetColorOverflowInfoReportsPredicateDrops) {
@@ -997,7 +1001,10 @@ TEST_F(ServerLifecycleApi, GetColorOverflowInfoReportsPredicateDrops) {
   LUMICE_ColorOverflowInfo info{};
   ASSERT_EQ(LUMICE_GetColorOverflowInfo(server_, &info), LUMICE_OK);
   EXPECT_EQ(info.component_overflow_count, 1);  // 65 - 64 = 1 predicate dropped
+  // GPU-only async caps stay 0 on this CPU-backend, sync-only commit path.
   EXPECT_EQ(info.symmetry_group_overflow_count, 0);
+  EXPECT_EQ(info.or_summand_overflow_count, 0);
+  EXPECT_EQ(info.color_class_overflow_count, 0);
 }
 
 TEST_F(ServerLifecycleApi, GetColorOverflowInfoNullArgs) {

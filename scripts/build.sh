@@ -51,11 +51,11 @@ build() {
         #         ctx->Yield() calls — fixed-dt (and --no-frame-limit) starve that thread
         #         the same way they starve save_open_visual_consistency's accumulation.
         echo "Running GUI correctness tests (fixed-dt, fast)..."
-        "$GUI_TEST_BIN" --fixed-dt --filter "-perf_test,-save_open_visual_consistency,-revert_repushes_server_display_state,-zorder_priority_persists_across_rerun"
+        "$GUI_TEST_BIN" --fixed-dt --filter "-perf_test,-save_open_visual_consistency,-revert_repushes_server_display_state,-zorder_priority_persists_across_rerun,-p2_gpu_color_degrade"
         ret=$?
         if [[ $ret == 0 ]]; then
           echo "Running GUI real-timing tests (perf + wall-clock-dependent, isolated)..."
-          "$GUI_TEST_BIN" --filter "perf_test,save_open_visual_consistency,revert_repushes_server_display_state,zorder_priority_persists_across_rerun"
+          "$GUI_TEST_BIN" --filter "perf_test,save_open_visual_consistency,revert_repushes_server_display_state,zorder_priority_persists_across_rerun,p2_gpu_color_degrade"
           ret=$?
         fi
       else
