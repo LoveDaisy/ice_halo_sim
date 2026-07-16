@@ -15,6 +15,7 @@ add_executable(lumice_bench
   "${PROJ_BENCH_DIR}/bench_optics.cpp"
   "${PROJ_BENCH_DIR}/bench_scene.cpp"
   "${PROJ_BENCH_DIR}/bench_sim.cpp"
-  "${PROJ_BENCH_DIR}/bench_filter.cpp")
+  "${PROJ_BENCH_DIR}/bench_filter.cpp"
+  "${PROJ_BENCH_DIR}/bench_crystal.cpp")
 target_link_libraries(lumice_bench
   PRIVATE benchmark::benchmark ${CMAKE_THREAD_LIBS_INIT} lumice_obj)

@@ -1,4 +1,10 @@
 [tool.pytest.ini_options]
+# testpaths is the e2e surface: bare `pytest` means "the end-to-end suite", and
+# CI's fast leg leans on that meaning. Not every pytest file in the tree belongs
+# here — test/unit-correctness/scripts/ is pytest too, but it is a unit layer
+# that needs no build and runs on every commit, so it is named explicitly by the
+# `policy` CI job instead. Adding it below would both blur what bare `pytest`
+# means and give it the slower PR-only cadence.
 testpaths = [
     "test/e2e-correctness",
     "test/parity-cross-backend",

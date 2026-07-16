@@ -1,7 +1,5 @@
 // FilterSpec::Match micro-benchmark: canonical-form matcher throughput
 // for single and complex (OR-of-raypaths) filters under P+D symmetry.
-// TODO(#247.4): r.rp_ was removed in #246; this file needs rewriting to use
-// RayBuffer / RecorderAppend APIs before -b bench builds will compile again.
 
 #include <benchmark/benchmark.h>
 
@@ -33,16 +31,25 @@ AxisDistribution MakeAzUniformRoll0() {
   return d;
 }
 
-// Pack raypath ids into a RaySeg.
-RaySeg MakeRay(std::initializer_list<IdType> fns) {
-  RaySeg r{};
-  r.rp_.Clear();
+// A ray plus its raypath recorder. #247.4 moved RaypathRecorder out of RaySeg into
+// RayBuffer's parallel recorders_ array, so the matcher now takes the two separately.
+// These recorders stay inline-only (2 hits << RaypathRecorder::kInlineCap), hence
+// bare operator<< and a null overflow arena at the Match call sites.
+struct BenchRay {
+  RaySeg seg;
+  RaypathRecorder rec;
+};
+
+// Pack raypath ids into a BenchRay.
+BenchRay MakeRay(std::initializer_list<IdType> fns) {
+  BenchRay r{};
+  r.rec.Clear();
   for (auto fn : fns) {
-    r.rp_ << fn;
+    r.rec << fn;
   }
-  r.from_face_ = kInvalidId;
-  r.to_face_ = kInvalidId;
-  r.w_ = 1.0f;
+  r.seg.from_face_ = kInvalidId;
+  r.seg.to_face_ = kInvalidId;
+  r.seg.w_ = 1.0f;
   return r;
 }
 
@@ -51,8 +58,8 @@ RaySeg MakeRay(std::initializer_list<IdType> fns) {
 // CAVEAT (exp #1-3 workload artifact): the 30 rays distribute over only 3 orbits: {3,5}/{3,7} (12),
 // {3,6} (6), {3,8} (12) — so OR-filters cycling {3,5}/{3,6}/{3,7}/{3,8} achieve 100% coverage at N=4,
 // masking true O(N) cost behind universal early-out. Use MakeNonMatchingRayBatch for worst-case scaling.
-std::vector<RaySeg> MakeRayBatch() {
-  std::vector<RaySeg> rays;
+std::vector<BenchRay> MakeRayBatch() {
+  std::vector<BenchRay> rays;
   rays.reserve(30);
   for (IdType a = 3; a <= 8; a++) {
     for (IdType b = 3; b <= 8; b++) {
@@ -67,8 +74,8 @@ std::vector<RaySeg> MakeRayBatch() {
 
 // Build a 30-ray batch where every ray contains a pyramid-upper face (13..17) so all rays
 // fall outside prism-only OR-filter accept sets. Worst-case workload for measuring linear-N scaling.
-std::vector<RaySeg> MakeNonMatchingRayBatch() {
-  std::vector<RaySeg> rays;
+std::vector<BenchRay> MakeNonMatchingRayBatch() {
+  std::vector<BenchRay> rays;
   rays.reserve(30);
   for (IdType a = 13; a <= 17; a++) {
     for (IdType b = 3; b <= 8; b++) {
@@ -115,7 +122,7 @@ static void BM_FilterMatch_C2Native_N1_PD(benchmark::State& state) {
   size_t n = rays.size();
 
   for (auto _ : state) {
-    bool r = spec->Match(rays[idx]);
+    bool r = spec->Match(rays[idx].seg, rays[idx].rec);
     benchmark::DoNotOptimize(r);
     idx++;
     if (idx == n) {
@@ -139,7 +146,7 @@ static void BM_FilterMatch_C2Native_ComplexN_PD(benchmark::State& state) {
   size_t n = rays.size();
 
   for (auto _ : state) {
-    bool r = spec->Match(rays[idx]);
+    bool r = spec->Match(rays[idx].seg, rays[idx].rec);
     benchmark::DoNotOptimize(r);
     idx++;
     if (idx == n) {
@@ -162,7 +169,7 @@ static void BM_FilterMatch_C2Native_ComplexN_PD_NoMatch(benchmark::State& state)
 
   // Sanity: every ray must miss the filter (no-match workload).
   for (const auto& r : rays) {
-    if (spec->Match(r)) {
+    if (spec->Match(r.seg, r.rec)) {
       state.SkipWithError("non-matching ray batch unexpectedly matched FilterSpec");
       return;
     }
@@ -172,7 +179,7 @@ static void BM_FilterMatch_C2Native_ComplexN_PD_NoMatch(benchmark::State& state)
   size_t n = rays.size();
 
   for (auto _ : state) {
-    bool r = spec->Match(rays[idx]);
+    bool r = spec->Match(rays[idx].seg, rays[idx].rec);
     benchmark::DoNotOptimize(r);
     idx++;
     if (idx == n) {

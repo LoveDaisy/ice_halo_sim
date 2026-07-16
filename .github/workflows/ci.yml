@@ -338,6 +338,55 @@ jobs:
       - name: Build (compiles cuda_trace_backend.cu via nvcc)
         run: cmake --build build --parallel
 
+  # Bench compile-only: builds the `lumice_bench` target so BUILD_BENCH=ON cannot
+  # rot again. It does NOT run the benchmarks — numbers off a shared, throttled
+  # CI runner are noise, and running them would only add PR latency. Perf work
+  # measures on the dedicated machines instead (doc/performance-testing.md).
+  #
+  # Why this job exists (2026-07-16): neither CI nor
+  # the pre-commit hook passed -b / -DBUILD_BENCH=ON, so nothing ever compiled
+  # bench/ and it silently rotted for months — e7c30933's RaySeg SBO refactor
+  # left bench_filter.cpp referencing a member that no longer existed, and the
+  # break surfaced only when someone tried -b by hand. Fixing the file without
+  # adding this gate would just restart that clock.
+  #
+  # No job-level `if:` — relies on the workflow-level `on: push / pull_request`
+  # triggers so both PRs and branch pushes run this gate.
+  bench-compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      # Independent cache key: BUILD_BENCH=ON pulls in the google/benchmark CPM
+      # package, so this configure's dependency set differs from the plain
+      # ubuntu-x64 build job's. Sharing a key would let one pollute the other.
+      - name: Cache CPM dependencies
+        uses: actions/cache@v6
+        with:
+          path: cpm_cache
+          key: cpm-ubuntu-x64-bench-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: cpm-ubuntu-x64-bench-
+
+      # BUILD_TEST=OFF + BUILD_GUI=OFF keep this job narrow: the build job above
+      # already covers those targets, and skipping them avoids the OpenGL/X11
+      # deps and the GLAD2 Python generator. LUMICE_NATIVE_ARCH=OFF matches the
+      # rest of CI.
+      - name: Configure (bench compile-only)
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TEST=OFF
+          -DBUILD_GUI=OFF
+          -DBUILD_BENCH=ON
+          -DLUMICE_NATIVE_ARCH=OFF
+
+      # Target-scoped on purpose: `lumice_bench` pulls in lumice_obj, so this
+      # compiles every bench translation unit plus the core it links against,
+      # without building the CLI/install artifacts the build job already covers.
+      - name: Build lumice_bench (compile + link only, no run)
+        run: cmake --build build --target lumice_bench --parallel
+
   e2e-test:
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
@@ -705,3 +754,35 @@ jobs:
 
       - name: Policy checks (env knobs / API boundary / using-namespace)
         run: python3 scripts/check_policies.py
+
+      - name: Install Python dependencies
+        # Capped at the current major: this job gates every commit, so a pytest
+        # release that changes collection or tokenizer behaviour would block the
+        # repo on a day nobody touched it. Raise the cap deliberately instead.
+        run: pip install 'pytest<9'
+
+      # The gates' own unit tests live here rather than in the e2e pytest run:
+      # they need no build and must run on every commit, which is this job's
+      # cadence and not that one's (it is PR/main-only and waits on a compile).
+      # They are excluded from pyproject's testpaths for the same reason, so
+      # they have to be named explicitly here.
+      - name: Unit tests for the policy gates
+        run: python3 -m pytest test/unit-correctness/scripts -q
+
+  # Diff-scoped sibling of the policy gate above: prose added by THIS PR must not
+  # cite the git-ignored per-task working notes (they are archived on close, so
+  # the reference dangles). Only added lines are read, so the pre-existing body
+  # of such references never blocks anyone. Runs on pull_request because that is
+  # where a merge-base exists; the pre-commit hook covers the local side.
+  new-refs:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: New-reference check (added lines vs merge-base)
+        run: |
+          base=$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD)
+          python3 scripts/check_new_refs.py --range "$base..HEAD"

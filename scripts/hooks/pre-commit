@@ -14,9 +14,14 @@
 REPO_ROOT=$(git rev-parse --show-toplevel) || exit 0
 cd "$REPO_ROOT" || exit 0
 
-# 1) Deterministic policy checks (whole tree — fast).
+# 1) Deterministic policy checks (whole tree — fast) plus the diff-scoped check
+#    on what this commit adds. Two entry points on purpose: the first asks what
+#    state the repo is in, the second asks what you just wrote.
 if command -v python3 >/dev/null 2>&1; then
   if ! python3 scripts/check_policies.py; then
+    exit 1
+  fi
+  if ! python3 scripts/check_new_refs.py --staged; then
     exit 1
   fi
 else

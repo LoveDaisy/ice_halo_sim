@@ -39,6 +39,7 @@ env 是标准做法，不在治理范围内。
 |---|---|---|---|
 | `LUMICE_TRACE_BACKEND` | `env::TraceBackendOverride` ← `simulator.cpp` `CreateBackend` / `server.cpp` `ResolveMetalRoute` | 选后端 `legacy`/`cpu_backend`/`metal`——**曾经的 footgun，已降级** | **CLI `--backend auto\|cpu\|metal`**（`src/main.cpp`）+ C API `LUMICE_SetPreferredBackend` / GUI checkbox。env 仅作 debug/CI 覆盖，生效即 WARN |
 | `LUMICE_DISPATCH_RAY_NUM` | `env::DispatchRayNum` ← `server.cpp` `GenerateScene` | GPU dispatch 粒度（perf 旋钮） | 无（纯实验旋钮，启动 INFO 可观测） |
+| `LUMICE_GEOM_CLOCK` | `env::GeomClock` ← `simulator.cpp` `Run` | legacy CPU 几何时钟 = 每个采样形状服务多少光线（即 D/K）。1 = 每光线一个新形状（标定 oracle）；默认 32 = `kSmallBatchRayNum`（该值是光线分批 stride，几何重采样搭它顺风车，**并非为采样质量选定**）。⚠️ **安全域 [1, 64]；≥128 会破坏堆**（实测 128→`139 134 139`；阈值恰为 SimBatch 大小 `server.cpp` `kDefaultRayNum=128`，缓冲仅 `ray_num*2`=256 而工作集 ≈ `geom_clock*2`）——机制与实测退出码见 `env_knobs.hpp` `GeomClock()` | 无（纯实验旋钮，启动 INFO 可观测） |
 | `LUMICE_COMMIT_RAY_NUM` | `env::CommitRayNum` ← `server.cpp` `ConsumeData` | commit 粒度（perf 旋钮） | 无（纯实验旋钮，启动 INFO 可观测） |
 | `LUMICE_XYZ_DRAIN_BATCHES` | `env::XyzDrainBatches` ← `simulator.cpp` `Run` | scrum-312 第三时钟 drain cadence 上限（每 N 个 device-fused batch 强制回读 XYZ；perf/精度旋钮，CUDA 路径） | 无（纯实验旋钮，启动 INFO 可观测；GUI 显示节奏主要由 producer-pause flush 驱动，此为 burst 内上界） |
 | `LUMICE_BATCH_RAY_NUM` | `env::CommitRayNum`（fallback） | 已废弃别名（deprecation WARN） | 由 `COMMIT_RAY_NUM` 取代 |

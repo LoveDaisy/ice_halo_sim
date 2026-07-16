@@ -37,6 +37,26 @@ std::optional<std::string> TraceBackendOverride(Logger& logger);
 // override when set to a positive integer, else default_val. INFO once if applied.
 std::size_t DispatchRayNum(Logger& logger, std::size_t default_val);
 
+// LUMICE_GEOM_CLOCK — experiment knob: how many rays share one
+// sampled crystal shape on the legacy CPU path (its geometry clock). This is the
+// D/K ratio directly: 1 = a fresh shape per ray (the unconstrained optimum, used
+// to build the calibration oracle), 32 = the shipped default. Returns the
+// override when positive, else default_val. INFO once if applied.
+//
+// KNOWN UPPER BOUND — safe range is [1, 64]; >= 128 CORRUPTS THE HEAP.
+// Measured (3 reps each): 32 -> 0 0 0, 64 -> 0 0 0,
+// 128 -> 139 134 139, 256 -> 139 0 134 (139=SIGSEGV, 134=SIGABRT, intermittent).
+// Mechanism: the threshold is exactly the SimBatch size (server.cpp
+// kDefaultRayNum=128). SimulateOneWavelength receives that as ray_num and sizes
+// its ray buffers to ray_num*2 = 256, while a sub-batch's working set is
+// ~curr_ray_num*2 == geom_clock*2 -- so 64 needs 128 and fits, 128 needs 256 and
+// sits exactly at capacity, spilling intermittently. This is deliberately NOT
+// clamped: a silent clamp would make a sweep quietly not do what was asked. The
+// geometry clock is entangled with the ray-buffer capacity model and that must be
+// fixed before it can become a tunable quantity; unreachable in production since
+// the default is the hard-coded constant.
+std::size_t GeomClock(Logger& logger, std::size_t default_val);
+
 // LUMICE_COMMIT_RAY_NUM (with legacy LUMICE_BATCH_RAY_NUM fallback) — consumer
 // commit granularity. COMMIT takes precedence; BATCH is honored as a fallback.
 // Returns the override when positive, else default_val. INFO once if applied; a
