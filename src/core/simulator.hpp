@@ -133,6 +133,19 @@ class Simulator {
 
   static constexpr size_t kSmallBatchRayNum = 32;
 
+  // explore-374 experiment knob (LUMICE_GEOM_CLOCK): rays served by one sampled
+  // crystal shape on this path -- the legacy CPU geometry clock, i.e. D/K.
+  // Defaults to kSmallBatchRayNum, which is where the shipped value comes from:
+  // the geometry resample rides the ray-batching stride as a side effect, it was
+  // never chosen for sampling quality. 1 = a fresh shape per ray (the oracle).
+  // Resolved from env at Run() entry.
+  //
+  // SAFE RANGE [1, 64] -- values >= 128 corrupt the heap, because this doubles as
+  // the ray-batch stride and SimulateOneWavelength's buffers only hold
+  // ray_num*2 == 256 for a 128-ray SimBatch. See env_knobs.hpp GeomClock() for
+  // the measured exit codes and the full mechanism before raising it.
+  size_t geom_clock_ = kSmallBatchRayNum;
+
   QueuePtrS<SimBatch> config_queue_;
   QueuePtrS<SimData> data_queue_;
   std::atomic_bool stop_;

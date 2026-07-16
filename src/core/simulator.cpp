@@ -804,6 +804,7 @@ void Simulator::Run() {
   auto backend = CreateBackend(preferred_backend_.load(std::memory_order_acquire), logger_);
   // scrum-312 third-clock drain cadence cap + fresh window per Run().
   xyz_drain_batches_ = env::XyzDrainBatches(logger_, kDefaultXyzDrainBatches);
+  geom_clock_ = env::GeomClock(logger_, kSmallBatchRayNum);
   xyz_win_ = XyzDrainWindow{};
   bool warned_no_renders = false;
   bool warned_multi_renderer = false;
@@ -1030,8 +1031,12 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
       // For deterministic params, create/copy crystal once per ci iteration.
       size_t ci_crystal_id = kInfSize;
 
-      for (size_t cn = 0; cn < crystal_ray_num[ci] && !stop_; cn += kSmallBatchRayNum) {  // for a same crystal
-        size_t curr_ray_num = std::min(kSmallBatchRayNum, crystal_ray_num[ci] - cn);
+      // explore-374: geom_clock_ (LUMICE_GEOM_CLOCK, default kSmallBatchRayNum)
+      // sets how many rays share one sampled shape. It doubles as the ray-batch
+      // size here, exactly as the shipped constant did -- see E6's deterministic
+      // control, which isolates the geometry effect from the batching effect.
+      for (size_t cn = 0; cn < crystal_ray_num[ci] && !stop_; cn += geom_clock_) {  // for a same crystal
+        size_t curr_ray_num = std::min(geom_clock_, crystal_ray_num[ci] - cn);
 
         size_t curr_crystal_id = 0;
         if (deterministic && ci_crystal_id != kInfSize) {
