@@ -184,23 +184,34 @@ def added_lines(diff_args: list[str]) -> dict[str, set[int]]:
     result: dict[str, set[int]] = {}
     path: str | None = None
     lineno = 0
+    in_hunk = False
     after_old_header = False
     for line in out.splitlines():
-        # A `+++ ` header only counts directly after its `--- ` partner. An added
-        # line of a Markdown file that quotes a patch verbatim starts with `++ `
-        # and would otherwise be read as a header, rerouting the rest of the hunk
-        # to whatever path it names.
-        if after_old_header and line.startswith("+++ "):
+        # `diff --git` opens a file section; headers live between it and the
+        # section's first `@@`, and nowhere else. Tracking that position is what
+        # makes the two header tests below safe, because neither prefix is
+        # unambiguous on its own: with -U0 every in-hunk line carries a `+`/`-`
+        # prefix, so payload text starting with `++ ` renders as `+++ ` and
+        # payload text starting with `-- ` renders as `--- `. Read positionally,
+        # a quoted patch inside a Markdown file cannot impersonate a header —
+        # and the failure it would cause is the silent kind: the hunk's real
+        # violations get attributed to a path that does not exist, whose blob
+        # reads back empty, and the gate passes green with no teeth.
+        if line.startswith("diff --git "):
+            path, in_hunk, after_old_header = None, False, False
+            continue
+        if not in_hunk and after_old_header and line.startswith("+++ "):
             target = line[4:]
             path = None if target == "/dev/null" else target[2:] if target.startswith("b/") else target
         elif line.startswith("@@"):
             m = HUNK_RE.match(line)
             if m:
                 lineno = int(m.group(1))
+                in_hunk = True
         elif path and line.startswith("+"):
             result.setdefault(path, set()).add(lineno)
             lineno += 1
-        after_old_header = line.startswith("--- ")
+        after_old_header = not in_hunk and line.startswith("--- ")
     return result
 
 
