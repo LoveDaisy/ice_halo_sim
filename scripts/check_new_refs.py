@@ -184,8 +184,13 @@ def added_lines(diff_args: list[str]) -> dict[str, set[int]]:
     result: dict[str, set[int]] = {}
     path: str | None = None
     lineno = 0
+    after_old_header = False
     for line in out.splitlines():
-        if line.startswith("+++ "):
+        # A `+++ ` header only counts directly after its `--- ` partner. An added
+        # line of a Markdown file that quotes a patch verbatim starts with `++ `
+        # and would otherwise be read as a header, rerouting the rest of the hunk
+        # to whatever path it names.
+        if after_old_header and line.startswith("+++ "):
             target = line[4:]
             path = None if target == "/dev/null" else target[2:] if target.startswith("b/") else target
         elif line.startswith("@@"):
@@ -195,6 +200,7 @@ def added_lines(diff_args: list[str]) -> dict[str, set[int]]:
         elif path and line.startswith("+"):
             result.setdefault(path, set()).add(lineno)
             lineno += 1
+        after_old_header = line.startswith("--- ")
     return result
 
 
