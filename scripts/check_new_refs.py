@@ -94,6 +94,14 @@ PATTERNS: list[tuple[re.Pattern[str], str]] = [
         "a path into the git-ignored working-notes tree",
     ),
     (
+        # The number branch deliberately has no trailing \b, unlike the two
+        # below. Letter-suffixed phase labels (`<kind>-3b`, `<kind>-3c`) are a
+        # real citation form here: a \b would drop 10 of them across the tree,
+        # all in the shape this gate targets ("host-only until <kind>-3c"). It
+        # reports the numeric stem as the matched token, which is enough — the
+        # file:line points at the line. Nothing is gained in exchange: the audit
+        # of 364 real tokens turned up no `<kind>-<digits><letters>` false
+        # positive, so the guard would cost recall and buy no precision.
         re.compile(
             r"\b(?:task|explore|scrum|chore)-"
             r"(?:\d+(?:\.\d+)*|[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+(?:\.\d+)*)"
@@ -101,7 +109,13 @@ PATTERNS: list[tuple[re.Pattern[str], str]] = [
         "a task identifier",
     ),
     (
-        re.compile(r"\bcode-review-\d+"),
+        # Trailing \b, and here it is load-bearing in the other direction: the
+        # rule's own prose names the filename pattern with an `N` placeholder
+        # (`code-review-0N`), which an unguarded `\d+` matches via the `0`.
+        # That wording is how anyone documents this rule, so without the guard
+        # the gate fires on any file explaining itself. Unlike the branch above
+        # there is no letter-suffixed round to lose: rounds are numbered.
+        re.compile(r"\bcode-review-\d+\b"),
         "a review-round note filename",
     ),
     (
