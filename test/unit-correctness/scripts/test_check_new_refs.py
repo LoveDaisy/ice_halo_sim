@@ -414,6 +414,129 @@ def test_python_string_literals_are_out_of_scope_but_prose_is_not(repo: Repo) ->
     assert repo.hits() == [("t.py", 1), ("t.py", 3)]
 
 
+# --- scope: the C-family path, and the cross-module contract under it ---------
+#
+# This is the path the rule exists for: C/C++ comments hold the large majority of
+# the citations the inventory found, and the breach that prompted the gate landed
+# in production core code. It is also the only path that does not parse anything
+# itself. It infers where the comments are by diffing the original text against
+# check_policies.strip_comments' output, which is legible only because that
+# function blanks comment characters to spaces and copies the rest verbatim,
+# leaving offsets 1:1. Nothing in either module enforces that; it is a contract
+# held across a module boundary by a docstring. Should strip_comments ever blank
+# to a different character, or stop preserving length, the zip below it silently
+# misaligns and this gate reports success while reading nonsense. The two tests
+# here are what turns that contract into something a change has to notice.
+
+C_FAMILY_SUFFIXES_UNDER_TEST = [".cpp", ".hpp", ".mm", ".cu"]
+
+
+@pytest.mark.parametrize("suffix", C_FAMILY_SUFFIXES_UNDER_TEST)
+def test_c_family_comment_citations_are_caught_at_the_right_line(
+    repo: Repo, suffix: str
+) -> None:
+    """Both comment forms are prose, and the reported line must be exact.
+
+    The block comment spans two lines with the citation on the second, so the
+    line numbers cannot come out right by accident: they are only correct while
+    the character offsets of the stripped text still line up with the original.
+    The suffixes are parametrized rather than represented by one sample because
+    they are a membership set, and dropping an entry from it is a one-character
+    edit that would otherwise leave the whole language silently unscanned.
+    """
+    repo.write(f"src/a{suffix}", "int f() { return 0; }\n")
+    repo.commit()
+
+    repo.write(
+        f"src/a{suffix}",
+        "#include <string>\n"
+        "// see scratchpad/example-name/ for the derivation\n"
+        "int f() { return 0; }  // superseded by explore-example-name\n"
+        "/* the longer note starts here\n"
+        "   and cites scrum-example-topic before it ends */\n"
+        "int g() { return 1; }\n",
+    )
+
+    assert repo.hits() == [(f"src/a{suffix}", 2), (f"src/a{suffix}", 3), (f"src/a{suffix}", 5)]
+
+
+@pytest.mark.parametrize("suffix", C_FAMILY_SUFFIXES_UNDER_TEST)
+def test_c_family_string_literals_are_out_of_scope(repo: Repo, suffix: str) -> None:
+    """A literal is program data in C too, and data is not prose.
+
+    Same judgement as the Python case, pinned separately because it is reached by
+    an entirely different mechanism: there a tokenizer classifies the string,
+    here a literal survives only because strip_comments copies it through
+    unchanged, so it never looks like blanked-out comment text.
+
+    Every citation-shaped literal below shares its line with a real comment, and
+    that is the point rather than decoration. A file of bare literals cannot tell
+    the two readings apart — with no comment on the line there is nothing for a
+    whole-line reading to be triggered by, and it passes either way. Pairing them
+    forces the distinction: the line is prose, and only the comment half of it is.
+    """
+    repo.write(f"src/b{suffix}", "int f() { return 0; }\n")
+    repo.commit()
+
+    repo.write(
+        f"src/b{suffix}",
+        'const char* kName = "task-901";  // the identifier is data, not a citation\n'
+        'const char* kPath = "scratchpad/example-name/plan.md";  // so is this one\n'
+        'void F() { Log("round-97 finished"); }  /* and this */\n',
+    )
+
+    assert repo.hits() == []
+
+
+# --- scope: the remaining prose readers ---------------------------------------
+
+
+@pytest.mark.parametrize("rel", ["ci.yml", "run.sh", "CMakeLists.txt"])
+def test_hash_comment_files_are_scanned(repo: Repo, rel: str) -> None:
+    """Hash-comment types are reached by suffix and by exact name, both of which
+    are membership sets that a tidying pass can shrink without any test noticing."""
+    repo.write(rel, "first line\n")
+    repo.commit()
+    repo.write(rel, "first line\n# mirrors scratchpad/example-name/ layout\n")
+
+    assert repo.hits() == [(rel, 2)]
+
+
+def test_hash_inside_a_string_is_not_a_comment(repo: Repo) -> None:
+    """The hash reader tracks quotes, and must: a `#` inside a literal opens no
+    comment, so a citation-shaped token behind one is data and stays out of scope.
+
+    The first line carries the whole weight: its `#` sits inside the quotes and it
+    has no real comment at all, so a reader that stopped honouring quotes would
+    invent prose here and report a violation that does not exist. A line with a
+    genuine trailing comment could not show that — it is reported either way, and
+    only the matched token would differ.
+    """
+    repo.write("run.sh", "echo hi\n")
+    repo.commit()
+    repo.write(
+        "run.sh",
+        'echo "# not a comment: see scratchpad/example-name/ here"\n'
+        'echo ok  # a real comment, citing explore-example-name\n',
+    )
+
+    assert repo.hits() == [("run.sh", 2)]
+
+
+def test_unparsable_python_falls_back_to_reading_comments(repo: Repo) -> None:
+    """A partial edit must degrade to comments, not to scanning nothing.
+
+    Python prose normally comes from the tokenizer, which raises on source that
+    does not parse. Failing open there would be the quiet kind of failure: the
+    file still gets committed, and its comments simply stop being checked.
+    """
+    repo.write("t.py", "x = 1\n")
+    repo.commit()
+    repo.write("t.py", "def f(:\n    # mid-edit, cites scratchpad/example-name/ still\n")
+
+    assert repo.hits() == [("t.py", 2)]
+
+
 def test_unknown_file_types_are_not_scanned(repo: Repo) -> None:
     """Reading an unknown type whole-file would fire on identifiers and payloads."""
     repo.write("data.json", "{}\n")
