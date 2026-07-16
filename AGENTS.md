@@ -38,7 +38,9 @@ pytest -v                                 # fast e2e only (matches CI; testpaths
 ./scripts/format.sh --check          # read-only: exit 1 if anything needs formatting (used by the pre-commit hook; CI runs the format-check job)
 
 # Engineering-policy gate (env-knob centralization/registration, GUI API boundary, using-namespace)
-python3 scripts/check_policies.py
+python3 scripts/check_policies.py    # whole-tree: what state is the repo in?
+python3 scripts/check_new_refs.py --staged        # diff-scoped: what did you just write?
+python3 scripts/check_new_refs.py --range A..B    # same, over a commit range (what CI runs)
 ./scripts/install-hooks.sh           # install the non-interactive pre-commit hook (one-time)
 ```
 
@@ -76,6 +78,24 @@ Release artifacts land in `build/cmake_install/`. Debug builds stay in `build/cm
   (centralized + logged on startup) and test/build infra. All `LUMICE_*` env reads live in
   `src/util/env_knobs.cpp` and are enforced by `scripts/check_policies.py` (CI `policy` job +
   local pre-commit hook, installed via `./scripts/install-hooks.sh`).
+- Working-note references: prose in a tracked file must not cite `scratchpad/` artifacts —
+  task ids (`task-<name>`, `explore-<name>`, `scrum-<name>`, `chore-<name>`), per-task note
+  filenames (`plan.md`, `progress.md`, `SUMMARY.md`), `code-review-0N`, `round-N`, or
+  `scratchpad/` paths. That tree is git-ignored and archived per task, so the reference
+  dangles for anyone reading later; state the mechanism itself instead. Permanent anchors
+  are fine and should stay: PR numbers, commit hashes, `file:line`, code symbol names.
+  This applies to any long-lived prose read apart from the context it was written in —
+  production comments, test docstrings, CI config comments, and `doc/` alike.
+  Enforced by `scripts/check_new_refs.py`, a **second, diff-scoped entry point** next to
+  `check_policies.py` — not a check inside it. It reads only the lines a change *adds*
+  (CI `new-refs` job on PRs vs merge-base; pre-commit hook on the staged diff), so the
+  large body of pre-existing references never blocks a commit. Only natural-language
+  regions are read: comments, Python docstrings, and Markdown — never string literals.
+  There is no inline exemption, by design: if some prose genuinely needs such a reference,
+  the rule is wrong and the rule should change. Files exempt from it are limited by one
+  criterion — the file's *subject* is this working-notes system itself, i.e. it must name
+  the system to do its job (this file, `CLAUDE.md`, and the root `.gitignore`). Citing the
+  system is not grounds for exemption; that is the thing being checked.
 
 ## Testing and Platform Notes
 
