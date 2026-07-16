@@ -70,56 +70,55 @@ void ServerPoller::Stop() {
   GUI_LOG_DEBUG("[Poller] Stop: worker paused");
 }
 
-// task-color-migration M4: split from the former single `EnsureRunning` to give display-time
-// refresh callers a wake path that does NOT publish valid=false — see doc/gui-state-
-// governance.md §4 支柱 2 and the header contract on WakeForRefresh.
-void ServerPoller::WakeForRestart(LUMICE_Server* server) {
+// Shared kPaused → kRunning transition for both public wake entry points. The valid=false publish
+// is the ONLY behavioral difference between restart and refresh, so it is a single bool parameter —
+// see the header contract on TransitionToRunning / WakeForRestart / WakeForRefresh. Returns true iff
+// it actually resumed, so callers log their resume line only on a real transition (pre-refactor
+// behavior — no-op paths logged nothing).
+bool ServerPoller::TransitionToRunning(LUMICE_Server* server, bool publish_reset) {
   if (!server) {
-    return;
+    return false;
   }
   {
     std::lock_guard<std::mutex> lk(mutex_);
     if (state_.load() == State::kRunning) {
-      return;  // Already running — zero overhead
+      return false;  // Already running — zero overhead
     }
     if (state_.load() == State::kTerminating) {
-      return;
+      return false;
     }
     // kPaused → resume polling
     server_ = server;
     last_generation_ = 0;
     last_quality_pass_time_ = std::chrono::steady_clock::now();
-    PublishValidReset();
+    if (publish_reset) {
+      PublishValidReset();
+    }
     state_.store(State::kRunning);
   }
   cv_.notify_all();
-  GUI_LOG_DEBUG("[Poller] WakeForRestart: resumed from paused (valid=false published)");
+  return true;
+}
+
+// task-color-migration M4: split from the former single `EnsureRunning` to give display-time
+// refresh callers a wake path that does NOT publish valid=false — see doc/gui-state-
+// governance.md §4 支柱 2 and the header contract on WakeForRefresh.
+void ServerPoller::WakeForRestart(LUMICE_Server* server) {
+  // publish_reset=true: fresh sim generation — publish valid=false so consumers ignore stale
+  // stats/lifecycle until the worker republishes.
+  if (TransitionToRunning(server, /*publish_reset=*/true)) {
+    GUI_LOG_DEBUG("[Poller] WakeForRestart: resumed from paused (valid=false published)");
+  }
 }
 
 void ServerPoller::WakeForRefresh(LUMICE_Server* server) {
-  if (!server) {
-    return;
+  // publish_reset=false: display-time refresh — the current snapshot must stay `valid` across the
+  // wake edge so SyncFromPoller does not transiently observe an invalid snapshot (which would let
+  // ReconcileSimState pull a completed sim back into kSimulating — task-color-migration AC1
+  // activity bug root cause (a)).
+  if (TransitionToRunning(server, /*publish_reset=*/false)) {
+    GUI_LOG_DEBUG("[Poller] WakeForRefresh: resumed from paused (valid preserved)");
   }
-  {
-    std::lock_guard<std::mutex> lk(mutex_);
-    if (state_.load() == State::kRunning) {
-      return;  // Already running — zero overhead
-    }
-    if (state_.load() == State::kTerminating) {
-      return;
-    }
-    // kPaused → resume polling WITHOUT publishing valid=false. Display-time callers rely on
-    // the current snapshot staying `valid` across the wake edge so SyncFromPoller does not
-    // transiently observe an invalid snapshot (which would let ReconcileSimState pull a
-    // completed sim back into kSimulating — task-color-migration AC1 activity bug root
-    // cause (a)).
-    server_ = server;
-    last_generation_ = 0;
-    last_quality_pass_time_ = std::chrono::steady_clock::now();
-    state_.store(State::kRunning);
-  }
-  cv_.notify_all();
-  GUI_LOG_DEBUG("[Poller] WakeForRefresh: resumed from paused (valid preserved)");
 }
 
 // Publish a valid=false copy of the current snapshot, preserving the payload (carry-forward)

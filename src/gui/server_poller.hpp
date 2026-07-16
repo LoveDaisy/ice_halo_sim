@@ -192,6 +192,20 @@ class ServerPoller {
   // Serializes under publish_mutex_. Called from Start()/WakeForRestart() on the main thread.
   void PublishValidReset();
 
+  // Shared body of WakeForRestart/WakeForRefresh: idempotently drive kPaused → kRunning with
+  // `server`, resetting the generation/quality-pass tracking under mutex_ and notifying the
+  // worker. The ONLY behavioral difference between the two public callers is whether a
+  // valid=false snapshot is published across the wake edge, so it is a single bool parameter:
+  //   publish_reset=true  (WakeForRestart) — fresh sim generation; consumers must ignore stale
+  //                        stats/lifecycle until the worker republishes.
+  //   publish_reset=false (WakeForRefresh) — display-time refresh; the current snapshot must
+  //                        stay `valid` across the wake so SyncFromPoller does not transiently
+  //                        observe an invalid snapshot (doc/gui-state-governance.md §4 支柱 2).
+  // Returns true iff it actually resumed (was kPaused); false on every no-op path (null server,
+  // already kRunning, kTerminating) so callers log their resume line only on a real transition,
+  // matching the pre-refactor behavior.
+  bool TransitionToRunning(LUMICE_Server* server, bool publish_reset);
+
   std::thread worker_;
   // state_ is atomic for lock-free reads in the poll loop; all writes are under mutex_.
   std::atomic<State> state_{ State::kPaused };
