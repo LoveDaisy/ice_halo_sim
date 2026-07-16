@@ -387,9 +387,21 @@ def main() -> int:
     group.add_argument("--range", dest="rng", metavar="BASE..HEAD", help="check a commit range")
     args = parser.parse_args()
 
-    if args.rng:
+    # Presence, not truthiness: an empty --range is a malformed range, and
+    # testing the string itself would quietly demote it to a staged scan.
+    if args.rng is not None:
         if ".." not in args.rng:
             parser.error("--range expects BASE..HEAD")
+        # The three-dot form is rejected rather than passed through. Splitting it
+        # on the first ".." silently yields a head of ".HEAD", and git's eventual
+        # complaint about that is not one anybody can act on. Its meaning is also
+        # not this tool's: A...B asks about the merge base, which the caller is
+        # better placed to resolve into the two-dot range it wants scanned.
+        if "..." in args.rng:
+            parser.error(
+                "--range expects the two-dot form BASE..HEAD; for merge-base "
+                "semantics pass `$(git merge-base A B)..B` explicitly"
+            )
         base, head = args.rng.split("..", 1)
         if not base or not head:
             parser.error("--range expects BASE..HEAD")

@@ -609,6 +609,41 @@ def test_staged_is_the_default_and_reads_the_index(
     assert check_new_refs.main() == 1
 
 
+def test_range_scans_the_commits_in_it(repo: Repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The other entry point: a commit range, as CI runs it against a merge base."""
+    base = repo._git("rev-parse", "HEAD").strip()
+    repo.write("doc/note.md", "# Note\nBackground sits in scratchpad/example-name/.\n")
+    repo.commit("later")
+
+    monkeypatch.setattr(sys, "argv", ["check_new_refs.py", "--range", f"{base}..HEAD"])
+
+    assert check_new_refs.main() == 1
+
+
+@pytest.mark.parametrize("rng", ["main...HEAD", "HEAD", ""])
+def test_malformed_range_is_refused_before_git_sees_it(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch, rng: str
+) -> None:
+    """A range this tool cannot honour must be named as such, not handed to git.
+
+    The three-dot form is the one that matters: it is close enough to correct to
+    be typed by accident, and splitting on the first `..` turns it into a head of
+    `.HEAD` — a string git rejects with a message about an unknown revision, which
+    tells the reader nothing about the syntax that caused it. Argument parsing is
+    the only place that still knows.
+
+    The empty case pins a smaller trap in the same branch: the range is dispatched
+    on whether it was *passed*, not on whether it is non-empty. Testing the string
+    would make `--range ""` fall through to a staged scan, quietly answering a
+    question nobody asked and exiting 0 on a clean index.
+    """
+    monkeypatch.setattr(sys, "argv", ["check_new_refs.py", "--range", rng])
+
+    with pytest.raises(SystemExit) as e:
+        check_new_refs.main()
+    assert e.value.code == 2
+
+
 @pytest.mark.parametrize("argv", [[], ["--staged"]])
 def test_unstaged_edits_are_not_the_gates_business(
     repo: Repo, monkeypatch: pytest.MonkeyPatch, argv: list[str]
