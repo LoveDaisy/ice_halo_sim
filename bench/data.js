@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784159464544,
+  "lastUpdate": 1784163003157,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "dec91f357ae70588ef872acc48f9e3268e0d21aa",
-          "message": "Merge pull request #101 from LoveDaisy/fix/capi_shared_lib\n\nfix(gui-shared-lib): expose XyzToSrgbUint8 via C API; restore GUI/core boundary",
-          "timestamp": "2026-05-20T18:14:57+08:00",
-          "tree_id": "5f0da1e0c5f0e2ce6ff584f3de125f66f308436c",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/dec91f357ae70588ef872acc48f9e3268e0d21aa"
-        },
-        "date": 1779272416214,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 337991.6,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 626705.2,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 414689.8,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 372986.7,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4800,6 +4752,54 @@ window.BENCHMARK_DATA = {
             "value": 373585.8,
             "unit": "rays/sec",
             "extra": "CPU: INTEL(R) XEON(R) PLATINUM 8573C\\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ec1879077f613c9bbfaabb3079281ef5164bb2de",
+          "message": "Merge pull request #203 from LoveDaisy/chore/reconciler-gate-wake-helper\n\nchore: harden reconciler include boundary + dedup wake path (scrum-353 T2 follow-up)",
+          "timestamp": "2026-07-16T08:44:05+08:00",
+          "tree_id": "b12a3a7a06d99002a3d740ef5c655ebef8581689",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/ec1879077f613c9bbfaabb3079281ef5164bb2de"
+        },
+        "date": 1784163001676,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 362318.6,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 588887.9,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 385555.8,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 456617.4,
+            "unit": "rays/sec",
+            "extra": "CPU: Intel(R) Xeon(R) 6973P-C\\nCores: 4"
           }
         ]
       }
