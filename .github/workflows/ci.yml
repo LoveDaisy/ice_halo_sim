@@ -756,7 +756,10 @@ jobs:
         run: python3 scripts/check_policies.py
 
       - name: Install Python dependencies
-        run: pip install pytest
+        # Capped at the current major: this job gates every commit, so a pytest
+        # release that changes collection or tokenizer behaviour would block the
+        # repo on a day nobody touched it. Raise the cap deliberately instead.
+        run: pip install 'pytest<9'
 
       # The gates' own unit tests live here rather than in the e2e pytest run:
       # they need no build and must run on every commit, which is this job's
