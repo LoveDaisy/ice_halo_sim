@@ -157,8 +157,16 @@ def added_lines(diff_args: list[str]) -> dict[str, set[int]]:
 
     -U0 drops context, so every non-header line inside a hunk is a `+` or a `-`;
     only `+` lines advance the new-file counter.
+
+    Rename detection is forced on (-M, not left to diff.renames) and R kept in
+    the filter. Without it, `git mv` of an untouched file is reported as a whole
+    delete plus a whole add, so every historical line of the moved file arrives
+    here as "added" — moving a file would demand its pre-existing prose be
+    cleaned up first, which is the one thing this gate exists not to do. With
+    rename detection a pure move emits no hunks at all, and a move-plus-edit
+    emits only the lines actually rewritten.
     """
-    out = _git(["diff", "-U0", "--no-color", "--no-renames", "--diff-filter=ACM", *diff_args])
+    out = _git(["diff", "-U0", "--no-color", "-M", "--diff-filter=ACMR", *diff_args])
     result: dict[str, set[int]] = {}
     path: str | None = None
     lineno = 0
