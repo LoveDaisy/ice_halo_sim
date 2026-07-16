@@ -29,6 +29,23 @@ and a frozen baseline would be a long-lived asset to maintain. Scanning only
 added lines starts green for free, needs no baseline, and matches how the rule
 actually gets broken — every recorded breach was newly written prose.
 
+What "added" rests on
+---------------------
+"Pre-existing prose is never billed to you" is not an absolute; it is inherited
+from git's rename detection, which is a similarity judgement rather than a record
+of the move. A moved file is only reported as a rename when enough of it survives
+(the -M default is 50%); below that, git emits a delete plus a whole-file add and
+every line of the moved file arrives here as new.
+
+The guarantee therefore holds exactly where it needs to. Its subject is the file
+with a large body of pre-existing references — hundreds of lines, dozens of
+citations — and no realistic edit to such a file removes half of it, so the
+rename is always detected and only the rewritten lines are scanned. The threshold
+is missed only by a short file whose content is largely replaced in the same
+commit as its move; there the whole file is scanned, which is the correct answer,
+because an author who rewrote most of a small file is writing this prose, not
+inheriting it.
+
 Scope
 -----
 Only natural-language regions are scanned: comments in every language, Python
@@ -179,6 +196,11 @@ def added_lines(diff_args: list[str]) -> dict[str, set[int]]:
     cleaned up first, which is the one thing this gate exists not to do. With
     rename detection a pure move emits no hunks at all, and a move-plus-edit
     emits only the lines actually rewritten.
+
+    -M is a similarity threshold (50% by default), so that last sentence has a
+    floor: a small file largely rewritten in the same commit as its move falls
+    under it and is scanned whole. See the module docstring for why that case is
+    the correct answer rather than a gap.
     """
     out = _git(["diff", "-U0", "--no-color", "-M", "--diff-filter=ACMR", *diff_args])
     result: dict[str, set[int]] = {}
