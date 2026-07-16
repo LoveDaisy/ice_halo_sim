@@ -343,7 +343,7 @@ jobs:
   # CI runner are noise, and running them would only add PR latency. Perf work
   # measures on the dedicated machines instead (doc/performance-testing.md).
   #
-  # Why this job exists (chore-bench-compile-gate, 2026-07-16): neither CI nor
+  # Why this job exists (2026-07-16): neither CI nor
   # the pre-commit hook passed -b / -DBUILD_BENCH=ON, so nothing ever compiled
   # bench/ and it silently rotted for months — e7c30933's RaySeg SBO refactor
   # left bench_filter.cpp referencing a member that no longer existed, and the

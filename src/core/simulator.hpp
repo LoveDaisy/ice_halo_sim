@@ -133,7 +133,7 @@ class Simulator {
 
   static constexpr size_t kSmallBatchRayNum = 32;
 
-  // explore-374 experiment knob (LUMICE_GEOM_CLOCK): rays served by one sampled
+  // Experiment knob (LUMICE_GEOM_CLOCK): rays served by one sampled
   // crystal shape on this path -- the legacy CPU geometry clock, i.e. D/K.
   // Defaults to kSmallBatchRayNum, which is where the shipped value comes from:
   // the geometry resample rides the ray-batching stride as a side effect, it was

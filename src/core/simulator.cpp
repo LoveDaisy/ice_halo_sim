@@ -1031,10 +1031,12 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
       // For deterministic params, create/copy crystal once per ci iteration.
       size_t ci_crystal_id = kInfSize;
 
-      // explore-374: geom_clock_ (LUMICE_GEOM_CLOCK, default kSmallBatchRayNum)
-      // sets how many rays share one sampled shape. It doubles as the ray-batch
-      // size here, exactly as the shipped constant did -- see E6's deterministic
-      // control, which isolates the geometry effect from the batching effect.
+      // geom_clock_ (LUMICE_GEOM_CLOCK, default kSmallBatchRayNum) sets how many
+      // rays share one sampled shape. It doubles as the ray-batch size here,
+      // exactly as the shipped constant did, so sweeping it moves both clocks at
+      // once. Isolating the geometry effect from the batching effect therefore
+      // needs a deterministic-params control run, where resampling is a no-op and
+      // only the batching effect remains.
       for (size_t cn = 0; cn < crystal_ray_num[ci] && !stop_; cn += geom_clock_) {  // for a same crystal
         size_t curr_ray_num = std::min(geom_clock_, crystal_ray_num[ci] - cn);
 

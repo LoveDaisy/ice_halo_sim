@@ -37,14 +37,14 @@ std::optional<std::string> TraceBackendOverride(Logger& logger);
 // override when set to a positive integer, else default_val. INFO once if applied.
 std::size_t DispatchRayNum(Logger& logger, std::size_t default_val);
 
-// LUMICE_GEOM_CLOCK — explore-374 experiment knob: how many rays share one
+// LUMICE_GEOM_CLOCK — experiment knob: how many rays share one
 // sampled crystal shape on the legacy CPU path (its geometry clock). This is the
 // D/K ratio directly: 1 = a fresh shape per ray (the unconstrained optimum, used
 // to build the calibration oracle), 32 = the shipped default. Returns the
 // override when positive, else default_val. INFO once if applied.
 //
 // KNOWN UPPER BOUND — safe range is [1, 64]; >= 128 CORRUPTS THE HEAP.
-// Measured (explore-374 E6, 3 reps each): 32 -> 0 0 0, 64 -> 0 0 0,
+// Measured (3 reps each): 32 -> 0 0 0, 64 -> 0 0 0,
 // 128 -> 139 134 139, 256 -> 139 0 134 (139=SIGSEGV, 134=SIGABRT, intermittent).
 // Mechanism: the threshold is exactly the SimBatch size (server.cpp
 // kDefaultRayNum=128). SimulateOneWavelength receives that as ray_num and sizes
