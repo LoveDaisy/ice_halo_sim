@@ -754,3 +754,21 @@ jobs:
 
       - name: Policy checks (env knobs / API boundary / using-namespace)
         run: python3 scripts/check_policies.py
+
+  # Diff-scoped sibling of the policy gate above: prose added by THIS PR must not
+  # cite the git-ignored per-task working notes (they are archived on close, so
+  # the reference dangles). Only added lines are read, so the pre-existing body
+  # of such references never blocks anyone. Runs on pull_request because that is
+  # where a merge-base exists; the pre-commit hook covers the local side.
+  new-refs:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: New-reference check (added lines vs merge-base)
+        run: |
+          base=$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD)
+          python3 scripts/check_new_refs.py --range "$base..HEAD"
