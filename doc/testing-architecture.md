@@ -68,9 +68,15 @@ naming convention / physical location**. Cadence values: `CI-fast` (every push, 
 - **Threshold convention**: exact or tight numeric tolerance (`EXPECT_EQ` / `EXPECT_NEAR` with
   a small epsilon). No statistical thresholds.
 - **Cadence**: `CI-fast` — every commit.
-- **Naming**: `test_<component>.{cpp}`; gtest `TEST(<Component>, <behavior>)`.
+- **Naming**: `test_<component>.{cpp}`; gtest `TEST(<Component>, <behavior>)`. Python members
+  follow pytest's own convention: `test_<component>.py`, `test_<behavior>` functions.
 - **Physical location**: target-state `test/unit-correctness/<subsystem>/`; current `unit_test`
-  target.
+  target. The layer is not C++-only: a component written in Python is tested in Python under
+  the same path (`test/unit-correctness/scripts/`, run by pytest). Those files are deliberately
+  **not** in `pyproject.toml`'s `testpaths` — that list is the e2e surface, and bare `pytest`
+  should keep meaning "the end-to-end suite". The `policy` CI job names them explicitly, which
+  also gets them this layer's every-commit cadence; the e2e job runs on PR/main only and waits
+  on a build.
 
 ### §1.2 `golden-analytic`
 
@@ -191,6 +197,7 @@ subsystem axis would re-mix unit and perf, which is exactly what we are leaving 
 | `gui` | imgui app, panels, preview, file IO, poller |
 | `config` | configuration parsing and simulation-config data |
 | `util` | logger, threading, queue, arguments, color data |
+| `scripts` | repo tooling under `scripts/`: the engineering-policy gates and their diff parsing |
 
 > **Name-overlap caution**: the `gui` *tag* here is only a layer-internal subsystem label —
 > e.g. a GUI-component unit test lives at `test/unit-correctness/gui/`. It is **not** the same
@@ -233,7 +240,8 @@ the physical blueprint in §6 — this tree decides *membership*, §6 decides *p
 
 5. Does X assert against a closed-form / analytic physical truth?
    → YES → golden-analytic. (§1.2)
-   → NO  → unit-correctness. Tag by subsystem (core/backend/server/gui/config/util). (§1.1)
+   → NO  → unit-correctness. Tag by subsystem
+            (core/backend/server/gui/config/util/scripts). (§1.1)
 ```
 
 Then: pick the subsystem tag (§2), and place per §6. *Concrete target / path / marker: see §6.*
@@ -354,7 +362,7 @@ health items that must not be moved/deleted casually.
 
 | Layer | Target-state path | Current C++ (unit/integration) | Current e2e (pytest) | Current gui | Migration constraint |
 |-------|-------------------|-------------------------------|----------------------|-------------|----------------------|
-| **unit-correctness** | `test/unit-correctness/<subsystem>/` | `test_math`, `test_geo3d`, `test_optics`†, `test_crystal`, `test_rng`, `test_queue`, `test_threading_pool`, `test_color_space`, `test_json`, `test_filter`, `test_filter_spec`, `test_config_snapshot`, `test_render_config`, `test_sim_data`, `test_simulator`, `test_cpu_info`, `test_axis_presets`, `test_slider_mapping`, `test_window_sizing`, `test_raypath_segments`, `test_reduce_raypath_audit`, `test_c_api`, `test_exit_records`, `test_ev_auto`, `test_proj`(integration), `test_integration_main` | — | — | — |
+| **unit-correctness** | `test/unit-correctness/<subsystem>/` | `test_math`, `test_geo3d`, `test_optics`†, `test_crystal`, `test_rng`, `test_queue`, `test_threading_pool`, `test_color_space`, `test_json`, `test_filter`, `test_filter_spec`, `test_config_snapshot`, `test_render_config`, `test_sim_data`, `test_simulator`, `test_cpu_info`, `test_axis_presets`, `test_slider_mapping`, `test_window_sizing`, `test_raypath_segments`, `test_reduce_raypath_audit`, `test_c_api`, `test_exit_records`, `test_ev_auto`, `test_proj`(integration), `test_integration_main` | — | — | `test/unit-correctness/scripts/test_check_new_refs.py` is a pytest member of this layer, run by the `policy` CI job and deliberately outside `testpaths` (§1.1). It is a regression net over a diff parser whose failures are silent — a broken parse reports success — so **do not delete a case for being redundant** without re-running it against the defect it pins. |
 | **golden-analytic** | `test/golden-analytic/<subsystem>/` | `test_projection`†, analytic segments inside `test_optics`†, `MultiMsContinuationNormalIncidence` (in `test_metal_trace_parity.cpp`, 2-MS analytic anchor) | — | — | †split out only after per-file confirmation of the analytic-truth boundary vs unit-correctness |
 | **parity-cross-backend** | `test/parity-cross-backend/<subsystem>/` | `test_metal_trace_parity`, `test_metal_root_gen`, `test_metal_trace_backend`, `test_metal_filter_match_parity`(.mm), `test_cpu_trace_backend` | `test_metal_exit_seam_parity`, `test_metal_batch_invariance`, `test_device_gen_default_path`, `test_cpu_backend_route`, **projection subsystem** (315.5): `test_metal_projection_parity`, `test_cuda_projection_parity` (shared `_projection_battery.py`) | — | `_parity_metrics.py` is the single source of parity metrics — **DO_NOT_MIGRATE_INDEPENDENTLY** (move with its dependents). Energy-conservation + cross-seed double gate is a 267.3 reinforcement — **DO NOT DELETE**. The `test_metal_batch_invariance` exit-conservation `xfail` is **legitimate** (worst-case drain not yet landed) — do not "fix" it by deleting. `_projection_battery.py` is the shared per-projection battery (oracle = legacy CPU) — move with `test_{metal,cuda}_projection_parity`. |
 | **e2e-correctness** | `test/e2e-correctness/` (flat) | — | `test_smoke`, `test_cli`, `test_raypath_equivalence` | — | — |

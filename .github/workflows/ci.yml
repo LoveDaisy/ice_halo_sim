@@ -755,6 +755,17 @@ jobs:
       - name: Policy checks (env knobs / API boundary / using-namespace)
         run: python3 scripts/check_policies.py
 
+      - name: Install Python dependencies
+        run: pip install pytest
+
+      # The gates' own unit tests live here rather than in the e2e pytest run:
+      # they need no build and must run on every commit, which is this job's
+      # cadence and not that one's (it is PR/main-only and waits on a compile).
+      # They are excluded from pyproject's testpaths for the same reason, so
+      # they have to be named explicitly here.
+      - name: Unit tests for the policy gates
+        run: python3 -m pytest test/unit-correctness/scripts -q
+
   # Diff-scoped sibling of the policy gate above: prose added by THIS PR must not
   # cite the git-ignored per-task working notes (they are archived on close, so
   # the reference dangles). Only added lines are read, so the pre-existing body
