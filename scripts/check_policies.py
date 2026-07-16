@@ -231,6 +231,52 @@ def check_gui_api_boundary() -> list[Violation]:
     return out
 
 
+# reconciler-widget-include: gui_state_reconcile.cpp is the "single owner of effects" reconciler.
+# T1 (task-color-migration) landed one concrete-widget dependency in it — `#include "gui/
+# color_window.hpp"` to call PushDisplayState — which inverts the intended layering direction
+# (widget depends on reconciler abstraction, not the reverse). That is acceptable for a SINGLE
+# domain but must not accrete: the moment a second `need_X_push` display channel would add a
+# second widget-header include here, the author must instead introduce a push-handler registration/
+# dispatch abstraction (doc/gui-state-governance.md §4 支柱 2). The inline comment + doc were the
+# only guard, i.e. a soft constraint; this gate hardens it (决策公理 a09). Any `#include "gui/..."`
+# in this file outside the allowlist below fails — forcing exactly that evaluation.
+RECONCILE_CPP = SRC / "gui" / "gui_state_reconcile.cpp"
+RECONCILE_GUI_INCLUDE = re.compile(r'#\s*include\s*"(gui/[^"]+)"')
+# Grandfathered includes. `gui_state_reconcile.hpp` = own header; `gui_state.hpp` = pure data
+# struct (a tier below, not a widget); `color_window.hpp` = the single T1 reverse-include. Adding
+# a NEW widget-header entry here without introducing the abstraction is the thing to stop, so
+# extending this set is a deliberate reviewed act, not a silent edit.
+RECONCILE_ALLOWED_GUI_INCLUDES = frozenset(
+    {
+        "gui/gui_state_reconcile.hpp",
+        "gui/gui_state.hpp",
+        "gui/color_window.hpp",
+    }
+)
+
+
+def check_reconciler_widget_include() -> list[Violation]:
+    out: list[Violation] = []
+    if not RECONCILE_CPP.exists():
+        return out
+    for lineno, _orig, code in code_lines(RECONCILE_CPP):
+        m = RECONCILE_GUI_INCLUDE.search(code)
+        if m and m.group(1) not in RECONCILE_ALLOWED_GUI_INCLUDES:
+            out.append(
+                Violation(
+                    RECONCILE_CPP,
+                    lineno,
+                    "reconciler-widget-include",
+                    f'gui_state_reconcile.cpp must not add #include "{m.group(1)}": the '
+                    "reconciler is the single owner of effects and must not reverse-depend on a "
+                    "second widget domain. Introduce a push-handler registration/dispatch "
+                    "abstraction instead (doc/gui-state-governance.md §4 支柱 2), or if this is a "
+                    "pure data/utility header, add it to RECONCILE_ALLOWED_GUI_INCLUDES.",
+                )
+            )
+    return out
+
+
 def check_no_using_namespace() -> list[Violation]:
     out: list[Violation] = []
     for path in cxx_sources(SRC):
@@ -799,6 +845,7 @@ CHECKS = [
     check_getenv_centralization,
     check_env_knob_registration,
     check_gui_api_boundary,
+    check_reconciler_widget_include,
     check_no_using_namespace,
     check_struct_layout_parity,
     check_no_config_by_value_copy,
@@ -825,7 +872,7 @@ def main() -> int:
         return 1
     print(
         "Policy check passed (env centralization, knob registration, GUI API boundary, "
-        "using-namespace, struct-layout parity, no-config-by-value-copy, "
+        "reconciler-widget-include, using-namespace, struct-layout parity, no-config-by-value-copy, "
         "gui-state-field-tier-registration, no-msvc-unsafe-builtin)."
     )
     return 0
