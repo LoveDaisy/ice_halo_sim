@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784174448241,
+  "lastUpdate": 1784174451116,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4818,54 +4818,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "135151eed06f1cb0288a1020d0a10c52cc45c485",
-          "message": "Merge pull request #102 from LoveDaisy/feat/gui_font\n\nfeat(gui): integrate FontAwesome 6 icon font for 12 GUI buttons",
-          "timestamp": "2026-05-21T12:50:01+08:00",
-          "tree_id": "949a6505c17485e7d2383f3d8f4f9f6d89603285",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/135151eed06f1cb0288a1020d0a10c52cc45c485"
-        },
-        "date": 1779339325818,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 1196362.3,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1850166,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 1141486.9,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 829873.3,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "d158a9394600b1ded192e6dc974603f42b76fb47",
           "message": "Merge pull request #103 from LoveDaisy/feat/gui_card_link\n\nfeat(gui): linked entries via ID-pool model + pick-mode UX",
           "timestamp": "2026-05-23T17:41:59+08:00",
@@ -9602,6 +9554,54 @@ window.BENCHMARK_DATA = {
             "value": 900844.7,
             "unit": "rays/sec",
             "extra": "CPU: Intel(R) Xeon(R) 6973P-C\\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c89c178f203a9956ee50c8af21c7f0300615d053",
+          "message": "Merge pull request #204 from LoveDaisy/feat/color-degrade-gui-surfacing\n\nfeat(color-degrade-gui-surfacing): surface all 3 GPU color-degrade caps to GUI modal",
+          "timestamp": "2026-07-16T11:53:31+08:00",
+          "tree_id": "ac0cf27c253b945d4191e4e914f50f1ad145a0fe",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/c89c178f203a9956ee50c8af21c7f0300615d053"
+        },
+        "date": 1784174450736,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 1171739.4,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1179531.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 1181815.6,
+            "unit": "rays/sec",
+            "extra": "CPU: Intel(R) Xeon(R) 6973P-C\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 663815.4,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
         ]
       }
