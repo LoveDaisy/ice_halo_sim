@@ -328,7 +328,12 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--staged", action="store_true", help="check the staged diff (default)")
+    group.add_argument(
+        "--staged",
+        action="store_true",
+        help="check the staged diff; this is what happens with no arguments too, "
+        "so passing it is documentation rather than a switch",
+    )
     group.add_argument("--range", dest="rng", metavar="BASE..HEAD", help="check a commit range")
     args = parser.parse_args()
 
@@ -340,6 +345,7 @@ def main() -> int:
             parser.error("--range expects BASE..HEAD")
         diff_args, content_ref = [base, head], head
     else:
+        # --staged, passed or defaulted to. Empty content_ref means the index.
         diff_args, content_ref = ["--cached"], ""
 
     violations, scanned = check(diff_args, content_ref)
