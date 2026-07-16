@@ -353,6 +353,8 @@ struct XyzImageData {
 // -----------------------------------------------------------------------------
 // TraceBackend — the seam.
 // -----------------------------------------------------------------------------
+// (ColorDegradeCounts lives in core/def.hpp so the config-layer SimData can
+// carry it too — task-color-degrade-gui-surfacing.)
 class TraceBackend {
  public:
   virtual ~TraceBackend() = default;
@@ -536,6 +538,13 @@ class TraceBackend {
   // ray-count-like metric and both backends should converge on one meaning.
   // See backlog "统一 crystal 计数语义（几何随机化落地时）".
   virtual size_t GetLastBatchCrystalCount() const { return 0; }
+
+  // Per-committed-config tally of GPU-side raypath-color drops (see
+  // ColorDegradeCounts above). Base + CPU backend have no such caps and return
+  // all-zeros; Metal/CUDA override. Value is recomputed from scratch on each
+  // BeginSession (config-constant), so the consumer overwrites rather than
+  // accumulates. task-color-degrade-gui-surfacing.
+  virtual ColorDegradeCounts GetLastColorDegradeCounts() const { return {}; }
 
   TraceBackend(const TraceBackend&) = delete;
   TraceBackend(TraceBackend&&) = delete;

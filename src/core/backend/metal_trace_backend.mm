@@ -899,6 +899,10 @@ struct MetalTraceBackend::Impl {
   //                           EnsureClassLaneBuf on shape / class-count change.
   ColorClassTable class_table_{};
   size_t          class_count_ = 0;
+  // task-color-degrade-gui-surfacing: per-config tally of dropped color
+  // assignments (symmetry-group / OR-summand / color-class caps). Reset at
+  // BeginSession entry, accumulated in BeginSession + EnsureFilterBuffers.
+  ColorDegradeCounts last_color_degrade_{};
   id<MTLBuffer>   class_lane_buf_ = nil;
   size_t          class_lane_pix_capacity_ = 0;
   // BeginSession captures the spectrum mode + per-batch sentinel so
@@ -1496,6 +1500,7 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
                    "config is intentional.",
                    mi, setting.crystal_.id_, group_count_raw, kColorMaxGroupsPerSlot,
                    group_count_raw - kColorMaxGroupsPerSlot);
+        last_color_degrade_.symmetry_group_overflow += group_count_raw - kColorMaxGroupsPerSlot;
       }
       const size_t group_count = std::min(group_count_raw, kColorMaxGroupsPerSlot);
       assert(group_count <= kColorMaxGroupsPerSlot &&
@@ -1522,6 +1527,13 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
                        "has more than kDeviceFilterMaxOrClauses={} OR-summands — dropping the remainder rather than "
                        "overflowing color_bit_map.",
                        mi, setting.crystal_.id_, static_cast<int>(sym), kDeviceFilterMaxOrClauses);
+            // Count every remaining summand in THIS group (from k onward) that
+            // the break will drop, so the GUI modal reports the true total.
+            for (size_t kk = k; kk < placement.predicates_.size(); ++kk) {
+              if (group_of[kk] == gi) {
+                last_color_degrade_.or_summand_overflow += 1;
+              }
+            }
             break;
           }
           cfp.filters_.push_back({ { kInvalidId, placement.predicates_[k] } });
@@ -2534,6 +2546,13 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   impl_->spec = spec;
   impl_->in_session = true;
   impl_->ms_idx = 0;
+  // task-color-degrade-gui-surfacing: reset the GPU color-degrade tally at the
+  // single per-config entry point, BEFORE both the color-class clamp below
+  // (~L2700) and EnsureFilterBuffers (~L2711, where the symmetry-group /
+  // OR-summand clamps live). Resetting inside EnsureFilterBuffers' top-of-func
+  // clearing block would wipe the color_class_overflow already computed here at
+  // BeginSession scope. Config-constant, recomputed every BeginSession.
+  impl_->last_color_degrade_ = ColorDegradeCounts{};
   // root_ray_count is reset ONLY at first seeding below (the !seeded gate, in
   // lock-step with rng.SetSeed). Resetting here unconditionally would collapse
   // the GPU PCG stream to a single 128-ray range every SimBatch — the mirror
@@ -2696,6 +2715,7 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
                  "KernelParams.color_class_bits/combine. Raise kMaxColorClassesDevice (+ MSL sibling) if this "
                  "config is intentional.",
                  class_count_raw, kMaxColorClassesDevice, class_count_raw - kMaxColorClassesDevice);
+      impl_->last_color_degrade_.color_class_overflow += class_count_raw - kMaxColorClassesDevice;
     }
     impl_->class_count_ = std::min(class_count_raw, kMaxColorClassesDevice);
     assert(impl_->class_count_ <= kMaxColorClassesDevice &&
@@ -3256,6 +3276,10 @@ size_t MetalTraceBackend::GetLastBatchCrystalCount() const {
   // only during the final layer's TraceLayer call (see the block at
   // metal_trace_backend.mm:2127-2168); reading before EndSession is safe.
   return impl_->last_layer_crystals_.size();
+}
+
+ColorDegradeCounts MetalTraceBackend::GetLastColorDegradeCounts() const {
+  return impl_->last_color_degrade_;
 }
 
 size_t MetalTraceBackend::TraceLayerKernelMaxThreadsForTest() const {

@@ -5446,6 +5446,111 @@ void RegisterLinkedEntriesTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // task-color-degrade-gui-surfacing: end-to-end proof that an ASYNC GPU color
+  // degrade (device buffer-layout cap exceeded on the worker's first batch)
+  // surfaces a GUI modal. Unlike the component overflow above (synchronous, set
+  // in CommitConfig), the color-class cap (kMaxColorClassesDevice=16) fires only
+  // when the Metal backend actually runs, so the modal comes from SyncFromPoller
+  // polling LUMICE_GetColorOverflowInfo — NOT from DoRun. Also guards the R1
+  // reset (task-366 class): after switching to a clean config the count must
+  // return to 0 and stop warning (no cross-config leak).
+  {
+    // Dedicated group so build.sh routes this to the REAL-TIMING pool: it drives
+    // a live GPU sim and WaitForSimRestartAtLeast waits on wall-clock batch
+    // accumulation, which --fixed-dt (the correctness pool) starves. See
+    // scratchpad/task-gui-test-fixed-dt + build.sh two-pool split.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_gpu_color_degrade", "gpu_color_class_overflow_surfaces_async_warning");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::ClearGuiWarning();
+      gui::g_server = LUMICE_CreateServer();
+      IM_CHECK(gui::g_server != nullptr);
+      // Force the GPU (Metal) backend — the three color-degrade caps are
+      // GPU-only. DoRun's MaybeReconstructServerForBackend rebuilds for GPU.
+      gui::g_state.use_gpu_backend = true;
+
+      // 20 color classes > kMaxColorClassesDevice=16 → BeginSession drops the
+      // excess 4. Each class carries one whole-crystal (match_all) ref so it is
+      // a real, non-empty class that reaches the core class table.
+      gui::g_state.raypath_color.clear();
+      constexpr int kNumClasses = 20;
+      for (int c = 0; c < kNumClasses; ++c) {
+        gui::ColorClassConfig cls;
+        cls.color[0] = (c % 3 == 0) ? 1.0f : 0.0f;
+        cls.color[1] = (c % 3 == 1) ? 1.0f : 0.0f;
+        cls.color[2] = (c % 3 == 2) ? 1.0f : 0.0f;
+        cls.combine = 0;
+        cls.visible = true;
+        cls.solo = false;
+        gui::ColorClassRefConfig ref;
+        ref.layer_idx = 0;
+        ref.crystal_pool_id = 0;  // CrystalConfig::id_ = 1 in ResetTestState()
+        ref.match_all = true;
+        cls.match.push_back(ref);
+        gui::g_state.raypath_color.push_back(cls);
+      }
+
+      // Small finite ray count so the GPU run finishes fast.
+      gui::g_state.sim.infinite = false;
+      gui::g_state.sim.ray_num_millions = 0.02f;
+
+      const unsigned long baseline_uploads = gui::g_state.texture_upload_count;
+      gui::DoRun(/*user_initiated=*/true);
+      // Pump frames until the GPU produces a batch; SyncFromPoller polls the
+      // async tally each Yield and fires the modal once it is populated.
+      const bool ran = WaitForSimRestartAtLeast(ctx, baseline_uploads, /*timeout_ms=*/8000);
+      IM_CHECK(ran);
+      // Give SyncFromPoller a few extra ticks to observe the populated count.
+      for (int i = 0; i < 20 && gui::PeekGuiWarning().empty(); ++i) {
+        ctx->Yield();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+
+      // Core AC: the async modal fired with a color-degrade message.
+      const std::string warning = gui::PeekGuiWarning();
+      IM_CHECK(!warning.empty());
+      IM_CHECK(warning.find("color") != std::string::npos || warning.find("Color") != std::string::npos);
+      IM_CHECK(warning.find("degraded") != std::string::npos);
+      IM_CHECK(warning.find("color class") != std::string::npos);
+
+      // Exact count lock: 20 - kMaxColorClassesDevice(16) = 4 dropped, via the
+      // async poll path (component count stays 0 — this is not a predicate drop).
+      LUMICE_ColorOverflowInfo color_over{};
+      IM_CHECK(LUMICE_GetColorOverflowInfo(gui::g_server, &color_over) == LUMICE_OK);
+      IM_CHECK(color_over.color_class_overflow_count == 4);
+      IM_CHECK(color_over.component_overflow_count == 0);
+
+      // R1 reset regression (task-366 class): switch to a CLEAN color config and
+      // re-run; the tally must reset to 0 and the degrade modal must not re-fire.
+      gui::ClearGuiWarning();
+      gui::g_state.raypath_color.clear();
+      const unsigned long baseline_uploads2 = gui::g_state.texture_upload_count;
+      gui::DoRun(/*user_initiated=*/true);
+      const bool ran2 = WaitForSimRestartAtLeast(ctx, baseline_uploads2, /*timeout_ms=*/8000);
+      IM_CHECK(ran2);
+      for (int i = 0; i < 20; ++i) {
+        ctx->Yield();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      LUMICE_ColorOverflowInfo color_over2{};
+      IM_CHECK(LUMICE_GetColorOverflowInfo(gui::g_server, &color_over2) == LUMICE_OK);
+      IM_CHECK(color_over2.color_class_overflow_count == 0);
+      IM_CHECK(gui::PeekGuiWarning().empty());
+
+      // Cleanup.
+      gui::ClearGuiWarning();
+      gui::g_state.raypath_color.clear();
+      gui::g_state.use_gpu_backend = false;
+      gui::g_server_poller.Stop();
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+      gui::g_state.run_intent = gui::RunIntent::kNone;
+      gui::g_state.committed_epoch = 0;
+      gui::g_state.dirty = false;
+    };
+  }
+
   // task-gui-feedback-affordances code-review-01 Critical 1 regression anchor: a persistent
   // color-overflow condition (unlike the FillLumiceConfig-REJECT branch covered by the sibling
   // `overflow_auto_commit_dedup` test) goes through the commit-SUCCEEDED branch of DoRun. That

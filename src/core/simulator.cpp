@@ -1201,6 +1201,9 @@ void Simulator::DrainDeviceXyz(TraceBackend* backend) {
   sim_data.generation_ = xyz_win_.generation;
   sim_data.root_ray_count_ = xyz_win_.root_rays;
   sim_data.crystal_count_ = xyz_win_.crystals;
+  // task-color-degrade-gui-surfacing: carry the window's GPU color-degrade tally
+  // into the drained SimData (config constant, direct copy — not accumulated).
+  sim_data.color_degrade_counts_ = xyz_win_.color_degrade_counts_;
   // This one SimData stands in for xyz_win_.calls per-wavelength calls; ConsumeData
   // decrements sim_scene_cnt_ by this so the counter invariant stays balanced.
   sim_data.sim_scene_credit_ = xyz_win_.calls;
@@ -1351,6 +1354,9 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
       xyz_win_.h = h;
       xyz_win_.wl = wl_param.wl_;
       xyz_win_.calls += 1;
+      // task-color-degrade-gui-surfacing: OVERWRITE (not +=) — the tally is a
+      // config constant, identical on every batch of this committed config.
+      xyz_win_.color_degrade_counts_ = backend.GetLastColorDegradeCounts();
       if (xyz_win_.calls >= xyz_drain_batches_) {
         DrainDeviceXyz(&backend);
       }

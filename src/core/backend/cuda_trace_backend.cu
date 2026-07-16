@@ -1826,6 +1826,10 @@ struct CudaTraceBackend::Impl {
   ColorGateTable    color_gate_table_{};
   ColorClassTable   class_table_{};
   size_t            class_count_       = 0;
+  // task-color-degrade-gui-surfacing: per-config tally of dropped color
+  // assignments. Reset + accumulated inside the filter_built_-guarded
+  // EnsureFilterBuffers body (see the reset there for why not at BeginSession).
+  ColorDegradeCounts last_color_degrade_{};
   bool              has_color_groups_  = false;
   // color_desc_offset_ / color_bits_offset_ are kept for grep-parity with Metal
   // `KernelParams.color_*` field names — CUDA uses INDEPENDENT buffers so the
@@ -2791,6 +2795,14 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
   color_gate_table_ = ColorGateTable{};
   class_table_      = ColorClassTable{};
   class_count_      = 0;
+  // task-color-degrade-gui-surfacing: reset the GPU color-degrade tally HERE,
+  // INSIDE the filter_built_-guarded body (co-located with the accumulation at
+  // the three caps below), NOT at BeginSession entry. Unlike Metal (whose
+  // EnsureFilterBuffers re-runs every batch), this body runs exactly once per
+  // config (filter_built_ short-circuits batches 2+). Resetting at BeginSession
+  // entry — which DOES re-run every batch — would zero the tally on batch 2+
+  // while this guarded body never re-accumulates, silently losing the counts.
+  last_color_degrade_ = ColorDegradeCounts{};
   color_desc_offset_ = 0u;  // CUDA uses independent buffers → structural 0
   color_bits_offset_ = 0u;
   if (spec.raypath_color != nullptr) {
@@ -2808,6 +2820,7 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
                  "CudaTraceBackend::EnsureFilterBuffers: color class count {} exceeds kMaxColorClassesDevice={} — "
                  "dropping the excess {} class(es); raise the constant (+ Metal sibling) if this config is intentional.",
                  class_count_raw, kMaxColorClassesDevice, class_count_raw - kMaxColorClassesDevice);
+      last_color_degrade_.color_class_overflow += class_count_raw - kMaxColorClassesDevice;
     }
     class_count_ = std::min(class_count_raw, kMaxColorClassesDevice);
     assert(class_count_ <= kMaxColorClassesDevice &&
@@ -2839,6 +2852,7 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
                      "if this config is intentional.",
                      mi, setting.crystal_.id_, group_count_raw, kColorMaxGroupsPerSlot,
                      group_count_raw - kColorMaxGroupsPerSlot);
+          last_color_degrade_.symmetry_group_overflow += group_count_raw - kColorMaxGroupsPerSlot;
         }
         const size_t group_count = std::min(group_count_raw, kColorMaxGroupsPerSlot);
         assert(group_count <= kColorMaxGroupsPerSlot &&
@@ -2863,6 +2877,13 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
                          "has more than kDeviceFilterMaxOrClauses={} OR-summands — dropping the remainder rather "
                          "than overflowing color_bit_map.",
                          mi, setting.crystal_.id_, static_cast<int>(sym), kDeviceFilterMaxOrClauses);
+              // Count every remaining summand in THIS group (from k onward) that
+              // the break drops, so the GUI modal reports the true total.
+              for (size_t kk = k; kk < placement.predicates_.size(); ++kk) {
+                if (group_of[kk] == gi) {
+                  last_color_degrade_.or_summand_overflow += 1;
+                }
+              }
               break;
             }
             cfp.filters_.push_back({ { kInvalidId, placement.predicates_[k] } });
@@ -4173,6 +4194,10 @@ size_t CudaTraceBackend::GetLastBatchCrystalCount() const {
   // during BeginSession (cuda_trace_backend.cu:2078-2093), so it can be read
   // safely anytime the session is open.
   return impl_->final_layer_crystals_.size();
+}
+
+ColorDegradeCounts CudaTraceBackend::GetLastColorDegradeCounts() const {
+  return impl_->last_color_degrade_;
 }
 
 // --- scrum-328.2 Step 3: TestHooks method definitions --------------------

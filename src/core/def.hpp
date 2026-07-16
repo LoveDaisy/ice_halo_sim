@@ -25,6 +25,26 @@ constexpr size_t kMaxHits = 64;        // How many hits in one crystal.
 constexpr size_t kMaxWlNum = 32;       // How many different wavelengths in one configuration.
 constexpr size_t kMaxCrystalNum = 16;  // How many crystal types in one configuration.
 
+// task-color-degrade-gui-surfacing: per-committed-config tally of raypath-color
+// assignments the GPU backends silently dropped because a device-side capacity
+// was exceeded. All three caps are GPU-only (device buffer-layout constants);
+// the CPU backend has no equivalent limit and always reports zeros. These are
+// config CONSTANTS (fixed for a given committed config), NOT per-batch
+// accumulators — the transport path (backend -> simulator -> server -> C API)
+// must OVERWRITE, never `+=`. Lives here in def.hpp so both the core backend
+// seam (TraceBackend) and the config-layer SimData can carry it without a
+// layering violation. Surfaced to the GUI so any color degradation produces a
+// modal warning instead of a silent log line.
+struct ColorDegradeCounts {
+  size_t symmetry_group_overflow = 0;  // kColorMaxGroupsPerSlot (per gate slot)
+  size_t or_summand_overflow = 0;      // kDeviceFilterMaxOrClauses (per color group)
+  size_t color_class_overflow = 0;     // kMaxColorClassesDevice (per session)
+
+  bool AnyOverflow() const {
+    return symmetry_group_overflow != 0 || or_summand_overflow != 0 || color_class_overflow != 0;
+  }
+};
+
 using IdType = uint16_t;
 
 

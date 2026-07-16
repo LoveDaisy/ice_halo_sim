@@ -117,6 +117,10 @@ class Simulator {
     int h = 0;
     float wl = 0.0f;     // last wl (device-fused: not consumed downstream)
     uint32_t calls = 0;  // batches accumulated since last drain (cadence cap)
+    // task-color-degrade-gui-surfacing: latest GPU color-degrade tally for this
+    // window. OVERWRITTEN each batch (config constant, identical every batch),
+    // NOT accumulated — see the store in SimulateOneWavelength's window branch.
+    ColorDegradeCounts color_degrade_counts_{};
   };
   XyzDrainWindow xyz_win_;
   static constexpr uint32_t kDefaultXyzDrainBatches = 64;

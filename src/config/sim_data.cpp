@@ -35,7 +35,9 @@ namespace lumice {
 // = 296.
 // task-358.1 Step 4 adds lane_pixel_data_ (vector<float>, 24B) + lane_class_count_
 // (size_t, 8B) for the device-side Y-lane drain, bumping 296 → 328.
-static_assert(sizeof(SimData) == 328, "SimData size changed — update copy/move ctors and operators");
+// task-color-degrade-gui-surfacing adds color_degrade_counts_ (ColorDegradeCounts
+// = 3 × size_t = 24B) for the GPU color-degrade tally, bumping 328 → 352.
+static_assert(sizeof(SimData) == 352, "SimData size changed — update copy/move ctors and operators");
 
 namespace {
 
@@ -392,7 +394,8 @@ SimData::SimData(const SimData& other)
       exit_records_(other.exit_records_), xyz_pixel_data_(other.xyz_pixel_data_),
       xyz_landed_weight_(other.xyz_landed_weight_), lane_pixel_data_(other.lane_pixel_data_),
       lane_class_count_(other.lane_class_count_), root_ray_count_(other.root_ray_count_),
-      crystal_count_(other.crystal_count_), sim_scene_credit_(other.sim_scene_credit_) {}
+      crystal_count_(other.crystal_count_), sim_scene_credit_(other.sim_scene_credit_),
+      color_degrade_counts_(other.color_degrade_counts_) {}
 
 SimData::SimData(SimData&& other) noexcept
     : curr_wl_(other.curr_wl_), generation_(other.generation_), rays_(std::move(other.rays_)),
@@ -402,7 +405,8 @@ SimData::SimData(SimData&& other) noexcept
       exit_records_(std::move(other.exit_records_)), xyz_pixel_data_(std::move(other.xyz_pixel_data_)),
       xyz_landed_weight_(other.xyz_landed_weight_), lane_pixel_data_(std::move(other.lane_pixel_data_)),
       lane_class_count_(other.lane_class_count_), root_ray_count_(other.root_ray_count_),
-      crystal_count_(other.crystal_count_), sim_scene_credit_(other.sim_scene_credit_) {}
+      crystal_count_(other.crystal_count_), sim_scene_credit_(other.sim_scene_credit_),
+      color_degrade_counts_(other.color_degrade_counts_) {}
 
 SimData& SimData::operator=(const SimData& other) {
   if (&other == this) {
@@ -429,6 +433,7 @@ SimData& SimData::operator=(const SimData& other) {
   root_ray_count_ = other.root_ray_count_;
   crystal_count_ = other.crystal_count_;
   sim_scene_credit_ = other.sim_scene_credit_;
+  color_degrade_counts_ = other.color_degrade_counts_;  // task-color-degrade-gui-surfacing (POD)
   return *this;
 }
 
@@ -462,6 +467,7 @@ SimData& SimData::operator=(SimData&& other) noexcept {
   root_ray_count_ = other.root_ray_count_;
   crystal_count_ = other.crystal_count_;
   sim_scene_credit_ = other.sim_scene_credit_;
+  color_degrade_counts_ = other.color_degrade_counts_;  // task-color-degrade-gui-surfacing (POD)
   return *this;
 }
 

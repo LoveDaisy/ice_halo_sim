@@ -78,24 +78,29 @@ typedef struct LUMICE_SimLifecycleResult_ {
   unsigned long long epoch;
 } LUMICE_SimLifecycleResult;
 
-// task-gui-feedback-affordances Step 7 (AC1): summary of how many color-
-// classification predicates / symmetry groups the CORE dropped during the
-// most recent commit. Used by the GUI DoRun path to surface a modal warning
-// that coloring will be truncated (the filter / geometry / raypath tracing
-// path is UNAFFECTED — only color assignment degrades).
+// Summary of how many raypath-color assignments the CORE dropped for the most
+// recent committed config, because some capacity was exceeded. Used by the GUI
+// to surface a modal warning that coloring will be truncated (the filter /
+// geometry / raypath tracing path is UNAFFECTED — only color assignment
+// degrades). All counts are per committed config, not cumulative across runs.
 //
-// component_overflow_count is set SYNCHRONOUSLY inside CommitConfig (predicates
-// past the 64-bit ComponentTable budget were assigned kNoBit).
-// symmetry_group_overflow_count is RESERVED for a follow-up task — the CPU/
-// Metal/CUDA `EnsureFilterBuffers` per-slot symmetry-group cap
-// (kColorMaxGroupsPerSlot=4) fires asynchronously on the worker thread's
-// first batch, so surfacing it requires poll infrastructure not yet wired.
-// Currently always 0; the field is kept in the ABI struct so future clients
-// do not need to re-widen it later. Tracked in backlog.md: "[GUI / 染色]
-// symmetry_group_overflow 的 GUI surfacing（poll infrastructure 待建）".
+// Two surfacing timings, by field:
+//   component_overflow_count is set SYNCHRONOUSLY inside CommitConfig (color
+//     predicates past the 64-bit ComponentTable budget were assigned kNoBit).
+//     Backend-independent (host-side gate table). Read once in the DoRun path.
+//   The remaining three are GPU-ONLY device buffer-layout caps that fire on the
+//     worker thread's FIRST batch (asynchronous), so the GUI must POLL them each
+//     tick rather than read them once at DoRun. Populated via the server's
+//     ConsumeData path; the CPU backend has no such caps and reports 0:
+//       symmetry_group_overflow_count — kColorMaxGroupsPerSlot (per gate slot)
+//       or_summand_overflow_count     — kDeviceFilterMaxOrClauses (per color group)
+//       color_class_overflow_count    — kMaxColorClassesDevice (per session)
+// See task-color-degrade-gui-surfacing.
 typedef struct LUMICE_ColorOverflowInfo_ {
   int component_overflow_count;
   int symmetry_group_overflow_count;
+  int or_summand_overflow_count;
+  int color_class_overflow_count;
 } LUMICE_ColorOverflowInfo;
 
 // =============== Ray Count Type ===============

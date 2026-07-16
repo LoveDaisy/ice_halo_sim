@@ -138,6 +138,8 @@ class MetalTraceBackend : public TraceBackend {
   // the last TraceLayer call). Simulator reads this after the MS loop to
   // fill SimData.crystal_count_ for stats reporting.
   size_t GetLastBatchCrystalCount() const override;
+  // task-color-degrade-gui-surfacing: per-config GPU color-degrade tally.
+  ColorDegradeCounts GetLastColorDegradeCounts() const override;
 
   // [TEST-ONLY] Return the trace_layer_kernel PSO's
   // maxTotalThreadsPerThreadgroup (or 0 if BeginSession has not yet built the
