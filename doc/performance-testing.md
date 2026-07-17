@@ -48,6 +48,61 @@ Supporting metrics:
 | `texture FPS` | GUI perf test steady_state | Steady-state texture refresh rate |
 | `Consume profile` | CLI -v / GUI --log-level debug | Per-batch filter/proj/accum breakdown |
 
+## ⚠️ Two ways `--benchmark` silently reports a number that answers a different question
+
+Both were hit in one session while calibrating the geometry clock; each produced a confident,
+self-consistent, wrong conclusion that survived until something else contradicted it.
+
+### A. `--benchmark` emits TWO `[BENCHMARK]` lines on the legacy CPU route — pick the right one
+
+The legacy CPU route runs a dual pass and prints one JSON per pass:
+`"mode":"single","workers":1` and `"mode":"multi","workers":N`. A GPU route is a single engine and
+prints one line only (`workers:1`).
+
+**The legacy CPU product path is `worker_count = PhysicalCoreCount()`** (`ServerImpl::ServerImpl`,
+`server.cpp:444`; only a fixed seed or a GPU route forces 1). So `mode:single` is a
+per-core/parallel-efficiency diagnostic — **it is not the shipping configuration**, and a
+`grep '"single"'` that looks right will quietly measure a config nobody runs.
+
+This is not a small correction — **effects can invert between the two passes**. Measured, tracing
+identical work (`face_distance` fixed, so zero construction), 20M rays:
+
+| geometry clock | `mode:single` | `mode:multi` (12 workers, = product) |
+|---|---|---|
+| 1 | 691 395 rays/s | 3 225 102 rays/s |
+| 16 | 493 789 rays/s | 4 545 052 rays/s |
+| | small clock **40% faster** | small clock **29% slower** |
+
+Parallel efficiency is itself clock-dependent (4.7x vs 9.2x speedup on 12 cores), so the two passes
+do not differ by a constant factor and **neither one can be rescaled into the other**. Cache effects
+in particular are invisible in `mode:single` — one thread owns the whole shared L2/L3, so a
+working-set effect that costs 11% in production measures as zero alone.
+
+Rule: **quote `mode:multi` for legacy CPU throughput.** Use `mode:single` only when per-core cost
+or parallel efficiency IS the question, and say so.
+
+### B. A GPU throughput run shorter than ~7s measures the clock-boost transient, not steady state
+
+`rays_per_sec` on the `steady` basis is `(rays_end - rays_at_active_start) / active_sec`, and the
+window OPENS at the first poll that observes `rays > 0`. If throughput is not constant across that
+window, the reported rate depends on how much of the startup transient the window happened to
+swallow.
+
+Measured on Metal, same binary, same config, interleaved runs:
+
+| ray_num | wall | spread over 10 runs |
+|---|---|---|
+| 20M | ~0.6s | **2.4x** (24.97M – 51.59M rays/s) |
+| 200M | ~7s | **1.22x** (26.05M – 31.88M rays/s), CV ~7% |
+
+The fast outliers (42M, 51M) vanish entirely at 200M: the 2.4x is **a short-run artifact, not GPU
+noise**. A 20M run only occupies ~0.6s, so the GPU clock-boost ramp dominates the window.
+
+Rule: **GPU throughput needs >= 200M rays (~7s)**; at that length CV ~7%, which repeats can average
+down. Below it the number is not a throughput measurement. Corollary: **"that backend is just noisy"
+is not a property of a backend** — an unexplained variance with no mechanism is an unpaid debt, and
+it silently downgrades every later measurement into "it can't be measured anyway".
+
 ## 1. CLI Pipeline Benchmark
 
 Pure pipeline throughput test without GUI, VSync, or display overhead.
