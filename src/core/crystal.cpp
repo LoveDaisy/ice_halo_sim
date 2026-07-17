@@ -421,7 +421,21 @@ IdType Crystal::GetFn(IdType poly_idx) const {
   if (poly_idx == kInvalidId || poly_idx >= poly_face_cnt_) {
     return kInvalidId;
   }
-  return fn_map_[poly_face_tri_id_[poly_idx]];
+  // Depth-of-defense: the inner index poly_face_tri_id_[poly_idx] is populated
+  // by BuildPolygonFaceData; if any future upstream regression leaves a slot
+  // uninitialized (the failure mode diagnosed on hex prisms with random
+  // face_distance, now guarded at the mesh factory), this bound check turns a
+  // wild fn_map_[garbage] read into a well-defined kInvalidId return. This is
+  // NOT a root-cause fix — the real fix is at the mesh-construction boundary
+  // (SolveConvexPolyhedronVtxD scale-relative dedup + Crystal factory Euler
+  // gate). Leaving the defense here so a future upstream drift surfaces as a
+  // detectable "no fn" symptom rather than a silent crash; do not treat this
+  // bound check as license to relax the mesh-side invariants.
+  const int tri = poly_face_tri_id_[poly_idx];
+  if (tri < 0 || static_cast<size_t>(tri) >= mesh_.GetTriangleCnt()) {
+    return kInvalidId;
+  }
+  return fn_map_[tri];
 }
 
 Crystal& Crystal::Rotate(const Rotation& r) {
