@@ -790,6 +790,26 @@ std::tuple<std::unique_ptr<float[]>, int> SolveConvexPolyhedronVtxD(int plane_cn
   std::vector<double> coef_d;
   WidenCoefToDouble(plane_cnt, coef_ptr, coef_d);
 
+  // Scale-relative dedup tolerance. The old absolute `2 * kIncidenceEpsD = 2e-5`
+  // was undersized on hex-prism corners where 4+ planes converge near-coincidentally
+  // (random face_distance, unit-scale coords): float→double input precision (~1e-7)
+  // amplified by the near-singular 3x3 condition number (SolvePlanesD accepts down
+  // to normalized |det| ≈ 1e-6) produces per-triple residuals ≈ 2e-5 — just above
+  // the old threshold, so C(4,3)=4 candidate positions for the same geometric
+  // corner all survive as distinct vertices. `5e-5 × characteristic length` clears
+  // the observed 2e-5 noise floor by ~2.5×, empirically the sweet spot in a swept
+  // grid: wider thresholds (1e-4, 1e-3) over-merge legitimately close vertices on
+  // random-face_distance geometries and produce non-manifold V=8/F=10 and V=10/F=14
+  // fragments whose Triangulate output no longer satisfies V−E+F=2 (net worse).
+  // Characteristic length uses `max|d|` over the plane set so the tolerance scales
+  // with crystal size instead of being fixed at some unit reference.
+  // doc/numerical-robustness.md §2 (relative tolerances).
+  double char_len = 1.0;
+  for (int i = 0; i < plane_cnt; i++) {
+    char_len = std::max(char_len, std::fabs(coef_d[i * 4 + 3]));
+  }
+  const double dedup_thresh = 5e-5 * char_len;
+
   int vtx_cap = plane_cnt * (plane_cnt - 1) * (plane_cnt - 2) / 6;
   auto vtx_d = std::make_unique<double[]>(vtx_cap * 3);
   double* vtx_ptr = vtx_d.get();
@@ -807,7 +827,7 @@ std::tuple<std::unique_ptr<float[]>, int> SolveConvexPolyhedronVtxD(int plane_cn
         }
         bool listed = false;
         for (int m = 0; m < vtx_cnt; m++) {
-          if (FloatEqualZeroD(DiffNorm3D(vtx_ptr + m * 3, xyz), 2 * kIncidenceEpsD)) {
+          if (FloatEqualZeroD(DiffNorm3D(vtx_ptr + m * 3, xyz), dedup_thresh)) {
             listed = true;
             break;
           }

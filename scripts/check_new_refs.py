@@ -113,6 +113,17 @@ EXCLUDED_PATHS = frozenset({"AGENTS.md", "CLAUDE.md", ".gitignore"})
 #
 # A `.` is only consumed when digits follow, so a sentence-final period is not
 # swallowed into the token.
+#
+# A bare ledger number with no `<kind>-` prefix (`377.1`, as in "377.1 baseline:
+# ~13.6%") is NOT matched, and deliberately so. It is a real citation form — it
+# dangles for a later reader exactly as much as the prefixed one — but the prefix
+# is the only thing that makes the token unambiguous. Without it the pattern would
+# have to match bare decimals, which are overwhelmingly measurements, percentages
+# and version numbers in this tree; this gate blocks commits and has no inline
+# exemption, so a false positive costs far more than a miss. The miss is accepted,
+# not an oversight: see the AGENTS.md rule, which makes this script the definition
+# of the rule rather than an approximation of it, precisely so that the gap does
+# not get relitigated as a review-time judgement call on every task.
 PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (
         # Word-boundary lookbehind, not a path one: a relative-path prefix in

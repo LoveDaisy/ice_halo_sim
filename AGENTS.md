@@ -96,6 +96,15 @@ Release artifacts land in `build/cmake_install/`. Debug builds stay in `build/cm
   criterion — the file's *subject* is this working-notes system itself, i.e. it must name
   the system to do its job (this file, `CLAUDE.md`, and the root `.gitignore`). Citing the
   system is not grounds for exemption; that is the thing being checked.
+  **The checker is the rule, not an approximation of it.** If `check_new_refs.py` passes, the
+  change is compliant — full stop. Do not flag a reference in review that the checker accepts,
+  and do not appeal to the rule's "spirit" beyond what it matches: the checker deliberately
+  misses some citation forms (the trade-offs are argued at each pattern in the script), and
+  those misses are accepted, not oversights awaiting discovery. Rationale: this rule guards
+  against a harm measured to be *low* — 41% of tracked files carried such references for years
+  with no observed cost — so an unbounded review-time judgement about it is worth less than it
+  costs. Tightening is legitimate only by changing a pattern in the script (and accepting the
+  false positives that buys), never by case-by-case escalation in review.
 
 ## Testing and Platform Notes
 

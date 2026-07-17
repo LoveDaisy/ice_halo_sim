@@ -87,11 +87,56 @@ void FillHexFnMap(size_t face_cnt, const float* face_n, IdType* fn_map) {
   }
 }
 
+bool IsClosedTriMesh(size_t v, size_t f) {
+  if (v == 0 || f == 0 || f % 2 != 0) {
+    return false;
+  }
+  const auto vi = static_cast<int64_t>(v);
+  const auto fi = static_cast<int64_t>(f);
+  return vi - (3 * fi / 2) + fi == 2;
+}
+
+namespace {
+
+// Fires when the numerical-geometry pipeline produced a mesh that fails the
+// closed-manifold Euler check under extreme random face_distance combinations
+// that the vertex-dedup relative tolerance still misses (empirically ~14 in
+// 200k under a gauss(1, 0.5) fuzz sweep). Downstream BuildPolygonFaceData
+// relies on a well-formed input mesh; feeding it a mesh that fails this check
+// leaves polygon-face slots partially initialized and the polygon-indexed
+// GetFn(IdType) reads through garbage tri ids into fn_map_. Rejecting the
+// mesh at the factory boundary matches FillHexCrystalCoef's existing
+// "zero-volume degenerate → returns 0 planes" pattern: caller-visible
+// contract is unchanged, downstream sees a Crystal with 0 triangles that
+// contributes nothing to raypath sampling.
+Mesh RejectMalformed(Mesh mesh, const char* factory) {
+  const size_t v = mesh.GetVtxCnt();
+  const size_t f = mesh.GetTriangleCnt();
+  if (IsClosedTriMesh(v, f)) {
+    return mesh;
+  }
+  // Silent when the upstream pipeline already returned an empty mesh (e.g.
+  // FillHexCrystalCoef's zero-volume early-return path emits its own warning).
+  // Emit only for the real "constructed something but it failed the
+  // closed-mesh check" case that this gate is designed to catch. This check
+  // is necessary but not sufficient for manifold-ness (see IsClosedTriMesh
+  // doc comment in crystal.hpp) — the log message deliberately says "Euler
+  // check" rather than "non-manifold" so it does not overclaim detection
+  // power it does not have.
+  if (v != 0 || f != 0) {
+    LOG_WARNING("{}: failed closed-mesh Euler check (V={}, F={}); treating as degenerate", factory, v, f);
+  }
+  return Mesh(0, 0);
+}
+
+}  // namespace
+
 Crystal Crystal::CreatePrism(float h) {
   float dist[6]{ 1, 1, 1, 1, 1, 1 };
   float coef[kMaxHexCrystalPlanes * 4];
   auto plane_cnt = FillHexCrystalCoef(0, 0, 0, h, 0, dist, coef);
-  auto c = Crystal(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef));
+  auto mesh = RejectMalformed(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef), "CreatePrism(h)");
+  auto c = Crystal(std::move(mesh));
   c.fn_period_ = 6;
   FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
   c.BuildPolygonFaceData(coef, plane_cnt);
@@ -101,7 +146,8 @@ Crystal Crystal::CreatePrism(float h) {
 Crystal Crystal::CreatePrism(float h, const float* fd) {
   float coef[kMaxHexCrystalPlanes * 4];
   auto plane_cnt = FillHexCrystalCoef(0, 0, 0, h, 0, fd, coef);
-  auto c = Crystal(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef));
+  auto mesh = RejectMalformed(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef), "CreatePrism(h, fd)");
+  auto c = Crystal(std::move(mesh));
   c.fn_period_ = 6;
   FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
   c.BuildPolygonFaceData(coef, plane_cnt);
@@ -116,7 +162,8 @@ Crystal Crystal::CreatePyramid(float h1, float h2, float h3) {
 Crystal Crystal::CreatePyramid(float upper_alpha, float lower_alpha, float h1, float h2, float h3, const float* dist) {
   float coef[kMaxHexCrystalPlanes * 4];
   auto plane_cnt = FillHexCrystalCoef(upper_alpha, lower_alpha, h1, h2, h3, dist, coef);
-  auto c = Crystal(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef));
+  auto mesh = RejectMalformed(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef), "CreatePyramid");
+  auto c = Crystal(std::move(mesh));
   c.fn_period_ = 6;
   FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
   c.BuildPolygonFaceData(coef, plane_cnt);
@@ -377,7 +424,21 @@ IdType Crystal::GetFn(IdType poly_idx) const {
   if (poly_idx == kInvalidId || poly_idx >= poly_face_cnt_) {
     return kInvalidId;
   }
-  return fn_map_[poly_face_tri_id_[poly_idx]];
+  // Depth-of-defense: the inner index poly_face_tri_id_[poly_idx] is populated
+  // by BuildPolygonFaceData; if any future upstream regression leaves a slot
+  // uninitialized (the failure mode diagnosed on hex prisms with random
+  // face_distance, now guarded at the mesh factory), this bound check turns a
+  // wild fn_map_[garbage] read into a well-defined kInvalidId return. This is
+  // NOT a root-cause fix — the real fix is at the mesh-construction boundary
+  // (SolveConvexPolyhedronVtxD scale-relative dedup + Crystal factory Euler
+  // gate). Leaving the defense here so a future upstream drift surfaces as a
+  // detectable "no fn" symptom rather than a silent crash; do not treat this
+  // bound check as license to relax the mesh-side invariants.
+  const int tri = poly_face_tri_id_[poly_idx];
+  if (tri < 0 || static_cast<size_t>(tri) >= mesh_.GetTriangleCnt()) {
+    return kInvalidId;
+  }
+  return fn_map_[tri];
 }
 
 Crystal& Crystal::Rotate(const Rotation& r) {

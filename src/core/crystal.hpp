@@ -28,6 +28,24 @@ namespace lumice {
 bool IsLegalFace(CrystalKind kind, int face);
 
 /**
+ * @brief Closed 2-manifold Euler-characteristic gate for a triangle mesh.
+ *
+ * Checks `V - E + F == 2` with `E = 3F/2` (each edge shared by exactly 2
+ * triangles). This is the single source of truth for the "is this mesh a
+ * legal closed polyhedron" predicate used both by the Crystal factory
+ * boundary (crystal.cpp, rejects malformed meshes before they reach
+ * BuildPolygonFaceData) and by test code that needs to assert the same
+ * invariant against known inputs — declared here so both consumers share one
+ * implementation instead of each maintaining a parallel copy that can drift.
+ *
+ * @note Necessary but not sufficient: a self-intersecting mesh whose V/F
+ *       counts happen to satisfy the Euler formula would pass. See
+ *       doc/numerical-robustness.md for the argmax/relative-tolerance
+ *       conventions this predicate follows.
+ */
+bool IsClosedTriMesh(size_t v, size_t f);
+
+/**
  * @brief Compute face-number map for a hexagonal crystal mesh.
  *
  * Precondition: @p face_n must contain unit per-triangle normals
