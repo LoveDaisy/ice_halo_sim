@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <fstream>
 #include <limits>
+#include <random>
 #include <set>
 #include <utility>
 
@@ -724,6 +725,144 @@ TEST_F(V3TestCrystal, FillHexCrystalCoefZeroVolumeGuardNoNan) {
     for (size_t i = 0; i < c_boundary.TotalTriangles() * 3; i++) {
       EXPECT_FALSE(std::isnan(bn[i])) << "boundary wedge=89.9° triangle " << (i / 3) << " has NaN normal";
     }
+  }
+}
+
+// ==========================================================================
+// Face-distance mesh-manifold regression coverage.
+//
+// Pre-fix on hex prisms, 4+ planes converging at near-coincident corners could
+// escape the SolveConvexPolyhedronVtxD absolute-tolerance vertex dedup and
+// produce non-manifold meshes (V=14/F=16 for a hex whose V should be 12), which
+// downstream corrupted the polygon-face slots and SIGSEGV'd through
+// Crystal::GetFn(IdType). Guard those invariants at three levels: closed-
+// manifold fuzz, hand-picked degenerate/negative-d survival/rejection cases,
+// and a direct GetFn(IdType) out-of-range unit test.
+// ==========================================================================
+
+// Closed 2-manifold Euler test on a triangle mesh: V − 3F/2 + F == 2, F even.
+// Matches the gate in the Crystal factory (crystal.cpp anonymous helper).
+bool IsClosedTriMesh(size_t v, size_t f) {
+  if (v == 0 || f == 0 || f % 2 != 0) {
+    return false;
+  }
+  const auto vi = static_cast<int64_t>(v);
+  const auto fi = static_cast<int64_t>(f);
+  return vi - (3 * fi / 2) + fi == 2;
+}
+
+TEST_F(V3TestCrystal, PrismEulerFuzzGauss) {
+  // Every crystal produced from gauss(1, 0.5) face_distance must either satisfy
+  // the closed-manifold Euler characteristic or be rejected outright by the
+  // factory gate (V=0, F=0) — no third state where a Crystal ships with
+  // partially-initialized poly_face_tri_id_ that GetFn would wild-read.
+  std::mt19937 rng(0xFACED151u);
+  std::normal_distribution<float> gauss(1.0f, 0.5f);
+  constexpr int kN = 10000;
+  int healthy = 0;
+  int rejected = 0;
+  for (int i = 0; i < kN; i++) {
+    float dist[6];
+    for (auto& x : dist) {
+      x = gauss(rng);
+    }
+    Crystal c = Crystal::CreatePrism(1.2f, dist);
+    const size_t v = c.TotalVertices();
+    const size_t f = c.TotalTriangles();
+    if (v == 0 && f == 0) {
+      rejected++;
+      continue;
+    }
+    ASSERT_TRUE(IsClosedTriMesh(v, f)) << "Non-manifold Crystal escaped the factory gate on iter=" << i << " V=" << v
+                                       << " F=" << f << " dist=[" << dist[0] << "," << dist[1] << "," << dist[2] << ","
+                                       << dist[3] << "," << dist[4] << "," << dist[5] << "]";
+    healthy++;
+  }
+  // Sanity: rejection rate should be much less than half — otherwise the fuzz
+  // covers too narrow a healthy path to protect against real regressions.
+  EXPECT_GT(healthy, kN / 2) << "unhealthy=" << (kN - healthy) << " out of " << kN;
+}
+
+TEST_F(V3TestCrystal, PrismEulerFuzzUniform) {
+  // Uniform(0.5, 1.5) — matches CrystalMaker's kUniform semantics
+  // ((GetUniform()-0.5)*std + mean, so std=1.0 gives full-width [-0.5, +0.5]
+  // around mean=1.0). No negatives, purely tests the healthy-path invariant.
+  std::mt19937 rng(0xFACED152u);
+  std::uniform_real_distribution<float> uni(0.5f, 1.5f);
+  constexpr int kN = 10000;
+  for (int i = 0; i < kN; i++) {
+    float dist[6];
+    for (auto& x : dist) {
+      x = uni(rng);
+    }
+    Crystal c = Crystal::CreatePrism(1.2f, dist);
+    const size_t v = c.TotalVertices();
+    const size_t f = c.TotalTriangles();
+    if (v == 0 && f == 0) {
+      continue;  // Rejected — fine (must not crash).
+    }
+    ASSERT_TRUE(IsClosedTriMesh(v, f)) << "Non-manifold Crystal escaped the factory gate on iter=" << i << " V=" << v
+                                       << " F=" << f;
+  }
+}
+
+TEST_F(V3TestCrystal, FaceDistanceReverseSurvives) {
+  // Anti-regression for "hide bugs in the parameter domain": these must not be
+  // silently rejected as degenerate. Numbers come from the 377.1 diagnosis
+  // matrix (single-edge zero → trapezoidal prism, full 1's → healthy hex).
+  {
+    float dist[6]{ 1, 1, 1, 1, 1, 1 };
+    Crystal c = Crystal::CreatePrism(1.2f, dist);
+    EXPECT_EQ(c.TotalVertices(), 12u);
+    EXPECT_EQ(c.TotalTriangles(), 20u);
+  }
+  {
+    // Single-edge zero: d0=0 collapses one prism plane onto the origin;
+    // opposite-pair sum d0+d3=1>0 keeps the body convex → V=8, F=12 trapezoid.
+    // Rejecting this would erase user-legitimate degenerate crystals and hide
+    // real bugs "in the parameter domain".
+    float dist[6]{ 0, 1, 1, 1, 1, 1 };
+    Crystal c = Crystal::CreatePrism(1.2f, dist);
+    EXPECT_EQ(c.TotalVertices(), 8u);
+    EXPECT_EQ(c.TotalTriangles(), 12u);
+  }
+  {
+    // Negative d with opposite-pair sum > 0: d0=-0.5 + d3=1 = 0.5 > 0. Not the
+    // canonical hex shape (geometry shifts), but must NOT be rejected as
+    // degenerate — negative face_distance is a legitimate input path unlocked
+    // by the removal of std::abs at CrystalMaker.
+    float dist[6]{ -0.5f, 1, 1, 1, 1, 1 };
+    Crystal c = Crystal::CreatePrism(1.2f, dist);
+    EXPECT_GT(c.TotalVertices(), 0u) << "negative-d with positive opposite-pair sum wrongly rejected";
+    EXPECT_GT(c.TotalTriangles(), 0u);
+    EXPECT_TRUE(IsClosedTriMesh(c.TotalVertices(), c.TotalTriangles()));
+  }
+}
+
+TEST_F(V3TestCrystal, FaceDistanceRejectRealDegenerate) {
+  // Anti-regression for "let real degenerate through": opposite pair sums to 0
+  // → zero-volume plate. Must be rejected as V=0/F=0 rather than propagate as
+  // a partial mesh that downstream would wild-read.
+  float dist[6]{ 0, 1, 1, 0, 1, 1 };
+  Crystal c = Crystal::CreatePrism(1.2f, dist);
+  EXPECT_EQ(c.TotalVertices(), 0u);
+  EXPECT_EQ(c.TotalTriangles(), 0u);
+}
+
+TEST_F(V3TestCrystal, GetFnPolyIdxOutOfRangeReturnsInvalidId) {
+  // The IdType overload has both an outer bound (poly_idx < poly_face_cnt_) and
+  // an inner defense (poly_face_tri_id_[poly_idx] must index into fn_map_).
+  // Both branches: an out-of-range poly_idx must not read past poly_face_tri_id_.
+  Crystal c = Crystal::CreatePrism(1.3f);
+  const auto n = c.PolygonFaceCount();
+  ASSERT_GT(n, 0u);
+  // Outer bound: index equal to the count returns kInvalidId.
+  EXPECT_EQ(c.GetFn(static_cast<IdType>(n)), kInvalidId);
+  EXPECT_EQ(c.GetFn(static_cast<IdType>(n + 100)), kInvalidId);
+  EXPECT_EQ(c.GetFn(kInvalidId), kInvalidId);
+  // Valid ids in range must return a defined fn (not the sentinel).
+  for (IdType i = 0; i < static_cast<IdType>(n); i++) {
+    EXPECT_NE(c.GetFn(i), kInvalidId) << "poly_idx=" << i;
   }
 }
 
