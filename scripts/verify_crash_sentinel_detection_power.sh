@@ -60,15 +60,27 @@ FIXED_WORKTREE="$WORK_PARENT/fixed"
 REVERTED_WORKTREE="$WORK_PARENT/reverted"
 
 cleanup() {
+  local exit_code="$1"
   echo "--- cleanup: removing worktrees ---"
   git worktree remove --force "$FIXED_WORKTREE" 2>/dev/null || true
+  # exit 2 (INCONCLUSIVE) and exit 4 (INFRASTRUCTURE ERROR) both tell the user
+  # to inspect $REVERTED_WORKTREE/build/ — deleting it here would make that
+  # instruction unfollowable. Keep the reverted worktree (and its parent) on
+  # those two paths; every other path cleans up as before.
+  if [ "$exit_code" -eq 2 ] || [ "$exit_code" -eq 4 ]; then
+    git worktree prune
+    echo "cleanup: exit $exit_code — retaining reverted arm worktree for inspection:" >&2
+    echo "  $REVERTED_WORKTREE" >&2
+    echo "  (remove manually with: git worktree remove --force '$REVERTED_WORKTREE' && rm -rf '$WORK_PARENT')" >&2
+    return
+  fi
   git worktree remove --force "$REVERTED_WORKTREE" 2>/dev/null || true
   rm -rf "$WORK_PARENT"
   # Prune stale worktree registrations.
   git worktree prune
   echo "cleanup done. Main worktree at $REPO_ROOT was never modified."
 }
-trap cleanup EXIT
+trap 'cleanup $?' EXIT
 
 echo "=== fixed arm (HEAD=$FIXED_HEAD) ==="
 git worktree add --detach "$FIXED_WORKTREE" "$FIXED_HEAD"
