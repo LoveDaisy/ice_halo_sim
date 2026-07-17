@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784282851172,
+  "lastUpdate": 1784282853325,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9620,50 +9620,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "e925a47e0db8e111ca3bd397a8ed21c44f8ed48d",
-          "message": "Merge pull request #105 from LoveDaisy/fix/adaptive_brightness_screenshot\n\nAdaptive Brightness: single-mode F1 anchor + screenshot fix + P99.5/T135 defaults",
-          "timestamp": "2026-05-24T20:37:24+08:00",
-          "tree_id": "a7d961fcc9ac82180aab92bb7165fd154a4c4616",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/e925a47e0db8e111ca3bd397a8ed21c44f8ed48d"
-        },
-        "date": 1779626511695,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 83,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 80.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 73.1,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 72.2,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "fc3e2fa37ad9f4bce408a9a5817f09eb57aa7c8a",
           "message": "Merge pull request #106 from LoveDaisy/feat/gui_zenith_nadir\n\nfeat(gui): zenith/nadir ring marker overlay",
           "timestamp": "2026-05-25T01:23:44+08:00",
@@ -14003,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 94.8,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "489bfb6288808f55579d34cc8361b00fd84d8fb0",
+          "message": "Merge pull request #207 from LoveDaisy/docs/geom-clock-and-benchmark-caveats\n\ndocs: correct two measurement caveats found while calibrating the geometry clock",
+          "timestamp": "2026-07-17T18:00:16+08:00",
+          "tree_id": "56bd0351ee4a8d7916c831f46b0b8cc6b5ce0f59",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/489bfb6288808f55579d34cc8361b00fd84d8fb0"
+        },
+        "date": 1784282852801,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 79,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96.5,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 76.1,
             "unit": "%"
           }
         ]
