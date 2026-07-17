@@ -276,21 +276,30 @@ struct CrystalMaker {
   RandomNumberGenerator& rng_;
 
   Crystal operator()(const PrismCrystalParam& p) {
+    // Heights are folded with std::abs — a negative height has no physical
+    // interpretation independent of crystal orientation. face_distance is signed:
+    // negative d shifts the plane past the origin, still yielding a valid convex
+    // body as long as opposite-pair sums d_i + d_{i+3} > 0 (verified downstream
+    // by Crystal::CreatePrism's Euler-manifold gate; degenerate combos are
+    // rejected as zero-triangle Crystals rather than silently absolute-valued at
+    // the sampler boundary, which was hiding an entire input path from the
+    // geometry pipeline).
     float h = std::abs(rng_.Get(p.h_));
     float dist[6]{};
     for (int i = 0; i < 6; i++) {
-      dist[i] = std::abs(rng_.Get(p.d_[i]));
+      dist[i] = rng_.Get(p.d_[i]);
     }
     return Crystal::CreatePrism(h, dist);
   }
 
   Crystal operator()(const PyramidCrystalParam& p) {
+    // Same rationale as the prism branch: heights fold, face_distance is signed.
     float h1 = std::abs(rng_.Get(p.h_pyr_u_));
     float h2 = std::abs(rng_.Get(p.h_prs_));
     float h3 = std::abs(rng_.Get(p.h_pyr_l_));
     float dist[6]{};
     for (int i = 0; i < 6; i++) {
-      dist[i] = std::abs(rng_.Get(p.d_[i]));
+      dist[i] = rng_.Get(p.d_[i]);
     }
     return Crystal::CreatePyramid(p.wedge_angle_u_, p.wedge_angle_l_, h1, h2, h3, dist);
   }
