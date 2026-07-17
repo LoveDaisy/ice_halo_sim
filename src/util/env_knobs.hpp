@@ -37,24 +37,28 @@ std::optional<std::string> TraceBackendOverride(Logger& logger);
 // override when set to a positive integer, else default_val. INFO once if applied.
 std::size_t DispatchRayNum(Logger& logger, std::size_t default_val);
 
-// LUMICE_GEOM_CLOCK — experiment knob: how many rays share one
-// sampled crystal shape on the legacy CPU path (its geometry clock). This is the
-// D/K ratio directly: 1 = a fresh shape per ray (the unconstrained optimum, used
-// to build the calibration oracle), 32 = the shipped default. Returns the
+// LUMICE_GEOM_CLOCK — experiment knob: how many rays share one sampled crystal
+// shape on the legacy CPU path (its geometry clock, K). K=1 is a fresh shape per
+// ray (the unconstrained optimum); 32 is the shipped default. Returns the
 // override when positive, else default_val. INFO once if applied.
 //
-// KNOWN UPPER BOUND — safe range is [1, 64]; >= 128 CORRUPTS THE HEAP.
-// Measured (3 reps each): 32 -> 0 0 0, 64 -> 0 0 0,
-// 128 -> 139 134 139, 256 -> 139 0 134 (139=SIGSEGV, 134=SIGABRT, intermittent).
-// Mechanism: the threshold is exactly the SimBatch size (server.cpp
-// kDefaultRayNum=128). SimulateOneWavelength receives that as ray_num and sizes
-// its ray buffers to ray_num*2 = 256, while a sub-batch's working set is
-// ~curr_ray_num*2 == geom_clock*2 -- so 64 needs 128 and fits, 128 needs 256 and
-// sits exactly at capacity, spilling intermittently. This is deliberately NOT
-// clamped: a silent clamp would make a sweep quietly not do what was asked. The
-// geometry clock is entangled with the ray-buffer capacity model and that must be
-// fixed before it can become a tunable quantity; unreachable in production since
-// the default is the hard-coded constant.
+// UPPER BOUND — safe range is [1, SimBatch size]; ABOVE THAT IT CORRUPTS THE HEAP.
+// The SimBatch size is the dispatch granularity: LUMICE_DISPATCH_RAY_NUM, whose
+// legacy-CPU default is server.cpp kDefaultRayNum=128. So the bound is a
+// CONSEQUENCE OF THE DISPATCH SETTING, not a property of this knob:
+//   * default dispatch (128): 32 -> 0 0 0, 64 -> 0 0 0, 128 -> 139 134 139,
+//     256 -> 139 0 134 (139=SIGSEGV, 134=SIGABRT, intermittent).
+//   * dispatch 65536: 128 / 1024 / 32768 all -> 0 0 0, and the sweep reaches the
+//     GPU-scale geometry clock (K=32768 yields 13 distinct shapes over 400k rays,
+//     matching what the Metal backend samples).
+// Mechanism: SimulateOneWavelength receives the SimBatch as ray_num and sizes its
+// ray buffers to ray_num*2, while a sub-batch's working set is ~curr_ray_num*2 ==
+// geom_clock*2 -- so the buffers fit exactly while geom_clock <= SimBatch, and
+// spill intermittently past it. Raising the dispatch raises the ceiling with it.
+// This is deliberately NOT clamped: a silent clamp would make a sweep quietly not
+// do what was asked. The geometry clock remains entangled with the ray-buffer
+// capacity model, which must be fixed before it can become a tunable quantity;
+// unreachable in production since the default is the hard-coded constant.
 std::size_t GeomClock(Logger& logger, std::size_t default_val);
 
 // LUMICE_COMMIT_RAY_NUM (with legacy LUMICE_BATCH_RAY_NUM fallback) — consumer
