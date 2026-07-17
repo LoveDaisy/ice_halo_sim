@@ -101,7 +101,11 @@ def _binary_smoke_check() -> None:
 
 
 # 15 runs at pre-fix crash rate 20% → detection power ~96% (1 - 0.8^15).
-_N_RUNS = 15
+# Overridable via SENTINEL_N so scripts/verify_crash_sentinel_detection_power.sh
+# can actually increase N when its own AMBIGUOUS branch recommends a rerun —
+# without this, the env var only changed the script's own log text while the
+# parametrized loop below silently kept running 15 regardless.
+_N_RUNS = int(os.environ.get("SENTINEL_N", "15"))
 
 
 def _classify_exit(returncode: int) -> str:

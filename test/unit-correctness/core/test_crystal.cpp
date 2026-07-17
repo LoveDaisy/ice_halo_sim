@@ -770,6 +770,12 @@ struct PrismFuzzResult {
   int healthy = 0;
   int degenerate_but_legal = 0;
   int rejected = 0;
+  // Indirect coverage for the negative-face_distance reject path (AC3) under
+  // random sampling, alongside the deterministic cases in
+  // FaceDistanceRejectRealDegenerate: how many iterations drew at least one
+  // negative dist[i], and how many of those were rejected (V==0 && F==0).
+  int neg_input = 0;
+  int neg_input_rejected = 0;
 };
 
 enum class PrismFuzzKind { kGaussian, kUniform };
@@ -784,14 +790,24 @@ PrismFuzzResult RunPrismFuzz(uint32_t seed, PrismFuzzKind kind, float mean, floa
   std::normal_distribution<float> gauss(mean, std);
   for (int i = 0; i < n; i++) {
     float dist[6];
+    bool has_neg = false;
     for (auto& x : dist) {
       x = (kind == PrismFuzzKind::kGaussian) ? gauss(rng) : uni(rng);
+      if (x < 0.f) {
+        has_neg = true;
+      }
+    }
+    if (has_neg) {
+      r.neg_input++;
     }
     Crystal c = Crystal::CreatePrism(1.2f, dist);
     const size_t v = c.TotalVertices();
     const size_t f = c.TotalTriangles();
     if (v == 0 && f == 0) {
       r.rejected++;
+      if (has_neg) {
+        r.neg_input_rejected++;
+      }
       continue;
     }
     if (!IsClosedTriMesh(v, f)) {
@@ -841,6 +857,18 @@ TEST_F(V3TestCrystal, PrismEulerFuzzGauss_std050) {
   const auto r = RunPrismFuzz(0xFACED153u, PrismFuzzKind::kGaussian, 1.0f, 0.50f, 10000);
   EXPECT_GT(r.degenerate_but_legal, 4400) << r.degenerate_but_legal;  // > 44%
   EXPECT_LT(r.degenerate_but_legal, 5400) << r.degenerate_but_legal;  // < 54%
+
+  // AC3 indirect coverage (plan Step 2): at this std, gauss(1.0, 0.5) is
+  // unbounded and must draw negative face_distance values on some iterations
+  // — the reject path (opposite-pair sum <= 0) must fire on a non-trivial,
+  // non-overwhelming fraction of them (some negative-containing draws still
+  // keep a positive opposite-pair sum and legitimately survive, per
+  // FaceDistanceReverseSurvives).
+  ASSERT_GT(r.neg_input, 0) << "std=0.50 must draw at least one negative dist[i]";
+  EXPECT_GT(r.neg_input_rejected, 0) << "reject path never fired on any negative-containing draw";
+  EXPECT_LT(r.neg_input_rejected, r.neg_input)
+      << "every negative-containing draw was rejected — reject judgment may be over-tight "
+      << "(should only fire when opposite-pair sum <= 0, not on any negative d[i])";
 }
 
 // Uniform baseline (empirical): with (U-0.5)*std+mean semantics all d_i stay in
@@ -856,15 +884,23 @@ TEST_F(V3TestCrystal, PrismEulerFuzzUniform_std015) {
 TEST_F(V3TestCrystal, PrismEulerFuzzUniform_std030) {
   const auto r = RunPrismFuzz(0xFACED155u, PrismFuzzKind::kUniform, 1.0f, 0.30f, 10000);
   EXPECT_EQ(r.rejected, 0);
-  // No specific degenerate proportion asserted — the bounded (U-0.5)*std+mean
-  // range [0.85, 1.15] rarely triggers the wedge-collapse geometry, and
-  // over-tightening a proportion here would just make the test flaky. The
-  // load-bearing assertion is "no rejection and no manifold escape".
+  // Observed (N=10000, seed 0xFACED155): degenerate_but_legal=0 — the bounded
+  // (U-0.5)*std+mean range [0.85, 1.15] never triggers wedge-collapse geometry
+  // at this std, so no meaningful lower-bound assertion is possible here
+  // without risking flakes on a proportion that is genuinely ~0, not merely
+  // small. The load-bearing invariants stay existence-only (no rejection, no
+  // manifold escape); this observed value is logged for future debugging so a
+  // shift toward non-zero-but-still-low degenerate rates does not silently
+  // disappear from view either.
+  std::cerr << "[observability] uniform std=0.30 degenerate_but_legal=" << r.degenerate_but_legal << "\n";
 }
 
 TEST_F(V3TestCrystal, PrismEulerFuzzUniform_std050) {
   const auto r = RunPrismFuzz(0xFACED156u, PrismFuzzKind::kUniform, 1.0f, 0.50f, 10000);
   EXPECT_EQ(r.rejected, 0);
+  // Observed (N=10000, seed 0xFACED156): degenerate_but_legal=0, same
+  // rationale as std=0.30 above.
+  std::cerr << "[observability] uniform std=0.50 degenerate_but_legal=" << r.degenerate_but_legal << "\n";
 }
 
 TEST_F(V3TestCrystal, FaceDistanceKnownMalformedInputsHealed) {

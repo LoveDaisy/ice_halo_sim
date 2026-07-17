@@ -78,7 +78,6 @@ git worktree add --detach "$FIXED_WORKTREE" "$FIXED_HEAD"
   ./scripts/build.sh -sj release >/dev/null
 )
 FIXED_BIN="$FIXED_WORKTREE/build/cmake_install/Lumice"
-FIXED_LIB="$(find "$FIXED_WORKTREE/build/cmake_install" -name 'liblumice*' -print -quit)"
 FIXED_MD5="$(md5 -q "$FIXED_BIN" 2>/dev/null || md5sum "$FIXED_BIN" | awk '{print $1}')"
 echo "fixed arm binary: $FIXED_BIN"
 echo "fixed arm md5:    $FIXED_MD5"
@@ -91,7 +90,6 @@ git worktree add --detach "$REVERTED_WORKTREE" "$REVERT_BASE"
   ./scripts/build.sh -sj release >/dev/null
 )
 REVERTED_BIN="$REVERTED_WORKTREE/build/cmake_install/Lumice"
-REVERTED_LIB="$(find "$REVERTED_WORKTREE/build/cmake_install" -name 'liblumice*' -print -quit)"
 REVERTED_MD5="$(md5 -q "$REVERTED_BIN" 2>/dev/null || md5sum "$REVERTED_BIN" | awk '{print $1}')"
 echo "reverted arm binary: $REVERTED_BIN"
 echo "reverted arm md5:    $REVERTED_MD5"
@@ -108,12 +106,39 @@ echo "=== reverted arm: sentinel run (N=$N_RUNS) ==="
 # Run the *current-HEAD* sentinel test (which has the signal-vs-clean-exit
 # discipline improvements) against the reverted-arm binary. This is the point
 # of two-arm testing: the sentinel must fire on the reverted arm.
+#
+# LUMICE_BIN is the only override this test path consumes (see
+# test/e2e/runner.py::find_lumice_binary) — the CLI binary is statically
+# linked against liblumice in this build (confirmed via `otool -L`/`ldd`: no
+# liblumice entry in the shared-library list), so there is no companion
+# shared-library path to pin here. Do NOT introduce a LUMICE_LIB override on
+# this invocation: capi_runner.py-style tests read it, but this sentinel goes
+# through the CLI subprocess path, which does not — setting it here would
+# silently do nothing (or, if runner.py ever grows LUMICE_LIB support later,
+# risk re-introducing a cross-arm-library pairing bug where the reverted
+# binary loads the fixed arm's library).
 set +e
-LUMICE_BIN="$REVERTED_BIN" LUMICE_LIB="$FIXED_LIB" \
+SENTINEL_N="$N_RUNS" LUMICE_BIN="$REVERTED_BIN" \
   pytest -v "test/regression-sentinel/test_face_distance_crash.py" \
   --tb=short 2>&1 | tee "$WORK_PARENT/reverted_arm.log"
 SENTINEL_EXIT=${PIPESTATUS[0]}
 set -e
+
+# Infrastructure failures (the module-scope smoke-check fixture erroring out)
+# report as pytest ERROR, not FAILED, and never reach _classify_exit — so they
+# contain neither "signal-death" nor "clean non-zero exit". Detect this first
+# so it is never miscounted as "0 signal deaths observed" (AMBIGUOUS below);
+# it means the reverted arm never got to run the parametrized loop at all.
+if grep -q "Lumice binary infrastructure check failed" "$WORK_PARENT/reverted_arm.log"; then
+  echo "" >&2
+  echo "INFRASTRUCTURE ERROR: reverted arm's module-scope smoke check failed —" >&2
+  echo "the reverted-arm binary could not even run a known-good config. The" >&2
+  echo "parametrized sentinel loop never executed, so 0 signal-deaths here does" >&2
+  echo "NOT mean 'no detection power' — it means the reverted-arm build itself" >&2
+  echo "is broken. Inspect $REVERTED_WORKTREE/build/ before drawing any" >&2
+  echo "conclusion." >&2
+  exit 4
+fi
 
 # Count failures classified as "signal-death" (SIGSEGV-class) vs any other exit.
 SIGNAL_DEATH_COUNT=$(grep -c "signal-death" "$WORK_PARENT/reverted_arm.log" || true)
