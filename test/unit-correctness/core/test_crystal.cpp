@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <random>
 #include <set>
@@ -740,16 +741,12 @@ TEST_F(V3TestCrystal, FillHexCrystalCoefZeroVolumeGuardNoNan) {
 // and a direct GetFn(IdType) out-of-range unit test.
 // ==========================================================================
 
-// Closed 2-manifold Euler test on a triangle mesh: V − 3F/2 + F == 2, F even.
-// Matches the gate in the Crystal factory (crystal.cpp anonymous helper).
-bool IsClosedTriMesh(size_t v, size_t f) {
-  if (v == 0 || f == 0 || f % 2 != 0) {
-    return false;
-  }
-  const auto vi = static_cast<int64_t>(v);
-  const auto fi = static_cast<int64_t>(f);
-  return vi - (3 * fi / 2) + fi == 2;
-}
+// IsClosedTriMesh is declared in core/crystal.hpp and shared with the
+// production gate in crystal.cpp (Crystal factory boundary) — this test file
+// asserts against the real implementation instead of a hand-copied one, so a
+// future tightening of the predicate (e.g. added manifold checks per
+// doc/numerical-robustness.md) can't silently drift out of sync with what
+// these tests actually verify.
 
 TEST_F(V3TestCrystal, PrismEulerFuzzGauss) {
   // Every crystal produced from gauss(1, 0.5) face_distance must either satisfy
@@ -803,6 +800,42 @@ TEST_F(V3TestCrystal, PrismEulerFuzzUniform) {
     }
     ASSERT_TRUE(IsClosedTriMesh(v, f)) << "Non-manifold Crystal escaped the factory gate on iter=" << i << " V=" << v
                                        << " F=" << f;
+  }
+}
+
+TEST_F(V3TestCrystal, FaceDistanceKnownMalformedInputsHealed) {
+  // Deterministic pin for the actual root cause (SolveConvexPolyhedronVtxD's
+  // vertex dedup): these are exact float32 face_distance combinations
+  // diagnosed to reproduce a non-manifold mesh (V=14/F=16 or V=12/F=12) on
+  // pre-fix HEAD — captured via hex-float bit patterns (not decimal, which
+  // loses the precision that triggers the near-coincident-vertex path) during
+  // root-cause diagnosis, replaying the exact SolveConvexPolyhedronVtxD input
+  // that produced 4+ planes converging within the pre-fix absolute dedup
+  // tolerance. Unlike the random-seed fuzz tests above (PrismEulerFuzzGauss/
+  // Uniform), whose seeded 10000-sample runs have near-zero probability of
+  // landing on the ~14-in-200k trigger set, these inputs deterministically
+  // hit the fix on every run: if the scale-relative vertex-dedup tolerance in
+  // SolveConvexPolyhedronVtxD is ever reverted or narrowed back toward the
+  // old absolute tolerance, every case here fails immediately and
+  // reproducibly, with no dependency on RNG state or memory layout.
+  constexpr float kH = 1.2f;
+  const float kKnownMalformedInputs[][6]{
+    // clang-format off
+    { 0x1.ac21bp+0f,  0x1.1d0d04p+0f, 0x1.c2325ap-1f, 0x1.18b52ep+0f, 0x1.eb8ef4p+0f, 0x1.a5ae5p-1f  },
+    { 0x1.d9c724p-2f, 0x1.240ec2p+0f, 0x1.69eed8p-1f, 0x1.4feeaep+0f, 0x1.4a5544p-1f, 0x1.1b9f16p+0f },
+    { 0x1.669738p+0f, 0x1.d40808p-3f, 0x1.7525ep-1f,  0x1.3bf1cap-1f, 0x1.129d3cp+0f, 0x1.2c18e2p+0f },
+    { 0x1.06a254p+0f, 0x1.f0702p-1f,  0x1.03dc38p+0f, 0x1.c9dc68p-1f, 0x1.12e3fp+1f,  0x1.40dc9ep+0f },
+    { 0x1.36916p-3f,  0x1.7051cp-4f,  0x1.4aa59cp+0f, 0x1.f07434p-1f, 0x1.95810cp+0f, 0x1.3a9366p-1f },
+    { 0x1.d5cbdcp-2f, 0x1.8c5ca4p+0f, 0x1.32126ap+0f, 0x1.44c52cp+0f, 0x1.2b007p-4f,  0x1.665a6ep-1f },
+    { 0x1.4be45cp+0f, 0x1.12d93p-1f,  0x1.570774p+0f, 0x1.9b3b64p-1f, 0x1.485f34p+0f, 0x1.7867ap+0f  },
+    // clang-format on
+  };
+  for (size_t i = 0; i < std::size(kKnownMalformedInputs); i++) {
+    Crystal c = Crystal::CreatePrism(kH, kKnownMalformedInputs[i]);
+    const size_t v = c.TotalVertices();
+    const size_t f = c.TotalTriangles();
+    ASSERT_TRUE(IsClosedTriMesh(v, f)) << "known pre-fix-malformed input[" << i << "] still produces a non-manifold "
+                                       << "mesh post-fix: V=" << v << " F=" << f;
   }
 }
 

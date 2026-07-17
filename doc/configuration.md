@@ -80,6 +80,12 @@ If the `axis` field is absent, the following defaults are used:
 | `height` | value/distribution | no | 1.0 | Height ratio h/a, where h is the prism height and a is the base diameter |
 | `face_distance` | array | no | [1,1,1,1,1,1] | Distance ratios for 6 faces; [1,1,1,1,1,1] for a regular hexagon |
 
+`face_distance` values may be negative — a negative value is accepted and
+participates in geometry construction with its sign (it is not silently
+folded to a positive value). The resulting mesh is validated at construction:
+a mesh that fails the closed-manifold check is rejected (the crystal is
+dropped and contributes zero energy) rather than silently accepted.
+
 **Example**:
 
 ```json
@@ -118,6 +124,9 @@ If the `axis` field is absent, the following defaults are used:
 | `upper_indices` | integer array | no | [1,0,1] | Miller indices for the upper pyramid segment |
 | `lower_indices` | integer array | no | [1,0,1] | Miller indices for the lower pyramid segment |
 | `face_distance` | array | no | [1,1,1,1,1,1] | Distance ratios for 6 faces |
+
+`face_distance` values may be negative — same construction and rejection
+semantics as the prism type above.
 
 **Example**:
 

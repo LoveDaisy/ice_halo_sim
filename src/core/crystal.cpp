@@ -87,20 +87,6 @@ void FillHexFnMap(size_t face_cnt, const float* face_n, IdType* fn_map) {
   }
 }
 
-namespace {
-
-// Closed 2-manifold Euler-characteristic gate: `V - E + F == 2` with `E = 3F/2`
-// on a triangle mesh (each edge shared by exactly 2 triangles). Fires when the
-// numerical-geometry pipeline produced a non-manifold mesh under extreme random
-// face_distance combinations that the vertex-dedup relative tolerance still
-// misses (~14 in 200k for gauss(1, 0.5), per Step 2 measurements). Downstream
-// BuildPolygonFaceData relies on a well-formed input mesh; feeding it a
-// non-manifold mesh leaves polygon-face slots partially initialized and the
-// polygon-indexed GetFn(IdType) reads through garbage tri ids into fn_map_.
-// Rejecting the mesh at the factory boundary matches FillHexCrystalCoef's
-// existing "zero-volume degenerate → returns 0 planes" pattern: caller-visible
-// contract is unchanged, downstream sees a Crystal with 0 triangles that
-// contributes nothing to raypath sampling.
 bool IsClosedTriMesh(size_t v, size_t f) {
   if (v == 0 || f == 0 || f % 2 != 0) {
     return false;
@@ -110,6 +96,19 @@ bool IsClosedTriMesh(size_t v, size_t f) {
   return vi - (3 * fi / 2) + fi == 2;
 }
 
+namespace {
+
+// Fires when the numerical-geometry pipeline produced a mesh that fails the
+// closed-manifold Euler check under extreme random face_distance combinations
+// that the vertex-dedup relative tolerance still misses (empirically ~14 in
+// 200k under a gauss(1, 0.5) fuzz sweep). Downstream BuildPolygonFaceData
+// relies on a well-formed input mesh; feeding it a mesh that fails this check
+// leaves polygon-face slots partially initialized and the polygon-indexed
+// GetFn(IdType) reads through garbage tri ids into fn_map_. Rejecting the
+// mesh at the factory boundary matches FillHexCrystalCoef's existing
+// "zero-volume degenerate → returns 0 planes" pattern: caller-visible
+// contract is unchanged, downstream sees a Crystal with 0 triangles that
+// contributes nothing to raypath sampling.
 Mesh RejectMalformed(Mesh mesh, const char* factory) {
   const size_t v = mesh.GetVtxCnt();
   const size_t f = mesh.GetTriangleCnt();
@@ -118,10 +117,14 @@ Mesh RejectMalformed(Mesh mesh, const char* factory) {
   }
   // Silent when the upstream pipeline already returned an empty mesh (e.g.
   // FillHexCrystalCoef's zero-volume early-return path emits its own warning).
-  // Emit only for the real "constructed something but it's not a closed
-  // manifold" case that this gate is designed to catch.
+  // Emit only for the real "constructed something but it failed the
+  // closed-mesh check" case that this gate is designed to catch. This check
+  // is necessary but not sufficient for manifold-ness (see IsClosedTriMesh
+  // doc comment in crystal.hpp) — the log message deliberately says "Euler
+  // check" rather than "non-manifold" so it does not overclaim detection
+  // power it does not have.
   if (v != 0 || f != 0) {
-    LOG_WARNING("{}: rejecting non-manifold mesh (V={}, F={}); treating as degenerate", factory, v, f);
+    LOG_WARNING("{}: failed closed-mesh Euler check (V={}, F={}); treating as degenerate", factory, v, f);
   }
   return Mesh(0, 0);
 }
@@ -132,7 +135,7 @@ Crystal Crystal::CreatePrism(float h) {
   float dist[6]{ 1, 1, 1, 1, 1, 1 };
   float coef[kMaxHexCrystalPlanes * 4];
   auto plane_cnt = FillHexCrystalCoef(0, 0, 0, h, 0, dist, coef);
-  auto mesh = RejectMalformed(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef), "CreatePrism");
+  auto mesh = RejectMalformed(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef), "CreatePrism(h)");
   auto c = Crystal(std::move(mesh));
   c.fn_period_ = 6;
   FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
@@ -143,7 +146,7 @@ Crystal Crystal::CreatePrism(float h) {
 Crystal Crystal::CreatePrism(float h, const float* fd) {
   float coef[kMaxHexCrystalPlanes * 4];
   auto plane_cnt = FillHexCrystalCoef(0, 0, 0, h, 0, fd, coef);
-  auto mesh = RejectMalformed(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef), "CreatePrism");
+  auto mesh = RejectMalformed(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef), "CreatePrism(h, fd)");
   auto c = Crystal(std::move(mesh));
   c.fn_period_ = 6;
   FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());

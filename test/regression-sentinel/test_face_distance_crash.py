@@ -16,8 +16,11 @@ and the polygon-indexed Crystal::GetFn wild-reads fn_map_ through the garbage
 tri id → SIGSEGV in Simulator::SimulateOneWavelength.
 
 Baseline reproduction rate: 4/20 = 20% (stochastic — depends on memory layout
-of the malformed-mesh path). This sentinel runs the exact reproducer config
-N times and requires every run to exit cleanly.
+of the malformed-mesh path). This sentinel replays the tracked reproducer
+config (test/e2e/configs/repro_crash_face_distance.json, a verbatim copy of
+the original diagnosis fixture — same gauss(1.0, 0.5) face_distance, same
+filter/ray_num/max_hits — so the baseline crash-rate measurement transfers
+without re-derivation) N times and requires every run to exit cleanly.
 
 Runs fast (~1s each × N=15 ≈ 15s) so it stays in the default `pytest -v` PR
 gate (no @pytest.mark.slow).
@@ -33,71 +36,15 @@ from pathlib import Path
 
 import pytest
 
-from test.e2e.runner import find_lumice_binary
+from test.e2e.runner import find_lumice_binary, get_project_root
 
 
-_GAUSS = {"type": "gauss", "mean": 1.0, "std": 0.50}
-_UNI_360 = {"type": "uniform", "mean": 0.0, "std": 360.0}
+_CONFIG_PATH = get_project_root() / "test" / "e2e" / "configs" / "repro_crash_face_distance.json"
 
 
-def _build_gauss_config(seed_note: int) -> dict:
-    # Anchor to the observed reproducer: gauss(1.0, 0.5) on all 6 face_distance
-    # entries, prism-only, small max_hits to keep runs fast, filter enabled to
-    # ensure the raypath machinery actually walks the polygon-face data (which
-    # was where GetFn(IdType) crashed pre-fix). seed_note keeps configs
-    # differentiable in a fixture cache without affecting geometry.
-    return {
-        "crystal": [
-            {
-                "id": 1,
-                "type": "prism",
-                "shape": {
-                    "height": 1.2,
-                    "face_distance": [_GAUSS] * 6,
-                },
-                "axis": {
-                    "azimuth": _UNI_360,
-                    "roll": _UNI_360,
-                    "zenith": {"type": "gauss", "mean": 90.0, "std": 0.8},
-                },
-            }
-        ],
-        "filter": [
-            {"id": 1, "type": "entry_exit", "entry": 3, "exit": 5, "action": "filter_in"}
-        ],
-        "scene": {
-            "light_source": {
-                "type": "sun",
-                "altitude": 20.0,
-                "azimuth": 0,
-                "diameter": 0.5,
-                "spectrum": [{"wavelength": 550, "weight": 1.0}],
-            },
-            "ray_num": 400000,
-            "max_hits": 8,
-            "scattering": [
-                {
-                    "prob": 0.0,
-                    "entries": [{"crystal": 1, "proportion": 1, "filter": 1}],
-                }
-            ],
-            "_seed_note": seed_note,
-        },
-        "render": [
-            {
-                "id": 1,
-                "lens": {"type": "linear", "fov": 55},
-                "resolution": [400, 300],
-                "ray_color": [1, 1, 1],
-                "background_color": [0, 0, 0],
-            }
-        ],
-    }
-
-
-def _run_once(seed_note: int) -> subprocess.CompletedProcess:
+def _run_once() -> subprocess.CompletedProcess:
     binary = find_lumice_binary()
-    cfg = _build_gauss_config(seed_note)
+    cfg = json.loads(_CONFIG_PATH.read_text())
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump(cfg, f)
         cfg_path = f.name
@@ -120,7 +67,7 @@ _N_RUNS = 15
 @pytest.mark.parametrize("run_idx", list(range(_N_RUNS)))
 def test_random_face_distance_no_crash(run_idx: int) -> None:
     """gauss(1.0, 0.5) face_distance run must exit 0. Pre-fix rate: 4/20."""
-    result = _run_once(seed_note=run_idx)
+    result = _run_once()
     assert result.returncode == 0, (
         f"Lumice exited {result.returncode} (signal death indicates SIGSEGV "
         f"regression on random face_distance) run_idx={run_idx}\n"
