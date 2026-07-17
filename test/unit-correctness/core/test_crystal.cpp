@@ -748,59 +748,123 @@ TEST_F(V3TestCrystal, FillHexCrystalCoefZeroVolumeGuardNoNan) {
 // doc/numerical-robustness.md) can't silently drift out of sync with what
 // these tests actually verify.
 
-TEST_F(V3TestCrystal, PrismEulerFuzzGauss) {
-  // Every crystal produced from gauss(1, 0.5) face_distance must either satisfy
-  // the closed-manifold Euler characteristic or be rejected outright by the
-  // factory gate (V=0, F=0) — no third state where a Crystal ships with
-  // partially-initialized poly_face_tri_id_ that GetFn would wild-read.
-  std::mt19937 rng(0xFACED151u);
-  std::normal_distribution<float> gauss(1.0f, 0.5f);
-  constexpr int kN = 10000;
+// Shared fuzz driver for the prism face_distance matrix. Callers pass the
+// distribution kind + spread; the helper draws `n` samples, builds a prism per
+// sample, and buckets each outcome into exactly one of three states:
+//   - healthy               : V/F satisfy IsClosedTriMesh and PolygonFaceCount()==8
+//                             (6 side faces + 2 basal faces — the canonical hex)
+//   - degenerate_but_legal  : V/F satisfy IsClosedTriMesh but PolygonFaceCount()<8
+//                             (side face(s) collapsed — still a legal closed
+//                             convex mesh, just with fewer than 8 polygon faces;
+//                             this is the "legal but reduced" path that the
+//                             filter/render pipeline must still traverse
+//                             without crashing)
+//   - rejected              : V==0 && F==0 (RejectMalformed folded a non-manifold
+//                             mesh at the factory boundary — the correct outcome
+//                             when opposite-pair sum ≤ 0 makes the body actually
+//                             degenerate)
+// The three buckets partition the sample space; any Crystal that ships with a
+// V/F pair that neither satisfies IsClosedTriMesh nor is (0,0) is a bug and
+// ADD_FAILURE fires immediately with the offending dist[] logged.
+struct PrismFuzzResult {
   int healthy = 0;
+  int degenerate_but_legal = 0;
   int rejected = 0;
-  for (int i = 0; i < kN; i++) {
+};
+
+enum class PrismFuzzKind { kGaussian, kUniform };
+
+PrismFuzzResult RunPrismFuzz(uint32_t seed, PrismFuzzKind kind, float mean, float std, int n) {
+  PrismFuzzResult r{};
+  std::mt19937 rng(seed);
+  // kUniform matches CrystalMaker's semantics: (U-0.5)*std + mean, so std is
+  // the full-width range around mean (verified against math.cpp:370). kGaussian
+  // uses standard normal * std + mean (math.cpp:372-374).
+  std::uniform_real_distribution<float> uni(mean - 0.5f * std, mean + 0.5f * std);
+  std::normal_distribution<float> gauss(mean, std);
+  for (int i = 0; i < n; i++) {
     float dist[6];
     for (auto& x : dist) {
-      x = gauss(rng);
+      x = (kind == PrismFuzzKind::kGaussian) ? gauss(rng) : uni(rng);
     }
     Crystal c = Crystal::CreatePrism(1.2f, dist);
     const size_t v = c.TotalVertices();
     const size_t f = c.TotalTriangles();
     if (v == 0 && f == 0) {
-      rejected++;
+      r.rejected++;
       continue;
     }
-    ASSERT_TRUE(IsClosedTriMesh(v, f)) << "Non-manifold Crystal escaped the factory gate on iter=" << i << " V=" << v
-                                       << " F=" << f << " dist=[" << dist[0] << "," << dist[1] << "," << dist[2] << ","
-                                       << dist[3] << "," << dist[4] << "," << dist[5] << "]";
-    healthy++;
+    if (!IsClosedTriMesh(v, f)) {
+      // ADD_FAILURE_AT (not ASSERT_TRUE) so the enclosing non-void helper
+      // remains legal; the outer TEST_F then EXPECT_FALSE(HasFailure()) if
+      // it wants to short-circuit. Bail out of the loop to avoid drowning
+      // the log in duplicate failures on the same seed.
+      ADD_FAILURE() << "Non-manifold Crystal escaped the factory gate on iter=" << i << " V=" << v << " F=" << f
+                    << " dist=[" << dist[0] << "," << dist[1] << "," << dist[2] << "," << dist[3] << "," << dist[4]
+                    << "," << dist[5] << "]";
+      break;
+    }
+    if (c.PolygonFaceCount() < 8u) {
+      r.degenerate_but_legal++;
+    } else {
+      r.healthy++;
+    }
   }
-  // Sanity: rejection rate should be much less than half — otherwise the fuzz
-  // covers too narrow a healthy path to protect against real regressions.
-  EXPECT_GT(healthy, kN / 2) << "unhealthy=" << (kN - healthy) << " out of " << kN;
+  return r;
 }
 
-TEST_F(V3TestCrystal, PrismEulerFuzzUniform) {
-  // Uniform(0.5, 1.5) — matches CrystalMaker's kUniform semantics
-  // ((GetUniform()-0.5)*std + mean, so std=1.0 gives full-width [-0.5, +0.5]
-  // around mean=1.0). No negatives, purely tests the healthy-path invariant.
-  std::mt19937 rng(0xFACED152u);
-  std::uniform_real_distribution<float> uni(0.5f, 1.5f);
-  constexpr int kN = 10000;
-  for (int i = 0; i < kN; i++) {
-    float dist[6];
-    for (auto& x : dist) {
-      x = uni(rng);
-    }
-    Crystal c = Crystal::CreatePrism(1.2f, dist);
-    const size_t v = c.TotalVertices();
-    const size_t f = c.TotalTriangles();
-    if (v == 0 && f == 0) {
-      continue;  // Rejected — fine (must not crash).
-    }
-    ASSERT_TRUE(IsClosedTriMesh(v, f)) << "Non-manifold Crystal escaped the factory gate on iter=" << i << " V=" << v
-                                       << " F=" << f;
-  }
+// gauss(1.0, std) baselines from the 377.1 diagnosis matrix (12500 samples at
+// std=0.50 — the reference tier for these proportions). At N=10000 we allow
+// ±3% absolute so the sample-size difference between the diagnosis run and
+// this unit-test fuzz does not turn into a flake.
+TEST_F(V3TestCrystal, PrismEulerFuzzGauss_std015) {
+  const auto r = RunPrismFuzz(0xFACED151u, PrismFuzzKind::kGaussian, 1.0f, 0.15f, 10000);
+  // Small std → geometry stays inside the healthy path. Allow a tiny tail for
+  // the near-boundary numerical edge (<1% expected).
+  EXPECT_LT(r.degenerate_but_legal, 100) << "std=0.15 degenerate_but_legal=" << r.degenerate_but_legal;
+  EXPECT_LT(r.rejected, 100) << "std=0.15 rejected=" << r.rejected;
+  EXPECT_GT(r.healthy, 9800);
+}
+
+TEST_F(V3TestCrystal, PrismEulerFuzzGauss_std030) {
+  // 377.1 baseline: ~13.6% degenerate_but_legal.
+  const auto r = RunPrismFuzz(0xFACED152u, PrismFuzzKind::kGaussian, 1.0f, 0.30f, 10000);
+  EXPECT_GT(r.degenerate_but_legal, 1000) << r.degenerate_but_legal;  // > 10%
+  EXPECT_LT(r.degenerate_but_legal, 1700) << r.degenerate_but_legal;  // < 17%
+  EXPECT_GT(r.healthy, 8000);
+}
+
+TEST_F(V3TestCrystal, PrismEulerFuzzGauss_std050) {
+  // 377.1 baseline: ~49.2% degenerate_but_legal. This is the AC5 anchor — if
+  // std ever gets silently clamped, this proportion collapses to the std=0.15
+  // level and the test goes red immediately.
+  const auto r = RunPrismFuzz(0xFACED153u, PrismFuzzKind::kGaussian, 1.0f, 0.50f, 10000);
+  EXPECT_GT(r.degenerate_but_legal, 4400) << r.degenerate_but_legal;  // > 44%
+  EXPECT_LT(r.degenerate_but_legal, 5400) << r.degenerate_but_legal;  // < 54%
+}
+
+// Uniform baseline (empirical): with (U-0.5)*std+mean semantics all d_i stay in
+// [mean-0.5*std, mean+0.5*std] > 0 for std < 2*mean, so `rejected` is exactly
+// zero (no opposite-pair-sum-≤0 outcome ever reachable). The remaining
+// invariant is closed-manifold-or-reject, which the shared helper's inline
+// ASSERT enforces on every iteration.
+TEST_F(V3TestCrystal, PrismEulerFuzzUniform_std015) {
+  const auto r = RunPrismFuzz(0xFACED154u, PrismFuzzKind::kUniform, 1.0f, 0.15f, 10000);
+  EXPECT_EQ(r.rejected, 0) << "uniform tight-spread should never reject";
+}
+
+TEST_F(V3TestCrystal, PrismEulerFuzzUniform_std030) {
+  const auto r = RunPrismFuzz(0xFACED155u, PrismFuzzKind::kUniform, 1.0f, 0.30f, 10000);
+  EXPECT_EQ(r.rejected, 0);
+  // No specific degenerate proportion asserted — the bounded (U-0.5)*std+mean
+  // range [0.85, 1.15] rarely triggers the wedge-collapse geometry, and
+  // over-tightening a proportion here would just make the test flaky. The
+  // load-bearing assertion is "no rejection and no manifold escape".
+}
+
+TEST_F(V3TestCrystal, PrismEulerFuzzUniform_std050) {
+  const auto r = RunPrismFuzz(0xFACED156u, PrismFuzzKind::kUniform, 1.0f, 0.50f, 10000);
+  EXPECT_EQ(r.rejected, 0);
 }
 
 TEST_F(V3TestCrystal, FaceDistanceKnownMalformedInputsHealed) {
@@ -873,13 +937,30 @@ TEST_F(V3TestCrystal, FaceDistanceReverseSurvives) {
 }
 
 TEST_F(V3TestCrystal, FaceDistanceRejectRealDegenerate) {
-  // Anti-regression for "let real degenerate through": opposite pair sums to 0
-  // → zero-volume plate. Must be rejected as V=0/F=0 rather than propagate as
-  // a partial mesh that downstream would wild-read.
-  float dist[6]{ 0, 1, 1, 0, 1, 1 };
-  Crystal c = Crystal::CreatePrism(1.2f, dist);
-  EXPECT_EQ(c.TotalVertices(), 0u);
-  EXPECT_EQ(c.TotalTriangles(), 0u);
+  // Anti-regression for "let real degenerate through": opposite pair sums ≤ 0
+  // → zero-volume (or worse) body. Must be rejected as V=0/F=0 rather than
+  // propagate as a partial mesh that downstream would wild-read. Cover both
+  // zero-sum (canonical degenerate) and strictly-negative-sum (negative-d
+  // wraps past the origin) inputs — the second bucket is the AC3 focus and
+  // was not exercised before the negative-d path was unlocked at CrystalMaker.
+  struct Case {
+    const char* name;
+    float dist[6];
+  };
+  const Case kCases[]{
+    // Zero opposite-pair sum: flat plate.
+    { "zero_sum_d0_d3", { 0.f, 1.f, 1.f, 0.f, 1.f, 1.f } },
+    // Strictly negative opposite-pair sum: one plane wraps past the origin
+    // faster than its opposite can compensate → non-manifold or empty solid.
+    { "neg_sum_d0_d3", { -1.5f, 1.f, 1.f, 1.f, 1.f, 1.f } },
+    { "neg_sum_d1_d4", { 1.f, -1.5f, 1.f, 1.f, 1.f, 1.f } },
+    { "neg_sum_d2_d5", { 1.f, 1.f, -1.5f, 1.f, 1.f, 1.f } },
+  };
+  for (const auto& tc : kCases) {
+    Crystal c = Crystal::CreatePrism(1.2f, tc.dist);
+    EXPECT_EQ(c.TotalVertices(), 0u) << "case=" << tc.name;
+    EXPECT_EQ(c.TotalTriangles(), 0u) << "case=" << tc.name;
+  }
 }
 
 TEST_F(V3TestCrystal, GetFnPolyIdxOutOfRangeReturnsInvalidId) {
