@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784246399543,
+  "lastUpdate": 1784246401746,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9620,50 +9620,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "d158a9394600b1ded192e6dc974603f42b76fb47",
-          "message": "Merge pull request #103 from LoveDaisy/feat/gui_card_link\n\nfeat(gui): linked entries via ID-pool model + pick-mode UX",
-          "timestamp": "2026-05-23T17:41:59+08:00",
-          "tree_id": "dcb404af64a0c4302dbf917a45e0f4888b230422",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/d158a9394600b1ded192e6dc974603f42b76fb47"
-        },
-        "date": 1779529616960,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 89.1,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 73.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 67.3,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 65.5,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "dd136e1208d0ad1d81384632592cc2c9421597ab",
           "message": "Merge pull request #104 from LoveDaisy/fix/ms_prob_leak\n\nfix(filter): restore filter as simulator emit-gate (Design A) + architecture doc",
           "timestamp": "2026-05-23T17:55:00+08:00",
@@ -14003,6 +13959,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 94.4,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ab7aa0b509b61ae45afbf6b3f6fb7846507c53b1",
+          "message": "Merge pull request #205 from LoveDaisy/chore/policy-gates\n\nchore(policy-gates): fix the bench compile rot and gate working-note references",
+          "timestamp": "2026-07-17T07:52:34+08:00",
+          "tree_id": "c40692428310e7ecfc1ae1acafbfeb140902be36",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/ab7aa0b509b61ae45afbf6b3f6fb7846507c53b1"
+        },
+        "date": 1784246401143,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 83.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 95,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 93.1,
             "unit": "%"
           }
         ]
