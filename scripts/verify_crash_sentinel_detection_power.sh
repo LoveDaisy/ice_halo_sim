@@ -185,12 +185,12 @@ if [ "$CLEAN_NONZERO_COUNT" -ge 1 ] && [ "$SIGNAL_DEATH_COUNT" -eq 0 ]; then
   exit 2
 fi
 
-# 0 signal deaths in N=15 at a 20% base rate ≈ P=0.035 — small but not
-# negligible. Do not soften-message this: report the probability and stop
-# short of concluding "sentinel is broken" without more data.
+# 0/N signal deaths does not by itself mean "sentinel has lost detection
+# power" — at any nonzero crash rate it can happen by chance for small N.
+# Do not soften-message this: stop short of concluding "sentinel is broken"
+# without more data.
 echo "AMBIGUOUS: 0/$N_RUNS signal deaths on the reverted arm." >&2
-echo "At the 20% pre-fix baseline crash rate (377.1 measurement, 4/20)," >&2
-echo "P(0 crashes in $N_RUNS runs) = 0.8^$N_RUNS ≈ 3.5% — small but not" >&2
-echo "impossible. Rerun with SENTINEL_N=$((N_RUNS * 2)) before concluding" >&2
-echo "the sentinel has lost detection power." >&2
+echo "This could be luck rather than a broken sentinel. Rerun with" >&2
+echo "SENTINEL_N=$((N_RUNS * 2)) before concluding the sentinel has lost" >&2
+echo "detection power." >&2
 exit 3
