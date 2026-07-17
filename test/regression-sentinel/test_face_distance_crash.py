@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import tempfile
 from pathlib import Path
@@ -41,10 +42,16 @@ from test.e2e.runner import find_lumice_binary, get_project_root
 
 _CONFIG_PATH = get_project_root() / "test" / "e2e" / "configs" / "repro_crash_face_distance.json"
 
+# A trivially-runnable config used only by the module-level smoke check. The
+# ms_filter_leak_impossible fixture is a good pick: it uses a stable prism
+# geometry (no random face_distance), always exits cleanly, and lives beside
+# the reproducer fixture so it fails for the same infrastructure reasons.
+_SMOKE_CONFIG_PATH = get_project_root() / "test" / "e2e" / "configs" / "ms_filter_leak_impossible.json"
 
-def _run_once() -> subprocess.CompletedProcess:
+
+def _run_config(config_path: Path, timeout: float = 60.0) -> subprocess.CompletedProcess:
     binary = find_lumice_binary()
-    cfg = json.loads(_CONFIG_PATH.read_text())
+    cfg = json.loads(config_path.read_text())
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump(cfg, f)
         cfg_path = f.name
@@ -53,15 +60,69 @@ def _run_once() -> subprocess.CompletedProcess:
             [str(binary), "-f", cfg_path],
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=timeout,
             env=os.environ.copy(),
         )
     finally:
         Path(cfg_path).unlink(missing_ok=True)
 
 
+def _run_once() -> subprocess.CompletedProcess:
+    return _run_config(_CONFIG_PATH, timeout=60.0)
+
+
+def _smoke_check_binary() -> None:
+    """Fail fast before N runs if the binary can't even start on a stable config.
+
+    Prior sessions hit false positives when `find_lumice_binary()` picked up a
+    stale build artifact that returned a non-zero exit for pure infrastructure
+    reasons (GLIBC mismatch, stale linkage), and the parametrized loop below
+    reported all N runs as "SIGSEGV regression" — which was misleading because
+    those failures were not signal deaths. This smoke check runs a
+    fixed-face-distance config first: if the binary is broken at the
+    infrastructure level, the assertion fires with a clear message before the
+    parametrized loop starts.
+    """
+    result = _run_config(_SMOKE_CONFIG_PATH, timeout=30.0)
+    assert result.returncode == 0, (
+        f"Lumice binary infrastructure check failed (returncode={result.returncode}) — "
+        f"this is not a SIGSEGV regression; the binary itself cannot run a known-good "
+        f"config. Check LUMICE_BIN, the shared-library build (`./scripts/build.sh -j "
+        f"release`), or the linker. This sentinel will now skip the parametrized "
+        f"runs to avoid misattributing infrastructure failure to the random-face_distance "
+        f"crash it is written to catch.\n"
+        f"stderr:\n{result.stderr}"
+    )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _binary_smoke_check() -> None:
+    _smoke_check_binary()
+
+
 # 15 runs at pre-fix crash rate 20% → detection power ~96% (1 - 0.8^15).
 _N_RUNS = 15
+
+
+def _classify_exit(returncode: int) -> str:
+    """Distinguish POSIX signal death from a clean non-zero exit for reporting.
+
+    POSIX returns a negative value from subprocess.run when the child died from
+    a signal (returncode = -signum), and a positive value for a clean non-zero
+    process exit. Only the signal path is what this sentinel is written to
+    catch — a clean non-zero exit is a config-rejection / infrastructure / API
+    issue and gets a different label so operators do not misdiagnose it as the
+    SIGSEGV regression.
+    """
+    if returncode < 0:
+        try:
+            name = signal.Signals(-returncode).name
+        except ValueError:
+            name = f"SIG{-returncode}"
+        return f"signal-death ({name}) — SIGSEGV-class regression"
+    if returncode > 0:
+        return f"clean non-zero exit (returncode={returncode}) — NOT a signal death; likely config rejection, infrastructure, or API issue"
+    return "clean exit (returncode=0)"
 
 
 @pytest.mark.parametrize("run_idx", list(range(_N_RUNS)))
@@ -69,7 +130,7 @@ def test_random_face_distance_no_crash(run_idx: int) -> None:
     """gauss(1.0, 0.5) face_distance run must exit 0. Pre-fix rate: 4/20."""
     result = _run_once()
     assert result.returncode == 0, (
-        f"Lumice exited {result.returncode} (signal death indicates SIGSEGV "
-        f"regression on random face_distance) run_idx={run_idx}\n"
+        f"Lumice exited: {_classify_exit(result.returncode)}\n"
+        f"run_idx={run_idx}\n"
         f"stderr:\n{result.stderr}"
     )
