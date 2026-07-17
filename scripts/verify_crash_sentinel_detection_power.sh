@@ -141,6 +141,12 @@ if grep -q "Lumice binary infrastructure check failed" "$WORK_PARENT/reverted_ar
 fi
 
 # Count failures classified as "signal-death" (SIGSEGV-class) vs any other exit.
+#
+# Anchor: these literals ("signal-death", "clean non-zero exit") are only
+# produced by test_face_distance_crash.py::_classify_exit(). That function
+# carries a matching anchor comment pointing back here. If either literal
+# changes on one side without the other, this script silently falls through
+# to AMBIGUOUS/INCONCLUSIVE regardless of what the reverted arm actually did.
 SIGNAL_DEATH_COUNT=$(grep -c "signal-death" "$WORK_PARENT/reverted_arm.log" || true)
 CLEAN_NONZERO_COUNT=$(grep -c "clean non-zero exit" "$WORK_PARENT/reverted_arm.log" || true)
 

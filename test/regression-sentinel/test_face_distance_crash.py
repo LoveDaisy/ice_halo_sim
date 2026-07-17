@@ -117,6 +117,13 @@ def _classify_exit(returncode: int) -> str:
     catch — a clean non-zero exit is a config-rejection / infrastructure / API
     issue and gets a different label so operators do not misdiagnose it as the
     SIGSEGV regression.
+
+    Anchor: scripts/verify_crash_sentinel_detection_power.sh greps this
+    function's output for the literal substrings "signal-death" and "clean
+    non-zero exit" to classify the reverted-arm test run. Changing either
+    literal here without updating that script's grep patterns will silently
+    make it report AMBIGUOUS/0-detections regardless of what actually
+    happened — the exact failure mode this coupling exists to prevent.
     """
     if returncode < 0:
         try:

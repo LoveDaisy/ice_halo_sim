@@ -873,9 +873,33 @@ TEST_F(V3TestCrystal, PrismEulerFuzzGauss_std050) {
 
 // Uniform baseline (empirical): with (U-0.5)*std+mean semantics all d_i stay in
 // [mean-0.5*std, mean+0.5*std] > 0 for std < 2*mean, so `rejected` is exactly
-// zero (no opposite-pair-sum-≤0 outcome ever reachable). The remaining
-// invariant is closed-manifold-or-reject, which the shared helper's inline
-// ASSERT enforces on every iteration.
+// zero (no opposite-pair-sum-≤0 outcome ever reachable) at these tiers. The
+// remaining invariant is closed-manifold-or-reject, which the shared helper's
+// inline ASSERT enforces on every iteration.
+//
+// A one-off empirical sweep (std in {0.5, 0.8, 1.0, 1.3, 1.6, 1.9, 1.99},
+// N=10000, not committed as a permanent test) confirmed degenerate_but_legal
+// is exactly 0 at std<=0.5 and only becomes non-trivial from std>=0.8 (1.7%),
+// climbing to double digits by std~1.0-1.3. Bounded uniform noise simply does
+// not reach the near-coincident-vertex combinations gauss(1.0, std) reaches
+// at the same nominal std — the two distributions are not comparable at
+// matched std values for this purpose, only at matched *variance* (uniform's
+// stddev is width/sqrt(12), i.e. roughly 3.5x tighter than its literal
+// "std" parameter suggests). Widening uniform's std into the >=0.8 range to
+// chase a non-zero degenerate proportion also starts producing occasional
+// `rejected` outcomes (observed at std=0.8/1.0/1.6/1.99) via the *same*
+// closed-mesh Euler-check gate that rejects real-degenerate gaussian inputs
+// — not the opposite-pair-sum path this comment's zero-rejection claim rests
+// on — so it would invalidate the EXPECT_EQ(rejected, 0) invariant below at
+// the same tier, not just add a new assertion. Redesigning the uniform std
+// matrix to reach both goals at once is out of scope here: the 015/030/050
+// tiers were chosen to mirror gaussian's tiers 1:1, and this fuzz layer's job
+// is exercising the "uniform path never mis-triggers real-degenerate
+// rejection" invariant — the reject-path coverage AC3 requires is already
+// covered by gaussian's fuzz (std=0.50 neg_input assertions above) and the
+// deterministic FaceDistanceRejectRealDegenerate cases, both of which fire
+// through the identical CreatePrism -> RejectMalformed code path regardless
+// of which distribution produced the input.
 TEST_F(V3TestCrystal, PrismEulerFuzzUniform_std015) {
   const auto r = RunPrismFuzz(0xFACED154u, PrismFuzzKind::kUniform, 1.0f, 0.15f, 10000);
   EXPECT_EQ(r.rejected, 0) << "uniform tight-spread should never reject";
