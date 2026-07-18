@@ -46,10 +46,23 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-# Default REVERT_BASE = parent of HEAD (assumes HEAD is on the fix commit or
-# a merged-in fix PR). Override with SENTINEL_REVERT_BASE if the tree layout
-# differs.
-REVERT_BASE="${SENTINEL_REVERT_BASE:-$(git rev-parse HEAD~1)}"
+# Default REVERT_BASE = the pre-fix tree state = this branch's merge-base with
+# origin/main. Do NOT use HEAD~1: the crystal.cpp fix is the FIRST commit on
+# this branch while the test/config/this-script land in LATER commits, so HEAD~1
+# still contains the fix and the "reverted" arm would silently compile fixed
+# code (false detection power — the exact HEAD~N off-by-one this task's plan
+# forbade). Override with SENTINEL_REVERT_BASE for other tree layouts (e.g. a
+# rebased/merged fix).
+if [ -n "${SENTINEL_REVERT_BASE:-}" ]; then
+  REVERT_BASE="$SENTINEL_REVERT_BASE"
+else
+  REVERT_BASE="$(git merge-base HEAD origin/main 2>/dev/null || true)"
+  if [ -z "$REVERT_BASE" ]; then
+    echo "ERROR: could not derive REVERT_BASE (git merge-base HEAD origin/main failed)." >&2
+    echo "Pass SENTINEL_REVERT_BASE=<pre-fix commit> explicitly." >&2
+    exit 1
+  fi
+fi
 N_RUNS="${SENTINEL_N:-15}"
 
 FIXED_HEAD="$(git rev-parse HEAD)"
