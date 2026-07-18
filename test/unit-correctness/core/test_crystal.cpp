@@ -1040,4 +1040,84 @@ TEST_F(V3TestCrystal, GetFnPolyIdxOutOfRangeReturnsInvalidId) {
   }
 }
 
+TEST_F(V3TestCrystal, PyramidRandomFaceDistanceMoveGetFnLegal) {
+  // Regression guard for the polygon-face count/stride mismatch previously
+  // living in BuildPolygonFaceData: when the degenerate-representative-triangle
+  // branch fires it shrank poly_face_cnt_ below the actual allocation stride;
+  // Crystal's copy/move ctors then re-derived poly_face_d_ / poly_face_tri_id_
+  // offsets from the shrunk count and read from wrong regions of
+  // poly_face_data_. Symptoms: CPU GetFn(IdType) either returned kInvalidId
+  // (bound-checked garbage tri) or, when the garbage happened to land in
+  // fn_map_ range, silently wrong face numbers; Metal UploadCrystal wild-read
+  // → SIGSEGV. After the fix poly_face_cnt_ ≡ actual allocation stride so
+  // copy/move are structurally safe.
+  //
+  // Detection strategy: fixed-seed random sweep over pyramid + gauss(1, 0.3)
+  // face_distance samples; for each surviving crystal exercise both move-ctor
+  // and move-assignment (the real production paths — MakeCrystal returns by
+  // value which forces move, and metal_trace_backend re-assigns current_crystal
+  // each dispatch batch), then require every polygon face's GetFn to (a) not be
+  // kInvalidId and (b) resolve to a legal pyramid face number. Pre-fix, at
+  // least one of the swept crystals lands on the shrink path and one of these
+  // two assertions fires; post-fix, both stay bit-for-bit intact regardless.
+  //
+  // Fixed seed makes the "random" sweep deterministic — no CI flake. 200
+  // iterations empirically covers ~30 shrink events, well above 1/reliably
+  // triggered.
+  std::mt19937 gen(42);
+  std::normal_distribution<float> dist_gen(1.0f, 0.5f);
+  // Multiple h regimes — the SHRINK case requires an upstream-passable
+  // mesh that still has a near-zero-area representative triangle for at
+  // least one polygon plane; that condition is sensitive to the pyramid
+  // wedge geometry as well as face_distance.
+  struct HTuple {
+    float h1, h2, h3;
+  };
+  const HTuple h_regimes[] = {
+    { 0.3f, 1.0f, 0.3f },    // moderate wedge, close to production defaults
+    { 0.1f, 1.2f, 0.5f },    // very thin upper wedge
+    { 0.8f, 0.3f, 0.8f },    // wedge-heavy
+    { 0.05f, 1.5f, 0.05f },  // extremely thin wedges
+  };
+  size_t swept = 0;
+  for (int iter = 0; iter < 500; iter++) {
+    float dist[6];
+    for (int i = 0; i < 6; i++) {
+      dist[i] = dist_gen(gen);
+    }
+    const auto& h = h_regimes[iter % 4];
+    Crystal c = Crystal::CreatePyramid(1, 1, 1, 1, h.h1, h.h2, h.h3, dist);
+    // Upstream rejects severely degenerate meshes (non-manifold Euler check)
+    // by returning a zero-triangle Crystal — skip; the count/stride path never
+    // runs there.
+    if (c.PolygonFaceCount() == 0) {
+      continue;
+    }
+    // Exercise both move-ctor (mirrors `MakeCrystal(...)` by-value return) and
+    // move-assignment (mirrors `current_crystal = MakeCrystal(...)` in
+    // metal_trace_backend.mm — the exact production call point the pre-fix
+    // crash was observed at).
+    const size_t face_cnt_before = c.PolygonFaceCount();
+    Crystal moved(std::move(c));
+    ASSERT_EQ(moved.PolygonFaceCount(), face_cnt_before) << "iter=" << iter << " (move-ctor count drift)";
+    Crystal assigned;
+    assigned = std::move(moved);
+    ASSERT_EQ(assigned.PolygonFaceCount(), face_cnt_before) << "iter=" << iter << " (move-assign count drift)";
+    for (size_t p = 0; p < assigned.PolygonFaceCount(); p++) {
+      IdType fn = assigned.GetFn(static_cast<IdType>(p));
+      ASSERT_NE(fn, kInvalidId) << "iter=" << iter << " poly_idx=" << p
+                                << " — GetFn returned kInvalidId, indicating polygon face tri_id "
+                                << "landed in a wrong region of poly_face_data_ (count/stride mismatch)";
+      ASSERT_TRUE(IsLegalFace(CrystalKind::kPyramid, static_cast<int>(fn)))
+          << "iter=" << iter << " poly_idx=" << p << " fn=" << fn
+          << " — GetFn resolved to an out-of-range face number, indicating polygon face tri_id "
+          << "landed in a plausible-but-wrong region of fn_map_";
+    }
+    swept++;
+  }
+  // Sanity: the fixed seed must have exercised at least a few surviving
+  // crystals, otherwise the guard is vacuous.
+  ASSERT_GT(swept, 20u) << "fixed-seed sweep produced too few surviving crystals; guard is vacuous";
+}
+
 }  // namespace
