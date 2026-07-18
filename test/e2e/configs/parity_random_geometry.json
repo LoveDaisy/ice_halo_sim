@@ -21,6 +21,9 @@
       }
     }
   ],
+  "filter": [
+    { "id": 1, "type": "entry_exit", "entry": 3, "exit": 5, "action": "filter_in" }
+  ],
   "scene": {
     "light_source": {
       "type": "sun",
@@ -29,10 +32,10 @@
       "diameter": 0.5,
       "spectrum": [{ "wavelength": 550, "weight": 1.0 }]
     },
-    "ray_num": 200000,
-    "max_hits": 6,
+    "ray_num": 400000,
+    "max_hits": 8,
     "scattering": [
-      { "prob": 0.0, "entries": [{ "crystal": 1, "proportion": 1 }] }
+      { "prob": 0.0, "entries": [{ "crystal": 1, "proportion": 1, "filter": 1 }] }
     ]
   },
   "render": [

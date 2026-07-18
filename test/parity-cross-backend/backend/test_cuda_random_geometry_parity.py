@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import os
 import platform
+import statistics
 
 import pytest
 
@@ -61,13 +62,21 @@ from test.e2e.runner import get_project_root
 CONFIGS_DIR = get_project_root() / "test" / "e2e" / "configs"
 _SEED_A = 42
 _SEED_B = 7
+# Seed set for the energy-parity test. The filtered observable (entry_exit 3→5)
+# is deliberately geometry-SENSITIVE, so its per-seed total-Y swings widely
+# (measured cross-seed CV ≈ 23% on dev49; per-seed cuda/legacy ratios spanned
+# 0.74–1.48). A single-seed energy ratio is therefore meaningless — parity must
+# be judged on the seed-AVERAGED energy against that noise band, not a single
+# draw. See the module docstring and the R1 body.
+_SEEDS = (42, 7, 100, 200, 300, 999, 1234, 5678)
 _TIMEOUT = 600
 
 # Random-geometry thresholds: looser than the deterministic battery on purpose
-# (see module docstring). The point is to detect a broken RNG plumbing / frozen
+# (see module docstring). The point is to detect broken RNG plumbing / a frozen
 # shape pool, not to chase deterministic parity.
-_T_RAW_CORR_DS = 0.90
-_T_ENERGY_TOL = 0.10
+_T_RAW_CORR_DS = 0.90        # spatial pattern (arc position) is stable across backends
+_T_MEAN_ENERGY_TOL = 0.30    # seed-averaged cuda/legacy total-Y; loose vs the ~23% CV
+_T_MIN_CV = 0.08             # cross-seed CV floor: a frozen backend collapses to ≈0
 _T_SELF_MARGIN = 0.05
 
 _CUDA_AVAILABLE = (
@@ -123,33 +132,69 @@ def test_cuda_random_geometry_image_parity_vs_legacy():
         stochastic scene, every batch would trace the SAME shape drawn on the
         first BeginSession → same as the frozen-shape symptom.
     """
-    legacy = _run(CFG, "legacy", seed=_SEED_A)
-    cuda = _run(CFG, "cuda", seed=_SEED_A)
+    # Per-seed total-Y for each backend. The filtered observable swings ~23%
+    # seed-to-seed (geometry-sensitive by design), so we judge parity on the
+    # seed-AVERAGED energy, and use the cross-seed CV as the freeze detector.
+    legacy_ys: list[float] = []
+    cuda_ys: list[float] = []
+    corr_seed_a = None
+    for seed in _SEEDS:
+        legacy = _run(CFG, "legacy", seed=seed)
+        cuda = _run(CFG, "cuda", seed=seed)
+        _assert_routed(legacy, "legacy", CFG)
+        _assert_routed(cuda, "cuda", CFG)
+        legacy_ys.append(float(legacy.flt_buf[..., 1].sum()))
+        cuda_ys.append(float(cuda.flt_buf[..., 1].sum()))
+        if seed == _SEED_A:
+            corr_seed_a = _raw_corr_ds(cuda, legacy)
 
-    _assert_routed(legacy, "legacy", CFG)
-    _assert_routed(cuda, "cuda", CFG)
-
-    corr = _raw_corr_ds(cuda, legacy)
-    cuda_Y = float(cuda.flt_buf[..., 1].sum())
-    legacy_Y = float(legacy.flt_buf[..., 1].sum())
-    assert legacy_Y > 0.0, f"{CFG}: legacy total Y == 0; cannot form energy ratio"
-    energy_ratio = cuda_Y / legacy_Y
+    legacy_mean = statistics.fmean(legacy_ys)
+    cuda_mean = statistics.fmean(cuda_ys)
+    assert legacy_mean > 0.0, f"{CFG}: legacy mean total-Y == 0; cannot form energy ratio"
+    legacy_cv = statistics.pstdev(legacy_ys) / legacy_mean
+    cuda_cv = statistics.pstdev(cuda_ys) / cuda_mean
+    mean_ratio = cuda_mean / legacy_mean
 
     print(
-        f"[parity] {CFG}: cuda ds_corr={corr:.4f} "
-        f"energy_ratio={energy_ratio:.4f} (tol +/-{_T_ENERGY_TOL})"
+        f"[parity] {CFG}: ds_corr(seed={_SEED_A})={corr_seed_a:.4f} "
+        f"mean_ratio={mean_ratio:.4f} (tol +/-{_T_MEAN_ENERGY_TOL}) "
+        f"cuda_cv={cuda_cv:.3f} legacy_cv={legacy_cv:.3f} (floor {_T_MIN_CV}) "
+        f"n_seeds={len(_SEEDS)}"
     )
 
-    assert corr >= _T_RAW_CORR_DS, (
-        f"{CFG}: ds_corr {corr:.4f} < {_T_RAW_CORR_DS}. Suspect CUDA geometry-pool "
-        "rebuild gate broken (pool persisted across batches under a stochastic "
-        "scene → single frozen shape) or rng_ seed-once gate broken (rng_ reset "
-        "every BeginSession → every batch draws the same shape prefix)."
+    # Spatial pattern: the filtered arc sits at the same sky position on both
+    # backends (its position is set by the geometry MEAN + axis dist, identical
+    # across backends), even though per-seed brightness differs.
+    assert corr_seed_a >= _T_RAW_CORR_DS, (
+        f"{CFG}: ds_corr {corr_seed_a:.4f} < {_T_RAW_CORR_DS}. The filtered arc "
+        "landed in a different place on CUDA vs legacy — a structural divergence, "
+        "not sampling noise."
     )
-    assert abs(energy_ratio - 1.0) <= _T_ENERGY_TOL, (
-        f"{CFG}: cuda/legacy total-Y ratio {energy_ratio:.4f} outside "
-        f"[1 +/- {_T_ENERGY_TOL}]. A large deviation on random geometry usually "
-        "means one side collapsed to a single shape sample (Y flattens or clusters)."
+    # Freeze detector (doubles as a vacuous-observable guard): CUDA resamples
+    # geometry once per SimBatch (K = dispatch size ≈ 32768, matching Metal), so
+    # a ~400k-ray run traces only ~12 distinct shapes → real cross-seed energy
+    # variance (measured CV ≈ 0.23 on dev49). The bug this task fixes collapses
+    # that to ONE shape for the whole run → CV → 0. Dropping the filter would
+    # also collapse CV (the full-sky sum is geometry-insensitive), so this one
+    # assertion guards both regressions.
+    #
+    # NOTE: legacy is deliberately NOT held to this floor. Legacy resamples every
+    # 32 rays (K = 32 → ~12500 shapes/run), so its per-run filtered energy is a
+    # fully-converged ensemble average with near-zero cross-seed variance
+    # (measured CV ≈ 0.005). That is the documented per-backend geometry-clock K
+    # difference, not a frozen or insensitive observable — asserting legacy also
+    # varies would wrongly flag correct fine-K sampling.
+    assert cuda_cv >= _T_MIN_CV, (
+        f"{CFG}: cuda cross-seed CV {cuda_cv:.3f} < {_T_MIN_CV}. CUDA energy barely "
+        "varies across seeds → geometry pool likely frozen (rng_ reseed / pool "
+        "persistence regression), or the filter was dropped from the config "
+        "(making the observable geometry-insensitive and this test vacuous)."
+    )
+    # Gross energy parity on the noise-band average (not a single draw).
+    assert abs(mean_ratio - 1.0) <= _T_MEAN_ENERGY_TOL, (
+        f"{CFG}: seed-averaged cuda/legacy total-Y {mean_ratio:.4f} outside "
+        f"[1 +/- {_T_MEAN_ENERGY_TOL}] over {len(_SEEDS)} seeds. A systematic "
+        "energy bias between the backends' randomization, beyond sampling noise."
     )
 
 
