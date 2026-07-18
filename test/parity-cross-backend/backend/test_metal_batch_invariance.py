@@ -132,7 +132,7 @@ def _spawn_run(config_name: str, batch: int):
     status["batches"] = int(m.group(1)) if m else -1
     assert status["batches"] > 0, (
         f"{config_name} batch={batch}: could not read effective batch count "
-        f"(Consume profile line missing) — cannot confirm batch took effect."
+        f"(Consume profile line missing) - cannot confirm batch took effect."
     )
     arr = np.load(out.name)
     os.unlink(out.name)
@@ -162,7 +162,7 @@ def test_metal_batch_invariance(config_name):
     assert s_large["batches"] * 4 < s_small["batches"], (
         f"{config_name}: batch grain did not actually differ "
         f"(b{_SMALL_BATCH}={s_small['batches']} batches, b{_LARGE_BATCH}={s_large['batches']}); "
-        f"suspect a frozen LUMICE_BATCH_RAY_NUM static — the comparison would be vacuous."
+        f"suspect a frozen LUMICE_BATCH_RAY_NUM static - the comparison would be vacuous."
     )
 
     cross = _corr(small, large)
@@ -180,13 +180,13 @@ def test_metal_batch_invariance(config_name):
     # severity. Does NOT enforce full invariance — the residual (gap≈0.013 today)
     # is an explore-3 / geometry-pool decision (concern #5).
     assert cross >= _CATASTROPHE_CORR, (
-        f"{config_name}: SEVERE batch dependence — cross-batch corr={cross:.4f} < "
+        f"{config_name}: SEVERE batch dependence - cross-batch corr={cross:.4f} < "
         f"{_CATASTROPHE_CORR}. Scrum 2's rewrite re-coupled the GPU dispatch batch to "
         f"the statistical result at gross severity."
     )
     assert abs(energy_ratio - 1.0) <= _CATASTROPHE_ENERGY_TOL, (
-        f"{config_name}: SEVERE batch energy dependence — energy_ratio={energy_ratio:.4f} "
-        f"outside [1±{_CATASTROPHE_ENERGY_TOL}]."
+        f"{config_name}: SEVERE batch energy dependence - energy_ratio={energy_ratio:.4f} "
+        f"outside [1+/-{_CATASTROPHE_ENERGY_TOL}]."
     )
 
 
@@ -241,7 +241,7 @@ def test_metal_exit_conservation_heavy():
     overflowed = bool(_RE_OVERFLOW.search(log))
     print(f"[exit-cons] ms3_mixed_pyramid_heavy: exit_overflow={overflowed} (gate: no overflow)")
     assert not overflowed, (
-        "ms3_mixed_pyramid_heavy overflowed exit_cap=12288 — Scrum-268.4's "
+        "ms3_mixed_pyramid_heavy overflowed exit_cap=12288 - Scrum-268.4's "
         "incremental drain regressed. Re-introduce clamp-side observability "
         "(see commit fb722c20 for the drain design) before relaxing this gate."
     )

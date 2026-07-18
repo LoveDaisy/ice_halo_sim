@@ -93,7 +93,7 @@ def _assert_routed_cuda(r: BufferedSimResult, lens_type: str) -> None:
         f"log did not emit the CudaTraceBackend routing line. log tail: {r.log_lines[-5:]}"
     )
     assert not r.fell_back, (
-        f"{lens_type}: CUDA was requested but fell back to legacy CPU — the "
+        f"{lens_type}: CUDA was requested but fell back to legacy CPU - the "
         f"projection is NOT actually accelerated. log tail: {r.log_lines[-5:]}"
     )
 
@@ -113,7 +113,7 @@ def test_cuda_projection_parity(lens_type: str, _proj_configs):
 
     assert legacy_a.routed_backend == "legacy" and not legacy_a.fell_back, (
         f"{lens_type}: legacy oracle routed={legacy_a.routed_backend!r} "
-        f"fell_back={legacy_a.fell_back} — env pollution suspected."
+        f"fell_back={legacy_a.fell_back} - env pollution suspected."
     )
     _assert_routed_cuda(cuda_a, lens_type)
 
@@ -122,7 +122,7 @@ def test_cuda_projection_parity(lens_type: str, _proj_configs):
 
     cuda_y = float(cuda_a.flt_buf[..., 1].sum())
     legacy_y = float(legacy_a.flt_buf[..., 1].sum())
-    assert legacy_y > 0.0, f"{lens_type}: legacy total Y == 0 — scene carries no signal"
+    assert legacy_y > 0.0, f"{lens_type}: legacy total Y == 0 - scene carries no signal"
     energy_ratio = cuda_y / legacy_y
 
     cuda_b = _run(cfg, "cuda", seed=_SEED_B)
@@ -144,11 +144,11 @@ def test_cuda_projection_parity(lens_type: str, _proj_configs):
     assert psnr >= T_PSNR_DB, f"{lens_type}: render PSNR {psnr:.2f} dB < {T_PSNR_DB}"
     assert abs(energy_ratio - 1.0) <= T_ENERGY_TOL, (
         f"{lens_type}: cuda/legacy total-Y ratio {energy_ratio:.4f} outside "
-        f"[1 ± {T_ENERGY_TOL}] — global energy imbalance in the exit/emit path."
+        f"[1 +/- {T_ENERGY_TOL}] - global energy imbalance in the exit/emit path."
     )
     assert cuda_self >= legacy_self - T_SELF_MARGIN, (
         f"{lens_type}: cuda cross-seed self-consistency {cuda_self:.4f} < "
-        f"legacy_self {legacy_self:.4f} − {T_SELF_MARGIN} — suspect PCG stream "
+        f"legacy_self {legacy_self:.4f} - {T_SELF_MARGIN} - suspect PCG stream "
         f"collapse / orientation undersampling in the CUDA path for this projection."
     )
 
