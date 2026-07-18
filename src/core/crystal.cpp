@@ -707,7 +707,7 @@ void Crystal::BuildPolygonFaceData(const float* plane_coef, size_t plane_cnt) {
       }
     }
     if (tri_best_plane < 0 || tri_best_dot < 1.0f - kFaceCoplanarFloor) {
-      LOG_WARNING("BuildPolygonFaceData: triangle %zu has no coplanar plane (best_dot=%.4f)", t,
+      LOG_WARNING("BuildPolygonFaceData: triangle {} has no coplanar plane (best_dot={:.4f})", t,
                   static_cast<double>(tri_best_dot));
       continue;
     }
@@ -717,16 +717,52 @@ void Crystal::BuildPolygonFaceData(const float* plane_coef, size_t plane_cnt) {
     }
   }
 
-  // Count planes that won at least one triangle.
-  size_t valid_cnt = 0;
-  for (size_t p = 0; p < plane_cnt; p++) {
-    if (plane_best_tri[p] >= 0) {
-      valid_cnt++;
-    }
+  // Degenerate-face safety net: reject planes whose representative triangle has
+  // near-zero area relative to the largest triangle. This signals an upstream
+  // geometry-gen artifact (a polygon plane survived without a real surface); in
+  // current pipeline Triangulate already skips faces with <3 vertices, so this
+  // gate is belt-and-suspenders for future configs (asymmetric d[6], near-degenerate
+  // apex collapse, etc.). max_tri_area only depends on face_area_ which is populated
+  // by ComputeCacheData before this function runs, so we can compute it up-front —
+  // it does not depend on the accept/reject decision.
+  float max_tri_area = 0.0f;
+  for (size_t t = 0; t < tri_cnt; t++) {
+    max_tri_area = std::max(max_tri_area, face_area_[t]);
   }
 
-  poly_face_cnt_ = valid_cnt;
-  if (valid_cnt == 0) {
+  // Single-pass acceptance: collect surviving (plane_idx, rep_tri) pairs. The
+  // acceptance predicate — "plane won a triangle" AND "representative triangle
+  // is not degenerate" — is evaluated exactly once here. A previous two-phase
+  // form evaluated only the first half to size the allocation, then re-applied
+  // the second half in the fill loop and rewrote poly_face_cnt_ to the final
+  // written count; that left the allocated memory laid out at the larger
+  // stride while poly_face_cnt_ shrank, so copy/move ctors of Crystal
+  // re-derived the pointer offsets from the shrunk count and read
+  // poly_face_d_ / poly_face_tri_id_ from wrong regions of poly_face_data_,
+  // causing Metal SIGSEGV and CPU silent-wrong-fn on pyramid+random
+  // face_distance configs. Now poly_face_cnt_ ≡ accepted.size() and equals
+  // the actual allocated stride from first assignment onward.
+  struct AcceptedFace {
+    size_t plane_idx;
+    int rep_tri;
+  };
+  std::vector<AcceptedFace> accepted;
+  accepted.reserve(plane_cnt);
+  for (size_t p = 0; p < plane_cnt; p++) {
+    if (plane_best_tri[p] < 0) {
+      continue;
+    }
+    int rep_tri = plane_best_tri[p];
+    if (max_tri_area > 0.0f && face_area_[rep_tri] < 1e-6f * max_tri_area) {
+      LOG_WARNING("BuildPolygonFaceData: plane {} has degenerate rep triangle {} (area={:.4e}, max={:.4e})", p, rep_tri,
+                  static_cast<double>(face_area_[rep_tri]), static_cast<double>(max_tri_area));
+      continue;
+    }
+    accepted.push_back({ p, rep_tri });
+  }
+
+  poly_face_cnt_ = accepted.size();
+  if (poly_face_cnt_ == 0) {
     poly_face_data_.reset();
     poly_face_n_ = nullptr;
     poly_face_d_ = nullptr;
@@ -734,42 +770,22 @@ void Crystal::BuildPolygonFaceData(const float* plane_coef, size_t plane_cnt) {
     return;
   }
 
-  // Allocate: normals(3*cnt) + dist(cnt) + tri_id as int(cnt) = 5*cnt floats
-  poly_face_data_ = std::make_unique<float[]>(valid_cnt * 5);
+  // Allocate: normals(3*cnt) + dist(cnt) + tri_id as int(cnt) = 5*cnt floats.
+  // stride is fixed by poly_face_cnt_ (= accepted.size()) and never re-derived
+  // from a shrunk count elsewhere.
+  poly_face_data_ = std::make_unique<float[]>(poly_face_cnt_ * 5);
   poly_face_n_ = poly_face_data_.get();
-  poly_face_d_ = poly_face_data_.get() + valid_cnt * 3;
-  poly_face_tri_id_ = reinterpret_cast<int*>(poly_face_data_.get() + valid_cnt * 4);
+  poly_face_d_ = poly_face_data_.get() + poly_face_cnt_ * 3;
+  poly_face_tri_id_ = reinterpret_cast<int*>(poly_face_data_.get() + poly_face_cnt_ * 4);
 
-  // Degenerate-face safety net (Step 3): warn if the representative triangle of any
-  // accepted polygon face has near-zero area relative to the largest triangle. This
-  // signals an upstream geometry-gen issue (a polygon plane survived without a real
-  // surface); in current pipeline the upstream Triangulate already skips faces with
-  // <3 vertices, so this gate is belt-and-suspenders for future configs (asymmetric
-  // d[6], near-degenerate apex collapse, etc.).
-  float max_tri_area = 0.0f;
-  for (size_t t = 0; t < tri_cnt; t++) {
-    max_tri_area = std::max(max_tri_area, face_area_[t]);
+  for (size_t i = 0; i < poly_face_cnt_; i++) {
+    const auto& a = accepted[i];
+    poly_face_n_[i * 3 + 0] = plane_n[a.plane_idx * 3 + 0];
+    poly_face_n_[i * 3 + 1] = plane_n[a.plane_idx * 3 + 1];
+    poly_face_n_[i * 3 + 2] = plane_n[a.plane_idx * 3 + 2];
+    poly_face_d_[i] = plane_d[a.plane_idx];
+    poly_face_tri_id_[i] = a.rep_tri;
   }
-
-  size_t idx = 0;
-  for (size_t p = 0; p < plane_cnt; p++) {
-    if (plane_best_tri[p] < 0) {
-      continue;
-    }
-    int rep_tri = plane_best_tri[p];
-    if (max_tri_area > 0.0f && face_area_[rep_tri] < 1e-6f * max_tri_area) {
-      LOG_WARNING("BuildPolygonFaceData: plane %zu has degenerate rep triangle %d (area=%.4e, max=%.4e)", p, rep_tri,
-                  static_cast<double>(face_area_[rep_tri]), static_cast<double>(max_tri_area));
-      continue;
-    }
-    poly_face_n_[idx * 3 + 0] = plane_n[p * 3 + 0];
-    poly_face_n_[idx * 3 + 1] = plane_n[p * 3 + 1];
-    poly_face_n_[idx * 3 + 2] = plane_n[p * 3 + 2];
-    poly_face_d_[idx] = plane_d[p];
-    poly_face_tri_id_[idx] = plane_best_tri[p];
-    idx++;
-  }
-  poly_face_cnt_ = idx;  // Re-count after degenerate filtering.
 }
 
 float Crystal::GetRefractiveIndex(float wl) const {
