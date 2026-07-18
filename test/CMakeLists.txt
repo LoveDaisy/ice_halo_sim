@@ -68,7 +68,11 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_window_sizing.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_ev_auto.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_composite_exposure_push.cpp"
-  "${PROJ_TEST_DIR}/unit-correctness/gui/test_filter_sop_grammar.cpp")
+  "${PROJ_TEST_DIR}/unit-correctness/gui/test_filter_sop_grammar.cpp"
+  # backend/: CUDA-only white-box tests for the geometry-pool rebuild gate.
+  # Body is `#if LUMICE_CUDA_ENABLED`, so on non-CUDA hosts the TU is empty
+  # (zero contributed symbols).
+  "${PROJ_TEST_DIR}/unit-correctness/backend/test_cuda_geom_pool_rebuild.cpp")
 target_include_directories(unit_correctness_test
   PRIVATE ${PROJ_TEST_DIR})
 target_link_libraries(unit_correctness_test
@@ -176,6 +180,17 @@ if(PYTEST_EXECUTABLE)
       "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_cuda_multi_ms_parity.py"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
   set_tests_properties("CudaMultiMsParity" PROPERTIES
+    LABELS "parity;cuda"
+    ENVIRONMENT "LUMICE_CUDA_ENABLED=1")
+  # Random-geometry cross-backend regression. Same ctest scaffolding as
+  # `CudaMultiMsParity` above so dev49 / win-builder can run it via
+  # `ctest -R CudaRandomGeometryParity`; on Mac / no-CUDA hosts the body
+  # self-skips at pytest collection time.
+  add_test(NAME "CudaRandomGeometryParity"
+    COMMAND ${PYTEST_EXECUTABLE} -v
+      "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_cuda_random_geometry_parity.py"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+  set_tests_properties("CudaRandomGeometryParity" PROPERTIES
     LABELS "parity;cuda"
     ENVIRONMENT "LUMICE_CUDA_ENABLED=1")
 endif()

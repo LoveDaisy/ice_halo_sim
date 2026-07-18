@@ -56,6 +56,18 @@ class CudaTraceBackendTestHooks {
   void EnableGenAttemptCount(size_t count, size_t ci_start = 0);
   size_t ReadbackGenAttemptCount(std::vector<int>& out, size_t count);
 
+  // White-box observation of `CudaTraceBackend::Impl::BuildGeomPool` call
+  // frequency. `EnableGeomPoolRebuildCount` flips the production zero-cost
+  // counter on (call BEFORE any BeginSession to observe the first build);
+  // `ReadbackGeomPoolRebuildCount` reads the count of `BuildGeomPool`
+  // invocations since Impl construction (or last observation). Distinguishes
+  // stochastic scenes (count grows with BeginSession cycles) from
+  // deterministic scenes (count stays at 1 across cycles — the pool
+  // build-once fast path). No device buffers to poke; no session-boundary
+  // constraints.
+  void EnableGeomPoolRebuildCount();
+  uint32_t ReadbackGeomPoolRebuildCount() const;
+
  private:
   CudaTraceBackend& backend_;
 };
