@@ -2287,9 +2287,11 @@ void CudaTraceBackend::Impl::UploadLatLut(const AxisDistribution& axis) {
 }
 
 // Does any (layer, ci) crystal param in the scene carry a stochastic shape
-// distribution? Polarity-inverse OR-reduction over `IsDeterministic(param)`
-// — the two predicates MUST stay in lockstep on any future CrystalParam
-// family. Callers: BeginSession's scene-change block caches the result into
+// distribution? This is a direct caller of `IsDeterministic(param)` (an
+// OR-reduction of its negation over every setting), NOT a second copy of the
+// predicate logic — adding a new CrystalParam family only needs
+// `IsDeterministic` itself to cover it; there is nothing here to keep in sync.
+// Callers: BeginSession's scene-change block caches the result into
 // `Impl::pool_stochastic_` so the per-BeginSession check is a plain bool load.
 // Anonymous namespace: matches the file-local-helper linkage convention for
 // this TU (CudaSelectedDevice / CheckCuda / … all have internal linkage) — a
