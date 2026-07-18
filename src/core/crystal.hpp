@@ -2,6 +2,7 @@
 #define SRC_CORE_CRYSTAL_H_
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -301,6 +302,14 @@ class Crystal {
   const float* GetPolygonFaceNormal() const;
   const float* GetPolygonFaceDist() const;
   const int* GetPolygonFaceTriId() const;
+
+  // Test observability: process-global count of degenerate polygon faces
+  // dropped by BuildPolygonFaceData (the count/stride "shrink" path that used
+  // to corrupt copy/move). Lets regression tests assert they actually
+  // exercised the shrink branch instead of passing vacuously. Thread-safe;
+  // reset before a measured sweep, read after.
+  static uint64_t DegenerateShrinkCount();
+  static void ResetDegenerateShrinkCount();
 
   IdType config_id_ = kInvalidId;
 

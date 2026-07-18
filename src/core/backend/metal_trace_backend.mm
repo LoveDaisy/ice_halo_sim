@@ -1669,11 +1669,39 @@ void MetalTraceBackend::Impl::UploadCrystal(const Crystal& crystal) {
 
   // Centroid per polygon face (mean of the polygon-triangle vertices) — same
   // formula as the explore spike (metal_full.mm / metal_ms.mm).
+  //
+  // Depth-of-defense bound check: symmetric to CPU Crystal::GetFn(IdType) at
+  // crystal.cpp:437-441. The root cause of the pyramid+random-face_distance
+  // Metal SIGSEGV was a stride/count mismatch inside BuildPolygonFaceData
+  // (fixed in the same task); after that fix poly_tri[f] is guaranteed to be
+  // a valid triangle index, so this guard is not what makes the code correct.
+  // It exists so any future upstream count/stride drift surfaces as a
+  // detectable "centroid stuck at origin + one WARN per UploadCrystal call"
+  // symptom rather than a wild read into tvtx. EnsurePolyBuffers only grows
+  // centroid_buf, so on shrink we must NOT leave the slot untouched — it would
+  // hold the previous crystal's stale centroid; write zeros explicitly.
+  size_t tri_cnt = crystal.TotalTriangles();
   const int* poly_tri = crystal.GetPolygonFaceTriId();
   const float* tvtx   = crystal.GetTriangleVtx();
   auto* centroid_ptr  = static_cast<float*>([centroid_buf contents]);
+  bool centroid_bound_warned = false;
   for (size_t f = 0; f < poly_cnt; f++) {
-    const float* v = tvtx + static_cast<size_t>(poly_tri[f]) * 9;
+    int t = poly_tri[f];
+    if (t < 0 || static_cast<size_t>(t) >= tri_cnt) {
+      centroid_ptr[f * 3 + 0] = 0.0f;
+      centroid_ptr[f * 3 + 1] = 0.0f;
+      centroid_ptr[f * 3 + 2] = 0.0f;
+      if (!centroid_bound_warned) {
+        ILOG_WARN(EffectiveLogger(logger_),
+                  "UploadCrystal: polygon face {} has out-of-range tri_id={} (tri_cnt={}); "
+                  "wrote zero centroid. This is depth-of-defense — root cause should be in "
+                  "BuildPolygonFaceData count/stride invariants.",
+                  f, t, tri_cnt);
+        centroid_bound_warned = true;
+      }
+      continue;
+    }
+    const float* v = tvtx + static_cast<size_t>(t) * 9;
     for (int k = 0; k < 3; k++) {
       centroid_ptr[f * 3 + k] = (v[0 * 3 + k] + v[1 * 3 + k] + v[2 * 3 + k]) / 3.0f;
     }
@@ -1688,7 +1716,6 @@ void MetalTraceBackend::Impl::UploadCrystal(const Crystal& crystal) {
   // on extreme-wedge (~≥87.4°) crystals (dot ≈ 0.9994).
   // NOTE: kFaceCoplanarFloor must match the value in crystal.cpp::BuildPolygonFaceData
   // and simulator.cpp::detail::PolygonFaceOfTri.
-  size_t tri_cnt = crystal.TotalTriangles();
   EnsureTriBuffers(tri_cnt);
   std::memcpy([tri_vtx_buf_ contents], crystal.GetTriangleVtx(),
               tri_cnt * 9 * sizeof(float));
