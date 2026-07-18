@@ -26,10 +26,14 @@
 #   ./scripts/verify_pyramid_crash_sentinel_detection_power.sh
 #
 # Options via env:
-#   SENTINEL_REVERT_BASE  — commit to check out for the reverted arm (default
-#                          =  the parent of HEAD, i.e. the state before the fix
-#                          commit landed). Set to override if the fix has been
-#                          rebased onto a different base.
+#   SENTINEL_REVERT_BASE  — commit to check out for the reverted arm (default =
+#                          this branch's merge-base with origin/main, i.e. the
+#                          pre-fix tree state, assuming the fix commit is the
+#                          first commit on this branch; hard-errors if origin/main
+#                          is unavailable). Set to override if the fix has been
+#                          rebased/merged onto a different base. Do NOT assume
+#                          "parent of HEAD" — the fix + its tests span several
+#                          commits, so HEAD~1 would still contain the fix.
 #   SENTINEL_N            — sentinel run count per arm (default 15). At the
 #                          calibrated fixture the shrink branch fires ~6 times
 #                          per run, so N=15 samples ~90 shrink events — enough
