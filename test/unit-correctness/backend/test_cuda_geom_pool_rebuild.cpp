@@ -67,8 +67,9 @@ SceneConfig MakeStochasticPrismScene(size_t max_hits, bool gaussian) {
   // Height h_: mean 1.0, spread 0.15 — well-conditioned (never degenerate).
   prism.h_ = Distribution{ t, 1.0f, 0.15f };
   // Face distances d_[6]: mean 1.0, spread 0.15. Still well-conditioned; we
-  // are testing the RNG plumbing, not degenerate-face handling (that lives in
-  // the separate "退化几何" scrum, per task plan §7 risk 2).
+  // are exercising the RNG plumbing, not degenerate-face handling — the
+  // negative-`d` / non-manifold rejection at the Crystal factory boundary is
+  // validated separately and is deliberately out of scope for this test.
   for (auto& d : prism.d_) {
     d = Distribution{ t, 1.0f, 0.15f };
   }
@@ -140,8 +141,8 @@ TEST(CudaGeomPoolRebuild, StochasticScene_Uniform_RebuildsEveryBatch) {
 // -----------------------------------------------------------------------------
 // Same as above but with a gaussian distribution — uniform and gaussian
 // exercise different rng_ code paths in CrystalMaker (Get() dispatches on
-// DistributionType), so both must be covered independently. Plan §5a: "uniform
-// 与 gaussian 各测一组——两者测的不是同一件事".
+// DistributionType), so both must be covered independently: testing one
+// distribution type alone would miss regressions in the other's sampling path.
 TEST(CudaGeomPoolRebuild, StochasticScene_Gaussian_RebuildsEveryBatch) {
   if (ShouldSkipCudaTests()) {
     GTEST_SKIP() << "no CUDA device enumerated";
@@ -199,6 +200,9 @@ TEST(CudaGeomPoolRebuild, StochasticScene_ShapesDifferAcrossBatches) {
   for (size_t i = 0; i < kCycles; ++i) {
     backend.BeginSession(spec);
     std::vector<float> g;
+    // 8 = MakePrismScene's polygon-face count (2 basal + 6 prism). If a future
+    // copy uses a crystal with fewer faces, ReadbackFirstPoolCrystalGeom
+    // truncates to the actual count rather than reading out of bounds.
     const size_t n = hooks.ReadbackFirstPoolCrystalGeom(g, /*count=*/8);
     backend.EndSession();
     ASSERT_GT(n, 0u) << "pool crystal geometry unavailable at cycle " << i
