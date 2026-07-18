@@ -40,8 +40,9 @@ below only turn any future upstream stride drift into a detectable "no fn" /
 
 Assertions:
   1. `returncode == 0` — the primary signal the SIGSEGV is caught.
-  2. stderr contains the "degenerate rep triangle" WARN at least once per run —
-     the anti-vacuous guard. If a future upstream change (e.g. a stronger
+  2. stdout+stderr (combined) contains the "degenerate rep triangle" WARN at
+     least once per run — the anti-vacuous guard (the Lumice CLI routes spdlog
+     to stdout, so the assertion checks both streams). If a future upstream change (e.g. a stronger
      factory gate) stopped surfacing the shrink path here, `returncode == 0`
      would silently keep passing while the sentinel had lost the coverage it
      was written for. Requiring the warning means the fixture is still driving
