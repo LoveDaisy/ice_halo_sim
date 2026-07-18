@@ -62,12 +62,26 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
 from test.e2e.runner import find_lumice_binary, get_project_root
+
+
+# The SIGSEGV this sentinel guards lives in the Metal backend
+# (UploadCrystal's centroid loop dereferencing a wild tri_id). On the CPU
+# backend the same corrupted crystal is caught by Crystal::GetFn's bound-check
+# (PR #206), so a CPU run neither crashes pre-fix NOR post-fix — running the
+# sentinel on CPU has ZERO crash-detection power (it would pass a reverted,
+# still-broken binary). We therefore force Metal below and skip entirely where
+# Metal does not exist.
+pytestmark = pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="pyramid UploadCrystal SIGSEGV is Metal-specific; no Metal backend off macOS",
+)
 
 
 _CONFIG_PATH = get_project_root() / "test" / "e2e" / "configs" / "repro_crash_pyramid_face_distance.json"
@@ -93,6 +107,12 @@ def _run_config(config_path: Path, timeout: float = 60.0) -> subprocess.Complete
     # switch — it only changes dispatch granularity, so setting it here is
     # equivalent to what a manual invocation would pass through the CLI.
     env.setdefault("LUMICE_DISPATCH_RAY_NUM", "1024")
+    # Force the Metal backend: the guarded crash is Metal-only, and the CLI's
+    # default backend is CPU on this platform, which would make every run pass
+    # regardless of the fix (see module-level note). Verified in the smoke check
+    # that Metal actually engaged (gpu_route=true) rather than silently falling
+    # back to CPU.
+    env.setdefault("LUMICE_TRACE_BACKEND", "metal")
     try:
         return subprocess.run(
             [str(binary), "-f", cfg_path],
@@ -121,6 +141,16 @@ def _smoke_check_binary() -> None:
         f"face_distance crash it is written to catch.\n"
         f"stderr:\n{result.stderr}"
     )
+    # The crash is Metal-only. If the forced backend did not actually engage
+    # (e.g. Metal unavailable → CPU fallback), the parametrized runs would pass
+    # vacuously on a still-broken binary. Skip rather than give false assurance.
+    combined = result.stdout + result.stderr
+    if "gpu_route=true" not in combined:
+        pytest.skip(
+            "Metal backend did not engage (no 'gpu_route=true' in output) — the "
+            "pyramid crash is Metal-specific and a CPU run has no crash-detection "
+            "power, so this sentinel is skipped rather than passing vacuously."
+        )
 
 
 @pytest.fixture(scope="module", autouse=True)
