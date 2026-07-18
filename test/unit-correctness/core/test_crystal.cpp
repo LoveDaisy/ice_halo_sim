@@ -1052,7 +1052,7 @@ TEST_F(V3TestCrystal, PyramidRandomFaceDistanceMoveGetFnLegal) {
   // → SIGSEGV. After the fix poly_face_cnt_ ≡ actual allocation stride so
   // copy/move are structurally safe.
   //
-  // Detection strategy: fixed-seed random sweep over pyramid + gauss(1, 0.3)
+  // Detection strategy: fixed-seed deterministic sweep over pyramid +
   // face_distance samples; for each surviving crystal exercise both move-ctor
   // and move-assignment (the real production paths — MakeCrystal returns by
   // value which forces move, and metal_trace_backend re-assigns current_crystal
@@ -1061,11 +1061,29 @@ TEST_F(V3TestCrystal, PyramidRandomFaceDistanceMoveGetFnLegal) {
   // least one of the swept crystals lands on the shrink path and one of these
   // two assertions fires; post-fix, both stay bit-for-bit intact regardless.
   //
-  // Fixed seed makes the "random" sweep deterministic — no CI flake. 200
-  // iterations empirically covers ~30 shrink events, well above 1/reliably
-  // triggered.
+  // PORTABILITY: the face_distance samples are drawn by mapping raw mt19937
+  // output through a hand-written uniform transform — NOT std::normal_/
+  // uniform_real_distribution, whose bit-exact output sequences are unspecified
+  // and differ across libstdc++ (dev49/Linux) and libc++ (macOS). mt19937's
+  // uint32 stream plus this manual mapping is identical on every stdlib, so the
+  // fixed seed constructs the *same* crystals — and therefore hits the *same*
+  // shrink events — everywhere. That is what makes the anti-vacuous assertion
+  // below trustworthy cross-platform (see project learning on distribution
+  // non-portability).
+  //
+  // ANTI-VACUOUS: the GetFn assertions only have detection power on crystals
+  // that actually took the degenerate-shrink path. We reset the process-global
+  // shrink counter, run the sweep, and assert it fired — otherwise a future
+  // sampling/geometry drift could make this guard pass while testing nothing.
+  Crystal::ResetDegenerateShrinkCount();
   std::mt19937 gen(42);
-  std::normal_distribution<float> dist_gen(1.0f, 0.5f);
+  // Map a fresh mt19937 draw to face_distance in [0.3, 1.7) — spread wide
+  // enough to produce near-zero-area representative triangles (the shrink
+  // trigger) while staying upstream-constructible.
+  auto next_dist = [&gen]() {
+    const float u = static_cast<float>(gen() >> 8) * (1.0f / 16777216.0f);  // [0,1)
+    return 0.3f + u * 1.4f;
+  };
   // Multiple h regimes — the SHRINK case requires an upstream-passable
   // mesh that still has a near-zero-area representative triangle for at
   // least one polygon plane; that condition is sensitive to the pyramid
@@ -1083,7 +1101,7 @@ TEST_F(V3TestCrystal, PyramidRandomFaceDistanceMoveGetFnLegal) {
   for (int iter = 0; iter < 500; iter++) {
     float dist[6];
     for (int i = 0; i < 6; i++) {
-      dist[i] = dist_gen(gen);
+      dist[i] = next_dist();
     }
     const auto& h = h_regimes[iter % 4];
     Crystal c = Crystal::CreatePyramid(1, 1, 1, 1, h.h1, h.h2, h.h3, dist);
@@ -1118,6 +1136,14 @@ TEST_F(V3TestCrystal, PyramidRandomFaceDistanceMoveGetFnLegal) {
   // Sanity: the fixed seed must have exercised at least a few surviving
   // crystals, otherwise the guard is vacuous.
   ASSERT_GT(swept, 20u) << "fixed-seed sweep produced too few surviving crystals; guard is vacuous";
+  // Anti-vacuous: the GetFn assertions above only have detection power on
+  // crystals that took the degenerate-shrink path. Require the sweep to have
+  // actually fired it — a future sampling/geometry drift that stops hitting the
+  // shrink branch must fail loudly here, not pass while testing nothing.
+  ASSERT_GT(Crystal::DegenerateShrinkCount(), 0u)
+      << "fixed-seed sweep never exercised the degenerate-shrink path (poly-face count/stride shrink); "
+      << "the move/GetFn assertions above were vacuous. If geometry sampling changed, re-calibrate the "
+      << "face_distance range in next_dist() so the sweep hits the shrink branch again.";
 }
 
 }  // namespace

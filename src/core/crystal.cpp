@@ -1,9 +1,11 @@
 #include "core/crystal.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <utility>
@@ -17,6 +19,21 @@
 #include "util/logger.hpp"
 
 namespace lumice {
+
+namespace {
+// Process-global count of degenerate polygon faces dropped by
+// BuildPolygonFaceData (the count/stride "shrink" path). Test observability
+// only; see Crystal::DegenerateShrinkCount().
+std::atomic<uint64_t> g_degenerate_shrink_count{ 0 };
+}  // namespace
+
+uint64_t Crystal::DegenerateShrinkCount() {
+  return g_degenerate_shrink_count.load(std::memory_order_relaxed);
+}
+
+void Crystal::ResetDegenerateShrinkCount() {
+  g_degenerate_shrink_count.store(0, std::memory_order_relaxed);
+}
 
 // Legal face-number sets mirror FillHexFnMap below:
 //   basal:         1, 2
@@ -756,6 +773,7 @@ void Crystal::BuildPolygonFaceData(const float* plane_coef, size_t plane_cnt) {
     if (max_tri_area > 0.0f && face_area_[rep_tri] < 1e-6f * max_tri_area) {
       LOG_WARNING("BuildPolygonFaceData: plane {} has degenerate rep triangle {} (area={:.4e}, max={:.4e})", p, rep_tri,
                   static_cast<double>(face_area_[rep_tri]), static_cast<double>(max_tri_area));
+      g_degenerate_shrink_count.fetch_add(1, std::memory_order_relaxed);
       continue;
     }
     accepted.push_back({ p, rep_tri });
