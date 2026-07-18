@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784282853325,
+  "lastUpdate": 1784350988193,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "fc3e2fa37ad9f4bce408a9a5817f09eb57aa7c8a",
-          "message": "Merge pull request #106 from LoveDaisy/feat/gui_zenith_nadir\n\nfeat(gui): zenith/nadir ring marker overlay",
-          "timestamp": "2026-05-25T01:23:44+08:00",
-          "tree_id": "3f5880b3f64c960c7f36c1b0c568f0b38f820075",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/fc3e2fa37ad9f4bce408a9a5817f09eb57aa7c8a"
-        },
-        "date": 1779643716538,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 443952.5,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 573187.7,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 389233.2,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 309777.8,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4800,6 +4752,48 @@ window.BENCHMARK_DATA = {
             "value": 389064.6,
             "unit": "rays/sec",
             "extra": "CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz\\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e22f9eea8e5d88a52b44452e88488b73c5bc9ec0",
+          "message": "Merge pull request #208 from LoveDaisy/fix/pyramid-geometry-crash-metal\n\nfix(core): pyramid + random face_distance Metal SIGSEGV (count/stride decouple)",
+          "timestamp": "2026-07-18T12:55:41+08:00",
+          "tree_id": "4664a91a1f187e7cb56fae546dfaa87d149d926c",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/e22f9eea8e5d88a52b44452e88488b73c5bc9ec0"
+        },
+        "date": 1784350986600,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "Ubuntu ARM64",
+            "value": 594036,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 496573.2,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 357024.9,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
         ]
       }
