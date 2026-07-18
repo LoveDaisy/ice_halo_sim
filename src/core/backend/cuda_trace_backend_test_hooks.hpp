@@ -68,6 +68,17 @@ class CudaTraceBackendTestHooks {
   void EnableGeomPoolRebuildCount();
   uint32_t ReadbackGeomPoolRebuildCount() const;
 
+  // White-box readback of a produced-geometry scalar vector from the FIRST
+  // host slot crystal currently in the geometry pool (`Impl::pool_crystals_`
+  // front). Copies up to `count` polygon-face distances (the quantity a
+  // stochastic `d_[]`/`h_` config actually randomizes) into `out`; returns
+  // the number of floats written (0 if the pool is empty). Call BETWEEN
+  // BeginSession and EndSession so the pool reflects the current cycle's draw.
+  // Lets a test assert that successive same-seed BeginSession cycles produce
+  // DIFFERENT geometry — the direct AC1 evidence that `rng_` advances across
+  // batches (Layer 1 seed-once) rather than resetting to a frozen shape.
+  size_t ReadbackFirstPoolCrystalGeom(std::vector<float>& out, size_t count) const;
+
  private:
   CudaTraceBackend& backend_;
 };

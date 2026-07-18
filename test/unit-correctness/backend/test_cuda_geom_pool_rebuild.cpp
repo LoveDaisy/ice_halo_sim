@@ -29,6 +29,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "config/crystal_config.hpp"
 #include "config/light_config.hpp"
@@ -162,14 +163,20 @@ TEST(CudaGeomPoolRebuild, StochasticScene_Gaussian_RebuildsEveryBatch) {
 // Prior to the fix, rng_ was reset every BeginSession, so cycle N shapes ==
 // cycle 0 shapes; after the fix, rng_ advances across cycles.
 //
-// Observation channel: `PrismCrystalParam::h_` is the first Distribution
-// consumed by `CrystalMaker::operator()(const PrismCrystalParam&)` — its
-// value ends up in the produced Crystal's height. We compare `Crystal::height_`
-// (or an equivalent per-cycle scalar; the exact geometry accessor is chosen
-// below) across cycles.
+// Observation channel: `ReadbackFirstPoolCrystalGeom` copies the produced
+// polygon-face distances of the pool's first host crystal — the quantity a
+// stochastic `d_[]`/`h_` config actually randomizes. Read BETWEEN BeginSession
+// and EndSession each cycle so the vector reflects THAT cycle's draw, then
+// compare across cycles.
 //
-// This ties Layer 1 + Layer 2 together into a single positive assertion for
-// AC1: the shape ACTUALLY changes across batches on the same instance.
+// Why rebuild-count alone is insufficient (and this test is not redundant with
+// the two above): if Layer 1 regressed to an unconditional per-BeginSession
+// reseed while Layer 2 still rebuilt the pool every cycle, `rng_` would reset
+// to the same prefix each time and every rebuild would draw the IDENTICAL
+// shape — yet `geom_pool_rebuild_count_` would still equal kCycles. Only a
+// direct geometry comparison distinguishes "rebuilt with a fresh draw" from
+// "rebuilt with a frozen draw". This is the sole local (pre-dev49) defense for
+// the Layer 1 seed-once invariant, so it must assert on geometry, not counts.
 TEST(CudaGeomPoolRebuild, StochasticScene_ShapesDifferAcrossBatches) {
   if (ShouldSkipCudaTests()) {
     GTEST_SKIP() << "no CUDA device enumerated";
@@ -179,24 +186,42 @@ TEST(CudaGeomPoolRebuild, StochasticScene_ShapesDifferAcrossBatches) {
 
   CudaTraceBackend backend;
   CudaTraceBackendTestHooks hooks(backend);
-  hooks.EnableGeomPoolRebuildCount();
 
   SessionSpec spec;
   spec.scene = &scene;
   spec.render = &render;
   spec.wl = WlParam{ 550.0f, 1.0f };
-  spec.seed = 42u;
+  spec.seed = 42u;  // SAME seed every cycle — the point is that rng_ advances.
 
   const size_t kCycles = 4;
-  // Sanity: with kCycles BeginSession calls we expect exactly kCycles rebuilds
-  // (redundant with the previous test, but keeps this test self-contained if
-  // the two are ever split into separate translation units).
+  std::vector<std::vector<float>> geoms;
+  geoms.reserve(kCycles);
   for (size_t i = 0; i < kCycles; ++i) {
     backend.BeginSession(spec);
+    std::vector<float> g;
+    const size_t n = hooks.ReadbackFirstPoolCrystalGeom(g, /*count=*/8);
     backend.EndSession();
+    ASSERT_GT(n, 0u) << "pool crystal geometry unavailable at cycle " << i
+                     << " (empty pool — device-gen path must populate pool_crystals_)";
+    geoms.push_back(std::move(g));
   }
-  EXPECT_EQ(hooks.ReadbackGeomPoolRebuildCount(), static_cast<uint32_t>(kCycles))
-      << "Sanity: stochastic scene should rebuild every cycle.";
+
+  // Layer 1 direct evidence: with the SAME seed on the SAME instance, each
+  // later cycle's geometry MUST differ from cycle 0. If Layer 1 regressed
+  // (unconditional reseed), every cycle would replay the identical first draw
+  // and all geoms would be bit-equal — the frozen-geometry bug this task fixes.
+  size_t distinct_from_first = 0;
+  for (size_t i = 1; i < kCycles; ++i) {
+    if (geoms[i] != geoms[0]) {
+      ++distinct_from_first;
+    }
+  }
+  EXPECT_EQ(distinct_from_first, kCycles - 1)
+      << "Stochastic scene must draw a DIFFERENT shape every BeginSession cycle "
+         "(AC1, Layer 1 seed-once). Only "
+      << distinct_from_first << " of " << (kCycles - 1)
+      << " later cycles differed from cycle 0; fewer means rng_ is being reset "
+         "per BeginSession (the frozen-geometry regression this task fixes).";
 }
 
 }  // namespace

@@ -180,9 +180,21 @@ def test_cuda_random_geometry_cross_seed_self_consistency():
         f"[self] {CFG}: cuda_self={corr_cuda:.4f} legacy_self={corr_legacy:.4f} "
         f"margin={_T_SELF_MARGIN}"
     )
+    # Two-sided: CUDA's cross-seed self-consistency must be CLOSE to legacy's,
+    # not merely "no lower". The frozen-shape collapse this test names manifests
+    # as corr_cuda ABNORMALLY HIGH (both seeds redraw the identical shape →
+    # near-identical images → corr → 1.0), which a one-sided lower bound would
+    # silently pass. The upper bound is the guard that actually catches the
+    # collapse; the white-box StochasticScene_ShapesDifferAcrossBatches test is
+    # the deterministic sibling defense for the same failure mode.
+    assert corr_cuda <= corr_legacy + _T_SELF_MARGIN, (
+        f"{CFG}: cuda cross-seed self-consistency {corr_cuda:.4f} > "
+        f"legacy_self {corr_legacy:.4f} + {_T_SELF_MARGIN}. Suspect frozen-shape "
+        "regression: CUDA is far MORE self-similar across seeds than legacy, "
+        "i.e. the shape pool collapsed to a single draw regardless of seed."
+    )
     assert corr_cuda >= corr_legacy - _T_SELF_MARGIN, (
         f"{CFG}: cuda cross-seed self-consistency {corr_cuda:.4f} < "
-        f"legacy_self {corr_legacy:.4f} - {_T_SELF_MARGIN}. Suspect frozen-shape "
-        "regression collapsed cross-seed variance (both seeds produce nearly "
-        "identical images because the shape pool did not actually re-draw)."
+        f"legacy_self {corr_legacy:.4f} - {_T_SELF_MARGIN}. Suspect undersampling "
+        "or a decorrelation regression (CUDA less self-consistent than legacy)."
     )

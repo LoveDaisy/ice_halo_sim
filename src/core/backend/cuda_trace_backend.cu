@@ -2291,6 +2291,10 @@ void CudaTraceBackend::Impl::UploadLatLut(const AxisDistribution& axis) {
 // — the two predicates MUST stay in lockstep on any future CrystalParam
 // family. Callers: BeginSession's scene-change block caches the result into
 // `Impl::pool_stochastic_` so the per-BeginSession check is a plain bool load.
+// Anonymous namespace: matches the file-local-helper linkage convention for
+// this TU (CudaSelectedDevice / CheckCuda / … all have internal linkage) — a
+// one-shot predicate must not leak external linkage across TUs.
+namespace {
 bool SceneHasStochasticGeometry(const SceneConfig& scene) {
   for (const auto& ms : scene.ms_) {
     for (const auto& setting : ms.setting_) {
@@ -2299,6 +2303,7 @@ bool SceneHasStochasticGeometry(const SceneConfig& scene) {
   }
   return false;
 }
+}  // namespace
 
 void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene) {
   // Build the per-(layer,ci) geometry pool. Called ONCE per scene when
@@ -4365,6 +4370,23 @@ void CudaTraceBackendTestHooks::EnableGeomPoolRebuildCount() {
 
 uint32_t CudaTraceBackendTestHooks::ReadbackGeomPoolRebuildCount() const {
   return backend_.impl_->geom_pool_rebuild_count_;
+}
+
+size_t CudaTraceBackendTestHooks::ReadbackFirstPoolCrystalGeom(std::vector<float>& out, size_t count) const {
+  auto& impl = *backend_.impl_;
+  out.clear();
+  if (impl.pool_crystals_.empty()) {
+    return 0;
+  }
+  const Crystal& c = impl.pool_crystals_.front();
+  const size_t avail = c.PolygonFaceCount();
+  const size_t n = count < avail ? count : avail;
+  const float* dist = c.GetPolygonFaceDist();
+  if (dist == nullptr || n == 0) {
+    return 0;
+  }
+  out.assign(dist, dist + n);
+  return n;
 }
 
 size_t CudaTraceBackendTestHooks::ReadbackGenDirs(std::vector<float>& out, size_t count) {
