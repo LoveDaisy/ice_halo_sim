@@ -122,10 +122,16 @@
   set LUMICE_CUDA_ENABLED=1
   set LUMICE_LIB=C:\lumice-src\build\Release\bin\lumice.dll
   set PATH=C:\lumice-src\build\Release\bin;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7\bin;%PATH%
+  set PYTHONUTF8=1
   cd /d C:\lumice-src
   C:\lumice-test\py311\python.exe -m pytest -v test\parity-cross-backend\backend\test_cuda_exit_seam_parity.py test\parity-cross-backend\backend\test_cuda_filter_parity.py test\parity-cross-backend\backend\test_cuda_multi_ms_parity.py
   ```
   耗时 ~7min，1070Ti/sm_61 走 compute_61 PTX JIT。
+  - ⚠️ **`set PYTHONUTF8=1` 必带**：中文 Windows 控制台默认 GBK codec，parity 测试的
+    docstring/traceback 若含非 ASCII 字符（数学符号、破折号），pytest 输出时会
+    `UnicodeEncodeError` 崩在渲染上 → parity 计算已完成但断言未执行 = 假失败遮蔽真结果。
+    `PYTHONUTF8=1` 强制 Python UTF-8 I/O，与 locale 无关，是这个坑的环境兜底。
+    测试消息串本身已改 ASCII（治本），此为第二道保险。
 - **PS over ssh 通用坑**：默认 shell 是 PowerShell，内联引号 + 中文 locale 易乱码/解析错 →
   **一律写 .ps1/.bat 文件 scp 过去，再 `powershell -NoProfile -ExecutionPolicy Bypass -File`
   或 `cmd /c`**。用完清理 `C:\lumice-test` 下的临时脚本（共享机卫生）。

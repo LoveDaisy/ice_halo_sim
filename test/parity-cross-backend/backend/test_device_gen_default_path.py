@@ -127,7 +127,7 @@ def test_default_path_device_gen_vs_host_gen_single_ms():
     )
     assert ds >= _DS_CORR_FLOOR, (
         f"dual_fisheye_ref default path: device-gen ON vs OFF ds_corr={ds:.4f} "
-        f"< {_DS_CORR_FLOOR} — systematic divergence between device-gen and "
+        f"< {_DS_CORR_FLOOR} - systematic divergence between device-gen and "
         f"host-gen on the default render path."
     )
 
@@ -203,7 +203,7 @@ def test_device_gen_activation_proof_fixed_seed():
     )
     assert rel_err > _ACTIVATION_RELERR_FLOOR, (
         f"dual_fisheye_ref sim_seed=42: device-gen ON vs OFF rel_err={rel_err:.3e} "
-        f"<= {_ACTIVATION_RELERR_FLOOR:.0e} — GPU PCG and host mt19937 produced "
+        f"<= {_ACTIVATION_RELERR_FLOOR:.0e} - GPU PCG and host mt19937 produced "
         f"near-identical output at the same seed. device-gen likely fell back "
         f"to host-gen; the default-path coverage in this file is then assert-may-pass."
     )

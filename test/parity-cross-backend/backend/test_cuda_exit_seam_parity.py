@@ -138,19 +138,19 @@ def test_cuda_single_ms_no_filter_parity():
 
     print(
         f"[parity] {cfg}: cuda ds_corr={corr:.4f} psnr={psnr:.2f}dB "
-        f"energy_ratio={energy_ratio:.4f} (tol ±{_T_ENERGY_TOL})"
+        f"energy_ratio={energy_ratio:.4f} (tol +/-{_T_ENERGY_TOL})"
     )
 
     # G1
     assert corr >= _T_RAW_CORR_DS, (
         f"{cfg}: ds_corr {corr:.4f} < {_T_RAW_CORR_DS} (G1 floor). "
         "Suspect frame invariant 6 (rot_c2w missing), from_face guard bug, "
-        "or Möller-Trumbore precision issue."
+        "or Moller-Trumbore precision issue."
     )
     # G2
     assert abs(energy_ratio - 1.0) <= _T_ENERGY_TOL, (
         f"{cfg}: cuda/legacy total-Y ratio {energy_ratio:.4f} outside "
-        f"[1 ± {_T_ENERGY_TOL}]. Suspect Fresnel sampling drift / exit-cap "
+        f"[1 +/- {_T_ENERGY_TOL}]. Suspect Fresnel sampling drift / exit-cap "
         "overflow / TIR mishandling."
     )
 
@@ -186,6 +186,6 @@ def test_cuda_cross_seed_self_consistency():
     )
     assert corr_cuda >= corr_legacy - _T_SELF_MARGIN, (
         f"{cfg}: cuda cross-seed self-consistency {corr_cuda:.4f} < "
-        f"legacy_self {corr_legacy:.4f} − {_T_SELF_MARGIN}. Suspect PCG seed "
+        f"legacy_self {corr_legacy:.4f} - {_T_SELF_MARGIN}. Suspect PCG seed "
         "collapse / per-thread stream reuse in trace_single_ms_kernel."
     )

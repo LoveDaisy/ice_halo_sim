@@ -141,7 +141,7 @@ def test_cuda_multi_ms_image_parity_vs_legacy():
 
     print(
         f"[parity] {cfg}: cuda ds_corr={corr:.4f} psnr={psnr:.2f}dB "
-        f"energy_ratio={energy_ratio:.4f} (tol ±{_T_ENERGY_TOL})"
+        f"energy_ratio={energy_ratio:.4f} (tol +/-{_T_ENERGY_TOL})"
     )
 
     # AC2a
@@ -153,7 +153,7 @@ def test_cuda_multi_ms_image_parity_vs_legacy():
     # AC2c
     assert abs(energy_ratio - 1.0) <= _T_ENERGY_TOL, (
         f"{cfg}: cuda/legacy total-Y ratio {energy_ratio:.4f} outside "
-        f"[1 ± {_T_ENERGY_TOL}]. Suspect prob_fail dropped (should be mid-exit), "
+        f"[1 +/- {_T_ENERGY_TOL}]. Suspect prob_fail dropped (should be mid-exit), "
         "cont buffer overflow (warn log), or transit kernel zeroing rays via "
         "tri_to_poly kInvalidId fallback."
     )
@@ -194,7 +194,7 @@ def test_cuda_high_continuation_no_exit_overflow_corruption():
 
     print(
         f"[parity] {cfg}: cuda ds_corr={corr:.4f} energy_ratio={energy_ratio:.4f} "
-        f"(floors corr≥{_T_RAW_CORR_DS}, |energy−1|≤{_T_ENERGY_TOL})"
+        f"(floors corr>={_T_RAW_CORR_DS}, |energy-1|<={_T_ENERGY_TOL})"
     )
 
     # ds_corr is the discriminating metric: the dropped-tail damage is spatial,
@@ -206,7 +206,7 @@ def test_cuda_high_continuation_no_exit_overflow_corruption():
     )
     assert abs(energy_ratio - 1.0) <= _T_ENERGY_TOL, (
         f"{cfg}: cuda/legacy total-Y ratio {energy_ratio:.4f} outside "
-        f"[1 ± {_T_ENERGY_TOL}]."
+        f"[1 +/- {_T_ENERGY_TOL}]."
     )
 
 
@@ -252,7 +252,7 @@ def test_cuda_three_layer_multi_ci_parity_vs_legacy():
 
     print(
         f"[parity] {cfg}(300K): cuda ds_corr={corr:.4f} energy_ratio={energy_ratio:.4f} "
-        f"(floors corr≥{_T_RAW_CORR_DS}, |energy−1|≤{_T_ENERGY_TOL})"
+        f"(floors corr>={_T_RAW_CORR_DS}, |energy-1|<={_T_ENERGY_TOL})"
     )
     assert corr >= _T_RAW_CORR_DS, (
         f"{cfg}: ds_corr {corr:.4f} < {_T_RAW_CORR_DS}. Multi-CI path broken on a "
@@ -260,7 +260,7 @@ def test_cuda_three_layer_multi_ci_parity_vs_legacy():
         "layer crystal_id-indexed DrainExits)."
     )
     assert abs(energy_ratio - 1.0) <= _T_ENERGY_TOL, (
-        f"{cfg}: cuda/legacy total-Y ratio {energy_ratio:.4f} outside [1 ± {_T_ENERGY_TOL}]."
+        f"{cfg}: cuda/legacy total-Y ratio {energy_ratio:.4f} outside [1 +/- {_T_ENERGY_TOL}]."
     )
 
 
@@ -298,7 +298,7 @@ def test_cuda_multi_ms_cross_seed_self_consistency():
     )
     assert corr_cuda >= corr_legacy - _T_SELF_MARGIN, (
         f"{cfg}: cuda cross-seed self-consistency {corr_cuda:.4f} < "
-        f"legacy_self {corr_legacy:.4f} − {_T_SELF_MARGIN}. Suspect PCG seed "
+        f"legacy_self {corr_legacy:.4f} - {_T_SELF_MARGIN}. Suspect PCG seed "
         "collapse in transit_multi_ms_kernel (transit_seed_ / transit_ray_count_ "
-        "not advancing per dispatch) — this is the scrum-267.3 failure mode."
+        "not advancing per dispatch) - this is the scrum-267.3 failure mode."
     )
