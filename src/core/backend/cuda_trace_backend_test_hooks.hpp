@@ -89,12 +89,21 @@ class CudaTraceBackendTestHooks {
   //   * ReadbackPoolShapeTable — D2H copy of `d_pool_shape_table_` as a flat
   //     vector of `{poly_off, poly_cnt, tri_off, tri_cnt}` rows. .size() ==
   //     Σ P_ci over every (layer, ci) resolved in this BeginSession (aka the
-  //     value `GetLastBatchCrystalCount()` reports). Precondition: called
+  //     value `GetLastBatchCrystalCount()` reports). The device buffer's
+  //     backing storage `Impl::pool_shape_slot_cap_` is set to
+  //     `pool_crystals_.size()` at every BuildGeomPool (freed to 0 on
+  //     scene-change / no-K path), so it is EXACTLY the current batch's
+  //     Σ P_ci — not a static allocation upper bound; stale rows from a
+  //     prior larger-K batch cannot leak through. Precondition: called
   //     BETWEEN BeginSession and EndSession.
   //   * ReadbackRootPoolShape — D2H copy of the first `count` entries of
   //     `d_root_pool_shape_` as `(poly_off, poly_cnt)` pairs. The pool-slot
   //     each ray's root landed on for the last TraceLayer pass (gen_root_kernel
-  //     for layer 0 / transit_multi_ms_kernel for layer≥1).
+  //     for layer 0 / transit_multi_ms_kernel for layer≥1). Fail-hard: throws
+  //     `std::out_of_range` if `count > root_cap_` — silent truncation would
+  //     hide a caller size-accounting bug behind a plausible-looking short
+  //     vector until it surfaces on-device as `cudaErrorIllegalMemoryAccess`,
+  //     which is far more expensive to trace than a host-side throw here.
   //
   // No `PoolShapeCountThisBatch()` sibling: CUDA already exposes the same
   // value on the production surface as `GetLastBatchCrystalCount()` — tests

@@ -58,6 +58,7 @@
 #include <mutex>
 #include <random>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <variant>
@@ -4835,9 +4836,18 @@ CudaTraceBackendTestHooks::ReadbackPoolShapeTable() const {
   // D2H copy of the Σ P_ci rows of `d_pool_shape_table_` as
   // `{poly_off, poly_cnt, tri_off, tri_cnt}` (matches the flat AoS-uint4
   // upload at BuildGeomPool `:2693-2711`).
-  // Fail-hard fallback: if the pool has not been built this session (K==0
-  // deterministic no-op path or disable_device_gen_ debug fallback), the
-  // slot cap is 0 and we return an empty vector rather than reading garbage.
+  // `pool_shape_slot_cap_` is set to `pool_crystals_.size()` at every
+  // BuildGeomPool (`:2711`, freed to 0 on scene-change / no-K path at `:2671`),
+  // i.e. it is exactly the current-batch Σ P_ci — not a static allocation
+  // upper bound. Every returned row is a valid `(layer, ci)` pool slot; no
+  // stale rows from a prior batch can leak through.
+  // Empty-vector return path: when the pool has not been built this session
+  // (deterministic geometry short-circuit that skips BuildGeomPool, or the
+  // `disable_device_gen_` debug fallback), the slot cap is 0 and we return an
+  // empty vector rather than reading garbage. This is NOT gated on the
+  // `LUMICE_GPU_GEOM_CLOCK` (K) knob value: with K unset / K==0, stochastic
+  // scenes still build a 1-row pool (P_ci=1 collapse), and this hook returns
+  // that 1 row.
   auto& impl = *backend_.impl_;
   std::vector<std::array<uint32_t, 4>> out;
   if (impl.d_pool_shape_table_ == nullptr || impl.pool_shape_slot_cap_ == 0u) {
@@ -4861,15 +4871,20 @@ CudaTraceBackendTestHooks::ReadbackRootPoolShape(size_t count) const {
   // D2H copy of the first `count` entries of `d_root_pool_shape_`
   // (per-ray `(poly_off, poly_cnt)` written by `gen_root_kernel` /
   // `transit_multi_ms_kernel`; consumed by `trace_single_ms_kernel`).
-  // Fail-hard: clamp count to root_cap_ so an over-large request cannot read
-  // out of bounds — mirrors ReadbackGenDirs D2H-capacity discipline.
+  // Fail-hard: `count > root_cap_` throws instead of silently truncating —
+  // a caller with a size-accounting bug otherwise gets a plausible-looking
+  // vector shorter than it asked for, hiding the misuse until dev49 debug
+  // (where `cudaErrorIllegalMemoryAccess` is far costlier to trace).
   auto& impl = *backend_.impl_;
   std::vector<std::pair<uint32_t, uint32_t>> out;
   if (impl.d_root_pool_shape_ == nullptr || count == 0u || impl.root_cap_ == 0u) {
     return out;
   }
   if (count > impl.root_cap_) {
-    count = impl.root_cap_;
+    std::ostringstream oss;
+    oss << "CudaTraceBackendTestHooks::ReadbackRootPoolShape: count=" << count
+        << " exceeds root_cap_=" << impl.root_cap_ << " (caller size-accounting bug)";
+    throw std::out_of_range(oss.str());
   }
   std::vector<uint2> raw(count);
   cudaDeviceSynchronize();
