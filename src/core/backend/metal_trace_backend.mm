@@ -279,8 +279,12 @@ struct GenRootKernelParams {
   float    roll_mean_rad;
   float    roll_std_rad;
   float    roll_pad;
+  // K-shape geometry pool size (P_ci). 1 = single-shape (historical behavior).
+  // Appended at struct end; every existing field is 4-byte scalar with natural
+  // alignment so no padding shift is introduced.
+  uint32_t pool_shape_count;
 };
-static_assert(sizeof(GenRootKernelParams) == 92u,
+static_assert(sizeof(GenRootKernelParams) == 96u,
               "GenRootKernelParams size mismatch — update host struct to match Metal-side layout");
 
 size_t ComputeOutCap(size_t n, size_t max_hits) {
@@ -876,6 +880,12 @@ struct MetalTraceBackend::Impl {
   //     the buffer-allocation and MSL binding-slot code); semantically these
   //     hold the ray's uint64 `this_mask` (== capture_ray_mask), which is now
   //     purely Design-2 colour bits.
+  // K-shape pool per-ray carrier: gen_root_kernel (first_ms) and
+  // transit_root_kernel (later layers) each write `{poly_off, poly_cnt}` for
+  // the shape they picked; trace_layer_kernel reads it as `r_pool_shape` at
+  // slot 16 (freed by the ExitStats merge). Not carried across layers — every
+  // (layer, ci) resolves its own pool and every root pass redraws freshly.
+  id<MTLBuffer> root_pool_shape_buf_   = nil;  // n × uint2 = n × 8 bytes
   id<MTLBuffer> root_component_buf_    = nil;
   id<MTLBuffer> cont_component_buf_[2] = { nil, nil };
   id<MTLBuffer> gate_component_bits_buf_ = nil;
@@ -1266,6 +1276,11 @@ void MetalTraceBackend::Impl::EnsureRootBuffers(size_t n) {
   root_component_buf_ = [device newBufferWithLength:n * sizeof(uint64_t)
                                            options:MTLResourceStorageModeShared];
   assert(root_component_buf_ != nil);
+  // K-shape pool per-ray shape carrier (see field-decl comment). Grown in
+  // lockstep with root_d so the trace kernel indexes it with the same tid.
+  root_pool_shape_buf_ = [device newBufferWithLength:n * 2u * sizeof(uint32_t)
+                                            options:MTLResourceStorageModeShared];
+  assert(root_pool_shape_buf_ != nil);
 }
 
 void MetalTraceBackend::Impl::EnsurePoolShapeTableBuffer(size_t shape_cnt) {
@@ -2153,6 +2168,13 @@ GenRootKernelParams MetalTraceBackend::Impl::BuildGenRootParams(
   gp.roll_mean_rad = axis_dist.roll_dist.mean * math::kDegreeToRad;
   gp.roll_std_rad  = axis_dist.roll_dist.std  * math::kDegreeToRad;
   gp.roll_pad      = 0.0f;
+  // K-shape pool size = number of shapes host built for THIS resolve. The
+  // callee already populated `pool_shape_table_h_` in UploadCrystalPool;
+  // its size is the authoritative P_ci. 0 would be a caller bug (no
+  // Resolve happened) — assert to catch it early.
+  assert(!pool_shape_table_h_.empty() &&
+         "BuildGenRootParams: pool_shape_table_h_ empty — ResolveLayerCrystalForCi not called?");
+  gp.pool_shape_count = static_cast<uint32_t>(pool_shape_table_h_.size());
   return gp;
 }
 
@@ -2203,6 +2225,14 @@ void MetalTraceBackend::Impl::EncodeGenRoot(id<MTLCommandBuffer> cb,
     [enc setBuffer:lat_lut_theta_buf_ offset:0 atIndex:14];
     [enc setBuffer:lat_lut_cdf_buf_   offset:0 atIndex:15];
     [enc setBuffer:lat_lut_flip_buf_  offset:0 atIndex:16];
+    // K-shape geometry pool: (poly_off, poly_cnt, tri_off, tri_cnt) per pool
+    // shape (buffer 19, read) + the per-ray write-out for the chosen shape's
+    // (poly_off, poly_cnt) slice (buffer 20). trace_layer_kernel reads the
+    // latter at buffer(16).
+    assert(pool_shape_table_buf_ != nil &&
+           "pool_shape_table_buf_ must be non-nil before EncodeGenRoot");
+    [enc setBuffer:pool_shape_table_buf_ offset:0 atIndex:19];
+    [enc setBuffer:root_pool_shape_buf_  offset:0 atIndex:20];
     NSUInteger threads = 64;
     NSUInteger groups = (static_cast<NSUInteger>(gp.num_rays) + threads - 1) / threads;
     [enc dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
@@ -2297,6 +2327,12 @@ void MetalTraceBackend::Impl::EncodeTransitRoot(
     NSUInteger comp_off = static_cast<NSUInteger>(ci_start) * sizeof(uint64_t);
     [enc setBuffer:cont_component_buf_[in_slot] offset:comp_off atIndex:17];
     [enc setBuffer:root_component_buf_          offset:0        atIndex:18];
+    // K-shape geometry pool bindings mirror EncodeGenRoot at the same slots
+    // 19/20 so both root passes speak the same shader-side layout.
+    assert(pool_shape_table_buf_ != nil &&
+           "pool_shape_table_buf_ must be non-nil before EncodeTransitRoot");
+    [enc setBuffer:pool_shape_table_buf_        offset:0        atIndex:19];
+    [enc setBuffer:root_pool_shape_buf_         offset:0        atIndex:20];
     NSUInteger threads = 64;
     NSUInteger groups  = (static_cast<NSUInteger>(gp.num_rays) + threads - 1) / threads;
     [enc dispatchThreadgroups:MTLSizeMake(groups, 1, 1)

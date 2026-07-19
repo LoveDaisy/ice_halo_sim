@@ -1117,6 +1117,14 @@ kernel void gen_root_kernel(
     device const float*     lat_lut_theta [[buffer(14)]],
     device const float*     lat_lut_cdf   [[buffer(15)]],
     device const float*     lat_lut_flip  [[buffer(16)]],
+    // K-shape geometry pool (see UploadCrystalPool in metal_trace_backend.mm).
+    // pool_shape_table[s] = uint4{poly_off, poly_cnt, tri_off, tri_cnt} for
+    // pool slot s in the shared poly_*/tri_* buffers. root_pool_shape[tid]
+    // stores this ray's chosen (poly_off, poly_cnt) — trace_layer_kernel reads
+    // it back at buffer(16) to know which slice of poly_n/poly_d/centroid to
+    // walk for its ray-polygon intersection loop.
+    device const uint4*     pool_shape_table [[buffer(19)]],
+    device uint2*           root_pool_shape  [[buffer(20)]],
     uint tid [[thread_position_in_grid]])
 {
   if (tid >= gp.num_rays) {
@@ -1189,17 +1197,50 @@ kernel void gen_root_kernel(
   float d_crystal[3];
   apply_inverse_mat9(mat9, d_world, d_crystal);
 
+  // 2.5. K-shape pool: pick this ray's shape via a SEED-DOMAIN-isolated PCG
+  // draw (BuildGeomShapeStream / kGeomShapeStreamNonce). Independent seed
+  // domain matters — sharing seed with orientation/wl would silently collide
+  // (same failure mode that shifted metal_lap green-excess before wl was
+  // isolated). P_ci == 1 (knob unset / deterministic params / host-gen
+  // fallback) collapses this to a no-op: shape_slot = 0, floor(u * 1) = 0,
+  // pool_shape_table[0] = (0, poly_cnt_full, 0, tri_cnt_full) — the historical
+  // single-shape layout falls out bit-for-bit. The draw is UNCONDITIONAL so
+  // there is no branch divergence per warp (AC2 bit-identity argument is
+  // structural, not gated on a runtime if).
+  PcgStream shape_stream = BuildGeomShapeStream(mixed_seed, global_idx);
+  float u_shape = pcg_uniform(shape_stream);
+  uint pool_slot = min(uint(u_shape * float(gp.pool_shape_count)),
+                       gp.pool_shape_count - 1u);
+  uint4 shape_info = pool_shape_table[pool_slot];
+  uint poly_off = shape_info.x;
+  uint tri_off  = shape_info.z;
+  uint tri_cnt  = shape_info.w;
+  // Publish this ray's chosen polygon slice for trace_layer_kernel to read
+  // (buffer(16), r_pool_shape). poly_cnt is what the trace kernel's
+  // ray-polygon loop needs; poly_off gets it into the right slice of poly_n /
+  // poly_d / centroid.
+  root_pool_shape[tid] = uint2(poly_off, shape_info.y);
+
   // 3. Triangle area×facing weighted pick → uniform point on the chosen tri.
+  //    Restricted to THIS shape's [tri_off, tri_off + tri_cnt) window. Legacy
+  //    InitRay_p_fid (simulator.cpp:106-124) is single-shape; we walk it
+  //    unchanged inside the shape's window (same proj_prob = max(-d·n * area,
+  //    0), same categorical_sample, same sample_triangle, same tri_to_poly
+  //    lookup — the only difference is that tri_id / tri_to_poly indices are
+  //    ABSOLUTE positions in the flattened pool buffer, which UploadCrystalPool
+  //    already baked into tri_to_poly's values).
   float proj_prob[kMaxTriPerKernel];
-  uint n_tri = min(gp.tri_count, kMaxTriPerKernel);
+  uint n_tri = min(tri_cnt, kMaxTriPerKernel);
   for (uint t = 0u; t < n_tri; t++) {
-    float dot = d_crystal[0] * tri_norm[t * 3 + 0]
-              + d_crystal[1] * tri_norm[t * 3 + 1]
-              + d_crystal[2] * tri_norm[t * 3 + 2];
-    proj_prob[t] = max(-dot * tri_area[t], 0.0f);
+    uint g = tri_off + t;
+    float dot = d_crystal[0] * tri_norm[g * 3 + 0]
+              + d_crystal[1] * tri_norm[g * 3 + 1]
+              + d_crystal[2] * tri_norm[g * 3 + 2];
+    proj_prob[t] = max(-dot * tri_area[g], 0.0f);
   }
   float u_cat = pcg_uniform(stream);
-  uint tri_id = categorical_sample(proj_prob, n_tri, u_cat);
+  uint local_tri = categorical_sample(proj_prob, n_tri, u_cat);
+  uint tri_id = tri_off + local_tri;
   float p[3];
   sample_triangle(stream, tri_vtx + tri_id * 9u, p);
   ushort to_face = tri_to_poly[tri_id];
@@ -1268,6 +1309,11 @@ kernel void transit_root_kernel(
     // Rebased onto scrum-332: LUT took 14/15/16, so component moved 14/15→17/18.
     device const ulong*  cont_component_in  [[buffer(17)]],
     device ulong*        root_component_out [[buffer(18)]],
+    // K-shape geometry pool (same bindings as gen_root_kernel). Every layer
+    // hop resolves a fresh pool per (layer, ci), so transit picks its shape
+    // independently — no cross-layer carry.
+    device const uint4*  pool_shape_table [[buffer(19)]],
+    device uint2*        root_pool_shape  [[buffer(20)]],
     uint tid [[thread_position_in_grid]])
 {
   if (tid >= gp.num_rays || gp.tri_count == 0u) {
@@ -1301,17 +1347,38 @@ kernel void transit_root_kernel(
   float d_crystal[3];
   apply_inverse_mat9(mat9, d_world, d_crystal);
 
+  // 2.5. K-shape pool: pick this ray's shape. Same seed-domain-isolated PCG
+  // draw pattern as gen_root_kernel — mixed_seed here already carries the
+  // transit_seed XOR (kTransitNonce ^ per-(layer, ci) nonce), so XOR-ing
+  // kGeomShapeStreamNonce on top keeps this draw independent from the
+  // orientation stream both across layers and within the same tid. P_ci == 1
+  // collapses to the historical single-shape behavior bit-for-bit (unchanged
+  // for parity when the K knob is unset).
+  PcgStream shape_stream = BuildGeomShapeStream(mixed_seed, global_idx);
+  float u_shape = pcg_uniform(shape_stream);
+  uint pool_slot = min(uint(u_shape * float(gp.pool_shape_count)),
+                       gp.pool_shape_count - 1u);
+  uint4 shape_info = pool_shape_table[pool_slot];
+  uint poly_off = shape_info.x;
+  uint tri_off  = shape_info.z;
+  uint tri_cnt  = shape_info.w;
+  root_pool_shape[tid] = uint2(poly_off, shape_info.y);
+
   // 3. Triangle area×facing weighted pick → uniform point on the chosen tri.
+  //    Restricted to the picked shape's window in the flattened pool buffer,
+  //    identical to gen_root_kernel §3.
   float proj_prob[kMaxTriPerKernel];
-  uint n_tri = min(gp.tri_count, kMaxTriPerKernel);
+  uint n_tri = min(tri_cnt, kMaxTriPerKernel);
   for (uint t = 0u; t < n_tri; t++) {
-    float dot = d_crystal[0] * tri_norm[t * 3u + 0u]
-              + d_crystal[1] * tri_norm[t * 3u + 1u]
-              + d_crystal[2] * tri_norm[t * 3u + 2u];
-    proj_prob[t] = max(-dot * tri_area[t], 0.0f);
+    uint g = tri_off + t;
+    float dot = d_crystal[0] * tri_norm[g * 3u + 0u]
+              + d_crystal[1] * tri_norm[g * 3u + 1u]
+              + d_crystal[2] * tri_norm[g * 3u + 2u];
+    proj_prob[t] = max(-dot * tri_area[g], 0.0f);
   }
   float u_cat = pcg_uniform(stream);
-  uint tri_id = categorical_sample(proj_prob, n_tri, u_cat);
+  uint local_tri = categorical_sample(proj_prob, n_tri, u_cat);
+  uint tri_id = tri_off + local_tri;
   float p[3];
   sample_triangle(stream, tri_vtx + tri_id * 9u, p);
   ushort to_face = tri_to_poly[tri_id];

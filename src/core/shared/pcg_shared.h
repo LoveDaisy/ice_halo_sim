@@ -157,6 +157,14 @@ struct GenRootKernelParams {
   float roll_mean_rad;
   float roll_std_rad;
   float roll_pad;
+  // K-shape geometry pool size for this per-ci resolve. When P_ci == 1
+  // (LUMICE_GPU_GEOM_CLOCK unset, deterministic crystal params, or host-gen
+  // fallback), every ray picks pool slot 0 and the shape-pick PCG draw
+  // reduces to a single uniform-draw no-op — the historical single-shape
+  // behavior falls out bit-for-bit. P_ci > 1 draws distinct shapes from the
+  // per-ci pool via floor(pcg_uniform(BuildGeomShapeStream(...)) * P_ci).
+  // Appended at struct end so existing fields keep their offsets.
+  uint32_t pool_shape_count;
 };
 
 // --- PCG hash + stream ----------------------------------------------------
