@@ -131,8 +131,10 @@ static_assert(offsetof(ExitStats, w_sum) == 4u, "ExitStats::w_sum offset drift")
 struct KernelParams {
   // scrum-268.8 (DR-3): per-batch n_idx + cie_x/y/z removed. trace_layer
   // kernel reads per-ray optics from the wl_pool[wl_idx] buffer instead.
+  // K-shape pool: the former per-batch `poly_cnt` scalar is retired — with a
+  // per-ray shape pick, poly_cnt is per-ray and travels through
+  // `r_pool_shape[tid]` (buffer 16) instead. MSL struct MUST drop it too.
   uint32_t max_hits;
-  uint32_t poly_cnt;
   uint32_t num_rays;
   uint32_t img_w;
   uint32_t img_h;
@@ -210,19 +212,17 @@ struct KernelParams {
   // the same name in `KernelParams`.
   uint32_t and_term_counts_base_offset;
 };
-// sizeof(ProjParams) == 76 (6 ints + 4 floats + float[9]); the 15 leading
-// 4-byte KernelParams scalars add 60, + proj 76 + capture_ray_mask 4 → 140
-// pre-358.1. task-358.1 Step 1+2 adds 4 more 4-byte fields (color has/offset/
-// bits/stride) → 156. Step 4 adds color_class_count (4, at offset 156) +
-// color_class_bits[16] (128, at 160, naturally 8-aligned) +
-// color_class_combine[16] (16, at 288) → 304. 304 % 8 = 0 → no trailing pad.
-// task-358.3 renamed capture_component → capture_ray_mask (same 4B slot, no
-// layout change; the 304 assert below is unaffected).
+// sizeof(ProjParams) == 76 (6 ints + 4 floats + float[9]). K-shape pool step:
+// per-batch `poly_cnt` removed — now per-ray via `r_pool_shape[tid]`. The
+// 14 leading 4-byte scalars = 56 → proj at offset 56 (16-block aligned) →
+// ends at 132. Five 4-byte fields (capture_ray_mask + 4 color-region knobs) +
+// color_class_count = 24 → offset 156, which is NOT 8-aligned; the compiler
+// inserts a 4-byte pad so color_class_bits[16] (uint64) lands at offset 160.
+// bits (128) at 160-288, combine[16] (16) at 288-304, and_term_counts_base_
+// offset (4) at 304-308, trailing pad to alignment 8 → 312.
+// Net: dropping poly_cnt moved the compiler pad from "trailing 4B" to
+// "internal 4B before color_class_bits" — total sizeof stays 312 exactly.
 static_assert(sizeof(lm_proj::ProjParams) == 76u, "ProjParams layout drift — check projection_shared.h");
-// task-device-flat-and-terms: appends a single uint32_t field
-// `and_term_counts_base_offset` (offset 304 → 308 bytes) but the struct's
-// alignment is 8 (uint64_t member `color_class_bits`), so the tail is rounded
-// up to 312.
 static_assert(sizeof(KernelParams) == 312u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 
@@ -2044,6 +2044,22 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
     wl_idx_ptr[i] = wl_idx;
     w_ptr[i] = wl_pool_host_[wl_idx].spd_weight;
   }
+  // K-shape pool: host-gen fallback ran InitRayFirstMs against `current_crystal`
+  // (== pool_crystals_.front() by construction), so every ray belongs to pool
+  // slot 0 whose slice covers the whole flattened buffer. trace_layer_kernel
+  // reads r_pool_shape[tid] unconditionally on every ray, so this MUST be
+  // populated even on the host-gen path (dropping it collapses the ray-polygon
+  // intersection loop to zero iterations → immediate exit → parity failure).
+  assert(!pool_shape_table_h_.empty() &&
+         "GenerateFirstLayerRootsForCi host-gen: pool_shape_table_h_ empty — "
+         "ResolveLayerCrystalForCi not called?");
+  const uint32_t shape0_poly_off = pool_shape_table_h_[0][0];
+  const uint32_t shape0_poly_cnt = pool_shape_table_h_[0][1];
+  auto* pool_shape_ptr = static_cast<uint32_t*>([root_pool_shape_buf_ contents]);
+  for (size_t i = 0; i < n; i++) {
+    pool_shape_ptr[i * 2 + 0] = shape0_poly_off;
+    pool_shape_ptr[i * 2 + 1] = shape0_poly_cnt;
+  }
   // Accumulate the host-gen count too so a future device-gen-eligible call
   // within the same session keeps gen_ray_base globally monotone.
   root_ray_count += n;
@@ -2113,6 +2129,18 @@ size_t MetalTraceBackend::Impl::InjectHostRoots(const HostRayBatch& host) {
   }
   for (size_t i = 0; i < n; i++) {
     wl_idx_ptr[i] = wl_idx_batch;
+  }
+  // K-shape pool: golden-ray injection carries a single crystal (host.crystal),
+  // so every ray maps to pool slot 0 whose slice covers the whole flattened
+  // buffer. trace_layer_kernel reads r_pool_shape[tid] on every ray.
+  assert(!pool_shape_table_h_.empty() &&
+         "InjectHostRoots: pool_shape_table_h_ empty — ResolveLayerCrystalForCi not called?");
+  const uint32_t shape0_poly_off = pool_shape_table_h_[0][0];
+  const uint32_t shape0_poly_cnt = pool_shape_table_h_[0][1];
+  auto* pool_shape_ptr = static_cast<uint32_t*>([root_pool_shape_buf_ contents]);
+  for (size_t i = 0; i < n; i++) {
+    pool_shape_ptr[i * 2 + 0] = shape0_poly_off;
+    pool_shape_ptr[i * 2 + 1] = shape0_poly_cnt;
   }
   return n;
 }
@@ -2394,7 +2422,10 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   // lookup superseded). current_n_idx + cie_* impl state survive for the
   // host-side parity audit only and are no longer wired into KernelParams.
   params.max_hits = static_cast<uint32_t>(spec.scene->max_hits_);
-  params.poly_cnt = static_cast<uint32_t>(current_crystal.PolygonFaceCount());
+  // poly_cnt was a per-batch scalar assuming one crystal per dispatch; the
+  // K-shape pool made that per-ray, so the trace kernel now reads
+  // (poly_off, poly_cnt) from `r_pool_shape[tid]` (buffer 16). The struct
+  // field itself is gone (see KernelParams above).
   params.num_rays = static_cast<uint32_t>(num_rays);
   params.img_w    = static_cast<uint32_t>(width);
   params.img_h    = static_cast<uint32_t>(height);
@@ -2542,9 +2573,12 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   [enc setBuffer:counter_buf    offset:0 atIndex:13];
   [enc setBuffer:rec_sink_buf   offset:0 atIndex:14];
   [enc setBuffer:exit_stats_buf_ offset:0 atIndex:15];
-  // buffer(16) freed by Step 1's exit_stats merge; Step 4 will bind
-  // `r_pool_shape` here (per-ray pool-shape offset carrier for
-  // trace_layer_kernel).
+  // K-shape pool per-ray shape carrier: the preceding gen_root_kernel
+  // (first_ms) or transit_root_kernel (later layers) wrote
+  // {poly_off, poly_cnt} for each ray's picked shape; trace_layer_kernel
+  // reads it here at slot 16 to drive its ray-polygon loop over the
+  // ray-specific polygon slice.
+  [enc setBuffer:root_pool_shape_buf_ offset:0 atIndex:16];
   [enc setBuffer:root_rot_buf   offset:0 atIndex:17];
   // S1 device-fused: slot 18 = landed_weight scalar (previously exit_ray_d).
   // Slots 19-23 (exit_ray_w/slot/crystal_id/face_seq_len/data) and 28

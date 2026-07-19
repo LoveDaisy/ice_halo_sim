@@ -441,8 +441,10 @@ struct KernelParams {
   // scrum-268.8 (DR-3): per-batch n_idx / cie_x/y/z removed. trace kernel now
   // reads per-ray optics from wl_pool[wl_idx] (see WlEntry above + buffer
   // bindings in DispatchLayer).
+  // K-shape pool: per-batch `poly_cnt` retired — the ray-polygon loop reads
+  // its (poly_off, poly_cnt) from `r_pool_shape[tid]` at buffer(16). Host
+  // struct MUST drop the field too or sizeof drifts.
   uint  max_hits;
-  uint  poly_cnt;
   uint  num_rays;
   uint  img_w;
   uint  img_h;
@@ -553,9 +555,14 @@ kernel void trace_layer_kernel(
     device const uint*     root_wl_idx   [[buffer(12)]],
     device atomic_uint*    counter  [[buffer(13)]],
     device float*          rec_sink [[buffer(14)]],
-    // Merged {count, w_sum} atomics (see `struct ExitStats` above); buffer(16)
-    // reserved for the K-shape pool's per-ray pool-shape offset carrier.
+    // Merged {count, w_sum} atomics (see `struct ExitStats` above).
     device ExitStats*      exit_stats [[buffer(15)]],
+    // K-shape geometry pool: per-ray {poly_off, poly_cnt} written by the
+    // preceding gen_root / transit_root pass. The ray's polygon slice in
+    // the shared poly_n / poly_d / centroid buffers is
+    // [poly_off, poly_off + poly_cnt). At P_ci == 1 this reduces to
+    // (0, full_poly_cnt) — the historical single-shape layout.
+    device const uint2*    r_pool_shape [[buffer(16)]],
     device const float*    root_rot [[buffer(17)]],
     // S1 device-fused: slot 18 is now the per-session landed-weight scalar
     // (total weight of in-bounds filter-pass emitted rays, used for
@@ -649,7 +656,12 @@ kernel void trace_layer_kernel(
   const float   cmf_x  = wle.cmf_x;
   const float   cmf_y  = wle.cmf_y;
   const float   cmf_z  = wle.cmf_z;
-  const uint  poly_cnt = prm.poly_cnt;
+  // K-shape pool: this ray's polygon slice in the flattened poly_* buffers.
+  // At P_ci == 1 shape == (0, full_poly_cnt) — historical layout preserved.
+  const uint2 shape          = r_pool_shape[tid];
+  const uint  shape_poly_off = shape.x;
+  const uint  shape_poly_cnt = shape.y;
+  const uint  shape_poly_end = shape_poly_off + shape_poly_cnt;
 
   const int   iw_i      = int(prm.img_w);
   const int   ih_i      = int(prm.img_h);
@@ -726,9 +738,15 @@ kernel void trace_layer_kernel(
       // threshold (see below) rather than an explicit fi==to_face skip; this
       // is equivalent to CUDA's skip on convex crystals (see traversal_shared.h
       // header for the equivalence condition and non-convex caveat).
+      //
+      // K-shape pool: walk THIS ray's polygon slice only
+      // ([shape_poly_off, shape_poly_end)) inside the shared poly_*
+      // buffers. `far_face` still records the ABSOLUTE polygon index (the
+      // loop variable `fi`), so cont_face → next-hit's to_face stays a
+      // valid direct index into poly_n / poly_d.
       float t_far = 1e30f;
       int   far_face = -1;
-      for (uint fi = 0u; fi < poly_cnt; fi++) {
+      for (uint fi = shape_poly_off; fi < shape_poly_end; fi++) {
         float fnx = poly_n[fi * 3u + 0u];
         float fny = poly_n[fi * 3u + 1u];
         float fnz = poly_n[fi * 3u + 2u];
