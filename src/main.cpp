@@ -153,6 +153,14 @@ void PrintColorClassSignal(LUMICE_Server* server, const std::filesystem::path& c
 // steal from trace workers). See task-fix-throughput-bench-honesty.
 constexpr auto kBenchmarkPollInterval = std::chrono::milliseconds(5);
 constexpr int kBenchmarkSingleRays = 2'000'000;
+// GPU-route warm-up pass ray count: sized to be the smallest value that still
+// reliably touches every one-time init path (CUDA context / Metal PSO compile /
+// first device dispatch). Context/PSO init cost is ray-count-independent — it
+// fires on the first GPU call, not on ray N — so the choice is bounded below
+// only by "enough rays for the pipeline to actually reach a GPU dispatch under
+// the normal drain semantics". 100k is well above the ~64k-batch drain
+// granularity of every current backend and keeps the added warm-up wall-time
+// short so we do not push `test_benchmark_infinite_no_hang.py`'s 30s ceiling.
 constexpr int kBenchmarkGpuWarmupRays = 100'000;
 // Drain-count-driven measurement (task-gpu-bench-drain-aligned-rate): when the
 // bench config asks for scene.ray_num="infinite", RunBenchmarkPass measures the
@@ -169,15 +177,6 @@ constexpr int kBenchmarkGpuWarmupRays = 100'000;
 // it ~2x run-to-run, CoV 8-28%) and NO N stabilizes it — Mac Metal is treated
 // as approximate (phase-1), not canonical. See doc/performance-testing.md.
 constexpr int kBenchmarkDrainWindows = 10;
-
-// GPU-route warm-up pass ray count: sized to be the smallest value that still
-// reliably touches every one-time init path (CUDA context / Metal PSO compile /
-// first device dispatch). Context/PSO init cost is ray-count-independent — it
-// fires on the first GPU call, not on ray N — so the choice is bounded below
-// only by "enough rays for the pipeline to actually reach a GPU dispatch under
-// the normal drain semantics". 100k is well above the ~64k-batch drain
-// granularity of every current backend and keeps the added warm-up wall-time
-// short so we do not push `test_benchmark_infinite_no_hang.py`'s 30s ceiling.
 
 void PrintUsage(const char* prog_name) {
   std::cout << "Usage: " << prog_name << " -f <config_file> [options]\n"
