@@ -524,8 +524,9 @@ class TraceBackend {
   //     LUMICE_GPU_GEOM_CLOCK=0 this collapses to Σ layers Σ ci 1 = the
   //     cross-layer instance count. With K>0 it grows toward ~ray_num/K and
   //     converges on the legacy CPU meaning as K → 1.
-  //   * CUDA: same K-shape-pool semantic as Metal (both GPU backends share the
-  //     shape-pool infrastructure; see the pool build in each backend).
+  //   * CUDA: pool-shape semantic NOT yet landed — CUDA backend still returns
+  //     the legacy per-batch Crystal-INSTANCE count (mirrors CPU meaning until
+  //     the CUDA-side K-shape pool is delivered as a follow-up).
   // The ONLY consumer is the CLI diagnostic line (main.cpp `Stats: ...
   // crystals=N`); GUI does not display it and no internal logic depends on it,
   // so a residual factor-of-K gap between CPU and GPU at intermediate K values

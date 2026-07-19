@@ -594,6 +594,146 @@ TEST(MetalTraceBackend, KShapePool_KEnabledSessionRunsAndProducesOutput_AC2) {
   ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
 }
 
+// AC2 statistical gate: with a stochastic h_ distribution, each K=0 session
+// draws exactly one crystal shape (P_ci=1), so exit_w_sum varies wildly
+// batch-to-batch as the seed picks different shapes. K=8 draws
+// P_ci = ceil(512/8) = 64 shapes per session, so each batch already averages
+// over 64 shapes — the across-seed variance drops sharply. This test asserts
+// (a) mean-invariance: the two K settings sample the same underlying energy
+// budget, so their means must agree within a few sigma; (b) variance drop:
+// stddev(K=8) < stddev(K=0). Together these constitute the AC2 evidence that
+// K→K* narrows variance without biasing the mean.
+TEST(MetalTraceBackend, KShapePool_KEnabledReducesCrossSeedVariance_AC2) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+
+  auto scene = MakeMetalSceneRandomH(/*max_hits=*/4, /*ms_layers=*/1);
+  auto render = MakeRectangularRender();
+  SessionSpec spec_template;
+  spec_template.scene = &scene;
+  spec_template.render = &render;
+  spec_template.wl = WlParam{ 550.0f, 1.0f };
+
+  auto run_batch = [&](const char* k_val, uint32_t seed) -> float {
+    if (k_val) {
+      ::setenv("LUMICE_GPU_GEOM_CLOCK", k_val, /*overwrite=*/1);
+    } else {
+      ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+    }
+    MetalTraceBackend backend;
+    SessionSpec spec = spec_template;
+    spec.seed = seed;
+    backend.BeginSession(spec);
+    HostRayBatch host;
+    host.count = 512;
+    host.crystal = nullptr;
+    host.refractive_index = 0.0f;
+    auto handle = backend.TraceLayer(RootRaySource::FromHost(host));
+    float w_sum = 0.0f;
+    if (handle) {
+      w_sum = handle->GetLayerStats().exit_w_sum;
+    }
+    backend.EndSession();
+    return w_sum;
+  };
+
+  constexpr size_t kNumSeeds = 12u;
+  std::vector<float> ws_k0;
+  std::vector<float> ws_k8;
+  ws_k0.reserve(kNumSeeds);
+  ws_k8.reserve(kNumSeeds);
+  for (uint32_t s = 1u; s <= kNumSeeds; ++s) {
+    ws_k0.push_back(run_batch(nullptr, s));
+    ws_k8.push_back(run_batch("8", s));
+  }
+
+  auto stats = [](const std::vector<float>& xs) {
+    double sum = 0.0;
+    for (float v : xs)
+      sum += v;
+    double mean = sum / static_cast<double>(xs.size());
+    double sq = 0.0;
+    for (float v : xs) {
+      double d = v - mean;
+      sq += d * d;
+    }
+    double var = sq / static_cast<double>(xs.size());
+    return std::make_pair(mean, std::sqrt(var));
+  };
+  auto [mean_k0, sd_k0] = stats(ws_k0);
+  auto [mean_k8, sd_k8] = stats(ws_k8);
+
+  // Mean invariance: K only redistributes shape draws within a batch, so the
+  // per-batch exit_w_sum expectation is invariant in K. With 12 seeds, the
+  // standard error of each mean is sd/sqrt(12); compare the two means by the
+  // pooled standard error of their difference (~sqrt(sd_k0^2 + sd_k8^2)/sqrt(12))
+  // against a generous 3σ bound to allow for finite-sample noise.
+  double pooled_se = std::sqrt(sd_k0 * sd_k0 + sd_k8 * sd_k8) / std::sqrt(static_cast<double>(kNumSeeds));
+  double mean_gap = std::abs(mean_k0 - mean_k8);
+  EXPECT_LT(mean_gap, 3.0 * pooled_se) << "AC2 mean invariance: |mean(K=0)-mean(K=8)| = " << mean_gap
+                                       << " exceeds 3× pooled SE = " << (3.0 * pooled_se) << " (mean_k0=" << mean_k0
+                                       << ", mean_k8=" << mean_k8 << ", sd_k0=" << sd_k0 << ", sd_k8=" << sd_k8 << ")";
+
+  // Variance drop: K=8 averages 64 shapes per batch vs K=0's one shape per
+  // batch, so cross-seed sd_k8 should be markedly lower than sd_k0. A generous
+  // ratio bound (sd_k8 < 0.75 × sd_k0) tolerates finite-sample noise while
+  // still catching a "K knob has no effect" regression. Theoretical expectation
+  // is roughly sqrt(64) ≈ 8× improvement; the loose bound here keeps the test
+  // non-flaky.
+  EXPECT_LT(sd_k8, 0.75 * sd_k0) << "AC2 variance drop: sd(K=8) = " << sd_k8
+                                 << " must be < 0.75 × sd(K=0) = " << (0.75 * sd_k0) << " (mean_k0=" << mean_k0
+                                 << ", mean_k8=" << mean_k8 << ")";
+
+  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+}
+
+// Regression coverage for the "empty batch + K knob enabled + stochastic
+// crystal params" combination. The offending
+// arithmetic (p_ci = ceil(ci_n/K) = 0 when ci_n==0) is already dead-code
+// today — TraceLayer short-circuits at `total_ray_num == 0` (line ~3051) and
+// the per-ci loop has `if (ci_n == 0) { continue; }` from the base commit —
+// but the defensive `ci_n > 0u` guard added around the p_ci formula is
+// defense-in-depth against future removal of either short-circuit. This
+// test locks in the "no crash under K enabled + empty root batch" contract
+// so any regression that removes both guards + reintroduces the arithmetic
+// fault will be caught here without requiring a hand-crafted multi-ci
+// partition that forces one ci to zero.
+TEST(MetalTraceBackend, KShapePool_EmptyBatchWithKEnabledDoesNotCrash_RegressionR2) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+
+  auto scene = MakeMetalSceneRandomH(/*max_hits=*/4, /*ms_layers=*/1);
+  auto render = MakeRectangularRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 7;
+
+  ::setenv("LUMICE_GPU_GEOM_CLOCK", "8", /*overwrite=*/1);
+
+  MetalTraceBackend backend;
+  backend.BeginSession(spec);
+  HostRayBatch host;
+  host.count = 0;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+  auto handle = backend.TraceLayer(RootRaySource::FromHost(host));
+  // TraceLayer early-returns at total_ray_num==0 without entering the ci
+  // loop, so no pool is built and pool_shape_count_this_batch_ stays 0.
+  // The assertion is "we got here without an assert-crash from the p_ci
+  // guard chain firing on the empty path".
+  EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u)
+      << "empty batch with K enabled must return 0 pool shapes (no pools "
+         "built) — non-zero here would mean the empty-batch guard is gone "
+         "and the K-shape path partially ran on a zero-ray batch.";
+  backend.EndSession();
+
+  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+}
+
 }  // namespace
 }  // namespace lumice
 

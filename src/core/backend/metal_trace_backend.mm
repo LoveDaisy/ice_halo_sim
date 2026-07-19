@@ -897,6 +897,18 @@ struct MetalTraceBackend::Impl {
   // the shape they picked; trace_layer_kernel reads it as `r_pool_shape` at
   // slot 16 (freed by the ExitStats merge). Not carried across layers — every
   // (layer, ci) resolves its own pool and every root pass redraws freshly.
+  //
+  // Single buffer (no ping-pong): the (layer, ci) cadence is fully synchronous
+  // — DispatchLayer waits at WaitAndReadbackLayer() at the ci-loop tail before
+  // the next ci's root-gen re-encodes into this same buffer. This is the same
+  // reason `pool_shape_table_buf_` above is single-instance. Contrast with
+  // cont_d_buf_[2] / cont_w_buf_[2] / cont_wl_idx_buf_[2] etc, which ping-pong
+  // because they carry per-ray STATE across MS layer transitions (transit_root
+  // reads the previous layer's slot while writing into the next). r_pool_shape
+  // holds a fresh per-root-pass draw with no cross-layer read dependency, so
+  // the ping-pong ping-pong buys nothing. If future work introduces cross-ci
+  // pipelining that breaks the WaitAndReadbackLayer sync boundary, this needs
+  // to become cont_pool_shape_buf_[2] (mirror the pattern above).
   id<MTLBuffer> root_pool_shape_buf_   = nil;  // n × uint2 = n × 8 bytes
   id<MTLBuffer> root_component_buf_    = nil;
   id<MTLBuffer> cont_component_buf_[2] = { nil, nil };
@@ -1061,6 +1073,10 @@ struct MetalTraceBackend::Impl {
   // needing a second offset addition on the hot path. P_ci == 1 collapses to
   // poly_off/tri_off == 0 and reproduces the historical layout bit-for-bit.
   void UploadCrystalPool(const std::vector<Crystal>& pool);
+  // Largest TotalTriangles() across all pool_crystals_ shapes (0 if pool is empty).
+  // Used by gen/transit paths to test the kMaxTriPerKernel=64 bound against every
+  // shape a per-ray pick might land on, not just shape 0.
+  uint32_t PoolMaxTriangleCount() const;
   // 330.2 S3b: lazily allocate the three fixed-size (LatLut::kNodes float) shared
   // LUT buffers (always bound, so they must always exist).
   void EnsureLatLutBuffers();
@@ -1754,6 +1770,14 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
                                                 options:MTLResourceStorageModeShared];
   assert(gate_component_bits_buf_ != nil);
   std::memcpy([gate_component_bits_buf_ contents], color_bit_map.data(), color_bits_count);
+}
+
+uint32_t MetalTraceBackend::Impl::PoolMaxTriangleCount() const {
+  uint32_t max_tri = 0u;
+  for (const auto& c : pool_crystals_) {
+    max_tri = std::max<uint32_t>(max_tri, static_cast<uint32_t>(c.TotalTriangles()));
+  }
+  return max_tri;
 }
 
 void MetalTraceBackend::Impl::UploadCrystalPool(const std::vector<Crystal>& pool) {
@@ -3127,7 +3151,11 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       if (!use_host && !IsDeterministic(setting.crystal_.param_)) {
         std::size_t k =
             env::GpuGeomClock(EffectiveLogger(impl_->logger_), /*default_val=*/0u);
-        if (k > 0u) {
+        // ci_n == 0 (empty partition) still needs a valid pool: ResolveLayerCrystalForCi,
+        // UploadCrystalPool, EnsurePoolShapeTableBuffer, BuildGenRootParams all assert
+        // p_ci/shape_cnt >= 1u. Force p_ci=1 so the empty partition builds a single
+        // placeholder shape (kernel path is skipped downstream via num_rays==0 gating).
+        if (k > 0u && ci_n > 0u) {
           p_ci = (ci_n + k - 1u) / k;
         }
       }
@@ -3192,11 +3220,7 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
           // the pool_crystals_ side data was already built (waste, but P_ci=1
           // is the only strictly-correct fallback and the WARN below flags the
           // situation for tuning).
-          uint32_t pool_max_tri = 0u;
-          for (const auto& c : impl_->pool_crystals_) {
-            pool_max_tri = std::max<uint32_t>(pool_max_tri,
-                                              static_cast<uint32_t>(c.TotalTriangles()));
-          }
+          uint32_t pool_max_tri = impl_->PoolMaxTriangleCount();
           bool device_gen_geom_ok = pool_max_tri <= 64u;
           if (!device_gen_geom_ok && impl_->pool_crystals_.size() > 1u &&
               !impl_->warned_pool_tri_overflow_gen_) {
@@ -3232,11 +3256,7 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
         // K-shape pool: same kMaxTriPerKernel guard as the gen path, but check
         // ALL shapes (transit_root_kernel also picks one per ray). transit has
         // no host fallback route today, so a violating shape drops the ci.
-        uint32_t transit_pool_max_tri = 0u;
-        for (const auto& c : impl_->pool_crystals_) {
-          transit_pool_max_tri = std::max<uint32_t>(transit_pool_max_tri,
-                                                   static_cast<uint32_t>(c.TotalTriangles()));
-        }
+        uint32_t transit_pool_max_tri = impl_->PoolMaxTriangleCount();
         if (transit_pool_max_tri > 64u) {
           ILOG_ERROR(EffectiveLogger(impl_->logger_),
                      "transit_root_kernel: pool max tri_count={} exceeds kMaxTriPerKernel=64 "
