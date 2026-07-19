@@ -1238,15 +1238,16 @@ __global__ void transit_multi_ms_kernel(
     const float* __restrict__ d_tri_norm,         // 3 × Σ tri_cnt
     const float* __restrict__ d_tri_area,         // Σ tri_cnt
     const uint16_t* __restrict__ d_tri_to_poly,   // Σ tri_cnt (kInvalidId on coplanar miss)
-    // K-shape: per-ci shape table (pre-offset) + per-ray shape carrier output.
-    // See gen_root_kernel above for the semantic contract — this signature
-    // is intentionally identical to gen so the two kernels stay locksteppable.
-    const uint4* __restrict__ d_pool_shape_table,
-    uint2* __restrict__ d_pool_shape_out,
     // 330.2 S6: unified latitude LUT (read only when gp.lat_lut_n > 0).
     const float* __restrict__ d_lat_lut_theta,
     const float* __restrict__ d_lat_lut_cdf,
     const float* __restrict__ d_lat_lut_flip,
+    // K-shape: per-ci shape table (pre-offset) + per-ray shape carrier output.
+    // See gen_root_kernel above for the semantic contract — parameter order
+    // matches gen (K-shape params after the lat_lut trio, before gp) so the
+    // two kernels stay locksteppable when new shared parameters are added.
+    const uint4* __restrict__ d_pool_shape_table,
+    uint2* __restrict__ d_pool_shape_out,
     lm_pcg::GenRootKernelParams gp,
     uint32_t n_rays,
     // [TEST-ONLY] nullptr in production. task-gpu-rng-ray-index-uint64 white-box
@@ -1840,7 +1841,6 @@ struct CudaTraceBackend::Impl {
   // relies on). See doc/gpu-shared-header-and-cross-backend-mirroring for
   // the "镜像语义、简化结构" pattern this instantiates.
   uint2*              d_root_pool_shape_    = nullptr;  // root_cap_ entries
-  uint2*              d_cont_pool_shape_[2] = {nullptr, nullptr};  // cont_cap_ each (ping-pong)
 
   // --- Continuation ring (296.4 + multi-CI 全量) ---------------------------
   // PING-PONG (2 slots), mirroring Metal cont_d/cont_w[slot]. Multi-CI moved
@@ -2278,7 +2278,6 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
       cudaFree(d_cont_w_[s]);      d_cont_w_[s] = nullptr;
       cudaFree(d_cont_wl_idx_[s]); d_cont_wl_idx_[s] = nullptr;
       cudaFree(d_cont_component_[s]); d_cont_component_[s] = nullptr;  // task-331.6
-      cudaFree(d_cont_pool_shape_[s]); d_cont_pool_shape_[s] = nullptr;  // K-shape pool
       cudaFree(d_cont_count_[s]);  d_cont_count_[s] = nullptr;
     }
     cudaFree(d_exit_);         d_exit_ = nullptr;
@@ -2746,7 +2745,6 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
     cudaFree(d_cont_w_[s]);      d_cont_w_[s] = nullptr;
     cudaFree(d_cont_wl_idx_[s]); d_cont_wl_idx_[s] = nullptr;
     cudaFree(d_cont_component_[s]); d_cont_component_[s] = nullptr;  // task-331.6
-    cudaFree(d_cont_pool_shape_[s]); d_cont_pool_shape_[s] = nullptr;  // K-shape pool
     cudaFree(d_cont_count_[s]);  d_cont_count_[s] = nullptr;
   }
   cudaFreeHost(pinned_dirs_);     pinned_dirs_ = nullptr;
@@ -2804,10 +2802,6 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
     ck(cudaMalloc(&d_cont_wl_idx_[s], cont_cap0 * sizeof(uint32_t)),        "cudaMalloc d_cont_wl_idx");
     // task-331.6: per-ray component mask for continuation rays (sibling of wl_idx).
     ck(cudaMalloc(&d_cont_component_[s], cont_cap0 * sizeof(unsigned long long)), "cudaMalloc d_cont_component");
-    // K-shape pool: per-ray shape carrier on the continuation ring (mirror the
-    // wl_idx sibling pattern — written by trace_single_ms_kernel on ms_mode==1
-    // and read by the next layer's trace kernel via ping-pong).
-    ck(cudaMalloc(&d_cont_pool_shape_[s], cont_cap0 * sizeof(uint2)),        "cudaMalloc d_cont_pool_shape");
     ck(cudaMalloc(&d_cont_count_[s],  sizeof(uint32_t)),                    "cudaMalloc d_cont_count");
   }
 
@@ -2899,15 +2893,11 @@ void CudaTraceBackend::Impl::EnsureContCapacity(size_t n_in, int out_slot) {
     cudaFree(d_cont_w_[out_slot]);      d_cont_w_[out_slot] = nullptr;
     cudaFree(d_cont_wl_idx_[out_slot]); d_cont_wl_idx_[out_slot] = nullptr;
     cudaFree(d_cont_component_[out_slot]); d_cont_component_[out_slot] = nullptr;  // task-331.6
-    cudaFree(d_cont_pool_shape_[out_slot]); d_cont_pool_shape_[out_slot] = nullptr;  // K-shape pool
     ck(cudaMalloc(&d_cont_d_[out_slot],      3 * need * sizeof(float)),    "cudaMalloc d_cont_d (grow)");
     ck(cudaMalloc(&d_cont_w_[out_slot],      need * sizeof(float)),        "cudaMalloc d_cont_w (grow)");
     ck(cudaMalloc(&d_cont_wl_idx_[out_slot], need * sizeof(uint32_t)),     "cudaMalloc d_cont_wl_idx (grow)");
     // task-331.6: grow the continuation component mask in lockstep.
     ck(cudaMalloc(&d_cont_component_[out_slot], need * sizeof(unsigned long long)), "cudaMalloc d_cont_component (grow)");
-    // K-shape pool: grow per-ray shape carrier in lockstep with the rest of the
-    // continuation ring — trace_single_ms_kernel reads it out on the next layer.
-    ck(cudaMalloc(&d_cont_pool_shape_[out_slot], need * sizeof(uint2)), "cudaMalloc d_cont_pool_shape (grow)");
     cont_cap_[out_slot] = need;
   }
 }
@@ -4082,11 +4072,12 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
           impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
           impl_->d_rot_c2w_, impl_->d_root_wl_idx_,
           geom_tri_vtx, geom_tri_norm, geom_tri_area, geom_tri_to_poly,
+          impl_->d_lat_lut_theta_, impl_->d_lat_lut_cdf_, impl_->d_lat_lut_flip_,
           // K-shape: shape table (pre-offset to this ci) + per-ray shape
           // carrier output. Written into d_root_pool_shape_ so trace kernel
-          // reads it just like d_root_wl_idx_.
+          // reads it just like d_root_wl_idx_. Position matches gen's kernel
+          // signature (after lat_lut trio, before gp) — see kernel declaration.
           ci_pool_shape_table, impl_->d_root_pool_shape_,
-          impl_->d_lat_lut_theta_, impl_->d_lat_lut_cdf_, impl_->d_lat_lut_flip_,
           gp, cin, transit_probe_arg,
           static_cast<uint32_t>(impl_->probe_ci_start_ + probe_win_off),
           // task-331.6: carry the component mask cont[in_slot] slice → root.
