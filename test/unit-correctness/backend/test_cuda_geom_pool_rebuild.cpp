@@ -44,6 +44,7 @@ namespace {
 
 using cuda_test::MakePrismScene;
 using cuda_test::MakeRenderConfig;
+using cuda_test::MakeStochasticPrismScene;
 
 bool ShouldSkipCudaTests() {
   return !CudaDeviceAvailable();
@@ -54,27 +55,6 @@ bool ShouldSkipCudaTests() {
 // pool.
 SceneConfig MakeDeterministicPrismScene(size_t max_hits) {
   return MakePrismScene(max_hits);
-}
-
-// Stochastic prism scene — `h_` and `d_[i]` all set to a uniform distribution.
-// `IsDeterministic(param)` returns false, so `SceneHasStochasticGeometry` is
-// true and BeginSession must force per-batch pool rebuild.
-SceneConfig MakeStochasticPrismScene(size_t max_hits, bool gaussian) {
-  SceneConfig scene = MakePrismScene(max_hits);
-  auto& setting = scene.ms_[0].setting_[0];
-  PrismCrystalParam prism = std::get<PrismCrystalParam>(setting.crystal_.param_);
-  const DistributionType t = gaussian ? DistributionType::kGaussian : DistributionType::kUniform;
-  // Height h_: mean 1.0, spread 0.15 — well-conditioned (never degenerate).
-  prism.h_ = Distribution{ t, 1.0f, 0.15f };
-  // Face distances d_[6]: mean 1.0, spread 0.15. Still well-conditioned; we
-  // are exercising the RNG plumbing, not degenerate-face handling — the
-  // negative-`d` / non-manifold rejection at the Crystal factory boundary is
-  // validated separately and is deliberately out of scope for this test.
-  for (auto& d : prism.d_) {
-    d = Distribution{ t, 1.0f, 0.15f };
-  }
-  setting.crystal_.param_ = prism;
-  return scene;
 }
 
 // Drive N BeginSession/EndSession cycles against `scene` and return the

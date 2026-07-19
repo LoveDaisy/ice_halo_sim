@@ -4830,6 +4830,59 @@ size_t CudaTraceBackendTestHooks::ReadbackFirstPoolCrystalGeom(std::vector<float
   return n;
 }
 
+std::vector<std::array<uint32_t, 4>>
+CudaTraceBackendTestHooks::ReadbackPoolShapeTable() const {
+  // D2H copy of the Σ P_ci rows of `d_pool_shape_table_` as
+  // `{poly_off, poly_cnt, tri_off, tri_cnt}` (matches the flat AoS-uint4
+  // upload at BuildGeomPool `:2693-2711`).
+  // Fail-hard fallback: if the pool has not been built this session (K==0
+  // deterministic no-op path or disable_device_gen_ debug fallback), the
+  // slot cap is 0 and we return an empty vector rather than reading garbage.
+  auto& impl = *backend_.impl_;
+  std::vector<std::array<uint32_t, 4>> out;
+  if (impl.d_pool_shape_table_ == nullptr || impl.pool_shape_slot_cap_ == 0u) {
+    return out;
+  }
+  const size_t total_slots = impl.pool_shape_slot_cap_;
+  std::vector<uint32_t> flat(total_slots * 4u);
+  cudaDeviceSynchronize();
+  CheckCuda(cudaMemcpy(flat.data(), impl.d_pool_shape_table_,
+                       total_slots * 4u * sizeof(uint32_t), cudaMemcpyDeviceToHost),
+            "ReadbackPoolShapeTable D2H d_pool_shape_table");
+  out.reserve(total_slots);
+  for (size_t k = 0; k < total_slots; ++k) {
+    out.push_back({ flat[k * 4u + 0u], flat[k * 4u + 1u], flat[k * 4u + 2u], flat[k * 4u + 3u] });
+  }
+  return out;
+}
+
+std::vector<std::pair<uint32_t, uint32_t>>
+CudaTraceBackendTestHooks::ReadbackRootPoolShape(size_t count) const {
+  // D2H copy of the first `count` entries of `d_root_pool_shape_`
+  // (per-ray `(poly_off, poly_cnt)` written by `gen_root_kernel` /
+  // `transit_multi_ms_kernel`; consumed by `trace_single_ms_kernel`).
+  // Fail-hard: clamp count to root_cap_ so an over-large request cannot read
+  // out of bounds — mirrors ReadbackGenDirs D2H-capacity discipline.
+  auto& impl = *backend_.impl_;
+  std::vector<std::pair<uint32_t, uint32_t>> out;
+  if (impl.d_root_pool_shape_ == nullptr || count == 0u || impl.root_cap_ == 0u) {
+    return out;
+  }
+  if (count > impl.root_cap_) {
+    count = impl.root_cap_;
+  }
+  std::vector<uint2> raw(count);
+  cudaDeviceSynchronize();
+  CheckCuda(cudaMemcpy(raw.data(), impl.d_root_pool_shape_, count * sizeof(uint2),
+                       cudaMemcpyDeviceToHost),
+            "ReadbackRootPoolShape D2H d_root_pool_shape");
+  out.reserve(count);
+  for (size_t i = 0; i < count; ++i) {
+    out.emplace_back(raw[i].x, raw[i].y);
+  }
+  return out;
+}
+
 size_t CudaTraceBackendTestHooks::ReadbackGenDirs(std::vector<float>& out, size_t count) {
   auto& impl = *backend_.impl_;
   if (count > impl.root_cap_) {
