@@ -193,6 +193,7 @@ Valuable design/architecture docs live in `doc/` (tracked). Consult the relevant
   - `trace-backend-frame-lifecycle.md` — Metal frame lifecycle (as-built, multi-MS transit via device `transit_root_kernel`, parity harness methodology, §8 DR-3 per-ray wavelength).
   - `gpu-single-engine-implementation.md` — **§0 as-built 接手须知**（scrum-267+268 完成：CLI 9.5×/GUI 2.07×/dispatch 32768/concern #2 解/DR-3 波长/R1 occupancy 640 benign）+ §5 设计推理 + §8 DR-3 决策链 + §9 关键发现；接手 GPU 路线先读 §0。
 - **Perf / testing**: `performance-testing.md`, `windows-remote-testing.md`, `xyz-stats-tool.md`
+  - `geometry-randomization-perf.md` — **几何随机化性能的成本模型 + 前沿图**：真正指标 = equal-error throughput（非 raw）；⚠️「随机比确定性慢 15.7×」是冷 vs 暖 CUDA context-init 测量假象（非 per-batch 几何成本）→ 别建「持久 buffer 消 churn」（打不存在的靶）；真杠杆 = B（per-ray K-shape pool 解耦 K 与 D）+ C（拓扑复用 10.12µs→127ns/prism）到 K\*=64；含「压到极限没有」核对清单 + 测量纪律（暖 context/interleaved/弃 wall_fallback）。优化几何随机化路径前先读。
   - `gpu-remote-cuda-build-testing.md` — **dev49 + win-builder 现成 recipe**（CUDA build + parity/正确性
     验证的两机操作手册：源码同步、docker/BuildTools 工具链、`LUMICE_HAS_CUDA` un-skip 闸、parity battery
     三文件、PS-over-ssh 坑）。**任何触及 `cuda_trace_backend.*` / 三后端共享头 / SimData / simulator 的
