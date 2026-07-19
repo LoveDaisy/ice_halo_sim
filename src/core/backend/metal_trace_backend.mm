@@ -765,6 +765,26 @@ struct MetalTraceBackend::Impl {
   id<MTLBuffer> tri_to_poly_buf_ = nil;  // N_tri × 1 uint16 (kInvalidId on miss)
   size_t        tri_buf_capacity_ = 0;
 
+  // Per-ray K-shape geometry pool (LUMICE_GPU_GEOM_CLOCK). Each per-(layer, ci)
+  // resolve draws `P_ci = ceil(N_ci / K)` distinct crystal shapes from `rng`
+  // and appends them into the flattened poly_*/tri_* buffers above; the
+  // shape-table below records each shape's (poly_off, poly_cnt, tri_off,
+  // tri_cnt) so gen_root / transit_root can pick a shape per ray. When the
+  // knob is unset (K == 0) or the crystal params are deterministic, P_ci
+  // collapses to 1 and this reduces to the historical single-shape upload
+  // (identical rng consumption, identical device data at offset 0).
+  //
+  // Deterministic collapse to 1 short-circuit: MakeCrystal is bit-identical
+  // across repeated calls for deterministic params, so pooling would just
+  // burn allocation + rng-advance without any variance to reduce.
+  std::vector<Crystal>     pool_crystals_;
+  // Row-major layout: 4 × uint32 per shape = {poly_off, poly_cnt, tri_off, tri_cnt}.
+  // Kept host-side so the resolve path can populate the device buffer and any
+  // test-only probe (Step 7) can read it back without extra plumbing.
+  std::vector<std::array<uint32_t, 4>> pool_shape_table_h_;
+  id<MTLBuffer> pool_shape_table_buf_ = nil;  // pool_capacity_ × uint4 (shape offsets)
+  size_t        pool_shape_capacity_  = 0;
+
   // Unified area-measure inverse-CDF latitude LUT (330.2). Three fixed-size
   // (LatLut::kNodes float) shared buffers rebuilt per-ci by UploadLatLut when the
   // orientation distribution routes to kLatPathLutInverseCdf. Metal forbids nil
@@ -992,24 +1012,45 @@ struct MetalTraceBackend::Impl {
   // freshly allocated buffer. Idempotent: no-op when the requested capacity
   // matches the current allocation and shape.
   void EnsureClassLaneBuf(int w, int h);
+  // Poly/tri buffer sizes are the ACCUMULATED totals across every shape in the
+  // K-shape pool being uploaded on this call (sum of per-shape poly_cnt /
+  // tri_cnt). Grow-only: when a subsequent pool needs at most as much, this is
+  // a no-op. Historical semantics (single shape) fall out at P_ci == 1.
   void EnsurePolyBuffers(size_t poly_cnt);
   void EnsureRootBuffers(size_t n);
   void EnsureTriBuffers(size_t tri_cnt);
+  // Grow-only allocation for the K-shape pool's (poly_off, poly_cnt, tri_off,
+  // tri_cnt) table. `shape_cnt` is the total number of distinct crystal shapes
+  // built for this per-ci resolve — 1 when the K knob is unset or the crystal
+  // params are deterministic; ceil(N_ci / K) otherwise.
+  void EnsurePoolShapeTableBuffer(size_t shape_cnt);
   void EnsureContBuffer(int slot);
   void EnsureComponentCaptureBuffers(size_t cap);  // task-331.5 (test-only ring)
   void EnsureRecSink(size_t n);
   // EnsureExitBuffers removed in S1 device-fused (exit records eliminated)
   void EnsureFilterBuffers(const SessionSpec& session_spec);  // scrum-267.1
   void EnsureWlPoolBuffer();  // scrum-268.8 (DR-3) per-ray wavelength pool
-  void UploadCrystal(const Crystal& crystal);
+  // Upload a K-shape pool for the current (layer, ci). Flattens every shape's
+  // poly/tri arrays into the shared poly_*/tri_* buffers; each shape's slice
+  // start + length is recorded into `pool_shape_table_h_` and mirrored into
+  // `pool_shape_table_buf_` (device-visible). `tri_to_poly_buf_` values are
+  // stored in ABSOLUTE (poly_off + local) space so the device kernels compose
+  // "shape_slot → tri_off + local_tri → tri_to_poly[..] → abs poly_idx" without
+  // needing a second offset addition on the hot path. P_ci == 1 collapses to
+  // poly_off/tri_off == 0 and reproduces the historical layout bit-for-bit.
+  void UploadCrystalPool(const std::vector<Crystal>& pool);
   // 330.2 S3b: lazily allocate the three fixed-size (LatLut::kNodes float) shared
   // LUT buffers (always bound, so they must always exist).
   void EnsureLatLutBuffers();
   // 330.2 S3b: rebuild + upload the latitude LUT for the given axis distribution
   // when it routes to kLatPathLutInverseCdf (per-ci cadence; covers gen + transit).
   void UploadLatLut(const AxisDistribution& axis);
+  // `p_ci` is the caller-computed pool size (1 for deterministic params or
+  // when LUMICE_GPU_GEOM_CLOCK is unset; ceil(N_ci / K) otherwise). The
+  // callee draws `p_ci` crystals from `rng` (host-injected path stays a
+  // single-shape passthrough).
   void ResolveLayerCrystalForCi(const ScatteringSetting& setting, bool use_host,
-                                const HostRayBatch& host_batch);
+                                const HostRayBatch& host_batch, size_t p_ci);
   size_t GenerateFirstLayerRootsForCi(const ScatteringSetting& setting,
                                       size_t ci, size_t crystal_ray_num,
                                       bool can_use_device_gen,
@@ -1225,6 +1266,18 @@ void MetalTraceBackend::Impl::EnsureRootBuffers(size_t n) {
   root_component_buf_ = [device newBufferWithLength:n * sizeof(uint64_t)
                                            options:MTLResourceStorageModeShared];
   assert(root_component_buf_ != nil);
+}
+
+void MetalTraceBackend::Impl::EnsurePoolShapeTableBuffer(size_t shape_cnt) {
+  assert(shape_cnt > 0u && "EnsurePoolShapeTableBuffer: shape_cnt == 0");
+  if (shape_cnt <= pool_shape_capacity_) {
+    return;
+  }
+  pool_shape_capacity_ = shape_cnt;
+  pool_shape_table_buf_ =
+      [device newBufferWithLength:shape_cnt * 4u * sizeof(uint32_t)
+                          options:MTLResourceStorageModeShared];
+  assert(pool_shape_table_buf_ != nil);
 }
 
 void MetalTraceBackend::Impl::EnsureTriBuffers(size_t tri_cnt) {
@@ -1676,91 +1729,130 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
   std::memcpy([gate_component_bits_buf_ contents], color_bit_map.data(), color_bits_count);
 }
 
-void MetalTraceBackend::Impl::UploadCrystal(const Crystal& crystal) {
-  size_t poly_cnt = crystal.PolygonFaceCount();
-  EnsurePolyBuffers(poly_cnt);
+void MetalTraceBackend::Impl::UploadCrystalPool(const std::vector<Crystal>& pool) {
+  assert(!pool.empty() && "UploadCrystalPool: empty pool (caller must build at least one shape)");
 
-  std::memcpy([poly_n_buf contents], crystal.GetPolygonFaceNormal(),
-              poly_cnt * 3 * sizeof(float));
-  std::memcpy([poly_d_buf contents], crystal.GetPolygonFaceDist(),
-              poly_cnt * sizeof(float));
+  // First pass: compute per-shape offsets + accumulated buffer sizes. Recorded
+  // into pool_shape_table_h_ so the caller can also read them (test hook +
+  // gen_root/transit_root shape-picker later).
+  pool_shape_table_h_.clear();
+  pool_shape_table_h_.reserve(pool.size());
+  size_t poly_acc = 0, tri_acc = 0;
+  for (const auto& crystal : pool) {
+    size_t poly_cnt = crystal.PolygonFaceCount();
+    size_t tri_cnt  = crystal.TotalTriangles();
+    pool_shape_table_h_.push_back({static_cast<uint32_t>(poly_acc),
+                                   static_cast<uint32_t>(poly_cnt),
+                                   static_cast<uint32_t>(tri_acc),
+                                   static_cast<uint32_t>(tri_cnt)});
+    poly_acc += poly_cnt;
+    tri_acc  += tri_cnt;
+  }
 
-  // Centroid per polygon face (mean of the polygon-triangle vertices) — same
-  // formula as the explore spike (metal_full.mm / metal_ms.mm).
-  //
-  // Depth-of-defense bound check: symmetric to CPU Crystal::GetFn(IdType) at
-  // crystal.cpp:437-441. The root cause of the pyramid+random-face_distance
-  // Metal SIGSEGV was a stride/count mismatch inside BuildPolygonFaceData
-  // (fixed in the same task); after that fix poly_tri[f] is guaranteed to be
-  // a valid triangle index, so this guard is not what makes the code correct.
-  // It exists so any future upstream count/stride drift surfaces as a
-  // detectable "centroid stuck at origin + one WARN per UploadCrystal call"
-  // symptom rather than a wild read into tvtx. EnsurePolyBuffers only grows
-  // centroid_buf, so on shrink we must NOT leave the slot untouched — it would
-  // hold the previous crystal's stale centroid; write zeros explicitly.
-  size_t tri_cnt = crystal.TotalTriangles();
-  const int* poly_tri = crystal.GetPolygonFaceTriId();
-  const float* tvtx   = crystal.GetTriangleVtx();
+  EnsurePolyBuffers(poly_acc);
+  EnsureTriBuffers(tri_acc);
+  EnsurePoolShapeTableBuffer(pool.size());
+
+  auto* poly_n_ptr    = static_cast<float*>([poly_n_buf contents]);
+  auto* poly_d_ptr    = static_cast<float*>([poly_d_buf contents]);
   auto* centroid_ptr  = static_cast<float*>([centroid_buf contents]);
+  auto* tri_vtx_ptr   = static_cast<float*>([tri_vtx_buf_ contents]);
+  auto* tri_norm_ptr  = static_cast<float*>([tri_norm_buf_ contents]);
+  auto* tri_area_ptr  = static_cast<float*>([tri_area_buf_ contents]);
+  auto* tri_to_poly_ptr = static_cast<uint16_t*>([tri_to_poly_buf_ contents]);
+
+  // Second pass: flatten each shape into the shared buffers at its own offset.
+  // Centroid + tri_to_poly follow the same pattern as the historical
+  // single-shape upload, only the write index picks up the pool offset.
+  // Depth-of-defense centroid bound-check + WARN: symmetric to CPU
+  // Crystal::GetFn(IdType) at crystal.cpp:437-441. Root cause of the historical
+  // pyramid+random-face_distance Metal SIGSEGV was a stride/count mismatch
+  // inside BuildPolygonFaceData (fixed there); the WARN + zero-write surfaces
+  // any future upstream drift as a detectable symptom rather than a wild read.
+  constexpr uint16_t kInvalidIdU16 = 0xffffu;
+  constexpr float kFaceCoplanarFloor = 1e-2f;
   bool centroid_bound_warned = false;
-  for (size_t f = 0; f < poly_cnt; f++) {
-    int t = poly_tri[f];
-    if (t < 0 || static_cast<size_t>(t) >= tri_cnt) {
-      centroid_ptr[f * 3 + 0] = 0.0f;
-      centroid_ptr[f * 3 + 1] = 0.0f;
-      centroid_ptr[f * 3 + 2] = 0.0f;
-      if (!centroid_bound_warned) {
-        ILOG_WARN(EffectiveLogger(logger_),
-                  "UploadCrystal: polygon face {} has out-of-range tri_id={} (tri_cnt={}); "
-                  "wrote zero centroid. This is depth-of-defense — root cause should be in "
-                  "BuildPolygonFaceData count/stride invariants.",
-                  f, t, tri_cnt);
-        centroid_bound_warned = true;
+
+  for (size_t s = 0; s < pool.size(); s++) {
+    const auto& crystal = pool[s];
+    const uint32_t poly_off = pool_shape_table_h_[s][0];
+    const uint32_t poly_cnt = pool_shape_table_h_[s][1];
+    const uint32_t tri_off  = pool_shape_table_h_[s][2];
+    const uint32_t tri_cnt  = pool_shape_table_h_[s][3];
+
+    std::memcpy(poly_n_ptr + poly_off * 3, crystal.GetPolygonFaceNormal(),
+                poly_cnt * 3 * sizeof(float));
+    std::memcpy(poly_d_ptr + poly_off, crystal.GetPolygonFaceDist(),
+                poly_cnt * sizeof(float));
+
+    const int* poly_tri = crystal.GetPolygonFaceTriId();
+    const float* tvtx   = crystal.GetTriangleVtx();
+    for (size_t f = 0; f < poly_cnt; f++) {
+      int t = poly_tri[f];
+      if (t < 0 || static_cast<size_t>(t) >= tri_cnt) {
+        centroid_ptr[(poly_off + f) * 3 + 0] = 0.0f;
+        centroid_ptr[(poly_off + f) * 3 + 1] = 0.0f;
+        centroid_ptr[(poly_off + f) * 3 + 2] = 0.0f;
+        if (!centroid_bound_warned) {
+          ILOG_WARN(EffectiveLogger(logger_),
+                    "UploadCrystalPool: shape {} polygon face {} has out-of-range "
+                    "tri_id={} (tri_cnt={}); wrote zero centroid. This is depth-of-defense — "
+                    "root cause should be in BuildPolygonFaceData count/stride invariants.",
+                    s, f, t, tri_cnt);
+          centroid_bound_warned = true;
+        }
+        continue;
       }
-      continue;
+      const float* v = tvtx + static_cast<size_t>(t) * 9;
+      for (int k = 0; k < 3; k++) {
+        centroid_ptr[(poly_off + f) * 3 + k] =
+            (v[0 * 3 + k] + v[1 * 3 + k] + v[2 * 3 + k]) / 3.0f;
+      }
     }
-    const float* v = tvtx + static_cast<size_t>(t) * 9;
-    for (int k = 0; k < 3; k++) {
-      centroid_ptr[f * 3 + k] = (v[0 * 3 + k] + v[1 * 3 + k] + v[2 * 3 + k]) / 3.0f;
+
+    std::memcpy(tri_vtx_ptr + tri_off * 9, crystal.GetTriangleVtx(),
+                tri_cnt * 9 * sizeof(float));
+    std::memcpy(tri_norm_ptr + tri_off * 3, crystal.GetTriangleNormal(),
+                tri_cnt * 3 * sizeof(float));
+    std::memcpy(tri_area_ptr + tri_off, crystal.GetTirangleArea(),
+                tri_cnt * sizeof(float));
+
+    // tri_to_poly stores ABSOLUTE polygon indices (poly_off + local) so that
+    // gen_root/transit_root can compose "shape.tri_off + local_tri →
+    // tri_to_poly[..] → abs poly_idx" with a single offset addition on the
+    // triangle side and none on the polygon side. Mirrors
+    // simulator.cpp::detail::PolygonFaceOfTri (argmax with sanity floor
+    // kFaceCoplanarFloor=1e-2; must match crystal.cpp::BuildPolygonFaceData +
+    // that helper). At P_ci == 1 this becomes 0 + local == local — identical
+    // to the historical single-shape layout.
+    const float* tri_norms_src  = crystal.GetTriangleNormal();
+    const float* poly_norms_src = crystal.GetPolygonFaceNormal();
+    for (size_t t = 0; t < tri_cnt; t++) {
+      const float* tn = tri_norms_src + t * 3;
+      int best_p = -1;
+      float best_dot = -1.0f;
+      for (size_t p = 0; p < poly_cnt; p++) {
+        const float* pn = poly_norms_src + p * 3;
+        float dot = tn[0] * pn[0] + tn[1] * pn[1] + tn[2] * pn[2];
+        if (dot > best_dot) {
+          best_dot = dot;
+          best_p = static_cast<int>(p);
+        }
+      }
+      tri_to_poly_ptr[tri_off + t] =
+          (best_p >= 0 && best_dot >= 1.0f - kFaceCoplanarFloor)
+              ? static_cast<uint16_t>(poly_off + static_cast<uint32_t>(best_p))
+              : kInvalidIdU16;
     }
   }
 
-  // Triangle-level geometry (task-260.2). Uploaded so the device root-gen
-  // kernel can replicate InitRay_p_fid: area×facing-weighted triangle pick +
-  // uniform sample inside the triangle, plus tri→polygon mapping.
-  // tri_to_poly mirrors simulator.cpp::detail::PolygonFaceOfTri: argmax over
-  // polygon-face normals with a sanity floor (kFaceCoplanarFloor=1e-2). A
-  // first-match `dot > 1-1e-3` cannot distinguish adjacent upper-pyramid faces
-  // on extreme-wedge (~≥87.4°) crystals (dot ≈ 0.9994).
-  // NOTE: kFaceCoplanarFloor must match the value in crystal.cpp::BuildPolygonFaceData
-  // and simulator.cpp::detail::PolygonFaceOfTri.
-  EnsureTriBuffers(tri_cnt);
-  std::memcpy([tri_vtx_buf_ contents], crystal.GetTriangleVtx(),
-              tri_cnt * 9 * sizeof(float));
-  std::memcpy([tri_norm_buf_ contents], crystal.GetTriangleNormal(),
-              tri_cnt * 3 * sizeof(float));
-  std::memcpy([tri_area_buf_ contents], crystal.GetTirangleArea(),
-              tri_cnt * sizeof(float));
-  const float* tri_norms_src = crystal.GetTriangleNormal();
-  const float* poly_norms_src = crystal.GetPolygonFaceNormal();
-  auto* tri_to_poly_ptr = static_cast<uint16_t*>([tri_to_poly_buf_ contents]);
-  constexpr uint16_t kInvalidIdU16 = 0xffffu;
-  constexpr float kFaceCoplanarFloor = 1e-2f;
-  for (size_t t = 0; t < tri_cnt; t++) {
-    const float* tn = tri_norms_src + t * 3;
-    int best_p = -1;
-    float best_dot = -1.0f;
-    for (size_t p = 0; p < poly_cnt; p++) {
-      const float* pn = poly_norms_src + p * 3;
-      float dot = tn[0] * pn[0] + tn[1] * pn[1] + tn[2] * pn[2];
-      if (dot > best_dot) {
-        best_dot = dot;
-        best_p = static_cast<int>(p);
-      }
-    }
-    tri_to_poly_ptr[t] = (best_p >= 0 && best_dot >= 1.0f - kFaceCoplanarFloor)
-                             ? static_cast<uint16_t>(best_p)
-                             : kInvalidIdU16;
+  // Populate device pool_shape_table_buf_ (uint4 per shape).
+  auto* table_ptr = static_cast<uint32_t*>([pool_shape_table_buf_ contents]);
+  for (size_t s = 0; s < pool_shape_table_h_.size(); s++) {
+    table_ptr[s * 4 + 0] = pool_shape_table_h_[s][0];
+    table_ptr[s * 4 + 1] = pool_shape_table_h_[s][1];
+    table_ptr[s * 4 + 2] = pool_shape_table_h_[s][2];
+    table_ptr[s * 4 + 3] = pool_shape_table_h_[s][3];
   }
 }
 
@@ -1804,22 +1896,35 @@ void MetalTraceBackend::Impl::UploadLatLut(const AxisDistribution& axis) {
 
 void MetalTraceBackend::Impl::ResolveLayerCrystalForCi(const ScatteringSetting& setting,
                                                         bool use_host,
-                                                        const HostRayBatch& host_batch) {
+                                                        const HostRayBatch& host_batch,
+                                                        size_t p_ci) {
+  assert(p_ci >= 1u && "ResolveLayerCrystalForCi: p_ci must be >= 1");
+  pool_crystals_.clear();
   if (use_host && host_batch.crystal != nullptr) {
-    current_crystal = *host_batch.crystal;
+    // Host-injected path (test-only golden ray hook): pool always collapses to
+    // one shape — the caller supplied a fixed Crystal, and the K knob has no
+    // physical meaning on this branch (no rng draws happen).
+    pool_crystals_.push_back(*host_batch.crystal);
     current_n_idx = host_batch.refractive_index;
   } else {
-    current_crystal = MakeCrystal(rng, setting.crystal_.param_);
+    pool_crystals_.reserve(p_ci);
+    for (size_t s = 0; s < p_ci; s++) {
+      pool_crystals_.push_back(MakeCrystal(rng, setting.crystal_.param_));
+    }
     // scrum-268.8 (DR-3): current_n_idx is dead state now — the trace kernel
     // reads per-ray n from wl_pool[wl_idx], not from this field (KernelParams
     // .n_idx was removed). After Step 9 the illuminant path passes wl=0, so
     // guard the Sellmeier call against the zero sentinel to avoid evaluating
     // GetRefractiveIndex out of its valid range for a value nothing consumes.
+    // Refractive index is a session-scope material property (ice), not a
+    // shape-scope one — every pool shape agrees, so reading from pool[0] is
+    // exact regardless of p_ci.
     current_n_idx =
-        (spec.wl.wl_ > 1.0f) ? current_crystal.GetRefractiveIndex(spec.wl.wl_) : 0.0f;
+        (spec.wl.wl_ > 1.0f) ? pool_crystals_.front().GetRefractiveIndex(spec.wl.wl_) : 0.0f;
   }
+  current_crystal = pool_crystals_.front();
   have_crystal = true;
-  UploadCrystal(current_crystal);
+  UploadCrystalPool(pool_crystals_);
   // 330.2 S3b: rebuild the latitude LUT at the same per-ci cadence — it depends
   // only on the axis distribution and is shared by the gen and transit passes of
   // this ci. EnsureLatLutBuffers (inside) keeps the buffers non-nil for binding.
@@ -2536,6 +2641,12 @@ void MetalTraceBackend::Impl::Reset() {
   proj_params_ = lm_proj::ProjParams{};
   have_crystal = false;
   current_n_idx = 0.0f;
+  // K-shape pool bookkeeping: host-side state clears every session so a stale
+  // pool cannot bleed into a re-used backend instance; the device buffer is
+  // grow-only (`pool_shape_capacity_`) and its contents are re-populated on
+  // every per-ci resolve, so it deliberately persists.
+  pool_crystals_.clear();
+  pool_shape_table_h_.clear();
   out_cap = 0;
   max_produced = 0;
   cont_counts[0] = cont_counts[1] = 0;
@@ -2916,8 +3027,23 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       }
       const auto& setting = ms_info.setting_[ci];
       bool use_host = first_ms && ci == 0 && roots.host.crystal != nullptr;
+      // Compute this ci's K-shape pool size. When the K knob is unset (K==0),
+      // the crystal params are deterministic, or we're on the host-injected
+      // ray path, P_ci collapses to 1 and everything downstream reproduces
+      // today's single-shape behavior bit-for-bit (identical rng consumption,
+      // identical device data at offset 0). Otherwise draw ceil(N_ci / K)
+      // distinct shapes so `gen_root_kernel` / `transit_root_kernel` (later
+      // steps) can pick per ray from a P_ci-wide pool.
+      size_t p_ci = 1u;
+      if (!use_host && !IsDeterministic(setting.crystal_.param_)) {
+        std::size_t k =
+            env::GpuGeomClock(EffectiveLogger(impl_->logger_), /*default_val=*/0u);
+        if (k > 0u) {
+          p_ci = (ci_n + k - 1u) / k;
+        }
+      }
       impl_->ResolveLayerCrystalForCi(setting, use_host,
-                                       first_ms ? roots.host : HostRayBatch{});
+                                       first_ms ? roots.host : HostRayBatch{}, p_ci);
 
       // scrum-258.3 Step 3 + scrum-267 Task 3 cleanup: final-layer only.
       // Non-final layers no longer need per-ci crystal/axis/filter state —
