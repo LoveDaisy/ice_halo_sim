@@ -511,6 +511,17 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
           std::cerr << "Warning: [BENCHMARK] mode=" << mode
                     << " rate_basis=wall_fallback — rays_per_sec includes one-time setup/context-init "
                     << "and is not a steady trace rate; do not use for perf comparison.\n";
+        } else if (std::string_view(rate_basis) == "active_short") {
+          // active_short means the run's rays all landed in the single poll that first
+          // observed cur_rays > 0 (r_end == rays_at_active_start): active_sec is measuring
+          // IDLE-detection latency after that poll, not trace duration, so rays_per_sec can
+          // be off by orders of magnitude in either direction (measured on CUDA: a 10M-ray
+          // config reported 1.97 billion rays/s this way). Symmetric to the wall_fallback
+          // warning above — same remedy (a larger ray_num spanning multiple poll intervals).
+          std::cerr << "Warning: [BENCHMARK] mode=" << mode
+                    << " rate_basis=active_short — the run completed within a single poll "
+                    << "interval; active_sec is not a real trace duration and rays_per_sec "
+                    << "can be wildly wrong; do not use for perf comparison.\n";
         }
         std::cout << "[BENCHMARK] " << result.dump() << "\n";
       }

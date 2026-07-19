@@ -130,19 +130,19 @@ discipline:
 3. **`ray_num` must be large enough that trace itself dominates any residual fixed overhead.**
    The GPU throughput cross-check in §B already puts this at ≥ 200M rays / ~7s for a stable
    number; legacy CPU numbers on short configs likewise inherit this lower bound.
-4. **Only trust `rate_basis` in `{steady, active_short, drain_aligned}`.** A `wall_fallback` or
-   `too_few_drains` result is by definition not a steady trace rate. `--benchmark` now emits
-   an explicit stderr warning when the reported pass falls through to `wall_fallback`
-   (`src/main.cpp` `RunBenchmarkPass`, next to the `[BENCHMARK]` JSON emit) so this cannot be
-   missed silently, but the discipline is the same: discard such numbers, do not use them for
-   perf comparison. `active_short` itself is only meaningful together with rule 3 above — at a
-   `ray_num` so small the whole trace fits inside one poll tick, `active_short`'s rate is a
-   division by a nearly-arbitrary sub-tick duration and can be off by orders of magnitude
-   (measured on CUDA/RTX4060Ti: a 10M-ray config reported `active_short` at 1.97 billion
-   rays/s, ~30x the same hardware's real steady rate) while still not being `wall_fallback`, so
-   it carries no built-in warning. There is no cheap way to distinguish a trustworthy
-   `active_short` from this failure mode after the fact — the only fix is rule 3's ray_num
-   floor, which is large enough that the run reliably lands on `steady` instead.
+4. **Only trust `rate_basis` in `{steady, drain_aligned}`.** `wall_fallback`, `too_few_drains`,
+   and `active_short` are all, by definition, not a steady trace rate — discard any of them,
+   do not use them for perf comparison. `--benchmark` emits an explicit stderr warning when
+   the reported pass falls through to `wall_fallback` or `active_short` (`src/main.cpp`
+   `RunBenchmarkPass`, next to the `[BENCHMARK]` JSON emit) so neither can be missed silently.
+   `active_short` fires when the whole run's rays land inside the single poll that first
+   observes `sim_ray_num > 0` — at that point `active_sec` is measuring IDLE-detection
+   latency after that poll, not real trace duration, and the resulting rate can be off by
+   orders of magnitude in either direction (measured on CUDA/RTX4060Ti: a 10M-ray config
+   reported `active_short` at 1.97 billion rays/s, ~30x the same hardware's real `steady`
+   rate). There is no cheap way to recover a trustworthy number from an `active_short` sample
+   after the fact — the fix is rule 3's `ray_num` floor, large enough that the run reliably
+   spans multiple poll intervals and lands on `steady` instead.
 
 ## 1. CLI Pipeline Benchmark
 
