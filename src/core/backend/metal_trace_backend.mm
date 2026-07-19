@@ -107,6 +107,17 @@ constexpr size_t kMaxColorClassesDevice = 16;
 // but keeping the nonces identical keeps the two GPU backends in lock-step.
 constexpr uint32_t kMetalShuffleNonce = 0xB17CA3D9u;
 
+// Device-side kInvalidId sentinel for the widened 32-bit tri_to_poly /
+// root_tf buffers. Mirrors MSL's `constant uint kInvalidId = 0xffffffffu`
+// in src/core/metal/lumice_trace.metal — the host-side single source of truth
+// so UploadCrystalPool, GenerateFirstLayerRootsForCi, and InjectHostRoots
+// reference it by name instead of open-coding the literal (avoids the
+// "same sentinel drifted across three write sites" failure mode). Widened
+// from the former uint16 0xffff because absolute polygon indices accumulated
+// across a K-shape pool (poly_off + local_p) can exceed 65535 at production
+// ci_n / K combinations — see PolygonFaceOfTri usage below.
+constexpr uint32_t kInvalidIdU32 = 0xffffffffu;
+
 // Host mirror of the MSL `ExitStats` struct in src/core/metal/lumice_trace.metal
 // (per-ray K-shape pool: the merged exit-stats accumulator frees a
 // trace_layer_kernel buffer slot for the per-ray pool-shape offset carrier).
@@ -1813,7 +1824,9 @@ void MetalTraceBackend::Impl::UploadCrystalPool(const std::vector<Crystal>& pool
     pool_shape_table_h_.clear();
     return;
   }
-  assert(!pool.empty() && "UploadCrystalPool: empty pool (caller must build at least one shape)");
+  // The early-return above already covers the empty case in every build
+  // configuration, so no post-guard `assert(!pool.empty())` follows here —
+  // it would be unreachable dead code (misleading rather than protective).
 
   // First pass: compute per-shape offsets + accumulated buffer sizes. Recorded
   // into pool_shape_table_h_ so the caller can also read them (test hook +
@@ -1852,9 +1865,8 @@ void MetalTraceBackend::Impl::UploadCrystalPool(const std::vector<Crystal>& pool
   // pyramid+random-face_distance Metal SIGSEGV was a stride/count mismatch
   // inside BuildPolygonFaceData (fixed there); the WARN + zero-write surfaces
   // any future upstream drift as a detectable symptom rather than a wild read.
-  // Must mirror MSL's `kInvalidId` in lumice_trace.metal. Widened to 32-bit
-  // in lockstep with tri_to_poly_buf_ / root_tf_buf.
-  constexpr uint32_t kInvalidIdU32 = 0xffffffffu;
+  // Sentinel `kInvalidIdU32` is the file-scope translation-unit constant near
+  // the top of this file (single source of truth mirroring MSL kInvalidId).
   constexpr float kFaceCoplanarFloor = 1e-2f;
   bool centroid_bound_warned = false;
 
@@ -2101,9 +2113,10 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
     // to_face_ = kInvalidId on that exact fallback path (see the LOG_WARNING
     // clause), so this promotion is load-bearing for the rare corrupt-crystal
     // config.
-    // 0xffffffffu mirrors MSL's kInvalidId constant (lumice_trace.metal).
+    // kInvalidIdU32 = the file-scope sentinel mirroring MSL's kInvalidId
+    // constant (single source of truth; see top-of-file declaration).
     tf_ptr[i] = (r.to_face_ == kInvalidId)
-                    ? 0xffffffffu
+                    ? kInvalidIdU32
                     : static_cast<uint32_t>(r.to_face_);
     // Per-ray crystal->world rotation (row-major mat_, same layout the kernel
     // applies as mat*v). InitRayFirstMs sampled this orientation and applied
@@ -2200,9 +2213,10 @@ size_t MetalTraceBackend::Impl::InjectHostRoots(const HostRayBatch& host) {
   // trace_layer_kernel's sentinel comparison still fires (see
   // GenerateFirstLayerRootsForCi's mirror comment for the OOB-avoidance
   // rationale).
+  // kInvalidIdU32 = the file-scope sentinel mirroring MSL's kInvalidId constant.
   for (size_t i = 0; i < n; i++) {
     tf_ptr[i] = (host.tf[i] == kInvalidId)
-                    ? 0xffffffffu
+                    ? kInvalidIdU32
                     : static_cast<uint32_t>(host.tf[i]);
   }
   for (size_t i = 0; i < n; i++) {

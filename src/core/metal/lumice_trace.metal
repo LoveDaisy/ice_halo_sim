@@ -679,9 +679,8 @@ kernel void trace_layer_kernel(
   lm_proj::ProjParams proj_local = prm.proj;
 
   // path[] carries LOCAL polygon indices (< PolygonFaceCount), so ushort has
-  // plenty of headroom (uchar would even fit but ushort keeps room for the
-  // absolute range on the very slim chance a future non-hex crystal grows past
-  // 255 faces).
+  // plenty of headroom (uchar would fit hex-prism's 8 faces; ushort keeps room
+  // for a future non-hex crystal whose local face count exceeds 255).
   ushort path[kRecCap];
   uint   rec_len = 0u;
 
