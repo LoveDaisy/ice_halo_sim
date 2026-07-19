@@ -125,7 +125,7 @@ def test_cuda_impossible_filter_produces_zero_intensity():
     )
     assert not result.fell_back, "impossible filter test: CUDA backend fell back to legacy"
     assert result.snapshot_intensity == pytest.approx(0.0, abs=1e-6), (
-        f"CUDA filter gate did NOT terminate filter-fail rays — Design A violation: "
+        f"CUDA filter gate did NOT terminate filter-fail rays - Design A violation: "
         f"snapshot_intensity={result.snapshot_intensity:.6f} (expected ~0). "
         "Suspect kernel emit gate skipping DeviceFilterCheck, or the dummy desc "
         "fallback being used when a real filter desc was needed."
@@ -163,17 +163,17 @@ def test_cuda_single_ms_filter_image_parity_vs_legacy():
 
     print(
         f"[parity] {cfg}: cuda ds_corr={corr:.4f} psnr={psnr:.2f}dB "
-        f"energy_ratio={energy_ratio:.4f} (tol ±{_T_ENERGY_TOL})"
+        f"energy_ratio={energy_ratio:.4f} (tol +/-{_T_ENERGY_TOL})"
     )
 
     assert corr >= _T_RAW_CORR_DS, (
         f"{cfg}: ds_corr {corr:.4f} < {_T_RAW_CORR_DS}. Suspect DrainExits "
-        "GetFn remap or FilterSpec::Check argument shape — the CPU unit test "
+        "GetFn remap or FilterSpec::Check argument shape - the CPU unit test "
         "test_device_filter_check_host.cpp already validated the device matcher."
     )
     assert abs(energy_ratio - 1.0) <= _T_ENERGY_TOL, (
         f"{cfg}: cuda/legacy total-Y ratio {energy_ratio:.4f} outside "
-        f"[1 ± {_T_ENERGY_TOL}]. Suspect final_ms_prob_ wired wrong or drain_rng_ "
+        f"[1 +/- {_T_ENERGY_TOL}]. Suspect final_ms_prob_ wired wrong or drain_rng_ "
         "seeded with the device-gate counter (would oversubtract)."
     )
 
@@ -212,18 +212,18 @@ def test_cuda_multi_ms_filter_image_parity_vs_legacy():
 
     print(
         f"[parity] {cfg}: cuda ds_corr={corr:.4f} psnr={psnr:.2f}dB "
-        f"energy_ratio={energy_ratio:.4f} (tol ±{_T_ENERGY_TOL})"
+        f"energy_ratio={energy_ratio:.4f} (tol +/-{_T_ENERGY_TOL})"
     )
 
     assert corr >= _T_RAW_CORR_DS, (
         f"{cfg}: ds_corr {corr:.4f} < {_T_RAW_CORR_DS}. Cross-check filter "
         "desc upload (EnsureFilterBuffers per-slot index) + path_rec content "
         "at the emit gate (Metal+CPU mid-layer exits write poly-index path "
-        "verbatim — CUDA must mirror)."
+        "verbatim - CUDA must mirror)."
     )
     assert abs(energy_ratio - 1.0) <= _T_ENERGY_TOL, (
         f"{cfg}: cuda/legacy total-Y ratio {energy_ratio:.4f} outside "
-        f"[1 ± {_T_ENERGY_TOL}]. Audit mid-exit routing (filter-fail must drop, "
+        f"[1 +/- {_T_ENERGY_TOL}]. Audit mid-exit routing (filter-fail must drop, "
         "filter-pass + prob-fail must mid-exit) and DrainExits' branch on "
         "final_ms_layer_idx_."
     )
@@ -259,7 +259,7 @@ def test_cuda_multi_ms_filter_cross_seed_self_consistency():
     )
     assert corr_cuda >= corr_legacy - _T_SELF_MARGIN, (
         f"{cfg}: cuda cross-seed self-consistency {corr_cuda:.4f} < "
-        f"legacy_self {corr_legacy:.4f} − {_T_SELF_MARGIN}. Suspect drain_rng_ "
+        f"legacy_self {corr_legacy:.4f} - {_T_SELF_MARGIN}. Suspect drain_rng_ "
         "or transit_ray_count_ collapse under the filter-drop survival rate; "
         "verify (transit_seed, transit_ray_count + tid) tuple stays disjoint "
         "across seed-{42, 7} runs."
@@ -303,17 +303,17 @@ def test_cuda_big_or_complex_with_color_parity_vs_legacy():
 
     print(
         f"[parity] {cfg}: cuda ds_corr={corr:.4f} "
-        f"energy_ratio={energy_ratio:.4f} (tol ±{_T_ENERGY_TOL})"
+        f"energy_ratio={energy_ratio:.4f} (tol +/-{_T_ENERGY_TOL})"
     )
 
     assert corr >= _T_RAW_CORR_DS, (
         f"{cfg}: ds_corr {corr:.4f} < {_T_RAW_CORR_DS}. Suspect the CUDA "
         "color-rebuild path skipping d_and_term_counts_ re-upload (see "
-        "cuda_trace_backend.cu color rebuild block) — physical filter reads "
+        "cuda_trace_backend.cu color rebuild block) - physical filter reads "
         "the pre-color-pass counts snapshot in color+big-OR configs."
     )
     assert abs(energy_ratio - 1.0) <= _T_ENERGY_TOL, (
         f"{cfg}: cuda/legacy total-Y ratio {energy_ratio:.4f} outside "
-        f"[1 ± {_T_ENERGY_TOL}]. Same suspects as above; a mis-indexed "
+        f"[1 +/- {_T_ENERGY_TOL}]. Same suspects as above; a mis-indexed "
         "and_term_counts read can turn AND-terms into no-ops or double-count."
     )

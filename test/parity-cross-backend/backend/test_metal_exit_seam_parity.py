@@ -153,7 +153,7 @@ def _assert_routed(r: BufferedSimResult, expected_backend: str, config_name: str
     assert r.routed_backend == expected_backend, (
         f"{config_name}/{expected_backend}: routed={r.routed_backend!r} "
         f"(expected {expected_backend!r}); core log did not emit the expected "
-        f"routing line — see log_lines for the actual path."
+        f"routing line - see log_lines for the actual path."
     )
     assert not r.fell_back, (
         f"{config_name}/{expected_backend}: fell back to legacy (lens/view "
@@ -332,8 +332,8 @@ def _assert_metal_self_consistency(
     )
     assert metal_self >= legacy_self - _SELF_MARGIN, (
         f"{config_name}: metal cross-seed self-consistency {metal_self:.4f} < "
-        f"legacy_self {legacy_self:.4f} − {_SELF_MARGIN}. Suspect transit/gen "
-        f"PCG stream collapse — metal orientations are less self-similar across "
+        f"legacy_self {legacy_self:.4f} - {_SELF_MARGIN}. Suspect transit/gen "
+        f"PCG stream collapse - metal orientations are less self-similar across "
         f"seeds than legacy, signalling under-sampling."
     )
 
@@ -356,11 +356,11 @@ def _assert_energy_conservation(
     ratio = metal_Y / legacy_Y
     print(
         f"[energy] {config_name}: metal/legacy Y ratio={ratio:.4f} "
-        f"tol=±{_ENERGY_TOL}"
+        f"tol=+/-{_ENERGY_TOL}"
     )
     assert abs(ratio - 1.0) <= _ENERGY_TOL, (
         f"{config_name}: metal/legacy total-Y ratio {ratio:.4f} outside "
-        f"[1 ± {_ENERGY_TOL}]. Suspect global energy imbalance in continuation/"
+        f"[1 +/- {_ENERGY_TOL}]. Suspect global energy imbalance in continuation/"
         f"emit-gate path (cf. fused-emit-gate +16% regression class)."
     )
 
