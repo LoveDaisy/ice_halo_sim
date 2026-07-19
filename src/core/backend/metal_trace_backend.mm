@@ -3694,4 +3694,37 @@ size_t MetalTraceBackendTestHooks::ReadbackGenAttemptCount(std::vector<int>& out
   return count;
 }
 
+// [TEST-ONLY] K-shape pool observability. Simple copy accessors — pool state
+// lives entirely host-side (pool_shape_table_h_ / pool_shape_count_this_batch_)
+// or in a Shared MTLBuffer (root_pool_shape_buf_), so no device sync needed.
+std::vector<std::array<uint32_t, 4>>
+MetalTraceBackendTestHooks::ReadbackPoolShapeTable() {
+  auto& impl = *backend_.impl_;
+  return impl.pool_shape_table_h_;
+}
+
+std::vector<std::pair<uint32_t, uint32_t>>
+MetalTraceBackendTestHooks::ReadbackRootPoolShape(size_t count) {
+  auto& impl = *backend_.impl_;
+  std::vector<std::pair<uint32_t, uint32_t>> out;
+  if (impl.root_pool_shape_buf_ == nil || count == 0u) {
+    return out;
+  }
+  const size_t cap_pairs =
+      static_cast<size_t>([impl.root_pool_shape_buf_ length]) / (2u * sizeof(uint32_t));
+  if (count > cap_pairs) {
+    count = cap_pairs;
+  }
+  const auto* raw = static_cast<const uint32_t*>([impl.root_pool_shape_buf_ contents]);
+  out.reserve(count);
+  for (size_t i = 0; i < count; i++) {
+    out.emplace_back(raw[i * 2 + 0], raw[i * 2 + 1]);
+  }
+  return out;
+}
+
+size_t MetalTraceBackendTestHooks::PoolShapeCountThisBatch() const {
+  return backend_.impl_->pool_shape_count_this_batch_;
+}
+
 }  // namespace lumice

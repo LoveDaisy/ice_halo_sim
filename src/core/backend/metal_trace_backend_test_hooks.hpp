@@ -19,7 +19,10 @@
 
 #if defined(__APPLE__)
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace lumice {
@@ -46,6 +49,20 @@ class MetalTraceBackendTestHooks {
   // near-pole acceptance-rate smoke consumer).
   void EnableGenAttemptCount(size_t count, size_t ci_start = 0);
   size_t ReadbackGenAttemptCount(std::vector<int>& out, size_t count);
+
+  // K-shape geometry pool observability:
+  //   * ReadbackPoolShapeTable — copy the host-side pool_shape_table_h_
+  //     (per-shape {poly_off, poly_cnt, tri_off, tri_cnt}). Reflects the pool
+  //     built by the most recent ResolveLayerCrystalForCi; .size() == P_ci.
+  //   * ReadbackRootPoolShape — copy the first `count` (poly_off, poly_cnt)
+  //     entries the last root pass wrote for its rays. Enables an AC1 probe
+  //     that different rays land on different pool slots.
+  //   * PoolShapeCountThisBatch — running sum of P_ci across every (layer,
+  //     ci) resolve inside the current session (BeginSession resets to 0).
+  //     Same value the CLI stat `Stats: crystals=N` reports at EndSession.
+  std::vector<std::array<uint32_t, 4>> ReadbackPoolShapeTable();
+  std::vector<std::pair<uint32_t, uint32_t>> ReadbackRootPoolShape(size_t count);
+  size_t PoolShapeCountThisBatch() const;
 
  private:
   MetalTraceBackend& backend_;

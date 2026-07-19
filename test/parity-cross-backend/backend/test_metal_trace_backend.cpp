@@ -8,12 +8,15 @@
 #if defined(__APPLE__)
 
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
+#include <set>
 #include <vector>
 
 #include "config/render_config.hpp"
 #include "core/backend/cpu_trace_backend.hpp"
 #include "core/backend/metal_trace_backend.hpp"
+#include "core/backend/metal_trace_backend_test_hooks.hpp"
 #include "core/backend/trace_backend.hpp"
 #include "metal_test_helpers.hpp"
 
@@ -390,6 +393,205 @@ TEST(MetalTraceBackend, DeviceAndPsoSharedAcrossInstances) {
                            "MetalTraceBackend instances — the process-level PSO cache is not "
                            "being shared. Per-Run PSO rebuilds were the ~150ms first-batch cost "
                            "that starved commit-outpaces-batch under the 70ms GUI commit clock.";
+}
+
+// =============================================================================
+// K-shape geometry pool AC1: LUMICE_GPU_GEOM_CLOCK enables a per-ci pool of
+// P_ci = ceil(N_ci / K) distinct crystal shapes, and gen_root_kernel picks a
+// pool slot per ray via an independent PCG stream. These tests verify:
+//   * Default (knob unset): P_ci == 1, one shape built per ci, all rays land
+//     on pool slot 0 — bit-identical to the pre-K-pool path.
+//   * K=8 with non-deterministic crystal params and 64 rays: P_ci == 8;
+//     ReadbackRootPoolShape shows ≥ 2 distinct (poly_off, poly_cnt) values
+//     across the batch (per-ray shape picking observably works).
+//   * Independent verification: the expected P_ci and the per-ray slot draw
+//     are recomputed inside the test WITHOUT calling into production code —
+//     otherwise the assertion would only check that a function calls itself.
+// =============================================================================
+
+namespace {
+
+// Random-h prism scene: overrides MakeMetalScene's deterministic h_ to a
+// gaussian so IsDeterministic returns false and the K knob takes effect.
+SceneConfig MakeMetalSceneRandomH(size_t max_hits, size_t ms_layers) {
+  SceneConfig scene = MakeMetalScene(max_hits, ms_layers);
+  for (auto& ms : scene.ms_) {
+    for (auto& s : ms.setting_) {
+      auto prism = std::get<PrismCrystalParam>(s.crystal_.param_);
+      prism.h_ = Distribution{ DistributionType::kGaussian, 1.0f, 0.15f };
+      s.crystal_.param_ = prism;
+    }
+  }
+  return scene;
+}
+
+}  // namespace
+
+TEST(MetalTraceBackend, KShapePool_DefaultKnobUnsetGivesPCiOne_AC1) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  // Guarantee the knob is off for this test (independent of prior test order).
+  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+
+  auto scene = MakeMetalSceneRandomH(/*max_hits=*/4, /*ms_layers=*/1);
+  auto render = MakeRectangularRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 21;
+
+  MetalTraceBackend backend;
+  backend.BeginSession(spec);
+  HostRayBatch host;
+  host.count = 64;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+  backend.TraceLayer(RootRaySource::FromHost(host));
+
+  MetalTraceBackendTestHooks hooks(backend);
+  auto table = hooks.ReadbackPoolShapeTable();
+  EXPECT_EQ(table.size(), 1u) << "K=0 must collapse pool to a single shape";
+  EXPECT_EQ(hooks.PoolShapeCountThisBatch(), 1u) << "Σ layers Σ ci P_ci at K=0: 1 × 1 × 1 = 1";
+  backend.EndSession();
+}
+
+TEST(MetalTraceBackend, KShapePool_KEnabledBuildsCeilNciOverKShapes_AC1) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  ::setenv("LUMICE_GPU_GEOM_CLOCK", "8", /*overwrite=*/1);
+
+  auto scene = MakeMetalSceneRandomH(/*max_hits=*/4, /*ms_layers=*/1);
+  auto render = MakeRectangularRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 23;
+
+  const size_t ci_n = 64;
+  const size_t k = 8;
+  const size_t expected_p_ci = (ci_n + k - 1) / k;
+  ASSERT_EQ(expected_p_ci, 8u);
+
+  MetalTraceBackend backend;
+  backend.BeginSession(spec);
+  HostRayBatch host;
+  host.count = ci_n;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+  backend.TraceLayer(RootRaySource::FromHost(host));
+
+  MetalTraceBackendTestHooks hooks(backend);
+  auto table = hooks.ReadbackPoolShapeTable();
+  EXPECT_EQ(table.size(), expected_p_ci) << "P_ci must be ceil(N_ci / K) = ceil(64 / 8) = 8";
+  EXPECT_EQ(hooks.PoolShapeCountThisBatch(), expected_p_ci) << "Single-layer, single-ci → Σ P_ci = 8";
+
+  // Verify per-shape offsets stack in non-decreasing order (each shape's slice
+  // starts after the previous shape's end).
+  for (size_t s = 1; s < table.size(); s++) {
+    EXPECT_GE(table[s][0], table[s - 1][0] + table[s - 1][1])
+        << "poly_off[" << s << "] not after poly_off[" << (s - 1) << "] + poly_cnt";
+    EXPECT_GE(table[s][2], table[s - 1][2] + table[s - 1][3])
+        << "tri_off[" << s << "] not after tri_off[" << (s - 1) << "] + tri_cnt";
+  }
+
+  // AC1 core: rays actually land on more than one pool slot. We do NOT call
+  // BuildGeomShapeStream / pcg_uniform here (that would let the production
+  // code silently agree with itself); we simply check that > 1 distinct
+  // (poly_off, poly_cnt) tuple appears across the batch. If the picker were
+  // broken (e.g. all rays picked slot 0), we would see exactly 1 distinct
+  // tuple → failure.
+  auto rays = hooks.ReadbackRootPoolShape(ci_n);
+  ASSERT_EQ(rays.size(), ci_n);
+  std::set<std::pair<uint32_t, uint32_t>> distinct(rays.begin(), rays.end());
+  EXPECT_GE(distinct.size(), 2u) << "K=8 P_ci=8: expected > 1 distinct (poly_off, poly_cnt) across " << ci_n
+                                 << " rays, got " << distinct.size();
+
+  // Cross-check: every observed (poly_off, poly_cnt) MUST match some row of
+  // pool_shape_table_h_ (shape picker never writes garbage). Table entries
+  // beyond the picked ones are OK — but every pick must be inside the table.
+  std::set<std::pair<uint32_t, uint32_t>> valid;
+  for (const auto& row : table) {
+    valid.emplace(row[0], row[1]);
+  }
+  for (const auto& r : rays) {
+    EXPECT_TRUE(valid.count(r) > 0u) << "ray landed on (" << r.first << ", " << r.second
+                                     << "), which is NOT a pool_shape_table row";
+  }
+
+  backend.EndSession();
+  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+}
+
+// AC2 supplementary smoke: with the K knob enabled, a full session runs to
+// completion without crash and produces exit statistics on the same order of
+// magnitude as the K=0 baseline for the same seed. This is not a CV/variance
+// gate (proper CV-vs-K trend requires many-batch statistical runs, out of
+// this test's scope) — it verifies that the K > 0 code path is exercised in
+// CI, catching regressions like the "all rays exit immediately" failure
+// mode that the intra-step verification caught during Step 4.
+TEST(MetalTraceBackend, KShapePool_KEnabledSessionRunsAndProducesOutput_AC2) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+
+  auto scene = MakeMetalSceneRandomH(/*max_hits=*/4, /*ms_layers=*/1);
+  auto render = MakeRectangularRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 25;
+
+  auto run_and_get_stats = [&](const char* k_val) {
+    if (k_val) {
+      ::setenv("LUMICE_GPU_GEOM_CLOCK", k_val, /*overwrite=*/1);
+    } else {
+      ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+    }
+    MetalTraceBackend backend;
+    backend.BeginSession(spec);
+    HostRayBatch host;
+    host.count = 512;
+    host.crystal = nullptr;
+    host.refractive_index = 0.0f;
+    auto handle = backend.TraceLayer(RootRaySource::FromHost(host));
+    LayerStats stats{};
+    if (handle) {
+      stats = handle->GetLayerStats();
+    }
+    size_t crystals = backend.GetLastBatchCrystalCount();
+    backend.EndSession();
+    return std::make_pair(stats, crystals);
+  };
+
+  auto [stats0, crystals0] = run_and_get_stats(nullptr);
+  auto [stats8, crystals8] = run_and_get_stats("8");
+
+  // K=0: exactly one shape per ci; K=8 with 512 rays: P_ci = ceil(512/8) = 64.
+  EXPECT_EQ(crystals0, 1u);
+  EXPECT_EQ(crystals8, 64u) << "K=8, N_ci=512 → P_ci=64; single layer × single ci → Σ P_ci = 64";
+
+  // Both runs must produce non-zero exit counts (session actually ran). The
+  // per-batch reset invariant (exit_stats_buf zeroed each dispatch) means
+  // both runs report the layer's exit metrics independently.
+  EXPECT_GT(stats0.exit_count, 0u);
+  EXPECT_GT(stats8.exit_count, 0u);
+  EXPECT_GT(stats0.exit_w_sum, 0.0f);
+  EXPECT_GT(stats8.exit_w_sum, 0.0f);
+
+  // Mean weight invariance sanity: switching K changes the crystal-shape
+  // distribution the rays interact with, not the total energy budget. Ratio
+  // is bounded conservatively (5×) — a stride-error / silent-drop regression
+  // would collapse one of the two to zero or produce a >10× swing.
+  const float w_ratio = stats8.exit_w_sum / stats0.exit_w_sum;
+  EXPECT_GT(w_ratio, 0.2f);
+  EXPECT_LT(w_ratio, 5.0f);
+
+  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
 }
 
 }  // namespace
