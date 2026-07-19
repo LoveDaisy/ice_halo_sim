@@ -103,6 +103,40 @@ down. Below it the number is not a throughput measurement. Corollary: **"that ba
 is not a property of a backend** — an unexplained variance with no mechanism is an unpaid debt, and
 it silently downgrades every later measurement into "it can't be measured anyway".
 
+### C. GPU cold-context init is folded into `rays_per_sec` when `active_sec` rounds to 0
+
+The first GPU call in a process triggers backend-specific one-time lazy init: on CUDA it is the
+context creation (~1.3s cold, ~62–67ms warm); on Metal it is PSO compile. That cost is paid
+exactly once per process. When the timed pass is short enough (small finite `ray_num`, or a
+too-few-drains exit on the infinite path) for `active_sec` to round to zero, the `rate_basis`
+ladder falls through to `wall_fallback` and `rays_per_sec = rays / wall_sec` — silently
+including that one-time init in the denominator. So a "cold" run (paying init) compared against
+a "warm" run (init already paid by an earlier process) can measure a many-x cold/warm gap that
+is a **process-order artifact, not a property of the trace**. This mechanism was the source of
+the "stoch vs det 15.7×" cold/warm measurement artifact.
+
+Four defensive rules — the first is now enforced by the tool, the other three remain usage
+discipline:
+
+1. **`--benchmark` runs one silent warm-up pass on the GPU route before the timed steady pass**
+   (`src/main.cpp` `main()`'s `benchmark_mode` branch, `gpu_route == true`; the warm-up uses
+   `kBenchmarkGpuWarmupRays` = 100k rays and the same config as the steady pass, only with
+   `scene.ray_num` overridden). It absorbs the one-time init so the reported `[BENCHMARK]` line
+   measures steady trace only. The legacy CPU route is unchanged (no lazy GPU init to strip).
+2. **When comparing two arms (e.g. stoch vs det, K=1 vs K=64), interleave A/B/A/B independent
+   process invocations** — do not run all-A back-to-back then all-B. Even with the warm-up
+   pass in (1), OS-level, driver-level, or thermal state can drift across a long same-arm
+   burst; interleaving averages that drift equally across both arms.
+3. **`ray_num` must be large enough that trace itself dominates any residual fixed overhead.**
+   The GPU throughput cross-check in §B already puts this at ≥ 200M rays / ~7s for a stable
+   number; legacy CPU numbers on short configs likewise inherit this lower bound.
+4. **Only trust `rate_basis` in `{steady, active, drain_aligned}`.** A `wall_fallback` or
+   `too_few_drains` result is by definition not a steady trace rate. `--benchmark` now emits
+   an explicit stderr warning when the reported pass falls through to `wall_fallback`
+   (`src/main.cpp` `RunBenchmarkPass`, next to the `[BENCHMARK]` JSON emit) so this cannot be
+   missed silently, but the discipline is the same: discard such numbers, do not use them for
+   perf comparison.
+
 ## 1. CLI Pipeline Benchmark
 
 Pure pipeline throughput test without GUI, VSync, or display overhead.
