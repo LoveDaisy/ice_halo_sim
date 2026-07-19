@@ -426,6 +426,17 @@ struct WlEntry {
   float cmf_z;
 };
 
+// Merged exit-stats accumulator for trace_layer_kernel. One 8-byte struct
+// bound at buffer(15) (count + w_sum atomics), freeing buffer(16) for the
+// per-ray pool-shape offset carrier (`r_pool_shape`) that the K-shape geometry
+// pool feeds in. Field order MUST match the host mirror `struct ExitStats` in
+// metal_trace_backend.mm (see the static_assert there). Both fields sit at
+// natural 4-byte alignment; total sizeof == 8.
+struct ExitStats {
+  atomic_uint  count;
+  atomic_float w_sum;
+};
+
 struct KernelParams {
   // scrum-268.8 (DR-3): per-batch n_idx / cie_x/y/z removed. trace kernel now
   // reads per-ray optics from wl_pool[wl_idx] (see WlEntry above + buffer
@@ -542,8 +553,9 @@ kernel void trace_layer_kernel(
     device const uint*     root_wl_idx   [[buffer(12)]],
     device atomic_uint*    counter  [[buffer(13)]],
     device float*          rec_sink [[buffer(14)]],
-    device atomic_uint*    exit_cnt [[buffer(15)]],
-    device atomic_float*   exit_wsum [[buffer(16)]],
+    // Merged {count, w_sum} atomics (see `struct ExitStats` above); buffer(16)
+    // reserved for the K-shape pool's per-ray pool-shape offset carrier.
+    device ExitStats*      exit_stats [[buffer(15)]],
     device const float*    root_rot [[buffer(17)]],
     // S1 device-fused: slot 18 is now the per-session landed-weight scalar
     // (total weight of in-bounds filter-pass emitted rays, used for
@@ -841,8 +853,8 @@ kernel void trace_layer_kernel(
               // / exit_wsum now tally "filter_pass polygon-exits" (gate dropped
               // filter_fail rays above; legacy meaning was "all polygon-exits").
               // Diagnostic-only counters; not consumed by parity tests.
-              atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
-              atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&exit_stats->count, 1u, memory_order_relaxed);
+              atomic_fetch_add_explicit(&exit_stats->w_sum, cw, memory_order_relaxed);
             } else {
               // Mid-exit: filter_pass && !do_continue → device-fused XYZ accumulation.
               // 315.3: single-source projection via lm_proj::ProjectExitToPixel
@@ -895,8 +907,8 @@ kernel void trace_layer_kernel(
                 }
               }
               // Diagnostic counters (not consumed by parity tests).
-              atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
-              atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&exit_stats->count, 1u, memory_order_relaxed);
+              atomic_fetch_add_explicit(&exit_stats->w_sum, cw, memory_order_relaxed);
             }
           }
           // filter_fail: implicit drop (no buffer write, no atomic counter
@@ -1018,8 +1030,8 @@ kernel void trace_layer_kernel(
                 }
               }
             }
-            atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
-            atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
+            atomic_fetch_add_explicit(&exit_stats->count, 1u, memory_order_relaxed);
+            atomic_fetch_add_explicit(&exit_stats->w_sum, cw, memory_order_relaxed);
           }
           // filter_fail: implicit drop — no pixel write, no diagnostic counter bump.
         }

@@ -107,6 +107,22 @@ constexpr size_t kMaxColorClassesDevice = 16;
 // but keeping the nonces identical keeps the two GPU backends in lock-step.
 constexpr uint32_t kMetalShuffleNonce = 0xB17CA3D9u;
 
+// Host mirror of the MSL `ExitStats` struct in src/core/metal/lumice_trace.metal
+// (per-ray K-shape pool: the merged exit-stats accumulator frees a
+// trace_layer_kernel buffer slot for the per-ray pool-shape offset carrier).
+// Field order (count, then w_sum) MUST match the MSL definition; host
+// reads/writes non-atomically after `waitUntilCompleted` (unified memory +
+// relaxed-order atomics on the device side are fully ordered by the CB
+// completion barrier).
+struct ExitStats {
+  uint32_t count;
+  float    w_sum;
+};
+static_assert(sizeof(ExitStats) == 8u,
+              "ExitStats size mismatch — must match MSL struct in lumice_trace.metal");
+static_assert(offsetof(ExitStats, count) == 0u, "ExitStats::count offset drift");
+static_assert(offsetof(ExitStats, w_sum) == 4u, "ExitStats::w_sum offset drift");
+
 // Mirror of the Metal-side KernelParams (host layout MUST match the .metal
 // struct field-for-field — all 4-byte scalars, natural alignment).
 // NOTE: field order MUST match MSL KernelParams in src/core/metal/lumice_trace.metal — static_assert
@@ -779,12 +795,14 @@ struct MetalTraceBackend::Impl {
   size_t        rec_sink_capacity = 0;
   size_t        max_produced = 0;
 
-  // Exit-ray statistics buffers (parity harness). Both 4-byte atomic scalars
-  // populated by the kernel in both ms_mode branches and read back after each
-  // DispatchLayer; cached in `last_stats` for the producing TraceLayer to
-  // hand off to MetalLayerHandle.
-  id<MTLBuffer> exit_count_buf = nil;
-  id<MTLBuffer> exit_w_sum_buf = nil;
+  // Exit-ray statistics buffer (parity harness). One 8-byte `ExitStats`
+  // allocation (uint32 atomic count + float atomic w_sum) bound at buffer(15);
+  // buffer(16) is reserved for the per-ray pool-shape offset carrier
+  // (`r_pool_shape`) that the K-shape geometry pool feeds into
+  // `trace_layer_kernel`. Populated by the kernel in both ms_mode branches and
+  // read back after each DispatchLayer; cached in `last_stats` for the
+  // producing TraceLayer to hand off to MetalLayerHandle.
+  id<MTLBuffer> exit_stats_buf_ = nil;
   LayerStats    last_stats{};
 
   // S1 device-fused: per-session landed-weight scalar buffer (1 × float).
@@ -1047,7 +1065,7 @@ struct MetalTraceBackend::Impl {
                      id<MTLCommandBuffer> existing_cb = nil);
   // Waits on `pending_cb_` (if any), validates status, reads back the
   // continuation counter into cont_counts[pending_out_slot_], accumulates
-  // last_stats from exit_count_buf/exit_w_sum_buf, and clears pending_cb_.
+  // last_stats from the merged exit_stats_buf_, and clears pending_cb_.
   // No-op when pending_cb_ is nil (safe to call at ci-loop tail).
   void WaitAndReadbackLayer();
   void Reset();
@@ -2330,21 +2348,19 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
                                       options:MTLResourceStorageModeShared];
   }
   *static_cast<uint32_t*>([counter_buf contents]) = counter_init;
-  // exit_count / exit_w_sum are atomic accumulators populated by the kernel.
-  // Reset before each dispatch and add the readback into last_stats so the
-  // per-ci contributions sum correctly.
-  if (exit_count_buf == nil) {
-    exit_count_buf = [device newBufferWithLength:sizeof(uint32_t)
-                                         options:MTLResourceStorageModeShared];
-    assert(exit_count_buf != nil);
+  // exit_stats holds the merged {count, w_sum} atomic accumulators populated
+  // by the kernel. Reset before each dispatch and add the readback into
+  // last_stats so the per-ci contributions sum correctly.
+  if (exit_stats_buf_ == nil) {
+    exit_stats_buf_ = [device newBufferWithLength:sizeof(ExitStats)
+                                          options:MTLResourceStorageModeShared];
+    assert(exit_stats_buf_ != nil);
   }
-  if (exit_w_sum_buf == nil) {
-    exit_w_sum_buf = [device newBufferWithLength:sizeof(float)
-                                         options:MTLResourceStorageModeShared];
-    assert(exit_w_sum_buf != nil);
+  {
+    auto* es = static_cast<ExitStats*>([exit_stats_buf_ contents]);
+    es->count = 0u;
+    es->w_sum = 0.0f;
   }
-  *static_cast<uint32_t*>([exit_count_buf contents]) = 0u;
-  *static_cast<float*>([exit_w_sum_buf contents]) = 0.0f;
 
   // task-268.7: caller may supply `existing_cb` so transit_root + trace share
   // one CB on non-first MS layers (Step 3). Same Apple-Silicon shared-memory
@@ -2384,8 +2400,10 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   [enc setBuffer:root_wl_idx_buf_  offset:0 atIndex:12];
   [enc setBuffer:counter_buf    offset:0 atIndex:13];
   [enc setBuffer:rec_sink_buf   offset:0 atIndex:14];
-  [enc setBuffer:exit_count_buf offset:0 atIndex:15];
-  [enc setBuffer:exit_w_sum_buf offset:0 atIndex:16];
+  [enc setBuffer:exit_stats_buf_ offset:0 atIndex:15];
+  // buffer(16) freed by Step 1's exit_stats merge; Step 4 will bind
+  // `r_pool_shape` here (per-ray pool-shape offset carrier for
+  // trace_layer_kernel).
   [enc setBuffer:root_rot_buf   offset:0 atIndex:17];
   // S1 device-fused: slot 18 = landed_weight scalar (previously exit_ray_d).
   // Slots 19-23 (exit_ray_w/slot/crystal_id/face_seq_len/data) and 28
@@ -2469,8 +2487,11 @@ void MetalTraceBackend::Impl::WaitAndReadbackLayer() {
   // sufficient (no blit encoder required on unified memory). Accumulate
   // into last_stats so the multi-ci loop's contributions sum correctly;
   // TraceLayer is responsible for zeroing last_stats before the ci loop.
-  last_stats.exit_count += *static_cast<uint32_t*>([exit_count_buf contents]);
-  last_stats.exit_w_sum += *static_cast<float*>([exit_w_sum_buf contents]);
+  {
+    auto* es = static_cast<ExitStats*>([exit_stats_buf_ contents]);
+    last_stats.exit_count += es->count;
+    last_stats.exit_w_sum += es->w_sum;
+  }
 }
 
 void MetalTraceBackend::Impl::Reset() {
