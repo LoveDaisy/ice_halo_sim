@@ -72,12 +72,23 @@ class MetalTraceBackendTestHooks {
   // shape s > 0 could sum poly_off × max_hits above this bound. Tests use
   // this to catch a regression to absolute-index storage without needing a
   // per-ray path readback.
+  //
+  // Convention note: this + ReadbackRootTf take an out-parameter vector and
+  // return the actual element count copied. This diverges from the earlier
+  // by-value Readback* methods above (ReadbackPoolShapeTable,
+  // ReadbackRootPoolShape) — the out-param form lets tests reuse a pre-sized
+  // vector across many batches without repeated allocation, which matters for
+  // the large per-ray probes here (up to `num_rays` floats/uint32_t entries
+  // per batch, vs. the O(pool_size) small vectors the earlier methods return).
+  // Future large per-ray Readback* additions should follow this out-param
+  // form; small O(pool_size) ones can keep by-value.
   size_t ReadbackRecSink(std::vector<float>& out, size_t count);
   // K-shape pool `root_tf` widened absolute-index readback. Each entry is the
   // pool-wide polygon index of the ray's initial hit face (or kInvalidId =
   // 0xffffffff on "triangle has no polygon backing"). Used by tests that
   // want to verify the widened 32-bit range without hitting sentinel
-  // collisions.
+  // collisions. See ReadbackRecSink above for the out-param convention
+  // rationale.
   size_t ReadbackRootTf(std::vector<uint32_t>& out, size_t count);
 
  private:

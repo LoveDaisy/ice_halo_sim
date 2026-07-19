@@ -115,7 +115,9 @@ constexpr uint32_t kMetalShuffleNonce = 0xB17CA3D9u;
 // "same sentinel drifted across three write sites" failure mode). Widened
 // from the former uint16 0xffff because absolute polygon indices accumulated
 // across a K-shape pool (poly_off + local_p) can exceed 65535 at production
-// ci_n / K combinations — see PolygonFaceOfTri usage below.
+// ci_n / K combinations — see the tri_to_poly_ptr write inside UploadCrystalPool
+// (the `? (poly_off + best_p) : kInvalidIdU32` ternary) for the site whose
+// value range the widening enables.
 constexpr uint32_t kInvalidIdU32 = 0xffffffffu;
 
 // Host mirror of the MSL `ExitStats` struct in src/core/metal/lumice_trace.metal
@@ -2370,20 +2372,30 @@ void MetalTraceBackend::Impl::EncodeGenRoot(id<MTLCommandBuffer> cb,
     // shape (buffer 19, read) + the per-ray write-out for the chosen shape's
     // (poly_off, poly_cnt) slice (buffer 20). trace_layer_kernel reads the
     // latter at buffer(16).
-    // Release-safe guard: Metal buffer binding APIs reject nil, so this ends
-    // the dispatch cleanly (no encoded work, no undefined-behavior device read)
-    // rather than firing an assert that compiles away in -DNDEBUG.
-    if (pool_shape_table_buf_ == nil) {
+    // Release-safe guard: check the HOST-side pool_shape_table_h_ vector, not
+    // just the device buffer. pool_shape_table_buf_ is a persistent Impl
+    // member — once any earlier ci in the session uploaded a non-empty pool,
+    // the device buffer stays allocated for the rest of the session, so a
+    // nil-only check would miss the "prior ci allocated + current ci empty"
+    // case and dispatch would consume stale table + geometry contents from
+    // that earlier ci. pool_shape_table_h_ IS reset to empty by UploadCrystalPool's
+    // empty-pool early-return (near the top of that function), so its
+    // emptiness is the accurate "current ci has no valid pool" signal.
+    // Skipping here ends the dispatch cleanly (no encoded work, no
+    // undefined-behavior device read of stale pool data) rather than firing
+    // an assert that compiles away in -DNDEBUG.
+    if (pool_shape_table_h_.empty()) {
       ILOG_ERROR(EffectiveLogger(logger_),
-                 "EncodeGenRoot: pool_shape_table_buf_ nil — skipping dispatch. This is a "
-                 "caller ordering bug (UploadCrystalPool must run before any root-gen encode); "
-                 "the ci contributes 0 rays to this batch, and TraceLayer's downstream ray "
-                 "cursors advance accordingly (no fake exit records produced).");
+                 "EncodeGenRoot: pool_shape_table_h_ empty — skipping dispatch. This is a "
+                 "caller ordering bug (UploadCrystalPool must run before any root-gen encode "
+                 "with a non-empty pool); the ci contributes 0 rays to this batch, and "
+                 "TraceLayer's downstream ray cursors advance accordingly (no fake exit "
+                 "records produced, no stale pool data consumed).");
       [enc endEncoding];
       return;
     }
     assert(pool_shape_table_buf_ != nil &&
-           "pool_shape_table_buf_ must be non-nil before EncodeGenRoot");
+           "pool_shape_table_buf_ must be non-nil once pool_shape_table_h_ is non-empty");
     [enc setBuffer:pool_shape_table_buf_ offset:0 atIndex:19];
     [enc setBuffer:root_pool_shape_buf_  offset:0 atIndex:20];
     NSUInteger threads = 64;
@@ -2482,16 +2494,21 @@ void MetalTraceBackend::Impl::EncodeTransitRoot(
     [enc setBuffer:root_component_buf_          offset:0        atIndex:18];
     // K-shape geometry pool bindings mirror EncodeGenRoot at the same slots
     // 19/20 so both root passes speak the same shader-side layout.
-    // Release-safe guard mirrors EncodeGenRoot above.
-    if (pool_shape_table_buf_ == nil) {
+    // Release-safe guard mirrors EncodeGenRoot above: check host-side
+    // pool_shape_table_h_ emptiness, not just the persistent device buffer's
+    // nil-ness (see EncodeGenRoot for the "prior ci allocated + current ci
+    // empty" scenario the nil check misses).
+    if (pool_shape_table_h_.empty()) {
       ILOG_ERROR(EffectiveLogger(logger_),
-                 "EncodeTransitRoot: pool_shape_table_buf_ nil — skipping dispatch. Caller "
-                 "ordering bug: UploadCrystalPool must run before any root pass encode.");
+                 "EncodeTransitRoot: pool_shape_table_h_ empty — skipping dispatch. Caller "
+                 "ordering bug: UploadCrystalPool must run with a non-empty pool before any "
+                 "root pass encode. The ci contributes 0 continuation rays; no stale pool "
+                 "data consumed.");
       [enc endEncoding];
       return;
     }
     assert(pool_shape_table_buf_ != nil &&
-           "pool_shape_table_buf_ must be non-nil before EncodeTransitRoot");
+           "pool_shape_table_buf_ must be non-nil once pool_shape_table_h_ is non-empty");
     [enc setBuffer:pool_shape_table_buf_        offset:0        atIndex:19];
     [enc setBuffer:root_pool_shape_buf_         offset:0        atIndex:20];
     NSUInteger threads = 64;
