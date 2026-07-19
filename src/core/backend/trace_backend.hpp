@@ -203,6 +203,13 @@ struct SessionSpec {
   // the snapshot alive after a subsequent CommitConfig swap; captured by
   // server.cpp's GenerateScene alongside `scene` under the scene_mutex_.
   std::shared_ptr<const RaypathColorConfig> raypath_color;
+  // Per-batch ray count hint. Present so device-side pool sizing (CUDA K-shape
+  // pool Path B: P_ci = ceil(ray_num * proportion / Σ proportion / K)) can be
+  // computed at BeginSession time without waiting for the first TraceLayer.
+  // CPU/Metal ignore this — Metal builds its pool per-ci at TraceLayer time
+  // using the actual partitioned ci_n; the CPU backend has no pool. 0 is a
+  // valid default (CUDA falls back to P_ci=1 → today's behavior).
+  size_t ray_num = 0;
 };
 
 // -----------------------------------------------------------------------------
@@ -524,9 +531,12 @@ class TraceBackend {
   //     LUMICE_GPU_GEOM_CLOCK=0 this collapses to Σ layers Σ ci 1 = the
   //     cross-layer instance count. With K>0 it grows toward ~ray_num/K and
   //     converges on the legacy CPU meaning as K → 1.
-  //   * CUDA: pool-shape semantic NOT yet landed — CUDA backend still returns
-  //     the legacy per-batch Crystal-INSTANCE count (mirrors CPU meaning until
-  //     the CUDA-side K-shape pool is delivered as a follow-up).
+  //   * CUDA (K-shape geometry pool): same semantic as Metal — Σ P_ci over
+  //     every (layer, ci) built this batch. At the default knob
+  //     LUMICE_GPU_GEOM_CLOCK=0 this collapses to Σ layers Σ ci 1, matching
+  //     Metal's default meaning byte-for-byte. `disable_device_gen_` debug
+  //     fallback still returns 0 until per-ci accounting on that path lands
+  //     (diagnostic-only gap; the primary device-gen path is exact).
   // The ONLY consumer is the CLI diagnostic line (main.cpp `Stats: ...
   // crystals=N`); GUI does not display it and no internal logic depends on it,
   // so a residual factor-of-K gap between CPU and GPU at intermediate K values

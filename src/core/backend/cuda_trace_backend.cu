@@ -611,9 +611,16 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                        const float* __restrict__ d_ws,          // n_roots
                                        const uint32_t* __restrict__ d_from_poly,  // n_roots (entry-face polygon id)
                                        uint32_t n_roots,
-                                       const float* __restrict__ d_poly_n,      // 3 × poly_cnt (outward polygon normals)
-                                       const float* __restrict__ d_poly_d,      // poly_cnt (plane constant, p·n + d = 0)
-                                       uint32_t poly_cnt,
+                                       // K-shape pool: BASE pointers (not per-shape offset). Per-ray
+                                       // `poly_off` is read from d_pool_shape_in below and added to
+                                       // produce the ray-effective indices. When the pool has only
+                                       // one shape per (layer,ci) — K==0, deterministic — every
+                                       // ray's poly_off is 0 → same read pattern as pre-K-shape.
+                                       const float* __restrict__ d_poly_n,      // 3 × Σ poly_cnt (POOL base)
+                                       const float* __restrict__ d_poly_d,      // Σ poly_cnt
+                                       // Per-ray shape carrier written by gen_root_kernel /
+                                       // transit_multi_ms_kernel. uint2{poly_off, poly_cnt}.
+                                       const uint2* __restrict__ d_pool_shape_in,
                                        const float* __restrict__ d_rot_c2w,     // 9 × n_roots, row-major per ray
                                        const WlEntry* __restrict__ d_wl_pool,   // wl_pool_size entries (per-ray optics)
                                        const uint32_t* __restrict__ d_root_wl_idx,  // n_roots (per-ray wl index, 296.6 DR-3)
@@ -730,6 +737,32 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
   if (tid >= n_roots) {
     return;
   }
+  // K-shape: resolve this ray's polygon-slab pool region. `d_poly_n` /
+  // `d_poly_d` are BASE pointers into the pool (Σ poly_cnt across all shapes);
+  // adding `poly_off * {3|1}` produces the per-ray effective pointers.
+  // `poly_cnt` here shadows the pre-K-shape kernel parameter — every downstream
+  // reference to `poly_cnt` (guards, main-loop bound, path_rec cap check, etc.)
+  // reads THIS value, i.e. the ci's shape this ray was matched to. When the
+  // pool has a single shape per ci (K==0 or deterministic params), poly_off≡0
+  // and poly_cnt == the single shape's polygon count → identical to the pre-K
+  // reads, byte-for-byte (AC2 hard bit-equivalence bar).
+  //
+  // Design note: `poly_off` is absolute within the pool; the LOCAL indices
+  // `from_poly` / `hit_poly` (which populate `path_rec[]` and cross to
+  // GetFn / filter descriptors) NEVER accumulate it — see plan §3.1 / §3.7
+  // for the "全程局部索引，不物化绝对下标" contract. The trace kernel below
+  // is byte-for-byte identical to the pre-K-shape body once `poly_cnt` is
+  // read from the pool and `d_poly_n` / `d_poly_d` are treated as ray-
+  // effective bases — no other change is needed anywhere in the traversal.
+  const uint2 ray_shape = d_pool_shape_in[tid];
+  const uint32_t poly_off = ray_shape.x;
+  const uint32_t poly_cnt = ray_shape.y;
+  // Ray-effective polygon base pointers. Introduced as locals (not by
+  // reassigning `d_poly_n` / `d_poly_d`) so the `__restrict__` on the
+  // parameters remains structurally intact — the compiler sees the base
+  // pointer alone as the aliasing key, not `base + per-ray offset`.
+  const float* d_poly_n_ray = d_poly_n + 3u * poly_off;
+  const float* d_poly_d_ray = d_poly_d +      poly_off;
   // task-331.6: load the carried component mask once (constant for the whole
   // in-crystal path, exactly like the wl_idx lifetime tag below).
   const unsigned long long carried_component = d_root_component[tid];
@@ -830,8 +863,8 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
     // for every supported crystal type, so the uint8_t cast is safe.
     path_rec[rec_len++] = static_cast<uint8_t>(from_poly);
 
-    float entry_nrm[3] = {d_poly_n[from_poly * 3u + 0u], d_poly_n[from_poly * 3u + 1u],
-                          d_poly_n[from_poly * 3u + 2u]};
+    float entry_nrm[3] = {d_poly_n_ray[from_poly * 3u + 0u], d_poly_n_ray[from_poly * 3u + 1u],
+                          d_poly_n_ray[from_poly * 3u + 2u]};
     // cos_theta_e < 0: sun ray points into the crystal (guaranteed by
     // InitRay_p_fid's area-weighted projection filter). rr_e = 1/n_idx
     // (air→glass) ⇒ 1 - rr_e^2 > 0 ⇒ dd_e > 0 ⇒ never TIR at entry.
@@ -1004,10 +1037,10 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
       if (fi == from_poly) {
         continue;
       }
-      float nx = d_poly_n[fi * 3u + 0u];
-      float ny = d_poly_n[fi * 3u + 1u];
-      float nz = d_poly_n[fi * 3u + 2u];
-      float fd = d_poly_d[fi];
+      float nx = d_poly_n_ray[fi * 3u + 0u];
+      float ny = d_poly_n_ray[fi * 3u + 1u];
+      float nz = d_poly_n_ray[fi * 3u + 2u];
+      float fd = d_poly_d_ray[fi];
       float t = lm_traversal::SlabFaceT(dir[0], dir[1], dir[2], org[0], org[1], org[2], nx, ny, nz, fd);
       if (t < t_best) {
         t_best = t;
@@ -1039,7 +1072,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
       path_rec[rec_len++] = static_cast<uint8_t>(hit_poly);
     }
 
-    float nrm[3] = {d_poly_n[hit_poly * 3u + 0u], d_poly_n[hit_poly * 3u + 1u], d_poly_n[hit_poly * 3u + 2u]};
+    float nrm[3] = {d_poly_n_ray[hit_poly * 3u + 0u], d_poly_n_ray[hit_poly * 3u + 1u], d_poly_n_ray[hit_poly * 3u + 2u]};
 
     // Fresnel: same formula as cpu/metal HitSurface. cos_theta is signed; rr
     // flips between n (going outward) and 1/n (going inward). dd ≤ 0 ⇒ TIR.
@@ -1201,10 +1234,15 @@ __global__ void transit_multi_ms_kernel(
     uint32_t* __restrict__ d_root_from_poly_out,  // n_rays (entry-face polygon id; kInvalidId widened)
     float* __restrict__ d_root_rot_out,           // 9 × n_rays (row-major crystal→world)
     uint32_t* d_root_wl_idx_out,                   // n_rays (pass-through); no __restrict__: may alias d_cont_wl_idx_in
-    const float* __restrict__ d_tri_vtx,          // 9 × tri_cnt (3 verts × 3 coords)
-    const float* __restrict__ d_tri_norm,         // 3 × tri_cnt (outward triangle normal)
-    const float* __restrict__ d_tri_area,         // tri_cnt
-    const uint16_t* __restrict__ d_tri_to_poly,   // tri_cnt (kInvalidId on coplanar miss)
+    const float* __restrict__ d_tri_vtx,          // 9 × Σ tri_cnt (POOL base; per-ray tri_off is added inside)
+    const float* __restrict__ d_tri_norm,         // 3 × Σ tri_cnt
+    const float* __restrict__ d_tri_area,         // Σ tri_cnt
+    const uint16_t* __restrict__ d_tri_to_poly,   // Σ tri_cnt (kInvalidId on coplanar miss)
+    // K-shape: per-ci shape table (pre-offset) + per-ray shape carrier output.
+    // See gen_root_kernel above for the semantic contract — this signature
+    // is intentionally identical to gen so the two kernels stay locksteppable.
+    const uint4* __restrict__ d_pool_shape_table,
+    uint2* __restrict__ d_pool_shape_out,
     // 330.2 S6: unified latitude LUT (read only when gp.lat_lut_n > 0).
     const float* __restrict__ d_lat_lut_theta,
     const float* __restrict__ d_lat_lut_cdf,
@@ -1273,35 +1311,57 @@ __global__ void transit_multi_ms_kernel(
   float d_crystal[3];
   lm_pcg::apply_inverse_mat9(mat9, d_world, d_crystal);
 
+  // 2.5. K-shape per-ray pool pick. Identical to the gen kernel's pick block
+  //      above — the transit stream reuses transit_mixed_seed / gen_ray_base
+  //      as its (mixed_seed, global_idx) inputs so the shape stream is
+  //      per-(layer, batch, tid) unique. See gen_root_kernel's 2.5 comment
+  //      for the "全程局部索引" contract that guides all downstream indexing.
+  const uint32_t p_ci_transit = (gp.pool_shape_count == 0u) ? 1u : gp.pool_shape_count;
+  lm_pcg::PcgStream shape_stream = lm_pcg::BuildGeomShapeStream(transit_mixed_seed, gp.gen_ray_base + tid);
+  const float u_shape = lm_pcg::pcg_uniform(shape_stream);
+  uint32_t pool_slot = static_cast<uint32_t>(u_shape * static_cast<float>(p_ci_transit));
+  if (pool_slot >= p_ci_transit) {
+    pool_slot = p_ci_transit - 1u;
+  }
+  const uint4 shape_info = d_pool_shape_table[pool_slot];
+  const uint32_t shape_poly_off = shape_info.x;
+  const uint32_t shape_poly_cnt = shape_info.y;
+  const uint32_t shape_tri_off  = shape_info.z;
+  const uint32_t shape_tri_cnt  = shape_info.w;
+  const float* d_tri_vtx_ray      = d_tri_vtx      + 9u * shape_tri_off;
+  const float* d_tri_norm_ray     = d_tri_norm     + 3u * shape_tri_off;
+  const float* d_tri_area_ray     = d_tri_area     +      shape_tri_off;
+  const uint16_t* d_tri_to_poly_ray = d_tri_to_poly +    shape_tri_off;
+
   // 3. Triangle area × facing weighted pick. kMaxTriPerKernel-sized stack
-  //    array; tri_cnt is BeginSession-validated to fit (otherwise it would
-  //    throw BackendUnavailableError before any kernel dispatch).
+  //    array; every pool shape's tri_cnt is BeginSession-validated to fit
+  //    (BuildGeomPool throws BackendUnavailableError on any shape > kMaxTriPerKernel).
   float proj_prob[lm_pcg::kMaxTriPerKernel];
-  uint32_t n_tri = gp.tri_count;
+  uint32_t n_tri = shape_tri_cnt;   // per-ray shape's triangle count (was gp.tri_count)
   if (n_tri > lm_pcg::kMaxTriPerKernel) {
     n_tri = lm_pcg::kMaxTriPerKernel;  // defensive; host should have already throw'd
   }
   for (uint32_t t = 0u; t < n_tri; ++t) {
-    float dot = d_crystal[0] * d_tri_norm[t * 3u + 0u]
-              + d_crystal[1] * d_tri_norm[t * 3u + 1u]
-              + d_crystal[2] * d_tri_norm[t * 3u + 2u];
+    float dot = d_crystal[0] * d_tri_norm_ray[t * 3u + 0u]
+              + d_crystal[1] * d_tri_norm_ray[t * 3u + 1u]
+              + d_crystal[2] * d_tri_norm_ray[t * 3u + 2u];
     // -dot * area: negate so triangles whose outward normal opposes the ray
     // (i.e. the ray enters that face) get positive weight; clamp the rest to
     // zero (mirrors Metal lumice_trace.metal:1265).
-    proj_prob[t] = fmaxf(-dot * d_tri_area[t], 0.0f);
+    proj_prob[t] = fmaxf(-dot * d_tri_area_ray[t], 0.0f);
   }
   float u_cat = lm_pcg::pcg_uniform(stream);
   uint32_t tri_id = lm_pcg::categorical_sample(proj_prob, n_tri, u_cat);
 
   // 4. Uniform sample inside the chosen triangle → entry point p.
   float p[3];
-  lm_pcg::sample_triangle(stream, d_tri_vtx + tri_id * 9u, p);
+  lm_pcg::sample_triangle(stream, d_tri_vtx_ray + tri_id * 9u, p);
 
   // 5. tri_to_poly. kInvalidId (uint16_t 0xffff) signals "triangle has no
   //    polygon backing under the coplanar-floor predicate" — mirror Metal's
   //    InitRay_p_fid zero-weight fallback so downstream trace dispatches see
   //    a benign drop (w=0 short-circuits the entry-face emit and main loop).
-  uint16_t to_face_u16 = d_tri_to_poly[tri_id];
+  uint16_t to_face_u16 = d_tri_to_poly_ray[tri_id];
   float w = d_cont_w_in[tid];
   constexpr uint16_t kInvalidIdU16 = 0xffffu;
   uint32_t to_face_u32;
@@ -1331,6 +1391,10 @@ __global__ void transit_multi_ms_kernel(
   d_root_wl_idx_out[tid] = d_cont_wl_idx_in[tid];
   // task-331.6: pass-through the OR-accumulated component mask (sibling of wl_idx).
   d_root_component_out[tid] = d_cont_component_in[tid];
+  // K-shape: emit this ray's shape (poly_off, poly_cnt) so the layer's
+  // trace_single_ms_kernel can build its ray-effective d_poly_n / d_poly_d
+  // pointers. Same discipline as gen_root_kernel above.
+  d_pool_shape_out[tid] = uint2{shape_poly_off, shape_poly_cnt};
 }
 
 // --- gen_root_kernel -------------------------------------------------------
@@ -1351,15 +1415,25 @@ __global__ void gen_root_kernel(float* __restrict__ d_root_d,           // 3 × 
                                 uint32_t* __restrict__ d_root_from_poly,  // n_rays (entry-face poly id)
                                 float* __restrict__ d_root_rot,         // 9 × n_rays (crystal→world)
                                 uint32_t* __restrict__ d_root_wl_idx,   // n_rays (per-ray wl index)
-                                const float* __restrict__ d_tri_vtx,    // 9 × tri_cnt
-                                const float* __restrict__ d_tri_norm,   // 3 × tri_cnt
-                                const float* __restrict__ d_tri_area,   // tri_cnt
-                                const uint16_t* __restrict__ d_tri_to_poly,  // tri_cnt
+                                const float* __restrict__ d_tri_vtx,    // 9 × Σ tri_cnt (POOL base; per-ray tri_off is added inside)
+                                const float* __restrict__ d_tri_norm,   // 3 × Σ tri_cnt
+                                const float* __restrict__ d_tri_area,   // Σ tri_cnt
+                                const uint16_t* __restrict__ d_tri_to_poly,  // Σ tri_cnt
                                 const WlEntry* __restrict__ d_wl_pool,  // wl_pool_size entries
                                 // 330.2 S6: unified latitude LUT (read only when gp.lat_lut_n > 0).
                                 const float* __restrict__ d_lat_lut_theta,
                                 const float* __restrict__ d_lat_lut_cdf,
                                 const float* __restrict__ d_lat_lut_flip,
+                                // K-shape geometry pool: (a) shape-table pre-offset to this ci's
+                                // pool region — d_pool_shape_table[pool_slot] is a uint4
+                                // {poly_off, poly_cnt, tri_off, tri_cnt} where the offsets are
+                                // ABSOLUTE within the pool buffers (d_tri_vtx / d_tri_to_poly /
+                                // d_pool_poly_n above). Kernel indexes it 0-based by the per-ray
+                                // pool_slot draw. (b) d_pool_shape_out: per-ray write of
+                                // {poly_off, poly_cnt} — the trace kernel consumes it to build
+                                // its ray-effective d_poly_n / d_poly_d pointers.
+                                const uint4* __restrict__ d_pool_shape_table,
+                                uint2* __restrict__ d_pool_shape_out,
                                 lm_pcg::GenRootKernelParams gp,
                                 uint32_t n_rays,
                                 // [TEST-ONLY] scrum-328.2 Step 1 RNG-probe / attempt-count observability
@@ -1445,24 +1519,53 @@ __global__ void gen_root_kernel(float* __restrict__ d_root_d,           // 3 × 
   float d_crystal[3];
   lm_pcg::apply_inverse_mat9(mat9, d_world, d_crystal);
 
+  // 2.5. K-shape per-ray pool pick (this task). Draws an independent PCG
+  //      stream (seed-domain isolated via kGeomShapeStreamNonce so it can't
+  //      collide with orientation / wl / sun-cone / cap streams) and picks
+  //      one of the ci's `gp.pool_shape_count` shapes uniformly. The shape
+  //      table pointer is host-pre-offset to this ci's slot_base, so
+  //      `pool_slot ∈ [0, gp.pool_shape_count)` is the per-ci LOCAL index.
+  //      When gp.pool_shape_count == 1 (K==0 or deterministic): pool_slot ≡ 0
+  //      → the ci's single shape → today's byte-exact behavior (AC2 bar).
+  //      The shape row's `poly_off` / `tri_off` are ABSOLUTE pool offsets;
+  //      we use them ONLY to build effective triangle / polygon pointers
+  //      (never write them into `from_poly` / `path_rec` etc., see the
+  //      "全程局部索引" design note in the impl header field docs above).
+  const uint32_t p_ci_gen = (gp.pool_shape_count == 0u) ? 1u : gp.pool_shape_count;
+  lm_pcg::PcgStream shape_stream = lm_pcg::BuildGeomShapeStream(gen_mixed_seed, global_idx);
+  const float u_shape = lm_pcg::pcg_uniform(shape_stream);
+  uint32_t pool_slot = static_cast<uint32_t>(u_shape * static_cast<float>(p_ci_gen));
+  if (pool_slot >= p_ci_gen) {
+    pool_slot = p_ci_gen - 1u;  // guard pcg_uniform → 1.0 rounding
+  }
+  const uint4 shape_info = d_pool_shape_table[pool_slot];
+  const uint32_t shape_poly_off = shape_info.x;
+  const uint32_t shape_poly_cnt = shape_info.y;
+  const uint32_t shape_tri_off  = shape_info.z;
+  const uint32_t shape_tri_cnt  = shape_info.w;
+  const float* d_tri_vtx_ray      = d_tri_vtx      + 9u * shape_tri_off;
+  const float* d_tri_norm_ray     = d_tri_norm     + 3u * shape_tri_off;
+  const float* d_tri_area_ray     = d_tri_area     +      shape_tri_off;
+  const uint16_t* d_tri_to_poly_ray = d_tri_to_poly +    shape_tri_off;
+
   // 3. Triangle area × facing weighted pick → uniform point on the chosen tri.
   float proj_prob[lm_pcg::kMaxTriPerKernel];
-  uint32_t n_tri = gp.tri_count;
+  uint32_t n_tri = shape_tri_cnt;   // per-ray shape's triangle count (was gp.tri_count)
   if (n_tri > lm_pcg::kMaxTriPerKernel) {
     n_tri = lm_pcg::kMaxTriPerKernel;  // defensive; host already throw'd otherwise
   }
   for (uint32_t t = 0u; t < n_tri; ++t) {
-    float dot = d_crystal[0] * d_tri_norm[t * 3u + 0u] + d_crystal[1] * d_tri_norm[t * 3u + 1u] +
-                d_crystal[2] * d_tri_norm[t * 3u + 2u];
-    proj_prob[t] = fmaxf(-dot * d_tri_area[t], 0.0f);
+    float dot = d_crystal[0] * d_tri_norm_ray[t * 3u + 0u] + d_crystal[1] * d_tri_norm_ray[t * 3u + 1u] +
+                d_crystal[2] * d_tri_norm_ray[t * 3u + 2u];
+    proj_prob[t] = fmaxf(-dot * d_tri_area_ray[t], 0.0f);
   }
   float u_cat = lm_pcg::pcg_uniform(stream);
   uint32_t tri_id = lm_pcg::categorical_sample(proj_prob, n_tri, u_cat);
   float p[3];
-  lm_pcg::sample_triangle(stream, d_tri_vtx + tri_id * 9u, p);
+  lm_pcg::sample_triangle(stream, d_tri_vtx_ray + tri_id * 9u, p);
 
   // 4. tri_to_poly. kInvalidId → zero-weight drop (InitRay_p_fid fallback).
-  uint16_t to_face_u16 = d_tri_to_poly[tri_id];
+  uint16_t to_face_u16 = d_tri_to_poly_ray[tri_id];
   float weight = d_wl_pool[wl_idx].spd_weight;
   constexpr uint16_t kInvalidIdU16 = 0xffffu;
   uint32_t to_face_u32;
@@ -1485,6 +1588,11 @@ __global__ void gen_root_kernel(float* __restrict__ d_root_d,           // 3 × 
   for (uint32_t k = 0u; k < 9u; ++k) {
     d_root_rot[tid * 9u + k] = mat9[k];
   }
+  // K-shape: pass the picked shape's (poly_off, poly_cnt) forward so
+  // trace_single_ms_kernel can build its per-ray effective polygon pointers
+  // without re-drawing the shape. poly_cnt is redundant with the pool table
+  // read but ships it inline avoids a second global load in the trace kernel.
+  d_pool_shape_out[tid] = uint2{shape_poly_off, shape_poly_cnt};
 }
 
 // --- shuffle_cont_kernel ---------------------------------------------------
@@ -1580,18 +1688,57 @@ struct CudaTraceBackend::Impl {
   // shape/(layer,ci)/session); the §5 per-ray K-shape pool is a later
   // statistical refinement, not needed for parity. Buffers concatenate all
   // slots; pool_*_off_/pool_*_cnt_ index each slot (slot = layer_slot_base_[mi]+ci).
-  float*    d_pool_poly_n_      = nullptr;  // 3 × Σ poly_cnt
+  float*    d_pool_poly_n_      = nullptr;  // 3 × Σ poly_cnt (over ALL pool slots incl. K-shape)
   float*    d_pool_poly_d_      = nullptr;  //     Σ poly_cnt
   float*    d_pool_tri_vtx_     = nullptr;  // 9 × Σ tri_cnt
   float*    d_pool_tri_norm_    = nullptr;  // 3 × Σ tri_cnt
   float*    d_pool_tri_area_    = nullptr;  //     Σ tri_cnt
   uint16_t* d_pool_tri_to_poly_ = nullptr;  //     Σ tri_cnt
+  // K-shape shape table (this task). One `uint4` row per pool slot:
+  //   {poly_off, poly_cnt, tri_off, tri_cnt}
+  // The per-ray shape pick in gen_root_kernel / transit_multi_ms_kernel loads
+  // its own slot's row via `d_pool_shape_table_[slot_base + pool_slot]` and
+  // uses it to compute the effective triangle/polygon pointers for the
+  // downstream sampler / traversal. Persistent grow-only across the session
+  // (same lifetime family as d_pool_poly_n_ …). Mirrors Metal
+  // `pool_shape_table_buf_` (metal_trace_backend.mm:810), but content-only —
+  // its role here is to fan the pool row out per-ray without host having to
+  // pre-offset. Rows: total pool slots (Σ P_ci over layers/cis).
+  uint32_t* d_pool_shape_table_ = nullptr;  // 4 × Σ P_ci  (flat uint4 rows)
+  size_t    pool_shape_slot_cap_ = 0;       // physical rows allocated for d_pool_shape_table_
+  // K-shape fallback shape table: single 4-uint32 row used ONLY when
+  // `disable_device_gen_` is set — that debug path uses the legacy single-
+  // crystal buffers (`d_poly_n_` / `d_tri_vtx_` …) and never populates
+  // `d_pool_shape_table_`, but the K-shape-aware kernels still need to see a
+  // valid table pointer. Populated to `{0, poly_cnt_, 0, tri_cnt_}` right
+  // before each fallback-path transit/trace dispatch. Persistent across
+  // batches (grow-never, 16 bytes total).
+  uint32_t* d_pool_shape_table_fb_ = nullptr;
   std::vector<uint32_t> pool_poly_off_;
   std::vector<uint32_t> pool_poly_cnt_;
   std::vector<uint32_t> pool_tri_off_;
   std::vector<uint32_t> pool_tri_cnt_;
-  std::vector<uint32_t> layer_slot_base_;   // ms layer mi → first slot index
-  std::vector<Crystal>  pool_crystals_;     // host slot crystals (config_id; wl-pool repr)
+  std::vector<uint32_t> layer_slot_base_;   // ms layer mi → first slot index (flat ci base;
+                                            //   layer_slot_base_[mi]+ci = "config-space" flat ci
+                                            //   index, still ≤ Σ crystal_cnt across layers,
+                                            //   NOT the pool slot index once P_ci > 1)
+  std::vector<Crystal>  pool_crystals_;     // host slot crystals (config_id; wl-pool repr) — flat
+                                            //   over pool slots (one per shape, len = Σ P_ci)
+  // K-shape pool accounting (this task): the pool now stores P_ci shapes per
+  // (layer, ci) instead of exactly 1. `layer_slot_base_[mi]+ci` remains the
+  // config-space flat ci index (for filter descriptors, crystal_proportion_, …
+  // — anything with per-ci semantics). `ci_pool_slot_base_[flat_ci]` and
+  // `ci_pool_shape_count_[flat_ci]` translate that flat ci index → the pool
+  // slot range [slot_base, slot_base+P_ci) that holds this ci's K shapes.
+  // When K==0 / ray_num==0 / deterministic params: P_ci ≡ 1 → slot_base ==
+  // flat_ci (逐位等价 today's behavior). Sized (config crystal total) elements.
+  std::vector<uint32_t> ci_pool_slot_base_;
+  std::vector<uint32_t> ci_pool_shape_count_;
+  // Diagnostic accumulator — sum of distinct pool shapes built this batch
+  // (across every (layer, ci)). Mirrors Metal's `pool_shape_count_this_batch_`
+  // (metal_trace_backend.mm:819). Reset in BeginSession; incremented in
+  // BuildGeomPool per shape built. Consumed by `GetLastBatchCrystalCount()`.
+  size_t pool_shape_count_this_batch_ = 0;
   bool        geom_pool_built_ = false;
   const void* pool_scene_      = nullptr;   // scene the pool was built for (rebuild guard)
   // True iff any (layer, ci) crystal param in `pool_scene_` carries a
@@ -1674,6 +1821,26 @@ struct CudaTraceBackend::Impl {
   // continuation ring). `unsigned long long` on device (8B); OR'd + stored only,
   // never atomically accumulated → no lo/hi split (mirror Metal MSL ulong).
   unsigned long long* d_root_component_ = nullptr;
+
+  // K-shape per-ray shape carrier (this task). Each entry packs the
+  // (poly_off, poly_cnt) pair of the shape THIS ray was matched to by
+  // gen_root_kernel / transit_multi_ms_kernel. trace_single_ms_kernel consumes
+  // it to compute the effective d_poly_n / d_poly_d pointers for this ray's
+  // polygon-slab traversal. Sized like d_root_wl_idx_ (root_cap_). When
+  // K==0 / P_ci==1 all entries collapse to (0, poly_cnt_of_only_shape) — the
+  // same single shape every ray reads today.
+  //
+  // Design note (plan §3.1 / §3.7): the values here are ABSOLUTE pool
+  // offsets, but they are ONLY used to construct effective pointers
+  // (d_pool_poly_n_ + 3*poly_off …) — never written into `path_rec`, never
+  // added to `from_poly` / `hit_poly`, never leaked into `d_tri_to_poly_`.
+  // The trace kernel body works entirely with LOCAL indices (fi ∈ [0,
+  // poly_cnt), matches Metal's `path[]` semantic contract without needing
+  // the "subtract shape_poly_off before writing path[]" nul-op that Metal
+  // relies on). See doc/gpu-shared-header-and-cross-backend-mirroring for
+  // the "镜像语义、简化结构" pattern this instantiates.
+  uint2*              d_root_pool_shape_    = nullptr;  // root_cap_ entries
+  uint2*              d_cont_pool_shape_[2] = {nullptr, nullptr};  // cont_cap_ each (ping-pong)
 
   // --- Continuation ring (296.4 + multi-CI 全量) ---------------------------
   // PING-PONG (2 slots), mirroring Metal cont_d/cont_w[slot]. Multi-CI moved
@@ -1995,7 +2162,7 @@ struct CudaTraceBackend::Impl {
   // scrum-306.2: build the per-(layer,ci) geometry pool once (device-gen path).
   // Consumes rng_ via MakeCrystal in the EXACT ci-loop order (layers outer, ci
   // inner) so pooled shapes are byte-identical to the prior per-batch upload.
-  void BuildGeomPool(const SceneConfig& scene);
+  void BuildGeomPool(const SceneConfig& scene, size_t ray_num, size_t k_shape);
 };
 
 void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
@@ -2052,9 +2219,14 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
     cudaFree(d_pool_tri_norm_);    d_pool_tri_norm_ = nullptr;
     cudaFree(d_pool_tri_area_);    d_pool_tri_area_ = nullptr;
     cudaFree(d_pool_tri_to_poly_); d_pool_tri_to_poly_ = nullptr;
+    cudaFree(d_pool_shape_table_); d_pool_shape_table_ = nullptr;  // K-shape pool
+    cudaFree(d_pool_shape_table_fb_); d_pool_shape_table_fb_ = nullptr;  // K-shape fallback
+    pool_shape_slot_cap_ = 0;
     pool_poly_off_.clear(); pool_poly_cnt_.clear();
     pool_tri_off_.clear();  pool_tri_cnt_.clear();
     layer_slot_base_.clear(); pool_crystals_.clear();
+    ci_pool_slot_base_.clear(); ci_pool_shape_count_.clear();  // K-shape pool
+    pool_shape_count_this_batch_ = 0;
     geom_pool_built_ = false;
     pool_scene_ = nullptr;
     // increment 4: filter descriptors + wl pool persist across the keep path;
@@ -2099,12 +2271,14 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
     cudaFree(d_from_poly_);    d_from_poly_ = nullptr;
     cudaFree(d_root_wl_idx_);  d_root_wl_idx_ = nullptr;
     cudaFree(d_root_component_); d_root_component_ = nullptr;  // task-331.6
+    cudaFree(d_root_pool_shape_); d_root_pool_shape_ = nullptr;  // K-shape pool
     cudaFree(d_wl_pool_);      d_wl_pool_ = nullptr;
     for (int s = 0; s < 2; ++s) {
       cudaFree(d_cont_d_[s]);      d_cont_d_[s] = nullptr;
       cudaFree(d_cont_w_[s]);      d_cont_w_[s] = nullptr;
       cudaFree(d_cont_wl_idx_[s]); d_cont_wl_idx_[s] = nullptr;
       cudaFree(d_cont_component_[s]); d_cont_component_[s] = nullptr;  // task-331.6
+      cudaFree(d_cont_pool_shape_[s]); d_cont_pool_shape_[s] = nullptr;  // K-shape pool
       cudaFree(d_cont_count_[s]);  d_cont_count_[s] = nullptr;
     }
     cudaFree(d_exit_);         d_exit_ = nullptr;
@@ -2307,17 +2481,109 @@ bool SceneHasStochasticGeometry(const SceneConfig& scene) {
 }
 }  // namespace
 
-void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene) {
-  // Build the per-(layer,ci) geometry pool. Called ONCE per scene when
+// AllocateShapeBudget (this task, Path B static-weight): compute K_ci[] for
+// one MS layer given the effective batch ray_num and K knob. Mirrors the
+// structure of PartitionCrystalRayNum (simulator.cpp:353-389) — largest-
+// remainder allocation over `proportions[]` — but the target sum is the
+// number of pool SHAPES (P_target = ceil(ray_num/K)), not the number of
+// rays. K==0 or ray_num==0 → each ci gets exactly 1 (逐位等价 today's
+// behavior). Minimum 1 per ci with non-zero proportion — a ci with zero
+// proportion is still allowed to allocate 1 (mirrors PartitionCrystalRayNum
+// treating zero-proportion buckets as valid targets); the ci's
+// `rng_` consumption remains identical because MakeCrystal is called for
+// every ci regardless of its ray count.
+static std::vector<uint32_t> AllocateShapeBudget(const std::vector<float>& proportions,
+                                                  size_t ray_num, size_t k_shape) {
+  const size_t crystal_cnt = proportions.size();
+  std::vector<uint32_t> out(crystal_cnt, 1u);  // default: P_ci = 1
+  if (crystal_cnt == 0u) {
+    return out;
+  }
+  // K==0 → shape pool disabled → today's per-ci single-shape behavior.
+  // ray_num==0 same fallback (defensive; SessionSpec::ray_num default).
+  if (k_shape == 0u || ray_num == 0u) {
+    return out;
+  }
+  // Compute the pool-shape budget: P_target ≈ ceil(ray_num / K). Path B
+  // approximation: use the same ray_num across all layers (layer≥1's actual
+  // per-batch ray count depends on prior-layer survival — Fresnel × filter ×
+  // ms_prob — none of which are knowable at BeginSession when this runs; the
+  // Path A alternative would reorder pool-build to per-ci inside TraceLayer
+  // like Metal, at the cost of losing CUDA's persistent-across-batches
+  // build-once optimization for deterministic scenes).
+  // The bias is "P_ci over-provisioned on deeper layers" (方向对，构造成本
+  // 略高但正确性不受影响 — K 只伤方差，不引偏差).
+  const size_t p_target = (ray_num + k_shape - 1u) / k_shape;
+  // Total proportion (skip negatives — mirrors PartitionCrystalRayNum).
+  double total_prop = 0.0;
+  for (float p : proportions) {
+    total_prop += static_cast<double>(std::max(0.0f, p));
+  }
+  if (total_prop <= 0.0) {
+    // All-zero-proportion edge case: fall back to per-ci P_ci=1.
+    return out;
+  }
+  // First pass: floor(ideal) per ci; track fractional remainders for the
+  // second pass (largest-remainder).
+  std::vector<double> remainders(crystal_cnt, 0.0);
+  size_t assigned = 0u;
+  for (size_t ci = 0; ci < crystal_cnt; ++ci) {
+    double ideal = (static_cast<double>(std::max(0.0f, proportions[ci])) / total_prop) *
+                   static_cast<double>(p_target);
+    uint32_t floor_val = static_cast<uint32_t>(ideal);
+    // Clamp minimum 1 (plan §3.2 "K_ci[ci] = max(K_ci[ci], 1)"). This is a
+    // safety net for tiny-proportion cis so their pool always has a valid
+    // shape row. It biases P_target upward vs. strict largest-remainder,
+    // but only when the strict allocation would zero out a ci (which the
+    // downstream kernel dispatch also cannot handle — pool_shape_count
+    // must be >= 1).
+    out[ci] = std::max(floor_val, 1u);
+    assigned += out[ci];
+    remainders[ci] = ideal - static_cast<double>(floor_val);
+  }
+  // Second pass: distribute the deficit / surplus by largest remainder.
+  if (assigned < p_target) {
+    size_t deficit = p_target - assigned;
+    // sort ci indices by remainder DESC (stable-sort by ci as tiebreaker
+    // → identical rng consumption order regardless of who wins the tie).
+    std::vector<size_t> order(crystal_cnt);
+    for (size_t i = 0; i < crystal_cnt; ++i) order[i] = i;
+    std::stable_sort(order.begin(), order.end(),
+                     [&](size_t a, size_t b) { return remainders[a] > remainders[b]; });
+    for (size_t k = 0; k < order.size() && deficit > 0; ++k) {
+      out[order[k]] += 1u;
+      --deficit;
+    }
+  }
+  // Surplus (assigned > p_target) is possible when the min-1 clamp pushed
+  // small-proportion cis above their ideal — accept the over-allocation
+  // (方向"多建形状"而非"少建"，plan §2 默认假设已论证：只影响构造成本，
+  // 不影响正确性).
+  return out;
+}
+
+void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_num, size_t k_shape) {
+  // Build the per-(layer,ci) K-shape geometry pool. Called ONCE per scene when
   // `pool_stochastic_` is false (all crystal params deterministic → shapes
   // are batch-invariant; the build-once optimization at `geom_pool_built_`
-  // stays intact). Called EVERY BeginSession when `pool_stochastic_` is
-  // true — BeginSession force-invalidates `geom_pool_built_` in that case
-  // so this rebuild path draws a fresh batch of shapes from `rng_`.
-  // MakeCrystal is consumed from `rng_` in the EXACT order the per-batch
-  // ci-loop used it (layers outer, ci inner); `rng_` is seed-once (see the
-  // `rng_seeded_` field), so successive rebuilds advance the stream instead
-  // of replaying the same prefix.
+  // stays intact — K-shape adds P_ci shapes per (layer,ci) but they too are
+  // deterministic across batches when the params are). Called EVERY BeginSession
+  // when `pool_stochastic_` is true — BeginSession force-invalidates
+  // `geom_pool_built_` in that case so this rebuild path draws a fresh batch
+  // of shapes from `rng_`. MakeCrystal is consumed from `rng_` in the EXACT
+  // order the per-batch ci-loop used it (layers outer, ci inner, shape-index
+  // innermost); `rng_` is seed-once (see the `rng_seeded_` field), so
+  // successive rebuilds advance the stream instead of replaying the same
+  // prefix.
+  //
+  // K-shape semantics (this task, plan §3.2):
+  //   - k_shape == 0 (LUMICE_GPU_GEOM_CLOCK unset) → P_ci ≡ 1 per (layer,ci),
+  //     equivalent to today: `MakeCrystal` called exactly once per (layer,ci),
+  //     `pool_*` vectors have the exact same content, byte-for-byte, as the
+  //     pre-K-shape implementation. This is the AC2 hard bit-equivalence bar.
+  //   - k_shape > 0 → each (layer,ci) allocates P_ci = round(P_target *
+  //     proportion_ci / Σ proportion) shapes where P_target = ceil(ray_num/K),
+  //     via AllocateShapeBudget's largest-remainder distribution.
   if (geom_pool_rebuild_count_enabled_) {
     ++geom_pool_rebuild_count_;
   }
@@ -2325,6 +2591,9 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene) {
   pool_poly_off_.clear(); pool_poly_cnt_.clear();
   pool_tri_off_.clear();  pool_tri_cnt_.clear();
   layer_slot_base_.clear();
+  ci_pool_slot_base_.clear();
+  ci_pool_shape_count_.clear();
+  pool_shape_count_this_batch_ = 0u;
 
   std::vector<float>    h_poly_n, h_poly_d, h_tri_vtx, h_tri_norm, h_tri_area;
   std::vector<uint16_t> h_tri2poly;
@@ -2333,39 +2602,62 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene) {
   for (size_t mi = 0; mi < scene.ms_.size(); ++mi) {
     layer_slot_base_.push_back(static_cast<uint32_t>(pool_crystals_.size()));
     const auto& settings = scene.ms_[mi].setting_;
-    for (size_t ci = 0; ci < settings.size(); ++ci) {
-      Crystal crystal = MakeCrystal(rng_, settings[ci].crystal_.param_);
-      size_t poly_cnt = crystal.PolygonFaceCount();
-      size_t tri_cnt  = crystal.TotalTriangles();
-      if (poly_cnt == 0 || tri_cnt == 0) {
-        throw BackendUnavailableError("CudaTraceBackend::BuildGeomPool: degenerate crystal geometry");
-      }
-      if (tri_cnt > static_cast<size_t>(lm_pcg::kMaxTriPerKernel)) {
-        throw BackendUnavailableError(
-            std::string{"CudaTraceBackend::BuildGeomPool: tri_count="} + std::to_string(tri_cnt) +
-            " exceeds kMaxTriPerKernel=" + std::to_string(lm_pcg::kMaxTriPerKernel));
-      }
-      const float* pn = crystal.GetPolygonFaceNormal();
-      const float* pd = crystal.GetPolygonFaceDist();
-      h_poly_n.insert(h_poly_n.end(), pn, pn + 3 * poly_cnt);
-      h_poly_d.insert(h_poly_d.end(), pd, pd + poly_cnt);
-      const float* tv = crystal.GetTriangleVtx();
-      const float* tn = crystal.GetTriangleNormal();
-      const float* ta = crystal.GetTirangleArea();
-      h_tri_vtx.insert(h_tri_vtx.end(), tv, tv + 9 * tri_cnt);
-      h_tri_norm.insert(h_tri_norm.end(), tn, tn + 3 * tri_cnt);
-      h_tri_area.insert(h_tri_area.end(), ta, ta + tri_cnt);
-      std::vector<uint16_t> t2p;
-      FillTriToPoly(crystal, t2p);
-      h_tri2poly.insert(h_tri2poly.end(), t2p.begin(), t2p.end());
+    // Build per-ci shape-count budget (Path B static-weight). K==0 → all 1s
+    // → today's byte-exact behavior (AC2). This layer's proportions[] mirrors
+    // TraceLayer's PartitionCrystalRayNum input for the same layer, so K_ci
+    // apportions on the SAME weights the ci-loop uses to split ray_num.
+    std::vector<float> proportions;
+    proportions.reserve(settings.size());
+    for (const auto& s : settings) {
+      proportions.push_back(s.crystal_proportion_);
+    }
+    const std::vector<uint32_t> k_ci_this_layer = AllocateShapeBudget(proportions, ray_num, k_shape);
 
-      pool_poly_off_.push_back(poly_acc);
-      pool_poly_cnt_.push_back(static_cast<uint32_t>(poly_cnt));
-      pool_tri_off_.push_back(tri_acc);
-      pool_tri_cnt_.push_back(static_cast<uint32_t>(tri_cnt));
-      poly_acc += static_cast<uint32_t>(poly_cnt);
-      tri_acc  += static_cast<uint32_t>(tri_cnt);
-      pool_crystals_.push_back(std::move(crystal));
+    for (size_t ci = 0; ci < settings.size(); ++ci) {
+      const uint32_t p_ci = k_ci_this_layer[ci];  // >= 1 by AllocateShapeBudget contract
+      // Record this ci's pool slot range: [slot_base, slot_base + p_ci). The
+      // slot_base is the current pool_crystals_ size (running total of shapes
+      // committed to the pool). This separation from `layer_slot_base_[mi]+ci`
+      // (the "flat config-space ci index") is the plan §3.3 accounting split.
+      ci_pool_slot_base_.push_back(static_cast<uint32_t>(pool_crystals_.size()));
+      ci_pool_shape_count_.push_back(p_ci);
+      for (uint32_t s = 0; s < p_ci; ++s) {
+        Crystal crystal = MakeCrystal(rng_, settings[ci].crystal_.param_);
+        size_t poly_cnt = crystal.PolygonFaceCount();
+        size_t tri_cnt  = crystal.TotalTriangles();
+        if (poly_cnt == 0 || tri_cnt == 0) {
+          throw BackendUnavailableError("CudaTraceBackend::BuildGeomPool: degenerate crystal geometry");
+        }
+        if (tri_cnt > static_cast<size_t>(lm_pcg::kMaxTriPerKernel)) {
+          throw BackendUnavailableError(
+              std::string{"CudaTraceBackend::BuildGeomPool: tri_count="} + std::to_string(tri_cnt) +
+              " exceeds kMaxTriPerKernel=" + std::to_string(lm_pcg::kMaxTriPerKernel) +
+              " (layer=" + std::to_string(mi) + " ci=" + std::to_string(ci) +
+              " shape=" + std::to_string(s) + "/" + std::to_string(p_ci) + ")");
+        }
+        const float* pn = crystal.GetPolygonFaceNormal();
+        const float* pd = crystal.GetPolygonFaceDist();
+        h_poly_n.insert(h_poly_n.end(), pn, pn + 3 * poly_cnt);
+        h_poly_d.insert(h_poly_d.end(), pd, pd + poly_cnt);
+        const float* tv = crystal.GetTriangleVtx();
+        const float* tn = crystal.GetTriangleNormal();
+        const float* ta = crystal.GetTirangleArea();
+        h_tri_vtx.insert(h_tri_vtx.end(), tv, tv + 9 * tri_cnt);
+        h_tri_norm.insert(h_tri_norm.end(), tn, tn + 3 * tri_cnt);
+        h_tri_area.insert(h_tri_area.end(), ta, ta + tri_cnt);
+        std::vector<uint16_t> t2p;
+        FillTriToPoly(crystal, t2p);
+        h_tri2poly.insert(h_tri2poly.end(), t2p.begin(), t2p.end());
+
+        pool_poly_off_.push_back(poly_acc);
+        pool_poly_cnt_.push_back(static_cast<uint32_t>(poly_cnt));
+        pool_tri_off_.push_back(tri_acc);
+        pool_tri_cnt_.push_back(static_cast<uint32_t>(tri_cnt));
+        poly_acc += static_cast<uint32_t>(poly_cnt);
+        tri_acc  += static_cast<uint32_t>(tri_cnt);
+        pool_crystals_.push_back(std::move(crystal));
+        ++pool_shape_count_this_batch_;
+      }
     }
   }
 
@@ -2376,6 +2668,8 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene) {
   cudaFree(d_pool_tri_norm_);    d_pool_tri_norm_ = nullptr;
   cudaFree(d_pool_tri_area_);    d_pool_tri_area_ = nullptr;
   cudaFree(d_pool_tri_to_poly_); d_pool_tri_to_poly_ = nullptr;
+  cudaFree(d_pool_shape_table_); d_pool_shape_table_ = nullptr;  // K-shape pool
+  pool_shape_slot_cap_ = 0;
 
   CheckCuda(cudaMalloc(&d_pool_poly_n_,      3 * poly_acc * sizeof(float)),    "BuildGeomPool malloc pool_poly_n");
   CheckCuda(cudaMalloc(&d_pool_poly_d_,          poly_acc * sizeof(float)),    "BuildGeomPool malloc pool_poly_d");
@@ -2396,6 +2690,27 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene) {
                        cudaMemcpyHostToDevice), "BuildGeomPool H2D pool_tri_area");
   CheckCuda(cudaMemcpy(d_pool_tri_to_poly_, h_tri2poly.data(), h_tri2poly.size() * sizeof(uint16_t),
                        cudaMemcpyHostToDevice), "BuildGeomPool H2D pool_tri_to_poly");
+
+  // K-shape shape-table upload: one `uint4` row per pool slot, packed as
+  // {poly_off, poly_cnt, tri_off, tri_cnt}. Kernel-side read is by absolute
+  // pool slot index (slot_base + pool_slot) so an array-of-struct layout on
+  // uint4 is the natural fit — 16B/row, 4 fields, 128b aligned.
+  const size_t total_slots = pool_crystals_.size();
+  if (total_slots > 0u) {
+    std::vector<uint32_t> h_shape_table(total_slots * 4u);
+    for (size_t k = 0; k < total_slots; ++k) {
+      h_shape_table[k * 4u + 0u] = pool_poly_off_[k];
+      h_shape_table[k * 4u + 1u] = pool_poly_cnt_[k];
+      h_shape_table[k * 4u + 2u] = pool_tri_off_[k];
+      h_shape_table[k * 4u + 3u] = pool_tri_cnt_[k];
+    }
+    CheckCuda(cudaMalloc(&d_pool_shape_table_, total_slots * 4u * sizeof(uint32_t)),
+              "BuildGeomPool malloc pool_shape_table");
+    CheckCuda(cudaMemcpy(d_pool_shape_table_, h_shape_table.data(),
+                         total_slots * 4u * sizeof(uint32_t), cudaMemcpyHostToDevice),
+              "BuildGeomPool H2D pool_shape_table");
+    pool_shape_slot_cap_ = total_slots;
+  }
 
   geom_pool_built_ = true;
 }
@@ -2422,6 +2737,7 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
   cudaFree(d_from_poly_); d_from_poly_ = nullptr;
   cudaFree(d_root_wl_idx_); d_root_wl_idx_ = nullptr;
   cudaFree(d_root_component_); d_root_component_ = nullptr;  // task-331.6
+  cudaFree(d_root_pool_shape_); d_root_pool_shape_ = nullptr;  // K-shape pool
   cudaFree(d_rot_c2w_);  d_rot_c2w_ = nullptr;
   cudaFree(d_exit_);     d_exit_ = nullptr;
   cudaFree(d_exit_count_); d_exit_count_ = nullptr;
@@ -2430,6 +2746,7 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
     cudaFree(d_cont_w_[s]);      d_cont_w_[s] = nullptr;
     cudaFree(d_cont_wl_idx_[s]); d_cont_wl_idx_[s] = nullptr;
     cudaFree(d_cont_component_[s]); d_cont_component_[s] = nullptr;  // task-331.6
+    cudaFree(d_cont_pool_shape_[s]); d_cont_pool_shape_[s] = nullptr;  // K-shape pool
     cudaFree(d_cont_count_[s]);  d_cont_count_[s] = nullptr;
   }
   cudaFreeHost(pinned_dirs_);     pinned_dirs_ = nullptr;
@@ -2471,6 +2788,13 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
   ck(cudaMalloc(&d_root_wl_idx_, buf_cap * sizeof(uint32_t)),              "cudaMalloc d_root_wl_idx");
   // task-331.6: per-ray component mask carrier (sibling of d_root_wl_idx_).
   ck(cudaMalloc(&d_root_component_, buf_cap * sizeof(unsigned long long)), "cudaMalloc d_root_component");
+  // K-shape pool: per-ray shape (poly_off, poly_cnt) carrier written by
+  // gen_root_kernel / transit_multi_ms_kernel and read by trace_single_ms_kernel.
+  // Sized like d_root_wl_idx_ (one entry per root ray). Even in P_ci=1 today's
+  // behavior the trace kernel reads this — value there is (poly_off=0,
+  // poly_cnt=only_shape_poly_cnt), a no-op but the read cost is negligible
+  // (uint2 = 8B, same locality as wl_idx).
+  ck(cudaMalloc(&d_root_pool_shape_, buf_cap * sizeof(uint2)), "cudaMalloc d_root_pool_shape");
   ck(cudaMalloc(&d_rot_c2w_,     9 * buf_cap * sizeof(float)),             "cudaMalloc d_rot_c2w");
   ck(cudaMalloc(&d_exit_,        exit_cap_ * sizeof(ExitRayRecord)),       "cudaMalloc d_exit");
   ck(cudaMalloc(&d_exit_count_,  sizeof(uint32_t)),                        "cudaMalloc d_exit_count");
@@ -2480,6 +2804,10 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
     ck(cudaMalloc(&d_cont_wl_idx_[s], cont_cap0 * sizeof(uint32_t)),        "cudaMalloc d_cont_wl_idx");
     // task-331.6: per-ray component mask for continuation rays (sibling of wl_idx).
     ck(cudaMalloc(&d_cont_component_[s], cont_cap0 * sizeof(unsigned long long)), "cudaMalloc d_cont_component");
+    // K-shape pool: per-ray shape carrier on the continuation ring (mirror the
+    // wl_idx sibling pattern — written by trace_single_ms_kernel on ms_mode==1
+    // and read by the next layer's trace kernel via ping-pong).
+    ck(cudaMalloc(&d_cont_pool_shape_[s], cont_cap0 * sizeof(uint2)),        "cudaMalloc d_cont_pool_shape");
     ck(cudaMalloc(&d_cont_count_[s],  sizeof(uint32_t)),                    "cudaMalloc d_cont_count");
   }
 
@@ -2545,6 +2873,7 @@ void CudaTraceBackend::Impl::EnsureContCapacity(size_t n_in, int out_slot) {
     cudaFree(d_from_poly_);   d_from_poly_ = nullptr;
     cudaFree(d_root_wl_idx_); d_root_wl_idx_ = nullptr;
     cudaFree(d_root_component_); d_root_component_ = nullptr;  // task-331.6
+    cudaFree(d_root_pool_shape_); d_root_pool_shape_ = nullptr;  // K-shape pool
     cudaFree(d_rot_c2w_);     d_rot_c2w_ = nullptr;
     ck(cudaMalloc(&d_dirs_,        3 * n_in * sizeof(float)),   "cudaMalloc d_dirs (grow)");
     ck(cudaMalloc(&d_pos_,         3 * n_in * sizeof(float)),   "cudaMalloc d_pos (grow)");
@@ -2553,6 +2882,9 @@ void CudaTraceBackend::Impl::EnsureContCapacity(size_t n_in, int out_slot) {
     ck(cudaMalloc(&d_root_wl_idx_, n_in * sizeof(uint32_t)),    "cudaMalloc d_root_wl_idx (grow)");
     // task-331.6: grow the component mask carrier in lockstep with the roots.
     ck(cudaMalloc(&d_root_component_, n_in * sizeof(unsigned long long)), "cudaMalloc d_root_component (grow)");
+    // K-shape pool: grow the per-ray pool-shape carrier in lockstep with the
+    // roots (same lifetime / same sizing as d_root_wl_idx_).
+    ck(cudaMalloc(&d_root_pool_shape_, n_in * sizeof(uint2)), "cudaMalloc d_root_pool_shape (grow)");
     ck(cudaMalloc(&d_rot_c2w_,     9 * n_in * sizeof(float)),   "cudaMalloc d_rot_c2w (grow)");
     root_cap_ = n_in;
   }
@@ -2567,11 +2899,15 @@ void CudaTraceBackend::Impl::EnsureContCapacity(size_t n_in, int out_slot) {
     cudaFree(d_cont_w_[out_slot]);      d_cont_w_[out_slot] = nullptr;
     cudaFree(d_cont_wl_idx_[out_slot]); d_cont_wl_idx_[out_slot] = nullptr;
     cudaFree(d_cont_component_[out_slot]); d_cont_component_[out_slot] = nullptr;  // task-331.6
+    cudaFree(d_cont_pool_shape_[out_slot]); d_cont_pool_shape_[out_slot] = nullptr;  // K-shape pool
     ck(cudaMalloc(&d_cont_d_[out_slot],      3 * need * sizeof(float)),    "cudaMalloc d_cont_d (grow)");
     ck(cudaMalloc(&d_cont_w_[out_slot],      need * sizeof(float)),        "cudaMalloc d_cont_w (grow)");
     ck(cudaMalloc(&d_cont_wl_idx_[out_slot], need * sizeof(uint32_t)),     "cudaMalloc d_cont_wl_idx (grow)");
     // task-331.6: grow the continuation component mask in lockstep.
     ck(cudaMalloc(&d_cont_component_[out_slot], need * sizeof(unsigned long long)), "cudaMalloc d_cont_component (grow)");
+    // K-shape pool: grow per-ray shape carrier in lockstep with the rest of the
+    // continuation ring — trace_single_ms_kernel reads it out on the next layer.
+    ck(cudaMalloc(&d_cont_pool_shape_[out_slot], need * sizeof(uint2)), "cudaMalloc d_cont_pool_shape (grow)");
     cont_cap_[out_slot] = need;
   }
 }
@@ -3162,6 +3498,27 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
       impl_->disable_device_gen_ = env::DisableDeviceGen(geom_logger);
     }
 
+    // K-shape pool: resolve the `LUMICE_GPU_GEOM_CLOCK` knob (0 == disabled →
+    // P_ci ≡ 1 → today's byte-exact behavior). Read once here so both
+    // BuildGeomPool (K-shape allocation) and the per-batch reset accumulator
+    // share the same effective value across the session. `disable_device_gen_`
+    // path drops the shape pool entirely (per-batch host-roots MakeCrystal is
+    // inherently P_ci=1 via a different code path) — WARN once if both env
+    // knobs are simultaneously set to non-default values (plan §3.8).
+    const std::size_t k_shape_effective =
+        impl_->disable_device_gen_ ? 0u : env::GpuGeomClock(geom_logger, /*default_val=*/0u);
+    if (impl_->disable_device_gen_ && env::GpuGeomClock(geom_logger, /*default_val=*/0u) > 0u) {
+      // Only WARN on first Beginsession per Run (mirrors the disable_device_gen_
+      // one-shot log discipline — the gen_seeded_ flag).
+      if (!impl_->gen_seeded_) {
+        ILOG_WARN(geom_logger,
+                  "CudaTraceBackend::BeginSession: LUMICE_GPU_GEOM_CLOCK and "
+                  "LUMICE_DISABLE_DEVICE_GEN are both set to non-default values. "
+                  "The K-shape pool is unavailable on the host-roots fallback path "
+                  "— treating K as 0 (P_ci=1) for this session.");
+      }
+    }
+
     // Geometry to device. Device-gen path: build the per-(layer,ci) pool ONCE
     // and persist it across the per-batch cycle (parity-exact — same shapes in
     // the same rng_ order; eliminates the per-batch 6×blocking-H2D re-upload of
@@ -3171,7 +3528,7 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     // feeds the wl pool + refractive-index log below in both paths.
     if (!impl_->disable_device_gen_) {
       if (!impl_->geom_pool_built_) {
-        impl_->BuildGeomPool(*spec.scene);  // sets geom_pool_built_
+        impl_->BuildGeomPool(*spec.scene, spec.ray_num, k_shape_effective);  // sets geom_pool_built_
       }
       impl_->poly_cnt_ = impl_->pool_poly_cnt_[0];
       impl_->tri_cnt_  = impl_->pool_tri_cnt_[0];
@@ -3531,6 +3888,14 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     const float* geom_poly_n; const float* geom_poly_d; uint32_t geom_poly_cnt;
     const float* geom_tri_vtx; const float* geom_tri_norm; const float* geom_tri_area;
     const uint16_t* geom_tri_to_poly; uint32_t geom_tri_cnt;
+    // K-shape: the (shape-table pointer, pool_shape_count) pair passed to
+    // gen/transit/trace kernels. In device-gen mode: shape_table pre-offset
+    // to this ci's slot_base + p_ci = ci's actual K_ci. In disable_device_gen
+    // mode: 1-row fallback (populated below) + p_ci=1 (matches the legacy
+    // single-crystal semantics; K-shape is disabled on this fallback path
+    // per plan §3.8).
+    const uint4* ci_pool_shape_table = nullptr;
+    uint32_t     ci_p_ci = 1u;
     if (impl_->disable_device_gen_) {
       ci_crystal_fb = std::make_unique<Crystal>(MakeCrystal(impl_->rng_, ms_setting.crystal_.param_));
       impl_->UploadCrystalGeometry(*ci_crystal_fb);
@@ -3540,17 +3905,50 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
       geom_tri_vtx = impl_->d_tri_vtx_; geom_tri_norm = impl_->d_tri_norm_;
       geom_tri_area = impl_->d_tri_area_; geom_tri_to_poly = impl_->d_tri_to_poly_;
       geom_tri_cnt = impl_->tri_cnt_;
+      // K-shape fallback: allocate + populate a 1-row shape table matching
+      // this ci's just-uploaded single crystal. The kernel path treats
+      // pool_shape_count==1 as "no diversity" — pool_slot ≡ 0 → shape row
+      // {poly_off=0, poly_cnt=poly_cnt_, tri_off=0, tri_cnt=tri_cnt_} → the
+      // legacy single-crystal read pattern, byte-for-byte.
+      if (impl_->d_pool_shape_table_fb_ == nullptr) {
+        ck_reset(cudaMalloc(&impl_->d_pool_shape_table_fb_, 4u * sizeof(uint32_t)),
+                 "cudaMalloc d_pool_shape_table_fb");
+      }
+      const uint32_t fb_row[4] = { 0u, impl_->poly_cnt_, 0u, impl_->tri_cnt_ };
+      ck_reset(cudaMemcpyAsync(impl_->d_pool_shape_table_fb_, fb_row, 4u * sizeof(uint32_t),
+                               cudaMemcpyHostToDevice, impl_->stream_),
+               "H2D d_pool_shape_table_fb");
+      ci_pool_shape_table = reinterpret_cast<const uint4*>(impl_->d_pool_shape_table_fb_);
+      ci_p_ci = 1u;
     } else {
-      const uint32_t slot = impl_->layer_slot_base_[impl_->ms_layer_idx_] + static_cast<uint32_t>(ci);
-      const Crystal& pc = impl_->pool_crystals_[slot];
+      // K-shape device-gen path. `flat_ci` indexes both the config-space ci
+      // vectors (crystal_proportion_, filter_desc_ci, …) AND the K-shape pool
+      // accounting vectors (ci_pool_slot_base_ / ci_pool_shape_count_). The
+      // first pool slot for this ci (== the ci's "representative shape") drives
+      // ci_cfg_id + the pre-K-shape geom-log fields — kernel-side per-ray shape
+      // pick derives the actual per-ray geometry.
+      const uint32_t flat_ci = impl_->layer_slot_base_[impl_->ms_layer_idx_] + static_cast<uint32_t>(ci);
+      const uint32_t slot_base_ci = impl_->ci_pool_slot_base_[flat_ci];
+      const Crystal& pc = impl_->pool_crystals_[slot_base_ci];
       ci_cfg_id = (pc.config_id_ == kInvalidId) ? 0xFFFFu : static_cast<uint32_t>(pc.config_id_);
-      const uint32_t po = impl_->pool_poly_off_[slot];
-      const uint32_t to = impl_->pool_tri_off_[slot];
-      geom_poly_n = impl_->d_pool_poly_n_ + 3u * po; geom_poly_d = impl_->d_pool_poly_d_ + po;
-      geom_poly_cnt = impl_->pool_poly_cnt_[slot];
-      geom_tri_vtx = impl_->d_pool_tri_vtx_ + 9u * to; geom_tri_norm = impl_->d_pool_tri_norm_ + 3u * to;
-      geom_tri_area = impl_->d_pool_tri_area_ + to; geom_tri_to_poly = impl_->d_pool_tri_to_poly_ + to;
-      geom_tri_cnt = impl_->pool_tri_cnt_[slot];
+      // K-shape: pass the POOL BASE (not per-shape offset). The kernel-side
+      // per-ray shape pick reads from the shape table (also passed below) and
+      // adds `poly_off * {3|1}` / `tri_off * {9|3|1}` to reconstitute the
+      // per-ray effective pointers. This is the plan §3.1 "全程局部索引"
+      // contract: the only place absolute pool offsets exist is inside the
+      // shape table + the +offset multiply that produces effective pointers;
+      // everything else (from_poly / hit_poly / path_rec) stays 0-based.
+      geom_poly_n = impl_->d_pool_poly_n_;   geom_poly_d = impl_->d_pool_poly_d_;
+      geom_poly_cnt = impl_->pool_poly_cnt_[slot_base_ci];  // representative — kernel reads per-ray
+      geom_tri_vtx = impl_->d_pool_tri_vtx_; geom_tri_norm = impl_->d_pool_tri_norm_;
+      geom_tri_area = impl_->d_pool_tri_area_; geom_tri_to_poly = impl_->d_pool_tri_to_poly_;
+      geom_tri_cnt = impl_->pool_tri_cnt_[slot_base_ci];    // representative (max across P_ci also OK)
+      // K-shape shape table pointer: pre-offset to this ci's slot_base so the
+      // kernel indexes 0-based by its per-ray pool_slot draw. Each row is a
+      // uint4 = 4 uint32; reinterpret from the uint32 storage above.
+      ci_pool_shape_table = reinterpret_cast<const uint4*>(impl_->d_pool_shape_table_)
+                            + slot_base_ci;
+      ci_p_ci = impl_->ci_pool_shape_count_[flat_ci];
     }
 
     // 330.2 S6: rebuild the latitude LUT for this ci's axis distribution before
@@ -3568,6 +3966,12 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
           BuildGenGpParams(ms_setting.crystal_.axis_, geom_tri_cnt, cin,
                            impl_->scene_->light_source_.param_, impl_->wl_pool_size_);
       gp.gen_seed     = impl_->gen_seed_;
+      // K-shape: tell the kernel how many pool shapes to draw from. The
+      // shape-table pointer is passed separately below (constant per dispatch).
+      // gp.tri_count above is kept as the belt-and-suspenders early-exit guard
+      // (kernel checks `gp.tri_count == 0`); the per-ray sampling loop bound
+      // reads the actual tri_cnt from the shape table row instead.
+      gp.pool_shape_count = ci_p_ci;
       // task-gpu-rng-ray-index-uint64: SplitPcgRayBase forwards the full 64-bit
       // gen_ray_count_ to the device as lo/hi halves; the kernel mixes hi into
       // each ray's PCG seed so >2^32 sessions no longer collapse on wrap
@@ -3590,6 +3994,12 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
                                      geom_tri_norm, geom_tri_area, geom_tri_to_poly,
                                      impl_->d_wl_pool_,
                                      impl_->d_lat_lut_theta_, impl_->d_lat_lut_cdf_, impl_->d_lat_lut_flip_,
+                                     // K-shape: shape table (pre-offset to this ci) + per-ray
+                                     // shape carrier output. `d_root_pool_shape_` is the sibling
+                                     // of `d_root_wl_idx_` — lives across per-ci dispatches so
+                                     // the next transit/trace can read it in the [0, cin) window.
+                                     ci_pool_shape_table,
+                                     impl_->d_root_pool_shape_,
                                      gp, cin,
                                      gen_probe_arg,
                                      static_cast<uint32_t>(impl_->probe_ci_start_ + probe_win_off),
@@ -3651,6 +4061,8 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
       lm_pcg::GenRootKernelParams gp =
           BuildTransitGpParams(ms_setting.crystal_.axis_, geom_tri_cnt, cin);
       gp.gen_seed     = impl_->transit_seed_;
+      // K-shape: per-ci pool shape count (see gen dispatch above for details).
+      gp.pool_shape_count = ci_p_ci;
       // task-gpu-rng-ray-index-uint64: full 64-bit transit_ray_count_ →
       // lo/hi (see gen path above for rationale).
       {
@@ -3670,6 +4082,10 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
           impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
           impl_->d_rot_c2w_, impl_->d_root_wl_idx_,
           geom_tri_vtx, geom_tri_norm, geom_tri_area, geom_tri_to_poly,
+          // K-shape: shape table (pre-offset to this ci) + per-ray shape
+          // carrier output. Written into d_root_pool_shape_ so trace kernel
+          // reads it just like d_root_wl_idx_.
+          ci_pool_shape_table, impl_->d_root_pool_shape_,
           impl_->d_lat_lut_theta_, impl_->d_lat_lut_cdf_, impl_->d_lat_lut_flip_,
           gp, cin, transit_probe_arg,
           static_cast<uint32_t>(impl_->probe_ci_start_ + probe_win_off),
@@ -3725,10 +4141,22 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
       color_params.color_class_bits[c]    = cls.member_bits_;
       color_params.color_class_combine[c] = (cls.combine_ == ColorClassCombine::kAll) ? 1u : 0u;
     }
+    // K-shape: trace kernel consumes the per-ray shape carrier that gen/transit
+    // wrote (d_root_pool_shape_). geom_poly_n / geom_poly_d are POOL BASE
+    // pointers (not per-shape offsets) — the kernel adds `poly_off` from the
+    // shape carrier to build ray-effective pointers. When cont-rings are
+    // wired (multi-MS layers), the trace kernel reads the SAME d_root_pool_shape_
+    // buffer because transit writes into it at the start of each layer's
+    // ci-loop; the carrier value is per-ray and always matches this dispatch.
+    // (Note: `geom_poly_cnt` is now unused by the kernel — poly_cnt is read
+    // per-ray from the shape carrier. Kept in the launch site for parity
+    // with the diagnostic log paths but not used device-side.)
+    (void)geom_poly_cnt;  // silence unused-var; poly_cnt is read per-ray from d_pool_shape_in
     trace_single_ms_kernel<<<grid, 256, 0, impl_->stream_>>>(
         impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
         cin, geom_poly_n, geom_poly_d,
-        geom_poly_cnt, impl_->d_rot_c2w_, impl_->d_wl_pool_, impl_->d_root_wl_idx_,
+        impl_->d_root_pool_shape_,
+        impl_->d_rot_c2w_, impl_->d_wl_pool_, impl_->d_root_wl_idx_,
         max_hits, impl_->d_exit_,
         static_cast<uint32_t>(impl_->exit_cap_), impl_->d_exit_count_,
         /*crystal_id=*/static_cast<uint32_t>(ci), /*ms_layer_idx=*/impl_->ms_layer_idx_,
@@ -4268,10 +4696,30 @@ uint32_t CudaTraceBackend::WlPoolSize() const {
 }
 
 size_t CudaTraceBackend::GetLastBatchCrystalCount() const {
-  // task-exit-seam-crystal-count: Impl::final_layer_crystals_ is populated
-  // during BeginSession (cuda_trace_backend.cu:2078-2093), so it can be read
-  // safely anytime the session is open.
-  return impl_->final_layer_crystals_.size();
+  // Unified with MetalTraceBackend semantic: return the total distinct pool
+  // shapes built this batch (Σ P_ci over all layers × cis). Reflects the
+  // K-shape geometry pool's actual shape footprint — matches the "how many
+  // distinct crystal instances did we trace against" question the diagnostic
+  // is meant to answer (main.cpp: `Stats: crystals=N`).
+  //
+  //   - K==0 (LUMICE_GPU_GEOM_CLOCK unset) or deterministic scene:
+  //       P_ci ≡ 1 per (layer,ci) → count == Σ crystal_cnt over layers
+  //       (== today's semantic behavior even though we replaced the
+  //       `final_layer_crystals_.size()` implementation — which was
+  //       "final-layer crystal_cnt only", NOT the config-total).
+  //   - K>0 stochastic scene: count grows with the pool depth ~ ray_num/K.
+  //   - `disable_device_gen_` debug fallback: BuildGeomPool is skipped, so
+  //     `pool_shape_count_this_batch_` stays 0 — the fallback path uploads
+  //     one crystal per (layer,ci) per batch via UploadCrystalGeometry, so
+  //     the pool footprint is effectively `Σ crystal_cnt`. Mirroring that
+  //     exactly requires per-ci accounting on the fallback path; deferred
+  //     as a diagnostic-only follow-up (the main K-shape path — which is
+  //     the reason this counter was added — is correct).
+  //
+  // Reset in BuildGeomPool (device-gen paths) so the deterministic once-per-
+  // scene rebuild's count persists across batches, and stochastic per-batch
+  // rebuilds' count is refreshed each batch.
+  return impl_->pool_shape_count_this_batch_;
 }
 
 ColorDegradeCounts CudaTraceBackend::GetLastColorDegradeCounts() const {

@@ -138,6 +138,13 @@ struct GenRootKernelParams {
   uint32_t gen_ray_base;     // low 32 bits of running ray-count (may wrap; the mod-2^32 wrap is intentional)
   uint32_t gen_ray_base_hi;  // high 32 bits of running ray-count (0 unless the session accumulated >2^32 rays)
   uint32_t num_rays;
+  // K-shape pool: `tri_count` is now the belt-and-suspenders EARLY-EXIT guard
+  // only (kernel `if (gp.tri_count == 0) return`). The per-ray triangle-count
+  // for the sampling loop is read from the per-ci pool shape table
+  // (`d_pool_shape_table_[pool_slot].w`). Host fills `tri_count` with a
+  // representative shape's tri count (typically the first shape of the ci —
+  // sufficient for the early-exit check since BuildGeomPool asserts every
+  // built shape has tri_count > 0). CUDA/Metal share this role uniformly.
   uint32_t tri_count;
   float sun_lon;           // (sun.azimuth + 180°) in radians
   float sun_lat;           // (-sun.altitude) in radians
