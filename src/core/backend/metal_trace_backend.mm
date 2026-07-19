@@ -621,6 +621,10 @@ struct MetalTraceBackend::Impl {
   Logger* logger_ = nullptr;
   // Captured at construction from LUMICE_DISABLE_DEVICE_GEN. See ctor above.
   bool disable_device_gen_ = false;
+  // Warn-once: K-shape pool built with some shape having tri_count > 64 on the
+  // gen path — that ci silently degraded to host-gen. Latched for the backend
+  // lifetime so spammy per-ci logs don't drown the console.
+  bool warned_pool_tri_overflow_gen_ = false;
   // gen+trace fusion stash (task-264). When device-gen runs for a ci,
   // GenerateFirstLayerRootsForCi parks the GenRootKernelParams here instead of
   // dispatching its own command buffer; DispatchLayer then prepends an
@@ -788,6 +792,14 @@ struct MetalTraceBackend::Impl {
   std::vector<std::array<uint32_t, 4>> pool_shape_table_h_;
   id<MTLBuffer> pool_shape_table_buf_ = nil;  // pool_capacity_ × uint4 (shape offsets)
   size_t        pool_shape_capacity_  = 0;
+  // Running total of distinct pool shapes built across every (layer, ci) in
+  // the current batch. Reset in BeginSession; incremented by UploadCrystalPool.
+  // Read out by GetLastBatchCrystalCount() as the "how many distinct crystal
+  // instances did this batch actually build" metric — the semantic that both
+  // GPU backends converge on when geometry becomes a per-ray sampled quantity
+  // (unifies the CPU vs GPU divergence documented on trace_backend.hpp's
+  // GetLastBatchCrystalCount).
+  size_t                   pool_shape_count_this_batch_ = 0;
 
   // Unified area-measure inverse-CDF latitude LUT (330.2). Three fixed-size
   // (LatLut::kNodes float) shared buffers rebuilt per-ci by UploadLatLut when the
@@ -1869,6 +1881,9 @@ void MetalTraceBackend::Impl::UploadCrystalPool(const std::vector<Crystal>& pool
     table_ptr[s * 4 + 2] = pool_shape_table_h_[s][2];
     table_ptr[s * 4 + 3] = pool_shape_table_h_[s][3];
   }
+
+  // Cross-(layer, ci) running total for GetLastBatchCrystalCount.
+  pool_shape_count_this_batch_ += pool.size();
 }
 
 // 330.2 S3b: allocate the three fixed-size shared LUT buffers if not yet present.
@@ -2775,6 +2790,10 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   impl_->spec = spec;
   impl_->in_session = true;
   impl_->ms_idx = 0;
+  // K-shape pool: reset the per-batch distinct-shape counter (accumulated by
+  // UploadCrystalPool across every (layer, ci) resolve inside this session).
+  // See GetLastBatchCrystalCount for the unified semantics.
+  impl_->pool_shape_count_this_batch_ = 0u;
   // task-color-degrade-gui-surfacing: reset the GPU color-degrade tally at the
   // single per-config entry point, BEFORE both the color-class clamp below
   // (~L2700) and EnsureFilterBuffers (~L2711, where the symmetry-group /
@@ -3166,9 +3185,31 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
           // The escape hatch is cached once per backend in Impl's ctor (see
           // task-260.5 Step 4); tests that need to flip it must setenv BEFORE
           // constructing a new MetalTraceBackend.
+          // K-shape pool: the kMaxTriPerKernel=64 bound applies to whichever
+          // shape gen_root_kernel actually picks; with a P_ci-wide pool that's
+          // the maximum tri_count across all shapes, not just shape 0. If any
+          // pool shape exceeds the bound, degrade the whole ci to host-gen —
+          // the pool_crystals_ side data was already built (waste, but P_ci=1
+          // is the only strictly-correct fallback and the WARN below flags the
+          // situation for tuning).
+          uint32_t pool_max_tri = 0u;
+          for (const auto& c : impl_->pool_crystals_) {
+            pool_max_tri = std::max<uint32_t>(pool_max_tri,
+                                              static_cast<uint32_t>(c.TotalTriangles()));
+          }
+          bool device_gen_geom_ok = pool_max_tri <= 64u;
+          if (!device_gen_geom_ok && impl_->pool_crystals_.size() > 1u &&
+              !impl_->warned_pool_tri_overflow_gen_) {
+            ILOG_WARN(EffectiveLogger(impl_->logger_),
+                      "K-shape pool: gen path shape with tri_count={} > 64 forced host-gen "
+                      "fallback (pool_size={}, ci={}). Set LUMICE_GPU_GEOM_CLOCK=0 or "
+                      "keep crystals below kMaxTriPerKernel=64 to keep device-gen.",
+                      pool_max_tri, impl_->pool_crystals_.size(), ci);
+            impl_->warned_pool_tri_overflow_gen_ = true;
+          }
           bool can_use_device_gen = !use_host &&
                                     impl_->gen_seed_ != 0u &&
-                                    impl_->current_crystal.TotalTriangles() <= 64u &&
+                                    device_gen_geom_ok &&
                                     !impl_->disable_device_gen_;
           in_count = impl_->GenerateFirstLayerRootsForCi(setting, ci, ci_n, can_use_device_gen,
                                                           attempts_win_off);
@@ -3188,10 +3229,19 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
         // across sequential compute encoders on one CB is verified (explore-
         // 263 gen+trace fusion corr 0.946 / task-264). The merge halves the
         // per-ci CPU-GPU sync point count on non-first MS layers (from 2 to 1).
-        if (impl_->current_crystal.TotalTriangles() > 64u) {
+        // K-shape pool: same kMaxTriPerKernel guard as the gen path, but check
+        // ALL shapes (transit_root_kernel also picks one per ray). transit has
+        // no host fallback route today, so a violating shape drops the ci.
+        uint32_t transit_pool_max_tri = 0u;
+        for (const auto& c : impl_->pool_crystals_) {
+          transit_pool_max_tri = std::max<uint32_t>(transit_pool_max_tri,
+                                                   static_cast<uint32_t>(c.TotalTriangles()));
+        }
+        if (transit_pool_max_tri > 64u) {
           ILOG_ERROR(EffectiveLogger(impl_->logger_),
-                     "transit_root_kernel: crystal ci={} tri_count={} exceeds kMaxTriPerKernel=64; ci skipped",
-                     ci, impl_->current_crystal.TotalTriangles());
+                     "transit_root_kernel: pool max tri_count={} exceeds kMaxTriPerKernel=64 "
+                     "(ci={}, pool_size={}); ci skipped",
+                     transit_pool_max_tri, ci, impl_->pool_crystals_.size());
           ci_start += ci_n;
           continue;
         }
@@ -3516,10 +3566,13 @@ uint32_t MetalTraceBackend::WlPoolSize() const {
 }
 
 size_t MetalTraceBackend::GetLastBatchCrystalCount() const {
-  // task-exit-seam-crystal-count: Impl::last_layer_crystals_ is resized/filled
-  // only during the final layer's TraceLayer call (see the block at
-  // metal_trace_backend.mm:2127-2168); reading before EndSession is safe.
-  return impl_->last_layer_crystals_.size();
+  // K-shape pool: this is now the number of distinct crystal INSTANCES the
+  // backend actually built during this batch across every (layer, ci) — the
+  // sum of P_ci over the whole scene. At LUMICE_GPU_GEOM_CLOCK unset (P_ci
+  // collapses to 1 per ci) it equals Σ layers Σ ci 1 = the cross-layer
+  // instance count; with the K knob on it grows toward ~ray_num/K and
+  // converges on legacy CPU's per-batch-instance semantics.
+  return impl_->pool_shape_count_this_batch_;
 }
 
 ColorDegradeCounts MetalTraceBackend::GetLastColorDegradeCounts() const {

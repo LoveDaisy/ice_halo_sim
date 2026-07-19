@@ -248,16 +248,17 @@ TEST(MetalTraceBackend, TraceLayerKernelOccupancy) {
 }
 
 // =============================================================================
-// task-exit-seam-crystal-count: Metal backend reports final-layer setting count.
-// Semantics locked here: return value is the LAST MS layer's setting count
-// (mirrors Impl::last_layer_crystals_), not a cross-layer sum.
+// K-shape geometry pool: GetLastBatchCrystalCount reports the CROSS-LAYER sum
+// of distinct pool shapes built during the batch (Σ layers Σ ci P_ci). At the
+// default knob LUMICE_GPU_GEOM_CLOCK=0, P_ci collapses to 1 per ci, so the
+// return value equals Σ layers Σ ci 1 = the cross-layer setting count.
 // =============================================================================
-TEST(MetalTraceBackend, GetLastBatchCrystalCountReturnsFinalLayerSettings) {
+TEST(MetalTraceBackend, GetLastBatchCrystalCountSumsPoolShapesAcrossLayers) {
   if (ShouldSkipMetalTests()) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
 
-  // Single-MS single-crystal → count == 1.
+  // Single-MS single-crystal → 1 layer × 1 ci × P_ci=1 = 1.
   {
     auto scene = MakeMetalScene(/*max_hits=*/4, /*ms_layers=*/1);
     auto render = MakeRectangularRender();
@@ -279,7 +280,10 @@ TEST(MetalTraceBackend, GetLastBatchCrystalCountReturnsFinalLayerSettings) {
     backend.EndSession();
   }
 
-  // Multi-MS: final layer has 3 crystal settings. Return value MUST be 3.
+  // Multi-MS: layer 0 has 1 crystal setting, layer 1 has 3. At the default
+  // knob (P_ci=1 per ci) the batch-wide sum is 1 + 3 = 4 — this is the exact
+  // opposite of the pre-K-pool semantic that returned only the final layer's
+  // 3 settings.
   {
     auto scene = MakeMetalScene(/*max_hits=*/4, /*ms_layers=*/2);
     auto& final_ms = scene.ms_.back();
@@ -316,7 +320,9 @@ TEST(MetalTraceBackend, GetLastBatchCrystalCountReturnsFinalLayerSettings) {
     auto roots1 = backend.Recombine(std::move(h0), rspec);
     backend.TraceLayer(roots1);
 
-    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 3u) << "Final-layer settings count, not cross-layer sum (would be 4)";
+    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 4u)
+        << "Cross-layer pool-shape sum at K=0: 1 (layer 0) + 3 (layer 1). "
+           "Pre-K-pool semantic was final-layer settings only (3).";
     backend.EndSession();
   }
 }

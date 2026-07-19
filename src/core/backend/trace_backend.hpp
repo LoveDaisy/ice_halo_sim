@@ -515,28 +515,22 @@ class TraceBackend {
   // after BeginSession (CUDA) or after the final TraceLayer call (Metal / CPU),
   // consumed by Simulator to fill SimData.crystal_count_ for stats reporting.
   //
-  // ⚠️ DELIBERATE CROSS-BACKEND SEMANTIC DIFFERENCE (owner-confirmed, 2026-07-01):
-  // StatsConsumer ACCUMULATES this per-batch value, but the per-batch increment
-  // means DIFFERENT PHYSICAL QUANTITIES per backend today, so the displayed
-  // `crystals` total diverges by a large factor:
+  // Per-backend semantic:
   //   * legacy CPU (SimulateOneWavelength): per-batch Crystal-INSTANCE count —
-  //     one Crystal emplaced per small batch for random-orientation scenes, so
-  //     the accumulated total grows ~ray_num/128.
-  //   * GPU exit-seam (this accessor): final-layer crystal *SETTING* count —
-  //     a small constant (typically 1-5) per dispatch, because device-gen
-  //     samples each ray's orientation independently and has no "Crystal
-  //     instance per batch" concept; accumulated total grows ~ray_num/dispatch.
-  // Measured (config_example, dev49 2026-07-01): CPU ≈15454 crystals @1.98M
-  // rays vs CUDA ≈2 @524K rays — an ~2000× gap at equal ray count. Both are
-  // non-zero and internally consistent; they are simply not the same metric.
-  // This gap is architectural, not a bug, and is acceptable because the ONLY
-  // consumer of this stat is the CLI diagnostic line (main.cpp `Stats: ...
-  // crystals=N`) — the GUI does not display it and no internal logic depends
-  // on it. Do NOT use this value in a bit-parity assertion against legacy stats.
-  // UNIFY LATER: when crystal geometry randomization lands (crystal itself
-  // becomes a sampled quantity, like rays), the count becomes a genuine
-  // ray-count-like metric and both backends should converge on one meaning.
-  // See backlog "统一 crystal 计数语义（几何随机化落地时）".
+  //     one Crystal emplaced per small batch for random-orientation scenes,
+  //     so the accumulated total grows ~ray_num/128.
+  //   * Metal (K-shape geometry pool): distinct pool shapes built during the
+  //     batch summed across every (layer, ci) — Σ P_ci. At the default knob
+  //     LUMICE_GPU_GEOM_CLOCK=0 this collapses to Σ layers Σ ci 1 = the
+  //     cross-layer instance count. With K>0 it grows toward ~ray_num/K and
+  //     converges on the legacy CPU meaning as K → 1.
+  //   * CUDA: same K-shape-pool semantic as Metal (both GPU backends share the
+  //     shape-pool infrastructure; see the pool build in each backend).
+  // The ONLY consumer is the CLI diagnostic line (main.cpp `Stats: ...
+  // crystals=N`); GUI does not display it and no internal logic depends on it,
+  // so a residual factor-of-K gap between CPU and GPU at intermediate K values
+  // is expected and harmless. Do NOT use this value in a bit-parity assertion
+  // against legacy stats.
   virtual size_t GetLastBatchCrystalCount() const { return 0; }
 
   // Per-committed-config tally of GPU-side raypath-color drops (see
