@@ -3827,4 +3827,43 @@ size_t MetalTraceBackendTestHooks::PoolShapeCountThisBatch() const {
   return backend_.impl_->pool_shape_count_this_batch_;
 }
 
+size_t MetalTraceBackendTestHooks::ReadbackRecSink(std::vector<float>& out, size_t count) {
+  // [TEST-ONLY] K-shape pool `path[]` locality probe. `rec_sink_buf` gets
+  // `Σ_k float(path[k])` per ray at the tail of `trace_layer_kernel`. Under
+  // the fixed contract path[k] ∈ [0, PolygonFaceCount), so tests can enforce a
+  // simple ceiling `rec_sink[i] < max_hits × PolygonFaceCount`. Unified-memory
+  // shared buffer → plain memcpy.
+  auto& impl = *backend_.impl_;
+  if (impl.rec_sink_buf == nil || count == 0u) {
+    out.clear();
+    return 0u;
+  }
+  const size_t cap_floats =
+      static_cast<size_t>([impl.rec_sink_buf length]) / sizeof(float);
+  if (count > cap_floats) {
+    count = cap_floats;
+  }
+  out.assign(count, 0.0f);
+  std::memcpy(out.data(), [impl.rec_sink_buf contents], count * sizeof(float));
+  return count;
+}
+
+size_t MetalTraceBackendTestHooks::ReadbackRootTf(std::vector<uint32_t>& out, size_t count) {
+  // [TEST-ONLY] K-shape pool widened root_tf_buf readback. See header for
+  // sentinel semantics.
+  auto& impl = *backend_.impl_;
+  if (impl.root_tf_buf == nil || count == 0u) {
+    out.clear();
+    return 0u;
+  }
+  const size_t cap =
+      static_cast<size_t>([impl.root_tf_buf length]) / sizeof(uint32_t);
+  if (count > cap) {
+    count = cap;
+  }
+  out.assign(count, 0u);
+  std::memcpy(out.data(), [impl.root_tf_buf contents], count * sizeof(uint32_t));
+  return count;
+}
+
 }  // namespace lumice

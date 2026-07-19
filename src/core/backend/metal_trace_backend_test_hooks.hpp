@@ -64,6 +64,22 @@ class MetalTraceBackendTestHooks {
   std::vector<std::pair<uint32_t, uint32_t>> ReadbackRootPoolShape(size_t count);
   size_t PoolShapeCountThisBatch() const;
 
+  // K-shape pool `path[]` locality probe: `rec_sink_buf` carries the per-ray
+  // Σ float(path[k]) written at the tail of `trace_layer_kernel`. Under the
+  // fixed contract, path[k] is a LOCAL polygon index within [0, PolygonFaceCount),
+  // so `rec_sink[tid] <= max_hits × (PolygonFaceCount - 1)` regardless of the
+  // shape the ray landed on. Pre-fix (path[k] absolute), rays landing on
+  // shape s > 0 could sum poly_off × max_hits above this bound. Tests use
+  // this to catch a regression to absolute-index storage without needing a
+  // per-ray path readback.
+  size_t ReadbackRecSink(std::vector<float>& out, size_t count);
+  // K-shape pool `root_tf` widened absolute-index readback. Each entry is the
+  // pool-wide polygon index of the ray's initial hit face (or kInvalidId =
+  // 0xffffffff on "triangle has no polygon backing"). Used by tests that
+  // want to verify the widened 32-bit range without hitting sentinel
+  // collisions.
+  size_t ReadbackRootTf(std::vector<uint32_t>& out, size_t count);
+
  private:
   MetalTraceBackend& backend_;
 };

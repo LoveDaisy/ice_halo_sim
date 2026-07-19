@@ -734,6 +734,243 @@ TEST(MetalTraceBackend, KShapePool_EmptyBatchWithKEnabledDoesNotCrash_Regression
   ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
 }
 
+// =============================================================================
+// K-shape pool absolute/local semantics regression coverage.
+//
+// Two blindspots in the original K-shape pool test net that these tests close:
+//
+//   * `path[]` locality (Test A). The 5 pre-existing KShapePool tests all ran
+//     with `filter.type = None` (which short-circuits DeviceFilterCheck to
+//     true), so absolute-vs-local corruption in the `path[]` write site never
+//     showed up. A ray landing on pool shape `s > 0` writes `poly_off + local`
+//     into `path[]`; downstream `path_local[k] = uchar(path[k])` narrows that
+//     to 8-bit and hands it to `ApplyGetFn_dev`, which indexes the per-crystal
+//     GetFn stripe — corrupting every raypath / entry-exit filter judgment.
+//     We probe locality directly via `ReadbackRecSink`: the trace kernel
+//     writes `rec_sink[tid] = Σ_k float(path[k])`, and under the fixed
+//     contract path[k] ∈ [0, PolygonFaceCount) regardless of pool shape.
+//
+//   * transit_root_kernel K>0 coverage (Test B). The pre-existing tests were
+//     all `ms_layers=1`, exercising only `gen_root_kernel`'s K-shape pick
+//     path. `transit_root_kernel` has its own K-shape pick that only runs on
+//     layer≥1, so a regression there would slip past the whole prior net.
+// =============================================================================
+
+TEST(MetalTraceBackend, KShapePool_PathIsLocalWithinPolygonFaceCount_AC1_TestA) {
+  // Test A: given a hex prism (PolygonFaceCount=8) + K=8 + ci_n=64 (P_ci=8),
+  // every ray's `Σ_k path[k]` MUST be bounded by `max_hits × PolygonFaceCount`.
+  // Independent-verify principle: we do NOT re-derive which pool slot each ray
+  // landed on (that would just recompute what the production code did).
+  // Instead, we assert a shape-invariant ceiling that holds ONLY when path[k]
+  // is a local index. Pre-fix (path[k] absolute), a ray on the last shape
+  // (poly_off ≈ 56) could sum up to 4 × 63 = 252, well past the local-index
+  // ceiling 4 × 8 = 32. Sentinel against reintroducing this exact blindspot.
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  ::setenv("LUMICE_GPU_GEOM_CLOCK", "8", /*overwrite=*/1);
+
+  const size_t kMaxHits = 4;
+  auto scene = MakeMetalSceneRandomH(/*max_hits=*/kMaxHits, /*ms_layers=*/1);
+  auto render = MakeRectangularRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 31;
+
+  const size_t ci_n = 64;
+  const size_t k = 8;
+  const size_t expected_p_ci = (ci_n + k - 1) / k;
+  ASSERT_EQ(expected_p_ci, 8u);
+
+  MetalTraceBackend backend;
+  backend.BeginSession(spec);
+  HostRayBatch host;
+  host.count = ci_n;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+  backend.TraceLayer(RootRaySource::FromHost(host));
+
+  MetalTraceBackendTestHooks hooks(backend);
+  auto table = hooks.ReadbackPoolShapeTable();
+  ASSERT_EQ(table.size(), expected_p_ci) << "K=8 P_ci sanity";
+
+  // Every shape in the pool must be a valid hex-prism (PolygonFaceCount == 8
+  // baked into MakeMetalScene; the local-index ceiling assumes this).
+  for (size_t s = 0; s < table.size(); s++) {
+    ASSERT_EQ(table[s][1], 8u) << "shape[" << s
+                               << "] poly_cnt != 8; test's "
+                                  "PolygonFaceCount assumption broken.";
+  }
+
+  // Independent ceiling — a shape-invariant of the LOCAL storage contract.
+  // The pre-fix (absolute) code stored poly_off + local into path[]; the
+  // largest legal Σ under the absolute contract would be max_hits × 63 = 252
+  // (poly_off up to 56 + local up to 7), so a 32 ceiling below cleanly
+  // separates the two behaviors.
+  const uint32_t poly_face_count = 8u;
+  const float kLocalCeil = static_cast<float>(kMaxHits) * static_cast<float>(poly_face_count);
+  std::vector<float> rec_sink;
+  size_t got = hooks.ReadbackRecSink(rec_sink, ci_n);
+  ASSERT_EQ(got, ci_n) << "ReadbackRecSink should return exactly ci_n slots";
+
+  // Sanity: at least one ray actually recorded hits (rec_sink > 0). If EVERY
+  // ray is zero the ceiling below is vacuously satisfied, so we'd rather fail
+  // loudly here than silently pass an inert test.
+  size_t nonzero = 0;
+  float max_val = 0.0f;
+  for (float v : rec_sink) {
+    if (v > 0.0f) {
+      ++nonzero;
+    }
+    max_val = std::max(max_val, v);
+  }
+  EXPECT_GT(nonzero, 0u) << "no ray recorded a path hit — either the scene "
+                            "reflects everything at once (parameter drift) or "
+                            "the trace kernel is not writing rec_sink; either "
+                            "way the locality ceiling below is vacuous.";
+  // Sensitivity guard: the pre-fix (absolute) code stored poly_off + local in
+  // path[], so with 8 shapes × PolygonFaceCount == 8, some rays MUST land on
+  // shapes with poly_off ≥ (P_ci-1) × PolygonFaceCount = 56, and their
+  // rec_sink[i] would sum ≥ 56 per hit. If the max we observe is below the
+  // local ceiling AND below what a shape-0-only distribution could reach
+  // (max_hits × PolygonFaceCount - 1 = 28), we're not exercising the bug
+  // (e.g. all rays landed on shape 0 or all rays exit after 1 hit) — that
+  // would let the pre-fix bug silently coexist with a green test. We assert
+  // sufficient variance in max_val to prove we ARE probing the poly_off > 0
+  // shapes.
+  std::vector<uint32_t> tf_probe;
+  hooks.ReadbackRootTf(tf_probe, ci_n);
+  uint32_t max_tf = 0u;
+  for (uint32_t v : tf_probe) {
+    if (v != 0xffffffffu) {
+      max_tf = std::max(max_tf, v);
+    }
+  }
+  // At K=8, P_ci=8, we expect random per-ray shape picks. With 64 rays over
+  // 8 shapes the expected count on shape 7 is ~8; the observed max_tf should
+  // reach into a poly_off > 0 shape (≥ 8).
+  ASSERT_GE(max_tf, static_cast<uint32_t>(poly_face_count))
+      << "max root_tf across 64 rays = " << max_tf << " < PolygonFaceCount = " << poly_face_count
+      << " — either all rays landed on shape 0 (picker regression) or "
+         "sentinel-only (dead session); the locality ceiling below cannot "
+         "then discriminate absolute vs local storage.";
+
+  // The ceiling MUST hold for every ray, whichever pool shape it picked.
+  for (size_t i = 0; i < rec_sink.size(); i++) {
+    EXPECT_LT(rec_sink[i], kLocalCeil) << "ray " << i << " has rec_sink=" << rec_sink[i]
+                                       << " (Σ_k path[k]); under the LOCAL-index contract this must be < " << kLocalCeil
+                                       << " (max_hits × PolygonFaceCount). A value at or above "
+                                          "this ceiling means path[k] is storing an ABSOLUTE "
+                                          "pool-wide index — the round-4 blindspot regression.";
+  }
+
+  // Widened root_tf sanity: values must either be the widened sentinel
+  // (kInvalidId = 0xffffffff) or a legal absolute polygon index inside SOME
+  // shape's slice. A stray 0x0000ffff (host uint16 sentinel zero-extended)
+  // would break both the ceiling above and this check.
+  std::vector<uint32_t> tf;
+  hooks.ReadbackRootTf(tf, ci_n);
+  ASSERT_EQ(tf.size(), ci_n);
+  auto valid_absolute = [&](uint32_t v) {
+    if (v == 0xffffffffu) {
+      return true;
+    }
+    for (const auto& row : table) {
+      const uint32_t begin = row[0];
+      const uint32_t end = row[0] + row[1];
+      if (v >= begin && v < end) {
+        return true;
+      }
+    }
+    return false;
+  };
+  for (size_t i = 0; i < tf.size(); i++) {
+    EXPECT_TRUE(valid_absolute(tf[i])) << "root_tf[" << i << "]=" << std::hex << tf[i] << std::dec
+                                       << " is neither kInvalidId nor a legal absolute polygon index within "
+                                          "any pool shape's [poly_off, poly_off+poly_cnt) window";
+  }
+
+  backend.EndSession();
+  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+}
+
+TEST(MetalTraceBackend, KShapePool_TransitPicksMultipleShapes_AC1_TestB) {
+  // Test B: `transit_root_kernel` picks a fresh pool shape per ray on layer
+  // ≥1. Prior K-shape pool tests all had `ms_layers=1`, exercising ONLY
+  // gen_root_kernel — a bug in transit's picker would have gone unnoticed.
+  // We drive a 2-layer session, then ReadbackRootPoolShape after the second
+  // TraceLayer to see what transit wrote for layer 1 rays.
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  ::setenv("LUMICE_GPU_GEOM_CLOCK", "8", /*overwrite=*/1);
+
+  auto scene = MakeMetalSceneRandomH(/*max_hits=*/6, /*ms_layers=*/2);
+  auto render = MakeRectangularRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 37;
+
+  MetalTraceBackend backend;
+  backend.BeginSession(spec);
+
+  HostRayBatch host;
+  host.count = 4096;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  auto h0 = backend.TraceLayer(RootRaySource::FromHost(host));
+  ASSERT_NE(h0, nullptr);
+  size_t cont0 = h0->ContinuationCount();
+  ASSERT_GT(cont0, 0u) << "no continuation rays — test B cannot exercise transit";
+
+  RecombineSpec rspec;
+  rspec.shuffle = false;
+  auto roots1 = backend.Recombine(std::move(h0), rspec);
+  ASSERT_TRUE(roots1.is_device);
+  ASSERT_EQ(roots1.device.count, cont0);
+
+  auto h1 = backend.TraceLayer(roots1);
+  ASSERT_NE(h1, nullptr);
+
+  // After layer 1's TraceLayer, root_pool_shape_buf_ holds what transit_root
+  // wrote for each ray. cont0 IS the exact number of rays transit dispatched
+  // (roots1.device.count == cont0), so readback that many slots.
+  MetalTraceBackendTestHooks hooks(backend);
+  auto rays = hooks.ReadbackRootPoolShape(cont0);
+  ASSERT_EQ(rays.size(), cont0);
+
+  // Pool table must also have grown ≥1 shape per layer/ci resolve.
+  auto table = hooks.ReadbackPoolShapeTable();
+  ASSERT_GT(table.size(), 0u);
+
+  // Every ray landed on some pool_shape_table row.
+  std::set<std::pair<uint32_t, uint32_t>> valid;
+  for (const auto& row : table) {
+    valid.emplace(row[0], row[1]);
+  }
+  for (const auto& r : rays) {
+    EXPECT_TRUE(valid.count(r) > 0u) << "layer-1 ray landed on (" << r.first << ", " << r.second
+                                     << ") — NOT a row of layer-1's pool_shape_table.";
+  }
+
+  // AC1 core: transit distributes rays across ≥2 distinct pool slots. A K=8
+  // + cont0 ≫ 1 with random-h prism scene means P_ci ≥ 2 and the picker MUST
+  // spread. Exactly-1 here would mean transit's shape-picker is broken (e.g.
+  // clamp-to-zero regression) — the ms_layers=1 tests would never catch this.
+  std::set<std::pair<uint32_t, uint32_t>> distinct(rays.begin(), rays.end());
+  EXPECT_GE(distinct.size(), 2u) << "K=8 + " << cont0 << " continuation rays: expected ≥ 2 distinct "
+                                 << "(poly_off, poly_cnt) tuples from transit_root_kernel, got " << distinct.size()
+                                 << " — transit's K-shape pick is not distributing.";
+
+  backend.EndSession();
+  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+}
+
 }  // namespace
 }  // namespace lumice
 
