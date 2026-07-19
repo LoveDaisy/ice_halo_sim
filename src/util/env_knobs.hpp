@@ -61,6 +61,27 @@ std::size_t DispatchRayNum(Logger& logger, std::size_t default_val);
 // unreachable in production since the default is the hard-coded constant.
 std::size_t GeomClock(Logger& logger, std::size_t default_val);
 
+// LUMICE_GPU_GEOM_CLOCK — experiment knob: how many rays share one sampled
+// crystal shape on the two GPU backends (Metal / CUDA). K=1 is a fresh shape
+// per ray; larger K means fewer distinct shapes per batch (a smaller pool).
+// Returns the override when set to a positive integer, else default_val.
+// INFO once if applied.
+//
+// This is INDEPENDENT of `LUMICE_GEOM_CLOCK` (legacy CPU only). Both knobs
+// mean "rays per sampled shape" but they live on different code paths — the
+// legacy CPU path reads GeomClock in `simulator.cpp:Run`, the GPU backends
+// read GpuGeomClock inside their per-batch pool build. Do NOT reuse the same
+// env name for both: `LUMICE_GEOM_CLOCK` is entangled with the legacy CPU
+// ray-buffer capacity model (see GeomClock docs above) and has an unsafe
+// upper bound; the GPU pool sits on its own capacity model with a separate
+// P_max derivation.
+//
+// Default value semantics (caller-supplied): pass 0 to mean "disabled → P=1
+// → today's per-batch single-shape behavior". Any positive value means the
+// pool builds `P_ci = ceil(N_ci / K)` shapes per (layer, ci). See
+// `doc/seam-design.md` §8 P2 for design context.
+std::size_t GpuGeomClock(Logger& logger, std::size_t default_val);
+
 // LUMICE_COMMIT_RAY_NUM (with legacy LUMICE_BATCH_RAY_NUM fallback) — consumer
 // commit granularity. COMMIT takes precedence; BATCH is honored as a fallback.
 // Returns the override when positive, else default_val. INFO once if applied; a

@@ -108,10 +108,17 @@ LM_CONSTANT int kMaxRejectionAttempts = 1000;
 //                                        issue.md causal-verification patch
 //                                        that shrank metal_lap.green_excess
 //                                        from +3.2 → +1.0)
-// All six values are pairwise distinct. `pcg_hash` has good avalanche on any
+//   kGeomShapeStreamNonce= 0x94D049BBu  (this header; per-ray "which pool
+//                                        shape does this ray consume" draw
+//                                        for the K-shape geometry pool.
+//                                        Value = SplitMix64 low half — a
+//                                        good-mixing constant unrelated by
+//                                        arithmetic to any nonce above.)
+// All seven values are pairwise distinct. `pcg_hash` has good avalanche on any
 // non-zero XOR delta, so no additional statistical validation is required.
 LM_CONSTANT uint32_t kWlStreamNonce = 0x9E3779B9u;
-// (BuildWlStream is defined after PcgStream below.)
+LM_CONSTANT uint32_t kGeomShapeStreamNonce = 0x94D049BBu;
+// (BuildWlStream / BuildGeomShapeStream are defined after PcgStream below.)
 
 // --- GenRootKernelParams --------------------------------------------------
 // Single source for both `gen_root_kernel` (Metal-only, device root sampler)
@@ -177,6 +184,23 @@ struct PcgStream {
 LM_FN PcgStream BuildWlStream(uint32_t mixed_seed, uint32_t global_idx) {
   PcgStream s;
   s.seed = mixed_seed ^ kWlStreamNonce;
+  s.global_idx = global_idx;
+  s.slot = 0u;
+  return s;
+}
+
+// Single-source constructor for the per-ray geometry-pool-shape draw stream.
+// K-shape geometry pool: every batch, the host builds `P_ci = ceil(N_ci / K)`
+// distinct crystal shapes per (layer, ci); each ray picks one of those P_ci
+// shapes via `floor(pcg_uniform(BuildGeomShapeStream(...)) * P_ci)`.
+// This stream MUST live in its own PCG seed domain — same reasoning as the wl
+// stream above: the orientation stream / wl stream / geom-shape stream all
+// consume `(mixed_seed, global_idx)` and would silently collide if any two
+// shared a seed (the same failure mode that shifted metal_lap green-excess
+// from +0.7 to +3.2 before wl was moved into its own seed domain).
+LM_FN PcgStream BuildGeomShapeStream(uint32_t mixed_seed, uint32_t global_idx) {
+  PcgStream s;
+  s.seed = mixed_seed ^ kGeomShapeStreamNonce;
   s.global_idx = global_idx;
   s.slot = 0u;
   return s;

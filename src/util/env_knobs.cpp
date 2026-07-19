@@ -69,6 +69,20 @@ std::size_t GeomClock(Logger& logger, std::size_t default_val) {
   return default_val;
 }
 
+std::size_t GpuGeomClock(Logger& logger, std::size_t default_val) {
+  if (const char* env = std::getenv("LUMICE_GPU_GEOM_CLOCK")) {
+    long b = std::atol(env);
+    if (b > 0) {
+      static std::once_flag logged;
+      std::call_once(logged, [&logger, b, default_val]() {
+        ILOG_INFO(logger, "env override: LUMICE_GPU_GEOM_CLOCK={} rays/shape (default {})", b, default_val);
+      });
+      return static_cast<std::size_t>(b);
+    }
+  }
+  return default_val;
+}
+
 std::uint32_t XyzDrainBatches(Logger& logger, std::uint32_t default_val) {
   if (const char* env = std::getenv("LUMICE_XYZ_DRAIN_BATCHES")) {
     long b = std::atol(env);
