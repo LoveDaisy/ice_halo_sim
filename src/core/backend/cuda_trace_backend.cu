@@ -1689,7 +1689,7 @@ struct CudaTraceBackend::Impl {
   // PARITY-EXACT with the prior per-batch path (current path already traces one
   // shape/(layer,ci)/session); the §5 per-ray K-shape pool is a later
   // statistical refinement, not needed for parity. Buffers concatenate all
-  // slots; pool_*_off_/pool_*_cnt_ index each slot (slot = layer_slot_base_[mi]+ci).
+  // slots; pool_*_off_/pool_*_cnt_ index each slot (slot = ci_pool_slot_base_[flat_ci]).
   float*    d_pool_poly_n_      = nullptr;  // 3 × Σ poly_cnt (over ALL pool slots incl. K-shape)
   float*    d_pool_poly_d_      = nullptr;  //     Σ poly_cnt
   float*    d_pool_tri_vtx_     = nullptr;  // 9 × Σ tri_cnt
@@ -1720,15 +1720,19 @@ struct CudaTraceBackend::Impl {
   std::vector<uint32_t> pool_poly_cnt_;
   std::vector<uint32_t> pool_tri_off_;
   std::vector<uint32_t> pool_tri_cnt_;
-  std::vector<uint32_t> layer_slot_base_;   // ms layer mi → first slot index (flat ci base;
-                                            //   layer_slot_base_[mi]+ci = "config-space" flat ci
-                                            //   index, still ≤ Σ crystal_cnt across layers,
-                                            //   NOT the pool slot index once P_ci > 1)
+  // ms layer mi → first flat ci-index for this layer. `layer_ci_base_[mi] + ci`
+  // is the config-space flat ci index used to look up per-(layer,ci) tables
+  // (`ci_pool_slot_base_`, `ci_pool_shape_count_`, filter descriptors, …).
+  // MUST be the running total of ci-count over prior layers, NOT the running
+  // total of pool slots (`pool_crystals_.size()`) — the two match only when
+  // every P_ci ≡ 1, so any conflation makes `ci_pool_slot_base_[flat_ci]` /
+  // `ci_pool_shape_count_[flat_ci]` reads OOB on layer ≥ 1 whenever K > 0.
+  std::vector<uint32_t> layer_ci_base_;
   std::vector<Crystal>  pool_crystals_;     // host slot crystals (config_id; wl-pool repr) — flat
                                             //   over pool slots (one per shape, len = Σ P_ci)
   // K-shape pool accounting (this task): the pool now stores P_ci shapes per
-  // (layer, ci) instead of exactly 1. `layer_slot_base_[mi]+ci` remains the
-  // config-space flat ci index (for filter descriptors, crystal_proportion_, …
+  // (layer, ci) instead of exactly 1. `layer_ci_base_[mi]+ci` is the config-
+  // space flat ci index (for filter descriptors, crystal_proportion_, …
   // — anything with per-ci semantics). `ci_pool_slot_base_[flat_ci]` and
   // `ci_pool_shape_count_[flat_ci]` translate that flat ci index → the pool
   // slot range [slot_base, slot_base+P_ci) that holds this ci's K shapes.
@@ -2073,6 +2077,11 @@ struct CudaTraceBackend::Impl {
   // of batches), not per batch.
   float*   d_xyz_buf_       = nullptr;  // alloc_xyz_w_ * alloc_xyz_h_ * 3 floats, atomicAdd target
   float*   d_landed_weight_ = nullptr;  // 1 float, atomicAdd target (running total)
+  // Session-lifetime snapshot of the previous TraceLayer's `d_landed_weight_`
+  // value so LayerStats::exit_w_sum reports each layer's contribution as a
+  // DELTA rather than the cumulative session total. Zeroed in BeginSession
+  // alongside `d_landed_weight_`; refreshed at the end of every TraceLayer.
+  float    layer_landed_weight_prev_ = 0.0f;
   // scrum-312: dims the persistent d_xyz_buf_ was actually allocated for. Unlike
   // img_w_/img_h_ (per-session, cleared by Reset), these survive across sessions
   // so ReadbackXyzAccum — which drains BETWEEN sessions — can release-safe-verify
@@ -2225,7 +2234,7 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
     pool_shape_slot_cap_ = 0;
     pool_poly_off_.clear(); pool_poly_cnt_.clear();
     pool_tri_off_.clear();  pool_tri_cnt_.clear();
-    layer_slot_base_.clear(); pool_crystals_.clear();
+    layer_ci_base_.clear(); pool_crystals_.clear();
     ci_pool_slot_base_.clear(); ci_pool_shape_count_.clear();  // K-shape pool
     pool_shape_count_this_batch_ = 0;
     geom_pool_built_ = false;
@@ -2590,7 +2599,7 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
   pool_crystals_.clear();
   pool_poly_off_.clear(); pool_poly_cnt_.clear();
   pool_tri_off_.clear();  pool_tri_cnt_.clear();
-  layer_slot_base_.clear();
+  layer_ci_base_.clear();
   ci_pool_slot_base_.clear();
   ci_pool_shape_count_.clear();
   pool_shape_count_this_batch_ = 0u;
@@ -2600,7 +2609,10 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
   uint32_t poly_acc = 0u, tri_acc = 0u;
 
   for (size_t mi = 0; mi < scene.ms_.size(); ++mi) {
-    layer_slot_base_.push_back(static_cast<uint32_t>(pool_crystals_.size()));
+    // ci-count prefix (not pool-slot prefix): consumers index
+    // `ci_pool_slot_base_` / `ci_pool_shape_count_` (both sized by number of
+    // (layer, ci) pairs, not by pool slots) with `layer_ci_base_[mi] + ci`.
+    layer_ci_base_.push_back(static_cast<uint32_t>(ci_pool_slot_base_.size()));
     const auto& settings = scene.ms_[mi].setting_;
     // Build per-ci shape-count budget (Path B static-weight). K==0 → all 1s
     // → today's byte-exact behavior (AC2). This layer's proportions[] mirrors
@@ -2617,7 +2629,7 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
       const uint32_t p_ci = k_ci_this_layer[ci];  // >= 1 by AllocateShapeBudget contract
       // Record this ci's pool slot range: [slot_base, slot_base + p_ci). The
       // slot_base is the current pool_crystals_ size (running total of shapes
-      // committed to the pool). This separation from `layer_slot_base_[mi]+ci`
+      // committed to the pool). This separation from `layer_ci_base_[mi]+ci`
       // (the "flat config-space ci index") is the plan §3.3 accounting split.
       ci_pool_slot_base_.push_back(static_cast<uint32_t>(pool_crystals_.size()));
       ci_pool_shape_count_.push_back(p_ci);
@@ -3498,6 +3510,23 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     // knobs are simultaneously set to non-default values (plan §3.8).
     const std::size_t k_shape_effective =
         impl_->disable_device_gen_ ? 0u : env::GpuGeomClock(geom_logger, /*default_val=*/0u);
+    // K-shape pool silently collapses to P_ci ≡ 1 when the caller forgot to
+    // populate `spec.ray_num` (AllocateShapeBudget early-return: `P_target =
+    // ceil(ray_num / K) = 0` when `ray_num == 0`). Production callers set
+    // `spec.ray_num` (see `simulator.cpp`), but a test constructing a
+    // `SessionSpec` from scratch is likely to miss the field — the CUDA
+    // K-shape pool then quietly degrades to the K=0 shape, which looks
+    // correct on parity metrics but leaves the K knob dead. One-shot WARN
+    // (gated by `gen_seeded_` like the other BeginSession WARNs) surfaces
+    // the miss without spamming the hot path.
+    if (k_shape_effective > 0u && spec.ray_num == 0u && !impl_->gen_seeded_) {
+      ILOG_WARN(geom_logger,
+                "CudaTraceBackend::BeginSession: LUMICE_GPU_GEOM_CLOCK={} but "
+                "SessionSpec::ray_num is 0 — K-shape pool degrades to P_ci=1 "
+                "(no per-ray shape diversity). Set spec.ray_num to the per-batch "
+                "ray count so AllocateShapeBudget can size the pool.",
+                k_shape_effective);
+    }
     if (impl_->disable_device_gen_ && env::GpuGeomClock(geom_logger, /*default_val=*/0u) > 0u) {
       // Only WARN on first Beginsession per Run (mirrors the disable_device_gen_
       // one-shot log discipline — the gen_seeded_ flag).
@@ -3684,6 +3713,7 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
                 "BeginSession cudaMemset d_xyz_buf");
       CheckCuda(cudaMemset(impl_->d_landed_weight_, 0, sizeof(float)),
                 "BeginSession cudaMemset d_landed_weight");
+      impl_->layer_landed_weight_prev_ = 0.0f;  // per-layer delta baseline
       impl_->alloc_xyz_w_ = impl_->img_w_;
       impl_->alloc_xyz_h_ = impl_->img_h_;
     }
@@ -3918,7 +3948,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
       // first pool slot for this ci (== the ci's "representative shape") drives
       // ci_cfg_id + the pre-K-shape geom-log fields — kernel-side per-ray shape
       // pick derives the actual per-ray geometry.
-      const uint32_t flat_ci = impl_->layer_slot_base_[impl_->ms_layer_idx_] + static_cast<uint32_t>(ci);
+      const uint32_t flat_ci = impl_->layer_ci_base_[impl_->ms_layer_idx_] + static_cast<uint32_t>(ci);
       const uint32_t slot_base_ci = impl_->ci_pool_slot_base_[flat_ci];
       const Crystal& pc = impl_->pool_crystals_[slot_base_ci];
       ci_cfg_id = (pc.config_id_ == kInvalidId) ? 0xFFFFu : static_cast<uint32_t>(pc.config_id_);
@@ -4290,8 +4320,27 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     impl_->h_cont_count_ = 0u;
   }
 
+  // Read this layer's contribution to the session-wide `d_landed_weight_`
+  // accumulator (device-fused XYZ path) so LayerStats::exit_w_sum reflects
+  // per-layer weight — mirrors Metal's ExitStats.w_sum (metal_trace_backend.mm
+  // :2818). Without this, callers relying on `GetLayerStats().exit_w_sum`
+  // (parity harness / K-shape filter parity battery) see a hardcoded 0 and
+  // treat every dispatch as inert. Delta accounting keeps multi-layer
+  // sessions consistent with Metal, which resets its per-layer buffer.
+  float layer_lw = 0.0f;
+  if (impl_->d_landed_weight_ != nullptr) {
+    float lw_cum = 0.0f;
+    ck_reset(cudaMemcpy(&lw_cum, impl_->d_landed_weight_, sizeof(float),
+                        cudaMemcpyDeviceToHost),
+             "TraceLayer landed_weight readback");
+    layer_lw = lw_cum - impl_->layer_landed_weight_prev_;
+    if (layer_lw < 0.0f) {
+      layer_lw = 0.0f;  // guard against float noise / external ReadbackXyzAccum reset
+    }
+    impl_->layer_landed_weight_prev_ = lw_cum;
+  }
   return std::make_unique<CudaLayerHandle>(cont_count_for_handle,
-                                           LayerStats{impl_->h_exit_count_, 0.0f});
+                                           LayerStats{impl_->h_exit_count_, layer_lw});
 }
 
 RootRaySource CudaTraceBackend::Recombine(LayerHandlePtr handle, const RecombineSpec& spec) {

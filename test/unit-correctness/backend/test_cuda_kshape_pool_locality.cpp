@@ -120,6 +120,7 @@ TEST(CudaKShapePool, KShapePool_PathIsLocalWithinPolygonFaceCount_AC1) {
   spec.render = &render;
   spec.wl = WlParam{ 550.0f, 1.0f };
   spec.seed = 31;
+  spec.ray_num = kCiN;
 
   CudaTraceBackend backend;
   CudaTraceBackendTestHooks hooks(backend);
@@ -175,43 +176,17 @@ TEST(CudaKShapePool, KShapePool_PathIsLocalWithinPolygonFaceCount_AC1) {
                                          "K-shape picker collapsed to slot 0 (picker regression) or "
                                          "the scene isn't exercising per-ray pick.";
 
-  // ---- Test A.2 — path[] locality via raw layer-0 exit records -------------
-  // `ReadbackExitRays` before Recombine returns the raw layer-0 records
-  // (DrainExits's `ms_layer_idx != final_layer` branch emits verbatim,
-  // `cuda_trace_backend.cu:4454-4457`) — path[] is exactly what
-  // `trace_single_ms_kernel` wrote, no GetFn remap yet. Under the LOCAL
-  // contract every `path[k]` MUST be < PolygonFaceCount (8) regardless of
-  // which pool shape the ray landed on. Pre-fix Metal (ABSOLUTE) would sum
-  // poly_off + local into path[], so rays on shape s ≥ 1 would produce
-  // values ≥ 8; those on shape 7 (poly_off=56) could hit up to 63.
-  std::vector<ExitRayRecord> exits0;
-  size_t n_exits0 = backend.ReadbackExitRays(exits0);
-  ASSERT_GT(n_exits0, 0u) << "no raw layer-0 exit records — early-exit path not exercised. "
-                             "Layer 0's ~40% early-exit fraction (1 - ms_prob=0.4) on "
-                          << kCiN
-                          << " rays should easily give tens; the path[] locality ceiling below is "
-                             "vacuous without at least one non-empty raw exit.";
-
-  size_t path_nonempty = 0;
-  for (size_t i = 0; i < exits0.size(); ++i) {
-    const ExitRayRecord& r = exits0[i];
-    if (r.path.size_ == 0u) {
-      continue;
-    }
-    ++path_nonempty;
-    const uint8_t n = r.path.size_ <= ExitFaceSeq::kCap ? r.path.size_ : ExitFaceSeq::kCap;
-    for (uint8_t k = 0; k < n; ++k) {
-      const uint32_t v = static_cast<uint32_t>(r.path.data_[k]);
-      EXPECT_LT(v, kPolygonFaceCount)
-          << "layer-0 raw exit " << i << " path[" << static_cast<int>(k) << "] = " << v << " ≥ PolygonFaceCount ("
-          << kPolygonFaceCount
-          << "); path[] stored an ABSOLUTE pool-wide index (poly_off + local), NOT the LOCAL "
-             "index the K-shape pool contract requires. Mirrors the Metal absolute-path[]-index regression "
-             "the K-shape pool foundation was hardened against.";
-    }
-  }
-  EXPECT_GT(path_nonempty, 0u) << "every raw layer-0 exit had path.size_=0 — the trace kernel is not "
-                                  "recording path[] hits; the locality ceiling above is vacuous.";
+  // Test A.2 (path[] locality via raw layer-0 ExitRayRecord) — intentionally
+  // dropped on CUDA. Since `SupportsDeviceXyzAccum() == true`,
+  // `trace_single_ms_kernel` never writes `d_exit_` / `d_exit_count_`; all
+  // mid-exits fold into `EmitToDeviceXyz` (`cuda_trace_backend.cu:947`), so
+  // `ReadbackExitRays` returns 0 by construction. The Metal absolute-vs-LOCAL
+  // `path[]` regression is also structurally impossible here — `path_rec[]`
+  // is a thread-local `uint8[]` fed only by LOCAL `from_poly` / `hit_poly`
+  // values bounds-checked against `poly_cnt`, and it never leaves the
+  // kernel. Filter-consumed index-type errors are still caught (indirectly)
+  // by the CUDA filter-parity battery. Re-adding a direct path[] readback
+  // would need a dedicated test-only capture ring in the kernel.
 
   backend.EndSession();
   ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
@@ -233,18 +208,21 @@ TEST(CudaKShapePool, KShapePool_TransitPicksMultipleShapes_AC1) {
   // Match Metal Test B (`test_metal_trace_backend.cpp:910-968`): 4096 rays so
   // ~2400 continue into layer 1 → plenty of transit rays for the ≥2-distinct-
   // slots signal to have statistical footing.
+  const size_t kRayNum = 4096;
+
   SessionSpec spec;
   spec.scene = &scene;
   spec.render = &render;
   spec.wl = WlParam{ 550.0f, 1.0f };
   spec.seed = 37;
+  spec.ray_num = kRayNum;
 
   CudaTraceBackend backend;
   CudaTraceBackendTestHooks hooks(backend);
   backend.BeginSession(spec);
 
   HostRayBatch host;
-  host.count = 4096;
+  host.count = kRayNum;
   host.crystal = nullptr;
   host.refractive_index = 0.0f;
 

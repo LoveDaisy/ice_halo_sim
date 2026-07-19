@@ -141,6 +141,7 @@ std::pair<size_t, double> RunCudaOnce(const SceneConfig& scene, const RenderConf
   spec.render = &render;
   spec.wl = WlParam{ 550.0f, 1.0f };
   spec.seed = seed;
+  spec.ray_num = ray_count;
 
   HostRayBatch host;
   host.count = ray_count;
