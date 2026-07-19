@@ -186,7 +186,10 @@ TEST(CudaKShapePool, KShapePool_PathIsLocalWithinPolygonFaceCount_AC1) {
   // values bounds-checked against `poly_cnt`, and it never leaves the
   // kernel. Filter-consumed index-type errors are still caught (indirectly)
   // by the CUDA filter-parity battery. Re-adding a direct path[] readback
-  // would need a dedicated test-only capture ring in the kernel.
+  // would need a dedicated test-only capture ring in the kernel — tracked
+  // as a project backlog item ("[CUDA / K-shape 池] 补 path[] LOCAL/ABSOLUTE
+  // 结构性观测（capture ring）") so this coverage gap does not vanish with
+  // the task archive.
 
   backend.EndSession();
   ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
