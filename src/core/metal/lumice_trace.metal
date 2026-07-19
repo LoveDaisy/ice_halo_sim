@@ -405,7 +405,14 @@ static inline uint DeviceFilterSummandMask(device const DeviceFilterDesc& f,
 // -----------------------------------------------------------------------------
 
 constant float  kFloatEps  = 1e-5f;
-constant ushort kInvalidId = 0xffffu;
+// K-shape pool absolute-index range = P_ci × PolygonFaceCount. K=8 target,
+// ci_n ≈ 262144 (single-ci occupying a full dispatch batch), PolygonFaceCount
+// ≈ 8 (hex prism) → 32768 × 8 ≈ 262144 absolute polygon slots, well past
+// uint16_t's 65535. tri_to_poly / root_tf are uint32_t on host + device; the
+// sentinel must sit outside the 32-bit absolute range so it never collides
+// with a legal pool-wide index. (Pre-K-pool: ushort 0xffff sufficed because
+// single-shape crystals never exceeded ~64 faces.)
+constant uint   kInvalidId = 0xffffffffu;
 constant uint   kRecCap    = 64u;
 
 // scrum-267 task-fused-emit-gate Step 5 (296.4 hoist): PCG hash + PcgStream +
@@ -534,7 +541,7 @@ kernel void trace_layer_kernel(
     device const float*    root_d   [[buffer(0)]],
     device const float*    root_p   [[buffer(1)]],
     device const float*    root_w   [[buffer(2)]],
-    device const ushort*   root_tf  [[buffer(3)]],
+    device const uint*     root_tf  [[buffer(3)]],
     device const float*    poly_n   [[buffer(4)]],
     device const float*    poly_d   [[buffer(5)]],
     device const float*    centroid [[buffer(6)]],
@@ -637,7 +644,7 @@ kernel void trace_layer_kernel(
   float oy = root_p[tid * 3u + 1u];
   float oz = root_p[tid * 3u + 2u];
   float w  = root_w[tid];
-  ushort to_face = root_tf[tid];
+  uint to_face = root_tf[tid];
 
   // Per-ray crystal->world rotation (row-major; world = m*v, mirroring
   // Rotation::Apply on the CPU). Applied to the exit direction before
@@ -671,6 +678,10 @@ kernel void trace_layer_kernel(
   // reference, so copy once per thread and pass the local to both exit blocks.
   lm_proj::ProjParams proj_local = prm.proj;
 
+  // path[] carries LOCAL polygon indices (< PolygonFaceCount), so ushort has
+  // plenty of headroom (uchar would even fit but ushort keeps room for the
+  // absolute range on the very slim chance a future non-hex crystal grows past
+  // 255 faces).
   ushort path[kRecCap];
   uint   rec_len = 0u;
 
@@ -693,7 +704,21 @@ kernel void trace_layer_kernel(
 
   for (uint hit = 0u; hit < prm.max_hits; hit++) {
     if (to_face == kInvalidId) { break; }
-    if (rec_len < kRecCap) { path[rec_len] = to_face; rec_len += 1u; }
+    // Contract split (K-shape pool):
+    //   * poly_n / poly_d / centroid / tri_* consume ABSOLUTE pool-wide
+    //     polygon indices (to_face, cont_face, far_face all absolute).
+    //   * path[] / DeviceFilterMatch*'s ApplyGetFn table consume PER-CRYSTAL
+    //     LOCAL polygon indices — GetFn bytes are keyed by (layer, ci) with a
+    //     stripe of length PolygonFaceCount, invariant across P_ci instances
+    //     (crystal randomisation only perturbs h / face_distance; topology
+    //     stable — see EnsureFilterBuffers comment + MakeCrystal). We MUST
+    //     convert absolute → local at the path[] write site by subtracting
+    //     shape_poly_off. At P_ci == 1 shape_poly_off == 0 so this is a no-op
+    //     bit-identical to the pre-K-pool path (AC2).
+    if (rec_len < kRecCap) {
+      path[rec_len] = ushort(to_face - shape_poly_off);
+      rec_len += 1u;
+    }
 
     float nx = poly_n[to_face * 3u + 0u];
     float ny = poly_n[to_face * 3u + 1u];
@@ -717,7 +742,7 @@ kernel void trace_layer_kernel(
       fdz = rr * dz - (rr - sd) * cos_theta * nz;
     }
 
-    ushort cont_face = kInvalidId;
+    uint cont_face = kInvalidId;
     float c_dx = 0.0f, c_dy = 0.0f, c_dz = 0.0f;
     float c_ox = 0.0f, c_oy = 0.0f, c_oz = 0.0f;
     float c_w  = 0.0f;
@@ -758,7 +783,7 @@ kernel void trace_layer_kernel(
       }
       float eps_thr = (to_face != kInvalidId && far_face != int(to_face)) ? -kFloatEps : kFloatEps;
       if (far_face >= 0 && t_far > eps_thr) {
-        cont_face = ushort(far_face);
+        cont_face = uint(far_face);
         c_dx = cdx; c_dy = cdy; c_dz = cdz;
         c_ox = ox + t_far * cdx;
         c_oy = oy + t_far * cdy;
@@ -1110,12 +1135,12 @@ kernel void gen_root_kernel(
     device float*           root_d        [[buffer(0)]],
     device float*           root_p        [[buffer(1)]],
     device float*           root_w        [[buffer(2)]],
-    device ushort*          root_tf       [[buffer(3)]],
+    device uint*            root_tf       [[buffer(3)]],
     device float*           root_rot      [[buffer(4)]],
     device const float*     tri_vtx       [[buffer(5)]],
     device const float*     tri_norm      [[buffer(6)]],
     device const float*     tri_area      [[buffer(7)]],
-    device const ushort*    tri_to_poly   [[buffer(8)]],
+    device const uint*      tri_to_poly   [[buffer(8)]],
     constant GenRootKernelParams& gp      [[buffer(9)]],
     // scrum-268.8 (DR-3): per-ray wavelength pool + per-ray wl_idx output.
     // Pool entries provide the spd_weight (replacing the deleted gp.ray_weight)
@@ -1261,7 +1286,7 @@ kernel void gen_root_kernel(
   uint tri_id = tri_off + local_tri;
   float p[3];
   sample_triangle(stream, tri_vtx + tri_id * 9u, p);
-  ushort to_face = tri_to_poly[tri_id];
+  uint to_face = tri_to_poly[tri_id];
   float weight = wl_pool[wl_idx].spd_weight;  // scrum-268.8 per-ray spd weight
   if (to_face == kInvalidId) {
     // Mirrors InitRay_p_fid fallback (simulator.cpp:92-94): zero weight when
@@ -1306,12 +1331,12 @@ kernel void transit_root_kernel(
     device float*        root_d      [[buffer(2)]],
     device float*        root_p      [[buffer(3)]],
     device float*        root_w      [[buffer(4)]],
-    device ushort*       root_tf     [[buffer(5)]],
+    device uint*         root_tf     [[buffer(5)]],
     device float*        root_rot    [[buffer(6)]],
     device const float*  tri_vtx     [[buffer(7)]],
     device const float*  tri_norm    [[buffer(8)]],
     device const float*  tri_area    [[buffer(9)]],
-    device const ushort* tri_to_poly [[buffer(10)]],
+    device const uint*   tri_to_poly [[buffer(10)]],
     constant GenRootKernelParams& gp [[buffer(11)]],
     // scrum-268.8 (DR-3): per-ray wavelength carrier through the layer hop.
     // The emit gate wrote each continuation ray's wl_idx into cont_wl_idx_in;
@@ -1399,7 +1424,7 @@ kernel void transit_root_kernel(
   uint tri_id = tri_off + local_tri;
   float p[3];
   sample_triangle(stream, tri_vtx + tri_id * 9u, p);
-  ushort to_face = tri_to_poly[tri_id];
+  uint to_face = tri_to_poly[tri_id];
 
   // 4. Carry continuation weight; mirror InitRay_p_fid fallback (zero weight
   //    when a triangle has no polygon backing).

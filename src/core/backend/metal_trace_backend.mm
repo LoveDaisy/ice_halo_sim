@@ -770,7 +770,11 @@ struct MetalTraceBackend::Impl {
   id<MTLBuffer> tri_vtx_buf_     = nil;  // N_tri × 9 float (3 vtx × 3 coords)
   id<MTLBuffer> tri_norm_buf_    = nil;  // N_tri × 3 float
   id<MTLBuffer> tri_area_buf_    = nil;  // N_tri × 1 float
-  id<MTLBuffer> tri_to_poly_buf_ = nil;  // N_tri × 1 uint16 (kInvalidId on miss)
+  id<MTLBuffer> tri_to_poly_buf_ = nil;  // N_tri × 1 uint32 (kInvalidId on miss)
+                                         // Widened from uint16 (K-shape pool absolute-index range
+                                         // = P_ci × PolygonFaceCount can exceed 65535 at K=8 target;
+                                         // sentinel 0xffffffff sits outside the 32-bit absolute
+                                         // range, matches kInvalidId in lumice_trace.metal).
   size_t        tri_buf_capacity_ = 0;
 
   // Per-ray K-shape geometry pool (LUMICE_GPU_GEOM_CLOCK). Each per-(layer, ci)
@@ -1286,7 +1290,7 @@ void MetalTraceBackend::Impl::EnsureRootBuffers(size_t n) {
   root_w_buf  = [device newBufferWithLength:n * sizeof(float)
                                     options:MTLResourceStorageModeShared];
   assert(root_w_buf != nil);
-  root_tf_buf = [device newBufferWithLength:n * sizeof(uint16_t)
+  root_tf_buf = [device newBufferWithLength:n * sizeof(uint32_t)
                                     options:MTLResourceStorageModeShared];
   assert(root_tf_buf != nil);
   root_rot_buf = [device newBufferWithLength:n * 9 * sizeof(float)
@@ -1312,6 +1316,20 @@ void MetalTraceBackend::Impl::EnsureRootBuffers(size_t n) {
 }
 
 void MetalTraceBackend::Impl::EnsurePoolShapeTableBuffer(size_t shape_cnt) {
+  // Release-safe guard (parallel to EnsureFilterBuffers' kColorMaxGroupsPerSlot
+  // pattern): a caller passing shape_cnt == 0 in a -DNDEBUG build would silently
+  // pass the assert and then underflow the MSL pool_shape_count-1u clamp to
+  // UINT32_MAX, causing a wildly out-of-range pool_shape_table[] read. Clamp
+  // to 1 so the caller who forgot to build any shape still gets a valid
+  // (albeit degenerate) 1-slot allocation. Assert stays as debug-only double
+  // defense.
+  if (shape_cnt == 0u) {
+    ILOG_ERROR(EffectiveLogger(logger_),
+               "EnsurePoolShapeTableBuffer: shape_cnt == 0; clamping to 1. This is a caller "
+               "contract violation (K-shape pool must resolve at least one crystal per ci) — "
+               "check ResolveLayerCrystalForCi's p_ci computation.");
+    shape_cnt = 1u;
+  }
   assert(shape_cnt > 0u && "EnsurePoolShapeTableBuffer: shape_cnt == 0");
   if (shape_cnt <= pool_shape_capacity_) {
     return;
@@ -1344,7 +1362,7 @@ void MetalTraceBackend::Impl::EnsureTriBuffers(size_t tri_cnt) {
   tri_area_buf_ = [device newBufferWithLength:tri_cnt * sizeof(float)
                                      options:MTLResourceStorageModeShared];
   assert(tri_area_buf_ != nil);
-  tri_to_poly_buf_ = [device newBufferWithLength:tri_cnt * sizeof(uint16_t)
+  tri_to_poly_buf_ = [device newBufferWithLength:tri_cnt * sizeof(uint32_t)
                                         options:MTLResourceStorageModeShared];
   assert(tri_to_poly_buf_ != nil);
 }
@@ -1781,6 +1799,20 @@ uint32_t MetalTraceBackend::Impl::PoolMaxTriangleCount() const {
 }
 
 void MetalTraceBackend::Impl::UploadCrystalPool(const std::vector<Crystal>& pool) {
+  // Release-safe guard: caller must supply at least one crystal so we have a
+  // legal shape 0 to flatten. Instead of downstream buffers ending up unwritten
+  // (poly/tri_* left at prior contents), abort the upload — TraceLayer sees
+  // pool_shape_table_h_ stay empty and skips the dispatch via its num_rays==0
+  // downstream gating (or fires the sibling asserts below with an explicit
+  // failure site rather than a silent partial upload).
+  if (pool.empty()) {
+    ILOG_ERROR(EffectiveLogger(logger_),
+               "UploadCrystalPool: empty pool (caller must build at least one shape); "
+               "skipping upload. Downstream EncodeGenRoot / EncodeTransitRoot guards will "
+               "flag the missing pool_shape_table.");
+    pool_shape_table_h_.clear();
+    return;
+  }
   assert(!pool.empty() && "UploadCrystalPool: empty pool (caller must build at least one shape)");
 
   // First pass: compute per-shape offsets + accumulated buffer sizes. Recorded
@@ -1810,7 +1842,7 @@ void MetalTraceBackend::Impl::UploadCrystalPool(const std::vector<Crystal>& pool
   auto* tri_vtx_ptr   = static_cast<float*>([tri_vtx_buf_ contents]);
   auto* tri_norm_ptr  = static_cast<float*>([tri_norm_buf_ contents]);
   auto* tri_area_ptr  = static_cast<float*>([tri_area_buf_ contents]);
-  auto* tri_to_poly_ptr = static_cast<uint16_t*>([tri_to_poly_buf_ contents]);
+  auto* tri_to_poly_ptr = static_cast<uint32_t*>([tri_to_poly_buf_ contents]);
 
   // Second pass: flatten each shape into the shared buffers at its own offset.
   // Centroid + tri_to_poly follow the same pattern as the historical
@@ -1820,7 +1852,9 @@ void MetalTraceBackend::Impl::UploadCrystalPool(const std::vector<Crystal>& pool
   // pyramid+random-face_distance Metal SIGSEGV was a stride/count mismatch
   // inside BuildPolygonFaceData (fixed there); the WARN + zero-write surfaces
   // any future upstream drift as a detectable symptom rather than a wild read.
-  constexpr uint16_t kInvalidIdU16 = 0xffffu;
+  // Must mirror MSL's `kInvalidId` in lumice_trace.metal. Widened to 32-bit
+  // in lockstep with tri_to_poly_buf_ / root_tf_buf.
+  constexpr uint32_t kInvalidIdU32 = 0xffffffffu;
   constexpr float kFaceCoplanarFloor = 1e-2f;
   bool centroid_bound_warned = false;
 
@@ -1892,8 +1926,8 @@ void MetalTraceBackend::Impl::UploadCrystalPool(const std::vector<Crystal>& pool
       }
       tri_to_poly_ptr[tri_off + t] =
           (best_p >= 0 && best_dot >= 1.0f - kFaceCoplanarFloor)
-              ? static_cast<uint16_t>(poly_off + static_cast<uint32_t>(best_p))
-              : kInvalidIdU16;
+              ? (poly_off + static_cast<uint32_t>(best_p))
+              : kInvalidIdU32;
     }
   }
 
@@ -2044,7 +2078,7 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
   auto* d_ptr   = static_cast<float*>([root_d_buf contents]);
   auto* p_ptr   = static_cast<float*>([root_p_buf contents]);
   auto* w_ptr   = static_cast<float*>([root_w_buf contents]);
-  auto* tf_ptr  = static_cast<uint16_t*>([root_tf_buf contents]);
+  auto* tf_ptr  = static_cast<uint32_t*>([root_tf_buf contents]);
   auto* rot_ptr = static_cast<float*>([root_rot_buf contents]);
 
   for (size_t i = 0; i < n; i++) {
@@ -2056,7 +2090,21 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
     p_ptr[i * 3 + 1] = r.p_[1];
     p_ptr[i * 3 + 2] = r.p_[2];
     w_ptr[i] = r.w_;
-    tf_ptr[i] = static_cast<uint16_t>(r.to_face_);
+    // K-shape pool: host-gen fallback pins every ray to pool slot 0 whose
+    // slice starts at poly_off == 0, so r.to_face_ (RaySeg::to_face_ is uint16
+    // IdType in def.hpp) already IS the absolute pool-wide index for this
+    // path. Promote host uint16 kInvalidId (0xffff) to device uint32 kInvalidId
+    // (0xffffffff) — zero-extension alone (0x0000ffff) would land inside legal
+    // absolute-index space and defeat trace_layer_kernel's `if (to_face ==
+    // kInvalidId) break;` guard, leaving a triangle-with-no-polygon-backing
+    // ray to index poly_n[65535 * 3] OOB. simulator.cpp::InitRay_p_fid sets
+    // to_face_ = kInvalidId on that exact fallback path (see the LOG_WARNING
+    // clause), so this promotion is load-bearing for the rare corrupt-crystal
+    // config.
+    // 0xffffffffu mirrors MSL's kInvalidId constant (lumice_trace.metal).
+    tf_ptr[i] = (r.to_face_ == kInvalidId)
+                    ? 0xffffffffu
+                    : static_cast<uint32_t>(r.to_face_);
     // Per-ray crystal->world rotation (row-major mat_, same layout the kernel
     // applies as mat*v). InitRayFirstMs sampled this orientation and applied
     // its inverse to bring d_ into crystal-local space for tracing; the kernel
@@ -2138,13 +2186,25 @@ size_t MetalTraceBackend::Impl::InjectHostRoots(const HostRayBatch& host) {
   auto* d_ptr   = static_cast<float*>([root_d_buf contents]);
   auto* p_ptr   = static_cast<float*>([root_p_buf contents]);
   auto* w_ptr   = static_cast<float*>([root_w_buf contents]);
-  auto* tf_ptr  = static_cast<uint16_t*>([root_tf_buf contents]);
+  auto* tf_ptr  = static_cast<uint32_t*>([root_tf_buf contents]);
   auto* rot_ptr = static_cast<float*>([root_rot_buf contents]);
   std::memcpy(d_ptr,  host.d,  n * 3 * sizeof(float));
   std::memcpy(p_ptr,  host.p,  n * 3 * sizeof(float));
   std::memcpy(w_ptr,  host.w,  n * sizeof(float));
-  // IdType is uint16_t (def.hpp); root_tf_buf element width matches.
-  std::memcpy(tf_ptr, host.tf, n * sizeof(uint16_t));
+  // K-shape pool: golden-ray tests pin the single crystal to pool slot 0
+  // (poly_off == 0), so host.tf's uint16 IdType values equal the widened
+  // absolute pool-wide indices. host.tf is uint16_t (RaySeg::to_face_ IdType)
+  // and root_tf_buf is uint32_t after the widen, so element-wise cast is
+  // required — a raw memcpy would produce garbage in the upper 16 bits.
+  // Promote uint16 kInvalidId (0xffff) → device kInvalidId (0xffffffff) so
+  // trace_layer_kernel's sentinel comparison still fires (see
+  // GenerateFirstLayerRootsForCi's mirror comment for the OOB-avoidance
+  // rationale).
+  for (size_t i = 0; i < n; i++) {
+    tf_ptr[i] = (host.tf[i] == kInvalidId)
+                    ? 0xffffffffu
+                    : static_cast<uint32_t>(host.tf[i]);
+  }
   for (size_t i = 0; i < n; i++) {
     float* m = rot_ptr + i * 9;
     m[0] = 1.0f; m[1] = 0.0f; m[2] = 0.0f;
@@ -2296,6 +2356,18 @@ void MetalTraceBackend::Impl::EncodeGenRoot(id<MTLCommandBuffer> cb,
     // shape (buffer 19, read) + the per-ray write-out for the chosen shape's
     // (poly_off, poly_cnt) slice (buffer 20). trace_layer_kernel reads the
     // latter at buffer(16).
+    // Release-safe guard: Metal buffer binding APIs reject nil, so this ends
+    // the dispatch cleanly (no encoded work, no undefined-behavior device read)
+    // rather than firing an assert that compiles away in -DNDEBUG.
+    if (pool_shape_table_buf_ == nil) {
+      ILOG_ERROR(EffectiveLogger(logger_),
+                 "EncodeGenRoot: pool_shape_table_buf_ nil — skipping dispatch. This is a "
+                 "caller ordering bug (UploadCrystalPool must run before any root-gen encode); "
+                 "the ci contributes 0 rays to this batch, and TraceLayer's downstream ray "
+                 "cursors advance accordingly (no fake exit records produced).");
+      [enc endEncoding];
+      return;
+    }
     assert(pool_shape_table_buf_ != nil &&
            "pool_shape_table_buf_ must be non-nil before EncodeGenRoot");
     [enc setBuffer:pool_shape_table_buf_ offset:0 atIndex:19];
@@ -2396,6 +2468,14 @@ void MetalTraceBackend::Impl::EncodeTransitRoot(
     [enc setBuffer:root_component_buf_          offset:0        atIndex:18];
     // K-shape geometry pool bindings mirror EncodeGenRoot at the same slots
     // 19/20 so both root passes speak the same shader-side layout.
+    // Release-safe guard mirrors EncodeGenRoot above.
+    if (pool_shape_table_buf_ == nil) {
+      ILOG_ERROR(EffectiveLogger(logger_),
+                 "EncodeTransitRoot: pool_shape_table_buf_ nil — skipping dispatch. Caller "
+                 "ordering bug: UploadCrystalPool must run before any root pass encode.");
+      [enc endEncoding];
+      return;
+    }
     assert(pool_shape_table_buf_ != nil &&
            "pool_shape_table_buf_ must be non-nil before EncodeTransitRoot");
     [enc setBuffer:pool_shape_table_buf_        offset:0        atIndex:19];
