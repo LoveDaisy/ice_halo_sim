@@ -56,6 +56,29 @@ class CudaTraceBackendTestHooks {
   void EnableGenAttemptCount(size_t count, size_t ci_start = 0);
   size_t ReadbackGenAttemptCount(std::vector<int>& out, size_t count);
 
+  // White-box observation of `CudaTraceBackend::Impl::BuildGeomPool` call
+  // frequency. `EnableGeomPoolRebuildCount` flips the production zero-cost
+  // counter on (call BEFORE any BeginSession to observe the first build);
+  // `ReadbackGeomPoolRebuildCount` reads the count of `BuildGeomPool`
+  // invocations since Impl construction (or last observation). Distinguishes
+  // stochastic scenes (count grows with BeginSession cycles) from
+  // deterministic scenes (count stays at 1 across cycles — the pool
+  // build-once fast path). No device buffers to poke; no session-boundary
+  // constraints.
+  void EnableGeomPoolRebuildCount();
+  uint32_t ReadbackGeomPoolRebuildCount() const;
+
+  // White-box readback of a produced-geometry scalar vector from the FIRST
+  // host slot crystal currently in the geometry pool (`Impl::pool_crystals_`
+  // front). Copies up to `count` polygon-face distances (the quantity a
+  // stochastic `d_[]`/`h_` config actually randomizes) into `out`; returns
+  // the number of floats written (0 if the pool is empty). Call BETWEEN
+  // BeginSession and EndSession so the pool reflects the current cycle's draw.
+  // Lets a test assert that successive same-seed BeginSession cycles produce
+  // DIFFERENT geometry — the direct AC1 evidence that `rng_` advances across
+  // batches (Layer 1 seed-once) rather than resetting to a frozen shape.
+  size_t ReadbackFirstPoolCrystalGeom(std::vector<float>& out, size_t count) const;
+
  private:
   CudaTraceBackend& backend_;
 };

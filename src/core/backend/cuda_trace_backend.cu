@@ -1594,6 +1594,23 @@ struct CudaTraceBackend::Impl {
   std::vector<Crystal>  pool_crystals_;     // host slot crystals (config_id; wl-pool repr)
   bool        geom_pool_built_ = false;
   const void* pool_scene_      = nullptr;   // scene the pool was built for (rebuild guard)
+  // True iff any (layer, ci) crystal param in `pool_scene_` carries a
+  // stochastic shape distribution. Recomputed only on scene change (see the
+  // `pool_scene_` sentinel above); if true, BeginSession force-invalidates
+  // `geom_pool_built_` every batch so BuildGeomPool re-draws fresh shapes.
+  // Deterministic scenes: false → the per-scene build-once fast path (see the
+  // comment on `filter_built_` above for the same optimization family) stays
+  // in effect and per-batch H2D remains at zero.
+  bool        pool_stochastic_ = false;
+  // [TEST-ONLY] rebuild counter for white-box tests. Production zero-cost:
+  // only incremented when `geom_pool_rebuild_count_enabled_` is set via
+  // `CudaTraceBackendTestHooks::EnableGeomPoolRebuildCount()`. Reads the
+  // count via `ReadbackGeomPoolRebuildCount()`. Used by
+  // `test/unit-correctness/backend/test_cuda_geom_pool_rebuild.cpp` to
+  // distinguish "pool rebuilt every batch" (stochastic path) from "pool
+  // built once" (deterministic path) without inspecting device buffers.
+  bool     geom_pool_rebuild_count_enabled_ = false;
+  uint32_t geom_pool_rebuild_count_         = 0;
   // scrum-306.2 increment 4: filter descriptors + wl pool are per-session-CONSTANT
   // (config + crystal n_idx fixed across batches) — persist them across the
   // per-batch cycle instead of free+malloc+H2D every BeginSession (post-pool the
@@ -1707,7 +1724,19 @@ struct CudaTraceBackend::Impl {
   float* pinned_rot_c2w_ = nullptr;  // n_roots × 9 (mirrors d_rot_c2w_)
   ExitRayRecord* pinned_exit_ = nullptr;
 
-  RandomNumberGenerator rng_{0u};  // re-seeded in BeginSession from spec.seed
+  RandomNumberGenerator rng_{0u};  // re-seeded ONCE per Impl lifetime in BeginSession (rng_seeded_ gate)
+  // Seed-once gate for `rng_`. Mirrors the CPU and Metal backends: see
+  // `CpuTraceBackend::seeded_`/`seeded_seed_` at cpu_trace_backend.cpp:232,
+  // 252-257 and `MetalTraceBackend`'s `rng_seeded_` at
+  // metal_trace_backend.mm:2626-2632. Simulator drives BeginSession per
+  // SimBatch, so an unconditional `SetSeed(spec.seed)` here would collapse
+  // the per-batch geometry / host-fallback MakeCrystal RNG stream to a
+  // constant prefix, freezing crystal-shape randomization end-to-end. Lives
+  // on Impl (not reset by EndSession/Reset) — same lifetime convention as
+  // the `gen_seeded_`/`transit_seeded_`/`gate_seeded_`/`drain_seeded_`
+  // siblings below.
+  bool     rng_seeded_      = false;
+  uint32_t rng_seeded_seed_ = 0;
 
   size_t n_roots_ = 0;
 
@@ -2257,13 +2286,41 @@ void CudaTraceBackend::Impl::UploadLatLut(const AxisDistribution& axis) {
             "UploadLatLut cudaMemcpy d_lat_lut_flip");
 }
 
+// Does any (layer, ci) crystal param in the scene carry a stochastic shape
+// distribution? This is a direct caller of `IsDeterministic(param)` (an
+// OR-reduction of its negation over every setting), NOT a second copy of the
+// predicate logic — adding a new CrystalParam family only needs
+// `IsDeterministic` itself to cover it; there is nothing here to keep in sync.
+// Callers: BeginSession's scene-change block caches the result into
+// `Impl::pool_stochastic_` so the per-BeginSession check is a plain bool load.
+// Anonymous namespace: matches the file-local-helper linkage convention for
+// this TU (CudaSelectedDevice / CheckCuda / … all have internal linkage) — a
+// one-shot predicate must not leak external linkage across TUs.
+namespace {
+bool SceneHasStochasticGeometry(const SceneConfig& scene) {
+  for (const auto& ms : scene.ms_) {
+    for (const auto& setting : ms.setting_) {
+      if (!IsDeterministic(setting.crystal_.param_)) return true;
+    }
+  }
+  return false;
+}
+}  // namespace
+
 void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene) {
-  // Build the per-(layer,ci) geometry pool ONCE. MakeCrystal is consumed from
-  // rng_ in the EXACT order the per-batch ci-loop used it (layers outer, ci
-  // inner; rng_ freshly re-seeded to spec.seed in BeginSession), so the pooled
-  // shapes are byte-identical to the prior per-batch upload. The pool then
-  // persists across batches (geom_pool_built_) — eliminating the per-batch 6×
-  // H2D re-upload of identical geometry.
+  // Build the per-(layer,ci) geometry pool. Called ONCE per scene when
+  // `pool_stochastic_` is false (all crystal params deterministic → shapes
+  // are batch-invariant; the build-once optimization at `geom_pool_built_`
+  // stays intact). Called EVERY BeginSession when `pool_stochastic_` is
+  // true — BeginSession force-invalidates `geom_pool_built_` in that case
+  // so this rebuild path draws a fresh batch of shapes from `rng_`.
+  // MakeCrystal is consumed from `rng_` in the EXACT order the per-batch
+  // ci-loop used it (layers outer, ci inner); `rng_` is seed-once (see the
+  // `rng_seeded_` field), so successive rebuilds advance the stream instead
+  // of replaying the same prefix.
+  if (geom_pool_rebuild_count_enabled_) {
+    ++geom_pool_rebuild_count_;
+  }
   pool_crystals_.clear();
   pool_poly_off_.clear(); pool_poly_cnt_.clear();
   pool_tri_off_.clear();  pool_tri_cnt_.clear();
@@ -3031,7 +3088,17 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     impl_->scene_ = spec.scene;
     impl_->render_ = spec.render;
     impl_->wl_ = spec.wl;
-    impl_->rng_.SetSeed(spec.seed);
+    // Seed rng_ ONCE per Impl lifetime — Simulator drives BeginSession per
+    // SimBatch, so an unconditional SetSeed would reset the per-batch
+    // MakeCrystal RNG to a constant prefix and freeze crystal-shape
+    // randomization. Mirrors cpu_trace_backend.cpp:232,252-257 +
+    // metal_trace_backend.mm:2626-2632. See rng_seeded_ field doc.
+    assert(!impl_->rng_seeded_ || spec.seed == 0 || spec.seed == impl_->rng_seeded_seed_);
+    if (spec.seed != 0 && !impl_->rng_seeded_) {
+      impl_->rng_.SetSeed(spec.seed);
+      impl_->rng_seeded_seed_ = spec.seed;
+      impl_->rng_seeded_      = true;
+    }
     impl_->ray_alloc_carry_.clear();  // per-(layer,ci) partition carry — fresh per session
 
     // scrum-306.2 increment 4: a scene change invalidates every per-session-constant
@@ -3042,6 +3109,17 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
       impl_->filter_built_      = false;
       impl_->wl_pool_uploaded_  = false;
       impl_->pool_scene_        = static_cast<const void*>(spec.scene);
+      // Cache whether this scene contains any stochastic crystal geometry.
+      // Scene-pointer-scoped: the scene may change under us (multi-config
+      // runs), but when the pointer holds, its stochastic profile does not.
+      impl_->pool_stochastic_   = SceneHasStochasticGeometry(*spec.scene);
+    }
+    // Stochastic scenes: force per-batch rebuild of the geometry pool so
+    // each SimBatch draws a fresh set of shapes from `rng_`. Deterministic
+    // scenes: leave `geom_pool_built_` alone → the build-once fast path
+    // stays in effect and per-batch H2D remains at zero.
+    if (impl_->pool_stochastic_) {
+      impl_->geom_pool_built_ = false;
     }
 
     // MVP: single MS, single crystal config — ms_[0].setting_[0].
@@ -4284,6 +4362,33 @@ size_t CudaTraceBackendTestHooks::ReadbackGenAttemptCount(std::vector<int>& out,
   CheckCuda(cudaMemcpy(out.data(), impl.d_lat_attempts_, count * sizeof(int), cudaMemcpyDeviceToHost),
             "ReadbackGenAttemptCount D2H");
   return count;
+}
+
+void CudaTraceBackendTestHooks::EnableGeomPoolRebuildCount() {
+  auto& impl = *backend_.impl_;
+  impl.geom_pool_rebuild_count_enabled_ = true;
+  impl.geom_pool_rebuild_count_         = 0u;
+}
+
+uint32_t CudaTraceBackendTestHooks::ReadbackGeomPoolRebuildCount() const {
+  return backend_.impl_->geom_pool_rebuild_count_;
+}
+
+size_t CudaTraceBackendTestHooks::ReadbackFirstPoolCrystalGeom(std::vector<float>& out, size_t count) const {
+  auto& impl = *backend_.impl_;
+  out.clear();
+  if (impl.pool_crystals_.empty()) {
+    return 0;
+  }
+  const Crystal& c = impl.pool_crystals_.front();
+  const size_t avail = c.PolygonFaceCount();
+  const size_t n = count < avail ? count : avail;
+  const float* dist = c.GetPolygonFaceDist();
+  if (dist == nullptr || n == 0) {
+    return 0;
+  }
+  out.assign(dist, dist + n);
+  return n;
 }
 
 size_t CudaTraceBackendTestHooks::ReadbackGenDirs(std::vector<float>& out, size_t count) {

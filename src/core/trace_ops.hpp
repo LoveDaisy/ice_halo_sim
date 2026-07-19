@@ -70,6 +70,15 @@ RayBuffer AllocateAllData(const SceneConfig& config, size_t ray_num);
 // params each call samples a fresh shape using the RNG).
 Crystal MakeCrystal(RandomNumberGenerator& rng, const CrystalParam& param);
 
+// Predicate: is `param` deterministic (no stochastic shape distribution on any
+// of prism `h_`/`d_[6]` or pyramid `h_prs_`/`h_pyr_u_`/`h_pyr_l_`/`d_[6]`)?
+// Deterministic params never consume the RNG in MakeCrystal, so callers use
+// this to decide whether a cached Crystal/geometry upload may be reused across
+// draws. Definition lives in simulator.cpp (single source, already exported at
+// namespace scope — this header only adds the declaration so backends can see
+// it without duplicating the visitor logic).
+bool IsDeterministic(const CrystalParam& param);
+
 }  // namespace lumice
 
 #endif  // CORE_TRACE_OPS_H_
