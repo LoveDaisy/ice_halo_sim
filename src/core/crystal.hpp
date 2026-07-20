@@ -15,7 +15,8 @@ namespace lumice {
 /**
  * @brief Test whether @p face is a legal face number on the given crystal kind.
  *
- * Legal sets (matching FillHexFnMap in crystal.cpp):
+ * Legal sets (matching the closed-form face-number tables in
+ * geo3d_closedform.cpp):
  *   - kPrism:   {1, 2, 3, 4, 5, 6, 7, 8}
  *   - kPyramid: {1, 2, 3..8, 13..18, 23..28}
  *
@@ -32,12 +33,14 @@ bool IsLegalFace(CrystalKind kind, int face);
  * @brief Closed 2-manifold Euler-characteristic gate for a triangle mesh.
  *
  * Checks `V - E + F == 2` with `E = 3F/2` (each edge shared by exactly 2
- * triangles). This is the single source of truth for the "is this mesh a
- * legal closed polyhedron" predicate used both by the Crystal factory
- * boundary (crystal.cpp, rejects malformed meshes before they reach
- * BuildPolygonFaceData) and by test code that needs to assert the same
- * invariant against known inputs — declared here so both consumers share one
- * implementation instead of each maintaining a parallel copy that can drift.
+ * triangles). This is a pure V/F predicate over an already-built mesh.
+ *
+ * @note It is no longer a factory gate. The closed-form representation decides
+ *       validity while constructing (surviving contour corners >= 3, plus a
+ *       non-degenerate height interval), so there is no "build a mesh, then
+ *       check whether the build went wrong" step left to guard. What remains
+ *       here is a test-only predicate for asserting the invariant against
+ *       known inputs.
  *
  * @note Necessary but not sufficient: a self-intersecting mesh whose V/F
  *       counts happen to satisfy the Euler formula would pass. See
