@@ -29,6 +29,7 @@
 
 #include <benchmark/benchmark.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -871,5 +872,100 @@ void BM_ApexDegreeDistribution(benchmark::State& state) {
   state.counters["PRISM_WITHOUT_PYR"] = static_cast<double>(prism_wo_pyr);
 }
 BENCHMARK(BM_ApexDegreeDistribution)->Arg(0)->Arg(5)->Arg(20)->Arg(50)->Arg(200);
+
+// ---- Experiment 13: how sensitive is the merge threshold, really? ----------
+//
+// Owner's physics argument: whether two corners 3e-6 apart count as one vertex
+// or two should not matter, because counting them as two only creates a face of
+// vanishing area that Monte-Carlo entry sampling essentially never selects. The
+// argument is about MEASURE, so it is testable: measure the area fraction of the
+// sliver faces that the merge decision creates or destroys.
+//
+// The counter-consideration is that in the current representation the threshold
+// is load-bearing for reasons that have nothing to do with physics: too wide
+// over-merges into non-manifold fragments, too narrow lets the several candidate
+// positions of one corner survive as distinct vertices. Both failures come from
+// the triangulation + Euler machinery, not from the geometry. In a
+// representation with no triangulation to destabilise, the only consequence of
+// moving the threshold should be whether a sliver face is listed -- i.e. the
+// physics insensitivity should become actual insensitivity.
+//
+// Reported per threshold: face count, and the smallest face's share of total
+// surface area (the quantity the MC argument turns on).
+void BM_MergeThresholdSensitivity(benchmark::State& state) {
+  const double sigma = static_cast<double>(state.range(0)) / 100.0;
+  const double thresh_rel = std::pow(10.0, -static_cast<double>(state.range(1)));
+
+  std::mt19937 rng(24680u);
+  std::normal_distribution<double> noise(1.0, sigma);
+  const double k = std::sqrt(3.0) / 4.0;
+  const double height = 1.0;
+
+  long samples = 0, face_cnt_total = 0;
+  double worst_sliver_frac = 1.0;  // smallest face area / total area, worst (largest) case
+  double min_sliver_frac = 1.0;    // and the smallest observed
+  long slivers_below_1e6 = 0;
+
+  for (int s = 0; s < 20000; s++) {
+    float dist[kPrismFaces];
+    for (float& d : dist) {
+      d = static_cast<float>(noise(rng));
+    }
+    auto cf = ClosedFormPrism<double>(dist, thresh_rel);
+    if (cf.vtx_cnt < 3) {
+      continue;
+    }
+    samples++;
+    // order corners by angle to get the ring, then per-face edge lengths
+    std::vector<std::pair<double, int>> ang;
+    ang.reserve(cf.vtx_cnt);
+    double cx = 0, cy = 0;
+    for (int v = 0; v < cf.vtx_cnt; v++) {
+      cx += cf.x[v];
+      cy += cf.y[v];
+    }
+    cx /= cf.vtx_cnt;
+    cy /= cf.vtx_cnt;
+    for (int v = 0; v < cf.vtx_cnt; v++) {
+      ang.emplace_back(std::atan2(cf.y[v] - cy, cf.x[v] - cx), v);
+    }
+    std::sort(ang.begin(), ang.end());
+    double perim = 0, min_edge = std::numeric_limits<double>::max(), area2 = 0;
+    for (size_t a = 0; a < ang.size(); a++) {
+      const int i0 = ang[a].second;
+      const int i1 = ang[(a + 1) % ang.size()].second;
+      const double dx = cf.x[i1] - cf.x[i0], dy = cf.y[i1] - cf.y[i0];
+      const double len = std::sqrt(dx * dx + dy * dy);
+      perim += len;
+      min_edge = std::min(min_edge, len);
+      area2 += cf.x[i0] * cf.y[i1] - cf.x[i1] * cf.y[i0];
+    }
+    const double cap_area = std::fabs(area2);  // 2 caps of area/2 each
+    const double total = perim * height + cap_area;
+    const double sliver = (min_edge * height) / total;
+    worst_sliver_frac = std::min(worst_sliver_frac, sliver);
+    min_sliver_frac = std::min(min_sliver_frac, sliver);
+    if (sliver < 1e-6) {
+      slivers_below_1e6++;
+    }
+    face_cnt_total += static_cast<long>(ang.size());
+  }
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(face_cnt_total);
+  }
+  state.counters["sigma"] = sigma;
+  state.counters["thresh_rel"] = thresh_rel;
+  state.counters["samples"] = static_cast<double>(samples);
+  state.counters["mean_face_cnt"] = samples ? static_cast<double>(face_cnt_total) / samples : 0.0;
+  state.counters["SMALLEST_face_area_frac"] = min_sliver_frac;
+  state.counters["n_sliver_lt_1e-6"] = static_cast<double>(slivers_below_1e6);
+}
+BENCHMARK(BM_MergeThresholdSensitivity)
+    ->Args({ 30, 12 })
+    ->Args({ 30, 10 })
+    ->Args({ 30, 8 })
+    ->Args({ 30, 6 })
+    ->Args({ 30, 4 })
+    ->Args({ 30, 3 });
 
 }  // namespace
