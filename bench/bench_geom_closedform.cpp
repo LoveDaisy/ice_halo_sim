@@ -1143,32 +1143,24 @@ void BM_PyramidClosedFormSanityDump(benchmark::State& state) {
   static bool dumped = false;
   if (!dumped) {
     dumped = true;
-    // Cross-check: pyramid oracle on pure-prism input agrees with ExactPrism
-    // (validates the oracle's shared arithmetic on the known-good subset).
+    // Pure-prism cross-check: build a pyramid input with no cones (h1=h3=0),
+    // oracle should recover 12 vertices (2 basal × 6-hexagon corners).
     {
       float dist_p[6]{ 1.f, 1.f, 1.f, 1.f, 1.f, 1.f };
-      auto prism_cf = ComputeClosedFormPrism(1.0f, dist_p);
-      float coef_prism[test_support::kExactPyramidMaxPlanes * 4];
-      int n = 0;
-      for (int slot = 0; slot < kClosedFormPrismFaceCnt; slot++) {
-        for (int k = 0; k < 4; k++) {
-          coef_prism[n * 4 + k] = prism_cf.plane_coef[slot * 4 + k];
-        }
-        n++;
-      }
-      auto pyr_oracle = test_support::ExactPyramid(n, coef_prism);
+      auto pyr_oracle = test_support::ExactPyramidFromParams(-1.0, -1.0, /*h1=*/0.0f, /*h2=*/1.0f, /*h3=*/0.0f, dist_p);
       auto prism_oracle = test_support::ExactPrism(dist_p);
       std::fprintf(stderr,
-                   "[PRISM CROSS-CHECK] pyr_oracle.vtx=%d (shift=%d, max_bits=%d, refused=%d) "
+                   "[PRISM CROSS-CHECK] pyr_oracle.vtx=%d (max_bits=%d, refused=%d reason=%s) "
                    "prism_oracle.corners=%d (expect 6+6=12 lifted)\n",
-                   pyr_oracle.vertex_count, pyr_oracle.shift, pyr_oracle.max_intermediate_bits,
-                   static_cast<int>(pyr_oracle.refused), prism_oracle.corner_count);
+                   pyr_oracle.vertex_count, pyr_oracle.max_intermediate_bits, static_cast<int>(pyr_oracle.refused),
+                   pyr_oracle.refuse_reason, prism_oracle.corner_count);
     }
     float dist[6]{ 1.f, 1.f, 1.f, 1.f, 1.f, 1.f };
-    // h1=h3=0.3 (truncated): closed-form top is a real hexagon; oracle stress-
-    // tests 4-plane concurrence dedup at the ±0.5 shoulders (see progress note
-    // on oracle over-counting under high-degree concurrence).
-    const float au = 28.0f, al = 28.0f, h1 = 0.3f, h2 = 1.0f, h3 = 0.3f;
+    // Regular pyramid α=28°, h=(1,1,1), dist=1 — the apex-1-vertex self-test:
+    // owner-mandated invariant that the exact oracle must give a single apex
+    // vertex under zero tolerance (previous SamePointFuzzy oracle failed here,
+    // returning 36 vertices from the split shoulder concurrences).
+    const float au = 28.0f, al = 28.0f, h1 = 1.0f, h2 = 1.0f, h3 = 1.0f;
     auto r = ComputeClosedFormPyramid(au, al, h1, h2, h3, dist);
     std::fprintf(stderr, "[SANITY] regular pyramid α=28° h=(1,1,1) dist=1:\n");
     std::fprintf(stderr, "  a1=%.6f a2=%.6f inset_top=%.6f inset_bot=%.6f\n", static_cast<double>(r.a1),
@@ -1206,26 +1198,19 @@ void BM_PyramidClosedFormSanityDump(benchmark::State& state) {
     }
     std::fprintf(stderr, "  [PROD] apex z_max=%.6f z_min=%.6f (closed-form z_top=%.6f)\n", prod_z_max, prod_z_min,
                  static_cast<double>(r.inset_at_top) * static_cast<double>(r.a1) + 0.5);
-    // Feed the closed-form's plane_coef to the pyramid oracle for sanity.
-    float coef_packed[test_support::kExactPyramidMaxPlanes * 4];
-    int packed_n = 0;
-    for (int slot = 0; slot < kClosedFormPyramidFaceCnt; slot++) {
-      const bool is_upper_cone = slot >= 8 && slot < 14;
-      const bool is_lower_cone = slot >= 14;
-      if (is_upper_cone && r.a1 <= 0) {
-        continue;
+    // Feed the pyramid oracle the SAME PARAMETERS (not float coefs) — Q(√3) exact
+    // construction internally. Owner-mandated invariant: apex-1-vertex under
+    // zero tolerance.
+    auto oracle =
+        test_support::ExactPyramidFromParams(static_cast<double>(r.a1), static_cast<double>(r.a2), h1, h2, h3, dist);
+    std::fprintf(stderr, "  [ORACLE] vertex_count=%d max_bits=%d refused=%d reason=%s\n", oracle.vertex_count,
+                 oracle.max_intermediate_bits, static_cast<int>(oracle.refused), oracle.refuse_reason);
+    if (!oracle.refused) {
+      for (int v = 0; v < oracle.vertex_count; v++) {
+        std::fprintf(stderr, "    ov%d = (%.6f, %.6f, %.6f)\n", v, oracle.vertex_xyz[v][0], oracle.vertex_xyz[v][1],
+                     oracle.vertex_xyz[v][2]);
       }
-      if (is_lower_cone && r.a2 <= 0) {
-        continue;
-      }
-      for (int k = 0; k < 4; k++) {
-        coef_packed[packed_n * 4 + k] = r.plane_coef[slot * 4 + k];
-      }
-      packed_n++;
     }
-    auto oracle = test_support::ExactPyramid(packed_n, coef_packed);
-    std::fprintf(stderr, "  [ORACLE] planes=%d vertex_count=%d shift=%d max_bits=%d refused=%d\n", packed_n,
-                 oracle.vertex_count, oracle.shift, oracle.max_intermediate_bits, static_cast<int>(oracle.refused));
   }
   for (auto _ : state) {
     benchmark::DoNotOptimize(dumped);
@@ -1287,26 +1272,18 @@ void BM_PyramidOracleSelfVerify(benchmark::State& state) {
         cf_faces_present++;
       }
     }
-    // Feed the oracle the CLOSED-FORM's plane_coef (same float precision on
-    // both sides — plan default assumption 4). Also strip absent-cone slots
-    // from the oracle input to avoid probing planes with all-zero coefs.
-    float coef_packed[test_support::kExactPyramidMaxPlanes * 4];
-    int packed_n = 0;
-    for (int slot = 0; slot < kClosedFormPyramidFaceCnt; slot++) {
-      const bool is_upper_cone = slot >= 8 && slot < 14;
-      const bool is_lower_cone = slot >= 14;
-      if (is_upper_cone && cf.a1 <= 0) {
-        continue;
-      }
-      if (is_lower_cone && cf.a2 <= 0) {
-        continue;
-      }
-      for (int k = 0; k < 4; k++) {
-        coef_packed[packed_n * 4 + k] = cf.plane_coef[slot * 4 + k];
-      }
-      packed_n++;
+    // Feed the oracle the PARAMETERS (owner directive). Q(√3) exact planes
+    // constructed internally — algebraic identities hold, no epsilon anywhere.
+    // Match the closed-form's a1 / a2 derivation exactly so both sides start
+    // from the same float-input rationals.
+    double a1_d = -1.0, a2_d = -1.0;
+    if (cf.a1 > 0) {
+      a1_d = static_cast<double>(cf.a1);
     }
-    auto oracle = test_support::ExactPyramid(packed_n, coef_packed);
+    if (cf.a2 > 0) {
+      a2_d = static_cast<double>(cf.a2);
+    }
+    auto oracle = test_support::ExactPyramidFromParams(a1_d, a2_d, h1, h2, h3, dist);
     if (oracle.refused) {
       oracle_refused++;
       continue;
