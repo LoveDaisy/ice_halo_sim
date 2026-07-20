@@ -33,17 +33,21 @@ struct OpticsFixture {
 
     for (size_t i = 0; i < n; i++) {
       auto& r = buf_in[i];
-      // Direction: pointing into the crystal (negative of face normal for the assigned face)
-      int fid = static_cast<int>(i % 4);  // cycle through top-face triangles
+      // Cycle through top-face triangles (0..3). Direction points into the
+      // crystal (negative face normal); position is the triangle's first
+      // vertex. to_face_ is a POLYGON-face index, not a triangle id — resolve
+      // via the parametric slot→poly-face table on the Crystal (kInvalidId
+      // returns are not expected here since triangles 0..3 belong to the upper
+      // basal on the closed-form prism factory output).
+      int fid = static_cast<int>(i % 4);
       r.d_[0] = -face_norm[fid * 3 + 0];
       r.d_[1] = -face_norm[fid * 3 + 1];
       r.d_[2] = -face_norm[fid * 3 + 2];
-      // Position: first vertex of the assigned face
       r.p_[0] = face_vtx[fid * 9 + 0];
       r.p_[1] = face_vtx[fid * 9 + 1];
       r.p_[2] = face_vtx[fid * 9 + 2];
       r.w_ = 1.0f;
-      r.to_face_ = static_cast<IdType>(fid);
+      r.to_face_ = crystal.PolygonFaceOfTri(fid);
     }
   }
 };

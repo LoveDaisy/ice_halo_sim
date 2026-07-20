@@ -326,6 +326,16 @@ class Crystal {
   const float* GetPolygonFaceDist() const;
   const int* GetPolygonFaceTriId() const;
 
+  // Map a triangle id to its polygon-face index (0..PolygonFaceCount()-1).
+  // Returns kInvalidId when @p tri_id is out of range OR when this Crystal was
+  // built via the mesh-only path (Crystal(Mesh) ctor without cf_geom_ wired,
+  // used only by the degenerate Mesh(0,0) short-circuit today). Replaces the
+  // per-consumer argmax reversal that used to live in
+  // simulator.cpp::detail::PolygonFaceOfTri — the tri→poly-face map is a
+  // parametric byproduct of the closed-form triangulation, not a fact to be
+  // rediscovered.
+  IdType PolygonFaceOfTri(int tri_id) const;
+
   // Closed-form flat POD accessor. Returns cf_geom_.face_cnt == 0 for crystals
   // constructed via the mesh path (custom crystals) or default-constructed
   // instances; > 0 once the closed-form factory paths are wired up
@@ -385,6 +395,12 @@ class Crystal {
   float* poly_face_n_ = nullptr;             // unit normals, 3 * poly_face_cnt_
   float* poly_face_d_ = nullptr;             // plane distances, poly_face_cnt_
   int* poly_face_tri_id_ = nullptr;          // representative triangle ID, poly_face_cnt_
+
+  // Direct tri→poly-face-index lookup. Populated by PopulateFromCfGeom from the
+  // per-tri "which face slot" table produced by BuildMeshFromCfGeom. Not
+  // populated (nullptr) for Crystals built via the mesh-only path — those
+  // return kInvalidId from PolygonFaceOfTri(int).
+  std::unique_ptr<IdType[]> poly_face_of_tri_;
 
   // Closed-form flat POD geometry. Populated by CreatePrism/CreatePyramid once
   // relined onto the closed-form path (plan Steps 2/3). face_cnt == 0 for

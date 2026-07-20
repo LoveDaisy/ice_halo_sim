@@ -822,17 +822,22 @@ TEST(SimulatorEffectiveSeed, TwoZeroSeedInstancesDistinct) {
   EXPECT_NE(b.GetEffectiveSeed(), 0u);
 }
 
-// Regression sentinel for the PolygonFaceOfTri argmax fix: PolygonFaceOfTri
-// must map each of the 6 upper-pyramid polygon faces uniquely on
-// extreme-wedge crystals. The buggy
-// first-match (`dot > 1-1e-3`) collapses ≥2 physical faces onto the lowest
-// polygon index because adjacent upper-face normals dot to ~0.9994. argmax
-// + sanity floor distinguishes them.
+// Regression sentinel that started life as a guard against the
+// PolygonFaceOfTri argmax fix (a first-match `dot > 1-1e-3` collapsed ≥2
+// upper-pyramid faces onto the lowest polygon index on ~≥87.4° wedge because
+// adjacent upper-face normals dot to ~0.9994). Step 4 of the closed-form
+// representation swap replaced the whole argmax reversal with a parametric
+// slot→poly-face constant table populated at Crystal construction time
+// (Crystal::PolygonFaceOfTri now reads a precomputed array). The original
+// failure mode is *structurally* unreachable through the closed-form path —
+// the map is not rediscovered per call. This sentinel is kept as a
+// higher-level end-to-end assertion (extreme-wedge crystals expose 6 distinct
+// upper-pyramid polygon faces to the CPU consumer surface) so a future
+// refactor that regresses either (a) parametric face-number assignment or
+// (b) the slot→poly-face table under move/copy still fails loudly.
 //
 // Identification: upper-pyramid faces carry Fn ∈ {13..18} (per
-// crystal.cpp::CreatePyramid Miller-axis numbering); we count distinct polygon
-// indices returned by detail::PolygonFaceOfTri for every triangle whose Fn is
-// in that range.
+// crystal.cpp::CreatePyramid Miller-axis numbering).
 constexpr IdType kUpperPyramidFnLo = 13;
 constexpr IdType kUpperPyramidFnHi = 18;
 
@@ -844,7 +849,7 @@ size_t CountDistinctUpperPolyFaces(const Crystal& crystal, bool* any_invalid_out
     if (fn < kUpperPyramidFnLo || fn > kUpperPyramidFnHi) {
       continue;
     }
-    IdType poly = detail::PolygonFaceOfTri(crystal, static_cast<int>(t));
+    IdType poly = crystal.PolygonFaceOfTri(static_cast<int>(t));
     if (poly == kInvalidId) {
       any_invalid = true;
       continue;
@@ -858,25 +863,23 @@ size_t CountDistinctUpperPolyFaces(const Crystal& crystal, bool* any_invalid_out
 }
 
 TEST(PolygonFaceOfTriArgmax, ExtremeWedge88SixDistinctUpperFaces) {
-  // Extreme wedge 88° — the buggy first-match collapses upper-pyramid triangles
-  // to ≤4 distinct polygon faces; argmax must recover the full 6.
+  // Extreme wedge 88° — six distinct upper-pyramid polygon faces must be
+  // exposed at the CPU consumer surface (parametric layout guarantee).
   auto crystal = Crystal::CreatePyramid(88.0f, 88.0f, 1.0f, 0.0f, 1.0f);
   bool any_invalid = false;
   size_t distinct = CountDistinctUpperPolyFaces(crystal, &any_invalid);
-  EXPECT_EQ(distinct, 6u) << "extreme-wedge 88°: upper-pyramid triangles should map to 6 distinct "
-                             "polygon faces under argmax (buggy first-match collapses to ≤4)";
-  EXPECT_FALSE(any_invalid) << "no upper-pyramid triangle should fall below kFaceCoplanarFloor on a "
-                               "valid crystal";
+  EXPECT_EQ(distinct, 6u) << "extreme-wedge 88°: upper-pyramid triangles must map to 6 distinct "
+                             "polygon faces (parametric slot→poly-face table)";
+  EXPECT_FALSE(any_invalid) << "no upper-pyramid triangle should return kInvalidId on a "
+                               "closed-form-built crystal";
 }
 
 TEST(PolygonFaceOfTriArgmax, NormalWedge87SixDistinctUpperFaces) {
-  // Sanity baseline at the threshold edge — argmax must match first-match's
-  // behavior here (already 6 distinct under either rule).
   auto crystal = Crystal::CreatePyramid(87.0f, 87.0f, 1.0f, 0.0f, 1.0f);
   bool any_invalid = false;
   size_t distinct = CountDistinctUpperPolyFaces(crystal, &any_invalid);
   EXPECT_EQ(distinct, 6u);
-  EXPECT_FALSE(any_invalid) << "no upper-pyramid triangle should fall below kFaceCoplanarFloor at wedge 87°";
+  EXPECT_FALSE(any_invalid) << "no upper-pyramid triangle should return kInvalidId at wedge 87°";
 }
 
 }  // namespace

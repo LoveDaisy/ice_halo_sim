@@ -398,13 +398,26 @@ void Crystal::PopulateFromCfGeom(const std::vector<int>& tri_face_slot) {
     fn_map_[t] = static_cast<IdType>(cf_geom_.face_number[tri_face_slot[t]]);
   }
 
+  // slot → poly-face-index (0..present_cnt-1). kInvalidId for absent slots.
+  IdType slot_to_poly[kCrystalGeomMaxFaces];
+  for (int i = 0; i < kCrystalGeomMaxFaces; i++) {
+    slot_to_poly[i] = kInvalidId;
+  }
   size_t present = 0;
   for (int slot = 0; slot < cf_geom_.face_cnt; slot++) {
     if (cf_geom_.face_present[slot]) {
+      slot_to_poly[slot] = static_cast<IdType>(present);
       present++;
     }
   }
   poly_face_cnt_ = present;
+
+  poly_face_of_tri_ = std::make_unique<IdType[]>(tri_cnt);
+  for (size_t t = 0; t < tri_cnt; t++) {
+    const int slot = tri_face_slot[t];
+    poly_face_of_tri_[t] = (slot >= 0 && slot < kCrystalGeomMaxFaces) ? slot_to_poly[slot] : kInvalidId;
+  }
+
   if (poly_face_cnt_ == 0) {
     poly_face_data_.reset();
     poly_face_n_ = nullptr;
@@ -584,6 +597,10 @@ Crystal::Crystal(const Crystal& other)
     poly_face_tri_id_ = reinterpret_cast<int*>(poly_face_data_.get() + poly_face_cnt_ * 4);
     std::memcpy(poly_face_data_.get(), other.poly_face_data_.get(), poly_face_cnt_ * 5 * sizeof(float));
   }
+  if (other.poly_face_of_tri_) {
+    poly_face_of_tri_ = std::make_unique<IdType[]>(tri_cnt);
+    std::memcpy(poly_face_of_tri_.get(), other.poly_face_of_tri_.get(), tri_cnt * sizeof(IdType));
+  }
 }
 
 Crystal::Crystal(Crystal&& other) noexcept
@@ -592,7 +609,8 @@ Crystal::Crystal(Crystal&& other) noexcept
       face_n_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kNormal),
       face_area_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kArea),
       fn_map_(std::move(other.fn_map_)), fn_period_(other.fn_period_), poly_face_cnt_(other.poly_face_cnt_),
-      poly_face_data_(std::move(other.poly_face_data_)), cf_geom_(other.cf_geom_) {
+      poly_face_data_(std::move(other.poly_face_data_)), poly_face_of_tri_(std::move(other.poly_face_of_tri_)),
+      cf_geom_(other.cf_geom_) {
   other.face_v_ = nullptr;
   other.face_n_ = nullptr;
   other.face_area_ = nullptr;
@@ -641,6 +659,12 @@ Crystal& Crystal::operator=(const Crystal& other) {
     poly_face_d_ = nullptr;
     poly_face_tri_id_ = nullptr;
   }
+  if (other.poly_face_of_tri_) {
+    poly_face_of_tri_ = std::make_unique<IdType[]>(n);
+    std::memcpy(poly_face_of_tri_.get(), other.poly_face_of_tri_.get(), n * sizeof(IdType));
+  } else {
+    poly_face_of_tri_.reset();
+  }
   cf_geom_ = other.cf_geom_;
   return *this;
 }
@@ -680,6 +704,8 @@ Crystal& Crystal::operator=(Crystal&& other) noexcept {
   other.poly_face_n_ = nullptr;
   other.poly_face_d_ = nullptr;
   other.poly_face_tri_id_ = nullptr;
+
+  poly_face_of_tri_ = std::move(other.poly_face_of_tri_);
 
   cf_geom_ = other.cf_geom_;
   other.cf_geom_ = CrystalGeom{};
@@ -737,6 +763,19 @@ IdType Crystal::GetFn(int fid) const {
   } else {
     return fn_map_[fid];
   }
+}
+
+IdType Crystal::PolygonFaceOfTri(int tri_id) const {
+  if (tri_id < 0 || tri_id >= static_cast<int>(mesh_.GetTriangleCnt())) {
+    return kInvalidId;
+  }
+  if (!poly_face_of_tri_) {
+    // Mesh-only Crystal (custom-mesh or default-constructed): tri→poly-face
+    // mapping is not derivable without the parametric slot table. Callers
+    // must treat kInvalidId as "no polygon face for this triangle".
+    return kInvalidId;
+  }
+  return poly_face_of_tri_[tri_id];
 }
 
 IdType Crystal::GetFn(IdType poly_idx) const {
