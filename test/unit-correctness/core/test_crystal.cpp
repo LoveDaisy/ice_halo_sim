@@ -730,6 +730,159 @@ TEST_F(V3TestCrystal, FillHexCrystalCoefZeroVolumeGuardNoNan) {
 }
 
 // ==========================================================================
+// Pyramid empty-feasible-region fuzz.
+//
+// FillHexCrystalCoef's pyramid branch solves basal `d` by intersecting three
+// non-basal planes at a time and clamping z_max/z_min to whichever candidate
+// vertices lie inside the polyhedron. When random face_distance perturbations
+// make the half-space intersection empty, the triple-plane loop never enters
+// its IsInPolyhedron3D branch; without a guard z_max/z_min retain their
+// sentinel initial values (lowest()/max()) and both basal-d coefficients
+// come out as +inf. This fuzz asserts the strong invariant: for every sample,
+// the coefficients FillHexCrystalCoef reports (the first plane_cnt*4 floats
+// of out_coef) must be finite — either the pyramid solves cleanly, or the
+// guard trips and returns plane_cnt==0 (no coefficients to inspect).
+//
+// A weak "guard-fires-sometimes" check accompanies the strong invariant:
+// under this sampling distribution the guard is expected to fire on a
+// non-trivial fraction of samples, so a run that reports zero fires would
+// mean either the sampling drifted away from the diagnostic domain or the
+// guard branch was silently unreachable. Under these alpha ranges
+// (0.1° < alpha < 89.9°) has_upper/has_lower are always true, so the
+// pre-existing zero-volume `!has_upper && !has_lower && h2<eps` early-return
+// cannot fire; any plane_cnt==0 outcome here is unambiguously attributable
+// to the empty-feasible-region guard.
+//
+// Sampling distribution matches bench_geom_closedform.cpp::BM_DumpPlaneSets
+// (see bench/bench_geom_closedform.cpp — verified against the red/green
+// diagnostic dump this test protects against). NOTE: if the bench-side
+// distribution changes, hit-rate assertions here will silently drift out of
+// alignment with the diagnostic — keep the two in sync when touching either.
+// The bench uses N=1500/arm; this fuzz uses N=1000/arm which is enough to
+// sit comfortably away from the small-sample noise floor around a ~13.6%
+// empirical fire rate. Seed is deterministic and independent of the bench
+// seed so this test does not depend on the bench binary being run.
+//
+// The uniform_real_distribution / normal_distribution mappings from raw
+// mt19937 output are not standardized across libstdc++ / libc++, so the
+// exact fire count may drift across platforms. The rate-band assertion is
+// deliberately wide ([5%, 30%]) to accommodate that; the finiteness
+// invariant is what carries the load.
+struct PyramidFeasibilityResult {
+  int total = 0;
+  int guard_fired = 0;      // plane_cnt == 0 (guard tripped, coefficients skipped)
+  int solved = 0;           // plane_cnt > 0 with finite coefficients
+  int nonfinite_leaks = 0;  // plane_cnt > 0 with non-finite coefficient — a BUG
+};
+
+enum class PyramidFuzzArm { kDirectWedge = 0, kMillerIndex = 1 };
+
+PyramidFeasibilityResult RunPyramidFeasibilityFuzz(uint32_t seed, PyramidFuzzArm arm, int n, double sigma) {
+  PyramidFeasibilityResult r{};
+  std::mt19937 rng(seed);
+  std::normal_distribution<double> d_noise(1.0, sigma);
+  std::uniform_real_distribution<double> h_dist(0.2, 2.0);
+  std::uniform_real_distribution<double> a_dist(1.0, 89.5);
+  std::uniform_int_distribution<int> miller_idx(1, 4);
+  for (int s = 0; s < n; s++) {
+    float dist[6];
+    for (float& d : dist) {
+      d = static_cast<float>(d_noise(rng));
+    }
+    const auto h2 = static_cast<float>(h_dist(rng));
+    const auto h1 = static_cast<float>(h_dist(rng) / 2.0);
+    float au = 0;
+    float al = 0;
+    if (arm == PyramidFuzzArm::kDirectWedge) {
+      au = static_cast<float>(a_dist(rng));
+      al = static_cast<float>(a_dist(rng));
+    } else {
+      const int i1 = miller_idx(rng);
+      const int i4 = miller_idx(rng);
+      au = static_cast<float>(std::atan(math::kSqrt3_2 * i4 / i1 / kIceCrystalC) * math::kRadToDegree);
+      al = au;
+    }
+    float coef[kMaxHexCrystalPlanes * 4];
+    const size_t plane_cnt = FillHexCrystalCoef(au, al, h1, h2, h1, dist, coef);
+    r.total++;
+    if (plane_cnt == 0) {
+      r.guard_fired++;
+      continue;
+    }
+    bool all_finite = true;
+    for (size_t i = 0; i < plane_cnt * 4; i++) {
+      if (!std::isfinite(coef[i])) {
+        all_finite = false;
+        break;
+      }
+    }
+    if (all_finite) {
+      r.solved++;
+    } else {
+      r.nonfinite_leaks++;
+      ADD_FAILURE() << "non-finite coefficient survived FillHexCrystalCoef: arm=" << static_cast<int>(arm)
+                    << " sample=" << s << " au=" << au << " al=" << al << " h1=" << h1 << " h2=" << h2 << " dist=["
+                    << dist[0] << "," << dist[1] << "," << dist[2] << "," << dist[3] << "," << dist[4] << "," << dist[5]
+                    << "] plane_cnt=" << plane_cnt;
+    }
+  }
+  return r;
+}
+
+// Direct-wedge arm: alpha sweeps 1°-89.5°, including the extreme-flat tail
+// (>87°) that the B-ring bug family lives in. Under sigma=0.8 empirical fire
+// rate ~13.6% (matches the diagnostic dump 89/700 for this arm).
+TEST_F(V3TestCrystal, PyramidFeasibilityFuzzDirectWedge_sigma08) {
+  const auto r = RunPyramidFeasibilityFuzz(0xFED08A00u, PyramidFuzzArm::kDirectWedge, 1000, 0.8);
+  std::cerr << "[observability] direct-wedge sigma=0.8 guard_fired=" << r.guard_fired << " solved=" << r.solved
+            << " nonfinite_leaks=" << r.nonfinite_leaks << " total=" << r.total << "\n";
+  EXPECT_EQ(r.nonfinite_leaks, 0) << "empty-feasible-region guard must not leak +inf coefficients";
+  EXPECT_GE(r.guard_fired, 50) << "guard fired on < 5% of samples — either distribution drifted "
+                                  "away from the diagnostic domain, or the branch is unreachable "
+                                  "(guard_fired="
+                               << r.guard_fired << " / " << r.total << ")";
+  EXPECT_LE(r.guard_fired, 300) << "guard fired on > 30% of samples — condition may be over-tight "
+                                   "(guard_fired="
+                                << r.guard_fired << " / " << r.total << ")";
+  EXPECT_GT(r.solved, 500) << "healthy pyramids should still dominate (solved=" << r.solved << " / " << r.total << ")";
+}
+
+// Miller-index arm: alpha = atan(sqrt(3)/2 * i4/i1 / c), i1,i4 ∈ [1,4].
+// Under sigma=0.8 empirical fire rate ~14.4% (matches the diagnostic dump
+// 101/700 for this arm). Both pyramid construction paths must be covered
+// independently — a majority-healthy result on one arm cannot statistically
+// hide a bug on the other.
+TEST_F(V3TestCrystal, PyramidFeasibilityFuzzMillerIndex_sigma08) {
+  const auto r = RunPyramidFeasibilityFuzz(0xFED08A01u, PyramidFuzzArm::kMillerIndex, 1000, 0.8);
+  std::cerr << "[observability] miller-index sigma=0.8 guard_fired=" << r.guard_fired << " solved=" << r.solved
+            << " nonfinite_leaks=" << r.nonfinite_leaks << " total=" << r.total << "\n";
+  EXPECT_EQ(r.nonfinite_leaks, 0) << "empty-feasible-region guard must not leak +inf coefficients";
+  EXPECT_GE(r.guard_fired, 50) << "guard fired on < 5% of samples (Miller-index arm) "
+                                  "(guard_fired="
+                               << r.guard_fired << " / " << r.total << ")";
+  EXPECT_LE(r.guard_fired, 300) << "guard fired on > 30% of samples (Miller-index arm) "
+                                   "(guard_fired="
+                                << r.guard_fired << " / " << r.total << ")";
+  EXPECT_GT(r.solved, 500);
+}
+
+// Green-arm sanity: at sigma=0.3 the same distribution is well-behaved and
+// the guard should almost never fire (bench dump: direct-wedge 694/700 solid,
+// Miller-index 700/700). This is the fuzz-layer analogue of the red/green
+// pair validated externally via BM_DumpPlaneSets; it guards against a guard
+// that is silently over-tight and mis-degrades healthy pyramids.
+TEST_F(V3TestCrystal, PyramidFeasibilityFuzzDirectWedge_sigma03_GreenBaseline) {
+  const auto r = RunPyramidFeasibilityFuzz(0xFED03A00u, PyramidFuzzArm::kDirectWedge, 1000, 0.3);
+  std::cerr << "[observability] direct-wedge sigma=0.3 (green) guard_fired=" << r.guard_fired << " solved=" << r.solved
+            << " nonfinite_leaks=" << r.nonfinite_leaks << " total=" << r.total << "\n";
+  EXPECT_EQ(r.nonfinite_leaks, 0);
+  EXPECT_LE(r.guard_fired, 30) << "guard fired on > 3% of green-baseline samples — condition too tight "
+                                  "(guard_fired="
+                               << r.guard_fired << " / " << r.total << ")";
+  EXPECT_GT(r.solved, 950);
+}
+
+// ==========================================================================
 // Face-distance mesh-manifold regression coverage.
 //
 // Pre-fix on hex prisms, 4+ planes converging at near-coincident corners could
