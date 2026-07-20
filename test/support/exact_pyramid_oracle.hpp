@@ -45,6 +45,8 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "core/math.hpp"
+
 namespace lumice {
 namespace test_support {
 
@@ -917,9 +919,17 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
   ExactPyramidVerdict out;
   int max_bits = 0;
 
-  // Legality gate — matches FillHexCrystalCoef (geo3d.cpp:381-382).
-  const bool has_upper = (a1 > 0.0) && (h1 > 1e-6f);
-  const bool has_lower = (a2 > 0.0) && (h3 > 1e-6f);
+  // Legality gate — matches FillHexCrystalCoef (geo3d.cpp:381-382). Must use
+  // the SAME threshold constant as production (math::kFloatEps), not an
+  // independently-chosen literal: a mismatched threshold creates a window
+  // where the oracle and the closed-form implementation disagree on
+  // has_upper/has_lower purely from tolerance drift, not from a genuine
+  // geometric divergence. This is a shared legality-gate CONTRACT with
+  // production, not a structural closed-form assumption, so reusing the
+  // constant does not compromise oracle independence per the file-header
+  // discipline above.
+  const bool has_upper = (a1 > 0.0) && (h1 > math::kFloatEps);
+  const bool has_lower = (a2 > 0.0) && (h3 > math::kFloatEps);
 
   // Convert scalar inputs to Q(√3) pure rationals.
   d::QS3 dist_qs[6];
@@ -932,8 +942,9 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
   d::QS3 h1_qs = has_upper ? d::FloatToQS3(h1) : d::QS3Zero();
   d::QS3 h3_qs = has_lower ? d::FloatToQS3(h3) : d::QS3Zero();
 
-  // Zero-volume short-circuit: no cones and prism section is zero.
-  if (!has_upper && !has_lower && h2 < 1e-6f) {
+  // Zero-volume short-circuit: no cones and prism section is zero. Same
+  // threshold-consistency rationale as the has_upper/has_lower gate above.
+  if (!has_upper && !has_lower && h2 < math::kFloatEps) {
     return out;
   }
 

@@ -270,6 +270,50 @@ struct ApexLPResult {
   double v = 0.0;
 };
 
+// Shared 3×3 solver for a direction triple (i, j, k):
+//   [cs_i sn_i 1] [u]   [d_i]
+//   [cs_j sn_j 1] [v] = [d_j]
+//   [cs_k sn_k 1] [m]   [d_k]
+// Single source of truth for the Cramer expansion used by EnumerateApexPoints,
+// MaxFeasibleInsetLP, and EnumerateConeDeathEvents. This task previously hand-
+// expanded the same (u, v, m) solve independently in all three functions and
+// introduced a unit-conversion bug in one copy that the other two didn't
+// share — three independent hand expansions of the same formula is a real
+// defect risk, not just style.
+//
+// Reuse of math.hpp::SolvePlanesD was evaluated first (a04) and rejected:
+// SolvePlanesD normalizes each plane by its normal magnitude and gates on a
+// FIXED normalized-determinant threshold (kSingularDetNormD = 1e-6,
+// math.cpp:747) calibrated against geo3d.cpp's wedge sweep, where plane
+// normals have runtime-varying magnitude from arbitrary crystal geometry.
+// Here the "planes" are the 20 fixed combinatorial direction triples
+// (cs_i, sn_i, 1) — constant unit-ish vectors known at compile time, not
+// runtime-scaled plane normals — so an ABSOLUTE threshold on the raw,
+// unnormalized determinant (1e-12, matching the tolerance already exercised
+// by Step 1's sweep) is the well-defined, already-validated choice; routing
+// through SolvePlanesD's differently-calibrated normalized threshold would be
+// an unreviewed behavior change with no code-size benefit (a wrapper would
+// still be needed to pack/unpack (i, j, k) → coef / res).
+//
+// Returns false iff the triple (i, j, k) is geometrically degenerate (det
+// below the absolute threshold) — only a handful of the 20 triples are ever
+// near-singular, independent of the dist_scaled magnitudes.
+bool Solve3x3ForDirTriple(const double cs[kClosedFormPyramidSideCnt], const double sn[kClosedFormPyramidSideCnt],
+                          const double dist_scaled[kClosedFormPyramidSideCnt], int i, int j, int k, double* out_u,
+                          double* out_v, double* out_m) {
+  double det = cs[i] * (sn[j] - sn[k]) - sn[i] * (cs[j] - cs[k]) + (cs[j] * sn[k] - cs[k] * sn[j]);
+  if (std::fabs(det) < 1e-12) {
+    return false;
+  }
+  double di = dist_scaled[i], dj = dist_scaled[j], dk = dist_scaled[k];
+  *out_u = (di * (sn[j] - sn[k]) - sn[i] * (dj - dk) + (dj * sn[k] - dk * sn[j])) / det;
+  *out_v = (cs[i] * (dj - dk) - di * (cs[j] - cs[k]) + (cs[j] * dk - cs[k] * dj)) / det;
+  *out_m =
+      (cs[i] * (sn[j] * dk - sn[k] * dj) - sn[i] * (cs[j] * dk - cs[k] * dj) + di * (cs[j] * sn[k] - cs[k] * sn[j])) /
+      det;
+  return true;
+}
+
 // Enumerate all triples achieving m within tol of the LP maximum, emitting
 // the distinct (u, v) points. Used to detect and materialize apex degeneracy
 // (LP optimum is a line segment / edge rather than a unique point). Returns
@@ -293,16 +337,10 @@ int EnumerateApexPoints(const double dist_scaled[kClosedFormPyramidSideCnt], dou
   for (int i = 0; i < kClosedFormPyramidSideCnt; i++) {
     for (int j = i + 1; j < kClosedFormPyramidSideCnt; j++) {
       for (int k = j + 1; k < kClosedFormPyramidSideCnt; k++) {
-        double det = cs[i] * (sn[j] - sn[k]) - sn[i] * (cs[j] - cs[k]) + (cs[j] * sn[k] - cs[k] * sn[j]);
-        if (std::fabs(det) < 1e-12) {
+        double u, v, m_lp;
+        if (!Solve3x3ForDirTriple(cs, sn, dist_scaled, i, j, k, &u, &v, &m_lp)) {
           continue;
         }
-        double di = dist_scaled[i], dj = dist_scaled[j], dk = dist_scaled[k];
-        double u = (di * (sn[j] - sn[k]) - sn[i] * (dj - dk) + (dj * sn[k] - dk * sn[j])) / det;
-        double v = (cs[i] * (dj - dk) - di * (cs[j] - cs[k]) + (cs[j] * dk - cs[k] * dj)) / det;
-        double m_lp = (cs[i] * (sn[j] * dk - sn[k] * dj) - sn[i] * (cs[j] * dk - cs[k] * dj) +
-                       di * (cs[j] * sn[k] - cs[k] * sn[j])) /
-                      det;
         // Only interested in triples at the LP maximum.
         if (std::fabs(m_lp - m_max_lp) > tol_lp) {
           continue;
@@ -372,20 +410,10 @@ ApexLPResult MaxFeasibleInsetLP(const double dist_scaled[kClosedFormPyramidSideC
   for (int i = 0; i < kClosedFormPyramidSideCnt; i++) {
     for (int j = i + 1; j < kClosedFormPyramidSideCnt; j++) {
       for (int k = j + 1; k < kClosedFormPyramidSideCnt; k++) {
-        // 3×3 system:
-        //   [cs_i sn_i 1] [u]   [d_i]
-        //   [cs_j sn_j 1] [v] = [d_j]
-        //   [cs_k sn_k 1] [m]   [d_k]
-        double det = cs[i] * (sn[j] - sn[k]) - sn[i] * (cs[j] - cs[k]) + (cs[j] * sn[k] - cs[k] * sn[j]);
-        if (std::fabs(det) < 1e-12) {
+        double u, v, m;
+        if (!Solve3x3ForDirTriple(cs, sn, dist_scaled, i, j, k, &u, &v, &m)) {
           continue;
         }
-        double di = dist_scaled[i], dj = dist_scaled[j], dk = dist_scaled[k];
-        double u = (di * (sn[j] - sn[k]) - sn[i] * (dj - dk) + (dj * sn[k] - dk * sn[j])) / det;
-        double v = (cs[i] * (dj - dk) - di * (cs[j] - cs[k]) + (cs[j] * dk - cs[k] * dj)) / det;
-        double m = (cs[i] * (sn[j] * dk - sn[k] * dj) - sn[i] * (cs[j] * dk - cs[k] * dj) +
-                    di * (cs[j] * sn[k] - cs[k] * sn[j])) /
-                   det;
         if (m < -tol) {
           continue;
         }
@@ -470,16 +498,10 @@ int EnumerateConeDeathEvents(const double dist_scaled[kClosedFormPyramidSideCnt]
   for (int i = 0; i < kClosedFormPyramidSideCnt; i++) {
     for (int j = i + 1; j < kClosedFormPyramidSideCnt; j++) {
       for (int k = j + 1; k < kClosedFormPyramidSideCnt; k++) {
-        double det = cs[i] * (sn[j] - sn[k]) - sn[i] * (cs[j] - cs[k]) + (cs[j] * sn[k] - cs[k] * sn[j]);
-        if (std::fabs(det) < 1e-12) {
+        double u, v, m_lp;
+        if (!Solve3x3ForDirTriple(cs, sn, dist_scaled, i, j, k, &u, &v, &m_lp)) {
           continue;
         }
-        double di = dist_scaled[i], dj = dist_scaled[j], dk = dist_scaled[k];
-        double u = (di * (sn[j] - sn[k]) - sn[i] * (dj - dk) + (dj * sn[k] - dk * sn[j])) / det;
-        double v = (cs[i] * (dj - dk) - di * (cs[j] - cs[k]) + (cs[j] * dk - cs[k] * dj)) / det;
-        double m_lp = (cs[i] * (sn[j] * dk - sn[k] * dj) - sn[i] * (cs[j] * dk - cs[k] * dj) +
-                       di * (cs[j] * sn[k] - cs[k] * sn[j])) /
-                      det;
         double m_phys = m_lp / kInsetK;
         if (m_phys < tol_phys || m_phys > m_max - tol_phys) {
           continue;  // outside the eroded z-range of this cone
@@ -817,8 +839,12 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
     ConeDeathEvent evs[20];
     int n = EnumerateConeDeathEvents(dist_scaled, m_at_top, h2_2, a1, /*upper_side=*/true, evs);
     for (int e = 0; e < n; e++) {
-      // Skip events at the shoulder or truncation (already handled).
-      if (std::fabs(evs[e].z - h2_2) < 1e-9 || std::fabs(evs[e].z - z_top) < 1e-9) {
+      // Skip events at the shoulder or truncation (already handled). Reuse
+      // kDedupTol (scaled by |z_top|/|z_bot|) rather than a fixed absolute
+      // literal — z is solved via an independent Cramer path from z_top/h2_2,
+      // so its absolute error scales with the same extreme-wedge magnitudes
+      // kDedupTol already accounts for.
+      if (std::fabs(evs[e].z - h2_2) < kDedupTol || std::fabs(evs[e].z - z_top) < kDedupTol) {
         continue;
       }
       int slots[3] = { 8 + evs[e].i, 8 + evs[e].j, 8 + evs[e].k };
@@ -855,7 +881,8 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
     ConeDeathEvent evs[20];
     int n = EnumerateConeDeathEvents(dist_scaled, m_at_bot, h2_2, a2, /*upper_side=*/false, evs);
     for (int e = 0; e < n; e++) {
-      if (std::fabs(evs[e].z + h2_2) < 1e-9 || std::fabs(evs[e].z - z_bot) < 1e-9) {
+      // See the upper-side kDedupTol note above.
+      if (std::fabs(evs[e].z + h2_2) < kDedupTol || std::fabs(evs[e].z - z_bot) < kDedupTol) {
         continue;
       }
       int slots[3] = { 14 + evs[e].i, 14 + evs[e].j, 14 + evs[e].k };
