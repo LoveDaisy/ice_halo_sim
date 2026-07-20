@@ -698,16 +698,18 @@ TEST(ClosedFormPyramid, SpecialisedConfigurationsAgreeAndNoSpecialCaseBranches) 
 // Analogous to test_closed_form_prism.cpp's DegenerateSweep.
 // ============================================================================
 
-// (sigma, seed, samples, unexplained ceiling — applied independently to both
-// the cf-vs-oracle and cf-vs-prod unexplained counters). Ceiling is per-sigma
-// rather than a single hardcoded 0 because higher sigma pushes more samples
-// into the merge-strategy-ambiguous zone at the edge of the 2× tolerance
-// factor — see the INSTANTIATE_TEST_SUITE_P comment below for the measured
-// baseline behind each value.
-class DegeneratePyramidSweep : public ::testing::TestWithParam<std::tuple<double, unsigned, int, int>> {};
+// (sigma, seed, samples, cf-vs-oracle unexplained ceiling, cf-vs-prod
+// unexplained ceiling — the two sides carry independent baselines and must
+// not share a common relaxation, or a regression on the currently-clean side
+// hides behind the looser side's tolerance). Ceilings are per-sigma rather
+// than a single hardcoded 0 because higher sigma pushes more samples into
+// the merge-strategy-ambiguous zone at the edge of the 2× tolerance factor —
+// see the INSTANTIATE_TEST_SUITE_P comment below for the measured baseline
+// behind each value.
+class DegeneratePyramidSweep : public ::testing::TestWithParam<std::tuple<double, unsigned, int, int, int>> {};
 
 TEST_P(DegeneratePyramidSweep, DivergencesExplainableByMergeTolerance) {
-  const auto [sigma, seed, samples, unexplained_ceiling] = GetParam();
+  const auto [sigma, seed, samples, oracle_unexplained_ceiling, prod_unexplained_ceiling] = GetParam();
   AlphaRngState rs(seed, /*alpha_lo=*/15.0, /*alpha_hi=*/75.0, sigma, /*h_lo=*/0.4, /*h_hi=*/1.6);
 
   long refused = 0;
@@ -780,10 +782,10 @@ TEST_P(DegeneratePyramidSweep, DivergencesExplainableByMergeTolerance) {
                "[degen σ=%.2f] refused=%ld prod_empty=%ld cf!=oracle exp=%ld unexp=%ld cf!=prod exp=%ld unexp=%ld\n",
                sigma, refused, prod_empty, cf_vs_oracle_explained, cf_vs_oracle_unexplained, cf_vs_prod_explained,
                cf_vs_prod_unexplained);
-  EXPECT_LE(cf_vs_oracle_unexplained, unexplained_ceiling)
+  EXPECT_LE(cf_vs_oracle_unexplained, oracle_unexplained_ceiling)
       << "cf vs oracle disagreements with vertex separation ABOVE 2× production merge tolerance at σ=" << sigma
       << " exceed the documented ceiling";
-  EXPECT_LE(cf_vs_prod_unexplained, unexplained_ceiling)
+  EXPECT_LE(cf_vs_prod_unexplained, prod_unexplained_ceiling)
       << "cf vs production disagreements with vertex separation ABOVE 2× production merge tolerance at σ=" << sigma
       << " exceed the documented ceiling";
   (void)cf_vs_oracle_explained;
@@ -791,18 +793,19 @@ TEST_P(DegeneratePyramidSweep, DivergencesExplainableByMergeTolerance) {
 }
 
 // σ=0.30: merge-tolerance explains 100% of the cf-vs-{oracle,prod}
-// divergences observed here — ceiling stays 0 (strict). σ=0.50: measured
-// with this fixture's fixed seed (deterministic) at cf-vs-oracle
-// unexplained=1/2000 (0.05%), cf-vs-prod unexplained=0/2000; ceiling 5
-// (0.25%, 5x margin over the observed oracle-side count) gives regression
-// coverage instead of the prior complete silence. This residual (a genuine
-// cf-vs-oracle divergence whose vertex separation exceeds 2x production's
-// merge tolerance, so it is not explainable by the merge-strategy-ambiguity
-// argument this suite otherwise relies on) does not yet have a root-caused
-// explanation and is a candidate for follow-up investigation.
+// divergences observed here — both ceilings stay 0 (strict). σ=0.50:
+// measured with this fixture's fixed seed (deterministic) at cf-vs-oracle
+// unexplained=1/2000 (0.05%), cf-vs-prod unexplained=0/2000. The two sides
+// are gated independently: cf-vs-oracle ceiling 5 (0.25%, 5× margin over the
+// observed residual — a genuine divergence whose vertex separation exceeds
+// 2× production's merge tolerance, so it is not explainable by the
+// merge-strategy-ambiguity argument this suite otherwise relies on; a
+// candidate for follow-up investigation), cf-vs-prod ceiling 0 (baseline is
+// clean, no known residual, so any regression there should trip immediately
+// and not hide behind the oracle-side relaxation).
 INSTANTIATE_TEST_SUITE_P(DegenerateSigmas, DegeneratePyramidSweep,
-                         ::testing::Values(std::make_tuple(0.30, 20260724u, 2'000, 0),
-                                           std::make_tuple(0.50, 20260725u, 2'000, 5)));
+                         ::testing::Values(std::make_tuple(0.30, 20260724u, 2'000, 0, 0),
+                                           std::make_tuple(0.50, 20260725u, 2'000, 5, 0)));
 
 }  // namespace
 }  // namespace lumice
