@@ -106,6 +106,24 @@ namespace {
 // Encoded as major*10 + minor to match cudaDeviceProp.
 constexpr int kCudaCapabilityFloor = 61;
 
+// CUDA-side sentinels for the host kInvalidId (uint16, 0xffff) as it flows
+// through this backend. Two widths are needed because different lookup tables
+// use different underlying storage:
+//   * `kInvalidIdU16` — mirrors the host kInvalidId at its natural 16-bit
+//     width. Used for tri_to_poly (uint16 buffer whose native "no match"
+//     sentinel is 0xffff) and any transient host uint16 comparison.
+//   * `kInvalidIdU32` — widened sentinel for indices that get promoted to
+//     uint32 on device (K-shape pool absolute indices, config_id passed to
+//     device filter matchers, and root_from_poly outputs). The 32-bit width
+//     is the deliberate design of those pools (absolute indices can exceed
+//     65535 in K-shape geometries); the widened sentinel is not a name
+//     bug — this constant just makes the intent explicit at each use site.
+// Single source of truth for both, replacing three prior repeated local
+// `constexpr uint16_t kInvalidIdU16 = 0xffffu;` declarations and one bare
+// uint32 literal.
+constexpr uint16_t kInvalidIdU16 = 0xffffu;
+constexpr uint32_t kInvalidIdU32 = 0xffffffffu;
+
 // Result of the one-shot device probe. Selects the first CUDA device whose
 // compute capability meets the PTX floor, and captures a human-readable
 // diagnostic line (device count, per-device name + capability, driver/runtime
@@ -998,7 +1016,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
     // see src/core/shared/traversal_shared.h for the denom-gate /
     // from-face exclusion contract shared with Metal + CPU.
     float t_best = 1e30f;
-    uint32_t hit_poly = 0xFFFFFFFFu;
+    uint32_t hit_poly = kInvalidIdU32;
     for (uint32_t fi = 0u; fi < poly_cnt; ++fi) {
       if (fi == from_poly) {
         continue;
@@ -1018,7 +1036,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
     // Mirrors CPU's `eps_thr = -math::kFloatEps` relaxed threshold
     // (optics.cpp:138). On a convex crystal this should never trigger the
     // hard exit — if it does, geometry data is anomalous.
-    if (hit_poly == 0xFFFFFFFFu || t_best <= -lm_traversal::kSlabEps) {
+    if (hit_poly == kInvalidIdU32 || t_best <= -lm_traversal::kSlabEps) {
       break;
     }
 
@@ -1330,12 +1348,11 @@ __global__ void transit_multi_ms_kernel(
   //    a benign drop (w=0 short-circuits the entry-face emit and main loop).
   uint16_t to_face_u16 = d_tri_to_poly_ray[tri_id];
   float w = d_cont_w_in[tid];
-  constexpr uint16_t kInvalidIdU16 = 0xffffu;
   uint32_t to_face_u32;
   if (to_face_u16 == kInvalidIdU16) {
     w = 0.0f;
-    to_face_u32 = 0xFFFFFFFFu;  // widened sentinel; trace kernel's `from_poly < poly_cnt`
-                                // guard filters this naturally.
+    to_face_u32 = kInvalidIdU32;  // widened sentinel; trace kernel's `from_poly < poly_cnt`
+                                  // guard filters this naturally.
   } else {
     to_face_u32 = static_cast<uint32_t>(to_face_u16);
   }
@@ -1534,11 +1551,10 @@ __global__ void gen_root_kernel(float* __restrict__ d_root_d,           // 3 × 
   // 4. tri_to_poly. kInvalidId → zero-weight drop (InitRay_p_fid fallback).
   uint16_t to_face_u16 = d_tri_to_poly_ray[tri_id];
   float weight = d_wl_pool[wl_idx].spd_weight;
-  constexpr uint16_t kInvalidIdU16 = 0xffffu;
   uint32_t to_face_u32;
   if (to_face_u16 == kInvalidIdU16) {
     weight = 0.0f;
-    to_face_u32 = 0xFFFFFFFFu;
+    to_face_u32 = kInvalidIdU32;
   } else {
     to_face_u32 = static_cast<uint32_t>(to_face_u16);
   }
@@ -1978,7 +1994,7 @@ struct CudaTraceBackend::Impl {
   uint8_t*          d_and_term_counts_   = nullptr;
   uint32_t          filter_desc_max_ci_  = 0u;       // per-layer ci stride (MVP=1)
   uint32_t          filter_n_slot_       = 0u;       // total descriptor slots
-  uint32_t          crystal_config_id_   = 0xFFFFu;  // for DeviceFilterMatchCrystal
+  uint32_t          crystal_config_id_   = kInvalidIdU16;  // for DeviceFilterMatchCrystal
 
   // task-358.2 (cuda-color-parity): Design-2 ColorGateTable state — built once
   // per scene in EnsureFilterBuffers (via BuildColorGateTable / BuildColorClass
@@ -2229,7 +2245,7 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
     wl_pool_uploaded_ = false;
     filter_desc_max_ci_ = 0u;
     filter_n_slot_ = 0u;
-    crystal_config_id_ = 0xFFFFu;
+    crystal_config_id_ = kInvalidIdU16;
     final_layer_filter_configs_.clear();
     final_layer_crystals_.clear();
     final_layer_axis_dists_.clear();
@@ -2394,7 +2410,6 @@ void CudaTraceBackend::Impl::UploadCrystalGeometry(const Crystal& crystal) {
   // kInvalidId fallback — same sentinel semantics as the prior argmax path.
   std::vector<uint16_t> tri_to_poly_host(tri_cnt);
   {
-    constexpr uint16_t kInvalidIdU16 = 0xffffu;
     for (size_t t = 0; t < tri_cnt; ++t) {
       IdType local = crystal.PolygonFaceOfTri(static_cast<int>(t));
       tri_to_poly_host[t] = (local == kInvalidId || static_cast<size_t>(local) >= poly_cnt)
@@ -2639,7 +2654,6 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
         // triangle; downstream sampling drops those rays via the InitRay_p_fid
         // kInvalidId fallback — same sentinel semantics as the prior argmax path.
         {
-          constexpr uint16_t kInvalidIdU16 = 0xffffu;
           h_tri2poly.reserve(h_tri2poly.size() + tri_cnt);
           for (size_t t = 0; t < tri_cnt; ++t) {
             IdType local = crystal.PolygonFaceOfTri(static_cast<int>(t));
@@ -3384,7 +3398,7 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
   crystal_config_id_ =
       (!final_layer_crystals_.empty() && final_layer_crystals_[0].config_id_ != kInvalidId)
           ? static_cast<uint32_t>(final_layer_crystals_[0].config_id_)
-          : 0xFFFFu;
+          : kInvalidIdU16;
   filter_built_ = true;
 }
 
@@ -3909,7 +3923,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
       ci_crystal_fb = std::make_unique<Crystal>(MakeCrystal(impl_->rng_, ms_setting.crystal_.param_));
       impl_->UploadCrystalGeometry(*ci_crystal_fb);
       ci_cfg_id = (ci_crystal_fb->config_id_ == kInvalidId)
-                      ? 0xFFFFu : static_cast<uint32_t>(ci_crystal_fb->config_id_);
+                      ? kInvalidIdU16 : static_cast<uint32_t>(ci_crystal_fb->config_id_);
       geom_poly_n = impl_->d_poly_n_; geom_poly_d = impl_->d_poly_d_; geom_poly_cnt = impl_->poly_cnt_;
       geom_tri_vtx = impl_->d_tri_vtx_; geom_tri_norm = impl_->d_tri_norm_;
       geom_tri_area = impl_->d_tri_area_; geom_tri_to_poly = impl_->d_tri_to_poly_;
@@ -3939,7 +3953,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
       const uint32_t flat_ci = impl_->layer_ci_base_[impl_->ms_layer_idx_] + static_cast<uint32_t>(ci);
       const uint32_t slot_base_ci = impl_->ci_pool_slot_base_[flat_ci];
       const Crystal& pc = impl_->pool_crystals_[slot_base_ci];
-      ci_cfg_id = (pc.config_id_ == kInvalidId) ? 0xFFFFu : static_cast<uint32_t>(pc.config_id_);
+      ci_cfg_id = (pc.config_id_ == kInvalidId) ? kInvalidIdU16 : static_cast<uint32_t>(pc.config_id_);
       // K-shape: pass the POOL BASE (not per-shape offset). The kernel-side
       // per-ray shape pick reads from the shape table (also passed below) and
       // adds `poly_off * {3|1}` / `tri_off * {9|3|1}` to reconstitute the
@@ -4043,7 +4057,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
           impl_->pinned_root_wl_idx_[i] = wl_idx;
           impl_->pinned_ws_[i] = impl_->wl_pool_host_[wl_idx].spd_weight;
           impl_->pinned_from_poly_[i] =
-              (r.to_face_ == kInvalidId) ? 0xFFFFFFFFu : static_cast<uint32_t>(r.to_face_);
+              (r.to_face_ == kInvalidId) ? kInvalidIdU32 : static_cast<uint32_t>(r.to_face_);
           std::memcpy(impl_->pinned_rot_c2w_ + i * 9, r.crystal_rot_.GetMat(), 9 * sizeof(float));
         }
       } catch (...) {
