@@ -144,9 +144,18 @@ TEST(CrystalMeshApi, PyramidFaceNumbersInLegalSet) {
 // the chained tri → polygon-face → fn lookup to the C-API sentinel -1;
 // without the explicit check, a naive static_cast<int>(kInvalidId) yields
 // 65535 (the unsigned representation) which silently passes to consumers as
-// a plausible-but-wrong face number.
+// a plausible-but-wrong face number. Drives the real tri -> polygon-face ->
+// fn chain (an out-of-range tri_id) so PolygonFaceOfTri() takes its actual
+// kInvalidId branch (crystal.cpp) instead of asserting a hand-typed literal
+// against itself.
 TEST(CrystalMeshApi, KInvalidIdMapsToMinusOne) {
-  const lumice::IdType fn = lumice::kInvalidId;
+  auto crystal = lumice::Crystal::CreatePrism(1.3f);
+  const lumice::IdType poly = crystal.PolygonFaceOfTri(-1);
+  ASSERT_EQ(poly, lumice::kInvalidId);
+  const lumice::IdType fn = crystal.GetFn(poly);
+  ASSERT_EQ(fn, lumice::kInvalidId);
+
+  // Same conversion LUMICE_GetCrystalMesh applies in c_api.cpp.
   const int api_val = (fn == lumice::kInvalidId) ? -1 : static_cast<int>(fn);
   EXPECT_EQ(api_val, -1);
   // Reverse check: naive static_cast yields 65535, confirming explicit check is needed.

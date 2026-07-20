@@ -33,7 +33,7 @@ static_assert(kCrystalGeomMaxFaces >= kClosedFormPyramidFaceCnt,
 static_assert(kCrystalGeomMaxVtxPerFace >= kClosedFormPyramidMaxFaceVtx,
               "CrystalGeom per-face vertex capacity must accommodate pyramid cone faces");
 
-// Legal face-number sets mirror FillHexFnMap below:
+// Legal face-number sets for the hexagonal crystal family:
 //   basal:         1, 2
 //   prism lateral: 3..8
 //   upper pyramid: 13..18

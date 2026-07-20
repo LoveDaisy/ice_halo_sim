@@ -40,20 +40,30 @@ below only turn any future upstream stride drift into a detectable "no fn" /
 
 Assertions:
   1. `returncode == 0` — the primary signal the SIGSEGV is caught.
-  2. stdout+stderr (combined) contains the "degenerate rep triangle" WARN at
-     least once per run — the anti-vacuous guard (the Lumice CLI routes spdlog
-     to stdout, so the assertion checks both streams). If a future upstream change (e.g. a stronger
-     factory gate) stopped surfacing the shrink path here, `returncode == 0`
-     would silently keep passing while the sentinel had lost the coverage it
-     was written for. Requiring the warning means the fixture is still driving
-     traffic through the fixed path; the day it stops, this sentinel fails
-     loudly and asks for a fixture retune, not a silent green.
+
+Retired anti-vacuous WARN guard (commit 14953369, "delete BuildPolygonFaceData
++ RejectMalformed + shrink counter"): `Crystal::BuildPolygonFaceData` — the
+only emitter of the "degenerate rep triangle" WARN this assertion used to
+require — no longer exists (`grep -r "degenerate rep triangle" src/` is empty
+tree-wide). The crystal representation this sentinel was fixed under generated
+polygon-face grouping numerically, by triangulating the mesh and picking an
+argmax "representative triangle" per face; a locally near-zero-area pick was
+the shrink-path trigger. The closed-form crystal representation knows face
+membership parametrically from construction, so there is no per-face
+triangle-argmax step left to produce a degenerate pick — the bug class is
+structurally unreachable, not silently unexercised. Re-adding an equivalent
+anti-vacuous guard would mean asserting on some property of the closed-form
+path, which is a different sentinel for a different (currently nonexistent)
+bug, not a retune of this one. `returncode == 0` remains meaningful: it still
+confirms this thin-wedge pyramid + gauss(1, 0.5) face_distance config runs
+Metal to completion without crashing under the current representation.
 
 Runs fast (~2s per iteration × N=15 ≈ 30s) so it stays in the default `pytest
 -v` PR gate (no @pytest.mark.slow). The two-arm detection-power verification
-(scripts/verify_pyramid_crash_sentinel_detection_power.sh) uses the same
-fixture with a longer N, run manually when the sentinel's coverage is in
-doubt.
+(scripts/verify_pyramid_crash_sentinel_detection_power.sh) still exercises the
+*old* (pre-closed-form) tree via its own merge-base revert arm, so it is
+unaffected by this retirement — it never runs against the current HEAD's
+closed-form path.
 """
 
 from __future__ import annotations
@@ -185,38 +195,19 @@ def _classify_exit(returncode: int) -> str:
     return "clean exit (returncode=0)"
 
 
-# Substring — deliberately not the full message — the AC6 refresh reformatted
-# the placeholder syntax (printf → spdlog), and this substring survives both
-# forms unchanged. Bound to Crystal::BuildPolygonFaceData's degenerate-branch
-# warning; if that log is ever removed or reworded, this sentinel is expected
-# to fail loudly so the fixture can be retuned to a new observable that still
-# proves the fixed code path is being exercised.
-_DEGENERATE_WARN_SUBSTR = "degenerate rep triangle"
-
-
 @pytest.mark.parametrize("run_idx", list(range(_N_RUNS)))
 def test_pyramid_random_face_distance_no_crash(run_idx: int) -> None:
-    """Pyramid + gauss(1, 0.5) face_distance must exit 0 AND exercise the fixed
-    BuildPolygonFaceData degenerate-branch path (proved via WARN emission)."""
+    """Pyramid + gauss(1, 0.5) face_distance must exit 0 (no SIGSEGV) under the
+    closed-form crystal representation on Metal.
+
+    No anti-vacuous WARN guard here (see module docstring "Retired anti-vacuous
+    WARN guard"): the degenerate-representative-triangle branch this sentinel
+    was originally written to force no longer exists in any code path, so a
+    fixed string to assert on would not exist either.
+    """
     result = _run_once()
     assert result.returncode == 0, (
         f"Lumice exited: {_classify_exit(result.returncode)}\n"
         f"run_idx={run_idx}\n"
         f"stderr:\n{result.stderr}"
-    )
-    # Anti-vacuous guard: the fixture must still drive the degenerate branch
-    # this sentinel is written to cover. If this fires, retune the fixture
-    # (e.g. widen face_distance std, thin the wedge further) rather than
-    # deleting the assertion. The Lumice CLI routes spdlog to stdout by
-    # default, so we check both streams — either match counts.
-    combined = result.stdout + result.stderr
-    assert _DEGENERATE_WARN_SUBSTR in combined, (
-        f"Sentinel fixture no longer exercises the degenerate-representative-triangle "
-        f"branch of BuildPolygonFaceData — `returncode==0` is meaningless coverage "
-        f"unless the fixed path is actually being hit. Retune the fixture "
-        f"({_CONFIG_PATH.name}) so at least one WARN containing "
-        f"'{_DEGENERATE_WARN_SUBSTR}' is emitted per run.\n"
-        f"run_idx={run_idx}\n"
-        f"stdout tail:\n{result.stdout[-2000:]}\n"
-        f"stderr tail:\n{result.stderr[-2000:]}"
     )

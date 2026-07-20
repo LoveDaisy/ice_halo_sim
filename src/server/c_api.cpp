@@ -2055,12 +2055,13 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
   }
 
   // Per-triangle face_number: chain tri → polygon-face → fn. Both hops read
-  // parametric tables (poly_face_of_tri_ + fn_map_ per polygon face) populated
-  // by PopulateFromCfGeom from cf_geom_.face_number. kInvalidId at either hop
-  // → -1 (C-API sentinel; naive static_cast would yield 65535).
+  // parametric tables (poly_face_of_tri_ + poly_face_fn_ per polygon face)
+  // populated by PopulateFromCfGeom from cf_geom_.face_number. kInvalidId at
+  // either hop → -1 (C-API sentinel; naive static_cast would yield 65535).
+  // GetFn() already short-circuits poly == kInvalidId internally.
   for (size_t i = 0; i < tri_cnt; ++i) {
     ns::IdType poly = crystal.PolygonFaceOfTri(static_cast<int>(i));
-    ns::IdType fn = (poly == ns::kInvalidId) ? ns::kInvalidId : crystal.GetFn(poly);
+    ns::IdType fn = crystal.GetFn(poly);
     out->face_numbers[i] = (fn == ns::kInvalidId) ? -1 : static_cast<int>(fn);
   }
 
