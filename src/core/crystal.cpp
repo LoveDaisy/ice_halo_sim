@@ -14,11 +14,24 @@
 #include "config/filter_config.hpp"
 #include "core/def.hpp"
 #include "core/geo3d.hpp"
+#include "core/geo3d_closedform.hpp"
 #include "core/math.hpp"
 #include "core/optics.hpp"
 #include "util/logger.hpp"
 
 namespace lumice {
+
+// Bridge Crystal's flat-POD capacity to the closed-form evaluator's per-face
+// counts. If the closed-form path ever gains a face-count larger than 20 (a
+// new crystal family or a widened cone slot layout), CrystalGeom's fixed arrays
+// would silently truncate — catch that at compile time here rather than at a
+// runtime read-past-end site.
+static_assert(kCrystalGeomMaxFaces >= kClosedFormPrismFaceCnt,
+              "CrystalGeom face capacity must accommodate the prism closed-form family");
+static_assert(kCrystalGeomMaxFaces >= kClosedFormPyramidFaceCnt,
+              "CrystalGeom face capacity must accommodate the pyramid closed-form family");
+static_assert(kCrystalGeomMaxVtxPerFace >= kClosedFormPyramidMaxFaceVtx,
+              "CrystalGeom per-face vertex capacity must accommodate pyramid cone faces");
 
 namespace {
 // Process-global count of degenerate polygon faces dropped by
@@ -241,7 +254,7 @@ Crystal::Crystal(const Crystal& other)
       face_n_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kNormal),
       face_area_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kArea),
       fn_map_(std::make_unique<IdType[]>(other.TotalTriangles())), fn_period_(other.fn_period_),
-      poly_face_cnt_(other.poly_face_cnt_) {
+      poly_face_cnt_(other.poly_face_cnt_), cf_geom_(other.cf_geom_) {
   auto tri_cnt = other.TotalTriangles();
   std::memcpy(cache_data_.get(), other.cache_data_.get(), tri_cnt * CrystalCachOffset::kTotal * sizeof(float));
   std::memcpy(fn_map_.get(), other.fn_map_.get(), tri_cnt * sizeof(IdType));
@@ -261,7 +274,7 @@ Crystal::Crystal(Crystal&& other) noexcept
       face_n_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kNormal),
       face_area_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kArea),
       fn_map_(std::move(other.fn_map_)), fn_period_(other.fn_period_), poly_face_cnt_(other.poly_face_cnt_),
-      poly_face_data_(std::move(other.poly_face_data_)) {
+      poly_face_data_(std::move(other.poly_face_data_)), cf_geom_(other.cf_geom_) {
   other.face_v_ = nullptr;
   other.face_n_ = nullptr;
   other.face_area_ = nullptr;
@@ -310,6 +323,7 @@ Crystal& Crystal::operator=(const Crystal& other) {
     poly_face_d_ = nullptr;
     poly_face_tri_id_ = nullptr;
   }
+  cf_geom_ = other.cf_geom_;
   return *this;
 }
 
@@ -348,6 +362,9 @@ Crystal& Crystal::operator=(Crystal&& other) noexcept {
   other.poly_face_n_ = nullptr;
   other.poly_face_d_ = nullptr;
   other.poly_face_tri_id_ = nullptr;
+
+  cf_geom_ = other.cf_geom_;
+  other.cf_geom_ = CrystalGeom{};
 
   return *this;
 }

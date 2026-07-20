@@ -62,6 +62,42 @@ bool IsClosedTriMesh(size_t v, size_t f);
  */
 void FillHexFnMap(size_t face_cnt, const float* face_n, IdType* fn_map);
 
+// Crystal's closed-form flat POD representation. Populated by the closed-form
+// factory paths (CreatePrism / CreatePyramid, once relined onto
+// ComputeClosedFormPrism / ComputeClosedFormPyramid — see plan Steps 2/3).
+// `face_cnt == 0` sentinels "not populated" (custom-mesh path or
+// default-constructed instance).
+//
+// Slot convention matches the corresponding ClosedFormXxxResult in
+// core/geo3d_closedform.hpp:
+//   - prism (face_cnt == 8):  slot 0/1 = basal (fn 1/2); slot 2+i = side (fn 3+i)
+//   - pyramid (face_cnt == 20): slot 0/1 = basal; slot 2+i = prism side;
+//     slot 8+i = upper cone (fn 13+i); slot 14+i = lower cone (fn 23+i).
+//
+// Max dims are dimensioned to the pyramid worst case. crystal.cpp carries a
+// static_assert bridging these constants to the ClosedFormPyramid capacity so
+// closed-form growth is caught at compile time, not silently truncated.
+constexpr int kCrystalGeomMaxFaces = 20;
+constexpr int kCrystalGeomMaxVtxPerFace = 32;
+
+struct CrystalGeom {
+  int face_cnt = 0;
+  // Plane coefficients (a, b, c, d) so a·x + b·y + c·z + d ≤ 0 is the bounded
+  // half-space. Layout mirrors FillHexCrystalCoef's output.
+  float plane_coef[kCrystalGeomMaxFaces * 4]{};
+  // Unit outward normals per face slot.
+  float face_normal[kCrystalGeomMaxFaces * 3]{};
+  // Face-number constants (parametric, per IsLegalFace convention).
+  int face_number[kCrystalGeomMaxFaces]{};
+  // face_present[slot]: whether this slot bounds the body.
+  bool face_present[kCrystalGeomMaxFaces]{};
+  // Per-face CCW vertex count. 0 iff face_present[slot] is false.
+  int face_vtx_cnt[kCrystalGeomMaxFaces]{};
+  // Per-face CCW vertex coords, packed as (x, y, z) triples in
+  // face_vtx[slot * kCrystalGeomMaxVtxPerFace * 3 + k * 3 + xyz].
+  float face_vtx[kCrystalGeomMaxFaces * kCrystalGeomMaxVtxPerFace * 3]{};
+};
+
 enum class CrystalType {
   kUnknown,
   kPrism,
@@ -290,6 +326,12 @@ class Crystal {
   const float* GetPolygonFaceDist() const;
   const int* GetPolygonFaceTriId() const;
 
+  // Closed-form flat POD accessor. Returns cf_geom_.face_cnt == 0 for crystals
+  // constructed via the mesh path (custom crystals) or default-constructed
+  // instances; > 0 once the closed-form factory paths are wired up
+  // (plan Steps 2/3).
+  const CrystalGeom& CfGeom() const { return cf_geom_; }
+
   // Test observability: process-global count of degenerate polygon faces
   // dropped by BuildPolygonFaceData (the count/stride "shrink" path that used
   // to corrupt copy/move). Lets regression tests assert they actually
@@ -325,6 +367,13 @@ class Crystal {
   float* poly_face_n_ = nullptr;             // unit normals, 3 * poly_face_cnt_
   float* poly_face_d_ = nullptr;             // plane distances, poly_face_cnt_
   int* poly_face_tri_id_ = nullptr;          // representative triangle ID, poly_face_cnt_
+
+  // Closed-form flat POD geometry. Populated by CreatePrism/CreatePyramid once
+  // relined onto the closed-form path (plan Steps 2/3). face_cnt == 0 for
+  // custom-mesh crystals. Embedded by value (POD) — copy/move ctors pick it up
+  // trivially via the default member-wise path in the aggregated initializer
+  // lists below.
+  CrystalGeom cf_geom_{};
 };
 
 

@@ -1346,4 +1346,43 @@ TEST_F(V3TestCrystal, CopyMoveRebindsTriangleGeometryPointers) {
   ASSERT_TRUE(std::equal(src_a.begin(), src_a.end(), mv_assign.GetTirangleArea()));
 }
 
+// Step 1 of the closed-form representation swap adds a CrystalGeom flat-POD
+// field, populated later (Steps 2/3) by the closed-form factory paths. Until
+// wired, all crystals — including those built by the current factories —
+// present cf_face_cnt_ == 0 (the "not populated" sentinel). This test pins:
+//   1. Default-constructed Crystal has face_cnt == 0.
+//   2. Copy/move preserve face_cnt (currently 0; guards the plumbing added in
+//      Step 1 so a broken copy path is caught before Steps 2/3 start relying
+//      on the field being carried through).
+//   3. The capacity constants are large enough for the pyramid worst case
+//      (defence in depth alongside the static_asserts in crystal.cpp).
+TEST(CrystalGeomStep1, DefaultInstanceHasZeroFaceCount) {
+  Crystal c;
+  EXPECT_EQ(c.CfGeom().face_cnt, 0);
+  Crystal cp = c;
+  EXPECT_EQ(cp.CfGeom().face_cnt, 0);
+  Crystal mv = std::move(cp);
+  EXPECT_EQ(mv.CfGeom().face_cnt, 0);
+  Crystal cp2 = Crystal::CreatePrism(1.0f);
+  cp2 = c;
+  EXPECT_EQ(cp2.CfGeom().face_cnt, 0);
+}
+
+TEST(CrystalGeomStep1, FactoryBuiltCrystalStillZeroPreStep2) {
+  // Until Steps 2/3 wire CreatePrism/CreatePyramid to the closed-form
+  // evaluator, the factory paths leave cf_geom_ at its default (face_cnt=0).
+  // This assertion is intentionally the inverse of what Step 2 will demand
+  // (face_cnt == 8) — flip when Step 2 lands, so the assertion itself becomes
+  // the tripwire that Step 2 actually rewired the factory.
+  Crystal prism = Crystal::CreatePrism(1.0f);
+  EXPECT_EQ(prism.CfGeom().face_cnt, 0);
+  Crystal pyramid = Crystal::CreatePyramid(0.5f, 1.0f, 0.5f);
+  EXPECT_EQ(pyramid.CfGeom().face_cnt, 0);
+}
+
+TEST(CrystalGeomStep1, CapacityConstantsBoundPyramidWorstCase) {
+  EXPECT_GE(kCrystalGeomMaxFaces, 20);
+  EXPECT_GE(kCrystalGeomMaxVtxPerFace, 32);
+}
+
 }  // namespace
