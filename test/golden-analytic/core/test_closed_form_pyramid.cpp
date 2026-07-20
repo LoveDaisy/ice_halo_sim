@@ -114,10 +114,13 @@ double MinPairwiseVertexDistance(const float* vtx, int cnt) {
   return best;
 }
 
-// Character length for production's merge tolerance formula (mirrors
-// src/core/math.cpp:807-811, floored at 1.0). Walks all populated plane d's
-// FillHexCrystalCoef produced; here we use the max-abs input parameter as a
-// safe proxy (basal d = h/2, side d = √3/8 · dist_i, cone d = (h/2 + a·dist)·√3/8).
+// Character length for production's merge tolerance formula (mirrors the
+// char_len computation inlined inside SolveConvexPolyhedronVtxD in
+// src/core/math.cpp — not a standalone function, so there is no call site to
+// reuse directly; kept in sync by hand), floored at 1.0. Walks all populated
+// plane d's FillHexCrystalCoef produced; here we use the max-abs input
+// parameter as a safe proxy (basal d = h/2, side d = √3/8 · dist_i,
+// cone d = (h/2 + a·dist)·√3/8).
 double ProductionCharLen(const PyramidSample& s) {
   double max_abs_d = 0.5 * static_cast<double>(s.h1 + s.h2 + s.h3);
   double max_dist = 0.0;
@@ -133,16 +136,27 @@ double ProductionCharLen(const PyramidSample& s) {
 
 // ---- Well-conditioned distribution generators ------------------------------
 
+// Base RNG state: seed + h/dist noise only. Used directly by callers whose
+// alpha doesn't come from a uniform distribution (Miller index pairs, fixed
+// sweep parameters) — no unused alpha_dist member for the reader to confirm
+// is never read.
 struct RngState {
   std::mt19937 rng;
-  std::uniform_real_distribution<double> alpha_dist;
   std::normal_distribution<double> d_noise;
   std::uniform_real_distribution<double> h_dist;
-  RngState(unsigned seed, double alpha_lo, double alpha_hi, double d_sigma, double h_lo, double h_hi)
-      : rng(seed), alpha_dist(alpha_lo, alpha_hi), d_noise(1.0, d_sigma), h_dist(h_lo, h_hi) {}
+  RngState(unsigned seed, double d_sigma, double h_lo, double h_hi)
+      : rng(seed), d_noise(1.0, d_sigma), h_dist(h_lo, h_hi) {}
 };
 
-PyramidSample GenWellConditioned(RngState& rs) {
+// Extends RngState with a uniform alpha distribution, for callers that draw
+// both wedge angles randomly (well-conditioned / degenerate sweeps).
+struct AlphaRngState : RngState {
+  std::uniform_real_distribution<double> alpha_dist;
+  AlphaRngState(unsigned seed, double alpha_lo, double alpha_hi, double d_sigma, double h_lo, double h_hi)
+      : RngState(seed, d_sigma, h_lo, h_hi), alpha_dist(alpha_lo, alpha_hi) {}
+};
+
+PyramidSample GenWellConditioned(AlphaRngState& rs) {
   PyramidSample s;
   s.upper_alpha = static_cast<float>(rs.alpha_dist(rs.rng));
   s.lower_alpha = static_cast<float>(rs.alpha_dist(rs.rng));
@@ -328,7 +342,7 @@ TEST(ClosedFormPyramid, WellConditionedDirectWedgeThreeWayAgreement) {
   // both ends, avoids the numerically nasty extreme-flat tail (covered
   // separately by the fixture below). σ = 0.1 keeps dist noise well below
   // face-drop threshold.
-  RngState rs(20260720u, 10.0, 80.0, 0.1, 0.6, 1.4);
+  AlphaRngState rs(20260720u, 10.0, 80.0, 0.1, 0.6, 1.4);
 
   long agree = 0;
   long no_witness = 0;
@@ -409,7 +423,7 @@ TEST(ClosedFormPyramid, WellConditionedMillerThreeWayAgreement) {
     { 1, 1 }, { 2, 1 }, { 3, 1 }, { 1, 2 }, { 2, 3 }, { 3, 2 },
   };
   constexpr int kSamplesPerPair = 200;
-  RngState rs(20260721u, /*unused alpha*/ 10.0, 80.0, 0.1, 0.6, 1.4);
+  RngState rs(20260721u, 0.1, 0.6, 1.4);
 
   long total = 0;
   long agree = 0;
@@ -489,16 +503,19 @@ TEST(ClosedFormPyramid, WellConditionedMillerThreeWayAgreement) {
 // B-ring sentinel drift.
 // ============================================================================
 
-class ExtremeFlatTailSweep : public ::testing::TestWithParam<float> {};
+// (alpha, cf_minority ceiling out of kSamplesPerAlpha). The ceiling is
+// per-alpha rather than a single shared ratio because the regime quality
+// degrades sharply approaching 90° (production's own dedup boundary is
+// a1-scaled and grows less reliable there) — see the INSTANTIATE_TEST_SUITE_P
+// comment below for the measured baseline behind each value.
+class ExtremeFlatTailSweep : public ::testing::TestWithParam<std::tuple<float, int>> {};
 
 TEST_P(ExtremeFlatTailSweep, DirectWedgeThreeWayAgreement) {
-  const float alpha = GetParam();
+  const auto [alpha, cf_minority_ceiling] = GetParam();
   constexpr int kSamplesPerAlpha = 500;
   // Symmetric wedge: both upper and lower cones at this alpha. Randomise h and
   // dist within a well-conditioned envelope.
-  RngState rs(20260722u ^ static_cast<unsigned>(alpha * 1000.0f),
-              /*unused alpha*/ static_cast<double>(alpha), static_cast<double>(alpha),
-              /*d_sigma=*/0.1, /*h_lo=*/0.6, /*h_hi=*/1.4);
+  RngState rs(20260722u ^ static_cast<unsigned>(alpha * 1000.0f), /*d_sigma=*/0.1, /*h_lo=*/0.6, /*h_hi=*/1.4);
   long agree = 0;
   long no_witness = 0;
   long cf_minority = 0;
@@ -547,20 +564,13 @@ TEST_P(ExtremeFlatTailSweep, DirectWedgeThreeWayAgreement) {
   // Cf-minority = cf disagrees with BOTH witnesses (or with the sole surviving
   // one). At α → 90° the oracle refuses 100% (__int128 budget exhausted per
   // owner's DECISION on Q(√3) intermediate widths), so this reduces to
-  // cf-vs-production only — still a valid adjudication.
-  // Extreme flat tail (α ∈ [85°, 89.5°]): a1 grows large, oracle refuses often
-  // (up to 100% at 89°+). When oracle is silent, cf must match prod exactly,
-  // but numerical residuals at boundary conditions can produce ±1 splits.
-  // Same 1% ceiling as the well-conditioned test — the extreme-flat regime
-  // is inherently noisier so a slightly larger tolerance is defensible, but
-  // 1% catches gross regressions (baseline observed: 2-8% per α = signal
-  // that this regime has quality issues worth addressing but currently is
-  // *documented*, not *silent*).
-  // Ceiling of 10% chosen at this α range because production's algorithm is
-  // itself less reliable near α → 90° (dedup boundary sensitive to
-  // a1-scaled residuals); the test asserts cf is not catastrophically wrong.
-  EXPECT_LT(cf_minority, kSamplesPerAlpha / 10)
-      << "cf disagrees with witnesses > 10% at α=" << alpha << " — climbing above documented regime";
+  // cf-vs-production only — still a valid adjudication. Ceiling is per-alpha
+  // (see INSTANTIATE_TEST_SUITE_P below) because the regime gets noisier
+  // approaching 90° — production's own dedup boundary is a1-scaled and grows
+  // less reliable there; the test asserts cf is not catastrophically wrong,
+  // not that this regime is bug-free.
+  EXPECT_LT(cf_minority, cf_minority_ceiling)
+      << "cf disagrees with witnesses beyond the documented ceiling at α=" << alpha;
   // No-witness (oracle refused AND prod empty). For α ∈ {89°, 89.5°} oracle
   // refuses ~100% but production still gives an answer, so no-witness stays
   // low. If both witnesses go silent on an entire fixture, the test provides
@@ -569,15 +579,23 @@ TEST_P(ExtremeFlatTailSweep, DirectWedgeThreeWayAgreement) {
       << "no witness (oracle refused AND prod empty) > 20% at α=" << alpha << " — test provides no coverage";
 }
 
-// α ∈ {85°, 87°, 87.5°, 88°} covered here as an active gate. α ∈ {89°, 89.5°}
-// are left out of the gate — at that α the oracle refuses 100% (a1 exceeds
-// the __int128 budget by owner's DECISION on Q(√3) intermediate widths) and
-// cf-vs-production diverges by 3-8 vertices per sample, which is a genuine
-// question about how the pyramid model behaves near the degeneracy limit
-// (production's algorithm is itself noisy there — merge boundaries multiply by
-// a1 → ∞). This is a documented follow-up, not a gate regression. See
-// scratchpad progress notes on this task for the numbers.
-INSTANTIATE_TEST_SUITE_P(FlatTailAlphas, ExtremeFlatTailSweep, ::testing::Values(85.0f, 87.0f, 87.5f, 88.0f));
+// α ∈ {85°, 87°, 87.5°, 88°}: ceiling 50/500 (10%) — observed baseline 2-8%
+// per α, ~1.25-5x margin. α ∈ {89°, 89.5°}: oracle refuses 100% here (a1
+// exceeds the __int128 budget by owner's DECISION on Q(√3) intermediate
+// widths), so cf-minority reduces to cf-vs-production only, and production's
+// own dedup boundary gets markedly noisier this close to 90° (merge
+// boundaries scale with a1 → ∞). Measured with this fixture's fixed seed
+// (fully deterministic — no run-to-run variance to budget for):
+// 89.0° → cf_minority=81/500 (16.2%), ceiling 130 (~1.5x margin);
+// 89.5° → cf_minority=169/500 (33.8%), ceiling 260 (~1.5x margin). These are
+// wide ceilings by design — the point is to catch a regression that pushes
+// this regime meaningfully worse, not to assert it is currently clean (it
+// isn't; see doc/numerical-robustness.md on why absolute a1-scaled residuals
+// grow unboundedly approaching the degenerate wedge limit).
+INSTANTIATE_TEST_SUITE_P(FlatTailAlphas, ExtremeFlatTailSweep,
+                         ::testing::Values(std::make_tuple(85.0f, 50), std::make_tuple(87.0f, 50),
+                                           std::make_tuple(87.5f, 50), std::make_tuple(88.0f, 50),
+                                           std::make_tuple(89.0f, 130), std::make_tuple(89.5f, 260)));
 
 // ============================================================================
 // Specialised configurations: shoulder / apex / face-drop. Each MUST agree
@@ -590,7 +608,7 @@ INSTANTIATE_TEST_SUITE_P(FlatTailAlphas, ExtremeFlatTailSweep, ::testing::Values
 // ============================================================================
 
 uint16_t CollectRegularUnion(int n) {
-  RngState rs(20260723u, 10.0, 80.0, 0.1, 0.6, 1.4);
+  AlphaRngState rs(20260723u, 10.0, 80.0, 0.1, 0.6, 1.4);
   uint16_t u = 0;
   for (int i = 0; i < n; i++) {
     PyramidSample s = GenWellConditioned(rs);
@@ -680,11 +698,17 @@ TEST(ClosedFormPyramid, SpecialisedConfigurationsAgreeAndNoSpecialCaseBranches) 
 // Analogous to test_closed_form_prism.cpp's DegenerateSweep.
 // ============================================================================
 
-class DegeneratePyramidSweep : public ::testing::TestWithParam<std::tuple<double, unsigned, int>> {};
+// (sigma, seed, samples, unexplained ceiling — applied independently to both
+// the cf-vs-oracle and cf-vs-prod unexplained counters). Ceiling is per-sigma
+// rather than a single hardcoded 0 because higher sigma pushes more samples
+// into the merge-strategy-ambiguous zone at the edge of the 2× tolerance
+// factor — see the INSTANTIATE_TEST_SUITE_P comment below for the measured
+// baseline behind each value.
+class DegeneratePyramidSweep : public ::testing::TestWithParam<std::tuple<double, unsigned, int, int>> {};
 
 TEST_P(DegeneratePyramidSweep, DivergencesExplainableByMergeTolerance) {
-  const auto [sigma, seed, samples] = GetParam();
-  RngState rs(seed, /*alpha_lo=*/15.0, /*alpha_hi=*/75.0, sigma, /*h_lo=*/0.4, /*h_hi=*/1.6);
+  const auto [sigma, seed, samples, unexplained_ceiling] = GetParam();
+  AlphaRngState rs(seed, /*alpha_lo=*/15.0, /*alpha_hi=*/75.0, sigma, /*h_lo=*/0.4, /*h_hi=*/1.6);
 
   long refused = 0;
   long prod_empty = 0;
@@ -756,23 +780,29 @@ TEST_P(DegeneratePyramidSweep, DivergencesExplainableByMergeTolerance) {
                "[degen σ=%.2f] refused=%ld prod_empty=%ld cf!=oracle exp=%ld unexp=%ld cf!=prod exp=%ld unexp=%ld\n",
                sigma, refused, prod_empty, cf_vs_oracle_explained, cf_vs_oracle_unexplained, cf_vs_prod_explained,
                cf_vs_prod_unexplained);
-  EXPECT_EQ(cf_vs_oracle_unexplained, 0)
-      << "cf vs oracle disagreements with vertex separation ABOVE 2× production merge tolerance at σ=" << sigma;
-  EXPECT_EQ(cf_vs_prod_unexplained, 0)
-      << "cf vs production disagreements with vertex separation ABOVE 2× production merge tolerance at σ=" << sigma;
+  EXPECT_LE(cf_vs_oracle_unexplained, unexplained_ceiling)
+      << "cf vs oracle disagreements with vertex separation ABOVE 2× production merge tolerance at σ=" << sigma
+      << " exceed the documented ceiling";
+  EXPECT_LE(cf_vs_prod_unexplained, unexplained_ceiling)
+      << "cf vs production disagreements with vertex separation ABOVE 2× production merge tolerance at σ=" << sigma
+      << " exceed the documented ceiling";
   (void)cf_vs_oracle_explained;
   (void)cf_vs_prod_explained;
 }
 
-// σ=0.30 is the active gate — merge-tolerance explains 100% of the
-// cf-vs-{oracle,prod} divergences observed here (baseline: 0 unexplained in
-// 2000 samples). σ=0.50 was piloted but showed ~4/2000 (0.2%) divergences
-// with vertex separations well above production's merge tolerance — a
-// documented follow-up (independent from the merge-strategy question this
-// suite asks). Left out of the gate to keep the -tj lane clean; the finding
-// is recorded in the scratchpad progress log for the follow-up round.
+// σ=0.30: merge-tolerance explains 100% of the cf-vs-{oracle,prod}
+// divergences observed here — ceiling stays 0 (strict). σ=0.50: measured
+// with this fixture's fixed seed (deterministic) at cf-vs-oracle
+// unexplained=1/2000 (0.05%), cf-vs-prod unexplained=0/2000; ceiling 5
+// (0.25%, 5x margin over the observed oracle-side count) gives regression
+// coverage instead of the prior complete silence. This residual (a genuine
+// cf-vs-oracle divergence whose vertex separation exceeds 2x production's
+// merge tolerance, so it is not explainable by the merge-strategy-ambiguity
+// argument this suite otherwise relies on) does not yet have a root-caused
+// explanation and is a candidate for follow-up investigation.
 INSTANTIATE_TEST_SUITE_P(DegenerateSigmas, DegeneratePyramidSweep,
-                         ::testing::Values(std::make_tuple(0.30, 20260724u, 2'000)));
+                         ::testing::Values(std::make_tuple(0.30, 20260724u, 2'000, 0),
+                                           std::make_tuple(0.50, 20260725u, 2'000, 5)));
 
 }  // namespace
 }  // namespace lumice
