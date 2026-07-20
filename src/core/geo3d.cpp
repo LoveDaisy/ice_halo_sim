@@ -454,6 +454,14 @@ size_t FillHexCrystalCoef(float upper_alpha, float lower_alpha, float h1, float 
     double z_max = std::numeric_limits<double>::lowest();
     double z_min = std::numeric_limits<double>::max();
     double xyz[3];
+    // Track whether any triple-plane intersection landed inside the polyhedron.
+    // A dedicated boolean is used instead of comparing z_max/z_min against their
+    // sentinel initial values: those sentinels flow through the arithmetic below
+    // (yielding +inf in both basal d values when the loop never fired), so
+    // any equality/threshold check against them would be brittle. Independent
+    // state answers the semantic question directly — "did the loop find any
+    // feasible vertex?" — without depending on the sentinel's numeric value.
+    bool found_feasible_vertex = false;
     for (size_t i = 2; i < cnt; i++) {
       for (size_t j = i + 1; j < cnt; j++) {
         for (size_t k = j + 1; k < cnt; k++) {
@@ -463,9 +471,27 @@ size_t FillHexCrystalCoef(float upper_alpha, float lower_alpha, float h1, float 
           if (IsInPolyhedron3D(static_cast<int>(cnt - 2), coef_d.data() + 8, xyz)) {
             z_max = std::max(z_max, xyz[2]);
             z_min = std::min(z_min, xyz[2]);
+            found_feasible_vertex = true;
           }
         }
       }
+    }
+    // Empty-feasible-region guard: when random face_distance makes the
+    // half-space intersection empty, the triple-loop never enters the
+    // IsInPolyhedron3D branch and z_max/z_min retain their sentinel initial
+    // values (lowest()/max()). Without this guard the arithmetic below emits
+    // two +inf basal-d coefficients; downstream a currently unrelated Euler
+    // check happens to reject the resulting F=0 mesh, but that containment is
+    // not this function's responsibility. Degrade to the same "return 0"
+    // pattern the zero-volume branch above uses; callers already handle
+    // plane_cnt==0 as an empty crystal.
+    if (!found_feasible_vertex) {
+      LOG_WARNING(
+          "FillHexCrystalCoef: empty pyramid feasible region (upper_alpha={:.3f}, "
+          "lower_alpha={:.3f}, h1={:.4e}, h2={:.4e}, h3={:.4e}); skipping",
+          static_cast<double>(upper_alpha), static_cast<double>(lower_alpha), static_cast<double>(h1),
+          static_cast<double>(h2), static_cast<double>(h3));
+      return 0;
     }
     auto h1_d = static_cast<double>(h1);
     auto h3_d = static_cast<double>(h3);
