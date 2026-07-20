@@ -139,6 +139,9 @@ namespace {
 // "zero-volume degenerate → returns 0 planes" pattern: caller-visible
 // contract is unchanged, downstream sees a Crystal with 0 triangles that
 // contributes nothing to raypath sampling.
+//
+// Retained for the pyramid path (which still walks the numerical pipeline in
+// Step 2's window); prism now goes through the closed-form gate below.
 Mesh RejectMalformed(Mesh mesh, const char* factory) {
   const size_t v = mesh.GetVtxCnt();
   const size_t f = mesh.GetTriangleCnt();
@@ -159,29 +162,277 @@ Mesh RejectMalformed(Mesh mesh, const char* factory) {
   return Mesh(0, 0);
 }
 
+// 386.2 validity gate for the prism closed-form path. The malformed families
+// the Euler check used to catch (opposite-pair-sum ≤ 0, wedge-collapse
+// pyramid-adjacent inputs) collapse the 2D cross-section corner ring to fewer
+// than three distinct corners; the closed-form solver produces that fact
+// directly (corner_cnt) — no reverse-engineering the topology from a triangle
+// mesh required.
+bool IsValidClosedFormPrism(const ClosedFormPrismResult& r, float h) {
+  return h > math::kFloatEps && r.corner_cnt >= 3;
+}
+
+// Convert ClosedFormPrismResult (single CCW 2D corner ring + h) into per-face
+// 3D CCW vertex lists in CrystalGeom.
+//   - Upper basal (slot 0, normal +z): ring CCW at z = +h/2 (ring is emitted
+//     CCW as seen from +z by SolveHexCrossSection; no re-ordering).
+//   - Lower basal (slot 1, normal -z): ring reversed at z = -h/2 so viewer at
+//     -z sees CCW.
+//   - Side face (slot 2+i, present): 4-vert rectangle
+//       (c_prev, z_bot), (c_curr, z_bot), (c_curr, z_top), (c_prev, z_top)
+//     with c_prev, c_curr the two ring corners the side lies between (walking
+//     present sides in i-increasing order). cross(v1-v0, v2-v0) aligns with
+//     the outward horizontal normal.
+void AdaptClosedFormPrismToCrystalGeom(const ClosedFormPrismResult& r, float h, CrystalGeom& g) {
+  g = CrystalGeom{};
+  g.face_cnt = kClosedFormPrismFaceCnt;
+
+  std::memcpy(g.plane_coef, r.plane_coef, sizeof(r.plane_coef));
+  std::memcpy(g.face_normal, r.face_normal, sizeof(r.face_normal));
+  std::memcpy(g.face_number, r.face_number, sizeof(r.face_number));
+  for (int i = 0; i < kClosedFormPrismFaceCnt; i++) {
+    g.face_present[i] = r.face_present[i];
+  }
+
+  if (r.corner_cnt < 3) {
+    return;
+  }
+
+  const int n = r.corner_cnt;
+  const float z_top = 0.5f * h;
+  const float z_bot = -0.5f * h;
+
+  if (r.face_present[0]) {
+    g.face_vtx_cnt[0] = n;
+    float* base = g.face_vtx + 0 * kCrystalGeomMaxVtxPerFace * 3;
+    for (int k = 0; k < n; k++) {
+      base[k * 3 + 0] = r.corner_x[k];
+      base[k * 3 + 1] = r.corner_y[k];
+      base[k * 3 + 2] = z_top;
+    }
+  }
+  if (r.face_present[1]) {
+    g.face_vtx_cnt[1] = n;
+    float* base = g.face_vtx + 1 * kCrystalGeomMaxVtxPerFace * 3;
+    for (int k = 0; k < n; k++) {
+      const int rev = n - 1 - k;
+      base[k * 3 + 0] = r.corner_x[rev];
+      base[k * 3 + 1] = r.corner_y[rev];
+      base[k * 3 + 2] = z_bot;
+    }
+  }
+
+  int present_idx[kClosedFormPrismSideCnt];
+  int p_n = 0;
+  for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
+    if (r.face_present[2 + i]) {
+      present_idx[p_n++] = i;
+    }
+  }
+  // p_n must equal n: the corner ring is built by walking present sides and
+  // emitting one corner per adjacent pair, and a bounded 2D polygon has as
+  // many edges as vertices.
+  assert(p_n == n);
+
+  for (int k = 0; k < p_n; k++) {
+    const int side_i = present_idx[k];
+    const int slot = 2 + side_i;
+    const int c_prev = (k - 1 + p_n) % p_n;
+    const int c_curr = k;
+
+    const float px = r.corner_x[c_prev];
+    const float py = r.corner_y[c_prev];
+    const float cx = r.corner_x[c_curr];
+    const float cy = r.corner_y[c_curr];
+
+    g.face_vtx_cnt[slot] = 4;
+    float* base = g.face_vtx + slot * kCrystalGeomMaxVtxPerFace * 3;
+    base[0 * 3 + 0] = px;
+    base[0 * 3 + 1] = py;
+    base[0 * 3 + 2] = z_bot;
+    base[1 * 3 + 0] = cx;
+    base[1 * 3 + 1] = cy;
+    base[1 * 3 + 2] = z_bot;
+    base[2 * 3 + 0] = cx;
+    base[2 * 3 + 1] = cy;
+    base[2 * 3 + 2] = z_top;
+    base[3 * 3 + 0] = px;
+    base[3 * 3 + 1] = py;
+    base[3 * 3 + 2] = z_top;
+  }
+}
+
+// Dedup-linear-search 3D vertex pool + fixed-fan triangulation. Small n
+// (≤ 24 verts for prism, ≤ 96 for the pyramid worst case), so O(n²) dedup is
+// fine and matches the tolerance choice already used inside
+// geo3d_closedform.cpp's 2D corner dedup.
+struct BuiltMesh {
+  Mesh mesh;
+  std::vector<int> tri_face_slot;  // len == mesh.GetTriangleCnt()
+};
+
+BuiltMesh BuildMeshFromCfGeom(const CrystalGeom& g) {
+  constexpr float kDedupTol = 1e-6f;
+
+  std::vector<float> vtx_pool;
+  vtx_pool.reserve(static_cast<size_t>(kCrystalGeomMaxFaces) * kCrystalGeomMaxVtxPerFace * 3);
+  auto add_or_find = [&](float x, float y, float z) -> int {
+    const size_t n = vtx_pool.size() / 3;
+    for (size_t i = 0; i < n; i++) {
+      const float dx = vtx_pool[i * 3 + 0] - x;
+      const float dy = vtx_pool[i * 3 + 1] - y;
+      const float dz = vtx_pool[i * 3 + 2] - z;
+      if (std::sqrt(dx * dx + dy * dy + dz * dz) < kDedupTol) {
+        return static_cast<int>(i);
+      }
+    }
+    vtx_pool.push_back(x);
+    vtx_pool.push_back(y);
+    vtx_pool.push_back(z);
+    return static_cast<int>(n);
+  };
+
+  std::vector<int> tri_idx;
+  std::vector<int> tri_face_slot;
+  int face_to_global[kCrystalGeomMaxVtxPerFace];
+
+  for (int slot = 0; slot < g.face_cnt; slot++) {
+    if (!g.face_present[slot]) {
+      continue;
+    }
+    const int fn = g.face_vtx_cnt[slot];
+    if (fn < 3) {
+      continue;
+    }
+    const float* base = g.face_vtx + slot * kCrystalGeomMaxVtxPerFace * 3;
+    for (int k = 0; k < fn; k++) {
+      face_to_global[k] = add_or_find(base[k * 3 + 0], base[k * 3 + 1], base[k * 3 + 2]);
+    }
+    // Fan (v[0], v[i-1], v[i]) for i = 2..n-1 → n-2 triangles.
+    for (int i = 2; i < fn; i++) {
+      tri_idx.push_back(face_to_global[0]);
+      tri_idx.push_back(face_to_global[i - 1]);
+      tri_idx.push_back(face_to_global[i]);
+      tri_face_slot.push_back(slot);
+    }
+  }
+
+  const size_t vtx_cnt = vtx_pool.size() / 3;
+  const size_t tri_cnt = tri_face_slot.size();
+
+  auto vtx_buf = std::make_unique<float[]>(vtx_cnt * 3);
+  if (vtx_cnt > 0) {
+    std::memcpy(vtx_buf.get(), vtx_pool.data(), vtx_cnt * 3 * sizeof(float));
+  }
+  auto tri_buf = std::make_unique<int[]>(tri_cnt * 3);
+  if (tri_cnt > 0) {
+    std::memcpy(tri_buf.get(), tri_idx.data(), tri_cnt * 3 * sizeof(int));
+  }
+
+  return BuiltMesh{ Mesh(vtx_cnt, std::move(vtx_buf), tri_cnt, std::move(tri_buf)), std::move(tri_face_slot) };
+}
+
 }  // namespace
 
-Crystal Crystal::CreatePrism(float h) {
-  float dist[6]{ 1, 1, 1, 1, 1, 1 };
-  float coef[kMaxHexCrystalPlanes * 4];
-  auto plane_cnt = FillHexCrystalCoef(0, 0, 0, h, 0, dist, coef);
-  auto mesh = RejectMalformed(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef), "CreatePrism(h)");
-  auto c = Crystal(std::move(mesh));
+// Populate fn_map_ and poly_face_data_ directly from the closed-form output,
+// skipping FillHexFnMap's argmax-vs-reference-normals reversal and
+// BuildPolygonFaceData's argmax triangle-to-plane grouping. The closed-form
+// output already carries the parametric face-number and one-tri-per-face slot
+// membership; there is nothing to reverse-engineer. This is the payoff of the
+// representation swap: the three argmax reversals (CPU / Metal / CUDA) become
+// straight assignments from the same source.
+void Crystal::PopulateFromCfGeom(const std::vector<int>& tri_face_slot) {
+  const size_t tri_cnt = mesh_.GetTriangleCnt();
+  assert(tri_face_slot.size() == tri_cnt);
+  for (size_t t = 0; t < tri_cnt; t++) {
+    fn_map_[t] = static_cast<IdType>(cf_geom_.face_number[tri_face_slot[t]]);
+  }
+
+  size_t present = 0;
+  for (int slot = 0; slot < cf_geom_.face_cnt; slot++) {
+    if (cf_geom_.face_present[slot]) {
+      present++;
+    }
+  }
+  poly_face_cnt_ = present;
+  if (poly_face_cnt_ == 0) {
+    poly_face_data_.reset();
+    poly_face_n_ = nullptr;
+    poly_face_d_ = nullptr;
+    poly_face_tri_id_ = nullptr;
+    return;
+  }
+  poly_face_data_ = std::make_unique<float[]>(poly_face_cnt_ * 5);
+  poly_face_n_ = poly_face_data_.get();
+  poly_face_d_ = poly_face_data_.get() + poly_face_cnt_ * 3;
+  poly_face_tri_id_ = reinterpret_cast<int*>(poly_face_data_.get() + poly_face_cnt_ * 4);
+
+  size_t p = 0;
+  for (int slot = 0; slot < cf_geom_.face_cnt; slot++) {
+    if (!cf_geom_.face_present[slot]) {
+      continue;
+    }
+    // Representative triangle: first tri assigned to this slot. This is the
+    // same contract BuildPolygonFaceData provided (a triangle definitely
+    // coplanar with the polygon plane); the specific triangle chosen doesn't
+    // matter beyond that — GetFn(IdType) only reads fn_map_[rep_tri], and both
+    // paths land the tri on the same face.
+    int rep_tri = -1;
+    for (size_t t = 0; t < tri_cnt; t++) {
+      if (tri_face_slot[t] == slot) {
+        rep_tri = static_cast<int>(t);
+        break;
+      }
+    }
+    assert(rep_tri >= 0);
+
+    poly_face_n_[p * 3 + 0] = cf_geom_.face_normal[slot * 3 + 0];
+    poly_face_n_[p * 3 + 1] = cf_geom_.face_normal[slot * 3 + 1];
+    poly_face_n_[p * 3 + 2] = cf_geom_.face_normal[slot * 3 + 2];
+
+    // Normalize the plane's d by |(a, b, c)| so the stored plane matches the
+    // "unit normal" convention BuildPolygonFaceData used. The closed-form
+    // plane_coef layout mirrors FillHexCrystalCoef's, whose per-slot norms are
+    // {1, 1, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5} for prism (basal unit, side 0.5).
+    const float* coef = cf_geom_.plane_coef + slot * 4;
+    const float norm = Norm3(coef);
+    poly_face_d_[p] = (norm > math::kFloatEps) ? (coef[3] / norm) : 0.0f;
+    poly_face_tri_id_[p] = rep_tri;
+    p++;
+  }
+}
+
+Crystal Crystal::MakePrismClosedForm(float h, const float dist[6], const char* factory) {
+  ClosedFormPrismResult r = ComputeClosedFormPrism(h, dist);
+  if (!IsValidClosedFormPrism(r, h)) {
+    // Silent for the FillHexCrystalCoef-mirroring zero-volume path (h ≤ eps).
+    // Warn on the "constructed something but it failed the closed-form gate"
+    // case — matches the RejectMalformed semantics for what used to be the
+    // "closed-mesh Euler check" family: caller-visible contract is unchanged,
+    // downstream sees a zero-triangle Crystal that contributes nothing.
+    if (h > math::kFloatEps) {
+      LOG_WARNING("{}: failed closed-form validity gate (h={:.4e}, corner_cnt={}); treating as degenerate",  //
+                  factory, static_cast<double>(h), r.corner_cnt);
+    }
+    return Crystal(Mesh(0, 0));
+  }
+  CrystalGeom g;
+  AdaptClosedFormPrismToCrystalGeom(r, h, g);
+  BuiltMesh built = BuildMeshFromCfGeom(g);
+  Crystal c(std::move(built.mesh));
+  c.cf_geom_ = g;
   c.fn_period_ = 6;
-  FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
-  c.BuildPolygonFaceData(coef, plane_cnt);
+  c.PopulateFromCfGeom(built.tri_face_slot);
   return c;
 }
 
+Crystal Crystal::CreatePrism(float h) {
+  float dist[6]{ 1, 1, 1, 1, 1, 1 };
+  return MakePrismClosedForm(h, dist, "CreatePrism(h)");
+}
+
 Crystal Crystal::CreatePrism(float h, const float* fd) {
-  float coef[kMaxHexCrystalPlanes * 4];
-  auto plane_cnt = FillHexCrystalCoef(0, 0, 0, h, 0, fd, coef);
-  auto mesh = RejectMalformed(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef), "CreatePrism(h, fd)");
-  auto c = Crystal(std::move(mesh));
-  c.fn_period_ = 6;
-  FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
-  c.BuildPolygonFaceData(coef, plane_cnt);
-  return c;
+  return MakePrismClosedForm(h, fd, "CreatePrism(h, fd)");
 }
 
 Crystal Crystal::CreatePyramid(float h1, float h2, float h3) {

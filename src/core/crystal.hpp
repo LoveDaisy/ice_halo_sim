@@ -345,6 +345,16 @@ class Crystal {
  private:
   void ComputeCacheData();
   void BuildPolygonFaceData(const float* plane_coef, size_t plane_cnt);
+  // Populate fn_map_ and poly_face_data_ directly from cf_geom_ + a per-tri
+  // "which face slot" table produced during the closed-form mesh build. See
+  // crystal.cpp for the design rationale (no argmax reversal — the
+  // parametric face-number + slot membership are already in cf_geom_).
+  void PopulateFromCfGeom(const std::vector<int>& tri_face_slot);
+  // Shared closed-form prism entry point behind both CreatePrism overloads.
+  // Runs ComputeClosedFormPrism → 386.2 validity gate → CrystalGeom adapter →
+  // fan-triangulation → PopulateFromCfGeom. Returns an empty crystal when the
+  // gate rejects (matches the legacy RejectMalformed downstream contract).
+  static Crystal MakePrismClosedForm(float h, const float dist[6], const char* factory);
 
   // Shift prism/pyramid faces so the first non-basal pri index becomes 0.
   // Basal faces (x < 3) are passed through unchanged. Returns the input

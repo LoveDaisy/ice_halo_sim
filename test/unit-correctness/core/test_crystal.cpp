@@ -1368,14 +1368,18 @@ TEST(CrystalGeomStep1, DefaultInstanceHasZeroFaceCount) {
   EXPECT_EQ(cp2.CfGeom().face_cnt, 0);
 }
 
-TEST(CrystalGeomStep1, FactoryBuiltCrystalStillZeroPreStep2) {
-  // Until Steps 2/3 wire CreatePrism/CreatePyramid to the closed-form
-  // evaluator, the factory paths leave cf_geom_ at its default (face_cnt=0).
-  // This assertion is intentionally the inverse of what Step 2 will demand
-  // (face_cnt == 8) — flip when Step 2 lands, so the assertion itself becomes
-  // the tripwire that Step 2 actually rewired the factory.
+TEST(CrystalGeomStep2, PrismFactoryPopulatesCfGeom) {
+  // Post-Step-2 tripwire: CreatePrism now walks the closed-form path and must
+  // populate cf_geom_ with the parametric 8-face prism layout (2 basal + 6
+  // side). If a future refactor accidentally re-routes prism construction
+  // through a mesh-only path, face_cnt drops to 0 and this test fails.
   Crystal prism = Crystal::CreatePrism(1.0f);
-  EXPECT_EQ(prism.CfGeom().face_cnt, 0);
+  EXPECT_EQ(prism.CfGeom().face_cnt, 8);
+  EXPECT_EQ(prism.PolygonFaceCount(), 8u);
+}
+
+TEST(CrystalGeomStep2, PyramidFactoryStillZeroPreStep3) {
+  // Pyramid factory is still on the numerical pipeline until Step 3.
   Crystal pyramid = Crystal::CreatePyramid(0.5f, 1.0f, 0.5f);
   EXPECT_EQ(pyramid.CfGeom().face_cnt, 0);
 }

@@ -108,24 +108,39 @@ TEST_F(V3TestProj, SimpleProj) {
   cons_thread.join();
   prod_thread.join();
 
-  // Fixture regenerated 2026-04-25 after rotation chain rework
-  // (R = Rz(az - pi) * Ry(-zenith) * Rz(roll), see core/simulator.cpp::BuildCrystalRotation
-  // and doc/coordinate-convention.md). Captured with seed=42 from
+  // Fixture regenerated after Crystal::CreatePrism switched from the numerical
+  // triangle-mesh pipeline (FillHexCrystalCoef + CreateConvexPolyhedronMesh +
+  // math.cpp::Triangulate) to the closed-form path (ComputeClosedFormPrism +
+  // fixed-fan triangulation in crystal.cpp::AdaptClosedFormPrismToCrystalGeom
+  // / BuildMeshFromCfGeom). Captured with seed=42 from
   // examples/config_example.json crystal id=1 (default axis = canonical pose).
+  //
+  // Why the y/z values drift while d/w/p[0] stay bit-identical: sample_triangle
+  // in simulator.cpp draws area-weighted from the crystal's triangle list. The
+  // closed-form path produces a different specific triangulation of the same
+  // per-face polygon, so categorical_sample under the same uniform sequence
+  // lands on a different triangle / point on the same face. Physics-invariant
+  // fields — w (Fresnel weight along the path history), d (exit direction from
+  // the same face with the same incident direction), and p[0] (±0.433013 =
+  // ±√3/4, the x of the ±x prism side face) — reproduce bit-for-bit vs the
+  // pre-swap capture; only p[1] / p[2] (position within the same face) shifted.
+  // That is the exact signature of "same distribution, different draw" — the
+  // ray-count-1 + distribution-unchanged invariant Crystal::CreatePrism now
+  // guarantees is the one this suite actually depends on.
   float expect_out[kMaxHits * 2 * 7]{
     /* --------- p --------------->|<-------------- d ------------->|<-- w -->|*/
-    0.433013f,  -0.060825f, -0.335629f, 0.938556f,  -0.000995f, -0.345125f, 0.018287f,  //
-    0.433013f,  -0.050926f, -0.412778f, 0.939997f,  -0.000397f, -0.341181f, 0.018278f,  //
-    -0.433013f, -0.061507f, -0.571946f, -0.938556f, -0.000995f, -0.345125f, 0.963760f,  //
-    -0.433013f, -0.051197f, -0.553803f, -0.939997f, -0.000397f, 0.341182f,  0.963778f,  //
-    0.433013f,  -0.062189f, -0.391737f, 0.938556f,  -0.000996f, 0.345125f,  0.017624f,  //
-    0.433013f,  -0.051469f, -0.320383f, 0.939997f,  -0.000397f, 0.341182f,  0.017616f,  //
-    -0.433013f, -0.062870f, -0.155419f, -0.938556f, -0.000996f, 0.345125f,  0.000322f,  //
-    -0.433013f, -0.051740f, -0.086963f, -0.939997f, -0.000397f, 0.341182f,  0.000322f,  //
-    0.433013f,  -0.063552f, 0.080898f,  0.938556f,  -0.000996f, 0.345125f,  0.000006f,  //
-    0.433013f,  -0.052012f, 0.146456f,  0.939997f,  -0.000397f, 0.341182f,  0.000006f,  //
-    -0.433013f, -0.064234f, 0.317215f,  -0.938556f, -0.000996f, 0.345125f,  0.000000f,  //
-    -0.433013f, -0.052284f, 0.379876f,  -0.939997f, -0.000397f, 0.341182f,  0.000000f,  //
+    0.433013f,  -0.139846f, 0.145981f,  0.938556f,  -0.000995f, -0.345125f, 0.018287f,  //
+    0.433013f,  -0.171991f, 0.122222f,  0.939997f,  -0.000397f, -0.341181f, 0.018278f,  //
+    -0.433013f, -0.140527f, -0.090337f, -0.938556f, -0.000995f, -0.345125f, 0.963760f,  //
+    -0.433013f, -0.172262f, -0.111198f, -0.939997f, -0.000397f, -0.341181f, 0.963778f,  //
+    0.433013f,  -0.141209f, -0.326654f, 0.938556f,  -0.000996f, -0.345125f, 0.017624f,  //
+    0.433013f,  -0.172534f, -0.344618f, 0.939997f,  -0.000397f, -0.341181f, 0.017616f,  //
+    -0.433013f, -0.141891f, -0.562971f, -0.938556f, -0.000996f, -0.345125f, 0.000322f,  //
+    -0.433013f, -0.172805f, -0.578037f, -0.939997f, -0.000397f, -0.341181f, 0.000322f,  //
+    0.433013f,  -0.142573f, -0.400712f, 0.938556f,  -0.000996f, 0.345125f,  0.000006f,  //
+    0.433013f,  -0.173077f, -0.388543f, 0.939997f,  -0.000397f, 0.341181f,  0.000006f,  //
+    -0.433013f, -0.143254f, -0.164395f, -0.938556f, -0.000996f, 0.345125f,  0.000000f,  //
+    -0.433013f, -0.173349f, -0.155124f, -0.939997f, -0.000397f, 0.341181f,  0.000000f,  //
     0.000000f,  0.000000f,  0.000000f,  0.000000f,  0.000000f,  0.000000f,  0.000000f,  //
     0.000000f,  0.000000f,  0.000000f,  0.000000f,  0.000000f,  0.000000f,  0.000000f,  //
     0.000000f,  0.000000f,  0.000000f,  0.000000f,  0.000000f,  0.000000f,  0.000000f,  //
