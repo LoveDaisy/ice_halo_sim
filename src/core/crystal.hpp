@@ -220,12 +220,6 @@ class Crystal {
   const float* GetTirangleArea() const;
 
   /**
-   * @brief Get triangle coordinate transformation matrices
-   * @return Pointer to transformation matrix array (12 * triangle_cnt elements: 4x3 matrix per triangle)
-   */
-  const float* GetTriangleCoordTf() const;
-
-  /**
    * @brief Get face number for a given triangle face index
    * @param fid Triangle face index
    * @return Face number (for raypath symmetry); kInvalidId if @p fid is out of range
@@ -245,13 +239,6 @@ class Crystal {
    *         where symmetry reductions do not apply.
    */
   int FnPeriod() const { return fn_period_; }
-
-  /**
-   * @brief Rotate the crystal
-   * @param r Rotation to apply
-   * @return Reference to this crystal
-   */
-  Crystal& Rotate(const Rotation& r);
 
   /**
    * @brief Reduce raypath using symmetry
@@ -325,10 +312,9 @@ class Crystal {
   Mesh mesh_;
 
   std::unique_ptr<float[]> cache_data_;
-  float* face_v_;         // vertex coordinate of every face. 9 * face_cnt
-  float* face_n_;         // normal of every face. 3 * face_cnt
-  float* face_area_;      // area of every face. 1 * face_cnt
-  float* face_coord_tf_;  // transform for barycentric coordinate. 12 * face_cnt
+  float* face_v_;     // vertex coordinate of every face. 9 * face_cnt
+  float* face_n_;     // normal of every face. 3 * face_cnt
+  float* face_area_;  // area of every face. 1 * face_cnt
 
   std::unique_ptr<IdType[]> fn_map_;  // fid --> fn
   int fn_period_;                     // for raypath symmetry

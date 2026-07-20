@@ -1146,4 +1146,51 @@ TEST_F(V3TestCrystal, PyramidRandomFaceDistanceMoveGetFnLegal) {
       << "face_distance range in next_dist() so the sweep hits the shrink branch again.";
 }
 
+// Copy/move must rebind face_v_/face_n_/face_area_ into the new cache_data_
+// allocation. Adjacent PolygonFaceCount/GetFn tests exercise poly_face_data_ but
+// leave triangle-geometry pointer rebinding untested; if a future edit to
+// CrystalCachOffset (e.g. adding or removing a segment) forgets one of the
+// pointer-rebind sites in the copy/move ctors or operator=, that regression
+// would slip past every existing guard. Byte-exact compare between source and
+// target of the three triangle arrays catches such a slip.
+TEST_F(V3TestCrystal, CopyMoveRebindsTriangleGeometryPointers) {
+  auto src = Crystal::CreatePrism(1.3f);
+  const auto n = src.TotalTriangles();
+  ASSERT_GT(n, 0u);
+  const std::vector<float> src_v(src.GetTriangleVtx(), src.GetTriangleVtx() + n * 9);
+  const std::vector<float> src_n(src.GetTriangleNormal(), src.GetTriangleNormal() + n * 3);
+  const std::vector<float> src_a(src.GetTirangleArea(), src.GetTirangleArea() + n);
+
+  // Copy ctor: pointers must reference the new allocation, not the source.
+  Crystal cpy(src);
+  ASSERT_NE(cpy.GetTriangleVtx(), src.GetTriangleVtx()) << "copy ctor did not allocate a new cache";
+  ASSERT_TRUE(std::equal(src_v.begin(), src_v.end(), cpy.GetTriangleVtx()));
+  ASSERT_TRUE(std::equal(src_n.begin(), src_n.end(), cpy.GetTriangleNormal()));
+  ASSERT_TRUE(std::equal(src_a.begin(), src_a.end(), cpy.GetTirangleArea()));
+
+  // Copy assign: same expectation.
+  Crystal cpy_assign = Crystal::CreatePrism(0.7f);
+  cpy_assign = src;
+  ASSERT_EQ(cpy_assign.TotalTriangles(), n);
+  ASSERT_TRUE(std::equal(src_v.begin(), src_v.end(), cpy_assign.GetTriangleVtx()));
+  ASSERT_TRUE(std::equal(src_n.begin(), src_n.end(), cpy_assign.GetTriangleNormal()));
+  ASSERT_TRUE(std::equal(src_a.begin(), src_a.end(), cpy_assign.GetTirangleArea()));
+
+  // Move ctor: cache_data_ transfers; pointers must be re-derived from the
+  // moved allocation so the arrays remain readable.
+  Crystal mv(std::move(cpy));
+  ASSERT_EQ(mv.TotalTriangles(), n);
+  ASSERT_TRUE(std::equal(src_v.begin(), src_v.end(), mv.GetTriangleVtx()));
+  ASSERT_TRUE(std::equal(src_n.begin(), src_n.end(), mv.GetTriangleNormal()));
+  ASSERT_TRUE(std::equal(src_a.begin(), src_a.end(), mv.GetTirangleArea()));
+
+  // Move assign: same expectation.
+  Crystal mv_assign = Crystal::CreatePrism(0.7f);
+  mv_assign = std::move(mv);
+  ASSERT_EQ(mv_assign.TotalTriangles(), n);
+  ASSERT_TRUE(std::equal(src_v.begin(), src_v.end(), mv_assign.GetTriangleVtx()));
+  ASSERT_TRUE(std::equal(src_n.begin(), src_n.end(), mv_assign.GetTriangleNormal()));
+  ASSERT_TRUE(std::equal(src_a.begin(), src_a.end(), mv_assign.GetTirangleArea()));
+}
+
 }  // namespace
