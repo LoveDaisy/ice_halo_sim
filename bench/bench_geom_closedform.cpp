@@ -558,4 +558,150 @@ void BM_ReuseCriterionReadjudicated(benchmark::State& state) {
 }
 BENCHMARK(BM_ReuseCriterionReadjudicated)->Arg(10)->Arg(20)->Arg(30)->Arg(50)->Arg(80);
 
+// ---- Experiment 6: is the pyramid family also 6-directional? ----------------
+//
+// The prism result rests on all six side planes having FIXED horizontal normal
+// directions 60 deg apart. Algebra says the pyramidal planes share those same
+// horizontal directions: an upper pyramidal face has xy-normal
+// a1*0.5*(cos t_i, sin t_i), exactly parallel to prism face i's 0.5*(cos t_i,
+// sin t_i); only the z component and the offset differ. If that holds, the whole
+// hex crystal family is a "6-direction prismatoid": at every height z the cross
+// section is an intersection of half-planes in the SAME six directions, with
+// offsets affine in z. That would carry the constant-conditioning result from
+// the prism to the pyramid, and reduce the 3D hull to a 1D problem per
+// direction. Measured here rather than asserted.
+void BM_PyramidSixDirections(benchmark::State& state) {
+  std::mt19937 rng(31337u);
+  std::uniform_real_distribution<double> alpha_dist(5.0, 85.0);
+  std::normal_distribution<double> d_noise(1.0, 0.3);
+  std::uniform_real_distribution<double> h_dist(0.2, 2.0);
+
+  double worst_dir_err = 0.0;
+  long samples = 0, planes_checked = 0, non_matching = 0;
+  for (int s = 0; s < 4000; s++) {
+    const auto au = static_cast<float>(alpha_dist(rng));
+    const auto al = static_cast<float>(alpha_dist(rng));
+    float dist[kPrismFaces];
+    for (float& d : dist) {
+      d = static_cast<float>(d_noise(rng));
+    }
+    float coef[kMaxHexCrystalPlanes * 4];
+    const int n =
+        static_cast<int>(FillHexCrystalCoef(au, al, static_cast<float>(h_dist(rng)), static_cast<float>(h_dist(rng)),
+                                            static_cast<float>(h_dist(rng)), dist, coef));
+    if (n == 0) {
+      continue;
+    }
+    samples++;
+    for (int k = 2; k < n; k++) {  // skip the two basal planes
+      const double nx = coef[k * 4 + 0], ny = coef[k * 4 + 1];
+      const double h = std::sqrt(nx * nx + ny * ny);
+      if (h < 1e-12) {
+        non_matching++;  // a horizontal-normal-free non-basal plane would break the model
+        continue;
+      }
+      planes_checked++;
+      // best match against the six fixed directions
+      double best = -2.0;
+      for (int i = 0; i < kPrismFaces; i++) {
+        const double t = i * M_PI / 3.0;
+        best = std::max(best, (nx * std::cos(t) + ny * std::sin(t)) / h);
+      }
+      worst_dir_err = std::max(worst_dir_err, 1.0 - best);
+    }
+  }
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(worst_dir_err);
+  }
+  state.counters["samples"] = static_cast<double>(samples);
+  state.counters["planes_checked"] = static_cast<double>(planes_checked);
+  state.counters["non_matching"] = static_cast<double>(non_matching);
+  state.counters["WORST_1_minus_cos"] = worst_dir_err;
+}
+BENCHMARK(BM_PyramidSixDirections);
+
+// ---- Experiment 7: does the apex survive randomized face_distance? ----------
+//
+// "The pyramid apex is a vertex where more than three planes meet, which breaks
+// the plane-triple cache model" was one of the two reasons topology reuse was
+// abandoned. But the apex is a coincidence of the SYMMETRIC crystal: the six
+// upper pyramidal planes meet at one point only when their offsets agree. Under
+// randomized face_distance -- the entire point of the randomization work -- the
+// offsets differ, so the apex should split into ordinary 3-plane vertices.
+// Counts, per sample, the maximum number of planes passing through any solved
+// vertex (degree), for the regular crystal and for randomized dist.
+void BM_PyramidApexDegree(benchmark::State& state) {
+  const bool randomize = state.range(0) != 0;
+  const auto h1 = static_cast<float>(state.range(1)) / 100.0f;  // 1.0 => true apex
+  std::mt19937 rng(9001u);
+  std::normal_distribution<double> d_noise(1.0, 0.2);
+  long samples = 0, high_degree_samples = 0, max_degree_seen = 0;
+  long fam_count[4]{};  // family census of the highest-degree vertex found
+  for (int s = 0; s < 400; s++) {
+    float dist[kPrismFaces];
+    for (float& d : dist) {
+      d = randomize ? static_cast<float>(d_noise(rng)) : 1.0f;
+    }
+    float coef[kMaxHexCrystalPlanes * 4];
+    const int n = static_cast<int>(FillHexCrystalCoef(28.0f, 28.0f, h1, 1.0f, h1, dist, coef));
+    if (n == 0) {
+      continue;
+    }
+    auto [vtx, cnt] = SolveConvexPolyhedronVtxD(n, coef);
+    if (cnt == 0) {
+      continue;
+    }
+    samples++;
+    long worst = 0;
+    for (int v = 0; v < cnt; v++) {
+      const float* p = vtx.get() + v * 3;
+      long deg = 0;
+      long fam[4]{};
+      double scale = 1.0;
+      for (int k = 0; k < n; k++) {
+        scale = std::max(scale, std::fabs(static_cast<double>(coef[k * 4 + 3])));
+      }
+      for (int k = 0; k < n; k++) {
+        const double* cp = nullptr;
+        const double sd = static_cast<double>(coef[k * 4 + 0]) * p[0] + static_cast<double>(coef[k * 4 + 1]) * p[1] +
+                          static_cast<double>(coef[k * 4 + 2]) * p[2] + static_cast<double>(coef[k * 4 + 3]);
+        const double nn = std::sqrt(static_cast<double>(coef[k * 4 + 0]) * coef[k * 4 + 0] +
+                                    static_cast<double>(coef[k * 4 + 1]) * coef[k * 4 + 1] +
+                                    static_cast<double>(coef[k * 4 + 2]) * coef[k * 4 + 2]);
+        (void)cp;
+        if (nn > 0 && std::fabs(sd) / nn < 1e-6 * scale) {
+          deg++;
+          fam[k < 2 ? 0 : (k < 8 ? 1 : (k < 14 ? 2 : 3))]++;
+        }
+      }
+      if (deg > worst) {
+        worst = deg;
+        if (deg >= max_degree_seen) {
+          for (int f = 0; f < 4; f++) {
+            fam_count[f] = fam[f];
+          }
+        }
+      }
+    }
+    max_degree_seen = std::max(max_degree_seen, worst);
+    if (worst > 3) {
+      high_degree_samples++;
+    }
+  }
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(max_degree_seen);
+  }
+  state.counters["randomized"] = randomize ? 1 : 0;
+  state.counters["h1"] = h1;
+  // Which plane FAMILIES meet at the worst vertex: 0=basal 1=prism 2=upper 3=lower.
+  state.counters["fam_basal"] = static_cast<double>(fam_count[0]);
+  state.counters["fam_prism"] = static_cast<double>(fam_count[1]);
+  state.counters["fam_upper"] = static_cast<double>(fam_count[2]);
+  state.counters["fam_lower"] = static_cast<double>(fam_count[3]);
+  state.counters["samples"] = static_cast<double>(samples);
+  state.counters["MAX_VERTEX_DEGREE"] = static_cast<double>(max_degree_seen);
+  state.counters["samples_with_deg_gt3"] = static_cast<double>(high_degree_samples);
+}
+BENCHMARK(BM_PyramidApexDegree)->Args({ 0, 30 })->Args({ 1, 30 })->Args({ 0, 100 })->Args({ 1, 100 });
+
 }  // namespace
