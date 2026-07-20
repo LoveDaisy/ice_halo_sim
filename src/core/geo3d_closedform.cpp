@@ -101,9 +101,15 @@ ClosedFormPrismResult ComputeClosedFormPrism(float h, const float dist[6]) {
     r_side[i] = k_r * static_cast<double>(dist[i]);
     scale = std::max(scale, std::fabs(r_side[i]));
   }
-  // Relative feasibility tolerance; kFloatEps = 1e-5 is the same constant used
-  // for vertex-set equality in Step 3 (plan §3 design point 3).
-  double tol = static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
+  // Relative feasibility / dedup tolerance. Empirically the 9-orders-of-magnitude
+  // stable window ends around here — at 4-way concurrencies (a corner where
+  // two solve-pairs collapse to the same geometric point), the double-precision
+  // residuals between the two candidates are of order 10·kFloatEps, so a
+  // pure 1·kFloatEps threshold occasionally fails to merge them. 5·kFloatEps
+  // aligns with production's dedup scale (SolveConvexPolyhedronVtxD uses
+  // 5e-5·char_len — src/core/math.cpp:807-811) and keeps distinct corners in
+  // the well-conditioned regime safely apart (~0.01+ scale at σ = 0.2).
+  double tol = 5.0 * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
 
   // Step 1: enumerate C(6,2) − 3 = 12 candidate corners; test feasibility and
   // dedup by exact-equality on (x, y) then relative distance.
