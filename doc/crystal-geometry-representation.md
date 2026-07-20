@@ -124,6 +124,22 @@ What this dissolves, in the order the tree suffered from it:
 - **Pooling becomes concatenation.** A flat POD shared by host and both GPU backends removes
   the per-backend re-pack stage that produced the traversal and index defects.
 
+### 4.a Landing status (prism)
+
+The prism half of the target representation has landed as
+`src/core/geo3d_closedform.{hpp,cpp}` (`ComputeClosedFormPrism`), with the
+promoted `__int128` exact oracle at `test/support/exact_prism_oracle.hpp` and a
+three-way golden-analytic sweep at
+`test/golden-analytic/core/test_closed_form_prism.cpp` (well-conditioned 1e5
+samples; degenerate σ ∈ {0.3, 0.5, 0.8}, 4e4 each). New and production paths
+**coexist**; the swap-in belongs to a later subtask. Construction cost measured
+against `BM_MakeCrystal/prism_random` (10970 ns baseline) and
+`BM_TopologyReuse/prism` (130 ns floor): the closed-form implementation runs at
+~96 ns per prism on Apple Silicon (`BM_ComputeClosedFormPrism`), ~114× faster
+than the production path and comparable to the reuse floor.
+
+The pyramid half is the next step in this same refactor line.
+
 ## 5. What it does **not** dissolve (honest limits)
 
 - **Concave pyramids** are not a half-space intersection. `CreateConcavePyramidMesh` needs

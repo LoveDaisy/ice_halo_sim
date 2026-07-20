@@ -37,6 +37,7 @@
 #include <vector>
 
 #include "core/geo3d.hpp"
+#include "core/geo3d_closedform.hpp"
 #include "core/math.hpp"
 #include "test/support/exact_prism_oracle.hpp"
 
@@ -332,6 +333,20 @@ void BM_ClosedFormPrismCost(benchmark::State& state) {
   }
 }
 BENCHMARK(BM_ClosedFormPrismCost);
+
+// Cost of the production-quality closed form (src/core/geo3d_closedform.*).
+// Distinct from BM_ClosedFormPrismCost above, which measures the bench-internal
+// explore scaffolding — the two have different signatures (this one takes h
+// and returns the packed POD; that one takes a tolerance and returns the
+// double-templated struct) so they cannot share a benchmark body.
+void BM_ComputeClosedFormPrism(benchmark::State& state) {
+  float dist[kPrismFaces]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  for (auto _ : state) {
+    auto r = ComputeClosedFormPrism(1.0f, dist);
+    benchmark::DoNotOptimize(r);
+  }
+}
+BENCHMARK(BM_ComputeClosedFormPrism);
 
 // ---- Experiment 2: how often is the PRODUCTION solver's topology wrong? -----
 //
