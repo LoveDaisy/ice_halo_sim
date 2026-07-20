@@ -728,12 +728,20 @@ void BM_DumpPlaneSets(benchmark::State& state) {
   if (path != nullptr) {
     FILE* f = std::fopen(path, "w");
     if (f != nullptr) {
+      // sigma/N overridable so the same dump can populate BOTH arms of a
+      // red/green test: sigma=0.3 barely produces a degenerate crystal at all
+      // (the prism cross-tab saw 0 in 200k), so a criterion validated only
+      // there would have no measured detection power.
+      const char* sigma_env = std::getenv("LUMICE_PLANE_DUMP_SIGMA");
+      const char* n_env = std::getenv("LUMICE_PLANE_DUMP_N");
+      const double sigma = sigma_env != nullptr ? std::atof(sigma_env) : 0.3;
+      const int n_per_arm = n_env != nullptr ? std::atoi(n_env) : 1500;
       std::mt19937 rng(20260720u);
-      std::normal_distribution<double> d_noise(1.0, 0.3);
+      std::normal_distribution<double> d_noise(1.0, sigma);
       std::uniform_real_distribution<double> h_dist(0.2, 2.0);
       // arm: 0 = direct wedge angle (incl. extreme-flat), 1 = Miller index
       for (int arm = 0; arm < 2; arm++) {
-        for (int s = 0; s < 1500; s++) {
+        for (int s = 0; s < n_per_arm; s++) {
           float dist[kPrismFaces];
           for (float& d : dist) {
             d = static_cast<float>(d_noise(rng));
@@ -758,11 +766,16 @@ void BM_DumpPlaneSets(benchmark::State& state) {
             continue;
           }
           auto [vtx, cnt] = SolveConvexPolyhedronVtxD(n, coef);
+          // The factory gate reads the *mesh* counts, not the solver's vertex
+          // count, so dump those too -- otherwise the gate's verdict cannot be
+          // reproduced offline. Appended after the coefficients so the existing
+          // parser (which slices exactly n*4 coefficient fields) still works.
+          auto mesh = CreateConvexPolyhedronMesh(n, coef);
           std::fprintf(f, "%d %d %d", arm, n, cnt);
           for (int k = 0; k < n * 4; k++) {
             std::fprintf(f, " %a", static_cast<double>(coef[k]));
           }
-          std::fprintf(f, "\n");
+          std::fprintf(f, " %zu %zu\n", mesh.GetVtxCnt(), mesh.GetTriangleCnt());
           written++;
         }
       }
