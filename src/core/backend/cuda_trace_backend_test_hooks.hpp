@@ -27,7 +27,10 @@
 
 #if defined(LUMICE_CUDA_ENABLED)
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
+#include <utility>
 #include <vector>
 
 #include "core/backend/rng_probe_stream.hpp"
@@ -78,6 +81,40 @@ class CudaTraceBackendTestHooks {
   // DIFFERENT geometry — the direct AC1 evidence that `rng_` advances across
   // batches (Layer 1 seed-once) rather than resetting to a frozen shape.
   size_t ReadbackFirstPoolCrystalGeom(std::vector<float>& out, size_t count) const;
+
+  // K-shape pool observability (CUDA sibling of Metal
+  // `MetalTraceBackendTestHooks::ReadbackPoolShapeTable` /
+  // `ReadbackRootPoolShape`, metal_trace_backend_test_hooks.hpp:63-64).
+  //
+  //   * ReadbackPoolShapeTable — D2H copy of `d_pool_shape_table_` as a flat
+  //     vector of `{poly_off, poly_cnt, tri_off, tri_cnt}` rows. .size() ==
+  //     Σ P_ci over every (layer, ci) resolved in this BeginSession (aka the
+  //     value `GetLastBatchCrystalCount()` reports). The device buffer's
+  //     backing storage `Impl::pool_shape_slot_cap_` is set to
+  //     `pool_crystals_.size()` at every BuildGeomPool (freed to 0 on
+  //     scene-change / no-K path), so it is EXACTLY the current batch's
+  //     Σ P_ci — not a static allocation upper bound; stale rows from a
+  //     prior larger-K batch cannot leak through. Precondition: called
+  //     BETWEEN BeginSession and EndSession.
+  //   * ReadbackRootPoolShape — D2H copy of the first `count` entries of
+  //     `d_root_pool_shape_` as `(poly_off, poly_cnt)` pairs. The pool-slot
+  //     each ray's root landed on for the last TraceLayer pass (gen_root_kernel
+  //     for layer 0 / transit_multi_ms_kernel for layer≥1). Fail-hard: throws
+  //     `std::out_of_range` if `count > root_cap_` — silent truncation would
+  //     hide a caller size-accounting bug behind a plausible-looking short
+  //     vector until it surfaces on-device as `cudaErrorIllegalMemoryAccess`,
+  //     which is far more expensive to trace than a host-side throw here.
+  //
+  // No `PoolShapeCountThisBatch()` sibling: CUDA already exposes the same
+  // value on the production surface as `GetLastBatchCrystalCount()` — tests
+  // read that directly (no reason to duplicate the getter here).
+  //
+  // Design note: both methods D2H-copy into a fresh vector rather than
+  // out-parameter form (the by-value form Metal uses for these two, since
+  // both return small O(pool_size) vectors — cheap to construct/return). The
+  // out-parameter form is reserved for the large per-ray probes.
+  std::vector<std::array<uint32_t, 4>> ReadbackPoolShapeTable() const;
+  std::vector<std::pair<uint32_t, uint32_t>> ReadbackRootPoolShape(size_t count) const;
 
  private:
   CudaTraceBackend& backend_;

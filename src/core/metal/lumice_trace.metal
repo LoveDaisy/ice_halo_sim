@@ -405,7 +405,14 @@ static inline uint DeviceFilterSummandMask(device const DeviceFilterDesc& f,
 // -----------------------------------------------------------------------------
 
 constant float  kFloatEps  = 1e-5f;
-constant ushort kInvalidId = 0xffffu;
+// K-shape pool absolute-index range = P_ci × PolygonFaceCount. K=8 target,
+// ci_n ≈ 262144 (single-ci occupying a full dispatch batch), PolygonFaceCount
+// ≈ 8 (hex prism) → 32768 × 8 ≈ 262144 absolute polygon slots, well past
+// uint16_t's 65535. tri_to_poly / root_tf are uint32_t on host + device; the
+// sentinel must sit outside the 32-bit absolute range so it never collides
+// with a legal pool-wide index. (Pre-K-pool: ushort 0xffff sufficed because
+// single-shape crystals never exceeded ~64 faces.)
+constant uint   kInvalidId = 0xffffffffu;
 constant uint   kRecCap    = 64u;
 
 // scrum-267 task-fused-emit-gate Step 5 (296.4 hoist): PCG hash + PcgStream +
@@ -426,12 +433,25 @@ struct WlEntry {
   float cmf_z;
 };
 
+// Merged exit-stats accumulator for trace_layer_kernel. One 8-byte struct
+// bound at buffer(15) (count + w_sum atomics), freeing buffer(16) for the
+// per-ray pool-shape offset carrier (`r_pool_shape`) that the K-shape geometry
+// pool feeds in. Field order MUST match the host mirror `struct ExitStats` in
+// metal_trace_backend.mm (see the static_assert there). Both fields sit at
+// natural 4-byte alignment; total sizeof == 8.
+struct ExitStats {
+  atomic_uint  count;
+  atomic_float w_sum;
+};
+
 struct KernelParams {
   // scrum-268.8 (DR-3): per-batch n_idx / cie_x/y/z removed. trace kernel now
   // reads per-ray optics from wl_pool[wl_idx] (see WlEntry above + buffer
   // bindings in DispatchLayer).
+  // K-shape pool: per-batch `poly_cnt` retired — the ray-polygon loop reads
+  // its (poly_off, poly_cnt) from `r_pool_shape[tid]` at buffer(16). Host
+  // struct MUST drop the field too or sizeof drifts.
   uint  max_hits;
-  uint  poly_cnt;
   uint  num_rays;
   uint  img_w;
   uint  img_h;
@@ -521,7 +541,7 @@ kernel void trace_layer_kernel(
     device const float*    root_d   [[buffer(0)]],
     device const float*    root_p   [[buffer(1)]],
     device const float*    root_w   [[buffer(2)]],
-    device const ushort*   root_tf  [[buffer(3)]],
+    device const uint*     root_tf  [[buffer(3)]],
     device const float*    poly_n   [[buffer(4)]],
     device const float*    poly_d   [[buffer(5)]],
     device const float*    centroid [[buffer(6)]],
@@ -542,8 +562,14 @@ kernel void trace_layer_kernel(
     device const uint*     root_wl_idx   [[buffer(12)]],
     device atomic_uint*    counter  [[buffer(13)]],
     device float*          rec_sink [[buffer(14)]],
-    device atomic_uint*    exit_cnt [[buffer(15)]],
-    device atomic_float*   exit_wsum [[buffer(16)]],
+    // Merged {count, w_sum} atomics (see `struct ExitStats` above).
+    device ExitStats*      exit_stats [[buffer(15)]],
+    // K-shape geometry pool: per-ray {poly_off, poly_cnt} written by the
+    // preceding gen_root / transit_root pass. The ray's polygon slice in
+    // the shared poly_n / poly_d / centroid buffers is
+    // [poly_off, poly_off + poly_cnt). At P_ci == 1 this reduces to
+    // (0, full_poly_cnt) — the historical single-shape layout.
+    device const uint2*    r_pool_shape [[buffer(16)]],
     device const float*    root_rot [[buffer(17)]],
     // S1 device-fused: slot 18 is now the per-session landed-weight scalar
     // (total weight of in-bounds filter-pass emitted rays, used for
@@ -618,7 +644,7 @@ kernel void trace_layer_kernel(
   float oy = root_p[tid * 3u + 1u];
   float oz = root_p[tid * 3u + 2u];
   float w  = root_w[tid];
-  ushort to_face = root_tf[tid];
+  uint to_face = root_tf[tid];
 
   // Per-ray crystal->world rotation (row-major; world = m*v, mirroring
   // Rotation::Apply on the CPU). Applied to the exit direction before
@@ -637,7 +663,12 @@ kernel void trace_layer_kernel(
   const float   cmf_x  = wle.cmf_x;
   const float   cmf_y  = wle.cmf_y;
   const float   cmf_z  = wle.cmf_z;
-  const uint  poly_cnt = prm.poly_cnt;
+  // K-shape pool: this ray's polygon slice in the flattened poly_* buffers.
+  // At P_ci == 1 shape == (0, full_poly_cnt) — historical layout preserved.
+  const uint2 shape          = r_pool_shape[tid];
+  const uint  shape_poly_off = shape.x;
+  const uint  shape_poly_cnt = shape.y;
+  const uint  shape_poly_end = shape_poly_off + shape_poly_cnt;
 
   const int   iw_i      = int(prm.img_w);
   const int   ih_i      = int(prm.img_h);
@@ -647,6 +678,9 @@ kernel void trace_layer_kernel(
   // reference, so copy once per thread and pass the local to both exit blocks.
   lm_proj::ProjParams proj_local = prm.proj;
 
+  // path[] carries LOCAL polygon indices (< PolygonFaceCount), so ushort has
+  // plenty of headroom (uchar would fit hex-prism's 8 faces; ushort keeps room
+  // for a future non-hex crystal whose local face count exceeds 255).
   ushort path[kRecCap];
   uint   rec_len = 0u;
 
@@ -669,7 +703,21 @@ kernel void trace_layer_kernel(
 
   for (uint hit = 0u; hit < prm.max_hits; hit++) {
     if (to_face == kInvalidId) { break; }
-    if (rec_len < kRecCap) { path[rec_len] = to_face; rec_len += 1u; }
+    // Contract split (K-shape pool):
+    //   * poly_n / poly_d / centroid / tri_* consume ABSOLUTE pool-wide
+    //     polygon indices (to_face, cont_face, far_face all absolute).
+    //   * path[] / DeviceFilterMatch*'s ApplyGetFn table consume PER-CRYSTAL
+    //     LOCAL polygon indices — GetFn bytes are keyed by (layer, ci) with a
+    //     stripe of length PolygonFaceCount, invariant across P_ci instances
+    //     (crystal randomisation only perturbs h / face_distance; topology
+    //     stable — see EnsureFilterBuffers comment + MakeCrystal). We MUST
+    //     convert absolute → local at the path[] write site by subtracting
+    //     shape_poly_off. At P_ci == 1 shape_poly_off == 0 so this is a no-op
+    //     bit-identical to the pre-K-pool path (AC2).
+    if (rec_len < kRecCap) {
+      path[rec_len] = ushort(to_face - shape_poly_off);
+      rec_len += 1u;
+    }
 
     float nx = poly_n[to_face * 3u + 0u];
     float ny = poly_n[to_face * 3u + 1u];
@@ -693,7 +741,7 @@ kernel void trace_layer_kernel(
       fdz = rr * dz - (rr - sd) * cos_theta * nz;
     }
 
-    ushort cont_face = kInvalidId;
+    uint cont_face = kInvalidId;
     float c_dx = 0.0f, c_dy = 0.0f, c_dz = 0.0f;
     float c_ox = 0.0f, c_oy = 0.0f, c_oz = 0.0f;
     float c_w  = 0.0f;
@@ -714,9 +762,15 @@ kernel void trace_layer_kernel(
       // threshold (see below) rather than an explicit fi==to_face skip; this
       // is equivalent to CUDA's skip on convex crystals (see traversal_shared.h
       // header for the equivalence condition and non-convex caveat).
+      //
+      // K-shape pool: walk THIS ray's polygon slice only
+      // ([shape_poly_off, shape_poly_end)) inside the shared poly_*
+      // buffers. `far_face` still records the ABSOLUTE polygon index (the
+      // loop variable `fi`), so cont_face → next-hit's to_face stays a
+      // valid direct index into poly_n / poly_d.
       float t_far = 1e30f;
       int   far_face = -1;
-      for (uint fi = 0u; fi < poly_cnt; fi++) {
+      for (uint fi = shape_poly_off; fi < shape_poly_end; fi++) {
         float fnx = poly_n[fi * 3u + 0u];
         float fny = poly_n[fi * 3u + 1u];
         float fnz = poly_n[fi * 3u + 2u];
@@ -728,7 +782,7 @@ kernel void trace_layer_kernel(
       }
       float eps_thr = (to_face != kInvalidId && far_face != int(to_face)) ? -kFloatEps : kFloatEps;
       if (far_face >= 0 && t_far > eps_thr) {
-        cont_face = ushort(far_face);
+        cont_face = uint(far_face);
         c_dx = cdx; c_dy = cdy; c_dz = cdz;
         c_ox = ox + t_far * cdx;
         c_oy = oy + t_far * cdy;
@@ -841,8 +895,8 @@ kernel void trace_layer_kernel(
               // / exit_wsum now tally "filter_pass polygon-exits" (gate dropped
               // filter_fail rays above; legacy meaning was "all polygon-exits").
               // Diagnostic-only counters; not consumed by parity tests.
-              atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
-              atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&exit_stats->count, 1u, memory_order_relaxed);
+              atomic_fetch_add_explicit(&exit_stats->w_sum, cw, memory_order_relaxed);
             } else {
               // Mid-exit: filter_pass && !do_continue → device-fused XYZ accumulation.
               // 315.3: single-source projection via lm_proj::ProjectExitToPixel
@@ -895,8 +949,8 @@ kernel void trace_layer_kernel(
                 }
               }
               // Diagnostic counters (not consumed by parity tests).
-              atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
-              atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&exit_stats->count, 1u, memory_order_relaxed);
+              atomic_fetch_add_explicit(&exit_stats->w_sum, cw, memory_order_relaxed);
             }
           }
           // filter_fail: implicit drop (no buffer write, no atomic counter
@@ -1018,8 +1072,8 @@ kernel void trace_layer_kernel(
                 }
               }
             }
-            atomic_fetch_add_explicit(exit_cnt, 1u, memory_order_relaxed);
-            atomic_fetch_add_explicit(exit_wsum, cw, memory_order_relaxed);
+            atomic_fetch_add_explicit(&exit_stats->count, 1u, memory_order_relaxed);
+            atomic_fetch_add_explicit(&exit_stats->w_sum, cw, memory_order_relaxed);
           }
           // filter_fail: implicit drop — no pixel write, no diagnostic counter bump.
         }
@@ -1080,12 +1134,12 @@ kernel void gen_root_kernel(
     device float*           root_d        [[buffer(0)]],
     device float*           root_p        [[buffer(1)]],
     device float*           root_w        [[buffer(2)]],
-    device ushort*          root_tf       [[buffer(3)]],
+    device uint*            root_tf       [[buffer(3)]],
     device float*           root_rot      [[buffer(4)]],
     device const float*     tri_vtx       [[buffer(5)]],
     device const float*     tri_norm      [[buffer(6)]],
     device const float*     tri_area      [[buffer(7)]],
-    device const ushort*    tri_to_poly   [[buffer(8)]],
+    device const uint*      tri_to_poly   [[buffer(8)]],
     constant GenRootKernelParams& gp      [[buffer(9)]],
     // scrum-268.8 (DR-3): per-ray wavelength pool + per-ray wl_idx output.
     // Pool entries provide the spd_weight (replacing the deleted gp.ray_weight)
@@ -1105,6 +1159,14 @@ kernel void gen_root_kernel(
     device const float*     lat_lut_theta [[buffer(14)]],
     device const float*     lat_lut_cdf   [[buffer(15)]],
     device const float*     lat_lut_flip  [[buffer(16)]],
+    // K-shape geometry pool (see UploadCrystalPool in metal_trace_backend.mm).
+    // pool_shape_table[s] = uint4{poly_off, poly_cnt, tri_off, tri_cnt} for
+    // pool slot s in the shared poly_*/tri_* buffers. root_pool_shape[tid]
+    // stores this ray's chosen (poly_off, poly_cnt) — trace_layer_kernel reads
+    // it back at buffer(16) to know which slice of poly_n/poly_d/centroid to
+    // walk for its ray-polygon intersection loop.
+    device const uint4*     pool_shape_table [[buffer(19)]],
+    device uint2*           root_pool_shape  [[buffer(20)]],
     uint tid [[thread_position_in_grid]])
 {
   if (tid >= gp.num_rays) {
@@ -1177,20 +1239,53 @@ kernel void gen_root_kernel(
   float d_crystal[3];
   apply_inverse_mat9(mat9, d_world, d_crystal);
 
+  // 2.5. K-shape pool: pick this ray's shape via a SEED-DOMAIN-isolated PCG
+  // draw (BuildGeomShapeStream / kGeomShapeStreamNonce). Independent seed
+  // domain matters — sharing seed with orientation/wl would silently collide
+  // (same failure mode that shifted metal_lap green-excess before wl was
+  // isolated). P_ci == 1 (knob unset / deterministic params / host-gen
+  // fallback) collapses this to a no-op: shape_slot = 0, floor(u * 1) = 0,
+  // pool_shape_table[0] = (0, poly_cnt_full, 0, tri_cnt_full) — the historical
+  // single-shape layout falls out bit-for-bit. The draw is UNCONDITIONAL so
+  // there is no branch divergence per warp (AC2 bit-identity argument is
+  // structural, not gated on a runtime if).
+  PcgStream shape_stream = BuildGeomShapeStream(mixed_seed, global_idx);
+  float u_shape = pcg_uniform(shape_stream);
+  uint pool_slot = min(uint(u_shape * float(gp.pool_shape_count)),
+                       gp.pool_shape_count - 1u);
+  uint4 shape_info = pool_shape_table[pool_slot];
+  uint poly_off = shape_info.x;
+  uint tri_off  = shape_info.z;
+  uint tri_cnt  = shape_info.w;
+  // Publish this ray's chosen polygon slice for trace_layer_kernel to read
+  // (buffer(16), r_pool_shape). poly_cnt is what the trace kernel's
+  // ray-polygon loop needs; poly_off gets it into the right slice of poly_n /
+  // poly_d / centroid.
+  root_pool_shape[tid] = uint2(poly_off, shape_info.y);
+
   // 3. Triangle area×facing weighted pick → uniform point on the chosen tri.
+  //    Restricted to THIS shape's [tri_off, tri_off + tri_cnt) window. Legacy
+  //    InitRay_p_fid (simulator.cpp:106-124) is single-shape; we walk it
+  //    unchanged inside the shape's window (same proj_prob = max(-d·n * area,
+  //    0), same categorical_sample, same sample_triangle, same tri_to_poly
+  //    lookup — the only difference is that tri_id / tri_to_poly indices are
+  //    ABSOLUTE positions in the flattened pool buffer, which UploadCrystalPool
+  //    already baked into tri_to_poly's values).
   float proj_prob[kMaxTriPerKernel];
-  uint n_tri = min(gp.tri_count, kMaxTriPerKernel);
+  uint n_tri = min(tri_cnt, kMaxTriPerKernel);
   for (uint t = 0u; t < n_tri; t++) {
-    float dot = d_crystal[0] * tri_norm[t * 3 + 0]
-              + d_crystal[1] * tri_norm[t * 3 + 1]
-              + d_crystal[2] * tri_norm[t * 3 + 2];
-    proj_prob[t] = max(-dot * tri_area[t], 0.0f);
+    uint g = tri_off + t;
+    float dot = d_crystal[0] * tri_norm[g * 3 + 0]
+              + d_crystal[1] * tri_norm[g * 3 + 1]
+              + d_crystal[2] * tri_norm[g * 3 + 2];
+    proj_prob[t] = max(-dot * tri_area[g], 0.0f);
   }
   float u_cat = pcg_uniform(stream);
-  uint tri_id = categorical_sample(proj_prob, n_tri, u_cat);
+  uint local_tri = categorical_sample(proj_prob, n_tri, u_cat);
+  uint tri_id = tri_off + local_tri;
   float p[3];
   sample_triangle(stream, tri_vtx + tri_id * 9u, p);
-  ushort to_face = tri_to_poly[tri_id];
+  uint to_face = tri_to_poly[tri_id];
   float weight = wl_pool[wl_idx].spd_weight;  // scrum-268.8 per-ray spd weight
   if (to_face == kInvalidId) {
     // Mirrors InitRay_p_fid fallback (simulator.cpp:92-94): zero weight when
@@ -1235,12 +1330,12 @@ kernel void transit_root_kernel(
     device float*        root_d      [[buffer(2)]],
     device float*        root_p      [[buffer(3)]],
     device float*        root_w      [[buffer(4)]],
-    device ushort*       root_tf     [[buffer(5)]],
+    device uint*         root_tf     [[buffer(5)]],
     device float*        root_rot    [[buffer(6)]],
     device const float*  tri_vtx     [[buffer(7)]],
     device const float*  tri_norm    [[buffer(8)]],
     device const float*  tri_area    [[buffer(9)]],
-    device const ushort* tri_to_poly [[buffer(10)]],
+    device const uint*   tri_to_poly [[buffer(10)]],
     constant GenRootKernelParams& gp [[buffer(11)]],
     // scrum-268.8 (DR-3): per-ray wavelength carrier through the layer hop.
     // The emit gate wrote each continuation ray's wl_idx into cont_wl_idx_in;
@@ -1256,6 +1351,11 @@ kernel void transit_root_kernel(
     // Rebased onto scrum-332: LUT took 14/15/16, so component moved 14/15→17/18.
     device const ulong*  cont_component_in  [[buffer(17)]],
     device ulong*        root_component_out [[buffer(18)]],
+    // K-shape geometry pool (same bindings as gen_root_kernel). Every layer
+    // hop resolves a fresh pool per (layer, ci), so transit picks its shape
+    // independently — no cross-layer carry.
+    device const uint4*  pool_shape_table [[buffer(19)]],
+    device uint2*        root_pool_shape  [[buffer(20)]],
     uint tid [[thread_position_in_grid]])
 {
   if (tid >= gp.num_rays || gp.tri_count == 0u) {
@@ -1289,20 +1389,41 @@ kernel void transit_root_kernel(
   float d_crystal[3];
   apply_inverse_mat9(mat9, d_world, d_crystal);
 
+  // 2.5. K-shape pool: pick this ray's shape. Same seed-domain-isolated PCG
+  // draw pattern as gen_root_kernel — mixed_seed here already carries the
+  // transit_seed XOR (kTransitNonce ^ per-(layer, ci) nonce), so XOR-ing
+  // kGeomShapeStreamNonce on top keeps this draw independent from the
+  // orientation stream both across layers and within the same tid. P_ci == 1
+  // collapses to the historical single-shape behavior bit-for-bit (unchanged
+  // for parity when the K knob is unset).
+  PcgStream shape_stream = BuildGeomShapeStream(mixed_seed, global_idx);
+  float u_shape = pcg_uniform(shape_stream);
+  uint pool_slot = min(uint(u_shape * float(gp.pool_shape_count)),
+                       gp.pool_shape_count - 1u);
+  uint4 shape_info = pool_shape_table[pool_slot];
+  uint poly_off = shape_info.x;
+  uint tri_off  = shape_info.z;
+  uint tri_cnt  = shape_info.w;
+  root_pool_shape[tid] = uint2(poly_off, shape_info.y);
+
   // 3. Triangle area×facing weighted pick → uniform point on the chosen tri.
+  //    Restricted to the picked shape's window in the flattened pool buffer,
+  //    identical to gen_root_kernel §3.
   float proj_prob[kMaxTriPerKernel];
-  uint n_tri = min(gp.tri_count, kMaxTriPerKernel);
+  uint n_tri = min(tri_cnt, kMaxTriPerKernel);
   for (uint t = 0u; t < n_tri; t++) {
-    float dot = d_crystal[0] * tri_norm[t * 3u + 0u]
-              + d_crystal[1] * tri_norm[t * 3u + 1u]
-              + d_crystal[2] * tri_norm[t * 3u + 2u];
-    proj_prob[t] = max(-dot * tri_area[t], 0.0f);
+    uint g = tri_off + t;
+    float dot = d_crystal[0] * tri_norm[g * 3u + 0u]
+              + d_crystal[1] * tri_norm[g * 3u + 1u]
+              + d_crystal[2] * tri_norm[g * 3u + 2u];
+    proj_prob[t] = max(-dot * tri_area[g], 0.0f);
   }
   float u_cat = pcg_uniform(stream);
-  uint tri_id = categorical_sample(proj_prob, n_tri, u_cat);
+  uint local_tri = categorical_sample(proj_prob, n_tri, u_cat);
+  uint tri_id = tri_off + local_tri;
   float p[3];
   sample_triangle(stream, tri_vtx + tri_id * 9u, p);
-  ushort to_face = tri_to_poly[tri_id];
+  uint to_face = tri_to_poly[tri_id];
 
   // 4. Carry continuation weight; mirror InitRay_p_fid fallback (zero weight
   //    when a triangle has no polygon backing).

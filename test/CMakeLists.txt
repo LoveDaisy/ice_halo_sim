@@ -72,7 +72,11 @@ add_executable(unit_correctness_test
   # backend/: CUDA-only white-box tests for the geometry-pool rebuild gate.
   # Body is `#if LUMICE_CUDA_ENABLED`, so on non-CUDA hosts the TU is empty
   # (zero contributed symbols).
-  "${PROJ_TEST_DIR}/unit-correctness/backend/test_cuda_geom_pool_rebuild.cpp")
+  "${PROJ_TEST_DIR}/unit-correctness/backend/test_cuda_geom_pool_rebuild.cpp"
+  # CUDA K-shape pool locality + transit coverage + knob-off collapse (Metal
+  # KShapePool_* suite CUDA sibling). Body `#if LUMICE_CUDA_ENABLED`, so on
+  # non-CUDA hosts the TU is empty (zero contributed symbols).
+  "${PROJ_TEST_DIR}/unit-correctness/backend/test_cuda_kshape_pool_locality.cpp")
 target_include_directories(unit_correctness_test
   PRIVATE ${PROJ_TEST_DIR})
 target_link_libraries(unit_correctness_test
@@ -97,7 +101,11 @@ add_executable(parity_test
   # task-331.5 raypath-color foundation: CPU-vs-Metal component-mask parity.
   "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_metal_component_mask_parity.cpp"
   # task-331.6 raypath-color foundation: CPU-vs-CUDA component-mask parity.
-  "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_cuda_component_mask_parity.cpp")
+  "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_cuda_component_mask_parity.cpp"
+  # CUDA K-shape pool × filter judgment: K=0/K=8 mean-invariance under an
+  # active EntryExit filter + loose CPU ballpark. Body `#if LUMICE_CUDA_ENABLED`,
+  # so on non-CUDA hosts the TU is empty.
+  "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_cuda_kshape_filter_parity.cpp")
 if(APPLE)
   # scrum-267 task-msl-filter-match-port: parity harness for device filter MATCH.
   # ObjC++ source (.mm) — needs ARC and the Metal/Foundation frameworks.

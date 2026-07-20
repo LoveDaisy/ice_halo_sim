@@ -153,6 +153,15 @@ void PrintColorClassSignal(LUMICE_Server* server, const std::filesystem::path& c
 // steal from trace workers). See task-fix-throughput-bench-honesty.
 constexpr auto kBenchmarkPollInterval = std::chrono::milliseconds(5);
 constexpr int kBenchmarkSingleRays = 2'000'000;
+// GPU-route warm-up pass ray count: sized to be the smallest value that still
+// reliably touches every one-time init path (CUDA context / Metal PSO compile /
+// first device dispatch). Context/PSO init cost is ray-count-independent — it
+// fires on the first GPU call, not on ray N — so the choice is bounded below
+// only by "enough rays for the pipeline to actually reach a GPU dispatch under
+// the normal drain semantics". 100k is well above the ~64k-batch drain
+// granularity of every current backend and keeps the added warm-up wall-time
+// short so we do not push `test_benchmark_infinite_no_hang.py`'s 30s ceiling.
+constexpr int kBenchmarkGpuWarmupRays = 100'000;
 // Drain-count-driven measurement (task-gpu-bench-drain-aligned-rate): when the
 // bench config asks for scene.ray_num="infinite", RunBenchmarkPass measures the
 // window from drain #1 (warmup-end anchor) to drain #(N+1), then stops the
@@ -293,8 +302,16 @@ void PrintStats(LUMICE_Server* server) {
   }
 }
 
+// `silent`: when true, suppress the final `[BENCHMARK]` JSON line on stdout and
+// the `wall_fallback` warning on stderr. Used by the GPU-route warm-up pass
+// (see main()'s benchmark_mode branch): its purpose is to absorb one-time GPU
+// context/PSO lazy-init before the real steady pass, so its own rate is
+// meaningless and would only mislead if reported. Every other observable side
+// effect (server create/commit/poll-to-IDLE/destroy, and the stderr commit-fail
+// path at line ~305) is kept identical to a normal pass — do not carve out a
+// parallel slim path (a05).
 void RunBenchmarkPass(const std::string& config_str, int num_workers, const char* mode, int cores,
-                      LUMICE_LogLevel log_level, int preferred_backend) {
+                      LUMICE_LogLevel log_level, int preferred_backend, bool silent = false) {
   LUMICE_ServerConfig server_config{};
   server_config.num_workers = num_workers;
   server_config.preferred_backend = preferred_backend;
@@ -480,7 +497,34 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
         result["window_sec"] = std::round(window_sec * 1000.0) / 1000.0;
         result["window_rays"] = window_rays;
       }
-      std::cout << "[BENCHMARK] " << result.dump() << "\n";
+      if (!silent) {
+        // `wall_fallback` means active_sec was too small to measure a steady
+        // trace rate, so `rays_per_sec = r_end / wall_sec` was used — that
+        // denominator includes one-time setup (server alloc + scene gen + first
+        // GPU dispatch triggering CUDA/Metal context/PSO lazy init). Treat such
+        // numbers as unusable for perf comparison; the GPU-route warm-up pass
+        // (see main()'s benchmark_mode) exists precisely to move that setup
+        // cost out of the measured pass. Warning suppressed under `silent`
+        // (i.e. the warm-up pass itself) — the warm-up rate is not reported,
+        // so warning about its basis would only mislead.
+        if (std::string_view(rate_basis) == "wall_fallback") {
+          std::cerr << "Warning: [BENCHMARK] mode=" << mode
+                    << " rate_basis=wall_fallback — rays_per_sec includes one-time setup/context-init "
+                    << "and is not a steady trace rate; do not use for perf comparison.\n";
+        } else if (std::string_view(rate_basis) == "active_short") {
+          // active_short means the run's rays all landed in the single poll that first
+          // observed cur_rays > 0 (r_end == rays_at_active_start): active_sec is measuring
+          // IDLE-detection latency after that poll, not trace duration, so rays_per_sec can
+          // be off by orders of magnitude in either direction (measured on CUDA: a 10M-ray
+          // config reported 1.97 billion rays/s this way). Symmetric to the wall_fallback
+          // warning above — same remedy (a larger ray_num spanning multiple poll intervals).
+          std::cerr << "Warning: [BENCHMARK] mode=" << mode
+                    << " rate_basis=active_short — the run completed within a single poll "
+                    << "interval; active_sec is not a real trace duration and rays_per_sec "
+                    << "can be wildly wrong; do not use for perf comparison.\n";
+        }
+        std::cout << "[BENCHMARK] " << result.dump() << "\n";
+      }
       break;
     }
   }
@@ -649,6 +693,26 @@ int main(int argc, char** argv) {
       auto single_config = config_json;
       single_config["scene"]["ray_num"] = kBenchmarkSingleRays;
       RunBenchmarkPass(single_config.dump(), 1, "single", cores, log_level, preferred_backend);
+    } else {
+      // GPU route: run one throwaway warm-up pass BEFORE the timed steady pass.
+      // Purpose: the first GPU call in a process triggers backend-specific lazy
+      // init (CUDA context ~1.3s cold; Metal PSO compile), and when the measured
+      // pass is short enough for `active_sec` to round to ~0 the `rate_basis`
+      // ladder falls back to `wall_fallback` and folds that one-time init into
+      // `rays_per_sec` — this is the mechanism behind the "stoch vs det 15.7×"
+      // cold/warm measurement artifact. Silent=true suppresses both the JSON
+      // stdout line and the wall_fallback stderr warning so downstream parsers
+      // (bench_throughput.py, test_metal_throughput.py,
+      // test_benchmark_infinite_no_hang.py) see the same single `[BENCHMARK]`
+      // line they always did. The warm-up config clones the user's original
+      // scene (same crystals / renders / spectrum), only overriding
+      // scene.ray_num to a small finite value — this keeps warm-up wall-time
+      // short (ray count is not what drives init cost) while still exercising
+      // the real GPU dispatch path the steady pass will use.
+      auto warmup_config = config_json;
+      warmup_config["scene"]["ray_num"] = kBenchmarkGpuWarmupRays;
+      RunBenchmarkPass(warmup_config.dump(), 1, "warmup", cores, log_level, preferred_backend,
+                       /*silent=*/true);
     }
 
     // Steady pass (label="multi"): original ray count. CPU = PhysicalCoreCount()

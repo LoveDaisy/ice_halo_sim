@@ -19,7 +19,10 @@
 
 #if defined(__APPLE__)
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace lumice {
@@ -46,6 +49,47 @@ class MetalTraceBackendTestHooks {
   // near-pole acceptance-rate smoke consumer).
   void EnableGenAttemptCount(size_t count, size_t ci_start = 0);
   size_t ReadbackGenAttemptCount(std::vector<int>& out, size_t count);
+
+  // K-shape geometry pool observability:
+  //   * ReadbackPoolShapeTable — copy the host-side pool_shape_table_h_
+  //     (per-shape {poly_off, poly_cnt, tri_off, tri_cnt}). Reflects the pool
+  //     built by the most recent ResolveLayerCrystalForCi; .size() == P_ci.
+  //   * ReadbackRootPoolShape — copy the first `count` (poly_off, poly_cnt)
+  //     entries the last root pass wrote for its rays. Enables an AC1 probe
+  //     that different rays land on different pool slots.
+  //   * PoolShapeCountThisBatch — running sum of P_ci across every (layer,
+  //     ci) resolve inside the current session (BeginSession resets to 0).
+  //     Same value the CLI stat `Stats: crystals=N` reports at EndSession.
+  std::vector<std::array<uint32_t, 4>> ReadbackPoolShapeTable();
+  std::vector<std::pair<uint32_t, uint32_t>> ReadbackRootPoolShape(size_t count);
+  size_t PoolShapeCountThisBatch() const;
+
+  // K-shape pool `path[]` locality probe: `rec_sink_buf` carries the per-ray
+  // Σ float(path[k]) written at the tail of `trace_layer_kernel`. Under the
+  // fixed contract, path[k] is a LOCAL polygon index within [0, PolygonFaceCount),
+  // so `rec_sink[tid] <= max_hits × (PolygonFaceCount - 1)` regardless of the
+  // shape the ray landed on. Pre-fix (path[k] absolute), rays landing on
+  // shape s > 0 could sum poly_off × max_hits above this bound. Tests use
+  // this to catch a regression to absolute-index storage without needing a
+  // per-ray path readback.
+  //
+  // Convention note: this + ReadbackRootTf take an out-parameter vector and
+  // return the actual element count copied. This diverges from the earlier
+  // by-value Readback* methods above (ReadbackPoolShapeTable,
+  // ReadbackRootPoolShape) — the out-param form lets tests reuse a pre-sized
+  // vector across many batches without repeated allocation, which matters for
+  // the large per-ray probes here (up to `num_rays` floats/uint32_t entries
+  // per batch, vs. the O(pool_size) small vectors the earlier methods return).
+  // Future large per-ray Readback* additions should follow this out-param
+  // form; small O(pool_size) ones can keep by-value.
+  size_t ReadbackRecSink(std::vector<float>& out, size_t count);
+  // K-shape pool `root_tf` widened absolute-index readback. Each entry is the
+  // pool-wide polygon index of the ray's initial hit face (or kInvalidId =
+  // 0xffffffff on "triangle has no polygon backing"). Used by tests that
+  // want to verify the widened 32-bit range without hitting sentinel
+  // collisions. See ReadbackRecSink above for the out-param convention
+  // rationale.
+  size_t ReadbackRootTf(std::vector<uint32_t>& out, size_t count);
 
  private:
   MetalTraceBackend& backend_;

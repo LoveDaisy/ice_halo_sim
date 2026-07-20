@@ -121,6 +121,29 @@ inline SceneConfig MakeRandomAxisScene(size_t max_hits, float final_prob) {
   return scene;
 }
 
+// Stochastic hex-prism scene: `h_` and every `d_[i]` set to a distribution
+// (uniform or gaussian) so `IsDeterministic` returns false and
+// `SceneHasStochasticGeometry` is true. Used by the K-shape pool tests to
+// force P_ci = ceil(N_ci / K) distinct pool shapes when
+// `LUMICE_GPU_GEOM_CLOCK > 0` — with a deterministic scene the shape-
+// randomization pipeline collapses to a single shape (K knob no-op) and the
+// per-ray shape pick has nothing to distinguish.
+//
+// Well-conditioned distributions (mean=1.0, spread=0.15) — the RNG plumbing
+// is what's under test, not degenerate-face handling.
+inline SceneConfig MakeStochasticPrismScene(size_t max_hits, bool gaussian) {
+  SceneConfig scene = MakePrismScene(max_hits);
+  auto& setting = scene.ms_[0].setting_[0];
+  PrismCrystalParam prism = std::get<PrismCrystalParam>(setting.crystal_.param_);
+  const DistributionType t = gaussian ? DistributionType::kGaussian : DistributionType::kUniform;
+  prism.h_ = Distribution{ t, 1.0f, 0.15f };
+  for (auto& d : prism.d_) {
+    d = Distribution{ t, 1.0f, 0.15f };
+  }
+  setting.crystal_.param_ = prism;
+  return scene;
+}
+
 // Two-MS-layer scene tuned so the transit stream is cleanly OBSERVABLE at
 // layer-1's d_dirs_ without the atomic-compaction confound:
 //   - Point sun (diameter 0) + FIXED-axis layer 0 → every layer-0 ray is

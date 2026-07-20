@@ -133,10 +133,11 @@ class MetalTraceBackend : public TraceBackend {
   // thereafter for the backend instance's lifetime.
   uint32_t WlPoolSize() const override;
 
-  // task-exit-seam-crystal-count: setting count of the final MS layer for the
-  // current session. Backed by Impl::last_layer_crystals_ (populated during
-  // the last TraceLayer call). Simulator reads this after the MS loop to
-  // fill SimData.crystal_count_ for stats reporting.
+  // K-shape pool: total distinct crystal INSTANCES built during this batch
+  // across every (layer, ci) — the sum of P_ci over the whole scene. At
+  // LUMICE_GPU_GEOM_CLOCK unset (P_ci = 1 per ci) this equals the cross-layer
+  // instance count. Simulator reads it after the MS loop to fill
+  // SimData.crystal_count_ for stats reporting.
   size_t GetLastBatchCrystalCount() const override;
   // task-color-degrade-gui-surfacing: per-config GPU color-degrade tally.
   ColorDegradeCounts GetLastColorDegradeCounts() const override;
