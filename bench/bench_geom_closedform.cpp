@@ -38,6 +38,7 @@
 
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
+#include "test/support/exact_prism_oracle.hpp"
 
 using namespace lumice;  // NOLINT(google-build-using-namespace) bench code
 
@@ -124,79 +125,11 @@ ClosedFormResult<T> ClosedFormPrism(const float* dist, T feas_tol_rel) {
 
 // ---- EXACT oracle: integer arithmetic, zero tolerance ----------------------
 //
-// This is the independent ground truth the topology-reuse work lacked. It does
-// NOT consult the production solver, and it contains no epsilon: after the
-// change of variables x = sqrt(3)*u the six prism constraints are rational in
-// dist[], and every float is exactly a dyadic rational, so scaling by a common
-// power of two makes the entire feasibility test exact in integers.
-//
-// Constraint form after scaling by 4 * 2^SHIFT (a_i*u + b_i*v <= c_i):
-//   i=0: ( 4, 0, D0)   i=1: ( 2, 2, D1)   i=2: (-2, 2, D2)
-//   i=3: (-4, 0, D3)   i=4: (-2,-2, D4)   i=5: ( 2,-2, D5)
-// (faces 0/3 carry the 4 because their constraint is u <= d/4, while the four
-//  oblique faces reduce to u+-v <= d/2 -- getting this scaling wrong makes 0/3
-//  redundant and silently turns every hexagon into a quadrilateral.)
-// with Di = round(dist[i] * 2^SHIFT) exact for the float mantissa.
-struct ExactLine {
-  __int128 a, b, c;
-};
-
+// The full derivation, scaling constants and __int128 implementation live in
+// test/support/exact_prism_oracle.hpp — there is exactly one implementation.
+// This one-line wrapper keeps the four call sites below signature-compatible.
 int ExactPrismCornerCount(const float* dist) {
-  // 2^30 keeps |dist| < 2^33 exactly representable and leaves ample headroom in
-  // __int128 for the 2x2 solves and the six substitutions below.
-  constexpr int kShift = 30;
-  const auto S = static_cast<__int128>(1) << kShift;
-  __int128 D[kPrismFaces];
-  for (int i = 0; i < kPrismFaces; i++) {
-    D[i] = static_cast<__int128>(std::llround(static_cast<double>(dist[i]) * static_cast<double>(S)));
-  }
-  const ExactLine L[kPrismFaces] = {
-    { 4, 0, D[0] }, { 2, 2, D[1] }, { -2, 2, D[2] }, { -4, 0, D[3] }, { -2, -2, D[4] }, { 2, -2, D[5] },
-  };
-
-  int cnt = 0;
-  __int128 vx[16], vy[16], vd[16];  // corner = (vx/vd, vy/vd), vd > 0
-  for (int i = 0; i < kPrismFaces; i++) {
-    for (int j = i + 1; j < kPrismFaces; j++) {
-      __int128 det = L[i].a * L[j].b - L[j].a * L[i].b;
-      if (det == 0) {
-        continue;  // parallel (opposite faces) — exactly zero, not "small"
-      }
-      __int128 px = L[i].c * L[j].b - L[j].c * L[i].b;
-      __int128 py = L[i].a * L[j].c - L[j].a * L[i].c;
-      if (det < 0) {
-        det = -det;
-        px = -px;
-        py = -py;
-      }
-      bool feasible = true;
-      for (int m = 0; m < kPrismFaces; m++) {
-        // (a*px + b*py)/det <= c   <=>   a*px + b*py <= c*det   (det > 0)
-        if (L[m].a * px + L[m].b * py > L[m].c * det) {
-          feasible = false;
-          break;
-        }
-      }
-      if (!feasible) {
-        continue;
-      }
-      bool dup = false;
-      for (int v = 0; v < cnt; v++) {
-        // exact cross-multiplied equality — no distance, no tolerance
-        if (vx[v] * det == px * vd[v] && vy[v] * det == py * vd[v]) {
-          dup = true;
-          break;
-        }
-      }
-      if (!dup && cnt < 16) {
-        vx[cnt] = px;
-        vy[cnt] = py;
-        vd[cnt] = det;
-        cnt++;
-      }
-    }
-  }
-  return cnt;
+  return test_support::ExactPrism(dist).corner_count;
 }
 
 // ---- production path, for comparison ---------------------------------------

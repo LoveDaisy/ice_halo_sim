@@ -267,6 +267,7 @@ set(lumice_core_src
   "${PROJ_SRC_DIR}/core/device_filter_desc.cpp"
   "${PROJ_SRC_DIR}/core/filter_spec.cpp"
   "${PROJ_SRC_DIR}/core/geo3d.cpp"
+  "${PROJ_SRC_DIR}/core/geo3d_closedform.cpp"
   "${PROJ_SRC_DIR}/core/lat_lut.cpp"
   "${PROJ_SRC_DIR}/core/math.cpp"
   "${PROJ_SRC_DIR}/core/optics.cpp"
