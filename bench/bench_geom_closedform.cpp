@@ -968,4 +968,107 @@ BENCHMARK(BM_MergeThresholdSensitivity)
     ->Args({ 30, 4 })
     ->Args({ 30, 3 });
 
+// ---- Experiment 14: is the cross-section a UNIFORMLY eroded hexagon? -------
+//
+// Experiment 6 established that every non-basal plane's horizontal normal is one
+// of six fixed directions, so at any height z the cross-section is a half-plane
+// intersection in those six directions. The algebra suggests something stronger:
+//
+//   direction i's constraint at height z is
+//       8*M_i(u,v) <= dist_i + min(0, (h/2 - z)/a1, (h/2 + z)/a2)
+//                              \________ independent of i ________/
+//
+// i.e. the cross-section is the SAME base hexagon eroded inward by a uniform
+// distance that depends only on z. If so, the entire 3D solid is determined by
+// one 2D polygon plus one scalar erosion profile, and the remaining work is
+// ordinary 2D engineering rather than an open question.
+//
+// Verified against the PRODUCTION plane coefficients (not the algebra): for each
+// direction, the per-z offset is derived from the actual coef, and the spread of
+// (offset_i - prism_offset_i) across the six directions is measured. Uniform
+// erosion means that spread is zero.
+void BM_UniformErosionModel(benchmark::State& state) {
+  std::mt19937 rng(13579u);
+  std::normal_distribution<double> d_noise(1.0, 0.3);
+  std::uniform_real_distribution<double> a_dist(3.0, 87.0);
+  std::uniform_real_distribution<double> h_dist(0.2, 2.0);
+
+  double worst_spread = 0.0;
+  double worst_spread_rel = 0.0;
+  long samples = 0, z_probes = 0;
+
+  for (int s = 0; s < 3000; s++) {
+    float dist[kPrismFaces];
+    for (float& d : dist) {
+      d = static_cast<float>(d_noise(rng));
+    }
+    const auto au = static_cast<float>(a_dist(rng));
+    const auto al = static_cast<float>(a_dist(rng));
+    const auto h2 = static_cast<float>(h_dist(rng));
+    const auto h1 = static_cast<float>(h_dist(rng) / 2.0);
+    float coef[kMaxHexCrystalPlanes * 4];
+    const int n = static_cast<int>(FillHexCrystalCoef(au, al, h1, h2, h1, dist, coef));
+    if (n < 14) {
+      continue;  // want both pyramidal caps present
+    }
+    samples++;
+    // classify each non-basal plane by its horizontal direction
+    // offset_i,k(z) = (-d_k - c_k*z) / |n_h,k|
+    const double z_hi = -static_cast<double>(coef[3]);  // plane (0,0,1,d):  z <= -d
+    const double z_lo = static_cast<double>(coef[7]);   // plane (0,0,-1,d): z >= d
+    for (int step = 0; step <= 8; step++) {
+      const double z = z_lo + (z_hi - z_lo) * step / 8.0;
+      double s_val[kPrismFaces];
+      bool ok = true;
+      for (int i = 0; i < kPrismFaces && ok; i++) {
+        const double t = i * M_PI / 3.0;
+        double g = std::numeric_limits<double>::max();
+        double r_prism = std::numeric_limits<double>::max();
+        for (int k = 2; k < n; k++) {
+          const double nx = coef[k * 4 + 0], ny = coef[k * 4 + 1], nz = coef[k * 4 + 2];
+          const double hn = std::sqrt(nx * nx + ny * ny);
+          if (hn < 1e-12) {
+            continue;
+          }
+          if ((nx * std::cos(t) + ny * std::sin(t)) / hn < 0.999999) {
+            continue;  // not this direction
+          }
+          const double off = (-static_cast<double>(coef[k * 4 + 3]) - nz * z) / hn;
+          g = std::min(g, off);
+          if (std::fabs(nz) < 1e-12) {
+            r_prism = off;  // the prism plane of this direction (no z component)
+          }
+        }
+        if (g == std::numeric_limits<double>::max() || r_prism == std::numeric_limits<double>::max()) {
+          ok = false;
+          break;
+        }
+        s_val[i] = g - r_prism;
+      }
+      if (!ok) {
+        continue;
+      }
+      z_probes++;
+      double lo = s_val[0], hi = s_val[0], scale = 1.0;
+      for (int i = 1; i < kPrismFaces; i++) {
+        lo = std::min(lo, s_val[i]);
+        hi = std::max(hi, s_val[i]);
+      }
+      for (int i = 0; i < kPrismFaces; i++) {
+        scale = std::max(scale, std::fabs(s_val[i]));
+      }
+      worst_spread = std::max(worst_spread, hi - lo);
+      worst_spread_rel = std::max(worst_spread_rel, (hi - lo) / scale);
+    }
+  }
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(worst_spread);
+  }
+  state.counters["samples"] = static_cast<double>(samples);
+  state.counters["z_probes"] = static_cast<double>(z_probes);
+  state.counters["WORST_SPREAD_abs"] = worst_spread;
+  state.counters["WORST_SPREAD_rel"] = worst_spread_rel;
+}
+BENCHMARK(BM_UniformErosionModel);
+
 }  // namespace
