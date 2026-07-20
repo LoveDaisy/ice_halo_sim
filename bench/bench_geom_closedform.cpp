@@ -1071,4 +1071,104 @@ void BM_UniformErosionModel(benchmark::State& state) {
 }
 BENCHMARK(BM_UniformErosionModel);
 
+// ---- Experiment 15: what does the malformed-mesh gate actually detect? ------
+//
+// `RejectMalformed` is the only validity gate at the Crystal factory boundary,
+// and its whole content is `IsClosedTriMesh(V, F)`, i.e. V - F/2 == 2 with F
+// even. It reads *nothing but two counts*. The replacement representation must
+// be "equally strong", which is unmeasurable until the incumbent's strength is
+// measured -- so cross-tabulate its verdict against the exact integer oracle on
+// the same plane set:
+//
+//   oracle corner count n >= 3  <=>  the half-space intersection really is a
+//   bounded 2D polygon, hence the extruded prism really is a solid.
+//
+// Four cells, and each one means something different:
+//   (gate pass, n >= 3) agreement on healthy input
+//   (gate FAIL, n >= 3) gate fires although the geometry is perfectly good
+//                       -> it is detecting a *pipeline artifact*, not a defect
+//   (gate pass, n <  3) gate blind spot: degenerate geometry admitted
+//   (gate FAIL, n <  3) gate earns its keep
+//
+// The float dist[] handed to both arms is bit-identical, so the two verdicts
+// are answering the same question about the same object.
+void BM_MalformedGateCrossTab(benchmark::State& state) {
+  const double sigma = static_cast<double>(state.range(0)) / 100.0;
+  constexpr int kSamples = 200000;
+  constexpr float kH = 1.0f;
+
+  std::mt19937 rng(20260720u);
+  std::normal_distribution<double> gauss(1.0, sigma);
+
+  long n_pass_valid = 0, n_fail_valid = 0, n_pass_degen = 0, n_fail_degen = 0;
+  long n_empty_planes = 0;
+  // Worst (i.e. largest) oracle corner count seen among gate failures: a gate
+  // failure on a 6-corner hexagon is a far stronger claim of "artifact" than
+  // one on a 3-corner sliver.
+  int max_corner_on_fail = 0;
+  int min_corner_on_fail = 99;
+
+  for (int s = 0; s < kSamples; s++) {
+    float dist[kPrismFaces];
+    for (int i = 0; i < kPrismFaces; i++) {
+      dist[i] = static_cast<float>(gauss(rng));
+    }
+
+    float coef[kMaxHexCrystalPlanes * 4];
+    const int plane_cnt = static_cast<int>(FillHexCrystalCoef(0, 0, 0, kH, 0, dist, coef));
+    if (plane_cnt == 0) {
+      n_empty_planes++;  // upstream zero-volume early-return; gate is not the actor
+      continue;
+    }
+    auto mesh = CreateConvexPolyhedronMesh(plane_cnt, coef);
+    const size_t v = mesh.GetVtxCnt();
+    const size_t f = mesh.GetTriangleCnt();
+    // IsClosedTriMesh inlined (crystal.hpp is not on the bench include path):
+    // V - 3F/2 + F == 2, F even and nonzero.
+    const bool gate_pass = (v != 0 && f != 0 && f % 2 == 0 &&
+                            static_cast<int64_t>(v) - (3 * static_cast<int64_t>(f) / 2) + static_cast<int64_t>(f) == 2);
+
+    const int corners = ExactPrismCornerCount(dist);
+    const bool oracle_valid = corners >= 3;
+
+    if (gate_pass && oracle_valid) {
+      n_pass_valid++;
+    } else if (!gate_pass && oracle_valid) {
+      n_fail_valid++;
+      max_corner_on_fail = std::max(max_corner_on_fail, corners);
+      min_corner_on_fail = std::min(min_corner_on_fail, corners);
+      // The decisive number, not the story: an n-corner prism must have
+      // V = 2n and F = 4n - 4. Printing the actual (V, F) says *how* the
+      // solver's answer differs -- one merged vertex, a whole missing face,
+      // or something else entirely.
+      if (n_fail_valid <= 12) {
+        std::printf("  [FAIL_valid] corners=%d V=%zu F=%zu (expect V=%d F=%d) dist=%.6f %.6f %.6f %.6f %.6f %.6f\n",
+                    corners, v, f, 2 * corners, 4 * corners - 4, static_cast<double>(dist[0]),
+                    static_cast<double>(dist[1]), static_cast<double>(dist[2]), static_cast<double>(dist[3]),
+                    static_cast<double>(dist[4]), static_cast<double>(dist[5]));
+      }
+    } else if (gate_pass && !oracle_valid) {
+      n_pass_degen++;
+    } else {
+      n_fail_degen++;
+      max_corner_on_fail = std::max(max_corner_on_fail, corners);
+      min_corner_on_fail = std::min(min_corner_on_fail, corners);
+    }
+  }
+
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(n_fail_valid);
+  }
+  state.counters["sigma"] = sigma;
+  state.counters["samples"] = static_cast<double>(kSamples);
+  state.counters["empty_planes"] = static_cast<double>(n_empty_planes);
+  state.counters["PASS_valid"] = static_cast<double>(n_pass_valid);
+  state.counters["FAIL_valid"] = static_cast<double>(n_fail_valid);
+  state.counters["PASS_degen"] = static_cast<double>(n_pass_degen);
+  state.counters["FAIL_degen"] = static_cast<double>(n_fail_degen);
+  state.counters["fail_corner_min"] = static_cast<double>(min_corner_on_fail == 99 ? -1 : min_corner_on_fail);
+  state.counters["fail_corner_max"] = static_cast<double>(max_corner_on_fail);
+}
+BENCHMARK(BM_MalformedGateCrossTab)->Arg(30)->Arg(50)->Arg(80);
+
 }  // namespace
