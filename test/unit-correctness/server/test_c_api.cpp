@@ -140,19 +140,18 @@ TEST(CrystalMeshApi, PyramidFaceNumbersInLegalSet) {
 }
 
 // Isolated coverage of the C-API's kInvalidId -> -1 conversion logic.
-// Synthetic zero vector forces all prism/basal dot products to fall below kFloatEps,
-// which takes the else branch in FillHexFnMap and leaves the slot as kInvalidId.
-// Test-only input; real callers pass unit per-triangle normals as documented.
-TEST(CrystalMeshApi, FillHexFnMapInvalidNormalMapsToMinusOne) {
-  lumice::IdType fn_tmp[1] = {};
-  const float kCraftedNormal[3] = { 0.0f, 0.0f, 0.0f };
-  lumice::FillHexFnMap(1, kCraftedNormal, fn_tmp);
-  ASSERT_EQ(fn_tmp[0], lumice::kInvalidId);
-  int api_val = (fn_tmp[0] == lumice::kInvalidId) ? -1 : static_cast<int>(fn_tmp[0]);
+// LUMICE_GetCrystalMesh's per-tri face_number loop maps any kInvalidId from
+// the chained tri → polygon-face → fn lookup to the C-API sentinel -1;
+// without the explicit check, a naive static_cast<int>(kInvalidId) yields
+// 65535 (the unsigned representation) which silently passes to consumers as
+// a plausible-but-wrong face number.
+TEST(CrystalMeshApi, KInvalidIdMapsToMinusOne) {
+  const lumice::IdType fn = lumice::kInvalidId;
+  const int api_val = (fn == lumice::kInvalidId) ? -1 : static_cast<int>(fn);
   EXPECT_EQ(api_val, -1);
   // Reverse check: naive static_cast yields 65535, confirming explicit check is needed.
-  EXPECT_EQ(static_cast<int>(fn_tmp[0]), 65535);
-  EXPECT_NE(static_cast<int>(fn_tmp[0]), -1);
+  EXPECT_EQ(static_cast<int>(fn), 65535);
+  EXPECT_NE(static_cast<int>(fn), -1);
 }
 
 

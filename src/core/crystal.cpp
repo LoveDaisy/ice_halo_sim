@@ -57,51 +57,6 @@ bool IsLegalFace(CrystalKind kind, int face) {
   return false;
 }
 
-void FillHexFnMap(size_t face_cnt, const float* face_n, IdType* fn_map) {
-  using math::kSqrt3_2;
-
-  std::fill(fn_map, fn_map + face_cnt, kInvalidId);
-
-  float ref_norms[9 * 3]{
-    0.0f,  0.0f,      0.0f,   // placeholder
-    0.0f,  0.0f,      1.0f,   // 1
-    0.0f,  0.0f,      -1.0f,  // 2
-    1.0f,  0.0f,      0.0f,   // 3
-    0.5f,  kSqrt3_2,  0.0f,   // 4
-    -0.5f, kSqrt3_2,  0.0f,   // 5
-    -1.0f, 0.0f,      0.0f,   // 6
-    -0.5,  -kSqrt3_2, 0.0f,   // 7
-    0.5f,  -kSqrt3_2, 0.0f,   // 8
-  };
-
-  for (size_t i = 0; i < face_cnt; i++) {
-    const float* curr_norm = face_n + i * 3;
-    IdType pri = 0;
-    float p_comp = -1;
-    for (IdType j = 3; j < 9; j++) {
-      if (auto p = Dot3(curr_norm, ref_norms + j * 3); p > math::kFloatEps && p > p_comp) {
-        pri = j;
-        p_comp = p;
-      }
-    }
-
-    IdType pyr = 0;
-    if (Dot3(curr_norm, ref_norms + 3) > math::kFloatEps) {
-      pyr = 1;
-    } else if (Dot3(curr_norm, ref_norms + 6) > math::kFloatEps) {
-      pyr = 2;
-    }
-
-    if (pri == 0 && pyr > 0) {
-      fn_map[i] = pyr;  // basal: 1 or 2
-    } else if (pri > 0) {
-      fn_map[i] = pyr * 10 + pri;  // prism/pyramidal: 3-8, 13-18, 23-28
-    } else {
-      LOG_WARNING("Unrecognized face number!");
-    }
-  }
-}
-
 bool IsClosedTriMesh(size_t v, size_t f) {
   if (v == 0 || f == 0 || f % 2 != 0) {
     return false;
