@@ -232,12 +232,6 @@ class Crystal {
   size_t TotalTriangles() const;
 
   /**
-   * @brief Get total number of vertices
-   * @return Number of vertices in the crystal mesh
-   */
-  size_t TotalVertices() const;
-
-  /**
    * @brief Get triangle vertex coordinates
    * @return Pointer to vertex coordinate array (9 * triangle_cnt elements: 3 vertices * 3 coordinates per triangle)
    */

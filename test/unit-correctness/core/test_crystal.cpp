@@ -251,7 +251,7 @@ TEST_F(V3TestCrystal, PyramidNonDefaultFaceDistanceMeshValid) {
   auto crystal = Crystal::CreatePyramid(1, 1, 1, 1, 0.3f, 1.0f, 0.3f, dist);
 
   EXPECT_GT(crystal.TotalTriangles(), 0u);
-  EXPECT_GT(crystal.TotalVertices(), 0u);
+  EXPECT_GT(crystal.GetMesh().GetVtxCnt(), 0u);
 
   // All normals should be unit vectors
   const auto* face_n = crystal.GetTriangleNormal();
@@ -286,7 +286,7 @@ TEST_F(V3TestCrystal, PyramidZeroFaceDistanceBoundary) {
   auto crystal = Crystal::CreatePyramid(1, 1, 1, 1, 0.3f, 1.0f, 0.3f, dist);
 
   // Should not crash; mesh may be degenerate but must have vertices
-  EXPECT_GT(crystal.TotalVertices(), 0u);
+  EXPECT_GT(crystal.GetMesh().GetVtxCnt(), 0u);
 }
 
 TEST_F(V3TestCrystal, PyramidFaceDistanceZRange) {
@@ -342,7 +342,7 @@ TEST_F(V3TestCrystal, WedgeAngleVsMillerIndexConsistency) {
     auto c_angle = Crystal::CreatePyramid(alpha, alpha, 0.3f, 1.0f, 0.3f, dist);
 
     EXPECT_EQ(c_miller.TotalTriangles(), c_angle.TotalTriangles()) << tc.label;
-    EXPECT_EQ(c_miller.TotalVertices(), c_angle.TotalVertices()) << tc.label;
+    EXPECT_EQ(c_miller.GetMesh().GetVtxCnt(), c_angle.GetMesh().GetVtxCnt()) << tc.label;
 
     // Verify vertex-level bit-exact consistency
     const auto* vtx_m = c_miller.GetTriangleVtx();
@@ -362,14 +362,14 @@ TEST_F(V3TestCrystal, WedgeAngleConvenienceOverload) {
   auto c2 = Crystal::CreatePyramid(alpha, alpha, 0.3f, 1.0f, 0.3f, dist);
 
   EXPECT_EQ(c1.TotalTriangles(), c2.TotalTriangles());
-  EXPECT_EQ(c1.TotalVertices(), c2.TotalVertices());
+  EXPECT_EQ(c1.GetMesh().GetVtxCnt(), c2.GetMesh().GetVtxCnt());
 }
 
 TEST_F(V3TestCrystal, WedgeAngleNormal) {
   // alpha=45 degrees: a typical case, crystal should be valid.
   auto crystal = Crystal::CreatePyramid(45.0f, 45.0f, 0.3f, 1.0f, 0.3f);
   EXPECT_GT(crystal.TotalTriangles(), 0u);
-  EXPECT_GT(crystal.TotalVertices(), 0u);
+  EXPECT_GT(crystal.GetMesh().GetVtxCnt(), 0u);
   // Full pyramid: 20 polygon faces
   EXPECT_EQ(crystal.PolygonFaceCount(), 20u);
 }
@@ -381,7 +381,7 @@ TEST_F(V3TestCrystal, WedgeAngleDegenerateSmall) {
 
   // Should degenerate to prism (8 polygon faces: 2 basal + 6 prism)
   EXPECT_EQ(c_degenerate.TotalTriangles(), c_prism.TotalTriangles());
-  EXPECT_EQ(c_degenerate.TotalVertices(), c_prism.TotalVertices());
+  EXPECT_EQ(c_degenerate.GetMesh().GetVtxCnt(), c_prism.GetMesh().GetVtxCnt());
   EXPECT_EQ(c_degenerate.PolygonFaceCount(), 8u);
 }
 
@@ -391,7 +391,7 @@ TEST_F(V3TestCrystal, WedgeAngleDegenerateLarge) {
   auto c_prism = Crystal::CreatePrism(1.0f);
 
   EXPECT_EQ(c_degenerate.TotalTriangles(), c_prism.TotalTriangles());
-  EXPECT_EQ(c_degenerate.TotalVertices(), c_prism.TotalVertices());
+  EXPECT_EQ(c_degenerate.GetMesh().GetVtxCnt(), c_prism.GetMesh().GetVtxCnt());
   EXPECT_EQ(c_degenerate.PolygonFaceCount(), 8u);
 }
 
@@ -412,7 +412,7 @@ TEST_F(V3TestCrystal, MillerIndexI1ZeroDegenerateToPrism) {
   auto c_prism = Crystal::CreatePrism(1.0f);
 
   EXPECT_EQ(c_degenerate.TotalTriangles(), c_prism.TotalTriangles());
-  EXPECT_EQ(c_degenerate.TotalVertices(), c_prism.TotalVertices());
+  EXPECT_EQ(c_degenerate.GetMesh().GetVtxCnt(), c_prism.GetMesh().GetVtxCnt());
   EXPECT_EQ(c_degenerate.PolygonFaceCount(), 8u);
 }
 
@@ -420,12 +420,12 @@ TEST_F(V3TestCrystal, WedgeAngleBoundaryValid) {
   // alpha=1 and alpha=80 are near the boundary, should produce valid 20-face pyramid meshes.
   auto c1 = Crystal::CreatePyramid(1.0f, 1.0f, 0.3f, 1.0f, 0.3f);
   EXPECT_GT(c1.TotalTriangles(), 0u);
-  EXPECT_GT(c1.TotalVertices(), 0u);
+  EXPECT_GT(c1.GetMesh().GetVtxCnt(), 0u);
   EXPECT_EQ(c1.PolygonFaceCount(), 20u);
 
   auto c2 = Crystal::CreatePyramid(80.0f, 80.0f, 0.3f, 1.0f, 0.3f);
   EXPECT_GT(c2.TotalTriangles(), 0u);
-  EXPECT_GT(c2.TotalVertices(), 0u);
+  EXPECT_GT(c2.GetMesh().GetVtxCnt(), 0u);
   EXPECT_EQ(c2.PolygonFaceCount(), 20u);
 
   // All triangle areas should be positive (no degenerate triangles)
@@ -583,7 +583,7 @@ TEST_F(V3TestCrystal, ExtremeWedgeVertexNoCollapse) {
   const float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
   for (float wedge : { 88.0f, 88.5f, 89.0f, 89.5f, 89.9f }) {
     auto c = Crystal::CreatePyramid(wedge, wedge, 1.0f, 0.0f, 1.0f, dist);
-    EXPECT_EQ(c.TotalVertices(), 8u) << "wedge=" << wedge;
+    EXPECT_EQ(c.GetMesh().GetVtxCnt(), 8u) << "wedge=" << wedge;
     EXPECT_EQ(c.PolygonFaceCount(), 12u) << "wedge=" << wedge;
   }
 }
@@ -960,7 +960,7 @@ PrismFuzzResult RunPrismFuzz(uint32_t seed, PrismFuzzKind kind, float mean, floa
       r.neg_input++;
     }
     Crystal c = Crystal::CreatePrism(1.2f, dist);
-    const size_t v = c.TotalVertices();
+    const size_t v = c.GetMesh().GetVtxCnt();
     const size_t f = c.TotalTriangles();
     if (v == 0 && f == 0) {
       r.rejected++;
@@ -1115,7 +1115,7 @@ TEST_F(V3TestCrystal, FaceDistanceKnownMalformedInputsHealed) {
   };
   for (size_t i = 0; i < std::size(kKnownMalformedInputs); i++) {
     Crystal c = Crystal::CreatePrism(kH, kKnownMalformedInputs[i]);
-    const size_t v = c.TotalVertices();
+    const size_t v = c.GetMesh().GetVtxCnt();
     const size_t f = c.TotalTriangles();
     ASSERT_TRUE(IsClosedTriMesh(v, f)) << "known pre-fix-malformed input[" << i << "] still produces a non-manifold "
                                        << "mesh post-fix: V=" << v << " F=" << f;
@@ -1129,7 +1129,7 @@ TEST_F(V3TestCrystal, FaceDistanceReverseSurvives) {
   {
     float dist[6]{ 1, 1, 1, 1, 1, 1 };
     Crystal c = Crystal::CreatePrism(1.2f, dist);
-    EXPECT_EQ(c.TotalVertices(), 12u);
+    EXPECT_EQ(c.GetMesh().GetVtxCnt(), 12u);
     EXPECT_EQ(c.TotalTriangles(), 20u);
   }
   {
@@ -1139,7 +1139,7 @@ TEST_F(V3TestCrystal, FaceDistanceReverseSurvives) {
     // real bugs "in the parameter domain".
     float dist[6]{ 0, 1, 1, 1, 1, 1 };
     Crystal c = Crystal::CreatePrism(1.2f, dist);
-    EXPECT_EQ(c.TotalVertices(), 8u);
+    EXPECT_EQ(c.GetMesh().GetVtxCnt(), 8u);
     EXPECT_EQ(c.TotalTriangles(), 12u);
   }
   {
@@ -1149,9 +1149,9 @@ TEST_F(V3TestCrystal, FaceDistanceReverseSurvives) {
     // by the removal of std::abs at CrystalMaker.
     float dist[6]{ -0.5f, 1, 1, 1, 1, 1 };
     Crystal c = Crystal::CreatePrism(1.2f, dist);
-    EXPECT_GT(c.TotalVertices(), 0u) << "negative-d with positive opposite-pair sum wrongly rejected";
+    EXPECT_GT(c.GetMesh().GetVtxCnt(), 0u) << "negative-d with positive opposite-pair sum wrongly rejected";
     EXPECT_GT(c.TotalTriangles(), 0u);
-    EXPECT_TRUE(IsClosedTriMesh(c.TotalVertices(), c.TotalTriangles()));
+    EXPECT_TRUE(IsClosedTriMesh(c.GetMesh().GetVtxCnt(), c.TotalTriangles()));
   }
 }
 
@@ -1177,7 +1177,7 @@ TEST_F(V3TestCrystal, FaceDistanceRejectRealDegenerate) {
   };
   for (const auto& tc : kCases) {
     Crystal c = Crystal::CreatePrism(1.2f, tc.dist);
-    EXPECT_EQ(c.TotalVertices(), 0u) << "case=" << tc.name;
+    EXPECT_EQ(c.GetMesh().GetVtxCnt(), 0u) << "case=" << tc.name;
     EXPECT_EQ(c.TotalTriangles(), 0u) << "case=" << tc.name;
   }
 }

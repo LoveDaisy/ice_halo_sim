@@ -741,10 +741,6 @@ size_t Crystal::TotalTriangles() const {
   return mesh_.GetTriangleCnt();
 }
 
-size_t Crystal::TotalVertices() const {
-  return mesh_.GetVtxCnt();
-}
-
 const float* Crystal::GetTriangleVtx() const {
   return face_v_;
 }
