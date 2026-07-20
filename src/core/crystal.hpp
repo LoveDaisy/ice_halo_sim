@@ -342,6 +342,12 @@ class Crystal {
   // (plan Steps 2/3).
   const CrystalGeom& CfGeom() const { return cf_geom_; }
 
+  // Read-only access to the underlying triangle mesh. Exposed so preview-only
+  // consumers (LUMICE_GetCrystalMesh) can pull vertex/triangle pools without
+  // building a second dedup path — the mesh pool is already deduped by
+  // BuildMeshFromCfGeom during construction.
+  const Mesh& GetMesh() const { return mesh_; }
+
   // Test observability: process-global count of degenerate polygon faces
   // dropped by BuildPolygonFaceData (the count/stride "shrink" path that used
   // to corrupt copy/move). Lets regression tests assert they actually

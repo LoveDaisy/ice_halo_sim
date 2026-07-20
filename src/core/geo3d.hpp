@@ -73,6 +73,8 @@ class Mesh {
 
   float* GetVtxPtr(size_t idx);
   int* GetTrianglePtr(size_t idx);
+  const float* GetVtxPtr(size_t idx) const;
+  const int* GetTrianglePtr(size_t idx) const;
 
  private:
   size_t vtx_cnt_;

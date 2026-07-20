@@ -332,6 +332,14 @@ int* Mesh::GetTrianglePtr(size_t idx) {
   return triangle_.get() + idx * 3;
 }
 
+const float* Mesh::GetVtxPtr(size_t idx) const {
+  return vertices_.get() + idx * 3;
+}
+
+const int* Mesh::GetTrianglePtr(size_t idx) const {
+  return triangle_.get() + idx * 3;
+}
+
 
 // ====== Unified hex crystal plane equations ======
 
