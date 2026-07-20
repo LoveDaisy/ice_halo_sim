@@ -1,22 +1,29 @@
-// Closed-form hex-crystal geometry — subtask closed-form-prism of the
-// geometry-closed-form-representation refactor.
+// Closed-form hex-crystal geometry — parallel implementation of the geometry
+// generation used by the golden-analytic tests and benches. Does NOT touch the
+// production path (FillHexCrystalCoef / SolveConvexPolyhedronVtxD / Crystal);
+// swap-in belongs to a later subtask.
 //
-// This header exposes a stateless evaluator for the prism family. It does NOT
-// touch the production path (FillHexCrystalCoef / SolveConvexPolyhedronVtxD /
-// Crystal); it is a parallel implementation used only by golden-analytic tests
-// and benches. Swap-in belongs to a later subtask.
+// The hex-crystal family (prism + pyramid) is characterised by six fixed
+// horizontal normal directions θᵢ = i·60°: the prism is the degenerate case
+// with inset ≡ 0 (a 2D half-plane intersection extruded in z); the pyramid
+// adds a piecewise-linear inset curve m(z) with up to two breakpoints
+// (z = ±h2/2). At every height z the cross section is the SAME 2D
+// half-plane problem over the six directions with per-direction offset
+// (√3/4)·(distᵢ − m(z)) — the closed-form pyramid solver reduces to
+// repeated calls to the shared 2D solver at a handful of candidate heights.
+// See doc/crystal-geometry-representation.md §4 for the design rationale.
 //
-// The prism is the degenerate case of the hex family whose inset curve is
-// identically zero: the crystal is a 2D half-plane intersection over six fixed
-// directions θᵢ = i·60°, extruded in z. Every non-opposite face pair has
-// determinant sin 60° = √3/2 exactly, and opposite faces are exactly parallel
-// (skipped by construction, no threshold). See doc/crystal-geometry-representation.md
-// §4 for the design rationale.
+// Every non-opposite direction pair has determinant sin 60° = √3/2 exactly;
+// opposite pairs are exactly parallel (skipped by construction, no threshold).
 
 #ifndef LUMICE_CORE_GEO3D_CLOSEDFORM_HPP_
 #define LUMICE_CORE_GEO3D_CLOSEDFORM_HPP_
 
 namespace lumice {
+
+// ============================================================================
+// Prism family (2 basal + 6 prism side).
+// ============================================================================
 
 // Face count and layout for the prism family.
 // Face slots (matching IsLegalFace kPrism: face_number 1..8):
@@ -29,10 +36,12 @@ constexpr int kClosedFormPrismSideCnt = 6;
 constexpr int kClosedFormPrismMaxCorners = 12;
 
 // Output of the closed-form prism evaluator. Fields are grouped by whether the
-// pyramid subtask can reuse the field verbatim; the pyramid will add its own
-// inset-curve state on top of the generic fields.
+// pyramid evaluator can reuse the field verbatim; the pyramid uses its own
+// (distinct) output struct because a pyramid face has variable corner count
+// per face, whereas the prism has a single CCW ring shared by every face.
 struct ClosedFormPrismResult {
-  // ---- Generic (reusable by the pyramid subtask; only the numerical source differs)
+  // ---- Generic (reusable field semantics; the pyramid evaluator has an
+  //      analogous field on its own struct, only the numerical source differs)
   // Plane coefficients (a, b, c, d) so that the bounded half-space is
   //   a·x + b·y + c·z + d ≤ 0
   // Layout mirrors FillHexCrystalCoef's output so a future swap can be a memcpy.
@@ -50,10 +59,8 @@ struct ClosedFormPrismResult {
   float corner_x[kClosedFormPrismMaxCorners];
   float corner_y[kClosedFormPrismMaxCorners];
 
-  // ---- Prism-specific degenerate values (pyramid will replace these with real values)
-  // The inset curve — how much the side profile shrinks with |z| — is
-  // identically 0 for the prism. Kept as a placeholder so the pyramid subtask
-  // can extend this struct without changing the reader shape.
+  // ---- Prism-specific degenerate values (identically zero for prism; the
+  //      pyramid evaluator carries these as first-class fields on its struct)
   float inset_at_top;     // = 0 for prism
   float inset_at_bottom;  // = 0 for prism
 };
@@ -67,6 +74,81 @@ struct ClosedFormPrismResult {
 //
 // This function does not consult the production path.
 ClosedFormPrismResult ComputeClosedFormPrism(float h, const float dist[6]);
+
+// ============================================================================
+// Pyramid family (2 basal + 6 prism + 6 upper cone + 6 lower cone).
+// ============================================================================
+
+// Face count and layout for the pyramid family.
+// Face slots (matching IsLegalFace kPyramid: face_number ∈ {1,2,3..8,13..18,23..28}):
+//   slot 0 → upper basal        (face_number 1)
+//   slot 1 → lower basal        (face_number 2)
+//   slot 2+i → prism side face i (face_number 3+i, i = 0..5)
+//   slot 8+i → upper cone face i (face_number 13+i, i = 0..5)
+//   slot 14+i → lower cone face i (face_number 23+i, i = 0..5)
+constexpr int kClosedFormPyramidFaceCnt = 20;
+constexpr int kClosedFormPyramidSideCnt = 6;
+// Global vertex pool upper bound. Each of the 6 adjacent-direction pairs
+// (0,1),(1,2),...,(5,0) contributes at most 4 vertices along z (basal cutoff /
+// shoulder at z=-h2/2 / shoulder at z=+h2/2 / basal cutoff or apex); death
+// events replace pairs but never add. 6·4 = 24 with slack up to 32.
+constexpr int kClosedFormPyramidMaxVtx = 32;
+// Per-face polygon vertex-count upper bound. Basal faces are ≤6-gons (one
+// vertex per adjacent-direction pair). Side / cone faces are ≤4-gons in the
+// well-conditioned regime; face-drop and shoulder events can inflate that
+// slightly. 8 is a safe upper bound with an assert tripwire on overflow.
+constexpr int kClosedFormPyramidMaxFaceVtx = 8;
+
+// Output of the closed-form pyramid evaluator. Two independent structs (vs
+// reusing ClosedFormPrismResult) because pyramid faces have variable corner
+// count — prism's single-CCW-ring layout cannot represent that without either
+// forcing prism to carry pyramid's complexity or forcing pyramid to smear its
+// per-face polygons into a shared ring.
+struct ClosedFormPyramidResult {
+  // Plane coefficients (a, b, c, d): a·x + b·y + c·z + d ≤ 0.
+  // Layout matches FillHexCrystalCoef's output.
+  float plane_coef[kClosedFormPyramidFaceCnt * 4];
+  // Unit outward normals for each face (parametric).
+  float face_normal[kClosedFormPyramidFaceCnt * 3];
+  // Face-number constants (parametric, per IsLegalFace kPyramid).
+  int face_number[kClosedFormPyramidFaceCnt];
+  // face_present[i]: face slot i bounds the body.
+  bool face_present[kClosedFormPyramidFaceCnt];
+
+  // De-duped 3D vertex pool. Each vertex is (x, y, z) packed at vtx[i*3+k].
+  int vtx_cnt;
+  float vtx[kClosedFormPyramidMaxVtx * 3];
+
+  // Per-face CCW vertex indices into the vtx pool. face_vtx_cnt[slot] is 0
+  // when face_present[slot] is false.
+  int face_vtx_cnt[kClosedFormPyramidFaceCnt];
+  int face_vtx[kClosedFormPyramidFaceCnt][kClosedFormPyramidMaxFaceVtx];
+
+  // Cone slopes (a1 = upper, a2 = lower). Negative sentinel (−1.0f) when the
+  // corresponding cone is absent (h1 ≤ 0, h3 ≤ 0, or alpha outside legal
+  // range).
+  float a1;
+  float a2;
+  // Inset amount at the basal cut heights (z = z_top, z = z_bottom).
+  // = 0 when the basal cut sits on the shoulder z = ±h2/2 (apex not reached).
+  float inset_at_top;
+  float inset_at_bottom;
+};
+
+// Evaluate the closed-form pyramid geometry — direct-wedge entry point.
+// Mirrors CreatePyramidMesh(upper_alpha, lower_alpha, h1, h2, h3, dist)
+// (geo3d.cpp:563). alpha is in degrees; the legal range [0.1°, 89.9°] matches
+// FillHexCrystalCoef's protection. Out-of-range or h1 ≤ 0 drops the upper
+// cone (a1 = −1.0f); same for the lower cone.
+ClosedFormPyramidResult ComputeClosedFormPyramid(float upper_alpha, float lower_alpha, float h1, float h2, float h3,
+                                                 const float dist[6]);
+
+// Miller-index entry point. Mirrors CreatePyramidMesh(upper_idx1, upper_idx4,
+// lower_idx1, lower_idx4, h1, h2, h3, dist) (geo3d.cpp:550). Uses the
+// algebraically-direct form a = i1·c/(2·i4) — no atan→tan roundtrip. i1 = 0
+// signals "no cone this side" (same as CreatePyramidMesh's convention).
+ClosedFormPyramidResult ComputeClosedFormPyramid(int upper_i1, int upper_i4, int lower_i1, int lower_i4, float h1,
+                                                 float h2, float h3, const float dist[6]);
 
 }  // namespace lumice
 

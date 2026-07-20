@@ -1132,6 +1132,48 @@ void BM_MalformedGateCrossTab(benchmark::State& state) {
 }
 BENCHMARK(BM_MalformedGateCrossTab)->Arg(30)->Arg(50)->Arg(80);
 
+// ---- Sanity: dump the closed-form pyramid for a well-known regular config -
+//
+// Read-only inspection benchmark that dumps a regular hexagonal pyramid
+// (dist all = 1) side-by-side with the production mesh, so the pyramid solver
+// output can be eyeballed for topological correctness before the automated
+// oracle lands. Prints once, then no-ops (guarded by static bool).
+void BM_PyramidClosedFormSanityDump(benchmark::State& state) {
+  static bool dumped = false;
+  if (!dumped) {
+    dumped = true;
+    float dist[6]{ 1.f, 1.f, 1.f, 1.f, 1.f, 1.f };
+    const float au = 28.0f, al = 28.0f, h1 = 1.0f, h2 = 1.0f, h3 = 1.0f;
+    auto r = ComputeClosedFormPyramid(au, al, h1, h2, h3, dist);
+    std::fprintf(stderr, "[SANITY] regular pyramid α=28° h=(1,1,1) dist=1:\n");
+    std::fprintf(stderr, "  a1=%.6f a2=%.6f inset_top=%.6f inset_bot=%.6f\n", static_cast<double>(r.a1),
+                 static_cast<double>(r.a2), static_cast<double>(r.inset_at_top),
+                 static_cast<double>(r.inset_at_bottom));
+    std::fprintf(stderr, "  vtx_cnt=%d\n", r.vtx_cnt);
+    for (int v = 0; v < r.vtx_cnt; v++) {
+      std::fprintf(stderr, "    v%d = (%.6f, %.6f, %.6f)\n", v, static_cast<double>(r.vtx[v * 3 + 0]),
+                   static_cast<double>(r.vtx[v * 3 + 1]), static_cast<double>(r.vtx[v * 3 + 2]));
+    }
+    for (int slot = 0; slot < kClosedFormPyramidFaceCnt; slot++) {
+      if (!r.face_present[slot]) {
+        continue;
+      }
+      std::fprintf(stderr, "  face slot=%d (fn=%d) present, %d vtx:", slot, r.face_number[slot], r.face_vtx_cnt[slot]);
+      for (int k = 0; k < r.face_vtx_cnt[slot]; k++) {
+        std::fprintf(stderr, " %d", r.face_vtx[slot][k]);
+      }
+      std::fprintf(stderr, "\n");
+    }
+    // Compare against production mesh.
+    auto mesh = CreatePyramidMesh(au, al, h1, h2, h3, dist);
+    std::fprintf(stderr, "  [PROD] vtx_cnt=%zu tri_cnt=%zu\n", mesh.GetVtxCnt(), mesh.GetTriangleCnt());
+  }
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(dumped);
+  }
+}
+BENCHMARK(BM_PyramidClosedFormSanityDump);
+
 // ============================================================================
 // Pyramid oracle pre-flight diagnostics — two independent questions the oracle
 // design rests on: (a) can __int128 hold the arithmetic; (b) is per-direction
