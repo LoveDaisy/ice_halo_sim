@@ -434,9 +434,9 @@ struct WlEntry {
 };
 
 // Merged exit-stats accumulator for trace_layer_kernel. One 8-byte struct
-// bound at buffer(15) (count + w_sum atomics), freeing buffer(16) for the
-// per-ray pool-shape offset carrier (`r_pool_shape`) that the K-shape geometry
-// pool feeds in. Field order MUST match the host mirror `struct ExitStats` in
+// bound at buffer(14) (count + w_sum atomics); buffer(15) carries the per-ray
+// pool-shape offset (`r_pool_shape`) that the K-shape geometry pool feeds in.
+// Field order MUST match the host mirror `struct ExitStats` in
 // metal_trace_backend.mm (see the static_assert there). Both fields sit at
 // natural 4-byte alignment; total sizeof == 8.
 struct ExitStats {
@@ -449,7 +449,7 @@ struct KernelParams {
   // reads per-ray optics from wl_pool[wl_idx] (see WlEntry above + buffer
   // bindings in DispatchLayer).
   // K-shape pool: per-batch `poly_cnt` retired — the ray-polygon loop reads
-  // its (poly_off, poly_cnt) from `r_pool_shape[tid]` at buffer(16). Host
+  // its (poly_off, poly_cnt) from `r_pool_shape[tid]` at buffer(15). Host
   // struct MUST drop the field too or sizeof drifts.
   uint  max_hits;
   uint  num_rays;
@@ -544,10 +544,9 @@ kernel void trace_layer_kernel(
     device const uint*     root_tf  [[buffer(3)]],
     device const float*    poly_n   [[buffer(4)]],
     device const float*    poly_d   [[buffer(5)]],
-    device const float*    centroid [[buffer(6)]],
-    constant KernelParams& prm      [[buffer(7)]],
-    device atomic_float*   image    [[buffer(8)]],
-    device float*          out_d    [[buffer(9)]],
+    constant KernelParams& prm      [[buffer(6)]],
+    device atomic_float*   image    [[buffer(7)]],
+    device float*          out_d    [[buffer(8)]],
     // scrum-268.8 (DR-3): slots 10 and 12 reclaimed from the retired out_p /
     // out_tf writes (dead data — transit_root_kernel resamples entry point +
     // face on the next-layer crystal; ReadbackExitRays never read cont_p /
@@ -557,63 +556,55 @@ kernel void trace_layer_kernel(
     // so per-thread divergent WlEntry reads hit the shader-side cache rather
     // than the slower device-memory gather path. Pool size ≤ 255 × 20B = 5100B
     // fits well below Metal's 64KB constant buffer ceiling.
-    constant WlEntry*      wl_pool       [[buffer(10)]],
-    device float*          out_w         [[buffer(11)]],
-    device const uint*     root_wl_idx   [[buffer(12)]],
-    device atomic_uint*    counter  [[buffer(13)]],
-    device float*          rec_sink [[buffer(14)]],
+    constant WlEntry*      wl_pool       [[buffer(9)]],
+    device float*          out_w         [[buffer(10)]],
+    device const uint*     root_wl_idx   [[buffer(11)]],
+    device atomic_uint*    counter  [[buffer(12)]],
+    device float*          rec_sink [[buffer(13)]],
     // Merged {count, w_sum} atomics (see `struct ExitStats` above).
-    device ExitStats*      exit_stats [[buffer(15)]],
+    device ExitStats*      exit_stats [[buffer(14)]],
     // K-shape geometry pool: per-ray {poly_off, poly_cnt} written by the
     // preceding gen_root / transit_root pass. The ray's polygon slice in
-    // the shared poly_n / poly_d / centroid buffers is
+    // the shared poly_n / poly_d buffers is
     // [poly_off, poly_off + poly_cnt). At P_ci == 1 this reduces to
     // (0, full_poly_cnt) — the historical single-shape layout.
-    device const uint2*    r_pool_shape [[buffer(16)]],
-    device const float*    root_rot [[buffer(17)]],
-    // S1 device-fused: slot 18 is now the per-session landed-weight scalar
+    device const uint2*    r_pool_shape [[buffer(15)]],
+    device const float*    root_rot [[buffer(16)]],
+    // S1 device-fused: slot 17 is now the per-session landed-weight scalar
     // (total weight of in-bounds filter-pass emitted rays, used for
-    // normalisation). Slots 18-23, 28, 30 previously held exit-record
+    // normalisation). Slots 17-22, 27, 29 previously held exit-record
     // buffers; those are replaced by on-device projection + XYZ accumulation
     // into `image` (AccumXyzToPixel from accum_shared.h).
-    device atomic_float*   landed_weight [[buffer(18)]],
-    // scrum-267 task-fused-emit-gate Step 4b: device-side emit gate state.
-    // The ms_mode==1 path now calls DeviceFilterCheck and draws a PCG prob to
-    // decide continuation vs mid-exit on-device; the former cont_crystal_id /
-    // cont_face_seq_* buffers (24-26) used by the host hop are removed and the
-    // gate buffers move into the freed slots. NOTE: plan §3 reserved 27-31 for
-    // these five buffers; Metal's per-stage buffer index ceiling is 30 (`buffer
-    // attribute parameter out of bounds: must be between 0 and 30`), so the
-    // actual binding is 24-28 (see progress.md DECISION "buffer 槽位 27-31 调
-    // 整为 24-28"). All inline references below use the actual 24-28 slots.
-    //   24 : filter desc array, indexed by ms_layer_idx * filter_desc_max_ci + ci
-    //   25 : per-slot prefix-sum offsets into gate_getfn_bytes
-    //   26 : flat GetFn(poly_idx) byte stream
-    //   27 : Complex filter sub-spec flat buffer
-    //   28 : (freed — was exit_ms_layer; removed in S1 device-fused)
-    device const DeviceFilterDesc* gate_filter_desc    [[buffer(24)]],
-    device const uint*             gate_getfn_offsets  [[buffer(25)]],
-    device const uchar*            gate_getfn_bytes    [[buffer(26)]],
-    device const DeviceFilterDesc* gate_sub_desc_buf   [[buffer(27)]],
+    device atomic_float*   landed_weight [[buffer(17)]],
+    // Device-side emit gate state. The ms_mode==1 path calls DeviceFilterCheck
+    // and draws a PCG prob to decide continuation vs mid-exit on-device.
+    //   23 : filter desc array, indexed by ms_layer_idx * filter_desc_max_ci + ci
+    //   24 : per-slot prefix-sum offsets into gate_getfn_bytes
+    //   25 : flat GetFn(poly_idx) byte stream
+    //   26 : Complex filter sub-spec flat buffer
+    device const DeviceFilterDesc* gate_filter_desc    [[buffer(23)]],
+    device const uint*             gate_getfn_offsets  [[buffer(24)]],
+    device const uchar*            gate_getfn_bytes    [[buffer(25)]],
+    device const DeviceFilterDesc* gate_sub_desc_buf   [[buffer(26)]],
     // scrum-268.8 (DR-3): cont_wl_idx propagates the photon's lifetime
     // wavelength tag into the continuation ring for the next layer.
-    device uint*                   cont_wl_idx         [[buffer(29)]],
+    device uint*                   cont_wl_idx         [[buffer(28)]],
     // task-331.5 (raypath-color foundation): per-ray uint64 component mask.
-    //   root_component  (19, read)  : mask carried INTO this layer (0 on layer
+    //   root_component  (18, read)  : mask carried INTO this layer (0 on layer
     //                                 0; transit copies cont→root for layer≥1).
-    //   cont_component  (20, write) : mask carried OUT to the continuation ring
+    //   cont_component  (19, write) : mask carried OUT to the continuation ring
     //                                 (lock-stepped with cont_d/cont_w/cont_wl_idx).
-    //   gate_component_bits (21,read): summand→component-bit table, keyed by
+    //   gate_component_bits (20,read): summand→component-bit table, keyed by
     //                                 gate_slot * kDevComponentStride + summand.
-    //   exit_comp_mask/w (22/23,write) + exit_comp_cnt (28,atomic): capture ring
+    //   exit_comp_mask/w (21/22,write) + exit_comp_cnt (27,atomic): capture ring
     //                                 for emitted (mid-exit + final) rays; drained
     //                                 host-side for CPU parity (test-only).
-    device const ulong*            root_component      [[buffer(19)]],
-    device ulong*                  cont_component      [[buffer(20)]],
-    device const uchar*            gate_component_bits [[buffer(21)]],
-    device ulong*                  exit_comp_mask      [[buffer(22)]],
-    device float*                  exit_comp_w         [[buffer(23)]],
-    device atomic_uint*            exit_comp_cnt       [[buffer(28)]],
+    device const ulong*            root_component      [[buffer(18)]],
+    device ulong*                  cont_component      [[buffer(19)]],
+    device const uchar*            gate_component_bits [[buffer(20)]],
+    device ulong*                  exit_comp_mask      [[buffer(21)]],
+    device float*                  exit_comp_w         [[buffer(22)]],
+    device atomic_uint*            exit_comp_cnt       [[buffer(27)]],
     // task-358.1 Step 4 (AC3 device-side Y-lane accumulation): per-color-class
     // atomic-float accumulator. Layout is column-major-by-class:
     //   class_lane_buf[class_idx * (img_w * img_h) + (py * img_w + px)]
@@ -622,7 +613,7 @@ kernel void trace_layer_kernel(
     // cmf_y * cw to every class whose predicate matches the ray's this_mask;
     // read back + folded into RenderConsumer::lane_y_ each drain window. See
     // plan §4 Step 4 for the accumulation semantics + rollback contract.
-    device atomic_float*           class_lane_buf      [[buffer(30)]],
+    device atomic_float*           class_lane_buf      [[buffer(29)]],
     uint tid [[thread_position_in_grid]]) {
   if (tid >= prm.num_rays) { return; }
   // task-331.5: load the carried component mask once (constant for the whole
@@ -704,7 +695,7 @@ kernel void trace_layer_kernel(
   for (uint hit = 0u; hit < prm.max_hits; hit++) {
     if (to_face == kInvalidId) { break; }
     // Contract split (K-shape pool):
-    //   * poly_n / poly_d / centroid / tri_* consume ABSOLUTE pool-wide
+    //   * poly_n / poly_d / tri_* consume ABSOLUTE pool-wide
     //     polygon indices (to_face, cont_face, far_face all absolute).
     //   * path[] / DeviceFilterMatch*'s ApplyGetFn table consume PER-CRYSTAL
     //     LOCAL polygon indices — GetFn bytes are keyed by (layer, ci) with a
@@ -1163,7 +1154,7 @@ kernel void gen_root_kernel(
     // pool_shape_table[s] = uint4{poly_off, poly_cnt, tri_off, tri_cnt} for
     // pool slot s in the shared poly_*/tri_* buffers. root_pool_shape[tid]
     // stores this ray's chosen (poly_off, poly_cnt) — trace_layer_kernel reads
-    // it back at buffer(16) to know which slice of poly_n/poly_d/centroid to
+    // it back at buffer(15) to know which slice of poly_n/poly_d to
     // walk for its ray-polygon intersection loop.
     device const uint4*     pool_shape_table [[buffer(19)]],
     device uint2*           root_pool_shape  [[buffer(20)]],
@@ -1258,9 +1249,9 @@ kernel void gen_root_kernel(
   uint tri_off  = shape_info.z;
   uint tri_cnt  = shape_info.w;
   // Publish this ray's chosen polygon slice for trace_layer_kernel to read
-  // (buffer(16), r_pool_shape). poly_cnt is what the trace kernel's
+  // (buffer(15), r_pool_shape). poly_cnt is what the trace kernel's
   // ray-polygon loop needs; poly_off gets it into the right slice of poly_n /
-  // poly_d / centroid.
+  // poly_d.
   root_pool_shape[tid] = uint2(poly_off, shape_info.y);
 
   // 3. Triangle area×facing weighted pick → uniform point on the chosen tri.

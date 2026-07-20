@@ -42,9 +42,8 @@ using metal_test::MakeRectangularRender;
 using metal_test::ShouldSkipMetalTests;
 
 struct PolyArrays {
-  std::vector<float> n;         // 3 * poly_cnt
-  std::vector<float> d;         // poly_cnt
-  std::vector<float> centroid;  // 3 * poly_cnt
+  std::vector<float> n;  // 3 * poly_cnt
+  std::vector<float> d;  // poly_cnt
 };
 
 PolyArrays BuildPolyArrays(const Crystal& crystal) {
@@ -52,15 +51,6 @@ PolyArrays BuildPolyArrays(const Crystal& crystal) {
   PolyArrays out;
   out.n.assign(crystal.GetPolygonFaceNormal(), crystal.GetPolygonFaceNormal() + poly_cnt * 3);
   out.d.assign(crystal.GetPolygonFaceDist(), crystal.GetPolygonFaceDist() + poly_cnt);
-  out.centroid.assign(poly_cnt * 3, 0.0f);
-  const int* poly_tri = crystal.GetPolygonFaceTriId();
-  const float* tvtx = crystal.GetTriangleVtx();
-  for (size_t f = 0; f < poly_cnt; f++) {
-    const float* v = tvtx + static_cast<size_t>(poly_tri[f]) * 9;
-    for (int k = 0; k < 3; k++) {
-      out.centroid[f * 3 + k] = (v[0 * 3 + k] + v[1 * 3 + k] + v[2 * 3 + k]) / 3.0f;
-    }
-  }
   return out;
 }
 
