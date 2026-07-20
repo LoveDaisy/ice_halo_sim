@@ -228,11 +228,6 @@ size_t ComputeContCap(size_t n_roots, size_t max_hits) {
   return n_roots * (max_hits * 2u + 4u);
 }
 
-// File-local mirror of Metal `kFaceCoplanarFloor` (metal_trace_backend.mm:1270)
-// — kept numerically in sync with `simulator.cpp::detail::PolygonFaceOfTri`
-// and `crystal.cpp::BuildPolygonFaceData`. Used by tri-to-poly mapping below.
-constexpr float kCudaFaceCoplanarFloor = 1e-2f;
-
 // PCG-stream isolation nonces. Independent values keep the three CUDA-side PCG
 // streams (transit orientation sampler / emit-gate prob draw / future device
 // root-gen) statistically separated even when spec.seed degenerates to 0.
@@ -375,36 +370,6 @@ lm_pcg::GenRootKernelParams BuildGenGpParams(const AxisDistribution& axis_dist, 
   gp.sun_half_angle = (sun.diameter_ * 0.5f) * math::kDegreeToRad;
   gp.wl_pool_size   = wl_pool_size;
   return gp;
-}
-
-// Compute tri-to-poly mapping (argmax over polygon-face normals + coplanar
-// floor). Mirrors Metal `UploadCrystal` (metal_trace_backend.mm:1271-1286)
-// byte-for-byte; the absolute-ε first-match anti-pattern guard in
-// doc/numerical-robustness.md约定 2 applies — DO NOT replace with a
-// `dot > 1-ε` early-exit.
-void FillTriToPoly(const Crystal& crystal, std::vector<uint16_t>& out) {
-  size_t tri_cnt  = crystal.TotalTriangles();
-  size_t poly_cnt = crystal.PolygonFaceCount();
-  out.resize(tri_cnt);
-  const float* tri_norms = crystal.GetTriangleNormal();
-  const float* poly_norms = crystal.GetPolygonFaceNormal();
-  constexpr uint16_t kInvalidIdU16 = 0xffffu;
-  for (size_t t = 0; t < tri_cnt; ++t) {
-    const float* tn = tri_norms + t * 3u;
-    int best_p = -1;
-    float best_dot = -1.0f;
-    for (size_t p = 0; p < poly_cnt; ++p) {
-      const float* pn = poly_norms + p * 3u;
-      float dot = tn[0] * pn[0] + tn[1] * pn[1] + tn[2] * pn[2];
-      if (dot > best_dot) {
-        best_dot = dot;
-        best_p = static_cast<int>(p);
-      }
-    }
-    out[t] = (best_p >= 0 && best_dot >= 1.0f - kCudaFaceCoplanarFloor)
-                 ? static_cast<uint16_t>(best_p)
-                 : kInvalidIdU16;
-  }
 }
 
 // --- Device-side geometry --------------------------------------------------
@@ -2158,7 +2123,7 @@ struct CudaTraceBackend::Impl {
   // Per-CI geometry (multi-CI, mirrors Metal UploadCrystal/Ensure*Buffers).
   // EnsureGeomCapacity grows d_poly_*/d_tri_* (grow-only) to hold a crystal of
   // the given size; UploadCrystalGeometry resizes + H2D-copies one crystal's
-  // polygon/triangle pool (incl. the tri_to_poly argmax map) and updates
+  // polygon/triangle pool (incl. the tri_to_poly slot table) and updates
   // poly_cnt_/tri_cnt_. Call once per (layer,ci) before that ci's trace/transit.
   void EnsureGeomCapacity(size_t poly_cnt, size_t tri_cnt);
   void UploadCrystalGeometry(const Crystal& crystal);
@@ -2396,7 +2361,7 @@ void CudaTraceBackend::Impl::EnsureGeomCapacity(size_t poly_cnt, size_t tri_cnt)
 void CudaTraceBackend::Impl::UploadCrystalGeometry(const Crystal& crystal) {
   // Per-CI geometry H2D, mirrors Metal UploadCrystal (metal_trace_backend.mm:1158).
   // Polygon-face slab geometry + triangle pool (for transit entry-point sampling)
-  // + the tri_to_poly argmax map. Updates poly_cnt_/tri_cnt_ to this crystal.
+  // + the tri_to_poly slot table. Updates poly_cnt_/tri_cnt_ to this crystal.
   size_t poly_cnt = crystal.PolygonFaceCount();
   size_t tri_cnt  = crystal.TotalTriangles();
   if (poly_cnt == 0) {
@@ -2423,8 +2388,20 @@ void CudaTraceBackend::Impl::UploadCrystalGeometry(const Crystal& crystal) {
                        cudaMemcpyHostToDevice), "UploadCrystalGeometry cudaMemcpy d_tri_norm");
   CheckCuda(cudaMemcpy(d_tri_area_, crystal.GetTirangleArea(), tri_cnt * sizeof(float),
                        cudaMemcpyHostToDevice), "UploadCrystalGeometry cudaMemcpy d_tri_area");
-  std::vector<uint16_t> tri_to_poly_host;
-  FillTriToPoly(crystal, tri_to_poly_host);
+  // tri→poly-face LOCAL uint16 map from Crystal's parametric slot table
+  // (Crystal::PopulateFromCfGeom). Mesh-only crystals emit kInvalidId per
+  // triangle; downstream sampling drops those rays via the InitRay_p_fid
+  // kInvalidId fallback — same sentinel semantics as the prior argmax path.
+  std::vector<uint16_t> tri_to_poly_host(tri_cnt);
+  {
+    constexpr uint16_t kInvalidIdU16 = 0xffffu;
+    for (size_t t = 0; t < tri_cnt; ++t) {
+      IdType local = crystal.PolygonFaceOfTri(static_cast<int>(t));
+      tri_to_poly_host[t] = (local == kInvalidId || static_cast<size_t>(local) >= poly_cnt)
+                                ? kInvalidIdU16
+                                : static_cast<uint16_t>(local);
+    }
+  }
   CheckCuda(cudaMemcpy(d_tri_to_poly_, tri_to_poly_host.data(), tri_cnt * sizeof(uint16_t),
                        cudaMemcpyHostToDevice), "UploadCrystalGeometry cudaMemcpy d_tri_to_poly");
 
@@ -2657,9 +2634,20 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
         h_tri_vtx.insert(h_tri_vtx.end(), tv, tv + 9 * tri_cnt);
         h_tri_norm.insert(h_tri_norm.end(), tn, tn + 3 * tri_cnt);
         h_tri_area.insert(h_tri_area.end(), ta, ta + tri_cnt);
-        std::vector<uint16_t> t2p;
-        FillTriToPoly(crystal, t2p);
-        h_tri2poly.insert(h_tri2poly.end(), t2p.begin(), t2p.end());
+        // tri→poly-face LOCAL uint16 map from Crystal's parametric slot table
+        // (Crystal::PopulateFromCfGeom). Mesh-only crystals emit kInvalidId per
+        // triangle; downstream sampling drops those rays via the InitRay_p_fid
+        // kInvalidId fallback — same sentinel semantics as the prior argmax path.
+        {
+          constexpr uint16_t kInvalidIdU16 = 0xffffu;
+          h_tri2poly.reserve(h_tri2poly.size() + tri_cnt);
+          for (size_t t = 0; t < tri_cnt; ++t) {
+            IdType local = crystal.PolygonFaceOfTri(static_cast<int>(t));
+            h_tri2poly.push_back((local == kInvalidId || static_cast<size_t>(local) >= poly_cnt)
+                                     ? kInvalidIdU16
+                                     : static_cast<uint16_t>(local));
+          }
+        }
 
         pool_poly_off_.push_back(poly_acc);
         pool_poly_cnt_.push_back(static_cast<uint32_t>(poly_cnt));

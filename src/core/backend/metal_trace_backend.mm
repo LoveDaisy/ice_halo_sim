@@ -1857,8 +1857,6 @@ void MetalTraceBackend::Impl::UploadCrystalPool(const std::vector<Crystal>& pool
   // Second pass: flatten each shape into the shared buffers at its own offset.
   // Sentinel `kInvalidIdU32` is the file-scope translation-unit constant near
   // the top of this file (single source of truth mirroring MSL kInvalidId).
-  constexpr float kFaceCoplanarFloor = 1e-2f;
-
   for (size_t s = 0; s < pool.size(); s++) {
     const auto& crystal = pool[s];
     const uint32_t poly_off = pool_shape_table_h_[s][0];
@@ -1878,32 +1876,21 @@ void MetalTraceBackend::Impl::UploadCrystalPool(const std::vector<Crystal>& pool
     std::memcpy(tri_area_ptr + tri_off, crystal.GetTirangleArea(),
                 tri_cnt * sizeof(float));
 
-    // tri_to_poly stores ABSOLUTE polygon indices (poly_off + local) so that
+    // tri_to_poly stores ABSOLUTE polygon indices (poly_off + local) so
     // gen_root/transit_root can compose "shape.tri_off + local_tri →
     // tri_to_poly[..] → abs poly_idx" with a single offset addition on the
-    // triangle side and none on the polygon side. Mirrors
-    // simulator.cpp::detail::PolygonFaceOfTri (argmax with sanity floor
-    // kFaceCoplanarFloor=1e-2; must match crystal.cpp::BuildPolygonFaceData +
-    // that helper). At P_ci == 1 this becomes 0 + local == local — identical
-    // to the historical single-shape layout.
-    const float* tri_norms_src  = crystal.GetTriangleNormal();
-    const float* poly_norms_src = crystal.GetPolygonFaceNormal();
+    // triangle side and none on the polygon side. Reads the parametric
+    // slot→poly-face table via Crystal::PolygonFaceOfTri (populated by
+    // Crystal::PopulateFromCfGeom for hex-family factories). Mesh-only
+    // crystals (custom-mesh test hook) return kInvalidId per triangle here;
+    // downstream sampling drops those rays via the InitRay_p_fid kInvalidId
+    // fallback — same sentinel semantics as the prior argmax path.
     for (size_t t = 0; t < tri_cnt; t++) {
-      const float* tn = tri_norms_src + t * 3;
-      int best_p = -1;
-      float best_dot = -1.0f;
-      for (size_t p = 0; p < poly_cnt; p++) {
-        const float* pn = poly_norms_src + p * 3;
-        float dot = tn[0] * pn[0] + tn[1] * pn[1] + tn[2] * pn[2];
-        if (dot > best_dot) {
-          best_dot = dot;
-          best_p = static_cast<int>(p);
-        }
-      }
+      IdType local = crystal.PolygonFaceOfTri(static_cast<int>(t));
       tri_to_poly_ptr[tri_off + t] =
-          (best_p >= 0 && best_dot >= 1.0f - kFaceCoplanarFloor)
-              ? (poly_off + static_cast<uint32_t>(best_p))
-              : kInvalidIdU32;
+          (local == kInvalidId || static_cast<uint32_t>(local) >= poly_cnt)
+              ? kInvalidIdU32
+              : (poly_off + static_cast<uint32_t>(local));
     }
   }
 
