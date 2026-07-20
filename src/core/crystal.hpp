@@ -295,7 +295,6 @@ class Crystal {
   size_t PolygonFaceCount() const;
   const float* GetPolygonFaceNormal() const;
   const float* GetPolygonFaceDist() const;
-  const int* GetPolygonFaceTriId() const;
 
   // Map a triangle id to its polygon-face index (0..PolygonFaceCount()-1).
   // Returns kInvalidId when @p tri_id is out of range OR when this Crystal was
@@ -323,10 +322,11 @@ class Crystal {
 
  private:
   void ComputeCacheData();
-  // Populate fn_map_ and poly_face_data_ directly from cf_geom_ + a per-tri
-  // "which face slot" table produced during the closed-form mesh build. See
-  // crystal.cpp for the design rationale (no argmax reversal — the
-  // parametric face-number + slot membership are already in cf_geom_).
+  // Populate poly_face_data_, poly_face_fn_ and poly_face_of_tri_ directly
+  // from cf_geom_ + a per-tri "which face slot" table produced during the
+  // closed-form mesh build. See crystal.cpp for the design rationale (no
+  // argmax reversal — the parametric face-number + slot membership are
+  // already in cf_geom_).
   void PopulateFromCfGeom(const std::vector<int>& tri_face_slot);
   // Shared closed-form prism entry point behind both CreatePrism overloads.
   // Runs ComputeClosedFormPrism → 386.2 validity gate → CrystalGeom adapter →
@@ -354,15 +354,20 @@ class Crystal {
   float* face_n_;     // normal of every face. 3 * face_cnt
   float* face_area_;  // area of every face. 1 * face_cnt
 
-  std::unique_ptr<IdType[]> fn_map_;  // fid --> fn
-  int fn_period_;                     // for raypath symmetry
+  int fn_period_ = -1;  // for raypath symmetry
 
   // Polygon face data for per-plane intersection
   size_t poly_face_cnt_ = 0;
-  std::unique_ptr<float[]> poly_face_data_;  // single allocation: n(3*cnt) + d(cnt) + tri_id(cnt as float)
+  std::unique_ptr<float[]> poly_face_data_;  // single allocation: n(3*cnt) + d(cnt)
   float* poly_face_n_ = nullptr;             // unit normals, 3 * poly_face_cnt_
   float* poly_face_d_ = nullptr;             // plane distances, poly_face_cnt_
-  int* poly_face_tri_id_ = nullptr;          // representative triangle ID, poly_face_cnt_
+
+  // Face-number per polygon face — direct parametric constant from
+  // cf_geom_.face_number[slot], populated by PopulateFromCfGeom. Fully replaces
+  // the previous "poly_face_tri_id_[poly] → fn_map_[tri]" two-hop reversal:
+  // fn is now stored directly at its natural key (polygon face) rather than
+  // reconstructed from an argmax-selected representative triangle.
+  std::unique_ptr<IdType[]> poly_face_fn_;
 
   // Direct tri→poly-face-index lookup. Populated by PopulateFromCfGeom from the
   // per-tri "which face slot" table produced by BuildMeshFromCfGeom. Not

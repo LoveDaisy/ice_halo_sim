@@ -104,10 +104,8 @@ TEST_F(V3TestCrystal, PolygonFaceDataPrism) {
 
   const auto* pn = crystal.GetPolygonFaceNormal();
   const auto* pd = crystal.GetPolygonFaceDist();
-  const auto* tri_id = crystal.GetPolygonFaceTriId();
   ASSERT_NE(pn, nullptr);
   ASSERT_NE(pd, nullptr);
-  ASSERT_NE(tri_id, nullptr);
 
   auto tri_cnt = crystal.TotalTriangles();
   const auto* face_n = crystal.GetTriangleNormal();
@@ -117,13 +115,21 @@ TEST_F(V3TestCrystal, PolygonFaceDataPrism) {
     float len = Norm3(pn + i * 3);
     EXPECT_NEAR(len, 1.0f, 1e-5) << "polygon face " << i;
 
-    // tri_id should be in range
-    EXPECT_GE(tri_id[i], 0);
-    EXPECT_LT(tri_id[i], static_cast<int>(tri_cnt));
-
-    // Polygon face normal should match its representative triangle normal
-    float dot = Dot3(pn + i * 3, face_n + tri_id[i] * 3);
-    EXPECT_GT(dot, 0.999f) << "polygon face " << i << " tri_id " << tri_id[i];
+    // Every polygon face must contribute at least one triangle whose normal
+    // aligns with the polygon plane normal. Uses PolygonFaceOfTri (the
+    // parametric tri→polygon slot table populated by PopulateFromCfGeom) as
+    // the inverse map — replaces the pre-7C GetPolygonFaceTriId() which
+    // exposed a single argmax-selected representative triangle.
+    bool found = false;
+    for (size_t t = 0; t < tri_cnt; t++) {
+      if (crystal.PolygonFaceOfTri(static_cast<int>(t)) == static_cast<IdType>(i)) {
+        float dot = Dot3(pn + i * 3, face_n + t * 3);
+        EXPECT_GT(dot, 0.999f) << "polygon face " << i << " tri " << t;
+        found = true;
+        break;
+      }
+    }
+    EXPECT_TRUE(found) << "polygon face " << i << " has no member triangle";
   }
 }
 
@@ -135,7 +141,8 @@ TEST_F(V3TestCrystal, PolygonFaceDataPyramid) {
 
   const auto* pn = crystal.GetPolygonFaceNormal();
   const auto* pd = crystal.GetPolygonFaceDist();
-  const auto* tri_id = crystal.GetPolygonFaceTriId();
+  ASSERT_NE(pn, nullptr);
+  ASSERT_NE(pd, nullptr);
 
   auto tri_cnt = crystal.TotalTriangles();
   const auto* face_n = crystal.GetTriangleNormal();
@@ -144,11 +151,18 @@ TEST_F(V3TestCrystal, PolygonFaceDataPyramid) {
     float len = Norm3(pn + i * 3);
     EXPECT_NEAR(len, 1.0f, 1e-5) << "polygon face " << i;
 
-    EXPECT_GE(tri_id[i], 0);
-    EXPECT_LT(tri_id[i], static_cast<int>(tri_cnt));
-
-    float dot = Dot3(pn + i * 3, face_n + tri_id[i] * 3);
-    EXPECT_GT(dot, 0.999f) << "polygon face " << i << " tri_id " << tri_id[i];
+    // Same "at least one member triangle aligns with the polygon normal"
+    // invariant as PolygonFaceDataPrism (see the rationale there).
+    bool found = false;
+    for (size_t t = 0; t < tri_cnt; t++) {
+      if (crystal.PolygonFaceOfTri(static_cast<int>(t)) == static_cast<IdType>(i)) {
+        float dot = Dot3(pn + i * 3, face_n + t * 3);
+        EXPECT_GT(dot, 0.999f) << "polygon face " << i << " tri " << t;
+        found = true;
+        break;
+      }
+    }
+    EXPECT_TRUE(found) << "polygon face " << i << " has no member triangle";
   }
 }
 

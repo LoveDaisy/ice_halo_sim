@@ -290,19 +290,18 @@ BuiltMesh BuildMeshFromCfGeom(const CrystalGeom& g) {
 
 }  // namespace
 
-// Populate fn_map_ and poly_face_data_ directly from the closed-form output,
-// skipping FillHexFnMap's argmax-vs-reference-normals reversal and
-// BuildPolygonFaceData's argmax triangle-to-plane grouping. The closed-form
-// output already carries the parametric face-number and one-tri-per-face slot
-// membership; there is nothing to reverse-engineer. This is the payoff of the
-// representation swap: the three argmax reversals (CPU / Metal / CUDA) become
-// straight assignments from the same source.
+// Populate poly_face_data_ (normals + plane distances), poly_face_fn_
+// (per-polygon face-number), and poly_face_of_tri_ (tri→polygon-face map)
+// directly from the closed-form output. The closed-form output already
+// carries the parametric face-number and per-triangle slot membership; there
+// is nothing to reverse-engineer. This is the payoff of the representation
+// swap: what used to be three separate argmax reversals (CPU / Metal / CUDA)
+// collapse into straight assignments from the same source, and the fn is now
+// stored at its natural key (per polygon face) rather than reconstructed
+// from an argmax-selected representative triangle.
 void Crystal::PopulateFromCfGeom(const std::vector<int>& tri_face_slot) {
   const size_t tri_cnt = mesh_.GetTriangleCnt();
   assert(tri_face_slot.size() == tri_cnt);
-  for (size_t t = 0; t < tri_cnt; t++) {
-    fn_map_[t] = static_cast<IdType>(cf_geom_.face_number[tri_face_slot[t]]);
-  }
 
   // slot → poly-face-index (0..present_cnt-1). kInvalidId for absent slots.
   IdType slot_to_poly[kCrystalGeomMaxFaces];
@@ -328,45 +327,34 @@ void Crystal::PopulateFromCfGeom(const std::vector<int>& tri_face_slot) {
     poly_face_data_.reset();
     poly_face_n_ = nullptr;
     poly_face_d_ = nullptr;
-    poly_face_tri_id_ = nullptr;
+    poly_face_fn_.reset();
     return;
   }
-  poly_face_data_ = std::make_unique<float[]>(poly_face_cnt_ * 5);
+  // Layout: normals(3*cnt) + dist(cnt) = 4*cnt floats.
+  poly_face_data_ = std::make_unique<float[]>(poly_face_cnt_ * 4);
   poly_face_n_ = poly_face_data_.get();
   poly_face_d_ = poly_face_data_.get() + poly_face_cnt_ * 3;
-  poly_face_tri_id_ = reinterpret_cast<int*>(poly_face_data_.get() + poly_face_cnt_ * 4);
+  poly_face_fn_ = std::make_unique<IdType[]>(poly_face_cnt_);
 
   size_t p = 0;
   for (int slot = 0; slot < cf_geom_.face_cnt; slot++) {
     if (!cf_geom_.face_present[slot]) {
       continue;
     }
-    // Representative triangle: first tri assigned to this slot. This is the
-    // same contract BuildPolygonFaceData provided (a triangle definitely
-    // coplanar with the polygon plane); the specific triangle chosen doesn't
-    // matter beyond that — GetFn(IdType) only reads fn_map_[rep_tri], and both
-    // paths land the tri on the same face.
-    int rep_tri = -1;
-    for (size_t t = 0; t < tri_cnt; t++) {
-      if (tri_face_slot[t] == slot) {
-        rep_tri = static_cast<int>(t);
-        break;
-      }
-    }
-    assert(rep_tri >= 0);
 
     poly_face_n_[p * 3 + 0] = cf_geom_.face_normal[slot * 3 + 0];
     poly_face_n_[p * 3 + 1] = cf_geom_.face_normal[slot * 3 + 1];
     poly_face_n_[p * 3 + 2] = cf_geom_.face_normal[slot * 3 + 2];
 
-    // Normalize the plane's d by |(a, b, c)| so the stored plane matches the
-    // "unit normal" convention BuildPolygonFaceData used. The closed-form
-    // plane_coef layout mirrors FillHexCrystalCoef's, whose per-slot norms are
-    // {1, 1, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5} for prism (basal unit, side 0.5).
+    // Normalize the plane's d by |(a, b, c)| so the stored plane keeps the
+    // "unit normal" convention. The closed-form plane_coef layout mirrors
+    // FillHexCrystalCoef's, whose per-slot norms are {1, 1, 0.5, 0.5, 0.5,
+    // 0.5, 0.5, 0.5} for prism (basal unit, side 0.5).
     const float* coef = cf_geom_.plane_coef + slot * 4;
     const float norm = Norm3(coef);
     poly_face_d_[p] = (norm > math::kFloatEps) ? (coef[3] / norm) : 0.0f;
-    poly_face_tri_id_[p] = rep_tri;
+
+    poly_face_fn_[p] = static_cast<IdType>(cf_geom_.face_number[slot]);
     p++;
   }
 }
@@ -469,8 +457,7 @@ Crystal::Crystal(size_t vtx_cnt, std::unique_ptr<float[]> vtx, size_t triangle_c
       cache_data_(std::make_unique<float[]>(triangle_cnt * CrystalCachOffset::kTotal)),
       face_v_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kVtx),
       face_n_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kNormal),
-      face_area_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kArea),
-      fn_map_(std::make_unique<IdType[]>(triangle_cnt)), fn_period_(-1) {
+      face_area_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kArea) {
   ComputeCacheData();
 }
 
@@ -479,8 +466,7 @@ Crystal::Crystal(Mesh mesh)
       cache_data_(std::make_unique<float[]>(mesh_.GetTriangleCnt() * CrystalCachOffset::kTotal)),
       face_v_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kVtx),
       face_n_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kNormal),
-      face_area_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kArea),
-      fn_map_(std::make_unique<IdType[]>(mesh_.GetTriangleCnt())), fn_period_(-1) {
+      face_area_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kArea) {
   ComputeCacheData();
 }
 
@@ -489,19 +475,18 @@ Crystal::Crystal(const Crystal& other)
       cache_data_(std::make_unique<float[]>(other.TotalTriangles() * CrystalCachOffset::kTotal)),
       face_v_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kVtx),
       face_n_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kNormal),
-      face_area_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kArea),
-      fn_map_(std::make_unique<IdType[]>(other.TotalTriangles())), fn_period_(other.fn_period_),
+      face_area_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kArea), fn_period_(other.fn_period_),
       poly_face_cnt_(other.poly_face_cnt_), cf_geom_(other.cf_geom_) {
   auto tri_cnt = other.TotalTriangles();
   std::memcpy(cache_data_.get(), other.cache_data_.get(), tri_cnt * CrystalCachOffset::kTotal * sizeof(float));
-  std::memcpy(fn_map_.get(), other.fn_map_.get(), tri_cnt * sizeof(IdType));
 
   if (poly_face_cnt_ > 0) {
-    poly_face_data_ = std::make_unique<float[]>(poly_face_cnt_ * 5);
+    poly_face_data_ = std::make_unique<float[]>(poly_face_cnt_ * 4);
     poly_face_n_ = poly_face_data_.get();
     poly_face_d_ = poly_face_data_.get() + poly_face_cnt_ * 3;
-    poly_face_tri_id_ = reinterpret_cast<int*>(poly_face_data_.get() + poly_face_cnt_ * 4);
-    std::memcpy(poly_face_data_.get(), other.poly_face_data_.get(), poly_face_cnt_ * 5 * sizeof(float));
+    std::memcpy(poly_face_data_.get(), other.poly_face_data_.get(), poly_face_cnt_ * 4 * sizeof(float));
+    poly_face_fn_ = std::make_unique<IdType[]>(poly_face_cnt_);
+    std::memcpy(poly_face_fn_.get(), other.poly_face_fn_.get(), poly_face_cnt_ * sizeof(IdType));
   }
   if (other.poly_face_of_tri_) {
     poly_face_of_tri_ = std::make_unique<IdType[]>(tri_cnt);
@@ -513,9 +498,9 @@ Crystal::Crystal(Crystal&& other) noexcept
     : config_id_(other.config_id_), mesh_(std::move(other.mesh_)), cache_data_(std::move(other.cache_data_)),
       face_v_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kVtx),
       face_n_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kNormal),
-      face_area_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kArea),
-      fn_map_(std::move(other.fn_map_)), fn_period_(other.fn_period_), poly_face_cnt_(other.poly_face_cnt_),
-      poly_face_data_(std::move(other.poly_face_data_)), poly_face_of_tri_(std::move(other.poly_face_of_tri_)),
+      face_area_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kArea), fn_period_(other.fn_period_),
+      poly_face_cnt_(other.poly_face_cnt_), poly_face_data_(std::move(other.poly_face_data_)),
+      poly_face_fn_(std::move(other.poly_face_fn_)), poly_face_of_tri_(std::move(other.poly_face_of_tri_)),
       cf_geom_(other.cf_geom_) {
   other.face_v_ = nullptr;
   other.face_n_ = nullptr;
@@ -524,12 +509,10 @@ Crystal::Crystal(Crystal&& other) noexcept
   if (poly_face_cnt_ > 0) {
     poly_face_n_ = poly_face_data_.get();
     poly_face_d_ = poly_face_data_.get() + poly_face_cnt_ * 3;
-    poly_face_tri_id_ = reinterpret_cast<int*>(poly_face_data_.get() + poly_face_cnt_ * 4);
   }
   other.poly_face_cnt_ = 0;
   other.poly_face_n_ = nullptr;
   other.poly_face_d_ = nullptr;
-  other.poly_face_tri_id_ = nullptr;
 }
 
 Crystal& Crystal::operator=(const Crystal& other) {
@@ -545,25 +528,24 @@ Crystal& Crystal::operator=(const Crystal& other) {
   face_v_ = cache_data_.get() + n * CrystalCachOffset::kVtx;
   face_n_ = cache_data_.get() + n * CrystalCachOffset::kNormal;
   face_area_ = cache_data_.get() + n * CrystalCachOffset::kArea;
-  fn_map_ = std::make_unique<IdType[]>(n);
 
   std::memcpy(cache_data_.get(), other.cache_data_.get(), n * CrystalCachOffset::kTotal * sizeof(float));
-  std::memcpy(fn_map_.get(), other.fn_map_.get(), n * sizeof(IdType));
 
   fn_period_ = other.fn_period_;
 
   poly_face_cnt_ = other.poly_face_cnt_;
   if (poly_face_cnt_ > 0) {
-    poly_face_data_ = std::make_unique<float[]>(poly_face_cnt_ * 5);
+    poly_face_data_ = std::make_unique<float[]>(poly_face_cnt_ * 4);
     poly_face_n_ = poly_face_data_.get();
     poly_face_d_ = poly_face_data_.get() + poly_face_cnt_ * 3;
-    poly_face_tri_id_ = reinterpret_cast<int*>(poly_face_data_.get() + poly_face_cnt_ * 4);
-    std::memcpy(poly_face_data_.get(), other.poly_face_data_.get(), poly_face_cnt_ * 5 * sizeof(float));
+    std::memcpy(poly_face_data_.get(), other.poly_face_data_.get(), poly_face_cnt_ * 4 * sizeof(float));
+    poly_face_fn_ = std::make_unique<IdType[]>(poly_face_cnt_);
+    std::memcpy(poly_face_fn_.get(), other.poly_face_fn_.get(), poly_face_cnt_ * sizeof(IdType));
   } else {
     poly_face_data_.reset();
     poly_face_n_ = nullptr;
     poly_face_d_ = nullptr;
-    poly_face_tri_id_ = nullptr;
+    poly_face_fn_.reset();
   }
   if (other.poly_face_of_tri_) {
     poly_face_of_tri_ = std::make_unique<IdType[]>(n);
@@ -592,24 +574,21 @@ Crystal& Crystal::operator=(Crystal&& other) noexcept {
   other.face_n_ = nullptr;
   other.face_area_ = nullptr;
 
-  fn_map_ = std::move(other.fn_map_);
   fn_period_ = other.fn_period_;
 
   poly_face_cnt_ = other.poly_face_cnt_;
   poly_face_data_ = std::move(other.poly_face_data_);
+  poly_face_fn_ = std::move(other.poly_face_fn_);
   if (poly_face_cnt_ > 0) {
     poly_face_n_ = poly_face_data_.get();
     poly_face_d_ = poly_face_data_.get() + poly_face_cnt_ * 3;
-    poly_face_tri_id_ = reinterpret_cast<int*>(poly_face_data_.get() + poly_face_cnt_ * 4);
   } else {
     poly_face_n_ = nullptr;
     poly_face_d_ = nullptr;
-    poly_face_tri_id_ = nullptr;
   }
   other.poly_face_cnt_ = 0;
   other.poly_face_n_ = nullptr;
   other.poly_face_d_ = nullptr;
-  other.poly_face_tri_id_ = nullptr;
 
   poly_face_of_tri_ = std::move(other.poly_face_of_tri_);
 
@@ -673,24 +652,10 @@ IdType Crystal::PolygonFaceOfTri(int tri_id) const {
 }
 
 IdType Crystal::GetFn(IdType poly_idx) const {
-  if (poly_idx == kInvalidId || poly_idx >= poly_face_cnt_) {
+  if (poly_idx == kInvalidId || poly_idx >= poly_face_cnt_ || !poly_face_fn_) {
     return kInvalidId;
   }
-  // Depth-of-defense: the inner index poly_face_tri_id_[poly_idx] is populated
-  // by BuildPolygonFaceData; if any future upstream regression leaves a slot
-  // uninitialized (the failure mode diagnosed on hex prisms with random
-  // face_distance, now guarded at the mesh factory), this bound check turns a
-  // wild fn_map_[garbage] read into a well-defined kInvalidId return. This is
-  // NOT a root-cause fix — the real fix is at the mesh-construction boundary
-  // (SolveConvexPolyhedronVtxD scale-relative dedup + Crystal factory Euler
-  // gate). Leaving the defense here so a future upstream drift surfaces as a
-  // detectable "no fn" symptom rather than a silent crash; do not treat this
-  // bound check as license to relax the mesh-side invariants.
-  const int tri = poly_face_tri_id_[poly_idx];
-  if (tri < 0 || static_cast<size_t>(tri) >= mesh_.GetTriangleCnt()) {
-    return kInvalidId;
-  }
-  return fn_map_[tri];
+  return poly_face_fn_[poly_idx];
 }
 
 std::vector<IdType> Crystal::PCanonicalShift(const std::vector<IdType>& rp) const {
@@ -878,10 +843,6 @@ const float* Crystal::GetPolygonFaceNormal() const {
 
 const float* Crystal::GetPolygonFaceDist() const {
   return poly_face_d_;
-}
-
-const int* Crystal::GetPolygonFaceTriId() const {
-  return poly_face_tri_id_;
 }
 
 float Crystal::GetRefractiveIndex(float wl) const {
