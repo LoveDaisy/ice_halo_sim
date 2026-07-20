@@ -158,7 +158,8 @@ add_executable(golden_analytic_test
   "${PROJ_TEST_DIR}/golden-analytic/backend/test_cpu_golden_rays.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/backend/test_multi_ms_golden.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_projection.cpp"
-  "${PROJ_TEST_DIR}/golden-analytic/core/test_closed_form_prism.cpp")
+  "${PROJ_TEST_DIR}/golden-analytic/core/test_closed_form_prism.cpp"
+  "${PROJ_TEST_DIR}/golden-analytic/core/test_closed_form_pyramid.cpp")
 target_include_directories(golden_analytic_test
   PRIVATE ${PROJ_TEST_DIR})
 target_link_libraries(golden_analytic_test

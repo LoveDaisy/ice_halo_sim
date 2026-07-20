@@ -49,13 +49,14 @@ bool Solve2x2(double a00, double a01, double a10, double a11, double b0, double 
 // never per-comparison floating-point outcomes (which would drift on legitimate
 // numerical differences and turn any set-equality assertion into a false
 // alarm).
-enum SolveHexCrossSectionPathTag : uint16_t {
-  kPathTagAnyDirDegenerate = 1u << 0,  // any direction i had dist[i] ≤ 0 (fully eroded)
-  kPathTagDedupHit = 1u << 1,          // at least one candidate corner was deduped
-  kPathTagBounded = 1u << 2,           // at least 3 present directions bounded a polygon
-  kPathTagAllDirsPresent = 1u << 3,    // all 6 directions bound a face (full hexagon)
-  kPathTagEmpty = 1u << 4,             // feasible region is empty (no corners survived)
-};
+// Local aliases mapped 1:1 to the public ClosedFormHexPathTag bits in the hpp.
+// Kept as aliases (not a private enum) so a mismatch between "what the solver
+// records" and "what the public struct exposes" is impossible by construction.
+constexpr uint16_t kPathTagAnyDirDegenerate = kClosedFormPathTagAnyDirDegenerate;
+constexpr uint16_t kPathTagDedupHit = kClosedFormPathTagDedupHit;
+constexpr uint16_t kPathTagBounded = kClosedFormPathTagBounded;
+constexpr uint16_t kPathTagAllDirsPresent = kClosedFormPathTagAllDirsPresent;
+constexpr uint16_t kPathTagEmpty = kClosedFormPathTagEmpty;
 
 // SolveHexCrossSection — the 2D half-plane intersection over the six fixed
 // prism directions θᵢ = i·60° with per-direction offset `r_side_dist[i]` (in
@@ -745,7 +746,9 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
     for (int i = 0; i < 6; i++) {
       r_side[i] = kInsetK * (static_cast<double>(dist[i]) - m);
     }
-    HexCrossSection xs = SolveHexCrossSection(r_side);
+    uint16_t local_tag = 0;
+    HexCrossSection xs = SolveHexCrossSection(r_side, &local_tag);
+    r.path_tag_union |= local_tag;
     if (!xs.any_side_present) {
       return 0;
     }

@@ -19,7 +19,26 @@
 #ifndef LUMICE_CORE_GEO3D_CLOSEDFORM_HPP_
 #define LUMICE_CORE_GEO3D_CLOSEDFORM_HPP_
 
+#include <cstdint>
+
 namespace lumice {
+
+// Coarse-grained structural branches walked by the shared 2D cross-section
+// solver. Recorded per invocation as a bitmask; the pyramid evaluator OR-unions
+// the tags of every invocation into ClosedFormPyramidResult::path_tag_union.
+// Tests use the union to assert that specialized configurations
+// (shoulder / apex / face-drop) walk the SAME set of branches as regular
+// well-conditioned configurations — turning "no special-case branch" from a
+// human code-review claim into a CI-enforceable set-equality check. Anchored on
+// structural predicates only (not floating-point comparison results), so
+// legitimate numerical drift cannot cause a false alarm.
+enum ClosedFormHexPathTag : uint16_t {
+  kClosedFormPathTagAnyDirDegenerate = 1u << 0,  // any direction had r_side ≤ 0
+  kClosedFormPathTagDedupHit = 1u << 1,          // ≥1 candidate corner deduped
+  kClosedFormPathTagBounded = 1u << 2,           // ≥3 present directions bounded a polygon
+  kClosedFormPathTagAllDirsPresent = 1u << 3,    // all 6 directions bound a face
+  kClosedFormPathTagEmpty = 1u << 4,             // feasible region empty
+};
 
 // ============================================================================
 // Prism family (2 basal + 6 prism side).
@@ -138,6 +157,13 @@ struct ClosedFormPyramidResult {
   // = 0 when the basal cut sits on the shoulder z = ±h2/2 (apex not reached).
   float inset_at_top;
   float inset_at_bottom;
+
+  // OR-union of ClosedFormHexPathTag bits across every internal SolveHexCrossSection
+  // invocation performed while computing this result. Zero when no invocation
+  // occurred (e.g. zero-volume short-circuit). Enables the golden-analytic test
+  // to assert that specialized configurations (shoulder / apex / face-drop) walk
+  // the SAME set of solver branches as regular configurations.
+  uint16_t path_tag_union;
 };
 
 // Evaluate the closed-form pyramid geometry — direct-wedge entry point.
