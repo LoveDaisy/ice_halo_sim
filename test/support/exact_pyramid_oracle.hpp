@@ -5,15 +5,20 @@
 // substitution — a1 spans [7.56e-4, 248] over the legal wedge range, so the
 // substitution trick (x = √3·u → tiny integer rows) doesn't work uniformly.
 //
-// Approach here: pressure-tested design (see bench_geom_closedform.cpp's
-// BM_PyramidOracleBitWidthPressure). Uniform SHIFT=24 across all coefficients
-// (matching float mantissa exactly) keeps every float coef captured with zero
-// truncation and bounds the worst-case triple-product intermediate at ~2^109
-// bits — well inside __int128 with 19-bit headroom. This is the "float-tier"
-// oracle: it operates on the float coefficients the closed-form actually
-// stores, so it tests exactly the level of precision the closed-form
-// commits to. Any double-precision internals of the closed-form that don't
-// affect its float output are outside this oracle's scope by design.
+// Approach: dynamic uniform shift computed at runtime per plane set. For each
+// coefficient f = m · 2^exp (m ∈ [0.5, 1), 24-bit float mantissa), lossless
+// integer capture requires shift ≥ 24 − exp; the shift for the whole set is
+// max(24 − exp_i). "shift = 24 hardcoded" (initial scaffold) was lossy — it
+// mistook "24 mantissa bits" for "24 fractional bits" and truncated any coef
+// with exp < 0 (measured: 66% of pyramid coefs, breaking exact 6-plane apex
+// concurrence and splitting one apex into a cluster of ~6 nearby points → a
+// regular hex pyramid returned vtx=36 instead of 14). Dynamic shift restores
+// bit-exact input capture. Budget guard: if the shift + magnitude combination
+// would push worst-case __int128 intermediates over the signed 127-bit limit
+// (specifically the 4·coef_bits + 3 bound in the IsFeasible cross-multiply),
+// the oracle sets `refused = true` and returns an empty verdict — silent
+// downgrade to a lossy answer is worse than no answer (a01: no ground truth
+// worth the name can quietly wrong itself).
 //
 // Independence discipline:
 //   - This oracle is a SECOND, structurally-independent implementation from
@@ -70,18 +75,166 @@ struct ExactPyramidVerdict {
   // ≥ 3 (a 2D polygon on the plane).
   int face_vertex_count[kExactPyramidMaxPlanes] = {};
   bool face_present[kExactPyramidMaxPlanes] = {};
+  // Refusal flag: set iff the input's required shift or the resulting
+  // intermediate bit widths would exceed the __int128 budget. When true, the
+  // vertex/face arrays are meaningless (empty) — the caller must NOT treat
+  // this as "no vertices found". Downstream ground-truth users should route
+  // refused samples to the Python `Fraction` oracle (unlimited precision) or
+  // exclude them from the batch.
+  bool refused = false;
+  // Diagnostic: shift used for this call, and worst observed intermediate bit
+  // width. Populated even when refused (to help sizing follow-up work).
+  int shift = 0;
+  int max_intermediate_bits = 0;
 };
 
 namespace exact_pyramid_detail {
 
-constexpr int kShift = 24;
-constexpr __int128 kShiftScale = static_cast<__int128>(1) << kShift;
+// Signed __int128 has 127 bits of magnitude + 1 sign bit. Worst-case
+// intermediate in ExactPyramid is the IsFeasible cross-multiply:
+//   sum_{col} plane[k][col] · point_num_col + plane[k][3] · det
+// where point_num_col and det are each Cramer-style 3×3 combinations of
+// scaled coefs (up to 3·coef_bits + 3 bits each). The dominant term thus has
+// coef_bits + 3·coef_bits + 3 = 4·coef_bits + 3 bits, plus ~2 bits from the
+// 4-term sum. Cap at 126 (leave 1 bit for sign + 1 for the sum) → coef_bits
+// budget = (126 − 5) / 4 = 30.
+constexpr int kMaxCoefBits = 30;
+constexpr int kMaxIntermediateBits = 126;
 
-// Scale a float to an exact __int128 by SHIFT=24. Since float has 24 bit
-// mantissa, this is lossless for values in [-2^40, 2^40] (mantissa · 2^SHIFT
-// still fits in ~64 bits, with the __int128 giving plenty of headroom).
-inline __int128 FloatToScaled(float x) {
-  return static_cast<__int128>(std::llround(static_cast<double>(x) * static_cast<double>(kShiftScale)));
+// Noise-floor + required-shift analysis of one input coefficient set.
+// Motivation: cos/sin/algebraic-cancellation in the producer can leak sub-ULP
+// noise (e.g., x1 − x2 where x1 == x2 by symmetry produces 1e-16 instead of
+// exact 0, from libm's rounded transcendentals). Feeding such a coef to the
+// naïve RequiredShift asks for shift ≈ 76 to capture it losslessly and pins
+// the oracle to a refuse verdict for otherwise well-conditioned inputs (the
+// regular hex pyramid trip-wired here). The fix: any coef whose magnitude is
+// smaller than 1 ULP of the input's max coef (≈ 2^-24 · max_abs) contributes
+// less than a rounding-error's worth to any product and is geometrically
+// zero — snap it out before computing shift.
+struct CoefAnalysis {
+  int shift = 0;
+  float noise_floor = 0.0f;  // |coef| < noise_floor is treated as 0
+};
+
+inline CoefAnalysis AnalyzeCoefs(int plane_cnt, const float* plane_coef) {
+  CoefAnalysis out;
+  float max_abs = 0.0f;
+  for (int i = 0; i < plane_cnt * 4; i++) {
+    float f = std::fabs(plane_coef[i]);
+    if (f > max_abs) {
+      max_abs = f;
+    }
+  }
+  if (max_abs == 0.0f) {
+    return out;
+  }
+  // 2^-24 relative to the largest coef: at or below this, a coef is within
+  // one float ULP of the largest coef and contributes nothing more than
+  // rounding noise to any product — treat as geometric zero.
+  out.noise_floor = std::ldexp(max_abs, -24);
+  // Compute the minimum uniform shift K such that every above-noise
+  // coefficient f_i, when scaled to `round(f_i · 2^K)`, is captured with zero
+  // truncation. For f = m · 2^exp (frexp), K ≥ 24 − exp makes f · 2^K integer.
+  // Take the max across coefs — one basis for the whole plane set.
+  int max_shift = 0;
+  for (int i = 0; i < plane_cnt * 4; i++) {
+    float af = std::fabs(plane_coef[i]);
+    if (af == 0.0f || af <= out.noise_floor) {
+      continue;
+    }
+    int exp = 0;
+    std::frexp(af, &exp);
+    int need = 24 - exp;
+    if (need < 0) {
+      need = 0;  // integer or larger already
+    }
+    if (need > max_shift) {
+      max_shift = need;
+    }
+  }
+  out.shift = max_shift;
+  return out;
+}
+
+// Scale a float losslessly using the shift returned by RequiredShift.
+// std::ldexp gives exact 2^shift multiplication; llround snaps the float
+// mantissa to its integer image (guaranteed exact when shift = 24 − exp for
+// that coef; larger shifts still produce integers since we only add trailing
+// zero bits). Zero coefs stay zero regardless.
+inline __int128 FloatToScaled(float f, int shift) {
+  if (f == 0.0f) {
+    return 0;
+  }
+  return static_cast<__int128>(std::llround(std::ldexp(static_cast<double>(f), shift)));
+}
+
+// Bit width of a signed __int128 magnitude (0 → 0, ±1 → 1, ±2..3 → 2, …).
+// Used to enforce the intermediate-bit-width budget before every risky
+// multiplication.
+inline int BitWidth128(__int128 x) {
+  if (x < 0) {
+    x = -x;
+  }
+  if (x == 0) {
+    return 0;
+  }
+  int b = 0;
+  __int128 v = x;
+  while (v != 0) {
+    v >>= 1;
+    b++;
+  }
+  return b;
+}
+
+// Overflow-checked cross-multiplied feasibility test. Returns tri-state:
+//   +1 = infeasible (some plane's LHS strictly > RHS)
+//    0 = feasible (all planes satisfied)
+//   -1 = refuse (an intermediate bit width exceeded the budget)
+// Also updates *max_bits with the widest observed intermediate. Runs on
+// reduced (px, py, pz, det) so worst-case magnitude is much smaller than
+// SolveTriple's raw output, but still guarded — for adversarial coefs the
+// reduced representation can be near-raw.
+inline int IsFeasibleGuarded(int n, const __int128 planes[][4], __int128 px, __int128 py, __int128 pz, __int128 det,
+                             int* max_bits) {
+  for (int k = 0; k < n; k++) {
+    __int128 t0 = planes[k][0] * px;
+    __int128 t1 = planes[k][1] * py;
+    __int128 t2 = planes[k][2] * pz;
+    __int128 rhs = -planes[k][3] * det;
+    int w0 = BitWidth128(t0);
+    int w1 = BitWidth128(t1);
+    int w2 = BitWidth128(t2);
+    int wr = BitWidth128(rhs);
+    int worst = w0;
+    if (w1 > worst) {
+      worst = w1;
+    }
+    if (w2 > worst) {
+      worst = w2;
+    }
+    if (wr > worst) {
+      worst = wr;
+    }
+    if (worst > *max_bits) {
+      *max_bits = worst;
+    }
+    if (worst >= kMaxIntermediateBits) {
+      return -1;  // refuse: single-term overflow risk
+    }
+    __int128 lhs = t0 + t1 + t2;
+    int wl = BitWidth128(lhs);
+    if (wl > *max_bits) {
+      *max_bits = wl;
+    }
+    if (wl >= kMaxIntermediateBits) {
+      return -1;  // refuse: sum overflow risk
+    }
+    if (lhs > rhs) {
+      return 1;
+    }
+  }
+  return 0;
 }
 
 // 3×3 Cramer determinant. Reads three plane rows (a, b, c, d) of scaled
@@ -107,24 +260,10 @@ inline void SolveTriple(const __int128 p0[4], const __int128 p1[4], const __int1
   *pz = p0[0] * (p1[1] * d2 - d1 * p2[1]) - p0[1] * (p1[0] * d2 - d1 * p2[0]) + d0 * (p1[0] * p2[1] - p1[1] * p2[0]);
 }
 
-// Exact feasibility: is (px/det, py/det, pz/det) inside every plane's
-// half-space a·x + b·y + c·z + d ≤ 0? Cross-multiply by det > 0 to keep
-// integer.
-//   a·(px/det) + b·(py/det) + c·(pz/det) ≤ -d
-//   a·px + b·py + c·pz ≤ -d · det
-inline bool IsFeasible(int n, const __int128 planes[][4], __int128 px, __int128 py, __int128 pz, __int128 det) {
-  for (int k = 0; k < n; k++) {
-    __int128 lhs = planes[k][0] * px + planes[k][1] * py + planes[k][2] * pz;
-    __int128 rhs = -planes[k][3] * det;
-    if (lhs > rhs) {
-      return false;
-    }
-  }
-  return true;
-}
-
 // Exact incidence: is (px/det, py/det, pz/det) exactly on plane k? Same
-// cross-multiplied form as IsFeasible but with equality.
+// cross-multiplied form as feasibility but with equality. Called only on
+// already-reduced (px, py, pz, det); overflow-safe under the same budget as
+// IsFeasibleGuarded (asserted in caller via the pre-check on coef bits).
 inline bool IsIncident(const __int128 plane[4], __int128 px, __int128 py, __int128 pz, __int128 det) {
   __int128 lhs = plane[0] * px + plane[1] * py + plane[2] * pz;
   __int128 rhs = -plane[3] * det;
@@ -173,41 +312,82 @@ inline bool SamePoint(const ExactPyramidVertex& a, __int128 bx, __int128 by, __i
 // plane_coef layout matches FillHexCrystalCoef and ComputeClosedFormPyramid:
 // (a, b, c, d) with the bounded half-space a·x + b·y + c·z + d ≤ 0.
 inline ExactPyramidVerdict ExactPyramid(int plane_cnt, const float* plane_coef) {
-  using namespace exact_pyramid_detail;
+  namespace d = exact_pyramid_detail;
   ExactPyramidVerdict out;
   if (plane_cnt <= 0 || plane_cnt > kExactPyramidMaxPlanes) {
     return out;
   }
+  // Compute the per-input dynamic shift + noise floor, then check up front
+  // that the scaled-coef magnitude will fit within the intermediate budget.
+  // If not, refuse — a truncating fall-back is exactly what produced the
+  // "regular pyramid → vtx=36" bug on the SHIFT=24 hardcode.
+  const d::CoefAnalysis analysis = d::AnalyzeCoefs(plane_cnt, plane_coef);
+  const int shift = analysis.shift;
+  out.shift = shift;
   __int128 planes[kExactPyramidMaxPlanes][4];
+  int max_coef_bits = 0;
   for (int i = 0; i < plane_cnt; i++) {
     for (int k = 0; k < 4; k++) {
-      planes[i][k] = FloatToScaled(plane_coef[i * 4 + k]);
+      float f = plane_coef[i * 4 + k];
+      // Snap sub-noise coefs to exact zero (see AnalyzeCoefs rationale).
+      if (std::fabs(f) <= analysis.noise_floor) {
+        f = 0.0f;
+      }
+      planes[i][k] = d::FloatToScaled(f, shift);
+      int w = d::BitWidth128(planes[i][k]);
+      if (w > max_coef_bits) {
+        max_coef_bits = w;
+      }
     }
+  }
+  out.max_intermediate_bits = max_coef_bits;
+  if (max_coef_bits > d::kMaxCoefBits) {
+    // Budget exhausted before we start. Refuse — silent downgrade would let
+    // an already-observed failure mode recur (see file header).
+    out.refused = true;
+    out.vertex_count = 0;
+    return out;
   }
   for (int i = 0; i < plane_cnt; i++) {
     for (int j = i + 1; j < plane_cnt; j++) {
       for (int k = j + 1; k < plane_cnt; k++) {
-        __int128 det = Det3(planes[i], planes[j], planes[k]);
+        __int128 det = d::Det3(planes[i], planes[j], planes[k]);
+        int w_det = d::BitWidth128(det);
+        if (w_det > out.max_intermediate_bits) {
+          out.max_intermediate_bits = w_det;
+        }
         if (det == 0) {
           continue;
         }
-        __int128 px, py, pz;
-        SolveTriple(planes[i], planes[j], planes[k], &px, &py, &pz);
+        __int128 px = 0;
+        __int128 py = 0;
+        __int128 pz = 0;
+        d::SolveTriple(planes[i], planes[j], planes[k], &px, &py, &pz);
         if (det < 0) {
           det = -det;
           px = -px;
           py = -py;
           pz = -pz;
         }
-        if (!IsFeasible(plane_cnt, planes, px, py, pz, det)) {
+        // Reduce first so IsFeasibleGuarded operates on bounded operands
+        // (SolveTriple output can be up to ~3·coef_bits + 3 bits — the raw
+        // form times another coef would blow past 127 bits at the top of
+        // the coef budget).
+        d::Reduce(&px, &py, &pz, &det);
+        int feas = d::IsFeasibleGuarded(plane_cnt, planes, px, py, pz, det, &out.max_intermediate_bits);
+        if (feas == -1) {
+          // Overflow risk on some plane's cross-multiply. Refuse the whole
+          // batch — a partial answer is worse than none.
+          out.refused = true;
+          out.vertex_count = 0;
+          return out;
+        }
+        if (feas == 1) {
           continue;
         }
-        // Reduce to lowest terms BEFORE any SamePoint / IsIncident check.
-        // Prevents downstream cross-multiply from overflowing __int128.
-        Reduce(&px, &py, &pz, &det);
         int existing = -1;
         for (int v = 0; v < out.vertex_count; v++) {
-          if (SamePoint(out.vertices[v], px, py, pz, det)) {
+          if (d::SamePoint(out.vertices[v], px, py, pz, det)) {
             existing = v;
             break;
           }
@@ -218,14 +398,14 @@ inline ExactPyramidVerdict ExactPyramid(int plane_cnt, const float* plane_coef) 
           // among the 3 defining planes of the FIRST discovery of this
           // vertex. Do NOT recompute per-plane counts here; those are
           // rebuilt below from the final mask.
-          out.vertices[existing].plane_incidence_mask |= (1ull << i) | (1ull << j) | (1ull << k);
+          out.vertices[existing].plane_incidence_mask |= (1ULL << i) | (1ULL << j) | (1ULL << k);
         } else if (out.vertex_count < kExactPyramidMaxVtx) {
           ExactPyramidVertex& v = out.vertices[out.vertex_count++];
           v.px = px;
           v.py = py;
           v.pz = pz;
           v.det = det;
-          v.plane_incidence_mask = (1ull << i) | (1ull << j) | (1ull << k);
+          v.plane_incidence_mask = (1ULL << i) | (1ULL << j) | (1ULL << k);
         }
       }
     }
@@ -236,8 +416,8 @@ inline ExactPyramidVerdict ExactPyramid(int plane_cnt, const float* plane_coef) 
   for (int v = 0; v < out.vertex_count; v++) {
     ExactPyramidVertex& vx = out.vertices[v];
     for (int k = 0; k < plane_cnt; k++) {
-      if (IsIncident(planes[k], vx.px, vx.py, vx.pz, vx.det)) {
-        vx.plane_incidence_mask |= (1ull << k);
+      if (d::IsIncident(planes[k], vx.px, vx.py, vx.pz, vx.det)) {
+        vx.plane_incidence_mask |= (1ULL << k);
       }
     }
   }
@@ -245,7 +425,7 @@ inline ExactPyramidVerdict ExactPyramid(int plane_cnt, const float* plane_coef) 
   for (int k = 0; k < plane_cnt; k++) {
     int cnt = 0;
     for (int v = 0; v < out.vertex_count; v++) {
-      if (out.vertices[v].plane_incidence_mask & (1ull << k)) {
+      if ((out.vertices[v].plane_incidence_mask & (1ULL << k)) != 0) {
         cnt++;
       }
     }

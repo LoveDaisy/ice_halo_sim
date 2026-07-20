@@ -1158,11 +1158,19 @@ void BM_PyramidClosedFormSanityDump(benchmark::State& state) {
       }
       auto pyr_oracle = test_support::ExactPyramid(n, coef_prism);
       auto prism_oracle = test_support::ExactPrism(dist_p);
-      std::fprintf(stderr, "[PRISM CROSS-CHECK] pyr_oracle.vtx=%d prism_oracle.corners=%d (expect 6+6=12 lifted)\n",
-                   pyr_oracle.vertex_count, prism_oracle.corner_count);
+      std::fprintf(stderr,
+                   "[PRISM CROSS-CHECK] pyr_oracle.vtx=%d (shift=%d, max_bits=%d, refused=%d) "
+                   "prism_oracle.corners=%d (expect 6+6=12 lifted)\n",
+                   pyr_oracle.vertex_count, pyr_oracle.shift, pyr_oracle.max_intermediate_bits,
+                   static_cast<int>(pyr_oracle.refused), prism_oracle.corner_count);
     }
     float dist[6]{ 1.f, 1.f, 1.f, 1.f, 1.f, 1.f };
-    const float au = 28.0f, al = 28.0f, h1 = 1.0f, h2 = 1.0f, h3 = 1.0f;
+    // NOTE: h1=1.0 exposed a units bug in closed-form (LP-scale vs physical
+    // m — see 2026-07-20 progress entry). Kept h1=0.3 here so the sanity dump
+    // exercises a truly truncated pyramid where the polygon at z_top is a
+    // hexagon (non-degenerate) — the case where closed-form and production
+    // should agree structurally.
+    const float au = 28.0f, al = 28.0f, h1 = 0.3f, h2 = 1.0f, h3 = 0.3f;
     auto r = ComputeClosedFormPyramid(au, al, h1, h2, h3, dist);
     std::fprintf(stderr, "[SANITY] regular pyramid α=28° h=(1,1,1) dist=1:\n");
     std::fprintf(stderr, "  a1=%.6f a2=%.6f inset_top=%.6f inset_bot=%.6f\n", static_cast<double>(r.a1),
@@ -1186,6 +1194,20 @@ void BM_PyramidClosedFormSanityDump(benchmark::State& state) {
     // Compare against production mesh.
     auto mesh = CreatePyramidMesh(au, al, h1, h2, h3, dist);
     std::fprintf(stderr, "  [PROD] vtx_cnt=%zu tri_cnt=%zu\n", mesh.GetVtxCnt(), mesh.GetTriangleCnt());
+    // Dump prod vertex z's for apex-height comparison.
+    double prod_z_max = -1e9;
+    double prod_z_min = 1e9;
+    for (size_t v = 0; v < mesh.GetVtxCnt(); v++) {
+      float z = mesh.GetVtxPtr(v)[2];
+      if (z > prod_z_max) {
+        prod_z_max = z;
+      }
+      if (z < prod_z_min) {
+        prod_z_min = z;
+      }
+    }
+    std::fprintf(stderr, "  [PROD] apex z_max=%.6f z_min=%.6f (closed-form z_top=%.6f)\n", prod_z_max, prod_z_min,
+                 static_cast<double>(r.inset_at_top) * static_cast<double>(r.a1) + 0.5);
     // Feed the closed-form's plane_coef to the pyramid oracle for sanity.
     float coef_packed[test_support::kExactPyramidMaxPlanes * 4];
     int packed_n = 0;
@@ -1204,7 +1226,8 @@ void BM_PyramidClosedFormSanityDump(benchmark::State& state) {
       packed_n++;
     }
     auto oracle = test_support::ExactPyramid(packed_n, coef_packed);
-    std::fprintf(stderr, "  [ORACLE] planes=%d vertex_count=%d\n", packed_n, oracle.vertex_count);
+    std::fprintf(stderr, "  [ORACLE] planes=%d vertex_count=%d shift=%d max_bits=%d refused=%d\n", packed_n,
+                 oracle.vertex_count, oracle.shift, oracle.max_intermediate_bits, static_cast<int>(oracle.refused));
     // Detailed per-vertex dump omitted — the __int128 rationals require
     // careful conversion to double to display without high-bit truncation,
     // which is not helpful to eyeball anyway. The oracle vertex count vs
