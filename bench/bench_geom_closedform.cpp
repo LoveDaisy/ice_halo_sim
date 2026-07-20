@@ -31,6 +31,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <random>
 #include <vector>
 
@@ -703,5 +704,172 @@ void BM_PyramidApexDegree(benchmark::State& state) {
   state.counters["samples_with_deg_gt3"] = static_cast<double>(high_degree_samples);
 }
 BENCHMARK(BM_PyramidApexDegree)->Args({ 0, 30 })->Args({ 1, 30 })->Args({ 0, 100 })->Args({ 1, 100 });
+
+// ---- Experiment 10: dump plane sets for an INDEPENDENT exact oracle --------
+//
+// The exact oracle above shares this file's structural insight (six fixed
+// horizontal directions). A shared misconception would pass both. This dumps
+// raw plane coefficients as hex floats so a separate, structure-agnostic oracle
+// (exact rationals, generic 3-plane enumeration, different language) can be the
+// arbiter -- see scripts alongside this explore.
+//
+// Covers BOTH pyramid construction paths, because they are not interchangeable:
+// Miller indices are the crystallographically rigorous route, while a directly
+// specified wedge angle is what extreme-flat validation configs use (a Miller
+// index is awkward there). The rationality of the substitution must not depend
+// on which route produced the coefficients: after x = sqrt(3)*u the sqrt(3)
+// cancels between the horizontal terms and the z coefficient (both carry the
+// same det = sqrt(3)/8 factor), leaving 8*a1*M_i + z <= h/2 + a1*dist_i whose
+// coefficients are just floats -- exact dyadic rationals whatever alpha is.
+void BM_DumpPlaneSets(benchmark::State& state) {
+  const char* path = std::getenv("LUMICE_PLANE_DUMP");
+  long written = 0;
+  if (path != nullptr) {
+    FILE* f = std::fopen(path, "w");
+    if (f != nullptr) {
+      std::mt19937 rng(20260720u);
+      std::normal_distribution<double> d_noise(1.0, 0.3);
+      std::uniform_real_distribution<double> h_dist(0.2, 2.0);
+      // arm: 0 = direct wedge angle (incl. extreme-flat), 1 = Miller index
+      for (int arm = 0; arm < 2; arm++) {
+        for (int s = 0; s < 1500; s++) {
+          float dist[kPrismFaces];
+          for (float& d : dist) {
+            d = static_cast<float>(d_noise(rng));
+          }
+          const auto h2 = static_cast<float>(h_dist(rng));
+          const auto h1 = static_cast<float>(h_dist(rng) / 2.0);
+          float au = 0, al = 0;
+          if (arm == 0) {
+            // sweep the whole legal wedge range, biased to the extreme-flat tail
+            std::uniform_real_distribution<double> a_dist(1.0, 89.5);
+            au = static_cast<float>(a_dist(rng));
+            al = static_cast<float>(a_dist(rng));
+          } else {
+            std::uniform_int_distribution<int> idx(1, 4);
+            const int i1 = idx(rng), i4 = idx(rng);
+            au = static_cast<float>(std::atan(math::kSqrt3_2 * i4 / i1 / kIceCrystalC) * math::kRadToDegree);
+            al = au;
+          }
+          float coef[kMaxHexCrystalPlanes * 4];
+          const int n = static_cast<int>(FillHexCrystalCoef(au, al, h1, h2, h1, dist, coef));
+          if (n == 0) {
+            continue;
+          }
+          auto [vtx, cnt] = SolveConvexPolyhedronVtxD(n, coef);
+          std::fprintf(f, "%d %d %d", arm, n, cnt);
+          for (int k = 0; k < n * 4; k++) {
+            std::fprintf(f, " %a", static_cast<double>(coef[k]));
+          }
+          std::fprintf(f, "\n");
+          written++;
+        }
+      }
+      std::fclose(f);
+    }
+  }
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(written);
+  }
+  state.counters["rows_written"] = static_cast<double>(written);
+}
+BENCHMARK(BM_DumpPlaneSets);
+
+// ---- Experiment 11: apex degree is a DISTRIBUTION, not a yes/no ------------
+//
+// Correcting an earlier over-read: a single max-over-400-samples at one sigma
+// was reported as "randomization splits the apex". Whether pyramidal face i
+// reaches the topmost vertex is a per-sample random event, so the apex degree
+// is a distribution that should tighten toward the symmetric value as sigma
+// falls. Also tests the structural claim that a non-degenerate prism face i
+// forces pyramidal face i to exist.
+void BM_ApexDegreeDistribution(benchmark::State& state) {
+  const double sigma = static_cast<double>(state.range(0)) / 1000.0;
+  std::mt19937 rng(555u);
+  std::normal_distribution<double> d_noise(1.0, sigma);
+  long hist[9]{};  // degree 0..8+
+  long samples = 0, prism_wo_pyr = 0, prism_present_total = 0;
+  for (int s = 0; s < 3000; s++) {
+    float dist[kPrismFaces];
+    for (float& d : dist) {
+      d = sigma > 0 ? static_cast<float>(d_noise(rng)) : 1.0f;
+    }
+    float coef[kMaxHexCrystalPlanes * 4];
+    const int n = static_cast<int>(FillHexCrystalCoef(28.0f, 28.0f, 1.0f, 1.0f, 1.0f, dist, coef));
+    if (n == 0) {
+      continue;
+    }
+    auto [vtx, cnt] = SolveConvexPolyhedronVtxD(n, coef);
+    if (cnt == 0) {
+      continue;
+    }
+    samples++;
+    double scale = 1.0;
+    for (int k = 0; k < n; k++) {
+      scale = std::max(scale, std::fabs(static_cast<double>(coef[k * 4 + 3])));
+    }
+    // degree of the topmost vertex
+    int top = 0;
+    for (int v = 1; v < cnt; v++) {
+      if (vtx[v * 3 + 2] > vtx[top * 3 + 2]) {
+        top = v;
+      }
+    }
+    const float* p = vtx.get() + top * 3;
+    int deg = 0;
+    for (int k = 0; k < n; k++) {
+      const double sd = static_cast<double>(coef[k * 4 + 0]) * p[0] + static_cast<double>(coef[k * 4 + 1]) * p[1] +
+                        static_cast<double>(coef[k * 4 + 2]) * p[2] + static_cast<double>(coef[k * 4 + 3]);
+      const double nn = std::sqrt(static_cast<double>(coef[k * 4 + 0]) * coef[k * 4 + 0] +
+                                  static_cast<double>(coef[k * 4 + 1]) * coef[k * 4 + 1] +
+                                  static_cast<double>(coef[k * 4 + 2]) * coef[k * 4 + 2]);
+      if (nn > 0 && std::fabs(sd) / nn < 1e-6 * scale) {
+        deg++;
+      }
+    }
+    hist[std::min(deg, 8)]++;
+
+    // structural claim: prism face i present => upper pyramidal face i present
+    for (int i = 0; i < kPrismFaces; i++) {
+      int on_prism = 0, on_pyr = 0;
+      for (int v = 0; v < cnt; v++) {
+        const float* q = vtx.get() + v * 3;
+        for (int which = 0; which < 2; which++) {
+          const int k = which == 0 ? (2 + i) : (8 + i);
+          if (k >= n) {
+            continue;
+          }
+          const double sd = static_cast<double>(coef[k * 4 + 0]) * q[0] + static_cast<double>(coef[k * 4 + 1]) * q[1] +
+                            static_cast<double>(coef[k * 4 + 2]) * q[2] + static_cast<double>(coef[k * 4 + 3]);
+          const double nn = std::sqrt(static_cast<double>(coef[k * 4 + 0]) * coef[k * 4 + 0] +
+                                      static_cast<double>(coef[k * 4 + 1]) * coef[k * 4 + 1] +
+                                      static_cast<double>(coef[k * 4 + 2]) * coef[k * 4 + 2]);
+          if (nn > 0 && std::fabs(sd) / nn < 1e-6 * scale) {
+            (which == 0 ? on_prism : on_pyr)++;
+          }
+        }
+      }
+      if (on_prism >= 3) {
+        prism_present_total++;
+        if (on_pyr < 3) {
+          prism_wo_pyr++;
+        }
+      }
+    }
+  }
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(hist[0]);
+  }
+  state.counters["sigma"] = sigma;
+  state.counters["samples"] = static_cast<double>(samples);
+  for (int d = 3; d <= 8; d++) {
+    char name[16];
+    std::snprintf(name, sizeof(name), "deg%d", d);
+    state.counters[name] = static_cast<double>(hist[d]);
+  }
+  state.counters["prism_present"] = static_cast<double>(prism_present_total);
+  state.counters["PRISM_WITHOUT_PYR"] = static_cast<double>(prism_wo_pyr);
+}
+BENCHMARK(BM_ApexDegreeDistribution)->Arg(0)->Arg(5)->Arg(20)->Arg(50)->Arg(200);
 
 }  // namespace
