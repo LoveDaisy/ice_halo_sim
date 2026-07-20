@@ -757,14 +757,6 @@ const float* Crystal::GetTirangleArea() const {
   return face_area_;
 }
 
-IdType Crystal::GetFn(int fid) const {
-  if (fid < 0 || fid >= static_cast<int>(mesh_.GetTriangleCnt())) {
-    return kInvalidId;
-  } else {
-    return fn_map_[fid];
-  }
-}
-
 IdType Crystal::PolygonFaceOfTri(int tri_id) const {
   if (tri_id < 0 || tri_id >= static_cast<int>(mesh_.GetTriangleCnt())) {
     return kInvalidId;

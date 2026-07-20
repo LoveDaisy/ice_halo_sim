@@ -72,12 +72,15 @@ TEST_F(V3TestCrystal, CrystalCacheData) {
   // Total ≈ 2 * 0.649519 + 3.9 ≈ 5.199
   ASSERT_NEAR(total_area, 5.199038f, 1e-3);
 
-  // fn_map: check basal and prism faces are assigned correctly
+  // fn_map: check basal and prism faces are assigned correctly.
+  // Chain tri → polygon-face → fn (both hops via the parametric slot table
+  // populated by PopulateFromCfGeom from cf_geom_.face_number).
   int basal_1_cnt = 0;
   int basal_2_cnt = 0;
   int prism_cnt = 0;
   for (size_t i = 0; i < n; i++) {
-    auto fn = crystal.GetFn(static_cast<int>(i));
+    IdType poly = crystal.PolygonFaceOfTri(static_cast<int>(i));
+    auto fn = crystal.GetFn(poly);
     if (fn == 1) {
       basal_1_cnt++;
     } else if (fn == 2) {
@@ -514,20 +517,22 @@ TEST_F(V3TestCrystal, EveryTriangleMapsToCoplanarPolygon) {
   }
 }
 
-// AC-5: GetFn(IdType poly_idx) returns the same fn that GetFn(int tri_id) gives
-// for the polygon's representative triangle, and yields kInvalidId on out-of-range
-// or kInvalidId input. Covers the new polygon-face overload used by simulator
-// after the from_face_/to_face_ split.
-TEST(CrystalGetFnByPolygonFace, MatchesTriangleOverloadAndBoundaries) {
+// AC-5: GetFn(IdType poly_idx) yields legal per-polygon face numbers and
+// kInvalidId on out-of-range or kInvalidId input. Since Step 7A the tri
+// overload (GetFn(int)) is deleted — the parametric slot table populated by
+// PopulateFromCfGeom is the single source of truth, so "two overloads must
+// agree" is no longer testable (there is only one overload). The invariants
+// worth guarding here are: every present polygon face resolves to a legal fn,
+// and out-of-range / kInvalidId poly_idx return kInvalidId.
+TEST(CrystalGetFnByPolygonFace, LegalPerPolyFnAndBoundaries) {
   auto crystal = Crystal::CreatePrism(1.0f);
   ASSERT_GT(crystal.PolygonFaceCount(), 0u);
 
-  const int* poly_tri = crystal.GetPolygonFaceTriId();
   for (size_t p = 0; p < crystal.PolygonFaceCount(); p++) {
     IdType fn_poly = crystal.GetFn(static_cast<IdType>(p));
-    IdType fn_tri = crystal.GetFn(poly_tri[p]);
-    EXPECT_EQ(fn_poly, fn_tri) << "polygon " << p << " fn mismatch vs tri " << poly_tri[p];
     EXPECT_NE(fn_poly, kInvalidId) << "polygon " << p << " should resolve to a known fn";
+    EXPECT_TRUE(IsLegalFace(CrystalKind::kPrism, static_cast<int>(fn_poly)))
+        << "polygon " << p << " fn=" << fn_poly << " not legal for prism";
   }
 
   // Out-of-range polygon index returns kInvalidId.
@@ -611,7 +616,8 @@ TEST_F(V3TestCrystal, PrismHZeroNoLeftoverPrismOrBasal) {
     EXPECT_GT(max_area, 0.0f) << "wedge=" << wedge;
     for (size_t t = 0; t < tri_cnt; t++) {
       EXPECT_GT(area[t], 1e-6f * max_area) << "wedge=" << wedge << " tri " << t << " near-zero area " << area[t];
-      int fn = static_cast<int>(crystal.GetFn(static_cast<int>(t)));
+      IdType poly = crystal.PolygonFaceOfTri(static_cast<int>(t));
+      int fn = static_cast<int>(crystal.GetFn(poly));
       EXPECT_TRUE((fn >= 13 && fn <= 18) || (fn >= 23 && fn <= 28))
           << "wedge=" << wedge << " tri " << t << " unexpected Fn=" << fn;
     }

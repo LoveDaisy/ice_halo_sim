@@ -256,13 +256,6 @@ class Crystal {
   const float* GetTirangleArea() const;
 
   /**
-   * @brief Get face number for a given triangle face index
-   * @param fid Triangle face index
-   * @return Face number (for raypath symmetry); kInvalidId if @p fid is out of range
-   */
-  IdType GetFn(int fid) const;
-
-  /**
    * @brief Get face number for a given polygon face index
    * @param poly_idx Polygon face index (0..PolygonFaceCount()-1)
    * @return Face number (for raypath symmetry); kInvalidId if @p poly_idx is out of range
