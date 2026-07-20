@@ -270,6 +270,79 @@ struct ApexLPResult {
   double v = 0.0;
 };
 
+// Enumerate all triples achieving m within tol of the LP maximum, emitting
+// the distinct (u, v) points. Used to detect and materialize apex degeneracy
+// (LP optimum is a line segment / edge rather than a unique point). Returns
+// the number of distinct points written; out_uv must have capacity for at
+// least 20 (u, v) pairs. All returned points have m physically equal to
+// m_max_phys within tolerance.
+int EnumerateApexPoints(const double dist_scaled[kClosedFormPyramidSideCnt], double m_max_phys, double out_u[20],
+                        double out_v[20]) {
+  double cs[kClosedFormPyramidSideCnt];
+  double sn[kClosedFormPyramidSideCnt];
+  double scale = 0.0;
+  for (int i = 0; i < kClosedFormPyramidSideCnt; i++) {
+    double t = static_cast<double>(i) * math::kPi_3;
+    cs[i] = std::cos(t);
+    sn[i] = std::sin(t);
+    scale = std::max(scale, std::fabs(dist_scaled[i]));
+  }
+  double tol_lp = 5.0 * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
+  double m_max_lp = m_max_phys * kInsetK;
+  int cnt = 0;
+  for (int i = 0; i < kClosedFormPyramidSideCnt; i++) {
+    for (int j = i + 1; j < kClosedFormPyramidSideCnt; j++) {
+      for (int k = j + 1; k < kClosedFormPyramidSideCnt; k++) {
+        double det = cs[i] * (sn[j] - sn[k]) - sn[i] * (cs[j] - cs[k]) + (cs[j] * sn[k] - cs[k] * sn[j]);
+        if (std::fabs(det) < 1e-12) {
+          continue;
+        }
+        double di = dist_scaled[i], dj = dist_scaled[j], dk = dist_scaled[k];
+        double u = (di * (sn[j] - sn[k]) - sn[i] * (dj - dk) + (dj * sn[k] - dk * sn[j])) / det;
+        double v = (cs[i] * (dj - dk) - di * (cs[j] - cs[k]) + (cs[j] * dk - cs[k] * dj)) / det;
+        double m_lp = (cs[i] * (sn[j] * dk - sn[k] * dj) - sn[i] * (cs[j] * dk - cs[k] * dj) +
+                       di * (cs[j] * sn[k] - cs[k] * sn[j])) /
+                      det;
+        // Only interested in triples at the LP maximum.
+        if (std::fabs(m_lp - m_max_lp) > tol_lp) {
+          continue;
+        }
+        // Feasibility under the remaining 3 constraints.
+        bool feasible = true;
+        for (int r = 0; r < kClosedFormPyramidSideCnt; r++) {
+          if (r == i || r == j || r == k) {
+            continue;
+          }
+          if (cs[r] * u + sn[r] * v + m_lp > dist_scaled[r] + tol_lp) {
+            feasible = false;
+            break;
+          }
+        }
+        if (!feasible) {
+          continue;
+        }
+        // Dedup against already-emitted (u, v).
+        bool dup = false;
+        for (int e = 0; e < cnt; e++) {
+          if (std::fabs(out_u[e] - u) < tol_lp && std::fabs(out_v[e] - v) < tol_lp) {
+            dup = true;
+            break;
+          }
+        }
+        if (dup) {
+          continue;
+        }
+        if (cnt < 20) {
+          out_u[cnt] = u;
+          out_v[cnt] = v;
+          cnt++;
+        }
+      }
+    }
+  }
+  return cnt;
+}
+
 // LP solve for max m such that cos(t_i)·u + sin(t_i)·v + m ≤ dist_scaled[i]
 // for all i = 0..5, where dist_scaled[i] = (√3/4)·dist[i]. Solution is at a
 // 3-face concurrence: enumerate C(6,3) = 20 triples, solve each 3×3 system
@@ -346,19 +419,42 @@ ApexLPResult MaxFeasibleInsetLP(const double dist_scaled[kClosedFormPyramidSideC
   return best;
 }
 
-// Enumerate corner-death z-events in the upper cone half-space
-// (m_phys ∈ (0, m_max_phys]). Each triple gives one m_LP; convert to
-// m_phys = m_LP / kInsetK and translate to z* = h2/2 + a·m_phys. Events with
-// m_phys ∉ (tol_phys, m_max_phys] are dropped. Returns the count written;
-// out_z holds the (sorted, deduped) z values. out_z must have capacity for
-// C(6,3) = 20 events.
+// One corner-death event in a cone half-space.
+//
+// Semantics: a 3-plane concurrence at physical inset m (in (0, m_max]) where
+// the corresponding 3D vertex is on the polyhedron surface. The vertex is at
+// (u, v, z) where z = h2/2 + a·m (upper) or -h2/2 - a·m (lower). The
+// killing triple is directions (i, j, k) — the vertex lies on cone_i, cone_j,
+// cone_k (upper or lower depending on side).
+struct ConeDeathEvent {
+  double z;
+  double u;
+  double v;
+  int i, j, k;  // killing triple; upper_cone_slot = 8+i etc.
+};
+
+// Enumerate corner-death events in a cone half-space (m_phys ∈ (0, m_max]).
+// Each triple (i, j, k) whose 3-plane concurrence at (u, v, m) is FEASIBLE
+// under the remaining 3 direction constraints corresponds to a real
+// corner-death event (a corner of the 2D cross section that just becomes
+// tight against a third plane). Triples whose (u, v) is already cut off by
+// some 4th direction are NOT real events and must be discarded — a
+// copy-paste from MaxFeasibleInsetLP that dropped the feasibility check
+// produces O(10) spurious near-apex z-events in asymmetric-dist
+// configurations.
+//
+// Events with m_phys ∉ (tol_phys, m_max_phys − tol_phys] are dropped (m ≤ 0
+// is either the shoulder or the prism section — not a cone-death event;
+// m = m_max is the apex event, captured elsewhere via z_top / z_bot).
+// Returns the count written; out_events must have capacity for C(6,3) = 20.
 //
 // Unit convention: `m_max` is PHYSICAL inset (matches MaxFeasibleInsetLP's
 // return). Internal 3×3 solve gives m in LP units (m_LP); we convert to
 // physical before filtering / z-emission so callers can reason uniformly in
-// physical space (a·m_phys is a physical z distance).
-int EnumerateConeDeathZ(const double dist_scaled[kClosedFormPyramidSideCnt], double m_max, double h2_2, double a,
-                        bool upper_side, double out_z[20]) {
+// physical space (a·m_phys is a physical z distance). (u, v) are already in
+// physical 2D coordinates — no conversion needed.
+int EnumerateConeDeathEvents(const double dist_scaled[kClosedFormPyramidSideCnt], double m_max, double h2_2, double a,
+                             bool upper_side, ConeDeathEvent out_events[20]) {
   double cs[kClosedFormPyramidSideCnt];
   double sn[kClosedFormPyramidSideCnt];
   double scale = 0.0;
@@ -370,7 +466,6 @@ int EnumerateConeDeathZ(const double dist_scaled[kClosedFormPyramidSideCnt], dou
   }
   double tol_lp = 5.0 * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
   double tol_phys = tol_lp / kInsetK;
-  double zs[20];
   int cnt = 0;
   for (int i = 0; i < kClosedFormPyramidSideCnt; i++) {
     for (int j = i + 1; j < kClosedFormPyramidSideCnt; j++) {
@@ -380,6 +475,8 @@ int EnumerateConeDeathZ(const double dist_scaled[kClosedFormPyramidSideCnt], dou
           continue;
         }
         double di = dist_scaled[i], dj = dist_scaled[j], dk = dist_scaled[k];
+        double u = (di * (sn[j] - sn[k]) - sn[i] * (dj - dk) + (dj * sn[k] - dk * sn[j])) / det;
+        double v = (cs[i] * (dj - dk) - di * (cs[j] - cs[k]) + (cs[j] * dk - cs[k] * dj)) / det;
         double m_lp = (cs[i] * (sn[j] * dk - sn[k] * dj) - sn[i] * (cs[j] * dk - cs[k] * dj) +
                        di * (cs[j] * sn[k] - cs[k] * sn[j])) /
                       det;
@@ -387,34 +484,30 @@ int EnumerateConeDeathZ(const double dist_scaled[kClosedFormPyramidSideCnt], dou
         if (m_phys < tol_phys || m_phys > m_max - tol_phys) {
           continue;  // outside the eroded z-range of this cone
         }
-        zs[cnt++] = upper_side ? (h2_2 + a * m_phys) : (-h2_2 - a * m_phys);
+        // Feasibility check under the remaining 3 direction constraints — a
+        // 3-plane concurrence at (u, v, m_lp) is a REAL corner-death event
+        // only if the corner isn't already cut off by some 4th face. Without
+        // this check, spurious concurrences pile up near the apex in
+        // asymmetric-dist configurations and produce ghost z-events.
+        bool feasible = true;
+        for (int r = 0; r < kClosedFormPyramidSideCnt; r++) {
+          if (r == i || r == j || r == k) {
+            continue;
+          }
+          if (cs[r] * u + sn[r] * v + m_lp > dist_scaled[r] + tol_lp) {
+            feasible = false;
+            break;
+          }
+        }
+        if (!feasible) {
+          continue;
+        }
+        double z = upper_side ? (h2_2 + a * m_phys) : (-h2_2 - a * m_phys);
+        out_events[cnt++] = { z, u, v, i, j, k };
       }
     }
   }
-  // Dedup + sort.
-  std::sort(zs, zs + cnt);
-  int out_n = 0;
-  for (int i = 0; i < cnt; i++) {
-    if (out_n > 0 && std::fabs(zs[i] - out_z[out_n - 1]) < 1e-9) {
-      continue;
-    }
-    out_z[out_n++] = zs[i];
-  }
-  return out_n;
-}
-
-// Compute the scalar inset at height z under the piecewise-linear model.
-// a_upper / a_lower use −1.0 sentinel for "cone absent"; when absent the
-// corresponding half-space is unreachable so this function is called only
-// for z inside the presented range.
-double ComputeInset(double z, double h2_2, double a_upper, double a_lower) {
-  if (z > h2_2 && a_upper > 0) {
-    return (z - h2_2) / a_upper;
-  }
-  if (z < -h2_2 && a_lower > 0) {
-    return (-h2_2 - z) / a_lower;
-  }
-  return 0.0;
+  return cnt;
 }
 
 // Simple 3D vertex dedup: append (x, y, z) to pool if not within tol of any
@@ -583,122 +676,57 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
     return r;
   }
 
-  // Assemble candidate z-events. In sorted-unique form.
-  double z_events[64];
-  int z_n = 0;
-  auto add_z = [&](double z) {
-    for (int i = 0; i < z_n; i++) {
-      if (std::fabs(z_events[i] - z) < 1e-9) {
-        return;
-      }
-    }
-    assert(z_n < 64);
-    z_events[z_n++] = z;
-  };
-  add_z(z_bot);
-  add_z(z_top);
-  if (has_upper && z_top > h2_2 + 1e-12) {
-    add_z(h2_2);  // upper shoulder
-  }
-  if (has_lower && z_bot < -h2_2 - 1e-12) {
-    add_z(-h2_2);  // lower shoulder
-  }
-  if (!has_upper && !has_lower) {
-    // Pure prism-shaped body: top = h2/2, bot = -h2/2 (already added).
-  } else if (!has_upper) {
-    // Only lower cone. Add shoulder at h2/2 (top of prism section = top of body).
-    if (h2 > math::kFloatEps) {
-      add_z(h2_2);
-    }
-  } else if (!has_lower) {
-    if (h2 > math::kFloatEps) {
-      add_z(-h2_2);
-    }
-  }
-  // Cone corner-death events.
-  if (has_upper) {
-    double d_z[20];
-    int n = EnumerateConeDeathZ(dist_scaled, m_at_top, h2_2, a1, /*upper_side=*/true, d_z);
-    for (int i = 0; i < n; i++) {
-      add_z(d_z[i]);
-    }
-  }
-  if (has_lower) {
-    double d_z[20];
-    int n = EnumerateConeDeathZ(dist_scaled, m_at_bot, h2_2, a2, /*upper_side=*/false, d_z);
-    for (int i = 0; i < n; i++) {
-      add_z(d_z[i]);
-    }
-  }
-  std::sort(z_events, z_events + z_n);
-
-  // For each candidate z: solve 2D cross section with eroded dist.
-  // Walk corners, resolve to 3D, dedup into vtx pool, associate to faces.
+  // Vertex-emission strategy: 3D vertices arise only at "boundary" z-events
+  // (shoulder / truncation / apex) OR at interior corner-death events. In the
+  // z-slice model, a 2D cross-section corner at INTERIOR z (between shoulder
+  // and truncation, or between shoulder and apex) is NOT a vertex — it is a
+  // moving-through-space point on an edge (the intersection line of two
+  // adjacent cone planes, parametrized by z). It becomes a vertex only when a
+  // THIRD plane passes through it:
+  //   • Shoulder z=±h2/2: 4-way concurrence (prism_i, prism_{i+1}, cone_i,
+  //     cone_{i+1}) — all cross-section corners are vertices.
+  //   • Truncation z=z_top with h1<1 (or z=z_bot with h3<1): 3-way concurrence
+  //     with basal plane — all cross-section corners are vertices.
+  //   • Apex z: polygon collapsed to a point — one vertex.
+  //   • Interior corner-death z=z_die: 3-way concurrence of cone_i, cone_j,
+  //     cone_k — ONLY the specific dying corner (u_die, v_die, z_die) is a
+  //     vertex; the other cross-section corners at z_die are still on edges.
+  //
+  // Emitting all cross-section corners at interior events (the previous
+  // implementation) produced O(6·N_events) spurious vertices — visible as
+  // shrinking-hexagon layers stacked between shoulder and apex.
   int vtx_cnt = 0;
   const double kDedupTol =
       5.0 * static_cast<double>(math::kFloatEps) * std::max({ std::fabs(z_top), std::fabs(z_bot), 1.0 });
   bool any_face_present[kClosedFormPyramidFaceCnt]{};
 
-  // A face may participate at multiple z layers (basal + prism + cone edges).
-  // For basal (slots 0/1), a vertex counts only at z = z_top / z_bot.
-  // For prism (slot 2+i), a vertex counts at any z ∈ [-h2/2, h2/2] AND its
-  //   two defining directions include i.
-  // For upper cone (slot 8+i), a vertex counts at any z ∈ [h2/2, z_top].
-  // For lower cone (slot 14+i), a vertex counts at any z ∈ [z_bot, -h2/2].
-  for (int e = 0; e < z_n; e++) {
-    double z = z_events[e];
-    if (z > z_top + 1e-9 || z < z_bot - 1e-9) {
-      continue;
+  // Helper: emit vertex at (u, v, z) and associate with the given face slots.
+  auto emit_vtx = [&](double u, double v, double z, const int* face_slots, int n_slots) {
+    int idx = InsertOrFindVertex(u, v, z, r.vtx, &vtx_cnt, kDedupTol);
+    for (int s = 0; s < n_slots; s++) {
+      AppendFaceVtx(&r, face_slots[s], idx);
+      any_face_present[face_slots[s]] = true;
     }
-    double m = ComputeInset(z, h2_2, has_upper ? a1 : -1.0, has_lower ? a2 : -1.0);
-    // r_side[i] = (√3/4)·(dist[i] - m_phys(z)) — SolveHexCrossSection expects
-    // its input in the SAME scaled units as ComputeClosedFormPrism uses
-    // (r_side = kInsetK·dist). Both `dist[i]` and `m` are in PHYSICAL length
-    // units here, so the subtraction is done first, then scaled — mixing
-    // physical `m` with pre-scaled `kInsetK·dist[i]` was the m-units bug fixed
-    // alongside MaxFeasibleInsetLP's return-value convention.
+  };
+
+  // Helper: solve 2D cross-section at physical inset m and emit ALL corners
+  // as vertices (used for shoulder / truncation / basal-cap events where each
+  // corner is a real 3-way (or higher) concurrence). face_slot_of_dir maps
+  // direction index i to the face slot for that layer (e.g. 2+i for prism,
+  // 8+i for upper cone). basal_slot >= 0 associates every corner with the
+  // basal face at this layer. Returns the number of corners emitted (0 if the
+  // cross section is empty — signals the caller to fall back to single-point
+  // apex handling).
+  auto emit_ring = [&](double m, double z, const int face_slot_of_dir[6], int basal_slot,
+                       const int extra_slot_of_dir[6]) -> int {
     double r_side[6];
     for (int i = 0; i < 6; i++) {
       r_side[i] = kInsetK * (static_cast<double>(dist[i]) - m);
     }
     HexCrossSection xs = SolveHexCrossSection(r_side);
     if (!xs.any_side_present) {
-      // Polygon collapsed to a point at this z — the apex/anti-apex case
-      // (happens when m ≈ m_apex, i.e. z = z_top with h1 = 1 or z = z_bot
-      // with h3 = 1). Insert a single vertex at (apex.u, apex.v, z) and
-      // associate it with EVERY side face in the corresponding half-space:
-      // upper cone (if z ≥ h2/2) and/or lower cone (if z ≤ -h2/2), plus the
-      // basal face if this z matches z_top or z_bot. Every cone face slot
-      // gets the apex as a shared vertex — this is exactly what the
-      // production mesh produces at a true apex (a fan of triangles).
-      const bool is_upper_apex = has_upper && z >= h2_2 - 1e-9;
-      const bool is_lower_apex = has_lower && z <= -h2_2 + 1e-9;
-      if (!is_upper_apex && !is_lower_apex) {
-        continue;
-      }
-      int idx = InsertOrFindVertex(apex.u, apex.v, z, r.vtx, &vtx_cnt, kDedupTol);
-      if (std::fabs(z - z_top) <= 1e-6) {
-        // Basal top exists only if it's a real (>1 vtx) polygon — a single
-        // apex vertex means the basal face is degenerate; don't record it.
-      }
-      if (std::fabs(z - z_bot) <= 1e-6) {
-        // Same for basal bottom.
-      }
-      if (is_upper_apex) {
-        for (int i = 0; i < 6; i++) {
-          AppendFaceVtx(&r, 8 + i, idx);
-          any_face_present[8 + i] = true;
-        }
-      }
-      if (is_lower_apex) {
-        for (int i = 0; i < 6; i++) {
-          AppendFaceVtx(&r, 14 + i, idx);
-          any_face_present[14 + i] = true;
-        }
-      }
-      continue;
+      return 0;
     }
-    // Determine present_idx[] in i-increasing order.
     int present_idx[6];
     int p_n = 0;
     for (int i = 0; i < 6; i++) {
@@ -706,48 +734,148 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
         present_idx[p_n++] = i;
       }
     }
-    // Each xs.corner[k] is the intersection of directions present_idx[k] and
-    // present_idx[(k+1) % p_n] (SolveHexCrossSection's emit order). Insert
-    // 3D vertex and associate to the faces that pass through it.
     for (int k = 0; k < xs.corner_cnt; k++) {
-      double vx = xs.corner_x[k];
-      double vy = xs.corner_y[k];
-      int idx = InsertOrFindVertex(vx, vy, z, r.vtx, &vtx_cnt, kDedupTol);
+      int slots[4];
+      int n_slots = 0;
       int dir_a = present_idx[k];
       int dir_b = present_idx[(k + 1) % p_n];
+      slots[n_slots++] = face_slot_of_dir[dir_a];
+      slots[n_slots++] = face_slot_of_dir[dir_b];
+      if (extra_slot_of_dir != nullptr) {
+        slots[n_slots++] = extra_slot_of_dir[dir_a];
+        slots[n_slots++] = extra_slot_of_dir[dir_b];
+      }
+      if (basal_slot >= 0) {
+        slots[n_slots++] = basal_slot;
+      }
+      emit_vtx(xs.corner_x[k], xs.corner_y[k], z, slots, n_slots);
+    }
+    return xs.corner_cnt;
+  };
 
-      // Basal association.
-      if (std::fabs(z - z_top) <= 1e-6) {
-        AppendFaceVtx(&r, 0, idx);
-        any_face_present[0] = true;
+  // Face-slot tables: index by direction i.
+  int prism_slot[6] = { 2, 3, 4, 5, 6, 7 };
+  int upper_slot[6] = { 8, 9, 10, 11, 12, 13 };
+  int lower_slot[6] = { 14, 15, 16, 17, 18, 19 };
+
+  // ---- Upper side ----------------------------------------------------------
+  const double kApexEps = 1e-9;
+  const bool upper_apex_collapsed = has_upper && m_at_top >= apex.m - kApexEps;
+  const bool lower_apex_collapsed = has_lower && m_at_bot >= apex.m - kApexEps;
+  if (has_upper) {
+    // Shoulder ring at z = +h2/2 (m = 0): 4-way concurrence prism_i,
+    // prism_{i+1}, upper_cone_i, upper_cone_{i+1}. Every corner is a vertex.
+    // Skip if the prism section is degenerate (h2 ≈ 0), in which case the
+    // shoulder coincides with a lower-side event and is handled there.
+    if (h2 > math::kFloatEps) {
+      emit_ring(0.0, h2_2, prism_slot, /*basal_slot=*/-1, upper_slot);
+    } else {
+      // No prism section — the "shoulder" is just the interface between
+      // upper and lower cones at z=0. Associate corners with both cone
+      // slot sets.
+      emit_ring(0.0, 0.0, upper_slot, /*basal_slot=*/-1, lower_slot);
+    }
+    // Top layer at z=z_top. Two mutually-exclusive shapes with the same
+    // emission code, differing only in whether the basal face is present:
+    //   • h1 < 1 (truncation): SolveHexCrossSection returns 3+ corners, all
+    //     3-way concurrences with basal_top (slot 0). basal_slot = 0.
+    //   • h1 >= 1 (apex reached): SolveHexCrossSection returns either 0
+    //     corners (single-point apex — LP maximum unique) or 2+ corners
+    //     (line/edge-apex — LP maximum is degenerate along a segment). No
+    //     basal face; basal_slot = -1. Fall back to inserting apex.u/apex.v
+    //     as a single point only when the cross-section is empty.
+    const int upper_basal_slot = upper_apex_collapsed ? -1 : 0;
+    int n_top = emit_ring(m_at_top, z_top, upper_slot, upper_basal_slot, nullptr);
+    if (upper_apex_collapsed) {
+      // At the apex, the LP maximum may be degenerate: multiple triples
+      // achieving the same m_apex give distinct (u, v) points → the "apex"
+      // is a line segment (or higher), not a single point. emit_ring uses
+      // SolveHexCrossSection with a tight feasibility tolerance and often
+      // finds only 1 of the endpoints (or 0 if the LP tie-break lands
+      // outside its tolerance). Enumerate the LP-max triples directly here
+      // so the union of both paths covers apex-line degeneracy.
+      double apex_us[20], apex_vs[20];
+      int apex_n = EnumerateApexPoints(dist_scaled, m_at_top, apex_us, apex_vs);
+      for (int e = 0; e < apex_n; e++) {
+        int idx = InsertOrFindVertex(apex_us[e], apex_vs[e], z_top, r.vtx, &vtx_cnt, kDedupTol);
+        for (int i = 0; i < 6; i++) {
+          AppendFaceVtx(&r, 8 + i, idx);
+          any_face_present[8 + i] = true;
+        }
       }
-      if (std::fabs(z - z_bot) <= 1e-6) {
-        AppendFaceVtx(&r, 1, idx);
-        any_face_present[1] = true;
-      }
-      // Prism association: z inside [-h2/2, h2/2] (inclusive of shoulder).
-      if (z >= -h2_2 - 1e-9 && z <= h2_2 + 1e-9) {
-        AppendFaceVtx(&r, 2 + dir_a, idx);
-        AppendFaceVtx(&r, 2 + dir_b, idx);
-        any_face_present[2 + dir_a] = true;
-        any_face_present[2 + dir_b] = true;
-      }
-      // Upper cone: z ∈ [h2/2, z_top].
-      if (has_upper && z >= h2_2 - 1e-9 && z <= z_top + 1e-9) {
-        AppendFaceVtx(&r, 8 + dir_a, idx);
-        AppendFaceVtx(&r, 8 + dir_b, idx);
-        any_face_present[8 + dir_a] = true;
-        any_face_present[8 + dir_b] = true;
-      }
-      // Lower cone: z ∈ [z_bot, -h2/2].
-      if (has_lower && z >= z_bot - 1e-9 && z <= -h2_2 + 1e-9) {
-        AppendFaceVtx(&r, 14 + dir_a, idx);
-        AppendFaceVtx(&r, 14 + dir_b, idx);
-        any_face_present[14 + dir_a] = true;
-        any_face_present[14 + dir_b] = true;
+      if (apex_n == 0 && n_top == 0) {
+        // Fallback: neither ring nor apex-enum found anything. Insert the
+        // canonical apex from MaxFeasibleInsetLP.
+        int idx = InsertOrFindVertex(apex.u, apex.v, z_top, r.vtx, &vtx_cnt, kDedupTol);
+        for (int i = 0; i < 6; i++) {
+          AppendFaceVtx(&r, 8 + i, idx);
+          any_face_present[8 + i] = true;
+        }
       }
     }
+    // Interior corner-death events: emit only the dying corner (u, v, z_die).
+    ConeDeathEvent evs[20];
+    int n = EnumerateConeDeathEvents(dist_scaled, m_at_top, h2_2, a1, /*upper_side=*/true, evs);
+    for (int e = 0; e < n; e++) {
+      // Skip events at the shoulder or truncation (already handled).
+      if (std::fabs(evs[e].z - h2_2) < 1e-9 || std::fabs(evs[e].z - z_top) < 1e-9) {
+        continue;
+      }
+      int slots[3] = { 8 + evs[e].i, 8 + evs[e].j, 8 + evs[e].k };
+      emit_vtx(evs[e].u, evs[e].v, evs[e].z, slots, 3);
+    }
   }
+
+  // ---- Lower side ----------------------------------------------------------
+  if (has_lower) {
+    if (h2 > math::kFloatEps) {
+      emit_ring(0.0, -h2_2, prism_slot, /*basal_slot=*/-1, lower_slot);
+    }
+    // Same shape rules as the upper side (see comment above).
+    const int lower_basal_slot = lower_apex_collapsed ? -1 : 1;
+    int n_bot = emit_ring(m_at_bot, z_bot, lower_slot, lower_basal_slot, nullptr);
+    if (lower_apex_collapsed) {
+      double apex_us[20], apex_vs[20];
+      int apex_n = EnumerateApexPoints(dist_scaled, m_at_bot, apex_us, apex_vs);
+      for (int e = 0; e < apex_n; e++) {
+        int idx = InsertOrFindVertex(apex_us[e], apex_vs[e], z_bot, r.vtx, &vtx_cnt, kDedupTol);
+        for (int i = 0; i < 6; i++) {
+          AppendFaceVtx(&r, 14 + i, idx);
+          any_face_present[14 + i] = true;
+        }
+      }
+      if (apex_n == 0 && n_bot == 0) {
+        int idx = InsertOrFindVertex(apex.u, apex.v, z_bot, r.vtx, &vtx_cnt, kDedupTol);
+        for (int i = 0; i < 6; i++) {
+          AppendFaceVtx(&r, 14 + i, idx);
+          any_face_present[14 + i] = true;
+        }
+      }
+    }
+    ConeDeathEvent evs[20];
+    int n = EnumerateConeDeathEvents(dist_scaled, m_at_bot, h2_2, a2, /*upper_side=*/false, evs);
+    for (int e = 0; e < n; e++) {
+      if (std::fabs(evs[e].z + h2_2) < 1e-9 || std::fabs(evs[e].z - z_bot) < 1e-9) {
+        continue;
+      }
+      int slots[3] = { 14 + evs[e].i, 14 + evs[e].j, 14 + evs[e].k };
+      emit_vtx(evs[e].u, evs[e].v, evs[e].z, slots, 3);
+    }
+  }
+
+  // ---- Pure-prism and one-sided-cone caps ---------------------------------
+  // If a cone is absent on one side, that side's cap is the shoulder itself
+  // acting as the basal face. Emit corners at z = ±h2/2 and associate with
+  // the basal slot on that side.
+  if (!has_upper && h2 > math::kFloatEps) {
+    emit_ring(0.0, h2_2, prism_slot, /*basal_slot=*/0, nullptr);
+  }
+  if (!has_lower && h2 > math::kFloatEps) {
+    emit_ring(0.0, -h2_2, prism_slot, /*basal_slot=*/1, nullptr);
+  }
+  // Pure prism (no cones, no prism section) — nothing to emit; handled by the
+  // zero-volume short-circuit above.
+
   r.vtx_cnt = vtx_cnt;
 
   // A face is "present" only if it has ≥ 3 distinct vertices in its polygon
