@@ -267,8 +267,9 @@ BENCHMARK_CAPTURE(BM_TopologyReuse, pyramid, PyramidCoef());
 
 // ---- Prototype: topology reuse + candidate SUFFICIENT failure criterion #1 --
 //
-// explore-topology-reuse-residual (C, owner-gate): the 127ns BM_TopologyReuse
-// floor does NOT verify topology still holds. A real impl must add a criterion
+// The 127ns BM_TopologyReuse floor does NOT verify topology still holds; the
+// residual after paying for that check is what decides whether reuse is
+// shippable. A real impl must add a criterion
 // that detects when the cached plane-triple structure is invalidated (a face
 // degenerates / a vertex is cut off, e.g. the skewed-prism 12->8 collapse).
 //

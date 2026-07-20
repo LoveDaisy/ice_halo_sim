@@ -81,8 +81,45 @@ construction from ~453% of trace to ~5.7%.
 1. **Physics-optimal `K*` is 8–64** (backend-independent; the payoff is a physical quantity). ✅ measured.
 2. **Construction wall at `K*`=64 is ~453% of trace, dropping to ~5.7% with topology reuse.** ✅ measured (`bench/bench_crystal.cpp` is the acceptance tool for the reuse ceiling).
 3. **Per-crystal construction cost is ~10.12 µs (98.4% mesh construction of a fixed topology); ceiling 127 ns.** ✅ measured.
-4. **CUDA per-batch H2D bandwidth at `K*`=64** (~665 KB/batch, ~12 GB over a full run; topology reuse does not reduce bandwidth — orthogonal). ⏳ to measure while building B.
-5. **Residual of the 79× topology-reuse ceiling once a *sufficient* validity predicate is paid** — face-count conservation is necessary but not sufficient (the hyperplane arrangement's combinatorial structure can change with face count fixed). ⏳ to measure while prototyping C. A modest residual is still a real speedup; it is never grounds to call C "not worth it".
+4. **CUDA per-batch H2D bandwidth at `K*`=64** (~665 KB/batch, ~12 GB over a full run; topology reuse does not reduce bandwidth — orthogonal). ✅ measured: ~210 MB/s, ~1% of PCIe — not a constraint.
+5. **Residual of the 79× topology-reuse ceiling once a *sufficient* validity predicate is paid** — face-count conservation is necessary but not sufficient (the hyperplane arrangement's combinatorial structure can change with face count fixed). ✅ measured, and it **found the blocker** — see below.
+
+## B is built; C is blocked on a correctness question, not a performance one
+
+**B (per-ray K-shape pool) is implemented and verified on both GPU backends** behind
+`LUMICE_GPU_GEOM_CLOCK` (default 0 = disabled = the historical one-shape-per-dispatch
+behavior, bit-for-bit). Building it surfaced and fixed two real defects: absolute pool
+indices leaking into consumers expecting per-crystal local indices (silently corrupting
+entry/exit filters once a batch held more than one shape), and a CUDA pool that stayed
+frozen at a degenerate size for `K > 0` sessions.
+
+**C (topology reuse) measured well and still cannot land as designed.** Cost side, on the
+`bench/bench_crystal.cpp` prototype: a candidate validity predicate (re-solve each cached
+plane triple, then half-space-test every cached vertex against every plane) costs only
++62 ns for a prism / +279 ns for a pyramid, leaving a **residual of 53.6× (prism) / 92.8×
+(pyramid)** against full construction. The predicate is emphatically not the bottleneck.
+
+Sufficiency side, which decides whether it may ship: fuzzing the predicate's verdict against
+the production solver over 20000 perturbed samples per σ found **false accepts** — the
+predicate declares the cache valid while the topology has genuinely changed (confirmed as a
+real 12 → 10 vertex count change, two vertices merging while both stay inside every
+half-space, so a half-space test cannot see it). Augmenting it with plane-concurrency and
+vertex-coincidence checks narrowed the leak but did not close it; the remainder sits on the
+degenerate boundary where the predicate's tolerance and the production solver's dedup
+tolerance disagree. Separately, a pyramid apex is a vertex where more than three planes meet
+by construction, which breaks the "cache one plane triple per vertex" model outright.
+
+Tuning the fuzz until the count reaches zero would be overfitting one seed, not a sufficiency
+proof. A provably sufficient predicate would have to align exactly with the production
+solver's degenerate dedup behavior — and that solver's tolerance is itself an empirically
+swept constant, so this is a regress, not an engineering task with an end.
+
+**Conclusion: the blocker is structural, not numerical-hygiene.** The validity question only
+exists because the crystal's combinatorial structure is discovered numerically rather than
+being known from the parametrization. See `crystal-geometry-representation.md` for that
+diagnosis and the redesign direction, under which the predicate — and the cache it guards —
+have no reason to exist, at a construction floor below the 127 ns reuse was reaching for.
+C should not be re-attempted on the current representation.
 
 ## Measurement discipline (learned the hard way)
 

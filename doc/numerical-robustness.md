@@ -1,9 +1,16 @@
 # Numerical Robustness Conventions (Geometry)
 
-> Status: conventions distilled from the task-275/276/277/278 bug family (extreme-wedge
-> pyramid crystals) and the explore-279 audit. Read before adding or modifying any
+> Status: conventions distilled from the extreme-wedge pyramid bug family (PR #132/#133/#135)
+> and the follow-up predicate audit (PR #137). Read before adding or modifying any
 > geometric predicate (coplanarity, face matching, intersection, degeneracy test).
 > 中文速记见末尾。
+>
+> ⚠️ **These conventions treat the symptom.** They describe how to survive the current
+> geometry pipeline, in which the combinatorial structure of the crystal is discovered
+> numerically and therefore needs tolerances at every step. The *structural* cause of that
+> need — and a representation that would not require it — is in
+> `crystal-geometry-representation.md`. Read that one before redesigning; read this one
+> before editing.
 
 ## The failure family
 
