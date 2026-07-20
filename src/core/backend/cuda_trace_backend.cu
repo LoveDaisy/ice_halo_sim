@@ -110,14 +110,19 @@ constexpr int kCudaCapabilityFloor = 61;
 // through this backend. Two widths are needed because different lookup tables
 // use different underlying storage:
 //   * `kInvalidIdU16` — mirrors the host kInvalidId at its natural 16-bit
-//     width. Used for tri_to_poly (uint16 buffer whose native "no match"
-//     sentinel is 0xffff) and any transient host uint16 comparison.
+//     width (value 0xffff). Used for tri_to_poly (uint16 buffer whose native
+//     "no match" sentinel is 0xffff) and any transient host uint16
+//     comparison. Also used for config_id passed to device filter matchers
+//     (crystal_config_id_, ci_cfg_id): those variables are stored in uint32
+//     on device, but the sentinel's actual semantic value is still the
+//     16-bit 0xffff, not a genuinely-32-bit sentinel — this is a case of
+//     "narrow value stored in a wider variable", not "widened sentinel".
 //   * `kInvalidIdU32` — widened sentinel for indices that get promoted to
-//     uint32 on device (K-shape pool absolute indices, config_id passed to
-//     device filter matchers, and root_from_poly outputs). The 32-bit width
-//     is the deliberate design of those pools (absolute indices can exceed
-//     65535 in K-shape geometries); the widened sentinel is not a name
-//     bug — this constant just makes the intent explicit at each use site.
+//     uint32 on device (K-shape pool absolute indices and root_from_poly
+//     outputs). The 32-bit width is the deliberate design of those pools
+//     (absolute indices can exceed 65535 in K-shape geometries); the widened
+//     sentinel is not a name bug — this constant just makes the intent
+//     explicit at each use site.
 // Single source of truth for both, replacing three prior repeated local
 // `constexpr uint16_t kInvalidIdU16 = 0xffffu;` declarations and one bare
 // uint32 literal.
