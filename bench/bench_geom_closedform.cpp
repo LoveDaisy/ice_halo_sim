@@ -1788,4 +1788,150 @@ void BM_PyramidAngularDeathStructure(benchmark::State& state) {
 }
 BENCHMARK(BM_PyramidAngularDeathStructure);
 
+// ---- Step 6: dump pyramid PARAMETERS for Python oracle cross-check ---------
+//
+// Emits one crystal per line as parameters (arm, a1, a2, h1/h2/h3, dist[6])
+// for consumption by an out-of-tree Python oracle that reconstructs the 20
+// half-space planes in Q(√3) (Fraction backend, unlimited precision, zero
+// tolerance). That Q(√3) enumeration is a THIRD independent implementation
+// of the pyramid vertex-enumeration problem — distinct in both language and
+// number system from the C++ __int128 oracle in
+// test/support/exact_pyramid_oracle.hpp, and from the closed-form path in
+// src/core/geo3d_closedform.cpp. A bug shared between the two C++ paths
+// (same author, same session) but not shared with the Q(√3) enumeration
+// would surface as a "diff" row. Its main leverage: on inputs whose
+// intermediate bit widths exceed __int128, the C++ oracle refuses; Q(√3)
+// does not, so the cross-check covers ranges the C++ oracle cannot.
+//
+// Line format (all numeric fields %a hex-float so IEEE round-trip is exact):
+//   <arm> <a1> <a2> <h1> <h2> <h3> <d0..d5> expected <N> cf <N_cf> oracle_refused <0|1>
+// arm 0 = wedge angle drawn directly, arm 1 = Miller index (a1/a2 derived
+// algebraically per plan §3(1)). `expected N` is the C++ __int128 oracle's
+// vertex count. `cf N_cf` is the closed form's count. `oracle_refused` is
+// 1 when the C++ oracle bailed on bit width — the driver should ignore
+// `expected` in that case and rely on the Q(√3) comparison against `cf`
+// alone. Fields past `expected N` are ignored by drivers that only need
+// the pair-agreement signal.
+//
+// Guarded by LUMICE_PYRAMID_PARAM_DUMP so the benchmark run stays no-op unless
+// explicitly requested — same idiom as BM_DumpPlaneSets. Sample count and
+// sigma likewise env-overridable.
+void BM_DumpPyramidParams(benchmark::State& state) {
+  const char* path = std::getenv("LUMICE_PYRAMID_PARAM_DUMP");
+  long written = 0;
+  if (path != nullptr) {
+    FILE* f = std::fopen(path, "w");
+    if (f != nullptr) {
+      const char* sigma_env = std::getenv("LUMICE_PYRAMID_PARAM_DUMP_SIGMA");
+      const char* n_env = std::getenv("LUMICE_PYRAMID_PARAM_DUMP_N");
+      const double sigma = sigma_env != nullptr ? std::atof(sigma_env) : 0.1;
+      const int n_per_arm = n_env != nullptr ? std::atoi(n_env) : 500;
+      std::mt19937 rng(20260721u);
+      std::normal_distribution<double> d_noise(1.0, sigma);
+      std::uniform_real_distribution<double> h_dist(0.2, 2.0);
+      // arm 0: wedge angle drawn from a distribution that covers the whole
+      // legal range with a bias to the extreme-flat tail [85°, 89.5°] — the
+      // range Step 5's golden-analytic FlatTailAlphas sweep, so any Python
+      // oracle disagreement here would correlate with tail-region behavior.
+      // arm 1: Miller index (i1, i4) ∈ [1, 4] × [1, 4], the range
+      // FillHexCrystalCoef's guard rail accepts.
+      for (int arm = 0; arm < 2; arm++) {
+        for (int s = 0; s < n_per_arm; s++) {
+          float dist[kPrismFaces];
+          for (float& d : dist) {
+            d = static_cast<float>(d_noise(rng));
+          }
+          const auto h2 = static_cast<float>(h_dist(rng));
+          const auto h1 = static_cast<float>(h_dist(rng) / 2.0);
+          const auto h3 = static_cast<float>(h_dist(rng) / 2.0);
+          ClosedFormPyramidResult r;
+          if (arm == 0) {
+            std::uniform_real_distribution<double> a_dist(1.0, 89.5);
+            const auto au = static_cast<float>(a_dist(rng));
+            const auto al = static_cast<float>(a_dist(rng));
+            r = ComputeClosedFormPyramid(au, al, h1, h2, h3, dist);
+          } else {
+            std::uniform_int_distribution<int> idx(1, 4);
+            const int ui1 = idx(rng), ui4 = idx(rng);
+            const int li1 = idx(rng), li4 = idx(rng);
+            r = ComputeClosedFormPyramid(ui1, ui4, li1, li4, h1, h2, h3, dist);
+          }
+          // Emit a1/a2 as %a so the Python oracle rebuilds the SAME
+          // dyadic rational the C++ closed form used. −1.0 sentinel from
+          // ClosedFormPyramidResult::a1/a2 means "cone absent this side" —
+          // the Python oracle recognizes this convention (build_cone_plane
+          // is only called for i-values with cones present).
+          // Feed the C++ oracle the SAME parameters (a1, a2, h1/h2/h3, dist)
+          // the closed form got. The oracle's sentinel for "cone absent" is
+          // matched to the closed form's (-1.0) — for arm 1 with i1=0 the
+          // closed form would fold that through ComputeClosedFormPyramid
+          // (Miller overload) into a1/a2 = -1.0, same convention.
+          auto oracle = test_support::ExactPyramidFromParams(static_cast<double>(r.a1), static_cast<double>(r.a2), h1,
+                                                             h2, h3, dist);
+          std::fprintf(f, "%d %a %a %a %a %a", arm, static_cast<double>(r.a1), static_cast<double>(r.a2),
+                       static_cast<double>(h1), static_cast<double>(h2), static_cast<double>(h3));
+          for (float d : dist) {
+            std::fprintf(f, " %a", static_cast<double>(d));
+          }
+          // `expected` = C++ oracle count (Python compares against this).
+          // `cf` = closed-form count (extra observable, ignored by driver).
+          // `oracle_refused` = 1 if __int128 oracle refused (bit-width),
+          // in which case Python's `expected` should be treated as unknown.
+          std::fprintf(f, " expected %d cf %d oracle_refused %d\n", oracle.vertex_count, r.vtx_cnt,
+                       static_cast<int>(oracle.refused));
+          written++;
+        }
+      }
+      std::fclose(f);
+    }
+  }
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(written);
+  }
+  state.counters["rows_written"] = static_cast<double>(written);
+}
+BENCHMARK(BM_DumpPyramidParams);
+
+// ---- Step 7: closed-form pyramid construction cost -------------------------
+//
+// Same-binary, same-session comparison against bench_crystal.cpp's
+// BM_MakeCrystal/pyramid_random (the geometry-construction clock's unit of
+// work the closed form is meant to replace) and against the existing
+// BM_ComputeClosedFormPrism (the sibling closed form; same file same session
+// so measurement noise is shared). Two flavors:
+//   _fixed:  regular pyramid α=28° h=(1,1,1) dist=[1]*6, mirrors
+//            BM_ComputeClosedFormPrism (which is also a fixed dist=1 sample) —
+//            isolates the algorithmic cost from random-draw overhead.
+//   _random: matches RandomPyramid() in bench_crystal.cpp: h_prs=Gauss(1, 0.2),
+//            h_pyr_{u,l}=Gauss(0.3, 0.05), dist=Gauss(1, 0.1), wedge=28°.
+//            This is the apples-to-apples pair for BM_MakeCrystal/pyramid_random.
+void BM_ComputeClosedFormPyramid_fixed(benchmark::State& state) {
+  float dist[kPrismFaces]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  for (auto _ : state) {
+    auto r = ComputeClosedFormPyramid(28.0f, 28.0f, 1.0f, 1.0f, 1.0f, dist);
+    benchmark::DoNotOptimize(r);
+  }
+}
+BENCHMARK(BM_ComputeClosedFormPyramid_fixed);
+
+void BM_ComputeClosedFormPyramid_random(benchmark::State& state) {
+  std::mt19937 rng(0x5EEDu);
+  std::normal_distribution<double> h_prs_dist(1.0, 0.2);
+  std::normal_distribution<double> h_pyr_dist(0.3, 0.05);
+  std::normal_distribution<double> d_noise(1.0, 0.1);
+  for (auto _ : state) {
+    float dist[kPrismFaces];
+    for (float& d : dist) {
+      d = static_cast<float>(d_noise(rng));
+    }
+    const auto h2 = static_cast<float>(h_prs_dist(rng));
+    const auto h1 = static_cast<float>(h_pyr_dist(rng));
+    const auto h3 = static_cast<float>(h_pyr_dist(rng));
+    auto r = ComputeClosedFormPyramid(28.0f, 28.0f, h1, h2, h3, dist);
+    benchmark::DoNotOptimize(r);
+  }
+  state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_ComputeClosedFormPyramid_random);
+
 }  // namespace
