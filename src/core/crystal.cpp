@@ -172,6 +172,23 @@ bool IsValidClosedFormPrism(const ClosedFormPrismResult& r, float h) {
   return h > math::kFloatEps && r.corner_cnt >= 3;
 }
 
+// 386.2 validity gate for the pyramid closed-form path. The closed-form
+// evaluator already resolves face-presence per slot (accounting for cone
+// dropout at illegal alpha, shoulder-vs-apex layering, and corner-death
+// events); a valid solid needs at least a tetrahedron's worth of faces
+// (4 present). Zero-volume inputs (h1=h2=h3=0 or all cones dropped with h2=0)
+// short-circuit to vtx_cnt == 0 inside the evaluator, which trivially fails
+// the count check.
+bool IsValidClosedFormPyramid(const ClosedFormPyramidResult& r) {
+  int present_cnt = 0;
+  for (int i = 0; i < kClosedFormPyramidFaceCnt; i++) {
+    if (r.face_present[i]) {
+      present_cnt++;
+    }
+  }
+  return present_cnt >= 4;
+}
+
 // Convert ClosedFormPrismResult (single CCW 2D corner ring + h) into per-face
 // 3D CCW vertex lists in CrystalGeom.
 //   - Upper basal (slot 0, normal +z): ring CCW at z = +h/2 (ring is emitted
@@ -259,6 +276,39 @@ void AdaptClosedFormPrismToCrystalGeom(const ClosedFormPrismResult& r, float h, 
     base[3 * 3 + 0] = px;
     base[3 * 3 + 1] = py;
     base[3 * 3 + 2] = z_top;
+  }
+}
+
+// Convert ClosedFormPyramidResult (per-slot CCW vertex indices into the
+// evaluator's global 3D pool) into per-face 3D CCW vertex coord lists in
+// CrystalGeom. The evaluator already sorts each face's vertices CCW as seen
+// from OUTSIDE the solid (geo3d_closedform.cpp:923-988), so no re-ordering is
+// needed here — just an index→coord scatter.
+void AdaptClosedFormPyramidToCrystalGeom(const ClosedFormPyramidResult& r, CrystalGeom& g) {
+  g = CrystalGeom{};
+  g.face_cnt = kClosedFormPyramidFaceCnt;
+
+  std::memcpy(g.plane_coef, r.plane_coef, sizeof(r.plane_coef));
+  std::memcpy(g.face_normal, r.face_normal, sizeof(r.face_normal));
+  std::memcpy(g.face_number, r.face_number, sizeof(r.face_number));
+  for (int i = 0; i < kClosedFormPyramidFaceCnt; i++) {
+    g.face_present[i] = r.face_present[i];
+  }
+
+  for (int slot = 0; slot < kClosedFormPyramidFaceCnt; slot++) {
+    if (!r.face_present[slot]) {
+      continue;
+    }
+    const int fn = r.face_vtx_cnt[slot];
+    assert(fn <= kCrystalGeomMaxVtxPerFace);
+    g.face_vtx_cnt[slot] = fn;
+    float* base = g.face_vtx + slot * kCrystalGeomMaxVtxPerFace * 3;
+    for (int k = 0; k < fn; k++) {
+      const int vi = r.face_vtx[slot][k];
+      base[k * 3 + 0] = r.vtx[vi * 3 + 0];
+      base[k * 3 + 1] = r.vtx[vi * 3 + 1];
+      base[k * 3 + 2] = r.vtx[vi * 3 + 2];
+    }
   }
 }
 
@@ -440,15 +490,32 @@ Crystal Crystal::CreatePyramid(float h1, float h2, float h3) {
   return CreatePyramid(alpha, alpha, h1, h2, h3);
 }
 
-Crystal Crystal::CreatePyramid(float upper_alpha, float lower_alpha, float h1, float h2, float h3, const float* dist) {
-  float coef[kMaxHexCrystalPlanes * 4];
-  auto plane_cnt = FillHexCrystalCoef(upper_alpha, lower_alpha, h1, h2, h3, dist, coef);
-  auto mesh = RejectMalformed(CreateConvexPolyhedronMesh(static_cast<int>(plane_cnt), coef), "CreatePyramid");
-  auto c = Crystal(std::move(mesh));
+Crystal Crystal::MakePyramidClosedForm(float upper_alpha, float lower_alpha, float h1, float h2, float h3,
+                                       const float dist[6], const char* factory) {
+  ClosedFormPyramidResult r = ComputeClosedFormPyramid(upper_alpha, lower_alpha, h1, h2, h3, dist);
+  if (!IsValidClosedFormPyramid(r)) {
+    // Silent when the evaluator returned an all-empty result (zero-volume
+    // short-circuit — matches FillHexCrystalCoef's own zero-volume path,
+    // which emits its own warning). Warn only when it produced *some*
+    // vertices but not enough face slots to bound a solid — the RejectMalformed
+    // analog for the closed-form path.
+    if (r.vtx_cnt > 0) {
+      LOG_WARNING("{}: failed closed-form validity gate (present face count < 4, vtx_cnt={})", factory, r.vtx_cnt);
+    }
+    return Crystal(Mesh(0, 0));
+  }
+  CrystalGeom g;
+  AdaptClosedFormPyramidToCrystalGeom(r, g);
+  BuiltMesh built = BuildMeshFromCfGeom(g);
+  Crystal c(std::move(built.mesh));
+  c.cf_geom_ = g;
   c.fn_period_ = 6;
-  FillHexFnMap(c.TotalTriangles(), c.face_n_, c.fn_map_.get());
-  c.BuildPolygonFaceData(coef, plane_cnt);
+  c.PopulateFromCfGeom(built.tri_face_slot);
   return c;
+}
+
+Crystal Crystal::CreatePyramid(float upper_alpha, float lower_alpha, float h1, float h2, float h3, const float* dist) {
+  return MakePyramidClosedForm(upper_alpha, lower_alpha, h1, h2, h3, dist, "CreatePyramid");
 }
 
 Crystal Crystal::CreatePyramid(float upper_alpha, float lower_alpha, float h1, float h2, float h3) {

@@ -1219,16 +1219,20 @@ TEST_F(V3TestCrystal, PyramidRandomFaceDistanceMoveGetFnLegal) {
   // uniform_real_distribution, whose bit-exact output sequences are unspecified
   // and differ across libstdc++ (dev49/Linux) and libc++ (macOS). mt19937's
   // uint32 stream plus this manual mapping is identical on every stdlib, so the
-  // fixed seed constructs the *same* crystals — and therefore hits the *same*
-  // shrink events — everywhere. That is what makes the anti-vacuous assertion
-  // below trustworthy cross-platform (see project learning on distribution
-  // non-portability).
+  // fixed seed constructs the *same* crystals everywhere.
   //
-  // ANTI-VACUOUS: the GetFn assertions only have detection power on crystals
-  // that actually took the degenerate-shrink path. We reset the process-global
-  // shrink counter, run the sweep, and assert it fired — otherwise a future
-  // sampling/geometry drift could make this guard pass while testing nothing.
-  Crystal::ResetDegenerateShrinkCount();
+  // Step 3 aftermath (2026-07-21): the anti-vacuous DegenerateShrinkCount()
+  // assertion was dropped. The pyramid factory now walks the closed-form path
+  // (MakePyramidClosedForm → PopulateFromCfGeom) and never reaches
+  // BuildPolygonFaceData, so the shrink counter can only be bumped by the
+  // custom-mesh Crystal(Mesh) ctor — a different call path this fixture does
+  // not exercise. Regression coverage for that path belongs to a targeted
+  // custom-mesh test (candidate follow-up; not gating Step 3). The remaining
+  // assertions still guard PopulateFromCfGeom's move/assign behavior under a
+  // wide fuzz — the failure symptoms they were originally added to catch
+  // (kInvalidId / out-of-range fn) would still fire on any pointer-rebinding
+  // regression in the copy/move ctors, regardless of which factory populated
+  // the fields.
   std::mt19937 gen(42);
   // Map a fresh mt19937 draw to face_distance in [0.3, 1.7) — spread wide
   // enough to produce near-zero-area representative triangles (the shrink
@@ -1289,14 +1293,6 @@ TEST_F(V3TestCrystal, PyramidRandomFaceDistanceMoveGetFnLegal) {
   // Sanity: the fixed seed must have exercised at least a few surviving
   // crystals, otherwise the guard is vacuous.
   ASSERT_GT(swept, 20u) << "fixed-seed sweep produced too few surviving crystals; guard is vacuous";
-  // Anti-vacuous: the GetFn assertions above only have detection power on
-  // crystals that took the degenerate-shrink path. Require the sweep to have
-  // actually fired it — a future sampling/geometry drift that stops hitting the
-  // shrink branch must fail loudly here, not pass while testing nothing.
-  ASSERT_GT(Crystal::DegenerateShrinkCount(), 0u)
-      << "fixed-seed sweep never exercised the degenerate-shrink path (poly-face count/stride shrink); "
-      << "the move/GetFn assertions above were vacuous. If geometry sampling changed, re-calibrate the "
-      << "face_distance range in next_dist() so the sweep hits the shrink branch again.";
 }
 
 // Copy/move must rebind face_v_/face_n_/face_area_ into the new cache_data_
@@ -1378,10 +1374,20 @@ TEST(CrystalGeomStep2, PrismFactoryPopulatesCfGeom) {
   EXPECT_EQ(prism.PolygonFaceCount(), 8u);
 }
 
-TEST(CrystalGeomStep2, PyramidFactoryStillZeroPreStep3) {
-  // Pyramid factory is still on the numerical pipeline until Step 3.
-  Crystal pyramid = Crystal::CreatePyramid(0.5f, 1.0f, 0.5f);
-  EXPECT_EQ(pyramid.CfGeom().face_cnt, 0);
+TEST(CrystalGeomStep3, PyramidFactoryPopulatesCfGeom) {
+  // Post-Step-3 tripwire: both pyramid ctor paths (alpha and Miller) now walk
+  // the closed-form path and must populate cf_geom_ with the parametric
+  // 20-face pyramid layout (2 basal + 6 prism side + 6 upper cone + 6 lower
+  // cone). If a future refactor accidentally re-routes pyramid construction
+  // through a mesh-only path, face_cnt drops to 0 and this test fails.
+  Crystal p_alpha = Crystal::CreatePyramid(0.5f, 1.0f, 0.5f);
+  EXPECT_EQ(p_alpha.CfGeom().face_cnt, 20);
+  EXPECT_EQ(p_alpha.PolygonFaceCount(), 20u);
+
+  float dist[6]{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  Crystal p_miller = Crystal::CreatePyramid(1, 1, 1, 1, 0.5f, 1.0f, 0.5f, dist);
+  EXPECT_EQ(p_miller.CfGeom().face_cnt, 20);
+  EXPECT_EQ(p_miller.PolygonFaceCount(), 20u);
 }
 
 TEST(CrystalGeomStep1, CapacityConstantsBoundPyramidWorstCase) {

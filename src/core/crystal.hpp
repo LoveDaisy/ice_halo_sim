@@ -356,6 +356,14 @@ class Crystal {
   // gate rejects (matches the legacy RejectMalformed downstream contract).
   static Crystal MakePrismClosedForm(float h, const float dist[6], const char* factory);
 
+  // Same shape for the pyramid family, entered from the alpha overload
+  // (Miller-index overload delegates through the alpha overload today, so this
+  // single entry covers both public paths). Uses the direct-wedge closed-form
+  // evaluator; the validity gate is "≥4 present face slots" (see
+  // IsValidClosedFormPyramid in crystal.cpp).
+  static Crystal MakePyramidClosedForm(float upper_alpha, float lower_alpha, float h1, float h2, float h3,
+                                       const float dist[6], const char* factory);
+
   // Shift prism/pyramid faces so the first non-basal pri index becomes 0.
   // Basal faces (x < 3) are passed through unchanged. Returns the input
   // verbatim when no non-basal face is present.
