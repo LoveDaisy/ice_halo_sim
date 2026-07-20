@@ -335,19 +335,10 @@ class Crystal {
   // BuildMeshFromCfGeom during construction.
   const Mesh& GetMesh() const { return mesh_; }
 
-  // Test observability: process-global count of degenerate polygon faces
-  // dropped by BuildPolygonFaceData (the count/stride "shrink" path that used
-  // to corrupt copy/move). Lets regression tests assert they actually
-  // exercised the shrink branch instead of passing vacuously. Thread-safe;
-  // reset before a measured sweep, read after.
-  static uint64_t DegenerateShrinkCount();
-  static void ResetDegenerateShrinkCount();
-
   IdType config_id_ = kInvalidId;
 
  private:
   void ComputeCacheData();
-  void BuildPolygonFaceData(const float* plane_coef, size_t plane_cnt);
   // Populate fn_map_ and poly_face_data_ directly from cf_geom_ + a per-tri
   // "which face slot" table produced during the closed-form mesh build. See
   // crystal.cpp for the design rationale (no argmax reversal — the
