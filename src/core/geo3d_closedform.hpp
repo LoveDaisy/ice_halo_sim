@@ -88,16 +88,21 @@ ClosedFormPrismResult ComputeClosedFormPrism(float h, const float dist[6]);
 //   slot 14+i → lower cone face i (face_number 23+i, i = 0..5)
 constexpr int kClosedFormPyramidFaceCnt = 20;
 constexpr int kClosedFormPyramidSideCnt = 6;
-// Global vertex pool upper bound. Each of the 6 adjacent-direction pairs
-// (0,1),(1,2),...,(5,0) contributes at most 4 vertices along z (basal cutoff /
-// shoulder at z=-h2/2 / shoulder at z=+h2/2 / basal cutoff or apex); death
-// events replace pairs but never add. 6·4 = 24 with slack up to 32.
-constexpr int kClosedFormPyramidMaxVtx = 32;
-// Per-face polygon vertex-count upper bound. Basal faces are ≤6-gons (one
-// vertex per adjacent-direction pair). Side / cone faces are ≤4-gons in the
-// well-conditioned regime; face-drop and shoulder events can inflate that
-// slightly. 8 is a safe upper bound with an assert tripwire on overflow.
-constexpr int kClosedFormPyramidMaxFaceVtx = 8;
+// Global vertex pool upper bound. Sized to accommodate:
+//   - 6 adjacent-direction pairs × up to 4 z-events (basal cut / shoulder ×2 /
+//     basal cut or apex) = 24 baseline vertices
+//   - Plus cone corner-death events: up to C(6,3)=20 triples per cone × 2 cones
+//     = 40 additional per-triple vertices in extreme irregular configs
+//   - Plus 2 apex vertices (one per side)
+// A defensive upper bound of 96 leaves comfortable slack; overflow is caught
+// with an unconditional runtime assert (kept live even under NDEBUG since the
+// consequence is silent memory corruption, not a mere check failure).
+constexpr int kClosedFormPyramidMaxVtx = 96;
+// Per-face polygon vertex-count upper bound. Basal faces are ≤6-gons in the
+// regular regime. Cone faces can inflate under irregular dist (multiple death
+// events on the same face). 32 is defensive; overflow is caught by
+// unconditional assert.
+constexpr int kClosedFormPyramidMaxFaceVtx = 32;
 
 // Output of the closed-form pyramid evaluator. Two independent structs (vs
 // reusing ClosedFormPrismResult) because pyramid faces have variable corner

@@ -4,6 +4,8 @@
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
@@ -409,7 +411,13 @@ int InsertOrFindVertex(double x, double y, double z, float* pool, int* cnt, doub
       return i;
     }
   }
-  assert(*cnt < kClosedFormPyramidMaxVtx && "pyramid vertex pool overflow — expand kClosedFormPyramidMaxVtx");
+  if (*cnt >= kClosedFormPyramidMaxVtx) {
+    // Unconditional (survives NDEBUG): silent overflow into adjacent
+    // face_vtx_cnt / face_vtx corrupts subsequent iterations and eventually
+    // segfaults on a bogus index. Trap here for a clean crash.
+    std::fprintf(stderr, "FATAL: pyramid vertex pool overflow (%d >= %d)\n", *cnt, kClosedFormPyramidMaxVtx);
+    std::abort();
+  }
   int idx = *cnt;
   pool[idx * 3 + 0] = static_cast<float>(x);
   pool[idx * 3 + 1] = static_cast<float>(y);
@@ -426,8 +434,11 @@ void AppendFaceVtx(ClosedFormPyramidResult* r, int face_slot, int vtx_idx) {
       return;
     }
   }
-  assert(*cnt < kClosedFormPyramidMaxFaceVtx &&
-         "pyramid face polygon size overflow — expand kClosedFormPyramidMaxFaceVtx");
+  if (*cnt >= kClosedFormPyramidMaxFaceVtx) {
+    std::fprintf(stderr, "FATAL: pyramid face polygon size overflow at slot=%d (%d >= %d)\n", face_slot, *cnt,
+                 kClosedFormPyramidMaxFaceVtx);
+    std::abort();
+  }
   r->face_vtx[face_slot][(*cnt)++] = vtx_idx;
 }
 

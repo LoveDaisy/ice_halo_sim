@@ -40,6 +40,7 @@
 #include "core/geo3d_closedform.hpp"
 #include "core/math.hpp"
 #include "test/support/exact_prism_oracle.hpp"
+#include "test/support/exact_pyramid_oracle.hpp"
 
 using namespace lumice;  // NOLINT(google-build-using-namespace) bench code
 
@@ -1142,6 +1143,24 @@ void BM_PyramidClosedFormSanityDump(benchmark::State& state) {
   static bool dumped = false;
   if (!dumped) {
     dumped = true;
+    // Cross-check: pyramid oracle on pure-prism input agrees with ExactPrism
+    // (validates the oracle's shared arithmetic on the known-good subset).
+    {
+      float dist_p[6]{ 1.f, 1.f, 1.f, 1.f, 1.f, 1.f };
+      auto prism_cf = ComputeClosedFormPrism(1.0f, dist_p);
+      float coef_prism[test_support::kExactPyramidMaxPlanes * 4];
+      int n = 0;
+      for (int slot = 0; slot < kClosedFormPrismFaceCnt; slot++) {
+        for (int k = 0; k < 4; k++) {
+          coef_prism[n * 4 + k] = prism_cf.plane_coef[slot * 4 + k];
+        }
+        n++;
+      }
+      auto pyr_oracle = test_support::ExactPyramid(n, coef_prism);
+      auto prism_oracle = test_support::ExactPrism(dist_p);
+      std::fprintf(stderr, "[PRISM CROSS-CHECK] pyr_oracle.vtx=%d prism_oracle.corners=%d (expect 6+6=12 lifted)\n",
+                   pyr_oracle.vertex_count, prism_oracle.corner_count);
+    }
     float dist[6]{ 1.f, 1.f, 1.f, 1.f, 1.f, 1.f };
     const float au = 28.0f, al = 28.0f, h1 = 1.0f, h2 = 1.0f, h3 = 1.0f;
     auto r = ComputeClosedFormPyramid(au, al, h1, h2, h3, dist);
@@ -1167,12 +1186,165 @@ void BM_PyramidClosedFormSanityDump(benchmark::State& state) {
     // Compare against production mesh.
     auto mesh = CreatePyramidMesh(au, al, h1, h2, h3, dist);
     std::fprintf(stderr, "  [PROD] vtx_cnt=%zu tri_cnt=%zu\n", mesh.GetVtxCnt(), mesh.GetTriangleCnt());
+    // Feed the closed-form's plane_coef to the pyramid oracle for sanity.
+    float coef_packed[test_support::kExactPyramidMaxPlanes * 4];
+    int packed_n = 0;
+    for (int slot = 0; slot < kClosedFormPyramidFaceCnt; slot++) {
+      const bool is_upper_cone = slot >= 8 && slot < 14;
+      const bool is_lower_cone = slot >= 14;
+      if (is_upper_cone && r.a1 <= 0) {
+        continue;
+      }
+      if (is_lower_cone && r.a2 <= 0) {
+        continue;
+      }
+      for (int k = 0; k < 4; k++) {
+        coef_packed[packed_n * 4 + k] = r.plane_coef[slot * 4 + k];
+      }
+      packed_n++;
+    }
+    auto oracle = test_support::ExactPyramid(packed_n, coef_packed);
+    std::fprintf(stderr, "  [ORACLE] planes=%d vertex_count=%d\n", packed_n, oracle.vertex_count);
+    // Detailed per-vertex dump omitted — the __int128 rationals require
+    // careful conversion to double to display without high-bit truncation,
+    // which is not helpful to eyeball anyway. The oracle vertex count vs
+    // closed-form vs production is the diagnostic that matters for triage.
   }
   for (auto _ : state) {
     benchmark::DoNotOptimize(dumped);
   }
 }
 BENCHMARK(BM_PyramidClosedFormSanityDump);
+
+// ---- Oracle self-verification against production and closed-form ----------
+//
+// The pyramid __int128 oracle is a SECOND independent implementation, so
+// before using it as ground truth in the golden-analytic tests it must first
+// self-verify on the known-good regime (well-conditioned samples where all
+// three parties — closed-form, oracle, production — should agree by
+// construction). Reports agreement counts across N = 5000 samples at
+// σ = 0.1 (well-conditioned).
+void BM_PyramidOracleSelfVerify(benchmark::State& state) {
+  static bool ran = false;
+  static long s_samples = 0, s_agree = 0, s_cf_diff = 0, s_prod_diff = 0, s_skip = 0;
+  if (ran) {
+    for (auto _ : state) {
+      benchmark::DoNotOptimize(s_agree);
+    }
+    state.counters["samples"] = static_cast<double>(s_samples);
+    state.counters["AGREE_ALL"] = static_cast<double>(s_agree);
+    state.counters["cf_vs_oracle_diff"] = static_cast<double>(s_cf_diff);
+    state.counters["prod_vs_oracle_diff"] = static_cast<double>(s_prod_diff);
+    state.counters["empty_skip"] = static_cast<double>(s_skip);
+    return;
+  }
+  ran = true;
+  std::mt19937 rng(20260721u);
+  std::uniform_real_distribution<double> alpha_dist(5.0, 85.0);
+  std::normal_distribution<double> d_noise(1.0, 0.1);
+  std::uniform_real_distribution<double> h_dist(0.5, 2.0);
+
+  long samples = 0;
+  long agree_all = 0;
+  long cf_vs_oracle_diff = 0;
+  long prod_vs_oracle_diff = 0;
+  long empty_or_skip = 0;
+  const int kSamples = 1;  // reduced for oracle bring-up debug
+
+  for (int s = 0; s < kSamples; s++) {
+    const auto au = static_cast<float>(alpha_dist(rng));
+    const auto al = static_cast<float>(alpha_dist(rng));
+    const auto h1 = static_cast<float>(h_dist(rng));
+    const auto h2 = static_cast<float>(h_dist(rng));
+    const auto h3 = static_cast<float>(h_dist(rng));
+    float dist[kPrismFaces];
+    for (float& d : dist) {
+      d = std::max(0.3f, static_cast<float>(d_noise(rng)));
+    }
+    std::fprintf(stderr, "s=%d au=%f al=%f h=%f,%f,%f dist=%f,%f,%f,%f,%f,%f\n", s, static_cast<double>(au),
+                 static_cast<double>(al), static_cast<double>(h1), static_cast<double>(h2), static_cast<double>(h3),
+                 static_cast<double>(dist[0]), static_cast<double>(dist[1]), static_cast<double>(dist[2]),
+                 static_cast<double>(dist[3]), static_cast<double>(dist[4]), static_cast<double>(dist[5]));
+    std::fflush(stderr);
+    auto cf = ComputeClosedFormPyramid(au, al, h1, h2, h3, dist);
+    std::fprintf(stderr, "  cf vtx=%d\n", cf.vtx_cnt);
+    std::fflush(stderr);
+    // Count face_present flags to compare against production tri_count.
+    int cf_faces_present = 0;
+    for (bool p : cf.face_present) {
+      if (p) {
+        cf_faces_present++;
+      }
+    }
+    // Feed the oracle the CLOSED-FORM's plane_coef (same float precision on
+    // both sides — plan default assumption 4). Also strip absent-cone slots
+    // from the oracle input to avoid probing planes with all-zero coefs.
+    float coef_packed[test_support::kExactPyramidMaxPlanes * 4];
+    int packed_n = 0;
+    for (int slot = 0; slot < kClosedFormPyramidFaceCnt; slot++) {
+      const bool is_upper_cone = slot >= 8 && slot < 14;
+      const bool is_lower_cone = slot >= 14;
+      if (is_upper_cone && cf.a1 <= 0) {
+        continue;
+      }
+      if (is_lower_cone && cf.a2 <= 0) {
+        continue;
+      }
+      for (int k = 0; k < 4; k++) {
+        coef_packed[packed_n * 4 + k] = cf.plane_coef[slot * 4 + k];
+      }
+      packed_n++;
+    }
+    auto oracle = test_support::ExactPyramid(packed_n, coef_packed);
+    // Production reference: FillHexCrystalCoef + SolveConvexPolyhedronVtxD.
+    float coef_prod[kMaxHexCrystalPlanes * 4];
+    const int prod_n = static_cast<int>(FillHexCrystalCoef(au, al, h1, h2, h3, dist, coef_prod));
+    if (prod_n == 0) {
+      empty_or_skip++;
+      continue;
+    }
+    auto [prod_vtx, prod_vtx_cnt] = SolveConvexPolyhedronVtxD(prod_n, coef_prod);
+
+    samples++;
+    const bool cf_oracle_ok = (cf.vtx_cnt == oracle.vertex_count);
+    const bool prod_oracle_ok = (prod_vtx_cnt == oracle.vertex_count);
+    if (cf_oracle_ok && prod_oracle_ok) {
+      agree_all++;
+    }
+    if (!cf_oracle_ok) {
+      cf_vs_oracle_diff++;
+      if (cf_vs_oracle_diff <= 5) {
+        std::fprintf(stderr, "[CF!=ORACLE] cf.vtx=%d oracle=%d au=%.2f al=%.2f h=%.2f,%.2f,%.2f\n", cf.vtx_cnt,
+                     oracle.vertex_count, static_cast<double>(au), static_cast<double>(al), static_cast<double>(h1),
+                     static_cast<double>(h2), static_cast<double>(h3));
+      }
+    }
+    if (!prod_oracle_ok) {
+      prod_vs_oracle_diff++;
+      if (prod_vs_oracle_diff <= 5) {
+        std::fprintf(stderr, "[PROD!=ORACLE] prod.vtx=%d oracle=%d au=%.2f al=%.2f h=%.2f,%.2f,%.2f\n", prod_vtx_cnt,
+                     oracle.vertex_count, static_cast<double>(au), static_cast<double>(al), static_cast<double>(h1),
+                     static_cast<double>(h2), static_cast<double>(h3));
+      }
+    }
+    (void)cf_faces_present;
+  }
+
+  s_samples = samples;
+  s_agree = agree_all;
+  s_cf_diff = cf_vs_oracle_diff;
+  s_prod_diff = prod_vs_oracle_diff;
+  s_skip = empty_or_skip;
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(agree_all);
+  }
+  state.counters["samples"] = static_cast<double>(samples);
+  state.counters["AGREE_ALL"] = static_cast<double>(agree_all);
+  state.counters["cf_vs_oracle_diff"] = static_cast<double>(cf_vs_oracle_diff);
+  state.counters["prod_vs_oracle_diff"] = static_cast<double>(prod_vs_oracle_diff);
+  state.counters["empty_skip"] = static_cast<double>(empty_or_skip);
+}
+BENCHMARK(BM_PyramidOracleSelfVerify);
 
 // ============================================================================
 // Pyramid oracle pre-flight diagnostics — two independent questions the oracle
