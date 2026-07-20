@@ -1132,4 +1132,452 @@ void BM_MalformedGateCrossTab(benchmark::State& state) {
 }
 BENCHMARK(BM_MalformedGateCrossTab)->Arg(30)->Arg(50)->Arg(80);
 
+// ============================================================================
+// Pyramid oracle pre-flight diagnostics — two independent questions the oracle
+// design rests on: (a) can __int128 hold the arithmetic; (b) is per-direction
+// death time a purely-local event? Both are DIAGNOSTICS, not production code.
+// ============================================================================
+
+// ---- Step 1(a): __int128 bit-width pressure test ---------------------------
+//
+// The exact prism oracle uses a single fixed SHIFT=30 because every prism-face
+// coefficient is O(1). Pyramid coefficients contain a1 = √3/(4·tan α), which
+// spans [7.56e-4, 248] over the legal α range [0.1°, 89.9°] — 5.5 decades. A
+// fixed SHIFT that keeps small a1 precise overflows on large a1; the reverse
+// loses bits at the small end. This experiment measures, in the same
+// three-plane-intersection arithmetic the pyramid oracle would perform, the
+// worst-case bit width of intermediate products for direct-wedge and Miller
+// input arms across the whole legal α range × the extreme-flat tail. If the
+// worst bit width sits comfortably below 127, __int128 with variable-shift
+// (frexp / ldexp) is feasible; if not, the oracle design needs a 256-bit
+// backing type (see plan §7 risk 1).
+//
+// Measurement method: run the intersection in double, but tracking the
+// absolute value of each intermediate product a·(b·c) - a·(c·b) ... . Then
+// compute log2(max) — that IS the bit width the integer version would need
+// (before adding any headroom for accumulation).
+namespace pyramid_spike_step1 {
+
+constexpr int kSides = 6;
+
+// Build the 20 pyramid plane coefficients for a given (alpha, h1, h2, h3, dist)
+// combination — same formulas as FillHexCrystalCoef but self-contained so this
+// diagnostic doesn't drag in the production geometry pipeline for a
+// bit-width probe.
+struct PyramidPlanes {
+  double coef[20 * 4];
+  int n;
+};
+
+PyramidPlanes BuildPyramidPlanes(double alpha_u_deg, double alpha_l_deg, double h1, double h2, double h3,
+                                 const double dist[kSides]) {
+  PyramidPlanes p;
+  using math::kPi_3;
+  using math::kPi_6;
+  const double kDegRad = M_PI / 180.0;
+  const double h2_2 = h2 / 2.0;
+  const double a1 = (h1 > 1e-9 && alpha_u_deg >= 0.1 && alpha_u_deg <= 89.9) ?
+                        (std::sqrt(3.0) / 4.0) / std::tan(alpha_u_deg * kDegRad) :
+                        -1.0;
+  const double a2 = (h3 > 1e-9 && alpha_l_deg >= 0.1 && alpha_l_deg <= 89.9) ?
+                        (std::sqrt(3.0) / 4.0) / std::tan(alpha_l_deg * kDegRad) :
+                        -1.0;
+  int c = 0;
+  // Basal (d filled later; the pressure test cares about the arithmetic on
+  // the intersecting non-basal planes, so any consistent d works).
+  p.coef[c * 4 + 0] = 0;
+  p.coef[c * 4 + 1] = 0;
+  p.coef[c * 4 + 2] = 1;
+  p.coef[c * 4 + 3] = -h2_2;
+  c++;
+  p.coef[c * 4 + 0] = 0;
+  p.coef[c * 4 + 1] = 0;
+  p.coef[c * 4 + 2] = -1;
+  p.coef[c * 4 + 3] = -h2_2;
+  c++;
+  // Prism.
+  for (int i = 0; i < kSides; i++) {
+    const double x1 = 0.5 * std::cos(-kPi_6 + i * kPi_3);
+    const double x2 = 0.5 * std::cos(kPi_6 + i * kPi_3);
+    const double y1 = 0.5 * std::sin(-kPi_6 + i * kPi_3);
+    const double y2 = 0.5 * std::sin(kPi_6 + i * kPi_3);
+    const double det = x1 * y2 - x2 * y1;
+    p.coef[c * 4 + 0] = y2 - y1;
+    p.coef[c * 4 + 1] = x1 - x2;
+    p.coef[c * 4 + 2] = 0;
+    p.coef[c * 4 + 3] = -dist[i] * det;
+    c++;
+  }
+  // Upper cone.
+  if (a1 > 0) {
+    for (int i = 0; i < kSides; i++) {
+      const double x1 = 0.5 * std::cos(-kPi_6 + i * kPi_3);
+      const double x2 = 0.5 * std::cos(kPi_6 + i * kPi_3);
+      const double y1 = 0.5 * std::sin(-kPi_6 + i * kPi_3);
+      const double y2 = 0.5 * std::sin(kPi_6 + i * kPi_3);
+      const double det = x1 * y2 - x2 * y1;
+      p.coef[c * 4 + 0] = a1 * (y2 - y1);
+      p.coef[c * 4 + 1] = a1 * (x1 - x2);
+      p.coef[c * 4 + 2] = det;
+      p.coef[c * 4 + 3] = -(h2_2 + a1 * dist[i]) * det;
+      c++;
+    }
+  }
+  // Lower cone.
+  if (a2 > 0) {
+    for (int i = 0; i < kSides; i++) {
+      const double x1 = 0.5 * std::cos(-kPi_6 + i * kPi_3);
+      const double x2 = 0.5 * std::cos(kPi_6 + i * kPi_3);
+      const double y1 = 0.5 * std::sin(-kPi_6 + i * kPi_3);
+      const double y2 = 0.5 * std::sin(kPi_6 + i * kPi_3);
+      const double det = x1 * y2 - x2 * y1;
+      p.coef[c * 4 + 0] = a2 * (y2 - y1);
+      p.coef[c * 4 + 1] = a2 * (x1 - x2);
+      p.coef[c * 4 + 2] = -det;
+      p.coef[c * 4 + 3] = -(h2_2 + a2 * dist[i]) * det;
+      c++;
+    }
+  }
+  p.n = c;
+  return p;
+}
+
+// Emulate the __int128-oracle arithmetic in double, tracking absolute values.
+// The oracle would do: scale each coef by 2^SHIFT so coefs become integers,
+// then compute det = ax*(by*cz - bz*cy) - ay*(bx*cz - bz*cx) + az*(bx*cy - by*cx),
+// and similarly px, py, pz numerators; feasibility check does (row_a*px + row_b*py + row_c*pz) <=> row_d*det.
+// The equivalent bit width IS log2(max intermediate). This function returns
+// that max, computed in double (double gives ~53 bit mantissa, enough to
+// represent the exponent of the true integer intermediate to within 1 bit).
+struct BitStats {
+  double max_intermediate_bits = 0;
+};
+
+void TrackTripleIntermediate(const double* a, const double* b, const double* c, double common_scale, BitStats* st) {
+  // Scale each coefficient row by common_scale (representing the 2^SHIFT
+  // rescaling). Everything from here on is in "integer units" (though we hold
+  // it in double for the pressure probe).
+  double A[4], B[4], C[4];
+  for (int k = 0; k < 4; k++) {
+    A[k] = a[k] * common_scale;
+    B[k] = b[k] * common_scale;
+    C[k] = c[k] * common_scale;
+  }
+  // Products in the determinant expansion.
+  const double m1 = A[0] * (B[1] * C[2] - B[2] * C[1]);
+  const double m2 = A[1] * (B[0] * C[2] - B[2] * C[0]);
+  const double m3 = A[2] * (B[0] * C[1] - B[1] * C[0]);
+  // Cofactor products (px, py, pz numerators use the same shape but with A[3] et al.).
+  const double n1 = A[3] * (B[1] * C[2] - B[2] * C[1]);
+  const double n2 = A[3] * (B[0] * C[2] - B[2] * C[0]);
+  const double n3 = A[3] * (B[0] * C[1] - B[1] * C[0]);
+  const double det = m1 - m2 + m3;
+  // Feasibility side of the check: row * (px, py, pz) <=> row[3] * det.
+  // The RHS multiplication row[3]*det is another triple-product-scale operation.
+  auto absmax = [](std::initializer_list<double> xs) {
+    double m = 0;
+    for (double x : xs) {
+      m = std::max(m, std::fabs(x));
+    }
+    return m;
+  };
+  const double worst = absmax({ m1, m2, m3, n1, n2, n3, det, A[3] * det });
+  if (worst > 0) {
+    st->max_intermediate_bits = std::max(st->max_intermediate_bits, std::log2(worst));
+  }
+}
+
+}  // namespace pyramid_spike_step1
+
+void BM_PyramidOracleBitWidthPressure(benchmark::State& state) {
+  using namespace pyramid_spike_step1;
+
+  // arm 0 = direct wedge (incl. [85°, 89.5°] tail), arm 1 = Miller index
+  const int arm = static_cast<int>(state.range(0));
+  std::mt19937 rng(20260720u ^ static_cast<unsigned>(arm));
+  std::uniform_real_distribution<double> alpha_bulk(1.0, 85.0);
+  std::uniform_real_distribution<double> alpha_tail(85.0, 89.5);
+  std::normal_distribution<double> d_noise(1.0, 0.3);
+  std::uniform_real_distribution<double> h_dist(0.2, 2.0);
+  std::uniform_int_distribution<int> idx_dist(1, 4);
+  std::uniform_int_distribution<int> tail_coin(0, 3);  // ~1/4 of samples in extreme-flat tail
+
+  BitStats st;
+  long samples = 0;
+  long triples_scored = 0;
+  // Cap SHIFT so |coef|·2^SHIFT stays representable in double (≤ ~2^1023
+  // isn't the risk; what matters is the mantissa resolution: we choose SHIFT
+  // such that the SMALLEST nonzero coef is captured with at least ~40 bits).
+  // The pyramid oracle would use frexp-based per-plane variable shifts, but
+  // the pressure question is "what's the total bit width of an intermediate
+  // if a naive fixed common SHIFT were used" — an upper bound on the
+  // variable-shift version.
+  constexpr double kScale = 4294967296.0;  // 2^32
+
+  const int kSamplesPerRun = 3000;
+  for (int s = 0; s < kSamplesPerRun; s++) {
+    double alpha_u, alpha_l;
+    if (arm == 0) {
+      alpha_u = (tail_coin(rng) == 0) ? alpha_tail(rng) : alpha_bulk(rng);
+      alpha_l = (tail_coin(rng) == 0) ? alpha_tail(rng) : alpha_bulk(rng);
+    } else {
+      const int i1u = idx_dist(rng), i4u = idx_dist(rng);
+      const int i1l = idx_dist(rng), i4l = idx_dist(rng);
+      alpha_u = std::atan(std::sqrt(3.0) / 2.0 * i4u / i1u / kIceCrystalC) * 180.0 / M_PI;
+      alpha_l = std::atan(std::sqrt(3.0) / 2.0 * i4l / i1l / kIceCrystalC) * 180.0 / M_PI;
+    }
+    double dist[6];
+    for (int i = 0; i < 6; i++) {
+      dist[i] = std::max(0.05, d_noise(rng));
+    }
+    const double h2 = h_dist(rng);
+    const double h1 = h_dist(rng) / 2.0;
+    const double h3 = h_dist(rng) / 2.0;
+    auto p = BuildPyramidPlanes(alpha_u, alpha_l, h1, h2, h3, dist);
+    if (p.n < 8) {
+      continue;
+    }
+    samples++;
+    // Probe every C(n, 3) triple of non-basal planes — same shape as the
+    // pyramid oracle would enumerate. Skip basal-only triples: they never
+    // determine a new vertex in the oracle's search.
+    for (int i = 2; i < p.n; i++) {
+      for (int j = i + 1; j < p.n; j++) {
+        for (int k = j + 1; k < p.n; k++) {
+          TrackTripleIntermediate(p.coef + i * 4, p.coef + j * 4, p.coef + k * 4, kScale, &st);
+          triples_scored++;
+        }
+      }
+    }
+  }
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(st.max_intermediate_bits);
+  }
+  state.counters["arm"] = arm;
+  state.counters["samples"] = static_cast<double>(samples);
+  state.counters["triples"] = static_cast<double>(triples_scored);
+  state.counters["shift_used_bits"] = std::log2(kScale);
+  state.counters["MAX_INTERMEDIATE_BITS"] = st.max_intermediate_bits;
+  // Verdict counter: we need bit width <= 127 (with headroom for the
+  // outer *= det comparison and one accumulation).
+  state.counters["fits_in_int128_headroom_bits"] = 127.0 - st.max_intermediate_bits;
+}
+BENCHMARK(BM_PyramidOracleBitWidthPressure)->Arg(0)->Arg(1);
+
+// Variable per-plane frexp normalization variant of Step 1(a): each plane's
+// max-abs coef gets normalized to 2^SHIFT_PER_PLANE (default 28) so mantissa
+// bits used per coef is ≤ 28. Triple-product mantissa is then ≤ 3·28 = 84 bits;
+// feasibility check adds another mul (·28 = 112 bits) + accumulation (+2) =
+// 114 bits total. If measurement here says "≤ ~117 bits", the pyramid oracle
+// with per-plane frexp normalization fits in __int128 with real headroom.
+namespace pyramid_spike_step1_variable {
+
+double MaxAbs(const double v[4]) {
+  double m = 0;
+  for (int i = 0; i < 4; i++) {
+    m = std::max(m, std::fabs(v[i]));
+  }
+  return m;
+}
+
+}  // namespace pyramid_spike_step1_variable
+
+void BM_PyramidOracleBitWidthPressureVar(benchmark::State& state) {
+  using namespace pyramid_spike_step1;
+  using pyramid_spike_step1_variable::MaxAbs;
+  const int arm = static_cast<int>(state.range(0));
+  const int shift_per_plane = static_cast<int>(state.range(1));  // e.g. 24, 28, 30
+
+  std::mt19937 rng(20260720u ^ static_cast<unsigned>(arm) ^ static_cast<unsigned>(shift_per_plane << 8));
+  std::uniform_real_distribution<double> alpha_bulk(1.0, 85.0);
+  std::uniform_real_distribution<double> alpha_tail(85.0, 89.5);
+  std::normal_distribution<double> d_noise(1.0, 0.3);
+  std::uniform_real_distribution<double> h_dist(0.2, 2.0);
+  std::uniform_int_distribution<int> idx_dist(1, 4);
+  std::uniform_int_distribution<int> tail_coin(0, 3);
+
+  double max_triple_mantissa_bits = 0;
+  double max_feas_mantissa_bits = 0;
+  long triples_scored = 0;
+  long samples = 0;
+  const double kMantissaTarget = std::pow(2.0, static_cast<double>(shift_per_plane));
+
+  for (int s = 0; s < 3000; s++) {
+    double alpha_u, alpha_l;
+    if (arm == 0) {
+      alpha_u = (tail_coin(rng) == 0) ? alpha_tail(rng) : alpha_bulk(rng);
+      alpha_l = (tail_coin(rng) == 0) ? alpha_tail(rng) : alpha_bulk(rng);
+    } else {
+      const int i1u = idx_dist(rng), i4u = idx_dist(rng);
+      const int i1l = idx_dist(rng), i4l = idx_dist(rng);
+      alpha_u = std::atan(std::sqrt(3.0) / 2.0 * i4u / i1u / kIceCrystalC) * 180.0 / M_PI;
+      alpha_l = std::atan(std::sqrt(3.0) / 2.0 * i4l / i1l / kIceCrystalC) * 180.0 / M_PI;
+    }
+    double dist[6];
+    for (int i = 0; i < 6; i++) {
+      dist[i] = std::max(0.05, d_noise(rng));
+    }
+    const double h2 = h_dist(rng);
+    const double h1 = h_dist(rng) / 2.0;
+    const double h3 = h_dist(rng) / 2.0;
+    auto p = BuildPyramidPlanes(alpha_u, alpha_l, h1, h2, h3, dist);
+    if (p.n < 8) {
+      continue;
+    }
+    samples++;
+    // Normalize each non-basal plane's coefs to have max_abs = 2^shift.
+    double scaled[20 * 4];
+    for (int i = 0; i < p.n; i++) {
+      const double m = MaxAbs(p.coef + i * 4);
+      const double s = m > 0 ? kMantissaTarget / m : 1.0;
+      for (int k = 0; k < 4; k++) {
+        scaled[i * 4 + k] = p.coef[i * 4 + k] * s;
+      }
+    }
+    for (int i = 2; i < p.n; i++) {
+      for (int j = i + 1; j < p.n; j++) {
+        for (int k = j + 1; k < p.n; k++) {
+          const double* A = scaled + i * 4;
+          const double* B = scaled + j * 4;
+          const double* C = scaled + k * 4;
+          const double m1 = A[0] * (B[1] * C[2] - B[2] * C[1]);
+          const double m2 = A[1] * (B[0] * C[2] - B[2] * C[0]);
+          const double m3 = A[2] * (B[0] * C[1] - B[1] * C[0]);
+          const double det = m1 - m2 + m3;
+          const double worst_triple =
+              std::max(std::fabs(m1), std::max(std::fabs(m2), std::max(std::fabs(m3), std::fabs(det))));
+          if (worst_triple > 0) {
+            max_triple_mantissa_bits = std::max(max_triple_mantissa_bits, std::log2(worst_triple));
+          }
+          // Feasibility check row_r · (px, py, pz) vs row_r[3] * det: another 3
+          // multiplications each of (30-bit coef · 90-bit intermediate).
+          for (int r = 0; r < p.n; r++) {
+            if (r == i || r == j || r == k) {
+              continue;
+            }
+            const double* R = scaled + r * 4;
+            const double lhs = R[0] * m1 + R[1] * m2 + R[2] * m3;
+            const double rhs = R[3] * det;
+            const double worst = std::max(std::fabs(lhs), std::fabs(rhs));
+            if (worst > 0) {
+              max_feas_mantissa_bits = std::max(max_feas_mantissa_bits, std::log2(worst));
+            }
+          }
+          triples_scored++;
+        }
+      }
+    }
+  }
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(max_triple_mantissa_bits);
+  }
+  state.counters["arm"] = arm;
+  state.counters["shift_per_plane"] = shift_per_plane;
+  state.counters["samples"] = static_cast<double>(samples);
+  state.counters["triples"] = static_cast<double>(triples_scored);
+  state.counters["MAX_TRIPLE_BITS"] = max_triple_mantissa_bits;
+  state.counters["MAX_FEAS_BITS"] = max_feas_mantissa_bits;
+  state.counters["int128_headroom"] = 127.0 - max_feas_mantissa_bits;
+}
+BENCHMARK(BM_PyramidOracleBitWidthPressureVar)
+    ->Args({ 0, 24 })
+    ->Args({ 0, 28 })
+    ->Args({ 0, 30 })
+    ->Args({ 1, 24 })
+    ->Args({ 1, 28 })
+    ->Args({ 1, 30 });
+
+// ---- Step 1(b): angular-death structure verification ----------------------
+//
+// Plan default assumption 3: "direction i's death event is determined only by
+// dist[i-1], dist[i], dist[i+1]." If FALSE, the closed-form corner-death
+// timetable derivation in Step 3 needs to look further. Verified empirically
+// by scanning inset m from 0 to max(dist) on the closed-form 2D cross-section
+// (uniform-erosion model), recording the m at which each side face i
+// disappears from face_present, and comparing to what m*_i would be if we
+// varied dist[i-1..i+1] alone (perturbing far directions and re-checking).
+void BM_PyramidAngularDeathStructure(benchmark::State& state) {
+  std::mt19937 rng(31415u);
+  std::normal_distribution<double> d_noise(1.0, 0.3);
+  long samples = 0;
+  long deaths_local_confirmed = 0;
+  long deaths_perturbed_by_far = 0;
+  double worst_far_perturbation = 0.0;
+
+  const int kSteps = 400;
+
+  for (int s = 0; s < 400; s++) {
+    float dist[6];
+    for (int i = 0; i < 6; i++) {
+      dist[i] = std::max(0.05f, static_cast<float>(d_noise(rng)));
+    }
+    // Find m*_i: for each direction i, the smallest m > 0 such that
+    // face i is NOT present in ComputeClosedFormPrism(h=1, dist - m).
+    // Scan in fine steps up to max(dist).
+    double max_d = 0;
+    for (int i = 0; i < 6; i++) {
+      max_d = std::max(max_d, static_cast<double>(dist[i]));
+    }
+    auto find_death = [&](const float d[6]) {
+      double death[6] = { -1, -1, -1, -1, -1, -1 };
+      for (int step = 0; step <= kSteps; step++) {
+        const double m = max_d * static_cast<double>(step) / kSteps;
+        float d_eroded[6];
+        for (int i = 0; i < 6; i++) {
+          d_eroded[i] = d[i] - static_cast<float>(m);
+        }
+        auto r = ComputeClosedFormPrism(1.0f, d_eroded);
+        for (int i = 0; i < 6; i++) {
+          if (death[i] < 0 && !r.face_present[2 + i]) {
+            death[i] = m;
+          }
+        }
+      }
+      return std::array<double, 6>{ death[0], death[1], death[2], death[3], death[4], death[5] };
+    };
+    auto base = find_death(dist);
+    samples++;
+
+    // Perturb ONLY far-away directions (i.e. those not in {i-1, i, i+1}) and
+    // see whether m*_i shifts. If the structure assumption holds, base[i]
+    // should stay the same.
+    for (int i = 0; i < 6; i++) {
+      if (base[i] < 0) {
+        continue;  // face i never dies in [0, max_d] — nothing to check
+      }
+      float perturbed[6];
+      for (int k = 0; k < 6; k++) {
+        perturbed[k] = dist[k];
+      }
+      // Add +0.3 to two "far" faces (distance 2 and 3 in the hex).
+      const int far_a = (i + 2) % 6;
+      const int far_b = (i + 3) % 6;
+      perturbed[far_a] += 0.3f;
+      perturbed[far_b] += 0.3f;
+      auto p = find_death(perturbed);
+      if (p[i] < 0) {
+        // Face i now lives forever (perturbation made the situation more
+        // permissive) — not a local-vs-global collision, skip.
+        continue;
+      }
+      const double delta = std::fabs(p[i] - base[i]);
+      const double rel = delta / std::max(base[i], 1e-9);
+      if (rel < 5e-3) {
+        deaths_local_confirmed++;
+      } else {
+        deaths_perturbed_by_far++;
+      }
+      worst_far_perturbation = std::max(worst_far_perturbation, rel);
+    }
+  }
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(deaths_local_confirmed);
+  }
+  state.counters["samples"] = static_cast<double>(samples);
+  state.counters["deaths_local_OK"] = static_cast<double>(deaths_local_confirmed);
+  state.counters["deaths_FAR_MATTERED"] = static_cast<double>(deaths_perturbed_by_far);
+  state.counters["worst_far_perturb_rel"] = worst_far_perturbation;
+}
+BENCHMARK(BM_PyramidAngularDeathStructure);
+
 }  // namespace
