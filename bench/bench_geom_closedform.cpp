@@ -1165,11 +1165,9 @@ void BM_PyramidClosedFormSanityDump(benchmark::State& state) {
                    static_cast<int>(pyr_oracle.refused), prism_oracle.corner_count);
     }
     float dist[6]{ 1.f, 1.f, 1.f, 1.f, 1.f, 1.f };
-    // NOTE: h1=1.0 exposed a units bug in closed-form (LP-scale vs physical
-    // m — see 2026-07-20 progress entry). Kept h1=0.3 here so the sanity dump
-    // exercises a truly truncated pyramid where the polygon at z_top is a
-    // hexagon (non-degenerate) — the case where closed-form and production
-    // should agree structurally.
+    // h1=h3=0.3 (truncated): closed-form top is a real hexagon; oracle stress-
+    // tests 4-plane concurrence dedup at the ±0.5 shoulders (see progress note
+    // on oracle over-counting under high-degree concurrence).
     const float au = 28.0f, al = 28.0f, h1 = 0.3f, h2 = 1.0f, h3 = 0.3f;
     auto r = ComputeClosedFormPyramid(au, al, h1, h2, h3, dist);
     std::fprintf(stderr, "[SANITY] regular pyramid α=28° h=(1,1,1) dist=1:\n");
@@ -1228,10 +1226,6 @@ void BM_PyramidClosedFormSanityDump(benchmark::State& state) {
     auto oracle = test_support::ExactPyramid(packed_n, coef_packed);
     std::fprintf(stderr, "  [ORACLE] planes=%d vertex_count=%d shift=%d max_bits=%d refused=%d\n", packed_n,
                  oracle.vertex_count, oracle.shift, oracle.max_intermediate_bits, static_cast<int>(oracle.refused));
-    // Detailed per-vertex dump omitted — the __int128 rationals require
-    // careful conversion to double to display without high-bit truncation,
-    // which is not helpful to eyeball anyway. The oracle vertex count vs
-    // closed-form vs production is the diagnostic that matters for triage.
   }
   for (auto _ : state) {
     benchmark::DoNotOptimize(dumped);
@@ -1272,7 +1266,8 @@ void BM_PyramidOracleSelfVerify(benchmark::State& state) {
   long cf_vs_oracle_diff = 0;
   long prod_vs_oracle_diff = 0;
   long empty_or_skip = 0;
-  const int kSamples = 1;  // reduced for oracle bring-up debug
+  long oracle_refused = 0;
+  const int kSamples = 200;
 
   for (int s = 0; s < kSamples; s++) {
     const auto au = static_cast<float>(alpha_dist(rng));
@@ -1284,14 +1279,7 @@ void BM_PyramidOracleSelfVerify(benchmark::State& state) {
     for (float& d : dist) {
       d = std::max(0.3f, static_cast<float>(d_noise(rng)));
     }
-    std::fprintf(stderr, "s=%d au=%f al=%f h=%f,%f,%f dist=%f,%f,%f,%f,%f,%f\n", s, static_cast<double>(au),
-                 static_cast<double>(al), static_cast<double>(h1), static_cast<double>(h2), static_cast<double>(h3),
-                 static_cast<double>(dist[0]), static_cast<double>(dist[1]), static_cast<double>(dist[2]),
-                 static_cast<double>(dist[3]), static_cast<double>(dist[4]), static_cast<double>(dist[5]));
-    std::fflush(stderr);
     auto cf = ComputeClosedFormPyramid(au, al, h1, h2, h3, dist);
-    std::fprintf(stderr, "  cf vtx=%d\n", cf.vtx_cnt);
-    std::fflush(stderr);
     // Count face_present flags to compare against production tri_count.
     int cf_faces_present = 0;
     for (bool p : cf.face_present) {
@@ -1319,6 +1307,10 @@ void BM_PyramidOracleSelfVerify(benchmark::State& state) {
       packed_n++;
     }
     auto oracle = test_support::ExactPyramid(packed_n, coef_packed);
+    if (oracle.refused) {
+      oracle_refused++;
+      continue;
+    }
     // Production reference: FillHexCrystalCoef + SolveConvexPolyhedronVtxD.
     float coef_prod[kMaxHexCrystalPlanes * 4];
     const int prod_n = static_cast<int>(FillHexCrystalCoef(au, al, h1, h2, h3, dist, coef_prod));
@@ -1358,6 +1350,8 @@ void BM_PyramidOracleSelfVerify(benchmark::State& state) {
   s_cf_diff = cf_vs_oracle_diff;
   s_prod_diff = prod_vs_oracle_diff;
   s_skip = empty_or_skip;
+  std::fprintf(stderr, "[SelfVerify] samples=%ld agree=%ld cf_diff=%ld prod_diff=%ld refused=%ld skipped=%ld\n",
+               samples, agree_all, cf_vs_oracle_diff, prod_vs_oracle_diff, oracle_refused, empty_or_skip);
   for (auto _ : state) {
     benchmark::DoNotOptimize(agree_all);
   }

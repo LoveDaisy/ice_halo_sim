@@ -275,6 +275,13 @@ struct ApexLPResult {
 // 3-face concurrence: enumerate C(6,3) = 20 triples, solve each 3×3 system
 // for (u, v, m), keep the LARGEST feasible m and record its (u, v). Returns
 // {0, 0, 0} if the LP is infeasible.
+//
+// Unit convention (out): the LP itself is set up in SCALED units
+// (m_LP appears alongside dist_scaled[i] = (√3/4)·dist[i]), but the returned
+// `m` is converted to PHYSICAL units (m_phys = m_LP / kInsetK) before return
+// so downstream code that combines it with `a1` / `a2` to yield a physical z
+// coordinate (z = h2/2 + a·m_phys) reads correctly. (u, v) are already 2D
+// physical coordinates in the horizontal plane — no conversion needed.
 ApexLPResult MaxFeasibleInsetLP(const double dist_scaled[kClosedFormPyramidSideCnt]) {
   double cs[kClosedFormPyramidSideCnt];
   double sn[kClosedFormPyramidSideCnt];
@@ -334,14 +341,22 @@ ApexLPResult MaxFeasibleInsetLP(const double dist_scaled[kClosedFormPyramidSideC
   if (!found) {
     return {};
   }
-  best.m = std::max(best.m, 0.0);
+  // Convert LP-units m to physical inset. See the unit convention note above.
+  best.m = std::max(best.m, 0.0) / kInsetK;
   return best;
 }
 
-// Enumerate corner-death z-events in the upper cone half-space (m ∈ (0, m_max]).
-// Each triple gives one m*, translated to z* = h2/2 + a1·m*. Events with
-// m ∉ (tol, m_max] are dropped. Returns the count written; out_z holds the
-// (sorted, deduped) z values. out_z must have capacity for C(6,3)=20 events.
+// Enumerate corner-death z-events in the upper cone half-space
+// (m_phys ∈ (0, m_max_phys]). Each triple gives one m_LP; convert to
+// m_phys = m_LP / kInsetK and translate to z* = h2/2 + a·m_phys. Events with
+// m_phys ∉ (tol_phys, m_max_phys] are dropped. Returns the count written;
+// out_z holds the (sorted, deduped) z values. out_z must have capacity for
+// C(6,3) = 20 events.
+//
+// Unit convention: `m_max` is PHYSICAL inset (matches MaxFeasibleInsetLP's
+// return). Internal 3×3 solve gives m in LP units (m_LP); we convert to
+// physical before filtering / z-emission so callers can reason uniformly in
+// physical space (a·m_phys is a physical z distance).
 int EnumerateConeDeathZ(const double dist_scaled[kClosedFormPyramidSideCnt], double m_max, double h2_2, double a,
                         bool upper_side, double out_z[20]) {
   double cs[kClosedFormPyramidSideCnt];
@@ -353,7 +368,8 @@ int EnumerateConeDeathZ(const double dist_scaled[kClosedFormPyramidSideCnt], dou
     sn[i] = std::sin(t);
     scale = std::max(scale, std::fabs(dist_scaled[i]));
   }
-  double tol = 5.0 * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
+  double tol_lp = 5.0 * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
+  double tol_phys = tol_lp / kInsetK;
   double zs[20];
   int cnt = 0;
   for (int i = 0; i < kClosedFormPyramidSideCnt; i++) {
@@ -364,13 +380,14 @@ int EnumerateConeDeathZ(const double dist_scaled[kClosedFormPyramidSideCnt], dou
           continue;
         }
         double di = dist_scaled[i], dj = dist_scaled[j], dk = dist_scaled[k];
-        double m = (cs[i] * (sn[j] * dk - sn[k] * dj) - sn[i] * (cs[j] * dk - cs[k] * dj) +
-                    di * (cs[j] * sn[k] - cs[k] * sn[j])) /
-                   det;
-        if (m < tol || m > m_max - tol) {
+        double m_lp = (cs[i] * (sn[j] * dk - sn[k] * dj) - sn[i] * (cs[j] * dk - cs[k] * dj) +
+                       di * (cs[j] * sn[k] - cs[k] * sn[j])) /
+                      det;
+        double m_phys = m_lp / kInsetK;
+        if (m_phys < tol_phys || m_phys > m_max - tol_phys) {
           continue;  // outside the eroded z-range of this cone
         }
-        zs[cnt++] = upper_side ? (h2_2 + a * m) : (-h2_2 - a * m);
+        zs[cnt++] = upper_side ? (h2_2 + a * m_phys) : (-h2_2 - a * m_phys);
       }
     }
   }
@@ -634,9 +651,15 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
       continue;
     }
     double m = ComputeInset(z, h2_2, has_upper ? a1 : -1.0, has_lower ? a2 : -1.0);
+    // r_side[i] = (√3/4)·(dist[i] - m_phys(z)) — SolveHexCrossSection expects
+    // its input in the SAME scaled units as ComputeClosedFormPrism uses
+    // (r_side = kInsetK·dist). Both `dist[i]` and `m` are in PHYSICAL length
+    // units here, so the subtraction is done first, then scaled — mixing
+    // physical `m` with pre-scaled `kInsetK·dist[i]` was the m-units bug fixed
+    // alongside MaxFeasibleInsetLP's return-value convention.
     double r_side[6];
     for (int i = 0; i < 6; i++) {
-      r_side[i] = kInsetK * static_cast<double>(dist[i]) - m;
+      r_side[i] = kInsetK * (static_cast<double>(dist[i]) - m);
     }
     HexCrossSection xs = SolveHexCrossSection(r_side);
     if (!xs.any_side_present) {
