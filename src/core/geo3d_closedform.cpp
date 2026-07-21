@@ -87,9 +87,8 @@ HexCrossSection SolveHexCrossSection(const double r_side_dist[kClosedFormPrismSi
   double sn[kClosedFormPrismSideCnt];
   double scale = 0.0;
   for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
-    double theta = static_cast<double>(i) * math::kPi_3;
-    cs[i] = std::cos(theta);
-    sn[i] = std::sin(theta);
+    cs[i] = kHexFaceCos[i];
+    sn[i] = kHexFaceSin[i];
     scale = std::max(scale, std::fabs(r_side_dist[i]));
     if (r_side_dist[i] <= 0.0) {
       tag |= kPathTagAnyDirDegenerate;
@@ -327,9 +326,8 @@ int EnumerateApexPoints(const double dist_scaled[kClosedFormPyramidSideCnt], dou
   double sn[kClosedFormPyramidSideCnt];
   double scale = 0.0;
   for (int i = 0; i < kClosedFormPyramidSideCnt; i++) {
-    double t = static_cast<double>(i) * math::kPi_3;
-    cs[i] = std::cos(t);
-    sn[i] = std::sin(t);
+    cs[i] = kHexFaceCos[i];
+    sn[i] = kHexFaceSin[i];
     scale = std::max(scale, std::fabs(dist_scaled[i]));
   }
   double tol_lp = 5.0 * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
@@ -399,9 +397,8 @@ ApexLPResult MaxFeasibleInsetLP(const double dist_scaled[kClosedFormPyramidSideC
   double sn[kClosedFormPyramidSideCnt];
   double scale = 0.0;
   for (int i = 0; i < kClosedFormPyramidSideCnt; i++) {
-    double t = static_cast<double>(i) * math::kPi_3;
-    cs[i] = std::cos(t);
-    sn[i] = std::sin(t);
+    cs[i] = kHexFaceCos[i];
+    sn[i] = kHexFaceSin[i];
     scale = std::max(scale, std::fabs(dist_scaled[i]));
   }
   double tol = 5.0 * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
@@ -488,9 +485,8 @@ int EnumerateConeDeathEvents(const double dist_scaled[kClosedFormPyramidSideCnt]
   double sn[kClosedFormPyramidSideCnt];
   double scale = 0.0;
   for (int i = 0; i < kClosedFormPyramidSideCnt; i++) {
-    double t = static_cast<double>(i) * math::kPi_3;
-    cs[i] = std::cos(t);
-    sn[i] = std::sin(t);
+    cs[i] = kHexFaceCos[i];
+    sn[i] = kHexFaceSin[i];
     scale = std::max(scale, std::fabs(dist_scaled[i]));
   }
   double tol_lp = 5.0 * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
@@ -616,13 +612,16 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
   r.plane_coef[5] = 0;
   r.plane_coef[6] = -1;
   r.plane_coef[7] = 0;
-  using math::kPi_3;
-  using math::kPi_6;
   for (int i = 0; i < 6; i++) {
-    double x1 = 0.5 * std::cos(-kPi_6 + i * kPi_3);
-    double x2 = 0.5 * std::cos(kPi_6 + i * kPi_3);
-    double y1 = 0.5 * std::sin(-kPi_6 + i * kPi_3);
-    double y2 = 0.5 * std::sin(kPi_6 + i * kPi_3);
+    // (x1, y1) = hexagon vertex at angle (i·60° − 30°) = kHexVtx[i].
+    // (x2, y2) = hexagon vertex at angle (i·60° + 30°); identity
+    //   (+30° + i·60°) ≡ (−30° + (i + 1)·60°) (mod 360°)
+    // lets us read this vertex from the same table.
+    const int i2 = (i + 1) % 6;
+    double x1 = 0.5 * kHexVtxCos[i];
+    double x2 = 0.5 * kHexVtxCos[i2];
+    double y1 = 0.5 * kHexVtxSin[i];
+    double y2 = 0.5 * kHexVtxSin[i2];
     double det = x1 * y2 - x2 * y1;  // = √3/8
     r.plane_coef[(2 + i) * 4 + 0] = static_cast<float>(y2 - y1);
     r.plane_coef[(2 + i) * 4 + 1] = static_cast<float>(x1 - x2);
@@ -1016,9 +1015,8 @@ ClosedFormPrismResult ComputeClosedFormPrism(float h, const float dist[6]) {
   r.face_normal[4] = 0.0f;
   r.face_normal[5] = -1.0f;
   for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
-    double theta = static_cast<double>(i) * math::kPi_3;
-    r.face_normal[(2 + i) * 3 + 0] = static_cast<float>(std::cos(theta));
-    r.face_normal[(2 + i) * 3 + 1] = static_cast<float>(std::sin(theta));
+    r.face_normal[(2 + i) * 3 + 0] = static_cast<float>(kHexFaceCos[i]);
+    r.face_normal[(2 + i) * 3 + 1] = static_cast<float>(kHexFaceSin[i]);
     r.face_normal[(2 + i) * 3 + 2] = 0.0f;
   }
 
@@ -1038,9 +1036,8 @@ ClosedFormPrismResult ComputeClosedFormPrism(float h, const float dist[6]) {
   double k_r = math::kSqrt3 / 4.0;  // r_i = (√3/4)·dist[i]
   double k_d = math::kSqrt3 / 8.0;  // d_i = -dist[i]·√3/8
   for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
-    double theta = static_cast<double>(i) * math::kPi_3;
-    r.plane_coef[(2 + i) * 4 + 0] = 0.5f * static_cast<float>(std::cos(theta));
-    r.plane_coef[(2 + i) * 4 + 1] = 0.5f * static_cast<float>(std::sin(theta));
+    r.plane_coef[(2 + i) * 4 + 0] = 0.5f * static_cast<float>(kHexFaceCos[i]);
+    r.plane_coef[(2 + i) * 4 + 1] = 0.5f * static_cast<float>(kHexFaceSin[i]);
     r.plane_coef[(2 + i) * 4 + 2] = 0.0f;
     r.plane_coef[(2 + i) * 4 + 3] = -static_cast<float>(k_d * static_cast<double>(dist[i]));
   }

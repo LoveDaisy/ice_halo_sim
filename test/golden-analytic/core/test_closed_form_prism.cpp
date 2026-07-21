@@ -63,9 +63,8 @@ double MinPairwiseCornerDistance(const float dist[kSideCnt], double feas_tol) {
   double r[kSideCnt];
   const double k_r = math::kSqrt3 / 4.0;
   for (int i = 0; i < kSideCnt; i++) {
-    double theta = static_cast<double>(i) * math::kPi_3;
-    cs[i] = std::cos(theta);
-    sn[i] = std::sin(theta);
+    cs[i] = kHexFaceCos[i];
+    sn[i] = kHexFaceSin[i];
     r[i] = k_r * static_cast<double>(dist[i]);
   }
   std::vector<std::pair<double, double>> pts;
@@ -175,9 +174,8 @@ TEST(ClosedFormPrism, RegularHexagonHasExpectedInvariants) {
   EXPECT_NEAR(r.face_normal[2], 1.0f, 1e-6f);
   EXPECT_NEAR(r.face_normal[5], -1.0f, 1e-6f);
   for (int i = 0; i < kSideCnt; i++) {
-    double theta = static_cast<double>(i) * math::kPi_3;
-    EXPECT_NEAR(r.face_normal[(2 + i) * 3 + 0], static_cast<float>(std::cos(theta)), 1e-6f);
-    EXPECT_NEAR(r.face_normal[(2 + i) * 3 + 1], static_cast<float>(std::sin(theta)), 1e-6f);
+    EXPECT_NEAR(r.face_normal[(2 + i) * 3 + 0], static_cast<float>(kHexFaceCos[i]), 1e-6f);
+    EXPECT_NEAR(r.face_normal[(2 + i) * 3 + 1], static_cast<float>(kHexFaceSin[i]), 1e-6f);
     EXPECT_NEAR(r.face_normal[(2 + i) * 3 + 2], 0.0f, 1e-6f);
   }
   // Corners on a regular hexagon lie on a circle of radius r = 0.5.

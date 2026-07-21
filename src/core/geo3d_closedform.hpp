@@ -23,6 +23,50 @@
 
 namespace lumice {
 
+// Exact θᵢ = i·60° horizontal directions, double precision, shared by every
+// production/test station that would otherwise recompute cos/sin at these
+// fixed compile-time-known angles. Motivation: libm cos/sin drifts by ~1 ULP
+// between macOS and glibc; when the closed-form implementation and its
+// golden-analytic reference each call libm independently, the two drift in
+// the same direction on any single platform and mask their disagreement, but
+// the drifts differ across platforms so a golden-analytic comparison that
+// passes on macOS still fails on Linux/glibc. Cure: both parties consume a
+// SINGLE canonical constant table, defined here in the header both sides
+// #include — no libm on any platform, no per-platform reproducibility gap.
+//
+// Two phases exist in this module — DO NOT conflate them. The pyramid inner
+// evaluator (ComputeClosedFormPyramidInner) walks the six hexagon vertices,
+// not the six face normals, so its cos/sin arguments are half-phase shifted:
+//   kHexFaceCos/Sin[i]: face-normal phase, θᵢ = i·60°
+//   kHexVtxCos/Sin[i]:  vertex phase,      θᵢ = i·60° − 30°
+// Identity used by the pyramid inner: the "+30° + i·60°" vertex equals
+// kHexVtxCos/Sin[(i + 1) % 6] (mod 360°). So face i's two adjacent hexagon
+// vertices are kHexVtxCos/Sin[i] and kHexVtxCos/Sin[(i + 1) % 6] — no third
+// table needed.
+constexpr double kHexSqrt3Half = 0.86602540378443864676;  // √3/2 as the nearest representable double.
+
+constexpr double kHexFaceCos[6] = { 1.0, 0.5, -0.5, -1.0, -0.5, 0.5 };
+constexpr double kHexFaceSin[6] = { 0.0, kHexSqrt3Half, kHexSqrt3Half, 0.0, -kHexSqrt3Half, -kHexSqrt3Half };
+
+constexpr double kHexVtxCos[6] = { kHexSqrt3Half, kHexSqrt3Half, 0.0, -kHexSqrt3Half, -kHexSqrt3Half, 0.0 };
+constexpr double kHexVtxSin[6] = { -0.5, 0.5, 1.0, 0.5, -0.5, -1.0 };
+
+// Permanent construction-time protection: table values must lie on the unit
+// circle. Guards against typos on future edits (the tables encode structural
+// hex-family geometry; changing a value is almost never legitimate).
+static_assert(kHexFaceCos[0] * kHexFaceCos[0] + kHexFaceSin[0] * kHexFaceSin[0] == 1.0, "kHexFace[0] not unit");
+static_assert(kHexFaceCos[3] * kHexFaceCos[3] + kHexFaceSin[3] * kHexFaceSin[3] == 1.0, "kHexFace[3] not unit");
+static_assert(kHexVtxCos[2] * kHexVtxCos[2] + kHexVtxSin[2] * kHexVtxSin[2] == 1.0, "kHexVtx[2] not unit");
+static_assert(kHexVtxCos[5] * kHexVtxCos[5] + kHexVtxSin[5] * kHexVtxSin[5] == 1.0, "kHexVtx[5] not unit");
+// Half-integer entries: √3/2 squared is not exactly 3/4 in binary, so entries
+// with ½ and √3/2 components need a small tolerance.
+static_assert((kHexFaceCos[1] * kHexFaceCos[1] + kHexFaceSin[1] * kHexFaceSin[1]) - 1.0 < 1e-15,
+              "kHexFace[1] not unit");
+static_assert(1.0 - (kHexFaceCos[1] * kHexFaceCos[1] + kHexFaceSin[1] * kHexFaceSin[1]) < 1e-15,
+              "kHexFace[1] not unit");
+static_assert((kHexVtxCos[0] * kHexVtxCos[0] + kHexVtxSin[0] * kHexVtxSin[0]) - 1.0 < 1e-15, "kHexVtx[0] not unit");
+static_assert(1.0 - (kHexVtxCos[0] * kHexVtxCos[0] + kHexVtxSin[0] * kHexVtxSin[0]) < 1e-15, "kHexVtx[0] not unit");
+
 // Coarse-grained structural branches walked by the shared 2D cross-section
 // solver. Recorded per invocation as a bitmask; the pyramid evaluator OR-unions
 // the tags of every invocation into ClosedFormPyramidResult::path_tag_union.
