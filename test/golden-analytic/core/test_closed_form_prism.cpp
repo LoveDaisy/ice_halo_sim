@@ -198,14 +198,20 @@ TEST(ClosedFormPrism, ZeroHeightShortCircuit) {
   }
 }
 
-#if defined(__SIZEOF_INT128__)
-
 // ============================================================================
 // Fixed-sample structural-margin guards (methodology gate: samples must sit
 // where the plan says they sit, not "wherever they happen to pass the three-way
 // assertion"). Regeneration must produce entries that satisfy these same
 // thresholds — if not, the pool has silently drifted and this TEST fails first,
 // with a specific line number pointing at the offending entry.
+//
+// Deliberately NOT gated behind __SIZEOF_INT128__: this guard only needs
+// CfMergeTolerance/MinPairwiseCornerDistance, neither of which touches the
+// exact oracle, so it must keep running on MSVC — it is the CI-automated
+// replacement for a human "was this sample tuned to pass" review: any future
+// hand-edit or addition to a sample pool that drifts outside the selection
+// threshold fails here first, on every platform, instead of relying on a
+// reviewer noticing.
 // ============================================================================
 
 TEST(ClosedFormPrism, FixedSamplesRetainStructuralMargin) {
@@ -235,6 +241,8 @@ TEST(ClosedFormPrism, FixedSamplesRetainStructuralMargin) {
     }
   }
 }
+
+#if defined(__SIZEOF_INT128__)
 
 // ============================================================================
 // Well-conditioned regime: closed form / exact oracle / production all agree
@@ -348,8 +356,7 @@ TEST_P(DegenerateSweep, DivergencesAreQuantitativelyExplainedByMergeTolerance) {
     for (int i = 0; i < kSideCnt; i++) {
       dist_scale = std::max(dist_scale, std::fabs(static_cast<double>(dist[i])));
     }
-    const double cf_scale = std::max(math::kSqrt3 / 4.0 * dist_scale, 1.0);
-    const double cf_merge_tol = 5.0 * static_cast<double>(math::kFloatEps) * cf_scale;
+    const double cf_merge_tol = CfMergeTolerance(dist);
     // char_len walks all 8 planes: |d_basal|=h/2, |d_side_i|=|dist_i|·√3/8; floored at 1.0.
     const double max_abs_d = std::max(0.5 * static_cast<double>(h), math::kSqrt3 / 8.0 * dist_scale);
     const double prod_char_len = std::max(1.0, max_abs_d);

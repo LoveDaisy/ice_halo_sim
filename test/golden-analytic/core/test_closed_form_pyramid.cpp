@@ -100,8 +100,11 @@ double A1FromAlpha(float alpha, float h_side) {
          std::tan(static_cast<double>(alpha) * static_cast<double>(math::kDegreeToRad));
 }
 
-#if defined(__SIZEOF_INT128__)
-// ---- Production 3D solve wrapper ------------------------------------------
+// ---- Production 3D solve wrapper --------------------------------------------
+// Deliberately NOT gated behind __SIZEOF_INT128__: this wrapper only touches
+// production code (FillHexCrystalCoef + SolveConvexPolyhedronVtxD), no oracle
+// dependency, and is needed unconditionally by FixedSamplesRetainStructuralMargin
+// below (which must keep running on MSVC — see that TEST's comment).
 
 int RunProduction3D(float upper_alpha, float lower_alpha, float h1, float h2, float h3, const float dist[kSideCnt],
                     std::unique_ptr<float[]>* out_vtx) {
@@ -166,6 +169,7 @@ float AlphaFromMiller(int i1, int i4) {
          math::kRadToDegree;
 }
 
+#if defined(__SIZEOF_INT128__)
 // ---- Three-way adjudication for a single sample ---------------------------
 //
 // Adjudication rule: cf disagreement is called REAL only when cf disagrees
@@ -290,34 +294,24 @@ SampleResult AdjudicateMiller(int upper_i1, int upper_i4, int lower_i1, int lowe
 #endif  // defined(__SIZEOF_INT128__)
 
 // ============================================================================
-// Sanity: regular hexagonal pyramid — the owner-mandated invariant. The
-// regular case has six cone planes passing exactly through the apex; under
-// zero-tolerance rational arithmetic the apex must be recognised as a single
-// vertex (a fuzzy dedup / rounded plane-coef oracle can split it into a
-// cluster of near-coincident points, which is how a previous iteration of
-// the oracle was known to be broken — sanity here refuses that regression).
-// ============================================================================
-
-#if defined(__SIZEOF_INT128__)
-
-TEST(ClosedFormPyramid, RegularPyramidAllThreeAgree) {
-  PyramidSample s{ /*upper_alpha=*/28.0f, /*lower_alpha=*/28.0f,
-                   /*h1=*/1.0f,           /*h2=*/1.0f,
-                   /*h3=*/1.0f,           /*dist=*/{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f } };
-  auto r = AdjudicateDirect(s);
-  ASSERT_FALSE(r.oracle_refused) << "oracle must not refuse the regular pyramid (owner invariant)";
-  EXPECT_EQ(r.outcome, kAgree) << "regular pyramid: cf=" << r.cf_vtx << " prod=" << r.prod_vtx
-                               << " oracle=" << r.oracle_vtx;
-  EXPECT_EQ(r.cf_vtx, 14) << "regular α=28°, h=1,1,1, dist=1: expected 14 vertices (12 belt + 2 apex)";
-  EXPECT_EQ(r.oracle_vtx, 14);
-  EXPECT_EQ(r.prod_vtx, 14);
-}
-
-// ============================================================================
 // Fixed-sample structural-margin guards — the same threshold that gated
 // selection now gates the pool at test time. Regeneration that produces a
 // pool outside these thresholds fails here first, with a specific offending
 // entry index.
+//
+// Deliberately NOT gated behind __SIZEOF_INT128__: this guard only needs
+// RunProduction3D/ProductionMergeTolerance/MinPairwiseVertexDistance, none of
+// which touch the exact oracle, so it must keep running on MSVC — it is the
+// CI-automated replacement for a human "was this sample tuned to pass"
+// review: any future hand-edit or addition to a sample pool that drifts
+// outside the selection threshold fails here first, on every platform,
+// instead of relying on a reviewer noticing. Covers all four sample-bucket
+// families exercised elsewhere in this file: well-conditioned direct-wedge,
+// Miller-index, flat-tail (α=85..89.5°), and degenerate — Miller and
+// flat-tail share the well-conditioned threshold because both
+// WellConditionedMillerThreeWayAgreement and ExtremeFlatTailSweep assert
+// plain three-way agreement (kAgree), the same regime well-conditioned
+// direct-wedge samples are drawn from.
 // ============================================================================
 
 TEST(ClosedFormPyramid, FixedSamplesRetainStructuralMargin) {
@@ -332,6 +326,54 @@ TEST(ClosedFormPyramid, FixedSamplesRetainStructuralMargin) {
     ASSERT_GE(min_sep, kWellConditionedMinSepFactor * prod_tol)
         << "well-conditioned sample #" << i << " has min_sep " << min_sep << " < " << kWellConditionedMinSepFactor
         << " × prod_merge_tol=" << prod_tol << " — sample pool has drifted; regenerate";
+  }
+  // Miller-index pool — same well-conditioned threshold (see comment above).
+  for (size_t i = 0; i < std::size(test_support::kPyramidMillerSamples); i++) {
+    const auto& m = test_support::kPyramidMillerSamples[i];
+    PyramidSample s;
+    s.upper_alpha = AlphaFromMiller(m.upper_i1, m.upper_i4);
+    s.lower_alpha = AlphaFromMiller(m.lower_i1, m.lower_i4);
+    s.h1 = m.h1;
+    s.h2 = m.h2;
+    s.h3 = m.h3;
+    for (int j = 0; j < kSideCnt; j++) {
+      s.dist[j] = m.dist[j];
+    }
+    std::unique_ptr<float[]> prod_vtx;
+    int prod_cnt = RunProduction3D(s.upper_alpha, s.lower_alpha, s.h1, s.h2, s.h3, s.dist, &prod_vtx);
+    ASSERT_GT(prod_cnt, 0) << "Miller sample #" << i << " produces empty production result";
+    const double prod_tol = ProductionMergeTolerance(s);
+    const double min_sep = MinPairwiseVertexDistance(prod_vtx.get(), prod_cnt);
+    ASSERT_GE(min_sep, kWellConditionedMinSepFactor * prod_tol)
+        << "Miller sample #" << i << " has min_sep " << min_sep << " < " << kWellConditionedMinSepFactor
+        << " × prod_merge_tol=" << prod_tol << " — sample pool has drifted; regenerate";
+  }
+  // Flat-tail pools (α=85..89.5°) — same well-conditioned threshold.
+  const test_support::PyramidDirectSample* flat_pools[] = {
+    test_support::kPyramidFlatTailAlpha85Samples,  test_support::kPyramidFlatTailAlpha87Samples,
+    test_support::kPyramidFlatTailAlpha875Samples, test_support::kPyramidFlatTailAlpha88Samples,
+    test_support::kPyramidFlatTailAlpha89Samples,  test_support::kPyramidFlatTailAlpha895Samples
+  };
+  size_t flat_sizes[] = {
+    std::size(test_support::kPyramidFlatTailAlpha85Samples),  std::size(test_support::kPyramidFlatTailAlpha87Samples),
+    std::size(test_support::kPyramidFlatTailAlpha875Samples), std::size(test_support::kPyramidFlatTailAlpha88Samples),
+    std::size(test_support::kPyramidFlatTailAlpha89Samples),  std::size(test_support::kPyramidFlatTailAlpha895Samples)
+  };
+  const char* flat_labels[] = { "α=85", "α=87", "α=87.5", "α=88", "α=89", "α=89.5" };
+  for (int b = 0; b < 6; b++) {
+    for (size_t i = 0; i < flat_sizes[b]; i++) {
+      PyramidSample s = MakeSample(flat_pools[b][i]);
+      std::unique_ptr<float[]> prod_vtx;
+      int prod_cnt = RunProduction3D(s.upper_alpha, s.lower_alpha, s.h1, s.h2, s.h3, s.dist, &prod_vtx);
+      ASSERT_GT(prod_cnt, 0) << "flat-tail " << flat_labels[b] << " sample #" << i
+                             << " produces empty production result";
+      const double prod_tol = ProductionMergeTolerance(s);
+      const double min_sep = MinPairwiseVertexDistance(prod_vtx.get(), prod_cnt);
+      ASSERT_GE(min_sep, kWellConditionedMinSepFactor * prod_tol)
+          << "flat-tail " << flat_labels[b] << " sample #" << i << " has min_sep " << min_sep << " < "
+          << kWellConditionedMinSepFactor << " × prod_merge_tol=" << prod_tol
+          << " — sample pool has drifted; regenerate";
+    }
   }
   // Degenerate pools.
   const test_support::PyramidDirectSample* degen_buckets[] = { test_support::kPyramidDegenerateSigma030Samples,
@@ -352,6 +394,30 @@ TEST(ClosedFormPyramid, FixedSamplesRetainStructuralMargin) {
           << kDegenerateMinSepFactor << " × prod_merge_tol=" << prod_tol << " — sample pool has drifted; regenerate";
     }
   }
+}
+
+#if defined(__SIZEOF_INT128__)
+
+// ============================================================================
+// Sanity: regular hexagonal pyramid — the owner-mandated invariant. The
+// regular case has six cone planes passing exactly through the apex; under
+// zero-tolerance rational arithmetic the apex must be recognised as a single
+// vertex (a fuzzy dedup / rounded plane-coef oracle can split it into a
+// cluster of near-coincident points, which is how a previous iteration of
+// the oracle was known to be broken — sanity here refuses that regression).
+// ============================================================================
+
+TEST(ClosedFormPyramid, RegularPyramidAllThreeAgree) {
+  PyramidSample s{ /*upper_alpha=*/28.0f, /*lower_alpha=*/28.0f,
+                   /*h1=*/1.0f,           /*h2=*/1.0f,
+                   /*h3=*/1.0f,           /*dist=*/{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f } };
+  auto r = AdjudicateDirect(s);
+  ASSERT_FALSE(r.oracle_refused) << "oracle must not refuse the regular pyramid (owner invariant)";
+  EXPECT_EQ(r.outcome, kAgree) << "regular pyramid: cf=" << r.cf_vtx << " prod=" << r.prod_vtx
+                               << " oracle=" << r.oracle_vtx;
+  EXPECT_EQ(r.cf_vtx, 14) << "regular α=28°, h=1,1,1, dist=1: expected 14 vertices (12 belt + 2 apex)";
+  EXPECT_EQ(r.oracle_vtx, 14);
+  EXPECT_EQ(r.prod_vtx, 14);
 }
 
 // ============================================================================
