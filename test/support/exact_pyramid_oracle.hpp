@@ -997,27 +997,35 @@ inline PolyTriplePoint SolveTriple(const PolyPlane& p0, const PolyPlane& p1, con
 // Two distinct outcomes when the sign cannot be read off as strictly + or -:
 //   *numeric_degenerate — det evaluates to EXACTLY 0.0 (bit-for-bit, via
 //     PolyEvalDouble) at (alpha_val, beta_val). This is a computational
-//     fact, not a tolerance judgment: det is literally the 3x3 determinant
-//     of the three planes' normal coefficients at this specific crystal
-//     shape, so an exact-zero evaluation means Cramer's rule is dividing
-//     0/0 — the three planes are linearly dependent AT THIS numeric point
-//     and this triple structurally cannot define a unique intersection,
-//     regardless of tolerance. Safe for the caller to skip just this
-//     triple (mirrors tp.degenerate, which catches the polynomial being
-//     identically zero for ALL (α, β); this catches it being zero at THIS
-//     (α, β) only). Verified for both symmetric-input regimes that trigger
-//     it in the fixed sample pools: RegularPyramid feeds identical
-//     alpha_val/beta_val doubles by construction (α=β), and Miller
-//     symmetric samples (upper_i1==lower_i1 && upper_i4==lower_i4) compute
-//     a1/a2 via the *same* arithmetic expression on identical integer
-//     inputs (geo3d_closedform.cpp's Miller entry), which IEEE754 guarantees
+//     fact for the two symmetric-input mechanisms this has actually been
+//     verified against (not a tolerance judgment in those cases): det is
+//     literally the 3x3 determinant of the three planes' normal
+//     coefficients at this specific crystal shape, so an exact-zero
+//     evaluation there means Cramer's rule is dividing 0/0 — the three
+//     planes are linearly dependent AT THIS numeric point and this triple
+//     structurally cannot define a unique intersection. Safe for the
+//     caller to skip just this triple (mirrors tp.degenerate, which
+//     catches the polynomial being identically zero for ALL (α, β); this
+//     catches it being zero at THIS (α, β) only). Verified for both
+//     symmetric-input regimes that trigger it in the fixed sample pools:
+//     RegularPyramid feeds identical alpha_val/beta_val doubles by
+//     construction (α=β), and Miller symmetric samples
+//     (upper_i1==lower_i1 && upper_i4==lower_i4) compute a1/a2 via the
+//     *same* arithmetic expression on identical integer inputs
+//     (geo3d_closedform.cpp's Miller entry), which IEEE754 guarantees
 //     reproduces bit-identical doubles — so for any det polynomial with a
 //     (β−α) factor, the double-Horner evaluation cancels to exactly 0.0
-//     (a−a=0 is exact in IEEE754, no rounding involved). This is not
-//     floating-point luck confined to that one polynomial shape: det is
-//     recomputed per-triple from the actual plane coefficients, so the
-//     same exact-zero-implies-no-unique-solution argument applies to any
-//     triple whose evaluated det happens to land on 0.0 bit-for-bit.
+//     (a−a=0 is exact in IEEE754, no rounding involved).
+//     This does NOT prove the same for an arbitrary polynomial shape at an
+//     arbitrary (α, β): a general multi-term PolyQS3 evaluated in floating
+//     point could in principle land on exactly 0.0 through coincidental
+//     rounding cancellation while the true algebraic determinant is a tiny
+//     nonzero — in that hypothetical case this branch would skip a triple
+//     it should have refused, with no direct signal. The residual risk is
+//     bounded, not eliminated, by the §4.A golden test's independent
+//     vertex_count check (any such misclassification changes vertex_count
+//     and fails there) and by the fact that the only inputs actually
+//     exercised today are the two proven-exact mechanisms above.
 //   *ambiguous — det is within the 128-ULP margin but NOT exactly 0.0: a
 //     genuine sign ambiguity where the true value could be a tiny nonzero
 //     (the triple may still define a real, numerically fragile vertex).
