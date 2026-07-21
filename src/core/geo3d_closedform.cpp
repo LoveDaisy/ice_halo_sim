@@ -170,7 +170,6 @@ HexCrossSection SolveHexCrossSection(const double r_side_dist[kClosedFormPrismSi
   }
 
   // face_present[i] = at least 2 distinct feasible corners lie on side i.
-  int present_n = 0;
   for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
     int on = 0;
     for (int v = 0; v < corner_cnt_local; v++) {
@@ -179,15 +178,16 @@ HexCrossSection SolveHexCrossSection(const double r_side_dist[kClosedFormPrismSi
       }
     }
     out.side_present[i] = (on >= 2);
-    if (out.side_present[i]) {
-      present_n++;
-    }
   }
 
   // Build the present-direction index list in ascending-index order. Since
   // the 6 directions are laid out at fixed i·60° angular positions
   // (kHexFaceCos/Sin), ascending index IS CCW angular order, so this list is
-  // already the CCW walk order the ring-emission loop below needs.
+  // already the CCW walk order the ring-emission loop below needs. p_n is
+  // the SOLE present-count (single source of truth, fed by the same
+  // side_present[] this loop reads) — do not reintroduce a parallel counter
+  // in the loop above; two counters over the same predicate can silently
+  // diverge if either is edited independently.
   int present_idx[kClosedFormPrismSideCnt];
   int p_n = 0;
   for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
@@ -200,11 +200,11 @@ HexCrossSection SolveHexCrossSection(const double r_side_dist[kClosedFormPrismSi
   // faces adjacent in the walk order may be an opposite (parallel) pair — a
   // corner is only well-defined at the intersection of two NON-parallel
   // lines, no matter how many other directions are also present elsewhere in
-  // the list. `present_n >= 3` alone is a NECESSARY condition (it already
-  // rules out the historical present_n == 2 defect below), not a sufficient
-  // one in general, so both conjuncts are checked explicitly here — making
-  // the true invariant a real runtime check in EVERY build, not the
-  // debug-only `assert(std::abs(i - j) != 3)` this replaces.
+  // the list. `p_n >= 3` alone is a NECESSARY condition (it already rules
+  // out the historical present_n == 2 defect below), not a sufficient one in
+  // general, so both conjuncts are checked explicitly here — making the true
+  // invariant a real runtime check in EVERY build, not the debug-only
+  // `assert(std::abs(i - j) != 3)` this replaces.
   //
   // Historically that invariant was enforced only in debug builds; NDEBUG
   // release builds silently fell through Solve2x2's det=0 early return and
@@ -219,7 +219,7 @@ HexCrossSection SolveHexCrossSection(const double r_side_dist[kClosedFormPrismSi
       break;
     }
   }
-  out.is_bounded_polygon = (present_n >= 3) && !has_opposite_adjacent;
+  out.is_bounded_polygon = (p_n >= 3) && !has_opposite_adjacent;
 
   if (!out.is_bounded_polygon) {
     tag |= kPathTagEmpty;
@@ -229,7 +229,7 @@ HexCrossSection SolveHexCrossSection(const double r_side_dist[kClosedFormPrismSi
     return out;
   }
   tag |= kPathTagBounded;
-  if (present_n == kClosedFormPrismSideCnt) {
+  if (p_n == kClosedFormPrismSideCnt) {
     tag |= kPathTagAllDirsPresent;
   }
 
