@@ -23,7 +23,7 @@
 // residuals-below-a-threshold as agreement, which silently loses evidence):
 //   • Well-conditioned regime: all three MUST agree on vertex count. Any
 //     disagreement is a bug.
-//   • Refused samples (oracle returned refused=true due to __int128 budget
+//   • Refused samples (oracle returned refused=true due to int64 budget
 //     exhaustion or sign ambiguity) are counted and asserted to stay under a
 //     ceiling — a large refuse rate is signal, not noise. Refused samples are
 //     excluded from the disagreement counts (they are literally "oracle did not
@@ -101,10 +101,8 @@ double A1FromAlpha(float alpha, float h_side) {
 }
 
 // ---- Production 3D solve wrapper --------------------------------------------
-// Deliberately NOT gated behind __SIZEOF_INT128__: this wrapper only touches
-// production code (FillHexCrystalCoef + SolveConvexPolyhedronVtxD), no oracle
-// dependency, and is needed unconditionally by FixedSamplesRetainStructuralMargin
-// below (which must keep running on MSVC — see that TEST's comment).
+// Wraps FillHexCrystalCoef + SolveConvexPolyhedronVtxD; no oracle dependency,
+// used by both the adjudication path and FixedSamplesRetainStructuralMargin.
 
 int RunProduction3D(float upper_alpha, float lower_alpha, float h1, float h2, float h3, const float dist[kSideCnt],
                     std::unique_ptr<float[]>* out_vtx) {
@@ -169,7 +167,6 @@ float AlphaFromMiller(int i1, int i4) {
          math::kRadToDegree;
 }
 
-#if defined(__SIZEOF_INT128__)
 // ---- Three-way adjudication for a single sample ---------------------------
 //
 // Adjudication rule: cf disagreement is called REAL only when cf disagrees
@@ -229,15 +226,11 @@ SampleResult AdjudicateDirect(const PyramidSample& s) {
   r.cf_path_tag_union = cf.path_tag_union;
 
   // Feed the oracle the SAME a1/a2 the closed form ended up using — the
-  // struct-stored float values, promoted back to double. The full-double
-  // recomputation from alpha carries ~53 mantissa bits, which balloons the
-  // oracle's Q(√3) intermediate widths past the __int128 budget on essentially
-  // every input (100% refuse observed at N=10k). The closed-form implementation
-  // truncates a1/a2 to float when it stores them; giving the oracle that same
-  // 24-bit-mantissa value fits within the oracle's ~13 bit headroom over
-  // __int128 (measured via pressure test in bench_geom_closedform.cpp
-  // BM_PyramidOracleBitWidthPressureVar) and matches what
-  // BM_PyramidOracleSelfVerify already relies on.
+  // struct-stored float values, promoted back to double. The oracle keeps
+  // a1/a2 symbolic (see exact_pyramid_oracle.hpp) so bit-width no longer
+  // depends on the a1 mantissa; matching cf's stored value here is a
+  // methodology choice (compare like with like), not a workaround for a
+  // width blow-up.
   const double a1_d = cf.a1 > 0 ? static_cast<double>(cf.a1) : -1.0;
   const double a2_d = cf.a2 > 0 ? static_cast<double>(cf.a2) : -1.0;
   auto oracle = test_support::ExactPyramidFromParams(a1_d, a2_d, s.h1, s.h2, s.h3, s.dist);
@@ -291,21 +284,18 @@ SampleResult AdjudicateMiller(int upper_i1, int upper_i4, int lower_i1, int lowe
   return r;
 }
 
-#endif  // defined(__SIZEOF_INT128__)
-
 // ============================================================================
 // Fixed-sample structural-margin guards — the same threshold that gated
 // selection now gates the pool at test time. Regeneration that produces a
 // pool outside these thresholds fails here first, with a specific offending
 // entry index.
 //
-// Deliberately NOT gated behind __SIZEOF_INT128__: this guard only needs
-// RunProduction3D/ProductionMergeTolerance/MinPairwiseVertexDistance, none of
-// which touch the exact oracle, so it must keep running on MSVC — it is the
+// The guard uses only RunProduction3D/ProductionMergeTolerance/
+// MinPairwiseVertexDistance and therefore runs on every platform — it is the
 // CI-automated replacement for a human "was this sample tuned to pass"
 // review: any future hand-edit or addition to a sample pool that drifts
-// outside the selection threshold fails here first, on every platform,
-// instead of relying on a reviewer noticing. Covers all four sample-bucket
+// outside the selection threshold fails here first, instead of relying on a
+// reviewer noticing. Covers all four sample-bucket
 // families exercised elsewhere in this file: well-conditioned direct-wedge,
 // Miller-index, flat-tail (α=85..89.5°), and degenerate — Miller and
 // flat-tail share the well-conditioned threshold because both
@@ -395,8 +385,6 @@ TEST(ClosedFormPyramid, FixedSamplesRetainStructuralMargin) {
     }
   }
 }
-
-#if defined(__SIZEOF_INT128__)
 
 // ============================================================================
 // Sanity: regular hexagonal pyramid — the owner-mandated invariant. The
@@ -681,10 +669,11 @@ TEST(ClosedFormPyramid, SpecialisedConfigurationsAgreeAndNoSpecialCaseBranches) 
     for (const PyramidSample& s : b.samples) {
       auto r = AdjudicateDirect(s);
       batch_union |= r.cf_path_tag_union;
-      // Face-drop configurations use small dist values (0.3-0.4) which push
-      // oracle's Q(√3) intermediate widths past the __int128 budget on some
-      // samples — accept oracle silence there. The kAgree outcome already
-      // handles both single- and dual-witness cases via ClassifyOutcome.
+      // Face-drop configurations use small dist values (0.3-0.4) which the
+      // oracle occasionally refuses (double-Horner sign filter marks near-
+      // boundary poly values ambiguous) — accept oracle silence there. The
+      // kAgree outcome already handles both single- and dual-witness cases
+      // via ClassifyOutcome.
       ASSERT_NE(r.outcome, kNoWitness) << "no witness on " << b.label << " sample — cannot adjudicate";
       EXPECT_EQ(r.outcome, kAgree) << b.label << ": cf=" << r.cf_vtx << " oracle=" << r.oracle_vtx
                                    << " (refused=" << r.oracle_refused << ") prod=" << r.prod_vtx
@@ -809,8 +798,6 @@ TEST_P(DegeneratePyramidSweep, DivergencesExplainableByMergeTolerance) {
 }
 
 INSTANTIATE_TEST_SUITE_P(DegenerateSigmas, DegeneratePyramidSweep, ::testing::Values(0, 1));
-
-#endif  // defined(__SIZEOF_INT128__)
 
 }  // namespace
 }  // namespace lumice

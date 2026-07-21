@@ -1,49 +1,81 @@
-// Exact pyramid vertex-enumeration oracle — parameters-in, Q(√3) exact.
+// Exact pyramid vertex-enumeration oracle — parameters-in, symbolic-a1 exact.
 //
 // Ground truth for the closed-form-pyramid work. This oracle takes the
 // GEOMETRIC PARAMETERS (a1, a2, h1, h2, h3, dist[6]) — NOT the pre-rounded
 // float plane coefficients — and constructs the 20 half-space planes
-// internally in the exact ring Q(√3). All six horizontal directions
-// (cos, sin) at 30° multiples take values in {0, ±1/2, ±√3/2}, so every
-// coefficient of the pyramid family lies in Q(√3) exactly. Algebraic
-// identities like `2·(a1·√3/8) = a1·√3/4` therefore hold bit-for-bit,
-// and the 4+ plane concurrences at the shoulder / apex become a SINGLE
-// Q(√3) rational point instead of a cluster of nearby float artifacts.
+// internally.
+//
+// Two exact algebraic layers, sharing the same int64_t integer budget:
+//
+//   Layer 1 — Q(√3) (base ring).  Every horizontal direction constant sits in
+//   {0, ±1/2, ±√3/2}; multiplying by float `dist[i]` and integer `h2` stays
+//   in Q(√3) exactly. Represented as `QS3 = (a + b·√3) / 2^shift` with `a, b`
+//   as int64_t. Equality is bit-exact integer comparison (`a == 0 && b == 0`
+//   for zero; direct component comparison for equality). Sign of a QS3 uses
+//   a double-Horner filter with a 128-ULP safety margin; ambiguous → refuse.
+//
+//   Layer 2 — PolyQS3(α, β) (extension by two formal symbols).  a1 and a2
+//   are kept as symbolic α and β, NOT substituted numerically. Every plane
+//   coefficient becomes a bivariate polynomial with QS3 coefficients:
+//     upper cone plane's A, B, D are α-linear;
+//     lower cone plane's A, B, D are β-linear;
+//     upper basal plane's D is α-linear (via z_top);
+//     lower basal plane's D is β-linear (via z_bot);
+//     prism planes and C's of the cone planes are constant.
+//   The 3×3 Cramer determinant grows joint degree at most (deg_α + deg_β ≤ 3);
+//   IsIncident / IsFeasibleSided add one more plane factor, so joint degree
+//   stays ≤ 4. Polynomial storage is a flat 5×5 triangular window.
+//
+//   The whole point of the α, β symbolic layer is that a1 and a2 are the sole
+//   sources of ~53-bit-mantissa doubles in the pipeline; keeping them
+//   symbolic collapses the intermediate integer bit-width from ~120 bits
+//   (numeric substitution, hits __int128 walls) to ≤ ~30 bits (measured on
+//   every fixed pool including a synthetic joint-89° worst case). int64_t
+//   with a 60-bit guarded budget therefore has room to spare. See the
+//   throwaway spike test/support/exact_pyramid_oracle_spike.cpp for the
+//   measurement harness that produced these numbers.
+//
+// Equality vs. sign — two independent judgements:
+//   • Polynomial equality (`PolyIsZero`) is used for incidence, dedup, and
+//     "line is degenerate" checks. Under the algebraic-independence
+//     assumption `α, β transcendental` (holds for direct-wedge a1 by
+//     construction), `p(α, β) ≡ 0 ⇔ p(a1, a2) = 0`, so this is exact.
+//     Under Miller a1 (rational i1·c/(2·i4)) equality is a strict
+//     over-approximation of numeric equality — the oracle may split a
+//     multi-way concurrence that a numeric engine merges; this shows up in
+//     the cross-validation and is handled per-sample rather than by adding
+//     a Miller special case up front.
+//   • Sign / feasibility uses `PolySign`: double-Horner evaluation at the
+//     actual (a1, a2), plus a `128 · Σ|c_ij|·|α|^i·|β|^j · ULP` margin.
+//     |val| > margin resolves the sign; otherwise `ambiguous = true` and
+//     the oracle refuses (same contract the __int128 predecessor already
+//     used on the opposite-sign QS3 case).
 //
 // Independence & discipline
 // -------------------------
-// - Zero tolerance anywhere. Q(√3) is a 2-D field over Q, and (a + b·√3) == 0
-//   iff a == 0 AND b == 0 (√3 irrational). Equality, incidence, and
-//   feasibility are all bit-exact integer comparisons.
-// - No hardcoded shift, no noise-floor snap, no fuzzy dedup. These were the
-//   three failure modes owner identified in prior rounds.
-// - Runtime bit-width guard on every arithmetic operation. When a product or
-//   sum would exceed the __int128 budget (120 bits, leaves margin for the
-//   next-step sum), the oracle sets `refused = true` and returns an empty
-//   verdict. Silent downgrade to a lossy answer is what produced the
-//   "regular pyramid → vtx=36" bug on the SHIFT=24 hardcode.
+// - Zero tolerance in the algebraic layer (Q(√3) and its polynomial
+//   extension); the ONLY numerical filter is the sign predicate, and it
+//   never returns a wrong sign — it either resolves or refuses.
+// - No hardcoded shift, no noise-floor snap, no fuzzy dedup.
+// - Runtime bit-width guard on every arithmetic operation
+//   (`AddGuarded`/`MulGuarded`/`ShiftUpGuarded`); when a product or sum
+//   would exceed the int64_t operand budget (kMaxOperandBits = 60), the
+//   oracle sets `refused = true` and returns an empty verdict.
 // - Structurally independent from the closed-form: enumerates every
 //   C(n, 3) plane triple with generic 3×3 Cramer arithmetic; does NOT bake
 //   in the "six fixed directions" insight, the "uniform erosion" model, or
 //   the "adjacent-only death" assumption. A bug in the closed-form's
 //   structural reasoning cannot also be a bug here.
-// - Dedup uses INCIDENCE (not cross-multiply): a candidate point A is a
-//   duplicate of an existing point B iff A is exactly incident to all three
-//   planes that defined B. This sidesteps the cross-multiply bit-width
-//   explosion (200+ bits, would blow past __int128) while remaining bit-
-//   exact: two triples yielding the geometrically same point must both have
-//   that point on ALL 6 planes involved.
+// - Dedup uses INCIDENCE (not cross-multiply of coordinates): a candidate
+//   point A is a duplicate of an existing point B iff A is exactly incident
+//   (polynomially) to all three planes that defined B. This sidesteps the
+//   cross-multiply bit-width explosion while remaining bit-exact under the
+//   equality contract above.
 //
 // Consumers: the golden-analytic pyramid test and the bench self-verify.
 
 #ifndef LUMICE_TEST_SUPPORT_EXACT_PYRAMID_ORACLE_HPP_
 #define LUMICE_TEST_SUPPORT_EXACT_PYRAMID_ORACLE_HPP_
-
-// MSVC has no __int128; the entire Q(√3) engine is built on __int128 and has
-// no non-__int128 API to expose. Under MSVC the header becomes an empty shell
-// (the guard alone) so translation units that #include it remain legal but
-// must gate every call site behind the same predicate.
-#if defined(__SIZEOF_INT128__)
 
 #include <algorithm>
 #include <cmath>
@@ -65,14 +97,14 @@ constexpr int kExactPyramidMaxVtx = 64;
 struct ExactPyramidVerdict {
   int vertex_count = 0;
   // Physical (double) coordinates for reporting / cross-checks. The exact
-  // Q(√3) representation is not exposed on the public interface — internal
+  // representation is not exposed on the public interface — internal
   // equality is bit-exact regardless of these values.
   double vertex_xyz[kExactPyramidMaxVtx][3]{};
   // Per-plane vertex count and presence flag (present iff >= 3 distinct
   // vertices lie on this plane, i.e. it bounds a 2-D face polygon).
   int face_vertex_count[kExactPyramidMaxPlanes]{};
   bool face_present[kExactPyramidMaxPlanes]{};
-  // Refusal: some intermediate exceeded the __int128 arithmetic budget, or a
+  // Refusal: some intermediate exceeded the int64_t arithmetic budget, or a
   // sign check was numerically ambiguous. When true, all other fields are
   // meaningless (empty). Downstream consumers must NOT interpret refused as
   // "no vertices found"; either route the sample to the Python `Fraction`
@@ -85,15 +117,18 @@ struct ExactPyramidVerdict {
 
 namespace exact_pyramid_detail {
 
-// Bit-width budget for __int128: signed magnitude ≤ 2^127-1. Cap
-// intermediate operands at 120 bits so a subsequent product (up to
-// 120 + 6 = 126 bits) and sum still fit. Exceed → refuse.
-constexpr int kMaxOperandBits = 120;
+// Bit-width budget for int64_t: signed magnitude ≤ 2^63-1. Cap operands at
+// 60 bits so a subsequent product / sum stays inside int64 (worst 60+60 =
+// 120 exceeds 63, so multiplies at the ceiling refuse — this is the design,
+// see file header). The spike measured a peak of 30 bits across all fixed
+// pools including synthetic joint-89° samples, so the ceiling is only
+// approached under unexpectedly adversarial inputs.
+constexpr int kMaxOperandBits = 60;
 
 // Q(√3) rational: value = (a + b·√3) / 2^shift. Zero is (0, 0, any shift).
 struct QS3 {
-  __int128 a;
-  __int128 b;
+  int64_t a;
+  int64_t b;
   int shift;
 };
 
@@ -101,18 +136,17 @@ inline QS3 QS3Zero() {
   return { 0, 0, 0 };
 }
 
-// Bit width of a signed __int128 (magnitude). 0 → 0, ±1 → 1, ±2..3 → 2, …
-inline int BitWidth(__int128 x) {
+// Bit width of a signed int64 magnitude. 0 → 0, ±1 → 1, ±2..3 → 2, …
+inline int BitWidth64(int64_t x) {
   if (x == 0) {
     return 0;
   }
-  if (x < 0) {
-    x = -x;
-  }
+  // Unsigned magnitude avoids the INT64_MIN pitfall (|INT64_MIN| exceeds
+  // int64 positive range).
+  uint64_t u = (x < 0) ? static_cast<uint64_t>(-(x + 1)) + 1u : static_cast<uint64_t>(x);
   int w = 0;
-  __int128 v = x;
-  while (v != 0) {
-    v >>= 1;
+  while (u != 0) {
+    u >>= 1;
     w++;
   }
   return w;
@@ -124,47 +158,51 @@ inline void TrackBits(int w, int* max_bits) {
   }
 }
 
-// Aligned add of two __int128 values with overflow tracking. Overflow of
-// signed addition happens when both operands are same-signed and their sum's
-// bit width would exceed __int128 signed range. We conservatively refuse if
-// the resulting bit width would exceed kMaxOperandBits.
-inline __int128 AddGuarded(__int128 x, __int128 y, bool* overflow, int* max_bits) {
-  __int128 s = x + y;
-  int w = BitWidth(s);
+// Aligned add of two int64 values with overflow tracking. Refuses if the
+// result bit width would exceed kMaxOperandBits (so the next multiply-add
+// step still fits) or if the sum itself would wrap signed int64.
+inline int64_t AddGuarded(int64_t x, int64_t y, bool* overflow, int* max_bits) {
+  const int wx = BitWidth64(x);
+  const int wy = BitWidth64(y);
+  const int w_hint = std::max(wx, wy) + 1;
+  if (w_hint > 62) {
+    *overflow = true;
+    TrackBits(w_hint, max_bits);
+    return 0;
+  }
+  const int64_t s = x + y;
+  const int w = BitWidth64(s);
   TrackBits(w, max_bits);
   if (w > kMaxOperandBits) {
-    // Even if signed __int128 didn't wrap here, the next op likely would.
     *overflow = true;
   }
   return s;
 }
 
 // Guarded multiply: refuse if the product bit width would exceed budget.
-inline __int128 MulGuarded(__int128 x, __int128 y, bool* overflow, int* max_bits) {
+inline int64_t MulGuarded(int64_t x, int64_t y, bool* overflow, int* max_bits) {
   if (x == 0 || y == 0) {
     return 0;
   }
-  int wx = BitWidth(x);
-  int wy = BitWidth(y);
+  const int wx = BitWidth64(x);
+  const int wy = BitWidth64(y);
   if (wx + wy > kMaxOperandBits) {
     *overflow = true;
     TrackBits(wx + wy, max_bits);
     return 0;
   }
-  __int128 r = x * y;
-  TrackBits(BitWidth(r), max_bits);
+  const int64_t r = x * y;
+  TrackBits(BitWidth64(r), max_bits);
   return r;
 }
 
-// Shift a QS3 up by delta bits so that both a and b are scaled by 2^delta.
-// This is the "raise shift" operation used to align two QS3 values before
-// addition. delta must be non-negative.
+// Shift a QS3 up by delta bits (both a and b scaled by 2^delta).
 inline void ShiftUpGuarded(QS3* x, int delta, bool* overflow, int* max_bits) {
   if (delta <= 0) {
     return;
   }
-  int wa = BitWidth(x->a);
-  int wb = BitWidth(x->b);
+  const int wa = BitWidth64(x->a);
+  const int wb = BitWidth64(x->b);
   if (wa + delta > kMaxOperandBits || wb + delta > kMaxOperandBits) {
     *overflow = true;
     TrackBits(std::max(wa, wb) + delta, max_bits);
@@ -173,7 +211,7 @@ inline void ShiftUpGuarded(QS3* x, int delta, bool* overflow, int* max_bits) {
   x->a <<= delta;
   x->b <<= delta;
   x->shift += delta;
-  TrackBits(std::max(BitWidth(x->a), BitWidth(x->b)), max_bits);
+  TrackBits(std::max(BitWidth64(x->a), BitWidth64(x->b)), max_bits);
 }
 
 // Align two QS3 to the same shift (raises the smaller-shift one).
@@ -188,11 +226,9 @@ inline void AlignShifts(QS3* x, QS3* y, bool* overflow, int* max_bits) {
   }
 }
 
-// Forward decl for StripTrailingZeros — defined below input converters.
 inline void StripTrailingZeros(QS3* x);
 
-// QS3 addition: aligns shifts, adds component-wise, strips trailing zero bits
-// from the result (keeps operand bit widths minimal for downstream ops).
+// QS3 addition: aligns shifts, adds component-wise, strips trailing zero bits.
 inline QS3 QS3Add(QS3 x, QS3 y, bool* overflow, int* max_bits) {
   AlignShifts(&x, &y, overflow, max_bits);
   if (*overflow) {
@@ -213,13 +249,12 @@ inline QS3 QS3Sub(QS3 x, QS3 y, bool* overflow, int* max_bits) {
 }
 
 // QS3 multiplication: (a1 + b1√3)(a2 + b2√3) = (a1·a2 + 3·b1·b2) + (a1·b2 + a2·b1)·√3.
-// Strips trailing zero bits from the result (matches Add convention).
 inline QS3 QS3Mul(QS3 x, QS3 y, bool* overflow, int* max_bits) {
-  __int128 aa = MulGuarded(x.a, y.a, overflow, max_bits);
-  __int128 bb = MulGuarded(x.b, y.b, overflow, max_bits);
-  __int128 ab = MulGuarded(x.a, y.b, overflow, max_bits);
-  __int128 ba = MulGuarded(x.b, y.a, overflow, max_bits);
-  __int128 three_bb = MulGuarded(3, bb, overflow, max_bits);
+  const int64_t aa = MulGuarded(x.a, y.a, overflow, max_bits);
+  const int64_t bb = MulGuarded(x.b, y.b, overflow, max_bits);
+  const int64_t ab = MulGuarded(x.a, y.b, overflow, max_bits);
+  const int64_t ba = MulGuarded(x.b, y.a, overflow, max_bits);
+  const int64_t three_bb = MulGuarded(3, bb, overflow, max_bits);
   QS3 out;
   out.a = AddGuarded(aa, three_bb, overflow, max_bits);
   out.b = AddGuarded(ab, ba, overflow, max_bits);
@@ -228,16 +263,88 @@ inline QS3 QS3Mul(QS3 x, QS3 y, bool* overflow, int* max_bits) {
   return out;
 }
 
-// QS3 == 0 iff both components are zero. Bit-exact.
 inline bool IsZero(QS3 x) {
   return x.a == 0 && x.b == 0;
 }
 
-// Sign of a QS3 value.
-//   Same-sign or one-zero cases: trivial, exact.
-//   Opposite-sign case: use double approximation with a comfortable safety
-//   margin. If ambiguous, set *sign_refuse = true; caller must refuse.
-inline int SignQS3(QS3 x, bool* sign_refuse) {
+inline QS3 QS3Neg(QS3 x) {
+  x.a = -x.a;
+  x.b = -x.b;
+  return x;
+}
+
+// int64 GCD (magnitudes, Euclidean).
+inline int64_t Gcd64(int64_t x, int64_t y) {
+  if (x < 0) {
+    x = -x;
+  }
+  if (y < 0) {
+    y = -y;
+  }
+  while (y != 0) {
+    const int64_t t = x % y;
+    x = y;
+    y = t;
+  }
+  return x;
+}
+
+// Strip trailing zero bits from a QS3 (canonical dyadic form).
+inline void StripTrailingZeros(QS3* x) {
+  if (x->a == 0 && x->b == 0) {
+    x->shift = 0;
+    return;
+  }
+  while (x->shift > 0) {
+    const int64_t a_odd = x->a & 1;
+    const int64_t b_odd = x->b & 1;
+    if (a_odd != 0 || b_odd != 0) {
+      break;
+    }
+    x->a >>= 1;
+    x->b >>= 1;
+    x->shift--;
+  }
+}
+
+// Convert a float (dyadic rational) to a QS3 pure-rational value.
+inline QS3 FloatToQS3(float f) {
+  if (f == 0.0f) {
+    return QS3Zero();
+  }
+  int e = 0;
+  const double m = std::frexp(static_cast<double>(f), &e);
+  const double m_int_d = std::ldexp(m, 24);
+  int64_t mant = static_cast<int64_t>(std::llround(m_int_d));
+  int shift = 24 - e;
+  if (shift < 0) {
+    mant <<= (-shift);
+    shift = 0;
+  }
+  QS3 out = { mant, 0, shift };
+  StripTrailingZeros(&out);
+  return out;
+}
+
+// Integer constant → QS3 pure-rational.
+inline QS3 IntToQS3(int n) {
+  return { static_cast<int64_t>(n), 0, 0 };
+}
+
+// Q(√3) constant √3 = (0, 1) at shift 0.
+inline QS3 QS3Sqrt3() {
+  return { 0, 1, 0 };
+}
+
+// Convert QS3 to double (for reporting / sign hints).
+inline double QS3ToDouble(QS3 x) {
+  const double kSqrt3D = 1.7320508075688772;
+  return (static_cast<double>(x.a) + static_cast<double>(x.b) * kSqrt3D) * std::ldexp(1.0, -x.shift);
+}
+
+// Sign of a QS3 value using a double-Horner filter with 128-ULP margin.
+// Ambiguous → sets *ambiguous = true; caller must refuse.
+inline int SignQS3(QS3 x, bool* ambiguous) {
   if (x.a == 0 && x.b == 0) {
     return 0;
   }
@@ -252,12 +359,6 @@ inline int SignQS3(QS3 x, bool* sign_refuse) {
   if (a_pos == b_pos) {
     return a_pos ? 1 : -1;
   }
-  // Opposite-sign case: sign(a + b·√3). Use double with a 128-ULP safety
-  // margin. The double approximation of a large __int128 loses precision
-  // beyond 53 bits, but for the sign question the leading-bit ratio is what
-  // matters. If magnitudes are grossly comparable but signs differ, the
-  // double answer is reliable if the ratio a/b is not pathologically close
-  // to -√3.
   const double da = static_cast<double>(x.a);
   const double db = static_cast<double>(x.b);
   const double kSqrt3D = 1.7320508075688772;
@@ -268,177 +369,160 @@ inline int SignQS3(QS3 x, bool* sign_refuse) {
   if (std::fabs(val) > margin) {
     return val > 0 ? 1 : -1;
   }
-  // Ambiguous in double — refuse rather than risk a wrong sign. Bit-exact
-  // resolution would require comparing a² vs 3·b² in __int256, which is
-  // outside the current implementation's scope.
-  *sign_refuse = true;
+  *ambiguous = true;
   return 0;
 }
 
-// Negate a QS3 in-place (used to canonicalize det > 0).
-inline QS3 QS3Neg(QS3 x) {
-  x.a = -x.a;
-  x.b = -x.b;
-  return x;
+inline int CompareQS3(QS3 x, QS3 y, bool* overflow, int* max_bits, bool* ambiguous) {
+  const QS3 diff = QS3Sub(x, y, overflow, max_bits);
+  if (*overflow) {
+    return 0;
+  }
+  return SignQS3(diff, ambiguous);
 }
 
-// __int128 GCD (magnitudes, Euclidean).
-inline __int128 Gcd128(__int128 x, __int128 y) {
-  if (x < 0) {
-    x = -x;
-  }
-  if (y < 0) {
-    y = -y;
-  }
-  while (y != 0) {
-    __int128 t = x % y;
-    x = y;
-    y = t;
-  }
-  return x;
-}
+// ============================================================================
+// PolyQS3(α, β) — bivariate polynomial with QS3 coefficients. Max joint degree
+// i + j ≤ kMaxJointDeg = 4 (see file header). Storage: flat 5×5 array; slots
+// outside the triangle are permanent zero. Extending the degree bound is a
+// deliberate change (an unlisted higher term would drop silently), not a
+// backwards-compatible growth axis.
+// ============================================================================
 
-// Reduce a 4-QS3 tuple (px, py, pz, det) by dividing all 8 integer components
-// by their common GCD. Also strips shift-common trailing zero bits.
-inline void ReducePoint(QS3* px, QS3* py, QS3* pz, QS3* det) {
-  __int128 g = 0;
-  auto acc = [&](__int128 v) {
-    if (v == 0) {
-      return;
+constexpr int kMaxJointDeg = 4;
+
+struct PolyQS3 {
+  QS3 c[kMaxJointDeg + 1][kMaxJointDeg + 1];
+};
+
+inline PolyQS3 PolyZero() {
+  PolyQS3 p{};
+  for (int i = 0; i <= kMaxJointDeg; i++) {
+    for (int j = 0; j <= kMaxJointDeg; j++) {
+      p.c[i][j] = QS3Zero();
     }
-    if (v < 0) {
-      v = -v;
-    }
-    g = (g == 0) ? v : Gcd128(g, v);
-  };
-  acc(px->a);
-  acc(px->b);
-  acc(py->a);
-  acc(py->b);
-  acc(pz->a);
-  acc(pz->b);
-  acc(det->a);
-  acc(det->b);
-  if (g > 1) {
-    px->a /= g;
-    px->b /= g;
-    py->a /= g;
-    py->b /= g;
-    pz->a /= g;
-    pz->b /= g;
-    det->a /= g;
-    det->b /= g;
   }
+  return p;
 }
 
-// Strip trailing zero bits from a QS3 (canonical dyadic form: at least one of
-// a/b must have a bottom-bit-set, else lower the shift). This is O(1) amortized
-// and shrinks bit widths dramatically for inputs like h2=1 (which starts as
-// mant=2^24, shift=24 → after strip: (1, 0, 0), bit width 1).
-inline void StripTrailingZeros(QS3* x) {
-  if (x->a == 0 && x->b == 0) {
-    x->shift = 0;
-    return;
-  }
-  while (x->shift > 0) {
-    __int128 a_odd = x->a & 1;
-    __int128 b_odd = x->b & 1;
-    if (a_odd != 0 || b_odd != 0) {
-      break;
-    }
-    x->a >>= 1;
-    x->b >>= 1;
-    x->shift--;
-  }
+inline PolyQS3 PolyFromQS3(QS3 x) {
+  PolyQS3 p = PolyZero();
+  p.c[0][0] = x;
+  return p;
 }
 
-// Convert a float (dyadic rational) to a QS3 pure-rational value.
-// value = f = m·2^e (frexp), so `int_mantissa` at shift `24 − e` is exact.
-inline QS3 FloatToQS3(float f) {
-  if (f == 0.0f) {
-    return QS3Zero();
+inline PolyQS3 PolyAlpha() {
+  PolyQS3 p = PolyZero();
+  p.c[1][0] = IntToQS3(1);
+  return p;
+}
+
+inline PolyQS3 PolyBeta() {
+  PolyQS3 p = PolyZero();
+  p.c[0][1] = IntToQS3(1);
+  return p;
+}
+
+inline PolyQS3 PolyNeg(PolyQS3 p) {
+  for (int i = 0; i <= kMaxJointDeg; i++) {
+    for (int j = 0; j <= kMaxJointDeg; j++) {
+      p.c[i][j] = QS3Neg(p.c[i][j]);
+    }
   }
-  int e = 0;
-  double m = std::frexp(static_cast<double>(f), &e);  // m in [0.5, 1)
-  double m_int_d = std::ldexp(m, 24);
-  __int128 mant = static_cast<__int128>(std::llround(m_int_d));
-  int shift = 24 - e;
-  if (shift < 0) {
-    mant <<= (-shift);
-    shift = 0;
+  return p;
+}
+
+inline PolyQS3 PolyAdd(const PolyQS3& x, const PolyQS3& y, bool* overflow, int* max_bits) {
+  PolyQS3 out{};
+  for (int i = 0; i <= kMaxJointDeg; i++) {
+    for (int j = 0; j <= kMaxJointDeg; j++) {
+      out.c[i][j] = QS3Add(x.c[i][j], y.c[i][j], overflow, max_bits);
+    }
   }
-  QS3 out = { mant, 0, shift };
-  StripTrailingZeros(&out);
   return out;
 }
 
-inline QS3 DoubleToQS3(double d) {
-  if (d == 0.0) {
-    return QS3Zero();
+inline PolyQS3 PolySub(const PolyQS3& x, const PolyQS3& y, bool* overflow, int* max_bits) {
+  return PolyAdd(x, PolyNeg(y), overflow, max_bits);
+}
+
+// PolyMul with degree bound: any product whose joint degree exceeds kMaxJointDeg
+// is a design violation, not a truncation. The loop bounds implicitly limit
+// this to the safe region — anything outside must have been introduced by an
+// operation not covered by the plane-degree analysis in the file header.
+inline PolyQS3 PolyMul(const PolyQS3& x, const PolyQS3& y, bool* overflow, int* max_bits) {
+  PolyQS3 out = PolyZero();
+  for (int i1 = 0; i1 <= kMaxJointDeg; i1++) {
+    for (int j1 = 0; j1 <= kMaxJointDeg - i1; j1++) {
+      if (IsZero(x.c[i1][j1])) {
+        continue;
+      }
+      for (int i2 = 0; i2 <= kMaxJointDeg - i1 - j1; i2++) {
+        for (int j2 = 0; j2 <= kMaxJointDeg - i1 - j1 - i2; j2++) {
+          if (IsZero(y.c[i2][j2])) {
+            continue;
+          }
+          const QS3 term = QS3Mul(x.c[i1][j1], y.c[i2][j2], overflow, max_bits);
+          out.c[i1 + i2][j1 + j2] = QS3Add(out.c[i1 + i2][j1 + j2], term, overflow, max_bits);
+        }
+      }
+    }
   }
-  int e = 0;
-  double m = std::frexp(d, &e);
-  double m_int_d = std::ldexp(m, 53);  // full double mantissa
-  __int128 mant = static_cast<__int128>(std::llround(m_int_d));
-  int shift = 53 - e;
-  if (shift < 0) {
-    mant <<= (-shift);
-    shift = 0;
-  }
-  QS3 out = { mant, 0, shift };
-  StripTrailingZeros(&out);
   return out;
 }
 
-// Integer constant → QS3 pure-rational.
-inline QS3 IntToQS3(int n) {
-  return { static_cast<__int128>(n), 0, 0 };
+inline bool PolyIsZero(const PolyQS3& p) {
+  for (int i = 0; i <= kMaxJointDeg; i++) {
+    for (int j = 0; j <= kMaxJointDeg; j++) {
+      if (!IsZero(p.c[i][j])) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
-// Q(√3) constant √3 = (0, 1) at shift 0.
-inline QS3 QS3Sqrt3() {
-  return { 0, 1, 0 };
-}
-
-// Divide QS3 by 2^n (equivalently, add n to shift).
-inline QS3 QS3DivPow2(QS3 x, int n) {
-  x.shift += n;
-  return x;
-}
-
-// Convert QS3 to double (for reporting / sign hints).
-inline double QS3ToDouble(QS3 x) {
+// Double-Horner evaluation of P(α, β) with the 128-ULP error margin.
+// Return: +1 / -1 / 0 (ambiguous). Ambiguous → *ambiguous = true.
+inline int PolySign(const PolyQS3& p, double alpha_val, double beta_val, bool* ambiguous) {
   const double kSqrt3D = 1.7320508075688772;
-  return (static_cast<double>(x.a) + static_cast<double>(x.b) * kSqrt3D) * std::ldexp(1.0, -x.shift);
+  const double kUlp = 2.220446049250313e-16;
+  double val = 0.0;
+  double mag = 0.0;
+  const double abs_a = std::fabs(alpha_val);
+  const double abs_b = std::fabs(beta_val);
+  for (int i = 0; i <= kMaxJointDeg; i++) {
+    for (int j = 0; j <= kMaxJointDeg - i; j++) {
+      const QS3& q = p.c[i][j];
+      if (IsZero(q)) {
+        continue;
+      }
+      const double coeff = (static_cast<double>(q.a) + static_cast<double>(q.b) * kSqrt3D) * std::ldexp(1.0, -q.shift);
+      const double alpha_i = std::pow(alpha_val, i);
+      const double beta_j = std::pow(beta_val, j);
+      val += coeff * alpha_i * beta_j;
+      mag += std::fabs(coeff) * std::pow(abs_a, i) * std::pow(abs_b, j);
+    }
+  }
+  const double margin = 128.0 * mag * kUlp;
+  if (std::fabs(val) > margin) {
+    return val > 0 ? 1 : -1;
+  }
+  *ambiguous = true;
+  return 0;
 }
 
 // ============================================================================
-// Plane construction from parameters — mirrors FillHexCrystalCoef's symbolic
-// form (geo3d.cpp:346-434). Every step in exact Q(√3).
+// Six horizontal direction pairs + LP direction constants — pure QS3 (no
+// α, β), same as the __int128 predecessor.
 // ============================================================================
-//
-// Six horizontal direction pairs (i=0..5). For each i, the two "corners" of
-// the prism face bracket the direction at ±30° offsets from i·60°:
-//   x1 = 0.5 · cos(-π/6 + i·π/3)   x2 = 0.5 · cos(π/6 + i·π/3)
-//   y1 = 0.5 · sin(-π/6 + i·π/3)   y2 = 0.5 · sin(π/6 + i·π/3)
-// The cos/sin values at 30° multiples take values in {0, ±1/2, ±√3/2}, so
-// 0.5·cos and 0.5·sin take values in {0, ±1/4, ±√3/4}. Hardcoded as QS3
-// constants at shift 2 (denominator 4).
 
 struct DirCorners {
   QS3 x1, x2, y1, y2;
 };
 
-// (a, b) at shift 2 = (a + b·√3) / 4. Values in {0, ±1, ±√3}/4.
 inline DirCorners GetDirCorners(int i) {
-  auto make = [](int a, int b) -> QS3 { return { static_cast<__int128>(a), static_cast<__int128>(b), 2 }; };
-  //  i    -π/6+iπ/3      π/6+iπ/3           x1=0.5·cos     y1=0.5·sin      x2=0.5·cos      y2=0.5·sin
-  //  0    -30°           30°                √3/4           -1/4            √3/4            1/4
-  //  1    30°            90°                √3/4           1/4             0               1/2
-  //  2    90°            150°               0              1/2             -√3/4           1/4
-  //  3    150°           210°               -√3/4          1/4             -√3/4           -1/4
-  //  4    210°           270°               -√3/4          -1/4            0               -1/2
-  //  5    270°           330°               0              -1/2            √3/4            -1/4
+  auto make = [](int a, int b) -> QS3 { return { static_cast<int64_t>(a), static_cast<int64_t>(b), 2 }; };
   switch (i) {
     case 0:
       return { make(0, 1), make(0, 1), make(-1, 0), make(1, 0) };
@@ -457,62 +541,15 @@ inline DirCorners GetDirCorners(int i) {
   }
 }
 
-// The det = x1·y2 − x2·y1 is a constant √3/8 for all i (this is what makes
-// dist[i] enter as `-dist[i]·√3/8` uniformly). Hardcoded to skip the QS3
-// multiplication overhead and avoid any risk of arithmetic drift.
-// Value: (0, 1) at shift 3.
+// The constant √3/8 = (0, 1) at shift 3, shared by every prism/cone plane.
 inline QS3 GetDirDet() {
   return { 0, 1, 3 };
 }
 
-// Build the 20 planes in Q(√3), matching FillHexCrystalCoef's layout:
-//   0: upper basal (0, 0, 1, -z_top)
-//   1: lower basal (0, 0, -1, z_bot)
-//   2..7: prism face i
-//   8..13: upper cone face i (only if a1 > 0)
-//   14..19: lower cone face i (only if a2 > 0)
-struct PlaneQS3 {
-  QS3 A, B, C, D;
-};
-
-inline void BuildPrismPlane(int i, QS3 dist_i, PlaneQS3* out, bool* overflow, int* max_bits) {
-  DirCorners dc = GetDirCorners(i);
-  QS3 det = GetDirDet();  // √3/8
-  out->A = QS3Sub(dc.y2, dc.y1, overflow, max_bits);
-  out->B = QS3Sub(dc.x1, dc.x2, overflow, max_bits);
-  out->C = QS3Zero();
-  QS3 neg_dist = QS3Neg(dist_i);
-  out->D = QS3Mul(neg_dist, det, overflow, max_bits);
-}
-
-inline void BuildConePlane(int i, QS3 a_cone, QS3 h2_2, QS3 dist_i, bool upper, PlaneQS3* out, bool* overflow,
-                           int* max_bits) {
-  DirCorners dc = GetDirCorners(i);
-  QS3 det = GetDirDet();  // √3/8; upper C = +det, lower C = -det
-  QS3 y_diff = QS3Sub(dc.y2, dc.y1, overflow, max_bits);
-  QS3 x_diff = QS3Sub(dc.x1, dc.x2, overflow, max_bits);
-  out->A = QS3Mul(a_cone, y_diff, overflow, max_bits);
-  out->B = QS3Mul(a_cone, x_diff, overflow, max_bits);
-  out->C = upper ? det : QS3Neg(det);
-  // D = -(h2/2 + a·dist[i]) · det
-  QS3 a_dist = QS3Mul(a_cone, dist_i, overflow, max_bits);
-  QS3 inner = QS3Add(h2_2, a_dist, overflow, max_bits);
-  QS3 neg_inner = QS3Neg(inner);
-  out->D = QS3Mul(neg_inner, det, overflow, max_bits);
-}
-
-// ============================================================================
-// z_top / z_bot from the LP: max m subject to cos(θ_i)·u + sin(θ_i)·v + m ≤
-// (√3/4)·dist[i]. The LP maximum lies at a 3-direction concurrence; enumerate
-// C(6, 3) = 20 triples in Q(√3), pick the largest feasible m.
-// ============================================================================
-//
-// (cos, sin) at 60° multiples in Q(√3):
-//   i=0: (1, 0)   i=1: (1/2, √3/2)   i=2: (-1/2, √3/2)
-//   i=3: (-1, 0)  i=4: (-1/2, -√3/2) i=5: (1/2, -√3/2)
+// (cos, sin) at 60° multiples in Q(√3), used by the LP3 apex solver.
 inline QS3 GetDirCos(int i) {
   auto make = [](int a, int b, int shift) -> QS3 {
-    return { static_cast<__int128>(a), static_cast<__int128>(b), shift };
+    return { static_cast<int64_t>(a), static_cast<int64_t>(b), shift };
   };
   switch (i) {
     case 0:
@@ -534,7 +571,7 @@ inline QS3 GetDirCos(int i) {
 
 inline QS3 GetDirSin(int i) {
   auto make = [](int a, int b, int shift) -> QS3 {
-    return { static_cast<__int128>(a), static_cast<__int128>(b), shift };
+    return { static_cast<int64_t>(a), static_cast<int64_t>(b), shift };
   };
   switch (i) {
     case 0:
@@ -554,21 +591,59 @@ inline QS3 GetDirSin(int i) {
   }
 }
 
-// Compare two QS3 values: returns sign(x - y). On refuse, sets *sign_refuse.
-inline int CompareQS3(QS3 x, QS3 y, bool* overflow, int* max_bits, bool* sign_refuse) {
-  QS3 diff = QS3Sub(x, y, overflow, max_bits);
-  if (*overflow) {
-    return 0;
-  }
-  return SignQS3(diff, sign_refuse);
+// ============================================================================
+// Plane construction — PolyPlane holds four PolyQS3 coefficients (A, B, C, D).
+// Prism planes: all coefficients constant polynomials.
+// Cone planes:  A, B, D depend on the cone symbol (α for upper, β for lower).
+// Basal planes: A = B = 0; C is constant; D is α-linear (upper) or β-linear
+//               (lower) via z_top / z_bot below.
+// ============================================================================
+
+struct PolyPlane {
+  PolyQS3 A, B, C, D;
+};
+
+inline PolyPlane BuildPrismPlane(int i, QS3 dist_i, bool* overflow, int* max_bits) {
+  const DirCorners dc = GetDirCorners(i);
+  const QS3 det = GetDirDet();
+  const QS3 y_diff = QS3Sub(dc.y2, dc.y1, overflow, max_bits);
+  const QS3 x_diff = QS3Sub(dc.x1, dc.x2, overflow, max_bits);
+  const QS3 neg_dist = QS3Neg(dist_i);
+  const QS3 d_qs = QS3Mul(neg_dist, det, overflow, max_bits);
+  PolyPlane p;
+  p.A = PolyFromQS3(y_diff);
+  p.B = PolyFromQS3(x_diff);
+  p.C = PolyFromQS3(QS3Zero());
+  p.D = PolyFromQS3(d_qs);
+  return p;
 }
 
-// Solve the 3×3 system for the LP:
-//   [cos_i  sin_i  1] [u]   [d_scaled_i]
-//   [cos_j  sin_j  1] [v] = [d_scaled_j]
-//   [cos_k  sin_k  1] [m]   [d_scaled_k]
-// where d_scaled_i = √3/4 · dist[i]. Returns (u, v, m) as QS3, plus the
-// system determinant (must be != 0 for a unique solution).
+// upper == true → symbolic α; upper == false → symbolic β.
+inline PolyPlane BuildConePlane(int i, bool upper, QS3 h2_2, QS3 dist_i, bool* overflow, int* max_bits) {
+  const DirCorners dc = GetDirCorners(i);
+  const QS3 det = GetDirDet();
+  const QS3 y_diff = QS3Sub(dc.y2, dc.y1, overflow, max_bits);
+  const QS3 x_diff = QS3Sub(dc.x1, dc.x2, overflow, max_bits);
+  const PolyQS3 sym = upper ? PolyAlpha() : PolyBeta();
+  PolyPlane p;
+  p.A = PolyMul(sym, PolyFromQS3(y_diff), overflow, max_bits);
+  p.B = PolyMul(sym, PolyFromQS3(x_diff), overflow, max_bits);
+  p.C = PolyFromQS3(upper ? det : QS3Neg(det));
+  // D = -(h2/2 + sym·dist)·det
+  const PolyQS3 sym_dist = PolyMul(sym, PolyFromQS3(dist_i), overflow, max_bits);
+  const PolyQS3 inner = PolyAdd(PolyFromQS3(h2_2), sym_dist, overflow, max_bits);
+  const PolyQS3 neg_inner = PolyNeg(inner);
+  p.D = PolyMul(neg_inner, PolyFromQS3(det), overflow, max_bits);
+  return p;
+}
+
+// ============================================================================
+// LP3 apex — solves the 3-direction concurrence for the upward LP
+//   max m subject to cos_i·u + sin_i·v + m ≤ √3/4·dist[i].
+// The LP solution depends only on the 6 direction constants and dist[] —
+// no α, β anywhere — so it stays in pure QS3 (int64), not PolyQS3.
+// ============================================================================
+
 struct LP3Solution {
   QS3 u, v, m, det;
   bool degenerate;
@@ -577,23 +652,20 @@ struct LP3Solution {
 inline LP3Solution SolveLP3(int i, int j, int k, const QS3 d_scaled[6], bool* overflow, int* max_bits) {
   LP3Solution s{};
   s.degenerate = false;
-  QS3 ci = GetDirCos(i), si = GetDirSin(i);
-  QS3 cj = GetDirCos(j), sj = GetDirSin(j);
-  QS3 ck = GetDirCos(k), sk = GetDirSin(k);
-  QS3 one = IntToQS3(1);
+  const QS3 ci = GetDirCos(i), si = GetDirSin(i);
+  const QS3 cj = GetDirCos(j), sj = GetDirSin(j);
+  const QS3 ck = GetDirCos(k), sk = GetDirSin(k);
 
-  // det = ci*(sj - sk) - si*(cj - ck) + (cj*sk - ck*sj)
-  QS3 sj_sk = QS3Sub(sj, sk, overflow, max_bits);
-  QS3 cj_ck = QS3Sub(cj, ck, overflow, max_bits);
-  QS3 cjsk = QS3Mul(cj, sk, overflow, max_bits);
-  QS3 cksj = QS3Mul(ck, sj, overflow, max_bits);
-  QS3 t1 = QS3Mul(ci, sj_sk, overflow, max_bits);
-  QS3 t2 = QS3Mul(si, cj_ck, overflow, max_bits);
-  QS3 t3 = QS3Sub(cjsk, cksj, overflow, max_bits);
-  QS3 t12 = QS3Sub(t1, t2, overflow, max_bits);
+  // det = ci·(sj - sk) - si·(cj - ck) + (cj·sk - ck·sj)
+  const QS3 sj_sk = QS3Sub(sj, sk, overflow, max_bits);
+  const QS3 cj_ck = QS3Sub(cj, ck, overflow, max_bits);
+  const QS3 cjsk = QS3Mul(cj, sk, overflow, max_bits);
+  const QS3 cksj = QS3Mul(ck, sj, overflow, max_bits);
+  const QS3 t1 = QS3Mul(ci, sj_sk, overflow, max_bits);
+  const QS3 t2 = QS3Mul(si, cj_ck, overflow, max_bits);
+  const QS3 t3 = QS3Sub(cjsk, cksj, overflow, max_bits);
+  const QS3 t12 = QS3Sub(t1, t2, overflow, max_bits);
   s.det = QS3Add(t12, t3, overflow, max_bits);
-  (void)one;
-
   if (*overflow) {
     return s;
   }
@@ -602,50 +674,43 @@ inline LP3Solution SolveLP3(int i, int j, int k, const QS3 d_scaled[6], bool* ov
     return s;
   }
 
-  QS3 di = d_scaled[i], dj = d_scaled[j], dk = d_scaled[k];
+  const QS3 di = d_scaled[i], dj = d_scaled[j], dk = d_scaled[k];
 
-  // u_num (numerator; s.u = u_num / det): replace column 0 with d
-  //   u_num = di*(sj - sk) - si*(dj - dk) + (dj*sk - dk*sj)
-  QS3 dj_dk = QS3Sub(dj, dk, overflow, max_bits);
-  QS3 djsk = QS3Mul(dj, sk, overflow, max_bits);
-  QS3 dksj = QS3Mul(dk, sj, overflow, max_bits);
-  QS3 u1 = QS3Mul(di, sj_sk, overflow, max_bits);
-  QS3 u2 = QS3Mul(si, dj_dk, overflow, max_bits);
-  QS3 u3 = QS3Sub(djsk, dksj, overflow, max_bits);
-  QS3 u12 = QS3Sub(u1, u2, overflow, max_bits);
+  // u_num, v_num, m_num from Cramer.
+  const QS3 dj_dk = QS3Sub(dj, dk, overflow, max_bits);
+  const QS3 djsk = QS3Mul(dj, sk, overflow, max_bits);
+  const QS3 dksj = QS3Mul(dk, sj, overflow, max_bits);
+  const QS3 u1 = QS3Mul(di, sj_sk, overflow, max_bits);
+  const QS3 u2 = QS3Mul(si, dj_dk, overflow, max_bits);
+  const QS3 u3 = QS3Sub(djsk, dksj, overflow, max_bits);
+  const QS3 u12 = QS3Sub(u1, u2, overflow, max_bits);
   s.u = QS3Add(u12, u3, overflow, max_bits);
 
-  // v_num: replace column 1 with d
-  //   v_num = ci*(dj - dk) - di*(cj - ck) + (cj*dk - ck*dj)
-  QS3 cjdk = QS3Mul(cj, dk, overflow, max_bits);
-  QS3 ckdj = QS3Mul(ck, dj, overflow, max_bits);
-  QS3 v1 = QS3Mul(ci, dj_dk, overflow, max_bits);
-  QS3 v2 = QS3Mul(di, cj_ck, overflow, max_bits);
-  QS3 v3 = QS3Sub(cjdk, ckdj, overflow, max_bits);
-  QS3 v12 = QS3Sub(v1, v2, overflow, max_bits);
+  const QS3 cjdk = QS3Mul(cj, dk, overflow, max_bits);
+  const QS3 ckdj = QS3Mul(ck, dj, overflow, max_bits);
+  const QS3 v1 = QS3Mul(ci, dj_dk, overflow, max_bits);
+  const QS3 v2 = QS3Mul(di, cj_ck, overflow, max_bits);
+  const QS3 v3 = QS3Sub(cjdk, ckdj, overflow, max_bits);
+  const QS3 v12 = QS3Sub(v1, v2, overflow, max_bits);
   s.v = QS3Add(v12, v3, overflow, max_bits);
 
-  // m_num: replace column 2 with d
-  //   m_num = ci*(sj·dk - sk·dj) - si*(cj·dk - ck·dj) + di*(cj·sk - ck·sj)
-  QS3 sjdk = QS3Mul(sj, dk, overflow, max_bits);
-  QS3 skdj = QS3Mul(sk, dj, overflow, max_bits);
-  QS3 sub1 = QS3Sub(sjdk, skdj, overflow, max_bits);
-  QS3 m1 = QS3Mul(ci, sub1, overflow, max_bits);
-  QS3 sub2 = QS3Sub(cjdk, ckdj, overflow, max_bits);
-  QS3 m2 = QS3Mul(si, sub2, overflow, max_bits);
-  QS3 sub3 = QS3Sub(cjsk, cksj, overflow, max_bits);
-  QS3 m3 = QS3Mul(di, sub3, overflow, max_bits);
-  QS3 m12 = QS3Sub(m1, m2, overflow, max_bits);
+  const QS3 sjdk = QS3Mul(sj, dk, overflow, max_bits);
+  const QS3 skdj = QS3Mul(sk, dj, overflow, max_bits);
+  const QS3 sub1 = QS3Sub(sjdk, skdj, overflow, max_bits);
+  const QS3 m1 = QS3Mul(ci, sub1, overflow, max_bits);
+  const QS3 sub2 = QS3Sub(cjdk, ckdj, overflow, max_bits);
+  const QS3 m2 = QS3Mul(si, sub2, overflow, max_bits);
+  const QS3 sub3 = QS3Sub(cjsk, cksj, overflow, max_bits);
+  const QS3 m3 = QS3Mul(di, sub3, overflow, max_bits);
+  const QS3 m12 = QS3Sub(m1, m2, overflow, max_bits);
   s.m = QS3Add(m12, m3, overflow, max_bits);
-
   return s;
 }
 
-// Canonicalize a QS3 rational (u_num/det) sign so det > 0. If det == 0, returns
-// as-is. Uses SignQS3 which may set sign_refuse for opposite-sign case.
-inline void CanonicalizeSign(QS3* px, QS3* py, QS3* pz, QS3* det, bool* sign_refuse) {
-  int s = SignQS3(*det, sign_refuse);
-  if (*sign_refuse) {
+// Canonicalize sign(det) > 0. May set *ambiguous if the sign is unresolvable.
+inline void CanonicalizeSign(QS3* px, QS3* py, QS3* pz, QS3* det, bool* ambiguous) {
+  const int s = SignQS3(*det, ambiguous);
+  if (*ambiguous) {
     return;
   }
   if (s < 0) {
@@ -656,9 +721,37 @@ inline void CanonicalizeSign(QS3* px, QS3* py, QS3* pz, QS3* det, bool* sign_ref
   }
 }
 
-// Compute the LP max m (as u/det, m/det tuple) over all feasible triples.
-// Returns the m rational (num, det). If refused for any reason, sets refused.
-// Also returns u, v of the winning triple.
+inline void ReducePoint(QS3* px, QS3* py, QS3* pz, QS3* det) {
+  int64_t g = 0;
+  auto acc = [&](int64_t v) {
+    if (v == 0) {
+      return;
+    }
+    if (v < 0) {
+      v = -v;
+    }
+    g = (g == 0) ? v : Gcd64(g, v);
+  };
+  acc(px->a);
+  acc(px->b);
+  acc(py->a);
+  acc(py->b);
+  acc(pz->a);
+  acc(pz->b);
+  acc(det->a);
+  acc(det->b);
+  if (g > 1) {
+    px->a /= g;
+    px->b /= g;
+    py->a /= g;
+    py->b /= g;
+    pz->a /= g;
+    pz->b /= g;
+    det->a /= g;
+    det->b /= g;
+  }
+}
+
 struct ApexResult {
   QS3 m_num, det;
   QS3 u_num, v_num;
@@ -678,7 +771,7 @@ inline ApexResult ComputeApexLP(const QS3 d_scaled[6], int* max_bits, const char
     for (int j = i + 1; j < 6; j++) {
       for (int k = j + 1; k < 6; k++) {
         bool overflow = false;
-        bool sign_refuse = false;
+        bool ambiguous = false;
         LP3Solution s = SolveLP3(i, j, k, d_scaled, &overflow, max_bits);
         if (overflow) {
           out.refused = true;
@@ -688,43 +781,39 @@ inline ApexResult ComputeApexLP(const QS3 d_scaled[6], int* max_bits, const char
         if (s.degenerate) {
           continue;
         }
-        // Canonicalize: sign(det) > 0.
-        CanonicalizeSign(&s.u, &s.v, &s.m, &s.det, &sign_refuse);
-        if (sign_refuse) {
+        CanonicalizeSign(&s.u, &s.v, &s.m, &s.det, &ambiguous);
+        if (ambiguous) {
           out.refused = true;
           *refuse_reason = "LP3 det sign ambiguous";
           return out;
         }
-        // Reduce integer GCD so subsequent arithmetic doesn't grow unbounded.
         ReducePoint(&s.u, &s.v, &s.m, &s.det);
 
-        // Feasibility: for every OTHER direction r, check
-        //   cos_r · u + sin_r · v + m·1 ≤ d_scaled_r · det   (multiply through by det > 0)
         bool feasible = true;
         for (int r = 0; r < 6; r++) {
           if (r == i || r == j || r == k) {
             continue;
           }
-          QS3 cr = GetDirCos(r);
-          QS3 sr = GetDirSin(r);
-          QS3 lhs1 = QS3Mul(cr, s.u, &overflow, max_bits);
-          QS3 lhs2 = QS3Mul(sr, s.v, &overflow, max_bits);
-          QS3 lhs12 = QS3Add(lhs1, lhs2, &overflow, max_bits);
-          QS3 lhs = QS3Add(lhs12, s.m, &overflow, max_bits);
-          QS3 rhs = QS3Mul(d_scaled[r], s.det, &overflow, max_bits);
+          const QS3 cr = GetDirCos(r);
+          const QS3 sr = GetDirSin(r);
+          const QS3 lhs1 = QS3Mul(cr, s.u, &overflow, max_bits);
+          const QS3 lhs2 = QS3Mul(sr, s.v, &overflow, max_bits);
+          const QS3 lhs12 = QS3Add(lhs1, lhs2, &overflow, max_bits);
+          const QS3 lhs = QS3Add(lhs12, s.m, &overflow, max_bits);
+          const QS3 rhs = QS3Mul(d_scaled[r], s.det, &overflow, max_bits);
           if (overflow) {
             out.refused = true;
             *refuse_reason = "LP3 feasibility overflow";
             return out;
           }
-          QS3 diff = QS3Sub(lhs, rhs, &overflow, max_bits);
+          const QS3 diff = QS3Sub(lhs, rhs, &overflow, max_bits);
           if (overflow) {
             out.refused = true;
             *refuse_reason = "LP3 feasibility diff overflow";
             return out;
           }
-          int sign = SignQS3(diff, &sign_refuse);
-          if (sign_refuse) {
+          const int sign = SignQS3(diff, &ambiguous);
+          if (ambiguous) {
             out.refused = true;
             *refuse_reason = "LP3 feasibility sign ambiguous";
             return out;
@@ -737,8 +826,7 @@ inline ApexResult ComputeApexLP(const QS3 d_scaled[6], int* max_bits, const char
         if (!feasible) {
           continue;
         }
-        // Compare m = s.m/s.det against best via cross-multiply of denominators
-        // (both dets > 0 after canonicalize): m > best_m iff s.m · best_det > best_m · s.det.
+
         if (!best_set) {
           best_m_num = s.m;
           best_det = s.det;
@@ -746,22 +834,21 @@ inline ApexResult ComputeApexLP(const QS3 d_scaled[6], int* max_bits, const char
           best_v_num = s.v;
           best_set = true;
         } else {
-          QS3 lhs = QS3Mul(s.m, best_det, &overflow, max_bits);
-          QS3 rhs = QS3Mul(best_m_num, s.det, &overflow, max_bits);
+          const QS3 lhs = QS3Mul(s.m, best_det, &overflow, max_bits);
+          const QS3 rhs = QS3Mul(best_m_num, s.det, &overflow, max_bits);
           if (overflow) {
             out.refused = true;
             *refuse_reason = "apex compare overflow";
             return out;
           }
-          QS3 diff = QS3Sub(lhs, rhs, &overflow, max_bits);
+          const QS3 diff = QS3Sub(lhs, rhs, &overflow, max_bits);
           if (overflow) {
             out.refused = true;
             *refuse_reason = "apex compare diff overflow";
             return out;
           }
-          bool cmp_refuse = false;
-          int sign = SignQS3(diff, &cmp_refuse);
-          if (cmp_refuse) {
+          const int sign = SignQS3(diff, &ambiguous);
+          if (ambiguous) {
             out.refused = true;
             *refuse_reason = "apex compare sign ambiguous";
             return out;
@@ -789,121 +876,113 @@ inline ApexResult ComputeApexLP(const QS3 d_scaled[6], int* max_bits, const char
 }
 
 // ============================================================================
-// 3-plane intersection point in Q(√3).
+// 3-plane intersection point in PolyQS3(α, β) — general Cramer.
+//   px, py, pz, det are each PolyQS3; the physical point is (px/det, py/det,
+//   pz/det) evaluated at (α = a1, β = a2). All equality tests use the
+//   PolyIsZero / PolyMul primitives; strict feasibility uses PolySign at the
+//   actual (a1, a2).
 // ============================================================================
-//
-// For planes p0, p1, p2 with rows (A, B, C, D), solve
-//   [A0 B0 C0] [x]   [-D0]
-//   [A1 B1 C1] [y] = [-D1]
-//   [A2 B2 C2] [z]   [-D2]
-// Cramer: det = det3([A|B|C]); x_num = det with column 0 replaced by -D;
-// similarly for y, z. Point = (x_num/det, y_num/det, z_num/det).
-struct TriplePoint {
-  QS3 px, py, pz, det;
-  bool degenerate;  // det == 0
+
+struct PolyTriplePoint {
+  PolyQS3 px, py, pz, det;
+  bool degenerate;
 };
 
-inline TriplePoint SolveTriple(const PlaneQS3& p0, const PlaneQS3& p1, const PlaneQS3& p2, bool* overflow,
-                               int* max_bits) {
-  TriplePoint out{};
+inline PolyTriplePoint SolveTriple(const PolyPlane& p0, const PolyPlane& p1, const PolyPlane& p2, bool* overflow,
+                                   int* max_bits) {
+  PolyTriplePoint out{};
   out.degenerate = false;
-  // det via cofactor expansion along row 0.
-  //   det = A0 * (B1·C2 - B2·C1) - B0 * (A1·C2 - A2·C1) + C0 * (A1·B2 - A2·B1)
-  QS3 b1c2 = QS3Mul(p1.B, p2.C, overflow, max_bits);
-  QS3 b2c1 = QS3Mul(p2.B, p1.C, overflow, max_bits);
-  QS3 minor0 = QS3Sub(b1c2, b2c1, overflow, max_bits);
-  QS3 a1c2 = QS3Mul(p1.A, p2.C, overflow, max_bits);
-  QS3 a2c1 = QS3Mul(p2.A, p1.C, overflow, max_bits);
-  QS3 minor1 = QS3Sub(a1c2, a2c1, overflow, max_bits);
-  QS3 a1b2 = QS3Mul(p1.A, p2.B, overflow, max_bits);
-  QS3 a2b1 = QS3Mul(p2.A, p1.B, overflow, max_bits);
-  QS3 minor2 = QS3Sub(a1b2, a2b1, overflow, max_bits);
-  QS3 t0 = QS3Mul(p0.A, minor0, overflow, max_bits);
-  QS3 t1 = QS3Mul(p0.B, minor1, overflow, max_bits);
-  QS3 t2 = QS3Mul(p0.C, minor2, overflow, max_bits);
-  QS3 t01 = QS3Sub(t0, t1, overflow, max_bits);
-  out.det = QS3Add(t01, t2, overflow, max_bits);
-
+  // det = A0·(B1·C2 - B2·C1) - B0·(A1·C2 - A2·C1) + C0·(A1·B2 - A2·B1)
+  const PolyQS3 b1c2 = PolyMul(p1.B, p2.C, overflow, max_bits);
+  const PolyQS3 b2c1 = PolyMul(p2.B, p1.C, overflow, max_bits);
+  const PolyQS3 minor0 = PolySub(b1c2, b2c1, overflow, max_bits);
+  const PolyQS3 a1c2 = PolyMul(p1.A, p2.C, overflow, max_bits);
+  const PolyQS3 a2c1 = PolyMul(p2.A, p1.C, overflow, max_bits);
+  const PolyQS3 minor1 = PolySub(a1c2, a2c1, overflow, max_bits);
+  const PolyQS3 a1b2 = PolyMul(p1.A, p2.B, overflow, max_bits);
+  const PolyQS3 a2b1 = PolyMul(p2.A, p1.B, overflow, max_bits);
+  const PolyQS3 minor2 = PolySub(a1b2, a2b1, overflow, max_bits);
+  const PolyQS3 t0 = PolyMul(p0.A, minor0, overflow, max_bits);
+  const PolyQS3 t1 = PolyMul(p0.B, minor1, overflow, max_bits);
+  const PolyQS3 t2 = PolyMul(p0.C, minor2, overflow, max_bits);
+  const PolyQS3 t01 = PolySub(t0, t1, overflow, max_bits);
+  out.det = PolyAdd(t01, t2, overflow, max_bits);
   if (*overflow) {
     return out;
   }
-  if (IsZero(out.det)) {
+  if (PolyIsZero(out.det)) {
     out.degenerate = true;
     return out;
   }
 
-  QS3 nD0 = QS3Neg(p0.D);
-  QS3 nD1 = QS3Neg(p1.D);
-  QS3 nD2 = QS3Neg(p2.D);
+  const PolyQS3 nD0 = PolyNeg(p0.D);
+  const PolyQS3 nD1 = PolyNeg(p1.D);
+  const PolyQS3 nD2 = PolyNeg(p2.D);
 
-  // x_num: replace column 0 with -D
-  //   = nD0 * (B1·C2 - B2·C1) - B0 * (nD1·C2 - nD2·C1) + C0 * (nD1·B2 - nD2·B1)
-  QS3 nD1c2 = QS3Mul(nD1, p2.C, overflow, max_bits);
-  QS3 nD2c1 = QS3Mul(nD2, p1.C, overflow, max_bits);
-  QS3 xm1 = QS3Sub(nD1c2, nD2c1, overflow, max_bits);
-  QS3 nD1b2 = QS3Mul(nD1, p2.B, overflow, max_bits);
-  QS3 nD2b1 = QS3Mul(nD2, p1.B, overflow, max_bits);
-  QS3 xm2 = QS3Sub(nD1b2, nD2b1, overflow, max_bits);
-  QS3 xt0 = QS3Mul(nD0, minor0, overflow, max_bits);
-  QS3 xt1 = QS3Mul(p0.B, xm1, overflow, max_bits);
-  QS3 xt2 = QS3Mul(p0.C, xm2, overflow, max_bits);
-  QS3 xt01 = QS3Sub(xt0, xt1, overflow, max_bits);
-  out.px = QS3Add(xt01, xt2, overflow, max_bits);
+  const PolyQS3 nD1c2 = PolyMul(nD1, p2.C, overflow, max_bits);
+  const PolyQS3 nD2c1 = PolyMul(nD2, p1.C, overflow, max_bits);
+  const PolyQS3 xm1 = PolySub(nD1c2, nD2c1, overflow, max_bits);
+  const PolyQS3 nD1b2 = PolyMul(nD1, p2.B, overflow, max_bits);
+  const PolyQS3 nD2b1 = PolyMul(nD2, p1.B, overflow, max_bits);
+  const PolyQS3 xm2 = PolySub(nD1b2, nD2b1, overflow, max_bits);
+  const PolyQS3 xt0 = PolyMul(nD0, minor0, overflow, max_bits);
+  const PolyQS3 xt1 = PolyMul(p0.B, xm1, overflow, max_bits);
+  const PolyQS3 xt2 = PolyMul(p0.C, xm2, overflow, max_bits);
+  const PolyQS3 xt01 = PolySub(xt0, xt1, overflow, max_bits);
+  out.px = PolyAdd(xt01, xt2, overflow, max_bits);
 
-  // y_num: replace column 1 with -D
-  //   = A0 * (nD1·C2 - nD2·C1) - nD0 * (A1·C2 - A2·C1) + C0 * (A1·nD2 - A2·nD1)
-  QS3 a1nD2 = QS3Mul(p1.A, nD2, overflow, max_bits);
-  QS3 a2nD1 = QS3Mul(p2.A, nD1, overflow, max_bits);
-  QS3 ym2 = QS3Sub(a1nD2, a2nD1, overflow, max_bits);
-  QS3 yt0 = QS3Mul(p0.A, xm1, overflow, max_bits);
-  QS3 yt1 = QS3Mul(nD0, minor1, overflow, max_bits);
-  QS3 yt2 = QS3Mul(p0.C, ym2, overflow, max_bits);
-  QS3 yt01 = QS3Sub(yt0, yt1, overflow, max_bits);
-  out.py = QS3Add(yt01, yt2, overflow, max_bits);
+  const PolyQS3 a1nD2 = PolyMul(p1.A, nD2, overflow, max_bits);
+  const PolyQS3 a2nD1 = PolyMul(p2.A, nD1, overflow, max_bits);
+  const PolyQS3 ym2 = PolySub(a1nD2, a2nD1, overflow, max_bits);
+  const PolyQS3 yt0 = PolyMul(p0.A, xm1, overflow, max_bits);
+  const PolyQS3 yt1 = PolyMul(nD0, minor1, overflow, max_bits);
+  const PolyQS3 yt2 = PolyMul(p0.C, ym2, overflow, max_bits);
+  const PolyQS3 yt01 = PolySub(yt0, yt1, overflow, max_bits);
+  out.py = PolyAdd(yt01, yt2, overflow, max_bits);
 
-  // z_num: replace column 2 with -D
-  //   = A0 * (B1·nD2 - B2·nD1) - B0 * (A1·nD2 - A2·nD1) + nD0 * (A1·B2 - A2·B1)
-  QS3 b1nD2 = QS3Mul(p1.B, nD2, overflow, max_bits);
-  QS3 b2nD1 = QS3Mul(p2.B, nD1, overflow, max_bits);
-  QS3 zm1 = QS3Sub(b1nD2, b2nD1, overflow, max_bits);
-  QS3 zt0 = QS3Mul(p0.A, zm1, overflow, max_bits);
-  QS3 zt1 = QS3Mul(p0.B, ym2, overflow, max_bits);
-  QS3 zt2 = QS3Mul(nD0, minor2, overflow, max_bits);
-  QS3 zt01 = QS3Sub(zt0, zt1, overflow, max_bits);
-  out.pz = QS3Add(zt01, zt2, overflow, max_bits);
-
+  const PolyQS3 b1nD2 = PolyMul(p1.B, nD2, overflow, max_bits);
+  const PolyQS3 b2nD1 = PolyMul(p2.B, nD1, overflow, max_bits);
+  const PolyQS3 zm1 = PolySub(b1nD2, b2nD1, overflow, max_bits);
+  const PolyQS3 zt0 = PolyMul(p0.A, zm1, overflow, max_bits);
+  const PolyQS3 zt1 = PolyMul(p0.B, ym2, overflow, max_bits);
+  const PolyQS3 zt2 = PolyMul(nD0, minor2, overflow, max_bits);
+  const PolyQS3 zt01 = PolySub(zt0, zt1, overflow, max_bits);
+  out.pz = PolyAdd(zt01, zt2, overflow, max_bits);
   return out;
 }
 
-// IsIncident: plane · (px, py, pz)/det + D = 0 iff
-//   A·px + B·py + C·pz + D·det == 0 (as QS3).
-inline bool IsIncident(const PlaneQS3& plane, QS3 px, QS3 py, QS3 pz, QS3 det, bool* overflow, int* max_bits) {
-  QS3 apx = QS3Mul(plane.A, px, overflow, max_bits);
-  QS3 bpy = QS3Mul(plane.B, py, overflow, max_bits);
-  QS3 cpz = QS3Mul(plane.C, pz, overflow, max_bits);
-  QS3 ddet = QS3Mul(plane.D, det, overflow, max_bits);
-  QS3 sum1 = QS3Add(apx, bpy, overflow, max_bits);
-  QS3 sum2 = QS3Add(sum1, cpz, overflow, max_bits);
-  QS3 sum3 = QS3Add(sum2, ddet, overflow, max_bits);
-  return IsZero(sum3);
+// IncidenceExpr: A·px + B·py + C·pz + D·det as PolyQS3. Consumer decides
+// equality (PolyIsZero) vs strict feasibility (PolySign at (a1, a2)).
+inline PolyQS3 IncidenceExpr(const PolyPlane& plane, const PolyTriplePoint& tp, bool* overflow, int* max_bits) {
+  const PolyQS3 apx = PolyMul(plane.A, tp.px, overflow, max_bits);
+  const PolyQS3 bpy = PolyMul(plane.B, tp.py, overflow, max_bits);
+  const PolyQS3 cpz = PolyMul(plane.C, tp.pz, overflow, max_bits);
+  const PolyQS3 ddet = PolyMul(plane.D, tp.det, overflow, max_bits);
+  const PolyQS3 s1 = PolyAdd(apx, bpy, overflow, max_bits);
+  const PolyQS3 s2 = PolyAdd(s1, cpz, overflow, max_bits);
+  return PolyAdd(s2, ddet, overflow, max_bits);
 }
 
-// IsFeasible: A·px + B·py + C·pz + D·det ≤ 0 (assuming det > 0).
+inline bool IsIncident(const PolyPlane& plane, const PolyTriplePoint& tp, bool* overflow, int* max_bits) {
+  const PolyQS3 expr = IncidenceExpr(plane, tp, overflow, max_bits);
+  if (*overflow) {
+    return false;
+  }
+  return PolyIsZero(expr);
+}
+
 // Returns +1 infeasible, 0 boundary/feasible, -1 refuse.
-inline int IsFeasibleSided(const PlaneQS3& plane, QS3 px, QS3 py, QS3 pz, QS3 det, bool* overflow, int* max_bits,
-                           bool* sign_refuse) {
-  QS3 apx = QS3Mul(plane.A, px, overflow, max_bits);
-  QS3 bpy = QS3Mul(plane.B, py, overflow, max_bits);
-  QS3 cpz = QS3Mul(plane.C, pz, overflow, max_bits);
-  QS3 ddet = QS3Mul(plane.D, det, overflow, max_bits);
-  QS3 sum1 = QS3Add(apx, bpy, overflow, max_bits);
-  QS3 sum2 = QS3Add(sum1, cpz, overflow, max_bits);
-  QS3 sum3 = QS3Add(sum2, ddet, overflow, max_bits);
+inline int IsFeasibleSided(const PolyPlane& plane, const PolyTriplePoint& tp, double alpha_val, double beta_val,
+                           bool* overflow, int* max_bits, bool* ambiguous) {
+  const PolyQS3 expr = IncidenceExpr(plane, tp, overflow, max_bits);
   if (*overflow) {
     return -1;
   }
-  int s = SignQS3(sum3, sign_refuse);
-  if (*sign_refuse) {
+  if (PolyIsZero(expr)) {
+    return 0;
+  }
+  const int s = PolySign(expr, alpha_val, beta_val, ambiguous);
+  if (*ambiguous) {
     return -1;
   }
   return s > 0 ? 1 : 0;
@@ -912,7 +991,7 @@ inline int IsFeasibleSided(const PlaneQS3& plane, QS3 px, QS3 py, QS3 pz, QS3 de
 }  // namespace exact_pyramid_detail
 
 // ============================================================================
-// Public API: takes parameters, constructs planes in Q(√3), enumerates vertices.
+// Public API: takes parameters, constructs planes, enumerates vertices.
 // ============================================================================
 //
 // Usage:
@@ -926,27 +1005,22 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
   int max_bits = 0;
 
   // Legality gate — matches FillHexCrystalCoef (geo3d.cpp:381-382). Must use
-  // the SAME threshold constant as production (math::kFloatEps), not an
-  // independently-chosen literal: a mismatched threshold creates a window
-  // where the oracle and the closed-form implementation disagree on
-  // has_upper/has_lower purely from tolerance drift, not from a genuine
-  // geometric divergence. This is a shared legality-gate CONTRACT with
-  // production, not a structural closed-form assumption, so reusing the
-  // constant does not compromise oracle independence per the file-header
-  // discipline above.
+  // the SAME threshold constant as production (math::kFloatEps); a mismatched
+  // threshold creates a window where the oracle and the closed-form
+  // implementation disagree on has_upper/has_lower purely from tolerance
+  // drift, not from a genuine geometric divergence.
   const bool has_upper = (a1 > 0.0) && (h1 > math::kFloatEps);
   const bool has_lower = (a2 > 0.0) && (h3 > math::kFloatEps);
 
-  // Convert scalar inputs to Q(√3) pure rationals.
+  // Convert scalar inputs to Q(√3) pure rationals; a1 / a2 stay as doubles —
+  // the symbolic α, β representation absorbs them at PolySign eval time only.
   d::QS3 dist_qs[6];
   for (int i = 0; i < 6; i++) {
     dist_qs[i] = d::FloatToQS3(dist[i]);
   }
-  d::QS3 h2_2_qs = d::DoubleToQS3(0.5 * static_cast<double>(h2));
-  d::QS3 a1_qs = has_upper ? d::DoubleToQS3(a1) : d::QS3Zero();
-  d::QS3 a2_qs = has_lower ? d::DoubleToQS3(a2) : d::QS3Zero();
-  d::QS3 h1_qs = has_upper ? d::FloatToQS3(h1) : d::QS3Zero();
-  d::QS3 h3_qs = has_lower ? d::FloatToQS3(h3) : d::QS3Zero();
+  const d::QS3 h2_2_qs = d::FloatToQS3(0.5f * h2);
+  const d::QS3 h1_qs = has_upper ? d::FloatToQS3(h1) : d::QS3Zero();
+  const d::QS3 h3_qs = has_lower ? d::FloatToQS3(h3) : d::QS3Zero();
 
   // Zero-volume short-circuit: no cones and prism section is zero. Same
   // threshold-consistency rationale as the has_upper/has_lower gate above.
@@ -954,14 +1028,13 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
     return out;
   }
 
-  // Build 20 planes (some may be zero/absent placeholders — we track presence).
-  d::PlaneQS3 planes[kExactPyramidMaxPlanes];
+  d::PolyPlane planes[kExactPyramidMaxPlanes];
   bool plane_active[kExactPyramidMaxPlanes] = { false };
   bool overflow = false;
 
   // Prism planes (slots 2..7)
   for (int i = 0; i < 6; i++) {
-    d::BuildPrismPlane(i, dist_qs[i], &planes[2 + i], &overflow, &max_bits);
+    planes[2 + i] = d::BuildPrismPlane(i, dist_qs[i], &overflow, &max_bits);
     plane_active[2 + i] = true;
   }
   if (overflow) {
@@ -973,7 +1046,7 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
 
   if (has_upper) {
     for (int i = 0; i < 6; i++) {
-      d::BuildConePlane(i, a1_qs, h2_2_qs, dist_qs[i], /*upper=*/true, &planes[8 + i], &overflow, &max_bits);
+      planes[8 + i] = d::BuildConePlane(i, /*upper=*/true, h2_2_qs, dist_qs[i], &overflow, &max_bits);
       plane_active[8 + i] = true;
     }
     if (overflow) {
@@ -985,7 +1058,7 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
   }
   if (has_lower) {
     for (int i = 0; i < 6; i++) {
-      d::BuildConePlane(i, a2_qs, h2_2_qs, dist_qs[i], /*upper=*/false, &planes[14 + i], &overflow, &max_bits);
+      planes[14 + i] = d::BuildConePlane(i, /*upper=*/false, h2_2_qs, dist_qs[i], &overflow, &max_bits);
       plane_active[14 + i] = true;
     }
     if (overflow) {
@@ -996,12 +1069,9 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
     }
   }
 
-  // Compute z_top / z_bot via the LP over Q(√3). z_top = h2/2 + h1·a1·m_apex_upper.
-  // For h1 == 1 (apex reached), z_top passes through the apex. For h1 < 1, it truncates.
-  d::QS3 z_top{}, z_bot{};
+  // Basal planes via LP3 apex — pure QS3 (no α, β), then wrap α or β into D.
   if (has_upper || has_lower) {
-    // d_scaled_i = √3/4 · dist[i] = √3 · dist[i] / 4
-    d::QS3 sqrt3_over_4 = { 0, 1, 2 };  // (0 + 1·√3) / 4
+    const d::QS3 sqrt3_over_4 = { 0, 1, 2 };
     d::QS3 d_scaled[6];
     for (int i = 0; i < 6; i++) {
       d_scaled[i] = d::QS3Mul(sqrt3_over_4, dist_qs[i], &overflow, &max_bits);
@@ -1021,147 +1091,95 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
       return out;
     }
     if (!apex.valid) {
-      // Empty feasible region — nothing to build (matches production's early return).
       return out;
     }
-    // m_apex (physical) = apex.m_num / apex.det · (4/√3) since LP m was in LP units.
-    // Actually the LP was: cos·u + sin·v + m ≤ √3/4·dist[i]. So m_LP is at the same
-    // scale as √3/4·dist. Physical m_phys satisfies √3/4·(dist - m_phys) = √3/4·dist - m_LP,
-    // giving m_phys = m_LP · 4/√3 = m_LP · 4√3/3. To convert m_LP to physical, multiply
-    // by (4·√3/3) — or equivalently divide by √3/4 = kInsetK.
-    // Actually simpler: z_top = h2/2 + h1 · a1 · m_phys = h2/2 + h1 · a1 · (m_LP / (√3/4))
-    //                        = h2/2 + h1 · a1 · m_LP · 4/√3
-    //                        = h2/2 + h1 · a1 · m_LP · 4·√3/3.
-    // Compute (4·√3/3) as QS3: numerator 4·√3, denom 3 (no dyadic). Since 3 is not a
-    // power of 2, we cannot represent 1/3 as a pure dyadic QS3.
-    //
-    // BUT: the LP solution already tracks m_num and det. The rational m_phys is exactly
-    //   m_phys = (m_num · 4·√3/3) / det = (4·√3·m_num) / (3·det).
-    // For z_top: h2/2 + h1·a1·m_phys is a rational in Q(√3) (all inputs Q(√3)).
-    //
-    // To keep operands dyadic, express z_top with an aggregate denominator. Compute:
-    //   inner = h1 · a1 · m_num · 4·√3    (numerator)
-    //   denom = 3 · det                    (denominator)
-    //   z_top = (h2/2 · denom + inner) / denom.
-    // Both operands still in Q(√3), and 3·det is Q(√3) (not integer). We don't need
-    // to normalize dyadically; QS3 arithmetic handles it.
 
-    d::QS3 four_sqrt3 = { 0, 4, 0 };  // 4·√3 = (0 + 4·√3)/1
-    d::QS3 three = { 3, 0, 0 };
-
+    // z_top = h2/2 + h1·α·m_apex·(4/√3), keeping (num, denom) implicit.
+    // Basal plane: (0, 0, C, D) with C = z_top_denom (pure QS3, α-free) and
+    // D = -z_top_num (α-linear polynomial). Under the α, β decomposition:
+    //   z_top_denom = 3 · m_top_det                              (QS3)
+    //   z_top_num   = h2/2 · z_top_denom + α · h1·m_top_num·4√3  (PolyQS3)
+    // The h1 (or h3) < 1 clamp reduces to m_top_num := h1·m_apex; else keep
+    // apex m directly (h1 ≥ 1 saturates at apex).
+    const d::QS3 four_sqrt3 = { 0, 4, 0 };
+    const d::QS3 three = { 3, 0, 0 };
     if (has_upper) {
-      // clamp: m_top_LP = min(h1 · m_apex_LP, m_apex_LP)  — production behavior.
-      // Since we represent m_apex as (m_num / det), we compute:
-      //   candidate = h1 · m_num / det.
-      //   if h1 > 1: cap at m_apex → m_top = m_num / det.
-      //   else: m_top = h1·m_num / det.
-      // Compare h1 vs 1 (both Q(√3)):
-      d::QS3 one_qs = d::IntToQS3(1);
-      bool cmp_refuse = false;
-      int cmp = d::CompareQS3(h1_qs, one_qs, &overflow, &max_bits, &cmp_refuse);
-      if (overflow || cmp_refuse) {
+      bool ambiguous = false;
+      const int cmp = d::CompareQS3(h1_qs, d::IntToQS3(1), &overflow, &max_bits, &ambiguous);
+      if (overflow || ambiguous) {
         out.refused = true;
         out.refuse_reason = "h1 vs 1 compare failed";
         out.max_intermediate_bits = max_bits;
         return out;
       }
-      d::QS3 m_top_num;
-      if (cmp >= 0) {
-        m_top_num = apex.m_num;
-      } else {
-        m_top_num = d::QS3Mul(h1_qs, apex.m_num, &overflow, &max_bits);
-      }
-      d::QS3 m_top_det = apex.det;
-      // z_top = h2/2 + a1 · m_top_num · (4·√3) / (3 · m_top_det)
-      // Represent as z_top_num / z_top_denom where z_top_denom = 3·m_top_det, and
-      // z_top_num = h2/2 · z_top_denom + a1 · m_top_num · 4·√3.
-      d::QS3 z_top_denom = d::QS3Mul(three, m_top_det, &overflow, &max_bits);
-      d::QS3 a1_mtop_4s3 = d::QS3Mul(a1_qs, m_top_num, &overflow, &max_bits);
-      a1_mtop_4s3 = d::QS3Mul(a1_mtop_4s3, four_sqrt3, &overflow, &max_bits);
-      d::QS3 h2_2_zd = d::QS3Mul(h2_2_qs, z_top_denom, &overflow, &max_bits);
-      d::QS3 z_top_num = d::QS3Add(h2_2_zd, a1_mtop_4s3, &overflow, &max_bits);
+      const d::QS3 m_top_num = (cmp >= 0) ? apex.m_num : d::QS3Mul(h1_qs, apex.m_num, &overflow, &max_bits);
+      const d::QS3 m_top_det = apex.det;
+      const d::QS3 z_top_denom = d::QS3Mul(three, m_top_det, &overflow, &max_bits);
+      const d::QS3 m_num_times_4sqrt3 = d::QS3Mul(m_top_num, four_sqrt3, &overflow, &max_bits);
+      const d::QS3 h2_2_zd = d::QS3Mul(h2_2_qs, z_top_denom, &overflow, &max_bits);
       if (overflow) {
         out.refused = true;
         out.refuse_reason = "z_top compute overflow";
         out.max_intermediate_bits = max_bits;
         return out;
       }
-      // Upper basal plane: (0, 0, 1, -z_top). To express -z_top in QS3 alone, we'd
-      // need to divide z_top_num by z_top_denom. Instead, embed the fraction into
-      // the plane: (0, 0, z_top_denom, -z_top_num). This scales the plane by
-      // z_top_denom (which is positive by canonicalize). Half-space
-      //   z_top_denom · z ≤ z_top_num
-      // is equivalent to z ≤ z_top_num / z_top_denom = z_top.
-      // For consistency with other planes (each has A, B, C in Q(√3)), we set C =
-      // z_top_denom and D = -z_top_num.
-      planes[0].A = d::QS3Zero();
-      planes[0].B = d::QS3Zero();
-      planes[0].C = z_top_denom;
-      planes[0].D = d::QS3Neg(z_top_num);
+      d::PolyQS3 z_top_num = d::PolyZero();
+      z_top_num.c[0][0] = h2_2_zd;
+      z_top_num.c[1][0] = m_num_times_4sqrt3;
+      planes[0].A = d::PolyZero();
+      planes[0].B = d::PolyZero();
+      planes[0].C = d::PolyFromQS3(z_top_denom);
+      planes[0].D = d::PolyNeg(z_top_num);
       plane_active[0] = true;
-      // Compute physical z_top for reporting.
-      double zt = d::QS3ToDouble(z_top_num) / d::QS3ToDouble(z_top_denom);
-      z_top = d::DoubleToQS3(zt);  // approximate for reporting only
-      (void)z_top;
     }
     if (has_lower) {
-      d::QS3 one_qs = d::IntToQS3(1);
-      bool cmp_refuse = false;
-      int cmp = d::CompareQS3(h3_qs, one_qs, &overflow, &max_bits, &cmp_refuse);
-      if (overflow || cmp_refuse) {
+      bool ambiguous = false;
+      const int cmp = d::CompareQS3(h3_qs, d::IntToQS3(1), &overflow, &max_bits, &ambiguous);
+      if (overflow || ambiguous) {
         out.refused = true;
         out.refuse_reason = "h3 vs 1 compare failed";
         out.max_intermediate_bits = max_bits;
         return out;
       }
-      d::QS3 m_bot_num;
-      if (cmp >= 0) {
-        m_bot_num = apex.m_num;
-      } else {
-        m_bot_num = d::QS3Mul(h3_qs, apex.m_num, &overflow, &max_bits);
-      }
-      d::QS3 m_bot_det = apex.det;
-      // z_bot = -h2/2 - a2 · m_bot_num · (4·√3) / (3 · m_bot_det)
-      d::QS3 z_bot_denom = d::QS3Mul(three, m_bot_det, &overflow, &max_bits);
-      d::QS3 a2_mbot_4s3 = d::QS3Mul(a2_qs, m_bot_num, &overflow, &max_bits);
-      a2_mbot_4s3 = d::QS3Mul(a2_mbot_4s3, four_sqrt3, &overflow, &max_bits);
-      d::QS3 neg_h2_2 = d::QS3Neg(h2_2_qs);
-      d::QS3 neg_h2_2_zd = d::QS3Mul(neg_h2_2, z_bot_denom, &overflow, &max_bits);
-      d::QS3 neg_a2 = d::QS3Neg(a2_mbot_4s3);
-      d::QS3 z_bot_num = d::QS3Add(neg_h2_2_zd, neg_a2, &overflow, &max_bits);
+      const d::QS3 m_bot_num = (cmp >= 0) ? apex.m_num : d::QS3Mul(h3_qs, apex.m_num, &overflow, &max_bits);
+      const d::QS3 m_bot_det = apex.det;
+      const d::QS3 z_bot_denom = d::QS3Mul(three, m_bot_det, &overflow, &max_bits);
+      const d::QS3 m_num_times_4sqrt3 = d::QS3Mul(m_bot_num, four_sqrt3, &overflow, &max_bits);
+      const d::QS3 neg_h2_2 = d::QS3Neg(h2_2_qs);
+      const d::QS3 neg_h2_2_zd = d::QS3Mul(neg_h2_2, z_bot_denom, &overflow, &max_bits);
       if (overflow) {
         out.refused = true;
         out.refuse_reason = "z_bot compute overflow";
         out.max_intermediate_bits = max_bits;
         return out;
       }
-      // Lower basal plane: (0, 0, -1, z_bot) with our scaling.
-      //   -z ≤ -z_bot ⇔ z ≥ z_bot. So (0, 0, -z_bot_denom, z_bot_num).
-      planes[1].A = d::QS3Zero();
-      planes[1].B = d::QS3Zero();
-      planes[1].C = d::QS3Neg(z_bot_denom);
+      // Lower basal encodes z ≥ z_bot as -z ≤ -z_bot:
+      //   plane = (0, 0, -z_bot_denom, +z_bot_num), where
+      //   z_bot_num = -h2/2·z_bot_denom - β·(m_bot_num · 4√3)   (β-linear)
+      d::PolyQS3 z_bot_num = d::PolyZero();
+      z_bot_num.c[0][0] = neg_h2_2_zd;
+      z_bot_num.c[0][1] = d::QS3Neg(m_num_times_4sqrt3);
+      planes[1].A = d::PolyZero();
+      planes[1].B = d::PolyZero();
+      planes[1].C = d::PolyFromQS3(d::QS3Neg(z_bot_denom));
       planes[1].D = z_bot_num;
       plane_active[1] = true;
-      z_bot = d::DoubleToQS3(d::QS3ToDouble(z_bot_num) / d::QS3ToDouble(z_bot_denom));
-      (void)z_bot;
     }
   } else {
     // Pure prism: no cones. Basal planes are (0, 0, ±1, ∓h2/2).
-    // Upper basal (0, 0, 1, -h2/2), lower basal (0, 0, -1, -h2/2). Both active.
-    d::QS3 neg_h2_2 = d::QS3Neg(h2_2_qs);
-    planes[0].A = d::QS3Zero();
-    planes[0].B = d::QS3Zero();
-    planes[0].C = d::IntToQS3(1);
-    planes[0].D = neg_h2_2;
+    const d::QS3 neg_h2_2 = d::QS3Neg(h2_2_qs);
+    planes[0].A = d::PolyZero();
+    planes[0].B = d::PolyZero();
+    planes[0].C = d::PolyFromQS3(d::IntToQS3(1));
+    planes[0].D = d::PolyFromQS3(neg_h2_2);
     plane_active[0] = true;
-    planes[1].A = d::QS3Zero();
-    planes[1].B = d::QS3Zero();
-    planes[1].C = d::IntToQS3(-1);
-    planes[1].D = neg_h2_2;
+    planes[1].A = d::PolyZero();
+    planes[1].B = d::PolyZero();
+    planes[1].C = d::PolyFromQS3(d::IntToQS3(-1));
+    planes[1].D = d::PolyFromQS3(neg_h2_2);
     plane_active[1] = true;
   }
 
-  // Compact active plane indices.
   int active_idx[kExactPyramidMaxPlanes];
   int active_n = 0;
   for (int i = 0; i < kExactPyramidMaxPlanes; i++) {
@@ -1170,22 +1188,24 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
     }
   }
 
-  // Enumerate C(active_n, 3) triples.
   struct Vertex {
-    d::QS3 px, py, pz, det;
-    int def_plane[3];  // active-slot indices of the defining triple
+    d::PolyTriplePoint tp;
+    int def_plane[3];
   };
   Vertex verts[kExactPyramidMaxVtx];
   int vtx_cnt = 0;
 
+  const double alpha_val = has_upper ? a1 : 0.0;
+  const double beta_val = has_lower ? a2 : 0.0;
+
   for (int a = 0; a < active_n; a++) {
     for (int b = a + 1; b < active_n; b++) {
       for (int c = b + 1; c < active_n; c++) {
-        int i = active_idx[a];
-        int j = active_idx[b];
-        int k = active_idx[c];
+        const int i = active_idx[a];
+        const int j = active_idx[b];
+        const int k = active_idx[c];
         bool overflow_t = false;
-        d::TriplePoint tp = d::SolveTriple(planes[i], planes[j], planes[k], &overflow_t, &max_bits);
+        d::PolyTriplePoint tp = d::SolveTriple(planes[i], planes[j], planes[k], &overflow_t, &max_bits);
         if (overflow_t) {
           out.refused = true;
           out.refuse_reason = "triple solve overflow";
@@ -1195,26 +1215,16 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
         if (tp.degenerate) {
           continue;
         }
-        // Canonicalize det > 0.
-        bool sign_refuse = false;
-        d::CanonicalizeSign(&tp.px, &tp.py, &tp.pz, &tp.det, &sign_refuse);
-        if (sign_refuse) {
-          out.refused = true;
-          out.refuse_reason = "triple det sign ambiguous";
-          out.max_intermediate_bits = max_bits;
-          return out;
-        }
-        // Reduce integer GCD to keep operands smaller for downstream ops.
-        d::ReducePoint(&tp.px, &tp.py, &tp.pz, &tp.det);
 
-        // Feasibility: check against all active planes (not just the defining 3).
+        // Feasibility over all other active planes.
         bool feasible = true;
         for (int r = 0; r < active_n; r++) {
-          int p_idx = active_idx[r];
+          const int p_idx = active_idx[r];
           if (p_idx == i || p_idx == j || p_idx == k) {
             continue;
           }
-          int fr = d::IsFeasibleSided(planes[p_idx], tp.px, tp.py, tp.pz, tp.det, &overflow_t, &max_bits, &sign_refuse);
+          bool ambiguous = false;
+          const int fr = d::IsFeasibleSided(planes[p_idx], tp, alpha_val, beta_val, &overflow_t, &max_bits, &ambiguous);
           if (fr == -1) {
             out.refused = true;
             out.refuse_reason = overflow_t ? "feasibility overflow" : "feasibility sign ambiguous";
@@ -1230,19 +1240,18 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
           continue;
         }
 
-        // Dedup: is this point already in the pool? A candidate matches an
-        // existing vertex iff it is incident to ALL 3 of that vertex's defining
-        // planes (equivalently, they share 3 planes' concurrence).
+        // Dedup by incidence: candidate matches an existing vertex iff it
+        // sits on all three defining planes of that vertex.
         int existing = -1;
         for (int v = 0; v < vtx_cnt; v++) {
           bool all_incident = true;
           for (int q = 0; q < 3; q++) {
-            int p_idx = verts[v].def_plane[q];
+            const int p_idx = verts[v].def_plane[q];
             if (p_idx == i || p_idx == j || p_idx == k) {
-              continue;  // trivially incident by construction
+              continue;
             }
             bool ov = false;
-            if (!d::IsIncident(planes[p_idx], tp.px, tp.py, tp.pz, tp.det, &ov, &max_bits)) {
+            if (!d::IsIncident(planes[p_idx], tp, &ov, &max_bits)) {
               all_incident = false;
               break;
             }
@@ -1263,10 +1272,7 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
             std::fprintf(stderr, "FATAL: ExactPyramid vertex pool overflow (%d)\n", vtx_cnt);
             std::abort();
           }
-          verts[vtx_cnt].px = tp.px;
-          verts[vtx_cnt].py = tp.py;
-          verts[vtx_cnt].pz = tp.pz;
-          verts[vtx_cnt].det = tp.det;
+          verts[vtx_cnt].tp = tp;
           verts[vtx_cnt].def_plane[0] = i;
           verts[vtx_cnt].def_plane[1] = j;
           verts[vtx_cnt].def_plane[2] = k;
@@ -1276,20 +1282,19 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
     }
   }
 
-  // Compute per-plane vertex counts via incidence tests over all planes.
+  // Per-plane vertex counts via incidence.
   int face_vtx[kExactPyramidMaxPlanes] = { 0 };
   for (int v = 0; v < vtx_cnt; v++) {
     for (int p = 0; p < kExactPyramidMaxPlanes; p++) {
       if (!plane_active[p]) {
         continue;
       }
-      // Fast path: if p is one of the defining triple, it's incident.
       if (verts[v].def_plane[0] == p || verts[v].def_plane[1] == p || verts[v].def_plane[2] == p) {
         face_vtx[p]++;
         continue;
       }
       bool ov = false;
-      if (d::IsIncident(planes[p], verts[v].px, verts[v].py, verts[v].pz, verts[v].det, &ov, &max_bits)) {
+      if (d::IsIncident(planes[p], verts[v].tp, &ov, &max_bits)) {
         face_vtx[p]++;
       }
       if (ov) {
@@ -1301,13 +1306,31 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
     }
   }
 
-  // Fill output.
   out.vertex_count = vtx_cnt;
   for (int v = 0; v < vtx_cnt; v++) {
-    double det_d = d::QS3ToDouble(verts[v].det);
-    out.vertex_xyz[v][0] = d::QS3ToDouble(verts[v].px) / det_d;
-    out.vertex_xyz[v][1] = d::QS3ToDouble(verts[v].py) / det_d;
-    out.vertex_xyz[v][2] = d::QS3ToDouble(verts[v].pz) / det_d;
+    // Evaluate PolyQS3 at (alpha_val, beta_val) → double.
+    // Only PolySign is used inside the engine; we build a small ad-hoc
+    // evaluator here to avoid an extra API surface.
+    auto eval = [&](const d::PolyQS3& p) -> double {
+      const double kSqrt3D = 1.7320508075688772;
+      double val = 0.0;
+      for (int i = 0; i <= d::kMaxJointDeg; i++) {
+        for (int j = 0; j <= d::kMaxJointDeg - i; j++) {
+          const d::QS3& q = p.c[i][j];
+          if (d::IsZero(q)) {
+            continue;
+          }
+          const double coeff =
+              (static_cast<double>(q.a) + static_cast<double>(q.b) * kSqrt3D) * std::ldexp(1.0, -q.shift);
+          val += coeff * std::pow(alpha_val, i) * std::pow(beta_val, j);
+        }
+      }
+      return val;
+    };
+    const double det_d = eval(verts[v].tp.det);
+    out.vertex_xyz[v][0] = eval(verts[v].tp.px) / det_d;
+    out.vertex_xyz[v][1] = eval(verts[v].tp.py) / det_d;
+    out.vertex_xyz[v][2] = eval(verts[v].tp.pz) / det_d;
   }
   for (int p = 0; p < kExactPyramidMaxPlanes; p++) {
     out.face_vertex_count[p] = face_vtx[p];
@@ -1319,7 +1342,5 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
 
 }  // namespace test_support
 }  // namespace lumice
-
-#endif  // defined(__SIZEOF_INT128__)
 
 #endif  // LUMICE_TEST_SUPPORT_EXACT_PYRAMID_ORACLE_HPP_
