@@ -64,8 +64,26 @@ static_assert((kHexFaceCos[1] * kHexFaceCos[1] + kHexFaceSin[1] * kHexFaceSin[1]
               "kHexFace[1] not unit");
 static_assert(1.0 - (kHexFaceCos[1] * kHexFaceCos[1] + kHexFaceSin[1] * kHexFaceSin[1]) < 1e-15,
               "kHexFace[1] not unit");
+static_assert((kHexFaceCos[2] * kHexFaceCos[2] + kHexFaceSin[2] * kHexFaceSin[2]) - 1.0 < 1e-15,
+              "kHexFace[2] not unit");
+static_assert(1.0 - (kHexFaceCos[2] * kHexFaceCos[2] + kHexFaceSin[2] * kHexFaceSin[2]) < 1e-15,
+              "kHexFace[2] not unit");
+static_assert((kHexFaceCos[4] * kHexFaceCos[4] + kHexFaceSin[4] * kHexFaceSin[4]) - 1.0 < 1e-15,
+              "kHexFace[4] not unit");
+static_assert(1.0 - (kHexFaceCos[4] * kHexFaceCos[4] + kHexFaceSin[4] * kHexFaceSin[4]) < 1e-15,
+              "kHexFace[4] not unit");
+static_assert((kHexFaceCos[5] * kHexFaceCos[5] + kHexFaceSin[5] * kHexFaceSin[5]) - 1.0 < 1e-15,
+              "kHexFace[5] not unit");
+static_assert(1.0 - (kHexFaceCos[5] * kHexFaceCos[5] + kHexFaceSin[5] * kHexFaceSin[5]) < 1e-15,
+              "kHexFace[5] not unit");
 static_assert((kHexVtxCos[0] * kHexVtxCos[0] + kHexVtxSin[0] * kHexVtxSin[0]) - 1.0 < 1e-15, "kHexVtx[0] not unit");
 static_assert(1.0 - (kHexVtxCos[0] * kHexVtxCos[0] + kHexVtxSin[0] * kHexVtxSin[0]) < 1e-15, "kHexVtx[0] not unit");
+static_assert((kHexVtxCos[1] * kHexVtxCos[1] + kHexVtxSin[1] * kHexVtxSin[1]) - 1.0 < 1e-15, "kHexVtx[1] not unit");
+static_assert(1.0 - (kHexVtxCos[1] * kHexVtxCos[1] + kHexVtxSin[1] * kHexVtxSin[1]) < 1e-15, "kHexVtx[1] not unit");
+static_assert((kHexVtxCos[3] * kHexVtxCos[3] + kHexVtxSin[3] * kHexVtxSin[3]) - 1.0 < 1e-15, "kHexVtx[3] not unit");
+static_assert(1.0 - (kHexVtxCos[3] * kHexVtxCos[3] + kHexVtxSin[3] * kHexVtxSin[3]) < 1e-15, "kHexVtx[3] not unit");
+static_assert((kHexVtxCos[4] * kHexVtxCos[4] + kHexVtxSin[4] * kHexVtxSin[4]) - 1.0 < 1e-15, "kHexVtx[4] not unit");
+static_assert(1.0 - (kHexVtxCos[4] * kHexVtxCos[4] + kHexVtxSin[4] * kHexVtxSin[4]) < 1e-15, "kHexVtx[4] not unit");
 
 // Coarse-grained structural branches walked by the shared 2D cross-section
 // solver. Recorded per invocation as a bitmask; the pyramid evaluator OR-unions
