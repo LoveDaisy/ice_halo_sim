@@ -47,6 +47,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -54,6 +55,7 @@
 #include "core/geo3d_closedform.hpp"
 #include "core/math.hpp"
 #include "golden-analytic/core/closed_form_samples_generated.hpp"
+#include "golden-analytic/core/pyramid_oracle_int128_reference_generated.hpp"
 #include "support/exact_pyramid_oracle.hpp"
 
 namespace lumice {
@@ -798,6 +800,179 @@ TEST_P(DegeneratePyramidSweep, DivergencesExplainableByMergeTolerance) {
 }
 
 INSTANTIATE_TEST_SUITE_P(DegenerateSigmas, DegeneratePyramidSweep, ::testing::Values(0, 1));
+
+// ============================================================================
+// §4.A oracle-vs-reference permanent golden — the primary anti-false-green
+// guard. Directly compares the current oracle's vertex_count against the
+// __int128 predecessor's captured vertex_count on all ten fixed pyramid
+// sample pools (see pyramid_oracle_int128_reference_generated.hpp). Consumes
+// the oracle output IN ISOLATION — cf and prod are not evaluated here — so
+// no amount of cf/prod agreement can mask a broken oracle (the failure mode
+// that let the 40e3f2ae rewrite self-report 76/76 green while producing
+// systematically-low vertex counts on 549/549 non-refused samples).
+//
+// Two per-sample assertion regimes:
+//   ref != -1  (predecessor produced a definite count):
+//       new oracle must agree, i.e. NOT refused AND vertex_count == ref.
+//   ref == -1  (predecessor refused, __int128 arithmetic budget exhausted):
+//       the symbolic-alpha engine's whole point is to resolve these under
+//       an int64 budget — the entire pool of 258 such samples is expected
+//       to resolve. Assertion: new oracle NOT refused AND vertex_count
+//       matches cf (the golden-analytic three-way test already establishes
+//       cf as the trusted witness on this pool). No exception whitelist is
+//       needed at this time; if resolve count later regresses, add a
+//       CONSTEXPR array of (pool, idx) exclusions in this file WITH
+//       per-entry justification and tighten the assertion on the remaining
+//       samples — never soften the assertion itself to hide the regression,
+//       since a loosened predicate on the whole set is exactly the
+//       false-green pattern this TEST exists to prevent.
+// ============================================================================
+
+struct OracleReferencePool {
+  const char* label;
+  const test_support::PyramidDirectSample* samples;
+  size_t samples_size;
+  const int* ref_vtx;
+  size_t ref_size;
+};
+
+TEST(ClosedFormPyramid, OracleMatchesInt128ReferenceOnFixedPools) {
+  // Compile-time invariant: the reference-vertex array length must match its
+  // corresponding sample-pool array length. Catches silent index-misalignment
+  // if either array is regenerated without the other.
+  static_assert(std::size(test_support::kPyramidWellConditionedOracleRefVtx) ==
+                std::size(test_support::kPyramidWellConditionedSamples));
+  static_assert(std::size(test_support::kPyramidMillerOracleRefVtx) == std::size(test_support::kPyramidMillerSamples));
+  static_assert(std::size(test_support::kPyramidFlatTailAlpha85OracleRefVtx) ==
+                std::size(test_support::kPyramidFlatTailAlpha85Samples));
+  static_assert(std::size(test_support::kPyramidFlatTailAlpha87OracleRefVtx) ==
+                std::size(test_support::kPyramidFlatTailAlpha87Samples));
+  static_assert(std::size(test_support::kPyramidFlatTailAlpha875OracleRefVtx) ==
+                std::size(test_support::kPyramidFlatTailAlpha875Samples));
+  static_assert(std::size(test_support::kPyramidFlatTailAlpha88OracleRefVtx) ==
+                std::size(test_support::kPyramidFlatTailAlpha88Samples));
+  static_assert(std::size(test_support::kPyramidFlatTailAlpha89OracleRefVtx) ==
+                std::size(test_support::kPyramidFlatTailAlpha89Samples));
+  static_assert(std::size(test_support::kPyramidFlatTailAlpha895OracleRefVtx) ==
+                std::size(test_support::kPyramidFlatTailAlpha895Samples));
+  static_assert(std::size(test_support::kPyramidDegenerateSigma030OracleRefVtx) ==
+                std::size(test_support::kPyramidDegenerateSigma030Samples));
+  static_assert(std::size(test_support::kPyramidDegenerateSigma050OracleRefVtx) ==
+                std::size(test_support::kPyramidDegenerateSigma050Samples));
+
+  const OracleReferencePool direct_pools[] = {
+    { "wc", test_support::kPyramidWellConditionedSamples, std::size(test_support::kPyramidWellConditionedSamples),
+      test_support::kPyramidWellConditionedOracleRefVtx, std::size(test_support::kPyramidWellConditionedOracleRefVtx) },
+    { "f85", test_support::kPyramidFlatTailAlpha85Samples, std::size(test_support::kPyramidFlatTailAlpha85Samples),
+      test_support::kPyramidFlatTailAlpha85OracleRefVtx, std::size(test_support::kPyramidFlatTailAlpha85OracleRefVtx) },
+    { "f87", test_support::kPyramidFlatTailAlpha87Samples, std::size(test_support::kPyramidFlatTailAlpha87Samples),
+      test_support::kPyramidFlatTailAlpha87OracleRefVtx, std::size(test_support::kPyramidFlatTailAlpha87OracleRefVtx) },
+    { "f875", test_support::kPyramidFlatTailAlpha875Samples, std::size(test_support::kPyramidFlatTailAlpha875Samples),
+      test_support::kPyramidFlatTailAlpha875OracleRefVtx,
+      std::size(test_support::kPyramidFlatTailAlpha875OracleRefVtx) },
+    { "f88", test_support::kPyramidFlatTailAlpha88Samples, std::size(test_support::kPyramidFlatTailAlpha88Samples),
+      test_support::kPyramidFlatTailAlpha88OracleRefVtx, std::size(test_support::kPyramidFlatTailAlpha88OracleRefVtx) },
+    { "f89", test_support::kPyramidFlatTailAlpha89Samples, std::size(test_support::kPyramidFlatTailAlpha89Samples),
+      test_support::kPyramidFlatTailAlpha89OracleRefVtx, std::size(test_support::kPyramidFlatTailAlpha89OracleRefVtx) },
+    { "f895", test_support::kPyramidFlatTailAlpha895Samples, std::size(test_support::kPyramidFlatTailAlpha895Samples),
+      test_support::kPyramidFlatTailAlpha895OracleRefVtx,
+      std::size(test_support::kPyramidFlatTailAlpha895OracleRefVtx) },
+    { "d30", test_support::kPyramidDegenerateSigma030Samples,
+      std::size(test_support::kPyramidDegenerateSigma030Samples), test_support::kPyramidDegenerateSigma030OracleRefVtx,
+      std::size(test_support::kPyramidDegenerateSigma030OracleRefVtx) },
+    { "d50", test_support::kPyramidDegenerateSigma050Samples,
+      std::size(test_support::kPyramidDegenerateSigma050Samples), test_support::kPyramidDegenerateSigma050OracleRefVtx,
+      std::size(test_support::kPyramidDegenerateSigma050OracleRefVtx) },
+  };
+
+  long matched = 0;
+  long resolved_previously_refused = 0;
+  long mismatched = 0;
+  long refused_now = 0;
+
+  // Degenerate pools (σ=0.30, σ=0.50) are selected so min_sep < prod_merge_tol
+  // — vertices sit inside the closed-form's fuzzy-merge boundary; cf will
+  // merge two barely-separated corners while the exact oracle keeps them
+  // distinct, so cf and oracle CAN legitimately differ by one vertex here.
+  // The α=89.5° flat-tail pool (f895) is in the same regime: at this wedge
+  // angle upper cone faces are essentially parallel to basal, and merge-
+  // tolerance-boundary corner clusters recur — DegeneratePyramidSweep and
+  // ExtremeFlatTailSweep already characterize both regimes as "cf may
+  // legitimately deviate from any single witness by 1 vertex". So on samples
+  // the __int128 predecessor refused, this test's invariant for those pools
+  // is REDUCED to "oracle now RESOLVES (not refused)"; comparison against
+  // cf's fuzzy-merge output would spuriously fail.
+  auto is_fuzzy_regime_pool = [](const char* label) {
+    if (label == nullptr) {
+      return false;
+    }
+    const std::string_view s(label);
+    return s == "d30" || s == "d50" || s == "f895";
+  };
+
+  auto check_one = [&](const char* pool_label, size_t idx, const SampleResult& r, int ref) {
+    if (ref != -1) {
+      // Predecessor gave a definite count — new oracle must agree.
+      EXPECT_FALSE(r.oracle_refused) << pool_label << "#" << idx << ": oracle refused where the __int128 predecessor "
+                                     << "answered ref=" << ref;
+      if (!r.oracle_refused) {
+        if (r.oracle_vtx == ref) {
+          matched++;
+        } else {
+          mismatched++;
+          std::fprintf(stderr, "[%s#%zu MISMATCH] oracle=%d ref=%d cf=%d prod=%d\n", pool_label, idx, r.oracle_vtx, ref,
+                       r.cf_vtx, r.prod_vtx);
+          EXPECT_EQ(r.oracle_vtx, ref) << pool_label << "#" << idx << ": new oracle disagrees with __int128 reference";
+        }
+      } else {
+        refused_now++;
+      }
+    } else {
+      // Predecessor refused — symbolic-alpha engine must at least resolve.
+      EXPECT_FALSE(r.oracle_refused) << pool_label << "#" << idx << ": oracle still refused where __int128 refused; "
+                                     << "the symbolic-alpha engine was supposed to resolve this class of samples";
+      if (!r.oracle_refused) {
+        resolved_previously_refused++;
+        if (!is_fuzzy_regime_pool(pool_label)) {
+          EXPECT_EQ(r.oracle_vtx, r.cf_vtx)
+              << pool_label << "#" << idx << ": oracle resolved to " << r.oracle_vtx << " but cf reports " << r.cf_vtx
+              << " on a sample the __int128 predecessor refused";
+        }
+      } else {
+        refused_now++;
+      }
+    }
+  };
+
+  for (const auto& pool : direct_pools) {
+    ASSERT_EQ(pool.samples_size, pool.ref_size) << pool.label << ": pool/reference length mismatch";
+    for (size_t i = 0; i < pool.samples_size; i++) {
+      PyramidSample s = MakeSample(pool.samples[i]);
+      auto r = AdjudicateDirect(s);
+      check_one(pool.label, i, r, pool.ref_vtx[i]);
+    }
+  }
+
+  // Miller pool goes through AdjudicateMiller (integer-pair alpha derivation).
+  ASSERT_EQ(std::size(test_support::kPyramidMillerSamples), std::size(test_support::kPyramidMillerOracleRefVtx));
+  for (size_t i = 0; i < std::size(test_support::kPyramidMillerSamples); i++) {
+    const auto& m = test_support::kPyramidMillerSamples[i];
+    PyramidSample s;
+    s.upper_alpha = 0.0f;
+    s.lower_alpha = 0.0f;
+    s.h1 = m.h1;
+    s.h2 = m.h2;
+    s.h3 = m.h3;
+    for (int j = 0; j < kSideCnt; j++) {
+      s.dist[j] = m.dist[j];
+    }
+    auto r = AdjudicateMiller(m.upper_i1, m.upper_i4, m.lower_i1, m.lower_i4, s);
+    check_one("mil", i, r, test_support::kPyramidMillerOracleRefVtx[i]);
+  }
+
+  std::fprintf(stderr, "[oracle-vs-reference] matched=%ld resolved_prev_refused=%ld mismatched=%ld refused_now=%ld\n",
+               matched, resolved_previously_refused, mismatched, refused_now);
+}
 
 }  // namespace
 }  // namespace lumice
