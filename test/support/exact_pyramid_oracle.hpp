@@ -446,10 +446,13 @@ inline PolyQS3 PolySub(const PolyQS3& x, const PolyQS3& y, bool* overflow, int* 
   return PolyAdd(x, PolyNeg(y), overflow, max_bits);
 }
 
-// PolyMul with degree bound: any product whose joint degree exceeds kMaxJointDeg
-// is a design violation, not a truncation. The loop bounds implicitly limit
-// this to the safe region — anything outside must have been introduced by an
-// operation not covered by the plane-degree analysis in the file header.
+// PolyMul with degree bound: enumerate the FULL triangular storage of both
+// operands and refuse (set *overflow = true, skip the write) when the summed
+// joint degree would exceed kMaxJointDeg. Any such product is a design
+// violation of the "plane joint degree ≤ 4" analysis in the file header;
+// silently dropping the term (as the previous loop-bound-tightened form did)
+// would let a fresh degree-growing operation return numerically wrong
+// polynomials with no signal. Refuse-not-truncate is the required contract.
 inline PolyQS3 PolyMul(const PolyQS3& x, const PolyQS3& y, bool* overflow, int* max_bits) {
   PolyQS3 out = PolyZero();
   for (int i1 = 0; i1 <= kMaxJointDeg; i1++) {
@@ -457,9 +460,13 @@ inline PolyQS3 PolyMul(const PolyQS3& x, const PolyQS3& y, bool* overflow, int* 
       if (IsZero(x.c[i1][j1])) {
         continue;
       }
-      for (int i2 = 0; i2 <= kMaxJointDeg - i1 - j1; i2++) {
-        for (int j2 = 0; j2 <= kMaxJointDeg - i1 - j1 - i2; j2++) {
+      for (int i2 = 0; i2 <= kMaxJointDeg; i2++) {
+        for (int j2 = 0; j2 <= kMaxJointDeg - i2; j2++) {
           if (IsZero(y.c[i2][j2])) {
+            continue;
+          }
+          if (i1 + i2 + j1 + j2 > kMaxJointDeg) {
+            *overflow = true;
             continue;
           }
           const QS3 term = QS3Mul(x.c[i1][j1], y.c[i2][j2], overflow, max_bits);
@@ -482,12 +489,36 @@ inline bool PolyIsZero(const PolyQS3& p) {
   return true;
 }
 
+// Shared double-Horner evaluation of P(α, β). Extracted so PolySign (below)
+// and the vertex-coordinate report in ExactPyramidFromParams evaluate polynomial
+// values through a single implementation — avoids formula drift.
+// NOTE: PolySign additionally accumulates a magnitude sum |c_ij|·|α|^i·|β|^j
+// for its 128-ULP margin; that accumulation still lives inline in PolySign
+// because it needs the same iteration structure but a different accumulator.
+// If PolyQS3's coefficient shape changes, BOTH this function's loop and
+// PolySign's magnitude loop must be updated together.
+inline double PolyEvalDouble(const PolyQS3& p, double alpha_val, double beta_val) {
+  const double kSqrt3D = 1.7320508075688772;
+  double val = 0.0;
+  for (int i = 0; i <= kMaxJointDeg; i++) {
+    for (int j = 0; j <= kMaxJointDeg - i; j++) {
+      const QS3& q = p.c[i][j];
+      if (IsZero(q)) {
+        continue;
+      }
+      const double coeff = (static_cast<double>(q.a) + static_cast<double>(q.b) * kSqrt3D) * std::ldexp(1.0, -q.shift);
+      val += coeff * std::pow(alpha_val, i) * std::pow(beta_val, j);
+    }
+  }
+  return val;
+}
+
 // Double-Horner evaluation of P(α, β) with the 128-ULP error margin.
 // Return: +1 / -1 / 0 (ambiguous). Ambiguous → *ambiguous = true.
 inline int PolySign(const PolyQS3& p, double alpha_val, double beta_val, bool* ambiguous) {
   const double kSqrt3D = 1.7320508075688772;
   const double kUlp = 2.220446049250313e-16;
-  double val = 0.0;
+  const double val = PolyEvalDouble(p, alpha_val, beta_val);
   double mag = 0.0;
   const double abs_a = std::fabs(alpha_val);
   const double abs_b = std::fabs(beta_val);
@@ -498,9 +529,6 @@ inline int PolySign(const PolyQS3& p, double alpha_val, double beta_val, bool* a
         continue;
       }
       const double coeff = (static_cast<double>(q.a) + static_cast<double>(q.b) * kSqrt3D) * std::ldexp(1.0, -q.shift);
-      const double alpha_i = std::pow(alpha_val, i);
-      const double beta_j = std::pow(beta_val, j);
-      val += coeff * alpha_i * beta_j;
       mag += std::fabs(coeff) * std::pow(abs_a, i) * std::pow(abs_b, j);
     }
   }
@@ -951,6 +979,34 @@ inline PolyTriplePoint SolveTriple(const PolyPlane& p0, const PolyPlane& p1, con
   return out;
 }
 
+// Canonicalize sign(det) > 0 on a PolyTriplePoint by evaluating det at the
+// physical (α = a1, β = a2). If det < 0 there, negate all four polynomials
+// (px, py, pz, det) — the physical point (px/det, py/det, pz/det) is
+// unchanged, PolyIsZero equality (used for incidence / dedup) is preserved
+// (a polynomial is zero iff its negation is), but the linear-in-det
+// feasibility predicate `A·px + B·py + C·pz + D·det ≤ 0` (which is
+// `A·x + B·y + C·z + D ≤ 0` multiplied through by det and therefore only
+// preserves the inequality direction when det > 0) is now interpretable in
+// the intended direction. May set *ambiguous if PolySign cannot resolve.
+//
+// Parallels the pure-QS3 CanonicalizeSign (used by ComputeApexLP) but must
+// evaluate the polynomial at (α, β) — the symbolic det is a PolyQS3 whose
+// sign genuinely depends on the numeric (a1, a2), unlike the LP3 det which
+// lives entirely in QS3 and is direction-agnostic.
+inline void CanonicalizePolyTripleSign(PolyQS3* px, PolyQS3* py, PolyQS3* pz, PolyQS3* det, double alpha_val,
+                                       double beta_val, bool* ambiguous) {
+  const int s = PolySign(*det, alpha_val, beta_val, ambiguous);
+  if (*ambiguous) {
+    return;
+  }
+  if (s < 0) {
+    *px = PolyNeg(*px);
+    *py = PolyNeg(*py);
+    *pz = PolyNeg(*pz);
+    *det = PolyNeg(*det);
+  }
+}
+
 // IncidenceExpr: A·px + B·py + C·pz + D·det as PolyQS3. Consumer decides
 // equality (PolyIsZero) vs strict feasibility (PolySign at (a1, a2)).
 inline PolyQS3 IncidenceExpr(const PolyPlane& plane, const PolyTriplePoint& tp, bool* overflow, int* max_bits) {
@@ -1216,6 +1272,30 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
           continue;
         }
 
+        // Canonicalize sign(det) > 0 at (alpha_val, beta_val). Downstream
+        // IsFeasibleSided reads A·px + B·py + C·pz + D·det ≤ 0, which is only
+        // equivalent to A·x + B·y + C·z + D ≤ 0 when det > 0; without this
+        // normalization every det<0 triple is judged with the inequality
+        // flipped and its feasibility is systematically inverted.
+        {
+          bool sign_ambiguous = false;
+          d::CanonicalizePolyTripleSign(&tp.px, &tp.py, &tp.pz, &tp.det, alpha_val, beta_val, &sign_ambiguous);
+          if (sign_ambiguous) {
+            // Numeric det ≈ 0 at (α, β) with a non-identically-zero polynomial
+            // — the three planes are linearly dependent at THIS parameter
+            // setting (a stronger condition than PolyIsZero can see; e.g.
+            // det = (3/64)·(β-α) is a non-zero polynomial but vanishes when
+            // α=β, as it does for the regular pyramid or any symmetric Miller
+            // sample). The Cramer point (px/det, py/det, pz/det) is 0/0 or
+            // near-infinity here — either way, no valid vertex is produced,
+            // so treat this triple like tp.degenerate and skip it. Other
+            // triples cover any real vertex that shares this plane subset;
+            // never-covered vertices at det=0 would be geometrically
+            // degenerate corners the polytope does not have.
+            continue;
+          }
+        }
+
         // Feasibility over all other active planes.
         bool feasible = true;
         for (int r = 0; r < active_n; r++) {
@@ -1308,29 +1388,10 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
 
   out.vertex_count = vtx_cnt;
   for (int v = 0; v < vtx_cnt; v++) {
-    // Evaluate PolyQS3 at (alpha_val, beta_val) → double.
-    // Only PolySign is used inside the engine; we build a small ad-hoc
-    // evaluator here to avoid an extra API surface.
-    auto eval = [&](const d::PolyQS3& p) -> double {
-      const double kSqrt3D = 1.7320508075688772;
-      double val = 0.0;
-      for (int i = 0; i <= d::kMaxJointDeg; i++) {
-        for (int j = 0; j <= d::kMaxJointDeg - i; j++) {
-          const d::QS3& q = p.c[i][j];
-          if (d::IsZero(q)) {
-            continue;
-          }
-          const double coeff =
-              (static_cast<double>(q.a) + static_cast<double>(q.b) * kSqrt3D) * std::ldexp(1.0, -q.shift);
-          val += coeff * std::pow(alpha_val, i) * std::pow(beta_val, j);
-        }
-      }
-      return val;
-    };
-    const double det_d = eval(verts[v].tp.det);
-    out.vertex_xyz[v][0] = eval(verts[v].tp.px) / det_d;
-    out.vertex_xyz[v][1] = eval(verts[v].tp.py) / det_d;
-    out.vertex_xyz[v][2] = eval(verts[v].tp.pz) / det_d;
+    const double det_d = d::PolyEvalDouble(verts[v].tp.det, alpha_val, beta_val);
+    out.vertex_xyz[v][0] = d::PolyEvalDouble(verts[v].tp.px, alpha_val, beta_val) / det_d;
+    out.vertex_xyz[v][1] = d::PolyEvalDouble(verts[v].tp.py, alpha_val, beta_val) / det_d;
+    out.vertex_xyz[v][2] = d::PolyEvalDouble(verts[v].tp.pz, alpha_val, beta_val) / det_d;
   }
   for (int p = 0; p < kExactPyramidMaxPlanes; p++) {
     out.face_vertex_count[p] = face_vtx[p];
