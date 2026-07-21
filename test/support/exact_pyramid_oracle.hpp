@@ -987,23 +987,58 @@ inline PolyTriplePoint SolveTriple(const PolyPlane& p0, const PolyPlane& p1, con
 // feasibility predicate `A·px + B·py + C·pz + D·det ≤ 0` (which is
 // `A·x + B·y + C·z + D ≤ 0` multiplied through by det and therefore only
 // preserves the inequality direction when det > 0) is now interpretable in
-// the intended direction. May set *ambiguous if PolySign cannot resolve.
+// the intended direction.
 //
 // Parallels the pure-QS3 CanonicalizeSign (used by ComputeApexLP) but must
 // evaluate the polynomial at (α, β) — the symbolic det is a PolyQS3 whose
 // sign genuinely depends on the numeric (a1, a2), unlike the LP3 det which
 // lives entirely in QS3 and is direction-agnostic.
-inline void CanonicalizePolyTripleSign(PolyQS3* px, PolyQS3* py, PolyQS3* pz, PolyQS3* det, double alpha_val,
-                                       double beta_val, bool* ambiguous) {
-  const int s = PolySign(*det, alpha_val, beta_val, ambiguous);
+//
+// Two distinct outcomes when the sign cannot be read off as strictly + or -:
+//   *numeric_degenerate — det evaluates to EXACTLY 0.0 (bit-for-bit, via
+//     PolyEvalDouble) at (alpha_val, beta_val). This is a computational
+//     fact, not a tolerance judgment: det is literally the 3x3 determinant
+//     of the three planes' normal coefficients at this specific crystal
+//     shape, so an exact-zero evaluation means Cramer's rule is dividing
+//     0/0 — the three planes are linearly dependent AT THIS numeric point
+//     and this triple structurally cannot define a unique intersection,
+//     regardless of tolerance. Safe for the caller to skip just this
+//     triple (mirrors tp.degenerate, which catches the polynomial being
+//     identically zero for ALL (α, β); this catches it being zero at THIS
+//     (α, β) only). Verified for both symmetric-input regimes that trigger
+//     it in the fixed sample pools: RegularPyramid feeds identical
+//     alpha_val/beta_val doubles by construction (α=β), and Miller
+//     symmetric samples (upper_i1==lower_i1 && upper_i4==lower_i4) compute
+//     a1/a2 via the *same* arithmetic expression on identical integer
+//     inputs (geo3d_closedform.cpp's Miller entry), which IEEE754 guarantees
+//     reproduces bit-identical doubles — so for any det polynomial with a
+//     (β−α) factor, the double-Horner evaluation cancels to exactly 0.0
+//     (a−a=0 is exact in IEEE754, no rounding involved). This is not
+//     floating-point luck confined to that one polynomial shape: det is
+//     recomputed per-triple from the actual plane coefficients, so the
+//     same exact-zero-implies-no-unique-solution argument applies to any
+//     triple whose evaluated det happens to land on 0.0 bit-for-bit.
+//   *ambiguous — det is within the 128-ULP margin but NOT exactly 0.0: a
+//     genuine sign ambiguity where the true value could be a tiny nonzero
+//     (the triple may still define a real, numerically fragile vertex).
+//     Zero tolerance applies here: caller MUST refuse the whole point,
+//     not silently drop the triple.
+inline void CanonicalizePolyTripleSign(PolyTriplePoint* tp, double alpha_val, double beta_val, bool* ambiguous,
+                                       bool* numeric_degenerate) {
+  const double val = PolyEvalDouble(tp->det, alpha_val, beta_val);
+  if (val == 0.0) {
+    *numeric_degenerate = true;
+    return;
+  }
+  const int s = PolySign(tp->det, alpha_val, beta_val, ambiguous);
   if (*ambiguous) {
     return;
   }
   if (s < 0) {
-    *px = PolyNeg(*px);
-    *py = PolyNeg(*py);
-    *pz = PolyNeg(*pz);
-    *det = PolyNeg(*det);
+    tp->px = PolyNeg(tp->px);
+    tp->py = PolyNeg(tp->py);
+    tp->pz = PolyNeg(tp->pz);
+    tp->det = PolyNeg(tp->det);
   }
 }
 
@@ -1279,20 +1314,25 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
         // flipped and its feasibility is systematically inverted.
         {
           bool sign_ambiguous = false;
-          d::CanonicalizePolyTripleSign(&tp.px, &tp.py, &tp.pz, &tp.det, alpha_val, beta_val, &sign_ambiguous);
-          if (sign_ambiguous) {
-            // Numeric det ≈ 0 at (α, β) with a non-identically-zero polynomial
-            // — the three planes are linearly dependent at THIS parameter
-            // setting (a stronger condition than PolyIsZero can see; e.g.
-            // det = (3/64)·(β-α) is a non-zero polynomial but vanishes when
-            // α=β, as it does for the regular pyramid or any symmetric Miller
-            // sample). The Cramer point (px/det, py/det, pz/det) is 0/0 or
-            // near-infinity here — either way, no valid vertex is produced,
-            // so treat this triple like tp.degenerate and skip it. Other
-            // triples cover any real vertex that shares this plane subset;
-            // never-covered vertices at det=0 would be geometrically
-            // degenerate corners the polytope does not have.
+          bool numeric_degenerate = false;
+          d::CanonicalizePolyTripleSign(&tp, alpha_val, beta_val, &sign_ambiguous, &numeric_degenerate);
+          if (numeric_degenerate) {
+            // det evaluates to exactly 0.0 at (α, β) — see the function's
+            // doc comment for why this is a computational fact (Cramer 0/0),
+            // not a tolerance judgment, and safe to skip: no valid vertex is
+            // produced by this specific triple at this specific (α, β). Other
+            // triples cover any real vertex that shares this plane subset.
             continue;
+          }
+          if (sign_ambiguous) {
+            // Genuine sign ambiguity (nonzero but within the 128-ULP margin)
+            // — zero tolerance applies: refuse the whole point rather than
+            // silently dropping a triple that may still define a real,
+            // numerically fragile vertex.
+            out.refused = true;
+            out.refuse_reason = "triple det sign ambiguous";
+            out.max_intermediate_bits = max_bits;
+            return out;
           }
         }
 

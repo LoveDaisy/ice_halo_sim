@@ -890,24 +890,42 @@ TEST(ClosedFormPyramid, OracleMatchesInt128ReferenceOnFixedPools) {
   long mismatched = 0;
   long refused_now = 0;
 
-  // Degenerate pools (σ=0.30, σ=0.50) are selected so min_sep < prod_merge_tol
-  // — vertices sit inside the closed-form's fuzzy-merge boundary; cf will
-  // merge two barely-separated corners while the exact oracle keeps them
-  // distinct, so cf and oracle CAN legitimately differ by one vertex here.
-  // The α=89.5° flat-tail pool (f895) is in the same regime: at this wedge
-  // angle upper cone faces are essentially parallel to basal, and merge-
-  // tolerance-boundary corner clusters recur — DegeneratePyramidSweep and
-  // ExtremeFlatTailSweep already characterize both regimes as "cf may
-  // legitimately deviate from any single witness by 1 vertex". So on samples
-  // the __int128 predecessor refused, this test's invariant for those pools
-  // is REDUCED to "oracle now RESOLVES (not refused)"; comparison against
-  // cf's fuzzy-merge output would spuriously fail.
-  auto is_fuzzy_regime_pool = [](const char* label) {
+  // Known-ambiguity exclusion list (plan §4 Step 5 decision rule, applied
+  // after empirically finding K_resolved == 258/258 but strict EXPECT_EQ
+  // against cf failing on 31 specific samples in d30/d50/f895). These are
+  // NOT oracle bugs: DegeneratePyramidSweep.DivergencesExplainableByMergeTolerance
+  // already quantitatively verifies, for every sample in the exact same
+  // kPyramidDegenerateSigma030Samples/kPyramidDegenerateSigma050Samples pools
+  // consumed here, that any cf!=oracle divergence has vertex separation
+  // below 2x production merge tolerance — i.e. cf legitimately merges
+  // barely-separated corners the exact oracle keeps distinct. f895#2 is a
+  // single ±1 diff consistent with the same flat-tail merge-tolerance regime
+  // (α=89.5°, upper cone faces nearly parallel to basal). Per the decision
+  // rule: entries here are allowed to skip the cf comparison (resolve is
+  // still mandatory); every sample NOT listed still requires
+  // EXPECT_EQ(oracle_vtx, cf_vtx).
+  struct KnownMergeToleranceSample {
+    const char* pool;
+    size_t idx;
+  };
+  static constexpr KnownMergeToleranceSample kKnownMergeToleranceSamples[] = {
+    { "d30", 0 },  { "d30", 2 },  { "d30", 3 },  { "d30", 6 },  { "d30", 10 }, { "d30", 13 }, { "d30", 14 },
+    { "d30", 18 }, { "d30", 19 }, { "d30", 21 }, { "d30", 23 }, { "d30", 26 }, { "d30", 28 }, { "d30", 29 },
+    { "d30", 34 }, { "d50", 0 },  { "d50", 4 },  { "d50", 14 }, { "d50", 16 }, { "d50", 17 }, { "d50", 19 },
+    { "d50", 23 }, { "d50", 25 }, { "d50", 27 }, { "d50", 29 }, { "d50", 32 }, { "d50", 33 }, { "d50", 34 },
+    { "d50", 36 }, { "d50", 38 }, { "f895", 2 },
+  };
+  auto is_known_merge_tolerance_sample = [](const char* label, size_t idx) {
     if (label == nullptr) {
       return false;
     }
     const std::string_view s(label);
-    return s == "d30" || s == "d50" || s == "f895";
+    for (const auto& e : kKnownMergeToleranceSamples) {
+      if (s == e.pool && idx == e.idx) {
+        return true;
+      }
+    }
+    return false;
   };
 
   auto check_one = [&](const char* pool_label, size_t idx, const SampleResult& r, int ref) {
@@ -933,7 +951,7 @@ TEST(ClosedFormPyramid, OracleMatchesInt128ReferenceOnFixedPools) {
                                      << "the symbolic-alpha engine was supposed to resolve this class of samples";
       if (!r.oracle_refused) {
         resolved_previously_refused++;
-        if (!is_fuzzy_regime_pool(pool_label)) {
+        if (!is_known_merge_tolerance_sample(pool_label, idx)) {
           EXPECT_EQ(r.oracle_vtx, r.cf_vtx)
               << pool_label << "#" << idx << ": oracle resolved to " << r.oracle_vtx << " but cf reports " << r.cf_vtx
               << " on a sample the __int128 predecessor refused";
