@@ -179,16 +179,22 @@ HexCrossSection SolveHexCrossSection(const double r_side_dist[kClosedFormPrismSi
     }
   }
 
-  bool any_side_present = false;
-  for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
-    if (out.side_present[i]) {
-      any_side_present = true;
-      break;
-    }
-  }
-  out.any_side_present = any_side_present;
+  // A bounded 2D polygon requires >= 3 non-parallel present sides. When only
+  // 1 or 2 sides are present (whether adjacent or opposite), the LP feasible
+  // region is degenerate (point / ray / strip / wedge) — NOT a bounded
+  // polygon — and the ring-emission walk below assumes bounded geometry
+  // (its `assert(std::abs(i - j) != 3)` at the adjacent-in-list Solve2x2 call
+  // encodes exactly the "no opposite pair in the walk" invariant).
+  //
+  // Historically this invariant was enforced only in debug builds; NDEBUG
+  // release builds silently fell through Solve2x2's det=0 early return and
+  // emitted the initialization-default corner (0, 0). The pyramid apex layer
+  // (called at m = m_apex, where the cross section IS a single point) hit
+  // this path in asymmetric-dist configurations and produced phantom
+  // (0, 0, z_apex) vertices — the exact defect fixed here.
+  out.any_side_present = (present_n >= 3);
 
-  if (!any_side_present) {
+  if (!out.any_side_present) {
     tag |= kPathTagEmpty;
     if (out_path_tag != nullptr) {
       *out_path_tag = tag;
