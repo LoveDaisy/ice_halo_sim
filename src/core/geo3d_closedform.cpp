@@ -75,7 +75,12 @@ struct HexCrossSection {
   double corner_y[kClosedFormPrismMaxCorners]{};
   // side_present[i] iff at least 2 distinct feasible corners lie on direction i.
   bool side_present[kClosedFormPrismSideCnt]{};
-  bool any_side_present = false;
+  // True iff the 6 half-plane constraints define a genuine BOUNDED 2D polygon
+  // (>= 3 non-parallel present sides, no opposite-adjacent pair in the walk
+  // order — see the derivation at its assignment site below). Named for what
+  // it gates, not merely "how many sides": a caller checking this field is
+  // asking "is there a polygon to extrude/emit", not "is >=1 side present".
+  bool is_bounded_polygon = false;
 };
 
 HexCrossSection SolveHexCrossSection(const double r_side_dist[kClosedFormPrismSideCnt],
@@ -179,22 +184,44 @@ HexCrossSection SolveHexCrossSection(const double r_side_dist[kClosedFormPrismSi
     }
   }
 
-  // A bounded 2D polygon requires >= 3 non-parallel present sides. When only
-  // 1 or 2 sides are present (whether adjacent or opposite), the LP feasible
-  // region is degenerate (point / ray / strip / wedge) — NOT a bounded
-  // polygon — and the ring-emission walk below assumes bounded geometry
-  // (its `assert(std::abs(i - j) != 3)` at the adjacent-in-list Solve2x2 call
-  // encodes exactly the "no opposite pair in the walk" invariant).
+  // Build the present-direction index list in ascending-index order. Since
+  // the 6 directions are laid out at fixed i·60° angular positions
+  // (kHexFaceCos/Sin), ascending index IS CCW angular order, so this list is
+  // already the CCW walk order the ring-emission loop below needs.
+  int present_idx[kClosedFormPrismSideCnt];
+  int p_n = 0;
+  for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
+    if (out.side_present[i]) {
+      present_idx[p_n++] = i;
+    }
+  }
+
+  // A bounded 2D polygon requires >= 3 non-parallel present sides AND no two
+  // faces adjacent in the walk order may be an opposite (parallel) pair — a
+  // corner is only well-defined at the intersection of two NON-parallel
+  // lines, no matter how many other directions are also present elsewhere in
+  // the list. `present_n >= 3` alone is a NECESSARY condition (it already
+  // rules out the historical present_n == 2 defect below), not a sufficient
+  // one in general, so both conjuncts are checked explicitly here — making
+  // the true invariant a real runtime check in EVERY build, not the
+  // debug-only `assert(std::abs(i - j) != 3)` this replaces.
   //
-  // Historically this invariant was enforced only in debug builds; NDEBUG
+  // Historically that invariant was enforced only in debug builds; NDEBUG
   // release builds silently fell through Solve2x2's det=0 early return and
   // emitted the initialization-default corner (0, 0). The pyramid apex layer
   // (called at m = m_apex, where the cross section IS a single point) hit
   // this path in asymmetric-dist configurations and produced phantom
   // (0, 0, z_apex) vertices — the exact defect fixed here.
-  out.any_side_present = (present_n >= 3);
+  bool has_opposite_adjacent = false;
+  for (int k = 0; k < p_n; k++) {
+    if (std::abs(present_idx[k] - present_idx[(k + 1) % p_n]) == 3) {
+      has_opposite_adjacent = true;
+      break;
+    }
+  }
+  out.is_bounded_polygon = (present_n >= 3) && !has_opposite_adjacent;
 
-  if (!out.any_side_present) {
+  if (!out.is_bounded_polygon) {
     tag |= kPathTagEmpty;
     if (out_path_tag != nullptr) {
       *out_path_tag = tag;
@@ -206,23 +233,16 @@ HexCrossSection SolveHexCrossSection(const double r_side_dist[kClosedFormPrismSi
     tag |= kPathTagAllDirsPresent;
   }
 
-  // Emit CCW corner ring by walking present side faces in i-increasing order.
-  // Adjacent-in-list pair (P[k], P[(k+1) % n]) defines corner k; opposite pairs
-  // are impossible because a bounded polygon cannot be defined by two parallel
-  // faces alone. For any adjacent-in-list (i, j) with j != i+3 the intersection
-  // is well-defined and (by convexity + both faces being present) feasible.
-  int present_idx[kClosedFormPrismSideCnt];
-  int p_n = 0;
-  for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
-    if (out.side_present[i]) {
-      present_idx[p_n++] = i;
-    }
-  }
+  // Emit CCW corner ring by walking present side faces in walk order.
+  // Adjacent-in-list pair (P[k], P[(k+1) % n]) defines corner k; the
+  // has_opposite_adjacent check above already ruled out opposite pairs, so
+  // for every adjacent-in-list (i, j) the intersection is well-defined and
+  // (by convexity + both faces being present) feasible.
   int emitted = 0;
   for (int k = 0; k < p_n; k++) {
     int i = present_idx[k];
     int j = present_idx[(k + 1) % p_n];
-    assert(std::abs(i - j) != 3);
+    assert(std::abs(i - j) != 3);  // guaranteed by has_opposite_adjacent above
     double px = 0.0;
     double py = 0.0;
     bool solved = Solve2x2(cs[i], sn[i], cs[j], sn[j], r_side_dist[i], r_side_dist[j], &px, &py);
@@ -754,7 +774,7 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
     uint16_t local_tag = 0;
     HexCrossSection xs = SolveHexCrossSection(r_side, &local_tag);
     r.path_tag_union |= local_tag;
-    if (!xs.any_side_present) {
+    if (!xs.is_bounded_polygon) {
       return 0;
     }
     int present_idx[6];
@@ -1068,11 +1088,11 @@ ClosedFormPrismResult ComputeClosedFormPrism(float h, const float dist[6]) {
   }
   HexCrossSection xs = SolveHexCrossSection(r_side);
 
-  // Basal presence: iff any side face is present (a non-empty 2D cross section
-  // extrudes both basal faces). The zero-volume short-circuit above already
-  // handled h ≈ 0.
-  r.face_present[0] = xs.any_side_present;
-  r.face_present[1] = xs.any_side_present;
+  // Basal presence: iff the cross section is a genuine bounded polygon (a
+  // non-empty 2D cross section extrudes both basal faces). The zero-volume
+  // short-circuit above already handled h ≈ 0.
+  r.face_present[0] = xs.is_bounded_polygon;
+  r.face_present[1] = xs.is_bounded_polygon;
   for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
     r.face_present[2 + i] = xs.side_present[i];
   }
