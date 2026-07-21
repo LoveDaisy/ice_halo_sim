@@ -15,7 +15,8 @@ namespace lumice {
 /**
  * @brief Test whether @p face is a legal face number on the given crystal kind.
  *
- * Legal sets (matching FillHexFnMap in crystal.cpp):
+ * Legal sets (matching the closed-form face-number tables in
+ * geo3d_closedform.cpp):
  *   - kPrism:   {1, 2, 3, 4, 5, 6, 7, 8}
  *   - kPyramid: {1, 2, 3..8, 13..18, 23..28}
  *
@@ -32,12 +33,14 @@ bool IsLegalFace(CrystalKind kind, int face);
  * @brief Closed 2-manifold Euler-characteristic gate for a triangle mesh.
  *
  * Checks `V - E + F == 2` with `E = 3F/2` (each edge shared by exactly 2
- * triangles). This is the single source of truth for the "is this mesh a
- * legal closed polyhedron" predicate used both by the Crystal factory
- * boundary (crystal.cpp, rejects malformed meshes before they reach
- * BuildPolygonFaceData) and by test code that needs to assert the same
- * invariant against known inputs — declared here so both consumers share one
- * implementation instead of each maintaining a parallel copy that can drift.
+ * triangles). This is a pure V/F predicate over an already-built mesh.
+ *
+ * @note It is no longer a factory gate. The closed-form representation decides
+ *       validity while constructing (surviving contour corners >= 3, plus a
+ *       non-degenerate height interval), so there is no "build a mesh, then
+ *       check whether the build went wrong" step left to guard. What remains
+ *       here is a test-only predicate for asserting the invariant against
+ *       known inputs.
  *
  * @note Necessary but not sufficient: a self-intersecting mesh whose V/F
  *       counts happen to satisfy the Euler formula would pass. See
@@ -46,21 +49,41 @@ bool IsLegalFace(CrystalKind kind, int face);
  */
 bool IsClosedTriMesh(size_t v, size_t f);
 
-/**
- * @brief Compute face-number map for a hexagonal crystal mesh.
- *
- * Precondition: @p face_n must contain unit per-triangle normals
- *   (stride = 3 floats per triangle, each normal length == 1).
- *
- * Output values match the face-number convention used by raypath filters:
- *   basal = 1 / 2; prism = 3..8; upper pyramidal = 13..18; lower = 23..28.
- * Returns kInvalidId for triangles whose normals do not match any hex face.
- *
- * @param face_cnt  Number of triangles.
- * @param face_n    Unit per-triangle normals, length = face_cnt * 3.
- * @param fn_map    Output buffer, length = face_cnt.
- */
-void FillHexFnMap(size_t face_cnt, const float* face_n, IdType* fn_map);
+// Crystal's closed-form flat POD representation. Populated by the closed-form
+// factory paths (CreatePrism / CreatePyramid, once relined onto
+// ComputeClosedFormPrism / ComputeClosedFormPyramid — see plan Steps 2/3).
+// `face_cnt == 0` sentinels "not populated" (custom-mesh path or
+// default-constructed instance).
+//
+// Slot convention matches the corresponding ClosedFormXxxResult in
+// core/geo3d_closedform.hpp:
+//   - prism (face_cnt == 8):  slot 0/1 = basal (fn 1/2); slot 2+i = side (fn 3+i)
+//   - pyramid (face_cnt == 20): slot 0/1 = basal; slot 2+i = prism side;
+//     slot 8+i = upper cone (fn 13+i); slot 14+i = lower cone (fn 23+i).
+//
+// Max dims are dimensioned to the pyramid worst case. crystal.cpp carries a
+// static_assert bridging these constants to the ClosedFormPyramid capacity so
+// closed-form growth is caught at compile time, not silently truncated.
+constexpr int kCrystalGeomMaxFaces = 20;
+constexpr int kCrystalGeomMaxVtxPerFace = 32;
+
+struct CrystalGeom {
+  int face_cnt = 0;
+  // Plane coefficients (a, b, c, d) so a·x + b·y + c·z + d ≤ 0 is the bounded
+  // half-space. Layout mirrors FillHexCrystalCoef's output.
+  float plane_coef[kCrystalGeomMaxFaces * 4]{};
+  // Unit outward normals per face slot.
+  float face_normal[kCrystalGeomMaxFaces * 3]{};
+  // Face-number constants (parametric, per IsLegalFace convention).
+  int face_number[kCrystalGeomMaxFaces]{};
+  // face_present[slot]: whether this slot bounds the body.
+  bool face_present[kCrystalGeomMaxFaces]{};
+  // Per-face CCW vertex count. 0 iff face_present[slot] is false.
+  int face_vtx_cnt[kCrystalGeomMaxFaces]{};
+  // Per-face CCW vertex coords, packed as (x, y, z) triples in
+  // face_vtx[slot * kCrystalGeomMaxVtxPerFace * 3 + k * 3 + xyz].
+  float face_vtx[kCrystalGeomMaxFaces * kCrystalGeomMaxVtxPerFace * 3]{};
+};
 
 enum class CrystalType {
   kUnknown,
@@ -196,12 +219,6 @@ class Crystal {
   size_t TotalTriangles() const;
 
   /**
-   * @brief Get total number of vertices
-   * @return Number of vertices in the crystal mesh
-   */
-  size_t TotalVertices() const;
-
-  /**
    * @brief Get triangle vertex coordinates
    * @return Pointer to vertex coordinate array (9 * triangle_cnt elements: 3 vertices * 3 coordinates per triangle)
    */
@@ -220,19 +237,6 @@ class Crystal {
   const float* GetTirangleArea() const;
 
   /**
-   * @brief Get triangle coordinate transformation matrices
-   * @return Pointer to transformation matrix array (12 * triangle_cnt elements: 4x3 matrix per triangle)
-   */
-  const float* GetTriangleCoordTf() const;
-
-  /**
-   * @brief Get face number for a given triangle face index
-   * @param fid Triangle face index
-   * @return Face number (for raypath symmetry); kInvalidId if @p fid is out of range
-   */
-  IdType GetFn(int fid) const;
-
-  /**
    * @brief Get face number for a given polygon face index
    * @param poly_idx Polygon face index (0..PolygonFaceCount()-1)
    * @return Face number (for raypath symmetry); kInvalidId if @p poly_idx is out of range
@@ -245,13 +249,6 @@ class Crystal {
    *         where symmetry reductions do not apply.
    */
   int FnPeriod() const { return fn_period_; }
-
-  /**
-   * @brief Rotate the crystal
-   * @param r Rotation to apply
-   * @return Reference to this crystal
-   */
-  Crystal& Rotate(const Rotation& r);
 
   /**
    * @brief Reduce raypath using symmetry
@@ -301,21 +298,52 @@ class Crystal {
   size_t PolygonFaceCount() const;
   const float* GetPolygonFaceNormal() const;
   const float* GetPolygonFaceDist() const;
-  const int* GetPolygonFaceTriId() const;
 
-  // Test observability: process-global count of degenerate polygon faces
-  // dropped by BuildPolygonFaceData (the count/stride "shrink" path that used
-  // to corrupt copy/move). Lets regression tests assert they actually
-  // exercised the shrink branch instead of passing vacuously. Thread-safe;
-  // reset before a measured sweep, read after.
-  static uint64_t DegenerateShrinkCount();
-  static void ResetDegenerateShrinkCount();
+  // Map a triangle id to its polygon-face index (0..PolygonFaceCount()-1).
+  // Returns kInvalidId when @p tri_id is out of range OR when this Crystal was
+  // built via the mesh-only path (Crystal(Mesh) ctor without cf_geom_ wired,
+  // used only by the degenerate Mesh(0,0) short-circuit today). Replaces the
+  // per-consumer argmax reversal that used to live in
+  // simulator.cpp::detail::PolygonFaceOfTri — the tri→poly-face map is a
+  // parametric byproduct of the closed-form triangulation, not a fact to be
+  // rediscovered.
+  IdType PolygonFaceOfTri(int tri_id) const;
+
+  // Closed-form flat POD accessor. Returns cf_geom_.face_cnt == 0 for crystals
+  // constructed via the mesh path (custom crystals) or default-constructed
+  // instances; > 0 once the closed-form factory paths are wired up
+  // (plan Steps 2/3).
+  const CrystalGeom& CfGeom() const { return cf_geom_; }
+
+  // Read-only access to the underlying triangle mesh. Exposed so preview-only
+  // consumers (LUMICE_GetCrystalMesh) can pull vertex/triangle pools without
+  // building a second dedup path — the mesh pool is already deduped by
+  // BuildMeshFromCfGeom during construction.
+  const Mesh& GetMesh() const { return mesh_; }
 
   IdType config_id_ = kInvalidId;
 
  private:
   void ComputeCacheData();
-  void BuildPolygonFaceData(const float* plane_coef, size_t plane_cnt);
+  // Populate poly_face_data_, poly_face_fn_ and poly_face_of_tri_ directly
+  // from cf_geom_ + a per-tri "which face slot" table produced during the
+  // closed-form mesh build. See crystal.cpp for the design rationale (no
+  // argmax reversal — the parametric face-number + slot membership are
+  // already in cf_geom_).
+  void PopulateFromCfGeom(const std::vector<int>& tri_face_slot);
+  // Shared closed-form prism entry point behind both CreatePrism overloads.
+  // Runs ComputeClosedFormPrism → 386.2 validity gate → CrystalGeom adapter →
+  // fan-triangulation → PopulateFromCfGeom. Returns an empty crystal when the
+  // gate rejects (matches the legacy RejectMalformed downstream contract).
+  static Crystal MakePrismClosedForm(float h, const float dist[6], const char* factory);
+
+  // Same shape for the pyramid family, entered from the alpha overload
+  // (Miller-index overload delegates through the alpha overload today, so this
+  // single entry covers both public paths). Uses the direct-wedge closed-form
+  // evaluator; the validity gate is "≥4 present face slots" (see
+  // IsValidClosedFormPyramid in crystal.cpp).
+  static Crystal MakePyramidClosedForm(float upper_alpha, float lower_alpha, float h1, float h2, float h3,
+                                       const float dist[6], const char* factory);
 
   // Shift prism/pyramid faces so the first non-basal pri index becomes 0.
   // Basal faces (x < 3) are passed through unchanged. Returns the input
@@ -325,20 +353,37 @@ class Crystal {
   Mesh mesh_;
 
   std::unique_ptr<float[]> cache_data_;
-  float* face_v_;         // vertex coordinate of every face. 9 * face_cnt
-  float* face_n_;         // normal of every face. 3 * face_cnt
-  float* face_area_;      // area of every face. 1 * face_cnt
-  float* face_coord_tf_;  // transform for barycentric coordinate. 12 * face_cnt
+  float* face_v_;     // vertex coordinate of every face. 9 * face_cnt
+  float* face_n_;     // normal of every face. 3 * face_cnt
+  float* face_area_;  // area of every face. 1 * face_cnt
 
-  std::unique_ptr<IdType[]> fn_map_;  // fid --> fn
-  int fn_period_;                     // for raypath symmetry
+  int fn_period_ = -1;  // for raypath symmetry
 
   // Polygon face data for per-plane intersection
   size_t poly_face_cnt_ = 0;
-  std::unique_ptr<float[]> poly_face_data_;  // single allocation: n(3*cnt) + d(cnt) + tri_id(cnt as float)
+  std::unique_ptr<float[]> poly_face_data_;  // single allocation: n(3*cnt) + d(cnt)
   float* poly_face_n_ = nullptr;             // unit normals, 3 * poly_face_cnt_
   float* poly_face_d_ = nullptr;             // plane distances, poly_face_cnt_
-  int* poly_face_tri_id_ = nullptr;          // representative triangle ID, poly_face_cnt_
+
+  // Face-number per polygon face — direct parametric constant from
+  // cf_geom_.face_number[slot], populated by PopulateFromCfGeom. Fully replaces
+  // the previous "poly_face_tri_id_[poly] → fn_map_[tri]" two-hop reversal:
+  // fn is now stored directly at its natural key (polygon face) rather than
+  // reconstructed from an argmax-selected representative triangle.
+  std::unique_ptr<IdType[]> poly_face_fn_;
+
+  // Direct tri→poly-face-index lookup. Populated by PopulateFromCfGeom from the
+  // per-tri "which face slot" table produced by BuildMeshFromCfGeom. Not
+  // populated (nullptr) for Crystals built via the mesh-only path — those
+  // return kInvalidId from PolygonFaceOfTri(int).
+  std::unique_ptr<IdType[]> poly_face_of_tri_;
+
+  // Closed-form flat POD geometry. Populated by CreatePrism/CreatePyramid once
+  // relined onto the closed-form path (plan Steps 2/3). face_cnt == 0 for
+  // custom-mesh crystals. Embedded by value (POD) — copy/move ctors pick it up
+  // trivially via the default member-wise path in the aggregated initializer
+  // lists below.
+  CrystalGeom cf_geom_{};
 };
 
 

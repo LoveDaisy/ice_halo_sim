@@ -6,7 +6,6 @@
 #include <map>
 #include <memory>
 #include <nlohmann/json.hpp>
-#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -1964,185 +1963,17 @@ int LUMICE_WillUseGpuRoute(int preferred_backend) {
 
 // =============== Crystal Mesh ===============
 
-// Compute per-face polygon topology from triangle data and face_numbers array.
-// Writes face_count, face_numbers_by_face, face_vtx_offsets, face_vtx_counts,
-// and face_vtx_pool into out. Skips face_numbers <= 0.
-static void FillPerFaceTopology(const int* tri, int tri_cnt, const float* vtx, const int* face_numbers_per_tri,
-                                LUMICE_CrystalMesh* out) {
-  // Collect distinct face numbers in sorted order (skip <= 0)
-  std::set<int> face_set;
-  for (int t = 0; t < tri_cnt; ++t) {
-    int fn = face_numbers_per_tri[t];
-    if (fn > 0) {
-      face_set.insert(fn);
-    }
-  }
-
-  int pool_offset = 0;
-  int fi = 0;
-
-  for (int fn : face_set) {
-    if (fi >= LUMICE_MAX_CRYSTAL_FACES) {
-      break;
-    }
-
-    // Gather unique vertex indices for this face_number
-    std::vector<int> unique_verts;
-    int first_tri = -1;
-    for (int t = 0; t < tri_cnt; ++t) {
-      if (face_numbers_per_tri[t] != fn) {
-        continue;
-      }
-      if (first_tri < 0) {
-        first_tri = t;
-      }
-      for (int k = 0; k < 3; ++k) {
-        int vi = tri[t * 3 + k];
-        bool found = false;
-        for (int x : unique_verts) {
-          if (x == vi) {
-            found = true;
-            break;
-          }
-        }
-        if (!found) {
-          unique_verts.push_back(vi);
-        }
-      }
-    }
-
-    if (unique_verts.size() < 3 || first_tri < 0) {
-      continue;
-    }
-
-    // Check pool capacity
-    int count = static_cast<int>(unique_verts.size());
-    if (pool_offset + count > LUMICE_MAX_CRYSTAL_FACE_VTXPOOL) {
-      break;  // pool exhausted
-    }
-
-    // Compute face center
-    float fc[3] = { 0.0f, 0.0f, 0.0f };
-    for (int vi : unique_verts) {
-      fc[0] += vtx[vi * 3 + 0];
-      fc[1] += vtx[vi * 3 + 1];
-      fc[2] += vtx[vi * 3 + 2];
-    }
-    float inv_cnt = 1.0f / static_cast<float>(count);
-    fc[0] *= inv_cnt;
-    fc[1] *= inv_cnt;
-    fc[2] *= inv_cnt;
-
-    // Compute outward normal from first triangle's cross product
-    const float* a = vtx + tri[first_tri * 3 + 0] * 3;
-    const float* b = vtx + tri[first_tri * 3 + 1] * 3;
-    const float* c = vtx + tri[first_tri * 3 + 2] * 3;
-    float e1[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] };
-    float e2[3] = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
-    float ref_n[3] = {
-      e1[1] * e2[2] - e1[2] * e2[1],
-      e1[2] * e2[0] - e1[0] * e2[2],
-      e1[0] * e2[1] - e1[1] * e2[0],
-    };
-    float nlen = std::sqrt(ref_n[0] * ref_n[0] + ref_n[1] * ref_n[1] + ref_n[2] * ref_n[2]);
-    if (nlen > 1e-6f) {
-      ref_n[0] /= nlen;
-      ref_n[1] /= nlen;
-      ref_n[2] /= nlen;
-    }
-
-    // Compute v0_dir: normalized vector from face center to first unique vertex
-    float v0_dir[3] = {
-      vtx[unique_verts[0] * 3 + 0] - fc[0],
-      vtx[unique_verts[0] * 3 + 1] - fc[1],
-      vtx[unique_verts[0] * 3 + 2] - fc[2],
-    };
-    float v0_len = std::sqrt(v0_dir[0] * v0_dir[0] + v0_dir[1] * v0_dir[1] + v0_dir[2] * v0_dir[2]);
-    if (v0_len > 1e-6f) {
-      v0_dir[0] /= v0_len;
-      v0_dir[1] /= v0_len;
-      v0_dir[2] /= v0_len;
-    }
-
-    // Sort vertices CCW around ref_n: atan2(dot(cross(v0,vi), ref_n), dot(v0,vi))
-    // Mirrors Triangulate() in math.cpp:920-938.
-    std::sort(unique_verts.begin(), unique_verts.end(), [&](int ia, int ib) {
-      float va[3] = { vtx[ia * 3] - fc[0], vtx[ia * 3 + 1] - fc[1], vtx[ia * 3 + 2] - fc[2] };
-      float vb[3] = { vtx[ib * 3] - fc[0], vtx[ib * 3 + 1] - fc[1], vtx[ib * 3 + 2] - fc[2] };
-      float la = std::sqrt(va[0] * va[0] + va[1] * va[1] + va[2] * va[2]);
-      float lb = std::sqrt(vb[0] * vb[0] + vb[1] * vb[1] + vb[2] * vb[2]);
-      if (la > 1e-6f) {
-        va[0] /= la;
-        va[1] /= la;
-        va[2] /= la;
-      }
-      if (lb > 1e-6f) {
-        vb[0] /= lb;
-        vb[1] /= lb;
-        vb[2] /= lb;
-      }
-      float na[3] = {
-        v0_dir[1] * va[2] - v0_dir[2] * va[1],
-        v0_dir[2] * va[0] - v0_dir[0] * va[2],
-        v0_dir[0] * va[1] - v0_dir[1] * va[0],
-      };
-      float nb[3] = {
-        v0_dir[1] * vb[2] - v0_dir[2] * vb[1],
-        v0_dir[2] * vb[0] - v0_dir[0] * vb[2],
-        v0_dir[0] * vb[1] - v0_dir[1] * vb[0],
-      };
-      float s1 = na[0] * ref_n[0] + na[1] * ref_n[1] + na[2] * ref_n[2];
-      float s2 = nb[0] * ref_n[0] + nb[1] * ref_n[1] + nb[2] * ref_n[2];
-      float c1 = v0_dir[0] * va[0] + v0_dir[1] * va[1] + v0_dir[2] * va[2];
-      float c2 = v0_dir[0] * vb[0] + v0_dir[1] * vb[1] + v0_dir[2] * vb[2];
-      return std::atan2(s1, c1) < std::atan2(s2, c2);
-    });
-
-    out->face_numbers_by_face[fi] = fn;
-    out->face_vtx_offsets[fi] = pool_offset;
-    out->face_vtx_counts[fi] = count;
-    for (int k = 0; k < count; ++k) {
-      out->face_vtx_pool[pool_offset + k] = unique_verts[k];
-    }
-    pool_offset += count;
-
-    // Phase B: area-weighted unit-length normal at position `fi`, lockstep with
-    // face_numbers_by_face[fi] / face_vtx_offsets[fi] / face_vtx_counts[fi].
-    // Accumulating un-normalized cross products gives an implicit 2*area weight
-    // per triangle; normalize once at the end. Avoids the GUI's previous
-    // first-triangle-only normal (biased on multi-triangle faces) and the
-    // absolute 1e-12 cross-magnitude threshold.
-    float acc_n[3] = { 0.0f, 0.0f, 0.0f };
-    for (int t = 0; t < tri_cnt; ++t) {
-      if (face_numbers_per_tri[t] != fn) {
-        continue;
-      }
-      const float* a = vtx + tri[t * 3 + 0] * 3;
-      const float* b = vtx + tri[t * 3 + 1] * 3;
-      const float* c = vtx + tri[t * 3 + 2] * 3;
-      float ea[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] };
-      float eb[3] = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
-      acc_n[0] += ea[1] * eb[2] - ea[2] * eb[1];
-      acc_n[1] += ea[2] * eb[0] - ea[0] * eb[2];
-      acc_n[2] += ea[0] * eb[1] - ea[1] * eb[0];
-    }
-    float acc_len = std::sqrt(acc_n[0] * acc_n[0] + acc_n[1] * acc_n[1] + acc_n[2] * acc_n[2]);
-    if (acc_len > 1e-6f) {
-      out->face_normals[fi * 3 + 0] = acc_n[0] / acc_len;
-      out->face_normals[fi * 3 + 1] = acc_n[1] / acc_len;
-      out->face_normals[fi * 3 + 2] = acc_n[2] / acc_len;
-    } else {
-      out->face_normals[fi * 3 + 0] = 0.0f;
-      out->face_normals[fi * 3 + 1] = 0.0f;
-      out->face_normals[fi * 3 + 2] = 0.0f;
-    }
-
-    ++fi;
-  }
-
-  out->face_count = fi;
-}
-
+// Reroutes preview-only geometry through the closed-form Crystal factories so
+// the LUMICE_CrystalMesh output is built from the parametric face_number /
+// face_present / face_vtx tables directly. Replaces the historical pipeline of
+//   CreatePrismMesh/CreatePyramidMesh → FillPerFaceTopology (argmax reversal on
+//   triangle normals to reconstruct face groups) → FillHexFnMap (argmax again
+//   for per-tri face numbers) → triangle-adjacency dihedral edge filter.
+// All three reversals are gone: face_numbers per triangle come from the
+// Crystal's fn_map_ (parametric, populated from cf_geom_.face_number in
+// PopulateFromCfGeom), and face_vtx_pool / face_normals come straight from
+// cf_geom_. See doc/crystal-geometry-representation.md §1 for the wider
+// "delete the reversal, read the constant" story.
 LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* crystal_json, LUMICE_CrystalMesh* out) {
   if (!crystal_json || !out) {
     return LUMICE_ERR_NULL_ARG;
@@ -2160,10 +1991,8 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
     return LUMICE_ERR_MISSING_FIELD;
   }
 
-  // Create mesh based on crystal type
   auto type_str = j.at("type").get<std::string>();
   const auto& shape = j.at("shape");
-  ns::Mesh mesh;
 
   // Parse face_distance if present (common to both prism and pyramid)
   float dist[6]{ 1, 1, 1, 1, 1, 1 };
@@ -2176,10 +2005,11 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
     }
   }
 
+  ns::Crystal crystal;
   try {
     if (type_str == "prism") {
       float h = shape.value("height", 1.0f);
-      mesh = ns::CreatePrismMesh(h, dist);
+      crystal = ns::Crystal::CreatePrism(h, dist);
     } else if (type_str == "pyramid") {
       float prism_h = shape.value("prism_h", 1.0f);
       float upper_h = shape.value("upper_h", 0.0f);
@@ -2188,13 +2018,13 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
       if (shape.contains("upper_wedge_angle") && shape.contains("lower_wedge_angle")) {
         float ua = shape["upper_wedge_angle"].get<float>();
         float la = shape["lower_wedge_angle"].get<float>();
-        mesh = ns::CreatePyramidMesh(ua, la, upper_h, prism_h, lower_h, dist);
+        crystal = ns::Crystal::CreatePyramid(ua, la, upper_h, prism_h, lower_h, dist);
       } else if (shape.contains("upper_indices") && shape.contains("lower_indices")) {
         float ua = MillerToAlpha(shape["upper_indices"][0].get<int>(), shape["upper_indices"][2].get<int>());
         float la = MillerToAlpha(shape["lower_indices"][0].get<int>(), shape["lower_indices"][2].get<int>());
-        mesh = ns::CreatePyramidMesh(ua, la, upper_h, prism_h, lower_h, dist);
+        crystal = ns::Crystal::CreatePyramid(ua, la, upper_h, prism_h, lower_h, dist);
       } else {
-        mesh = ns::CreatePyramidMesh(upper_h, prism_h, lower_h);
+        crystal = ns::Crystal::CreatePyramid(upper_h, prism_h, lower_h);
       }
     } else {
       return LUMICE_ERR_INVALID_VALUE;
@@ -2203,115 +2033,145 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
     return LUMICE_ERR_INVALID_CONFIG;
   }
 
-  // Fill vertices
+  const ns::Mesh& mesh = crystal.GetMesh();
+  const ns::CrystalGeom& g = crystal.CfGeom();
+
   auto vtx_cnt = static_cast<int>(mesh.GetVtxCnt());
   if (vtx_cnt > LUMICE_MAX_CRYSTAL_VERTICES) {
     return LUMICE_ERR_INVALID_VALUE;
   }
   out->vertex_count = vtx_cnt;
-  std::memcpy(out->vertices, mesh.GetVtxPtr(0), vtx_cnt * 3 * sizeof(float));
+  if (vtx_cnt > 0) {
+    std::memcpy(out->vertices, mesh.GetVtxPtr(0), vtx_cnt * 3 * sizeof(float));
+  }
 
-  // Fill triangles for surface rendering
   auto tri_cnt = mesh.GetTriangleCnt();
   if (static_cast<int>(tri_cnt) > LUMICE_MAX_CRYSTAL_TRIANGLES) {
     return LUMICE_ERR_INVALID_VALUE;
   }
-  const int* tri = mesh.GetTrianglePtr(0);
   out->triangle_count = static_cast<int>(tri_cnt);
-  std::memcpy(out->triangles, tri, tri_cnt * 3 * sizeof(int));
-
-  const float* vtx = mesh.GetVtxPtr(0);
-
-  // Build edge → triangle list
-  using Edge = std::pair<int, int>;
-  std::map<Edge, std::vector<size_t>> edge_tris;
-  for (size_t i = 0; i < tri_cnt; i++) {
-    int v0 = tri[i * 3 + 0];
-    int v1 = tri[i * 3 + 1];
-    int v2 = tri[i * 3 + 2];
-    edge_tris[{ std::min(v0, v1), std::max(v0, v1) }].push_back(i);
-    edge_tris[{ std::min(v1, v2), std::max(v1, v2) }].push_back(i);
-    edge_tris[{ std::min(v0, v2), std::max(v0, v2) }].push_back(i);
+  if (tri_cnt > 0) {
+    std::memcpy(out->triangles, mesh.GetTrianglePtr(0), tri_cnt * 3 * sizeof(int));
   }
 
-  // Compute triangle normals and filter edges
-  auto ComputeTriNormal = [&](size_t t, float* n) {
-    const float* a = vtx + tri[t * 3 + 0] * 3;
-    const float* b = vtx + tri[t * 3 + 1] * 3;
-    const float* c = vtx + tri[t * 3 + 2] * 3;
-    float e1[3]{ b[0] - a[0], b[1] - a[1], b[2] - a[2] };
-    float e2[3]{ c[0] - a[0], c[1] - a[1], c[2] - a[2] };
-    n[0] = e1[1] * e2[2] - e1[2] * e2[1];
-    n[1] = e1[2] * e2[0] - e1[0] * e2[2];
-    n[2] = e1[0] * e2[1] - e1[1] * e2[0];
-    float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
-    if (len > 1e-6f) {
-      n[0] /= len;
-      n[1] /= len;
-      n[2] /= len;
+  // Per-triangle face_number: chain tri → polygon-face → fn. Both hops read
+  // parametric tables (poly_face_of_tri_ + poly_face_fn_ per polygon face)
+  // populated by PopulateFromCfGeom from cf_geom_.face_number. kInvalidId at
+  // either hop → -1 (C-API sentinel; naive static_cast would yield 65535).
+  // GetFn() already short-circuits poly == kInvalidId internally.
+  for (size_t i = 0; i < tri_cnt; ++i) {
+    ns::IdType poly = crystal.PolygonFaceOfTri(static_cast<int>(i));
+    ns::IdType fn = crystal.GetFn(poly);
+    out->face_numbers[i] = (fn == ns::kInvalidId) ? -1 : static_cast<int>(fn);
+  }
+
+  // Per-face polygon topology: walk present slots in cf_geom_, map each face's
+  // CCW (x,y,z) vertex to its index in the deduped mesh vertex pool.
+  // BuildMeshFromCfGeom used the same coordinates when it built the pool, so a
+  // simple linear search with the same 1e-6f tolerance is guaranteed to hit.
+  const float* vtx = (vtx_cnt > 0) ? mesh.GetVtxPtr(0) : nullptr;
+  constexpr float kDedupTol = 1e-6f;
+  auto find_vtx_idx = [&](float x, float y, float z) -> int {
+    for (int i = 0; i < vtx_cnt; ++i) {
+      float dx = vtx[i * 3 + 0] - x;
+      float dy = vtx[i * 3 + 1] - y;
+      float dz = vtx[i * 3 + 2] - z;
+      if (std::sqrt(dx * dx + dy * dy + dz * dz) < kDedupTol) {
+        return i;
+      }
     }
+    return -1;
   };
 
-  // Collect dihedral/boundary edges with their adjacent face normals
-  struct EdgeInfo {
-    Edge edge;
-    float n0[3];
-    float n1[3];
+  int fi = 0;
+  int pool_offset = 0;
+  // Track (v_min, v_max) edge → (slot_a, slot_b). Second slot may stay -1 for
+  // boundary edges (only in degenerate geometries; well-formed prism/pyramid
+  // yields a closed 2-manifold so every polygon edge is shared by exactly two
+  // present slots).
+  struct EdgeSlotPair {
+    int slot_a;
+    int slot_b;
   };
-  std::vector<EdgeInfo> edge_infos;
-  for (const auto& [edge, tris] : edge_tris) {
-    if (tris.size() == 1) {
-      // Boundary edge — store same normal for both sides
-      EdgeInfo info;
-      info.edge = edge;
-      ComputeTriNormal(tris[0], info.n0);
-      std::memcpy(info.n1, info.n0, 3 * sizeof(float));
-      edge_infos.push_back(info);
-    } else if (tris.size() >= 2) {
-      // Include if adjacent triangles have different normals (dihedral edge)
-      float n0[3], n1[3];
-      ComputeTriNormal(tris[0], n0);
-      ComputeTriNormal(tris[1], n1);
-      float dot = n0[0] * n1[0] + n0[1] * n1[1] + n0[2] * n1[2];
-      if (dot < 1.0f - 1e-3f) {
-        EdgeInfo info;
-        info.edge = edge;
-        std::memcpy(info.n0, n0, 3 * sizeof(float));
-        std::memcpy(info.n1, n1, 3 * sizeof(float));
-        edge_infos.push_back(info);
+  std::map<std::pair<int, int>, EdgeSlotPair> edge_slots;
+  int slot_to_fi[ns::kCrystalGeomMaxFaces];
+  for (int i = 0; i < ns::kCrystalGeomMaxFaces; ++i) {
+    slot_to_fi[i] = -1;
+  }
+
+  for (int slot = 0; slot < g.face_cnt; ++slot) {
+    if (!g.face_present[slot]) {
+      continue;
+    }
+    int fn = g.face_vtx_cnt[slot];
+    if (fn < 3) {
+      continue;
+    }
+    if (fi >= LUMICE_MAX_CRYSTAL_FACES) {
+      break;
+    }
+    if (pool_offset + fn > LUMICE_MAX_CRYSTAL_FACE_VTXPOOL) {
+      break;  // pool exhausted
+    }
+
+    const float* face_v = g.face_vtx + slot * ns::kCrystalGeomMaxVtxPerFace * 3;
+    // Resolve pool indices for this face's CCW vertex list.
+    int local_indices[ns::kCrystalGeomMaxVtxPerFace];
+    for (int k = 0; k < fn; ++k) {
+      int idx = find_vtx_idx(face_v[k * 3 + 0], face_v[k * 3 + 1], face_v[k * 3 + 2]);
+      if (idx < 0) {
+        return LUMICE_ERR_INVALID_CONFIG;  // should be impossible: BuildMeshFromCfGeom deduped these coords
+      }
+      local_indices[k] = idx;
+      out->face_vtx_pool[pool_offset + k] = idx;
+    }
+
+    out->face_numbers_by_face[fi] = g.face_number[slot];
+    out->face_vtx_offsets[fi] = pool_offset;
+    out->face_vtx_counts[fi] = fn;
+    // Face normal from cf_geom_ is already unit outward (populated by the
+    // closed-form evaluator + AdaptClosedFormXxxToCrystalGeom).
+    out->face_normals[fi * 3 + 0] = g.face_normal[slot * 3 + 0];
+    out->face_normals[fi * 3 + 1] = g.face_normal[slot * 3 + 1];
+    out->face_normals[fi * 3 + 2] = g.face_normal[slot * 3 + 2];
+    slot_to_fi[slot] = fi;
+    pool_offset += fn;
+    ++fi;
+
+    // Register polygon-boundary edges for this slot.
+    for (int k = 0; k < fn; ++k) {
+      int a = local_indices[k];
+      int b = local_indices[(k + 1) % fn];
+      auto key = std::make_pair(std::min(a, b), std::max(a, b));
+      auto [it, inserted] = edge_slots.try_emplace(key, EdgeSlotPair{ slot, -1 });
+      if (!inserted) {
+        if (it->second.slot_b < 0 && it->second.slot_a != slot) {
+          it->second.slot_b = slot;
+        }
       }
     }
   }
+  out->face_count = fi;
 
-  auto edge_cnt = static_cast<int>(edge_infos.size());
-  if (edge_cnt > LUMICE_MAX_CRYSTAL_EDGES) {
-    return LUMICE_ERR_INVALID_VALUE;
+  // Emit edges as polygon boundaries (no triangle-adjacency + dihedral-angle
+  // threshold — that was a numerical stand-in for "shared by two polygons of
+  // different faces", which cf_geom_ tells us directly).
+  int edge_cnt = 0;
+  for (const auto& [edge, slots] : edge_slots) {
+    if (edge_cnt >= LUMICE_MAX_CRYSTAL_EDGES) {
+      break;
+    }
+    out->edges[edge_cnt * 2 + 0] = edge.first;
+    out->edges[edge_cnt * 2 + 1] = edge.second;
+    // n0 = normal of first adjacent face slot; n1 = normal of second (or same
+    // as n0 for boundary edges — only possible in degenerate geometries).
+    const float* n0 = g.face_normal + slots.slot_a * 3;
+    const float* n1 = (slots.slot_b >= 0) ? (g.face_normal + slots.slot_b * 3) : n0;
+    std::memcpy(&out->edge_face_normals[edge_cnt * 6 + 0], n0, 3 * sizeof(float));
+    std::memcpy(&out->edge_face_normals[edge_cnt * 6 + 3], n1, 3 * sizeof(float));
+    ++edge_cnt;
   }
   out->edge_count = edge_cnt;
-
-  // Fill per-triangle face numbers via core FillHexFnMap.
-  // ComputeTriNormal (defined above) normalizes via cross-product length; output
-  // is a unit normal per triangle — matches FillHexFnMap's precondition.
-  // Stack buffers sized to the API cap to avoid heap allocation on slider drag.
-  float tri_normals[LUMICE_MAX_CRYSTAL_TRIANGLES * 3] = {};
-  for (size_t i = 0; i < tri_cnt; ++i) {
-    ComputeTriNormal(i, tri_normals + i * 3);
-  }
-  ns::IdType fn_tmp[LUMICE_MAX_CRYSTAL_TRIANGLES] = {};
-  ns::FillHexFnMap(tri_cnt, tri_normals, fn_tmp);
-  for (size_t i = 0; i < tri_cnt; ++i) {
-    // kInvalidId is uint16_t(0xffff) = 65535; a direct static_cast to int would
-    // yield 65535, not -1. Explicit check maps it to the C-API sentinel -1.
-    out->face_numbers[i] = (fn_tmp[i] == ns::kInvalidId) ? -1 : static_cast<int>(fn_tmp[i]);
-  }
-  for (int i = 0; i < edge_cnt; i++) {
-    out->edges[i * 2 + 0] = edge_infos[i].edge.first;
-    out->edges[i * 2 + 1] = edge_infos[i].edge.second;
-    std::memcpy(&out->edge_face_normals[i * 6 + 0], edge_infos[i].n0, 3 * sizeof(float));
-    std::memcpy(&out->edge_face_normals[i * 6 + 3], edge_infos[i].n1, 3 * sizeof(float));
-  }
-
-  FillPerFaceTopology(tri, static_cast<int>(tri_cnt), vtx, out->face_numbers, out);
 
   return LUMICE_OK;
 }

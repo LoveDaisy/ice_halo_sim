@@ -124,6 +124,52 @@ What this dissolves, in the order the tree suffered from it:
 - **Pooling becomes concatenation.** A flat POD shared by host and both GPU backends removes
   the per-backend re-pack stage that produced the traversal and index defects.
 
+### 4.a Landing status (prism)
+
+The prism half of the target representation has landed as
+`src/core/geo3d_closedform.{hpp,cpp}` (`ComputeClosedFormPrism`), with the
+promoted `__int128` exact oracle at `test/support/exact_prism_oracle.hpp` and a
+three-way golden-analytic sweep at
+`test/golden-analytic/core/test_closed_form_prism.cpp` (well-conditioned 1e5
+samples; degenerate σ ∈ {0.3, 0.5, 0.8}, 4e4 each). New and production paths
+**coexist**; the swap-in belongs to a later subtask. Construction cost measured
+against `BM_MakeCrystal/prism_random` (10970 ns baseline) and
+`BM_TopologyReuse/prism` (130 ns floor): the closed-form implementation runs at
+~96 ns per prism on Apple Silicon (`BM_ComputeClosedFormPrism`), ~114× faster
+than the production path and comparable to the reuse floor.
+
+### 4.b Landing status (pyramid)
+
+The pyramid half of the target representation has landed alongside prism as
+`src/core/geo3d_closedform.{hpp,cpp}` (`ComputeClosedFormPyramid`, two
+overloads mirroring `CreatePyramidMesh` — direct wedge angle and Miller
+indices), with a second independent `__int128` exact oracle at
+`test/support/exact_pyramid_oracle.hpp` (general C(n,3) plane-triple
+enumeration, structurally distinct from the prism oracle's
+hardcoded-6-directions shortcut) and a three-way golden-analytic sweep at
+`test/golden-analytic/core/test_closed_form_pyramid.cpp` (well-conditioned
+sweep across both construction paths; extreme-flat tail α ∈ [85°, 89.5°];
+degenerate σ ∈ {0.30, 0.50}; shoulder / apex / face-drop specialty cases with
+a `path_tag_union` assertion that these walk the same solver branches as
+regular samples — the "no special-case branch" invariant is executable, not
+just review-time). An out-of-tree Python `Fraction` oracle in Q(√3)
+provides a third independent implementation for cross-check where the C++
+`__int128` oracle's bit width is exceeded (typical σ=0.1 mixed range: ~89%
+samples force the C++ oracle to refuse; on the ~11% it handles, closed form
+and C++ oracle agree 100%; on the refused 89% Python agrees with closed form
+at 99.8%, the residual 0.2% being ±1 vertex at boundary events already
+bounded by the golden-analytic per-parameter ceilings). New and production
+paths **coexist**; the swap-in belongs to a later subtask.
+
+Construction cost measured in the same session as
+`BM_MakeCrystal/pyramid_random` (49797 ns baseline this run) and
+`BM_ComputeClosedFormPrism` (93.9 ns): the closed-form pyramid runs at
+~1938 ns fixed / ~2885 ns random per pyramid on Apple Silicon
+(`BM_ComputeClosedFormPyramid_fixed` / `_random`), **~17× faster** than the
+production path. The gap versus prism (30× more work per call) tracks the
+structural cost: pyramid enumerates up to 20 candidate z-events and per-event
+corner deaths across 20 direction triples, vs prism's single 2D solve.
+
 ## 5. What it does **not** dissolve (honest limits)
 
 - **Concave pyramids** are not a half-space intersection. `CreateConcavePyramidMesh` needs

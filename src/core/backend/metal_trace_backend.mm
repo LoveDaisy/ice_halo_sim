@@ -739,7 +739,6 @@ struct MetalTraceBackend::Impl {
   // Polygon geometry (uploaded per-layer; capacity-resized lazily).
   id<MTLBuffer> poly_n_buf  = nil;
   id<MTLBuffer> poly_d_buf  = nil;
-  id<MTLBuffer> centroid_buf = nil;
   size_t        poly_capacity = 0;
 
   // First-layer root rays (uploaded from host).
@@ -1284,9 +1283,6 @@ void MetalTraceBackend::Impl::EnsurePolyBuffers(size_t poly_cnt) {
   poly_d_buf  = [device newBufferWithLength:poly_cnt * sizeof(float)
                                     options:MTLResourceStorageModeShared];
   assert(poly_d_buf != nil);
-  centroid_buf = [device newBufferWithLength:poly_cnt * 3 * sizeof(float)
-                                     options:MTLResourceStorageModeShared];
-  assert(centroid_buf != nil);
 }
 
 void MetalTraceBackend::Impl::EnsureRootBuffers(size_t n) {
@@ -1548,7 +1544,7 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
   // OR-clause across all Complex filters, packed in OR-clause order under each
   // parent desc. `and_terms_start` on the parent indexes here; two-region
   // packing into `complex_sub_desc_buf_` keeps Metal's 30-buffer per-stage cap
-  // intact (single binding at atIndex:27; kernel reinterprets the tail).
+  // intact (single binding at atIndex:26; kernel reinterprets the tail).
   std::vector<uint8_t> and_term_counts_flat;
   for (size_t mi = 0; mi < n_layers; ++mi) {
     const auto& ms = session_spec.scene->ms_[mi];
@@ -1853,25 +1849,14 @@ void MetalTraceBackend::Impl::UploadCrystalPool(const std::vector<Crystal>& pool
 
   auto* poly_n_ptr    = static_cast<float*>([poly_n_buf contents]);
   auto* poly_d_ptr    = static_cast<float*>([poly_d_buf contents]);
-  auto* centroid_ptr  = static_cast<float*>([centroid_buf contents]);
   auto* tri_vtx_ptr   = static_cast<float*>([tri_vtx_buf_ contents]);
   auto* tri_norm_ptr  = static_cast<float*>([tri_norm_buf_ contents]);
   auto* tri_area_ptr  = static_cast<float*>([tri_area_buf_ contents]);
   auto* tri_to_poly_ptr = static_cast<uint32_t*>([tri_to_poly_buf_ contents]);
 
   // Second pass: flatten each shape into the shared buffers at its own offset.
-  // Centroid + tri_to_poly follow the same pattern as the historical
-  // single-shape upload, only the write index picks up the pool offset.
-  // Depth-of-defense centroid bound-check + WARN: symmetric to CPU
-  // Crystal::GetFn(IdType) at crystal.cpp:437-441. Root cause of the historical
-  // pyramid+random-face_distance Metal SIGSEGV was a stride/count mismatch
-  // inside BuildPolygonFaceData (fixed there); the WARN + zero-write surfaces
-  // any future upstream drift as a detectable symptom rather than a wild read.
   // Sentinel `kInvalidIdU32` is the file-scope translation-unit constant near
   // the top of this file (single source of truth mirroring MSL kInvalidId).
-  constexpr float kFaceCoplanarFloor = 1e-2f;
-  bool centroid_bound_warned = false;
-
   for (size_t s = 0; s < pool.size(); s++) {
     const auto& crystal = pool[s];
     const uint32_t poly_off = pool_shape_table_h_[s][0];
@@ -1884,31 +1869,6 @@ void MetalTraceBackend::Impl::UploadCrystalPool(const std::vector<Crystal>& pool
     std::memcpy(poly_d_ptr + poly_off, crystal.GetPolygonFaceDist(),
                 poly_cnt * sizeof(float));
 
-    const int* poly_tri = crystal.GetPolygonFaceTriId();
-    const float* tvtx   = crystal.GetTriangleVtx();
-    for (size_t f = 0; f < poly_cnt; f++) {
-      int t = poly_tri[f];
-      if (t < 0 || static_cast<size_t>(t) >= tri_cnt) {
-        centroid_ptr[(poly_off + f) * 3 + 0] = 0.0f;
-        centroid_ptr[(poly_off + f) * 3 + 1] = 0.0f;
-        centroid_ptr[(poly_off + f) * 3 + 2] = 0.0f;
-        if (!centroid_bound_warned) {
-          ILOG_WARN(EffectiveLogger(logger_),
-                    "UploadCrystalPool: shape {} polygon face {} has out-of-range "
-                    "tri_id={} (tri_cnt={}); wrote zero centroid. This is depth-of-defense — "
-                    "root cause should be in BuildPolygonFaceData count/stride invariants.",
-                    s, f, t, tri_cnt);
-          centroid_bound_warned = true;
-        }
-        continue;
-      }
-      const float* v = tvtx + static_cast<size_t>(t) * 9;
-      for (int k = 0; k < 3; k++) {
-        centroid_ptr[(poly_off + f) * 3 + k] =
-            (v[0 * 3 + k] + v[1 * 3 + k] + v[2 * 3 + k]) / 3.0f;
-      }
-    }
-
     std::memcpy(tri_vtx_ptr + tri_off * 9, crystal.GetTriangleVtx(),
                 tri_cnt * 9 * sizeof(float));
     std::memcpy(tri_norm_ptr + tri_off * 3, crystal.GetTriangleNormal(),
@@ -1916,32 +1876,21 @@ void MetalTraceBackend::Impl::UploadCrystalPool(const std::vector<Crystal>& pool
     std::memcpy(tri_area_ptr + tri_off, crystal.GetTirangleArea(),
                 tri_cnt * sizeof(float));
 
-    // tri_to_poly stores ABSOLUTE polygon indices (poly_off + local) so that
+    // tri_to_poly stores ABSOLUTE polygon indices (poly_off + local) so
     // gen_root/transit_root can compose "shape.tri_off + local_tri →
     // tri_to_poly[..] → abs poly_idx" with a single offset addition on the
-    // triangle side and none on the polygon side. Mirrors
-    // simulator.cpp::detail::PolygonFaceOfTri (argmax with sanity floor
-    // kFaceCoplanarFloor=1e-2; must match crystal.cpp::BuildPolygonFaceData +
-    // that helper). At P_ci == 1 this becomes 0 + local == local — identical
-    // to the historical single-shape layout.
-    const float* tri_norms_src  = crystal.GetTriangleNormal();
-    const float* poly_norms_src = crystal.GetPolygonFaceNormal();
+    // triangle side and none on the polygon side. Reads the parametric
+    // slot→poly-face table via Crystal::PolygonFaceOfTri (populated by
+    // Crystal::PopulateFromCfGeom for hex-family factories). Mesh-only
+    // crystals (custom-mesh test hook) return kInvalidId per triangle here;
+    // downstream sampling drops those rays via the InitRay_p_fid kInvalidId
+    // fallback — same sentinel semantics as the prior argmax path.
     for (size_t t = 0; t < tri_cnt; t++) {
-      const float* tn = tri_norms_src + t * 3;
-      int best_p = -1;
-      float best_dot = -1.0f;
-      for (size_t p = 0; p < poly_cnt; p++) {
-        const float* pn = poly_norms_src + p * 3;
-        float dot = tn[0] * pn[0] + tn[1] * pn[1] + tn[2] * pn[2];
-        if (dot > best_dot) {
-          best_dot = dot;
-          best_p = static_cast<int>(p);
-        }
-      }
+      IdType local = crystal.PolygonFaceOfTri(static_cast<int>(t));
       tri_to_poly_ptr[tri_off + t] =
-          (best_p >= 0 && best_dot >= 1.0f - kFaceCoplanarFloor)
-              ? (poly_off + static_cast<uint32_t>(best_p))
-              : kInvalidIdU32;
+          (local == kInvalidId || static_cast<uint32_t>(local) >= poly_cnt)
+              ? kInvalidIdU32
+              : (poly_off + static_cast<uint32_t>(local));
     }
   }
 
@@ -2709,58 +2658,55 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   [enc setBuffer:r_tf           offset:0 atIndex:3];
   [enc setBuffer:poly_n_buf     offset:0 atIndex:4];
   [enc setBuffer:poly_d_buf     offset:0 atIndex:5];
-  [enc setBuffer:centroid_buf   offset:0 atIndex:6];
-  [enc setBytes:&params length:sizeof(KernelParams) atIndex:7];
-  [enc setBuffer:xyz_image      offset:0 atIndex:8];
-  [enc setBuffer:cont_d[out_slot]  offset:0 atIndex:9];
-  // scrum-268.8 (DR-3): slots 10/12 retired from out_p / out_tf and reclaimed
-  // for the wavelength pool (read) + per-ray root wl_idx (read). cont_w stays
-  // at 11; cont_wl_idx (write) moves out to slot 29 / exit_wl_idx (write) to
-  // slot 30 — the only two free slots left under Metal's 30-binding ceiling.
-  [enc setBuffer:wl_pool_buf_      offset:0 atIndex:10];
-  [enc setBuffer:cont_w[out_slot]  offset:0 atIndex:11];
-  [enc setBuffer:root_wl_idx_buf_  offset:0 atIndex:12];
-  [enc setBuffer:counter_buf    offset:0 atIndex:13];
-  [enc setBuffer:rec_sink_buf   offset:0 atIndex:14];
-  [enc setBuffer:exit_stats_buf_ offset:0 atIndex:15];
+  [enc setBytes:&params length:sizeof(KernelParams) atIndex:6];
+  [enc setBuffer:xyz_image      offset:0 atIndex:7];
+  [enc setBuffer:cont_d[out_slot]  offset:0 atIndex:8];
+  // Slots 9/11 carry the wavelength pool (read) + per-ray root wl_idx (read);
+  // cont_w sits at 10. cont_wl_idx (write) is at slot 28. The trace kernel
+  // reads per-ray optics from wl_pool[wl_idx] so a per-batch n_idx / cie_x/y/z
+  // no longer travels in KernelParams.
+  [enc setBuffer:wl_pool_buf_      offset:0 atIndex:9];
+  [enc setBuffer:cont_w[out_slot]  offset:0 atIndex:10];
+  [enc setBuffer:root_wl_idx_buf_  offset:0 atIndex:11];
+  [enc setBuffer:counter_buf    offset:0 atIndex:12];
+  [enc setBuffer:rec_sink_buf   offset:0 atIndex:13];
+  [enc setBuffer:exit_stats_buf_ offset:0 atIndex:14];
   // K-shape pool per-ray shape carrier: the preceding gen_root_kernel
   // (first_ms) or transit_root_kernel (later layers) wrote
   // {poly_off, poly_cnt} for each ray's picked shape; trace_layer_kernel
-  // reads it here at slot 16 to drive its ray-polygon loop over the
+  // reads it here at slot 15 to drive its ray-polygon loop over the
   // ray-specific polygon slice.
-  [enc setBuffer:root_pool_shape_buf_ offset:0 atIndex:16];
-  [enc setBuffer:root_rot_buf   offset:0 atIndex:17];
-  // S1 device-fused: slot 18 = landed_weight scalar (previously exit_ray_d).
-  // Slots 19-23 (exit_ray_w/slot/crystal_id/face_seq_len/data) and 28
-  // (exit_ms_layer) and 30 (exit_wl_idx) are freed; exit records are no
-  // longer materialised — the kernel accumulates directly into image + landed_weight.
-  [enc setBuffer:landed_weight_buf_ offset:0 atIndex:18];
+  [enc setBuffer:root_pool_shape_buf_ offset:0 atIndex:15];
+  [enc setBuffer:root_rot_buf   offset:0 atIndex:16];
+  // S1 device-fused: slot 17 = landed_weight scalar. Exit records are not
+  // materialised — the kernel accumulates directly into image + landed_weight.
+  [enc setBuffer:landed_weight_buf_ offset:0 atIndex:17];
   // Emit-gate filter state (scrum-267 task-fused-emit-gate Step 4b). Bound for
   // every dispatch (Metal disallows nil buffers). EnsureFilterBuffers guarantees
   // non-nil even in no-filter sessions via the 1-byte dummy fallback (R5 fix).
-  // Slots 24-27 carry filter descriptors; slot 28 is freed (was exit_ms_layer).
-  [enc setBuffer:filter_desc_buf_      offset:0 atIndex:24];
-  [enc setBuffer:getfn_offsets_buf_    offset:0 atIndex:25];
-  [enc setBuffer:getfn_bytes_buf_      offset:0 atIndex:26];
-  [enc setBuffer:complex_sub_desc_buf_ offset:0 atIndex:27];
-  // scrum-268.8 (DR-3): cont_wl_idx propagates the photon's lifetime
-  // wavelength tag into the continuation ring (slot 29). Slot 30 freed.
-  [enc setBuffer:cont_wl_idx_buf_[out_slot] offset:0 atIndex:29];
-  // task-331.5 (raypath-color foundation): per-ray component-mask carry (19/20),
-  // summand→bit table (21), and the emit capture ring (22/23/28). All bound
+  // Slots 23-26 carry filter descriptors.
+  [enc setBuffer:filter_desc_buf_      offset:0 atIndex:23];
+  [enc setBuffer:getfn_offsets_buf_    offset:0 atIndex:24];
+  [enc setBuffer:getfn_bytes_buf_      offset:0 atIndex:25];
+  [enc setBuffer:complex_sub_desc_buf_ offset:0 atIndex:26];
+  // cont_wl_idx propagates the photon's lifetime wavelength tag into the
+  // continuation ring (slot 28) so the next layer's trace reads its optics
+  // from the same wl_pool entry the ray originally sampled.
+  [enc setBuffer:cont_wl_idx_buf_[out_slot] offset:0 atIndex:28];
+  // Per-ray raypath-color state: uint64 component-mask carry (18/19), summand→
+  // bit table (20), and the emit capture ring (21/22/27). All bound
   // unconditionally (Metal disallows nil); the kernel's capture branch is gated
   // by KernelParams.capture_ray_mask so production dispatches skip them.
-  [enc setBuffer:root_component_buf_       offset:0 atIndex:19];
-  [enc setBuffer:cont_component_buf_[out_slot] offset:0 atIndex:20];
-  [enc setBuffer:gate_component_bits_buf_  offset:0 atIndex:21];
-  [enc setBuffer:exit_comp_mask_buf_       offset:0 atIndex:22];
-  [enc setBuffer:exit_comp_w_buf_          offset:0 atIndex:23];
-  [enc setBuffer:exit_comp_cnt_buf_        offset:0 atIndex:28];
-  // task-358.1 Step 4 (AC3 device-side Y-lane accumulation): slot 30 = per-
-  // class atomic_float accumulator (dummy 4-byte alloc when class_count==0).
-  // Slots 0-29 are fully occupied by the trace kernel — 30 is the only free
-  // slot under Metal's per-stage 30-buffer ceiling (assumption B).
-  [enc setBuffer:class_lane_buf_           offset:0 atIndex:30];
+  [enc setBuffer:root_component_buf_       offset:0 atIndex:18];
+  [enc setBuffer:cont_component_buf_[out_slot] offset:0 atIndex:19];
+  [enc setBuffer:gate_component_bits_buf_  offset:0 atIndex:20];
+  [enc setBuffer:exit_comp_mask_buf_       offset:0 atIndex:21];
+  [enc setBuffer:exit_comp_w_buf_          offset:0 atIndex:22];
+  [enc setBuffer:exit_comp_cnt_buf_        offset:0 atIndex:27];
+  // Device-side per-color-class Y-lane accumulator: slot 29 = atomic_float
+  // buffer, allocated as class_count * W * H (or a 4-byte dummy when
+  // class_count==0 so this binding stays non-nil under Metal's nil-ban).
+  [enc setBuffer:class_lane_buf_           offset:0 atIndex:29];
 
   NSUInteger tg = std::min<NSUInteger>(256, pso.maxTotalThreadsPerThreadgroup);
   [enc dispatchThreads:MTLSizeMake(num_rays, 1, 1)
