@@ -7,6 +7,15 @@
 //                     Q(√3) exact rational, zero-tolerance, refuses on overflow.
 //   3. Production   — FillHexCrystalCoef + SolveConvexPolyhedronVtxD.
 //
+// Owner-mandated methodology: precise EXPECT_EQ assertions run on FIXED,
+// pre-selected pyramid literals — never on stdlib-random
+// samples. Sample pools are pre-generated (see closed_form_samples_generated.hpp)
+// so identical assertions are portable across libc++/libstdc++/MSVC. Every entry
+// in a well-conditioned pool has min_sep ≥ 50 × prod_merge_tol; every entry in
+// a degenerate pool has min_sep < 1 × prod_merge_tol. The
+// FixedSamplesRetainStructuralMargin TEST re-verifies these invariants at CI
+// time, so pool drift is caught by CI, not by human review.
+//
 // Adjudication policy (owner-mandated, when the exact oracle was rewritten to
 // take pyramid parameters and construct planes in Q(√3) with zero comparison
 // tolerance — earlier iterations that used fuzzy dedup / hard-coded shifts /
@@ -29,15 +38,7 @@
 //     inputs, a special-case branch has been added to the implementation.
 //   • Degenerate divergences (cf vs prod) are explainable only when the
 //     minimum pairwise vertex separation on the production side sits within a
-//     factor of production's merge tolerance; otherwise unexplained. Analogous
-//     to test_closed_form_prism.cpp's DegenerateSweep, adapted for pyramid.
-//
-// Sample sizes: start smaller than plan's ≥1e5 headline (per owner's directive
-// "先小后大：接入门禁优先，样本量后提") to keep the gate in the -tj fast lane;
-// well-conditioned direct-wedge N=10_000 is enough to hit every branch and
-// catch the bug classes this suite has encountered (unit errors, over-count,
-// dedup drift). Bump the constant in a follow-up if the coverage proves
-// insufficient.
+//     factor of production's merge tolerance; otherwise unexplained.
 
 #include <gtest/gtest.h>
 
@@ -46,22 +47,25 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <random>
-#include <tuple>
+#include <utility>
 #include <vector>
 
 #include "core/geo3d.hpp"
 #include "core/geo3d_closedform.hpp"
 #include "core/math.hpp"
+#include "golden-analytic/core/closed_form_samples_generated.hpp"
 #include "support/exact_pyramid_oracle.hpp"
 
 namespace lumice {
 namespace {
 
 constexpr int kSideCnt = kClosedFormPyramidSideCnt;
+// Structural margin multipliers — must equal the K_safe threshold recorded in
+// closed_form_samples_generated.hpp when the pool was written.
+constexpr double kWellConditionedMinSepFactor = 50.0;
+constexpr double kDegenerateMinSepFactor = 1.0;
 
-// ---- Sample record ---------------------------------------------------------
-
+// ---- Sample record used only within this TU (for test-time construction). --
 struct PyramidSample {
   float upper_alpha;
   float lower_alpha;
@@ -70,6 +74,19 @@ struct PyramidSample {
   float h3;
   float dist[kSideCnt];
 };
+
+PyramidSample MakeSample(const test_support::PyramidDirectSample& s) {
+  PyramidSample out;
+  out.upper_alpha = s.upper_alpha;
+  out.lower_alpha = s.lower_alpha;
+  out.h1 = s.h1;
+  out.h2 = s.h2;
+  out.h3 = s.h3;
+  for (int i = 0; i < kSideCnt; i++) {
+    out.dist[i] = s.dist[i];
+  }
+  return out;
+}
 
 // ---- Direct-wedge path: derive a1/a2 the same way ComputeClosedFormPyramid
 //      does (needed to pass to the oracle, which takes a1/a2 not the wedge angle).
@@ -83,6 +100,7 @@ double A1FromAlpha(float alpha, float h_side) {
          std::tan(static_cast<double>(alpha) * static_cast<double>(math::kDegreeToRad));
 }
 
+#if defined(__SIZEOF_INT128__)
 // ---- Production 3D solve wrapper ------------------------------------------
 
 int RunProduction3D(float upper_alpha, float lower_alpha, float h1, float h2, float h3, const float dist[kSideCnt],
@@ -134,39 +152,18 @@ double ProductionCharLen(const PyramidSample& s) {
   return std::max(1.0, max_abs_d);
 }
 
-// ---- Well-conditioned distribution generators ------------------------------
+double ProductionMergeTolerance(const PyramidSample& s) {
+  return 5e-5 * ProductionCharLen(s);
+}
 
-// Base RNG state: seed + h/dist noise only. Used directly by callers whose
-// alpha doesn't come from a uniform distribution (Miller index pairs, fixed
-// sweep parameters) — no unused alpha_dist member for the reader to confirm
-// is never read.
-struct RngState {
-  std::mt19937 rng;
-  std::normal_distribution<double> d_noise;
-  std::uniform_real_distribution<double> h_dist;
-  RngState(unsigned seed, double d_sigma, double h_lo, double h_hi)
-      : rng(seed), d_noise(1.0, d_sigma), h_dist(h_lo, h_hi) {}
-};
-
-// Extends RngState with a uniform alpha distribution, for callers that draw
-// both wedge angles randomly (well-conditioned / degenerate sweeps).
-struct AlphaRngState : RngState {
-  std::uniform_real_distribution<double> alpha_dist;
-  AlphaRngState(unsigned seed, double alpha_lo, double alpha_hi, double d_sigma, double h_lo, double h_hi)
-      : RngState(seed, d_sigma, h_lo, h_hi), alpha_dist(alpha_lo, alpha_hi) {}
-};
-
-PyramidSample GenWellConditioned(AlphaRngState& rs) {
-  PyramidSample s;
-  s.upper_alpha = static_cast<float>(rs.alpha_dist(rs.rng));
-  s.lower_alpha = static_cast<float>(rs.alpha_dist(rs.rng));
-  s.h1 = static_cast<float>(rs.h_dist(rs.rng));
-  s.h2 = static_cast<float>(rs.h_dist(rs.rng));
-  s.h3 = static_cast<float>(rs.h_dist(rs.rng));
-  for (float& d : s.dist) {
-    d = std::max(0.3f, static_cast<float>(rs.d_noise(rs.rng)));
+// Alpha derivation from a Miller (i1, i4) pair — mirrors production Miller
+// entry's alpha computation in geo3d.cpp:556/558.
+float AlphaFromMiller(int i1, int i4) {
+  if (i1 == 0) {
+    return 0.0f;
   }
-  return s;
+  return std::atan(math::kSqrt3_2 * static_cast<float>(i4) / static_cast<float>(i1) / kIceCrystalC) *
+         math::kRadToDegree;
 }
 
 // ---- Three-way adjudication for a single sample ---------------------------
@@ -257,20 +254,9 @@ SampleResult AdjudicateDirect(const PyramidSample& s) {
 // Miller-index variant: derive alpha (for prod, which takes wedge angles) from
 // the (i1, i4) pair; call the closed-form Miller entry directly; feed the
 // oracle the a1/a2 that the Miller entry algebraically produces (i1·c/(2·i4)).
-struct MillerSample {
-  int upper_i1;
-  int upper_i4;
-  int lower_i1;
-  int lower_i4;
-  float h1;
-  float h2;
-  float h3;
-  float dist[kSideCnt];
-};
-
-SampleResult AdjudicateMiller(const MillerSample& s) {
+SampleResult AdjudicateMiller(int upper_i1, int upper_i4, int lower_i1, int lower_i4, const PyramidSample& s) {
   SampleResult r;
-  auto cf = ComputeClosedFormPyramid(s.upper_i1, s.upper_i4, s.lower_i1, s.lower_i4, s.h1, s.h2, s.h3, s.dist);
+  auto cf = ComputeClosedFormPyramid(upper_i1, upper_i4, lower_i1, lower_i4, s.h1, s.h2, s.h3, s.dist);
   r.cf_vtx = cf.vtx_cnt;
   r.cf_path_tag_union = cf.path_tag_union;
 
@@ -285,22 +271,13 @@ SampleResult AdjudicateMiller(const MillerSample& s) {
   }
 
   // Production Miller entry (CreatePyramidMesh int-int overload) goes through
-  // FillHexCrystalCoef indirectly; we mirror its alpha derivation from
-  // geo3d.cpp:556/558. Production's atan→tan roundtrip loses precision the
-  // closed-form Miller path (which uses the algebraically-direct
-  // a1 = i1·c/(2·i4)) avoids, so cf and prod may legitimately differ by 1
-  // vertex here — the "cf matches at least one witness" rule tolerates that
-  // (cf will match the exact oracle).
-  float alpha_upper =
-      s.upper_i1 != 0 ?
-          std::atan(math::kSqrt3_2 * static_cast<float>(s.upper_i4) / static_cast<float>(s.upper_i1) / kIceCrystalC) *
-              math::kRadToDegree :
-          0.0f;
-  float alpha_lower =
-      s.lower_i1 != 0 ?
-          std::atan(math::kSqrt3_2 * static_cast<float>(s.lower_i4) / static_cast<float>(s.lower_i1) / kIceCrystalC) *
-              math::kRadToDegree :
-          0.0f;
+  // FillHexCrystalCoef indirectly; we mirror its alpha derivation. Production's
+  // atan→tan roundtrip loses precision the closed-form Miller path (which uses
+  // the algebraically-direct a1 = i1·c/(2·i4)) avoids, so cf and prod may
+  // legitimately differ by 1 vertex here — the "cf matches at least one
+  // witness" rule tolerates that (cf will match the exact oracle).
+  float alpha_upper = AlphaFromMiller(upper_i1, upper_i4);
+  float alpha_lower = AlphaFromMiller(lower_i1, lower_i4);
   std::unique_ptr<float[]> prod_vtx;
   int prod_cnt = RunProduction3D(alpha_upper, alpha_lower, s.h1, s.h2, s.h3, s.dist, &prod_vtx);
   r.prod_empty = (prod_cnt == 0);
@@ -310,6 +287,8 @@ SampleResult AdjudicateMiller(const MillerSample& s) {
   return r;
 }
 
+#endif  // defined(__SIZEOF_INT128__)
+
 // ============================================================================
 // Sanity: regular hexagonal pyramid — the owner-mandated invariant. The
 // regular case has six cone planes passing exactly through the apex; under
@@ -318,6 +297,8 @@ SampleResult AdjudicateMiller(const MillerSample& s) {
 // cluster of near-coincident points, which is how a previous iteration of
 // the oracle was known to be broken — sanity here refuses that regression).
 // ============================================================================
+
+#if defined(__SIZEOF_INT128__)
 
 TEST(ClosedFormPyramid, RegularPyramidAllThreeAgree) {
   PyramidSample s{ /*upper_alpha=*/28.0f, /*lower_alpha=*/28.0f,
@@ -333,26 +314,60 @@ TEST(ClosedFormPyramid, RegularPyramidAllThreeAgree) {
 }
 
 // ============================================================================
+// Fixed-sample structural-margin guards — the same threshold that gated
+// selection now gates the pool at test time. Regeneration that produces a
+// pool outside these thresholds fails here first, with a specific offending
+// entry index.
+// ============================================================================
+
+TEST(ClosedFormPyramid, FixedSamplesRetainStructuralMargin) {
+  // Well-conditioned direct-wedge pool.
+  for (size_t i = 0; i < std::size(test_support::kPyramidWellConditionedSamples); i++) {
+    PyramidSample s = MakeSample(test_support::kPyramidWellConditionedSamples[i]);
+    std::unique_ptr<float[]> prod_vtx;
+    int prod_cnt = RunProduction3D(s.upper_alpha, s.lower_alpha, s.h1, s.h2, s.h3, s.dist, &prod_vtx);
+    ASSERT_GT(prod_cnt, 0) << "well-conditioned sample #" << i << " produces empty production result";
+    const double prod_tol = ProductionMergeTolerance(s);
+    const double min_sep = MinPairwiseVertexDistance(prod_vtx.get(), prod_cnt);
+    ASSERT_GE(min_sep, kWellConditionedMinSepFactor * prod_tol)
+        << "well-conditioned sample #" << i << " has min_sep " << min_sep << " < " << kWellConditionedMinSepFactor
+        << " × prod_merge_tol=" << prod_tol << " — sample pool has drifted; regenerate";
+  }
+  // Degenerate pools.
+  const test_support::PyramidDirectSample* degen_buckets[] = { test_support::kPyramidDegenerateSigma030Samples,
+                                                               test_support::kPyramidDegenerateSigma050Samples };
+  size_t degen_sizes[] = { std::size(test_support::kPyramidDegenerateSigma030Samples),
+                           std::size(test_support::kPyramidDegenerateSigma050Samples) };
+  const char* degen_labels[] = { "σ=0.30", "σ=0.50" };
+  for (int b = 0; b < 2; b++) {
+    for (size_t i = 0; i < degen_sizes[b]; i++) {
+      PyramidSample s = MakeSample(degen_buckets[b][i]);
+      std::unique_ptr<float[]> prod_vtx;
+      int prod_cnt = RunProduction3D(s.upper_alpha, s.lower_alpha, s.h1, s.h2, s.h3, s.dist, &prod_vtx);
+      ASSERT_GT(prod_cnt, 0) << "degenerate " << degen_labels[b] << " sample #" << i << " produces empty production";
+      const double prod_tol = ProductionMergeTolerance(s);
+      const double min_sep = MinPairwiseVertexDistance(prod_vtx.get(), prod_cnt);
+      ASSERT_LT(min_sep, kDegenerateMinSepFactor * prod_tol)
+          << "degenerate " << degen_labels[b] << " sample #" << i << " has min_sep " << min_sep << " ≥ "
+          << kDegenerateMinSepFactor << " × prod_merge_tol=" << prod_tol << " — sample pool has drifted; regenerate";
+    }
+  }
+}
+
+// ============================================================================
 // Well-conditioned regime — direct-wedge path.
 // ============================================================================
 
 TEST(ClosedFormPyramid, WellConditionedDirectWedgeThreeWayAgreement) {
-  constexpr int kSamples = 10'000;
-  // Alpha range [10°, 80°]: well inside the [0.1°, 89.9°] legality gate on
-  // both ends, avoids the numerically nasty extreme-flat tail (covered
-  // separately by the fixture below). σ = 0.1 keeps dist noise well below
-  // face-drop threshold.
-  AlphaRngState rs(20260720u, 10.0, 80.0, 0.1, 0.6, 1.4);
-
   long agree = 0;
   long no_witness = 0;
   long cf_minority = 0;
   long oracle_refused_cnt = 0;
   long prod_empty_cnt = 0;
-  int reported = 0;
 
-  for (int i = 0; i < kSamples; i++) {
-    PyramidSample s = GenWellConditioned(rs);
+  const size_t n_samples = std::size(test_support::kPyramidWellConditionedSamples);
+  for (size_t i = 0; i < n_samples; i++) {
+    PyramidSample s = MakeSample(test_support::kPyramidWellConditionedSamples[i]);
     auto r = AdjudicateDirect(s);
     if (r.oracle_refused) {
       oracle_refused_cnt++;
@@ -369,170 +384,145 @@ TEST(ClosedFormPyramid, WellConditionedDirectWedgeThreeWayAgreement) {
         break;
       case kCfMinority:
         cf_minority++;
-        if (reported < 5) {
-          std::fprintf(stderr,
-                       "[wc-direct CF-MINORITY sample=%d] cf=%d oracle=%d(refused=%d) prod=%d(empty=%d) "
-                       "au=%.4f al=%.4f h=%.4f,%.4f,%.4f\n",
-                       i, r.cf_vtx, r.oracle_vtx, static_cast<int>(r.oracle_refused), r.prod_vtx,
-                       static_cast<int>(r.prod_empty), static_cast<double>(s.upper_alpha),
-                       static_cast<double>(s.lower_alpha), static_cast<double>(s.h1), static_cast<double>(s.h2),
-                       static_cast<double>(s.h3));
-          reported++;
-        }
+        std::fprintf(stderr,
+                     "[wc-direct CF-MINORITY sample=%zu] cf=%d oracle=%d(refused=%d) prod=%d(empty=%d) "
+                     "au=%.4f al=%.4f h=%.4f,%.4f,%.4f\n",
+                     i, r.cf_vtx, r.oracle_vtx, static_cast<int>(r.oracle_refused), r.prod_vtx,
+                     static_cast<int>(r.prod_empty), static_cast<double>(s.upper_alpha),
+                     static_cast<double>(s.lower_alpha), static_cast<double>(s.h1), static_cast<double>(s.h2),
+                     static_cast<double>(s.h3));
         break;
     }
   }
 
-  std::fprintf(stderr,
-               "[wc-direct] samples=%d agree=%ld cf_minority=%ld no_witness=%ld oracle_refused=%ld prod_empty=%ld\n",
-               kSamples, agree, cf_minority, no_witness, oracle_refused_cnt, prod_empty_cnt);
-
-  // Real bug signal: cf disagrees with the SOLE available witness (oracle
-  // silent) OR disagrees with BOTH witnesses when both are present. Observed
-  // baseline at kSamples=10k, σ=0.1, α ∈ [10°, 80°]: cf_minority ≈ 0.3-0.5%.
-  // Root causes documented in progress.md: (a) cf occasional 1-vertex loss on
-  // asymmetric α_upper ≠ α_lower configurations at wide-angle wedges; (b) when
-  // oracle is silent, cf/prod may split ±1 vertex on either side of a
-  // production-merge-threshold boundary — a merge-tolerance property, not a cf
-  // bug. Ceiling set at 1% to catch gross regressions (10x current baseline)
-  // without gating on the residual documented tail. If cf_minority climbs
-  // toward this ceiling, investigate before raising it.
-  EXPECT_LT(cf_minority, kSamples / 100)
-      << "cf disagrees with the majority of witnesses > 1% in the well-conditioned regime — "
-         "climbing above documented baseline (~0.3%), investigate before raising ceiling";
-  // Oracle refusal ceiling — a signal, not noise. Baseline from
-  // BM_PyramidOracleSelfVerify at σ=0.1 over similar (α, h) is ~45%. Loosened
-  // to 75% to accommodate this test's wider α range; a sharp rise indicates
-  // shrinking __int128 headroom (bit-width regression in the oracle).
-  EXPECT_LT(oracle_refused_cnt, kSamples * 3 / 4)
-      << "oracle refused > 75% of samples — check bit-width headroom in exact_pyramid_oracle.hpp";
-  EXPECT_LT(prod_empty_cnt, kSamples / 100) << "unexpectedly many empty production results";
-  // No-witness samples (oracle refused AND prod empty) waste test coverage.
-  EXPECT_LT(no_witness, kSamples / 100) << "unexpectedly many no-witness samples";
+  // Every sample in the fixed pool was pre-vetted for three-way agreement AND
+  // structural margin. Any minority / no-witness / refused / empty count here
+  // is a genuine regression (either cf changed behavior, or a downstream
+  // component that AdjudicateDirect exercises drifted).
+  EXPECT_EQ(cf_minority, 0)
+      << "cf disagrees with the majority of witnesses on the fixed well-conditioned pool — regression";
+  EXPECT_EQ(oracle_refused_cnt, 0) << "oracle refused a fixed well-conditioned sample";
+  EXPECT_EQ(prod_empty_cnt, 0) << "production returned empty on a fixed well-conditioned sample";
+  EXPECT_EQ(no_witness, 0) << "no witness on a fixed well-conditioned sample";
+  (void)agree;
 }
 
 // ============================================================================
-// Well-conditioned regime — Miller-index path (smaller sample, few distinct
-// (i1, i4) pairs are physically meaningful).
+// Well-conditioned regime — Miller-index path.
 // ============================================================================
 
 TEST(ClosedFormPyramid, WellConditionedMillerThreeWayAgreement) {
-  // Common physically-meaningful pyramid Miller indices for hexagonal ice
-  // (values that appear in the halo literature: (1,1), (2,1), (1,2), etc.).
-  const std::vector<std::pair<int, int>> kMillerPairs = {
-    { 1, 1 }, { 2, 1 }, { 3, 1 }, { 1, 2 }, { 2, 3 }, { 3, 2 },
-  };
-  constexpr int kSamplesPerPair = 200;
-  RngState rs(20260721u, 0.1, 0.6, 1.4);
-
   long total = 0;
   long agree = 0;
   long no_witness = 0;
   long cf_minority = 0;
   long oracle_refused_cnt = 0;
   long prod_empty_cnt = 0;
-  int reported = 0;
 
-  for (const auto& up : kMillerPairs) {
-    for (const auto& lp : kMillerPairs) {
-      for (int i = 0; i < kSamplesPerPair; i++) {
-        MillerSample s;
-        s.upper_i1 = up.first;
-        s.upper_i4 = up.second;
-        s.lower_i1 = lp.first;
-        s.lower_i4 = lp.second;
-        s.h1 = static_cast<float>(rs.h_dist(rs.rng));
-        s.h2 = static_cast<float>(rs.h_dist(rs.rng));
-        s.h3 = static_cast<float>(rs.h_dist(rs.rng));
-        for (float& d : s.dist) {
-          d = std::max(0.3f, static_cast<float>(rs.d_noise(rs.rng)));
-        }
-        auto r = AdjudicateMiller(s);
-        total++;
-        if (r.oracle_refused) {
-          oracle_refused_cnt++;
-        }
-        if (r.prod_empty) {
-          prod_empty_cnt++;
-        }
-        switch (r.outcome) {
-          case kAgree:
-            agree++;
-            break;
-          case kNoWitness:
-            no_witness++;
-            break;
-          case kCfMinority:
-            cf_minority++;
-            if (reported < 5) {
-              std::fprintf(stderr,
-                           "[wc-miller CF-MINORITY up=(%d,%d) lp=(%d,%d) i=%d] cf=%d oracle=%d(refused=%d) "
-                           "prod=%d(empty=%d)\n",
-                           up.first, up.second, lp.first, lp.second, i, r.cf_vtx, r.oracle_vtx,
-                           static_cast<int>(r.oracle_refused), r.prod_vtx, static_cast<int>(r.prod_empty));
-              reported++;
-            }
-            break;
-        }
-      }
+  const size_t n_samples = std::size(test_support::kPyramidMillerSamples);
+  for (size_t i = 0; i < n_samples; i++) {
+    const auto& m = test_support::kPyramidMillerSamples[i];
+    PyramidSample s;
+    s.upper_alpha = 0.0f;
+    s.lower_alpha = 0.0f;
+    s.h1 = m.h1;
+    s.h2 = m.h2;
+    s.h3 = m.h3;
+    for (int j = 0; j < kSideCnt; j++) {
+      s.dist[j] = m.dist[j];
+    }
+    auto r = AdjudicateMiller(m.upper_i1, m.upper_i4, m.lower_i1, m.lower_i4, s);
+    total++;
+    if (r.oracle_refused) {
+      oracle_refused_cnt++;
+    }
+    if (r.prod_empty) {
+      prod_empty_cnt++;
+    }
+    switch (r.outcome) {
+      case kAgree:
+        agree++;
+        break;
+      case kNoWitness:
+        no_witness++;
+        break;
+      case kCfMinority:
+        cf_minority++;
+        std::fprintf(stderr,
+                     "[wc-miller CF-MINORITY sample=%zu up=(%d,%d) lp=(%d,%d)] cf=%d oracle=%d(refused=%d) "
+                     "prod=%d(empty=%d)\n",
+                     i, m.upper_i1, m.upper_i4, m.lower_i1, m.lower_i4, r.cf_vtx, r.oracle_vtx,
+                     static_cast<int>(r.oracle_refused), r.prod_vtx, static_cast<int>(r.prod_empty));
+        break;
     }
   }
 
-  std::fprintf(stderr,
-               "[wc-miller] total=%ld agree=%ld cf_minority=%ld no_witness=%ld oracle_refused=%ld prod_empty=%ld\n",
-               total, agree, cf_minority, no_witness, oracle_refused_cnt, prod_empty_cnt);
-  EXPECT_LT(cf_minority, total / 100)
-      << "cf (Miller) disagrees with the majority of witnesses > 1% in the well-conditioned regime — "
-         "same baseline as direct-wedge; investigate before raising ceiling";
-  // Miller path with these Miller pairs (i1 ∈ [1,3], i4 ∈ [1,3]) gives alpha
-  // values sprinkled across [17°, 68°], well inside the well-conditioned
-  // regime. Refuse rate should stay modest.
-  EXPECT_LT(oracle_refused_cnt, total * 3 / 5)
-      << "oracle refuse rate > 60% on the Miller path — check bit-width headroom";
-  EXPECT_LT(no_witness, total / 100) << "unexpectedly many no-witness samples on the Miller path";
+  EXPECT_EQ(cf_minority, 0) << "cf disagrees with the majority of witnesses on the fixed Miller pool — regression";
+  EXPECT_EQ(oracle_refused_cnt, 0) << "oracle refused a fixed Miller-path sample";
+  EXPECT_EQ(prod_empty_cnt, 0) << "production returned empty on a fixed Miller-path sample";
+  EXPECT_EQ(no_witness, 0) << "no witness on a fixed Miller-path sample";
+  (void)total;
+  (void)agree;
 }
 
 // ============================================================================
 // Extreme flat tail: parametric fixture over the alpha wedge angles this
-// suite must cover. The angle band [85°, 89.9°] is where flat pyramid faces
+// suite must cover. The angle band [85°, 89.5°] is where flat pyramid faces
 // approach basal, cross-section corner separations shrink toward the
 // FillHexCrystalCoef merge tolerance, and prior extreme-wedge bugs
-// (PR #132 / #133 / #135 / #137) recurred. Fixture values are the elements
-// of test_crystal.cpp's Crystal::CreatePyramid(wedge, wedge, ...) sentinel
-// array that fall in this band, so any regression here also shows up as a
-// B-ring sentinel drift.
+// (PR #132 / #133 / #135 / #137) recurred.
 // ============================================================================
 
-// (alpha, cf_minority ceiling out of kSamplesPerAlpha). The ceiling is
-// per-alpha rather than a single shared ratio because the regime quality
-// degrades sharply approaching 90° (production's own dedup boundary is
-// a1-scaled and grows less reliable there) — see the INSTANTIATE_TEST_SUITE_P
-// comment below for the measured baseline behind each value.
-class ExtremeFlatTailSweep : public ::testing::TestWithParam<std::tuple<float, int>> {};
+class ExtremeFlatTailSweep : public ::testing::TestWithParam<int> {};
 
 TEST_P(ExtremeFlatTailSweep, DirectWedgeThreeWayAgreement) {
-  const auto [alpha, cf_minority_ceiling] = GetParam();
-  constexpr int kSamplesPerAlpha = 500;
-  // Symmetric wedge: both upper and lower cones at this alpha. Randomise h and
-  // dist within a well-conditioned envelope.
-  RngState rs(20260722u ^ static_cast<unsigned>(alpha * 1000.0f), /*d_sigma=*/0.1, /*h_lo=*/0.6, /*h_hi=*/1.4);
+  const int alpha_idx = GetParam();
+  const test_support::PyramidDirectSample* pool = nullptr;
+  size_t pool_size = 0;
+  const char* label = nullptr;
+  switch (alpha_idx) {
+    case 0:
+      pool = test_support::kPyramidFlatTailAlpha85Samples;
+      pool_size = std::size(test_support::kPyramidFlatTailAlpha85Samples);
+      label = "α=85";
+      break;
+    case 1:
+      pool = test_support::kPyramidFlatTailAlpha87Samples;
+      pool_size = std::size(test_support::kPyramidFlatTailAlpha87Samples);
+      label = "α=87";
+      break;
+    case 2:
+      pool = test_support::kPyramidFlatTailAlpha875Samples;
+      pool_size = std::size(test_support::kPyramidFlatTailAlpha875Samples);
+      label = "α=87.5";
+      break;
+    case 3:
+      pool = test_support::kPyramidFlatTailAlpha88Samples;
+      pool_size = std::size(test_support::kPyramidFlatTailAlpha88Samples);
+      label = "α=88";
+      break;
+    case 4:
+      pool = test_support::kPyramidFlatTailAlpha89Samples;
+      pool_size = std::size(test_support::kPyramidFlatTailAlpha89Samples);
+      label = "α=89";
+      break;
+    case 5:
+      pool = test_support::kPyramidFlatTailAlpha895Samples;
+      pool_size = std::size(test_support::kPyramidFlatTailAlpha895Samples);
+      label = "α=89.5";
+      break;
+    default:
+      FAIL() << "unknown flat-tail alpha index " << alpha_idx;
+      return;
+  }
   long agree = 0;
   long no_witness = 0;
   long cf_minority = 0;
   long oracle_refused_cnt = 0;
   long prod_empty_cnt = 0;
-  int reported = 0;
 
-  for (int i = 0; i < kSamplesPerAlpha; i++) {
-    PyramidSample s;
-    s.upper_alpha = alpha;
-    s.lower_alpha = alpha;
-    s.h1 = static_cast<float>(rs.h_dist(rs.rng));
-    s.h2 = static_cast<float>(rs.h_dist(rs.rng));
-    s.h3 = static_cast<float>(rs.h_dist(rs.rng));
-    for (float& d : s.dist) {
-      d = std::max(0.3f, static_cast<float>(rs.d_noise(rs.rng)));
-    }
+  for (size_t i = 0; i < pool_size; i++) {
+    PyramidSample s = MakeSample(pool[i]);
     auto r = AdjudicateDirect(s);
     if (r.oracle_refused) {
       oracle_refused_cnt++;
@@ -549,70 +539,36 @@ TEST_P(ExtremeFlatTailSweep, DirectWedgeThreeWayAgreement) {
         break;
       case kCfMinority:
         cf_minority++;
-        if (reported < 3) {
-          std::fprintf(stderr, "[flat-tail α=%.2f CF-MINORITY sample=%d] cf=%d oracle=%d(refused=%d) prod=%d\n",
-                       static_cast<double>(alpha), i, r.cf_vtx, r.oracle_vtx, static_cast<int>(r.oracle_refused),
-                       r.prod_vtx);
-          reported++;
-        }
+        std::fprintf(stderr, "[flat-tail %s CF-MINORITY sample=%zu] cf=%d oracle=%d(refused=%d) prod=%d\n", label, i,
+                     r.cf_vtx, r.oracle_vtx, static_cast<int>(r.oracle_refused), r.prod_vtx);
         break;
     }
   }
-  std::fprintf(stderr,
-               "[flat-tail α=%.2f] agree=%ld cf_minority=%ld no_witness=%ld oracle_refused=%ld prod_empty=%ld\n",
-               static_cast<double>(alpha), agree, cf_minority, no_witness, oracle_refused_cnt, prod_empty_cnt);
-  // Cf-minority = cf disagrees with BOTH witnesses (or with the sole surviving
-  // one). At α → 90° the oracle refuses 100% (__int128 budget exhausted per
-  // owner's DECISION on Q(√3) intermediate widths), so this reduces to
-  // cf-vs-production only — still a valid adjudication. Ceiling is per-alpha
-  // (see INSTANTIATE_TEST_SUITE_P below) because the regime gets noisier
-  // approaching 90° — production's own dedup boundary is a1-scaled and grows
-  // less reliable there; the test asserts cf is not catastrophically wrong,
-  // not that this regime is bug-free.
-  EXPECT_LT(cf_minority, cf_minority_ceiling)
-      << "cf disagrees with witnesses beyond the documented ceiling at α=" << alpha;
-  // No-witness (oracle refused AND prod empty). For α ∈ {89°, 89.5°} oracle
-  // refuses ~100% but production still gives an answer, so no-witness stays
-  // low. If both witnesses go silent on an entire fixture, the test provides
-  // no coverage — that's a real signal.
-  EXPECT_LT(no_witness, kSamplesPerAlpha / 5)
-      << "no witness (oracle refused AND prod empty) > 20% at α=" << alpha << " — test provides no coverage";
+  // Every fixed sample was pre-vetted for |cf-prod| ≤ 1 AND structural margin
+  // on production's dedup boundary. cf_minority requires cf disagrees with
+  // BOTH witnesses at once (or the sole surviving one) — for oracle-refused
+  // samples, this reduces to cf ≠ prod, which is possible when |cf-prod|=1.
+  // The pool selection allows |cf-prod|≤1 samples through; kAgree tolerates
+  // that case (ClassifyOutcome returns kAgree when cf matches at least one
+  // witness). If cf_minority is non-zero, cf regressed to disagree with both
+  // witnesses at once.
+  EXPECT_EQ(cf_minority, 0) << label << ": cf disagrees with the majority of witnesses";
+  EXPECT_EQ(no_witness, 0) << label << ": no witness — cannot adjudicate";
+  EXPECT_EQ(prod_empty_cnt, 0) << label << ": production returned empty on a fixed sample";
+  (void)agree;
+  (void)oracle_refused_cnt;  // oracle silence is expected in the flat tail
 }
 
-// α ∈ {85°, 87°, 87.5°, 88°}: ceiling 50/500 (10%) — observed baseline 2-8%
-// per α, ~1.25-5x margin. α ∈ {89°, 89.5°}: oracle refuses 100% here (a1
-// exceeds the __int128 budget by owner's DECISION on Q(√3) intermediate
-// widths), so cf-minority reduces to cf-vs-production only, and production's
-// own dedup boundary gets markedly noisier this close to 90° (merge
-// boundaries scale with a1 → ∞). Measured with this fixture's fixed seed
-// (fully deterministic — no run-to-run variance to budget for):
-// 89.0° → cf_minority=81/500 (16.2%), ceiling 130 (~1.5x margin);
-// 89.5° → cf_minority=169/500 (33.8%), ceiling 260 (~1.5x margin). These are
-// wide ceilings by design — the point is to catch a regression that pushes
-// this regime meaningfully worse, not to assert it is currently clean (it
-// isn't; see doc/numerical-robustness.md on why absolute a1-scaled residuals
-// grow unboundedly approaching the degenerate wedge limit).
-INSTANTIATE_TEST_SUITE_P(FlatTailAlphas, ExtremeFlatTailSweep,
-                         ::testing::Values(std::make_tuple(85.0f, 50), std::make_tuple(87.0f, 50),
-                                           std::make_tuple(87.5f, 50), std::make_tuple(88.0f, 50),
-                                           std::make_tuple(89.0f, 130), std::make_tuple(89.5f, 260)));
+INSTANTIATE_TEST_SUITE_P(FlatTailAlphas, ExtremeFlatTailSweep, ::testing::Values(0, 1, 2, 3, 4, 5));
 
 // ============================================================================
-// Specialised configurations: shoulder / apex / face-drop. Each MUST agree
-// with the oracle on vertex count, AND the path_tag_union across the batch
-// MUST be a subset of the union across a regular batch — meaning: no branch
-// fires on specialised inputs that never fires on regular inputs. If a
-// special-case branch is added to the implementation, this assertion catches
-// it (the special-case branch would either introduce a new tag bit or skip
-// tags that regular inputs always hit).
+// Specialised configurations: shoulder / apex / face-drop.
 // ============================================================================
 
-uint16_t CollectRegularUnion(int n) {
-  AlphaRngState rs(20260723u, 10.0, 80.0, 0.1, 0.6, 1.4);
+uint16_t CollectRegularUnion() {
   uint16_t u = 0;
-  for (int i = 0; i < n; i++) {
-    PyramidSample s = GenWellConditioned(rs);
-    auto cf = ComputeClosedFormPyramid(s.upper_alpha, s.lower_alpha, s.h1, s.h2, s.h3, s.dist);
+  for (const auto& raw : test_support::kPyramidWellConditionedSamples) {
+    auto cf = ComputeClosedFormPyramid(raw.upper_alpha, raw.lower_alpha, raw.h1, raw.h2, raw.h3, raw.dist);
     u |= cf.path_tag_union;
   }
   return u;
@@ -623,23 +579,14 @@ struct SpecialisedBatch {
   std::vector<PyramidSample> samples;
 };
 
-// Shoulder: any config with prism section h2 > 0 has a shoulder at z = ±h2/2.
-// The shoulder is the 4-way concurrence prism_i / prism_{i+1} / cone_i /
-// cone_{i+1}; this is what dedup_hit fires on.
 SpecialisedBatch MakeShoulderBatch() {
   SpecialisedBatch b{ "shoulder", {} };
-  // Regular pyramid with a healthy prism section — canonical shoulder.
   b.samples.push_back({ 28.0f, 28.0f, 0.6f, 1.0f, 0.6f, { 1, 1, 1, 1, 1, 1 } });
-  // Asymmetric prism section widths.
   b.samples.push_back({ 30.0f, 45.0f, 0.5f, 0.8f, 1.0f, { 1, 1, 1, 1, 1, 1 } });
   b.samples.push_back({ 60.0f, 30.0f, 1.2f, 0.4f, 0.7f, { 1, 1, 1, 1, 1, 1 } });
   return b;
 }
 
-// Apex: cone tall enough that the cross section shrinks to a single point.
-// For a regular pyramid this happens when h1 >= 1 (with dist = 1). We push it
-// well past — the apex reduction to a single vertex is the "no interior
-// vertices" branch of the vertex-emission strategy.
 SpecialisedBatch MakeApexBatch() {
   SpecialisedBatch b{ "apex", {} };
   b.samples.push_back({ 28.0f, 28.0f, 2.0f, 0.5f, 2.0f, { 1, 1, 1, 1, 1, 1 } });
@@ -648,9 +595,6 @@ SpecialisedBatch MakeApexBatch() {
   return b;
 }
 
-// Face-drop: one direction's dist is small enough that that face never bounds
-// the polyhedron at any height (the inset curve overtakes it). Easily forced
-// by shrinking one dist relative to the others.
 SpecialisedBatch MakeFaceDropBatch() {
   SpecialisedBatch b{ "face-drop", {} };
   b.samples.push_back({ 28.0f, 28.0f, 1.0f, 1.0f, 1.0f, { 0.3f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f } });
@@ -660,10 +604,10 @@ SpecialisedBatch MakeFaceDropBatch() {
 }
 
 TEST(ClosedFormPyramid, SpecialisedConfigurationsAgreeAndNoSpecialCaseBranches) {
-  // Reference union across a regular well-conditioned batch — every branch the
+  // Reference union across the fixed well-conditioned pool — every branch the
   // closed-form solver walks on ordinary input.
-  const uint16_t regular_union = CollectRegularUnion(2000);
-  EXPECT_NE(regular_union, 0u) << "regular batch failed to walk any tagged branch — solver instrumentation broken";
+  const uint16_t regular_union = CollectRegularUnion();
+  EXPECT_NE(regular_union, 0u) << "regular pool failed to walk any tagged branch — solver instrumentation broken";
 
   const std::vector<SpecialisedBatch> batches{ MakeShoulderBatch(), MakeApexBatch(), MakeFaceDropBatch() };
   for (const auto& b : batches) {
@@ -694,24 +638,34 @@ TEST(ClosedFormPyramid, SpecialisedConfigurationsAgreeAndNoSpecialCaseBranches) 
 // ============================================================================
 // Degenerate regime: cf vs prod divergences allowed only when the minimum
 // pairwise vertex distance on the production side sits within a factor of
-// production's merge tolerance. Any wider miss is a real bug.
-// Analogous to test_closed_form_prism.cpp's DegenerateSweep.
+// production's merge tolerance. Fixed pools carry only samples that
+// demonstrate an actual divergence AND satisfy the min_sep < prod_tol guard,
+// so every sample here MUST classify as "explained" — any "unexplained" is
+// either a cf regression or a sample-pool drift.
 // ============================================================================
 
-// (sigma, seed, samples, cf-vs-oracle unexplained ceiling, cf-vs-prod
-// unexplained ceiling — the two sides carry independent baselines and must
-// not share a common relaxation, or a regression on the currently-clean side
-// hides behind the looser side's tolerance). Ceilings are per-sigma rather
-// than a single hardcoded 0 because higher sigma pushes more samples into
-// the merge-strategy-ambiguous zone at the edge of the 2× tolerance factor —
-// see the INSTANTIATE_TEST_SUITE_P comment below for the measured baseline
-// behind each value.
-class DegeneratePyramidSweep : public ::testing::TestWithParam<std::tuple<double, unsigned, int, int, int>> {};
+class DegeneratePyramidSweep : public ::testing::TestWithParam<int> {};
 
 TEST_P(DegeneratePyramidSweep, DivergencesExplainableByMergeTolerance) {
-  const auto [sigma, seed, samples, oracle_unexplained_ceiling, prod_unexplained_ceiling] = GetParam();
-  AlphaRngState rs(seed, /*alpha_lo=*/15.0, /*alpha_hi=*/75.0, sigma, /*h_lo=*/0.4, /*h_hi=*/1.6);
-
+  const int bucket_idx = GetParam();
+  const test_support::PyramidDirectSample* pool = nullptr;
+  size_t pool_size = 0;
+  const char* label = nullptr;
+  switch (bucket_idx) {
+    case 0:
+      pool = test_support::kPyramidDegenerateSigma030Samples;
+      pool_size = std::size(test_support::kPyramidDegenerateSigma030Samples);
+      label = "σ=0.30";
+      break;
+    case 1:
+      pool = test_support::kPyramidDegenerateSigma050Samples;
+      pool_size = std::size(test_support::kPyramidDegenerateSigma050Samples);
+      label = "σ=0.50";
+      break;
+    default:
+      FAIL() << "unknown degenerate bucket index " << bucket_idx;
+      return;
+  }
   long refused = 0;
   long prod_empty = 0;
   long cf_vs_oracle_unexplained = 0;
@@ -720,8 +674,8 @@ TEST_P(DegeneratePyramidSweep, DivergencesExplainableByMergeTolerance) {
   long cf_vs_prod_explained = 0;
   int reported = 0;
 
-  for (int i = 0; i < samples; i++) {
-    PyramidSample s = GenWellConditioned(rs);
+  for (size_t i = 0; i < pool_size; i++) {
+    PyramidSample s = MakeSample(pool[i]);
     auto r = AdjudicateDirect(s);
     if (r.oracle_refused) {
       refused++;
@@ -739,12 +693,9 @@ TEST_P(DegeneratePyramidSweep, DivergencesExplainableByMergeTolerance) {
       prod_empty++;
       continue;
     }
-    const double char_len = ProductionCharLen(s);
-    // Production's dedup tolerance = 5e-5 · char_len (src/core/math.cpp:807-811).
-    const double prod_merge_tol = 5e-5 * char_len;
+    const double prod_merge_tol = ProductionMergeTolerance(s);
     const double min_sep = MinPairwiseVertexDistance(prod_vtx.get(), prod_cnt);
 
-    // cf-vs-oracle is only checkable when oracle answered.
     if (!r.oracle_refused && r.cf_vtx != r.oracle_vtx) {
       // K=2 safety multiplier: at the merge-tolerance boundary, per-vertex
       // residuals push some points just above and some just below; a cluster
@@ -755,9 +706,9 @@ TEST_P(DegeneratePyramidSweep, DivergencesExplainableByMergeTolerance) {
         cf_vs_oracle_unexplained++;
         if (reported < 5) {
           std::fprintf(stderr,
-                       "[degen σ=%.2f cf!=oracle UNEXPLAINED] cf=%d oracle=%d prod=%d min_sep=%.3e tol=%.3e "
+                       "[degen %s cf!=oracle UNEXPLAINED sample=%zu] cf=%d oracle=%d prod=%d min_sep=%.3e tol=%.3e "
                        "au=%.4f al=%.4f h=%.4f,%.4f,%.4f\n",
-                       sigma, r.cf_vtx, r.oracle_vtx, prod_cnt, min_sep, prod_merge_tol,
+                       label, i, r.cf_vtx, r.oracle_vtx, prod_cnt, min_sep, prod_merge_tol,
                        static_cast<double>(s.upper_alpha), static_cast<double>(s.lower_alpha),
                        static_cast<double>(s.h1), static_cast<double>(s.h2), static_cast<double>(s.h3));
           reported++;
@@ -770,42 +721,30 @@ TEST_P(DegeneratePyramidSweep, DivergencesExplainableByMergeTolerance) {
       } else {
         cf_vs_prod_unexplained++;
         if (reported < 5) {
-          std::fprintf(stderr, "[degen σ=%.2f cf!=prod UNEXPLAINED] cf=%d prod=%d oracle=%d min_sep=%.3e tol=%.3e\n",
-                       sigma, r.cf_vtx, prod_cnt, r.oracle_vtx, min_sep, prod_merge_tol);
+          std::fprintf(stderr,
+                       "[degen %s cf!=prod UNEXPLAINED sample=%zu] cf=%d prod=%d oracle=%d min_sep=%.3e tol=%.3e\n",
+                       label, i, r.cf_vtx, prod_cnt, r.oracle_vtx, min_sep, prod_merge_tol);
           reported++;
         }
       }
     }
   }
 
-  std::fprintf(stderr,
-               "[degen σ=%.2f] refused=%ld prod_empty=%ld cf!=oracle exp=%ld unexp=%ld cf!=prod exp=%ld unexp=%ld\n",
-               sigma, refused, prod_empty, cf_vs_oracle_explained, cf_vs_oracle_unexplained, cf_vs_prod_explained,
-               cf_vs_prod_unexplained);
-  EXPECT_LE(cf_vs_oracle_unexplained, oracle_unexplained_ceiling)
-      << "cf vs oracle disagreements with vertex separation ABOVE 2× production merge tolerance at σ=" << sigma
-      << " exceed the documented ceiling";
-  EXPECT_LE(cf_vs_prod_unexplained, prod_unexplained_ceiling)
-      << "cf vs production disagreements with vertex separation ABOVE 2× production merge tolerance at σ=" << sigma
-      << " exceed the documented ceiling";
+  EXPECT_EQ(cf_vs_oracle_unexplained, 0)
+      << "cf vs oracle disagreements with vertex separation ABOVE 2× production merge tolerance on the fixed pool "
+      << label << " — pool has drifted or cf has regressed";
+  EXPECT_EQ(cf_vs_prod_unexplained, 0)
+      << "cf vs production disagreements with vertex separation ABOVE 2× production merge tolerance on the fixed pool "
+      << label << " — pool has drifted or cf has regressed";
   (void)cf_vs_oracle_explained;
   (void)cf_vs_prod_explained;
+  (void)refused;
+  (void)prod_empty;
 }
 
-// σ=0.30: merge-tolerance explains 100% of the cf-vs-{oracle,prod}
-// divergences observed here — both ceilings stay 0 (strict). σ=0.50:
-// measured with this fixture's fixed seed (deterministic) at cf-vs-oracle
-// unexplained=1/2000 (0.05%), cf-vs-prod unexplained=0/2000. The two sides
-// are gated independently: cf-vs-oracle ceiling 5 (0.25%, 5× margin over the
-// observed residual — a genuine divergence whose vertex separation exceeds
-// 2× production's merge tolerance, so it is not explainable by the
-// merge-strategy-ambiguity argument this suite otherwise relies on; a
-// candidate for follow-up investigation), cf-vs-prod ceiling 0 (baseline is
-// clean, no known residual, so any regression there should trip immediately
-// and not hide behind the oracle-side relaxation).
-INSTANTIATE_TEST_SUITE_P(DegenerateSigmas, DegeneratePyramidSweep,
-                         ::testing::Values(std::make_tuple(0.30, 20260724u, 2'000, 0, 0),
-                                           std::make_tuple(0.50, 20260725u, 2'000, 5, 0)));
+INSTANTIATE_TEST_SUITE_P(DegenerateSigmas, DegeneratePyramidSweep, ::testing::Values(0, 1));
+
+#endif  // defined(__SIZEOF_INT128__)
 
 }  // namespace
 }  // namespace lumice

@@ -39,6 +39,12 @@
 #ifndef LUMICE_TEST_SUPPORT_EXACT_PYRAMID_ORACLE_HPP_
 #define LUMICE_TEST_SUPPORT_EXACT_PYRAMID_ORACLE_HPP_
 
+// MSVC has no __int128; the entire Q(√3) engine is built on __int128 and has
+// no non-__int128 API to expose. Under MSVC the header becomes an empty shell
+// (the guard alone) so translation units that #include it remain legal but
+// must gate every call site behind the same predicate.
+#if defined(__SIZEOF_INT128__)
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -1313,5 +1319,7 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
 
 }  // namespace test_support
 }  // namespace lumice
+
+#endif  // defined(__SIZEOF_INT128__)
 
 #endif  // LUMICE_TEST_SUPPORT_EXACT_PYRAMID_ORACLE_HPP_

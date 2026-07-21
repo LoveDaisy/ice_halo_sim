@@ -35,6 +35,12 @@
 #ifndef LUMICE_TEST_SUPPORT_EXACT_PRISM_ORACLE_HPP_
 #define LUMICE_TEST_SUPPORT_EXACT_PRISM_ORACLE_HPP_
 
+// MSVC has no __int128; the entire oracle is a __int128 arithmetic engine and
+// has no non-__int128 API to expose. Under MSVC the header becomes an empty
+// shell (the guard alone) so translation units that #include it remain legal
+// but must gate every call site behind the same predicate.
+#if defined(__SIZEOF_INT128__)
+
 #include <cmath>
 #include <cstdint>
 
@@ -141,5 +147,7 @@ inline ExactPrismVerdict ExactPrism(const float dist[kExactPrismSideCnt]) {
 
 }  // namespace test_support
 }  // namespace lumice
+
+#endif  // defined(__SIZEOF_INT128__)
 
 #endif  // LUMICE_TEST_SUPPORT_EXACT_PRISM_ORACLE_HPP_
