@@ -3,7 +3,8 @@
 // Three parties are compared:
 //   1. Closed form  — ComputeClosedFormPrism from core/geo3d_closedform.
 //   2. Exact oracle — ExactPrism from test/support/exact_prism_oracle.hpp,
-//                     zero-tolerance __int128 arithmetic.
+//                     zero-tolerance int64 arithmetic (bit-width analysis in
+//                     that header shows a 2^25 safety margin at SHIFT = 24).
 //   3. Production   — FillHexCrystalCoef + SolveConvexPolyhedronVtxD.
 //
 // Owner-mandated methodology: precise EXPECT_EQ assertions run on FIXED,
@@ -115,7 +116,6 @@ double CfMergeTolerance(const float dist[kSideCnt]) {
   return 5.0 * static_cast<double>(math::kFloatEps) * cf_scale;
 }
 
-#if defined(__SIZEOF_INT128__)
 // Vertex-set match: every closed-form 2D corner lifted to z = ±h/2 must appear
 // in the production 3D vertex set, and vice versa (equal count checked
 // separately by the caller).
@@ -156,7 +156,6 @@ int RunProduction3D(float h, const float* dist, std::unique_ptr<float[]>* out_vt
   *out_vtx = std::move(vtx);
   return cnt;
 }
-#endif  // defined(__SIZEOF_INT128__)
 
 // ============================================================================
 // Known-configuration sanity: regular hexagon (dist = 1)
@@ -203,13 +202,11 @@ TEST(ClosedFormPrism, ZeroHeightShortCircuit) {
 // thresholds — if not, the pool has silently drifted and this TEST fails first,
 // with a specific line number pointing at the offending entry.
 //
-// Deliberately NOT gated behind __SIZEOF_INT128__: this guard only needs
-// CfMergeTolerance/MinPairwiseCornerDistance, neither of which touches the
-// exact oracle, so it must keep running on MSVC — it is the CI-automated
-// replacement for a human "was this sample tuned to pass" review: any future
-// hand-edit or addition to a sample pool that drifts outside the selection
-// threshold fails here first, on every platform, instead of relying on a
-// reviewer noticing.
+// This guard uses only CfMergeTolerance/MinPairwiseCornerDistance and
+// therefore runs on every platform — it is the CI-automated replacement for a
+// human "was this sample tuned to pass" review: any future hand-edit or
+// addition to a sample pool that drifts outside the selection threshold fails
+// here first, instead of relying on a reviewer noticing.
 // ============================================================================
 
 TEST(ClosedFormPrism, FixedSamplesRetainStructuralMargin) {
@@ -239,8 +236,6 @@ TEST(ClosedFormPrism, FixedSamplesRetainStructuralMargin) {
     }
   }
 }
-
-#if defined(__SIZEOF_INT128__)
 
 // ============================================================================
 // Well-conditioned regime: closed form / exact oracle / production all agree
@@ -454,8 +449,6 @@ TEST(ClosedFormPrism, OracleMaskPopcountMatchesFacePresent) {
   }
   EXPECT_EQ(side_present_disagree, 0);
 }
-
-#endif  // defined(__SIZEOF_INT128__)
 
 }  // namespace
 }  // namespace lumice

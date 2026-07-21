@@ -16,7 +16,8 @@
 //      the ground truth (its dedup tolerance is an empirically swept constant).
 //      An EXACT integer oracle is built instead (see ExactPrismCornerCount):
 //      after x = sqrt(3)*u the constraints are rational in dist[], so the whole
-//      predicate runs in __int128 with no tolerance at all. NOTE: precision
+//      predicate runs in int64 with no tolerance at all (see the bit-width
+//      analysis in test/support/exact_prism_oracle.hpp). NOTE: precision
 //      escalation via `long double` is NOT usable here -- on arm64 macOS
 //      long double IS double (53-bit), so such a test passes vacuously.
 //
@@ -127,7 +128,7 @@ ClosedFormResult<T> ClosedFormPrism(const float* dist, T feas_tol_rel) {
 
 // ---- EXACT oracle: integer arithmetic, zero tolerance ----------------------
 //
-// The full derivation, scaling constants and __int128 implementation live in
+// The full derivation, scaling constants and int64 implementation live in
 // test/support/exact_prism_oracle.hpp — there is exactly one implementation.
 // This one-line wrapper keeps the four call sites below signature-compatible.
 int ExactPrismCornerCount(const float* dist) {
@@ -243,7 +244,8 @@ SweepStats RunSweep(double sigma, unsigned seed, int samples) {
     //   u <= d0/4,  u+v <= d1/2,  -u+v <= d2/2,
     //  -u <= d3/4, -u-v <= d4/2,   u-v <= d5/2.
     // Scaling by 4 and clearing denominators with the exact dyadic value of each
-    // float dist[i] makes the whole predicate exact in __int128.
+    // float dist[i] makes the whole predicate exact in int64 (see the bit-width
+    // analysis in test/support/exact_prism_oracle.hpp for the budget).
     const int exact_cnt = ExactPrismCornerCount(dist);
     if (exact_cnt != cf_d.vtx_cnt) {
       st.closedform_vs_exact_diff++;
