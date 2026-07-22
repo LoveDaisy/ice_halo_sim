@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784713397713,
+  "lastUpdate": 1784713400151,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9608,50 +9608,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "eb70214863932c839b9f6102a4ce5961856333bc",
-          "message": "Merge pull request #113 from LoveDaisy/chore/gui_lag\n\nfix(gui): eliminate high-resolution GUI lag",
-          "timestamp": "2026-05-27T10:08:15+08:00",
-          "tree_id": "a7433ce2d4a833d2ea80f18d110d7ea3ce15f183",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/eb70214863932c839b9f6102a4ce5961856333bc"
-        },
-        "date": 1779847936908,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 87.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 83.8,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 73.7,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 64.7,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "e4a3f6587b8ef382e420de0b5d739f4f5bc0d8c5",
           "message": "Merge pull request #114 from LoveDaisy/chore/major_audit\n\nchore: major audit — architecture docs, tooltips, and cross-ref comments",
           "timestamp": "2026-05-28T08:33:03+08:00",
@@ -13986,6 +13942,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 94.2,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7bd2f401246d724694c7c02bbce7a37b093f43d4",
+          "message": "Merge pull request #216 from LoveDaisy/feat/pyramid-oracle-contract-tests\n\ngeometry test: retire symbolic-α pyramid oracle for three contract-aligned tests",
+          "timestamp": "2026-07-22T17:35:30+08:00",
+          "tree_id": "316a03a93602e9c23a00832d413abf5c51648733",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/7bd2f401246d724694c7c02bbce7a37b093f43d4"
+        },
+        "date": 1784713399375,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 75,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96.4,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 96.4,
             "unit": "%"
           }
         ]
