@@ -1091,6 +1091,26 @@ inline int IsFeasibleSided(const PolyPlane& plane, const PolyTriplePoint& tp, do
   if (PolyIsZero(expr)) {
     return 0;
   }
+  // TEMP 387.10-DBG: when the feasibility value is near-zero (the apex case),
+  // dump every nonzero QS3 coefficient of expr so we can see whether expr is
+  // genuinely a nonzero polynomial or an identically-zero one the arithmetic
+  // failed to reduce. Platform-independent (integer QS3), so a local run is
+  // authoritative.
+  {
+    const double dbgval = PolyEvalDouble(expr, alpha_val, beta_val);
+    if (std::fabs(dbgval) < 1e-6) {
+      std::fprintf(stderr, "[DBG expr-near-zero] val=%.3g PolyIsZero=0 nonzero-coeffs:\n", dbgval);
+      for (int i = 0; i <= kMaxJointDeg; i++) {
+        for (int j = 0; j <= kMaxJointDeg; j++) {
+          const QS3& q = expr.c[i][j];
+          if (q.a != 0 || q.b != 0) {
+            std::fprintf(stderr, "    c[%d][%d]={a=%lld b=%lld shift=%d} ~%.6g\n", i, j, static_cast<long long>(q.a),
+                         static_cast<long long>(q.b), q.shift, QS3ToDouble(q));
+          }
+        }
+      }
+    }
+  }
   const int s = PolySign(expr, alpha_val, beta_val, ambiguous);
   if (*ambiguous) {
     return -1;
@@ -1387,6 +1407,11 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
           bool ambiguous = false;
           const int fr = d::IsFeasibleSided(planes[p_idx], tp, alpha_val, beta_val, &overflow_t, &max_bits, &ambiguous);
           if (fr == -1) {
+            // TEMP 387.10-DBG: report the exact plane configuration behind the
+            // ambiguous feasibility. Slot map: 0=top basal, 1=bottom basal,
+            // 2..7=prism, 8..13=upper cone, 14..19=lower cone.
+            std::fprintf(stderr, "[DBG feas-ambig] vertex tri={%d,%d,%d} tested plane p_idx=%d overflow=%d\n", i, j, k,
+                         p_idx, overflow_t ? 1 : 0);
             out.refused = true;
             out.refuse_reason = overflow_t ? "feasibility overflow" : "feasibility sign ambiguous";
             out.max_intermediate_bits = max_bits;
