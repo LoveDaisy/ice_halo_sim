@@ -530,17 +530,37 @@ inline double PolyEvalDouble(const PolyQS3& p, double alpha_val, double beta_val
 // pyramid's a1 == a2), but exact substitution resolves it with no wide
 // arithmetic — the actual ambiguous incidences are low degree.
 inline QS3 PolyEvalExact(const PolyQS3& p, QS3 a1, QS3 a2, bool* overflow, int* max_bits) {
+  // Raise a1 / a2 only to the max degree actually present in p. Computing unused
+  // high powers (a1^3 ≈ 72 bits, a1^4 ≈ 96 bits) would spuriously trip the int64
+  // overflow guard and force a refuse even when the live monomials are low
+  // degree (the regular pyramid's ambiguous incidence is k·(α−β), degree 1).
+  int max_i = 0;
+  int max_j = 0;
+  for (int i = 0; i <= kMaxJointDeg; i++) {
+    for (int j = 0; j <= kMaxJointDeg; j++) {
+      if (!IsZero(p.c[i][j])) {
+        if (i > max_i) {
+          max_i = i;
+        }
+        if (j > max_j) {
+          max_j = j;
+        }
+      }
+    }
+  }
   QS3 a1pow[kMaxJointDeg + 1];
   QS3 a2pow[kMaxJointDeg + 1];
   a1pow[0] = IntToQS3(1);
   a2pow[0] = IntToQS3(1);
-  for (int i = 1; i <= kMaxJointDeg; i++) {
+  for (int i = 1; i <= max_i; i++) {
     a1pow[i] = QS3Mul(a1pow[i - 1], a1, overflow, max_bits);
-    a2pow[i] = QS3Mul(a2pow[i - 1], a2, overflow, max_bits);
+  }
+  for (int j = 1; j <= max_j; j++) {
+    a2pow[j] = QS3Mul(a2pow[j - 1], a2, overflow, max_bits);
   }
   QS3 acc = QS3Zero();
-  for (int i = 0; i <= kMaxJointDeg; i++) {
-    for (int j = 0; j <= kMaxJointDeg - i; j++) {
+  for (int i = 0; i <= max_i; i++) {
+    for (int j = 0; j <= max_j; j++) {
       if (IsZero(p.c[i][j])) {
         continue;
       }
