@@ -239,8 +239,11 @@ SampleResult AdjudicateDirect(const PyramidSample& s) {
   auto oracle = test_support::ExactPyramidFromParams(a1_d, a2_d, s.h1, s.h2, s.h3, s.dist);
   r.oracle_refused = oracle.refused;
   if (oracle.refused) {  // TEMP ARM64-CI-DBG (387.10)
-    std::fprintf(stderr, "[DBG oracle-REFUSE reason='%s' a1=%.9g a2=%.9g]\n",
-                 oracle.refuse_reason ? oracle.refuse_reason : "", a1_d, a2_d);
+    float a1f = static_cast<float>(a1_d);
+    std::uint32_t a1bits = 0;
+    std::memcpy(&a1bits, &a1f, sizeof(float));
+    std::fprintf(stderr, "[DBG oracle-REFUSE reason='%s' a1=%.9g a1bits=0x%08x max_bits=%d]\n",
+                 oracle.refuse_reason ? oracle.refuse_reason : "", a1_d, a1bits, oracle.max_intermediate_bits);
   }
   if (!oracle.refused) {
     r.oracle_vtx = oracle.vertex_count;
@@ -271,8 +274,11 @@ SampleResult AdjudicateMiller(int upper_i1, int upper_i4, int lower_i1, int lowe
   auto oracle = test_support::ExactPyramidFromParams(a1_d, a2_d, s.h1, s.h2, s.h3, s.dist);
   r.oracle_refused = oracle.refused;
   if (oracle.refused) {  // TEMP ARM64-CI-DBG (387.10)
-    std::fprintf(stderr, "[DBG oracle-REFUSE reason='%s' a1=%.9g a2=%.9g]\n",
-                 oracle.refuse_reason ? oracle.refuse_reason : "", a1_d, a2_d);
+    float a1f = static_cast<float>(a1_d);
+    std::uint32_t a1bits = 0;
+    std::memcpy(&a1bits, &a1f, sizeof(float));
+    std::fprintf(stderr, "[DBG oracle-REFUSE reason='%s' a1=%.9g a1bits=0x%08x max_bits=%d]\n",
+                 oracle.refuse_reason ? oracle.refuse_reason : "", a1_d, a1bits, oracle.max_intermediate_bits);
   }
   if (!oracle.refused) {
     r.oracle_vtx = oracle.vertex_count;
