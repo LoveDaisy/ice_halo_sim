@@ -238,6 +238,10 @@ SampleResult AdjudicateDirect(const PyramidSample& s) {
   const double a2_d = cf.a2 > 0 ? static_cast<double>(cf.a2) : -1.0;
   auto oracle = test_support::ExactPyramidFromParams(a1_d, a2_d, s.h1, s.h2, s.h3, s.dist);
   r.oracle_refused = oracle.refused;
+  if (oracle.refused) {  // TEMP ARM64-CI-DBG (387.10)
+    std::fprintf(stderr, "[DBG oracle-REFUSE reason='%s' a1=%.9g a2=%.9g]\n",
+                 oracle.refuse_reason ? oracle.refuse_reason : "", a1_d, a2_d);
+  }
   if (!oracle.refused) {
     r.oracle_vtx = oracle.vertex_count;
   }
@@ -266,6 +270,10 @@ SampleResult AdjudicateMiller(int upper_i1, int upper_i4, int lower_i1, int lowe
   const double a2_d = cf.a2 > 0 ? static_cast<double>(cf.a2) : -1.0;
   auto oracle = test_support::ExactPyramidFromParams(a1_d, a2_d, s.h1, s.h2, s.h3, s.dist);
   r.oracle_refused = oracle.refused;
+  if (oracle.refused) {  // TEMP ARM64-CI-DBG (387.10)
+    std::fprintf(stderr, "[DBG oracle-REFUSE reason='%s' a1=%.9g a2=%.9g]\n",
+                 oracle.refuse_reason ? oracle.refuse_reason : "", a1_d, a2_d);
+  }
   if (!oracle.refused) {
     r.oracle_vtx = oracle.vertex_count;
   }
