@@ -526,6 +526,48 @@ TEST(MetalTraceBackend, KShapePool_KEnabledBuildsCeilNciOverKShapes_AC1) {
   ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
 }
 
+// K-shape pool driven by config (NOT env): SceneConfig::geom_clock_ is now the
+// production source of K. With the env var explicitly unset, setting
+// scene.geom_clock_ = 8 must build the same P_ci = ceil(N_ci / K) pool the env
+// path produces. This proves the config plumbing itself drives K — the earlier
+// tests only cover the env-override path, which would still pass even if the
+// config field were ignored.
+TEST(MetalTraceBackend, KShapePool_ConfigDrivenKWithoutEnv) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  // No env override: the value must come purely from config.
+  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+
+  auto scene = MakeMetalSceneRandomH(/*max_hits=*/4, /*ms_layers=*/1);
+  scene.geom_clock_ = 8;  // config-supplied K
+  auto render = MakeRectangularRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 23;
+
+  const size_t ci_n = 64;
+  const size_t k = 8;
+  const size_t expected_p_ci = (ci_n + k - 1) / k;
+  ASSERT_EQ(expected_p_ci, 8u);
+
+  MetalTraceBackend backend;
+  backend.BeginSession(spec);
+  HostRayBatch host;
+  host.count = ci_n;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+  backend.TraceLayer(RootRaySource::FromHost(host));
+
+  MetalTraceBackendTestHooks hooks(backend);
+  auto table = hooks.ReadbackPoolShapeTable();
+  EXPECT_EQ(table.size(), expected_p_ci) << "config geom_clock=8 must build ceil(64/8)=8 shapes without any env var";
+  EXPECT_EQ(hooks.PoolShapeCountThisBatch(), expected_p_ci) << "Single-layer, single-ci → Σ P_ci = 8";
+  backend.EndSession();
+}
+
 // AC2 supplementary smoke: with the K knob enabled, a full session runs to
 // completion without crash and produces exit statistics on the same order of
 // magnitude as the K=0 baseline for the same seed. This is not a CV/variance

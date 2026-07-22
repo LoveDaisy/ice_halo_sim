@@ -3516,7 +3516,9 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     // inherently P_ci=1 via a different code path) — WARN once if both env
     // knobs are simultaneously set to non-default values (plan §3.8).
     const std::size_t k_shape_effective =
-        impl_->disable_device_gen_ ? 0u : env::GpuGeomClock(geom_logger, /*default_val=*/0u);
+        impl_->disable_device_gen_
+            ? 0u
+            : env::GpuGeomClock(geom_logger, /*default_val=*/spec.scene->geom_clock_);
     // K-shape pool silently collapses to P_ci ≡ 1 when the caller forgot to
     // populate `spec.ray_num` (AllocateShapeBudget early-return: `P_target =
     // ceil(ray_num / K) = 0` when `ray_num == 0`). Production callers set
@@ -3534,7 +3536,8 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
                 "ray count so AllocateShapeBudget can size the pool.",
                 k_shape_effective);
     }
-    if (impl_->disable_device_gen_ && env::GpuGeomClock(geom_logger, /*default_val=*/0u) > 0u) {
+    if (impl_->disable_device_gen_ &&
+        env::GpuGeomClock(geom_logger, /*default_val=*/spec.scene->geom_clock_) > 0u) {
       // Only WARN on first Beginsession per Run (mirrors the disable_device_gen_
       // one-shot log discipline — the gen_seeded_ flag).
       if (!impl_->gen_seeded_) {
