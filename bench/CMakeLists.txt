@@ -18,10 +18,11 @@ add_executable(lumice_bench
   "${PROJ_BENCH_DIR}/bench_filter.cpp"
   "${PROJ_BENCH_DIR}/bench_crystal.cpp"
   "${PROJ_BENCH_DIR}/bench_geom_closedform.cpp")
-# Reach the promoted __int128 oracle at test/support/exact_prism_oracle.hpp via
-# `#include "test/support/..."`. The dependency direction (bench → test/support)
-# is inverted vs. usual but intentional: the oracle has one implementation and
-# bench is the secondary consumer (golden-analytic tests are primary).
+# Reach the promoted exact prism oracle at test/support/exact_prism_oracle.hpp
+# via `#include "test/support/..."`. The dependency direction (bench →
+# test/support) is inverted vs. usual but intentional: the oracle has one
+# implementation and bench is the secondary consumer (golden-analytic tests
+# are primary).
 target_include_directories(lumice_bench
   PRIVATE "${PROJ_ROOT}")
 target_link_libraries(lumice_bench

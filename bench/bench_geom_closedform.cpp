@@ -16,7 +16,8 @@
 //      the ground truth (its dedup tolerance is an empirically swept constant).
 //      An EXACT integer oracle is built instead (see ExactPrismCornerCount):
 //      after x = sqrt(3)*u the constraints are rational in dist[], so the whole
-//      predicate runs in __int128 with no tolerance at all. NOTE: precision
+//      predicate runs in int64 with no tolerance at all (see the bit-width
+//      analysis in test/support/exact_prism_oracle.hpp). NOTE: precision
 //      escalation via `long double` is NOT usable here -- on arm64 macOS
 //      long double IS double (53-bit), so such a test passes vacuously.
 //
@@ -127,7 +128,7 @@ ClosedFormResult<T> ClosedFormPrism(const float* dist, T feas_tol_rel) {
 
 // ---- EXACT oracle: integer arithmetic, zero tolerance ----------------------
 //
-// The full derivation, scaling constants and __int128 implementation live in
+// The full derivation, scaling constants and int64 implementation live in
 // test/support/exact_prism_oracle.hpp — there is exactly one implementation.
 // This one-line wrapper keeps the four call sites below signature-compatible.
 int ExactPrismCornerCount(const float* dist) {
@@ -243,7 +244,8 @@ SweepStats RunSweep(double sigma, unsigned seed, int samples) {
     //   u <= d0/4,  u+v <= d1/2,  -u+v <= d2/2,
     //  -u <= d3/4, -u-v <= d4/2,   u-v <= d5/2.
     // Scaling by 4 and clearing denominators with the exact dyadic value of each
-    // float dist[i] makes the whole predicate exact in __int128.
+    // float dist[i] makes the whole predicate exact in int64 (see the bit-width
+    // analysis in test/support/exact_prism_oracle.hpp for the budget).
     const int exact_cnt = ExactPrismCornerCount(dist);
     if (exact_cnt != cf_d.vtx_cnt) {
       st.closedform_vs_exact_diff++;
@@ -1220,7 +1222,7 @@ BENCHMARK(BM_PyramidClosedFormSanityDump);
 
 // ---- Oracle self-verification against production and closed-form ----------
 //
-// The pyramid __int128 oracle is a SECOND independent implementation, so
+// The pyramid exact oracle is a SECOND independent implementation, so
 // before using it as ground truth in the golden-analytic tests it must first
 // self-verify on the known-good regime (well-conditioned samples where all
 // three parties — closed-form, oracle, production — should agree by
@@ -1341,361 +1343,11 @@ void BM_PyramidOracleSelfVerify(benchmark::State& state) {
 BENCHMARK(BM_PyramidOracleSelfVerify);
 
 // ============================================================================
-// Pyramid oracle pre-flight diagnostics — two independent questions the oracle
-// design rests on: (a) can __int128 hold the arithmetic; (b) is per-direction
-// death time a purely-local event? Both are DIAGNOSTICS, not production code.
+// Pyramid oracle pre-flight diagnostic — is per-direction death time a purely-
+// local event? DIAGNOSTIC, not production code.
 // ============================================================================
 
-// ---- Step 1(a): __int128 bit-width pressure test ---------------------------
-//
-// The exact prism oracle uses a single fixed SHIFT=30 because every prism-face
-// coefficient is O(1). Pyramid coefficients contain a1 = √3/(4·tan α), which
-// spans [7.56e-4, 248] over the legal α range [0.1°, 89.9°] — 5.5 decades. A
-// fixed SHIFT that keeps small a1 precise overflows on large a1; the reverse
-// loses bits at the small end. This experiment measures, in the same
-// three-plane-intersection arithmetic the pyramid oracle would perform, the
-// worst-case bit width of intermediate products for direct-wedge and Miller
-// input arms across the whole legal α range × the extreme-flat tail. If the
-// worst bit width sits comfortably below 127, __int128 with variable-shift
-// (frexp / ldexp) is feasible; if not, the oracle design needs a 256-bit
-// backing type (see plan §7 risk 1).
-//
-// Measurement method: run the intersection in double, but tracking the
-// absolute value of each intermediate product a·(b·c) - a·(c·b) ... . Then
-// compute log2(max) — that IS the bit width the integer version would need
-// (before adding any headroom for accumulation).
-namespace pyramid_spike_step1 {
-
-constexpr int kSides = 6;
-
-// Build the 20 pyramid plane coefficients for a given (alpha, h1, h2, h3, dist)
-// combination — same formulas as FillHexCrystalCoef but self-contained so this
-// diagnostic doesn't drag in the production geometry pipeline for a
-// bit-width probe.
-struct PyramidPlanes {
-  double coef[20 * 4];
-  int n;
-};
-
-PyramidPlanes BuildPyramidPlanes(double alpha_u_deg, double alpha_l_deg, double h1, double h2, double h3,
-                                 const double dist[kSides]) {
-  PyramidPlanes p;
-  using math::kPi_3;
-  using math::kPi_6;
-  const double kDegRad = M_PI / 180.0;
-  const double h2_2 = h2 / 2.0;
-  const double a1 = (h1 > 1e-9 && alpha_u_deg >= 0.1 && alpha_u_deg <= 89.9) ?
-                        (std::sqrt(3.0) / 4.0) / std::tan(alpha_u_deg * kDegRad) :
-                        -1.0;
-  const double a2 = (h3 > 1e-9 && alpha_l_deg >= 0.1 && alpha_l_deg <= 89.9) ?
-                        (std::sqrt(3.0) / 4.0) / std::tan(alpha_l_deg * kDegRad) :
-                        -1.0;
-  int c = 0;
-  // Basal (d filled later; the pressure test cares about the arithmetic on
-  // the intersecting non-basal planes, so any consistent d works).
-  p.coef[c * 4 + 0] = 0;
-  p.coef[c * 4 + 1] = 0;
-  p.coef[c * 4 + 2] = 1;
-  p.coef[c * 4 + 3] = -h2_2;
-  c++;
-  p.coef[c * 4 + 0] = 0;
-  p.coef[c * 4 + 1] = 0;
-  p.coef[c * 4 + 2] = -1;
-  p.coef[c * 4 + 3] = -h2_2;
-  c++;
-  // Prism.
-  for (int i = 0; i < kSides; i++) {
-    const double x1 = 0.5 * std::cos(-kPi_6 + i * kPi_3);
-    const double x2 = 0.5 * std::cos(kPi_6 + i * kPi_3);
-    const double y1 = 0.5 * std::sin(-kPi_6 + i * kPi_3);
-    const double y2 = 0.5 * std::sin(kPi_6 + i * kPi_3);
-    const double det = x1 * y2 - x2 * y1;
-    p.coef[c * 4 + 0] = y2 - y1;
-    p.coef[c * 4 + 1] = x1 - x2;
-    p.coef[c * 4 + 2] = 0;
-    p.coef[c * 4 + 3] = -dist[i] * det;
-    c++;
-  }
-  // Upper cone.
-  if (a1 > 0) {
-    for (int i = 0; i < kSides; i++) {
-      const double x1 = 0.5 * std::cos(-kPi_6 + i * kPi_3);
-      const double x2 = 0.5 * std::cos(kPi_6 + i * kPi_3);
-      const double y1 = 0.5 * std::sin(-kPi_6 + i * kPi_3);
-      const double y2 = 0.5 * std::sin(kPi_6 + i * kPi_3);
-      const double det = x1 * y2 - x2 * y1;
-      p.coef[c * 4 + 0] = a1 * (y2 - y1);
-      p.coef[c * 4 + 1] = a1 * (x1 - x2);
-      p.coef[c * 4 + 2] = det;
-      p.coef[c * 4 + 3] = -(h2_2 + a1 * dist[i]) * det;
-      c++;
-    }
-  }
-  // Lower cone.
-  if (a2 > 0) {
-    for (int i = 0; i < kSides; i++) {
-      const double x1 = 0.5 * std::cos(-kPi_6 + i * kPi_3);
-      const double x2 = 0.5 * std::cos(kPi_6 + i * kPi_3);
-      const double y1 = 0.5 * std::sin(-kPi_6 + i * kPi_3);
-      const double y2 = 0.5 * std::sin(kPi_6 + i * kPi_3);
-      const double det = x1 * y2 - x2 * y1;
-      p.coef[c * 4 + 0] = a2 * (y2 - y1);
-      p.coef[c * 4 + 1] = a2 * (x1 - x2);
-      p.coef[c * 4 + 2] = -det;
-      p.coef[c * 4 + 3] = -(h2_2 + a2 * dist[i]) * det;
-      c++;
-    }
-  }
-  p.n = c;
-  return p;
-}
-
-// Emulate the __int128-oracle arithmetic in double, tracking absolute values.
-// The oracle would do: scale each coef by 2^SHIFT so coefs become integers,
-// then compute det = ax*(by*cz - bz*cy) - ay*(bx*cz - bz*cx) + az*(bx*cy - by*cx),
-// and similarly px, py, pz numerators; feasibility check does (row_a*px + row_b*py + row_c*pz) <=> row_d*det.
-// The equivalent bit width IS log2(max intermediate). This function returns
-// that max, computed in double (double gives ~53 bit mantissa, enough to
-// represent the exponent of the true integer intermediate to within 1 bit).
-struct BitStats {
-  double max_intermediate_bits = 0;
-};
-
-void TrackTripleIntermediate(const double* a, const double* b, const double* c, double common_scale, BitStats* st) {
-  // Scale each coefficient row by common_scale (representing the 2^SHIFT
-  // rescaling). Everything from here on is in "integer units" (though we hold
-  // it in double for the pressure probe).
-  double A[4], B[4], C[4];
-  for (int k = 0; k < 4; k++) {
-    A[k] = a[k] * common_scale;
-    B[k] = b[k] * common_scale;
-    C[k] = c[k] * common_scale;
-  }
-  // Products in the determinant expansion.
-  const double m1 = A[0] * (B[1] * C[2] - B[2] * C[1]);
-  const double m2 = A[1] * (B[0] * C[2] - B[2] * C[0]);
-  const double m3 = A[2] * (B[0] * C[1] - B[1] * C[0]);
-  // Cofactor products (px, py, pz numerators use the same shape but with A[3] et al.).
-  const double n1 = A[3] * (B[1] * C[2] - B[2] * C[1]);
-  const double n2 = A[3] * (B[0] * C[2] - B[2] * C[0]);
-  const double n3 = A[3] * (B[0] * C[1] - B[1] * C[0]);
-  const double det = m1 - m2 + m3;
-  // Feasibility side of the check: row * (px, py, pz) <=> row[3] * det.
-  // The RHS multiplication row[3]*det is another triple-product-scale operation.
-  auto absmax = [](std::initializer_list<double> xs) {
-    double m = 0;
-    for (double x : xs) {
-      m = std::max(m, std::fabs(x));
-    }
-    return m;
-  };
-  const double worst = absmax({ m1, m2, m3, n1, n2, n3, det, A[3] * det });
-  if (worst > 0) {
-    st->max_intermediate_bits = std::max(st->max_intermediate_bits, std::log2(worst));
-  }
-}
-
-}  // namespace pyramid_spike_step1
-
-void BM_PyramidOracleBitWidthPressure(benchmark::State& state) {
-  using namespace pyramid_spike_step1;
-
-  // arm 0 = direct wedge (incl. [85°, 89.5°] tail), arm 1 = Miller index
-  const int arm = static_cast<int>(state.range(0));
-  std::mt19937 rng(20260720u ^ static_cast<unsigned>(arm));
-  std::uniform_real_distribution<double> alpha_bulk(1.0, 85.0);
-  std::uniform_real_distribution<double> alpha_tail(85.0, 89.5);
-  std::normal_distribution<double> d_noise(1.0, 0.3);
-  std::uniform_real_distribution<double> h_dist(0.2, 2.0);
-  std::uniform_int_distribution<int> idx_dist(1, 4);
-  std::uniform_int_distribution<int> tail_coin(0, 3);  // ~1/4 of samples in extreme-flat tail
-
-  BitStats st;
-  long samples = 0;
-  long triples_scored = 0;
-  // Cap SHIFT so |coef|·2^SHIFT stays representable in double (≤ ~2^1023
-  // isn't the risk; what matters is the mantissa resolution: we choose SHIFT
-  // such that the SMALLEST nonzero coef is captured with at least ~40 bits).
-  // The pyramid oracle would use frexp-based per-plane variable shifts, but
-  // the pressure question is "what's the total bit width of an intermediate
-  // if a naive fixed common SHIFT were used" — an upper bound on the
-  // variable-shift version.
-  constexpr double kScale = 4294967296.0;  // 2^32
-
-  const int kSamplesPerRun = 3000;
-  for (int s = 0; s < kSamplesPerRun; s++) {
-    double alpha_u, alpha_l;
-    if (arm == 0) {
-      alpha_u = (tail_coin(rng) == 0) ? alpha_tail(rng) : alpha_bulk(rng);
-      alpha_l = (tail_coin(rng) == 0) ? alpha_tail(rng) : alpha_bulk(rng);
-    } else {
-      const int i1u = idx_dist(rng), i4u = idx_dist(rng);
-      const int i1l = idx_dist(rng), i4l = idx_dist(rng);
-      alpha_u = std::atan(std::sqrt(3.0) / 2.0 * i4u / i1u / kIceCrystalC) * 180.0 / M_PI;
-      alpha_l = std::atan(std::sqrt(3.0) / 2.0 * i4l / i1l / kIceCrystalC) * 180.0 / M_PI;
-    }
-    double dist[6];
-    for (int i = 0; i < 6; i++) {
-      dist[i] = std::max(0.05, d_noise(rng));
-    }
-    const double h2 = h_dist(rng);
-    const double h1 = h_dist(rng) / 2.0;
-    const double h3 = h_dist(rng) / 2.0;
-    auto p = BuildPyramidPlanes(alpha_u, alpha_l, h1, h2, h3, dist);
-    if (p.n < 8) {
-      continue;
-    }
-    samples++;
-    // Probe every C(n, 3) triple of non-basal planes — same shape as the
-    // pyramid oracle would enumerate. Skip basal-only triples: they never
-    // determine a new vertex in the oracle's search.
-    for (int i = 2; i < p.n; i++) {
-      for (int j = i + 1; j < p.n; j++) {
-        for (int k = j + 1; k < p.n; k++) {
-          TrackTripleIntermediate(p.coef + i * 4, p.coef + j * 4, p.coef + k * 4, kScale, &st);
-          triples_scored++;
-        }
-      }
-    }
-  }
-  for (auto _ : state) {
-    benchmark::DoNotOptimize(st.max_intermediate_bits);
-  }
-  state.counters["arm"] = arm;
-  state.counters["samples"] = static_cast<double>(samples);
-  state.counters["triples"] = static_cast<double>(triples_scored);
-  state.counters["shift_used_bits"] = std::log2(kScale);
-  state.counters["MAX_INTERMEDIATE_BITS"] = st.max_intermediate_bits;
-  // Verdict counter: we need bit width <= 127 (with headroom for the
-  // outer *= det comparison and one accumulation).
-  state.counters["fits_in_int128_headroom_bits"] = 127.0 - st.max_intermediate_bits;
-}
-BENCHMARK(BM_PyramidOracleBitWidthPressure)->Arg(0)->Arg(1);
-
-// Variable per-plane frexp normalization variant of Step 1(a): each plane's
-// max-abs coef gets normalized to 2^SHIFT_PER_PLANE (default 28) so mantissa
-// bits used per coef is ≤ 28. Triple-product mantissa is then ≤ 3·28 = 84 bits;
-// feasibility check adds another mul (·28 = 112 bits) + accumulation (+2) =
-// 114 bits total. If measurement here says "≤ ~117 bits", the pyramid oracle
-// with per-plane frexp normalization fits in __int128 with real headroom.
-namespace pyramid_spike_step1_variable {
-
-double MaxAbs(const double v[4]) {
-  double m = 0;
-  for (int i = 0; i < 4; i++) {
-    m = std::max(m, std::fabs(v[i]));
-  }
-  return m;
-}
-
-}  // namespace pyramid_spike_step1_variable
-
-void BM_PyramidOracleBitWidthPressureVar(benchmark::State& state) {
-  using namespace pyramid_spike_step1;
-  using pyramid_spike_step1_variable::MaxAbs;
-  const int arm = static_cast<int>(state.range(0));
-  const int shift_per_plane = static_cast<int>(state.range(1));  // e.g. 24, 28, 30
-
-  std::mt19937 rng(20260720u ^ static_cast<unsigned>(arm) ^ static_cast<unsigned>(shift_per_plane << 8));
-  std::uniform_real_distribution<double> alpha_bulk(1.0, 85.0);
-  std::uniform_real_distribution<double> alpha_tail(85.0, 89.5);
-  std::normal_distribution<double> d_noise(1.0, 0.3);
-  std::uniform_real_distribution<double> h_dist(0.2, 2.0);
-  std::uniform_int_distribution<int> idx_dist(1, 4);
-  std::uniform_int_distribution<int> tail_coin(0, 3);
-
-  double max_triple_mantissa_bits = 0;
-  double max_feas_mantissa_bits = 0;
-  long triples_scored = 0;
-  long samples = 0;
-  const double kMantissaTarget = std::pow(2.0, static_cast<double>(shift_per_plane));
-
-  for (int s = 0; s < 3000; s++) {
-    double alpha_u, alpha_l;
-    if (arm == 0) {
-      alpha_u = (tail_coin(rng) == 0) ? alpha_tail(rng) : alpha_bulk(rng);
-      alpha_l = (tail_coin(rng) == 0) ? alpha_tail(rng) : alpha_bulk(rng);
-    } else {
-      const int i1u = idx_dist(rng), i4u = idx_dist(rng);
-      const int i1l = idx_dist(rng), i4l = idx_dist(rng);
-      alpha_u = std::atan(std::sqrt(3.0) / 2.0 * i4u / i1u / kIceCrystalC) * 180.0 / M_PI;
-      alpha_l = std::atan(std::sqrt(3.0) / 2.0 * i4l / i1l / kIceCrystalC) * 180.0 / M_PI;
-    }
-    double dist[6];
-    for (int i = 0; i < 6; i++) {
-      dist[i] = std::max(0.05, d_noise(rng));
-    }
-    const double h2 = h_dist(rng);
-    const double h1 = h_dist(rng) / 2.0;
-    const double h3 = h_dist(rng) / 2.0;
-    auto p = BuildPyramidPlanes(alpha_u, alpha_l, h1, h2, h3, dist);
-    if (p.n < 8) {
-      continue;
-    }
-    samples++;
-    // Normalize each non-basal plane's coefs to have max_abs = 2^shift.
-    double scaled[20 * 4];
-    for (int i = 0; i < p.n; i++) {
-      const double m = MaxAbs(p.coef + i * 4);
-      const double s = m > 0 ? kMantissaTarget / m : 1.0;
-      for (int k = 0; k < 4; k++) {
-        scaled[i * 4 + k] = p.coef[i * 4 + k] * s;
-      }
-    }
-    for (int i = 2; i < p.n; i++) {
-      for (int j = i + 1; j < p.n; j++) {
-        for (int k = j + 1; k < p.n; k++) {
-          const double* A = scaled + i * 4;
-          const double* B = scaled + j * 4;
-          const double* C = scaled + k * 4;
-          const double m1 = A[0] * (B[1] * C[2] - B[2] * C[1]);
-          const double m2 = A[1] * (B[0] * C[2] - B[2] * C[0]);
-          const double m3 = A[2] * (B[0] * C[1] - B[1] * C[0]);
-          const double det = m1 - m2 + m3;
-          const double worst_triple =
-              std::max(std::fabs(m1), std::max(std::fabs(m2), std::max(std::fabs(m3), std::fabs(det))));
-          if (worst_triple > 0) {
-            max_triple_mantissa_bits = std::max(max_triple_mantissa_bits, std::log2(worst_triple));
-          }
-          // Feasibility check row_r · (px, py, pz) vs row_r[3] * det: another 3
-          // multiplications each of (30-bit coef · 90-bit intermediate).
-          for (int r = 0; r < p.n; r++) {
-            if (r == i || r == j || r == k) {
-              continue;
-            }
-            const double* R = scaled + r * 4;
-            const double lhs = R[0] * m1 + R[1] * m2 + R[2] * m3;
-            const double rhs = R[3] * det;
-            const double worst = std::max(std::fabs(lhs), std::fabs(rhs));
-            if (worst > 0) {
-              max_feas_mantissa_bits = std::max(max_feas_mantissa_bits, std::log2(worst));
-            }
-          }
-          triples_scored++;
-        }
-      }
-    }
-  }
-  for (auto _ : state) {
-    benchmark::DoNotOptimize(max_triple_mantissa_bits);
-  }
-  state.counters["arm"] = arm;
-  state.counters["shift_per_plane"] = shift_per_plane;
-  state.counters["samples"] = static_cast<double>(samples);
-  state.counters["triples"] = static_cast<double>(triples_scored);
-  state.counters["MAX_TRIPLE_BITS"] = max_triple_mantissa_bits;
-  state.counters["MAX_FEAS_BITS"] = max_feas_mantissa_bits;
-  state.counters["int128_headroom"] = 127.0 - max_feas_mantissa_bits;
-}
-BENCHMARK(BM_PyramidOracleBitWidthPressureVar)
-    ->Args({ 0, 24 })
-    ->Args({ 0, 28 })
-    ->Args({ 0, 30 })
-    ->Args({ 1, 24 })
-    ->Args({ 1, 28 })
-    ->Args({ 1, 30 });
-
-// ---- Step 1(b): angular-death structure verification ----------------------
+// ---- Angular-death structure verification ---------------------------------
 //
 // Plan default assumption 3: "direction i's death event is determined only by
 // dist[i-1], dist[i], dist[i+1]." If FALSE, the closed-form corner-death
@@ -1795,21 +1447,23 @@ BENCHMARK(BM_PyramidAngularDeathStructure);
 // half-space planes in Q(√3) (Fraction backend, unlimited precision, zero
 // tolerance). That Q(√3) enumeration is a THIRD independent implementation
 // of the pyramid vertex-enumeration problem — distinct in both language and
-// number system from the C++ __int128 oracle in
+// number system from the C++ exact oracle in
 // test/support/exact_pyramid_oracle.hpp, and from the closed-form path in
 // src/core/geo3d_closedform.cpp. A bug shared between the two C++ paths
 // (same author, same session) but not shared with the Q(√3) enumeration
-// would surface as a "diff" row. Its main leverage: on inputs whose
-// intermediate bit widths exceed __int128, the C++ oracle refuses; Q(√3)
-// does not, so the cross-check covers ranges the C++ oracle cannot.
+// would surface as a "diff" row. Its main leverage: on inputs where the
+// C++ oracle's sign-decision filter refuses (near-boundary poly values),
+// the unbounded-precision Q(√3) enumeration still resolves, so the cross-
+// check covers ranges the C++ oracle cannot.
 //
 // Line format (all numeric fields %a hex-float so IEEE round-trip is exact):
 //   <arm> <a1> <a2> <h1> <h2> <h3> <d0..d5> expected <N> cf <N_cf> oracle_refused <0|1>
 // arm 0 = wedge angle drawn directly, arm 1 = Miller index (a1/a2 derived
-// algebraically per plan §3(1)). `expected N` is the C++ __int128 oracle's
-// vertex count. `cf N_cf` is the closed form's count. `oracle_refused` is
-// 1 when the C++ oracle bailed on bit width — the driver should ignore
-// `expected` in that case and rely on the Q(√3) comparison against `cf`
+// algebraically). `expected N` is the C++ exact oracle's vertex count.
+// `cf N_cf` is the closed form's count. `oracle_refused` is 1 when the C++
+// oracle bailed (sign ambiguous or width overflow) — the driver should
+// ignore `expected` in that case and rely on the Q(√3) comparison against
+// `cf`
 // alone. Fields past `expected N` are ignored by drivers that only need
 // the pair-agreement signal.
 //
@@ -1875,8 +1529,9 @@ void BM_DumpPyramidParams(benchmark::State& state) {
           }
           // `expected` = C++ oracle count (Python compares against this).
           // `cf` = closed-form count (extra observable, ignored by driver).
-          // `oracle_refused` = 1 if __int128 oracle refused (bit-width),
-          // in which case Python's `expected` should be treated as unknown.
+          // `oracle_refused` = 1 if the C++ exact oracle refused (bit-width
+          // or sign ambiguous), in which case Python's `expected` should be
+          // treated as unknown.
           std::fprintf(f, " expected %d cf %d oracle_refused %d\n", oracle.vertex_count, r.vtx_cnt,
                        static_cast<int>(oracle.refused));
           written++;

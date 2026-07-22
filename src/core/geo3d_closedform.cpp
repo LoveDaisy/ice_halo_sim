@@ -75,7 +75,12 @@ struct HexCrossSection {
   double corner_y[kClosedFormPrismMaxCorners]{};
   // side_present[i] iff at least 2 distinct feasible corners lie on direction i.
   bool side_present[kClosedFormPrismSideCnt]{};
-  bool any_side_present = false;
+  // True iff the 6 half-plane constraints define a genuine BOUNDED 2D polygon
+  // (>= 3 non-parallel present sides, no opposite-adjacent pair in the walk
+  // order — see the derivation at its assignment site below). Named for what
+  // it gates, not merely "how many sides": a caller checking this field is
+  // asking "is there a polygon to extrude/emit", not "is >=1 side present".
+  bool is_bounded_polygon = false;
 };
 
 HexCrossSection SolveHexCrossSection(const double r_side_dist[kClosedFormPrismSideCnt],
@@ -87,9 +92,8 @@ HexCrossSection SolveHexCrossSection(const double r_side_dist[kClosedFormPrismSi
   double sn[kClosedFormPrismSideCnt];
   double scale = 0.0;
   for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
-    double theta = static_cast<double>(i) * math::kPi_3;
-    cs[i] = std::cos(theta);
-    sn[i] = std::sin(theta);
+    cs[i] = kHexFaceCos[i];
+    sn[i] = kHexFaceSin[i];
     scale = std::max(scale, std::fabs(r_side_dist[i]));
     if (r_side_dist[i] <= 0.0) {
       tag |= kPathTagAnyDirDegenerate;
@@ -166,7 +170,6 @@ HexCrossSection SolveHexCrossSection(const double r_side_dist[kClosedFormPrismSi
   }
 
   // face_present[i] = at least 2 distinct feasible corners lie on side i.
-  int present_n = 0;
   for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
     int on = 0;
     for (int v = 0; v < corner_cnt_local; v++) {
@@ -175,37 +178,16 @@ HexCrossSection SolveHexCrossSection(const double r_side_dist[kClosedFormPrismSi
       }
     }
     out.side_present[i] = (on >= 2);
-    if (out.side_present[i]) {
-      present_n++;
-    }
   }
 
-  bool any_side_present = false;
-  for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
-    if (out.side_present[i]) {
-      any_side_present = true;
-      break;
-    }
-  }
-  out.any_side_present = any_side_present;
-
-  if (!any_side_present) {
-    tag |= kPathTagEmpty;
-    if (out_path_tag != nullptr) {
-      *out_path_tag = tag;
-    }
-    return out;
-  }
-  tag |= kPathTagBounded;
-  if (present_n == kClosedFormPrismSideCnt) {
-    tag |= kPathTagAllDirsPresent;
-  }
-
-  // Emit CCW corner ring by walking present side faces in i-increasing order.
-  // Adjacent-in-list pair (P[k], P[(k+1) % n]) defines corner k; opposite pairs
-  // are impossible because a bounded polygon cannot be defined by two parallel
-  // faces alone. For any adjacent-in-list (i, j) with j != i+3 the intersection
-  // is well-defined and (by convexity + both faces being present) feasible.
+  // Build the present-direction index list in ascending-index order. Since
+  // the 6 directions are laid out at fixed i·60° angular positions
+  // (kHexFaceCos/Sin), ascending index IS CCW angular order, so this list is
+  // already the CCW walk order the ring-emission loop below needs. p_n is
+  // the SOLE present-count (single source of truth, fed by the same
+  // side_present[] this loop reads) — do not reintroduce a parallel counter
+  // in the loop above; two counters over the same predicate can silently
+  // diverge if either is edited independently.
   int present_idx[kClosedFormPrismSideCnt];
   int p_n = 0;
   for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
@@ -213,11 +195,54 @@ HexCrossSection SolveHexCrossSection(const double r_side_dist[kClosedFormPrismSi
       present_idx[p_n++] = i;
     }
   }
+
+  // A bounded 2D polygon requires >= 3 non-parallel present sides AND no two
+  // faces adjacent in the walk order may be an opposite (parallel) pair — a
+  // corner is only well-defined at the intersection of two NON-parallel
+  // lines, no matter how many other directions are also present elsewhere in
+  // the list. `p_n >= 3` alone is a NECESSARY condition (it already rules
+  // out the historical present_n == 2 defect below), not a sufficient one in
+  // general, so both conjuncts are checked explicitly here — making the true
+  // invariant a real runtime check in EVERY build, not the debug-only
+  // `assert(std::abs(i - j) != 3)` this replaces.
+  //
+  // Historically that invariant was enforced only in debug builds; NDEBUG
+  // release builds silently fell through Solve2x2's det=0 early return and
+  // emitted the initialization-default corner (0, 0). The pyramid apex layer
+  // (called at m = m_apex, where the cross section IS a single point) hit
+  // this path in asymmetric-dist configurations and produced phantom
+  // (0, 0, z_apex) vertices — the exact defect fixed here.
+  bool has_opposite_adjacent = false;
+  for (int k = 0; k < p_n; k++) {
+    if (std::abs(present_idx[k] - present_idx[(k + 1) % p_n]) == 3) {
+      has_opposite_adjacent = true;
+      break;
+    }
+  }
+  out.is_bounded_polygon = (p_n >= 3) && !has_opposite_adjacent;
+
+  if (!out.is_bounded_polygon) {
+    tag |= kPathTagEmpty;
+    if (out_path_tag != nullptr) {
+      *out_path_tag = tag;
+    }
+    return out;
+  }
+  tag |= kPathTagBounded;
+  if (p_n == kClosedFormPrismSideCnt) {
+    tag |= kPathTagAllDirsPresent;
+  }
+
+  // Emit CCW corner ring by walking present side faces in walk order.
+  // Adjacent-in-list pair (P[k], P[(k+1) % n]) defines corner k; the
+  // has_opposite_adjacent check above already ruled out opposite pairs, so
+  // for every adjacent-in-list (i, j) the intersection is well-defined and
+  // (by convexity + both faces being present) feasible.
   int emitted = 0;
   for (int k = 0; k < p_n; k++) {
     int i = present_idx[k];
     int j = present_idx[(k + 1) % p_n];
-    assert(std::abs(i - j) != 3);
+    assert(std::abs(i - j) != 3);  // guaranteed by has_opposite_adjacent above
     double px = 0.0;
     double py = 0.0;
     bool solved = Solve2x2(cs[i], sn[i], cs[j], sn[j], r_side_dist[i], r_side_dist[j], &px, &py);
@@ -327,9 +352,8 @@ int EnumerateApexPoints(const double dist_scaled[kClosedFormPyramidSideCnt], dou
   double sn[kClosedFormPyramidSideCnt];
   double scale = 0.0;
   for (int i = 0; i < kClosedFormPyramidSideCnt; i++) {
-    double t = static_cast<double>(i) * math::kPi_3;
-    cs[i] = std::cos(t);
-    sn[i] = std::sin(t);
+    cs[i] = kHexFaceCos[i];
+    sn[i] = kHexFaceSin[i];
     scale = std::max(scale, std::fabs(dist_scaled[i]));
   }
   double tol_lp = 5.0 * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
@@ -399,9 +423,8 @@ ApexLPResult MaxFeasibleInsetLP(const double dist_scaled[kClosedFormPyramidSideC
   double sn[kClosedFormPyramidSideCnt];
   double scale = 0.0;
   for (int i = 0; i < kClosedFormPyramidSideCnt; i++) {
-    double t = static_cast<double>(i) * math::kPi_3;
-    cs[i] = std::cos(t);
-    sn[i] = std::sin(t);
+    cs[i] = kHexFaceCos[i];
+    sn[i] = kHexFaceSin[i];
     scale = std::max(scale, std::fabs(dist_scaled[i]));
   }
   double tol = 5.0 * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
@@ -488,9 +511,8 @@ int EnumerateConeDeathEvents(const double dist_scaled[kClosedFormPyramidSideCnt]
   double sn[kClosedFormPyramidSideCnt];
   double scale = 0.0;
   for (int i = 0; i < kClosedFormPyramidSideCnt; i++) {
-    double t = static_cast<double>(i) * math::kPi_3;
-    cs[i] = std::cos(t);
-    sn[i] = std::sin(t);
+    cs[i] = kHexFaceCos[i];
+    sn[i] = kHexFaceSin[i];
     scale = std::max(scale, std::fabs(dist_scaled[i]));
   }
   double tol_lp = 5.0 * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
@@ -616,13 +638,16 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
   r.plane_coef[5] = 0;
   r.plane_coef[6] = -1;
   r.plane_coef[7] = 0;
-  using math::kPi_3;
-  using math::kPi_6;
   for (int i = 0; i < 6; i++) {
-    double x1 = 0.5 * std::cos(-kPi_6 + i * kPi_3);
-    double x2 = 0.5 * std::cos(kPi_6 + i * kPi_3);
-    double y1 = 0.5 * std::sin(-kPi_6 + i * kPi_3);
-    double y2 = 0.5 * std::sin(kPi_6 + i * kPi_3);
+    // (x1, y1) = hexagon vertex at angle (i·60° − 30°) = kHexVtx[i].
+    // (x2, y2) = hexagon vertex at angle (i·60° + 30°); identity
+    //   (+30° + i·60°) ≡ (−30° + (i + 1)·60°) (mod 360°)
+    // lets us read this vertex from the same table.
+    const int i2 = (i + 1) % 6;
+    double x1 = 0.5 * kHexVtxCos[i];
+    double x2 = 0.5 * kHexVtxCos[i2];
+    double y1 = 0.5 * kHexVtxSin[i];
+    double y2 = 0.5 * kHexVtxSin[i2];
     double det = x1 * y2 - x2 * y1;  // = √3/8
     r.plane_coef[(2 + i) * 4 + 0] = static_cast<float>(y2 - y1);
     r.plane_coef[(2 + i) * 4 + 1] = static_cast<float>(x1 - x2);
@@ -749,7 +774,7 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
     uint16_t local_tag = 0;
     HexCrossSection xs = SolveHexCrossSection(r_side, &local_tag);
     r.path_tag_union |= local_tag;
-    if (!xs.any_side_present) {
+    if (!xs.is_bounded_polygon) {
       return 0;
     }
     int present_idx[6];
@@ -1016,9 +1041,8 @@ ClosedFormPrismResult ComputeClosedFormPrism(float h, const float dist[6]) {
   r.face_normal[4] = 0.0f;
   r.face_normal[5] = -1.0f;
   for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
-    double theta = static_cast<double>(i) * math::kPi_3;
-    r.face_normal[(2 + i) * 3 + 0] = static_cast<float>(std::cos(theta));
-    r.face_normal[(2 + i) * 3 + 1] = static_cast<float>(std::sin(theta));
+    r.face_normal[(2 + i) * 3 + 0] = static_cast<float>(kHexFaceCos[i]);
+    r.face_normal[(2 + i) * 3 + 1] = static_cast<float>(kHexFaceSin[i]);
     r.face_normal[(2 + i) * 3 + 2] = 0.0f;
   }
 
@@ -1038,9 +1062,8 @@ ClosedFormPrismResult ComputeClosedFormPrism(float h, const float dist[6]) {
   double k_r = math::kSqrt3 / 4.0;  // r_i = (√3/4)·dist[i]
   double k_d = math::kSqrt3 / 8.0;  // d_i = -dist[i]·√3/8
   for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
-    double theta = static_cast<double>(i) * math::kPi_3;
-    r.plane_coef[(2 + i) * 4 + 0] = 0.5f * static_cast<float>(std::cos(theta));
-    r.plane_coef[(2 + i) * 4 + 1] = 0.5f * static_cast<float>(std::sin(theta));
+    r.plane_coef[(2 + i) * 4 + 0] = 0.5f * static_cast<float>(kHexFaceCos[i]);
+    r.plane_coef[(2 + i) * 4 + 1] = 0.5f * static_cast<float>(kHexFaceSin[i]);
     r.plane_coef[(2 + i) * 4 + 2] = 0.0f;
     r.plane_coef[(2 + i) * 4 + 3] = -static_cast<float>(k_d * static_cast<double>(dist[i]));
   }
@@ -1065,11 +1088,11 @@ ClosedFormPrismResult ComputeClosedFormPrism(float h, const float dist[6]) {
   }
   HexCrossSection xs = SolveHexCrossSection(r_side);
 
-  // Basal presence: iff any side face is present (a non-empty 2D cross section
-  // extrudes both basal faces). The zero-volume short-circuit above already
-  // handled h ≈ 0.
-  r.face_present[0] = xs.any_side_present;
-  r.face_present[1] = xs.any_side_present;
+  // Basal presence: iff the cross section is a genuine bounded polygon (a
+  // non-empty 2D cross section extrudes both basal faces). The zero-volume
+  // short-circuit above already handled h ≈ 0.
+  r.face_present[0] = xs.is_bounded_polygon;
+  r.face_present[1] = xs.is_bounded_polygon;
   for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
     r.face_present[2 + i] = xs.side_present[i];
   }

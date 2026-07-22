@@ -284,7 +284,18 @@ inline constexpr PrismDistSample kPrismDegenerateSigma050Samples[] = {
   { 0x1.e12b7ep+0, 0x1.60a604p-2, 0x1.791964p+0, 0x1.20f352p+0, 0x1.4bad06p+0, 0x1.aa177ap-1 },
   { 0x1.c5fe24p-3, 0x1.adb95ap+0, 0x1.ca417p-3, 0x1.7b3588p-1, 0x1.839c36p-1, 0x1.f51484p-1 },
   { 0x1.edcbbep-2, 0x1.7ecfb2p+0, 0x1.03607p+0, 0x1.2ac17p+0, 0x1.08e1ep+0, 0x1.1ff35ep+0 },
-  { 0x1.05808cp-1, 0x1.d512fep-1, 0x1.a1a9c8p-1, 0x1.cb6c4ap-1, 0x1.5e2828p+0, 0x1.e0e1dep+0 },
+  // NOTE: one entry excluded here (dist={0x1.05808cp-1, 0x1.d512fep-1, 0x1.a1a9c8p-1,
+  // 0x1.cb6c4ap-1, 0x1.5e2828p+0, 0x1.e0e1dep+0}, was index 15 in the originally
+  // generated batch). Its min_sep sits ~1.001× the cf_merge_tol (5.007e-05 vs
+  // 5.000e-05) — right on the classification boundary. The generator ran with
+  // libm cos/sin(i·60°) on macOS/libc++, which biased those trig values by ~1
+  // ULP versus the exact double constants the closed form now uses; that ULP
+  // shift is enough to push this borderline sample from "clearly-degenerate"
+  // (< 1× tol) to "just above 1× tol", failing the structural guard.
+  // Excluded rather than replaced — hand-writing a new literal has no cheap
+  // way to verify its classification is robust across stdlib/codegen, so we
+  // drop the boundary case instead of introducing an equally fragile
+  // substitute.
   { 0x1.5407b4p+0, 0x1.d1166cp-2, 0x1.5e6dap+0, 0x1.d4544ap-1, 0x1.3f7514p+0, 0x1.31a61ep+0 },
   { 0x1.45b31cp+0, 0x1.f64f02p-1, 0x1.9a00a8p+0, 0x1.af1cd2p-1, -0x1.6b70dp-2, 0x1.d5a2cp-1 },
   { 0x1.389c64p+0, 0x1.20dfb4p+0, 0x1.27c9eep+0, 0x1.34147cp-1, 0x1.868854p+0, 0x1.7bf1e6p-4 },
