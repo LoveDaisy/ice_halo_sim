@@ -14,6 +14,9 @@ void to_json(nlohmann::json& j, const SceneConfig& s) {
     j["ray_num"] = s.ray_num_;
   }
   j["max_hits"] = s.max_hits_;
+  if (s.geom_clock_ != 0) {
+    j["geom_clock"] = s.geom_clock_;
+  }
   for (const auto& m : s.ms_) {
     nlohmann::json j_m;
     j_m["prob"] = m.prob_;

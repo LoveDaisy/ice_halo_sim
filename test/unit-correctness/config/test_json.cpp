@@ -396,6 +396,9 @@ TEST_F(V3TestJson, Scene_SingleScattering) {
 
   ASSERT_EQ(s.max_hits_, 7);
   ASSERT_EQ(s.ray_num_, 2);
+  // Golden config has no `geom_clock` key -> stays at the disabled default,
+  // covering the "knob-off / backward-compatible" acceptance criterion.
+  ASSERT_EQ(s.geom_clock_, 0u);
   ASSERT_EQ(s.ms_.size(), 1);
 
   ASSERT_NEAR(s.ms_[0].prob_, 0.0f, 1e-5);
@@ -405,6 +408,43 @@ TEST_F(V3TestJson, Scene_SingleScattering) {
   ASSERT_EQ(s.ms_[0].setting_[0].filter_.id_, kInvalidId);
   const auto& sp = std::get<SimpleFilterParam>(s.ms_[0].setting_[0].filter_.param_);
   ASSERT_TRUE(std::holds_alternative<NoneFilterParam>(sp));
+}
+
+// Safe domain for scene.geom_clock is {0} U [1, kGeomClockMax]. Parse both
+// endpoints of the accepted range plus rejection of out-of-range values.
+TEST_F(V3TestJson, Scene_GeomClockAcceptedValues) {
+  for (size_t k : { size_t{ 0 }, size_t{ 1 }, kGeomClockMax }) {
+    auto j = config_json_;
+    j.at("scene")["geom_clock"] = k;
+    auto manager = j.get<ConfigManager>();
+    ASSERT_EQ(manager.scene_.geom_clock_, k) << "geom_clock=" << k;
+  }
+}
+
+TEST_F(V3TestJson, Scene_GeomClockRejectsOutOfRange) {
+  {
+    auto j = config_json_;
+    j.at("scene")["geom_clock"] = kGeomClockMax + 1;  // above upper bound
+    EXPECT_THROW(j.get<ConfigManager>(), std::invalid_argument);
+  }
+  {
+    auto j = config_json_;
+    j.at("scene")["geom_clock"] = -1;  // negative
+    EXPECT_THROW(j.get<ConfigManager>(), std::invalid_argument);
+  }
+}
+
+TEST_F(V3TestJson, Scene_GeomClockRoundTrip) {
+  // 0 (default) must not emit the key; a non-zero value must round-trip.
+  auto manager = config_json_.get<ConfigManager>();
+  ASSERT_EQ(manager.scene_.geom_clock_, 0u);
+  nlohmann::json j_off = manager.scene_;
+  EXPECT_FALSE(j_off.contains("geom_clock"));
+
+  manager.scene_.geom_clock_ = kGeomClockMax;
+  nlohmann::json j_on = manager.scene_;
+  ASSERT_TRUE(j_on.contains("geom_clock"));
+  EXPECT_EQ(j_on.at("geom_clock").get<size_t>(), kGeomClockMax);
 }
 
 // =============== Lens Orthographic ===============

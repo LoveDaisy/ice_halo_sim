@@ -136,6 +136,19 @@ SceneConfig ParseSceneConfig(const nlohmann::json& j_scene, const ConfigManager&
     throw std::invalid_argument("max_hits must be in [1, " + std::to_string(kMaxHits) + "]");
   }
 
+  // Optional GPU K-shape pool clock. Absent -> keeps the member default (0 =
+  // disabled). Read into a signed type first so a negative literal is rejected
+  // rather than wrapping to a huge size_t. Safe domain is {0} U [1, kGeomClockMax];
+  // out-of-range values are rejected (not silently clamped) so an over-large
+  // request surfaces at parse time instead of quietly running at a different K.
+  if (j_scene.contains("geom_clock")) {
+    long long geom_clock = j_scene.at("geom_clock").get<long long>();
+    if (geom_clock < 0 || geom_clock > static_cast<long long>(kGeomClockMax)) {
+      throw std::invalid_argument("geom_clock must be 0 (disabled) or in [1, " + std::to_string(kGeomClockMax) + "]");
+    }
+    scene.geom_clock_ = static_cast<size_t>(geom_clock);
+  }
+
   scene.light_source_ = j_scene.at("light_source").get<LightSourceConfig>();
 
   for (const auto& j_s : j_scene.at("scattering")) {
