@@ -1138,7 +1138,7 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
     return out;
   }
 
-  d::PolyPlane planes[kExactPyramidMaxPlanes];
+  d::PolyPlane planes[kExactPyramidMaxPlanes] = {};
   bool plane_active[kExactPyramidMaxPlanes] = { false };
   bool overflow = false;
 
@@ -1302,7 +1302,7 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
     d::PolyTriplePoint tp;
     int def_plane[3];
   };
-  Vertex verts[kExactPyramidMaxVtx];
+  Vertex verts[kExactPyramidMaxVtx] = {};
   int vtx_cnt = 0;
 
   const double alpha_val = has_upper ? a1 : 0.0;
