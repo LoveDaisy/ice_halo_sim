@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784705725118,
+  "lastUpdate": 1784705728185,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4812,54 +4812,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "062fff11d9ca5a48e9424fc2424572c415b9460f",
-          "message": "Merge pull request #112 from LoveDaisy/fix/misc\n\nchore(gui): unify overlay sentinel and add review follow-up fixes",
-          "timestamp": "2026-05-27T08:42:42+08:00",
-          "tree_id": "adcb4da74d7fbf0987da6ef3c60a107b7c34e64a",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/062fff11d9ca5a48e9424fc2424572c415b9460f"
-        },
-        "date": 1779842847258,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 1118454.2,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1818287.8,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 1117299.6,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 830599.1,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "eb70214863932c839b9f6102a4ce5961856333bc",
           "message": "Merge pull request #113 from LoveDaisy/chore/gui_lag\n\nfix(gui): eliminate high-resolution GUI lag",
           "timestamp": "2026-05-27T10:08:15+08:00",
@@ -9590,6 +9542,54 @@ window.BENCHMARK_DATA = {
             "value": 653822.4,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0244b5f169af36f52d1fbfcf83ea3ca4df809f12",
+          "message": "Merge pull request #215 from LoveDaisy/feat/geometry-exact-domain-audit\n\ngeometry exactness: symbolic-a1 exact oracle (drop __int128) + pyramid apex bug fix + 3-platform verify",
+          "timestamp": "2026-07-22T15:28:14+08:00",
+          "tree_id": "455c7b6b9c07b5fffdb7b5cc4cd6c4c0844c0eb7",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/0244b5f169af36f52d1fbfcf83ea3ca4df809f12"
+        },
+        "date": 1784705727772,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 881831.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1192044.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 780663.7,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 606069,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
           }
         ]
       }
