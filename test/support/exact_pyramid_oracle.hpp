@@ -521,6 +521,37 @@ inline double PolyEvalDouble(const PolyQS3& p, double alpha_val, double beta_val
   return val;
 }
 
+// Exact evaluation of P(α, β) at α = a1, β = a2 as pure QS3 (int64, no double).
+// a1 / a2 are the exact dyadic values of the float pyramid parameters, so the
+// substitution is exact; the overflow guard trips (sets *overflow) if any
+// intermediate exceeds the int64 budget. Used only as the ambiguous-sign
+// fallback (see IsFeasibleSided): the free-symbol double filter cannot certify
+// a value that is zero only because of an α↔β relation (e.g. the regular
+// pyramid's a1 == a2), but exact substitution resolves it with no wide
+// arithmetic — the actual ambiguous incidences are low degree.
+inline QS3 PolyEvalExact(const PolyQS3& p, QS3 a1, QS3 a2, bool* overflow, int* max_bits) {
+  QS3 a1pow[kMaxJointDeg + 1];
+  QS3 a2pow[kMaxJointDeg + 1];
+  a1pow[0] = IntToQS3(1);
+  a2pow[0] = IntToQS3(1);
+  for (int i = 1; i <= kMaxJointDeg; i++) {
+    a1pow[i] = QS3Mul(a1pow[i - 1], a1, overflow, max_bits);
+    a2pow[i] = QS3Mul(a2pow[i - 1], a2, overflow, max_bits);
+  }
+  QS3 acc = QS3Zero();
+  for (int i = 0; i <= kMaxJointDeg; i++) {
+    for (int j = 0; j <= kMaxJointDeg - i; j++) {
+      if (IsZero(p.c[i][j])) {
+        continue;
+      }
+      const QS3 aij = QS3Mul(a1pow[i], a2pow[j], overflow, max_bits);
+      const QS3 term = QS3Mul(p.c[i][j], aij, overflow, max_bits);
+      acc = QS3Add(acc, term, overflow, max_bits);
+    }
+  }
+  return acc;
+}
+
 // Double-Horner evaluation of P(α, β) with the 128-ULP error margin.
 // Return: +1 / -1 / 0 (ambiguous). Ambiguous → *ambiguous = true.
 inline int PolySign(const PolyQS3& p, double alpha_val, double beta_val, bool* ambiguous) {
@@ -1091,29 +1122,34 @@ inline int IsFeasibleSided(const PolyPlane& plane, const PolyTriplePoint& tp, do
   if (PolyIsZero(expr)) {
     return 0;
   }
-  // TEMP 387.10-DBG: when the feasibility value is near-zero (the apex case),
-  // dump every nonzero QS3 coefficient of expr so we can see whether expr is
-  // genuinely a nonzero polynomial or an identically-zero one the arithmetic
-  // failed to reduce. Platform-independent (integer QS3), so a local run is
-  // authoritative.
-  {
-    const double dbgval = PolyEvalDouble(expr, alpha_val, beta_val);
-    if (std::fabs(dbgval) < 1e-6) {
-      std::fprintf(stderr, "[DBG expr-near-zero] val=%.3g PolyIsZero=0 nonzero-coeffs:\n", dbgval);
-      for (int i = 0; i <= kMaxJointDeg; i++) {
-        for (int j = 0; j <= kMaxJointDeg; j++) {
-          const QS3& q = expr.c[i][j];
-          if (q.a != 0 || q.b != 0) {
-            std::fprintf(stderr, "    c[%d][%d]={a=%lld b=%lld shift=%d} ~%.6g\n", i, j, static_cast<long long>(q.a),
-                         static_cast<long long>(q.b), q.shift, QS3ToDouble(q));
-          }
-        }
-      }
-    }
-  }
   const int s = PolySign(expr, alpha_val, beta_val, ambiguous);
   if (*ambiguous) {
-    return -1;
+    // The double filter cannot certify this sign — the value is within the
+    // 128-ULP margin of zero. This is not necessarily a genuine near-degeneracy:
+    // it also fires when expr(α,β) is a nonzero polynomial that vanishes only
+    // because of an α↔β relation the free-symbol form cannot see (the regular
+    // pyramid's belt incidence k·(α−β) is exactly zero because a1 == a2).
+    // Resolve it exactly by substituting the exact dyadic (a1,a2) via int64 QS3
+    // arithmetic — no __int128, since the ambiguous incidences that actually
+    // occur are low degree (the high-degree apex concurrence is already an
+    // identity caught by PolyIsZero above). Only a genuine int64-budget overflow
+    // (a true wide near-cancellation) falls through to refuse.
+    *ambiguous = false;
+    bool of = false;
+    const QS3 a1q = FloatToQS3(static_cast<float>(alpha_val));
+    const QS3 a2q = FloatToQS3(static_cast<float>(beta_val));
+    const QS3 exact = PolyEvalExact(expr, a1q, a2q, &of, max_bits);
+    if (of) {
+      *ambiguous = true;
+      return -1;
+    }
+    bool exact_ambiguous = false;
+    const int es = SignQS3(exact, &exact_ambiguous);
+    if (exact_ambiguous) {
+      *ambiguous = true;
+      return -1;
+    }
+    return es > 0 ? 1 : 0;
   }
   return s > 0 ? 1 : 0;
 }
