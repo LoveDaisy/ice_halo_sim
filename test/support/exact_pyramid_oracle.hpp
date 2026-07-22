@@ -1093,29 +1093,7 @@ inline int IsFeasibleSided(const PolyPlane& plane, const PolyTriplePoint& tp, do
   }
   const int s = PolySign(expr, alpha_val, beta_val, ambiguous);
   if (*ambiguous) {
-    // The candidate's signed distance to this plane is within the 128-ULP
-    // margin of zero: to double precision it lies ON the plane's boundary.
-    // In a closed convex polytope a boundary point is feasible, so treat this
-    // as boundary-feasible (0) rather than refusing (-1). This is where the
-    // symbolic-α oracle differs from its __int128 predecessor: the predecessor
-    // substituted a1's numeric value into the coefficients, so an exact
-    // multi-plane concurrence at α=a1 became a rational identity (PolyIsZero);
-    // the free-symbol representation cannot see that algebraic coincidence —
-    // expr(α,β) is a genuine nonzero polynomial with a root only at the
-    // specific (a1,a2). The regular pyramid is exactly this case: six upper
-    // cone planes concur at the apex when α=tan(28°), and the double filter
-    // evaluates that true root as 0.0 (FMA-contracted on Ampere ARM64) or a
-    // sub-margin nonzero (elsewhere) — either way, within margin.
-    //
-    // Safety: returning boundary-feasible here never keeps a globally
-    // infeasible candidate. Feasibility is the conjunction over all other
-    // planes (the caller breaks on the first strictly-positive result); a
-    // candidate that is definitely outside some OTHER plane still returns +1
-    // there and is rejected. A candidate within margin of THIS plane is, at
-    // worst, a near-coincident duplicate of a real boundary vertex, which the
-    // downstream incidence dedup collapses.
-    *ambiguous = false;
-    return 0;
+    return -1;
   }
   return s > 0 ? 1 : 0;
 }
