@@ -80,6 +80,11 @@ std::size_t GeomClock(Logger& logger, std::size_t default_val);
 // → today's per-batch single-shape behavior". Any positive value means the
 // pool builds `P_ci = ceil(N_ci / K)` shapes per (layer, ci). See
 // `doc/seam-design.md` §8 P2 for design context.
+//
+// The `default_val` is now normally `SceneConfig::geom_clock_` (the config-
+// supplied production default); the env var only overrides it for ad-hoc
+// dev/CI runs. This mirrors the DispatchRayNum / CommitRayNum layering where
+// config provides the baseline and env is a transient override.
 std::size_t GpuGeomClock(Logger& logger, std::size_t default_val);
 
 // LUMICE_COMMIT_RAY_NUM (with legacy LUMICE_BATCH_RAY_NUM fallback) — consumer

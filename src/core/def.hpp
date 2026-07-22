@@ -20,8 +20,13 @@ enum Symmetry : uint8_t {
 };
 
 
-constexpr size_t kMaxMsNum = 4;        // How many multi-satterings at most.
-constexpr size_t kMaxHits = 64;        // How many hits in one crystal.
+constexpr size_t kMaxMsNum = 4;  // How many multi-satterings at most.
+constexpr size_t kMaxHits = 64;  // How many hits in one crystal.
+// GPU K-shape pool geometry clock safe upper bound. Numerically equals kMaxHits
+// by coincidence but is semantically independent (one caps per-crystal hits, the
+// other caps rays-per-sampled-shape on the GPU pool). A future auto-K feature
+// adjusting this bound changes only here, never kMaxHits.
+constexpr size_t kGeomClockMax = 64;
 constexpr size_t kMaxWlNum = 32;       // How many different wavelengths in one configuration.
 constexpr size_t kMaxCrystalNum = 16;  // How many crystal types in one configuration.
 

@@ -27,6 +27,11 @@ struct MsInfo {
 struct SceneConfig {
   size_t ray_num_;  // For every single wavelength.
   size_t max_hits_;
+  // GPU K-shape pool clock (0 = disabled/opt-in default). Affects Metal/CUDA GPU
+  // backends only; CPU-legacy uses its own LUMICE_GEOM_CLOCK. Unlike ray_num_ /
+  // max_hits_ (consumed by all three backends), this field is read only by the
+  // two GPU backends -- it is NOT a globally-effective simulation parameter.
+  size_t geom_clock_ = 0;
   LightSourceConfig light_source_;
   std::vector<MsInfo> ms_;  // (prob, [scattering_info, ...])
 };

@@ -3206,8 +3206,8 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       // steps) can pick per ray from a P_ci-wide pool.
       size_t p_ci = 1u;
       if (!use_host && !IsDeterministic(setting.crystal_.param_)) {
-        std::size_t k =
-            env::GpuGeomClock(EffectiveLogger(impl_->logger_), /*default_val=*/0u);
+        std::size_t k = env::GpuGeomClock(EffectiveLogger(impl_->logger_),
+                                          /*default_val=*/impl_->spec.scene->geom_clock_);
         // ci_n == 0 (empty partition) still needs a valid pool: ResolveLayerCrystalForCi,
         // UploadCrystalPool, EnsurePoolShapeTableBuffer, BuildGenRootParams all assert
         // p_ci/shape_cnt >= 1u. Force p_ci=1 so the empty partition builds a single

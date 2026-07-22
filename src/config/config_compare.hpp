@@ -119,7 +119,8 @@ inline bool operator==(const MsInfo& a, const MsInfo& b) {
 }
 
 inline bool operator==(const SceneConfig& a, const SceneConfig& b) {
-  return a.ray_num_ == b.ray_num_ && a.max_hits_ == b.max_hits_ && a.light_source_ == b.light_source_ && a.ms_ == b.ms_;
+  return a.ray_num_ == b.ray_num_ && a.max_hits_ == b.max_hits_ && a.geom_clock_ == b.geom_clock_ &&
+         a.light_source_ == b.light_source_ && a.ms_ == b.ms_;
 }
 
 // ---- ConfigManager ----
