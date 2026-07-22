@@ -1574,6 +1574,18 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
     out.vertex_xyz[v][1] = d::PolyEvalDouble(verts[v].tp.py, alpha_val, beta_val) / det_d;
     out.vertex_xyz[v][2] = d::PolyEvalDouble(verts[v].tp.pz, alpha_val, beta_val) / det_d;
   }
+  // TEMP 387.10-DBG: dump every deduped vertex (xyz + defining plane triple) so
+  // the Ampere-18 set can be diffed against the macOS-14 set to see whether the
+  // 4 extra are coincident duplicates (dedup gap) or distinct boundary points
+  // (feasibility gap).
+  if (has_upper && has_lower) {
+    std::fprintf(stderr, "[DBG verts] count=%d\n", vtx_cnt);
+    for (int v = 0; v < vtx_cnt; v++) {
+      std::fprintf(stderr, "  v%d tri={%d,%d,%d} xyz=(%.6f,%.6f,%.6f)\n", v, verts[v].def_plane[0],
+                   verts[v].def_plane[1], verts[v].def_plane[2], out.vertex_xyz[v][0], out.vertex_xyz[v][1],
+                   out.vertex_xyz[v][2]);
+    }
+  }
   for (int p = 0; p < kExactPyramidMaxPlanes; p++) {
     out.face_vertex_count[p] = face_vtx[p];
     out.face_present[p] = (face_vtx[p] >= 3);
