@@ -143,23 +143,32 @@ than the production path and comparable to the reuse floor.
 The pyramid half of the target representation has landed alongside prism as
 `src/core/geo3d_closedform.{hpp,cpp}` (`ComputeClosedFormPyramid`, two
 overloads mirroring `CreatePyramidMesh` — direct wedge angle and Miller
-indices), with a second independent `__int128` exact oracle at
-`test/support/exact_pyramid_oracle.hpp` (general C(n,3) plane-triple
-enumeration, structurally distinct from the prism oracle's
-hardcoded-6-directions shortcut) and a three-way golden-analytic sweep at
+indices), with a golden-analytic suite at
 `test/golden-analytic/core/test_closed_form_pyramid.cpp` (well-conditioned
 sweep across both construction paths; extreme-flat tail α ∈ [85°, 89.5°];
 degenerate σ ∈ {0.30, 0.50}; shoulder / apex / face-drop specialty cases with
 a `path_tag_union` assertion that these walk the same solver branches as
 regular samples — the "no special-case branch" invariant is executable, not
-just review-time). An out-of-tree Python `Fraction` oracle in Q(√3)
-provides a third independent implementation for cross-check where the C++
-`__int128` oracle's bit width is exceeded (typical σ=0.1 mixed range: ~89%
-samples force the C++ oracle to refuse; on the ~11% it handles, closed form
-and C++ oracle agree 100%; on the refused 89% Python agrees with closed form
-at 99.8%, the residual 0.2% being ±1 vertex at boundary events already
-bounded by the golden-analytic per-parameter ceilings). New and production
-paths **coexist**; the swap-in belongs to a later subtask.
+just review-time). New and production paths **coexist**; the swap-in belongs
+to a later subtask.
+
+The pyramid side originally shipped with a second `__int128` exact oracle
+that carried the cone angles as *free symbols* (general C(n,3) plane-triple
+enumeration). **That oracle has been retired.** Symbolic-α exactness is a
+category error for this problem: a free-symbol model is the algebra of the
+generic point and is structurally blind to degeneracy (`a1 = a2 ⟹ α = β`),
+so it fell back to an embedded double filter whose ambiguous→refuse verdict is
+FMA-contraction sensitive and platform-dependent (correct 14-vertex topology
+on one platform, all-wrong 18 on Ampere ARM64). It was replaced by three
+tests that each assert a contract the production path *actually holds* —
+`TopologyMatchesGoldenConstants` (topology is a stored constant),
+`VertexPlaneSelfConsistency`, and `DegenerateContractSafe` — none arbitrating
+"which is more precise" on a degenerate input. The full criterion (pin a
+number field for exact arithmetic, or admit the double approximation — never a
+free symbol pretending to be exact) is convention #8 in
+`numerical-robustness.md`. The prism oracle (`exact_prism_oracle.hpp`) is
+unaffected: its hardcoded-6-directions shortcut never took the free-symbol
+route.
 
 Construction cost measured in the same session as
 `BM_MakeCrystal/pyramid_random` (49797 ns baseline this run) and
@@ -206,7 +215,11 @@ other questions are:
    the degenerate regime the oracle must be independent (exact/rational arithmetic, or hand-
    derived solutions for known configurations). Without this, a rewrite can only be shown to
    *differ* from the old pipeline, never to be *more correct* than it. This is the same trap
-   that stalled the topology-reuse predicate.
+   that stalled the topology-reuse predicate. One attempt at that independent degenerate-regime
+   oracle — a symbolic-α exact oracle on the pyramid side — was itself retired as a category
+   error: a free-symbol model is blind to the very degeneracies it was meant to arbitrate. The
+   criterion for when an exact/rational oracle is sound (pin a decidable number field vs. admit
+   the double approximation) is convention #8 in `numerical-robustness.md`.
 3. **The shape of the face-existence predicate.** Not "can it be derived" but "does it come out
    as clean analytic inequalities, or as a case explosion". If strongly skewed `d` fragments it
    into many branches, the design has traded epsilons for branches and the benefit shrinks. The
@@ -224,4 +237,4 @@ other questions are:
 - **目标表达**：平面方程 + 面存在掩码 + 面号常数表 + 闭式面轮廓（三角形仅 GUI 派生）；扁平 POD、host/device 同构、池化即拼接。
 - **消解了什么**：共面归组/法向匹配/`tri_to_poly` 无对象可分类；顶点去重容差不复存在；掉面从"意外"变"一等状态"；**拓扑复用的失效判据问题消失**（判据难题只在拓扑靠数值发现时才存在），构造地板低于 127 ns。
 - **不消解什么**：凹锥晶体需单独建模；光线–几何求交的数值问题仍在（收益是**收敛**ε 的作用域）；掉面语义是产品问题；⚠️ 与"校验输出不校验输入"的既定判据存在真实张力，须显式重新决定。
-- **动手前必须先回答的三件事**：①消费者清点（定最小充分表达，比算法更贵） ②等价性 gt 从哪来（**旧求解器不能当 gt，它就是病人**；良态区可对照，退化区需独立 gt——这正是拓扑复用卡死的同一个坑） ③面存在谓词的**形态**（干净不等式 vs case 爆炸）。
+- **动手前必须先回答的三件事**：①消费者清点（定最小充分表达，比算法更贵） ②等价性 gt 从哪来（**旧求解器不能当 gt，它就是病人**；良态区可对照，退化区需独立 gt——这正是拓扑复用卡死的同一个坑；pyramid 侧曾试的 symbolic-α 精确 oracle 已因**范畴错误**退休——自由符号盲于它本要仲裁的退化，判据见 `numerical-robustness.md` 第 8 条） ③面存在谓词的**形态**（干净不等式 vs case 爆炸）。
