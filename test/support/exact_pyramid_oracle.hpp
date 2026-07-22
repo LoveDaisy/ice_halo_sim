@@ -208,8 +208,8 @@ inline void ShiftUpGuarded(QS3* x, int delta, bool* overflow, int* max_bits) {
     TrackBits(std::max(wa, wb) + delta, max_bits);
     return;
   }
-  x->a <<= delta;
-  x->b <<= delta;
+  x->a = static_cast<int64_t>(static_cast<uint64_t>(x->a) << delta);
+  x->b = static_cast<int64_t>(static_cast<uint64_t>(x->b) << delta);
   x->shift += delta;
   TrackBits(std::max(BitWidth64(x->a), BitWidth64(x->b)), max_bits);
 }
@@ -318,7 +318,7 @@ inline QS3 FloatToQS3(float f) {
   int64_t mant = static_cast<int64_t>(std::llround(m_int_d));
   int shift = 24 - e;
   if (shift < 0) {
-    mant <<= (-shift);
+    mant = static_cast<int64_t>(static_cast<uint64_t>(mant) << (-shift));
     shift = 0;
   }
   QS3 out = { mant, 0, shift };
