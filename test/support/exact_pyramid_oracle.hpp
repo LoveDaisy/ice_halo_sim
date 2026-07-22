@@ -1317,6 +1317,28 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
         bool overflow_t = false;
         d::PolyTriplePoint tp = d::SolveTriple(planes[i], planes[j], planes[k], &overflow_t, &max_bits);
         if (overflow_t) {
+          // TEMP ARM64-CI-DBG (387.10): the regular pyramid must NOT overflow a
+          // triple solve. Dump the offending triple + the raw QS3 coefficients
+          // of all three planes so a garbage (uninitialised-at-O3) coefficient
+          // is visible in the CI log.
+          std::fprintf(stderr, "[DBG triple-overflow i=%d j=%d k=%d max_bits=%d]\n", i, j, k, max_bits);
+          const d::PolyPlane* pp[3] = { &planes[i], &planes[j], &planes[k] };
+          const char* cn[4] = { "A", "B", "C", "D" };
+          for (int pi = 0; pi < 3; pi++) {
+            const d::PolyQS3* coef[4] = { &pp[pi]->A, &pp[pi]->B, &pp[pi]->C, &pp[pi]->D };
+            for (int ci = 0; ci < 4; ci++) {
+              for (int ii = 0; ii <= d::kMaxJointDeg; ii++) {
+                for (int jj = 0; jj <= d::kMaxJointDeg; jj++) {
+                  const d::QS3& q = coef[ci]->c[ii][jj];
+                  if (q.a != 0 || q.b != 0 || q.shift != 0) {
+                    std::fprintf(stderr, "  plane[%d].%s c[%d][%d]={a=%lld b=%lld shift=%d}\n",
+                                 (pi == 0 ? i : (pi == 1 ? j : k)), cn[ci], ii, jj, static_cast<long long>(q.a),
+                                 static_cast<long long>(q.b), q.shift);
+                  }
+                }
+              }
+            }
+          }
           out.refused = true;
           out.refuse_reason = "triple solve overflow";
           out.max_intermediate_bits = max_bits;

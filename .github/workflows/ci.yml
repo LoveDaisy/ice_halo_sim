@@ -95,20 +95,15 @@ jobs:
           -DBUILD_TEST=ON
           -DBUILD_GUI=${{ matrix.build_gui }}
           -DLUMICE_NATIVE_ARCH=OFF
-          -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF
-          -DCMAKE_CXX_FLAGS_RELEASE="-O0 -g -DNDEBUG"
           ${{ env.LUMICE_PYTHON_ARGS }}
 
       - name: Build
         run: cmake --build build --parallel
 
-      - name: Test (valgrind memcheck — TEMP 387.10, pinpoint uninitialized read)
+      - name: Test (TEMP 387.10 — dump triple-overflow coefficients at -O3)
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq valgrind
-          valgrind --track-origins=yes --error-exitcode=0 \
-            ./build/Release/bin/golden_analytic_test \
-            --gtest_filter='ClosedFormPyramid.RegularPyramidAllThreeAgree:ClosedFormPyramid.WellConditionedDirectWedgeThreeWayAgreement' \
-            2>&1 | grep -E "Conditional|uninitialised|Use of uninit|Invalid|at 0x|by 0x|exact_pyramid|ERROR SUMMARY" | head -60
+          ./build/Release/bin/golden_analytic_test \
+            --gtest_filter='ClosedFormPyramid.RegularPyramidAllThreeAgree' 2>&1 | head -120
 
       - name: Benchmark
         continue-on-error: true
