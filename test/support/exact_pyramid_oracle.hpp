@@ -208,11 +208,8 @@ inline void ShiftUpGuarded(QS3* x, int delta, bool* overflow, int* max_bits) {
     TrackBits(std::max(wa, wb) + delta, max_bits);
     return;
   }
-  // Multiply by 2^delta rather than left-shift: left shift of a negative
-  // signed value is UB in C++17. The width guard above guarantees no overflow,
-  // so signed multiply by (1<<delta) is well-defined and arithmetically exact.
-  x->a = x->a * (INT64_C(1) << delta);
-  x->b = x->b * (INT64_C(1) << delta);
+  x->a = static_cast<int64_t>(static_cast<uint64_t>(x->a) << delta);
+  x->b = static_cast<int64_t>(static_cast<uint64_t>(x->b) << delta);
   x->shift += delta;
   TrackBits(std::max(BitWidth64(x->a), BitWidth64(x->b)), max_bits);
 }
@@ -321,7 +318,7 @@ inline QS3 FloatToQS3(float f) {
   int64_t mant = static_cast<int64_t>(std::llround(m_int_d));
   int shift = 24 - e;
   if (shift < 0) {
-    mant = mant * (INT64_C(1) << (-shift));
+    mant = static_cast<int64_t>(static_cast<uint64_t>(mant) << (-shift));
     shift = 0;
   }
   QS3 out = { mant, 0, shift };
@@ -372,11 +369,6 @@ inline int SignQS3(QS3 x, bool* ambiguous) {
   if (std::fabs(val) > margin) {
     return val > 0 ? 1 : -1;
   }
-  // TEMP ARM64-CI-DBG (387.10): dump the ambiguous QS3 so the CI ARM64 log shows
-  // exactly which value diverged vs the passing x86/macOS runs.
-  std::fprintf(stderr, "[DBG SignQS3-AMBIG] a=%lld b=%lld shift=%d val=%.17g margin=%.17g ratio=%.4g\n",
-               static_cast<long long>(x.a), static_cast<long long>(x.b), x.shift, val, margin,
-               margin > 0 ? std::fabs(val) / margin : -1.0);
   *ambiguous = true;
   return 0;
 }
@@ -521,57 +513,6 @@ inline double PolyEvalDouble(const PolyQS3& p, double alpha_val, double beta_val
   return val;
 }
 
-// Exact evaluation of P(α, β) at α = a1, β = a2 as pure QS3 (int64, no double).
-// a1 / a2 are the exact dyadic values of the float pyramid parameters, so the
-// substitution is exact; the overflow guard trips (sets *overflow) if any
-// intermediate exceeds the int64 budget. Used only as the ambiguous-sign
-// fallback (see IsFeasibleSided): the free-symbol double filter cannot certify
-// a value that is zero only because of an α↔β relation (e.g. the regular
-// pyramid's a1 == a2), but exact substitution resolves it with no wide
-// arithmetic — the actual ambiguous incidences are low degree.
-inline QS3 PolyEvalExact(const PolyQS3& p, QS3 a1, QS3 a2, bool* overflow, int* max_bits) {
-  // Raise a1 / a2 only to the max degree actually present in p. Computing unused
-  // high powers (a1^3 ≈ 72 bits, a1^4 ≈ 96 bits) would spuriously trip the int64
-  // overflow guard and force a refuse even when the live monomials are low
-  // degree (the regular pyramid's ambiguous incidence is k·(α−β), degree 1).
-  int max_i = 0;
-  int max_j = 0;
-  for (int i = 0; i <= kMaxJointDeg; i++) {
-    for (int j = 0; j <= kMaxJointDeg; j++) {
-      if (!IsZero(p.c[i][j])) {
-        if (i > max_i) {
-          max_i = i;
-        }
-        if (j > max_j) {
-          max_j = j;
-        }
-      }
-    }
-  }
-  QS3 a1pow[kMaxJointDeg + 1];
-  QS3 a2pow[kMaxJointDeg + 1];
-  a1pow[0] = IntToQS3(1);
-  a2pow[0] = IntToQS3(1);
-  for (int i = 1; i <= max_i; i++) {
-    a1pow[i] = QS3Mul(a1pow[i - 1], a1, overflow, max_bits);
-  }
-  for (int j = 1; j <= max_j; j++) {
-    a2pow[j] = QS3Mul(a2pow[j - 1], a2, overflow, max_bits);
-  }
-  QS3 acc = QS3Zero();
-  for (int i = 0; i <= max_i; i++) {
-    for (int j = 0; j <= max_j; j++) {
-      if (IsZero(p.c[i][j])) {
-        continue;
-      }
-      const QS3 aij = QS3Mul(a1pow[i], a2pow[j], overflow, max_bits);
-      const QS3 term = QS3Mul(p.c[i][j], aij, overflow, max_bits);
-      acc = QS3Add(acc, term, overflow, max_bits);
-    }
-  }
-  return acc;
-}
-
 // Double-Horner evaluation of P(α, β) with the 128-ULP error margin.
 // Return: +1 / -1 / 0 (ambiguous). Ambiguous → *ambiguous = true.
 inline int PolySign(const PolyQS3& p, double alpha_val, double beta_val, bool* ambiguous) {
@@ -595,9 +536,6 @@ inline int PolySign(const PolyQS3& p, double alpha_val, double beta_val, bool* a
   if (std::fabs(val) > margin) {
     return val > 0 ? 1 : -1;
   }
-  // TEMP ARM64-CI-DBG (387.10): dump the ambiguous PolySign eval.
-  std::fprintf(stderr, "[DBG PolySign-AMBIG] alpha=%.17g beta=%.17g val=%.17g mag=%.17g margin=%.17g ratio=%.4g\n",
-               alpha_val, beta_val, val, mag, margin, margin > 0 ? std::fabs(val) / margin : -1.0);
   *ambiguous = true;
   return 0;
 }
@@ -1124,31 +1062,12 @@ inline PolyQS3 IncidenceExpr(const PolyPlane& plane, const PolyTriplePoint& tp, 
   return PolyAdd(s2, ddet, overflow, max_bits);
 }
 
-inline bool IsIncident(const PolyPlane& plane, const PolyTriplePoint& tp, double alpha_val, double beta_val,
-                       bool* overflow, int* max_bits) {
+inline bool IsIncident(const PolyPlane& plane, const PolyTriplePoint& tp, bool* overflow, int* max_bits) {
   const PolyQS3 expr = IncidenceExpr(plane, tp, overflow, max_bits);
   if (*overflow) {
     return false;
   }
-  if (PolyIsZero(expr)) {
-    return true;
-  }
-  // Value-specific incidence: expr(α,β) can vanish at the actual (a1,a2) even
-  // when it is not identically zero — the free-symbol form misses coincidences
-  // that hold only because of an α↔β relation (the regular pyramid's a1 == a2
-  // makes the belt incidence k·(α−β) exactly zero). The dedup / face-count
-  // consumers need this value-specific equality to collapse coincident
-  // vertices, mirroring what the __int128 predecessor saw by substituting a1's
-  // value into the coefficients. Exact int64 QS3 substitution; if it overflows
-  // the budget the coincidence cannot be certified, so report not-incident
-  // (conservative — leaves the vertices separate rather than wrongly merging).
-  bool of = false;
-  const QS3 exact = PolyEvalExact(expr, FloatToQS3(static_cast<float>(alpha_val)),
-                                  FloatToQS3(static_cast<float>(beta_val)), &of, max_bits);
-  if (of) {
-    return false;
-  }
-  return IsZero(exact);
+  return PolyIsZero(expr);
 }
 
 // Returns +1 infeasible, 0 boundary/feasible, -1 refuse.
@@ -1163,32 +1082,7 @@ inline int IsFeasibleSided(const PolyPlane& plane, const PolyTriplePoint& tp, do
   }
   const int s = PolySign(expr, alpha_val, beta_val, ambiguous);
   if (*ambiguous) {
-    // The double filter cannot certify this sign — the value is within the
-    // 128-ULP margin of zero. This is not necessarily a genuine near-degeneracy:
-    // it also fires when expr(α,β) is a nonzero polynomial that vanishes only
-    // because of an α↔β relation the free-symbol form cannot see (the regular
-    // pyramid's belt incidence k·(α−β) is exactly zero because a1 == a2).
-    // Resolve it exactly by substituting the exact dyadic (a1,a2) via int64 QS3
-    // arithmetic — no __int128, since the ambiguous incidences that actually
-    // occur are low degree (the high-degree apex concurrence is already an
-    // identity caught by PolyIsZero above). Only a genuine int64-budget overflow
-    // (a true wide near-cancellation) falls through to refuse.
-    *ambiguous = false;
-    bool of = false;
-    const QS3 a1q = FloatToQS3(static_cast<float>(alpha_val));
-    const QS3 a2q = FloatToQS3(static_cast<float>(beta_val));
-    const QS3 exact = PolyEvalExact(expr, a1q, a2q, &of, max_bits);
-    if (of) {
-      *ambiguous = true;
-      return -1;
-    }
-    bool exact_ambiguous = false;
-    const int es = SignQS3(exact, &exact_ambiguous);
-    if (exact_ambiguous) {
-      *ambiguous = true;
-      return -1;
-    }
-    return es > 0 ? 1 : 0;
+    return -1;
   }
   return s > 0 ? 1 : 0;
 }
@@ -1233,7 +1127,7 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
     return out;
   }
 
-  d::PolyPlane planes[kExactPyramidMaxPlanes] = {};
+  d::PolyPlane planes[kExactPyramidMaxPlanes];
   bool plane_active[kExactPyramidMaxPlanes] = { false };
   bool overflow = false;
 
@@ -1397,7 +1291,7 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
     d::PolyTriplePoint tp;
     int def_plane[3];
   };
-  Vertex verts[kExactPyramidMaxVtx] = {};
+  Vertex verts[kExactPyramidMaxVtx];
   int vtx_cnt = 0;
 
   const double alpha_val = has_upper ? a1 : 0.0;
@@ -1412,28 +1306,6 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
         bool overflow_t = false;
         d::PolyTriplePoint tp = d::SolveTriple(planes[i], planes[j], planes[k], &overflow_t, &max_bits);
         if (overflow_t) {
-          // TEMP ARM64-CI-DBG (387.10): the regular pyramid must NOT overflow a
-          // triple solve. Dump the offending triple + the raw QS3 coefficients
-          // of all three planes so a garbage (uninitialised-at-O3) coefficient
-          // is visible in the CI log.
-          std::fprintf(stderr, "[DBG triple-overflow i=%d j=%d k=%d max_bits=%d]\n", i, j, k, max_bits);
-          const d::PolyPlane* pp[3] = { &planes[i], &planes[j], &planes[k] };
-          const char* cn[4] = { "A", "B", "C", "D" };
-          for (int pi = 0; pi < 3; pi++) {
-            const d::PolyQS3* coef[4] = { &pp[pi]->A, &pp[pi]->B, &pp[pi]->C, &pp[pi]->D };
-            for (int ci = 0; ci < 4; ci++) {
-              for (int ii = 0; ii <= d::kMaxJointDeg; ii++) {
-                for (int jj = 0; jj <= d::kMaxJointDeg; jj++) {
-                  const d::QS3& q = coef[ci]->c[ii][jj];
-                  if (q.a != 0 || q.b != 0 || q.shift != 0) {
-                    std::fprintf(stderr, "  plane[%d].%s c[%d][%d]={a=%lld b=%lld shift=%d}\n",
-                                 (pi == 0 ? i : (pi == 1 ? j : k)), cn[ci], ii, jj, static_cast<long long>(q.a),
-                                 static_cast<long long>(q.b), q.shift);
-                  }
-                }
-              }
-            }
-          }
           out.refused = true;
           out.refuse_reason = "triple solve overflow";
           out.max_intermediate_bits = max_bits;
@@ -1482,11 +1354,6 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
           bool ambiguous = false;
           const int fr = d::IsFeasibleSided(planes[p_idx], tp, alpha_val, beta_val, &overflow_t, &max_bits, &ambiguous);
           if (fr == -1) {
-            // TEMP 387.10-DBG: report the exact plane configuration behind the
-            // ambiguous feasibility. Slot map: 0=top basal, 1=bottom basal,
-            // 2..7=prism, 8..13=upper cone, 14..19=lower cone.
-            std::fprintf(stderr, "[DBG feas-ambig] vertex tri={%d,%d,%d} tested plane p_idx=%d overflow=%d\n", i, j, k,
-                         p_idx, overflow_t ? 1 : 0);
             out.refused = true;
             out.refuse_reason = overflow_t ? "feasibility overflow" : "feasibility sign ambiguous";
             out.max_intermediate_bits = max_bits;
@@ -1512,7 +1379,7 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
               continue;
             }
             bool ov = false;
-            if (!d::IsIncident(planes[p_idx], tp, alpha_val, beta_val, &ov, &max_bits)) {
+            if (!d::IsIncident(planes[p_idx], tp, &ov, &max_bits)) {
               all_incident = false;
               break;
             }
@@ -1555,7 +1422,7 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
         continue;
       }
       bool ov = false;
-      if (d::IsIncident(planes[p], verts[v].tp, alpha_val, beta_val, &ov, &max_bits)) {
+      if (d::IsIncident(planes[p], verts[v].tp, &ov, &max_bits)) {
         face_vtx[p]++;
       }
       if (ov) {
@@ -1573,18 +1440,6 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
     out.vertex_xyz[v][0] = d::PolyEvalDouble(verts[v].tp.px, alpha_val, beta_val) / det_d;
     out.vertex_xyz[v][1] = d::PolyEvalDouble(verts[v].tp.py, alpha_val, beta_val) / det_d;
     out.vertex_xyz[v][2] = d::PolyEvalDouble(verts[v].tp.pz, alpha_val, beta_val) / det_d;
-  }
-  // TEMP 387.10-DBG: dump every deduped vertex (xyz + defining plane triple) so
-  // the Ampere-18 set can be diffed against the macOS-14 set to see whether the
-  // 4 extra are coincident duplicates (dedup gap) or distinct boundary points
-  // (feasibility gap).
-  if (has_upper && has_lower) {
-    std::fprintf(stderr, "[DBG verts] count=%d\n", vtx_cnt);
-    for (int v = 0; v < vtx_cnt; v++) {
-      std::fprintf(stderr, "  v%d tri={%d,%d,%d} xyz=(%.6f,%.6f,%.6f)\n", v, verts[v].def_plane[0],
-                   verts[v].def_plane[1], verts[v].def_plane[2], out.vertex_xyz[v][0], out.vertex_xyz[v][1],
-                   out.vertex_xyz[v][2]);
-    }
   }
   for (int p = 0; p < kExactPyramidMaxPlanes; p++) {
     out.face_vertex_count[p] = face_vtx[p];

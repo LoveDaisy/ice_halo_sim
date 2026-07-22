@@ -20,14 +20,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # TEMP ARM64-CI-DBG (387.10): matrix filtered to ONLY Ubuntu ARM64 for
-          # fast iteration on the ARM64-specific golden failure. RESTORE the other
-          # three entries (x86_64 / macOS / MSVC) before merge.
-          # - name: Ubuntu x86_64
-          #   os: ubuntu-24.04
-          #   build_gui: ON
-          #   cache_key: ubuntu-x64
-          #   benchmark_bin: build/Release/bin/Lumice
+          - name: Ubuntu x86_64
+            os: ubuntu-24.04
+            build_gui: ON
+            cache_key: ubuntu-x64
+            benchmark_bin: build/Release/bin/Lumice
 
           - name: Ubuntu ARM64
             os: ubuntu-24.04-arm
@@ -35,18 +32,18 @@ jobs:
             cache_key: ubuntu-arm64
             benchmark_bin: build/Release/bin/Lumice
 
-          # - name: macOS ARM64
-          #   os: macos-15
-          #   build_gui: ON
-          #   cache_key: macos-arm64
-          #   benchmark_bin: build/Release/bin/Lumice
+          - name: macOS ARM64
+            os: macos-15
+            build_gui: ON
+            cache_key: macos-arm64
+            benchmark_bin: build/Release/bin/Lumice
 
-          # - name: Windows MSVC x86_64
-          #   os: windows-2025
-          #   build_gui: ON
-          #   cache_key: windows-msvc-x64
-          #   msvc: true
-          #   benchmark_bin: build/Release/bin/Lumice.exe
+          - name: Windows MSVC x86_64
+            os: windows-2025
+            build_gui: ON
+            cache_key: windows-msvc-x64
+            msvc: true
+            benchmark_bin: build/Release/bin/Lumice.exe
 
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.name }}
@@ -100,7 +97,7 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
-      - name: Test (TEMP 387.10 — full golden + unit + parity to confirm A' fix)
+      - name: Test
         run: ctest --test-dir build --output-on-failure -L "unit-correctness|parity|golden-analytic"
 
       - name: Benchmark
