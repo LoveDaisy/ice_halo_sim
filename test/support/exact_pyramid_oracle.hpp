@@ -1124,12 +1124,31 @@ inline PolyQS3 IncidenceExpr(const PolyPlane& plane, const PolyTriplePoint& tp, 
   return PolyAdd(s2, ddet, overflow, max_bits);
 }
 
-inline bool IsIncident(const PolyPlane& plane, const PolyTriplePoint& tp, bool* overflow, int* max_bits) {
+inline bool IsIncident(const PolyPlane& plane, const PolyTriplePoint& tp, double alpha_val, double beta_val,
+                       bool* overflow, int* max_bits) {
   const PolyQS3 expr = IncidenceExpr(plane, tp, overflow, max_bits);
   if (*overflow) {
     return false;
   }
-  return PolyIsZero(expr);
+  if (PolyIsZero(expr)) {
+    return true;
+  }
+  // Value-specific incidence: expr(α,β) can vanish at the actual (a1,a2) even
+  // when it is not identically zero — the free-symbol form misses coincidences
+  // that hold only because of an α↔β relation (the regular pyramid's a1 == a2
+  // makes the belt incidence k·(α−β) exactly zero). The dedup / face-count
+  // consumers need this value-specific equality to collapse coincident
+  // vertices, mirroring what the __int128 predecessor saw by substituting a1's
+  // value into the coefficients. Exact int64 QS3 substitution; if it overflows
+  // the budget the coincidence cannot be certified, so report not-incident
+  // (conservative — leaves the vertices separate rather than wrongly merging).
+  bool of = false;
+  const QS3 exact = PolyEvalExact(expr, FloatToQS3(static_cast<float>(alpha_val)),
+                                  FloatToQS3(static_cast<float>(beta_val)), &of, max_bits);
+  if (of) {
+    return false;
+  }
+  return IsZero(exact);
 }
 
 // Returns +1 infeasible, 0 boundary/feasible, -1 refuse.
@@ -1493,7 +1512,7 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
               continue;
             }
             bool ov = false;
-            if (!d::IsIncident(planes[p_idx], tp, &ov, &max_bits)) {
+            if (!d::IsIncident(planes[p_idx], tp, alpha_val, beta_val, &ov, &max_bits)) {
               all_incident = false;
               break;
             }
@@ -1536,7 +1555,7 @@ inline ExactPyramidVerdict ExactPyramidFromParams(double a1, double a2, float h1
         continue;
       }
       bool ov = false;
-      if (d::IsIncident(planes[p], verts[v].tp, &ov, &max_bits)) {
+      if (d::IsIncident(planes[p], verts[v].tp, alpha_val, beta_val, &ov, &max_bits)) {
         face_vtx[p]++;
       }
       if (ov) {
