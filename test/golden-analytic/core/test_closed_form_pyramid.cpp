@@ -46,6 +46,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string_view>
 #include <utility>
@@ -402,6 +403,17 @@ TEST(ClosedFormPyramid, RegularPyramidAllThreeAgree) {
                    /*h1=*/1.0f,           /*h2=*/1.0f,
                    /*h3=*/1.0f,           /*dist=*/{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f } };
   auto r = AdjudicateDirect(s);
+  {
+    // TEMP ARM64-CI-DBG (387.10): dump cf.a1/a2 raw bits so the CI ARM64 log
+    // reveals whether the production a1 diverges vs the passing x86/macOS runs.
+    auto cfd = ComputeClosedFormPyramid(s.upper_alpha, s.lower_alpha, s.h1, s.h2, s.h3, s.dist);
+    std::uint32_t a1b = 0, a2b = 0;
+    std::memcpy(&a1b, &cfd.a1, sizeof(float));
+    std::memcpy(&a2b, &cfd.a2, sizeof(float));
+    std::fprintf(stderr, "[DBG regular a1=%.9g bits=0x%08x  a2=%.9g bits=0x%08x  refused=%d oracle_vtx=%d]\n",
+                 static_cast<double>(cfd.a1), a1b, static_cast<double>(cfd.a2), a2b, static_cast<int>(r.oracle_refused),
+                 r.oracle_vtx);
+  }
   ASSERT_FALSE(r.oracle_refused) << "oracle must not refuse the regular pyramid (owner invariant)";
   EXPECT_EQ(r.outcome, kAgree) << "regular pyramid: cf=" << r.cf_vtx << " prod=" << r.prod_vtx
                                << " oracle=" << r.oracle_vtx;

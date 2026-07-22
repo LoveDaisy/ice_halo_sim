@@ -208,8 +208,11 @@ inline void ShiftUpGuarded(QS3* x, int delta, bool* overflow, int* max_bits) {
     TrackBits(std::max(wa, wb) + delta, max_bits);
     return;
   }
-  x->a = static_cast<int64_t>(static_cast<uint64_t>(x->a) << delta);
-  x->b = static_cast<int64_t>(static_cast<uint64_t>(x->b) << delta);
+  // Multiply by 2^delta rather than left-shift: left shift of a negative
+  // signed value is UB in C++17. The width guard above guarantees no overflow,
+  // so signed multiply by (1<<delta) is well-defined and arithmetically exact.
+  x->a = x->a * (INT64_C(1) << delta);
+  x->b = x->b * (INT64_C(1) << delta);
   x->shift += delta;
   TrackBits(std::max(BitWidth64(x->a), BitWidth64(x->b)), max_bits);
 }
@@ -318,7 +321,7 @@ inline QS3 FloatToQS3(float f) {
   int64_t mant = static_cast<int64_t>(std::llround(m_int_d));
   int shift = 24 - e;
   if (shift < 0) {
-    mant = static_cast<int64_t>(static_cast<uint64_t>(mant) << (-shift));
+    mant = mant * (INT64_C(1) << (-shift));
     shift = 0;
   }
   QS3 out = { mant, 0, shift };
@@ -369,6 +372,11 @@ inline int SignQS3(QS3 x, bool* ambiguous) {
   if (std::fabs(val) > margin) {
     return val > 0 ? 1 : -1;
   }
+  // TEMP ARM64-CI-DBG (387.10): dump the ambiguous QS3 so the CI ARM64 log shows
+  // exactly which value diverged vs the passing x86/macOS runs.
+  std::fprintf(stderr, "[DBG SignQS3-AMBIG] a=%lld b=%lld shift=%d val=%.17g margin=%.17g ratio=%.4g\n",
+               static_cast<long long>(x.a), static_cast<long long>(x.b), x.shift, val, margin,
+               margin > 0 ? std::fabs(val) / margin : -1.0);
   *ambiguous = true;
   return 0;
 }
@@ -536,6 +544,9 @@ inline int PolySign(const PolyQS3& p, double alpha_val, double beta_val, bool* a
   if (std::fabs(val) > margin) {
     return val > 0 ? 1 : -1;
   }
+  // TEMP ARM64-CI-DBG (387.10): dump the ambiguous PolySign eval.
+  std::fprintf(stderr, "[DBG PolySign-AMBIG] alpha=%.17g beta=%.17g val=%.17g mag=%.17g margin=%.17g ratio=%.4g\n",
+               alpha_val, beta_val, val, mag, margin, margin > 0 ? std::fabs(val) / margin : -1.0);
   *ambiguous = true;
   return 0;
 }
