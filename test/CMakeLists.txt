@@ -160,6 +160,7 @@ add_executable(golden_analytic_test
   "${PROJ_TEST_DIR}/golden-analytic/core/test_projection.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_closed_form_prism.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_closed_form_pyramid.cpp"
+  "${PROJ_TEST_DIR}/golden-analytic/core/test_incidence_sampling_polygon_oracle.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_triangulation_swap_spike.cpp")
 target_include_directories(golden_analytic_test
   PRIVATE ${PROJ_TEST_DIR})
