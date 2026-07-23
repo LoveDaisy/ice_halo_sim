@@ -41,6 +41,7 @@
 #include "core/backend/cuda_trace_backend.hpp"
 #include "core/backend/cuda_trace_backend_test_hooks.hpp"  // scrum-328.2 Step 3
 #include "core/backend/trace_backend.hpp"
+#include "core/crystal.hpp"
 #include "core/exit_seam.hpp"
 #include "core/raypath.hpp"
 #include "cuda_test_helpers.hpp"  // scrum-328.2 Step 5: shared scene / render fixtures
@@ -768,6 +769,137 @@ TEST(RngObservabilityFacilitySmoke, NearPoleLaplacianTightEnvelopeAcceptanceRate
   EXPECT_LE(mean_attempts, hi) << "CUDA Laplacian b=5 near-pole mean(attempts)=" << mean_attempts
                                << " above anchor±5% [" << lo << ", " << hi
                                << "] — CUDA/Metal cross-backend anchor drift; investigate source-mirror parity.";
+}
+
+// ---- Per-ray captured-sample white-box gate for the cf_geom entry sampler -----
+//
+// CUDA sibling of MetalRootGen.PerRayEntryPointGeometricConsistency. The CUDA
+// backend builds the device entry-sampler triangle SoA from cf_geom_ on the host
+// (detail::BuildEntrySubTris) instead of the crystal's triangle Mesh cache. This
+// gate reads back the ACTUAL per-ray samples the gen_root / transit kernels wrote
+// — direction (ReadbackGenDirs) + entry point & face (ReadbackRootEntryPoint) —
+// and checks each captured (p, f) is geometrically consistent with the crystal:
+// f valid, p on polygon f's plane (p·n_f + d_f ≈ 0), p inside the convex crystal
+// (on face f's FACET), and f front-facing (n_f·d < 0). Physical ground truth is
+// used rather than a same-seed host replay because the transit entry point
+// depends on the continuation ray direction (a function of the full upstream
+// trace), which a pure per-ray seed cannot reconstruct — see the Metal sibling's
+// comment. The sampler MATH is the separate analytic gate in
+// test_incidence_sampling_polygon_oracle.cpp.
+namespace {
+constexpr uint32_t kInvalidFaceU32Cuda = 0xffffffffu;
+
+struct CudaEntryVerifyStats {
+  size_t valid = 0;
+  size_t drops = 0;
+  size_t failures = 0;
+};
+
+CudaEntryVerifyStats VerifyCudaEntryPoints(const Crystal& crystal, const std::vector<float>& dirs,
+                                           const std::vector<float>& points, const std::vector<uint32_t>& faces,
+                                           size_t count, const char* label) {
+  const size_t poly_cnt = crystal.PolygonFaceCount();
+  const float* pn = crystal.GetPolygonFaceNormal();
+  const float* pd = crystal.GetPolygonFaceDist();
+  constexpr float kOnPlaneTol = 2e-3f;
+  constexpr float kInsideTol = 5e-3f;
+  constexpr float kFrontTol = 1e-2f;
+
+  CudaEntryVerifyStats st;
+  int reported = 0;
+  for (size_t i = 0; i < count; i++) {
+    const uint32_t f = faces[i];
+    if (f == kInvalidFaceU32Cuda) {
+      st.drops++;
+      continue;
+    }
+    if (static_cast<size_t>(f) >= poly_cnt) {
+      st.failures++;
+      if (reported++ < 8) {
+        ADD_FAILURE() << label << " ray " << i << ": face id " << f << " out of range [0," << poly_cnt << ")";
+      }
+      continue;
+    }
+    st.valid++;
+    const float* d = dirs.data() + 3 * i;
+    const float* p = points.data() + 3 * i;
+    const float* nf = pn + 3 * f;
+    const float on_plane = nf[0] * p[0] + nf[1] * p[1] + nf[2] * p[2] + pd[f];
+    const float front = nf[0] * d[0] + nf[1] * d[1] + nf[2] * d[2];
+    float max_halfspace = -1e30f;
+    for (size_t k = 0; k < poly_cnt; k++) {
+      const float* nk = pn + 3 * k;
+      const float h = nk[0] * p[0] + nk[1] * p[1] + nk[2] * p[2] + pd[k];
+      if (h > max_halfspace) {
+        max_halfspace = h;
+      }
+    }
+    const bool ok = std::abs(on_plane) < kOnPlaneTol && max_halfspace < kInsideTol && front < kFrontTol;
+    if (!ok) {
+      st.failures++;
+      if (reported++ < 8) {
+        ADD_FAILURE() << label << " ray " << i << " face=" << f << " on_plane=" << on_plane
+                      << " max_halfspace=" << max_halfspace << " front(n·d)=" << front;
+      }
+    }
+  }
+  EXPECT_EQ(st.failures, 0u) << label << ": " << st.failures << " geometric-invariant violations";
+  return st;
+}
+}  // namespace
+
+TEST(CudaRootGen, PerRayEntryPointGeometricConsistency) {
+  if (!CudaDeviceAvailable()) {
+    GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
+  }
+  auto scene = MakeTwoLayerScene(/*max_hits=*/6);  // 2 MS layers, deterministic prism h=1.0
+  auto render = MakeFullViewRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  const Crystal gt = Crystal::CreatePrism(1.0f);  // same canonical cf_geom the pool holds
+
+  CudaTraceBackend backend;
+  backend.BeginSession(spec);
+  CudaTraceBackendTestHooks hooks(backend);
+  hooks.SetInitialRayBase(/*gen=*/0u, /*transit=*/0u, /*gate=*/0u);
+
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  // --- Layer 0: gen_root ---
+  auto h0 = backend.TraceLayer(RootRaySource::FromHost(host));
+  ASSERT_NE(h0, nullptr);
+  std::vector<float> gen_dirs;
+  std::vector<float> gen_p;
+  std::vector<uint32_t> gen_f;
+  ASSERT_EQ(hooks.ReadbackGenDirs(gen_dirs, kRayCount), 3u * kRayCount);
+  ASSERT_EQ(hooks.ReadbackRootEntryPoint(gen_p, gen_f, kRayCount), kRayCount);
+  CudaEntryVerifyStats gen_st = VerifyCudaEntryPoints(gt, gen_dirs, gen_p, gen_f, kRayCount, "gen");
+  EXPECT_GT(gen_st.valid, kRayCount / 2) << "gen: too few valid entry samples (drops=" << gen_st.drops << ")";
+
+  // --- Layer 1: transit over the compacted continuation set [0, n_cont) ---
+  const size_t n_cont = h0->ContinuationCount();
+  ASSERT_GT(n_cont, 64u) << "too few continuation rays to exercise transit meaningfully";
+  RecombineSpec rspec;
+  rspec.shuffle = false;
+  auto roots1 = backend.Recombine(std::move(h0), rspec);
+  auto h1 = backend.TraceLayer(roots1);
+  ASSERT_NE(h1, nullptr);
+  std::vector<float> tr_dirs;
+  std::vector<float> tr_p;
+  std::vector<uint32_t> tr_f;
+  ASSERT_EQ(hooks.ReadbackGenDirs(tr_dirs, n_cont), 3u * n_cont);
+  ASSERT_EQ(hooks.ReadbackRootEntryPoint(tr_p, tr_f, n_cont), n_cont);
+  CudaEntryVerifyStats tr_st = VerifyCudaEntryPoints(gt, tr_dirs, tr_p, tr_f, n_cont, "transit");
+  EXPECT_GT(tr_st.valid, n_cont / 2) << "transit: too few valid entry samples (drops=" << tr_st.drops << ")";
+
+  backend.EndSession();
 }
 
 }  // namespace

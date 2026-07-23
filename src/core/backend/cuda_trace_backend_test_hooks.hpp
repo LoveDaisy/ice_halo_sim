@@ -49,6 +49,17 @@ class CudaTraceBackendTestHooks {
   // Direct read of gen_root_kernel's crystal-local ray directions (3 floats/ray).
   size_t ReadbackGenDirs(std::vector<float>& out, size_t count);
 
+  // Direct read of the per-ray entry sample the gen_root / transit kernels wrote:
+  // p_out = 3 floats/ray crystal-local entry point (d_pos_), face_out = 1
+  // uint32/ray entry polygon id (d_from_poly_, kInvalidId widened = 0xffffffff on
+  // a zero-weight/degenerate drop). Both kernels write the SAME physical buffers,
+  // so calling this after a gen TraceLayer reads gen's samples and after a transit
+  // TraceLayer reads transit's — one hook covers both paths. Returns the ray count
+  // actually copied (clamped to root_cap_). Used by the per-ray white-box gate
+  // that checks each captured (p, to_face) is geometrically consistent with the
+  // captured direction (ReadbackGenDirs) and the crystal geometry.
+  size_t ReadbackRootEntryPoint(std::vector<float>& p_out, std::vector<uint32_t>& face_out, size_t count);
+
   // scrum-328.2 Step 1: explicit-stream RNG probe (raw pcg_uniform draw).
   void EnableRngProbe(RngProbeStream stream, size_t count, size_t ci_start = 0);
   size_t ReadbackRngProbe(std::vector<float>& out, size_t count);

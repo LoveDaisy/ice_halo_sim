@@ -3730,6 +3730,25 @@ size_t MetalTraceBackendTestHooks::ReadbackGenDirs(std::vector<float>& out, size
   return n_floats;
 }
 
+size_t MetalTraceBackendTestHooks::ReadbackRootP(std::vector<float>& out, size_t count) {
+  // [TEST-ONLY] per-ray crystal-local entry point. root_p_buf is
+  // MTLResourceStorageModeShared (unified memory) so this is a plain memcpy —
+  // no kernel change needed. Sibling of ReadbackGenDirs / ReadbackRootTf.
+  auto& impl = *backend_.impl_;
+  if (impl.root_p_buf == nil || count == 0u) {
+    out.clear();
+    return 0u;
+  }
+  const size_t cap_floats = static_cast<size_t>([impl.root_p_buf length]) / sizeof(float);
+  size_t n_floats = 3u * count;
+  if (n_floats > cap_floats) {
+    n_floats = cap_floats;
+  }
+  out.assign(n_floats, 0.0f);
+  std::memcpy(out.data(), [impl.root_p_buf contents], n_floats * sizeof(float));
+  return n_floats;
+}
+
 void MetalTraceBackendTestHooks::EnableGenAttemptCount(size_t count, size_t ci_start) {
   // scrum-328.2 Step 1 Metal-symmetric enable: grow the always-bound sibling
   // buffer to hold `count` ints, arm the write flag. Independent of the RNG

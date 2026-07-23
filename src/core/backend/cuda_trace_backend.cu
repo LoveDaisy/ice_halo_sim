@@ -5027,6 +5027,27 @@ size_t CudaTraceBackendTestHooks::ReadbackGenDirs(std::vector<float>& out, size_
   return n_floats;
 }
 
+size_t CudaTraceBackendTestHooks::ReadbackRootEntryPoint(std::vector<float>& p_out, std::vector<uint32_t>& face_out,
+                                                         size_t count) {
+  auto& impl = *backend_.impl_;
+  if (count > impl.root_cap_) {
+    count = impl.root_cap_;
+  }
+  if (impl.d_pos_ == nullptr || impl.d_from_poly_ == nullptr || count == 0u) {
+    p_out.clear();
+    face_out.clear();
+    return 0u;
+  }
+  p_out.assign(3u * count, 0.0f);
+  face_out.assign(count, 0u);
+  cudaDeviceSynchronize();  // gen/transit kernel must finish before the D2H copy
+  CheckCuda(cudaMemcpy(p_out.data(), impl.d_pos_, 3u * count * sizeof(float), cudaMemcpyDeviceToHost),
+            "ReadbackRootEntryPoint D2H d_pos_");
+  CheckCuda(cudaMemcpy(face_out.data(), impl.d_from_poly_, count * sizeof(uint32_t), cudaMemcpyDeviceToHost),
+            "ReadbackRootEntryPoint D2H d_from_poly_");
+  return count;
+}
+
 }  // namespace lumice
 
 #endif  // defined(LUMICE_CUDA_ENABLED)

@@ -45,6 +45,15 @@ class MetalTraceBackendTestHooks {
   // directions (3 floats/ray). Unified memory → plain memcpy.
   size_t ReadbackGenDirs(std::vector<float>& out, size_t count);
 
+  // Direct read of the per-ray crystal-local entry point (3 floats/ray) the
+  // gen_root / transit_root kernels wrote into root_p_buf (both dispatches bind
+  // the same shared buffer, so this reads gen's samples after a gen TraceLayer
+  // and transit's after a transit TraceLayer). Plain memcpy (unified memory).
+  // The sibling entry-face id is ReadbackRootTf. Used by the per-ray white-box
+  // gate that checks each captured (p, to_face) is geometrically consistent with
+  // the captured direction (ReadbackGenDirs) and the crystal geometry.
+  size_t ReadbackRootP(std::vector<float>& out, size_t count);
+
   // scrum-328.2 Step 1 attempt-count observation (Metal-symmetric with CUDA;
   // near-pole acceptance-rate smoke consumer).
   void EnableGenAttemptCount(size_t count, size_t ci_start = 0);
