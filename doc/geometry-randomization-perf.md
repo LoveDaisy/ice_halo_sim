@@ -48,6 +48,37 @@ is **not** a universal factor. Across a scene spread (Metal `--benchmark`, best-
   performance-measurement config must therefore include a multi-crystal multi-MS scene, and the
   "shrink object construction" lever's ROI is largest exactly there.
 
+### The "shrink object construction" lever landed — measured (detriangulation)
+
+That lever has now been pulled: the triangle `Mesh` was removed from the `Crystal` hot path —
+root incidence sampling consumes the closed-form per-face geometry directly, and `MakeCrystal`
+no longer builds/stores the triangle mesh or its per-triangle caches (C-API geometry export
+triangulates on demand). Isolated `BM_MakeCrystal` prism improved 5.37×/6.47×. The system-level
+K=64 construction penalty, measured before/after on the same machine/session (200 M rays,
+prism `face_distance` gauss std=0.3, 3-rep median, all `steady`; before = pre-removal, after =
+post-removal):
+
+| backend | K=64 penalty before | after | K=64 raw throughput before → after |
+|---|---|---|---|
+| Metal (Mac, unified memory) | 2.20× (reproduces the 2.4× cited above) | **1.74×** | 13.7 → 18.1 M/s (+32%) |
+| CUDA (RTX 4060 Ti, K=1024 basis) | 11.85× (reproduces the ≈10.7× discrete-memory wall) | **5.16×** | 19.0 → **60.5 M/s (3.19×)** |
+
+- **K=D throughput is unchanged on both backends** — the deterministic path barely constructs, so
+  removing construction cost has nothing to cut there. This is the mechanism check: the gain lands
+  exactly on the construction-heavy randomized path, nowhere else.
+- **CUDA gains far exceed Metal** (3.19× vs 1.32× raw K=64 throughput) because its construction
+  wall (host build + H2D) is far heavier than Metal's unified-memory object construction; the
+  detriangulation cuts the triangle portion of that wall on both.
+- **Honest gap: the realized penalty reduction is smaller than a naive projection from the isolated
+  `BM_MakeCrystal` speedup.** `MakeCrystal` is a large but not sole component of per-batch cost
+  (pool upload / management overhead is untouched), so the 5.37× isolated gain does not translate
+  1:1 into the K=64 penalty. The equal-error moat (variance advantage ÷ construction penalty) moves
+  with the measured penalty: Metal ≈42×→≈53× on the derivation above.
+- **Clock caveat (CUDA):** dev49 clocks could not be pinned; validity rests on warmed-steady state,
+  interleaved 3-rep, and the before arm reproducing the prior discrete-memory baseline (as the
+  Metal before arm reproduces 2.4×). Absolute throughput is not cross-session comparable; the
+  before/after delta and penalty ratios are.
+
 ## The one thing to internalize first: the metric is equal-error throughput
 
 Raw ray throughput is **not** the objective and is **already adequate**. The objective is
