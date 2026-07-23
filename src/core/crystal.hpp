@@ -65,7 +65,15 @@ bool IsClosedTriMesh(size_t v, size_t f);
 // static_assert bridging these constants to the ClosedFormPyramid capacity so
 // closed-form growth is caught at compile time, not silently truncated.
 constexpr int kCrystalGeomMaxFaces = 20;
-constexpr int kCrystalGeomMaxVtxPerFace = 32;
+// Per-face CCW vertex capacity. The hexagonal pyramid/prism family's real worst
+// case is 7 (measured: max present face_vtx_cnt over a 2M-sample fuzz spanning
+// wide/negative/near-zero face distances + the known near-coincident-vertex
+// inputs; basal ≤6-gon, cone faces inflate to 7 under irregular dist). 12 keeps
+// a comfortable margin; the closed-form evaluator's AppendFaceVtx hard-aborts
+// (never silently truncates) if a face ever exceeds kClosedFormPyramidMaxFaceVtx
+// (== 12, kept in lockstep via the static_assert in crystal.cpp). This directly
+// shrinks CrystalGeom's by-value copy cost (face_vtx dominates its footprint).
+constexpr int kCrystalGeomMaxVtxPerFace = 12;
 
 struct CrystalGeom {
   int face_cnt = 0;

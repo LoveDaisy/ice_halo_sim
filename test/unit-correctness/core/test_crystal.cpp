@@ -13,6 +13,7 @@
 #include "config/config_manager.hpp"
 #include "core/crystal.hpp"
 #include "core/geo3d.hpp"
+#include "core/geo3d_closedform.hpp"
 #include "core/math.hpp"
 #include "core/simulator.hpp"
 #include "util/logger.hpp"
@@ -1398,7 +1399,12 @@ TEST(CrystalGeomStep3, PyramidFactoryPopulatesCfGeom) {
 
 TEST(CrystalGeomStep1, CapacityConstantsBoundPyramidWorstCase) {
   EXPECT_GE(kCrystalGeomMaxFaces, 20);
-  EXPECT_GE(kCrystalGeomMaxVtxPerFace, 32);
+  // Anchor to the closed-form evaluator's per-face capacity rather than a hard
+  // literal, so this defence-in-depth check tracks the compile-time static_assert
+  // in crystal.cpp automatically. The measured hexagonal-family worst case is 7
+  // (see the kCrystalGeomMaxVtxPerFace comment in crystal.hpp).
+  EXPECT_GE(kCrystalGeomMaxVtxPerFace, kClosedFormPyramidMaxFaceVtx);
+  EXPECT_GE(kCrystalGeomMaxVtxPerFace, 7);
 }
 
 }  // namespace

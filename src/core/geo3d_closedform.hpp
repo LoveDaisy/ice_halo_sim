@@ -181,9 +181,12 @@ constexpr int kClosedFormPyramidSideCnt = 6;
 constexpr int kClosedFormPyramidMaxVtx = 96;
 // Per-face polygon vertex-count upper bound. Basal faces are ≤6-gons in the
 // regular regime. Cone faces can inflate under irregular dist (multiple death
-// events on the same face). 32 is defensive; overflow is caught by
-// unconditional assert.
-constexpr int kClosedFormPyramidMaxFaceVtx = 32;
+// events on the same face) but the measured worst case over a 2M-sample fuzz
+// (wide/negative/near-zero dist) is 7; 12 keeps a comfortable margin. Kept in
+// lockstep with kCrystalGeomMaxVtxPerFace (crystal.hpp) via a static_assert;
+// overflow is caught by AppendFaceVtx's unconditional abort (never silently
+// truncated).
+constexpr int kClosedFormPyramidMaxFaceVtx = 12;
 
 // Output of the closed-form pyramid evaluator. Two independent structs (vs
 // reusing ClosedFormPrismResult) because pyramid faces have variable corner
