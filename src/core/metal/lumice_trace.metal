@@ -1275,8 +1275,21 @@ kernel void gen_root_kernel(
   uint local_tri = categorical_sample(proj_prob, n_tri, u_cat);
   uint tri_id = tri_off + local_tri;
   float p[3];
-  sample_triangle(stream, tri_vtx + tri_id * 9u, p);
-  uint to_face = tri_to_poly[tri_id];
+  // K-shape degenerate-slot guard: tri_cnt == 0 (ring0-legal zero-triangle
+  // Crystal) → tri_off aliases the NEXT slot's triangles (or the pool tail), so
+  // tri_vtx / tri_to_poly[tri_id] would read a neighbor shape. Skip both reads
+  // and route into the kInvalidId zero-weight drop below. Non-degenerate rays
+  // never take this branch → AC2 bit-exact single-shape path unchanged.
+  uint to_face;
+  if (tri_cnt == 0u) {
+    p[0] = 0.0f;
+    p[1] = 0.0f;
+    p[2] = 0.0f;
+    to_face = kInvalidId;
+  } else {
+    sample_triangle(stream, tri_vtx + tri_id * 9u, p);
+    to_face = tri_to_poly[tri_id];
+  }
   float weight = wl_pool[wl_idx].spd_weight;  // scrum-268.8 per-ray spd weight
   if (to_face == kInvalidId) {
     // Mirrors InitRay_p_fid fallback (simulator.cpp:92-94): zero weight when
@@ -1413,8 +1426,20 @@ kernel void transit_root_kernel(
   uint local_tri = categorical_sample(proj_prob, n_tri, u_cat);
   uint tri_id = tri_off + local_tri;
   float p[3];
-  sample_triangle(stream, tri_vtx + tri_id * 9u, p);
-  uint to_face = tri_to_poly[tri_id];
+  // K-shape degenerate-slot guard (mirrors gen_root_kernel): tri_cnt == 0 →
+  // tri_off aliases the next slot's triangles / pool tail, so skip both reads
+  // and route into the kInvalidId zero-weight drop. Non-degenerate rays
+  // unaffected (AC2 bit-exact path unchanged).
+  uint to_face;
+  if (tri_cnt == 0u) {
+    p[0] = 0.0f;
+    p[1] = 0.0f;
+    p[2] = 0.0f;
+    to_face = kInvalidId;
+  } else {
+    sample_triangle(stream, tri_vtx + tri_id * 9u, p);
+    to_face = tri_to_poly[tri_id];
+  }
 
   // 4. Carry continuation weight; mirror InitRay_p_fid fallback (zero weight
   //    when a triangle has no polygon backing).
