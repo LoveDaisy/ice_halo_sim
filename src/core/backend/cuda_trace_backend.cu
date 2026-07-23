@@ -2407,12 +2407,37 @@ void CudaTraceBackend::Impl::EnsureGeomCapacity(size_t poly_cnt, size_t tri_cnt)
   }
 }
 
+namespace {
+// Build the flat triangle SoA the device entry sampler consumes, straight from
+// the crystal's closed-form polygon geometry (cf_geom_) via the same
+// detail::BuildEntrySubTris helper CPU InitRay_p_fid uses — the triangle Mesh
+// cache (GetTriangleVtx/Normal/Area + PolygonFaceOfTri) is no longer read. Same
+// sub-triangles / fan order / winding as the Mesh path, but each sub-tri carries
+// its compact present-face LOCAL id (0..PolygonFaceCount()-1) directly, so no
+// PolygonFaceOfTri reverse lookup and no kInvalidId path are needed — a
+// cf_geom-built crystal's face_id is always in range. Appends `tri_cnt`
+// triangles to the four SoA arrays (vtx: 9/tri, norm: 3/tri, area+tri2poly: 1/tri).
+void AppendCfGeomTriangles(const Crystal& crystal, size_t tri_cnt, std::vector<float>& vtx9,
+                           std::vector<float>& norm3, std::vector<float>& area, std::vector<uint16_t>& tri2poly) {
+  std::vector<detail::EntrySubTri> sub(tri_cnt);
+  detail::BuildEntrySubTris(crystal.CfGeom(), sub.data());
+  for (size_t t = 0; t < tri_cnt; ++t) {
+    vtx9.insert(vtx9.end(), sub[t].v, sub[t].v + 9);
+    norm3.insert(norm3.end(), sub[t].n, sub[t].n + 3);
+    area.push_back(sub[t].area);
+    tri2poly.push_back(static_cast<uint16_t>(sub[t].face_id));
+  }
+}
+}  // namespace
+
 void CudaTraceBackend::Impl::UploadCrystalGeometry(const Crystal& crystal) {
   // Per-CI geometry H2D, mirrors Metal UploadCrystal (metal_trace_backend.mm:1158).
   // Polygon-face slab geometry + triangle pool (for transit entry-point sampling)
   // + the tri_to_poly slot table. Updates poly_cnt_/tri_cnt_ to this crystal.
+  // The triangle pool is built on the fly from cf_geom_ (AppendCfGeomTriangles),
+  // not the crystal's triangle Mesh cache — see that helper for the equivalence.
   size_t poly_cnt = crystal.PolygonFaceCount();
-  size_t tri_cnt  = crystal.TotalTriangles();
+  size_t tri_cnt  = detail::CountEntrySubTris(crystal.CfGeom());
   if (poly_cnt == 0) {
     throw BackendUnavailableError("CudaTraceBackend::UploadCrystalGeometry: degenerate crystal geometry (0 polygons)");
   }
@@ -2431,26 +2456,21 @@ void CudaTraceBackend::Impl::UploadCrystalGeometry(const Crystal& crystal) {
                        cudaMemcpyHostToDevice), "UploadCrystalGeometry cudaMemcpy d_poly_n");
   CheckCuda(cudaMemcpy(d_poly_d_, crystal.GetPolygonFaceDist(), poly_cnt * sizeof(float),
                        cudaMemcpyHostToDevice), "UploadCrystalGeometry cudaMemcpy d_poly_d");
-  CheckCuda(cudaMemcpy(d_tri_vtx_, crystal.GetTriangleVtx(), 9 * tri_cnt * sizeof(float),
+
+  std::vector<float>    h_tri_vtx, h_tri_norm, h_tri_area;
+  std::vector<uint16_t> h_tri2poly;
+  h_tri_vtx.reserve(9 * tri_cnt);
+  h_tri_norm.reserve(3 * tri_cnt);
+  h_tri_area.reserve(tri_cnt);
+  h_tri2poly.reserve(tri_cnt);
+  AppendCfGeomTriangles(crystal, tri_cnt, h_tri_vtx, h_tri_norm, h_tri_area, h_tri2poly);
+  CheckCuda(cudaMemcpy(d_tri_vtx_, h_tri_vtx.data(), 9 * tri_cnt * sizeof(float),
                        cudaMemcpyHostToDevice), "UploadCrystalGeometry cudaMemcpy d_tri_vtx");
-  CheckCuda(cudaMemcpy(d_tri_norm_, crystal.GetTriangleNormal(), 3 * tri_cnt * sizeof(float),
+  CheckCuda(cudaMemcpy(d_tri_norm_, h_tri_norm.data(), 3 * tri_cnt * sizeof(float),
                        cudaMemcpyHostToDevice), "UploadCrystalGeometry cudaMemcpy d_tri_norm");
-  CheckCuda(cudaMemcpy(d_tri_area_, crystal.GetTirangleArea(), tri_cnt * sizeof(float),
+  CheckCuda(cudaMemcpy(d_tri_area_, h_tri_area.data(), tri_cnt * sizeof(float),
                        cudaMemcpyHostToDevice), "UploadCrystalGeometry cudaMemcpy d_tri_area");
-  // tri→poly-face LOCAL uint16 map from Crystal's parametric slot table
-  // (Crystal::PopulateFromCfGeom). Mesh-only crystals emit kInvalidId per
-  // triangle; downstream sampling drops those rays via the InitRay_p_fid
-  // kInvalidId fallback — same sentinel semantics as the prior argmax path.
-  std::vector<uint16_t> tri_to_poly_host(tri_cnt);
-  {
-    for (size_t t = 0; t < tri_cnt; ++t) {
-      IdType local = crystal.PolygonFaceOfTri(static_cast<int>(t));
-      tri_to_poly_host[t] = (local == kInvalidId || static_cast<size_t>(local) >= poly_cnt)
-                                ? kInvalidIdU16
-                                : static_cast<uint16_t>(local);
-    }
-  }
-  CheckCuda(cudaMemcpy(d_tri_to_poly_, tri_to_poly_host.data(), tri_cnt * sizeof(uint16_t),
+  CheckCuda(cudaMemcpy(d_tri_to_poly_, h_tri2poly.data(), tri_cnt * sizeof(uint16_t),
                        cudaMemcpyHostToDevice), "UploadCrystalGeometry cudaMemcpy d_tri_to_poly");
 
   poly_cnt_ = static_cast<uint32_t>(poly_cnt);
@@ -2661,7 +2681,7 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
       for (uint32_t s = 0; s < p_ci; ++s) {
         Crystal crystal = MakeCrystal(rng_, settings[ci].crystal_.param_);
         size_t poly_cnt = crystal.PolygonFaceCount();
-        size_t tri_cnt  = crystal.TotalTriangles();
+        size_t tri_cnt  = detail::CountEntrySubTris(crystal.CfGeom());
         if (poly_cnt == 0 || tri_cnt == 0) {
           // Ring0-legal degenerate slot: a zero-triangle Crystal is a valid
           // "contributes nothing" product (Crystal::MakePrismClosedForm returns
@@ -2695,25 +2715,11 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
         const float* pd = crystal.GetPolygonFaceDist();
         h_poly_n.insert(h_poly_n.end(), pn, pn + 3 * poly_cnt);
         h_poly_d.insert(h_poly_d.end(), pd, pd + poly_cnt);
-        const float* tv = crystal.GetTriangleVtx();
-        const float* tn = crystal.GetTriangleNormal();
-        const float* ta = crystal.GetTirangleArea();
-        h_tri_vtx.insert(h_tri_vtx.end(), tv, tv + 9 * tri_cnt);
-        h_tri_norm.insert(h_tri_norm.end(), tn, tn + 3 * tri_cnt);
-        h_tri_area.insert(h_tri_area.end(), ta, ta + tri_cnt);
-        // tri→poly-face LOCAL uint16 map from Crystal's parametric slot table
-        // (Crystal::PopulateFromCfGeom). Mesh-only crystals emit kInvalidId per
-        // triangle; downstream sampling drops those rays via the InitRay_p_fid
-        // kInvalidId fallback — same sentinel semantics as the prior argmax path.
-        {
-          h_tri2poly.reserve(h_tri2poly.size() + tri_cnt);
-          for (size_t t = 0; t < tri_cnt; ++t) {
-            IdType local = crystal.PolygonFaceOfTri(static_cast<int>(t));
-            h_tri2poly.push_back((local == kInvalidId || static_cast<size_t>(local) >= poly_cnt)
-                                     ? kInvalidIdU16
-                                     : static_cast<uint16_t>(local));
-          }
-        }
+        // Triangle geometry built on the fly from cf_geom_ (AppendCfGeomTriangles),
+        // not the crystal's triangle Mesh cache. face_id is the compact present-face
+        // LOCAL id carried by each sub-tri (no PolygonFaceOfTri reverse lookup, no
+        // kInvalidId path — always in range for a cf_geom-built crystal).
+        AppendCfGeomTriangles(crystal, tri_cnt, h_tri_vtx, h_tri_norm, h_tri_area, h_tri2poly);
 
         pool_poly_off_.push_back(poly_acc);
         pool_poly_cnt_.push_back(static_cast<uint32_t>(poly_cnt));

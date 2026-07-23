@@ -1089,7 +1089,8 @@ struct MetalTraceBackend::Impl {
   // needing a second offset addition on the hot path. P_ci == 1 collapses to
   // poly_off/tri_off == 0 and reproduces the historical layout bit-for-bit.
   void UploadCrystalPool(const std::vector<Crystal>& pool);
-  // Largest TotalTriangles() across all pool_crystals_ shapes (0 if pool is empty).
+  // Largest sub-triangle count (CountEntrySubTris(CfGeom())) across all
+  // pool_crystals_ shapes (0 if pool is empty).
   // Used by gen/transit paths to test the kMaxTriPerKernel=64 bound against every
   // shape a per-ray pick might land on, not just shape 0.
   uint32_t PoolMaxTriangleCount() const;
@@ -1802,7 +1803,7 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
 uint32_t MetalTraceBackend::Impl::PoolMaxTriangleCount() const {
   uint32_t max_tri = 0u;
   for (const auto& c : pool_crystals_) {
-    max_tri = std::max<uint32_t>(max_tri, static_cast<uint32_t>(c.TotalTriangles()));
+    max_tri = std::max<uint32_t>(max_tri, static_cast<uint32_t>(detail::CountEntrySubTris(c.CfGeom())));
   }
   return max_tri;
 }
@@ -1834,7 +1835,9 @@ void MetalTraceBackend::Impl::UploadCrystalPool(const std::vector<Crystal>& pool
   size_t poly_acc = 0, tri_acc = 0;
   for (const auto& crystal : pool) {
     size_t poly_cnt = crystal.PolygonFaceCount();
-    size_t tri_cnt  = crystal.TotalTriangles();
+    // Triangle count from the closed-form polygon geometry (cf_geom_), matching
+    // the on-the-fly sub-triangle build in the second pass — not the Mesh cache.
+    size_t tri_cnt  = detail::CountEntrySubTris(crystal.CfGeom());
     pool_shape_table_h_.push_back({static_cast<uint32_t>(poly_acc),
                                    static_cast<uint32_t>(poly_cnt),
                                    static_cast<uint32_t>(tri_acc),
@@ -1869,28 +1872,25 @@ void MetalTraceBackend::Impl::UploadCrystalPool(const std::vector<Crystal>& pool
     std::memcpy(poly_d_ptr + poly_off, crystal.GetPolygonFaceDist(),
                 poly_cnt * sizeof(float));
 
-    std::memcpy(tri_vtx_ptr + tri_off * 9, crystal.GetTriangleVtx(),
-                tri_cnt * 9 * sizeof(float));
-    std::memcpy(tri_norm_ptr + tri_off * 3, crystal.GetTriangleNormal(),
-                tri_cnt * 3 * sizeof(float));
-    std::memcpy(tri_area_ptr + tri_off, crystal.GetTirangleArea(),
-                tri_cnt * sizeof(float));
-
-    // tri_to_poly stores ABSOLUTE polygon indices (poly_off + local) so
-    // gen_root/transit_root can compose "shape.tri_off + local_tri →
-    // tri_to_poly[..] → abs poly_idx" with a single offset addition on the
-    // triangle side and none on the polygon side. Reads the parametric
-    // slot→poly-face table via Crystal::PolygonFaceOfTri (populated by
-    // Crystal::PopulateFromCfGeom for hex-family factories). Mesh-only
-    // crystals (custom-mesh test hook) return kInvalidId per triangle here;
-    // downstream sampling drops those rays via the InitRay_p_fid kInvalidId
-    // fallback — same sentinel semantics as the prior argmax path.
-    for (size_t t = 0; t < tri_cnt; t++) {
-      IdType local = crystal.PolygonFaceOfTri(static_cast<int>(t));
-      tri_to_poly_ptr[tri_off + t] =
-          (local == kInvalidId || static_cast<uint32_t>(local) >= poly_cnt)
-              ? kInvalidIdU32
-              : (poly_off + static_cast<uint32_t>(local));
+    // Triangle geometry built on the fly from cf_geom_ (detail::BuildEntrySubTris,
+    // the same helper CPU InitRay_p_fid uses) — NOT the crystal's triangle Mesh
+    // cache (GetTriangleVtx/Normal/Area + PolygonFaceOfTri). Same sub-triangles /
+    // fan order / winding, but each sub-tri carries its compact present-face LOCAL
+    // id directly, so no PolygonFaceOfTri reverse lookup is needed.
+    std::vector<detail::EntrySubTri> sub(tri_cnt);
+    detail::BuildEntrySubTris(crystal.CfGeom(), sub.data());
+    for (uint32_t t = 0; t < tri_cnt; t++) {
+      std::memcpy(tri_vtx_ptr + (tri_off + t) * 9, sub[t].v, 9 * sizeof(float));
+      std::memcpy(tri_norm_ptr + (tri_off + t) * 3, sub[t].n, 3 * sizeof(float));
+      tri_area_ptr[tri_off + t] = sub[t].area;
+      // tri_to_poly stores ABSOLUTE polygon indices so gen_root/transit_root can
+      // compose "shape.tri_off + local_tri → tri_to_poly[..] → abs poly_idx" with
+      // a single offset addition on the triangle side and none on the polygon
+      // side. sub[t].face_id is the compact present-face LOCAL id (always in range
+      // for a cf_geom-built crystal), so add this shape's poly_off to absolutize
+      // it — the LOCAL→ABSOLUTE step that must not be dropped in a multi-shape
+      // pool (a single-shape pool has poly_off==0 and would mask a missing add).
+      tri_to_poly_ptr[tri_off + t] = poly_off + static_cast<uint32_t>(sub[t].face_id);
     }
   }
 
@@ -2215,7 +2215,7 @@ size_t MetalTraceBackend::Impl::InjectHostRoots(const HostRayBatch& host) {
 GenRootKernelParams MetalTraceBackend::Impl::BuildGenRootParams(
     const ScatteringSetting& setting, size_t crystal_ray_num) const {
   GenRootKernelParams gp{};
-  gp.tri_count = static_cast<uint32_t>(current_crystal.TotalTriangles());
+  gp.tri_count = static_cast<uint32_t>(detail::CountEntrySubTris(current_crystal.CfGeom()));
   assert(gp.tri_count <= 64u &&
          "BuildGenRootParams: tri_count > kMaxTriPerKernel — caller must fall back to host gen");
   gp.num_rays = static_cast<uint32_t>(crystal_ray_num);
