@@ -77,11 +77,15 @@ size_t CountEntrySubTris(const CrystalGeom& cf) {
 // area from the same cross product. The compact present-face id is assigned
 // by iterating slots in ascending order and skipping absent ones — the same
 // rule PopulateFromCfGeom uses to number poly_face_n_/poly_face_fn_, so
-// to_face_ indexes them correctly. (If a third independent implementation of
-// this fan/winding convention is ever needed — e.g. by the T3 GPU follow-up —
-// extracting a shared helper with BuildMeshFromCfGeom should be reconsidered;
-// today's two implementations serve different output shapes — a persistent
-// Mesh vs. this one-shot stack CSR table — so kept separate, see task plan.)
+// to_face_ indexes them correctly. This is the single fan/winding
+// implementation shared by all three entry-sampler consumers — CPU
+// InitRay_p_fid plus the Metal and CUDA host upload paths, which call
+// BuildEntrySubTris directly to build their device entry-sampler triangle SoA
+// (they do NOT re-implement the convention per backend). It stays distinct from
+// BuildMeshFromCfGeom (crystal.cpp) because the two serve different output
+// shapes — a persistent triangle Mesh vs. this one-shot fan table; if a future
+// consumer needs the same convention in yet another shape, extracting a shared
+// helper with BuildMeshFromCfGeom should be reconsidered.
 void BuildEntrySubTris(const CrystalGeom& cf, EntrySubTri* out) {
   size_t t = 0;
   IdType present_id = 0;

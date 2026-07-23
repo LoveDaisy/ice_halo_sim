@@ -231,18 +231,31 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
 Rotation BuildCrystalRotation(float azimuth_rad, float latitude_rad, float roll_rad);
 
 namespace detail {
+// NOTE ON THIS NAMESPACE'S REACH: CountEntrySubTris / BuildEntrySubTris / the
+// EntrySubTri struct below are no longer test-or-simulator-only — the Metal and
+// CUDA backends' host upload paths (metal_trace_backend.mm, cuda_trace_backend.cu)
+// call them in PRODUCTION to build their device entry-sampler triangle SoA from
+// cf_geom_. They are, in effect, a small geometry utility shared by three modules
+// (simulator + both GPU backends), which sits uneasily with the `detail` name's
+// "internal / test-visible" connotation. The migration to a proper shared home
+// (e.g. crystal.hpp or a dedicated geometry header) is DELIBERATELY DEFERRED: it
+// is a pure rename with no functional benefit today, and the reuse works as-is.
+// TRACKED DEBT: if a fourth cross-module consumer appears, re-evaluate promoting
+// these out of `detail` into a first-class shared API at that point.
+
 // Maps a triangle id to its polygon-face index via argmax of the dot product
 // against polygon-face normals (kFaceCoplanarFloor=1e-2). Used by InitRay_p_fid
 // to label the initial entry segment. Exposed for unit-test access; not part
 // of the public C API.
 IdType PolygonFaceOfTri(const Crystal& crystal, int tri_id);
 
-// One fan sub-triangle of a present polygon face, built once per InitRay_p_fid
-// call from cf_geom_ corners. Carries its geometry (for the per-ray projected
-// weight + point sampling) and the compact present-face id it belongs to (==
-// the RaySeg::to_face_ value, matching PopulateFromCfGeom's numbering).
-// Exposed for unit-test access (constructing a synthetic CrystalGeom with a
-// degenerate fan sub-triangle); not part of the public C API.
+// One fan sub-triangle of a present polygon face, built once per entry-sampler
+// setup (CPU InitRay_p_fid per call, or a GPU backend's per-crystal host upload)
+// from cf_geom_ corners. Carries its geometry (for the per-ray projected weight
+// + point sampling) and the compact present-face id it belongs to (== the
+// RaySeg::to_face_ value, matching PopulateFromCfGeom's numbering). Also exposed
+// for unit-test access (constructing a synthetic CrystalGeom with a degenerate
+// fan sub-triangle); not part of the public C API.
 struct EntrySubTri {
   float v[9];      // 3 corners (fanned from corner 0)
   float n[3];      // unit winding normal Cross3(v1-v0, v2-v0), normalized (zero if area == 0)
