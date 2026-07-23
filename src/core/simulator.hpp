@@ -243,12 +243,6 @@ namespace detail {
 // TRACKED DEBT: if a fourth cross-module consumer appears, re-evaluate promoting
 // these out of `detail` into a first-class shared API at that point.
 
-// Maps a triangle id to its polygon-face index via argmax of the dot product
-// against polygon-face normals (kFaceCoplanarFloor=1e-2). Used by InitRay_p_fid
-// to label the initial entry segment. Exposed for unit-test access; not part
-// of the public C API.
-IdType PolygonFaceOfTri(const Crystal& crystal, int tri_id);
-
 // One fan sub-triangle of a present polygon face, built once per entry-sampler
 // setup (CPU InitRay_p_fid per call, or a GPU backend's per-crystal host upload)
 // from cf_geom_ corners. Carries its geometry (for the per-ray projected weight
