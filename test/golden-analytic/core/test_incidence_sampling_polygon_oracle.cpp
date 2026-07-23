@@ -94,6 +94,10 @@ std::vector<CrystalFixture> MakeFixtures() {
   // Degenerate face-drop pyramids — reuse the fixed configurations that are
   // known to collapse at least one face (MakeFaceDropBatch in
   // test_closed_form_pyramid.cpp). Not re-invented degenerate numbers.
+  // MakeFaceDropBatch has anonymous-namespace (internal) linkage in that
+  // translation unit, so it cannot be called from here directly — the
+  // dist[] literals below are a hand-copy and MUST be kept numerically in
+  // sync with MakeFaceDropBatch's face-drop samples if those ever change.
   const float kDrop0[6] = { 0.3f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
   const float kDrop1[6] = { 1.0f, 0.4f, 1.0f, 0.5f, 1.0f, 1.0f };
   const float kDrop2[6] = { 1.0f, 1.0f, 0.35f, 1.0f, 1.0f, 0.9f };

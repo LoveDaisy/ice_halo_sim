@@ -578,6 +578,10 @@ SpecialisedBatch MakeApexBatch() {
   return b;
 }
 
+// NOTE: test_incidence_sampling_polygon_oracle.cpp hand-copies these dist[]
+// literals (kDrop0/kDrop1/kDrop2) because this function has anonymous-namespace
+// (internal) linkage and cannot be called cross-translation-unit. Keep both
+// copies numerically in sync if these samples ever change.
 SpecialisedBatch MakeFaceDropBatch() {
   SpecialisedBatch b{ "face-drop", {} };
   b.samples.push_back({ 28.0f, 28.0f, 1.0f, 1.0f, 1.0f, { 0.3f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f } });

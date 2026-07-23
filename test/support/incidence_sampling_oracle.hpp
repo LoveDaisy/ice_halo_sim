@@ -20,14 +20,25 @@
 //   3. Comparators (AC1 per-face projected-area distribution, AC2 in-face
 //      uniformity) that consume an observed sample set and emit a verdict.
 //
-// Fan-triangulation target: the target is defined over the FAN-TRIANGULATION of
-// each face (fanned from corner 0, matching BuildMeshFromCfGeom), not a planar
-// polygon. For a planar convex face this is IDENTICAL to the whole-polygon target
-// (projected area = shoelace × cos; in-face = uniform-over-polygon); for a
-// degenerate, slightly non-planar face (some closed-form pyramid cone faces) the
-// fan is the honest description of the actual bent surface both the current
-// triangle sampler AND the future polygon sampler operate on. So it is the 口径-B
-// distribution-invariant target — see the DECISION note in the task progress log.
+// Fan-triangulation target (why fan, not whole-polygon shoelace): the target is
+// defined over the FAN-TRIANGULATION of each face (fanned from corner 0, matching
+// BuildMeshFromCfGeom), not a planar polygon. Diagnosis: some closed-form pyramid
+// cone faces have corners that are NOT exactly coplanar (a residual of the cone
+// construction), so a single whole-polygon shoelace/normal is ill-defined for
+// them — it silently picks one of several possible planes and disagrees with what
+// the mesh triangulation actually integrates over. The fan decomposition sidesteps
+// this: each fan triangle has its own well-defined normal/area from its own three
+// corners, so summing fan-triangle contributions is well-defined even when the
+// face as a whole is not planar. For a planar convex face this is IDENTICAL to the
+// whole-polygon target (projected area = shoelace × cos; in-face =
+// uniform-over-polygon); the fan formulation is a strict generalization, not a
+// different target. Architectural consequence for T2/T3 (polygon-granularity
+// sampler): this couples the oracle's ground truth to the fan-from-corner-0
+// convention — a future sampler is free to choose ANY per-face integration order
+// for its own implementation, but it must produce the SAME per-face
+// projected-area sum and the SAME in-face point distribution as the
+// fan-from-corner-0 decomposition, or this oracle will (correctly) flag it as a
+// distribution mismatch on non-planar faces.
 //
 // Independence discipline (a02): the oracle computes each fan triangle's normal
 // from its corners with the SAME winding as the mesh (Cross3(v1-v0, v2-v0)) and
@@ -525,12 +536,6 @@ inline Ac1Verdict CheckProjectedAreaDistribution(const Crystal& crystal, const f
   return v;
 }
 
-inline Ac1Verdict SampleAndCheckProjectedAreaDistribution(const Crystal& crystal, const float d[3], size_t n,
-                                                          uint32_t seed, double k_sigma) {
-  EntrySamples s = DriveEntrySampling(crystal, d, n, seed);
-  return CheckProjectedAreaDistribution(crystal, d, s.face, k_sigma);
-}
-
 // ---- AC2: in-face uniformity ----
 struct Ac2FaceResult {
   int face = -1;
@@ -645,12 +650,6 @@ inline Ac2Verdict CheckInFaceUniformity(const Crystal& crystal, const float d[3]
     v.per_face[f] = r;
   }
   return v;
-}
-
-inline Ac2Verdict SampleAndCheckInFaceUniformity(const Crystal& crystal, const float d[3], size_t n, uint32_t seed,
-                                                 double centroid_k_sigma, double moment_k_sigma) {
-  EntrySamples s = DriveEntrySampling(crystal, d, n, seed);
-  return CheckInFaceUniformity(crystal, d, s, centroid_k_sigma, moment_k_sigma);
 }
 
 }  // namespace test_support

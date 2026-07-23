@@ -33,7 +33,6 @@ import os
 import shutil
 import tempfile
 import unittest
-from pathlib import Path
 
 from test.e2e.base import LumiceTestCase
 from test.e2e.image_utils import HAS_PILLOW
