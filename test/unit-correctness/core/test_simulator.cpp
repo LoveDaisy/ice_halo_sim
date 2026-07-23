@@ -1042,5 +1042,56 @@ TEST(InitRayPolygonSampling, SelectedFacesAreFrontFacing) {
   }
 }
 
+// A face with vtx_cnt>=3 (not the whole-face degenerate case already handled
+// by CountEntrySubTris/BuildEntrySubTris skipping vtx_cnt<3) can still contain
+// one collapsed fan sub-triangle if two of its corners coincide. Before the
+// fix, Cross3 on the collapsed pair gave a zero vector, area correctly came
+// out 0, but Normalize3 on that same zero vector produced NaN — poisoning the
+// per-ray projected-weight table even though the sub-tri's area already
+// should have zeroed its selection weight. Regression guard: the degenerate
+// sub-tri's normal must be a finite zero, not NaN, and must not corrupt its
+// non-degenerate neighbor.
+TEST(InitRayPolygonSampling, DegenerateSubTriProducesFiniteZeroNotNaN) {
+  CrystalGeom cf{};
+  cf.face_cnt = 1;
+  cf.face_present[0] = true;
+  cf.face_vtx_cnt[0] = 4;
+  // Corners 0 and 1 coincide -> fan sub-tri (0,1,2) collapses to zero area.
+  // Corners 0,2,3 form a valid non-degenerate triangle.
+  const float corners[4][3] = { { 0, 0, 0 }, { 0, 0, 0 }, { 1, 0, 0 }, { 1, 1, 0 } };
+  for (int k = 0; k < 4; k++) {
+    std::memcpy(cf.face_vtx + static_cast<size_t>(k) * 3, corners[k], 3 * sizeof(float));
+  }
+
+  const size_t subtri_cnt = detail::CountEntrySubTris(cf);
+  ASSERT_EQ(subtri_cnt, 2u);
+  std::vector<detail::EntrySubTri> subtri(subtri_cnt);
+  detail::BuildEntrySubTris(cf, subtri.data());
+
+  // Degenerate sub-tri (0,1,2): area exactly 0, normal finite zero (not NaN).
+  EXPECT_FLOAT_EQ(subtri[0].area, 0.0f);
+  for (float c : subtri[0].n) {
+    ASSERT_TRUE(std::isfinite(c)) << "degenerate sub-tri produced a non-finite normal component";
+    EXPECT_FLOAT_EQ(c, 0.0f);
+  }
+  EXPECT_EQ(subtri[0].face_id, 0);
+
+  // Its non-degenerate neighbor (0,2,3) must be unaffected: positive area,
+  // finite unit normal.
+  EXPECT_GT(subtri[1].area, 0.0f);
+  for (float c : subtri[1].n) {
+    EXPECT_TRUE(std::isfinite(c));
+  }
+  EXPECT_EQ(subtri[1].face_id, 0);
+
+  // The per-ray weight InitRay_p_fid actually computes from this sub-tri must
+  // come out exactly 0.0f (not NaN) for any direction, so collapsed geometry
+  // is silently discarded via zero weight rather than corrupting the sampler.
+  const float d[3] = { 0.0f, 0.0f, -1.0f };
+  const float w0 = std::max(-Dot3(d, subtri[0].n) * subtri[0].area, 0.0f);
+  ASSERT_TRUE(std::isfinite(w0));
+  EXPECT_FLOAT_EQ(w0, 0.0f);
+}
+
 }  // namespace
 }  // namespace lumice

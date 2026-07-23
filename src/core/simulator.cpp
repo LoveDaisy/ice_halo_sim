@@ -51,36 +51,38 @@ namespace lumice {
  * @brief Sample on crystal & init origin (p, from_face_, to_face_) of rays.
  *        NOTE: direction of rays should be given.
  */
-// One fan sub-triangle of a present polygon face, built once per InitRay_p_fid
-// call from cf_geom_ corners. Carries its geometry (for the per-ray projected
-// weight + point sampling) and the compact present-face id it belongs to (==
-// the RaySeg::to_face_ value, matching PopulateFromCfGeom's numbering).
-struct EntrySubTri {
-  float v[9];   // 3 corners (fanned from corner 0)
-  float n[3];   // unit winding normal Cross3(v1-v0, v2-v0), normalized
-  float area;   // 0.5 * |Cross3(v1-v0, v2-v0)|
-  IdType face;  // compact present-face id (0..PolygonFaceCount()-1)
-};
+namespace detail {
 
-// Count the fan sub-triangles the present faces expand into (Σ max(vtx-2, 0)).
-static size_t CountEntrySubTris(const CrystalGeom& cf) {
+// Single source of truth for "how many fan sub-triangles does a face with
+// this many corners contribute" — shared by CountEntrySubTris (sizing) and
+// BuildEntrySubTris (filling) so the two can never disagree on which faces
+// are skipped.
+static constexpr int SubTriCountForFace(int vtx_cnt) {
+  return vtx_cnt >= 3 ? vtx_cnt - 2 : 0;
+}
+
+size_t CountEntrySubTris(const CrystalGeom& cf) {
   size_t cnt = 0;
   for (int slot = 0; slot < cf.face_cnt; slot++) {
-    if (cf.face_present[slot] && cf.face_vtx_cnt[slot] >= 3) {
-      cnt += static_cast<size_t>(cf.face_vtx_cnt[slot] - 2);
+    if (cf.face_present[slot]) {
+      cnt += static_cast<size_t>(SubTriCountForFace(cf.face_vtx_cnt[slot]));
     }
   }
   return cnt;
 }
 
-// Expand present faces into a flat fan sub-triangle table. Fan (0, k, k+1) for
-// k = 1..vtx_cnt-2, matching BuildMeshFromCfGeom and the T1 analytic oracle
-// (test/support/incidence_sampling_oracle.hpp): raw winding normal from the
-// triangle's own corners (no outward reorientation), area from the same cross
-// product. The compact present-face id is assigned by iterating slots in
-// ascending order and skipping absent ones — the same rule PopulateFromCfGeom
-// uses to number poly_face_n_/poly_face_fn_, so to_face_ indexes them correctly.
-static void BuildEntrySubTris(const CrystalGeom& cf, EntrySubTri* out) {
+// Fan (0, k, k+1) for k = 1..vtx_cnt-2, matching BuildMeshFromCfGeom and the
+// T1 analytic oracle (test/support/incidence_sampling_oracle.hpp): raw
+// winding normal from the triangle's own corners (no outward reorientation),
+// area from the same cross product. The compact present-face id is assigned
+// by iterating slots in ascending order and skipping absent ones — the same
+// rule PopulateFromCfGeom uses to number poly_face_n_/poly_face_fn_, so
+// to_face_ indexes them correctly. (If a third independent implementation of
+// this fan/winding convention is ever needed — e.g. by the T3 GPU follow-up —
+// extracting a shared helper with BuildMeshFromCfGeom should be reconsidered;
+// today's two implementations serve different output shapes — a persistent
+// Mesh vs. this one-shot stack CSR table — so kept separate, see task plan.)
+void BuildEntrySubTris(const CrystalGeom& cf, EntrySubTri* out) {
   size_t t = 0;
   IdType present_id = 0;
   for (int slot = 0; slot < cf.face_cnt; slot++) {
@@ -89,7 +91,7 @@ static void BuildEntrySubTris(const CrystalGeom& cf, EntrySubTri* out) {
     }
     const IdType face_id = present_id++;
     const int vtx_cnt = cf.face_vtx_cnt[slot];
-    if (vtx_cnt < 3) {
+    if (SubTriCountForFace(vtx_cnt) == 0) {
       // Degenerate/collapsed face: contributes no sub-triangle and thus no
       // selection weight — the zero-weight discard convention, no new mechanism.
       continue;
@@ -103,12 +105,25 @@ static void BuildEntrySubTris(const CrystalGeom& cf, EntrySubTri* out) {
       float e1[3]{ st.v[3] - st.v[0], st.v[4] - st.v[1], st.v[5] - st.v[2] };
       float e2[3]{ st.v[6] - st.v[0], st.v[7] - st.v[1], st.v[8] - st.v[2] };
       Cross3(e1, e2, st.n);
-      st.area = Norm3(st.n) / 2.0f;
-      Normalize3(st.n);
-      st.face = face_id;
+      const float raw_len = Norm3(st.n);
+      st.area = raw_len / 2.0f;
+      if (raw_len > 0.0f) {
+        // Guard the division, not a fuzzy closeness check: this is the exact
+        // singular case (zero-length cross product from collapsed/collinear
+        // corners within an otherwise-valid vtx_cnt>=3 face), not a tolerance
+        // band — any positive raw_len normalizes safely regardless of scale.
+        st.n[0] /= raw_len;
+        st.n[1] /= raw_len;
+        st.n[2] /= raw_len;
+      } else {
+        st.n[0] = st.n[1] = st.n[2] = 0.0f;
+      }
+      st.face_id = face_id;
     }
   }
 }
+
+}  // namespace detail
 
 void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr) {
   if (!ray_buf_ptr) {
@@ -124,7 +139,7 @@ void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr) {
   // cf_geom_ corners and each sub-triangle carries its own compact present-face
   // id, so to_face_ is read directly (no PolygonFaceOfTri reverse lookup).
   const CrystalGeom& cf = curr_crystal.CfGeom();
-  const size_t subtri_cnt = CountEntrySubTris(cf);
+  const size_t subtri_cnt = detail::CountEntrySubTris(cf);
 
   if (subtri_cnt == 0) {
     // No present face with >=3 corners (empty/degenerate crystal — only the
@@ -142,19 +157,19 @@ void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr) {
   // Worst case is 20 faces * 30 fan-tris = 600, well past the stack size, so
   // fall back to the heap (same stack+heap pattern the old sampler used).
   constexpr size_t kMaxSubTris = 64;
-  EntrySubTri subtri_buf[kMaxSubTris];
+  detail::EntrySubTri subtri_buf[kMaxSubTris];
   float proj_prob_buf[kMaxSubTris];
-  std::unique_ptr<EntrySubTri[]> subtri_heap;
+  std::unique_ptr<detail::EntrySubTri[]> subtri_heap;
   std::unique_ptr<float[]> proj_prob_heap;
-  EntrySubTri* subtri = subtri_buf;
+  detail::EntrySubTri* subtri = subtri_buf;
   float* proj_prob = proj_prob_buf;
   if (subtri_cnt > kMaxSubTris) {
-    subtri_heap = std::make_unique<EntrySubTri[]>(subtri_cnt);
+    subtri_heap = std::make_unique<detail::EntrySubTri[]>(subtri_cnt);
     proj_prob_heap = std::make_unique<float[]>(subtri_cnt);
     subtri = subtri_heap.get();
     proj_prob = proj_prob_heap.get();
   }
-  BuildEntrySubTris(cf, subtri);
+  detail::BuildEntrySubTris(cf, subtri);
 
   for (auto& r : ray_buf) {
     const auto* d = r.d_;
@@ -167,7 +182,7 @@ void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr) {
     // Initial entry segment: no source face, hit face = the sampled sub-tri's
     // polygon face (compact present id, read directly — no reverse lookup).
     r.from_face_ = kInvalidId;
-    r.to_face_ = subtri[tri_id].face;
+    r.to_face_ = subtri[tri_id].face_id;
   }
 }
 

@@ -236,6 +236,29 @@ namespace detail {
 // to label the initial entry segment. Exposed for unit-test access; not part
 // of the public C API.
 IdType PolygonFaceOfTri(const Crystal& crystal, int tri_id);
+
+// One fan sub-triangle of a present polygon face, built once per InitRay_p_fid
+// call from cf_geom_ corners. Carries its geometry (for the per-ray projected
+// weight + point sampling) and the compact present-face id it belongs to (==
+// the RaySeg::to_face_ value, matching PopulateFromCfGeom's numbering).
+// Exposed for unit-test access (constructing a synthetic CrystalGeom with a
+// degenerate fan sub-triangle); not part of the public C API.
+struct EntrySubTri {
+  float v[9];      // 3 corners (fanned from corner 0)
+  float n[3];      // unit winding normal Cross3(v1-v0, v2-v0), normalized (zero if area == 0)
+  float area;      // 0.5 * |Cross3(v1-v0, v2-v0)|
+  IdType face_id;  // compact present-face id (0..PolygonFaceCount()-1)
+};
+
+// Count the fan sub-triangles the present faces expand into (Σ max(vtx-2, 0)).
+size_t CountEntrySubTris(const CrystalGeom& cf);
+
+// Expand present faces into a flat fan sub-triangle table. Fan (0, k, k+1) for
+// k = 1..vtx_cnt-2, matching BuildMeshFromCfGeom and the T1 analytic oracle
+// (test/support/incidence_sampling_oracle.hpp). A sub-triangle whose corners
+// are degenerate (collapsed/collinear, area == 0) gets a zero normal instead
+// of a NaN one — its area already zeroes its selection weight downstream.
+void BuildEntrySubTris(const CrystalGeom& cf, EntrySubTri* out);
 }  // namespace detail
 
 }  // namespace lumice
