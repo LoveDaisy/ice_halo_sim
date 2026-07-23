@@ -315,14 +315,17 @@ TEST(IncidenceSamplingOracle, Ac2SelfProof) {
 // issue: the area weight drops the front-face sign, using |d·n|·A instead of
 // max(-d·n·A, 0). This lights back faces that the correct target gives zero
 // weight, so the AC1 comparator (built on the true, unmodified oracle) must
-// reject it. Every non-weight primitive (RandomSample, SampleTrianglePoint,
-// PolygonFaceOfTri, the triangle getters) is the production implementation.
+// reject it. Every non-weight primitive (RandomSample, SampleTrianglePoint, and
+// the cf_geom fan sub-triangles carrying vtx/normal/area/face_id) is the
+// production implementation.
 EntrySamples SampleEntryPointBiased(const Crystal& crystal, const float d[3], size_t n, uint32_t seed) {
   RandomNumberGenerator::GetInstance().SetSeed(seed);
-  const size_t total_faces = crystal.TotalTriangles();
-  const float* face_area = crystal.GetTirangleArea();
-  const float* face_norm = crystal.GetTriangleNormal();
-  const float* face_vtx = crystal.GetTriangleVtx();
+  const CrystalGeom& cf = crystal.CfGeom();
+  std::vector<detail::EntrySubTri> sub(detail::CountEntrySubTris(cf));
+  if (!sub.empty()) {
+    detail::BuildEntrySubTris(cf, sub.data());
+  }
+  const size_t total_faces = sub.size();
 
   std::vector<float> proj_prob(total_faces);
   EntrySamples out;
@@ -331,14 +334,14 @@ EntrySamples SampleEntryPointBiased(const Crystal& crystal, const float d[3], si
   for (size_t i = 0; i < n; i++) {
     for (size_t j = 0; j < total_faces; j++) {
       // BIAS: absolute value instead of max(-dot, 0) — lights back faces too.
-      proj_prob[j] = std::abs(Dot3(d, face_norm + j * 3)) * face_area[j];
+      proj_prob[j] = std::abs(Dot3(d, sub[j].n)) * sub[j].area;
     }
     int tri_id = 0;
     RandomSample(static_cast<int>(total_faces), proj_prob.data(), &tri_id);
     float p[3];
-    SampleTrianglePoint(face_vtx + tri_id * 9, p);
+    SampleTrianglePoint(sub[tri_id].v, p);
     out.point[i] = { p[0], p[1], p[2] };
-    out.face[i] = crystal.PolygonFaceOfTri(tri_id);
+    out.face[i] = sub[tri_id].face_id;
   }
   return out;
 }
@@ -411,24 +414,18 @@ TEST(IncidenceSamplingOracle, DISABLED_CalibrationScan) {
 }
 
 // ================================================================================
-// CPU-only white-box gate for the GPU entry-sampler data-source swap. The GPU
-// backends (Metal/CUDA) feed their device entry sampler a triangle SoA built on
-// the fly from cf_geom_ via detail::BuildEntrySubTris (the same helper CPU
-// InitRay_p_fid uses) rather than the crystal's triangle Mesh cache
-// (Crystal::GetTriangleVtx/Normal/Area + PolygonFaceOfTri). This section proves
-// that swap is behavior-preserving without any GPU hardware:
-//   (a) MeshDataMatchesCfGeomSubTris — the cf_geom-direct SoA is numerically the
-//       SAME geometry the Mesh cache getters return (count, fan order, per-tri
-//       vtx/norm/area, and tri→poly-face id), so swapping the upload data source
-//       cannot change what the device kernel sees.
-//   (b) DeviceSampler{Ac1,Ac2,RedState} — the ACTUAL device sampling routines
-//       (lm_pcg::sample_triangle + lm_pcg::categorical_sample from
-//       src/core/shared/pcg_shared.h, the exact code the gen_root/transit kernels
-//       run) driven over that SoA reproduce the analytic projected-area target
-//       (AC1) + in-face uniformity (AC2), and a biased weight is still rejected
-//       (teeth). This is stronger than data-equivalence alone: it verifies "if the
-//       upload feeds the right data, the device selection math is analytically
-//       correct."
+// CPU-only white-box gate for the GPU entry-sampler. The GPU backends
+// (Metal/CUDA) feed their device entry sampler a triangle SoA built on the fly
+// from cf_geom_ via detail::BuildEntrySubTris (the same helper CPU
+// InitRay_p_fid uses). This section proves the device selection math is correct
+// without any GPU hardware:
+//   DeviceSampler{Ac1,Ac2,RedState} — the ACTUAL device sampling routines
+//   (lm_pcg::sample_triangle + lm_pcg::categorical_sample from
+//   src/core/shared/pcg_shared.h, the exact code the gen_root/transit kernels
+//   run) driven over that SoA reproduce the analytic projected-area target
+//   (AC1) + in-face uniformity (AC2), and a biased weight is still rejected
+//   (teeth): "if the upload feeds the right data, the device selection math is
+//   analytically correct."
 // ================================================================================
 
 // SoA layout identical to the device geometry pool: tri_vtx[9*T] / tri_norm[3*T]
@@ -499,60 +496,7 @@ EntrySamples DriveEntrySamplingDevice(const Crystal& crystal, const float d[3], 
   return out;
 }
 
-// ---- (a) Data-equivalence: cf_geom-direct SoA == Mesh cache getters ------------
-TEST(DeviceSamplingPolygonOracle, MeshDataMatchesCfGeomSubTris) {
-  for (auto& f : MakeFixtures()) {
-    const Crystal& c = f.crystal;
-    const size_t tri_mesh = c.TotalTriangles();
-    const size_t sub_cnt = detail::CountEntrySubTris(c.CfGeom());
-    ASSERT_EQ(sub_cnt, tri_mesh) << f.label << ": sub-tri count diverged from Mesh triangle count";
-
-    std::vector<detail::EntrySubTri> sub(sub_cnt);
-    detail::BuildEntrySubTris(c.CfGeom(), sub.data());
-    const float* mv = c.GetTriangleVtx();
-    const float* mn = c.GetTriangleNormal();
-    const float* ma = c.GetTirangleArea();
-
-    for (size_t t = 0; t < sub_cnt; t++) {
-      // Exact integer equality: BuildEntrySubTris carries the compact present-face
-      // id directly, and it MUST equal PolygonFaceOfTri's reverse-lookup value.
-      EXPECT_EQ(sub[t].face_id, c.PolygonFaceOfTri(static_cast<int>(t)))
-          << f.label << " tri " << t << ": face_id disagreement";
-      // Vertices: same corners up to the Mesh path's 1e-6 vertex dedup (a shared
-      // corner collapses to the first-seen pool coord). 1e-4 covers that noise.
-      for (int k = 0; k < 9; k++) {
-        EXPECT_NEAR(sub[t].v[k], mv[t * 9 + k], 1e-4f) << f.label << " tri " << t << " vtx[" << k << "]";
-      }
-      // Area matches regardless of degeneracy (both 0 for a collapsed sub-tri).
-      EXPECT_NEAR(sub[t].area, ma[t], 1e-4f) << f.label << " tri " << t << " area";
-      // Normal: only compare unit normals for non-degenerate sub-tris. The Mesh
-      // path (Crystal::ComputeCacheData) Normalize3's a zero cross product without
-      // a length guard, so a zero-area Mesh triangle can hold a NaN normal;
-      // BuildEntrySubTris guards it to a finite zero. A degenerate sub-tri's
-      // normal is never read (its area zeroes the weight), so this divergence is
-      // benign — but the cf_geom side must still be finite (the T3 顺带修复).
-      if (sub[t].area > 1e-6f) {
-        for (int k = 0; k < 3; k++) {
-          EXPECT_NEAR(sub[t].n[k], mn[t * 3 + k], 1e-4f) << f.label << " tri " << t << " norm[" << k << "]";
-        }
-      } else {
-        for (float cval : sub[t].n) {
-          EXPECT_TRUE(std::isfinite(cval)) << f.label << " tri " << t << ": degenerate normal not finite";
-        }
-      }
-    }
-  }
-
-  // Mesh(0,0) degenerate crystal (default-constructed = the production reject
-  // product): both the Mesh count and the cf_geom sub-tri count must be 0 and
-  // neither call may crash. This is the empty-crystal branch the GPU upload's
-  // BackendUnavailableError / ring0-legal degenerate-slot paths already cover.
-  Crystal empty;
-  EXPECT_EQ(empty.TotalTriangles(), 0u);
-  EXPECT_EQ(detail::CountEntrySubTris(empty.CfGeom()), 0u);
-}
-
-// ---- (b) Device sampling math: AC1 (face distribution) -------------------------
+// ---- Device sampling math: AC1 (face distribution) -----------------------------
 TEST(DeviceSamplingPolygonOracle, DeviceSamplerMathPassesAc1) {
   auto fixtures = MakeFixtures();
   uint32_t seed = 54321;

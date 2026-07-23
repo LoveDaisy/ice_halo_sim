@@ -831,8 +831,8 @@ TEST(SimulatorEffectiveSeed, TwoZeroSeedInstancesDistinct) {
 // upper-pyramid faces onto the lowest polygon index on ~≥87.4° wedge because
 // adjacent upper-face normals dot to ~0.9994). Step 4 of the closed-form
 // representation swap replaced the whole argmax reversal with a parametric
-// slot→poly-face constant table populated at Crystal construction time
-// (Crystal::PolygonFaceOfTri now reads a precomputed array). The original
+// slot→poly-face id carried directly by each fan sub-triangle
+// (detail::EntrySubTri::face_id, derived from cf_geom_ presence). The original
 // failure mode is *structurally* unreachable through the closed-form path —
 // the map is not rediscovered per call. This sentinel is kept as a
 // higher-level end-to-end assertion (extreme-wedge crystals expose 6 distinct
@@ -846,16 +846,24 @@ constexpr IdType kUpperPyramidFnLo = 13;
 constexpr IdType kUpperPyramidFnHi = 18;
 
 size_t CountDistinctUpperPolyFaces(const Crystal& crystal, bool* any_invalid_out = nullptr) {
+  // Rebuild the fan sub-triangles from cf_geom_ (the same helper the CPU/GPU
+  // entry samplers use); each sub-triangle carries the compact present-face id
+  // it belongs to (== the old PolygonFaceOfTri result).
+  const CrystalGeom& cf = crystal.CfGeom();
+  std::vector<detail::EntrySubTri> sub(detail::CountEntrySubTris(cf));
+  if (!sub.empty()) {
+    detail::BuildEntrySubTris(cf, sub.data());
+  }
   std::set<IdType> polys;
   bool any_invalid = false;
-  for (size_t t = 0; t < crystal.TotalTriangles(); t++) {
-    IdType fn = crystal.GetFn(static_cast<int>(t));
-    if (fn < kUpperPyramidFnLo || fn > kUpperPyramidFnHi) {
-      continue;
-    }
-    IdType poly = crystal.PolygonFaceOfTri(static_cast<int>(t));
+  for (size_t t = 0; t < sub.size(); t++) {
+    IdType poly = sub[t].face_id;
     if (poly == kInvalidId) {
       any_invalid = true;
+      continue;
+    }
+    IdType fn = crystal.GetFn(poly);
+    if (fn < kUpperPyramidFnLo || fn > kUpperPyramidFnHi) {
       continue;
     }
     polys.insert(poly);
