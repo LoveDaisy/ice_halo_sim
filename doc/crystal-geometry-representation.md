@@ -1,10 +1,13 @@
 # Crystal Geometry: Generation and In-Memory Representation
 
-> Status: **diagnosis + redesign direction**, not as-built. The pipeline described in §1 is
-> what the tree does today; §4 is a proposed target that has not been built or validated.
-> Read this before touching crystal construction, the polygon-face tables, the face-number
-> map, or any backend's geometry upload — and read it *together with*
-> `numerical-robustness.md`, which gives the conventions for surviving the current design.
+> Status: **redesign has largely landed as-built (PR #214)**; §1 describes the **pre-#214**
+> pipeline (kept as the diagnosis of why the redesign was needed). The closed-form
+> representation of §4 is now the production construction path — see §4.a/§4.b/§4.c for exactly
+> what landed and what remains. Read this before touching crystal construction, the polygon-face
+> tables, the face-number map, or any backend's geometry upload — and read it *together with*
+> `numerical-robustness.md` (conventions for the intersection-test epsilons that remain) and
+> `geometry-randomization-value-and-measurement.md` / `geometry-randomization-perf.md` (what the
+> closed-form floor unlocked for the randomization moat).
 > 中文速记见末尾。
 
 ## Why this document exists
@@ -131,8 +134,9 @@ The prism half of the target representation has landed as
 promoted `__int128` exact oracle at `test/support/exact_prism_oracle.hpp` and a
 three-way golden-analytic sweep at
 `test/golden-analytic/core/test_closed_form_prism.cpp` (well-conditioned 1e5
-samples; degenerate σ ∈ {0.3, 0.5, 0.8}, 4e4 each). New and production paths
-**coexist**; the swap-in belongs to a later subtask. Construction cost measured
+samples; degenerate σ ∈ {0.3, 0.5, 0.8}, 4e4 each). **The swap-in has landed
+(PR #214): `ComputeClosedFormPrism` is now the production construction path
+(`crystal.cpp:363`).** Construction cost measured
 against `BM_MakeCrystal/prism_random` (10970 ns baseline) and
 `BM_TopologyReuse/prism` (130 ns floor): the closed-form implementation runs at
 ~96 ns per prism on Apple Silicon (`BM_ComputeClosedFormPrism`), ~114× faster
@@ -149,8 +153,8 @@ sweep across both construction paths; extreme-flat tail α ∈ [85°, 89.5°];
 degenerate σ ∈ {0.30, 0.50}; shoulder / apex / face-drop specialty cases with
 a `path_tag_union` assertion that these walk the same solver branches as
 regular samples — the "no special-case branch" invariant is executable, not
-just review-time). New and production paths **coexist**; the swap-in belongs
-to a later subtask.
+just review-time). **The swap-in has landed (PR #214): `ComputeClosedFormPyramid`
+is now the production construction path (`crystal.cpp:402`).**
 
 The pyramid side originally shipped with a second `__int128` exact oracle
 that carried the cone angles as *free symbols* (general C(n,3) plane-triple
@@ -178,6 +182,26 @@ Construction cost measured in the same session as
 production path. The gap versus prism (30× more work per call) tracks the
 structural cost: pyramid enumerates up to 20 candidate z-events and per-event
 corner deaths across 20 direction triples, vs prism's single 2D solve.
+
+### 4.c Landing status (representation swap) — what changed, what remains
+
+Precisely, as-built after PR #214 (do not over-read "as-built" as "every §1 artifact is gone"):
+
+- **Landed.** Closed-form construction is the production path (`crystal.cpp:363`/`:402`). A flat
+  per-face representation carries face vertices (`kCrystalGeomMaxVtxPerFace`) with
+  `poly_face_n_` no longer populated from a back-derived table. The **two-hop face-number
+  reversal is deleted** — `FillPerFaceTopology` and `poly_face_tri_id_` survive only as
+  historical comments (`c_api.cpp` / `crystal.hpp`), not live code. The `C(n,3)` solver + dedup
+  no longer feed the prism/pyramid factories. GUI required zero changes (C-API boundary).
+- **Retained (honest).** `Crystal::PolygonFaceOfTri` (triangle → polygon-face) is **still live**
+  (`simulator.cpp:84`, `crystal.cpp:641`, Metal `metal_trace_backend.mm`): the triangle mesh is
+  still generated (fan-triangulated from the closed-form outlines) for the paths that consume
+  triangles, and those paths still map a triangle back to its polygon face. This is a bounded
+  `argmax` on a *known-correct* per-face representation, not the old discover-topology-from-
+  coordinates reversal, so it is not in the epsilon-defect family — but it is not zero, and the
+  §2 "back-mapping is the substrate of the index-defect family" critique is only *mostly*
+  retired, not entirely.
+- **Concave pyramids** remain on the old path (§5).
 
 ## 5. What it does **not** dissolve (honest limits)
 

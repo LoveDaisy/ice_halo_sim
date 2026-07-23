@@ -7,6 +7,47 @@ shape. Making that fast — reaching a target statistical fidelity in the least 
 is a moat. This document is the cost model and the lever map: read it before optimizing the
 geometry-randomization path so you don't chase a phantom.
 
+> **Read `geometry-randomization-value-and-measurement.md` alongside this.** That doc owns the
+> *value* side (does randomization converge to the right image, and where the effect lives);
+> this doc owns the *cost* side. The "equal-error throughput" metric below is a **variance-axis**
+> quantity — it measures how fast, not whether it is right.
+
+## Update — post closed-form landing (PR #214/#217/#218): C is superseded, the wall moved
+
+The body below (lever map, "B and C inseparable", the topology-reuse analysis) is the reasoning
+*as it stood on the old pipeline*. The closed-form crystal representation has since landed
+(PR #214; see `crystal-geometry-representation.md`), which changes two load-bearing facts:
+
+- **C (topology reuse) is not merely blocked — it is the wrong lever.** Closed-form construction
+  makes the geometry *compute* ~92 ns, which is only ~5% of `MakeCrystal`'s cost; the other ~95%
+  is `Crystal` *object* construction (~1.66 µs on Metal, ~2.5 µs on CUDA — host build 93%, H2D
+  upload 7% measured warm). C optimized the 5%. The premise that made "B and C inseparable" —
+  that construction *is* the reusable topology derivation — is dissolved: B alone now delivers a
+  larger equal-error moat (≈28–40× on Metal) than the old projection expected. Do not re-attempt
+  C. The real remaining lever is **shrinking `MakeCrystal` object construction** (cross-backend);
+  its ROI is largest on multi-crystal scenes (see next).
+- **The cost-model numbers below (10.12 µs `MakeCrystal`, 98.4% mesh re-derivation) are the old
+  pipeline.** Post closed-form the wall is object construction, not topology re-derivation.
+
+### K=64 penalty is scene-dependent — measured across scenes (not just single-crystal single-MS)
+
+`geom_clock` was measured for its cost only on the single-crystal single-MS bench (≈0.37×). It
+is **not** a universal factor. Across a scene spread (Metal `--benchmark`, best-of-3):
+
+| scene | K=D / det | K=64 / det |
+|---|---|---|
+| single-MS 1-crystal (2048) | 1.17 | 0.36 |
+| 2-MS 1-crystal (256) | 0.98 | 0.43 |
+| 3-MS 7-crystal (2048) | 0.96 | 0.28 |
+| 3-MS 8-crystal mixed-pyramid (2048) | 0.89 | 0.25 |
+
+- **"Turning randomization on is ≈ free" (K=D / det ≈ 1) holds across scenes.**
+- **The K=64 penalty is worse on multi-crystal / pyramid scenes** (0.25 vs 0.36). Construction is
+  paid per `(crystal × MS-layer)` shape pool, so pool count grows *faster* than per-ray trace
+  cost on heavy scenes — refuting the naive "heavier trace dilutes the penalty" expectation. A
+  performance-measurement config must therefore include a multi-crystal multi-MS scene, and the
+  "shrink object construction" lever's ROI is largest exactly there.
+
 ## The one thing to internalize first: the metric is equal-error throughput
 
 Raw ray throughput is **not** the objective and is **already adequate**. The objective is
