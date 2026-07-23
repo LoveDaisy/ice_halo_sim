@@ -1345,13 +1345,25 @@ __global__ void transit_multi_ms_kernel(
 
   // 4. Uniform sample inside the chosen triangle → entry point p.
   float p[3];
-  lm_pcg::sample_triangle(stream, d_tri_vtx_ray + tri_id * 9u, p);
 
   // 5. tri_to_poly. kInvalidId (uint16_t 0xffff) signals "triangle has no
   //    polygon backing under the coplanar-floor predicate" — mirror Metal's
   //    InitRay_p_fid zero-weight fallback so downstream trace dispatches see
   //    a benign drop (w=0 short-circuits the entry-face emit and main loop).
-  uint16_t to_face_u16 = d_tri_to_poly_ray[tri_id];
+  //    K-shape degenerate-slot guard (mirrors gen_root_kernel): shape_tri_cnt
+  //    == 0 → shape_tri_off aliases the next slot's triangles / pool tail, so
+  //    skip both reads and route into the kInvalidId zero-weight drop.
+  //    Non-degenerate rays are unaffected (AC2 bit-exact path unchanged).
+  uint16_t to_face_u16;
+  if (shape_tri_cnt == 0u) {
+    p[0] = 0.0f;
+    p[1] = 0.0f;
+    p[2] = 0.0f;
+    to_face_u16 = kInvalidIdU16;
+  } else {
+    lm_pcg::sample_triangle(stream, d_tri_vtx_ray + tri_id * 9u, p);
+    to_face_u16 = d_tri_to_poly_ray[tri_id];
+  }
   float w = d_cont_w_in[tid];
   uint32_t to_face_u32;
   if (to_face_u16 == kInvalidIdU16) {
@@ -1551,10 +1563,26 @@ __global__ void gen_root_kernel(float* __restrict__ d_root_d,           // 3 × 
   float u_cat = lm_pcg::pcg_uniform(stream);
   uint32_t tri_id = lm_pcg::categorical_sample(proj_prob, n_tri, u_cat);
   float p[3];
-  lm_pcg::sample_triangle(stream, d_tri_vtx_ray + tri_id * 9u, p);
 
   // 4. tri_to_poly. kInvalidId → zero-weight drop (InitRay_p_fid fallback).
-  uint16_t to_face_u16 = d_tri_to_poly_ray[tri_id];
+  //    K-shape degenerate-slot guard: when shape_tri_cnt == 0 (ring0-legal
+  //    zero-triangle Crystal that "contributes nothing"), shape_tri_off aliases
+  //    the NEXT pool slot's packed triangles (or runs past the pool tail on the
+  //    last slot), so sampling tri_id 0 here would silently read a neighbor
+  //    shape's vtx / tri_to_poly. Skip both reads and route into the existing
+  //    kInvalidId zero-weight drop below — same sentinel, no new mechanism.
+  //    Non-degenerate rays never take this branch, so the K==0 / AC2 bit-exact
+  //    path is numerically unchanged.
+  uint16_t to_face_u16;
+  if (shape_tri_cnt == 0u) {
+    p[0] = 0.0f;
+    p[1] = 0.0f;
+    p[2] = 0.0f;
+    to_face_u16 = kInvalidIdU16;
+  } else {
+    lm_pcg::sample_triangle(stream, d_tri_vtx_ray + tri_id * 9u, p);
+    to_face_u16 = d_tri_to_poly_ray[tri_id];
+  }
   float weight = d_wl_pool[wl_idx].spd_weight;
   uint32_t to_face_u32;
   if (to_face_u16 == kInvalidIdU16) {
@@ -2635,7 +2663,26 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
         size_t poly_cnt = crystal.PolygonFaceCount();
         size_t tri_cnt  = crystal.TotalTriangles();
         if (poly_cnt == 0 || tri_cnt == 0) {
-          throw BackendUnavailableError("CudaTraceBackend::BuildGeomPool: degenerate crystal geometry");
+          // Ring0-legal degenerate slot: a zero-triangle Crystal is a valid
+          // "contributes nothing" product (Crystal::MakePrismClosedForm returns
+          // Mesh(0,0) when the closed-form validity gate fails). Tolerate it
+          // exactly like Metal's UploadCrystalPool — record a {poly_off, 0,
+          // tri_off, 0} shape row with no geometry bytes and DO NOT advance
+          // poly_acc/tri_acc. The per-ray shape pick in gen_root_kernel /
+          // transit_multi_ms_kernel drops any ray that lands on a tri_cnt==0
+          // slot (zero weight, kInvalidId face). Throwing here was the root
+          // cause of the CPU-fallback + PolygonFaceOfTri log-storm: one
+          // degenerate slot in a 512-shape K-pool must not fail the whole
+          // backend. `continue` skips the geometry getters (safe on Mesh(0,0)).
+          // The kMaxTriPerKernel throw below is a distinct kernel-stack bound,
+          // unrelated to ring0 degeneracy, and stays fatal.
+          pool_poly_off_.push_back(poly_acc);
+          pool_poly_cnt_.push_back(0u);
+          pool_tri_off_.push_back(tri_acc);
+          pool_tri_cnt_.push_back(0u);
+          pool_crystals_.push_back(std::move(crystal));
+          ++pool_shape_count_this_batch_;
+          continue;
         }
         if (tri_cnt > static_cast<size_t>(lm_pcg::kMaxTriPerKernel)) {
           throw BackendUnavailableError(

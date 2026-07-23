@@ -1,0 +1,15 @@
+{
+  "crystal": [{ "id": 1, "type": "prism",
+    "shape": { "height": 1.2, "face_distance": [{"type":"gauss","mean":1.0,"std":0.50}, {"type":"gauss","mean":1.0,"std":0.50}, {"type":"gauss","mean":1.0,"std":0.50}, {"type":"gauss","mean":1.0,"std":0.50}, {"type":"gauss","mean":1.0,"std":0.50}, {"type":"gauss","mean":1.0,"std":0.50}] },
+    "axis": { "azimuth": {"type":"uniform","mean":0.0,"std":360.0},
+              "roll": {"type":"uniform","mean":0.0,"std":360.0},
+              "zenith": {"type":"gauss","mean":90.0,"std":0.8} } }],
+  "filter": [{ "id": 1, "type": "entry_exit", "entry": 3, "exit": 5, "action": "filter_in" }],
+  "scene": { "light_source": { "type": "sun", "altitude": 20.0, "azimuth": 0, "diameter": 0.5,
+               "spectrum": [{"wavelength": 550, "weight": 1.0}] },
+    "ray_num": 400000, "max_hits": 8, "geom_clock": 64,
+    "scattering": [{ "prob": 0.0, "entries": [{"crystal": 1, "proportion": 1, "filter": 1}] }] },
+  "render": [{ "id": 1, "lens": { "type": "dual_fisheye_equal_area", "fov": 360 },
+               "resolution": [512, 256], "visible": "full",
+               "ray_color": [1,1,1], "background_color": [0,0,0] }]
+}

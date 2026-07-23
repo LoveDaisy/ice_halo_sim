@@ -189,12 +189,13 @@ TEST(CudaRichExit, ExitFaceIsValid) {
 }
 
 // =============================================================================
-// task-exit-seam-crystal-count: CUDA backend reports final-layer setting count.
-// Semantics: return value is the LAST MS layer's setting count (mirrors
-// Impl::final_layer_crystals_ populated during BeginSession), not a cross-layer
-// sum. Locks plan §2 default assumption 2.
+// K-shape geometry pool: GetLastBatchCrystalCount reports the CROSS-LAYER sum
+// of distinct pool shapes built during the batch (Σ layers Σ ci P_ci). At the
+// default knob LUMICE_GPU_GEOM_CLOCK=0, P_ci collapses to 1 per ci, so the
+// return value equals Σ layers Σ ci 1 = the cross-layer setting count. Same
+// semantic as Metal (see MetalTraceBackend.GetLastBatchCrystalCountSumsPoolShapesAcrossLayers).
 // =============================================================================
-TEST(CudaBackendCrystalCount, ReturnsFinalLayerSettings) {
+TEST(CudaBackendCrystalCount, GetLastBatchCrystalCountSumsPoolShapesAcrossLayers) {
   if (!CudaDeviceAvailable()) {
     GTEST_SKIP() << "No CUDA device available on this host.";
   }
@@ -216,7 +217,8 @@ TEST(CudaBackendCrystalCount, ReturnsFinalLayerSettings) {
   }
 
   // Case 2 — multi MS scene with 3 settings on the FINAL layer, 1 on the
-  // first. Return value MUST be 3, not 4 (cross-layer sum).
+  // first. Return value MUST be the cross-layer sum 1 + 3 = 4, not the
+  // final-layer-only count (3).
   {
     auto scene = MakePrismScene(/*max_hits=*/4);
     // Convert single-MS scene to 2-MS: original layer becomes the first
@@ -246,7 +248,9 @@ TEST(CudaBackendCrystalCount, ReturnsFinalLayerSettings) {
 
     CudaTraceBackend backend;
     backend.BeginSession(spec);
-    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 3u) << "Final-layer settings count, not cross-layer sum (would be 4)";
+    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 4u)
+        << "Cross-layer pool-shape sum at K=0: 1 (layer 0) + 3 (layer 1). "
+           "Pre-K-pool semantic was final-layer settings only (3).";
     backend.EndSession();
   }
 }
