@@ -117,7 +117,7 @@ static AxisDist g_axis_buf[3];  // zenith, azimuth, roll
 constexpr size_t kSummandRowBufSize = 256;
 // UI soft cap (kMaxSummandRows): prevents unbounded row growth from the "+ Add"
 // button before the real ABI-layer limits kick in. The authoritative overflow
-// gates live in file_io.cpp::FillLumiceConfig (ExpandSopToClauses → clauses vec
+// gates live in file_io.cpp::BuildScene (ExpandSopToClauses → clauses vec
 // with LUMICE_MAX_CONFIG_CLAUSES cap) and BuildExportJsonOrWarn; those remain
 // the last-word validators. The ABI ceiling is now much higher (v4.9,
 // task-host-abi-cpu-caps: LUMICE_MAX_CONFIG_CLAUSES=4096), but this UI soft
@@ -891,7 +891,7 @@ static void RenderSummandRowList() {
   }
 
   // Add-row button: capped at kMaxSummandRows (soft UI cap; hard cap enforced by
-  // FillLumiceConfig / BuildExportJsonOrWarn at the ABI boundary).
+  // BuildScene / BuildExportJsonOrWarn at the ABI boundary).
   const bool at_cap = g_summand_rows.size() >= kMaxSummandRows;
   ImGui::BeginDisabled(at_cap);
   if (ImGui::Button("+ Add OR row##summand_add", ImVec2(140, 0))) {
@@ -958,7 +958,7 @@ static void RenderSummandRowList() {
     // learns early — before hitting OK / Run — that a ';'-heavy row will
     // trip the ABI cap. Delegates to SummarizeSopExpansion, which shares
     // ExpandSopToClauses with the commit path (file_io.hpp — single source).
-    // The commit path (DoRun's FillLumiceConfig branch) remains the ABI
+    // The commit path (DoRun's BuildScene branch) remains the ABI
     // enforcement point; this preview is diagnostic-only (issue.md D "越界
     // 有可见提示"; plan §2/§3 D "仅标红，不禁用 OK").
     FilterConfig probe;  // throwaway wrapper — SummarizeSopExpansion only reads .param

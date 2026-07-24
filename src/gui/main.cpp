@@ -279,7 +279,7 @@ int main(int argc, char** argv) {
     gui::SyncFromPoller();
 
     // Live-edit: auto-commit config when parameters change during simulation.
-    // DoRun fills LUMICE_Config struct and calls LUMICE_CommitConfigStruct (no JSON string roundtrip).
+    // DoRun builds a LUMICE_Scene and calls LUMICE_CommitScene (no JSON string roundtrip).
     // Throttled to at most once per kCommitIntervalMs.
     {
       static auto last_commit = std::chrono::steady_clock::now();

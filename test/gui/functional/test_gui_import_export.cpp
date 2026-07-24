@@ -47,8 +47,8 @@ nlohmann::json CommitSceneJson(const gui::GuiState& state) {
 }
 
 // Core-config JSON for `state` through the production export path (BuildExportJsonOrWarn).
-// Replaces the retired gui::SerializeCoreConfig, which was a separately-maintained emitter;
-// export JSON is now produced by serializing the same LUMICE_Scene the commit path builds.
+// There is no separately-maintained JSON emitter any more: export JSON is produced by
+// serializing the same LUMICE_Scene the commit path builds.
 // Returns "" when the state exceeds the ABI bounds (the export reject path).
 std::string CoreJson(const gui::GuiState& state) {
   std::string json;
@@ -159,8 +159,8 @@ void GlOpGuiFunc(ImGuiTestContext*) {
 // ========== Import/Export Tests ==========
 
 void RegisterImportExportTests(ImGuiTestEngine* engine) {
-  // Test 1: Core JSON path invariants — SerializeCoreConfig → DeserializeFromJson.
-  // NOTE: This is NOT a GUI-state round-trip. SerializeCoreConfig always emits a
+  // Test 1: Core JSON path invariants — export JSON → DeserializeFromJson.
+  // NOTE: This is NOT a GUI-state round-trip. The export path always emits a
   // fixed full-sphere renderer (lens="dual_fisheye_equal_area", fov=180, visible="full",
   // background=[0,0,0]) regardless of GUI state — Core only consumes this shape.
   // GUI-state round-trip is covered by renderer_new_format_roundtrip / lmc_full_roundtrip.
@@ -502,8 +502,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
   // Covers all 4 file_io write paths + 1 load path introduced by the discrete-spectrum work:
   //   1. GUI project save (root["sun"]["spectrum"]="custom" + "custom_spectrum" array)
   //   2. GUI project load (reads back the array, restores kCustomSpectrumIndex)
-  //   3. SerializeCoreConfig (light_source.spectrum emitted as a JSON array)
-  //   4. FillLumiceConfig (LUMICE_Config.spectrum_entries[]/spectrum_count populated)
+  //   3. export JSON (light_source.spectrum emitted as a JSON array)
+  //   4. commit scene (same array-form spectrum reaches the simulator)
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "custom_spectrum_roundtrip");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -532,7 +532,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.sun.custom_spectrum[2].weight, 0.7f);
       std::remove(tmp_path);
 
-      // (3) SerializeCoreConfig emits an array-form spectrum. Matches core light_config.cpp
+      // (3) The export path emits an array-form spectrum. Matches core light_config.cpp
       // SpectrumToJson shape ([{wavelength, weight}, ...]).
       std::string core_json = CoreJson(gui::g_state);
       auto parsed = nlohmann::json::parse(core_json);
@@ -978,7 +978,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
   }
 
   // task-data-model-and-serialization: AC #7 — multi-raypath OR end-to-end.
-  // GUI raypath_text "3-5; 1-3" → SerializeCoreConfig → ConfigManager parses
+  // GUI raypath_text "3-5; 1-3" → export JSON → ConfigManager parses
   // out 3 filters: 2 simple raypaths (ids 1, 2) + 1 complex (id 3) referencing
   // them. The main filter referenced by the scattering entry is the complex.
   {
@@ -1440,7 +1440,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
   }
 
   // task-per-type-entry-exit (issue 178.4): end-to-end equivalence between
-  // GUI EE filter → SerializeCoreConfig output and a hand-crafted reference
+  // GUI EE filter → export JSON output and a hand-crafted reference
   // core JSON object. Validates AC-6 (`type` / `action` / `symmetry` /
   // `entry` / `exit` / `id` field-by-field equality regardless of insertion
   // order via nlohmann::json::operator==).
@@ -1589,7 +1589,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
   }
 
   // T13 — AC7 serialization equivalence: Remove EE Filter via GUI → OK →
-  // entry.filter_id = nullopt → SerializeCoreConfig emits no "filter" field.
+  // entry.filter_id = nullopt → the export JSON emits no "filter" field.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "entry_exit_remove_ok_no_filter_in_json");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -1625,7 +1625,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       // filter must be nullopt after Remove + OK.
       IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
 
-      // SerializeCoreConfig must not emit any "filter" field (no EE residue).
+      // The export JSON must not emit any "filter" field (no EE residue).
       const std::string core_json = CoreJson(gui::g_state);
       IM_CHECK(!core_json.empty());
       const auto j = nlohmann::json::parse(core_json);
@@ -3312,7 +3312,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext*) {
       ResetTestState();
 
-      // 1) Write a valid CLI-shape JSON to tmp (SerializeCoreConfig round-trip).
+      // 1) Write a valid CLI-shape JSON to tmp (export round-trip).
       std::string json = CoreJson(gui::g_state);
       const char* tmp_path = "/tmp/lumice_open_json_import.json";
       bool write_ok = gui::ExportConfigJson(tmp_path, json);
@@ -3548,7 +3548,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
 
-      // Prepare a valid CLI-shape JSON config on disk (round-trips through SerializeCoreConfig).
+      // Prepare a valid CLI-shape JSON config on disk (round-trips through the export path).
       std::string json = CoreJson(gui::g_state);
       const char* tmp_path = "/tmp/lumice_reset_owner_json_import.json";
       IM_CHECK(gui::ExportConfigJson(tmp_path, json));

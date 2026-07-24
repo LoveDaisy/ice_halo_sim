@@ -151,9 +151,9 @@ void DoNew();
 void CalibrateQualityThreshold();
 // task-metal-gui-commit-backpressure: DoRun returns `true` when this call reached
 // a terminal outcome that needs NO retry next tick — EITHER it issued a
-// LUMICE_CommitConfigStruct, OR it hit an unrecoverable pre-commit validation
-// failure (config overflow) where retrying would not help. (So `true` is NOT
-// strictly "CommitConfigStruct was called" — the overflow branch returns true
+// LUMICE_CommitScene, OR it hit an unrecoverable pre-commit validation
+// failure (scene overflow) where retrying would not help. (So `true` is NOT
+// strictly "CommitScene was called" — the overflow branch returns true
 // without reaching it.) It returns `false` ONLY when the backpressure gate
 // deferred this attempt because the current Run has not yet produced its first
 // consumed batch (avoids the commit-outpaces-batch starvation that made Metal

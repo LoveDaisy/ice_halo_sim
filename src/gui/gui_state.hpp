@@ -240,7 +240,7 @@ static_assert(sizeof(kLensTypePresentationOrder) / sizeof(*kLensTypePresentation
 // Dual fisheye overlap: max |sky.z| for the overlap zone.
 // = sin(5°) ≈ 0.0872. Each hemisphere extends 5° past the equator.
 // This constant defines the GUI's internal texture format overlap. It is passed to core via
-// FillLumiceConfig/SerializeCoreConfig; core reads overlap from RenderConfig (no hardcoded value).
+// BuildScene (file_io.hpp); core reads overlap from RenderConfig (no hardcoded value).
 constexpr float kDualFisheyeOverlap = 0.0872f;
 
 // Preset illuminant labels. The combo appends "Custom..." at kCustomSpectrumIndex; that entry is
