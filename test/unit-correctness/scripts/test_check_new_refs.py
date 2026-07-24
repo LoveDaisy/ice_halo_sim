@@ -1,11 +1,15 @@
 """Regression net for `scripts/check_new_refs.py`.
 
-Its sibling gate `scripts/check_policies.py` ships without tests, and that is
-fine: every one of its checks asks "is this symbol present in this file?", which
-is legible by reading. This one is a regex battery driving a unified-diff
-parser, and it is neither — five distinct defects were found on the same small
-surface in one day, one of them living *inside* the fix for another. Careful
-reading demonstrably does not converge here.
+Its sibling gate `scripts/check_policies.py` mostly ships without tests, and
+that is fine: most of its checks ask "is this symbol present in this file?",
+which is legible by reading. This one is a regex battery driving a
+unified-diff parser, and it is neither — five distinct defects were found on
+the same small surface in one day, one of them living *inside* the fix for
+another. Careful reading demonstrably does not converge here. (One check in
+`check_policies.py` shares that property —
+`check_no_default_constructed_crystal_slots` parses call-site arguments
+rather than matching a symbol, and has its own regression net,
+`test_check_policies_crystal_slots.py`, for the same reason.)
 
 What makes that worth a test file rather than more care: every defect failed
 *silently*. A broken parser does not crash, it attributes lines to a path that

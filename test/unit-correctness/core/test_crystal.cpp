@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -11,11 +12,13 @@
 #include <utility>
 
 #include "config/config_manager.hpp"
+#include "config/crystal_config.hpp"
 #include "core/crystal.hpp"
 #include "core/geo3d.hpp"
 #include "core/geo3d_closedform.hpp"
 #include "core/math.hpp"
 #include "core/simulator.hpp"
+#include "core/trace_ops.hpp"
 #include "util/logger.hpp"
 
 extern std::string config_file_name;
@@ -1405,6 +1408,172 @@ TEST(CrystalGeomStep1, CapacityConstantsBoundPyramidWorstCase) {
   // (see the kCrystalGeomMaxVtxPerFace comment in crystal.hpp).
   EXPECT_GE(kCrystalGeomMaxVtxPerFace, kClosedFormPyramidMaxFaceVtx);
   EXPECT_GE(kCrystalGeomMaxVtxPerFace, 7);
+}
+
+// ---------------------------------------------------------------------------
+// Empty-Crystal state contract.
+//
+// Two producers can hand downstream code a Crystal that bounds no volume:
+//   (a) `Crystal c;`             — the public default constructor;
+//   (b) `return Crystal();`      — the closed-form validity gate's reject
+//                                  branch in MakePrismClosedForm /
+//                                  MakePyramidClosedForm (crystal.cpp), which
+//                                  IS reachable from production input because
+//                                  CrystalMaker feeds it randomized h /
+//                                  face_distance draws.
+// The tests below pin, at run time, that (a) and (b) produce a byte-for-byte
+// identical state, and that that state is the "nothing populated" sentinel the
+// rest of the codebase tests for (`face_cnt == 0` / `PolygonFaceCount() == 0`).
+// Consumers therefore need exactly one defence, not two; and any future change
+// that makes the reject branch return a *partially* populated Crystal (e.g. a
+// plane set without corners) breaks these tests rather than surfacing as a
+// downstream out-of-bounds read.
+// ---------------------------------------------------------------------------
+
+// Assert that `c` is in the canonical empty state, field by field. Kept as a
+// helper so both producers are checked against the same predicate.
+void ExpectCanonicalEmptyCrystal(const Crystal& c, const char* who) {
+  const CrystalGeom& g = c.CfGeom();
+  EXPECT_EQ(g.face_cnt, 0) << who;
+  for (int slot = 0; slot < kCrystalGeomMaxFaces; slot++) {
+    EXPECT_FALSE(g.face_present[slot]) << who << " slot=" << slot;
+    EXPECT_EQ(g.face_vtx_cnt[slot], 0) << who << " slot=" << slot;
+    EXPECT_EQ(g.face_number[slot], 0) << who << " slot=" << slot;
+  }
+  for (int i = 0; i < kCrystalGeomMaxFaces * 4; i++) {
+    EXPECT_EQ(g.plane_coef[i], 0.0f) << who << " plane_coef[" << i << "]";
+  }
+  for (int i = 0; i < kCrystalGeomMaxFaces * 3; i++) {
+    EXPECT_EQ(g.face_normal[i], 0.0f) << who << " face_normal[" << i << "]";
+  }
+  for (int i = 0; i < kCrystalGeomMaxFaces * kCrystalGeomMaxVtxPerFace * 3; i++) {
+    EXPECT_EQ(g.face_vtx[i], 0.0f) << who << " face_vtx[" << i << "]";
+  }
+  // Polygon-face view derived from cf_geom_ — PopulateFromCfGeom never ran.
+  EXPECT_EQ(c.PolygonFaceCount(), 0u) << who;
+  EXPECT_EQ(c.GetPolygonFaceNormal(), nullptr) << who;
+  EXPECT_EQ(c.GetPolygonFaceDist(), nullptr) << who;
+  // Symmetry reduction is inapplicable (the factories set fn_period_ = 6 only
+  // on the success path), and GetFn must reject every index rather than read
+  // out of a null table.
+  EXPECT_EQ(c.FnPeriod(), -1) << who;
+  EXPECT_EQ(c.GetFn(0), kInvalidId) << who;
+  EXPECT_EQ(c.config_id_, kInvalidId) << who;
+  // On-demand triangulation of an empty geometry must yield an empty mesh, not
+  // a degenerate one — this is what the GPU device-gen tri buffers size from.
+  EXPECT_EQ(detail::CountEntrySubTris(g), 0u) << who;
+  const auto built = detail::BuildMeshFromCfGeom(g);
+  EXPECT_EQ(built.mesh.GetVtxCnt(), 0u) << who;
+  EXPECT_EQ(built.mesh.GetTriangleCnt(), 0u) << who;
+}
+
+// Byte-for-byte comparison of the flat POD geometry, so "equivalent" means
+// equivalent and not just "both report face_cnt == 0".
+bool CfGeomBytesEqual(const CrystalGeom& a, const CrystalGeom& b) {
+  return std::memcmp(&a, &b, sizeof(CrystalGeom)) == 0;
+}
+
+TEST(EmptyCrystalContract, DefaultConstructedStateIsPinnedFieldByField) {
+  Crystal c;
+  ExpectCanonicalEmptyCrystal(c, "default-constructed");
+
+  // Copy / move must carry the empty state through unchanged — these are the
+  // operations `std::vector<Crystal>` performs on reallocation, and the ones
+  // the backends use to stage a resolved crystal.
+  Crystal copied = c;  // NOLINT(performance-unnecessary-copy-initialization)
+  ExpectCanonicalEmptyCrystal(copied, "copy-constructed-from-empty");
+  Crystal moved = std::move(copied);
+  ExpectCanonicalEmptyCrystal(moved, "move-constructed-from-empty");
+
+  // Assigning an empty over a populated instance must fully clear it (a stale
+  // poly_face_data_ left behind would be read with poly_face_cnt_ == 0 above,
+  // but the pointer accessors are part of the pinned contract).
+  Crystal overwritten = Crystal::CreatePrism(1.0f);
+  ASSERT_GT(overwritten.PolygonFaceCount(), 0u) << "fixture precondition: prism must be populated";
+  overwritten = c;
+  ExpectCanonicalEmptyCrystal(overwritten, "copy-assigned-empty-over-populated");
+
+  Crystal overwritten2 = Crystal::CreatePrism(1.0f);
+  ASSERT_GT(overwritten2.PolygonFaceCount(), 0u) << "fixture precondition: prism must be populated";
+  Crystal donor;
+  overwritten2 = std::move(donor);
+  ExpectCanonicalEmptyCrystal(overwritten2, "move-assigned-empty-over-populated");
+}
+
+TEST(EmptyCrystalContract, DegenerateFactoryRejectEqualsDefaultConstruction) {
+  const Crystal reference;  // canonical empty state
+
+  // Prism reject branch: h <= kFloatEps fails IsValidClosedFormPrism, taking
+  // the silent `return Crystal();` path in MakePrismClosedForm.
+  Crystal prism_reject = Crystal::CreatePrism(0.0f);
+  ASSERT_EQ(prism_reject.CfGeom().face_cnt, 0)
+      << "fixture precondition: CreatePrism(0.0f) must hit the validity-gate reject branch; "
+      << "if this fires the gate changed and the rest of this test is vacuous";
+  ExpectCanonicalEmptyCrystal(prism_reject, "prism-validity-gate-reject");
+  EXPECT_TRUE(CfGeomBytesEqual(prism_reject.CfGeom(), reference.CfGeom()))
+      << "prism reject branch produced a cf_geom_ that differs bytewise from default construction";
+
+  // Prism reject branch reached through the *warning* arm instead (h > eps but
+  // the opposite-pair sums cannot bound a solid): all six distances negative.
+  {
+    float dist[6]{ -1, -1, -1, -1, -1, -1 };
+    Crystal prism_neg = Crystal::CreatePrism(1.2f, dist);
+    ASSERT_EQ(prism_neg.CfGeom().face_cnt, 0)
+        << "fixture precondition: all-negative face distances must fail the closed-form validity gate";
+    ExpectCanonicalEmptyCrystal(prism_neg, "prism-all-negative-dist-reject");
+    EXPECT_TRUE(CfGeomBytesEqual(prism_neg.CfGeom(), reference.CfGeom()));
+  }
+
+  // Pyramid reject branch: zero-volume input fails IsValidClosedFormPyramid
+  // (present face count < 4) and takes `return Crystal();` in
+  // MakePyramidClosedForm.
+  {
+    float dist[6]{ 0, 0, 0, 0, 0, 0 };
+    Crystal pyr_reject = Crystal::CreatePyramid(28.0f, 28.0f, 0.0f, 0.0f, 0.0f, dist);
+    ASSERT_EQ(pyr_reject.CfGeom().face_cnt, 0)
+        << "fixture precondition: zero-volume pyramid must hit the validity-gate reject branch";
+    ExpectCanonicalEmptyCrystal(pyr_reject, "pyramid-validity-gate-reject");
+    EXPECT_TRUE(CfGeomBytesEqual(pyr_reject.CfGeom(), reference.CfGeom()));
+  }
+}
+
+TEST(EmptyCrystalContract, MakeCrystalCanReturnTheEmptyStateFromRandomizedParams) {
+  // Reachability evidence for the empty state in *production* input terms: the
+  // parameters below are an ordinary randomized crystal config, not a
+  // hand-built empty Crystal. A wide face_distance spread drives some draws
+  // past the closed-form validity gate, so MakeCrystal — the single entry point
+  // every backend builds crystals through — hands back the same empty state the
+  // default constructor produces.
+  //
+  // Consumers must therefore treat "MakeCrystal returned an empty crystal" as a
+  // reachable input, not as an impossible one.
+  PrismCrystalParam param;
+  param.h_ = Distribution{ DistributionType::kGaussian, 1.0f, 0.5f };
+  for (auto& d : param.d_) {
+    d = Distribution{ DistributionType::kGaussian, 1.0f, 0.8f };
+  }
+
+  RandomNumberGenerator rng(20260724u);
+  size_t empty_cnt = 0;
+  size_t populated_cnt = 0;
+  const Crystal reference;
+  for (int i = 0; i < 2000; i++) {
+    Crystal c = MakeCrystal(rng, CrystalParam{ param });
+    if (c.CfGeom().face_cnt == 0) {
+      empty_cnt++;
+      // Every empty crystal that reaches a consumer is the canonical state —
+      // there is no second, partially-populated flavour to defend against.
+      ASSERT_TRUE(CfGeomBytesEqual(c.CfGeom(), reference.CfGeom())) << "draw " << i;
+      ASSERT_EQ(c.PolygonFaceCount(), 0u) << "draw " << i;
+      ASSERT_EQ(c.FnPeriod(), -1) << "draw " << i;
+    } else {
+      populated_cnt++;
+    }
+  }
+  EXPECT_GT(empty_cnt, 0u) << "the randomized sweep produced no degenerate draw — the reachability claim "
+                           << "this test exists to pin is no longer exercised by these parameters";
+  EXPECT_GT(populated_cnt, 0u) << "the sweep produced only degenerate draws — parameters are unrealistic "
+                               << "and the test says nothing about production behaviour";
 }
 
 }  // namespace

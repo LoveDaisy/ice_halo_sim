@@ -26,8 +26,10 @@ struct FilterMatchTestParams {
 // Buffer layout (mirrors plan D6 binding contract — both this kernel and the
 // host harness must agree on indices):
 //   0  filter_desc_buf       : DeviceFilterDesc[n_filters]
-//   1  getfn_offsets_buf     : uint[n_crystals + 1]
-//   2  getfn_bytes_buf       : uchar[]
+//   1  (retired: the getfn_offsets prefix-sum table was dropped; the
+//       GetFn remap is now per-instance, indexed by the ray's poly_off)
+//   2  poly_fn_buf           : uchar[] per-instance GetFn table (single crystal
+//                              in this fixture → ray_cslot doubles as poly_off=0)
 //   3  ray_path_buf          : uchar[n * face_seq_cap]
 //   4  ray_path_len_buf      : uchar[n]
 //   5  ray_crystal_slot      : uint16[n]
@@ -46,8 +48,7 @@ struct FilterMatchTestParams {
 //                              KernelParams.and_term_counts_base_offset).
 kernel void filter_match_test_kernel(
     device const DeviceFilterDesc* filter_desc        [[buffer(0)]],
-    device const uint*             getfn_offsets      [[buffer(1)]],
-    device const uchar*            getfn_bytes        [[buffer(2)]],
+    device const uchar*            poly_fn            [[buffer(2)]],
     device const uchar*            ray_path           [[buffer(3)]],
     device const uchar*            ray_path_len       [[buffer(4)]],
     device const ushort*           ray_cslot          [[buffer(5)]],
@@ -74,11 +75,13 @@ kernel void filter_match_test_kernel(
   uint fi = ray_filter[tid];
   device const DeviceFilterDesc& f = filter_desc[fi];
   bool result;
+  // ray_cslot doubles as poly_off (0 for this single-crystal
+  // fixture, whose poly_fn stripe starts at absolute offset 0).
   if (prm.check_mode == 0u) {
-    result = DeviceFilterMatch(f, complex_sub_desc, and_term_counts, path_local, len, getfn_bytes, getfn_offsets,
+    result = DeviceFilterMatch(f, complex_sub_desc, and_term_counts, path_local, len, poly_fn,
                                (uint)ray_cslot[tid], dir_local, (uint)ray_cid[tid]);
   } else {
-    result = DeviceFilterCheck(f, complex_sub_desc, and_term_counts, path_local, len, getfn_bytes, getfn_offsets,
+    result = DeviceFilterCheck(f, complex_sub_desc, and_term_counts, path_local, len, poly_fn,
                                (uint)ray_cslot[tid], dir_local, (uint)ray_cid[tid]);
   }
   out_match[tid] = result ? 1u : 0u;

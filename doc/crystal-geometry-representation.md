@@ -193,14 +193,18 @@ Precisely, as-built after PR #214 (do not over-read "as-built" as "every §1 art
   reversal is deleted** — `FillPerFaceTopology` and `poly_face_tri_id_` survive only as
   historical comments (`c_api.cpp` / `crystal.hpp`), not live code. The `C(n,3)` solver + dedup
   no longer feed the prism/pyramid factories. GUI required zero changes (C-API boundary).
-- **Retained (honest).** `Crystal::PolygonFaceOfTri` (triangle → polygon-face) is **still live**
-  (`simulator.cpp:84`, `crystal.cpp:641`, Metal `metal_trace_backend.mm`): the triangle mesh is
-  still generated (fan-triangulated from the closed-form outlines) for the paths that consume
-  triangles, and those paths still map a triangle back to its polygon face. This is a bounded
-  `argmax` on a *known-correct* per-face representation, not the old discover-topology-from-
-  coordinates reversal, so it is not in the epsilon-defect family — but it is not zero, and the
-  §2 "back-mapping is the substrate of the index-defect family" critique is only *mostly*
-  retired, not entirely.
+- **Retained-then-deleted.** At PR #214 landing, `Crystal::PolygonFaceOfTri` (triangle →
+  polygon-face) was still live: the triangle mesh was still generated (fan-triangulated from the
+  closed-form outlines) for the paths that consumed triangles, and those paths mapped a triangle
+  back to its polygon face via a bounded `argmax` on a *known-correct* per-face representation —
+  not the old discover-topology-from-coordinates reversal, so it was not in the epsilon-defect
+  family, but it was not zero either. PR #219 (commit `b53eca1f`) subsequently removed this
+  entirely: entry-point sampling was rewritten to sample the closed-form polygon geometry
+  directly (each sub-triangle now carries its own present-face id), so `PolygonFaceOfTri` and the
+  triangle-Mesh hot path it served have no live callers in `src/` — only historical-contrast
+  comments remain (`simulator.cpp`, `metal_trace_backend.mm`, `cuda_trace_backend.cu`). The §2
+  "back-mapping is the substrate of the index-defect family" critique is now fully retired for
+  this reversal, not merely mostly.
 - **Concave pyramids** remain on the old path (§5).
 
 ## 5. What it does **not** dissolve (honest limits)

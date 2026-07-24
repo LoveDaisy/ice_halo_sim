@@ -139,22 +139,25 @@ static inline void ReduceBuffer_dev(thread uchar* data, uint size, uchar symmetr
 }
 
 // --- ApplyGetFn ---
-// Remaps poly-index path to face-number space via the per-crystal GetFn byte
-// table (built on host by `BuildDeviceGetFnBytes`, see
-// core/device_filter_desc.{hpp,cpp}). `crystal_slot` indexes into the prefix-
-// sum offset table to locate this crystal's stripe. Writes face-numbers into
-// `out` (caller-owned thread buffer).
+// Remaps poly-index path to face-number space via the PER-INSTANCE GetFn byte
+// table `poly_fn` (one uchar per absolute pool polygon; built in
+// UploadCrystalPool from each pool crystal's own GetFn, so the local->canonical
+// mapping matches the exact instance the ray traversed). The
+// ray's own polygon slice starts at `poly_off` (== shape_poly_off), and
+// `path[i]` is that ray's LOCAL polygon index, so `poly_fn[poly_off + path[i]]`
+// is the absolute-indexed lookup. This replaces the former per-(layer,ci)
+// prototype table (getfn_bytes/getfn_offsets), whose "any sampled instance
+// suffices / topology stable" invariant is false under strong shape
+// randomization (degenerate face_distance draws drop lateral faces per
+// instance). Writes face-numbers into `out` (caller-owned thread buffer).
 static inline void ApplyGetFn_dev(thread const uchar* path, uint len,
-                                  device const uchar* getfn_bytes,
-                                  device const uint*  getfn_offsets,
-                                  uint  crystal_slot,
+                                  device const uchar* poly_fn,
+                                  uint  poly_off,
                                   thread uchar* out) {
-  uint base = getfn_offsets[crystal_slot];
-  // Stripe end (next prefix sum entry) bounds the per-crystal table; we
-  // trust path[k] < stripe_len because the kernel produces valid poly-indices
-  // and the parity harness controls the test inputs.
+  // We trust path[k] < this instance's poly_cnt because the kernel produces
+  // valid LOCAL poly-indices and the parity harness controls the test inputs.
   for (uint i = 0; i < len; i++) {
-    out[i] = getfn_bytes[base + path[i]];
+    out[i] = poly_fn[poly_off + path[i]];
   }
 }
 
@@ -167,12 +170,11 @@ static inline void ApplyGetFn_dev(thread const uchar* path, uint len,
 
 static inline bool DeviceFilterMatchRaypath(device const DeviceFilterDesc& f,
                                             thread const uchar* path, uint path_len,
-                                            device const uchar* getfn_bytes,
-                                            device const uint*  getfn_offsets,
-                                            uint  crystal_slot) {
+                                            device const uchar* poly_fn,
+                                            uint  poly_off) {
   if (path_len != f.canonical_len) { return false; }
   uchar buf[kDevRecCap];
-  ApplyGetFn_dev(path, path_len, getfn_bytes, getfn_offsets, crystal_slot, buf);
+  ApplyGetFn_dev(path, path_len, poly_fn, poly_off, buf);
   if (f.fn_period < 0 || f.symmetry == kDevSymNone) {
     for (uint i = 0; i < path_len; i++) {
       if (buf[i] != f.canonical_bytes[i]) { return false; }
@@ -188,20 +190,18 @@ static inline bool DeviceFilterMatchRaypath(device const DeviceFilterDesc& f,
 
 static inline bool DeviceFilterMatchEntryExit(device const DeviceFilterDesc& f,
                                               thread const uchar* path, uint path_len,
-                                              device const uchar* getfn_bytes,
-                                              device const uint*  getfn_offsets,
-                                              uint  crystal_slot) {
+                                              device const uchar* poly_fn,
+                                              uint  poly_off) {
   if (path_len == 0u) { return false; }
   if (path_len < f.min_len) { return false; }
   if (f.max_len != 0u && path_len > f.max_len) { return false; }
   if (!f.has_entry && !f.has_exit) { return true; }
-  // Resolve the ends in face-number space (single ApplyGetFn for the two
-  // bytes — buf small enough that we always remap the whole prefix/suffix).
+  // Resolve the ends in face-number space (per-instance poly_fn indexed by the
+  // ray's absolute polygon offset — see ApplyGetFn_dev).
   uchar ee[2];
-  uint base = getfn_offsets[crystal_slot];
   uint ee_len = 0u;
-  if (f.has_entry) { ee[ee_len++] = getfn_bytes[base + path[0]]; }
-  if (f.has_exit)  { ee[ee_len++] = getfn_bytes[base + path[path_len - 1u]]; }
+  if (f.has_entry) { ee[ee_len++] = poly_fn[poly_off + path[0]]; }
+  if (f.has_exit)  { ee[ee_len++] = poly_fn[poly_off + path[path_len - 1u]]; }
   if (f.fn_period < 0 || f.symmetry == kDevSymNone) {
     for (uint i = 0; i < ee_len; i++) {
       if (ee[i] != f.canonical_bytes[i]) { return false; }
@@ -237,17 +237,16 @@ static inline bool DeviceFilterMatchCrystal(device const DeviceFilterDesc& f,
 // ComplexSpec which uses SimpleSpecCreator on each sub-spec).
 static inline bool DeviceFilterMatchSimple(device const DeviceFilterDesc& f,
                                            thread const uchar* path, uint path_len,
-                                           device const uchar* getfn_bytes,
-                                           device const uint*  getfn_offsets,
-                                           uint  crystal_slot,
+                                           device const uchar* poly_fn,
+                                           uint  poly_off,
                                            thread const float* ray_dir,
                                            uint  ray_crystal_config_id) {
   if (f.type == kDevFilterTypeNone)     { return true; }
   if (f.type == kDevFilterTypeRaypath)  {
-    return DeviceFilterMatchRaypath(f, path, path_len, getfn_bytes, getfn_offsets, crystal_slot);
+    return DeviceFilterMatchRaypath(f, path, path_len, poly_fn, poly_off);
   }
   if (f.type == kDevFilterTypeEntryExit) {
-    return DeviceFilterMatchEntryExit(f, path, path_len, getfn_bytes, getfn_offsets, crystal_slot);
+    return DeviceFilterMatchEntryExit(f, path, path_len, poly_fn, poly_off);
   }
   if (f.type == kDevFilterTypeDirection) {
     return DeviceFilterMatchDirection(f, ray_dir);
@@ -268,9 +267,8 @@ static inline bool DeviceFilterMatchComplex(device const DeviceFilterDesc& f,
                                             device const DeviceFilterDesc* complex_sub_desc_buf,
                                             device const uchar* and_term_counts_buf,
                                             thread const uchar* path, uint path_len,
-                                            device const uchar* getfn_bytes,
-                                            device const uint*  getfn_offsets,
-                                            uint  crystal_slot,
+                                            device const uchar* poly_fn,
+                                            uint  poly_off,
                                             thread const float* ray_dir,
                                             uint  ray_crystal_config_id) {
   if (f.or_clause_count == 0) { return false; }  // see comment above
@@ -280,8 +278,8 @@ static inline bool DeviceFilterMatchComplex(device const DeviceFilterDesc& f,
     bool and_ok = true;
     for (uint and_j = 0; and_j < and_n; and_j++) {
       if (!DeviceFilterMatchSimple(complex_sub_desc_buf[sub_idx],
-                                   path, path_len, getfn_bytes, getfn_offsets,
-                                   crystal_slot, ray_dir, ray_crystal_config_id)) {
+                                   path, path_len, poly_fn, poly_off,
+                                   ray_dir, ray_crystal_config_id)) {
         and_ok = false;
         // Short-circuit: skip the rest of this AND-clause so sub_idx lands at
         // the next OR-clause start. and_j sub-descs already consumed, jump the
@@ -303,18 +301,17 @@ static inline bool DeviceFilterMatch(device const DeviceFilterDesc& f,
                                      device const DeviceFilterDesc* complex_sub_desc_buf,
                                      device const uchar* and_term_counts_buf,
                                      thread const uchar* path, uint path_len,
-                                     device const uchar* getfn_bytes,
-                                     device const uint*  getfn_offsets,
-                                     uint  crystal_slot,
+                                     device const uchar* poly_fn,
+                                     uint  poly_off,
                                      thread const float* ray_dir,
                                      uint  ray_crystal_config_id) {
   if (f.type == kDevFilterTypeComplex) {
     return DeviceFilterMatchComplex(f, complex_sub_desc_buf, and_term_counts_buf,
-                                    path, path_len, getfn_bytes, getfn_offsets,
-                                    crystal_slot, ray_dir, ray_crystal_config_id);
+                                    path, path_len, poly_fn, poly_off,
+                                    ray_dir, ray_crystal_config_id);
   }
-  return DeviceFilterMatchSimple(f, path, path_len, getfn_bytes, getfn_offsets,
-                                 crystal_slot, ray_dir, ray_crystal_config_id);
+  return DeviceFilterMatchSimple(f, path, path_len, poly_fn, poly_off,
+                                 ray_dir, ray_crystal_config_id);
 }
 
 // Check = Match XOR (action == filter_out). Same algebra as
@@ -323,14 +320,13 @@ static inline bool DeviceFilterCheck(device const DeviceFilterDesc& f,
                                      device const DeviceFilterDesc* complex_sub_desc_buf,
                                      device const uchar* and_term_counts_buf,
                                      thread const uchar* path, uint path_len,
-                                     device const uchar* getfn_bytes,
-                                     device const uint*  getfn_offsets,
-                                     uint  crystal_slot,
+                                     device const uchar* poly_fn,
+                                     uint  poly_off,
                                      thread const float* ray_dir,
                                      uint  ray_crystal_config_id) {
   bool m = DeviceFilterMatch(f, complex_sub_desc_buf, and_term_counts_buf,
-                             path, path_len, getfn_bytes, getfn_offsets,
-                             crystal_slot, ray_dir, ray_crystal_config_id);
+                             path, path_len, poly_fn, poly_off,
+                             ray_dir, ray_crystal_config_id);
   return (f.action == 0u) ? m : !m;
 }
 
@@ -356,9 +352,8 @@ static inline uint DeviceFilterSummandMask(device const DeviceFilterDesc& f,
                                            device const DeviceFilterDesc* complex_sub_desc_buf,
                                            device const uchar* and_term_counts_buf,
                                            thread const uchar* path, uint path_len,
-                                           device const uchar* getfn_bytes,
-                                           device const uint*  getfn_offsets,
-                                           uint  crystal_slot,
+                                           device const uchar* poly_fn,
+                                           uint  poly_off,
                                            thread const float* ray_dir,
                                            uint  ray_crystal_config_id,
                                            thread bool* out_matched) {
@@ -373,8 +368,8 @@ static inline uint DeviceFilterSummandMask(device const DeviceFilterDesc& f,
       bool and_ok = true;
       for (uint and_j = 0u; and_j < and_n; and_j++) {
         if (!DeviceFilterMatchSimple(complex_sub_desc_buf[sub_idx],
-                                     path, path_len, getfn_bytes, getfn_offsets,
-                                     crystal_slot, ray_dir, ray_crystal_config_id)) {
+                                     path, path_len, poly_fn, poly_off,
+                                     ray_dir, ray_crystal_config_id)) {
           and_ok = false;
           sub_idx += (and_n - and_j);  // skip rest of this AND-clause
           break;
@@ -390,8 +385,8 @@ static inline uint DeviceFilterSummandMask(device const DeviceFilterDesc& f,
     *out_matched = true;   // None passes but contributes 0 summands
     return 0u;
   }
-  bool m = DeviceFilterMatchSimple(f, path, path_len, getfn_bytes, getfn_offsets,
-                                   crystal_slot, ray_dir, ray_crystal_config_id);
+  bool m = DeviceFilterMatchSimple(f, path, path_len, poly_fn, poly_off,
+                                   ray_dir, ray_crystal_config_id);
   *out_matched = m;
   return m ? 1u : 0u;
 }
@@ -579,12 +574,16 @@ kernel void trace_layer_kernel(
     // Device-side emit gate state. The ms_mode==1 path calls DeviceFilterCheck
     // and draws a PCG prob to decide continuation vs mid-exit on-device.
     //   23 : filter desc array, indexed by ms_layer_idx * filter_desc_max_ci + ci
-    //   24 : per-slot prefix-sum offsets into gate_getfn_bytes
-    //   25 : flat GetFn(poly_idx) byte stream
+    //   25 : per-instance GetFn table `gate_poly_fn`, one uchar per ABSOLUTE
+    //        pool polygon (parallel to poly_n/poly_d at buffer 4/5). Indexed by
+    //        the ray's own shape_poly_off + LOCAL path index — see
+    //        ApplyGetFn_dev. (Buffer 24, the former per-(layer,ci)
+    //        prototype prefix-sum table, is retired: the shared-prototype getfn
+    //        table mis-mapped degenerate pool instances under strong shape
+    //        randomization.)
     //   26 : Complex filter sub-spec flat buffer
     device const DeviceFilterDesc* gate_filter_desc    [[buffer(23)]],
-    device const uint*             gate_getfn_offsets  [[buffer(24)]],
-    device const uchar*            gate_getfn_bytes    [[buffer(25)]],
+    device const uchar*            gate_poly_fn        [[buffer(25)]],
     device const DeviceFilterDesc* gate_sub_desc_buf   [[buffer(26)]],
     // scrum-268.8 (DR-3): cont_wl_idx propagates the photon's lifetime
     // wavelength tag into the continuation ring for the next layer.
@@ -698,13 +697,15 @@ kernel void trace_layer_kernel(
     //   * poly_n / poly_d / tri_* consume ABSOLUTE pool-wide
     //     polygon indices (to_face, cont_face, far_face all absolute).
     //   * path[] / DeviceFilterMatch*'s ApplyGetFn table consume PER-CRYSTAL
-    //     LOCAL polygon indices — GetFn bytes are keyed by (layer, ci) with a
-    //     stripe of length PolygonFaceCount, invariant across P_ci instances
-    //     (crystal randomisation only perturbs h / face_distance; topology
-    //     stable — see EnsureFilterBuffers comment + MakeCrystal). We MUST
-    //     convert absolute → local at the path[] write site by subtracting
-    //     shape_poly_off. At P_ci == 1 shape_poly_off == 0 so this is a no-op
-    //     bit-identical to the pre-K-pool path (AC2).
+    //     LOCAL polygon indices — GetFn bytes are now PER-INSTANCE (one stripe
+    //     of length PolygonFaceCount per pool crystal, built in
+    //     UploadCrystalPool from that instance's own GetFn; see ApplyGetFn_dev
+    //     comment above). The former per-(layer,ci) prototype table's "any
+    //     sampled instance suffices / topology stable" invariant does NOT hold
+    //     under strong shape randomization. We MUST convert absolute → local
+    //     at the path[] write site by subtracting shape_poly_off. At P_ci == 1
+    //     shape_poly_off == 0 so this is a no-op bit-identical to the
+    //     pre-K-pool path (AC2).
     if (rec_len < kRecCap) {
       path[rec_len] = ushort(to_face - shape_poly_off);
       rec_len += 1u;
@@ -802,24 +803,17 @@ kernel void trace_layer_kernel(
           for (uint k = 0u; k < gate_len; k++) { path_local[k] = uchar(path[k]); }
           uint gate_slot = prm.ms_layer_idx * prm.filter_desc_max_ci + prm.crystal_id;
           float ray_dir_w[3] = { wcx, wcy, wcz };
-          // 7th argument INTENTIONALLY passes `gate_slot` (NOT prm.crystal_id
-          // as in plan §4 Step 5 pseudo-code). `DeviceFilterCheck` forwards it
-          // to `DeviceFilterMatchRaypath` where it indexes
-          // `gate_getfn_offsets[slot..slot+1]` to locate the per-orbit GetFn
-          // byte stream. `EnsureFilterBuffers` lays out offsets keyed by
-          // `slot = mi * max_ci + ci` (= `gate_slot`), so passing
-          // `prm.crystal_id` would point at layer-0's orbit table for every
-          // layer and silently mis-match from ms_layer_idx ≥ 1. The plan
-          // pseudo-code conflated "which crystal" with "where in the slot
-          // layout" — gate_slot is the correct slot identity here. (See
-          // progress.md DECISION "DeviceFilterCheck 第 7 参数=gate_slot 非
-          // prm.crystal_id" for the full derivation; multi-MS filter parity
-          // proves this is the working form. Do NOT "fix" back to crystal_id.)
+          // `gate_slot = ms_layer_idx * filter_desc_max_ci + crystal_id` selects
+          // this dispatch's filter DESCRIPTOR (gate_filter_desc[gate_slot]) —
+          // keyed by (layer, ci) so ms_layer_idx ≥ 1 does not alias layer-0's
+          // descriptor. The GetFn REMAP, by contrast, is now per-INSTANCE:
+          // DeviceFilterCheck takes gate_poly_fn + this ray's shape_poly_off and
+          // indexes gate_poly_fn[shape_poly_off + path_local[i]].
           bool filter_pass = DeviceFilterCheck(
               gate_filter_desc[gate_slot], gate_sub_desc_buf, gate_and_term_counts,
               path_local, gate_len,
-              gate_getfn_bytes, gate_getfn_offsets,
-              gate_slot, ray_dir_w, prm.crystal_config_id);
+              gate_poly_fn, shape_poly_off,
+              ray_dir_w, prm.crystal_config_id);
           if (filter_pass) {
             // task-358.3: Fork-C physical-bits produce branch removed. `this_mask`
             // now starts from the carried mask and is OR-accumulated by ONLY the
@@ -845,8 +839,8 @@ kernel void trace_layer_kernel(
                 uint c_smask = DeviceFilterSummandMask(
                     gate_filter_desc[prm.color_desc_offset + color_slot_idx],
                     gate_sub_desc_buf, gate_and_term_counts,
-                    path_local, gate_len, gate_getfn_bytes, gate_getfn_offsets,
-                    gate_slot, ray_dir_w, prm.crystal_config_id, &matched_col);
+                    path_local, gate_len, gate_poly_fn, shape_poly_off,
+                    ray_dir_w, prm.crystal_config_id, &matched_col);
                 for (uint k = 0u; k < kDevComponentStride; k++) {
                   if ((c_smask & (1u << k)) != 0u) {
                     uchar bit = gate_component_bits[
@@ -970,8 +964,8 @@ kernel void trace_layer_kernel(
           bool filter_pass_f = DeviceFilterCheck(
               gate_filter_desc[gate_slot_f], gate_sub_desc_buf, gate_and_term_counts,
               path_local_f, gate_len_f,
-              gate_getfn_bytes, gate_getfn_offsets,
-              gate_slot_f, ray_dir_w_f, prm.crystal_config_id);
+              gate_poly_fn, shape_poly_off,
+              ray_dir_w_f, prm.crystal_config_id);
           // Final-layer prob draw — reuse the persistent gate_stream hoisted
           // above the hit loop (same one the ms_mode==1 branch consumes; only
           // one branch runs per dispatch because ms_mode is a dispatch-level
@@ -996,8 +990,8 @@ kernel void trace_layer_kernel(
                 uint c_smask_f = DeviceFilterSummandMask(
                     gate_filter_desc[prm.color_desc_offset + color_slot_idx_f],
                     gate_sub_desc_buf, gate_and_term_counts,
-                    path_local_f, gate_len_f, gate_getfn_bytes, gate_getfn_offsets,
-                    gate_slot_f, ray_dir_w_f, prm.crystal_config_id, &matched_col_f);
+                    path_local_f, gate_len_f, gate_poly_fn, shape_poly_off,
+                    ray_dir_w_f, prm.crystal_config_id, &matched_col_f);
                 for (uint k = 0u; k < kDevComponentStride; k++) {
                   if ((c_smask_f & (1u << k)) != 0u) {
                     uchar bit = gate_component_bits[

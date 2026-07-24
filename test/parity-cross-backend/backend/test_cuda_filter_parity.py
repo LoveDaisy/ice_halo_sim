@@ -191,8 +191,9 @@ def test_cuda_multi_ms_filter_image_parity_vs_legacy():
     Suspects on failure:
       - DeviceFilterDesc per-slot indexing wrong (gate_slot off by max_ci) →
         wrong filter applied at each layer → corr tanks.
-      - getfn_offsets prefix-sum wrong → ApplyGetFn_dev reads neighbour
-        stripes → predicate scrambles → both corr + energy fail.
+      - per-instance poly_fn indexing wrong (wrong poly_off / neighbour
+        instance's stripe) → ApplyGetFn_dev remaps to the wrong face-number
+        → predicate scrambles → both corr + energy fail.
       - mid-exit ms_layer_idx tag wrong → DrainExits routes a mid-exit through
         host filter and drops it → energy drops while corr stays plausible.
     """

@@ -43,10 +43,19 @@ bar." Argmax needs no knowledge of the geometry's scale and is robust as angular
 separations shrink. Keep a **sanity floor** (`kFaceCoplanarFloor = 1e-2`, ~8.1° slack)
 only to reject genuine non-matches, never as the selector.
 
-✅ Golden templates already in the tree:
-- `crystal.cpp::BuildPolygonFaceData` — argmax triangle→plane assignment.
-- `simulator.cpp::PolygonFaceOfTri` — argmax triangle→polygon-face.
-- `crystal.cpp::FillHexFnMap` pri loop — `p > p_comp` is argmax over the 6 prism refs.
+⚠️ **Superseded, not a live template anymore.** The three functions below were the
+argmax golden templates at the time this convention was written; the closed-form
+representation swap (PR #214) then deleted all three (`BuildPolygonFaceData` and
+`FillHexFnMap` in PR #219 commits `135bca77`/`0d6413f0`, `PolygonFaceOfTri` in PR #219
+commit `b53eca1f`) because the reversal they performed is no longer needed at all —
+`Crystal::PopulateFromCfGeom` (`crystal.cpp`) assigns face data straight from the
+closed-form output instead of reverse-engineering it via argmax. The **convention**
+(prefer argmax over first-match/threshold) still applies to any *new* triangle↔plane
+or normal-classification code; there is currently no live in-tree example of it to
+point to.
+- ~~`crystal.cpp::BuildPolygonFaceData` — argmax triangle→plane assignment.~~ (deleted)
+- ~~`simulator.cpp::PolygonFaceOfTri` — argmax triangle→polygon-face.~~ (deleted)
+- ~~`crystal.cpp::FillHexFnMap` pri loop — `p > p_comp` is argmax over the 6 prism refs.~~ (deleted)
 
 ### 2. Prefer **relative / normalized tolerances** for scale-variant quantities
 - **Areas**: compare relative to a characteristic area, not an absolute floor.
@@ -171,5 +180,5 @@ files, pointing the author here. Scope TBD in the hardening backlog.
 - **病灶族**：绝对 epsilon 作用在尺度可变的几何量（夹角随 wedge 缩、薄片厚 0.02-0.04、面积∝长²、det∝模长积），极端几何下失效。
 - **八条约定**：①匹配用 argmax 不用绝对阈值 ②尺度可变量用相对/归一化容差 ③几何生成走 double、热追踪保 float ④谓词单一真源(防漏网兄弟) ⑤归一化/除法加零保护、用 `<eps` 不用 `==0` ⑥信 ground truth 不信 proxy 指标、哨兵要反向验证有检测力 ⑦测试覆盖极端尾部(wedge 89°+、近退化) ⑧自由符号代数结构性盲于退化——选错代数模型，任何容差救不了。
 - **第 8 条（选模型，不是调 ε）**：自由/超越符号是"通用点"的代数，只判"对所有取值成立的恒等式"(`p(α)≡0 ⟺ p 是零多项式`)；几何退化是"特定取值下的巧合"(`a1=a2 ⟹ α=β`、三面共点、某边先消失)，自由符号模型按定义看不见——这是**范畴错误**，不是可打补丁的实现 bug。病例：pyramid oracle 把锥角当自由符号 α/β，正规锥体 `k·(α−β)` 真零却判不出，落到内嵌 double-Horner + 128-ULP refuse 滤波器，其 ambiguous→refuse 受 FMA 收缩影响、平台相关(同码 macOS 出 14 顶点、Ampere ARM64 出全错 18；前三平台绿是舍入侥幸)。**判据 = 二选一**：要么把参数**钉进对运算封闭且零测试可判定的数域**(六方族 = `QS3 = ℚ(√3)`，且输入参数本身也须落域内)做精确整数/有理算术；要么**老实认 double 近似**、按约定②用尺度相对容差 + fixture 离精确边界。中间"自由符号假装精确"两头不占。**绕不开精确计算的两种正解**：测试/构建期 → 离线 CAS(sympy 真·代数数)一次算死存盘；运行时生产 → 钉数域精确整数 or 认近似(本仓库生产 `geo3d_closedform.*` 全 double、退化产近零面积面即可，从未需运行时精确)。落地示例：`test_closed_form_pyramid.cpp` 的三件契约测试(`TopologyMatchesGoldenConstants`/`VertexPlaneSelfConsistency`/`DegenerateContractSafe`)各断言生产真持有的契约，均不对退化情形仲裁"谁更精确"。
-- **金标准模板**：`crystal.cpp:699` 相对面积、`BuildPolygonFaceData`/`PolygonFaceOfTri`/`FillHexFnMap` pri 的 argmax。
+- **金标准模板**：`crystal.cpp:699` 相对面积仍在；`BuildPolygonFaceData`/`PolygonFaceOfTri`/`FillHexFnMap` pri 的 argmax **三者均已被闭式表达重构删除**（PR #214 起收尾于 PR #219，`135bca77`/`0d6413f0`/`b53eca1f`）——它们做的三角→面/面号反推整类需求已消失，非它们各自被换了新实现；约定①本身仍适用于任何新写的匹配代码，只是当前树内已无该模式的在场例子。
 - **已知欠账**：SolvePlanes 系列 det 绝对阈值未归一化(脆但当前未触发)。

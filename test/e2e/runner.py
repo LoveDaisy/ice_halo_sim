@@ -25,17 +25,24 @@ def find_lumice_binary() -> Path:
 
     Raises FileNotFoundError with actionable message if not found.
     """
+    # Always return an ABSOLUTE path. LUMICE_BIN is frequently a relative path
+    # (CI's shared-lib E2E build does not install, so it points LUMICE_BIN at
+    # the build-tree binary `build/Release/bin/Lumice` — see ci.yml). A caller
+    # that runs the binary under a different cwd (e.g. subprocess(cwd=tmp_path)
+    # to isolate an image output) would otherwise resolve that relative path
+    # against the wrong directory and hit FileNotFoundError. resolve() makes the
+    # returned path cwd-independent.
     env_bin = os.environ.get("LUMICE_BIN")
     if env_bin:
         p = Path(env_bin)
         if p.is_file() and os.access(p, os.X_OK):
-            return p
+            return p.resolve()
         raise FileNotFoundError(f"LUMICE_BIN={env_bin} is not a valid executable")
 
     root = get_project_root()
     candidate = root / "build" / "cmake_install" / "Lumice"
     if candidate.is_file() and os.access(candidate, os.X_OK):
-        return candidate
+        return candidate.resolve()
 
     raise FileNotFoundError(
         f"Lumice binary not found at {candidate}. "

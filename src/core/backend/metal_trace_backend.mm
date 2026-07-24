@@ -739,6 +739,14 @@ struct MetalTraceBackend::Impl {
   // Polygon geometry (uploaded per-layer; capacity-resized lazily).
   id<MTLBuffer> poly_n_buf  = nil;
   id<MTLBuffer> poly_d_buf  = nil;
+  // per-instance GetFn table, one uchar (canonical face-number) per
+  // ABSOLUTE pool polygon, laid out in lock-step with poly_n_buf/poly_d_buf so
+  // the trace kernel indexes it by the ray's own shape_poly_off + LOCAL path
+  // index. Replaces the former per-(layer,ci) prototype getfn table, whose
+  // shared stripe mis-mapped degenerate pool instances under strong shape
+  // randomization (the emit gate read another face's canonical value → the
+  // entry_exit filter collapsed to 0). Allocated in EnsurePolyBuffers.
+  id<MTLBuffer> poly_fn_buf = nil;
   size_t        poly_capacity = 0;
 
   // First-layer root rays (uploaded from host).
@@ -1007,15 +1015,19 @@ struct MetalTraceBackend::Impl {
 
   // Per-layer hop state (scrum-258.3 + scrum-267 task-fused-emit-gate +
   // scrum-267 task-device-resident-continuation Task 3).
-  // hop_ms_prob_ feeds the device emit gate's KernelParams.ms_prob.
-  // last_layer_* is still consumed by ReadbackExitRays for the final-layer
-  // host filter+prob path. The sibling per-ci hop vectors and the mid-exit
-  // host drain were removed in Task 3 once mid-exit emission + frame-transit
-  // both ran on-device.
+  // hop_ms_prob_ feeds the device emit gate's KernelParams.ms_prob for
+  // non-final layers; last_ms_prob_ does the same for the final layer
+  // (DispatchLayer's ms_mode == 0 branch). The sibling per-ci hop vectors and
+  // the mid-exit host drain were removed in Task 3 once mid-exit emission +
+  // frame-transit both ran on-device.
+  //
+  // The final layer no longer mirrors per-ci crystal/axis/filter state on the
+  // host: once the emit gate ran filter+prob+projection on-device,
+  // ReadbackExitRays stopped materialising per-exit records (it returns 0), so
+  // nothing consumed those mirrors. They were removed rather than kept — a
+  // resize()'d vector whose ci_n == 0 slots stay default-constructed is a trap
+  // for whoever adds the first reader back.
   float                           hop_ms_prob_[2]      = { 0.0f, 0.0f };
-  std::vector<Crystal>            last_layer_crystals_;
-  std::vector<AxisDistribution>   last_layer_axis_dists_;
-  std::vector<FilterConfig>       last_layer_filter_configs_;
   float                           last_ms_prob_      = 0.0f;
   uint8_t                         last_ms_layer_idx_ = 0u;
 
@@ -1026,14 +1038,13 @@ struct MetalTraceBackend::Impl {
   //     (ms_layer, ci) flattened as `ms_layer * max_ci + ci` (see
   //     filter_desc_strides_). Same crystal/filter pair across layers does
   //     NOT dedup — keeps lookup O(1).
-  //   * getfn_offsets_buf_: uint32[n_slot + 1] prefix sum of poly_face_cnt per
-  //     (ms_layer, ci); last entry = total bytes.
-  //   * getfn_bytes_buf_: flat uchar stream, slot i lives in
-  //     [offsets[i], offsets[i+1]); content = crystal.GetFn(poly_idx) per
-  //     poly_idx (D1 layout).
+  // the GetFn remap table is no longer part of this per-slot
+  // filter state. It was a per-(layer,ci) prototype stripe (getfn_offsets_buf_
+  // + getfn_bytes_buf_) built from a single fixed-seed crystal, which mis-mapped
+  // degenerate pool instances under strong shape randomization. It is replaced
+  // by the per-instance poly_fn_buf (built in UploadCrystalPool, indexed by the
+  // ray's absolute polygon offset).
   id<MTLBuffer> filter_desc_buf_    = nil;
-  id<MTLBuffer> getfn_offsets_buf_  = nil;
-  id<MTLBuffer> getfn_bytes_buf_    = nil;
   // Complex filter sub-spec flat buffer (267.1b). For each top-level Complex
   // desc, `sub_desc_start` indexes here and `or_clause_count` +
   // `and_term_counts[]` describe the OR/AND layout. Sub-descs are always
@@ -1274,16 +1285,25 @@ void MetalTraceBackend::Impl::EnsureClassLaneBuf(int w, int h) {
 }
 
 void MetalTraceBackend::Impl::EnsurePolyBuffers(size_t poly_cnt) {
-  if (poly_cnt <= poly_capacity) {
+  // poly_cnt == 0 (a whole pool of degenerate/empty crystals) is reachable —
+  // see EnsureTriBuffers. newBufferWithLength:0 returns nil on some drivers and
+  // Metal forbids nil bindings, so allocate a 1-polygon dummy for the zero case
+  // (the gen kernel's gp.tri_count==0 guard means these are never read then).
+  size_t need = std::max<size_t>(poly_cnt, 1u);
+  if (need <= poly_capacity && poly_n_buf != nil) {
     return;
   }
-  poly_capacity = poly_cnt;
-  poly_n_buf  = [device newBufferWithLength:poly_cnt * 3 * sizeof(float)
+  poly_capacity = need;
+  poly_n_buf  = [device newBufferWithLength:need * 3 * sizeof(float)
                                     options:MTLResourceStorageModeShared];
   assert(poly_n_buf != nil);
-  poly_d_buf  = [device newBufferWithLength:poly_cnt * sizeof(float)
+  poly_d_buf  = [device newBufferWithLength:need * sizeof(float)
                                     options:MTLResourceStorageModeShared];
   assert(poly_d_buf != nil);
+  // per-instance GetFn table, one uchar per absolute pool polygon.
+  poly_fn_buf = [device newBufferWithLength:need * sizeof(uint8_t)
+                                    options:MTLResourceStorageModeShared];
+  assert(poly_fn_buf != nil);
 }
 
 void MetalTraceBackend::Impl::EnsureRootBuffers(size_t n) {
@@ -1352,27 +1372,31 @@ void MetalTraceBackend::Impl::EnsurePoolShapeTableBuffer(size_t shape_cnt) {
 }
 
 void MetalTraceBackend::Impl::EnsureTriBuffers(size_t tri_cnt) {
-  // task-260.5 Step 3: device-gen requires at least one triangle for the
-  // area×facing categorical sampler. A zero-count crystal would underflow
-  // categorical_sample in gen_root_kernel (n=0 → returns 0xffffffff → OOB
-  // index). Production configs always have tri_cnt > 0; this assert catches
-  // a future scene/config bug at the layer-prep stage rather than as a GPU
-  // hang.
-  assert(tri_cnt > 0u && "EnsureTriBuffers: tri_cnt == 0 (gen_root_kernel cannot sample)");
-  if (tri_cnt <= tri_buf_capacity_) {
+  // tri_cnt == 0 (a whole pool of degenerate/empty crystals) is a REACHABLE
+  // input, not a bug: MakeCrystal's closed-form validity gate returns an empty
+  // Crystal for degenerate face_distance draws (~11.6% at gauss std=0.5), and
+  // at pool size 1 that empties the pool's triangle set. The device gen kernel's
+  // gp.tri_count==0 guard early-returns (0 rays) before touching the triangle
+  // buffers, so their contents are never read in that case — but Metal still
+  // forbids nil buffer bindings, so allocate a 1-triangle dummy when tri_cnt==0
+  // (formerly this asserted tri_cnt>0, which fired in Debug on legitimate
+  // strongly-randomized scenes; see the empty-Crystal contract). Grow-only:
+  // once a real pool sizes these up they stay large enough for later dummies.
+  size_t need = std::max<size_t>(tri_cnt, 1u);
+  if (need <= tri_buf_capacity_ && tri_vtx_buf_ != nil) {
     return;
   }
-  tri_buf_capacity_ = tri_cnt;
-  tri_vtx_buf_ = [device newBufferWithLength:tri_cnt * 9 * sizeof(float)
+  tri_buf_capacity_ = need;
+  tri_vtx_buf_ = [device newBufferWithLength:need * 9 * sizeof(float)
                                     options:MTLResourceStorageModeShared];
   assert(tri_vtx_buf_ != nil);
-  tri_norm_buf_ = [device newBufferWithLength:tri_cnt * 3 * sizeof(float)
+  tri_norm_buf_ = [device newBufferWithLength:need * 3 * sizeof(float)
                                      options:MTLResourceStorageModeShared];
   assert(tri_norm_buf_ != nil);
-  tri_area_buf_ = [device newBufferWithLength:tri_cnt * sizeof(float)
+  tri_area_buf_ = [device newBufferWithLength:need * sizeof(float)
                                      options:MTLResourceStorageModeShared];
   assert(tri_area_buf_ != nil);
-  tri_to_poly_buf_ = [device newBufferWithLength:tri_cnt * sizeof(uint32_t)
+  tri_to_poly_buf_ = [device newBufferWithLength:need * sizeof(uint32_t)
                                         options:MTLResourceStorageModeShared];
   assert(tri_to_poly_buf_ != nil);
 }
@@ -1457,20 +1481,26 @@ void MetalTraceBackend::Impl::EnsureWlPoolBuffer() {
 }
 
 // scrum-267 task-msl-filter-match-port (Step 4): upload per-session filter
-// descriptors + GetFn tables for the future fused emit gate (sub-task 2).
-// Layout: one DeviceFilterDesc per (ms_layer, ci) slot, flat-indexed as
-// `ms_layer * max_ci + ci` (max_ci = max setting_.size() across layers); one
-// GetFn byte stripe per slot with a uint prefix-sum offsets array. All
-// hexagonal crystals share `poly_face_cnt_ == 8`, so a prototype crystal made
-// with a fixed seed is enough to derive GetFn — current Metal backend supports
-// hex prism only (BeginSession asserts already enforce that elsewhere). Per
-// plan §3 D1 + Step 4 + Round-2 Minor-3 refinement.
+// descriptors for the fused emit gate. Layout: one DeviceFilterDesc per
+// (ms_layer, ci) slot, flat-indexed as `ms_layer * max_ci + ci` (max_ci = max
+// setting_.size() across layers).
+//
+// this function no longer builds a GetFn remap table. The former
+// design derived GetFn from a single fixed-seed prototype crystal per slot
+// (assuming "all hexagonal crystals share poly_face_cnt_ == 8, so any sampled
+// instance suffices"). That invariant is false under strong shape
+// randomization: degenerate face_distance draws drop lateral faces per
+// instance, so the prototype's local->canonical mapping mis-mapped the actual
+// traced instances (entry_exit filter collapsed to 0 at gauss std >= 0.30).
+// The GetFn table is now per-instance (poly_fn_buf, built in UploadCrystalPool
+// from each pool crystal's own GetFn and indexed by the ray's absolute polygon
+// offset). The proto crystal is still built here only for BuildDeviceFilterDesc
+// (canonical bytes / symmetry / sigma_a), which are filter-config-derived and
+// crystal-topology-independent.
 void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spec) {
   filter_desc_count_ = 0;
   filter_desc_max_ci_ = 0;
   filter_desc_buf_ = nil;
-  getfn_offsets_buf_ = nil;
-  getfn_bytes_buf_ = nil;
   complex_sub_desc_buf_ = nil;
   and_term_counts_base_offset_ = 0u;
   // task-358.1: reset color state up-front; the descriptor append below turns
@@ -1479,26 +1509,19 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
   color_desc_offset_ = 0u;
   color_bits_offset_ = 0u;
   // scrum-267 task-fused-emit-gate Step 3a (R5 fix): the trace kernel's emit
-  // gate unconditionally binds filter_desc_buf_ / getfn_offsets_buf_ /
-  // getfn_bytes_buf_ / complex_sub_desc_buf_ at buffer slots 24-27 (plan §3
-  // originally reserved 27-30 but Metal's per-stage buffer-index ceiling is
-  // 30 — see DECISION in progress.md). Metal disallows nil-buffer bindings,
-  // so each early-return path must still allocate a 1-byte dummy. The kernel
-  // never reads through them in the
-  // no-filter case (DeviceFilterCheck on a None desc returns true and the gate
-  // proceeds, but on the ms_mode==0 path the gate is never entered; the
-  // ms_mode==1 path only fires when there are MS layers, which co-occurs with
-  // EnsureFilterBuffers having a real desc array).
+  // gate unconditionally binds filter_desc_buf_ / complex_sub_desc_buf_ (slots
+  // 23/26) plus the per-instance poly_fn_buf (slot 25, allocated in
+  // EnsurePolyBuffers). Metal disallows nil-buffer bindings, so each early-
+  // return path must still allocate a 1-byte dummy for the filter descriptor
+  // buffers. The kernel never reads through them in the no-filter case
+  // (DeviceFilterCheck on a None desc returns true and the gate proceeds, but on
+  // the ms_mode==0 path the gate is never entered; the ms_mode==1 path only
+  // fires when there are MS layers, which co-occurs with EnsureFilterBuffers
+  // having a real desc array).
   auto alloc_filter_dummies = [&]() {
     filter_desc_buf_ = [device newBufferWithLength:1
                                           options:MTLResourceStorageModeShared];
     assert(filter_desc_buf_ != nil);
-    getfn_offsets_buf_ = [device newBufferWithLength:1
-                                            options:MTLResourceStorageModeShared];
-    assert(getfn_offsets_buf_ != nil);
-    getfn_bytes_buf_ = [device newBufferWithLength:1
-                                          options:MTLResourceStorageModeShared];
-    assert(getfn_bytes_buf_ != nil);
     complex_sub_desc_buf_ = [device newBufferWithLength:1
                                                options:MTLResourceStorageModeShared];
     assert(complex_sub_desc_buf_ != nil);
@@ -1529,14 +1552,16 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
   filter_desc_max_ci_ = max_ci;
   size_t n_slot = n_layers * max_ci;
 
-  // Build per-slot prototype crystals via a private RNG so the session's main
-  // rng stream (used for trace) is not advanced. Hex-prism GetFn(poly_idx) is
-  // shape-invariant for hex faces; any sampled instance suffices for the
-  // canonical_bytes + GetFn table contents (Round-2 Minor-3 acknowledgement:
-  // canonical computation is fn_period=6-invariant for hex crystals).
+  // Build a per-slot prototype crystal via a private RNG so the session's main
+  // rng stream (used for trace) is not advanced. The prototype feeds
+  // BuildDeviceFilterDesc only, whose canonical_bytes / symmetry / sigma_a are
+  // filter-config-derived and crystal-topology-independent — so any instance is
+  // fine HERE. (the prototype is NOT used to build a GetFn remap
+  // table anymore; the actual per-instance GetFn is uploaded via poly_fn_buf in
+  // UploadCrystalPool. The old "any sampled instance suffices for the GetFn
+  // table" assumption is exactly what strong shape randomization broke.)
   RandomNumberGenerator proto_rng(0xC0FEFEEDu);
   std::vector<DeviceFilterDesc> descs(n_slot);
-  std::vector<std::vector<uint8_t>> per_slot_bytes(n_slot);
   // Flat sub-desc buffer for Complex filters (267.1b). Inlined collection so a
   // Complex slot's `sub_desc_start` is recorded BEFORE pushing its sub-descs —
   // avoids needing a separate (slot, ComplexFilterParam) map for a second pass.
@@ -1554,7 +1579,6 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
       Crystal proto = MakeCrystal(proto_rng, setting.crystal_.param_);
       size_t slot = mi * max_ci + ci;
       descs[slot] = detail::BuildDeviceFilterDesc(setting.filter_, proto, setting.crystal_.axis_);
-      per_slot_bytes[slot] = detail::BuildDeviceGetFnBytes(proto);
       // Inline Complex sub-desc collection — see plan §3 D5 / Step 3 rationale.
       if (descs[slot].type == kDeviceFilterTypeComplex) {
         const auto* complex_p = std::get_if<ComplexFilterParam>(&setting.filter_.param_);
@@ -1728,32 +1752,8 @@ void MetalTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& session_spe
                 color_desc_region * sizeof(DeviceFilterDesc));
   }
 
-  // Upload GetFn prefix-sum offsets + flat byte stream.
-  std::vector<uint32_t> offsets(n_slot + 1, 0u);
-  for (size_t i = 0; i < n_slot; ++i) {
-    offsets[i + 1] = offsets[i] + static_cast<uint32_t>(per_slot_bytes[i].size());
-  }
-  size_t offsets_bytes = offsets.size() * sizeof(uint32_t);
-  getfn_offsets_buf_ = [device newBufferWithLength:offsets_bytes
-                                            options:MTLResourceStorageModeShared];
-  assert(getfn_offsets_buf_ != nil);
-  std::memcpy([getfn_offsets_buf_ contents], offsets.data(), offsets_bytes);
-
-  size_t total_bytes = offsets.back();
-  // newBufferWithLength:0 returns nil on some drivers — guard with a 1-byte
-  // minimum so the buffer is always bindable (kernel reads gated by offsets).
-  size_t alloc_bytes = std::max<size_t>(total_bytes, 1);
-  getfn_bytes_buf_ = [device newBufferWithLength:alloc_bytes
-                                          options:MTLResourceStorageModeShared];
-  assert(getfn_bytes_buf_ != nil);
-  if (total_bytes > 0) {
-    uint8_t* dst = static_cast<uint8_t*>([getfn_bytes_buf_ contents]);
-    for (size_t i = 0; i < n_slot; ++i) {
-      if (!per_slot_bytes[i].empty()) {
-        std::memcpy(dst + offsets[i], per_slot_bytes[i].data(), per_slot_bytes[i].size());
-      }
-    }
-  }
+  // the per-slot prototype GetFn table upload used to live here.
+  // The GetFn remap is now per-instance (poly_fn_buf, UploadCrystalPool).
 
   // Upload Complex sub-desc flat buffer (267.1b) + flat AND-term counts
   // (task-device-flat-and-terms) packed after it. Allocate a 1-byte dummy when
@@ -1846,12 +1846,25 @@ void MetalTraceBackend::Impl::UploadCrystalPool(const std::vector<Crystal>& pool
     tri_acc  += tri_cnt;
   }
 
+  // A pool whose crystals are all degenerate (each an empty Crystal from
+  // MakeCrystal's closed-form validity gate — a legitimate ~11.6% outcome at
+  // face_distance gauss std=0.5) has zero total polygons/triangles. This is a
+  // reachable input, not a bug: the gen kernel's gp.tri_count==0 guard early-
+  // returns (0 rays emitted) before it ever reads the pool tables, and the
+  // trace pass is then skipped by num_rays==0 gating. We keep the normal upload
+  // path (non-empty pool_shape_table_h_ so BuildGenRootParams' precondition
+  // holds); Ensure{Poly,Tri}Buffers allocate a 1-element dummy for the zero
+  // case so the buffers stay bindable (Metal forbids nil bindings) even when
+  // the very first pool of the session is all-degenerate. A PARTIALLY
+  // degenerate pool (tri_acc>0) uploads normally; the kernel's per-shape
+  // tri_cnt==0 branch routes rays that pick an empty shape to a zero-weight drop.
   EnsurePolyBuffers(poly_acc);
   EnsureTriBuffers(tri_acc);
   EnsurePoolShapeTableBuffer(pool.size());
 
   auto* poly_n_ptr    = static_cast<float*>([poly_n_buf contents]);
   auto* poly_d_ptr    = static_cast<float*>([poly_d_buf contents]);
+  auto* poly_fn_ptr   = static_cast<uint8_t*>([poly_fn_buf contents]);
   auto* tri_vtx_ptr   = static_cast<float*>([tri_vtx_buf_ contents]);
   auto* tri_norm_ptr  = static_cast<float*>([tri_norm_buf_ contents]);
   auto* tri_area_ptr  = static_cast<float*>([tri_area_buf_ contents]);
@@ -1871,6 +1884,16 @@ void MetalTraceBackend::Impl::UploadCrystalPool(const std::vector<Crystal>& pool
                 poly_cnt * 3 * sizeof(float));
     std::memcpy(poly_d_ptr + poly_off, crystal.GetPolygonFaceDist(),
                 poly_cnt * sizeof(float));
+
+    // per-instance GetFn table. detail::BuildDeviceGetFnBytes returns
+    // exactly poly_cnt bytes = this instance's own GetFn(local) for each present
+    // face — the SAME single-source builder the retired per-slot prototype path
+    // used, now applied to the actual traced instance instead of a fixed-seed
+    // prototype. Written at this shape's absolute poly_off so the trace kernel's
+    // gate_poly_fn[shape_poly_off + local] lookup lands on the right instance.
+    const std::vector<uint8_t> fn_bytes = detail::BuildDeviceGetFnBytes(crystal);
+    assert(fn_bytes.size() == poly_cnt && "poly_fn stripe length must equal poly_cnt");
+    std::memcpy(poly_fn_ptr + poly_off, fn_bytes.data(), poly_cnt * sizeof(uint8_t));
 
     // Triangle geometry built on the fly from cf_geom_ (detail::BuildEntrySubTris,
     // the same helper CPU InitRay_p_fid uses) — NOT the crystal's triangle Mesh
@@ -2684,10 +2707,12 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   // Emit-gate filter state (scrum-267 task-fused-emit-gate Step 4b). Bound for
   // every dispatch (Metal disallows nil buffers). EnsureFilterBuffers guarantees
   // non-nil even in no-filter sessions via the 1-byte dummy fallback (R5 fix).
-  // Slots 23-26 carry filter descriptors.
+  // Slots 23/25/26 carry filter descriptors + the per-instance GetFn table.
+  // Slot 24 (the retired prototype prefix-sum table) is no longer bound — the
+  // kernel drops that param. poly_fn_buf is the per-instance GetFn
+  // table, bound at 25 in place of the former shared getfn byte stream.
   [enc setBuffer:filter_desc_buf_      offset:0 atIndex:23];
-  [enc setBuffer:getfn_offsets_buf_    offset:0 atIndex:24];
-  [enc setBuffer:getfn_bytes_buf_      offset:0 atIndex:25];
+  [enc setBuffer:poly_fn_buf           offset:0 atIndex:25];
   [enc setBuffer:complex_sub_desc_buf_ offset:0 atIndex:26];
   // cont_wl_idx propagates the photon's lifetime wavelength tag into the
   // continuation ring (slot 28) so the next layer's trace reads its optics
@@ -2824,16 +2849,13 @@ void MetalTraceBackend::Impl::Reset() {
   // scene.max_hits_; clear to make a session-mid leak obvious.
   face_seq_cap_ = 0;
   // scrum-258.3 + scrum-267 Task 3: per-layer filter+prob state.
-  // hop_ms_prob_ (device emit gate) + last_layer_* (final-layer host
-  // filter+prob in ReadbackExitRays) are populated by TraceLayer's ci loop in
-  // the next session; clear here so a stale layer's settings cannot bleed
-  // across sessions if BeginSession skips re-assigning a particular slot.
+  // hop_ms_prob_ / last_ms_prob_ (device emit gate) are populated by
+  // TraceLayer's ci loop in the next session; clear here so a stale layer's
+  // settings cannot bleed across sessions if BeginSession skips re-assigning a
+  // particular slot.
   for (int s = 0; s < 2; s++) {
     hop_ms_prob_[s] = 0.0f;
   }
-  last_layer_crystals_.clear();
-  last_layer_axis_dists_.clear();
-  last_layer_filter_configs_.clear();
   last_ms_prob_ = 0.0f;
   last_ms_layer_idx_ = 0u;
   // scrum-267 task-msl-filter-match-port (Step 4): per-session device filter
@@ -2842,8 +2864,6 @@ void MetalTraceBackend::Impl::Reset() {
   filter_desc_count_ = 0;
   filter_desc_max_ci_ = 0;
   filter_desc_buf_ = nil;
-  getfn_offsets_buf_ = nil;
-  getfn_bytes_buf_ = nil;
   complex_sub_desc_buf_ = nil;
   and_term_counts_base_offset_ = 0u;
   spec = SessionSpec{};
@@ -3138,14 +3158,10 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     int in_slot = static_cast<int>((impl_->ms_idx - 1) & 1u);  // only used when !first_ms
 
     // scrum-258.3 Step 3 + scrum-267 Task 3 cleanup: per-layer filter+prob
-    // state. Non-final layers populate `hop_ms_prob_[out_slot]` (consumed by
-    // the device emit gate's `KernelParams.ms_prob` in DispatchLayer); the
-    // final layer populates `last_layer_*` (consumed by ReadbackExitRays for
-    // host filter+prob on the final-layer exits).
+    // state. Non-final layers populate `hop_ms_prob_[out_slot]`, the final
+    // layer populates `last_ms_prob_`; both are consumed by the device emit
+    // gate's `KernelParams.ms_prob` in DispatchLayer.
     if (last_layer) {
-      impl_->last_layer_crystals_.resize(crystal_cnt);
-      impl_->last_layer_axis_dists_.resize(crystal_cnt);
-      impl_->last_layer_filter_configs_.resize(crystal_cnt);
       impl_->last_ms_prob_ = ms_info.prob_;
       impl_->last_ms_layer_idx_ = static_cast<uint8_t>(impl_->ms_idx);
     } else {
@@ -3219,18 +3235,11 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       impl_->ResolveLayerCrystalForCi(setting, use_host,
                                        first_ms ? roots.host : HostRayBatch{}, p_ci);
 
-      // scrum-258.3 Step 3 + scrum-267 Task 3 cleanup: final-layer only.
-      // Non-final layers no longer need per-ci crystal/axis/filter state —
+      // No layer keeps per-ci crystal/axis/filter state on the host any more —
       // transit_root_kernel pulls geometry from tri_*_buf_ (uploaded by
       // ResolveLayerCrystalForCi → UploadCrystal) and the emit gate consumes
-      // the device-side filter buffers (scrum-267 task-msl-filter-match-port).
-      // ReadbackExitRays still runs host filter+prob on the final-layer exits,
-      // so last_layer_* mirrors stay.
-      if (last_layer) {
-        impl_->last_layer_crystals_[ci] = impl_->current_crystal;
-        impl_->last_layer_axis_dists_[ci] = setting.crystal_.axis_;
-        impl_->last_layer_filter_configs_[ci] = setting.filter_;
-      }
+      // the device-side filter buffers, on the final layer as well as the
+      // intermediate ones.
 
       size_t in_count = 0;
       if (first_ms) {
