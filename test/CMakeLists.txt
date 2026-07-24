@@ -26,7 +26,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/core/test_optics.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_crystal.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_rng.cpp"
-  "${PROJ_TEST_DIR}/unit-correctness/core/test_distribution_bit_exact.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_distribution_slots.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_filter.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_filter_spec.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_component_gate.cpp"
