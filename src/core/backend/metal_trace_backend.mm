@@ -1285,20 +1285,23 @@ void MetalTraceBackend::Impl::EnsureClassLaneBuf(int w, int h) {
 }
 
 void MetalTraceBackend::Impl::EnsurePolyBuffers(size_t poly_cnt) {
-  if (poly_cnt <= poly_capacity) {
+  // poly_cnt == 0 (a whole pool of degenerate/empty crystals) is reachable —
+  // see EnsureTriBuffers. newBufferWithLength:0 returns nil on some drivers and
+  // Metal forbids nil bindings, so allocate a 1-polygon dummy for the zero case
+  // (the gen kernel's gp.tri_count==0 guard means these are never read then).
+  size_t need = std::max<size_t>(poly_cnt, 1u);
+  if (need <= poly_capacity && poly_n_buf != nil) {
     return;
   }
-  poly_capacity = poly_cnt;
-  poly_n_buf  = [device newBufferWithLength:poly_cnt * 3 * sizeof(float)
+  poly_capacity = need;
+  poly_n_buf  = [device newBufferWithLength:need * 3 * sizeof(float)
                                     options:MTLResourceStorageModeShared];
   assert(poly_n_buf != nil);
-  poly_d_buf  = [device newBufferWithLength:poly_cnt * sizeof(float)
+  poly_d_buf  = [device newBufferWithLength:need * sizeof(float)
                                     options:MTLResourceStorageModeShared];
   assert(poly_d_buf != nil);
   // per-instance GetFn table, one uchar per absolute pool polygon.
-  // newBufferWithLength:0 returns nil on some drivers; poly_cnt is >= 1 here
-  // (UploadCrystalPool early-returns on an empty pool before calling this).
-  poly_fn_buf = [device newBufferWithLength:poly_cnt * sizeof(uint8_t)
+  poly_fn_buf = [device newBufferWithLength:need * sizeof(uint8_t)
                                     options:MTLResourceStorageModeShared];
   assert(poly_fn_buf != nil);
 }
@@ -1369,37 +1372,31 @@ void MetalTraceBackend::Impl::EnsurePoolShapeTableBuffer(size_t shape_cnt) {
 }
 
 void MetalTraceBackend::Impl::EnsureTriBuffers(size_t tri_cnt) {
-  // task-260.5 Step 3: device-gen requires at least one triangle for the
-  // area×facing categorical sampler. A zero-count crystal would underflow
-  // categorical_sample in gen_root_kernel (n=0 → returns 0xffffffff → OOB
-  // index). This assert catches such a crystal at the layer-prep stage
-  // rather than as a GPU hang.
-  //
-  // NOTE: the original claim here ("Production configs always have tri_cnt
-  // > 0") is FALSE. Under strong shape randomization, MakeCrystal's
-  // closed-form validity gate returns a default-constructed (empty) Crystal
-  // for degenerate face_distance draws — measured ~11.6% hit rate at
-  // face_distance gauss std=0.5 — and that empty Crystal reaches here with
-  // tri_cnt == 0. So this assert fires in Debug on *legitimate* randomized
-  // scenes, not just on a future config bug. Treat tri_cnt == 0 as a
-  // reachable input; the empty-Crystal-tolerance fix (make the device gen
-  // path skip / degrade instead of asserting) is tracked as separate work
-  // and is intentionally out of this change's scope.
-  assert(tri_cnt > 0u && "EnsureTriBuffers: tri_cnt == 0 (gen_root_kernel cannot sample)");
-  if (tri_cnt <= tri_buf_capacity_) {
+  // tri_cnt == 0 (a whole pool of degenerate/empty crystals) is a REACHABLE
+  // input, not a bug: MakeCrystal's closed-form validity gate returns an empty
+  // Crystal for degenerate face_distance draws (~11.6% at gauss std=0.5), and
+  // at pool size 1 that empties the pool's triangle set. The device gen kernel's
+  // gp.tri_count==0 guard early-returns (0 rays) before touching the triangle
+  // buffers, so their contents are never read in that case — but Metal still
+  // forbids nil buffer bindings, so allocate a 1-triangle dummy when tri_cnt==0
+  // (formerly this asserted tri_cnt>0, which fired in Debug on legitimate
+  // strongly-randomized scenes; see the empty-Crystal contract). Grow-only:
+  // once a real pool sizes these up they stay large enough for later dummies.
+  size_t need = std::max<size_t>(tri_cnt, 1u);
+  if (need <= tri_buf_capacity_ && tri_vtx_buf_ != nil) {
     return;
   }
-  tri_buf_capacity_ = tri_cnt;
-  tri_vtx_buf_ = [device newBufferWithLength:tri_cnt * 9 * sizeof(float)
+  tri_buf_capacity_ = need;
+  tri_vtx_buf_ = [device newBufferWithLength:need * 9 * sizeof(float)
                                     options:MTLResourceStorageModeShared];
   assert(tri_vtx_buf_ != nil);
-  tri_norm_buf_ = [device newBufferWithLength:tri_cnt * 3 * sizeof(float)
+  tri_norm_buf_ = [device newBufferWithLength:need * 3 * sizeof(float)
                                      options:MTLResourceStorageModeShared];
   assert(tri_norm_buf_ != nil);
-  tri_area_buf_ = [device newBufferWithLength:tri_cnt * sizeof(float)
+  tri_area_buf_ = [device newBufferWithLength:need * sizeof(float)
                                      options:MTLResourceStorageModeShared];
   assert(tri_area_buf_ != nil);
-  tri_to_poly_buf_ = [device newBufferWithLength:tri_cnt * sizeof(uint32_t)
+  tri_to_poly_buf_ = [device newBufferWithLength:need * sizeof(uint32_t)
                                         options:MTLResourceStorageModeShared];
   assert(tri_to_poly_buf_ != nil);
 }
@@ -1849,6 +1846,18 @@ void MetalTraceBackend::Impl::UploadCrystalPool(const std::vector<Crystal>& pool
     tri_acc  += tri_cnt;
   }
 
+  // A pool whose crystals are all degenerate (each an empty Crystal from
+  // MakeCrystal's closed-form validity gate — a legitimate ~11.6% outcome at
+  // face_distance gauss std=0.5) has zero total polygons/triangles. This is a
+  // reachable input, not a bug: the gen kernel's gp.tri_count==0 guard early-
+  // returns (0 rays emitted) before it ever reads the pool tables, and the
+  // trace pass is then skipped by num_rays==0 gating. We keep the normal upload
+  // path (non-empty pool_shape_table_h_ so BuildGenRootParams' precondition
+  // holds); Ensure{Poly,Tri}Buffers allocate a 1-element dummy for the zero
+  // case so the buffers stay bindable (Metal forbids nil bindings) even when
+  // the very first pool of the session is all-degenerate. A PARTIALLY
+  // degenerate pool (tri_acc>0) uploads normally; the kernel's per-shape
+  // tri_cnt==0 branch routes rays that pick an empty shape to a zero-weight drop.
   EnsurePolyBuffers(poly_acc);
   EnsureTriBuffers(tri_acc);
   EnsurePoolShapeTableBuffer(pool.size());
