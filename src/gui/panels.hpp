@@ -85,8 +85,10 @@ void ShapeTableParamLabel(const char* label);
 // still shows them (greyed = "available to turn on"), matching the owner's "everything on the
 // surface" design — no hidden state, the table stays a regular rectangle. Enabling randomization
 // defaults to Uniform with spread = 0.2 × center (owner default); disabling collapses to NO_RANDOM
-// and zeroes the (now meaningless) spread. Must be called between BeginTable/EndTable. Returns true
-// if any value changed. Does NOT call MarkDirty() — caller is responsible.
+// and zeroes the (now meaningless) spread. Must be called between BeginTable/EndTable, and advances
+// exactly kShapeTableColumnCount (=5) columns — every row helper in this table (this one and the
+// file-local wedge row) must honor that column count or ImGui silently misaligns the grid. Returns
+// true if any value changed. Does NOT call MarkDirty() — caller is responsible.
 //
 // Unlike RenderAxisDist, the type combo's top-most-popup fix is handled INTERNALLY (via
 // RenderShapeDistTypeCombo) — callers need NOT precede this with SetNextComboPopupTopMost().

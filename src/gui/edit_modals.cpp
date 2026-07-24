@@ -579,6 +579,9 @@ static bool RenderWedgeTableRow(const char* label, float* value) {
   ImGui::TableNextColumn();  // Random  — blank (not applicable)
   ImGui::TableNextColumn();  // Type    — blank
   ImGui::TableNextColumn();  // Spread  — blank
+  // Invariant: this row advanced exactly kShapeTableColumnCount (=5) columns — same contract as
+  // RenderShapeDistTableRow; the last three cells are intentionally empty (wedge angles are
+  // non-randomizable), not skipped, so the grid stays a rectangle and headers stay aligned.
   return changed;
 }
 
