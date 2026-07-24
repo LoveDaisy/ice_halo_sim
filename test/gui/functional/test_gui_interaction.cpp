@@ -1992,9 +1992,9 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
         IM_CHECK_EQ(crystal().face_distance[i].type, gui::ShapeDistType::kNoRandom);
       }
 
-      // Collapse the Face Distance section. ImGui persists TreeNode open/closed state per window
-      // across tests (ResetTestState resets g_state but not ImGui storage), so leaving it open would
-      // change the crystal-modal layout for later tests that assume the default-collapsed section.
+      // Collapse the Face Distance section. ImGui persists the CollapsingHeader open/closed state per
+      // window across tests (ResetTestState resets g_state but not ImGui storage), so leaving it open
+      // would change the crystal-modal layout for later tests that assume the default-collapsed section.
       ctx->ItemClick("**/Face Distance##modal");
       ctx->Yield(2);
       ctx->ItemClick("**/Close##edit_modal");

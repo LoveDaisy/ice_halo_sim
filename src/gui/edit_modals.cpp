@@ -72,14 +72,25 @@ constexpr float kEditModalMinWidth = 820.0f;
 // fixed height as the horizontal right pane (kPreviewChildHeight), so the
 // vertical modal is exactly 2× the horizontal modal height plus chrome.
 //
-// Raised 360 → 420 for the Crystal-tab shape property table: its fixed columns
-// (Parameter kLabelColWidth=70 + Type 120 + Spread 60 + the Random checkbox cell
-// ~26) sum to ~276, and the stretch Value column still needs the slider(≥40) +
-// input(kInputWidth=60) pair (~104) to keep the "%.4f" Prism-H number readable;
-// with inner cell borders + cell/window padding that totals ~420. Below this the
-// table would either clip the Spread number column or force a horizontal scroll.
+// Held at 420 for the Crystal-tab shape property table. Fixed columns
+// (Param kShapeParamColWidth=60 + Rand kShapeRandColWidth=36 + Type
+// kShapeTypeColWidth=100 + Spread kShapeSpreadColWidth=60) sum to ~256; the
+// stretch Value column then keeps a usable slider + input(kInputWidth=60) pair
+// with the "%.4f" Prism-H number readable, plus inner borders / cell padding.
+// Below this the table would clip the Spread number column or force a scroll.
 constexpr float kEditModalMinWidthVertical = 420.0f;
 constexpr float kEditModalMinHeightVertical = 0.0f;
+
+// Shape property-table fixed column widths; the Value column is WidthStretch and
+// takes the remainder. Tuned so the vertical layout gives the Value slider real
+// length instead of starving it behind wide Random/Type cells: Rand only needs
+// the checkbox + "Rand" header, Type fits the distribution names, Spread fits
+// "100.0000" (%.4f). Shared by the main params table and the Face Distance table
+// so their columns line up.
+constexpr float kShapeParamColWidth = 60.0f;
+constexpr float kShapeRandColWidth = 36.0f;
+constexpr float kShapeTypeColWidth = 100.0f;
+constexpr float kShapeSpreadColWidth = 60.0f;
 
 static ActiveModal g_active_modal = ActiveModal::kNone;
 static int g_modal_layer_idx = -1;
@@ -611,25 +622,30 @@ static void RenderCrystalModal(GuiState& /*state*/) {
 
   ImGui::Spacing();
 
-  // -- Shape parameters (single BeginTable property table) --
+  // -- Shape parameters (property table) --
   // Every randomizable shape scalar is one RenderShapeDistTableRow (5 aligned columns:
-  // Parameter | Value | Random | Type | Spread); the two Pyramid wedge angles are non-randomizable
-  // RenderWedgeTableRow rows (Random/Type/Spread blank). See gui/slider_mapping.hpp for the
+  // Param | Value | Rand | Type | Spread); the two Pyramid wedge angles are non-randomizable
+  // RenderWedgeTableRow rows (Rand/Type/Spread blank). See gui/slider_mapping.hpp for the
   // three-H-mapping conventions. Column count is pinned to kShapeTableColumnCount (panels.hpp) so
-  // the TableSetupColumn declarations here and the TableNextColumn sequences in the row helpers
-  // cannot drift (ImGui silently misaligns rather than asserting on a mismatch).
+  // the TableSetupColumn declarations and the TableNextColumn sequences in the row helpers cannot
+  // drift (ImGui silently misaligns rather than asserting on a mismatch).
   constexpr float kFaceSpreadMax = 2.0f;
   const ImGuiTableFlags kTableFlags =
       ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg;
-  if (ImGui::BeginTable("##shape_params", kShapeTableColumnCount, kTableFlags)) {
-    // Value is the only WidthStretch column, so a narrow (vertical-layout) table compresses the
-    // slider first rather than clipping the fixed Type/Spread cells — satisfies the "shorten the
-    // slider, keep the number columns readable" responsive requirement.
-    ImGui::TableSetupColumn("Parameter", ImGuiTableColumnFlags_WidthFixed, kLabelColWidth);
+  // Shared column setup: identical fixed widths in the main params table and the Face Distance table
+  // below, so the 6 face rows line up column-for-column with the parameter rows. Value is the only
+  // WidthStretch column, so a narrow (vertical-layout) table compresses the slider first rather than
+  // clipping the fixed Rand/Type/Spread cells.
+  const auto setup_shape_columns = []() {
+    ImGui::TableSetupColumn("Param", ImGuiTableColumnFlags_WidthFixed, kShapeParamColWidth);
     ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-    ImGui::TableSetupColumn("Random", ImGuiTableColumnFlags_WidthFixed);
-    ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 120.0f);
-    ImGui::TableSetupColumn("Spread", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+    ImGui::TableSetupColumn("Rand", ImGuiTableColumnFlags_WidthFixed, kShapeRandColWidth);
+    ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, kShapeTypeColWidth);
+    ImGui::TableSetupColumn("Spread", ImGuiTableColumnFlags_WidthFixed, kShapeSpreadColWidth);
+  };
+
+  if (ImGui::BeginTable("##shape_params", kShapeTableColumnCount, kTableFlags)) {
+    setup_shape_columns();
     ImGui::TableHeadersRow();
 
     if (cr.type == CrystalType::kPrism) {
@@ -641,28 +657,27 @@ static void RenderCrystalModal(GuiState& /*state*/) {
       RenderWedgeTableRow("Upper A##modal_cr", &cr.upper_alpha);
       RenderWedgeTableRow("Lower A##modal_cr", &cr.lower_alpha);
     }
+    ImGui::EndTable();
+  }
 
-    // -- Face distance --
-    // The 6 faces are ordinary rows of the SAME table (column-for-column aligned with the params
-    // above), gated behind a collapsible header. SpanAllColumns makes the header stretch across the
-    // whole table like a divider row; NoTreePushOnOpen keeps the face rows at zero extra indent so
-    // their left edge lines up with the parameter rows. Default-collapsed (no DefaultOpen flag).
-    // Each face is an independent RenderShapeDistTableRow — there is NO "broadcast to all faces"
-    // control (owner rejected it): every row is edited independently, so the old unified/mixed-state
-    // machinery (and its self-contradiction warning) is gone.
-    ImGui::TableNextRow();
-    ImGui::TableNextColumn();
-    const bool fd_open = ImGui::TreeNodeEx("Face Distance##modal",
-                                           ImGuiTreeNodeFlags_SpanAllColumns | ImGuiTreeNodeFlags_NoTreePushOnOpen);
-    if (fd_open) {
+  // -- Face distance --
+  // A full-width CollapsingHeader (OUTSIDE the table) instead of an in-table SpanAllColumns tree
+  // node: inside a table the header label was clipped to the narrow Param cell and truncated "Face
+  // Distance". The 6 faces then render in a SECOND table with the SAME column setup, so they still
+  // line up column-for-column with the parameter rows above. Default-collapsed. Each face is an
+  // independent RenderShapeDistTableRow — there is NO "broadcast to all faces" control (owner
+  // rejected it), so the old unified/mixed-state machinery (and its self-contradiction warning) is
+  // gone.
+  if (ImGui::CollapsingHeader("Face Distance##modal")) {
+    if (ImGui::BeginTable("##face_dist_params", kShapeTableColumnCount, kTableFlags)) {
+      setup_shape_columns();  // no TableHeadersRow — the params table above already labels the columns
       for (int i = 0; i < 6; i++) {
         char label[32];
         snprintf(label, sizeof(label), "Face %d##modal_fd", i + 3);
         RenderShapeDistTableRow(label, cr.face_distance[i], 0.0f, kFaceSpreadMax, "%.3f", SliderScale::kLinear);
       }
+      ImGui::EndTable();
     }
-
-    ImGui::EndTable();
   }
 
   // -- Reset All (Crystal tab) --
