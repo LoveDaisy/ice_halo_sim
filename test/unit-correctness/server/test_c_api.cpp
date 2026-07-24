@@ -484,17 +484,18 @@ TEST(ParseConfigApi, MinimalPrismConfig) {
   EXPECT_EQ(config.crystal_count, 1);
   EXPECT_EQ(config.crystals[0].id, 1);
   EXPECT_EQ(config.crystals[0].type, 0);  // prism
-  EXPECT_FLOAT_EQ(config.crystals[0].height, 1.5f);
+  EXPECT_FLOAT_EQ(config.crystals[0].height.center, 1.5f);
 
-  // Default face_distance = all 1.0
+  // Default face_distance = all NO_RANDOM 1.0
   for (int k = 0; k < 6; k++) {
-    EXPECT_FLOAT_EQ(config.crystals[0].face_distance[k], 1.0f);
+    EXPECT_EQ(config.crystals[0].face_distance[k].type, LUMICE_DIST_NO_RANDOM);
+    EXPECT_FLOAT_EQ(config.crystals[0].face_distance[k].center, 1.0f);
   }
 
   // Axis
-  EXPECT_EQ(config.crystals[0].zenith.type, 0);  // gauss
-  EXPECT_FLOAT_EQ(config.crystals[0].zenith.mean, 90.0f);
-  EXPECT_FLOAT_EQ(config.crystals[0].zenith.std, 10.0f);
+  EXPECT_EQ(config.crystals[0].zenith.type, LUMICE_DIST_GAUSS);
+  EXPECT_FLOAT_EQ(config.crystals[0].zenith.center, 90.0f);
+  EXPECT_FLOAT_EQ(config.crystals[0].zenith.spread, 10.0f);
 
   // Scene
   EXPECT_FLOAT_EQ(config.sun_altitude, 20.0f);
@@ -540,13 +541,13 @@ TEST(ParseConfigApi, FullConfigWithPyramidAndFilter) {
 
   // Prism with custom face_distance
   EXPECT_EQ(config.crystals[0].type, 0);
-  EXPECT_FLOAT_EQ(config.crystals[0].face_distance[1], 0.8f);
-  EXPECT_FLOAT_EQ(config.crystals[0].face_distance[2], 1.0f);
+  EXPECT_FLOAT_EQ(config.crystals[0].face_distance[1].center, 0.8f);
+  EXPECT_FLOAT_EQ(config.crystals[0].face_distance[2].center, 1.0f);
 
   // Pyramid
   EXPECT_EQ(config.crystals[1].type, 1);
-  EXPECT_FLOAT_EQ(config.crystals[1].prism_h, 1.0f);
-  EXPECT_FLOAT_EQ(config.crystals[1].upper_h, 0.5f);
+  EXPECT_FLOAT_EQ(config.crystals[1].prism_h.center, 1.0f);
+  EXPECT_FLOAT_EQ(config.crystals[1].upper_h.center, 0.5f);
   EXPECT_NEAR(config.crystals[1].upper_wedge_angle, 28.0f, 0.1f);
 
   // Filter
@@ -611,7 +612,7 @@ TEST(ParseConfigApi, ParseConfigFile) {
   lumice::ConfigOwningGuard config_guard(config);
   EXPECT_EQ(LUMICE_ParseConfigFile(tmp_path.u8string().c_str(), &config), LUMICE_OK);
   EXPECT_EQ(config.crystal_count, 1);
-  EXPECT_FLOAT_EQ(config.crystals[0].height, 1.5f);
+  EXPECT_FLOAT_EQ(config.crystals[0].height.center, 1.5f);
 
   std::filesystem::remove(tmp_path);
 }
@@ -1972,6 +1973,174 @@ TEST(StructFilterParse, IllegalEntryExitValuePassesThroughLikeCore) {
   EXPECT_EQ(LUMICE_ParseConfigString(json.c_str(), &out), LUMICE_OK);
   ASSERT_GE(out.filter_count, 1);
   EXPECT_EQ(out.filters[0].ee_min_len, 0);  // stored verbatim, not normalized/rejected here
+}
+
+// =====================================================================================
+// v4.10 distribution leaf: LUMICE_Distribution round-trips for shape scalars
+// (struct -> LUMICE_ConfigToJson -> LUMICE_ParseConfigString), across all six distribution
+// types INCLUDING no_random (AC3), plus geom_clock struct-path equivalence (AC5) and the
+// LUMICE_API_VERSION compile-time guard (AC4).
+// =====================================================================================
+
+// AC4: LUMICE_API_VERSION exists and is usable in a caller static_assert.
+static_assert(LUMICE_API_VERSION >= 410, "LUMICE_API_VERSION regressed below v4.10");
+
+namespace {
+// struct -> JSON (public LUMICE_ConfigToJson) -> struct (LUMICE_ParseConfigString). Returns the
+// round-tripped crystals[0]. Mirrors RoundTripFilter for the crystal / distribution path.
+LUMICE_CrystalParam RoundTripCrystal(const LUMICE_CrystalParam& in) {
+  LUMICE_Config cfg{};
+  lumice::ConfigOwningGuard cfg_guard(cfg);
+  cfg.crystal_count = 1;
+  cfg.crystals[0] = in;
+  char buf[8192] = {};
+  size_t len = 0;
+  EXPECT_EQ(LUMICE_ConfigToJson(&cfg, buf, sizeof(buf), &len), LUMICE_OK);
+  EXPECT_LT(len, sizeof(buf));  // these small configs never truncate
+  LUMICE_Config out{};
+  lumice::ConfigOwningGuard out_guard(out);
+  EXPECT_EQ(LUMICE_ParseConfigString(buf, &out), LUMICE_OK);
+  EXPECT_EQ(out.crystal_count, 1);
+  return out.crystals[0];
+}
+
+// A prism crystal with `height` set to `d`; axis + all six face_distance left NO_RANDOM defaults.
+LUMICE_CrystalParam MakePrismWithHeight(const LUMICE_Distribution& d) {
+  LUMICE_CrystalParam cr{};  // zero-init => every distribution is NO_RANDOM
+  cr.id = 1;
+  cr.type = 0;  // prism
+  cr.height = d;
+  for (int i = 0; i < 6; i++) {
+    cr.face_distance[i] = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 1.0f, 0.0f };
+  }
+  return cr;
+}
+}  // namespace
+
+TEST(DistributionRoundTrip, AllTypesHeight) {
+  struct Case {
+    int type;
+    float center;
+    float spread;
+  };
+  // Covers ALL six LUMICE_DIST_* including NO_RANDOM (AC3): height goes struct -> JSON -> struct.
+  const Case cases[] = {
+    { LUMICE_DIST_NO_RANDOM, 1.5f, 0.0f },  { LUMICE_DIST_UNIFORM, 2.0f, 0.3f },
+    { LUMICE_DIST_GAUSS, 1.2f, 0.1f },      { LUMICE_DIST_ZIGZAG, 0.9f, 0.2f },
+    { LUMICE_DIST_LAPLACIAN, 1.1f, 0.05f }, { LUMICE_DIST_GAUSS_LEGACY, 1.3f, 0.15f },
+  };
+  for (const auto& c : cases) {
+    LUMICE_Distribution in{ c.type, c.center, c.spread };
+    auto out = RoundTripCrystal(MakePrismWithHeight(in)).height;
+    EXPECT_EQ(out.type, c.type) << "type=" << c.type;
+    EXPECT_FLOAT_EQ(out.center, c.center) << "type=" << c.type;
+    // NO_RANDOM serializes as a bare number (no spread on the wire); it round-trips as spread 0.
+    // For the randomized types spread must survive verbatim.
+    if (c.type != LUMICE_DIST_NO_RANDOM) {
+      EXPECT_FLOAT_EQ(out.spread, c.spread) << "type=" << c.type;
+    }
+  }
+}
+
+// AC3 focused case: a NO_RANDOM shape scalar serializes to a bare JSON number and parses back.
+// Before Step 3 taught JsonToDistribution the is_number() branch, this failed with
+// LUMICE_ERR_MISSING_FIELD (bare number has no "type"/"mean"/"std"). Red/green evidence in
+// this task's progress log.
+TEST(DistributionRoundTrip, NoRandomHeight) {
+  auto out = RoundTripCrystal(MakePrismWithHeight({ LUMICE_DIST_NO_RANDOM, 1.5f, 0.0f })).height;
+  EXPECT_EQ(out.type, LUMICE_DIST_NO_RANDOM);
+  EXPECT_FLOAT_EQ(out.center, 1.5f);
+}
+
+// Per-face independence: a mix of distribution types across the 6 faces must survive round-trip
+// (not collapsed by a "all default" fast path).
+TEST(DistributionRoundTrip, FaceDistancePerFaceMixed) {
+  LUMICE_CrystalParam cr{};
+  cr.id = 1;
+  cr.type = 0;
+  cr.height = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 1.0f, 0.0f };
+  cr.face_distance[0] = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 1.0f, 0.0f };
+  cr.face_distance[1] = LUMICE_Distribution{ LUMICE_DIST_GAUSS, 0.8f, 0.05f };
+  cr.face_distance[2] = LUMICE_Distribution{ LUMICE_DIST_UNIFORM, 1.2f, 0.1f };
+  cr.face_distance[3] = LUMICE_Distribution{ LUMICE_DIST_ZIGZAG, 0.9f, 0.2f };
+  cr.face_distance[4] = LUMICE_Distribution{ LUMICE_DIST_LAPLACIAN, 1.1f, 0.03f };
+  cr.face_distance[5] = LUMICE_Distribution{ LUMICE_DIST_GAUSS_LEGACY, 1.0f, 0.15f };
+  auto out = RoundTripCrystal(cr);
+  EXPECT_EQ(out.face_distance[0].type, LUMICE_DIST_NO_RANDOM);
+  EXPECT_FLOAT_EQ(out.face_distance[0].center, 1.0f);
+  EXPECT_EQ(out.face_distance[1].type, LUMICE_DIST_GAUSS);
+  EXPECT_FLOAT_EQ(out.face_distance[1].center, 0.8f);
+  EXPECT_FLOAT_EQ(out.face_distance[1].spread, 0.05f);
+  EXPECT_EQ(out.face_distance[2].type, LUMICE_DIST_UNIFORM);
+  EXPECT_FLOAT_EQ(out.face_distance[2].center, 1.2f);
+  EXPECT_EQ(out.face_distance[3].type, LUMICE_DIST_ZIGZAG);
+  EXPECT_EQ(out.face_distance[4].type, LUMICE_DIST_LAPLACIAN);
+  EXPECT_EQ(out.face_distance[5].type, LUMICE_DIST_GAUSS_LEGACY);
+  EXPECT_FLOAT_EQ(out.face_distance[5].spread, 0.15f);
+}
+
+// Pyramid shape scalars (prism_h/upper_h/lower_h) are distributions too; verify no_random +
+// a randomized type survive round-trip on the pyramid arm.
+TEST(DistributionRoundTrip, PyramidShapeScalars) {
+  LUMICE_CrystalParam cr{};
+  cr.id = 1;
+  cr.type = 1;  // pyramid
+  cr.prism_h = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 1.0f, 0.0f };
+  cr.upper_h = LUMICE_Distribution{ LUMICE_DIST_GAUSS, 0.5f, 0.02f };
+  cr.lower_h = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 0.5f, 0.0f };
+  cr.upper_wedge_angle = 28.0f;
+  cr.lower_wedge_angle = 28.0f;
+  for (int i = 0; i < 6; i++) {
+    cr.face_distance[i] = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 1.0f, 0.0f };
+  }
+  auto out = RoundTripCrystal(cr);
+  EXPECT_EQ(out.prism_h.type, LUMICE_DIST_NO_RANDOM);
+  EXPECT_FLOAT_EQ(out.prism_h.center, 1.0f);
+  EXPECT_EQ(out.upper_h.type, LUMICE_DIST_GAUSS);
+  EXPECT_FLOAT_EQ(out.upper_h.center, 0.5f);
+  EXPECT_FLOAT_EQ(out.upper_h.spread, 0.02f);
+  EXPECT_EQ(out.lower_h.type, LUMICE_DIST_NO_RANDOM);
+  EXPECT_FLOAT_EQ(out.upper_wedge_angle, 28.0f);
+}
+
+// AC5: geom_clock reaches the scene JSON via the struct path, with the same "0 => omit" wire
+// convention core proj_config.cpp uses; and it survives a struct -> JSON -> struct round-trip.
+TEST(GeomClockStructPath, EmittedWhenSet) {
+  LUMICE_Config cfg{};
+  lumice::ConfigOwningGuard cfg_guard(cfg);
+  cfg.geom_clock = 30;
+  char buf[8192] = {};
+  size_t len = 0;
+  ASSERT_EQ(LUMICE_ConfigToJson(&cfg, buf, sizeof(buf), &len), LUMICE_OK);
+  auto j = nlohmann::json::parse(buf);
+  ASSERT_TRUE(j.contains("scene"));
+  ASSERT_TRUE(j["scene"].contains("geom_clock"));
+  EXPECT_EQ(j["scene"]["geom_clock"].get<int>(), 30);
+}
+
+TEST(GeomClockStructPath, OmittedWhenZero) {
+  LUMICE_Config cfg{};
+  lumice::ConfigOwningGuard cfg_guard(cfg);
+  cfg.geom_clock = 0;  // zero-init default: disabled
+  char buf[8192] = {};
+  size_t len = 0;
+  ASSERT_EQ(LUMICE_ConfigToJson(&cfg, buf, sizeof(buf), &len), LUMICE_OK);
+  auto j = nlohmann::json::parse(buf);
+  ASSERT_TRUE(j.contains("scene"));
+  EXPECT_FALSE(j["scene"].contains("geom_clock"));
+}
+
+TEST(GeomClockStructPath, RoundTrip) {
+  LUMICE_Config cfg{};
+  lumice::ConfigOwningGuard cfg_guard(cfg);
+  cfg.geom_clock = 16;
+  char buf[8192] = {};
+  size_t len = 0;
+  ASSERT_EQ(LUMICE_ConfigToJson(&cfg, buf, sizeof(buf), &len), LUMICE_OK);
+  LUMICE_Config out{};
+  lumice::ConfigOwningGuard out_guard(out);
+  ASSERT_EQ(LUMICE_ParseConfigString(buf, &out), LUMICE_OK);
+  EXPECT_EQ(out.geom_clock, 16);
 }
 
 // Parse cross-check against core from_json (source of truth): parsing a filter JSON via

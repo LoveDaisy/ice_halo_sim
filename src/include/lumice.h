@@ -16,6 +16,13 @@ extern "C" {
 #endif
 
 // =============== Constants ===============
+// ABI version, encoded as major*100 + minor (v4.10 -> 410). Before this macro existed, the
+// v4.3~v4.9 BREAKING bumps lived only in prose comments, so a caller linking against a header
+// newer/older than the .so it loads had NO compile-time guard — a layout mismatch was silent UB.
+// Callers can now pin the ABI they were built against, e.g.:
+//   static_assert(LUMICE_API_VERSION >= 410, "Lumice header too old for this integration");
+// Bump on every BREAKING change to LUMICE_Config / public struct layout.
+#define LUMICE_API_VERSION 410
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -220,42 +227,75 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 #define LUMICE_MAX_CONFIG_COLOR_CLASSES 64
 #define LUMICE_MAX_CONFIG_COLOR_REFS 32
 
-// Axis distribution type constants for LUMICE_AxisDist.type
-#define LUMICE_AXIS_DIST_GAUSS 0
-#define LUMICE_AXIS_DIST_UNIFORM 1
-#define LUMICE_AXIS_DIST_ZIGZAG 2
-#define LUMICE_AXIS_DIST_LAPLACIAN 3
-#define LUMICE_AXIS_DIST_GAUSS_LEGACY 4
+// BREAKING (v4.10): LUMICE_AxisDist renamed+widened to
+// LUMICE_Distribution and now serves ANY randomizable scalar (axis angles AND crystal shape
+// quantities), mirroring core's single `Distribution` type (src/core/math.hpp). The distribution
+// type constants were renamed LUMICE_AXIS_DIST_* -> LUMICE_DIST_* AND their numeric values were
+// reordered so that NO_RANDOM == 0 (see the zero-init contract note below). Fields renamed
+// mean/std -> center/spread (matching core's neutral center/spread naming). Callers must recompile.
+//
+// Distribution type constants for LUMICE_Distribution.type. Values deliberately match core
+// DistributionType's enum order (src/core/math.hpp) so "zero-init == not random" holds in both
+// layers with the same integer. The C API translates via a hand-written JSON string switch
+// (c_api.cpp), NOT an integer cast, so the values need only stay self-consistent here.
+#define LUMICE_DIST_NO_RANDOM 0
+#define LUMICE_DIST_UNIFORM 1
+#define LUMICE_DIST_GAUSS 2
+#define LUMICE_DIST_ZIGZAG 3
+#define LUMICE_DIST_LAPLACIAN 4
+#define LUMICE_DIST_GAUSS_LEGACY 5
 
-typedef struct LUMICE_AxisDist_ {
-  int type;    // LUMICE_AXIS_DIST_GAUSS / UNIFORM / ZIGZAG / LAPLACIAN / GAUSS_LEGACY
-  float mean;  // degrees
-  float std;   // gauss/gauss_legacy: std dev; uniform: full range; zigzag: amplitude; laplacian: scale (degrees)
-} LUMICE_AxisDist;
+// A randomizable scalar. `center`/`spread` roles by type (照抄 core src/core/math.hpp):
+//   NO_RANDOM     center = the deterministic value itself; spread = unused
+//   UNIFORM       center = mean;                           spread = full range
+//   GAUSS         center = mean;                           spread = std dev
+//   ZIGZAG        center = mean;                           spread = amplitude
+//   LAPLACIAN     center = mean;                           spread = scale
+//   GAUSS_LEGACY  center = mean;                           spread = std dev (legacy no-Jacobian)
+// Units are field-dependent (axis angles: degrees; face_distance: dimensionless ratio) — the
+// distribution type is unit-agnostic, exactly as core's Distribution.
+//
+// ZERO-INIT CONTRACT: LUMICE_DIST_NO_RANDOM == 0 is a design promise. After `LUMICE_Distribution
+// d{}` (or memset(0)), `type == NO_RANDOM` and the scalar is `center == 0` — i.e. NOT random.
+// This fixes the pre-v4.10 trap where LUMICE_AXIS_DIST_GAUSS == 0 made a zero-inited struct a
+// "std=0 gauss" instead of "not random".
+typedef struct LUMICE_Distribution_ {
+  int type;      // LUMICE_DIST_NO_RANDOM / UNIFORM / GAUSS / ZIGZAG / LAPLACIAN / GAUSS_LEGACY
+  float center;  // role depends on type (see table above)
+  float spread;  // role depends on type (see table above); unused for NO_RANDOM
+} LUMICE_Distribution;
 
+// BREAKING (v4.10): the five shape scalars below
+// (height/prism_h/upper_h/lower_h/face_distance[6]) were promoted from bare float to
+// LUMICE_Distribution so a randomizable shape can be expressed through the C struct path (they
+// map to core PrismCrystalParam.h_/d_[6] and PyramidCrystalParam.h_prs_/h_pyr_u_/h_pyr_l_, all
+// already Distribution in core). upper_wedge_angle/lower_wedge_angle stay bare float, mirroring
+// core's wedge_angle_u_/l_ (not Distribution). Layout changed; callers must recompile.
 typedef struct LUMICE_CrystalParam_ {
   int id;
   int type;  // 0=prism, 1=pyramid
 
   // Prism
-  float height;
+  LUMICE_Distribution height;
 
   // Pyramid
-  float prism_h;
-  float upper_h;
-  float lower_h;
-  float upper_wedge_angle;  // degrees, angle between pyramidal face and c-axis
+  LUMICE_Distribution prism_h;
+  LUMICE_Distribution upper_h;
+  LUMICE_Distribution lower_h;
+  float upper_wedge_angle;  // degrees, angle between pyramidal face and c-axis (bare float, not Distribution)
   float lower_wedge_angle;  // degrees
 
-  // Face distance (distance from center to each of the 6 prism faces).
-  // Default: all 1.0f (regular hexagonal prism). Caller must initialize; memset(0) gives invalid geometry.
-  float face_distance[6];
+  // Face distance (distance from center to each of the 6 prism faces), each a distribution.
+  // Zero-init makes each element {NO_RANDOM, center=0, spread=0} == degenerate (zero-distance)
+  // geometry: this is the SAME "caller must initialize" contract the pre-v4.10 bare float[6]{}
+  // already carried, not a new trap. Regular hexagonal prism default = six {NO_RANDOM, 1.0f, 0.0f}.
+  LUMICE_Distribution face_distance[6];
 
   // Axis distributions. Sampled values feed the rotation chain (angles in degrees)
   // R = Rz(azimuth - 180°) * Ry(-zenith) * Rz(roll); see doc/coordinate-convention.md.
-  LUMICE_AxisDist zenith;
-  LUMICE_AxisDist azimuth;
-  LUMICE_AxisDist roll;
+  LUMICE_Distribution zenith;
+  LUMICE_Distribution azimuth;
+  LUMICE_Distribution roll;
 } LUMICE_CrystalParam;
 
 // Filter type discriminant for LUMICE_FilterParam.type.
@@ -538,6 +578,12 @@ typedef struct LUMICE_Config_ {
   int infinite;             // 1=infinite rays, 0=finite
   LUMICE_RayCount ray_num;  // only used when infinite==0
   int max_hits;
+  // Geometry-resampling clock K: how many rays reuse one sampled crystal instance before
+  // resampling. 0 = disabled (core derives a SimBatch-based default); else must be in
+  // [1, kGeomClockMax=64] (validated at commit by core config_manager.cpp). Added v4.10 so
+  // struct-path callers can drive K (previously only reachable via config JSON). Pure append;
+  // zero-init == disabled, so this is backward compatible at the value level.
+  int geom_clock;
 
   // Scene: scattering
   LUMICE_ScatterLayer scattering[LUMICE_MAX_CONFIG_SCATTER_LAYERS];
@@ -573,6 +619,11 @@ typedef struct LUMICE_Config_ {
 // heap pointers (24 B/record × 32 records = 768 B); measured sizeof(LUMICE_Config) drops from
 // ~113 KB to ~96 KB (~98 280 B on this platform), so the 160 KB ceiling still holds with even
 // more headroom than pre-v4.9.
+// v4.10: five LUMICE_CrystalParam shape scalars promoted to
+// LUMICE_Distribution (height/prism_h/upper_h/lower_h: 4B->12B each = +32B; face_distance[6]:
+// 24B->72B = +48B; +80B/crystal × 256 crystals ≈ +20 KB) plus one int geom_clock. Measured
+// sizeof(LUMICE_Config) == 118 768 B on this platform (Apple clang, arm64) — up from ~98 KB,
+// still well under the 160 KB ceiling (~27.5 % headroom).
 #if defined(__cplusplus)
 static_assert(sizeof(LUMICE_Config) <= 160u * 1024u,
               "LUMICE_Config exceeded its 160 KB ABI ceiling — either shrink a field or bump the ceiling deliberately");

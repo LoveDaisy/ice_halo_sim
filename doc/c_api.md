@@ -29,9 +29,19 @@ Link against the `lumice` static library.
 ### Constants
 
 ```c
+#define LUMICE_API_VERSION 410        // ABI version, encoded major*100 + minor (v4.10)
 #define LUMICE_MAX_RENDER_RESULTS 16  // Maximum capacity of the render result array
 #define LUMICE_MAX_STATS_RESULTS 1    // Maximum capacity of the stats result array
 ```
+
+`LUMICE_API_VERSION` lets a caller pin the ABI it was compiled against and fail loudly on a
+mismatch instead of hitting silent UB from a struct-layout drift, e.g.:
+
+```c
+static_assert(LUMICE_API_VERSION >= 410, "Lumice header too old for this integration");
+```
+
+It is bumped on every BREAKING change to the public struct layout.
 
 ### Data Types
 

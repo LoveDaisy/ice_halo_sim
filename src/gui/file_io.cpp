@@ -1197,30 +1197,30 @@ static void EmitColorPredicateJson(const LUMICE_ColorPredicate& p, json& out) {
 
 // ========== Fill LUMICE_Config C struct (for LUMICE_CommitConfigStruct) ==========
 
-static void FillAxisDist(const AxisDist& src, LUMICE_AxisDist* dst) {
+static void FillAxisDist(const AxisDist& src, LUMICE_Distribution* dst) {
   static_assert(static_cast<int>(AxisDistType::kCount) == 5, "Update FillAxisDist when adding new AxisDistType");
   switch (src.type) {
     case AxisDistType::kGauss:
-      dst->type = LUMICE_AXIS_DIST_GAUSS;
+      dst->type = LUMICE_DIST_GAUSS;
       break;
     case AxisDistType::kUniform:
-      dst->type = LUMICE_AXIS_DIST_UNIFORM;
+      dst->type = LUMICE_DIST_UNIFORM;
       break;
     case AxisDistType::kZigzag:
-      dst->type = LUMICE_AXIS_DIST_ZIGZAG;
+      dst->type = LUMICE_DIST_ZIGZAG;
       break;
     case AxisDistType::kLaplacian:
-      dst->type = LUMICE_AXIS_DIST_LAPLACIAN;
+      dst->type = LUMICE_DIST_LAPLACIAN;
       break;
     case AxisDistType::kGaussLegacy:
-      dst->type = LUMICE_AXIS_DIST_GAUSS_LEGACY;
+      dst->type = LUMICE_DIST_GAUSS_LEGACY;
       break;
     default:
-      dst->type = LUMICE_AXIS_DIST_GAUSS;
+      dst->type = LUMICE_DIST_GAUSS;
       break;
   }
-  dst->mean = src.mean;
-  dst->std = src.std;
+  dst->center = src.mean;
+  dst->spread = src.std;
 }
 
 // Helper: fill a LUMICE_CrystalParam from GUI CrystalConfig with a given ID.
@@ -1230,13 +1230,17 @@ static void FillAxisDist(const AxisDist& src, LUMICE_AxisDist* dst) {
 static void FillCrystalParam(const CrystalConfig& c, int id, LUMICE_CrystalParam* dst) {
   dst->id = id;
   dst->type = c.type == CrystalType::kPrism ? 0 : 1;
-  dst->height = c.height;
-  dst->prism_h = c.prism_h;
-  dst->upper_h = c.upper_h;
-  dst->lower_h = c.lower_h;
+  // GUI shape fields are still bare scalars (randomization editing is a later task); wrap each as
+  // a NO_RANDOM distribution to preserve exact semantics across the widened v4.10 ABI.
+  dst->height = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, c.height, 0.0f };
+  dst->prism_h = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, c.prism_h, 0.0f };
+  dst->upper_h = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, c.upper_h, 0.0f };
+  dst->lower_h = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, c.lower_h, 0.0f };
   dst->upper_wedge_angle = c.upper_alpha;
   dst->lower_wedge_angle = c.lower_alpha;
-  std::copy(std::begin(c.face_distance), std::end(c.face_distance), dst->face_distance);
+  for (int i = 0; i < 6; i++) {
+    dst->face_distance[i] = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, c.face_distance[i], 0.0f };
+  }
   FillAxisDist(c.zenith, &dst->zenith);
   FillAxisDist(c.azimuth, &dst->azimuth);
   FillAxisDist(c.roll, &dst->roll);
