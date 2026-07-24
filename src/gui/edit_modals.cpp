@@ -555,13 +555,15 @@ static void RenderCrystalModal(GuiState& /*state*/) {
   ImGui::Spacing();
 
   // -- Parameters --
-  // See gui/slider_mapping.hpp for the three-H-mapping conventions.
+  // See gui/slider_mapping.hpp for the three-H-mapping conventions. Each shape scalar is now a
+  // ShapeDist: RenderShapeDist renders the center slider plus a Randomize checkbox (+ type/spread
+  // when enabled). RenderShapeDist self-handles its combo's top-most-popup fix (see panels.hpp).
   if (cr.type == CrystalType::kPrism) {
-    SliderWithInput("Height##modal_cr", &cr.height, 0.01f, 100.0f, "%.2f", SliderScale::kLog);
+    RenderShapeDist("Height##modal_cr", cr.height, 0.01f, 100.0f, "%.2f", SliderScale::kLog);
   } else {
-    SliderWithInput("Prism H##modal_cr", &cr.prism_h, 0.0f, 100.0f, "%.4f", SliderScale::kLogLinear);
-    SliderWithInput("Upper H##modal_cr", &cr.upper_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
-    SliderWithInput("Lower H##modal_cr", &cr.lower_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
+    RenderShapeDist("Prism H##modal_cr", cr.prism_h, 0.0f, 100.0f, "%.4f", SliderScale::kLogLinear);
+    RenderShapeDist("Upper H##modal_cr", cr.upper_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
+    RenderShapeDist("Lower H##modal_cr", cr.lower_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
     SliderWithPresetEdit("Upper A##modal_cr", &cr.upper_alpha, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, kWedgePresets,
                          kWedgePresetCount);
     SliderWithPresetEdit("Lower A##modal_cr", &cr.lower_alpha, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, kWedgePresets,
@@ -569,11 +571,98 @@ static void RenderCrystalModal(GuiState& /*state*/) {
   }
 
   // -- Face distance --
+  // Unified view (one type + one spread broadcast to all 6 faces; centers stay independent) plus an
+  // Advanced per-face tree where each face's type/spread can diverge. Broadcasts fire ONLY on active
+  // edits (checkbox toggle / combo change / spread drag), never on passive display, so opening the
+  // unified view never silently overwrites a per-face-diverged config (plan §7 risk 2).
+  constexpr float kFaceSpreadMax = 2.0f;
   if (ImGui::TreeNode("Face Distance##modal")) {
+    // Whether face[0] currently carries randomization drives the unified checkbox display.
+    bool uni_random = cr.face_distance[0].type != ShapeDistType::kNoRandom;
+    // Mixed = the 6 faces do not all share face[0]'s (type, spread). Only a display hint.
+    bool mixed = false;
+    for (int i = 1; i < 6; i++) {
+      if (cr.face_distance[i].type != cr.face_distance[0].type ||
+          cr.face_distance[i].spread != cr.face_distance[0].spread) {
+        mixed = true;
+        break;
+      }
+    }
+    if (ImGui::Checkbox("Randomize (all faces)##modal_fd_uni", &uni_random)) {
+      for (int i = 0; i < 6; i++) {
+        if (uni_random) {
+          cr.face_distance[i].type = ShapeDistType::kUniform;
+          cr.face_distance[i].spread = 0.2f * cr.face_distance[i].center;
+        } else {
+          cr.face_distance[i].type = ShapeDistType::kNoRandom;
+          cr.face_distance[i].spread = 0.0f;
+        }
+      }
+    }
+    if (uni_random) {
+      int uni_combo = static_cast<int>(cr.face_distance[0].type) - 1;
+      if (uni_combo < 0) {
+        uni_combo = 0;
+      }
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(120.0f);
+      SetNextComboPopupTopMost();
+      if (ImGui::Combo("##modal_fd_uni_type", &uni_combo, "Uniform\0Gauss\0Zigzag\0Laplacian\0Gauss (legacy)\0")) {
+        ShapeDistType t = static_cast<ShapeDistType>(uni_combo + 1);
+        for (int i = 0; i < 6; i++) {
+          cr.face_distance[i].type = t;
+        }
+      }
+      float uni_spread = cr.face_distance[0].spread;
+      if (SliderWithInput("Spread (all)##modal_fd_uni_spread", &uni_spread, 0.0f, kFaceSpreadMax, "%.3f",
+                          SliderScale::kSqrt)) {
+        for (int i = 0; i < 6; i++) {
+          cr.face_distance[i].spread = uni_spread;
+        }
+      }
+      if (mixed) {
+        ImGui::TextDisabled("(faces differ — see Per-face)");
+      }
+    }
+
+    ImGui::Separator();
+    // Per-face center — always independent, always shown (matches pre-upgrade behavior).
     for (int i = 0; i < 6; i++) {
       char label[32];
       snprintf(label, sizeof(label), "Face %d##modal_fd", i + 3);
-      SliderWithInput(label, &cr.face_distance[i], 0.0f, 2.0f, "%.3f");
+      SliderWithInput(label, &cr.face_distance[i].center, 0.0f, kFaceSpreadMax, "%.3f");
+    }
+
+    // Advanced: per-face randomization. Editing here diverges a single face's type/spread from the
+    // rest, exercising the core's six independent d_[6] distributions.
+    if (ImGui::TreeNode("Per-face randomization##modal_fd_adv")) {
+      for (int i = 0; i < 6; i++) {
+        ImGui::PushID(i);
+        bool fr = cr.face_distance[i].type != ShapeDistType::kNoRandom;
+        char flabel[16];
+        snprintf(flabel, sizeof(flabel), "Face %d", i + 3);
+        if (ImGui::Checkbox(flabel, &fr)) {
+          if (fr) {
+            cr.face_distance[i].type = ShapeDistType::kUniform;
+            cr.face_distance[i].spread = 0.2f * cr.face_distance[i].center;
+          } else {
+            cr.face_distance[i].type = ShapeDistType::kNoRandom;
+            cr.face_distance[i].spread = 0.0f;
+          }
+        }
+        if (cr.face_distance[i].type != ShapeDistType::kNoRandom) {
+          int fci = static_cast<int>(cr.face_distance[i].type) - 1;
+          ImGui::SameLine();
+          ImGui::SetNextItemWidth(110.0f);
+          SetNextComboPopupTopMost();
+          if (ImGui::Combo("##fd_type", &fci, "Uniform\0Gauss\0Zigzag\0Laplacian\0Gauss (legacy)\0")) {
+            cr.face_distance[i].type = static_cast<ShapeDistType>(fci + 1);
+          }
+          SliderWithInput("Spread##fd", &cr.face_distance[i].spread, 0.0f, kFaceSpreadMax, "%.3f", SliderScale::kSqrt);
+        }
+        ImGui::PopID();
+      }
+      ImGui::TreePop();
     }
     ImGui::TreePop();
   }

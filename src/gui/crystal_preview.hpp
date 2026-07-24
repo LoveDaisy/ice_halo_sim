@@ -35,18 +35,20 @@ void ResetCrystalView(AxisPreset preset, const AxisDist params[3]);
 void ResetCrystalViewToCrystal(const CrystalConfig& cr);
 void ApplyTrackballRotation(float dx, float dy);
 
-// Fixed preview sample seed. Until T4 promotes the GUI CrystalConfig shape fields to
-// distributions, every field is a deterministic (NO_RANDOM) scalar, so LUMICE_GetCrystalMesh's
-// no-op-seed contract makes any seed value produce the identical mesh — this constant is a
-// placeholder that keeps the two call sites (edit_modals.cpp, thumbnail_cache.cpp) on the SAME
-// value rather than each inlining a literal. `inline constexpr` gives one definition across TUs.
-// TODO(T5, gui-shape-randomization): replace with a real, per-frame-varying seed source so the
-// preview animates once shape distributions exist.
+// Fixed preview sample seed. The GUI CrystalConfig shape fields are now first-class distributions,
+// so a randomized shape DOES vary with the seed; this constant deliberately pins the preview to a
+// single deterministic draw (seed 0) so the modal preview and thumbnails stay stable frame-to-frame
+// and match the four tracked crystal reference images. It keeps the call sites (edit_modals.cpp,
+// thumbnail_cache.cpp) on the SAME value rather than each inlining a literal. `inline constexpr`
+// gives one definition across TUs.
+// TODO(gui-preview-animation, gui-shape-randomization): replace with a real, per-frame-varying seed
+// source so the preview animates while a shape distribution is active.
 inline constexpr unsigned long long kPreviewFixedSampleSeed = 0;
 
 // Build crystal mesh data from config: construct a LUMICE_CrystalParam, sample via
 // LUMICE_GetCrystalMesh, then apply Y-Z swap + AABB normalization. `sample_seed` selects the
-// shape draw (no-op while GUI shape fields are deterministic — see kPreviewFixedSampleSeed).
+// shape draw (fixed to kPreviewFixedSampleSeed for a stable preview; a randomized shape yields a
+// different but deterministic mesh per seed).
 // Caller allocates LUMICE_CrystalMesh on stack (fixed-size arrays, no free needed). Returns true on success.
 bool BuildCrystalMeshData(const CrystalConfig& cr, unsigned long long sample_seed, LUMICE_CrystalMesh* out);
 

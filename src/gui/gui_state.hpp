@@ -63,23 +63,79 @@ struct AxisDist {
   friend bool operator!=(const AxisDist& a, const AxisDist& b) { return !(a == b); }
 };
 
+// Crystal shape distribution type. Parallel to AxisDist but with a NO_RANDOM alternative that
+// axis distributions do not have (a crystal orientation is always a distribution; a shape scalar
+// may be a fixed deterministic value). Enum values are deliberately aligned 1:1 with the
+// LUMICE_DIST_* wire constants (NO_RANDOM=0 / UNIFORM=1 / GAUSS=2 / ZIGZAG=3 / LAPLACIAN=4 /
+// GAUSS_LEGACY=5) so mapping to LUMICE_Distribution is a static_cast, not a hand-written switch
+// (contrast FillAxisDist). The static_assert block after ShapeDist pins every value at compile
+// time, so any future divergence fails the build instead of silently producing the wrong dist.
+enum class ShapeDistType {
+  kNoRandom = 0,
+  kUniform = 1,
+  kGauss = 2,
+  kZigzag = 3,
+  kLaplacian = 4,
+  kGaussLegacy = 5,
+  kCount = 6
+};
+
+struct ShapeDist {
+  ShapeDistType type = ShapeDistType::kNoRandom;
+  float center = 0.0f;
+  float spread = 0.0f;
+
+  ShapeDist() = default;
+  // Non-explicit: a bare scalar ⇔ a NO_RANDOM deterministic value is a convention the wire format
+  // already recognises (file_io.cpp's `is_number()` branch, core JSON's no_random bare-number
+  // encoding). This constructor only formalises it into C++ so the ~80 existing `c.height = 5.0f`
+  // style assignments and CrystalConfig's default member initialisers compile unchanged. Only the
+  // float→ShapeDist direction is provided — a reverse ShapeDist→float would silently drop
+  // type/spread, exactly the data-loss defect this scrum fixes.
+  ShapeDist(float v) : center(v) {}  // NOLINT(google-explicit-constructor)
+
+  friend bool operator==(const ShapeDist& a, const ShapeDist& b) {
+    return a.type == b.type && a.center == b.center && a.spread == b.spread;
+  }
+  friend bool operator!=(const ShapeDist& a, const ShapeDist& b) { return !(a == b); }
+};
+
+// ShapeDist → LUMICE_Distribution. Value alignment (see ShapeDistType comment) makes this a
+// static_cast rather than a switch; the static_asserts below guarantee the cast is exact.
+inline LUMICE_Distribution ToLumiceDistribution(const ShapeDist& src) {
+  return LUMICE_Distribution{ static_cast<int>(src.type), src.center, src.spread };
+}
+
+static_assert(static_cast<int>(ShapeDistType::kNoRandom) == LUMICE_DIST_NO_RANDOM,
+              "ShapeDistType/LUMICE_DIST_* misaligned");
+static_assert(static_cast<int>(ShapeDistType::kUniform) == LUMICE_DIST_UNIFORM,
+              "ShapeDistType/LUMICE_DIST_* misaligned");
+static_assert(static_cast<int>(ShapeDistType::kGauss) == LUMICE_DIST_GAUSS, "ShapeDistType/LUMICE_DIST_* misaligned");
+static_assert(static_cast<int>(ShapeDistType::kZigzag) == LUMICE_DIST_ZIGZAG, "ShapeDistType/LUMICE_DIST_* misaligned");
+static_assert(static_cast<int>(ShapeDistType::kLaplacian) == LUMICE_DIST_LAPLACIAN,
+              "ShapeDistType/LUMICE_DIST_* misaligned");
+static_assert(static_cast<int>(ShapeDistType::kGaussLegacy) == LUMICE_DIST_GAUSS_LEGACY,
+              "ShapeDistType/LUMICE_DIST_* misaligned");
+
 // GUI-only data structure: crystal geometry + axis distribution.
 struct CrystalConfig {
   std::string name;
   CrystalType type = CrystalType::kPrism;
 
   // Prism
-  float height = 1.0f;
+  ShapeDist height = 1.0f;
 
   // Pyramid
-  float prism_h = 1.0f;
-  float upper_h = 0.2f;
-  float lower_h = 0.2f;
+  ShapeDist prism_h = 1.0f;
+  ShapeDist upper_h = 0.2f;
+  ShapeDist lower_h = 0.2f;
   float upper_alpha = 28.0f;  // Wedge angle (degrees). Default ≈ atan(√3/2 / 1.629) * 180/π, i.e. Miller {1,0,-1,1}
   float lower_alpha = 28.0f;
 
-  // Face distance (common to Prism and Pyramid — distance from center to each of the 6 prism faces)
-  float face_distance[6] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+  // Face distance (common to Prism and Pyramid — distance from center to each of the 6 prism faces).
+  // Each face is an independent ShapeDist so a per-face heterogeneous distribution config round-trips
+  // without collapsing (the core d_[6] is six independent Distributions).
+  ShapeDist face_distance[6] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
 
   // Axis distribution (all default to uniform full rotation)
   AxisDist zenith{ AxisDistType::kUniform, 0.0f, 360.0f };

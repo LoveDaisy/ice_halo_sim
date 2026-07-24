@@ -34,6 +34,20 @@ void ResetEditRequest();
 // Returns true if any value changed. Does NOT call MarkDirty() — caller is responsible.
 bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mean_max);
 
+// ---- Shape distribution controls (crystal geometry randomization) ----
+
+// Render one crystal shape distribution: the center slider (always shown, using the caller's
+// range/format/scale) + a "Randomize" checkbox + (when randomized) a distribution-type combo and
+// a spread slider. Enabling randomization defaults to Uniform with spread = 0.2 × center (owner
+// default); disabling collapses to NO_RANDOM and zeroes the (now meaningless) spread. Returns true
+// if any value changed. Does NOT call MarkDirty() — caller is responsible.
+//
+// Unlike RenderAxisDist, the type combo's top-most-popup fix is handled INTERNALLY (the combo only
+// renders when randomized, so the caller cannot reliably pre-queue it) — callers need NOT precede
+// this with SetNextComboPopupTopMost().
+bool RenderShapeDist(const char* label, ShapeDist& dist, float center_min, float center_max,
+                     const char* center_fmt = "%.3f", SliderScale center_scale = SliderScale::kLinear);
+
 // ---- Axis preset classification ----
 
 // Classify crystal axis configuration into a named preset (Parry/Column/Lowitz/Plate/Random/Custom).

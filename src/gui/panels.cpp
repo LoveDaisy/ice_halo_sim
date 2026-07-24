@@ -423,6 +423,69 @@ bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mea
   return changed;
 }
 
+// Default spread fraction applied when a shape field's randomization is first enabled: the
+// distribution spread starts at 0.2 × center (i.e. roughly ±10% for uniform's center±spread/2).
+// An arbitrary but reasonable seed value; the user adjusts from there.
+constexpr float kShapeDistDefaultSpreadFraction = 0.2f;
+
+bool RenderShapeDist(const char* label, ShapeDist& dist, float center_min, float center_max, const char* center_fmt,
+                     SliderScale center_scale) {
+  bool changed = false;
+  ImGui::PushID(label);
+
+  // Center is always editable (deterministic value / distribution center).
+  changed |= SliderWithInput(label, &dist.center, center_min, center_max, center_fmt, center_scale);
+
+  // Randomize toggle. NO_RANDOM is expressed ONLY via this checkbox — the type combo lists just
+  // the five randomized types, so there is no redundant "manually pick no_random" path.
+  bool randomize = dist.type != ShapeDistType::kNoRandom;
+  if (ImGui::Checkbox("Randomize", &randomize)) {
+    if (randomize) {
+      dist.type = ShapeDistType::kUniform;                          // owner-defined default type
+      dist.spread = kShapeDistDefaultSpreadFraction * dist.center;  // default spread heuristic
+    } else {
+      dist.type = ShapeDistType::kNoRandom;
+      dist.spread = 0.0f;  // spread is meaningless for NO_RANDOM; zero it so operator==/round-trip stay clean
+    }
+    changed = true;
+  }
+
+  if (dist.type != ShapeDistType::kNoRandom) {
+    // Combo lists the five randomized types; index 0..4 maps to kUniform..kGaussLegacy (enum
+    // values 1..5), so combo_index = static_cast<int>(type) - 1.
+    static_assert(static_cast<int>(ShapeDistType::kCount) == 6,
+                  "Update RenderShapeDist combo when adding a ShapeDistType");
+    int combo_index = static_cast<int>(dist.type) - 1;
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(120.0f);
+    // Keep this combo's popup above a detached OS-viewport modal (mirrors SetNextComboPopupTopMost
+    // in edit_modals.cpp). Self-contained here — set immediately before the Combo — so the fix does
+    // not depend on the caller and holds even though the combo only renders when randomized.
+    ImGuiWindowClass topmost;
+    topmost.ViewportFlagsOverrideSet = ImGuiViewportFlags_TopMost;
+    ImGui::SetNextWindowClass(&topmost);
+    if (ImGui::Combo("##shapedist", &combo_index, "Uniform\0Gauss\0Zigzag\0Laplacian\0Gauss (legacy)\0")) {
+      dist.type = static_cast<ShapeDistType>(combo_index + 1);
+      changed = true;
+    }
+
+    // Spread slider — same units as center (a distance/height ratio), so the range tracks the
+    // center's max. Type-specific label mirrors RenderAxisDist for user familiarity.
+    const char* spread_label = "Std";
+    if (dist.type == ShapeDistType::kUniform) {
+      spread_label = "Range";
+    } else if (dist.type == ShapeDistType::kZigzag) {
+      spread_label = "Amplitude";
+    } else if (dist.type == ShapeDistType::kLaplacian) {
+      spread_label = "Scale";
+    }
+    changed |= SliderWithInput(spread_label, &dist.spread, 0.0f, center_max, center_fmt, SliderScale::kSqrt);
+  }
+
+  ImGui::PopID();
+  return changed;
+}
+
 
 // ---- Selection and edit accessors ----
 

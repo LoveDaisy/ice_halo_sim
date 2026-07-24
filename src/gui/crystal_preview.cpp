@@ -41,14 +41,22 @@ int CrystalParamHash(const CrystalConfig& c) {
     std::memcpy(&i, &f, sizeof(i));
     return i;
   };
-  h ^= hash_float(c.height) * 31;
-  h ^= hash_float(c.prism_h) * 37;
-  h ^= hash_float(c.upper_h) * 41;
-  h ^= hash_float(c.lower_h) * 43;
+  // Each shape field is a ShapeDist: hash all three components ({type, center, spread}) so a change
+  // to the distribution type or spread (not just the center) is detected and re-uploads the mesh.
+  auto hash_shape = [&](const ShapeDist& d, int salt) {
+    int hh = static_cast<int>(d.type) * salt;
+    hh ^= hash_float(d.center) * (salt + 1);
+    hh ^= hash_float(d.spread) * (salt + 2);
+    return hh;
+  };
+  h ^= hash_shape(c.height, 31);
+  h ^= hash_shape(c.prism_h, 37);
+  h ^= hash_shape(c.upper_h, 41);
+  h ^= hash_shape(c.lower_h, 43);
   h ^= hash_float(c.upper_alpha) * 47;
   h ^= hash_float(c.lower_alpha) * 53;
   for (int i = 0; i < 6; i++) {
-    h ^= hash_float(c.face_distance[i]) * (59 + i);
+    h ^= hash_shape(c.face_distance[i], 59 + i * 3);
   }
   return h;
 }
@@ -152,25 +160,24 @@ void ApplyTrackballRotation(float dx, float dy) {
 }
 
 bool BuildCrystalMeshData(const CrystalConfig& cr, unsigned long long sample_seed, LUMICE_CrystalMesh* out) {
-  // Preview and simulation now share the same LUMICE_CrystalParam: build it straight
-  // from the GUI config (no stringify → no %.4f precision divergence). GUI shape fields
-  // are still deterministic scalars (T4 has not promoted them to distributions), so each
-  // is wrapped in a NO_RANDOM distribution; the axis fields are irrelevant to the local-
-  // frame mesh and left zero-initialized.
-  auto no_random = [](float value) { return LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, value, 0.0f }; };
+  // Preview and simulation now share the same LUMICE_CrystalParam: build it straight from the GUI
+  // config (no stringify → no %.4f precision divergence). Shape fields are first-class ShapeDist,
+  // mapped through ToLumiceDistribution so a randomized shape drives the preview mesh exactly as it
+  // drives the simulator (given the same sample_seed). The axis fields are irrelevant to the
+  // local-frame mesh and left zero-initialized.
   LUMICE_CrystalParam param{};
   param.type = (cr.type == CrystalType::kPrism) ? 0 : 1;
   if (cr.type == CrystalType::kPrism) {
-    param.height = no_random(cr.height);
+    param.height = ToLumiceDistribution(cr.height);
   } else {
-    param.prism_h = no_random(cr.prism_h);
-    param.upper_h = no_random(cr.upper_h);
-    param.lower_h = no_random(cr.lower_h);
+    param.prism_h = ToLumiceDistribution(cr.prism_h);
+    param.upper_h = ToLumiceDistribution(cr.upper_h);
+    param.lower_h = ToLumiceDistribution(cr.lower_h);
     param.upper_wedge_angle = cr.upper_alpha;  // bare float, not a distribution
     param.lower_wedge_angle = cr.lower_alpha;
   }
   for (int i = 0; i < 6; i++) {
-    param.face_distance[i] = no_random(cr.face_distance[i]);
+    param.face_distance[i] = ToLumiceDistribution(cr.face_distance[i]);
   }
 
   *out = {};
