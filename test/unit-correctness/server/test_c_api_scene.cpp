@@ -951,3 +951,223 @@ TEST(SceneSerializeNegative, FromJsonFileNotFound) {
   EXPECT_EQ(LUMICE_SceneFromJsonFile("/path/does/not/exist/scene.json", &scene), LUMICE_ERR_FILE_NOT_FOUND);
   EXPECT_EQ(scene, nullptr);
 }
+
+// =============== LUMICE_CommitScene (AC1/AC2) ===============
+//
+// AC1 strategy mirrors the Add*/Set* section above: rather than asserting "return code was OK",
+// these prove the new handle entry point lands on the SAME core commit path as the established
+// LUMICE_CommitConfigStruct — same return codes AND the same out_reused sequence for equivalent
+// scene state. The mechanism that makes that hold is that scene->root and ConfigToJson() are the
+// same wire document (EquivalentToCommitConfigStructForSameState asserts that byte-level premise
+// directly, so a failure tells you whether the drift is in the data shape or in the commit path).
+
+namespace {
+
+// Renderer used by every commit test below. Kept tiny: commit builds a consumer per renderer,
+// and these tests care about the commit/reuse contract, not about rendering anything.
+LUMICE_RenderParam MakeCommitRenderParam() {
+  LUMICE_RenderParam r{};
+  r.resolution_w = 64;
+  r.resolution_h = 32;
+  r.opacity = 1.0f;
+  r.intensity_factor = 1.0f;
+  r.overlap = 0.0f;
+  return r;
+}
+
+// Populate `scene` with the smallest state the core accepts as a committable configuration:
+// one deterministic prism, one renderer, a sun, and a short finite ray budget (so the server
+// terminates promptly instead of simulating forever).
+void FillCommittableScene(LUMICE_Scene* scene, float sun_altitude = 20.0f) {
+  int id = -1;
+  const LUMICE_CrystalParam crystal = MakePrismParam(1.0f);
+  ASSERT_EQ(LUMICE_SceneAddCrystal(scene, &crystal, &id), LUMICE_OK);
+  const LUMICE_RenderParam renderer = MakeCommitRenderParam();
+  ASSERT_EQ(LUMICE_SceneAddRenderer(scene, &renderer, &id), LUMICE_OK);
+  ASSERT_EQ(LUMICE_SceneSetLightSource(scene, sun_altitude, 0.0f, 0.5f, "D65"), LUMICE_OK);
+  ASSERT_EQ(LUMICE_SceneSetSimParams(scene, 0, 100, 8, 0), LUMICE_OK);
+}
+
+// The LUMICE_Config oracle for FillCommittableScene: the same nine-subsystem state expressed in
+// the legacy wide struct, so the two commit entry points can be fed equivalent input.
+void FillEquivalentConfig(LUMICE_Config* config, float sun_altitude = 20.0f) {
+  config->crystal_count = 1;
+  config->crystals[0] = MakePrismParam(1.0f);
+  config->crystals[0].id = 0;
+  config->renderer_count = 1;
+  config->renderers[0] = MakeCommitRenderParam();
+  config->renderers[0].id = 0;
+  config->sun_altitude = sun_altitude;
+  config->sun_azimuth = 0.0f;
+  config->sun_diameter = 0.5f;
+  config->spectrum = "D65";
+  config->infinite = 0;
+  config->ray_num = 100;
+  config->max_hits = 8;
+  config->geom_clock = 0;
+}
+
+// RAII server so a failed ASSERT still tears the server down.
+struct ServerGuard {
+  LUMICE_Server* server = LUMICE_CreateServer();
+  ~ServerGuard() {
+    LUMICE_StopServer(server);
+    LUMICE_DestroyServer(server);
+  }
+  LUMICE_Server* get() const { return server; }
+};
+
+}  // namespace
+
+TEST(SceneCommit, NullServerReturnsNullArg) {
+  SceneGuard g;
+  int reused = -1;
+  EXPECT_EQ(LUMICE_CommitScene(nullptr, g.get(), &reused), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(reused, -1) << "out_reused must be untouched on the error path";
+}
+
+TEST(SceneCommit, NullSceneReturnsNullArg) {
+  ServerGuard s;
+  ASSERT_NE(s.get(), nullptr);
+  int reused = -1;
+  EXPECT_EQ(LUMICE_CommitScene(s.get(), nullptr, &reused), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(reused, -1) << "out_reused must be untouched on the error path";
+}
+
+TEST(SceneCommit, OutReusedNullDoesNotCrash) {
+  SceneGuard g;
+  ASSERT_NO_FATAL_FAILURE(FillCommittableScene(g.get()));
+  ServerGuard s;
+  ASSERT_NE(s.get(), nullptr);
+  // out_reused is optional (same contract as LUMICE_CommitConfigStruct): NULL must commit normally.
+  EXPECT_EQ(LUMICE_CommitScene(s.get(), g.get(), nullptr), LUMICE_OK);
+}
+
+TEST(SceneCommit, FirstCommitFromJsonNotReused) {
+  // Exercise the full JSON authoring route the API is meant to be used through:
+  // SceneFromJson (399.3) produces the handle, CommitScene consumes it.
+  SceneGuard src;
+  ASSERT_NO_FATAL_FAILURE(FillCommittableScene(src.get()));
+  const std::string json = SceneRoot(src.get()).dump();
+
+  LUMICE_Scene* scene = nullptr;
+  ASSERT_EQ(LUMICE_SceneFromJson(json.c_str(), &scene), LUMICE_OK);
+  ASSERT_NE(scene, nullptr);
+
+  ServerGuard s;
+  ASSERT_NE(s.get(), nullptr);
+  int reused = -1;
+  EXPECT_EQ(LUMICE_CommitScene(s.get(), scene, &reused), LUMICE_OK);
+  EXPECT_EQ(reused, 0) << "first commit has no consumers to reuse";
+  LUMICE_SceneDestroy(scene);
+}
+
+TEST(SceneCommit, CommitDoesNotConsumeScene) {
+  // The handle stays owned by the caller and stays usable: commit, mutate, commit the SAME
+  // handle again. (Ownership is the part of the header contract a caller most easily gets wrong.)
+  SceneGuard g;
+  ASSERT_NO_FATAL_FAILURE(FillCommittableScene(g.get()));
+  ServerGuard s;
+  ASSERT_NE(s.get(), nullptr);
+  ASSERT_EQ(LUMICE_CommitScene(s.get(), g.get(), nullptr), LUMICE_OK);
+  EXPECT_EQ(SceneRoot(g.get()).at("crystal").size(), 1u) << "commit must not mutate or clear the scene";
+  ASSERT_EQ(LUMICE_SceneSetLightSource(g.get(), 25.0f, 0.0f, 0.5f, "D65"), LUMICE_OK);
+  EXPECT_EQ(LUMICE_CommitScene(s.get(), g.get(), nullptr), LUMICE_OK);
+}
+
+TEST(SceneCommit, ReusesConsumersOnNonRendererChange) {
+  // Reuse judgement is the core correctness point of this entry point: the server may keep its
+  // consumers across a commit that does not change the renderer set/layout, so a live preview
+  // buffer is not torn. Method mirrors StructFilterComplex.ComplexFilterCommitReusesOnNonRendererChange
+  // in test_c_api.cpp, which locks the same contract for the legacy struct path.
+  SceneGuard g;
+  ASSERT_NO_FATAL_FAILURE(FillCommittableScene(g.get()));
+  ServerGuard s;
+  ASSERT_NE(s.get(), nullptr);
+
+  int reused = -1;
+  ASSERT_EQ(LUMICE_CommitScene(s.get(), g.get(), &reused), LUMICE_OK);
+  EXPECT_EQ(reused, 0) << "first commit builds consumers";
+
+  // Change a non-renderer field only.
+  ASSERT_EQ(LUMICE_SceneSetLightSource(g.get(), 25.0f, 0.0f, 0.5f, "D65"), LUMICE_OK);
+  reused = -1;
+  ASSERT_EQ(LUMICE_CommitScene(s.get(), g.get(), &reused), LUMICE_OK);
+  EXPECT_EQ(reused, 1) << "consumers must be reused when the renderer set is unchanged";
+}
+
+TEST(SceneCommit, EquivalentToCommitConfigStructForSameState) {
+  // AC1 head-on: same scene state, two entry points, two independent servers — identical return
+  // codes and identical out_reused sequences across a first commit and a non-renderer edit.
+  SceneGuard scene;
+  ASSERT_NO_FATAL_FAILURE(FillCommittableScene(scene.get()));
+
+  LUMICE_Config config{};
+  lumice::ConfigOwningGuard config_guard(config);
+  FillEquivalentConfig(&config);
+
+  // White-box premise: the two paths hand the core the SAME document. If this fails, a divergence
+  // below is a data-shape drift (399.2 territory), not a commit-path bug.
+  ASSERT_EQ(SceneRoot(scene.get()), ConfigToJson(config)) << "scene->root must match ConfigToJson byte for byte";
+
+  ServerGuard scene_server;
+  ServerGuard struct_server;
+  ASSERT_NE(scene_server.get(), nullptr);
+  ASSERT_NE(struct_server.get(), nullptr);
+
+  int scene_reused = -1;
+  int struct_reused = -1;
+  const auto scene_err1 = LUMICE_CommitScene(scene_server.get(), scene.get(), &scene_reused);
+  const auto struct_err1 = LUMICE_CommitConfigStruct(struct_server.get(), &config, &struct_reused);
+  EXPECT_EQ(scene_err1, struct_err1);
+  EXPECT_EQ(scene_err1, LUMICE_OK);
+  EXPECT_EQ(scene_reused, struct_reused);
+  EXPECT_EQ(scene_reused, 0);
+
+  // Identical non-renderer edit on both sides.
+  ASSERT_EQ(LUMICE_SceneSetLightSource(scene.get(), 25.0f, 0.0f, 0.5f, "D65"), LUMICE_OK);
+  config.sun_altitude = 25.0f;
+  ASSERT_EQ(SceneRoot(scene.get()), ConfigToJson(config)) << "edited states must still match";
+
+  scene_reused = -1;
+  struct_reused = -1;
+  const auto scene_err2 = LUMICE_CommitScene(scene_server.get(), scene.get(), &scene_reused);
+  const auto struct_err2 = LUMICE_CommitConfigStruct(struct_server.get(), &config, &struct_reused);
+  EXPECT_EQ(scene_err2, struct_err2);
+  EXPECT_EQ(scene_err2, LUMICE_OK);
+  EXPECT_EQ(scene_reused, struct_reused);
+  EXPECT_EQ(scene_reused, 1);
+}
+
+TEST(SceneCommit, DoesNotReuseConsumersOnRendererChange) {
+  // Counter-pole of ReusesConsumersOnNonRendererChange, and the reason that test means anything:
+  // out_reused is a real signal, not a constant 1 after the first commit. Adding a renderer
+  // changes the renderer set, so the consumers must be rebuilt.
+  SceneGuard g;
+  ASSERT_NO_FATAL_FAILURE(FillCommittableScene(g.get()));
+  ServerGuard s;
+  ASSERT_NE(s.get(), nullptr);
+
+  int reused = -1;
+  ASSERT_EQ(LUMICE_CommitScene(s.get(), g.get(), &reused), LUMICE_OK);
+  ASSERT_EQ(reused, 0);
+
+  int id = -1;
+  const LUMICE_RenderParam extra = MakeCommitRenderParam();
+  ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &extra, &id), LUMICE_OK);
+  reused = -1;
+  ASSERT_EQ(LUMICE_CommitScene(s.get(), g.get(), &reused), LUMICE_OK);
+  EXPECT_EQ(reused, 0) << "renderer-set change must rebuild consumers";
+}
+
+TEST(SceneCommit, EmptySceneIsRejected) {
+  // Error-code mapping path: a freshly created (crystal-less) scene is not a committable
+  // configuration, and the core rejection must surface as a mapped C error rather than OK.
+  SceneGuard g;
+  ASSERT_NE(g.get(), nullptr);
+  ServerGuard s;
+  ASSERT_NE(s.get(), nullptr);
+  int reused = -1;
+  EXPECT_NE(LUMICE_CommitScene(s.get(), g.get(), &reused), LUMICE_OK);
+  EXPECT_EQ(reused, -1) << "out_reused must be untouched when the commit fails";
+}
