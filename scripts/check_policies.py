@@ -45,6 +45,20 @@ Checks:
      implementation. Scope is intentionally narrow: only the popcount/ctz/clz
      families are pinned (task-popcount-helper), extend the regex when a new
      MSVC-unsafe `__builtin_*` family surfaces.
+  9. no-default-constructed-crystal-slots — no `std::vector<Crystal>` in src/
+     may be sized by `resize()`, `assign(n)`, or a count-ctor, and none may be
+     grown with an argument-less `emplace_back()`. All four produce
+     default-constructed `Crystal` elements: `face_cnt == 0`, no polygon faces,
+     `fn_period_ == -1`, null normal/distance tables. That state is the same
+     one the closed-form validity gate returns for a degenerate crystal, so
+     consumers that iterate the container cannot tell "never filled in" from
+     "legitimately empty", and a partially-filled container (e.g. a per-ci loop
+     that `continue`s on empty populations) silently hands out untouched slots.
+     Every such container must instead be filled element-by-element with real
+     crystals via `push_back`/`emplace_back(args...)`, so its size and its
+     populated prefix are the same thing by construction. The invariant is
+     pinned here rather than in a comment because the failure is silent: a
+     default slot reads as a valid empty crystal all the way to the GPU.
 
 Add a new check as a function returning a list of Violation and append it to
 CHECKS. Keep each check deterministic and artifact-inspecting.
@@ -849,6 +863,72 @@ def check_no_msvc_unsafe_builtin() -> list[Violation]:
     return out
 
 
+# `std::vector<Crystal> name;` / `std::vector<Crystal> name(...)` — the leading
+# boundary keeps it from matching `std::vector<CrystalConfig>` and friends.
+CRYSTAL_VECTOR_DECL = re.compile(r"std::vector\s*<\s*Crystal\s*>\s*&?\s*([A-Za-z_]\w*)")
+# Operations that materialise default-constructed elements. `reserve` is
+# deliberately absent: it allocates without constructing, which is exactly the
+# pattern this check wants people to use.
+CRYSTAL_VECTOR_DEFAULT_FILL = ("resize", "assign")
+
+
+def check_no_default_constructed_crystal_slots() -> list[Violation]:
+    out: list[Violation] = []
+    for path in cxx_sources(SRC):
+        lines = list(code_lines(path))
+        names: set[str] = set()
+        for _lineno, _orig, code in lines:
+            for m in CRYSTAL_VECTOR_DECL.finditer(code):
+                names.add(m.group(1))
+        if not names:
+            continue
+        # A count-ctor on the declaration line itself: `std::vector<Crystal> v(n);`
+        # is the same hazard spelled differently. `v(a, b)` (iterator range) and
+        # `v(other)` (copy) are fine, so only a single non-empty argument counts.
+        for lineno, _orig, code in lines:
+            for m in CRYSTAL_VECTOR_DECL.finditer(code):
+                tail = code[m.end():].lstrip()
+                if tail.startswith("(") and not tail.startswith("()"):
+                    inner = tail[1: tail.find(")")] if ")" in tail else ""
+                    if inner.strip() and "," not in inner:
+                        out.append(
+                            Violation(
+                                path,
+                                lineno,
+                                "no-default-constructed-crystal-slots",
+                                f"`{m.group(1)}` is sized by a count-ctor, which fills it with "
+                                "default-constructed Crystals (face_cnt == 0, no polygon faces). "
+                                "Reserve and push_back real crystals instead, so size == populated.",
+                            )
+                        )
+        for lineno, _orig, code in lines:
+            for name in names:
+                for op in CRYSTAL_VECTOR_DEFAULT_FILL:
+                    if re.search(rf"\b{re.escape(name)}\s*\.\s*{op}\s*\(", code):
+                        out.append(
+                            Violation(
+                                path,
+                                lineno,
+                                "no-default-constructed-crystal-slots",
+                                f"`{name}.{op}(...)` fills the vector with default-constructed "
+                                "Crystals (face_cnt == 0, no polygon faces, fn_period_ == -1). "
+                                "A consumer cannot distinguish those slots from a legitimately "
+                                "empty crystal. Reserve and push_back real crystals instead.",
+                            )
+                        )
+                if re.search(rf"\b{re.escape(name)}\s*\.\s*emplace_back\s*\(\s*\)", code):
+                    out.append(
+                        Violation(
+                            path,
+                            lineno,
+                            "no-default-constructed-crystal-slots",
+                            f"`{name}.emplace_back()` appends a default-constructed Crystal. "
+                            "Pass the crystal to append, or push_back one built by a factory.",
+                        )
+                    )
+    return out
+
+
 CHECKS = [
     check_getenv_centralization,
     check_env_knob_registration,
@@ -859,6 +939,7 @@ CHECKS = [
     check_no_config_by_value_copy,
     check_gui_state_field_tier_registration,
     check_no_msvc_unsafe_builtin,
+    check_no_default_constructed_crystal_slots,
 ]
 
 
@@ -881,7 +962,8 @@ def main() -> int:
     print(
         "Policy check passed (env centralization, knob registration, GUI API boundary, "
         "reconciler-widget-include, using-namespace, struct-layout parity, no-config-by-value-copy, "
-        "gui-state-field-tier-registration, no-msvc-unsafe-builtin)."
+        "gui-state-field-tier-registration, no-msvc-unsafe-builtin, "
+        "no-default-constructed-crystal-slots)."
     )
     return 0
 
