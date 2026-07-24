@@ -542,3 +542,355 @@ TEST(SceneNegative, RendererSoftCapEnforced) {
   EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_ERR_INVALID_CONFIG);
   EXPECT_EQ(SceneRoot(g.get()).at("render").size(), static_cast<size_t>(LUMICE_MAX_CONFIG_RENDERERS));
 }
+
+// =============== AC1: SceneToJson / SceneFromJson round-trip (lossless) ===============
+
+namespace {
+
+// Serialize a scene into a std::string via the two-call buffer contract: query the length with a
+// NULL buffer, then fill an exactly-sized buffer. Also asserts *out_len is stable across both calls.
+std::string SceneToJsonString(const LUMICE_Scene* scene) {
+  size_t len = 0;
+  EXPECT_EQ(LUMICE_SceneToJson(scene, nullptr, 0, &len), LUMICE_OK);
+  std::string buf(len + 1, '\0');  // +1 for the NUL the contract always writes
+  size_t written_len = 0;
+  EXPECT_EQ(LUMICE_SceneToJson(scene, buf.data(), buf.size(), &written_len), LUMICE_OK);
+  EXPECT_EQ(written_len, len);
+  buf.resize(len);  // drop the trailing NUL slot
+  return buf;
+}
+
+// ToJson -> FromJson -> deep-compare roots, plus ToJson idempotence on the round-tripped handle.
+// Full-root equality is intentionally strict: a difference would expose a real
+// JsonToConfig/ConfigToJson gap, not a test that is too tight (see plan §7 risk 3).
+void ExpectLosslessRoundTrip(LUMICE_Scene* scene) {
+  const std::string json = SceneToJsonString(scene);
+  LUMICE_Scene* rt = nullptr;
+  ASSERT_EQ(LUMICE_SceneFromJson(json.c_str(), &rt), LUMICE_OK);
+  ASSERT_NE(rt, nullptr);
+  EXPECT_EQ(SceneRoot(scene), SceneRoot(rt)) << "FromJson(ToJson(scene)) must equal the original root";
+  // Idempotence: re-serializing the round-tripped handle yields byte-identical JSON (proves FromJson
+  // introduced no silent field loss / reordering).
+  EXPECT_EQ(json, SceneToJsonString(rt));
+  LUMICE_SceneDestroy(rt);
+}
+
+LUMICE_Distribution Dist(int type, float center, float spread) {
+  return LUMICE_Distribution{ type, center, spread };
+}
+
+}  // namespace
+
+TEST(SceneRoundTrip, EmptyScene) {
+  SceneGuard g;
+  ExpectLosslessRoundTrip(g.get());
+}
+
+TEST(SceneRoundTrip, CrystalEveryDistributionType) {
+  // Every randomizable distribution type (no_random/uniform/gauss/zigzag/laplacian/gauss_legacy)
+  // must round-trip on both a shape scalar (height) and axis fields (zenith/azimuth).
+  const int dist_types[] = { LUMICE_DIST_NO_RANDOM, LUMICE_DIST_UNIFORM,   LUMICE_DIST_GAUSS,
+                             LUMICE_DIST_ZIGZAG,    LUMICE_DIST_LAPLACIAN, LUMICE_DIST_GAUSS_LEGACY };
+  for (int dt : dist_types) {
+    SceneGuard g;
+    const float spread = (dt == LUMICE_DIST_NO_RANDOM) ? 0.0f : 0.5f;
+    LUMICE_CrystalParam p = MakePrismParam(1.5f);
+    p.height = Dist(dt, 2.0f, spread);
+    p.zenith = Dist(dt, 90.0f, spread);
+    p.azimuth = Dist(dt, 10.0f, spread);
+    p.roll = DetDist(0.0f);
+    int id = -1;
+    ASSERT_EQ(LUMICE_SceneAddCrystal(g.get(), &p, &id), LUMICE_OK) << "dist type " << dt;
+    ExpectLosslessRoundTrip(g.get());
+  }
+}
+
+TEST(SceneRoundTrip, PyramidCrystal) {
+  SceneGuard g;
+  LUMICE_CrystalParam p{};
+  p.type = 1;  // pyramid
+  p.prism_h = DetDist(1.0f);
+  p.upper_h = Dist(LUMICE_DIST_GAUSS, 0.4f, 0.05f);
+  p.lower_h = DetDist(0.3f);
+  p.upper_wedge_angle = 28.0f;
+  p.lower_wedge_angle = 28.0f;
+  for (auto& fd : p.face_distance) {
+    fd = DetDist(1.0f);
+  }
+  p.zenith = Dist(LUMICE_DIST_UNIFORM, 0.0f, 5.0f);
+  int id = -1;
+  ASSERT_EQ(LUMICE_SceneAddCrystal(g.get(), &p, &id), LUMICE_OK);
+  ExpectLosslessRoundTrip(g.get());
+}
+
+TEST(SceneRoundTrip, SimpleFilters) {
+  SceneGuard g;
+  int id = -1;
+  const LUMICE_CrystalParam cr = MakePrismParam(1.0f);
+  ASSERT_EQ(LUMICE_SceneAddCrystal(g.get(), &cr, &id), LUMICE_OK);
+
+  LUMICE_FilterParam raypath{};
+  raypath.type = LUMICE_FILTER_TYPE_RAYPATH;
+  raypath.symmetry = 4;
+  raypath.raypath_count = 3;
+  raypath.raypath[0] = 3;
+  raypath.raypath[1] = 5;
+  raypath.raypath[2] = 3;
+  ASSERT_EQ(LUMICE_SceneAddFilter(g.get(), &raypath, &id), LUMICE_OK);
+
+  LUMICE_FilterParam crystal_filter{};
+  crystal_filter.type = LUMICE_FILTER_TYPE_CRYSTAL;
+  crystal_filter.crystal_id = 0;
+  ASSERT_EQ(LUMICE_SceneAddFilter(g.get(), &crystal_filter, &id), LUMICE_OK);
+
+  ExpectLosslessRoundTrip(g.get());
+}
+
+TEST(SceneRoundTrip, ComplexFilterComposition) {
+  // A complex filter's composition references OTHER filters by id. FromJson runs the full config
+  // validator, which cross-checks those references (stricter than Add-time, which only validates
+  // each item's shape) — so the referenced simple filters must exist for a lossless round-trip.
+  SceneGuard g;
+  int id = -1;
+  LUMICE_FilterParam s0{};
+  s0.type = LUMICE_FILTER_TYPE_RAYPATH;
+  s0.symmetry = 4;
+  s0.raypath_count = 2;
+  s0.raypath[0] = 3;
+  s0.raypath[1] = 5;
+  ASSERT_EQ(LUMICE_SceneAddFilter(g.get(), &s0, &id), LUMICE_OK);
+  ASSERT_EQ(id, 0);
+  LUMICE_FilterParam s1{};
+  s1.type = LUMICE_FILTER_TYPE_RAYPATH;
+  s1.symmetry = 4;
+  s1.raypath_count = 2;
+  s1.raypath[0] = 3;
+  s1.raypath[1] = 6;
+  ASSERT_EQ(LUMICE_SceneAddFilter(g.get(), &s1, &id), LUMICE_OK);
+  ASSERT_EQ(id, 1);
+  // Sum-of-products over the two simple filters: clause0 = {0}, clause1 = {0, 1}.
+  const int term_counts[] = { 1, 2 };
+  const int term_ids[] = { 0, 0, 1 };
+  LUMICE_ComplexComposition comp{};
+  ASSERT_EQ(LUMICE_CompositionSetClauses(&comp, 2, term_counts, term_ids), LUMICE_OK);
+  LUMICE_FilterParam f{};
+  f.type = LUMICE_FILTER_TYPE_COMPLEX;
+  f.symmetry = 4;
+  ASSERT_EQ(LUMICE_SceneAddComplexFilter(g.get(), &f, &comp, &id), LUMICE_OK);
+  ASSERT_EQ(id, 2);
+  LUMICE_CompositionReleaseClauses(&comp);
+  ExpectLosslessRoundTrip(g.get());
+}
+
+TEST(SceneRoundTrip, RendererAndScatterLayer) {
+  SceneGuard g;
+  int id = -1;
+  const LUMICE_CrystalParam cr = MakePrismParam(1.0f);
+  ASSERT_EQ(LUMICE_SceneAddCrystal(g.get(), &cr, &id), LUMICE_OK);
+
+  LUMICE_RenderParam r{};
+  r.resolution_w = 1024;
+  r.resolution_h = 768;
+  r.opacity = 0.8f;
+  r.intensity_factor = 1.5f;
+  r.overlap = 0.25f;
+  ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
+
+  LUMICE_ScatterLayer layer{};
+  layer.probability = 0.4f;
+  layer.entry_count = 2;
+  layer.entries[0] = LUMICE_ScatterEntry{ 0, 0.6f, -1 };
+  layer.entries[1] = LUMICE_ScatterEntry{ 0, 0.4f, 0 };
+  ASSERT_EQ(LUMICE_SceneAddScatterLayer(g.get(), &layer, &id), LUMICE_OK);
+
+  ExpectLosslessRoundTrip(g.get());
+}
+
+TEST(SceneRoundTrip, ColorClasses) {
+  SceneGuard g;
+  ASSERT_EQ(LUMICE_SceneSetColorMode(g.get(), LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
+  LUMICE_ColorClass cls{};
+  cls.color[0] = 0.2f;
+  cls.color[1] = 0.7f;
+  cls.color[2] = 0.9f;
+  cls.combine = LUMICE_COLOR_COMBINE_ANY;
+  cls.visible = 1;
+  cls.solo = 0;
+  cls.match_count = 1;
+  cls.match[0].layer = 0;
+  cls.match[0].crystal = 0;
+  cls.match[0].predicate.type = LUMICE_FILTER_TYPE_RAYPATH;
+  cls.match[0].predicate.raypath_count = 2;
+  cls.match[0].predicate.raypath[0] = 3;
+  cls.match[0].predicate.raypath[1] = 4;
+  int id = -1;
+  ASSERT_EQ(LUMICE_SceneAddColorClass(g.get(), &cls, &id), LUMICE_OK);
+  ExpectLosslessRoundTrip(g.get());
+}
+
+TEST(SceneRoundTrip, LightSourceDiscreteSpectrumAndSimParams) {
+  SceneGuard g;
+  const LUMICE_SpectrumEntry spec[] = { { 450.0f, 1.0f }, { 550.0f, 2.0f }, { 650.0f, 0.5f } };
+  ASSERT_EQ(LUMICE_SceneSetCustomSpectrum(g.get(), spec, 3), LUMICE_OK);
+  ASSERT_EQ(LUMICE_SceneSetLightSource(g.get(), 23.5f, 90.0f, 0.53f, "D65"), LUMICE_OK);
+  ASSERT_EQ(LUMICE_SceneSetSimParams(g.get(), 0, 500000, 12, 4), LUMICE_OK);
+  ExpectLosslessRoundTrip(g.get());
+}
+
+TEST(SceneRoundTrip, LightSourceStringSpectrum) {
+  SceneGuard g;
+  ASSERT_EQ(LUMICE_SceneSetLightSource(g.get(), 10.0f, 45.0f, 0.5f, "D65"), LUMICE_OK);
+  ASSERT_EQ(LUMICE_SceneSetSimParams(g.get(), 1, 0, 8, 0), LUMICE_OK);
+  ExpectLosslessRoundTrip(g.get());
+}
+
+TEST(SceneRoundTrip, RichSceneAllSubsystems) {
+  // One scene exercising all nine subsystems together, then a full-root round-trip.
+  SceneGuard g;
+  int id = -1;
+
+  LUMICE_CrystalParam cr = MakePrismParam(1.2f);
+  cr.zenith = Dist(LUMICE_DIST_LAPLACIAN, 90.0f, 2.0f);
+  cr.azimuth = Dist(LUMICE_DIST_UNIFORM, 0.0f, 10.0f);
+  ASSERT_EQ(LUMICE_SceneAddCrystal(g.get(), &cr, &id), LUMICE_OK);
+
+  LUMICE_FilterParam raypath{};
+  raypath.type = LUMICE_FILTER_TYPE_RAYPATH;
+  raypath.symmetry = 4;
+  raypath.raypath_count = 2;
+  raypath.raypath[0] = 3;
+  raypath.raypath[1] = 5;
+  ASSERT_EQ(LUMICE_SceneAddFilter(g.get(), &raypath, &id), LUMICE_OK);
+
+  const int term_counts[] = { 2 };
+  const int term_ids[] = { 0, 0 };
+  LUMICE_ComplexComposition comp{};
+  ASSERT_EQ(LUMICE_CompositionSetClauses(&comp, 1, term_counts, term_ids), LUMICE_OK);
+  LUMICE_FilterParam cf{};
+  cf.type = LUMICE_FILTER_TYPE_COMPLEX;
+  cf.symmetry = 4;
+  ASSERT_EQ(LUMICE_SceneAddComplexFilter(g.get(), &cf, &comp, &id), LUMICE_OK);
+  LUMICE_CompositionReleaseClauses(&comp);
+
+  LUMICE_RenderParam r{};
+  r.resolution_w = 800;
+  r.resolution_h = 800;
+  r.opacity = 1.0f;
+  r.intensity_factor = 1.0f;
+  ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
+
+  LUMICE_ScatterLayer layer{};
+  layer.probability = 0.5f;
+  layer.entry_count = 1;
+  layer.entries[0] = LUMICE_ScatterEntry{ 0, 1.0f, 0 };
+  ASSERT_EQ(LUMICE_SceneAddScatterLayer(g.get(), &layer, &id), LUMICE_OK);
+
+  ASSERT_EQ(LUMICE_SceneSetColorMode(g.get(), LUMICE_COLOR_MODE_ADDITIVE), LUMICE_OK);
+  LUMICE_ColorClass cls{};
+  cls.color[0] = 1.0f;
+  cls.combine = LUMICE_COLOR_COMBINE_ANY;
+  cls.visible = 1;
+  cls.match_count = 1;
+  cls.match[0].layer = 0;
+  cls.match[0].crystal = 0;
+  cls.match[0].predicate.type = LUMICE_FILTER_TYPE_CRYSTAL;
+  cls.match[0].predicate.crystal_id = 0;
+  ASSERT_EQ(LUMICE_SceneAddColorClass(g.get(), &cls, &id), LUMICE_OK);
+
+  const LUMICE_SpectrumEntry spec[] = { { 480.0f, 1.0f }, { 620.0f, 0.8f } };
+  ASSERT_EQ(LUMICE_SceneSetCustomSpectrum(g.get(), spec, 2), LUMICE_OK);
+  ASSERT_EQ(LUMICE_SceneSetLightSource(g.get(), 20.0f, 120.0f, 0.5f, "D65"), LUMICE_OK);
+  ASSERT_EQ(LUMICE_SceneSetSimParams(g.get(), 0, 1000000, 20, 8), LUMICE_OK);
+
+  ExpectLosslessRoundTrip(g.get());
+}
+
+// =============== AC3: serialization negative paths (error code, never crash, *out == NULL) ===============
+
+namespace {
+// A non-NULL sentinel we never dereference: proves the impl actively writes NULL on failure
+// (rather than leaving the caller's pointer untouched). Casting an integer to a pointer and only
+// comparing it is well-defined; it is never loaded/stored through.
+LUMICE_Scene* Sentinel() {
+  return reinterpret_cast<LUMICE_Scene*>(0xDEADBEEF);
+}
+}  // namespace
+
+TEST(SceneSerializeNegative, ToJsonNullScene) {
+  size_t len = 12345;
+  EXPECT_EQ(LUMICE_SceneToJson(nullptr, nullptr, 0, &len), LUMICE_ERR_NULL_ARG);
+}
+
+TEST(SceneSerializeNegative, FromJsonNullArgs) {
+  LUMICE_Scene* scene = Sentinel();
+  EXPECT_EQ(LUMICE_SceneFromJson(nullptr, &scene), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_SceneFromJson("{}", nullptr), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_SceneFromJsonFile(nullptr, &scene), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_SceneFromJsonFile("x.json", nullptr), LUMICE_ERR_NULL_ARG);
+}
+
+TEST(SceneSerializeNegative, SyntaxErrorClearsOutScene) {
+  LUMICE_Scene* scene = Sentinel();
+  EXPECT_EQ(LUMICE_SceneFromJson("{ not valid json", &scene), LUMICE_ERR_INVALID_JSON);
+  EXPECT_EQ(scene, nullptr) << "*out_scene must be NULL on failure";
+}
+
+TEST(SceneSerializeNegative, MissingCrystalField) {
+  LUMICE_Scene* scene = Sentinel();
+  const char* json = R"({ "scene": { "ray_num": 0, "max_hits": 0 } })";
+  EXPECT_EQ(LUMICE_SceneFromJson(json, &scene), LUMICE_ERR_MISSING_FIELD);
+  EXPECT_EQ(scene, nullptr);
+}
+
+TEST(SceneSerializeNegative, MissingSceneField) {
+  LUMICE_Scene* scene = Sentinel();
+  const char* json = R"({ "crystal": [] })";
+  EXPECT_EQ(LUMICE_SceneFromJson(json, &scene), LUMICE_ERR_MISSING_FIELD);
+  EXPECT_EQ(scene, nullptr);
+}
+
+TEST(SceneSerializeNegative, CrystalMissingTypeField) {
+  LUMICE_Scene* scene = Sentinel();
+  // Crystal entry present but missing "type".
+  const char* json = R"({ "crystal": [ { "id": 0 } ], "scene": { "ray_num": 0, "max_hits": 0 } })";
+  EXPECT_EQ(LUMICE_SceneFromJson(json, &scene), LUMICE_ERR_MISSING_FIELD);
+  EXPECT_EQ(scene, nullptr);
+}
+
+TEST(SceneSerializeNegative, CrystalInvalidTypeValue) {
+  LUMICE_Scene* scene = Sentinel();
+  const char* json =
+      R"({ "crystal": [ { "id": 0, "type": "notacrystal" } ], "scene": { "ray_num": 0, "max_hits": 0 } })";
+  EXPECT_EQ(LUMICE_SceneFromJson(json, &scene), LUMICE_ERR_INVALID_VALUE);
+  EXPECT_EQ(scene, nullptr);
+}
+
+TEST(SceneSerializeNegative, CrystalCountOverSoftCap) {
+  // Build a JSON scene with one crystal beyond the soft cap, programmatically.
+  nlohmann::json root;
+  root["crystal"] = nlohmann::json::array();
+  for (int i = 0; i < LUMICE_MAX_CONFIG_CRYSTALS + 1; i++) {
+    nlohmann::json c;
+    c["id"] = i;
+    c["type"] = "prism";
+    c["shape"]["height"] = { { "type", "no_random" }, { "center", 1.0 } };
+    nlohmann::json fd = nlohmann::json::array();
+    for (int k = 0; k < 6; k++) {
+      fd.push_back({ { "type", "no_random" }, { "center", 1.0 } });
+    }
+    c["shape"]["face_distance"] = fd;
+    root["crystal"].push_back(c);
+  }
+  root["scene"]["ray_num"] = 0;
+  root["scene"]["max_hits"] = 0;
+
+  LUMICE_Scene* scene = Sentinel();
+  EXPECT_EQ(LUMICE_SceneFromJson(root.dump().c_str(), &scene), LUMICE_ERR_INVALID_CONFIG);
+  EXPECT_EQ(scene, nullptr);
+}
+
+TEST(SceneSerializeNegative, FromJsonFileNotFound) {
+  LUMICE_Scene* scene = Sentinel();
+  EXPECT_EQ(LUMICE_SceneFromJsonFile("/path/does/not/exist/scene.json", &scene), LUMICE_ERR_FILE_NOT_FOUND);
+  EXPECT_EQ(scene, nullptr);
+}
