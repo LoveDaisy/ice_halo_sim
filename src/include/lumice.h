@@ -533,8 +533,9 @@ typedef struct LUMICE_RenderParam_ {
 // Scene deep-copies every input value immediately, so the caller's leaf struct may be a stack
 // temporary that is discarded/reused right after the call returns (no "must outlive commit"
 // lifetime reasoning). Type + lifecycle + leaf writes are joined by the serialization half
-// (SceneToJson / SceneFromJson / SceneFromJsonFile, below); CommitScene remains the only
-// still-missing entry point (a separate follow-up).
+// (SceneToJson / SceneFromJson / SceneFromJsonFile, below) and by the commit entry point
+// (LUMICE_CommitScene, below), which is the handle-side counterpart of the three legacy
+// LUMICE_Config commit functions.
 //
 // Coexists with LUMICE_Config: this step adds symbols only; LUMICE_Config and its three commit
 // entry points are byte-for-byte unchanged. LUMICE_API_VERSION is NOT bumped here (no BREAKING
@@ -633,6 +634,30 @@ LUMICE_ErrorCode LUMICE_SceneToJson(const LUMICE_Scene* scene, char* out_buf, si
 // LUMICE_ERR_FILE_NOT_FOUND (SceneFromJsonFile: file cannot be opened).
 LUMICE_ErrorCode LUMICE_SceneFromJson(const char* json_str, LUMICE_Scene** out_scene);
 LUMICE_ErrorCode LUMICE_SceneFromJsonFile(const char* filename, LUMICE_Scene** out_scene);
+
+// ---------- Commit ----------
+// Commit `scene` to `server`: the handle-side counterpart of LUMICE_CommitConfigStruct, and the
+// entry point the three legacy LUMICE_Config commit functions collapse into. Both go through the
+// same core commit path, so reuse judgement and re-simulation triggering are identical for
+// equivalent scene state — commit never depends on which entry point produced the JSON.
+//
+// Commit is DELIBERATELY decoupled from serialization: this takes a handle, never a JSON string
+// or a file path. To commit JSON, first build a handle with LUMICE_SceneFromJson /
+// LUMICE_SceneFromJsonFile, then pass it here.
+//
+// `scene` is neither consumed nor destroyed: it is read as const, the server keeps no reference
+// to it, and the caller still owns it and must eventually call LUMICE_SceneDestroy. The same
+// handle may be committed repeatedly (edit via Add*/Set*, commit again).
+//
+// `out_reused` is OPTIONAL (may be NULL). When non-NULL it receives 1 if the server reused the
+// existing consumers/renderers across this commit (no renderer-layout change), 0 if they were
+// rebuilt. Unlike the legacy JSON-string / JSON-file entry points, which never exposed this
+// signal, every LUMICE_CommitScene caller can read it.
+//
+// Errors: LUMICE_ERR_NULL_ARG (NULL server or scene), LUMICE_ERR_INVALID_CONFIG (the scene is not
+// a committable configuration) — the same mapping LUMICE_CommitConfigStruct performs. No
+// whole-scene re-validation happens here: each Add*/Set* call already validated its own input.
+LUMICE_ErrorCode LUMICE_CommitScene(LUMICE_Server* server, const LUMICE_Scene* scene, int* out_reused);
 
 // BREAKING (v4.4): added spectrum_entries[]/spectrum_count for custom discrete spectrum.
 // Layout changed; callers must recompile against this header. spectrum_count > 0 selects the

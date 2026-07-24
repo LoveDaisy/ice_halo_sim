@@ -1263,6 +1263,28 @@ const int* LUMICE_CompositionClauseTerms(const LUMICE_ComplexComposition* comp, 
 }
 
 
+// Single source for the "hand an already-encoded scene JSON to the core and report reuse" tail
+// shared by LUMICE_CommitConfigStruct and LUMICE_CommitScene. Both entry points differ only in
+// how they obtain `root` (ConfigToJson of a wide struct vs. the Scene handle's own document);
+// everything downstream — the core commit call, the error log, the error-code mapping, and the
+// out_reused write-back — must stay identical, so it lives here rather than being duplicated.
+// Callers are responsible for their own NULL checks before calling. `source` only tags the error
+// log with the originating entry point, so a failed commit stays attributable after unification.
+static LUMICE_ErrorCode CommitJsonToServer(LUMICE_Server* server, const nlohmann::json& root, int* out_reused,
+                                           const char* source) {
+  bool reused = false;
+  auto err = server->server_->CommitConfig(root, &reused);
+  if (err) {
+    LOG_ERROR("Failed to commit configuration ({}): {}", source, err.message);
+    return MapErrorCode(err.code);
+  }
+  if (out_reused) {
+    *out_reused = reused ? 1 : 0;
+  }
+  return LUMICE_OK;
+}
+
+
 // Struct->JSON path: see doc/capi-lifecycle-architecture.md §6.2.
 LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_Config* config, int* out_reused) {
   if (!server || !config) {
@@ -1325,22 +1347,13 @@ LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_C
   // already converts core from_json exceptions to an Error return internally (server.cpp),
   // so those don't reach here — this try/catch primarily guards ConfigToJson's throw from
   // escaping the C ABI boundary. Map any escaped exception to LUMICE_ERR_INVALID_CONFIG.
-  bool reused = false;
   try {
     auto config_json = ConfigToJson(*config);
-    auto err = server->server_->CommitConfig(config_json, &reused);
-    if (err) {
-      LOG_ERROR("Failed to commit configuration (struct): {}", err.message);
-      return MapErrorCode(err.code);
-    }
+    return CommitJsonToServer(server, config_json, out_reused, "struct");
   } catch (const std::exception& e) {
     LOG_ERROR("Failed to commit configuration (struct): invalid config: {}", e.what());
     return LUMICE_ERR_INVALID_CONFIG;
   }
-  if (out_reused) {
-    *out_reused = reused ? 1 : 0;
-  }
-  return LUMICE_OK;
 }
 
 
@@ -2165,6 +2178,21 @@ LUMICE_ErrorCode LUMICE_SceneFromJsonFile(const char* filename, LUMICE_Scene** o
   } catch (const nlohmann::json::exception&) {
     return LUMICE_ERR_INVALID_VALUE;
   }
+}
+
+
+// =============== Scene commit ===============
+// Handle->core commit. Deliberately thinner than LUMICE_CommitConfigStruct: that function's
+// bounds-check prologue defends against a caller hand-filling the wide C struct with arbitrary
+// counts/pointers, a state a Scene cannot reach — every Add*/Set* validated its own input at call
+// time, so re-checking here would be dead code. scene->root and ConfigToJson's output are the
+// same encoding (they share the per-section encode helpers), so both entry points hand the core
+// the identical document shape and reuse judgement cannot diverge between them.
+LUMICE_ErrorCode LUMICE_CommitScene(LUMICE_Server* server, const LUMICE_Scene* scene, int* out_reused) {
+  if (!server || !scene) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  return CommitJsonToServer(server, scene->root, out_reused, "scene");
 }
 
 
