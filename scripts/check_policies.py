@@ -873,6 +873,22 @@ CRYSTAL_VECTOR_DEFAULT_FILL = ("resize", "assign")
 
 
 def check_no_default_constructed_crystal_slots() -> list[Violation]:
+    """Flag `std::vector<Crystal>` sites that materialise default-constructed
+    elements (single-argument `resize`/`assign`, count-ctor, no-arg
+    `emplace_back()`).
+
+    Scope: text-matches direct `std::vector<Crystal> name` declarations only —
+    type aliases (`using CrystalVec = std::vector<Crystal>;`) and indirect
+    holders (a `std::vector<Crystal>` wrapped in a struct member and exposed
+    elsewhere) are not recognised and can bypass this check undetected.
+
+    Any `resize()`/`push_back`-based reshape of a `std::vector<Crystal>` is
+    rejected wholesale, even a hypothetical safe `resize()` immediately
+    followed by a loop that fills every new index — the win of one uniform,
+    mechanically-verifiable rule (no case-by-case safety proof required) is
+    judged worth that false-positive rate; push_back/emplace_back(args...) is
+    the one sanctioned shape.
+    """
     out: list[Violation] = []
     for path in cxx_sources(SRC):
         lines = list(code_lines(path))
@@ -901,10 +917,20 @@ def check_no_default_constructed_crystal_slots() -> list[Violation]:
                                 "Reserve and push_back real crystals instead, so size == populated.",
                             )
                         )
+        # Same "no comma == hazard" rule as the count-ctor check above:
+        # `resize(n, value)` / `assign(n, value)` / `assign(first, last)` fill
+        # with real values and are safe; only the single-argument forms
+        # (`resize(n)`; `assign(n)` isn't even valid C++, but a stray
+        # single-argument call is still worth flagging) materialise defaults.
         for lineno, _orig, code in lines:
             for name in names:
                 for op in CRYSTAL_VECTOR_DEFAULT_FILL:
-                    if re.search(rf"\b{re.escape(name)}\s*\.\s*{op}\s*\(", code):
+                    m = re.search(rf"\b{re.escape(name)}\s*\.\s*{op}\s*\(", code)
+                    if not m:
+                        continue
+                    tail = code[m.end():]
+                    inner = tail[: tail.find(")")] if ")" in tail else tail
+                    if inner.strip() and "," not in inner:
                         out.append(
                             Violation(
                                 path,
