@@ -544,6 +544,44 @@ TEST(SceneNegative, RendererSoftCapEnforced) {
   EXPECT_EQ(SceneRoot(g.get()).at("render").size(), static_cast<size_t>(LUMICE_MAX_CONFIG_RENDERERS));
 }
 
+// v4.11: the renderer struct gained two enum-valued fields and two counted inline arrays, so
+// LUMICE_SceneAddRenderer gained the matching rejections. Every one of them must leave the scene
+// untouched — a partially-encoded renderer would be worse than the rejected call.
+TEST(SceneNegative, RendererInvalidEnumOrGridCountRejected) {
+  SceneGuard g;
+  int id = -1;
+  LUMICE_RenderParam base{};
+  base.resolution_w = 100;
+  base.resolution_h = 100;
+  base.lens_type = LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA;
+  base.lens_fov = 180.0f;
+
+  LUMICE_RenderParam bad_lens = base;
+  bad_lens.lens_type = 999;
+  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &bad_lens, &id), LUMICE_ERR_INVALID_CONFIG);
+
+  LUMICE_RenderParam bad_visible = base;
+  bad_visible.visible = 7;
+  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &bad_visible, &id), LUMICE_ERR_INVALID_CONFIG);
+
+  LUMICE_RenderParam bad_central = base;
+  bad_central.central_grid_count = LUMICE_MAX_CONFIG_GRID_LINES + 1;
+  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &bad_central, &id), LUMICE_ERR_INVALID_CONFIG);
+
+  LUMICE_RenderParam negative_elevation = base;
+  negative_elevation.elevation_grid_count = -1;
+  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &negative_elevation, &id), LUMICE_ERR_INVALID_CONFIG);
+
+  EXPECT_TRUE(SceneRoot(g.get()).at("render").empty())
+      << "a rejected renderer must not leave a partially-built entry behind";
+
+  // The exact cap is accepted (the bound is inclusive).
+  LUMICE_RenderParam at_cap = base;
+  at_cap.central_grid_count = LUMICE_MAX_CONFIG_GRID_LINES;
+  at_cap.elevation_grid_count = LUMICE_MAX_CONFIG_GRID_LINES;
+  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &at_cap, &id), LUMICE_OK);
+}
+
 // =============== AC1: SceneToJson / SceneFromJson round-trip (lossless) ===============
 
 namespace {
@@ -715,6 +753,53 @@ TEST(SceneRoundTrip, RendererAndScatterLayer) {
   ASSERT_EQ(LUMICE_SceneAddScatterLayer(g.get(), &layer, &id), LUMICE_OK);
 
   ExpectLosslessRoundTrip(g.get());
+}
+
+// Every lens projection must survive Scene -> JSON -> Scene. The C API <-> core lens mapping is a
+// hand-written switch on both sides, so a single transposed arm would silently render a config
+// through the wrong projection; a whole-corpus test cannot catch that for the projections the
+// corpus happens not to use. The FOVs stay inside each type's MaxFov (core rejects the rest).
+TEST(SceneRoundTrip, EveryLensTypeAndVisibleRange) {
+  struct LensCase {
+    int type;
+    float fov;
+  };
+  const LensCase lenses[] = {
+    { LUMICE_LENS_TYPE_LINEAR, 120.0f },
+    { LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA, 200.0f },
+    { LUMICE_LENS_TYPE_FISHEYE_EQUIDISTANT, 240.0f },
+    { LUMICE_LENS_TYPE_FISHEYE_STEREOGRAPHIC, 300.0f },
+    { LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA, 180.0f },
+    { LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUIDISTANT, 190.0f },
+    { LUMICE_LENS_TYPE_DUAL_FISHEYE_STEREOGRAPHIC, 210.0f },
+    { LUMICE_LENS_TYPE_RECTANGULAR, 0.0f },  // full-sky by definition; core ignores fov
+    { LUMICE_LENS_TYPE_FISHEYE_ORTHOGRAPHIC, 180.0f },
+    { LUMICE_LENS_TYPE_DUAL_FISHEYE_ORTHOGRAPHIC, 150.0f },
+    { LUMICE_LENS_TYPE_GLOBE, 90.0f },
+  };
+  const int visibles[] = { LUMICE_VISIBLE_UPPER, LUMICE_VISIBLE_LOWER, LUMICE_VISIBLE_FULL };
+
+  for (const auto& lens : lenses) {
+    for (int visible : visibles) {
+      SceneGuard g;
+      int id = -1;
+      LUMICE_RenderParam r{};
+      r.resolution_w = 256;
+      r.resolution_h = 128;
+      r.opacity = 1.0f;
+      r.intensity_factor = 1.0f;
+      r.lens_type = lens.type;
+      r.lens_fov = lens.fov;
+      r.visible = visible;
+      r.ray_color[0] = r.ray_color[1] = r.ray_color[2] = -1.0f;
+      r.celestial_outline = 1;
+      ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK)
+          << "lens_type=" << lens.type << " visible=" << visible;
+      // The round trip re-parses through core, so a mis-mapped enum surfaces either as a rejection
+      // or as a root mismatch here.
+      ExpectLosslessRoundTrip(g.get());
+    }
+  }
 }
 
 TEST(SceneRoundTrip, ColorClasses) {
