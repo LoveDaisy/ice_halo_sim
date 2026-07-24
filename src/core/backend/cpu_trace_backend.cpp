@@ -294,8 +294,8 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
   size_t crystal_cnt = ms_info.setting_.size();
   // task-exit-seam-crystal-count: record final MS layer setting count for
   // Simulator to feed SimData.crystal_count_. Semantics: last layer only,
-  // not cross-layer sum (mirrors Metal `last_layer_crystals_` /
-  // CUDA `final_layer_crystals_`).
+  // not cross-layer sum (mirrors CUDA `final_layer_crystals_`; Metal keeps no
+  // host-side final-layer mirror since the emit gate moved on-device).
   if (ms_idx_ + 1 == spec_.scene->ms_.size()) {
     last_layer_crystal_count_ = crystal_cnt;
   }

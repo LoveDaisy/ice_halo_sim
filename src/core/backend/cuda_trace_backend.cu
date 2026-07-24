@@ -2118,7 +2118,10 @@ struct CudaTraceBackend::Impl {
   // Multi-CI 全量: the final layer may hold several crystals; DrainExits indexes
   // these per-exit by ExitRayRecord.crystal_id. Populated in BeginSession from
   // the last MS layer's settings (proto crystals — filter only needs topology).
-  // Mirrors Metal last_layer_crystals_[ci] (metal_trace_backend.mm:2403-2409).
+  // Metal used to keep the same per-ci mirror; it no longer does — its emit
+  // gate runs filter+prob on-device, so ReadbackExitRays returns no records
+  // and the mirror had no reader left. CUDA still drains on the host, so this
+  // one is live.
   std::vector<FilterConfig>     final_layer_filter_configs_;
   std::vector<Crystal>          final_layer_crystals_;
   std::vector<AxisDistribution> final_layer_axis_dists_;
@@ -3429,9 +3432,9 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
 
   // Capture final-layer host filter state PER-CI — DrainExits applies FilterSpec
   // on records tagged with the final ms_layer_idx, indexed by ExitRayRecord
-  // .crystal_id (mirrors Metal last_layer_crystals_[ci], metal:2403-2409). Proto
-  // crystals (deterministic rng) suffice: the host filter only needs the face
-  // topology (GetFn), which is param-determined, not the exact traced instance.
+  // .crystal_id. Proto crystals (deterministic rng) suffice: the host filter
+  // only needs the face topology (GetFn), which is param-determined, not the
+  // exact traced instance.
   const auto& last_ms_layer = spec.scene->ms_.back();
   const size_t last_ci_cnt = last_ms_layer.setting_.size();
   RandomNumberGenerator drain_proto_rng(0xC0FEFEEDu);

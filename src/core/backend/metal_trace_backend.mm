@@ -1007,15 +1007,19 @@ struct MetalTraceBackend::Impl {
 
   // Per-layer hop state (scrum-258.3 + scrum-267 task-fused-emit-gate +
   // scrum-267 task-device-resident-continuation Task 3).
-  // hop_ms_prob_ feeds the device emit gate's KernelParams.ms_prob.
-  // last_layer_* is still consumed by ReadbackExitRays for the final-layer
-  // host filter+prob path. The sibling per-ci hop vectors and the mid-exit
-  // host drain were removed in Task 3 once mid-exit emission + frame-transit
-  // both ran on-device.
+  // hop_ms_prob_ feeds the device emit gate's KernelParams.ms_prob for
+  // non-final layers; last_ms_prob_ does the same for the final layer
+  // (DispatchLayer's ms_mode == 0 branch). The sibling per-ci hop vectors and
+  // the mid-exit host drain were removed in Task 3 once mid-exit emission +
+  // frame-transit both ran on-device.
+  //
+  // The final layer no longer mirrors per-ci crystal/axis/filter state on the
+  // host: once the emit gate ran filter+prob+projection on-device,
+  // ReadbackExitRays stopped materialising per-exit records (it returns 0), so
+  // nothing consumed those mirrors. They were removed rather than kept — a
+  // resize()'d vector whose ci_n == 0 slots stay default-constructed is a trap
+  // for whoever adds the first reader back.
   float                           hop_ms_prob_[2]      = { 0.0f, 0.0f };
-  std::vector<Crystal>            last_layer_crystals_;
-  std::vector<AxisDistribution>   last_layer_axis_dists_;
-  std::vector<FilterConfig>       last_layer_filter_configs_;
   float                           last_ms_prob_      = 0.0f;
   uint8_t                         last_ms_layer_idx_ = 0u;
 
@@ -2824,16 +2828,13 @@ void MetalTraceBackend::Impl::Reset() {
   // scene.max_hits_; clear to make a session-mid leak obvious.
   face_seq_cap_ = 0;
   // scrum-258.3 + scrum-267 Task 3: per-layer filter+prob state.
-  // hop_ms_prob_ (device emit gate) + last_layer_* (final-layer host
-  // filter+prob in ReadbackExitRays) are populated by TraceLayer's ci loop in
-  // the next session; clear here so a stale layer's settings cannot bleed
-  // across sessions if BeginSession skips re-assigning a particular slot.
+  // hop_ms_prob_ / last_ms_prob_ (device emit gate) are populated by
+  // TraceLayer's ci loop in the next session; clear here so a stale layer's
+  // settings cannot bleed across sessions if BeginSession skips re-assigning a
+  // particular slot.
   for (int s = 0; s < 2; s++) {
     hop_ms_prob_[s] = 0.0f;
   }
-  last_layer_crystals_.clear();
-  last_layer_axis_dists_.clear();
-  last_layer_filter_configs_.clear();
   last_ms_prob_ = 0.0f;
   last_ms_layer_idx_ = 0u;
   // scrum-267 task-msl-filter-match-port (Step 4): per-session device filter
@@ -3138,14 +3139,10 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     int in_slot = static_cast<int>((impl_->ms_idx - 1) & 1u);  // only used when !first_ms
 
     // scrum-258.3 Step 3 + scrum-267 Task 3 cleanup: per-layer filter+prob
-    // state. Non-final layers populate `hop_ms_prob_[out_slot]` (consumed by
-    // the device emit gate's `KernelParams.ms_prob` in DispatchLayer); the
-    // final layer populates `last_layer_*` (consumed by ReadbackExitRays for
-    // host filter+prob on the final-layer exits).
+    // state. Non-final layers populate `hop_ms_prob_[out_slot]`, the final
+    // layer populates `last_ms_prob_`; both are consumed by the device emit
+    // gate's `KernelParams.ms_prob` in DispatchLayer.
     if (last_layer) {
-      impl_->last_layer_crystals_.resize(crystal_cnt);
-      impl_->last_layer_axis_dists_.resize(crystal_cnt);
-      impl_->last_layer_filter_configs_.resize(crystal_cnt);
       impl_->last_ms_prob_ = ms_info.prob_;
       impl_->last_ms_layer_idx_ = static_cast<uint8_t>(impl_->ms_idx);
     } else {
@@ -3219,18 +3216,11 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       impl_->ResolveLayerCrystalForCi(setting, use_host,
                                        first_ms ? roots.host : HostRayBatch{}, p_ci);
 
-      // scrum-258.3 Step 3 + scrum-267 Task 3 cleanup: final-layer only.
-      // Non-final layers no longer need per-ci crystal/axis/filter state —
+      // No layer keeps per-ci crystal/axis/filter state on the host any more —
       // transit_root_kernel pulls geometry from tri_*_buf_ (uploaded by
       // ResolveLayerCrystalForCi → UploadCrystal) and the emit gate consumes
-      // the device-side filter buffers (scrum-267 task-msl-filter-match-port).
-      // ReadbackExitRays still runs host filter+prob on the final-layer exits,
-      // so last_layer_* mirrors stay.
-      if (last_layer) {
-        impl_->last_layer_crystals_[ci] = impl_->current_crystal;
-        impl_->last_layer_axis_dists_[ci] = setting.crystal_.axis_;
-        impl_->last_layer_filter_configs_[ci] = setting.filter_;
-      }
+      // the device-side filter buffers, on the final layer as well as the
+      // intermediate ones.
 
       size_t in_count = 0;
       if (first_ms) {
