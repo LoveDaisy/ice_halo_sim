@@ -86,12 +86,16 @@ struct ShapeDist {
   float spread = 0.0f;
 
   ShapeDist() = default;
+  ShapeDist(ShapeDistType t, float c, float s) : type(t), center(c), spread(s) {}
   // Non-explicit: a bare scalar ⇔ a NO_RANDOM deterministic value is a convention the wire format
   // already recognises (file_io.cpp's `is_number()` branch, core JSON's no_random bare-number
   // encoding). This constructor only formalises it into C++ so the ~80 existing `c.height = 5.0f`
   // style assignments and CrystalConfig's default member initialisers compile unchanged. Only the
   // float→ShapeDist direction is provided — a reverse ShapeDist→float would silently drop
   // type/spread, exactly the data-loss defect this scrum fixes.
+  // NB: providing these constructors makes ShapeDist a non-aggregate, so it is constructed as
+  // `ShapeDist{type, center, spread}` (this ctor) or `ShapeDist{value}` (the float ctor) — not via
+  // aggregate brace-elision.
   ShapeDist(float v) : center(v) {}  // NOLINT(google-explicit-constructor)
 
   friend bool operator==(const ShapeDist& a, const ShapeDist& b) {

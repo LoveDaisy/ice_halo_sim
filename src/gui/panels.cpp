@@ -431,15 +431,20 @@ constexpr float kShapeDistDefaultSpreadFraction = 0.2f;
 bool RenderShapeDist(const char* label, ShapeDist& dist, float center_min, float center_max, const char* center_fmt,
                      SliderScale center_scale) {
   bool changed = false;
-  ImGui::PushID(label);
+  // No PushID wrapper: the center slider keeps its original `label`-derived id (so existing
+  // ItemInputValue paths stay valid), and each extra widget gets a `label`-suffixed unique id so
+  // multiple RenderShapeDist calls do not collide and GUI tests can target each precisely.
 
   // Center is always editable (deterministic value / distribution center).
   changed |= SliderWithInput(label, &dist.center, center_min, center_max, center_fmt, center_scale);
 
   // Randomize toggle. NO_RANDOM is expressed ONLY via this checkbox — the type combo lists just
-  // the five randomized types, so there is no redundant "manually pick no_random" path.
+  // the five randomized types, so there is no redundant "manually pick no_random" path. The ##
+  // suffix embeds `label` so the id is unique per field while the visible text stays "Randomize".
+  char ck_id[96];
+  snprintf(ck_id, sizeof(ck_id), "Randomize##rnd_%s", label);
   bool randomize = dist.type != ShapeDistType::kNoRandom;
-  if (ImGui::Checkbox("Randomize", &randomize)) {
+  if (ImGui::Checkbox(ck_id, &randomize)) {
     if (randomize) {
       dist.type = ShapeDistType::kUniform;                          // owner-defined default type
       dist.spread = kShapeDistDefaultSpreadFraction * dist.center;  // default spread heuristic
@@ -456,6 +461,8 @@ bool RenderShapeDist(const char* label, ShapeDist& dist, float center_min, float
     static_assert(static_cast<int>(ShapeDistType::kCount) == 6,
                   "Update RenderShapeDist combo when adding a ShapeDistType");
     int combo_index = static_cast<int>(dist.type) - 1;
+    char combo_id[96];
+    snprintf(combo_id, sizeof(combo_id), "##shapedist_%s", label);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(120.0f);
     // Keep this combo's popup above a detached OS-viewport modal (mirrors SetNextComboPopupTopMost
@@ -464,13 +471,14 @@ bool RenderShapeDist(const char* label, ShapeDist& dist, float center_min, float
     ImGuiWindowClass topmost;
     topmost.ViewportFlagsOverrideSet = ImGuiViewportFlags_TopMost;
     ImGui::SetNextWindowClass(&topmost);
-    if (ImGui::Combo("##shapedist", &combo_index, "Uniform\0Gauss\0Zigzag\0Laplacian\0Gauss (legacy)\0")) {
+    if (ImGui::Combo(combo_id, &combo_index, "Uniform\0Gauss\0Zigzag\0Laplacian\0Gauss (legacy)\0")) {
       dist.type = static_cast<ShapeDistType>(combo_index + 1);
       changed = true;
     }
 
     // Spread slider — same units as center (a distance/height ratio), so the range tracks the
-    // center's max. Type-specific label mirrors RenderAxisDist for user familiarity.
+    // center's max. Type-specific label mirrors RenderAxisDist for user familiarity; the ## suffix
+    // keeps the id unique per field while the visible text is the type-specific spread label.
     const char* spread_label = "Std";
     if (dist.type == ShapeDistType::kUniform) {
       spread_label = "Range";
@@ -479,10 +487,11 @@ bool RenderShapeDist(const char* label, ShapeDist& dist, float center_min, float
     } else if (dist.type == ShapeDistType::kLaplacian) {
       spread_label = "Scale";
     }
-    changed |= SliderWithInput(spread_label, &dist.spread, 0.0f, center_max, center_fmt, SliderScale::kSqrt);
+    char sp_id[96];
+    snprintf(sp_id, sizeof(sp_id), "%s##spread_%s", spread_label, label);
+    changed |= SliderWithInput(sp_id, &dist.spread, 0.0f, center_max, center_fmt, SliderScale::kSqrt);
   }
 
-  ImGui::PopID();
   return changed;
 }
 

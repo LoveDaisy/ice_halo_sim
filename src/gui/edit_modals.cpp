@@ -637,11 +637,12 @@ static void RenderCrystalModal(GuiState& /*state*/) {
     // rest, exercising the core's six independent d_[6] distributions.
     if (ImGui::TreeNode("Per-face randomization##modal_fd_adv")) {
       for (int i = 0; i < 6; i++) {
-        ImGui::PushID(i);
+        // Unique ## suffixes per row (rather than PushID) so GUI tests can target each face's
+        // checkbox / combo / spread unambiguously.
         bool fr = cr.face_distance[i].type != ShapeDistType::kNoRandom;
-        char flabel[16];
-        snprintf(flabel, sizeof(flabel), "Face %d", i + 3);
-        if (ImGui::Checkbox(flabel, &fr)) {
+        char ck_label[32];
+        snprintf(ck_label, sizeof(ck_label), "Face %d##fd_adv_ck_%d", i + 3, i);
+        if (ImGui::Checkbox(ck_label, &fr)) {
           if (fr) {
             cr.face_distance[i].type = ShapeDistType::kUniform;
             cr.face_distance[i].spread = 0.2f * cr.face_distance[i].center;
@@ -652,15 +653,18 @@ static void RenderCrystalModal(GuiState& /*state*/) {
         }
         if (cr.face_distance[i].type != ShapeDistType::kNoRandom) {
           int fci = static_cast<int>(cr.face_distance[i].type) - 1;
+          char type_label[32];
+          char sp_label[32];
+          snprintf(type_label, sizeof(type_label), "##fd_adv_type_%d", i);
+          snprintf(sp_label, sizeof(sp_label), "Spread##fd_adv_sp_%d", i);
           ImGui::SameLine();
           ImGui::SetNextItemWidth(110.0f);
           SetNextComboPopupTopMost();
-          if (ImGui::Combo("##fd_type", &fci, "Uniform\0Gauss\0Zigzag\0Laplacian\0Gauss (legacy)\0")) {
+          if (ImGui::Combo(type_label, &fci, "Uniform\0Gauss\0Zigzag\0Laplacian\0Gauss (legacy)\0")) {
             cr.face_distance[i].type = static_cast<ShapeDistType>(fci + 1);
           }
-          SliderWithInput("Spread##fd", &cr.face_distance[i].spread, 0.0f, kFaceSpreadMax, "%.3f", SliderScale::kSqrt);
+          SliderWithInput(sp_label, &cr.face_distance[i].spread, 0.0f, kFaceSpreadMax, "%.3f", SliderScale::kSqrt);
         }
-        ImGui::PopID();
       }
       ImGui::TreePop();
     }
