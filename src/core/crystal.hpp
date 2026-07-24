@@ -198,7 +198,17 @@ class Crystal {
 
   /**
    * @brief Default constructor
-   * @note Creates an empty crystal
+   * @note Creates an empty crystal: `CfGeom().face_cnt == 0`, no face slots
+   *       present, `PolygonFaceCount() == 0`, null normal/distance tables,
+   *       `FnPeriod() == -1`, `config_id_ == kInvalidId`.
+   * @note This is NOT a placeholder-only state. `CreatePrism` / `CreatePyramid`
+   *       return a bytewise-identical instance whenever the closed-form
+   *       validity gate rejects their input, and `MakeCrystal` feeds that gate
+   *       randomized height / face-distance draws — so a consumer holding a
+   *       `Crystal` built through the normal factory path must treat "empty" as
+   *       a reachable input rather than an impossible one. The state and that
+   *       equivalence are pinned by the `EmptyCrystalContract` tests in
+   *       test/unit-correctness/core/test_crystal.cpp.
    */
   Crystal();
 
