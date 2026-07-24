@@ -343,13 +343,48 @@ static bool SliderIntWithInput(const char* label, int* value, int min_val, int m
   return *value != old_value;
 }
 
+// ---- Shared combo-popup fix (see panels.hpp) ----
+//
+// Mark the next combo's popup viewport as TopMost so it shares NSWindow level
+// with the modal when the modal is detached into its own OS viewport. Without
+// this, combo popups default to normal level (0) while the detached modal sits
+// at NSFloatingWindowLevel (3, set via the modal's own SetNextWindowClass /
+// ImGuiViewportFlags_TopMost in RenderEditModals), causing the popup to render
+// behind the modal — invisible and click-throughable. Must be called before
+// every modal-internal `BeginCombo` / `Combo` / `RenderAxisDist` call site.
+//
+// MAINTAINER: any new Combo / BeginCombo inside modal rendering functions
+// (RenderCrystalPreviewPane / RenderCrystalModal / RenderAxisModal /
+// RenderFilterModal, all in edit_modals.cpp) MUST be preceded by a call to
+// this helper. Forgetting the call has no compile-time error and silently
+// regresses to the original bug — only visible in detached-modal state which
+// CI cannot reproduce (hidden GLFW window pins GetMainViewport()->Pos to (0,0)).
+//
+// Mechanism: BeginCombo internally backs up and restores g.NextWindowData (see
+// imgui_widgets.cpp:1837/1906), so the flags set here propagate through to the
+// combo popup's `Begin` call inside `BeginComboPopup`. Validated against
+// macOS GLFW backend (CGWindowListCopyWindowInfo reports popup layer=3 after
+// applying this; without it layer=0). See ocornut/imgui#6216.
+//
+// UPGRADE NOTE: re-verify the NextWindowData backup/restore path in
+// imgui_widgets.cpp::BeginCombo when upgrading ImGui past v1.91.8-docking.
+// `ImGuiWindowClass.ViewportFlagsOverrideSet` is alpha API (per ocornut in
+// #7105) and the backup/restore pair (lines 1837/1906 above) may shift across
+// versions; if combo popups regress to layer=0 after an upgrade, audit those
+// two sites first.
+void SetNextComboPopupTopMost() {
+  ImGuiWindowClass wc;
+  wc.ViewportFlagsOverrideSet = ImGuiViewportFlags_TopMost;
+  ImGui::SetNextWindowClass(&wc);
+}
+
 // ---- Axis distribution controls (shared with edit modals) ----
 //
 // CALLER CONTRACT: when invoked from a context where the parent window may
 // become a detached OS viewport (currently: Edit Entry modal in multi-viewport
-// mode), the caller must precede this call with `SetNextComboPopupTopMost()`
-// (see edit_modals.cpp). Without that, the internal `##dist` Combo's popup
-// defaults to NSWindow layer=0 and gets rendered behind the modal at layer=3.
+// mode), the caller must precede this call with `SetNextComboPopupTopMost()`.
+// Without that, the internal `##dist` Combo's popup defaults to NSWindow
+// layer=0 and gets rendered behind the modal at layer=3.
 //
 // IMPLEMENTATION CONTRACT: this function MUST NOT introduce a `Begin` /
 // `BeginChild` call before the Combo at line 297 — doing so would consume
@@ -420,6 +455,84 @@ bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mea
   }
 
   ImGui::PopID();
+  return changed;
+}
+
+// Single source for the ShapeDistType<->combo-string mapping (see panels.hpp). All three call
+// sites — this file's RenderShapeDist and edit_modals.cpp's face_distance unified/per-face
+// views — go through here so a future ShapeDistType addition only needs updating this one combo
+// string + the static_assert guard below it, instead of three hand-written copies drifting apart.
+bool RenderShapeDistTypeCombo(const char* id, ShapeDistType* type) {
+  // Combo lists the five randomized types; index 0..4 maps to kUniform..kGaussLegacy (enum
+  // values 1..5), so combo_index = static_cast<int>(*type) - 1.
+  static_assert(static_cast<int>(ShapeDistType::kCount) == 6,
+                "Update RenderShapeDistTypeCombo combo when adding a ShapeDistType");
+  int combo_index = static_cast<int>(*type) - 1;
+  if (combo_index < 0) {
+    combo_index = 0;  // *type == kNoRandom: caller only invokes this once already-randomized, but
+                      // clamp defensively so an out-of-range index never reaches ImGui::Combo.
+  }
+  SetNextComboPopupTopMost();
+  if (ImGui::Combo(id, &combo_index, "Uniform\0Gauss\0Zigzag\0Laplacian\0Gauss (legacy)\0")) {
+    *type = static_cast<ShapeDistType>(combo_index + 1);
+    return true;
+  }
+  return false;
+}
+
+bool RenderShapeDist(const char* label, ShapeDist& dist, float center_min, float center_max, const char* center_fmt,
+                     SliderScale center_scale) {
+  bool changed = false;
+  // No PushID wrapper: the center slider keeps its original `label`-derived id (so existing
+  // ItemInputValue paths stay valid), and each extra widget gets a `label`-suffixed unique id so
+  // multiple RenderShapeDist calls do not collide and GUI tests can target each precisely.
+
+  // Center is always editable (deterministic value / distribution center).
+  changed |= SliderWithInput(label, &dist.center, center_min, center_max, center_fmt, center_scale);
+
+  // Randomize toggle. NO_RANDOM is expressed ONLY via this checkbox — the type combo lists just
+  // the five randomized types, so there is no redundant "manually pick no_random" path. The ##
+  // suffix embeds `label` so the id is unique per field while the visible text stays "Randomize".
+  char ck_id[96];
+  snprintf(ck_id, sizeof(ck_id), "Randomize##rnd_%s", label);
+  bool randomize = dist.type != ShapeDistType::kNoRandom;
+  if (ImGui::Checkbox(ck_id, &randomize)) {
+    if (randomize) {
+      dist.type = ShapeDistType::kUniform;                          // owner-defined default type
+      dist.spread = kShapeDistDefaultSpreadFraction * dist.center;  // default spread heuristic
+    } else {
+      dist.type = ShapeDistType::kNoRandom;
+      dist.spread = 0.0f;  // spread is meaningless for NO_RANDOM; zero it so operator==/round-trip stay clean
+    }
+    changed = true;
+  }
+
+  if (dist.type != ShapeDistType::kNoRandom) {
+    char combo_id[96];
+    snprintf(combo_id, sizeof(combo_id), "##shapedist_%s", label);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(120.0f);
+    // RenderShapeDistTypeCombo self-contains the top-most-popup fix — set immediately before the
+    // Combo — so it does not depend on the caller and holds even though the combo only renders
+    // when randomized.
+    changed |= RenderShapeDistTypeCombo(combo_id, &dist.type);
+
+    // Spread slider — same units as center (a distance/height ratio), so the range tracks the
+    // center's max. Type-specific label mirrors RenderAxisDist for user familiarity; the ## suffix
+    // keeps the id unique per field while the visible text is the type-specific spread label.
+    const char* spread_label = "Std";
+    if (dist.type == ShapeDistType::kUniform) {
+      spread_label = "Range";
+    } else if (dist.type == ShapeDistType::kZigzag) {
+      spread_label = "Amplitude";
+    } else if (dist.type == ShapeDistType::kLaplacian) {
+      spread_label = "Scale";
+    }
+    char sp_id[96];
+    snprintf(sp_id, sizeof(sp_id), "%s##spread_%s", spread_label, label);
+    changed |= SliderWithInput(sp_id, &dist.spread, 0.0f, center_max, center_fmt, SliderScale::kSqrt);
+  }
+
   return changed;
 }
 

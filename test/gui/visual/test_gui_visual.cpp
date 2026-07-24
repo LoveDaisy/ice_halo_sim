@@ -19,7 +19,7 @@ static void DriveCrystalPreviewFboForTest() {
   const auto& cr = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id];
   int hash = gui::CrystalParamHash(cr);
   if (hash != gui::g_crystal_mesh_hash) {
-    int result = gui::BuildAndUploadCrystalMesh(cr);
+    int result = gui::BuildAndUploadCrystalMesh(cr, gui::kPreviewFixedSampleSeed);
     if (result != 0) {
       gui::g_crystal_mesh_hash = hash;
     }

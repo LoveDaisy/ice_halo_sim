@@ -424,7 +424,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       ResetTestState();
       ctx->Yield(2);
-      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height;
+      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height.center;
 
       // AC #1: on modal open, no tab carries a dirty marker.
       ctx->ItemClick("**/Edit##cr");
@@ -725,7 +725,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       gui::g_state.layers[0].entries.push_back(e_second);
       ctx->Yield(2);
       const int cid1 = gui::g_state.layers[0].entries[1].crystal_id;
-      const float orig_h1 = gui::g_state.crystals[cid1].height;
+      const float orig_h1 = gui::g_state.crystals[cid1].height.center;
       IM_CHECK_EQ(orig_h1, 5.0f);
 
       // Open entry 0's Crystal tab, focus Height and type without committing.
@@ -940,7 +940,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
       ctx->Yield();
 
-      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height;
+      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height.center;
 
       // Open Edit modal (Staged), then toggle Immediate — triggers close+reopen.
       ctx->ItemClick("**/Edit##cr");
@@ -1066,7 +1066,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // mode-switch path — that is covered by Test 5).
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
-      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height;
+      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height.center;
 
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(4);
@@ -1097,7 +1097,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ResetTestState();
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
-      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height;
+      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height.center;
 
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(4);
@@ -1122,7 +1122,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ResetTestState();
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
-      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height;
+      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height.center;
 
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(4);
@@ -1154,7 +1154,7 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ResetTestState();
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
-      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height;
+      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height.center;
 
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(4);
@@ -1895,6 +1895,113 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.screenshot_include_overlay, false);
     };
   }
+
+  // AC3: new crystal defaults to non-random; enabling a shape field's randomization defaults its
+  // type to uniform (owner-defined), and disabling collapses it back to NO_RANDOM with zero spread.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "shape_dist_default_and_enable");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      // Immediate mode so checkbox edits commit to g_state every frame (mirrors the
+      // immediate_slider_commits_immediately pattern); ResetTestState clears the flag to false.
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+      auto crystal = []() -> gui::CrystalConfig& {
+        return gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id];
+      };
+      // AC3: default not random for every shape field.
+      IM_CHECK_EQ(crystal().height.type, gui::ShapeDistType::kNoRandom);
+      for (int i = 0; i < 6; i++) {
+        IM_CHECK_EQ(crystal().face_distance[i].type, gui::ShapeDistType::kNoRandom);
+      }
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      // AC3: enabling randomization defaults type to uniform.
+      ctx->ItemClick("**/Randomize##rnd_Height##modal_cr");
+      ctx->Yield(2);
+      IM_CHECK_EQ(crystal().height.type, gui::ShapeDistType::kUniform);
+      IM_CHECK_GT(crystal().height.spread, 0.0f);  // default spread = 0.2 * center (center default 1.0)
+
+      // Disabling collapses back to NO_RANDOM and zeroes the (now meaningless) spread.
+      ctx->ItemClick("**/Randomize##rnd_Height##modal_cr");
+      ctx->Yield(2);
+      IM_CHECK_EQ(crystal().height.type, gui::ShapeDistType::kNoRandom);
+      IM_CHECK_EQ(crystal().height.spread, 0.0f);
+
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // AC2: face_distance unified view broadcasts type/spread to all 6 faces, and the per-face advanced
+  // view can diverge a single face WITHOUT the unified view later silently overwriting the others
+  // (plan §7 risk 2 — the very "silent data loss" class this scrum fixes).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "shape_dist_face_unified_and_perface");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;  // commit checkbox edits to g_state each frame
+      ctx->Yield(2);
+      auto crystal = []() -> gui::CrystalConfig& {
+        return gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id];
+      };
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Face Distance##modal");  // expand the Face Distance tree
+      ctx->Yield(2);
+
+      // Diverge two face centers BEFORE enabling unified randomization (via the always-visible
+      // per-face center sliders — a legitimate, common operation path that does not require
+      // randomization to be on). Regression coverage for code-review round 1: the "Randomize (all
+      // faces)" enable branch must broadcast ONE shared spread value derived once, not compute
+      // spread per-face from each face's own (now-divergent) center — the latter would silently
+      // give faces different spreads under a control labelled "all faces".
+      ctx->ItemInputValue("**/##Face 3##modal_fd_input", 1.2f);
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/##Face 4##modal_fd_input", 0.6f);
+      ctx->Yield(2);
+
+      // AC2: unified "Randomize (all faces)" broadcasts uniform to every face.
+      ctx->ItemClick("**/Randomize (all faces)##modal_fd_uni");
+      ctx->Yield(2);
+      for (int i = 0; i < 6; i++) {
+        IM_CHECK_EQ(crystal().face_distance[i].type, gui::ShapeDistType::kUniform);
+      }
+      // Regression: with divergent centers, all 6 faces must still get the SAME broadcast spread.
+      const float uni_spread = crystal().face_distance[0].spread;
+      for (int i = 1; i < 6; i++) {
+        IM_CHECK_EQ(crystal().face_distance[i].spread, uni_spread);
+      }
+
+      // Diverge face 0 via the per-face advanced view (its checkbox is labelled "Face 3").
+      ctx->ItemClick("**/Per-face randomization##modal_fd_adv");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Face 3##fd_adv_ck_0");
+      ctx->Yield(2);
+      IM_CHECK_EQ(crystal().face_distance[0].type, gui::ShapeDistType::kNoRandom);
+
+      // Risk 2: passively re-rendering the (now-mixed) unified view across several frames must NOT
+      // broadcast — faces 1..5 stay uniform, face 0 stays NO_RANDOM.
+      ctx->Yield(6);
+      IM_CHECK_EQ(crystal().face_distance[0].type, gui::ShapeDistType::kNoRandom);
+      for (int i = 1; i < 6; i++) {
+        IM_CHECK_EQ(crystal().face_distance[i].type, gui::ShapeDistType::kUniform);
+      }
+
+      // Collapse the two TreeNodes we expanded. ImGui persists TreeNode open/closed state per
+      // window across tests (ResetTestState resets g_state but not ImGui storage), so leaving them
+      // open would change the crystal-modal layout for later tests that assume the default-collapsed
+      // Face Distance section.
+      ctx->ItemClick("**/Per-face randomization##modal_fd_adv");
+      ctx->ItemClick("**/Face Distance##modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
 }
 
 // P2 tests
@@ -2285,7 +2392,7 @@ void RegisterP1InteractionTests(ImGuiTestEngine* engine) {
 
       // Set the Height field through the modal UI — the buffer now differs from g_state.
       // If a spurious OpenEditModal call resets the buffer, the field reverts to g_state.height.
-      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height;
+      const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height.center;
       ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 33.0f);
       ctx->Yield();
 
@@ -2399,7 +2506,7 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Height should be clamped to >= 0.01 (kLog with min=0.01)
-      IM_CHECK_GE(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height, 0.01f - 1e-6f);
+      IM_CHECK_GE(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height.center, 0.01f - 1e-6f);
     };
   }
 
@@ -3897,7 +4004,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
       auto& cr = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id];
       auto type_before = cr.type;
-      float height_before = cr.height;
+      float height_before = cr.height.center;
 
       // Click Edit Crystal button on the first entry card
       ctx->ItemClick("**/Edit##cr");
@@ -3921,7 +4028,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Verify initial height
-      float initial_height = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height;
+      float initial_height = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height.center;
 
       // Open crystal modal
       ctx->ItemClick("**/Edit##cr");

@@ -101,8 +101,8 @@ TEST(ConfigSnapshot, FromCapturesAllConfigFields) {
   const int snap_cid0 = snap.layers[0].entries[0].crystal_id;
   const int src_cid0 = s.layers[0].entries[0].crystal_id;
   EXPECT_EQ(snap.crystals[snap_cid0].name, s.crystals[src_cid0].name);
-  EXPECT_FLOAT_EQ(snap.crystals[snap_cid0].height, s.crystals[src_cid0].height);
-  EXPECT_FLOAT_EQ(snap.crystals[snap_cid0].face_distance[0], 1.3f);
+  EXPECT_FLOAT_EQ(snap.crystals[snap_cid0].height.center, s.crystals[src_cid0].height.center);
+  EXPECT_FLOAT_EQ(snap.crystals[snap_cid0].face_distance[0].center, 1.3f);
   EXPECT_EQ(snap.crystals[snap_cid0].zenith.type, AxisDistType::kGauss);
   EXPECT_FLOAT_EQ(snap.crystals[snap_cid0].zenith.mean, 30.0f);
   EXPECT_FLOAT_EQ(snap.crystals[snap_cid0].zenith.std, 5.0f);
@@ -258,7 +258,7 @@ TEST(ConfigSnapshot, RoundTripFromThenApplyRestoresConfig) {
   EXPECT_FLOAT_EQ(restored.renderer.fov, original.renderer.fov);
   // Nested crystal/axis fields also survive the From → ApplyTo cycle.
   const auto& restored_e0 = restored.layers[0].entries[0];
-  EXPECT_FLOAT_EQ(restored.crystals[restored_e0.crystal_id].face_distance[0], 1.3f);
+  EXPECT_FLOAT_EQ(restored.crystals[restored_e0.crystal_id].face_distance[0].center, 1.3f);
   EXPECT_EQ(restored.crystals[restored_e0.crystal_id].zenith.type, AxisDistType::kGauss);
   EXPECT_FLOAT_EQ(restored.crystals[restored_e0.crystal_id].zenith.mean, 30.0f);
 
@@ -294,7 +294,7 @@ TEST(ConfigSnapshot, RoundTripPoolAndEntries) {
 
   snap.ApplyTo(s);
 
-  EXPECT_FLOAT_EQ(s.crystals[0].height, 1.5f);
+  EXPECT_FLOAT_EQ(s.crystals[0].height.center, 1.5f);
   EXPECT_EQ(s.layers[0].entries[0].crystal_id, 0);
   EXPECT_EQ(s.layers[0].entries[1].crystal_id, 0);
   EXPECT_FALSE(s.layers[0].entries[1].filter_id.has_value());

@@ -11,7 +11,7 @@ namespace lumice {
 
 inline bool operator==(const Distribution& a, const Distribution& b) {
   static_assert(sizeof(Distribution) == 12, "Update operator== when Distribution fields change");
-  return a.type == b.type && a.mean == b.mean && a.std == b.std;
+  return a.type == b.type && a.center == b.center && a.spread == b.spread;
 }
 
 inline bool operator==(const AxisDistribution& a, const AxisDistribution& b) {

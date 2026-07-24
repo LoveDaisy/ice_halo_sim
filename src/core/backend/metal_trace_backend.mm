@@ -2260,8 +2260,11 @@ GenRootKernelParams MetalTraceBackend::Impl::BuildGenRootParams(
   // lat_path::SelectLatPath (scrum-328.2 Step 4).
   auto decision = lat_path::SelectLatPath(axis_dist);
   auto lat_type = axis_dist.latitude_dist.type;
-  float lat_mean_rad = axis_dist.latitude_dist.mean * math::kDegreeToRad;
-  float lat_std_rad  = axis_dist.latitude_dist.std  * math::kDegreeToRad;
+  // The GenRootKernelParams wire fields keep their `*_mean_rad` / `*_std_rad` names (see the note
+  // at their declaration in pcg_shared.h); on the host side they are fed from the type-erased
+  // `center` / `spread` slots, which is exactly what the device kernels re-interpret per type.
+  float lat_mean_rad = axis_dist.latitude_dist.center * math::kDegreeToRad;
+  float lat_std_rad  = axis_dist.latitude_dist.spread * math::kDegreeToRad;
 
   gp.lat_path        = lat_path::ToWireValue(decision.kind);
   gp.lat_dist_type   = static_cast<uint32_t>(lat_type);
@@ -2275,13 +2278,13 @@ GenRootKernelParams MetalTraceBackend::Impl::BuildGenRootParams(
                      : 0u;
 
   gp.az_type     = static_cast<uint32_t>(axis_dist.azimuth_dist.type);
-  gp.az_mean_rad = axis_dist.azimuth_dist.mean * math::kDegreeToRad;
-  gp.az_std_rad  = axis_dist.azimuth_dist.std  * math::kDegreeToRad;
+  gp.az_mean_rad = axis_dist.azimuth_dist.center * math::kDegreeToRad;
+  gp.az_std_rad  = axis_dist.azimuth_dist.spread * math::kDegreeToRad;
   gp.az_pad      = 0.0f;
 
   gp.roll_type     = static_cast<uint32_t>(axis_dist.roll_dist.type);
-  gp.roll_mean_rad = axis_dist.roll_dist.mean * math::kDegreeToRad;
-  gp.roll_std_rad  = axis_dist.roll_dist.std  * math::kDegreeToRad;
+  gp.roll_mean_rad = axis_dist.roll_dist.center * math::kDegreeToRad;
+  gp.roll_std_rad  = axis_dist.roll_dist.spread * math::kDegreeToRad;
   gp.roll_pad      = 0.0f;
   // K-shape pool size = number of shapes host built for THIS resolve. The
   // callee already populated `pool_shape_table_h_` in UploadCrystalPool;

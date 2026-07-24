@@ -1,6 +1,7 @@
 #include "core/math.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -344,6 +345,55 @@ const ShortIdType* TriangleIdx::idx() const {
 }
 
 
+// Named accessors for Distribution. Each one names the row of the per-type table in math.hpp that
+// the caller is relying on, and asserts the type actually matches. They are pure forwarding to
+// `center` / `spread` — no arithmetic — so the sampling behavior is unchanged by construction.
+float Distribution::Value() const {
+  assert(type == DistributionType::kNoRandom);
+  return center;
+}
+
+float Distribution::UniformCenter() const {
+  assert(type == DistributionType::kUniform);
+  return center;
+}
+
+float Distribution::UniformFullRange() const {
+  assert(type == DistributionType::kUniform);
+  return spread;
+}
+
+float Distribution::Mean() const {
+  assert(type == DistributionType::kGaussian || type == DistributionType::kGaussianLegacy);
+  return center;
+}
+
+float Distribution::Std() const {
+  assert(type == DistributionType::kGaussian || type == DistributionType::kGaussianLegacy);
+  return spread;
+}
+
+float Distribution::Tilt() const {
+  assert(type == DistributionType::kZigzag);
+  return center;
+}
+
+float Distribution::Amplitude() const {
+  assert(type == DistributionType::kZigzag);
+  return spread;
+}
+
+float Distribution::Location() const {
+  assert(type == DistributionType::kLaplacian);
+  return center;
+}
+
+float Distribution::Scale() const {
+  assert(type == DistributionType::kLaplacian);
+  return spread;
+}
+
+
 RandomNumberGenerator::RandomNumberGenerator(uint32_t seed)
     : seed_(seed), generator_{ static_cast<std::mt19937::result_type>(seed) } {}
 
@@ -368,25 +418,25 @@ float RandomNumberGenerator::GetUniform() {
 float RandomNumberGenerator::Get(Distribution dist) {
   switch (dist.type) {
     case DistributionType::kUniform:
-      return (GetUniform() - 0.5f) * dist.std + dist.mean;
+      return (GetUniform() - 0.5f) * dist.UniformFullRange() + dist.UniformCenter();
     case DistributionType::kGaussian:
     case DistributionType::kGaussianLegacy:
-      return GetGaussian() * dist.std + dist.mean;
+      return GetGaussian() * dist.Std() + dist.Mean();
     case DistributionType::kZigzag:
-      // Rectified arcsine: |A·sin(2πU) + B| where A=std (amplitude), B=mean (tilt offset).
+      // Rectified arcsine: |A·sin(2πU) + B| where A is the amplitude and B the tilt offset.
       // The abs() is intentional: fold (flip=true) is unconditionally skipped — abs() guarantees
-      // phi >= 0 for all kZigzag inputs regardless of mean/std values.
-      return std::abs(dist.std * std::sin(GetUniform() * 2.0f * math::kPi) + dist.mean);
+      // phi >= 0 for all kZigzag inputs regardless of the amplitude / tilt values.
+      return std::abs(dist.Amplitude() * std::sin(GetUniform() * 2.0f * math::kPi) + dist.Tilt());
     case DistributionType::kLaplacian: {
       // Laplace inverse CDF: μ - b·sign(U-0.5)·ln(1-2|U-0.5|), returns degrees.
       float u = GetUniform();
       float sign = (u < 0.5f) ? -1.0f : 1.0f;
       float arg = 1.0f - 2.0f * std::abs(u - 0.5f);
       arg = std::max(arg, std::numeric_limits<float>::min());  // Clamp to avoid ln(0).
-      return dist.mean - dist.std * sign * std::log(arg);
+      return dist.Location() - dist.Scale() * sign * std::log(arg);
     }
     case DistributionType::kNoRandom:
-      return dist.mean;
+      return dist.Value();
     default:
       return 0.0f;
   }
@@ -502,40 +552,45 @@ std::pair<float, bool> detail::NormalizeLatitude(float latitude_rad) {
 
 
 bool AxisDistribution::IsFullSphereUniform() const {
-  return azimuth_dist.type == DistributionType::kUniform && FloatEqual(azimuth_dist.mean, 0.0f) &&
-         FloatEqual(azimuth_dist.std, 360.0f) && latitude_dist.type == DistributionType::kUniform &&
-         FloatEqual(latitude_dist.mean, 90.0f) && FloatEqual(latitude_dist.std, 360.0f);
+  return azimuth_dist.type == DistributionType::kUniform && FloatEqual(azimuth_dist.UniformCenter(), 0.0f) &&
+         FloatEqual(azimuth_dist.UniformFullRange(), 360.0f) && latitude_dist.type == DistributionType::kUniform &&
+         FloatEqual(latitude_dist.UniformCenter(), 90.0f) && FloatEqual(latitude_dist.UniformFullRange(), 360.0f);
 }
 
 
 bool AxisDistribution::IsAzRotationallySymmetric() const {
-  return azimuth_dist.type == DistributionType::kUniform && FloatEqual(azimuth_dist.std, 360.0f);
+  return azimuth_dist.type == DistributionType::kUniform && FloatEqual(azimuth_dist.UniformFullRange(), 360.0f);
 }
 
 
+// The on-disk JSON keys stay "mean" / "std": that is the published config file format (see
+// doc/configuration.md and examples/config_example.json). Only the C++ member names changed, so
+// this is the one place where the two vocabularies meet. Serialization is type-erased by nature —
+// it must round-trip every DistributionType — hence the generic members rather than the named
+// accessors.
 void to_json(nlohmann::json& obj, const Distribution& dist) {
   if (dist.type == DistributionType::kNoRandom) {
-    obj = dist.mean;
+    obj = dist.center;
   } else {
     obj["type"] = dist.type;
-    obj["mean"] = dist.mean;
-    obj["std"] = dist.std;
+    obj["mean"] = dist.center;
+    obj["std"] = dist.spread;
   }
 }
 
 void from_json(const nlohmann::json& obj, Distribution& dist) {
   if (obj.is_number()) {
     dist.type = DistributionType::kNoRandom;
-    obj.get_to(dist.mean);
+    obj.get_to(dist.center);
   } else if (obj.is_object()) {
     if (obj.contains("type")) {
       obj.at("type").get_to(dist.type);
     }
     if (obj.contains("mean")) {
-      obj.at("mean").get_to(dist.mean);
+      obj.at("mean").get_to(dist.center);
     }
     if (obj.contains("std")) {
-      obj.at("std").get_to(dist.std);
+      obj.at("std").get_to(dist.spread);
     }
   } else {
     LOG_ERROR("Cannot recognize distribution!");
@@ -543,14 +598,14 @@ void from_json(const nlohmann::json& obj, Distribution& dist) {
 }
 
 void to_json(nlohmann::json& obj, const AxisDistribution& axis) {
-  // Zenith: internal latitude → external zenith (mean = 90 - lat).
+  // Zenith: internal latitude → external zenith (zenith center = 90 - latitude center).
   // Must handle kNoRandom (serialized as number) vs others (serialized as object).
   nlohmann::json zenith;
   to_json(zenith, axis.latitude_dist);
   if (zenith.is_number()) {
-    zenith = 90.0f - axis.latitude_dist.mean;
+    zenith = 90.0f - axis.latitude_dist.center;
   } else {
-    zenith["mean"] = 90.0f - axis.latitude_dist.mean;
+    zenith["mean"] = 90.0f - axis.latitude_dist.center;
   }
   obj["zenith"] = zenith;
   obj["azimuth"] = axis.azimuth_dist;
@@ -559,14 +614,14 @@ void to_json(nlohmann::json& obj, const AxisDistribution& axis) {
 
 void from_json(const nlohmann::json& obj, AxisDistribution& axis) {
   obj.at("zenith").get_to(axis.latitude_dist);
-  axis.latitude_dist.mean = 90.0f - axis.latitude_dist.mean;
+  axis.latitude_dist.center = 90.0f - axis.latitude_dist.center;
 
   axis.azimuth_dist.type = DistributionType::kUniform;
-  axis.azimuth_dist.mean = 0.0f;
-  axis.azimuth_dist.std = 360.0f;
+  axis.azimuth_dist.center = 0.0f;
+  axis.azimuth_dist.spread = 360.0f;
   axis.roll_dist.type = DistributionType::kUniform;
-  axis.roll_dist.mean = 0.0f;
-  axis.roll_dist.std = 360.0f;
+  axis.roll_dist.center = 0.0f;
+  axis.roll_dist.spread = 360.0f;
 
   if (obj.contains("azimuth")) {
     obj.at("azimuth").get_to(axis.azimuth_dist);

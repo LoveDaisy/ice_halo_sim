@@ -154,6 +154,15 @@ static float g_saved_zoom;
 
 // Crystal modal: mesh hash for edit buffer change detection
 static int g_modal_mesh_hash = 0;
+// Crystal modal: sample_seed the cached mesh was last built with. Paired with g_modal_mesh_hash to
+// form a two-field rebuild gate (param OR seed changed) — kept separate from the param hash rather
+// than XOR-merged, because distinct (hash, seed) pairs could collide to one int and drop a rebuild.
+static unsigned long long g_modal_mesh_seed_built = kPreviewFixedSampleSeed;
+// Crystal modal: preview lifecycle epoch. Bumped on every OpenEditModal / ResetModalState (the two
+// "new preview session" boundaries) so the animation ticker resets its accumulated time + seed
+// instead of carrying a stale value across sessions (see gui-state-governance: local static timers
+// must be epoch-keyed, not bare timestamps).
+static unsigned long long g_modal_preview_epoch = 0;
 
 // Flag: the OpenPopup call must happen exactly once per modal open,
 // on the frame following the EditRequest.
@@ -320,39 +329,6 @@ void SnapshotAllBuffers(const GuiState& state) {
   }
 }
 
-// Mark the next combo's popup viewport as TopMost so it shares NSWindow level
-// with the modal when the modal is detached into its own OS viewport. Without
-// this, combo popups default to normal level (0) while the detached modal sits
-// at NSFloatingWindowLevel (3, set via the modal's own SetNextWindowClass /
-// ImGuiViewportFlags_TopMost in RenderEditModals), causing the popup to render
-// behind the modal — invisible and click-throughable. Must be called before
-// every modal-internal `BeginCombo` / `Combo` / `RenderAxisDist` call site.
-//
-// MAINTAINER: any new Combo / BeginCombo inside modal rendering functions
-// (RenderCrystalPreviewPane / RenderCrystalModal / RenderAxisModal /
-// RenderFilterModal) MUST be preceded by a call to this helper. Forgetting
-// the call has no compile-time error and silently regresses to the original
-// bug — only visible in detached-modal state which CI cannot reproduce
-// (hidden GLFW window pins GetMainViewport()->Pos to (0,0)).
-//
-// Mechanism: BeginCombo internally backs up and restores g.NextWindowData (see
-// imgui_widgets.cpp:1837/1906), so the flags set here propagate through to the
-// combo popup's `Begin` call inside `BeginComboPopup`. Validated against
-// macOS GLFW backend (CGWindowListCopyWindowInfo reports popup layer=3 after
-// applying this; without it layer=0). See ocornut/imgui#6216.
-//
-// UPGRADE NOTE: re-verify the NextWindowData backup/restore path in
-// imgui_widgets.cpp::BeginCombo when upgrading ImGui past v1.91.8-docking.
-// `ImGuiWindowClass.ViewportFlagsOverrideSet` is alpha API (per ocornut in
-// #7105) and the backup/restore pair (lines 1837/1906 above) may shift across
-// versions; if combo popups regress to layer=0 after an upgrade, audit those
-// two sites first.
-void SetNextComboPopupTopMost() {
-  ImGuiWindowClass wc;
-  wc.ViewportFlagsOverrideSet = ImGuiViewportFlags_TopMost;
-  ImGui::SetNextWindowClass(&wc);
-}
-
 }  // namespace
 
 // ============================================================
@@ -429,7 +405,8 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   // Save trackball state for Cancel restoration
   std::memcpy(g_saved_rotation, g_crystal_rotation, sizeof(g_saved_rotation));
   g_saved_zoom = g_crystal_zoom;
-  g_modal_mesh_hash = 0;  // Force mesh update on first frame
+  g_modal_mesh_hash = 0;    // Force mesh update on first frame
+  g_modal_preview_epoch++;  // New preview session: reset the animation ticker (epoch-keyed)
 
   switch (req.target) {
     case EditTarget::kCrystal:
@@ -474,18 +451,56 @@ static void HandleCrystalPreviewInteraction(bool hovered, bool active) {
 // child-size computation in RenderEditModals.
 constexpr float kModalPreviewImageSize = 320.0f;
 
+// Advances (or resets, on a new epoch) the preview animation ticker and returns the sample_seed to
+// build this frame. Kept separate from RenderCrystalPreviewPane so the render function stays focused
+// on rendering. When has_random is false the seed is pinned to kPreviewFixedSampleSeed and the
+// accumulator is held at 0, so the caller's rebuild gate degenerates to a pure param comparison —
+// byte-for-byte the pre-animation behavior (the "static when no randomization" contract). Uses
+// ImGui::GetIO().DeltaTime (overridden to a constant under gui_test --fixed-dt) rather than a raw
+// wall clock, so tests can cross a tick deterministically with Yield(N) in the fast fixed-dt pool.
+static unsigned long long AdvancePreviewAnimSeed(bool has_random) {
+  static unsigned long long s_anim_epoch = 0;
+  static float s_anim_accum_s = 0.0f;
+  static unsigned long long s_anim_seed = kPreviewFixedSampleSeed;
+  if (s_anim_epoch != g_modal_preview_epoch) {
+    s_anim_epoch = g_modal_preview_epoch;
+    s_anim_accum_s = 0.0f;
+    s_anim_seed = kPreviewFixedSampleSeed;
+  }
+  if (!has_random) {
+    s_anim_accum_s = 0.0f;
+    s_anim_seed = kPreviewFixedSampleSeed;
+    return s_anim_seed;
+  }
+  s_anim_accum_s += ImGui::GetIO().DeltaTime;
+  constexpr float kIntervalS = static_cast<float>(kCrystalPreviewAnimIntervalMs) / 1000.0f;
+  if (s_anim_accum_s >= kIntervalS) {
+    s_anim_accum_s -= kIntervalS;
+    s_anim_seed++;
+  }
+  return s_anim_seed;
+}
+
 // Render the persistent crystal preview pane (3D image + drag interaction +
 // style selector + reset view). Called from the left BeginChild during modal
 // rendering so the preview stays visible across Crystal / Axis / Filter tabs.
 static void RenderCrystalPreviewPane(GuiState& /*state*/) {
   auto& cr = g_crystal_buf;
 
-  // Update mesh if crystal params changed
+  // Advance the animation ticker; a randomized shape re-samples every tick, an unrandomized one
+  // stays pinned to kPreviewFixedSampleSeed (static preview).
+  const bool has_random = HasActiveShapeRandomization(cr);
+  const unsigned long long sample_seed = AdvancePreviewAnimSeed(has_random);
+
+  // Rebuild gate: param OR seed changed (two fields compared separately, not merged into one hash —
+  // XOR-merge could collide distinct (hash, seed) pairs and drop a rebuild). When !has_random the
+  // seed is constant, so this reduces to the original param-only comparison.
   int hash = CrystalParamHash(cr);
-  if (hash != g_modal_mesh_hash) {
-    int result = BuildAndUploadCrystalMesh(cr);
+  if (hash != g_modal_mesh_hash || sample_seed != g_modal_mesh_seed_built) {
+    int result = BuildAndUploadCrystalMesh(cr, sample_seed);
     if (result != 0) {
       g_modal_mesh_hash = result;
+      g_modal_mesh_seed_built = sample_seed;
     }
   }
 
@@ -555,13 +570,15 @@ static void RenderCrystalModal(GuiState& /*state*/) {
   ImGui::Spacing();
 
   // -- Parameters --
-  // See gui/slider_mapping.hpp for the three-H-mapping conventions.
+  // See gui/slider_mapping.hpp for the three-H-mapping conventions. Each shape scalar is now a
+  // ShapeDist: RenderShapeDist renders the center slider plus a Randomize checkbox (+ type/spread
+  // when enabled). RenderShapeDist self-handles its combo's top-most-popup fix (see panels.hpp).
   if (cr.type == CrystalType::kPrism) {
-    SliderWithInput("Height##modal_cr", &cr.height, 0.01f, 100.0f, "%.2f", SliderScale::kLog);
+    RenderShapeDist("Height##modal_cr", cr.height, 0.01f, 100.0f, "%.2f", SliderScale::kLog);
   } else {
-    SliderWithInput("Prism H##modal_cr", &cr.prism_h, 0.0f, 100.0f, "%.4f", SliderScale::kLogLinear);
-    SliderWithInput("Upper H##modal_cr", &cr.upper_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
-    SliderWithInput("Lower H##modal_cr", &cr.lower_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
+    RenderShapeDist("Prism H##modal_cr", cr.prism_h, 0.0f, 100.0f, "%.4f", SliderScale::kLogLinear);
+    RenderShapeDist("Upper H##modal_cr", cr.upper_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
+    RenderShapeDist("Lower H##modal_cr", cr.lower_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
     SliderWithPresetEdit("Upper A##modal_cr", &cr.upper_alpha, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, kWedgePresets,
                          kWedgePresetCount);
     SliderWithPresetEdit("Lower A##modal_cr", &cr.lower_alpha, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, kWedgePresets,
@@ -569,11 +586,102 @@ static void RenderCrystalModal(GuiState& /*state*/) {
   }
 
   // -- Face distance --
+  // Unified view (one type + one spread broadcast to all 6 faces; centers stay independent) plus an
+  // Advanced per-face tree where each face's type/spread can diverge. Broadcasts fire ONLY on active
+  // edits (checkbox toggle / combo change / spread drag), never on passive display, so opening the
+  // unified view never silently overwrites a per-face-diverged config (plan §7 risk 2).
+  constexpr float kFaceSpreadMax = 2.0f;
   if (ImGui::TreeNode("Face Distance##modal")) {
+    // Whether face[0] currently carries randomization drives the unified checkbox display.
+    bool uni_random = cr.face_distance[0].type != ShapeDistType::kNoRandom;
+    // Mixed = the 6 faces do not all share face[0]'s (type, spread). Only a display hint.
+    bool mixed = false;
+    for (int i = 1; i < 6; i++) {
+      if (cr.face_distance[i].type != cr.face_distance[0].type ||
+          cr.face_distance[i].spread != cr.face_distance[0].spread) {
+        mixed = true;
+        break;
+      }
+    }
+    if (ImGui::Checkbox("Randomize (all faces)##modal_fd_uni", &uni_random)) {
+      if (uni_random) {
+        // Broadcast ONE shared spread (derived from face[0]'s center) to all 6 faces — mirrors the
+        // "Spread (all)" slider's broadcast below. Must NOT compute spread per-face from each
+        // face's own center: the per-face center sliders above are always independent, so if the
+        // user already diverged centers before enabling this checkbox, a per-face computation
+        // would silently produce 6 different spreads under a control labeled "all faces" (the
+        // unified view's single-shared-value semantics, plan §3 design point 2).
+        const float uni_spread = kShapeDistDefaultSpreadFraction * cr.face_distance[0].center;
+        for (int i = 0; i < 6; i++) {
+          cr.face_distance[i].type = ShapeDistType::kUniform;
+          cr.face_distance[i].spread = uni_spread;
+        }
+      } else {
+        for (int i = 0; i < 6; i++) {
+          cr.face_distance[i].type = ShapeDistType::kNoRandom;
+          cr.face_distance[i].spread = 0.0f;
+        }
+      }
+    }
+    if (uni_random) {
+      ShapeDistType uni_type = cr.face_distance[0].type;
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(120.0f);
+      if (RenderShapeDistTypeCombo("##modal_fd_uni_type", &uni_type)) {
+        for (int i = 0; i < 6; i++) {
+          cr.face_distance[i].type = uni_type;
+        }
+      }
+      float uni_spread = cr.face_distance[0].spread;
+      if (SliderWithInput("Spread (all)##modal_fd_uni_spread", &uni_spread, 0.0f, kFaceSpreadMax, "%.3f",
+                          SliderScale::kSqrt)) {
+        for (int i = 0; i < 6; i++) {
+          cr.face_distance[i].spread = uni_spread;
+        }
+      }
+      if (mixed) {
+        ImGui::TextDisabled("(faces differ — see Per-face)");
+      }
+    }
+
+    ImGui::Separator();
+    // Per-face center — always independent, always shown (matches pre-upgrade behavior).
     for (int i = 0; i < 6; i++) {
       char label[32];
       snprintf(label, sizeof(label), "Face %d##modal_fd", i + 3);
-      SliderWithInput(label, &cr.face_distance[i], 0.0f, 2.0f, "%.3f");
+      SliderWithInput(label, &cr.face_distance[i].center, 0.0f, kFaceSpreadMax, "%.3f");
+    }
+
+    // Advanced: per-face randomization. Editing here diverges a single face's type/spread from the
+    // rest, exercising the core's six independent d_[6] distributions.
+    if (ImGui::TreeNode("Per-face randomization##modal_fd_adv")) {
+      for (int i = 0; i < 6; i++) {
+        // Unique ## suffixes per row (rather than PushID) so GUI tests can target each face's
+        // checkbox / combo / spread unambiguously.
+        bool fr = cr.face_distance[i].type != ShapeDistType::kNoRandom;
+        char ck_label[32];
+        snprintf(ck_label, sizeof(ck_label), "Face %d##fd_adv_ck_%d", i + 3, i);
+        if (ImGui::Checkbox(ck_label, &fr)) {
+          if (fr) {
+            cr.face_distance[i].type = ShapeDistType::kUniform;
+            cr.face_distance[i].spread = kShapeDistDefaultSpreadFraction * cr.face_distance[i].center;
+          } else {
+            cr.face_distance[i].type = ShapeDistType::kNoRandom;
+            cr.face_distance[i].spread = 0.0f;
+          }
+        }
+        if (cr.face_distance[i].type != ShapeDistType::kNoRandom) {
+          char type_label[32];
+          char sp_label[32];
+          snprintf(type_label, sizeof(type_label), "##fd_adv_type_%d", i);
+          snprintf(sp_label, sizeof(sp_label), "Spread##fd_adv_sp_%d", i);
+          ImGui::SameLine();
+          ImGui::SetNextItemWidth(110.0f);
+          RenderShapeDistTypeCombo(type_label, &cr.face_distance[i].type);
+          SliderWithInput(sp_label, &cr.face_distance[i].spread, 0.0f, kFaceSpreadMax, "%.3f", SliderScale::kSqrt);
+        }
+      }
+      ImGui::TreePop();
     }
     ImGui::TreePop();
   }
@@ -1014,6 +1122,7 @@ void ResetModalState() {
   g_pending_open = false;
   g_pending_mode_switch = false;
   g_modal_mesh_hash = 0;
+  g_modal_preview_epoch++;  // New preview session: reset the animation ticker (epoch-keyed)
 }
 
 bool IsCurrentModalDApplicable() {

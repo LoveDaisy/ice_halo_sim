@@ -32,6 +32,10 @@ constexpr int kCommitIntervalMs =
          // 70ms gives Windows enough headroom: first_upload avg ~48ms + poll ~20ms needs >60ms window.
 constexpr int kPollIntervalMs = 20;  // Server poll interval (T_poll, ms). Shorter than VSync frame (16.67ms at 60fps)
                                      // to ensure each frame has fresh data available via LoadSnapshot().
+// Crystal edit-modal preview animation tick (ms between successive sample_seed advances while a
+// shape distribution is active). ~3.3 Hz sits in the 2-4 Hz visual-comfort band (faster reads as
+// noise); it is a pure UX cadence choice, not a correctness constraint.
+constexpr int kCrystalPreviewAnimIntervalMs = 300;
 constexpr int kTargetFrameTimeMs = 16;  // Fallback frame time limit (ms). Prevents busy-wait when VSync fails
                                         // (known issue on Windows+NVIDIA, GLFW #1559/#2049).
 // Calibration window for quality gate threshold calculation (ms).

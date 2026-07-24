@@ -134,7 +134,7 @@ DeviceFilterDesc BuildDeviceFilterDesc(const FilterConfig& config, const Crystal
   desc.symmetry = config.symmetry_;
   bool d_applicable = detail::IsDApplicable(axis_dist);
   desc.d_applicable = d_applicable ? 1u : 0u;
-  desc.sigma_a = d_applicable ? detail::ComputeSigmaA(axis_dist.roll_dist.mean) : 0;
+  desc.sigma_a = d_applicable ? detail::ComputeSigmaA(axis_dist.roll_dist.center) : 0;
   desc.fn_period = crystal.FnPeriod();
 
   std::visit(TopVisitor{ crystal, config.symmetry_, desc.sigma_a, d_applicable, desc }, config.param_);

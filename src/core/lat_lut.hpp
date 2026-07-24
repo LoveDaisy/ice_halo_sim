@@ -34,7 +34,7 @@ struct LatLut {
   std::array<float, kNodes> flip_prob{};
 };
 
-// Build the LUT for a latitude Distribution (mean/std in DEGREES, axis-dist convention).
+// Build the LUT for a latitude Distribution (center/spread in DEGREES, axis-dist convention).
 // Host-only, build-time, deterministic (no RNG); amortized once per orientation distribution
 // (per-ci/per-layer, cached — never per ray). Intended for the LUT-routed families
 // (kGaussian / kUniform / kZigzag / kLaplacian); kNoRandom / kGaussianLegacy / full-sphere are
@@ -42,7 +42,7 @@ struct LatLut {
 LatLut BuildLatLut(const Distribution& lat_dist);
 
 // Thread-safe, process-lifetime, build-once memoized accessor for the unified
-// area-measure latitude LUT, keyed on (type, mean, std). This is the SINGLE
+// area-measure latitude LUT, keyed on (type, center, spread). This is the SINGLE
 // source that amortizes BuildLatLut across all legacy-CPU worker threads and
 // both GPU backends (task-335). It replaced the per-thread single-entry cache
 // whose most-recent-only policy thrashed catastrophically when a worker's

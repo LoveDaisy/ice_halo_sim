@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -11,11 +12,13 @@
 #include <utility>
 #include <vector>
 
+#include "config/crystal_config.hpp"        // ns::PrismCrystalParam / PyramidCrystalParam (LUMICE_GetCrystalMesh)
 #include "config/raypath_color_config.hpp"  // ns::kDefaultCompositeMode (single-source default)
 #include "config/raypath_validation.hpp"
 #include "config/render_config.hpp"
 #include "core/crystal.hpp"
 #include "core/geo3d.hpp"
+#include "core/trace_ops.hpp"  // ns::MakeCrystal (core single-source crystal sampler)
 #if defined(__APPLE__)
 #include "core/backend/metal_trace_backend.hpp"
 #endif
@@ -172,31 +175,39 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 
 
 // =============== Configuration (C struct) ===============
-static nlohmann::json AxisDistToJson(const LUMICE_AxisDist& d) {
+// Serialize a LUMICE_Distribution to its core-compatible JSON wire form. NO_RANDOM emits a
+// bare number (center), matching core Distribution::to_json's short-circuit branch
+// (math.cpp: `obj = dist.center`); the other 5 types emit {"type","mean","std"} objects. The
+// on-disk keys stay "mean"/"std" (core's published config format) even though the C struct
+// field names are center/spread.
+static nlohmann::json DistributionToJson(const LUMICE_Distribution& d) {
+  if (d.type == LUMICE_DIST_NO_RANDOM) {
+    return d.center;  // bare number; aligns with core Distribution::to_json for kNoRandom
+  }
   nlohmann::json j;
   switch (d.type) {
-    case LUMICE_AXIS_DIST_GAUSS:
-      j["type"] = "gauss";
-      break;
-    case LUMICE_AXIS_DIST_UNIFORM:
+    case LUMICE_DIST_UNIFORM:
       j["type"] = "uniform";
       break;
-    case LUMICE_AXIS_DIST_ZIGZAG:
+    case LUMICE_DIST_GAUSS:
+      j["type"] = "gauss";
+      break;
+    case LUMICE_DIST_ZIGZAG:
       j["type"] = "zigzag";
       break;
-    case LUMICE_AXIS_DIST_LAPLACIAN:
+    case LUMICE_DIST_LAPLACIAN:
       j["type"] = "laplacian";
       break;
-    case LUMICE_AXIS_DIST_GAUSS_LEGACY:
+    case LUMICE_DIST_GAUSS_LEGACY:
       j["type"] = "gauss_legacy";
       break;
     default:
-      LOG_ERROR("Unknown LUMICE_AxisDist.type: {}", d.type);
+      LOG_ERROR("Unknown LUMICE_Distribution.type: {}", d.type);
       j["type"] = "gauss";
       break;
   }
-  j["mean"] = d.mean;
-  j["std"] = d.std;
+  j["mean"] = d.center;
+  j["std"] = d.spread;
   return j;
 }
 
@@ -298,6 +309,35 @@ static void ColorPredicateToJson(const LUMICE_ColorPredicate& p, nlohmann::json&
   }
 }
 
+// Non-static (declared in server/c_api_internal.hpp) so both ConfigToJson and
+// LUMICE_GetCrystalMesh consume the SAME crystal-shape translation table. Returns
+// {"type","shape"} only — id/axis are the caller's responsibility (ConfigToJson adds
+// them; the mesh-preview path does not want them).
+nlohmann::json CrystalShapeToJson(const LUMICE_CrystalParam& cr) {
+  nlohmann::json j;
+  if (cr.type == 0) {
+    j["type"] = "prism";
+    j["shape"]["height"] = DistributionToJson(cr.height);
+  } else {
+    j["type"] = "pyramid";
+    j["shape"]["prism_h"] = DistributionToJson(cr.prism_h);
+    j["shape"]["upper_h"] = DistributionToJson(cr.upper_h);
+    j["shape"]["lower_h"] = DistributionToJson(cr.lower_h);
+    j["shape"]["upper_wedge_angle"] = cr.upper_wedge_angle;
+    j["shape"]["lower_wedge_angle"] = cr.lower_wedge_angle;
+  }
+  // face_distance: emit all 6 unconditionally (mirrors core crystal_config.cpp::to_json's
+  // `j["face_distance"] = p.d_`). The "only when non-default" shortcut no longer fits now that
+  // each element is a distribution (a NO_RANDOM 1.0 default vs a randomized 1.0 are different
+  // wire forms), so always round-trip every element.
+  nlohmann::json fd = nlohmann::json::array();
+  for (int fi = 0; fi < 6; fi++) {
+    fd.push_back(DistributionToJson(cr.face_distance[fi]));
+  }
+  j["shape"]["face_distance"] = fd;
+  return j;
+}
+
 // Non-static (declared in server/c_api_internal.hpp) so unit tests can assert the
 // emitted filter JSON shape field by field. See that header for rationale.
 nlohmann::json ConfigToJson(const LUMICE_Config& c) {
@@ -308,34 +348,11 @@ nlohmann::json ConfigToJson(const LUMICE_Config& c) {
   root["crystal"] = json::array();
   for (int i = 0; i < c.crystal_count; i++) {
     const auto& cr = c.crystals[i];
-    json j;
+    json j = CrystalShapeToJson(cr);  // {"type","shape"} single-source translation
     j["id"] = cr.id;
-    if (cr.type == 0) {
-      j["type"] = "prism";
-      j["shape"]["height"] = cr.height;
-    } else {
-      j["type"] = "pyramid";
-      j["shape"]["prism_h"] = cr.prism_h;
-      j["shape"]["upper_h"] = cr.upper_h;
-      j["shape"]["lower_h"] = cr.lower_h;
-      j["shape"]["upper_wedge_angle"] = cr.upper_wedge_angle;
-      j["shape"]["lower_wedge_angle"] = cr.lower_wedge_angle;
-    }
-    // face_distance: only write when non-default
-    bool is_default_fd = true;
-    for (int fi = 0; fi < 6; fi++) {
-      if (std::abs(cr.face_distance[fi] - 1.0f) > 1e-6f) {
-        is_default_fd = false;
-        break;
-      }
-    }
-    if (!is_default_fd) {
-      j["shape"]["face_distance"] = { cr.face_distance[0], cr.face_distance[1], cr.face_distance[2],
-                                      cr.face_distance[3], cr.face_distance[4], cr.face_distance[5] };
-    }
-    j["axis"]["zenith"] = AxisDistToJson(cr.zenith);
-    j["axis"]["azimuth"] = AxisDistToJson(cr.azimuth);
-    j["axis"]["roll"] = AxisDistToJson(cr.roll);
+    j["axis"]["zenith"] = DistributionToJson(cr.zenith);
+    j["axis"]["azimuth"] = DistributionToJson(cr.azimuth);
+    j["axis"]["roll"] = DistributionToJson(cr.roll);
     root["crystal"].push_back(j);
   }
 
@@ -456,6 +473,10 @@ nlohmann::json ConfigToJson(const LUMICE_Config& c) {
     scene["ray_num"] = c.ray_num;
   }
   scene["max_hits"] = c.max_hits;
+  // geom_clock: emit only when set (mirrors core proj_config.cpp::to_json's `if (geom_clock_ != 0)`).
+  if (c.geom_clock != 0) {
+    scene["geom_clock"] = c.geom_clock;
+  }
 
   scene["scattering"] = json::array();
   for (int i = 0; i < c.scatter_count; i++) {
@@ -952,26 +973,48 @@ LUMICE_ErrorCode LUMICE_ConfigToJson(const LUMICE_Config* config, char* out_buf,
 // =============== Configuration Parsing (JSON -> LUMICE_Config) ===============
 // Symmetric inverse of ConfigToJson. Decomposed into per-section helpers.
 
-static LUMICE_ErrorCode JsonToAxisDist(const nlohmann::json& j, LUMICE_AxisDist* out) {
-  if (!j.is_object() || !j.contains("type") || !j.contains("mean") || !j.contains("std")) {
+static LUMICE_ErrorCode JsonToDistribution(const nlohmann::json& j, LUMICE_Distribution* out) {
+  // Bare number => NO_RANDOM (deterministic value). Mirrors core Distribution::from_json's
+  // is_number() branch. This is the common case for shape fields with randomization off, and the
+  // whole reason no_random was previously a translation gap: axis JSON always carried a type
+  // object so the missing no_random case never fired until shape scalars became distributions.
+  if (j.is_number()) {
+    out->type = LUMICE_DIST_NO_RANDOM;
+    out->center = j.get<float>();
+    out->spread = 0.0f;
+    return LUMICE_OK;
+  }
+  if (!j.is_object() || !j.contains("type")) {
     return LUMICE_ERR_MISSING_FIELD;
   }
   auto type_str = j.at("type").get<std::string>();
-  if (type_str == "gauss") {
-    out->type = LUMICE_AXIS_DIST_GAUSS;
-  } else if (type_str == "uniform") {
-    out->type = LUMICE_AXIS_DIST_UNIFORM;
+  // Defensive: tolerate an explicit {"type":"no_random", ...} object on the READ side even though
+  // the WRITE side (DistributionToJson) only ever produces a bare number for NO_RANDOM. center
+  // then comes from "mean" if present, else 0.
+  if (type_str == "no_random") {
+    out->type = LUMICE_DIST_NO_RANDOM;
+    out->center = j.contains("mean") ? j.at("mean").get<float>() : 0.0f;
+    out->spread = 0.0f;
+    return LUMICE_OK;
+  }
+  if (!j.contains("mean") || !j.contains("std")) {
+    return LUMICE_ERR_MISSING_FIELD;
+  }
+  if (type_str == "uniform") {
+    out->type = LUMICE_DIST_UNIFORM;
+  } else if (type_str == "gauss") {
+    out->type = LUMICE_DIST_GAUSS;
   } else if (type_str == "zigzag") {
-    out->type = LUMICE_AXIS_DIST_ZIGZAG;
+    out->type = LUMICE_DIST_ZIGZAG;
   } else if (type_str == "laplacian") {
-    out->type = LUMICE_AXIS_DIST_LAPLACIAN;
+    out->type = LUMICE_DIST_LAPLACIAN;
   } else if (type_str == "gauss_legacy") {
-    out->type = LUMICE_AXIS_DIST_GAUSS_LEGACY;
+    out->type = LUMICE_DIST_GAUSS_LEGACY;
   } else {
     return LUMICE_ERR_INVALID_VALUE;
   }
-  out->mean = j.at("mean").get<float>();
-  out->std = j.at("std").get<float>();
+  out->center = j.at("mean").get<float>();
+  out->spread = j.at("std").get<float>();
   return LUMICE_OK;
 }
 
@@ -995,7 +1038,9 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
     if (!cj.contains("shape") || !cj.at("shape").contains("height")) {
       return LUMICE_ERR_MISSING_FIELD;
     }
-    cr->height = cj.at("shape").at("height").get<float>();
+    if (auto err = JsonToDistribution(cj.at("shape").at("height"), &cr->height); err != LUMICE_OK) {
+      return err;
+    }
   } else if (type_str == "pyramid") {
     cr->type = 1;
     if (!cj.contains("shape")) {
@@ -1005,9 +1050,15 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
     if (!shape.contains("prism_h") || !shape.contains("upper_h") || !shape.contains("lower_h")) {
       return LUMICE_ERR_MISSING_FIELD;
     }
-    cr->prism_h = shape.at("prism_h").get<float>();
-    cr->upper_h = shape.at("upper_h").get<float>();
-    cr->lower_h = shape.at("lower_h").get<float>();
+    if (auto err = JsonToDistribution(shape.at("prism_h"), &cr->prism_h); err != LUMICE_OK) {
+      return err;
+    }
+    if (auto err = JsonToDistribution(shape.at("upper_h"), &cr->upper_h); err != LUMICE_OK) {
+      return err;
+    }
+    if (auto err = JsonToDistribution(shape.at("lower_h"), &cr->lower_h); err != LUMICE_OK) {
+      return err;
+    }
     // Wedge angle: prefer "upper_wedge_angle", fallback to "upper_indices" conversion
     if (shape.contains("upper_wedge_angle") && shape.at("upper_wedge_angle").is_number()) {
       cr->upper_wedge_angle = shape.at("upper_wedge_angle").get<float>();
@@ -1027,18 +1078,20 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
     return LUMICE_ERR_INVALID_VALUE;
   }
 
-  // face_distance: array of 6 or absent (default all 1.0f)
+  // face_distance: array of 6 distributions, or absent (default all NO_RANDOM 1.0)
   if (cj.contains("shape") && cj.at("shape").contains("face_distance")) {
     const auto& fd = cj.at("shape").at("face_distance");
     if (!fd.is_array() || fd.size() != 6) {
       return LUMICE_ERR_INVALID_VALUE;
     }
     for (int k = 0; k < 6; k++) {
-      cr->face_distance[k] = fd[k].get<float>();
+      if (auto err = JsonToDistribution(fd[k], &cr->face_distance[k]); err != LUMICE_OK) {
+        return err;
+      }
     }
   } else {
     for (int k = 0; k < 6; k++) {
-      cr->face_distance[k] = 1.0f;
+      cr->face_distance[k] = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 1.0f, 0.0f };
     }
   }
 
@@ -1047,12 +1100,12 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
     return LUMICE_ERR_MISSING_FIELD;
   }
   const auto& axis = cj.at("axis");
-  for (const auto& [name, dest] : std::vector<std::pair<const char*, LUMICE_AxisDist*>>{
+  for (const auto& [name, dest] : std::vector<std::pair<const char*, LUMICE_Distribution*>>{
            { "zenith", &cr->zenith }, { "azimuth", &cr->azimuth }, { "roll", &cr->roll } }) {
     if (!axis.contains(name)) {
       return LUMICE_ERR_MISSING_FIELD;
     }
-    auto err = JsonToAxisDist(axis.at(name), dest);
+    auto err = JsonToDistribution(axis.at(name), dest);
     if (err != LUMICE_OK) {
       return err;
     }
@@ -1369,6 +1422,12 @@ static LUMICE_ErrorCode JsonToScene(const nlohmann::json& scene, LUMICE_Config* 
 
   if (scene.contains("max_hits")) {
     out->max_hits = scene.at("max_hits").get<int>();
+  }
+
+  // geom_clock: lossless parse only, no range check (range {0}∪[1,64] is validated single-source
+  // in core config_manager.cpp at commit, matching the ray_num/max_hits convention here).
+  if (scene.contains("geom_clock")) {
+    out->geom_clock = scene.at("geom_clock").get<int>();
   }
 
   // Scattering
@@ -1974,71 +2033,57 @@ int LUMICE_WillUseGpuRoute(int preferred_backend) {
 // PopulateFromCfGeom), and face_vtx_pool / face_normals come straight from
 // cf_geom_. See doc/crystal-geometry-representation.md §1 for the wider
 // "delete the reversal, read the constant" story.
-LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* crystal_json, LUMICE_CrystalMesh* out) {
-  if (!crystal_json || !out) {
+// Fold a 64-bit sample seed into the 32-bit seed RandomNumberGenerator accepts.
+// XOR-fold (both halves participate) rather than truncate: truncation would make any
+// two seeds that differ only in the high 32 bits collide deterministically; XOR-fold
+// reduces that to a ~2^-32 uniform collision probability. This is NOT a "distinct
+// sample_seed => distinct mesh" guarantee, only a removal of the deterministic-collision
+// class of false negatives.
+static uint32_t FoldSampleSeed64(unsigned long long seed) {
+  return static_cast<uint32_t>(seed) ^ static_cast<uint32_t>(seed >> 32);
+}
+
+LUMICE_ErrorCode LUMICE_GetCrystalMesh(const LUMICE_CrystalParam* crystal, unsigned long long sample_seed,
+                                       LUMICE_CrystalMesh* out) {
+  if (!crystal || !out) {
     return LUMICE_ERR_NULL_ARG;
   }
+  if (crystal->type != 0 && crystal->type != 1) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
 
-  // Parse JSON
-  nlohmann::json j;
+  // Single mapping table: translate the shape into the core crystal JSON schema, then
+  // let the core from_json (already validated by ConfigToJson round-trips) build the
+  // CrystalParam variant. This reuses the existing translation instead of maintaining
+  // a second, parallel struct-to-struct field map.
+  ns::CrystalParam param;
   try {
-    j = nlohmann::json::parse(crystal_json);
-  } catch (...) {
-    return LUMICE_ERR_INVALID_JSON;
-  }
-
-  if (!j.contains("type") || !j.contains("shape")) {
-    return LUMICE_ERR_MISSING_FIELD;
-  }
-
-  auto type_str = j.at("type").get<std::string>();
-  const auto& shape = j.at("shape");
-
-  // Parse face_distance if present (common to both prism and pyramid)
-  float dist[6]{ 1, 1, 1, 1, 1, 1 };
-  if (shape.contains("face_distance") && shape["face_distance"].is_array()) {
-    size_t n = std::min(shape["face_distance"].size(), static_cast<size_t>(6));
-    for (size_t i = 0; i < n; i++) {
-      if (shape["face_distance"][i].is_number()) {
-        dist[i] = shape["face_distance"][i].get<float>();
-      }
-    }
-  }
-
-  ns::Crystal crystal;
-  try {
-    if (type_str == "prism") {
-      float h = shape.value("height", 1.0f);
-      crystal = ns::Crystal::CreatePrism(h, dist);
-    } else if (type_str == "pyramid") {
-      float prism_h = shape.value("prism_h", 1.0f);
-      float upper_h = shape.value("upper_h", 0.0f);
-      float lower_h = shape.value("lower_h", 0.0f);
-      // Prefer wedge_angle, fallback to upper_indices, then default
-      if (shape.contains("upper_wedge_angle") && shape.contains("lower_wedge_angle")) {
-        float ua = shape["upper_wedge_angle"].get<float>();
-        float la = shape["lower_wedge_angle"].get<float>();
-        crystal = ns::Crystal::CreatePyramid(ua, la, upper_h, prism_h, lower_h, dist);
-      } else if (shape.contains("upper_indices") && shape.contains("lower_indices")) {
-        float ua = MillerToAlpha(shape["upper_indices"][0].get<int>(), shape["upper_indices"][2].get<int>());
-        float la = MillerToAlpha(shape["lower_indices"][0].get<int>(), shape["lower_indices"][2].get<int>());
-        crystal = ns::Crystal::CreatePyramid(ua, la, upper_h, prism_h, lower_h, dist);
-      } else {
-        crystal = ns::Crystal::CreatePyramid(upper_h, prism_h, lower_h);
-      }
+    const nlohmann::json shape = CrystalShapeToJson(*crystal).at("shape");
+    if (crystal->type == 0) {
+      param = shape.get<ns::PrismCrystalParam>();
     } else {
-      return LUMICE_ERR_INVALID_VALUE;
+      param = shape.get<ns::PyramidCrystalParam>();
     }
   } catch (...) {
     return LUMICE_ERR_INVALID_CONFIG;
   }
 
+  // Sample one concrete shape through the core single-source sampler. A LOCAL RNG
+  // instance (not the process singleton) is what makes the determinism contract hold:
+  // identical seed + identical param => identical MakeCrystal draw sequence, with no
+  // cross-call state carried in a shared generator. For a fully NO_RANDOM param,
+  // MakeCrystal never touches the RNG, so sample_seed is a no-op (contract).
+  ns::RandomNumberGenerator rng(FoldSampleSeed64(sample_seed));
+  const ns::Crystal crystal_obj = ns::MakeCrystal(rng, param);
+
   // On-demand triangulation: the Crystal no longer stores a triangle mesh
   // (entry-point sampling consumes cf_geom_ corners directly). Geometry export
   // is a cold path (GUI preview, gated by a param hash) so building the mesh
   // here — instead of eagerly in every MakeCrystal — costs nothing on the hot
-  // path.
-  const ns::CrystalGeom& g = crystal.CfGeom();
+  // path. A degenerate sample (validation gate rejected) yields a default-constructed
+  // Crystal with face_cnt==0; BuildMeshFromCfGeom and the export loops below are all
+  // safe (zero-iteration) on that, producing an empty-but-valid mesh and LUMICE_OK.
+  const ns::CrystalGeom& g = crystal_obj.CfGeom();
   const ns::detail::BuiltMesh built = ns::detail::BuildMeshFromCfGeom(g);
   const ns::Mesh& mesh = built.mesh;
 

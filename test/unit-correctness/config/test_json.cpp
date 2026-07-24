@@ -153,11 +153,13 @@ TEST(IlluminantSpd, DSeriesPositive) {
 
 
 // =============== Crystal ===============
-#define CHECK_DISTRIBUTION(d, t, m, s) \
+// Type-erased on purpose — the same macro checks kNoRandom / kUniform / kGaussian distributions
+// below, so it reads the generic center/spread slots rather than any named accessor.
+#define CHECK_DISTRIBUTION(d, t, c, s) \
   do {                                 \
     ASSERT_EQ(d.type, t);              \
-    ASSERT_NEAR(d.mean, m, 1e-5);      \
-    ASSERT_NEAR(d.std, s, 1e-5);       \
+    ASSERT_NEAR(d.center, c, 1e-5);    \
+    ASSERT_NEAR(d.spread, s, 1e-5);    \
   } while (false)
 
 TEST_F(V3TestJson, Distribution) {
@@ -272,11 +274,11 @@ TEST(FaceDistanceRoundTrip, NoScalingApplied) {
   auto c1 = j1.get<CrystalConfig>();
   const auto& p1 = std::get<PyramidCrystalParam>(c1.param_);
 
-  // Verify no scaling applied
-  EXPECT_NEAR(p1.d_[0].mean, 1.0f, 1e-5f);
-  EXPECT_NEAR(p1.d_[1].mean, 0.8f, 1e-5f);
-  EXPECT_NEAR(p1.d_[3].mean, 1.2f, 1e-5f);
-  EXPECT_NEAR(p1.d_[5].mean, 0.9f, 1e-5f);
+  // Verify no scaling applied. Value() also pins that these stay kNoRandom face distances.
+  EXPECT_NEAR(p1.d_[0].Value(), 1.0f, 1e-5f);
+  EXPECT_NEAR(p1.d_[1].Value(), 0.8f, 1e-5f);
+  EXPECT_NEAR(p1.d_[3].Value(), 1.2f, 1e-5f);
+  EXPECT_NEAR(p1.d_[5].Value(), 0.9f, 1e-5f);
 
   // Verify wedge angle: {2,0,2} → same as {1,0,1} → 28.00°
   EXPECT_NEAR(p1.wedge_angle_u_, 28.00f, 0.01f);
@@ -289,7 +291,7 @@ TEST(FaceDistanceRoundTrip, NoScalingApplied) {
   const auto& p2 = std::get<PyramidCrystalParam>(c2.param_);
 
   for (int i = 0; i < 6; i++) {
-    EXPECT_NEAR(p2.d_[i].mean, p1.d_[i].mean, 1e-5f);
+    EXPECT_NEAR(p2.d_[i].Value(), p1.d_[i].Value(), 1e-5f);
   }
   EXPECT_NEAR(p2.wedge_angle_u_, p1.wedge_angle_u_, 1e-5f);
   EXPECT_NEAR(p2.wedge_angle_l_, p1.wedge_angle_l_, 1e-5f);

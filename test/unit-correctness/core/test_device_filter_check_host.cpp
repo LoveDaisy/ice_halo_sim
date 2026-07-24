@@ -44,18 +44,18 @@ Crystal MakeHexPrism() {
 AxisDistribution MakeAxis(bool d_applicable) {
   AxisDistribution d{};
   d.azimuth_dist.type = DistributionType::kUniform;
-  d.azimuth_dist.std = 360.0f;
-  d.azimuth_dist.mean = 0.0f;
+  d.azimuth_dist.spread = 360.0f;
+  d.azimuth_dist.center = 0.0f;
   d.latitude_dist.type = DistributionType::kNoRandom;
-  d.latitude_dist.mean = 90.0f;
+  d.latitude_dist.center = 90.0f;
   if (d_applicable) {
     d.roll_dist.type = DistributionType::kNoRandom;
-    d.roll_dist.mean = 30.0f;  // sigma_a=5 per kSigmaARollDeg inverse
-    d.roll_dist.std = 0.0f;
+    d.roll_dist.center = 30.0f;  // sigma_a=5 per kSigmaARollDeg inverse
+    d.roll_dist.spread = 0.0f;
   } else {
     d.roll_dist.type = DistributionType::kUniform;
-    d.roll_dist.mean = 0.0f;
-    d.roll_dist.std = 360.0f;
+    d.roll_dist.center = 0.0f;
+    d.roll_dist.spread = 360.0f;
   }
   return d;
 }

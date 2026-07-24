@@ -133,6 +133,20 @@ LM_CONSTANT uint32_t kGeomShapeStreamNonce = 0x94D049BBu;
 // introducing device-side 64-bit integer arithmetic. See `pcg_advance_hi` +
 // `pcg_seed_with_high` below for the mixing rule; `high==0` (session under
 // 2^32 rays) is bit-exact with the pre-fix stream by construction.
+//
+// KNOWN, DELIBERATELY UNFIXED: the `lat_mean_rad` / `lat_std_rad` /
+// `az_mean_rad` / … field pairs below carry the SAME semantic overload that the
+// host-side `lumice::Distribution` used to have — what the second slot means
+// (standard deviation / full range / amplitude / scale) depends on the paired
+// `*_type` field, and the names only describe the Gaussian case. On the host
+// side that was cleaned up by renaming the members to `center` / `spread` (see
+// the per-type table on `Distribution` in core/math.hpp); the wire struct was
+// left alone on purpose, because renaming here means touching the CUDA and
+// Metal kernels that consume it (`pcg_get_dist` below and its callers) across
+// two device toolchains, which is a different risk class than a host-only
+// rename. Treat these as raw per-type parameters the kernel re-interprets, not
+// as statistics. Any future cleanup should follow the same center/spread
+// vocabulary rather than inventing a third one.
 struct GenRootKernelParams {
   uint32_t gen_seed;         // PCG master seed (== spec.seed [XOR transit/gate nonce])
   uint32_t gen_ray_base;     // low 32 bits of running ray-count (may wrap; the mod-2^32 wrap is intentional)
@@ -266,10 +280,13 @@ LM_FN float pcg_gaussian(LM_THREAD PcgStream& s) {
   return LM_SQRT(-2.0f * LM_LOG(u1)) * LM_COS(2.0f * LM_PI_F * u2);
 }
 
-// Mirrors RandomNumberGenerator::Get (math.cpp:365-389). mean / std are in
+// Mirrors RandomNumberGenerator::Get (math.cpp). The `mean` / `std_val`
+// parameters are the type-erased anchor / spread slots of the host-side
+// lumice::Distribution (its `center` / `spread` members) — what each one means
+// statistically depends on `dtype`, see the table on that struct. They are in
 // the SAME unit the host caller uses for the result; SampleSphericalPointsSph
-// always pre-converts axis_dist.{*}.mean/std to radians here, so the radian
-// envelope semantics hold.
+// always pre-converts axis_dist.{*} to radians here, so the radian envelope
+// semantics hold.
 LM_FN float pcg_get_dist(LM_THREAD PcgStream& s, uint32_t dtype, float mean, float std_val) {
   if (dtype == kDistNoRandom) {
     return mean;

@@ -136,19 +136,56 @@ static json SerializeAxisDist(const AxisDist& a) {
   return j;
 }
 
+static const char* ShapeDistTypeToString(ShapeDistType t) {
+  switch (t) {
+    case ShapeDistType::kNoRandom:
+      return "no_random";
+    case ShapeDistType::kUniform:
+      return "uniform";
+    case ShapeDistType::kGauss:
+      return "gauss";
+    case ShapeDistType::kZigzag:
+      return "zigzag";
+    case ShapeDistType::kLaplacian:
+      return "laplacian";
+    case ShapeDistType::kGaussLegacy:
+      return "gauss_legacy";
+    default:
+      GUI_LOG_ERROR("[FileIO] Unknown ShapeDistType: {}", static_cast<int>(t));
+      return "no_random";
+  }
+}
+
+// Serialize a crystal shape distribution. A NO_RANDOM value collapses to a bare number (its
+// center) so default (non-random) crystals produce byte-identical JSON to the pre-upgrade format
+// (`"height": 1.0`) — no noise added to the common case. A randomized field writes the full
+// {type, mean, std} object (keys mirror SerializeAxisDist and the core on-disk format).
+static json SerializeShapeDist(const ShapeDist& d) {
+  if (d.type == ShapeDistType::kNoRandom) {
+    return json(d.center);
+  }
+  json j;
+  j["type"] = ShapeDistTypeToString(d.type);
+  j["mean"] = d.center;
+  j["std"] = d.spread;
+  return j;
+}
+
 // Field-sync guard for SerializeCrystal.
 // If CrystalConfig gains/loses a field, sizeof changes and this fires. Developer must then
 // audit BOTH SerializeCrystal (below) and FillCrystalParam (further down this file) for
 // same-file sync. Platform-gated because std::string size varies across C++ stdlib impls;
 // this mirror is a "Apple Silicon + libc++ reminder", not a cross-platform contract.
 //
-// Audited fields (2026-04 snapshot):
-//   name (serialize: yes, c-api: no), type (yes/yes), height (prism-only/yes),
-//   prism_h, upper_h, lower_h (pyramid-only/yes),
-//   upper_alpha, lower_alpha (pyramid-only/yes),
-//   face_distance[6] (conditional/yes), zenith, azimuth, roll (yes/yes).
+// Audited fields (2026-07 snapshot, shape scalars promoted to ShapeDist):
+//   name (serialize: yes, c-api: no), type (yes/yes),
+//   height, prism_h, upper_h, lower_h (now ShapeDist; serialize + c-api yes),
+//   upper_alpha, lower_alpha (bare float, pyramid-only/yes),
+//   face_distance[6] (now ShapeDist[6]; conditional serialize / c-api yes),
+//   zenith, azimuth, roll (AxisDist, yes/yes).
+// Size grew 112 → 192 when the five shape scalars became ShapeDist (12 B each: +80 B total).
 #if defined(__APPLE__) && defined(__aarch64__)
-static_assert(sizeof(CrystalConfig) == 112,
+static_assert(sizeof(CrystalConfig) == 192,
               "CrystalConfig size changed; audit SerializeCrystal and FillCrystalParam for new/renamed fields");
 #endif
 static json SerializeCrystal(const CrystalConfig& c, int id) {
@@ -160,27 +197,31 @@ static json SerializeCrystal(const CrystalConfig& c, int id) {
 
   if (c.type == CrystalType::kPrism) {
     j["type"] = "prism";
-    j["shape"]["height"] = c.height;
+    j["shape"]["height"] = SerializeShapeDist(c.height);
   } else {
     j["type"] = "pyramid";
-    j["shape"]["prism_h"] = c.prism_h;
-    j["shape"]["upper_h"] = c.upper_h;
-    j["shape"]["lower_h"] = c.lower_h;
+    j["shape"]["prism_h"] = SerializeShapeDist(c.prism_h);
+    j["shape"]["upper_h"] = SerializeShapeDist(c.upper_h);
+    j["shape"]["lower_h"] = SerializeShapeDist(c.lower_h);
     j["shape"]["upper_wedge_angle"] = c.upper_alpha;
     j["shape"]["lower_wedge_angle"] = c.lower_alpha;
   }
 
-  // face_distance: only write when non-default (not all 1.0)
+  // face_distance: only write when non-default. The default is the deterministic unit distance
+  // ShapeDist{kNoRandom, 1.0, 0.0}; compare all three components via ShapeDist::operator== so a
+  // face that is randomized but happens to have center 1.0 is NOT mistaken for the default.
+  const ShapeDist default_fd = 1.0f;  // {kNoRandom, 1.0, 0.0}
   bool is_default_fd = true;
   for (int i = 0; i < 6; i++) {
-    if (std::abs(c.face_distance[i] - 1.0f) > 1e-6f) {
+    if (c.face_distance[i] != default_fd) {
       is_default_fd = false;
       break;
     }
   }
   if (!is_default_fd) {
-    j["shape"]["face_distance"] = { c.face_distance[0], c.face_distance[1], c.face_distance[2],
-                                    c.face_distance[3], c.face_distance[4], c.face_distance[5] };
+    j["shape"]["face_distance"] = { SerializeShapeDist(c.face_distance[0]), SerializeShapeDist(c.face_distance[1]),
+                                    SerializeShapeDist(c.face_distance[2]), SerializeShapeDist(c.face_distance[3]),
+                                    SerializeShapeDist(c.face_distance[4]), SerializeShapeDist(c.face_distance[5]) };
   }
 
   j["axis"]["zenith"] = SerializeAxisDist(c.zenith);
@@ -645,6 +686,42 @@ static AxisDistType ParseAxisDistType(const std::string& t) {
   return AxisDistType::kGauss;
 }
 
+static ShapeDistType ParseShapeDistType(const std::string& t) {
+  if (t == "no_random")
+    return ShapeDistType::kNoRandom;
+  if (t == "uniform")
+    return ShapeDistType::kUniform;
+  if (t == "gauss")
+    return ShapeDistType::kGauss;
+  if (t == "zigzag")
+    return ShapeDistType::kZigzag;
+  if (t == "laplacian")
+    return ShapeDistType::kLaplacian;
+  if (t == "gauss_legacy")
+    return ShapeDistType::kGaussLegacy;
+  GUI_LOG_ERROR("[FileIO] Unknown shape dist type '{}', falling back to uniform", t);
+  return ShapeDistType::kUniform;
+}
+
+// Parse a crystal shape distribution. A bare number → {NO_RANDOM, v, 0}; an object → the full
+// {type, mean, std}. This is the round-trip-loss fix: the pre-upgrade code read only "mean" and
+// dropped type/std. `default_center` supplies the center for an absent/typeless value, mirroring
+// each field's historical parse fallback (height/prism_h = 1.0; upper_h/lower_h = 0.0).
+static ShapeDist ParseShapeDist(const json& j, float default_center) {
+  ShapeDist d;
+  d.center = default_center;
+  if (j.is_number()) {
+    d.type = ShapeDistType::kNoRandom;
+    d.center = j.get<float>();
+    d.spread = 0.0f;
+  } else if (j.is_object()) {
+    d.type = ParseShapeDistType(j.value("type", "no_random"));
+    d.center = j.value("mean", default_center);
+    d.spread = j.value("std", 0.0f);
+  }
+  return d;
+}
+
 static AxisDist ParseAxisDist(const json& j) {
   AxisDist a;
   if (j.is_number()) {
@@ -671,16 +748,13 @@ static CrystalConfig ParseCrystal(const json& j) {
     auto& s = j.at("shape");
     if (c.type == CrystalType::kPrism) {
       if (s.contains("height")) {
-        if (s["height"].is_number()) {
-          c.height = s["height"].get<float>();
-        } else if (s["height"].is_object()) {
-          c.height = s["height"].value("mean", 1.0f);
-        }
+        c.height = ParseShapeDist(s["height"], 1.0f);
       }
     } else {
-      c.prism_h = s.value("prism_h", 1.0f);
-      c.upper_h = s.value("upper_h", 0.0f);
-      c.lower_h = s.value("lower_h", 0.0f);
+      // Historical fallbacks preserved: prism_h defaults to 1.0, upper_h/lower_h to 0.0 when absent.
+      c.prism_h = s.contains("prism_h") ? ParseShapeDist(s["prism_h"], 1.0f) : ShapeDist(1.0f);
+      c.upper_h = s.contains("upper_h") ? ParseShapeDist(s["upper_h"], 0.0f) : ShapeDist(0.0f);
+      c.lower_h = s.contains("lower_h") ? ParseShapeDist(s["lower_h"], 0.0f) : ShapeDist(0.0f);
       // Wedge angle: prefer "upper_wedge_angle", fallback to "upper_indices" conversion
       if (s.contains("upper_wedge_angle") && s["upper_wedge_angle"].is_number()) {
         c.upper_alpha = s["upper_wedge_angle"].get<float>();
@@ -697,12 +771,7 @@ static CrystalConfig ParseCrystal(const json& j) {
     if (s.contains("face_distance") && s["face_distance"].is_array()) {
       size_t n = std::min(s["face_distance"].size(), static_cast<size_t>(6));
       for (size_t i = 0; i < n; i++) {
-        auto& elem = s["face_distance"][i];
-        if (elem.is_number()) {
-          c.face_distance[i] = elem.get<float>();
-        } else if (elem.is_object()) {
-          c.face_distance[i] = elem.value("mean", 1.0f);
-        }
+        c.face_distance[i] = ParseShapeDist(s["face_distance"][i], 1.0f);
       }
     }
   }
@@ -1197,30 +1266,30 @@ static void EmitColorPredicateJson(const LUMICE_ColorPredicate& p, json& out) {
 
 // ========== Fill LUMICE_Config C struct (for LUMICE_CommitConfigStruct) ==========
 
-static void FillAxisDist(const AxisDist& src, LUMICE_AxisDist* dst) {
+static void FillAxisDist(const AxisDist& src, LUMICE_Distribution* dst) {
   static_assert(static_cast<int>(AxisDistType::kCount) == 5, "Update FillAxisDist when adding new AxisDistType");
   switch (src.type) {
     case AxisDistType::kGauss:
-      dst->type = LUMICE_AXIS_DIST_GAUSS;
+      dst->type = LUMICE_DIST_GAUSS;
       break;
     case AxisDistType::kUniform:
-      dst->type = LUMICE_AXIS_DIST_UNIFORM;
+      dst->type = LUMICE_DIST_UNIFORM;
       break;
     case AxisDistType::kZigzag:
-      dst->type = LUMICE_AXIS_DIST_ZIGZAG;
+      dst->type = LUMICE_DIST_ZIGZAG;
       break;
     case AxisDistType::kLaplacian:
-      dst->type = LUMICE_AXIS_DIST_LAPLACIAN;
+      dst->type = LUMICE_DIST_LAPLACIAN;
       break;
     case AxisDistType::kGaussLegacy:
-      dst->type = LUMICE_AXIS_DIST_GAUSS_LEGACY;
+      dst->type = LUMICE_DIST_GAUSS_LEGACY;
       break;
     default:
-      dst->type = LUMICE_AXIS_DIST_GAUSS;
+      dst->type = LUMICE_DIST_GAUSS;
       break;
   }
-  dst->mean = src.mean;
-  dst->std = src.std;
+  dst->center = src.mean;
+  dst->spread = src.std;
 }
 
 // Helper: fill a LUMICE_CrystalParam from GUI CrystalConfig with a given ID.
@@ -1230,13 +1299,18 @@ static void FillAxisDist(const AxisDist& src, LUMICE_AxisDist* dst) {
 static void FillCrystalParam(const CrystalConfig& c, int id, LUMICE_CrystalParam* dst) {
   dst->id = id;
   dst->type = c.type == CrystalType::kPrism ? 0 : 1;
-  dst->height = c.height;
-  dst->prism_h = c.prism_h;
-  dst->upper_h = c.upper_h;
-  dst->lower_h = c.lower_h;
+  // GUI shape fields are now first-class ShapeDist; map each straight to LUMICE_Distribution so a
+  // GUI-configured randomization actually reaches the simulator (the pre-upgrade NO_RANDOM wrapper
+  // silently flattened every field). ToLumiceDistribution is a value-aligned static_cast.
+  dst->height = ToLumiceDistribution(c.height);
+  dst->prism_h = ToLumiceDistribution(c.prism_h);
+  dst->upper_h = ToLumiceDistribution(c.upper_h);
+  dst->lower_h = ToLumiceDistribution(c.lower_h);
   dst->upper_wedge_angle = c.upper_alpha;
   dst->lower_wedge_angle = c.lower_alpha;
-  std::copy(std::begin(c.face_distance), std::end(c.face_distance), dst->face_distance);
+  for (int i = 0; i < 6; i++) {
+    dst->face_distance[i] = ToLumiceDistribution(c.face_distance[i]);
+  }
   FillAxisDist(c.zenith, &dst->zenith);
   FillAxisDist(c.azimuth, &dst->azimuth);
   FillAxisDist(c.roll, &dst->roll);

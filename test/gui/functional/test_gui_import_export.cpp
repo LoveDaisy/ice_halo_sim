@@ -359,6 +359,100 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // Test: crystal shape RANDOMIZATION round-trip (AC1). Guards the data-loss defect this task
+  // fixes — pre-fix, file_io read a {type,mean,std} shape distribution as a bare mean and wrote it
+  // back as a scalar, so a CLI-configured randomization silently vanished on a GUI load→save. The
+  // config below carries a randomized height AND a per-face heterogeneous face_distance (face[0]
+  // Uniform, face[3] Gauss, one randomized face whose center happens to equal the default 1.0 —
+  // the boundary that a center-only "is default" check would wrongly drop). Round-trips through the
+  // real SaveLmcFile/LoadLmcFile production path (no hand-assembled JSON, per issue hard constraint)
+  // and asserts every {type,center,spread} component survives.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "shape_randomization_roundtrip");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      auto& entry0 = gui::g_state.layers[0].entries[0];
+      auto& cr = gui::CrystalOf(gui::g_state, entry0);
+      cr.type = gui::CrystalType::kPrism;
+      // Randomized height (Gauss, center 2.5, spread 0.4).
+      cr.height = gui::ShapeDist{ gui::ShapeDistType::kGauss, 2.5f, 0.4f };
+      // Per-face heterogeneous distributions: some randomized, some not, one randomized-at-1.0.
+      cr.face_distance[0] = gui::ShapeDist{ gui::ShapeDistType::kUniform, 1.2f, 0.3f };
+      cr.face_distance[1] = gui::ShapeDist{ gui::ShapeDistType::kNoRandom, 0.8f, 0.0f };
+      cr.face_distance[2] = gui::ShapeDist{ gui::ShapeDistType::kZigzag, 1.0f, 0.15f };  // center == default 1.0
+      cr.face_distance[3] = gui::ShapeDist{ gui::ShapeDistType::kGauss, 0.9f, 0.05f };
+      cr.face_distance[4] = gui::ShapeDist{ gui::ShapeDistType::kLaplacian, 1.1f, 0.2f };
+      cr.face_distance[5] = gui::ShapeDist{ gui::ShapeDistType::kGaussLegacy, 1.3f, 0.25f };
+
+      const char* tmp_path = "/tmp/lumice_shape_rand_roundtrip.lmc";
+      bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
+      IM_CHECK(save_ok);
+
+      gui::DoNew();
+      std::vector<unsigned char> tex_data;
+      int tex_w = 0;
+      int tex_h = 0;
+      bool load_ok = gui::LoadLmcFile(tmp_path, gui::g_state, tex_data, tex_w, tex_h);
+      IM_CHECK(load_ok);
+
+      auto& loaded = gui::CrystalOf(gui::g_state, gui::g_state.layers[0].entries[0]);
+      // height — all three components.
+      IM_CHECK_EQ(loaded.height.type, gui::ShapeDistType::kGauss);
+      IM_CHECK_EQ(loaded.height.center, 2.5f);
+      IM_CHECK_EQ(loaded.height.spread, 0.4f);
+      // face_distance — full ShapeDist equality per face (operator== covers type/center/spread).
+      IM_CHECK(loaded.face_distance[0] == (gui::ShapeDist{ gui::ShapeDistType::kUniform, 1.2f, 0.3f }));
+      IM_CHECK(loaded.face_distance[1] == (gui::ShapeDist{ gui::ShapeDistType::kNoRandom, 0.8f, 0.0f }));
+      IM_CHECK(loaded.face_distance[2] == (gui::ShapeDist{ gui::ShapeDistType::kZigzag, 1.0f, 0.15f }));
+      IM_CHECK(loaded.face_distance[3] == (gui::ShapeDist{ gui::ShapeDistType::kGauss, 0.9f, 0.05f }));
+      IM_CHECK(loaded.face_distance[4] == (gui::ShapeDist{ gui::ShapeDistType::kLaplacian, 1.1f, 0.2f }));
+      IM_CHECK(loaded.face_distance[5] == (gui::ShapeDist{ gui::ShapeDistType::kGaussLegacy, 1.3f, 0.25f }));
+
+      std::remove(tmp_path);
+    };
+  }
+
+  // Test: crystal shape randomization reaches the COMMIT path (AC4). FillLumiceConfig is the
+  // GUI→core typed-struct bridge (LUMICE_CommitConfigStruct's input); pre-fix it wrapped every
+  // shape scalar in a NO_RANDOM distribution, so a GUI-configured randomization never reached the
+  // simulator. This asserts the mapped LUMICE_Distribution carries the real {type,center,spread}
+  // for height and a per-face-heterogeneous face_distance — the same ShapeDist → LUMICE_Distribution
+  // value-aligned mapping the preview uses.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "shape_randomization_commit_path");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      auto& cr = gui::CrystalOf(gui::g_state, gui::g_state.layers[0].entries[0]);
+      cr.type = gui::CrystalType::kPrism;
+      cr.height = gui::ShapeDist{ gui::ShapeDistType::kGauss, 2.5f, 0.4f };
+      cr.face_distance[0] = gui::ShapeDist{ gui::ShapeDistType::kUniform, 1.2f, 0.3f };
+      cr.face_distance[3] = gui::ShapeDist{ gui::ShapeDistType::kLaplacian, 0.9f, 0.05f };
+
+      LUMICE_Config cfg{};
+      lumice::ConfigOwningGuard cfg_guard(cfg);
+      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
+      IM_CHECK(cfg.crystal_count >= 1);
+
+      const LUMICE_CrystalParam& c0 = cfg.crystals[0];
+      // height: value-aligned mapping (LUMICE_DIST_GAUSS == 2).
+      IM_CHECK_EQ(c0.height.type, LUMICE_DIST_GAUSS);
+      IM_CHECK_EQ(c0.height.center, 2.5f);
+      IM_CHECK_EQ(c0.height.spread, 0.4f);
+      // per-face heterogeneity survives the commit mapping.
+      IM_CHECK_EQ(c0.face_distance[0].type, LUMICE_DIST_UNIFORM);
+      IM_CHECK_EQ(c0.face_distance[0].center, 1.2f);
+      IM_CHECK_EQ(c0.face_distance[0].spread, 0.3f);
+      IM_CHECK_EQ(c0.face_distance[3].type, LUMICE_DIST_LAPLACIAN);
+      IM_CHECK_EQ(c0.face_distance[3].center, 0.9f);
+      IM_CHECK_EQ(c0.face_distance[3].spread, 0.05f);
+      // an untouched face stays the deterministic default.
+      IM_CHECK_EQ(c0.face_distance[1].type, LUMICE_DIST_NO_RANDOM);
+      IM_CHECK_EQ(c0.face_distance[1].center, 1.0f);
+    };
+  }
+
   // Test: custom-spectrum end-to-end round-trip (task-323).
   // Covers all 4 file_io write paths + 1 load path introduced by the discrete-spectrum work:
   //   1. GUI project save (root["sun"]["spectrum"]="custom" + "custom_spectrum" array)

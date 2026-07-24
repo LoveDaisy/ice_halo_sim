@@ -25,7 +25,7 @@ env 是标准做法，不在治理范围内。
 ## 2. 现状清单
 
 > 勘察方法：`grep -rn "getenv" src/`，剔除 C API 枚举常量（`LUMICE_OK` / `LUMICE_ERR_*` /
-> `LUMICE_LOG_*` / `LUMICE_LENS_*` / `LUMICE_AXIS_DIST_*` / `LUMICE_MAX_CONFIG_*`）与头文件
+> `LUMICE_LOG_*` / `LUMICE_LENS_*` / `LUMICE_DIST_*` / `LUMICE_MAX_CONFIG_*`）与头文件
 > guard（`LUMICE_*_HPP`）噪声后，真·环境变量分两类。
 
 ### A 类 — 运行时行为旋钮（策略主要约束对象）

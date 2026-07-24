@@ -151,7 +151,7 @@ void ThumbnailCache::RenderThumbnail(int crystal_id, const GuiState& state) {
 
   // Build mesh data
   LUMICE_CrystalMesh mesh{};
-  if (!BuildCrystalMeshData(crystal, &mesh)) {
+  if (!BuildCrystalMeshData(crystal, kPreviewFixedSampleSeed, &mesh)) {
     GUI_LOG_WARNING("Failed to build mesh for thumbnail (crystal_id={})", crystal_id);
     return;
   }

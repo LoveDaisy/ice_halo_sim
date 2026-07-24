@@ -230,7 +230,7 @@ These functions have no shared state and are always thread-safe:
 
 | Function | Precondition | Notes |
 |----------|-------------|-------|
-| `LUMICE_GetCrystalMesh(server, json, out)` | `json != NULL`, `out != NULL` | `server` is unused (reserved) |
+| `LUMICE_GetCrystalMesh(crystal, sample_seed, out)` | `crystal != NULL`, `out != NULL` | Samples one shape from `crystal`'s distributions via the core sampler; `server` param removed |
 | `LUMICE_ValidateRaypathText(text, kind, out_state, out_msg, size)` | all pointers non-null | Pure validation |
 | `LUMICE_IsLegalFace(kind, face)` | none | Pure function |
 | `LUMICE_MaxFov(type)` | none | Pure function |
@@ -295,7 +295,7 @@ false and no snapshot is ever prepared). It still does **not** call
 | `LUMICE_GetStatsResults` | Yes | same as above | Triggers DoSnapshot |
 | `LUMICE_GetCachedStats` | Yes | `snapshot_mutex_` | Read-only cache; no DoSnapshot |
 | `LUMICE_SetRaypathColors` | Yes* | `consumer_mutex_` (TicketMutex) | Display-time only: updates color/visible/solo/z-order/mode on the active class table, sets `snapshot_dirty_`. Never touches Stop/Start/`scene_generation_`/`committed_epoch_`/`consumers_`. *Safe vs `Get*Results`, but NOT vs concurrent `CommitConfig*` (same single-owner rule; `CommitConfig` writes `active_class_table_` partly outside `consumer_mutex_`, a pre-existing race — task-342.2 progress.md risk 3). |
-| `LUMICE_GetCrystalMesh` | Yes | — | No shared state (`server` param unused) |
+| `LUMICE_GetCrystalMesh` | Yes | — | No shared state (no `server` param; uses a local RNG per call) |
 | `LUMICE_ValidateRaypathText` | Yes | — | Pure function |
 | `LUMICE_IsLegalFace` | Yes | — | Pure function |
 | `LUMICE_MaxFov` | Yes | — | Pure function |

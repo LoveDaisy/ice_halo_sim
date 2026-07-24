@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <cstring>
 
 #include "gui/app.hpp"
@@ -42,16 +41,45 @@ int CrystalParamHash(const CrystalConfig& c) {
     std::memcpy(&i, &f, sizeof(i));
     return i;
   };
-  h ^= hash_float(c.height) * 31;
-  h ^= hash_float(c.prism_h) * 37;
-  h ^= hash_float(c.upper_h) * 41;
-  h ^= hash_float(c.lower_h) * 43;
+  // Each shape field is a ShapeDist: hash all three components ({type, center, spread}) so a change
+  // to the distribution type or spread (not just the center) is detected and re-uploads the mesh.
+  auto hash_shape = [&](const ShapeDist& d, int salt) {
+    int hh = static_cast<int>(d.type) * salt;
+    hh ^= hash_float(d.center) * (salt + 1);
+    hh ^= hash_float(d.spread) * (salt + 2);
+    return hh;
+  };
+  h ^= hash_shape(c.height, 31);
+  h ^= hash_shape(c.prism_h, 37);
+  h ^= hash_shape(c.upper_h, 41);
+  h ^= hash_shape(c.lower_h, 43);
   h ^= hash_float(c.upper_alpha) * 47;
   h ^= hash_float(c.lower_alpha) * 53;
   for (int i = 0; i < 6; i++) {
-    h ^= hash_float(c.face_distance[i]) * (59 + i);
+    h ^= hash_shape(c.face_distance[i], 59 + i * 3);
   }
   return h;
+}
+
+bool HasActiveShapeRandomization(const CrystalConfig& c) {
+  auto is_random = [](const ShapeDist& d) { return d.type != ShapeDistType::kNoRandom; };
+  // Only the height-family fields the current type actually consumes (mirrors BuildCrystalMeshData's
+  // type branch); face_distance is consumed by both types.
+  if (c.type == CrystalType::kPrism) {
+    if (is_random(c.height)) {
+      return true;
+    }
+  } else {
+    if (is_random(c.prism_h) || is_random(c.upper_h) || is_random(c.lower_h)) {
+      return true;
+    }
+  }
+  for (const auto& fd : c.face_distance) {
+    if (is_random(fd)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void ResetCrystalView() {
@@ -152,25 +180,29 @@ void ApplyTrackballRotation(float dx, float dy) {
   std::memcpy(g_crystal_rotation, tmp, sizeof(g_crystal_rotation));
 }
 
-bool BuildCrystalMeshData(const CrystalConfig& cr, LUMICE_CrystalMesh* out) {
-  char json_buf[512];
-  auto* fd = cr.face_distance;
+bool BuildCrystalMeshData(const CrystalConfig& cr, unsigned long long sample_seed, LUMICE_CrystalMesh* out) {
+  // Preview and simulation now share the same LUMICE_CrystalParam: build it straight from the GUI
+  // config (no stringify → no %.4f precision divergence). Shape fields are first-class ShapeDist,
+  // mapped through ToLumiceDistribution so a randomized shape drives the preview mesh exactly as it
+  // drives the simulator (given the same sample_seed). The axis fields are irrelevant to the
+  // local-frame mesh and left zero-initialized.
+  LUMICE_CrystalParam param{};
+  param.type = (cr.type == CrystalType::kPrism) ? 0 : 1;
   if (cr.type == CrystalType::kPrism) {
-    snprintf(json_buf, sizeof(json_buf),
-             R"({"type":"prism","shape":{"height":%.4f,)"
-             R"("face_distance":[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]}})",
-             cr.height, fd[0], fd[1], fd[2], fd[3], fd[4], fd[5]);
+    param.height = ToLumiceDistribution(cr.height);
   } else {
-    snprintf(json_buf, sizeof(json_buf),
-             R"({"type":"pyramid","shape":{"prism_h":%.4f,"upper_h":%.4f,"lower_h":%.4f,)"
-             R"("upper_wedge_angle":%.4f,"lower_wedge_angle":%.4f,)"
-             R"("face_distance":[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]}})",
-             cr.prism_h, cr.upper_h, cr.lower_h, cr.upper_alpha, cr.lower_alpha, fd[0], fd[1], fd[2], fd[3], fd[4],
-             fd[5]);
+    param.prism_h = ToLumiceDistribution(cr.prism_h);
+    param.upper_h = ToLumiceDistribution(cr.upper_h);
+    param.lower_h = ToLumiceDistribution(cr.lower_h);
+    param.upper_wedge_angle = cr.upper_alpha;  // bare float, not a distribution
+    param.lower_wedge_angle = cr.lower_alpha;
+  }
+  for (int i = 0; i < 6; i++) {
+    param.face_distance[i] = ToLumiceDistribution(cr.face_distance[i]);
   }
 
   *out = {};
-  if (LUMICE_GetCrystalMesh(nullptr, json_buf, out) != LUMICE_OK) {
+  if (LUMICE_GetCrystalMesh(&param, sample_seed, out) != LUMICE_OK) {
     return false;
   }
 
@@ -231,9 +263,9 @@ bool BuildCrystalMeshData(const CrystalConfig& cr, LUMICE_CrystalMesh* out) {
   return true;
 }
 
-int BuildAndUploadCrystalMesh(const CrystalConfig& cr) {
+int BuildAndUploadCrystalMesh(const CrystalConfig& cr, unsigned long long sample_seed) {
   LUMICE_CrystalMesh mesh{};
-  if (!BuildCrystalMeshData(cr, &mesh)) {
+  if (!BuildCrystalMeshData(cr, sample_seed, &mesh)) {
     return 0;
   }
 

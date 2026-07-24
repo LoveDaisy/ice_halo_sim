@@ -16,6 +16,13 @@ extern int g_crystal_mesh_hash;
 
 // Crystal preview helpers
 int CrystalParamHash(const CrystalConfig& c);
+
+// Returns true if the crystal has an active shape-field randomization (any consumed ShapeDist with
+// type != kNoRandom), i.e. the preview mesh would vary with sample_seed. Only the shape fields that
+// the current c.type actually feeds into LUMICE_CrystalParam are checked (kPrism → height; kPyramid
+// → prism_h/upper_h/lower_h), plus face_distance[6] which both types consume. This mirrors the
+// branch in BuildCrystalMeshData so the animation gate never spins on a field the mesh ignores.
+bool HasActiveShapeRandomization(const CrystalConfig& c);
 // Legacy GUI initialization path only; always returns Rx(20°). Any new
 // reset-view logic should use the two-argument overload below with preset +
 // params. Used by main GUI startup and the test harness where no axis preset /
@@ -35,13 +42,26 @@ void ResetCrystalView(AxisPreset preset, const AxisDist params[3]);
 void ResetCrystalViewToCrystal(const CrystalConfig& cr);
 void ApplyTrackballRotation(float dx, float dy);
 
-// Build crystal mesh data from config: JSON construction, LUMICE_GetCrystalMesh, Y-Z swap, AABB normalization.
-// Caller allocates LUMICE_CrystalMesh on stack (fixed-size arrays, no free needed). Returns true on success.
-bool BuildCrystalMeshData(const CrystalConfig& cr, LUMICE_CrystalMesh* out);
+// Fixed preview sample seed. The GUI CrystalConfig shape fields are now first-class distributions,
+// so a randomized shape DOES vary with the seed; this constant deliberately pins the preview to a
+// single deterministic draw (seed 0) so the modal preview and thumbnails stay stable frame-to-frame
+// and match the four tracked crystal reference images. It keeps the call sites (edit_modals.cpp,
+// thumbnail_cache.cpp) on the SAME value rather than each inlining a literal. `inline constexpr`
+// gives one definition across TUs.
+// TODO(gui-preview-animation, gui-shape-randomization): replace with a real, per-frame-varying seed
+// source so the preview animates while a shape distribution is active.
+inline constexpr unsigned long long kPreviewFixedSampleSeed = 0;
 
-// Build crystal mesh from config JSON, apply Y-Z swap and AABB normalization,
+// Build crystal mesh data from config: construct a LUMICE_CrystalParam, sample via
+// LUMICE_GetCrystalMesh, then apply Y-Z swap + AABB normalization. `sample_seed` selects the
+// shape draw (fixed to kPreviewFixedSampleSeed for a stable preview; a randomized shape yields a
+// different but deterministic mesh per seed).
+// Caller allocates LUMICE_CrystalMesh on stack (fixed-size arrays, no free needed). Returns true on success.
+bool BuildCrystalMeshData(const CrystalConfig& cr, unsigned long long sample_seed, LUMICE_CrystalMesh* out);
+
+// Build crystal mesh from config, apply Y-Z swap and AABB normalization,
 // then upload to g_crystal_renderer. Returns the computed param hash, or 0 on failure.
-int BuildAndUploadCrystalMesh(const CrystalConfig& cr);
+int BuildAndUploadCrystalMesh(const CrystalConfig& cr, unsigned long long sample_seed);
 
 // Access the most-recently uploaded crystal mesh (Y-Z swapped + AABB normalized).
 // Returns nullptr if no mesh has been built yet or after ResetLastCrystalMesh().

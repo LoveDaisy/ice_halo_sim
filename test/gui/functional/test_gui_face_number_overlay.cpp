@@ -749,8 +749,13 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
       lumice::gui::ResetLastCrystalMesh();
 
       LUMICE_CrystalMesh mesh{};
-      const char* prism_json = R"({"type": "prism", "shape": {"height": 1.0}})";
-      IM_CHECK_EQ(LUMICE_GetCrystalMesh(nullptr, prism_json, &mesh), LUMICE_OK);
+      LUMICE_CrystalParam prism_param{};
+      prism_param.type = 0;  // prism
+      prism_param.height = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 1.0f, 0.0f };
+      for (auto& fd : prism_param.face_distance) {
+        fd = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 1.0f, 0.0f };
+      }
+      IM_CHECK_EQ(LUMICE_GetCrystalMesh(&prism_param, lumice::gui::kPreviewFixedSampleSeed, &mesh), LUMICE_OK);
       IM_CHECK_GT(mesh.face_count, 0);
 
       FaceLabel labels_old[lumice::gui::kMaxFaceLabels] = {};
@@ -820,7 +825,7 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
 
       for (const auto& c : cases) {
         LUMICE_CrystalMesh mesh{};
-        IM_CHECK(lumice::gui::BuildCrystalMeshData(c.cfg, &mesh));
+        IM_CHECK(lumice::gui::BuildCrystalMeshData(c.cfg, lumice::gui::kPreviewFixedSampleSeed, &mesh));
         IM_CHECK_GT(mesh.face_count, 0);
 
         // Centroid over the GL-frame vertex buffer (already swapped + AABB-
