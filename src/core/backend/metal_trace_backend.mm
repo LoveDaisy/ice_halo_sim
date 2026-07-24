@@ -1359,9 +1359,19 @@ void MetalTraceBackend::Impl::EnsureTriBuffers(size_t tri_cnt) {
   // task-260.5 Step 3: device-gen requires at least one triangle for the
   // area×facing categorical sampler. A zero-count crystal would underflow
   // categorical_sample in gen_root_kernel (n=0 → returns 0xffffffff → OOB
-  // index). Production configs always have tri_cnt > 0; this assert catches
-  // a future scene/config bug at the layer-prep stage rather than as a GPU
-  // hang.
+  // index). This assert catches such a crystal at the layer-prep stage
+  // rather than as a GPU hang.
+  //
+  // NOTE: the original claim here ("Production configs always have tri_cnt
+  // > 0") is FALSE. Under strong shape randomization, MakeCrystal's
+  // closed-form validity gate returns a default-constructed (empty) Crystal
+  // for degenerate face_distance draws — measured ~11.6% hit rate at
+  // face_distance gauss std=0.5 — and that empty Crystal reaches here with
+  // tri_cnt == 0. So this assert fires in Debug on *legitimate* randomized
+  // scenes, not just on a future config bug. Treat tri_cnt == 0 as a
+  // reachable input; the empty-Crystal-tolerance fix (make the device gen
+  // path skip / degrade instead of asserting) is tracked as separate work
+  // and is intentionally out of this change's scope.
   assert(tri_cnt > 0u && "EnsureTriBuffers: tri_cnt == 0 (gen_root_kernel cannot sample)");
   if (tri_cnt <= tri_buf_capacity_) {
     return;
