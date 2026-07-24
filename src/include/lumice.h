@@ -532,9 +532,9 @@ typedef struct LUMICE_RenderParam_ {
 // ScatterLayer / SpectrumEntry / ColorClass) are UNCHANGED and pass in by const pointer — the
 // Scene deep-copies every input value immediately, so the caller's leaf struct may be a stack
 // temporary that is discarded/reused right after the call returns (no "must outlive commit"
-// lifetime reasoning). This first step covers type + lifecycle + leaf writes only; serialization
-// (SceneToJson/FromJson) and commit (CommitScene) are separate follow-up entry points and are NOT
-// declared here yet.
+// lifetime reasoning). Type + lifecycle + leaf writes are joined by the serialization half
+// (SceneToJson / SceneFromJson / SceneFromJsonFile, below); CommitScene remains the only
+// still-missing entry point (a separate follow-up).
 //
 // Coexists with LUMICE_Config: this step adds symbols only; LUMICE_Config and its three commit
 // entry points are byte-for-byte unchanged. LUMICE_API_VERSION is NOT bumped here (no BREAKING
@@ -607,6 +607,32 @@ LUMICE_ErrorCode LUMICE_SceneSetCustomSpectrum(LUMICE_Scene* scene, const LUMICE
 LUMICE_ErrorCode LUMICE_SceneSetSimParams(LUMICE_Scene* scene, int infinite, LUMICE_RayCount ray_num, int max_hits,
                                           int geom_clock);
 LUMICE_ErrorCode LUMICE_SceneSetColorMode(LUMICE_Scene* scene, int raypath_color_mode);
+
+// ---------- Serialization: decoupled from commit ----------
+// These are the JSON authoring half of the handle API and are DELIBERATELY independent of
+// LUMICE_Server: SceneFromJson / SceneFromJsonFile only produce a handle, never commit or
+// re-simulate (that stays the exclusive job of the commit entry points). Round-trip is lossless:
+// SceneFromJson(ToJson(scene)) is semantically equal to the original.
+//
+// SceneToJson serializes `scene` into `out_buf` using the same snprintf-style buffer contract as
+// LUMICE_ConfigToJson: pass out_buf == NULL (or buf_size == 0) to query the length only; on a
+// too-small buffer the output is truncated but always NUL-terminated, and *out_len (when non-NULL)
+// always reports the full, untruncated length. Returns LUMICE_ERR_NULL_ARG for a NULL scene,
+// LUMICE_ERR_INVALID_CONFIG if the scene cannot be serialized (e.g. a Set* call was fed a string
+// that is not valid UTF-8).
+LUMICE_ErrorCode LUMICE_SceneToJson(const LUMICE_Scene* scene, char* out_buf, size_t buf_size, size_t* out_len);
+
+// SceneFromJson / SceneFromJsonFile parse and validate a full scene JSON document and, on success,
+// allocate a brand-new handle written to *out_scene (the caller owns it and MUST eventually pass
+// it to LUMICE_SceneDestroy). On ANY failure *out_scene is set to NULL and no handle is leaked, so
+// the caller never Destroys a handle that was not produced. Validation, soft capacity limits, and
+// error-code semantics are identical to LUMICE_ParseConfigString / LUMICE_ParseConfigFile:
+// LUMICE_ERR_NULL_ARG (NULL json_str/filename or out_scene), LUMICE_ERR_INVALID_JSON (syntax
+// error), LUMICE_ERR_MISSING_FIELD (a required field absent), LUMICE_ERR_INVALID_VALUE /
+// LUMICE_ERR_INVALID_CONFIG (bad enum / value / exceeds a LUMICE_MAX_CONFIG_* soft cap),
+// LUMICE_ERR_FILE_NOT_FOUND (SceneFromJsonFile: file cannot be opened).
+LUMICE_ErrorCode LUMICE_SceneFromJson(const char* json_str, LUMICE_Scene** out_scene);
+LUMICE_ErrorCode LUMICE_SceneFromJsonFile(const char* filename, LUMICE_Scene** out_scene);
 
 // BREAKING (v4.4): added spectrum_entries[]/spectrum_count for custom discrete spectrum.
 // Layout changed; callers must recompile against this header. spectrum_count > 0 selects the

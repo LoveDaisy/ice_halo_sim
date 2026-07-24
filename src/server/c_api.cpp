@@ -953,6 +953,34 @@ const nlohmann::json& SceneRoot(const LUMICE_Scene* scene) {
 }
 
 
+// ---------- Serialization: decoupled from commit ----------
+// SceneToJson lives in the Scene section because it only depends on scene->root (no JsonToConfig).
+// It mirrors LUMICE_ConfigToJson's buffer contract exactly. root.dump() can throw type_error if a
+// Set* stored a non-UTF-8 string (SetLightSource/SetCustomSpectrum take an unvalidated const char*),
+// so the dump is guarded — the exception must not cross the C ABI boundary.
+LUMICE_ErrorCode LUMICE_SceneToJson(const LUMICE_Scene* scene, char* out_buf, size_t buf_size, size_t* out_len) {
+  if (!scene) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  std::string json_str;
+  try {
+    json_str = scene->root.dump();
+  } catch (const std::exception& e) {
+    LOG_ERROR("LUMICE_SceneToJson: failed to serialize scene: {}", e.what());
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  if (out_len) {
+    *out_len = json_str.size();
+  }
+  if (out_buf && buf_size > 0) {
+    size_t n = std::min(json_str.size(), buf_size - 1);
+    std::memcpy(out_buf, json_str.data(), n);
+    out_buf[n] = '\0';
+  }
+  return LUMICE_OK;
+}
+
+
 // Display-time color update: see doc/capi-lifecycle-architecture.md §4 / §6.4.
 // task-342.2: does NOT restart the simulation — accumulator, epoch, and consumers are
 // untouched. Only the next Get*Results call re-composites with the new appearance.
@@ -2049,6 +2077,85 @@ LUMICE_ErrorCode LUMICE_ParseConfigFile(const char* filename, LUMICE_Config* out
   try {
     auto root = nlohmann::json::parse(file);
     return JsonToConfig(root, out);
+  } catch (const nlohmann::json::parse_error&) {
+    return LUMICE_ERR_INVALID_JSON;
+  } catch (const nlohmann::json::exception&) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+}
+
+
+// ---------- Serialization: decoupled from commit (JSON -> new Scene) ----------
+// JsonToScene reuses the established JsonToConfig validator (single source of truth — no parallel
+// JSON reader that could drift from it) by parsing into a temporary LUMICE_Config, then re-encodes
+// that struct via ConfigToJson into the new handle's root. It NEVER touches LUMICE_Server: this is
+// the serialization half of the handle API, deliberately independent of commit/re-sim.
+//
+// The temporary LUMICE_Config is heap-allocated (it is large; this scrum's history includes a real
+// 512 KB stack overflow from an oversized on-stack LUMICE_Config). Its owning heap fields
+// (raypath_color, compositions[].term_ids/term_counts) are freed on EVERY return path by the
+// custom deleter — JsonToConfig may leave them partially allocated when it fails mid-parse (same
+// hazard JsonToConfig itself guards against with its memset-before-Release entry).
+namespace {
+struct ConfigDeleter {
+  void operator()(LUMICE_Config* cfg) const {
+    if (cfg) {
+      LUMICE_ConfigReleaseColorClasses(cfg);
+      LUMICE_ConfigReleaseCompositions(cfg);
+      delete cfg;
+    }
+  }
+};
+}  // namespace
+
+static LUMICE_ErrorCode JsonToScene(const nlohmann::json& root, LUMICE_Scene** out_scene) {
+  *out_scene = nullptr;  // contract: *out_scene is NULL on any failure, no handle to Destroy
+  std::unique_ptr<LUMICE_Config, ConfigDeleter> tmp(new LUMICE_Config());
+  auto err = JsonToConfig(root, tmp.get());
+  if (err != LUMICE_OK) {
+    return err;
+  }
+  try {
+    *out_scene = new LUMICE_Scene_{ ConfigToJson(*tmp) };
+  } catch (const std::exception& e) {
+    LOG_ERROR("LUMICE_SceneFromJson: failed to re-encode parsed config: {}", e.what());
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_SceneFromJson(const char* json_str, LUMICE_Scene** out_scene) {
+  if (!json_str || !out_scene) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  *out_scene = nullptr;
+
+  try {
+    auto root = nlohmann::json::parse(json_str);
+    return JsonToScene(root, out_scene);
+  } catch (const nlohmann::json::parse_error&) {
+    return LUMICE_ERR_INVALID_JSON;
+  } catch (const nlohmann::json::exception&) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+}
+
+
+LUMICE_ErrorCode LUMICE_SceneFromJsonFile(const char* filename, LUMICE_Scene** out_scene) {
+  if (!filename || !out_scene) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  *out_scene = nullptr;
+
+  std::ifstream file(lumice::PathFromU8(filename));
+  if (!file.is_open()) {
+    return LUMICE_ERR_FILE_NOT_FOUND;
+  }
+
+  try {
+    auto root = nlohmann::json::parse(file);
+    return JsonToScene(root, out_scene);
   } catch (const nlohmann::json::parse_error&) {
     return LUMICE_ERR_INVALID_JSON;
   } catch (const nlohmann::json::exception&) {
