@@ -872,6 +872,41 @@ CRYSTAL_VECTOR_DECL = re.compile(r"std::vector\s*<\s*Crystal\s*>\s*&?\s*([A-Za-z
 CRYSTAL_VECTOR_DEFAULT_FILL = ("resize", "assign")
 
 
+def _paren_inner(tail_after_open_paren: str) -> str:
+    """Text between an already-consumed `(` and its depth-matched `)`.
+
+    Tracks nesting depth (rather than a naive first-`)` scan) so a nested
+    call inside the argument list — as either the whole sole argument
+    (`resize(ComputeCount(w, h))`) or a later argument
+    (`v(a.begin(), a.end())`) — does not end the scan early.
+    """
+    depth = 1
+    for i, ch in enumerate(tail_after_open_paren):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return tail_after_open_paren[:i]
+    return tail_after_open_paren
+
+
+def _has_top_level_comma(inner: str) -> bool:
+    """True if `inner` (already extracted via `_paren_inner`) has a comma at
+    its own nesting depth 0 — i.e. a real second argument, not one belonging
+    to a nested call that is itself a single argument.
+    """
+    depth = 0
+    for ch in inner:
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            return True
+    return False
+
+
 def check_no_default_constructed_crystal_slots() -> list[Violation]:
     """Flag `std::vector<Crystal>` sites that materialise default-constructed
     elements (single-argument `resize`/`assign`, count-ctor, no-arg
@@ -899,14 +934,26 @@ def check_no_default_constructed_crystal_slots() -> list[Violation]:
         if not names:
             continue
         # A count-ctor on the declaration line itself: `std::vector<Crystal> v(n);`
-        # is the same hazard spelled differently. `v(a, b)` (iterator range) and
-        # `v(other)` (copy) are fine, so only a single non-empty argument counts.
+        # is the same hazard spelled differently. Excluded as safe: `v(a, b)`
+        # (iterator range — comma present); `v(other)` where `other` is another
+        # known `std::vector<Crystal>` name (copy-ctor); and any argument
+        # containing whitespace, which is either an expression (`v(w * h)`,
+        # conservatively treated as out of scope for this text-only check) or,
+        # critically, a `type name` pair — because at this parsing depth a
+        # function *declaration* (`std::vector<Crystal> Build(int n);`) is
+        # indistinguishable from a variable declaration, and only the real
+        # count-ctor's argument is guaranteed to be whitespace-free.
         for lineno, _orig, code in lines:
             for m in CRYSTAL_VECTOR_DECL.finditer(code):
                 tail = code[m.end():].lstrip()
                 if tail.startswith("(") and not tail.startswith("()"):
-                    inner = tail[1: tail.find(")")] if ")" in tail else ""
-                    if inner.strip() and "," not in inner:
+                    inner = _paren_inner(tail[1:]).strip()
+                    if (
+                        inner
+                        and not _has_top_level_comma(inner)
+                        and not re.search(r"\s", inner)
+                        and inner not in names
+                    ):
                         out.append(
                             Violation(
                                 path,
@@ -922,15 +969,18 @@ def check_no_default_constructed_crystal_slots() -> list[Violation]:
         # with real values and are safe; only the single-argument forms
         # (`resize(n)`; `assign(n)` isn't even valid C++, but a stray
         # single-argument call is still worth flagging) materialise defaults.
+        # No whitespace-based exclusion here (unlike the count-ctor branch
+        # above): a `name.resize(...)` call can never be mistaken for a
+        # function declaration, so an expression argument (`resize(w * h)`)
+        # is still the real hazard and must stay flagged.
         for lineno, _orig, code in lines:
             for name in names:
                 for op in CRYSTAL_VECTOR_DEFAULT_FILL:
                     m = re.search(rf"\b{re.escape(name)}\s*\.\s*{op}\s*\(", code)
                     if not m:
                         continue
-                    tail = code[m.end():]
-                    inner = tail[: tail.find(")")] if ")" in tail else tail
-                    if inner.strip() and "," not in inner:
+                    inner = _paren_inner(code[m.end():])
+                    if inner.strip() and not _has_top_level_comma(inner):
                         out.append(
                             Violation(
                                 path,
