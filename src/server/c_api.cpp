@@ -338,6 +338,180 @@ nlohmann::json CrystalShapeToJson(const LUMICE_CrystalParam& cr) {
   return j;
 }
 
+// Per-item wire encoders — the single source of truth for each subsystem's JSON shape, shared
+// by both the batch path (ConfigToJson below) and the incremental Scene path (LUMICE_SceneAdd*).
+// Splitting ConfigToJson's formerly-inline loops into these keeps the two paths from drifting;
+// the caller owns id assignment (ConfigToJson passes the struct's .id; the Scene passes its own
+// sequential id). These throw std::invalid_argument on an invalid item — the batch caller wraps
+// the whole ConfigToJson in try/catch, the Scene callers wrap each Add in try/catch.
+
+// Full crystal object: {"type","shape",...} from CrystalShapeToJson plus id + axis distributions.
+static nlohmann::json CrystalToJson(const LUMICE_CrystalParam& cr, int id) {
+  nlohmann::json j = CrystalShapeToJson(cr);  // {"type","shape"} single-source translation
+  j["id"] = id;
+  j["axis"]["zenith"] = DistributionToJson(cr.zenith);
+  j["axis"]["azimuth"] = DistributionToJson(cr.azimuth);
+  j["axis"]["roll"] = DistributionToJson(cr.roll);
+  return j;
+}
+
+// Encode the type-specific arm fields of a SIMPLE filter (none/raypath/entry_exit/direction/
+// crystal) into `j`. Does NOT write id/action/symmetry — those are common fields the caller
+// writes around this. Throws for COMPLEX (needs composition context — caller handles it) and for
+// UNSET/out-of-range (the zero-init guard). Mirrors core config/filter_config.cpp::to_json.
+// SYNC: the per-type field list here mirrors the parse side in JsonToFilter; adding/removing a
+// filter type or field requires updating both.
+static void EncodeSimpleFilterBody(const LUMICE_FilterParam& f, nlohmann::json& j) {
+  switch (f.type) {
+    case LUMICE_FILTER_TYPE_NONE:
+      j["type"] = "none";
+      break;
+    case LUMICE_FILTER_TYPE_RAYPATH: {
+      j["type"] = "raypath";
+      nlohmann::json rp = nlohmann::json::array();
+      for (int k = 0; k < f.raypath_count; k++) {
+        rp.push_back(f.raypath[k]);
+      }
+      j["raypath"] = rp;
+      break;
+    }
+    case LUMICE_FILTER_TYPE_ENTRY_EXIT:
+      j["type"] = "entry_exit";
+      if (f.ee_entry >= 0) {
+        j["entry"] = f.ee_entry;
+      }
+      if (f.ee_exit >= 0) {
+        j["exit"] = f.ee_exit;
+      }
+      if (f.ee_min_len > 1) {
+        j["min_len"] = f.ee_min_len;
+      }
+      if (f.ee_max_len >= 0) {
+        j["max_len"] = f.ee_max_len;
+      }
+      break;
+    case LUMICE_FILTER_TYPE_DIRECTION:
+      j["type"] = "direction";
+      j["az"] = f.dir_az;
+      j["el"] = f.dir_el;
+      j["radii"] = f.dir_radii;
+      break;
+    case LUMICE_FILTER_TYPE_CRYSTAL:
+      j["type"] = "crystal";
+      j["crystal_id"] = f.crystal_id;
+      break;
+    case LUMICE_FILTER_TYPE_COMPLEX:
+      // A complex filter cannot be encoded from the LUMICE_FilterParam alone — it needs its
+      // composition. ConfigToJson handles COMPLEX before reaching here; LUMICE_SceneAddFilter
+      // rejects it (the caller must use LUMICE_SceneAddComplexFilter).
+      throw std::invalid_argument("complex filter cannot be encoded as a simple filter: " + std::to_string(f.type));
+    default:
+      // UNSET (zero-init guard) or an out-of-range discriminant: fail fast rather than silently
+      // emitting a wrong/empty filter.
+      throw std::invalid_argument("LUMICE_FilterParam.type is unset or invalid: " + std::to_string(f.type));
+  }
+}
+
+// Encode a complex filter's sum-of-products composition as the wire "composition" array: each
+// clause is a bare id (1 term) or an array of ids (multi-term), mirroring core to_json.
+static nlohmann::json CompositionArrayToJson(const LUMICE_ComplexComposition& comp) {
+  nlohmann::json composition = nlohmann::json::array();
+  for (int cl = 0; cl < comp.clause_count; cl++) {
+    int term_n = 0;
+    const int* terms_p = LUMICE_CompositionClauseTerms(&comp, cl, &term_n);
+    if (term_n == 1 && terms_p != nullptr) {
+      composition.push_back(terms_p[0]);
+    } else {
+      nlohmann::json terms = nlohmann::json::array();
+      for (int t = 0; t < term_n; t++) {
+        terms.push_back(terms_p[t]);
+      }
+      composition.push_back(terms);
+    }
+  }
+  return composition;
+}
+
+// Full renderer object. Core always produces dual equal-area fisheye texture (full-globe); the
+// GUI shader reprojects to the user's display projection. Caller owns the id.
+static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
+  nlohmann::json jr;
+  jr["id"] = id;
+  jr["lens"]["type"] = "dual_fisheye_equal_area";
+  jr["lens"]["fov"] = 180.0f;
+  jr["resolution"] = { r.resolution_w, r.resolution_h };
+  jr["view"]["elevation"] = 0.0f;
+  jr["view"]["azimuth"] = 0.0f;
+  jr["view"]["roll"] = 0.0f;
+  jr["visible"] = "full";
+  jr["background"] = { 0.0f, 0.0f, 0.0f };
+  jr["opacity"] = r.opacity;
+  jr["intensity_factor"] = r.intensity_factor;
+  jr["overlap"] = r.overlap;
+  return jr;
+}
+
+// One scattering layer: {"prob", "entries":[{"crystal","proportion"[,"filter"]}]}.
+static nlohmann::json ScatterLayerToJson(const LUMICE_ScatterLayer& layer) {
+  nlohmann::json jl;
+  jl["prob"] = layer.probability;
+  jl["entries"] = nlohmann::json::array();
+  for (int k = 0; k < layer.entry_count; k++) {
+    const auto& e = layer.entries[k];
+    nlohmann::json je;
+    je["crystal"] = e.crystal_id >= 0 ? e.crystal_id : 1;
+    je["proportion"] = e.proportion;
+    if (e.filter_id >= 0) {
+      je["filter"] = e.filter_id;
+    }
+    jl["entries"].push_back(je);
+  }
+  return jl;
+}
+
+// One raypath color class. combine/visible/solo emitted only when non-default (mirrors core
+// to_json). Throws on an invalid combine or an invalid match predicate.
+static nlohmann::json ColorClassToJson(const LUMICE_ColorClass& cls) {
+  nlohmann::json jc;
+  jc["color"] = { cls.color[0], cls.color[1], cls.color[2] };
+  if (cls.combine == LUMICE_COLOR_COMBINE_ALL) {
+    jc["combine"] = "all";
+  } else if (cls.combine != LUMICE_COLOR_COMBINE_ANY) {
+    throw std::invalid_argument("LUMICE_ColorClass.combine is invalid: " + std::to_string(cls.combine));
+  }
+  if (!cls.visible) {
+    jc["visible"] = false;
+  }
+  if (cls.solo) {
+    jc["solo"] = true;
+  }
+  nlohmann::json match = nlohmann::json::array();
+  for (int k = 0; k < cls.match_count; k++) {
+    const auto& ref = cls.match[k];
+    nlohmann::json jr;
+    jr["layer"] = ref.layer;
+    jr["crystal"] = ref.crystal;
+    ColorPredicateToJson(ref.predicate, jr);
+    match.push_back(jr);
+  }
+  jc["match"] = match;
+  return jc;
+}
+
+// Map LUMICE_COLOR_MODE_* to its wire string. Throws std::invalid_argument on an invalid mode.
+static const char* ColorModeToString(int mode) {
+  switch (mode) {
+    case LUMICE_COLOR_MODE_DOMINANT:
+      return "dominant";
+    case LUMICE_COLOR_MODE_ADDITIVE:
+      return "additive";
+    case LUMICE_COLOR_MODE_PAINTER:
+      return "painter";
+    default:
+      throw std::invalid_argument("raypath_color_mode is invalid: " + std::to_string(mode));
+  }
+}
+
 // Non-static (declared in server/c_api_internal.hpp) so unit tests can assert the
 // emitted filter JSON shape field by field. See that header for rationale.
 nlohmann::json ConfigToJson(const LUMICE_Config& c) {
@@ -347,13 +521,7 @@ nlohmann::json ConfigToJson(const LUMICE_Config& c) {
   // Crystals
   root["crystal"] = json::array();
   for (int i = 0; i < c.crystal_count; i++) {
-    const auto& cr = c.crystals[i];
-    json j = CrystalShapeToJson(cr);  // {"type","shape"} single-source translation
-    j["id"] = cr.id;
-    j["axis"]["zenith"] = DistributionToJson(cr.zenith);
-    j["axis"]["azimuth"] = DistributionToJson(cr.azimuth);
-    j["axis"]["roll"] = DistributionToJson(cr.roll);
-    root["crystal"].push_back(j);
+    root["crystal"].push_back(CrystalToJson(c.crystals[i], c.crystals[i].id));
   }
 
   // Filters
@@ -364,78 +532,19 @@ nlohmann::json ConfigToJson(const LUMICE_Config& c) {
     j["id"] = f.id;
     j["action"] = f.action == 0 ? "filter_in" : "filter_out";
 
-    // Type-specific fields. Mirrors core config/filter_config.cpp::to_json so that
-    // server->CommitConfig(json) -> from_json consumes the output losslessly.
-    // SYNC: the per-type field list here mirrors the parse side in JsonToFilter (below);
-    // adding/removing a filter type or field requires updating both.
-    switch (f.type) {
-      case LUMICE_FILTER_TYPE_NONE:
-        j["type"] = "none";
-        break;
-      case LUMICE_FILTER_TYPE_RAYPATH: {
-        j["type"] = "raypath";
-        json rp = json::array();
-        for (int k = 0; k < f.raypath_count; k++) {
-          rp.push_back(f.raypath[k]);
-        }
-        j["raypath"] = rp;
-        break;
+    // COMPLEX resolves its composition from this config's compositions[] pool (the Scene path
+    // gets it directly via LUMICE_SceneAddComplexFilter). Simple arms defer to the shared
+    // encoder. The zero-init guard / invalid-type throw lives in EncodeSimpleFilterBody, which
+    // LUMICE_CommitConfigStruct's try/catch maps to LUMICE_ERR_INVALID_CONFIG.
+    if (f.type == LUMICE_FILTER_TYPE_COMPLEX) {
+      j["type"] = "complex";
+      if (f.composition_index < 0 || f.composition_index >= c.composition_count) {
+        throw std::invalid_argument("LUMICE_FilterParam.composition_index out of range: " +
+                                    std::to_string(f.composition_index));
       }
-      case LUMICE_FILTER_TYPE_ENTRY_EXIT:
-        j["type"] = "entry_exit";
-        if (f.ee_entry >= 0) {
-          j["entry"] = f.ee_entry;
-        }
-        if (f.ee_exit >= 0) {
-          j["exit"] = f.ee_exit;
-        }
-        if (f.ee_min_len > 1) {
-          j["min_len"] = f.ee_min_len;
-        }
-        if (f.ee_max_len >= 0) {
-          j["max_len"] = f.ee_max_len;
-        }
-        break;
-      case LUMICE_FILTER_TYPE_DIRECTION:
-        j["type"] = "direction";
-        j["az"] = f.dir_az;
-        j["el"] = f.dir_el;
-        j["radii"] = f.dir_radii;
-        break;
-      case LUMICE_FILTER_TYPE_CRYSTAL:
-        j["type"] = "crystal";
-        j["crystal_id"] = f.crystal_id;
-        break;
-      case LUMICE_FILTER_TYPE_COMPLEX: {
-        j["type"] = "complex";
-        if (f.composition_index < 0 || f.composition_index >= c.composition_count) {
-          throw std::invalid_argument("LUMICE_FilterParam.composition_index out of range: " +
-                                      std::to_string(f.composition_index));
-        }
-        const auto& comp = c.compositions[f.composition_index];
-        json composition = json::array();
-        for (int cl = 0; cl < comp.clause_count; cl++) {
-          // Mirror core to_json: a 1-term clause emits a bare id; a multi-term clause an array.
-          int term_n = 0;
-          const int* terms_p = LUMICE_CompositionClauseTerms(&comp, cl, &term_n);
-          if (term_n == 1 && terms_p != nullptr) {
-            composition.push_back(terms_p[0]);
-          } else {
-            json terms = json::array();
-            for (int t = 0; t < term_n; t++) {
-              terms.push_back(terms_p[t]);
-            }
-            composition.push_back(terms);
-          }
-        }
-        j["composition"] = composition;
-        break;
-      }
-      default:
-        // UNSET (zero-init guard) or an out-of-range discriminant: fail fast rather
-        // than silently emitting a wrong/empty filter. Caller LUMICE_CommitConfigStruct
-        // wraps this in try/catch and maps it to LUMICE_ERR_INVALID_CONFIG.
-        throw std::invalid_argument("LUMICE_FilterParam.type is unset or invalid: " + std::to_string(f.type));
+      j["composition"] = CompositionArrayToJson(c.compositions[f.composition_index]);
+    } else {
+      EncodeSimpleFilterBody(f, j);
     }
 
     // symmetry is a common FilterConfig field (see core filter_config.cpp::to_json, which
@@ -480,21 +589,7 @@ nlohmann::json ConfigToJson(const LUMICE_Config& c) {
 
   scene["scattering"] = json::array();
   for (int i = 0; i < c.scatter_count; i++) {
-    const auto& layer = c.scattering[i];
-    json jl;
-    jl["prob"] = layer.probability;
-    jl["entries"] = json::array();
-    for (int k = 0; k < layer.entry_count; k++) {
-      const auto& e = layer.entries[k];
-      json je;
-      je["crystal"] = e.crystal_id >= 0 ? e.crystal_id : 1;
-      je["proportion"] = e.proportion;
-      if (e.filter_id >= 0) {
-        je["filter"] = e.filter_id;
-      }
-      jl["entries"].push_back(je);
-    }
-    scene["scattering"].push_back(jl);
+    scene["scattering"].push_back(ScatterLayerToJson(c.scattering[i]));
   }
   root["scene"] = scene;
 
@@ -502,21 +597,7 @@ nlohmann::json ConfigToJson(const LUMICE_Config& c) {
   // GUI shader reprojects from this format to the user's display projection.
   root["render"] = json::array();
   for (int i = 0; i < c.renderer_count; i++) {
-    const auto& r = c.renderers[i];
-    json jr;
-    jr["id"] = r.id;
-    jr["lens"]["type"] = "dual_fisheye_equal_area";
-    jr["lens"]["fov"] = 180.0f;
-    jr["resolution"] = { r.resolution_w, r.resolution_h };
-    jr["view"]["elevation"] = 0.0f;
-    jr["view"]["azimuth"] = 0.0f;
-    jr["view"]["roll"] = 0.0f;
-    jr["visible"] = "full";
-    jr["background"] = { 0.0f, 0.0f, 0.0f };
-    jr["opacity"] = r.opacity;
-    jr["intensity_factor"] = r.intensity_factor;
-    jr["overlap"] = r.overlap;
-    root["render"].push_back(jr);
+    root["render"].push_back(RendererToJson(c.renderers[i], c.renderers[i].id));
   }
 
   // Raypath color classes (task-342.2). Only emit when non-empty so the mono/no-color case
@@ -525,59 +606,352 @@ nlohmann::json ConfigToJson(const LUMICE_Config& c) {
   // the bare-array (dominant-only) and object shapes, so emitting the object form does not
   // constrain the reader; it simplifies the emit path (no mode string comparison branch).
   if (c.raypath_color_count > 0) {
-    const char* mode_str = "dominant";
-    switch (c.raypath_color_mode) {
-      case LUMICE_COLOR_MODE_DOMINANT:
-        mode_str = "dominant";
-        break;
-      case LUMICE_COLOR_MODE_ADDITIVE:
-        mode_str = "additive";
-        break;
-      case LUMICE_COLOR_MODE_PAINTER:
-        mode_str = "painter";
-        break;
-      default:
-        throw std::invalid_argument("LUMICE_Config.raypath_color_mode is invalid: " +
-                                    std::to_string(c.raypath_color_mode));
-    }
     nlohmann::json classes = nlohmann::json::array();
     for (int i = 0; i < c.raypath_color_count; i++) {
-      const auto& cls = c.raypath_color[i];
-      nlohmann::json jc;
-      jc["color"] = { cls.color[0], cls.color[1], cls.color[2] };
-      // Mirror core to_json: combine/visible/solo emitted only when non-default (any/true/false).
-      // any is the default; only emit "combine":"all" when explicitly set.
-      if (cls.combine == LUMICE_COLOR_COMBINE_ALL) {
-        jc["combine"] = "all";
-      } else if (cls.combine != LUMICE_COLOR_COMBINE_ANY) {
-        throw std::invalid_argument("LUMICE_ColorClass.combine is invalid: " + std::to_string(cls.combine));
-      }
-      if (!cls.visible) {
-        jc["visible"] = false;
-      }
-      if (cls.solo) {
-        jc["solo"] = true;
-      }
-      nlohmann::json match = nlohmann::json::array();
-      for (int k = 0; k < cls.match_count; k++) {
-        const auto& ref = cls.match[k];
-        nlohmann::json jr;
-        jr["layer"] = ref.layer;
-        jr["crystal"] = ref.crystal;
-        ColorPredicateToJson(ref.predicate, jr);
-        match.push_back(jr);
-      }
-      jc["match"] = match;
-      classes.push_back(jc);
+      classes.push_back(ColorClassToJson(c.raypath_color[i]));
     }
     nlohmann::json rc;
-    rc["mode"] = mode_str;
+    rc["mode"] = ColorModeToString(c.raypath_color_mode);
     rc["classes"] = classes;
     root["raypath_color"] = rc;
   }
 
   return root;
 }
+
+// =============== Scene (opaque handle) ===============
+// LUMICE_Scene_ wraps an nlohmann::json `root` that is byte-isomorphic with the config wire
+// format ConfigToJson emits (root["crystal"]/["filter"]/["scene"]/["render"]/["raypath_color"]).
+// The Add*/Set* family reuses the SAME per-item encoders as ConfigToJson (single source), just
+// one item at a time. Lifecycle mirrors LUMICE_Server_ (new/delete); the json copy constructor
+// is a deep copy, so SceneClone is a one-liner with no hand-written field copying.
+struct LUMICE_Scene_ {
+  nlohmann::json root;
+};
+
+// Empty-scene skeleton: the same shape ConfigToJson emits for a zero-initialized LUMICE_Config,
+// minus the optional raypath_color (absent until SetColorMode/AddColorClass — the same
+// "count == 0 → omit the key" isomorphism the batch path keeps). Scene scalars default to a
+// default config's values; Set* overwrites them.
+static nlohmann::json MakeEmptySceneRoot() {
+  nlohmann::json root;
+  root["crystal"] = nlohmann::json::array();
+  root["filter"] = nlohmann::json::array();
+  nlohmann::json scene;
+  scene["light_source"]["type"] = "sun";
+  scene["light_source"]["altitude"] = 0.0f;
+  scene["light_source"]["azimuth"] = 0.0f;
+  scene["light_source"]["diameter"] = 0.0f;
+  scene["light_source"]["spectrum"] = "D65";
+  scene["ray_num"] = static_cast<LUMICE_RayCount>(0);
+  scene["max_hits"] = 0;
+  scene["scattering"] = nlohmann::json::array();
+  root["scene"] = scene;
+  root["render"] = nlohmann::json::array();
+  return root;
+}
+
+// Create root["raypath_color"] = {"mode": <core default>, "classes": []} if absent, so mode and
+// classes always coexist once either SetColorMode or AddColorClass has touched the color path.
+// The key stays entirely absent until then (matches ConfigToJson's "raypath_color_count == 0 →
+// omit" byte-isomorphism). Uses the SAME core single-source default the batch reader falls back
+// to (ns::kDefaultCompositeMode).
+static void EnsureRaypathColor(nlohmann::json& root) {
+  if (!root.contains("raypath_color")) {
+    nlohmann::json rc;
+    rc["mode"] = ns::kDefaultCompositeMode;
+    rc["classes"] = nlohmann::json::array();
+    root["raypath_color"] = rc;
+  }
+}
+
+// ---------- Lifecycle ----------
+LUMICE_Scene* LUMICE_SceneCreate(void) {
+  // Build the skeleton first so a throw (bad_alloc) leaks nothing.
+  return new LUMICE_Scene_{ MakeEmptySceneRoot() };
+}
+
+
+LUMICE_Scene* LUMICE_SceneClone(const LUMICE_Scene* scene) {
+  if (!scene) {
+    return nullptr;
+  }
+  // nlohmann::json's copy constructor deep-copies the whole tree — no aliasing with the source.
+  return new LUMICE_Scene_(*scene);
+}
+
+
+void LUMICE_SceneDestroy(LUMICE_Scene* scene) {
+  delete scene;  // delete nullptr is a no-op (NULL-safe, same as LUMICE_DestroyServer)
+}
+
+
+// ---------- Incremental build: Add* ----------
+LUMICE_ErrorCode LUMICE_SceneAddCrystal(LUMICE_Scene* scene, const LUMICE_CrystalParam* crystal, int* out_id) {
+  if (!scene || !crystal || !out_id) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  auto& arr = scene->root["crystal"];
+  if (arr.size() >= LUMICE_MAX_CONFIG_CRYSTALS) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  const int id = static_cast<int>(arr.size());
+  // Encode into a temporary first: any throw leaves the scene untouched (no partial write).
+  nlohmann::json j;
+  try {
+    j = CrystalToJson(*crystal, id);
+  } catch (const std::exception& e) {
+    LOG_ERROR("LUMICE_SceneAddCrystal: invalid crystal: {}", e.what());
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  arr.push_back(std::move(j));
+  *out_id = id;
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_SceneAddFilter(LUMICE_Scene* scene, const LUMICE_FilterParam* filter, int* out_id) {
+  if (!scene || !filter || !out_id) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  auto& arr = scene->root["filter"];
+  if (arr.size() >= LUMICE_MAX_CONFIG_FILTERS) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  // Defensive bound on the fixed-size raypath[] the struct carries (ConfigToJson trusts this;
+  // the Scene validates at Add-time so an out-of-range count returns an error, not an OOB read).
+  if (filter->type == LUMICE_FILTER_TYPE_RAYPATH &&
+      (filter->raypath_count < 0 || filter->raypath_count > LUMICE_MAX_CONFIG_RAYPATH_LEN)) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  const int id = static_cast<int>(arr.size());
+  nlohmann::json j;
+  j["id"] = id;
+  j["action"] = filter->action == 0 ? "filter_in" : "filter_out";
+  try {
+    // EncodeSimpleFilterBody rejects COMPLEX (use SceneAddComplexFilter) and UNSET/invalid.
+    EncodeSimpleFilterBody(*filter, j);
+  } catch (const std::exception& e) {
+    LOG_ERROR("LUMICE_SceneAddFilter: invalid filter: {}", e.what());
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  j["symmetry"] = SymmetryBitsToString(filter->symmetry);
+  arr.push_back(std::move(j));
+  *out_id = id;
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_SceneAddComplexFilter(LUMICE_Scene* scene, const LUMICE_FilterParam* filter,
+                                              const LUMICE_ComplexComposition* composition, int* out_id) {
+  if (!scene || !filter || !composition || !out_id) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  auto& arr = scene->root["filter"];
+  if (arr.size() >= LUMICE_MAX_CONFIG_FILTERS) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  // Validate the composition storage before writing anything (mirrors LUMICE_CommitConfigStruct's
+  // clause/term bounds + null-pointer defense). term_ids may legitimately be null iff every
+  // clause has 0 terms (total_terms == 0) — see LUMICE_CompositionSetClauses.
+  const auto& comp = *composition;
+  if (comp.clause_count < 0 || comp.clause_count > LUMICE_MAX_CONFIG_CLAUSES) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  if (comp.clause_count > 0 && comp.term_counts == nullptr) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  size_t total_terms = 0;
+  for (int cl = 0; cl < comp.clause_count; cl++) {
+    if (comp.term_counts[cl] < 0 || comp.term_counts[cl] > LUMICE_MAX_CONFIG_TERMS) {
+      return LUMICE_ERR_INVALID_CONFIG;
+    }
+    total_terms += static_cast<size_t>(comp.term_counts[cl]);
+  }
+  if (total_terms > 0 && comp.term_ids == nullptr) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  const int id = static_cast<int>(arr.size());
+  nlohmann::json j;
+  j["id"] = id;
+  j["action"] = filter->action == 0 ? "filter_in" : "filter_out";
+  j["type"] = "complex";
+  // Deep-copy the composition into the JSON now: term_ids/term_counts are read and encoded, so
+  // the caller's LUMICE_ComplexComposition may be released/reused right after this returns.
+  j["composition"] = CompositionArrayToJson(comp);
+  j["symmetry"] = SymmetryBitsToString(filter->symmetry);
+  arr.push_back(std::move(j));
+  *out_id = id;
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_SceneAddRenderer(LUMICE_Scene* scene, const LUMICE_RenderParam* renderer, int* out_id) {
+  if (!scene || !renderer || !out_id) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  auto& arr = scene->root["render"];
+  if (arr.size() >= LUMICE_MAX_CONFIG_RENDERERS) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  const int id = static_cast<int>(arr.size());
+  arr.push_back(RendererToJson(*renderer, id));
+  *out_id = id;
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_SceneAddScatterLayer(LUMICE_Scene* scene, const LUMICE_ScatterLayer* layer, int* out_id) {
+  if (!scene || !layer || !out_id) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  if (layer->entry_count < 0 || layer->entry_count > LUMICE_MAX_CONFIG_SCATTER_ENTRIES) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  auto& scene_j = scene->root["scene"];
+  // The skeleton always seeds an empty scattering array; guard defensively in case a scene built
+  // by a future FromJson path lacks it.
+  if (!scene_j.contains("scattering") || !scene_j["scattering"].is_array()) {
+    scene_j["scattering"] = nlohmann::json::array();
+  }
+  auto& arr = scene_j["scattering"];
+  if (arr.size() >= LUMICE_MAX_CONFIG_SCATTER_LAYERS) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  const int id = static_cast<int>(arr.size());
+  arr.push_back(ScatterLayerToJson(*layer));
+  *out_id = id;
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_SceneAddColorClass(LUMICE_Scene* scene, const LUMICE_ColorClass* color_class, int* out_id) {
+  if (!scene || !color_class || !out_id) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  if (color_class->match_count < 0 || color_class->match_count > LUMICE_MAX_CONFIG_COLOR_REFS) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  // Encode first (throws on invalid combine / predicate) so a failure leaves the scene untouched
+  // — do NOT create the raypath_color key before this succeeds.
+  nlohmann::json jc;
+  try {
+    jc = ColorClassToJson(*color_class);
+  } catch (const std::exception& e) {
+    LOG_ERROR("LUMICE_SceneAddColorClass: invalid color class: {}", e.what());
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  // Soft cap check must peek at the current class count WITHOUT creating the key.
+  int existing = 0;
+  if (scene->root.contains("raypath_color") && scene->root["raypath_color"].contains("classes")) {
+    existing = static_cast<int>(scene->root["raypath_color"]["classes"].size());
+  }
+  if (existing >= LUMICE_MAX_CONFIG_COLOR_CLASSES) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  EnsureRaypathColor(scene->root);
+  auto& arr = scene->root["raypath_color"]["classes"];
+  const int id = static_cast<int>(arr.size());
+  arr.push_back(std::move(jc));
+  *out_id = id;
+  return LUMICE_OK;
+}
+
+
+// ---------- Scalar / whole-group settings: Set* ----------
+LUMICE_ErrorCode LUMICE_SceneSetLightSource(LUMICE_Scene* scene, float sun_altitude, float sun_azimuth,
+                                            float sun_diameter, const char* spectrum) {
+  if (!scene) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  auto& ls = scene->root["scene"]["light_source"];
+  ls["type"] = "sun";
+  ls["altitude"] = sun_altitude;
+  ls["azimuth"] = sun_azimuth;
+  ls["diameter"] = sun_diameter;
+  // A discrete spectrum (an array set by SceneSetCustomSpectrum) wins over the string, mirroring
+  // the LUMICE_Config spectrum_count > 0 rule — do NOT clobber it here. Only write the string
+  // when no discrete spectrum is currently set. This makes the two call orders converge.
+  if (!ls.contains("spectrum") || !ls["spectrum"].is_array()) {
+    ls["spectrum"] = spectrum ? spectrum : "D65";
+  }
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_SceneSetCustomSpectrum(LUMICE_Scene* scene, const LUMICE_SpectrumEntry* entries, int count) {
+  if (!scene) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  if (count < 0 || count > LUMICE_MAX_CONFIG_SPECTRUM_ENTRIES) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  if (count > 0 && entries == nullptr) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  auto& ls = scene->root["scene"]["light_source"];
+  if (count == 0) {
+    // Clear the discrete spectrum: fall back to the default string (matches spectrum_count == 0).
+    ls["spectrum"] = "D65";
+  } else {
+    nlohmann::json spectrum = nlohmann::json::array();
+    for (int i = 0; i < count; i++) {
+      nlohmann::json e;
+      e["wavelength"] = entries[i].wavelength;
+      e["weight"] = entries[i].weight;
+      spectrum.push_back(e);
+    }
+    ls["spectrum"] = spectrum;
+  }
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_SceneSetSimParams(LUMICE_Scene* scene, int infinite, LUMICE_RayCount ray_num, int max_hits,
+                                          int geom_clock) {
+  if (!scene) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  auto& scene_j = scene->root["scene"];
+  if (infinite) {
+    scene_j["ray_num"] = "infinite";
+  } else {
+    scene_j["ray_num"] = ray_num;
+  }
+  scene_j["max_hits"] = max_hits;
+  // geom_clock: emit only when set (mirrors ConfigToJson's `if (geom_clock != 0)`); erase on 0 so
+  // a prior non-zero value is cleared and the "omit when 0" isomorphism holds.
+  if (geom_clock != 0) {
+    scene_j["geom_clock"] = geom_clock;
+  } else {
+    scene_j.erase("geom_clock");
+  }
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_SceneSetColorMode(LUMICE_Scene* scene, int raypath_color_mode) {
+  if (!scene) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  const char* mode_str = nullptr;
+  try {
+    mode_str = ColorModeToString(raypath_color_mode);
+  } catch (const std::exception& e) {
+    LOG_ERROR("LUMICE_SceneSetColorMode: {}", e.what());
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  EnsureRaypathColor(scene->root);
+  scene->root["raypath_color"]["mode"] = mode_str;
+  return LUMICE_OK;
+}
+
+
+// Test-only accessor (declared in server/c_api_internal.hpp). See that header for rationale.
+const nlohmann::json& SceneRoot(const LUMICE_Scene* scene) {
+  return scene->root;
+}
+
 
 // Display-time color update: see doc/capi-lifecycle-architecture.md §4 / §6.4.
 // task-342.2: does NOT restart the simulation — accumulator, epoch, and consumers are
@@ -1355,7 +1729,10 @@ static LUMICE_ErrorCode JsonToRaypathColor(const nlohmann::json& j, LUMICE_Confi
   return LUMICE_OK;
 }
 
-static LUMICE_ErrorCode JsonToScene(const nlohmann::json& scene, LUMICE_Config* out) {
+// Parse the JSON "scene" subsection (light source + simulation params) into a LUMICE_Config.
+// Named ...SceneParams (not JsonToScene) to avoid colliding, on sight, with the public opaque
+// type LUMICE_Scene — this file-static parser has always been about the scene PARAMS block only.
+static LUMICE_ErrorCode JsonToSceneParams(const nlohmann::json& scene, LUMICE_Config* out) {
   // Light source
   if (scene.contains("light_source")) {
     const auto& ls = scene.at("light_source");
@@ -1618,7 +1995,7 @@ static LUMICE_ErrorCode JsonToConfig(const nlohmann::json& root, LUMICE_Config* 
   if (!root.contains("scene")) {
     return LUMICE_ERR_MISSING_FIELD;
   }
-  auto err = JsonToScene(root.at("scene"), out);
+  auto err = JsonToSceneParams(root.at("scene"), out);
   if (err != LUMICE_OK) {
     return err;
   }

@@ -28,6 +28,10 @@ extern "C" {
 
 // =============== Opaque Types ===============
 typedef struct LUMICE_Server_ LUMICE_Server;
+// Opaque, incrementally-built scene container. See the "Scene (opaque handle)" section further
+// down for its lifecycle + Add*/Set* build API. Declared here alongside the other opaque handle
+// types; the build functions live below the leaf POD structs they consume.
+typedef struct LUMICE_Scene_ LUMICE_Scene;
 
 // =============== Error Codes ===============
 typedef enum LUMICE_ErrorCode_ {
@@ -515,6 +519,94 @@ typedef struct LUMICE_RenderParam_ {
   float intensity_factor;
   float overlap;  // Dual fisheye overlap zone |sky.z| threshold (sin value). 0 = no overlap.
 } LUMICE_RenderParam;
+
+// =============== Scene (opaque handle) ===============
+// LUMICE_Scene (opaque type declared up top) is an incrementally-built scene container. Unlike
+// the wide-value LUMICE_Config struct below, adding a subsystem is adding a function (never an
+// ABI break to existing callers), there is no MAX_* compile-time ceiling on the number of items,
+// and the three commit entry points collapse (in a later step) into one. The handle owns all its
+// state; callers manage it exclusively through the lifecycle functions.
+//
+// The Add*/Set* family covers the same nine subsystems LUMICE_Config carries. The leaf POD
+// structs above (LUMICE_CrystalParam / FilterParam / ComplexComposition / RenderParam /
+// ScatterLayer / SpectrumEntry / ColorClass) are UNCHANGED and pass in by const pointer — the
+// Scene deep-copies every input value immediately, so the caller's leaf struct may be a stack
+// temporary that is discarded/reused right after the call returns (no "must outlive commit"
+// lifetime reasoning). This first step covers type + lifecycle + leaf writes only; serialization
+// (SceneToJson/FromJson) and commit (CommitScene) are separate follow-up entry points and are NOT
+// declared here yet.
+//
+// Coexists with LUMICE_Config: this step adds symbols only; LUMICE_Config and its three commit
+// entry points are byte-for-byte unchanged. LUMICE_API_VERSION is NOT bumped here (no BREAKING
+// layout change) — the bump lands with the eventual LUMICE_Config removal.
+//
+// Naming: this family uses Noun-Verb order (SceneCreate / SceneAddCrystal / …), coexisting with
+// the repo's existing Verb-Noun names (LUMICE_CreateServer / LUMICE_CommitConfig). Both are
+// accepted conventions; neither is "the new standard".
+
+// ---------- Lifecycle ----------
+// Allocate an empty scene. The caller owns the returned handle and MUST eventually pass it to
+// LUMICE_SceneDestroy. Returns NULL only on allocation failure.
+LUMICE_Scene* LUMICE_SceneCreate(void);
+
+// Deep-copy `scene` into a brand-new, fully independent handle (no aliasing with the original).
+// This is the value the old wide-struct semantics really bought — atomic modal edit / Cancel —
+// now a single call instead of a ~96 KB stack copy. Mutating the clone never affects the
+// original and vice versa; each must be Destroyed independently. Returns NULL if `scene` is
+// NULL or on allocation failure.
+LUMICE_Scene* LUMICE_SceneClone(const LUMICE_Scene* scene);
+
+// Release a scene handle. NULL-safe no-op (same contract as LUMICE_DestroyServer). Each handle
+// must be Destroyed exactly once; destroying the same handle twice is undefined behavior (this
+// mirrors LUMICE_DestroyServer and every other handle in this API — there is no double-free
+// sentinel).
+void LUMICE_SceneDestroy(LUMICE_Scene* scene);
+
+// ---------- Incremental build: leaf POD in, sequential id out ----------
+// Every Add* appends one item and writes its 0-based sequence id (its index among items of the
+// same kind, in insertion order) to *out_id. The Scene assigns this id itself and IGNORES any
+// `.id` field on the incoming POD. Cross-referencing fields the caller constructs later
+// (LUMICE_FilterParam.crystal_id, LUMICE_ScatterEntry.crystal_id/filter_id, a composition's
+// term ids) MUST use these returned out_id values, not a caller-chosen id.
+//
+// Validation is Add-time: each call validates the one item's shape/enums before writing, and
+// returns an error code (never throws across the C ABI). On any validation failure the scene is
+// left unchanged (no partial write). Returns LUMICE_ERR_NULL_ARG when scene / the input pointer
+// / out_id is NULL; LUMICE_ERR_INVALID_CONFIG on an invalid item (bad enum, out-of-range count,
+// or exceeding the soft per-kind capacity carried over from LUMICE_MAX_CONFIG_*).
+LUMICE_ErrorCode LUMICE_SceneAddCrystal(LUMICE_Scene* scene, const LUMICE_CrystalParam* crystal, int* out_id);
+// SceneAddFilter handles the SIMPLE filter arms only (none/raypath/entry_exit/direction/crystal);
+// a filter with type == LUMICE_FILTER_TYPE_COMPLEX is rejected (LUMICE_ERR_INVALID_CONFIG) —
+// use LUMICE_SceneAddComplexFilter for those.
+LUMICE_ErrorCode LUMICE_SceneAddFilter(LUMICE_Scene* scene, const LUMICE_FilterParam* filter, int* out_id);
+// Add a complex (sum-of-products) filter in one call: the filter identity plus its composition.
+// The Scene DEEP-COPIES composition->term_ids / term_counts into its own state immediately, so
+// the caller's LUMICE_ComplexComposition (and its heap arrays) can be released/reused right
+// after this returns. `filter->type` and `filter->composition_index` are ignored (type is
+// forced to complex; the composition is taken from `composition`, not looked up by index).
+LUMICE_ErrorCode LUMICE_SceneAddComplexFilter(LUMICE_Scene* scene, const LUMICE_FilterParam* filter,
+                                              const LUMICE_ComplexComposition* composition, int* out_id);
+LUMICE_ErrorCode LUMICE_SceneAddRenderer(LUMICE_Scene* scene, const LUMICE_RenderParam* renderer, int* out_id);
+LUMICE_ErrorCode LUMICE_SceneAddScatterLayer(LUMICE_Scene* scene, const LUMICE_ScatterLayer* layer, int* out_id);
+LUMICE_ErrorCode LUMICE_SceneAddColorClass(LUMICE_Scene* scene, const LUMICE_ColorClass* color_class, int* out_id);
+
+// ---------- Scalar / whole-group settings: grouped by LUMICE_Config field cluster ----------
+// Each Set* is idempotent (last write wins) and callable in any order. Returns
+// LUMICE_ERR_NULL_ARG for a NULL scene, LUMICE_ERR_INVALID_CONFIG / _INVALID_VALUE for an
+// invalid value.
+//
+// Light source + spectrum interact: a discrete spectrum (SceneSetCustomSpectrum with count > 0)
+// takes precedence over the `spectrum` string, matching the LUMICE_Config spectrum_count > 0
+// rule. So SceneSetLightSource does NOT overwrite a discrete spectrum already set, and the two
+// call orders (SetLightSource then SetCustomSpectrum, or the reverse) converge to the same
+// result. SceneSetCustomSpectrum with count == 0 clears the discrete spectrum (falls back to the
+// default "D65" string).
+LUMICE_ErrorCode LUMICE_SceneSetLightSource(LUMICE_Scene* scene, float sun_altitude, float sun_azimuth,
+                                            float sun_diameter, const char* spectrum);
+LUMICE_ErrorCode LUMICE_SceneSetCustomSpectrum(LUMICE_Scene* scene, const LUMICE_SpectrumEntry* entries, int count);
+LUMICE_ErrorCode LUMICE_SceneSetSimParams(LUMICE_Scene* scene, int infinite, LUMICE_RayCount ray_num, int max_hits,
+                                          int geom_clock);
+LUMICE_ErrorCode LUMICE_SceneSetColorMode(LUMICE_Scene* scene, int raypath_color_mode);
 
 // BREAKING (v4.4): added spectrum_entries[]/spectrum_count for custom discrete spectrum.
 // Layout changed; callers must recompile against this header. spectrum_count > 0 selects the

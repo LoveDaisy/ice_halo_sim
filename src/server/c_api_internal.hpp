@@ -9,6 +9,13 @@
 
 #include "include/lumice.h"
 
+// Test-only exposure of a LUMICE_Scene handle's internal JSON representation. NOT part of the
+// public C API — do not include from src/gui/ or ship to consumers. Lets unit tests assert the
+// Add*/Set* encoding matches ConfigToJson's established wire shape field-by-field, and lets tests
+// verify SceneClone independence without waiting for a public scene-to-JSON serializer.
+// Precondition: scene != nullptr.
+const nlohmann::json& SceneRoot(const LUMICE_Scene* scene);
+
 // Serialize a LUMICE_Config struct into the core config JSON schema (the same shape
 // core config/filter_config.cpp::to_json produces). Exposed here — rather than kept
 // file-static in c_api.cpp — so tests can assert the emitted filter shape field by
