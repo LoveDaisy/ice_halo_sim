@@ -654,9 +654,12 @@ LUMICE_ErrorCode LUMICE_SceneFromJsonFile(const char* filename, LUMICE_Scene** o
 // rebuilt. Unlike the legacy JSON-string / JSON-file entry points, which never exposed this
 // signal, every LUMICE_CommitScene caller can read it.
 //
-// Errors: LUMICE_ERR_NULL_ARG (NULL server or scene), LUMICE_ERR_INVALID_CONFIG (the scene is not
-// a committable configuration) — the same mapping LUMICE_CommitConfigStruct performs. No
-// whole-scene re-validation happens here: each Add*/Set* call already validated its own input.
+// Errors: LUMICE_ERR_NULL_ARG (NULL server or scene); otherwise whatever the core commit rejects
+// the scene with, mapped exactly as LUMICE_CommitConfigStruct maps it — LUMICE_ERR_INVALID_CONFIG
+// / _MISSING_FIELD / _INVALID_VALUE / _INVALID_JSON for a configuration the core refuses, and
+// LUMICE_ERR_SERVER for a server-side failure. On any error *out_reused is left untouched. Note
+// that no whole-scene re-validation happens here: each Add*/Set* call already validated its own
+// input, so what this can still surface is cross-field/semantic rejection from the core.
 LUMICE_ErrorCode LUMICE_CommitScene(LUMICE_Server* server, const LUMICE_Scene* scene, int* out_reused);
 
 // BREAKING (v4.4): added spectrum_entries[]/spectrum_count for custom discrete spectrum.
