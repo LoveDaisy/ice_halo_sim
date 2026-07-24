@@ -585,7 +585,7 @@ TEST(MetalRootGen, TransitStreamWireUp) {
 //                          measured 1.00745 with seed 42 / 65536 rays)
 // - Gaussian σ=5  → 1.002 (kLatPathRayleigh tight-envelope, ~99.8% acceptance)
 //
-// Near-pole config: latitude_dist.mean = 90° (= zenith 0, per math.cpp:638),
+// Near-pole config: latitude_dist.center = 90° (= zenith 0, per math.cpp:638),
 // so cos(φ)/M rejection loop actually kicks in. Sample size 65536 → MC
 // standard error on mean(attempts) < 1% for a distribution whose stdev is
 // ~4, well below the ±5% tolerance.

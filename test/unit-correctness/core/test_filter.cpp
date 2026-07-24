@@ -35,10 +35,10 @@ class FilterTest : public ::testing::Test {
   static AxisDistribution DEnablingAxis() {
     AxisDistribution d{};
     d.azimuth_dist.type = DistributionType::kUniform;
-    d.azimuth_dist.std = 360.0f;
-    d.azimuth_dist.mean = 0.0f;
+    d.azimuth_dist.spread = 360.0f;
+    d.azimuth_dist.center = 0.0f;
     d.roll_dist.type = DistributionType::kNoRandom;
-    d.roll_dist.mean = 0.0f;
+    d.roll_dist.center = 0.0f;
     return d;
   }
 

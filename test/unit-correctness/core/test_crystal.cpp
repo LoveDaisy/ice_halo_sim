@@ -501,40 +501,40 @@ TEST(DetailIsRollMeanAtMultipleOf30, Boundary) {
   AxisDistribution d{};
   d.roll_dist.type = DistributionType::kNoRandom;
 
-  d.roll_dist.mean = 0.0f;
+  d.roll_dist.center = 0.0f;
   EXPECT_TRUE(lumice::detail::IsRollMeanAtMultipleOf30(d));
 
-  d.roll_dist.mean = 30.0f;
+  d.roll_dist.center = 30.0f;
   EXPECT_TRUE(lumice::detail::IsRollMeanAtMultipleOf30(d));
 
-  d.roll_dist.mean = 60.0f;
+  d.roll_dist.center = 60.0f;
   EXPECT_TRUE(lumice::detail::IsRollMeanAtMultipleOf30(d));
 
-  d.roll_dist.mean = 15.0f;
+  d.roll_dist.center = 15.0f;
   EXPECT_FALSE(lumice::detail::IsRollMeanAtMultipleOf30(d));
 
   // 29.9f is clearly outside the 1e-5 tolerance of any multiple of 30
-  d.roll_dist.mean = 29.9f;
+  d.roll_dist.center = 29.9f;
   EXPECT_FALSE(lumice::detail::IsRollMeanAtMultipleOf30(d));
 }
 
 TEST(DetailIsDApplicable, Conditions) {
   AxisDistribution d{};
   d.azimuth_dist.type = DistributionType::kUniform;
-  d.azimuth_dist.std = 360.0f;
-  d.azimuth_dist.mean = 0.0f;
+  d.azimuth_dist.spread = 360.0f;
+  d.azimuth_dist.center = 0.0f;
   d.roll_dist.type = DistributionType::kNoRandom;
-  d.roll_dist.mean = 0.0f;
+  d.roll_dist.center = 0.0f;
 
   // az=kUniform/360 + roll=0 → true
   EXPECT_TRUE(lumice::detail::IsDApplicable(d));
 
   // roll=15 → false
-  d.roll_dist.mean = 15.0f;
+  d.roll_dist.center = 15.0f;
   EXPECT_FALSE(lumice::detail::IsDApplicable(d));
 
   // az=kGaussian → false
-  d.roll_dist.mean = 0.0f;
+  d.roll_dist.center = 0.0f;
   d.azimuth_dist.type = DistributionType::kGaussian;
   EXPECT_FALSE(lumice::detail::IsDApplicable(d));
 }

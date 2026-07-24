@@ -85,13 +85,13 @@ std::string FormatRecorder(const RaypathRecorder& rp) {
 AxisDistribution MakeAxis(float roll_mean_deg) {
   AxisDistribution d{};
   d.azimuth_dist.type = DistributionType::kUniform;
-  d.azimuth_dist.std = 360.0f;
-  d.azimuth_dist.mean = 0.0f;
+  d.azimuth_dist.spread = 360.0f;
+  d.azimuth_dist.center = 0.0f;
   d.latitude_dist.type = DistributionType::kNoRandom;
-  d.latitude_dist.mean = 90.0f;
+  d.latitude_dist.center = 90.0f;
   d.roll_dist.type = DistributionType::kNoRandom;
-  d.roll_dist.mean = roll_mean_deg;
-  d.roll_dist.std = 0.0f;
+  d.roll_dist.center = roll_mean_deg;
+  d.roll_dist.spread = 0.0f;
   return d;
 }
 

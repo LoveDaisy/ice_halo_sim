@@ -230,8 +230,8 @@ class SphericalSamplingTest : public ::testing::Test {
                                        size_t n) {
     lumice::AxisDistribution axis;
     axis.latitude_dist.type = lumice::DistributionType::kGaussian;
-    axis.latitude_dist.mean = static_cast<float>(90.0 - zen_mean_deg);  // zenith → latitude
-    axis.latitude_dist.std = static_cast<float>(sigma_deg);
+    axis.latitude_dist.center = static_cast<float>(90.0 - zen_mean_deg);  // zenith → latitude
+    axis.latitude_dist.spread = static_cast<float>(sigma_deg);
     axis.azimuth_dist.type = lumice::DistributionType::kUniform;
 
     std::vector<int> counts(bin_edges_deg.size() - 1, 0);
@@ -362,11 +362,11 @@ TEST_F(SphericalSamplingTest, UniformLatitudeJacobianCorrection) {
 
   lumice::AxisDistribution axis;
   axis.latitude_dist.type = lumice::DistributionType::kUniform;
-  axis.latitude_dist.mean = 90.0f;  // zenith=0° → latitude=90° (centered at pole)
-  axis.latitude_dist.std = 360.0f;  // full range
+  axis.latitude_dist.center = 90.0f;   // zenith=0° → latitude=90° (centered at pole)
+  axis.latitude_dist.spread = 360.0f;  // full range
   axis.azimuth_dist.type = lumice::DistributionType::kUniform;
-  axis.azimuth_dist.mean = 0.0f;
-  axis.azimuth_dist.std = 360.0f;
+  axis.azimuth_dist.center = 0.0f;
+  axis.azimuth_dist.spread = 360.0f;
 
   // Bin over full colatitude [0°, 180°].
   constexpr int kNumBins = 18;
@@ -432,8 +432,8 @@ TEST_F(SphericalSamplingTest, MeanVarianceAccuracy) {
     rng.SetSeed(123);
     lumice::AxisDistribution axis;
     axis.latitude_dist.type = lumice::DistributionType::kGaussian;
-    axis.latitude_dist.mean = static_cast<float>(90.0 - cfg.zen);
-    axis.latitude_dist.std = static_cast<float>(cfg.sigma);
+    axis.latitude_dist.center = static_cast<float>(90.0 - cfg.zen);
+    axis.latitude_dist.spread = static_cast<float>(cfg.sigma);
     axis.azimuth_dist.type = lumice::DistributionType::kUniform;
 
     // Numerically compute E[theta] for p(theta) ∝ G_folded(theta) × sin(theta).
@@ -692,8 +692,10 @@ TEST_F(RngTest, ZigzagJsonRoundTrip) {
   Distribution parsed{};
   lumice::from_json(j, parsed);
   EXPECT_EQ(parsed.type, DistributionType::kZigzag);
-  EXPECT_FLOAT_EQ(parsed.mean, 10.0f);
-  EXPECT_FLOAT_EQ(parsed.std, 25.0f);
+  // Named accessors, not the raw slots: for kZigzag the JSON "mean"/"std" keys carry the tilt
+  // offset and the amplitude, and asserting through Tilt()/Amplitude() is what pins that reading.
+  EXPECT_FLOAT_EQ(parsed.Tilt(), 10.0f);
+  EXPECT_FLOAT_EQ(parsed.Amplitude(), 25.0f);
 }
 
 
@@ -1353,8 +1355,9 @@ TEST_F(RngTest, LaplacianJsonRoundTrip) {
   Distribution parsed{};
   lumice::from_json(j, parsed);
   EXPECT_EQ(parsed.type, DistributionType::kLaplacian);
-  EXPECT_FLOAT_EQ(parsed.mean, 45.0f);
-  EXPECT_FLOAT_EQ(parsed.std, 3.0f);
+  // Named accessors: for kLaplacian the JSON "mean"/"std" keys carry the location and the scale.
+  EXPECT_FLOAT_EQ(parsed.Location(), 45.0f);
+  EXPECT_FLOAT_EQ(parsed.Scale(), 3.0f);
 }
 
 // --- 330.2 invert_lat_lut (unified area-measure inverse-CDF LUT) --------------

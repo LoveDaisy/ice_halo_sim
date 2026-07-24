@@ -96,28 +96,28 @@ TEST(DeviceFilterDescLayout, SizeFitsBudget) {
 AxisDistribution MakeDApplicableAxis() {
   AxisDistribution a;
   a.azimuth_dist.type = DistributionType::kUniform;
-  a.azimuth_dist.mean = 0.0f;
-  a.azimuth_dist.std = 360.0f;
+  a.azimuth_dist.center = 0.0f;
+  a.azimuth_dist.spread = 360.0f;
   a.latitude_dist.type = DistributionType::kUniform;
-  a.latitude_dist.mean = 0.0f;
-  a.latitude_dist.std = 360.0f;
+  a.latitude_dist.center = 0.0f;
+  a.latitude_dist.spread = 360.0f;
   a.roll_dist.type = DistributionType::kUniform;
-  a.roll_dist.mean = 0.0f;
-  a.roll_dist.std = 360.0f;
+  a.roll_dist.center = 0.0f;
+  a.roll_dist.spread = 360.0f;
   return a;
 }
 
 AxisDistribution MakeDNonApplicableAxis() {
   AxisDistribution a;
   a.azimuth_dist.type = DistributionType::kUniform;
-  a.azimuth_dist.mean = 0.0f;
-  a.azimuth_dist.std = 360.0f;
+  a.azimuth_dist.center = 0.0f;
+  a.azimuth_dist.spread = 360.0f;
   a.latitude_dist.type = DistributionType::kGaussian;
-  a.latitude_dist.mean = 0.0f;
-  a.latitude_dist.std = 40.0f;
+  a.latitude_dist.center = 0.0f;
+  a.latitude_dist.spread = 40.0f;
   a.roll_dist.type = DistributionType::kUniform;
-  a.roll_dist.mean = 5.0f;  // not a multiple of 30°
-  a.roll_dist.std = 360.0f;
+  a.roll_dist.center = 5.0f;  // not a multiple of 30°
+  a.roll_dist.spread = 360.0f;
   return a;
 }
 
