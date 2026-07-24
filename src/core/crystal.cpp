@@ -708,7 +708,11 @@ float Crystal::GetRefractiveIndex(float wl) const {
 namespace detail {
 
 bool IsRollMeanAtMultipleOf30(const AxisDistribution& d) {
-  float mean = d.roll_dist.mean;
+  // Deliberately type-erased: the anchor slot is read for every DistributionType, not just the
+  // Gaussian family, so the generic `center` member is the correct access (a named accessor would
+  // assert on the other types). Do NOT read this as "the statistical mean of the roll angle" —
+  // for kZigzag it is a tilt offset, for kUniform an interval midpoint.
+  float mean = d.roll_dist.center;
   float remainder = std::fmod(std::fmod(mean, 30.0f) + 30.0f, 30.0f);
   return FloatEqual(remainder, 0.0f) || FloatEqual(remainder, 30.0f);
 }

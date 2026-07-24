@@ -21,10 +21,10 @@ void from_json(const nlohmann::json& j, PrismCrystalParam& p) {
     j.at("height").get_to(p.h_);
   }
 
-  // Face distance: default mean=1.0 (1.0 = regular hexagon in FillHexCrystalCoef)
+  // Face distance: default value 1.0 (1.0 = regular hexagon in FillHexCrystalCoef)
   for (auto& x : p.d_) {
     x.type = DistributionType::kNoRandom;
-    x.mean = 1.0f;
+    x.center = 1.0f;
   }
   if (j.contains("face_distance")) {
     size_t i = 0;
@@ -84,10 +84,10 @@ void from_json(const nlohmann::json& j, PyramidCrystalParam& p) {
     p.wedge_angle_l_ = MillerToAlpha(li[0].get<int>(), li[2].get<int>());
   }
 
-  // Face distance: default mean=1.0 (1.0 = regular hexagon in FillHexCrystalCoef)
+  // Face distance: default value 1.0 (1.0 = regular hexagon in FillHexCrystalCoef)
   for (auto& x : p.d_) {
     x.type = DistributionType::kNoRandom;
-    x.mean = 1.0f;
+    x.center = 1.0f;
   }
   if (j.contains("face_distance")) {
     size_t i = 0;

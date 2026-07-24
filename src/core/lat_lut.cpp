@@ -72,8 +72,8 @@ LatLut DegenerateLut(double colat) {
 }  // namespace
 
 LatLut BuildLatLut(const Distribution& lat_dist) {
-  const double mean_rad = static_cast<double>(lat_dist.mean) * kDeg2Rad;
-  const double scale_rad = static_cast<double>(lat_dist.std) * kDeg2Rad;
+  const double mean_rad = static_cast<double>(lat_dist.center) * kDeg2Rad;
+  const double scale_rad = static_cast<double>(lat_dist.spread) * kDeg2Rad;
   const DistributionType type = lat_dist.type;
   const double dtheta = kPi / kFine;
 
@@ -182,21 +182,21 @@ LatLut BuildLatLut(const Distribution& lat_dist) {
 
 namespace {
 
-// Cache key: the (type, mean, std) triple that fully determines a LatLut. Exact
+// Cache key: the (type, center, spread) triple that fully determines a LatLut. Exact
 // float bit-equality matches the semantics of the old single-entry cache (a
 // re-configured but numerically identical distribution reuses the same LUT).
 struct LatLutKey {
   DistributionType type;
-  float mean;
-  float std;
-  bool operator==(const LatLutKey& o) const { return type == o.type && mean == o.mean && std == o.std; }
+  float center;
+  float spread;
+  bool operator==(const LatLutKey& o) const { return type == o.type && center == o.center && spread == o.spread; }
 };
 
 struct LatLutKeyHash {
   size_t operator()(const LatLutKey& k) const {
     size_t h = std::hash<int>{}(static_cast<int>(k.type));
-    h = h * 1000003u ^ std::hash<float>{}(k.mean);
-    h = h * 1000003u ^ std::hash<float>{}(k.std);
+    h = h * 1000003u ^ std::hash<float>{}(k.center);
+    h = h * 1000003u ^ std::hash<float>{}(k.spread);
     return h;
   }
 };
@@ -210,7 +210,7 @@ const LatLut* GetSharedLatLut(const Distribution& lat_dist) {
   // concurrently without the lock. The mutex only serializes lookup/insert.
   static std::mutex mu;
   static std::unordered_map<LatLutKey, std::unique_ptr<LatLut>, LatLutKeyHash> cache;
-  const LatLutKey key{ lat_dist.type, lat_dist.mean, lat_dist.std };
+  const LatLutKey key{ lat_dist.type, lat_dist.center, lat_dist.spread };
   std::lock_guard<std::mutex> lock(mu);
   auto it = cache.find(key);
   if (it == cache.end()) {

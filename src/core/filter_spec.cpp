@@ -380,7 +380,7 @@ struct TopSpecCreator {
 std::unique_ptr<FilterSpec> FilterSpec::Create(const FilterConfig& config, const Crystal& crystal,
                                                const AxisDistribution& axis_dist) {
   bool d_applicable = detail::IsDApplicable(axis_dist);
-  int sigma_a = d_applicable ? detail::ComputeSigmaA(axis_dist.roll_dist.mean) : 0;
+  int sigma_a = d_applicable ? detail::ComputeSigmaA(axis_dist.roll_dist.center) : 0;
   auto spec = std::visit(TopSpecCreator{ crystal, config.symmetry_, sigma_a, d_applicable }, config.param_);
   spec->action_ = config.action_;
   return spec;

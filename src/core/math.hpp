@@ -131,10 +131,63 @@ enum class DistributionType {
 };
 
 
+//! @brief A one-dimensional random distribution described by two positional parameters.
+//!
+//! @details The two data members are named for the *role* each slot plays — a role that is
+//!   invariant across every DistributionType — rather than for a statistical quantity that is
+//!   only accurate for the Gaussian family. The former names (`mean` / `std`) claimed a meaning
+//!   that holds for 2 of the 6 types and misleads for the other 4.
+//!
+//!   - `center` — the anchor / location of the distribution.
+//!   - `spread` — the width / amplitude of the distribution.
+//!
+//!   Per-type reading of the two slots:
+//!
+//!   | type            | center             | spread                      |
+//!   |-----------------|--------------------|-----------------------------|
+//!   | kNoRandom       | the value itself   | unused                      |
+//!   | kUniform        | interval midpoint  | **full** range (not half)   |
+//!   | kGaussian       | mean μ             | standard deviation σ        |
+//!   | kGaussianLegacy | mean μ             | standard deviation σ        |
+//!   | kZigzag         | tilt offset B      | amplitude A                 |
+//!   | kLaplacian      | location μ         | scale b                     |
+//!
+//!   Call sites that know the type should use the named accessors below instead of reading the
+//!   members directly — the accessor name states which row of the table is being relied on, and
+//!   asserts the type actually matches. Call sites that are genuinely type-erased (JSON
+//!   serialization, GPU parameter packing, hashing, equality) read `center` / `spread` directly;
+//!   that is the intended use of the neutral names, not a workaround.
+//!
+//!   Aggregate brace-initialization `Distribution{ type, center, spread }` remains valid: the
+//!   slot order is the same for every type, so positional construction cannot silently swap
+//!   meanings.
 struct Distribution {
   DistributionType type;
-  float mean;
-  float std;
+  float center;
+  float spread;
+
+  //! @brief The constant value produced by a kNoRandom distribution.
+  float Value() const;
+
+  //! @brief Midpoint of a kUniform interval.
+  float UniformCenter() const;
+  //! @brief Full width of a kUniform interval (NOT the half-width).
+  float UniformFullRange() const;
+
+  //! @brief Mean μ of a kGaussian / kGaussianLegacy distribution.
+  float Mean() const;
+  //! @brief Standard deviation σ of a kGaussian / kGaussianLegacy distribution.
+  float Std() const;
+
+  //! @brief Tilt offset B of a kZigzag distribution.
+  float Tilt() const;
+  //! @brief Amplitude A of a kZigzag distribution.
+  float Amplitude() const;
+
+  //! @brief Location μ of a kLaplacian distribution.
+  float Location() const;
+  //! @brief Scale b of a kLaplacian distribution.
+  float Scale() const;
 };
 
 
