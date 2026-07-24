@@ -367,6 +367,7 @@ int main(int argc, char** argv) {
   RegisterLifecycleTests(engine);
   RegisterCompositePreviewTests(engine);
   RegisterStateReconcileTests(engine);
+  RegisterPreviewAnimationTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
 
   // Main loop — runs until all tests complete
