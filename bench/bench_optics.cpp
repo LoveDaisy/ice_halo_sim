@@ -28,26 +28,26 @@ struct OpticsFixture {
     buf_out.size_ = n * 2;
     refractive_index = crystal.GetRefractiveIndex(550.0f);
 
-    const auto* face_norm = crystal.GetTriangleNormal();
-    const auto* face_vtx = crystal.GetTriangleVtx();
+    // Seed every ray onto the upper basal face (cf_geom_ slot 0 on the
+    // closed-form prism). Direction points into the crystal (negative face
+    // normal); position is the face's first CCW corner. The upper basal is the
+    // first present slot, so its polygon-face index (RaySeg::to_face_) is 0.
+    // The Crystal no longer exposes per-triangle getters — read the flat POD
+    // geometry directly (the benchmark only needs one realistic entry face).
+    const CrystalGeom& g = crystal.CfGeom();
+    const float* basal_n = g.face_normal;  // slot 0 normal
+    const float* basal_v0 = g.face_vtx;    // slot 0, corner 0
 
     for (size_t i = 0; i < n; i++) {
       auto& r = buf_in[i];
-      // Cycle through top-face triangles (0..3). Direction points into the
-      // crystal (negative face normal); position is the triangle's first
-      // vertex. to_face_ is a POLYGON-face index, not a triangle id — resolve
-      // via the parametric slot→poly-face table on the Crystal (kInvalidId
-      // returns are not expected here since triangles 0..3 belong to the upper
-      // basal on the closed-form prism factory output).
-      int fid = static_cast<int>(i % 4);
-      r.d_[0] = -face_norm[fid * 3 + 0];
-      r.d_[1] = -face_norm[fid * 3 + 1];
-      r.d_[2] = -face_norm[fid * 3 + 2];
-      r.p_[0] = face_vtx[fid * 9 + 0];
-      r.p_[1] = face_vtx[fid * 9 + 1];
-      r.p_[2] = face_vtx[fid * 9 + 2];
+      r.d_[0] = -basal_n[0];
+      r.d_[1] = -basal_n[1];
+      r.d_[2] = -basal_n[2];
+      r.p_[0] = basal_v0[0];
+      r.p_[1] = basal_v0[1];
+      r.p_[2] = basal_v0[2];
       r.w_ = 1.0f;
-      r.to_face_ = crystal.PolygonFaceOfTri(fid);
+      r.to_face_ = 0;
     }
   }
 };

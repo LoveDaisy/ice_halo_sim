@@ -51,45 +51,142 @@ namespace lumice {
  * @brief Sample on crystal & init origin (p, from_face_, to_face_) of rays.
  *        NOTE: direction of rays should be given.
  */
+namespace detail {
+
+// Single source of truth for "how many fan sub-triangles does a face with
+// this many corners contribute" — shared by CountEntrySubTris (sizing) and
+// BuildEntrySubTris (filling) so the two can never disagree on which faces
+// are skipped.
+static constexpr int SubTriCountForFace(int vtx_cnt) {
+  return vtx_cnt >= 3 ? vtx_cnt - 2 : 0;
+}
+
+size_t CountEntrySubTris(const CrystalGeom& cf) {
+  size_t cnt = 0;
+  for (int slot = 0; slot < cf.face_cnt; slot++) {
+    if (cf.face_present[slot]) {
+      cnt += static_cast<size_t>(SubTriCountForFace(cf.face_vtx_cnt[slot]));
+    }
+  }
+  return cnt;
+}
+
+// Fan (0, k, k+1) for k = 1..vtx_cnt-2, matching BuildMeshFromCfGeom and the
+// T1 analytic oracle (test/support/incidence_sampling_oracle.hpp): raw
+// winding normal from the triangle's own corners (no outward reorientation),
+// area from the same cross product. The compact present-face id is assigned
+// by iterating slots in ascending order and skipping absent ones — the same
+// rule PopulateFromCfGeom uses to number poly_face_n_/poly_face_fn_, so
+// to_face_ indexes them correctly. This is the single fan/winding
+// implementation shared by all three entry-sampler consumers — CPU
+// InitRay_p_fid plus the Metal and CUDA host upload paths, which call
+// BuildEntrySubTris directly to build their device entry-sampler triangle SoA
+// (they do NOT re-implement the convention per backend). It stays distinct from
+// BuildMeshFromCfGeom (crystal.cpp) because the two serve different output
+// shapes — a persistent triangle Mesh vs. this one-shot fan table; if a future
+// consumer needs the same convention in yet another shape, extracting a shared
+// helper with BuildMeshFromCfGeom should be reconsidered.
+void BuildEntrySubTris(const CrystalGeom& cf, EntrySubTri* out) {
+  size_t t = 0;
+  IdType present_id = 0;
+  for (int slot = 0; slot < cf.face_cnt; slot++) {
+    if (!cf.face_present[slot]) {
+      continue;
+    }
+    const IdType face_id = present_id++;
+    const int vtx_cnt = cf.face_vtx_cnt[slot];
+    if (SubTriCountForFace(vtx_cnt) == 0) {
+      // Degenerate/collapsed face: contributes no sub-triangle and thus no
+      // selection weight — the zero-weight discard convention, no new mechanism.
+      continue;
+    }
+    const float* base = cf.face_vtx + static_cast<size_t>(slot) * kCrystalGeomMaxVtxPerFace * 3;
+    for (int k = 1; k + 1 < vtx_cnt; k++) {
+      EntrySubTri& st = out[t++];
+      std::memcpy(st.v + 0, base + 0, 3 * sizeof(float));
+      std::memcpy(st.v + 3, base + k * 3, 3 * sizeof(float));
+      std::memcpy(st.v + 6, base + (k + 1) * 3, 3 * sizeof(float));
+      float e1[3]{ st.v[3] - st.v[0], st.v[4] - st.v[1], st.v[5] - st.v[2] };
+      float e2[3]{ st.v[6] - st.v[0], st.v[7] - st.v[1], st.v[8] - st.v[2] };
+      Cross3(e1, e2, st.n);
+      const float raw_len = Norm3(st.n);
+      st.area = raw_len / 2.0f;
+      if (raw_len > 0.0f) {
+        // Guard the division, not a fuzzy closeness check: this is the exact
+        // singular case (zero-length cross product from collapsed/collinear
+        // corners within an otherwise-valid vtx_cnt>=3 face), not a tolerance
+        // band — any positive raw_len normalizes safely regardless of scale.
+        st.n[0] /= raw_len;
+        st.n[1] /= raw_len;
+        st.n[2] /= raw_len;
+      } else {
+        st.n[0] = st.n[1] = st.n[2] = 0.0f;
+      }
+      st.face_id = face_id;
+    }
+  }
+}
+
+}  // namespace detail
+
 void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr) {
   if (!ray_buf_ptr) {
     return;
   }
 
   RayBuffer& ray_buf = *ray_buf_ptr;
-  // p & to_face_: sample on crystal triangles (area-weighted), then map to polygon face.
-  auto total_faces = curr_crystal.TotalTriangles();
-  const auto* face_area = curr_crystal.GetTirangleArea();
-  const auto* face_norm = curr_crystal.GetTriangleNormal();
-  const auto* face_vtx = curr_crystal.GetTriangleVtx();
+  // p & to_face_: sample directly on the closed-form polygon geometry
+  // (cf_geom_), not the triangle Mesh. Expand present faces into a flat fan
+  // sub-triangle table ONCE per call, then do a single area-weighted
+  // RandomSample per ray over that table — the per-ray FLOP count matches the
+  // old triangle sampler (same sub-triangles), but the geometry now comes from
+  // cf_geom_ corners and each sub-triangle carries its own compact present-face
+  // id, so to_face_ is read directly (no PolygonFaceOfTri reverse lookup).
+  const CrystalGeom& cf = curr_crystal.CfGeom();
+  const size_t subtri_cnt = detail::CountEntrySubTris(cf);
 
-  constexpr size_t kMaxTriangles = 64;
-  float proj_prob_buf[kMaxTriangles];
-  std::unique_ptr<float[]> proj_prob_heap;
-  float* proj_prob = proj_prob_buf;
-  if (total_faces > kMaxTriangles) {
-    proj_prob_heap = std::make_unique<float[]>(total_faces);
-    proj_prob = proj_prob_heap.get();
-  }
-  for (auto& r : ray_buf) {
-    const auto* d = r.d_;
-    for (size_t j = 0; j < total_faces; j++) {
-      proj_prob[j] = std::max(-Dot3(d, face_norm + j * 3) * face_area[j], 0.0f);
-    }
-    int tri_id = 0;
-    RandomSample(total_faces, proj_prob, &tri_id);
-    SampleTrianglePoint(face_vtx + tri_id * 9, r.p_);
-    // Initial entry segment: no source face, hit face = the sampled one's polygon.
-    r.from_face_ = kInvalidId;
-    r.to_face_ = curr_crystal.PolygonFaceOfTri(tri_id);
-    if (r.to_face_ == kInvalidId) {
-      // Triangle has no matching polygon face — only reachable via the mesh-only
-      // Crystal ctor path (custom crystals), never through the parametric
-      // hex-family factories. Zero weight to suppress downstream contribution;
-      // HitSurface also guards kInvalidId at loop entry, preventing any OOB.
-      LOG_WARNING("PolygonFaceOfTri: tri {} has no matching polygon face; zeroing ray weight", tri_id);
+  if (subtri_cnt == 0) {
+    // No present face with >=3 corners (empty/degenerate crystal — only the
+    // Mesh(0,0) reject path reaches here in production). Zero every ray's weight
+    // so it contributes nothing downstream; HitSurface also guards kInvalidId.
+    for (auto& r : ray_buf) {
+      r.from_face_ = kInvalidId;
+      r.to_face_ = kInvalidId;
       r.w_ = 0.0f;
     }
+    return;
+  }
+
+  // Sub-triangle table + per-ray projected-weight buffer, both built once.
+  // Worst case is 20 faces * 30 fan-tris = 600, well past the stack size, so
+  // fall back to the heap (same stack+heap pattern the old sampler used).
+  constexpr size_t kMaxSubTris = 64;
+  detail::EntrySubTri subtri_buf[kMaxSubTris];
+  float proj_prob_buf[kMaxSubTris];
+  std::unique_ptr<detail::EntrySubTri[]> subtri_heap;
+  std::unique_ptr<float[]> proj_prob_heap;
+  detail::EntrySubTri* subtri = subtri_buf;
+  float* proj_prob = proj_prob_buf;
+  if (subtri_cnt > kMaxSubTris) {
+    subtri_heap = std::make_unique<detail::EntrySubTri[]>(subtri_cnt);
+    proj_prob_heap = std::make_unique<float[]>(subtri_cnt);
+    subtri = subtri_heap.get();
+    proj_prob = proj_prob_heap.get();
+  }
+  detail::BuildEntrySubTris(cf, subtri);
+
+  for (auto& r : ray_buf) {
+    const auto* d = r.d_;
+    for (size_t j = 0; j < subtri_cnt; j++) {
+      proj_prob[j] = std::max(-Dot3(d, subtri[j].n) * subtri[j].area, 0.0f);
+    }
+    int tri_id = 0;
+    RandomSample(static_cast<int>(subtri_cnt), proj_prob, &tri_id);
+    SampleTrianglePoint(subtri[tri_id].v, r.p_);
+    // Initial entry segment: no source face, hit face = the sampled sub-tri's
+    // polygon face (compact present id, read directly — no reverse lookup).
+    r.from_face_ = kInvalidId;
+    r.to_face_ = subtri[tri_id].face_id;
   }
 }
 

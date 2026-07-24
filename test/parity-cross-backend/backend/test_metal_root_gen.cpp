@@ -35,6 +35,7 @@
 #include "core/backend/metal_trace_backend.hpp"
 #include "core/backend/metal_trace_backend_test_hooks.hpp"  // scrum-328.2 Step 3
 #include "core/backend/trace_backend.hpp"
+#include "core/crystal.hpp"
 #include "core/math.hpp"
 #include "metal_test_helpers.hpp"
 
@@ -1035,6 +1036,178 @@ TEST(RngObservabilityFacilitySmoke, NearPoleLaplacianDirsMatchCpuMoments) {
       << " (rad); Laplacian tight-envelope samplers should target the same analytic distribution.";
   EXPECT_NEAR(metal_var, cpu_var, 0.0005) << "Metal vs CPU axis-colatitude variance mismatch: metal=" << metal_var
                                           << " cpu=" << cpu_var << " (rad²); distribution-shape parity failed.";
+}
+
+// ---- Per-ray captured-sample white-box gate for the cf_geom entry sampler -----
+//
+// The Metal (and CUDA) backends build the device entry-sampler triangle SoA from
+// cf_geom_ on the host (detail::BuildEntrySubTris) instead of the crystal's
+// triangle Mesh cache. This gate reads back the ACTUAL per-ray samples the device
+// wrote — direction d (ReadbackGenDirs), entry point p (ReadbackRootP) and entry
+// face f (ReadbackRootTf) — and checks each is geometrically consistent with the
+// crystal geometry, per ray, rather than trusting an aggregate statistic:
+//   * f is a valid polygon index (or the zero-weight kInvalidId drop).
+//   * p lies ON polygon f's plane (p·n_f + d_f ≈ 0) — a wrong face id (e.g. a
+//     dropped local→absolute offset) or wrong SoA vertices would move p off it.
+//   * p lies inside the convex crystal (p·n_k + d_k ≤ 0 ∀ faces k) — so p is on
+//     face f's FACET, not merely its infinite plane.
+//   * face f is front-facing to the incident direction (n_f·d < 0) — a winding or
+//     back-face bug would light a face the projected-area weight must give 0.
+//
+// Why physical ground truth rather than a same-seed host replay of the sampler:
+// the entry point depends on the ray's crystal-local incident direction, and for
+// the TRANSIT kernel that direction comes from the continuation ray (a function
+// of the full upstream trace + atomic compaction), not a pure per-ray seed — so
+// a seed-only host replay cannot reconstruct it. Checking the captured sample
+// against the geometry is uniform for gen and transit and directly targets what
+// the data-source swap can break (SoA contents, face id, winding, offsets). The
+// sampler MATH itself (projected-area face selection + in-face uniformity) is the
+// separate analytic gate in test_incidence_sampling_polygon_oracle.cpp.
+namespace {
+constexpr uint32_t kInvalidFaceU32 = 0xffffffffu;  // mirrors kInvalidIdU32 (metal_trace_backend.mm)
+
+struct EntryVerifyStats {
+  size_t total = 0;
+  size_t valid = 0;     // non-drop rays actually checked
+  size_t drops = 0;     // kInvalidId zero-weight drops
+  size_t failures = 0;  // rays that violated a geometric invariant
+};
+
+// Checks every captured (d, p, f) against `crystal`'s polygon geometry. GTest
+// EXPECT_* on the first few violations (bounded so a gross failure does not spam
+// megabytes). Returns counts so the caller can assert a healthy valid fraction.
+EntryVerifyStats VerifyEntryPointsPhysical(const Crystal& crystal, const std::vector<float>& dirs,
+                                           const std::vector<float>& points, const std::vector<uint32_t>& faces,
+                                           size_t count, const char* label) {
+  const size_t poly_cnt = crystal.PolygonFaceCount();
+  const float* pn = crystal.GetPolygonFaceNormal();  // 3 × poly_cnt, outward unit
+  const float* pd = crystal.GetPolygonFaceDist();    // poly_cnt, plane const (p·n + d = 0)
+  // Crystal-local geometry is O(1) in size (basal ±0.5, side radius 1), so
+  // absolute tolerances in those units are meaningful. On-plane 1e-3 covers
+  // float32 accumulation across the sub-triangle sample; the inside-hull slack
+  // is looser to tolerate the same noise on the bounding halfspaces.
+  constexpr float kOnPlaneTol = 2e-3f;
+  constexpr float kInsideTol = 5e-3f;
+  constexpr float kFrontTol = 1e-2f;  // n_f·d < this (clearly non-back-facing)
+
+  EntryVerifyStats st;
+  st.total = count;
+  int reported = 0;
+  for (size_t i = 0; i < count; i++) {
+    const uint32_t f = faces[i];
+    if (f == kInvalidFaceU32) {
+      st.drops++;
+      continue;
+    }
+    if (static_cast<size_t>(f) >= poly_cnt) {
+      st.failures++;
+      if (reported < 8) {
+        reported++;
+        ADD_FAILURE() << label << " ray " << i << ": face id " << f << " out of range [0," << poly_cnt << ")";
+      }
+      continue;
+    }
+    st.valid++;
+    const float* d = dirs.data() + 3 * i;
+    const float* p = points.data() + 3 * i;
+    const float* nf = pn + 3 * f;
+    const float on_plane = nf[0] * p[0] + nf[1] * p[1] + nf[2] * p[2] + pd[f];
+    const float front = nf[0] * d[0] + nf[1] * d[1] + nf[2] * d[2];
+    // Inside the convex crystal: max over all faces of (p·n_k + d_k) ≤ 0.
+    float max_halfspace = -1e30f;
+    for (size_t k = 0; k < poly_cnt; k++) {
+      const float* nk = pn + 3 * k;
+      const float h = nk[0] * p[0] + nk[1] * p[1] + nk[2] * p[2] + pd[k];
+      if (h > max_halfspace) {
+        max_halfspace = h;
+      }
+    }
+    const bool ok = std::abs(on_plane) < kOnPlaneTol && max_halfspace < kInsideTol && front < kFrontTol;
+    if (!ok) {
+      st.failures++;
+      if (reported < 8) {
+        reported++;
+        ADD_FAILURE() << label << " ray " << i << " face=" << f << " on_plane=" << on_plane
+                      << " max_halfspace=" << max_halfspace << " front(n·d)=" << front << " p=(" << p[0] << "," << p[1]
+                      << "," << p[2] << ")";
+      }
+    }
+  }
+  // Any violation past the per-ray report cap still fails the test.
+  EXPECT_EQ(st.failures, 0u) << label << ": " << st.failures << " of " << st.valid
+                             << " valid entry samples violated a geometric invariant";
+  return st;
+}
+}  // namespace
+
+// Gen + transit, ≥2 MS layers: every captured device entry sample must be
+// geometrically consistent with the deterministic prism the scene traces. Covers
+// BOTH kernels because they write the same root_p / root_tf buffers.
+TEST(MetalRootGen, PerRayEntryPointGeometricConsistency) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+  EnableDeviceGenForStatisticalParity();
+
+  auto scene = MakeMetalScene(/*max_hits=*/6, /*ms_layers=*/2);
+  // Layer 1 (continuation/transit) gets a random axis so its orientation stream
+  // is exercised; the entry point is still checked against the same prism.
+  scene.ms_[1].setting_[0].crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  scene.ms_[1].setting_[0].crystal_.axis_.latitude_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+  auto render = MakeRectangularRender();
+
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 42;
+
+  HostRayBatch host;
+  host.count = kRayCount;
+  host.crystal = nullptr;
+  host.refractive_index = 0.0f;
+
+  // Ground-truth geometry: the scene's crystal is a deterministic prism h=1.0 (see
+  // MakeMetalScene) — the same canonical cf_geom the device pool holds.
+  const Crystal gt = Crystal::CreatePrism(1.0f);
+
+  MetalTraceBackend metal;
+  metal.BeginSession(spec);
+  MetalTraceBackendTestHooks hooks(metal);
+  hooks.SetInitialRayBase(/*root_base=*/0u, /*transit_base=*/0u);
+
+  // --- Layer 0: gen_root ---
+  auto h0 = metal.TraceLayer(RootRaySource::FromHost(host));
+  ASSERT_NE(h0, nullptr);
+  std::vector<float> gen_dirs, gen_p;
+  std::vector<uint32_t> gen_f;
+  ASSERT_EQ(hooks.ReadbackGenDirs(gen_dirs, kRayCount), 3u * kRayCount);
+  ASSERT_EQ(hooks.ReadbackRootP(gen_p, kRayCount), 3u * kRayCount);
+  ASSERT_EQ(hooks.ReadbackRootTf(gen_f, kRayCount), kRayCount);
+  EntryVerifyStats gen_st = VerifyEntryPointsPhysical(gt, gen_dirs, gen_p, gen_f, kRayCount, "gen");
+  // A gen batch that entirely dropped would be a vacuous pass — require most rays
+  // to be real front-face hits (the sun cone illuminates several prism faces).
+  EXPECT_GT(gen_st.valid, kRayCount / 2) << "gen: too few valid entry samples (" << gen_st.valid << "/" << gen_st.total
+                                         << ", drops=" << gen_st.drops << ") — check is near-vacuous";
+
+  // --- Layer 1: transit_root over the compacted continuation set [0, n_cont) ---
+  const size_t n_cont = h0->ContinuationCount();
+  ASSERT_GT(n_cont, 64u) << "too few continuation rays to exercise transit meaningfully";
+  RecombineSpec rspec;
+  rspec.shuffle = false;
+  auto roots1 = metal.Recombine(std::move(h0), rspec);
+  auto h1 = metal.TraceLayer(roots1);
+  ASSERT_NE(h1, nullptr);
+  std::vector<float> tr_dirs, tr_p;
+  std::vector<uint32_t> tr_f;
+  ASSERT_EQ(hooks.ReadbackGenDirs(tr_dirs, n_cont), 3u * n_cont);
+  ASSERT_EQ(hooks.ReadbackRootP(tr_p, n_cont), 3u * n_cont);
+  ASSERT_EQ(hooks.ReadbackRootTf(tr_f, n_cont), n_cont);
+  EntryVerifyStats tr_st = VerifyEntryPointsPhysical(gt, tr_dirs, tr_p, tr_f, n_cont, "transit");
+  EXPECT_GT(tr_st.valid, n_cont / 2) << "transit: too few valid entry samples (" << tr_st.valid << "/" << tr_st.total
+                                     << ", drops=" << tr_st.drops << ") — check is near-vacuous";
+
+  metal.EndSession();
 }
 
 }  // namespace

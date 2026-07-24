@@ -2033,8 +2033,14 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
     return LUMICE_ERR_INVALID_CONFIG;
   }
 
-  const ns::Mesh& mesh = crystal.GetMesh();
+  // On-demand triangulation: the Crystal no longer stores a triangle mesh
+  // (entry-point sampling consumes cf_geom_ corners directly). Geometry export
+  // is a cold path (GUI preview, gated by a param hash) so building the mesh
+  // here — instead of eagerly in every MakeCrystal — costs nothing on the hot
+  // path.
   const ns::CrystalGeom& g = crystal.CfGeom();
+  const ns::detail::BuiltMesh built = ns::detail::BuildMeshFromCfGeom(g);
+  const ns::Mesh& mesh = built.mesh;
 
   auto vtx_cnt = static_cast<int>(mesh.GetVtxCnt());
   if (vtx_cnt > LUMICE_MAX_CRYSTAL_VERTICES) {
@@ -2054,15 +2060,14 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* cr
     std::memcpy(out->triangles, mesh.GetTrianglePtr(0), tri_cnt * 3 * sizeof(int));
   }
 
-  // Per-triangle face_number: chain tri → polygon-face → fn. Both hops read
-  // parametric tables (poly_face_of_tri_ + poly_face_fn_ per polygon face)
-  // populated by PopulateFromCfGeom from cf_geom_.face_number. kInvalidId at
-  // either hop → -1 (C-API sentinel; naive static_cast would yield 65535).
-  // GetFn() already short-circuits poly == kInvalidId internally.
+  // Per-triangle face_number, read straight from cf_geom_. Each triangle's
+  // originating face slot (built.tri_face_slot[i]) is, by construction, a
+  // present face with >= 3 corners (an absent or sub-triangle face emits no
+  // triangle), so cf_geom_.face_number[slot] is always a legal fn — there is
+  // no kInvalidId / -1 sentinel case to map anymore.
   for (size_t i = 0; i < tri_cnt; ++i) {
-    ns::IdType poly = crystal.PolygonFaceOfTri(static_cast<int>(i));
-    ns::IdType fn = crystal.GetFn(poly);
-    out->face_numbers[i] = (fn == ns::kInvalidId) ? -1 : static_cast<int>(fn);
+    const int slot = built.tri_face_slot[i];
+    out->face_numbers[i] = g.face_number[slot];
   }
 
   // Per-face polygon topology: walk present slots in cf_geom_, map each face's

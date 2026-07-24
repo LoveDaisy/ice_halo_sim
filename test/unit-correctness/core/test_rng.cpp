@@ -10,6 +10,7 @@
 #include "core/math.hpp"
 #include "core/shared/lat_path_selection.hpp"
 #include "core/shared/pcg_shared.h"
+#include "core/simulator.hpp"
 #include "util/threading_pool.hpp"
 
 namespace {
@@ -166,15 +167,22 @@ TEST_F(RngTest, SampleSphericalWithCustomLatitude) {
 TEST_F(RngTest, TriangleSample) {
   auto crystal = lumice::Crystal::CreatePrism(0.2f);
 
+  // The Crystal no longer caches a triangle mesh; rebuild the fan sub-triangles
+  // from cf_geom_ (the same helper the CPU/GPU entry samplers use) and sample
+  // the first one.
+  const lumice::CrystalGeom& cf = crystal.CfGeom();
+  std::vector<lumice::detail::EntrySubTri> sub(lumice::detail::CountEntrySubTris(cf));
+  ASSERT_GT(sub.size(), 0u);
+  lumice::detail::BuildEntrySubTris(cf, sub.data());
+
   float p[3];
   float v[3];
-  int fid = 0;
-  const float* face_vtx = crystal.GetTriangleVtx() + fid * 9;
+  const float* face_vtx = sub[0].v;
   lumice::SampleTrianglePoint(face_vtx, p);
   for (int k = 0; k < 3; k++) {
     v[k] = p[k] - face_vtx[k];
   }
-  float dot = lumice::Dot3(v, crystal.GetTriangleNormal() + fid * 3);
+  float dot = lumice::Dot3(v, sub[0].n);
   EXPECT_NEAR(dot, 0.0f, kFloatEps);
 }
 

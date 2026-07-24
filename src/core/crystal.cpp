@@ -218,15 +218,18 @@ void AdaptClosedFormPyramidToCrystalGeom(const ClosedFormPyramidResult& r, Cryst
   }
 }
 
+}  // namespace
+
+namespace detail {
+
 // Dedup-linear-search 3D vertex pool + fixed-fan triangulation. Small n
 // (≤ 24 verts for prism, ≤ 96 for the pyramid worst case), so O(n²) dedup is
 // fine and matches the tolerance choice already used inside
 // geo3d_closedform.cpp's 2D corner dedup.
-struct BuiltMesh {
-  Mesh mesh;
-  std::vector<int> tri_face_slot;  // len == mesh.GetTriangleCnt()
-};
-
+//
+// This is the only triangulating path left in the codebase. It is a pure
+// function of cf_geom_, invoked on the cold path only (C-API geometry export +
+// white-box tests) — the MakeCrystal hot path no longer builds a triangle mesh.
 BuiltMesh BuildMeshFromCfGeom(const CrystalGeom& g) {
   constexpr float kDedupTol = 1e-6f;
 
@@ -288,40 +291,24 @@ BuiltMesh BuildMeshFromCfGeom(const CrystalGeom& g) {
   return BuiltMesh{ Mesh(vtx_cnt, std::move(vtx_buf), tri_cnt, std::move(tri_buf)), std::move(tri_face_slot) };
 }
 
-}  // namespace
+}  // namespace detail
 
-// Populate poly_face_data_ (normals + plane distances), poly_face_fn_
-// (per-polygon face-number), and poly_face_of_tri_ (tri→polygon-face map)
-// directly from the closed-form output. The closed-form output already
-// carries the parametric face-number and per-triangle slot membership; there
-// is nothing to reverse-engineer. This is the payoff of the representation
-// swap: what used to be three separate argmax reversals (CPU / Metal / CUDA)
-// collapse into straight assignments from the same source, and the fn is now
-// stored at its natural key (per polygon face) rather than reconstructed
-// from an argmax-selected representative triangle.
-void Crystal::PopulateFromCfGeom(const std::vector<int>& tri_face_slot) {
-  const size_t tri_cnt = mesh_.GetTriangleCnt();
-  assert(tri_face_slot.size() == tri_cnt);
-
-  // slot → poly-face-index (0..present_cnt-1). kInvalidId for absent slots.
-  IdType slot_to_poly[kCrystalGeomMaxFaces];
-  for (int i = 0; i < kCrystalGeomMaxFaces; i++) {
-    slot_to_poly[i] = kInvalidId;
-  }
+// Populate poly_face_data_ (normals + plane distances) and poly_face_fn_
+// (per-polygon face-number) directly from the closed-form output. The
+// closed-form output already carries the parametric face-number and per-slot
+// presence; there is nothing to reverse-engineer. This is the payoff of the
+// representation swap: what used to be three separate argmax reversals (CPU /
+// Metal / CUDA) collapse into straight assignments from the same source, and
+// the fn is now stored at its natural key (per polygon face) rather than
+// reconstructed from an argmax-selected representative triangle.
+void Crystal::PopulateFromCfGeom() {
   size_t present = 0;
   for (int slot = 0; slot < cf_geom_.face_cnt; slot++) {
     if (cf_geom_.face_present[slot]) {
-      slot_to_poly[slot] = static_cast<IdType>(present);
       present++;
     }
   }
   poly_face_cnt_ = present;
-
-  poly_face_of_tri_ = std::make_unique<IdType[]>(tri_cnt);
-  for (size_t t = 0; t < tri_cnt; t++) {
-    const int slot = tri_face_slot[t];
-    poly_face_of_tri_[t] = (slot >= 0 && slot < kCrystalGeomMaxFaces) ? slot_to_poly[slot] : kInvalidId;
-  }
 
   if (poly_face_cnt_ == 0) {
     poly_face_data_.reset();
@@ -371,15 +358,12 @@ Crystal Crystal::MakePrismClosedForm(float h, const float dist[6], const char* f
       LOG_WARNING("{}: failed closed-form validity gate (h={:.4e}, corner_cnt={}); treating as degenerate",  //
                   factory, static_cast<double>(h), r.corner_cnt);
     }
-    return Crystal(Mesh(0, 0));
+    return Crystal();
   }
-  CrystalGeom g;
-  AdaptClosedFormPrismToCrystalGeom(r, h, g);
-  BuiltMesh built = BuildMeshFromCfGeom(g);
-  Crystal c(std::move(built.mesh));
-  c.cf_geom_ = g;
+  Crystal c;
+  AdaptClosedFormPrismToCrystalGeom(r, h, c.cf_geom_);
   c.fn_period_ = 6;
-  c.PopulateFromCfGeom(built.tri_face_slot);
+  c.PopulateFromCfGeom();
   return c;
 }
 
@@ -409,15 +393,12 @@ Crystal Crystal::MakePyramidClosedForm(float upper_alpha, float lower_alpha, flo
     if (r.vtx_cnt > 0) {
       LOG_WARNING("{}: failed closed-form validity gate (present face count < 4, vtx_cnt={})", factory, r.vtx_cnt);
     }
-    return Crystal(Mesh(0, 0));
+    return Crystal();
   }
-  CrystalGeom g;
-  AdaptClosedFormPyramidToCrystalGeom(r, g);
-  BuiltMesh built = BuildMeshFromCfGeom(g);
-  Crystal c(std::move(built.mesh));
-  c.cf_geom_ = g;
+  Crystal c;
+  AdaptClosedFormPyramidToCrystalGeom(r, c.cf_geom_);
   c.fn_period_ = 6;
-  c.PopulateFromCfGeom(built.tri_face_slot);
+  c.PopulateFromCfGeom();
   return c;
 }
 
@@ -443,43 +424,11 @@ Crystal Crystal::CreatePyramid(int upper_i1, int upper_i4, int lower_i1, int low
 }
 
 
-enum CrystalCachOffset {
-  kVtx = 0,
-  kNormal = 9,
-  kArea = 12,
-  kTotal = 13,
-};
-
 Crystal::Crystal() {}
 
-Crystal::Crystal(size_t vtx_cnt, std::unique_ptr<float[]> vtx, size_t triangle_cnt, std::unique_ptr<int[]> triangle_idx)
-    : mesh_(vtx_cnt, std::move(vtx), triangle_cnt, std::move(triangle_idx)),
-      cache_data_(std::make_unique<float[]>(triangle_cnt * CrystalCachOffset::kTotal)),
-      face_v_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kVtx),
-      face_n_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kNormal),
-      face_area_(cache_data_.get() + triangle_cnt * CrystalCachOffset::kArea) {
-  ComputeCacheData();
-}
-
-Crystal::Crystal(Mesh mesh)
-    : mesh_(std::move(mesh)),
-      cache_data_(std::make_unique<float[]>(mesh_.GetTriangleCnt() * CrystalCachOffset::kTotal)),
-      face_v_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kVtx),
-      face_n_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kNormal),
-      face_area_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kArea) {
-  ComputeCacheData();
-}
-
 Crystal::Crystal(const Crystal& other)
-    : config_id_(other.config_id_), mesh_(other.mesh_),
-      cache_data_(std::make_unique<float[]>(other.TotalTriangles() * CrystalCachOffset::kTotal)),
-      face_v_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kVtx),
-      face_n_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kNormal),
-      face_area_(cache_data_.get() + other.TotalTriangles() * CrystalCachOffset::kArea), fn_period_(other.fn_period_),
-      poly_face_cnt_(other.poly_face_cnt_), cf_geom_(other.cf_geom_) {
-  auto tri_cnt = other.TotalTriangles();
-  std::memcpy(cache_data_.get(), other.cache_data_.get(), tri_cnt * CrystalCachOffset::kTotal * sizeof(float));
-
+    : config_id_(other.config_id_), fn_period_(other.fn_period_), poly_face_cnt_(other.poly_face_cnt_),
+      cf_geom_(other.cf_geom_) {
   if (poly_face_cnt_ > 0) {
     poly_face_data_ = std::make_unique<float[]>(poly_face_cnt_ * 4);
     poly_face_n_ = poly_face_data_.get();
@@ -488,24 +437,12 @@ Crystal::Crystal(const Crystal& other)
     poly_face_fn_ = std::make_unique<IdType[]>(poly_face_cnt_);
     std::memcpy(poly_face_fn_.get(), other.poly_face_fn_.get(), poly_face_cnt_ * sizeof(IdType));
   }
-  if (other.poly_face_of_tri_) {
-    poly_face_of_tri_ = std::make_unique<IdType[]>(tri_cnt);
-    std::memcpy(poly_face_of_tri_.get(), other.poly_face_of_tri_.get(), tri_cnt * sizeof(IdType));
-  }
 }
 
 Crystal::Crystal(Crystal&& other) noexcept
-    : config_id_(other.config_id_), mesh_(std::move(other.mesh_)), cache_data_(std::move(other.cache_data_)),
-      face_v_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kVtx),
-      face_n_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kNormal),
-      face_area_(cache_data_.get() + mesh_.GetTriangleCnt() * CrystalCachOffset::kArea), fn_period_(other.fn_period_),
-      poly_face_cnt_(other.poly_face_cnt_), poly_face_data_(std::move(other.poly_face_data_)),
-      poly_face_fn_(std::move(other.poly_face_fn_)), poly_face_of_tri_(std::move(other.poly_face_of_tri_)),
+    : config_id_(other.config_id_), fn_period_(other.fn_period_), poly_face_cnt_(other.poly_face_cnt_),
+      poly_face_data_(std::move(other.poly_face_data_)), poly_face_fn_(std::move(other.poly_face_fn_)),
       cf_geom_(other.cf_geom_) {
-  other.face_v_ = nullptr;
-  other.face_n_ = nullptr;
-  other.face_area_ = nullptr;
-
   if (poly_face_cnt_ > 0) {
     poly_face_n_ = poly_face_data_.get();
     poly_face_d_ = poly_face_data_.get() + poly_face_cnt_ * 3;
@@ -521,16 +458,6 @@ Crystal& Crystal::operator=(const Crystal& other) {
   }
 
   config_id_ = other.config_id_;
-  mesh_ = other.mesh_;
-
-  auto n = other.TotalTriangles();
-  cache_data_ = std::make_unique<float[]>(n * CrystalCachOffset::kTotal);
-  face_v_ = cache_data_.get() + n * CrystalCachOffset::kVtx;
-  face_n_ = cache_data_.get() + n * CrystalCachOffset::kNormal;
-  face_area_ = cache_data_.get() + n * CrystalCachOffset::kArea;
-
-  std::memcpy(cache_data_.get(), other.cache_data_.get(), n * CrystalCachOffset::kTotal * sizeof(float));
-
   fn_period_ = other.fn_period_;
 
   poly_face_cnt_ = other.poly_face_cnt_;
@@ -547,12 +474,6 @@ Crystal& Crystal::operator=(const Crystal& other) {
     poly_face_d_ = nullptr;
     poly_face_fn_.reset();
   }
-  if (other.poly_face_of_tri_) {
-    poly_face_of_tri_ = std::make_unique<IdType[]>(n);
-    std::memcpy(poly_face_of_tri_.get(), other.poly_face_of_tri_.get(), n * sizeof(IdType));
-  } else {
-    poly_face_of_tri_.reset();
-  }
   cf_geom_ = other.cf_geom_;
   return *this;
 }
@@ -563,17 +484,6 @@ Crystal& Crystal::operator=(Crystal&& other) noexcept {
   }
 
   config_id_ = other.config_id_;
-  mesh_ = std::move(other.mesh_);
-
-  auto n = mesh_.GetTriangleCnt();
-  cache_data_ = std::move(other.cache_data_);
-  face_v_ = cache_data_.get() + n * CrystalCachOffset::kVtx;
-  face_n_ = cache_data_.get() + n * CrystalCachOffset::kNormal;
-  face_area_ = cache_data_.get() + n * CrystalCachOffset::kArea;
-  other.face_v_ = nullptr;
-  other.face_n_ = nullptr;
-  other.face_area_ = nullptr;
-
   fn_period_ = other.fn_period_;
 
   poly_face_cnt_ = other.poly_face_cnt_;
@@ -590,65 +500,10 @@ Crystal& Crystal::operator=(Crystal&& other) noexcept {
   other.poly_face_n_ = nullptr;
   other.poly_face_d_ = nullptr;
 
-  poly_face_of_tri_ = std::move(other.poly_face_of_tri_);
-
   cf_geom_ = other.cf_geom_;
   other.cf_geom_ = CrystalGeom{};
 
   return *this;
-}
-
-void Crystal::ComputeCacheData() {
-  auto triangle_cnt = mesh_.GetTriangleCnt();
-  const auto* vtx = mesh_.GetVtxPtr(0);
-  const auto* triangle_idx = mesh_.GetTrianglePtr(0);
-  float ev[6];
-  for (size_t i = 0; i < triangle_cnt; i++) {
-    // face_v_
-    for (int j = 0; j < 3; j++) {
-      std::memcpy(face_v_ + i * 9 + j * 3, vtx + triangle_idx[i * 3 + j] * 3, 3 * sizeof(float));
-    }
-
-    // edge vectors (local)
-    for (int j = 0; j < 3; j++) {
-      ev[j + 0] = face_v_[i * 9 + j + 3] - face_v_[i * 9 + j + 0];
-      ev[j + 3] = face_v_[i * 9 + j + 6] - face_v_[i * 9 + j + 0];
-    }
-
-    // face_n_ && face_area_
-    Cross3(ev + 0, ev + 3, face_n_ + i * 3);
-    face_area_[i] = Norm3(face_n_ + i * 3) / 2.0f;
-    Normalize3(face_n_ + i * 3);
-  }
-}
-
-size_t Crystal::TotalTriangles() const {
-  return mesh_.GetTriangleCnt();
-}
-
-const float* Crystal::GetTriangleVtx() const {
-  return face_v_;
-}
-
-const float* Crystal::GetTriangleNormal() const {
-  return face_n_;
-}
-
-const float* Crystal::GetTirangleArea() const {
-  return face_area_;
-}
-
-IdType Crystal::PolygonFaceOfTri(int tri_id) const {
-  if (tri_id < 0 || tri_id >= static_cast<int>(mesh_.GetTriangleCnt())) {
-    return kInvalidId;
-  }
-  if (!poly_face_of_tri_) {
-    // Mesh-only Crystal (custom-mesh or default-constructed): tri→poly-face
-    // mapping is not derivable without the parametric slot table. Callers
-    // must treat kInvalidId as "no polygon face for this triangle".
-    return kInvalidId;
-  }
-  return poly_face_of_tri_[tri_id];
 }
 
 IdType Crystal::GetFn(IdType poly_idx) const {

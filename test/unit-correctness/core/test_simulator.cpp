@@ -1,10 +1,14 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <numeric>
 #include <set>
+#include <utility>
 #include <vector>
 
 #include "config/filter_config.hpp"
@@ -827,8 +831,8 @@ TEST(SimulatorEffectiveSeed, TwoZeroSeedInstancesDistinct) {
 // upper-pyramid faces onto the lowest polygon index on ~≥87.4° wedge because
 // adjacent upper-face normals dot to ~0.9994). Step 4 of the closed-form
 // representation swap replaced the whole argmax reversal with a parametric
-// slot→poly-face constant table populated at Crystal construction time
-// (Crystal::PolygonFaceOfTri now reads a precomputed array). The original
+// slot→poly-face id carried directly by each fan sub-triangle
+// (detail::EntrySubTri::face_id, derived from cf_geom_ presence). The original
 // failure mode is *structurally* unreachable through the closed-form path —
 // the map is not rediscovered per call. This sentinel is kept as a
 // higher-level end-to-end assertion (extreme-wedge crystals expose 6 distinct
@@ -842,16 +846,24 @@ constexpr IdType kUpperPyramidFnLo = 13;
 constexpr IdType kUpperPyramidFnHi = 18;
 
 size_t CountDistinctUpperPolyFaces(const Crystal& crystal, bool* any_invalid_out = nullptr) {
+  // Rebuild the fan sub-triangles from cf_geom_ (the same helper the CPU/GPU
+  // entry samplers use); each sub-triangle carries the compact present-face id
+  // it belongs to (== the old PolygonFaceOfTri result).
+  const CrystalGeom& cf = crystal.CfGeom();
+  std::vector<detail::EntrySubTri> sub(detail::CountEntrySubTris(cf));
+  if (!sub.empty()) {
+    detail::BuildEntrySubTris(cf, sub.data());
+  }
   std::set<IdType> polys;
   bool any_invalid = false;
-  for (size_t t = 0; t < crystal.TotalTriangles(); t++) {
-    IdType fn = crystal.GetFn(static_cast<int>(t));
-    if (fn < kUpperPyramidFnLo || fn > kUpperPyramidFnHi) {
-      continue;
-    }
-    IdType poly = crystal.PolygonFaceOfTri(static_cast<int>(t));
+  for (size_t t = 0; t < sub.size(); t++) {
+    IdType poly = sub[t].face_id;
     if (poly == kInvalidId) {
       any_invalid = true;
+      continue;
+    }
+    IdType fn = crystal.GetFn(poly);
+    if (fn < kUpperPyramidFnLo || fn > kUpperPyramidFnHi) {
       continue;
     }
     polys.insert(poly);
@@ -880,6 +892,213 @@ TEST(PolygonFaceOfTriArgmax, NormalWedge87SixDistinctUpperFaces) {
   size_t distinct = CountDistinctUpperPolyFaces(crystal, &any_invalid);
   EXPECT_EQ(distinct, 6u);
   EXPECT_FALSE(any_invalid) << "no upper-pyramid triangle should return kInvalidId at wedge 87°";
+}
+
+// ---- InitRay_p_fid polygon-granularity sampler ----
+//
+// White-box self-proof of the compact present-face numbering that the rewritten
+// InitRay_p_fid assigns to RaySeg::to_face_. The oracle suite
+// (test/golden-analytic/core/test_incidence_sampling_polygon_oracle.cpp) already
+// gates the sampled *distribution*; these are faster, direct checks that the
+// compact id the sampler writes is the same numbering GetFn/poly_face_n_ use —
+// the failure mode risk-4 warns about (a numbering drift silently indexes the
+// wrong face normal downstream). Expectations are derived independently from
+// CfGeom (slot ascending, skip absent), not from the sampler under test.
+namespace {
+
+// Drive the real production sampler for `n` rays, all with crystal-local
+// direction `d`. Mirrors the oracle's DriveEntrySampling but kept local so this
+// unit test does not depend on the golden-analytic support header.
+std::vector<IdType> DriveToFaces(const Crystal& crystal, const float d[3], size_t n, uint32_t seed,
+                                 std::vector<std::array<float, 3>>* points_out = nullptr) {
+  RandomNumberGenerator::GetInstance().SetSeed(seed);
+  RayBuffer buf(n);
+  buf.size_ = n;
+  for (size_t i = 0; i < n; i++) {
+    RaySeg& r = buf[i];
+    r.d_[0] = d[0];
+    r.d_[1] = d[1];
+    r.d_[2] = d[2];
+    r.w_ = 1.0f;
+    r.from_face_ = kInvalidId;
+    r.to_face_ = kInvalidId;
+  }
+  InitRay_p_fid(crystal, &buf);
+  std::vector<IdType> faces(n);
+  if (points_out) {
+    points_out->resize(n);
+  }
+  for (size_t i = 0; i < n; i++) {
+    faces[i] = buf[i].to_face_;
+    if (points_out) {
+      (*points_out)[i] = { buf[i].p_[0], buf[i].p_[1], buf[i].p_[2] };
+    }
+  }
+  return faces;
+}
+
+}  // namespace
+
+// The compact numbering InitRay_p_fid assigns (slot ascending, skip absent) must
+// agree with the numbering PopulateFromCfGeom fed into GetFn: for every present
+// slot, GetFn(compact_id) must equal that slot's parametric face_number.
+TEST(InitRayPolygonSampling, CompactFaceIdMatchesGetFn) {
+  const float kUnitDist[6] = { 1, 1, 1, 1, 1, 1 };
+  const float kDrop[6] = { 1.0f, 0.4f, 1.0f, 0.5f, 1.0f, 1.0f };  // known face-drop pyramid
+  std::vector<std::pair<const char*, Crystal>> fixtures;
+  fixtures.emplace_back("prism_h1.2", Crystal::CreatePrism(1.2f));
+  fixtures.emplace_back("pyr_shoulder", Crystal::CreatePyramid(28.0f, 28.0f, 0.6f, 1.0f, 0.6f, kUnitDist));
+  fixtures.emplace_back("pyr_drop", Crystal::CreatePyramid(30.0f, 30.0f, 1.0f, 0.5f, 1.0f, kDrop));
+
+  for (auto& [label, crystal] : fixtures) {
+    const CrystalGeom& cf = crystal.CfGeom();
+    IdType compact = 0;
+    for (int slot = 0; slot < cf.face_cnt; slot++) {
+      if (!cf.face_present[slot]) {
+        continue;
+      }
+      EXPECT_EQ(crystal.GetFn(compact), static_cast<IdType>(cf.face_number[slot]))
+          << label << ": compact id " << compact << " (slot " << slot << ") face-number mismatch";
+      compact++;
+    }
+    EXPECT_EQ(static_cast<size_t>(compact), crystal.PolygonFaceCount()) << label << ": present-count mismatch";
+  }
+}
+
+// A direction that illuminates exactly one face: every ray must land on that
+// face's compact id (in range, single-valued), the point must lie on that face's
+// plane, and GetFn(to_face_) must equal the illuminated face's parametric number.
+TEST(InitRayPolygonSampling, SingleFaceDirectionHitsExpectedFace) {
+  Crystal crystal = Crystal::CreatePrism(1.2f);
+  const CrystalGeom& cf = crystal.CfGeom();
+
+  // Independently pick the "top basal" face: present slot whose outward normal
+  // has the most-positive z. A ray travelling -z illuminates only it.
+  int top_slot = -1;
+  IdType top_compact = kInvalidId;
+  IdType compact = 0;
+  float best_nz = -2.0f;
+  for (int slot = 0; slot < cf.face_cnt; slot++) {
+    if (!cf.face_present[slot]) {
+      continue;
+    }
+    const float nz = cf.face_normal[slot * 3 + 2];
+    if (nz > best_nz) {
+      best_nz = nz;
+      top_slot = slot;
+      top_compact = compact;
+    }
+    compact++;
+  }
+  ASSERT_GE(top_slot, 0);
+  ASSERT_GT(best_nz, 0.9f) << "expected a basal face with near-+z normal";
+
+  // Expected z of the top face (all its corners share it for a flat basal face).
+  const float expect_z = cf.face_vtx[static_cast<size_t>(top_slot) * kCrystalGeomMaxVtxPerFace * 3 + 2];
+
+  const float d[3] = { 0.0f, 0.0f, -1.0f };
+  std::vector<std::array<float, 3>> pts;
+  const std::vector<IdType> faces = DriveToFaces(crystal, d, 4000, 12345, &pts);
+
+  for (size_t i = 0; i < faces.size(); i++) {
+    ASSERT_NE(faces[i], kInvalidId);
+    ASSERT_LT(faces[i], static_cast<IdType>(crystal.PolygonFaceCount()));
+    EXPECT_EQ(faces[i], top_compact) << "ray " << i << " selected a non-illuminated face";
+    EXPECT_NEAR(pts[i][2], expect_z, 1e-4f) << "sampled point off the top-basal plane";
+  }
+  EXPECT_EQ(crystal.GetFn(top_compact), static_cast<IdType>(cf.face_number[top_slot]));
+}
+
+// Across several directions and fixtures, every sampled to_face_ must be in range
+// and correspond to a genuinely front-facing face (outward normal·d < 0) — a
+// zero-/back-weight face must never be selected. Directly catches a numbering
+// drift that would point to_face_ at the wrong (e.g. back) face.
+TEST(InitRayPolygonSampling, SelectedFacesAreFrontFacing) {
+  const float kUnitDist[6] = { 1, 1, 1, 1, 1, 1 };
+  std::vector<std::pair<const char*, Crystal>> fixtures;
+  fixtures.emplace_back("prism_h1.2", Crystal::CreatePrism(1.2f));
+  fixtures.emplace_back("pyr_shoulder", Crystal::CreatePyramid(28.0f, 28.0f, 0.6f, 1.0f, 0.6f, kUnitDist));
+
+  const float s = 1.0f / std::sqrt(3.0f);
+  const std::vector<std::array<float, 3>> dirs = {
+    { 0, 0, -1 }, { 0, 0, 1 }, { 1, 0, 0 }, { s, s, s }, { -s, s, -s },
+  };
+
+  for (auto& [label, crystal] : fixtures) {
+    const CrystalGeom& cf = crystal.CfGeom();
+    // Build compact-id → slot map (same rule the sampler uses).
+    std::vector<int> compact_to_slot;
+    for (int slot = 0; slot < cf.face_cnt; slot++) {
+      if (cf.face_present[slot]) {
+        compact_to_slot.push_back(slot);
+      }
+    }
+    for (const auto& d : dirs) {
+      const std::vector<IdType> faces = DriveToFaces(crystal, d.data(), 2000, 777, nullptr);
+      for (IdType f : faces) {
+        ASSERT_NE(f, kInvalidId) << label;
+        ASSERT_LT(static_cast<size_t>(f), compact_to_slot.size()) << label;
+        const int slot = compact_to_slot[f];
+        const float* n = cf.face_normal + slot * 3;
+        const float n_dot_d = n[0] * d[0] + n[1] * d[1] + n[2] * d[2];
+        // Front-facing = outward normal opposes the ray direction. Allow a tiny
+        // grazing margin (fan sub-tri normals of near-planar faces jitter ~1e-3).
+        EXPECT_LT(n_dot_d, 1e-2f) << label << ": selected a back-facing face (compact " << f << ", slot " << slot
+                                  << ", n·d=" << n_dot_d << ")";
+      }
+    }
+  }
+}
+
+// A face with vtx_cnt>=3 (not the whole-face degenerate case already handled
+// by CountEntrySubTris/BuildEntrySubTris skipping vtx_cnt<3) can still contain
+// one collapsed fan sub-triangle if two of its corners coincide. Before the
+// fix, Cross3 on the collapsed pair gave a zero vector, area correctly came
+// out 0, but Normalize3 on that same zero vector produced NaN — poisoning the
+// per-ray projected-weight table even though the sub-tri's area already
+// should have zeroed its selection weight. Regression guard: the degenerate
+// sub-tri's normal must be a finite zero, not NaN, and must not corrupt its
+// non-degenerate neighbor.
+TEST(InitRayPolygonSampling, DegenerateSubTriProducesFiniteZeroNotNaN) {
+  CrystalGeom cf{};
+  cf.face_cnt = 1;
+  cf.face_present[0] = true;
+  cf.face_vtx_cnt[0] = 4;
+  // Corners 0 and 1 coincide -> fan sub-tri (0,1,2) collapses to zero area.
+  // Corners 0,2,3 form a valid non-degenerate triangle.
+  const float corners[4][3] = { { 0, 0, 0 }, { 0, 0, 0 }, { 1, 0, 0 }, { 1, 1, 0 } };
+  for (int k = 0; k < 4; k++) {
+    std::memcpy(cf.face_vtx + static_cast<size_t>(k) * 3, corners[k], 3 * sizeof(float));
+  }
+
+  const size_t subtri_cnt = detail::CountEntrySubTris(cf);
+  ASSERT_EQ(subtri_cnt, 2u);
+  std::vector<detail::EntrySubTri> subtri(subtri_cnt);
+  detail::BuildEntrySubTris(cf, subtri.data());
+
+  // Degenerate sub-tri (0,1,2): area exactly 0, normal finite zero (not NaN).
+  EXPECT_FLOAT_EQ(subtri[0].area, 0.0f);
+  for (float c : subtri[0].n) {
+    ASSERT_TRUE(std::isfinite(c)) << "degenerate sub-tri produced a non-finite normal component";
+    EXPECT_FLOAT_EQ(c, 0.0f);
+  }
+  EXPECT_EQ(subtri[0].face_id, 0);
+
+  // Its non-degenerate neighbor (0,2,3) must be unaffected: positive area,
+  // finite unit normal.
+  EXPECT_GT(subtri[1].area, 0.0f);
+  for (float c : subtri[1].n) {
+    EXPECT_TRUE(std::isfinite(c));
+  }
+  EXPECT_EQ(subtri[1].face_id, 0);
+
+  // The per-ray weight InitRay_p_fid actually computes from this sub-tri must
+  // come out exactly 0.0f (not NaN) for any direction, so collapsed geometry
+  // is silently discarded via zero weight rather than corrupting the sampler.
+  const float d[3] = { 0.0f, 0.0f, -1.0f };
+  const float w0 = std::max(-Dot3(d, subtri[0].n) * subtri[0].area, 0.0f);
+  ASSERT_TRUE(std::isfinite(w0));
+  EXPECT_FLOAT_EQ(w0, 0.0f);
 }
 
 }  // namespace

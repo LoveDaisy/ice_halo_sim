@@ -65,7 +65,15 @@ bool IsClosedTriMesh(size_t v, size_t f);
 // static_assert bridging these constants to the ClosedFormPyramid capacity so
 // closed-form growth is caught at compile time, not silently truncated.
 constexpr int kCrystalGeomMaxFaces = 20;
-constexpr int kCrystalGeomMaxVtxPerFace = 32;
+// Per-face CCW vertex capacity. The hexagonal pyramid/prism family's real worst
+// case is 7 (measured: max present face_vtx_cnt over a 2M-sample fuzz spanning
+// wide/negative/near-zero face distances + the known near-coincident-vertex
+// inputs; basal ≤6-gon, cone faces inflate to 7 under irregular dist). 12 keeps
+// a comfortable margin; the closed-form evaluator's AppendFaceVtx hard-aborts
+// (never silently truncates) if a face ever exceeds kClosedFormPyramidMaxFaceVtx
+// (== 12, kept in lockstep via the static_assert in crystal.cpp). This directly
+// shrinks CrystalGeom's by-value copy cost (face_vtx dominates its footprint).
+constexpr int kCrystalGeomMaxVtxPerFace = 12;
 
 struct CrystalGeom {
   int face_cnt = 0;
@@ -106,9 +114,13 @@ using CrystalPtrU = std::unique_ptr<Crystal>;
 
 /**
  * @brief Crystal geometry representation and operations
- * @details This class represents a crystal with triangular mesh.
- *          It provides methods for creating crystals and querying geometry data.
- *          The crystal is represented as a triangular mesh for efficient ray-crystal intersection.
+ * @details This class represents a crystal via its closed-form flat-POD geometry
+ *          (`cf_geom_`: planes + face-present mask + per-face CCW corners) plus
+ *          the polygon-face data derived from it (normals, plane distances, and
+ *          face numbers for slab traversal). The class no longer stores a
+ *          triangle mesh: entry-point sampling consumes `cf_geom_` corners
+ *          directly, and the only triangulating consumer (C-API geometry export)
+ *          builds a `Mesh` on demand via `detail::BuildMeshFromCfGeom`.
  */
 class Crystal {
  public:
@@ -190,51 +202,12 @@ class Crystal {
    */
   Crystal();
 
-  /**
-   * @brief Construct crystal from vertex and triangle data
-   * @param vtx_cnt Number of vertices
-   * @param vtx Vertex coordinate array (3 * vtx_cnt elements)
-   * @param triangle_cnt Number of triangles
-   * @param triangle_idx Triangle index array (3 * triangle_cnt elements)
-   */
-  Crystal(size_t vtx_cnt, std::unique_ptr<float[]> vtx, size_t triangle_cnt, std::unique_ptr<int[]> triangle_idx);
-
-  /**
-   * @brief Construct crystal from mesh
-   * @param mesh Mesh object containing vertex and triangle data
-   */
-  explicit Crystal(Mesh mesh);
-
   Crystal(const Crystal& other);
   Crystal(Crystal&& other) noexcept;
   ~Crystal() = default;
 
   Crystal& operator=(const Crystal& other);
   Crystal& operator=(Crystal&& other) noexcept;
-
-  /**
-   * @brief Get total number of triangles
-   * @return Number of triangles in the crystal mesh
-   */
-  size_t TotalTriangles() const;
-
-  /**
-   * @brief Get triangle vertex coordinates
-   * @return Pointer to vertex coordinate array (9 * triangle_cnt elements: 3 vertices * 3 coordinates per triangle)
-   */
-  const float* GetTriangleVtx() const;
-
-  /**
-   * @brief Get triangle normal vectors
-   * @return Pointer to normal vector array (3 * triangle_cnt elements: 3 coordinates per triangle)
-   */
-  const float* GetTriangleNormal() const;
-
-  /**
-   * @brief Get triangle areas
-   * @return Pointer to area array (triangle_cnt elements)
-   */
-  const float* GetTirangleArea() const;
 
   /**
    * @brief Get face number for a given polygon face index
@@ -299,38 +272,20 @@ class Crystal {
   const float* GetPolygonFaceNormal() const;
   const float* GetPolygonFaceDist() const;
 
-  // Map a triangle id to its polygon-face index (0..PolygonFaceCount()-1).
-  // Returns kInvalidId when @p tri_id is out of range OR when this Crystal was
-  // built via the mesh-only path (Crystal(Mesh) ctor without cf_geom_ wired,
-  // used only by the degenerate Mesh(0,0) short-circuit today). Replaces the
-  // per-consumer argmax reversal that used to live in
-  // simulator.cpp::detail::PolygonFaceOfTri — the tri→poly-face map is a
-  // parametric byproduct of the closed-form triangulation, not a fact to be
-  // rediscovered.
-  IdType PolygonFaceOfTri(int tri_id) const;
-
-  // Closed-form flat POD accessor. Returns cf_geom_.face_cnt == 0 for crystals
-  // constructed via the mesh path (custom crystals) or default-constructed
-  // instances; > 0 once the closed-form factory paths are wired up
-  // (plan Steps 2/3).
+  // Closed-form flat POD accessor. Returns cf_geom_.face_cnt == 0 for a
+  // default-constructed instance (including the degenerate-factory
+  // short-circuit); > 0 for closed-form prism/pyramid crystals.
   const CrystalGeom& CfGeom() const { return cf_geom_; }
-
-  // Read-only access to the underlying triangle mesh. Exposed so preview-only
-  // consumers (LUMICE_GetCrystalMesh) can pull vertex/triangle pools without
-  // building a second dedup path — the mesh pool is already deduped by
-  // BuildMeshFromCfGeom during construction.
-  const Mesh& GetMesh() const { return mesh_; }
 
   IdType config_id_ = kInvalidId;
 
  private:
-  void ComputeCacheData();
-  // Populate poly_face_data_, poly_face_fn_ and poly_face_of_tri_ directly
-  // from cf_geom_ + a per-tri "which face slot" table produced during the
-  // closed-form mesh build. See crystal.cpp for the design rationale (no
-  // argmax reversal — the parametric face-number + slot membership are
-  // already in cf_geom_).
-  void PopulateFromCfGeom(const std::vector<int>& tri_face_slot);
+  // Populate poly_face_data_ (normals + plane distances) and poly_face_fn_
+  // (per-polygon-face face number) directly from cf_geom_. The closed-form
+  // output already carries the parametric face-number and per-slot presence;
+  // there is nothing to reverse-engineer (no argmax reversal, no triangle
+  // mesh). See crystal.cpp for the design rationale.
+  void PopulateFromCfGeom();
   // Shared closed-form prism entry point behind both CreatePrism overloads.
   // Runs ComputeClosedFormPrism → 386.2 validity gate → CrystalGeom adapter →
   // fan-triangulation → PopulateFromCfGeom. Returns an empty crystal when the
@@ -350,13 +305,6 @@ class Crystal {
   // verbatim when no non-basal face is present.
   std::vector<IdType> PCanonicalShift(const std::vector<IdType>& rp) const;
 
-  Mesh mesh_;
-
-  std::unique_ptr<float[]> cache_data_;
-  float* face_v_;     // vertex coordinate of every face. 9 * face_cnt
-  float* face_n_;     // normal of every face. 3 * face_cnt
-  float* face_area_;  // area of every face. 1 * face_cnt
-
   int fn_period_ = -1;  // for raypath symmetry
 
   // Polygon face data for per-plane intersection
@@ -372,23 +320,29 @@ class Crystal {
   // reconstructed from an argmax-selected representative triangle.
   std::unique_ptr<IdType[]> poly_face_fn_;
 
-  // Direct tri→poly-face-index lookup. Populated by PopulateFromCfGeom from the
-  // per-tri "which face slot" table produced by BuildMeshFromCfGeom. Not
-  // populated (nullptr) for Crystals built via the mesh-only path — those
-  // return kInvalidId from PolygonFaceOfTri(int).
-  std::unique_ptr<IdType[]> poly_face_of_tri_;
-
-  // Closed-form flat POD geometry. Populated by CreatePrism/CreatePyramid once
-  // relined onto the closed-form path (plan Steps 2/3). face_cnt == 0 for
-  // custom-mesh crystals. Embedded by value (POD) — copy/move ctors pick it up
-  // trivially via the default member-wise path in the aggregated initializer
-  // lists below.
+  // Closed-form flat POD geometry. Populated by CreatePrism/CreatePyramid.
+  // face_cnt == 0 for a default-constructed instance. Embedded by value (POD) —
+  // copy/move ctors pick it up trivially via the member-wise path in the
+  // initializer lists in crystal.cpp.
   CrystalGeom cf_geom_{};
 };
 
 
 namespace detail {
 // Internal — not part of public API.
+
+// On-demand triangulation of a CrystalGeom: deduped 3D vertex pool + fixed-fan
+// triangle indices, plus a per-triangle "which face slot it came from" table
+// (len == mesh.GetTriangleCnt()). Fan rule (v0, v[i-1], v[i]) matches
+// detail::BuildEntrySubTris and the T1 analytic oracle. This is the *only*
+// triangulating path left; it is a pure function of cf_geom_, called on the
+// cold path only (C-API geometry export + white-box tests), never in the
+// MakeCrystal hot path.
+struct BuiltMesh {
+  Mesh mesh;
+  std::vector<int> tri_face_slot;
+};
+BuiltMesh BuildMeshFromCfGeom(const CrystalGeom& g);
 
 // Returns true if roll_mean_deg is a multiple of 30° (within FloatEqual precision).
 bool IsRollMeanAtMultipleOf30(const AxisDistribution& d);
