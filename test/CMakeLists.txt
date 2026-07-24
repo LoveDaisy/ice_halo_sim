@@ -53,6 +53,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/config/test_color_class_table.cpp"
   # server/
   "${PROJ_TEST_DIR}/unit-correctness/server/test_c_api.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_c_api_scene.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_stats_consumer.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_ray_num_semantics.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_component_lanes.cpp"
