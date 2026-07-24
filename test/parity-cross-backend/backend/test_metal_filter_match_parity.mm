@@ -263,7 +263,7 @@ struct FilterMatchTestParams {
 // in are caller-owned MTLBuffers; the harness sets binding indices according
 // to the contract in `kFilterMatchTestKernelSrc`.
 size_t DispatchParity(MetalHarness& h,
-                      id<MTLBuffer> filter_desc, id<MTLBuffer> getfn_offsets, id<MTLBuffer> getfn_bytes,
+                      id<MTLBuffer> filter_desc, id<MTLBuffer> poly_fn,
                       id<MTLBuffer> ray_path, id<MTLBuffer> ray_path_len,
                       id<MTLBuffer> ray_cslot, id<MTLBuffer> ray_cid,
                       id<MTLBuffer> ray_dir, id<MTLBuffer> ray_filter,
@@ -277,8 +277,9 @@ size_t DispatchParity(MetalHarness& h,
     id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
     [enc setComputePipelineState:h.pso];
     [enc setBuffer:filter_desc      offset:0 atIndex:0];
-    [enc setBuffer:getfn_offsets    offset:0 atIndex:1];
-    [enc setBuffer:getfn_bytes      offset:0 atIndex:2];
+    // buffer(1) getfn_offsets retired; poly_fn is the per-instance
+    // GetFn table (single-crystal fixture → one stripe at offset 0).
+    [enc setBuffer:poly_fn          offset:0 atIndex:2];
     [enc setBuffer:ray_path         offset:0 atIndex:3];
     [enc setBuffer:ray_path_len     offset:0 atIndex:4];
     [enc setBuffer:ray_cslot        offset:0 atIndex:5];
@@ -691,8 +692,9 @@ void RunSweep(MetalHarness& h, const ParityFixture& fx, std::mt19937& rng,
 
   // Upload device-side state.
   id<MTLBuffer> filter_desc_buf = MakeShared(h.device, fx.descs.data(), fx.descs.size() * sizeof(DeviceFilterDesc));
-  uint32_t getfn_offsets[2] = { 0, static_cast<uint32_t>(fx.getfn.size()) };
-  id<MTLBuffer> offsets_buf = MakeShared(h.device, getfn_offsets, sizeof(getfn_offsets));
+  // fx.getfn is the single-crystal per-instance GetFn stripe (== the
+  // production poly_fn table for one shape at offset 0); the retired getfn_offsets
+  // prefix-sum table is no longer built or bound.
   id<MTLBuffer> getfn_buf = MakeShared(h.device, fx.getfn.data(), fx.getfn.size());
   // Complex sub-desc buffer — 1-byte dummy when empty so the buffer(11) bind
   // is always valid (Metal disallows nil); kernel reads gated by Complex
@@ -711,7 +713,7 @@ void RunSweep(MetalHarness& h, const ParityFixture& fx, std::mt19937& rng,
   prm.n = static_cast<uint32_t>(n_rays);
   prm.face_seq_cap = static_cast<uint32_t>(fx.face_seq_cap);
   prm.check_mode = check_mode;
-  DispatchParity(h, filter_desc_buf, offsets_buf, getfn_buf,
+  DispatchParity(h, filter_desc_buf, getfn_buf,
                  rb.path, rb.path_len, rb.cslot, rb.cid, rb.dir, rb.filter,
                  rb.out_match, prm, complex_sub_buf, and_term_buf);
 
