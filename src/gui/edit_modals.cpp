@@ -320,39 +320,6 @@ void SnapshotAllBuffers(const GuiState& state) {
   }
 }
 
-// Mark the next combo's popup viewport as TopMost so it shares NSWindow level
-// with the modal when the modal is detached into its own OS viewport. Without
-// this, combo popups default to normal level (0) while the detached modal sits
-// at NSFloatingWindowLevel (3, set via the modal's own SetNextWindowClass /
-// ImGuiViewportFlags_TopMost in RenderEditModals), causing the popup to render
-// behind the modal — invisible and click-throughable. Must be called before
-// every modal-internal `BeginCombo` / `Combo` / `RenderAxisDist` call site.
-//
-// MAINTAINER: any new Combo / BeginCombo inside modal rendering functions
-// (RenderCrystalPreviewPane / RenderCrystalModal / RenderAxisModal /
-// RenderFilterModal) MUST be preceded by a call to this helper. Forgetting
-// the call has no compile-time error and silently regresses to the original
-// bug — only visible in detached-modal state which CI cannot reproduce
-// (hidden GLFW window pins GetMainViewport()->Pos to (0,0)).
-//
-// Mechanism: BeginCombo internally backs up and restores g.NextWindowData (see
-// imgui_widgets.cpp:1837/1906), so the flags set here propagate through to the
-// combo popup's `Begin` call inside `BeginComboPopup`. Validated against
-// macOS GLFW backend (CGWindowListCopyWindowInfo reports popup layer=3 after
-// applying this; without it layer=0). See ocornut/imgui#6216.
-//
-// UPGRADE NOTE: re-verify the NextWindowData backup/restore path in
-// imgui_widgets.cpp::BeginCombo when upgrading ImGui past v1.91.8-docking.
-// `ImGuiWindowClass.ViewportFlagsOverrideSet` is alpha API (per ocornut in
-// #7105) and the backup/restore pair (lines 1837/1906 above) may shift across
-// versions; if combo popups regress to layer=0 after an upgrade, audit those
-// two sites first.
-void SetNextComboPopupTopMost() {
-  ImGuiWindowClass wc;
-  wc.ViewportFlagsOverrideSet = ImGuiViewportFlags_TopMost;
-  ImGui::SetNextWindowClass(&wc);
-}
-
 }  // namespace
 
 // ============================================================
@@ -589,28 +556,32 @@ static void RenderCrystalModal(GuiState& /*state*/) {
       }
     }
     if (ImGui::Checkbox("Randomize (all faces)##modal_fd_uni", &uni_random)) {
-      for (int i = 0; i < 6; i++) {
-        if (uni_random) {
+      if (uni_random) {
+        // Broadcast ONE shared spread (derived from face[0]'s center) to all 6 faces — mirrors the
+        // "Spread (all)" slider's broadcast below. Must NOT compute spread per-face from each
+        // face's own center: the per-face center sliders above are always independent, so if the
+        // user already diverged centers before enabling this checkbox, a per-face computation
+        // would silently produce 6 different spreads under a control labeled "all faces" (the
+        // unified view's single-shared-value semantics, plan §3 design point 2).
+        const float uni_spread = kShapeDistDefaultSpreadFraction * cr.face_distance[0].center;
+        for (int i = 0; i < 6; i++) {
           cr.face_distance[i].type = ShapeDistType::kUniform;
-          cr.face_distance[i].spread = 0.2f * cr.face_distance[i].center;
-        } else {
+          cr.face_distance[i].spread = uni_spread;
+        }
+      } else {
+        for (int i = 0; i < 6; i++) {
           cr.face_distance[i].type = ShapeDistType::kNoRandom;
           cr.face_distance[i].spread = 0.0f;
         }
       }
     }
     if (uni_random) {
-      int uni_combo = static_cast<int>(cr.face_distance[0].type) - 1;
-      if (uni_combo < 0) {
-        uni_combo = 0;
-      }
+      ShapeDistType uni_type = cr.face_distance[0].type;
       ImGui::SameLine();
       ImGui::SetNextItemWidth(120.0f);
-      SetNextComboPopupTopMost();
-      if (ImGui::Combo("##modal_fd_uni_type", &uni_combo, "Uniform\0Gauss\0Zigzag\0Laplacian\0Gauss (legacy)\0")) {
-        ShapeDistType t = static_cast<ShapeDistType>(uni_combo + 1);
+      if (RenderShapeDistTypeCombo("##modal_fd_uni_type", &uni_type)) {
         for (int i = 0; i < 6; i++) {
-          cr.face_distance[i].type = t;
+          cr.face_distance[i].type = uni_type;
         }
       }
       float uni_spread = cr.face_distance[0].spread;
@@ -645,24 +616,20 @@ static void RenderCrystalModal(GuiState& /*state*/) {
         if (ImGui::Checkbox(ck_label, &fr)) {
           if (fr) {
             cr.face_distance[i].type = ShapeDistType::kUniform;
-            cr.face_distance[i].spread = 0.2f * cr.face_distance[i].center;
+            cr.face_distance[i].spread = kShapeDistDefaultSpreadFraction * cr.face_distance[i].center;
           } else {
             cr.face_distance[i].type = ShapeDistType::kNoRandom;
             cr.face_distance[i].spread = 0.0f;
           }
         }
         if (cr.face_distance[i].type != ShapeDistType::kNoRandom) {
-          int fci = static_cast<int>(cr.face_distance[i].type) - 1;
           char type_label[32];
           char sp_label[32];
           snprintf(type_label, sizeof(type_label), "##fd_adv_type_%d", i);
           snprintf(sp_label, sizeof(sp_label), "Spread##fd_adv_sp_%d", i);
           ImGui::SameLine();
           ImGui::SetNextItemWidth(110.0f);
-          SetNextComboPopupTopMost();
-          if (ImGui::Combo(type_label, &fci, "Uniform\0Gauss\0Zigzag\0Laplacian\0Gauss (legacy)\0")) {
-            cr.face_distance[i].type = static_cast<ShapeDistType>(fci + 1);
-          }
+          RenderShapeDistTypeCombo(type_label, &cr.face_distance[i].type);
           SliderWithInput(sp_label, &cr.face_distance[i].spread, 0.0f, kFaceSpreadMax, "%.3f", SliderScale::kSqrt);
         }
       }

@@ -1952,11 +1952,27 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/Face Distance##modal");  // expand the Face Distance tree
       ctx->Yield(2);
 
+      // Diverge two face centers BEFORE enabling unified randomization (via the always-visible
+      // per-face center sliders — a legitimate, common operation path that does not require
+      // randomization to be on). Regression coverage for code-review round 1: the "Randomize (all
+      // faces)" enable branch must broadcast ONE shared spread value derived once, not compute
+      // spread per-face from each face's own (now-divergent) center — the latter would silently
+      // give faces different spreads under a control labelled "all faces".
+      ctx->ItemInputValue("**/##Face 3##modal_fd_input", 1.2f);
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/##Face 4##modal_fd_input", 0.6f);
+      ctx->Yield(2);
+
       // AC2: unified "Randomize (all faces)" broadcasts uniform to every face.
       ctx->ItemClick("**/Randomize (all faces)##modal_fd_uni");
       ctx->Yield(2);
       for (int i = 0; i < 6; i++) {
         IM_CHECK_EQ(crystal().face_distance[i].type, gui::ShapeDistType::kUniform);
+      }
+      // Regression: with divergent centers, all 6 faces must still get the SAME broadcast spread.
+      const float uni_spread = crystal().face_distance[0].spread;
+      for (int i = 1; i < 6; i++) {
+        IM_CHECK_EQ(crystal().face_distance[i].spread, uni_spread);
       }
 
       // Diverge face 0 via the per-face advanced view (its checkbox is labelled "Face 3").

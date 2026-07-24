@@ -28,6 +28,14 @@ struct EditRequest {
 const EditRequest& GetEditRequest();
 void ResetEditRequest();
 
+// ---- Shared ImGui combo-popup fix (panels.cpp and edit_modals.cpp both call this) ----
+
+// Mark the next combo's popup viewport as TopMost so it shares NSWindow level with a detached
+// OS-viewport modal (see panels.cpp for the full mechanism writeup). Single definition — both
+// modal-internal combos (edit_modals.cpp) and panel-internal combos (RenderShapeDistTypeCombo
+// below) call this same function rather than each inlining their own copy.
+void SetNextComboPopupTopMost();
+
 // ---- Axis distribution controls (shared between panels and edit modals) ----
 
 // Render axis distribution controls (combo + mean + std sliders).
@@ -35,6 +43,21 @@ void ResetEditRequest();
 bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mean_max);
 
 // ---- Shape distribution controls (crystal geometry randomization) ----
+
+// Default spread fraction applied when a shape field's randomization is first enabled: the
+// distribution spread starts at 0.2 × center (i.e. roughly ±10% for uniform's center±spread/2).
+// An arbitrary but reasonable seed value; the user adjusts from there. Shared between
+// RenderShapeDist below and edit_modals.cpp's face_distance unified/per-face "enable" branches so
+// all three sites agree on the same default heuristic.
+constexpr float kShapeDistDefaultSpreadFraction = 0.2f;
+
+// Render just the distribution-type combo (the 5 randomized ShapeDistType values). Single source
+// for the enum<->combo-string mapping and its `kCount` static_assert guard — RenderShapeDist below,
+// the face_distance unified view, and the face_distance per-face view all call this instead of each
+// hand-rolling the same combo string, so a future ShapeDistType addition only needs updating here.
+// Calls SetNextComboPopupTopMost() internally. Returns true and writes the new value to *type if
+// the user picked a different entry.
+bool RenderShapeDistTypeCombo(const char* id, ShapeDistType* type);
 
 // Render one crystal shape distribution: the center slider (always shown, using the caller's
 // range/format/scale) + a "Randomize" checkbox + (when randomized) a distribution-type combo and
