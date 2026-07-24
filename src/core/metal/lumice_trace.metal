@@ -697,13 +697,15 @@ kernel void trace_layer_kernel(
     //   * poly_n / poly_d / tri_* consume ABSOLUTE pool-wide
     //     polygon indices (to_face, cont_face, far_face all absolute).
     //   * path[] / DeviceFilterMatch*'s ApplyGetFn table consume PER-CRYSTAL
-    //     LOCAL polygon indices — GetFn bytes are keyed by (layer, ci) with a
-    //     stripe of length PolygonFaceCount, invariant across P_ci instances
-    //     (crystal randomisation only perturbs h / face_distance; topology
-    //     stable — see EnsureFilterBuffers comment + MakeCrystal). We MUST
-    //     convert absolute → local at the path[] write site by subtracting
-    //     shape_poly_off. At P_ci == 1 shape_poly_off == 0 so this is a no-op
-    //     bit-identical to the pre-K-pool path (AC2).
+    //     LOCAL polygon indices — GetFn bytes are now PER-INSTANCE (one stripe
+    //     of length PolygonFaceCount per pool crystal, built in
+    //     UploadCrystalPool from that instance's own GetFn; see ApplyGetFn_dev
+    //     comment above). The former per-(layer,ci) prototype table's "any
+    //     sampled instance suffices / topology stable" invariant does NOT hold
+    //     under strong shape randomization. We MUST convert absolute → local
+    //     at the path[] write site by subtracting shape_poly_off. At P_ci == 1
+    //     shape_poly_off == 0 so this is a no-op bit-identical to the
+    //     pre-K-pool path (AC2).
     if (rec_len < kRecCap) {
       path[rec_len] = ushort(to_face - shape_poly_off);
       rec_len += 1u;

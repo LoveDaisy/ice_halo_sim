@@ -2465,6 +2465,7 @@ void CudaTraceBackend::Impl::UploadCrystalGeometry(const Crystal& crystal) {
   CheckCuda(cudaMemcpy(d_poly_d_, crystal.GetPolygonFaceDist(), poly_cnt * sizeof(float),
                        cudaMemcpyHostToDevice), "UploadCrystalGeometry cudaMemcpy d_poly_d");
   const std::vector<uint8_t> h_poly_fn = detail::BuildDeviceGetFnBytes(crystal);
+  assert(h_poly_fn.size() == poly_cnt && "poly_fn stripe length must equal poly_cnt");
   CheckCuda(cudaMemcpy(d_poly_fn_, h_poly_fn.data(), poly_cnt * sizeof(uint8_t),
                        cudaMemcpyHostToDevice), "UploadCrystalGeometry cudaMemcpy d_poly_fn");
 
@@ -2728,6 +2729,7 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
         h_poly_n.insert(h_poly_n.end(), pn, pn + 3 * poly_cnt);
         h_poly_d.insert(h_poly_d.end(), pd, pd + poly_cnt);
         const std::vector<uint8_t> fn = detail::BuildDeviceGetFnBytes(crystal);
+        assert(fn.size() == poly_cnt && "poly_fn stripe length must equal poly_cnt");
         h_poly_fn.insert(h_poly_fn.end(), fn.begin(), fn.end());
         // Triangle geometry built on the fly from cf_geom_ (AppendCfGeomTriangles),
         // not the crystal's triangle Mesh cache. face_id is the compact present-face
