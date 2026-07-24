@@ -1297,11 +1297,11 @@ void RenderImportWarningPopup() {
   }
 
   if (ImGui::BeginPopupModal("Import Warning", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextUnformatted("Some filters in the imported config cannot be represented in the GUI:");
+    ImGui::TextUnformatted("Some settings in the imported config could not be fully represented in the GUI:");
     ImGui::Separator();
     ImGui::TextUnformatted(active_msg.c_str());
     ImGui::Separator();
-    ImGui::TextUnformatted("These filters were dropped. The rendered image will differ from the original.");
+    ImGui::TextUnformatted("They were simplified on load. Edit the config file / CLI directly to keep the originals.");
     if (ImGui::Button("OK", ImVec2(80, 0))) {
       active_msg.clear();
       ImGui::CloseCurrentPopup();

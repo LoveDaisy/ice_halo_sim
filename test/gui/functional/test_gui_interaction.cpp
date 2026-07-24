@@ -1918,10 +1918,9 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(4);
 
-      // Property-table row state (AC "能随机+关"): the Type/Spread cells are rendered even when
-      // Randomize is off, but wrapped in BeginDisabled so they grey out. Probe the spread input
-      // (shares the row's BeginDisabled scope with the type combo) — carries ImGuiItemFlags_Disabled
-      // while NO_RANDOM.
+      // Property-table row state (AC "能随机+关"): the Spread cell is rendered even when Randomize is
+      // off, but wrapped in BeginDisabled so it greys out. Probe the spread input — it carries
+      // ImGuiItemFlags_Disabled while NO_RANDOM. (The GUI is uniform-only; there is no type combo.)
       {
         auto sp_info = ctx->ItemInfo("**/##spread_Height##modal_cr");
         IM_CHECK((sp_info.ItemFlags & ImGuiItemFlags_Disabled) != 0);

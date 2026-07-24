@@ -469,27 +469,6 @@ bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mea
   return changed;
 }
 
-// Single source for the ShapeDistType<->combo-string mapping (see panels.hpp). All three call
-// sites — this file's RenderShapeDist and edit_modals.cpp's face_distance unified/per-face
-// views — go through here so a future ShapeDistType addition only needs updating this one combo
-// string + the static_assert guard below it, instead of three hand-written copies drifting apart.
-bool RenderShapeDistTypeCombo(const char* id, ShapeDistType* type) {
-  // Combo lists the five randomized types; index 0..4 maps to kUniform..kGaussLegacy (enum
-  // values 1..5), so combo_index = static_cast<int>(*type) - 1.
-  static_assert(static_cast<int>(ShapeDistType::kCount) == 6,
-                "Update RenderShapeDistTypeCombo combo when adding a ShapeDistType");
-  int combo_index = static_cast<int>(*type) - 1;
-  if (combo_index < 0) {
-    combo_index = 0;  // *type == kNoRandom: caller only invokes this once already-randomized, but
-                      // clamp defensively so an out-of-range index never reaches ImGui::Combo.
-  }
-  SetNextComboPopupTopMost();
-  if (ImGui::Combo(id, &combo_index, "Uniform\0Gauss\0Zigzag\0Laplacian\0Gauss (legacy)\0")) {
-    *type = static_cast<ShapeDistType>(combo_index + 1);
-    return true;
-  }
-  return false;
-}
 
 void ShapeTableParamLabel(const char* label) {
   const char* hash_pos = strstr(label, "##");
@@ -517,16 +496,16 @@ bool RenderShapeDistTableRow(const char* label, ShapeDist& dist, float center_mi
   ImGui::TableNextColumn();
   changed |= SliderWithInput(label, &dist.center, center_min, center_max, center_fmt, center_scale, false);
 
-  // Col 2 — Randomize checkbox. NO_RANDOM is expressed ONLY via this checkbox — the type combo
-  // lists just the five randomized types, so there is no redundant "manually pick no_random" path.
-  // Text-less (the header names the column); the ## suffix embeds `label` so the id is unique.
+  // Col 2 — Randomize checkbox. The GUI is uniform-only, so enabling sets type=Uniform; NO_RANDOM is
+  // expressed via this checkbox being off. Text-less (the header names the column); the ## suffix
+  // embeds `label` so the id is unique.
   ImGui::TableNextColumn();
   char ck_id[96];
   snprintf(ck_id, sizeof(ck_id), "##rnd_%s", label);
   bool randomize = dist.type != ShapeDistType::kNoRandom;
   if (ImGui::Checkbox(ck_id, &randomize)) {
     if (randomize) {
-      dist.type = ShapeDistType::kUniform;                          // owner-defined default type
+      dist.type = ShapeDistType::kUniform;                          // GUI edits uniform only
       dist.spread = kShapeDistDefaultSpreadFraction * dist.center;  // default spread heuristic
     } else {
       dist.type = ShapeDistType::kNoRandom;
@@ -535,21 +514,11 @@ bool RenderShapeDistTableRow(const char* label, ShapeDist& dist, float center_mi
     changed = true;
   }
 
-  // Cols 3 & 4 — type combo + spread input. Rendered even when not randomized, but wrapped in
-  // BeginDisabled so they grey out ("available to enable") and cannot be interacted with while
-  // dist is NO_RANDOM (type==kNoRandom / spread==0), preserving the disabled-state round-trip.
+  // Col 3 — spread input. Rendered even when not randomized, but wrapped in BeginDisabled so it greys
+  // out ("available to enable") and cannot be interacted with while dist is NO_RANDOM (spread==0),
+  // preserving the disabled-state semantics. A plain number input (not a slider — saves horizontal
+  // space in the narrow vertical layout). Same units as center; clamped to [0, center_max].
   ImGui::BeginDisabled(!randomize);
-
-  // Col 3 — distribution type.
-  ImGui::TableNextColumn();
-  char combo_id[96];
-  snprintf(combo_id, sizeof(combo_id), "##shapedist_%s", label);
-  ImGui::SetNextItemWidth(-FLT_MIN);  // fill the fixed Type column
-  changed |= RenderShapeDistTypeCombo(combo_id, &dist.type);
-
-  // Col 4 — spread: a plain number input (not a slider — saves horizontal space in the narrow
-  // vertical layout). Same units as center; clamped to [0, center_max] to match the old slider's
-  // range.
   ImGui::TableNextColumn();
   char sp_id[96];
   snprintf(sp_id, sizeof(sp_id), "##spread_%s", label);

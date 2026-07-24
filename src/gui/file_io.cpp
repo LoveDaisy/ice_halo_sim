@@ -703,10 +703,28 @@ static ShapeDistType ParseShapeDistType(const std::string& t) {
   return ShapeDistType::kUniform;
 }
 
-// Parse a crystal shape distribution. A bare number → {NO_RANDOM, v, 0}; an object → the full
-// {type, mean, std}. This is the round-trip-loss fix: the pre-upgrade code read only "mean" and
-// dropped type/std. `default_center` supplies the center for an absent/typeless value, mirroring
-// each field's historical parse fallback (height/prism_h = 1.0; upper_h/lower_h = 0.0).
+// Count of shape distributions downgraded to uniform during the current parse (see ParseShapeDist).
+// Consumed + reset by TakeShapeDistDowngradeCount() so the GUI open handler can surface a one-time
+// "some distributions were simplified" notice. GUI file loading is single-threaded, so a TU-local
+// counter is safe and avoids threading an accumulator through every ParseCrystal call site.
+static int g_shape_dist_downgrade_count = 0;
+
+int TakeShapeDistDowngradeCount() {
+  int n = g_shape_dist_downgrade_count;
+  g_shape_dist_downgrade_count = 0;
+  return n;
+}
+
+// Parse a crystal shape distribution. A bare number → {NO_RANDOM, v, 0}; an object → {type, mean,
+// std}. `default_center` supplies the center for an absent/typeless value, mirroring each field's
+// historical parse fallback (height/prism_h = 1.0; upper_h/lower_h = 0.0).
+//
+// The GUI edits UNIFORM distributions only, so any other randomized family (gauss/zigzag/laplacian/
+// gauss_legacy) is downgraded to uniform here, keeping the spread value as-is. This is a deliberate,
+// user-notified capability downgrade (JSON/CLI carry the full distribution set; the GUI is the
+// simplified editor), surfaced via a load-complete notice — NOT a silent loss (contrast the earlier
+// bug where loading collapsed a distribution to its bare mean and dropped type/std with no notice).
+// NO_RANDOM (off) and UNIFORM pass through unchanged. Downgrades bump g_shape_dist_downgrade_count.
 static ShapeDist ParseShapeDist(const json& j, float default_center) {
   ShapeDist d;
   d.center = default_center;
@@ -718,6 +736,10 @@ static ShapeDist ParseShapeDist(const json& j, float default_center) {
     d.type = ParseShapeDistType(j.value("type", "no_random"));
     d.center = j.value("mean", default_center);
     d.spread = j.value("std", 0.0f);
+  }
+  if (d.type != ShapeDistType::kNoRandom && d.type != ShapeDistType::kUniform) {
+    d.type = ShapeDistType::kUniform;
+    ++g_shape_dist_downgrade_count;
   }
   return d;
 }

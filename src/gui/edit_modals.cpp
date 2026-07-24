@@ -73,23 +73,21 @@ constexpr float kEditModalMinWidth = 820.0f;
 // vertical modal is exactly 2× the horizontal modal height plus chrome.
 //
 // Held at 420 for the Crystal-tab shape property table. Fixed columns
-// (Param kShapeParamColWidth=60 + Rand kShapeRandColWidth=36 + Type
-// kShapeTypeColWidth=100 + Spread kShapeSpreadColWidth=60) sum to ~256; the
-// stretch Value column then keeps a usable slider + input(kInputWidth=60) pair
-// with the "%.4f" Prism-H number readable, plus inner borders / cell padding.
-// Below this the table would clip the Spread number column or force a scroll.
+// (Param kShapeParamColWidth=60 + Rand kShapeRandColWidth=36 + Spread
+// kShapeSpreadColWidth=60) sum to ~156; the stretch Value column then gets a
+// long slider + input(kInputWidth=60) pair with the "%.4f" Prism-H number
+// readable, plus inner borders / cell padding. (The GUI is uniform-only, so there
+// is no Type column; that reclaimed width goes to the Value slider.)
 constexpr float kEditModalMinWidthVertical = 420.0f;
 constexpr float kEditModalMinHeightVertical = 0.0f;
 
 // Shape property-table fixed column widths; the Value column is WidthStretch and
 // takes the remainder. Tuned so the vertical layout gives the Value slider real
-// length instead of starving it behind wide Random/Type cells: Rand only needs
-// the checkbox + "Rand" header, Type fits the distribution names, Spread fits
-// "100.0000" (%.4f). Shared by the main params table and the Face Distance table
-// so their columns line up.
+// length instead of starving it: Rand only needs the checkbox + "Rand" header,
+// Spread fits "100.0000" (%.4f). Shared by the main params table and the Face
+// Distance table so their columns line up.
 constexpr float kShapeParamColWidth = 60.0f;
 constexpr float kShapeRandColWidth = 36.0f;
-constexpr float kShapeTypeColWidth = 100.0f;
 constexpr float kShapeSpreadColWidth = 60.0f;
 
 static ActiveModal g_active_modal = ActiveModal::kNone;
@@ -623,9 +621,9 @@ static void RenderCrystalModal(GuiState& /*state*/) {
   ImGui::Spacing();
 
   // -- Shape parameters (property table) --
-  // Every randomizable shape scalar is one RenderShapeDistTableRow (5 aligned columns:
-  // Param | Value | Rand | Type | Spread); the two Pyramid wedge angles are non-randomizable
-  // RenderWedgeTableRow rows (Rand/Type/Spread blank). See gui/slider_mapping.hpp for the
+  // Every randomizable shape scalar is one RenderShapeDistTableRow (4 aligned columns:
+  // Param | Value | Rand | Spread); the two Pyramid wedge angles are non-randomizable
+  // RenderWedgeTableRow rows (Rand/Spread blank). See gui/slider_mapping.hpp for the
   // three-H-mapping conventions. Column count is pinned to kShapeTableColumnCount (panels.hpp) so
   // the TableSetupColumn declarations and the TableNextColumn sequences in the row helpers cannot
   // drift (ImGui silently misaligns rather than asserting on a mismatch).
@@ -640,7 +638,6 @@ static void RenderCrystalModal(GuiState& /*state*/) {
     ImGui::TableSetupColumn("Param", ImGuiTableColumnFlags_WidthFixed, kShapeParamColWidth);
     ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.0f);
     ImGui::TableSetupColumn("Rand", ImGuiTableColumnFlags_WidthFixed, kShapeRandColWidth);
-    ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, kShapeTypeColWidth);
     ImGui::TableSetupColumn("Spread", ImGuiTableColumnFlags_WidthFixed, kShapeSpreadColWidth);
   };
 
