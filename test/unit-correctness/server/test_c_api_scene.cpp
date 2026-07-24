@@ -697,6 +697,12 @@ TEST(SceneRoundTrip, RendererAndScatterLayer) {
   r.overlap = 0.25f;
   ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
 
+  // A scattering entry may name a filter, and that filter must exist — both core and the C API
+  // reject a dangling reference — so declare one before referencing id 0 below.
+  LUMICE_FilterParam f{};
+  f.type = LUMICE_FILTER_TYPE_NONE;
+  ASSERT_EQ(LUMICE_SceneAddFilter(g.get(), &f, &id), LUMICE_OK);
+
   LUMICE_ScatterLayer layer{};
   layer.probability = 0.4f;
   layer.entry_count = 2;

@@ -54,6 +54,7 @@ add_executable(unit_correctness_test
   # server/
   "${PROJ_TEST_DIR}/unit-correctness/server/test_c_api.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_c_api_scene.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_json_parser_parity.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_stats_consumer.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_ray_num_semantics.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_component_lanes.cpp"
@@ -87,9 +88,13 @@ target_link_libraries(unit_correctness_test
 set_target_properties(unit_correctness_test PROPERTIES
   BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest>")
 
+# 3rd argv = repository root. test_json_parser_parity.cpp enumerates the on-disk config corpora
+# (examples/, test/e2e/configs/, test/fixtures/) from it, so newly added corpus files are covered
+# automatically without editing a hard-coded file list.
 add_test(NAME "LumiceUnitCorrectnessTest" COMMAND unit_correctness_test
   "${PROJ_TEST_DIR}/fixtures/v3_config.json"
-  "${CMAKE_CURRENT_BINARY_DIR}")
+  "${CMAKE_CURRENT_BINARY_DIR}"
+  "${CMAKE_SOURCE_DIR}")
 set_tests_properties("LumiceUnitCorrectnessTest" PROPERTIES LABELS "unit-correctness")
 
 # --------------------------------------------------------------------------------------------------

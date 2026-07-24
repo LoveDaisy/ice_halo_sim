@@ -1388,32 +1388,44 @@ LUMICE_ErrorCode LUMICE_ConfigToJson(const LUMICE_Config* config, char* out_buf,
 // =============== Configuration Parsing (JSON -> LUMICE_Config) ===============
 // Symmetric inverse of ConfigToJson. Decomposed into per-section helpers.
 
+// Parse one distribution IN PLACE. `*out` must already hold the default this slot carries in
+// core, because core's Distribution::from_json overwrites ONLY the keys present in the JSON and
+// leaves the rest of the destination untouched — "type without mean" keeps the destination's
+// mean, and a bare number keeps its spread. Every call site below therefore pre-fills `*out` with
+// the matching core-side default before calling in, rather than relying on the zeroed struct.
 static LUMICE_ErrorCode JsonToDistribution(const nlohmann::json& j, LUMICE_Distribution* out) {
   // Bare number => NO_RANDOM (deterministic value). Mirrors core Distribution::from_json's
-  // is_number() branch. This is the common case for shape fields with randomization off, and the
-  // whole reason no_random was previously a translation gap: axis JSON always carried a type
-  // object so the missing no_random case never fired until shape scalars became distributions.
+  // is_number() branch, which sets type + center and does NOT touch spread. This is the common
+  // case for shape fields with randomization off, and the whole reason no_random was previously a
+  // translation gap: axis JSON always carried a type object so the missing no_random case never
+  // fired until shape scalars became distributions.
   if (j.is_number()) {
     out->type = LUMICE_DIST_NO_RANDOM;
     out->center = j.get<float>();
-    out->spread = 0.0f;
     return LUMICE_OK;
   }
-  if (!j.is_object() || !j.contains("type")) {
-    return LUMICE_ERR_MISSING_FIELD;
+  if (!j.is_object()) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  // Each key is independently optional: core applies `if (contains(k)) get_to(...)` per key.
+  if (!j.contains("type")) {
+    if (j.contains("mean")) {
+      out->center = j.at("mean").get<float>();
+    }
+    if (j.contains("std")) {
+      out->spread = j.at("std").get<float>();
+    }
+    return LUMICE_OK;
   }
   auto type_str = j.at("type").get<std::string>();
   // Defensive: tolerate an explicit {"type":"no_random", ...} object on the READ side even though
-  // the WRITE side (DistributionToJson) only ever produces a bare number for NO_RANDOM. center
-  // then comes from "mean" if present, else 0.
+  // the WRITE side (DistributionToJson) only ever produces a bare number for NO_RANDOM.
   if (type_str == "no_random") {
     out->type = LUMICE_DIST_NO_RANDOM;
-    out->center = j.contains("mean") ? j.at("mean").get<float>() : 0.0f;
-    out->spread = 0.0f;
+    if (j.contains("mean")) {
+      out->center = j.at("mean").get<float>();
+    }
     return LUMICE_OK;
-  }
-  if (!j.contains("mean") || !j.contains("std")) {
-    return LUMICE_ERR_MISSING_FIELD;
   }
   if (type_str == "uniform") {
     out->type = LUMICE_DIST_UNIFORM;
@@ -1426,10 +1438,17 @@ static LUMICE_ErrorCode JsonToDistribution(const nlohmann::json& j, LUMICE_Distr
   } else if (type_str == "gauss_legacy") {
     out->type = LUMICE_DIST_GAUSS_LEGACY;
   } else {
+    // Core maps an unrecognized type string to the FIRST entry of its
+    // NLOHMANN_JSON_SERIALIZE_ENUM table (a silent misread), which is not a tolerance worth
+    // mirroring; rejecting is the deliberate exception to "align with core".
     return LUMICE_ERR_INVALID_VALUE;
   }
-  out->center = j.at("mean").get<float>();
-  out->spread = j.at("std").get<float>();
+  if (j.contains("mean")) {
+    out->center = j.at("mean").get<float>();
+  }
+  if (j.contains("std")) {
+    out->spread = j.at("std").get<float>();
+  }
   return LUMICE_OK;
 }
 
@@ -1447,33 +1466,52 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
   }
   cr->id = cj.at("id").get<int>();
 
+  // Type is dispatched BEFORE "shape" is required: core only reaches j.at("shape") inside a
+  // recognized type branch, so an unknown type is an invalid VALUE, not a missing field.
   auto type_str = cj.at("type").get<std::string>();
+  if (type_str != "prism" && type_str != "pyramid") {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  if (!cj.contains("shape")) {
+    return LUMICE_ERR_MISSING_FIELD;  // core: j.at("shape")
+  }
   if (type_str == "prism") {
     cr->type = 0;
-    if (!cj.contains("shape") || !cj.at("shape").contains("height")) {
-      return LUMICE_ERR_MISSING_FIELD;
-    }
-    if (auto err = JsonToDistribution(cj.at("shape").at("height"), &cr->height); err != LUMICE_OK) {
-      return err;
+    // height is OPTIONAL: core PrismCrystalParam::h_ defaults to a deterministic 1.0 and
+    // from_json only overwrites it when the key is present.
+    cr->height = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 1.0f, 0.0f };
+    if (cj.at("shape").contains("height")) {
+      if (auto err = JsonToDistribution(cj.at("shape").at("height"), &cr->height); err != LUMICE_OK) {
+        return err;
+      }
     }
   } else if (type_str == "pyramid") {
     cr->type = 1;
-    if (!cj.contains("shape")) {
-      return LUMICE_ERR_MISSING_FIELD;
-    }
     const auto& shape = cj.at("shape");
-    if (!shape.contains("prism_h") || !shape.contains("upper_h") || !shape.contains("lower_h")) {
+    // prism_h is required (core: j.at("prism_h")); the two pyramidal heights are optional and
+    // default to a deterministic 0.0 (PyramidCrystalParam::h_pyr_u_ / h_pyr_l_).
+    if (!shape.contains("prism_h")) {
       return LUMICE_ERR_MISSING_FIELD;
     }
     if (auto err = JsonToDistribution(shape.at("prism_h"), &cr->prism_h); err != LUMICE_OK) {
       return err;
     }
-    if (auto err = JsonToDistribution(shape.at("upper_h"), &cr->upper_h); err != LUMICE_OK) {
-      return err;
+    cr->upper_h = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 0.0f, 0.0f };
+    cr->lower_h = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 0.0f, 0.0f };
+    if (shape.contains("upper_h")) {
+      if (auto err = JsonToDistribution(shape.at("upper_h"), &cr->upper_h); err != LUMICE_OK) {
+        return err;
+      }
     }
-    if (auto err = JsonToDistribution(shape.at("lower_h"), &cr->lower_h); err != LUMICE_OK) {
-      return err;
+    if (shape.contains("lower_h")) {
+      if (auto err = JsonToDistribution(shape.at("lower_h"), &cr->lower_h); err != LUMICE_OK) {
+        return err;
+      }
     }
+    // Wedge angles default to 28° (PyramidCrystalParam::wedge_angle_u_ / _l_) when neither the
+    // explicit angle nor the Miller indices are given — the zeroed struct would mean 0°.
+    cr->upper_wedge_angle = 28.0f;
+    cr->lower_wedge_angle = 28.0f;
     // Wedge angle: prefer "upper_wedge_angle", fallback to "upper_indices" conversion
     if (shape.contains("upper_wedge_angle") && shape.at("upper_wedge_angle").is_number()) {
       cr->upper_wedge_angle = shape.at("upper_wedge_angle").get<float>();
@@ -1493,54 +1531,82 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
     return LUMICE_ERR_INVALID_VALUE;
   }
 
-  // face_distance: array of 6 distributions, or absent (default all NO_RANDOM 1.0)
-  if (cj.contains("shape") && cj.at("shape").contains("face_distance")) {
+  // face_distance: every element defaults to a deterministic 1.0 (regular hexagon). A shorter
+  // array leaves the remaining faces at that default and a longer one is truncated at 6 — core
+  // fills element-by-element and breaks at index 6 rather than demanding exactly six entries.
+  for (int k = 0; k < 6; k++) {
+    cr->face_distance[k] = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 1.0f, 0.0f };
+  }
+  if (cj.at("shape").contains("face_distance")) {
     const auto& fd = cj.at("shape").at("face_distance");
-    if (!fd.is_array() || fd.size() != 6) {
+    if (!fd.is_array()) {
       return LUMICE_ERR_INVALID_VALUE;
     }
-    for (int k = 0; k < 6; k++) {
+    const int n = std::min(6, static_cast<int>(fd.size()));
+    for (int k = 0; k < n; k++) {
       if (auto err = JsonToDistribution(fd[k], &cr->face_distance[k]); err != LUMICE_OK) {
         return err;
       }
     }
-  } else {
-    for (int k = 0; k < 6; k++) {
-      cr->face_distance[k] = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 1.0f, 0.0f };
-    }
   }
 
-  // Axis distributions
-  if (!cj.contains("axis")) {
-    return LUMICE_ERR_MISSING_FIELD;
-  }
-  const auto& axis = cj.at("axis");
-  for (const auto& [name, dest] : std::vector<std::pair<const char*, LUMICE_Distribution*>>{
-           { "zenith", &cr->zenith }, { "azimuth", &cr->azimuth }, { "roll", &cr->roll } }) {
-    if (!axis.contains(name)) {
+  // Axis distributions. The two cases are deliberately NOT symmetric, mirroring core:
+  //   - `axis` absent      -> AxisDistribution's default constructor: zenith/azimuth/roll all
+  //                           deterministic 0 (its latitude 90 IS zenith 0).
+  //   - `axis` present     -> `zenith` is required; `azimuth` / `roll` default to a full 360°
+  //                           uniform sweep, NOT to 0.
+  // Collapsing them into one "all three optional, default 0" rule silently changes the sampled
+  // orientation for a partial `axis` object.
+  cr->zenith = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 0.0f, 0.0f };
+  cr->azimuth = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 0.0f, 0.0f };
+  cr->roll = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 0.0f, 0.0f };
+  if (cj.contains("axis")) {
+    const auto& axis = cj.at("axis");
+    if (!axis.contains("zenith")) {
       return LUMICE_ERR_MISSING_FIELD;
     }
-    auto err = JsonToDistribution(axis.at(name), dest);
-    if (err != LUMICE_OK) {
+    // Core reads the zenith key into its latitude slot and then flips it (latitude = 90 - zenith),
+    // unconditionally — so a zenith object that omits `mean` inherits the latitude default 90,
+    // which is zenith 90 on this side of the flip (NOT zenith 0).
+    cr->zenith = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 90.0f, 0.0f };
+    if (auto err = JsonToDistribution(axis.at("zenith"), &cr->zenith); err != LUMICE_OK) {
       return err;
+    }
+    cr->azimuth = LUMICE_Distribution{ LUMICE_DIST_UNIFORM, 0.0f, 360.0f };
+    cr->roll = LUMICE_Distribution{ LUMICE_DIST_UNIFORM, 0.0f, 360.0f };
+    if (axis.contains("azimuth")) {
+      if (auto err = JsonToDistribution(axis.at("azimuth"), &cr->azimuth); err != LUMICE_OK) {
+        return err;
+      }
+    }
+    if (axis.contains("roll")) {
+      if (auto err = JsonToDistribution(axis.at("roll"), &cr->roll); err != LUMICE_OK) {
+        return err;
+      }
     }
   }
   return LUMICE_OK;
 }
 
 static LUMICE_ErrorCode JsonToFilter(const nlohmann::json& fj, LUMICE_FilterParam* f) {
-  if (!fj.contains("id") || !fj.contains("type") || !fj.contains("action")) {
+  if (!fj.contains("id") || !fj.contains("type")) {
     return LUMICE_ERR_MISSING_FIELD;
   }
   f->id = fj.at("id").get<int>();
 
-  auto action_str = fj.at("action").get<std::string>();
-  if (action_str == "filter_in") {
-    f->action = 0;
-  } else if (action_str == "filter_out") {
-    f->action = 1;
-  } else {
-    return LUMICE_ERR_INVALID_VALUE;
+  // action is OPTIONAL and defaults to filter_in (core FilterConfig::from_json). An unrecognized
+  // action string is still rejected here: core silently keeps filter_in for one, which turns a
+  // typo into a wrong-but-running filter.
+  f->action = 0;
+  if (fj.contains("action")) {
+    auto action_str = fj.at("action").get<std::string>();
+    if (action_str == "filter_in") {
+      f->action = 0;
+    } else if (action_str == "filter_out") {
+      f->action = 1;
+    } else {
+      return LUMICE_ERR_INVALID_VALUE;
+    }
   }
 
   // Type-specific fields (JSON -> struct arm). Field names/defaults mirror core
@@ -1555,15 +1621,21 @@ static LUMICE_ErrorCode JsonToFilter(const nlohmann::json& fj, LUMICE_FilterPara
     f->type = LUMICE_FILTER_TYPE_NONE;
   } else if (type_str == "raypath") {
     f->type = LUMICE_FILTER_TYPE_RAYPATH;
-    if (fj.contains("raypath") && fj.at("raypath").is_array()) {
-      const auto& rp = fj.at("raypath");
-      f->raypath_count = static_cast<int>(rp.size());
-      if (f->raypath_count > LUMICE_MAX_CONFIG_RAYPATH_LEN) {
-        return LUMICE_ERR_INVALID_CONFIG;
-      }
-      for (int k = 0; k < f->raypath_count; k++) {
-        f->raypath[k] = rp[k].get<int>();
-      }
+    // Required (core: j.at("raypath")). Accepting it as absent used to produce an empty raypath
+    // filter that matches nothing, for a config core would have refused outright.
+    if (!fj.contains("raypath")) {
+      return LUMICE_ERR_MISSING_FIELD;
+    }
+    if (!fj.at("raypath").is_array()) {
+      return LUMICE_ERR_INVALID_VALUE;
+    }
+    const auto& rp = fj.at("raypath");
+    f->raypath_count = static_cast<int>(rp.size());
+    if (f->raypath_count > LUMICE_MAX_CONFIG_RAYPATH_LEN) {
+      return LUMICE_ERR_INVALID_CONFIG;
+    }
+    for (int k = 0; k < f->raypath_count; k++) {
+      f->raypath[k] = rp[k].get<int>();
     }
   } else if (type_str == "entry_exit") {
     f->type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
@@ -1770,23 +1842,53 @@ static LUMICE_ErrorCode JsonToRaypathColor(const nlohmann::json& j, LUMICE_Confi
   return LUMICE_OK;
 }
 
+// Reference-integrity helpers for the scene block. Crystals and filters are parsed into `out`
+// before the scene block is, so a scattering entry's ids can be checked against what was actually
+// declared — the C-API-side equivalent of core's m.crystals_.at() / m.filters_.at() lookups.
+static bool ConfigHasCrystal(const LUMICE_Config& c, int id) {
+  for (int i = 0; i < c.crystal_count; i++) {
+    if (c.crystals[i].id == id) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool ConfigHasFilter(const LUMICE_Config& c, int id) {
+  for (int i = 0; i < c.filter_count; i++) {
+    if (c.filters[i].id == id) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Parse the JSON "scene" subsection (light source + simulation params) into a LUMICE_Config.
 // Named ...SceneParams (not JsonToScene) to avoid colliding, on sight, with the public opaque
 // type LUMICE_Scene — this file-static parser has always been about the scene PARAMS block only.
 static LUMICE_ErrorCode JsonToSceneParams(const nlohmann::json& scene, LUMICE_Config* out) {
-  // Light source
-  if (scene.contains("light_source")) {
-    const auto& ls = scene.at("light_source");
-    if (ls.contains("altitude")) {
-      out->sun_altitude = ls.at("altitude").get<float>();
+  // Light source: required, and so are its `type` / `altitude` / `spectrum` keys (core
+  // LightSourceConfig::from_json reads all three with .at()). A `type` other than "sun" is
+  // rejected rather than mirrored: core only logs and leaves its SunParam uninitialized.
+  {
+    if (!scene.contains("light_source")) {
+      return LUMICE_ERR_MISSING_FIELD;
     }
+    const auto& ls = scene.at("light_source");
+    if (!ls.contains("type") || !ls.contains("altitude") || !ls.contains("spectrum")) {
+      return LUMICE_ERR_MISSING_FIELD;
+    }
+    if (ls.at("type").get<std::string>() != "sun") {
+      return LUMICE_ERR_INVALID_VALUE;
+    }
+    out->sun_altitude = ls.at("altitude").get<float>();
     if (ls.contains("azimuth")) {
       out->sun_azimuth = ls.at("azimuth").get<float>();
     }
     if (ls.contains("diameter")) {
       out->sun_diameter = ls.at("diameter").get<float>();
     }
-    if (ls.contains("spectrum")) {
+    {
       const auto& sp = ls.at("spectrum");
       if (sp.is_string()) {
         out->spectrum = MapSpectrumString(sp.get<std::string>());
@@ -1816,16 +1918,14 @@ static LUMICE_ErrorCode JsonToSceneParams(const nlohmann::json& scene, LUMICE_Co
       } else {
         return LUMICE_ERR_INVALID_VALUE;
       }
-    } else {
-      out->spectrum = "D65";
-      out->spectrum_count = 0;
     }
-  } else {
-    out->spectrum = "D65";
   }
 
-  // Ray num
-  if (scene.contains("ray_num")) {
+  // Ray num: required (core: j_scene.at("ray_num")).
+  if (!scene.contains("ray_num")) {
+    return LUMICE_ERR_MISSING_FIELD;
+  }
+  {
     const auto& rn = scene.at("ray_num");
     if (rn.is_string() && rn.get<std::string>() == "infinite") {
       out->infinite = 1;
@@ -1838,9 +1938,12 @@ static LUMICE_ErrorCode JsonToSceneParams(const nlohmann::json& scene, LUMICE_Co
     }
   }
 
-  if (scene.contains("max_hits")) {
-    out->max_hits = scene.at("max_hits").get<int>();
+  // max_hits: required (core: j_scene.at("max_hits")). Its RANGE check stays single-source in
+  // core and fires at commit, matching the geom_clock convention below.
+  if (!scene.contains("max_hits")) {
+    return LUMICE_ERR_MISSING_FIELD;
   }
+  out->max_hits = scene.at("max_hits").get<int>();
 
   // geom_clock: lossless parse only, no range check (range {0}∪[1,64] is validated single-source
   // in core config_manager.cpp at commit, matching the ray_num/max_hits convention here).
@@ -1848,9 +1951,19 @@ static LUMICE_ErrorCode JsonToSceneParams(const nlohmann::json& scene, LUMICE_Co
     out->geom_clock = scene.at("geom_clock").get<int>();
   }
 
-  // Scattering
-  if (scene.contains("scattering") && scene.at("scattering").is_array()) {
+  // Scattering: required (core: j_scene.at("scattering")), and so is each layer's "entries"
+  // array. Every entry must name an EXISTING crystal, and a referenced filter must exist too —
+  // core resolves both through m.crystals_.at() / m.filters_.at(), which throw on a dangling id.
+  // That check is only possible here because crystals and filters are parsed before the scene
+  // block, the same order core uses.
+  if (!scene.contains("scattering")) {
+    return LUMICE_ERR_MISSING_FIELD;
+  }
+  {
     const auto& scat = scene.at("scattering");
+    if (!scat.is_array()) {
+      return LUMICE_ERR_INVALID_VALUE;
+    }
     if (static_cast<int>(scat.size()) > LUMICE_MAX_CONFIG_SCATTER_LAYERS) {
       return LUMICE_ERR_INVALID_CONFIG;
     }
@@ -1861,22 +1974,36 @@ static LUMICE_ErrorCode JsonToSceneParams(const nlohmann::json& scene, LUMICE_Co
       if (lj.contains("prob")) {
         layer.probability = lj.at("prob").get<float>();
       }
-      if (lj.contains("entries") && lj.at("entries").is_array()) {
-        const auto& entries = lj.at("entries");
-        if (static_cast<int>(entries.size()) > LUMICE_MAX_CONFIG_SCATTER_ENTRIES) {
+      if (!lj.contains("entries") || !lj.at("entries").is_array()) {
+        return LUMICE_ERR_MISSING_FIELD;
+      }
+      const auto& entries = lj.at("entries");
+      if (static_cast<int>(entries.size()) > LUMICE_MAX_CONFIG_SCATTER_ENTRIES) {
+        return LUMICE_ERR_INVALID_CONFIG;
+      }
+      layer.entry_count = static_cast<int>(entries.size());
+      for (int k = 0; k < layer.entry_count; k++) {
+        const auto& ej = entries[k];
+        auto& e = layer.entries[k];
+        if (!ej.contains("crystal")) {
+          return LUMICE_ERR_MISSING_FIELD;
+        }
+        e.crystal_id = ej.at("crystal").get<int>();
+        if (!ConfigHasCrystal(*out, e.crystal_id)) {
           return LUMICE_ERR_INVALID_CONFIG;
         }
-        layer.entry_count = static_cast<int>(entries.size());
-        for (int k = 0; k < layer.entry_count; k++) {
-          const auto& ej = entries[k];
-          auto& e = layer.entries[k];
-          if (ej.contains("crystal")) {
-            e.crystal_id = ej.at("crystal").get<int>();
+        // proportion defaults to 100 (core ScatteringSetting's crystal_proportion_); the zeroed
+        // struct would mean "this crystal never gets picked".
+        e.proportion = 100.0f;
+        if (ej.contains("proportion")) {
+          e.proportion = ej.at("proportion").get<float>();
+        }
+        e.filter_id = -1;
+        if (ej.contains("filter")) {
+          e.filter_id = ej.at("filter").get<int>();
+          if (!ConfigHasFilter(*out, e.filter_id)) {
+            return LUMICE_ERR_INVALID_CONFIG;
           }
-          if (ej.contains("proportion")) {
-            e.proportion = ej.at("proportion").get<float>();
-          }
-          e.filter_id = ej.contains("filter") ? ej.at("filter").get<int>() : -1;
         }
       }
     }
@@ -1892,13 +2019,20 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, LUMICE
   for (int i = 0; i < out->renderer_count; i++) {
     const auto& rj = render_arr[i];
     auto& r = out->renderers[i];
-    if (rj.contains("id")) {
-      r.id = rj.at("id").get<int>();
+    // id and resolution are both required (core ParseRenderConfig: j.at("id") / j.at("resolution")).
+    if (!rj.contains("id") || !rj.contains("resolution")) {
+      return LUMICE_ERR_MISSING_FIELD;
     }
-    if (rj.contains("resolution") && rj.at("resolution").is_array() && rj.at("resolution").size() == 2) {
-      r.resolution_w = rj.at("resolution")[0].get<int>();
-      r.resolution_h = rj.at("resolution")[1].get<int>();
+    r.id = rj.at("id").get<int>();
+    if (!rj.at("resolution").is_array() || rj.at("resolution").size() != 2) {
+      return LUMICE_ERR_INVALID_VALUE;
     }
+    r.resolution_w = rj.at("resolution")[0].get<int>();
+    r.resolution_h = rj.at("resolution")[1].get<int>();
+    // opacity / intensity_factor default to 1.0 in core RenderConfig; the zeroed struct would
+    // mean a fully transparent, zero-brightness renderer.
+    r.opacity = 1.0f;
+    r.intensity_factor = 1.0f;
     if (rj.contains("opacity")) {
       r.opacity = rj.at("opacity").get<float>();
     }
@@ -2005,8 +2139,11 @@ static LUMICE_ErrorCode JsonToConfig(const nlohmann::json& root, LUMICE_Config* 
     }
   }
 
-  // Filters (optional)
-  if (root.contains("filter") && root.at("filter").is_array()) {
+  // Filters: the key is required (core iterates j.at("filter")), though an empty array is fine.
+  if (!root.contains("filter") || !root.at("filter").is_array()) {
+    return LUMICE_ERR_MISSING_FIELD;
+  }
+  {
     const auto& filters = root.at("filter");
     if (static_cast<int>(filters.size()) > LUMICE_MAX_CONFIG_FILTERS) {
       return LUMICE_ERR_INVALID_CONFIG;
@@ -2041,12 +2178,13 @@ static LUMICE_ErrorCode JsonToConfig(const nlohmann::json& root, LUMICE_Config* 
     return err;
   }
 
-  // Renderers (optional)
-  if (root.contains("render") && root.at("render").is_array()) {
-    err = JsonToRenderers(root.at("render"), out);
-    if (err != LUMICE_OK) {
-      return err;
-    }
+  // Renderers: required (core iterates j.at("render")).
+  if (!root.contains("render") || !root.at("render").is_array()) {
+    return LUMICE_ERR_MISSING_FIELD;
+  }
+  err = JsonToRenderers(root.at("render"), out);
+  if (err != LUMICE_OK) {
+    return err;
   }
 
   // Raypath color classes (optional, Design 2 / task-342.2)

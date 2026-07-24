@@ -809,18 +809,12 @@ TEST(ParseConfigApi, UnsupportedFilterType) {
 
 
 TEST(ParseConfigApi, ArraySpectrumParsed) {
-  nlohmann::json root;
-  nlohmann::json cr;
-  cr["id"] = 1;
-  cr["type"] = "prism";
-  cr["shape"]["height"] = 1.0f;
-  cr["axis"]["zenith"] = { { "type", "gauss" }, { "mean", 90.0f }, { "std", 10.0f } };
-  cr["axis"]["azimuth"] = { { "type", "uniform" }, { "mean", 0.0f }, { "std", 180.0f } };
-  cr["axis"]["roll"] = { { "type", "uniform" }, { "mean", 0.0f }, { "std", 180.0f } };
-  root["crystal"] = nlohmann::json::array({ cr });
+  // Start from a complete document and swap in the discrete spectrum: every other required key
+  // (filter / render / scene.max_hits / scene.scattering, light_source.type / .altitude) must be
+  // present, since the parser now enforces exactly what core's from_json enforces.
+  auto root = nlohmann::json::parse(MakeMinimalConfigJson());
   root["scene"]["light_source"]["spectrum"] = nlohmann::json::array(
       { { { "wavelength", 450 }, { "weight", 0.8 } }, { { "wavelength", 550 }, { "weight", 1.0 } } });
-  root["scene"]["ray_num"] = 1000;
 
   LUMICE_Config config{};
 
@@ -1984,6 +1978,10 @@ LUMICE_FilterParam RoundTripFilter(const LUMICE_FilterParam& in) {
 std::string FullConfigWithFilterJson(const nlohmann::json& jf) {
   auto root = nlohmann::json::parse(MakeFullConfigJson());
   root["filter"][0] = jf;
+  // Keep the scattering entry pointing at whatever id the substituted filter carries: a dangling
+  // filter reference is a config core itself refuses (m.filters_.at throws), so leaving the
+  // fixture's original id here would make the document invalid rather than exercise the filter.
+  root["scene"]["scattering"][0]["entries"][0]["filter"] = jf.at("id");
   return root.dump();
 }
 }  // namespace
