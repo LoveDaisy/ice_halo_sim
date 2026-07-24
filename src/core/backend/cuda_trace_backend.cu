@@ -498,17 +498,19 @@ __device__ inline unsigned long long ApplyLayerColorBits(unsigned long long carr
                                                           const uint8_t* d_and_term_counts,
                                                           const uint8_t* d_color_bit_map,
                                                           const uint8_t* path, uint32_t path_len,
-                                                          const uint8_t* getfn_bytes,
-                                                          const uint32_t* getfn_offsets,
-                                                          uint32_t gate_slot, const float* ray_dir,
+                                                          const uint8_t* poly_fn,
+                                                          uint32_t gate_slot, uint32_t poly_off,
+                                                          const float* ray_dir,
                                                           uint32_t crystal_config_id) {
   unsigned long long m = carried;
   for (uint32_t g = 0u; g < static_cast<uint32_t>(kColorMaxGroupsPerSlot); ++g) {
+    // gate_slot selects the color DESCRIPTOR row (per (layer,ci)); poly_off is
+    // this ray's own polygon offset for the per-instance GetFn remap.
     const uint32_t color_slot_idx = gate_slot * static_cast<uint32_t>(kColorMaxGroupsPerSlot) + g;
     bool matched_c = false;
     const uint32_t c_smask = lm_filter::DeviceFilterSummandMask(
-        d_color_filter_desc[color_slot_idx], d_complex_sub_desc, d_and_term_counts, path, path_len, getfn_bytes,
-        getfn_offsets, gate_slot, ray_dir, crystal_config_id, &matched_c);
+        d_color_filter_desc[color_slot_idx], d_complex_sub_desc, d_and_term_counts, path, path_len, poly_fn,
+        poly_off, ray_dir, crystal_config_id, &matched_c);
     for (uint32_t k = 0u; k < kDeviceFilterMaxOrClauses; ++k) {
       if ((c_smask & (1u << k)) != 0u) {
         const uint8_t bit = d_color_bit_map[color_slot_idx * kDeviceFilterMaxOrClauses + k];
@@ -640,8 +642,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                        // 296.5 filter gate inputs. ms_mode==0 dispatches pass
                                        // nullptr/0 — DeviceFilterCheck branches are never executed.
                                        const DeviceFilterDesc* __restrict__ d_filter_desc,
-                                       const uint32_t* __restrict__ d_getfn_offsets,
-                                       const uint8_t* __restrict__ d_getfn_bytes,
+                                       const uint8_t* __restrict__ d_poly_fn,
                                        const DeviceFilterDesc* __restrict__ d_complex_sub_desc,
                                        // task-device-flat-and-terms: parallel flat AND-term counts
                                        // buffer, indexed via each Complex parent's `and_terms_start`.
@@ -884,8 +885,8 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
         const uint32_t gate_slot = static_cast<uint32_t>(ms_layer_idx) * filter_desc_max_ci +
                                    static_cast<uint32_t>(crystal_id);
         const bool filter_pass = lm_filter::DeviceFilterCheck(
-            d_filter_desc[gate_slot], d_complex_sub_desc, d_and_term_counts, path_rec, rec_len, d_getfn_bytes,
-            d_getfn_offsets, gate_slot, exit_world, crystal_config_id);
+            d_filter_desc[gate_slot], d_complex_sub_desc, d_and_term_counts, path_rec, rec_len, d_poly_fn,
+            poly_off, exit_world, crystal_config_id);
         if (filter_pass) {
           // task-358.3: Fork-C physical-bit produce branch removed. `this_mask`
           // now starts from the carried mask and is OR-accumulated by ONLY the
@@ -897,8 +898,8 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
           // branch skip (AC4 zero-cost). Mirrors MSL lumice_trace.metal.
           if (color_params.has_color_groups != 0u) {
             this_mask = ApplyLayerColorBits(this_mask, d_color_filter_desc, d_complex_sub_desc, d_and_term_counts,
-                                            d_color_bit_map, path_rec, rec_len, d_getfn_bytes, d_getfn_offsets,
-                                            gate_slot, exit_world, crystal_config_id);
+                                            d_color_bit_map, path_rec, rec_len, d_poly_fn,
+                                            gate_slot, poly_off, exit_world, crystal_config_id);
           }
           // Prob gate (prob-pass → continuation; prob-fail → mid-exit). The
           // gate_stream advances on each pcg_uniform draw so the per-bounce
@@ -952,8 +953,8 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
         const uint32_t gate_slot_e = static_cast<uint32_t>(ms_layer_idx) * filter_desc_max_ci +
                                      static_cast<uint32_t>(crystal_id);
         const bool filter_pass_e = lm_filter::DeviceFilterCheck(
-            d_filter_desc[gate_slot_e], d_complex_sub_desc, d_and_term_counts, path_rec, rec_len, d_getfn_bytes,
-            d_getfn_offsets, gate_slot_e, exit_world, crystal_config_id);
+            d_filter_desc[gate_slot_e], d_complex_sub_desc, d_and_term_counts, path_rec, rec_len, d_poly_fn,
+            poly_off, exit_world, crystal_config_id);
         if (filter_pass_e) {
           lm_pcg::PcgStream gate_f;
           gate_f.seed       = gate_final_mixed_seed;
@@ -976,8 +977,8 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
             unsigned long long this_mask = carried_component;
             if (color_params.has_color_groups != 0u) {
               this_mask = ApplyLayerColorBits(this_mask, d_color_filter_desc, d_complex_sub_desc, d_and_term_counts,
-                                              d_color_bit_map, path_rec, rec_len, d_getfn_bytes, d_getfn_offsets,
-                                              gate_slot_e, exit_world, crystal_config_id);
+                                              d_color_bit_map, path_rec, rec_len, d_poly_fn,
+                                              gate_slot_e, poly_off, exit_world, crystal_config_id);
             }
             EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                             cmf_x, cmf_y, cmf_z, w_refl_e,
@@ -1101,8 +1102,8 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
           const uint32_t gate_slot = static_cast<uint32_t>(ms_layer_idx) * filter_desc_max_ci +
                                    static_cast<uint32_t>(crystal_id);
           const bool filter_pass = lm_filter::DeviceFilterCheck(
-              d_filter_desc[gate_slot], d_complex_sub_desc, d_and_term_counts, path_rec, rec_len, d_getfn_bytes,
-              d_getfn_offsets, gate_slot, exit_world, crystal_config_id);
+              d_filter_desc[gate_slot], d_complex_sub_desc, d_and_term_counts, path_rec, rec_len, d_poly_fn,
+              poly_off, exit_world, crystal_config_id);
           if (filter_pass) {
             // task-358.3: Fork-C produce branch retired; only Design-2 color
             // pass accumulates into this_mask (per-bounce mid-exit sibling of
@@ -1110,8 +1111,8 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
             unsigned long long this_mask = carried_component;
             if (color_params.has_color_groups != 0u) {
               this_mask = ApplyLayerColorBits(this_mask, d_color_filter_desc, d_complex_sub_desc, d_and_term_counts,
-                                              d_color_bit_map, path_rec, rec_len, d_getfn_bytes, d_getfn_offsets,
-                                              gate_slot, exit_world, crystal_config_id);
+                                              d_color_bit_map, path_rec, rec_len, d_poly_fn,
+                                              gate_slot, poly_off, exit_world, crystal_config_id);
             }
             bool do_continue = (lm_pcg::pcg_uniform(gate_stream) < ms_prob);
             if (do_continue) {
@@ -1152,8 +1153,8 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
           const uint32_t gate_slot_r = static_cast<uint32_t>(ms_layer_idx) * filter_desc_max_ci +
                                        static_cast<uint32_t>(crystal_id);
           const bool filter_pass_r = lm_filter::DeviceFilterCheck(
-              d_filter_desc[gate_slot_r], d_complex_sub_desc, d_and_term_counts, path_rec, rec_len, d_getfn_bytes,
-              d_getfn_offsets, gate_slot_r, exit_world, crystal_config_id);
+              d_filter_desc[gate_slot_r], d_complex_sub_desc, d_and_term_counts, path_rec, rec_len, d_poly_fn,
+              poly_off, exit_world, crystal_config_id);
           if (filter_pass_r) {
             lm_pcg::PcgStream gate_f;
             gate_f.seed       = gate_final_mixed_seed;
@@ -1171,8 +1172,8 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               unsigned long long this_mask = carried_component;
               if (color_params.has_color_groups != 0u) {
                 this_mask = ApplyLayerColorBits(this_mask, d_color_filter_desc, d_complex_sub_desc, d_and_term_counts,
-                                                d_color_bit_map, path_rec, rec_len, d_getfn_bytes, d_getfn_offsets,
-                                                gate_slot_r, exit_world, crystal_config_id);
+                                                d_color_bit_map, path_rec, rec_len, d_poly_fn,
+                                                gate_slot_r, poly_off, exit_world, crystal_config_id);
               }
               EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                               cmf_x, cmf_y, cmf_z, w_refr,
@@ -1670,6 +1671,7 @@ struct CudaTraceBackend::Impl {
   // Möller-Trumbore.
   float* d_poly_n_ = nullptr;  // 3 × poly_cnt (outward polygon normals, AoS)
   float* d_poly_d_ = nullptr;  // poly_cnt (plane constant: p·n + d = 0)
+  uint8_t* d_poly_fn_ = nullptr;  // per-instance GetFn table, one uint8 per polygon (single/fallback path; parallel to d_poly_n_)
   uint32_t poly_cnt_ = 0;
 
   // --- Multi-MS continuation (296.4) ---------------------------------------
@@ -1706,6 +1708,7 @@ struct CudaTraceBackend::Impl {
   // slots; pool_*_off_/pool_*_cnt_ index each slot (slot = ci_pool_slot_base_[flat_ci]).
   float*    d_pool_poly_n_      = nullptr;  // 3 × Σ poly_cnt (over ALL pool slots incl. K-shape)
   float*    d_pool_poly_d_      = nullptr;  //     Σ poly_cnt
+  uint8_t*  d_pool_poly_fn_     = nullptr;  // per-instance GetFn table over ALL pool slots (parallel to d_pool_poly_n_)
   float*    d_pool_tri_vtx_     = nullptr;  // 9 × Σ tri_cnt
   float*    d_pool_tri_norm_    = nullptr;  // 3 × Σ tri_cnt
   float*    d_pool_tri_area_    = nullptr;  //     Σ tri_cnt
@@ -2010,19 +2013,19 @@ struct CudaTraceBackend::Impl {
   uint8_t n_ms_layers_  = 0u;
 
   // --- Filter buffers (296.5) ----------------------------------------------
-  // Mirrors Metal's filter_desc_buf_ / getfn_offsets_buf_ / getfn_bytes_buf_ /
-  // complex_sub_desc_buf_ quartet (metal_trace_backend.mm:724-734). The CUDA
-  // kernel emit gate (ms_mode==1) consumes these via DeviceFilterCheck; the
-  // 1-byte dummy fallback covers no-filter sessions so the kernel pointers are
-  // always non-null even on the ms_mode==0 path (which doesn't read them).
+  // Mirrors Metal's filter_desc_buf_ / complex_sub_desc_buf_ pair
+  // (metal_trace_backend.mm:724-734). The CUDA kernel emit gate (ms_mode==1)
+  // consumes these via DeviceFilterCheck; the 1-byte dummy fallback covers
+  // no-filter sessions so the kernel pointers are always non-null even on the
+  // ms_mode==0 path (which doesn't read them). The per-instance GetFn table is
+  // NOT here — it rides alongside the polygon-normal geometry as
+  // d_poly_fn_ / d_pool_poly_fn_ and is indexed by the ray's own poly_off.
   DeviceFilterDesc* d_filter_desc_       = nullptr;  // n_slot DeviceFilterDescs (or 1B dummy)
-  uint32_t*         d_getfn_offsets_     = nullptr;  // (n_slot + 1) uint32 prefix-sum (or 1B dummy)
-  uint8_t*          d_getfn_bytes_       = nullptr;  // flat GetFn byte stream (or 1B dummy)
   DeviceFilterDesc* d_complex_sub_desc_  = nullptr;  // flat Complex sub-descs (or 1B dummy)
   // task-device-flat-and-terms: parallel flat buffer, one uint8 per OR-clause
   // across all Complex descs (physical + color). CUDA uses an INDEPENDENT
   // allocation (no Metal-style 30-buffer cap to worry about); mirrors the
-  // discipline of `d_color_bit_map_` / `d_getfn_bytes_`. 1-byte dummy in the
+  // discipline of `d_color_bit_map_`. 1-byte dummy in the
   // no-Complex fallback so the kernel pointer stays bindable.
   uint8_t*          d_and_term_counts_   = nullptr;
   uint32_t          filter_desc_max_ci_  = 0u;       // per-layer ci stride (MVP=1)
@@ -2234,6 +2237,7 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
   if (!keep_persistent_buffers) {
     cudaFree(d_poly_n_);     d_poly_n_ = nullptr;
     cudaFree(d_poly_d_);     d_poly_d_ = nullptr;
+    cudaFree(d_poly_fn_);    d_poly_fn_ = nullptr;
     cudaFree(d_tri_vtx_);    d_tri_vtx_ = nullptr;
     cudaFree(d_tri_norm_);   d_tri_norm_ = nullptr;
     cudaFree(d_tri_area_);   d_tri_area_ = nullptr;
@@ -2242,6 +2246,7 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
     // the per-batch keep_persistent path so it is uploaded once per scene).
     cudaFree(d_pool_poly_n_);      d_pool_poly_n_ = nullptr;
     cudaFree(d_pool_poly_d_);      d_pool_poly_d_ = nullptr;
+    cudaFree(d_pool_poly_fn_);     d_pool_poly_fn_ = nullptr;
     cudaFree(d_pool_tri_vtx_);     d_pool_tri_vtx_ = nullptr;
     cudaFree(d_pool_tri_norm_);    d_pool_tri_norm_ = nullptr;
     cudaFree(d_pool_tri_area_);    d_pool_tri_area_ = nullptr;
@@ -2259,8 +2264,6 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
     // increment 4: filter descriptors + wl pool persist across the keep path;
     // free + invalidate them only here on full teardown (d_wl_pool_ freed below).
     cudaFree(d_filter_desc_);      d_filter_desc_ = nullptr;
-    cudaFree(d_getfn_offsets_);    d_getfn_offsets_ = nullptr;
-    cudaFree(d_getfn_bytes_);      d_getfn_bytes_ = nullptr;
     cudaFree(d_complex_sub_desc_); d_complex_sub_desc_ = nullptr;
     // task-device-flat-and-terms: parallel flat buffer for AND-term counts;
     // rebuilt alongside d_complex_sub_desc_ (including the color-rebuild
@@ -2393,8 +2396,10 @@ void CudaTraceBackend::Impl::EnsureGeomCapacity(size_t poly_cnt, size_t tri_cnt)
   if (poly_cnt > alloc_poly_cap_) {
     cudaFree(d_poly_n_); d_poly_n_ = nullptr;
     cudaFree(d_poly_d_); d_poly_d_ = nullptr;
+    cudaFree(d_poly_fn_); d_poly_fn_ = nullptr;
     CheckCuda(cudaMalloc(&d_poly_n_, 3 * poly_cnt * sizeof(float)), "EnsureGeomCapacity cudaMalloc d_poly_n");
     CheckCuda(cudaMalloc(&d_poly_d_, poly_cnt * sizeof(float)), "EnsureGeomCapacity cudaMalloc d_poly_d");
+    CheckCuda(cudaMalloc(&d_poly_fn_, poly_cnt * sizeof(uint8_t)), "EnsureGeomCapacity cudaMalloc d_poly_fn");
     alloc_poly_cap_ = static_cast<uint32_t>(poly_cnt);
   }
   if (tri_cnt > alloc_tri_cap_) {
@@ -2459,6 +2464,9 @@ void CudaTraceBackend::Impl::UploadCrystalGeometry(const Crystal& crystal) {
                        cudaMemcpyHostToDevice), "UploadCrystalGeometry cudaMemcpy d_poly_n");
   CheckCuda(cudaMemcpy(d_poly_d_, crystal.GetPolygonFaceDist(), poly_cnt * sizeof(float),
                        cudaMemcpyHostToDevice), "UploadCrystalGeometry cudaMemcpy d_poly_d");
+  const std::vector<uint8_t> h_poly_fn = detail::BuildDeviceGetFnBytes(crystal);
+  CheckCuda(cudaMemcpy(d_poly_fn_, h_poly_fn.data(), poly_cnt * sizeof(uint8_t),
+                       cudaMemcpyHostToDevice), "UploadCrystalGeometry cudaMemcpy d_poly_fn");
 
   std::vector<float>    h_tri_vtx, h_tri_norm, h_tri_area;
   std::vector<uint16_t> h_tri2poly;
@@ -2653,6 +2661,7 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
   pool_shape_count_this_batch_ = 0u;
 
   std::vector<float>    h_poly_n, h_poly_d, h_tri_vtx, h_tri_norm, h_tri_area;
+  std::vector<uint8_t>  h_poly_fn;
   std::vector<uint16_t> h_tri2poly;
   uint32_t poly_acc = 0u, tri_acc = 0u;
 
@@ -2718,6 +2727,8 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
         const float* pd = crystal.GetPolygonFaceDist();
         h_poly_n.insert(h_poly_n.end(), pn, pn + 3 * poly_cnt);
         h_poly_d.insert(h_poly_d.end(), pd, pd + poly_cnt);
+        const std::vector<uint8_t> fn = detail::BuildDeviceGetFnBytes(crystal);
+        h_poly_fn.insert(h_poly_fn.end(), fn.begin(), fn.end());
         // Triangle geometry built on the fly from cf_geom_ (AppendCfGeomTriangles),
         // not the crystal's triangle Mesh cache. face_id is the compact present-face
         // LOCAL id carried by each sub-tri (no PolygonFaceOfTri reverse lookup, no
@@ -2739,6 +2750,7 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
   // Free any prior pool (scene change), then allocate + H2D-upload once.
   cudaFree(d_pool_poly_n_);      d_pool_poly_n_ = nullptr;
   cudaFree(d_pool_poly_d_);      d_pool_poly_d_ = nullptr;
+  cudaFree(d_pool_poly_fn_);     d_pool_poly_fn_ = nullptr;
   cudaFree(d_pool_tri_vtx_);     d_pool_tri_vtx_ = nullptr;
   cudaFree(d_pool_tri_norm_);    d_pool_tri_norm_ = nullptr;
   cudaFree(d_pool_tri_area_);    d_pool_tri_area_ = nullptr;
@@ -2748,6 +2760,7 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
 
   CheckCuda(cudaMalloc(&d_pool_poly_n_,      3 * poly_acc * sizeof(float)),    "BuildGeomPool malloc pool_poly_n");
   CheckCuda(cudaMalloc(&d_pool_poly_d_,          poly_acc * sizeof(float)),    "BuildGeomPool malloc pool_poly_d");
+  CheckCuda(cudaMalloc(&d_pool_poly_fn_,         poly_acc * sizeof(uint8_t)),  "BuildGeomPool malloc pool_poly_fn");
   CheckCuda(cudaMalloc(&d_pool_tri_vtx_,     9 * tri_acc * sizeof(float)),     "BuildGeomPool malloc pool_tri_vtx");
   CheckCuda(cudaMalloc(&d_pool_tri_norm_,    3 * tri_acc * sizeof(float)),     "BuildGeomPool malloc pool_tri_norm");
   CheckCuda(cudaMalloc(&d_pool_tri_area_,        tri_acc * sizeof(float)),     "BuildGeomPool malloc pool_tri_area");
@@ -2757,6 +2770,8 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
                        cudaMemcpyHostToDevice), "BuildGeomPool H2D pool_poly_n");
   CheckCuda(cudaMemcpy(d_pool_poly_d_, h_poly_d.data(), h_poly_d.size() * sizeof(float),
                        cudaMemcpyHostToDevice), "BuildGeomPool H2D pool_poly_d");
+  CheckCuda(cudaMemcpy(d_pool_poly_fn_, h_poly_fn.data(), h_poly_fn.size() * sizeof(uint8_t),
+                       cudaMemcpyHostToDevice), "BuildGeomPool H2D pool_poly_fn");
   CheckCuda(cudaMemcpy(d_pool_tri_vtx_, h_tri_vtx.data(), h_tri_vtx.size() * sizeof(float),
                        cudaMemcpyHostToDevice), "BuildGeomPool H2D pool_tri_vtx");
   CheckCuda(cudaMemcpy(d_pool_tri_norm_, h_tri_norm.data(), h_tri_norm.size() * sizeof(float),
@@ -3057,8 +3072,6 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
   }
   // Free any prior session's filter buffers (cudaFree on nullptr is a no-op).
   cudaFree(d_filter_desc_);       d_filter_desc_       = nullptr;
-  cudaFree(d_getfn_offsets_);     d_getfn_offsets_     = nullptr;
-  cudaFree(d_getfn_bytes_);       d_getfn_bytes_       = nullptr;
   cudaFree(d_complex_sub_desc_);  d_complex_sub_desc_  = nullptr;
   cudaFree(d_and_term_counts_);   d_and_term_counts_   = nullptr;
   // task-358.2: free any prior session's independent color-region buffers.
@@ -3087,11 +3100,6 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
     dummy.type = kDeviceFilterTypeNone;
     ck(cudaMemcpy(d_filter_desc_, &dummy, sizeof(DeviceFilterDesc), cudaMemcpyHostToDevice),
        "cudaMemcpy d_filter_desc (dummy)");
-    uint32_t dummy_offsets[2] = {0u, 0u};
-    ck(cudaMalloc(&d_getfn_offsets_, sizeof(dummy_offsets)), "cudaMalloc d_getfn_offsets (dummy)");
-    ck(cudaMemcpy(d_getfn_offsets_, dummy_offsets, sizeof(dummy_offsets), cudaMemcpyHostToDevice),
-       "cudaMemcpy d_getfn_offsets (dummy)");
-    ck(cudaMalloc(&d_getfn_bytes_, 1u), "cudaMalloc d_getfn_bytes (dummy)");
     ck(cudaMalloc(&d_complex_sub_desc_, sizeof(DeviceFilterDesc)), "cudaMalloc d_complex_sub_desc (dummy)");
     // task-device-flat-and-terms: 1-byte dummy so the kernel pointer stays
     // bindable in no-Complex sessions (the Complex branch is never entered).
@@ -3135,14 +3143,17 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
   size_t n_slot = n_layers * max_ci;
   filter_n_slot_ = static_cast<uint32_t>(n_slot);
 
-  // Build per-slot descriptors + per-slot GetFn byte stripes via a private
-  // proto RNG (private to keep the session's main rng_ pristine for the first
-  // TraceLayer's per-batch MakeCrystal). Hex prism GetFn is shape-invariant
-  // across orientation/aspect, so any sampled instance suffices for the
-  // canonical bytes + GetFn table (mirrors Metal proto_rng pattern).
+  // Build per-slot descriptors via a private proto RNG (private to keep the
+  // session's main rng_ pristine for the first TraceLayer's per-batch
+  // MakeCrystal). The descriptor fields sampled here (symmetry, sigma_a,
+  // d_applicable, Complex sub-descs) are shape-invariant across
+  // orientation/aspect, so any sampled instance suffices (mirrors Metal
+  // proto_rng pattern). The per-instance GetFn table is NOT built here — it
+  // rides alongside each pool crystal's polygon geometry (built in
+  // BuildGeomPool / UploadCrystalGeometry) and is indexed by the ray's own
+  // poly_off.
   RandomNumberGenerator proto_rng(0xC0FEFEEDu);
   std::vector<DeviceFilterDesc> descs(n_slot);
-  std::vector<std::vector<uint8_t>> per_slot_bytes(n_slot);
   std::vector<DeviceFilterDesc> all_sub_descs;
   // task-device-flat-and-terms: parallel flat buffer of per-OR-clause AND-term
   // counts, indexed via `and_terms_start` on each Complex parent desc.
@@ -3155,7 +3166,6 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
       Crystal proto = MakeCrystal(proto_rng, setting.crystal_.param_);
       size_t slot = mi * max_ci + ci;
       descs[slot] = detail::BuildDeviceFilterDesc(setting.filter_, proto, setting.crystal_.axis_);
-      per_slot_bytes[slot] = detail::BuildDeviceGetFnBytes(proto);
       if (descs[slot].type == kDeviceFilterTypeComplex) {
         const auto* complex_p = std::get_if<ComplexFilterParam>(&setting.filter_.param_);
         // BuildDeviceFilterDesc produces Complex only when the variant carries
@@ -3168,8 +3178,8 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
       }
     }
     // Trailing slots (ms.setting_.size() < max_ci) keep zero-init
-    // DeviceFilterDesc{type=kDeviceFilterTypeNone} + empty GetFn stripe, so an
-    // out-of-range gate_slot surfaces as a pass-through true.
+    // DeviceFilterDesc{type=kDeviceFilterTypeNone}, so an out-of-range gate_slot
+    // surfaces as a pass-through true.
   }
 
   // Upload descriptors.
@@ -3177,28 +3187,8 @@ void CudaTraceBackend::Impl::EnsureFilterBuffers(const SessionSpec& spec) {
   ck(cudaMalloc(&d_filter_desc_, descs_bytes), "cudaMalloc d_filter_desc");
   ck(cudaMemcpy(d_filter_desc_, descs.data(), descs_bytes, cudaMemcpyHostToDevice), "cudaMemcpy d_filter_desc");
 
-  // Upload GetFn prefix-sum offsets + flat byte stream.
-  std::vector<uint32_t> offsets(n_slot + 1u, 0u);
-  for (size_t i = 0; i < n_slot; ++i) {
-    offsets[i + 1] = offsets[i] + static_cast<uint32_t>(per_slot_bytes[i].size());
-  }
-  size_t offsets_bytes = offsets.size() * sizeof(uint32_t);
-  ck(cudaMalloc(&d_getfn_offsets_, offsets_bytes), "cudaMalloc d_getfn_offsets");
-  ck(cudaMemcpy(d_getfn_offsets_, offsets.data(), offsets_bytes, cudaMemcpyHostToDevice),
-     "cudaMemcpy d_getfn_offsets");
-
-  size_t total_bytes = offsets.back();
-  size_t alloc_bytes = std::max<size_t>(total_bytes, 1u);  // 1-byte floor so the buffer is always bindable
-  ck(cudaMalloc(&d_getfn_bytes_, alloc_bytes), "cudaMalloc d_getfn_bytes");
-  if (total_bytes > 0) {
-    std::vector<uint8_t> flat(total_bytes, 0u);
-    for (size_t i = 0; i < n_slot; ++i) {
-      if (!per_slot_bytes[i].empty()) {
-        std::memcpy(flat.data() + offsets[i], per_slot_bytes[i].data(), per_slot_bytes[i].size());
-      }
-    }
-    ck(cudaMemcpy(d_getfn_bytes_, flat.data(), total_bytes, cudaMemcpyHostToDevice), "cudaMemcpy d_getfn_bytes");
-  }
+  // per-instance GetFn is uploaded as d_pool_poly_fn_/d_poly_fn_ in
+  // BuildGeomPool/UploadCrystalGeometry; no shared prototype GetFn table here.
 
   // Upload Complex sub-descs (1-byte dummy fallback when none present, so the
   // kernel pointer is always bindable; DeviceFilterCheck only reads through it
@@ -3973,6 +3963,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     std::unique_ptr<Crystal> ci_crystal_fb;  // fallback path only (avoids Crystal default-ctor)
     uint32_t ci_cfg_id;
     const float* geom_poly_n; const float* geom_poly_d; uint32_t geom_poly_cnt;
+    const uint8_t* geom_poly_fn;
     const float* geom_tri_vtx; const float* geom_tri_norm; const float* geom_tri_area;
     const uint16_t* geom_tri_to_poly; uint32_t geom_tri_cnt;
     // K-shape: the (shape-table pointer, pool_shape_count) pair passed to
@@ -3989,6 +3980,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
       ci_cfg_id = (ci_crystal_fb->config_id_ == kInvalidId)
                       ? kInvalidIdU16 : static_cast<uint32_t>(ci_crystal_fb->config_id_);
       geom_poly_n = impl_->d_poly_n_; geom_poly_d = impl_->d_poly_d_; geom_poly_cnt = impl_->poly_cnt_;
+      geom_poly_fn = impl_->d_poly_fn_;
       geom_tri_vtx = impl_->d_tri_vtx_; geom_tri_norm = impl_->d_tri_norm_;
       geom_tri_area = impl_->d_tri_area_; geom_tri_to_poly = impl_->d_tri_to_poly_;
       geom_tri_cnt = impl_->tri_cnt_;
@@ -4026,6 +4018,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
       // shape table + the +offset multiply that produces effective pointers;
       // everything else (from_poly / hit_poly / path_rec) stays 0-based.
       geom_poly_n = impl_->d_pool_poly_n_;   geom_poly_d = impl_->d_pool_poly_d_;
+      geom_poly_fn = impl_->d_pool_poly_fn_;
       geom_poly_cnt = impl_->pool_poly_cnt_[slot_base_ci];  // representative — kernel reads per-ray
       geom_tri_vtx = impl_->d_pool_tri_vtx_; geom_tri_norm = impl_->d_pool_tri_norm_;
       geom_tri_area = impl_->d_pool_tri_area_; geom_tri_to_poly = impl_->d_pool_tri_to_poly_;
@@ -4258,8 +4251,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
         gate_split.lo,
         gate_split.hi,
         impl_->d_filter_desc_,
-        impl_->d_getfn_offsets_,
-        impl_->d_getfn_bytes_,
+        geom_poly_fn,
         impl_->d_complex_sub_desc_,
         impl_->d_and_term_counts_,
         impl_->filter_desc_max_ci_,

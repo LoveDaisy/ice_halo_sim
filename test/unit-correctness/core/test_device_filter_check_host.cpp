@@ -84,8 +84,9 @@ struct Fixture {
   Crystal crystal;
   AxisDistribution axis;
   std::vector<DeviceFilterDesc> descs;
+  // Per-instance GetFn table for the single fixture crystal (== poly_fn with
+  // poly_off 0). The former per-(layer,ci) prototype prefix-sum offsets are gone.
   std::vector<uint8_t> getfn;
-  uint32_t getfn_offsets[2] = { 0u, 0u };
   std::vector<DeviceFilterDesc> complex_subs;
   // task-device-flat-and-terms: parallel flat AND-term counts buffer,
   // indexed via each Complex parent's `and_terms_start`.
@@ -229,8 +230,6 @@ Fixture BuildFixture(bool d_applicable_axis) {
     fx.host_specs.push_back(FilterSpec::Create(cfg, fx.crystal, fx.axis));
   }
   fx.getfn = detail::BuildDeviceGetFnBytes(fx.crystal);
-  fx.getfn_offsets[0] = 0u;
-  fx.getfn_offsets[1] = static_cast<uint32_t>(fx.getfn.size());
   // Pad complex_subs with a dummy entry so the device-side ptr is always
   // valid (mirrors EnsureFilterBuffers' 1-element fallback for layouts with
   // no Complex filter at all — kept defensive here even though our fixture
@@ -309,8 +308,8 @@ bool HostCheck(const Fixture& fx, const Ray& r) {
 
 bool DeviceCheck(const Fixture& fx, const Ray& r) {
   return lm_filter::DeviceFilterCheck(fx.descs[r.filter_idx], fx.complex_subs.data(), fx.and_term_counts.data(),
-                                      r.raw_poly.data(), r.path_len, fx.getfn.data(), fx.getfn_offsets,
-                                      /*crystal_slot=*/0u, r.dir, static_cast<uint32_t>(r.crystal_config_id));
+                                      r.raw_poly.data(), r.path_len, fx.getfn.data(),
+                                      /*poly_off=*/0u, r.dir, static_cast<uint32_t>(r.crystal_config_id));
 }
 
 TEST(DeviceFilterCheckHost, RaypathEntryExitDirCrystalComplex_ParityWithFilterSpec) {
