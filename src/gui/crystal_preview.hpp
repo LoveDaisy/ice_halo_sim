@@ -35,13 +35,24 @@ void ResetCrystalView(AxisPreset preset, const AxisDist params[3]);
 void ResetCrystalViewToCrystal(const CrystalConfig& cr);
 void ApplyTrackballRotation(float dx, float dy);
 
-// Build crystal mesh data from config: JSON construction, LUMICE_GetCrystalMesh, Y-Z swap, AABB normalization.
-// Caller allocates LUMICE_CrystalMesh on stack (fixed-size arrays, no free needed). Returns true on success.
-bool BuildCrystalMeshData(const CrystalConfig& cr, LUMICE_CrystalMesh* out);
+// Fixed preview sample seed. Until T4 promotes the GUI CrystalConfig shape fields to
+// distributions, every field is a deterministic (NO_RANDOM) scalar, so LUMICE_GetCrystalMesh's
+// no-op-seed contract makes any seed value produce the identical mesh — this constant is a
+// placeholder that keeps the two call sites (edit_modals.cpp, thumbnail_cache.cpp) on the SAME
+// value rather than each inlining a literal. `inline constexpr` gives one definition across TUs.
+// TODO(T5, gui-shape-randomization): replace with a real, per-frame-varying seed source so the
+// preview animates once shape distributions exist.
+inline constexpr unsigned long long kPreviewFixedSampleSeed = 0;
 
-// Build crystal mesh from config JSON, apply Y-Z swap and AABB normalization,
+// Build crystal mesh data from config: construct a LUMICE_CrystalParam, sample via
+// LUMICE_GetCrystalMesh, then apply Y-Z swap + AABB normalization. `sample_seed` selects the
+// shape draw (no-op while GUI shape fields are deterministic — see kPreviewFixedSampleSeed).
+// Caller allocates LUMICE_CrystalMesh on stack (fixed-size arrays, no free needed). Returns true on success.
+bool BuildCrystalMeshData(const CrystalConfig& cr, unsigned long long sample_seed, LUMICE_CrystalMesh* out);
+
+// Build crystal mesh from config, apply Y-Z swap and AABB normalization,
 // then upload to g_crystal_renderer. Returns the computed param hash, or 0 on failure.
-int BuildAndUploadCrystalMesh(const CrystalConfig& cr);
+int BuildAndUploadCrystalMesh(const CrystalConfig& cr, unsigned long long sample_seed);
 
 // Access the most-recently uploaded crystal mesh (Y-Z swapped + AABB normalized).
 // Returns nullptr if no mesh has been built yet or after ResetLastCrystalMesh().

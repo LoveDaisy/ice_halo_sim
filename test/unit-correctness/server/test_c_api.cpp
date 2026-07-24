@@ -51,10 +51,48 @@ static_assert(sizeof(LUMICE_RawXyzResult) == 64, "LUMICE_RawXyzResult ABI must b
 static_assert(sizeof(LUMICE_RenderResult) == 32, "LUMICE_RenderResult ABI must be 32 bytes (capi_runner.py mirror)");
 static_assert(sizeof(LUMICE_ServerConfig) == 12, "LUMICE_ServerConfig ABI must be 12 bytes (capi_runner.py mirror)");
 
+namespace {
+
+// Build a deterministic (NO_RANDOM) LUMICE_Distribution scalar.
+LUMICE_Distribution DetDist(float value) {
+  return LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, value, 0.0f };
+}
+
+// Build a deterministic prism param: `height` scalar + six face_distance = 1.0
+// (the regular-hexagon default the old JSON path relied on).
+LUMICE_CrystalParam MakePrismParam(float height = 1.0f) {
+  LUMICE_CrystalParam p{};
+  p.type = 0;
+  p.height = DetDist(height);
+  for (auto& fd : p.face_distance) {
+    fd = DetDist(1.0f);
+  }
+  return p;
+}
+
+// Build a deterministic pyramid param. Wedge angles default to 28.0° (the same
+// value the old 3-arg CreatePyramid Miller-[1,0,1] default produced).
+LUMICE_CrystalParam MakePyramidParam(float prism_h, float upper_h, float lower_h, float upper_wedge = 28.0f,
+                                     float lower_wedge = 28.0f) {
+  LUMICE_CrystalParam p{};
+  p.type = 1;
+  p.prism_h = DetDist(prism_h);
+  p.upper_h = DetDist(upper_h);
+  p.lower_h = DetDist(lower_h);
+  p.upper_wedge_angle = upper_wedge;
+  p.lower_wedge_angle = lower_wedge;
+  for (auto& fd : p.face_distance) {
+    fd = DetDist(1.0f);
+  }
+  return p;
+}
+
+}  // namespace
+
 TEST(CrystalMeshApi, PrismVerticesAndEdges) {
   LUMICE_CrystalMesh mesh{};
-  const char* json = R"({"type": "prism", "shape": {"height": 1.0}})";
-  LUMICE_ErrorCode err = LUMICE_GetCrystalMesh(nullptr, json, &mesh);
+  const LUMICE_CrystalParam param = MakePrismParam(1.0f);
+  LUMICE_ErrorCode err = LUMICE_GetCrystalMesh(&param, 0, &mesh);
   EXPECT_EQ(err, LUMICE_OK);
   EXPECT_EQ(mesh.vertex_count, 12);
   // 18 wireframe edges: 6 top + 6 bottom + 6 vertical (internal diagonals excluded)
@@ -63,8 +101,8 @@ TEST(CrystalMeshApi, PrismVerticesAndEdges) {
 
 TEST(CrystalMeshApi, PyramidVerticesAndEdges) {
   LUMICE_CrystalMesh mesh{};
-  const char* json = R"({"type": "pyramid", "shape": {"prism_h": 1.0, "upper_h": 0.5, "lower_h": 0.5}})";
-  LUMICE_ErrorCode err = LUMICE_GetCrystalMesh(nullptr, json, &mesh);
+  const LUMICE_CrystalParam param = MakePyramidParam(1.0f, 0.5f, 0.5f);
+  LUMICE_ErrorCode err = LUMICE_GetCrystalMesh(&param, 0, &mesh);
   EXPECT_EQ(err, LUMICE_OK);
   EXPECT_GT(mesh.vertex_count, 0);
   EXPECT_GT(mesh.edge_count, 0);
@@ -74,32 +112,26 @@ TEST(CrystalMeshApi, PyramidVerticesAndEdges) {
 
 TEST(CrystalMeshApi, NullArgs) {
   LUMICE_CrystalMesh mesh{};
-  EXPECT_EQ(LUMICE_GetCrystalMesh(nullptr, nullptr, &mesh), LUMICE_ERR_NULL_ARG);
-  EXPECT_EQ(LUMICE_GetCrystalMesh(nullptr, "{}", nullptr), LUMICE_ERR_NULL_ARG);
-}
-
-TEST(CrystalMeshApi, InvalidJson) {
-  LUMICE_CrystalMesh mesh{};
-  EXPECT_EQ(LUMICE_GetCrystalMesh(nullptr, "not json", &mesh), LUMICE_ERR_INVALID_JSON);
-}
-
-TEST(CrystalMeshApi, MissingFields) {
-  LUMICE_CrystalMesh mesh{};
-  EXPECT_EQ(LUMICE_GetCrystalMesh(nullptr, R"({"type": "prism"})", &mesh), LUMICE_ERR_MISSING_FIELD);
-  EXPECT_EQ(LUMICE_GetCrystalMesh(nullptr, R"({"shape": {}})", &mesh), LUMICE_ERR_MISSING_FIELD);
+  const LUMICE_CrystalParam param = MakePrismParam(1.0f);
+  EXPECT_EQ(LUMICE_GetCrystalMesh(nullptr, 0, &mesh), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_GetCrystalMesh(&param, 0, nullptr), LUMICE_ERR_NULL_ARG);
 }
 
 TEST(CrystalMeshApi, UnknownType) {
+  // An out-of-range crystal type (not 0=prism / 1=pyramid) must be rejected without
+  // building anything — the new-signature analog of the old "unknown type string".
   LUMICE_CrystalMesh mesh{};
-  EXPECT_EQ(LUMICE_GetCrystalMesh(nullptr, R"({"type": "cube", "shape": {}})", &mesh), LUMICE_ERR_INVALID_VALUE);
+  LUMICE_CrystalParam param = MakePrismParam(1.0f);
+  param.type = 2;
+  EXPECT_EQ(LUMICE_GetCrystalMesh(&param, 0, &mesh), LUMICE_ERR_INVALID_VALUE);
 }
 
 TEST(CrystalMeshApi, PrismFaceNumbersInLegalSet) {
   // Zero-init covers all unused slots with 0; LUMICE_GetCrystalMesh must overwrite
   // [0, triangle_count) with valid face numbers (>0).
   LUMICE_CrystalMesh mesh{};
-  const char* json = R"({"type": "prism", "shape": {"height": 1.0}})";
-  ASSERT_EQ(LUMICE_GetCrystalMesh(nullptr, json, &mesh), LUMICE_OK);
+  const LUMICE_CrystalParam param = MakePrismParam(1.0f);
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&param, 0, &mesh), LUMICE_OK);
   ASSERT_GT(mesh.triangle_count, 0);
   for (int i = 0; i < mesh.triangle_count; ++i) {
     int fn = mesh.face_numbers[i];
@@ -111,8 +143,8 @@ TEST(CrystalMeshApi, PrismFaceNumbersInLegalSet) {
 
 TEST(CrystalMeshApi, PyramidFaceNumbersInLegalSet) {
   LUMICE_CrystalMesh mesh{};
-  const char* json = R"({"type": "pyramid", "shape": {"prism_h": 1.0, "upper_h": 0.5, "lower_h": 0.5}})";
-  ASSERT_EQ(LUMICE_GetCrystalMesh(nullptr, json, &mesh), LUMICE_OK);
+  const LUMICE_CrystalParam param = MakePyramidParam(1.0f, 0.5f, 0.5f);
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&param, 0, &mesh), LUMICE_OK);
   ASSERT_GT(mesh.triangle_count, 0);
   bool saw_prism = false;
   bool saw_upper_pyr = false;
@@ -143,8 +175,8 @@ TEST(CrystalMeshApi, PyramidFaceNumbersInLegalSet) {
 
 TEST(CrystalMeshApi, PrismPerFaceTopology) {
   LUMICE_CrystalMesh mesh{};
-  const char* json = R"({"type": "prism", "shape": {"height": 1.0}})";
-  ASSERT_EQ(LUMICE_GetCrystalMesh(nullptr, json, &mesh), LUMICE_OK);
+  const LUMICE_CrystalParam param = MakePrismParam(1.0f);
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&param, 0, &mesh), LUMICE_OK);
 
   // Prism: 2 basal + 6 lateral faces
   EXPECT_EQ(mesh.face_count, 8);
@@ -172,8 +204,8 @@ TEST(CrystalMeshApi, PrismPerFaceTopology) {
 
 TEST(CrystalMeshApi, PyramidPerFaceTopology) {
   LUMICE_CrystalMesh mesh{};
-  const char* json = R"({"type": "pyramid", "shape": {"prism_h": 1.0, "upper_h": 0.5, "lower_h": 0.5}})";
-  ASSERT_EQ(LUMICE_GetCrystalMesh(nullptr, json, &mesh), LUMICE_OK);
+  const LUMICE_CrystalParam param = MakePyramidParam(1.0f, 0.5f, 0.5f);
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&param, 0, &mesh), LUMICE_OK);
 
   EXPECT_GT(mesh.face_count, 0);
   // Full pyramid: 2 basal + 6 prism + 6 upper + 6 lower = 20 faces
@@ -189,8 +221,8 @@ TEST(CrystalMeshApi, PyramidPerFaceTopology) {
 
 TEST(CrystalMeshApi, PerFaceVertexOrderCCW) {
   LUMICE_CrystalMesh mesh{};
-  const char* json = R"({"type": "prism", "shape": {"height": 1.0}})";
-  ASSERT_EQ(LUMICE_GetCrystalMesh(nullptr, json, &mesh), LUMICE_OK);
+  const LUMICE_CrystalParam param = MakePrismParam(1.0f);
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&param, 0, &mesh), LUMICE_OK);
   ASSERT_GT(mesh.face_count, 0);
 
   // Find basal face (fn==1) and verify CCW winding
@@ -269,8 +301,8 @@ TEST(CrystalMeshApi, PerFaceVertexOrderCCW) {
 
 TEST(CrystalMeshApi, FaceNormalsUnitLengthPrism) {
   LUMICE_CrystalMesh mesh{};
-  const char* json = R"({"type": "prism", "shape": {"height": 1.0}})";
-  ASSERT_EQ(LUMICE_GetCrystalMesh(nullptr, json, &mesh), LUMICE_OK);
+  const LUMICE_CrystalParam param = MakePrismParam(1.0f);
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&param, 0, &mesh), LUMICE_OK);
   ASSERT_GT(mesh.face_count, 0);
 
   for (int fi = 0; fi < mesh.face_count; ++fi) {
@@ -286,8 +318,8 @@ TEST(CrystalMeshApi, FaceNormalsOutwardPrism) {
   // Each face normal must point outward from the face centroid: dot(n, centroid - origin) > 0
   // for centered hex prism geometry.
   LUMICE_CrystalMesh mesh{};
-  const char* json = R"({"type": "prism", "shape": {"height": 1.0}})";
-  ASSERT_EQ(LUMICE_GetCrystalMesh(nullptr, json, &mesh), LUMICE_OK);
+  const LUMICE_CrystalParam param = MakePrismParam(1.0f);
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&param, 0, &mesh), LUMICE_OK);
   ASSERT_GT(mesh.face_count, 0);
 
   for (int fi = 0; fi < mesh.face_count; ++fi) {
@@ -320,9 +352,8 @@ TEST(CrystalMeshApi, FaceNormalsUnitLengthExtremePyramid) {
   // Covers lower-pyramidal face numbers (23-28), which exceed LUMICE_MAX_CRYSTAL_FACES=24
   // — exercising the position-based (fi) indexing rather than fn-value indexing.
   LUMICE_CrystalMesh mesh{};
-  const char* json = R"({"type": "pyramid", "shape": {"prism_h": 0.01, "upper_h": 0.5, "lower_h": 0.5,
-                            "upper_wedge_angle": 87.0, "lower_wedge_angle": 87.0}})";
-  ASSERT_EQ(LUMICE_GetCrystalMesh(nullptr, json, &mesh), LUMICE_OK);
+  const LUMICE_CrystalParam param = MakePyramidParam(0.01f, 0.5f, 0.5f, 87.0f, 87.0f);
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&param, 0, &mesh), LUMICE_OK);
   ASSERT_GT(mesh.face_count, 0);
 
   for (int fi = 0; fi < mesh.face_count; ++fi) {
@@ -335,8 +366,8 @@ TEST(CrystalMeshApi, FaceNormalsUnitLengthExtremePyramid) {
 
 TEST(CrystalMeshApi, PerFacePoolBoundary) {
   LUMICE_CrystalMesh mesh{};
-  const char* json = R"({"type": "pyramid", "shape": {"prism_h": 1.0, "upper_h": 0.5, "lower_h": 0.5}})";
-  ASSERT_EQ(LUMICE_GetCrystalMesh(nullptr, json, &mesh), LUMICE_OK);
+  const LUMICE_CrystalParam param = MakePyramidParam(1.0f, 0.5f, 0.5f);
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&param, 0, &mesh), LUMICE_OK);
 
   // Verify pool usage doesn't exceed the cap
   int total_pool = 0;
@@ -351,6 +382,119 @@ TEST(CrystalMeshApi, PerFacePoolBoundary) {
     EXPECT_GT(mesh.face_vtx_counts[i], 0);
   }
   EXPECT_LE(total_pool, LUMICE_MAX_CRYSTAL_FACE_VTXPOOL);
+}
+
+// =============== Sampling contract tests (Step 2 boundary + AC2–AC5) ===============
+
+// Step 2 boundary: the shared shape-translation helper must NOT leak the crystal
+// id or axis distributions into its output — those are meaningless for a stateless
+// mesh preview and belong only to ConfigToJson's per-crystal wrapper. Locks the
+// "don't accidentally slip id/axis into the shared helper" risk.
+TEST(CrystalShapeToJson, ExcludesIdAndAxis) {
+  LUMICE_CrystalParam prism = MakePrismParam(1.0f);
+  prism.id = 7;
+  prism.zenith = LUMICE_Distribution{ LUMICE_DIST_GAUSS, 90.0f, 10.0f };
+  nlohmann::json j = CrystalShapeToJson(prism);
+  EXPECT_FALSE(j.contains("id"));
+  EXPECT_FALSE(j.contains("axis"));
+  EXPECT_TRUE(j.contains("type"));
+  EXPECT_TRUE(j.contains("shape"));
+
+  LUMICE_CrystalParam pyr = MakePyramidParam(1.0f, 0.5f, 0.5f);
+  pyr.id = 9;
+  nlohmann::json jp = CrystalShapeToJson(pyr);
+  EXPECT_FALSE(jp.contains("id"));
+  EXPECT_FALSE(jp.contains("axis"));
+}
+
+// AC2: identical param + identical seed => bit-identical mesh. The whole struct is
+// compared (both start zero-initialized, so unused tail slots stay 0 in both).
+TEST(CrystalMeshSampling, DeterministicSameSeedBitExact) {
+  LUMICE_CrystalParam param = MakePrismParam(1.0f);
+  for (auto& fd : param.face_distance) {
+    fd = LUMICE_Distribution{ LUMICE_DIST_GAUSS, 1.0f, 0.3f };
+  }
+  LUMICE_CrystalMesh a{};
+  LUMICE_CrystalMesh b{};
+  const unsigned long long seed = 0x1234567890abcdefULL;
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&param, seed, &a), LUMICE_OK);
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&param, seed, &b), LUMICE_OK);
+  EXPECT_EQ(std::memcmp(&a, &b, sizeof(LUMICE_CrystalMesh)), 0)
+      << "same param + same seed must produce a bit-identical mesh";
+}
+
+// AC3 (positive): a randomized crystal produces different meshes under different seeds.
+TEST(CrystalMeshSampling, SeedChangesMeshWhenRandomized) {
+  LUMICE_CrystalParam param = MakePrismParam(1.0f);
+  for (auto& fd : param.face_distance) {
+    fd = LUMICE_Distribution{ LUMICE_DIST_GAUSS, 1.0f, 0.3f };
+  }
+  LUMICE_CrystalMesh a{};
+  LUMICE_CrystalMesh b{};
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&param, 1, &a), LUMICE_OK);
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&param, 2, &b), LUMICE_OK);
+  EXPECT_NE(std::memcmp(&a, &b, sizeof(LUMICE_CrystalMesh)), 0)
+      << "different seeds on a randomized crystal must produce different meshes";
+}
+
+// AC3 (negative / no-op contract): a fully NO_RANDOM crystal ignores the seed.
+TEST(CrystalMeshSampling, SeedNoOpWhenNoRandom) {
+  const LUMICE_CrystalParam param = MakePrismParam(1.0f);  // all fields NO_RANDOM
+  LUMICE_CrystalMesh a{};
+  LUMICE_CrystalMesh b{};
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&param, 1, &a), LUMICE_OK);
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&param, 999999, &b), LUMICE_OK);
+  EXPECT_EQ(std::memcmp(&a, &b, sizeof(LUMICE_CrystalMesh)), 0)
+      << "no_random crystal must yield the identical mesh regardless of seed";
+}
+
+// AC4: the preview path matches the full-precision simulation geometry bit-for-bit,
+// and demonstrably diverges from what the old GUI %.4f snprintf truncation produced.
+// The truncated baseline's INEQUALITY is what proves this test is not tautological.
+TEST(CrystalMeshSampling, PreviewMatchesSimulationPrecision) {
+  const float kFull = 1.23456789f;
+  const float kTrunc = 1.2346f;  // what the old GUI "%.4f" formatting would have written
+  const LUMICE_CrystalParam param = MakePrismParam(kFull);
+  LUMICE_CrystalMesh mesh_new{};
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&param, 0, &mesh_new), LUMICE_OK);
+  ASSERT_GT(mesh_new.vertex_count, 0);
+
+  const float dist[6] = { 1, 1, 1, 1, 1, 1 };
+  const lumice::Crystal c_full = lumice::Crystal::CreatePrism(kFull, dist);
+  const lumice::detail::BuiltMesh built_full = lumice::detail::BuildMeshFromCfGeom(c_full.CfGeom());
+  ASSERT_EQ(mesh_new.vertex_count, static_cast<int>(built_full.mesh.GetVtxCnt()));
+  EXPECT_EQ(std::memcmp(mesh_new.vertices, built_full.mesh.GetVtxPtr(0), mesh_new.vertex_count * 3 * sizeof(float)), 0)
+      << "preview mesh must equal full-precision simulation geometry bit-for-bit";
+
+  const lumice::Crystal c_trunc = lumice::Crystal::CreatePrism(kTrunc, dist);
+  const lumice::detail::BuiltMesh built_trunc = lumice::detail::BuildMeshFromCfGeom(c_trunc.CfGeom());
+  ASSERT_EQ(mesh_new.vertex_count, static_cast<int>(built_trunc.mesh.GetVtxCnt()));
+  EXPECT_NE(std::memcmp(mesh_new.vertices, built_trunc.mesh.GetVtxPtr(0), mesh_new.vertex_count * 3 * sizeof(float)), 0)
+      << "%.4f-truncated geometry must differ — proving the test detects precision loss";
+}
+
+// AC5: a large-sigma crystal repeatedly samples shapes the closed-form validation
+// gate rejects; every call must return LUMICE_OK (no SIGSEGV) with an empty-but-valid
+// mesh. The degenerate_hit_count assertion guarantees the reject branch is actually
+// exercised — "no crash" alone would still pass if the branch were never reached.
+TEST(CrystalMeshSampling, DegenerateInputSurvivesLoop) {
+  LUMICE_CrystalParam param = MakePrismParam(1.0f);
+  // Large sigma so opposite face-distance pairs frequently sum <= 0, tripping the
+  // closed-form validity gate. Seeds are fixed (0..199) and the RNG is deterministic,
+  // so the hit count is fully reproducible — not flaky — and empirically comfortable
+  // (dozens of hits), leaving margin if the gate is later retuned.
+  for (auto& fd : param.face_distance) {
+    fd = LUMICE_Distribution{ LUMICE_DIST_GAUSS, 1.0f, 1.0f };
+  }
+  int degenerate_hit_count = 0;
+  for (unsigned long long seed = 0; seed < 200; ++seed) {
+    LUMICE_CrystalMesh mesh{};
+    ASSERT_EQ(LUMICE_GetCrystalMesh(&param, seed, &mesh), LUMICE_OK) << "seed " << seed << " must not crash/error";
+    if (mesh.vertex_count == 0) {
+      ++degenerate_hit_count;  // empty-but-valid result from the validation-gate reject branch
+    }
+  }
+  EXPECT_GT(degenerate_hit_count, 0) << "validation-gate reject branch was never exercised — pick a larger sigma";
 }
 
 // =============== ParseConfigApi Tests ===============

@@ -483,7 +483,7 @@ static void RenderCrystalPreviewPane(GuiState& /*state*/) {
   // Update mesh if crystal params changed
   int hash = CrystalParamHash(cr);
   if (hash != g_modal_mesh_hash) {
-    int result = BuildAndUploadCrystalMesh(cr);
+    int result = BuildAndUploadCrystalMesh(cr, kPreviewFixedSampleSeed);
     if (result != 0) {
       g_modal_mesh_hash = result;
     }

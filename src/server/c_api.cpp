@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -11,11 +12,13 @@
 #include <utility>
 #include <vector>
 
+#include "config/crystal_config.hpp"        // ns::PrismCrystalParam / PyramidCrystalParam (LUMICE_GetCrystalMesh)
 #include "config/raypath_color_config.hpp"  // ns::kDefaultCompositeMode (single-source default)
 #include "config/raypath_validation.hpp"
 #include "config/render_config.hpp"
 #include "core/crystal.hpp"
 #include "core/geo3d.hpp"
+#include "core/trace_ops.hpp"  // ns::MakeCrystal (core single-source crystal sampler)
 #if defined(__APPLE__)
 #include "core/backend/metal_trace_backend.hpp"
 #endif
@@ -306,6 +309,35 @@ static void ColorPredicateToJson(const LUMICE_ColorPredicate& p, nlohmann::json&
   }
 }
 
+// Non-static (declared in server/c_api_internal.hpp) so both ConfigToJson and
+// LUMICE_GetCrystalMesh consume the SAME crystal-shape translation table. Returns
+// {"type","shape"} only — id/axis are the caller's responsibility (ConfigToJson adds
+// them; the mesh-preview path does not want them).
+nlohmann::json CrystalShapeToJson(const LUMICE_CrystalParam& cr) {
+  nlohmann::json j;
+  if (cr.type == 0) {
+    j["type"] = "prism";
+    j["shape"]["height"] = DistributionToJson(cr.height);
+  } else {
+    j["type"] = "pyramid";
+    j["shape"]["prism_h"] = DistributionToJson(cr.prism_h);
+    j["shape"]["upper_h"] = DistributionToJson(cr.upper_h);
+    j["shape"]["lower_h"] = DistributionToJson(cr.lower_h);
+    j["shape"]["upper_wedge_angle"] = cr.upper_wedge_angle;
+    j["shape"]["lower_wedge_angle"] = cr.lower_wedge_angle;
+  }
+  // face_distance: emit all 6 unconditionally (mirrors core crystal_config.cpp::to_json's
+  // `j["face_distance"] = p.d_`). The "only when non-default" shortcut no longer fits now that
+  // each element is a distribution (a NO_RANDOM 1.0 default vs a randomized 1.0 are different
+  // wire forms), so always round-trip every element.
+  nlohmann::json fd = nlohmann::json::array();
+  for (int fi = 0; fi < 6; fi++) {
+    fd.push_back(DistributionToJson(cr.face_distance[fi]));
+  }
+  j["shape"]["face_distance"] = fd;
+  return j;
+}
+
 // Non-static (declared in server/c_api_internal.hpp) so unit tests can assert the
 // emitted filter JSON shape field by field. See that header for rationale.
 nlohmann::json ConfigToJson(const LUMICE_Config& c) {
@@ -316,30 +348,8 @@ nlohmann::json ConfigToJson(const LUMICE_Config& c) {
   root["crystal"] = json::array();
   for (int i = 0; i < c.crystal_count; i++) {
     const auto& cr = c.crystals[i];
-    json j;
+    json j = CrystalShapeToJson(cr);  // {"type","shape"} single-source translation
     j["id"] = cr.id;
-    if (cr.type == 0) {
-      j["type"] = "prism";
-      j["shape"]["height"] = DistributionToJson(cr.height);
-    } else {
-      j["type"] = "pyramid";
-      j["shape"]["prism_h"] = DistributionToJson(cr.prism_h);
-      j["shape"]["upper_h"] = DistributionToJson(cr.upper_h);
-      j["shape"]["lower_h"] = DistributionToJson(cr.lower_h);
-      j["shape"]["upper_wedge_angle"] = cr.upper_wedge_angle;
-      j["shape"]["lower_wedge_angle"] = cr.lower_wedge_angle;
-    }
-    // face_distance: emit all 6 unconditionally (mirrors core crystal_config.cpp::to_json's
-    // `j["face_distance"] = p.d_`). The "only when non-default" shortcut no longer fits now that
-    // each element is a distribution (a NO_RANDOM 1.0 default vs a randomized 1.0 are different
-    // wire forms), so always round-trip every element.
-    {
-      nlohmann::json fd = nlohmann::json::array();
-      for (int fi = 0; fi < 6; fi++) {
-        fd.push_back(DistributionToJson(cr.face_distance[fi]));
-      }
-      j["shape"]["face_distance"] = fd;
-    }
     j["axis"]["zenith"] = DistributionToJson(cr.zenith);
     j["axis"]["azimuth"] = DistributionToJson(cr.azimuth);
     j["axis"]["roll"] = DistributionToJson(cr.roll);
@@ -2023,71 +2033,57 @@ int LUMICE_WillUseGpuRoute(int preferred_backend) {
 // PopulateFromCfGeom), and face_vtx_pool / face_normals come straight from
 // cf_geom_. See doc/crystal-geometry-representation.md §1 for the wider
 // "delete the reversal, read the constant" story.
-LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* /*server*/, const char* crystal_json, LUMICE_CrystalMesh* out) {
-  if (!crystal_json || !out) {
+// Fold a 64-bit sample seed into the 32-bit seed RandomNumberGenerator accepts.
+// XOR-fold (both halves participate) rather than truncate: truncation would make any
+// two seeds that differ only in the high 32 bits collide deterministically; XOR-fold
+// reduces that to a ~2^-32 uniform collision probability. This is NOT a "distinct
+// sample_seed => distinct mesh" guarantee, only a removal of the deterministic-collision
+// class of false negatives.
+static uint32_t FoldSampleSeed64(unsigned long long seed) {
+  return static_cast<uint32_t>(seed) ^ static_cast<uint32_t>(seed >> 32);
+}
+
+LUMICE_ErrorCode LUMICE_GetCrystalMesh(const LUMICE_CrystalParam* crystal, unsigned long long sample_seed,
+                                       LUMICE_CrystalMesh* out) {
+  if (!crystal || !out) {
     return LUMICE_ERR_NULL_ARG;
   }
+  if (crystal->type != 0 && crystal->type != 1) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
 
-  // Parse JSON
-  nlohmann::json j;
+  // Single mapping table: translate the shape into the core crystal JSON schema, then
+  // let the core from_json (already validated by ConfigToJson round-trips) build the
+  // CrystalParam variant. This reuses the existing translation instead of maintaining
+  // a second, parallel struct-to-struct field map.
+  ns::CrystalParam param;
   try {
-    j = nlohmann::json::parse(crystal_json);
-  } catch (...) {
-    return LUMICE_ERR_INVALID_JSON;
-  }
-
-  if (!j.contains("type") || !j.contains("shape")) {
-    return LUMICE_ERR_MISSING_FIELD;
-  }
-
-  auto type_str = j.at("type").get<std::string>();
-  const auto& shape = j.at("shape");
-
-  // Parse face_distance if present (common to both prism and pyramid)
-  float dist[6]{ 1, 1, 1, 1, 1, 1 };
-  if (shape.contains("face_distance") && shape["face_distance"].is_array()) {
-    size_t n = std::min(shape["face_distance"].size(), static_cast<size_t>(6));
-    for (size_t i = 0; i < n; i++) {
-      if (shape["face_distance"][i].is_number()) {
-        dist[i] = shape["face_distance"][i].get<float>();
-      }
-    }
-  }
-
-  ns::Crystal crystal;
-  try {
-    if (type_str == "prism") {
-      float h = shape.value("height", 1.0f);
-      crystal = ns::Crystal::CreatePrism(h, dist);
-    } else if (type_str == "pyramid") {
-      float prism_h = shape.value("prism_h", 1.0f);
-      float upper_h = shape.value("upper_h", 0.0f);
-      float lower_h = shape.value("lower_h", 0.0f);
-      // Prefer wedge_angle, fallback to upper_indices, then default
-      if (shape.contains("upper_wedge_angle") && shape.contains("lower_wedge_angle")) {
-        float ua = shape["upper_wedge_angle"].get<float>();
-        float la = shape["lower_wedge_angle"].get<float>();
-        crystal = ns::Crystal::CreatePyramid(ua, la, upper_h, prism_h, lower_h, dist);
-      } else if (shape.contains("upper_indices") && shape.contains("lower_indices")) {
-        float ua = MillerToAlpha(shape["upper_indices"][0].get<int>(), shape["upper_indices"][2].get<int>());
-        float la = MillerToAlpha(shape["lower_indices"][0].get<int>(), shape["lower_indices"][2].get<int>());
-        crystal = ns::Crystal::CreatePyramid(ua, la, upper_h, prism_h, lower_h, dist);
-      } else {
-        crystal = ns::Crystal::CreatePyramid(upper_h, prism_h, lower_h);
-      }
+    const nlohmann::json shape = CrystalShapeToJson(*crystal).at("shape");
+    if (crystal->type == 0) {
+      param = shape.get<ns::PrismCrystalParam>();
     } else {
-      return LUMICE_ERR_INVALID_VALUE;
+      param = shape.get<ns::PyramidCrystalParam>();
     }
   } catch (...) {
     return LUMICE_ERR_INVALID_CONFIG;
   }
 
+  // Sample one concrete shape through the core single-source sampler. A LOCAL RNG
+  // instance (not the process singleton) is what makes the determinism contract hold:
+  // identical seed + identical param => identical MakeCrystal draw sequence, with no
+  // cross-call state carried in a shared generator. For a fully NO_RANDOM param,
+  // MakeCrystal never touches the RNG, so sample_seed is a no-op (contract).
+  ns::RandomNumberGenerator rng(FoldSampleSeed64(sample_seed));
+  const ns::Crystal crystal_obj = ns::MakeCrystal(rng, param);
+
   // On-demand triangulation: the Crystal no longer stores a triangle mesh
   // (entry-point sampling consumes cf_geom_ corners directly). Geometry export
   // is a cold path (GUI preview, gated by a param hash) so building the mesh
   // here — instead of eagerly in every MakeCrystal — costs nothing on the hot
-  // path.
-  const ns::CrystalGeom& g = crystal.CfGeom();
+  // path. A degenerate sample (validation gate rejected) yields a default-constructed
+  // Crystal with face_cnt==0; BuildMeshFromCfGeom and the export loops below are all
+  // safe (zero-iteration) on that, producing an empty-but-valid mesh and LUMICE_OK.
+  const ns::CrystalGeom& g = crystal_obj.CfGeom();
   const ns::detail::BuiltMesh built = ns::detail::BuildMeshFromCfGeom(g);
   const ns::Mesh& mesh = built.mesh;
 

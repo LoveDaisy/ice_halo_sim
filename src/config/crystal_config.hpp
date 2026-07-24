@@ -25,6 +25,14 @@ struct PyramidCrystalParam {
 
 using CrystalParam = std::variant<PrismCrystalParam, PyramidCrystalParam>;
 
+// Per-param shape (de)serialization. Declared here (definitions in crystal_config.cpp)
+// so consumers outside that TU — e.g. the C API mesh-preview path — can build a
+// PrismCrystalParam/PyramidCrystalParam from a shape JSON via `get<>` (ADL).
+void to_json(nlohmann::json& j, const PrismCrystalParam& p);
+void from_json(const nlohmann::json& j, PrismCrystalParam& p);
+void to_json(nlohmann::json& j, const PyramidCrystalParam& p);
+void from_json(const nlohmann::json& j, PyramidCrystalParam& p);
+
 struct CrystalConfig {
   IdType id_;
   CrystalParam param_;

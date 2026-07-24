@@ -958,11 +958,7 @@ void LUMICE_StopServer(LUMICE_Server* server);
 
 // =============== Crystal Mesh ===============
 // Get crystal wireframe mesh for 3D preview.
-// crystal_json is a single crystal config JSON string, e.g.:
-//   {"type": "prism", "shape": {"height": 1.0}}
-//   {"type": "pyramid", "shape": {"prism_h": 1.0, "upper_h": 0.5, "lower_h": 0.5}}
 // Caller allocates LUMICE_CrystalMesh on stack, Core fills vertex/edge data.
-// server may be NULL (not used, reserved for future).
 
 #define LUMICE_MAX_CRYSTAL_VERTICES 128
 #define LUMICE_MAX_CRYSTAL_EDGES 256
@@ -999,7 +995,29 @@ typedef struct LUMICE_CrystalMesh_ {
   float face_normals[LUMICE_MAX_CRYSTAL_FACES * 3];
 } LUMICE_CrystalMesh;
 
-LUMICE_ErrorCode LUMICE_GetCrystalMesh(LUMICE_Server* server, const char* crystal_json, LUMICE_CrystalMesh* out);
+// Sample one concrete crystal shape from `crystal`'s distributions and build its
+// preview mesh. Preview and simulation share the SAME LUMICE_CrystalParam, so there
+// is no stringify step and no precision divergence between what is previewed and what
+// is simulated. Sampling runs through the core single-source sampler (ns::MakeCrystal),
+// so Gaussian/Laplacian/zigzag/uniform semantics and the ring-0 negative-d policy are
+// never re-implemented on the GUI side.
+//
+// Contract:
+//   - Deterministic: identical `crystal` + identical `sample_seed` => bit-identical
+//     `out` mesh (the basis for T5 preview-animation / thumbnail determinism).
+//   - `sample_seed` is a NO-OP for a fully non-random crystal (every shape field
+//     LUMICE_DIST_NO_RANDOM): MakeCrystal never touches the RNG, so any seed yields the
+//     same mesh (the basis for "preview holds still when std=0").
+//   - Degenerate input never crashes: a randomized crystal may sample a shape the
+//     closed-form validation gate rejects; that yields an empty-but-valid mesh
+//     (all *_count == 0) and LUMICE_OK, never a SIGSEGV.
+//   - The mesh is in the crystal's LOCAL frame; the axis distributions
+//     (zenith/azimuth/roll) are NOT consumed here (orientation is applied at render time).
+//
+// Returns LUMICE_ERR_NULL_ARG if `crystal` or `out` is NULL; LUMICE_ERR_INVALID_VALUE
+// for an unknown crystal->type; LUMICE_ERR_INVALID_CONFIG if the shape cannot be parsed.
+LUMICE_ErrorCode LUMICE_GetCrystalMesh(const LUMICE_CrystalParam* crystal, unsigned long long sample_seed,
+                                       LUMICE_CrystalMesh* out);
 
 // =============== Config ID Range ===============
 // Maximum value for LUMICE config IDs (matches core IdType = uint16_t max).

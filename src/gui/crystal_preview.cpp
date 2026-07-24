@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <cstring>
 
 #include "gui/app.hpp"
@@ -152,25 +151,30 @@ void ApplyTrackballRotation(float dx, float dy) {
   std::memcpy(g_crystal_rotation, tmp, sizeof(g_crystal_rotation));
 }
 
-bool BuildCrystalMeshData(const CrystalConfig& cr, LUMICE_CrystalMesh* out) {
-  char json_buf[512];
-  auto* fd = cr.face_distance;
+bool BuildCrystalMeshData(const CrystalConfig& cr, unsigned long long sample_seed, LUMICE_CrystalMesh* out) {
+  // Preview and simulation now share the same LUMICE_CrystalParam: build it straight
+  // from the GUI config (no stringify → no %.4f precision divergence). GUI shape fields
+  // are still deterministic scalars (T4 has not promoted them to distributions), so each
+  // is wrapped in a NO_RANDOM distribution; the axis fields are irrelevant to the local-
+  // frame mesh and left zero-initialized.
+  auto no_random = [](float value) { return LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, value, 0.0f }; };
+  LUMICE_CrystalParam param{};
+  param.type = (cr.type == CrystalType::kPrism) ? 0 : 1;
   if (cr.type == CrystalType::kPrism) {
-    snprintf(json_buf, sizeof(json_buf),
-             R"({"type":"prism","shape":{"height":%.4f,)"
-             R"("face_distance":[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]}})",
-             cr.height, fd[0], fd[1], fd[2], fd[3], fd[4], fd[5]);
+    param.height = no_random(cr.height);
   } else {
-    snprintf(json_buf, sizeof(json_buf),
-             R"({"type":"pyramid","shape":{"prism_h":%.4f,"upper_h":%.4f,"lower_h":%.4f,)"
-             R"("upper_wedge_angle":%.4f,"lower_wedge_angle":%.4f,)"
-             R"("face_distance":[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]}})",
-             cr.prism_h, cr.upper_h, cr.lower_h, cr.upper_alpha, cr.lower_alpha, fd[0], fd[1], fd[2], fd[3], fd[4],
-             fd[5]);
+    param.prism_h = no_random(cr.prism_h);
+    param.upper_h = no_random(cr.upper_h);
+    param.lower_h = no_random(cr.lower_h);
+    param.upper_wedge_angle = cr.upper_alpha;  // bare float, not a distribution
+    param.lower_wedge_angle = cr.lower_alpha;
+  }
+  for (int i = 0; i < 6; i++) {
+    param.face_distance[i] = no_random(cr.face_distance[i]);
   }
 
   *out = {};
-  if (LUMICE_GetCrystalMesh(nullptr, json_buf, out) != LUMICE_OK) {
+  if (LUMICE_GetCrystalMesh(&param, sample_seed, out) != LUMICE_OK) {
     return false;
   }
 
@@ -231,9 +235,9 @@ bool BuildCrystalMeshData(const CrystalConfig& cr, LUMICE_CrystalMesh* out) {
   return true;
 }
 
-int BuildAndUploadCrystalMesh(const CrystalConfig& cr) {
+int BuildAndUploadCrystalMesh(const CrystalConfig& cr, unsigned long long sample_seed) {
   LUMICE_CrystalMesh mesh{};
-  if (!BuildCrystalMeshData(cr, &mesh)) {
+  if (!BuildCrystalMeshData(cr, sample_seed, &mesh)) {
     return 0;
   }
 
