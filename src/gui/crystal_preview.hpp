@@ -16,6 +16,13 @@ extern int g_crystal_mesh_hash;
 
 // Crystal preview helpers
 int CrystalParamHash(const CrystalConfig& c);
+
+// Returns true if the crystal has an active shape-field randomization (any consumed ShapeDist with
+// type != kNoRandom), i.e. the preview mesh would vary with sample_seed. Only the shape fields that
+// the current c.type actually feeds into LUMICE_CrystalParam are checked (kPrism → height; kPyramid
+// → prism_h/upper_h/lower_h), plus face_distance[6] which both types consume. This mirrors the
+// branch in BuildCrystalMeshData so the animation gate never spins on a field the mesh ignores.
+bool HasActiveShapeRandomization(const CrystalConfig& c);
 // Legacy GUI initialization path only; always returns Rx(20°). Any new
 // reset-view logic should use the two-argument overload below with preset +
 // params. Used by main GUI startup and the test harness where no axis preset /

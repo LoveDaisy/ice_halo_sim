@@ -154,6 +154,15 @@ static float g_saved_zoom;
 
 // Crystal modal: mesh hash for edit buffer change detection
 static int g_modal_mesh_hash = 0;
+// Crystal modal: sample_seed the cached mesh was last built with. Paired with g_modal_mesh_hash to
+// form a two-field rebuild gate (param OR seed changed) — kept separate from the param hash rather
+// than XOR-merged, because distinct (hash, seed) pairs could collide to one int and drop a rebuild.
+static unsigned long long g_modal_mesh_seed_built = kPreviewFixedSampleSeed;
+// Crystal modal: preview lifecycle epoch. Bumped on every OpenEditModal / ResetModalState (the two
+// "new preview session" boundaries) so the animation ticker resets its accumulated time + seed
+// instead of carrying a stale value across sessions (see gui-state-governance: local static timers
+// must be epoch-keyed, not bare timestamps).
+static unsigned long long g_modal_preview_epoch = 0;
 
 // Flag: the OpenPopup call must happen exactly once per modal open,
 // on the frame following the EditRequest.
@@ -396,7 +405,8 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   // Save trackball state for Cancel restoration
   std::memcpy(g_saved_rotation, g_crystal_rotation, sizeof(g_saved_rotation));
   g_saved_zoom = g_crystal_zoom;
-  g_modal_mesh_hash = 0;  // Force mesh update on first frame
+  g_modal_mesh_hash = 0;    // Force mesh update on first frame
+  g_modal_preview_epoch++;  // New preview session: reset the animation ticker (epoch-keyed)
 
   switch (req.target) {
     case EditTarget::kCrystal:
@@ -441,18 +451,56 @@ static void HandleCrystalPreviewInteraction(bool hovered, bool active) {
 // child-size computation in RenderEditModals.
 constexpr float kModalPreviewImageSize = 320.0f;
 
+// Advances (or resets, on a new epoch) the preview animation ticker and returns the sample_seed to
+// build this frame. Kept separate from RenderCrystalPreviewPane so the render function stays focused
+// on rendering. When has_random is false the seed is pinned to kPreviewFixedSampleSeed and the
+// accumulator is held at 0, so the caller's rebuild gate degenerates to a pure param comparison —
+// byte-for-byte the pre-animation behavior (the "static when no randomization" contract). Uses
+// ImGui::GetIO().DeltaTime (overridden to a constant under gui_test --fixed-dt) rather than a raw
+// wall clock, so tests can cross a tick deterministically with Yield(N) in the fast fixed-dt pool.
+static unsigned long long AdvancePreviewAnimSeed(bool has_random) {
+  static unsigned long long s_anim_epoch = 0;
+  static float s_anim_accum_s = 0.0f;
+  static unsigned long long s_anim_seed = kPreviewFixedSampleSeed;
+  if (s_anim_epoch != g_modal_preview_epoch) {
+    s_anim_epoch = g_modal_preview_epoch;
+    s_anim_accum_s = 0.0f;
+    s_anim_seed = kPreviewFixedSampleSeed;
+  }
+  if (!has_random) {
+    s_anim_accum_s = 0.0f;
+    s_anim_seed = kPreviewFixedSampleSeed;
+    return s_anim_seed;
+  }
+  s_anim_accum_s += ImGui::GetIO().DeltaTime;
+  constexpr float kIntervalS = static_cast<float>(kCrystalPreviewAnimIntervalMs) / 1000.0f;
+  if (s_anim_accum_s >= kIntervalS) {
+    s_anim_accum_s -= kIntervalS;
+    s_anim_seed++;
+  }
+  return s_anim_seed;
+}
+
 // Render the persistent crystal preview pane (3D image + drag interaction +
 // style selector + reset view). Called from the left BeginChild during modal
 // rendering so the preview stays visible across Crystal / Axis / Filter tabs.
 static void RenderCrystalPreviewPane(GuiState& /*state*/) {
   auto& cr = g_crystal_buf;
 
-  // Update mesh if crystal params changed
+  // Advance the animation ticker; a randomized shape re-samples every tick, an unrandomized one
+  // stays pinned to kPreviewFixedSampleSeed (static preview).
+  const bool has_random = HasActiveShapeRandomization(cr);
+  const unsigned long long sample_seed = AdvancePreviewAnimSeed(has_random);
+
+  // Rebuild gate: param OR seed changed (two fields compared separately, not merged into one hash —
+  // XOR-merge could collide distinct (hash, seed) pairs and drop a rebuild). When !has_random the
+  // seed is constant, so this reduces to the original param-only comparison.
   int hash = CrystalParamHash(cr);
-  if (hash != g_modal_mesh_hash) {
-    int result = BuildAndUploadCrystalMesh(cr, kPreviewFixedSampleSeed);
+  if (hash != g_modal_mesh_hash || sample_seed != g_modal_mesh_seed_built) {
+    int result = BuildAndUploadCrystalMesh(cr, sample_seed);
     if (result != 0) {
       g_modal_mesh_hash = result;
+      g_modal_mesh_seed_built = sample_seed;
     }
   }
 
@@ -1074,6 +1122,7 @@ void ResetModalState() {
   g_pending_open = false;
   g_pending_mode_switch = false;
   g_modal_mesh_hash = 0;
+  g_modal_preview_epoch++;  // New preview session: reset the animation ticker (epoch-keyed)
 }
 
 bool IsCurrentModalDApplicable() {

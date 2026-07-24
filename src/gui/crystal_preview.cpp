@@ -61,6 +61,27 @@ int CrystalParamHash(const CrystalConfig& c) {
   return h;
 }
 
+bool HasActiveShapeRandomization(const CrystalConfig& c) {
+  auto is_random = [](const ShapeDist& d) { return d.type != ShapeDistType::kNoRandom; };
+  // Only the height-family fields the current type actually consumes (mirrors BuildCrystalMeshData's
+  // type branch); face_distance is consumed by both types.
+  if (c.type == CrystalType::kPrism) {
+    if (is_random(c.height)) {
+      return true;
+    }
+  } else {
+    if (is_random(c.prism_h) || is_random(c.upper_h) || is_random(c.lower_h)) {
+      return true;
+    }
+  }
+  for (const auto& fd : c.face_distance) {
+    if (is_random(fd)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void ResetCrystalView() {
   // Legacy default view (+20 deg around X). Kept for callers that have no axis
   // preset in scope (main GUI init and test harness setup); modal Reset View
