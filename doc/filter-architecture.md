@@ -135,6 +135,23 @@ simulator output  →  RenderConsumer  →  projection  →  XYZ accumulate
 is removed in task-revert (Design A target, removed in task-revert 219.4).  Any attempt
 to apply filters at the consumer level is a design violation.
 
+### Empty-batch contract
+
+Because the filter gate runs simulator-side and can legitimately reject **every** ray in a
+given `Consume()` batch (see the §7 branch table — a low pass-rate filter's "this batch got
+zero survivors" is a normal tail event, not a malformed state), `outgoing_d_` and
+`outgoing_w_` may both be empty while `rays_` is non-empty. `RenderConsumer` **must tolerate
+this**: with `outgoing_w_.size() == 0` the copy, projection, and accumulation loops are all
+no-ops and `snapshot_intensity_` stays zero. The consumer may **not** assume that a non-empty
+`rays_` implies non-empty `outgoing_*`; the only sizing invariant it may rely on is the
+`outgoing_d_.size() == 3 * outgoing_w_.size()` parallel-array relationship documented in
+`sim_data.hpp` (asserted at `src/server/render.cpp:248`).
+
+> A stale assertion at `render.cpp:248` used to encode "`rays_` non-empty ⟹ `outgoing_w_`
+> non-empty", causing a Debug-only `SIGABRT` whenever a filtered batch happened to empty out.
+> It was replaced with the size-consistency check above, because the emptied-batch state it
+> tripped on is exactly what Design A allows.
+
 ---
 
 ## §5 Data Flow Invariants
@@ -371,6 +388,7 @@ anchor points for future contributors:
 | Binding model, GUI linked-group invariants | `src/gui/gui_state.hpp:294-328` |
 | Filter ↔ crystal per-entry config | `src/config/proj_config.hpp` — `ScatteringSetting` |
 | Simulator-side filter check (Design A gate) | `src/core/simulator.cpp` — `CollectData()` |
+| Empty-batch consumer contract (Design A) | `src/server/render.cpp:248` |
 | FilterSpec algorithm interface | `src/core/filter_spec.hpp` |
 | EV pipeline (single-lane, P99 anchor) | `doc/ev-pipeline-architecture.md` |
 | Filter JSON schema | `doc/configuration.md` |

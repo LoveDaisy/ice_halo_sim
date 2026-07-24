@@ -245,7 +245,17 @@ void RenderConsumer::Consume(const SimData& data) {
 
   // Copy pre-filtered outgoing rays into contiguous buffers (Design A:
   // simulator-side filter has already dropped non-matching rays).
-  assert(!data.outgoing_w_.empty() || data.rays_.Empty());
+  //
+  // The original assertion here checked "rays_ non-empty => outgoing_w_
+  // non-empty", but that property is NOT something Design A ever promises: the
+  // simulator-side filter acts as an emit-gate, so an entire Consume() batch
+  // having every candidate ray rejected (outgoing_* empty while rays_ is
+  // non-empty) is a legitimate tail event, not a malformed state — normal
+  // per-batch pass rates are already well under 1% (see
+  // doc/filter-architecture.md §4 "Empty-batch contract"). What Design A DOES
+  // promise is the outgoing_d_/outgoing_w_ parallel-array sizing invariant
+  // documented in sim_data.hpp: three direction floats per weight.
+  assert(data.outgoing_d_.size() == 3 * data.outgoing_w_.size());
   size_t filtered_ray_num = outgoing_count;
   if (!data.outgoing_d_.empty()) {
     std::memcpy(d_buf_.get(), data.outgoing_d_.data(), filtered_ray_num * 3 * sizeof(float));
