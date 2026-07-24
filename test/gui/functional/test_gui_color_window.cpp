@@ -16,15 +16,15 @@
 // would only reach indirectly and much more slowly.
 
 #include <chrono>
+#include <nlohmann/json.hpp>
 #include <thread>
 
 #include "IconsFontAwesome6.h"  // ICON_FA_* selectors for locating icon-prefixed buttons.
 #include "gui/app.hpp"          // ShouldTintColorsButton — Step 1 predicate for AC2.
 #include "gui/color_window.hpp"
-#include "gui/file_io.hpp"  // FillLumiceConfig — pipeline assertion for AC4 default flow-through.
+#include "gui/file_io.hpp"  // BuildScene — pipeline assertion for AC4 default flow-through.
 #include "gui/gui_state.hpp"
 #include "gui/raypath_segments.hpp"
-#include "include/lumice_config_scope.hpp"  // ConfigOwningGuard — auto-releases raypath_color for AC4 test.
 #include "test_gui_shared.hpp"
 
 namespace {
@@ -1233,8 +1233,8 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
 
   // task-color-default-pbd (A4) AC1 + AC4 — clicking "+ Add Ref" on an existing
   // class seeds the new ref with sym_p/sym_b/sym_d = true (owner-preferred PBD
-  // default), and this default propagates through FillLumiceConfig into the
-  // core LUMICE_ColorPredicate.symmetry bitmask as P|B|D (bits 1|2|4 == 7).
+  // default), and this default propagates through BuildScene into the committed
+  // scene's per-ref symmetry as the "PBD" string (bits 1|2|4 == 7).
   // AC3's dual (deserialization NOT re-labeled to PBD) lives in
   // test_gui_import_export.cpp — a struct-default assertion, orthogonal to
   // this call-site test.
@@ -1281,14 +1281,18 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       IM_CHECK(gui::g_state.raypath_color[0].match[0].sym_b);
       IM_CHECK(gui::g_state.raypath_color[0].match[0].sym_d);
 
-      // AC4: the default flows through FillLumiceConfig into the core
-      // LUMICE_ColorPredicate.symmetry bitmask (P|B|D = 1|2|4 == 7). Proves
-      // the new default reaches the scrum-356 per-ref symmetry pipeline
-      // without any renderer-side changes.
-      LUMICE_Config cfg{};
-      lumice::ConfigOwningGuard cfg_guard(cfg);
-      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
-      IM_CHECK_EQ(cfg.raypath_color[0].match[0].predicate.symmetry, 7);
+      // AC4: the default flows through BuildScene into the committed scene's
+      // per-ref symmetry (P|B|D, emitted as "PBD"). Proves the new default
+      // reaches the per-ref symmetry pipeline without any renderer-side changes.
+      gui::ScenePtr scene = gui::BuildScene(gui::g_state, gui::SceneIntent::kSimCommit);
+      IM_CHECK(scene != nullptr);
+      size_t json_len = 0;
+      IM_CHECK_EQ(LUMICE_SceneToJson(scene.get(), nullptr, 0, &json_len), LUMICE_OK);
+      std::string scene_buf(json_len + 1, '\0');
+      IM_CHECK_EQ(LUMICE_SceneToJson(scene.get(), scene_buf.data(), scene_buf.size(), nullptr), LUMICE_OK);
+      scene_buf.resize(json_len);
+      const auto scene_j = nlohmann::json::parse(scene_buf);
+      IM_CHECK_STR_EQ(scene_j["raypath_color"]["classes"][0]["match"][0]["symmetry"].get<std::string>().c_str(), "PBD");
 
       gui::g_state.color_window_open = false;
       ctx->Yield(2);
@@ -1319,7 +1323,7 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       baseline.visible = false;
       gui::g_state.raypath_color.push_back(baseline);
       // Snapshot the baseline INTO last_committed_state, mirroring what
-      // FillLumiceConfig + CommitConfigStruct do after a successful commit.
+      // BuildScene + LUMICE_CommitScene do after a successful commit.
       gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
 
       // Pin reconcile base to kDone so a subsequent dirty edit surfaces as

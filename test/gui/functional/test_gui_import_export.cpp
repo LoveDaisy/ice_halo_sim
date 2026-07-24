@@ -3,9 +3,8 @@
 #include <nlohmann/json.hpp>
 
 #include "IconsFontAwesome6.h"
-#include "gui/export_fbo_renderer.hpp"      // RenderExportToRgba for GL pixel-level assertions
-#include "gui/raypath_segments.hpp"         // ParseSummandText / SumOfProducts (SoP round-trip tests)
-#include "include/lumice_config_scope.hpp"  // lumice::ConfigOwningGuard for LUMICE_Config RAII
+#include "gui/export_fbo_renderer.hpp"  // RenderExportToRgba for GL pixel-level assertions
+#include "gui/raypath_segments.hpp"     // ParseSummandText / SumOfProducts (SoP round-trip tests)
 #include "test_gui_shared.hpp"
 
 // task-349.4 wait-until-condition helper — bounded polling that yields to the main render
@@ -15,6 +14,47 @@
 // waiting up to the bound instead of after a fixed frame count.
 namespace {
 constexpr int kDoOpenSettleYieldLimit = 60;
+
+// ===== LUMICE_Scene test scaffolding (399.5) =====
+// LUMICE_Scene is opaque, so the pre-handle "fill a LUMICE_Config and assert cfg.<field>"
+// pattern becomes "BuildScene, serialize, assert on the JSON document". That is not a weaker
+// assertion medium: LUMICE_SceneToJson dumps the scene's own internal document verbatim (the
+// Scene IS a JSON tree — see LUMICE_Scene_ in c_api.cpp), so reading it is reading the scene's
+// state, not a re-encoding of it.
+//
+// Scene ids are 0-based and assigned by the Scene itself (lumice.h "Incremental build"), where
+// the pre-handle GUI code assigned crystals `pool_id + 1` and ran its own 1-based filter
+// counter. Assertions on emitted ids therefore start at 0 — the ids are internal cross-
+// references (scattering entry -> crystal/filter, composition term -> filter), never a
+// user-visible or persisted value.
+nlohmann::json SceneJson(const LUMICE_Scene* scene) {
+  size_t len = 0;
+  if (scene == nullptr || LUMICE_SceneToJson(scene, nullptr, 0, &len) != LUMICE_OK) {
+    return nlohmann::json{};
+  }
+  std::string buf(len + 1, '\0');
+  if (LUMICE_SceneToJson(scene, buf.data(), buf.size(), nullptr) != LUMICE_OK) {
+    return nlohmann::json{};
+  }
+  buf.resize(len);
+  return nlohmann::json::parse(buf);
+}
+
+// Build the commit-path scene for `state` and return its document. Returns a null json when
+// BuildScene rejects the state (ABI overflow) — callers that care assert on that separately.
+nlohmann::json CommitSceneJson(const gui::GuiState& state) {
+  return SceneJson(gui::BuildScene(state, gui::SceneIntent::kSimCommit).get());
+}
+
+// Core-config JSON for `state` through the production export path (BuildExportJsonOrWarn).
+// Replaces the retired gui::SerializeCoreConfig, which was a separately-maintained emitter;
+// export JSON is now produced by serializing the same LUMICE_Scene the commit path builds.
+// Returns "" when the state exceeds the ABI bounds (the export reject path).
+std::string CoreJson(const gui::GuiState& state) {
+  std::string json;
+  gui::BuildExportJsonOrWarn(state, &json, nullptr);
+  return json;
+}
 
 template <typename Fn>
 void YieldUntilTrue(ImGuiTestContext* ctx, int max_yields, Fn&& condition) {
@@ -135,7 +175,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::g_state.sim.ray_num_millions = 2.5f;
 
       // Serialize → deserialize
-      std::string json = gui::SerializeCoreConfig(gui::g_state);
+      std::string json = CoreJson(gui::g_state);
       IM_CHECK(!json.empty());
 
       gui::GuiState loaded = gui::InitDefaultState();
@@ -174,7 +214,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       new_layer.probability = 0.45f;  // last layer, non-zero — the footgun value
       gui::g_state.layers.push_back(std::move(new_layer));
 
-      std::string json = gui::SerializeCoreConfig(gui::g_state);
+      std::string json = CoreJson(gui::g_state);
       IM_CHECK(!json.empty());
 
       gui::GuiState loaded = gui::InitDefaultState();
@@ -185,24 +225,23 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(loaded.layers[0].probability, 0.3f);
       IM_CHECK_EQ(loaded.layers[1].probability, 0.45f);  // NOT silently zeroed
 
-      // Second serialization path (code-review Major-1): the C struct commit
-      // path (FillLumiceConfig -> LUMICE_CommitConfigStruct) is what actually
-      // feeds the simulator. Assert it preserves the last-layer footgun prob>0
+      // Second serialization path (code-review Major-1): the handle commit
+      // path (BuildScene -> LUMICE_CommitScene) is what actually feeds the
+      // simulator. Assert it preserves the last-layer footgun prob>0
       // too — the display disable/warning logic must not zero the stored value
       // on the path that reaches core. This path is commit-only (no reverse
       // deserialize), so it is a forward-fidelity check, not a round-trip.
       // (The .lmc save path SerializeGuiStateJson uses the identical
-      // `jl["prob"] = layer.probability` float primitive as SerializeCoreConfig
+      // `jl["prob"] = layer.probability` float primitive as the core JSON
       // above, so its prob fidelity is covered by equivalence.)
       // Feed the DESERIALIZED state (not the original g_state) so this is the
-      // full end-to-end chain: file JSON -> deserialize -> loaded -> C struct
+      // full end-to-end chain: file JSON -> deserialize -> loaded -> scene
       // -> core (code-review r2 Minor-1).
-      LUMICE_Config cfg{};
-      lumice::ConfigOwningGuard cfg_guard(cfg);
-      gui::FillLumiceConfig(loaded, &cfg);
-      IM_CHECK_EQ(cfg.scatter_count, 2);
-      IM_CHECK_EQ(cfg.scattering[0].probability, 0.3f);
-      IM_CHECK_EQ(cfg.scattering[1].probability, 0.45f);
+      const auto scene_j = CommitSceneJson(loaded);
+      const auto& scattering = scene_j["scene"]["scattering"];
+      IM_CHECK_EQ(scattering.size(), (size_t)2);
+      IM_CHECK_EQ(scattering[0]["prob"].get<float>(), 0.3f);
+      IM_CHECK_EQ(scattering[1]["prob"].get<float>(), 0.45f);
     };
   }
 
@@ -213,7 +252,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       ResetTestState();
 
       gui::g_state.sim.ray_num_millions = 3.0f;
-      std::string json = gui::SerializeCoreConfig(gui::g_state);
+      std::string json = CoreJson(gui::g_state);
 
       const char* tmp_path = "/tmp/lumice_config_test.json";
       bool write_ok = gui::ExportConfigJson(tmp_path, json);
@@ -419,12 +458,13 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // Test: crystal shape randomization reaches the COMMIT path (AC4). FillLumiceConfig is the
-  // GUI→core typed-struct bridge (LUMICE_CommitConfigStruct's input); pre-fix it wrapped every
+  // Test: crystal shape randomization reaches the COMMIT path (AC4). BuildScene is the
+  // GUI→core bridge (LUMICE_CommitScene's input); pre-fix it wrapped every
   // shape scalar in a NO_RANDOM distribution, so a GUI-configured randomization never reached the
-  // simulator. This asserts the mapped LUMICE_Distribution carries the real {type,center,spread}
+  // simulator. This asserts the emitted distribution carries the real {type,center,spread}
   // for height and a per-face-heterogeneous face_distance — the same ShapeDist → LUMICE_Distribution
-  // value-aligned mapping the preview uses.
+  // value-aligned mapping the preview uses. A NO_RANDOM distribution emits as a bare number
+  // (c_api.cpp DistributionToJson), everything else as {"type","center","spread"}.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "shape_randomization_commit_path");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -436,26 +476,25 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       cr.face_distance[0] = gui::ShapeDist{ gui::ShapeDistType::kUniform, 1.2f, 0.3f };
       cr.face_distance[3] = gui::ShapeDist{ gui::ShapeDistType::kLaplacian, 0.9f, 0.05f };
 
-      LUMICE_Config cfg{};
-      lumice::ConfigOwningGuard cfg_guard(cfg);
-      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
-      IM_CHECK(cfg.crystal_count >= 1);
+      const auto scene_j = CommitSceneJson(gui::g_state);
+      IM_CHECK(scene_j["crystal"].size() >= (size_t)1);
 
-      const LUMICE_CrystalParam& c0 = cfg.crystals[0];
-      // height: value-aligned mapping (LUMICE_DIST_GAUSS == 2).
-      IM_CHECK_EQ(c0.height.type, LUMICE_DIST_GAUSS);
-      IM_CHECK_EQ(c0.height.center, 2.5f);
-      IM_CHECK_EQ(c0.height.spread, 0.4f);
+      const auto& shape = scene_j["crystal"][0]["shape"];
+      // height: the configured distribution reaches core, not a NO_RANDOM flattening.
+      IM_CHECK_EQ(shape["height"]["type"].get<std::string>(), std::string("gauss"));
+      IM_CHECK_EQ(shape["height"]["mean"].get<float>(), 2.5f);
+      IM_CHECK_EQ(shape["height"]["std"].get<float>(), 0.4f);
       // per-face heterogeneity survives the commit mapping.
-      IM_CHECK_EQ(c0.face_distance[0].type, LUMICE_DIST_UNIFORM);
-      IM_CHECK_EQ(c0.face_distance[0].center, 1.2f);
-      IM_CHECK_EQ(c0.face_distance[0].spread, 0.3f);
-      IM_CHECK_EQ(c0.face_distance[3].type, LUMICE_DIST_LAPLACIAN);
-      IM_CHECK_EQ(c0.face_distance[3].center, 0.9f);
-      IM_CHECK_EQ(c0.face_distance[3].spread, 0.05f);
-      // an untouched face stays the deterministic default.
-      IM_CHECK_EQ(c0.face_distance[1].type, LUMICE_DIST_NO_RANDOM);
-      IM_CHECK_EQ(c0.face_distance[1].center, 1.0f);
+      const auto& fd = shape["face_distance"];
+      IM_CHECK_EQ(fd[0]["type"].get<std::string>(), std::string("uniform"));
+      IM_CHECK_EQ(fd[0]["mean"].get<float>(), 1.2f);
+      IM_CHECK_EQ(fd[0]["std"].get<float>(), 0.3f);
+      IM_CHECK_EQ(fd[3]["type"].get<std::string>(), std::string("laplacian"));
+      IM_CHECK_EQ(fd[3]["mean"].get<float>(), 0.9f);
+      IM_CHECK_EQ(fd[3]["std"].get<float>(), 0.05f);
+      // an untouched face stays the deterministic default (NO_RANDOM → bare number).
+      IM_CHECK(fd[1].is_number());
+      IM_CHECK_EQ(fd[1].get<float>(), 1.0f);
     };
   }
 
@@ -495,7 +534,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
 
       // (3) SerializeCoreConfig emits an array-form spectrum. Matches core light_config.cpp
       // SpectrumToJson shape ([{wavelength, weight}, ...]).
-      std::string core_json = gui::SerializeCoreConfig(gui::g_state);
+      std::string core_json = CoreJson(gui::g_state);
       auto parsed = nlohmann::json::parse(core_json);
       const auto& spec = parsed["scene"]["light_source"]["spectrum"];
       IM_CHECK(spec.is_array());
@@ -504,14 +543,15 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(spec[1]["weight"].get<float>(), 1.0f);
       IM_CHECK_EQ(spec[2]["wavelength"].get<float>(), 650.0f);
 
-      // (4) FillLumiceConfig populates spectrum_entries[]/spectrum_count.
-      LUMICE_Config cfg{};
-      lumice::ConfigOwningGuard cfg_guard(cfg);
-      gui::FillLumiceConfig(gui::g_state, &cfg);
-      IM_CHECK_EQ(cfg.spectrum_count, 3);
-      IM_CHECK_EQ(cfg.spectrum_entries[0].wavelength, 450.0f);
-      IM_CHECK_EQ(cfg.spectrum_entries[0].weight, 0.5f);
-      IM_CHECK_EQ(cfg.spectrum_entries[2].wavelength, 650.0f);
+      // (4) BuildScene emits the discrete spectrum on the commit path too (the discrete list
+      // overrides the spectrum name string, mirroring the LUMICE_Config spectrum_count > 0 rule).
+      const auto scene_j = CommitSceneJson(gui::g_state);
+      const auto& commit_spec = scene_j["scene"]["light_source"]["spectrum"];
+      IM_CHECK(commit_spec.is_array());
+      IM_CHECK_EQ(commit_spec.size(), (size_t)3);
+      IM_CHECK_EQ(commit_spec[0]["wavelength"].get<float>(), 450.0f);
+      IM_CHECK_EQ(commit_spec[0]["weight"].get<float>(), 0.5f);
+      IM_CHECK_EQ(commit_spec[2]["wavelength"].get<float>(), 650.0f);
     };
   }
 
@@ -972,43 +1012,36 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       // composition structure) — not ConfigManager round-trip semantics. If
       // round-trip behavior needs guarding in the future, add a dedicated
       // core-side test or a config-deserialization C API (see backlog).
-      std::string core_json = gui::SerializeCoreConfig(gui::g_state);
+      std::string core_json = CoreJson(gui::g_state);
       auto parsed = nlohmann::json::parse(core_json);
 
-      // SerializeCoreConfig (src/gui/file_io.cpp:578-626) starts next_filter_id
-      // at 1 and push_back's filters in SerializeFilterForCore order — multi-
-      // segment raypath emits children first (ids 1..N) then the complex
-      // (id N+1), so array index matches id - 1.
+      // The Scene assigns filter ids itself, 0-based in insertion order (lumice.h "Incremental
+      // build"). ExpandFilterToScene adds the per-clause children first (ids 0..N-1) then the
+      // complex (id N), so array index == id.
       IM_CHECK(parsed.contains("filter") && parsed["filter"].is_array());
       IM_CHECK_EQ(static_cast<int>(parsed["filter"].size()), 3);
 
-      // Filter 1: raypath [3, 5] (segment "3-5").
-      IM_CHECK_EQ(parsed["filter"][0]["id"].get<int>(), 1);
+      // Filter 0: raypath [3, 5] (segment "3-5").
+      IM_CHECK_EQ(parsed["filter"][0]["id"].get<int>(), 0);
       IM_CHECK_STR_EQ(parsed["filter"][0]["type"].get<std::string>().c_str(), "raypath");
-      IM_CHECK_EQ(static_cast<int>(parsed["filter"][0]["raypath"].size()), 2);
-      IM_CHECK_EQ(parsed["filter"][0]["raypath"][0].get<int>(), 3);
-      IM_CHECK_EQ(parsed["filter"][0]["raypath"][1].get<int>(), 5);
+      IM_CHECK_EQ(parsed["filter"][0]["raypath"], nlohmann::json({ 3, 5 }));
 
-      // Filter 2: raypath [1, 3] (segment "1-3").
-      IM_CHECK_EQ(parsed["filter"][1]["id"].get<int>(), 2);
+      // Filter 1: raypath [1, 3] (segment "1-3").
+      IM_CHECK_EQ(parsed["filter"][1]["id"].get<int>(), 1);
       IM_CHECK_STR_EQ(parsed["filter"][1]["type"].get<std::string>().c_str(), "raypath");
-      IM_CHECK_EQ(static_cast<int>(parsed["filter"][1]["raypath"].size()), 2);
-      IM_CHECK_EQ(parsed["filter"][1]["raypath"][0].get<int>(), 1);
-      IM_CHECK_EQ(parsed["filter"][1]["raypath"][1].get<int>(), 3);
+      IM_CHECK_EQ(parsed["filter"][1]["raypath"], nlohmann::json({ 1, 3 }));
 
-      // Filter 3: complex, composition [[1], [2]].
-      IM_CHECK_EQ(parsed["filter"][2]["id"].get<int>(), 3);
+      // Filter 2: complex. A single-term clause is emitted as a BARE id (core wire form —
+      // core filter_config.cpp to_json / c_api.cpp CompositionArrayToJson), so a 2-clause
+      // OR of singletons is [0, 1], not [[0], [1]]. The GUI's own emitter used to write the
+      // always-nested form; going through the core encoder aligns the two.
+      IM_CHECK_EQ(parsed["filter"][2]["id"].get<int>(), 2);
       IM_CHECK_STR_EQ(parsed["filter"][2]["type"].get<std::string>().c_str(), "complex");
-      IM_CHECK(parsed["filter"][2].contains("composition"));
-      IM_CHECK_EQ(static_cast<int>(parsed["filter"][2]["composition"].size()), 2);
-      IM_CHECK_EQ(static_cast<int>(parsed["filter"][2]["composition"][0].size()), 1);
-      IM_CHECK_EQ(parsed["filter"][2]["composition"][0][0].get<int>(), 1);
-      IM_CHECK_EQ(static_cast<int>(parsed["filter"][2]["composition"][1].size()), 1);
-      IM_CHECK_EQ(parsed["filter"][2]["composition"][1][0].get<int>(), 2);
+      IM_CHECK_EQ(parsed["filter"][2]["composition"], nlohmann::json({ 0, 1 }));
 
-      // Scattering entry should reference the complex filter (id 3).
+      // Scattering entry should reference the complex filter (id 2).
       IM_CHECK(parsed.contains("scene"));
-      IM_CHECK(parsed["scene"]["scattering"][0]["entries"][0]["filter"] == 3);
+      IM_CHECK(parsed["scene"]["scattering"][0]["entries"][0]["filter"] == 2);
     };
   }
 
@@ -1038,7 +1071,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
 
       // Inspect serialized JSON directly — same shape-only contract as the
       // multi_raypath_or_e2e test above.
-      std::string core_json = gui::SerializeCoreConfig(gui::g_state);
+      std::string core_json = CoreJson(gui::g_state);
       auto parsed = nlohmann::json::parse(core_json);
 
       // Exactly 1 simple raypath filter, no complex upgrade.
@@ -1265,7 +1298,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         gui::SetFilter(gui::g_state, entry, f);
         layer.entries.push_back(entry);
         gui::g_state.layers.push_back(layer);
-        return nlohmann::json::parse(gui::SerializeCoreConfig(gui::g_state));
+        return nlohmann::json::parse(CoreJson(gui::g_state));
       };
 
       const auto single_row = build_and_serialize({ "1-3;3-5" });
@@ -1316,7 +1349,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         gui::SetFilter(gui::g_state, entry, f);
         layer.entries.push_back(entry);
         gui::g_state.layers.push_back(layer);
-        return nlohmann::json::parse(gui::SerializeCoreConfig(gui::g_state));
+        return nlohmann::json::parse(CoreJson(gui::g_state));
       };
 
       const auto single_row = build_and_serialize({ "1-3;3-5 & entry:2" });
@@ -1441,7 +1474,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       layer.entries.push_back(e);
       gui::g_state.layers.push_back(layer);
 
-      const std::string s = gui::SerializeCoreConfig(gui::g_state);
+      const std::string s = CoreJson(gui::g_state);
       IM_CHECK(!s.empty());
 
       const auto j = nlohmann::json::parse(s);
@@ -1456,12 +1489,12 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_STR_EQ(jf["symmetry"].get<std::string>().c_str(), "PD");
       IM_CHECK_EQ(jf["entry"].get<int>(), 2);
       IM_CHECK_EQ(jf["exit"].get<int>(), 5);
-      IM_CHECK_EQ(jf["id"].get<int>(), 1);
+      IM_CHECK_EQ(jf["id"].get<int>(), 0);  // Scene-assigned, 0-based
 
       // Whole-object equivalence with hand-crafted reference (json::operator==
       // is field-set + value equality, insertion-order independent).
       const nlohmann::json expected = {
-        { "id", 1 },          { "type", "entry_exit" }, { "action", "filter_out" },
+        { "id", 0 },          { "type", "entry_exit" }, { "action", "filter_out" },
         { "symmetry", "PD" }, { "entry", 2 },           { "exit", 5 },
       };
       IM_CHECK(jf == expected);
@@ -1593,7 +1626,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
 
       // SerializeCoreConfig must not emit any "filter" field (no EE residue).
-      const std::string core_json = gui::SerializeCoreConfig(gui::g_state);
+      const std::string core_json = CoreJson(gui::g_state);
       IM_CHECK(!core_json.empty());
       const auto j = nlohmann::json::parse(core_json);
       // No top-level "filter" array, or it's empty.
@@ -1631,7 +1664,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       layer.entries.push_back(entry);
       gui::g_state.layers.push_back(layer);
 
-      const std::string core_json = gui::SerializeCoreConfig(gui::g_state);
+      const std::string core_json = CoreJson(gui::g_state);
       IM_CHECK(!core_json.empty());
 
       gui::GuiState loaded = gui::InitDefaultState();
@@ -1652,7 +1685,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       // Re-serialize equivalence: the reconstructed filter emits the SAME core
       // filter array (2 simple raypaths + 1 complex).
       const auto j_orig = nlohmann::json::parse(core_json);
-      const auto j_reser = nlohmann::json::parse(gui::SerializeCoreConfig(loaded));
+      const auto j_reser = nlohmann::json::parse(CoreJson(loaded));
       IM_CHECK(j_orig["filter"] == j_reser["filter"]);
     };
   }
@@ -1688,7 +1721,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       layer.entries.push_back(entry);
       gui::g_state.layers.push_back(layer);
 
-      const std::string core_json = gui::SerializeCoreConfig(gui::g_state);
+      const std::string core_json = CoreJson(gui::g_state);
       IM_CHECK(!core_json.empty());
       gui::GuiState loaded = gui::InitDefaultState();
       bool ok = gui::DeserializeFromJson(core_json, loaded);
@@ -1707,7 +1740,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_STR_EQ(loaded_filter.param[3].text.c_str(), "entry:4 & exit:6");
       IM_CHECK(gui::PeekImportComplexFilterWarning().empty());
       const auto j_orig = nlohmann::json::parse(core_json);
-      const auto j_reser = nlohmann::json::parse(gui::SerializeCoreConfig(loaded));
+      const auto j_reser = nlohmann::json::parse(CoreJson(loaded));
       IM_CHECK(j_orig["filter"] == j_reser["filter"]);
     };
   }
@@ -1743,7 +1776,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       layer.entries.push_back(entry);
       gui::g_state.layers.push_back(layer);
 
-      const std::string core_json = gui::SerializeCoreConfig(gui::g_state);
+      const std::string core_json = CoreJson(gui::g_state);
       IM_CHECK(!core_json.empty());
       gui::GuiState loaded = gui::InitDefaultState();
       bool ok = gui::DeserializeFromJson(core_json, loaded);
@@ -1760,7 +1793,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_STR_EQ(loaded_filter.param[1].text.c_str(), "entry: & exit:6");
       IM_CHECK(gui::PeekImportComplexFilterWarning().empty());
       const auto j_orig = nlohmann::json::parse(core_json);
-      const auto j_reser = nlohmann::json::parse(gui::SerializeCoreConfig(loaded));
+      const auto j_reser = nlohmann::json::parse(CoreJson(loaded));
       IM_CHECK(j_orig["filter"] == j_reser["filter"]);
     };
   }
@@ -1816,10 +1849,23 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_STR_EQ(lf.param[0].text.c_str(), "3-5 & 1-3");
       // No warning — fully representable now.
       IM_CHECK(gui::PeekImportComplexFilterWarning().empty());
-      // Re-serialize equivalence: back to the identical 2 raypath + 1 complex form.
-      const auto j_orig = nlohmann::json::parse(core_json);
-      const auto j_reser = nlohmann::json::parse(gui::SerializeCoreConfig(loaded));
-      IM_CHECK(j_orig["filter"] == j_reser["filter"]);
+      // Re-serialize equivalence: back to the same 2 raypath + 1 complex form. Compared
+      // against an explicit expectation rather than the hand-authored input, because the
+      // emitter owns the id space (Scene-assigned, 0-based, so the round-trip renumbers 1..3
+      // to 0..2) and always writes a `symmetry` key (empty when no bits) where the input
+      // omitted it. The structural claim — two raypath children AND-ed by one complex, in
+      // order — is asserted directly.
+      const auto j_reser = nlohmann::json::parse(CoreJson(loaded));
+      const nlohmann::json expected_filters = {
+        { { "id", 0 }, { "type", "raypath" }, { "action", "filter_in" }, { "symmetry", "" }, { "raypath", { 3, 5 } } },
+        { { "id", 1 }, { "type", "raypath" }, { "action", "filter_in" }, { "symmetry", "" }, { "raypath", { 1, 3 } } },
+        { { "id", 2 },
+          { "type", "complex" },
+          { "action", "filter_in" },
+          { "symmetry", "" },
+          { "composition", { { 0, 1 } } } },  // one clause, two AND terms -> nested array
+      };
+      IM_CHECK(j_reser["filter"] == expected_filters);
     };
   }
 
@@ -1876,10 +1922,25 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_STR_EQ(lf.param[1].text.c_str(), "3-5");
       // Legal form (match-all is a first-class wildcard factor) — no warning.
       IM_CHECK(gui::PeekImportComplexFilterWarning().empty());
-      // Re-serialize equivalence: back to the identical 2 raypath + 1 complex form.
-      const auto j_orig = nlohmann::json::parse(core_json);
-      const auto j_reser = nlohmann::json::parse(gui::SerializeCoreConfig(loaded));
-      IM_CHECK(j_orig["filter"] == j_reser["filter"]);
+      // Re-serialize equivalence: back to the same 2 raypath + 1 complex form (explicit
+      // expectation — see the sibling test above for why the hand-authored input is not the
+      // comparison target). Each clause has a single term, so the composition uses the core's
+      // bare-id form.
+      const auto j_reser = nlohmann::json::parse(CoreJson(loaded));
+      const nlohmann::json expected_filters = {
+        { { "id", 0 },
+          { "type", "raypath" },
+          { "action", "filter_in" },
+          { "symmetry", "" },
+          { "raypath", nlohmann::json::array() } },
+        { { "id", 1 }, { "type", "raypath" }, { "action", "filter_in" }, { "symmetry", "" }, { "raypath", { 3, 5 } } },
+        { { "id", 2 },
+          { "type", "complex" },
+          { "action", "filter_in" },
+          { "symmetry", "" },
+          { "composition", { 0, 1 } } },  // two single-term clauses -> bare ids
+      };
+      IM_CHECK(j_reser["filter"] == expected_filters);
     };
   }
 
@@ -1984,16 +2045,17 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // 327.4 cross-check: the GUI filter expansion has two twins — SerializeFilterForCore
-  // (GUI -> JSON) and ExpandFilterToStruct (GUI -> C struct, via FillLumiceConfig). For the
-  // same GuiState the struct built directly must field-match the struct obtained by JSON
-  // round-trip. Guards the twins against drift (plan §3-2 / review Major 1).
+  // 327.4 cross-check, migrated to the handle API (399.5). The original guarded two hand-written
+  // expansion twins (GUI -> JSON vs GUI -> C struct) against drift; that class of drift is now
+  // structurally impossible — the GUI has ONE emitter (BuildScene) and the export JSON is that
+  // scene serialized. What remains genuinely checkable, and is what this test now asserts, is
+  // that a filter expansion survives the JSON round-trip losslessly: BuildScene -> SceneToJson
+  // -> SceneFromJson -> SceneToJson must reproduce the same document. That covers the same
+  // failure mode from the surviving direction — an expansion the GUI can build but the core
+  // reader cannot faithfully parse back (bad composition shape, dropped term, id mismatch).
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "filter_expand_struct_vs_json");
     t->TestFunc = [](ImGuiTestContext*) {
-      // Core comparison: given a fully-built GuiState (single crystal, single
-      // filter, single entry) the struct path (ExpandFilterToStruct) and the JSON
-      // path (SerializeFilterForCore) must produce field-identical LUMICE_Config.
       auto run_cross_check = [](const gui::FilterConfig& f) {
         gui::g_state.filters.clear();
         gui::g_state.layers.clear();
@@ -2007,50 +2069,22 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         layer.entries.push_back(e);
         gui::g_state.layers.push_back(layer);
 
-        LUMICE_Config from_struct{};
+        gui::ScenePtr built = gui::BuildScene(gui::g_state, gui::SceneIntent::kSimCommit);
+        IM_CHECK(built != nullptr);
+        const nlohmann::json a_json = SceneJson(built.get());
 
-        lumice::ConfigOwningGuard from_struct_guard(from_struct);
-        IM_CHECK(gui::FillLumiceConfig(gui::g_state, &from_struct));  // struct path (ExpandFilterToStruct)
-        std::string json = gui::SerializeCoreConfig(gui::g_state);    // JSON path (SerializeFilterForCore)
-        LUMICE_Config from_json{};
-        lumice::ConfigOwningGuard from_json_guard(from_json);
-        IM_CHECK_EQ(LUMICE_ParseConfigString(json.c_str(), &from_json), LUMICE_OK);
+        // Re-parse the emitted document through the core reader and re-emit.
+        const std::string json_str = a_json.dump();
+        LUMICE_Scene* reparsed_raw = nullptr;
+        IM_CHECK_EQ(LUMICE_SceneFromJson(json_str.c_str(), &reparsed_raw), LUMICE_OK);
+        gui::ScenePtr reparsed(reparsed_raw);
+        const nlohmann::json b_json = SceneJson(reparsed.get());
 
-        IM_CHECK_EQ(from_struct.filter_count, from_json.filter_count);
-        IM_CHECK_EQ(from_struct.composition_count, from_json.composition_count);
-        for (int i = 0; i < from_struct.filter_count; i++) {
-          const LUMICE_FilterParam& a = from_struct.filters[i];
-          const LUMICE_FilterParam& b = from_json.filters[i];
-          IM_CHECK_EQ(a.id, b.id);
-          IM_CHECK_EQ(a.type, b.type);
-          IM_CHECK_EQ(a.action, b.action);
-          IM_CHECK_EQ(a.symmetry, b.symmetry);
-          if (a.type == LUMICE_FILTER_TYPE_RAYPATH) {
-            IM_CHECK_EQ(a.raypath_count, b.raypath_count);
-            for (int k = 0; k < a.raypath_count; k++) {
-              IM_CHECK_EQ(a.raypath[k], b.raypath[k]);
-            }
-          } else if (a.type == LUMICE_FILTER_TYPE_ENTRY_EXIT) {
-            IM_CHECK_EQ(a.ee_entry, b.ee_entry);
-            IM_CHECK_EQ(a.ee_exit, b.ee_exit);
-            IM_CHECK_EQ(a.ee_min_len, b.ee_min_len);
-            IM_CHECK_EQ(a.ee_max_len, b.ee_max_len);
-          } else if (a.type == LUMICE_FILTER_TYPE_COMPLEX) {
-            const LUMICE_ComplexComposition& ca = from_struct.compositions[a.composition_index];
-            const LUMICE_ComplexComposition& cb = from_json.compositions[b.composition_index];
-            IM_CHECK_EQ(ca.clause_count, cb.clause_count);
-            for (int cl = 0; cl < ca.clause_count; cl++) {
-              int a_n = 0;
-              int b_n = 0;
-              const int* a_terms = LUMICE_CompositionClauseTerms(&ca, cl, &a_n);
-              const int* b_terms = LUMICE_CompositionClauseTerms(&cb, cl, &b_n);
-              IM_CHECK_EQ(a_n, b_n);
-              for (int tt = 0; tt < a_n; tt++) {
-                IM_CHECK_EQ(a_terms[tt], b_terms[tt]);
-              }
-            }
-          }
-        }
+        // Filters (identity + per-type arm fields + composition shape) must survive verbatim.
+        IM_CHECK_EQ(a_json["filter"].size(), b_json["filter"].size());
+        IM_CHECK(a_json["filter"] == b_json["filter"]);
+        // ... and so must the scattering entries that reference them by id.
+        IM_CHECK(a_json["scene"]["scattering"] == b_json["scene"]["scattering"]);
       };
 
       auto fresh_state = []() {
@@ -2120,8 +2154,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       cross_check_sop({ "entry:3,4 & 7-1", "2-6" });
 
       // Overflow: a raypath with more than LUMICE_MAX_CONFIG_CLAUSES OR segments exceeds the
-      // composition ABI bounds -> FillLumiceConfig must return false (graceful degradation),
-      // so app.cpp keeps the prior committed state instead of committing a truncated config.
+      // clause ABI bound -> BuildScene must return nullptr (graceful degradation), so app.cpp
+      // keeps the prior committed state instead of committing a truncated config.
       {
         ResetTestState();
         gui::g_state.crystals.clear();
@@ -2153,14 +2187,12 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         e.proportion = 100.0f;
         layer.entries.push_back(e);
         gui::g_state.layers.push_back(layer);
-        LUMICE_Config over{};
-        lumice::ConfigOwningGuard over_guard(over);
         gui::FilterOverflowInfo overflow;
-        IM_CHECK(!gui::FillLumiceConfig(gui::g_state, &over, &overflow));  // over ABI bounds -> false
-        // "no partial writes on overflow" contract (ExpandFilterToStruct doc): the overflowing
-        // filter bails before any filter/composition is written for it.
-        IM_CHECK_EQ(over.filter_count, 0);
-        IM_CHECK_EQ(over.composition_count, 0);
+        gui::ScenePtr over = gui::BuildScene(gui::g_state, gui::SceneIntent::kSimCommit, &overflow);
+        // Over ABI bounds -> no handle at all. The caller therefore cannot commit a half-built
+        // scene even by mistake, which is what the pre-handle "no partial writes into the
+        // caller's LUMICE_Config" contract was buying.
+        IM_CHECK(over == nullptr);
         // Overflow identity: the first (layer 0, entry 0) reference is captured with the
         // FilterConfig::name so the caller can locate the offending filter for the user.
         IM_CHECK_EQ(overflow.layer_index, 0);
@@ -2206,11 +2238,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         e.proportion = 100.0f;
         layer.entries.push_back(e);
         gui::g_state.layers.push_back(layer);
-        LUMICE_Config over{};
-        lumice::ConfigOwningGuard over_guard(over);
-        IM_CHECK(!gui::FillLumiceConfig(gui::g_state, &over));  // term count > 8 -> false
-        IM_CHECK_EQ(over.filter_count, 0);
-        IM_CHECK_EQ(over.composition_count, 0);
+        // term count over LUMICE_MAX_CONFIG_TERMS -> no handle produced.
+        IM_CHECK(gui::BuildScene(gui::g_state, gui::SceneIntent::kSimCommit) == nullptr);
       }
 
       // Overflow (code-review-01 Major 2): the cross-factor Cartesian is capped
@@ -2254,24 +2283,16 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         e.proportion = 100.0f;
         layer.entries.push_back(e);
         gui::g_state.layers.push_back(layer);
-        LUMICE_Config over{};
-        lumice::ConfigOwningGuard over_guard(over);
-        IM_CHECK(!gui::FillLumiceConfig(gui::g_state, &over));  // Cartesian > 4096 clauses -> false
-        IM_CHECK_EQ(over.filter_count, 0);
-        IM_CHECK_EQ(over.composition_count, 0);
+        // Cartesian > LUMICE_MAX_CONFIG_CLAUSES -> no handle produced, and no exponential
+        // clause tree materialized on the way there.
+        IM_CHECK(gui::BuildScene(gui::g_state, gui::SceneIntent::kSimCommit) == nullptr);
 
-        // JSON-twin overflow behavior (code-review-02 Minor 2): SerializeFilterForCore is a
-        // total function, so it degrades the overflowing filter to a BOUNDED match-all
-        // stand-in (not the exponential tree, not a crash) — parses back as a single simple
-        // filter with no complex. The production export path (DoExportConfigJson) rejects
-        // overflow upstream via FillLumiceConfig before this is ever written (Major 1).
-        std::string core_json = gui::SerializeCoreConfig(gui::g_state);
-        IM_CHECK(!core_json.empty());
-        LUMICE_Config from_json{};
-        lumice::ConfigOwningGuard from_json_guard(from_json);
-        IM_CHECK_EQ(LUMICE_ParseConfigString(core_json.c_str(), &from_json), LUMICE_OK);
-        IM_CHECK_EQ(from_json.filter_count, 1);       // bounded match-all stand-in, not 64 clauses
-        IM_CHECK_EQ(from_json.composition_count, 0);  // no complex emitted for the stand-in
+        // Export behavior on the same over-limit state, tightened relative to the pre-handle
+        // code: there is no longer a second, total JSON emitter that degrades an
+        // overflowing filter to a bounded match-all stand-in. Export now goes through the one
+        // BuildScene, so it REFUSES outright — strictly safer than the old stand-in, which was
+        // only kept off disk by DoExportConfigJson pre-checking the commit path.
+        IM_CHECK(CoreJson(gui::g_state).empty());
       }
     };
   }
@@ -2446,21 +2467,23 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // task-342.3 Step 3: FillLumiceConfig raypath_color[] emission
+  // BuildScene raypath_color emission
   // ---------------------------------------------------------------------------
-  // ColorClassConfig (GUI-side) -> LUMICE_ColorClass (C struct) translation.
-  // Uses the plain FillLumiceConfig no-imgui-interaction pattern shared by the
+  // ColorClassConfig (GUI-side) -> LUMICE_ColorClass translation.
+  // Uses the plain BuildScene no-imgui-interaction pattern shared by the
   // sibling overflow / SoP cross-check tests above (no ItemClick / no UI).
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_empty_emits_zero_count");
     t->TestFunc = [](ImGuiTestContext*) {
       ResetTestState();
-      LUMICE_Config cfg{};
-      lumice::ConfigOwningGuard cfg_guard(cfg);
-      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
-      IM_CHECK_EQ(cfg.raypath_color_count, 0);
-      // doc §4.8: GUI default is now painter.
-      IM_CHECK_EQ(cfg.raypath_color_mode, LUMICE_COLOR_MODE_PAINTER);
+      const auto j = CommitSceneJson(gui::g_state);
+      // Zero classes -> the whole raypath_color key is absent, keeping the mono/no-color scene
+      // byte-identical to the pre-v4.7 wire form (the "count == 0 -> omit" isomorphism). Mode
+      // is only meaningful alongside classes, so it is deliberately not emitted here either.
+      IM_CHECK(!j.contains("raypath_color"));
+      // doc §4.8: GUI default is now painter (asserted on the state, which is where the default
+      // lives — with no classes there is nothing for it to be emitted onto).
+      IM_CHECK_EQ(gui::g_state.raypath_color_mode, LUMICE_COLOR_MODE_PAINTER);
     };
   }
   {
@@ -2482,26 +2505,22 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       cls.match.push_back(ref);
       gui::g_state.raypath_color.push_back(cls);
 
-      LUMICE_Config cfg{};
-
-      lumice::ConfigOwningGuard cfg_guard(cfg);
-      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
-      IM_CHECK_EQ(cfg.raypath_color_count, 1);
-      const auto& c = cfg.raypath_color[0];
-      IM_CHECK_EQ(c.color[0], 0.8f);
-      IM_CHECK_EQ(c.color[1], 0.3f);
-      IM_CHECK_EQ(c.color[2], 0.1f);
-      IM_CHECK_EQ(c.combine, LUMICE_COLOR_COMBINE_ANY);
-      IM_CHECK_EQ(c.visible, 1);
-      IM_CHECK_EQ(c.solo, 0);
-      IM_CHECK_EQ(c.match_count, 1);
-      IM_CHECK_EQ(c.match[0].layer, 0);
-      IM_CHECK_EQ(c.match[0].crystal, 1);  // pool 0 -> C-API id 1
-      IM_CHECK_EQ(c.match[0].predicate.type, LUMICE_FILTER_TYPE_RAYPATH);
-      IM_CHECK_EQ(c.match[0].predicate.raypath_count, 3);
-      IM_CHECK_EQ(c.match[0].predicate.raypath[0], 3);
-      IM_CHECK_EQ(c.match[0].predicate.raypath[1], 5);
-      IM_CHECK_EQ(c.match[0].predicate.raypath[2], 1);
+      const auto j = CommitSceneJson(gui::g_state);
+      const auto& classes = j["raypath_color"]["classes"];
+      IM_CHECK_EQ(classes.size(), (size_t)1);
+      const auto& c = classes[0];
+      IM_CHECK_EQ(c["color"][0].get<float>(), 0.8f);
+      IM_CHECK_EQ(c["color"][1].get<float>(), 0.3f);
+      IM_CHECK_EQ(c["color"][2].get<float>(), 0.1f);
+      // combine/visible/solo are emitted only when non-default (any / true / false).
+      IM_CHECK(!c.contains("combine"));
+      IM_CHECK(!c.contains("visible"));
+      IM_CHECK(!c.contains("solo"));
+      IM_CHECK_EQ(c["match"].size(), (size_t)1);
+      IM_CHECK_EQ(c["match"][0]["layer"].get<int>(), 0);
+      IM_CHECK_EQ(c["match"][0]["crystal"].get<int>(), 0);  // pool 0 -> scene crystal id 0
+      IM_CHECK_EQ(c["match"][0]["type"].get<std::string>(), std::string("raypath"));
+      IM_CHECK_EQ(c["match"][0]["raypath"], nlohmann::json({ 3, 5, 1 }));
     };
   }
   {
@@ -2516,13 +2535,12 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       cls.match.push_back(ref);
       gui::g_state.raypath_color.push_back(cls);
 
-      LUMICE_Config cfg{};
-
-      lumice::ConfigOwningGuard cfg_guard(cfg);
-      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
-      IM_CHECK_EQ(cfg.raypath_color_count, 1);
-      IM_CHECK_EQ(cfg.raypath_color[0].match_count, 1);
-      IM_CHECK_EQ(cfg.raypath_color[0].match[0].predicate.type, LUMICE_FILTER_TYPE_UNSET);
+      const auto j = CommitSceneJson(gui::g_state);
+      const auto& classes = j["raypath_color"]["classes"];
+      IM_CHECK_EQ(classes.size(), (size_t)1);
+      IM_CHECK_EQ(classes[0]["match"].size(), (size_t)1);
+      // UNSET (match-all) is encoded by the ABSENCE of a "type" field.
+      IM_CHECK(!classes[0]["match"][0].contains("type"));
     };
   }
   {
@@ -2537,12 +2555,10 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       cls.match.push_back(ref);
       gui::g_state.raypath_color.push_back(cls);
 
-      LUMICE_Config cfg{};
-
-      lumice::ConfigOwningGuard cfg_guard(cfg);
-      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
-      IM_CHECK_EQ(cfg.raypath_color_count, 1);
-      IM_CHECK_EQ(cfg.raypath_color[0].match[0].predicate.type, LUMICE_FILTER_TYPE_UNSET);
+      const auto j = CommitSceneJson(gui::g_state);
+      const auto& classes = j["raypath_color"]["classes"];
+      IM_CHECK_EQ(classes.size(), (size_t)1);
+      IM_CHECK(!classes[0]["match"][0].contains("type"));
     };
   }
   {
@@ -2557,15 +2573,13 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       cls.match.push_back(ref);
       gui::g_state.raypath_color.push_back(cls);
 
-      LUMICE_Config cfg{};
-
-      lumice::ConfigOwningGuard cfg_guard(cfg);
-      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
-      IM_CHECK_EQ(cfg.raypath_color_count, 1);
-      const auto& p = cfg.raypath_color[0].match[0].predicate;
-      IM_CHECK_EQ(p.type, LUMICE_FILTER_TYPE_ENTRY_EXIT);
-      IM_CHECK_EQ(p.ee_entry, 1);
-      IM_CHECK_EQ(p.ee_exit, 2);
+      const auto j = CommitSceneJson(gui::g_state);
+      const auto& classes = j["raypath_color"]["classes"];
+      IM_CHECK_EQ(classes.size(), (size_t)1);
+      const auto& p = classes[0]["match"][0];
+      IM_CHECK_EQ(p["type"].get<std::string>(), std::string("entry_exit"));
+      IM_CHECK_EQ(p["entry"].get<int>(), 1);
+      IM_CHECK_EQ(p["exit"].get<int>(), 2);
     };
   }
   {
@@ -2595,15 +2609,13 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       cls.match.push_back(r1);
       gui::g_state.raypath_color.push_back(cls);
 
-      LUMICE_Config cfg{};
-
-      lumice::ConfigOwningGuard cfg_guard(cfg);
-      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
-      IM_CHECK_EQ(cfg.raypath_color_count, 1);
-      IM_CHECK_EQ(cfg.raypath_color[0].combine, LUMICE_COLOR_COMBINE_ALL);
-      IM_CHECK_EQ(cfg.raypath_color[0].match_count, 2);
-      IM_CHECK_EQ(cfg.raypath_color[0].match[0].layer, 0);
-      IM_CHECK_EQ(cfg.raypath_color[0].match[1].layer, 1);
+      const auto j = CommitSceneJson(gui::g_state);
+      const auto& classes = j["raypath_color"]["classes"];
+      IM_CHECK_EQ(classes.size(), (size_t)1);
+      IM_CHECK_EQ(classes[0]["combine"].get<std::string>(), std::string("all"));
+      IM_CHECK_EQ(classes[0]["match"].size(), (size_t)2);
+      IM_CHECK_EQ(classes[0]["match"][0]["layer"].get<int>(), 0);
+      IM_CHECK_EQ(classes[0]["match"][1]["layer"].get<int>(), 1);
     };
   }
   {
@@ -2620,13 +2632,10 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::g_state.raypath_color.push_back(cls);
       gui::g_state.raypath_color_mode = LUMICE_COLOR_MODE_ADDITIVE;
 
-      LUMICE_Config cfg{};
-
-      lumice::ConfigOwningGuard cfg_guard(cfg);
-      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
-      IM_CHECK_EQ(cfg.raypath_color[0].visible, 0);
-      IM_CHECK_EQ(cfg.raypath_color[0].solo, 1);
-      IM_CHECK_EQ(cfg.raypath_color_mode, LUMICE_COLOR_MODE_ADDITIVE);
+      const auto j = CommitSceneJson(gui::g_state);
+      IM_CHECK_EQ(j["raypath_color"]["classes"][0]["visible"].get<bool>(), false);
+      IM_CHECK_EQ(j["raypath_color"]["classes"][0]["solo"].get<bool>(), true);
+      IM_CHECK_EQ(j["raypath_color"]["mode"].get<std::string>(), std::string("additive"));
     };
   }
   {
@@ -2650,13 +2659,11 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       cls.match.push_back(r_ok);
       gui::g_state.raypath_color.push_back(cls);
 
-      LUMICE_Config cfg{};
-
-      lumice::ConfigOwningGuard cfg_guard(cfg);
-      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
-      IM_CHECK_EQ(cfg.raypath_color_count, 1);
-      IM_CHECK_EQ(cfg.raypath_color[0].match_count, 1);  // orphan dropped
-      IM_CHECK_EQ(cfg.raypath_color[0].match[0].crystal, 1);
+      const auto j = CommitSceneJson(gui::g_state);
+      const auto& classes = j["raypath_color"]["classes"];
+      IM_CHECK_EQ(classes.size(), (size_t)1);
+      IM_CHECK_EQ(classes[0]["match"].size(), (size_t)1);  // orphan dropped
+      IM_CHECK_EQ(classes[0]["match"][0]["crystal"].get<int>(), 0);
     };
   }
   {
@@ -2675,13 +2682,11 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       cls.match.push_back(r_ok);
       gui::g_state.raypath_color.push_back(cls);
 
-      LUMICE_Config cfg{};
-
-      lumice::ConfigOwningGuard cfg_guard(cfg);
-      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
-      IM_CHECK_EQ(cfg.raypath_color_count, 1);
-      IM_CHECK_EQ(cfg.raypath_color[0].match_count, 1);
-      IM_CHECK_EQ(cfg.raypath_color[0].match[0].predicate.type, LUMICE_FILTER_TYPE_UNSET);
+      const auto j = CommitSceneJson(gui::g_state);
+      const auto& classes = j["raypath_color"]["classes"];
+      IM_CHECK_EQ(classes.size(), (size_t)1);
+      IM_CHECK_EQ(classes[0]["match"].size(), (size_t)1);  // bad-predicate ref dropped
+      IM_CHECK(!classes[0]["match"][0].contains("type"));
     };
   }
   {
@@ -2696,12 +2701,10 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       cls.match.push_back(r_bad);
       gui::g_state.raypath_color.push_back(cls);
 
-      LUMICE_Config cfg{};
-
-      lumice::ConfigOwningGuard cfg_guard(cfg);
-      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
-      IM_CHECK_EQ(cfg.raypath_color_count, 1);
-      IM_CHECK_EQ(cfg.raypath_color[0].match_count, 0);
+      const auto j = CommitSceneJson(gui::g_state);
+      const auto& classes = j["raypath_color"]["classes"];
+      IM_CHECK_EQ(classes.size(), (size_t)1);
+      IM_CHECK_EQ(classes[0]["match"].size(), (size_t)0);
     };
   }
   {
@@ -2716,10 +2719,8 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         cls.match.push_back(ref);
         gui::g_state.raypath_color.push_back(cls);
       }
-      LUMICE_Config cfg{};
-      lumice::ConfigOwningGuard cfg_guard(cfg);
       gui::ColorClassOverflowInfo color_overflow;
-      IM_CHECK(!gui::FillLumiceConfig(gui::g_state, &cfg, nullptr, &color_overflow));
+      IM_CHECK(gui::BuildScene(gui::g_state, gui::SceneIntent::kSimCommit, nullptr, &color_overflow) == nullptr);
       IM_CHECK(color_overflow.class_over_cap);
       IM_CHECK_EQ(color_overflow.class_index, LUMICE_MAX_CONFIG_COLOR_CLASSES);
     };
@@ -2736,29 +2737,29 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         cls.match.push_back(ref);
       }
       gui::g_state.raypath_color.push_back(cls);
-      LUMICE_Config cfg{};
-      lumice::ConfigOwningGuard cfg_guard(cfg);
       gui::ColorClassOverflowInfo color_overflow;
-      IM_CHECK(!gui::FillLumiceConfig(gui::g_state, &cfg, nullptr, &color_overflow));
+      IM_CHECK(gui::BuildScene(gui::g_state, gui::SceneIntent::kSimCommit, nullptr, &color_overflow) == nullptr);
       IM_CHECK(!color_overflow.class_over_cap);
       IM_CHECK_EQ(color_overflow.class_index, 0);
       IM_CHECK_EQ(color_overflow.ref_index, LUMICE_MAX_CONFIG_COLOR_REFS);
     };
   }
 
-  // task-342.3 Step 4: SerializeCoreConfig / DeserializeFromJson raypath_color[] roundtrip.
+  // Export-JSON / DeserializeFromJson raypath_color roundtrip.
   // ---------------------------------------------------------------------------
-  // These tests exercise the JSON dual-twin path. Where meaningful they cross-check the JSON
-  // emit against the struct emit (FillLumiceConfig) to guarantee AC1 pixel-equivalence is a
-  // structural consequence of shared logic (single FillColorPredicate) rather than a
-  // coincidence between two independent implementations.
+  // These tests exercise the export path (BuildExportJsonOrWarn). Where the original suite
+  // cross-checked the JSON emitter against a separate struct emitter, the two are now the same
+  // scene under two SceneIntents — so the cross-checks below assert the intents agree, which is
+  // the property that can still break (a field accidentally made intent-dependent). The one
+  // intended difference, renderer intensity_factor, has its own dedicated test
+  // (intensity_factor_ignores_exposure_offset_in_gui_run_path).
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "raypath_color_serialize_omits_when_empty");
     t->TestFunc = [](ImGuiTestContext*) {
       ResetTestState();
       // Empty raypath_color → JSON must not contain a "raypath_color" key so mono-only
       // configs remain byte-identical with the pre-v4.7 shape (zero-regression contract).
-      const std::string js = gui::SerializeCoreConfig(gui::g_state);
+      const std::string js = CoreJson(gui::g_state);
       auto j = nlohmann::json::parse(js);
       IM_CHECK(!j.contains("raypath_color"));
     };
@@ -2779,7 +2780,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::g_state.raypath_color.push_back(cls);
       gui::g_state.raypath_color_mode = LUMICE_COLOR_MODE_ADDITIVE;
 
-      auto j = nlohmann::json::parse(gui::SerializeCoreConfig(gui::g_state));
+      auto j = nlohmann::json::parse(CoreJson(gui::g_state));
       IM_CHECK(j.contains("raypath_color"));
       const auto& jrc = j["raypath_color"];
       IM_CHECK(jrc.is_object());
@@ -2796,7 +2797,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK(jc["match"].is_array() && jc["match"].size() == 1);
       const auto& jr = jc["match"][0];
       IM_CHECK_EQ(jr["layer"].get<int>(), 0);
-      IM_CHECK_EQ(jr["crystal"].get<int>(), 1);  // pool 0 -> C-API id 1
+      IM_CHECK_EQ(jr["crystal"].get<int>(), 0);  // pool 0 -> scene crystal id 0
       IM_CHECK_STR_EQ(jr["type"].get<std::string>().c_str(), "raypath");
       IM_CHECK(jr["raypath"].is_array() && jr["raypath"].size() == 2);
       IM_CHECK_EQ(jr["raypath"][0].get<int>(), 3);
@@ -2825,15 +2826,12 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       cls.match.push_back(ref);
       gui::g_state.raypath_color.push_back(cls);
 
-      // Struct emit carries the bitmask.
-      LUMICE_Config cfg{};
-      lumice::ConfigOwningGuard cfg_guard(cfg);
-      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
-      const auto& sp = cfg.raypath_color[0].match[0].predicate;
-      IM_CHECK_EQ(sp.symmetry, 5);  // P|D
+      // The commit-intent scene carries the symmetry string...
+      const auto commit_j = CommitSceneJson(gui::g_state);
+      IM_CHECK_STR_EQ(commit_j["raypath_color"]["classes"][0]["match"][0]["symmetry"].get<std::string>().c_str(), "PD");
 
-      // JSON emit carries the string form.
-      auto j = nlohmann::json::parse(gui::SerializeCoreConfig(gui::g_state));
+      // ...and so does the exported JSON.
+      auto j = nlohmann::json::parse(CoreJson(gui::g_state));
       const auto& jr = j["raypath_color"]["classes"][0]["match"][0];
       IM_CHECK(jr.contains("symmetry"));
       IM_CHECK_STR_EQ(jr["symmetry"].get<std::string>().c_str(), "PD");
@@ -2858,31 +2856,19 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       cls.match.push_back(ref);
       gui::g_state.raypath_color.push_back(cls);
 
-      // Struct emit.
-      LUMICE_Config cfg{};
-      lumice::ConfigOwningGuard cfg_guard(cfg);
-      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
-      const auto& sp = cfg.raypath_color[0].match[0].predicate;
-
-      // JSON emit.
-      auto j = nlohmann::json::parse(gui::SerializeCoreConfig(gui::g_state));
+      // Commit-intent scene vs export-intent JSON.
+      const auto commit_j = CommitSceneJson(gui::g_state);
+      auto j = nlohmann::json::parse(CoreJson(gui::g_state));
       const auto& jr = j["raypath_color"]["classes"][0]["match"][0];
 
-      // Class-level fields agree.
-      IM_CHECK_EQ(cfg.raypath_color[0].combine, LUMICE_COLOR_COMBINE_ALL);
+      // Class-level fields land as expected...
       IM_CHECK_STR_EQ(j["raypath_color"]["classes"][0]["combine"].get<std::string>().c_str(), "all");
-      IM_CHECK_EQ(cfg.raypath_color[0].visible, 0);
       IM_CHECK_EQ(j["raypath_color"]["classes"][0]["visible"].get<bool>(), false);
-      IM_CHECK_EQ(cfg.raypath_color[0].solo, 1);
       IM_CHECK_EQ(j["raypath_color"]["classes"][0]["solo"].get<bool>(), true);
-
-      // Predicate fields agree — struct type RAYPATH ↔ JSON type "raypath" + raypath[] elements.
-      IM_CHECK_EQ(sp.type, LUMICE_FILTER_TYPE_RAYPATH);
       IM_CHECK_STR_EQ(jr["type"].get<std::string>().c_str(), "raypath");
-      IM_CHECK_EQ(sp.raypath_count, static_cast<int>(jr["raypath"].size()));
-      for (int k = 0; k < sp.raypath_count; k++) {
-        IM_CHECK_EQ(sp.raypath[k], jr["raypath"][k].get<int>());
-      }
+      IM_CHECK_EQ(jr["raypath"], nlohmann::json({ 1, 2, 3, 4 }));
+      // ...and the entire color block is intent-independent.
+      IM_CHECK(commit_j["raypath_color"] == j["raypath_color"]);
     };
   }
   {
@@ -2902,26 +2888,22 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       cls.match.push_back(all_ref);
       gui::g_state.raypath_color.push_back(cls);
 
-      LUMICE_Config cfg{};
-
-      lumice::ConfigOwningGuard cfg_guard(cfg);
-      IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
-      auto j = nlohmann::json::parse(gui::SerializeCoreConfig(gui::g_state));
+      const auto commit_j = CommitSceneJson(gui::g_state);
+      auto j = nlohmann::json::parse(CoreJson(gui::g_state));
       const auto& jrefs = j["raypath_color"]["classes"][0]["match"];
-      IM_CHECK_EQ(cfg.raypath_color[0].match_count, 2);
+      IM_CHECK_EQ(static_cast<int>(commit_j["raypath_color"]["classes"][0]["match"].size()), 2);
       IM_CHECK_EQ(static_cast<int>(jrefs.size()), 2);
 
       // EE ref.
-      const auto& sp0 = cfg.raypath_color[0].match[0].predicate;
-      IM_CHECK_EQ(sp0.type, LUMICE_FILTER_TYPE_ENTRY_EXIT);
       IM_CHECK_STR_EQ(jrefs[0]["type"].get<std::string>().c_str(), "entry_exit");
-      IM_CHECK_EQ(sp0.ee_entry, jrefs[0].value("entry", -1));
-      IM_CHECK_EQ(sp0.ee_exit, jrefs[0].value("exit", -1));
+      IM_CHECK_EQ(jrefs[0].value("entry", -1), 1);
+      IM_CHECK_EQ(jrefs[0].value("exit", -1), 2);
 
-      // Match-all ref: struct UNSET ↔ JSON has no "type" field.
-      const auto& sp1 = cfg.raypath_color[0].match[1].predicate;
-      IM_CHECK_EQ(sp1.type, LUMICE_FILTER_TYPE_UNSET);
+      // Match-all ref: UNSET is encoded as the absence of a "type" field.
       IM_CHECK(!jrefs[1].contains("type"));
+
+      // Both intents produce the same color block.
+      IM_CHECK(commit_j["raypath_color"] == j["raypath_color"]);
     };
   }
   {
@@ -2950,10 +2932,10 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       cls.match.push_back(ok);
       gui::g_state.raypath_color.push_back(cls);
 
-      auto j = nlohmann::json::parse(gui::SerializeCoreConfig(gui::g_state));
+      auto j = nlohmann::json::parse(CoreJson(gui::g_state));
       const auto& jrefs = j["raypath_color"]["classes"][0]["match"];
       IM_CHECK_EQ(static_cast<int>(jrefs.size()), 1);
-      IM_CHECK_EQ(jrefs[0]["crystal"].get<int>(), 1);
+      IM_CHECK_EQ(jrefs[0]["crystal"].get<int>(), 0);
       IM_CHECK(!jrefs[0].contains("type"));  // ok was match_all
     };
   }
@@ -3009,7 +2991,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       const auto original = gui::g_state.raypath_color;
       const int original_mode = gui::g_state.raypath_color_mode;
 
-      const std::string js = gui::SerializeCoreConfig(gui::g_state);
+      const std::string js = CoreJson(gui::g_state);
       gui::GuiState loaded = gui::InitDefaultState();
       IM_CHECK(gui::DeserializeFromJson(js, loaded));
 
@@ -3037,7 +3019,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK(gui::DeserializeFromJson(js, s1));
       IM_CHECK_EQ(static_cast<int>(s1.raypath_color.size()), 3);
 
-      const std::string js2 = gui::SerializeCoreConfig(s1);
+      const std::string js2 = CoreJson(s1);
       gui::GuiState s2 = gui::InitDefaultState();
       IM_CHECK(gui::DeserializeFromJson(js2, s2));
 
@@ -3157,17 +3139,17 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
   }
 
   // task-346.1 (①) AC5 mechanism-layer regression: pin the invariant that the GUI Run
-  // path never bakes `exposure_offset` into `LUMICE_Config.renderers[0].intensity_factor`.
+  // path never bakes `exposure_offset` into the committed renderer's intensity_factor.
   // Root cause of the composite re-run 2× EV bug (see plan §3.1): the old code wrote
   // `intensity_factor = 2^exposure_offset`, which then multiplied `display_exposure_scale`
   // (already carrying the same manual EV pushed via LUMICE_SetCompositeExposure) inside
   // the compositor's single shared exposure scalar. This regression fires the second any
   // future refactor reintroduces that bake — without needing to run a real re-run scenario.
   //
-  // Note: the paired invariant on the CLI/config export path (SerializeCoreConfig, which
-  // DOES bake 2^exposure_offset — different, legal semantics) is exercised by the existing
-  // GuiJsonRoundtrip tests that cover exposure_offset ∈ {1.5f, -1.25f, ...}. Two paths,
-  // two semantics, both pinned.
+  // 399.5: the two semantics are now the two arms of gui::SceneIntent, so this test asserts
+  // BOTH of them in one place — kSimCommit must NOT bake, kJsonExport MUST. That is exactly
+  // the divergence SceneIntent exists to carry, and it is the only field allowed to differ
+  // between the two arms.
   {
     ImGuiTest* t =
         IM_REGISTER_TEST(engine, "import_export", "intensity_factor_ignores_exposure_offset_in_gui_run_path");
@@ -3177,13 +3159,24 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         ResetTestState();
         gui::g_state.renderer.exposure_offset = offset;
 
-        LUMICE_Config cfg{};
-        lumice::ConfigOwningGuard cfg_guard(cfg);
-        IM_CHECK(gui::FillLumiceConfig(gui::g_state, &cfg));
-        IM_CHECK_EQ(cfg.renderer_count, 1);
+        const auto commit_j = CommitSceneJson(gui::g_state);
+        IM_CHECK_EQ(commit_j["render"].size(), (size_t)1);
         // The GUI Run path must NEVER bake exposure_offset here. Manual + auto EV both
         // live on the display-time path (mono shader uniform / LUMICE_SetCompositeExposure).
-        IM_CHECK_EQ(cfg.renderers[0].intensity_factor, 1.0f);
+        IM_CHECK_EQ(commit_j["render"][0]["intensity_factor"].get<float>(), 1.0f);
+
+        // The CLI/config export path MUST bake it — the CLI has no display-time EV, so the
+        // exported config has to reproduce the on-screen brightness on its own.
+        const auto export_j = nlohmann::json::parse(CoreJson(gui::g_state));
+        IM_CHECK_EQ(export_j["render"][0]["intensity_factor"].get<float>(), std::pow(2.0f, offset));
+
+        // Nothing else may depend on the intent: the two documents differ in that one field
+        // only. (Pins the SceneIntent divergence from silently spreading to other fields.)
+        auto commit_stripped = commit_j;
+        auto export_stripped = export_j;
+        commit_stripped["render"][0].erase("intensity_factor");
+        export_stripped["render"][0].erase("intensity_factor");
+        IM_CHECK(commit_stripped == export_stripped);
       }
     };
   }
@@ -3320,7 +3313,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       ResetTestState();
 
       // 1) Write a valid CLI-shape JSON to tmp (SerializeCoreConfig round-trip).
-      std::string json = gui::SerializeCoreConfig(gui::g_state);
+      std::string json = CoreJson(gui::g_state);
       const char* tmp_path = "/tmp/lumice_open_json_import.json";
       bool write_ok = gui::ExportConfigJson(tmp_path, json);
       IM_CHECK(write_ok);
@@ -3556,7 +3549,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       ResetTestState();
 
       // Prepare a valid CLI-shape JSON config on disk (round-trips through SerializeCoreConfig).
-      std::string json = gui::SerializeCoreConfig(gui::g_state);
+      std::string json = CoreJson(gui::g_state);
       const char* tmp_path = "/tmp/lumice_reset_owner_json_import.json";
       IM_CHECK(gui::ExportConfigJson(tmp_path, json));
 

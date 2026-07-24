@@ -18,7 +18,7 @@
 #include "gui/app.hpp"                  // g_server_poller / g_preview / DoOpen / DoNew / SyncFromPoller
 #include "gui/color_window.hpp"         // PushDisplayState (M8 AC3 direct-push path)
 #include "gui/export_fbo_renderer.hpp"  // RenderExportToRgba for AC2 pixel-level assertion
-#include "gui/file_io.hpp"              // SerializeCoreConfig / ExportConfigJson / SaveLmcFile
+#include "gui/file_io.hpp"              // BuildExportJsonOrWarn / ExportConfigJson / SaveLmcFile
 #include "gui/gui_state.hpp"            // GuiState + DisplayStateBaseline (M8 AC3)
 #include "gui/gui_state_reconcile.hpp"  // ReconcileGuiEffects / ApplyGuiEffects (M8 AC3 reconciler-path)
 #include "gui/server_poller.hpp"
@@ -803,7 +803,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
   };
 
   // task-346.1 ① AC1 anchor (re-run 双叠加消除 · 端到端字节等价):
-  // With the FillLumiceConfig fix in place (intensity_factor ≡ 1.0f, exposure_offset never
+  // With the BuildScene fix in place (intensity_factor ≡ 1.0f on the commit intent, exposure_offset never
   // baked into the committed config), the GUI Run path pushes a single copy of manual EV
   // through the display-time channel (LUMICE_SetCompositeExposure). If the caller keeps the
   // manual EV fixed at E and re-commits the SAME config, the composite bytes MUST be
@@ -1273,7 +1273,8 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
 
     // Write a mono default-state .json (no raypath_color) so DoOpen(.json) hits the JSON-import
     // branch and resets g_state via InitDefaultState — the exact production shape of the bug.
-    std::string json = gui::SerializeCoreConfig(gui::InitDefaultState());
+    std::string json;
+    IM_CHECK(gui::BuildExportJsonOrWarn(gui::InitDefaultState(), &json, nullptr));
     const char* tmp_path = "/tmp/lumice_fence_open_json.json";
     IM_CHECK(gui::ExportConfigJson(tmp_path, json));
 

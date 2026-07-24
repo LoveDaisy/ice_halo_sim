@@ -24,7 +24,6 @@
 #include "gui/gui_state.hpp"
 #include "gui/preview_renderer.hpp"
 #include "gui/raypath_segments.hpp"
-#include "include/lumice_config_scope.hpp"
 #include "util/path_utils.hpp"
 
 namespace lumice::gui {
@@ -236,21 +235,6 @@ static const char* FilterActionToString(int action) {
   return action == 0 ? "filter_in" : "filter_out";
 }
 
-// Compose the symmetry string ("PBD"-subset) used by both GUI and core JSON.
-static std::string FilterSymmetryToString(const FilterConfig& f) {
-  std::string sym;
-  if (f.sym_p) {
-    sym += "P";
-  }
-  if (f.sym_b) {
-    sym += "B";
-  }
-  if (f.sym_d) {
-    sym += "D";
-  }
-  return sym;
-}
-
 // GUI .lmc payload: per-filter JSON object.
 //
 // Schema v=3 (task-serialization-bidirectional): a filter carries its full
@@ -278,31 +262,6 @@ static json SerializeFilterForGui(const FilterConfig& f, int id) {
   }
   j["summands"] = std::move(summands);
 
-  return j;
-}
-
-// Result of expanding a single GUI FilterConfig into one or more core JSON
-// filter entries. `main_id` is the id the scattering entry should reference
-// (== last id emitted for multi-raypath OR; == base id for trivial cases).
-//
-// TU-local (file_io.cpp internal): helpers consumed only by SerializeCoreConfig stay private.
-struct FilterCoreResult {
-  int main_id;
-  std::vector<json> filters;
-};
-
-// Build a single simple-filter JSON entry (any of raypath/entry_exit).
-template <class FillFn>
-static json BuildCoreSimpleFilterJson(const FilterConfig& f, int id, const char* type_name, FillFn fill) {
-  json j;
-  j["id"] = id;
-  j["type"] = type_name;
-  j["action"] = FilterActionToString(f.action);
-  std::string sym = FilterSymmetryToString(f);
-  if (!sym.empty()) {
-    j["symmetry"] = sym;
-  }
-  fill(j);
   return j;
 }
 
@@ -384,7 +343,7 @@ struct EELenBounds {
   // on the core EntryExitFilterParam::max_len_). Distinct from
   // kEEWildcardSentinel which is the face-wildcard marker — same magic value,
   // different namespace: this one is never confused with a face id because
-  // EELenBounds::max_len is only ever fed to WriteEELengthFields / parsed back
+  // EELenBounds::max_len is only ever fed to a LUMICE_FilterParam.ee_max_len / parsed back
   // from min/max length JSON fields, not into the entry/exit face channels.
   int max_len;
 };
@@ -399,18 +358,6 @@ static EELenBounds DecodeLengthMode(int mode, int min_len, int max_len) {
     case 0:
     default:
       return { 1, -1 };
-  }
-}
-
-// Emit min_len / max_len JSON fields on an EE SimpleFilter following the
-// core schema in src/config/filter_config.cpp: omit min_len when default
-// (==1), omit max_len when unbounded.
-static void WriteEELengthFields(nlohmann::json& j, const EELenBounds& b) {
-  if (b.min_len > 1) {
-    j["min_len"] = b.min_len;
-  }
-  if (b.max_len >= 0) {
-    j["max_len"] = b.max_len;
   }
 }
 
@@ -432,10 +379,11 @@ static int ClampIdValue(int v, const char* field_name) {
 //
 // Backend-agnostic intermediate representation of a GUI FilterConfig fully
 // expanded to disjunctive normal form: an OR of clauses, each clause an AND of
-// simple-filter term descriptors. Both serialization twins (SerializeFilterForCore
-// = JSON, ExpandFilterToStruct = C struct) translate the SAME ExpandedFilter, so
-// they can never drift apart (the scrum-327 parallel-twin lesson: two hand-written
-// expansion loops caused three Majors).
+// simple-filter term descriptors. ExpandFilterToScene is now its ONLY consumer —
+// the historical second consumer (a hand-written JSON emit twin) is gone: JSON is
+// produced by serializing the very LUMICE_Scene the commit path builds, so the two
+// cannot drift by construction. (The prior arrangement — two hand-written expansion loops,
+// one per output format — produced three separate correctness bugs before being unified.)
 struct SimpleTermDesc {
   bool is_raypath = true;
   std::vector<int> raypath;         // valid when is_raypath (empty == match-all)
@@ -593,82 +541,6 @@ SopExpansionSummary SummarizeSopExpansion(const FilterConfig& f) {
 // expands to multiple clauses (IsDegenerateSingleTerm()==false). Do not assume they sync.
 static bool IsDegenerateSingleTerm(const ExpandedFilter& ef) {
   return ef.clauses.size() == 1 && ef.clauses[0].size() == 1;
-}
-
-// Translate a GUI FilterConfig into one or more core JSON filter entries.
-//
-// Degenerate (1 clause 1 term) → 1 simple filter. Otherwise → N simple filters
-// (one per clause-term, no dedup — matches the pre-uplift OR-of-singletons and
-// keeps existing configs byte-equivalent) + 1 complex whose composition is the
-// nested-array [[t00,t01,..],[t10,..],..] (outer OR = clause, inner AND = terms).
-// next_filter_id_base: caller's id counter; result.main_id = the id a scattering
-// entry references (the complex id when expanded, else the sole simple id).
-//
-// SYNC: this is the JSON-emit twin of ExpandFilterToStruct (the C-struct emit,
-// below). Both translate the SAME ExpandSopToClauses(f) output — do NOT hand-write
-// a parallel expansion here. The struct-vs-JSON cross-check test
-// (filter_expand_struct_vs_json) is the enforcing gate.
-static FilterCoreResult SerializeFilterForCore(const FilterConfig& f, int next_filter_id_base) {
-  FilterCoreResult result;
-  result.main_id = next_filter_id_base;
-  const ExpandedFilter ef = ExpandSopToClauses(f);
-  if (ef.overflow) {
-    // Why the twins diverge on overflow (code-review-02 Minor 2): SerializeFilterForCore
-    // must stay a TOTAL function returning a valid FilterCoreResult (a scattering entry
-    // references result.main_id), so on overflow it emits a bounded match-all stand-in
-    // rather than failing. The struct twin (ExpandFilterToStruct) instead `return false`s
-    // because its caller FillLumiceConfig has a graceful bail. The stand-in must never
-    // reach a real export: the sole production caller of SerializeCoreConfig
-    // (DoExportConfigJson) pre-checks via FillLumiceConfig and aborts with a user-visible
-    // warning before serializing (code-review-02 Major 1). This log is the last-resort
-    // non-silent signal for any other caller.
-    GUI_LOG_WARNING(
-        "[FileIO] Filter '{}' expansion exceeds complex-filter limits ({} clauses / {} terms max); "
-        "emitting a bounded match-all stand-in (export path rejects this upstream).",
-        f.name, LUMICE_MAX_CONFIG_CLAUSES, LUMICE_MAX_CONFIG_TERMS);
-  }
-
-  auto build_simple = [&](int id, const SimpleTermDesc& t) -> json {
-    if (t.is_raypath) {
-      return BuildCoreSimpleFilterJson(f, id, "raypath", [&](json& j) { j["raypath"] = t.raypath; });
-    }
-    return BuildCoreSimpleFilterJson(f, id, "entry_exit", [&](json& j) {
-      if (t.entry != kEEWildcardSentinel) {
-        j["entry"] = ClampIdValue(t.entry, "entry");
-      }
-      if (t.exit != kEEWildcardSentinel) {
-        j["exit"] = ClampIdValue(t.exit, "exit");
-      }
-      WriteEELengthFields(j, EELenBounds{ t.min_len, t.max_len });
-    });
-  };
-
-  if (IsDegenerateSingleTerm(ef)) {
-    int id = next_filter_id_base;
-    result.filters.push_back(build_simple(id, ef.clauses[0][0]));
-    result.main_id = id;
-    return result;
-  }
-
-  // Emit all simple filters first (clause order, term order within clause), then
-  // the complex last — matching the "children first, complex last" id ordering.
-  json composition = json::array();
-  int running = 0;
-  for (const auto& clause : ef.clauses) {
-    json clause_ids = json::array();
-    for (const auto& term : clause) {
-      int id = next_filter_id_base + running++;
-      result.filters.push_back(build_simple(id, term));
-      clause_ids.push_back(id);
-    }
-    composition.push_back(std::move(clause_ids));
-  }
-  int complex_id = next_filter_id_base + running;
-  result.filters.push_back(
-      BuildCoreSimpleFilterJson(f, complex_id, "complex", [&composition](json& j) { j["composition"] = composition; }));
-  result.main_id = complex_id;
-
-  return result;
 }
 
 static AxisDistType ParseAxisDistType(const std::string& t) {
@@ -993,21 +865,22 @@ static FilterConfig ParseFilterFromGuiJson(const json& jf) {
 }
 
 
-// ========== Core Config Serialization (for LUMICE_CommitConfig) ==========
+// ========== Core Config Serialization (export path) ==========
 
 bool BuildExportJsonOrWarn(const GuiState& state, std::string* out_json, std::string* out_warning) {
-  // Reuse the SAME overflow contract the simulation-commit path (DoRun) uses, so export
-  // and simulation reject an over-limit filter consistently. Without this, the JSON twin
-  // would emit a semantically-opposite match-all stand-in and export would silently write
-  // a wrong config (code-review-02/03 Major). Pure — no dialog/filesystem — so this reject
-  // path is directly unit-testable.
-  LUMICE_Config probe{};
-  lumice::ConfigOwningGuard probe_color_guard(probe);  // v4.8: release probe.raypath_color on scope exit
+  // ONE scene serves both roles the pre-handle code needed two constructions for: it is the
+  // overflow-validation object AND the export source. (The old code built a throwaway
+  // LUMICE_Config `probe` purely to reuse the commit path's ABI-bounds check, then discarded it
+  // and re-emitted the same config through a separately-maintained ~180-line JSON writer.)
+  // Export and simulation therefore reject an over-limit filter identically by construction, not
+  // by two implementations agreeing — the latter previously let export silently write a
+  // semantically-opposite match-all stand-in for a filter the simulator refused.
   FilterOverflowInfo overflow;
   ColorClassOverflowInfo color_overflow;
-  if (!FillLumiceConfig(state, &probe, &overflow, &color_overflow)) {
+  ScenePtr scene = BuildScene(state, SceneIntent::kJsonExport, &overflow, &color_overflow);
+  if (!scene) {
     if (out_warning) {
-      // color_overflow.class_index >= 0 iff FillLumiceConfig failed on the color-class walk
+      // color_overflow.class_index >= 0 iff BuildScene failed on the color-class walk
       // (which runs strictly after the filter walk) rather than a physical-filter overflow —
       // reusing the filter-overflow wording here would misattribute the resource and the
       // limit number (code-review-01 Major 1).
@@ -1025,268 +898,34 @@ bool BuildExportJsonOrWarn(const GuiState& state, std::string* out_json, std::st
     return false;
   }
   if (out_json) {
-    *out_json = SerializeCoreConfig(state);
+    // LUMICE_SceneToJson emits compact JSON (root.dump()); the exported file is read and edited
+    // by humans and fed to the CLI, so restore the 2-space indentation the GUI has always
+    // written. Re-indenting here (rather than widening the C API with a pretty-print flag) keeps
+    // the formatting choice where the audience is.
+    size_t len = 0;
+    if (LUMICE_SceneToJson(scene.get(), nullptr, 0, &len) != LUMICE_OK) {
+      GUI_LOG_WARNING("[FileIO] BuildExportJsonOrWarn: LUMICE_SceneToJson failed to size the document");
+      return false;
+    }
+    std::string buf(len + 1, '\0');
+    if (LUMICE_SceneToJson(scene.get(), buf.data(), buf.size(), nullptr) != LUMICE_OK) {
+      GUI_LOG_WARNING("[FileIO] BuildExportJsonOrWarn: LUMICE_SceneToJson failed to serialize the scene");
+      return false;
+    }
+    buf.resize(len);
+    *out_json = json::parse(buf).dump(2);
   }
   return true;
 }
 
-// task-342.3 Step 4 forward decls: FillColorPredicate is the single source of truth for
-// (ColorClassRefConfig → LUMICE_ColorPredicate) translation; both the struct commit path
-// (FillColorClasses, below) and the JSON emit path (SerializeCoreConfig, below) go through
-// it so the AC1 struct/JSON pixel-equivalence is a structural guarantee, not a coincidence.
-// EmitColorPredicateJson mirrors c_api.cpp's ColorPredicateToJson (which is static and
-// inaccessible from GUI); the pair is guarded by a cross-check test that asserts the two
-// paths produce equivalent predicates for identical GUI input.
+// Forward decl: FillColorPredicate is the single source of truth for
+// (ColorClassRefConfig → LUMICE_ColorPredicate) translation. Since the JSON emit is now
+// produced by serializing the very same LUMICE_Scene the commit path builds, struct/JSON
+// pixel-equivalence is structural — there is no second predicate emitter to keep in sync.
 static bool FillColorPredicate(LUMICE_ColorPredicate* dst, const ColorClassRefConfig& ref);
-static void EmitColorPredicateJson(const LUMICE_ColorPredicate& p, json& out);
-
-std::string SerializeCoreConfig(const GuiState& state) {
-  json root;
-
-  // Flatten layers into crystal/filter/scattering arrays with dynamically assigned IDs
-  int next_crystal_id = 1;
-  int next_filter_id = 1;
-  root["crystal"] = json::array();
-  root["filter"] = json::array();
-
-  json scene;
-  scene["light_source"]["type"] = "sun";
-  scene["light_source"]["altitude"] = state.sun.altitude;
-  scene["light_source"]["diameter"] = state.sun.diameter;
-  if (state.sun.spectrum_index == kCustomSpectrumIndex && !state.sun.custom_spectrum.empty()) {
-    // Discrete custom spectrum → JSON array (shape matches core light_config.cpp::SpectrumToJson).
-    scene["light_source"]["spectrum"] = WlWeightArrayToJson(state.sun.custom_spectrum);
-  } else if (state.sun.spectrum_index >= 0 && state.sun.spectrum_index < kSpectrumCount) {
-    scene["light_source"]["spectrum"] = kSpectrumNames[state.sun.spectrum_index];
-  } else {
-    scene["light_source"]["spectrum"] = "D65";
-  }
-
-  if (state.sim.infinite) {
-    scene["ray_num"] = "infinite";
-  } else {
-    auto ray_num = static_cast<size_t>(state.sim.ray_num_millions * 1e6);
-    scene["ray_num"] = ray_num;
-  }
-  scene["max_hits"] = state.sim.max_hits;
-
-  // ID-pool model: walk reachable crystals/filters and dedupe via pool id.
-  // Each pool id is emitted as one core crystal/filter; entries reference by
-  // (pool_id + 1) — core ConfigManager uses ID-field map lookup, so id
-  // sequences need not be contiguous.
-  std::map<int, int> crystal_pool_to_core;  // pool_id -> core id
-  std::map<int, int> filter_pool_to_core;   // pool_id -> main_id (last id for multi-segment)
-  scene["scattering"] = json::array();
-  for (auto& layer : state.layers) {
-    json jl;
-    jl["prob"] = layer.probability;
-    jl["entries"] = json::array();
-    for (auto& entry : layer.entries) {
-      int cid;
-      auto it_c = crystal_pool_to_core.find(entry.crystal_id);
-      if (it_c == crystal_pool_to_core.end()) {
-        cid = next_crystal_id++;
-        crystal_pool_to_core.emplace(entry.crystal_id, cid);
-        root["crystal"].push_back(SerializeCrystal(state.crystals[entry.crystal_id], cid));
-      } else {
-        cid = it_c->second;
-      }
-
-      json je;
-      je["crystal"] = cid;
-      je["proportion"] = entry.proportion;
-
-      if (entry.filter_id.has_value()) {
-        int fpool = *entry.filter_id;
-        int main_id;
-        auto it_f = filter_pool_to_core.find(fpool);
-        if (it_f == filter_pool_to_core.end()) {
-          auto fr = SerializeFilterForCore(state.filters[fpool], next_filter_id);
-          for (auto& jf : fr.filters) {
-            root["filter"].push_back(jf);
-          }
-          next_filter_id += static_cast<int>(fr.filters.size());
-          main_id = fr.main_id;
-          filter_pool_to_core.emplace(fpool, main_id);
-        } else {
-          main_id = it_f->second;
-        }
-        je["filter"] = main_id;
-      }
-
-      jl["entries"].push_back(je);
-    }
-    scene["scattering"].push_back(jl);
-  }
-  root["scene"] = scene;
-
-  // Render — Core always produces dual equal-area fisheye texture (full-globe, equal-area).
-  // NOTE: GUI enforces single renderer; if multi-renderer support is added, revisit this
-  // fixed id and loop-of-one structure.
-  root["render"] = json::array();
-  {
-    const auto& r = state.renderer;
-    json jr;
-    jr["id"] = 1;
-    jr["lens"]["type"] = "dual_fisheye_equal_area";
-    jr["lens"]["fov"] = 180.0f;
-
-    int res = kSimResolutions[r.sim_resolution_index];
-    jr["resolution"] = { res * 2, res };
-
-    jr["view"]["elevation"] = 0.0f;
-    jr["view"]["azimuth"] = 0.0f;
-    jr["view"]["roll"] = 0.0f;
-
-    jr["visible"] = "full";
-    jr["background"] = { 0.0f, 0.0f, 0.0f };
-    jr["opacity"] = r.opacity;
-    // CLI 导出路径：intensity_factor 必须烘焙 2^exposure_offset——CLI 没有独立的
-    // display-time EV 概念，导出的 config.json 用 CLI 重跑时亮度需与 GUI 当前视图
-    // 一致（Save Config 语义承诺）。这与 FillLumiceConfig（本文件 ~L1554 附近）
-    // 的 struct 提交路径**故意**不同——那条路径由 display-time 承担 EV，此处不能
-    // 一致化，否则 GUI Run 会双叠加。task-346.1 / doc/ev-pipeline-architecture.md §2.4。
-    jr["intensity_factor"] = std::pow(2.0f, r.exposure_offset);
-    jr["overlap"] = kDualFisheyeOverlap;
-
-    root["render"].push_back(jr);
-  }
-
-  // Raypath color classes (task-342.3 Step 4). Emit only when non-empty so the mono/no-color
-  // case matches the pre-v4.7 JSON shape byte-for-byte (zero-regression contract). Wire shape
-  // matches c_api.cpp's ConfigToJson: object form {"mode": ..., "classes": [...]}. Uses the
-  // same crystal_pool_to_core built in the scattering loop above (no second walk) and the
-  // same ref-level filters (orphan crystal / non-single-atom predicate → SKIP) that
-  // FillColorClasses applies for struct commit, so struct↔JSON emits agree structurally.
-  // z_order is NOT emitted: the wire schema mirrors LUMICE_ColorClass which has no z_order
-  // (it lives in LUMICE_ColorClassDisplay, applied via the separate SetRaypathColors setter);
-  // GUI ColorClassConfig::z_order round-trips only when it matches the physical index (the
-  // default new-class placement), which is the state the plan's roundtrip test constructs.
-  if (!state.raypath_color.empty()) {
-    const char* mode_str = "dominant";
-    if (state.raypath_color_mode == LUMICE_COLOR_MODE_ADDITIVE) {
-      mode_str = "additive";
-    } else if (state.raypath_color_mode == LUMICE_COLOR_MODE_PAINTER) {
-      mode_str = "painter";
-    }
-    json classes = json::array();
-    for (size_t i = 0; i < state.raypath_color.size(); i++) {
-      const auto& cls = state.raypath_color[i];
-      json jc;
-      jc["color"] = { cls.color[0], cls.color[1], cls.color[2] };
-      // Mirror c_api emit: combine/visible/solo only when non-default (any/true/false).
-      if (cls.combine == LUMICE_COLOR_COMBINE_ALL) {
-        jc["combine"] = "all";
-      }
-      if (!cls.visible) {
-        jc["visible"] = false;
-      }
-      if (cls.solo) {
-        jc["solo"] = true;
-      }
-      json match = json::array();
-      for (size_t j = 0; j < cls.match.size(); j++) {
-        const auto& ref = cls.match[j];
-        auto it_c = crystal_pool_to_core.find(ref.crystal_pool_id);
-        if (it_c == crystal_pool_to_core.end()) {
-          GUI_LOG_WARNING(
-              "[FileIO] SerializeCoreConfig: raypath_color[{}].match[{}] references crystal pool {} not in scene; "
-              "skipped.",
-              i, j, ref.crystal_pool_id);
-          continue;
-        }
-        LUMICE_ColorPredicate probe{};
-        if (!FillColorPredicate(&probe, ref)) {
-          GUI_LOG_WARNING(
-              "[FileIO] SerializeCoreConfig: raypath_color[{}].match[{}] predicate not a single atom (\"{}\"); "
-              "skipped.",
-              i, j, ref.predicate_text);
-          continue;
-        }
-        json jr;
-        jr["layer"] = ref.layer_idx;
-        jr["crystal"] = it_c->second;
-        EmitColorPredicateJson(probe, jr);
-        match.push_back(jr);
-      }
-      jc["match"] = match;
-      classes.push_back(jc);
-    }
-    json jrc;
-    jrc["mode"] = mode_str;
-    jrc["classes"] = classes;
-    root["raypath_color"] = jrc;
-  }
-
-  return root.dump(2);
-}
-
-// task-342.3 Step 4: emit a LUMICE_ColorPredicate as the "predicate arm" JSON fields
-// (mirrors c_api.cpp static ColorPredicateToJson; kept in sync via the JSON-vs-struct
-// cross-check test). UNSET emits nothing (match-all wire form: no `type` field). COMPLEX
-// and out-of-range types are unreachable — FillColorPredicate only produces UNSET / RAYPATH /
-// ENTRY_EXIT — but we assert defensively rather than silently emit a mis-typed class.
-static void EmitColorPredicateJson(const LUMICE_ColorPredicate& p, json& out) {
-  switch (p.type) {
-    case LUMICE_FILTER_TYPE_UNSET:
-      // Match-all: no type/raypath/entry_exit fields. Symmetry, if non-default,
-      // is still legal (mirrors c_api.cpp's ColorPredicateFromJson which accepts
-      // UNSET + non-default symmetry as a valid Design-2 state).
-      break;
-    case LUMICE_FILTER_TYPE_RAYPATH: {
-      out["type"] = "raypath";
-      json rp = json::array();
-      for (int k = 0; k < p.raypath_count; k++) {
-        rp.push_back(p.raypath[k]);
-      }
-      out["raypath"] = rp;
-      break;
-    }
-    case LUMICE_FILTER_TYPE_ENTRY_EXIT:
-      out["type"] = "entry_exit";
-      if (p.ee_entry >= 0) {
-        out["entry"] = p.ee_entry;
-      }
-      if (p.ee_exit >= 0) {
-        out["exit"] = p.ee_exit;
-      }
-      if (p.ee_min_len > 1) {
-        out["min_len"] = p.ee_min_len;
-      }
-      if (p.ee_max_len >= 0) {
-        out["max_len"] = p.ee_max_len;
-      }
-      break;
-    default:
-      // FillColorPredicate never emits NONE / DIRECTION / CRYSTAL / COMPLEX — reaching here
-      // means a bug in FillColorPredicate or an out-of-range type. Log loudly; skip the
-      // type/raypath fields so the class stays match-all-shaped rather than half-serialized.
-      GUI_LOG_WARNING(
-          "[FileIO] EmitColorPredicateJson: unexpected LUMICE_ColorPredicate type {}; emitted as match-all.", p.type);
-      break;
-  }
-  // task-356.3 — symmetry is a predicate-level field applying uniformly across
-  // predicate types (matches c_api.cpp ColorPredicateToJson wire form: non-default
-  // emits a "PBD"-subset string; default omitted for backward-compat with pre-v4.9
-  // GUI project files). Literal 1/2/4 kept in sync with c_api.cpp:207
-  // SymmetryBitsToString — no named LUMICE_SYM_* constant in the public header.
-  if (p.symmetry != 0) {
-    std::string sym;
-    if (p.symmetry & 1) {
-      sym += "P";
-    }
-    if (p.symmetry & 2) {
-      sym += "B";
-    }
-    if (p.symmetry & 4) {
-      sym += "D";
-    }
-    out["symmetry"] = sym;
-  }
-}
 
 
-// ========== Fill LUMICE_Config C struct (for LUMICE_CommitConfigStruct) ==========
+// ========== Build a LUMICE_Scene handle (for LUMICE_CommitScene / LUMICE_SceneToJson) ==========
 
 static void FillAxisDist(const AxisDist& src, LUMICE_Distribution* dst) {
   static_assert(static_cast<int>(AxisDistType::kCount) == 5, "Update FillAxisDist when adding new AxisDistType");
@@ -1314,12 +953,13 @@ static void FillAxisDist(const AxisDist& src, LUMICE_Distribution* dst) {
   dst->spread = src.std;
 }
 
-// Helper: fill a LUMICE_CrystalParam from GUI CrystalConfig with a given ID.
+// Helper: fill a LUMICE_CrystalParam from GUI CrystalConfig.
+// `dst->id` is deliberately NOT set: LUMICE_SceneAddCrystal ignores any incoming .id and
+// assigns its own sequential id, returned via out_id (lumice.h "Incremental build" contract).
 // Field-sync guard: see the static_assert(sizeof(CrystalConfig) == 112) near
 // SerializeCrystal above. One copy guards both functions (same TU, identical
 // condition); this comment keeps the pairing obvious to readers.
-static void FillCrystalParam(const CrystalConfig& c, int id, LUMICE_CrystalParam* dst) {
-  dst->id = id;
+static void FillCrystalParam(const CrystalConfig& c, LUMICE_CrystalParam* dst) {
   dst->type = c.type == CrystalType::kPrism ? 0 : 1;
   // GUI shape fields are now first-class ShapeDist; map each straight to LUMICE_Distribution so a
   // GUI-configured randomization actually reaches the simulator (the pre-upgrade NO_RANDOM wrapper
@@ -1338,63 +978,66 @@ static void FillCrystalParam(const CrystalConfig& c, int id, LUMICE_CrystalParam
   FillAxisDist(c.roll, &dst->roll);
 }
 
-// Struct analog of SerializeFilterForCore: expand a GUI FilterConfig into one or more
-// LUMICE_FilterParam entries — a single simple filter, or (for multi-clause / multi-term SoP)
-// N simple filters + 1 complex referencing them via an out->compositions[] slot. Appends to
-// out->filters[] starting at *filter_idx, assigning ids from next_filter_id (a running counter,
-// matching SerializeCoreConfig). Sets *out_main_id to the id a scattering entry should reference
-// (the complex id when expanded, else the sole simple id). All ABI-bounds checks are performed up
-// front, so on overflow the function returns false WITHOUT any partial writes to the counts
-// (*filter_idx / composition_count untouched).
+// Expand a GUI FilterConfig into the scene: one simple filter, or (for a multi-clause /
+// multi-term SoP) N simple filters + 1 complex filter whose composition references them by the
+// ids the Scene handed back. Sets *out_main_id to the id a scattering entry should reference
+// (the complex id when expanded, else the sole simple id). `filter_count` is the running number
+// of filters already added to `scene`; it is read for the capacity pre-check and advanced here.
 //
-// SYNC: this is the C-struct emit twin of SerializeFilterForCore (the JSON emit). Both translate
-// the SAME ExpandSopToClauses(f) output — the clause/term/id ordering is fixed by the shared
-// expander, so the two are structurally identical by construction. The struct-vs-JSON cross-check
-// test (filter_expand_struct_vs_json) is the enforcing gate.
-static bool ExpandFilterToStruct(const FilterConfig& f, int next_filter_id, LUMICE_Config* out, int* filter_idx,
-                                 int* out_main_id) {
+// On overflow / any Add failure this returns false and BuildScene destroys the whole scene, so
+// there is no "no partial writes" contract to maintain any more (the pre-handle struct version
+// had to check every bound up front because its output buffer was the caller's and survived a
+// failed call; a partially-built Scene is simply never observable).
+//
+// The clause / term / filter-capacity pre-checks are kept even though LUMICE_SceneAdd* validates
+// too, because only THIS side knows the GUI's (layer, entry, filter name) locator — the Scene can
+// only report "this one call was rejected". The pre-handle `composition_count >=
+// LUMICE_MAX_CONFIG_COMPLEX` check is gone: it guarded LUMICE_Config's fixed compositions[] pool,
+// and a Scene stores each composition inline in its filter object, so that pool no longer exists.
+// Complex filters stay bounded by LUMICE_MAX_CONFIG_FILTERS (each consumes >= 2 filter slots).
+static bool ExpandFilterToScene(const FilterConfig& f, LUMICE_Scene* scene, int* filter_count, int* out_main_id) {
   const int action = f.action;
   const int symmetry = (f.sym_p ? 1 : 0) | (f.sym_b ? 2 : 0) | (f.sym_d ? 4 : 0);
-  auto set_common = [&](LUMICE_FilterParam* dst, int id, int type) {
-    dst->id = id;
-    dst->type = type;
-    dst->action = action;
-    dst->symmetry = symmetry;
-  };
-  auto fill_term = [&](LUMICE_FilterParam* dst, int id, const SimpleTermDesc& t) {
+  // Build one term's LUMICE_FilterParam. `.id` is left zero on purpose — LUMICE_SceneAddFilter
+  // ignores it and assigns the id it returns via out_id.
+  auto make_term = [&](const SimpleTermDesc& t) {
+    LUMICE_FilterParam dst{};
+    dst.action = action;
+    dst.symmetry = symmetry;
     if (t.is_raypath) {
-      set_common(dst, id, LUMICE_FILTER_TYPE_RAYPATH);
-      dst->raypath_count =
+      dst.type = LUMICE_FILTER_TYPE_RAYPATH;
+      dst.raypath_count =
           static_cast<int>(std::min(t.raypath.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_RAYPATH_LEN)));
-      for (int k = 0; k < dst->raypath_count; k++) {
-        dst->raypath[k] = t.raypath[k];
+      for (int k = 0; k < dst.raypath_count; k++) {
+        dst.raypath[k] = t.raypath[k];
       }
     } else {
-      set_common(dst, id, LUMICE_FILTER_TYPE_ENTRY_EXIT);
-      dst->ee_entry = (t.entry == kEEWildcardSentinel) ? -1 : ClampIdValue(t.entry, "entry");
-      dst->ee_exit = (t.exit == kEEWildcardSentinel) ? -1 : ClampIdValue(t.exit, "exit");
-      dst->ee_min_len = t.min_len;
-      dst->ee_max_len = t.max_len;
+      dst.type = LUMICE_FILTER_TYPE_ENTRY_EXIT;
+      dst.ee_entry = (t.entry == kEEWildcardSentinel) ? -1 : ClampIdValue(t.entry, "entry");
+      dst.ee_exit = (t.exit == kEEWildcardSentinel) ? -1 : ClampIdValue(t.exit, "exit");
+      dst.ee_min_len = t.min_len;
+      dst.ee_max_len = t.max_len;
     }
+    return dst;
   };
 
   const ExpandedFilter ef = ExpandSopToClauses(f);
   if (ef.overflow) {
-    return false;  // exceeds ABI clause/term caps — graceful drop (no partial write)
+    return false;  // exceeds ABI clause/term caps — graceful drop
   }
 
   if (IsDegenerateSingleTerm(ef)) {
-    if (*filter_idx >= LUMICE_MAX_CONFIG_FILTERS) {
+    if (*filter_count >= LUMICE_MAX_CONFIG_FILTERS) {
       return false;
     }
-    fill_term(&out->filters[(*filter_idx)++], next_filter_id, ef.clauses[0][0]);
-    *out_main_id = next_filter_id;
+    const LUMICE_FilterParam param = make_term(ef.clauses[0][0]);
+    if (LUMICE_SceneAddFilter(scene, &param, out_main_id) != LUMICE_OK) {
+      return false;
+    }
+    (*filter_count)++;
     return true;
   }
 
-  // ABI bounds pre-check — every limit is checked BEFORE any write so an overflow
-  // returns false with no partial mutation (the "no partial writes on overflow"
-  // contract FillLumiceConfig relies on for graceful degradation).
   int total_terms = 0;
   for (const auto& clause : ef.clauses) {
     if (static_cast<int>(clause.size()) > LUMICE_MAX_CONFIG_TERMS) {
@@ -1403,59 +1046,53 @@ static bool ExpandFilterToStruct(const FilterConfig& f, int next_filter_id, LUMI
     total_terms += static_cast<int>(clause.size());
   }
   if (static_cast<int>(ef.clauses.size()) > LUMICE_MAX_CONFIG_CLAUSES ||
-      out->composition_count >= LUMICE_MAX_CONFIG_COMPLEX ||
-      *filter_idx + total_terms + 1 > LUMICE_MAX_CONFIG_FILTERS) {
+      *filter_count + total_terms + 1 > LUMICE_MAX_CONFIG_FILTERS) {
     return false;
   }
 
-  // v4.9 (task-host-abi-cpu-caps): compose the (term_counts, term_ids) triple on the stack
-  // first, then commit via LUMICE_CompositionSetClauses in one shot — mirrors the pattern
-  // used on the JsonToComplexComposition side. filter_idx / composition_count are advanced
-  // after Set succeeds; on Set failure (OOM) the caller sees "no partial write" (composition
-  // slot untouched, filters[] untouched, counters unchanged).
+  // Add the per-term simple filters first (clause order, term order within clause), collecting
+  // the ids the Scene assigned. The composition then references THOSE ids rather than ids this
+  // function predicts — the pre-handle version had to compute `next_filter_id + running` because
+  // it owned the id space; the Scene owns it now (lumice.h: "Cross-referencing fields the caller
+  // constructs later ... MUST use these returned out_id values").
   const int clause_n = static_cast<int>(ef.clauses.size());
   std::vector<int> term_counts_vec;
   std::vector<int> term_ids_vec;
   term_counts_vec.reserve(static_cast<size_t>(clause_n));
   term_ids_vec.reserve(static_cast<size_t>(total_terms));
-  int pending_filter_idx = *filter_idx;
-  int running = 0;
-  for (size_t cl = 0; cl < ef.clauses.size(); ++cl) {
-    const auto& clause = ef.clauses[cl];
+  for (const auto& clause : ef.clauses) {
     term_counts_vec.push_back(static_cast<int>(clause.size()));
-    for (size_t tt = 0; tt < clause.size(); ++tt) {
-      term_ids_vec.push_back(next_filter_id + running++);
+    for (const auto& term : clause) {
+      const LUMICE_FilterParam param = make_term(term);
+      int term_id = -1;
+      if (LUMICE_SceneAddFilter(scene, &param, &term_id) != LUMICE_OK) {
+        return false;
+      }
+      (*filter_count)++;
+      term_ids_vec.push_back(term_id);
     }
   }
-  const int comp_idx = out->composition_count;
-  LUMICE_ComplexComposition* comp = &out->compositions[comp_idx];
-  if (LUMICE_CompositionSetClauses(comp, clause_n, term_counts_vec.data(), term_ids_vec.data()) != LUMICE_OK) {
+
+  // Compose the (clause_count, term_counts, term_ids) triple, hand it to the Scene, release it
+  // immediately: LUMICE_SceneAddComplexFilter deep-copies the composition before returning, so
+  // it must not outlive this call (and leaks if never released).
+  LUMICE_ComplexComposition comp{};
+  if (LUMICE_CompositionSetClauses(&comp, clause_n, term_counts_vec.data(), term_ids_vec.data()) != LUMICE_OK) {
     return false;
   }
-  // Set succeeded — now emit the per-term simple filters and the complex filter itself.
-  int emit_running = 0;
-  for (size_t cl = 0; cl < ef.clauses.size(); ++cl) {
-    const auto& clause = ef.clauses[cl];
-    for (size_t tt = 0; tt < clause.size(); ++tt) {
-      int cid = next_filter_id + emit_running++;
-      fill_term(&out->filters[pending_filter_idx++], cid, clause[tt]);
-    }
+  LUMICE_FilterParam complex_param{};
+  complex_param.action = action;
+  complex_param.symmetry = symmetry;
+  complex_param.type = LUMICE_FILTER_TYPE_COMPLEX;  // ignored by AddComplexFilter; set for clarity
+  const LUMICE_ErrorCode err = LUMICE_SceneAddComplexFilter(scene, &complex_param, &comp, out_main_id);
+  LUMICE_CompositionReleaseClauses(&comp);
+  if (err != LUMICE_OK) {
+    return false;
   }
-  int complex_id = next_filter_id + emit_running;  // == next_filter_id + total_terms
-  LUMICE_FilterParam* cdst = &out->filters[pending_filter_idx++];
-  set_common(cdst, complex_id, LUMICE_FILTER_TYPE_COMPLEX);
-  cdst->composition_index = comp_idx;
-  *filter_idx = pending_filter_idx;
-  out->composition_count = comp_idx + 1;
-  *out_main_id = complex_id;
+  (*filter_count)++;
   return true;
 }
 
-// Returns false if a filter expansion exceeded the ABI bounds (composition pool / clause /
-// filter capacity); the caller must then keep the previously committed state (graceful
-// degradation), not commit `out`. Crystals still use the P+1 pool-id scheme; filters use a
-// running id counter (matching SerializeCoreConfig) because one GUI filter may expand into
-// N simple + 1 complex.
 std::string FormatOverflowLocator(const FilterOverflowInfo& overflow) {
   // 1-based Layer/Entry to match the panel header convention (panels.cpp "Layer %d").
   const std::string pos =
@@ -1480,7 +1117,7 @@ std::string FormatColorOverflowLocator(const ColorClassOverflowInfo& overflow) {
 // Non-empty text is parsed via raypath_segments::ParseSummandText; only single-Factor and
 // single-alternative results are accepted (LUMICE_ColorPredicate is a single-atom carrier per
 // Design 2). If the text does not resolve to exactly one atom, returns false — caller
-// (FillColorClasses below) treats it as "skip this ref" (mirrors the plan §3 decision:
+// (AddColorClasses below) treats it as "skip this ref" (mirrors the plan §3 decision:
 // arbitrary AND/multi-alt goes through combine:all across refs, not inside one predicate).
 static bool FillColorPredicate(LUMICE_ColorPredicate* dst, const ColorClassRefConfig& ref) {
   *dst = LUMICE_ColorPredicate{};
@@ -1526,16 +1163,21 @@ static bool FillColorPredicate(LUMICE_ColorPredicate* dst, const ColorClassRefCo
   return true;
 }
 
-// task-342.3 Step 3: walk state.raypath_color and populate out->raypath_color[]. Returns
-// false on ABI-bounds overflow (class count or per-class ref count over cap) and reports
-// the offending index via `color_overflow` (when non-null); on success writes counts and
-// returns true. Orphan refs (crystal_pool_id not in `crystal_pool_to_core` because the
-// referenced crystal isn't in any active scattering entry) are SKIPPED at the ref level
-// (not the class) with a warning log — mirrors the plan §3 graceful degradation for
-// referenced placements the user removed after configuring the color class. Bad predicate
-// text (multi-factor / multi-alt) is likewise skipped at the ref level.
-static bool FillColorClasses(const GuiState& state, const std::map<int, int>& crystal_pool_to_core, LUMICE_Config* out,
-                             ColorClassOverflowInfo* color_overflow) {
+// Walk state.raypath_color and add one LUMICE_ColorClass per class to
+// `scene`. Returns false on ABI-bounds overflow (class count or per-class ref count over cap)
+// and reports the offending index via `color_overflow` (when non-null). Orphan refs
+// (crystal_pool_id not in `crystal_pool_to_core` because the referenced crystal isn't in any
+// active scattering entry) are SKIPPED at the ref level (not the class) with a warning log —
+// mirrors the plan §3 graceful degradation for referenced placements the user removed after
+// configuring the color class. Bad predicate text (multi-factor / multi-alt) is likewise
+// skipped at the ref level.
+//
+// The pre-handle version had to call LUMICE_ConfigCreateColorClasses first (LUMICE_Config's
+// raypath_color is an owning heap array the caller then had to Release). LUMICE_SceneAddColorClass
+// deep-copies a stack temporary instead, so that whole allocate-then-fill-in-place ownership
+// dance is gone.
+static bool AddColorClasses(const GuiState& state, const std::map<int, int>& crystal_pool_to_core, LUMICE_Scene* scene,
+                            ColorClassOverflowInfo* color_overflow) {
   const int n_classes = static_cast<int>(state.raypath_color.size());
   if (n_classes > LUMICE_MAX_CONFIG_COLOR_CLASSES) {
     if (color_overflow != nullptr) {
@@ -1548,7 +1190,8 @@ static bool FillColorClasses(const GuiState& state, const std::map<int, int>& cr
   // ABI-bounds pre-check on per-class ref counts (COUNTING orphan/invalid refs would be
   // wrong — those will be skipped; count only the surviving refs to compare with the cap).
   // Two-pass approach: first count surviving refs per class, reject any class over cap;
-  // then emit. Same "no partial writes on overflow" contract as ExpandFilterToStruct.
+  // then emit. Rejecting BEFORE the first Add keeps the overflow report (which class, which
+  // ref) exact — the Scene could only tell us "this Add was rejected".
   std::vector<std::vector<int>> keep_refs(n_classes);  // per-class list of surviving ref indices
   for (int i = 0; i < n_classes; i++) {
     const auto& cls = state.raypath_color[i];
@@ -1577,25 +1220,19 @@ static bool FillColorClasses(const GuiState& state, const std::map<int, int>& cr
       return false;
     }
   }
-  // Emit. task-344 (BREAKING v4.8): raypath_color is a heap-allocated pointer owned by
-  // `out`. Allocate on the caller's behalf via LUMICE_ConfigCreateColorClasses (implicit
-  // allocation contract — the caller of FillLumiceConfig cannot know n_classes in
-  // advance). Caller MUST release via LUMICE_ConfigReleaseColorClasses (see
-  // lumice::ConfigOwningGuard in lumice_config_scope.hpp).
-  LUMICE_ColorClass* dst_array = nullptr;
-  if (n_classes > 0) {
-    dst_array = LUMICE_ConfigCreateColorClasses(out, n_classes);
-    if (dst_array == nullptr) {
-      // n_classes bounded above by LUMICE_MAX_CONFIG_COLOR_CLASSES; only OOM reaches here.
-      return false;
-    }
-  } else {
-    // Zero classes: keep raypath_color nullptr / count 0 (mono-only state).
-    out->raypath_color_count = 0;
+  if (n_classes == 0) {
+    // Mono-only state: touch nothing. Neither SetColorMode nor AddColorClass may run, or the
+    // scene grows a raypath_color key and stops being byte-identical to the pre-v4.7 wire form
+    // (the same "count == 0 -> omit" isomorphism LUMICE_ConfigToJson keeps).
+    return true;
+  }
+  // raypath_color_mode: pass through verbatim; the Scene validates the enum range.
+  if (LUMICE_SceneSetColorMode(scene, state.raypath_color_mode) != LUMICE_OK) {
+    return false;
   }
   for (int i = 0; i < n_classes; i++) {
     const auto& cls = state.raypath_color[i];
-    LUMICE_ColorClass& dst = dst_array[i];
+    LUMICE_ColorClass dst{};
     dst.color[0] = cls.color[0];
     dst.color[1] = cls.color[1];
     dst.color[2] = cls.color[2];
@@ -1612,37 +1249,41 @@ static bool FillColorClasses(const GuiState& state, const std::map<int, int>& cr
       (void)FillColorPredicate(&dref.predicate, ref);
     }
     dst.match_count = m;
+    int class_id = -1;
+    if (LUMICE_SceneAddColorClass(scene, &dst, &class_id) != LUMICE_OK) {
+      return false;
+    }
   }
-  // raypath_color_mode: pass through verbatim; c_api emit validates the enum range.
-  out->raypath_color_mode = state.raypath_color_mode;
   return true;
 }
 
-bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out, FilterOverflowInfo* overflow,
-                      ColorClassOverflowInfo* color_overflow) {
-  // v4.8: raypath_color is an owning heap pointer. If `out` was reused across two Fill
-  // calls, memset would clobber the pointer without freeing it — release first so the
-  // memset that follows sees a defensibly-null field. Release is null-safe / idempotent.
-  LUMICE_ConfigReleaseColorClasses(out);
-  // v4.9 (task-host-abi-cpu-caps): compositions[i].term_ids/term_counts are also owning
-  // heap pointers — same memset-would-leak hazard as raypath_color; release first.
-  LUMICE_ConfigReleaseCompositions(out);
-  std::memset(out, 0, sizeof(LUMICE_Config));
+ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInfo* overflow,
+                    ColorClassOverflowInfo* color_overflow) {
+  ScenePtr scene(LUMICE_SceneCreate());
+  if (!scene) {
+    GUI_LOG_WARNING("[FileIO] BuildScene: LUMICE_SceneCreate failed");
+    return nullptr;
+  }
 
-  // ID-pool model: walk entries, dedupe by pool id, emit one C crystal per reachable pool
-  // slot (P -> C API id P+1). Filters map pool_id -> main_id (the id a scattering entry
-  // references; the complex id for an expanded multi-segment/multi-value filter).
-  std::map<int, int> crystal_pool_to_core;  // pool_id -> C api id (1-based)
+  // ID-pool model: walk entries, dedupe by pool id, emit one scene crystal per reachable pool
+  // slot. Filters map pool_id -> main_id (the id a scattering entry references; the complex id
+  // for an expanded multi-segment/multi-value filter). Both maps now store the id the SCENE
+  // assigned (its out_id) rather than one the GUI computed: the pre-handle code derived crystal
+  // ids as `pool_id + 1` and ran its own filter-id counter purely to fill LUMICE_Config's arrays
+  // consistently. The Scene owns id assignment (lumice.h: "The Scene assigns this id itself and
+  // IGNORES any `.id` field on the incoming POD"), so those two counters are gone. Ids stay
+  // insertion-ordered either way, so the dedupe walk below is unchanged.
+  std::map<int, int> crystal_pool_to_core;  // pool_id -> scene crystal id
   std::map<int, int> filter_pool_to_core;   // pool_id -> main_id
-  int crystal_idx = 0;
-  int filter_idx = 0;
-  int next_filter_id = 1;  // running C-API filter id counter (mirrors SerializeCoreConfig)
+  int filter_count = 0;                     // filters added so far (ABI capacity pre-check)
 
-  out->scatter_count =
+  const int layer_n =
       static_cast<int>(std::min(state.layers.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_SCATTER_LAYERS)));
-  for (int i = 0; i < out->scatter_count; i++) {
+  for (int i = 0; i < layer_n; i++) {
     const auto& layer = state.layers[i];
-    auto& dst_layer = out->scattering[i];
+    // One layer is assembled on the stack exactly as before, then handed to the Scene in a
+    // single Add (which deep-copies it) instead of being written into out->scattering[i].
+    LUMICE_ScatterLayer dst_layer{};
     dst_layer.probability = layer.probability;
     dst_layer.entry_count =
         static_cast<int>(std::min(layer.entries.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_SCATTER_ENTRIES)));
@@ -1652,14 +1293,18 @@ bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out, FilterOverflowI
       int cid;
       auto it_c = crystal_pool_to_core.find(entry.crystal_id);
       if (it_c == crystal_pool_to_core.end()) {
-        if (crystal_idx >= LUMICE_MAX_CONFIG_CRYSTALS) {
-          // C buffer full — truncate entries from this point.
+        if (static_cast<int>(crystal_pool_to_core.size()) >= LUMICE_MAX_CONFIG_CRYSTALS) {
+          // Scene crystal capacity reached — truncate entries from this point.
           dst_layer.entry_count = k;
           break;
         }
-        cid = entry.crystal_id + 1;  // 0-based pool → 1-based C API
+        LUMICE_CrystalParam param{};
+        FillCrystalParam(state.crystals[entry.crystal_id], &param);
+        if (LUMICE_SceneAddCrystal(scene.get(), &param, &cid) != LUMICE_OK) {
+          GUI_LOG_WARNING("[FileIO] BuildScene: LUMICE_SceneAddCrystal rejected crystal pool {}", entry.crystal_id);
+          return nullptr;
+        }
         crystal_pool_to_core.emplace(entry.crystal_id, cid);
-        FillCrystalParam(state.crystals[entry.crystal_id], cid, &out->crystals[crystal_idx++]);
       } else {
         cid = it_c->second;
       }
@@ -1673,16 +1318,14 @@ bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out, FilterOverflowI
         if (it_f != filter_pool_to_core.end()) {
           fid = it_f->second;
         } else {
-          int before_idx = filter_idx;
           int main_id = -1;
-          if (ExpandFilterToStruct(state.filters[fpool], next_filter_id, out, &filter_idx, &main_id)) {
-            next_filter_id += (filter_idx - before_idx);  // ids consumed == filters appended
+          if (ExpandFilterToScene(state.filters[fpool], scene.get(), &filter_count, &main_id)) {
             filter_pool_to_core.emplace(fpool, main_id);
             fid = main_id;
           } else {
-            // Exceeded ABI bounds (composition pool / clause / filter capacity). Bail out
-            // immediately with false so the caller keeps the old committed state rather than
-            // commit a truncated config (no point finishing the rest of `out`, it is discarded).
+            // Exceeded ABI bounds (clause / term / filter capacity). Bail out immediately so the
+            // caller keeps the old committed state rather than commit a truncated config — the
+            // half-built scene dies with the ScenePtr, so there is nothing to unwind.
             // Capture the current (layer, entry, filter name) so the caller can locate the
             // offending filter. Only the FIRST reference is reported — if the same filter pool
             // id is used at multiple sites, later ones are not surfaced (they share content).
@@ -1691,7 +1334,7 @@ bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out, FilterOverflowI
               overflow->entry_index = k;
               overflow->filter_name = state.filters[fpool].name;
             }
-            return false;
+            return nullptr;
           }
         }
         dst_layer.entries[k].filter_id = fid;
@@ -1699,82 +1342,99 @@ bool FillLumiceConfig(const GuiState& state, LUMICE_Config* out, FilterOverflowI
         dst_layer.entries[k].filter_id = -1;
       }
     }
+    int layer_id = -1;
+    if (LUMICE_SceneAddScatterLayer(scene.get(), &dst_layer, &layer_id) != LUMICE_OK) {
+      GUI_LOG_WARNING("[FileIO] BuildScene: LUMICE_SceneAddScatterLayer rejected layer {}", i);
+      return nullptr;
+    }
   }
-  out->crystal_count = crystal_idx;
-  out->filter_count = filter_idx;
 
-  // Renderer — single renderer always emitted with fixed id=1.
+  // Renderer — single renderer always emitted.
   // NOTE: GUI enforces single renderer; if multi-renderer support is added, revisit this
-  // fixed id and count=1.
-  out->renderer_count = 1;
+  // loop-of-one structure.
   {
     const auto& r = state.renderer;
-    auto& dst = out->renderers[0];
-    dst.id = 1;
+    LUMICE_RenderParam dst{};
     int res = kSimResolutions[r.sim_resolution_index];
     dst.resolution_w = res * 2;
     dst.resolution_h = res;
     dst.opacity = r.opacity;
-    // task-346.1: GUI Run 路径的 intensity_factor 必须恒为 RenderConfig::intensity_factor_
-    // 的默认值（config/render_config.hpp 里的 1.0f；这里用字面量绑定，因 GUI API
-    // 边界禁止 src/gui/ 直接 include core/config 头——若未来该默认值变更需同步此处）。
-    // 语义：GUI 的手动 + 自动 EV 完全由 display-time 路径承担：mono 走 shader uniform
-    // （app.cpp RefreshPreviewParams），composite 走 LUMICE_SetCompositeExposure
-    // （每帧从 RenderPreviewPanel 推送，作为 display_exposure_scale 参与 compositor
-    // 的单一共享曝光标量 s = ExposureScale() × display_exposure_scale）。
-    // 若在此烘焙 2^exposure_offset，则在 re-run 且 EV≠0 时会与 display-time 推送
-    // 双叠加 → 手动 EV 被计算两次。
-    // ⚠️ 注意：CLI/config 导出路径（SerializeCoreConfig，本文件 ~L1040 附近）
-    // 反而必须写入 2^exposure_offset，因为 CLI 没有独立的 display-time EV 概念——
-    // 同一字段两种合法语义、互不影响，勿一致化。
-    // 详见 doc/ev-pipeline-architecture.md §2.4/§4。
-    dst.intensity_factor = 1.0f;
+    // doc/ev-pipeline-architecture.md §2.4/§4 — the ONE field where the two
+    // SceneIntent arms differ, and the reason SceneIntent exists at all:
+    //
+    // kSimCommit (GUI Run): intensity_factor must stay at RenderConfig::intensity_factor_'s
+    // default (config/render_config.hpp's 1.0f; bound as a literal here because the GUI API
+    // boundary forbids src/gui/ from including core/config headers — if that default ever
+    // changes, sync this). GUI manual + auto EV are carried entirely by the display-time path:
+    // mono via a shader uniform (app.cpp RefreshPreviewParams), composite via
+    // LUMICE_SetCompositeExposure (pushed every frame from RenderPreviewPanel as
+    // display_exposure_scale, feeding the compositor's single shared exposure scalar
+    // s = ExposureScale() × display_exposure_scale). Baking 2^exposure_offset here would
+    // double-apply manual EV on any re-run with EV != 0.
+    //
+    // kJsonExport (Save Config JSON): must bake 2^exposure_offset, because the CLI has no
+    // display-time EV concept — re-rendering the exported config has to reproduce the
+    // brightness the user is looking at (the Save Config semantic promise).
+    dst.intensity_factor = intent == SceneIntent::kJsonExport ? std::pow(2.0f, r.exposure_offset) : 1.0f;
     dst.overlap = kDualFisheyeOverlap;
+    int renderer_id = -1;
+    if (LUMICE_SceneAddRenderer(scene.get(), &dst, &renderer_id) != LUMICE_OK) {
+      GUI_LOG_WARNING("[FileIO] BuildScene: LUMICE_SceneAddRenderer failed");
+      return nullptr;
+    }
   }
 
-  // Scene: light source
-  out->sun_altitude = state.sun.altitude;
-  out->sun_azimuth = 0.0f;
-  out->sun_diameter = state.sun.diameter;
-  if (state.sun.spectrum_index == kCustomSpectrumIndex && !state.sun.custom_spectrum.empty()) {
-    // Discrete custom spectrum → C struct array carrier (spectrum_count > 0 overrides string).
+  // Scene: light source. sun_azimuth is always 0 (the GUI exposes no azimuth control).
+  const char* spectrum_name = "D65";
+  const bool use_custom_spectrum =
+      state.sun.spectrum_index == kCustomSpectrumIndex && !state.sun.custom_spectrum.empty();
+  if (!use_custom_spectrum && state.sun.spectrum_index >= 0 && state.sun.spectrum_index < kSpectrumCount) {
+    spectrum_name = kSpectrumNames[state.sun.spectrum_index];
+  }
+  if (LUMICE_SceneSetLightSource(scene.get(), state.sun.altitude, 0.0f, state.sun.diameter, spectrum_name) !=
+      LUMICE_OK) {
+    GUI_LOG_WARNING("[FileIO] BuildScene: LUMICE_SceneSetLightSource failed");
+    return nullptr;
+  }
+  if (use_custom_spectrum) {
+    // Discrete custom spectrum overrides the string (same rule as LUMICE_Config's
+    // spectrum_count > 0). SetCustomSpectrum is only called in this branch: calling it with
+    // count == 0 would CLEAR the spectrum back to "D65" and clobber the preset name above.
     int n = std::min(static_cast<int>(state.sun.custom_spectrum.size()), kSpectrumHardMax);
     if (static_cast<int>(state.sun.custom_spectrum.size()) > kSpectrumHardMax) {
       GUI_LOG_WARNING("[FileIO] custom spectrum truncated from {} to {} entries", state.sun.custom_spectrum.size(),
                       kSpectrumHardMax);
     }
-    out->spectrum_count = n;
+    std::vector<LUMICE_SpectrumEntry> entries(static_cast<size_t>(n));
     for (int i = 0; i < n; i++) {
-      out->spectrum_entries[i].wavelength = state.sun.custom_spectrum[i].wavelength;
-      out->spectrum_entries[i].weight = state.sun.custom_spectrum[i].weight;
+      entries[i].wavelength = state.sun.custom_spectrum[i].wavelength;
+      entries[i].weight = state.sun.custom_spectrum[i].weight;
     }
-    out->spectrum = "D65";  // fallback string kept but ignored by c_api when spectrum_count > 0
-  } else {
-    out->spectrum_count = 0;
-    if (state.sun.spectrum_index >= 0 && state.sun.spectrum_index < kSpectrumCount) {
-      out->spectrum = kSpectrumNames[state.sun.spectrum_index];
-    } else {
-      out->spectrum = "D65";
+    if (LUMICE_SceneSetCustomSpectrum(scene.get(), entries.data(), n) != LUMICE_OK) {
+      GUI_LOG_WARNING("[FileIO] BuildScene: LUMICE_SceneSetCustomSpectrum failed");
+      return nullptr;
     }
   }
 
-  // Scene: simulation
-  out->infinite = state.sim.infinite ? 1 : 0;
-  out->ray_num = static_cast<LUMICE_RayCount>(state.sim.ray_num_millions * 1e6);
-  out->max_hits = state.sim.max_hits;
+  // Scene: simulation. geom_clock is passed 0 explicitly — the GUI has never set it (the
+  // pre-handle path left the memset-0 field untouched) and exposes no control for it.
+  if (LUMICE_SceneSetSimParams(scene.get(), state.sim.infinite ? 1 : 0,
+                               static_cast<LUMICE_RayCount>(state.sim.ray_num_millions * 1e6), state.sim.max_hits,
+                               /*geom_clock=*/0) != LUMICE_OK) {
+    GUI_LOG_WARNING("[FileIO] BuildScene: LUMICE_SceneSetSimParams failed");
+    return nullptr;
+  }
 
   // task-342.3 Step 3: raypath color classes. Reuses `crystal_pool_to_core` built above so
-  // ref.crystal_pool_id (GUI pool index) resolves to the same 1-based C-API crystal id the
-  // scattering entries reference. Orphan/invalid refs are skipped at ref level; class-cap /
-  // ref-cap overflow returns false with color_overflow populated (no partial writes: on
-  // failure the caller must not commit `out`, same contract as the filter branch above).
-  if (!FillColorClasses(state, crystal_pool_to_core, out, color_overflow)) {
-    return false;
+  // ref.crystal_pool_id (GUI pool index) resolves to the same scene crystal id the scattering
+  // entries reference. Orphan/invalid refs are skipped at ref level; class-cap / ref-cap
+  // overflow returns nullptr with color_overflow populated.
+  if (!AddColorClasses(state, crystal_pool_to_core, scene.get(), color_overflow)) {
+    return nullptr;
   }
 
-  return true;
+  return scene;
 }
-
 
 // ========== Core JSON Deserialization (for JSON import) ==========
 // Handles Core config JSON format: root has "crystal"/"filter"/"scene"/"render" keys.
@@ -1816,8 +1476,8 @@ static void DecodeEELengthFromJson(const json& jf, int& length_mode, int& min_le
 }
 
 // Decode a core-JSON EE "entry"/"exit" face field into the GUI's text form.
-// Wildcard is encoded by field-absence (SerializeFilterForCore omits the field
-// for kEEWildcardSentinel) — so absent/null → empty text. A defensive negative
+// Wildcard is encoded by field-absence (the core emitter omits entry/exit when the
+// LUMICE_FilterParam field is negative) — so absent/null → empty text. A defensive negative
 // (legacy/hand-written explicit sentinel) is also treated as wildcard; any
 // non-negative integer (including face 0) is a real face → its decimal text.
 // Shared by the simple-filter parse branch and TryReconstructComplexFilter so
@@ -1830,7 +1490,7 @@ static std::string DecodeEEFaceFromJson(const json& jf, const char* key) {
   return (v < 0) ? std::string{} : std::to_string(v);
 }
 
-// Reverse of SerializeFilterForCore — reconstruct a GUI FilterConfig from a core
+// Reverse of ExpandFilterToScene — reconstruct a GUI FilterConfig from a core
 // "complex" filter. The sum-of-products model (task-serialization-bidirectional)
 // makes the GUI able to express a general OR-of-(AND-of-terms): each composition
 // product (clause) becomes one SummandText, and each term id in the product
@@ -1866,8 +1526,15 @@ static bool TryReconstructComplexFilter(const json& jf, const std::map<int, json
   f.sym_d = (sym.find('D') != std::string::npos);
 
   SumOfProducts sop;
-  for (const auto& product : jf["composition"]) {  // product = clause = AND of term ids
-    if (!product.is_array() || product.empty()) {
+  for (const auto& raw_product : jf["composition"]) {  // product = clause = AND of term ids
+    // The core wire form writes a SINGLE-term clause as a bare id and a multi-term clause as an
+    // array of ids (core filter_config.cpp to_json / c_api.cpp CompositionArrayToJson); both are
+    // legal and mean the same thing. Normalize to the array form before walking terms. Until
+    // 399.5 the GUI read back only its own emitter's output, which always wrote the array form,
+    // so the bare form was silently unsupported — a config written by the CLI/core (or now by
+    // the GUI's own export, which goes through the core encoder) failed to reconstruct.
+    const json product = raw_product.is_array() ? raw_product : json::array({ raw_product });
+    if (product.empty()) {
       fail_reason = "complex filter id=" + std::to_string(complex_id) + ": composition clause is not a non-empty array";
       return false;
     }
