@@ -49,6 +49,11 @@ using test_support::Ac1Verdict;
 using test_support::Ac2Verdict;
 using test_support::EntrySamples;
 
+// Double-precision pi, local to this file. `M_PI` is not portable (MSVC leaves it
+// undefined unless `_USE_MATH_DEFINES` is set before <cmath>), and `math::kPi` is
+// float — too coarse for the 1e-12/1e-9 geometric tolerances asserted below.
+constexpr double kPiDouble = 3.14159265358979323846;
+
 // ---- Statistical parameters ---------------------------------------------------
 // Sample count per (fixture, direction). Large enough that even faces receiving
 // a few-percent share get thousands of hits (AC2 needs a stable per-face moment
@@ -234,7 +239,7 @@ TEST(IncidenceSamplingOracle, OracleMathSelfProof) {
   {
     double hex[18];
     for (int k = 0; k < 6; k++) {
-      const double a = static_cast<double>(k) * (M_PI / 3.0);
+      const double a = static_cast<double>(k) * (kPiDouble / 3.0);
       hex[k * 3 + 0] = std::cos(a);
       hex[k * 3 + 1] = std::sin(a);
       hex[k * 3 + 2] = 0.0;
