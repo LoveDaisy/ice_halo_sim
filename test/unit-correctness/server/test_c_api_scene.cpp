@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <cstring>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
@@ -821,11 +822,59 @@ TEST(SceneSerializeNegative, ToJsonNullScene) {
   EXPECT_EQ(LUMICE_SceneToJson(nullptr, nullptr, 0, &len), LUMICE_ERR_NULL_ARG);
 }
 
+// Mirrors StructFilterParse.ConfigToJsonBufferTruncationContract (test_c_api.cpp) for the Scene
+// entry point: same snprintf-style caller-buffer contract, same highest-risk-path rationale
+// (plan Step 2 required this test).
+TEST(SceneSerializeNegative, ToJsonBufferTruncationContract) {
+  SceneGuard g;
+  int id = -1;
+  const LUMICE_CrystalParam cr = MakePrismParam(1.0f);
+  ASSERT_EQ(LUMICE_SceneAddCrystal(g.get(), &cr, &id), LUMICE_OK);
+  ASSERT_EQ(LUMICE_SceneSetLightSource(g.get(), 20.0f, 120.0f, 0.5f, "D65"), LUMICE_OK);
+
+  // Query length only (out_buf == NULL, buf_size == 0).
+  size_t full_len = 0;
+  EXPECT_EQ(LUMICE_SceneToJson(g.get(), nullptr, 0, &full_len), LUMICE_OK);
+  EXPECT_GT(full_len, size_t{ 8 });  // full JSON is well over 8 bytes
+
+  // Full (untruncated) reference output.
+  std::string full(full_len + 1, '\0');
+  ASSERT_EQ(LUMICE_SceneToJson(g.get(), full.data(), full.size(), nullptr), LUMICE_OK);
+
+  // Truncate into a small buffer.
+  char small[8];
+  std::memset(small, 'X', sizeof(small));
+  size_t len = 0;
+  EXPECT_EQ(LUMICE_SceneToJson(g.get(), small, sizeof(small), &len), LUMICE_OK);
+  EXPECT_EQ(len, full_len);                          // out_len = FULL length, not written count
+  EXPECT_GE(len, sizeof(small));                     // out_len >= buf_size signals truncation
+  EXPECT_EQ(small[sizeof(small) - 1], '\0');         // always NUL-terminated
+  EXPECT_EQ(std::strlen(small), sizeof(small) - 1);  // wrote exactly buf_size-1 chars
+  EXPECT_EQ(std::string(small, sizeof(small) - 1),   // truncated prefix matches full prefix
+            std::string(full.data(), sizeof(small) - 1));
+}
+
+// SetLightSource takes an unvalidated const char* spectrum; nlohmann::json accepts the raw bytes
+// at assignment time and only validates UTF-8 at dump() time. This exercises the catch path in
+// LUMICE_SceneToJson (c_api.cpp:966-971) that must not let the exception cross the C ABI boundary.
+TEST(SceneSerializeNegative, ToJsonInvalidUtf8SpectrumReturnsInvalidConfig) {
+  SceneGuard g;
+  const char invalid_utf8[] = { '\xFF', '\xFE', '\0' };  // not a valid UTF-8 byte sequence
+  ASSERT_EQ(LUMICE_SceneSetLightSource(g.get(), 20.0f, 120.0f, 0.5f, invalid_utf8), LUMICE_OK);
+
+  size_t len = 12345;
+  EXPECT_EQ(LUMICE_SceneToJson(g.get(), nullptr, 0, &len), LUMICE_ERR_INVALID_CONFIG);
+}
+
 TEST(SceneSerializeNegative, FromJsonNullArgs) {
   LUMICE_Scene* scene = Sentinel();
   EXPECT_EQ(LUMICE_SceneFromJson(nullptr, &scene), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(scene, nullptr) << "*out_scene must be NULL on failure, even for the NULL json_str path";
   EXPECT_EQ(LUMICE_SceneFromJson("{}", nullptr), LUMICE_ERR_NULL_ARG);
+
+  scene = Sentinel();
   EXPECT_EQ(LUMICE_SceneFromJsonFile(nullptr, &scene), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(scene, nullptr) << "*out_scene must be NULL on failure, even for the NULL filename path";
   EXPECT_EQ(LUMICE_SceneFromJsonFile("x.json", nullptr), LUMICE_ERR_NULL_ARG);
 }
 
@@ -853,6 +902,14 @@ TEST(SceneSerializeNegative, CrystalMissingTypeField) {
   LUMICE_Scene* scene = Sentinel();
   // Crystal entry present but missing "type".
   const char* json = R"({ "crystal": [ { "id": 0 } ], "scene": { "ray_num": 0, "max_hits": 0 } })";
+  EXPECT_EQ(LUMICE_SceneFromJson(json, &scene), LUMICE_ERR_MISSING_FIELD);
+  EXPECT_EQ(scene, nullptr);
+}
+
+TEST(SceneSerializeNegative, CrystalMissingIdField) {
+  LUMICE_Scene* scene = Sentinel();
+  // Crystal entry present but missing "id".
+  const char* json = R"({ "crystal": [ { "type": "prism" } ], "scene": { "ray_num": 0, "max_hits": 0 } })";
   EXPECT_EQ(LUMICE_SceneFromJson(json, &scene), LUMICE_ERR_MISSING_FIELD);
   EXPECT_EQ(scene, nullptr);
 }

@@ -2126,10 +2126,12 @@ static LUMICE_ErrorCode JsonToScene(const nlohmann::json& root, LUMICE_Scene** o
 
 
 LUMICE_ErrorCode LUMICE_SceneFromJson(const char* json_str, LUMICE_Scene** out_scene) {
+  if (out_scene) {
+    *out_scene = nullptr;
+  }
   if (!json_str || !out_scene) {
     return LUMICE_ERR_NULL_ARG;
   }
-  *out_scene = nullptr;
 
   try {
     auto root = nlohmann::json::parse(json_str);
@@ -2143,10 +2145,12 @@ LUMICE_ErrorCode LUMICE_SceneFromJson(const char* json_str, LUMICE_Scene** out_s
 
 
 LUMICE_ErrorCode LUMICE_SceneFromJsonFile(const char* filename, LUMICE_Scene** out_scene) {
+  if (out_scene) {
+    *out_scene = nullptr;
+  }
   if (!filename || !out_scene) {
     return LUMICE_ERR_NULL_ARG;
   }
-  *out_scene = nullptr;
 
   std::ifstream file(lumice::PathFromU8(filename));
   if (!file.is_open()) {
