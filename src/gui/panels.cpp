@@ -560,7 +560,12 @@ bool RenderShapeDistTableRow(const char* label, ShapeDist& dist, float center_mi
   }
 
   ImGui::EndDisabled();
-  // Invariant: this row advanced exactly kShapeTableColumnCount (=5) columns.
+  // Make kShapeTableColumnCount load-bearing at the consumption site, not just a comment: assert the
+  // row consumed exactly that many columns. Bumping the constant + adding a TableSetupColumn without
+  // updating this helper then trips here instead of silently misaligning the grid (the drift mode the
+  // constant exists to stop; ImGui does not assert on a column-count mismatch on its own).
+  IM_ASSERT(ImGui::TableGetColumnIndex() + 1 == kShapeTableColumnCount &&
+            "RenderShapeDistTableRow must advance exactly kShapeTableColumnCount columns");
   return changed;
 }
 

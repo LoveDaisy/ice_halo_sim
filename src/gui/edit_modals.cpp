@@ -228,8 +228,11 @@ bool SliderWithPresetEdit(const char* label, float* value, float min_val, float 
 
   float spacing = ImGui::GetStyle().ItemSpacing.x;
   float avail_w = ImGui::GetContentRegionAvail().x;
-  // mirrors PrepareSliderLayout: reserve the label column only when a trailing label is drawn.
-  float slider_w = trailing_label ? (avail_w - kInputWidth - kLabelColWidth - spacing * 2) : (avail_w - kInputWidth);
+  // mirrors PrepareSliderLayout: reserve the label column + 2 spacings (slider->input, input->label)
+  // with a trailing label; without it, still reserve the one slider->input spacing (SameLine at the
+  // input below adds it) — omitting it overflows the cell by one ItemSpacing.x and clips the arrow.
+  float slider_w =
+      trailing_label ? (avail_w - kInputWidth - kLabelColWidth - spacing * 2) : (avail_w - kInputWidth - spacing);
   if (slider_w < 40.0f)
     slider_w = 40.0f;
 
@@ -576,12 +579,17 @@ static bool RenderWedgeTableRow(const char* label, float* value) {
   ImGui::TableNextColumn();  // Value — slider + input + preset dropdown, filling the cell.
   bool changed = SliderWithPresetEdit(label, value, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, kWedgePresets,
                                       kWedgePresetCount, /*trailing_label=*/false);
-  ImGui::TableNextColumn();  // Random  — blank (not applicable)
-  ImGui::TableNextColumn();  // Type    — blank
-  ImGui::TableNextColumn();  // Spread  — blank
-  // Invariant: this row advanced exactly kShapeTableColumnCount (=5) columns — same contract as
-  // RenderShapeDistTableRow; the last three cells are intentionally empty (wedge angles are
-  // non-randomizable), not skipped, so the grid stays a rectangle and headers stay aligned.
+  // Wedge angles are non-randomizable: advance the remaining (kShapeTableColumnCount - content)
+  // columns as intentionally-empty cells (Random / Type / Spread). Driven by the shared constant
+  // rather than a hardcoded 3, so the blank count tracks any column-count change automatically —
+  // kShapeTableColumnCount is load-bearing here, not just asserted in a comment. Empty (not skipped)
+  // keeps the grid a rectangle and the headers aligned.
+  constexpr int kWedgeContentColumns = 2;  // Parameter + Value
+  for (int col = kWedgeContentColumns; col < kShapeTableColumnCount; ++col) {
+    ImGui::TableNextColumn();
+  }
+  IM_ASSERT(ImGui::TableGetColumnIndex() + 1 == kShapeTableColumnCount &&
+            "RenderWedgeTableRow must advance exactly kShapeTableColumnCount columns");
   return changed;
 }
 
