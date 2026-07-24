@@ -2073,8 +2073,13 @@ TEST(DistributionRoundTrip, FaceDistancePerFaceMixed) {
   EXPECT_FLOAT_EQ(out.face_distance[1].spread, 0.05f);
   EXPECT_EQ(out.face_distance[2].type, LUMICE_DIST_UNIFORM);
   EXPECT_FLOAT_EQ(out.face_distance[2].center, 1.2f);
+  EXPECT_FLOAT_EQ(out.face_distance[2].spread, 0.1f);
   EXPECT_EQ(out.face_distance[3].type, LUMICE_DIST_ZIGZAG);
+  EXPECT_FLOAT_EQ(out.face_distance[3].center, 0.9f);
+  EXPECT_FLOAT_EQ(out.face_distance[3].spread, 0.2f);
   EXPECT_EQ(out.face_distance[4].type, LUMICE_DIST_LAPLACIAN);
+  EXPECT_FLOAT_EQ(out.face_distance[4].center, 1.1f);
+  EXPECT_FLOAT_EQ(out.face_distance[4].spread, 0.03f);
   EXPECT_EQ(out.face_distance[5].type, LUMICE_DIST_GAUSS_LEGACY);
   EXPECT_FLOAT_EQ(out.face_distance[5].spread, 0.15f);
 }
@@ -2100,6 +2105,7 @@ TEST(DistributionRoundTrip, PyramidShapeScalars) {
   EXPECT_FLOAT_EQ(out.upper_h.center, 0.5f);
   EXPECT_FLOAT_EQ(out.upper_h.spread, 0.02f);
   EXPECT_EQ(out.lower_h.type, LUMICE_DIST_NO_RANDOM);
+  EXPECT_FLOAT_EQ(out.lower_h.center, 0.5f);
   EXPECT_FLOAT_EQ(out.upper_wedge_angle, 28.0f);
 }
 
@@ -2141,6 +2147,50 @@ TEST(GeomClockStructPath, RoundTrip) {
   lumice::ConfigOwningGuard out_guard(out);
   ASSERT_EQ(LUMICE_ParseConfigString(buf, &out), LUMICE_OK);
   EXPECT_EQ(out.geom_clock, 16);
+}
+
+// JsonToDistribution's defensive {"type":"no_random",...} object branch (c_api.cpp) is read-side
+// only — DistributionToJson never emits this shape (NO_RANDOM always writes a bare number). Cover
+// it directly through the public parse entry point so the branch can't silently bit-rot unnoticed.
+TEST(DistributionRoundTrip, NoRandomObjectFormAccepted) {
+  auto j = nlohmann::json::parse(MakeMinimalConfigJson());
+  j["crystal"][0]["shape"]["height"] = { { "type", "no_random" }, { "mean", 1.5f } };
+  LUMICE_Config config{};
+  lumice::ConfigOwningGuard config_guard(config);
+  ASSERT_EQ(LUMICE_ParseConfigString(j.dump().c_str(), &config), LUMICE_OK);
+  ASSERT_EQ(config.crystal_count, 1);
+  EXPECT_EQ(config.crystals[0].height.type, LUMICE_DIST_NO_RANDOM);
+  EXPECT_FLOAT_EQ(config.crystals[0].height.center, 1.5f);
+  EXPECT_FLOAT_EQ(config.crystals[0].height.spread, 0.0f);
+}
+
+// code-review round 1 (Major): the round-trip tests above only prove the C API's own writer
+// (ConfigToJson) and reader (ParseConfigString) agree with each other — a shared misconception
+// about core's real wire contract (e.g. the no_random bare-number convention) would not be
+// caught by that self-closed loop. This commits a struct-built config carrying mixed
+// distribution shapes plus a non-zero geom_clock straight to a real server via
+// LUMICE_CommitConfigStruct, proving core's own from_json genuinely accepts what the C API
+// produces — mirrors the ParseConfigApi.ParseModifyCommit end-to-end commit pattern.
+TEST(DistributionRoundTrip, CommitsToRealServer) {
+  auto json = MakeMinimalConfigJson();
+  LUMICE_Config config{};
+  lumice::ConfigOwningGuard config_guard(config);
+  ASSERT_EQ(LUMICE_ParseConfigString(json.c_str(), &config), LUMICE_OK);
+  ASSERT_EQ(config.crystal_count, 1);
+
+  config.crystals[0].height = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 1.5f, 0.0f };
+  for (int i = 0; i < 6; i++) {
+    config.crystals[0].face_distance[i] = LUMICE_Distribution{ LUMICE_DIST_GAUSS, 1.0f, 0.1f };
+  }
+  config.geom_clock = 8;
+
+  auto* server = LUMICE_CreateServer();
+  ASSERT_NE(server, nullptr);
+  int reused = -1;
+  EXPECT_EQ(LUMICE_CommitConfigStruct(server, &config, &reused), LUMICE_OK);
+
+  LUMICE_StopServer(server);
+  LUMICE_DestroyServer(server);
 }
 
 // Parse cross-check against core from_json (source of truth): parsing a filter JSON via
