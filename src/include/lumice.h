@@ -22,7 +22,7 @@ extern "C" {
 // Callers can now pin the ABI they were built against, e.g.:
 //   static_assert(LUMICE_API_VERSION >= 410, "Lumice header too old for this integration");
 // Bump on every BREAKING change to LUMICE_Config / public struct layout.
-#define LUMICE_API_VERSION 410
+#define LUMICE_API_VERSION 411
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -230,6 +230,10 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 // the OR/AND expansion seen in practice.
 #define LUMICE_MAX_CONFIG_COLOR_CLASSES 64
 #define LUMICE_MAX_CONFIG_COLOR_REFS 32
+// Per-renderer grid-line ceiling (central_grid[] / elevation_grid[] inline arrays in
+// LUMICE_RenderParam). Same "widen (breaking bump)" rule as the constants above. 64 matches the
+// order of magnitude of the other sanity ceilings; the shipped corpus peaks at 1 central line.
+#define LUMICE_MAX_CONFIG_GRID_LINES 64
 
 // BREAKING (v4.10): LUMICE_AxisDist renamed+widened to
 // LUMICE_Distribution and now serves ANY randomizable scalar (axis angles AND crystal shape
@@ -510,14 +514,74 @@ typedef struct LUMICE_ColorClass_ {
 #define LUMICE_COLOR_MODE_ADDITIVE 1
 #define LUMICE_COLOR_MODE_PAINTER 2
 
+// Lens projection kinds. Values mirror the declaration order of core LensParam::LensType, but the
+// C API<->core mapping is an explicit switch, so a future reorder on either side cannot silently
+// alias one projection onto another.
+#define LUMICE_LENS_TYPE_LINEAR 0
+#define LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA 1
+#define LUMICE_LENS_TYPE_FISHEYE_EQUIDISTANT 2
+#define LUMICE_LENS_TYPE_FISHEYE_STEREOGRAPHIC 3
+#define LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA 4
+#define LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUIDISTANT 5
+#define LUMICE_LENS_TYPE_DUAL_FISHEYE_STEREOGRAPHIC 6
+#define LUMICE_LENS_TYPE_RECTANGULAR 7
+#define LUMICE_LENS_TYPE_FISHEYE_ORTHOGRAPHIC 8
+#define LUMICE_LENS_TYPE_DUAL_FISHEYE_ORTHOGRAPHIC 9
+#define LUMICE_LENS_TYPE_GLOBE 10
+
+// Which half of the celestial sphere the renderer draws (mirrors core RenderConfig::VisibleRange).
+#define LUMICE_VISIBLE_UPPER 0
+#define LUMICE_VISIBLE_LOWER 1
+#define LUMICE_VISIBLE_FULL 2
+
+// One overlay grid line (mirrors core GridLineParam). `value` is the azimuth (central grid) or
+// elevation (elevation grid) in degrees; the rest is appearance.
+typedef struct LUMICE_GridLine_ {
+  float value;
+  float width;
+  float opacity;
+  float color[3];
+} LUMICE_GridLine;
+
 // BREAKING (v4.3): norm_mode field removed; struct layout changed. Callers must recompile against this header.
+// BREAKING (v4.11): extended from the 6-field projection-agnostic subset to the full renderer
+// description (lens / lens_shift / view / visible / background / ray_color / grid /
+// celestial_outline). Before this, those fields had no home in the struct, so every C API entry
+// point that re-encodes a renderer (LUMICE_ParseConfigString/File, LUMICE_SceneFromJson/File,
+// LUMICE_SceneAddRenderer) silently replaced them with a hardcoded
+// dual_fisheye_equal_area/fov180/view000/visible=full/black-background renderer — a config could
+// parse cleanly and then be simulated with a projection the caller never asked for. Callers must
+// recompile.
+//
+// WARNING: a zero-initialized `LUMICE_RenderParam{}` is NOT a committable state — lens_fov = 0 is
+// rejected as an invalid FOV for every lens type. Callers must set at least lens_type/lens_fov
+// explicitly (same "zero-init requires explicit follow-up" discipline as LUMICE_ColorClass's
+// visible field and LUMICE_FILTER_TYPE_UNSET). No implicit non-zero default is baked in on
+// purpose: an implicit default silently substituted for the caller's intent is exactly the defect
+// this version fixes.
 typedef struct LUMICE_RenderParam_ {
   int id;
   int resolution_w;
   int resolution_h;
   float opacity;
   float intensity_factor;
-  float overlap;  // Dual fisheye overlap zone |sky.z| threshold (sin value). 0 = no overlap.
+  float overlap;   // Dual fisheye overlap zone |sky.z| threshold (sin value). 0 = no overlap.
+  int lens_type;   // LUMICE_LENS_TYPE_*
+  float lens_fov;  // degrees; valid range depends on lens_type (core MaxFov)
+  int lens_shift[2];
+  float view_azimuth;
+  float view_elevation;
+  float view_roll;
+  int visible;          // LUMICE_VISIBLE_*
+  float background[3];  // linear RGB
+  // Fixed ray tint in linear RGB, or {-1,-1,-1} (core's default sentinel) for "use the natural
+  // spectral color". Zero-init means an all-black tint, NOT the sentinel.
+  float ray_color[3];
+  int celestial_outline;  // non-zero = draw the horizon/celestial outline
+  LUMICE_GridLine central_grid[LUMICE_MAX_CONFIG_GRID_LINES];
+  int central_grid_count;
+  LUMICE_GridLine elevation_grid[LUMICE_MAX_CONFIG_GRID_LINES];
+  int elevation_grid_count;
 } LUMICE_RenderParam;
 
 // =============== Scene (opaque handle) ===============
@@ -770,6 +834,10 @@ typedef struct LUMICE_Config_ {
 // 24B->72B = +48B; +80B/crystal × 256 crystals ≈ +20 KB) plus one int geom_clock. Measured
 // sizeof(LUMICE_Config) == 118 768 B on this platform (Apple clang, arm64) — up from ~98 KB,
 // still well under the 160 KB ceiling (~27.5 % headroom).
+// v4.11: LUMICE_RenderParam grew the full renderer description; the two
+// LUMICE_GridLine[64] inline arrays dominate (24 B × 64 × 2 = 3 072 B) for ~3.1 KB/renderer ×
+// 4 renderers ≈ +12.3 KB. Still far under the ceiling; if a future widening approaches it, shrink
+// LUMICE_MAX_CONFIG_GRID_LINES rather than raising the 160 KB ceiling.
 #if defined(__cplusplus)
 static_assert(sizeof(LUMICE_Config) <= 160u * 1024u,
               "LUMICE_Config exceeded its 160 KB ABI ceiling — either shrink a field or bump the ceiling deliberately");

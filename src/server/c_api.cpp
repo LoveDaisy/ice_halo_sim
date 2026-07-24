@@ -432,22 +432,129 @@ static nlohmann::json CompositionArrayToJson(const LUMICE_ComplexComposition& co
   return composition;
 }
 
-// Full renderer object. Core always produces dual equal-area fisheye texture (full-globe); the
-// GUI shader reprojects to the user's display projection. Caller owns the id.
+// Map LUMICE_LENS_TYPE_* to its core enumerator. Explicit switch (not a numeric cast) so a future
+// reorder of either enumeration surfaces as a compile/throw rather than a silently aliased
+// projection. Throws std::invalid_argument on an unknown value.
+static ns::LensParam::LensType MapLensTypeFromCApi(int lens_type) {
+  switch (lens_type) {
+    case LUMICE_LENS_TYPE_LINEAR:
+      return ns::LensParam::kLinear;
+    case LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA:
+      return ns::LensParam::kFisheyeEqualArea;
+    case LUMICE_LENS_TYPE_FISHEYE_EQUIDISTANT:
+      return ns::LensParam::kFisheyeEquidistant;
+    case LUMICE_LENS_TYPE_FISHEYE_STEREOGRAPHIC:
+      return ns::LensParam::kFisheyeStereographic;
+    case LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA:
+      return ns::LensParam::kDualFisheyeEqualArea;
+    case LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUIDISTANT:
+      return ns::LensParam::kDualFisheyeEquidistant;
+    case LUMICE_LENS_TYPE_DUAL_FISHEYE_STEREOGRAPHIC:
+      return ns::LensParam::kDualFisheyeStereographic;
+    case LUMICE_LENS_TYPE_RECTANGULAR:
+      return ns::LensParam::kRectangular;
+    case LUMICE_LENS_TYPE_FISHEYE_ORTHOGRAPHIC:
+      return ns::LensParam::kFisheyeOrthographic;
+    case LUMICE_LENS_TYPE_DUAL_FISHEYE_ORTHOGRAPHIC:
+      return ns::LensParam::kDualFisheyeOrthographic;
+    case LUMICE_LENS_TYPE_GLOBE:
+      return ns::LensParam::kGlobe;
+    default:
+      throw std::invalid_argument("LUMICE_RenderParam.lens_type is invalid: " + std::to_string(lens_type));
+  }
+}
+
+// Inverse of MapLensTypeFromCApi. Total over the core enumeration (no default arm) so adding a
+// projection to core breaks the build here instead of decoding to a wrong C API constant.
+static int MapLensTypeToCApi(ns::LensParam::LensType type) {
+  switch (type) {
+    case ns::LensParam::kLinear:
+      return LUMICE_LENS_TYPE_LINEAR;
+    case ns::LensParam::kFisheyeEqualArea:
+      return LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA;
+    case ns::LensParam::kFisheyeEquidistant:
+      return LUMICE_LENS_TYPE_FISHEYE_EQUIDISTANT;
+    case ns::LensParam::kFisheyeStereographic:
+      return LUMICE_LENS_TYPE_FISHEYE_STEREOGRAPHIC;
+    case ns::LensParam::kDualFisheyeEqualArea:
+      return LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA;
+    case ns::LensParam::kDualFisheyeEquidistant:
+      return LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUIDISTANT;
+    case ns::LensParam::kDualFisheyeStereographic:
+      return LUMICE_LENS_TYPE_DUAL_FISHEYE_STEREOGRAPHIC;
+    case ns::LensParam::kRectangular:
+      return LUMICE_LENS_TYPE_RECTANGULAR;
+    case ns::LensParam::kFisheyeOrthographic:
+      return LUMICE_LENS_TYPE_FISHEYE_ORTHOGRAPHIC;
+    case ns::LensParam::kDualFisheyeOrthographic:
+      return LUMICE_LENS_TYPE_DUAL_FISHEYE_ORTHOGRAPHIC;
+    case ns::LensParam::kGlobe:
+      return LUMICE_LENS_TYPE_GLOBE;
+  }
+  throw std::invalid_argument("unmapped core LensType: " + std::to_string(static_cast<int>(type)));
+}
+
+// Map LUMICE_VISIBLE_* to its core enumerator. Throws std::invalid_argument on an unknown value.
+static ns::RenderConfig::VisibleRange MapVisibleFromCApi(int visible) {
+  switch (visible) {
+    case LUMICE_VISIBLE_UPPER:
+      return ns::RenderConfig::kUpper;
+    case LUMICE_VISIBLE_LOWER:
+      return ns::RenderConfig::kLower;
+    case LUMICE_VISIBLE_FULL:
+      return ns::RenderConfig::kFull;
+    default:
+      throw std::invalid_argument("LUMICE_RenderParam.visible is invalid: " + std::to_string(visible));
+  }
+}
+
+// Copy `count` C grid lines into the core vector form so nlohmann's to_json(GridLineParam) owns
+// the wire shape (single source for the per-field optional/default logic).
+static std::vector<ns::GridLineParam> GridLinesToCore(const LUMICE_GridLine* lines, int count) {
+  std::vector<ns::GridLineParam> out;
+  out.reserve(static_cast<size_t>(count));
+  for (int i = 0; i < count; i++) {
+    ns::GridLineParam g;
+    g.value_ = lines[i].value;
+    g.width_ = lines[i].width;
+    g.opacity_ = lines[i].opacity;
+    g.color_[0] = lines[i].color[0];
+    g.color_[1] = lines[i].color[1];
+    g.color_[2] = lines[i].color[2];
+    out.push_back(g);
+  }
+  return out;
+}
+
+// Full renderer object. Every field of the C struct is written verbatim; the numeric encodings
+// (lens f<->fov trigonometry, grid-line defaults) come from core's to_json overloads rather than
+// being re-derived here, so there is exactly one implementation of each formula.
+// Throws std::invalid_argument on an invalid lens_type / visible / grid count; callers wrap.
+// The grid-count check lives here (not only in the entry points) because this is the single place
+// that dereferences central_grid[]/elevation_grid[] — LUMICE_ConfigToJson accepts a
+// caller-assembled struct with no bounds pass of its own.
 static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
+  if (r.central_grid_count < 0 || r.central_grid_count > LUMICE_MAX_CONFIG_GRID_LINES || r.elevation_grid_count < 0 ||
+      r.elevation_grid_count > LUMICE_MAX_CONFIG_GRID_LINES) {
+    throw std::invalid_argument(
+        "LUMICE_RenderParam grid count out of range: central=" + std::to_string(r.central_grid_count) +
+        ", elevation=" + std::to_string(r.elevation_grid_count));
+  }
   nlohmann::json jr;
   jr["id"] = id;
-  jr["lens"]["type"] = "dual_fisheye_equal_area";
-  jr["lens"]["fov"] = 180.0f;
+  jr["lens"] = ns::LensParam{ MapLensTypeFromCApi(r.lens_type), r.lens_fov };
+  jr["lens_shift"] = { r.lens_shift[0], r.lens_shift[1] };
   jr["resolution"] = { r.resolution_w, r.resolution_h };
-  jr["view"]["elevation"] = 0.0f;
-  jr["view"]["azimuth"] = 0.0f;
-  jr["view"]["roll"] = 0.0f;
-  jr["visible"] = "full";
-  jr["background"] = { 0.0f, 0.0f, 0.0f };
+  jr["view"] = ns::ViewParam{ r.view_azimuth, r.view_elevation, r.view_roll };
+  jr["visible"] = MapVisibleFromCApi(r.visible);
+  jr["background"] = { r.background[0], r.background[1], r.background[2] };
+  jr["ray_color"] = { r.ray_color[0], r.ray_color[1], r.ray_color[2] };
   jr["opacity"] = r.opacity;
   jr["intensity_factor"] = r.intensity_factor;
   jr["overlap"] = r.overlap;
+  jr["grid"]["central"] = GridLinesToCore(r.central_grid, r.central_grid_count);
+  jr["grid"]["elevation"] = GridLinesToCore(r.elevation_grid, r.elevation_grid_count);
+  jr["grid"]["outline"] = r.celestial_outline != 0;
   return jr;
 }
 
@@ -790,12 +897,27 @@ LUMICE_ErrorCode LUMICE_SceneAddRenderer(LUMICE_Scene* scene, const LUMICE_Rende
   if (!scene || !renderer || !out_id) {
     return LUMICE_ERR_NULL_ARG;
   }
+  // Grid counts index the fixed-capacity inline arrays RendererToJson reads; validate before the
+  // encode so an out-of-range count cannot walk off the end of central_grid[]/elevation_grid[].
+  if (renderer->central_grid_count < 0 || renderer->central_grid_count > LUMICE_MAX_CONFIG_GRID_LINES ||
+      renderer->elevation_grid_count < 0 || renderer->elevation_grid_count > LUMICE_MAX_CONFIG_GRID_LINES) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
   auto& arr = scene->root["render"];
   if (arr.size() >= LUMICE_MAX_CONFIG_RENDERERS) {
     return LUMICE_ERR_INVALID_CONFIG;
   }
   const int id = static_cast<int>(arr.size());
-  arr.push_back(RendererToJson(*renderer, id));
+  // Encode first (throws on an invalid lens_type / visible) so a failure leaves the scene
+  // untouched — mirrors LUMICE_SceneAddColorClass.
+  nlohmann::json jr;
+  try {
+    jr = RendererToJson(*renderer, id);
+  } catch (const std::exception& e) {
+    LOG_ERROR("LUMICE_SceneAddRenderer: invalid renderer: {}", e.what());
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  arr.push_back(std::move(jr));
   *out_id = id;
   return LUMICE_OK;
 }
@@ -1306,6 +1428,18 @@ LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_C
   for (int i = 0; i < config->raypath_color_count; i++) {
     if (config->raypath_color[i].match_count < 0 ||
         config->raypath_color[i].match_count > LUMICE_MAX_CONFIG_COLOR_REFS) {
+      return LUMICE_ERR_INVALID_CONFIG;
+    }
+  }
+  // v4.11: the two grid counts index LUMICE_RenderParam's fixed-capacity inline arrays, which
+  // ConfigToJson reads without re-checking. Same defense as the match_count loop above.
+  if (config->renderer_count < 0) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  for (int i = 0; i < config->renderer_count; i++) {
+    const auto& r = config->renderers[i];
+    if (r.central_grid_count < 0 || r.central_grid_count > LUMICE_MAX_CONFIG_GRID_LINES || r.elevation_grid_count < 0 ||
+        r.elevation_grid_count > LUMICE_MAX_CONFIG_GRID_LINES) {
       return LUMICE_ERR_INVALID_CONFIG;
     }
   }
@@ -2011,6 +2145,74 @@ static LUMICE_ErrorCode JsonToSceneParams(const nlohmann::json& scene, LUMICE_Co
   return LUMICE_OK;
 }
 
+// Inverse of MapVisibleFromCApi. Total over the core enumeration (no default arm).
+static int MapVisibleToCApi(ns::RenderConfig::VisibleRange visible) {
+  switch (visible) {
+    case ns::RenderConfig::kUpper:
+      return LUMICE_VISIBLE_UPPER;
+    case ns::RenderConfig::kLower:
+      return LUMICE_VISIBLE_LOWER;
+    case ns::RenderConfig::kFull:
+      return LUMICE_VISIBLE_FULL;
+  }
+  return LUMICE_VISIBLE_UPPER;
+}
+
+// The two enum-valued renderer fields need a string pre-check: NLOHMANN_JSON_SERIALIZE_ENUM maps
+// an unrecognized value to the FIRST table entry ("linear" / "upper"), so a typo'd projection
+// would be silently misread rather than reported. Same deliberate exception to "align with core"
+// already taken for the distribution / crystal type strings above.
+static bool IsKnownLensTypeString(const std::string& s) {
+  return s == "linear" || s == "fisheye_equal_area" || s == "fisheye_equidistant" || s == "fisheye_stereographic" ||
+         s == "dual_fisheye_equal_area" || s == "dual_fisheye_equidistant" || s == "dual_fisheye_stereographic" ||
+         s == "rectangular" || s == "fisheye_orthographic" || s == "dual_fisheye_orthographic" || s == "globe";
+}
+
+static bool IsKnownVisibleString(const std::string& s) {
+  return s == "upper" || s == "lower" || s == "full";
+}
+
+// Decode one field with core's own from_json (single source for the f->fov trigonometry, the
+// MaxFov range check and the per-field optional/default logic), mapping nlohmann's exception
+// taxonomy onto C API error codes: a missing key (out_of_range id 403) is MISSING_FIELD,
+// everything else (type mismatch, out-of-range fov, too-short focal length) is INVALID_VALUE.
+template <typename T>
+static LUMICE_ErrorCode DecodeCoreField(const nlohmann::json& j, T& dst) {
+  try {
+    j.get_to(dst);
+  } catch (const nlohmann::json::out_of_range& e) {
+    return e.id == 403 ? LUMICE_ERR_MISSING_FIELD : LUMICE_ERR_INVALID_VALUE;
+  } catch (const nlohmann::json::exception&) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  return LUMICE_OK;
+}
+
+// Decode one grid-line array ("grid.central" / "grid.elevation") into the fixed-capacity C array.
+static LUMICE_ErrorCode JsonToGridLines(const nlohmann::json& arr_j, LUMICE_GridLine* out, int* out_count) {
+  if (!arr_j.is_array()) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  if (static_cast<int>(arr_j.size()) > LUMICE_MAX_CONFIG_GRID_LINES) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  *out_count = static_cast<int>(arr_j.size());
+  for (int k = 0; k < *out_count; k++) {
+    ns::GridLineParam g;
+    const LUMICE_ErrorCode err = DecodeCoreField(arr_j[k], g);
+    if (err != LUMICE_OK) {
+      return err;
+    }
+    out[k].value = g.value_;
+    out[k].width = g.width_;
+    out[k].opacity = g.opacity_;
+    out[k].color[0] = g.color_[0];
+    out[k].color[1] = g.color_[1];
+    out[k].color[2] = g.color_[2];
+  }
+  return LUMICE_OK;
+}
+
 static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, LUMICE_Config* out) {
   if (static_cast<int>(render_arr.size()) > LUMICE_MAX_CONFIG_RENDERERS) {
     return LUMICE_ERR_INVALID_CONFIG;
@@ -2042,7 +2244,110 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, LUMICE
     if (rj.contains("overlap")) {
       r.overlap = std::max(0.0f, rj.at("overlap").get<float>());
     }
-    // lens, view, visible, background fields are ignored (not representable in LUMICE_Config)
+
+    // ---- Fields the struct gained in v4.11 (previously parsed and thrown away) ----
+    // Every default below mirrors the corresponding core RenderConfig member initializer
+    // (config/render_config.hpp), and every present-key decode runs through core's own from_json.
+    ns::LensParam lens{ ns::LensParam::kLinear, 90.0f };
+    if (rj.contains("lens")) {
+      const auto& lens_j = rj.at("lens");
+      if (!lens_j.is_object()) {
+        return LUMICE_ERR_INVALID_VALUE;
+      }
+      // Core's LensParam::from_json does j.at("type") — the key is required, not optional.
+      if (!lens_j.contains("type")) {
+        return LUMICE_ERR_MISSING_FIELD;
+      }
+      if (!lens_j.at("type").is_string() || !IsKnownLensTypeString(lens_j.at("type").get<std::string>())) {
+        return LUMICE_ERR_INVALID_VALUE;
+      }
+      const LUMICE_ErrorCode err = DecodeCoreField(lens_j, lens);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+    }
+    r.lens_type = MapLensTypeToCApi(lens.type_);
+    r.lens_fov = lens.fov_;
+
+    r.lens_shift[0] = 0;
+    r.lens_shift[1] = 0;
+    if (rj.contains("lens_shift")) {
+      const LUMICE_ErrorCode err = DecodeCoreField(rj.at("lens_shift"), r.lens_shift);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+    }
+
+    ns::ViewParam view{};
+    if (rj.contains("view")) {
+      const LUMICE_ErrorCode err = DecodeCoreField(rj.at("view"), view);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+    }
+    r.view_azimuth = view.az_;
+    r.view_elevation = view.el_;
+    r.view_roll = view.ro_;
+
+    r.visible = LUMICE_VISIBLE_UPPER;
+    if (rj.contains("visible")) {
+      if (!rj.at("visible").is_string() || !IsKnownVisibleString(rj.at("visible").get<std::string>())) {
+        return LUMICE_ERR_INVALID_VALUE;
+      }
+      auto visible = ns::RenderConfig::kUpper;
+      const LUMICE_ErrorCode err = DecodeCoreField(rj.at("visible"), visible);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+      r.visible = MapVisibleToCApi(visible);
+    }
+
+    r.background[0] = r.background[1] = r.background[2] = 0.0f;
+    if (rj.contains("background")) {
+      const LUMICE_ErrorCode err = DecodeCoreField(rj.at("background"), r.background);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+    }
+
+    // Core's default is the {-1,-1,-1} "use the natural spectral color" sentinel, NOT black.
+    r.ray_color[0] = r.ray_color[1] = r.ray_color[2] = -1.0f;
+    if (rj.contains("ray_color")) {
+      const LUMICE_ErrorCode err = DecodeCoreField(rj.at("ray_color"), r.ray_color);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+    }
+
+    r.central_grid_count = 0;
+    r.elevation_grid_count = 0;
+    r.celestial_outline = 1;  // core RenderConfig::celestial_outline_ defaults to true
+    if (rj.contains("grid")) {
+      const auto& gj = rj.at("grid");
+      if (!gj.is_object()) {
+        return LUMICE_ERR_INVALID_VALUE;
+      }
+      if (gj.contains("central")) {
+        const LUMICE_ErrorCode err = JsonToGridLines(gj.at("central"), r.central_grid, &r.central_grid_count);
+        if (err != LUMICE_OK) {
+          return err;
+        }
+      }
+      if (gj.contains("elevation")) {
+        const LUMICE_ErrorCode err = JsonToGridLines(gj.at("elevation"), r.elevation_grid, &r.elevation_grid_count);
+        if (err != LUMICE_OK) {
+          return err;
+        }
+      }
+      if (gj.contains("outline")) {
+        bool outline = true;
+        const LUMICE_ErrorCode err = DecodeCoreField(gj.at("outline"), outline);
+        if (err != LUMICE_OK) {
+          return err;
+        }
+        r.celestial_outline = outline ? 1 : 0;
+      }
+    }
   }
   return LUMICE_OK;
 }

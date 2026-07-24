@@ -695,6 +695,10 @@ TEST(SceneRoundTrip, RendererAndScatterLayer) {
   r.opacity = 0.8f;
   r.intensity_factor = 1.5f;
   r.overlap = 0.25f;
+  // A zero-initialized LUMICE_RenderParam is not committable (lens_fov = 0 is an invalid FOV),
+  // and this scene goes through LUMICE_SceneFromJson, which re-validates via core.
+  r.lens_type = LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA;
+  r.lens_fov = 180.0f;
   ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
 
   // A scattering entry may name a filter, and that filter must exist — both core and the C API
@@ -784,6 +788,29 @@ TEST(SceneRoundTrip, RichSceneAllSubsystems) {
   r.resolution_h = 800;
   r.opacity = 1.0f;
   r.intensity_factor = 1.0f;
+  // Every v4.11 renderer field gets a NON-default value here: this scene goes through
+  // ExpectLosslessRoundTrip, so a field that fails to survive Scene -> JSON -> Scene shows up as a
+  // root mismatch rather than passing on a coincidence of defaults.
+  r.lens_type = LUMICE_LENS_TYPE_FISHEYE_STEREOGRAPHIC;
+  r.lens_fov = 270.0f;
+  r.lens_shift[0] = 7;
+  r.lens_shift[1] = -3;
+  r.view_azimuth = 30.0f;
+  r.view_elevation = -12.5f;
+  r.view_roll = 5.0f;
+  r.visible = LUMICE_VISIBLE_LOWER;
+  r.background[0] = 0.1f;
+  r.background[1] = 0.2f;
+  r.background[2] = 0.3f;
+  r.ray_color[0] = 0.9f;
+  r.ray_color[1] = 0.8f;
+  r.ray_color[2] = 0.7f;
+  r.celestial_outline = 0;
+  r.central_grid_count = 2;
+  r.central_grid[0] = LUMICE_GridLine{ 0.0f, 1.5f, 0.5f, { 1.0f, 0.0f, 0.0f } };
+  r.central_grid[1] = LUMICE_GridLine{ 90.0f, 2.0f, 0.25f, { 0.0f, 1.0f, 0.0f } };
+  r.elevation_grid_count = 1;
+  r.elevation_grid[0] = LUMICE_GridLine{ 45.0f, 1.0f, 1.0f, { 0.0f, 0.0f, 1.0f } };
   ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
 
   LUMICE_ScatterLayer layer{};
@@ -978,6 +1005,10 @@ LUMICE_RenderParam MakeCommitRenderParam() {
   r.opacity = 1.0f;
   r.intensity_factor = 1.0f;
   r.overlap = 0.0f;
+  // Part of "the smallest state core accepts": a zero-initialized LUMICE_RenderParam carries
+  // lens_fov = 0, which core rejects as an invalid FOV, so these two are mandatory.
+  r.lens_type = LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA;
+  r.lens_fov = 180.0f;
   return r;
 }
 

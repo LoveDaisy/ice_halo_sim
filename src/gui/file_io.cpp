@@ -1377,6 +1377,22 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
     // brightness the user is looking at (the Save Config semantic promise).
     dst.intensity_factor = intent == SceneIntent::kJsonExport ? std::pow(2.0f, r.exposure_offset) : 1.0f;
     dst.overlap = kDualFisheyeOverlap;
+    // v4.11: LUMICE_RenderParam carries the full renderer description, so the values the C API
+    // used to hardcode while re-encoding a renderer now have to be stated here. Core always
+    // produces a dual equal-area fisheye full-globe texture; the GUI shader reprojects it to the
+    // user's display projection, so these are GUI policy, not user-facing settings.
+    dst.lens_type = LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA;  // was hardcoded in RendererToJson
+    dst.lens_fov = 180.0f;                                     // was hardcoded in RendererToJson
+    dst.visible = LUMICE_VISIBLE_FULL;                         // was hardcoded in RendererToJson
+    // Never encoded pre-v4.11, so there is no prior hardcoded value to reproduce: take core's
+    // authoritative defaults instead. {-1,-1,-1} is RenderConfig::ray_color_'s "use the natural
+    // spectral color" sentinel — a zero-initialized {0,0,0} would tint every ray black.
+    dst.ray_color[0] = dst.ray_color[1] = dst.ray_color[2] = -1.0f;
+    dst.celestial_outline = 1;  // core RenderConfig::celestial_outline_ default (true)
+    // view / background / lens_shift / grid counts keep their zero-initialized values, which match
+    // both the pre-v4.11 hardcoded encoding and core's defaults. The GUI's own screen-space
+    // overlay grid (gui_state.show_grid_line) is a display-time layer and is unrelated to
+    // render[].grid, which core bakes into the image.
     int renderer_id = -1;
     if (LUMICE_SceneAddRenderer(scene.get(), &dst, &renderer_id) != LUMICE_OK) {
       GUI_LOG_WARNING("[FileIO] BuildScene: LUMICE_SceneAddRenderer failed");

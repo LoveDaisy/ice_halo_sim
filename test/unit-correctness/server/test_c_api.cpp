@@ -609,6 +609,11 @@ static std::string MakeFullConfigJson() {
   nlohmann::json rn;
   rn["id"] = 1;
   rn["lens"]["type"] = "dual_fisheye_equal_area";
+  // fov is NOT optional once "lens" is present: core's LensParam::from_json requires "fov" or "f"
+  // and throws out_of_range 403 otherwise (verified against the CLI). This fixture predates the
+  // v4.11 renderer round-trip, when the C API ignored the whole "lens" object and so accepted a
+  // document core itself rejects.
+  rn["lens"]["fov"] = 180.0f;
   rn["resolution"] = { 1024, 512 };
   rn["opacity"] = 0.9f;
   rn["intensity_factor"] = 2.0f;

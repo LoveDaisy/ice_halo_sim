@@ -188,7 +188,9 @@ struct SectionDiff {
   bool scene = false;
   bool raypath_color = false;
 
-  bool AnyOutsideRenderers() const { return crystals || filters || scene || raypath_color; }
+  // v4.11 closed the renderer expression gap, so `renderers` is no longer carved out: every
+  // section is now held to the same "values must survive the round trip" standard.
+  bool Any() const { return crystals || filters || renderers || scene || raypath_color; }
 
   // The offending items, re-serialized through core's own to_json so a failure names the field
   // instead of dumping raw struct bytes.
@@ -243,6 +245,9 @@ SectionDiff DiffSections(const lumice::ConfigManager& a, const lumice::ConfigMan
   if (d.filters) {
     AppendItemDiff("filter", a.filters_, b.filters_, &d.detail);
   }
+  if (d.renderers) {
+    AppendItemDiff("render", a.renderers_, b.renderers_, &d.detail);
+  }
   if (d.scene) {
     nlohmann::json sa;
     nlohmann::json sb;
@@ -270,17 +275,13 @@ struct CorpusCase {
   bool AcceptedEndToEnd() const { return capi_ok && round_trip_ok; }
   std::string round_trip_error;
   SectionDiff diff;
-  // Renderer fields LUMICE_RenderParam actually carries, compared separately from the whole
-  // RenderConfig so the known expression gap (lens/view/visible/background/ray_color/lens_shift/
-  // grid have no home in the struct) does not mask a regression in the fields that DO round-trip.
-  bool renderer_representable_diff = false;
-  std::string renderer_representable_detail;
+  // Per-renderer diff, kept alongside the whole-section SectionDiff::renderers flag because it
+  // names the offending renderer id. Before v4.11 this compared only the subset
+  // LUMICE_RenderParam could carry; the struct now carries every field, so the comparison is
+  // core's own RenderConfig::operator== with no whitelist.
+  bool renderer_diff = false;
+  std::string renderer_diff_detail;
 };
-
-bool RepresentableRendererFieldsEqual(const lumice::RenderConfig& a, const lumice::RenderConfig& b) {
-  return a.id_ == b.id_ && a.resolution_[0] == b.resolution_[0] && a.resolution_[1] == b.resolution_[1] &&
-         a.opacity_ == b.opacity_ && a.intensity_factor_ == b.intensity_factor_ && a.overlap_ == b.overlap_;
-}
 
 // Run both parsers over the whole corpus once. Shared by the divergence-class tests so the sweep
 // (and its file IO) happens a single time per binary run.
@@ -309,18 +310,23 @@ const std::vector<CorpusCase>& Corpus() {
           for (const auto& [id, expected] : c.core.config.renderers_) {
             auto it = round_trip.config.renderers_.find(id);
             if (it == round_trip.config.renderers_.end()) {
-              c.renderer_representable_diff = true;
-              c.renderer_representable_detail += " renderer id " + std::to_string(id) + " missing;";
+              c.renderer_diff = true;
+              c.renderer_diff_detail += " renderer id " + std::to_string(id) + " missing;";
               continue;
             }
-            if (!RepresentableRendererFieldsEqual(expected, it->second)) {
-              c.renderer_representable_diff = true;
-              c.renderer_representable_detail += " renderer id " + std::to_string(id) + " differs;";
+            if (!(expected == it->second)) {
+              nlohmann::json a;
+              nlohmann::json b;
+              lumice::to_json(a, expected);
+              lumice::to_json(b, it->second);
+              c.renderer_diff = true;
+              c.renderer_diff_detail +=
+                  "\n  renderer id " + std::to_string(id) + ":\n    core: " + a.dump() + "\n    capi: " + b.dump();
             }
           }
           if (c.core.config.renderers_.size() != round_trip.config.renderers_.size()) {
-            c.renderer_representable_diff = true;
-            c.renderer_representable_detail += " renderer count differs;";
+            c.renderer_diff = true;
+            c.renderer_diff_detail += " renderer count differs;";
           }
         }
       }
@@ -371,11 +377,12 @@ TEST(JsonParserParity, CorpusCapiRejectsEverythingCoreRejects) {
 
 // =============== Divergence class C: values must survive the C API round trip ===============
 //
-// Scoped to the sections whose values the C API struct can express. The renderer section is
-// carved out on purpose: LUMICE_RenderParam has no fields for lens / view / visible / background
-// / ray_color / lens_shift / grid, so those values are dropped by construction — that gap is a
-// struct-shape question, not a required-vs-optional one, and is pinned separately below.
-TEST(JsonParserParity, CorpusValuesSurviveCapiRoundTripOutsideRendererGap) {
+// Covers every section. The renderer section used to be carved out — LUMICE_RenderParam had no
+// fields for lens / view / visible / background / ray_color / lens_shift / grid, so those values
+// were dropped by construction — but v4.11 widened the struct to the full renderer description,
+// so there is no longer a section held to a weaker standard than the rest.
+// (Formerly JsonParserParity.CorpusValuesSurviveCapiRoundTripOutsideRendererGap.)
+TEST(JsonParserParity, CorpusValuesSurviveCapiRoundTrip) {
   if (!CorpusAvailable()) {
     GTEST_SKIP();
   }
@@ -388,17 +395,21 @@ TEST(JsonParserParity, CorpusValuesSurviveCapiRoundTripOutsideRendererGap) {
       ADD_FAILURE() << "divergence C: " << c.path << " — " << c.round_trip_error;
       continue;
     }
-    if (c.diff.AnyOutsideRenderers()) {
+    if (c.diff.Any()) {
       ADD_FAILURE() << "divergence C (value not preserved): " << c.path
                     << " — differing sections: " << c.diff.ToString() << c.diff.detail;
     }
   }
 }
 
-// The renderer expression gap must stay confined to the fields the C struct genuinely cannot
-// carry. id / resolution / opacity / intensity_factor / overlap DO have homes in
-// LUMICE_RenderParam, so a mismatch there is a real bug, not the known gap.
-TEST(JsonParserParity, CorpusRendererGapConfinedToUnrepresentableFields) {
+// Every renderer field must survive the round trip — no whitelist. Before v4.11 this asserted the
+// weaker "the expression gap stays confined to the fields the C struct cannot carry" (only
+// id / resolution / opacity / intensity_factor / overlap were compared, because lens / lens_shift
+// / view / visible / background / ray_color / grid / celestial_outline had no home in
+// LUMICE_RenderParam and were silently replaced with a hardcoded renderer). The struct now carries
+// all of them, so the comparison is core's own RenderConfig::operator==.
+// (Formerly JsonParserParity.CorpusRendererGapConfinedToUnrepresentableFields.)
+TEST(JsonParserParity, CorpusRendererFieldsSurviveCapiRoundTrip) {
   if (!CorpusAvailable()) {
     GTEST_SKIP();
   }
@@ -406,9 +417,8 @@ TEST(JsonParserParity, CorpusRendererGapConfinedToUnrepresentableFields) {
     if (!c.round_trip_ok) {
       continue;
     }
-    EXPECT_FALSE(c.renderer_representable_diff)
-        << "renderer field that IS representable in LUMICE_RenderParam did not survive: " << c.path << " —"
-        << c.renderer_representable_detail;
+    EXPECT_FALSE(c.renderer_diff) << "renderer field did not survive the C API round trip: " << c.path << " —"
+                                  << c.renderer_diff_detail;
   }
 }
 
