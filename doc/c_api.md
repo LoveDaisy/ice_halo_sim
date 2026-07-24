@@ -217,6 +217,37 @@ void LUMICE_SetLogLevel(LUMICE_Server* server, LUMICE_LogLevel level);
 
 ### Configuration
 
+#### JSON schema strictness (`LUMICE_ParseConfigString/File`, `LUMICE_SceneFromJson/File`)
+
+All C API entry points that read a config document share one parser, and that parser accepts
+**exactly what the simulator's own config parser accepts** — same required keys, same defaults for
+omitted optional keys. This is a hard contract, not a best effort: the handle path is the only way
+to feed a config into the library, so a parser that is stricter would reject configs the CLI reads
+today, and one that is looser would silently accept a document the commit stage then refuses.
+
+The contract is enforced mechanically rather than by review: `JsonParserParity.*` in
+`test/unit-correctness/server/test_json_parser_parity.cpp` runs both parsers over every config
+file tracked in the repository (enumerated from disk, so new files are covered automatically) and
+fails on any input one accepts and the other rejects, or any input both accept but decode to
+different values.
+
+Two deliberate exceptions:
+
+- **Invalid enum strings are rejected, not silently reinterpreted.** Where the core parser maps an
+  unrecognized `type` / `action` / `spectrum` string onto a plausible-looking fallback, the C API
+  returns `LUMICE_ERR_INVALID_VALUE` instead — a typo should surface, not quietly change the
+  simulation.
+- **Value-range checks fire at commit, not at parse.** Bounds such as `max_hits ∈ [1, 64]` stay
+  single-source in the core and are reported by `LUMICE_CommitScene` /
+  `LUMICE_CommitConfigStruct`, so a parse that succeeds is not by itself a promise that the commit
+  will. End to end the document is still rejected; only the reporting point differs.
+
+One known gap, tracked separately: a renderer's `lens` / `lens_shift` / `view` / `visible` /
+`background` / `ray_color` / `grid` have no fields in `LUMICE_RenderParam`, so they are dropped
+when a document is parsed into `LUMICE_Config` and replaced with defaults if it is re-serialized.
+The parity test pins the gap to exactly those fields — everything `LUMICE_RenderParam` can carry
+round-trips unchanged.
+
 #### LUMICE_CommitConfig
 
 Submits a configuration as a JSON string.
