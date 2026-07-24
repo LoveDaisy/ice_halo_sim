@@ -1917,14 +1917,31 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
 
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(4);
-      // AC3: enabling randomization defaults type to uniform.
-      ctx->ItemClick("**/Randomize##rnd_Height##modal_cr");
+
+      // Property-table row state (AC "能随机+关"): the Type/Spread cells are rendered even when
+      // Randomize is off, but wrapped in BeginDisabled so they grey out. Probe the spread input
+      // (shares the row's BeginDisabled scope with the type combo) — carries ImGuiItemFlags_Disabled
+      // while NO_RANDOM.
+      {
+        auto sp_info = ctx->ItemInfo("**/##spread_Height##modal_cr");
+        IM_CHECK((sp_info.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      }
+
+      // AC3: enabling randomization defaults type to uniform. The checkbox is text-less (the table
+      // header names the column), so its id is just the "##rnd_<label>" suffix.
+      ctx->ItemClick("**/##rnd_Height##modal_cr");
       ctx->Yield(2);
       IM_CHECK_EQ(crystal().height.type, gui::ShapeDistType::kUniform);
       IM_CHECK_GT(crystal().height.spread, 0.0f);  // default spread = 0.2 * center (center default 1.0)
 
+      // AC "能随机+开": once randomized, the same spread input loses the Disabled flag (all-lit row).
+      {
+        auto sp_info = ctx->ItemInfo("**/##spread_Height##modal_cr");
+        IM_CHECK((sp_info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      }
+
       // Disabling collapses back to NO_RANDOM and zeroes the (now meaningless) spread.
-      ctx->ItemClick("**/Randomize##rnd_Height##modal_cr");
+      ctx->ItemClick("**/##rnd_Height##modal_cr");
       ctx->Yield(2);
       IM_CHECK_EQ(crystal().height.type, gui::ShapeDistType::kNoRandom);
       IM_CHECK_EQ(crystal().height.spread, 0.0f);
@@ -1935,11 +1952,12 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
     };
   }
 
-  // AC2: face_distance unified view broadcasts type/spread to all 6 faces, and the per-face advanced
-  // view can diverge a single face WITHOUT the unified view later silently overwriting the others
-  // (plan §7 risk 2 — the very "silent data loss" class this scrum fixes).
+  // Per-face independence: the property table has NO "broadcast to all faces" control (owner
+  // rejected it). Each of the 6 face rows is an independent ShapeDist, so enabling randomization on
+  // one face must leave the others untouched. This is the positive regression guard for the "zero
+  // broadcast" design — a re-added broadcast would flip all 6 faces at once and fail here.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "shape_dist_face_unified_and_perface");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "shape_dist_face_perface_independent");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       gui::g_state.modal_immediate_mode = true;  // commit checkbox edits to g_state each frame
@@ -1949,52 +1967,34 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       };
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(4);
-      ctx->ItemClick("**/Face Distance##modal");  // expand the Face Distance tree
+      // Expand the zero-indent Face Distance collapsible section (default-collapsed).
+      ctx->ItemClick("**/Face Distance##modal");
       ctx->Yield(2);
 
-      // Diverge two face centers BEFORE enabling unified randomization (via the always-visible
-      // per-face center sliders — a legitimate, common operation path that does not require
-      // randomization to be on). Regression coverage for code-review round 1: the "Randomize (all
-      // faces)" enable branch must broadcast ONE shared spread value derived once, not compute
-      // spread per-face from each face's own (now-divergent) center — the latter would silently
-      // give faces different spreads under a control labelled "all faces".
-      ctx->ItemInputValue("**/##Face 3##modal_fd_input", 1.2f);
-      ctx->Yield(2);
-      ctx->ItemInputValue("**/##Face 4##modal_fd_input", 0.6f);
-      ctx->Yield(2);
-
-      // AC2: unified "Randomize (all faces)" broadcasts uniform to every face.
-      ctx->ItemClick("**/Randomize (all faces)##modal_fd_uni");
-      ctx->Yield(2);
+      // All 6 faces start non-random.
       for (int i = 0; i < 6; i++) {
-        IM_CHECK_EQ(crystal().face_distance[i].type, gui::ShapeDistType::kUniform);
-      }
-      // Regression: with divergent centers, all 6 faces must still get the SAME broadcast spread.
-      const float uni_spread = crystal().face_distance[0].spread;
-      for (int i = 1; i < 6; i++) {
-        IM_CHECK_EQ(crystal().face_distance[i].spread, uni_spread);
+        IM_CHECK_EQ(crystal().face_distance[i].type, gui::ShapeDistType::kNoRandom);
       }
 
-      // Diverge face 0 via the per-face advanced view (its checkbox is labelled "Face 3").
-      ctx->ItemClick("**/Per-face randomization##modal_fd_adv");
+      // Enable randomization independently on face 3 (index 0) and face 4 (index 1). The row
+      // checkbox is text-less, so its id is "##rnd_<row label>" where the row label is "Face N".
+      ctx->ItemClick("**/##rnd_Face 3##modal_fd");
       ctx->Yield(2);
-      ctx->ItemClick("**/Face 3##fd_adv_ck_0");
+      ctx->ItemClick("**/##rnd_Face 4##modal_fd");
       ctx->Yield(2);
-      IM_CHECK_EQ(crystal().face_distance[0].type, gui::ShapeDistType::kNoRandom);
 
-      // Risk 2: passively re-rendering the (now-mixed) unified view across several frames must NOT
-      // broadcast — faces 1..5 stay uniform, face 0 stays NO_RANDOM.
+      // Only the two toggled faces became random (uniform, owner default); the other four stayed
+      // NO_RANDOM. Re-render several frames to prove no passive broadcast sneaks in.
       ctx->Yield(6);
-      IM_CHECK_EQ(crystal().face_distance[0].type, gui::ShapeDistType::kNoRandom);
-      for (int i = 1; i < 6; i++) {
-        IM_CHECK_EQ(crystal().face_distance[i].type, gui::ShapeDistType::kUniform);
+      IM_CHECK_EQ(crystal().face_distance[0].type, gui::ShapeDistType::kUniform);
+      IM_CHECK_EQ(crystal().face_distance[1].type, gui::ShapeDistType::kUniform);
+      for (int i = 2; i < 6; i++) {
+        IM_CHECK_EQ(crystal().face_distance[i].type, gui::ShapeDistType::kNoRandom);
       }
 
-      // Collapse the two TreeNodes we expanded. ImGui persists TreeNode open/closed state per
-      // window across tests (ResetTestState resets g_state but not ImGui storage), so leaving them
-      // open would change the crystal-modal layout for later tests that assume the default-collapsed
-      // Face Distance section.
-      ctx->ItemClick("**/Per-face randomization##modal_fd_adv");
+      // Collapse the Face Distance section. ImGui persists TreeNode open/closed state per window
+      // across tests (ResetTestState resets g_state but not ImGui storage), so leaving it open would
+      // change the crystal-modal layout for later tests that assume the default-collapsed section.
       ctx->ItemClick("**/Face Distance##modal");
       ctx->Yield(2);
       ctx->ItemClick("**/Close##edit_modal");

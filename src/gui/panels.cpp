@@ -1,6 +1,7 @@
 #include "gui/panels.hpp"
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -261,8 +262,13 @@ namespace {
 
 // Compute slider width and prepare IDs for the [slider] [input] Label layout.
 // Writes slider_id and input_id buffers, returns the computed slider width.
+// When `reserve_label_col` is false the trailing text label is omitted (table-cell
+// mode): the width no longer reserves kLabelColWidth nor its extra SameLine spacing,
+// so the [slider][input] pair fills the whole cell (GetContentRegionAvail() ==
+// column width inside a BeginTable cell).
 static float PrepareSliderLayout(const char* label, char* display_label_out, size_t display_buf_size, char* slider_id,
-                                 size_t slider_id_size, char* input_id, size_t input_id_size) {
+                                 size_t slider_id_size, char* input_id, size_t input_id_size,
+                                 bool reserve_label_col = true) {
   // Strip ImGui ID suffix (e.g. "Azimuth##view" → display "Azimuth")
   const char* hash_pos = strstr(label, "##");
   if (hash_pos) {
@@ -280,7 +286,10 @@ static float PrepareSliderLayout(const char* label, char* display_label_out, siz
 
   float spacing = ImGui::GetStyle().ItemSpacing.x;
   float avail_w = ImGui::GetContentRegionAvail().x;
-  float slider_w = avail_w - kInputWidth - kLabelColWidth - spacing * 2;
+  // With the trailing label: subtract kLabelColWidth + 2 SameLine spacings
+  // (slider→input, input→label). Without it: only the slider→input spacing.
+  float slider_w =
+      reserve_label_col ? (avail_w - kInputWidth - kLabelColWidth - spacing * 2) : (avail_w - kInputWidth - spacing);
   if (slider_w < 40.0f)
     slider_w = 40.0f;
   return slider_w;
@@ -292,13 +301,13 @@ static void FinishSliderLayout(const char* display_label) {
   ImGui::TextUnformatted(display_label);
 }
 
-bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt,
-                     SliderScale scale) {
+bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt, SliderScale scale,
+                     bool trailing_label) {
   char display_buf[64];
   char slider_id[64];
   char input_id[64];
   float slider_w = PrepareSliderLayout(label, display_buf, sizeof(display_buf), slider_id, sizeof(slider_id), input_id,
-                                       sizeof(input_id));
+                                       sizeof(input_id), trailing_label);
 
   const float old_value = *value;
 
@@ -313,7 +322,9 @@ bool SliderWithInput(const char* label, float* value, float min_val, float max_v
 
   *value = std::clamp(*value, min_val, max_val);
 
-  FinishSliderLayout(display_buf);
+  if (trailing_label) {
+    FinishSliderLayout(display_buf);
+  }
   return *value != old_value;
 }
 
@@ -480,21 +491,38 @@ bool RenderShapeDistTypeCombo(const char* id, ShapeDistType* type) {
   return false;
 }
 
-bool RenderShapeDist(const char* label, ShapeDist& dist, float center_min, float center_max, const char* center_fmt,
-                     SliderScale center_scale) {
+void ShapeTableParamLabel(const char* label) {
+  const char* hash_pos = strstr(label, "##");
+  if (hash_pos) {
+    ImGui::TextUnformatted(label, hash_pos);
+  } else {
+    ImGui::TextUnformatted(label);
+  }
+}
+
+bool RenderShapeDistTableRow(const char* label, ShapeDist& dist, float center_min, float center_max,
+                             const char* center_fmt, SliderScale center_scale) {
   bool changed = false;
   // No PushID wrapper: the center slider keeps its original `label`-derived id (so existing
-  // ItemInputValue paths stay valid), and each extra widget gets a `label`-suffixed unique id so
-  // multiple RenderShapeDist calls do not collide and GUI tests can target each precisely.
+  // ItemInputValue paths — e.g. "##Height##modal_cr_input" — stay valid), and each extra widget
+  // gets a `label`-suffixed unique id so multiple rows do not collide and GUI tests can target each.
+  ImGui::TableNextRow();
 
-  // Center is always editable (deterministic value / distribution center).
-  changed |= SliderWithInput(label, &dist.center, center_min, center_max, center_fmt, center_scale);
+  // Col 0 — Parameter name.
+  ImGui::TableNextColumn();
+  ShapeTableParamLabel(label);
 
-  // Randomize toggle. NO_RANDOM is expressed ONLY via this checkbox — the type combo lists just
-  // the five randomized types, so there is no redundant "manually pick no_random" path. The ##
-  // suffix embeds `label` so the id is unique per field while the visible text stays "Randomize".
+  // Col 1 — center value: slider + input, filling the (stretch) Value column. trailing_label=false
+  // because the name already occupies Col 0.
+  ImGui::TableNextColumn();
+  changed |= SliderWithInput(label, &dist.center, center_min, center_max, center_fmt, center_scale, false);
+
+  // Col 2 — Randomize checkbox. NO_RANDOM is expressed ONLY via this checkbox — the type combo
+  // lists just the five randomized types, so there is no redundant "manually pick no_random" path.
+  // Text-less (the header names the column); the ## suffix embeds `label` so the id is unique.
+  ImGui::TableNextColumn();
   char ck_id[96];
-  snprintf(ck_id, sizeof(ck_id), "Randomize##rnd_%s", label);
+  snprintf(ck_id, sizeof(ck_id), "##rnd_%s", label);
   bool randomize = dist.type != ShapeDistType::kNoRandom;
   if (ImGui::Checkbox(ck_id, &randomize)) {
     if (randomize) {
@@ -507,32 +535,32 @@ bool RenderShapeDist(const char* label, ShapeDist& dist, float center_min, float
     changed = true;
   }
 
-  if (dist.type != ShapeDistType::kNoRandom) {
-    char combo_id[96];
-    snprintf(combo_id, sizeof(combo_id), "##shapedist_%s", label);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(120.0f);
-    // RenderShapeDistTypeCombo self-contains the top-most-popup fix — set immediately before the
-    // Combo — so it does not depend on the caller and holds even though the combo only renders
-    // when randomized.
-    changed |= RenderShapeDistTypeCombo(combo_id, &dist.type);
+  // Cols 3 & 4 — type combo + spread input. Rendered even when not randomized, but wrapped in
+  // BeginDisabled so they grey out ("available to enable") and cannot be interacted with while
+  // dist is NO_RANDOM (type==kNoRandom / spread==0), preserving the disabled-state round-trip.
+  ImGui::BeginDisabled(!randomize);
 
-    // Spread slider — same units as center (a distance/height ratio), so the range tracks the
-    // center's max. Type-specific label mirrors RenderAxisDist for user familiarity; the ## suffix
-    // keeps the id unique per field while the visible text is the type-specific spread label.
-    const char* spread_label = "Std";
-    if (dist.type == ShapeDistType::kUniform) {
-      spread_label = "Range";
-    } else if (dist.type == ShapeDistType::kZigzag) {
-      spread_label = "Amplitude";
-    } else if (dist.type == ShapeDistType::kLaplacian) {
-      spread_label = "Scale";
-    }
-    char sp_id[96];
-    snprintf(sp_id, sizeof(sp_id), "%s##spread_%s", spread_label, label);
-    changed |= SliderWithInput(sp_id, &dist.spread, 0.0f, center_max, center_fmt, SliderScale::kSqrt);
+  // Col 3 — distribution type.
+  ImGui::TableNextColumn();
+  char combo_id[96];
+  snprintf(combo_id, sizeof(combo_id), "##shapedist_%s", label);
+  ImGui::SetNextItemWidth(-FLT_MIN);  // fill the fixed Type column
+  changed |= RenderShapeDistTypeCombo(combo_id, &dist.type);
+
+  // Col 4 — spread: a plain number input (not a slider — saves horizontal space in the narrow
+  // vertical layout). Same units as center; clamped to [0, center_max] to match the old slider's
+  // range.
+  ImGui::TableNextColumn();
+  char sp_id[96];
+  snprintf(sp_id, sizeof(sp_id), "##spread_%s", label);
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  if (ImGui::InputFloat(sp_id, &dist.spread, 0, 0, center_fmt)) {
+    dist.spread = std::clamp(dist.spread, 0.0f, center_max);
+    changed = true;
   }
 
+  ImGui::EndDisabled();
+  // Invariant: this row advanced exactly kShapeTableColumnCount (=5) columns.
   return changed;
 }
 

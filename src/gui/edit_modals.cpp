@@ -71,7 +71,14 @@ constexpr float kEditModalMinWidth = 820.0f;
 // Height is content-driven (AlwaysAutoResize): the bottom pane uses the same
 // fixed height as the horizontal right pane (kPreviewChildHeight), so the
 // vertical modal is exactly 2× the horizontal modal height plus chrome.
-constexpr float kEditModalMinWidthVertical = 360.0f;
+//
+// Raised 360 → 420 for the Crystal-tab shape property table: its fixed columns
+// (Parameter kLabelColWidth=70 + Type 120 + Spread 60 + the Random checkbox cell
+// ~26) sum to ~276, and the stretch Value column still needs the slider(≥40) +
+// input(kInputWidth=60) pair (~104) to keep the "%.4f" Prism-H number readable;
+// with inner cell borders + cell/window padding that totals ~420. Below this the
+// table would either clip the Spread number column or force a horizontal scroll.
+constexpr float kEditModalMinWidthVertical = 420.0f;
 constexpr float kEditModalMinHeightVertical = 0.0f;
 
 static ActiveModal g_active_modal = ActiveModal::kNone;
@@ -195,8 +202,11 @@ constexpr int kWedgePresetCount = 4;
 
 // Render a slider + input + preset dropdown for wedge angle.
 // Edit-buffer context: cannot call MarkDirty internally, so this is a standalone impl.
+// `trailing_label = false` (table-cell mode): mirrors SliderWithInput's switch — omit the
+// trailing text label and drop kLabelColWidth from the width so the [slider][input][▼] group
+// fills the whole table cell (the field name lives in the Parameter column instead).
 bool SliderWithPresetEdit(const char* label, float* value, float min_val, float max_val, const char* fmt,
-                          SliderScale scale, const ValuePreset* presets, int preset_count) {
+                          SliderScale scale, const ValuePreset* presets, int preset_count, bool trailing_label = true) {
   char display_buf[64];
   char slider_id[64];
   char input_id[64];
@@ -218,7 +228,8 @@ bool SliderWithPresetEdit(const char* label, float* value, float min_val, float 
 
   float spacing = ImGui::GetStyle().ItemSpacing.x;
   float avail_w = ImGui::GetContentRegionAvail().x;
-  float slider_w = avail_w - kInputWidth - kLabelColWidth - spacing * 2;  // mirrors PrepareSliderLayout
+  // mirrors PrepareSliderLayout: reserve the label column only when a trailing label is drawn.
+  float slider_w = trailing_label ? (avail_w - kInputWidth - kLabelColWidth - spacing * 2) : (avail_w - kInputWidth);
   if (slider_w < 40.0f)
     slider_w = 40.0f;
 
@@ -264,8 +275,10 @@ bool SliderWithPresetEdit(const char* label, float* value, float min_val, float 
 
   *value = std::clamp(*value, min_val, max_val);
 
-  ImGui::SameLine();
-  ImGui::TextUnformatted(display_buf);
+  if (trailing_label) {
+    ImGui::SameLine();
+    ImGui::TextUnformatted(display_buf);
+  }
   return changed;
 }
 
@@ -551,9 +564,27 @@ static void RenderCrystalPreviewPane(GuiState& /*state*/) {
   }
 }
 
-// Crystal tab body: type radio + parameter sliders + face distance tree.
-// Preview / style / reset live in the persistent left pane (see
-// RenderCrystalPreviewPane) so they remain visible on Axis / Filter tabs too.
+// Render a wedge-angle parameter (upper_alpha / lower_alpha) as one property-table row. These are
+// structurally NOT randomizable (owner: "no need, don't do it"), so only the Parameter + Value
+// columns are filled; the Random / Type / Spread columns are advanced but left BLANK. Blank here
+// means "not applicable" — visually distinct from the greyed-but-present state a randomizable row
+// shows when its Randomize checkbox is off. Advances all kShapeTableColumnCount columns.
+static bool RenderWedgeTableRow(const char* label, float* value) {
+  ImGui::TableNextRow();
+  ImGui::TableNextColumn();  // Parameter
+  ShapeTableParamLabel(label);
+  ImGui::TableNextColumn();  // Value — slider + input + preset dropdown, filling the cell.
+  bool changed = SliderWithPresetEdit(label, value, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, kWedgePresets,
+                                      kWedgePresetCount, /*trailing_label=*/false);
+  ImGui::TableNextColumn();  // Random  — blank (not applicable)
+  ImGui::TableNextColumn();  // Type    — blank
+  ImGui::TableNextColumn();  // Spread  — blank
+  return changed;
+}
+
+// Crystal tab body: type radio + a single shape-parameter property table + a zero-indent Face
+// Distance collapsible section (also inside the table). Preview / style / reset live in the
+// persistent left pane (see RenderCrystalPreviewPane) so they remain visible on Axis / Filter tabs.
 static void RenderCrystalModal(GuiState& /*state*/) {
   auto& cr = g_crystal_buf;
 
@@ -569,121 +600,58 @@ static void RenderCrystalModal(GuiState& /*state*/) {
 
   ImGui::Spacing();
 
-  // -- Parameters --
-  // See gui/slider_mapping.hpp for the three-H-mapping conventions. Each shape scalar is now a
-  // ShapeDist: RenderShapeDist renders the center slider plus a Randomize checkbox (+ type/spread
-  // when enabled). RenderShapeDist self-handles its combo's top-most-popup fix (see panels.hpp).
-  if (cr.type == CrystalType::kPrism) {
-    RenderShapeDist("Height##modal_cr", cr.height, 0.01f, 100.0f, "%.2f", SliderScale::kLog);
-  } else {
-    RenderShapeDist("Prism H##modal_cr", cr.prism_h, 0.0f, 100.0f, "%.4f", SliderScale::kLogLinear);
-    RenderShapeDist("Upper H##modal_cr", cr.upper_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
-    RenderShapeDist("Lower H##modal_cr", cr.lower_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
-    SliderWithPresetEdit("Upper A##modal_cr", &cr.upper_alpha, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, kWedgePresets,
-                         kWedgePresetCount);
-    SliderWithPresetEdit("Lower A##modal_cr", &cr.lower_alpha, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, kWedgePresets,
-                         kWedgePresetCount);
-  }
-
-  // -- Face distance --
-  // Unified view (one type + one spread broadcast to all 6 faces; centers stay independent) plus an
-  // Advanced per-face tree where each face's type/spread can diverge. Broadcasts fire ONLY on active
-  // edits (checkbox toggle / combo change / spread drag), never on passive display, so opening the
-  // unified view never silently overwrites a per-face-diverged config (plan §7 risk 2).
+  // -- Shape parameters (single BeginTable property table) --
+  // Every randomizable shape scalar is one RenderShapeDistTableRow (5 aligned columns:
+  // Parameter | Value | Random | Type | Spread); the two Pyramid wedge angles are non-randomizable
+  // RenderWedgeTableRow rows (Random/Type/Spread blank). See gui/slider_mapping.hpp for the
+  // three-H-mapping conventions. Column count is pinned to kShapeTableColumnCount (panels.hpp) so
+  // the TableSetupColumn declarations here and the TableNextColumn sequences in the row helpers
+  // cannot drift (ImGui silently misaligns rather than asserting on a mismatch).
   constexpr float kFaceSpreadMax = 2.0f;
-  if (ImGui::TreeNode("Face Distance##modal")) {
-    // Whether face[0] currently carries randomization drives the unified checkbox display.
-    bool uni_random = cr.face_distance[0].type != ShapeDistType::kNoRandom;
-    // Mixed = the 6 faces do not all share face[0]'s (type, spread). Only a display hint.
-    bool mixed = false;
-    for (int i = 1; i < 6; i++) {
-      if (cr.face_distance[i].type != cr.face_distance[0].type ||
-          cr.face_distance[i].spread != cr.face_distance[0].spread) {
-        mixed = true;
-        break;
-      }
-    }
-    if (ImGui::Checkbox("Randomize (all faces)##modal_fd_uni", &uni_random)) {
-      if (uni_random) {
-        // Broadcast ONE shared spread (derived from face[0]'s center) to all 6 faces — mirrors the
-        // "Spread (all)" slider's broadcast below. Must NOT compute spread per-face from each
-        // face's own center: the per-face center sliders above are always independent, so if the
-        // user already diverged centers before enabling this checkbox, a per-face computation
-        // would silently produce 6 different spreads under a control labeled "all faces" (the
-        // unified view's single-shared-value semantics, plan §3 design point 2).
-        const float uni_spread = kShapeDistDefaultSpreadFraction * cr.face_distance[0].center;
-        for (int i = 0; i < 6; i++) {
-          cr.face_distance[i].type = ShapeDistType::kUniform;
-          cr.face_distance[i].spread = uni_spread;
-        }
-      } else {
-        for (int i = 0; i < 6; i++) {
-          cr.face_distance[i].type = ShapeDistType::kNoRandom;
-          cr.face_distance[i].spread = 0.0f;
-        }
-      }
-    }
-    if (uni_random) {
-      ShapeDistType uni_type = cr.face_distance[0].type;
-      ImGui::SameLine();
-      ImGui::SetNextItemWidth(120.0f);
-      if (RenderShapeDistTypeCombo("##modal_fd_uni_type", &uni_type)) {
-        for (int i = 0; i < 6; i++) {
-          cr.face_distance[i].type = uni_type;
-        }
-      }
-      float uni_spread = cr.face_distance[0].spread;
-      if (SliderWithInput("Spread (all)##modal_fd_uni_spread", &uni_spread, 0.0f, kFaceSpreadMax, "%.3f",
-                          SliderScale::kSqrt)) {
-        for (int i = 0; i < 6; i++) {
-          cr.face_distance[i].spread = uni_spread;
-        }
-      }
-      if (mixed) {
-        ImGui::TextDisabled("(faces differ — see Per-face)");
-      }
+  const ImGuiTableFlags kTableFlags =
+      ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg;
+  if (ImGui::BeginTable("##shape_params", kShapeTableColumnCount, kTableFlags)) {
+    // Value is the only WidthStretch column, so a narrow (vertical-layout) table compresses the
+    // slider first rather than clipping the fixed Type/Spread cells — satisfies the "shorten the
+    // slider, keep the number columns readable" responsive requirement.
+    ImGui::TableSetupColumn("Parameter", ImGuiTableColumnFlags_WidthFixed, kLabelColWidth);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    ImGui::TableSetupColumn("Random", ImGuiTableColumnFlags_WidthFixed);
+    ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+    ImGui::TableSetupColumn("Spread", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+    ImGui::TableHeadersRow();
+
+    if (cr.type == CrystalType::kPrism) {
+      RenderShapeDistTableRow("Height##modal_cr", cr.height, 0.01f, 100.0f, "%.2f", SliderScale::kLog);
+    } else {
+      RenderShapeDistTableRow("Prism H##modal_cr", cr.prism_h, 0.0f, 100.0f, "%.4f", SliderScale::kLogLinear);
+      RenderShapeDistTableRow("Upper H##modal_cr", cr.upper_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
+      RenderShapeDistTableRow("Lower H##modal_cr", cr.lower_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
+      RenderWedgeTableRow("Upper A##modal_cr", &cr.upper_alpha);
+      RenderWedgeTableRow("Lower A##modal_cr", &cr.lower_alpha);
     }
 
-    ImGui::Separator();
-    // Per-face center — always independent, always shown (matches pre-upgrade behavior).
-    for (int i = 0; i < 6; i++) {
-      char label[32];
-      snprintf(label, sizeof(label), "Face %d##modal_fd", i + 3);
-      SliderWithInput(label, &cr.face_distance[i].center, 0.0f, kFaceSpreadMax, "%.3f");
-    }
-
-    // Advanced: per-face randomization. Editing here diverges a single face's type/spread from the
-    // rest, exercising the core's six independent d_[6] distributions.
-    if (ImGui::TreeNode("Per-face randomization##modal_fd_adv")) {
+    // -- Face distance --
+    // The 6 faces are ordinary rows of the SAME table (column-for-column aligned with the params
+    // above), gated behind a collapsible header. SpanAllColumns makes the header stretch across the
+    // whole table like a divider row; NoTreePushOnOpen keeps the face rows at zero extra indent so
+    // their left edge lines up with the parameter rows. Default-collapsed (no DefaultOpen flag).
+    // Each face is an independent RenderShapeDistTableRow — there is NO "broadcast to all faces"
+    // control (owner rejected it): every row is edited independently, so the old unified/mixed-state
+    // machinery (and its self-contradiction warning) is gone.
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    const bool fd_open = ImGui::TreeNodeEx("Face Distance##modal",
+                                           ImGuiTreeNodeFlags_SpanAllColumns | ImGuiTreeNodeFlags_NoTreePushOnOpen);
+    if (fd_open) {
       for (int i = 0; i < 6; i++) {
-        // Unique ## suffixes per row (rather than PushID) so GUI tests can target each face's
-        // checkbox / combo / spread unambiguously.
-        bool fr = cr.face_distance[i].type != ShapeDistType::kNoRandom;
-        char ck_label[32];
-        snprintf(ck_label, sizeof(ck_label), "Face %d##fd_adv_ck_%d", i + 3, i);
-        if (ImGui::Checkbox(ck_label, &fr)) {
-          if (fr) {
-            cr.face_distance[i].type = ShapeDistType::kUniform;
-            cr.face_distance[i].spread = kShapeDistDefaultSpreadFraction * cr.face_distance[i].center;
-          } else {
-            cr.face_distance[i].type = ShapeDistType::kNoRandom;
-            cr.face_distance[i].spread = 0.0f;
-          }
-        }
-        if (cr.face_distance[i].type != ShapeDistType::kNoRandom) {
-          char type_label[32];
-          char sp_label[32];
-          snprintf(type_label, sizeof(type_label), "##fd_adv_type_%d", i);
-          snprintf(sp_label, sizeof(sp_label), "Spread##fd_adv_sp_%d", i);
-          ImGui::SameLine();
-          ImGui::SetNextItemWidth(110.0f);
-          RenderShapeDistTypeCombo(type_label, &cr.face_distance[i].type);
-          SliderWithInput(sp_label, &cr.face_distance[i].spread, 0.0f, kFaceSpreadMax, "%.3f", SliderScale::kSqrt);
-        }
+        char label[32];
+        snprintf(label, sizeof(label), "Face %d##modal_fd", i + 3);
+        RenderShapeDistTableRow(label, cr.face_distance[i], 0.0f, kFaceSpreadMax, "%.3f", SliderScale::kLinear);
       }
-      ImGui::TreePop();
     }
-    ImGui::TreePop();
+
+    ImGui::EndTable();
   }
 
   // -- Reset All (Crystal tab) --
