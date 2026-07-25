@@ -75,6 +75,40 @@ struct LeftPanelCaptureState {
   }
 };
 
+// Default-framebuffer capture with a caller-selectable rectangle. Deliberately NOT merged
+// with LeftPanelCaptureState: that one derives its rect from left-panel geometry constants
+// (plus a runtime Retina scale) inside the hook, whereas this one takes the rect from the
+// caller. Merging would mean rewriting an already-validated hook for zero new capability.
+//
+// Rect protocol: rect_w <= 0 (the default) captures the whole default framebuffer
+// (0, 0, fb_w, fb_h); setting a non-zero rect_w/rect_h before requested.store(true)
+// captures that sub-region instead (framebuffer pixels, origin bottom-left — the caller
+// applies its own Retina scaling if the rect comes from ImGui coordinates).
+// The "FullFrame" name reflects the current sole consumer, not a restriction.
+struct FullFrameCaptureState {
+  std::atomic<bool> requested{ false };
+  std::atomic<bool> done{ false };
+  std::vector<unsigned char> pixels;
+  int width = 0;
+  int height = 0;
+  int rect_x = 0;
+  int rect_y = 0;
+  int rect_w = 0;
+  int rect_h = 0;
+
+  void Reset() {
+    done.store(false);
+    requested.store(false);
+    pixels.clear();
+    width = 0;
+    height = 0;
+    rect_x = 0;
+    rect_y = 0;
+    rect_w = 0;
+    rect_h = 0;
+  }
+};
+
 struct AutoEvExportState {
   gui::PreviewViewport custom_vp;
   std::filesystem::path export_path;
@@ -117,6 +151,7 @@ extern ScreenshotCapture g_capture;
 extern ExportTestState g_export_test;
 extern BgOverlayTestState g_bg_test;
 extern LeftPanelCaptureState g_left_panel_capture;
+extern FullFrameCaptureState g_fullframe_capture;
 extern AutoEvExportState g_auto_ev_export;
 extern std::vector<unsigned char> g_synth_tex;
 extern int g_core_log_level;
@@ -174,5 +209,8 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine);
 void RegisterCompositePreviewTests(ImGuiTestEngine* engine);
 void RegisterStateReconcileTests(ImGuiTestEngine* engine);
 void RegisterPreviewAnimationTests(ImGuiTestEngine* engine);
+void RegisterCaptureHarnessTests(ImGuiTestEngine* engine);
+void RegisterLensProjectionTests(ImGuiTestEngine* engine);
+void RegisterModalLayoutTests(ImGuiTestEngine* engine);
 
 #endif  // LUMICE_TEST_GUI_SHARED_HPP

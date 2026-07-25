@@ -126,36 +126,100 @@ Release artifacts land in `build/cmake_install/`. Debug builds stay in `build/cm
 - Windows physical-desktop validation uses `scripts/win_remote_test.sh` together with `scripts/win_test_watcher.ps1`.
 - Performance diagnostics and workflows are documented in `doc/performance-testing.md`.
 
-### GUI Test Reference Regeneration (auto_ev tests)
+### GUI Test Reference Regeneration (reference groups)
 
 The `auto_ev` reference images are pixel-averaged means of N=10 stochastic renders to suppress
-per-run noise. Per-scene PSNR thresholds are `mean − 3σ` (floored to 0.5 dB precision).
+per-run noise. Per-scene PSNR thresholds are `mean − 4σ` (floored to 0.5 dB precision) — the
+margin every threshold in the repo is actually set with, and the one `SIGMA_MARGIN` in the
+driver emits. Both phases sample **full-suite** runs under `scripts/build.sh`'s correctness-pool
+invocation, never a single group in isolation: isolated runs measured 0.34–0.62 dB optimistic,
+which is how the `auto_ev` references once ended up flaking. The driver has no switch for this.
 
 Each scene has a single reference: the auto-EV-applied capture (`auto_ev_<scene>_on.jpg`). The
 legacy `_off` (intensity_factor=1.0) mode was dropped in chore-auto-ev-regression-drop-off — the
 GUI has no auto-EV toggle, so off was a degenerate non-default state exercising no unique code path.
 
+The `lens_proj` references cover the preview fragment shader's projection math
+(`src/gui/preview_renderer.cpp`: `fisheyeInverse` / `dualFisheyeInverse` / `rectangularInverse`) via
+an off-screen FBO export, independent of window size or layout — see the docking-coupling note
+below. Regen trigger: any change to that projection math or to `export_fbo_renderer.cpp`'s render
+path. Command: `python scripts/regen_gui_test_refs.py --group lens_proj`. Threshold backfill: the
+`psnr_threshold` field of each `kScenes[]` row in `test/gui/visual/test_gui_lens_projection.cpp`.
+
+The `modal_layout` references cover the edit-modal's internal control layout
+(`src/gui/edit_modals.cpp`) via an on-screen capture of the live "Edit Entry" window rectangle — see
+the docking-coupling note below. All four scenes are deterministic (no simulation, no RNG) and
+compare pixel-identical, so their thresholds sit at the shared 40 dB deterministic floor rather than
+a calibrated mean − 4σ. Regen trigger: any layout change to the edit modal (slider/input widths,
+property-table columns, control ordering, auto-resize behavior), or a harness window size / font
+atlas / ImGui style change. Command: `python scripts/regen_gui_test_refs.py --group modal_layout`.
+Threshold backfill: the `psnr_threshold` field of each `kScenes[]` row in
+`test/gui/visual/test_gui_modal_layout.cpp` — normally left at `kDeterministicThresholdDb` unless a
+scene stops comparing pixel-identical.
+
 **`--keep-export-png` flag** — When passed to `gui_test`, `CheckAgainstReference` skips
 `std::remove` so the per-run export PNGs at `/tmp/lumice_auto_ev_*.png` are preserved for
 collection by the driver script.
 
+**Reference groups** — `auto_ev` is one entry in the `GROUPS` registry at the top of
+`scripts/regen_gui_test_refs.py`; `capture_harness`, `lens_proj` and `modal_layout` are the
+second, third and fourth. A
+group names the `gui_test` category it tags its output with (also the `[<tag>]` its comparisons
+print and its key in `_thresholds.json`), its scenes/modes, and the `/tmp` and reference filename
+prefixes. Adding a visual-regression suite means adding a `GROUPS` entry — Phase A/B themselves
+are group-agnostic.
+Two constraints when registering one: the key must be unique across groups (PSNR samples are
+attributed by an exact match on the `[<tag>]` prefix in a shared full-suite stderr), and the
+test must compare via `lumice::test::CheckAgainstReference` so Phase B can parse its PSNR line.
+
+A scene whose frame is deterministic (no simulation, no RNG) compares pixel-identical, i.e.
+`PSNR=inf`, which leaves `mean − 4σ` no finite sample. Phase B records `identical_runs` for such
+scenes and reports a fixed 40 dB floor instead of a calibrated statistic — bit-exactness is not
+demandable of a committed reference compared on other machines.
+
 **Regeneration workflow:**
 ```bash
-# Full regen (Phase A: generate mean-ref + Phase B: calibrate thresholds, ~20 min):
+# Full regen of EVERY registered group (Phase A: mean-ref + Phase B: thresholds, ~20 min):
 python scripts/regen_gui_test_refs.py
 
+# One group only (recommended — regen what you changed, leave other groups' refs alone):
+python scripts/regen_gui_test_refs.py --group auto_ev
+
 # Phase A only (generate mean-ref images, then manually update thresholds):
-python scripts/regen_gui_test_refs.py --phase-a-only
+python scripts/regen_gui_test_refs.py --group auto_ev --phase-a-only
 
 # Phase B only (recalibrate thresholds against existing mean-refs):
-python scripts/regen_gui_test_refs.py --phase-b-only
+python scripts/regen_gui_test_refs.py --group auto_ev --phase-b-only
+
+# Single scene (--scene requires --group; scene names are only unique within a group):
+python scripts/regen_gui_test_refs.py --group auto_ev --scene halo_22
 
 # Quick smoke test (2 runs each phase):
-python scripts/regen_gui_test_refs.py --n 2 --n-calib 2
+python scripts/regen_gui_test_refs.py --group auto_ev --n 2 --n-calib 2
 ```
 
-After Phase B, copy the `threshold` values from `test/gui/references/_thresholds.json` into
-`kScenes[]` in `test/gui/visual/test_gui_auto_ev.cpp` (one `<scene>_on` threshold per scene).
+Phase B merges per group and per scene: groups and scenes not covered by the run keep their
+existing entries, including their own `generated_at`. Thresholds live under
+`groups.<key>.scenes` in `test/gui/references/_thresholds.json`.
+
+After Phase B, copy the `threshold` values into the group's test source — for `auto_ev` that is
+`kScenes[]` in `test/gui/visual/test_gui_auto_ev.cpp` (one `<scene>_on` threshold per scene); the
+script prints the path for whichever group it ran.
+
+**Docking coupling boundary** — relevant to a planned migration of the GUI's fixed-layout panels
+(and the edit modal, from `BeginPopupModal` to a dockable window) onto ImGui's docking branch:
+- The regen harness itself (readback, comparison, threshold, trigger mode) is layout-agnostic —
+  Phase A/B do not know or care whether panels are docked.
+- `lens_proj` renders through its own off-screen FBO (`export_fbo_renderer.cpp`'s
+  `RenderExportToRgba`, allocated at the caller-supplied size), never reading the on-screen preview
+  viewport. It is **fully docking-decoupled**, in both pixel content and output size — the migration
+  needs no action on this group.
+- `modal_layout` reads the DEFAULT framebuffer through `g_fullframe_capture`'s sub-region protocol,
+  using the live on-screen rectangle of the "Edit Entry" window. Once the edit modal becomes
+  dockable, its on-screen position/size source changes and these references will need a **re-shoot**:
+  re-run `python scripts/regen_gui_test_refs.py --group modal_layout` (Phase A + B). No harness code
+  change is required — the comparison mechanism (`CheckAgainstReference` + `g_fullframe_capture`)
+  stays the same; only the captured pixels change.
 
 ## Logging and Troubleshooting
 

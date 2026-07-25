@@ -71,62 +71,6 @@ static bool RequestAndWaitExport(ImGuiTestContext* ctx, const gui::PreviewViewpo
   return g_auto_ev_export.done.load() && g_auto_ev_export.result;
 }
 
-// Compare exported PNG at tmp_path against reference; prints instructions if reference missing.
-// Returns true if check passed (or was skipped because both ok), false if test should fail.
-static bool CheckAgainstReference(const char* group, const char* tag, const std::string& tmp_path,
-                                  const std::string& ref_path, double threshold) {
-  std::vector<unsigned char> ref_data;
-  int ref_w = 0;
-  int ref_h = 0;
-  int ref_ch = 0;
-  bool loaded = lumice::test::LoadPng(ref_path.c_str(), ref_data, ref_w, ref_h, ref_ch);
-  if (!loaded) {
-    fprintf(stderr, "[%s] %s: reference not found at %s\n", group, tag, ref_path.c_str());
-    fprintf(stderr, "[%s] %s: Copy %s to %s\n", group, tag, tmp_path.c_str(), ref_path.c_str());
-    return false;
-  }
-
-  std::vector<unsigned char> cap_data;
-  int cap_w = 0;
-  int cap_h = 0;
-  int cap_ch = 0;
-  if (!lumice::test::LoadPng(tmp_path.c_str(), cap_data, cap_w, cap_h, cap_ch)) {
-    fprintf(stderr, "[%s] %s: failed to load capture from %s\n", group, tag, tmp_path.c_str());
-    return false;
-  }
-
-  if (cap_w != ref_w || cap_h != ref_h) {
-    fprintf(stderr, "[%s] %s: size mismatch cap=%dx%dx%d ref=%dx%dx%d\n", group, tag, cap_w, cap_h, cap_ch, ref_w,
-            ref_h, ref_ch);
-    return false;
-  }
-
-  // When ref is RGB (e.g. JPEG) and capture is RGBA, strip alpha before comparison.
-  const unsigned char* cmp_ptr = cap_data.data();
-  std::vector<unsigned char> converted;
-  int cmp_channels = cap_ch;
-  if (ref_ch == 3 && cap_ch == 4) {
-    converted = lumice::test::StripAlpha(cap_data.data(), cap_w, cap_h);
-    cmp_ptr = converted.data();
-    cmp_channels = 3;
-  } else if (ref_ch != cap_ch) {
-    fprintf(stderr, "[%s] %s: channel mismatch cap=%d ref=%d\n", group, tag, cap_ch, ref_ch);
-    return false;
-  }
-
-  double psnr = lumice::test::ComputePsnr(cmp_ptr, ref_data.data(), ref_w, ref_h, cmp_channels);
-  fprintf(stderr, "[%s] %s: PSNR=%.2f dB (threshold=%.1f dB)\n", group, tag, psnr, threshold);
-  if (psnr < threshold) {
-    fprintf(stderr, "[%s] %s: PSNR below threshold — possible regression\n", group, tag);
-    return false;
-  }
-  // g_keep_export_png is set by --keep-export-png; scripts/regen_gui_test_refs.py uses this flag.
-  if (!g_keep_export_png) {
-    std::remove(tmp_path.c_str());
-  }
-  return true;
-}
-
 void RegisterAutoEvRegressionTests(ImGuiTestEngine* engine) {
   for (int idx = 0; idx < kSceneCount; idx++) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "auto_ev", kScenes[idx].name);
@@ -230,8 +174,8 @@ void RegisterAutoEvRegressionTests(ImGuiTestEngine* engine) {
       IM_CHECK(RequestAndWaitExport(ctx, vp, path_on));
 
       // 11. Compare against reference
-      IM_CHECK(CheckAgainstReference("auto_ev", (std::string(scene.name) + "_on").c_str(), path_on, ref_on,
-                                     scene.psnr_threshold));
+      IM_CHECK(lumice::test::CheckAgainstReference("auto_ev", (std::string(scene.name) + "_on").c_str(), path_on,
+                                                   ref_on, scene.psnr_threshold, g_keep_export_png));
     };
   }
 }

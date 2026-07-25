@@ -59,6 +59,15 @@ Checks:
      populated prefix are the same thing by construction. The invariant is
      pinned here rather than in a comment because the failure is silent: a
      default slot reads as a valid empty crystal all the way to the GPU.
+  10. gui-test-suite-args-sync — scripts/regen_gui_test_refs.py's SUITE_FILTER_EXPR
+     must match the gui_test correctness-pool `--filter` invocation in
+     scripts/build.sh. The two are independent hand-maintained copies (bash vs.
+     Python, so they cannot share a single literal) of the same exclusion list;
+     letting them drift silently recalibrates GUI visual-regression thresholds
+     under a condition CI no longer actually asserts under — this exact class of
+     drift (isolated `--filter <group>` vs. the full suite) previously made
+     committed references optimistic (see AGENTS.md's reference-regeneration
+     section).
 
 Add a new check as a function returning a list of Violation and append it to
 CHECKS. Keep each check deterministic and artifact-inspecting.
@@ -1009,6 +1018,75 @@ def check_no_default_constructed_crystal_slots() -> list[Violation]:
     return out
 
 
+BUILD_SH = REPO_ROOT / "scripts" / "build.sh"
+REGEN_GUI_TEST_REFS_PY = REPO_ROOT / "scripts" / "regen_gui_test_refs.py"
+
+_BUILD_SH_CORRECTNESS_FILTER = re.compile(r'GUI_TEST_BIN"\s+--fixed-dt\s+--filter\s+"([^"]+)"')
+# Matches SUITE_FILTER_EXPR's value however it is broken across adjacent string-literal lines
+# (Python concatenates those at parse time); DOTALL lets the group span the newline between them.
+_REGEN_SUITE_FILTER_EXPR = re.compile(
+    r'SUITE_FILTER_EXPR\s*=\s*\(\s*((?:"[^"]*"\s*)+)\)', re.DOTALL
+)
+_QUOTED_STRING = re.compile(r'"([^"]*)"')
+
+
+def check_gui_test_suite_args_sync() -> list[Violation]:
+    """Text/regex-only on both sides (never imports regen_gui_test_refs.py): that module pulls
+    in numpy/PIL, and an unguarded import here would let a failure in it take down every other
+    check_policies.py check along with this one — see git history for the exec_module attempt
+    this replaced."""
+    out: list[Violation] = []
+    if not BUILD_SH.exists() or not REGEN_GUI_TEST_REFS_PY.exists():
+        return out
+
+    build_sh_text = BUILD_SH.read_text(encoding="utf-8")
+    m = _BUILD_SH_CORRECTNESS_FILTER.search(build_sh_text)
+    if not m:
+        out.append(
+            Violation(
+                BUILD_SH,
+                1,
+                "gui-test-suite-args-sync",
+                "could not locate the gui_test correctness-pool `--filter` invocation "
+                "(expected `\"$GUI_TEST_BIN\" --fixed-dt --filter \"...\"`); update this "
+                "check's pattern alongside any build.sh restructuring.",
+            )
+        )
+        return out
+    build_sh_filter = m.group(1)
+
+    regen_text = REGEN_GUI_TEST_REFS_PY.read_text(encoding="utf-8")
+    m2 = _REGEN_SUITE_FILTER_EXPR.search(regen_text)
+    if not m2:
+        out.append(
+            Violation(
+                REGEN_GUI_TEST_REFS_PY,
+                1,
+                "gui-test-suite-args-sync",
+                "could not locate SUITE_FILTER_EXPR's value (expected "
+                '`SUITE_FILTER_EXPR = ("..." "...")`); update this check\'s pattern '
+                "alongside any SUITE_FILTER_EXPR restructuring.",
+            )
+        )
+        return out
+    regen_filter = "".join(_QUOTED_STRING.findall(m2.group(1)))
+    lineno = regen_text.count("\n", 0, m2.start()) + 1
+
+    if build_sh_filter != regen_filter:
+        out.append(
+            Violation(
+                REGEN_GUI_TEST_REFS_PY,
+                lineno,
+                "gui-test-suite-args-sync",
+                f"SUITE_FILTER_EXPR ({regen_filter!r}) no longer matches "
+                f"scripts/build.sh's gui_test correctness-pool `--filter` "
+                f"({build_sh_filter!r}); update SUITE_FILTER_EXPR so reference calibration "
+                "keeps running under the same condition CI actually asserts under.",
+            )
+        )
+    return out
+
+
 CHECKS = [
     check_getenv_centralization,
     check_env_knob_registration,
@@ -1020,6 +1098,7 @@ CHECKS = [
     check_gui_state_field_tier_registration,
     check_no_msvc_unsafe_builtin,
     check_no_default_constructed_crystal_slots,
+    check_gui_test_suite_args_sync,
 ]
 
 
@@ -1043,7 +1122,7 @@ def main() -> int:
         "Policy check passed (env centralization, knob registration, GUI API boundary, "
         "reconciler-widget-include, using-namespace, struct-layout parity, no-config-by-value-copy, "
         "gui-state-field-tier-registration, no-msvc-unsafe-builtin, "
-        "no-default-constructed-crystal-slots)."
+        "no-default-constructed-crystal-slots, gui-test-suite-args-sync)."
     )
     return 0
 

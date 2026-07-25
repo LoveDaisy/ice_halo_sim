@@ -42,6 +42,7 @@ ScreenshotCapture g_capture;
 ExportTestState g_export_test;
 BgOverlayTestState g_bg_test;
 LeftPanelCaptureState g_left_panel_capture;
+FullFrameCaptureState g_fullframe_capture;
 AutoEvExportState g_auto_ev_export;
 int g_core_log_level = LUMICE_LOG_INFO;
 int g_gui_log_level = LUMICE_LOG_INFO;
@@ -368,6 +369,9 @@ int main(int argc, char** argv) {
   RegisterCompositePreviewTests(engine);
   RegisterStateReconcileTests(engine);
   RegisterPreviewAnimationTests(engine);
+  RegisterCaptureHarnessTests(engine);
+  RegisterLensProjectionTests(engine);
+  RegisterModalLayoutTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
 
   // Main loop — runs until all tests complete
@@ -517,6 +521,36 @@ int main(int argc, char** argv) {
         // fprintf matches diagnostic style used elsewhere in this file
         // (glfwInit failure, DIAG messages); not a log-framework path.
         fprintf(stderr, "[LeftPanelCapture] ReadbackGlRegionToRgba failed (rx=%d ry=%d rw=%d rh=%d fb=%dx%d)\n", rx, ry,
+                rw, rh, fb_w, fb_h);
+      }
+    }
+
+    // Generic default-framebuffer capture hook (whole frame or caller-selected rect).
+    // Same timing contract as the left-panel hook above: AFTER RenderDrawData, BEFORE
+    // glfwSwapBuffers. Unlike that hook, the rectangle comes from the requesting test
+    // (see FullFrameCaptureState), so no panel geometry is hard-coded here.
+    if (g_fullframe_capture.requested.exchange(false)) {
+      int fb_w = 0;
+      int fb_h = 0;
+      glfwGetFramebufferSize(window, &fb_w, &fb_h);
+      // Locals intentionally non-const: matches the left-panel hook's rationale
+      // (project clang-tidy would force kRx/kRy naming on const locals).
+      int rx = g_fullframe_capture.rect_x;
+      int ry = g_fullframe_capture.rect_y;
+      int rw = g_fullframe_capture.rect_w;
+      int rh = g_fullframe_capture.rect_h;
+      if (rw <= 0 || rh <= 0) {
+        rx = 0;
+        ry = 0;
+        rw = fb_w;
+        rh = fb_h;
+      }
+      if (lumice::gui::ReadbackGlRegionToRgba(rx, ry, rw, rh, g_fullframe_capture.pixels)) {
+        g_fullframe_capture.width = rw;
+        g_fullframe_capture.height = rh;
+        g_fullframe_capture.done.store(true);
+      } else {
+        fprintf(stderr, "[FullFrameCapture] ReadbackGlRegionToRgba failed (rx=%d ry=%d rw=%d rh=%d fb=%dx%d)\n", rx, ry,
                 rw, rh, fb_w, fb_h);
       }
     }

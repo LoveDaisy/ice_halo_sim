@@ -1,6 +1,7 @@
 #ifndef LUMICE_TEST_GUI_SCREENSHOT_HPP
 #define LUMICE_TEST_GUI_SCREENSHOT_HPP
 
+#include <string>
 #include <vector>
 
 // Forward declare GL types to avoid GL header dependency in the header
@@ -30,6 +31,18 @@ double ComputePsnr(const unsigned char* img1, const unsigned char* img2, int w, 
 
 // Strip alpha channel from RGBA pixel data, returning RGB.
 std::vector<unsigned char> StripAlpha(const unsigned char* rgba, int width, int height);
+
+// Compare the capture saved at tmp_path against the reference image at ref_path.
+// Returns true when the capture matches within threshold; false (with a stderr diagnostic)
+// when the reference is missing, the capture cannot be read, dimensions/channels disagree,
+// or PSNR is below threshold.
+//
+// group/tag are the "[<group>] <tag>:" stderr prefix; scripts/regen_gui_test_refs.py parses
+// PSNR lines by that prefix, so a reference group's <group> must match its registry key there.
+// keep_capture_png=false deletes tmp_path on success (pass the binary's --keep-export-png
+// flag through so the regen driver can collect per-run PNGs).
+bool CheckAgainstReference(const char* group, const char* tag, const std::string& tmp_path, const std::string& ref_path,
+                           double threshold, bool keep_capture_png);
 
 }  // namespace lumice::test
 
