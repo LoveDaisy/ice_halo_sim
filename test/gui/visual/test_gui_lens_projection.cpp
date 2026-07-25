@@ -14,10 +14,9 @@
 // on-screen preview viewport is never read. That is what makes these references permanent
 // assets rather than something to re-shoot whenever the layout moves.
 //
-// Category "lens_proj" is checked against every other gui_test category: --filter is a
-// case-insensitive SUBSTRING match on name OR category (imgui_te_engine::PassFilter), so a
-// key that is a substring of another category would pull unrelated tests into this group's
-// PSNR sampling in scripts/regen_gui_test_refs.py.
+// Category "lens_proj" doubles as the "[lens_proj]" tag CheckAgainstReference prints, which
+// is how scripts/regen_gui_test_refs.py attributes PSNR samples to this group in a shared
+// full-suite stderr. It must therefore stay unique across groups.
 
 #include <cmath>
 #include <fstream>
@@ -72,17 +71,22 @@ struct LensProjScene {
 // and the equirect map spans the full ±180° x ±90° sky. A square frame would only add
 // black bands.
 //
-// Thresholds are set by scripts/regen_gui_test_refs.py --group lens_proj (Phase B,
-// mean − 3σ floored to 0.5 dB); see test/gui/references/_thresholds.json for the sampled
-// mean/σ behind each value.
+// References are pixel-averaged means of N=10 runs; thresholds come from
+// scripts/regen_gui_test_refs.py --group lens_proj (Phase B, mean − 4σ floored to 0.5 dB,
+// pooled over 40 runs), with the sampled mean/σ recorded per scene in
+// test/gui/references/_thresholds.json and repeated inline below.
 static const LensProjScene kScenes[] = {
-  {"fisheye_equal_area_120",       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 0.0,
+  // mean 19.43 σ0.456
+  {"fisheye_equal_area_120",       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 17.5,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   120.0f, 20.0f},
-  {"fisheye_orthographic_180",     LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 0.0,
+  // mean 20.31 σ0.374
+  {"fisheye_orthographic_180",     LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 18.5,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeOrthographic, 180.0f, 20.0f},
-  {"dual_fisheye_equal_area_full", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 0.0,
+  // mean 20.60 σ0.273
+  {"dual_fisheye_equal_area_full", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 19.5,
    LensSetup::kDualFisheyeExport},
-  {"rectangular",                  LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 0.0,
+  // mean 19.61 σ0.349
+  {"rectangular",                  LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 18.0,
    LensSetup::kEquirectExport},
 };
 // clang-format on

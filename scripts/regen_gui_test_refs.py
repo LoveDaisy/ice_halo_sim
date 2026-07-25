@@ -5,12 +5,18 @@ Reference generation and threshold calibration driver for GUI visual-regression 
 Phase A: Run gui_test N times with --keep-export-png, pixel-average the
   captures per (scene, mode), and save the mean image as the new reference.
 Phase B: Run gui_test N_calib times, parse PSNR output from stderr, and
-  compute per-scene threshold recommendations (mean - 3sigma, floor to 0.5 dB).
+  compute per-scene threshold recommendations (mean - SIGMA_MARGIN*sigma,
+  floor to 0.5 dB).
 
 Both phases are driven by the GROUPS registry below: a reference group names the
-gui_test category to filter on, its scenes/modes, and the tmp/reference filename
-prefixes. Adding a visual-regression suite means adding a GROUPS entry — the Phase
-A/B algorithms themselves stay untouched.
+gui_test category it tags its output with, its scenes/modes, and the tmp/reference
+filename prefixes. Adding a visual-regression suite means adding a GROUPS entry — the
+Phase A/B algorithms themselves stay untouched.
+
+Every run of both phases is a full gui_test run under the same invocation
+scripts/build.sh uses for its correctness pool (see SUITE_ARGS), because that is the
+condition the committed thresholds have to hold under; groups are separated by the
+"[<group>]" tag their comparisons print, not by narrowing what runs.
 
 See AGENTS.md "GUI Test Reference Regeneration" for usage.
 """
@@ -40,9 +46,9 @@ class ReferenceGroup:
     """One registered visual-regression suite.
 
     key         gui_test category AND the "[<key>]" stderr tag its comparisons print;
-                also the _thresholds.json group name. Must not be a substring of any
-                other gui_test category — --filter is substring-matched, so a colliding
-                key would pull unrelated tests into this group's PSNR sampling.
+                also the _thresholds.json group name. Must be unique across groups:
+                PSNR lines are attributed by an exact match on this tag, so two groups
+                sharing one would have their samples pooled into a single threshold.
     scenes      scene names, matching the test registration order in the group's source.
     modes       per-scene variant suffixes; [None] for groups without variants.
     tmp_prefix  the test writes its capture to /tmp/<tmp_prefix><key>.png.
@@ -119,12 +125,20 @@ STAGING_DIR = "/tmp/gui_refs_build"
 _PSNR_RE = re.compile(r"\[(\w+)\]\s+(\S+):\s+PSNR=(inf|[0-9.]+)\s+dB")
 
 # Threshold recorded when every calibration run was pixel-identical to the reference, so
-# mean − 3σ has nothing finite to work with. Bit-exactness cannot be demanded — references
+# mean − kσ has nothing finite to work with. Bit-exactness cannot be demanded — references
 # are committed and compared on other machines — so this falls back to the value the repo's
 # other deterministic GL comparisons already use (screenshot/left_panel_psnr,
 # screenshot/crystal_psnr): high enough that a moved widget or changed color fails, loose
 # enough to absorb encoder/driver noise.
 DETERMINISTIC_FLOOR_DB = 40.0
+
+# Sigma margin behind each recommended threshold. 4, not 3: every threshold this repo
+# actually ships is mean − 4σ (reproduce it from the psnr_mean/psnr_std recorded in
+# _thresholds.json — six of the ten auto_ev scenes discriminate between 3σ and 4σ, and
+# all six match 4σ), so 3σ here would have been a recommendation nobody adopted. It is
+# also the margin the observed tails need: three sigma left the lens_proj dual-fisheye
+# threshold 0.08 dB under the lowest sample of an independent 20-run batch.
+SIGMA_MARGIN = 4.0
 
 
 # ---------------------------------------------------------------------------
@@ -149,18 +163,26 @@ def _scene_key(scene: str, mode: str | None) -> str:
     return f"{scene}_{mode}" if mode else scene
 
 
-def _gtest_filter(group: ReferenceGroup, args: argparse.Namespace) -> str:
-    """Build the gui_test --filter value. Filter is substring-matched against
-    each test's Name OR Category (see imgui_te_engine.cpp:PassFilter — not a
-    glob, not gtest syntax). With --scene, use ^name$ to anchor an exact match
-    on the scene name so 'rp46' does not also pick 'rp46_nof'."""
-    if getattr(args, "scene", None):
-        return f"^{args.scene}$"
-    return group.key
+# Every run — reference generation AND calibration — invokes gui_test exactly the way
+# scripts/build.sh runs its correctness pool: the whole suite minus the real-timing tests,
+# with --fixed-dt. Sampling a group in isolation (`--filter <key>`) is measurably optimistic,
+# because each test then gets the machine to itself and its Monte-Carlo frame accumulates
+# less noise: across the lens_proj group, isolated runs came out 0.34–0.62 dB above
+# full-suite runs, enough that an isolated threshold sat ABOVE full-suite samples
+# actually observed. auto_ev learned the same lesson the expensive way (its references
+# predate this and had to be regenerated from full-suite runs after a 31% run-level flake).
+# So the condition is not a knob: thresholds must be calibrated under the condition the
+# assertions run in, and there is no way to ask this script for anything else.
+SUITE_ARGS = [
+    "--fixed-dt",
+    "--filter",
+    "-perf_test,-save_open_visual_consistency,-revert_repushes_server_display_state,"
+    "-zorder_priority_persists_across_rerun,-p2_gpu_color_degrade",
+]
 
 
-def _run(binary: str, gtest_filter: str, extra_args: list[str], capture_stderr: bool = False) -> tuple[int, str]:
-    cmd = [binary, "--filter", gtest_filter] + extra_args
+def _run(binary: str, extra_args: list[str], capture_stderr: bool = False) -> tuple[int, str]:
+    cmd = [binary] + SUITE_ARGS + extra_args
     result = subprocess.run(cmd, capture_output=capture_stderr, text=True)
     return result.returncode, result.stderr if capture_stderr else ""
 
@@ -242,12 +264,11 @@ def phase_a_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
     refs_dir = args.refs_dir
     quality = args.quality
     scenes = _scene_list(group, args)
-    gtest_filter = _gtest_filter(group, args)
 
     print(f"[Phase A][{group.key}] Mean-ref generation: N={n} runs, JPEG quality={quality}")
     print(f"[Phase A][{group.key}] Binary : {binary}")
     print(f"[Phase A][{group.key}] Refs   : {refs_dir}")
-    print(f"[Phase A][{group.key}] Scenes : {scenes} (gtest filter='{gtest_filter}')")
+    print(f"[Phase A][{group.key}] Scenes : {scenes} (full-suite runs; --scene selects which to average)")
 
     # Clear staging dir for idempotent reruns
     staging = os.path.join(STAGING_DIR, group.key)
@@ -259,7 +280,7 @@ def phase_a_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
     for i in range(n):
         run_dir = os.path.join(staging, f"run_{i}")
         print(f"[Phase A][{group.key}] Run {i + 1}/{n}...", flush=True)
-        rc, _ = _run(binary, gtest_filter, ["--keep-export-png"])
+        rc, _ = _run(binary, ["--keep-export-png"])
         if rc != 0:
             print(f"  WARNING: run {i} exited {rc}", file=sys.stderr)
         _collect_pngs(group, run_dir, scenes)
@@ -343,20 +364,21 @@ def phase_b_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
     binary = args.binary
     n_calib = args.n_calib
     refs_dir = args.refs_dir
-    gtest_filter = _gtest_filter(group, args)
+    # Every group prints into the same full-suite stderr, and --scene must leave the group's
+    # other scenes' entries untouched, so sampling is restricted to the selected keys.
+    wanted = {_scene_key(scene, mode) for scene in _scene_list(group, args) for mode in group.modes}
 
     print(f"[Phase B][{group.key}] Threshold calibration: N_calib={n_calib} runs")
     print(f"[Phase B][{group.key}] Binary : {binary}")
-    print(f"[Phase B][{group.key}] Filter : {gtest_filter}")
+    print(f"[Phase B][{group.key}] Scenes : {sorted(wanted)}")
 
     psnr_data: dict[str, list[float]] = {}
     for i in range(n_calib):
         print(f"[Phase B][{group.key}] Calibration run {i + 1}/{n_calib}...", flush=True)
-        _, stderr = _run(binary, gtest_filter, [], capture_stderr=True)
+        _, stderr = _run(binary, [], capture_stderr=True)
         for m in _PSNR_RE.finditer(stderr):
-            # Drop PSNR lines emitted by other reference groups: a substring --filter can
-            # legitimately select more than this group's tests.
-            if m.group(1) != group.key:
+            # Drop PSNR lines belonging to another group, or to a scene this run did not select.
+            if m.group(1) != group.key or m.group(2) not in wanted:
                 continue
             tag, val = m.group(2), float(m.group(3))
             psnr_data.setdefault(tag, []).append(val)
@@ -369,7 +391,10 @@ def phase_b_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
-    print(f"\n[Phase B][{group.key}] Recommendations (mean − 3σ, floor to 0.5 dB precision):")
+    print(
+        f"\n[Phase B][{group.key}] Recommendations "
+        f"(mean − {SIGMA_MARGIN:.0f}σ, floor to 0.5 dB precision):"
+    )
     scenes_out: dict[str, dict] = {}
     for tag in sorted(psnr_data):
         samples = psnr_data[tag]
@@ -393,7 +418,7 @@ def phase_b_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
         vals = np.array(finite)
         mean = float(vals.mean())
         std = float(vals.std(ddof=0))
-        threshold = math.floor((mean - 3 * std) * 2) / 2
+        threshold = math.floor((mean - SIGMA_MARGIN * std) * 2) / 2
         suffix = f"  ({identical}/{len(samples)} runs pixel-identical, excluded)" if identical else ""
         print(f"  {tag}: mean={mean:.2f} dB  std={std:.4f} dB  threshold={threshold:.1f} dB{suffix}")
         scenes_out[tag] = {
@@ -480,7 +505,8 @@ def main() -> None:
             "--group (which is then required, since scene names are only unique per group). "
             "Phase A overwrites only this scene's reference image; Phase B updates only "
             "this scene's entry in _thresholds.json (other scenes preserved via merge-write). "
-            "Default: run all scenes of every selected group."
+            "Selects what is averaged/calibrated, not what gui_test runs — every run is a "
+            "full-suite run (see SUITE_ARGS). Default: all scenes of every selected group."
         ),
     )
 

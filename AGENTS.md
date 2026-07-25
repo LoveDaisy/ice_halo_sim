@@ -129,7 +129,11 @@ Release artifacts land in `build/cmake_install/`. Debug builds stay in `build/cm
 ### GUI Test Reference Regeneration (reference groups)
 
 The `auto_ev` reference images are pixel-averaged means of N=10 stochastic renders to suppress
-per-run noise. Per-scene PSNR thresholds are `mean − 3σ` (floored to 0.5 dB precision).
+per-run noise. Per-scene PSNR thresholds are `mean − 4σ` (floored to 0.5 dB precision) — the
+margin every threshold in the repo is actually set with, and the one `SIGMA_MARGIN` in the
+driver emits. Both phases sample **full-suite** runs under `scripts/build.sh`'s correctness-pool
+invocation, never a single group in isolation: isolated runs measured 0.34–0.62 dB optimistic,
+which is how the `auto_ev` references once ended up flaking. The driver has no switch for this.
 
 Each scene has a single reference: the auto-EV-applied capture (`auto_ev_<scene>_on.jpg`). The
 legacy `_off` (intensity_factor=1.0) mode was dropped in chore-auto-ev-regression-drop-off — the
@@ -140,17 +144,17 @@ GUI has no auto-EV toggle, so off was a degenerate non-default state exercising 
 collection by the driver script.
 
 **Reference groups** — `auto_ev` is one entry in the `GROUPS` registry at the top of
-`scripts/regen_gui_test_refs.py`; `capture_harness` is the second. A group names the `gui_test`
-category to filter on (which is also the `[<tag>]` its comparisons print and its key in
-`_thresholds.json`), its scenes/modes, and the `/tmp` and reference filename prefixes. Adding a
-visual-regression suite means adding a `GROUPS` entry — Phase A/B themselves are group-agnostic.
-Two constraints when registering one: the category must not be a substring of any existing
-`gui_test` category (`--filter` is substring-matched, so a colliding key would pull unrelated
-tests into the group's PSNR sampling), and the test must compare via
-`lumice::test::CheckAgainstReference` so Phase B can parse its PSNR line.
+`scripts/regen_gui_test_refs.py`; `capture_harness` and `lens_proj` are the second and third. A
+group names the `gui_test` category it tags its output with (also the `[<tag>]` its comparisons
+print and its key in `_thresholds.json`), its scenes/modes, and the `/tmp` and reference filename
+prefixes. Adding a visual-regression suite means adding a `GROUPS` entry — Phase A/B themselves
+are group-agnostic.
+Two constraints when registering one: the key must be unique across groups (PSNR samples are
+attributed by an exact match on the `[<tag>]` prefix in a shared full-suite stderr), and the
+test must compare via `lumice::test::CheckAgainstReference` so Phase B can parse its PSNR line.
 
 A scene whose frame is deterministic (no simulation, no RNG) compares pixel-identical, i.e.
-`PSNR=inf`, which leaves `mean − 3σ` no finite sample. Phase B records `identical_runs` for such
+`PSNR=inf`, which leaves `mean − 4σ` no finite sample. Phase B records `identical_runs` for such
 scenes and reports a fixed 40 dB floor instead of a calibrated statistic — bit-exactness is not
 demandable of a committed reference compared on other machines.
 
