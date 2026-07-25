@@ -23,7 +23,6 @@
 #include "gui/gui_logger.hpp"
 #include "gui/gui_state_reconcile.hpp"
 #include "gui/window_sizing.hpp"
-#include "include/lumice_config_scope.hpp"
 #include "util/path_utils.hpp"
 
 namespace lumice::gui {
@@ -721,21 +720,21 @@ void CalibrateQualityThreshold() {
   constexpr int kCalibrationRays = 100000;
   constexpr double kCalibrationFraction = 0.4;  // Accept frames >= 40% of typical ray count per window
 
-  // Use current default state to build a calibration config
-  LUMICE_Config config{};
-  lumice::ConfigOwningGuard config_color_guard(config);  // v4.8: release raypath_color on any early return
-  if (!FillLumiceConfig(g_state, &config)) {
+  // Use current default state to build a calibration scene
+  ScenePtr scene = BuildScene(g_state, SceneIntent::kSimCommit);
+  if (!scene) {
     // Unlike DoRun (which pops SetGuiWarning), calibration degrades silently to the default
     // threshold: it does not touch the user's edited/committed config, so a log line is
     // sufficient and a modal would be noise. Intentional asymmetry, not an oversight.
     GUI_LOG_WARNING("[Calibration] filter exceeds ABI limits, using default threshold");
     return;
   }
-  config.infinite = 0;
-  config.ray_num = kCalibrationRays;
+  // Override just the two sim scalars for the short calibration run; every Set* is idempotent
+  // (last write wins), so re-setting the group is the documented way to amend a built scene.
+  LUMICE_SceneSetSimParams(scene.get(), /*infinite=*/0, kCalibrationRays, g_state.sim.max_hits, /*geom_clock=*/0);
 
   auto t0 = std::chrono::steady_clock::now();
-  auto err = LUMICE_CommitConfigStruct(g_server, &config, nullptr);
+  auto err = LUMICE_CommitScene(g_server, scene.get(), nullptr);
   if (err != LUMICE_OK) {
     GUI_LOG_WARNING("[Calibration] CommitConfig failed ({}), using default threshold", static_cast<int>(err));
     return;
@@ -924,21 +923,19 @@ bool DoRun(bool user_initiated) {
   bool expect_rebuild = backend_reconstructed || !g_state.last_committed_state.has_value() ||
                         !RenderConfigResimEqual(g_state.renderer, g_state.last_committed_state->renderer);
 
-  // Single typed-struct commit path (327.4): all filter types — including multi-segment
-  // raypath / multi-value EE (expanded to N simple + 1 complex) — go through the C struct, so
+  // Single handle commit path (327.4 / 399.5): all filter types — including multi-segment
+  // raypath / multi-value EE (expanded to N simple + 1 complex) — go through LUMICE_Scene, so
   // the out_reused signal is always available (no more JSON path that forced full rebuild and
   // tore live-preview buffers on every EE/multi-segment slider drag).
   //
-  // Build the struct BEFORE stopping the poller: if a filter exceeds the ABI bounds
-  // (composition pool / clause / filter capacity), keep the previously committed state
-  // (graceful degradation) — poller untouched, buffer not torn — rather than commit a
-  // truncated config.
-  LUMICE_Config config{};
-  lumice::ConfigOwningGuard config_color_guard(config);  // v4.8: release raypath_color on any early return
+  // Build the scene BEFORE stopping the poller: if a filter exceeds the ABI bounds
+  // (clause / term / filter capacity), keep the previously committed state (graceful
+  // degradation) — poller untouched, buffer not torn — rather than commit a truncated config.
   FilterOverflowInfo overflow;
   ColorClassOverflowInfo color_overflow;
-  if (!FillLumiceConfig(g_state, &config, &overflow, &color_overflow)) {
-    // color_overflow.class_index >= 0 iff FillLumiceConfig failed on the color-class walk
+  ScenePtr scene = BuildScene(g_state, SceneIntent::kSimCommit, &overflow, &color_overflow);
+  if (!scene) {
+    // color_overflow.class_index >= 0 iff BuildScene failed on the color-class walk
     // (which runs strictly after the filter walk), rather than a physical-filter overflow.
     // Reusing the filter-overflow wording/limit for a color overflow would misattribute the
     // resource type and print the wrong cap number to the user (code-review-01 Major 1).
@@ -953,7 +950,7 @@ bool DoRun(bool user_initiated) {
     } else {
       // Locator ("filter \"NAME\", Layer L / Entry E", or "Layer L / Entry E" when unnamed)
       // identifying which filter reference tripped the ABI bounds, captured inside
-      // FillLumiceConfig. Built by FormatOverflowLocator so the format is unit-testable
+      // BuildScene. Built by FormatOverflowLocator so the format is unit-testable
       // (test_gui_import_export.cpp) rather than only exercised through on-screen GUI.
       log_locator = FormatOverflowLocator(overflow);
       warning_msg = "This filter has too many OR segments / values to apply (limit " +
@@ -991,7 +988,7 @@ bool DoRun(bool user_initiated) {
   // (see MaybeReconstructServerForBackend) — no per-DoRun SetPreferredBackend push.
 
   int reused = 0;
-  LUMICE_ErrorCode err = LUMICE_CommitConfigStruct(g_server, &config, &reused);
+  LUMICE_ErrorCode err = LUMICE_CommitScene(g_server, scene.get(), &reused);
   if (err == LUMICE_OK) {
     // task-gui-feedback-affordances Step 7 (AC1): the ABI check above passed
     // (filter / raypath tracing / geometry all fit within their caps), but
@@ -1004,7 +1001,7 @@ bool DoRun(bool user_initiated) {
     // that was called out in this task's issue.md §A.
     //
     // Two mutually-exclusive branches feed SetGuiWarning inside DoRun:
-    //  1) FillLumiceConfig failure (above) → commit was REJECTED, previous
+    //  1) BuildScene failure (above) → commit was REJECTED, previous
     //     config kept. That branch already gated on `user_initiated` to force
     //     a refire on explicit user Runs (Step 2 AC3).
     //  2) This one → commit SUCCEEDED, coloring degrades gracefully. Uses a
@@ -1030,7 +1027,7 @@ bool DoRun(bool user_initiated) {
           "Affected rays/crystals will render with missing or incomplete color. The underlying "
           "filtering/geometry is unaffected — only color assignment degrades.\n"
           "Simplify the color configuration (fewer distinct predicates per class / fewer symmetry variants) to fix.";
-      // Same user_initiated-gated-clear discipline as the FillLumiceConfig-failure branch
+      // Same user_initiated-gated-clear discipline as the BuildScene-failure branch
       // above (AC3): only force-reopen on an explicit user Run. Do NOT unconditionally
       // ClearGuiWarning() before this check (code-review-01 Critical 1) — that would zero
       // g_gui_warning_current ahead of the comparison below, so SetGuiWarning's
@@ -1105,7 +1102,7 @@ bool DoRun(bool user_initiated) {
       g_server_poller.WakeForRestart(g_server);
     }
   }
-  // Both err==LUMICE_OK and err!=LUMICE_OK paths issued LUMICE_CommitConfigStruct;
+  // Both err==LUMICE_OK and err!=LUMICE_OK paths issued LUMICE_CommitScene;
   // "committed" here means "gate did not defer this attempt", not "commit succeeded".
   // Callers use this to gate throttle-side accounting (see main.cpp / test_gui_perf.cpp).
   return true;

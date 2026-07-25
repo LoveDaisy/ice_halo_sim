@@ -94,7 +94,7 @@ void StartPerfSimulation() {
   }
 
   // Set up g_state to match perf config, then use DoRun() so the server's
-  // config_manager_ is populated from the same SerializeCoreConfig path.
+  // config_manager_ is populated from the same BuildScene path.
   gui::g_state.sun.altitude = 20.0f;
   gui::g_state.sun.diameter = 0.5f;
   gui::g_state.sun.spectrum_index = 2;  // D65

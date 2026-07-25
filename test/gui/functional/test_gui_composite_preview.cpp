@@ -18,7 +18,7 @@
 #include "gui/app.hpp"                  // g_server_poller / g_preview / DoOpen / DoNew / SyncFromPoller
 #include "gui/color_window.hpp"         // PushDisplayState (M8 AC3 direct-push path)
 #include "gui/export_fbo_renderer.hpp"  // RenderExportToRgba for AC2 pixel-level assertion
-#include "gui/file_io.hpp"              // SerializeCoreConfig / ExportConfigJson / SaveLmcFile
+#include "gui/file_io.hpp"              // BuildExportJsonOrWarn / ExportConfigJson / SaveLmcFile
 #include "gui/gui_state.hpp"            // GuiState + DisplayStateBaseline (M8 AC3)
 #include "gui/gui_state_reconcile.hpp"  // ReconcileGuiEffects / ApplyGuiEffects (M8 AC3 reconciler-path)
 #include "gui/server_poller.hpp"
@@ -26,8 +26,8 @@
 
 namespace {
 
-// Minimal single-prism config in the canonical ConfigToJson format used by
-// LUMICE_CommitConfig (lowercase "prism", nested "shape"). Mirrors
+// Minimal single-prism config in the canonical wire format LUMICE_SceneFromJson reads
+// (lowercase "prism", nested "shape"). Mirrors
 // MakeSmallSimConfigJson / MakeMinimalConfigJson in test/unit-correctness/server/
 // test_c_api.cpp; those fixtures live in a TU-private anon namespace and are
 // not linkable across the gui_test target, so we recreate their shape here.
@@ -183,8 +183,21 @@ void FenceExportGuiFunc(ImGuiTestContext*) {
   g_fence_gl_op.done = true;
 }
 
+// JSON -> Scene handle -> commit: the only commit path since v4.12 removed the JSON-string
+// entry points. The handle is a local — LUMICE_CommitScene reads it as const and keeps no
+// reference — so it is destroyed as soon as the commit returns.
+LUMICE_ErrorCode CommitJsonConfig(LUMICE_Server* server, const char* json) {
+  LUMICE_Scene* scene = nullptr;
+  if (auto err = LUMICE_SceneFromJson(json, &scene); err != LUMICE_OK) {
+    return err;
+  }
+  const auto err = LUMICE_CommitScene(server, scene, /*out_reused=*/nullptr);
+  LUMICE_SceneDestroy(scene);
+  return err;
+}
+
 bool RunToIdleWithData(LUMICE_Server* server, const char* json) {
-  if (LUMICE_CommitConfig(server, json) != LUMICE_OK) {
+  if (CommitJsonConfig(server, json) != LUMICE_OK) {
     return false;
   }
   for (int waited = 0; waited < 5000; waited += 10) {
@@ -462,7 +475,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     // (b) NON-RESTART: lifecycle stays COMPLETED with the SAME epoch. This is the 322 clock-
     // decoupling guarantee — a display-time edit re-materializes but does NOT reset the
     // accumulator or bump the committed_epoch. If ③'s wake path ever regressed to calling
-    // LUMICE_Start / LUMICE_CommitConfig, this would flip lifecycle back to RUNNING and/or
+    // LUMICE_Start / LUMICE_CommitScene, this would flip lifecycle back to RUNNING and/or
     // bump the epoch.
     LUMICE_SimLifecycleResult lc_after{};
     IM_CHECK_EQ(LUMICE_GetSimLifecycle(server, &lc_after), LUMICE_OK);
@@ -803,7 +816,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
   };
 
   // task-346.1 ① AC1 anchor (re-run 双叠加消除 · 端到端字节等价):
-  // With the FillLumiceConfig fix in place (intensity_factor ≡ 1.0f, exposure_offset never
+  // With the BuildScene fix in place (intensity_factor ≡ 1.0f on the commit intent, exposure_offset never
   // baked into the committed config), the GUI Run path pushes a single copy of manual EV
   // through the display-time channel (LUMICE_SetCompositeExposure). If the caller keeps the
   // manual EV fixed at E and re-commits the SAME config, the composite bytes MUST be
@@ -830,8 +843,8 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     const size_t rgb_bytes = static_cast<size_t>(first[0].img_width) * static_cast<size_t>(first[0].img_height) * 3;
     std::vector<uint8_t> first_rgb(first[0].img_buffer, first[0].img_buffer + rgb_bytes);
 
-    // Re-Run: same config, same EV. RunToIdleWithData internally does LUMICE_CommitConfig
-    // which calls Stop() → ResetWith()/rebuild → restart accumulation. This is the exact
+    // Re-Run: same config, same EV. RunToIdleWithData internally commits the scene, which
+    // calls Stop() → ResetWith()/rebuild → restart accumulation. This is the exact
     // path DoRun() takes; if any code layer sneaked EV into the committed config, this
     // re-Run's composite would be 2× amplified vs. first Run.
     IM_CHECK(RunToIdleWithData(server, kColorConfig));
@@ -913,8 +926,8 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
 
     // Phase B: user adds a class → GUI-side re-commits the 2-class config. This is the
     // same code path RenderColorWindow's "Add Class" button triggers (state.MarkStructHardDirty
-    // → next debounce → LUMICE_CommitConfigStruct → re-sim + RenderConsumer rebuild).
-    IM_CHECK_EQ(LUMICE_CommitConfig(server, kTwoColorConfig), LUMICE_OK);
+    // → next debounce → LUMICE_CommitScene → re-sim + RenderConsumer rebuild).
+    IM_CHECK_EQ(CommitJsonConfig(server, kTwoColorConfig), LUMICE_OK);
 
     // Bounded convergence: 300 polls × 10 ms = 3s hard ceiling. The fixture (400k rays,
     // 128x64) typically converges in under 500ms on release build. Anything beyond the
@@ -1273,7 +1286,8 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
 
     // Write a mono default-state .json (no raypath_color) so DoOpen(.json) hits the JSON-import
     // branch and resets g_state via InitDefaultState — the exact production shape of the bug.
-    std::string json = gui::SerializeCoreConfig(gui::InitDefaultState());
+    std::string json;
+    IM_CHECK(gui::BuildExportJsonOrWarn(gui::InitDefaultState(), &json, nullptr));
     const char* tmp_path = "/tmp/lumice_fence_open_json.json";
     IM_CHECK(gui::ExportConfigJson(tmp_path, json));
 

@@ -29,9 +29,20 @@ Lumice 提供了完整的C接口，方便与其他语言集成。C接口封装�
 ### 常量
 
 ```c
+#define LUMICE_API_VERSION 412        // ABI 版本，编码为 major*100 + minor（v4.12）
 #define LUMICE_MAX_RENDER_RESULTS 16  // 渲染结果数组最大容量
 #define LUMICE_MAX_STATS_RESULTS 1    // 统计结果数组最大容量
 ```
+
+`LUMICE_API_VERSION` 让调用方把编译时依赖的 ABI 钉死，在不匹配时编译期报错，而不是撞上结构体布局漂移导致的静默 UB：
+
+```c
+static_assert(LUMICE_API_VERSION >= 412, "Lumice header too old for this integration");
+```
+
+公开符号集或结构体布局每发生一次 BREAKING 变更就 bump 一次。
+
+**v4.12 就是一次这样的 break。** 宽值结构体 `LUMICE_Config` 及所有只为喂养它而存在的东西被移除：`LUMICE_Config` 本身、三个提交入口（`LUMICE_CommitConfig` / `LUMICE_CommitConfigFromFile` / `LUMICE_CommitConfigStruct`）、`LUMICE_ParseConfigString` / `LUMICE_ParseConfigFile` / `LUMICE_ConfigToJson`、`LUMICE_ConfigCreateColorClasses` / `LUMICE_ConfigReleaseColorClasses` / `LUMICE_ConfigReleaseCompositions` 所有权辅助函数，以及 C++ RAII 头 `src/include/lumice_config_scope.hpp`。`LUMICE_Scene` 取代了它们全部。不提供任何 shim 或别名：调用已移除符号的代码会编译失败——这正是预期的迁移信号。
 
 ### 数据类型
 
@@ -41,6 +52,14 @@ Lumice 提供了完整的C接口，方便与其他语言集成。C接口封装�
 
 ```c
 typedef struct LUMICE_Server_ LUMICE_Server;
+```
+
+#### LUMICE_Scene
+
+场景句柄，不透明指针类型。它是本 API 的配置容器，完整生命周期见 [配置](#配置)。
+
+```c
+typedef struct LUMICE_Scene_ LUMICE_Scene;
 ```
 
 #### LUMICE_ErrorCode
@@ -102,7 +121,7 @@ typedef struct LUMICE_RenderResult_ {
 
 **注意**：
 - `img_buffer` 指向的图像数据由库内部管理，不需要手动释放
-- `img_buffer` 有效期：直到下一次 `LUMICE_GetRenderResults()` 或 `LUMICE_CommitConfig()` 调用
+- `img_buffer` 有效期：直到下一次 `LUMICE_GetRenderResults()` 或 `LUMICE_CommitScene()` 调用
 - 如需长期持有，应自行 `memcpy` 拷贝
 - 图像数据格式为RGB，每个像素3个字节（R, G, B）
 - 图像数据大小 = `img_width * img_height * 3` 字节
@@ -202,45 +221,119 @@ void LUMICE_SetLogLevel(LUMICE_Server* server, LUMICE_LogLevel level);
 
 ### 配置
 
-#### LUMICE_CommitConfig
+配置存放在 `LUMICE_Scene` 里——一个不透明、增量构建的句柄。配置 server 只有一条路：先构建或解析出一个场景，再提交它。
 
-提交JSON字符串配置。
+```
+   LUMICE_SceneCreate + Add*/Set*  ─┐
+                                    ├─→  LUMICE_Scene  ──→  LUMICE_CommitScene(server, scene)
+   LUMICE_SceneFromJson{,File}     ─┘         │
+                                              └──→  LUMICE_SceneToJson  （保存 / 查看）
+```
+
+编写（JSON 或程序化）与提交是刻意分离的：`SceneFromJson` 从不碰 server，`CommitScene` 也从不接受文档。句柄归调用方所有，可以反复提交，最终必须销毁。
+
+#### 场景生命周期
 
 ```c
-LUMICE_ErrorCode LUMICE_CommitConfig(LUMICE_Server* server, const char* config_str);
+LUMICE_Scene* LUMICE_SceneCreate(void);
+LUMICE_Scene* LUMICE_SceneClone(const LUMICE_Scene* scene);
+void          LUMICE_SceneDestroy(LUMICE_Scene* scene);
+```
+
+- `SceneCreate` 返回空句柄，分配失败时返回 `NULL`。所有权归调用方，最终必须传给 `SceneDestroy`。
+- `SceneClone` 深拷贝出一个完全独立的句柄（无别名）。这正是旧的宽值结构体语义真正买到的东西——原子的模态编辑 + Cancel——现在只需一次调用，而不是一次六位数字节的栈拷贝。每个句柄都要各自销毁。`scene` 为 `NULL` 或分配失败时返回 `NULL`。
+- `SceneDestroy` 对 `NULL` 是安全空操作。每个句柄只能销毁一次，重复销毁是未定义行为（与 `LUMICE_DestroyServer` 同一契约）。
+
+#### 构建场景：`LUMICE_SceneAdd*`
+
+```c
+LUMICE_ErrorCode LUMICE_SceneAddCrystal(LUMICE_Scene*, const LUMICE_CrystalParam*, int* out_id);
+LUMICE_ErrorCode LUMICE_SceneAddFilter(LUMICE_Scene*, const LUMICE_FilterParam*, int* out_id);
+LUMICE_ErrorCode LUMICE_SceneAddComplexFilter(LUMICE_Scene*, const LUMICE_FilterParam*,
+                                              const LUMICE_ComplexComposition*, int* out_id);
+LUMICE_ErrorCode LUMICE_SceneAddRenderer(LUMICE_Scene*, const LUMICE_RenderParam*, int* out_id);
+LUMICE_ErrorCode LUMICE_SceneAddScatterLayer(LUMICE_Scene*, const LUMICE_ScatterLayer*, int* out_id);
+LUMICE_ErrorCode LUMICE_SceneAddColorClass(LUMICE_Scene*, const LUMICE_ColorClass*, int* out_id);
+```
+
+每个 `Add*` 追加一个条目，并把它的 0 基序号 id（同类条目中按插入顺序的下标）写入 `*out_id`。
+
+- **id 由场景分配，传入结构体上的 `.id` 字段一律被忽略。** 之后构造的交叉引用字段（`LUMICE_FilterParam.crystal_id`、`LUMICE_ScatterEntry.crystal_id` / `.filter_id`、composition 的 term id）**必须**使用返回的 `out_id`，不能用自己挑的 id。
+- **所有输入立即深拷贝。** 传入的 leaf 结构体可以是栈上临时量，调用一返回就复用或丢弃——本 API 里没有任何"必须活过 commit"的生命周期推理。`SceneAddComplexFilter` 同样会拷贝 composition 的 `term_ids` / `term_counts` 堆数组，调用返回后即可释放它们。
+- **逐调用校验。** 每个 `Add*` 在写入前校验这一个条目的形状与枚举；失败时场景保持完全不变（不留半写状态）。
+- `SceneAddFilter` 只处理 SIMPLE 分支（`none` / `raypath` / `entry_exit` / `direction` / `crystal`）。`type == LUMICE_FILTER_TYPE_COMPLEX` 的 filter 会被拒绝——请用 `SceneAddComplexFilter`，它同时接收 filter 标识与其 composition，并忽略 `filter->type` / `filter->composition_index`。
+
+**返回值**（全部 `Add*` 相同）：
+- `LUMICE_OK`: 成功，已写入 `*out_id`
+- `LUMICE_ERR_NULL_ARG`: `scene`、输入指针或 `out_id` 为 `NULL`
+- `LUMICE_ERR_INVALID_CONFIG`: 条目非法（枚举错误、计数越界），或该类条目已达对应的 `LUMICE_MAX_CONFIG_*` 容量上限
+
+#### 场景设置：`LUMICE_SceneSet*`
+
+```c
+LUMICE_ErrorCode LUMICE_SceneSetLightSource(LUMICE_Scene*, float sun_altitude, float sun_azimuth,
+                                            float sun_diameter, const char* spectrum);
+LUMICE_ErrorCode LUMICE_SceneSetCustomSpectrum(LUMICE_Scene*, const LUMICE_SpectrumEntry*, int count);
+LUMICE_ErrorCode LUMICE_SceneSetSimParams(LUMICE_Scene*, int infinite, LUMICE_RayCount ray_num,
+                                          int max_hits, int geom_clock);
+LUMICE_ErrorCode LUMICE_SceneSetColorMode(LUMICE_Scene*, int raypath_color_mode);
+```
+
+每个 `Set*` 都是幂等的（后写覆盖先写）且可以任意顺序调用。`scene` 为 `NULL` 返回 `LUMICE_ERR_NULL_ARG`，值非法返回 `LUMICE_ERR_INVALID_CONFIG` / `LUMICE_ERR_INVALID_VALUE`。
+
+光源与光谱存在交互，且设计上与调用顺序无关：离散光谱（`SetCustomSpectrum` 且 `count > 0`）优先于 `spectrum` 字符串，因此 `SetLightSource` **不会**覆盖已设置的离散光谱，两种调用顺序收敛到同一结果。`SetCustomSpectrum` 传 `count == 0` 清除离散光谱，回退到字符串（默认 `"D65"`）。
+
+`SetSimParams` 接收 `infinite`（1 = 无限跑，0 = 跑满 `ray_num` 条光线后停）、`max_hits`，以及 `geom_clock`（几何重采样时钟 K；0 = 交由 core 推导默认值）。
+
+#### 序列化：`LUMICE_SceneToJson` / `SceneFromJson` / `SceneFromJsonFile`
+
+```c
+LUMICE_ErrorCode LUMICE_SceneToJson(const LUMICE_Scene* scene, char* out_buf, size_t buf_size,
+                                    size_t* out_len);
+LUMICE_ErrorCode LUMICE_SceneFromJson(const char* json_str, LUMICE_Scene** out_scene);
+LUMICE_ErrorCode LUMICE_SceneFromJsonFile(const char* filename, LUMICE_Scene** out_scene);
+```
+
+这是 JSON 编写侧，且完全不碰 `LUMICE_Server`：解析只产出句柄，仅此而已。往返无损——`SceneFromJson(SceneToJson(scene))` 与原场景语义等价。文档格式与 CLI 读取的格式相同，见 [配置文档](configuration_zh.md)。
+
+`SceneToJson` 使用 snprintf 风格的调用方缓冲区，不跨 ABI 分配内存：
+
+- 传 `out_buf == NULL`（或 `buf_size == 0`）只查询长度、不写入。
+- 缓冲区不足时输出被截断，但**始终**以 NUL 结尾。
+- `out_len` 非 `NULL` 时总是写入完整（未截断）长度，因此 `*out_len >= buf_size` 即表示发生了截断。惯用两段式：先查询、按 `*out_len + 1` 分配、再调一次。
+- `scene` 为 `NULL` 返回 `LUMICE_ERR_NULL_ARG`；场景无法序列化（例如某个 `Set*` 收到了非法 UTF-8 字符串）返回 `LUMICE_ERR_INVALID_CONFIG`。
+
+`SceneFromJson` / `SceneFromJsonFile` 成功时向 `*out_scene` 写入一个全新句柄——所有权归调用方，最终必须 `SceneDestroy`。**任何失败路径上 `*out_scene` 都被置为 `NULL` 且不泄漏句柄**，因此调用方绝不会去销毁一个并未产出的句柄。
+
+**返回值**：
+- `LUMICE_OK`: 成功，`*out_scene` 持有新句柄
+- `LUMICE_ERR_NULL_ARG`: `json_str` / `filename` 或 `out_scene` 为 `NULL`
+- `LUMICE_ERR_INVALID_JSON`: 语法错误
+- `LUMICE_ERR_MISSING_FIELD`: 缺少必需字段
+- `LUMICE_ERR_INVALID_VALUE` / `LUMICE_ERR_INVALID_CONFIG`: 枚举或取值非法，或超出某个 `LUMICE_MAX_CONFIG_*` 软上限
+- `LUMICE_ERR_FILE_NOT_FOUND`（仅 `SceneFromJsonFile`）: 文件无法打开
+
+#### LUMICE_CommitScene
+
+把场景提交给 server。这是本 API **唯一**的提交入口。
+
+```c
+LUMICE_ErrorCode LUMICE_CommitScene(LUMICE_Server* server, const LUMICE_Scene* scene,
+                                    int* out_reused);
 ```
 
 **参数**：
-- `server`: 服务器句柄指针
-- `config_str`: JSON格式的配置字符串
+- `server`: 服务器句柄
+- `scene`: 场景句柄。以 `const` 读取，**既不被消费也不被销毁**。server 不保留对它的引用，所有权仍在调用方手上，同一句柄可以反复提交（用 `Add*`/`Set*` 改一改再提交一次）。
+- `out_reused`: 可选（可为 `NULL`）。非 `NULL` 时：本次提交复用了既有 consumer/renderer（渲染器布局未变）写 `1`，重建了写 `0`。
 
 **返回值**：
-- `LUMICE_OK`: 成功
-- `LUMICE_ERR_NULL_ARG`: `server` 或 `config_str` 为 `NULL`
-- `LUMICE_ERR_INVALID_JSON`: JSON 格式错误
-- `LUMICE_ERR_INVALID_CONFIG` / `LUMICE_ERR_MISSING_FIELD` / `LUMICE_ERR_INVALID_VALUE`: 配置内容错误
+- `LUMICE_OK`: 成功——server 立即停止当前任务并开始新任务
+- `LUMICE_ERR_NULL_ARG`: `server` 或 `scene` 为 `NULL`
+- `LUMICE_ERR_INVALID_CONFIG` / `LUMICE_ERR_MISSING_FIELD` / `LUMICE_ERR_INVALID_VALUE` / `LUMICE_ERR_INVALID_JSON`: core 拒绝了该配置
+- `LUMICE_ERR_SERVER`: server 侧失败
 
-**注意**：
-- 提交配置后，服务器会立即开始处理
-- 配置格式参见 [配置文档](configuration_zh.md)
-
-#### LUMICE_CommitConfigFromFile
-
-从文件加载并提交配置。
-
-```c
-LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* filename);
-```
-
-**参数**：
-- `server`: 服务器句柄指针
-- `filename`: 配置文件路径
-
-**返回值**：
-- `LUMICE_OK`: 成功
-- `LUMICE_ERR_NULL_ARG`: `server` 或 `filename` 为 `NULL`
-- `LUMICE_ERR_FILE_NOT_FOUND`: 文件不存在或无法打开
-- 其他错误码：配置内容错误
+任何错误路径上 `*out_reused` 都保持不变。注意这里不做整场景重校验：每个 `Add*`/`Set*` 都已校验过自己的输入，这里还能暴露的是 core 的跨字段 / 语义拒绝（例如 `max_hits` 越界）。
 
 ### 结果获取
 
@@ -337,8 +430,16 @@ int main() {
         return 1;
     }
 
-    // 2. 从文件加载配置
-    if (LUMICE_CommitConfigFromFile(server, "config.json") != LUMICE_OK) {
+    // 2. 把配置文件解析成场景句柄，提交，然后释放句柄。
+    //    （server 不保留对 scene 的引用，所以 commit 一返回就可以销毁它。）
+    LUMICE_Scene* scene = NULL;
+    if (LUMICE_SceneFromJsonFile("config.json", &scene) != LUMICE_OK) {
+        LUMICE_DestroyServer(server);
+        return 1;
+    }
+    LUMICE_ErrorCode commit_err = LUMICE_CommitScene(server, scene, NULL);
+    LUMICE_SceneDestroy(scene);
+    if (commit_err != LUMICE_OK) {
         LUMICE_DestroyServer(server);
         return 1;
     }
@@ -402,10 +503,18 @@ int main(int argc, char* argv[]) {
     // 2. 设置日志级别（可选，默认 INFO）
     LUMICE_SetLogLevel(server, LUMICE_LOG_INFO);
 
-    // 3. 加载配置
-    LUMICE_ErrorCode err = LUMICE_CommitConfigFromFile(server, argv[1]);
+    // 3. 加载配置：文件 -> 场景句柄 -> 提交 -> 释放句柄
+    LUMICE_Scene* scene = NULL;
+    LUMICE_ErrorCode err = LUMICE_SceneFromJsonFile(argv[1], &scene);
     if (err != LUMICE_OK) {
-        fprintf(stderr, "Error: Failed to load config (error code: %d)\n", err);
+        fprintf(stderr, "Error: Failed to parse config (error code: %d)\n", err);
+        LUMICE_DestroyServer(server);
+        return 1;
+    }
+    err = LUMICE_CommitScene(server, scene, NULL);
+    LUMICE_SceneDestroy(scene);   // 无论提交成功与否，句柄都归我们释放
+    if (err != LUMICE_OK) {
+        fprintf(stderr, "Error: Failed to commit config (error code: %d)\n", err);
         LUMICE_DestroyServer(server);
         return 1;
     }
@@ -464,7 +573,8 @@ int main(int argc, char* argv[]) {
 所有配置/查询/结果获取 API 返回 `LUMICE_ErrorCode`。最佳实践：
 
 ```c
-LUMICE_ErrorCode err = LUMICE_CommitConfigFromFile(server, "config.json");
+LUMICE_Scene* scene = NULL;
+LUMICE_ErrorCode err = LUMICE_SceneFromJsonFile("config.json", &scene);
 if (err != LUMICE_OK) {
     switch (err) {
         case LUMICE_ERR_NULL_ARG:
@@ -501,7 +611,8 @@ if (err != LUMICE_OK) {
 
 以下API**不是线程安全**的，不应从多个线程同时调用：
 - `LUMICE_CreateServer()` / `LUMICE_DestroyServer()`: 服务器生命周期管理
-- `LUMICE_CommitConfig()` / `LUMICE_CommitConfigFromFile()`: 配置提交
+- `LUMICE_CommitScene()`: 配置提交
+- 对同一个 `LUMICE_Scene*` 句柄的修改（`LUMICE_SceneAdd*` / `LUMICE_SceneSet*` / `LUMICE_SceneDestroy`）——句柄内部没有加锁。不同句柄互相独立，两个线程各建各的场景是安全的。
 - `LUMICE_StopServer()`: 服务器停止
 
 ### 多线程使用建议
@@ -543,8 +654,12 @@ LUMICE_MAX_STATS_RESULTS = 1
 # 定义函数签名
 lib.LUMICE_CreateServer.restype = ctypes.c_void_p
 lib.LUMICE_DestroyServer.argtypes = [ctypes.c_void_p]
-lib.LUMICE_CommitConfigFromFile.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-lib.LUMICE_CommitConfigFromFile.restype = ctypes.c_int
+lib.LUMICE_SceneFromJsonFile.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
+lib.LUMICE_SceneFromJsonFile.restype = ctypes.c_int
+lib.LUMICE_CommitScene.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
+lib.LUMICE_CommitScene.restype = ctypes.c_int
+lib.LUMICE_SceneDestroy.argtypes = [ctypes.c_void_p]
+lib.LUMICE_SceneDestroy.restype = None
 lib.LUMICE_GetRenderResults.argtypes = [ctypes.c_void_p, ctypes.POINTER(LUMICE_RenderResult), ctypes.c_int]
 lib.LUMICE_GetRenderResults.restype = ctypes.c_int
 lib.LUMICE_GetStatsResults.argtypes = [ctypes.c_void_p, ctypes.POINTER(LUMICE_StatsResult), ctypes.c_int]
@@ -560,9 +675,16 @@ def simulate(config_file):
         raise RuntimeError("Failed to create server")
 
     try:
-        err = lib.LUMICE_CommitConfigFromFile(server, config_file.encode('utf-8'))
+        scene = ctypes.c_void_p()
+        err = lib.LUMICE_SceneFromJsonFile(config_file.encode('utf-8'), ctypes.byref(scene))
         if err != 0:
-            raise RuntimeError(f"Failed to load config (error: {err})")
+            raise RuntimeError(f"Failed to parse config (error: {err})")
+        try:
+            err = lib.LUMICE_CommitScene(server, scene, None)
+            if err != 0:
+                raise RuntimeError(f"Failed to commit config (error: {err})")
+        finally:
+            lib.LUMICE_SceneDestroy(scene)
 
         import time
         while True:
@@ -612,7 +734,9 @@ struct LUMICE_StatsResult {
 extern "C" {
     fn LUMICE_CreateServer() -> *mut c_void;
     fn LUMICE_DestroyServer(server: *mut c_void);
-    fn LUMICE_CommitConfigFromFile(server: *mut c_void, filename: *const c_char) -> c_int;
+    fn LUMICE_SceneFromJsonFile(filename: *const c_char, out_scene: *mut *mut c_void) -> c_int;
+    fn LUMICE_CommitScene(server: *mut c_void, scene: *const c_void, out_reused: *mut c_int) -> c_int;
+    fn LUMICE_SceneDestroy(scene: *mut c_void);
     fn LUMICE_GetRenderResults(server: *mut c_void, out: *mut LUMICE_RenderResult, max_count: c_int) -> c_int;
     fn LUMICE_GetStatsResults(server: *mut c_void, out: *mut LUMICE_StatsResult, max_count: c_int) -> c_int;
     fn LUMICE_QueryServerState(server: *mut c_void, out: *mut c_int) -> c_int;
@@ -624,7 +748,7 @@ extern "C" {
 
 ### Q1: 如何从文件读取配置？
 
-**A**: 使用 `LUMICE_CommitConfigFromFile()`，直接传入文件路径。也可以将文件内容读取为字符串后传给 `LUMICE_CommitConfig()`。
+**A**: 用 `LUMICE_SceneFromJsonFile()` 把文件解析成场景句柄，再用 `LUMICE_CommitScene()` 提交，最后 `LUMICE_SceneDestroy()` 释放句柄。若文档已在内存里，改用 `LUMICE_SceneFromJson()`，其余相同。解析与提交拆成两步是有意为之：解析完全不碰 server，因此可以在不打断正在跑的仿真的前提下校验或编辑配置。
 
 ### Q2: 图像数据格式是什么？
 
@@ -632,11 +756,11 @@ extern "C" {
 
 ### Q3: img_buffer 何时失效？
 
-**A**: `img_buffer` 指针有效至下一次 `LUMICE_GetRenderResults()` 或 `LUMICE_CommitConfig()` 调用。如需长期持有，应自行 `memcpy` 拷贝数据。
+**A**: `img_buffer` 指针有效至下一次 `LUMICE_GetRenderResults()` 或 `LUMICE_CommitScene()` 调用。如需长期持有，应自行 `memcpy` 拷贝数据。
 
 ### Q4: 服务器可以同时处理多个配置吗？
 
-**A**: 不可以。每次调用 `LUMICE_CommitConfig()` 会停止当前任务并开始新任务。如需并行处理，应创建多个服务器实例。
+**A**: 不可以。每次调用 `LUMICE_CommitScene()` 会停止当前任务并开始新任务。如需并行处理，应创建多个服务器实例。（同一个场景句柄可以提交给多个 server——commit 以 `const` 读取它且不保留引用。）
 
 ### Q5: 如何判断结果数组是否为空？
 

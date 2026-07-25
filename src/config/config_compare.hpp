@@ -123,10 +123,26 @@ inline bool operator==(const SceneConfig& a, const SceneConfig& b) {
          a.light_source_ == b.light_source_ && a.ms_ == b.ms_;
 }
 
+// ---- Raypath color config ----
+
+inline bool operator==(const RaypathColorRef& a, const RaypathColorRef& b) {
+  return a.layer_ == b.layer_ && a.crystal_ == b.crystal_ && a.predicate_ == b.predicate_ && a.symmetry_ == b.symmetry_;
+}
+
+inline bool operator==(const ColorClassConfig& a, const ColorClassConfig& b) {
+  return std::equal(std::begin(a.color_), std::end(a.color_), std::begin(b.color_)) && a.combine_ == b.combine_ &&
+         a.visible_ == b.visible_ && a.solo_ == b.solo_ && a.match_ == b.match_;
+}
+
+inline bool operator==(const RaypathColorConfig& a, const RaypathColorConfig& b) {
+  return a.classes_ == b.classes_ && a.mode_ == b.mode_;
+}
+
 // ---- ConfigManager ----
 
 inline bool operator==(const ConfigManager& a, const ConfigManager& b) {
-  return a.crystals_ == b.crystals_ && a.filters_ == b.filters_ && a.renderers_ == b.renderers_ && a.scene_ == b.scene_;
+  return a.crystals_ == b.crystals_ && a.filters_ == b.filters_ && a.renderers_ == b.renderers_ &&
+         a.scene_ == b.scene_ && a.raypath_color_ == b.raypath_color_;
 }
 
 }  // namespace lumice

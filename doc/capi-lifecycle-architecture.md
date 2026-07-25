@@ -5,8 +5,7 @@ Lumice's C API layer — the boundary between GUI / CLI / external consumers and
 the core simulation engine.
 
 **Target audience**: contributors who modify server lifecycle management,
-result retrieval paths, sentinel handling, or the `CommitConfig` dual-path
-logic.
+result retrieval paths, sentinel handling, or the commit path.
 
 **Scope**: internal contracts, state machine, thread safety model, and
 sentinel-overflow protection. This document does **not** cover:
@@ -31,8 +30,8 @@ suitable for FFI consumption. It enforces:
 2. **Per-function contracts** (preconditions, postconditions, error returns).
 3. A **thread safety model** (per-function annotations).
 4. A **sentinel pattern** with overflow protection for result arrays.
-5. **Dual configuration paths** (`CommitConfig` JSON vs. `CommitConfigStruct`).
-6. **SimData side-effect rules** triggered by `CommitConfig`.
+5. A **single configuration path** through the `LUMICE_Scene` opaque handle.
+6. **SimData side-effect rules** triggered by a commit.
 
 Key source files:
 
@@ -60,7 +59,7 @@ LUMICE_CreateServer / LUMICE_CreateServerEx
     v
 [Idle — kStopped, no config committed, threads in cv.wait]
     |
-    |  LUMICE_CommitConfig* ──> internally: Stop() → rebuild consumers → Start()
+    |  LUMICE_CommitScene ──> internally: Stop() → rebuild consumers → Start()
     v
 [Running — kRunning, simulation active]
     |                                              ^
@@ -69,7 +68,7 @@ LUMICE_CreateServer / LUMICE_CreateServerEx
     v                                              |
 [Idle — kStopped, has_ever_consumed_=false]        |
     |                                              |
-    +---- LUMICE_CommitConfig* (re-launch) --------+
+    +---- LUMICE_CommitScene (re-launch) ----------+
     |
     |  LUMICE_DestroyServer ──> Terminate()
     v
@@ -79,7 +78,7 @@ LUMICE_CreateServer / LUMICE_CreateServerEx
 Key observations:
 
 - There is no explicit `Run()` API. The server transitions to Running
-  *inside* `CommitConfig`, which calls `Stop() → rebuild → Start()`.
+  *inside* the commit, which calls `Stop() → rebuild → Start()`.
 - `LUMICE_SERVER_NOT_READY` is defined in the `LUMICE_ServerState` enum but
   is never returned by `LUMICE_QueryServerState`. The implementation maps
   to either `LUMICE_SERVER_IDLE` or `LUMICE_SERVER_RUNNING`. This enum
@@ -90,10 +89,10 @@ Key observations:
 
 | Current State | API Call | Next State | Notes |
 |---------------|----------|------------|-------|
-| Idle | `CommitConfig*` | Running | Stop (no-op if already stopped) → rebuild → Start |
+| Idle | `CommitScene` | Running | Stop (no-op if already stopped) → rebuild → Start |
 | Idle | `StopServer` | Idle | No-op (already stopped) |
 | Idle | `DestroyServer` | Destroyed | `Terminate()` → `~ServerImpl` joins all threads |
-| Running | `CommitConfig*` | Running | Stop (drains workers) → rebuild → Start |
+| Running | `CommitScene` | Running | Stop (drains workers) → rebuild → Start |
 | Running | `StopServer` | Idle | Drains queues, waits for `active_workers_==0` |
 | Running | `DestroyServer` | Destroyed | `Terminate()` calls Stop first |
 | Running | `Get*Results` | Running | Triggers snapshot if `snapshot_dirty_` |
@@ -128,40 +127,52 @@ Key observations:
 
 ### §3.2 Configuration APIs
 
-#### `LUMICE_CommitConfig(server, config_str)` / `LUMICE_CommitConfigFromFile(server, filename)`
+#### `LUMICE_CommitScene(server, scene, out_reused)`
 
-- **Precondition**: `server != NULL`, input non-null.
-- **Postcondition**: on success, server is Running with new config active.
-  On failure, server may be in `kError` status (parse failures leave the
-  running server untouched; only the status is set to `kError`).
+- **Precondition**: `server != NULL`, `scene != NULL`.
+- **Postcondition**: on success, server is Running with the new config active.
+  On failure, the running server is left untouched; only the status is set to
+  `kError`.
 - **Error returns**: `LUMICE_ERR_NULL_ARG`, `LUMICE_ERR_INVALID_JSON`,
   `LUMICE_ERR_INVALID_CONFIG`, `LUMICE_ERR_MISSING_FIELD`,
-  `LUMICE_ERR_INVALID_VALUE`.
-- **Internal sequence**: parse JSON → `Stop()` → consumer rebuild/reuse →
+  `LUMICE_ERR_INVALID_VALUE`, `LUMICE_ERR_SERVER`. If `out_reused` is non-null
+  it is set to `1` when consumers were reused, `0` when rebuilt — and left
+  untouched on any error.
+- **Internal sequence**: `CommitJsonToServer(server, scene->root, …)` →
+  `Server::CommitConfig(json, &reused)` → `Stop()` → consumer rebuild/reuse →
   update `active_scene_` → `Start()`.
-  (`c_api.cpp:125–156`, `server.cpp:226–335`)
+- **Ownership**: the scene is read as `const`, the server keeps no reference to
+  it, and the caller still owns it. The same handle may be committed repeatedly,
+  and to more than one server.
+- **No bounds-check prologue.** The removed struct entry point needed one
+  because a caller could hand-fill a wide C struct with arbitrary counts and
+  pointers. A `LUMICE_Scene` cannot reach that state: every `Add*`/`Set*`
+  validated its own input at call time, so re-validating here would be dead
+  code. What a commit can still surface is cross-field / semantic rejection from
+  the core (e.g. `max_hits` out of range).
 
-#### `LUMICE_CommitConfigStruct(server, config, out_reused)`
-
-- **Precondition**: `server != NULL`, `config != NULL`. Array counts must
-  not exceed `LUMICE_MAX_CONFIG_*` limits.
-- **Postcondition**: same as `CommitConfig` (JSON path). If `out_reused`
-  is non-null, set to `1` when consumers were reused, `0` when rebuilt.
-- **Internal path**: `ConfigToJson(*config)` → `Server::CommitConfig(json, &reused)`.
-  The struct path always produces `dual_fisheye_equal_area` lens at 180° FOV
-  (see §6.2).
-  (`c_api.cpp:313–336`)
-
-#### `LUMICE_ParseConfigString(json_str, out)` / `LUMICE_ParseConfigFile(filename, out)`
+#### `LUMICE_SceneFromJson(json_str, out_scene)` / `LUMICE_SceneFromJsonFile(filename, out_scene)`
 
 - **Precondition**: pointers non-null.
-- **Postcondition**: `out` populated with parsed config. The `spectrum`
-  field points to static storage — the caller must not free it.
-- **Side effects**: none (pure parsing, no server state change).
-- **Supported subset**: only `type="raypath"` filters; only string-form
-  spectrum (`"D65"`, `"D50"`, `"A"`, `"E"`); renderer lens/view/visible/
-  background fields are ignored.
-  (`c_api.cpp:670–704`)
+- **Postcondition**: on success `*out_scene` owns a fresh handle the caller must
+  `LUMICE_SceneDestroy`. On **any** failure `*out_scene` is `NULL` and no handle
+  leaks, so a caller never destroys a handle that was not produced.
+- **Side effects**: none on any server — this is pure parsing. It is the reason
+  authoring and committing are separate entry points at all: a config can be
+  validated or edited without disturbing a running simulation.
+- **Implementation note (known technical debt).** These parse into an internal
+  `ConfigScratch` (`src/server/c_api_internal.hpp` — the former public
+  `LUMICE_Config`, demoted in v4.12) via `JsonToConfig`, then re-encode that
+  struct through `ConfigToJson` into the new handle's root. That double hop —
+  text → `ConfigScratch` → JSON root — is deliberate, not an oversight:
+  `JsonToConfig`/`ConfigToJson` are the single validated JSON↔config
+  implementation in the codebase, carrying every field mapping, bounds check and
+  strictness rule, and the handle path inherits its correctness directly from
+  them. Growing a second, drifting JSON reader to save one re-encode on a
+  non-hot path was judged the worse trade. If it is ever revisited, the
+  replacement must be validated against the same differential corpus
+  (`test/unit-correctness/server/test_json_parser_parity.cpp`), not against the
+  encoder it replaces.
 
 ### §3.3 Result Retrieval APIs
 
@@ -285,7 +296,9 @@ false and no snapshot is ever prepared). It still does **not** call
 |----------|-------------|------------|-------|
 | `LUMICE_CreateServer*` | No | — | Global logger sink registration is not atomic |
 | `LUMICE_DestroyServer` | No | — | Destructor joins threads; concurrent calls UB |
-| `LUMICE_CommitConfig*` | No | — | Modifies `config_manager_`, calls Stop/Start |
+| `LUMICE_CommitScene` | No | — | Modifies `config_manager_`, calls Stop/Start |
+| `LUMICE_SceneCreate` / `Clone` / `Destroy` / `Add*` / `Set*` | Per-handle | — | A handle has no internal locking, so one handle has one owner thread. Distinct handles are fully independent — building two scenes on two threads is safe. |
+| `LUMICE_SceneToJson` / `SceneFromJson` / `SceneFromJsonFile` | Per-handle | — | Never touch a server. `FromJson*` only writes the fresh handle it allocates. |
 | `LUMICE_StopServer` | No | — | Direct state/queue mutation |
 | `LUMICE_SetLogCallback` | No | static bool (non-atomic) | First-call sink registration has a race window |
 | `LUMICE_SetLogLevel` | Conditional | spdlog internal lock | Thread-safe for concurrent calls; ordering not guaranteed |
@@ -294,14 +307,13 @@ false and no snapshot is ever prepared). It still does **not** call
 | `LUMICE_GetRawXyzResults` | Yes | same as above | GUI polling thread uses this path |
 | `LUMICE_GetStatsResults` | Yes | same as above | Triggers DoSnapshot |
 | `LUMICE_GetCachedStats` | Yes | `snapshot_mutex_` | Read-only cache; no DoSnapshot |
-| `LUMICE_SetRaypathColors` | Yes* | `consumer_mutex_` (TicketMutex) | Display-time only: updates color/visible/solo/z-order/mode on the active class table, sets `snapshot_dirty_`. Never touches Stop/Start/`scene_generation_`/`committed_epoch_`/`consumers_`. *Safe vs `Get*Results`, but NOT vs concurrent `CommitConfig*` (same single-owner rule; `CommitConfig` writes `active_class_table_` partly outside `consumer_mutex_`, a pre-existing race — task-342.2 progress.md risk 3). |
+| `LUMICE_SetRaypathColors` | Yes* | `consumer_mutex_` (TicketMutex) | Display-time only: updates color/visible/solo/z-order/mode on the active class table, sets `snapshot_dirty_`. Never touches Stop/Start/`scene_generation_`/`committed_epoch_`/`consumers_`. *Safe vs `Get*Results`, but NOT vs a concurrent `LUMICE_CommitScene` (same single-owner rule; the commit writes `active_class_table_` partly outside `consumer_mutex_`, a pre-existing race). |
 | `LUMICE_GetCrystalMesh` | Yes | — | No shared state (no `server` param; uses a local RNG per call) |
 | `LUMICE_ValidateRaypathText` | Yes | — | Pure function |
 | `LUMICE_IsLegalFace` | Yes | — | Pure function |
 | `LUMICE_MaxFov` | Yes | — | Pure function |
 | `LUMICE_XyzToSrgbUint8` | Yes | — | Pure function |
-| `LUMICE_ParseConfigString` | Yes | — | Pure function |
-| `LUMICE_ParseConfigFile` | Yes | — | Pure function |
+
 
 **Mutex types**:
 
@@ -313,7 +325,7 @@ false and no snapshot is ever prepared). It still does **not** call
   `start_mutex_`, `prod_mutex_`, `scene_mutex_`.
 
 **Practical rule**: a single "owner thread" should perform all non-thread-safe
-operations (`Create`, `CommitConfig`, `Stop`, `Destroy`). Polling threads
+operations (`Create`, `CommitScene`, `Stop`, `Destroy`). Polling threads
 may safely call `QueryServerState` and `Get*Results` concurrently.
 
 ---
@@ -360,7 +372,7 @@ if (count < max_count) {
 }
 ```
 
-**Regression test**: `test/e2e/test_capi_sentinel_overflow.py` exercises
+**Regression test**: `test/regression-sentinel/test_capi_sentinel_overflow.py` exercises
 3 configs × 12 rounds = 36 server lifecycles using `max_count=1` to guard
 against reintroduction.
 
@@ -396,65 +408,63 @@ No sentinel is needed when the caller uses direct indexing.
 
 ---
 
-## §6 CommitConfig Dual Paths
+## §6 The Single Commit Path
 
-Both paths ultimately call the same internal `Server::CommitConfig(json, out_reused)`.
+Up to v4.11 there were two commit surfaces — a JSON-string one
+(`LUMICE_CommitConfig` / `FromFile`) and a wide-C-struct one
+(`LUMICE_CommitConfigStruct`) — that met at the same internal
+`Server::CommitConfig(json, out_reused)`. v4.12 removed both. Every
+configuration, however it was authored, now reaches the core through
+`LUMICE_CommitScene`.
 
-### §6.1 JSON String Path
+### §6.1 Two authoring routes, one commit
 
-`LUMICE_CommitConfig(server, config_str)`:
-1. Null-checks arguments.
-2. Calls `Server::CommitConfig(string)` which parses JSON then delegates
-   to `ServerImpl::CommitConfig(json)`.
+```
+  JSON text / file ──> LUMICE_SceneFromJson{,File} ──┐
+                        (JsonToConfig -> ConfigToJson)│
+                                                      ├─> scene->root ──> LUMICE_CommitScene
+  SceneCreate + Add*/Set* ────────────────────────────┘        │             (CommitJsonToServer)
+                        (per-section encode helpers)            │                   │
+                                                                v                   v
+                                                        LUMICE_SceneToJson   Server::CommitConfig(json, &reused)
+```
 
-This path accepts the **full** configuration format: all filter types
-(distribution, raypath, etc.), array-form spectrum, any lens type, any
-view parameters.
+The two authoring routes converge *before* the commit, on one JSON document
+(`scene->root`), because they share the same per-section encode helpers. That
+shared encoder is the mechanism — not a coincidence — behind the property
+`scene->root == ConfigToJson(equivalent config)`, asserted byte-for-byte in
+`test/unit-correctness/server/test_c_api_scene.cpp`. Because the routes converge
+on a document rather than on a call, reuse judgement and re-simulation
+triggering cannot diverge between them: `CommitJsonToServer` sees no evidence of
+which route produced its input.
 
-(`c_api.cpp:125–139`)
+### §6.2 Why `CommitJsonToServer` stays a separate function
 
-### §6.2 C Struct Path
+`LUMICE_CommitScene` is its only caller today. It remains factored out because
+the core commit call, the error log, the error-code mapping and the
+`out_reused` write-back are one unit: a future second producer of an
+already-encoded document must reuse it verbatim rather than re-derive it. This
+is the same reasoning that kept the two v4.11 entry points behaviorally
+identical.
 
-`LUMICE_CommitConfigStruct(server, config, out_reused)`:
-1. Null-checks and bounds-checks array counts.
-2. Calls `ConfigToJson(*config)` to convert the C struct to a JSON object.
-3. Calls `Server::CommitConfig(json, &reused)`.
+### §6.3 What the struct path bought, and where it went
 
-Constraints imposed by the C struct representation:
+The struct path existed to skip JSON string serialization in the GUI's 50 ms
+commit cycle, and it was the only entry point exposing `out_reused`. Both
+properties survive it: the Scene handle is built through typed `Add*`/`Set*`
+calls with no string round-trip, and `out_reused` is now available to every
+caller.
 
-| Dimension | Struct path limitation |
-|-----------|----------------------|
-| Filter types | `type="raypath"` only |
-| Spectrum | String enumerations only (`"D65"`, `"D50"`, `"A"`, `"E"`) |
-| Lens type | Always `dual_fisheye_equal_area`, FOV 180° |
-| View parameters | Fixed at elevation=0, azimuth=0, roll=0 |
-| Background | Fixed at black (0,0,0) |
-| Visible | Fixed at `"full"` |
-| `out_reused` | Exposes consumer reuse decision (JSON path does not) |
-
-(`c_api.cpp:188–336`)
-
-### §6.3 Semantic Equivalence
-
-For the subset of configurations expressible by `LUMICE_Config`, both paths
-produce **identical** `CommitConfig(json)` calls. The struct path exists to
-eliminate JSON string serialization overhead in the GUI's 50ms commit cycle
-(see task-52.2). The reuse flag (`out_reused`) lets the GUI detect whether
-buffer pointers remain valid.
-
-`raypath_color[]` (Design 2 per-raypath color classes, task-342.2) rides this
-same struct→JSON→`CommitConfig` path — there is **no** separate struct→core
-translation for color. `ConfigToJson` emits `raypath_color` in the exact wire
-shape core's `RaypathColorConfig::from_json` reads, so the JSON-string commit
-and the struct commit produce byte-identical composites for the same config
-(verified by `RaypathColorApi.JsonAndStructCommitPixelEquivalent`, AC1). A
-zero `raypath_color_count` omits the key entirely, keeping the mono JSON shape
-byte-for-byte unchanged (AC4).
+Per-raypath color classes ride the same single path. There is **no** separate
+struct→core translation for color: the encoder emits `raypath_color` in the
+exact wire shape core's `RaypathColorConfig::from_json` reads. A scene with zero
+color classes omits the key entirely, keeping the mono JSON shape byte-for-byte
+unchanged.
 
 ### §6.4 Display-time color setter (`LUMICE_SetRaypathColors`)
 
 Changing **member structure** (a class's `match[]` refs / `combine`) is a
-re-simulation event and must go through `CommitConfig*` (dirty → rebuild lanes →
+re-simulation event and must go through `LUMICE_CommitScene` (dirty → rebuild lanes →
 re-accumulate). Changing only **appearance** (per-class RGB, `visible`, `solo`,
 z-order, composite mode) does NOT need re-simulation: `LUMICE_SetRaypathColors`
 mutates the active class table in place under `consumer_mutex_`, sets
@@ -470,11 +480,11 @@ draw priority never re-binds a lane to another class's color (see
 
 ---
 
-## §7 SimData Side Effects of CommitConfig
+## §7 SimData Side Effects of a Commit
 
 ### §7.1 Internal Reset Sequence
 
-When `CommitConfig` succeeds, the following sequence occurs
+When a commit succeeds, the following sequence occurs
 (`server.cpp:226–335`):
 
 1. **Parse**: temporary `ConfigManager` parses JSON. On failure, the running
@@ -500,16 +510,16 @@ When `CommitConfig` succeeds, the following sequence occurs
 
 ### §7.2 Buffer Lifetime Rules
 
-| Field | State after CommitConfig |
+| Field | State after a commit |
 |-------|------------------------|
 | `has_ever_consumed_` | `false` — new simulation data required |
 | `snapshot_dirty_` | `false` |
 | `snapshot_generation_` | **Unchanged** — only `PrepareSnapshot` increments it; poller tracks its own `last_generation_` |
-| `img_buffer` / `xyz_buffer` pointers | **Invalid on rebuild**; valid on reuse (same allocation). Callers should re-query after `CommitConfig` |
+| `img_buffer` / `xyz_buffer` pointers | **Invalid on rebuild**; valid on reuse (same allocation). Callers should re-query after a commit |
 | `has_valid_data` (C API field) | `0` — maps from `has_ever_consumed_=false` |
 | Cached `StatsResult` | Stale from previous run; `GetCachedStats` returns it until overwritten by next snapshot |
 
-**Rule**: after any `CommitConfig` call, callers must not use previously
+**Rule**: after any `LUMICE_CommitScene` call, callers must not use previously
 obtained `img_buffer` / `xyz_buffer` pointers. The GUI re-fetches via
 `GetRawXyzResults` on the next poll cycle.
 
@@ -523,10 +533,11 @@ obtained `img_buffer` / `xyz_buffer` pointers. The GUI re-fetches via
 | `src/server/c_api.cpp:726–729` (`GetRenderResults` sentinel) | §5.2 Overflow fix |
 | `src/server/c_api.cpp:760–763` (`GetRawXyzResults` sentinel) | §5.2 Overflow fix |
 | `src/server/c_api.cpp:785–787` (`GetStatsResults` sentinel) | §5.2 Overflow fix |
-| `src/server/c_api.cpp:313` (`CommitConfigStruct` entry) | §6.2 C Struct path |
-| `src/server/server.cpp:226` (`CommitConfig` entry) | §7 SimData side effects |
+| `src/server/c_api.cpp` (`CommitJsonToServer` — the shared commit tail) | §6.2 Why it stays factored out |
+| `src/server/c_api.cpp` (`JsonToScene` — the JSON→handle double hop) | §3.2 Known technical debt |
+| `src/server/server.cpp:226` (`Server::CommitConfig` entry) | §7 SimData side effects |
 | `src/server/server.cpp:526–527` (`has_ever_consumed_ = false`) | §7.1 Reset sequence |
 | `src/server/server.cpp` `ConsumeData` zero-exit `else` branch (`has_ever_consumed_`/`snapshot_dirty_` on all-black batch) | §3.6 Zero-output completion |
 | `src/server/server.cpp:37–53` (`TicketMutex`) | §4 Thread safety (FIFO mutex) |
-| `test/e2e/test_capi_sentinel_overflow.py` | §5.2 Regression test |
+| `test/regression-sentinel/test_capi_sentinel_overflow.py` | §5.2 Regression test |
 | `test/parity-cross-backend/backend/test_cuda_filter_parity.py::test_cuda_impossible_filter_produces_zero_intensity` | §3.6 Zero-output reproducer |

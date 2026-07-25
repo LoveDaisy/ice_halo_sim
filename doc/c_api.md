@@ -29,7 +29,7 @@ Link against the `lumice` static library.
 ### Constants
 
 ```c
-#define LUMICE_API_VERSION 410        // ABI version, encoded major*100 + minor (v4.10)
+#define LUMICE_API_VERSION 412        // ABI version, encoded major*100 + minor (v4.12)
 #define LUMICE_MAX_RENDER_RESULTS 16  // Maximum capacity of the render result array
 #define LUMICE_MAX_STATS_RESULTS 1    // Maximum capacity of the stats result array
 ```
@@ -38,10 +38,19 @@ Link against the `lumice` static library.
 mismatch instead of hitting silent UB from a struct-layout drift, e.g.:
 
 ```c
-static_assert(LUMICE_API_VERSION >= 410, "Lumice header too old for this integration");
+static_assert(LUMICE_API_VERSION >= 412, "Lumice header too old for this integration");
 ```
 
-It is bumped on every BREAKING change to the public struct layout.
+It is bumped on every BREAKING change to the public symbol set or struct layout.
+
+**v4.12 is such a break.** The wide `LUMICE_Config` value struct and everything that existed only
+to feed it were removed: `LUMICE_Config` itself, the three commit entry points
+(`LUMICE_CommitConfig` / `LUMICE_CommitConfigFromFile` / `LUMICE_CommitConfigStruct`),
+`LUMICE_ParseConfigString` / `LUMICE_ParseConfigFile` / `LUMICE_ConfigToJson`, the
+`LUMICE_ConfigCreateColorClasses` / `LUMICE_ConfigReleaseColorClasses` /
+`LUMICE_ConfigReleaseCompositions` ownership helpers, and the C++ RAII header
+`src/include/lumice_config_scope.hpp`. `LUMICE_Scene` replaces all of them. There is no shim and
+no alias: code calling a removed symbol fails to compile, which is the intended migration signal.
 
 ### Data Types
 
@@ -51,6 +60,15 @@ Server handle, an opaque pointer type.
 
 ```c
 typedef struct LUMICE_Server_ LUMICE_Server;
+```
+
+#### LUMICE_Scene
+
+Scene handle, an opaque pointer type. This is the configuration container of the API — see
+[Configuration](#configuration) for its full lifecycle.
+
+```c
+typedef struct LUMICE_Scene_ LUMICE_Scene;
 ```
 
 #### LUMICE_ErrorCode
@@ -112,7 +130,7 @@ typedef struct LUMICE_RenderResult_ {
 
 **Notes**:
 - The image data pointed to by `img_buffer` is managed internally by the library and does not need to be freed manually
-- `img_buffer` remains valid until the next call to `LUMICE_GetRenderResults()` or `LUMICE_CommitConfig()`
+- `img_buffer` remains valid until the next call to `LUMICE_GetRenderResults()` or `LUMICE_CommitScene()`
 - If you need to retain the data long-term, you should `memcpy` it yourself
 - Image data is in RGB format, with 3 bytes per pixel (R, G, B)
 - Image data size = `img_width * img_height * 3` bytes
@@ -217,118 +235,232 @@ void LUMICE_SetLogLevel(LUMICE_Server* server, LUMICE_LogLevel level);
 
 ### Configuration
 
-#### LUMICE_CommitConfig
+A configuration lives in a `LUMICE_Scene` — an opaque, incrementally-built handle. There is
+exactly one way to configure a server: build or parse a scene, then commit it.
 
-Submits a configuration as a JSON string.
+```
+   LUMICE_SceneCreate + Add*/Set*  ─┐
+                                    ├─→  LUMICE_Scene  ──→  LUMICE_CommitScene(server, scene)
+   LUMICE_SceneFromJson{,File}     ─┘         │
+                                              └──→  LUMICE_SceneToJson  (save / inspect)
+```
+
+Authoring (JSON or programmatic) and committing are deliberately separate: `SceneFromJson` never
+touches a server, and `CommitScene` never takes a document. A handle is caller-owned, may be
+committed repeatedly, and must eventually be destroyed.
+
+#### JSON schema strictness (`LUMICE_SceneFromJson` / `LUMICE_SceneFromJsonFile`)
+
+All C API entry points that read a config document share one parser, and that parser accepts
+**exactly what the simulator's own config parser accepts** — same required keys, same defaults for
+omitted optional keys. This is a hard contract, not a best effort: the handle path is the only way
+to feed a config into the library, so a parser that is stricter would reject configs the CLI reads
+today, and one that is looser would silently accept a document the commit stage then refuses.
+
+The contract is enforced mechanically rather than by review: `JsonParserParity.*` in
+`test/unit-correctness/server/test_json_parser_parity.cpp` runs both parsers over every config
+file tracked in the repository (enumerated from disk, so new files are covered automatically) and
+fails on any input one accepts and the other rejects, or any input both accept but decode to
+different values.
+
+Two deliberate exceptions:
+
+- **Invalid enum strings are rejected, not silently reinterpreted.** Where the core parser maps an
+  unrecognized `type` / `action` / `spectrum` string onto a plausible-looking fallback, the C API
+  returns `LUMICE_ERR_INVALID_VALUE` instead — a typo should surface, not quietly change the
+  simulation.
+- **Value-range checks fire at commit, not at parse.** Bounds such as `max_hits ∈ [1, 64]` stay
+  single-source in the core and are reported by `LUMICE_CommitScene`, so a parse that succeeds is
+  not by itself a promise that the commit will. End to end the document is still rejected; only
+  the reporting point differs.
+
+Separately from the core's own rules, the C API enforces per-kind soft capacity ceilings
+(`LUMICE_MAX_CONFIG_*`, listed in `lumice.h`) at `Add*` / parse time — e.g. at most
+`LUMICE_MAX_CONFIG_COLOR_REFS` match refs on one color class. Exceeding one returns
+`LUMICE_ERR_INVALID_CONFIG`.
+
+Renderers round-trip in full. Up to v4.10 a renderer's `lens` / `lens_shift` / `view` /
+`visible` / `background` / `ray_color` / `grid` / `celestial_outline` had no fields in
+`LUMICE_RenderParam`, so they were dropped on parse and replaced with a hardcoded
+`dual_fisheye_equal_area` / fov 180 / view {0,0,0} / `visible=full` / black-background renderer on
+re-serialization — a document could parse cleanly and then be simulated through a projection the
+caller never asked for. v4.11 widened the struct to the full renderer description, and the parity
+test now compares renderers with core's own `RenderConfig::operator==`, with no field whitelist.
+
+#### Scene lifecycle
 
 ```c
-LUMICE_ErrorCode LUMICE_CommitConfig(LUMICE_Server* server, const char* config_str);
+LUMICE_Scene* LUMICE_SceneCreate(void);
+LUMICE_Scene* LUMICE_SceneClone(const LUMICE_Scene* scene);
+void          LUMICE_SceneDestroy(LUMICE_Scene* scene);
+```
+
+- `SceneCreate` returns an empty handle, or `NULL` on allocation failure. The caller owns it and
+  must eventually pass it to `SceneDestroy`.
+- `SceneClone` deep-copies a scene into a fully independent handle (no aliasing). This is what
+  the old wide-struct value semantics really bought — atomic modal edit with a Cancel path — now
+  one call instead of a six-figure-byte stack copy. Each handle must be destroyed independently.
+  Returns `NULL` if `scene` is `NULL` or on allocation failure.
+- `SceneDestroy` is a `NULL`-safe no-op. Each handle must be destroyed exactly once; destroying
+  twice is undefined behavior (same contract as `LUMICE_DestroyServer`).
+
+#### Building a scene: `LUMICE_SceneAdd*`
+
+```c
+LUMICE_ErrorCode LUMICE_SceneAddCrystal(LUMICE_Scene*, const LUMICE_CrystalParam*, int* out_id);
+LUMICE_ErrorCode LUMICE_SceneAddFilter(LUMICE_Scene*, const LUMICE_FilterParam*, int* out_id);
+LUMICE_ErrorCode LUMICE_SceneAddComplexFilter(LUMICE_Scene*, const LUMICE_FilterParam*,
+                                              const LUMICE_ComplexComposition*, int* out_id);
+LUMICE_ErrorCode LUMICE_SceneAddRenderer(LUMICE_Scene*, const LUMICE_RenderParam*, int* out_id);
+LUMICE_ErrorCode LUMICE_SceneAddScatterLayer(LUMICE_Scene*, const LUMICE_ScatterLayer*, int* out_id);
+LUMICE_ErrorCode LUMICE_SceneAddColorClass(LUMICE_Scene*, const LUMICE_ColorClass*, int* out_id);
+```
+
+Every `Add*` appends one item and writes its 0-based sequence id — its index among items of the
+same kind, in insertion order — to `*out_id`.
+
+- **The scene assigns ids; it ignores any `.id` field on the incoming struct.** Cross-referencing
+  fields you build later (`LUMICE_FilterParam.crystal_id`, `LUMICE_ScatterEntry.crystal_id` /
+  `.filter_id`, a composition's term ids) MUST use the returned `out_id` values, never an id you
+  chose yourself.
+- **Every input is deep-copied immediately.** The leaf struct you pass in may be a stack temporary
+  that you reuse or discard as soon as the call returns — there is no "must outlive the commit"
+  lifetime rule anywhere in this API. `SceneAddComplexFilter` also copies the composition's
+  `term_ids` / `term_counts` heap arrays, so you may release them right after it returns.
+- **Validation is per-call.** Each `Add*` validates that one item's shape and enums before
+  writing; on failure the scene is left completely unchanged (no partial write).
+- `SceneAddFilter` handles the SIMPLE arms only (`none` / `raypath` / `entry_exit` / `direction` /
+  `crystal`). A filter with `type == LUMICE_FILTER_TYPE_COMPLEX` is rejected — use
+  `SceneAddComplexFilter`, which takes the filter identity and its composition together and
+  ignores `filter->type` / `filter->composition_index`.
+
+**Return value** (all of them):
+- `LUMICE_OK`: success, `*out_id` written.
+- `LUMICE_ERR_NULL_ARG`: `scene`, the input pointer, or `out_id` is `NULL`.
+- `LUMICE_ERR_INVALID_CONFIG`: invalid item — bad enum, out-of-range count, or the scene already
+  holds the matching `LUMICE_MAX_CONFIG_*` capacity of that kind.
+
+#### Scene settings: `LUMICE_SceneSet*`
+
+```c
+LUMICE_ErrorCode LUMICE_SceneSetLightSource(LUMICE_Scene*, float sun_altitude, float sun_azimuth,
+                                            float sun_diameter, const char* spectrum);
+LUMICE_ErrorCode LUMICE_SceneSetCustomSpectrum(LUMICE_Scene*, const LUMICE_SpectrumEntry*, int count);
+LUMICE_ErrorCode LUMICE_SceneSetSimParams(LUMICE_Scene*, int infinite, LUMICE_RayCount ray_num,
+                                          int max_hits, int geom_clock);
+LUMICE_ErrorCode LUMICE_SceneSetColorMode(LUMICE_Scene*, int raypath_color_mode);
+```
+
+Each `Set*` is idempotent (last write wins) and callable in any order. Returns
+`LUMICE_ERR_NULL_ARG` for a `NULL` scene, `LUMICE_ERR_INVALID_CONFIG` / `LUMICE_ERR_INVALID_VALUE`
+for an invalid value.
+
+Light source and spectrum interact, and the interaction is order-independent by design: a discrete
+spectrum (`SetCustomSpectrum` with `count > 0`) takes precedence over the `spectrum` string, so
+`SetLightSource` does NOT overwrite a discrete spectrum already set. Both call orders converge to
+the same result. `SetCustomSpectrum` with `count == 0` clears the discrete spectrum and falls back
+to the string (default `"D65"`).
+
+`SetSimParams` takes `infinite` (1 = run forever, 0 = stop after `ray_num` rays), `max_hits`, and
+`geom_clock` (geometry-resampling clock K; 0 = let the core derive a default).
+
+#### Serialization: `LUMICE_SceneToJson` / `SceneFromJson` / `SceneFromJsonFile`
+
+```c
+LUMICE_ErrorCode LUMICE_SceneToJson(const LUMICE_Scene* scene, char* out_buf, size_t buf_size,
+                                    size_t* out_len);
+LUMICE_ErrorCode LUMICE_SceneFromJson(const char* json_str, LUMICE_Scene** out_scene);
+LUMICE_ErrorCode LUMICE_SceneFromJsonFile(const char* filename, LUMICE_Scene** out_scene);
+```
+
+These are the JSON authoring half, and they never touch a `LUMICE_Server`: parsing produces a
+handle, nothing more. Round-trip is lossless — `SceneFromJson(SceneToJson(scene))` is semantically
+equal to the original. The document format is the same one the CLI reads; see
+[Configuration Documentation](configuration.md).
+
+`SceneToJson` uses an snprintf-style caller buffer with no cross-ABI allocation:
+
+- Pass `out_buf == NULL` (or `buf_size == 0`) to query the length without writing.
+- On a too-small buffer the output is truncated but **always** NUL-terminated.
+- `*out_len` (when non-`NULL`) always reports the full, untruncated length, so the output was
+  truncated iff `*out_len >= buf_size`. The usual two-call pattern is: query, allocate
+  `*out_len + 1`, call again.
+- Returns `LUMICE_ERR_NULL_ARG` for a `NULL` scene, `LUMICE_ERR_INVALID_CONFIG` if the scene
+  cannot be serialized (e.g. a `Set*` was handed a string that is not valid UTF-8).
+
+`SceneFromJson` / `SceneFromJsonFile` allocate a brand-new handle into `*out_scene` on success —
+you own it and must eventually `SceneDestroy` it. **On any failure `*out_scene` is set to `NULL`
+and no handle is leaked**, so you never destroy a handle that was not produced.
+
+**Return value**:
+- `LUMICE_OK`: success, `*out_scene` owns a new handle.
+- `LUMICE_ERR_NULL_ARG`: `json_str` / `filename` or `out_scene` is `NULL`.
+- `LUMICE_ERR_INVALID_JSON`: syntax error.
+- `LUMICE_ERR_MISSING_FIELD`: a required field is absent.
+- `LUMICE_ERR_INVALID_VALUE` / `LUMICE_ERR_INVALID_CONFIG`: bad enum or value, or a
+  `LUMICE_MAX_CONFIG_*` soft cap exceeded.
+- `LUMICE_ERR_FILE_NOT_FOUND` (`SceneFromJsonFile` only): the file cannot be opened.
+
+#### LUMICE_CommitScene
+
+Commits a scene to a server. This is the **only** commit entry point in the API.
+
+```c
+LUMICE_ErrorCode LUMICE_CommitScene(LUMICE_Server* server, const LUMICE_Scene* scene,
+                                    int* out_reused);
 ```
 
 **Parameters**:
-- `server`: server handle pointer
-- `config_str`: configuration string in JSON format
+- `server`: server handle.
+- `scene`: scene handle. Read as `const`; **neither consumed nor destroyed**. The server keeps no
+  reference to it, you still own it, and the same handle may be committed repeatedly (edit via
+  `Add*`/`Set*`, commit again).
+- `out_reused`: optional (may be `NULL`). When non-`NULL`, receives `1` if the server reused the
+  existing consumers/renderers across this commit (no renderer-layout change), `0` if they were
+  rebuilt.
 
 **Return value**:
-- `LUMICE_OK`: success
-- `LUMICE_ERR_NULL_ARG`: `server` or `config_str` is `NULL`
-- `LUMICE_ERR_INVALID_JSON`: invalid JSON format
-- `LUMICE_ERR_INVALID_CONFIG` / `LUMICE_ERR_MISSING_FIELD` / `LUMICE_ERR_INVALID_VALUE`: invalid configuration content
+- `LUMICE_OK`: success — the server stops the current run and starts the new one immediately.
+- `LUMICE_ERR_NULL_ARG`: `server` or `scene` is `NULL`.
+- `LUMICE_ERR_INVALID_CONFIG` / `LUMICE_ERR_MISSING_FIELD` / `LUMICE_ERR_INVALID_VALUE` /
+  `LUMICE_ERR_INVALID_JSON`: the core refused the configuration.
+- `LUMICE_ERR_SERVER`: server-side failure.
 
-**Notes**:
-- After submitting the configuration, the server begins processing immediately
-- See the [Configuration Documentation](configuration.md) for the configuration format
-
-#### LUMICE_CommitConfigFromFile
-
-Loads and submits a configuration from a file.
-
-```c
-LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* filename);
-```
-
-**Parameters**:
-- `server`: server handle pointer
-- `filename`: path to the configuration file
-
-**Return value**:
-- `LUMICE_OK`: success
-- `LUMICE_ERR_NULL_ARG`: `server` or `filename` is `NULL`
-- `LUMICE_ERR_FILE_NOT_FOUND`: file does not exist or cannot be opened
-- Other error codes: invalid configuration content
+On any error `*out_reused` is left untouched. Note that no whole-scene re-validation happens here:
+every `Add*`/`Set*` already validated its own input, so what this can still surface is
+cross-field / semantic rejection from the core (e.g. `max_hits` out of range).
 
 #### Per-raypath color classes (`raypath_color`) and `LUMICE_SetRaypathColors`
 
-`LUMICE_Config` carries an optional `raypath_color[]` (Design 2, task-342.2):
-each *color class* has an RGB color plus a set of placement-scoped *match*
-predicates `{layer, crystal, predicate}` that decide which surviving rays get
-color-tagged. `raypath_color_mode` selects the display-time composite mode
-(`LUMICE_COLOR_MODE_DOMINANT` / `_ADDITIVE` / `_PAINTER`). `raypath_color_count
-== 0` disables color entirely — the mono `LUMICE_GetRenderResults` output and
-the emitted JSON are byte-identical to a config without the field.
-
-##### Lifetime — `raypath_color` is a heap pointer (BREAKING v4.8)
-
-Since v4.8 (task-344), `LUMICE_Config.raypath_color` is a heap-allocated
-`LUMICE_ColorClass*`, **not** an inline fixed-size array. The change shrinks
-`sizeof(LUMICE_Config)` from ~467 KB to ~113 KB (fixed a stack overflow in
-the GUI test harness when two `LUMICE_Config` locals shared a single stack
-frame) and hands the caller explicit ownership of the color-class allocation.
-
-Two APIs manage the allocation:
+A scene carries an optional set of *color classes*: each has an RGB color plus a set of
+placement-scoped *match* predicates `{layer, crystal, predicate}` that decide which surviving rays
+get color-tagged. The composite mode (`LUMICE_COLOR_MODE_DOMINANT` / `_ADDITIVE` / `_PAINTER`) is
+a scene setting. A scene with no color classes disables color entirely — the mono
+`LUMICE_GetRenderResults` output and the emitted JSON are byte-identical to a config that never
+mentioned the feature.
 
 ```c
-LUMICE_ColorClass* LUMICE_ConfigCreateColorClasses(LUMICE_Config* cfg, int count);
-void               LUMICE_ConfigReleaseColorClasses(LUMICE_Config* cfg);
+LUMICE_ErrorCode LUMICE_SceneAddColorClass(LUMICE_Scene*, const LUMICE_ColorClass*, int* out_id);
+LUMICE_ErrorCode LUMICE_SceneSetColorMode(LUMICE_Scene*, int raypath_color_mode);
 ```
 
-- `Create` zero-initializes `count` `LUMICE_ColorClass` entries, writes them
-  into `cfg->raypath_color` (with `cfg->raypath_color_count = count`), and
-  returns the array pointer for the caller to fill. `count == 0` sets
-  `raypath_color = NULL / raypath_color_count = 0` (equivalent to "no color
-  classes"). Rejects `cfg == NULL`, `count < 0`, or
-  `count > LUMICE_MAX_CONFIG_COLOR_CLASSES` by returning `NULL`.
-  **Idempotent / create-or-replace**: if `cfg->raypath_color` is already
-  non-NULL (previous `Create` or implicit-alloc path), the old allocation
-  is freed first, so calling `Create` twice on the same `cfg` is safe.
-- `Release` frees the allocation and resets `raypath_color / raypath_color_count`
-  to zero. Null-safe and idempotent — safe to call on an already-released or
-  never-allocated `cfg`.
+**There is no ownership contract to honor.** `SceneAddColorClass` deep-copies the class you hand
+it, and the scene owns its color-class storage for as long as the handle lives; `SceneDestroy`
+releases everything. Up to v4.11 this was the API's sharpest edge — `LUMICE_Config.raypath_color`
+was a caller-owned heap pointer with `Create`/`Release` functions, implicit-allocation paths, a
+"do not copy the struct by value" rule and a C++ RAII guard to make early returns safe. All of
+that is gone with the struct.
 
-**Implicit-alloc paths** (caller does NOT pre-call `Create`; the function
-allocates internally): `LUMICE_ParseConfigString` / `LUMICE_ParseConfigFile`
-and the GUI's `FillLumiceConfig` allocate `raypath_color` based on data they
-parse (JSON `classes` length or `GuiState.raypath_color.size()`). The caller
-still owns the resulting allocation and **must call `Release`** (directly or
-via the RAII guard below) once done, regardless of who triggered the alloc.
-
-**Do not copy `LUMICE_Config` by value.** Because `raypath_color` is an
-owning heap pointer, `LUMICE_Config b = a;` / by-value function parameters /
-`std::vector<LUMICE_Config>` alias the same allocation and double-free at
-second `Release`. Route through `LUMICE_Config*` or `const LUMICE_Config&`.
-`scripts/check_policies.py` (rule `no-config-by-value-copy`) enforces this
-statically for `src/` and `test/`.
-
-**RAII helper (C++ only)** — `src/include/lumice_config_scope.hpp` provides
-`lumice::ConfigColorGuard`, a non-copyable / non-movable scope guard that
-calls `Release` on the referenced `LUMICE_Config` at end of scope, covering
-all early-return paths (assertions, `IM_CHECK`, exceptions):
-
-```cpp
-LUMICE_Config cfg{};
-lumice::ConfigColorGuard _color_guard(cfg);   // frees raypath_color on scope exit
-LUMICE_ParseConfigString(json_str, strlen(json_str), &cfg);
-// ... use cfg ...
-```
-
+> **WARNING** — `LUMICE_ColorClass.visible` is a plain 0/1 field applied verbatim, so a
+> zero-initialized `LUMICE_ColorClass{}` has `visible == 0` (INVISIBLE), the opposite of the core
+> JSON default. Set `visible = 1` explicitly for every class you want shown, or the compositor
+> silently omits it.
 
 Two disjoint change paths — pick by whether the *members* change:
 
-- **Structure change** (`match[]` refs / `combine`) → **re-simulation**. Edit
-  `LUMICE_Config.raypath_color[]` and re-submit via `LUMICE_CommitConfig` (JSON
-  string) or `LUMICE_CommitConfigStruct` (C struct); both produce identical
-  composites. Read the composite images via `LUMICE_GetCompositeResults` (one
-  sRGB `LUMICE_RenderResult` per colored renderer).
+- **Structure change** (`match[]` refs / `combine`) → **re-simulation**. Rebuild the scene's color
+  classes and re-commit with `LUMICE_CommitScene`. Read the composite images via
+  `LUMICE_GetCompositeResults` (one sRGB `LUMICE_RenderResult` per colored renderer).
 - **Appearance change** (RGB / visible / solo / z-order / composite mode) →
   **no re-simulation**:
 
@@ -482,8 +614,16 @@ int main() {
         return 1;
     }
 
-    // 2. Load configuration from file
-    if (LUMICE_CommitConfigFromFile(server, "config.json") != LUMICE_OK) {
+    // 2. Parse the config file into a scene handle, commit it, then release the handle.
+    //    (The server keeps no reference to the scene, so it can go away right after commit.)
+    LUMICE_Scene* scene = NULL;
+    if (LUMICE_SceneFromJsonFile("config.json", &scene) != LUMICE_OK) {
+        LUMICE_DestroyServer(server);
+        return 1;
+    }
+    LUMICE_ErrorCode commit_err = LUMICE_CommitScene(server, scene, NULL);
+    LUMICE_SceneDestroy(scene);
+    if (commit_err != LUMICE_OK) {
         LUMICE_DestroyServer(server);
         return 1;
     }
@@ -547,10 +687,18 @@ int main(int argc, char* argv[]) {
     // 2. Set log level (optional, default is INFO)
     LUMICE_SetLogLevel(server, LUMICE_LOG_INFO);
 
-    // 3. Load configuration
-    LUMICE_ErrorCode err = LUMICE_CommitConfigFromFile(server, argv[1]);
+    // 3. Load configuration: file -> scene handle -> commit -> release handle.
+    LUMICE_Scene* scene = NULL;
+    LUMICE_ErrorCode err = LUMICE_SceneFromJsonFile(argv[1], &scene);
     if (err != LUMICE_OK) {
-        fprintf(stderr, "Error: Failed to load config (error code: %d)\n", err);
+        fprintf(stderr, "Error: Failed to parse config (error code: %d)\n", err);
+        LUMICE_DestroyServer(server);
+        return 1;
+    }
+    err = LUMICE_CommitScene(server, scene, NULL);
+    LUMICE_SceneDestroy(scene);   // committed or not, the handle is ours to free
+    if (err != LUMICE_OK) {
+        fprintf(stderr, "Error: Failed to commit config (error code: %d)\n", err);
         LUMICE_DestroyServer(server);
         return 1;
     }
@@ -609,7 +757,8 @@ int main(int argc, char* argv[]) {
 All configuration, query, and result retrieval APIs return `LUMICE_ErrorCode`. Best practice:
 
 ```c
-LUMICE_ErrorCode err = LUMICE_CommitConfigFromFile(server, "config.json");
+LUMICE_Scene* scene = NULL;
+LUMICE_ErrorCode err = LUMICE_SceneFromJsonFile("config.json", &scene);
 if (err != LUMICE_OK) {
     switch (err) {
         case LUMICE_ERR_NULL_ARG:
@@ -646,7 +795,10 @@ The following APIs are **thread-safe**:
 
 The following APIs are **not thread-safe** and must not be called simultaneously from multiple threads:
 - `LUMICE_CreateServer()` / `LUMICE_DestroyServer()`: server lifecycle management
-- `LUMICE_CommitConfig()` / `LUMICE_CommitConfigFromFile()`: configuration submission
+- `LUMICE_CommitScene()`: configuration submission
+- `LUMICE_Scene*` handle mutation (`LUMICE_SceneAdd*` / `LUMICE_SceneSet*` / `LUMICE_SceneDestroy`
+  on one handle) — a handle has no internal locking. Distinct handles are independent, so building
+  two scenes on two threads is fine.
 - `LUMICE_StopServer()`: server shutdown
 
 ### Multithreading Recommendations
@@ -688,8 +840,12 @@ LUMICE_MAX_STATS_RESULTS = 1
 # Define function signatures
 lib.LUMICE_CreateServer.restype = ctypes.c_void_p
 lib.LUMICE_DestroyServer.argtypes = [ctypes.c_void_p]
-lib.LUMICE_CommitConfigFromFile.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-lib.LUMICE_CommitConfigFromFile.restype = ctypes.c_int
+lib.LUMICE_SceneFromJsonFile.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
+lib.LUMICE_SceneFromJsonFile.restype = ctypes.c_int
+lib.LUMICE_CommitScene.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
+lib.LUMICE_CommitScene.restype = ctypes.c_int
+lib.LUMICE_SceneDestroy.argtypes = [ctypes.c_void_p]
+lib.LUMICE_SceneDestroy.restype = None
 lib.LUMICE_GetRenderResults.argtypes = [ctypes.c_void_p, ctypes.POINTER(LUMICE_RenderResult), ctypes.c_int]
 lib.LUMICE_GetRenderResults.restype = ctypes.c_int
 lib.LUMICE_GetStatsResults.argtypes = [ctypes.c_void_p, ctypes.POINTER(LUMICE_StatsResult), ctypes.c_int]
@@ -705,9 +861,16 @@ def simulate(config_file):
         raise RuntimeError("Failed to create server")
 
     try:
-        err = lib.LUMICE_CommitConfigFromFile(server, config_file.encode('utf-8'))
+        scene = ctypes.c_void_p()
+        err = lib.LUMICE_SceneFromJsonFile(config_file.encode('utf-8'), ctypes.byref(scene))
         if err != 0:
-            raise RuntimeError(f"Failed to load config (error: {err})")
+            raise RuntimeError(f"Failed to parse config (error: {err})")
+        try:
+            err = lib.LUMICE_CommitScene(server, scene, None)
+            if err != 0:
+                raise RuntimeError(f"Failed to commit config (error: {err})")
+        finally:
+            lib.LUMICE_SceneDestroy(scene)
 
         import time
         while True:
@@ -757,7 +920,9 @@ struct LUMICE_StatsResult {
 extern "C" {
     fn LUMICE_CreateServer() -> *mut c_void;
     fn LUMICE_DestroyServer(server: *mut c_void);
-    fn LUMICE_CommitConfigFromFile(server: *mut c_void, filename: *const c_char) -> c_int;
+    fn LUMICE_SceneFromJsonFile(filename: *const c_char, out_scene: *mut *mut c_void) -> c_int;
+    fn LUMICE_CommitScene(server: *mut c_void, scene: *const c_void, out_reused: *mut c_int) -> c_int;
+    fn LUMICE_SceneDestroy(scene: *mut c_void);
     fn LUMICE_GetRenderResults(server: *mut c_void, out: *mut LUMICE_RenderResult, max_count: c_int) -> c_int;
     fn LUMICE_GetStatsResults(server: *mut c_void, out: *mut LUMICE_StatsResult, max_count: c_int) -> c_int;
     fn LUMICE_QueryServerState(server: *mut c_void, out: *mut c_int) -> c_int;
@@ -769,7 +934,7 @@ extern "C" {
 
 ### Q1: How do I load a configuration from a file?
 
-**A**: Use `LUMICE_CommitConfigFromFile()` and pass the file path directly. Alternatively, you can read the file contents into a string and pass it to `LUMICE_CommitConfig()`.
+**A**: `LUMICE_SceneFromJsonFile()` parses the file into a scene handle; `LUMICE_CommitScene()` then submits it, and `LUMICE_SceneDestroy()` frees the handle. If you already have the document in memory, use `LUMICE_SceneFromJson()` instead — the rest is identical. Parsing and committing are separate calls on purpose: parsing never touches the server, so you can validate or edit a config without disturbing a running simulation.
 
 ### Q2: What is the image data format?
 
@@ -777,11 +942,11 @@ extern "C" {
 
 ### Q3: When does img_buffer become invalid?
 
-**A**: The `img_buffer` pointer remains valid until the next call to `LUMICE_GetRenderResults()` or `LUMICE_CommitConfig()`. If you need to retain the data long-term, you should `memcpy` it yourself.
+**A**: The `img_buffer` pointer remains valid until the next call to `LUMICE_GetRenderResults()` or `LUMICE_CommitScene()`. If you need to retain the data long-term, you should `memcpy` it yourself.
 
 ### Q4: Can the server process multiple configurations simultaneously?
 
-**A**: No. Each call to `LUMICE_CommitConfig()` stops the current task and starts a new one. To process in parallel, create multiple server instances.
+**A**: No. Each call to `LUMICE_CommitScene()` stops the current task and starts a new one. To process in parallel, create multiple server instances. (A single scene handle may be committed to several servers — commit reads it as `const` and keeps no reference.)
 
 ### Q5: How do I check if the result array is empty?
 

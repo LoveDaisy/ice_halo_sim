@@ -20,14 +20,14 @@ Checks:
      have identical ordered (type, name) field lists. Catches same-size field
      reorders that sizeof-based `static_assert`s do not detect (scrum-328.2
      Step 6).
-  6. no-config-by-value-copy — LUMICE_Config owns heap allocations via its
-     raypath_color pointer (task-344, v4.8) AND each compositions[i]'s
-     term_ids/term_counts pointers (task-host-abi-cpu-caps, v4.9). The check
-     also covers LUMICE_ComplexComposition (each record is now an owning
-     type on its own). Copying either struct by value (copy-init, direct-
-     init, list-init, by-value parameter, or later-line assignment `y = x;`)
-     aliases the same heap blocks and double-frees on double Release. Route
-     through pointer or `const &`, and manage lifetime via the type's
+  6. no-config-by-value-copy — ConfigScratch (the internal parse buffer in
+     server/c_api_internal.hpp, formerly the public LUMICE_Config) owns heap
+     allocations via its raypath_color pointer (v4.8) AND each
+     compositions[i]'s term_ids/term_counts pointers (v4.9). The check also covers LUMICE_ComplexComposition (each record is now
+     an owning type on its own). Copying either struct by value (copy-init,
+     direct-init, list-init, by-value parameter, or later-line assignment
+     `y = x;`) aliases the same heap blocks and double-frees on double Release.
+     Route through pointer or `const &`, and manage lifetime via the type's
      Create/Set / Release C API (or lumice::ConfigOwningGuard).
   7. gui-state-field-tier-registration — every top-level field of
      `struct GuiState` (src/gui/gui_state.hpp) must be registered in EXACTLY
@@ -431,20 +431,24 @@ def check_struct_layout_parity() -> list[Violation]:
     return out
 
 
-# no-config-by-value-copy: LUMICE_Config carries an owning heap pointer
+# no-config-by-value-copy: ConfigScratch carries an owning heap pointer
 # (raypath_color) since task-344 / v4.8. Any by-value copy — copy/direct/list
 # initialization, by-value parameter, or later-line assignment `y = x;` between
 # two same-type locals — aliases the same heap block and double-frees at Release.
-# Route through pointer or `const LUMICE_Config&`, and manage lifetime via
-# LUMICE_ConfigCreateColorClasses / Release (or lumice::ConfigColorGuard).
+# Route through pointer or `const ConfigScratch&`, and manage lifetime via
+# ConfigCreateColorClasses / Release (or ConfigScratchGuard).
 #
-# Known limitation (recorded in plan §3 design-point 6, out of scope for this
-# task): does not cover container-held instances (`std::vector<LUMICE_Config>`
-# etc.). Codebase audit found no such usage; extend the rule if it appears.
+# v4.12 renamed the guarded type: the struct was removed from the public ABI
+# (LUMICE_Config) and demoted to the internal ConfigScratch. The ownership shape
+# — and therefore this gate — is unchanged; only the token it binds to moved.
+#
+# Known limitation: does not cover container-held instances
+# (`std::vector<ConfigScratch>` etc.). Codebase audit found no such usage;
+# extend the rule if it appears.
 #
 # Known limitation (code-review-01, round 1): Patterns 1a/1b/1c all require
 # the RHS to be a single bare identifier, so a function-call RHS such as
-# `LUMICE_Config x = SomeFactory();` is not matched. The codebase currently
+# `ConfigScratch x = SomeFactory();` is not matched. The codebase currently
 # avoids this shape (test factories were converted to out-param `Fill*` style
 # specifically to sidestep it), but a future by-value-returning factory would
 # not be caught — extend Pattern 1a's RHS match to also accept `\w+\(...\)`
@@ -452,7 +456,7 @@ def check_struct_layout_parity() -> list[Violation]:
 # v4.9 (task-host-abi-cpu-caps): LUMICE_ComplexComposition now owns two heap
 # pointers (term_ids / term_counts) via LUMICE_CompositionSetClauses, so it
 # joins the ban list on the same "aliased owning pointer → double-free"
-# grounds as LUMICE_Config. Same 4 patterns run for each type.
+# grounds as the config struct. Same 4 patterns run for each type.
 #
 # code-review-01 (round 1, Major) fix: the RHS of Patterns 1a/1b/1c originally
 # matched only a bare identifier (`\w+`), so the exact risk this task's own
@@ -462,7 +466,7 @@ def check_struct_layout_parity() -> list[Violation]:
 # pointer-member (`->field`), and subscript (`[expr]`) chains so member/subscript
 # copy sources are caught too. The (still-open) function-call-RHS limitation
 # above is unrelated and unchanged.
-GUARDED_OWNING_TYPES = ["LUMICE_Config", "LUMICE_ComplexComposition"]
+GUARDED_OWNING_TYPES = ["ConfigScratch", "LUMICE_ComplexComposition"]
 
 # A bare identifier optionally followed by any number of `.field`, `->field`,
 # or `[expr]` accessors — e.g. `cfg`, `cfg.compositions[i]`, `arr[i]->comp`.

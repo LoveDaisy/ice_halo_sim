@@ -152,7 +152,7 @@ void RegisterAutoEvRegressionTests(ImGuiTestEngine* engine) {
       // 3. Force sim_resolution_index=0 (512) to speed up CI without changing GUI option count
       gui::g_state.renderer.sim_resolution_index = 0;
 
-      // 4. DoRun → triggers SerializeCoreConfig (dual-fisheye override) → starts poller.
+      // 4. DoRun → triggers BuildScene (dual-fisheye override) → starts poller.
       // DoRun sets the intent (run_intent=kRunning); sim_state is reconcile-derived on the next
       // frame, so assert the intent here (the wait loop below drives frames to kSimulating/data).
       gui::DoRun(/*user_initiated=*/true);

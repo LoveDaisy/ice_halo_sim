@@ -5658,7 +5658,7 @@ void RegisterLinkedEntriesTests(ImGuiTestEngine* engine) {
   }
 
   // task-gui-feedback-affordances code-review-01 Critical 1 regression anchor: a persistent
-  // color-overflow condition (unlike the FillLumiceConfig-REJECT branch covered by the sibling
+  // color-overflow condition (unlike the BuildScene-REJECT branch covered by the sibling
   // `overflow_auto_commit_dedup` test) goes through the commit-SUCCEEDED branch of DoRun. That
   // branch used to call ClearGuiWarning() unconditionally before checking for a color overflow,
   // which zeroed the identity-dedup state ahead of the comparison and made every auto-commit

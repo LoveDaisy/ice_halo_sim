@@ -211,8 +211,15 @@ def _load_lib() -> ctypes.CDLL:
     lib.LUMICE_DestroyServer.restype = None
     lib.LUMICE_DestroyServer.argtypes = [ctypes.c_void_p]
 
-    lib.LUMICE_CommitConfigFromFile.restype = ctypes.c_int
-    lib.LUMICE_CommitConfigFromFile.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    # Scene (opaque handle) config path — the only C API surface that commits a config.
+    lib.LUMICE_SceneFromJsonFile.restype = ctypes.c_int
+    lib.LUMICE_SceneFromJsonFile.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
+
+    lib.LUMICE_CommitScene.restype = ctypes.c_int
+    lib.LUMICE_CommitScene.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
+
+    lib.LUMICE_SceneDestroy.restype = None
+    lib.LUMICE_SceneDestroy.argtypes = [ctypes.c_void_p]
 
     lib.LUMICE_QueryServerState.restype = ctypes.c_int
     lib.LUMICE_QueryServerState.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
@@ -320,6 +327,29 @@ def _summarize_backend(lines: List[str]) -> tuple[str, bool]:
     return routed, fell_back
 
 
+def _commit_config(lib, server, config_path: str) -> None:
+    """Parse `config_path` into a LUMICE_Scene handle and commit it, then free the handle.
+
+    Since v4.12 this is the whole story: LUMICE_SceneFromJsonFile + LUMICE_CommitScene is the
+    only C API surface that carries a config to the server, so there is no path selector.
+    """
+    scene = ctypes.c_void_p()
+    err = lib.LUMICE_SceneFromJsonFile(str(config_path).encode("utf-8"), ctypes.byref(scene))
+    if err != 0:
+        raise RuntimeError(f"SceneFromJsonFile failed err={err} config={config_path}")
+    if not scene:
+        raise RuntimeError(f"SceneFromJsonFile returned a NULL handle for {config_path}")
+    try:
+        # CommitScene deep-copies what it needs; the handle stays caller-owned.
+        err = lib.LUMICE_CommitScene(server, scene, None)
+        if err != 0:
+            raise RuntimeError(f"CommitScene failed err={err} config={config_path}")
+    finally:
+        # NULL-safe no-op by contract, but the handle is non-NULL here by the check above; the
+        # finally covers the commit-failure path, where the handle exists and must still be freed.
+        lib.LUMICE_SceneDestroy(scene)
+
+
 def run_scene_capi(config_path: str, sim_seed: int = 0, timeout_sec: int = 180) -> SimResult:
     """Run a single Lumice simulation via the C API and return scalar intensity.
 
@@ -347,9 +377,7 @@ def run_scene_capi(config_path: str, sim_seed: int = 0, timeout_sec: int = 180) 
         raise RuntimeError("LUMICE_CreateServer returned NULL")
 
     try:
-        err = lib.LUMICE_CommitConfigFromFile(server, str(config_path).encode("utf-8"))
-        if err != 0:
-            raise RuntimeError(f"CommitConfigFromFile failed err={err} config={config_path}")
+        _commit_config(lib, server, str(config_path))
 
         results = (LUMICE_RawXyzResult * 1)()
         state_out = ctypes.c_int(0)
@@ -476,9 +504,7 @@ def run_scene_capi_buffered(
                     lib.LUMICE_SetPreferredBackend(server, LUMICE_BACKEND_CPU)
                 # cpu_backend: env handles routing; preferred is ignored.
 
-                err = lib.LUMICE_CommitConfigFromFile(server, str(config_path).encode("utf-8"))
-                if err != 0:
-                    raise RuntimeError(f"CommitConfigFromFile failed err={err} config={config_path}")
+                _commit_config(lib, server, str(config_path))
 
                 results = (LUMICE_RawXyzResult * 1)()
                 renders = (LUMICE_RenderResult * 1)()

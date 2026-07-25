@@ -55,8 +55,11 @@ The `Server` class is the central entry point of the architecture. It uses the P
 - Lifecycle management: controlling server startup and shutdown
 
 **Main Interface**:
-- `CommitConfig(const std::string&)`: Submit a JSON configuration string
-- `CommitConfigFromFile(const std::string&)`: Load configuration from a file
+- `CommitConfig(const nlohmann::json&, bool* out_reused)`: Submit a parsed configuration.
+  This is the single core-side commit; the only public entry point that reaches it is
+  `LUMICE_CommitScene` (the C API's `LUMICE_Config` value struct and its three commit
+  functions were removed in v4.12 — see [`doc/c_api.md`](c_api.md)).
+- `CommitConfig(const std::string&)`: JSON-string overload used by the benchmark harness
 - `GetRenderResults()`: Retrieve render results (non-blocking)
 - `GetStatsResult()`: Retrieve statistics results (non-blocking)
 - `IsIdle()`: Check whether the server is idle
@@ -320,9 +323,10 @@ void LUMICE_DestroyServer(LUMICE_Server* server);
 // Logging
 void LUMICE_SetLogLevel(LUMICE_Server* server, LUMICE_LogLevel level);
 
-// Configuration (returns LUMICE_ErrorCode)
-LUMICE_ErrorCode LUMICE_CommitConfig(LUMICE_Server* server, const char* config_str);
-LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* filename);
+// Configuration: build or parse a scene handle, then commit it (returns LUMICE_ErrorCode)
+LUMICE_ErrorCode LUMICE_SceneFromJsonFile(const char* filename, LUMICE_Scene** out_scene);
+LUMICE_ErrorCode LUMICE_CommitScene(LUMICE_Server* server, const LUMICE_Scene* scene, int* out_reused);
+void LUMICE_SceneDestroy(LUMICE_Scene* scene);
 
 // Result retrieval (array + sentinel pattern, returns LUMICE_ErrorCode)
 LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count);
