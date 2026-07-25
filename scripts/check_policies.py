@@ -227,12 +227,20 @@ MSVC_UNSAFE_BUILTIN = re.compile(r"\b__builtin_(?:popcount|ctz|clz)\w*")
 # logging bypass. The leading \b is what excludes them: there is no word boundary
 # before `printf` inside `snprintf`, so the buffer forms cannot match, while the
 # `v?f?` prefix admits the four stream forms (printf/fprintf/vprintf/vfprintf)
-# that can. Only qualified std:: stream objects are matched, which is sound here
-# because `using namespace` is itself banned (check_no_using_namespace above), so
-# an unqualified `cout` cannot compile. std::endl/std::flush need no entry: they
-# cannot appear without one of the stream objects below.
+# that can. std::endl/std::flush need no entry: they cannot appear without one of
+# the stream objects below.
+#
+# The `std::` on the stream form is optional, and the trailing `<<` is what makes
+# that safe — it distinguishes a stream write from a variable that merely happens
+# to be named `cerr`. Matching the unqualified spelling is not redundant with the
+# `using namespace` ban: that check is bound to CXX_SUFFIXES and so does not see
+# .cu/.metal, and extending it there would be wrong rather than merely noisy,
+# since GPU dialects require namespace imports (`using namespace metal;` heads
+# lumice_trace.metal, and CUDA has the same idiom for cooperative_groups). This
+# rule therefore carries its own weight on GPU sources instead of resting on a
+# premise that does not hold there.
 BARE_PRINT_CALL = re.compile(r"\b(?:std::)?(?:v?f?printf|puts|fputs|fputc|putc|putchar)\s*\(")
-BARE_PRINT_STREAM = re.compile(r"\bstd::(?:cout|cerr|clog)\b")
+BARE_PRINT_STREAM = re.compile(r"\b(?:std::)?(?:cout|cerr|clog)\s*<<")
 
 
 def check_getenv_centralization() -> list[Violation]:
