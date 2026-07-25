@@ -405,6 +405,16 @@ def phase_b_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
+    # A tag short of n_calib samples means some calibration run's stderr never printed its PSNR
+    # line (e.g. a timing/watchdog early-exit) — surface that immediately rather than leaving it
+    # discoverable only by cross-checking n_samples in _thresholds.json after the fact.
+    for tag in sorted(wanted - psnr_data.keys()):
+        print(
+            f"WARNING: [Phase B][{group.key}] tag '{tag}' produced 0/{n_calib} PSNR samples "
+            "(no calibration run printed it)",
+            file=sys.stderr,
+        )
+
     print(
         f"\n[Phase B][{group.key}] Recommendations "
         f"(mean − max({SIGMA_MARGIN:.0f}σ, {MIN_MARGIN_DB:.1f} dB), floor to 0.5 dB precision):"
@@ -412,6 +422,13 @@ def phase_b_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
     scenes_out: dict[str, dict] = {}
     for tag in sorted(psnr_data):
         samples = psnr_data[tag]
+        if len(samples) < n_calib:
+            print(
+                f"WARNING: [Phase B][{group.key}] tag '{tag}' produced only {len(samples)}/{n_calib} "
+                "PSNR samples — the resulting mean/std/threshold are computed from fewer runs than "
+                "declared in n_calib_runs",
+                file=sys.stderr,
+            )
         identical = sum(1 for v in samples if math.isinf(v))
         finite = [v for v in samples if math.isfinite(v)]
         if not finite:

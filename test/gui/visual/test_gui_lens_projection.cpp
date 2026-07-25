@@ -18,6 +18,7 @@
 // is how scripts/regen_gui_test_refs.py attributes PSNR samples to this group in a shared
 // full-suite stderr. It must therefore stay unique across groups.
 
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <iterator>
@@ -98,16 +99,16 @@ struct LensProjScene {
 // pooled over 60 runs), with the sampled mean/σ recorded per scene in
 // test/gui/references/_thresholds.json and repeated inline below.
 static const LensProjScene kScenes[] = {
-  // mean 20.3085 σ0.1887
+  // mean 20.293 σ0.1742
   {"fisheye_equal_area_120",       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.0,  400000ULL,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   120.0f, 20.0f},
-  // mean 21.1868 σ0.2203
+  // mean 21.1458 σ0.199
   {"fisheye_orthographic_180",     LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 20.0,  400000ULL,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeOrthographic, 180.0f, 20.0f},
-  // mean 27.74 σ0.058
+  // mean 27.7147 σ0.0643
   {"dual_fisheye_equal_area_full", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 26.5,  5000000ULL,
    LensSetup::kDualFisheyeExport},
-  // mean 26.59 σ0.069
+  // mean 26.5703 σ0.0876
   {"rectangular",                  LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 25.5,  5000000ULL,
    LensSetup::kEquirectExport},
 };
@@ -198,21 +199,38 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
       // left by the previous scene satisfies the wait on the very first frame, and the capture
       // then reads whatever texture happened to still be bound.
       //
-      // ImGuiTestEngine's watchdog measures simulated time (frame count * ConfigFixedDeltaTime
-      // under --fixed-dt), not wall clock, and its default kill threshold is 60s. The two
-      // full-sky scenes need up to 5M rays to reach a usable noise floor (see kScenes[] note),
-      // which can take longer than 60 simulated seconds to accumulate — the loop bound below is
-      // already 120s, so the watchdog default was simply never raised to match. Widen it only
-      // for this wait so a slow-but-legitimate accumulation isn't mistaken for a hung test; the
-      // guard restores it (whether this wait succeeds or the IM_CHECK below returns early), so
+      // The wait below is bounded by real elapsed time, not iteration count: --fixed-dt injects a
+      // fixed 1/60s frame dt but also skips the frame-limit sleep (runs "at full speed"), so an
+      // iteration cap only approximates a real-time budget if each Yield() costs close to that
+      // injected dt. Measured, it does not — the two full-sky scenes normally reach their 5M-ray
+      // target in ~1.4s of real time via ~2,000 fast iterations. Under load each iteration can cost
+      // much more real time without the sim thread's ray throughput scaling the same way, so a
+      // fixed iteration-count cap can exhaust itself long before the sim thread gets the real
+      // seconds it needs — this under-load early-exit was the root cause of an observed ~1.7%
+      // flake on these two scenes (confirmed by reproducing it under synthetic CPU contention: the
+      // old cap hit its bound at 3.8M/5M and 4.0M/5M rays). A wall-clock deadline instead gives the
+      // sim thread the real time budget it actually needs, regardless of how fast or slow each GUI
+      // iteration runs.
+      //
+      // ImGuiTestEngine's own watchdog is a second, *independent* timer that measures simulated
+      // time (frame count * ConfigFixedDeltaTime), not wall clock — under --fixed-dt those two
+      // clocks are decoupled in either direction: unloaded, ~1,400 Yield()s/real-second inflate
+      // simulated time far ahead of real time; loaded, simulated time can still outrun a real-time
+      // deadline whenever the iteration rate stays merely above 60 Hz while sim throughput does
+      // not. Reproduced directly: with only the default widened threshold (180s) the watchdog's own
+      // IM_CHECK(false) fired at frame ~10,798 under heavy contention while the wall-clock deadline
+      // still had over 100 real seconds left. It is therefore raised far past anything the deadline
+      // below could accumulate at any plausible iteration rate — the wall-clock deadline is what
+      // actually bounds this wait against a genuine hang; the watchdog is left with no bound to
+      // enforce as a result. The guard restores both configs afterward regardless of outcome, so
       // every other test still gets the tight default.
-      guard.engine_io->ConfigWatchdogWarning = 150.0f;
-      guard.engine_io->ConfigWatchdogKillTest = 180.0f;
+      guard.engine_io->ConfigWatchdogWarning = 50000.0f;
+      guard.engine_io->ConfigWatchdogKillTest = 100000.0f;
       gui::g_state.texture_upload_count = 0;
       gui::g_state.stats_sim_ray_num = 0;
-      for (int i = 0;
-           i < 120 * 60 && (gui::g_state.stats_sim_ray_num < scene.min_rays || gui::g_state.texture_upload_count == 0);
-           ++i) {
+      const auto wait_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(170);
+      while ((gui::g_state.stats_sim_ray_num < scene.min_rays || gui::g_state.texture_upload_count == 0) &&
+             std::chrono::steady_clock::now() < wait_deadline) {
         ctx->Yield(1);
       }
       IM_CHECK_GE((unsigned long long)gui::g_state.stats_sim_ray_num, scene.min_rays);
