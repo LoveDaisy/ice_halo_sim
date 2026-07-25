@@ -31,13 +31,17 @@ serially (capi_runner mutates os.environ + a process-global log callback).
 
 from __future__ import annotations
 
-import math
 import platform
 
 import pytest
 
 from test.e2e.capi_runner import BufferedSimResult, run_scene_capi_buffered
-from test.e2e._parity_metrics import _raw_corr_ds as _raw_corr_ds_impl, _DS_BH, _DS_BW
+from test.e2e._parity_metrics import (
+    _raw_corr_ds as _raw_corr_ds_impl,
+    _DS_BH,
+    _DS_BW,
+    render_psnr as _render_psnr,
+)
 from test.e2e._projection_battery import (
     PROJECTION_TYPES,
     T_ENERGY_TOL,
@@ -72,16 +76,6 @@ def _proj_configs(tmp_path_factory) -> dict:
 
 def _raw_corr_ds(a: BufferedSimResult, b: BufferedSimResult) -> float:
     return _raw_corr_ds_impl(a, b, _DS_BH, _DS_BW)
-
-
-def _render_psnr(a: BufferedSimResult, b: BufferedSimResult) -> float:
-    if a.rgb_buf.shape != b.rgb_buf.shape:
-        raise ValueError(f"render shape mismatch: {a.rgb_buf.shape} vs {b.rgb_buf.shape}")
-    diff = a.rgb_buf.astype(float) - b.rgb_buf.astype(float)
-    mse = float((diff * diff).mean())
-    if mse == 0.0:
-        return float("inf")
-    return 10.0 * math.log10((255.0 * 255.0) / mse)
 
 
 def _run(cfg_path, backend: str, seed: int = _SEED) -> BufferedSimResult:

@@ -60,3 +60,20 @@ def _raw_corr_ds(a, b, bh: int, bw: int) -> float:
         return 0.0
     c = float(np.corrcoef(xa, xb)[0, 1])
     return 0.0 if math.isnan(c) else c
+
+
+def render_psnr(a, b) -> float:
+    """PSNR (dB) between two 8-bit RGB render buffers (``BufferedSimResult.rgb_buf``).
+
+    Same formula as ``image_utils.compute_psnr``, but fed by the in-memory buffers the C API
+    hands back rather than by two files on disk. Returns +inf for identical buffers.
+    """
+    ra = np.asarray(a.rgb_buf if hasattr(a, "rgb_buf") else a)
+    rb = np.asarray(b.rgb_buf if hasattr(b, "rgb_buf") else b)
+    if ra.shape != rb.shape:
+        raise ValueError(f"render shape mismatch: {ra.shape} vs {rb.shape}")
+    diff = ra.astype(float) - rb.astype(float)
+    mse = float((diff * diff).mean())
+    if mse == 0.0:
+        return float("inf")
+    return 10.0 * math.log10((255.0 * 255.0) / mse)
