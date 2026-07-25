@@ -13,8 +13,14 @@ enum class SliderScale { kLinear, kSqrt, kLog, kLogLinear };
 // Slider + InputFloat + label text, laid out as: [slider] [input] Label
 // Uses a fixed label column width so vertically stacked sliders align.
 // Returns true if value changed.
+//
+// `trailing_label = false` (table-cell mode): omit the trailing text label and let
+// the [slider][input] pair fill the whole content region — used when the field's
+// name already lives in a dedicated table column (see RenderShapeDistTableRow). The
+// default keeps the ~25 existing panel call sites (Axis / Sun / Simulation / View /
+// Display) byte-for-byte unchanged.
 bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt = "%.1f",
-                     SliderScale scale = SliderScale::kLinear);
+                     SliderScale scale = SliderScale::kLinear, bool trailing_label = true);
 
 // ---- Edit request (shared between panels.cpp and app_panels.cpp) ----
 enum class EditTarget { kNone, kCrystal, kAxis, kFilter, kCard };
@@ -51,25 +57,34 @@ bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mea
 // all three sites agree on the same default heuristic.
 constexpr float kShapeDistDefaultSpreadFraction = 0.2f;
 
-// Render just the distribution-type combo (the 5 randomized ShapeDistType values). Single source
-// for the enum<->combo-string mapping and its `kCount` static_assert guard — RenderShapeDist below,
-// the face_distance unified view, and the face_distance per-face view all call this instead of each
-// hand-rolling the same combo string, so a future ShapeDistType addition only needs updating here.
-// Calls SetNextComboPopupTopMost() internally. Returns true and writes the new value to *type if
-// the user picked a different entry.
-bool RenderShapeDistTypeCombo(const char* id, ShapeDistType* type);
+// Column count of the crystal shape-parameter property table (see RenderCrystalModal). Single
+// source shared by the structure-definition site (edit_modals.cpp TableSetupColumn) and the
+// structure-consumption sites (RenderShapeDistTableRow / the wedge + face rows' TableNextColumn
+// sequences). ImGui does NOT hard-assert when a row emits a different number of columns than the
+// header declares — it silently misaligns — so keeping every site pinned to this one constant is
+// how the "columns everywhere" invariant is enforced. Columns: Param | Value | Rand | Spread.
+// (The GUI edits uniform-only — no distribution-type column; non-uniform types loaded from JSON are
+// downgraded to uniform on load, see file_io.cpp ParseShapeDist.)
+constexpr int kShapeTableColumnCount = 4;
 
-// Render one crystal shape distribution: the center slider (always shown, using the caller's
-// range/format/scale) + a "Randomize" checkbox + (when randomized) a distribution-type combo and
-// a spread slider. Enabling randomization defaults to Uniform with spread = 0.2 × center (owner
-// default); disabling collapses to NO_RANDOM and zeroes the (now meaningless) spread. Returns true
-// if any value changed. Does NOT call MarkDirty() — caller is responsible.
-//
-// Unlike RenderAxisDist, the type combo's top-most-popup fix is handled INTERNALLY (the combo only
-// renders when randomized, so the caller cannot reliably pre-queue it) — callers need NOT precede
-// this with SetNextComboPopupTopMost().
-bool RenderShapeDist(const char* label, ShapeDist& dist, float center_min, float center_max,
-                     const char* center_fmt = "%.3f", SliderScale center_scale = SliderScale::kLinear);
+// Emit the Parameter (first) column of a shape-table row: strip any "##id" suffix from `label` and
+// show the human-readable name. Shared so the randomizable rows (RenderShapeDistTableRow) and the
+// structurally-non-randomizable wedge rows (edit_modals.cpp) render their name column identically.
+// Must be called right after TableNextColumn() for the Parameter column.
+void ShapeTableParamLabel(const char* label);
+
+// Render one crystal shape distribution as a property-table row:
+//   [Param label] [center slider+input] [Randomize checkbox] [spread input]
+// The spread column is wrapped in BeginDisabled(!randomize) so a not-yet-randomized field still
+// shows it (greyed = "available to turn on"), matching the owner's "everything on the surface"
+// design — no hidden state, the table stays a regular rectangle. Enabling randomization sets the
+// distribution to Uniform with spread = 0.2 × center (the GUI is uniform-only); disabling collapses
+// to NO_RANDOM and zeroes the (now meaningless) spread. Must be called between BeginTable/EndTable,
+// and advances exactly kShapeTableColumnCount columns — every row helper in this table (this one and
+// the file-local wedge row) must honor that column count or ImGui silently misaligns the grid.
+// Returns true if any value changed. Does NOT call MarkDirty() — caller is responsible.
+bool RenderShapeDistTableRow(const char* label, ShapeDist& dist, float center_min, float center_max,
+                             const char* center_fmt = "%.3f", SliderScale center_scale = SliderScale::kLinear);
 
 // ---- Axis preset classification ----
 

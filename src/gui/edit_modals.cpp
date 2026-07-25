@@ -71,8 +71,24 @@ constexpr float kEditModalMinWidth = 820.0f;
 // Height is content-driven (AlwaysAutoResize): the bottom pane uses the same
 // fixed height as the horizontal right pane (kPreviewChildHeight), so the
 // vertical modal is exactly 2× the horizontal modal height plus chrome.
-constexpr float kEditModalMinWidthVertical = 360.0f;
+//
+// Held at 420 for the Crystal-tab shape property table. Fixed columns
+// (Param kShapeParamColWidth=60 + Rand kShapeRandColWidth=36 + Spread
+// kShapeSpreadColWidth=60) sum to ~156; the stretch Value column then gets a
+// long slider + input(kInputWidth=60) pair with the "%.4f" Prism-H number
+// readable, plus inner borders / cell padding. (The GUI is uniform-only, so there
+// is no Type column; that reclaimed width goes to the Value slider.)
+constexpr float kEditModalMinWidthVertical = 420.0f;
 constexpr float kEditModalMinHeightVertical = 0.0f;
+
+// Shape property-table fixed column widths; the Value column is WidthStretch and
+// takes the remainder. Tuned so the vertical layout gives the Value slider real
+// length instead of starving it: Rand only needs the checkbox + "Rand" header,
+// Spread fits "100.0000" (%.4f). Shared by the main params table and the Face
+// Distance table so their columns line up.
+constexpr float kShapeParamColWidth = 60.0f;
+constexpr float kShapeRandColWidth = 36.0f;
+constexpr float kShapeSpreadColWidth = 60.0f;
 
 static ActiveModal g_active_modal = ActiveModal::kNone;
 static int g_modal_layer_idx = -1;
@@ -195,8 +211,11 @@ constexpr int kWedgePresetCount = 4;
 
 // Render a slider + input + preset dropdown for wedge angle.
 // Edit-buffer context: cannot call MarkDirty internally, so this is a standalone impl.
+// `trailing_label = false` (table-cell mode): mirrors SliderWithInput's switch — omit the
+// trailing text label and drop kLabelColWidth from the width so the [slider][input][▼] group
+// fills the whole table cell (the field name lives in the Parameter column instead).
 bool SliderWithPresetEdit(const char* label, float* value, float min_val, float max_val, const char* fmt,
-                          SliderScale scale, const ValuePreset* presets, int preset_count) {
+                          SliderScale scale, const ValuePreset* presets, int preset_count, bool trailing_label = true) {
   char display_buf[64];
   char slider_id[64];
   char input_id[64];
@@ -218,7 +237,11 @@ bool SliderWithPresetEdit(const char* label, float* value, float min_val, float 
 
   float spacing = ImGui::GetStyle().ItemSpacing.x;
   float avail_w = ImGui::GetContentRegionAvail().x;
-  float slider_w = avail_w - kInputWidth - kLabelColWidth - spacing * 2;  // mirrors PrepareSliderLayout
+  // mirrors PrepareSliderLayout: reserve the label column + 2 spacings (slider->input, input->label)
+  // with a trailing label; without it, still reserve the one slider->input spacing (SameLine at the
+  // input below adds it) — omitting it overflows the cell by one ItemSpacing.x and clips the arrow.
+  float slider_w =
+      trailing_label ? (avail_w - kInputWidth - kLabelColWidth - spacing * 2) : (avail_w - kInputWidth - spacing);
   if (slider_w < 40.0f)
     slider_w = 40.0f;
 
@@ -264,8 +287,10 @@ bool SliderWithPresetEdit(const char* label, float* value, float min_val, float 
 
   *value = std::clamp(*value, min_val, max_val);
 
-  ImGui::SameLine();
-  ImGui::TextUnformatted(display_buf);
+  if (trailing_label) {
+    ImGui::SameLine();
+    ImGui::TextUnformatted(display_buf);
+  }
   return changed;
 }
 
@@ -551,9 +576,35 @@ static void RenderCrystalPreviewPane(GuiState& /*state*/) {
   }
 }
 
-// Crystal tab body: type radio + parameter sliders + face distance tree.
-// Preview / style / reset live in the persistent left pane (see
-// RenderCrystalPreviewPane) so they remain visible on Axis / Filter tabs too.
+// Render a wedge-angle parameter (upper_alpha / lower_alpha) as one property-table row. These are
+// structurally NOT randomizable (owner: "no need, don't do it"), so only the Parameter + Value
+// columns are filled; the Random / Type / Spread columns are advanced but left BLANK. Blank here
+// means "not applicable" — visually distinct from the greyed-but-present state a randomizable row
+// shows when its Randomize checkbox is off. Advances all kShapeTableColumnCount columns.
+static bool RenderWedgeTableRow(const char* label, float* value) {
+  ImGui::TableNextRow();
+  ImGui::TableNextColumn();  // Parameter
+  ShapeTableParamLabel(label);
+  ImGui::TableNextColumn();  // Value — slider + input + preset dropdown, filling the cell.
+  bool changed = SliderWithPresetEdit(label, value, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, kWedgePresets,
+                                      kWedgePresetCount, /*trailing_label=*/false);
+  // Wedge angles are non-randomizable: advance the remaining (kShapeTableColumnCount - content)
+  // columns as intentionally-empty cells (Random / Type / Spread). Driven by the shared constant
+  // rather than a hardcoded 3, so the blank count tracks any column-count change automatically —
+  // kShapeTableColumnCount is load-bearing here, not just asserted in a comment. Empty (not skipped)
+  // keeps the grid a rectangle and the headers aligned.
+  constexpr int kWedgeContentColumns = 2;  // Parameter + Value
+  for (int col = kWedgeContentColumns; col < kShapeTableColumnCount; ++col) {
+    ImGui::TableNextColumn();
+  }
+  IM_ASSERT(ImGui::TableGetColumnIndex() + 1 == kShapeTableColumnCount &&
+            "RenderWedgeTableRow must advance exactly kShapeTableColumnCount columns");
+  return changed;
+}
+
+// Crystal tab body: type radio + a single shape-parameter property table + a zero-indent Face
+// Distance collapsible section (also inside the table). Preview / style / reset live in the
+// persistent left pane (see RenderCrystalPreviewPane) so they remain visible on Axis / Filter tabs.
 static void RenderCrystalModal(GuiState& /*state*/) {
   auto& cr = g_crystal_buf;
 
@@ -569,121 +620,61 @@ static void RenderCrystalModal(GuiState& /*state*/) {
 
   ImGui::Spacing();
 
-  // -- Parameters --
-  // See gui/slider_mapping.hpp for the three-H-mapping conventions. Each shape scalar is now a
-  // ShapeDist: RenderShapeDist renders the center slider plus a Randomize checkbox (+ type/spread
-  // when enabled). RenderShapeDist self-handles its combo's top-most-popup fix (see panels.hpp).
-  if (cr.type == CrystalType::kPrism) {
-    RenderShapeDist("Height##modal_cr", cr.height, 0.01f, 100.0f, "%.2f", SliderScale::kLog);
-  } else {
-    RenderShapeDist("Prism H##modal_cr", cr.prism_h, 0.0f, 100.0f, "%.4f", SliderScale::kLogLinear);
-    RenderShapeDist("Upper H##modal_cr", cr.upper_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
-    RenderShapeDist("Lower H##modal_cr", cr.lower_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
-    SliderWithPresetEdit("Upper A##modal_cr", &cr.upper_alpha, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, kWedgePresets,
-                         kWedgePresetCount);
-    SliderWithPresetEdit("Lower A##modal_cr", &cr.lower_alpha, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, kWedgePresets,
-                         kWedgePresetCount);
+  // -- Shape parameters (property table) --
+  // Every randomizable shape scalar is one RenderShapeDistTableRow (4 aligned columns:
+  // Param | Value | Rand | Spread); the two Pyramid wedge angles are non-randomizable
+  // RenderWedgeTableRow rows (Rand/Spread blank). See gui/slider_mapping.hpp for the
+  // three-H-mapping conventions. Column count is pinned to kShapeTableColumnCount (panels.hpp) so
+  // the TableSetupColumn declarations and the TableNextColumn sequences in the row helpers cannot
+  // drift (ImGui silently misaligns rather than asserting on a mismatch).
+  constexpr float kFaceSpreadMax = 2.0f;
+  const ImGuiTableFlags kTableFlags =
+      ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg;
+  // Shared column setup: identical fixed widths in the main params table and the Face Distance table
+  // below, so the 6 face rows line up column-for-column with the parameter rows. Value is the only
+  // WidthStretch column, so a narrow (vertical-layout) table compresses the slider first rather than
+  // clipping the fixed Rand/Type/Spread cells.
+  const auto setup_shape_columns = []() {
+    ImGui::TableSetupColumn("Param", ImGuiTableColumnFlags_WidthFixed, kShapeParamColWidth);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    ImGui::TableSetupColumn("Rand", ImGuiTableColumnFlags_WidthFixed, kShapeRandColWidth);
+    ImGui::TableSetupColumn("Spread", ImGuiTableColumnFlags_WidthFixed, kShapeSpreadColWidth);
+  };
+
+  if (ImGui::BeginTable("##shape_params", kShapeTableColumnCount, kTableFlags)) {
+    setup_shape_columns();
+    ImGui::TableHeadersRow();
+
+    if (cr.type == CrystalType::kPrism) {
+      RenderShapeDistTableRow("Height##modal_cr", cr.height, 0.01f, 100.0f, "%.2f", SliderScale::kLog);
+    } else {
+      RenderShapeDistTableRow("Prism H##modal_cr", cr.prism_h, 0.0f, 100.0f, "%.4f", SliderScale::kLogLinear);
+      RenderShapeDistTableRow("Upper H##modal_cr", cr.upper_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
+      RenderShapeDistTableRow("Lower H##modal_cr", cr.lower_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
+      RenderWedgeTableRow("Upper A##modal_cr", &cr.upper_alpha);
+      RenderWedgeTableRow("Lower A##modal_cr", &cr.lower_alpha);
+    }
+    ImGui::EndTable();
   }
 
   // -- Face distance --
-  // Unified view (one type + one spread broadcast to all 6 faces; centers stay independent) plus an
-  // Advanced per-face tree where each face's type/spread can diverge. Broadcasts fire ONLY on active
-  // edits (checkbox toggle / combo change / spread drag), never on passive display, so opening the
-  // unified view never silently overwrites a per-face-diverged config (plan §7 risk 2).
-  constexpr float kFaceSpreadMax = 2.0f;
-  if (ImGui::TreeNode("Face Distance##modal")) {
-    // Whether face[0] currently carries randomization drives the unified checkbox display.
-    bool uni_random = cr.face_distance[0].type != ShapeDistType::kNoRandom;
-    // Mixed = the 6 faces do not all share face[0]'s (type, spread). Only a display hint.
-    bool mixed = false;
-    for (int i = 1; i < 6; i++) {
-      if (cr.face_distance[i].type != cr.face_distance[0].type ||
-          cr.face_distance[i].spread != cr.face_distance[0].spread) {
-        mixed = true;
-        break;
-      }
-    }
-    if (ImGui::Checkbox("Randomize (all faces)##modal_fd_uni", &uni_random)) {
-      if (uni_random) {
-        // Broadcast ONE shared spread (derived from face[0]'s center) to all 6 faces — mirrors the
-        // "Spread (all)" slider's broadcast below. Must NOT compute spread per-face from each
-        // face's own center: the per-face center sliders above are always independent, so if the
-        // user already diverged centers before enabling this checkbox, a per-face computation
-        // would silently produce 6 different spreads under a control labeled "all faces" (the
-        // unified view's single-shared-value semantics, plan §3 design point 2).
-        const float uni_spread = kShapeDistDefaultSpreadFraction * cr.face_distance[0].center;
-        for (int i = 0; i < 6; i++) {
-          cr.face_distance[i].type = ShapeDistType::kUniform;
-          cr.face_distance[i].spread = uni_spread;
-        }
-      } else {
-        for (int i = 0; i < 6; i++) {
-          cr.face_distance[i].type = ShapeDistType::kNoRandom;
-          cr.face_distance[i].spread = 0.0f;
-        }
-      }
-    }
-    if (uni_random) {
-      ShapeDistType uni_type = cr.face_distance[0].type;
-      ImGui::SameLine();
-      ImGui::SetNextItemWidth(120.0f);
-      if (RenderShapeDistTypeCombo("##modal_fd_uni_type", &uni_type)) {
-        for (int i = 0; i < 6; i++) {
-          cr.face_distance[i].type = uni_type;
-        }
-      }
-      float uni_spread = cr.face_distance[0].spread;
-      if (SliderWithInput("Spread (all)##modal_fd_uni_spread", &uni_spread, 0.0f, kFaceSpreadMax, "%.3f",
-                          SliderScale::kSqrt)) {
-        for (int i = 0; i < 6; i++) {
-          cr.face_distance[i].spread = uni_spread;
-        }
-      }
-      if (mixed) {
-        ImGui::TextDisabled("(faces differ — see Per-face)");
-      }
-    }
-
-    ImGui::Separator();
-    // Per-face center — always independent, always shown (matches pre-upgrade behavior).
-    for (int i = 0; i < 6; i++) {
-      char label[32];
-      snprintf(label, sizeof(label), "Face %d##modal_fd", i + 3);
-      SliderWithInput(label, &cr.face_distance[i].center, 0.0f, kFaceSpreadMax, "%.3f");
-    }
-
-    // Advanced: per-face randomization. Editing here diverges a single face's type/spread from the
-    // rest, exercising the core's six independent d_[6] distributions.
-    if (ImGui::TreeNode("Per-face randomization##modal_fd_adv")) {
+  // A full-width CollapsingHeader (OUTSIDE the table) instead of an in-table SpanAllColumns tree
+  // node: inside a table the header label was clipped to the narrow Param cell and truncated "Face
+  // Distance". The 6 faces then render in a SECOND table with the SAME column setup, so they still
+  // line up column-for-column with the parameter rows above. Default-collapsed. Each face is an
+  // independent RenderShapeDistTableRow — there is NO "broadcast to all faces" control (owner
+  // rejected it), so the old unified/mixed-state machinery (and its self-contradiction warning) is
+  // gone.
+  if (ImGui::CollapsingHeader("Face Distance##modal")) {
+    if (ImGui::BeginTable("##face_dist_params", kShapeTableColumnCount, kTableFlags)) {
+      setup_shape_columns();  // no TableHeadersRow — the params table above already labels the columns
       for (int i = 0; i < 6; i++) {
-        // Unique ## suffixes per row (rather than PushID) so GUI tests can target each face's
-        // checkbox / combo / spread unambiguously.
-        bool fr = cr.face_distance[i].type != ShapeDistType::kNoRandom;
-        char ck_label[32];
-        snprintf(ck_label, sizeof(ck_label), "Face %d##fd_adv_ck_%d", i + 3, i);
-        if (ImGui::Checkbox(ck_label, &fr)) {
-          if (fr) {
-            cr.face_distance[i].type = ShapeDistType::kUniform;
-            cr.face_distance[i].spread = kShapeDistDefaultSpreadFraction * cr.face_distance[i].center;
-          } else {
-            cr.face_distance[i].type = ShapeDistType::kNoRandom;
-            cr.face_distance[i].spread = 0.0f;
-          }
-        }
-        if (cr.face_distance[i].type != ShapeDistType::kNoRandom) {
-          char type_label[32];
-          char sp_label[32];
-          snprintf(type_label, sizeof(type_label), "##fd_adv_type_%d", i);
-          snprintf(sp_label, sizeof(sp_label), "Spread##fd_adv_sp_%d", i);
-          ImGui::SameLine();
-          ImGui::SetNextItemWidth(110.0f);
-          RenderShapeDistTypeCombo(type_label, &cr.face_distance[i].type);
-          SliderWithInput(sp_label, &cr.face_distance[i].spread, 0.0f, kFaceSpreadMax, "%.3f", SliderScale::kSqrt);
-        }
+        char label[32];
+        snprintf(label, sizeof(label), "Face %d##modal_fd", i + 3);
+        RenderShapeDistTableRow(label, cr.face_distance[i], 0.0f, kFaceSpreadMax, "%.3f", SliderScale::kLinear);
       }
-      ImGui::TreePop();
+      ImGui::EndTable();
     }
-    ImGui::TreePop();
   }
 
   // -- Reset All (Crystal tab) --
@@ -1717,6 +1708,13 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   const float kToolRow = ImGui::GetFrameHeightWithSpacing();
   const float kVPad = style.WindowPadding.y * 2.0f + style.ItemSpacing.y;
   const float kPreviewChildHeight = kModalPreviewImageSize + kToolRow + kVPad;
+  // Content pane height (tab bar + the tallest tab body). Sized to fit the tallest crystal layout —
+  // Pyramid + all 6 Face Distance rows expanded (~16 rows + tab bar) — so that case no longer needs a
+  // scrollbar. Kept a FIXED height (not ImGuiChildFlags_AutoResizeY): a content-driven size grows the
+  // modal downward past the screen bottom as sections/rows expand and it drops the scroll fallback
+  // that genuinely tall content (e.g. a many-row filter, up to kMaxSummandRows) still relies on — so
+  // content taller than this still scrolls, while the fixed size keeps the modal centered on appear.
+  const float kModalContentHeight = kToolRow + 17.0f * ImGui::GetFrameHeightWithSpacing() + kVPad;
   bool vertical = state.modal_layout_vertical;
 
   if (vertical) {
@@ -1725,26 +1723,23 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     RenderCrystalPreviewPane(state);
     ImGui::EndChild();
-    // Lower pane: tab bar + body. Height matches the horizontal right pane
-    // so V-layout modal is visually a stacked version of H-layout (user
-    // feedback gui-polish-v15 round 2). Use default scrollbar behavior
-    // (shown only when content overflows); AlwaysVerticalScrollbar would
-    // leave the track visible even when content fits — unnecessary noise
-    // for tabs whose natural height already matches the pane.
-    ImGui::BeginChild("##modal_bottom_pane", ImVec2(-FLT_MIN, kPreviewChildHeight), ImGuiChildFlags_None,
+    // Lower pane: tab bar + body, at kModalContentHeight so the tallest crystal layout fits without a
+    // scrollbar (taller content still scrolls; see the constant's rationale).
+    ImGui::BeginChild("##modal_bottom_pane", ImVec2(-FLT_MIN, kModalContentHeight), ImGuiChildFlags_None,
                       ImGuiWindowFlags_None);
     RenderModalTabBar(state, crystal_label, axis_label, filter_label, crystal_flags, axis_flags, filter_flags);
     ImGui::EndChild();
   } else {
-    // Horizontal: existing layout. Left pane NoScrollbar + NoScrollWithMouse — height
-    // budget covers content; right pane sizes off remaining width.
+    // Horizontal: existing layout. Left pane NoScrollbar + NoScrollWithMouse (fixed preview height);
+    // right pane sizes off remaining width and uses kModalContentHeight so the tallest tab content
+    // (Pyramid + all Face Distance rows) fits without a scrollbar (taller content still scrolls).
     const float right_w = std::max(320.0f, ImGui::GetContentRegionAvail().x - kPreviewChildW_H - style.ItemSpacing.x);
     ImGui::BeginChild("##modal_left_pane", ImVec2(kPreviewChildW_H, kPreviewChildHeight), ImGuiChildFlags_None,
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     RenderCrystalPreviewPane(state);
     ImGui::EndChild();
     ImGui::SameLine();
-    ImGui::BeginChild("##modal_right_pane", ImVec2(right_w, kPreviewChildHeight), ImGuiChildFlags_None);
+    ImGui::BeginChild("##modal_right_pane", ImVec2(right_w, kModalContentHeight), ImGuiChildFlags_None);
     RenderModalTabBar(state, crystal_label, axis_label, filter_label, crystal_flags, axis_flags, filter_flags);
     ImGui::EndChild();
   }

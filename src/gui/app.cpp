@@ -632,6 +632,7 @@ void DoOpen(const std::filesystem::path& path) {
   std::vector<unsigned char> tex_data;
   int tex_w = 0;
   int tex_h = 0;
+  TakeShapeDistDowngradeCount();  // discard any stale count so only this load's downgrades are counted
   if (LoadLmcFile(path, g_state, tex_data, tex_w, tex_h)) {
     // Data restore + command-semantic fields (path/dirty/run_intent stay in handler).
     g_state.current_file_path = path;
@@ -662,6 +663,16 @@ void DoOpen(const std::filesystem::path& path) {
           g_state.aspect_preset = AspectPreset::kFree;
         }
       }
+    }
+
+    // Notify: the GUI edits uniform shape distributions only. If the file carried non-uniform
+    // families (gauss/laplacian/...) they were loaded as uniform (see ParseShapeDist). This is a
+    // deliberate capability downgrade, surfaced once via the shared import-warning popup.
+    if (TakeShapeDistDowngradeCount() > 0) {
+      SetImportComplexFilterWarning(
+          "Some crystal shape distributions used non-uniform types (e.g. gauss, laplacian). The GUI "
+          "edits uniform distributions only, so they were loaded as uniform. Edit the config file / "
+          "CLI directly to keep other distribution types.");
     }
   }
 }

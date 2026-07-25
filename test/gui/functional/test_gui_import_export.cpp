@@ -368,16 +368,21 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
   // real SaveLmcFile/LoadLmcFile production path (no hand-assembled JSON, per issue hard constraint)
   // and asserts every {type,center,spread} component survives.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "shape_randomization_roundtrip");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "shape_load_downgrades_nonuniform_to_uniform");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
 
+      // The GUI edits UNIFORM shape distributions only. A file authored by JSON/CLI may carry richer
+      // families (gauss/zigzag/laplacian/gauss_legacy); on load those are downgraded to uniform,
+      // keeping the center/spread values, and the downgrade is counted for the load-complete notice.
+      // NO_RANDOM (off) and UNIFORM pass through unchanged. This is a deliberate, notified capability
+      // downgrade (owner decision) — not a silent loss (the earlier bug collapsed a loaded distribution
+      // to its bare mean, dropping type/std). This test injects a rich distribution set (simulating a
+      // JSON file) and asserts the downgrade contract.
       auto& entry0 = gui::g_state.layers[0].entries[0];
       auto& cr = gui::CrystalOf(gui::g_state, entry0);
       cr.type = gui::CrystalType::kPrism;
-      // Randomized height (Gauss, center 2.5, spread 0.4).
       cr.height = gui::ShapeDist{ gui::ShapeDistType::kGauss, 2.5f, 0.4f };
-      // Per-face heterogeneous distributions: some randomized, some not, one randomized-at-1.0.
       cr.face_distance[0] = gui::ShapeDist{ gui::ShapeDistType::kUniform, 1.2f, 0.3f };
       cr.face_distance[1] = gui::ShapeDist{ gui::ShapeDistType::kNoRandom, 0.8f, 0.0f };
       cr.face_distance[2] = gui::ShapeDist{ gui::ShapeDistType::kZigzag, 1.0f, 0.15f };  // center == default 1.0
@@ -390,6 +395,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK(save_ok);
 
       gui::DoNew();
+      gui::TakeShapeDistDowngradeCount();  // discard any stale count from prior parses
       std::vector<unsigned char> tex_data;
       int tex_w = 0;
       int tex_h = 0;
@@ -397,17 +403,17 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK(load_ok);
 
       auto& loaded = gui::CrystalOf(gui::g_state, gui::g_state.layers[0].entries[0]);
-      // height — all three components.
-      IM_CHECK_EQ(loaded.height.type, gui::ShapeDistType::kGauss);
-      IM_CHECK_EQ(loaded.height.center, 2.5f);
-      IM_CHECK_EQ(loaded.height.spread, 0.4f);
-      // face_distance — full ShapeDist equality per face (operator== covers type/center/spread).
+      // height (was Gauss) → Uniform, center/spread preserved.
+      IM_CHECK(loaded.height == (gui::ShapeDist{ gui::ShapeDistType::kUniform, 2.5f, 0.4f }));
+      // face_distance: Uniform/NO_RANDOM pass through; the four non-uniform families → Uniform (values kept).
       IM_CHECK(loaded.face_distance[0] == (gui::ShapeDist{ gui::ShapeDistType::kUniform, 1.2f, 0.3f }));
       IM_CHECK(loaded.face_distance[1] == (gui::ShapeDist{ gui::ShapeDistType::kNoRandom, 0.8f, 0.0f }));
-      IM_CHECK(loaded.face_distance[2] == (gui::ShapeDist{ gui::ShapeDistType::kZigzag, 1.0f, 0.15f }));
-      IM_CHECK(loaded.face_distance[3] == (gui::ShapeDist{ gui::ShapeDistType::kGauss, 0.9f, 0.05f }));
-      IM_CHECK(loaded.face_distance[4] == (gui::ShapeDist{ gui::ShapeDistType::kLaplacian, 1.1f, 0.2f }));
-      IM_CHECK(loaded.face_distance[5] == (gui::ShapeDist{ gui::ShapeDistType::kGaussLegacy, 1.3f, 0.25f }));
+      IM_CHECK(loaded.face_distance[2] == (gui::ShapeDist{ gui::ShapeDistType::kUniform, 1.0f, 0.15f }));
+      IM_CHECK(loaded.face_distance[3] == (gui::ShapeDist{ gui::ShapeDistType::kUniform, 0.9f, 0.05f }));
+      IM_CHECK(loaded.face_distance[4] == (gui::ShapeDist{ gui::ShapeDistType::kUniform, 1.1f, 0.2f }));
+      IM_CHECK(loaded.face_distance[5] == (gui::ShapeDist{ gui::ShapeDistType::kUniform, 1.3f, 0.25f }));
+      // Exactly the five non-uniform fields (height + faces 2/3/4/5) were downgraded and counted.
+      IM_CHECK_EQ(gui::TakeShapeDistDowngradeCount(), 5);
 
       std::remove(tmp_path);
     };

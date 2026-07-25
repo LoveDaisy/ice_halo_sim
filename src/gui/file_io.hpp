@@ -106,6 +106,12 @@ bool SaveLmcFile(const std::filesystem::path& path, const GuiState& state, const
 bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector<unsigned char>& tex_data, int& tex_w,
                  int& tex_h);
 
+// Returns the number of crystal shape distributions downgraded to uniform since the last call, and
+// resets the counter. The GUI edits uniform distributions only; non-uniform families loaded from
+// JSON are converted on load (see ParseShapeDist). Call after a load to decide whether to show the
+// "some distributions were simplified" notice. Call once before a load to discard any stale count.
+int TakeShapeDistDowngradeCount();
+
 // Export preview as PNG (renders via FBO, must be called on GL thread).
 // Thin wrapper over RenderExportToRgba + WriteRgbaBufferToPng.
 bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& renderer, const PreviewViewport& vp);
