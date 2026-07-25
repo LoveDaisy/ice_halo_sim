@@ -723,6 +723,38 @@ TEST(ParseConfigApi, FullConfigWithPyramidAndFilter) {
 }
 
 
+// K-class: NLOHMANN_JSON_SERIALIZE_ENUM maps an unrecognized string to the FIRST table entry, so
+// the JSON string parse path pre-checks lens.type / visible against a hand-written known-value
+// list before decoding (IsKnownLensTypeString / IsKnownVisibleString in c_api.cpp) rather than
+// letting a typo silently become "linear" / "upper". LUMICE_SceneAddRenderer's struct entry point
+// is covered separately by SceneNegative.RendererInvalidEnumOrGridCountRejected (int, not string);
+// this pair covers the string-typed JSON path those tests don't reach.
+TEST(ParseConfigApi, RendererLensTypeUnknownStringRejected) {
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  root["render"][0]["lens"]["type"] = "not_a_real_lens";
+  // NLOHMANN_JSON_SERIALIZE_ENUM's silent-fallback value is kLinear (the first table entry,
+  // core/render_config.hpp), whose MaxFov is 179°. Use a fov that is valid for kLinear (60°,
+  // well under both 179° and every other lens type's cap) so a pre-check bypass would silently
+  // succeed via the fallback instead of incidentally being caught by the unrelated fov-range
+  // check that MakeFullConfigJson's fov=180 would trip for kLinear regardless of this guard.
+  root["render"][0]["lens"]["fov"] = 60.0f;
+
+  LUMICE_Config config{};
+  lumice::ConfigOwningGuard config_guard(config);
+  EXPECT_EQ(LUMICE_ParseConfigString(root.dump().c_str(), &config), LUMICE_ERR_INVALID_VALUE);
+}
+
+
+TEST(ParseConfigApi, RendererVisibleUnknownStringRejected) {
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  root["render"][0]["visible"] = "not_a_real_visibility";
+
+  LUMICE_Config config{};
+  lumice::ConfigOwningGuard config_guard(config);
+  EXPECT_EQ(LUMICE_ParseConfigString(root.dump().c_str(), &config), LUMICE_ERR_INVALID_VALUE);
+}
+
+
 TEST(ParseConfigApi, ParseModifyCommit) {
   auto json = MakeMinimalConfigJson();
   LUMICE_Config config{};

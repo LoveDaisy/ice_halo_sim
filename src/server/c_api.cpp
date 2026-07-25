@@ -2145,7 +2145,9 @@ static LUMICE_ErrorCode JsonToSceneParams(const nlohmann::json& scene, LUMICE_Co
   return LUMICE_OK;
 }
 
-// Inverse of MapVisibleFromCApi. Total over the core enumeration (no default arm).
+// Inverse of MapVisibleFromCApi. Total over the core enumeration (no default arm) so adding a
+// visibility range to core breaks the build here instead of decoding to a wrong C API constant —
+// same fail-loud contract as MapLensTypeToCApi.
 static int MapVisibleToCApi(ns::RenderConfig::VisibleRange visible) {
   switch (visible) {
     case ns::RenderConfig::kUpper:
@@ -2155,7 +2157,7 @@ static int MapVisibleToCApi(ns::RenderConfig::VisibleRange visible) {
     case ns::RenderConfig::kFull:
       return LUMICE_VISIBLE_FULL;
   }
-  return LUMICE_VISIBLE_UPPER;
+  throw std::invalid_argument("unmapped core VisibleRange: " + std::to_string(static_cast<int>(visible)));
 }
 
 // The two enum-valued renderer fields need a string pre-check: NLOHMANN_JSON_SERIALIZE_ENUM maps
@@ -2514,7 +2516,10 @@ LUMICE_ErrorCode LUMICE_ParseConfigString(const char* json_str, LUMICE_Config* o
     return JsonToConfig(root, out);
   } catch (const nlohmann::json::parse_error&) {
     return LUMICE_ERR_INVALID_JSON;
-  } catch (const nlohmann::json::exception&) {
+  } catch (const std::exception&) {
+    // Catches nlohmann::json::exception (malformed/out-of-range values) AND std::invalid_argument
+    // from JsonToConfig's decode-direction Map*ToCApi calls (unmapped core enumerator) — both are
+    // "the document decoded to something invalid", not a parse-syntax error.
     return LUMICE_ERR_INVALID_VALUE;
   }
 }
@@ -2535,7 +2540,8 @@ LUMICE_ErrorCode LUMICE_ParseConfigFile(const char* filename, LUMICE_Config* out
     return JsonToConfig(root, out);
   } catch (const nlohmann::json::parse_error&) {
     return LUMICE_ERR_INVALID_JSON;
-  } catch (const nlohmann::json::exception&) {
+  } catch (const std::exception&) {
+    // See LUMICE_ParseConfigString for why this is std::exception, not nlohmann::json::exception.
     return LUMICE_ERR_INVALID_VALUE;
   }
 }
@@ -2594,7 +2600,9 @@ LUMICE_ErrorCode LUMICE_SceneFromJson(const char* json_str, LUMICE_Scene** out_s
     return JsonToScene(root, out_scene);
   } catch (const nlohmann::json::parse_error&) {
     return LUMICE_ERR_INVALID_JSON;
-  } catch (const nlohmann::json::exception&) {
+  } catch (const std::exception&) {
+    // See LUMICE_ParseConfigString for why this is std::exception, not nlohmann::json::exception:
+    // JsonToScene's inner JsonToConfig call runs the same decode-direction Map*ToCApi throws.
     return LUMICE_ERR_INVALID_VALUE;
   }
 }
@@ -2618,7 +2626,8 @@ LUMICE_ErrorCode LUMICE_SceneFromJsonFile(const char* filename, LUMICE_Scene** o
     return JsonToScene(root, out_scene);
   } catch (const nlohmann::json::parse_error&) {
     return LUMICE_ERR_INVALID_JSON;
-  } catch (const nlohmann::json::exception&) {
+  } catch (const std::exception&) {
+    // See LUMICE_ParseConfigString for why this is std::exception, not nlohmann::json::exception.
     return LUMICE_ERR_INVALID_VALUE;
   }
 }

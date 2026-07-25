@@ -29,7 +29,7 @@ Link against the `lumice` static library.
 ### Constants
 
 ```c
-#define LUMICE_API_VERSION 410        // ABI version, encoded major*100 + minor (v4.10)
+#define LUMICE_API_VERSION 411        // ABI version, encoded major*100 + minor (v4.11)
 #define LUMICE_MAX_RENDER_RESULTS 16  // Maximum capacity of the render result array
 #define LUMICE_MAX_STATS_RESULTS 1    // Maximum capacity of the stats result array
 ```
@@ -38,7 +38,7 @@ Link against the `lumice` static library.
 mismatch instead of hitting silent UB from a struct-layout drift, e.g.:
 
 ```c
-static_assert(LUMICE_API_VERSION >= 410, "Lumice header too old for this integration");
+static_assert(LUMICE_API_VERSION >= 411, "Lumice header too old for this integration");
 ```
 
 It is bumped on every BREAKING change to the public struct layout.
@@ -242,11 +242,13 @@ Two deliberate exceptions:
   `LUMICE_CommitConfigStruct`, so a parse that succeeds is not by itself a promise that the commit
   will. End to end the document is still rejected; only the reporting point differs.
 
-One known gap, tracked separately: a renderer's `lens` / `lens_shift` / `view` / `visible` /
-`background` / `ray_color` / `grid` have no fields in `LUMICE_RenderParam`, so they are dropped
-when a document is parsed into `LUMICE_Config` and replaced with defaults if it is re-serialized.
-The parity test pins the gap to exactly those fields — everything `LUMICE_RenderParam` can carry
-round-trips unchanged.
+Renderers round-trip in full. Up to v4.10 a renderer's `lens` / `lens_shift` / `view` /
+`visible` / `background` / `ray_color` / `grid` / `celestial_outline` had no fields in
+`LUMICE_RenderParam`, so they were dropped on parse and replaced with a hardcoded
+`dual_fisheye_equal_area` / fov 180 / view {0,0,0} / `visible=full` / black-background renderer on
+re-serialization — a document could parse cleanly and then be simulated through a projection the
+caller never asked for. v4.11 widened the struct to the full renderer description, and the parity
+test now compares renderers with core's own `RenderConfig::operator==`, with no field whitelist.
 
 #### LUMICE_CommitConfig
 

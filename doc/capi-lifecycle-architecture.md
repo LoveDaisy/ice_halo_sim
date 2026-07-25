@@ -148,8 +148,8 @@ Key observations:
 - **Postcondition**: same as `CommitConfig` (JSON path). If `out_reused`
   is non-null, set to `1` when consumers were reused, `0` when rebuilt.
 - **Internal path**: `ConfigToJson(*config)` → `Server::CommitConfig(json, &reused)`.
-  The struct path always produces `dual_fisheye_equal_area` lens at 180° FOV
-  (see §6.2).
+  Since v4.11 the struct carries the full renderer description, so the lens /
+  view / visible / background the caller set are what gets committed (see §6.2).
   (`c_api.cpp:313–336`)
 
 #### `LUMICE_ParseConfigString(json_str, out)` / `LUMICE_ParseConfigFile(filename, out)`
@@ -159,8 +159,8 @@ Key observations:
   field points to static storage — the caller must not free it.
 - **Side effects**: none (pure parsing, no server state change).
 - **Supported subset**: only `type="raypath"` filters; only string-form
-  spectrum (`"D65"`, `"D50"`, `"A"`, `"E"`); renderer lens/view/visible/
-  background fields are ignored.
+  spectrum (`"D65"`, `"D50"`, `"A"`, `"E"`). Renderer fields are fully
+  represented as of v4.11 (they were dropped before that).
   (`c_api.cpp:670–704`)
 
 ### §3.3 Result Retrieval APIs
@@ -426,10 +426,7 @@ Constraints imposed by the C struct representation:
 |-----------|----------------------|
 | Filter types | `type="raypath"` only |
 | Spectrum | String enumerations only (`"D65"`, `"D50"`, `"A"`, `"E"`) |
-| Lens type | Always `dual_fisheye_equal_area`, FOV 180° |
-| View parameters | Fixed at elevation=0, azimuth=0, roll=0 |
-| Background | Fixed at black (0,0,0) |
-| Visible | Fixed at `"full"` |
+| Renderer fields | None — v4.11 widened `LUMICE_RenderParam` to carry lens / lens_shift / view / visible / background / ray_color / grid / celestial_outline. Up to v4.10 these were forced to `dual_fisheye_equal_area` / FOV 180° / view {0,0,0} / black / `"full"` |
 | `out_reused` | Exposes consumer reuse decision (JSON path does not) |
 
 (`c_api.cpp:188–336`)

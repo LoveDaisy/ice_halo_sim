@@ -836,8 +836,10 @@ typedef struct LUMICE_Config_ {
 // still well under the 160 KB ceiling (~27.5 % headroom).
 // v4.11: LUMICE_RenderParam grew the full renderer description; the two
 // LUMICE_GridLine[64] inline arrays dominate (24 B × 64 × 2 = 3 072 B) for ~3.1 KB/renderer ×
-// 4 renderers ≈ +12.3 KB. Still far under the ceiling; if a future widening approaches it, shrink
-// LUMICE_MAX_CONFIG_GRID_LINES rather than raising the 160 KB ceiling.
+// 4 renderers ≈ +12.3 KB. Measured sizeof(LUMICE_Config) == 131 328 B on this platform (Apple
+// clang, arm64) — up from 118 768 B, still under the 160 KB ceiling (~19.8 % headroom). If a
+// future widening approaches it, shrink LUMICE_MAX_CONFIG_GRID_LINES rather than raising the
+// 160 KB ceiling.
 #if defined(__cplusplus)
 static_assert(sizeof(LUMICE_Config) <= 160u * 1024u,
               "LUMICE_Config exceeded its 160 KB ABI ceiling — either shrink a field or bump the ceiling deliberately");
