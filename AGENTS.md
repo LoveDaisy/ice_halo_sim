@@ -139,6 +139,24 @@ Each scene has a single reference: the auto-EV-applied capture (`auto_ev_<scene>
 legacy `_off` (intensity_factor=1.0) mode was dropped in chore-auto-ev-regression-drop-off — the
 GUI has no auto-EV toggle, so off was a degenerate non-default state exercising no unique code path.
 
+The `lens_proj` references cover the preview fragment shader's projection math
+(`src/gui/preview_renderer.cpp`: `fisheyeInverse` / `dualFisheyeInverse` / `rectangularInverse`) via
+an off-screen FBO export, independent of window size or layout — see the docking-coupling note
+below. Regen trigger: any change to that projection math or to `export_fbo_renderer.cpp`'s render
+path. Command: `python scripts/regen_gui_test_refs.py --group lens_proj`. Threshold backfill: the
+`psnr_threshold` field of each `kScenes[]` row in `test/gui/visual/test_gui_lens_projection.cpp`.
+
+The `modal_layout` references cover the edit-modal's internal control layout
+(`src/gui/edit_modals.cpp`) via an on-screen capture of the live "Edit Entry" window rectangle — see
+the docking-coupling note below. All four scenes are deterministic (no simulation, no RNG) and
+compare pixel-identical, so their thresholds sit at the shared 40 dB deterministic floor rather than
+a calibrated mean − 4σ. Regen trigger: any layout change to the edit modal (slider/input widths,
+property-table columns, control ordering, auto-resize behavior), or a harness window size / font
+atlas / ImGui style change. Command: `python scripts/regen_gui_test_refs.py --group modal_layout`.
+Threshold backfill: the `psnr_threshold` field of each `kScenes[]` row in
+`test/gui/visual/test_gui_modal_layout.cpp` — normally left at `kDeterministicThresholdDb` unless a
+scene stops comparing pixel-identical.
+
 **`--keep-export-png` flag** — When passed to `gui_test`, `CheckAgainstReference` skips
 `std::remove` so the per-run export PNGs at `/tmp/lumice_auto_ev_*.png` are preserved for
 collection by the driver script.
@@ -187,6 +205,21 @@ existing entries, including their own `generated_at`. Thresholds live under
 After Phase B, copy the `threshold` values into the group's test source — for `auto_ev` that is
 `kScenes[]` in `test/gui/visual/test_gui_auto_ev.cpp` (one `<scene>_on` threshold per scene); the
 script prints the path for whichever group it ran.
+
+**Docking coupling boundary** — relevant to a planned migration of the GUI's fixed-layout panels
+(and the edit modal, from `BeginPopupModal` to a dockable window) onto ImGui's docking branch:
+- The regen harness itself (readback, comparison, threshold, trigger mode) is layout-agnostic —
+  Phase A/B do not know or care whether panels are docked.
+- `lens_proj` renders through its own off-screen FBO (`export_fbo_renderer.cpp`'s
+  `RenderExportToRgba`, allocated at the caller-supplied size), never reading the on-screen preview
+  viewport. It is **fully docking-decoupled**, in both pixel content and output size — the migration
+  needs no action on this group.
+- `modal_layout` reads the DEFAULT framebuffer through `g_fullframe_capture`'s sub-region protocol,
+  using the live on-screen rectangle of the "Edit Entry" window. Once the edit modal becomes
+  dockable, its on-screen position/size source changes and these references will need a **re-shoot**:
+  re-run `python scripts/regen_gui_test_refs.py --group modal_layout` (Phase A + B). No harness code
+  change is required — the comparison mechanism (`CheckAgainstReference` + `g_fullframe_capture`)
+  stays the same; only the captured pixels change.
 
 ## Logging and Troubleshooting
 
