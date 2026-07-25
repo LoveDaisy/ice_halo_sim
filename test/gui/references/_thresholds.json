@@ -1,57 +1,61 @@
 {
-  "generated_at": "2026-07-07T00:00:00",
-  "n_ref_runs": 10,
-  "n_calib_runs": 25,
-  "scenes": {
-    "halo_22_on": {
-      "psnr_mean": 18.39,
-      "psnr_std": 0.349,
-      "threshold": 16.5
-    },
-    "multi_scat_on": {
-      "psnr_mean": 16.32,
-      "psnr_std": 0.210,
-      "threshold": 15.0
-    },
-    "color_on": {
-      "psnr_mean": 19.81,
-      "psnr_std": 0.317,
-      "threshold": 18.5
-    },
-    "pyramid_on": {
-      "psnr_mean": 19.10,
-      "psnr_std": 0.223,
-      "threshold": 18.0
-    },
-    "cza_on": {
-      "psnr_mean": 35.89,
-      "psnr_std": 0.362,
-      "threshold": 34.0
-    },
-    "parhelion_on": {
-      "psnr_mean": 25.59,
-      "psnr_std": 0.486,
-      "threshold": 23.5
-    },
-    "filters_on": {
-      "psnr_mean": 24.39,
-      "psnr_std": 0.333,
-      "threshold": 23.0
-    },
-    "rp46_on": {
-      "psnr_mean": 28.80,
-      "psnr_std": 0.348,
-      "threshold": 27.0
-    },
-    "rp46_nof_on": {
-      "psnr_mean": 19.35,
-      "psnr_std": 0.316,
-      "threshold": 18.0
-    },
-    "overlay_ea_on": {
-      "psnr_mean": 20.29,
-      "psnr_std": 0.211,
-      "threshold": 19.0
+  "groups": {
+    "auto_ev": {
+      "generated_at": "2026-07-07T00:00:00",
+      "n_ref_runs": 10,
+      "n_calib_runs": 25,
+      "scenes": {
+        "halo_22_on": {
+          "psnr_mean": 18.39,
+          "psnr_std": 0.349,
+          "threshold": 16.5
+        },
+        "multi_scat_on": {
+          "psnr_mean": 16.32,
+          "psnr_std": 0.21,
+          "threshold": 15.0
+        },
+        "color_on": {
+          "psnr_mean": 19.81,
+          "psnr_std": 0.317,
+          "threshold": 18.5
+        },
+        "pyramid_on": {
+          "psnr_mean": 19.1,
+          "psnr_std": 0.223,
+          "threshold": 18.0
+        },
+        "cza_on": {
+          "psnr_mean": 35.89,
+          "psnr_std": 0.362,
+          "threshold": 34.0
+        },
+        "parhelion_on": {
+          "psnr_mean": 25.59,
+          "psnr_std": 0.486,
+          "threshold": 23.5
+        },
+        "filters_on": {
+          "psnr_mean": 24.39,
+          "psnr_std": 0.333,
+          "threshold": 23.0
+        },
+        "rp46_on": {
+          "psnr_mean": 28.8,
+          "psnr_std": 0.348,
+          "threshold": 27.0
+        },
+        "rp46_nof_on": {
+          "psnr_mean": 19.35,
+          "psnr_std": 0.316,
+          "threshold": 18.0
+        },
+        "overlay_ea_on": {
+          "psnr_mean": 20.29,
+          "psnr_std": 0.211,
+          "threshold": 19.0
+        }
+      }
     }
   }
 }
