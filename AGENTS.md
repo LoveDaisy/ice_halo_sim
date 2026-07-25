@@ -144,7 +144,8 @@ GUI has no auto-EV toggle, so off was a degenerate non-default state exercising 
 collection by the driver script.
 
 **Reference groups** — `auto_ev` is one entry in the `GROUPS` registry at the top of
-`scripts/regen_gui_test_refs.py`; `capture_harness` and `lens_proj` are the second and third. A
+`scripts/regen_gui_test_refs.py`; `capture_harness`, `lens_proj` and `modal_layout` are the
+second, third and fourth. A
 group names the `gui_test` category it tags its output with (also the `[<tag>]` its comparisons
 print and its key in `_thresholds.json`), its scenes/modes, and the `/tmp` and reference filename
 prefixes. Adding a visual-regression suite means adding a `GROUPS` entry — Phase A/B themselves

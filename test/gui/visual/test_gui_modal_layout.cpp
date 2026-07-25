@@ -25,6 +25,7 @@
 #include <string>
 #include <vector>
 
+#include "IconsFontAwesome6.h"  // ICON_FA_* selectors: the modal buttons carry icon-prefixed labels
 #include "gui/panels.hpp"
 #include "test_gui_shared.hpp"
 
@@ -52,12 +53,24 @@ struct ModalLayoutScene {
   double psnr_threshold;
 };
 
+// Every scene here is deterministic — no simulation, no RNG, and the modal's crystal preview
+// pins its sample seed to kPreviewFixedSampleSeed whenever the shape carries no randomization
+// (edit_modals.cpp: AdvancePreviewAnimSeed), which is the case for all four. So they compare
+// pixel-identical (PSNR=inf) and there is no finite mean − 4σ to calibrate: Phase A measured
+// zero pixel variance over 10 full-suite runs, and Phase B found 60/60 runs bit-identical for
+// every scene, recording the driver's deterministic floor. 40 dB is therefore not a sampled
+// statistic but the repo-wide floor for deterministic GL comparisons (screenshot/left_panel_psnr,
+// screenshot/crystal_psnr, capture_harness/fullframe) — bit-exactness cannot be demanded of a
+// committed reference compared on another machine's GL stack.
+// See groups.modal_layout in test/gui/references/_thresholds.json.
+static constexpr double kDeterministicThresholdDb = 40.0;
+
 // clang-format off
 static const ModalLayoutScene kScenes[] = {
-  {"crystal_prism",   gui::EditTarget::kCrystal, gui::CrystalType::kPrism,   FilterKind::kNone,      false, false, 820.0f, 30.0},
-  {"crystal_pyramid", gui::EditTarget::kCrystal, gui::CrystalType::kPyramid, FilterKind::kNone,      true,  true,  420.0f, 30.0},
-  {"filter_raypath",  gui::EditTarget::kFilter,  gui::CrystalType::kPrism,   FilterKind::kRaypath,   false, false, 820.0f, 30.0},
-  {"filter_ee",       gui::EditTarget::kFilter,  gui::CrystalType::kPrism,   FilterKind::kEntryExit, false, false, 820.0f, 30.0},
+  {"crystal_prism",   gui::EditTarget::kCrystal, gui::CrystalType::kPrism,   FilterKind::kNone,      false, false, 820.0f, kDeterministicThresholdDb},
+  {"crystal_pyramid", gui::EditTarget::kCrystal, gui::CrystalType::kPyramid, FilterKind::kNone,      true,  true,  420.0f, kDeterministicThresholdDb},
+  {"filter_raypath",  gui::EditTarget::kFilter,  gui::CrystalType::kPrism,   FilterKind::kRaypath,   false, false, 820.0f, kDeterministicThresholdDb},
+  {"filter_ee",       gui::EditTarget::kFilter,  gui::CrystalType::kPrism,   FilterKind::kEntryExit, false, false, 820.0f, kDeterministicThresholdDb},
 };
 // clang-format on
 static constexpr int kSceneCount = sizeof(kScenes) / sizeof(kScenes[0]);
@@ -249,6 +262,13 @@ void RegisterModalLayoutTests(ImGuiTestEngine* engine) {
         ctx->ItemClose("**/Face Distance##modal");
         ctx->Yield(2);
       }
+
+      // Close the modal. Not strictly required — ResetTestState -> ResetModalState clears
+      // g_active_modal, and BeginPopupModal closes a popup whose p_open reads false on the very
+      // next frame — but leaving one open would hand the following test a frame of stale modal
+      // for no reason. Placed after the capture so it cannot influence the compared pixels.
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+      ctx->Yield(2);
 
       IM_CHECK(lumice::test::CheckAgainstReference("modal_layout", scene.name, tmp_path, ref_path, scene.psnr_threshold,
                                                    g_keep_export_png));

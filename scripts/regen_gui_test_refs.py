@@ -112,6 +112,22 @@ GROUPS: dict[str, ReferenceGroup] = {
         ref_prefix="lens_proj_",
         source="test/gui/visual/test_gui_lens_projection.cpp",
     ),
+    # Edit-modal layout scene names — must match kScenes[] order in test_gui_modal_layout.cpp.
+    # Each scene is one (tab, crystal type, H/V layout) combination of the unified edit popup,
+    # captured as the modal's own on-screen rectangle.
+    "modal_layout": ReferenceGroup(
+        key="modal_layout",
+        scenes=[
+            "crystal_prism",
+            "crystal_pyramid",
+            "filter_raypath",
+            "filter_ee",
+        ],
+        modes=[None],
+        tmp_prefix="lumice_modal_layout_",
+        ref_prefix="modal_layout_",
+        source="test/gui/visual/test_gui_modal_layout.cpp",
+    ),
 }
 
 STAGING_DIR = "/tmp/gui_refs_build"
