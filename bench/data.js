@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784988680948,
+  "lastUpdate": 1784988683391,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9608,50 +9608,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "390813463050266f30c6406eab1cb4b9a52972bb",
-          "message": "Merge pull request #121 from LoveDaisy/feat/metal_backend_prod\n\nfeat: Metal trace backend (production) — pluggable TraceBackend seam + CPU/Metal parity",
-          "timestamp": "2026-06-08T17:19:20+08:00",
-          "tree_id": "ce38b259f1a458387effaafcbece2fdfa5c2e196",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/390813463050266f30c6406eab1cb4b9a52972bb"
-        },
-        "date": 1780910681665,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 87.5,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 102.8,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 98.9,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 97.3,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "5c588072df470acedf8b0eb419f2c1b278e77239",
           "message": "Merge pull request #122 from LoveDaisy/feat/metal-gui-default\n\nfeat: enable Metal backend on GUI live-preview (dual-fisheye-EA + C API toggle)",
           "timestamp": "2026-06-09T09:33:36+08:00",
@@ -13986,6 +13942,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 90.4,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "62ba3d6ba31990e43588d1b8c222716cc1a70d5d",
+          "message": "Merge pull request #225 from LoveDaisy/feat/gui-visual-regression-coverage\n\ntest(gui): reference-image pixel regression for lens projections + modal layouts",
+          "timestamp": "2026-07-25T22:04:33+08:00",
+          "tree_id": "750dc3e4cce3891a10ee627c0a5fde4efbbc3a21",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/62ba3d6ba31990e43588d1b8c222716cc1a70d5d"
+        },
+        "date": 1784988682535,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 79.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 101.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 95.5,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 94.3,
             "unit": "%"
           }
         ]
