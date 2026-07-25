@@ -126,7 +126,7 @@ Release artifacts land in `build/cmake_install/`. Debug builds stay in `build/cm
 - Windows physical-desktop validation uses `scripts/win_remote_test.sh` together with `scripts/win_test_watcher.ps1`.
 - Performance diagnostics and workflows are documented in `doc/performance-testing.md`.
 
-### GUI Test Reference Regeneration (auto_ev tests)
+### GUI Test Reference Regeneration (reference groups)
 
 The `auto_ev` reference images are pixel-averaged means of N=10 stochastic renders to suppress
 per-run noise. Per-scene PSNR thresholds are `mean − 3σ` (floored to 0.5 dB precision).
@@ -139,23 +139,49 @@ GUI has no auto-EV toggle, so off was a degenerate non-default state exercising 
 `std::remove` so the per-run export PNGs at `/tmp/lumice_auto_ev_*.png` are preserved for
 collection by the driver script.
 
+**Reference groups** — `auto_ev` is one entry in the `GROUPS` registry at the top of
+`scripts/regen_gui_test_refs.py`; `capture_harness` is the second. A group names the `gui_test`
+category to filter on (which is also the `[<tag>]` its comparisons print and its key in
+`_thresholds.json`), its scenes/modes, and the `/tmp` and reference filename prefixes. Adding a
+visual-regression suite means adding a `GROUPS` entry — Phase A/B themselves are group-agnostic.
+Two constraints when registering one: the category must not be a substring of any existing
+`gui_test` category (`--filter` is substring-matched, so a colliding key would pull unrelated
+tests into the group's PSNR sampling), and the test must compare via
+`lumice::test::CheckAgainstReference` so Phase B can parse its PSNR line.
+
+A scene whose frame is deterministic (no simulation, no RNG) compares pixel-identical, i.e.
+`PSNR=inf`, which leaves `mean − 3σ` no finite sample. Phase B records `identical_runs` for such
+scenes and reports a fixed 40 dB floor instead of a calibrated statistic — bit-exactness is not
+demandable of a committed reference compared on other machines.
+
 **Regeneration workflow:**
 ```bash
-# Full regen (Phase A: generate mean-ref + Phase B: calibrate thresholds, ~20 min):
+# Full regen of EVERY registered group (Phase A: mean-ref + Phase B: thresholds, ~20 min):
 python scripts/regen_gui_test_refs.py
 
+# One group only (recommended — regen what you changed, leave other groups' refs alone):
+python scripts/regen_gui_test_refs.py --group auto_ev
+
 # Phase A only (generate mean-ref images, then manually update thresholds):
-python scripts/regen_gui_test_refs.py --phase-a-only
+python scripts/regen_gui_test_refs.py --group auto_ev --phase-a-only
 
 # Phase B only (recalibrate thresholds against existing mean-refs):
-python scripts/regen_gui_test_refs.py --phase-b-only
+python scripts/regen_gui_test_refs.py --group auto_ev --phase-b-only
+
+# Single scene (--scene requires --group; scene names are only unique within a group):
+python scripts/regen_gui_test_refs.py --group auto_ev --scene halo_22
 
 # Quick smoke test (2 runs each phase):
-python scripts/regen_gui_test_refs.py --n 2 --n-calib 2
+python scripts/regen_gui_test_refs.py --group auto_ev --n 2 --n-calib 2
 ```
 
-After Phase B, copy the `threshold` values from `test/gui/references/_thresholds.json` into
-`kScenes[]` in `test/gui/visual/test_gui_auto_ev.cpp` (one `<scene>_on` threshold per scene).
+Phase B merges per group and per scene: groups and scenes not covered by the run keep their
+existing entries, including their own `generated_at`. Thresholds live under
+`groups.<key>.scenes` in `test/gui/references/_thresholds.json`.
+
+After Phase B, copy the `threshold` values into the group's test source — for `auto_ev` that is
+`kScenes[]` in `test/gui/visual/test_gui_auto_ev.cpp` (one `<scene>_on` threshold per scene); the
+script prints the path for whichever group it ran.
 
 ## Logging and Troubleshooting
 
