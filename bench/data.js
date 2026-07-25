@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784942603372,
+  "lastUpdate": 1784942605604,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9608,50 +9608,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "a83345b608ebc03c14a674ba2d9e86a766c27e61",
-          "message": "Merge pull request #119 from LoveDaisy/dev/soa_refactor\n\nCPU SoA: ray recorder footprint optimization (RaypathRecorder split + SBO)",
-          "timestamp": "2026-06-02T14:44:34+08:00",
-          "tree_id": "54bf6808db99db93563899e56f190d727a9b2868",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/a83345b608ebc03c14a674ba2d9e86a766c27e61"
-        },
-        "date": 1780382993976,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 88.8,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 74.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 72.1,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 52.7,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "392ee041c7255f883dcb83f6eb4c4958ea8f8d28",
           "message": "Merge pull request #120 from LoveDaisy/dev/perf_opt2\n\nperf(worker-default): default worker count to physical cores",
           "timestamp": "2026-06-03T18:05:54+08:00",
@@ -13986,6 +13942,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 91,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fa613fb092061df691f456e4ee68497590efe136",
+          "message": "Merge pull request #223 from LoveDaisy/feat/gui-shape-randomization-property-table\n\nfeat(gui): crystal shape randomization as a single uniform property table",
+          "timestamp": "2026-07-25T09:15:06+08:00",
+          "tree_id": "e97db9aed21e5466cd569d61f8ad02416099e8ee",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/fa613fb092061df691f456e4ee68497590efe136"
+        },
+        "date": 1784942604996,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 90.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 97.8,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 89,
             "unit": "%"
           }
         ]
